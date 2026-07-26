@@ -128,6 +128,31 @@ func TestAgentCallLog_RecordTruncatesErrorAndStripsToken(t *testing.T) {
 	assert.Contains(t, row2.Error, "脱敏")
 }
 
+func TestAgentCallLog_RecordCapability(t *testing.T) {
+	db := setupAgentCallLogDB(t)
+	svc := NewAgentCallLogService(db)
+
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 1, TokenName: "v2", Action: AgentActionInstanceStart,
+		Capability: AgentCapabilityInstanceLife, Client: "mcp", Success: true,
+	}))
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 2, TokenName: "v1", Action: AgentActionInstanceStart,
+		Capability: AgentLegacyCapabilityInstanceLife, Client: "curl", Success: false, Error: "forbidden",
+	}))
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 3, TokenName: "sess", Action: "mcp.session.open",
+		Client: "mcp", Success: true, // capability 空
+	}))
+
+	var rows []model.AgentCallLog
+	require.NoError(t, db.Order("id ASC").Find(&rows).Error)
+	require.Len(t, rows, 3)
+	assert.Equal(t, AgentCapabilityInstanceLife, rows[0].Capability)
+	assert.Equal(t, AgentLegacyCapabilityInstanceLife, rows[1].Capability)
+	assert.Empty(t, rows[2].Capability)
+}
+
 func TestAgentCallLog_CustomRetention(t *testing.T) {
 	db := setupAgentCallLogDB(t)
 	svc := NewAgentCallLogServiceWithRetention(db, 1)

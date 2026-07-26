@@ -13,8 +13,8 @@
     ▼
 Control Plane (Go 单二进制)
     ├── 跨 Worker Bot 调度与 desired-state 真源（FR-351/ADR-074）
-    ├── Agent 策略真源（FR-384~388 / ADR-076）：jmat_* Token + 写白名单 + scope + 硬拒绝
-    ├── 内嵌 MCP 网关（FR-389 / ADR-077）：Streamable HTTP + SSE，`/api/v1/mcp`，会话内存可运维
+    ├── Agent 策略真源（FR-384~388 / FR-395 / ADR-076/080）：jmat_* Token + V1 写白名单 / V2 能力分组 + scope + 永久禁区
+    ├── 内嵌 MCP 网关（FR-389 / FR-395 / ADR-077/080）：Streamable HTTP + SSE，`/api/v1/mcp`，会话内存可运维，tools/list 按能力动态裁剪
     │ gRPC —— 指令优先经 Worker 主动建立的「反向隧道」下发（Worker 零入站，FR-281/ADR-066）；
     │         无隧道（老 Worker / 重建窗口）回退 CP 直拨 worker gRPC 端口
     ▲
@@ -138,7 +138,7 @@ apps/jmctl/       # 紧急 daemon CLI（FR-184）
 - 节点管理：限平台管理员
 - 配额：创建实例时校验 `MaxInstances`/`MaxBots`/`MaxStorageMB`（0 表示不限）；`GET /groups/:id/quota` 返回用量
 
-### 4.1.1 Agent 接入与策略真源（FR-384~388 / ADR-076/077）
+### 4.1.1 Agent 接入与策略真源（FR-384~388 / FR-395 / ADR-076/077/080）
 
 Agent（IDE / 脚本 / CI）**不复用人类 JWT**，使用专用 Token（明文前缀 `jmat_`，库内只存 SHA-256）。
 
@@ -147,30 +147,36 @@ Agent（IDE / 脚本 / CI）**不复用人类 JWT**，使用专用 Token（明�
     │ POST /api/v1/agent/tokens 签发（明文仅一次）
     │ GET/DELETE /api/v1/agent/mcp/sessions 会话运维
     ▼
-agent_tokens 表（scope 实例/节点 + write_allowlist + 过期/吊销）
+agent_tokens 表
+  · V1：scope 实例/节点 + write_allowlist + 过期/吊销
+  · V2：policy_version=2 + capabilities + scope；节点 scope 单向继承实例
     │
-    │ Bearer jmat_* → middleware.AgentAuth + ResolveAction
+    │ Bearer jmat_* → middleware.AgentAuth + CanDiscover / Authorize
     ▼
 Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
     ▲                                    ▲
-    ├── jmagent（CLI）                   │ tools → 同一 ResolveAction / service
-    ├── curl / 任意 HTTP 客户端          │ 会话：内存 SessionManager（空闲/绝对超时、并发上限）
-    └── ~~（已退役 FR-392）mcp-bridge stdio~~  │ 传输：Streamable HTTP 主 + SSE 兼容
+    ├── jmagent（CLI）                   │ ToolSpec → 同一 action 目录 / service
+    ├── curl / 任意 HTTP 客户端          │ tools/list 按能力与潜在 scope 动态裁剪
+    └── ~~（已退役 FR-392）mcp-bridge~~  │ tools/call 可信目标最终授权
+                                         │ 会话：内存 SessionManager（空闲/绝对超时、并发上限）
+                                         │ 传输：Streamable HTTP 主 + SSE 兼容
 ```
 
 **策略（CP 唯一真源，入口不得本地发明）**：
 
 | 层 | 规则 |
 |---|---|
-| 默认 | 只读（列表/状态/指标等，仍受 scope 收敛） |
-| 写白名单 MVP | `instance.life`（start/stop/restart，**无 kill**）、`node.maintenance`（enter/leave） |
-| 资源 scope | 实例 ID / 节点 ID 白名单；越界 403 |
-| 硬拒绝 | 用户/组/权限、平台设置、DB 浏览、自更新、删节点/实例、kill、制品/密钥、审计删除等 |
+| 策略版本 | `policy_version=1` 保留旧 `write_allowlist` 精确语义且**不启用**节点继承；`=2` 使用固定 capability 分组，节点 scope 单向覆盖该节点当前与未来实例 |
+| V2 能力 | `node.read/operate/destructive`、`instance.read/life/command/provision/configure/content/destructive`、`bot.read/manage/load`、`observability.read`；未知 capability/action 默认拒绝 |
+| 资源 scope | 实例 ID 显式白名单 ∪（仅 V2）节点 ID 下当前实例；越界 403；实例 scope 不反向授权节点 |
+| 发现 / 执行 | `CanDiscover` 驱动 MCP `tools/list` 与契约枚举；`Authorize` 在可信目标解析后执行最终授权；生命周期写操作派发前锁内重验归属 |
+| 永久禁区 | 用户/组/RBAC、Agent Token 管理、密钥/准入凭据明文、数据库浏览、自更新、平台设置永不进入 action 目录；实例删除/强杀/节点删除等须后续 FR 以 destructive 能力显式登记 |
+| 调用流水 | `agent_call_logs.capability`：V2 记 action 对应能力，V1 记 `legacy.*`；会话事件可空 |
 | 错误 | 401 无效/吊销/过期；403 策略拒绝（非 5xx 静默）；MCP tool 策略拒绝 → HTTP 200 + `isError=true` + 中文 |
 
-**内嵌 MCP（FR-389 / ADR-077）**：模块 `internal/controlplane/mcp/`；配置 `mcp.idle_timeout`（默认 30m）、`absolute_timeout`（24h）、`max_global_sessions`（32）、`max_sessions_per_token`（4）。CP 重启会话全丢（可接受）。人类 JWT 不能充当 MCP 会话凭证。
+**内嵌 MCP（FR-389 / FR-395 / ADR-077/080）**：模块 `internal/controlplane/mcp/`；配置 `mcp.idle_timeout`（默认 30m）、`absolute_timeout`（24h）、`max_global_sessions`（32）、`max_sessions_per_token`（4）。CP 重启会话全丢（可接受）。人类 JWT 不能充当 MCP 会话凭证。`tools/list` 按 Token 能力与可用 scope 动态裁剪；`tools/call` 仍最终授权。
 
-**与 jmctl 的边界**：jmctl 绕开 CP、直连本机 daemon（故障应急）；Agent 面**必须**经 CP，以便鉴权、scope、审计 `actor_kind=agent`。契约与可证门禁见 `docs/specs/agent-safety-gate/contract.md` 与 CI job `agent-gate`（FR-388）。本机冒烟证据见 `.tmp/acceptance-agent-smoke-2026-07-23.md`。
+**与 jmctl 的边界**：jmctl 绕开 CP、直连本机 daemon（故障应急）；Agent 面**必须**经 CP，以便鉴权、scope、审计 `actor_kind=agent`。契约与可证门禁见 `docs/specs/agent-safety-gate/contract.md` 与 CI job `agent-gate`（FR-388 / FR-395）。本机冒烟证据见 `.tmp/acceptance-agent-smoke-2026-07-23.md`。
 
 ### 4.2 Bot 目标实例与执行节点（FR-351 / ADR-074）
 

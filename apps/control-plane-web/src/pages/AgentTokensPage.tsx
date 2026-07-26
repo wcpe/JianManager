@@ -10,8 +10,9 @@ import {
   useIssueAgentToken,
   useRevokeAgentToken,
   agentTokenStatus,
-  DEFAULT_WRITE_ALLOWLIST,
   WRITE_ALLOWLIST_OPTIONS,
+  CAPABILITY_OPTIONS,
+  DEFAULT_CAPABILITIES,
   type AgentTokenInfo,
 } from '@/api/agentTokens'
 import { mcpBaseUrl } from '@/api/agentObservability'
@@ -90,7 +91,7 @@ export function formatScopeSummary(
   return parts.length ? parts.join(' · ') : labels.none
 }
 
-/** 写白名单展示文案。 */
+/** 写白名单展示文案（V1 兼容）。 */
 function formatWriteAllowlist(list: string[], t: (k: string) => string): string {
   if (!list.length) return t('agentTokens.write.none')
   return list
@@ -99,6 +100,23 @@ function formatWriteAllowlist(list: string[], t: (k: string) => string): string 
       return opt ? t(opt.labelKey) : v
     })
     .join('、')
+}
+
+/** V2 能力展示文案。 */
+function formatCapabilities(list: string[], t: (k: string) => string): string {
+  if (!list.length) return t('agentTokens.capability.none')
+  return list
+    .map((v) => {
+      const opt = CAPABILITY_OPTIONS.find((o) => o.value === v)
+      return opt ? t(opt.labelKey) : v
+    })
+    .join('、')
+}
+
+/** 权限列：V2 显示能力，V1 显示旧写白名单。 */
+function formatPermissions(tok: AgentTokenInfo, t: (k: string) => string): string {
+  if (tok.policyVersion === 2) return formatCapabilities(tok.capabilities, t)
+  return formatWriteAllowlist(tok.writeAllowlist, t)
 }
 
 function statusLevel(status: ReturnType<typeof agentTokenStatus>): 'success' | 'warning' | 'danger' {
@@ -200,6 +218,7 @@ export default function AgentTokensPage() {
               <TableRow>
                 <TableHead>{t('agentTokens.col.name')}</TableHead>
                 <TableHead>{t('agentTokens.col.prefix')}</TableHead>
+                <TableHead>{t('agentTokens.col.policy')}</TableHead>
                 <TableHead>{t('agentTokens.col.scope')}</TableHead>
                 <TableHead>{t('agentTokens.col.write')}</TableHead>
                 <TableHead>{t('agentTokens.col.expires')}</TableHead>
@@ -212,22 +231,34 @@ export default function AgentTokensPage() {
             <TableBody>
               {tokens.map((tok) => {
                 const status = agentTokenStatus(tok)
+                const nodeLabel =
+                  tok.policyVersion === 2
+                    ? t('agentTokens.scope.nodesInherit')
+                    : t('agentTokens.scope.nodesNoInherit')
                 const scope = formatScopeSummary(tok.scopedInstanceIds, tok.scopedNodeIds, {
                   instances: t('agentTokens.scope.instances'),
-                  nodes: t('agentTokens.scope.nodes'),
+                  nodes: nodeLabel,
                   none: t('agentTokens.scope.none'),
                 })
+                const perms = formatPermissions(tok, t)
+                const policyLabel =
+                  tok.policyVersion === 2 ? t('agentTokens.policy.v2') : t('agentTokens.policy.v1')
                 return (
                   <TableRow key={tok.id}>
                     <TableCell className="font-medium">{tok.name}</TableCell>
                     <TableCell>
                       <code className="font-mono text-xs">{tok.tokenPrefix}…</code>
                     </TableCell>
+                    <TableCell>
+                      <Badge variant={tok.policyVersion === 2 ? 'default' : 'secondary'} className="text-[10px]">
+                        {policyLabel}
+                      </Badge>
+                    </TableCell>
                     <TableCell className="max-w-[14rem] truncate text-xs text-muted-foreground" title={scope}>
                       {scope}
                     </TableCell>
-                    <TableCell className="max-w-[12rem] truncate text-xs" title={formatWriteAllowlist(tok.writeAllowlist, t)}>
-                      {formatWriteAllowlist(tok.writeAllowlist, t)}
+                    <TableCell className="max-w-[12rem] truncate text-xs" title={perms}>
+                      {perms}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-xs tabular-nums">
                       {tok.expiresAt ? new Date(tok.expiresAt).toLocaleString() : '—'}
@@ -318,7 +349,8 @@ function CreateAgentTokenDialog({
     name: string
     scopedInstanceIds: number[]
     scopedNodeIds: number[]
-    writeAllowlist: string[]
+    policyVersion: number
+    capabilities: string[]
     ttlDays: number
   }) => void
 }) {
@@ -328,7 +360,7 @@ function CreateAgentTokenDialog({
   const [selectedNode, setSelectedNode] = useState<number[]>([])
   const [instIdsText, setInstIdsText] = useState('')
   const [nodeIdsText, setNodeIdsText] = useState('')
-  const [writeAllow, setWriteAllow] = useState<string[]>([...DEFAULT_WRITE_ALLOWLIST])
+  const [capabilities, setCapabilities] = useState<string[]>([...DEFAULT_CAPABILITIES])
   const [ttlDays, setTtlDays] = useState('90')
 
   const { data: instances } = useInstances()
@@ -343,7 +375,7 @@ function CreateAgentTokenDialog({
     setSelectedNode([])
     setInstIdsText('')
     setNodeIdsText('')
-    setWriteAllow([...DEFAULT_WRITE_ALLOWLIST])
+    setCapabilities([...DEFAULT_CAPABILITIES])
     setTtlDays('90')
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [open])
@@ -356,8 +388,8 @@ function CreateAgentTokenDialog({
     set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id])
   }
 
-  const toggleWrite = (value: string) => {
-    setWriteAllow((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]))
+  const toggleCapability = (value: string) => {
+    setCapabilities((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]))
   }
 
   const handleSubmit = (e: FormEvent) => {
@@ -380,7 +412,8 @@ function CreateAgentTokenDialog({
       name: trimmed,
       scopedInstanceIds: mergeIds(selectedInst, instIdsText),
       scopedNodeIds: mergeIds(selectedNode, nodeIdsText),
-      writeAllowlist: writeAllow,
+      policyVersion: 2,
+      capabilities,
       ttlDays: ttl,
     })
   }
@@ -474,14 +507,14 @@ function CreateAgentTokenDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label>{t('agentTokens.field.writeAllowlist')}</Label>
-              <p className="text-xs text-muted-foreground">{t('agentTokens.field.writeHint')}</p>
-              <div className="space-y-1 rounded-md border p-2">
-                {WRITE_ALLOWLIST_OPTIONS.map((opt) => (
+              <Label>{t('agentTokens.field.capabilities')}</Label>
+              <p className="text-xs text-muted-foreground">{t('agentTokens.field.capabilitiesHint')}</p>
+              <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-2">
+                {CAPABILITY_OPTIONS.map((opt) => (
                   <label key={opt.value} className="flex cursor-pointer items-center gap-2 text-sm">
                     <Checkbox
-                      checked={writeAllow.includes(opt.value)}
-                      onCheckedChange={() => toggleWrite(opt.value)}
+                      checked={capabilities.includes(opt.value)}
+                      onCheckedChange={() => toggleCapability(opt.value)}
                     />
                     <span>{t(opt.labelKey)}</span>
                     <code className="ml-auto font-mono text-[10px] text-muted-foreground">{opt.value}</code>

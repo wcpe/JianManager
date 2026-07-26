@@ -34,26 +34,39 @@ type ToolContent struct {
 type ToolDeps struct {
 	Instance *service.InstanceService
 	Node     *service.NodeService
-	Log      *service.LogService // 可选；nil 时 agent_get_instance_logs 返回中文错误
+	Log      *service.LogService        // 可选；nil 时 agent_get_instance_logs 返回中文错误
+	Agent    *service.AgentTokenService // FR-395：可信目标解析与 scope 查询
 }
 
-// RegisteredTools 返回本网关注册的全部工具（硬拒绝面永不出现）。
-// 与 jm-agent / Agent Ops 对齐；含 agent_get_instance_logs（spec FR-389）。
-func RegisteredTools() []ToolDef {
-	return []ToolDef{
-		{
+// toolSpec 工具协议定义（静态注册）。
+type toolSpec struct {
+	Def    ToolDef
+	Action string
+}
+
+// allToolSpecs 全量工具目录（静态；永久禁区不在此处）。
+// 工具可见性由 ToolsForPrincipal 按能力动态裁剪；此处只是声明与 InputSchema。
+var allToolSpecs = []toolSpec{
+	{
+		Def: ToolDef{
 			Name:        "agent_whoami",
-			Description: "查询当前 Agent Token 身份与 scope/写白名单",
+			Description: "查询当前 Agent Token 身份与策略版本、能力与 scope",
 			InputSchema: emptySchema(),
 		},
-		{
+		Action: service.AgentActionWhoami,
+	},
+	{
+		Def: ToolDef{
 			Name:        "agent_list_nodes",
 			Description: "列出 Token scope 内的节点",
 			InputSchema: emptySchema(),
 		},
-		{
+		Action: service.AgentActionListNodes,
+	},
+	{
+		Def: ToolDef{
 			Name:        "agent_list_instances",
-			Description: "列出 Token scope 内的实例；可选按 nodeId 过滤",
+			Description: "列出 Token scope 内的实例；V2 Token 节点 scope 自动覆盖当前实例；可选按 nodeId 过滤",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -64,17 +77,26 @@ func RegisteredTools() []ToolDef {
 				},
 			},
 		},
-		{
+		Action: service.AgentActionListInstances,
+	},
+	{
+		Def: ToolDef{
 			Name:        "agent_get_instance",
 			Description: "获取指定实例详情（须在 scope 内）",
 			InputSchema: idSchema("实例 ID"),
 		},
-		{
+		Action: service.AgentActionGetInstance,
+	},
+	{
+		Def: ToolDef{
 			Name:        "agent_get_instance_metrics",
 			Description: "获取指定实例运行指标（须在 scope 内）",
 			InputSchema: idSchema("实例 ID"),
 		},
-		{
+		Action: service.AgentActionGetInstanceMetrics,
+	},
+	{
+		Def: ToolDef{
 			Name:        "agent_get_instance_logs",
 			Description: "获取指定实例最近日志（须在 scope 内）；可选 limit",
 			InputSchema: map[string]any{
@@ -92,45 +114,115 @@ func RegisteredTools() []ToolDef {
 				"required": []string{"id"},
 			},
 		},
-		{
+		Action: service.AgentActionGetInstanceLogs,
+	},
+	{
+		Def: ToolDef{
 			Name:        "instance_start",
-			Description: "启动实例（需写白名单 instance.life + 实例 scope）",
+			Description: "启动实例（须具备 instance.life 能力或 V1 写白名单）",
 			InputSchema: idSchema("实例 ID"),
 		},
-		{
+		Action: service.AgentActionInstanceStart,
+	},
+	{
+		Def: ToolDef{
 			Name:        "instance_stop",
-			Description: "停止实例（需写白名单 instance.life + 实例 scope）",
+			Description: "停止实例（须具备 instance.life 能力或 V1 写白名单）",
 			InputSchema: idSchema("实例 ID"),
 		},
-		{
+		Action: service.AgentActionInstanceStop,
+	},
+	{
+		Def: ToolDef{
 			Name:        "instance_restart",
-			Description: "重启实例（需写白名单 instance.life + 实例 scope）",
+			Description: "重启实例（须具备 instance.life 能力或 V1 写白名单）",
 			InputSchema: idSchema("实例 ID"),
 		},
-		{
+		Action: service.AgentActionInstanceRestart,
+	},
+	{
+		Def: ToolDef{
 			Name:        "node_maintenance_enter",
-			Description: "节点进入维护模式（需写白名单 node.maintenance + 节点 scope）",
+			Description: "节点进入维护模式（须具备 node.operate 能力或 V1 写白名单）",
 			InputSchema: idSchema("节点 ID"),
 		},
-		{
+		Action: service.AgentActionNodeMaintenanceEnter,
+	},
+	{
+		Def: ToolDef{
 			Name:        "node_maintenance_leave",
-			Description: "节点离开维护模式（需写白名单 node.maintenance + 节点 scope）",
+			Description: "节点离开维护模式（须具备 node.operate 能力或 V1 写白名单）",
 			InputSchema: idSchema("节点 ID"),
 		},
-	}
+		Action: service.AgentActionNodeMaintenanceLeave,
+	},
 }
 
-// ToolNames 返回注册工具名称列表（单测用）。
-func ToolNames() []string {
-	tools := RegisteredTools()
-	out := make([]string, len(tools))
-	for i, t := range tools {
-		out[i] = t.Name
+// RegisteredTools 返回全量工具目录（硬拒绝面与永久禁区永不出现）。
+// 供全量测试用；生产 tools/list 调用 ToolsForPrincipal。
+func RegisteredTools() []ToolDef {
+	out := make([]ToolDef, 0, len(allToolSpecs))
+	for _, s := range allToolSpecs {
+		out = append(out, s.Def)
 	}
 	return out
 }
 
-// CallTool 按名称分发工具调用；策略一律走 ResolveAction。
+// ToolNames 返回注册工具名称列表（单测用）。
+func ToolNames() []string {
+	out := make([]string, 0, len(allToolSpecs))
+	for _, s := range allToolSpecs {
+		out = append(out, s.Def.Name)
+	}
+	return out
+}
+
+// ToolsForPrincipal 按 principal 的能力与潜在 scope 动态裁剪工具列表（FR-395）。
+// V1 仅显示兼容解释器确实可能允许的工具；V2 按 capability 与 scope 可用性过滤。
+func ToolsForPrincipal(p *service.AgentPrincipal) []ToolDef {
+	if p == nil {
+		return nil
+	}
+	out := make([]ToolDef, 0, len(allToolSpecs))
+	for _, s := range allToolSpecs {
+		if _, err := service.CanDiscover(p, s.Action); err == nil {
+			out = append(out, s.Def)
+		}
+	}
+	return out
+}
+
+// toolActionByName 通过工具名快速查 action。
+func toolActionByName(name string) (string, bool) {
+	for _, s := range allToolSpecs {
+		if s.Def.Name == name {
+			return s.Action, true
+		}
+	}
+	return "", false
+}
+
+// toolTargetByName 从参数提取 target 类型与 ID 字符串（供流水记录）。
+func toolTargetByName(name string, args map[string]any) (targetType, targetID string) {
+	if args == nil {
+		return "", ""
+	}
+	action, ok := toolActionByName(name)
+	if !ok {
+		return "", ""
+	}
+	d, ok := service.DescribeAgentAction(action)
+	if !ok || d.ResourceType == service.AgentResourceNone {
+		return "", ""
+	}
+	id, err := toUint(args["id"])
+	if err != nil {
+		return "", ""
+	}
+	return d.ResourceType, strconv.FormatUint(uint64(id), 10)
+}
+
+// CallTool 按名称分发工具调用；策略走 action 目录，可信目标由 Agent service 解析。
 func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, name string, args map[string]any) ToolResult {
 	if p == nil {
 		return toolErr("需要有效的 Agent Token")
@@ -145,9 +237,15 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 	default:
 	}
 
+	// 工具不在 catalog → 未知工具（永久禁区也不在 catalog）
+	action, ok := toolActionByName(name)
+	if !ok {
+		return toolErr("未知工具: " + name + "（硬拒绝面操作不会注册为 tool）")
+	}
+
 	switch name {
 	case "agent_whoami":
-		if err := service.ResolveAction(p, service.AgentActionWhoami, 0, 0); err != nil {
+		if _, err := service.CanDiscover(p, action); err != nil {
 			return toolForbidden(err)
 		}
 		return toolOK(map[string]any{
@@ -155,13 +253,15 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 			"name":              p.Name,
 			"tokenId":           p.TokenID,
 			"tokenPrefix":       p.TokenPrefix,
+			"policyVersion":     p.PolicyVersion,
 			"scopedInstanceIds": p.ScopedInstanceIDs,
 			"scopedNodeIds":     p.ScopedNodeIDs,
 			"writeAllowlist":    p.WriteAllowlist,
+			"capabilities":      p.Capabilities,
 		})
 
 	case "agent_list_nodes":
-		if err := service.ResolveAction(p, service.AgentActionListNodes, 0, 0); err != nil {
+		if _, err := service.CanDiscover(p, action); err != nil {
 			return toolForbidden(err)
 		}
 		if deps.Node == nil {
@@ -178,47 +278,37 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		return toolOK(out)
 
 	case "agent_list_instances":
-		if err := service.ResolveAction(p, service.AgentActionListInstances, 0, 0); err != nil {
-			return toolForbidden(err)
+		if deps.Agent == nil {
+			return toolErr("策略服务不可用")
 		}
 		if deps.Instance == nil {
 			return toolErr("实例服务不可用")
 		}
-		var nodeFilter uint
+		var nodeFilter *uint
 		if v, ok := args["nodeId"]; ok {
 			nid, err := toUint(v)
 			if err != nil {
 				return toolErr("参数 nodeId 无效: " + err.Error())
 			}
-			nodeFilter = nid
+			nodeFilter = &nid
 		}
-		var out []model.Instance
-		for _, id := range p.ScopedInstanceIDs {
-			inst, err := deps.Instance.GetByID(id)
-			if err != nil {
-				continue
-			}
-			if nodeFilter != 0 && inst.NodeID != nodeFilter {
-				continue
-			}
-			out = append(out, *inst)
+		list, err := deps.Agent.ListAccessibleInstances(p, nodeFilter)
+		if err != nil {
+			return toolForbidden(err)
 		}
-		return toolOK(out)
+		return toolOK(list)
 
 	case "agent_get_instance":
 		id, e := requireID(args)
 		if e != nil {
 			return toolErr(e.Error())
 		}
-		if err := service.ResolveAction(p, service.AgentActionGetInstance, id, 0); err != nil {
-			return toolForbidden(err)
+		if deps.Agent == nil {
+			return toolErr("策略服务不可用")
 		}
-		if deps.Instance == nil {
-			return toolErr("实例服务不可用")
-		}
-		inst, err := deps.Instance.GetByID(id)
+		_, inst, err := deps.Agent.AuthorizeInstanceAction(p, action, id)
 		if err != nil {
-			return toolErr("实例不存在")
+			return toolForbidden(err)
 		}
 		return toolOK(inst)
 
@@ -227,7 +317,10 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		if e != nil {
 			return toolErr(e.Error())
 		}
-		if err := service.ResolveAction(p, service.AgentActionGetInstanceMetrics, id, 0); err != nil {
+		if deps.Agent == nil {
+			return toolErr("策略服务不可用")
+		}
+		if _, _, err := deps.Agent.AuthorizeInstanceAction(p, action, id); err != nil {
 			return toolForbidden(err)
 		}
 		if deps.Instance == nil {
@@ -244,7 +337,10 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		if e != nil {
 			return toolErr(e.Error())
 		}
-		if err := service.ResolveAction(p, service.AgentActionGetInstanceLogs, id, 0); err != nil {
+		if deps.Agent == nil {
+			return toolErr("策略服务不可用")
+		}
+		if _, _, err := deps.Agent.AuthorizeInstanceAction(p, action, id); err != nil {
 			return toolForbidden(err)
 		}
 		if deps.Log == nil {
@@ -273,53 +369,87 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		}
 		return toolOK(page)
 
-	case "instance_start":
-		return callLifecycle(ctx, deps, p, service.AgentActionInstanceStart, args, func(id uint) error {
-			return deps.Instance.Start(id)
-		})
-	case "instance_stop":
-		return callLifecycle(ctx, deps, p, service.AgentActionInstanceStop, args, func(id uint) error {
-			return deps.Instance.Stop(id)
-		})
-	case "instance_restart":
-		return callLifecycle(ctx, deps, p, service.AgentActionInstanceRestart, args, func(id uint) error {
-			return deps.Instance.Restart(id)
-		})
+	case "instance_start", "instance_stop", "instance_restart":
+		return callLifecycle(ctx, deps, p, action, args)
 
 	case "node_maintenance_enter":
-		return callMaintenance(deps, p, service.AgentActionNodeMaintenanceEnter, args, true)
+		return callMaintenance(deps, p, action, args, true)
 	case "node_maintenance_leave":
-		return callMaintenance(deps, p, service.AgentActionNodeMaintenanceLeave, args, false)
+		return callMaintenance(deps, p, action, args, false)
 
 	default:
-		return toolErr("未知工具: " + name + "（硬拒绝面操作不会注册为 tool）")
+		return toolErr("未知工具: " + name)
 	}
 }
 
-func callLifecycle(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any, fn func(uint) error) ToolResult {
+// callLifecycle 实例生命周期工具调用：可信目标授权 + expected node 派发（FR-395）。
+// 若 deps.Agent 为 nil（unit test 轻量场景），回退 ResolveAction 仅做主体内存判断。
+func callLifecycle(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult {
 	_ = ctx
 	id, e := requireID(args)
 	if e != nil {
 		return toolErr(e.Error())
 	}
+	// 有 Agent service → 可信目标授权 + expected node（FR-395 生产路径）。
+	if deps.Agent != nil {
+		_, inst, err := deps.Agent.AuthorizeInstanceAction(p, action, id)
+		if err != nil {
+			return toolForbidden(err)
+		}
+		if deps.Instance == nil {
+			return toolErr("实例服务不可用")
+		}
+		expectedNodeID := inst.NodeID
+		var execErr error
+		switch action {
+		case service.AgentActionInstanceStart:
+			execErr = deps.Instance.StartForExpectedNode(id, expectedNodeID)
+		case service.AgentActionInstanceStop:
+			execErr = deps.Instance.StopForExpectedNode(id, expectedNodeID)
+		case service.AgentActionInstanceRestart:
+			execErr = deps.Instance.RestartForExpectedNode(id, expectedNodeID)
+		default:
+			return toolErr("未知生命周期动作: " + action)
+		}
+		if execErr != nil {
+			return toolErr(execErr.Error())
+		}
+		return toolOK(map[string]any{"ok": true})
+	}
+	// 无 Agent service → 先做主体内存策略判断，再检查服务可用性（unit test / legacy）。
 	if err := service.ResolveAction(p, action, id, 0); err != nil {
 		return toolForbidden(err)
 	}
 	if deps.Instance == nil {
 		return toolErr("实例服务不可用")
 	}
-	if err := fn(id); err != nil {
-		return toolErr(err.Error())
+	var execErr error
+	switch action {
+	case service.AgentActionInstanceStart:
+		execErr = deps.Instance.Start(id)
+	case service.AgentActionInstanceStop:
+		execErr = deps.Instance.Stop(id)
+	case service.AgentActionInstanceRestart:
+		execErr = deps.Instance.Restart(id)
+	default:
+		return toolErr("未知生命周期动作: " + action)
+	}
+	if execErr != nil {
+		return toolErr(execErr.Error())
 	}
 	return toolOK(map[string]any{"ok": true})
 }
 
+// callMaintenance 节点维护工具调用。
 func callMaintenance(deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any, enabled bool) ToolResult {
 	id, e := requireID(args)
 	if e != nil {
 		return toolErr(e.Error())
 	}
-	if err := service.ResolveAction(p, action, 0, id); err != nil {
+	if deps.Agent == nil {
+		return toolErr("策略服务不可用")
+	}
+	if _, err := deps.Agent.AuthorizeNodeAction(p, action, id); err != nil {
 		return toolForbidden(err)
 	}
 	if deps.Node == nil {
@@ -415,11 +545,9 @@ func toolErr(msg string) ToolResult {
 }
 
 func toolForbidden(err error) ToolResult {
-	msg := "操作被拒绝"
+	msg := "能力/scope 不足或操作被拒绝"
 	if err != nil && !errors.Is(err, service.ErrAgentForbidden) {
 		msg = err.Error()
-	} else if errors.Is(err, service.ErrAgentForbidden) {
-		msg = "写白名单/scope 不足或硬拒绝"
 	}
 	return toolErr(msg)
 }

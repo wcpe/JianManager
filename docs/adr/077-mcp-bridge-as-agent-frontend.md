@@ -10,8 +10,8 @@
    - Streamable HTTP 主路径：`POST/GET /api/v1/mcp`
    - SSE 兼容：`GET /api/v1/mcp/sse` + `POST /api/v1/mcp/message`
 2. **鉴权**：仅 Agent Token（`jmat_`）；复用 `middleware.AgentAuth` / `AgentTokenService.Authenticate`。人类 JWT **不得**充当 MCP 会话凭证。
-3. **协议适配 only**：工具调用内部只调既有 service / `ResolveAction`，**禁止**在 MCP 层复制 scope / 写白名单 / 硬拒绝策略。
-4. **工具集**与 jm-agent / Agent Ops 对齐；硬拒绝面操作**不注册**为 tool。
+3. **协议适配 only**：工具调用内部只调既有 service / 统一 action 授权器，**禁止**在 MCP 层复制 scope / 写白名单 / capability / 硬拒绝策略。
+4. **工具集**由 service action 目录投影；`tools/list` 按 Token 能力与可用 scope 动态裁剪（ADR-080），永久禁区与未登记 action **不注册**为 tool。
 5. **会话内存可运维**：sessionId、token 元数据、IP、传输类型、连接/活动时间、最近 tool、空闲/绝对超时；全局与每 Token 并发上限；管理员 JWT API 列表 / 踢线。
 6. **FR-386 stdio mcp-bridge**：标记废弃；删除 `apps/mcp-bridge` 属 **FR-392**（本 ADR 不强制本批删仓，但不得再作为推荐接入路径）。
 
@@ -31,3 +31,4 @@
 ## 关系
 
 - ADR-076（策略真源）、FR-389（本决策落地）、FR-390（调用流水可选）、FR-392（删除 mcp-bridge）、FR-386（废弃）。
+- **修订于 ADR-080**：工具发现改为按 capability/scope 动态裁剪；MCP 仅保留 ToolSpec 协议适配，能力与 scope 规则仍只落在 CP service action 目录。

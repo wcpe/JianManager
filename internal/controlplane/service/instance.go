@@ -892,6 +892,18 @@ func (s *InstanceService) removeWorkerData(instance *model.Instance) error {
 
 // Start 启动实例（委托给 Worker Node）。
 func (s *InstanceService) Start(id uint) error {
+	return s.startInternal(id, 0)
+}
+
+// StartForExpectedNode Agent 专用启动：锁内重验 node 归属，变化则拒绝派发（FR-395）。
+func (s *InstanceService) StartForExpectedNode(id, expectedNodeID uint) error {
+	if expectedNodeID == 0 {
+		return fmt.Errorf("expectedNodeID 无效")
+	}
+	return s.startInternal(id, expectedNodeID)
+}
+
+func (s *InstanceService) startInternal(id, expectedNodeID uint) error {
 	releaseOperation := s.acquireInstanceOperation(id)
 	delegateOwnsOperation := false
 	defer func() {
@@ -903,6 +915,9 @@ func (s *InstanceService) Start(id uint) error {
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return err
+	}
+	if expectedNodeID != 0 && instance.NodeID != expectedNodeID {
+		return ErrAgentForbidden
 	}
 
 	// 损毁实例不可直接启动（FR-342）：搭建任一阶段失败进 DAMAGED，须先「重建」复用参数重跑搭建，
@@ -936,7 +951,7 @@ func (s *InstanceService) Start(id uint) error {
 	}
 
 	// 委托给 Worker Node；生命周期锁移交给后台委托，RPC 与状态回写结束后释放。
-	delegateOwnsOperation = s.spawnDelegate(instance, "start", releaseOperation)
+	delegateOwnsOperation = s.spawnDelegate(instance, "start", expectedNodeID, releaseOperation)
 
 	return nil
 }
@@ -990,6 +1005,18 @@ func (s *InstanceService) memoryGate(instance *model.Instance) error {
 
 // Stop 停止实例（委托给 Worker Node）。
 func (s *InstanceService) Stop(id uint) error {
+	return s.stopInternal(id, 0)
+}
+
+// StopForExpectedNode Agent 专用停止：锁内重验 node 归属（FR-395）。
+func (s *InstanceService) StopForExpectedNode(id, expectedNodeID uint) error {
+	if expectedNodeID == 0 {
+		return fmt.Errorf("expectedNodeID 无效")
+	}
+	return s.stopInternal(id, expectedNodeID)
+}
+
+func (s *InstanceService) stopInternal(id, expectedNodeID uint) error {
 	releaseOperation := s.acquireInstanceOperation(id)
 	delegateOwnsOperation := false
 	defer func() {
@@ -1001,18 +1028,33 @@ func (s *InstanceService) Stop(id uint) error {
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return err
+	}
+	if expectedNodeID != 0 && instance.NodeID != expectedNodeID {
+		return ErrAgentForbidden
 	}
 
 	if err := s.transition(id, model.InstanceStatusStopping, "停止"); err != nil {
 		return err
 	}
 
-	delegateOwnsOperation = s.spawnDelegate(instance, "stop", releaseOperation)
+	delegateOwnsOperation = s.spawnDelegate(instance, "stop", expectedNodeID, releaseOperation)
 	return nil
 }
 
 // Restart 重启实例。
 func (s *InstanceService) Restart(id uint) error {
+	return s.restartInternal(id, 0)
+}
+
+// RestartForExpectedNode Agent 专用重启：锁内重验 node 归属（FR-395）。
+func (s *InstanceService) RestartForExpectedNode(id, expectedNodeID uint) error {
+	if expectedNodeID == 0 {
+		return fmt.Errorf("expectedNodeID 无效")
+	}
+	return s.restartInternal(id, expectedNodeID)
+}
+
+func (s *InstanceService) restartInternal(id, expectedNodeID uint) error {
 	releaseOperation := s.acquireInstanceOperation(id)
 	delegateOwnsOperation := false
 	defer func() {
@@ -1024,6 +1066,9 @@ func (s *InstanceService) Restart(id uint) error {
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return err
+	}
+	if expectedNodeID != 0 && instance.NodeID != expectedNodeID {
+		return ErrAgentForbidden
 	}
 
 	// 重启最终会重新启动实例，必须与 Start 共用同一道长操作闸；所有复用 Restart 的入口自动覆盖。
@@ -1046,7 +1091,7 @@ func (s *InstanceService) Restart(id uint) error {
 		return err
 	}
 
-	delegateOwnsOperation = s.spawnDelegate(instance, "restart", releaseOperation)
+	delegateOwnsOperation = s.spawnDelegate(instance, "restart", expectedNodeID, releaseOperation)
 	return nil
 }
 
@@ -1072,7 +1117,7 @@ func (s *InstanceService) Kill(id uint) error {
 		return err
 	}
 
-	delegateOwnsOperation = s.spawnDelegate(instance, "kill", releaseOperation)
+	delegateOwnsOperation = s.spawnDelegate(instance, "kill", 0, releaseOperation)
 	return nil
 }
 
@@ -1345,8 +1390,9 @@ func (s *InstanceService) resolveJDKPath(instance *model.Instance) (string, erro
 
 // spawnDelegate 在后台异步委托实例动作给 Worker，并登记到 bgWG 以便优雅关闭时 join。
 // releaseOperation 由后台委托在 RPC 与状态回写结束后调用，使删除与后续生命周期请求等待在途动作。
+// expectedNodeID>0 时派发前再次重读实例归属；变化则拒绝 Worker RPC（FR-395）。
 // Shutdown 之后（bgCtx 取消）不再发起新委托，返回 false 让调用方自行释放生命周期锁。
-func (s *InstanceService) spawnDelegate(instance *model.Instance, action string, releaseOperation func()) bool {
+func (s *InstanceService) spawnDelegate(instance *model.Instance, action string, expectedNodeID uint, releaseOperation func()) bool {
 	s.bgMu.Lock()
 	if s.bgCtx.Err() != nil {
 		s.bgMu.Unlock()
@@ -1358,6 +1404,15 @@ func (s *InstanceService) spawnDelegate(instance *model.Instance, action string,
 	go func() {
 		defer s.bgWG.Done()
 		defer releaseOperation()
+		if expectedNodeID != 0 {
+			current, err := s.GetByID(instance.ID)
+			if err != nil || current.NodeID != expectedNodeID {
+				slog.Warn("实例归属变化，取消 Agent 生命周期派发",
+					"instanceId", instance.UUID, "expectedNodeId", expectedNodeID)
+				return
+			}
+			instance = current
+		}
 		s.delegateToWorker(instance, action)
 	}()
 	return true

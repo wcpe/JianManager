@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"gorm.io/gorm"
@@ -13,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Agent 写白名单与动作常量（FR-384 / ADR-076）。
+// Agent 写白名单与动作常量（FR-384 / FR-395，见 ADR-076/080）。
 const (
 	AgentWriteInstanceLife    = "instance.life"
 	AgentWriteNodeMaintenance = "node.maintenance"
@@ -59,6 +60,7 @@ const (
 )
 
 // 硬拒绝 action 集合（永不 allow）。
+// FR-395 起生产授权以 action 目录为准；本集合继续供 FR-388 契约与兼容测试枚举。
 var agentHardDeny = map[string]struct{}{
 	AgentHardDenyUserWrite:      {},
 	AgentHardDenyGroupWrite:     {},
@@ -75,7 +77,7 @@ var agentHardDeny = map[string]struct{}{
 	"settings.write": {}, "db.query": {}, "system.update": {},
 }
 
-// AgentOpsAction 运维面可暴露的 action 契约行（FR-388）。
+// AgentOpsAction 运维面可暴露的 action 契约行（FR-388 / FR-395）。
 type AgentOpsAction struct {
 	// Action 策略引擎动作名。
 	Action string
@@ -85,8 +87,10 @@ type AgentOpsAction struct {
 	PathTemplate string
 	// Kind read|write。
 	Kind string
-	// WriteAllow 写动作所需白名单项；读为空。
+	// WriteAllow 写动作所需 V1 白名单项；读为空。
 	WriteAllow string
+	// Capability 写动作/读动作所需 V2 能力；whoami 为空。
+	Capability string
 	// Scope instance|node|none。
 	Scope string
 	// HTTPDeny 策略拒绝时期望的 HTTP 状态（运维面统一 403）。
@@ -94,19 +98,35 @@ type AgentOpsAction struct {
 }
 
 // AgentOpsContract 返回 CLI/MCP/curl 共享的运维 action 契约表。
+// 由 action 目录投影，仅包含带 HTTP 投影的条目。
 func AgentOpsContract() []AgentOpsAction {
-	return []AgentOpsAction{
-		{Action: AgentActionWhoami, Method: "GET", PathTemplate: "/api/v1/agent/whoami", Kind: "read", Scope: "none", HTTPDeny: 403},
-		{Action: AgentActionListNodes, Method: "GET", PathTemplate: "/api/v1/agent/nodes", Kind: "read", Scope: "node", HTTPDeny: 403},
-		{Action: AgentActionListInstances, Method: "GET", PathTemplate: "/api/v1/agent/instances", Kind: "read", Scope: "instance", HTTPDeny: 403},
-		{Action: AgentActionGetInstance, Method: "GET", PathTemplate: "/api/v1/agent/instances/:id", Kind: "read", Scope: "instance", HTTPDeny: 403},
-		{Action: AgentActionGetInstanceMetrics, Method: "GET", PathTemplate: "/api/v1/agent/instances/:id/metrics", Kind: "read", Scope: "instance", HTTPDeny: 403},
-		{Action: AgentActionInstanceStart, Method: "POST", PathTemplate: "/api/v1/agent/instances/:id/start", Kind: "write", WriteAllow: AgentWriteInstanceLife, Scope: "instance", HTTPDeny: 403},
-		{Action: AgentActionInstanceStop, Method: "POST", PathTemplate: "/api/v1/agent/instances/:id/stop", Kind: "write", WriteAllow: AgentWriteInstanceLife, Scope: "instance", HTTPDeny: 403},
-		{Action: AgentActionInstanceRestart, Method: "POST", PathTemplate: "/api/v1/agent/instances/:id/restart", Kind: "write", WriteAllow: AgentWriteInstanceLife, Scope: "instance", HTTPDeny: 403},
-		{Action: AgentActionNodeMaintenanceEnter, Method: "POST", PathTemplate: "/api/v1/agent/nodes/:id/maintenance/enter", Kind: "write", WriteAllow: AgentWriteNodeMaintenance, Scope: "node", HTTPDeny: 403},
-		{Action: AgentActionNodeMaintenanceLeave, Method: "POST", PathTemplate: "/api/v1/agent/nodes/:id/maintenance/leave", Kind: "write", WriteAllow: AgentWriteNodeMaintenance, Scope: "node", HTTPDeny: 403},
+	items := make([]AgentOpsAction, 0, len(agentActionCatalog))
+	for _, d := range agentActionCatalog {
+		if !d.HTTPInContract {
+			continue
+		}
+		kind := d.Operation
+		if kind == AgentOperationDestructive {
+			kind = AgentOperationWrite
+		}
+		items = append(items, AgentOpsAction{
+			Action:       d.Action,
+			Method:       d.HTTPMethod,
+			PathTemplate: d.HTTPPath,
+			Kind:         kind,
+			WriteAllow:   d.V1WriteAllow,
+			Capability:   d.V2Capability,
+			Scope:        d.ResourceType,
+			HTTPDeny:     403,
+		})
 	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].PathTemplate == items[j].PathTemplate {
+			return items[i].Method < items[j].Method
+		}
+		return items[i].PathTemplate < items[j].PathTemplate
+	})
+	return items
 }
 
 // AgentHardDenyList 返回硬拒绝 action 列表（排序无关，供契约/测试枚举）。
@@ -126,16 +146,18 @@ func IsAgentHardDeny(action string) bool {
 
 // AgentPrincipal 鉴权后注入上下文的 agent 主体。
 type AgentPrincipal struct {
-	TokenID           uint
-	Name              string
+	TokenID uint
+	Name    string
 	// TokenPrefix 明文前缀（如 jmat_ab12），供 MCP 会话列表展示；不泄露全文。
 	TokenPrefix       string
+	PolicyVersion     int
 	ScopedInstanceIDs []uint
 	ScopedNodeIDs     []uint
 	WriteAllowlist    []string
+	Capabilities      []string
 }
 
-// AgentTokenService Agent Token 管理与策略引擎（FR-384，见 ADR-076）。
+// AgentTokenService Agent Token 管理与策略引擎（FR-384 / FR-395，见 ADR-076/080）。
 type AgentTokenService struct {
 	db *gorm.DB
 }
@@ -146,11 +168,17 @@ func NewAgentTokenService(db *gorm.DB) *AgentTokenService {
 }
 
 // IssueAgentTokenRequest 签发请求。
+// WriteAllowlistProvided / CapabilitiesProvided 用于区分「字段缺省」与「显式空数组」。
 type IssueAgentTokenRequest struct {
-	Name              string
-	ScopedInstanceIDs []uint
-	ScopedNodeIDs     []uint
-	WriteAllowlist    []string
+	Name                   string
+	ScopedInstanceIDs      []uint
+	ScopedNodeIDs          []uint
+	WriteAllowlist         []string
+	WriteAllowlistProvided bool
+	Capabilities           []string
+	CapabilitiesProvided   bool
+	// PolicyVersion 1=V1，2=V2；0 视为 V1。
+	PolicyVersion int
 	// TTLDays 有效天数；<=0 默认 90，上限 365。
 	TTLDays   int
 	CreatedBy uint
@@ -169,11 +197,46 @@ func (s *AgentTokenService) Issue(req IssueAgentTokenRequest) (*model.AgentToken
 	if ttlDays > maxAgentTTLDays {
 		ttlDays = maxAgentTTLDays
 	}
-	// 默认写白名单：仅生命周期 + 维护态
-	allow := req.WriteAllowlist
-	if allow == nil {
-		allow = []string{AgentWriteInstanceLife, AgentWriteNodeMaintenance}
+
+	policyVersion := req.PolicyVersion
+	if policyVersion == 0 {
+		policyVersion = AgentPolicyVersionV1
 	}
+	if policyVersion != AgentPolicyVersionV1 && policyVersion != AgentPolicyVersionV2 {
+		return nil, "", fmt.Errorf("policyVersion 仅支持 1 或 2")
+	}
+
+	var allow []string
+	var caps []string
+	switch policyVersion {
+	case AgentPolicyVersionV1:
+		if req.CapabilitiesProvided {
+			return nil, "", fmt.Errorf("V1 Token 不得提交 capabilities")
+		}
+		if req.WriteAllowlistProvided {
+			allow = req.WriteAllowlist
+			if allow == nil {
+				allow = []string{}
+			}
+		} else {
+			// 默认写白名单：仅生命周期 + 维护态
+			allow = []string{AgentWriteInstanceLife, AgentWriteNodeMaintenance}
+		}
+		caps = []string{}
+	case AgentPolicyVersionV2:
+		if req.WriteAllowlistProvided {
+			return nil, "", fmt.Errorf("V2 Token 不得提交 writeAllowlist")
+		}
+		if !req.CapabilitiesProvided {
+			return nil, "", fmt.Errorf("V2 Token 必须显式提交 capabilities（可为空数组）")
+		}
+		if err := ValidateAgentCapabilities(req.Capabilities); err != nil {
+			return nil, "", err
+		}
+		caps = append([]string(nil), req.Capabilities...)
+		allow = []string{}
+	}
+
 	instJSON, err := json.Marshal(req.ScopedInstanceIDs)
 	if err != nil {
 		return nil, "", err
@@ -183,6 +246,10 @@ func (s *AgentTokenService) Issue(req IssueAgentTokenRequest) (*model.AgentToken
 		return nil, "", err
 	}
 	allowJSON, err := json.Marshal(allow)
+	if err != nil {
+		return nil, "", err
+	}
+	capsJSON, err := json.Marshal(caps)
 	if err != nil {
 		return nil, "", err
 	}
@@ -198,6 +265,8 @@ func (s *AgentTokenService) Issue(req IssueAgentTokenRequest) (*model.AgentToken
 		ScopedInstanceIDs: string(instJSON),
 		ScopedNodeIDs:     string(nodeJSON),
 		WriteAllowlist:    string(allowJSON),
+		PolicyVersion:     policyVersion,
+		Capabilities:      string(capsJSON),
 		ExpiresAt:         time.Now().Add(time.Duration(ttlDays) * 24 * time.Hour),
 		CreatedBy:         req.CreatedBy,
 	}
@@ -259,60 +328,44 @@ func (s *AgentTokenService) Authenticate(plaintext string) (*AgentPrincipal, err
 	return p, nil
 }
 
-// ResolveAction 策略真源：硬拒绝 / 写白名单 / scope。
-// instanceID、nodeID 为 0 表示该动作不绑定资源。
+// ResolveAction 兼容包装：将显式 instanceID/nodeID 视为可信目标。
+// 生产 HTTP/MCP 应优先走 Authorize + CP 可信目标解析；本函数保留 V1 测试与旧调用方。
 func ResolveAction(p *AgentPrincipal, action string, instanceID, nodeID uint) error {
 	if p == nil {
 		return ErrAgentForbidden
 	}
-	if _, hard := agentHardDeny[action]; hard {
+	if IsAgentHardDeny(action) {
 		return ErrAgentForbidden
 	}
-	// 写动作
-	switch action {
-	case AgentActionInstanceStart, AgentActionInstanceStop, AgentActionInstanceRestart:
-		if !containsStr(p.WriteAllowlist, AgentWriteInstanceLife) {
-			return ErrAgentForbidden
-		}
-		if instanceID == 0 || !agentContainsUint(p.ScopedInstanceIDs, instanceID) {
-			return ErrAgentForbidden
-		}
-		return nil
-	case AgentActionNodeMaintenanceEnter, AgentActionNodeMaintenanceLeave:
-		if !containsStr(p.WriteAllowlist, AgentWriteNodeMaintenance) {
-			return ErrAgentForbidden
-		}
-		if nodeID == 0 || !agentContainsUint(p.ScopedNodeIDs, nodeID) {
-			return ErrAgentForbidden
-		}
-		return nil
-	case AgentActionGetInstance, AgentActionGetInstanceMetrics, AgentActionGetInstanceLogs:
-		if instanceID == 0 || !agentContainsUint(p.ScopedInstanceIDs, instanceID) {
-			return ErrAgentForbidden
-		}
-		return nil
-	case AgentActionListInstances:
-		// 列表：至少有一个实例 scope 才允许（避免空 token 扫全站）
-		if len(p.ScopedInstanceIDs) == 0 {
-			return ErrAgentForbidden
-		}
-		return nil
-	case AgentActionListNodes:
-		if len(p.ScopedNodeIDs) == 0 {
-			return ErrAgentForbidden
-		}
-		return nil
-	case AgentActionWhoami:
-		return nil
-	default:
-		// 未知动作默认拒绝
+	d, ok := DescribeAgentAction(action)
+	if !ok {
 		return ErrAgentForbidden
 	}
+	// 无具体目标的发现类 action（whoami/list）走 CanDiscover。
+	if d.Action == AgentActionWhoami || d.Action == AgentActionListInstances || d.Action == AgentActionListNodes {
+		_, err := CanDiscover(p, action)
+		return err
+	}
+	target := AgentTrustedTarget{ResourceType: d.ResourceType}
+	switch d.ResourceType {
+	case AgentResourceNone:
+		// 无目标
+	case AgentResourceNode:
+		target.NodeID = nodeID
+	case AgentResourceInstance:
+		// 兼容旧调用：仅传 instanceID 时，V1 只看显式实例 scope；
+		// V2 若未提供 nodeID，仅在显式实例 scope 命中时放行，不猜测归属。
+		target.InstanceID = instanceID
+		target.NodeID = nodeID
+	}
+	_, err := Authorize(p, action, target)
+	return err
 }
 
 func principalFromToken(tok *model.AgentToken) (*AgentPrincipal, error) {
 	var instIDs, nodeIDs []uint
 	var allow []string
+	var caps []string
 	if tok.ScopedInstanceIDs != "" {
 		if err := json.Unmarshal([]byte(tok.ScopedInstanceIDs), &instIDs); err != nil {
 			return nil, fmt.Errorf("解析 scoped_instance_ids 失败: %w", err)
@@ -328,13 +381,31 @@ func principalFromToken(tok *model.AgentToken) (*AgentPrincipal, error) {
 			return nil, fmt.Errorf("解析 write_allowlist 失败: %w", err)
 		}
 	}
+	policyVersion := tok.PolicyVersion
+	if policyVersion == 0 {
+		policyVersion = AgentPolicyVersionV1
+	}
+	if policyVersion == AgentPolicyVersionV2 {
+		if tok.Capabilities != "" {
+			if err := json.Unmarshal([]byte(tok.Capabilities), &caps); err != nil {
+				return nil, fmt.Errorf("解析 capabilities 失败: %w", err)
+			}
+		}
+		if caps == nil {
+			caps = []string{}
+		}
+	} else {
+		caps = []string{}
+	}
 	return &AgentPrincipal{
 		TokenID:           tok.ID,
 		Name:              tok.Name,
 		TokenPrefix:       tok.TokenPrefix,
+		PolicyVersion:     policyVersion,
 		ScopedInstanceIDs: instIDs,
 		ScopedNodeIDs:     nodeIDs,
 		WriteAllowlist:    allow,
+		Capabilities:      caps,
 	}, nil
 }
 

@@ -18,6 +18,7 @@
   - `id`、`created_at`
   - `token_id`、`token_name`（冗余快照，吊销后仍可读）
   - `action`（与 `service.AgentAction*` 或 MCP session 事件对齐，如 `agent.whoami`、`agent.instance_start`、`mcp.session.open`）
+  - `capability`（可空，FR-395）：本次授权实际使用的能力标签。V2 记 action 对应 capability（如 `instance.life`）；V1 写记 `legacy.instance.life` / `legacy.node.maintenance`，读记 `legacy.read`；会话事件可空；历史空值合法
   - `client`：`mcp` | `jmagent` | `curl` | `unknown`（优先 `X-JM-Agent-Client`，缺省 unknown；MCP 传输路径强制 `mcp`）
   - `transport`：可选 `streamable_http` | `sse` | `http` | 空
   - `target_type`、`target_id`（可空）
@@ -86,12 +87,13 @@
 ## 5. 验收标准
 
 1. whoami / list nodes 成功后流水有记录，`action` 正确，`client` 在设置 header 时为 `jmagent`  
-2. 写操作 403（scope/白名单）有流水且 `success=false`  
+2. 写操作 403（scope/白名单/能力不足）有流水且 `success=false`  
 3. 未鉴权请求不产生海量流水（401 不刷库）  
-4. `GET call-logs` 可按 tokenId/action/client/时间过滤；非管理员 403  
+4. `GET call-logs` 可按 tokenId/action/client/时间过滤；非管理员 403；响应含可选 `capability`  
 5. Token 列表含 `lastUsedAt`、`callCount24h`  
 6. 过期清理单测或集成测证明超期可删  
-7. **真机**：现有远程 CP 或本机验收栈上产生 ≥2 条可区分 client 的记录（若仅 390 先合：curl + jmagent 即可）
+7. V1/V2 调用分别记录 `legacy.*` 与 capability 标签；历史空 capability 可正常查询  
+8. **真机**：现有远程 CP 或本机验收栈上产生 ≥2 条可区分 client 的记录（若仅 390 先合：curl + jmagent 即可）
 
 ## 6. 风险 / 待定
 

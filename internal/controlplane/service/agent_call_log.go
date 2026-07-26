@@ -67,6 +67,7 @@ type AgentCallRecord struct {
 	TokenID    uint
 	TokenName  string
 	Action     string
+	Capability string
 	Client     string
 	Transport  string
 	TargetType string
@@ -95,6 +96,7 @@ func (s *AgentCallLogService) Record(r AgentCallRecord) error {
 		TokenID:    r.TokenID,
 		TokenName:  r.TokenName,
 		Action:     r.Action,
+		Capability: r.Capability,
 		Client:     client,
 		Transport:  r.Transport,
 		TargetType: r.TargetType,
@@ -107,7 +109,7 @@ func (s *AgentCallLogService) Record(r AgentCallRecord) error {
 	}
 	// Select 全字段：避免 GORM Create 省略 bool 零值导致 success=false 未落库。
 	if err := s.db.Select(
-		"TokenID", "TokenName", "Action", "Client", "Transport",
+		"TokenID", "TokenName", "Action", "Capability", "Client", "Transport",
 		"TargetType", "TargetID", "Success", "Error", "LatencyMs", "IP", "CreatedAt",
 	).Create(row).Error; err != nil {
 		return fmt.Errorf("记录 agent 调用流水失败: %w", err)

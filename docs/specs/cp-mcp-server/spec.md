@@ -19,10 +19,10 @@
   - Streamable HTTP：`POST/GET /mcp`（或 `/api/v1/mcp`，**二选一写死**，避免双轨）
   - SSE 兼容：`GET /mcp/sse` + 消息 `POST` 配套（与 MCP SSE 传输约定对齐）
 - **鉴权**：`Authorization: Bearer <jmat_…>` 或等价 MCP 初始化参数中的 token → `AgentAuth` / 同一 `Authenticate`
-- **工具集**（与 jm-agent / 既有 Agent Ops API 对齐，硬拒绝面**不注册**为 tool）：
-  - 读：`agent_whoami`、`agent_list_nodes`、`agent_list_instances`、`agent_get_instance`、`agent_get_instance_metrics`、`agent_get_instance_logs`
+- **工具集**（与 jm-agent / 既有 Agent Ops API 对齐，硬拒绝面**不注册**为 tool；FR-395 起由 ToolSpec → action 目录投影，`tools/list` 按 Token 能力与潜在 scope 动态裁剪）：
+  - 读取：`agent_whoami`、`agent_list_nodes`、`agent_list_instances`、`agent_get_instance`、`agent_get_instance_metrics`、`agent_get_instance_logs`
   - 写：`instance_start`、`instance_stop`、`instance_restart`、`node_maintenance_enter`、`node_maintenance_leave`
-- tool 调用内部 **只调 CP 本地 service / 既有 agent handler**，不二次实现 scope/写白名单
+- tool 调用内部 **只调 CP 本地 service / 统一 action 授权器**，不二次实现 scope/写白名单/capability
 - **会话运维（内存）**：
   - 字段：sessionId、tokenId、tokenName、tokenPrefix、clientIP、transport（`streamable_http`|`sse`）、connectedAt、lastActivityAt、lastTool、idleTimeout、absoluteTimeout
   - 列表 / 按 id 踢线（管理员 JWT）
@@ -47,7 +47,7 @@
 
 - `internal/controlplane/mcp/`（或 `service/mcp_session.go` + `router/mcp.go`）：会话表（内存 `sync.Map`/`map+mutex`）、超时清理 goroutine、传输适配
 - `router`：注册 MCP 传输路由 + 管理员 sessions API
-- 工具调用：复用 `AgentOpsHandler` / `AgentTokenService.ResolveAction` + Instance/Node service，**禁止**复制策略分支
+- 工具调用：复用 `AgentOpsHandler` / `AgentTokenService.CanDiscover|Authorize` + Instance/Node service，**禁止**复制策略分支；MCP 仅持 ToolSpec（name/schema/action/执行器）
 
 ### 3.2 会话生命周期
 
@@ -86,12 +86,12 @@ initialize(auth) → Authenticate → 检查并发 → 创建 session → tools/
 
 ## 5. 验收标准
 
-1. 有效 Token：Streamable HTTP 与 SSE 均可建立会话并 `tools/list` 仅含约定工具  
+1. 有效 Token：Streamable HTTP 与 SSE 均可建立会话；`tools/list` 按当前 Token 能力与可用 scope 动态返回工具（空能力 V2 仅 whoami）  
 2. 无效/吊销/过期 Token：无法建立会话（401/等价）  
-3. scope 外 tool / 硬拒绝：不注册或 call 返回 isError + 中文原因，且 **HTTP 层不得 5xx 当策略拒绝**  
+3. scope 外 tool / 能力不足 / 永久禁区：不注册或 call 返回 isError + 中文原因，且 **HTTP 层不得 5xx 当策略拒绝**；未列出的工具手工 call 仍须最终授权拒绝  
 4. 会话列表可见 token 名/前缀、IP、时长、最近 tool、传输类型；踢线后客户端无法继续 call  
 5. 空闲超时、绝对超时、全局/每 Token 并发上限行为符合配置；超限中文原因  
-6. 单测：会话并发、超时、踢线、鉴权失败  
+6. 单测：会话并发、超时、踢线、鉴权失败、动态 tools/list  
 7. **真机**（需用户环境或既有 `103.45.143.199`）：HTTPS 远程走通至少一条 Streamable HTTP 或 SSE 全路径  
 
 ## 6. 风险 / 待定

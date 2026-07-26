@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -376,7 +375,7 @@ func (h *Handler) dispatch(c *gin.Context, s *Session, req RPCRequest, notificat
 		if notification {
 			return RPCResponse{}
 		}
-		return newResult(req.ID, map[string]any{"tools": RegisteredTools()})
+		return newResult(req.ID, map[string]any{"tools": ToolsForPrincipal(s.Principal)})
 	case "tools/call":
 		if notification {
 			return RPCResponse{}
@@ -419,30 +418,16 @@ func (h *Handler) handleToolsCall(s *Session, req RPCRequest) RPCResponse {
 	return newResult(req.ID, result)
 }
 
-// toolActionMap MCP tool 名 → Agent action 名（与 Ops/流水对齐）。
-var toolActionMap = map[string]string{
-	"agent_whoami":              service.AgentActionWhoami,
-	"agent_list_nodes":          service.AgentActionListNodes,
-	"agent_list_instances":      service.AgentActionListInstances,
-	"agent_get_instance":        service.AgentActionGetInstance,
-	"agent_get_instance_metrics": service.AgentActionGetInstanceMetrics,
-	"agent_get_instance_logs":   service.AgentActionGetInstanceLogs,
-	"instance_start":            service.AgentActionInstanceStart,
-	"instance_stop":             service.AgentActionInstanceStop,
-	"instance_restart":          service.AgentActionInstanceRestart,
-	"node_maintenance_enter":    service.AgentActionNodeMaintenanceEnter,
-	"node_maintenance_leave":    service.AgentActionNodeMaintenanceLeave,
-}
-
 func (h *Handler) recordToolCall(s *Session, toolName string, args map[string]any, result ToolResult, d time.Duration) {
 	if h == nil || h.callLog == nil || s == nil || s.Principal == nil {
 		return
 	}
-	action := toolActionMap[toolName]
-	if action == "" {
+	action, ok := toolActionByName(toolName)
+	if !ok {
 		action = "mcp.tool." + toolName
 	}
-	targetType, targetID := toolTarget(toolName, args)
+	targetType, targetID := toolTargetByName(toolName, args)
+	capability := service.CapabilityForCallLog(s.Principal, action)
 	errMsg := ""
 	if result.IsError {
 		if len(result.Content) > 0 {
@@ -459,6 +444,7 @@ func (h *Handler) recordToolCall(s *Session, toolName string, args map[string]an
 		TokenID:    s.Principal.TokenID,
 		TokenName:  s.Principal.Name,
 		Action:     action,
+		Capability: capability,
 		Client:     service.AgentClientMCP,
 		Transport:  s.Transport,
 		TargetType: targetType,
@@ -468,25 +454,6 @@ func (h *Handler) recordToolCall(s *Session, toolName string, args map[string]an
 		LatencyMs:  uint(ms),
 		IP:         s.ClientIP,
 	})
-}
-
-func toolTarget(toolName string, args map[string]any) (targetType, targetID string) {
-	if args == nil {
-		return "", ""
-	}
-	id, err := toUint(args["id"])
-	if err != nil {
-		return "", ""
-	}
-	switch toolName {
-	case "agent_get_instance", "agent_get_instance_metrics", "agent_get_instance_logs",
-		"instance_start", "instance_stop", "instance_restart":
-		return "instance", strconv.FormatUint(uint64(id), 10)
-	case "node_maintenance_enter", "node_maintenance_leave":
-		return "node", strconv.FormatUint(uint64(id), 10)
-	default:
-		return "", ""
-	}
 }
 
 func (h *Handler) recordSessionEvent(s *Session, action, ip string, success bool, errMsg string) {

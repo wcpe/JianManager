@@ -276,6 +276,7 @@ func main() {
 		Instance: instanceSvc,
 		Node:     nodeSvc,
 		Log:      logSvc,
+		Agent:    agentTokenSvc,
 	}, auditSvc, agentCallLogSvc)
 	// 平台存储资源管理器（FR-083）：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
 	storageSvc := service.NewStorageService(db, root)

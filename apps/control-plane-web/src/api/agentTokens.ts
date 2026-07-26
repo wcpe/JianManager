@@ -1,14 +1,35 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 默认写白名单（与后端 service.AgentWrite* 对齐）。 */
+/** V1 兼容写白名单（仅用于旧 Token 展示，不再作为新建默认值）。 */
 export const DEFAULT_WRITE_ALLOWLIST = ['instance.life', 'node.maintenance'] as const
 
-/** 可选写白名单项（MVP 仅此两项）。 */
+/** V1 写白名单项：仅用于旧 Token 的兼容展示映射（FR-395）。 */
 export const WRITE_ALLOWLIST_OPTIONS = [
   { value: 'instance.life', labelKey: 'agentTokens.write.instanceLife' },
   { value: 'node.maintenance', labelKey: 'agentTokens.write.nodeMaintenance' },
 ] as const
+
+/** V2 能力分组选项（与后端 service.AgentCapability* 对齐，FR-395 / ADR-080）。 */
+export const CAPABILITY_OPTIONS = [
+  { value: 'node.read', labelKey: 'agentTokens.capability.nodeRead' },
+  { value: 'node.operate', labelKey: 'agentTokens.capability.nodeOperate' },
+  { value: 'node.destructive', labelKey: 'agentTokens.capability.nodeDestructive' },
+  { value: 'instance.read', labelKey: 'agentTokens.capability.instanceRead' },
+  { value: 'instance.life', labelKey: 'agentTokens.capability.instanceLife' },
+  { value: 'instance.command', labelKey: 'agentTokens.capability.instanceCommand' },
+  { value: 'instance.provision', labelKey: 'agentTokens.capability.instanceProvision' },
+  { value: 'instance.configure', labelKey: 'agentTokens.capability.instanceConfigure' },
+  { value: 'instance.content', labelKey: 'agentTokens.capability.instanceContent' },
+  { value: 'instance.destructive', labelKey: 'agentTokens.capability.instanceDestructive' },
+  { value: 'bot.read', labelKey: 'agentTokens.capability.botRead' },
+  { value: 'bot.manage', labelKey: 'agentTokens.capability.botManage' },
+  { value: 'bot.load', labelKey: 'agentTokens.capability.botLoad' },
+  { value: 'observability.read', labelKey: 'agentTokens.capability.observabilityRead' },
+] as const
+
+/** 新建 V2 Token 的默认能力：仅只读，服务端不隐式补能力。 */
+export const DEFAULT_CAPABILITIES = ['node.read', 'instance.read', 'observability.read'] as const
 
 /**
  * 列表项：后端 model.AgentToken 序列化后，scope/白名单字段为 JSON 文本字符串
@@ -28,6 +49,10 @@ export interface AgentTokenRaw {
   createdBy: number
   /** 近 24h 调用次数（FR-390）。 */
   callCount24h?: number
+  /** 策略版本；缺失或非 2 一律按 V1 展示（FR-395）。 */
+  policyVersion?: number | null
+  /** V2 能力数组；V1 为空（FR-395）。 */
+  capabilities?: string | string[] | null
 }
 
 /** 前端规范化后的 Token 元数据（无明文）。 */
@@ -44,14 +69,20 @@ export interface AgentTokenInfo {
   createdAt: string
   createdBy: number
   callCount24h: number
+  /** 1=V1 兼容策略，2=V2 能力策略。 */
+  policyVersion: 1 | 2
+  /** V2 能力；V1 恒为空数组。 */
+  capabilities: string[]
 }
 
-/** POST 签发请求体。 */
+/** POST 签发请求体。V2 提交 capabilities，禁止与 writeAllowlist 混用。 */
 export interface IssueAgentTokenRequest {
   name: string
   scopedInstanceIds: number[]
   scopedNodeIds: number[]
   writeAllowlist?: string[]
+  policyVersion?: number
+  capabilities?: string[]
   /** 有效天数；<=0 后端默认 90，上限 365。 */
   ttlDays?: number
 }
@@ -90,9 +121,11 @@ export function parseStringList(value: string | string[] | null | undefined): st
   }
 }
 
-/** 规范化列表项。 */
+/** 规范化列表项（V1/V2 兼容，FR-395）。 */
 export function normalizeAgentToken(raw: AgentTokenRaw): AgentTokenInfo {
   const n = Number(raw.callCount24h)
+  const pv = raw.policyVersion === 2 ? 2 : 1
+  const capabilities = pv === 2 ? parseStringList(raw.capabilities) : []
   return {
     id: raw.id,
     name: raw.name,
@@ -106,6 +139,8 @@ export function normalizeAgentToken(raw: AgentTokenRaw): AgentTokenInfo {
     createdAt: raw.createdAt,
     createdBy: raw.createdBy,
     callCount24h: Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0,
+    policyVersion: pv,
+    capabilities,
   }
 }
 

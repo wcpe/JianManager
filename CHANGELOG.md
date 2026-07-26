@@ -8,6 +8,9 @@
 
 > 下个版本开发窗口；正式发版时将本段整理为新版本段。
 
+### 新增
+- **Agent 能力策略 v2 与节点继承实例作用域（FR-395）**：`agent_tokens` 增加 `policy_version`/`capabilities`；V1 写白名单精确兼容且不启用节点继承；V2 固定 capability 分组，节点 scope 单向覆盖当前与未来实例；统一 action 目录驱动 HTTP/MCP；`tools/list` 按能力动态裁剪，`tools/call` 可信目标最终授权；生命周期派发前锁内重验归属；调用流水新增 `capability`（V2 能力 / V1 `legacy.*`）；Token 管理 UI 默认签发 V2 并展示策略版本与能力。ADR-080 accepted；ADR-076/077 部分修订。
+
 ## 0.20.0（2026-07-25）
 
 > 本版交付：文件资源管理器权限/多窗壳、Agent Token + CP 内嵌 MCP 与调用观测、Bot 命令压测平台（编排/运行/向导/观测）、实例反向对账、节点离线归档清理；退役 mcp-bridge。CI 在 `b029216` 全绿（agent-gate/web-static/bot-quality/web-quality/E2E×4）。已知残余：FR-365 error 态不自动回 connected；FR-369/370 单 Worker 不宣称 500 全员 connected 与 60min harness 满跑。

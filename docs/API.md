@@ -3302,16 +3302,18 @@
 
 ---
 
-## Agent 接入（FR-384 / FR-388）
+## Agent 接入（FR-384 / FR-388 / FR-395）
 
-Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离。策略真源在 CP（默认只读 + 写白名单 + 实例/节点 scope + 硬拒绝面）。  
-契约表见 `docs/specs/agent-safety-gate/contract.md`。
+Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离。策略真源在 CP：  
+- **V1**（`policyVersion` 缺省或 1）：旧 `writeAllowlist` 精确语义，显式实例/节点 ID scope，**不**启用节点继承。  
+- **V2**（`policyVersion=2`）：固定 capability 分组；节点 scope 单向覆盖该节点当前与未来实例；未知 capability/action 默认拒绝。  
+契约表见 `docs/specs/agent-safety-gate/contract.md`；ADR 见 076/080。
 
 ### POST /api/v1/agent/tokens
 - **描述**: 签发 Agent Token（明文仅此响应返回一次）
-- **关联 FR**: FR-384
+- **关联 FR**: FR-384 / FR-395
 - **权限**: 平台管理员 JWT
-- **请求**:
+- **V1 请求**（兼容；缺省 policyVersion=1）：
   ```json
   {
     "name": "ci",
@@ -3321,14 +3323,32 @@ Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离
     "ttlDays": 90
   }
   ```
-- **响应** (201): `{ "token": { ...元数据 }, "plaintext": "jmat_..." }`
+  - `writeAllowlist` 缺省时默认 `instance.life` + `node.maintenance`；显式 `[]` 为只读。  
+  - **不得**提交 `capabilities`。
+- **V2 请求**（推荐；管理 UI 默认签发 V2）：
+  ```json
+  {
+    "name": "cursor-dev",
+    "policyVersion": 2,
+    "scopedInstanceIds": [1],
+    "scopedNodeIds": [2],
+    "capabilities": ["node.read", "instance.read", "instance.life", "observability.read"],
+    "ttlDays": 90
+  }
+  ```
+  - **必须**显式提交 `capabilities`（允许 `[]`）；服务端不隐式补能力。  
+  - **不得**同时提交 `writeAllowlist`。  
+  - 未知/重复 capability → 400。
+- **响应** (201): `{ "token": { "id", "name", "tokenPrefix", "scopedInstanceIds", "scopedNodeIds", "writeAllowlist", "policyVersion", "capabilities": [], "expiresAt", "revoked", "createdAt", "createdBy" }, "plaintext": "jmat_..." }`
+  - `capabilities` 恒为**数组**；V1 为空数组。
 - **错误**: 400 | 403
 
 ### GET /api/v1/agent/tokens
 - **描述**: 列出 Agent Token 元数据（无明文）；含 `lastUsedAt` 与 `callCount24h`（近 24h 调用次数，FR-390）
-- **关联 FR**: FR-384 / FR-390
+- **关联 FR**: FR-384 / FR-390 / FR-395
 - **权限**: 平台管理员 JWT
-- **响应** (200): `[{ "id", "name", "tokenPrefix", "scopedInstanceIds", "scopedNodeIds", "writeAllowlist", "expiresAt", "revoked", "lastUsedAt", "createdAt", "createdBy", "callCount24h" }, ...]`
+- **响应** (200): `[{ "id", "name", "tokenPrefix", "scopedInstanceIds", "scopedNodeIds", "writeAllowlist", "policyVersion", "capabilities", "expiresAt", "revoked", "lastUsedAt", "createdAt", "createdBy", "callCount24h" }, ...]`
+  - 旧字段 `writeAllowlist` 不删除；新增 `policyVersion`、`capabilities`（数组）。
 
 ### DELETE /api/v1/agent/tokens/:id
 - **描述**: 吊销 Agent Token（立即失效）
@@ -3336,8 +3356,8 @@ Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离
 - **权限**: 平台管理员 JWT
 
 ### GET /api/v1/agent/call-logs
-- **描述**: 分页查询 Agent 调用流水（读+写 Ops；日后 MCP tool 同表）
-- **关联 FR**: FR-390
+- **描述**: 分页查询 Agent 调用流水（读+写 Ops 与 MCP tool）
+- **关联 FR**: FR-390 / FR-395
 - **权限**: 平台管理员 JWT
 - **查询参数**:
   | 参数 | 类型 | 说明 |
@@ -3350,49 +3370,58 @@ Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离
   | to | string | RFC3339 或 `YYYY-MM-DD` |
   | page | int | 默认 1 |
   | pageSize | int | 默认 50，上限 200 |
-- **响应** (200): `{ "items": [...], "total", "page", "pageSize" }`；`items[]` 字段含 `tokenId`、`tokenName`、`action`、`client`、`transport`、`targetType`、`targetId`、`success`、`error`、`latencyMs`、`ip`、`createdAt`
+- **响应** (200): `{ "items": [...], "total", "page", "pageSize" }`；`items[]` 字段含 `tokenId`、`tokenName`、`action`、`capability`、`client`、`transport`、`targetType`、`targetId`、`success`、`error`、`latencyMs`、`ip`、`createdAt`
+  - `capability`：V2 记 action 对应能力（如 `instance.life`）；V1 写记 `legacy.instance.life` / `legacy.node.maintenance`，读记 `legacy.read`；会话事件可空。历史空值合法。
 - **排序**: `created_at DESC, id DESC`
 - **错误**: 400 参数无效 | 403 非平台管理员
 - **客户端约定**: 请求头 `X-JM-Agent-Client: jmagent|mcp|curl`（长度 ≤32，未知/非法归 `unknown`）；`jmagent` CLI 默认发送 `jmagent`。仅**成功鉴权后**记流水；401 不刷库；策略 403 记 `success=false`。默认保留 14 天（启动时清理过期行）。
 
 ### GET /api/v1/agent/whoami
-- **描述**: 查询当前 Agent 身份与 scope / 写白名单
-- **关联 FR**: FR-384 / FR-388
+- **描述**: 查询当前 Agent 身份、策略版本、能力与 scope
+- **关联 FR**: FR-384 / FR-388 / FR-395
 - **权限**: Agent Token（`Authorization: Bearer jmat_...`）
-- **响应** (200): `{ "kind":"agent", "name":"...", "tokenId":1, "scopedInstanceIds":[], "scopedNodeIds":[], "writeAllowlist":[] }`
+- **响应** (200): `{ "kind":"agent", "name":"...", "tokenId":1, "policyVersion":1|2, "scopedInstanceIds":[], "scopedNodeIds":[], "writeAllowlist":[], "capabilities":[] }`
 - **错误**: 401 Token 无效/吊销/过期
 - **流水**: 成功鉴权后记 `agent.whoami`（FR-390）
 
 ### GET /api/v1/agent/nodes
 - **描述**: 列出 scope 内节点
-- **权限**: Agent Token；节点 scope 须非空，否则 403
+- **权限**: Agent Token；节点 scope 须非空且（V2）具备 `node.read`，否则 403
 
 ### GET /api/v1/agent/instances
-- **描述**: 列出 scope 内实例；可选 `?nodeId=`
-- **权限**: Agent Token；实例 scope 须非空，否则 403
+- **描述**: 列出可访问实例；可选 `?nodeId=`
+- **权限**: Agent Token
+- **V1**: 仅显式实例 scope；空实例 scope → 403  
+- **V2**: 显式实例 ∪ 授权节点上的当前实例；空 scope 且无节点继承 → 403；`nodeId` 仅作结果过滤
 
 ### GET /api/v1/agent/instances/:id
 ### GET /api/v1/agent/instances/:id/metrics
-- **描述**: 实例详情 / 指标（须在实例 scope 内）
-- **错误**: 403 越权 | 404 不存在
+- **描述**: 实例详情 / 指标
+- **V2 能力**: 详情需 `instance.read`；指标需 `observability.read`
+- **错误**: 403 越权或不存在（Agent 面收敛为同一拒绝语义，不泄露存在性）
 
 ### POST /api/v1/agent/instances/:id/start|stop|restart
-- **描述**: 实例生命周期（写白名单 `instance.life` + 实例 scope）
-- **错误**: 403 写白名单/scope 不足；kill **永不**对 agent 开放
+- **描述**: 实例生命周期
+- **V1**: 写白名单 `instance.life` + 显式实例 scope  
+- **V2**: 能力 `instance.life` + 显式实例或节点继承 scope；派发前锁内重验归属
+- **错误**: 403 能力/scope 不足；kill **永不**对 agent 开放（未登记 action）
 
 ### POST /api/v1/agent/nodes/:id/maintenance/enter|leave
-- **描述**: 节点维护模式（写白名单 `node.maintenance` + 节点 scope）
+- **描述**: 节点维护模式
+- **V1**: 写白名单 `node.maintenance` + 节点 scope  
+- **V2**: 能力 `node.operate` + 节点 scope
 - **错误**: 403
 
 ### 策略错误码（Agent）
 | HTTP | error | 含义 |
 |---|---|---|
 | 401 | UNAUTHORIZED | 缺 Token / 非 jmat_ / 无效 / 吊销 / 过期 |
-| 403 | FORBIDDEN | scope 外、写白名单外、硬拒绝、空 scope list |
+| 403 | FORBIDDEN | scope 外、能力不足、写白名单外、永久禁区、空 scope list、未知 action |
+| 400 | BAD_REQUEST | 签发时 V1/V2 字段混用、未知 capability、参数无效 |
 
 ---
 
-## CP 内嵌 MCP（FR-389 / ADR-077）
+## CP 内嵌 MCP（FR-389 / FR-395 / ADR-077/080）
 
 Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP SDK）。**路径写死**：
 
@@ -3406,10 +3435,12 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 
 - **鉴权**：仅 Agent Token（`Authorization: Bearer jmat_...`）。人类 JWT **不能**建立 MCP 会话（401）。
 - **会话响应头**：`Mcp-Session-Id: mcps_<hex>`
-- **工具集**（硬拒绝面不注册）：`agent_whoami`、`agent_list_nodes`、`agent_list_instances`、`agent_get_instance`、`agent_get_instance_metrics`、`agent_get_instance_logs`、`instance_start`、`instance_stop`、`instance_restart`、`node_maintenance_enter`、`node_maintenance_leave`
-- **策略**：tool 内部走 `ResolveAction` + 既有 Instance/Node/Log service；策略拒绝 → HTTP **200** + MCP `result.isError=true` + 中文 message（**不得 5xx**）
+- **工具目录**（全量注册，永久禁区不注册）：`agent_whoami`、`agent_list_nodes`、`agent_list_instances`、`agent_get_instance`、`agent_get_instance_metrics`、`agent_get_instance_logs`、`instance_start`、`instance_stop`、`instance_restart`、`node_maintenance_enter`、`node_maintenance_leave`
+- **tools/list**：按当前 Token 的能力与潜在可用 scope **动态裁剪**（V1 兼容解释器；V2 capability）。空能力 V2 仅见 `agent_whoami`。
+- **tools/call**：无论是否出现在 list，均做最终授权；可信目标由 CP 解析；生命周期写操作使用 expected-node 派发。策略拒绝 → HTTP **200** + MCP `result.isError=true` + 中文 message（**不得 5xx**）。
 - **并发/超时**（配置 `mcp.*`，默认空闲 30m / 绝对 24h / 全局 32 / 每 Token 4）：超限 HTTP **429**，中文 `message`
 - **会话生命周期**：CP 重启全丢（内存）；空闲/绝对超时或管理员踢线后 context 取消
+- **流水**：tool call 记对应 Agent action 与 `capability`；会话 open/close/kick capability 可空
 
 ### GET /api/v1/agent/mcp/sessions
 - **描述**: 列出当前内存中的 MCP 会话

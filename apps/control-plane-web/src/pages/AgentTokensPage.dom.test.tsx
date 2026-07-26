@@ -70,7 +70,7 @@ describe('AgentTokensPage（DOM）', () => {
     expect(mockedApi.get).not.toHaveBeenCalled()
   })
 
-  it('管理员渲染列表行与吊销入口', async () => {
+  it('管理员渲染列表行与吊销入口（V1 兼容展示）', async () => {
     login(10)
     mockedApi.get.mockImplementation(async (url: string) => {
       if (url === '/agent/tokens') {
@@ -99,10 +99,42 @@ describe('AgentTokensPage（DOM）', () => {
     renderWithProviders(<AgentTokensPage />)
     expect(await screen.findByText('ci-bot')).toBeInTheDocument()
     expect(screen.getByText(/jmat_ab12/)).toBeInTheDocument()
+    expect(screen.getByText(/V1/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /吊销|Revoke/ })).toBeInTheDocument()
   })
 
-  it('创建成功展示一次性明文与 JM_AGENT_TOKEN', async () => {
+  it('V2 Token 列表展示能力与策略版本', async () => {
+    login(10)
+    mockedApi.get.mockImplementation(async (url: string) => {
+      if (url === '/agent/tokens') {
+        return {
+          data: [
+            {
+              id: 2,
+              name: 'v2-bot',
+              tokenPrefix: 'jmat_v2xx',
+              scopedInstanceIds: '[]',
+              scopedNodeIds: '[3]',
+              writeAllowlist: '[]',
+              policyVersion: 2,
+              capabilities: ['instance.read', 'node.read'],
+              expiresAt: '2099-12-31T00:00:00Z',
+              revoked: false,
+              createdAt: '2026-07-26T00:00:00Z',
+              createdBy: 1,
+            },
+          ],
+        }
+      }
+      return { data: [] }
+    })
+
+    renderWithProviders(<AgentTokensPage />)
+    expect(await screen.findByText('v2-bot')).toBeInTheDocument()
+    expect(screen.getByText(/V2/)).toBeInTheDocument()
+  })
+
+  it('创建成功展示一次性明文与 JM_AGENT_TOKEN，并提交 V2 payload', async () => {
     login(10)
     mockedApi.get.mockImplementation(async (url: string) => {
       if (url === '/agent/tokens') return { data: [] }
@@ -118,7 +150,9 @@ describe('AgentTokensPage（DOM）', () => {
           tokenPrefix: 'jmat_xy99',
           scopedInstanceIds: '[1]',
           scopedNodeIds: '[]',
-          writeAllowlist: '["instance.life"]',
+          writeAllowlist: '[]',
+          policyVersion: 2,
+          capabilities: ['node.read', 'instance.read', 'observability.read'],
           expiresAt: '2099-01-01T00:00:00Z',
           revoked: false,
           createdAt: '2026-07-23T00:00:00Z',
@@ -139,10 +173,17 @@ describe('AgentTokensPage（DOM）', () => {
     await waitFor(() => {
       expect(mockedApi.post).toHaveBeenCalledWith(
         '/agent/tokens',
-        expect.objectContaining({ name: 'cursor-dev' }),
+        expect.objectContaining({
+          name: 'cursor-dev',
+          policyVersion: 2,
+          capabilities: expect.arrayContaining(['node.read', 'instance.read', 'observability.read']),
+        }),
       )
     })
+    const body = mockedApi.post.mock.calls[0][1] as Record<string, unknown>
+    expect(body).not.toHaveProperty('writeAllowlist')
     expect(await screen.findByText('jmat_xy99secretplaintext')).toBeInTheDocument()
     expect(screen.getByText(/JM_AGENT_TOKEN=jmat_xy99secretplaintext/)).toBeInTheDocument()
   })
 })
+

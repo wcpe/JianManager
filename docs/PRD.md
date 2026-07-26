@@ -92,6 +92,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-389~392（Agent MCP 长连接运维 + 调用观测）：✅ 已交付@v0.20.0（CP 内嵌 MCP + 调用流水 + 观测 UI + mcp-bridge 退役）
 - FR-373~378（文件权限底座 + 资源管理器批次）：✅ 已交付@v0.20.0
 - FR-393~394（节点离线归档与彻底清理）：✅ 已交付@v0.20.0
+- FR-395~399（Agent MCP 全域运维 + 500 Bot 资源容量闭环 2026-07-26）：能力分组白名单与节点继承实例 scope / 节点实例全生命周期强类型工具 / 文件配置插件控制与流式数据分离 / Bot 舰队压测全编排 / 全链路资源采样与容量报告；永久禁区保留用户组与 RBAC、Agent Token 管理、密钥明文、数据库浏览、自更新、平台设置；计划见 `.tmp/brainstorm-mcp-full-ops-bot-capacity-2026-07-26.md` → FR-395 `docs/specs/agent-capability-policy-v2/spec.md`、FR-396 `docs/specs/mcp-instance-operations/spec.md`、FR-397 `docs/specs/mcp-content-operations/spec.md`、FR-398 `docs/specs/mcp-bot-orchestration/spec.md`、FR-399 `docs/specs/bot-load-resource-capacity/spec.md`（均需 spec；依赖序 395→[396,397,398]→399→500 Bot 真机容量战役）
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 > **验收档位图例**：`·全真栈验收`=真 UI+真 CP/Worker+真外部进程端到端；`·四档验收`=单测/集测/单机截图/真浏览器截图（后端 mock 基底）；`·验收经 FR-XXX 覆盖`=能力面被后继 FR 重做/包含并在其验收中验证（映射依据 `.tmp/acceptance/UNMARKED-66-RECONCILE.md`）；**无后缀=交付未验收（真缺口，当前 1 个：099 需真客户端 OTA 场景）**。证据台账 `.tmp/acceptance/ACCEPTANCE-LEDGER.md`。
@@ -477,6 +478,11 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-392 | 退役 mcp-bridge + jmagent 客户端标识（feat/docs）：删除 `apps/mcp-bridge` 与 stdio 文档路径；README/接入指引改为 CP MCP URL；`jmagent` 全局发送 `X-JM-Agent-Client: jmagent`；构建/CI/发布物去掉 mcp-bridge；更新 FR-388 契约与 ADR-077 状态为 superseded by 改写版（需 spec 或并入 FR-389 退役章；依赖 FR-389 主路径可连后执行，可与 FR-391 尾段并行）→ 退役说明可落 `docs/specs/cp-mcp-server/spec.md` 退役章 | — | ✅ 已交付@v0.20.0·mcp-bridge 删除 + CI/契约清理 |
 | FR-393 | 节点离线归档列表与详情（feat，增强 FR-048 软删可发现性）：主节点列表仅活跃节点；`NodesPage` 增加「归档」分段/Tab，列出已软删下线节点并只读查看摘要（名/host/原状态/下线时间等）；在线下线与名下实例守卫沿用 FR-048/309（在线拒绝、未 force 的 409 清单）。验收：离线下线后主列表消失、归档可见；在线仍拒；compose 1CP+1Worker 真机走通（需 spec）→ `docs/specs/node-offline-archive/spec.md` | — | ✅ 已交付@v0.20.0·真机 API 闭环 |
 | FR-394 | 归档节点彻底清理（feat，增强 FR-309 清理闭环）：归档区对已下线节点提供「清理」= 硬删除节点库记录；有残留实例记录须 force 确认后级联删实例平台记录（**不清理远端文件**，文案明示）；DangerConfirm 输入节点名；写审计。验收：清理后主列表与归档均不可见；未 force 有实例则拒绝；compose 真机验（需 spec，依赖 FR-393 UI 入口；硬删 API 可与 FR-393 后端并行）→ `docs/specs/node-offline-archive/spec.md`（同目录清理章） | — | ✅ 已交付@v0.20.0·真机硬删闭环 |
+| FR-395 | Agent 能力策略 v2 与节点继承实例作用域（feat，增强 FR-384/389）：把 `write_allowlist` 扩为强类型能力分组（节点读/操作/破坏性、实例读/生命周期/命令/搭建配置/内容/破坏性、Bot 读/管理/压测、观测读），节点 scope 自动覆盖该节点当前与未来实例，实例 ID scope 继续支持最小授权；旧 Token 迁移后不扩权，未知动作默认拒绝；`tools/list` 按能力裁剪，调用流水记录能力与目标；永久禁区仍为用户/组/RBAC、Agent Token 管理、密钥明文、数据库浏览、自更新、平台设置（需 spec + 新 ADR 取代 ADR-076 对 Agent 硬拒绝面的旧定义，并修订 ADR-077；被 FR-396~399 依赖）→ `docs/specs/agent-capability-policy-v2/spec.md` | P0 | 🔨 开发中 |
+| FR-396 | MCP 节点与实例全生命周期强类型工具（feat，增强 FR-005/302/314/342/389）：在 FR-395 策略闸内开放节点详情/指标/维护/排空/Docker 与运行时可用性/归档清理，以及实例搜索/指标/日志/崩溃快照/创建搭建/导入克隆/配置/启停重启重建/命令/批量/强杀/删除；全部直接复用 CP service 与现有状态机、启动预检、内存水位和任务闸，不经本机 HTTP 回环；强杀、删除和节点清理须独立 destructive 能力 + 服务端精确确认；不开放返回明文 enrollment token 的节点准入签发（需 spec，依赖 FR-395）→ `docs/specs/mcp-instance-operations/spec.md` | P0 | 📋 计划 |
+| FR-397 | MCP 文件、配置与插件运维强类型工具（feat，增强 FR-008/031/052/373/389）：开放目录/元数据/文本读写/权限预检与 chmod/移动删除/历史 diff 回滚，配置发现/字段与文本写入/校验/历史，以及从既有制品 assetId 部署、启停、删除插件；控制与数据分离——MCP 不承载大型 base64/jar/世界包，改签发短时单用途且绑定 Token/scope/实例/path 的流式 HTTP 传输票据；保留路径越界、二进制与文本体积护栏、原子落盘和危险确认（需 spec，依赖 FR-395；可与 FR-396/398 并行）→ `docs/specs/mcp-content-operations/spec.md` | P1 | 📋 计划 |
+| FR-398 | MCP Bot 舰队与压测编排全工具（feat，增强 FR-362/369~372/389）：普通 Bot 列表/详情/创建/停止/删除/行为/命令，压测模板 CRUD 与结构化 JSON/YAML 命令计划/负载曲线/阈值，以及运行创建→发压节点容量→预检→启动→状态→停止→失败子集重试→分页 Bot/失败/事件/指标→JSON/CSV 报告全部由强类型 tool 覆盖；目标实例与每个执行节点均过 FR-395 scope，planToken 保持不透明，5000 条明细走分页/游标，命令成功边界继续遵循 ADR-075（需 spec，依赖 FR-395）→ `docs/specs/mcp-bot-orchestration/spec.md` | P0 | 📋 计划 |
+| FR-399 | 500 Bot 全链路资源采样与容量报告（feat，增强 FR-343/362/370）：压测运行同步采样目标服 JVM 进程 RSS/堆/CPU/运行时长（探针可用时附 TPS/MSPT）、各发压节点 Worker RSS/bot-worker RSS/节点内存与 Bot 数，以及在线率/命令发送/调度延迟/失败/重连；报告按阶段输出 baseline、峰值、p95、增量、每 Bot 内存斜率，分别列目标服/各发压节点/集群总量，并区分「500 Bot 实测峰值」与「加 25% 安全余量建议」；缺失指标标 unavailable 不以零冒充，MCP 可查快照/曲线/终态容量报告（需 spec，依赖 FR-398，资源字段跨 Worker/CP/报告/MCP）→ `docs/specs/bot-load-resource-capacity/spec.md` | P0 | 📋 计划 |
 ### 范围外（后续版本，暂不纳入 V1）
 
 | 编号 | 需求 | 预计版本 |
@@ -502,6 +508,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - **逐 FR 验收**见对应 `docs/specs/<feature>/`；标 `已交付@vX.Y.Z` 须该 FR 验收标准全部满足 + 自动化测试通过 + 标注的真机/集成项由用户确认通过，由 `sdd-release-version` 发版统一标注。
 - **横切验收**（前端类 FR）：i18n（中/英）完整 + 暗/亮色正常 + 关键路径真机验证——三者缺一不算交付。
 - **500+ Bot 分布式命令压测**（FR-351/352/354/358~361）：离线测试环境中以多 Worker 分片向同一目标服发起 stable、step 和 spike 三类测试；正式通过至少要求 500+ Bot 连续 60 分钟，在线率、命令发送率、调度完成率、Worker 健康率及已配置屏障的到达率均 ≥99%，命令调度 lag p95≤1 秒，Worker/bot-worker 无非预期崩溃；前端必须完成命令模板配置、容量预检、实时观测、失败定位和报告闭环。`bot.chat` 未同步抛错只证明命令发送动作成功，不证明服务器接受、权限通过或产生业务效果；ServerProbe、TPS/MSPT、塔防或其他业务事件仅为可选附加观测，不得成为通用运行的启动、成功或交付前提。
+- **Agent MCP 小游戏房间容量验收**（FR-395~399）：仅用 scoped Agent Token + MCP 强类型工具完成「实例准备/配置→Bot 模板与会话→容量预检→100/200/300/400/500 阶梯升压→登录静置→命令进房→移动攻击与周期命令→500 Bot 连续 60 分钟→停止与报告」全流程；默认 50 Bot/Worker，500 实测须至少 10 个具备容量的真实 Worker，不得靠单 bot-worker 放大到 500。容量报告必须分别给出目标服 JVM、各发压 Worker/bot-worker、节点总内存与集群总量的 baseline/峰值/p95/每 Bot 斜率，并把实测值与加 25% 安全余量建议明确分开；环境不足只能标已测规模与外推，禁止宣称 500 实测。
 
 | 期 | 主题 | 完成判定 | 主要证据 |
 |---|---|---|---|

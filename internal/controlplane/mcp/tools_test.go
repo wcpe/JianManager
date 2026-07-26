@@ -45,6 +45,83 @@ func TestRegisteredTools_Set(t *testing.T) {
 	}
 }
 
+func TestToolsForPrincipal_EmptyV2OnlyWhoami(t *testing.T) {
+	p := &service.AgentPrincipal{
+		PolicyVersion: service.AgentPolicyVersionV2,
+		Capabilities:  []string{},
+	}
+	tools := ToolsForPrincipal(p)
+	require.Len(t, tools, 1)
+	assert.Equal(t, "agent_whoami", tools[0].Name)
+}
+
+func TestToolsForPrincipal_V2InstanceReadAndLife(t *testing.T) {
+	p := &service.AgentPrincipal{
+		PolicyVersion:     service.AgentPolicyVersionV2,
+		ScopedInstanceIDs: []uint{1},
+		Capabilities:      []string{service.AgentCapabilityInstanceRead, service.AgentCapabilityInstanceLife},
+	}
+	tools := ToolsForPrincipal(p)
+	names := make(map[string]bool, len(tools))
+	for _, t2 := range tools {
+		names[t2.Name] = true
+	}
+	assert.True(t, names["agent_whoami"])
+	assert.True(t, names["agent_list_instances"])
+	assert.True(t, names["agent_get_instance"])
+	assert.True(t, names["instance_start"])
+	assert.True(t, names["instance_stop"])
+	assert.True(t, names["instance_restart"])
+	// 无 node.read → 节点相关工具不可见
+	assert.False(t, names["agent_list_nodes"])
+	assert.False(t, names["node_maintenance_enter"])
+}
+
+func TestToolsForPrincipal_V2NodeRead(t *testing.T) {
+	p := &service.AgentPrincipal{
+		PolicyVersion: service.AgentPolicyVersionV2,
+		ScopedNodeIDs: []uint{1},
+		Capabilities:  []string{service.AgentCapabilityNodeRead},
+	}
+	tools := ToolsForPrincipal(p)
+	names := make(map[string]bool, len(tools))
+	for _, t2 := range tools {
+		names[t2.Name] = true
+	}
+	assert.True(t, names["agent_list_nodes"])
+	assert.False(t, names["instance_start"])
+	assert.False(t, names["node_maintenance_enter"]) // 需 node.operate
+}
+
+func TestToolsForPrincipal_V1FullWriteShowsAll11(t *testing.T) {
+	p := &service.AgentPrincipal{
+		PolicyVersion:     service.AgentPolicyVersionV1,
+		ScopedInstanceIDs: []uint{1},
+		ScopedNodeIDs:     []uint{1},
+		WriteAllowlist:    []string{service.AgentWriteInstanceLife, service.AgentWriteNodeMaintenance},
+	}
+	tools := ToolsForPrincipal(p)
+	assert.Len(t, tools, len(RegisteredTools()), "V1 全白名单应显示全部工具")
+}
+
+func TestToolsForPrincipal_V1EmptyWriteNoLifecycle(t *testing.T) {
+	p := &service.AgentPrincipal{
+		PolicyVersion:     service.AgentPolicyVersionV1,
+		ScopedInstanceIDs: []uint{1},
+		ScopedNodeIDs:     []uint{1},
+		WriteAllowlist:    []string{},
+	}
+	tools := ToolsForPrincipal(p)
+	names := make(map[string]bool, len(tools))
+	for _, t2 := range tools {
+		names[t2.Name] = true
+	}
+	assert.False(t, names["instance_start"], "空写白名单不应显示生命周期工具")
+	assert.False(t, names["node_maintenance_enter"])
+	assert.True(t, names["agent_whoami"])
+	assert.True(t, names["agent_get_instance"])
+}
+
 func TestCallTool_Whoami(t *testing.T) {
 	p := &service.AgentPrincipal{
 		TokenID:           1,
@@ -99,3 +176,4 @@ func TestCallTool_SessionClosed(t *testing.T) {
 	assert.True(t, res.IsError)
 	assert.Contains(t, res.Content[0].Text, "会话已关闭")
 }
+

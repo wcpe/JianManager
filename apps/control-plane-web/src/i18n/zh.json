@@ -2826,11 +2826,11 @@
   },
   "agentTokens": {
     "title": "Agent Token",
-    "subtitle": "为 AI 助手 / 脚本 / CI 签发受限令牌。明文仅创建时显示一次；scope 与写白名单由 CP 强制。",
+    "subtitle": "为 AI 助手 / 脚本 / CI 签发受限令牌。明文仅创建时显示一次；scope 与能力策略由 CP 强制。",
     "forbidden": "仅平台管理员可访问",
     "create": "新建 Token",
     "createTitle": "签发 Agent Token",
-    "createDesc": "指定名称、可访问实例/节点、写操作白名单与有效期。创建后明文仅显示一次。",
+    "createDesc": "指定名称、可访问实例/节点、能力与有效期。创建后明文仅显示一次。",
     "createSubmit": "签发",
     "createSuccess": "Token 已签发，请立即复制保存",
     "createFailed": "签发失败",
@@ -2840,7 +2840,8 @@
       "name": "名称",
       "prefix": "前缀",
       "scope": "Scope",
-      "write": "写白名单",
+      "write": "权限",
+      "policy": "策略",
       "expires": "有效期",
       "status": "状态",
       "lastUsed": "最近使用",
@@ -2852,12 +2853,35 @@
     "scope": {
       "instances": "实例",
       "nodes": "节点",
+      "nodesInherit": "节点（含实例继承）",
+      "nodesNoInherit": "节点（不继承实例）",
       "none": "未授权任何资源"
+    },
+    "policy": {
+      "v1": "V1（兼容）",
+      "v2": "V2"
     },
     "write": {
       "instanceLife": "实例生命周期（启停/重启）",
       "nodeMaintenance": "节点维护态",
       "none": "仅只读"
+    },
+    "capability": {
+      "nodeRead": "节点只读",
+      "nodeOperate": "节点运维（维护态）",
+      "nodeDestructive": "节点破坏性操作",
+      "instanceRead": "实例只读",
+      "instanceLife": "实例生命周期（启停/重启）",
+      "instanceCommand": "实例命令执行",
+      "instanceProvision": "实例搭建/导入/克隆",
+      "instanceConfigure": "实例结构化配置",
+      "instanceContent": "实例文件与插件内容",
+      "instanceDestructive": "实例破坏性操作",
+      "botRead": "Bot 只读",
+      "botManage": "Bot 管理",
+      "botLoad": "Bot 压测编排",
+      "observabilityRead": "观测只读（指标/日志）",
+      "none": "无能力（仅 whoami）"
     },
     "status": {
       "active": "有效",
@@ -2877,12 +2901,14 @@
       "instanceIds": "实例 ID 输入",
       "noInstances": "暂无实例",
       "nodes": "节点 Scope",
-      "nodesHint": "勾选可访问节点，或在下方手动输入 ID。空 = 未授权任何节点。",
+      "nodesHint": "勾选可访问节点，或在下方手动输入 ID。空 = 未授权任何节点。节点 scope 会自动覆盖该节点当前与未来的实例，但仍需勾选对应能力。",
       "nodeIds": "节点 ID 输入",
       "noNodes": "暂无节点",
       "idsPlaceholder": "也可手动输入 ID，如 1,2,3",
       "writeAllowlist": "写操作白名单",
       "writeHint": "默认允许实例生命周期与节点维护态；取消勾选即只读。硬拒绝面永不对 agent 开放。",
+      "capabilities": "能力（V2）",
+      "capabilitiesHint": "新 Token 一律签发 V2 能力策略。默认仅勾选只读能力；服务端不会隐式补能力，可全部取消。永久禁区（用户/组/RBAC、Token 管理、密钥明文、数据库浏览、自更新、平台设置）永不开放。",
       "ttlDays": "有效天数",
       "ttlHint": "默认 90 天，上限 365 天"
     },

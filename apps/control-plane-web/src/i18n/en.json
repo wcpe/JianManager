@@ -2847,11 +2847,11 @@
   },
   "agentTokens": {
     "title": "Agent Token",
-    "subtitle": "Issue scoped tokens for AI assistants / scripts / CI. Plaintext is shown only once at creation; scope and write allowlist are enforced by CP.",
+    "subtitle": "Issue scoped tokens for AI assistants / scripts / CI. Plaintext is shown only once at creation; scope and capability policy are enforced by CP.",
     "forbidden": "Platform admins only",
     "create": "New Token",
     "createTitle": "Issue Agent Token",
-    "createDesc": "Set name, instance/node scope, write allowlist and TTL. Plaintext is shown only once after creation.",
+    "createDesc": "Set name, instance/node scope, capabilities and TTL. Plaintext is shown only once after creation.",
     "createSubmit": "Issue",
     "createSuccess": "Token issued — copy and store it now",
     "createFailed": "Failed to issue token",
@@ -2861,7 +2861,8 @@
       "name": "Name",
       "prefix": "Prefix",
       "scope": "Scope",
-      "write": "Write allowlist",
+      "write": "Permissions",
+      "policy": "Policy",
       "expires": "Expires",
       "lastUsed": "Last used",
       "callCount24h": "24h calls",
@@ -2873,12 +2874,35 @@
     "scope": {
       "instances": "Instances",
       "nodes": "Nodes",
+      "nodesInherit": "Nodes (instances inherited)",
+      "nodesNoInherit": "Nodes (no instance inheritance)",
       "none": "No resources authorized"
+    },
+    "policy": {
+      "v1": "V1 (legacy)",
+      "v2": "V2"
     },
     "write": {
       "instanceLife": "Instance lifecycle (start/stop/restart)",
       "nodeMaintenance": "Node maintenance",
       "none": "Read-only"
+    },
+    "capability": {
+      "nodeRead": "Node read",
+      "nodeOperate": "Node operate (maintenance)",
+      "nodeDestructive": "Node destructive",
+      "instanceRead": "Instance read",
+      "instanceLife": "Instance lifecycle (start/stop/restart)",
+      "instanceCommand": "Instance command",
+      "instanceProvision": "Instance provision/import/clone",
+      "instanceConfigure": "Instance configuration",
+      "instanceContent": "Instance files and plugins",
+      "instanceDestructive": "Instance destructive",
+      "botRead": "Bot read",
+      "botManage": "Bot manage",
+      "botLoad": "Bot load orchestration",
+      "observabilityRead": "Observability read (metrics/logs)",
+      "none": "No capabilities (whoami only)"
     },
     "status": {
       "active": "Active",
@@ -2898,12 +2922,14 @@
       "instanceIds": "Instance ID input",
       "noInstances": "No instances",
       "nodes": "Node scope",
-      "nodesHint": "Select nodes or type IDs below. Empty = no nodes authorized.",
+      "nodesHint": "Select nodes or type IDs below. Empty = no nodes authorized. Node scope automatically covers current and future instances on that node, but the matching capability is still required.",
       "nodeIds": "Node ID input",
       "noNodes": "No nodes",
       "idsPlaceholder": "Or type IDs, e.g. 1,2,3",
       "writeAllowlist": "Write allowlist",
       "writeHint": "Default allows instance lifecycle and node maintenance; uncheck for read-only. Hard-deny surface is never open to agents.",
+      "capabilities": "Capabilities (V2)",
+      "capabilitiesHint": "New tokens always use the V2 capability policy. Only read capabilities are preselected; the server never adds capabilities implicitly and you may clear them all. Permanently denied areas (users/groups/RBAC, token management, secret plaintext, DB browsing, self-update, platform settings) are never exposed.",
       "ttlDays": "TTL (days)",
       "ttlHint": "Default 90 days, max 365"
     },

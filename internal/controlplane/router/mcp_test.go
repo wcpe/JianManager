@@ -13,11 +13,14 @@ import (
 
 	"github.com/wcpe/JianManager/internal/controlplane/mcp"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 // FR-389：CP 内嵌 MCP 鉴权、tools/list、会话列表/踢线。
 
-func setupMCP(t *testing.T) (db *gorm.DB, r interface{ ServeHTTP(http.ResponseWriter, *http.Request) }, adminJWT string, agentPlain string, inst *model.Instance) {
+func setupMCP(t *testing.T) (db *gorm.DB, r interface {
+	ServeHTTP(http.ResponseWriter, *http.Request)
+}, adminJWT string, agentPlain string, inst *model.Instance) {
 	t.Helper()
 	db, engine, adminJWT, node, inst := setupAgentGate(t)
 	_, agentPlain = issueAgentPlaintext(t, engine, adminJWT, map[string]any{
@@ -30,7 +33,9 @@ func setupMCP(t *testing.T) (db *gorm.DB, r interface{ ServeHTTP(http.ResponseWr
 	return db, engine, adminJWT, agentPlain, inst
 }
 
-func mcpPOST(t *testing.T, r interface{ ServeHTTP(http.ResponseWriter, *http.Request) }, path, token, sessionID string, body any) *httptest.ResponseRecorder {
+func mcpPOST(t *testing.T, r interface {
+	ServeHTTP(http.ResponseWriter, *http.Request)
+}, path, token, sessionID string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
@@ -247,4 +252,102 @@ func TestMCP_ScopeDeniedIsErrorNot5xx(t *testing.T) {
 	assert.True(t, resp.Result.IsError)
 	require.NotEmpty(t, resp.Result.Content)
 	assert.NotEmpty(t, resp.Result.Content[0].Text)
+}
+
+// TestMCP_V2_ToolsListDynamicFilter V2 Token 的 tools/list 按能力动态裁剪。
+func TestMCP_V2_ToolsListDynamicFilter(t *testing.T) {
+	_, r, adminJWT, _, inst := setupAgentGate(t)
+
+	// 只有 observability.read 的 V2 Token
+	_, obs := issueAgentPlaintext(t, r, adminJWT, map[string]any{
+		"name":              "v2-obs",
+		"policyVersion":     2,
+		"capabilities":      []string{service.AgentCapabilityObservabilityRead},
+		"scopedInstanceIds": []uint{inst.ID},
+	})
+
+	w := mcpPOST(t, r, "/api/v1/mcp", obs, "", map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "initialize",
+		"params": map[string]any{"protocolVersion": "2024-11-05"},
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	sid := w.Header().Get(mcp.HeaderSessionID)
+
+	w = mcpPOST(t, r, "/api/v1/mcp", obs, sid, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "tools/list",
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var listResp struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listResp))
+	names := map[string]bool{}
+	for _, tl := range listResp.Result.Tools {
+		names[tl.Name] = true
+	}
+	// agent_whoami 对所有有效 Token 可见
+	assert.True(t, names["agent_whoami"])
+	// observability.read 可见指标与日志
+	assert.True(t, names["agent_get_instance_metrics"])
+	assert.True(t, names["agent_get_instance_logs"])
+	// 无 instance.life → 生命周期工具不可见
+	assert.False(t, names["instance_start"])
+	assert.False(t, names["instance_stop"])
+	// 无 node.read → 节点工具不可见
+	assert.False(t, names["agent_list_nodes"])
+	assert.False(t, names["node_maintenance_enter"])
+
+	// 手工调用未列出的工具仍须 isError（不能靠 list 裁剪绕过）
+	w = mcpPOST(t, r, "/api/v1/mcp", obs, sid, map[string]any{
+		"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "instance_start",
+			"arguments": map[string]any{"id": float64(inst.ID)},
+		},
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	var callResp struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &callResp))
+	assert.True(t, callResp.Result.IsError, "未列出的工具仍须被 tools/call 拒绝")
+}
+
+// TestMCP_V2_EmptyCapabilityOnlyWhoami 空能力 V2 Token 的 tools/list 只含 whoami。
+func TestMCP_V2_EmptyCapabilityOnlyWhoami(t *testing.T) {
+	_, r, adminJWT, node, inst := setupAgentGate(t)
+	_, emptyPlain := issueAgentPlaintext(t, r, adminJWT, map[string]any{
+		"name":              "v2-zero",
+		"policyVersion":     2,
+		"capabilities":      []string{},
+		"scopedInstanceIds": []uint{inst.ID},
+		"scopedNodeIds":     []uint{node.ID},
+	})
+
+	w := mcpPOST(t, r, "/api/v1/mcp", emptyPlain, "", map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "initialize",
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	sid := w.Header().Get(mcp.HeaderSessionID)
+
+	w = mcpPOST(t, r, "/api/v1/mcp", emptyPlain, sid, map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "tools/list",
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	var listResp struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listResp))
+	require.Len(t, listResp.Result.Tools, 1)
+	assert.Equal(t, "agent_whoami", listResp.Result.Tools[0].Name)
 }
