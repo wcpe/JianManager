@@ -9,6 +9,7 @@
 > 下个版本开发窗口；正式发版时将本段整理为新版本段。
 
 ### 新增
+- **MCP 节点与实例全生命周期强类型工具（FR-396）**：在 FR-395 策略闸内开放节点详情/指标/Docker 探测/排空/归档清理，以及实例搜索/环境/崩溃快照/创建搭建/导入克隆/重建/配置更新/命令/批量/强杀/删除；MCP 直接复用 CP service，不经本机 HTTP 回环；破坏性操作要求独立 destructive 能力 + 服务端精确确认参数；生命周期写操作派发前锁内重验归属；toolSpec 增加 Exec 注册表与 RequiresConfirm 机制，按域拆分 tools_node/instance/provision。
 - **Agent 能力策略 v2 与节点继承实例作用域（FR-395）**：`agent_tokens` 增加 `policy_version`/`capabilities`；V1 写白名单精确兼容且不启用节点继承；V2 固定 capability 分组，节点 scope 单向覆盖当前与未来实例；统一 action 目录驱动 HTTP/MCP；`tools/list` 按能力动态裁剪，`tools/call` 可信目标最终授权；生命周期派发前锁内重验归属；调用流水新增 `capability`（V2 能力 / V1 `legacy.*`）；Token 管理 UI 默认签发 V2 并展示策略版本与能力。ADR-080 accepted；ADR-076/077 部分修订。
 
 ## 0.20.0（2026-07-25）

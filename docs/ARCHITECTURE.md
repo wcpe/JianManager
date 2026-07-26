@@ -174,6 +174,8 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
 | 调用流水 | `agent_call_logs.capability`：V2 记 action 对应能力，V1 记 `legacy.*`；会话事件可空 |
 | 错误 | 401 无效/吊销/过期；403 策略拒绝（非 5xx 静默）；MCP tool 策略拒绝 → HTTP 200 + `isError=true` + 中文 |
 
+**MCP 节点与实例全生命周期（FR-396）**：在 FR-395 能力策略闸内，把节点详情/指标/Docker/排空/归档清理与实例搜索/创建搭建/导入克隆/重建/配置/命令/批量/强杀/删除开放为强类型 MCP 工具；直接复用 CP service，不经本机 HTTP 回环。破坏性操作（kill/delete/purge）要求独立 destructive 能力 + 服务端精确确认参数（confirmInstanceName/confirmNodeName 与当前名称精确比对）。写操作派发前锁内重验实例归属（expected-node）。工具按域拆分 `tools_node.go` / `tools_instance.go` / `tools_provision.go`，`toolSpec.Exec` 注册表分发，骨架预留 `RequiresConfirm` 供后续 FR 复用。
+
 **内嵌 MCP（FR-389 / FR-395 / ADR-077/080）**：模块 `internal/controlplane/mcp/`；配置 `mcp.idle_timeout`（默认 30m）、`absolute_timeout`（24h）、`max_global_sessions`（32）、`max_sessions_per_token`（4）。CP 重启会话全丢（可接受）。人类 JWT 不能充当 MCP 会话凭证。`tools/list` 按 Token 能力与可用 scope 动态裁剪；`tools/call` 仍最终授权。
 
 **与 jmctl 的边界**：jmctl 绕开 CP、直连本机 daemon（故障应急）；Agent 面**必须**经 CP，以便鉴权、scope、审计 `actor_kind=agent`。契约与可证门禁见 `docs/specs/agent-safety-gate/contract.md` 与 CI job `agent-gate`（FR-388 / FR-395）。本机冒烟证据见 `.tmp/acceptance-agent-smoke-2026-07-23.md`。

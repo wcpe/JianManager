@@ -36,12 +36,26 @@ type ToolDeps struct {
 	Node     *service.NodeService
 	Log      *service.LogService        // 可选；nil 时 agent_get_instance_logs 返回中文错误
 	Agent    *service.AgentTokenService // FR-395：可信目标解析与 scope 查询
+	// FR-396 扩展依赖；nil 时对应工具返回中文「服务不可用」。
+	Provision *service.ProvisionService
+	Import    *service.ImportServerService
+	Clone     *service.CloneService
+	Batch     *service.InstanceBatchService
+	Docker    *service.DockerImageService
+	Crash     *service.CrashSnapshotService
+	Task      *service.TaskService
 }
+
+// toolExec 工具执行器：参数已校验过会话，action 已从 catalog 解析。
+// 授权与确认由 CallTool 骨架统一处理，执行器只做参数解析 + 调 service。
+type toolExec func(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult
 
 // toolSpec 工具协议定义（静态注册）。
 type toolSpec struct {
-	Def    ToolDef
-	Action string
+	Def          ToolDef
+	Action       string
+	Exec         toolExec // 可选；nil 时走 CallTool 内置 switch（兼容既有 11 工具）
+	ConfirmField string   // FR-396：destructive 确认参数名（如 confirmInstanceName）
 }
 
 // allToolSpecs 全量工具目录（静态；永久禁区不在此处）。
@@ -378,8 +392,84 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		return callMaintenance(deps, p, action, args, false)
 
 	default:
+		// FR-396+：扩展工具走注册表 Exec，CallTool 骨架统一处理确认参数。
+		return callRegisteredTool(ctx, deps, p, name, action, args)
+	}
+}
+
+// callRegisteredTool 按工具名查找带 Exec 的 toolSpec 并执行。
+// destructive 工具在授权通过后、执行器之前统一校验精确确认参数。
+func callRegisteredTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, name, action string, args map[string]any) ToolResult {
+	spec, ok := findToolSpec(name)
+	if !ok || spec.Exec == nil {
 		return toolErr("未知工具: " + name)
 	}
+	// 精确确认：与目标当前名称比对（区分大小写，不 trim）。
+	if field := spec.ConfirmField; field != "" {
+		if err := verifyDestructiveConfirm(deps, action, args, field); err != nil {
+			return toolErr(err.Error())
+		}
+	}
+	return spec.Exec(ctx, deps, p, action, args)
+}
+
+// findToolSpec 按工具名查找注册表条目。
+func findToolSpec(name string) (toolSpec, bool) {
+	for _, s := range allToolSpecs {
+		if s.Def.Name == name {
+			return s, true
+		}
+	}
+	return toolSpec{}, false
+}
+
+// verifyDestructiveConfirm 从 args 取确认字段，与 CP 数据库中目标当前名称精确比对。
+// 确认失败不进入 service 写路径；返回中文错误供 isError 投影。
+func verifyDestructiveConfirm(deps ToolDeps, action string, args map[string]any, field string) error {
+	raw, _ := args[field].(string)
+	if raw == "" {
+		return fmt.Errorf("缺少必填确认参数 %s", field)
+	}
+	id, err := requireID(args)
+	if err != nil {
+		return err
+	}
+	d, ok := service.DescribeAgentAction(action)
+	if !ok {
+		return fmt.Errorf("未知动作")
+	}
+	var actual string
+	switch d.ResourceType {
+	case service.AgentResourceInstance:
+		if deps.Instance == nil {
+			return fmt.Errorf("实例服务不可用")
+		}
+		inst, e := deps.Instance.GetByID(id)
+		if e != nil {
+			return fmt.Errorf("确认名称与目标不符")
+		}
+		actual = inst.Name
+	case service.AgentResourceNode:
+		if deps.Node == nil {
+			return fmt.Errorf("节点服务不可用")
+		}
+		n, e := deps.Node.GetByID(id)
+		if e != nil {
+			return fmt.Errorf("确认名称与目标不符")
+		}
+		actual = n.Name
+	default:
+		return fmt.Errorf("确认参数仅适用于节点/实例目标")
+	}
+	if raw != actual {
+		return fmt.Errorf("确认名称与目标不符")
+	}
+	return nil
+}
+
+// registerToolSpecs 追加工具到全局目录（FR-396+ 域文件 init 调用）。
+func registerToolSpecs(specs ...toolSpec) {
+	allToolSpecs = append(allToolSpecs, specs...)
 }
 
 // callLifecycle 实例生命周期工具调用：可信目标授权 + expected node 派发（FR-395）。

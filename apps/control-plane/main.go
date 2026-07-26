@@ -272,12 +272,7 @@ func main() {
 	})
 	mcpSessions.Start()
 	defer mcpSessions.Stop()
-	mcpHandler := mcp.NewHandler(mcpSessions, agentTokenSvc, mcp.ToolDeps{
-		Instance: instanceSvc,
-		Node:     nodeSvc,
-		Log:      logSvc,
-		Agent:    agentTokenSvc,
-	}, auditSvc, agentCallLogSvc)
+	// mcpHandler 延后到 FR-396 依赖服务就绪后构造（ToolDeps 按值传递）。
 	// 平台存储资源管理器（FR-083）：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
 	storageSvc := service.NewStorageService(db, root)
 	// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
@@ -489,6 +484,20 @@ func main() {
 	importServerSvc.SetTaskService(taskSvc)
 	cloneSvc.SetTaskService(taskSvc)
 	backupSvc.SetTaskService(taskSvc)
+	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等 provision/import/clone/batch/docker/crash/task 就绪。
+	mcpHandler := mcp.NewHandler(mcpSessions, agentTokenSvc, mcp.ToolDeps{
+		Instance:  instanceSvc,
+		Node:      nodeSvc,
+		Log:       logSvc,
+		Agent:     agentTokenSvc,
+		Provision: provisionSvc,
+		Import:    importServerSvc,
+		Clone:     cloneSvc,
+		Batch:     instanceBatchSvc,
+		Docker:    dockerImageSvc,
+		Crash:     crashSnapshotSvc,
+		Task:      taskSvc,
+	}, auditSvc, agentCallLogSvc)
 	// 制品存量迁移（FR-348）：渠道间搬运后台任务（先改记录再删源，幂等续跑）。
 	// RecoverOrphans 清扫 CP 重启滞留的非终态迁移任务，保证在途判定即真相。
 	artifactMigrationSvc := service.NewArtifactMigrationService(db, root, artifactStorageSvc, taskSvc)

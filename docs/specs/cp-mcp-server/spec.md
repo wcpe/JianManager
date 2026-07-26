@@ -22,6 +22,8 @@
 - **工具集**（与 jm-agent / 既有 Agent Ops API 对齐，硬拒绝面**不注册**为 tool；FR-395 起由 ToolSpec → action 目录投影，`tools/list` 按 Token 能力与潜在 scope 动态裁剪）：
   - 读取：`agent_whoami`、`agent_list_nodes`、`agent_list_instances`、`agent_get_instance`、`agent_get_instance_metrics`、`agent_get_instance_logs`
   - 写：`instance_start`、`instance_stop`、`instance_restart`、`node_maintenance_enter`、`node_maintenance_leave`
+  - 节点扩展（FR-396）：`node_get`、`node_get_metrics`、`node_check_docker`、`node_drain`、`node_list_archived`、`node_purge_archived`（须 confirmNodeName）
+  - 实例扩展（FR-396）：`instance_search`、`instance_get_env`、`instance_list_crash_snapshots`、`instance_create`、`instance_provision_server`、`instance_import_inspect`、`instance_import`、`instance_clone`、`instance_rebuild`、`instance_update_config`、`task_get`、`instance_send_command`、`instance_batch`、`instance_kill`/`instance_delete`（须 confirmInstanceName）
 - tool 调用内部 **只调 CP 本地 service / 统一 action 授权器**，不二次实现 scope/写白名单/capability
 - **会话运维（内存）**：
   - 字段：sessionId、tokenId、tokenName、tokenPrefix、clientIP、transport（`streamable_http`|`sse`）、connectedAt、lastActivityAt、lastTool、idleTimeout、absoluteTimeout

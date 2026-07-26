@@ -41,15 +41,16 @@ const (
 
 // AgentActionDescriptor 统一 action 目录条目。
 type AgentActionDescriptor struct {
-	Action         string
-	V2Capability   string
-	ResourceType   string
-	Operation      string
-	V1Allowed      bool
-	V1WriteAllow   string
-	HTTPMethod     string
-	HTTPPath       string
-	HTTPInContract bool
+	Action          string
+	V2Capability    string
+	ResourceType    string
+	Operation       string
+	V1Allowed       bool
+	V1WriteAllow    string
+	HTTPMethod      string
+	HTTPPath        string
+	HTTPInContract  bool
+	RequiresConfirm bool // FR-396：destructive 操作须服务端精确确认参数
 }
 
 // AgentAuthorization 授权结果；Capability 供调用流水记录。
@@ -142,6 +143,40 @@ var agentActionCatalog = map[string]AgentActionDescriptor{
 		V1Allowed: true, V1WriteAllow: AgentWriteNodeMaintenance,
 		HTTPMethod: "POST", HTTPPath: "/api/v1/agent/nodes/:id/maintenance/leave", HTTPInContract: true,
 	},
+}
+
+// fr396DomainActions 是 FR-396 节点/实例扩展 action，经 init 注入 catalog，
+// 保持 map 字面量本体不被并行分支争用（与 FR-397/398 的追加风格一致）。
+var fr396DomainActions = []AgentActionDescriptor{
+	{Action: AgentActionNodeGet, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
+	{Action: AgentActionNodeGetMetrics, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
+	{Action: AgentActionNodeCheckDocker, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
+	{Action: AgentActionNodeDrain, V2Capability: AgentCapabilityNodeOperate, ResourceType: AgentResourceNode, Operation: AgentOperationWrite},
+	{Action: AgentActionNodeListArchived, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
+	{Action: AgentActionNodePurgeArchived, V2Capability: AgentCapabilityNodeDestructive, ResourceType: AgentResourceNode, Operation: AgentOperationDestructive, RequiresConfirm: true},
+	{Action: AgentActionInstanceSearch, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionInstanceGetEnv, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionInstanceListCrashSnapshots, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	// 创建类：目标资源类型按节点授权（创建前尚无实例），clone/rebuild 源实例仍走 instance。
+	{Action: AgentActionInstanceCreate, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceProvisionServer, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceImportInspect, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
+	{Action: AgentActionInstanceImport, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceNode, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceClone, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceRebuild, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceUpdateConfig, V2Capability: AgentCapabilityInstanceConfigure, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	// task_get 无固定资源类型：先按 task 关联实例归属重验，再走 instance.read 能力。
+	{Action: AgentActionTaskGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
+	{Action: AgentActionInstanceSendCommand, V2Capability: AgentCapabilityInstanceCommand, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceBatch, V2Capability: AgentCapabilityInstanceLife, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceKill, V2Capability: AgentCapabilityInstanceDestructive, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true},
+	{Action: AgentActionInstanceDelete, V2Capability: AgentCapabilityInstanceDestructive, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true},
+}
+
+func init() {
+	for _, d := range fr396DomainActions {
+		agentActionCatalog[d.Action] = d
+	}
 }
 
 // AgentKnownCapabilities 返回排序后的已知 V2 能力列表。
@@ -271,6 +306,11 @@ func principalCanAccessNode(p *AgentPrincipal, nodeID uint) bool {
 		return false
 	}
 	return agentContainsUint(p.ScopedNodeIDs, nodeID)
+}
+
+// PrincipalCanAccessNode 导出节点 scope 判断，供 MCP 列表过滤等只读投影使用。
+func PrincipalCanAccessNode(p *AgentPrincipal, nodeID uint) bool {
+	return principalCanAccessNode(p, nodeID)
 }
 
 // CanDiscover 判断 Token 是否可在 tools/list / 契约枚举中看到该 action。

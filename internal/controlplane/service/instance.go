@@ -730,12 +730,27 @@ var (
 // 兑现删除确认文案「所有数据将被删除」；否则系统分配的 hash 后缀目录（ADR-007）不复用，
 // 反复建删会无限堆积孤儿目录。清理失败则中止删除（记录保留可重试），不静默孤儿化。
 func (s *InstanceService) Delete(id uint) error {
+	return s.deleteInternal(id, 0)
+}
+
+// DeleteForExpectedNode Agent 专用删除：锁内重验 node 归属，变化则拒绝（FR-396）。
+func (s *InstanceService) DeleteForExpectedNode(id, expectedNodeID uint) error {
+	if expectedNodeID == 0 {
+		return fmt.Errorf("expectedNodeID 无效")
+	}
+	return s.deleteInternal(id, expectedNodeID)
+}
+
+func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 	releaseOperation := s.acquireInstanceOperation(id)
 	defer releaseOperation()
 
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return err
+	}
+	if expectedNodeID != 0 && instance.NodeID != expectedNodeID {
+		return ErrAgentForbidden
 	}
 	stoppedForDelete := false
 	switch instance.Status {
@@ -1097,6 +1112,18 @@ func (s *InstanceService) restartInternal(id, expectedNodeID uint) error {
 
 // Kill 强制终止实例。
 func (s *InstanceService) Kill(id uint) error {
+	return s.killInternal(id, 0)
+}
+
+// KillForExpectedNode Agent 专用强杀：锁内重验 node 归属，变化则拒绝派发（FR-396）。
+func (s *InstanceService) KillForExpectedNode(id, expectedNodeID uint) error {
+	if expectedNodeID == 0 {
+		return fmt.Errorf("expectedNodeID 无效")
+	}
+	return s.killInternal(id, expectedNodeID)
+}
+
+func (s *InstanceService) killInternal(id, expectedNodeID uint) error {
 	releaseOperation := s.acquireInstanceOperation(id)
 	delegateOwnsOperation := false
 	defer func() {
@@ -1109,6 +1136,9 @@ func (s *InstanceService) Kill(id uint) error {
 	if err != nil {
 		return err
 	}
+	if expectedNodeID != 0 && instance.NodeID != expectedNodeID {
+		return ErrAgentForbidden
+	}
 
 	// 强制终止是逃生通道：从任意状态（含 RUNNING / STARTING）直接置 STOPPED，绕过状态机校验。
 	// 修 BUG——强杀原走 transition，RUNNING→STOPPED 不在 validTransitions（须经 STOPPING）被「无效的状态转换」
@@ -1117,7 +1147,7 @@ func (s *InstanceService) Kill(id uint) error {
 		return err
 	}
 
-	delegateOwnsOperation = s.spawnDelegate(instance, "kill", 0, releaseOperation)
+	delegateOwnsOperation = s.spawnDelegate(instance, "kill", expectedNodeID, releaseOperation)
 	return nil
 }
 
@@ -1126,9 +1156,24 @@ func (s *InstanceService) Kill(id uint) error {
 // 与 Start/Stop 的异步委托不同：命令需即时反馈成功/失败，故走同步委托（与 GetMetrics 一致），
 // 不经 spawnDelegate，因此测试中 Shutdown 禁用异步委托后仍可观测结果。
 func (s *InstanceService) SendCommand(id uint, command string) error {
+	return s.sendCommandInternal(id, command, 0)
+}
+
+// SendCommandForExpectedNode Agent 专用命令：重验 node 归属后同步下发（FR-396）。
+func (s *InstanceService) SendCommandForExpectedNode(id uint, command string, expectedNodeID uint) error {
+	if expectedNodeID == 0 {
+		return fmt.Errorf("expectedNodeID 无效")
+	}
+	return s.sendCommandInternal(id, command, expectedNodeID)
+}
+
+func (s *InstanceService) sendCommandInternal(id uint, command string, expectedNodeID uint) error {
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return err
+	}
+	if expectedNodeID != 0 && instance.NodeID != expectedNodeID {
+		return ErrAgentForbidden
 	}
 	if instance.Status != model.InstanceStatusRunning {
 		return fmt.Errorf("%w：当前状态 %s", ErrInstanceNotRunning, instance.Status)
