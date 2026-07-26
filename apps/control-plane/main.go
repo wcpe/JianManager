@@ -256,6 +256,13 @@ func main() {
 	enrollTokenSvc := service.NewEnrollTokenService(db)
 	// Agent 专用令牌 + 策略引擎（FR-384，见 ADR-076）：与人类 JWT 分离，默认只读 + 写白名单 + scope。
 	agentTokenSvc := service.NewAgentTokenService(db)
+	// Agent 流式传输票据（FR-397）：MCP 不承载大文件字节，改签发短时单用途票据换取数据面。
+	// 密钥从服务端主密钥域分离派生，与计划令牌互不通用。
+	agentTransferSvc, err := service.NewAgentTransferTicketService(
+		service.DeriveAgentTransferTicketSecret([]byte(cfg.JWT.Secret)), agentTokenSvc, nil)
+	if err != nil {
+		log.Fatalf("初始化 Agent 传输票据服务失败: %v", err)
+	}
 	// Agent 调用流水（FR-390，见 ADR-076）：读+写 Ops；默认保留 14 天；供 MCP 复用 Record。
 	agentCallLogSvc := service.NewAgentCallLogService(db)
 	if n, err := agentCallLogSvc.PurgeExpired(); err != nil {
@@ -484,7 +491,7 @@ func main() {
 	importServerSvc.SetTaskService(taskSvc)
 	cloneSvc.SetTaskService(taskSvc)
 	backupSvc.SetTaskService(taskSvc)
-	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等 provision/import/clone/batch/docker/crash/task 就绪。
+	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等 FR-396/397 依赖服务全部就绪。
 	mcpHandler := mcp.NewHandler(mcpSessions, agentTokenSvc, mcp.ToolDeps{
 		Instance:  instanceSvc,
 		Node:      nodeSvc,
@@ -497,6 +504,12 @@ func main() {
 		Docker:    dockerImageSvc,
 		Crash:     crashSnapshotSvc,
 		Task:      taskSvc,
+		// FR-397 内容运维：文件/配置/插件工具与大文件传输票据签发。
+		File:        fileSvc,
+		FileVersion: fileVersionSvc,
+		Config:      configSvc,
+		Plugin:      pluginSvc,
+		Transfer:    agentTransferSvc,
 	}, auditSvc, agentCallLogSvc)
 	// 制品存量迁移（FR-348）：渠道间搬运后台任务（先改记录再删源，幂等续跑）。
 	// RecoverOrphans 清扫 CP 重启滞留的非终态迁移任务，保证在途判定即真相。
@@ -640,6 +653,7 @@ func main() {
 		EnrollToken:             enrollTokenSvc,
 		AgentToken:              agentTokenSvc,
 		AgentCallLog:            agentCallLogSvc,
+		AgentTransfer:           agentTransferSvc,
 		MCP:                     mcpHandler,
 		EnrollInstall: router.EnrollInstallConfig{
 			AdvertiseGRPC: cfg.Enroll.AdvertiseGRPC,

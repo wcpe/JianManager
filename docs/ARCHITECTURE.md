@@ -178,6 +178,8 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
 
 **内嵌 MCP（FR-389 / FR-395 / ADR-077/080）**：模块 `internal/controlplane/mcp/`；配置 `mcp.idle_timeout`（默认 30m）、`absolute_timeout`（24h）、`max_global_sessions`（32）、`max_sessions_per_token`（4）。CP 重启会话全丢（可接受）。人类 JWT 不能充当 MCP 会话凭证。`tools/list` 按 Token 能力与可用 scope 动态裁剪；`tools/call` 仍最终授权。
 
+**Agent 流式传输票据（FR-397）**：MCP 不承载大文件字节。Agent 经 `file_issue_transfer_ticket` 换取票据，再走 `PUT/GET /api/v1/agent-transfer/{upload,download}` 数据面（复用 FR-304 流式链路，CP 内存 O(chunk)，Worker 原子落盘）。票据为 HMAC-SHA256 签名（密钥自服务端主密钥域分离派生，与 Bot 计划令牌互不通用）、5 分钟 TTL、一次性消费，正文绑定 tokenId/instanceId/direction/path；消费时实时重验 Token 未吊销与实例归属。端点挂公开组（票据即凭据）且**不接受任何路径/实例参数**——授权上下文全部取自票据 claims，故无参数注入面；失效的所有形态归一为同一句 403 中文，不泄露内部状态。
+
 **与 jmctl 的边界**：jmctl 绕开 CP、直连本机 daemon（故障应急）；Agent 面**必须**经 CP，以便鉴权、scope、审计 `actor_kind=agent`。契约与可证门禁见 `docs/specs/agent-safety-gate/contract.md` 与 CI job `agent-gate`（FR-388 / FR-395）。本机冒烟证据见 `.tmp/acceptance-agent-smoke-2026-07-23.md`。
 
 ### 4.2 Bot 目标实例与执行节点（FR-351 / ADR-074）

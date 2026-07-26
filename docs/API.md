@@ -3421,6 +3421,21 @@ Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离
 
 ---
 
+## Agent 流式传输数据面（FR-397）
+
+MCP 只承载小文本，大文件与二进制经票据换取的流式端点传输（控制与数据分离）。
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/api/v1/agent-transfer/upload` | PUT | 请求体为原始字节流；流式转发到 Worker（CP 内存 O(chunk)），覆盖已存在文件前自动改前快照 |
+| `/api/v1/agent-transfer/download` | GET | 流式返回文件内容；带 `Content-Length` 供客户端校验完整性，任意大小不截断 |
+
+- **鉴权**：**票据即凭据**，仅 `?ticket=<票据>`。本端点**不挂** Agent Token 中间件，也**不接受**任何路径/实例参数——授权上下文全部取自票据 claims，故无参数注入面（额外 query 被忽略）。
+- **票据获取**：MCP 工具 `file_issue_transfer_ticket`（需 `instance.content` 能力 + 实例 scope），参数 `id`、`direction`（`upload`/`download`）、`path`。
+- **票据性质**：HMAC-SHA256 签名（密钥自服务端主密钥域分离派生）、TTL 5 分钟、**一次性消费**，正文绑定 `tokenId`/`instanceId`/`direction`/`path`。
+- **消费时重验**：签名 → 未过期 → 未被消费 → Token 未吊销 → 实例归属仍在授权范围 → 方向与端点匹配。
+- **错误**：上述任一不符 → **403** + 统一中文 `票据无效或已失效`（不区分具体原因，避免泄露内部状态）。未配置服务端主密钥时端点关闭（**503**）。
+
 ## CP 内嵌 MCP（FR-389 / FR-395 / ADR-077/080）
 
 Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP SDK）。**路径写死**：
@@ -3435,7 +3450,10 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 
 - **鉴权**：仅 Agent Token（`Authorization: Bearer jmat_...`）。人类 JWT **不能**建立 MCP 会话（401）。
 - **会话响应头**：`Mcp-Session-Id: mcps_<hex>`
-- **工具目录**（全量注册，永久禁区不注册）：`agent_whoami`、`agent_list_nodes`、`agent_list_instances`、`agent_get_instance`、`agent_get_instance_metrics`、`agent_get_instance_logs`、`instance_start`、`instance_stop`、`instance_restart`、`node_maintenance_enter`、`node_maintenance_leave`；节点扩展（FR-396）：`node_get`/`node_get_metrics`/`node_check_docker`/`node_drain`/`node_list_archived`/`node_purge_archived`；实例扩展：`instance_search`/`instance_get_env`/`instance_list_crash_snapshots`/`instance_create`/`instance_provision_server`/`instance_import_inspect`/`instance_import`/`instance_clone`/`instance_rebuild`/`instance_update_config`/`task_get`/`instance_send_command`/`instance_batch`/`instance_kill`/`instance_delete`
+- **工具目录**（全量注册，永久禁区不注册）：
+  - 基础（FR-389/395）：`agent_whoami`、`agent_list_nodes`、`agent_list_instances`、`agent_get_instance`、`agent_get_instance_metrics`、`agent_get_instance_logs`、`instance_start`、`instance_stop`、`instance_restart`、`node_maintenance_enter`、`node_maintenance_leave`
+  - 节点/实例扩展（FR-396）：`node_get`/`node_get_metrics`/`node_check_docker`/`node_drain`/`node_list_archived`/`node_purge_archived`；`instance_search`/`instance_get_env`/`instance_list_crash_snapshots`/`instance_create`/`instance_provision_server`/`instance_import_inspect`/`instance_import`/`instance_clone`/`instance_rebuild`/`instance_update_config`/`task_get`/`instance_send_command`/`instance_batch`/`instance_kill`/`instance_delete`
+  - 内容运维（FR-397）：`file_list`、`file_check_access`、`file_read_text`、`file_write_text`、`file_rename`、`file_chmod`、`file_delete`、`file_versions`、`file_diff`、`file_rollback`、`file_issue_transfer_ticket`、`config_discover`、`config_read`、`config_write_text`、`config_write_fields`、`config_cross_check`、`config_versions`、`config_diff`、`config_rollback`、`plugin_list`、`plugin_deploy_from_asset`、`plugin_toggle`、`plugin_delete`
 - **tools/list**：按当前 Token 的能力与潜在可用 scope **动态裁剪**（V1 兼容解释器；V2 capability）。空能力 V2 仅见 `agent_whoami`。
 - **tools/call**：无论是否出现在 list，均做最终授权；可信目标由 CP 解析；生命周期写操作使用 expected-node 派发。策略拒绝 → HTTP **200** + MCP `result.isError=true` + 中文 message（**不得 5xx**）。
 - **并发/超时**（配置 `mcp.*`，默认空闲 30m / 绝对 24h / 全局 32 / 每 Token 4）：超限 HTTP **429**，中文 `message`

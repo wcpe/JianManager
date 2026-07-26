@@ -44,6 +44,12 @@ type ToolDeps struct {
 	Docker    *service.DockerImageService
 	Crash     *service.CrashSnapshotService
 	Task      *service.TaskService
+	// FR-397 内容运维依赖；nil 时对应工具返回中文「服务不可用」。
+	File        *service.FileService
+	FileVersion *service.FileVersionService
+	Config      *service.ConfigService
+	Plugin      *service.PluginService
+	Transfer    *service.AgentTransferTicketService
 }
 
 // toolExec 工具执行器：参数已校验过会话，action 已从 catalog 解析。
@@ -172,6 +178,13 @@ var allToolSpecs = []toolSpec{
 	},
 }
 
+// init 追加 FR-397 内容运维工具（文件/配置/插件），保持各域声明在各自文件内。
+func init() {
+	allToolSpecs = append(allToolSpecs, fileToolSpecs...)
+	allToolSpecs = append(allToolSpecs, configToolSpecs...)
+	allToolSpecs = append(allToolSpecs, pluginToolSpecs...)
+}
+
 // RegisteredTools 返回全量工具目录（硬拒绝面与永久禁区永不出现）。
 // 供全量测试用；生产 tools/list 调用 ToolsForPrincipal。
 func RegisteredTools() []ToolDef {
@@ -255,6 +268,11 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 	action, ok := toolActionByName(name)
 	if !ok {
 		return toolErr("未知工具: " + name + "（硬拒绝面操作不会注册为 tool）")
+	}
+
+	// FR-397 内容运维域（文件/配置/插件）在独立文件内分发。
+	if res, handled := callContentTool(deps, p, name, action, args); handled {
+		return res
 	}
 
 	switch name {

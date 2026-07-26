@@ -116,6 +116,9 @@ type Services struct {
 	AgentToken *service.AgentTokenService
 	// AgentCallLog Agent 调用流水（FR-390，见 ADR-076）；nil 时不记流水、无 call-logs/count。
 	AgentCallLog *service.AgentCallLogService
+	// AgentTransfer 流式传输票据（FR-397）：MCP 不承载大文件字节，改由票据换取一次性数据面。
+	// nil 时 /api/v1/agent-transfer 关闭（未配置服务端主密钥）。
+	AgentTransfer *service.AgentTransferTicketService
 	// MCP 内嵌 MCP 网关（FR-389，见 ADR-077）；nil 时 /api/v1/mcp 与会话管理关闭。
 	MCP *mcp.Handler
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
@@ -152,6 +155,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 	setupHandler := NewSetupHandler(svcs.Auth)
 	setupHandler.RegisterRoutes(api)
+
+	// Agent 流式传输数据面（FR-397）：票据自身即完整凭据（HMAC 签名 + 一次性 + 实时重验），
+	// 故挂公开组而非 Agent 鉴权组；端点不接受任何路径/实例参数，无参数注入面。
+	if svcs.AgentTransfer != nil && svcs.File != nil && svcs.FileVersion != nil {
+		NewAgentTransferHandler(svcs.AgentTransfer, svcs.File, svcs.FileVersion).RegisterRoutes(api)
+	}
 
 	// 面向玩家的客户端分发消费端点（FR-087，见 ADR-022/023、contract §4）：
 	// manifest/制品端点用拉取密钥（X-Client-Key）鉴权，与运营浏览器 JWT 入口物理隔离，

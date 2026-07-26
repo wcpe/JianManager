@@ -179,6 +179,41 @@ func init() {
 	}
 }
 
+// init 追加 FR-397 内容运维 action（文件/配置/插件/传输票据）。
+// 全部 V1Allowed=false、MCP 专属（无 HTTP 契约投影），资源恒为 instance。
+func init() {
+	registerAgentInstanceActions(AgentCapabilityInstanceRead, AgentOperationRead,
+		AgentActionFileList, AgentActionFileCheckAccess, AgentActionFileReadText,
+		AgentActionFileVersions, AgentActionFileDiff,
+		AgentActionConfigDiscover, AgentActionConfigRead, AgentActionConfigCrossCheck,
+		AgentActionConfigVersions, AgentActionConfigDiff,
+		AgentActionPluginList,
+	)
+	registerAgentInstanceActions(AgentCapabilityInstanceContent, AgentOperationWrite,
+		AgentActionFileWriteText, AgentActionFileRename, AgentActionFileChmod,
+		AgentActionFileRollback, AgentActionFileIssueTransferTicket,
+		AgentActionPluginDeployFromAsset, AgentActionPluginToggle,
+	)
+	registerAgentInstanceActions(AgentCapabilityInstanceContent, AgentOperationDestructive,
+		AgentActionFileDelete, AgentActionPluginDelete,
+	)
+	registerAgentInstanceActions(AgentCapabilityInstanceConfigure, AgentOperationWrite,
+		AgentActionConfigWriteText, AgentActionConfigWriteFields, AgentActionConfigRollback,
+	)
+}
+
+// registerAgentInstanceActions 批量登记同能力同操作等级的实例类 action。
+func registerAgentInstanceActions(capability, operation string, actions ...string) {
+	for _, action := range actions {
+		agentActionCatalog[action] = AgentActionDescriptor{
+			Action:       action,
+			V2Capability: capability,
+			ResourceType: AgentResourceInstance,
+			Operation:    operation,
+		}
+	}
+}
+
 // AgentKnownCapabilities 返回排序后的已知 V2 能力列表。
 func AgentKnownCapabilities() []string {
 	out := make([]string, 0, len(agentKnownCapabilities))

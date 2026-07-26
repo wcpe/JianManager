@@ -54,6 +54,39 @@ const (
 	AgentActionInstanceKill               = "agent.instance_kill"
 	AgentActionInstanceDelete             = "agent.instance_delete"
 
+	// FR-397 文件域 action（MCP 专属，不进 HTTP 契约投影）。
+	AgentActionFileList                = "agent.file_list"
+	AgentActionFileCheckAccess         = "agent.file_check_access"
+	AgentActionFileReadText            = "agent.file_read_text"
+	AgentActionFileWriteText           = "agent.file_write_text"
+	AgentActionFileRename              = "agent.file_rename"
+	AgentActionFileChmod               = "agent.file_chmod"
+	AgentActionFileDelete              = "agent.file_delete"
+	AgentActionFileVersions            = "agent.file_versions"
+	AgentActionFileDiff                = "agent.file_diff"
+	AgentActionFileRollback            = "agent.file_rollback"
+	AgentActionFileIssueTransferTicket = "agent.file_issue_transfer_ticket"
+
+	// AgentActionFileTransferConsume 仅作票据消费的调用流水标签，
+	// 刻意不进 action 目录：它不可被授权、不可被发现，凭据是票据本身。
+	AgentActionFileTransferConsume = "agent.file_transfer_consume"
+
+	// FR-397 配置域 action。
+	AgentActionConfigDiscover    = "agent.config_discover"
+	AgentActionConfigRead        = "agent.config_read"
+	AgentActionConfigWriteText   = "agent.config_write_text"
+	AgentActionConfigWriteFields = "agent.config_write_fields"
+	AgentActionConfigCrossCheck  = "agent.config_cross_check"
+	AgentActionConfigVersions    = "agent.config_versions"
+	AgentActionConfigDiff        = "agent.config_diff"
+	AgentActionConfigRollback    = "agent.config_rollback"
+
+	// FR-397 插件域 action。
+	AgentActionPluginList            = "agent.plugin_list"
+	AgentActionPluginDeployFromAsset = "agent.plugin_deploy_from_asset"
+	AgentActionPluginToggle          = "agent.plugin_toggle"
+	AgentActionPluginDelete          = "agent.plugin_delete"
+
 	// 硬拒绝示例 action（永不对 agent 开放；ResolveAction 显式 deny）
 	AgentHardDenyUserWrite      = "user.write"
 	AgentHardDenyGroupWrite     = "group.write"
@@ -349,6 +382,26 @@ func (s *AgentTokenService) Authenticate(plaintext string) (*AgentPrincipal, err
 	now := time.Now()
 	_ = s.db.Model(&tok).Update("last_used_at", &now).Error
 	return p, nil
+}
+
+// PrincipalByID 按 Token ID 实时重建主体（FR-397 票据消费重验用）：
+// 吊销或过期一律返回 ErrAgentTokenInvalid，无需票据撤销列表。
+func (s *AgentTokenService) PrincipalByID(tokenID uint) (*AgentPrincipal, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("agent token service 未初始化")
+	}
+	var tok model.AgentToken
+	err := s.db.First(&tok, tokenID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrAgentTokenInvalid
+	}
+	if err != nil {
+		return nil, fmt.Errorf("查询 agent token 失败: %w", err)
+	}
+	if tok.Revoked || !time.Now().Before(tok.ExpiresAt) {
+		return nil, ErrAgentTokenInvalid
+	}
+	return principalFromToken(&tok)
 }
 
 // ResolveAction 兼容包装：将显式 instanceID/nodeID 视为可信目标。

@@ -192,6 +192,11 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		// Agent 调用流水（FR-390）：Ops 读+写记流水；Token 列表 callCount24h。
 		AgentCallLog: service.NewAgentCallLogService(db),
 	}
+	// Agent 流式传输票据（FR-397）：密钥与生产同样从主密钥域分离派生。
+	transferSecret := service.DeriveAgentTransferTicketSecret([]byte(jwtCfg.Secret))
+	if tickets, err := service.NewAgentTransferTicketService(transferSecret, svcs.AgentToken, nil); err == nil {
+		svcs.AgentTransfer = tickets
+	}
 	// CP 内嵌 MCP（FR-389）：测试挂载会话管理器（小并发便于超限用例）。
 	agentTok := svcs.AgentToken
 	logSvc := svcs.Log

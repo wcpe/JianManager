@@ -776,6 +776,11 @@ func (s *FileService) DecompileClass(instanceID uint, path, entry string) (*Deco
 	}, nil
 }
 
+// ValidateInstancePath 对外暴露实例内相对路径校验（FR-397：MCP 与票据端点复用同一口径）。
+func ValidateInstancePath(path string) error {
+	return validatePath(path)
+}
+
 // validatePath 校验文件路径，防止路径遍历攻击。
 func validatePath(path string) error {
 	if strings.Contains(path, "..") {

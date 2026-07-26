@@ -24,6 +24,9 @@
   - 写：`instance_start`、`instance_stop`、`instance_restart`、`node_maintenance_enter`、`node_maintenance_leave`
   - 节点扩展（FR-396）：`node_get`、`node_get_metrics`、`node_check_docker`、`node_drain`、`node_list_archived`、`node_purge_archived`（须 confirmNodeName）
   - 实例扩展（FR-396）：`instance_search`、`instance_get_env`、`instance_list_crash_snapshots`、`instance_create`、`instance_provision_server`、`instance_import_inspect`、`instance_import`、`instance_clone`、`instance_rebuild`、`instance_update_config`、`task_get`、`instance_send_command`、`instance_batch`、`instance_kill`/`instance_delete`（须 confirmInstanceName）
+  - 内容运维读（FR-397，`instance.read`）：`file_list`、`file_check_access`、`file_read_text`、`file_versions`、`file_diff`、`config_discover`、`config_read`、`config_cross_check`、`config_versions`、`config_diff`、`plugin_list`
+  - 内容运维写（FR-397，`instance.content` / `instance.configure`）：`file_write_text`、`file_rename`、`file_chmod`、`file_rollback`、`file_issue_transfer_ticket`、`config_write_text`、`config_write_fields`、`config_rollback`、`plugin_deploy_from_asset`、`plugin_toggle`
+  - 内容运维破坏性（FR-397，须精确确认参数）：`file_delete`（`confirmPath`）、`plugin_delete`（`confirmName`）
 - tool 调用内部 **只调 CP 本地 service / 统一 action 授权器**，不二次实现 scope/写白名单/capability
 - **会话运维（内存）**：
   - 字段：sessionId、tokenId、tokenName、tokenPrefix、clientIP、transport（`streamable_http`|`sse`）、connectedAt、lastActivityAt、lastTool、idleTimeout、absoluteTimeout

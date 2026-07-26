@@ -31,11 +31,12 @@ func TestRegisteredTools_Set(t *testing.T) {
 		"node_maintenance_enter",
 		"node_maintenance_leave",
 	}
-	// FR-396 起工具集扩容：只断言既有 11 个仍在，不强制总数。
+	// FR-396/397 起工具集加性扩展：只断言既有 11 个仍在，不强制总数。
+	// 内容运维域另有专门契约测试。
+	assert.GreaterOrEqual(t, len(tools), len(want))
 	for _, n := range want {
 		assert.True(t, names[n], "应注册 %s", n)
 	}
-	assert.GreaterOrEqual(t, len(tools), len(want))
 	// 硬拒绝面不得出现
 	hardDenied := []string{
 		"user_create", "delete_instance", "kill_instance",
@@ -101,7 +102,8 @@ func TestToolsForPrincipal_V1FullWriteShowsAllLegacyTools(t *testing.T) {
 		ScopedNodeIDs:     []uint{1},
 		WriteAllowlist:    []string{service.AgentWriteInstanceLife, service.AgentWriteNodeMaintenance},
 	}
-	// V1 只能看到 V1Allowed=true 的 action；FR-396 起新增工具一律不可见。
+	// V1 只能看到兼容解释器允许的 action（V1Allowed=true）；
+	// FR-396 起新增的工具一律 V1Allowed=false，V1 Token 不得因工具集扩容而扩权。
 	want := 0
 	for _, spec := range allToolSpecs {
 		d, ok := service.DescribeAgentAction(spec.Action)
@@ -111,6 +113,13 @@ func TestToolsForPrincipal_V1FullWriteShowsAllLegacyTools(t *testing.T) {
 	}
 	tools := ToolsForPrincipal(p)
 	assert.Len(t, tools, want, "V1 全白名单应显示全部兼容工具，且不含新增工具")
+	for _, tool := range tools {
+		action, ok := toolActionByName(tool.Name)
+		assert.True(t, ok)
+		d, ok := service.DescribeAgentAction(action)
+		assert.True(t, ok)
+		assert.True(t, d.V1Allowed, "V1 不应看到工具: "+tool.Name)
+	}
 }
 
 func TestToolsForPrincipal_V1EmptyWriteNoLifecycle(t *testing.T) {
@@ -185,4 +194,3 @@ func TestCallTool_SessionClosed(t *testing.T) {
 	assert.True(t, res.IsError)
 	assert.Contains(t, res.Content[0].Text, "会话已关闭")
 }
-
