@@ -2560,13 +2560,13 @@
 
 ## 连通性自检（FR-229）
 
-> 「先测后用」连通性探测，仅平台管理员。出站 HTTP 测试经 CP 当前出站客户端（含已配置代理，FR-185）发起，反映「CP 能否到达该源」；节点存活经 gRPC 调用 Worker 轻量 `GetVersion` 主动探活（不读心跳缓存）。出站 HTTP 测试可让 CP 请求任意 URL（SSRF 面），故限平台管理员。
+> 「先测后用」连通性探测，仅平台管理员。出站 HTTP 测试经 CP 当前出站客户端（含已配置代理，FR-185）发起，反映「CP 能否到达该源」；目标必须为解析到公网地址的 HTTP(S) URL，请求固定使用经校验的解析地址且不跟随重定向，以避免该入口探测内网。节点存活经 gRPC 调用 Worker 轻量 `GetVersion` 主动探活（不读心跳缓存）。
 
 ### POST /api/v1/diagnostics/http-test
 - **描述**: 经 CP 出站客户端 GET 目标 URL 测可达性（代理设置 / JDK 下载源连通性复用）
 - **关联 FR**: FR-229（增强 FR-185/178）
 - **权限**: 平台管理员
-- **请求体**: `{ "url": "https://api.github.com" }`（仅带 host 的 http/https 绝对 URL，否则 400 `INVALID_URL`）
+- **请求体**: `{ "url": "https://api.github.com" }`（仅允许解析到公网地址的 http/https 绝对 URL；私网、回环、链路本地、含凭据地址和重定向目标均拒绝，否则 400 `INVALID_URL`）
 - **响应**: `{ "ok": true, "status": 200, "latencyMs": 371 }`；连接失败返 `{ "ok": false, "latencyMs": <ms>, "error": "<原因>" }`（连接失败不作 5xx，置 `ok=false`）
 - **超时**: 10s
 

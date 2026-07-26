@@ -35,7 +35,7 @@ func (h *DiagnosticsHandler) TestHTTP(c *gin.Context) {
 	res, err := h.svc.TestHTTPReachability(c.Request.Context(), req.URL)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidTestURL) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_URL", "message": "仅支持 http/https URL"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_URL", "message": "仅支持公网 http/https URL"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "TEST_FAILED", "message": err.Error()})

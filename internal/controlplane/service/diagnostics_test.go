@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
+	"net/netip"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -13,6 +13,12 @@ import (
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func newDiagTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -34,19 +40,94 @@ func TestDiagnostics_TestHTTPReachability_RejectsInvalidURL(t *testing.T) {
 
 // 命中可达目标 → OK=true + 透出状态码（经注入的出站客户端）。
 func TestDiagnostics_TestHTTPReachability_OK(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusTeapot)
-	}))
-	defer srv.Close()
 	svc := NewDiagnosticsService(nil, nil)
-	svc.SetHTTPClientProvider(srv.Client)
-	res, err := svc.TestHTTPReachability(context.Background(), srv.URL)
+	svc.SetHTTPClientProvider(func() *http.Client {
+		return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusTeapot, Body: http.NoBody, Request: req}, nil
+		})}
+	})
+	res, err := svc.TestHTTPReachability(context.Background(), "https://8.8.8.8/download")
 	require.NoError(t, err)
 	require.True(t, res.OK)
 	require.Equal(t, http.StatusTeapot, res.Status)
 }
 
-// 出站客户端未注入 → 报错（非 panic）。
+func TestDiagnostics_TestHTTPReachability_RejectsRestrictedAddress(t *testing.T) {
+	svc := NewDiagnosticsService(nil, nil)
+	svc.SetHTTPClientProvider(func() *http.Client { return http.DefaultClient })
+	for _, rawURL := range []string{
+		"http://127.0.0.1",
+		"http://10.0.0.1",
+		"http://100.64.0.1",
+		"http://169.254.169.254",
+		"http://[::1]",
+		"http://[::ffff:127.0.0.1]",
+		"http://[fe80::1]",
+		"http://user:pass@example.com",
+	} {
+		_, err := svc.TestHTTPReachability(context.Background(), rawURL)
+		require.ErrorIs(t, err, ErrInvalidTestURL, "应拒绝: %q", rawURL)
+	}
+}
+
+func TestDiagnostics_TestHTTPReachability_RejectsDomainResolvingPrivate(t *testing.T) {
+	original := lookupHost
+	lookupHost = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("10.0.0.1")}, nil
+	}
+	t.Cleanup(func() { lookupHost = original })
+
+	svc := NewDiagnosticsService(nil, nil)
+	svc.SetHTTPClientProvider(func() *http.Client { return http.DefaultClient })
+	_, err := svc.TestHTTPReachability(context.Background(), "https://download.example.com/server.jar")
+	require.ErrorIs(t, err, ErrInvalidTestURL)
+}
+
+func TestDiagnostics_TestHTTPReachability_PinsValidatedAddress(t *testing.T) {
+	original := lookupHost
+	lookupHost = func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+	}
+	t.Cleanup(func() { lookupHost = original })
+
+	svc := NewDiagnosticsService(nil, nil)
+	svc.SetHTTPClientProvider(func() *http.Client {
+		return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			require.Equal(t, "8.8.8.8", req.URL.Hostname())
+			require.Equal(t, "download.example.com", req.Host)
+			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
+		})}
+	})
+	res, err := svc.TestHTTPReachability(context.Background(), "https://download.example.com/server.jar")
+	require.NoError(t, err)
+	require.True(t, res.OK)
+}
+
+func TestDiagnostics_TestHTTPReachability_DoesNotFollowRedirect(t *testing.T) {
+	redirected := false
+	svc := NewDiagnosticsService(nil, nil)
+	svc.SetHTTPClientProvider(func() *http.Client {
+		return &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == "/redirect" {
+				return &http.Response{
+					StatusCode: http.StatusFound,
+					Header:     http.Header{"Location": []string{"http://127.0.0.1/private"}},
+					Body:       http.NoBody,
+					Request:    req,
+				}, nil
+			}
+			redirected = true
+			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
+		})}
+	})
+
+	res, err := svc.TestHTTPReachability(context.Background(), "https://8.8.8.8/redirect")
+	require.NoError(t, err)
+	require.True(t, res.OK)
+	require.Equal(t, http.StatusFound, res.Status)
+	require.False(t, redirected)
+}
+
 func TestDiagnostics_TestHTTPReachability_NoProvider(t *testing.T) {
 	svc := NewDiagnosticsService(nil, nil)
 	_, err := svc.TestHTTPReachability(context.Background(), "https://example.com")

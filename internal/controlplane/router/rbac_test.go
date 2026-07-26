@@ -301,3 +301,47 @@ func TestQuota_UsageReflectsInstancesAndBots(t *testing.T) {
 	assert.Equal(t, float64(1), resp["usedInstances"])
 	assert.Equal(t, float64(3), resp["usedBots"])
 }
+
+// TestRBAC_OnlyGroupAdminCanUpdateLaunchSpec 普通成员不能修改会影响 Worker 执行上下文的启动规格。
+func TestRBAC_OnlyGroupAdminCanUpdateLaunchSpec(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	adminToken := getAdminToken(t, r)
+	createTestNode(t, db)
+	groupID := createGroupViaAPI(t, r, adminToken, "启动规格组")
+	instanceID := createInstanceViaAPI(t, r, adminToken, 1, groupID)
+
+	memberToken := getMemberToken(t, r, "launch-member", "password123")
+	memberID := findUserIDByUsername(t, db, "launch-member")
+	addMemberViaAPI(t, r, adminToken, groupID, memberID, model.GroupMemberRoleMember)
+
+	w := makeRequest(r, "PUT", "/api/v1/instances/"+itoa(instanceID), map[string]interface{}{
+		"startCommand": "echo unsafe",
+	}, memberToken)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	w = makeRequest(r, "PUT", "/api/v1/instances/"+itoa(instanceID), map[string]interface{}{
+		"envVars": map[string]string{"JAVA_TOOL_OPTIONS": "-javaagent:unsafe.jar"},
+	}, memberToken)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	var instance model.Instance
+	require.NoError(t, db.First(&instance, instanceID).Error)
+	assert.Equal(t, "java -jar server.jar", instance.StartCommand)
+	assert.Empty(t, instance.EnvVars)
+
+	groupAdminToken := getMemberToken(t, r, "launch-admin", "password123")
+	groupAdminID := findUserIDByUsername(t, db, "launch-admin")
+	setGlobalRole(t, db, groupAdminID, model.RoleGroupAdmin)
+	addMemberViaAPI(t, r, adminToken, groupID, groupAdminID, model.GroupMemberRoleAdmin)
+
+	w = makeRequest(r, "PUT", "/api/v1/instances/"+itoa(instanceID), map[string]interface{}{
+		"startCommand": "java -jar approved.jar",
+		"envVars":      map[string]string{"JVM_ARGS": "-Xmx1G"},
+	}, groupAdminToken)
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	require.NoError(t, db.First(&instance, instanceID).Error)
+	assert.Equal(t, "java -jar approved.jar", instance.StartCommand)
+	assert.JSONEq(t, `{"JVM_ARGS":"-Xmx1G"}`, instance.EnvVars)
+}

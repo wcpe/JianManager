@@ -187,6 +187,22 @@ func (s *AuthzService) CanManageInstance(access *UserAccess, instanceID uint) (b
 	return access.CanAccessGroup(groupID), nil
 }
 
+// CanManageInstanceLaunchSpec 判断用户是否能修改实例启动命令和环境变量等高风险启动规格。
+// 这些字段会改变 Worker 创建进程时的执行上下文，故仅平台管理员或所属用户组管理员可修改。
+func (s *AuthzService) CanManageInstanceLaunchSpec(access *UserAccess, instanceID uint) (bool, error) {
+	if access.IsPlatformAdmin {
+		return true, nil
+	}
+	groupID, err := s.getInstanceGroupID(instanceID)
+	if err != nil {
+		return false, err
+	}
+	if groupID == 0 {
+		return false, nil
+	}
+	return access.CanManageGroup(groupID), nil
+}
+
 // getInstanceGroupID 查询实例所属用户组 ID，未分配返回 0。
 func (s *AuthzService) getInstanceGroupID(instanceID uint) (uint, error) {
 	var gi model.GroupInstance

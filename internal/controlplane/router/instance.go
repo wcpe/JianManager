@@ -326,6 +326,12 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
+	if req.StartCommand != nil || req.EnvVars != nil {
+		if !canManageInstanceLaunchSpec(c, h.authz, id) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+			return
+		}
+	}
 
 	instance, err := h.instanceSvc.Update(id, service.UpdateInstanceFields{
 		Name:         req.Name,
@@ -588,6 +594,19 @@ func canManageInstance(c *gin.Context, authz *service.AuthzService, instanceID u
 		return false
 	}
 	ok, err := authz.CanManageInstance(access, instanceID)
+	if err != nil {
+		return false
+	}
+	return ok
+}
+
+// canManageInstanceLaunchSpec 校验当前用户可修改实例的启动命令和环境变量等高风险启动规格。
+func canManageInstanceLaunchSpec(c *gin.Context, authz *service.AuthzService, instanceID uint) bool {
+	access := getAccess(c)
+	if access == nil {
+		return false
+	}
+	ok, err := authz.CanManageInstanceLaunchSpec(access, instanceID)
 	if err != nil {
 		return false
 	}
