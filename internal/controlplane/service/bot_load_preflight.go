@@ -34,6 +34,7 @@ type BotLoadPreflightService struct {
 	signer       *BotLoadPlanTokenSigner
 	clock        BotLoadClock
 	planner      BotLoadPlanner
+	intents      *BotLoadRunIntentService
 
 	commitMu sync.Mutex
 }
@@ -44,6 +45,11 @@ func NewBotLoadPreflightService(db *gorm.DB, capacities BotLoadCapacityProvider,
 		db: db, capacities: capacities, reservations: reservations,
 		signer: signer, clock: normalizeBotLoadClock(clock), planner: BotLoadPlanner{},
 	}
+}
+
+// SetRunIntentService 注入 V2 运行状态机，使预检成功的运行进入 ready。
+func (s *BotLoadPreflightService) SetRunIntentService(intents *BotLoadRunIntentService) {
+	s.intents = intents
 }
 
 // Preflight 生成计划并在 ready 时保存服务端计划正文、建立同到期时间的软预留。
@@ -77,7 +83,14 @@ func (s *BotLoadPreflightService) Preflight(ctx context.Context, session *model.
 	if len(result.Blockers) > 0 || !planning.Ready {
 		return result, nil
 	}
-	return s.commitReadyPlan(result, session, planning, capacitySnapshot.ReservationLimits)
+	result, err = s.commitReadyPlan(result, session, planning, capacitySnapshot.ReservationLimits)
+	if err != nil || session.SchemaVersion != 2 || s.intents == nil {
+		return result, err
+	}
+	if _, err := s.intents.MarkReady(ctx, session.ID); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *BotLoadPreflightService) validatePreflight(session *model.BotStressSession, input *BotLoadPreflightInput) error {

@@ -71,6 +71,62 @@ func TestGetInstanceMetrics_RunningWithoutProbeUsesSystemMetrics(t *testing.T) {
 	cleanupFR343Instance(mgr, uuid)
 }
 
+func TestGetInstanceResourceSnapshot_AggregatesRootAndDescendants(t *testing.T) {
+	srv, _, uuid := startFR343RunningInstance(t)
+
+	var response *workerpb.GetInstanceResourceSnapshotResponse
+	require.Eventually(t, func() bool {
+		var err error
+		response, err = srv.GetInstanceResourceSnapshot(context.Background(), &workerpb.GetInstanceResourceSnapshotRequest{InstanceUuid: uuid})
+		return err == nil && response.RssAvailable && response.ProcessRssBytes > 0 && response.UptimeAvailable && response.UptimeSeconds > 0
+	}, 5*time.Second, 100*time.Millisecond)
+
+	require.Greater(t, response.RootPid, int64(0))
+	require.GreaterOrEqual(t, response.ProcessCount, int32(1))
+	require.Empty(t, response.UnavailableReason)
+}
+
+func TestCompleteProcessTree_IncludesDescendants(t *testing.T) {
+	javaPath := copyTestExecutableAsJava(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestFR343MetricsHelperProcess$")
+	cmd.Env = append(os.Environ(), fr343HelperModeEnv+"=wrapper", fr343HelperJavaEnv+"="+javaPath)
+	require.NoError(t, cmd.Start())
+	var processes []*psproc.Process
+	defer func() {
+		for _, process := range processes {
+			if process.Pid != int32(cmd.Process.Pid) {
+				_ = process.Kill()
+			}
+		}
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	require.Eventually(t, func() bool {
+		root, err := psproc.NewProcess(int32(cmd.Process.Pid))
+		if err != nil {
+			return false
+		}
+		processes, err = completeProcessTree(context.Background(), root)
+		return err == nil && len(processes) >= 2
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestGetInstanceResourceSnapshot_StoppedDoesNotFabricateMetrics(t *testing.T) {
+	mgr := process.NewManager(t.TempDir())
+	const uuid = "fr399-stopped"
+	require.NoError(t, mgr.Create(uuid, "停止实例", "unused", "", t.TempDir(), nil, false, process.ProcessTypeDirect, "", "", 0, 0))
+	srv := NewServer(mgr, "node-fr399", nil, nil, nil)
+
+	response, err := srv.GetInstanceResourceSnapshot(context.Background(), &workerpb.GetInstanceResourceSnapshotRequest{InstanceUuid: uuid})
+	require.NoError(t, err)
+	assert.False(t, response.RssAvailable)
+	assert.False(t, response.CpuAvailable)
+	assert.False(t, response.UptimeAvailable)
+	assert.NotEmpty(t, response.UnavailableReason)
+	assert.Zero(t, response.ProcessRssBytes)
+}
+
 func TestGetInstanceMetrics_ProbeOverridesSystemMetrics(t *testing.T) {
 	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `serverprobe_tps{window="1m"} 19.5
@@ -166,6 +222,7 @@ func startFR343RunningInstance(t *testing.T) (*Server, *process.Manager, string)
 	t.Helper()
 	javaPath := copyTestExecutableAsJava(t)
 	mgr := process.NewManager(t.TempDir())
+	mgr.SetMemGuard(process.MemGuardConfig{Disabled: true})
 	uuid := "fr343-running-" + strings.ReplaceAll(t.Name(), "/", "-")
 	require.NoError(t, mgr.Create(
 		uuid,

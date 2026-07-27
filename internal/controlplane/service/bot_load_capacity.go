@@ -112,7 +112,17 @@ func botLoadWorkerCapacityFromProto(response *workerpb.GetBotCapacityResponse) B
 		WorkerEpochGeneration: response.WorkerEpochGeneration, BotWorkerVersion: response.BotWorkerVersion,
 		RSSBytes: response.RssBytes, EventLoopP95MS: response.EventLoopP95Ms, ObservedAt: observedAt,
 		UnavailableReason: response.UnavailableReason, Features: append([]string(nil), response.Features...),
+		WorkerProcessRSSBytes:             workerProcessRSSBytes(response),
+		WorkerProcessRSSUnavailableReason: response.WorkerProcessRssUnavailableReason,
 	}
+}
+
+func workerProcessRSSBytes(response *workerpb.GetBotCapacityResponse) *int64 {
+	if response == nil || !response.WorkerProcessRssAvailable {
+		return nil
+	}
+	value := response.WorkerProcessRssBytes
+	return &value
 }
 
 type botLoadCachedCapacity struct {
@@ -346,6 +356,8 @@ func (d *BotLoadCapacityDirectory) applyWorkerCapacity(capacity *BotLoadNodeCapa
 	capacity.RuntimeSource = "worker-grpc"
 	capacity.RSSBytes = worker.RSSBytes
 	capacity.EventLoopP95MS = worker.EventLoopP95MS
+	capacity.WorkerProcessRSSBytes = worker.WorkerProcessRSSBytes
+	capacity.WorkerProcessRSSUnavailableReason = worker.WorkerProcessRSSUnavailableReason
 	switch {
 	case worker.Legacy:
 		capacity.UnavailableReason = BotLoadUnavailableLegacyWorker

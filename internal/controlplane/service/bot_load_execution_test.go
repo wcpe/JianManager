@@ -474,6 +474,27 @@ func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 	require.Equal(t, int64(500), ckCount) // 每 bot 1 occurrence
 }
 
+func TestBotLoadExecutionStart_V2ReadyTransitionsToRunning(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{10}, 10, nil)
+	ready := model.BotLoadRunReady
+	verdict := model.BotLoadVerdictPending
+	require.NoError(t, h.db.Model(h.session).Updates(map[string]any{
+		"schema_version": 2, "run_state": ready, "verdict": verdict,
+	}).Error)
+	h.service.SetRunIntentService(NewBotLoadRunIntentService(h.db))
+
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+	var saved model.BotStressSession
+	require.NoError(t, h.db.First(&saved, h.session.ID).Error)
+	require.NotNil(t, saved.RunState)
+	require.Equal(t, model.BotLoadRunRunning, *saved.RunState)
+	var eventCount int64
+	require.NoError(t, h.db.Model(&model.BotLoadRunEvent{}).
+		Where("stress_session_id = ?", h.session.ID).Count(&eventCount).Error)
+	require.Equal(t, int64(2), eventCount)
+}
+
 // TestBotLoadExecutionStop_CancelsOpenCommandSchedules FR-369：stop 对未终态 checkpoint 下发 Cancel。
 func TestBotLoadExecutionStop_CancelsOpenCommandSchedules(t *testing.T) {
 	h := newBotLoadExecutionHarness(t, []int{2}, 2, nil)

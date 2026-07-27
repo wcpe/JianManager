@@ -6,11 +6,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	psproc "github.com/shirou/gopsutil/v4/process"
 
 	"github.com/wcpe/JianManager/internal/worker/bot"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -380,9 +384,9 @@ var botRequestSequence atomic.Uint64
 // GetBotCapacity 返回本节点 bot-worker 的准入容量与运行时快照。
 func (s *Server) GetBotCapacity(ctx context.Context, _ *workerpb.GetBotCapacityRequest) (*workerpb.GetBotCapacityResponse, error) {
 	if err := s.prepareBotFleet(ctx); err != nil {
-		return unavailableCapacityResponse(err), nil
+		return populateWorkerProcessRSS(ctx, unavailableCapacityResponse(err)), nil
 	}
-	return capacityToProto(s.botFleet.CapacitySnapshot()), nil
+	return populateWorkerProcessRSS(ctx, capacityToProto(s.botFleet.CapacitySnapshot())), nil
 }
 
 // ApplyBotBatch 幂等应用最多 50 个 assignment，并仅把 Node 明确回执计为 accepted。
@@ -1003,6 +1007,22 @@ func capacityToProto(snapshot bot.BotCapacitySnapshot) *workerpb.GetBotCapacityR
 
 func unavailableCapacityResponse(err error) *workerpb.GetBotCapacityResponse {
 	return &workerpb.GetBotCapacityResponse{Legacy: true, MaxBots: 50, ObservedAtUnixMs: time.Now().UnixMilli(), UnavailableReason: err.Error()}
+}
+
+func populateWorkerProcessRSS(ctx context.Context, response *workerpb.GetBotCapacityResponse) *workerpb.GetBotCapacityResponse {
+	process, err := psproc.NewProcessWithContext(ctx, int32(os.Getpid()))
+	if err != nil {
+		response.WorkerProcessRssUnavailableReason = "读取 Go Worker 进程失败: " + err.Error()
+		return response
+	}
+	memory, err := process.MemoryInfoWithContext(ctx)
+	if err != nil || memory == nil || memory.RSS > math.MaxInt64 {
+		response.WorkerProcessRssUnavailableReason = "读取 Go Worker RSS 失败"
+		return response
+	}
+	response.WorkerProcessRssBytes = int64(memory.RSS)
+	response.WorkerProcessRssAvailable = true
+	return response
 }
 
 func fleetSnapshotResponse(states []bot.BotState, capacity bot.BotCapacitySnapshot) *workerpb.GetBotFleetSnapshotResponse {

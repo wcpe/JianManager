@@ -36,7 +36,7 @@ func newBotLoadPreflightDB(t *testing.T) *gorm.DB {
 	dsn := fmt.Sprintf("file:bot-load-preflight-%d?mode=memory&cache=shared", time.Now().UnixNano())
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.BotStressSession{}, &model.BotLoadBatch{}, &model.Bot{}))
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.BotStressSession{}, &model.BotLoadBatch{}, &model.Bot{}, &model.BotLoadRunEvent{}))
 	return db
 }
 
@@ -98,6 +98,36 @@ func TestBotLoadPreflight_ReadyPersistsPlanAndReservesWithoutCreatingBots(t *tes
 	require.NoError(t, db.Model(&model.BotLoadBatch{}).Count(&batchCount).Error)
 	require.Zero(t, botCount)
 	require.Zero(t, batchCount)
+}
+
+func TestBotLoadPreflight_V2ReadyWritesRunState(t *testing.T) {
+	db := newBotLoadPreflightDB(t)
+	session := createBotLoadSession(t, db, "v2-ready", 10)
+	pending := model.BotLoadRunPending
+	verdict := model.BotLoadVerdictPending
+	require.NoError(t, db.Model(&model.BotStressSession{}).Where("id = ?", session.ID).Updates(map[string]any{
+		"schema_version": 2, "run_state": pending, "verdict": verdict,
+	}).Error)
+	session.SchemaVersion = 2
+	session.RunState = &pending
+	clock := &botLoadFakeClock{now: time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)}
+	reservations := NewBotLoadReservationStore(clock, time.Minute)
+	signer, err := NewBotLoadPlanTokenSigner([]byte("test-only-plan-token-secret"), clock)
+	require.NoError(t, err)
+	provider := &fakeBotLoadCapacityProvider{snapshot: BotLoadCapacitySnapshot{
+		NodeCapacities:    []BotLoadNodeCapacity{readyBotLoadNode(1, 10, 1)},
+		ReservationLimits: map[uint]int{1: 10}, UpdatedAt: clock.Now(),
+	}}
+	svc := NewBotLoadPreflightService(db, provider, reservations, signer, clock)
+	svc.SetRunIntentService(NewBotLoadRunIntentService(db))
+
+	result, err := svc.Preflight(context.Background(), &session, BotLoadPreflightInput{TargetBots: 10})
+	require.NoError(t, err)
+	require.True(t, result.Ready)
+	var saved model.BotStressSession
+	require.NoError(t, db.First(&saved, session.ID).Error)
+	require.NotNil(t, saved.RunState)
+	require.Equal(t, model.BotLoadRunReady, *saved.RunState)
 }
 
 func TestBotLoadPreflight_NotReadyHasNoSideEffects(t *testing.T) {

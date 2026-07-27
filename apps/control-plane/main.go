@@ -56,6 +56,7 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	}
 	preflight := service.NewBotLoadPreflightService(db, capacity, reservations, signer, nil)
 	execution := service.NewGRPCBotLoadExecutionService(db, capacity, reservations, signer, pool, nil, nil)
+	intents := service.NewBotLoadRunIntentService(db)
 	actionResults := service.NewActionResultService(db, nil)
 	barriers := service.NewBarrierCoordinator(nil)
 	signalRouter := service.NewGRPCActionSignalRouter(actionResults, pool, nil)
@@ -70,7 +71,8 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	execution.SetFleetSnapshotRefresher(coordinator)
 	execution.SetScenarioRunLifecycle(scenarioEvents)
 	// FR-370 V2 运行状态机：stop/complete 写 bot_load_run_events。
-	execution.SetRunIntentService(service.NewBotLoadRunIntentService(db))
+	preflight.SetRunIntentService(intents)
+	execution.SetRunIntentService(intents)
 	// FR-365：状态新鲜度巡检，将幽灵 connected 收敛为 disconnected/error。
 	freshnessSvc := service.NewBotFreshnessService(db, nil)
 	freshness := service.NewBotFreshnessSweeper(freshnessSvc)
@@ -217,6 +219,8 @@ func main() {
 	botLoadTemplateSvc := service.NewBotLoadTemplateService(db)
 	// FR-370 5s 指标采样器（后台循环；Stop 在进程退出前调用）。
 	botLoadMetricSampler := service.NewBotLoadMetricSampler(db, nil)
+	botLoadMetricSampler.SetCapacityProvider(botLoadSvcs.capacity)
+	botLoadMetricSampler.SetTargetResourceProvider(service.NewGRPCBotLoadTargetResourceProvider(pool))
 	botLoadMetricSampler.Start()
 	defer botLoadMetricSampler.Stop()
 	// FR-370 failures/events 投影（读路径，无后台循环）。

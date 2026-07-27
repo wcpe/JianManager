@@ -424,8 +424,8 @@
 - **错误**: 409 `NODE_OFFLINE`（节点未连接，预检无法执行）；422 `PREFLIGHT_FAILED`（预检未通过，带具体原因）；422 `INVALID_TRANSITION`（状态机拒绝 / 长操作在途「实例正在搭建中（核心下载未完成）…/导入中（目录搬迁未完成）…/克隆中（工作目录复制未完成）…」/ 内存水位不足）
 
 ### GET /api/v1/bots/stress-sessions/:id/report
-- **描述**: 导出压测终态报告（FR-370）。仅 `schemaVersion=2` 且 `runState` 为终态时可导出；含 `bot.chat` 成功边界免责声明
-- **关联 FR**: FR-370
+- **描述**: 导出压测终态报告（FR-370/399）。仅 `schemaVersion=2` 且 `runState` 为终态时可导出；含 `bot.chat` 成功边界免责声明及加性 `capacity` 段。`capacity` 固定含 `testedScale`、`targetHostMemory`、`stages`、`measuredPeak`、`recommended`、环境元数据和免责声明；资源未知统一为 `null`，并在阶段或环境的 `unavailable` 中说明原因，建议值为实测值的 1.25 倍向上取整。
+- **关联 FR**: FR-370 / FR-399
 - **权限**: `bot.read` 且可访问该会话所属实例
 - **Query**: `format=json|csv`（默认 `json`）
 - **响应**: JSON 报告对象，或 `text/csv` 附件
@@ -438,8 +438,8 @@
 - **响应**: `text/event-stream`
 
 ### GET /api/v1/bots/stress-sessions/:id/metrics
-- **描述**: 读取压测会话 5s 聚合指标样本（FR-370）。样本由 CP 后台 `BotLoadMetricSampler` 写入 `bot_load_metric_samples`（Bot 状态计数 + 命令 checkpoint 计数）；首版延迟百分位/targetLegacy 多为 null/空
-- **关联 FR**: FR-370 / FR-372
+- **描述**: 读取压测会话 5s 聚合指标样本（FR-370/399）。样本由 CP 后台 `BotLoadMetricSampler` 写入 `bot_load_metric_samples`；`executor` 加性包含本 run Bot 数、bot-worker RSS、Go Worker RSS 与节点资源，`targetLegacy.targetResource` 包含目标进程树 RSS/CPU/运行时长、JVM 堆及目标主机内存。所有已定义的资源数值未知时均为 `null`，并在同层 `unavailable` 中说明原因。
+- **关联 FR**: FR-370 / FR-372 / FR-399
 - **权限**: 同 report
 - **Query**: `from?`/`to?`（RFC3339）；`resolution=raw|15s|1m|5m`（默认 raw）；响应最多约 1200 点
 - **响应**: `{ items:[{timestamp,stageIndex,counts,command,barrier,executor,latency,errors,targetLegacy?}], from, to, resolution }`

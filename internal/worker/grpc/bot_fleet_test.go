@@ -115,6 +115,8 @@ func TestGetBotCapacityMapsFleetSnapshot(t *testing.T) {
 	require.EqualValues(t, 50, got.MaxBots)
 	require.EqualValues(t, 9, got.CapacityGeneration)
 	require.Equal(t, []string{"fleet-v1"}, got.Features)
+	require.True(t, got.WorkerProcessRssAvailable)
+	require.Greater(t, got.WorkerProcessRssBytes, int64(0))
 }
 
 func TestApplyBotBatchEnforcesLimitGenerationAndIdempotency(t *testing.T) {

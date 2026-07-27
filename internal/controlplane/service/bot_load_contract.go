@@ -54,25 +54,27 @@ func normalizeBotLoadClock(clock BotLoadClock) BotLoadClock {
 
 // BotLoadNodeCapacity 是 API 冻结的发压节点容量领域 DTO。
 type BotLoadNodeCapacity struct {
-	NodeID             uint       `json:"nodeId"`
-	NodeUUID           string     `json:"nodeUuid"`
-	NodeName           string     `json:"nodeName"`
-	Online             bool       `json:"online"`
-	TunnelConnected    bool       `json:"tunnelConnected"`
-	BotWorkerReady     bool       `json:"botWorkerReady"`
-	Legacy             bool       `json:"legacy"`
-	MaxBots            int        `json:"maxBots"`
-	ActiveBots         int        `json:"activeBots"`
-	ReservedBots       int        `json:"reservedBots"`
-	AvailableBots      int        `json:"availableBots"`
-	CapacityGeneration int64      `json:"capacityGeneration"`
-	WorkerEpoch        string     `json:"workerEpoch,omitempty"`
-	BotWorkerVersion   string     `json:"botWorkerVersion,omitempty"`
-	RuntimeSource      string     `json:"runtimeSource,omitempty"`
-	RSSBytes           int64      `json:"rssBytes,omitempty"`
-	EventLoopP95MS     float64    `json:"eventLoopP95Ms,omitempty"`
-	LastHeartbeatAt    *time.Time `json:"lastHeartbeatAt,omitempty"`
-	UnavailableReason  string     `json:"unavailableReason,omitempty"`
+	NodeID                            uint       `json:"nodeId"`
+	NodeUUID                          string     `json:"nodeUuid"`
+	NodeName                          string     `json:"nodeName"`
+	Online                            bool       `json:"online"`
+	TunnelConnected                   bool       `json:"tunnelConnected"`
+	BotWorkerReady                    bool       `json:"botWorkerReady"`
+	Legacy                            bool       `json:"legacy"`
+	MaxBots                           int        `json:"maxBots"`
+	ActiveBots                        int        `json:"activeBots"`
+	ReservedBots                      int        `json:"reservedBots"`
+	AvailableBots                     int        `json:"availableBots"`
+	CapacityGeneration                int64      `json:"capacityGeneration"`
+	WorkerEpoch                       string     `json:"workerEpoch,omitempty"`
+	BotWorkerVersion                  string     `json:"botWorkerVersion,omitempty"`
+	RuntimeSource                     string     `json:"runtimeSource,omitempty"`
+	RSSBytes                          int64      `json:"rssBytes,omitempty"`
+	EventLoopP95MS                    float64    `json:"eventLoopP95Ms,omitempty"`
+	WorkerProcessRSSBytes             *int64     `json:"workerProcessRssBytes,omitempty"`
+	WorkerProcessRSSUnavailableReason string     `json:"workerProcessRssUnavailableReason,omitempty"`
+	LastHeartbeatAt                   *time.Time `json:"lastHeartbeatAt,omitempty"`
+	UnavailableReason                 string     `json:"unavailableReason,omitempty"`
 }
 
 // BotLoadAllocation 是 API 冻结的单批分片领域 DTO。
@@ -123,20 +125,22 @@ type BotLoadPreflightResult struct {
 
 // BotLoadWorkerCapacity 是 GetBotCapacity 的 CP 内部快照，避免把 proto 泄漏到算法层。
 type BotLoadWorkerCapacity struct {
-	Ready                 bool
-	Legacy                bool
-	MaxBots               int
-	ActiveBots            int
-	ConnectingBots        int
-	CapacityGeneration    int64
-	WorkerEpoch           string
-	WorkerEpochGeneration int64
-	BotWorkerVersion      string
-	RSSBytes              int64
-	EventLoopP95MS        float64
-	ObservedAt            time.Time
-	UnavailableReason     string
-	Features              []string
+	Ready                             bool
+	Legacy                            bool
+	MaxBots                           int
+	ActiveBots                        int
+	ConnectingBots                    int
+	CapacityGeneration                int64
+	WorkerEpoch                       string
+	WorkerEpochGeneration             int64
+	BotWorkerVersion                  string
+	RSSBytes                          int64
+	EventLoopP95MS                    float64
+	WorkerProcessRSSBytes             *int64
+	WorkerProcessRSSUnavailableReason string
+	ObservedAt                        time.Time
+	UnavailableReason                 string
+	Features                          []string
 }
 
 // BotLoadCapacitySnapshot 是容量目录输出及预留原子校验所需的内部目录快照。

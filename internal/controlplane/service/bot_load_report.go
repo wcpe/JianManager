@@ -25,16 +25,17 @@ func NewBotLoadReportService(db *gorm.DB) *BotLoadReportService {
 
 // BotLoadReportJSON 最小 JSON 报告。
 type BotLoadReportJSON struct {
-	RunID         uint           `json:"runId"`
-	RunUUID       string         `json:"runUuid"`
-	SchemaVersion int            `json:"schemaVersion"`
-	RunState      string         `json:"runState"`
-	Verdict       string         `json:"verdict"`
-	MaxStableBots *int           `json:"maxStableBots,omitempty"`
-	FailureSummary map[string]int `json:"failureSummary,omitempty"`
-	ReportSummary string         `json:"reportSummary,omitempty"`
-	GeneratedAt   time.Time      `json:"generatedAt"`
-	Disclaimer    string         `json:"disclaimer"`
+	RunID          uint                   `json:"runId"`
+	RunUUID        string                 `json:"runUuid"`
+	SchemaVersion  int                    `json:"schemaVersion"`
+	RunState       string                 `json:"runState"`
+	Verdict        string                 `json:"verdict"`
+	MaxStableBots  *int                   `json:"maxStableBots,omitempty"`
+	FailureSummary map[string]int         `json:"failureSummary,omitempty"`
+	ReportSummary  string                 `json:"reportSummary,omitempty"`
+	GeneratedAt    time.Time              `json:"generatedAt"`
+	Disclaimer     string                 `json:"disclaimer"`
+	Capacity       *BotLoadCapacityReport `json:"capacity"`
 }
 
 // BuildJSON 仅 schemaVersion=2 且终态可导出。
@@ -52,11 +53,16 @@ func (s *BotLoadReportService) BuildJSON(sessionID uint) (*BotLoadReportJSON, er
 	if !IsTerminalRunState(*sess.RunState) {
 		return nil, ErrBotLoadReportNotReady
 	}
+	var samples []model.BotLoadMetricSample
+	if err := s.db.Where("stress_session_id = ?", sessionID).Order("sampled_at ASC").Find(&samples).Error; err != nil {
+		return nil, err
+	}
 	rep := &BotLoadReportJSON{
 		RunID: sess.ID, RunUUID: sess.UUID, SchemaVersion: sess.SchemaVersion,
 		RunState: string(*sess.RunState), GeneratedAt: time.Now().UTC(),
 		Disclaimer: "命令发送成功仅表示 bot.chat 未同步抛错，不证明服务器接受或业务效果。",
 	}
+	rep.Capacity = buildBotLoadCapacityReport(sess, samples)
 	if sess.Verdict != nil {
 		rep.Verdict = string(*sess.Verdict)
 	}
@@ -79,18 +85,41 @@ func (s *BotLoadReportService) BuildCSV(sessionID uint) ([]byte, error) {
 	var b strings.Builder
 	b.WriteString("\ufeff")
 	w := csv.NewWriter(&b)
-	_ = w.Write([]string{"runId", "runUuid", "runState", "verdict", "maxStableBots", "generatedAt"})
+	_ = w.Write([]string{"runId", "runUuid", "runState", "verdict", "maxStableBots", "generatedAt", "capacityPeakBots", "capacityClaimedAs500", "capacityTargetProcessRssBytes", "capacityRecommendedTargetProcessRssBytes", "capacityTargetHostMemoryWithinReserve"})
 	maxStable := ""
 	if rep.MaxStableBots != nil {
 		maxStable = fmt.Sprintf("%d", *rep.MaxStableBots)
 	}
+	capacity := rep.Capacity
 	_ = w.Write([]string{
 		fmt.Sprintf("%d", rep.RunID), rep.RunUUID, rep.RunState, rep.Verdict,
-		maxStable, rep.GeneratedAt.Format(time.RFC3339),
+		maxStable, rep.GeneratedAt.Format(time.RFC3339), capacityCSVInt(capacity.TestedScale.PeakBots), fmt.Sprintf("%t", capacity.TestedScale.ClaimedAs500),
+		capacityCSVInt64(capacity.MeasuredPeak.TargetProcessRssBytes.Value), capacityCSVInt64(capacity.Recommended.TargetProcessRssBytes), capacityCSVBool(capacity.TargetHostMemory.WithinReserve),
 	})
 	w.Flush()
 	if err := w.Error(); err != nil {
 		return nil, err
 	}
 	return []byte(b.String()), nil
+}
+
+func capacityCSVInt(value *int) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", *value)
+}
+
+func capacityCSVInt64(value *int64) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", *value)
+}
+
+func capacityCSVBool(value *bool) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprintf("%t", *value)
 }

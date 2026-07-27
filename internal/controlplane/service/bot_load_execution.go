@@ -302,6 +302,9 @@ func (s *BotLoadExecutionService) Start(ctx context.Context, sessionID uint, pla
 	if err != nil {
 		return nil, err
 	}
+	if err := s.markV2RunStarting(ctx, prepared.session); err != nil {
+		return nil, err
+	}
 	s.startMu.Lock()
 	hasPlanned, err := s.materializeStart(ctx, prepared)
 	s.startMu.Unlock()
@@ -311,6 +314,9 @@ func (s *BotLoadExecutionService) Start(ctx context.Context, sessionID uint, pla
 	if s.reservations != nil {
 		s.reservations.Release(sessionID)
 	}
+	if err := s.markV2RunRunning(ctx, prepared.session); err != nil {
+		return nil, err
+	}
 	s.ensureFleetSubscriptions(prepared)
 	if hasPlanned {
 		if err := s.submitLifecycle(sessionID, "start", func() { s.runDispatch(prepared) }); err != nil {
@@ -318,6 +324,22 @@ func (s *BotLoadExecutionService) Start(ctx context.Context, sessionID uint, pla
 		}
 	}
 	return s.loadSession(ctx, sessionID)
+}
+
+func (s *BotLoadExecutionService) markV2RunStarting(ctx context.Context, session *model.BotStressSession) error {
+	if session == nil || session.SchemaVersion != 2 || s.intents == nil || session.RunState == nil || *session.RunState != model.BotLoadRunReady {
+		return nil
+	}
+	_, err := s.intents.ApplyIntent(ctx, session.ID, BotLoadIntentStart, "dispatch_started")
+	return err
+}
+
+func (s *BotLoadExecutionService) markV2RunRunning(ctx context.Context, session *model.BotStressSession) error {
+	if session == nil || session.SchemaVersion != 2 || s.intents == nil || session.RunState == nil || *session.RunState != model.BotLoadRunReady {
+		return nil
+	}
+	_, err := s.intents.ApplyIntent(ctx, session.ID, BotLoadIntentRunning, "dispatching")
+	return err
 }
 
 func (s *BotLoadExecutionService) ensureFleetSubscriptions(prepared *botLoadStartPreparation) {

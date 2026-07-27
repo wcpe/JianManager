@@ -94,6 +94,8 @@ service WorkerService {
   rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
   // GetInstanceMetrics 获取实例指标。
   rpc GetInstanceMetrics(GetInstanceMetricsRequest) returns (GetInstanceMetricsResponse);
+  // GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照（FR-399）。
+  rpc GetInstanceResourceSnapshot(GetInstanceResourceSnapshotRequest) returns (GetInstanceResourceSnapshotResponse);
   // GetInstanceEnv 获取运行中实例 JVM 进程的实际环境（FR-344 环境变量下区）。
   rpc GetInstanceEnv(GetInstanceEnvRequest) returns (GetInstanceEnvResponse);
 
@@ -841,6 +843,24 @@ message GetInstanceMetricsResponse {
   // RCON 回退已退役（FR-067，见 ADR-016）：不再有 RCON/进程内存兜底的 TPS/在线人数。
   bool probe_available = 10;
   float mspt_p95_millis = 11; // ServerProbe 最近 60 秒原始 Tick 时长 p95；不得由 avg 二次聚合冒充
+}
+
+// GetInstanceResourceSnapshotRequest 查询实例根进程及其完整子进程树的资源快照。
+message GetInstanceResourceSnapshotRequest {
+  string instance_uuid = 1;
+}
+
+// GetInstanceResourceSnapshotResponse 中每个指标均有独立可用标记，避免以零值伪造不可用数据。
+message GetInstanceResourceSnapshotResponse {
+  int64 root_pid = 1;
+  int32 process_count = 2;
+  int64 process_rss_bytes = 3;
+  double cpu_percent = 4;
+  double uptime_seconds = 5;
+  bool rss_available = 6;
+  bool cpu_available = 7;
+  bool uptime_available = 8;
+  string unavailable_reason = 9;
 }
 
 // WorldMetric 单个世界的负载（来自 ServerProbe serverprobe_world_*）。
@@ -1703,6 +1723,10 @@ message GetBotCapacityResponse {
   int64 observed_at_unix_ms = 12;
   string unavailable_reason = 13;
   repeated string features = 14;
+  // worker_process_rss_bytes 是 Go Worker 自身 RSS，不是 bot-worker RSS；false 时数值无效。
+  int64 worker_process_rss_bytes = 15;
+  bool worker_process_rss_available = 16;
+  string worker_process_rss_unavailable_reason = 17;
 }
 
 message BotAssignment {

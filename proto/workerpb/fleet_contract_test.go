@@ -16,6 +16,7 @@ func TestWorkerProto_FleetContractFrozen(t *testing.T) {
 
 	for _, name := range []protoreflect.Name{
 		"GetBotCapacity",
+		"GetInstanceResourceSnapshot",
 		"ApplyBotBatch",
 		"GetBotFleetSnapshot",
 		"StreamBotFleetEvents",
@@ -55,6 +56,13 @@ func TestWorkerProto_FleetContractFrozen(t *testing.T) {
 
 	assertField(t, file, "InstanceMetricSample", "mspt_p95_millis")
 	assertField(t, file, "GetInstanceMetricsResponse", "mspt_p95_millis")
+	assertMessageFields(t, file, "GetInstanceResourceSnapshotResponse", []string{
+		"root_pid", "process_count", "process_rss_bytes", "cpu_percent", "uptime_seconds",
+		"rss_available", "cpu_available", "uptime_available", "unavailable_reason",
+	})
+	assertMessageFields(t, file, "GetBotCapacityResponse", []string{
+		"worker_process_rss_bytes", "worker_process_rss_available", "worker_process_rss_unavailable_reason",
+	})
 }
 
 func TestWorkerProto_FleetOneofMarshalRoundTrip(t *testing.T) {

@@ -12,7 +12,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 const botLoadMetricSampleInterval = 5 * time.Second
@@ -20,8 +22,10 @@ const botLoadMetricSampleInterval = 5 * time.Second
 // BotLoadMetricSampler 每 5s 为活跃压测会话写入一条聚合样本（FR-370）。
 // 首版只聚合 Bot 状态计数与命令 checkpoint 终态计数；延迟百分位/探针 targetLegacy 后续迭代。
 type BotLoadMetricSampler struct {
-	db    *gorm.DB
-	clock BotLoadClock
+	db              *gorm.DB
+	clock           BotLoadClock
+	capacities      BotLoadCapacityProvider
+	targetResources BotLoadTargetResourceProvider
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -31,6 +35,71 @@ type BotLoadMetricSampler struct {
 // NewBotLoadMetricSampler 创建采样器。
 func NewBotLoadMetricSampler(db *gorm.DB, clock BotLoadClock) *BotLoadMetricSampler {
 	return &BotLoadMetricSampler{db: db, clock: normalizeBotLoadClock(clock)}
+}
+
+// BotLoadTargetProcessResource 是目标实例根进程及子进程树的 Worker 采样快照。
+type BotLoadTargetProcessResource struct {
+	ProcessRSSBytes *int64
+	CPUPercent      *float64
+	UptimeSeconds   *float64
+}
+
+// BotLoadTargetResourceProvider 隔离目标实例资源 gRPC，采样器不直接访问 Worker。
+type BotLoadTargetResourceProvider interface {
+	GetTargetProcessResource(ctx context.Context, nodeUUID, instanceUUID string) (BotLoadTargetProcessResource, error)
+}
+
+type grpcBotLoadTargetResourceProvider struct {
+	pool *cpgrpc.ClientPool
+}
+
+// NewGRPCBotLoadTargetResourceProvider 创建通过既有 CP→Worker 连接池采集目标实例资源的提供方。
+func NewGRPCBotLoadTargetResourceProvider(pool *cpgrpc.ClientPool) BotLoadTargetResourceProvider {
+	return grpcBotLoadTargetResourceProvider{pool: pool}
+}
+
+func (p grpcBotLoadTargetResourceProvider) GetTargetProcessResource(ctx context.Context, nodeUUID, instanceUUID string) (BotLoadTargetProcessResource, error) {
+	if p.pool == nil {
+		return BotLoadTargetProcessResource{}, errBotLoadWorkerMissing
+	}
+	client, ok := p.pool.Get(nodeUUID)
+	if !ok || client.Worker == nil {
+		return BotLoadTargetProcessResource{}, errBotLoadWorkerMissing
+	}
+	resourceCtx, cancel := context.WithTimeout(ctx, botLoadCapacityNodeTimeout)
+	defer cancel()
+	response, err := client.Worker.GetInstanceResourceSnapshot(resourceCtx, &workerpb.GetInstanceResourceSnapshotRequest{InstanceUuid: instanceUUID})
+	if err != nil || response == nil {
+		if err != nil {
+			return BotLoadTargetProcessResource{}, err
+		}
+		return BotLoadTargetProcessResource{}, errors.New("目标实例资源快照为空")
+	}
+	resource := BotLoadTargetProcessResource{}
+	if response.RssAvailable {
+		resource.ProcessRSSBytes = ptrInt64(response.ProcessRssBytes)
+	}
+	if response.CpuAvailable {
+		resource.CPUPercent = ptrFloat64(response.CpuPercent)
+	}
+	if response.UptimeAvailable {
+		resource.UptimeSeconds = ptrFloat64(response.UptimeSeconds)
+	}
+	return resource, nil
+}
+
+// SetCapacityProvider 注入现有容量目录，供采样器读取已绑定执行节点的 bot-worker 资源。
+func (s *BotLoadMetricSampler) SetCapacityProvider(provider BotLoadCapacityProvider) {
+	if s != nil {
+		s.capacities = provider
+	}
+}
+
+// SetTargetResourceProvider 注入目标实例进程树资源源。
+func (s *BotLoadMetricSampler) SetTargetResourceProvider(provider BotLoadTargetResourceProvider) {
+	if s != nil {
+		s.targetResources = provider
+	}
 }
 
 // Start 启动后台 5s 循环；重复调用幂等。
@@ -140,9 +209,16 @@ func (s *BotLoadMetricSampler) SampleSession(ctx context.Context, sessionID uint
 	if err != nil {
 		return err
 	}
-	// 首版空壳：屏障/执行节点/延迟/错误在后续接真实源。
+	executorJSON, err := s.collectExecutorResources(ctx, sessionID, now)
+	if err != nil {
+		return err
+	}
+	targetLegacyJSON, err := s.collectTargetLegacy(ctx, sess.InstanceID, now)
+	if err != nil {
+		return err
+	}
+	// 屏障、延迟和错误的真实源仍由后续压测迭代补充。
 	emptyObj := []byte(`{}`)
-	emptyArr := []byte(`[]`)
 	latency := map[string]any{
 		"connectP50Ms": nil, "connectP95Ms": nil, "connectP99Ms": nil,
 		"scheduleLagP50Ms": nil, "scheduleLagP95Ms": nil, "scheduleLagP99Ms": nil,
@@ -151,15 +227,16 @@ func (s *BotLoadMetricSampler) SampleSession(ctx context.Context, sessionID uint
 	latencyJSON, _ := json.Marshal(latency)
 
 	row := model.BotLoadMetricSample{
-		StressSessionID: sessionID,
-		SampledAt:       now,
-		StageIndex:      stage,
-		CountsJSON:      string(countsJSON),
-		CommandJSON:     string(commandJSON),
-		BarrierJSON:     string(emptyObj),
-		ExecutorJSON:    string(emptyArr),
-		LatencyJSON:     string(latencyJSON),
-		ErrorsJSON:      string(emptyObj),
+		StressSessionID:  sessionID,
+		SampledAt:        now,
+		StageIndex:       stage,
+		CountsJSON:       string(countsJSON),
+		CommandJSON:      string(commandJSON),
+		BarrierJSON:      string(emptyObj),
+		ExecutorJSON:     string(executorJSON),
+		LatencyJSON:      string(latencyJSON),
+		ErrorsJSON:       string(emptyObj),
+		TargetLegacyJSON: targetLegacyJSON,
 	}
 	// unique(session, sampled_at) 冲突时覆盖 JSON 字段（同窗重采幂等）。
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
@@ -170,6 +247,335 @@ func (s *BotLoadMetricSampler) SampleSession(ctx context.Context, sessionID uint
 		}),
 	}).Create(&row).Error
 }
+
+const botLoadMetricStaleAfter = 30 * time.Second
+
+type botLoadExecutorMetric struct {
+	NodeID                uint     `json:"nodeId"`
+	ActiveBots            *int64   `json:"activeBots"`
+	BotWorkerRSSBytes     *int64   `json:"botWorkerRssBytes"`
+	EventLoopP95MS        *float64 `json:"eventLoopP95Ms"`
+	NodeMemUsedBytes      *int64   `json:"nodeMemUsedBytes"`
+	NodeMemTotalBytes     *int64   `json:"nodeMemTotalBytes"`
+	NodeCPUPercent        *float64 `json:"nodeCpuPercent"`
+	WorkerProcessRSSBytes *int64   `json:"workerProcessRssBytes"`
+	Health                *string  `json:"health"`
+	Unavailable           []string `json:"unavailable"`
+}
+
+type botLoadTargetResourceMetric struct {
+	ProcessRSSBytes   *int64   `json:"processRssBytes"`
+	HeapUsedBytes     *int64   `json:"heapUsedBytes"`
+	HeapMaxBytes      *int64   `json:"heapMaxBytes"`
+	CPUPercent        *float64 `json:"cpuPercent"`
+	UptimeSeconds     *float64 `json:"uptimeSeconds"`
+	HostMemUsedBytes  *int64   `json:"hostMemUsedBytes"`
+	HostMemTotalBytes *int64   `json:"hostMemTotalBytes"`
+	TPS               *float64 `json:"tps"`
+	MSPT              *float64 `json:"mspt"`
+	OnlinePlayers     *int64   `json:"onlinePlayers"`
+	Unavailable       []string `json:"unavailable"`
+}
+
+type botLoadMetricValue struct {
+	NodeUUID   string
+	InstanceID string
+	MetricKey  string
+	TS         time.Time
+	Value      float64
+}
+
+func (s *BotLoadMetricSampler) collectExecutorResources(ctx context.Context, sessionID uint, sampledAt time.Time) ([]byte, error) {
+	var batches []model.BotLoadBatch
+	if err := s.db.WithContext(ctx).Select("executor_node_id").
+		Where("stress_session_id = ?", sessionID).Group("executor_node_id").Find(&batches).Error; err != nil {
+		return nil, fmt.Errorf("查询压测执行节点失败: %w", err)
+	}
+	if len(batches) == 0 {
+		return json.Marshal([]botLoadExecutorMetric{})
+	}
+	nodeIDs := make([]uint, 0, len(batches))
+	for _, batch := range batches {
+		nodeIDs = append(nodeIDs, batch.ExecutorNodeID)
+	}
+	var nodes []model.Node
+	if err := s.db.WithContext(ctx).Where("id IN ?", nodeIDs).Find(&nodes).Error; err != nil {
+		return nil, fmt.Errorf("查询压测执行节点信息失败: %w", err)
+	}
+	nodesByID := make(map[uint]model.Node, len(nodes))
+	nodeUUIDs := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		nodesByID[node.ID] = node
+		nodeUUIDs = append(nodeUUIDs, node.UUID)
+	}
+	active, err := s.aggregateExecutorActiveBots(ctx, sessionID, nodeIDs)
+	if err != nil {
+		return nil, err
+	}
+	metricValues, err := s.latestNodeMetricValues(ctx, nodeUUIDs, sampledAt)
+	if err != nil {
+		return nil, err
+	}
+	capacityByNode, capacityReason := s.snapshotExecutorCapacities(ctx, sessionID)
+	result := make([]botLoadExecutorMetric, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		node, found := nodesByID[nodeID]
+		item := botLoadExecutorMetric{NodeID: nodeID, Unavailable: []string{}}
+		if count, ok := active[nodeID]; ok {
+			item.ActiveBots = ptrInt64(count)
+		} else {
+			item.ActiveBots = ptrInt64(0)
+		}
+		if !found {
+			item.Unavailable = append(item.Unavailable, "node:NOT_FOUND")
+			result = append(result, item)
+			continue
+		}
+		capacity, capacityFound := capacityByNode[nodeID]
+		s.applyExecutorCapacity(&item, capacity, capacityFound, capacityReason)
+		s.applyNodeResourceMetrics(&item, node, metricValues, sampledAt)
+		result = append(result, item)
+	}
+	return json.Marshal(result)
+}
+
+func (s *BotLoadMetricSampler) aggregateExecutorActiveBots(ctx context.Context, sessionID uint, nodeIDs []uint) (map[uint]int64, error) {
+	type row struct {
+		ExecutorNodeID uint
+		Count          int64
+	}
+	var rows []row
+	if err := s.db.WithContext(ctx).Model(&model.Bot{}).
+		Select("executor_node_id, COUNT(*) AS count").
+		Where("stress_session_id = ? AND executor_node_id IN ? AND status IN ?", sessionID, nodeIDs,
+			[]model.BotStatus{model.BotStatusConnected, model.BotStatusConnecting}).
+		Group("executor_node_id").Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("聚合执行节点活跃 Bot 失败: %w", err)
+	}
+	out := make(map[uint]int64, len(rows))
+	for _, row := range rows {
+		out[row.ExecutorNodeID] = row.Count
+	}
+	return out, nil
+}
+
+func (s *BotLoadMetricSampler) snapshotExecutorCapacities(ctx context.Context, sessionID uint) (map[uint]BotLoadNodeCapacity, string) {
+	if s.capacities == nil {
+		return map[uint]BotLoadNodeCapacity{}, "CAPACITY_UNAVAILABLE"
+	}
+	snapshot, err := s.capacities.Snapshot(ctx, sessionID)
+	if err != nil || snapshot == nil {
+		return map[uint]BotLoadNodeCapacity{}, "CAPACITY_RPC_FAILED"
+	}
+	out := make(map[uint]BotLoadNodeCapacity, len(snapshot.NodeCapacities))
+	for _, capacity := range snapshot.NodeCapacities {
+		out[capacity.NodeID] = capacity
+	}
+	return out, ""
+}
+
+func (s *BotLoadMetricSampler) applyExecutorCapacity(item *botLoadExecutorMetric, capacity BotLoadNodeCapacity, capacityFound bool, snapshotReason string) {
+	if snapshotReason != "" {
+		item.Unavailable = append(item.Unavailable,
+			"botWorkerRssBytes:"+snapshotReason, "eventLoopP95Ms:"+snapshotReason,
+			"workerProcessRssBytes:"+snapshotReason, "health:"+snapshotReason)
+		return
+	}
+	if !capacityFound {
+		item.Unavailable = append(item.Unavailable,
+			"botWorkerRssBytes:CAPACITY_UNAVAILABLE", "eventLoopP95Ms:CAPACITY_UNAVAILABLE",
+			"workerProcessRssBytes:CAPACITY_UNAVAILABLE", "health:CAPACITY_UNAVAILABLE")
+		return
+	}
+	if capacity.UnavailableReason != "" {
+		health := "unhealthy"
+		item.Health = &health
+		item.Unavailable = append(item.Unavailable,
+			"botWorkerRssBytes:"+capacity.UnavailableReason, "eventLoopP95Ms:"+capacity.UnavailableReason,
+			"workerProcessRssBytes:"+capacity.UnavailableReason)
+		return
+	}
+	health := "ready"
+	if capacity.Legacy {
+		health = "legacy"
+	}
+	item.Health = &health
+	if capacity.RSSBytes > 0 {
+		item.BotWorkerRSSBytes = ptrInt64(capacity.RSSBytes)
+	} else {
+		item.Unavailable = append(item.Unavailable, "botWorkerRssBytes:CAPACITY_VALUE_MISSING")
+	}
+	item.EventLoopP95MS = ptrFloat64(capacity.EventLoopP95MS)
+	if capacity.WorkerProcessRSSBytes != nil {
+		item.WorkerProcessRSSBytes = capacity.WorkerProcessRSSBytes
+	} else {
+		reason := capacity.WorkerProcessRSSUnavailableReason
+		if reason == "" {
+			reason = "WORKER_PROCESS_RSS_UNAVAILABLE"
+		}
+		item.Unavailable = append(item.Unavailable, "workerProcessRssBytes:"+reason)
+	}
+}
+
+func (s *BotLoadMetricSampler) applyNodeResourceMetrics(item *botLoadExecutorMetric, node model.Node, values map[string]botLoadMetricValue, sampledAt time.Time) {
+	if node.MemoryMB > 0 {
+		item.NodeMemTotalBytes = ptrInt64(node.MemoryMB * 1024 * 1024)
+	} else {
+		item.Unavailable = append(item.Unavailable, "nodeMemTotalBytes:NODE_MEMORY_UNKNOWN")
+	}
+	if value, ok := values[metricValueMapKey(node.UUID, "", model.MetricNodeMemUsed)]; ok && !metricValueStale(value, sampledAt) {
+		item.NodeMemUsedBytes = ptrInt64(int64(value.Value))
+	} else {
+		item.Unavailable = append(item.Unavailable, "nodeMemUsedBytes:"+metricUnavailableReason(ok, value, sampledAt))
+	}
+	if value, ok := values[metricValueMapKey(node.UUID, "", model.MetricNodeCPUPct)]; ok && !metricValueStale(value, sampledAt) {
+		item.NodeCPUPercent = ptrFloat64(value.Value)
+	} else {
+		item.Unavailable = append(item.Unavailable, "nodeCpuPercent:"+metricUnavailableReason(ok, value, sampledAt))
+	}
+}
+
+func (s *BotLoadMetricSampler) latestNodeMetricValues(ctx context.Context, nodeUUIDs []string, sampledAt time.Time) (map[string]botLoadMetricValue, error) {
+	if len(nodeUUIDs) == 0 {
+		return map[string]botLoadMetricValue{}, nil
+	}
+	return s.latestMetricValues(ctx, s.db.WithContext(ctx).Table("metric_sample_raws AS raw").
+		Select("series.node_uuid, series.instance_id, series.metric_key, raw.ts, raw.value").
+		Joins("JOIN metric_series AS series ON series.id = raw.series_id").
+		Where("series.scope = ? AND series.node_uuid IN ? AND series.instance_id = ? AND series.metric_key IN ? AND raw.value IS NOT NULL AND raw.ts <= ?",
+			model.MetricScopeNode, nodeUUIDs, "", []string{model.MetricNodeMemUsed, model.MetricNodeCPUPct}, sampledAt))
+}
+
+func (s *BotLoadMetricSampler) latestMetricValues(ctx context.Context, query *gorm.DB) (map[string]botLoadMetricValue, error) {
+	var rows []botLoadMetricValue
+	if err := query.WithContext(ctx).Order("raw.ts DESC").Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("查询资源时序指标失败: %w", err)
+	}
+	out := make(map[string]botLoadMetricValue, len(rows))
+	for _, row := range rows {
+		key := metricValueMapKey(row.NodeUUID, row.InstanceID, row.MetricKey)
+		if _, exists := out[key]; !exists {
+			out[key] = row
+		}
+	}
+	return out, nil
+}
+
+func metricValueMapKey(nodeUUID, instanceID, metricKey string) string {
+	return nodeUUID + "\x00" + instanceID + "\x00" + metricKey
+}
+
+func metricValueStale(value botLoadMetricValue, sampledAt time.Time) bool {
+	return value.TS.Before(sampledAt.Add(-botLoadMetricStaleAfter))
+}
+
+func metricUnavailableReason(found bool, value botLoadMetricValue, sampledAt time.Time) string {
+	if found && metricValueStale(value, sampledAt) {
+		return "METRIC_STALE"
+	}
+	return "METRIC_UNAVAILABLE"
+}
+
+func (s *BotLoadMetricSampler) collectTargetLegacy(ctx context.Context, instanceID uint, sampledAt time.Time) (*string, error) {
+	var instance model.Instance
+	if err := s.db.WithContext(ctx).Preload("Node").First(&instance, instanceID).Error; err != nil {
+		return nil, fmt.Errorf("查询压测目标实例失败: %w", err)
+	}
+	values, err := s.latestInstanceMetricValues(ctx, instance.Node.UUID, instance.UUID, sampledAt)
+	if err != nil {
+		return nil, err
+	}
+	resource := botLoadTargetResourceMetric{Unavailable: []string{}}
+	s.applyTargetProcessResource(ctx, &resource, instance)
+	s.applyTargetNodeResourceMetrics(&resource, instance.Node, values, sampledAt)
+	s.applyTargetInstanceMetricValues(&resource, instance.Node.UUID, instance.UUID, values, sampledAt)
+	payload := map[string]any{
+		"tps": resource.TPS, "mspt": resource.MSPT, "msptP95": resource.MSPT, "onlinePlayers": resource.OnlinePlayers,
+		"targetResource": resource,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	encoded := string(raw)
+	return &encoded, nil
+}
+
+func (s *BotLoadMetricSampler) applyTargetProcessResource(ctx context.Context, resource *botLoadTargetResourceMetric, instance model.Instance) {
+	if s.targetResources == nil {
+		resource.Unavailable = append(resource.Unavailable,
+			"processRssBytes:TARGET_RESOURCE_UNAVAILABLE", "cpuPercent:TARGET_RESOURCE_UNAVAILABLE", "uptimeSeconds:TARGET_RESOURCE_UNAVAILABLE")
+		return
+	}
+	value, err := s.targetResources.GetTargetProcessResource(ctx, instance.Node.UUID, instance.UUID)
+	if err != nil {
+		resource.Unavailable = append(resource.Unavailable,
+			"processRssBytes:TARGET_RESOURCE_UNAVAILABLE", "cpuPercent:TARGET_RESOURCE_UNAVAILABLE", "uptimeSeconds:TARGET_RESOURCE_UNAVAILABLE")
+		return
+	}
+	resource.ProcessRSSBytes, resource.CPUPercent, resource.UptimeSeconds = value.ProcessRSSBytes, value.CPUPercent, value.UptimeSeconds
+	if value.ProcessRSSBytes == nil {
+		resource.Unavailable = append(resource.Unavailable, "processRssBytes:TARGET_RESOURCE_UNAVAILABLE")
+	}
+	if value.CPUPercent == nil {
+		resource.Unavailable = append(resource.Unavailable, "cpuPercent:TARGET_RESOURCE_UNAVAILABLE")
+	}
+	if value.UptimeSeconds == nil {
+		resource.Unavailable = append(resource.Unavailable, "uptimeSeconds:TARGET_RESOURCE_UNAVAILABLE")
+	}
+}
+
+func (s *BotLoadMetricSampler) applyTargetNodeResourceMetrics(resource *botLoadTargetResourceMetric, node model.Node, values map[string]botLoadMetricValue, sampledAt time.Time) {
+	if node.MemoryMB > 0 {
+		resource.HostMemTotalBytes = ptrInt64(node.MemoryMB * 1024 * 1024)
+	} else {
+		resource.Unavailable = append(resource.Unavailable, "hostMemTotalBytes:NODE_MEMORY_UNKNOWN")
+	}
+	if value, ok := values[metricValueMapKey(node.UUID, "", model.MetricNodeMemUsed)]; ok && !metricValueStale(value, sampledAt) {
+		resource.HostMemUsedBytes = ptrInt64(int64(value.Value))
+	} else {
+		resource.Unavailable = append(resource.Unavailable, "hostMemUsedBytes:"+metricUnavailableReason(ok, value, sampledAt))
+	}
+}
+
+func (s *BotLoadMetricSampler) applyTargetInstanceMetricValues(resource *botLoadTargetResourceMetric, nodeUUID, instanceUUID string, values map[string]botLoadMetricValue, sampledAt time.Time) {
+	resource.HeapUsedBytes = metricInt64(values, nodeUUID, instanceUUID, model.MetricInstHeapUsed, sampledAt, "heapUsedBytes", &resource.Unavailable)
+	resource.HeapMaxBytes = metricInt64(values, nodeUUID, instanceUUID, model.MetricInstHeapMax, sampledAt, "heapMaxBytes", &resource.Unavailable)
+	resource.TPS = metricFloat64(values, nodeUUID, instanceUUID, model.MetricInstTPS, sampledAt, "tps", &resource.Unavailable)
+	resource.MSPT = metricFloat64(values, nodeUUID, instanceUUID, model.MetricInstMSPT, sampledAt, "mspt", &resource.Unavailable)
+	resource.OnlinePlayers = metricInt64(values, nodeUUID, instanceUUID, model.MetricInstPlayersOnline, sampledAt, "onlinePlayers", &resource.Unavailable)
+}
+
+func (s *BotLoadMetricSampler) latestInstanceMetricValues(ctx context.Context, nodeUUID, instanceUUID string, sampledAt time.Time) (map[string]botLoadMetricValue, error) {
+	return s.latestMetricValues(ctx, s.db.WithContext(ctx).Table("metric_sample_raws AS raw").
+		Select("series.node_uuid, series.instance_id, series.metric_key, raw.ts, raw.value").
+		Joins("JOIN metric_series AS series ON series.id = raw.series_id").
+		Where("series.scope = ? AND series.node_uuid = ? AND series.instance_id = ? AND series.metric_key IN ? AND raw.value IS NOT NULL AND raw.ts <= ?",
+			model.MetricScopeInstance, nodeUUID, instanceUUID,
+			[]string{model.MetricInstHeapUsed, model.MetricInstHeapMax, model.MetricInstTPS, model.MetricInstMSPT, model.MetricInstPlayersOnline}, sampledAt))
+}
+
+func metricInt64(values map[string]botLoadMetricValue, nodeUUID, instanceUUID, key string, sampledAt time.Time, field string, unavailable *[]string) *int64 {
+	value, ok := values[metricValueMapKey(nodeUUID, instanceUUID, key)]
+	if !ok || metricValueStale(value, sampledAt) {
+		*unavailable = append(*unavailable, field+":"+metricUnavailableReason(ok, value, sampledAt))
+		return nil
+	}
+	return ptrInt64(int64(value.Value))
+}
+
+func metricFloat64(values map[string]botLoadMetricValue, nodeUUID, instanceUUID, key string, sampledAt time.Time, field string, unavailable *[]string) *float64 {
+	value, ok := values[metricValueMapKey(nodeUUID, instanceUUID, key)]
+	if !ok || metricValueStale(value, sampledAt) {
+		*unavailable = append(*unavailable, field+":"+metricUnavailableReason(ok, value, sampledAt))
+		return nil
+	}
+	return ptrFloat64(value.Value)
+}
+
+func ptrInt64(value int64) *int64 { return &value }
+
+func ptrFloat64(value float64) *float64 { return &value }
 
 func (s *BotLoadMetricSampler) aggregateBotCounts(ctx context.Context, sessionID uint, planned int) (map[string]int64, error) {
 	out := map[string]int64{
