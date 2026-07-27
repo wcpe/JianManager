@@ -55,10 +55,13 @@ func (s *Server) ReadConfig(ctx context.Context, req *workerpb.ReadConfigRequest
 		return nil, fmt.Errorf("实例 %s 不存在", req.InstanceUuid)
 	}
 	path := filepath.Join(inst.WorkDir, req.Path)
-	if err := validatePath(inst.WorkDir, path); err != nil {
+	if err := validateNonRootPath(inst.WorkDir, path); err != nil {
 		return nil, err
 	}
-	format, _ := detectConfigFormat(req.Path)
+	format, supported := detectConfigFormat(req.Path)
+	if !supported {
+		return nil, fmt.Errorf("仅允许操作配置文件")
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置失败: %w", err)
@@ -105,10 +108,13 @@ func (s *Server) WriteConfig(ctx context.Context, req *workerpb.WriteConfigReque
 		return nil, fmt.Errorf("实例 %s 不存在", req.InstanceUuid)
 	}
 	path := filepath.Join(inst.WorkDir, req.Path)
-	if err := validatePath(inst.WorkDir, path); err != nil {
+	if err := validateNonRootPath(inst.WorkDir, path); err != nil {
 		return nil, err
 	}
-	format, _ := detectConfigFormat(req.Path)
+	format, supported := detectConfigFormat(req.Path)
+	if !supported {
+		return nil, fmt.Errorf("仅允许操作配置文件")
+	}
 	validation := validateConfigText(format, req.Content)
 	if !validation.Valid {
 		return &workerpb.WriteConfigResponse{Success: false, Error: "配置格式校验失败", Validation: validation}, nil

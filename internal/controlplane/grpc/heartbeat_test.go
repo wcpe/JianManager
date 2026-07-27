@@ -173,6 +173,53 @@ func TestHeartbeat_WrongSecretRejected(t *testing.T) {
 	require.Equal(t, oldHeartbeat.Unix(), fromDB.LastHeartbeat.Unix())
 }
 
+// TestHeartbeat_MissingSecretRejected 验证匿名心跳不能改变节点状态或触发后续副作用。
+func TestHeartbeat_MissingSecretRejected(t *testing.T) {
+	h, db := newHeartbeatHandler(t)
+	oldHeartbeat := time.Now().Add(-2 * time.Minute)
+	node := seedHeartbeatNode(t, db, model.NodeStatusOffline, oldHeartbeat)
+
+	stream := newHeartbeatTestStream(context.Background(), &workerpb.HeartbeatRequest{
+		NodeUuid: node.UUID,
+		CpuUsage: 0.99,
+	})
+
+	err := h.Heartbeat(stream)
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
+	require.Empty(t, stream.sent)
+
+	var fromDB model.Node
+	require.NoError(t, db.Where("uuid = ?", node.UUID).First(&fromDB).Error)
+	require.Equal(t, model.NodeStatusOffline, fromDB.Status)
+	require.InDelta(t, 0, float64(fromDB.CPUUsage), 0.001)
+	require.Equal(t, oldHeartbeat.Unix(), fromDB.LastHeartbeat.Unix())
+}
+
+// TestHeartbeat_BindsStreamToFirstAuthenticatedUUID 同一心跳流不得借共享密钥切换节点身份。
+func TestHeartbeat_BindsStreamToFirstAuthenticatedUUID(t *testing.T) {
+	h, db := newHeartbeatHandler(t)
+	first := seedHeartbeatNode(t, db, model.NodeStatusOffline, time.Now().Add(-time.Minute))
+	second := &model.Node{
+		UUID: "node-second-heartbeat", Name: "heartbeat-node-second", Host: "127.0.0.2", GRPCPort: 0, WSPort: 0,
+		Secret: "node-secret-ok", Status: model.NodeStatusOffline,
+	}
+	require.NoError(t, db.Create(second).Error)
+
+	stream := newHeartbeatTestStream(ctxWithHeartbeatSecret("node-secret-ok"),
+		&workerpb.HeartbeatRequest{NodeUuid: first.UUID, CpuUsage: 0.2},
+		&workerpb.HeartbeatRequest{NodeUuid: second.UUID, CpuUsage: 0.9},
+	)
+
+	err := h.Heartbeat(stream)
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.Len(t, stream.sent, 1)
+
+	var fromDB model.Node
+	require.NoError(t, db.Where("uuid = ?", second.UUID).First(&fromDB).Error)
+	require.Equal(t, model.NodeStatusOffline, fromDB.Status)
+	require.InDelta(t, 0, float64(fromDB.CPUUsage), 0.001)
+}
+
 // TestOfflineDetector_MarksStaleNodeOffline 覆盖 FR-029：超过 90 秒无心跳的在线节点会被标记离线。
 func TestOfflineDetector_MarksStaleNodeOffline(t *testing.T) {
 	_, db := newHeartbeatHandler(t)

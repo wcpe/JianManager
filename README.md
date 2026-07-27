@@ -20,7 +20,7 @@ JianManager 是面向中小型游戏服务器运营团队的自托管管理平�
 
 **部署与接入**
 - **单二进制**：前端经 `go:embed` 内嵌，Control Plane 一个文件即整个面板；SQLite 零配置起步
-- **节点零入站接入**：Worker 主动建立 gRPC 反向隧道，NAT / 内网机器免端口映射；老版本自动回退直拨
+- **节点零入站接入**：Worker 主动建立 gRPC 反向隧道，NAT / 内网机器免端口映射；无隧道时节点不可调用
 - **一键装节点**：面板生成安装命令，目标机粘贴执行即注册上线（systemd / Windows 双平台，Worker 二进制内嵌在面板里，**离线 / 受限网络也能装**）
 - **SSH 推送部署**：`deploy-cp.sh` / `deploy-worker.sh` 从操作机一条命令部署 / 更新远程主机，配置与数据无损
 - **在线自更新**：面板内检查新版 / 一键升级 / 回滚上一版（CP 与全部节点）
@@ -151,7 +151,7 @@ task dist    # 前端 + Bot Worker + 全部内嵌资产 + Windows/Linux amd64 �
      │  HTTP / WS（终端经面板中转）
      ▼
  Control Plane（Go，×1）────── SQLite / MySQL
-     ▲  gRPC 反向隧道（Worker 只出站；老节点回退直拨）
+     ▲  gRPC 反向隧道（Worker 只出站）
      │
  Worker Node（Go，×N）
      ├── 进程管理（direct / 守护进程 / Docker）
@@ -165,7 +165,7 @@ task dist    # 前端 + Bot Worker + 全部内嵌资产 + Windows/Linux amd64 �
 | Worker Node | Go | N | 游戏服进程管理、终端、指标采集、文件操作 |
 | Bot Worker | Node.js | 按需 | Mineflayer 连接与行为引擎 |
 
-**端口**：对外仅需暴露面板 HTTP（默认 `8080`）与 CP gRPC（默认 `9100`，供节点出站连接）；节点侧端口（9101/9102）仅本机探针与旧版直拨回退使用，无需公网暴露。
+**端口**：对外仅需暴露面板 HTTP（默认 `8080`）与 CP gRPC（默认 `9100`，供节点出站连接）；Worker 不开放 CP 入站 gRPC，WS `9102` 仅供本机回环终端桥与本机探针使用。
 
 ## ⚙️ 配置
 

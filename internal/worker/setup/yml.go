@@ -9,8 +9,8 @@ import (
 
 // WriteWorkerYML 原子写出 worker.yml（FR-222，见 ADR-051）。
 //
-// 字段与 install-worker.sh 写出的一组保持一致（name / control_plane / data_dir / grpc.port /
-// ws.port / log）。**enrollment token 绝不写入**（一次性凭据不留盘，沿用 ADR-020 §2.3）；
+// 字段与 install-worker.sh 写出的一组保持一致（name / control_plane / data_dir / ws.port /
+// log）。**enrollment token 绝不写入**（一次性凭据不留盘，沿用 ADR-020 §2.3）；
 // data_dir 仅在显式给出时写（缺省留空 = ./data，不把派生绝对路径钉死进文件）。
 //
 // 直接拼 YAML 文本（而非引第三方 marshaler）：字段少且固定、需带说明注释、对值做最小转义，
@@ -28,8 +28,6 @@ func WriteWorkerYML(path string, in *Inputs) error {
 	if strings.TrimSpace(in.DataDir) != "" {
 		fmt.Fprintf(&b, "data_dir: %s\n", yamlScalar(in.DataDir))
 	}
-	b.WriteString("grpc:\n")
-	fmt.Fprintf(&b, "  port: %d\n", in.GRPCPort)
 	b.WriteString("ws:\n")
 	fmt.Fprintf(&b, "  port: %d\n", in.WSPort)
 	b.WriteString("log:\n")

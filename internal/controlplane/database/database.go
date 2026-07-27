@@ -101,6 +101,7 @@ func AutoMigrate(db *gorm.DB) error {
 
 	if err := db.AutoMigrate(
 		&model.User{},
+		&model.AuthSetupLock{},
 		&model.Group{},
 		&model.GroupMember{},
 		&model.GroupQuota{},
@@ -116,6 +117,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.AgentToken{},
 		// Agent 调用流水（FR-390，见 ADR-076）：读+写 Ops 与日后 MCP tool。
 		&model.AgentCallLog{},
+		&model.AgentTransferTicket{},
 		&model.Instance{},
 		&model.GroupInstance{},
 		// 实例组织分组树（FR-165，见 ADR-033）：自引用邻接表 + 实例 M:N，
@@ -212,6 +214,12 @@ func AutoMigrate(db *gorm.DB) error {
 	// 节点名活跃唯一约束（见 ADR-039，修复 BUG-A）：先对存量重名活跃节点去重，再建部分唯一索引。
 	// 必须在 AutoMigrate 建表后执行（依赖 nodes 表与 deleted_at 列存在）。
 	if err := migrateNodeNameUnique(db); err != nil {
+		return err
+	}
+	if err := migrateBackupStorageActiveNameKey(db); err != nil {
+		return err
+	}
+	if err := migrateScopedUniqueIndexes(db); err != nil {
 		return err
 	}
 	// FR-365：幂等回填 bots.desired_state / desired_state_generation。
@@ -335,7 +343,10 @@ func dedupeActiveNodeNames(db *gorm.DB) error {
 			if i == 0 {
 				continue // 保留首个（最近活跃）
 			}
-			newName := fmt.Sprintf("%s-dup-%d", n.Name, n.ID)
+			newName, err := nextDedupeNodeName(db, n.Name, n.ID)
+			if err != nil {
+				return err
+			}
 			if err := db.Model(&model.Node{}).Where("id = ?", n.ID).
 				Update("name", newName).Error; err != nil {
 				return fmt.Errorf("重命名重名节点 id=%d 失败: %w", n.ID, err)
@@ -345,25 +356,93 @@ func dedupeActiveNodeNames(db *gorm.DB) error {
 	return nil
 }
 
-// migrateGRPCPortColumn 将旧的 g_rpc_port 列迁移为 grpc_port。
-// GORM 对 GRPCPort 的默认 snake_case 转换是 g_r_p_c_port，
-// 显式 column tag 修正为 grpc_port，这里处理已有数据库的列重命名。
+// nextDedupeNodeName 生成未被其它活跃节点占用的迁移去重名称。
+func nextDedupeNodeName(db *gorm.DB, name string, id uint) (string, error) {
+	base := fmt.Sprintf("%s-dup-%d", name, id)
+	for suffix := 0; ; suffix++ {
+		candidate := base
+		if suffix > 0 {
+			candidate = fmt.Sprintf("%s-%d", base, suffix)
+		}
+		var count int64
+		if err := db.Model(&model.Node{}).Where("name = ? AND deleted_at IS NULL", candidate).Count(&count).Error; err != nil {
+			return "", fmt.Errorf("检查节点去重名称 %q 失败: %w", candidate, err)
+		}
+		if count == 0 {
+			return candidate, nil
+		}
+	}
+}
+
+// migrateGRPCPortColumn 将旧的 g_rpc_port / g_r_p_c_port 列迁移为 grpc_port。
+// GORM 对 GRPCPort 的默认 snake_case 转换是 g_r_p_c_port，历史手写迁移也曾使用
+// g_rpc_port；两种旧列都必须保留数值，遇到冲突值时中止迁移，禁止静默丢端口。
 func migrateGRPCPortColumn(db *gorm.DB) error {
-	// 检查 nodes 表是否存在
 	if !db.Migrator().HasTable("nodes") {
 		return nil
 	}
+	for _, legacy := range []string{"g_rpc_port", "g_r_p_c_port"} {
+		if !db.Migrator().HasColumn("nodes", legacy) {
+			continue
+		}
+		if !db.Migrator().HasColumn("nodes", "grpc_port") {
+			if err := db.Migrator().RenameColumn("nodes", legacy, "grpc_port"); err != nil {
+				return fmt.Errorf("迁移 %s 列失败: %w", legacy, err)
+			}
+			continue
+		}
+		var conflicts int64
+		query := fmt.Sprintf("SELECT COUNT(*) FROM nodes WHERE grpc_port <> 0 AND %s <> 0 AND grpc_port <> %s", legacy, legacy)
+		if err := db.Raw(query).Scan(&conflicts).Error; err != nil {
+			return fmt.Errorf("检查 %s 与 grpc_port 冲突失败: %w", legacy, err)
+		}
+		if conflicts > 0 {
+			return fmt.Errorf("迁移 %s 失败：存在 %d 条与 grpc_port 冲突的数据", legacy, conflicts)
+		}
+		update := fmt.Sprintf("UPDATE nodes SET grpc_port = %s WHERE grpc_port = 0 AND %s <> 0", legacy, legacy)
+		if err := db.Exec(update).Error; err != nil {
+			return fmt.Errorf("回填 %s 到 grpc_port 失败: %w", legacy, err)
+		}
+		if err := db.Migrator().DropColumn("nodes", legacy); err != nil {
+			return fmt.Errorf("删除已迁移的 %s 列失败: %w", legacy, err)
+		}
+	}
+	return nil
+}
 
-	// 检查旧列是否存在
-	if !db.Migrator().HasColumn("nodes", "g_rpc_port") {
+// migrateBackupStorageActiveNameKey 为活跃备份存储回填名称唯一键，并清空归档记录的键。
+// 以 nullable key + 普通唯一索引替代仅 SQLite 支持的部分唯一索引，保证 SQLite/MySQL 一致。
+func migrateBackupStorageActiveNameKey(db *gorm.DB) error {
+	if !db.Migrator().HasTable("backup_storages") || !db.Migrator().HasColumn("backup_storages", "active_name_key") {
 		return nil
 	}
-
-	// 重命名列：g_rpc_port → grpc_port
-	if err := db.Exec("ALTER TABLE nodes RENAME COLUMN g_rpc_port TO grpc_port").Error; err != nil {
-		return fmt.Errorf("迁移 g_rpc_port 列失败: %w", err)
+	if err := db.Exec("UPDATE backup_storages SET active_name_key = NULL WHERE deleted_at IS NOT NULL AND active_name_key IS NOT NULL").Error; err != nil {
+		return fmt.Errorf("清理归档备份存储名称键失败: %w", err)
 	}
+	if err := db.Exec("UPDATE backup_storages SET active_name_key = name WHERE deleted_at IS NULL AND (active_name_key IS NULL OR active_name_key = '')").Error; err != nil {
+		return fmt.Errorf("回填活跃备份存储名称键失败: %w", err)
+	}
+	return nil
+}
 
+// migrateScopedUniqueIndexes 移除不含软删或 node→zone scope 的旧唯一索引。
+// 新索引由 AutoMigrate 先创建，随后才释放旧索引，迁移期间不会出现无约束窗口。
+func migrateScopedUniqueIndexes(db *gorm.DB) error {
+	for _, migration := range []struct {
+		model any
+		index string
+	}{
+		{&model.BackupStorage{}, "idx_backup_storages_name"},
+		{&model.BackupStorage{}, "uniq_backup_storage_name_active"},
+		{&model.BusinessEvent{}, "idx_be_domain_dedup"},
+		{&model.EconomyLedgerEntry{}, "idx_ele_ledger"},
+	} {
+		if db.Migrator().HasIndex(migration.model, migration.index) {
+			if err := db.Migrator().DropIndex(migration.model, migration.index); err != nil {
+				return fmt.Errorf("删除旧唯一索引 %s 失败: %w", migration.index, err)
+			}
+		}
+	}
 	return nil
 }
 

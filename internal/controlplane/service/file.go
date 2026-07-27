@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path"
+	pathpkg "path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -632,7 +633,7 @@ func filterSearchHits(hits []SearchHit, maxResults int, scope SearchScope, trunc
 		if scope.RootPath != "" && hit.Path != scope.RootPath && !strings.HasPrefix(hit.Path, scope.RootPath+"/") {
 			continue
 		}
-		if len(exts) > 0 && !exts[strings.ToLower(path.Ext(hit.Path))] {
+		if len(exts) > 0 && !exts[strings.ToLower(pathpkg.Ext(hit.Path))] {
 			continue
 		}
 		filtered = append(filtered, hit)
@@ -779,6 +780,36 @@ func (s *FileService) DecompileClass(instanceID uint, path, entry string) (*Deco
 // ValidateInstancePath 对外暴露实例内相对路径校验（FR-397：MCP 与票据端点复用同一口径）。
 func ValidateInstancePath(path string) error {
 	return validatePath(path)
+}
+
+// ValidateNonRootInstancePath 校验必须指向工作目录内具体条目的路径。
+// 根目录只能用于显式只读目录浏览，不能作为读写或删除目标。
+func ValidateNonRootInstancePath(path string) error {
+	normalized := strings.ReplaceAll(strings.TrimSpace(path), "\\", "/")
+	if normalized == "" || pathpkg.Clean(normalized) == "." {
+		return fmt.Errorf("路径不得为工作目录根")
+	}
+	return validatePath(path)
+}
+
+// ValidateConfigInstancePath 校验 MCP 配置面只能操作受支持的配置文件，不能绕过 instance.content 能力边界。
+func ValidateConfigInstancePath(path string) error {
+	if err := ValidateNonRootInstancePath(path); err != nil {
+		return err
+	}
+	if !isConfigPath(path) {
+		return fmt.Errorf("仅允许操作配置文件")
+	}
+	return nil
+}
+
+func isConfigPath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".properties", ".yml", ".yaml", ".toml", ".json", ".conf":
+		return true
+	default:
+		return false
+	}
 }
 
 // validatePath 校验文件路径，防止路径遍历攻击。

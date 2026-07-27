@@ -83,7 +83,7 @@ func TestAlert_CreateListDelete(t *testing.T) {
 		"threshold":    90.0,
 		"durationSec":  60,
 		"notifyType":   "webhook",
-		"notifyTarget": "https://example.com/hook",
+		"notifyTarget": "${JM_ALERT_WEBHOOK}",
 	}
 	w := makeRequest(r, "POST", "/api/v1/alerts/rules", ruleBody, token)
 	assert.Equal(t, http.StatusCreated, w.Code)

@@ -34,7 +34,6 @@ BINARY=""               # 本地已拷贝的 Worker 二进制路径（离线/内
 DOWNLOAD_URL="${JIANMANAGER_WORKER_DOWNLOAD_URL:-https://github.com/wcpe/JianManager/releases/latest/download}"
 INSTALL_DIR="/opt/jianmanager"   # 安装目录
 DATA_DIR=""             # 数据根（缺省 <install-dir>/data）
-GRPC_PORT="9101"        # Worker gRPC 端口
 WS_PORT="9102"          # Worker WS 终端端口
 INSTALL_SERVICE="0"     # 是否注册 systemd 服务
 SERVICE_SCOPE="system"  # systemd 档位：system（/etc/systemd/system，需 root）| user（~/.config/systemd/user，普通用户，FR-277/ADR-063）
@@ -56,7 +55,6 @@ usage() {
                            环境变量 JIANMANAGER_WORKER_DOWNLOAD_URL）
   --install-dir <dir>      安装目录（默认 /opt/jianmanager）
   --data-dir <dir>         数据根目录（默认 <install-dir>/data）
-  --grpc-port <port>       Worker gRPC 端口（默认 9101）
   --ws-port <port>         Worker WS 端口（默认 9102）
   --service                注册 systemd 服务（开机自启、常驻自连）
   --service-scope <s>      systemd 档位：system（默认，需 root）| user（普通用户
@@ -82,7 +80,6 @@ while [ $# -gt 0 ]; do
         --download-url)  DOWNLOAD_URL="$2"; shift 2 ;;
         --install-dir)   INSTALL_DIR="$2"; shift 2 ;;
         --data-dir)      DATA_DIR="$2"; shift 2 ;;
-        --grpc-port)     GRPC_PORT="$2"; shift 2 ;;
         --ws-port)       WS_PORT="$2"; shift 2 ;;
         --service)       INSTALL_SERVICE="1"; shift ;;
         --service-scope) SERVICE_SCOPE="$2"; shift 2 ;;
@@ -237,8 +234,8 @@ if [ "$DOWNLOAD_ONLY" = "1" ]; then
 fi
 
 # ---- 上线阶段：调 worker setup（传参/env），由 Worker 自配 + 注册 + run ----
-# Worker 免配置自启 setup（FR-222）：非 TTY 下从 --control-plane/--token/--name/--grpc-port/
-# --ws-port/--data-dir + JIANMANAGER_* env 读，自己写 worker.yml + 注册 + 持久化身份 + 转 run。
+# Worker 免配置自启 setup（FR-222）：非 TTY 下从 --control-plane/--token/--name/--ws-port/
+# --data-dir + JIANMANAGER_* env 读，自己写 worker.yml + 注册 + 持久化身份 + 转 run。
 # 脚本据此把入参喂给 worker，不再自己写 worker.yml。token 仅经 env 传、绝不落盘。
 if [ "$INSTALL_SERVICE" = "1" ]; then
     if ! command -v systemctl >/dev/null 2>&1; then
@@ -294,7 +291,6 @@ if [ "$INSTALL_SERVICE" = "1" ]; then
     # token 经服务进程环境注入（一次性），不写入任何配置文件。
     SVC_ENV="Environment=JIANMANAGER_CONTROL_PLANE=$CONTROL_PLANE
 Environment=JIANMANAGER_ENROLL_TOKEN=$TOKEN
-Environment=JIANMANAGER_GRPC_PORT=$GRPC_PORT
 Environment=JIANMANAGER_WS_PORT=$WS_PORT
 Environment=JIANMANAGER_DATA_DIR=$DATA_DIR"
     [ -z "$NODE_NAME" ] || SVC_ENV="$SVC_ENV
@@ -330,8 +326,8 @@ UNIT_EOF
 else
     echo "[3/4] 未指定 --service，前台调 worker 自配上线（Ctrl+C 退出；生产建议加 --service）"
     echo "[4/4] 启动 Worker（首次自配 setup）..."
-    # 前台上线：CP/节点名/端口经 flag 传，token 仅经 env（不出现在进程命令行参数里）。
-    set -- --control-plane "$CONTROL_PLANE" --grpc-port "$GRPC_PORT" --ws-port "$WS_PORT" --data-dir "$DATA_DIR"
+    # 前台上线：CP/节点名/WS 端口经 flag 传，token 仅经 env（不出现在进程命令行参数里）。
+    set -- --control-plane "$CONTROL_PLANE" --ws-port "$WS_PORT" --data-dir "$DATA_DIR"
     [ -z "$NODE_NAME" ] || set -- "$@" --name "$NODE_NAME"
     cd "$INSTALL_DIR"
     JIANMANAGER_ENROLL_TOKEN="$TOKEN" exec "$BIN_PATH" "$@"

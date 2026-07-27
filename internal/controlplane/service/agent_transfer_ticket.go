@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wcpe/JianManager/internal/platform/onetimetoken"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // FR-397 流式传输票据：MCP 只承载小文本，大文件经短时单用途票据走既有数据面。
@@ -18,7 +18,7 @@ const (
 	// agentTransferTicketTTL 票据有效期；足够发起一次传输，过期即须重新申请。
 	agentTransferTicketTTL = 5 * time.Minute
 	// agentTransferTicketDomain 域分离标识，保证票据密钥与其它签名用途互不通用。
-	agentTransferTicketDomain = "jianmanager/agent-transfer/ticket/v1"
+	agentTransferTicketDomain  = "jianmanager/agent-transfer/ticket/v1"
 	agentTransferTicketVersion = 1
 
 	// AgentTransferDirectionUpload 上传方向（Agent → 实例工作目录）。
@@ -65,7 +65,6 @@ type AgentTransferClaims struct {
 // AgentTransferTicketService 签发与消费流式传输票据（HMAC 签名 + 一次性 + 实时重验）。
 type AgentTransferTicketService struct {
 	secret []byte
-	store  *onetimetoken.Store
 	agent  *AgentTokenService
 	now    func() time.Time
 }
@@ -84,7 +83,6 @@ func NewAgentTransferTicketService(secret []byte, agent *AgentTokenService, now 
 	}
 	return &AgentTransferTicketService{
 		secret: append([]byte(nil), secret...),
-		store:  onetimetoken.NewStore(),
 		agent:  agent,
 		now:    now,
 	}, nil
@@ -124,6 +122,10 @@ func (s *AgentTransferTicketService) Issue(p *AgentPrincipal, instanceID uint, d
 	}
 	ticket := base64.RawURLEncoding.EncodeToString(payload) + "." +
 		base64.RawURLEncoding.EncodeToString(s.sign(payload))
+	row := model.AgentTransferTicket{Digest: transferTicketDigest(ticket), ExpiresAt: expiresAt}
+	if err := s.agent.db.Create(&row).Error; err != nil {
+		return "", time.Time{}, fmt.Errorf("保存传输票据失败: %w", err)
+	}
 	return ticket, expiresAt, nil
 }
 
@@ -135,10 +137,6 @@ func (s *AgentTransferTicketService) Consume(ticket string) (*AgentTransferClaim
 		return nil, err
 	}
 	expiresAt := time.Unix(0, claims.ExpiresAtUnixNano)
-	if !s.store.Consume(ticket, expiresAt) {
-		// 已消费或已过期：一次性存储已覆盖两种形态。
-		return nil, ErrAgentTransferTicketInvalid
-	}
 	if !s.now().Before(expiresAt) {
 		return nil, ErrAgentTransferTicketInvalid
 	}
@@ -151,6 +149,14 @@ func (s *AgentTransferTicketService) Consume(ticket string) (*AgentTransferClaim
 		// 实例归属或能力已变化。
 		return nil, ErrAgentTransferTicketInvalid
 	}
+	// 所有会瞬时失败的鉴权/归属校验完成后才原子消费，避免一次临时故障烧掉票据。
+	now := s.now().UTC()
+	result := s.agent.db.Model(&model.AgentTransferTicket{}).
+		Where("digest = ? AND consumed_at IS NULL AND expires_at > ?", transferTicketDigest(ticket), now).
+		Update("consumed_at", now)
+	if result.Error != nil || result.RowsAffected != 1 {
+		return nil, ErrAgentTransferTicketInvalid
+	}
 	return &AgentTransferClaims{
 		TokenID:    principal.TokenID,
 		TokenName:  principal.Name,
@@ -158,6 +164,11 @@ func (s *AgentTransferTicketService) Consume(ticket string) (*AgentTransferClaim
 		Direction:  claims.Direction,
 		Path:       claims.Path,
 	}, nil
+}
+
+func transferTicketDigest(ticket string) string {
+	digest := sha256.Sum256([]byte(ticket))
+	return fmt.Sprintf("%x", digest[:])
 }
 
 func (s *AgentTransferTicketService) parseAndAuthenticate(ticket string) (*agentTransferClaims, error) {

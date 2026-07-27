@@ -56,7 +56,7 @@ type TunnelStatus interface {
 	Connected(nodeUUID string) bool
 }
 
-// SetTunnelStatus 注入隧道状态来源；main 装配时调用一次。未注入时响应恒为 false（直拨语义）。
+// SetTunnelStatus 注入隧道状态来源；main 装配时调用一次。未注入时响应恒为 false。
 func (s *NodeService) SetTunnelStatus(ts TunnelStatus) {
 	s.tunnelStatus = ts
 }
@@ -426,6 +426,9 @@ func (s *NodeService) ListArchived() ([]ArchivedNode, error) {
 	}
 	return out, nil
 }
+
+// GetName 返回归档节点名称，供确认逻辑与活跃节点统一处理。
+func (n ArchivedNode) GetName() string { return n.Name }
 
 // GetArchived 按 ID 取单个归档节点；非归档或不存在 → ErrNodeNotFound（FR-393）。
 func (s *NodeService) GetArchived(id uint) (*ArchivedNode, error) {

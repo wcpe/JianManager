@@ -14,10 +14,11 @@ import (
 
 // Context keys。
 const (
-	CtxUserID   = "userId"
-	CtxUsername = "username"
-	CtxRole     = "role"
-	CtxAccess   = "access"
+	CtxUserID      = "userId"
+	CtxUsername    = "username"
+	CtxRole        = "role"
+	CtxAuthVersion = "authVersion"
+	CtxAccess      = "access"
 )
 
 // JWTAuth JWT 认证中间件。
@@ -37,8 +38,8 @@ func JWTAuth(secret string) gin.HandlerFunc {
 
 		token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
 			return []byte(secret), nil
-		})
-		if err != nil || !token.Valid {
+		}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+		if err != nil || !token.Valid || claims.TokenType != service.TokenTypeAccess {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error":   "UNAUTHORIZED",
 				"message": "Token 无效或已过期",
@@ -49,6 +50,7 @@ func JWTAuth(secret string) gin.HandlerFunc {
 		c.Set(CtxUserID, claims.UserID)
 		c.Set(CtxUsername, claims.Username)
 		c.Set(CtxRole, claims.Role)
+		c.Set(CtxAuthVersion, claims.AuthVersion)
 
 		c.Next()
 	}
@@ -57,8 +59,8 @@ func JWTAuth(secret string) gin.HandlerFunc {
 // RequireRole 要求最低角色等级的中间件。
 func RequireRole(minRole model.UserRole) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		roleVal, exists := c.Get(CtxRole)
-		if !exists {
+		access := getAccess(c)
+		if access == nil {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error":   "FORBIDDEN",
 				"message": "无权限",
@@ -66,8 +68,7 @@ func RequireRole(minRole model.UserRole) gin.HandlerFunc {
 			return
 		}
 
-		userRole, ok := roleVal.(model.UserRole)
-		if !ok || userRole < minRole {
+		if access.Role < minRole {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error":   "FORBIDDEN",
 				"message": "权限不足",
@@ -99,12 +100,35 @@ func LoadAccess(authz *service.AuthzService) gin.HandlerFunc {
 			})
 			return
 		}
+		authVersion, ok := c.Get(CtxAuthVersion)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error":   "UNAUTHORIZED",
+				"message": "认证信息异常",
+			})
+			return
+		}
+		version, ok := authVersion.(uint)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error":   "UNAUTHORIZED",
+				"message": "认证信息异常",
+			})
+			return
+		}
 
 		access, err := authz.LoadUserAccess(uid)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error":   "FORBIDDEN",
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error":   "UNAUTHORIZED",
 				"message": "加载用户权限失败",
+			})
+			return
+		}
+		if access.AuthVersion != version {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error":   "UNAUTHORIZED",
+				"message": "Token 已失效",
 			})
 			return
 		}

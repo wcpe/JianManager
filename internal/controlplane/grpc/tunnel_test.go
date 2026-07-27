@@ -1,6 +1,6 @@
 // 外部测试包：与 register_identity_test.go 同理（service 已 import grpc，避免循环）。
 // 进程内集成测试：真 grpc.Server + bufconn + 真反向隧道，验证 FR-281 M1 的
-// 「隧道建立→登记→pool 隧道优先→RPC 可达」与「鉴权拒绝」「无隧道回退直拨」。
+// 「隧道建立→登记→pool 隧道取连接→RPC 可达」与「鉴权拒绝」「无隧道不可调用」。
 package grpc_test
 
 import (
@@ -112,7 +112,7 @@ func TestReverseTunnel_EndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "tunnel-test", resp.Version)
 
-	// 隧道断开 → 登记消失 → pool 回退（无直拨连接则取不到）。
+	// 隧道断开 → 登记消失 → pool 不再提供该节点客户端。
 	cancel()
 	waitConnected(t, reg, uuid, false)
 	_, ok = pool.Get(uuid)
@@ -142,8 +142,8 @@ func TestReverseTunnel_AuthRejected(t *testing.T) {
 	require.False(t, reg.Connected(""))
 }
 
-// 双模式回退：无隧道时 Get 走既有直拨路径（测试注入客户端可取到）。
-func TestPool_FallbackToDirectWithoutTunnel(t *testing.T) {
+// 无活跃隧道时，连接池不得回退到 CP→Worker 直拨客户端。
+func TestPool_DoesNotFallbackToDirectWithoutTunnel(t *testing.T) {
 	reg, _, _ := startTunnelCP(t)
 	pool := cpgrpc.NewClientPool()
 	pool.SetTunnelProvider(reg)
@@ -151,6 +151,6 @@ func TestPool_FallbackToDirectWithoutTunnel(t *testing.T) {
 	const uuid = "node-direct-1"
 	pool.SetWorkerClientForTest(uuid, workerpb.NewWorkerServiceClient(nil))
 	client, ok := pool.Get(uuid)
-	require.True(t, ok)
-	require.Equal(t, uuid, client.NodeUUID)
+	require.False(t, ok)
+	require.Nil(t, client)
 }

@@ -112,8 +112,8 @@ func TestRegister_NewNode_UsedToken(t *testing.T) {
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
 }
 
-// TestRegister_ExistingNode_NoTokenReregisters 老节点（name 命中）重注册不强制 token：放行，返回既有身份。
-func TestRegister_ExistingNode_NoTokenReregisters(t *testing.T) {
+// TestRegister_ExistingNode_MissingIdentityRejected 已存在节点重注册必须同时提供 UUID 和密钥。
+func TestRegister_ExistingNode_MissingIdentityRejected(t *testing.T) {
 	h, db, _ := newEnrollRegisterHandler(t)
 	existing := &model.Node{
 		Name: "edge-old", Host: "127.0.0.1", GRPCPort: 0, WSPort: 0,
@@ -121,10 +121,12 @@ func TestRegister_ExistingNode_NoTokenReregisters(t *testing.T) {
 	}
 	require.NoError(t, db.Create(existing).Error)
 
-	resp, err := h.Register(context.Background(), registerReq("edge-old"))
-	require.NoError(t, err)
-	require.Equal(t, existing.UUID, resp.NodeUuid)
-	require.Equal(t, "existing-secret", resp.NodeSecret, "重注册应返回既有 secret，不重签")
+	_, err := h.Register(context.Background(), registerReq("edge-old"))
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
+
+	var node model.Node
+	require.NoError(t, db.Where("uuid = ?", existing.UUID).First(&node).Error)
+	require.Equal(t, "existing-secret", node.Secret)
 }
 
 // TestRegister_NewNode_UsesEnrollTokenPresetName worker 未上报名（req.Name 空）时，新节点采用

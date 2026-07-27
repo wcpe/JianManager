@@ -61,3 +61,14 @@ func TestRateLimiter_AllowCleansStaleBuckets(t *testing.T) {
 	rl.mu.Unlock()
 	assert.False(t, exists, "下一次请求应惰性清理过期桶")
 }
+
+// TestRateLimiter_BoundsBuckets 新来源不能无限增长限流状态。
+func TestRateLimiter_BoundsBuckets(t *testing.T) {
+	rl := NewRateLimiter(1, 1)
+	rl.maxBuckets = 2
+
+	assert.True(t, rl.Allow("ip-a"))
+	assert.True(t, rl.Allow("ip-b"))
+	assert.False(t, rl.Allow("ip-c"))
+	assert.Len(t, rl.buckets, 2)
+}

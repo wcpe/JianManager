@@ -1,7 +1,7 @@
 # ADR-066: CP→Worker 指令经 Worker 发起的 gRPC 反向隧道（免 NAT / 零入站）
 
 - **日期**: 2026-07-12
-- **状态**: accepted
+- **状态**: superseded-by [ADR-081](081-reverse-tunnel-only-node-authentication.md)
 - **取代关系**: **修订 ADR-002**（gRPC 节点通信）——gRPC 仍是节点间唯一 RPC 协议，本 ADR 只改「CP→Worker 调用的承载方向」：由 CP 直拨 worker `node.Host:GRPCPort` 改为**优先经 Worker 主动建立的反向隧道**；直拨降级为回退路径。**修订架构不变量「浏览器 ↔ Worker WS」**：浏览器终端改经 CP 中转，Worker WS 端口（9102）收敛为仅服务本机探针 plugin-bridge（ADR-012/016 探针通道不变）。
 - **关联**: FR-281（本 ADR 落地）、ADR-039（节点 UUID 身份——隧道归属锚定）、ADR-061（WS 令牌密钥——终端令牌校验语义保留）、ADR-050（重连 resync——隧道断连窗口语义对齐）、FR-278（CP 内嵌 Worker——版本强一致为双模式过渡兜底）。
 

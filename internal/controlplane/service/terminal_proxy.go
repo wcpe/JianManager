@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -62,9 +61,8 @@ type TerminalProxy struct {
 	pingPeriod time.Duration
 	pongWait   time.Duration
 
-	// workerClients 按节点取 WorkerServiceClient（FR-281 M2，见 ADR-066）：
-	// 由 ClientPool 适配注入——终端优先经 gRPC TerminalSession 桥接（隧道优先/直拨回退由
-	// 池决定），老 Worker（Unimplemented）回退直拨 WS。nil 表示未启用，恒走 WS 直拨。
+	// workerClients 按节点取 WorkerServiceClient（FR-281 M2，见 ADR-066）。
+	// 由 ClientPool 适配注入；终端只经 gRPC 反向隧道桥接，无可用隧道即提示重试。
 	workerClients func(nodeUUID string) (workerpb.WorkerServiceClient, bool)
 }
 
@@ -107,7 +105,6 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 		}
 
 		instanceUUID, _ := claims["instanceId"].(string)
-		permission, _ := claims["permission"].(string)
 		if instanceUUID == "" {
 			http.Error(w, "missing instanceId", http.StatusBadRequest)
 			return
@@ -118,8 +115,8 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 			return
 		}
 
-		// 2. 查找实例所在节点与 Worker WS 地址
-		nodeUUID, workerWSURL, err := p.terminal.GetWorkerSession(instanceUUID)
+		// 2. 查找实例所在节点，由反向隧道承载后续终端会话。
+		nodeUUID, err := p.terminal.GetWorkerSession(instanceUUID)
 		if err != nil {
 			slog.Error("查找 Worker 地址失败", "instanceUUID", instanceUUID, "error", err)
 			http.Error(w, "instance not found", http.StatusNotFound)
@@ -138,98 +135,16 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 		}
 		defer browserConn.Close()
 
-		// 4a. 优先经 gRPC TerminalSession 桥接（FR-281 M2，见 ADR-066）：
-		// 连接池隧道优先/直拨回退，NAT/内网节点终端由此可达；令牌校验方仍是 Worker。
-		// 老 Worker 无该 RPC（Unimplemented）→ 落到 4b 直拨 WS（行为与引入前一致）。
+		// 4. 经 gRPC TerminalSession 反向隧道桥接，令牌校验方仍是 Worker。
 		if p.workerClients != nil {
 			if worker, ok := p.workerClients(nodeUUID); ok {
 				if p.bridgeViaGRPC(browserConn, worker, tokenStr, instanceUUID) {
 					return
 				}
-				slog.Debug("gRPC 终端桥不可用，回退直拨 Worker WS", "instanceUUID", instanceUUID)
 			}
 		}
-
-		// 4b. 连接 Worker WS（携带同样的 token）
-		workerURL := fmt.Sprintf("%s?token=%s", workerWSURL, tokenStr)
-		workerConn, dialResp, err := websocket.DefaultDialer.Dial(workerURL, nil)
-		if err != nil {
-			p.tokens.Release(tokenStr)
-			// Worker 以 401/403 拒绝握手 = 令牌被 Worker 主动拒绝（非网络故障）：给出定向诊断
-			//（FR-276，见 ADR-061）。常见根因：该节点 WS 令牌密钥与平台不一致（旧 Worker 未升级 /
-			// 手动配置漂移）。日志与消息均不含 token（workerWSURL 无 query）。
-			if dialResp != nil {
-				defer dialResp.Body.Close()
-				if dialResp.StatusCode == http.StatusUnauthorized || dialResp.StatusCode == http.StatusForbidden {
-					slog.Error("Worker 拒绝终端令牌（疑似节点 WS 令牌密钥与平台不一致）",
-						"url", workerWSURL, "status", dialResp.StatusCode)
-					writeTerminalProxyState(browserConn, TerminalProxyCodeWorkerTokenRejected,
-						fmt.Sprintf("终端令牌被 Worker 拒绝（HTTP %d）：该节点的 WS 令牌密钥与平台不一致。新版 Worker 会在注册时自动获取密钥，请确认节点已升级并重启；手动部署请核对 worker.yml 的 jwt_secret 是否与平台一致。", dialResp.StatusCode))
-					return
-				}
-			}
-			slog.Error("连接 Worker WS 失败", "url", workerWSURL, "error", err)
-			writeTerminalProxyState(browserConn, "", "连接 Worker 失败: "+err.Error())
-			return
-		}
-		defer workerConn.Close()
-
-		slog.Info("终端代理已建立", "instanceUUID", instanceUUID, "permission", permission)
-
-		// 保活心跳（FR-140）：两侧连接都装 pong 续读超时 + 定时 ping。浏览器侧 ping 让
-		// 「浏览器↔CP」这一跳（可能经反代/LB）保持有流量；Worker 侧 ping 保活「CP↔Worker」跳。
-		p.setupKeepalive(browserConn)
-		p.setupKeepalive(workerConn)
-
-		// 5. 双向桥接
-		var wg sync.WaitGroup
-		wg.Add(2)
-
-		// browser → worker（stdin、resize）
-		go func() {
-			defer wg.Done()
-			defer workerConn.Close()
-			for {
-				msgType, msg, err := browserConn.ReadMessage()
-				if err != nil {
-					return
-				}
-				p.extendReadDeadline(browserConn)
-				if err := workerConn.WriteMessage(msgType, msg); err != nil {
-					return
-				}
-			}
-		}()
-
-		// worker → browser（stdout、stderr、state）
-		go func() {
-			defer wg.Done()
-			defer browserConn.Close()
-			for {
-				msgType, msg, err := workerConn.ReadMessage()
-				if err != nil {
-					if err != io.EOF {
-						slog.Debug("Worker WS 断开", "error", err)
-					}
-					return
-				}
-				p.extendReadDeadline(workerConn)
-				if err := browserConn.WriteMessage(msgType, msg); err != nil {
-					return
-				}
-			}
-		}()
-
-		// 心跳 ping：WriteControl 可与桥接的写并发（gorilla 保证），无需额外互斥。
-		if p.pingPeriod > 0 {
-			stop := make(chan struct{})
-			go pingConn(browserConn, p.pingPeriod, stop)
-			go pingConn(workerConn, p.pingPeriod, stop)
-			defer close(stop)
-		}
-
-		wg.Wait()
-		slog.Info("终端代理已关闭", "instanceUUID", instanceUUID)
+		p.tokens.Release(tokenStr)
+		writeTerminalProxyState(browserConn, "", "节点反向隧道不可用，请等待节点重新连接后重试")
 	}
 }
 
@@ -238,10 +153,9 @@ func (p *TerminalProxy) SetWorkerClients(get func(nodeUUID string) (workerpb.Wor
 	p.workerClients = get
 }
 
-// bridgeViaGRPC 经 gRPC TerminalSession 双向流桥接浏览器终端（FR-281 M2，见 ADR-066）。
-// 池取到的客户端天然隧道优先/直拨回退——NAT/内网节点的终端由此可达。
+// bridgeViaGRPC 经 gRPC TerminalSession 双向流桥接浏览器终端。
 // 返回 true 表示会话已由本路径处理（含已向浏览器发出诊断的失败）；
-// 返回 false 表示应回退直拨 WS（老 Worker Unimplemented / 建流即败）。
+// 返回 false 表示反向隧道不可用，由调用方保留一次性令牌并提示重试。
 func (p *TerminalProxy) bridgeViaGRPC(browserConn *websocket.Conn, worker workerpb.WorkerServiceClient, tokenStr, instanceUUID string) bool {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -256,13 +170,13 @@ func (p *TerminalProxy) bridgeViaGRPC(browserConn *websocket.Conn, worker worker
 		return false
 	}
 
-	// 等 Worker 的就绪 ack：确定性区分 就绪 / 令牌被拒 / 老 Worker 回退。
+	// 等 Worker 的就绪 ack：确定性区分就绪、令牌被拒和隧道不可用。
 	first, err := stream.Recv()
 	if err != nil {
 		st, _ := status.FromError(err)
 		switch st.Code() {
 		case codes.Unimplemented:
-			return false // 老 Worker 无该 RPC：回退直拨 WS，行为与引入前一致
+			return false
 		case codes.PermissionDenied:
 			// 令牌被 Worker 拒绝：FR-276 定向诊断在 gRPC 桥路同语义成立（见 ADR-061）。
 			slog.Error("Worker 拒绝终端令牌（疑似节点 WS 令牌密钥与平台不一致）",

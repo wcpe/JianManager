@@ -83,6 +83,10 @@ func (h *Handler) HandleStreamablePOST(c *gin.Context) {
 		if sessionID != "" {
 			// 已有会话时重复 initialize：刷新活动即可
 			if s, err := h.sessions.Get(sessionID); err == nil {
+				if s.TokenID != p.TokenID {
+					c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "会话不属于当前 Token"})
+					return
+				}
 				_ = h.sessions.Touch(s.ID, "")
 				c.Header(HeaderSessionID, s.ID)
 				writeRPC(c, newResult(req.ID, initializeResult()))

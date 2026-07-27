@@ -324,6 +324,10 @@ func TestDelete_OK(t *testing.T) {
 
 	_, err = svc.GetByID(st.ID)
 	require.ErrorIs(t, err, ErrStorageNotFound)
+	_, err = svc.Create(&model.BackupStorage{
+		Name: "dav", Type: model.BackupStorageWebDAV, Endpoint: "https://dav.local",
+	})
+	require.NoError(t, err, "软删后应允许复用同名存储后端")
 }
 
 func TestList_IncludesUsageAndLastTest(t *testing.T) {

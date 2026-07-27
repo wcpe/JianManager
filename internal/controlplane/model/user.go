@@ -32,6 +32,8 @@ type User struct {
 	Password  string         `gorm:"type:varchar(128);not null" json:"-"`
 	Role      UserRole       `gorm:"default:0" json:"role"`
 	Status    UserStatus     `gorm:"default:0" json:"status"`
+	// AuthVersion 在密码、状态或角色发生安全相关变更时递增，用于立即吊销旧会话。
+	AuthVersion uint           `gorm:"not null;default:0" json:"-"`
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt time.Time      `json:"updatedAt"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`

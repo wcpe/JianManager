@@ -123,6 +123,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
+	if err := config.ValidateJWTSecret(cfg.JWT.Secret, cfg.Server.DevMode); err != nil {
+		log.Fatalf("JWT 配置无效: %v", err)
+	}
 
 	initLogger(cfg.Log)
 
@@ -687,8 +690,7 @@ func main() {
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
 	terminalProxy := service.NewTerminalProxy(wsTokenSecret, terminalSvc)
-	// 终端优先经 gRPC TerminalSession 桥接（FR-281 M2，见 ADR-066）：池取客户端隧道优先/
-	// 直拨回退，NAT/内网节点终端可达；老 Worker（Unimplemented）回退直拨 WS。
+	// 终端仅经 gRPC TerminalSession 反向隧道桥接（FR-281 M2，见 ADR-081）。
 	terminalProxy.SetWorkerClients(func(nodeUUID string) (workerpb.WorkerServiceClient, bool) {
 		client, ok := pool.Get(nodeUUID)
 		if !ok {
@@ -705,7 +707,7 @@ func main() {
 	grpcHandler := cpgrpc.NewControlPlaneHandler(db, pool)
 	// WS 令牌密钥经注册/心跳下发 Worker（FR-275，见 ADR-061）。
 	grpcHandler.SetWSTokenSecret(wsTokenSecret)
-	grpcHandler.SetOnWorkerConnect(func(nodeUUID string) {
+	onWorkerTunnelConnected := func(nodeUUID string) {
 		eventSvc.StartWorkerStream(nodeUUID)
 		// 玩家事件流（探针经反向 WS 上报）同步订阅（FR-066）。
 		playerEventSvc.StartWorkerStream(nodeUUID)
@@ -716,7 +718,7 @@ func main() {
 		// 在 Worker 侧重新可被文件/配置/归档 op 定位（修 bug #2，见 ADR-050）。
 		// 异步执行：该回调可能在心跳处理路径内触发，重推不应阻塞心跳应答。
 		go instanceSvc.ResyncNode(nodeUUID)
-	})
+	}
 	// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
 	grpcHandler.SetMetricIngester(metricSvc)
 	// 心跳负载里的运行中任务快照汇聚落库 + 终态副作用（落 NodeJDK / 发站内信，FR-183，见 ADR-040）。
@@ -724,15 +726,16 @@ func main() {
 	// 心跳反向对账：Worker 有、CP 无记录的无主运行时（FR-326）。
 	grpcHandler.SetOrphanRuntimeIngester(orphanRuntimeSvc)
 	// 注入 enrollment token 校验器（FR-080，见 ADR-020）：新节点首次注册必须凭有效一次性 token，
-	// 老节点（name 命中）重注册不强制 token，避免在网节点重启掉线。
+	// 已登记节点必须用 UUID 与密钥重注册；新节点首次注册必须凭有效一次性 token。
 	grpcHandler.SetEnrollmentValidator(enrollTokenSvc)
 	// 注入节点期望代理解析器（FR-185，见 ADR-043）：每次心跳响应携带该节点期望出站代理
 	// （custom→节点值，inherit→全局默认）+ generation，Worker 据变化运行时重建出站 client。
 	grpcHandler.SetNodeProxyResolver(nodeProxySvc)
 	// 反向隧道注册表（FR-281，见 ADR-066）：Worker 主动在本 gRPC 端口开常驻反向隧道，
-	// CP 指令经隧道下发（NAT/内网 worker 零入站）；pool 取连接隧道优先、直拨回退。
+	// CP 指令仅经反向隧道下发，Worker 不开放任何 CP 直拨入口。
 	// 鉴权拦截器仅拦 OpenReverseTunnel，其余流式方法（心跳等）原样放行。
 	tunnelReg := cpgrpc.NewTunnelRegistry(db)
+	tunnelReg.SetOnConnected(onWorkerTunnelConnected)
 	pool.SetTunnelProvider(tunnelReg)
 	// 节点与 Bot 容量观测面共用实时隧道状态，不读取 gorm:- 运行态字段。
 	nodeSvc.SetTunnelStatus(tunnelReg)

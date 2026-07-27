@@ -84,8 +84,8 @@ func TestTerminalProxy_GRPCBridge_EndToEnd(t *testing.T) {
 	require.NoError(t, conn.ReadJSON(&welcome), "welcome 须经 gRPC 桥到达（直拨地址是黑洞端口）")
 }
 
-// 老 Worker 兼容：TerminalSession 返回 Unimplemented → 回退直拨 WS，行为与引入前一致。
-func TestTerminalProxy_FallbackToDirectWSOnUnimplemented(t *testing.T) {
+// TerminalSession 不可用时，CP 不得回退直拨 Worker WS。
+func TestTerminalProxy_DoesNotFallbackToDirectWSOnUnimplemented(t *testing.T) {
 	secret := "terminal-proxy-secret"
 	workerServer := workerws.NewTerminalServer(secret)
 	workerMux := http.NewServeMux()
@@ -93,7 +93,7 @@ func TestTerminalProxy_FallbackToDirectWSOnUnimplemented(t *testing.T) {
 	workerHTTP := httptest.NewServer(workerMux)
 	defer workerHTTP.Close()
 
-	// 直拨地址指向真 worker WS；gRPC 客户端是老 Worker（全部 RPC Unimplemented）。
+	// 即使数据库中仍保存可用的旧 Worker WS 地址，也不得使用它。
 	db, instanceID := newTerminalTestDB(t, workerHTTP.URL)
 	svc := NewTerminalService(db, secret, "ws://fallback.invalid")
 	proxy := NewTerminalProxy(secret, svc)
@@ -110,8 +110,11 @@ func TestTerminalProxy_FallbackToDirectWSOnUnimplemented(t *testing.T) {
 	conn := dialTerminalProxy(t, token.WSURL, token.Token)
 	defer conn.Close()
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(3*time.Second)))
-	var welcome map[string]any
-	require.NoError(t, conn.ReadJSON(&welcome), "老 Worker 须经直拨 WS 回退路径连通")
+	var state map[string]any
+	require.NoError(t, conn.ReadJSON(&state))
+	require.Equal(t, "state", state["type"])
+	require.Equal(t, "error", state["state"])
+	require.Contains(t, state["data"], "反向隧道不可用")
 }
 
 // 令牌被拒诊断：worker 侧密钥与平台不一致 → gRPC 桥路给出 FR-276 同款定向诊断。

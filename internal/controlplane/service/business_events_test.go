@@ -156,6 +156,21 @@ func TestIngest_CrossNodeSameZoneNoCollision(t *testing.T) {
 	assert.Len(t, rows, 2, "跨节点同区应为两行（node→zone 维度）")
 }
 
+// TestIngest_SameLedgerAcrossNodeAndZone 保留各 node→zone 内独立分配的相同账本 ID。
+func TestIngest_SameLedgerAcrossNodeAndZone(t *testing.T) {
+	db := newBusinessEventTestDB(t)
+	svc := NewBusinessEventService(db)
+	svc.Ingest("node-1", economyEvt(t, "inst-a", economyData("Steve", "coin", "zone-a", "DEPOSIT", "10", "10", "7", "1")))
+	svc.Ingest("node-1", economyEvt(t, "inst-b", economyData("Alex", "coin", "zone-b", "DEPOSIT", "20", "20", "7", "1")))
+	svc.Ingest("node-2", economyEvt(t, "inst-c", economyData("Bob", "coin", "zone-a", "DEPOSIT", "30", "30", "7", "1")))
+
+	var envelopes, ledgers int64
+	require.NoError(t, db.Model(&model.BusinessEvent{}).Count(&envelopes).Error)
+	require.NoError(t, db.Model(&model.EconomyLedgerEntry{}).Count(&ledgers).Error)
+	assert.Equal(t, int64(3), envelopes, "相同 ledgerId 在不同 node 或 zone 不得互相吞掉")
+	assert.Equal(t, int64(3), ledgers, "账务审计必须按 node→zone 去重")
+}
+
 // TestAggregateEconomyByZone 跨区聚合返回逐 (node,zone) 行，不盲目求和。
 func TestAggregateEconomyByZone(t *testing.T) {
 	db := newBusinessEventTestDB(t)

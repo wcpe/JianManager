@@ -23,6 +23,7 @@ func fr396TestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{}, &model.Instance{}, &model.AgentToken{}, &model.AgentCallLog{},
+		&model.GroupInstance{}, &model.ServerRegistration{}, &model.NetworkMember{},
 		&model.Task{}, &model.TaskLog{},
 	))
 	return db
@@ -86,9 +87,35 @@ func TestFR396_ConfirmRejectsMissing(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "confirmInstanceName")
 }
 
+func TestFR396_ConfirmDoesNotRevealOutOfScopeTarget(t *testing.T) {
+	db := fr396TestDB(t)
+	agent, p, node, _ := fr396Seed(t, db)
+	other := &model.Node{UUID: "n-other", Name: "hidden-node", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(other).Error)
+	deps := ToolDeps{Agent: agent, Node: service.NewNodeService(db)}
+	res := CallTool(context.Background(), deps, p, "node_purge_archived", map[string]any{
+		"id": float64(other.ID), "confirmNodeName": other.Name,
+	})
+	assert.True(t, res.IsError)
+	assert.Contains(t, res.Content[0].Text, "拒绝")
+	assert.NotContains(t, res.Content[0].Text, "确认名称")
+	assert.NotEqual(t, node.ID, other.ID)
+}
+
+func TestFR396_PurgeArchivedUsesArchivedName(t *testing.T) {
+	db := fr396TestDB(t)
+	agent, p, node, _ := fr396Seed(t, db)
+	require.NoError(t, db.Delete(node).Error)
+	deps := ToolDeps{Agent: agent, Node: service.NewNodeService(db)}
+	res := CallTool(context.Background(), deps, p, "node_purge_archived", map[string]any{
+		"id": float64(node.ID), "confirmNodeName": node.Name, "force": true,
+	})
+	assert.False(t, res.IsError, "归档节点应可按其名称确认后清理: %v", res.Content)
+}
+
 func TestFR396_V1CannotSeeNewTools(t *testing.T) {
 	p := &service.AgentPrincipal{
-		PolicyVersion: service.AgentPolicyVersionV1,
+		PolicyVersion:     service.AgentPolicyVersionV1,
 		ScopedInstanceIDs: []uint{1}, ScopedNodeIDs: []uint{1},
 		WriteAllowlist: []string{service.AgentWriteInstanceLife, service.AgentWriteNodeMaintenance},
 	}

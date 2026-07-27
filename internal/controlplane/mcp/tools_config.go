@@ -133,6 +133,9 @@ func callConfigRead(deps ToolDeps, p *service.AgentPrincipal, action string, arg
 	if denied != nil {
 		return *denied
 	}
+	if err := service.ValidateConfigInstancePath(path); err != nil {
+		return toolErr(err.Error())
+	}
 	if deps.Config == nil {
 		return toolErr("配置服务不可用")
 	}
@@ -151,6 +154,9 @@ func callConfigWriteText(deps ToolDeps, p *service.AgentPrincipal, action string
 	if denied != nil {
 		return *denied
 	}
+	if err := service.ValidateConfigInstancePath(path); err != nil {
+		return toolErr(err.Error())
+	}
 	content, err := requireStringArg(args, "content")
 	if err != nil {
 		return toolErr(err.Error())
@@ -165,7 +171,7 @@ func callConfigWriteText(deps ToolDeps, p *service.AgentPrincipal, action string
 	if deps.Config == nil {
 		return toolErr("配置服务不可用")
 	}
-	versionID, validation, werr := deps.Config.Write(id, path, content, message, 0, nil)
+	versionID, validation, werr := deps.Config.Write(id, path, content, message, p.TokenID, nil)
 	if werr != nil {
 		return toolErr(werr.Error())
 	}
@@ -176,6 +182,9 @@ func callConfigWriteFields(deps ToolDeps, p *service.AgentPrincipal, action stri
 	id, path, denied := resolveInstancePath(deps, p, action, args, true)
 	if denied != nil {
 		return *denied
+	}
+	if err := service.ValidateConfigInstancePath(path); err != nil {
+		return toolErr(err.Error())
 	}
 	updates, err := stringMapArg(args, "updates")
 	if err != nil {
@@ -188,7 +197,7 @@ func callConfigWriteFields(deps ToolDeps, p *service.AgentPrincipal, action stri
 	if deps.Config == nil {
 		return toolErr("配置服务不可用")
 	}
-	versionID, validation, werr := deps.Config.WriteFields(id, path, updates, message, 0)
+	versionID, validation, werr := deps.Config.WriteFields(id, path, updates, message, p.TokenID)
 	if werr != nil {
 		return toolErr(werr.Error())
 	}
@@ -199,6 +208,9 @@ func callConfigCrossCheck(deps ToolDeps, p *service.AgentPrincipal, action strin
 	id, path, denied := resolveInstancePath(deps, p, action, args, true)
 	if denied != nil {
 		return *denied
+	}
+	if err := service.ValidateConfigInstancePath(path); err != nil {
+		return toolErr(err.Error())
 	}
 	content, err := requireStringArg(args, "content")
 	if err != nil {
@@ -222,6 +234,9 @@ func callConfigVersions(deps ToolDeps, p *service.AgentPrincipal, action string,
 	if denied != nil {
 		return *denied
 	}
+	if err := service.ValidateConfigInstancePath(path); err != nil {
+		return toolErr(err.Error())
+	}
 	if deps.Config == nil {
 		return toolErr("配置服务不可用")
 	}
@@ -236,6 +251,9 @@ func callConfigDiff(deps ToolDeps, p *service.AgentPrincipal, action string, arg
 	id, path, denied := resolveInstancePath(deps, p, action, args, true)
 	if denied != nil {
 		return *denied
+	}
+	if err := service.ValidateConfigInstancePath(path); err != nil {
+		return toolErr(err.Error())
 	}
 	fromID, err := optionalUintArg(args, "from")
 	if err != nil {
@@ -263,6 +281,9 @@ func callConfigRollback(deps ToolDeps, p *service.AgentPrincipal, action string,
 	if denied != nil {
 		return *denied
 	}
+	if err := service.ValidateConfigInstancePath(path); err != nil {
+		return toolErr(err.Error())
+	}
 	versionID, err := optionalUintArg(args, "versionId")
 	if err != nil {
 		return toolErr(err.Error())
@@ -277,7 +298,7 @@ func callConfigRollback(deps ToolDeps, p *service.AgentPrincipal, action string,
 	if deps.Config == nil {
 		return toolErr("配置服务不可用")
 	}
-	newVersionID, rerr := deps.Config.Rollback(id, path, versionID, message, 0)
+	newVersionID, rerr := deps.Config.Rollback(id, path, versionID, message, p.TokenID)
 	if rerr != nil {
 		return toolErr(rerr.Error())
 	}

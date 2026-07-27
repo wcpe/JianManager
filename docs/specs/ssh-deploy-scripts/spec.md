@@ -69,7 +69,7 @@
 1. 预检：本地产物在（否则按 `JM_BUILD` 决定构建或报错）；`ssh -o BatchMode=yes` 连通（失败给密钥指引）；scope 判定（§3.2，user 档含 linger 检查）。
 2. `scp dist/worker-linux-<arch>` → `<install-dir>/jianmanager-worker.new` + `scp scripts/install-worker.sh` → 目标机临时路径。
 3. 远端判定**首次 / 更新**：`systemctl [--user] cat jianmanager-worker` 存在 = 更新，否则首次。
-   - **首次**：原子就位二进制后远程执行 `install-worker.sh --binary <bin> --service [--service-scope user] --control-plane $JM_CONTROL_PLANE --token $JM_ENROLL_TOKEN [--name ...] --grpc-port ... --ws-port ... --install-dir ... --data-dir ...`（system 档非 root 时整脚本 `sudo -n` 执行）——unit 写出、worker 自配 setup、注册、token 不落普通文件，全部走 FR-223/ADR-051 既有已验路径。**为 user 档扩 `install-worker.sh` 本身**（新增 `--service-scope system|user`，默认 system 保持现状零变化）：unit 写 `~/.config/systemd/user/`、`systemctl --user`、[Install] 段 `WantedBy=default.target`；扩完同步内嵌副本（`make embed-install-scripts`，字节一致测试守护）。pull 式一键安装同获非 root 能力，属本 FR 的阻塞性依赖而非顺手加功能。
+   - **首次**：原子就位二进制后远程执行 `install-worker.sh --binary <bin> --service [--service-scope user] --control-plane $JM_CONTROL_PLANE --token $JM_ENROLL_TOKEN [--name ...] --ws-port ... --install-dir ... --data-dir ...`（system 档非 root 时整脚本 `sudo -n` 执行）——unit 写出、worker 自配 setup、注册、token 不落普通文件，全部走 FR-223/ADR-051 既有已验路径。**为 user 档扩 `install-worker.sh` 本身**（新增 `--service-scope system|user`，默认 system 保持现状零变化）：unit 写 `~/.config/systemd/user/`、`systemctl --user`、[Install] 段 `WantedBy=default.target`；扩完同步内嵌副本（`make embed-install-scripts`，字节一致测试守护）。pull 式一键安装同获非 root 能力，属本 FR 的阻塞性依赖而非顺手加功能。
    - **更新**：`systemctl [--user] stop` → 旧二进制 `mv` 为 `.bak` → 新二进制就位 → `start`。不碰 `worker.yml` / `etc/node-identity.json` / unit（身份与配置保留，重启后以既有身份重连，无需 token）。
 4. 验证：`systemctl [--user] is-active jianmanager-worker` = active，失败时抓 `journalctl [--user] -u jianmanager-worker -n 40` 回显。
 

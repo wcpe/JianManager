@@ -17,6 +17,7 @@ import (
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/version"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 func newSelfUpdateTestDB(t *testing.T) *gorm.DB {
@@ -245,9 +246,8 @@ func TestRollout_MixedResults(t *testing.T) {
 	require.NoError(t, db.Create(n1).Error)
 	require.NoError(t, db.Create(n2).Error)
 	require.NoError(t, db.Create(n3).Error)
-	// grpc.NewClient 是惰性连接（首次 RPC 才拨号），故 Connect 仅登记不实际连。
-	require.NoError(t, pool.Connect(n1.UUID, "127.0.0.1:1"))
-	require.NoError(t, pool.Connect(n2.UUID, "127.0.0.1:1"))
+	pool.SetWorkerClientForTest(n1.UUID, workerpb.NewWorkerServiceClient(nil))
+	pool.SetWorkerClientForTest(n2.UUID, workerpb.NewWorkerServiceClient(nil))
 
 	svc := NewSelfUpdateService(db, pool, SelfUpdateConfig{FeedURL: "https://x"}, nil)
 	// 注入单节点升级桩：n1 成功，n2 失败。
@@ -321,7 +321,7 @@ func seedRolloutNodes(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, names 
 	for i, name := range names {
 		n := &model.Node{Name: name, Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: string(rune('a' + i)), OS: runtime.GOOS, Arch: runtime.GOARCH, Status: model.NodeStatusOnline}
 		require.NoError(t, db.Create(n).Error)
-		require.NoError(t, pool.Connect(n.UUID, "127.0.0.1:1"))
+		pool.SetWorkerClientForTest(n.UUID, workerpb.NewWorkerServiceClient(nil))
 		out = append(out, n)
 	}
 	return out

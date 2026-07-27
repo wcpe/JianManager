@@ -2,29 +2,27 @@
 package service
 
 import (
-	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
-	workerws "github.com/wcpe/JianManager/internal/worker/ws"
+	wgrpc "github.com/wcpe/JianManager/internal/worker/grpc"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // newProxyKeepaliveFixture 起 Worker 终端服务 + CP 代理，返回代理与签好的终端 token。
 func newProxyKeepaliveFixture(t *testing.T) (*TerminalProxy, *TerminalToken) {
 	t.Helper()
 	const secret = "keepalive-proxy-secret"
-	workerServer := workerws.NewTerminalServer(secret)
-	workerMux := http.NewServeMux()
-	workerMux.HandleFunc("/ws/terminal", workerServer.Handler())
-	workerHTTP := httptest.NewServer(workerMux)
-	t.Cleanup(workerHTTP.Close)
-
-	db, instanceID := newTerminalTestDB(t, workerHTTP.URL)
+	db, instanceID := newTerminalTestDB(t, startWorkerTerminalWS(t, secret))
 	svc := NewTerminalService(db, secret, "ws://fallback.invalid")
 	proxy := NewTerminalProxy(secret, svc)
+	wsrv := &wgrpc.Server{}
+	wsrv.SetTerminalWSAddr(startWorkerTerminalWS(t, secret))
+	client := startTerminalWorkerGRPC(t, wsrv)
+	proxy.SetWorkerClients(func(string) (workerpb.WorkerServiceClient, bool) { return client, true })
 	cpHTTP := httptest.NewServer(proxy.Handler())
 	t.Cleanup(cpHTTP.Close)
 

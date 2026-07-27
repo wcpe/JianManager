@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/register"
 )
 
-// TestCollectInputs_NonTTY_FlagsBeatEnv 无 TTY 形态：命令行参数优先于环境变量，端口/默认值正确。
+// TestCollectInputs_NonTTY_FlagsBeatEnv 无 TTY 形态：命令行参数优先于环境变量，WS 端口默认值正确。
 func TestCollectInputs_NonTTY_FlagsBeatEnv(t *testing.T) {
 	t.Setenv("JIANMANAGER_CONTROL_PLANE", "env-cp:9100")
 	t.Setenv("JIANMANAGER_ENROLL_TOKEN", "jmet_env")
@@ -24,13 +24,12 @@ func TestCollectInputs_NonTTY_FlagsBeatEnv(t *testing.T) {
 
 	in, err := CollectInputs(Options{
 		IsTTY: false,
-		Args:  []string{"--control-plane", "flag-cp:9100", "--token", "jmet_flag", "--grpc-port", "19101"},
+		Args:  []string{"--control-plane", "flag-cp:9100", "--token", "jmet_flag"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "flag-cp:9100", in.ControlPlane, "flag 覆盖 env")
 	assert.Equal(t, "jmet_flag", in.EnrollToken, "flag 覆盖 env")
 	assert.Equal(t, "env-node", in.NodeName, "未给 flag 时回退 env")
-	assert.Equal(t, 19101, in.GRPCPort)
 	assert.Equal(t, defaultWSPort, in.WSPort, "未给则用默认 ws 端口")
 }
 
@@ -43,7 +42,6 @@ func TestCollectInputs_NonTTY_EnvOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "cp.example:9100", in.ControlPlane)
 	assert.Equal(t, "jmet_abc", in.EnrollToken)
-	assert.Equal(t, defaultGRPCPort, in.GRPCPort)
 	assert.Equal(t, defaultWSPort, in.WSPort)
 }
 
@@ -68,15 +66,16 @@ func TestCollectInputs_NonTTY_CPDefaults(t *testing.T) {
 	assert.Equal(t, defaultControlPlane, in.ControlPlane)
 }
 
-// TestCollectInputs_NonTTY_BadPortFails 端口非法 → 报错。
-func TestCollectInputs_NonTTY_BadPortFails(t *testing.T) {
+// TestCollectInputs_NonTTY_LegacyGRPCPortIgnored 旧 gRPC 参数/环境变量不再作为 setup 输入。
+func TestCollectInputs_NonTTY_LegacyGRPCPortIgnored(t *testing.T) {
 	t.Setenv("JIANMANAGER_ENROLL_TOKEN", "")
-	_, err := CollectInputs(Options{
+	t.Setenv("JIANMANAGER_GRPC_PORT", "not-a-port")
+	in, err := CollectInputs(Options{
 		IsTTY: false,
 		Args:  []string{"--token", "jmet_x", "--grpc-port", "abc"},
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "grpc-port")
+	require.NoError(t, err)
+	assert.Equal(t, defaultWSPort, in.WSPort)
 }
 
 // TestParseFlags_EqualsForm --key=value 形态解析正确，未知 flag 忽略。
@@ -90,15 +89,14 @@ func TestParseFlags_EqualsForm(t *testing.T) {
 
 // TestCollectInputs_TTY_Interactive 交互式形态：逐项输入被正确采集（驱动 reader，不需真 TTY）。
 func TestCollectInputs_TTY_Interactive(t *testing.T) {
-	// 顺序：CP / token / name / grpc / ws / data_dir。空行接受默认。
+	// 顺序：CP / token / name / ws / data_dir。空行接受默认。
 	input := strings.Join([]string{
 		"cp-host:9100", // CP
 		"jmet_interactive",
 		"my-node",
-		"",     // grpc 端口默认
-		"",     // ws 端口默认
-		"",     // data_dir 默认（空）
-		"",     // 兜底
+		"", // ws 端口默认
+		"", // data_dir 默认（空）
+		"", // 兜底
 	}, "\n")
 	var out bytes.Buffer
 	in, err := CollectInputs(Options{
@@ -110,7 +108,6 @@ func TestCollectInputs_TTY_Interactive(t *testing.T) {
 	assert.Equal(t, "cp-host:9100", in.ControlPlane)
 	assert.Equal(t, "jmet_interactive", in.EnrollToken)
 	assert.Equal(t, "my-node", in.NodeName)
-	assert.Equal(t, defaultGRPCPort, in.GRPCPort)
 	assert.Equal(t, defaultWSPort, in.WSPort)
 	assert.Empty(t, in.DataDir)
 }
@@ -157,7 +154,7 @@ func TestRun_WritesYMLRegistersPersists(t *testing.T) {
 	// 注册以 enrollment token 携带、节点名/端口正确。
 	assert.Equal(t, "jmet_run", capturedCfg.EnrollToken)
 	assert.Equal(t, "edge-7", capturedCfg.NodeName)
-	assert.Equal(t, defaultGRPCPort, capturedCfg.GrpcPort)
+	assert.Zero(t, capturedCfg.GrpcPort)
 
 	// worker.yml 写出且 token 不在其中。
 	ymlPath := filepath.Join(workDir, "worker.yml")

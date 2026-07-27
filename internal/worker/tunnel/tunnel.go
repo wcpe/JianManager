@@ -108,7 +108,7 @@ func (r *Runner) serveOnce() error {
 
 	rts := grpctunnel.NewReverseTunnelServer(tunnelpb.NewTunnelServiceClient(conn))
 	// 消息尺寸守卫（FR-305）：grpctunnel 不接受 grpc.ServerOption，唯一天花板是 4GB 硬编码——
-	// 经 WrapRegistrar 在注册层施加与直拨 ServerOptions 等效的 64MiB 双向上限，双模式行为一致。
+	// 经 WrapRegistrar 在注册层施加 64MiB 双向上限。
 	r.register(grpcmsg.WrapRegistrar(rts))
 
 	ctx, cancel := context.WithCancel(context.Background())

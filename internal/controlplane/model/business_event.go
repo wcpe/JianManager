@@ -5,21 +5,23 @@ import "time"
 // BusinessEvent 是 JBIS 通用业务事件信封表（插件无关汇聚底座，FR-116 底座 / FR-122，见 ADR-028）。
 //
 // 探针经反向 WS 桥上报的业务域事件（economy/inventory…）一律按本表落库：CP **插件无关**，只认
-// domain/action/payload 信封 + dedupKey，不理解具体业务语义。按 (Domain, DedupKey) 唯一去重应对桥的
+// domain/action/payload 信封 + dedupKey，不理解具体业务语义。按 (Domain, NodeUUID, ZoneID, DedupKey) 唯一去重应对桥的
 // **至少一次投递**与跨节点重试（同键重发 insert-or-ignore，不重复计数）。新增业务域**无需改表**。
 //
 // 数据所有权（架构不变量）：JM 只存汇聚镜像 + 操作审计，业务真源仍在各插件存储；本表是"汇聚镜像"的通用底座，
 // 高价值域（经济）另有结构化专表（[EconomyBalanceMirror] / [EconomyLedgerEntry]）供高效查询与对账。
 type BusinessEvent struct {
 	ID uint `gorm:"primaryKey" json:"id"`
-	// Domain 业务域命名空间（economy/inventory…）；与 DedupKey 组成唯一去重键。
-	Domain string `gorm:"type:varchar(32);not null;uniqueIndex:idx_be_domain_dedup,priority:1;index:idx_be_domain_time,priority:1" json:"domain"`
-	// DedupKey 业务事件去重锚点（经济域为 mce ledgerId 字符串，全局唯一稳定）。
-	DedupKey string `gorm:"column:dedup_key;type:varchar(128);not null;uniqueIndex:idx_be_domain_dedup,priority:2" json:"dedupKey"`
+	// Domain 业务域命名空间（economy/inventory…）；与来源 scope、DedupKey 组成唯一去重键。
+	Domain string `gorm:"type:varchar(32);not null;uniqueIndex:idx_be_scope_dedup,priority:1;index:idx_be_domain_time,priority:1" json:"domain"`
+	// DedupKey 业务事件去重锚点（经济域为 mce ledgerId，只有 node→zone 内唯一）。
+	DedupKey string `gorm:"column:dedup_key;type:varchar(128);not null;uniqueIndex:idx_be_scope_dedup,priority:4" json:"dedupKey"`
 	// Action 业务事件子类型（economy_change…），供下游分流/展示。
 	Action string `gorm:"type:varchar(64);not null" json:"action"`
 	// NodeUUID 事件来源节点（经济多区/多节点聚合的 node→zone 维度起点）。
-	NodeUUID string `gorm:"column:node_uuid;type:varchar(64);index:idx_be_node" json:"nodeUuid"`
+	NodeUUID string `gorm:"column:node_uuid;type:varchar(64);not null;uniqueIndex:idx_be_scope_dedup,priority:2;index:idx_be_node" json:"nodeUuid"`
+	// ZoneID 经济事件的 mce 区；其它业务域为空串。账本 ID 只在 node→zone 内去重。
+	ZoneID string `gorm:"column:zone_id;type:varchar(64);not null;default:'';uniqueIndex:idx_be_scope_dedup,priority:3" json:"zoneId,omitempty"`
 	// InstanceUUID 事件来源实例（探针所在子服实例）。
 	InstanceUUID string `gorm:"column:instance_uuid;type:varchar(64);index:idx_be_instance" json:"instanceUuid"`
 	// Operator 操作者身份透传位（FR-121 业务写横切硬化时回填"哪个管理员/为什么"；自发事件为空）。
@@ -69,17 +71,17 @@ type EconomyBalanceMirror struct {
 // EconomyLedgerEntry 是经济变更/操作审计表：逐条经济变更的结构化留痕（FR-122，见 ADR-028）。
 //
 // 与通用 [BusinessEvent] 并存——envelope 是插件无关底座，本表是经济域**结构化专表**，把信封 payload 拆列
-// 供高效查询/对账（按玩家/货币/区/时间维度）。按 LedgerID 唯一去重（与 envelope 同源 dedupKey），
+// 供高效查询/对账（按玩家/货币/区/时间维度）。按 (NodeUUID, ZoneID, LedgerID) 唯一去重（与 envelope 同源 dedupKey），
 // 业务数据**不降采样、不丢**（区别于监控时序，ADR-028）。append-only，不随镜像覆盖。
 type EconomyLedgerEntry struct {
 	ID uint `gorm:"primaryKey" json:"id"`
-	// LedgerID mce 总账流水 ID（去重锚点，全局唯一）。
-	LedgerID int64 `gorm:"column:ledger_id;not null;uniqueIndex:idx_ele_ledger" json:"ledgerId"`
+	// LedgerID mce 总账流水 ID（去重锚点，仅 node→zone 内唯一）。
+	LedgerID int64 `gorm:"column:ledger_id;not null;uniqueIndex:idx_ele_scope_ledger,priority:3" json:"ledgerId"`
 	// NodeUUID / InstanceUUID 事件来源（node→zone 聚合维度）。
-	NodeUUID     string `gorm:"column:node_uuid;type:varchar(64);index:idx_ele_node" json:"nodeUuid"`
+	NodeUUID     string `gorm:"column:node_uuid;type:varchar(64);not null;uniqueIndex:idx_ele_scope_ledger,priority:1;index:idx_ele_node" json:"nodeUuid"`
 	InstanceUUID string `gorm:"column:instance_uuid;type:varchar(64)" json:"instanceUuid"`
 	// ZoneID mce 区 ID。
-	ZoneID string `gorm:"column:zone_id;type:varchar(64);index:idx_ele_player,priority:1" json:"zoneId"`
+	ZoneID string `gorm:"column:zone_id;type:varchar(64);not null;uniqueIndex:idx_ele_scope_ledger,priority:2;index:idx_ele_player,priority:1" json:"zoneId"`
 	// PlayerName 玩家名。
 	PlayerName string `gorm:"column:player_name;type:varchar(64);index:idx_ele_player,priority:2" json:"playerName"`
 	// Currency 货币 identifier；CurrencyID 为 mce Int 原值。

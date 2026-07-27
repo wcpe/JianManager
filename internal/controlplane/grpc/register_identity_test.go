@@ -109,16 +109,13 @@ func TestRegister_UUIDProof_SecretMismatch(t *testing.T) {
 	require.Equal(t, "10.0.0.1", node.Host, "secret 不符不得覆写 host")
 }
 
-// TestRegister_SameHostLegacy_Reregisters 未升级旧 Worker（只带 name）、host 与库存一致：同机重启信号，放行（ADR-039 §1.2-2）。
-func TestRegister_SameHostLegacy_Reregisters(t *testing.T) {
+// TestRegister_MissingIdentityRejectsExistingNode 验证 Host 不再作为节点身份凭据。
+func TestRegister_MissingIdentityRejectsExistingNode(t *testing.T) {
 	h, db, _ := newIdentityRegisterHandler(t)
-	uuid := seedNode(t, db, "edge-a", "10.0.0.1", "secret-a")
+	seedNode(t, db, "edge-a", "10.0.0.1", "secret-a")
 
-	// 无 uuid/secret、无 token，但 host 与登记 host 一致 → 同机重启，放行重注册。
-	resp, err := h.Register(context.Background(), regReqHost("edge-a", "10.0.0.1"))
-	require.NoError(t, err)
-	require.Equal(t, uuid, resp.NodeUuid, "同机重启应返回既有身份")
-	require.Equal(t, "secret-a", resp.NodeSecret)
+	_, err := h.Register(context.Background(), regReqHost("edge-a", "10.0.0.1"))
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
 }
 
 // TestRegister_SameNameDifferentHost_Rejected 核心 BUG-A：另一台机器（host 不同）用同名、无 uuid、带有效 token 注册
@@ -133,7 +130,7 @@ func TestRegister_SameNameDifferentHost_Rejected(t *testing.T) {
 	// 陌生机器：host 不同、无身份、带有效 token。
 	_, err = h.Register(ctxWithEnrollToken(plaintext), regReqHost("edge-a", "192.168.1.50"))
 	require.Error(t, err, "异机同名应被拒绝")
-	require.Equal(t, codes.AlreadyExists, status.Code(err))
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
 
 	// 旧节点身份/host 必须原封不动（不被覆写）。
 	var node model.Node
@@ -174,19 +171,27 @@ func ctxWithIdentityAndToken(uuid, secret, token string) context.Context {
 	return metadata.NewIncomingContext(context.Background(), md)
 }
 
-// TestRegister_UnknownUUID_FallsToTokenPath 持一个库中不存在的 uuid（如残留旧身份指向已删节点）：
-// 不命中 UUID 分支，落到 token 新建路径——撞名则拒、新名则建（ADR-039 §1.2 边界）。
-func TestRegister_UnknownUUID_FallsToTokenPath(t *testing.T) {
+// TestRegister_UnknownIdentityRejected 持已失效身份时不能降级为新节点注册。
+func TestRegister_UnknownIdentityRejected(t *testing.T) {
 	h, db, enrollSvc := newIdentityRegisterHandler(t)
 	_ = seedNode(t, db, "edge-a", "10.0.0.1", "secret-a")
 
 	_, plaintext, err := enrollSvc.Issue("", 30, 1)
 	require.NoError(t, err)
 
-	// uuid 不存在于库、host 不同、带 token、新名 → 走 token 新建。
-	resp, err := h.Register(
+	// uuid 不存在于库时，即使另带有效 token 也必须明确拒绝。
+	_, err = h.Register(
 		ctxWithIdentityAndToken("00000000-0000-0000-0000-000000000000", "whatever", plaintext),
 		regReqHost("edge-c", "192.168.1.77"))
-	require.NoError(t, err)
-	require.NotEmpty(t, resp.NodeUuid)
+	require.Equal(t, codes.NotFound, status.Code(err))
+}
+
+// TestRegister_PartialIdentityRejected 验证 UUID 和 secret 缺一不可。
+func TestRegister_PartialIdentityRejected(t *testing.T) {
+	h, db, _ := newIdentityRegisterHandler(t)
+	uuid := seedNode(t, db, "edge-a", "10.0.0.1", "secret-a")
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{nodeUUIDHeader: uuid}))
+	_, err := h.Register(ctx, regReqHost("edge-a", "10.0.0.1"))
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
 }

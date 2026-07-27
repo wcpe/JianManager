@@ -64,7 +64,7 @@ FR-397 把这套内容运维以强类型 MCP 工具开放给 scoped Agent，同�
 MCP 不承载大文件字节。Agent 需要上传 jar/世界包或下载大文件时：
 
 1. 经 `file_issue_transfer_ticket` 申请，参数：`id`（实例）、`direction`（upload/download）、`path`（目标路径，过 `validatePath`）。
-2. CP 用 HMAC-SHA256 签发票据（先例：`BotLoadPlanTokenSigner` 域分离派生 + `onetimetoken.Store` 一次性消费）：
+2. CP 用 HMAC-SHA256 签发票据，票据摘要持久化到 `agent_transfer_tickets`；消费时以条件更新原子标记，重启或多进程部署下仍保持一次性语义：
    - claims：`tokenId`（Agent Token ID）、`instanceId`、`direction`、`path`、`expiresAt`；
    - TTL 5 分钟；单次消费（`onetimetoken.Store`，consume 即作废；上传失败可重新申请）。
 3. 新 HTTP 数据面端点（无需 JWT/Agent Header，票据即凭据）：
@@ -109,7 +109,7 @@ MCP 不承载大文件字节。Agent 需要上传 jar/世界包或下载大文�
 ```text
 type AgentTransferTicketService struct {
     signer  // HMAC，密钥经 DeriveXxxSecret 从主密钥域分离（对齐 BotLoadPlanTokenSigner 先例）
-    store   *onetimetoken.Store
+    db      // 票据摘要与消费状态；仅保存 SHA-256 摘要，不保存票据明文
     agent   *AgentTokenService   // 消费时重验 Token 有效性与实例归属
     file    *FileService
 }

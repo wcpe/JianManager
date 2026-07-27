@@ -50,8 +50,8 @@ func (s *Server) TerminalSession(stream workerpb.WorkerService_TerminalSessionSe
 	}
 	defer wsConn.Close()
 
-	// 回环拨通即回「就绪 ack」（空 open）：CP 据此确定性区分「就绪 / 令牌被拒 / 老 Worker
-	// Unimplemented（回退直拨 WS）」，不必等首个数据帧。
+	// 回环拨通即回「就绪 ack」（空 open）：CP 据此确定性区分「就绪 / 令牌被拒 / 隧道不可用」，
+	// 不必等首个数据帧。
 	if err := stream.Send(&workerpb.TerminalFrame{
 		Kind: &workerpb.TerminalFrame_Open{Open: &workerpb.TerminalOpen{}},
 	}); err != nil {

@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/context"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -40,15 +42,14 @@ func TestRegister_DeliversWSTokenSecret_UUIDReregister(t *testing.T) {
 	require.Equal(t, "cp-ws-secret", resp.WsTokenSecret)
 }
 
-// TestRegister_DeliversWSTokenSecret_SameHostLegacy 过渡兼容路径（同机 host 命中重注册）同样下发。
-func TestRegister_DeliversWSTokenSecret_SameHostLegacy(t *testing.T) {
+// TestRegister_MissingIdentityDoesNotDeliverWSTokenSecret 不允许 Host 伪身份路径取得 WS 密钥。
+func TestRegister_MissingIdentityDoesNotDeliverWSTokenSecret(t *testing.T) {
 	h, db, _ := newIdentityRegisterHandler(t)
 	h.SetWSTokenSecret("cp-ws-secret")
 	seedNode(t, db, "edge-a", "10.0.0.1", "secret-a")
 
-	resp, err := h.Register(context.Background(), regReqHost("edge-a", "10.0.0.1"))
-	require.NoError(t, err)
-	require.Equal(t, "cp-ws-secret", resp.WsTokenSecret)
+	_, err := h.Register(context.Background(), regReqHost("edge-a", "10.0.0.1"))
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
 }
 
 // TestRegister_NoWSTokenSecret_WhenUnset 未注入（零值）时注册响应不携带：
@@ -84,22 +85,18 @@ func TestHeartbeat_DeliversWSTokenSecret(t *testing.T) {
 	require.Equal(t, "cp-ws-secret", stream.sent[0].WsTokenSecret)
 }
 
-// TestHeartbeat_NoWSTokenSecret_WhenStreamUnauthenticated 未出示 node-secret 的心跳流
-//（FR-004 旧版兼容路径）不下发 WS 令牌密钥：该路径跳过鉴权，任何能连 CP gRPC 端口的调用方
-// 都能开流，无门槛下发等于把密钥送给陌生人（可据此伪造终端写令牌）。密钥仅对已鉴权
-//（首拍 node_secret 校验通过）的流下发；新版 Worker 心跳恒带 node-secret，功能不受影响。
-func TestHeartbeat_NoWSTokenSecret_WhenStreamUnauthenticated(t *testing.T) {
+// TestHeartbeat_MissingSecretDoesNotDeliverWSTokenSecret 匿名心跳在读取请求前即被拒绝。
+func TestHeartbeat_MissingSecretDoesNotDeliverWSTokenSecret(t *testing.T) {
 	h, db := newHeartbeatHandler(t)
 	h.SetWSTokenSecret("cp-ws-secret")
 	node := seedHeartbeatNode(t, db, model.NodeStatusOffline, time.Now().Add(-time.Minute))
 
-	// 不带 node-secret metadata 的流（匿名/旧版）：仍能心跳（向后兼容），但响应不携带密钥。
+	// 不带 node-secret metadata 的流（匿名/旧版）不得进入心跳处理。
 	stream := newHeartbeatTestStream(context.Background(), &workerpb.HeartbeatRequest{NodeUuid: node.UUID})
 
 	err := h.Heartbeat(stream)
-	require.True(t, errors.Is(err, io.EOF))
-	require.Len(t, stream.sent, 1)
-	require.Empty(t, stream.sent[0].WsTokenSecret)
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
+	require.Empty(t, stream.sent)
 }
 
 // TestHeartbeat_NoWSTokenSecret_WhenUnset 未注入时心跳响应不携带（旧行为零变化）。

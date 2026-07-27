@@ -16,7 +16,6 @@ func TestLoad_Defaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "node-01", cfg.Name)
 	assert.Equal(t, "localhost:9100", cfg.ControlPlane)
-	assert.Equal(t, 9101, cfg.GRPC.Port)
 	assert.Equal(t, 9102, cfg.WS.Port)
 	assert.Empty(t, cfg.EnrollToken, "enroll token 默认空，仅经 env/命令行注入")
 }
@@ -33,12 +32,21 @@ func TestLoad_EnrollTokenFromEnv(t *testing.T) {
 func TestLoad_EnvOverridesDefaults(t *testing.T) {
 	t.Setenv("JIANMANAGER_NODE_NAME", "edge-42")
 	t.Setenv("JIANMANAGER_CONTROL_PLANE_GRPC", "cp.example.com:9100")
-	t.Setenv("JIANMANAGER_GRPC_PORT", "19101")
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
 	require.NoError(t, err)
 	assert.Equal(t, "edge-42", cfg.Name)
 	assert.Equal(t, "cp.example.com:9100", cfg.ControlPlane)
-	assert.Equal(t, 19101, cfg.GRPC.Port)
+}
+
+// TestLoad_IgnoresLegacyGRPCPort 旧 grpc.port 与环境变量仅兼容读取，不能改变 Worker 行为。
+func TestLoad_IgnoresLegacyGRPCPort(t *testing.T) {
+	path := t.TempDir() + "/worker.yml"
+	require.NoError(t, os.WriteFile(path, []byte("grpc:\n  port: 19101\nws:\n  port: 19102\n"), 0o644))
+	t.Setenv("JIANMANAGER_GRPC_PORT", "19103")
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 19102, cfg.WS.Port)
 }
 
 // TestLoad_ControlPlaneEnvAlias 旧键 JIANMANAGER_CONTROL_PLANE 与正式键等价（FR-354）。

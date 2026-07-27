@@ -52,7 +52,7 @@ func (s *Server) ReadFile(ctx context.Context, req *workerpb.ReadFileRequest) (*
 	}
 
 	path := filepath.Join(inst.WorkDir, req.Path)
-	if err := validatePath(inst.WorkDir, path); err != nil {
+	if err := validateNonRootPath(inst.WorkDir, path); err != nil {
 		return nil, err
 	}
 
@@ -77,7 +77,7 @@ func (s *Server) WriteFile(ctx context.Context, req *workerpb.WriteFileRequest) 
 	}
 
 	path := filepath.Join(inst.WorkDir, req.Path)
-	if err := validatePath(inst.WorkDir, path); err != nil {
+	if err := validateNonRootPath(inst.WorkDir, path); err != nil {
 		return nil, err
 	}
 
@@ -101,7 +101,7 @@ func (s *Server) DeleteFile(ctx context.Context, req *workerpb.DeleteFileRequest
 	}
 
 	path := filepath.Join(inst.WorkDir, req.Path)
-	if err := validatePath(inst.WorkDir, path); err != nil {
+	if err := validateNonRootPath(inst.WorkDir, path); err != nil {
 		return nil, err
 	}
 
@@ -121,10 +121,10 @@ func (s *Server) RenameFile(ctx context.Context, req *workerpb.RenameFileRequest
 
 	oldPath := filepath.Join(inst.WorkDir, req.OldPath)
 	newPath := filepath.Join(inst.WorkDir, req.NewPath)
-	if err := validatePath(inst.WorkDir, oldPath); err != nil {
+	if err := validateNonRootPath(inst.WorkDir, oldPath); err != nil {
 		return nil, err
 	}
-	if err := validatePath(inst.WorkDir, newPath); err != nil {
+	if err := validateNonRootPath(inst.WorkDir, newPath); err != nil {
 		return nil, err
 	}
 
@@ -150,5 +150,24 @@ func validatePath(workDir, targetPath string) error {
 		return fmt.Errorf("路径越界: %s 不在工作目录 %s 下", targetPath, workDir)
 	}
 
+	return nil
+}
+
+// validateNonRootPath 拒绝把实例工作目录根当作具体文件操作目标，防止删除等操作扩大到整个实例。
+func validateNonRootPath(workDir, targetPath string) error {
+	if err := validatePath(workDir, targetPath); err != nil {
+		return err
+	}
+	absWork, err := filepath.Abs(workDir)
+	if err != nil {
+		return fmt.Errorf("解析工作目录失败: %w", err)
+	}
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return fmt.Errorf("解析目标路径失败: %w", err)
+	}
+	if absTarget == absWork {
+		return fmt.Errorf("路径不得为工作目录根")
+	}
 	return nil
 }

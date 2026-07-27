@@ -136,6 +136,10 @@ type Services struct {
 // Setup 创建并配置 Gin 路由引擎。
 func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	r := gin.New()
+	// Control Plane 不自行信任反向代理；未显式配置的 X-Forwarded-For 不能伪造限流与审计 IP。
+	if err := r.SetTrustedProxies(nil); err != nil {
+		panic("配置 Gin 受信任代理失败: " + err.Error())
+	}
 	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
 		Skip: func(c *gin.Context) bool {
 			return strings.HasPrefix(c.Request.URL.Path, "/worker-assets/")

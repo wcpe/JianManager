@@ -92,25 +92,17 @@ func buildTerminalWSURL(baseURL, requestHost string, secure bool) string {
 	return fmt.Sprintf("%s://%s/ws/terminal", scheme, requestHost)
 }
 
-// GetWorkerAddr 返回实例所在 Worker 的 WS 地址（供代理直拨回退路径使用）。
-func (s *TerminalService) GetWorkerAddr(instanceUUID string) (string, error) {
-	_, wsURL, err := s.GetWorkerSession(instanceUUID)
-	return wsURL, err
-}
-
-// GetWorkerSession 返回实例所在节点 UUID 与 Worker WS 地址（FR-281 M2）：
-// nodeUUID 供 gRPC TerminalSession 桥路经连接池取客户端（隧道优先/直拨回退），
-// wsURL 供老 Worker 的直拨 WS 回退路径。
-func (s *TerminalService) GetWorkerSession(instanceUUID string) (nodeUUID, wsURL string, err error) {
+// GetWorkerSession 返回实例所在节点 UUID，供 gRPC TerminalSession 隧道桥按节点取客户端。
+func (s *TerminalService) GetWorkerSession(instanceUUID string) (nodeUUID string, err error) {
 	var instance model.Instance
 	if err := s.db.Where("uuid = ?", instanceUUID).First(&instance).Error; err != nil {
-		return "", "", ErrInstanceNotFound
+		return "", ErrInstanceNotFound
 	}
 
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
-		return "", "", ErrNodeNotFound
+		return "", ErrNodeNotFound
 	}
 
-	return node.UUID, fmt.Sprintf("ws://%s:%d/ws/terminal", node.Host, node.WSPort), nil
+	return node.UUID, nil
 }

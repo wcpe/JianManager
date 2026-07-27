@@ -26,9 +26,11 @@ const (
 // 凭证字段（AccessKey/SecretKey）按 .claude/rules/config-files.md 规范以 ${ENV_VAR} 形式存储，
 // 不落明文；下发 Worker 前由 service 从环境变量解析为明文（CP 拥有配置）。参见 ADR-011 对齐。
 type BackupStorage struct {
-	ID   uint              `gorm:"primaryKey" json:"id"`
-	Name string            `gorm:"type:varchar(128);not null;uniqueIndex" json:"name"`
-	Type BackupStorageType `gorm:"type:varchar(32);not null" json:"type"`
+	ID   uint   `gorm:"primaryKey" json:"id"`
+	Name string `gorm:"type:varchar(128);not null" json:"name"`
+	// ActiveNameKey 仅活跃记录保存名称，软删时置 NULL；SQLite/MySQL 均允许唯一索引中的多个 NULL。
+	ActiveNameKey *string           `gorm:"type:varchar(128);uniqueIndex:uniq_backup_storage_active_name_key" json:"-"`
+	Type          BackupStorageType `gorm:"type:varchar(32);not null" json:"type"`
 	// Endpoint S3 endpoint / WebDAV 基地址 / SFTP host[:port]。
 	Endpoint string `gorm:"type:varchar(512)" json:"endpoint"`
 	// Bucket S3 bucket（其余类型忽略）。

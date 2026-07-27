@@ -2,7 +2,7 @@
 //
 // 配置真正落盘到 worker.yml 而非堆砌 JIANMANAGER_* 环境变量（FR-080，见 ADR-020）；
 // 所有项有合理默认，零配置即可启动开发环境。环境变量以 JIANMANAGER_ 前缀按路径覆盖
-// （如 server gRPC 端口 → JIANMANAGER_GRPC_PORT），与 Control Plane 配置惯例一致。
+// （如 Control Plane gRPC 地址 → JIANMANAGER_CONTROL_PLANE_GRPC），与 Control Plane 配置惯例一致。
 package config
 
 import (
@@ -18,11 +18,10 @@ import (
 
 // Config Worker Node 配置。
 type Config struct {
-	Name         string     `mapstructure:"name"`
-	ControlPlane string     `mapstructure:"control_plane"`
-	NodeSecret   string     `mapstructure:"node_secret"`
-	GRPC         GRPCConfig `mapstructure:"grpc"`
-	WS           WSConfig   `mapstructure:"ws"`
+	Name         string   `mapstructure:"name"`
+	ControlPlane string   `mapstructure:"control_plane"`
+	NodeSecret   string   `mapstructure:"node_secret"`
+	WS           WSConfig `mapstructure:"ws"`
 	// DataDir 是项目自包含数据根（默认 ./data，可经 JIANMANAGER_DATA_DIR 覆盖）。
 	// JDK、服务器工作目录等运行态数据统一收口到此根。参见 ADR-010。
 	DataDir string `mapstructure:"data_dir"`
@@ -31,7 +30,7 @@ type Config struct {
 	ServersDir string `mapstructure:"servers_dir"`
 	// Host 注册上报给 CP 的本机地址；留空则自动探测出口 IP（供 CP 反向连接）。
 	Host string `mapstructure:"host"`
-	// JWTSecret WS 终端/插件桥一次性 token 校验密钥；与 CP 共享。
+	// JWTSecret 历史兼容字段；WS 令牌密钥只接受 CP 注册/心跳下发值。
 	JWTSecret string `mapstructure:"jwt_secret"`
 	// EnrollToken 一次性 enrollment token 明文（FR-080，见 ADR-020）。
 	// 仅经环境变量/命令行传入、绝不写入 worker.yml（一次性凭据不留盘）；
@@ -85,11 +84,6 @@ type DecompilerConfig struct {
 	AllowDownload bool `mapstructure:"allow_download"`
 }
 
-// GRPCConfig gRPC 服务器配置。
-type GRPCConfig struct {
-	Port int `mapstructure:"port"`
-}
-
 // WSConfig WebSocket 服务器配置。
 type WSConfig struct {
 	Port int `mapstructure:"port"`
@@ -113,7 +107,6 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("name", "node-01")
 	v.SetDefault("control_plane", "localhost:9100")
 	v.SetDefault("node_secret", "")
-	v.SetDefault("grpc.port", 9101)
 	v.SetDefault("ws.port", 9102)
 	v.SetDefault("data_dir", "")
 	v.SetDefault("servers_dir", "")
@@ -188,7 +181,7 @@ func FindConfigFile(name string, dirs ...string) string {
 }
 
 // WorkerConfigExists 报告工作目录、可执行文件所在目录或 configs/ 下是否存在 worker 配置文件
-//（.yml 优先、.yaml 回退）。供 worker 入口未配置自检使用（FR-222，见 ADR-051）。
+// （.yml 优先、.yaml 回退）。供 worker 入口未配置自检使用（FR-222，见 ADR-051）。
 // 纳入「exe 旁」搜索（FIX-3）：Windows 服务/从别处启动时 cwd 可能非安装目录，配置随二进制仍可被发现。
 func WorkerConfigExists() bool {
 	return FindConfigFile("worker", configSearchDirs()...) != ""

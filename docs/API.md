@@ -303,10 +303,7 @@
 - **错误码**: `404 ENROLL_TOKEN_NOT_FOUND`
 - **审计**: `node.enroll_token.revoke`
 
-> **gRPC `Register` 身份匹配（FR-080 + ADR-039，不改 proto）**: Worker 注册经 gRPC metadata header 携带身份/准入凭据，CP 按三级优先级匹配既有节点（修复重名覆写 BUG-A）——
-> 1. **UUID 证明**：重注册时携带 `node-uuid` + `node-secret`；命中库中节点且 secret 匹配 → 按 UUID 重注册（更新 host/port/os/arch，允许改名），返回既有身份；secret 不符 → `PermissionDenied`，绝不覆写。
-> 2. **同机 host 兼容（过渡）**：未升级旧 Worker 只带 name，name 命中且本次连接 host 与库存一致 → 放行重注册并告警建议升级；host 不一致落到 3。
-> 3. **token 新建**：否则视为新节点，必须带有效 enrollment token（`enroll-token` header，存在+未过期+未消费+未吊销），校验通过原子标记 `used` 并换发全新 `node_uuid`/`node_secret`，失败回 `PermissionDenied`；若上报名与既有节点撞名 → `AlreadyExists` 拒绝（提示改名），绝不覆写。
+> **gRPC `Register` 与 `Heartbeat` 节点身份（ADR-081，不改 proto）**: 重注册必须同时携带 `node-uuid` + `node-secret`；节点不存在回 `NotFound`、缺失或只携带其一回 `Unauthenticated`、secret 不匹配回 `PermissionDenied`。Host 与名称不是身份凭据，同名既有节点不得降级为 Host 匹配重注册。首次注册只能携带有效 `enroll-token`；CP 原子消费后换发全新 `node_uuid`/`node_secret`。Heartbeat 必须携带 `node-secret`，首条负载按 `node_uuid` 校验后绑定整条流；未认证请求不更新任何节点状态或下发数据。
 >
 > Worker 把换发的身份持久化到 `<dataRoot>/etc/node-identity.json`（0600），重启读取并经 metadata 出示，不重复消费一次性 token。
 
@@ -1872,7 +1869,7 @@
   - `keyword`: 仅 `log_keyword` 用且必填；`eventMatch`: 仅 `player_event` 用（`join`/`quit`/`chat`/`cross_server`，空=任意）
   - `channelIds`: 路由的通知通道 ID 列表（空=不外发，仍入事件库 + 站内）
   - `dedupWindowSec`: 去抖聚合窗口；`silenceStart`/`silenceEnd`: 静默窗口（`HH:MM`，支持跨午夜）
-  - `notifyType`/`notifyTarget`: 兼容 FR-011 单 webhook 直发（未配 `channelIds` 时回退）
+  - `notifyType`/`notifyTarget`: 兼容 FR-011 单 webhook 直发（未配 `channelIds` 时回退）；`notifyTarget` 仅接受 `${ENV_VAR}` 引用，创建与列表响应不回显该字段
 - **错误**: `400 INVALID_REQUEST`（非法触发类型/级别）
 
 #### PUT /api/v1/alerts/rules/:id

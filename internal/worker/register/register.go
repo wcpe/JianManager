@@ -37,11 +37,11 @@ type Config struct {
 	ControlPlaneAddr string // Control Plane gRPC 地址
 	NodeName         string // 节点名称
 	WsPort           int    // WebSocket 端口
-	GrpcPort         int    // gRPC 端口（供 Control Plane 反向连接）
+	GrpcPort         int    // 历史兼容字段；Worker 不再监听 gRPC 端口。
 	Host             string // 本机 IP（留空自动检测，优先 127.0.0.1）
 	// EnrollToken enrollment token 明文（FR-080，见 ADR-020）。
 	// 仅新节点首次注册（无本地身份文件）时携带；经 gRPC metadata 传给 CP 校验消费。
-	// 已有本地身份的重注册留空（CP 按 UUID/同机 host 匹配放行，不强制 token）。
+	// 已有本地身份的重注册留空；CP 仅按 UUID 与密钥放行，不消费 token。
 	EnrollToken string
 	// NodeUUID / NodeSecret 本地持久化的节点身份（见 ADR-039）。
 	// 重注册时（已有本地身份文件）填入并经 gRPC metadata 出示，CP 按 UUID 匹配既有节点、

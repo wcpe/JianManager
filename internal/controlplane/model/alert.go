@@ -106,11 +106,11 @@ type AlertRule struct {
 	SilenceStart string `gorm:"type:varchar(8)" json:"silenceStart"`
 	SilenceEnd   string `gorm:"type:varchar(8)" json:"silenceEnd"`
 	// NotifyRecover 恢复时是否发送恢复通知（仅对可恢复的触发类型：metric/instance_crash/node_offline）。
-	NotifyRecover bool `gorm:"default:true" json:"notifyRecover"`
+	NotifyRecover bool `json:"notifyRecover"`
 
 	// NotifyType/NotifyTarget 兼容 FR-011 的单 webhook 直发（未配置 ChannelIDs 时回退）。
 	NotifyType   string `gorm:"type:varchar(32)" json:"notifyType"`
-	NotifyTarget string `gorm:"type:varchar(512)" json:"notifyTarget"`
+	NotifyTarget string `gorm:"type:varchar(512)" json:"-"`
 
 	Enabled   bool           `gorm:"default:true" json:"enabled"`
 	CreatedAt time.Time      `json:"createdAt"`

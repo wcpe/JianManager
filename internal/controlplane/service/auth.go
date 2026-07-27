@@ -8,6 +8,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
@@ -20,6 +21,14 @@ var (
 	ErrUserDisabled       = errors.New("用户已被禁用")
 	ErrAdminAlreadyExists = errors.New("管理员已存在")
 	ErrUserNotFound       = errors.New("用户不存在")
+)
+
+const (
+	// TokenTypeAccess 标识仅可用于访问受保护 API 的 token。
+	TokenTypeAccess = "access"
+	// TokenTypeRefresh 标识仅可用于刷新会话的 token。
+	TokenTypeRefresh = "refresh"
+	authSetupLockKey = "initial-admin"
 )
 
 // AuthService 认证服务。
@@ -48,9 +57,11 @@ type TokenPair struct {
 
 // Claims JWT 声明。
 type Claims struct {
-	UserID   uint           `json:"userId"`
-	Username string         `json:"username"`
-	Role     model.UserRole `json:"role"`
+	UserID      uint           `json:"userId"`
+	Username    string         `json:"username"`
+	Role        model.UserRole `json:"role"`
+	TokenType   string         `json:"tokenType"`
+	AuthVersion uint           `json:"authVersion"`
 	jwt.RegisteredClaims
 }
 
@@ -109,8 +120,8 @@ func (s *AuthService) RefreshToken(refreshToken string) (*TokenPair, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(refreshToken, claims, func(t *jwt.Token) (interface{}, error) {
 		return []byte(s.cfg.Secret), nil
-	})
-	if err != nil || !token.Valid {
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+	if err != nil || !token.Valid || claims.TokenType != TokenTypeRefresh {
 		return nil, ErrInvalidToken
 	}
 
@@ -122,6 +133,9 @@ func (s *AuthService) RefreshToken(refreshToken string) (*TokenPair, error) {
 	if user.Status == model.UserStatusDisabled {
 		return nil, ErrUserDisabled
 	}
+	if user.AuthVersion != claims.AuthVersion {
+		return nil, ErrInvalidToken
+	}
 
 	return s.generateTokenPair(&user)
 }
@@ -132,9 +146,11 @@ func (s *AuthService) generateTokenPair(user *model.User) (*TokenPair, error) {
 
 	// Access Token
 	accessClaims := &Claims{
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
+		UserID:      user.ID,
+		Username:    user.Username,
+		Role:        user.Role,
+		TokenType:   TokenTypeAccess,
+		AuthVersion: user.AuthVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.cfg.AccessTTL)),
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -148,7 +164,9 @@ func (s *AuthService) generateTokenPair(user *model.User) (*TokenPair, error) {
 
 	// Refresh Token
 	refreshClaims := &Claims{
-		UserID: user.ID,
+		UserID:      user.ID,
+		TokenType:   TokenTypeRefresh,
+		AuthVersion: user.AuthVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(now.Add(s.cfg.RefreshTTL)),
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -178,15 +196,6 @@ func (s *AuthService) SetupRequired() (bool, error) {
 
 // SetupAdmin 创建初始管理员并返回 Token。仅当无管理员时可用。
 func (s *AuthService) SetupAdmin(username, password string) (*TokenPair, error) {
-	// 幂等检查：管理员已存在则拒绝
-	var count int64
-	if err := s.db.Model(&model.User{}).Where("role = ?", model.RolePlatformAdmin).Count(&count).Error; err != nil {
-		return nil, fmt.Errorf("查询管理员数量失败: %w", err)
-	}
-	if count > 0 {
-		return nil, ErrAdminAlreadyExists
-	}
-
 	hashed, err := bcrypt.GenerateFromPassword([]byte(password), s.passwordCost)
 	if err != nil {
 		return nil, fmt.Errorf("加密密码失败: %w", err)
@@ -199,8 +208,27 @@ func (s *AuthService) SetupAdmin(username, password string) (*TokenPair, error) 
 		Status:   model.UserStatusActive,
 	}
 
-	if err := s.db.Create(user).Error; err != nil {
-		return nil, fmt.Errorf("创建管理员失败: %w", err)
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&model.User{}).Where("role = ?", model.RolePlatformAdmin).Count(&count).Error; err != nil {
+			return fmt.Errorf("查询管理员数量失败: %w", err)
+		}
+		if count > 0 {
+			return ErrAdminAlreadyExists
+		}
+		lockResult := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&model.AuthSetupLock{Key: authSetupLockKey})
+		if lockResult.Error != nil {
+			return fmt.Errorf("获取初始化锁失败: %w", lockResult.Error)
+		}
+		if lockResult.RowsAffected == 0 {
+			return ErrAdminAlreadyExists
+		}
+		if err := tx.Create(user).Error; err != nil {
+			return fmt.Errorf("创建管理员失败: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return s.generateTokenPair(user)

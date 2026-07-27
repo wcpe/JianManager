@@ -43,8 +43,7 @@ setup 先探测标准输入是否为 TTY（`golang.org/x/term.IsTerminal(int(os.
 | Control Plane gRPC 地址 | 是 | `localhost:9100` | host:port |
 | Enrollment token | 是 | 无 | 面板「添加节点」生成的 `jmet_...`；空则重问（必填） |
 | 节点名 | 否 | 空（CP 据上报名/预设名生效） | 留空交由 CP/token 预设名 |
-| gRPC 端口 | 否 | `9101` | 供 CP 反向连接 |
-| WS 端口 | 否 | `9102` | 浏览器终端 |
+| WS 端口 | 否 | `9102` | 本机终端回环桥与本机探针 |
 | data_dir | 否 | 空（即 `./data`） | 数据根 |
 
 - token 必填：空输入则提示并重问（不静默用空 token 注册）。
@@ -60,7 +59,6 @@ setup 先探测标准输入是否为 TTY（`golang.org/x/term.IsTerminal(int(os.
 | CP gRPC 地址 | `--control-plane <addr>` | `JIANMANAGER_CONTROL_PLANE` / `JIANMANAGER_CONTROL_PLANE_GRPC` | 是 |
 | Enrollment token | `--token <jmet_...>` | `JIANMANAGER_ENROLL_TOKEN` | 是 |
 | 节点名 | `--name <node>` | `JIANMANAGER_NODE_NAME` | 否 |
-| gRPC 端口 | `--grpc-port <p>` | `JIANMANAGER_GRPC_PORT` | 否（默认 9101） |
 | WS 端口 | `--ws-port <p>` | `JIANMANAGER_WS_PORT` | 否（默认 9102） |
 | data_dir | `--data-dir <dir>` | `JIANMANAGER_DATA_DIR` | 否（默认 `./data`） |
 
@@ -80,8 +78,6 @@ setup 先探测标准输入是否为 TTY（`golang.org/x/term.IsTerminal(int(os.
    name: <节点名 或 node-<hostname>>
    control_plane: <cp-grpc>
    data_dir: <data-dir，仅当显式给出>
-   grpc:
-     port: <grpc-port>
    ws:
      port: <ws-port>
    log:
@@ -97,7 +93,7 @@ setup 先探测标准输入是否为 TTY（`golang.org/x/term.IsTerminal(int(os.
 
 3. **持久化身份**：把换得的 `node_uuid`/`node_secret`/`node_name` 写 `<data-dir>/etc/node-identity.json`（复用 `register.SaveIdentity`，0600 原子写，含敏感 secret 不入日志）。
 
-4. **转入正常 run**：setup 不退出进程，而是把采集到的配置交给既有 run 主体继续（启动 gRPC/WS 服务、心跳等）。实现上 setup 直接复用刚写出的配置在内存中构造 `*config.Config`（避免「写文件再重读」的竞态与多余 IO），并把首注册结果（身份）交给 run 主体，run 主体识别「身份已由 setup 持久化」则跳过重复注册，直接以该身份起心跳与服务。
+4. **转入正常 run**：setup 不退出进程，而是把采集到的配置交给既有 run 主体继续（启动 WS 服务、心跳与反向隧道）。实现上 setup 直接复用刚写出的配置在内存中构造 `*config.Config`（避免「写文件再重读」的竞态与多余 IO），并把首注册结果（身份）交给 run 主体，run 主体识别「身份已由 setup 持久化」则跳过重复注册，直接以该身份起心跳与服务。
 
 > **架构不变量守恒**：注册唯一走 gRPC（ADR-002）；token 不落 `worker.yml`（ADR-020）；Worker 不直连 DB（注册/身份均经 gRPC + 本地文件）；身份文件 0600（ADR-020 §3）。
 
@@ -116,7 +112,7 @@ setup 先探测标准输入是否为 TTY（`golang.org/x/term.IsTerminal(int(os.
 ```
 worker [配置文件路径]                # 既有：显式配置文件 → 直接 run
 worker                               # 未配置 → 自动 setup（TTY 交互 / 无 TTY 报错指引）
-worker --control-plane <addr> --token <jmet_...> [--name N] [--grpc-port P] [--ws-port P] [--data-dir D]
+worker --control-plane <addr> --token <jmet_...> [--name N] [--ws-port P] [--data-dir D]
                                      # 未配置 + 无 TTY（或显式带 flag）→ setup 用这些入参，不交互
 worker daemon                        # 既有：daemon wrapper 子进程（不变）
 ```
@@ -126,7 +122,6 @@ worker daemon                        # 既有：daemon wrapper 子进程（不�
 | `--control-plane` | string | `localhost:9100` | `JIANMANAGER_CONTROL_PLANE(_GRPC)` | CP gRPC 地址（setup 必填） |
 | `--token` | string | 无 | `JIANMANAGER_ENROLL_TOKEN` | enrollment token（setup 必填，不落盘） |
 | `--name` | string | 空 | `JIANMANAGER_NODE_NAME` | 节点名（可空） |
-| `--grpc-port` | int | `9101` | `JIANMANAGER_GRPC_PORT` | gRPC 端口 |
 | `--ws-port` | int | `9102` | `JIANMANAGER_WS_PORT` | WS 端口 |
 | `--data-dir` | string | 空（`./data`） | `JIANMANAGER_DATA_DIR` | 数据根 |
 
@@ -139,7 +134,6 @@ worker daemon                        # 既有：daemon wrapper 子进程（不�
 | `name` | `--name` 或 `node-<hostname>` | 节点名 |
 | `control_plane` | `--control-plane` | CP gRPC host:port |
 | `data_dir` | `--data-dir`（显式时） | 数据根；缺省不写（= `./data`） |
-| `grpc.port` | `--grpc-port` | gRPC 端口 |
 | `ws.port` | `--ws-port` | WS 端口 |
 | `log.level` / `log.format` | 固定 `info` / `json` | 日志 |
 
@@ -151,8 +145,8 @@ worker daemon                        # 既有：daemon wrapper 子进程（不�
 
 - [ ] **AC1 未配置自检进 setup**：模拟全新机器（删 `worker.yml`/`worker.yaml` + 无 `<data-dir>/etc/node-identity.json`）→ 跑 `worker` → 进入 setup（TTY 交互 / 无 TTY 读参数）。
 - [ ] **AC2 交互式采集**：有 TTY 时逐项提示 CP/token/name（+ 可选端口/data_dir），给默认值，回车接受默认，token 空则重问。
-- [ ] **AC3 无人值守**：无 TTY 时从 `--control-plane`/`--token`/`--name`/`--grpc-port`/`--ws-port`/`--data-dir` + `JIANMANAGER_*` env 读；缺 CP 地址或 token → 明确报错退出（不卡住等输入）。
-- [ ] **AC4 写 worker.yml**：setup 写出 `worker.yml`，字段（name/control_plane/grpc.port/ws.port/log）正确；**enrollment token 不在文件中**；data_dir 仅显式给出时写。
+- [ ] **AC3 无人值守**：无 TTY 时从 `--control-plane`/`--token`/`--name`/`--ws-port`/`--data-dir` + `JIANMANAGER_*` env 读；缺 CP 地址或 token → 明确报错退出（不卡住等输入）。
+- [ ] **AC4 写 worker.yml**：setup 写出 `worker.yml`，字段（name/control_plane/ws.port/log）正确；**enrollment token 不在文件中**；data_dir 仅显式给出时写。
 - [ ] **AC5 注册 + 持久化身份**：setup 携 token 经 gRPC 首注册成功，换得 `node_uuid`/`node_secret` 写 `<data-dir>/etc/node-identity.json`（0600）。
 - [ ] **AC6 转 run + 上线**：setup 后转入正常 run，节点在面板显示在线（不重复消费 token、不二次注册）。
 - [ ] **AC7 已配置直接 run**：有 `worker.yml` 或有 `node-identity.json` 的节点 → 跳过 setup，直接 run（现状不变，零行为变化）。

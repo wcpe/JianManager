@@ -222,6 +222,31 @@ func TestFR397_PathTraversalRejected(t *testing.T) {
 	}
 }
 
+func TestFR397_RequiredPathRejectsWorkDirRoot(t *testing.T) {
+	deps, p, instID := setupContentToolsDeps(t)
+	for _, path := range []string{"", ".", "./", ".\\"} {
+		res := CallTool(context.Background(), deps, p, "file_read_text", map[string]any{
+			"id": float64(instID), "path": path,
+		})
+		require.True(t, res.IsError, "路径 %q 必须拒绝", path)
+		assert.Contains(t, res.Content[0].Text, "工作目录根")
+	}
+	res := CallTool(context.Background(), deps, p, "file_rename", map[string]any{
+		"id": float64(instID), "oldPath": ".", "newPath": "next",
+	})
+	require.True(t, res.IsError)
+	assert.Contains(t, res.Content[0].Text, "工作目录根")
+}
+
+func TestFR397_ConfigToolsRejectNonConfigPath(t *testing.T) {
+	deps, p, instID := setupContentToolsDeps(t)
+	res := CallTool(context.Background(), deps, p, "config_read", map[string]any{
+		"id": float64(instID), "path": "plugins/unsafe.jar",
+	})
+	require.True(t, res.IsError)
+	assert.Contains(t, res.Content[0].Text, "配置文件")
+}
+
 func TestFR397_ScopeOutsideConverges(t *testing.T) {
 	deps, p, instID := setupContentToolsDeps(t)
 	res := CallTool(context.Background(), deps, p, "file_list", map[string]any{

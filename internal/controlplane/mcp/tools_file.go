@@ -159,7 +159,12 @@ func resolveInstancePath(deps ToolDeps, p *service.AgentPrincipal, action string
 		res := toolErr(err.Error())
 		return 0, "", &res
 	}
-	if path != "" {
+	if pathRequired {
+		if verr := service.ValidateNonRootInstancePath(path); verr != nil {
+			res := toolErr(verr.Error())
+			return 0, "", &res
+		}
+	} else if path != "" {
 		if verr := service.ValidateInstancePath(path); verr != nil {
 			res := toolErr(verr.Error())
 			return 0, "", &res
@@ -254,7 +259,7 @@ func callFileRename(deps ToolDeps, p *service.AgentPrincipal, action string, arg
 		return toolErr(err.Error())
 	}
 	for _, path := range []string{oldPath, newPath} {
-		if verr := service.ValidateInstancePath(path); verr != nil {
+		if verr := service.ValidateNonRootInstancePath(path); verr != nil {
 			return toolErr(verr.Error())
 		}
 	}
@@ -387,10 +392,10 @@ func callFileIssueTransferTicket(deps ToolDeps, p *service.AgentPrincipal, actio
 		return toolForbidden(ierr)
 	}
 	return toolOK(map[string]any{
-		"ticket":    ticket,
-		"direction": direction,
-		"path":      path,
-		"expiresAt": expiresAt,
+		"ticket":           ticket,
+		"direction":        direction,
+		"path":             path,
+		"expiresAt":        expiresAt,
 		"uploadEndpoint":   "PUT /api/v1/agent-transfer/upload?ticket=<ticket>",
 		"downloadEndpoint": "GET /api/v1/agent-transfer/download?ticket=<ticket>",
 	})

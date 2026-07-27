@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 )
@@ -24,8 +25,16 @@ type ClientDistGuardChecker interface {
 func ClientDistGuard(guard ClientDistGuardChecker, ratePerSecond, burst, maxConcurrent int) gin.HandlerFunc {
 	limiter := NewRateLimiter(ratePerSecond, burst)
 	var sem chan struct{}
+	var concurrentByIP map[string]int
+	var concurrentMu sync.Mutex
+	perIPConcurrent := 0
 	if maxConcurrent > 0 {
 		sem = make(chan struct{}, maxConcurrent)
+		concurrentByIP = make(map[string]int)
+		perIPConcurrent = maxConcurrent / 8
+		if perIPConcurrent < 1 {
+			perIPConcurrent = 1
+		}
 	}
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
@@ -48,18 +57,43 @@ func ClientDistGuard(guard ClientDistGuardChecker, ratePerSecond, burst, maxConc
 
 		// 3. 全局并发信号量。
 		if sem != nil {
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			default:
+			if !acquireClientDistSlot(sem, concurrentByIP, &concurrentMu, ip, perIPConcurrent) {
 				if guard != nil {
 					guard.MarkConcurrency()
 				}
 				c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "BUSY", "message": "服务繁忙，请稍后再试"})
 				return
 			}
+			defer releaseClientDistSlot(sem, concurrentByIP, &concurrentMu, ip)
 		}
 
 		c.Next()
 	}
+}
+
+// acquireClientDistSlot 让单一来源最多占用八分之一并发槽，避免其耗尽全局 BUSY 容量。
+func acquireClientDistSlot(sem chan struct{}, byIP map[string]int, mu *sync.Mutex, ip string, perIPLimit int) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if byIP[ip] >= perIPLimit {
+		return false
+	}
+	select {
+	case sem <- struct{}{}:
+		byIP[ip]++
+		return true
+	default:
+		return false
+	}
+}
+
+// releaseClientDistSlot 在请求结束时释放来源并发计数，空来源立即删掉以保持映射有界。
+func releaseClientDistSlot(sem chan struct{}, byIP map[string]int, mu *sync.Mutex, ip string) {
+	mu.Lock()
+	defer mu.Unlock()
+	byIP[ip]--
+	if byIP[ip] == 0 {
+		delete(byIP, ip)
+	}
+	<-sem
 }

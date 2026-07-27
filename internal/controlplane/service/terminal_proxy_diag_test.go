@@ -2,7 +2,6 @@
 package service
 
 import (
-	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -10,7 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	workerws "github.com/wcpe/JianManager/internal/worker/ws"
+	wgrpc "github.com/wcpe/JianManager/internal/worker/grpc"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // readFirstProxyMessage 从代理浏览器侧连接读取首条 JSON 消息（2s 超时）。
@@ -28,15 +28,13 @@ func readFirstProxyMessage(t *testing.T, wsURL, token string) map[string]any {
 // 浏览器收到 code=WORKER_TOKEN_REJECTED 的定向诊断，而非裸「连接已断开」。
 func TestTerminalProxy_WorkerTokenRejected_Diagnostic(t *testing.T) {
 	// 「Worker」侧用另一把密钥 → CP 签的终端 token 在 Worker 侧 401。
-	workerServer := workerws.NewTerminalServer("worker-side-DIFFERENT-secret")
-	workerMux := http.NewServeMux()
-	workerMux.HandleFunc("/ws/terminal", workerServer.Handler())
-	workerHTTP := httptest.NewServer(workerMux)
-	defer workerHTTP.Close()
-
-	db, instanceID := newTerminalTestDB(t, workerHTTP.URL)
+	db, instanceID := newTerminalTestDB(t, startWorkerTerminalWS(t, "worker-side-DIFFERENT-secret"))
 	svc := NewTerminalService(db, "cp-ws-secret", "ws://fallback.invalid")
 	proxy := NewTerminalProxy("cp-ws-secret", svc)
+	wsrv := &wgrpc.Server{}
+	wsrv.SetTerminalWSAddr(startWorkerTerminalWS(t, "worker-side-DIFFERENT-secret"))
+	client := startTerminalWorkerGRPC(t, wsrv)
+	proxy.SetWorkerClients(func(string) (workerpb.WorkerServiceClient, bool) { return client, true })
 	cpHTTP := httptest.NewServer(proxy.Handler())
 	defer cpHTTP.Close()
 
@@ -50,15 +48,9 @@ func TestTerminalProxy_WorkerTokenRejected_Diagnostic(t *testing.T) {
 	assert.Contains(t, msg["data"], "WS 令牌密钥与平台不一致", "诊断文案应点明根因")
 }
 
-// TestTerminalProxy_NetworkFailure_GenericError 网络类失败（端口不可达）→ 一般错误、无诊断码：
-// 与「Worker 拒绝令牌」可区分，避免把断网误报成密钥问题。
-func TestTerminalProxy_NetworkFailure_GenericError(t *testing.T) {
-	// 起一个服务器拿到未占用端口后立即关闭 → 后续连接必然拒绝（网络类失败）。
-	dead := httptest.NewServer(http.NotFoundHandler())
-	deadURL := dead.URL
-	dead.Close()
-
-	db, instanceID := newTerminalTestDB(t, deadURL)
+// TestTerminalProxy_TunnelUnavailable_GenericError 没有活跃隧道时返回一般错误且保留令牌重试机会。
+func TestTerminalProxy_TunnelUnavailable_GenericError(t *testing.T) {
+	db, instanceID := newTerminalTestDB(t, "http://127.0.0.1:1")
 	svc := NewTerminalService(db, "cp-ws-secret", "ws://fallback.invalid")
 	proxy := NewTerminalProxy("cp-ws-secret", svc)
 	cpHTTP := httptest.NewServer(proxy.Handler())
@@ -71,5 +63,5 @@ func TestTerminalProxy_NetworkFailure_GenericError(t *testing.T) {
 	assert.Equal(t, "error", msg["state"])
 	_, hasCode := msg["code"]
 	assert.False(t, hasCode, "网络类失败不应携带 WORKER_TOKEN_REJECTED 诊断码")
-	assert.Contains(t, msg["data"], "连接 Worker 失败")
+	assert.Contains(t, msg["data"], "反向隧道不可用")
 }

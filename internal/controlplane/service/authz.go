@@ -57,6 +57,7 @@ const (
 type UserAccess struct {
 	UserID            uint
 	Role              model.UserRole
+	AuthVersion       uint
 	IsPlatformAdmin   bool
 	AdminGroupIDs     map[uint]struct{} // 以组管理员身份管理的组 ID 集合
 	MemberGroupIDs    map[uint]struct{} // 以普通成员身份所属的组 ID 集合
@@ -83,10 +84,14 @@ func (s *AuthzService) LoadUserAccess(userID uint) (*UserAccess, error) {
 		}
 		return nil, fmt.Errorf("查询用户失败: %w", err)
 	}
+	if user.Status != model.UserStatusActive {
+		return nil, ErrUserDisabled
+	}
 
 	access := &UserAccess{
 		UserID:           user.ID,
 		Role:             user.Role,
+		AuthVersion:      user.AuthVersion,
 		IsPlatformAdmin:  user.Role == model.RolePlatformAdmin,
 		AdminGroupIDs:    map[uint]struct{}{},
 		MemberGroupIDs:   map[uint]struct{}{},

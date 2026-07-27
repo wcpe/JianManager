@@ -24,14 +24,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
-    ports:
-      - "9101:9101"   # gRPC（直拨回退）
-      - "9102:9102"   # WS（本机探针/直拨回退）
     environment:
       # 线上/本地 compose 唯一 main Worker 节点名
       - JIANMANAGER_NODE_NAME=main
       - JIANMANAGER_CONTROL_PLANE_GRPC=control-plane:9100
-      - JIANMANAGER_GRPC_PORT=9101
       - JIANMANAGER_WS_PORT=9102
       - JIANMANAGER_DATA_DIR=/app/data
       - JIANMANAGER_ENROLL_TOKEN=${JIANMANAGER_ENROLL_TOKEN:-}

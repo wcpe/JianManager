@@ -68,23 +68,23 @@
 - Worker 注册时在 metadata 携带 `enroll-token`（首次安装时）。
 - CP `Register` 分叉：
   - **新节点**（`name` 在 `nodes` 表未命中）：**必须**带有效 enrollment token（存在 + 未过期 + 未消费 + 未吊销）。校验通过 → 创建节点 + 原子标记 token `used`（记 `used_by_node`）→ 返回 `node_uuid`/`node_secret`。校验失败 → `PermissionDenied`（Worker 据此明确报错退出，不重试）。
-  - **老节点**（`name` 命中）：重注册不强制 token（既有节点重启不掉线，ADR-020 §1）。
+  - **既有节点**：必须同时携带持久化的 `node_uuid`/`node_secret` 重注册；名称不是身份依据（ADR-081）。
 - 心跳鉴权（`node_secret` 经 metadata）完全不变。
 
 ## Worker 侧行为（部署/启动）
 
 - 启动入参优先级：本地身份文件 `<dataRoot>/etc/node-identity.json`（有则复用 `node_uuid`/`node_secret`，走重注册）> enroll token（`--enroll-token` / `JIANMANAGER_ENROLL_TOKEN`，无身份文件时首注册必需）。
-- 配置加载：真正加载 `worker.yaml`（CP gRPC 地址 / grpc·ws 端口 / data_dir / 日志），env 仍可覆盖（`JIANMANAGER_*`）。
+- 配置加载：真正加载 `worker.yml`/`worker.yaml`（CP gRPC 地址 / WS 端口 / data_dir / 日志），env 仍可覆盖（`JIANMANAGER_*`）；旧 `grpc.port` 读取时静默忽略。
 - 注册成功后把 `node_uuid`/`node_secret` 持久化到 `etc/node-identity.json`（0600），重启复用、不重复消费 token。
 
 ## 安装脚本
 
 | 文件 | 平台 | 说明 |
 |---|---|---|
-| `scripts/install-worker.sh` | Linux/macOS | 探测 os/arch → 下载或用 `--binary` 本地二进制 → 写 `worker.yaml` → 启动注册 → 可选 `--service` 装 systemd |
+| `scripts/install-worker.sh` | Linux/macOS | 探测 os/arch → 下载或用 `--binary` 本地二进制 → 调 Worker setup 写 `worker.yml`、注册 → 可选 `--service` 装 systemd |
 | `scripts/install-worker.ps1` | Windows | 同上，可选装 Windows service（`New-Service`/`sc.exe`） |
 
-脚本参数（两端对齐）：`--control-plane <grpc-addr>`（必填）、`--token <jmet_...>`（必填）、`--name <node>`（可选）、`--binary <path>`（可选，离线/内网）、`--download-url <url>`（可选）、`--install-dir <dir>`（可选）、`--data-dir <dir>`（可选）、`--ws-port`/`--grpc-port`（可选）、`--service`（可选，装系统服务）。
+脚本参数（两端对齐）：`--control-plane <grpc-addr>`（必填）、`--token <jmet_...>`（必填）、`--name <node>`（可选）、`--binary <path>`（可选，离线/内网）、`--download-url <url>`（可选）、`--install-dir <dir>`（可选）、`--data-dir <dir>`（可选）、`--ws-port`（可选）、`--service`（可选，装系统服务）。
 
-- 脚本幂等：重复执行覆盖配置、重启服务，不重复消费已用 token（Worker 侧靠身份文件保证）。
+- 脚本幂等：重复执行复用既有 Worker 配置与身份、重启服务，不重复消费已用 token（Worker 侧靠身份文件保证）。
 - enrollment token **不写入 `worker.yaml`**，仅经环境变量/命令行传给首次启动。

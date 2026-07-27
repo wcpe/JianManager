@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -196,10 +195,9 @@ func runWorker() {
 	}
 
 	nodeName := cfg.Name
-	grpcPort := cfg.GRPC.Port
 	wsPort := cfg.WS.Port
 	host := cfg.Host // 留空自动检测本机 IP
-	jwtSecret := cfg.JWTSecret
+	wsTokenSecret := ""
 
 	// 节点 UUID 在首次注册后由 CP 签发并落本地身份文件复用（FR-080）；启动时先占位。
 	nodeUUID := "local-dev"
@@ -226,7 +224,7 @@ func runWorker() {
 		localIdentity = setupResult.Identity
 	}
 	if localIdentity != nil && localIdentity.WSTokenSecret != "" {
-		jwtSecret = localIdentity.WSTokenSecret
+		wsTokenSecret = localIdentity.WSTokenSecret
 	}
 
 	// 服务器工作目录根：默认数据根下 var/servers；配置 servers_dir 显式覆盖（兼容旧部署）。
@@ -235,7 +233,7 @@ func runWorker() {
 		serversDir = cfg.ServersDir
 	}
 
-	slog.Info("Worker Node 启动", "name", nodeName, "grpcPort", grpcPort, "wsPort", wsPort, "dataDir", root.Base(), "serversDir", serversDir)
+	slog.Info("Worker Node 启动", "name", nodeName, "wsPort", wsPort, "dataDir", root.Base(), "serversDir", serversDir)
 	// 初始化进程管理器
 	manager := process.NewManager(serversDir)
 	// 启动内存闸（FR-317）：可用内存塞不下待启实例即拒绝启动，防节点 OOM 失联。
@@ -284,8 +282,6 @@ func runWorker() {
 	})
 	defer collector.Stop()
 
-	// 启动 gRPC 服务器
-	grpcServer := grpc.NewServer(wgrpc.ServerOptions()...)
 	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr, root)
 	// Worker 升级二进制下载与服务端 jar 下载经进程级出站持有者（FR-174/FR-185）：
 	// CP 下发代理改动运行时即时生效。
@@ -379,24 +375,8 @@ func runWorker() {
 	// 令牌校验/会话层单一真源仍是 ws.TerminalServer。
 	workerServer.SetTerminalWSAddr(fmt.Sprintf("ws://127.0.0.1:%d/ws/terminal", wsPort))
 
-	workerpb.RegisterWorkerServiceServer(grpcServer, workerServer)
-
-	grpcAddr := fmt.Sprintf(":%d", grpcPort)
-	grpcListener, err := net.Listen("tcp", grpcAddr)
-	if err != nil {
-		slog.Error("监听 gRPC 端口失败", "addr", grpcAddr, "error", err)
-		os.Exit(1)
-	}
-
-	go func() {
-		slog.Info("gRPC 服务器就绪", "addr", grpcAddr)
-		if err := grpcServer.Serve(grpcListener); err != nil {
-			slog.Error("gRPC 服务器退出", "error", err)
-		}
-	}()
-
-	// 启动 WS 终端服务器
-	terminalServer := ws.NewTerminalServer(jwtSecret)
+	// WS 服务在节点完成注册并取得非空专用密钥后才监听，避免以空密钥暴露入口。
+	terminalServer := ws.NewTerminalServer(wsTokenSecret)
 
 	// 桥接进程输出：一份给 WebSocket 终端（交互），一份给 StreamInstanceEvents 事件流（CP 采集落库，FR-049）。
 	// 两条路径相互独立，从同一份进程输出分流，互不阻塞。
@@ -414,23 +394,16 @@ func runWorker() {
 	})
 
 	// 插件桥服务端（ServerProbe 反向 WS，FR-065，见 ADR-016）：与终端 WS 并列、同一监听端口。
-	// 探针主动连入 /ws/plugin-bridge，事件经 gRPC StreamPluginEvents 冒泡到 CP；token 校验复用 JWT secret。
-	pluginBridge := ws.NewPluginBridgeServer(jwtSecret)
+	// 探针主动连入 /ws/plugin-bridge，事件经 gRPC StreamPluginEvents 冒泡到 CP；token 校验使用 CP 下发的专用 WS 密钥。
+	pluginBridge := ws.NewPluginBridgeServer(wsTokenSecret)
 	workerServer.SetPluginBridge(pluginBridge)
 
 	wsMux := http.NewServeMux()
 	wsMux.HandleFunc("/ws/terminal", terminalServer.Handler())
 	wsMux.HandleFunc("/ws/plugin-bridge", pluginBridge.Handler())
 
-	wsAddr := fmt.Sprintf(":%d", wsPort)
+	wsAddr := localWSAddr(wsPort)
 	wsServer := &http.Server{Addr: wsAddr, Handler: wsMux}
-
-	go func() {
-		slog.Info("WebSocket 终端服务器就绪", "addr", wsAddr)
-		if err := wsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("WS 服务器退出", "error", err)
-		}
-	}()
 
 	// 注册到 Control Plane（FR-080，见 ADR-020）。
 	// Control Plane 未启动时 Worker 不退出，按指数退避重试直到注册成功。
@@ -478,7 +451,7 @@ func runWorker() {
 			ControlPlaneAddr: cpAddr,
 			NodeName:         nodeName,
 			WsPort:           wsPort,
-			GrpcPort:         grpcPort,
+			GrpcPort:         0,
 			Host:             host,
 		}
 		if identity != nil {
@@ -557,14 +530,24 @@ func runWorker() {
 		}
 	}
 
-	// CP 下发的 WS 令牌密钥热应用（FR-275，见 ADR-061）：注册响应非空即应用到终端/插件桥
-	//（幂等；与启动初值相同等效无操作）。旧 CP 响应为空 → 沿用启动初值（本地配置），行为不变。
-	currentWSSecret := jwtSecret
+	// CP 下发的 WS 令牌密钥热应用（FR-275，见 ADR-061）：注册响应非空即应用到终端/插件桥。
+	// 旧 CP 未下发密钥时仅可使用此前由 CP 持久化的密钥，绝不回退 worker.yml 的 jwt_secret。
+	currentWSSecret := wsTokenSecret
 	if regResult.WSTokenSecret != "" {
 		terminalServer.SetJWTSecret(regResult.WSTokenSecret)
 		pluginBridge.SetJWTSecret(regResult.WSTokenSecret)
 		currentWSSecret = regResult.WSTokenSecret
 	}
+	if currentWSSecret == "" {
+		slog.Error("Control Plane 未下发 WS 令牌密钥，拒绝启动 WS 服务")
+		os.Exit(1)
+	}
+	go func() {
+		slog.Info("WebSocket 服务器就绪", "addr", wsAddr)
+		if err := wsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("WS 服务器退出", "error", err)
+		}
+	}()
 
 	// 启动心跳上报（携带注册获得的 node_secret 供 Control Plane 鉴权）
 	hb := heartbeat.New(cpAddr, nodeUUID, regResult.NodeSecret, 30*time.Second, manager)
@@ -594,8 +577,7 @@ func runWorker() {
 	hb.Start()
 	defer hb.Stop()
 
-	// 常驻反向隧道（FR-281，见 ADR-066）：把同一 workerServer 实现挂到隧道上，
-	// CP 指令经隧道下发——worker 零入站端口要求（NAT/内网可接入），9101 保留作直拨回退。
+	// 常驻反向隧道：把同一 workerServer 实现挂到隧道上，Worker 不监听 CP 直拨 gRPC 端口。
 	tunnelRunner := tunnel.New(cpAddr, nodeUUID, regResult.NodeSecret, func(reg grpc.ServiceRegistrar) {
 		workerpb.RegisterWorkerServiceServer(reg, workerServer)
 	})
@@ -608,20 +590,16 @@ func runWorker() {
 	sig := <-sigCh
 
 	slog.Info("收到退出信号，正在关闭", "signal", sig)
-	// GracefulStop 会阻塞至所有活跃 RPC 收敛，但终端会话 / 反向隧道 / 日志流是长连接、永不自然
-	// 结束，会无界挂起至 systemd TimeoutStopSec(默认 90s) 才 SIGKILL，进而拖延甚至跳过 StopAll 的
-	// daemon 优雅断开（FR-341 K3）。故设 5s 上限，超时强制 Stop() 关活跃连接，确保迅速退出。
-	graceStopped := make(chan struct{})
-	go func() {
-		grpcServer.GracefulStop()
-		close(graceStopped)
-	}()
-	select {
-	case <-graceStopped:
-	case <-time.After(5 * time.Second):
-		slog.Warn("gRPC 优雅停机超时，强制关闭活跃连接")
-		grpcServer.Stop()
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelShutdown()
+	if err := wsServer.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("WS 服务关闭超时", "error", err)
 	}
 	manager.StopAll()
 	slog.Info("Worker Node 已停止")
+}
+
+// localWSAddr 返回仅供本机终端回环桥与本机探针使用的 WebSocket 监听地址。
+func localWSAddr(port int) string {
+	return fmt.Sprintf("127.0.0.1:%d", port)
 }

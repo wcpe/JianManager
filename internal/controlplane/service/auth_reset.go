@@ -30,8 +30,9 @@ func ResetUserPassword(db *gorm.DB, username, plain string) (*model.User, error)
 	}
 
 	if err := db.Model(&user).Updates(map[string]any{
-		"password": string(hashed),
-		"status":   model.UserStatusActive,
+		"password":     string(hashed),
+		"status":       model.UserStatusActive,
+		"auth_version": gorm.Expr("auth_version + ?", 1),
 	}).Error; err != nil {
 		return nil, fmt.Errorf("更新密码失败: %w", err)
 	}

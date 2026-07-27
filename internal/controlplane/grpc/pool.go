@@ -1,21 +1,17 @@
 package grpc
 
 import (
-	"fmt"
-	"log/slog"
 	"sync"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/wcpe/JianManager/internal/platform/grpcmsg"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // Client gRPC 客户端封装。
 type Client struct {
-	Conn   *grpc.ClientConn
-	Worker workerpb.WorkerServiceClient
+	Conn     *grpc.ClientConn
+	Worker   workerpb.WorkerServiceClient
 	NodeUUID string
 }
 
@@ -25,52 +21,23 @@ type TunnelProvider interface {
 	Channel(nodeUUID string) (grpc.ClientConnInterface, bool)
 }
 
+// TunnelNodeProvider 提供当前存在活跃隧道的节点列表。
+type TunnelNodeProvider interface {
+	ConnectedNodes() []string
+}
+
 // ClientPool 管理到多个 Worker Node 的 gRPC 连接。
 type ClientPool struct {
-	mu      sync.RWMutex
-	clients map[string]*Client // nodeUUID → Client
-	tunnels TunnelProvider     // 反向隧道来源；nil 表示未启用（纯直拨）
+	mu          sync.RWMutex
+	testClients map[string]*Client // 仅供单元测试注入，不创建网络连接
+	tunnels     TunnelProvider     // 唯一的生产节点 RPC 承载
 }
 
 // NewClientPool 创建客户端连接池。
 func NewClientPool() *ClientPool {
 	return &ClientPool{
-		clients: make(map[string]*Client),
+		testClients: make(map[string]*Client),
 	}
-}
-
-// Connect 连接到 Worker Node。
-func (p *ClientPool) Connect(nodeUUID, addr string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// 如果已连接，先关闭旧连接（测试注入的客户端无底层 Conn，判空防 panic）
-	if existing, ok := p.clients[nodeUUID]; ok {
-		if existing.Conn != nil {
-			existing.Conn.Close()
-		}
-		delete(p.clients, nodeUUID)
-	}
-
-	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		// 两方向显式 64MiB（FR-305）：接收默认仅 4MiB（大响应暗礁）、发送默认无界，
-		// 与 Worker 服务端/隧道守卫同源同值（grpcmsg.MaxMessageBytes）。
-		grpc.WithDefaultCallOptions(grpcmsg.CallOptions()...),
-	)
-	if err != nil {
-		return fmt.Errorf("连接 Worker Node %s 失败: %w", addr, err)
-	}
-
-	client := &Client{
-		Conn:     conn,
-		Worker:   workerpb.NewWorkerServiceClient(conn),
-		NodeUUID: nodeUUID,
-	}
-
-	p.clients[nodeUUID] = client
-	slog.Info("已连接 Worker Node", "nodeUUID", nodeUUID, "addr", addr)
-	return nil
 }
 
 // SetWorkerClientForTest 直接注入某节点的 Worker gRPC 客户端（仅测试用）。
@@ -78,7 +45,7 @@ func (p *ClientPool) Connect(nodeUUID, addr string) error {
 func (p *ClientPool) SetWorkerClientForTest(nodeUUID string, worker workerpb.WorkerServiceClient) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.clients[nodeUUID] = &Client{Worker: worker, NodeUUID: nodeUUID}
+	p.testClients[nodeUUID] = &Client{Worker: worker, NodeUUID: nodeUUID}
 }
 
 // SetTunnelProvider 注入反向隧道来源（FR-281）；main 装配时调用一次。
@@ -88,13 +55,11 @@ func (p *ClientPool) SetTunnelProvider(tp TunnelProvider) {
 	p.tunnels = tp
 }
 
-// Get 获取指定节点的客户端。两级取连接（ADR-066 双模式）：
-// 该节点存在活跃反向隧道 → 隧道优先（NAT/内网 worker 唯一可达路径）；
-// 否则回退直拨（老版本 worker、隧道断连重建窗口——行为与引入隧道前完全一致）。
+// Get 获取指定节点的客户端。生产路径只允许活跃反向隧道；无隧道即不可调用。
 func (p *ClientPool) Get(nodeUUID string) (*Client, bool) {
 	p.mu.RLock()
 	tp := p.tunnels
-	client, ok := p.clients[nodeUUID]
+	testClient, testOK := p.testClients[nodeUUID]
 	p.mu.RUnlock()
 
 	if tp != nil {
@@ -102,8 +67,9 @@ func (p *ClientPool) Get(nodeUUID string) (*Client, bool) {
 			// 隧道客户端按取即建（轻量封装，无底层 Conn 需管理）。
 			return &Client{Worker: workerpb.NewWorkerServiceClient(ch), NodeUUID: nodeUUID}, true
 		}
+		return nil, false
 	}
-	return client, ok
+	return testClient, testOK
 }
 
 // Disconnect 断开指定节点的连接。
@@ -111,12 +77,11 @@ func (p *ClientPool) Disconnect(nodeUUID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if client, ok := p.clients[nodeUUID]; ok {
+	if client, ok := p.testClients[nodeUUID]; ok {
 		if client.Conn != nil {
 			client.Conn.Close()
 		}
-		delete(p.clients, nodeUUID)
-		slog.Info("已断开 Worker Node", "nodeUUID", nodeUUID)
+		delete(p.testClients, nodeUUID)
 	}
 }
 
@@ -125,13 +90,12 @@ func (p *ClientPool) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	for uuid, client := range p.clients {
+	for _, client := range p.testClients {
 		if client.Conn != nil {
 			client.Conn.Close()
 		}
-		slog.Info("关闭 Worker Node 连接", "nodeUUID", uuid)
 	}
-	p.clients = make(map[string]*Client)
+	p.testClients = make(map[string]*Client)
 }
 
 // ConnectedNodes 返回已连接的节点 UUID 列表。
@@ -139,9 +103,13 @@ func (p *ClientPool) ConnectedNodes() []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	nodes := make([]string, 0, len(p.clients))
-	for uuid := range p.clients {
+	tp := p.tunnels
+	nodes := make([]string, 0, len(p.testClients))
+	for uuid := range p.testClients {
 		nodes = append(nodes, uuid)
+	}
+	if provider, ok := tp.(TunnelNodeProvider); ok {
+		return provider.ConnectedNodes()
 	}
 	return nodes
 }

@@ -158,6 +158,10 @@ func (d *AlertDispatcher) notify(rule *model.AlertRule, note AlertNotification) 
 		// FR-011 兼容回退：单 webhook 直发。
 		if rule.NotifyType == model.ChannelTypeWebhook && rule.NotifyTarget != "" {
 			cfg := ChannelConfig{URL: rule.NotifyTarget}
+			if err := validateChannelConfig(model.ChannelTypeWebhook, &cfg); err != nil {
+				slog.Warn("告警 webhook 直发配置无效", "rule", rule.Name, "error", err)
+				return
+			}
 			raw, _ := json.Marshal(cfg)
 			if err := d.notifier.Send(model.ChannelTypeWebhook, string(raw), note); err != nil {
 				slog.Warn("告警 webhook 直发失败", "rule", rule.Name, "error", err)

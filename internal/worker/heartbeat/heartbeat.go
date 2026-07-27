@@ -32,7 +32,7 @@ type InstanceStateProvider interface {
 }
 
 // TaskSnapshotProvider 提供运行中长任务的心跳快照（FR-183，见 ADR-040）。
-// 由 Worker gRPC Server 实现（其内存任务登记表）。终态任务上报后由本心跳调 Drop 移除。
+// 由 Worker gRPC 服务实现持有的内存任务表实现。终态任务上报后由本心跳调 Drop 移除。
 type TaskSnapshotProvider interface {
 	TaskSnapshots() []*workerpb.TaskSnapshot
 	DropTask(taskID string)
@@ -72,7 +72,7 @@ func New(controlPlaneAddr, nodeUUID, nodeSecret string, interval time.Duration, 
 }
 
 // SetTaskProvider 注入运行中任务快照来源（FR-183，见 ADR-040）。
-// 由 main 装配（传入 Worker gRPC Server）；不调用则心跳不携带任务进度。
+// 由 main 装配（传入 Worker gRPC 服务实现）；不调用则心跳不携带任务进度。
 func (h *Heartbeat) SetTaskProvider(p TaskSnapshotProvider) {
 	h.taskProvider = p
 }

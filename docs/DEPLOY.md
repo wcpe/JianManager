@@ -33,9 +33,8 @@ export JIANMANAGER_JWT_SECRET="$(openssl rand -hex 32)"   # 务必设置；只�
 ./control-plane
 #   首次启动后浏览器打开 http://<本机IP>:8080，按引导创建管理员（§5）
 
-# 2. Worker Node（另开终端；gRPC :9101，WS :9102 仅本机探针桥与直拨回退）
+# 2. Worker Node（另开终端；仅出站反向隧道，WS :9102 仅本机探针桥）
 export JIANMANAGER_CONTROL_PLANE_GRPC="127.0.0.1:9100"     # Control Plane 的 gRPC 地址
-export JIANMANAGER_HOST="127.0.0.1"                        # CP 直拨回退本 Worker 的地址（见 §8）
 ./worker
 ```
 
@@ -98,12 +97,11 @@ Worker 全部用环境变量配置（也可放 `worker.yml` 同名键）：
 | 环境变量 | 说明 | 默认 |
 |---|---|---|
 | `JIANMANAGER_CONTROL_PLANE_GRPC` | **必填**，Control Plane gRPC 地址 `host:9100` | 无 |
-| `JIANMANAGER_JWT_SECRET` | 旧 CP（< FR-275）兼容项：与 CP 一致才能过终端/探针桥校验。新 CP 会在注册时自动下发 WS 令牌密钥（持久化到 `etc/node-identity.json`），**无需配置** | dev-secret-change-me |
+| `JIANMANAGER_JWT_SECRET` | 历史兼容项，Worker 不再使用；新 CP 会在注册时自动下发 WS 令牌密钥并持久化到 `etc/node-identity.json` | — |
 | `JIANMANAGER_NODE_NAME` | 节点显示名 | node-01 |
 | `JIANMANAGER_NODE_UUID` | 固定节点 UUID（留空则首次生成；重装后想复用既有节点须显式指定） | 自动 |
-| `JIANMANAGER_HOST` | CP 直拨回退本 Worker 的地址（gRPC/终端 WS，FR-281 后仅无隧道回退场景需要，见 §8）。留空自动探测本机 IP；NAT/容器下需显式指定 CP 可达地址 | 自动 |
-| `JIANMANAGER_GRPC_PORT` | Worker gRPC 端口 | 9101 |
-| `JIANMANAGER_WS_PORT` | Worker WS 端口（本机探针 plugin-bridge + 终端直拨回退，浏览器不直连） | 9102 |
+| `JIANMANAGER_HOST` | 节点信息展示地址；不用于 CP 拨号 | 自动 |
+| `JIANMANAGER_WS_PORT` | Worker WS 端口（本机探针 plugin-bridge + 本机终端回环桥，浏览器不直连） | 9102 |
 | `JIANMANAGER_DATA_DIR` | 数据根（游戏服在 `var/servers/`、JDK 在 `opt/jdks/`） | 进程目录下 `data/` |
 | `JIANMANAGER_BOT_WORKER_PATH` | 显式覆盖 Bot Worker 入口 `index.js` 路径（指定后固定该入口、不再自愈下发；仅仓库式部署等特殊场景需要，见下） | 留空自动解析（数据根自愈副本优先） |
 | `JIANMANAGER_DISABLE_JDK` | 设为 `1` 关闭托管 JDK 能力 | 启用 |
@@ -149,10 +147,9 @@ export JIANMANAGER_BOT_WORKER_PATH="$(pwd)/dist/index.js"
 |---|---|---|
 | 8080 | Control Plane HTTP/WS | 浏览器、运维（含终端 `/ws/terminal` 中转） |
 | 9100 | Control Plane gRPC | 各 Worker → CP（含反向隧道建立） |
-| 9101 | Worker gRPC | CP → Worker（仅直拨回退；隧道在时无需入站放通） |
-| 9102 | Worker WebSocket | 本机探针 plugin-bridge（回环）；老 Worker 回退时 CP → Worker（**浏览器不直连**） |
+| 9102 | Worker WebSocket | 本机探针 plugin-bridge 与本机终端回环桥（**浏览器和 CP 均不直连**） |
 
-要点：浏览器只访问 Control Plane（8080）——终端自 FR-281（ADR-066）起一律经 CP `/ws/terminal` 中转，携带 CP 签发的一次性 token，**不再直连** Worker 的 9102。指令下发优先经 Worker 主动建立的 **gRPC 反向隧道**（Worker 只出站连 9100、零入站端口要求，NAT/内网可接入）；仅无隧道回退时（老 Worker / 断连重建窗口）CP 才直拨 Worker 的 9101/9102，此时 `JIANMANAGER_HOST` 须是 **CP 可达**的 Worker 地址、对应端口对 CP 放通（均无需对浏览器放通）。终端/探针桥 token 用专用 **WS 令牌密钥**签发校验（FR-275/ADR-061，经注册/心跳自动下发 Worker）；`JIANMANAGER_JWT_SECRET` 只签用户会话、无需 CP 与 Worker 一致，令牌 401 排查见 §6。反向代理（HTTPS）时请透传 `X-Forwarded-Proto`，终端会据此选 `wss://`。
+要点：浏览器只访问 Control Plane（8080）——终端一律经 CP `/ws/terminal` 中转，携带 CP 签发的一次性 token，**不再直连** Worker 的 9102。指令下发只经 Worker 主动建立的 **gRPC 反向隧道**（Worker 只出站连 9100、零入站端口要求，NAT/内网可接入）；无隧道时节点不可调用，CP 不拨号 Worker 地址。终端/探针桥 token 用专用 **WS 令牌密钥**签发校验（FR-275/ADR-061，经注册/心跳自动下发 Worker）；`JIANMANAGER_JWT_SECRET` 只签用户会话、无需 CP 与 Worker 一致，令牌 401 排查见 §6。反向代理（HTTPS）时请透传 `X-Forwarded-Proto`，终端会据此选 `wss://`。
 
 ## 9. 升级与备份
 

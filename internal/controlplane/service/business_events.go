@@ -24,9 +24,9 @@ const economyDomain = "economy"
 // 本服务不碰之）。
 //
 // 职责：
-//  1. 通用 envelope 去重落库（按 (domain, dedupKey) insert-or-ignore，应对桥的至少一次投递与跨节点重试）；
+//  1. 通用 envelope 去重落库（按 (domain,node,zone,dedupKey) insert-or-ignore，应对桥的至少一次投递与跨节点重试）；
 //  2. 经济域结构化镜像维护（按 node→zone 维度，seq 单调推进，跨区同名玩家不串味/不重复计数）；
-//  3. 经济变更审计 append（按 ledgerId 去重，业务数据不降采样不丢，ADR-028）；
+//  3. 经济变更审计 append（按 node→zone→ledgerId 去重，业务数据不降采样不丢，ADR-028）；
 //  4. 只读聚合查询（业务事件流 / 经济镜像 / 跨区聚合）。
 //
 // 数据所有权（架构不变量）：仅 CP 读写 DB；JM 存的是汇聚镜像 + 审计，余额真源仍在各服 mce 库。
@@ -75,7 +75,14 @@ func (s *BusinessEventService) Ingest(nodeUUID string, evt *workerpb.PluginEvent
 		return // 非业务事件（监控/治理），不归本服务
 	}
 
-	inserted, err := s.recordEnvelope(nodeUUID, domain, evt)
+	zoneID := ""
+	if domain == economyDomain {
+		data, ok := parseEconomyData(evt.RawJson)
+		if ok {
+			zoneID = data.ZoneID
+		}
+	}
+	inserted, err := s.recordEnvelope(nodeUUID, zoneID, domain, evt)
 	if err != nil {
 		slog.Warn("业务事件 envelope 落库失败", "domain", domain, "dedupKey", evt.DedupKey, "err", err)
 		return
@@ -92,20 +99,21 @@ func (s *BusinessEventService) Ingest(nodeUUID string, evt *workerpb.PluginEvent
 	}
 }
 
-// recordEnvelope 按 (domain, dedupKey) 去重落通用 envelope；返回是否为本次新插入（false=重复投递已存在）。
-func (s *BusinessEventService) recordEnvelope(nodeUUID, domain string, evt *workerpb.PluginEvent) (bool, error) {
+// recordEnvelope 按 (domain,node,zone,dedupKey) 去重落通用 envelope；返回是否为本次新插入（false=重复投递已存在）。
+func (s *BusinessEventService) recordEnvelope(nodeUUID, zoneID, domain string, evt *workerpb.PluginEvent) (bool, error) {
 	row := &model.BusinessEvent{
 		Domain:       domain,
 		DedupKey:     evt.DedupKey,
 		Action:       evt.Type,
 		NodeUUID:     nodeUUID,
+		ZoneID:       zoneID,
 		InstanceUUID: evt.InstanceUuid,
 		PayloadJSON:  evt.RawJson,
 		OccurredAt:   evt.Timestamp,
 	}
 	// dedupKey 为空时退化为不去重（仍落库，但无唯一约束保护）：由上层保证业务事件携非空 dedupKey。
 	res := s.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "domain"}, {Name: "dedup_key"}},
+		Columns:   []clause.Column{{Name: "domain"}, {Name: "node_uuid"}, {Name: "zone_id"}, {Name: "dedup_key"}},
 		DoNothing: true,
 	}).Create(row)
 	if res.Error != nil {
@@ -114,7 +122,7 @@ func (s *BusinessEventService) recordEnvelope(nodeUUID, domain string, evt *work
 	return res.RowsAffected > 0, nil
 }
 
-// applyEconomy 解析经济事件 data，维护结构化镜像（seq 单调）+ append 审计（按 ledgerId 去重）。
+// applyEconomy 解析经济事件 data，维护结构化镜像（seq 单调）+ append 审计（按 node→zone→ledgerId 去重）。
 func (s *BusinessEventService) applyEconomy(nodeUUID string, evt *workerpb.PluginEvent) error {
 	d, ok := parseEconomyData(evt.RawJson)
 	if !ok {
@@ -133,7 +141,7 @@ func (s *BusinessEventService) applyEconomy(nodeUUID string, evt *workerpb.Plugi
 	return s.upsertMirror(nodeUUID, evt.InstanceUuid, d, ledgerID, seq, currencyID, occurredAt)
 }
 
-// appendLedger 追加经济变更审计行；按 ledgerId 去重（重发不重复留痕）。
+// appendLedger 追加经济变更审计行；按 node→zone→ledgerId 去重（重发不重复留痕）。
 func (s *BusinessEventService) appendLedger(
 	nodeUUID, instanceUUID string, d economyEventData, ledgerID, seq int64, currencyID int, occurredAt int64,
 ) error {
@@ -152,7 +160,7 @@ func (s *BusinessEventService) appendLedger(
 		OccurredAt:   occurredAt,
 	}
 	return s.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "ledger_id"}},
+		Columns:   []clause.Column{{Name: "node_uuid"}, {Name: "zone_id"}, {Name: "ledger_id"}},
 		DoNothing: true,
 	}).Create(row).Error
 }

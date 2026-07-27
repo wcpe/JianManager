@@ -15,8 +15,7 @@ Control Plane (Go 单二进制)
     ├── 跨 Worker Bot 调度与 desired-state 真源（FR-351/ADR-074）
     ├── Agent 策略真源（FR-384~388 / FR-395 / ADR-076/080）：jmat_* Token + V1 写白名单 / V2 能力分组 + scope + 永久禁区
     ├── 内嵌 MCP 网关（FR-389 / FR-395 / ADR-077/080）：Streamable HTTP + SSE，`/api/v1/mcp`，会话内存可运维，tools/list 按能力动态裁剪
-    │ gRPC —— 指令优先经 Worker 主动建立的「反向隧道」下发（Worker 零入站，FR-281/ADR-066）；
-    │         无隧道（老 Worker / 重建窗口）回退 CP 直拨 worker gRPC 端口
+    │ gRPC —— 指令仅经 Worker 主动建立的「反向隧道」下发（Worker 零入站，ADR-081）
     ▲
     │ HTTPS + Bearer jmat_*（与人类 JWT 物理同端口、语义分离）
     ├── jmagent CLI（FR-385，脚本/CI）
@@ -25,7 +24,7 @@ Control Plane (Go 单二进制)
 Worker Node (Go) × 20~100
     ├── 游戏服进程管理 (direct/daemon/docker)
     ├── 守护进程 Wrapper
-    ├── WebSocket 终端服务 (/ws/terminal，CP 经 TerminalSession gRPC 桥回环接入；亦作老 CP 直拨回退)
+    ├── WebSocket 终端服务（仅本机回环；CP 经 TerminalSession gRPC 隧道桥接）
     ├── 插件桥反向 WS 服务 (/ws/plugin-bridge, 探针主动连入, token, FR-065/ADR-016)
     ├── Bot 容量/runtime 真源 → Node.js 子进程 (Mineflayer)
     └── 指标采集（ServerProbe /metrics）
@@ -39,8 +38,8 @@ Worker Node (Go) × 20~100
 
 | 进程 | 语言 | 部署 | 职责 |
 |---|---|---|---|
-| Control Plane | Go | 1 个实例 | API、人类 JWT + Agent Token 鉴权、跨 Worker 调度与 desired-state 真源、gRPC 客户端池（隧道优先/直拨回退）、终端 WS 中转、前端静态文件 |
-| Worker Node | Go | 20-100 个实例 | gRPC 服务端 + 反向隧道客户端、进程管理、Docker 管理、Bot 容量/runtime 真源、WS 终端服务（本机桥/回退） |
+| Control Plane | Go | 1 个实例 | API、人类 JWT + Agent Token 鉴权、跨 Worker 调度与 desired-state 真源、仅反向隧道的 gRPC 客户端池、终端 WS 中转、前端静态文件 |
+| Worker Node | Go | 20-100 个实例 | 反向隧道客户端、进程管理、Docker 管理、Bot 容量/runtime 真源、WS 终端本机桥 |
 | Bot Worker | Node.js | 由 Worker 按需 spawn | Mineflayer 连接、行为引擎、寻路、脚本执行；仅经 stdin/stdout JSON IPC 受管 |
 
 旁路客户端（非常驻服务进程，不改三进程模型）：
@@ -249,14 +248,11 @@ internal/worker/
 
 ### 5.1 节点接入与部署（一键安装 / enrollment，FR-080，见 ADR-020）
 
-- **配置加载**：Worker 启动时经 `internal/worker/config.go`（viper）真正加载 `worker.yml`（CP gRPC 地址、grpc/ws 端口、data_dir、日志），`JIANMANAGER_` 前缀环境变量按路径覆盖。配置落盘取代历史的环境变量堆砌。
+- **配置加载**：Worker 启动时经 `internal/worker/config.go`（viper）真正加载 `worker.yml`（CP gRPC 地址、WS 端口、data_dir、日志），`JIANMANAGER_` 前缀环境变量按路径覆盖。已有 `grpc.port` 读取时静默忽略，不再是 Worker 配置项。
 - **免配置自启 setup（FR-222，见 ADR-051，改写 ADR-020 §2 单脚本写配置编排）**：「下载」（取二进制）与「上线」（写配置 + 注册 + run）解耦——Worker 入口 `runWorker` 加载配置前先自检「是否已配置」（`无 worker.yml/.yaml` **且** `无 <data-dir>/etc/node-identity.json`）。**未配置** → 进入 `internal/worker/setup`：有 TTY 交互逐项问 CP gRPC 地址 / enroll token / 节点名（可选端口、data_dir，给默认值）；无 TTY（CI/管道/systemd/Windows 服务）从命令行参数 + `JIANMANAGER_*` env 读，缺必填（CP 地址 / token）即 fail-fast（不卡住等输入）。setup 顺序：写 `worker.yml`（原子、复刻安装脚本字段、**enroll token 绝不写入**）→ 携 token 经 gRPC 首注册换身份 → 持久化 `node_uuid`/`node_secret` 到 `etc/node-identity.json`（0600）→ **转入正常 run**（内存构造配置 + 复用首注册身份，不重启进程、不重复注册）。**已配置**（有 yml 或有 node-identity，或显式传配置文件路径）→ 跳过 setup 直接 run（现状零变化）。新机器零脚本依赖即可上线，安装脚本（FR-223）退化为「取二进制 + 调 setup」。
 - **enrollment token 准入**：新增节点凭 CP 签发的**一次性、限时** enrollment token 注册（取代 FR-004 的「无凭据自助注册」对新节点的开放）。token 经 gRPC metadata `enroll-token` 传给 CP 校验消费（不改 proto）；CP 只对「新节点首次落库」设门槛，已有身份的重注册不强制 token（不破网）。
-- **身份持久化**：注册成功换得的 `node_uuid`/`node_secret` 写入数据根 `etc/node-identity.json`（0600，含敏感 secret 不入日志）。Worker 重启优先读该文件复用既有身份走重注册，不重复消费已失效的一次性 token。CP 下发的 **WS 令牌密钥**（`wsTokenSecret`，FR-275/ADR-061）一并持久化于此：启动时优先用其构造终端/插件桥校验（回退 `worker.yml` `jwt_secret` 兼容旧 CP），注册/心跳下发变化时热更新并补写。
-- **注册身份匹配（UUID 锚定，见 ADR-039，修复重名覆盖 BUG-A）**：`ControlPlaneHandler.Register` 按三级优先级匹配既有节点，杜绝「另一台机器用同名注册覆写旧节点身份/host」——
-  1. **UUID 证明**：Worker 重注册时经 gRPC metadata `node-uuid` + `node-secret` 出示本地身份；命中库中节点且 secret 匹配 → 按 UUID 重注册（更新 host/port/os/arch，允许改名）；secret 不符 → `PermissionDenied`，绝不覆写。
-  2. **同机 host 兼容（过渡）**：未升级旧 Worker 只带 name，name 命中既有节点且本次连接 host 与库存 host 一致（同机重启信号）→ 放行重注册并告警建议升级；host 不一致落到 3。
-  3. **token 新建**：否则视为新节点，凭有效 enrollment token 准入；若上报名与既有节点撞名 → `AlreadyExists` 拒绝（提示改名），绝不覆写。
+- **身份持久化**：注册成功换得的 `node_uuid`/`node_secret` 写入数据根 `etc/node-identity.json`（0600，含敏感 secret 不入日志）。Worker 重启优先读该文件复用既有身份走重注册，不重复消费已失效的一次性 token。CP 下发的 **WS 令牌密钥**（`wsTokenSecret`，FR-275/ADR-061）一并持久化于此：启动时仅使用该密钥构造终端/插件桥校验；注册/心跳下发变化时热更新并补写，空密钥时拒绝启动 WS 服务。
+- **注册身份匹配（UUID 锚定，见 ADR-081）**：已存在节点重注册必须同时在 gRPC metadata 出示 `node-uuid` 与 `node-secret`；UUID 不存在、密钥错误或只提供其中之一均拒绝且不更新节点。两者都未提供时，仅可用有效 `enroll-token` 创建新节点；Host 和名称不再作为身份凭据。
 - **节点名活跃唯一**：身份由 UUID 锚定，`name` 降为可变标签但活跃节点间唯一——`database.AutoMigrate` 对存量重名活跃节点先去重（追加 `-dup-<id>` 后缀）再建「部分唯一索引」（仅约束 `deleted_at IS NULL` 的活跃行），软删除节点可释放其名供新节点复用（见 ADR-039 §3）。
 - **坏节点检测/修复（见 ADR-039 §2）**：`NodeRepairService` 提供检测疑似被串改/重名节点（只读诊断）、把被挤占机器作为新节点重新 enroll（轮换 UUID/secret）、清理孤立 JDK/实例引用；破坏性操作需二次确认（`confirm=true`）并入审计（FR-015/FR-059）。HTTP 入口见 API.md 节点修复章节（UI 入口随 FR-177）。
 - **一键安装脚本**：`scripts/install-worker.sh`（Linux/macOS）/ `install-worker.ps1`（Windows）由平台分发，幂等完成「下载或拷贝二进制 → 写 worker.yml → 以 enroll token 首注册 → 可选注册 systemd / Windows 服务（开机自启、常驻自连）」。enroll token 仅经命令行/环境变量传入、绝不写入 `worker.yml`。FR-190 起添加节点一键命令默认签发 CP-local `/worker-assets/:version/{os}/{arch}/worker?token=...` 下载 URL 模板，脚本按运行时平台替换；`enroll.binary_url` 仍可显式覆盖，离线场景保留 `--binary` 本地二进制兜底。
@@ -270,9 +266,9 @@ internal/worker/
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
 - 生命周期：Register, Heartbeat (双向 stream), FetchBotWorkerArchive
-  - `Register` 的身份匹配经 gRPC metadata 携带 `node-uuid`/`node-secret`（重注册出示身份）或 `enroll-token`（新节点准入），均不改 proto；匹配优先级与重名覆盖防护见 §5.1（ADR-039）
-  - `RegisterResponse` 携带 `ws_token_secret`（FR-275，见 ADR-061）：CP↔Worker 专用 **WS 令牌密钥**（只签终端/插件桥令牌，与签用户会话的 `jwt.secret` 隔离，Worker 永不持有后者）。首注册与重注册均下发；Worker 持久化到 `etc/node-identity.json` 并热应用到 WS 校验。CP 侧密钥三轨：显式 `jwt.ws_secret` > 生产 autogen 持久化 `<dataRoot>/etc/ws-token-secret.key`（0600）> dev 回退 `dev-secret-change-me`；空字段（旧 CP）时 Worker 回退本地 `jwt_secret` 配置（向后兼容）
-  - `Heartbeat` 负载除节点指标（CPU/内存/磁盘/累计网络字节/`load_avg1` 系统负载，FR-062）外携带 `instance_metrics`（每实例 ServerProbe 快照：TPS/MSPT/在线/堆/线程/CPU/uptime + 分世界负载，FR-060）；CP 收心跳经 `IngestHeartbeat` 落库为时序样本（node_cpu/mem/disk/net 速率/load）并据相邻累计字节算网络速率（Worker 不碰 DB）
+  - `Register` 的身份匹配经 gRPC metadata 携带 `node-uuid`/`node-secret`（重注册必须同时出示）或 `enroll-token`（新节点准入），均不改 proto；Host 和名称不再作为身份凭据（ADR-081）。
+  - `RegisterResponse` 携带 `ws_token_secret`（FR-275，见 ADR-061）：CP↔Worker 专用 **WS 令牌密钥**（只签终端/插件桥令牌，与签用户会话的 `jwt.secret` 隔离，Worker 永不持有后者）。首注册与重注册均下发；Worker 持久化到 `etc/node-identity.json` 并热应用到 WS 校验。CP 侧密钥三轨：显式 `jwt.ws_secret` > 生产 autogen 持久化 `<dataRoot>/etc/ws-token-secret.key`（0600）> dev 回退 `dev-secret-change-me`；若既无本地持久化值也未收到响应值，Worker 拒绝启动 WS 服务。
+  - `Heartbeat` 必须携带 `node-secret` metadata；CP 在处理首条负载前按 `node_uuid` 校验 secret，并将 UUID 绑定到整条流。无凭据、未知节点、凭据不匹配或流内 UUID 改变一律拒绝且无状态副作用（ADR-081）。认证通过的负载携带节点指标（CPU/内存/磁盘/累计网络字节/`load_avg1` 系统负载，FR-062）与 `instance_metrics`（每实例 ServerProbe 快照：TPS/MSPT/在线/堆/线程/CPU/uptime + 分世界负载，FR-060）；CP 经 `IngestHeartbeat` 落库为时序样本。
   - `Heartbeat` 还加性携带 `tasks`（`TaskSnapshot`：task_id/state/progress/error/result/recent_log_lines，FR-183/ADR-040）——Worker 把运行中长任务（如 JDK 安装）的进度随心跳上报，CP 经 `TaskService.IngestSnapshots` upsert `Task` + 幂等追加 `TaskLog`，并在任务**首次进终态**时触发副作用（jdk_install 成功落 `NodeJDK` + 发成功站内信，失败发失败站内信）。日志行编码为 `<绝对序号>\t<正文>`，跨周期重叠窗口按绝对序号去重
   - **实例状态双向对账**：`Heartbeat.instances`（`InstanceState`：uuid/state + 可选 `pid`，FR-326）既服务**正向对账**（CP 以 Worker 为真源：本节点 DB 为 RUNNING/STARTING/STOPPING 但本拍未上报者置 STOPPED，语义不变），也服务**反向对账**（FR-326，见 ADR-079）：Worker 有、CP 无记录（软删视为无）→ `OrphanRuntimeTracker` 记 `orphan_runtimes`（pending→宽限后 confirmed；默认 `auto_dispose=false` 只列表/日志，管理员 `POST /orphan-runtimes/:uuid/dispose` 或开启自动后下发 `DisposeOrphanRuntime`）。老 Worker 不填新字段 / 未注入 Tracker 时反向路径关闭、不崩；**不重建 CP 实例、不改写正向语义**
   - `HeartbeatResponse` 加性携带 `ws_token_secret`（FR-275，见 ADR-061）：WS 令牌密钥每拍随心跳下发，Worker 比对「值变化」才热更新终端/插件桥校验并补写身份文件——CP 轮换密钥后 Worker 不重启即自愈（≤1 心跳周期）
@@ -289,11 +285,11 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 文件操作：ListFiles, ReadFile, WriteFile, UploadFile (client stream), DeleteFile, RenameFile（跨目录即移动）, DownloadFile (server stream), DownloadArchive (server stream), SearchFiles
   - `ReadFile` 是**在线编辑器**读取能力，带 10MiB 护栏（超限截断；前端另有大文件/二进制预览拦截）。**下载不得复用 ReadFile**——曾因下载端点借用它导致超限大文件被静默截断（详见 `DownloadFile`）
   - `DownloadFile` 单文件**原样分块流式**返回（~64KiB 分片，首帧携带文件总大小），任意大小不截断；CP `FileHandler.Download` 先收首帧再写响应头（打开失败/越界/目录/老 Worker 无本 RPC 时仍能返回 JSON 明确错误而非半截文件），并以首帧总大小设 `Content-Length`——流中途失败即字节数不符，客户端按下载失败处理。老 Worker（无本 RPC）明确报错引导升级，**不回退会截断的 ReadFile**
-  - `WriteFile` 是实例工作目录内受限写入能力（在线编辑器小文本保存用，unary 受直拨 64MiB 单消息上限约束）。**上传不得复用 WriteFile**——曾因上传端点全量缓冲 + 复用它导致直拨 >64MB 被拒收、反向隧道下双侧内存整块缓冲（FR-304）
+  - `WriteFile` 是实例工作目录内受限写入能力（在线编辑器小文本保存用，unary 受 64MiB 单消息上限约束）。**上传不得复用 WriteFile**——曾因上传端点全量缓冲 + 复用它导致大文件被拒收、反向隧道下双侧内存整块缓冲（FR-304）
   - `UploadFile` 单文件**client-stream 流式上传**（FR-304，与 `DownloadFile` 对称）：首帧携带 `instance_uuid+path`、后续帧纯内容（~64KiB 分片）；Worker 同目录临时文件接收、收完 `os.Rename` 原子覆盖目标，中途任何失败删临时文件不动既有目标；响应回报 `bytes_written` 供 CP 完整性比对。**零帧即关流约定返回业务级失败（无副作用）**，CP 借此逐次探测老 Worker（返回 `Unimplemented`）并回退 `WriteFile` unary（≤64MB，超限明确报错引导升级）。CP 上传 handler 流式读 multipart（目标路径经 query 参数先行）不整块缓冲；FR-052/053 插件单发与批量扇出部署经同一 `uploadToWorker` 统一入口走本 RPC，老 Worker 自动回退，不为插件部署另设 RPC
   - `DownloadArchive` 把选中的文件/目录（目录递归，仅常规文件）即时打包为 zip 边遍历边分片流式返回（每条目经 `validatePath` 防越界/zip-slip，~32KiB 分片，不缓冲整包）；CP `FileHandler.DownloadArchive` 逐帧 `Recv` 写响应并 `Flush`，转为 HTTP `application/zip`（批量下载，FR-070）。资源管理器树内拖拽「移动」复用 `RenameFile`，无独立 move RPC
   - `SearchFiles` 对实例工作目录做全文搜索 / 文件名快速打开（FR-074，见 ADR-017）。索引是 **Worker 本地派生资产**（落数据根 `var/index/<instance-uuid>/`，**不进 CP 数据库**）：Worker 每实例持有一份倒排索引（token→文件集合）+ 文件指纹表，查询前按指纹比对增量更新（增/改/删）再倒排取候选、候选内精确行扫描；`mode=filename` 走文件名子串匹配（行号 0）。CP 仅经 gRPC 转发查询、不持有索引
-- **单消息尺寸上限统一（FR-305）**：CP↔Worker 两方向、直拨/隧道双模式共用 **64MiB** 单一真值（`internal/platform/grpcmsg.MaxMessageBytes`）——直拨侧 Worker `ServerOptions()` 收/发显式同值、CP 连接池 `WithDefaultCallOptions` 显式同值（修客户端接收 4MiB 默认暗礁）；隧道侧 grpctunnel 不受理 grpc.ServerOption（原天花板为 4GB 硬编码），由 `grpcmsg.WrapRegistrar` 在注册层以双向拦截器（请求进 handler 前、响应发送前 `proto.Size` 判限）施加等效守卫，超限一律 `ResourceExhausted`+中文引导。大载荷一律走流式 RPC（UploadFile/DownloadFile/DownloadArchive），unary 仅承载 <64MiB 载荷（现存最大 DeployServerProbe ~7.6MB）
+- **单消息尺寸上限统一（FR-305）**：CP↔Worker 反向隧道两方向共用 **64MiB** 单一真值（`internal/platform/grpcmsg.MaxMessageBytes`）。grpctunnel 不受理 grpc.ServerOption（原天花板为 4GB 硬编码），由 `grpcmsg.WrapRegistrar` 在注册层以双向拦截器（请求进 handler 前、响应发送前 `proto.Size` 判限）施加守卫，超限一律 `ResourceExhausted`+中文引导。大载荷一律走流式 RPC（UploadFile/DownloadFile/DownloadArchive），unary 仅承载 <64MiB 载荷（现存最大 DeployServerProbe ~7.6MB）。
 - 归档浏览与反编译（FR-075；见 ADR-018）：ListArchiveEntries, ReadArchiveEntry, DecompileClass
   - `ListArchiveEntries`/`ReadArchiveEntry` 用 Go `archive/zip` **只读**列举/读取 jar/zip 内部条目（不起进程、零落盘，条目名经 zip-slip 校验，条目数/单条目字节有上限超出截断，内容嗅探 NUL 判二进制）；`DecompileClass` 经实例绑定 JDK（或系统候选 JDK / `JAVA_HOME` 兜底）**受控 exec** CFR 单 jar 把 `.class`/`.jar`（或 jar 内某 `.class` 抽临时文件）反编译为 Java 源码——CFR 仅静态分析字节码、不加载/运行目标代码，`context` 超时 + 输入体积上限 + 输出截断 + 失败/降级以 `success=false`+结构化 error 返回（不抛错）。CP 加性端点 `GET .../files/archive/entries`、`GET .../files/archive/read`（octet-stream + `X-Truncated`/`X-Binary` 头）、`POST .../files/decompile`，均复用文件「查看」级权限。CFR 分发：配置路径 > 内嵌（`make embed-cfr`，gitignore 不入库）> 数据根缓存 `var/tools/cfr-<ver>.jar` > Maven Central 按需下载（sha256 pin）
 - 终端：IssueTerminalToken
@@ -306,7 +302,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - `BotFleetEvent.action_event` 由 CP `ScenarioActionEventService` 接入，先经 `ActionResultService` 按执行节点、session、Bot 与 desired generation 强校验并写入 `bot_load_action_results`：V2 `correlationToken` 必须非空且为 UUID，非法 start/finish/barrier 在落账与屏障冻结前拒绝；actionRunId 幂等创建 running，首个终态条件更新胜出，重复/迟到事件不改账本；result JSON 最大 16KiB，超限改存带 `truncated/originalBytes/preview` 的可识别元数据。Worker gRPC 层为 action-event 维护当前进程内、非持久化的有界压缩 journal：按 `actionRunId` identity 只保留最新 running/waiting 或首个 terminal，容量上限 60,000 条；新订阅按接收序号 replay 后再接 live。Worker 进程重启后 Bot desired 集合由 CP reconcile 恢复（FR-365）；action journal 本身仍不落盘。`barrier-arrived` 再进入 `BarrierCoordinator`，兼容外部动作信号由 `ActionSignalRouter` 经 `SignalBotActions` 投递。ADR-075 起，`send_command` 的通用成功只表示 Bot Worker 调用 `bot.chat` 时未同步抛错；调用前路由、IPC、参数处理失败或调用同步抛错仍记动作失败，ServerProbe/TPS/MSPT 不参与通用命令结果。
 - 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml + 运行库缓存 `libraries_zip` 经 gRPC 下发，FR-010/FR-114；见 ADR-014/016）。Worker 写入实例 `plugins/` 并把缓存包解压到实例根 `libraries/`，**在线更新**（FR-068）复用本 RPC 推最新内嵌 jar 与缓存（下次重启生效，可选推送并重启），经 `GET/POST /instances/:id/probe/update`
 - 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
-  - **JBIS 业务事件汇聚上行（FR-122；见 ADR-027/028）**：同一条 StreamPluginEvents 流复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义）。CP 侧 `PlayerEventService` 据 `domain` 分流：玩家/监控事件走在线名册 + SSE，业务事件交 `BusinessEventService` 按 (domain,dedup_key) 去重落 `business_events` 通用信封，经济域(`economy`)再解析信封维护 `economy_balance_mirrors`(node→zone 维度、seq 单调)+`economy_ledger_entries`(审计)。探针侧由 mce `PlayerEconomyChangeEvent`/`PlayerEconomyCatchupEvent` 折算上报（覆盖 web 后台/跨服一切余额变更），currencyId Int→identifier 折算保证跨服聚合不串味。CP 插件无关、只认信封
+  - **JBIS 业务事件汇聚上行（FR-122；见 ADR-027/028）**：同一条 StreamPluginEvents 流复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义）。CP 侧 `PlayerEventService` 据 `domain` 分流：玩家/监控事件走在线名册 + SSE，业务事件交 `BusinessEventService` 按 (domain,node_uuid,zone_id,dedup_key) 去重落 `business_events` 通用信封；经济域(`economy`)再解析信封维护 `economy_balance_mirrors`(node→zone 维度、seq 单调)+`economy_ledger_entries`(node→zone→ledger 幂等审计)。探针侧由 mce `PlayerEconomyChangeEvent`/`PlayerEconomyCatchupEvent` 折算上报（覆盖 web 后台/跨服一切余额变更），currencyId Int→identifier 折算保证跨服聚合不串味。CP 插件无关、只认信封
 - 指标：`GetNodeMetrics` 采集 Worker 所在节点 CPU / 内存 / 磁盘实时快照；`GetInstanceMetrics` 请求带 `probe_port`，由 Worker 抓 ServerProbe `/metrics`（**RCON 已退役（FR-067/ADR-016）**——探针未就绪时富指标 N/A，不再回退 RCON）。`GET /api/v1/nodes/:id/metrics` 节点面板端点优先经已连接 Worker 主动拉取，连接池暂无该节点时回退 CP 中最新心跳快照；实例实时面板继续按需 `GetInstanceMetrics` 拉取；**历史时序**（FR-060）由 Worker 心跳推送 `instance_metrics`，二者互补
 - 玩家管理：SendPluginCommand（FR-067/ADR-016；CP 经 Worker 反向 WS 向探针下发踢/封/解封/白名单治理指令，探针经服务端 API 执行；在线列表经探针事件聚合）。**RCON 路径已退役**，`ExecRconCommand`/`rcon_client` 移除；探针未连入时优雅降级
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
@@ -331,18 +327,18 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - 恢复按链顺序（全量基 + 各增量）回放；远程后端（S3/SFTP/WebDAV）由 Worker 持 CP 下发的 StorageBackendSpec 直传/拉回，凭证由 CP 从 `${ENV_VAR}` 解析后下发（Worker 不读环境/不碰 DB）
   - `TestStorageBackend` 仅做连通性与容量探测：CP 选择在线 Worker 下发已保存的后端规格，Worker 侧用同一 `internal/worker/storage` 抽象执行 `Ping`/`Stat`。S3/WebDAV/SFTP 通过小对象写入→读取→删除验证读写权限；失败以业务错误码回 CP，HTTP 层仍返回 `ok=false` 供前端行内展示。
 
-### 6.2 WebSocket（浏览器 ↔ Worker Node）
+### 6.2 WebSocket（浏览器 ↔ Control Plane，Worker 仅本机回环）
 
 终端经 CP 代理桥接，Control Plane 签发一次性 30s token 鉴权。token 用 **WS 令牌密钥**签发/校验（FR-275，见 ADR-061）：CP 与 Worker 共享的专用密钥（经注册/心跳自动下发，见 §6.1），与签用户会话的 `jwt.secret` 隔离：
 
 ```
 Browser → Control Plane (POST /instances/:id/terminal/token)
   → 返回 {token, wsUrl}（wsUrl 指向 CP 代理端点 /ws/terminal）
-Browser → CP (/ws/terminal?token=xxx) → CP 校验并转拨 → Worker (:wsPort/ws/terminal?token=xxx)
+Browser → CP (/ws/terminal?token=xxx) → CP 校验 → TerminalSession（反向隧道）→ Worker 本机回环 WS
   → Worker 独立校验同一 token → 双向终端流（browser ↔ CP ↔ worker 桥接）
 ```
 
-**空闲保活（FR-140）**：CP 终端代理（browser 侧与 worker 侧两个连接）与 Worker 终端桥都装 WS ping/pong 心跳——每 ~30s 发一次 ping、收到对端任意帧（含 pong）即续 ~70s 读超时。空闲终端（如 Paper 长时间无输出）经反向代理/LB 时不会被中间层按空闲超时（常见 60s）断连；同时据读超时检测真正的死连。ping 用 `WriteControl`（gorilla 保证与其它写并发安全），不与桥接/广播写互斥。
+**空闲保活（FR-140）**：CP 与浏览器一侧、Worker 本机终端桥都装 WS ping/pong 心跳；CP→Worker 段由 gRPC/反向隧道传输层保活。空闲终端（如 Paper 长时间无输出）经反向代理/LB 时不会被中间层按空闲超时（常见 60s）断连；同时据读超时检测真正的死连。
 
 消息格式：
 
@@ -448,7 +444,7 @@ Flags:   bit0=compressed(zlib)
 - **强制终止杀整树**：`daemonStrategy.Kill`（重启/强制终止路径）除发 `kill` 控制帧外，兜底用 `taskkill /T` 终止 wrapper→cmd→Java 整棵进程树；不可只杀 wrapper PID，否则 Windows 上 Java 孤儿化继续占监听端口，紧接的 `Start` 会因端口被占而 `BindException` 崩溃。
 - **PID 文件恢复**：wrapper 写 `<pidDir>/<uuid>.pid`（JSON：wrapper pid、java pid、socket 地址、instance uuid）。Worker 启动时 `Manager.RecoverDaemonInstances` 扫描 PID 文件，wrapper pid 存活则 reconnect socket 恢复管理，wrapper 已死则清理文件与残留 socket。wrapper 存活但 reconnect 拨号失败时（FR-325 兜底）：有界重试（3 次、间隔 1s/2s/4s 递增，期间保留 PID 文件保证实例仍可发现）；耗尽后按 PID 记录先强杀 wrapper 进程树再补杀 Java 树（`daemon.KillPIDTree`：Windows `taskkill /T /F`、Unix 杀进程组，Java 在 Unix 上自成进程组故须补杀），存活复核确认死透才清 PID 文件与 socket；杀不死（权限等）保留 PID 文件待下次接管扫描再兜底——杜绝孤儿永久失联（真机事故：残留 java 占 Paper `session.lock`）。
 - **优雅退出**：daemon 模式下 `Manager.StopAll` 只断开与 wrapper 的连接，不杀游戏服（direct 模式才终止进程）。
-- **Worker 重启后 wrapper 存活（FR-341，落地 ADR-003 承诺）**：daemon wrapper 须在 Worker 升级/崩溃/`systemctl restart` 后存活、由恢复的 Worker 经 socket 重连接管（即上条「PID 文件恢复」的 reconnect 分支，而非「清理残留」）。真机验证曾因三处叠加缺陷 wrapper 全被杀、只命中「清理残留」，已各个击破：① wrapper 的 stdout/stderr 是父 Worker 建立的 OS 管道，Worker 死后写 fd 1/2 触发 SIGPIPE、被 Go 运行时对标准流的默认动作终止——wrapper 启动即 `signal.Ignore(SIGPIPE)`（Unix，见 `daemon.IgnoreBrokenPipe`；Windows 无此语义为空操作），改为 EPIPE 丢弃不崩；② systemd worker 单元默认 `KillMode=control-group` 会连坐 SIGKILL cgroup 内经 setsid 脱离的 wrapper——单元改 `KillMode=process`（`install-worker.sh` + CP 内嵌副本，仅向主进程发信号，`install_scripts_test.go` 守护）；③ Worker SIGTERM 的 `grpcServer.GracefulStop()` 因终端/反向隧道/日志长连接永不收敛而挂起至 `TimeoutStopSec`(默认 90s) 才被 SIGKILL、拖延甚至跳过 `StopAll` 的优雅断开——改为 5s 上限、超时强制 `Stop()`。删除运行中实例仍强杀两棵进程树（上条 FR-310），与「重启存活」正交。
+- **Worker 重启后 wrapper 存活（FR-341，落地 ADR-003 承诺）**：daemon wrapper 须在 Worker 升级/崩溃/`systemctl restart` 后存活、由恢复的 Worker 经 socket 重连接管（即上条「PID 文件恢复」的 reconnect 分支，而非「清理残留」）。真机验证曾因三处叠加缺陷 wrapper 全被杀、只命中「清理残留」，已各个击破：① wrapper 的 stdout/stderr 是父 Worker 建立的 OS 管道，Worker 死后写 fd 1/2 触发 SIGPIPE、被 Go 运行时对标准流的默认动作终止——wrapper 启动即 `signal.Ignore(SIGPIPE)`（Unix，见 `daemon.IgnoreBrokenPipe`；Windows 无此语义为空操作），改为 EPIPE 丢弃不崩；② systemd worker 单元默认 `KillMode=control-group` 会连坐 SIGKILL cgroup 内经 setsid 脱离的 wrapper——单元改 `KillMode=process`（`install-worker.sh` + CP 内嵌副本，仅向主进程发信号，`install_scripts_test.go` 守护）；③ Worker 收到 SIGTERM 时先在 5 秒上限内关闭本地 WS 服务，再停止本地管理器；不再存在入站 gRPC server 的优雅停止等待。删除运行中实例仍强杀两棵进程树（上条 FR-310），与「重启存活」正交。
 
 #### docker 容器化实例生命周期（ADR-019，FR-078）
 
@@ -524,7 +520,7 @@ Control Plane 新增一类**面向玩家公网**的 HTTP 分发端点（客户�
 
 **鉴权与信任分层（ADR-022/023；信任模型见 [ADR-054](../adr/054-updater-arch-simplification.md)）**：拉取密钥**半公开**（随整包分发必泄露），仅作鉴权路由 + 吊销、**不作内容可信依据**；内容可信靠 **HTTPS + 拉取密钥鉴权 + sha256 完整性校验**（FR-256 起去掉 manifest Ed25519 验签——私钥在服务器上验签形同虚设，推翻 ADR-022/053）。消费端点与运营浏览器 JWT 入口、发布端点**物理隔离**；L7 防护（限流以 IP 为主）见 ADR-023。manifest 格式见 `docs/specs/client-distribution/contract.md`。**拉取密钥可查看 / 永久使用（FR-192/ADR-044）**：拉取密钥**发出后永久使用**（随整合包分发、所有后续更新都依赖它）。鉴权仍只用 `key_hash` 比对，另存 AES-256-GCM 可逆加密副本 `key_enc`（主密钥 env 注入优先，未配则自动生成并持久化，失败时降级为不可查看但不阻断鉴权），平台管理员经 `GET .../keys/:keyId/reveal`（+ 审计 `client_key.reveal`）查看明文。运营操作面：创建可填自定义值（留空自动生成），`PUT .../keys/:keyId` 改值/名称（改值重算 `key_hash` + 重写 `key_enc`，审计 `client_key.update`）；**不提供轮换**（换 key 会使已分发客户端断更，与永久使用矛盾）；吊销保留并强警告。可查看与拉取密钥「半公开、非信任根」的真实信任级一致。
 
-**L7 应用层防护（FR-096 + FR-264，见 ADR-023）**：消费端点（manifest / updater-core / 制品 / security hello）与运营浏览器 JWT 入口隔离，并叠加两层防护。第一层 `ClientDistGuard` 提供 IP 黑白名单（`client_ip_rules`，deny 优先、有 allow 即白名单模式）、per-IP 令牌桶限流与全局并发信号量，命中拒 403/429，内存计数器经 `GET /client-dist/protection-stats` 可观测。第二层 `ClientDistSecurityService` 提供单节点源站安全防护：IP 临时封禁（`client_protection_actions`，`status=active|expired|canceled`，命中先于密钥校验返回 `IP_TEMP_BLOCKED` + `Retry-After`）、per-key / per-channel 限速、制品下载并发与字节配额、key 状态机（`normal / observe / throttled / suspended / revoked`）、频道保护模式（只能降速 / 降级，不封禁频道）和制品授权收紧（只能拉所属频道 latest/回滚窗口/选定 updater-core 引用的 sha，越权返回 `ARTIFACT_NOT_ALLOWED`）。Range 下载仍由 `http.ServeContent` 支持 206，但拒绝 multi-range，小 Range 会进入风险事件。缓存即防护（ETag/304 + 内容寻址强缓存，CDN 前置）。**L3/L4 容量型 DDoS 靠 CDN/Anycast/云清洗，不在 JM**。
+**L7 应用层防护（FR-096 + FR-264，见 ADR-023）**：消费端点（manifest / updater-core / 制品 / security hello）与运营浏览器 JWT 入口隔离，并叠加两层防护。Gin 未配置受控反向代理时显式不信任转发头，IP 策略、审计与限流只使用直连地址；如部署在反向代理后，必须显式配置受控代理 CIDR。第一层 `ClientDistGuard` 提供 IP 黑白名单（`client_ip_rules`，deny 优先、有 allow 即白名单模式）、per-IP 令牌桶限流与全局并发信号量，命中拒 403/429；限流桶数量有上限，单个 IP 不能占满全局并发槽，内存计数器经 `GET /client-dist/protection-stats` 可观测。第二层 `ClientDistSecurityService` 提供单节点源站安全防护：IP 临时封禁（`client_protection_actions`，`status=active|expired|canceled`，命中先于密钥校验返回 `IP_TEMP_BLOCKED` + `Retry-After`）、per-key / per-channel 限速、制品下载并发与字节配额、key 状态机（`normal / observe / throttled / suspended / revoked`）、频道保护模式（只能降速 / 降级，不封禁频道）和制品授权收紧（只能拉所属频道 latest/回滚窗口/选定 updater-core 引用的 sha，越权返回 `ARTIFACT_NOT_ALLOWED`）。Range 下载仍由 `http.ServeContent` 支持 206，但拒绝 multi-range，小 Range 会进入风险事件。缓存即防护（ETag/304 + 内容寻址强缓存，CDN 前置）。**L3/L4 容量型 DDoS 靠 CDN/Anycast/云清洗，不在 JM**。
 
 **启动安全画像与客户端分发安全（FR-264）**：updater-core 启动早期调用 `POST /client-security/hello`，body 上报 `playerName`（来自 `jm-updater.json`，承认可伪造，仅作粗略参考）、`machineId`、`installId`、频道、core/wedge/manifest 版本与 OS/Java/launcher/locale/timezone/memoryTier 等粗粒度环境特征。CP 写入 `client_security_hellos` 明细，并按 `(channel_id, machine_id, install_id)` upsert `client_security_profiles`；非法玩家名等写 `client_security_risk_events`。后续遥测与心跳不强制携带 `X-Player-Name`，只需稳定标识 `X-Machine-Id` + `X-Install-Id` + 拉取密钥，CP 写入 `client_telemetry` / `client_runtime_states` 时优先兼容 header，缺省从最新安全画像反查玩家名。管理台独立 `/client-dist-security` 页面命名为「客户端分发安全」，不触碰发布页，消费 `/client-dist/security/*` 聚合端点展示安全总览、异常请求、全量日志详情、客户端画像、IP/玩家剖析、封禁与降级管理、安全分组；隐私告知不再作为独立 Tab 展示。
 
@@ -613,10 +609,10 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | bots | uuid, instance_id(FK，目标实例/权限归属), stress_session_id(FK，可空), executor_node_id(FK，可空；为空回退目标实例节点), load_batch_id(FK，可空), name, status, desired_state(running/stopped，FR-365 CP 期望态), reconnect_count(累计自动重连，FR-365), worker_epoch/worker_epoch_generation, last_event_seq, last_seen_at/connected_at, desired_state_generation(协议 generation 唯一映射，不另建 generation 列), config_hash, cohort_key, last_error, config(JSON), behavior, worker_id(仅兼容展示) |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2), checksum/checksum_algo(归档完整性, FR-171) |
 | process_metric_snapshots | node_uuid, instance_uuid, pid, name, cpu_percent, rss_bytes, read_bytes_per_sec, write_bytes_per_sec, user, command_summary(截断脱敏), sampled_at（受管实例进程 TOPN 短期快照，按 48h TTL 清理，FR-170） |
-| backup_storages | name(UNIQUE), type(local/s3/sftp/webdav), endpoint, bucket, region, prefix, access_key_env(${ENV_VAR}), secret_key_env(${ENV_VAR}), use_ssl, last_test_at/last_test_ok/last_test_message（FR-057/FR-152；backupCount/usedBytes 从 backups 聚合） |
+| backup_storages | name, active_name_key（仅活跃行保存名称并唯一，软删清空）, type(local/s3/sftp/webdav), endpoint, bucket, region, prefix, access_key_env(${ENV_VAR}), secret_key_env(${ENV_VAR}), use_ssl, last_test_at/last_test_ok/last_test_message（FR-057/FR-152；backupCount/usedBytes 从 backups 聚合） |
 | schedules | uuid, instance_id(FK), name, cron_expr, action, payload, enabled |
 | schedule_execution_logs | schedule_id(FK), action, status, error, started_at, finished_at |
-| alert_rules | uuid, name, trigger_type(V2: metric/instance_crash/node_offline/log_keyword/player_event/backup_failed), level(V2: info/warn/critical), target_type, target_id, metric, operator, threshold, duration_sec, keyword(V2 日志关键字), event_match(V2 玩家事件子类型), channel_ids(V2 JSON 路由通道), dedup_window_sec(V2 去抖), silence_start/silence_end(V2 静默窗口 HH:MM), notify_recover(V2), notify_type, notify_target(FR-011 兼容), enabled |
+| alert_rules | uuid, name, trigger_type(V2: metric/instance_crash/node_offline/log_keyword/player_event/backup_failed), level(V2: info/warn/critical), target_type, target_id, metric, operator, threshold, duration_sec, keyword(V2 日志关键字), event_match(V2 玩家事件子类型), channel_ids(V2 JSON 路由通道), dedup_window_sec(V2 去抖), silence_start/silence_end(V2 静默窗口 HH:MM), notify_recover(V2), notify_type, notify_target（FR-011 兼容但仅 `${ENV_VAR}` 引用，API 不回显）, enabled |
 | alert_events | rule_id, target_id, level(V2), trigger_type(V2), dedup_key(V2 去抖键), value, message, count(V2 聚合计数), resolved, fired_at, last_fired_at(V2), resolved_at, acknowledged/acknowledged_by/acknowledged_at(V2 确认), read(V2 站内已读) |
 | alert_channels (V2) | uuid, name, type(webhook/email/dingtalk/wecom/feishu/discord/telegram/inapp), enabled, config(JSON, 凭证子字段 ${ENV_VAR} 引用, FR-085) |
 | metric_series (V2) | node_uuid, instance_id, scope(node/instance/world), metric_key, world, unit, last_seen_at; UNIQUE(node_uuid,instance_id,scope,metric_key,world)（时序序列维度，FR-060/ADR-013） |
@@ -665,9 +661,9 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | client_security_counters (FR-264) | scope + key + bucket(UNIQUE), value, updated_at（安全计数/配额桶辅助） |
 | client_runtime_states (FR-265) | channel_id + machine_id(UNIQUE 组合), player_name, ip, platform, java_version, launcher, core_version, local_version, first_seen_at, last_heartbeat_at, created_at/updated_at（客户端最新启动运行态；启动心跳只 upsert 此表，不写 client_telemetry；machine_id/player_name 不可信，仅统计/联动筛选） |
 | client_dist_snapshots (FR-217/265) | channel_id + bucket_ts(UNIQUE 组合, **频道×小时桶**), manifest_pulls, artifact_pulls, download_bytes, active_machines(桶内 machine_id 去重), version_dist/platform_dist/lag_dist(JSON map), update_total/success/fail_static/rolled_back/error（**观测时序快照**，后台离线把 client_dist_events+client_telemetry 卷积而来，与写时聚合解耦；单档小时桶留 ≥180d；供观测·分发监控页跨频道/平台时序，ADR-049） |
-| business_events (FR-116/122) | domain + dedup_key(UNIQUE 组合, 至少一次投递去重), action, node_uuid, instance_uuid, operator(FR-121 回填), payload_json(信封原文), occurred_at, created_at（JBIS 通用业务事件信封表，**插件无关汇聚底座**；探针经反向 WS 桥上报的业务域事件按 (domain,dedup_key) insert-or-ignore 落库，新增域无需改表，**不降采样不丢**，ADR-028） |
+| business_events (FR-116/122) | domain + node_uuid + zone_id + dedup_key(UNIQUE 组合, 至少一次投递去重), action, instance_uuid, operator(FR-121 回填), payload_json(信封原文), occurred_at, created_at（JBIS 通用业务事件信封表，**插件无关汇聚底座**；探针经反向 WS 桥上报的业务域事件按节点与分区隔离的幂等键 insert-or-ignore 落库，新增域无需改表，**不降采样不丢**，ADR-028） |
 | economy_balance_mirrors (FR-122) | node_uuid + zone_id + player_name + currency(UNIQUE 组合, **node→zone 维度**), currency_id, balance(字符串 BigDecimal), last_seq(单调推进游标), last_ledger_id, last_entry_type, occurred_at, updated_at（经济结构化镜像最新余额；按 ledger 事件 seq 单调推进，跨区/跨节点同名玩家独立不串味/不重复计数；汇聚镜像非真源，ADR-028） |
-| economy_ledger_entries (FR-122) | ledger_id(UNIQUE, 去重锚点), node_uuid, instance_uuid, zone_id, player_name, currency, currency_id, entry_type, signed_amount(字符串), balance_after(字符串), seq, occurred_at, created_at（经济变更/操作审计，结构化专表 append-only；与 business_events 并存供高效查询/对账，业务数据**不降采样不丢**，ADR-028） |
+| economy_ledger_entries (FR-122) | node_uuid + zone_id + ledger_id(UNIQUE 组合, 去重锚点), instance_uuid, player_name, currency, currency_id, entry_type, signed_amount(字符串), balance_after(字符串), seq, occurred_at, created_at（经济变更/操作审计，结构化专表 append-only；与 business_events 并存供高效查询/对账，业务数据**不降采样不丢**，ADR-028） |
 
 ### 数据库切换
 
@@ -1120,7 +1116,7 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 ## 11. 配置
 
 **Control Plane**: `control-plane.yml` — server port, gRPC port, database, JWT secret（管理员账号通过首次启动 Web 引导创建，见 FR-017）；`log_store`（日志中心，FR-049）；`proxy`（出站代理，FR-174，见 §11.2）
-**Worker Node**: `worker.yml` — node name, Control Plane address, gRPC/WS ports, data_dir, Docker, Bot 配置；`proxy`（出站代理，FR-174，见 §11.2）；`memory_guard`（启动内存闸，FR-317：`reserve_mb` 保留水位 MB，0=默认 max(512MB,总内存 10%)；`disabled` 应急关闭）
+**Worker Node**: `worker.yml` — node name, Control Plane address, WS port, data_dir, Docker, Bot 配置；遗留 `grpc.port` 读取时静默忽略；`proxy`（出站代理，FR-174，见 §11.2）；`memory_guard`（启动内存闸，FR-317：`reserve_mb` 保留水位 MB，0=默认 max(512MB,总内存 10%)；`disabled` 应急关闭）
 
 `log_store`（日志持久化/归档/保留，均有默认值，零配置即用）：
 

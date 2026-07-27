@@ -105,6 +105,7 @@ func (s *BackupStorageService) Create(st *model.BackupStorage) (*model.BackupSto
 	if st.Region == "" && st.Type == model.BackupStorageS3 {
 		st.Region = "us-east-1"
 	}
+	st.ActiveNameKey = &st.Name
 	if err := s.db.Create(st).Error; err != nil {
 		return nil, fmt.Errorf("创建存储后端失败: %w", err)
 	}
@@ -137,6 +138,7 @@ func (s *BackupStorageService) Update(id uint, st model.BackupStorage) (*model.B
 	// Updates(map) 显式写零值（false / 空串 / NULL），避开 GORM struct 更新的零值跳过。
 	if err := s.db.Model(&model.BackupStorage{}).Where("id = ?", id).Updates(map[string]any{
 		"name":              st.Name,
+		"active_name_key":   st.Name,
 		"endpoint":          st.Endpoint,
 		"bucket":            st.Bucket,
 		"region":            st.Region,
@@ -246,7 +248,15 @@ func (s *BackupStorageService) Delete(id uint) error {
 	if refs > 0 {
 		return fmt.Errorf("%w: 当前被 %d 个备份引用", ErrStorageInUse, refs)
 	}
-	return s.db.Delete(&model.BackupStorage{}, id).Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.BackupStorage{}).Where("id = ?", id).Update("active_name_key", nil).Error; err != nil {
+			return fmt.Errorf("释放存储后端名称键失败: %w", err)
+		}
+		if err := tx.Delete(&model.BackupStorage{}, id).Error; err != nil {
+			return fmt.Errorf("删除存储后端失败: %w", err)
+		}
+		return nil
+	})
 }
 
 // TestCandidate 校验一个未保存的存储后端配置；不写入数据库。

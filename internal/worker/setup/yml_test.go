@@ -21,7 +21,6 @@ func TestWriteWorkerYML_Fields(t *testing.T) {
 		ControlPlane: "cp-host:9100",
 		EnrollToken:  "jmet_should_not_appear",
 		NodeName:     "edge-1",
-		GRPCPort:     19101,
 		WSPort:       19102,
 		DataDir:      filepath.Join(dir, "mydata"),
 	}
@@ -37,8 +36,8 @@ func TestWriteWorkerYML_Fields(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "edge-1", cfg.Name)
 	assert.Equal(t, "cp-host:9100", cfg.ControlPlane)
-	assert.Equal(t, 19101, cfg.GRPC.Port)
 	assert.Equal(t, 19102, cfg.WS.Port)
+	assert.NotContains(t, text, "grpc:", "worker.yml 不得再写入 Worker gRPC 端口")
 	assert.Equal(t, filepath.Join(dir, "mydata"), cfg.DataDir)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "json", cfg.Log.Format)
@@ -52,7 +51,6 @@ func TestWriteWorkerYML_OmitsEmptyDataDir(t *testing.T) {
 	in := &Inputs{
 		ControlPlane: "cp:9100",
 		NodeName:     "n",
-		GRPCPort:     9101,
 		WSPort:       9102,
 		DataDir:      "",
 	}
@@ -73,7 +71,7 @@ func TestWriteWorkerYML_OmitsEmptyDataDir(t *testing.T) {
 func TestWriteWorkerYML_EmptyNameFallsBack(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "worker.yml")
-	in := &Inputs{ControlPlane: "cp:9100", NodeName: "", GRPCPort: 9101, WSPort: 9102}
+	in := &Inputs{ControlPlane: "cp:9100", NodeName: "", WSPort: 9102}
 	require.NoError(t, WriteWorkerYML(path, in))
 
 	cfg, err := workercfg.Load(path)
@@ -85,7 +83,7 @@ func TestWriteWorkerYML_EmptyNameFallsBack(t *testing.T) {
 func TestWriteWorkerYML_Atomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "worker.yml")
-	require.NoError(t, WriteWorkerYML(path, &Inputs{ControlPlane: "cp:9100", NodeName: "n", GRPCPort: 9101, WSPort: 9102}))
+	require.NoError(t, WriteWorkerYML(path, &Inputs{ControlPlane: "cp:9100", NodeName: "n", WSPort: 9102}))
 
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)

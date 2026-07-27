@@ -41,8 +41,6 @@ function Install-JianManagerWorker {
         [string]$InstallDir = "C:\JianManager",
         # 数据根目录（默认 <InstallDir>\data）。
         [string]$DataDir = "",
-        # Worker gRPC 端口（默认 9101）。
-        [int]$GrpcPort = 9101,
         # Worker WS 终端端口（默认 9102）。
         [int]$WsPort = 9102,
         # 注册 Windows 服务（开机自启、常驻自连）。
@@ -149,8 +147,8 @@ function Install-JianManagerWorker {
     }
 
     # 上线阶段：调 worker setup（传参/env），由 Worker 自配 + 注册 + run。
-    # Worker 免配置自启 setup（FR-222）：非 TTY 下从 --control-plane/--token/--name/--grpc-port/
-    # --ws-port/--data-dir + JIANMANAGER_* env 读，自己写 worker.yml + 注册 + 持久化身份 + 转 run。
+    # Worker 免配置自启 setup（FR-222）：非 TTY 下从 --control-plane/--token/--name/--ws-port/
+    # --data-dir + JIANMANAGER_* env 读，自己写 worker.yml + 注册 + 持久化身份 + 转 run。
     # 脚本据此把入参喂给 worker，不再自己写 worker.yml。token 仅经 env 传、绝不落盘。
     if ($Service) {
         # 注册 Windows 服务：服务 ImagePath 直接跑 worker（无配置 → 首次自启 setup）。CP/节点名/端口
@@ -170,7 +168,6 @@ function Install-JianManagerWorker {
         $envEntries = @(
             "JIANMANAGER_CONTROL_PLANE=$ControlPlane",
             "JIANMANAGER_ENROLL_TOKEN=$Token",
-            "JIANMANAGER_GRPC_PORT=$GrpcPort",
             "JIANMANAGER_WS_PORT=$WsPort",
             "JIANMANAGER_DATA_DIR=$DataDir"
         )
@@ -182,8 +179,8 @@ function Install-JianManagerWorker {
     } else {
         Write-Host "[3/4] 未指定 -Service，前台调 worker 自配上线（Ctrl+C 退出；生产建议加 -Service）"
         Write-Host "[4/4] 启动 Worker（首次自配 setup）..."
-        # 前台上线：CP/节点名/端口经参数传，token 仅经 env（不出现在进程命令行参数里）。
-        $wargs = @("--control-plane", $ControlPlane, "--grpc-port", "$GrpcPort", "--ws-port", "$WsPort", "--data-dir", $DataDir)
+        # 前台上线：CP/节点名/WS 端口经参数传，token 仅经 env（不出现在进程命令行参数里）。
+        $wargs = @("--control-plane", $ControlPlane, "--ws-port", "$WsPort", "--data-dir", $DataDir)
         if ($Name) { $wargs += @("--name", $Name) }
         $env:JIANMANAGER_ENROLL_TOKEN = $Token
         Push-Location $InstallDir

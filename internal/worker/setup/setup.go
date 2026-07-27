@@ -31,7 +31,6 @@ import (
 // 默认值（与 config 包默认、install-worker.sh 写出的字段一致）。
 const (
 	defaultControlPlane = "localhost:9100"
-	defaultGRPCPort     = 9101
 	defaultWSPort       = 9102
 )
 
@@ -43,9 +42,8 @@ type Inputs struct {
 	EnrollToken string
 	// NodeName 节点名（可空，留空由 CP/token 预设名生效）。
 	NodeName string
-	// GRPCPort / WSPort Worker gRPC / WS 端口。
-	GRPCPort int
-	WSPort   int
+	// WSPort Worker 本机 WS 端口。
+	WSPort int
 	// DataDir 数据根（空 = 默认 ./data，缺省不写入 worker.yml）。
 	DataDir string
 }
@@ -110,7 +108,7 @@ func Run(ctx context.Context, configWorkDir string, opts Options) (*Result, erro
 		ControlPlaneAddr: in.ControlPlane,
 		NodeName:         in.NodeName,
 		WsPort:           in.WSPort,
-		GrpcPort:         in.GRPCPort,
+		GrpcPort:         0,
 		EnrollToken:      in.EnrollToken,
 	}
 	fmt.Fprintf(opts.Out, "正在向 Control Plane 注册（%s）...\n", in.ControlPlane)
@@ -181,15 +179,10 @@ func collectNonInteractive(opts Options) (*Inputs, error) {
 		DataDir:      pick(flags["data-dir"], "JIANMANAGER_DATA_DIR"),
 	}
 
-	grpcPort, err := pickPort(flags["grpc-port"], "JIANMANAGER_GRPC_PORT", defaultGRPCPort)
-	if err != nil {
-		return nil, fmt.Errorf("--grpc-port 非法: %w", err)
-	}
 	wsPort, err := pickPort(flags["ws-port"], "JIANMANAGER_WS_PORT", defaultWSPort)
 	if err != nil {
 		return nil, fmt.Errorf("--ws-port 非法: %w", err)
 	}
-	in.GRPCPort = grpcPort
 	in.WSPort = wsPort
 
 	if in.ControlPlane == "" {
@@ -231,10 +224,6 @@ func collectInteractive(opts Options) (*Inputs, error) {
 	if err != nil {
 		return nil, err
 	}
-	grpcPort, err := promptPort(r, w, "gRPC 端口", firstNonEmpty(flags["grpc-port"], os.Getenv("JIANMANAGER_GRPC_PORT")), defaultGRPCPort)
-	if err != nil {
-		return nil, err
-	}
 	wsPort, err := promptPort(r, w, "WS 终端端口", firstNonEmpty(flags["ws-port"], os.Getenv("JIANMANAGER_WS_PORT")), defaultWSPort)
 	if err != nil {
 		return nil, err
@@ -248,7 +237,6 @@ func collectInteractive(opts Options) (*Inputs, error) {
 		ControlPlane: cp,
 		EnrollToken:  token,
 		NodeName:     name,
-		GRPCPort:     grpcPort,
 		WSPort:       wsPort,
 		DataDir:      dataDir,
 	}, nil
@@ -259,7 +247,7 @@ func parseFlags(args []string) map[string]string {
 	out := map[string]string{}
 	known := map[string]bool{
 		"control-plane": true, "token": true, "name": true,
-		"grpc-port": true, "ws-port": true, "data-dir": true,
+		"ws-port": true, "data-dir": true,
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]

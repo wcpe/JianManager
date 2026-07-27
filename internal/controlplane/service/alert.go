@@ -178,6 +178,9 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 	if err := s.validateChannelIDs(req.ChannelIDs); err != nil {
 		return nil, err
 	}
+	if err := validateLegacyWebhook(req.NotifyType, req.NotifyTarget); err != nil {
+		return nil, err
+	}
 
 	notifyRecover := true
 	if req.NotifyRecover != nil {
@@ -223,7 +226,21 @@ func (s *AlertService) ListRules() ([]model.AlertRule, error) {
 	if err := s.db.Order("id DESC").Find(&rules).Error; err != nil {
 		return nil, err
 	}
+	for i := range rules {
+		rules[i].NotifyTarget = ""
+	}
 	return rules, nil
+}
+
+// validateLegacyWebhook 收紧 FR-011 兼容直发通道：URL 常含 token，只允许环境变量引用。
+func validateLegacyWebhook(notifyType, notifyTarget string) error {
+	if notifyType == "" && notifyTarget == "" {
+		return nil
+	}
+	if notifyType != model.ChannelTypeWebhook || !envRefPattern.MatchString(notifyTarget) {
+		return errors.New("webhook 目标必须以 ${ENV_VAR} 形式引用环境变量")
+	}
+	return nil
 }
 
 // UpdateRuleRequest 更新告警规则的可变字段（指针=可选更新）。

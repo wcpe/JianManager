@@ -443,6 +443,12 @@ func callRegisteredTool(ctx context.Context, deps ToolDeps, p *service.AgentPrin
 	if !ok || spec.Exec == nil {
 		return toolErr("未知工具: " + name)
 	}
+	// 精确确认会读取真实目标名称；必须先按 scope 授权，避免确认接口成为跨 scope 名称探针。
+	if spec.ConfirmField != "" {
+		if err := authorizeDestructiveTarget(p, action, args); err != nil {
+			return toolForbidden(err)
+		}
+	}
 	// 精确确认：与目标当前名称比对（区分大小写，不 trim）。
 	if field := spec.ConfirmField; field != "" {
 		if err := verifyDestructiveConfirm(deps, action, args, field); err != nil {
@@ -450,6 +456,28 @@ func callRegisteredTool(ctx context.Context, deps ToolDeps, p *service.AgentPrin
 		}
 	}
 	return spec.Exec(ctx, deps, p, action, args)
+}
+
+func authorizeDestructiveTarget(p *service.AgentPrincipal, action string, args map[string]any) error {
+	id, err := requireID(args)
+	if err != nil {
+		return err
+	}
+	d, ok := service.DescribeAgentAction(action)
+	if !ok {
+		return service.ErrAgentForbidden
+	}
+	target := service.AgentTrustedTarget{ResourceType: d.ResourceType}
+	switch d.ResourceType {
+	case service.AgentResourceInstance:
+		target.InstanceID = id
+	case service.AgentResourceNode:
+		target.NodeID = id
+	default:
+		return service.ErrAgentForbidden
+	}
+	_, err = service.Authorize(p, action, target)
+	return err
 }
 
 // findToolSpec 按工具名查找注册表条目。
@@ -492,11 +520,21 @@ func verifyDestructiveConfirm(deps ToolDeps, action string, args map[string]any,
 		if deps.Node == nil {
 			return fmt.Errorf("节点服务不可用")
 		}
-		n, e := deps.Node.GetByID(id)
-		if e != nil {
-			return fmt.Errorf("确认名称与目标不符")
+		var n interface{ GetName() string }
+		if action == service.AgentActionNodePurgeArchived {
+			archived, e := deps.Node.GetArchived(id)
+			if e != nil {
+				return fmt.Errorf("确认名称与目标不符")
+			}
+			n = archived
+		} else {
+			active, e := deps.Node.GetByID(id)
+			if e != nil {
+				return fmt.Errorf("确认名称与目标不符")
+			}
+			n = nodeName{active.Name}
 		}
-		actual = n.Name
+		actual = n.GetName()
 	default:
 		return fmt.Errorf("确认参数仅适用于节点/实例目标")
 	}
@@ -505,6 +543,10 @@ func verifyDestructiveConfirm(deps ToolDeps, action string, args map[string]any,
 	}
 	return nil
 }
+
+type nodeName struct{ name string }
+
+func (n nodeName) GetName() string { return n.name }
 
 // registerToolSpecs 追加工具到全局目录（FR-396+ 域文件 init 调用）。
 func registerToolSpecs(specs ...toolSpec) {

@@ -12,11 +12,14 @@ import (
 type RateLimiter struct {
 	mu          sync.Mutex
 	buckets     map[string]*bucket
+	maxBuckets  int
 	rate        int           // 每秒允许的请求数
 	capacity    int           // 桶容量
 	cleanup     time.Duration // 清理间隔
 	lastCleanup time.Time
 }
+
+const maxRateLimitBuckets = 10000
 
 type bucket struct {
 	tokens    float64
@@ -29,6 +32,7 @@ type bucket struct {
 func NewRateLimiter(ratePerSecond, capacity int) *RateLimiter {
 	return &RateLimiter{
 		buckets:     make(map[string]*bucket),
+		maxBuckets:  maxRateLimitBuckets,
 		rate:        ratePerSecond,
 		capacity:    capacity,
 		cleanup:     5 * time.Minute,
@@ -53,6 +57,9 @@ func (rl *RateLimiter) Allow(key string) bool {
 
 	b, exists := rl.buckets[key]
 	if !exists {
+		if len(rl.buckets) >= rl.maxBuckets {
+			return false
+		}
 		b = &bucket{
 			tokens:    float64(rl.capacity),
 			lastTime:  now,

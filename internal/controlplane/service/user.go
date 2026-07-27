@@ -96,6 +96,9 @@ func (s *UserService) Update(id uint, role *model.UserRole, status *model.UserSt
 		}
 		updates["password"] = string(hashed)
 	}
+	if role != nil || status != nil || (password != nil && *password != "") {
+		updates["auth_version"] = gorm.Expr("auth_version + ?", 1)
+	}
 
 	if len(updates) > 0 {
 		if err := s.db.Model(user).Updates(updates).Error; err != nil {

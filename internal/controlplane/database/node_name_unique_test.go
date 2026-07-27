@@ -85,3 +85,64 @@ func TestMigrateNodeNameUnique_Idempotent(t *testing.T) {
 	db := newMigratedDB(t)
 	require.NoError(t, migrateNodeNameUnique(db), "第二次迁移应幂等无错")
 }
+
+// TestMigrateGRPCPortColumn_GormLegacyColumn 保留 GORM 曾生成的 g_r_p_c_port 数据。
+func TestMigrateGRPCPortColumn_GormLegacyColumn(t *testing.T) {
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec("CREATE TABLE nodes (id integer primary key, g_r_p_c_port integer)").Error)
+	require.NoError(t, db.Exec("INSERT INTO nodes (id, g_r_p_c_port) VALUES (1, 19132)").Error)
+
+	require.NoError(t, migrateGRPCPortColumn(db))
+	require.True(t, db.Migrator().HasColumn("nodes", "grpc_port"))
+	require.False(t, db.Migrator().HasColumn("nodes", "g_r_p_c_port"))
+
+	var port int
+	require.NoError(t, db.Raw("SELECT grpc_port FROM nodes WHERE id = 1").Scan(&port).Error)
+	require.Equal(t, 19132, port)
+}
+
+// TestDedupeActiveNodeNames_AvoidsExistingSuffixCollision 去重名称不能覆盖已有活跃节点名。
+func TestDedupeActiveNodeNames_AvoidsExistingSuffixCollision(t *testing.T) {
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Node{}))
+	require.NoError(t, db.Create(&model.Node{ID: 1, Name: "dup", Host: "10.0.0.1", Secret: "s1"}).Error)
+	require.NoError(t, db.Create(&model.Node{ID: 2, Name: "dup", Host: "10.0.0.2", Secret: "s2"}).Error)
+	require.NoError(t, db.Create(&model.Node{ID: 3, Name: "dup-dup-2", Host: "10.0.0.3", Secret: "s3"}).Error)
+
+	require.NoError(t, migrateNodeNameUnique(db))
+
+	var names []string
+	require.NoError(t, db.Model(&model.Node{}).Order("id ASC").Pluck("name", &names).Error)
+	require.Len(t, names, 3)
+	require.NotEqual(t, names[1], names[2], "自动去重名不得与已有活跃节点冲突")
+}
+
+// TestMigrateScopedUniqueIndexes_BackupStorageAllowsReuse 验证旧的全局唯一索引被替换为软删感知索引。
+func TestMigrateScopedUniqueIndexes_BackupStorageAllowsReuse(t *testing.T) {
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.BackupStorage{}))
+	require.NoError(t, db.Exec("CREATE UNIQUE INDEX idx_backup_storages_name ON backup_storages(name)").Error)
+
+	// 模拟升级前已经存在、尚未回填 active_name_key 的活跃记录。
+	activeName := "archive"
+	first := &model.BackupStorage{Name: "archive", ActiveNameKey: &activeName, Type: model.BackupStorageS3}
+	require.NoError(t, db.Create(first).Error)
+	require.NoError(t, db.Model(first).Update("active_name_key", nil).Error)
+
+	require.NoError(t, migrateBackupStorageActiveNameKey(db))
+	require.NoError(t, migrateScopedUniqueIndexes(db))
+
+	var migrated model.BackupStorage
+	require.NoError(t, db.First(&migrated, first.ID).Error)
+	require.NotNil(t, migrated.ActiveNameKey)
+	require.Equal(t, "archive", *migrated.ActiveNameKey)
+	require.NoError(t, db.Model(&model.BackupStorage{}).Where("id = ?", first.ID).Update("active_name_key", nil).Error)
+	require.NoError(t, db.Delete(&model.BackupStorage{}, first.ID).Error)
+	require.NoError(t, db.Create(&model.BackupStorage{Name: "archive", Type: model.BackupStorageS3}).Error)
+}

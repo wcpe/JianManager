@@ -54,6 +54,49 @@ func TestAlertService_CreateRule_DefaultsMetric(t *testing.T) {
 	assert.True(t, rule.NotifyRecover)
 }
 
+// TestAlertService_CreateRule_PersistsDisabledRecovery 关闭恢复通知必须按 false 落库。
+func TestAlertService_CreateRule_PersistsDisabledRecovery(t *testing.T) {
+	db := newAlertTestDB(t)
+	svc := NewAlertService(db)
+	disabled := false
+	rule, err := svc.CreateRule(CreateRuleRequest{
+		Name: "cpu", TargetType: "node", Metric: "cpu", Operator: ">", Threshold: 90, NotifyRecover: &disabled,
+	})
+	require.NoError(t, err)
+
+	var stored model.AlertRule
+	require.NoError(t, db.First(&stored, rule.ID).Error)
+	assert.False(t, stored.NotifyRecover)
+}
+
+// TestAlertService_CreateRule_RejectsPlaintextWebhook 禁止把带密钥的 webhook URL 明文写库。
+func TestAlertService_CreateRule_RejectsPlaintextWebhook(t *testing.T) {
+	db := newAlertTestDB(t)
+	svc := NewAlertService(db)
+	_, err := svc.CreateRule(CreateRuleRequest{
+		Name: "cpu", TargetType: "node", Metric: "cpu", Operator: ">", Threshold: 90,
+		NotifyType: model.ChannelTypeWebhook, NotifyTarget: "https://hooks.example.test/?token=secret",
+	})
+	require.Error(t, err)
+}
+
+// TestAlertService_ListRules_RedactsLegacyWebhookTarget 列表响应不得回显 webhook 目标。
+func TestAlertService_ListRules_RedactsLegacyWebhookTarget(t *testing.T) {
+	db := newAlertTestDB(t)
+	svc := NewAlertService(db)
+	rule, err := svc.CreateRule(CreateRuleRequest{
+		Name: "cpu", TargetType: "node", Metric: "cpu", Operator: ">", Threshold: 90,
+		NotifyType: model.ChannelTypeWebhook, NotifyTarget: "${JM_ALERT_WEBHOOK}",
+	})
+	require.NoError(t, err)
+
+	rules, err := svc.ListRules()
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, rule.ID, rules[0].ID)
+	assert.Empty(t, rules[0].NotifyTarget)
+}
+
 func TestAlertService_CreateRule_Validation(t *testing.T) {
 	db := newAlertTestDB(t)
 	svc := NewAlertService(db)

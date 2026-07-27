@@ -17,7 +17,7 @@ func setupTransferTicketDB(t *testing.T) *gorm.DB {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.AgentToken{}, &model.Instance{}, &model.Node{}))
+	require.NoError(t, db.AutoMigrate(&model.AgentToken{}, &model.Instance{}, &model.Node{}, &model.AgentTransferTicket{}))
 	return db
 }
 
@@ -75,6 +75,21 @@ func TestAgentTransferTicket_SingleUse(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tickets.Consume(ticket)
 	assert.ErrorIs(t, err, ErrAgentTransferTicketInvalid, "票据不得二次消费")
+}
+
+func TestAgentTransferTicket_ConsumptionPersistsAcrossServiceInstances(t *testing.T) {
+	db := setupTransferTicketDB(t)
+	agentSvc, p, inst := seedTransferPrincipal(t, db)
+	issuer, err := NewAgentTransferTicketService(DeriveAgentTransferTicketSecret([]byte("master")), agentSvc, nil)
+	require.NoError(t, err)
+	ticket, _, err := issuer.Issue(p, inst.ID, AgentTransferDirectionDownload, "logs/latest.log")
+	require.NoError(t, err)
+	_, err = issuer.Consume(ticket)
+	require.NoError(t, err)
+	verifier, err := NewAgentTransferTicketService(DeriveAgentTransferTicketSecret([]byte("master")), agentSvc, nil)
+	require.NoError(t, err)
+	_, err = verifier.Consume(ticket)
+	assert.ErrorIs(t, err, ErrAgentTransferTicketInvalid)
 }
 
 func TestAgentTransferTicket_Expired(t *testing.T) {

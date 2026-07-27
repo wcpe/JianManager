@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"errors"
 	"log/slog"
 	"sync"
 
@@ -16,15 +17,16 @@ import (
 
 // TunnelRegistry 管理 Worker 主动建立的 gRPC 反向隧道（FR-281，见 ADR-066）。
 // Worker 在 CP 既有 gRPC 端口上开常驻反向隧道并以节点身份（node-uuid/node-secret
-// metadata，ADR-039）锚定归属；ClientPool 取连接时隧道优先、直拨回退（双模式）。
+// metadata，ADR-039）锚定归属；ClientPool 只从活跃隧道取得节点通道。
 // 鉴权在 StreamAuthInterceptor 前置完成——到达 handler 的隧道必已通过 secret 校验，
 // 杜绝「节点 A 冒领节点 B 的指令」。
 type TunnelRegistry struct {
 	db      *gorm.DB
 	handler *grpctunnel.TunnelServiceHandler
 
-	mu     sync.RWMutex
-	active map[string]int // nodeUUID → 活跃隧道数（常态 ≤1；重建瞬间旧未关新已开可短暂为 2）
+	mu          sync.RWMutex
+	active      map[string]int // nodeUUID → 活跃隧道数（常态 ≤1；重建瞬间旧未关新已开可短暂为 2）
+	onConnected func(nodeUUID string)
 }
 
 // NewTunnelRegistry 创建反向隧道注册表。
@@ -59,22 +61,26 @@ func (r *TunnelRegistry) StreamAuthInterceptor() grpc.StreamServerInterceptor {
 		uuid := nodeUUIDFromContext(ctx)
 		secret := nodeSecretFromContext(ctx)
 		if uuid == "" || secret == "" {
-			return status.Error(codes.Unauthenticated, "反向隧道缺少节点身份")
+			return status.Error(codes.Unauthenticated, "反向隧道身份无效")
 		}
 		var node model.Node
 		if err := r.db.Where("uuid = ?", uuid).First(&node).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				slog.Error("反向隧道鉴权查询失败", "err", err)
+				return status.Error(codes.Unavailable, "反向隧道鉴权暂不可用")
+			}
 			slog.Warn("反向隧道鉴权失败：节点不存在", "nodeUUID", uuid)
-			return status.Errorf(codes.NotFound, "节点 %s 不存在", uuid)
+			return status.Error(codes.Unauthenticated, "反向隧道身份无效")
 		}
 		if node.Secret != secret {
 			slog.Warn("反向隧道鉴权失败：secret 不匹配", "nodeUUID", uuid)
-			return status.Error(codes.PermissionDenied, "反向隧道鉴权失败")
+			return status.Error(codes.Unauthenticated, "反向隧道身份无效")
 		}
 		return handler(srv, ss)
 	}
 }
 
-// Channel 返回指向该节点的隧道通道；无活跃隧道返回 false（调用方回退直拨）。
+// Channel 返回指向该节点的隧道通道；无活跃隧道返回 false。
 func (r *TunnelRegistry) Channel(nodeUUID string) (grpc.ClientConnInterface, bool) {
 	r.mu.RLock()
 	n := r.active[nodeUUID]
@@ -82,7 +88,29 @@ func (r *TunnelRegistry) Channel(nodeUUID string) (grpc.ClientConnInterface, boo
 	if n == 0 {
 		return nil, false
 	}
-	return r.handler.KeyAsChannel(nodeUUID), true
+	channel := r.handler.KeyAsChannel(nodeUUID)
+	if !channel.Ready() {
+		return nil, false
+	}
+	return channel, true
+}
+
+// SetOnConnected 设置节点首次建立反向隧道后的回调。
+func (r *TunnelRegistry) SetOnConnected(fn func(nodeUUID string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onConnected = fn
+}
+
+// ConnectedNodes 返回当前存在活跃反向隧道的节点 UUID。
+func (r *TunnelRegistry) ConnectedNodes() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	nodes := make([]string, 0, len(r.active))
+	for uuid := range r.active {
+		nodes = append(nodes, uuid)
+	}
+	return nodes
 }
 
 // Connected 报告该节点当前是否有活跃反向隧道（节点观测面用）。
@@ -101,8 +129,12 @@ func (r *TunnelRegistry) onOpen(t grpctunnel.TunnelChannel) {
 	r.mu.Lock()
 	r.active[uuid]++
 	n := r.active[uuid]
+	onConnected := r.onConnected
 	r.mu.Unlock()
 	slog.Info("节点反向隧道已建立", "nodeUUID", uuid, "active", n)
+	if n == 1 && onConnected != nil {
+		go onConnected(uuid)
+	}
 }
 
 func (r *TunnelRegistry) onClose(t grpctunnel.TunnelChannel) {

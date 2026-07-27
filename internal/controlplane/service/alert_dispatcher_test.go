@@ -195,13 +195,34 @@ func TestDispatcher_FR011WebhookFallback(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
+	t.Setenv("JM_TEST_LEGACY_WEBHOOK", srv.URL)
+
+	rule := &model.AlertRule{Name: "legacy", Level: model.AlertLevelWarn, TriggerType: model.AlertTriggerMetric,
+		NotifyType: model.ChannelTypeWebhook, NotifyTarget: "${JM_TEST_LEGACY_WEBHOOK}"}
+	require.NoError(t, db.Create(rule).Error)
+
+	d.Fire(AlertTrigger{Rule: rule, TargetID: 1, DedupKey: "k", Message: "m", Resolvable: true})
+	assert.Equal(t, int64(1), atomic.LoadInt64(&hits))
+}
+
+// TestDispatcher_FR011WebhookFallbackRejectsPlaintext 存量明文 URL 不得继续用于外发。
+func TestDispatcher_FR011WebhookFallbackRejectsPlaintext(t *testing.T) {
+	db := newAlertTestDB(t)
+	d := NewAlertDispatcher(db)
+
+	var hits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&hits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
 
 	rule := &model.AlertRule{Name: "legacy", Level: model.AlertLevelWarn, TriggerType: model.AlertTriggerMetric,
 		NotifyType: model.ChannelTypeWebhook, NotifyTarget: srv.URL}
 	require.NoError(t, db.Create(rule).Error)
 
 	d.Fire(AlertTrigger{Rule: rule, TargetID: 1, DedupKey: "k", Message: "m", Resolvable: true})
-	assert.Equal(t, int64(1), atomic.LoadInt64(&hits))
+	assert.Equal(t, int64(0), atomic.LoadInt64(&hits))
 }
 
 // itoa 避免在测试中引 strconv。

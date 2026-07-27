@@ -1,8 +1,21 @@
 package grpc
 
 import (
+	"path/filepath"
 	"testing"
 )
+
+func TestValidateNonRootPath(t *testing.T) {
+	workDir := t.TempDir()
+	for _, target := range []string{workDir, filepath.Join(workDir, "."), filepath.Join(workDir, "nested", "..")} {
+		if err := validateNonRootPath(workDir, target); err == nil {
+			t.Fatalf("工作目录根 %q 必须拒绝", target)
+		}
+	}
+	if err := validateNonRootPath(workDir, filepath.Join(workDir, "server.properties")); err != nil {
+		t.Fatalf("工作目录内具体路径应允许: %v", err)
+	}
+}
 
 func TestDetectConfigFormat(t *testing.T) {
 	supported := map[string]string{

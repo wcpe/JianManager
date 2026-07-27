@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -158,6 +159,19 @@ type JWTConfig struct {
 	WSSecret string `mapstructure:"ws_secret"`
 }
 
+const defaultJWTSecret = "dev-secret-change-me"
+
+// ValidateJWTSecret 校验用户会话签名密钥。生产环境禁止使用源码公开的开发默认值或空值。
+func ValidateJWTSecret(secret string, devMode bool) error {
+	if devMode {
+		return nil
+	}
+	if strings.TrimSpace(secret) == "" || secret == defaultJWTSecret {
+		return errors.New("生产环境必须通过 jwt.secret 或 JIANMANAGER_JWT_SECRET 配置非默认 JWT 密钥")
+	}
+	return nil
+}
+
 // LogConfig 日志配置。
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
@@ -198,7 +212,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("grpc.port", 9100)
 	v.SetDefault("database.driver", "sqlite")
 	v.SetDefault("database.dsn", "data/jianmanager.db")
-	v.SetDefault("jwt.secret", "dev-secret-change-me")
+	v.SetDefault("jwt.secret", defaultJWTSecret)
 	v.SetDefault("jwt.access_ttl", "15m")
 	v.SetDefault("jwt.refresh_ttl", "168h")
 	// CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：默认空 = 生产 autogen 持久化 / dev 回退。

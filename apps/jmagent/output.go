@@ -269,11 +269,12 @@ func formatOK(w io.Writer, v any) error {
 
 // truncate 截断过长字符串并加省略号。
 func truncate(s string, max int) string {
-	if max <= 0 || len(s) <= max {
+	runes := []rune(s)
+	if max <= 0 || len(runes) <= max {
 		return s
 	}
 	if max <= 1 {
-		return s[:max]
+		return string(runes[:max])
 	}
-	return s[:max-1] + "…"
+	return string(runes[:max-1]) + "…"
 }

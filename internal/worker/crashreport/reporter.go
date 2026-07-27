@@ -33,7 +33,7 @@ type Snapshot struct {
 	TailOutput string
 }
 
-// Reporter 崩溃快照上报器：走 Worker→CP 既有出站信道（与注册/心跳同址直拨，
+// Reporter 崩溃快照上报器：走 Worker→CP 既有出站信道（与注册/心跳同址，
 // NAT 节点同样可达），上报失败（网络 / 老 CP Unimplemented）记日志丢弃，
 // 不重试不排队——快照是尽力而为的诊断增强，不得反向影响进程状态机。
 type Reporter struct {

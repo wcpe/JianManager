@@ -18,7 +18,8 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
-	workerws "github.com/wcpe/JianManager/internal/worker/ws"
+	wgrpc "github.com/wcpe/JianManager/internal/worker/grpc"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // TestBuildTerminalWSURL 覆盖终端代理 WS URL 的 scheme 选择与 baseURL 回退。
@@ -112,15 +113,13 @@ func issuedAtUnix(t *testing.T, tokenStr string) int64 {
 
 func TestTerminalProxy_RejectsReusedToken(t *testing.T) {
 	secret := "terminal-proxy-secret"
-	workerServer := workerws.NewTerminalServer(secret)
-	workerMux := http.NewServeMux()
-	workerMux.HandleFunc("/ws/terminal", workerServer.Handler())
-	workerHTTP := httptest.NewServer(workerMux)
-	defer workerHTTP.Close()
-
-	db, instanceID := newTerminalTestDB(t, workerHTTP.URL)
+	db, instanceID := newTerminalTestDB(t, startWorkerTerminalWS(t, secret))
 	svc := NewTerminalService(db, secret, "ws://fallback.invalid")
 	proxy := NewTerminalProxy(secret, svc)
+	wsrv := &wgrpc.Server{}
+	wsrv.SetTerminalWSAddr(startWorkerTerminalWS(t, secret))
+	client := startTerminalWorkerGRPC(t, wsrv)
+	proxy.SetWorkerClients(func(string) (workerpb.WorkerServiceClient, bool) { return client, true })
 	cpHTTP := httptest.NewServer(proxy.Handler())
 	defer cpHTTP.Close()
 
@@ -149,15 +148,13 @@ func TestTerminalProxy_RejectsReusedToken(t *testing.T) {
 // 不得命中 used-set 返回 401（旧实现 A/B 字节相同，重连要等跨秒重试才恢复）。
 func TestTerminalProxy_ReissuedTokenSameSecondConnects(t *testing.T) {
 	secret := "terminal-proxy-secret"
-	workerServer := workerws.NewTerminalServer(secret)
-	workerMux := http.NewServeMux()
-	workerMux.HandleFunc("/ws/terminal", workerServer.Handler())
-	workerHTTP := httptest.NewServer(workerMux)
-	defer workerHTTP.Close()
-
-	db, instanceID := newTerminalTestDB(t, workerHTTP.URL)
+	db, instanceID := newTerminalTestDB(t, startWorkerTerminalWS(t, secret))
 	svc := NewTerminalService(db, secret, "ws://fallback.invalid")
 	proxy := NewTerminalProxy(secret, svc)
+	wsrv := &wgrpc.Server{}
+	wsrv.SetTerminalWSAddr(startWorkerTerminalWS(t, secret))
+	client := startTerminalWorkerGRPC(t, wsrv)
+	proxy.SetWorkerClients(func(string) (workerpb.WorkerServiceClient, bool) { return client, true })
 	cpHTTP := httptest.NewServer(proxy.Handler())
 	defer cpHTTP.Close()
 
