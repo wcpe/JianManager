@@ -3128,6 +3128,10 @@
   },
   "logs": {
     "title": "Log Center",
+    "viewLabel": "Log view",
+    "view_platform": "Platform Logs",
+    "view_node_instance": "Node / Instance Logs",
+    "view_all": "All Logs",
     "time": "Time",
     "level": "Level",
     "source": "Source",

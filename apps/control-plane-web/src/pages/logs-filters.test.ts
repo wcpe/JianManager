@@ -5,6 +5,7 @@ import {
   buildExportParams,
   computeVirtualWindow,
   TIME_RANGE_PRESETS,
+  LOG_VIEWS,
   type LogExportScope,
 } from './logs-filters'
 import type { LogQueryParams } from '@/api/logs'
@@ -23,6 +24,12 @@ describe('logLevelStatus', () => {
   it('falls back to neutral for unknown levels', () => {
     expect(logLevelStatus('trace')).toBe('neutral')
     expect(logLevelStatus('')).toBe('neutral')
+  })
+})
+
+describe('LOG_VIEWS', () => {
+  it('defines the two primary views and the administrator-only full search', () => {
+    expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all'])
   })
 })
 

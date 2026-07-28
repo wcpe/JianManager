@@ -13,6 +13,12 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
+const (
+	logViewPlatform     = "platform"
+	logViewNodeInstance = "node_instance"
+	logViewAll          = "all"
+)
+
 // LogHandler 日志中心路由处理器（FR-049 查询 + 导出）。
 type LogHandler struct {
 	logSvc *service.LogService
@@ -33,9 +39,9 @@ func (h *LogHandler) RegisterRoutes(rg *gin.RouterGroup) {
 // buildFilter 从查询参数解析过滤条件，并按授权上下文收敛资源可见范围。
 // 返回 (filter, ok)；ok=false 表示已写出错误响应。
 //
-// 可见性规则（FR-049/FR-050 权限）：
-//   - 平台管理员：不收敛，可见全部（实例日志 + 平台日志）；
-//   - 组成员/组管理员：仅见有权实例的日志，平台日志对其隐藏（强制 source=instance + 实例集合收敛）。
+// 可见性规则（FR-049/FR-050/FR-403 权限）：
+//   - 平台管理员：可选平台、节点/实例或全部日志视图；
+//   - 组成员/组管理员：仅见有权实例的节点/实例日志，平台和全部视图均拒绝。
 func (h *LogHandler) buildFilter(c *gin.Context) (service.LogFilter, bool) {
 	access := getAccess(c)
 	if access == nil {
@@ -44,6 +50,11 @@ func (h *LogHandler) buildFilter(c *gin.Context) (service.LogFilter, bool) {
 	}
 
 	f := service.LogFilter{Keyword: c.Query("keyword")}
+	view := c.DefaultQuery("view", logViewNodeInstance)
+	if view != logViewPlatform && view != logViewNodeInstance && view != logViewAll {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "view 仅支持 platform、node_instance 或 all"})
+		return service.LogFilter{}, false
+	}
 
 	if v := c.Query("source"); v != "" {
 		s := model.LogSource(v)
@@ -76,7 +87,12 @@ func (h *LogHandler) buildFilter(c *gin.Context) (service.LogFilter, bool) {
 		}
 	}
 
-	// 资源级隔离：非平台管理员强制收敛到可访问实例，且只看实例日志（隐藏平台日志）。
+	if !access.IsPlatformAdmin && view != logViewNodeInstance {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "仅平台管理员可查看平台或全部日志"})
+		return service.LogFilter{}, false
+	}
+
+	// 资源级隔离：非平台管理员强制收敛到可访问实例，且只看实例日志（隐藏平台日志和节点 Worker 日志）。
 	if !access.IsPlatformAdmin {
 		ids, _, err := h.authz.AccessibleInstanceIDs(access)
 		if err != nil {
@@ -87,6 +103,17 @@ func (h *LogHandler) buildFilter(c *gin.Context) (service.LogFilter, bool) {
 		src := model.LogSourceInstance
 		f.Source = &src
 		// 若调用方显式传了 instanceId，但不在可访问集合内，AccessibleInstanceIDs 收敛会自然过滤掉。
+	}
+	if access.IsPlatformAdmin {
+		switch view {
+		case logViewPlatform:
+			src := model.LogSourceControlPlane
+			f.Source = &src
+			f.Sources = nil
+		case logViewNodeInstance:
+			f.Source = nil
+			f.Sources = []model.LogSource{model.LogSourceWorker, model.LogSourceInstance}
+		}
 	}
 
 	return f, true

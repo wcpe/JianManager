@@ -487,7 +487,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-400 | 受管资源归因与首页仪表 Tooltip（feat，增强 FR-169/170）：修复观测刷新后，首页 CPU/负载/内存仪表提供采样时间、陈旧/离线态与可访问 Tooltip；按节点→受管实例→进程 TopN 解释资源占用并可下钻监控页。仅覆盖节点、Worker、受管实例进程树与 Bot Worker，不采集任意 OS 进程；页面可见时 10s 刷新、隐藏暂停，复用既有 90s 新鲜度阈值（需 spec，依赖 FIX-观测刷新）→ `docs/specs/managed-resource-attribution/spec.md` | P1 | 🔨 开发中 |
 | FR-401 | Bot Worker 历史观测与聚合统计（feat，增强 FR-362/399）：常驻采样 Bot Worker RSS、事件循环 P95、活跃/连接中数、状态/重连/错误，按执行节点、目标实例与压测会话聚合查询；不以共享进程 RSS 伪造单 Bot 占用。时序留存复用 ADR-013 的 raw/5m/1h 三档（需 spec，依赖 FR-400 的唯一实时快照契约）→ `docs/specs/bot-runtime-observability/spec.md` | P1 | 📋 计划 |
 | FR-402 | 平台全景观测总览与下钻（feat，增强 FR-220）：平台首页聚合健康、资源、节点/实例状态、告警、任务与 Bot，展示 TopN/异常项并下钻节点或实例详情，不在首页全量铺开实体表（需 spec，依赖 FR-400/401）→ `docs/specs/platform-observability-overview/spec.md` | P1 | 📋 计划 |
-| FR-403 | 日志中心平台与节点实例视图分流（feat，增强 FR-150/215）：同一路径分为「平台日志」（仅 CP）与「节点/实例日志」（Worker+实例，按节点/实例聚合筛选）两个主视图；平台管理员保留受控全量检索。复用既有日志表与筛选接口（免 spec） | P1 | 📋 计划 |
+| FR-403 | 日志中心平台与节点实例视图分流（feat，增强 FR-150/215）：同一路径分为「平台日志」（仅 CP）与「节点/实例日志」（Worker+实例，按节点/实例聚合筛选）两个主视图；平台管理员保留受控全量检索。复用既有日志表与筛选接口（免 spec） | P1 | 🔨 开发中 |
 ### 范围外（后续版本，暂不纳入 V1）
 
 | 编号 | 需求 | 预计版本 |

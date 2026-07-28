@@ -177,16 +177,17 @@ func toModel(e IngestEntry) model.LogEntry {
 
 // LogFilter 日志检索过滤条件。所有字段下沉为 DB 谓词，零值表示不过滤。
 type LogFilter struct {
-	Source       *model.LogSource
-	Level        *model.LogLevel
-	InstanceID   *uint
-	NodeID       *uint
-	Keyword      string // 在 message 上做 LIKE %keyword%
-	From         *time.Time
-	To           *time.Time
-	InstanceIDs  []uint // 资源级隔离：非平台管理员收敛到可访问实例集（含平台日志另行放行，见 router）
-	Page         int
-	PageSize     int
+	Source      *model.LogSource
+	Sources     []model.LogSource
+	Level       *model.LogLevel
+	InstanceID  *uint
+	NodeID      *uint
+	Keyword     string // 在 message 上做 LIKE %keyword%
+	From        *time.Time
+	To          *time.Time
+	InstanceIDs []uint // 资源级隔离：非平台管理员收敛到可访问实例集（平台与 Worker 日志由 router 层隔离）
+	Page        int
+	PageSize    int
 }
 
 // LogPage 分页查询结果。
@@ -245,6 +246,13 @@ func (s *LogService) Export(filter LogFilter, maxRows int) ([]model.LogEntry, er
 func (s *LogService) applyFilter(q *gorm.DB, filter LogFilter) *gorm.DB {
 	if filter.Source != nil {
 		q = q.Where("source = ?", *filter.Source)
+	}
+	if filter.Sources != nil {
+		if len(filter.Sources) == 0 {
+			q = q.Where("1 = 0")
+		} else {
+			q = q.Where("source IN ?", filter.Sources)
+		}
 	}
 	if filter.Level != nil {
 		q = q.Where("level = ?", *filter.Level)

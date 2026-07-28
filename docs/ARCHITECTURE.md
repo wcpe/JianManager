@@ -1133,6 +1133,8 @@ log_store:
 
 **API 错误统一落平台日志（FR-320）**：全局 gin 中间件 `middleware.ErrorLog` 把 API 失败响应（4xx 业务拒绝=warn、5xx=error，401/404/429 噪音跳过）连同路径/状态码/响应体/用户/IP slog 化，经 `PersistSlogHandler` 桥自动落日志中心 platform 源——`/logs` 页可直接追查「某操作为什么报错」。此前错误只回 HTTP 响应，平台日志恒空、失败随连接断开进黑洞（FR-319 真机事故的观测性根因）。
 
+**日志视图分流（FR-403）**：`/logs` 与 `/logs/export` 复用同一 `log_entries` 表和筛选服务，以 `view` 在查询层分流：`platform` 只取 CP 日志，`node_instance`（默认）取 Worker 与实例日志并保留节点/实例筛选，`all` 允许平台管理员受控全量检索。非平台管理员只可访问已授权实例的节点/实例视图，不得读取平台或 Worker 日志；不引入第二份存储或新的日志数据模型。
+
 ### 11.1 项目自包含数据根（FHS 布局，ADR-010）
 
 平台运行态数据统一收口到单一数据根，默认进程工作目录下 `./data`，可经环境变量 `JIANMANAGER_DATA_DIR` 覆盖；进程启动时若不存在按布局自动初始化（CP 与 Worker 同源约定，由 `internal/platform/dataroot` 解析）。

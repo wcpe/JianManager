@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Download, Radio } from 'lucide-react'
 import { useLogs, exportLogs, type LogQueryParams } from '@/api/logs'
+import { useAuthStore } from '@/stores/auth'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { Button } from '@jianmanager/ui/components/button'
@@ -30,6 +31,7 @@ import {
   buildExportParams,
   computeVirtualWindow,
   TIME_RANGE_PRESETS,
+  LOG_VIEWS,
   type TimeRangePreset,
   type LogExportScope,
 } from './logs-filters'
@@ -38,6 +40,7 @@ import {
 const SENTINEL_ALL = '__all__'
 const PAGE_SIZE = 100
 const SOURCES = ['instance', 'control_plane', 'worker']
+const ROLE_PLATFORM_ADMIN = 10
 const LEVELS = ['error', 'warn', 'info', 'debug']
 const EXPORT_SCOPES: LogExportScope[] = ['currentPage', 'allMatched', 'range']
 
@@ -59,7 +62,9 @@ export default function LogsPage() {
   const { data: nodes } = useNodes()
   const { data: instances } = useInstances()
   const [searchParams] = useSearchParams()
+  const isPlatformAdmin = useAuthStore((state) => state.role === ROLE_PLATFORM_ADMIN)
 
+  const [view, setView] = useState<'platform' | 'node_instance' | 'all'>('node_instance')
   const [source, setSource] = useState('')
   const [level, setLevel] = useState('')
   const [nodeId, setNodeId] = useState<number | null>(null)
@@ -78,9 +83,10 @@ export default function LogsPage() {
   // 跟随态钉在第 1 页（最新）；锚点 now 在每次构建参数时取，配合轮询滚动时间窗。
   const timeParams = timeRangeToParams(range, new Date())
   const params: LogQueryParams = {
+    view,
     page: follow ? 1 : page,
     pageSize: PAGE_SIZE,
-    ...(source ? { source } : {}),
+    ...(view === 'all' && source ? { source } : {}),
     ...(level ? { level } : {}),
     ...(nodeId !== null ? { nodeId } : {}),
     ...(instanceId !== null ? { instanceId } : {}),
@@ -143,6 +149,30 @@ export default function LogsPage() {
         </DropdownMenu>
       </div>
 
+      <div
+        className="jm-toolbar-surface flex flex-wrap gap-1 p-1"
+        role="tablist"
+        aria-label={t('logs.viewLabel')}
+      >
+        {LOG_VIEWS.filter((candidate) => isPlatformAdmin || candidate === 'node_instance').map(
+          (candidate) => (
+            <Button
+              key={candidate}
+              variant={view === candidate ? 'default' : 'ghost'}
+              size="sm"
+              role="tab"
+              aria-selected={view === candidate}
+              onClick={() => {
+                setView(candidate)
+                setPage(1)
+              }}
+            >
+              {t(`logs.view_${candidate}`)}
+            </Button>
+          ),
+        )}
+      </div>
+
       {/* 强筛选工具栏 */}
       <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
         {/* 级别快速 pill（全部 + 四级） */}
@@ -183,56 +213,64 @@ export default function LogsPage() {
             ))}
           </SelectContent>
         </Select>
-        <Select
-          value={source === '' ? SENTINEL_ALL : source}
-          onValueChange={(v: string) => resetTo(setSource)(v === SENTINEL_ALL ? '' : v)}
-        >
-          <SelectTrigger size="sm" className="w-32">
-            <SelectValue placeholder={t('logs.allSources')} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={SENTINEL_ALL}>{t('logs.allSources')}</SelectItem>
-            {SOURCES.map((s) => (
-              <SelectItem key={s} value={s}>
-                {t(`logs.source_${s}`)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select
-          value={nodeId === null ? SENTINEL_ALL : String(nodeId)}
-          onValueChange={(v: string) => resetTo(setNodeId)(v === SENTINEL_ALL ? null : Number(v))}
-        >
-          <SelectTrigger size="sm" className="w-36">
-            <SelectValue placeholder={t('logs.allNodes')} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={SENTINEL_ALL}>{t('logs.allNodes')}</SelectItem>
-            {nodes?.map((node) => (
-              <SelectItem key={node.id} value={String(node.id)}>
-                {node.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select
-          value={instanceId === null ? SENTINEL_ALL : String(instanceId)}
-          onValueChange={(v: string) =>
-            resetTo(setInstanceId)(v === SENTINEL_ALL ? null : Number(v))
-          }
-        >
-          <SelectTrigger size="sm" className="w-44">
-            <SelectValue placeholder={t('logs.allInstances')} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={SENTINEL_ALL}>{t('logs.allInstances')}</SelectItem>
-            {instances?.map((inst) => (
-              <SelectItem key={inst.id} value={String(inst.id)}>
-                {inst.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {view === 'all' && (
+          <Select
+            value={source === '' ? SENTINEL_ALL : source}
+            onValueChange={(v: string) => resetTo(setSource)(v === SENTINEL_ALL ? '' : v)}
+          >
+            <SelectTrigger size="sm" className="w-32">
+              <SelectValue placeholder={t('logs.allSources')} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={SENTINEL_ALL}>{t('logs.allSources')}</SelectItem>
+              {SOURCES.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {t(`logs.source_${s}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {view !== 'platform' && (
+          <Select
+            value={nodeId === null ? SENTINEL_ALL : String(nodeId)}
+            onValueChange={(v: string) =>
+              resetTo(setNodeId)(v === SENTINEL_ALL ? null : Number(v))
+            }
+          >
+            <SelectTrigger size="sm" className="w-36">
+              <SelectValue placeholder={t('logs.allNodes')} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={SENTINEL_ALL}>{t('logs.allNodes')}</SelectItem>
+              {nodes?.map((node) => (
+                <SelectItem key={node.id} value={String(node.id)}>
+                  {node.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {view !== 'platform' && (
+          <Select
+            value={instanceId === null ? SENTINEL_ALL : String(instanceId)}
+            onValueChange={(v: string) =>
+              resetTo(setInstanceId)(v === SENTINEL_ALL ? null : Number(v))
+            }
+          >
+            <SelectTrigger size="sm" className="w-44">
+              <SelectValue placeholder={t('logs.allInstances')} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={SENTINEL_ALL}>{t('logs.allInstances')}</SelectItem>
+              {instances?.map((inst) => (
+                <SelectItem key={inst.id} value={String(inst.id)}>
+                  {inst.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
 
         {/* 实时跟随开关 pill，靠右 */}
         <button

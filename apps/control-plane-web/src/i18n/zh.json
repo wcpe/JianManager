@@ -3107,6 +3107,10 @@
   },
   "logs": {
     "title": "日志中心",
+    "viewLabel": "日志视图",
+    "view_platform": "平台日志",
+    "view_node_instance": "节点/实例日志",
+    "view_all": "全部日志",
     "time": "时间",
     "level": "级别",
     "source": "来源",

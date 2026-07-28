@@ -35,7 +35,7 @@ func parseLogPage(t *testing.T, w *httptest.ResponseRecorder) (items []interface
 	return
 }
 
-func TestLog_List_AdminSeesAll(t *testing.T) {
+func TestLog_List_DefaultsToNodeInstanceView(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 	adminToken := getAdminToken(t, r)
@@ -45,8 +45,9 @@ func TestLog_List_AdminSeesAll(t *testing.T) {
 
 	w := makeRequest(r, "GET", "/api/v1/logs", nil, adminToken)
 	require.Equal(t, http.StatusOK, w.Code)
-	_, total := parseLogPage(t, w)
-	assert.Equal(t, 2, total) // 管理员可见实例 + 平台日志
+	items, total := parseLogPage(t, w)
+	assert.Equal(t, 1, total)
+	assert.Equal(t, "inst line", items[0].(map[string]interface{})["message"])
 }
 
 func TestLog_List_Filters(t *testing.T) {
@@ -68,6 +69,47 @@ func TestLog_List_Filters(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	_, total = parseLogPage(t, w)
 	assert.Equal(t, 1, total)
+}
+
+func TestLog_List_ViewSplit(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	adminToken := getAdminToken(t, r)
+
+	seedLog(t, db, model.LogEntry{Source: model.LogSourceControlPlane, Level: model.LogLevelInfo, Message: "cp only"})
+	seedLog(t, db, model.LogEntry{Source: model.LogSourceWorker, Level: model.LogLevelInfo, NodeID: 3, Message: "worker line"})
+	seedLog(t, db, model.LogEntry{Source: model.LogSourceInstance, Level: model.LogLevelInfo, NodeID: 3, InstanceID: 8, Message: "instance line"})
+
+	w := makeRequest(r, "GET", "/api/v1/logs?view=platform", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code)
+	items, total := parseLogPage(t, w)
+	require.Equal(t, 1, total)
+	assert.Equal(t, "cp only", items[0].(map[string]interface{})["message"])
+
+	w = makeRequest(r, "GET", "/api/v1/logs?view=node_instance&nodeId=3", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code)
+	items, total = parseLogPage(t, w)
+	require.Equal(t, 2, total)
+	assert.NotContains(t, w.Body.String(), "cp only")
+	assert.Contains(t, w.Body.String(), "worker line")
+	assert.Contains(t, w.Body.String(), "instance line")
+}
+
+func TestLog_List_PrivilegedViewsRequirePlatformAdmin(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	adminToken := getAdminToken(t, r)
+	createTestNode(t, db)
+	group := createGroupViaAPI(t, r, adminToken, "日志组")
+	memberToken := getMemberToken(t, r, "log-member", "password123")
+	memberID := findUserIDByUsername(t, db, "log-member")
+	addMemberViaAPI(t, r, adminToken, group, memberID, model.GroupMemberRoleMember)
+	_ = createInstanceViaAPI(t, r, adminToken, 1, group)
+
+	for _, view := range []string{logViewPlatform, logViewAll} {
+		w := makeRequest(r, "GET", "/api/v1/logs?view="+view, nil, memberToken)
+		assert.Equal(t, http.StatusForbidden, w.Code, "view=%s", view)
+	}
 }
 
 func TestLog_List_CrossGroupIsolation(t *testing.T) {
@@ -109,11 +151,11 @@ func TestLog_List_CrossGroupIsolation(t *testing.T) {
 	require.Len(t, items, 1)
 	assert.Equal(t, "A line", items[0].(map[string]interface{})["message"])
 
-	// admin 见全部 3 条。
+	// 管理员默认只见节点/实例视图的 2 条日志。
 	w = makeRequest(r, "GET", "/api/v1/logs", nil, adminToken)
 	require.Equal(t, http.StatusOK, w.Code)
 	_, adminTotal := parseLogPage(t, w)
-	assert.Equal(t, 3, adminTotal)
+	assert.Equal(t, 2, adminTotal)
 }
 
 func TestLog_Export_NDJSON(t *testing.T) {
@@ -132,6 +174,20 @@ func TestLog_Export_NDJSON(t *testing.T) {
 	// 导出按时间正序。
 	assert.Contains(t, lines[0], "export one")
 	assert.Contains(t, lines[1], "export two")
+}
+
+func TestLog_Export_ViewSplit(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	adminToken := getAdminToken(t, r)
+
+	seedLog(t, db, model.LogEntry{Source: model.LogSourceControlPlane, Level: model.LogLevelInfo, Message: "cp export"})
+	seedLog(t, db, model.LogEntry{Source: model.LogSourceWorker, Level: model.LogLevelInfo, NodeID: 3, Message: "worker export"})
+
+	w := makeRequest(r, "GET", "/api/v1/logs/export?view=platform", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "cp export")
+	assert.NotContains(t, w.Body.String(), "worker export")
 }
 
 func TestLog_List_RequiresAuth(t *testing.T) {

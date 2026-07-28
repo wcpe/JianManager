@@ -20,6 +20,8 @@ export interface LogEntry {
 
 /** 日志查询筛选条件（DB 侧过滤 + 分页，FR-049/FR-050）。 */
 export interface LogQueryParams {
+  /** 主视图：平台仅 CP；节点/实例聚合 Worker 与实例；all 仅平台管理员。 */
+  view?: 'platform' | 'node_instance' | 'all'
   source?: string
   level?: string
   instanceId?: number
