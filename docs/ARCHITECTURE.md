@@ -638,7 +638,8 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | artifact_reconcile_settings (FR-349) | id=1, enabled(default true), interval_hours(default 24，[1,720]), next_run_at, updated_at（定期对账单行设置） |
 | logs (FR-049) | source(instance/control_plane/worker), level(debug/info/warn/error), instance_id, instance_uuid, node_id, stream(stdout/stderr), message, time；复合索引 (source,time)/(level,time)/(instance_id,time)/(node_id,time)，关键字检索走 message 列谓词 |
 | ban_records (V2) | uuid, player_name, reason, scope(network/instance/global), scope_id, operator_id(FK), active, created_at, unbanned_at（玩家封禁台账，FR-054；保留历史治理记录，解封置 active=false 保留历史） |
-| platform_settings (V2) | key(PK), value, updated_at（平台配置 DB 覆盖层，仅存被显式覆盖的白名单键；生效优先级 DB 覆盖 > 环境变量 > YAML 默认，FR-063/ADR-015）。network 类键 `proxy.url`（敏感脱敏）/`proxy.no_proxy` 为 CP 全局出站代理（FR-185/ADR-043），保存即重建 CP 出站持有者并作为各节点默认代理（优先级 settings DB > control-plane.yml > env）。FR-326 加性键 `instance_reverse_reconcile.grace_period`（默认 10m）/`instance_reverse_reconcile.auto_dispose`（默认 false）护栏读侧即时生效 |
+| platform_settings (V2) | key(PK), value, updated_at（平台配置 DB 覆盖层，仅存被显式覆盖的白名单键；生效优先级 DB 覆盖 > 环境变量 > YAML 默认，FR-063/ADR-015）。network 类键 `proxy.url`（敏感脱敏）/`proxy.no_proxy` 为 CP 全局出站代理（FR-185/ADR-043），保存即重建 CP 出站持有者并作为各节点默认代理（优先级 settings DB > control-plane.yml > env）。FR-326 加性键 `instance_reverse_reconcile.grace_period`（默认 10m）/`instance_reverse_reconcile.auto_dispose`（默认 false）护栏读侧即时生效。FR-405 的 `platform.public_base_url` 是后续所有绝对链接的唯一 HTTP/HTTPS 公共基址，`invite.smtp.*` 用于受控邀请；SMTP 密码只存 `${ENV_VAR}` 引用且读取时脱敏 |
+| user_invitations (FR-405) | email, token_hash（SHA-256，UNIQUE，不存明文）, token_prefix（识别用、不对外）, role（固定 member）, expires_at, created_by_id, used_at, revoked_at, email_sent_at, email_delivery, created_at, deleted_at；管理员签发，公开接受端以条件更新原子消费，失效状态统一拒绝 |
 | orphan_runtimes (V2, FR-326) | uuid, node_uuid, instance_uuid, worker_state, worker_pid, status(pending/confirmed/disposed/cancelled), first_seen_at, last_seen_at, disposed_at, dispose_mode(auto/manual), last_error（无主运行时反向对账跟踪：Worker 有、CP 无记录；宽限+默认不自动杀；见 ADR-079） |
 | self_update_check_caches (FR-186) | id(固定=1, 单行覆盖), result_json(上次成功 CheckResult 的 JSON blob, 整段存不拆字段以免随 CheckResult 演进迁移、反序列化缺字段降级), source(更新源标识冗余, 诊断用), checked_at（系统更新页检查结果服务端缓存；GET /self-update/check 返此缓存不触发 live、refresh 成功后 upsert 覆盖、刷新失败不清，进页即显 + 后台静默刷新，增强 FR-182） |
 | tasks (V2, FR-183) | task_id(UNIQUE, UUID 业务键), node_id, instance_id(FR-319 provision 任务关联实例，启动闸据此拦在途搭建), kind(jdk_install/runtime_install/pkg_install/provision/import/clone/backup_create/backup_restore/artifact_migrate), state(pending/running/succeeded/failed/canceled), progress(0~100), title, detail, error, result(成功结果 JSON), created_by(发起人/归属), created_at, updated_at（全局任务中心：长任务进度经心跳 upsert 或 CP 侧直写，终态触发副作用，ADR-040）。**长操作任务化（FR-323）**：CP 侧长操作（一键搭建 / 导入 migrate 搬迁 / 克隆拷贝 / 备份创建恢复）经共享底座 `TaskService.RunAsync`（CreateTask→后台 goroutine→SetStage 阶段进度→MarkSucceeded/Failed→终态站内信，业务副作用如 statusReason/Backup record 状态由 work 自负）统一纳入任务中心——提交秒回 `{…, taskId}` 不阻塞（搬迁/拷贝/打包可数十分钟），进度/失败在任务中心可见；就地导入（O(1) 无拷贝）保持同步。**制品存量迁移（FR-348）**使用 `kind=artifact_migrate/node_id=0` 的 CP 本地任务；因发起时必须同步落 `artifact_migrations` 登记，采用手写 `CreateTask→建登记→goroutine→MarkRunning/终态` 生命周期而不走 `RunAsync` |
@@ -937,7 +938,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  用户管理                     [+ 创建用户]            │
+│  用户管理          [+ 创建用户] [+ 邀请成员]          │
 │                                                      │
 │  ┌─────────────────────────────────────────────────┐ │
 │  │ 用户名    │ 角色       │ 所属组   │ 状态  │ 操作 │ │
@@ -947,6 +948,8 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 │  └─────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────┘
 ```
+
+> FR-405 关闭匿名 `/auth/register`：管理员可直接创建任意有效角色/状态，或签发仅成员、7 天有效、可撤销的一次性邀请。邀请令牌只在创建响应和邮件链接的 URL fragment 中短暂存在；公开 `/invite` 页面读取 fragment 后调用接受接口并自行设置凭据。受邀成员不自动加入用户组。
 
 #### 用户组管理 `/groups`
 
@@ -985,7 +988,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 - **备份 `/backups`**: 按实例分组的备份列表，支持创建/恢复/删除
 - **模板 `/templates`**: 服务端模板列表，平台管理员可管理
 - **审计日志 `/audit`**: 操作日志表格，按用户/操作/时间筛选
-- **设置 `/settings`**: 系统设置（仅平台管理员）；页面按外观、日志、运行时、网络、备份、安全 / 系统共 6 类展示。DB 覆盖优先级为 DB > env > YAML；各键是否即时改变运行态以 `effectiveImmediately` 与对应消费链路为准（FR-063）
+- **设置 `/settings`**: 系统设置（仅平台管理员）；页面按外观、日志、运行时、网络、备份、邀请邮件、安全 / 系统共 7 类展示。DB 覆盖优先级为 DB > env > YAML；各键是否即时改变运行态以 `effectiveImmediately` 与对应消费链路为准（FR-063/405）
 - **系统更新 `/system-update`** (V2，FR-081/FR-175/FR-182/ADR-036 §7/ADR-042): 侧栏「设置」组，仅平台管理员可见。更新源默认读 **GitHub Releases**（`update.github_repo`=`wcpe/JianManager` + `channel`：`stable`=`/releases/latest`、`prerelease`=滚动 `latest` tag，feed 为可选回退）。检查更新（CP 自身 + 各节点版本对比，`source` 标更新源，notes 独立说明块）、CP 自更新、单节点升级、全网逐节点编排（rollout 运行中短轮询进度）；**升级前自动备份当前二进制**，CP 与各节点可一键**回滚 v{backupVersion}**到上一版（无备份禁用，FR-182）。升级/回滚均危险操作走统一 `DangerConfirm`（scope=platform）二次确认
 - **群组服 `/networks` + `/networks/topology`** (V2): `/networks/topology` 为拓扑视图（代理 + 已注册后端，含各子服在线人数），`/networks` 为群组管理；管理 proxy↔backend 注册（别名/优先级/forced-host）；群组软标签筛选与批量启停；「搭建子服 / 搭建代理」向导入口
 - **玩家管理 `/players`** (V2): 在线玩家（探针事件实时聚合，标注所在子服，BC 跨服感知，FR-066）/封禁记录/白名单三视图；踢出/封禁二次确认 + 原因输入，解封（经探针插件桥 `SendPluginCommand` 执行，FR-067）；探针未连入降级提示。**「实时事件」标签**经 SSE 驱动在线名册 + 事件流

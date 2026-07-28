@@ -29,19 +29,6 @@
   ```
 - **错误**: 409 管理员已存在 | 400 参数校验失败
 
-### POST /api/v1/auth/register
-- **描述**: 用户注册
-- **关联 FR**: FR-001
-- **请求**:
-  ```json
-  { "username": "string", "password": "string" }
-  ```
-- **响应** (201):
-  ```json
-  { "id": "uuid", "username": "string", "createdAt": "datetime" }
-  ```
-- **错误**: 409 username 已存在
-
 ### POST /api/v1/auth/login
 - **描述**: 用户登录
 - **关联 FR**: FR-001
@@ -68,9 +55,27 @@
   ```
 - **错误**: 401 refreshToken 无效或已过期
 
+### POST /api/v1/auth/invitations/accept
+- **描述**: 消费一次性邀请并创建启用的组成员。过期、撤销、已使用和伪造令牌均返回同一错误，不泄露邀请状态。
+- **关联 FR**: FR-405
+- **权限**: 无需认证
+- **请求**: `{ "token": "string", "username": "string", "password": "string" }`（用户名 3–64 字符，密码 8–128 字符）
+- **响应** (201): `{ "id": 1, "username": "string", "createdAt": "datetime" }`
+- **错误**: 400 `INVALID_REQUEST` | 401 `INVITATION_INVALID` | 409 `USER_EXISTS`
+
+> `POST /api/v1/auth/register` 已移除，任何请求均为 404；初始管理员仍只能通过首次启动的 `POST /api/v1/setup` 创建。
+
 ---
 
 ## 用户
+
+### POST /api/v1/users
+- **描述**: 平台管理员直接创建用户，可一次指定角色与初始状态；替代已移除的匿名注册入口。
+- **关联 FR**: FR-405
+- **权限**: 平台管理员
+- **请求**: `{ "username": "string", "password": "string", "role": 0|1|10, "status": 0|1 }`（用户名 3–64 字符，密码 8–128 字符）
+- **响应** (201): `{ "id": 1, "uuid": "string", "username": "string", "role": 0, "status": 0, "createdAt": "datetime" }`
+- **错误**: 400 `INVALID_REQUEST` | 403 `FORBIDDEN` | 409 `USER_EXISTS`
 
 ### GET /api/v1/users
 - **描述**: 用户列表（平台管理员）。可选服务端搜索/分页（FR-336）。
@@ -96,6 +101,27 @@
 - **描述**: 删除用户
 - **关联 FR**: FR-002
 - **权限**: `user.delete`
+
+### POST /api/v1/users/invitations
+- **描述**: 签发仅组成员可用、7 天有效、一次性的邀请。邮件未配置或投递失败时邀请仍创建成功，管理员仅可在本次响应取得手动发送链接。
+- **关联 FR**: FR-405
+- **权限**: 平台管理员
+- **请求**: `{ "email": "user@example.com", "sendEmail": true }`
+- **响应** (201): `{ "id": 1, "email": "user@example.com", "role": 0, "expiresAt": "datetime", "invitationUrl": "https://…/invite#token", "emailDelivery": "sent"|"not_configured"|"failed" }`
+- **错误**: 400 `INVALID_REQUEST` | 403 `FORBIDDEN`
+
+### GET /api/v1/users/invitations
+- **描述**: 列出邀请生命周期；不含明文令牌、令牌哈希、SMTP 密码或邮件正文。
+- **关联 FR**: FR-405
+- **权限**: 平台管理员
+- **响应** (200): `[{ "id": 1, "email": "user@example.com", "role": 0, "expiresAt": "datetime", "used": false, "usedAt": null, "revoked": false, "revokedAt": null, "createdBy": 1, "emailSentAt": null, "emailDelivery": "not_configured", "createdAt": "datetime" }]`
+
+### DELETE /api/v1/users/invitations/:id
+- **描述**: 撤销未使用邀请。
+- **关联 FR**: FR-405
+- **权限**: 平台管理员
+- **响应** (200): `{ "message": "已撤销" }`
+- **错误**: 403 `FORBIDDEN` | 404 `NOT_FOUND` | 409 `INVITATION_ALREADY_USED`
 
 ---
 
@@ -2631,10 +2657,10 @@
   ```
 
 ### PUT /api/v1/settings
-- **描述**: 写入一批白名单配置覆盖。非白名单键或值不合法时整体拒绝（422）且不落库；成功后返回更新后的最新视图。设置页按外观、日志、运行时、网络、备份、安全 / 系统共 **6 类**展示；是否立即改变 CP 行为以每项 `effectiveImmediately` 与下列生效链路为准，不能泛化为所有白名单项无条件热生效
+- **描述**: 写入一批白名单配置覆盖。非白名单键或值不合法时整体拒绝（422）且不落库；成功后返回更新后的最新视图。设置页按外观、日志、运行时、网络、备份、邀请邮件、安全 / 系统共 **7 类**展示；是否立即改变 CP 行为以每项 `effectiveImmediately` 与下列生效链路为准，不能泛化为所有白名单项无条件热生效
 - **权限**: 平台管理员
 - **关联 FR**: FR-063
-- **可写白名单键**: `log.level`（debug|info|warn|error）、`debug.mode`（true|false）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`runtime.mirror.nodejs`（FR-299）、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）、`instance_reverse_reconcile.grace_period` / `instance_reverse_reconcile.auto_dispose`（FR-326）
+- **可写白名单键**: `log.level`（debug|info|warn|error）、`debug.mode`（true|false）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`runtime.mirror.nodejs`（FR-299）、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）、`instance_reverse_reconcile.grace_period` / `instance_reverse_reconcile.auto_dispose`（FR-326）、`platform.public_base_url`、`invite.smtp.host` / `invite.smtp.port` / `invite.smtp.username` / `invite.smtp.password` / `invite.smtp.from`（FR-405）
 - **各项生效方式**（FR-063 / FR-185 / FR-225 / FR-326）：
   - `log.level`：`effectiveImmediately=true`，落库即在 CP 内切换（slog LevelVar）
   - `debug.mode`：`effectiveImmediately=true`，开启时切换 CP 日志与 Gin debug 模式；关闭时恢复 `log.level` 基线与 Gin release 模式
@@ -2645,6 +2671,8 @@
   - `proxy.url` / `proxy.no_proxy`（FR-185/ADR-043）：`effectiveImmediately=true`，落库即重建 CP 出站持有者（CP 自身下载立即走新代理）；`proxy.url` 敏感，回显脱敏（含凭据时仅 `scheme://host:port`），非法地址（非 http/https/socks5 / 不可解析）整体拒绝（422）。此全局值同时作为各节点默认代理（节点页可覆盖），优先级 settings DB > control-plane.yml > env
   - `instance_reverse_reconcile.grace_period`（FR-326）：`effectiveImmediately=true`，正 Go duration（默认 `10m`）；无主运行时首次发现后观察期，期内 CP 又有实例记录则取消
   - `instance_reverse_reconcile.auto_dispose`（FR-326）：`effectiveImmediately=true`，`true|false`（**默认 false**）；宽限后是否自动下发 `DisposeOrphanRuntime`，关则仅列表/日志，管理员手动确认
+  - `platform.public_base_url`（FR-405）：平台生成绝对链接的唯一公共基址，必须为无查询参数、无 fragment 的完整 HTTP 或 HTTPS 地址；签发邀请时据此生成 `<base>/invite#<token>`，未配置或非法时拒绝签发，绝不从请求 Host 或转发头推断。无 TLS 的自托管内网可使用 HTTP，公网部署应使用 HTTPS。
+  - `invite.smtp.host` / `invite.smtp.port` / `invite.smtp.username` / `invite.smtp.password` / `invite.smtp.from`（FR-405）：独立于告警通道的邀请邮件配置；密码仅接受 `${ENV_VAR}`，GET 仅回显“已配置”状态。邮件未配置或投递失败时邀请仍创建，响应带 `emailDelivery` 与一次性手动发送链接。
 - **请求**: `{ "values": { "log.level": "debug", "backup.retention_days": "30" } }`
 
 ---
