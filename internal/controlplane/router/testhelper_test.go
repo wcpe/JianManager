@@ -141,53 +141,55 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	instanceBatchSvc.SetInstanceService(instanceSvc)
 	authSvc := service.NewAuthService(db, jwtCfg)
 	authSvc.SetPasswordCostForTest(bcrypt.MinCost)
+	userSvc := service.NewUserService(db)
+	userSvc.SetPasswordCostForTest(bcrypt.MinCost)
 	svcs := &Services{
-		Auth:              authSvc,
-		User:              service.NewUserService(db),
-		Group:             groupSvc,
-		Node:              nodeSvc,
-		NodeRepair:        service.NewNodeRepairService(db),
-		Instance:          instanceSvc,
-		InstanceBatch:     instanceBatchSvc,
-		InstanceGroup:     service.NewInstanceGroupService(db),
-		NodeRuntime:       service.NewNodeRuntimeService(db, pool),
-		ProbeUpdate:       service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),
-		Terminal:          service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
-		File:              fileSvc,
-		FileVersion:       fileVersionSvc,
-		Plugin:            service.NewPluginService(db, pool, assetSvc),
-		Config:            configSvc,
-		Bot:               botSvc,
-		BotStressSession:  service.NewBotStressSessionService(db, botSvc),
-		BotLoadCapacity:   botLoadCapacity,
-		BotLoadPreflight:  botLoadPreflight,
-		BotLoadExecution:  botLoadExecution,
-		BotLoadReport:     service.NewBotLoadReportService(db),
-		BotLoadMetrics:    service.NewBotLoadMetricSampler(db, nil),
-		BotLoadProjection: service.NewBotLoadProjectionService(db),
-		Alert:             service.NewAlertService(db),
-		AlertChannel:      service.NewAlertChannelService(db),
-		Schedule:          service.NewScheduleService(db),
-		Backup:            service.NewBackupService(db, pool),
-		BackupStorage:     backupStorageSvc,
-		ArtifactStorage:   artifactStorageSvc,
-		ArtifactReconcile: artifactReconcileSvc,
-		Template:          service.NewTemplateService(db),
-		Audit:             service.NewAuditService(db),
-		Authz:             authzSvc,
-		Business:          service.NewBusinessService(db, pool),
-		BusinessEvent:     service.NewBusinessEventService(db),
-		Asset:             assetSvc,
-		RuntimeAssets:     runtimeAssetsSvc,
-		Storage:           service.NewStorageService(db, root),
-		Log:               service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
-		Metric:            service.NewMetricService(db),
+		Auth:                  authSvc,
+		User:                  userSvc,
+		Group:                 groupSvc,
+		Node:                  nodeSvc,
+		NodeRepair:            service.NewNodeRepairService(db),
+		Instance:              instanceSvc,
+		InstanceBatch:         instanceBatchSvc,
+		InstanceGroup:         service.NewInstanceGroupService(db),
+		NodeRuntime:           service.NewNodeRuntimeService(db, pool),
+		ProbeUpdate:           service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),
+		Terminal:              service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
+		File:                  fileSvc,
+		FileVersion:           fileVersionSvc,
+		Plugin:                service.NewPluginService(db, pool, assetSvc),
+		Config:                configSvc,
+		Bot:                   botSvc,
+		BotStressSession:      service.NewBotStressSessionService(db, botSvc),
+		BotLoadCapacity:       botLoadCapacity,
+		BotLoadPreflight:      botLoadPreflight,
+		BotLoadExecution:      botLoadExecution,
+		BotLoadReport:         service.NewBotLoadReportService(db),
+		BotLoadMetrics:        service.NewBotLoadMetricSampler(db, nil),
+		BotLoadProjection:     service.NewBotLoadProjectionService(db),
+		Alert:                 service.NewAlertService(db),
+		AlertChannel:          service.NewAlertChannelService(db),
+		Schedule:              service.NewScheduleService(db),
+		Backup:                service.NewBackupService(db, pool),
+		BackupStorage:         backupStorageSvc,
+		ArtifactStorage:       artifactStorageSvc,
+		ArtifactReconcile:     artifactReconcileSvc,
+		Template:              service.NewTemplateService(db),
+		Audit:                 service.NewAuditService(db),
+		Authz:                 authzSvc,
+		Business:              service.NewBusinessService(db, pool),
+		BusinessEvent:         service.NewBusinessEventService(db),
+		Asset:                 assetSvc,
+		RuntimeAssets:         runtimeAssetsSvc,
+		Storage:               service.NewStorageService(db, root),
+		Log:                   service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
+		Metric:                service.NewMetricService(db),
 		PlatformObservability: service.NewPlatformObservabilityService(db),
-		DBBrowse:          service.NewDBBrowseService(db),
-		SelfUpdate:        service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{}, root),
-		ServerState:       service.NewServerStateService(db, pool),
-		CrashSnapshot:     service.NewCrashSnapshotService(db),
-		ImportServer:      service.NewImportServerService(db, pool, instanceSvc),
+		DBBrowse:              service.NewDBBrowseService(db),
+		SelfUpdate:            service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{}, root),
+		ServerState:           service.NewServerStateService(db, pool),
+		CrashSnapshot:         service.NewCrashSnapshotService(db),
+		ImportServer:          service.NewImportServerService(db, pool, instanceSvc),
 		// Agent Token 策略真源（FR-384/388）：测试路由需挂 agent 管理/运维面。
 		AgentToken: service.NewAgentTokenService(db),
 		// Agent 调用流水（FR-390）：Ops 读+写记流水；Token 列表 callCount24h。
@@ -242,24 +244,23 @@ func getAdminToken(t *testing.T, r *gin.Engine) string {
 	return token
 }
 
-// getMemberToken 注册一个普通成员并返回 access token。
+// getMemberToken 通过受保护的管理员创建接口创建普通成员并返回 access token。
 func getMemberToken(t *testing.T, r *gin.Engine, username, password string) string {
 	t.Helper()
 
-	regBody, _ := json.Marshal(map[string]string{
+	adminToken := loginTestAdmin(t, r)
+	w := makeRequest(r, http.MethodPost, "/api/v1/users", map[string]interface{}{
 		"username": username,
 		"password": password,
-	})
-	req := httptest.NewRequest("POST", "/api/v1/auth/register", bytes.NewBuffer(regBody))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
+		"role":     model.RoleMember,
+		"status":   model.UserStatusActive,
+	}, adminToken)
 	if w.Code != http.StatusCreated {
-		t.Fatalf("注册用户失败: status=%d, body=%s", w.Code, w.Body.String())
+		t.Fatalf("创建测试成员失败: status=%d, body=%s", w.Code, w.Body.String())
 	}
 
-	req = httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewBuffer(regBody))
+	regBody, _ := json.Marshal(map[string]string{"username": username, "password": password})
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", bytes.NewBuffer(regBody))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -276,6 +277,24 @@ func getMemberToken(t *testing.T, r *gin.Engine, username, password string) stri
 	token, ok := resp["accessToken"].(string)
 	if !ok || token == "" {
 		t.Fatalf("登录响应中缺少 accessToken: %v", resp)
+	}
+	return token
+}
+
+func loginTestAdmin(t *testing.T, r *gin.Engine) string {
+	t.Helper()
+	body := map[string]string{"username": "admin", "password": "password123"}
+	w := makeRequest(r, http.MethodPost, "/api/v1/auth/login", body, "")
+	if w.Code == http.StatusUnauthorized {
+		return getAdminToken(t, r)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("登录测试管理员失败: status=%d, body=%s", w.Code, w.Body.String())
+	}
+	resp := parseJSON(t, w)
+	token, ok := resp["accessToken"].(string)
+	if !ok || token == "" {
+		t.Fatal("测试管理员登录响应缺少 accessToken")
 	}
 	return token
 }

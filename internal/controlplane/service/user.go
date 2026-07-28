@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,12 +13,51 @@ import (
 
 // UserService 用户管理服务。
 type UserService struct {
-	db *gorm.DB
+	db           *gorm.DB
+	invitation   *UserInvitationService
+	passwordCost int
 }
 
 // NewUserService 创建用户管理服务。
 func NewUserService(db *gorm.DB) *UserService {
-	return &UserService{db: db}
+	return &UserService{db: db, invitation: NewUserInvitationService(db), passwordCost: bcrypt.DefaultCost}
+}
+
+// InvitationService 返回与用户持久化边界共享数据库的邀请服务。
+func (s *UserService) InvitationService() *UserInvitationService { return s.invitation }
+
+// SetPasswordCostForTest 设置测试 bcrypt 成本，生产装配不得调用。
+func (s *UserService) SetPasswordCostForTest(cost int) { s.passwordCost = cost }
+
+// Create 创建由平台管理员直接指定角色与状态的用户。
+func (s *UserService) Create(username, password string, role model.UserRole, status model.UserStatus) (*model.User, error) {
+	if !validUserRole(role) || !validUserStatus(status) {
+		return nil, ErrUserInvalid
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), s.passwordCost)
+	if err != nil {
+		return nil, fmt.Errorf("加密密码失败: %w", err)
+	}
+	user := &model.User{Username: username, Password: string(hashed), Role: role, Status: status}
+	if err := s.db.Create(user).Error; err != nil {
+		if isUniqueConstraint(err) {
+			return nil, ErrUserExists
+		}
+		return nil, fmt.Errorf("创建用户失败: %w", err)
+	}
+	return user, nil
+}
+
+func validUserRole(role model.UserRole) bool {
+	return role == model.RoleMember || role == model.RoleGroupAdmin || role == model.RolePlatformAdmin
+}
+
+func validUserStatus(status model.UserStatus) bool {
+	return status == model.UserStatusActive || status == model.UserStatusDisabled
+}
+
+func isUniqueConstraint(err error) bool {
+	return errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(strings.ToLower(err.Error()), "unique")
 }
 
 // UserListFilter 用户列表筛选（FR-336）。零值不限制。

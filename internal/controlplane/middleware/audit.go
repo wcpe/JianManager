@@ -181,6 +181,10 @@ func determineAction(method, path string) string {
 		return "instance.update"
 	case method == "DELETE" && strings.Contains(path, "/instances"):
 		return "instance.delete"
+	case method == "POST" && strings.HasSuffix(path, "/users/invitations"):
+		return "user.invitation.create"
+	case method == "DELETE" && strings.Contains(path, "/users/invitations/"):
+		return "user.invitation.revoke"
 	case method == "POST" && strings.Contains(path, "/users"):
 		return "user.create"
 	case method == "PUT" && strings.Contains(path, "/users"):

@@ -21,6 +21,7 @@ var (
 	ErrUserDisabled       = errors.New("用户已被禁用")
 	ErrAdminAlreadyExists = errors.New("管理员已存在")
 	ErrUserNotFound       = errors.New("用户不存在")
+	ErrUserInvalid        = errors.New("用户角色或状态非法")
 )
 
 const (
@@ -43,6 +44,9 @@ func NewAuthService(db *gorm.DB, cfg config.JWTConfig) *AuthService {
 	return &AuthService{db: db, cfg: cfg, passwordCost: bcrypt.DefaultCost}
 }
 
+// UserService 创建共享认证数据库的用户服务，供完整路由装配缺少显式用户服务时兜底。
+func (s *AuthService) UserService() *UserService { return NewUserService(s.db) }
+
 // SetPasswordCostForTest 设置测试用 bcrypt 成本，生产装配不得调用。
 func (s *AuthService) SetPasswordCostForTest(cost int) {
 	s.passwordCost = cost
@@ -63,35 +67,6 @@ type Claims struct {
 	TokenType   string         `json:"tokenType"`
 	AuthVersion uint           `json:"authVersion"`
 	jwt.RegisteredClaims
-}
-
-// Register 用户注册。
-func (s *AuthService) Register(username, password string) (*model.User, error) {
-	// 检查用户名是否已存在
-	var count int64
-	s.db.Model(&model.User{}).Where("username = ?", username).Count(&count)
-	if count > 0 {
-		return nil, ErrUserExists
-	}
-
-	// bcrypt 加密密码
-	hashed, err := bcrypt.GenerateFromPassword([]byte(password), s.passwordCost)
-	if err != nil {
-		return nil, fmt.Errorf("加密密码失败: %w", err)
-	}
-
-	user := &model.User{
-		Username: username,
-		Password: string(hashed),
-		Role:     model.RoleMember,
-		Status:   model.UserStatusActive,
-	}
-
-	if err := s.db.Create(user).Error; err != nil {
-		return nil, fmt.Errorf("创建用户失败: %w", err)
-	}
-
-	return user, nil
 }
 
 // Login 用户登录。

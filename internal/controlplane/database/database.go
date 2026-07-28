@@ -101,6 +101,7 @@ func AutoMigrate(db *gorm.DB) error {
 
 	if err := db.AutoMigrate(
 		&model.User{},
+		&model.UserInvitation{},
 		&model.AuthSetupLock{},
 		&model.Group{},
 		&model.GroupMember{},

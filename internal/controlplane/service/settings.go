@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"strconv"
 	"time"
 
@@ -43,6 +44,15 @@ const (
 	SettingKeyOrphanGracePeriod = "instance_reverse_reconcile.grace_period"
 	// SettingKeyOrphanAutoDispose 宽限后是否自动下发处置（true|false，FR-326）。默认 false：只列表/日志，管理员手动确认。
 	SettingKeyOrphanAutoDispose = "instance_reverse_reconcile.auto_dispose"
+	// SettingKeyPlatformPublicBaseURL 是平台生成绝对链接唯一允许使用的公共基址（FR-405）。
+	// 允许 HTTP 供无 TLS 的自托管内网使用；不允许由请求头推断。
+	SettingKeyPlatformPublicBaseURL = "platform.public_base_url"
+	// SettingKeyInviteSMTPHost / Port / Username / Password / From 是独立于告警通道的邀请邮件配置。
+	SettingKeyInviteSMTPHost     = "invite.smtp.host"
+	SettingKeyInviteSMTPPort     = "invite.smtp.port"
+	SettingKeyInviteSMTPUsername = "invite.smtp.username"
+	SettingKeyInviteSMTPPassword = "invite.smtp.password"
+	SettingKeyInviteSMTPFrom     = "invite.smtp.from"
 )
 
 var (
@@ -182,6 +192,12 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		// 实例反向对账护栏（FR-326）：宽限期与自动处置开关；读侧即时生效（下一次心跳观察即用）。
 		s.editableItem(SettingKeyOrphanGracePeriod, s.defaultValue(SettingKeyOrphanGracePeriod), overrides, true),
 		s.editableItem(SettingKeyOrphanAutoDispose, s.defaultValue(SettingKeyOrphanAutoDispose), overrides, true),
+		s.editableItem(SettingKeyPlatformPublicBaseURL, s.defaultValue(SettingKeyPlatformPublicBaseURL), overrides, true),
+		s.editableItem(SettingKeyInviteSMTPHost, s.defaultValue(SettingKeyInviteSMTPHost), overrides, true),
+		s.editableItem(SettingKeyInviteSMTPPort, s.defaultValue(SettingKeyInviteSMTPPort), overrides, true),
+		s.editableItem(SettingKeyInviteSMTPUsername, s.defaultValue(SettingKeyInviteSMTPUsername), overrides, true),
+		s.inviteSMTPPasswordItem(overrides),
+		s.editableItem(SettingKeyInviteSMTPFrom, s.defaultValue(SettingKeyInviteSMTPFrom), overrides, true),
 	}
 
 	readOnly := []SettingItem{
@@ -286,6 +302,25 @@ func (s *SettingsService) proxyURLItem(overrides map[string]string) SettingItem 
 	}
 }
 
+func (s *SettingsService) inviteSMTPPasswordItem(overrides map[string]string) SettingItem {
+	_, overridden := overrides[SettingKeyInviteSMTPPassword]
+	return SettingItem{
+		Key:                  SettingKeyInviteSMTPPassword,
+		Value:                maskConfigured(overridden),
+		Editable:             true,
+		Sensitive:            true,
+		Overridden:           overridden,
+		EffectiveImmediately: true,
+	}
+}
+
+func maskConfigured(configured bool) string {
+	if configured {
+		return "(已配置)"
+	}
+	return ""
+}
+
 func readOnlyItem(key, value string, sensitive bool) SettingItem {
 	return SettingItem{Key: key, Value: value, Editable: false, Sensitive: sensitive}
 }
@@ -318,6 +353,9 @@ func (s *SettingsService) defaultValue(key string) string {
 		return "10m"
 	case SettingKeyOrphanAutoDispose:
 		return "false"
+	case SettingKeyPlatformPublicBaseURL, SettingKeyInviteSMTPHost, SettingKeyInviteSMTPPort,
+		SettingKeyInviteSMTPUsername, SettingKeyInviteSMTPPassword, SettingKeyInviteSMTPFrom:
+		return ""
 	}
 	return ""
 }
@@ -381,7 +419,9 @@ func isWritableSettingKey(key string) bool {
 		SettingKeyRuntimeMirrorNodeJS,
 		SettingKeyGracefulStopTimeout, SettingKeyBackupRetentionDays,
 		SettingKeyProxyURL, SettingKeyProxyNoProxy,
-		SettingKeyOrphanGracePeriod, SettingKeyOrphanAutoDispose:
+		SettingKeyOrphanGracePeriod, SettingKeyOrphanAutoDispose,
+		SettingKeyPlatformPublicBaseURL, SettingKeyInviteSMTPHost, SettingKeyInviteSMTPPort,
+		SettingKeyInviteSMTPUsername, SettingKeyInviteSMTPPassword, SettingKeyInviteSMTPFrom:
 		return true
 	}
 	return false
@@ -429,6 +469,28 @@ func validateSettingValue(key, val string) error {
 	case SettingKeyOrphanAutoDispose:
 		if val != "true" && val != "false" {
 			return fmt.Errorf("%w: 自动处置须为 true|false", ErrSettingValueInvalid)
+		}
+	case SettingKeyPlatformPublicBaseURL:
+		if err := validatePublicBaseURL(val); err != nil {
+			return fmt.Errorf("%w: %v", ErrSettingValueInvalid, err)
+		}
+	case SettingKeyInviteSMTPPort:
+		if val != "" {
+			port, err := strconv.Atoi(val)
+			if err != nil || port < 1 || port > 65535 {
+				return fmt.Errorf("%w: SMTP 端口须为 1-65535", ErrSettingValueInvalid)
+			}
+		}
+	case SettingKeyInviteSMTPFrom:
+		if val != "" {
+			address, err := mail.ParseAddress(val)
+			if err != nil || address.Address != val {
+				return fmt.Errorf("%w: SMTP 发件人地址非法", ErrSettingValueInvalid)
+			}
+		}
+	case SettingKeyInviteSMTPPassword:
+		if val != "" && !environmentReferencePattern.MatchString(val) {
+			return fmt.Errorf("%w: SMTP 密码必须为 ${ENV_VAR} 引用", ErrSettingValueInvalid)
 		}
 	}
 	return nil

@@ -137,6 +137,9 @@ type Services struct {
 
 // Setup 创建并配置 Gin 路由引擎。
 func Setup(svcs *Services, jwtSecret string) *gin.Engine {
+	if svcs.User == nil && svcs.Auth != nil {
+		svcs.User = svcs.Auth.UserService()
+	}
 	r := gin.New()
 	// Control Plane 不自行信任反向代理；未显式配置的 X-Forwarded-For 不能伪造限流与审计 IP。
 	if err := r.SetTrustedProxies(nil); err != nil {
@@ -156,7 +159,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	api.Use(middleware.ErrorLog())
 
 	// 公开路由（无需认证）
-	authHandler := NewAuthHandler(svcs.Auth)
+	var invitationSvc *service.UserInvitationService
+	if svcs.User != nil {
+		invitationSvc = svcs.User.InvitationService()
+	}
+	authHandler := NewAuthHandler(svcs.Auth, invitationSvc)
 	authHandler.RegisterRoutes(api)
 
 	setupHandler := NewSetupHandler(svcs.Auth)
@@ -390,8 +397,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	admin := protected.Group("")
 	admin.Use(middleware.RequireRole(model.RolePlatformAdmin))
 	{
-		userHandler := NewUserHandler(svcs.User)
-		userHandler.RegisterRoutes(admin)
+		if svcs.User != nil {
+			userHandler := NewUserHandler(svcs.User)
+			userHandler.RegisterRoutes(admin)
+		}
 
 		auditHandler := NewAuditHandler(svcs.Audit)
 		auditHandler.RegisterRoutes(admin)

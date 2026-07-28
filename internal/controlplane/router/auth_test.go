@@ -74,44 +74,32 @@ func TestSetup_Status(t *testing.T) {
 	assert.Equal(t, false, resp["setupRequired"])
 }
 
-func TestAuth_Register_Success(t *testing.T) {
+func TestAuth_Register_Removed(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 
 	body := map[string]string{"username": "testuser", "password": "password123"}
 	w := makeRequest(r, "POST", "/api/v1/auth/register", body, "")
 
-	assert.Equal(t, http.StatusCreated, w.Code)
-
-	var resp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "testuser", resp["username"])
-	assert.NotEmpty(t, resp["id"])
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestAuth_Register_DuplicateUsername(t *testing.T) {
+func TestAuth_Register_RemainsAbsentForDuplicatePayload(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 
 	body := map[string]string{"username": "testuser", "password": "password123"}
 	w := makeRequest(r, "POST", "/api/v1/auth/register", body, "")
-	assert.Equal(t, http.StatusCreated, w.Code)
-
-	w = makeRequest(r, "POST", "/api/v1/auth/register", body, "")
-	assert.Equal(t, http.StatusConflict, w.Code)
-
-	var resp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "USER_EXISTS", resp["error"])
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestAuth_Register_InvalidRequest(t *testing.T) {
+func TestAuth_Register_RemainsAbsentForInvalidPayload(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 
 	body := map[string]string{"username": "ab", "password": "12345"}
 	w := makeRequest(r, "POST", "/api/v1/auth/register", body, "")
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestAuth_Login_Success(t *testing.T) {
@@ -119,10 +107,9 @@ func TestAuth_Login_Success(t *testing.T) {
 	r := setupTestRouter(db)
 
 	regBody := map[string]string{"username": "testuser", "password": "password123"}
-	w := makeRequest(r, "POST", "/api/v1/auth/register", regBody, "")
-	require.Equal(t, http.StatusCreated, w.Code)
+	_ = getMemberToken(t, r, regBody["username"], regBody["password"])
+	w := makeRequest(r, "POST", "/api/v1/auth/login", regBody, "")
 
-	w = makeRequest(r, "POST", "/api/v1/auth/login", regBody, "")
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	var resp map[string]interface{}
@@ -136,11 +123,10 @@ func TestAuth_Login_WrongPassword(t *testing.T) {
 	r := setupTestRouter(db)
 
 	regBody := map[string]string{"username": "testuser", "password": "password123"}
-	w := makeRequest(r, "POST", "/api/v1/auth/register", regBody, "")
-	require.Equal(t, http.StatusCreated, w.Code)
+	_ = getMemberToken(t, r, regBody["username"], regBody["password"])
 
 	loginBody := map[string]string{"username": "testuser", "password": "wrongpassword"}
-	w = makeRequest(r, "POST", "/api/v1/auth/login", loginBody, "")
+	w := makeRequest(r, "POST", "/api/v1/auth/login", loginBody, "")
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
@@ -158,10 +144,9 @@ func TestAuth_Refresh_Success(t *testing.T) {
 	r := setupTestRouter(db)
 
 	body := map[string]string{"username": "testuser", "password": "password123"}
-	w := makeRequest(r, "POST", "/api/v1/auth/register", body, "")
-	require.Equal(t, http.StatusCreated, w.Code)
+	_ = getMemberToken(t, r, body["username"], body["password"])
+	w := makeRequest(r, "POST", "/api/v1/auth/login", body, "")
 
-	w = makeRequest(r, "POST", "/api/v1/auth/login", body, "")
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var loginResp map[string]interface{}

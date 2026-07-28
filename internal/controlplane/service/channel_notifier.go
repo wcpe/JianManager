@@ -2,12 +2,10 @@ package service
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/smtp"
 	"net/url"
 	"strconv"
 	"strings"
@@ -300,56 +298,9 @@ func (n *ChannelNotifier) sendEmail(cfg *ChannelConfig, note AlertNotification) 
 		return fmt.Errorf("邮件通道缺少收件人")
 	}
 	subject := fmt.Sprintf("[%s] %s", strings.ToUpper(note.Level), note.Title)
-	msg := buildEmailMessage(from, tos, subject, plainText(note))
-	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-
-	var auth smtp.Auth
-	if cfg.Username != "" {
-		auth = smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
-	}
-
-	if cfg.Port == 465 {
-		return n.sendEmailImplicitTLS(addr, cfg.Host, auth, from, tos, msg)
-	}
-	// 25/587：经 net/smtp 默认走 STARTTLS（若服务器支持）。
-	return smtp.SendMail(addr, auth, from, tos, msg)
-}
-
-// sendEmailImplicitTLS 经隐式 TLS（端口 465）投递。
-func (n *ChannelNotifier) sendEmailImplicitTLS(addr, host string, auth smtp.Auth, from string, to []string, msg []byte) error {
-	conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host})
-	if err != nil {
-		return fmt.Errorf("连接 SMTP(TLS) 失败: %w", err)
-	}
-	c, err := smtp.NewClient(conn, host)
-	if err != nil {
-		return fmt.Errorf("建立 SMTP 会话失败: %w", err)
-	}
-	defer c.Close()
-	if auth != nil {
-		if err := c.Auth(auth); err != nil {
-			return fmt.Errorf("SMTP 认证失败: %w", err)
-		}
-	}
-	if err := c.Mail(from); err != nil {
-		return err
-	}
-	for _, rcpt := range to {
-		if err := c.Rcpt(rcpt); err != nil {
-			return err
-		}
-	}
-	w, err := c.Data()
-	if err != nil {
-		return err
-	}
-	if _, err := w.Write(msg); err != nil {
-		return err
-	}
-	if err := w.Close(); err != nil {
-		return err
-	}
-	return c.Quit()
+	return sendSMTPMessage(SMTPMessageConfig{
+		Host: cfg.Host, Port: cfg.Port, Username: cfg.Username, Password: cfg.Password, From: from,
+	}, tos, subject, plainText(note))
 }
 
 // buildEmailMessage 组装 RFC 822 邮件（UTF-8 纯文本，主题 base64 编码避免乱码）。
