@@ -57,6 +57,8 @@ type Node struct {
 	BotActiveCount           *int32     `json:"botActiveCount"`
 	BotConnectingCount       *int32     `json:"botConnectingCount"`
 	BotEventLoopP95MS        *float64   `json:"botEventLoopP95Ms"`
+	BotCapacityMax           *int32     `json:"botCapacityMax"`
+	BotCapacityUnavailableReason string `gorm:"type:varchar(256)" json:"botCapacityUnavailableReason"`
 	BotAvailable             bool       `gorm:"default:false" json:"botAvailable"`
 	BotUnavailableReason     string     `gorm:"type:varchar(256)" json:"botUnavailableReason"`
 	// ProxyMode 节点出站代理模式（FR-185，见 ADR-043）：

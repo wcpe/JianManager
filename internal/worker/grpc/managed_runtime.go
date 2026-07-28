@@ -8,6 +8,7 @@ import (
 
 	psproc "github.com/shirou/gopsutil/v4/process"
 
+	"github.com/wcpe/JianManager/internal/worker/bot"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -32,11 +33,13 @@ func (s *Server) ManagedRuntimeSnapshot() *workerpb.ManagedRuntimeSnapshot {
 	s.botEventMu.Unlock()
 	if manager == nil {
 		result.BotUnavailableReason = "本节点未启用 Bot Worker"
+		result.BotCapacityUnavailableReason = result.BotUnavailableReason
 		return result
 	}
 	botRuntime := manager.RuntimeSnapshot()
 	if !botRuntime.Running || botRuntime.PID <= 0 {
 		result.BotUnavailableReason = "Bot Worker 未启动"
+		result.BotCapacityUnavailableReason = result.BotUnavailableReason
 		return result
 	}
 	if !botRuntime.Capacity.Ready {
@@ -44,6 +47,7 @@ func (s *Server) ManagedRuntimeSnapshot() *workerpb.ManagedRuntimeSnapshot {
 		if result.BotUnavailableReason == "" {
 			result.BotUnavailableReason = "Bot Worker 尚未就绪"
 		}
+		result.BotCapacityUnavailableReason = result.BotUnavailableReason
 		s.forgetManagedProcess(botRuntime.PID)
 		return result
 	}
@@ -55,7 +59,20 @@ func (s *Server) ManagedRuntimeSnapshot() *workerpb.ManagedRuntimeSnapshot {
 	result.BotActiveCount = &active
 	result.BotConnectingCount = &connecting
 	result.BotEventLoopP95Ms = &eventLoop
+	result.BotCapacityMax, result.BotCapacityUnavailableReason = managedBotCapacityMax(botRuntime.Capacity)
 	return result
+}
+
+// managedBotCapacityMax 仅转换已就绪 Bot Worker 上报的真实容量，缺失或越界时保持缺测。
+func managedBotCapacityMax(capacity bot.BotCapacitySnapshot) (*int32, string) {
+	if !capacity.Ready {
+		return nil, "Bot Worker 尚未就绪"
+	}
+	if capacity.MaxBots <= 0 || int64(capacity.MaxBots) > math.MaxInt32 {
+		return nil, "Bot Worker 未报告有效容量"
+	}
+	value := int32(capacity.MaxBots)
+	return &value, ""
 }
 
 func (s *Server) sampleManagedProcess(ctx context.Context, pid int, now time.Time) (*int64, *float64) {

@@ -39,10 +39,12 @@
 | `bot_worker_cpu_pct` | 共享 Bot Worker 进程 CPU 百分比；不是任一 Bot 的 CPU |
 | `bot_active_count` / `bot_connecting_count` | Bot Worker 当前聚合数 |
 | `bot_event_loop_p95_ms` | Bot Worker 事件循环 P95 |
+| `bot_capacity_max` | 已就绪 Bot Worker 上报的真实最大 Bot 容量；未知、未就绪或无效时不填 |
+| `bot_capacity_unavailable_reason` | `bot_capacity_max` 缺测的明确原因 |
 | `bot_available` / `bot_unavailable_reason` | 本地 Bot Worker 快照是否可用及原因 |
 | `observed_at_unix_ms` | Worker 实际观测时刻 |
 
-Worker 从已存在的本地进程管理器读取只读快照，不创建、重启或探测 Bot Worker。CPU 以同一受管 PID 在相邻采样时刻的进程 CPU 时间差除以单调时间间隔计算；首帧、PID 更换、进程退出或间隔无效时对应值为 `null`，不得代填 0。CP 的 Heartbeat handler 仅在节点认证成功后写入 `Node` 的当前运行时字段；字段缺失或 `bot_available=false` 时清空数值并保存原因，禁止保留旧值冒充实时。
+Worker 从已存在的本地进程管理器读取只读快照，不创建、重启或探测 Bot Worker。CPU 以同一受管 PID 在相邻采样时刻的进程 CPU 时间差除以单调时间间隔计算；首帧、PID 更换、进程退出或间隔无效时对应值为 `null`，不得代填 0。`bot_capacity_max` 仅从已经 Ready 的容量快照读取；未就绪、未启动、缺失或无效时为 `null` 并附原因。CP 的 Heartbeat handler 仅在节点认证成功后写入 `Node` 的当前运行时字段；字段缺失或 `bot_available=false` 时清空数值并保存原因，禁止保留旧值冒充实时。
 
 ### 3.2 归因查询
 

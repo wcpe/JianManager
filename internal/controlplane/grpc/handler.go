@@ -385,6 +385,8 @@ func managedRuntimeUpdates(snapshot *workerpb.ManagedRuntimeSnapshot) map[string
 		"bot_active_count":            nil,
 		"bot_connecting_count":        nil,
 		"bot_event_loop_p95_ms":       nil,
+		"bot_capacity_max":            nil,
+		"bot_capacity_unavailable_reason": "Worker 未上报受管运行时快照",
 		"bot_available":               false,
 		"bot_unavailable_reason":      "Worker 未上报受管运行时快照",
 	}
@@ -397,6 +399,7 @@ func managedRuntimeUpdates(snapshot *workerpb.ManagedRuntimeSnapshot) map[string
 	}
 	updates["worker_process_rss_bytes"] = snapshot.WorkerProcessRssBytes
 	updates["worker_process_cpu_pct"] = snapshot.WorkerProcessCpuPct
+	updates["bot_capacity_unavailable_reason"] = truncateRuntimeReason(snapshot.BotCapacityUnavailableReason)
 	updates["bot_available"] = snapshot.BotAvailable
 	if snapshot.BotAvailable {
 		updates["bot_worker_rss_bytes"] = snapshot.BotWorkerRssBytes
@@ -404,12 +407,19 @@ func managedRuntimeUpdates(snapshot *workerpb.ManagedRuntimeSnapshot) map[string
 		updates["bot_active_count"] = snapshot.BotActiveCount
 		updates["bot_connecting_count"] = snapshot.BotConnectingCount
 		updates["bot_event_loop_p95_ms"] = snapshot.BotEventLoopP95Ms
+		updates["bot_capacity_max"] = snapshot.BotCapacityMax
 		updates["bot_unavailable_reason"] = ""
+		if updates["bot_capacity_max"] == nil && updates["bot_capacity_unavailable_reason"] == "" {
+			updates["bot_capacity_unavailable_reason"] = "Bot Worker 未报告有效容量"
+		}
 		return updates
 	}
 	updates["bot_unavailable_reason"] = truncateRuntimeReason(snapshot.BotUnavailableReason)
 	if updates["bot_unavailable_reason"] == "" {
 		updates["bot_unavailable_reason"] = "Bot Worker 不可用"
+	}
+	if updates["bot_capacity_unavailable_reason"] == "" {
+		updates["bot_capacity_unavailable_reason"] = updates["bot_unavailable_reason"]
 	}
 	return updates
 }

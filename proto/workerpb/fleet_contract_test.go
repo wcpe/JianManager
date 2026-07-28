@@ -67,7 +67,7 @@ func TestWorkerProto_FleetContractFrozen(t *testing.T) {
 	assertMessageFields(t, file, "ManagedRuntimeSnapshot", []string{
 		"worker_process_rss_bytes", "worker_process_cpu_pct", "bot_worker_rss_bytes", "bot_worker_cpu_pct",
 		"bot_active_count", "bot_connecting_count", "bot_event_loop_p95_ms", "bot_available",
-		"bot_unavailable_reason", "observed_at_unix_ms",
+		"bot_unavailable_reason", "observed_at_unix_ms", "bot_capacity_max", "bot_capacity_unavailable_reason",
 	})
 }
 

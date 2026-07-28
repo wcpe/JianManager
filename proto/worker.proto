@@ -423,6 +423,8 @@ message ManagedRuntimeSnapshot {
   bool bot_available = 8;
   string bot_unavailable_reason = 9;
   int64 observed_at_unix_ms = 10;
+  optional int32 bot_capacity_max = 11;
+  string bot_capacity_unavailable_reason = 12;
 }
 
 message HeartbeatResponse {

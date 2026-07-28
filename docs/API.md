@@ -609,7 +609,7 @@
 - **关联 FR**: FR-400
 - **权限**: 平台管理员；不扩展 `/metrics/overview` 的普通登录聚合权限。
 - **Query**: `sort=cpu|memory`（默认 `memory`）；`limit=1..10`（默认 `5`）。
-- **响应**: `{ sampledAt, freshness, nodes, topInstances, topProcesses }`；节点 `status`/顶层 `freshness` 为 `fresh|stale|offline|unavailable`。不可用 CPU/RSS/Bot 数值为 `null`；`nodes` 含 `nodeUuid` 供监控页下钻。Bot Worker 未启动、旧 Worker 未上报或快照过期时 `botWorker.available=false` 且带 `reason`。
+  - **响应**: `{ sampledAt, freshness, nodes, topInstances, topProcesses }`；节点 `status`/顶层 `freshness` 为 `fresh|stale|offline|unavailable`。不可用 CPU/RSS/Bot 数值为 `null`；`nodes` 含 `nodeUuid` 供监控页下钻。`botWorker.capacityMax` 仅为已就绪共享 Bot Worker 上报的真实最大容量，缺失时为 `null` 且由 `capacityUnavailableReason` 解释。Bot Worker 未启动、旧 Worker 未上报或快照过期时 `botWorker.available=false` 且带 `reason`。
 - **错误**: 400 `INVALID_ARGUMENT`（非法排序或上限）；403 `FORBIDDEN`。
 
 ### GET /api/v1/metrics/processes/top

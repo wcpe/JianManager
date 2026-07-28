@@ -1117,19 +1117,21 @@ func (x *ProcessMetricSample) GetSampledAtUnixMs() int64 {
 // ManagedRuntimeSnapshot 只描述 Worker 自身和它已运行的共享 Bot Worker。
 // 未知值不填；CPU 首帧或 PID 变化时为空，避免以零值伪造空闲。
 type ManagedRuntimeSnapshot struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	WorkerProcessRssBytes *int64                 `protobuf:"varint,1,opt,name=worker_process_rss_bytes,json=workerProcessRssBytes,proto3,oneof" json:"worker_process_rss_bytes,omitempty"`
-	WorkerProcessCpuPct   *float64               `protobuf:"fixed64,2,opt,name=worker_process_cpu_pct,json=workerProcessCpuPct,proto3,oneof" json:"worker_process_cpu_pct,omitempty"`
-	BotWorkerRssBytes     *int64                 `protobuf:"varint,3,opt,name=bot_worker_rss_bytes,json=botWorkerRssBytes,proto3,oneof" json:"bot_worker_rss_bytes,omitempty"`
-	BotWorkerCpuPct       *float64               `protobuf:"fixed64,4,opt,name=bot_worker_cpu_pct,json=botWorkerCpuPct,proto3,oneof" json:"bot_worker_cpu_pct,omitempty"`
-	BotActiveCount        *int32                 `protobuf:"varint,5,opt,name=bot_active_count,json=botActiveCount,proto3,oneof" json:"bot_active_count,omitempty"`
-	BotConnectingCount    *int32                 `protobuf:"varint,6,opt,name=bot_connecting_count,json=botConnectingCount,proto3,oneof" json:"bot_connecting_count,omitempty"`
-	BotEventLoopP95Ms     *float64               `protobuf:"fixed64,7,opt,name=bot_event_loop_p95_ms,json=botEventLoopP95Ms,proto3,oneof" json:"bot_event_loop_p95_ms,omitempty"`
-	BotAvailable          bool                   `protobuf:"varint,8,opt,name=bot_available,json=botAvailable,proto3" json:"bot_available,omitempty"`
-	BotUnavailableReason  string                 `protobuf:"bytes,9,opt,name=bot_unavailable_reason,json=botUnavailableReason,proto3" json:"bot_unavailable_reason,omitempty"`
-	ObservedAtUnixMs      int64                  `protobuf:"varint,10,opt,name=observed_at_unix_ms,json=observedAtUnixMs,proto3" json:"observed_at_unix_ms,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state                        protoimpl.MessageState `protogen:"open.v1"`
+	WorkerProcessRssBytes        *int64                 `protobuf:"varint,1,opt,name=worker_process_rss_bytes,json=workerProcessRssBytes,proto3,oneof" json:"worker_process_rss_bytes,omitempty"`
+	WorkerProcessCpuPct          *float64               `protobuf:"fixed64,2,opt,name=worker_process_cpu_pct,json=workerProcessCpuPct,proto3,oneof" json:"worker_process_cpu_pct,omitempty"`
+	BotWorkerRssBytes            *int64                 `protobuf:"varint,3,opt,name=bot_worker_rss_bytes,json=botWorkerRssBytes,proto3,oneof" json:"bot_worker_rss_bytes,omitempty"`
+	BotWorkerCpuPct              *float64               `protobuf:"fixed64,4,opt,name=bot_worker_cpu_pct,json=botWorkerCpuPct,proto3,oneof" json:"bot_worker_cpu_pct,omitempty"`
+	BotActiveCount               *int32                 `protobuf:"varint,5,opt,name=bot_active_count,json=botActiveCount,proto3,oneof" json:"bot_active_count,omitempty"`
+	BotConnectingCount           *int32                 `protobuf:"varint,6,opt,name=bot_connecting_count,json=botConnectingCount,proto3,oneof" json:"bot_connecting_count,omitempty"`
+	BotEventLoopP95Ms            *float64               `protobuf:"fixed64,7,opt,name=bot_event_loop_p95_ms,json=botEventLoopP95Ms,proto3,oneof" json:"bot_event_loop_p95_ms,omitempty"`
+	BotAvailable                 bool                   `protobuf:"varint,8,opt,name=bot_available,json=botAvailable,proto3" json:"bot_available,omitempty"`
+	BotUnavailableReason         string                 `protobuf:"bytes,9,opt,name=bot_unavailable_reason,json=botUnavailableReason,proto3" json:"bot_unavailable_reason,omitempty"`
+	ObservedAtUnixMs             int64                  `protobuf:"varint,10,opt,name=observed_at_unix_ms,json=observedAtUnixMs,proto3" json:"observed_at_unix_ms,omitempty"`
+	BotCapacityMax               *int32                 `protobuf:"varint,11,opt,name=bot_capacity_max,json=botCapacityMax,proto3,oneof" json:"bot_capacity_max,omitempty"`
+	BotCapacityUnavailableReason string                 `protobuf:"bytes,12,opt,name=bot_capacity_unavailable_reason,json=botCapacityUnavailableReason,proto3" json:"bot_capacity_unavailable_reason,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *ManagedRuntimeSnapshot) Reset() {
@@ -1230,6 +1232,20 @@ func (x *ManagedRuntimeSnapshot) GetObservedAtUnixMs() int64 {
 		return x.ObservedAtUnixMs
 	}
 	return 0
+}
+
+func (x *ManagedRuntimeSnapshot) GetBotCapacityMax() int32 {
+	if x != nil && x.BotCapacityMax != nil {
+		return *x.BotCapacityMax
+	}
+	return 0
+}
+
+func (x *ManagedRuntimeSnapshot) GetBotCapacityUnavailableReason() string {
+	if x != nil {
+		return x.BotCapacityUnavailableReason
+	}
+	return ""
 }
 
 type HeartbeatResponse struct {
@@ -15248,7 +15264,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x04user\x18\b \x01(\tR\x04user\x12'\n" +
 	"\x0fcommand_summary\x18\t \x01(\tR\x0ecommandSummary\x12+\n" +
 	"\x12sampled_at_unix_ms\x18\n" +
-	" \x01(\x03R\x0fsampledAtUnixMs\"\xcf\x05\n" +
+	" \x01(\x03R\x0fsampledAtUnixMs\"\xda\x06\n" +
 	"\x16ManagedRuntimeSnapshot\x12<\n" +
 	"\x18worker_process_rss_bytes\x18\x01 \x01(\x03H\x00R\x15workerProcessRssBytes\x88\x01\x01\x128\n" +
 	"\x16worker_process_cpu_pct\x18\x02 \x01(\x01H\x01R\x13workerProcessCpuPct\x88\x01\x01\x124\n" +
@@ -15260,14 +15276,17 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\rbot_available\x18\b \x01(\bR\fbotAvailable\x124\n" +
 	"\x16bot_unavailable_reason\x18\t \x01(\tR\x14botUnavailableReason\x12-\n" +
 	"\x13observed_at_unix_ms\x18\n" +
-	" \x01(\x03R\x10observedAtUnixMsB\x1b\n" +
+	" \x01(\x03R\x10observedAtUnixMs\x12-\n" +
+	"\x10bot_capacity_max\x18\v \x01(\x05H\aR\x0ebotCapacityMax\x88\x01\x01\x12E\n" +
+	"\x1fbot_capacity_unavailable_reason\x18\f \x01(\tR\x1cbotCapacityUnavailableReasonB\x1b\n" +
 	"\x19_worker_process_rss_bytesB\x19\n" +
 	"\x17_worker_process_cpu_pctB\x17\n" +
 	"\x15_bot_worker_rss_bytesB\x15\n" +
 	"\x13_bot_worker_cpu_pctB\x13\n" +
 	"\x11_bot_active_countB\x17\n" +
 	"\x15_bot_connecting_countB\x18\n" +
-	"\x16_bot_event_loop_p95_ms\"\xef\x01\n" +
+	"\x16_bot_event_loop_p95_msB\x13\n" +
+	"\x11_bot_capacity_max\"\xef\x01\n" +
 	"\x11HeartbeatResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\x12\x1b\n" +
 	"\tproxy_url\x18\x02 \x01(\tR\bproxyUrl\x12$\n" +

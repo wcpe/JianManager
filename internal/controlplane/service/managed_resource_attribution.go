@@ -59,6 +59,8 @@ type ResourceAttributionBotWorker struct {
 	ActiveCount     *int32   `json:"activeCount"`
 	ConnectingCount *int32   `json:"connectingCount"`
 	EventLoopP95MS  *float64 `json:"eventLoopP95Ms"`
+	CapacityMax     *int32   `json:"capacityMax"`
+	CapacityUnavailableReason string `json:"capacityUnavailableReason"`
 	Available       bool     `json:"available"`
 	Reason          string   `json:"reason"`
 }
@@ -170,6 +172,7 @@ func attributionNode(node model.Node, status ResourceFreshness) ResourceAttribut
 	item.BotWorker = ResourceAttributionBotWorker{Reason: node.BotUnavailableReason}
 	if status != ResourceFreshnessFresh {
 		item.BotWorker.Reason = "节点资源快照已过期"
+		item.BotWorker.CapacityUnavailableReason = "节点资源快照已过期"
 		return item
 	}
 	cpu := float64(node.CPUUsage) * 100
@@ -186,7 +189,9 @@ func attributionNode(node model.Node, status ResourceFreshness) ResourceAttribut
 	item.BotWorker = ResourceAttributionBotWorker{
 		RSSBytes: node.BotWorkerRSSBytes, CPUPct: node.BotWorkerCPUPct,
 		ActiveCount: node.BotActiveCount, ConnectingCount: node.BotConnectingCount,
-		EventLoopP95MS: node.BotEventLoopP95MS, Available: node.BotAvailable, Reason: node.BotUnavailableReason,
+		EventLoopP95MS: node.BotEventLoopP95MS, CapacityMax: node.BotCapacityMax,
+		CapacityUnavailableReason: node.BotCapacityUnavailableReason,
+		Available: node.BotAvailable, Reason: node.BotUnavailableReason,
 	}
 	return item
 }
