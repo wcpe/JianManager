@@ -631,7 +631,13 @@
     "loadTrend": "Load Trend",
     "memTrend": "Memory Trend",
     "playersTrend": "Players Trend",
-    "instanceList": "Instances"
+    "instanceList": "Instances",
+    "resourceAttributionLabel": "{{label}} resource attribution",
+    "resourceAttributionLoading": "Loading managed resource attribution…",
+    "resourceAttributionUnavailable": "Managed resource attribution is unavailable or not permitted",
+    "sampleTimeUnknown": "Sample time unknown",
+    "resourceObservation": "RSS is an observed managed-process value and may include shared pages; it cannot be added to node memory usage.",
+    "freshness": { "fresh": "Fresh", "stale": "Stale", "offline": "Offline", "unavailable": "Unavailable" }
   },
   "metrics": {
     "tab": "Monitor",

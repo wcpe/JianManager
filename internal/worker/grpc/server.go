@@ -64,6 +64,9 @@ type Server struct {
 	botFleet        botFleetManager
 	botStartMu      sync.Mutex
 	botBatchMu      sync.Mutex
+	// managedRuntimeMu 保护 Worker/Bot Worker CPU 时间差的上一次采样基线（FR-400）。
+	managedRuntimeMu  sync.Mutex
+	managedRuntimeCPU map[int]managedRuntimeCPUBaseline
 	botBatchResults map[string]*botBatchCacheEntry
 	// botOwnershipMu 同时保护 Fleet ownership 账本并串行化 Fleet Apply 与 legacy mutation，
 	// 防止 legacy RPC 在 accepted 回执与 ownership 落账之间越过。
@@ -157,9 +160,10 @@ func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Col
 		jdkMgr:          jdkMgr,
 		root:            root,
 		botBatchResults: make(map[string]*botBatchCacheEntry),
-		botOwnership:    make(map[string]botFleetOwnership),
-		searchIndexes:   make(map[string]*search.Index),
-		tasks:           taskreg.New(),
+		managedRuntimeCPU: make(map[int]managedRuntimeCPUBaseline),
+		botOwnership:      make(map[string]botFleetOwnership),
+		searchIndexes:     make(map[string]*search.Index),
+		tasks:             taskreg.New(),
 	}
 	manager.SetStateChangeHandler(func(uuid string, oldState, newState process.InstanceState) {
 		s.dispatch(instanceEvent{

@@ -604,6 +604,14 @@
   `totals` 取 Node/Instance 表当前值 + 各实例最近 2min 在线人数合计。
 - **错误**: 400 `INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`
 
+### GET /api/v1/metrics/resource-attribution
+- **描述**: 首页仪表 Tooltip 的有界受管资源归因。节点当前资源来自已认证 Heartbeat；实例/进程只来自 RUNNING 的 JianManager 受管实例进程树最新快照。Worker 与共享 Bot Worker 资源均为观察值，RSS 可能含共享页，不能与节点已用内存相加或当作单 Bot 资源。
+- **关联 FR**: FR-400
+- **权限**: 平台管理员；不扩展 `/metrics/overview` 的普通登录聚合权限。
+- **Query**: `sort=cpu|memory`（默认 `memory`）；`limit=1..10`（默认 `5`）。
+- **响应**: `{ sampledAt, freshness, nodes, topInstances, topProcesses }`；节点 `status`/顶层 `freshness` 为 `fresh|stale|offline|unavailable`。不可用 CPU/RSS/Bot 数值为 `null`；`nodes` 含 `nodeUuid` 供监控页下钻。Bot Worker 未启动、旧 Worker 未上报或快照过期时 `botWorker.available=false` 且带 `reason`。
+- **错误**: 400 `INVALID_ARGUMENT`（非法排序或上限）；403 `FORBIDDEN`。
+
 ### GET /api/v1/metrics/processes/top
 - **描述**: 返回受管实例进程 TOPN 最新快照。Worker 只上报受 JianManager 管理的实例根进程及子进程，命令摘要已截断/脱敏，不返回完整命令行或环境变量
 - **关联 FR**: FR-170 ｜ **关联 ADR**: ADR-060

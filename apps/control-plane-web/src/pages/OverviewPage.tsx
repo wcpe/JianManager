@@ -1,11 +1,11 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { useTasks, type TaskState } from '@/api/tasks'
 import { useAlertEvents } from '@/api/alerts'
-import { useMetricOverview } from '@/api/metrics'
+import { useMetricOverview, useResourceAttribution, type ResourceAttributionResponse } from '@/api/metrics'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { ResourceGauge } from '@jianmanager/ui/components/gauge'
@@ -31,6 +31,85 @@ function taskStatusLevel(state: TaskState): StatusLevel {
   if (state === 'succeeded') return 'success'
   if (state === 'failed') return 'danger'
   return 'neutral'
+}
+
+type AttributionGauge = 'cpu' | 'load' | 'memory'
+
+function formatObservedAt(value: string | null, unknown: string): string {
+  if (!value) return unknown
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? unknown : date.toLocaleString()
+}
+
+/** 首页仪表的有界受管资源 Tooltip，不展示任意 OS 进程。 */
+function GaugeAttributionTooltip({
+  label,
+  children,
+  active,
+  onToggle,
+  data,
+  isLoading,
+  isError,
+}: {
+  label: string
+  children: ReactNode
+  active: boolean
+  onToggle: () => void
+  data?: ResourceAttributionResponse
+  isLoading: boolean
+  isError: boolean
+}) {
+  const { t } = useTranslation()
+  return (
+    <Panel bodyClassName="relative flex items-center justify-center py-3">
+      <button
+        type="button"
+        aria-label={t('dashboard.resourceAttributionLabel', { label })}
+        aria-expanded={active}
+        className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={onToggle}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && active) onToggle()
+        }}
+      >
+        {children}
+      </button>
+      {active && (
+        <div role="tooltip" data-testid="overview-resource-attribution" className="absolute left-2 right-2 top-[calc(100%-0.25rem)] z-30 rounded-md border bg-popover p-3 text-left text-xs text-popover-foreground shadow-soft">
+          {isLoading && <p className="text-muted-foreground">{t('dashboard.resourceAttributionLoading')}</p>}
+          {isError && <p className="text-muted-foreground">{t('dashboard.resourceAttributionUnavailable')}</p>}
+          {data && (
+            <div className="space-y-2">
+              <p className="text-muted-foreground">{formatObservedAt(data.sampledAt, t('dashboard.sampleTimeUnknown'))} · {t(`dashboard.freshness.${data.freshness}`, data.freshness)}</p>
+              <div className="space-y-1">
+                {data.nodes.slice(0, 3).map((node) => (
+                  <Link key={node.nodeId} to={`/monitoring?node=${encodeURIComponent(node.nodeUuid)}`} className="flex justify-between gap-2 hover:text-primary">
+                    <span className="truncate">{node.name} · {t(`dashboard.freshness.${node.status}`, node.status)}</span>
+                    <span className="font-mono">{node.memoryUsedBytes == null ? '--' : fmtBytes(node.memoryUsedBytes)}</span>
+                  </Link>
+                ))}
+              </div>
+              <div className="space-y-1 border-t pt-2">
+                {data.topInstances.slice(0, 3).map((instance) => (
+                  <Link key={instance.instanceId} to={`/monitoring?instance=${encodeURIComponent(instance.instanceUuid)}`} className="flex justify-between gap-2 hover:text-primary">
+                    <span className="truncate">{instance.instanceName}</span>
+                    <span className="font-mono">{fmtBytes(instance.rssBytes)}</span>
+                  </Link>
+                ))}
+                {data.topProcesses.slice(0, 4).map((process) => (
+                  <Link key={`${process.instanceId}-${process.pid}`} to={`/monitoring?instance=${encodeURIComponent(process.instanceUuid)}`} className="flex justify-between gap-2 hover:text-primary">
+                    <span className="truncate">{process.instanceName} / {process.name || `PID ${process.pid}`}</span>
+                    <span className="font-mono">{fmtBytes(process.rssBytes)}</span>
+                  </Link>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground">{t('dashboard.resourceObservation')}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </Panel>
+  )
 }
 
 /** 首页紧凑聚合面板属性。 */
@@ -80,11 +159,13 @@ function OverviewAggregationPanel({
 export default function OverviewPage() {
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>('24h')
+  const [activeGauge, setActiveGauge] = useState<AttributionGauge | null>(null)
   const { data: nodes } = useNodes()
   const instancesQuery = useInstances()
   const tasksQuery = useTasks({ limit: 5 })
   const alertsQuery = useAlertEvents({ resolved: false, pageSize: 5 })
   const { data: overview } = useMetricOverview(range)
+  const attribution = useResourceAttribution(activeGauge !== null, activeGauge === 'memory' ? 'memory' : 'cpu')
   const instanceRows = instancesQuery.data ?? []
   const exceptionRows = instanceRows.filter((instance) => instance.status === 'CRASHED').slice(0, 5)
   const recentTasks = tasksQuery.data?.items.slice(0, 5) ?? []
@@ -104,6 +185,15 @@ export default function OverviewPage() {
   const totals = overview?.totals
   const memPct = totals && totals.memTotalBytes > 0 ? (totals.memUsedBytes / totals.memTotalBytes) * 100 : 0
 
+  useEffect(() => {
+    if (!activeGauge) return undefined
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setActiveGauge(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [activeGauge])
+
   /** 据 metricKey 取一条聚合趋势并映射为图表序列。 */
   const trend = (metricKey: string, name: string): ChartSeries[] => {
     const tr = overview?.trends.find((x) => x.metricKey === metricKey)
@@ -120,17 +210,17 @@ export default function OverviewPage() {
 
       {/* 顶部：环形仪表盘 + 统计块 */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
-        <Panel bodyClassName="flex items-center justify-center py-3">
+        <GaugeAttributionTooltip label={t('dashboard.totalCpu')} active={activeGauge === 'cpu'} onToggle={() => setActiveGauge(activeGauge === 'cpu' ? null : 'cpu')} data={attribution.data} isLoading={attribution.isLoading} isError={attribution.isError}>
           <ResourceGauge label={t('dashboard.totalCpu')} value={totals?.cpuPct ?? 0} unit="%" />
-        </Panel>
-        <Panel bodyClassName="flex items-center justify-center py-3">
+        </GaugeAttributionTooltip>
+        <GaugeAttributionTooltip label={t('dashboard.totalLoad')} active={activeGauge === 'load'} onToggle={() => setActiveGauge(activeGauge === 'load' ? null : 'load')} data={attribution.data} isLoading={attribution.isLoading} isError={attribution.isError}>
           {/* 负载是「占总核数比例」：以倍数（load÷核）呈现而非百分比，环按 1.0=满核封顶，
               不再出现 >100% 的破环（FR-108）。grading 仍按占比走 resourceLevel（>0.8×→红）。 */}
           <ResourceGauge label={t('dashboard.totalLoad')} value={(totals?.loadAvg ?? 0) / 100} max={1} unit="×" decimals={2} />
-        </Panel>
-        <Panel bodyClassName="flex items-center justify-center py-3">
+        </GaugeAttributionTooltip>
+        <GaugeAttributionTooltip label={t('dashboard.totalMem')} active={activeGauge === 'memory'} onToggle={() => setActiveGauge(activeGauge === 'memory' ? null : 'memory')} data={attribution.data} isLoading={attribution.isLoading} isError={attribution.isError}>
           <ResourceGauge label={t('dashboard.totalMem')} value={memPct} unit="%" />
-        </Panel>
+        </GaugeAttributionTooltip>
         <StatCard
           label={t('dashboard.nodes')}
           value={`${totals?.onlineNodeCount ?? 0}/${totals?.nodeCount ?? nodes?.length ?? 0}`}

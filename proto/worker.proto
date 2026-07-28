@@ -344,6 +344,7 @@ message HeartbeatRequest {
   double load_avg1 = 11;  // 节点 1 分钟 load average（FR-062；gopsutil 跨平台，取不到为 0）
   repeated TaskSnapshot tasks = 12;  // 运行中长任务进度快照（FR-183 任务中心，见 ADR-040）
   repeated ProcessMetricSample process_metrics = 13; // 受管实例进程 TOPN 快照（FR-170）
+  ManagedRuntimeSnapshot managed_runtime = 14; // Worker 与共享 Bot Worker 当前受管运行时快照（FR-400）
 }
 
 // TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照（FR-183，见 ADR-040）。
@@ -407,6 +408,21 @@ message ProcessMetricSample {
   string user = 8;
   string command_summary = 9;
   int64 sampled_at_unix_ms = 10;
+}
+
+// ManagedRuntimeSnapshot 只描述 Worker 自身和它已运行的共享 Bot Worker。
+// 未知值不填；CPU 首帧或 PID 变化时为空，避免以零值伪造空闲。
+message ManagedRuntimeSnapshot {
+  optional int64 worker_process_rss_bytes = 1;
+  optional double worker_process_cpu_pct = 2;
+  optional int64 bot_worker_rss_bytes = 3;
+  optional double bot_worker_cpu_pct = 4;
+  optional int32 bot_active_count = 5;
+  optional int32 bot_connecting_count = 6;
+  optional double bot_event_loop_p95_ms = 7;
+  bool bot_available = 8;
+  string bot_unavailable_reason = 9;
+  int64 observed_at_unix_ms = 10;
 }
 
 message HeartbeatResponse {

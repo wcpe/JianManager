@@ -9,6 +9,7 @@
 > 下个版本开发窗口；正式发版时将本段整理为新版本段。
 
 ### 新增
+- **受管资源归因与首页仪表 Tooltip（FR-400）**：Worker 经已认证反向隧道 Heartbeat 只读上报自身与已运行共享 Bot Worker 的当前 RSS/CPU 和 Bot 聚合状态；CPU 首帧/PID 切换缺测而非伪造零值，未启动 Bot Worker 不会被观测拉起。Control Plane 新增平台管理员受管资源归因接口，首页仪表按需展示鲜度、节点/受管实例/进程 TopN 并可下钻监控页；不采集任意 OS 进程，RSS 明示为不可加总观察值。
 - **500 Bot 全链路资源采样与容量报告（FR-399）**：Worker 新增受管实例进程树 RSS/CPU/运行时长快照与 Go Worker RSS，CP 每 5 秒采样目标服和本会话执行节点资源；报告按固定阶段口径输出 baseline/peak/p95/delta/斜率、实测峰值与 25% 建议。目标 SSH 主机 64 GiB 时保留 8 GiB 系统内存；未满足内存、500 connected Bot、10 个实际执行节点或既有 verdict 时，报告只声明最大稳定实测规模，不伪称 500 Bot 实测。
 - **MCP 节点与实例全生命周期强类型工具（FR-396）**：在 FR-395 策略闸内开放节点详情/指标/Docker 探测/排空/归档清理，以及实例搜索/环境/崩溃快照/创建搭建/导入克隆/重建/配置更新/命令/批量/强杀/删除；MCP 直接复用 CP service，不经本机 HTTP 回环；破坏性操作要求独立 destructive 能力 + 服务端精确确认参数；生命周期写操作派发前锁内重验归属；toolSpec 增加 Exec 注册表与 RequiresConfirm 机制，按域拆分 tools_node/instance/provision。
 - **Agent 能力策略 v2 与节点继承实例作用域（FR-395）**：`agent_tokens` 增加 `policy_version`/`capabilities`；V1 写白名单精确兼容且不启用节点继承；V2 固定 capability 分组，节点 scope 单向覆盖当前与未来实例；统一 action 目录驱动 HTTP/MCP；`tools/list` 按能力动态裁剪，`tools/call` 可信目标最终授权；生命周期派发前锁内重验归属；调用流水新增 `capability`（V2 能力 / V1 `legacy.*`）；Token 管理 UI 默认签发 V2 并展示策略版本与能力。ADR-080 accepted；ADR-076/077 部分修订。

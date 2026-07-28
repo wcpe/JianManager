@@ -322,6 +322,9 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			"last_heartbeat":     time.Now(),
 			"status":             model.NodeStatusOnline,
 		}
+		for key, value := range managedRuntimeUpdates(req.ManagedRuntime) {
+			updates[key] = value
+		}
 
 		if err := h.db.Model(&model.Node{}).Where("uuid = ?", req.NodeUuid).Updates(updates).Error; err != nil {
 			slog.Warn("更新心跳数据失败", "nodeUUID", req.NodeUuid, "error", err)
@@ -370,6 +373,53 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			return err
 		}
 	}
+}
+
+func managedRuntimeUpdates(snapshot *workerpb.ManagedRuntimeSnapshot) map[string]interface{} {
+	updates := map[string]interface{}{
+		"managed_runtime_observed_at": nil,
+		"worker_process_rss_bytes":    nil,
+		"worker_process_cpu_pct":      nil,
+		"bot_worker_rss_bytes":        nil,
+		"bot_worker_cpu_pct":          nil,
+		"bot_active_count":            nil,
+		"bot_connecting_count":        nil,
+		"bot_event_loop_p95_ms":       nil,
+		"bot_available":               false,
+		"bot_unavailable_reason":      "Worker 未上报受管运行时快照",
+	}
+	if snapshot == nil {
+		return updates
+	}
+	if snapshot.ObservedAtUnixMs > 0 {
+		observedAt := time.UnixMilli(snapshot.ObservedAtUnixMs).UTC()
+		updates["managed_runtime_observed_at"] = &observedAt
+	}
+	updates["worker_process_rss_bytes"] = snapshot.WorkerProcessRssBytes
+	updates["worker_process_cpu_pct"] = snapshot.WorkerProcessCpuPct
+	updates["bot_available"] = snapshot.BotAvailable
+	if snapshot.BotAvailable {
+		updates["bot_worker_rss_bytes"] = snapshot.BotWorkerRssBytes
+		updates["bot_worker_cpu_pct"] = snapshot.BotWorkerCpuPct
+		updates["bot_active_count"] = snapshot.BotActiveCount
+		updates["bot_connecting_count"] = snapshot.BotConnectingCount
+		updates["bot_event_loop_p95_ms"] = snapshot.BotEventLoopP95Ms
+		updates["bot_unavailable_reason"] = ""
+		return updates
+	}
+	updates["bot_unavailable_reason"] = truncateRuntimeReason(snapshot.BotUnavailableReason)
+	if updates["bot_unavailable_reason"] == "" {
+		updates["bot_unavailable_reason"] = "Bot Worker 不可用"
+	}
+	return updates
+}
+
+func truncateRuntimeReason(reason string) string {
+	const maxBytes = 256
+	if len(reason) <= maxBytes {
+		return reason
+	}
+	return reason[:maxBytes]
 }
 
 // StartOfflineDetector 启动离线检测器。

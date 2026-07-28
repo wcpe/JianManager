@@ -82,6 +82,14 @@ func TestHeartbeat_ValidSecretUpdatesNode(t *testing.T) {
 	h, db := newHeartbeatHandler(t)
 	oldHeartbeat := time.Now().Add(-2 * time.Minute)
 	node := seedHeartbeatNode(t, db, model.NodeStatusOffline, oldHeartbeat)
+	workerRSS := int64(1024)
+	workerCPU := 12.5
+	botRSS := int64(2048)
+	botCPU := 25.0
+	activeBots := int32(3)
+	connectingBots := int32(1)
+	eventLoopP95 := 4.5
+	observedAt := time.Now().Add(-time.Second)
 
 	stream := newHeartbeatTestStream(ctxWithHeartbeatSecret("node-secret-ok"), &workerpb.HeartbeatRequest{
 		NodeUuid:         node.UUID,
@@ -93,6 +101,13 @@ func TestHeartbeat_ValidSecretUpdatesNode(t *testing.T) {
 		NetworkBytesSent: 12345,
 		NetworkBytesRecv: 67890,
 		LoadAvg1:         1.25,
+		ManagedRuntime: &workerpb.ManagedRuntimeSnapshot{
+			WorkerProcessRssBytes: &workerRSS, WorkerProcessCpuPct: &workerCPU,
+			BotWorkerRssBytes: &botRSS, BotWorkerCpuPct: &botCPU,
+			BotActiveCount: &activeBots, BotConnectingCount: &connectingBots,
+			BotEventLoopP95Ms: &eventLoopP95, BotAvailable: true,
+			ObservedAtUnixMs: observedAt.UnixMilli(),
+		},
 	})
 
 	err := h.Heartbeat(stream)
@@ -113,6 +128,16 @@ func TestHeartbeat_ValidSecretUpdatesNode(t *testing.T) {
 	require.Equal(t, int64(12345), fromDB.NetworkBytesSent)
 	require.Equal(t, int64(67890), fromDB.NetworkBytesRecv)
 	require.InDelta(t, 1.25, fromDB.LoadAvg1, 0.001)
+	require.Equal(t, &workerRSS, fromDB.WorkerProcessRSSBytes)
+	require.Equal(t, &workerCPU, fromDB.WorkerProcessCPUPct)
+	require.Equal(t, &botRSS, fromDB.BotWorkerRSSBytes)
+	require.Equal(t, &botCPU, fromDB.BotWorkerCPUPct)
+	require.Equal(t, &activeBots, fromDB.BotActiveCount)
+	require.Equal(t, &connectingBots, fromDB.BotConnectingCount)
+	require.Equal(t, &eventLoopP95, fromDB.BotEventLoopP95MS)
+	require.True(t, fromDB.BotAvailable)
+	require.NotNil(t, fromDB.ManagedRuntimeObservedAt)
+	require.Equal(t, observedAt.UnixMilli(), fromDB.ManagedRuntimeObservedAt.UnixMilli())
 }
 
 // TestHeartbeat_KeepsDamagedOnStoppedReport 覆盖 FR-342 真机回归：DAMAGED（搭建失败损毁）是

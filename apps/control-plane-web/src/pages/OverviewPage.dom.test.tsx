@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
@@ -36,6 +37,23 @@ beforeEach(() => {
 })
 
 describe('OverviewPage（mock 假后端）', () => {
+  it('资源仪表 Tooltip 只在打开后查询受管归因，并可下钻监控页', async () => {
+    server.use(
+      http.get(API('/metrics/resource-attribution'), () => HttpResponse.json({
+        sampledAt: '2026-07-28T00:00:00Z', freshness: 'fresh',
+        nodes: [{ nodeId: 1, nodeUuid: 'node-a', name: '节点 A', status: 'fresh', observedAt: '2026-07-28T00:00:00Z', cpuPct: 10, loadPct: 20, memoryUsedBytes: 1024, memoryTotalBytes: 2048, workerProcessRssBytes: null, workerProcessCpuPct: null, botWorker: { rssBytes: null, cpuPct: null, activeCount: null, connectingCount: null, eventLoopP95Ms: null, available: false, reason: '未启动' } }],
+        topInstances: [{ instanceId: 2, instanceUuid: 'inst-a', instanceName: '大厅', nodeId: 1, cpuPct: 10, rssBytes: 512, sampledAt: '2026-07-28T00:00:00Z' }],
+        topProcesses: [],
+      })),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<OverviewPage />, { route: '/' })
+    await user.click(await screen.findByRole('button', { name: '总内存 资源归因' }))
+    const tooltip = await screen.findByTestId('overview-resource-attribution')
+    expect(within(tooltip).getByRole('link', { name: /节点 A/ })).toHaveAttribute('href', '/monitoring?node=node-a')
+    expect(within(tooltip).getByRole('link', { name: /大厅/ })).toHaveAttribute('href', '/monitoring?instance=inst-a')
+  })
+
   it('底部实例表渲染种子实例', async () => {
     const { container } = renderWithProviders(<OverviewPage />, { route: '/' })
     expect(container.firstElementChild).toHaveAttribute('data-page', 'overview')

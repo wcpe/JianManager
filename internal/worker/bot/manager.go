@@ -92,6 +92,14 @@ type BotCapacitySnapshot struct {
 	UnavailableReason     string
 }
 
+// RuntimeSnapshot 是已存在 Bot Worker 的只读运行时视图。
+// 它绝不启动、重启或探测子进程，供 Heartbeat 上报当前受管资源。
+type RuntimeSnapshot struct {
+	PID      int
+	Running  bool
+	Capacity BotCapacitySnapshot
+}
+
 // ScriptProgress 脚本进度。
 type ScriptProgress struct {
 	ScriptID string `json:"scriptId"`
@@ -1318,6 +1326,18 @@ func (m *Manager) CapacitySnapshot() BotCapacitySnapshot {
 	defer m.mu.Unlock()
 	result := m.capacity
 	result.Features = append([]string(nil), m.capacity.Features...)
+	return result
+}
+
+// RuntimeSnapshot 返回当前 Bot Worker 进程与容量快照，不产生任何生命周期副作用。
+func (m *Manager) RuntimeSnapshot() RuntimeSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := RuntimeSnapshot{Running: m.running, Capacity: m.capacity}
+	result.Capacity.Features = append([]string(nil), m.capacity.Features...)
+	if m.cmd != nil && m.cmd.Process != nil {
+		result.PID = m.cmd.Process.Pid
+	}
 	return result
 }
 

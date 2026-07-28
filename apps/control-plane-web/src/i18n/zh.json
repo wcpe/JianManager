@@ -608,7 +608,13 @@
     "loadTrend": "负载趋势",
     "memTrend": "内存趋势",
     "playersTrend": "在线玩家趋势",
-    "instanceList": "实例列表"
+    "instanceList": "实例列表",
+    "resourceAttributionLabel": "{{label}} 资源归因",
+    "resourceAttributionLoading": "正在加载受管资源归因…",
+    "resourceAttributionUnavailable": "暂无查看受管资源归因的权限或数据",
+    "sampleTimeUnknown": "采样时间未知",
+    "resourceObservation": "RSS 为受管进程观察值，可能含共享页，不能与节点已用内存相加。",
+    "freshness": { "fresh": "新鲜", "stale": "陈旧", "offline": "离线", "unavailable": "不可用" }
   },
   "metrics": {
     "tab": "监控",

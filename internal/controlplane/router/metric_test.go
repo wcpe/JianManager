@@ -142,3 +142,39 @@ func TestMetricProcessTop_InstanceOK(t *testing.T) {
 		t.Fatalf("期望一条进程数据，得 %v", rows)
 	}
 }
+
+func TestMetricResourceAttribution_AdminOnly(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	admin := getAdminToken(t, r)
+	member := getMemberToken(t, r, "observer", "password123")
+	createTestNode(t, db)
+
+	w := makeRequest(r, "GET", "/api/v1/metrics/resource-attribution?sort=memory&limit=5", nil, admin)
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 200，得 %d，body=%s", w.Code, w.Body.String())
+	}
+	if _, ok := parseJSON(t, w)["nodes"]; !ok {
+		t.Fatalf("期望 nodes，得 %s", w.Body.String())
+	}
+
+	w = makeRequest(r, "GET", "/api/v1/metrics/resource-attribution", nil, member)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("期望 403，得 %d，body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestMetricResourceAttribution_ValidatesArguments(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	admin := getAdminToken(t, r)
+	for _, path := range []string{
+		"/api/v1/metrics/resource-attribution?sort=io",
+		"/api/v1/metrics/resource-attribution?limit=11",
+	} {
+		w := makeRequest(r, "GET", path, nil, admin)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: 期望 400，得 %d，body=%s", path, w.Code, w.Body.String())
+		}
+	}
+}

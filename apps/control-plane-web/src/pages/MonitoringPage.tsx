@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { useMetricOverview, useMetricSeries, useProcessTop, type ProcessTopItem } from '@/api/metrics'
@@ -23,6 +24,14 @@ function defsFor(kind: DrillTarget['kind']): MetricChartDef[] {
   if (kind === 'node') return NODE_CHART_DEFS
   if (kind === 'instance') return INSTANCE_CHART_DEFS
   return PLATFORM_CHART_DEFS
+}
+
+function targetFromSearch(searchParams: URLSearchParams): DrillTarget {
+  const instance = searchParams.get('instance')
+  if (instance) return { kind: 'instance', uuid: instance }
+  const node = searchParams.get('node')
+  if (node) return { kind: 'node', uuid: node }
+  return { kind: 'platform' }
 }
 
 function formatBytes(bytes: number): string {
@@ -139,9 +148,10 @@ function useMonitorSeries(
  */
 export default function MonitoringPage() {
   const { t } = useTranslation()
+  const [searchParams] = useSearchParams()
   const { data: nodes } = useNodes()
   const { data: instances } = useInstances()
-  const [target, setTarget] = useState<DrillTarget>({ kind: 'platform' })
+  const [target, setTarget] = useState<DrillTarget>(() => targetFromSearch(searchParams))
   // 页级范围 + 粒度（驱动概览/对比；主图网格各图另有独立范围，但共享该页级粒度）。
   const [range, setRange] = useState<MetricRange>('24h')
   const [resolution, setResolution] = useState<MetricResolution>('auto')

@@ -47,6 +47,18 @@ type Node struct {
 	NetworkBytesRecv int64 `gorm:"default:0" json:"networkBytesRecv"`
 	// LoadAvg1 节点 1 分钟 load average（FR-062，心跳驱动）。
 	LoadAvg1 float64 `gorm:"default:0" json:"loadAvg1"`
+	// ManagedRuntimeObservedAt 是 Worker 随已认证 Heartbeat 上报受管运行时快照的实际观测时间。
+	// 运行时不可用或旧 Worker 未上报时，相关字段必须清空，避免陈旧值被当成当前资源。
+	ManagedRuntimeObservedAt *time.Time `json:"managedRuntimeObservedAt"`
+	WorkerProcessRSSBytes    *int64     `json:"workerProcessRssBytes"`
+	WorkerProcessCPUPct      *float64   `json:"workerProcessCpuPct"`
+	BotWorkerRSSBytes        *int64     `json:"botWorkerRssBytes"`
+	BotWorkerCPUPct          *float64   `json:"botWorkerCpuPct"`
+	BotActiveCount           *int32     `json:"botActiveCount"`
+	BotConnectingCount       *int32     `json:"botConnectingCount"`
+	BotEventLoopP95MS        *float64   `json:"botEventLoopP95Ms"`
+	BotAvailable             bool       `gorm:"default:false" json:"botAvailable"`
+	BotUnavailableReason     string     `gorm:"type:varchar(256)" json:"botUnavailableReason"`
 	// ProxyMode 节点出站代理模式（FR-185，见 ADR-043）：
 	//   inherit（默认）= 用平台全局默认代理（settings DB > control-plane.yml > env）；
 	//   custom         = 用本节点自定义 ProxyURL/ProxyNoProxy。

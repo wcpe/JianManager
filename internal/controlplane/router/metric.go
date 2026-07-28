@@ -29,6 +29,7 @@ func (h *MetricHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	m.GET("/series", h.Series)
 	m.POST("/series/batch", h.SeriesBatch)
 	m.GET("/overview", h.Overview)
+	m.GET("/resource-attribution", h.ResourceAttribution)
 	m.GET("/processes/top", h.ProcessTop)
 }
 
@@ -269,6 +270,34 @@ func (h *MetricHandler) Overview(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, ov)
+}
+
+// ResourceAttribution 返回首页 Tooltip 使用的有界受管资源归因（FR-400）。
+// 节点和跨实例进程明细只对平台管理员开放，避免扩展原 overview 的聚合权限边界。
+func (h *MetricHandler) ResourceAttribution(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	sortBy := c.DefaultQuery("sort", "memory")
+	if sortBy != "cpu" && sortBy != "memory" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_ARGUMENT", "message": "sort 必须为 cpu 或 memory"})
+		return
+	}
+	limit := 5
+	if raw := c.Query("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 10 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_ARGUMENT", "message": "limit 必须为 1 到 10"})
+			return
+		}
+		limit = parsed
+	}
+	result, err := h.metricSvc.ResourceAttribution(service.ResourceAttributionQuery{Sort: sortBy, Limit: limit})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询受管资源归因失败"})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 // ProcessTop 返回受管实例进程 TOPN 快照（FR-170）。

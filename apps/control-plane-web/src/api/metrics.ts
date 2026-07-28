@@ -205,6 +205,77 @@ export function useMetricOverview(range: MetricRange, resolution?: MetricResolut
   })
 }
 
+export type ResourceFreshness = 'fresh' | 'stale' | 'offline' | 'unavailable'
+
+export interface ResourceAttributionBotWorker {
+  rssBytes: number | null
+  cpuPct: number | null
+  activeCount: number | null
+  connectingCount: number | null
+  eventLoopP95Ms: number | null
+  available: boolean
+  reason: string
+}
+
+export interface ResourceAttributionNode {
+  nodeId: number
+  nodeUuid: string
+  name: string
+  status: ResourceFreshness
+  observedAt: string | null
+  cpuPct: number | null
+  loadPct: number | null
+  memoryUsedBytes: number | null
+  memoryTotalBytes: number | null
+  workerProcessRssBytes: number | null
+  workerProcessCpuPct: number | null
+  botWorker: ResourceAttributionBotWorker
+}
+
+export interface ResourceAttributionInstance {
+  instanceId: number
+  instanceUuid: string
+  instanceName: string
+  nodeId: number
+  cpuPct: number
+  rssBytes: number
+  sampledAt: string
+}
+
+export interface ResourceAttributionProcess {
+  instanceId: number
+  instanceUuid: string
+  instanceName: string
+  nodeId: number
+  pid: number
+  name: string
+  cpuPercent: number
+  rssBytes: number
+  sampledAt: string
+}
+
+export interface ResourceAttributionResponse {
+  sampledAt: string | null
+  freshness: ResourceFreshness
+  nodes: ResourceAttributionNode[]
+  topInstances: ResourceAttributionInstance[]
+  topProcesses: ResourceAttributionProcess[]
+}
+
+/** 首页受管资源归因；仅在管理员打开仪表 Tooltip 后轮询，隐藏标签页默认暂停。 */
+export function useResourceAttribution(enabled: boolean, sort: 'cpu' | 'memory') {
+  return useQuery({
+    queryKey: ['resourceAttribution', sort],
+    queryFn: async () => {
+      const { data } = await api.get<ResourceAttributionResponse>(`/metrics/resource-attribution?sort=${sort}&limit=5`)
+      return data
+    },
+    enabled,
+    refetchInterval: enabled ? 10_000 : false,
+    refetchIntervalInBackground: false,
+  })
+}
+
 export interface ProcessTopItem {
   instanceId: number
   instanceUuid: string

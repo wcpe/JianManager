@@ -40,6 +40,12 @@ type TaskSnapshotProvider interface {
 	CancelTask(taskID string) bool
 }
 
+// ManagedRuntimeProvider 提供 Worker 与已运行 Bot Worker 的只读运行时快照。
+// 采集端不得因调用本接口启动、重启或扫描任意非受管进程。
+type ManagedRuntimeProvider interface {
+	ManagedRuntimeSnapshot() *workerpb.ManagedRuntimeSnapshot
+}
+
 // Heartbeat 心跳上报器。
 type Heartbeat struct {
 	controlPlaneAddr string
@@ -50,6 +56,8 @@ type Heartbeat struct {
 	instanceProvider InstanceStateProvider
 	// taskProvider 运行中任务快照来源（FR-183）；为 nil 时心跳不带任务字段（向后兼容）。
 	taskProvider TaskSnapshotProvider
+	// managedRuntimeProvider 由 Worker 主进程注入；nil 时保持旧 Worker 的 Heartbeat 兼容形状。
+	managedRuntimeProvider ManagedRuntimeProvider
 	// proxyApplier 据心跳响应里 CP 下发的期望代理运行时重建 Worker 出站 client（FR-185，见 ADR-043）；
 	// 为 nil 时心跳不应用下发代理（Worker 仅用本地 yaml/env，向后兼容旧 CP）。
 	proxyApplier *proxyApplier
@@ -75,6 +83,11 @@ func New(controlPlaneAddr, nodeUUID, nodeSecret string, interval time.Duration, 
 // 由 main 装配（传入 Worker gRPC 服务实现）；不调用则心跳不携带任务进度。
 func (h *Heartbeat) SetTaskProvider(p TaskSnapshotProvider) {
 	h.taskProvider = p
+}
+
+// SetManagedRuntimeProvider 注入受管运行时快照来源（FR-400）。
+func (h *Heartbeat) SetManagedRuntimeProvider(p ManagedRuntimeProvider) {
+	h.managedRuntimeProvider = p
 }
 
 // SetProxyRebuilder 注入「据心跳下发代理重建出站 client」的回调（FR-185，见 ADR-043）。
@@ -177,6 +190,9 @@ func (h *Heartbeat) sendHeartbeat() error {
 		}
 		req.InstanceMetrics = collectInstanceMetrics(states)
 		req.ProcessMetrics = collectProcessMetrics(states)
+	}
+	if h.managedRuntimeProvider != nil {
+		req.ManagedRuntime = h.managedRuntimeProvider.ManagedRuntimeSnapshot()
 	}
 
 	// 附加运行中长任务进度快照（FR-183，见 ADR-040）。
