@@ -1,8 +1,8 @@
 /**
- * 监控页（FR-169）6 指标定义表 + 序列装配纯逻辑。把「哪张图画哪些 metricKey、用什么单位/格式」
+ * 监控页指标定义表 + 序列装配纯逻辑。把「哪张图画哪些 metricKey、用什么单位/格式」
  * 收敛成与 React 无关的数据，便于 vitest 单测，也让平台/节点/实例三 target 共用同一骨架。
  *
- * 仅消费现有 FR-060/061 指标键（见 internal/controlplane/model/metric.go），不新增后端字段。
+ * 消费既有节点/实例指标及 FR-401 节点级共享 Bot Worker 指标（见 internal/controlplane/model/metric.go）。
  * 数据里没有的维度（如 load5/load15、磁盘读写速率、进程 TOP10）一律不画、不留占位（按 FR-169 决定）。
  */
 
@@ -94,7 +94,7 @@ export function compactFormatter(v: number): string {
 }
 
 /**
- * 平台/节点监控的 6 指标定义（design §4.2）。
+ * 平台/节点监控指标定义（design §4.2）。
  * 受限于现有指标：负载只有 1 分钟（node_load），磁盘/网络 IO 用现有占用/速率指标，
  * 「资源使用率」= CPU% + 内存% + 磁盘%（占比同图对比）。
  */
@@ -146,6 +146,41 @@ export const NODE_CHART_DEFS: MetricChartDef[] = [
       { metricKey: 'node_net_rx_rate', nameKey: 'monitor.metric.netRx' },
       { metricKey: 'node_net_tx_rate', nameKey: 'monitor.metric.netTx' },
     ],
+  },
+  {
+    id: 'bot-runtime-memory',
+    titleKey: 'monitor.chart.botRuntimeMemory',
+    format: 'bytes',
+    sources: [
+      { metricKey: 'bot_worker_rss_bytes', nameKey: 'monitor.metric.botWorkerRss' },
+      { metricKey: 'worker_process_rss_bytes', nameKey: 'monitor.metric.workerProcessRss' },
+    ],
+  },
+  {
+    id: 'bot-runtime-cpu',
+    titleKey: 'monitor.chart.botRuntimeCpu',
+    format: 'pct',
+    yDomain: [0, 100],
+    sources: [
+      { metricKey: 'bot_worker_cpu_pct', nameKey: 'monitor.metric.botWorkerCpu' },
+      { metricKey: 'worker_process_cpu_pct', nameKey: 'monitor.metric.workerProcessCpu' },
+    ],
+  },
+  {
+    id: 'bot-runtime-bots',
+    titleKey: 'monitor.chart.botRuntimeBots',
+    format: 'count',
+    sources: [
+      { metricKey: 'bot_active_count', nameKey: 'monitor.metric.botActive' },
+      { metricKey: 'bot_connecting_count', nameKey: 'monitor.metric.botConnecting' },
+      { metricKey: 'bot_capacity_max', nameKey: 'monitor.metric.botCapacity' },
+    ],
+  },
+  {
+    id: 'bot-runtime-event-loop',
+    titleKey: 'monitor.chart.botRuntimeEventLoop',
+    format: 'ms',
+    sources: [{ metricKey: 'bot_event_loop_p95_ms', nameKey: 'monitor.metric.botEventLoopP95' }],
   },
 ]
 
@@ -282,6 +317,14 @@ export const NODE_METRIC_CATALOG: MetricCatalogItem[] = [
   { metricKey: 'node_disk_used', nameKey: 'monitor.metric.diskUsed', format: 'bytes' },
   { metricKey: 'node_net_rx_rate', nameKey: 'monitor.metric.netRx', format: 'bytesPerSec' },
   { metricKey: 'node_net_tx_rate', nameKey: 'monitor.metric.netTx', format: 'bytesPerSec' },
+  { metricKey: 'bot_worker_rss_bytes', nameKey: 'monitor.metric.botWorkerRss', format: 'bytes' },
+  { metricKey: 'worker_process_rss_bytes', nameKey: 'monitor.metric.workerProcessRss', format: 'bytes' },
+  { metricKey: 'bot_worker_cpu_pct', nameKey: 'monitor.metric.botWorkerCpu', format: 'pct' },
+  { metricKey: 'worker_process_cpu_pct', nameKey: 'monitor.metric.workerProcessCpu', format: 'pct' },
+  { metricKey: 'bot_active_count', nameKey: 'monitor.metric.botActive', format: 'count' },
+  { metricKey: 'bot_connecting_count', nameKey: 'monitor.metric.botConnecting', format: 'count' },
+  { metricKey: 'bot_capacity_max', nameKey: 'monitor.metric.botCapacity', format: 'count' },
+  { metricKey: 'bot_event_loop_p95_ms', nameKey: 'monitor.metric.botEventLoopP95', format: 'ms' },
 ]
 
 export const INSTANCE_METRIC_CATALOG: MetricCatalogItem[] = [

@@ -482,6 +482,10 @@ func main() {
 	metricSvc := service.NewMetricService(db)
 	metricSvc.Start()
 	defer metricSvc.Stop()
+	// FR-401：仅将已认证 Heartbeat 的当前快照按固定周期沉淀为节点级历史指标。
+	botRuntimeMetricSampler := service.NewBotRuntimeMetricSampler(db, metricSvc)
+	botRuntimeMetricSampler.Start()
+	defer botRuntimeMetricSampler.Stop()
 
 	// 全局任务中心 + 站内信（FR-183，见 ADR-040）：长任务进度汇聚 + 终态发站内信。
 	// TaskService 在心跳路径处理任务快照、终态落 NodeJDK 并经 NotificationService 发信；

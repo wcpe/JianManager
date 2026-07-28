@@ -1,6 +1,7 @@
 package router
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,9 +29,146 @@ func (h *MetricHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	m := rg.Group("/metrics")
 	m.GET("/series", h.Series)
 	m.POST("/series/batch", h.SeriesBatch)
+	m.GET("/bot-runtime", h.BotRuntime)
 	m.GET("/overview", h.Overview)
 	m.GET("/resource-attribution", h.ResourceAttribution)
 	m.GET("/processes/top", h.ProcessTop)
+}
+
+// BotRuntime 返回节点关联的共享 Bot Worker 历史观测；不将进程资源归属到单个 Bot 或会话。
+func (h *MetricHandler) BotRuntime(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+	query, ok := parseBotRuntimeQuery(c)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_ARGUMENT", "message": "关联目标、时间范围或分辨率非法"})
+		return
+	}
+	if err := h.authorizeBotRuntime(access, query); err != nil {
+		h.writeBotRuntimeAuthorizationError(c, err)
+		return
+	}
+	result, err := h.metricSvc.QueryBotRuntime(query)
+	if errors.Is(err, service.ErrBotRuntimeTargetNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "TARGET_NOT_FOUND", "message": "关联目标不存在"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询共享 Bot Worker 指标失败"})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func parseBotRuntimeQuery(c *gin.Context) (service.BotRuntimeQuery, bool) {
+	_, hasFrom := c.GetQuery("from")
+	_, hasTo := c.GetQuery("to")
+	if hasFrom != hasTo {
+		return service.BotRuntimeQuery{}, false
+	}
+	nodeID, nodePresent, ok := parseOptionalPositiveMetricID(c, "nodeId")
+	if !ok {
+		return service.BotRuntimeQuery{}, false
+	}
+	instanceID, instancePresent, ok := parseOptionalPositiveMetricID(c, "instanceId")
+	if !ok {
+		return service.BotRuntimeQuery{}, false
+	}
+	sessionID, sessionPresent, ok := parseOptionalPositiveMetricID(c, "sessionId")
+	if !ok || boolCount(nodePresent, instancePresent, sessionPresent) > 1 {
+		return service.BotRuntimeQuery{}, false
+	}
+	resolution := c.DefaultQuery("resolution", "auto")
+	switch resolution {
+	case "auto", "raw", "5m", "1h":
+	default:
+		return service.BotRuntimeQuery{}, false
+	}
+	from, to, ok := parseMetricRange(c)
+	if !ok {
+		return service.BotRuntimeQuery{}, false
+	}
+	return service.BotRuntimeQuery{NodeID: nodeID, InstanceID: instanceID, SessionID: sessionID, From: from, To: to, Resolution: resolution}, true
+}
+
+func parseOptionalPositiveMetricID(c *gin.Context, key string) (uint, bool, bool) {
+	raw, present := c.GetQuery(key)
+	if !present {
+		return 0, false, true
+	}
+	id, err := strconv.ParseUint(raw, 10, 0)
+	if err != nil || id == 0 {
+		return 0, true, false
+	}
+	return uint(id), true, true
+}
+
+func boolCount(values ...bool) int {
+	count := 0
+	for _, value := range values {
+		if value {
+			count++
+		}
+	}
+	return count
+}
+
+func (h *MetricHandler) authorizeBotRuntime(access *service.UserAccess, query service.BotRuntimeQuery) error {
+	if query.NodeID != 0 {
+		return nil
+	}
+	if query.InstanceID != 0 {
+		return h.authorizeBotRuntimeInstance(access, query.InstanceID)
+	}
+	if query.SessionID != 0 {
+		instanceID, found, err := h.metricSvc.ResolveBotRuntimeSessionInstanceID(query.SessionID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return service.ErrBotRuntimeTargetNotFound
+		}
+		return h.authorizeBotRuntimeInstance(access, instanceID)
+	}
+	if !access.IsPlatformAdmin {
+		return errBotRuntimeForbidden
+	}
+	return nil
+}
+
+var errBotRuntimeForbidden = errors.New("无权访问共享 Bot Worker 指标")
+
+func (h *MetricHandler) authorizeBotRuntimeInstance(access *service.UserAccess, instanceID uint) error {
+	_, found, err := h.metricSvc.ResolveInstanceUUID(instanceID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return service.ErrBotRuntimeTargetNotFound
+	}
+	allowed, err := h.authz.CanAccessInstance(access, instanceID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return errBotRuntimeForbidden
+	}
+	return nil
+}
+
+func (h *MetricHandler) writeBotRuntimeAuthorizationError(c *gin.Context, err error) {
+	if errors.Is(err, errBotRuntimeForbidden) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权访问关联实例的共享 Bot Worker 指标"})
+		return
+	}
+	if errors.Is(err, service.ErrBotRuntimeTargetNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "TARGET_NOT_FOUND", "message": "关联目标不存在"})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询关联权限失败"})
 }
 
 // metricBatchMaxTargets 批量序列端点的目标数硬上限（FR-340）。去重后超出即 422。

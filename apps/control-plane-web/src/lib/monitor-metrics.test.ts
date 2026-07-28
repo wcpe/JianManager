@@ -79,12 +79,15 @@ describe('ratioPctSeries', () => {
 })
 
 describe('定义表完整性', () => {
-  it('节点 6 图 / 实例 6 图', () => {
-    expect(NODE_CHART_DEFS).toHaveLength(6)
+  it('节点 10 图（含共享 Bot Worker）/ 实例 6 图', () => {
+    expect(NODE_CHART_DEFS).toHaveLength(10)
     expect(INSTANCE_CHART_DEFS).toHaveLength(6)
   })
-  it('节点 6 图 id 与设计一致', () => {
-    expect(NODE_CHART_DEFS.map((d) => d.id)).toEqual(['resource', 'load', 'cpu', 'memory', 'disk', 'network'])
+  it('节点图含共享 Bot Worker 历史指标', () => {
+    expect(NODE_CHART_DEFS.map((d) => d.id)).toEqual([
+      'resource', 'load', 'cpu', 'memory', 'disk', 'network',
+      'bot-runtime-memory', 'bot-runtime-cpu', 'bot-runtime-bots', 'bot-runtime-event-loop',
+    ])
   })
   it('平台 def 只含 overview 聚合可得的 4 指标', () => {
     expect(PLATFORM_CHART_DEFS.map((d) => d.id)).toEqual(['cpu', 'load', 'memory', 'players'])

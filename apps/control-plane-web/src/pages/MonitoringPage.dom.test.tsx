@@ -118,6 +118,8 @@ describe('MonitoringPage（mock 假后端）', () => {
     // 下钻到该节点 → 面包屑出现节点名（变为节点视图）。
     await user.selectOptions(drill, 'node-1-uuid')
     expect(await screen.findByText('北京节点')).toBeInTheDocument()
+    expect(await screen.findByText('共享 Bot Worker 运行时')).toBeInTheDocument()
+    expect(screen.getByText('Bot Worker 资源为共享进程观察值，不代表任一 Bot 或会话的独占资源。')).toBeInTheDocument()
   })
 
   it('③ FR-221 剖析维度渲染：关键指标概览 + 多指标对比 + 粒度选择器', async () => {

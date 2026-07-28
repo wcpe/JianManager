@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
-import { useMetricOverview, useMetricSeries, useProcessTop, type ProcessTopItem } from '@/api/metrics'
+import { useBotRuntimeMetrics, useMetricOverview, useMetricSeries, useProcessTop, type ProcessTopItem } from '@/api/metrics'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { RangePicker, ResolutionPicker, type MetricRange, type MetricResolution } from '@jianmanager/ui'
 import { MonitorSkeleton, type MonitorSource } from '@jianmanager/ui'
@@ -110,6 +110,16 @@ function ProcessTopPanel({ rows }: { rows: ProcessTopItem[] }) {
   )
 }
 
+function BotRuntimePanel({ reason }: { reason?: string }) {
+  const { t } = useTranslation()
+  return (
+    <Panel title={t('monitor.botRuntime.title')}>
+      <p className="text-sm text-muted-foreground">{t('monitor.botRuntime.notice')}</p>
+      {reason && <p className="mt-2 text-sm text-amber-600">{t('monitor.botRuntime.unavailable', { reason })}</p>}
+    </Panel>
+  )
+}
+
 function useMonitorSeries(
   source: MonitorSource,
   range: MetricRange,
@@ -160,12 +170,20 @@ export default function MonitoringPage() {
 
   const tKey = targetKey(target)
   const currentInstance = target.kind === 'instance' ? (instances ?? []).find((i) => i.uuid === target.uuid) : undefined
-  const currentNodeUUID = target.kind === 'node' ? target.uuid : undefined
+  const currentNode = target.kind === 'node' ? (nodes ?? []).find((node) => node.uuid === target.uuid) : undefined
+  const currentNodeUUID = currentNode?.uuid
   const { data: processTop = [] } = useProcessTop({
     instanceId: currentInstance?.id,
     nodeId: currentNodeUUID,
     enabled: target.kind !== 'instance' || !!currentInstance,
   })
+  const botRuntime = useBotRuntimeMetrics({
+    nodeId: currentNode?.id,
+    range,
+    resolution,
+    enabled: target.kind === 'node' && !!currentNode,
+  })
+  const botRuntimeReason = botRuntime.data?.unavailable.find((item) => item.nodeId === currentNode?.id)?.reason
 
   // 概览/对比/主图共享的数据源描述（MonitorSource 与 SeriesTarget 同构）。
   const source: MonitorSource =
@@ -226,6 +244,8 @@ export default function MonitoringPage() {
       </Panel>
 
       <ProcessTopPanel rows={processTop} />
+
+      {target.kind === 'node' && <BotRuntimePanel reason={botRuntimeReason} />}
 
       <Panel bodyClassName="px-3 py-2 text-[11px] text-muted-foreground">{t('monitor.hint')}</Panel>
 

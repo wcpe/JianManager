@@ -582,6 +582,14 @@
 - **响应** (200): `{ "resolution", "from", "to", "series": { "<targetId>": [MetricSeries...] }, "skipped": [ { "targetId", "reason": "forbidden"|"not_found" } ] }`（series 与 `GET /metrics/series` 同构、逐目标独立）
 - **错误**: 400 `INVALID_REQUEST`/`INVALID_SCOPE`/`INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`（无鉴权上下文）；422 `TOO_MANY_TARGETS`（>50）；500 `INTERNAL_ERROR`
 
+### GET /api/v1/metrics/bot-runtime
+- **描述**: 返回节点关联的共享 Bot Worker 历史观测；资源只表示受管 Go Worker 与共享 Bot Worker 进程，绝不归属到单个 Bot 或压测会话。
+- **关联 FR**: FR-401（依赖 FR-400 当前快照）
+- **权限**: 登录；`nodeId` 沿用节点指标访问边界，`instanceId`/`sessionId` 按目标实例 `instance.read` 收敛；无关联筛选的全平台节点结果仅平台管理员可查。
+- **Query**: `nodeId?`、`instanceId?`、`sessionId?` 三者最多一个（数值 ID）；`range` 或 `from`/`to`（RFC3339，默认 `24h`）；`resolution=auto|raw|5m|1h`（默认 `auto`）。
+- **响应** (200): `{ resolution, from, to, sharedRuntime:true, notice, nodes:[{nodeId,nodeName,series:[MetricSeries...]}], unavailable:[{nodeId,reason}] }`。仅返回 `bot_worker_rss_bytes`、`worker_process_rss_bytes`、`bot_worker_cpu_pct`、`worker_process_cpu_pct`、`bot_active_count`、`bot_connecting_count`、`bot_capacity_max`、`bot_event_loop_p95_ms`；指标值/`avg|min|max` 为 `null` 表示缺测断点，`unavailable` 说明当前快照不可用原因。
+- **错误**: 400 `INVALID_ARGUMENT`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`；500 `INTERNAL_ERROR`。
+
 ### GET /api/v1/metrics/overview
 - **描述**: 总览页跨节点聚合：当前总量 + 聚合历史曲线（总 CPU 均值 / 总内存合计 / 总在线玩家合计）
 - **关联 FR**: FR-060

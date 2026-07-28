@@ -663,6 +663,11 @@
     "processCpu": "CPU",
     "processMemory": "进程内存",
     "processIo": "IO 读/写",
+    "botRuntime": {
+      "title": "共享 Bot Worker 运行时",
+      "notice": "Bot Worker 资源为共享进程观察值，不代表任一 Bot 或会话的独占资源。",
+      "unavailable": "当前不可用：{{reason}}"
+    },
     "resolution": "聚合粒度",
     "res": {
       "auto": "自动",
@@ -699,6 +704,10 @@
       "memory": "内存",
       "disk": "磁盘",
       "network": "网络 IO",
+      "botRuntimeMemory": "Bot Worker 内存",
+      "botRuntimeCpu": "Bot Worker CPU",
+      "botRuntimeBots": "Bot 运行数量",
+      "botRuntimeEventLoop": "Bot 事件循环延迟",
       "tps": "TPS",
       "mspt": "MSPT",
       "heap": "堆内存",
@@ -723,7 +732,15 @@
       "heapMax": "上限",
       "threads": "线程",
       "players": "在线玩家",
-      "chunks": "加载区块"
+      "chunks": "加载区块",
+      "botWorkerRss": "Bot Worker RSS",
+      "workerProcessRss": "Worker 进程 RSS",
+      "botWorkerCpu": "Bot Worker CPU",
+      "workerProcessCpu": "Worker 进程 CPU",
+      "botActive": "活跃 Bot",
+      "botConnecting": "连接中 Bot",
+      "botCapacity": "容量上限",
+      "botEventLoopP95": "事件循环 P95"
     }
   },
   "probe": {

@@ -686,6 +686,11 @@
     "processCpu": "CPU",
     "processMemory": "Process memory",
     "processIo": "IO read/write",
+    "botRuntime": {
+      "title": "Shared Bot Worker runtime",
+      "notice": "Bot Worker resources are shared process observations, not exclusive resources of any Bot or session.",
+      "unavailable": "Currently unavailable: {{reason}}"
+    },
     "resolution": "Resolution",
     "res": {
       "auto": "Auto",
@@ -722,6 +727,10 @@
       "memory": "Memory",
       "disk": "Disk",
       "network": "Network IO",
+      "botRuntimeMemory": "Bot Worker memory",
+      "botRuntimeCpu": "Bot Worker CPU",
+      "botRuntimeBots": "Bot runtime counts",
+      "botRuntimeEventLoop": "Bot event-loop latency",
       "tps": "TPS",
       "mspt": "MSPT",
       "heap": "Heap",
@@ -746,7 +755,15 @@
       "heapMax": "Max",
       "threads": "Threads",
       "players": "Online players",
-      "chunks": "Loaded chunks"
+      "chunks": "Loaded chunks",
+      "botWorkerRss": "Bot Worker RSS",
+      "workerProcessRss": "Worker process RSS",
+      "botWorkerCpu": "Bot Worker CPU",
+      "workerProcessCpu": "Worker process CPU",
+      "botActive": "Active Bots",
+      "botConnecting": "Connecting Bots",
+      "botCapacity": "Capacity limit",
+      "botEventLoopP95": "Event-loop P95"
     }
   },
   "probe": {

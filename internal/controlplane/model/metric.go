@@ -34,6 +34,17 @@ const (
 	MetricNodeNetTxRate = "node_net_tx_rate"
 	MetricNodeLoad      = "node_load" // 1 分钟 load average（FR-062）
 
+	// FR-401：由 FR-400 已认证 Heartbeat 当前快照沉淀的共享 Bot Worker 运行时指标。
+	// 它们属于节点维度，不代表任一 Bot 或压测会话独占的资源。
+	MetricWorkerProcessRSSBytes = "worker_process_rss_bytes"
+	MetricWorkerProcessCPUPct   = "worker_process_cpu_pct"
+	MetricBotWorkerRSSBytes     = "bot_worker_rss_bytes"
+	MetricBotWorkerCPUPct       = "bot_worker_cpu_pct"
+	MetricBotActiveCount        = "bot_active_count"
+	MetricBotConnectingCount    = "bot_connecting_count"
+	MetricBotCapacityMax        = "bot_capacity_max"
+	MetricBotEventLoopP95MS     = "bot_event_loop_p95_ms"
+
 	MetricInstTPS           = "inst_tps"
 	MetricInstMSPT          = "inst_mspt"
 	MetricInstPlayersOnline = "inst_players_online"

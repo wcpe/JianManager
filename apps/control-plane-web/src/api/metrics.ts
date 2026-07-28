@@ -85,6 +85,17 @@ export interface MetricSeriesResponse {
   series: MetricSeries[]
 }
 
+/** FR-401 节点关联的共享 Bot Worker 运行时历史响应。 */
+export interface BotRuntimeMetricResponse {
+  resolution: string
+  from: string
+  to: string
+  sharedRuntime: boolean
+  notice: string
+  nodes: { nodeId: number; nodeName: string; series: MetricSeries[] }[]
+  unavailable: { nodeId: number; reason: string }[]
+}
+
 /**
  * 聚合粒度档位（FR-221，ADR-013 三档降采样）：
  * auto=按区间自动选档；raw=原始 30s；5m/1h=对应降采样卷积档。
@@ -114,6 +125,27 @@ export function useMetricSeries(params: {
     },
     enabled: enabled && !!targetId,
     refetchInterval: 30_000,
+  })
+}
+
+/** 节点监控页的共享 Bot Worker 状态；30 秒轮询以与历史采样节奏对齐。 */
+export function useBotRuntimeMetrics(params: {
+  nodeId: number | undefined
+  range: MetricRange
+  resolution?: MetricResolution
+  enabled?: boolean
+}) {
+  const { nodeId, range, resolution, enabled = true } = params
+  return useQuery({
+    queryKey: ['botRuntimeMetrics', nodeId ?? 0, range, resolution ?? 'auto'],
+    queryFn: async () => {
+      const q = new URLSearchParams({ nodeId: String(nodeId), range })
+      if (resolution && resolution !== 'auto') q.set('resolution', resolution)
+      const { data } = await api.get<BotRuntimeMetricResponse>(`/metrics/bot-runtime?${q.toString()}`)
+      return data
+    },
+    enabled: enabled && !!nodeId,
+    refetchInterval: enabled && nodeId ? 30_000 : false,
   })
 }
 
