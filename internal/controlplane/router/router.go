@@ -87,7 +87,9 @@ type Services struct {
 	Network      *service.NetworkService
 	Log          *service.LogService
 	Metric       *service.MetricService
-	Settings     *service.SettingsService
+	// PlatformObservability 是平台管理员首页的有界总览读模型（FR-402）。
+	PlatformObservability *service.PlatformObservabilityService
+	Settings              *service.SettingsService
 	// OrphanRuntime 实例反向对账无主运行时列表/确认处置（FR-326）；nil 时端点关闭。
 	OrphanRuntime *service.OrphanRuntimeTracker
 	ProbeUpdate   *service.ProbeUpdateService
@@ -359,6 +361,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 时序监控历史曲线（FR-060）：node 维度对认证用户开放，instance 维度按 CanAccessInstance 收敛。
 		metricHandler := NewMetricHandler(svcs.Metric, svcs.Authz)
 		metricHandler.RegisterRoutes(protected)
+		if svcs.PlatformObservability != nil {
+			observabilityHandler := NewObservabilityHandler(svcs.PlatformObservability)
+			observabilityHandler.RegisterRoutes(protected)
+		}
 
 		// 全局任务中心（FR-183，见 ADR-040）：认证用户可见，非管理员只见自己发起的任务（service 层收敛）。
 		if svcs.Task != nil {

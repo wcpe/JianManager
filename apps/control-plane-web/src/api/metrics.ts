@@ -239,6 +239,58 @@ export function useMetricOverview(range: MetricRange, resolution?: MetricResolut
 
 export type ResourceFreshness = 'fresh' | 'stale' | 'offline' | 'unavailable'
 
+/** FR-402 平台管理员首页的有界全景观测读模型。 */
+export interface PlatformObservabilityOverviewResponse {
+  sampledAt: string | null
+  health: {
+    nodeCount: number
+    onlineNodeCount: number
+    staleNodeCount: number
+    offlineNodeCount: number
+    runningInstanceCount: number
+    crashedInstanceCount: number
+    stoppedInstanceCount: number
+  }
+  resources: {
+    cpuPct: number | null
+    loadPct: number | null
+    memoryUsedBytes: number | null
+    memoryTotalBytes: number | null
+    freshness: ResourceFreshness
+  }
+  bots: {
+    sharedRuntime: true
+    notice: string
+    nodeCount: number
+    botWorkerRssBytes: number | null
+    botWorkerCpuPct: number | null
+    workerProcessRssBytes: number | null
+    workerProcessCpuPct: number | null
+    activeCount: number | null
+    connectingCount: number | null
+    eventLoopP95Ms: number | null
+    unavailable: { nodeId: number; reason: string }[]
+  }
+  alerts: { id: number; severity: string; title: string; createdAt: string }[]
+  tasks: { id: number; state: string; title: string; updatedAt: string }[]
+  exceptions: { kind: string; nodeId?: number; instanceId?: number; title: string; href: string }[]
+}
+
+/** 平台管理员可见时每 10 秒刷新；TanStack Query 默认隐藏页暂停，这里显式固定该契约。 */
+export function usePlatformObservabilityOverview(enabled: boolean) {
+  return useQuery({
+    queryKey: ['platformObservabilityOverview'],
+    queryFn: async () => {
+      const { data } = await api.get<PlatformObservabilityOverviewResponse>('/observability/overview')
+      return data
+    },
+    enabled,
+    staleTime: 0,
+    refetchInterval: enabled ? 10_000 : false,
+    refetchIntervalInBackground: false,
+  })
+}
+
 export interface ResourceAttributionBotWorker {
   rssBytes: number | null
   cpuPct: number | null

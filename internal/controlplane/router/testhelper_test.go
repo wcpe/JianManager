@@ -182,6 +182,7 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		Storage:           service.NewStorageService(db, root),
 		Log:               service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
 		Metric:            service.NewMetricService(db),
+		PlatformObservability: service.NewPlatformObservabilityService(db),
 		DBBrowse:          service.NewDBBrowseService(db),
 		SelfUpdate:        service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{}, root),
 		ServerState:       service.NewServerStateService(db, pool),

@@ -482,6 +482,7 @@ func main() {
 	metricSvc := service.NewMetricService(db)
 	metricSvc.Start()
 	defer metricSvc.Stop()
+	platformObservabilitySvc := service.NewPlatformObservabilityService(db)
 	// FR-401：仅将已认证 Heartbeat 的当前快照按固定周期沉淀为节点级历史指标。
 	botRuntimeMetricSampler := service.NewBotRuntimeMetricSampler(db, metricSvc)
 	botRuntimeMetricSampler.Start()
@@ -656,6 +657,7 @@ func main() {
 		Network:                 networkSvc,
 		Log:                     logSvc,
 		Metric:                  metricSvc,
+		PlatformObservability:   platformObservabilitySvc,
 		Settings:                settingsSvc,
 		OrphanRuntime:           orphanRuntimeSvc,
 		ProbeUpdate:             probeUpdateSvc,

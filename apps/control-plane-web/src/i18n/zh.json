@@ -614,6 +614,17 @@
     "resourceAttributionUnavailable": "暂无查看受管资源归因的权限或数据",
     "sampleTimeUnknown": "采样时间未知",
     "resourceObservation": "RSS 为受管进程观察值，可能含共享页，不能与节点已用内存相加。",
+    "platformHealth": "平台健康",
+    "platformExceptions": "异常项",
+    "sharedBotRuntime": "Bot Worker（共享）",
+    "platformOverviewUnavailable": "平台全景观测暂不可用",
+    "activeAlerts": "未解决告警：{{count}}",
+    "activeTasks": "进行中或失败任务：{{count}}",
+    "botRss": "Bot Worker RSS",
+    "botCpu": "Bot Worker CPU",
+    "botCount": "活跃 Bot",
+    "botEventLoop": "事件循环 P95",
+    "botUnavailable": "当前不可用：{{reason}}",
     "freshness": { "fresh": "新鲜", "stale": "陈旧", "offline": "离线", "unavailable": "不可用" }
   },
   "metrics": {

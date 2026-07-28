@@ -637,6 +637,17 @@
     "resourceAttributionUnavailable": "Managed resource attribution is unavailable or not permitted",
     "sampleTimeUnknown": "Sample time unknown",
     "resourceObservation": "RSS is an observed managed-process value and may include shared pages; it cannot be added to node memory usage.",
+    "platformHealth": "Platform health",
+    "platformExceptions": "Exceptions",
+    "sharedBotRuntime": "Bot Worker (shared)",
+    "platformOverviewUnavailable": "Platform observability overview is unavailable",
+    "activeAlerts": "Unresolved alerts: {{count}}",
+    "activeTasks": "Active or failed tasks: {{count}}",
+    "botRss": "Bot Worker RSS",
+    "botCpu": "Bot Worker CPU",
+    "botCount": "Active Bots",
+    "botEventLoop": "Event-loop P95",
+    "botUnavailable": "Currently unavailable: {{reason}}",
     "freshness": { "fresh": "Fresh", "stale": "Stale", "offline": "Offline", "unavailable": "Unavailable" }
   },
   "metrics": {

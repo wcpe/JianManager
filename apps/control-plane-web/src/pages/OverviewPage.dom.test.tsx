@@ -7,6 +7,7 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
+import { useAuthStore } from '@/stores/auth'
 import OverviewPage from './OverviewPage'
 
 /**
@@ -36,7 +37,36 @@ beforeEach(() => {
   )
 })
 
+function loginPlatformAdmin(): void {
+  const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
+  loginMockUser(`mock.${payload}.sig`)
+  useAuthStore.getState().login(`mock.${payload}.sig`, 'test-refresh-token')
+}
+
 describe('OverviewPage（mock 假后端）', () => {
+  it('平台管理员展示有界健康、异常与共享 Bot 观测并可下钻', async () => {
+    loginPlatformAdmin()
+    server.use(
+      http.get(API('/observability/overview'), () =>
+        HttpResponse.json({
+          sampledAt: '2026-07-28T00:00:00Z',
+          health: { nodeCount: 2, onlineNodeCount: 1, staleNodeCount: 1, offlineNodeCount: 0, runningInstanceCount: 3, crashedInstanceCount: 1, stoppedInstanceCount: 2 },
+          resources: { cpuPct: 42.5, loadPct: 35, memoryUsedBytes: 1024, memoryTotalBytes: 2048, freshness: 'fresh' },
+          bots: { sharedRuntime: true, notice: 'Bot Worker 资源为共享进程观察值，不代表任一 Bot 或会话的独占资源。', nodeCount: 1, botWorkerRssBytes: 120, botWorkerCpuPct: 3.5, workerProcessRssBytes: 240, workerProcessCpuPct: 1.5, activeCount: 20, connectingCount: 1, eventLoopP95Ms: 4.2, unavailable: [{ nodeId: 2, reason: '节点心跳已过期' }] },
+          alerts: [], tasks: [],
+          exceptions: [{ kind: 'node_stale', nodeId: 2, title: 'node-a 心跳陈旧', href: '/monitoring?node=node-a' }],
+        }),
+      ),
+    )
+
+    renderWithProviders(<OverviewPage />, { route: '/' })
+
+    expect(await screen.findByText('平台健康')).toBeInTheDocument()
+    expect(screen.getByText('Bot Worker（共享）')).toBeInTheDocument()
+    expect(await screen.findByText('Bot Worker 资源为共享进程观察值，不代表任一 Bot 或会话的独占资源。')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'node-a 心跳陈旧' })).toHaveAttribute('href', '/monitoring?node=node-a')
+  })
+
   it('资源仪表 Tooltip 只在打开后查询受管归因，并可下钻监控页', async () => {
     server.use(
       http.get(API('/metrics/resource-attribution'), () => HttpResponse.json({

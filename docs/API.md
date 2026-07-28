@@ -612,6 +612,14 @@
   `totals` 取 Node/Instance 表当前值 + 各实例最近 2min 在线人数合计。
 - **错误**: 400 `INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`
 
+### GET /api/v1/observability/overview
+- **描述**: 平台管理员首页的有界全景观测读模型；只汇总 Control Plane 已持久化的节点、实例、告警、任务和共享 Bot Worker 快照，不调用 Worker RPC。
+- **关联 FR**: FR-402（复用 FR-400/FR-401）
+- **权限**: 平台管理员。
+- **Query**: 无。
+- **响应** (200): `{ sampledAt, health, resources, bots, alerts, tasks, exceptions }`；`alerts`、`tasks`、`exceptions` 各最多 5 条，异常项提供既有 `/monitoring?...` 或 `/instances/:id` 下钻链接。`resources` 仅聚合鲜活节点；`bots.sharedRuntime=true`，RSS/CPU/Bot 数为共享进程观察值，绝不归属到单 Bot/会话。`bots.eventLoopP95Ms` 取可用节点 P95 的最大值（最差节点），无可用节点时为 `null` 且由 `unavailable` 说明。
+- **错误**: 403 `FORBIDDEN`；500 `INTERNAL_ERROR`。
+
 ### GET /api/v1/metrics/resource-attribution
 - **描述**: 首页仪表 Tooltip 的有界受管资源归因。节点当前资源来自已认证 Heartbeat；实例/进程只来自 RUNNING 的 JianManager 受管实例进程树最新快照。Worker 与共享 Bot Worker 资源均为观察值，RSS 可能含共享页，不能与节点已用内存相加或当作单 Bot 资源。
 - **关联 FR**: FR-400
