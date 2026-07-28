@@ -93,6 +93,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-373~378（文件权限底座 + 资源管理器批次）：✅ 已交付@v0.20.0
 - FR-393~394（节点离线归档与彻底清理）：✅ 已交付@v0.20.0
 - FR-395~399（Agent MCP 全域运维 + 500 Bot 资源容量闭环 2026-07-26）：能力分组白名单与节点继承实例 scope / 节点实例全生命周期强类型工具 / 文件配置插件控制与流式数据分离 / Bot 舰队压测全编排 / 全链路资源采样与容量报告；永久禁区保留用户组与 RBAC、Agent Token 管理、密钥明文、数据库浏览、自更新、平台设置；计划见 `.tmp/brainstorm-mcp-full-ops-bot-capacity-2026-07-26.md` → FR-395 `docs/specs/agent-capability-policy-v2/spec.md`、FR-396 `docs/specs/mcp-instance-operations/spec.md`、FR-397 `docs/specs/mcp-content-operations/spec.md`、FR-398 `docs/specs/mcp-bot-orchestration/spec.md`、FR-399 `docs/specs/bot-load-resource-capacity/spec.md`（均需 spec；依赖序 395→[396,397,398]→399→500 Bot 真机容量战役）
+- FR-404（Bot 乱斗场景与受管稳定性压测）：Scenario V2 的死亡重生恢复、混合目标搜敌与本地攻击活跃度，以及 MCP 场景创建入口；以受管 Paper + ServerProbe 做 50 Bot 一小时资源稳定性验证，不把客户端攻击动作冒充服务端伤害/击杀证据 → `docs/specs/bot-combat-soak/spec.md`（已审核，开发中）
 - FIX-观测刷新 + FR-400~403（平台全景观测 2026-07-27）：修复可见页面指标自动刷新与陈旧态；补齐受管资源归因与首页 Tooltip、Bot Worker 历史观测、平台总览下钻，以及平台/节点实例日志分流。范围只涵盖平台受管资源，不采集任意 OS 进程、不伪造单 Bot RSS；指标留存复用 ADR-013 的 48h raw / 30d 5m / 400d 1h。→ FR-400 `docs/specs/managed-resource-attribution/spec.md`、FR-401 `docs/specs/bot-runtime-observability/spec.md`、FR-402 `docs/specs/platform-observability-overview/spec.md`（均需 spec）；FR-403 免 spec。依赖序：FIX→400→401→402；FR-403 独立；计划见 `.tmp/brainstorm-platform-observability-2026-07-27.md`
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
@@ -488,6 +489,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-401 | Bot Worker 历史观测与聚合统计（feat，增强 FR-362/399）：常驻采样 Bot Worker RSS、事件循环 P95、活跃/连接中数、状态/重连/错误，按执行节点、目标实例与压测会话聚合查询；不以共享进程 RSS 伪造单 Bot 占用。时序留存复用 ADR-013 的 raw/5m/1h 三档（需 spec，依赖 FR-400 的唯一实时快照契约）→ `docs/specs/bot-runtime-observability/spec.md` | P1 | 📋 计划 |
 | FR-402 | 平台全景观测总览与下钻（feat，增强 FR-220）：平台首页聚合健康、资源、节点/实例状态、告警、任务与 Bot，展示 TopN/异常项并下钻节点或实例详情，不在首页全量铺开实体表（需 spec，依赖 FR-400/401）→ `docs/specs/platform-observability-overview/spec.md` | P1 | 📋 计划 |
 | FR-403 | 日志中心平台与节点实例视图分流（feat，增强 FR-150/215）：同一路径分为「平台日志」（仅 CP）与「节点/实例日志」（Worker+实例，按节点/实例聚合筛选）两个主视图；平台管理员保留受控全量检索。复用既有日志表与筛选接口（免 spec） | P1 | 🔨 开发中 |
+| FR-404 | Bot 乱斗场景与受管稳定性压测（feat，增强 FR-274/352/398/399）：`attack_until` 加性支持死亡后受限重生恢复、混合玩家/敌对生物确定性随机目标、无目标寻路搜敌与客户端攻击活跃度；MCP `loadtest_run_create` 可提交冻结的 Scenario V2。使用受管隔离 Paper + ServerProbe 运行 1 Worker × 50 Bot × 1 小时，只验证客户端攻击活动、重生恢复和资源稳定性，不把它表述为服务端伤害/击杀或 TEST-500（需 spec，依赖 FR-398/399）→ `docs/specs/bot-combat-soak/spec.md` | P0 | 🔨 开发中 |
 ### 范围外（后续版本，暂不纳入 V1）
 
 | 编号 | 需求 | 预计版本 |
