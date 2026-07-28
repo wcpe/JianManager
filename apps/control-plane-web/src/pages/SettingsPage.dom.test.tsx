@@ -6,6 +6,7 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import { useAuthStore } from '@/stores/auth'
 import SettingsPage from './SettingsPage'
+import { keyCategory, validateSettingDraft } from './settings-form'
 
 /**
  * SettingsPage 强断言（FR-210）：渲染 seed 平台配置 → 改设置保存联动回读新值 → 注入 500 显错误态。
@@ -68,5 +69,19 @@ describe('SettingsPage（mock 假后端）', () => {
 
     await user.click(await screen.findByRole('button', { name: /日志/ }))
     expect(await screen.findByText('加载平台配置失败')).toBeInTheDocument()
+  })
+
+  it('邀请邮件配置归入可编辑分类，平台公共基址接受 HTTP/HTTPS 且拒绝查询参数或片段', async () => {
+    loginAsPlatformAdmin()
+    renderWithProviders(<SettingsPage />)
+
+    expect(await screen.findByRole('button', { name: /邀请邮件/ })).toBeInTheDocument()
+    expect(keyCategory('platform.public_base_url')).toBe('email')
+    expect(keyCategory('invite.smtp.host')).toBe('email')
+    expect(validateSettingDraft('platform.public_base_url', 'http://panel.example.com')).toBeUndefined()
+    expect(validateSettingDraft('platform.public_base_url', 'https://panel.example.com')).toBeUndefined()
+    expect(validateSettingDraft('platform.public_base_url', 'https://panel.example.com?source=test')).toBe('settings.invalidPlatformPublicBaseUrl')
+    expect(validateSettingDraft('platform.public_base_url', 'https://panel.example.com#invite')).toBe('settings.invalidPlatformPublicBaseUrl')
+    expect(validateSettingDraft('platform.public_base_url', 'http://user:pass@panel.example.com')).toBe('settings.invalidPlatformPublicBaseUrl')
   })
 })

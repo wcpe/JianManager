@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
-import { type UserInfo } from '@/api/users'
 import { Button } from '@jianmanager/ui/components/button'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import {
@@ -37,6 +36,7 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState('0')
+  const [status, setStatus] = useState('0')
   const [error, setError] = useState('')
   const gate = useFieldGate()
 
@@ -44,6 +44,10 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
     { value: '0', label: t('users.member') },
     { value: '1', label: t('users.groupAdmin') },
     { value: '10', label: t('users.platformAdmin') },
+  ]
+  const statusOptions: ComboboxOption[] = [
+    { value: '0', label: t('users.enabled') },
+    { value: '1', label: t('users.disabled') },
   ]
 
   const errors = validateFields(
@@ -55,18 +59,13 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
   )
 
   const create = useMutation({
-    // register 仅建普通成员；若选了更高角色，据返回 uuid 定位新用户并应用（FR-156）。
-    mutationFn: async (body: { username: string; password: string; role: string }) => {
-      const res = await api.post<{ id?: string }>('/auth/register', {
+    mutationFn: async (body: { username: string; password: string; role: string; status: string }) => {
+      await api.post('/users', {
         username: body.username,
         password: body.password,
+        role: Number(body.role),
+        status: Number(body.status),
       })
-      const newUuid = res.data?.id
-      if (body.role !== '0' && newUuid) {
-        const { data: list } = await api.get<UserInfo[]>('/users')
-        const created = list.find((u) => u.uuid === newUuid)
-        if (created) await api.put(`/users/${created.id}`, { role: Number(body.role) })
-      }
     },
     onSuccess: () => {
       toast.success(t('users.created'))
@@ -83,6 +82,7 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
     setUsername('')
     setPassword('')
     setRole('0')
+    setStatus('0')
     setError('')
     gate.reset()
   }
@@ -92,7 +92,7 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
     gate.submit()
     if (hasErrors(errors)) return
     setError('')
-    create.mutate({ username, password, role })
+    create.mutate({ username, password, role, status })
   }
 
   const handleClose = () => {
@@ -148,6 +148,13 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
                 <Combobox options={roleOptions} value={role} onChange={setRole} allowCustom={false} />
               </div>
               <p className="mt-1 text-xs text-muted-foreground">{t(`users.roleDesc_${role}`)}</p>
+            </div>
+
+            <div>
+              <FieldLabel>{t('users.status')}</FieldLabel>
+              <div className="mt-1">
+                <Combobox options={statusOptions} value={status} onChange={setStatus} allowCustom={false} />
+              </div>
             </div>
           </ScrollableDialogBody>
 

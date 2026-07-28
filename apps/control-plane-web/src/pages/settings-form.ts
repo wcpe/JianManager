@@ -9,6 +9,19 @@ export interface DraftDiffItem {
   value: string
 }
 
+/** 设置分类：appearance 为客户端偏好，其余为平台配置。 */
+export type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'network' | 'backup' | 'email' | 'security'
+
+/** 把平台配置键映射到分类：可编辑项落 logging/runtime/network/backup/email，只读项落 security。 */
+export function keyCategory(key: string): SettingCategory {
+  if (key.startsWith('log.') || key.startsWith('debug.')) return 'logging'
+  if (key.startsWith('jdk.') || key.startsWith('graceful_stop.')) return 'runtime'
+  if (key.startsWith('proxy.')) return 'network'
+  if (key.startsWith('backup.')) return 'backup'
+  if (key === 'platform.public_base_url' || key.startsWith('invite.')) return 'email'
+  return 'security'
+}
+
 /**
  * 计算草稿相对当前值的有效改动集（仅含真正不同的键）。
  * 草稿里等于当前值、未定义、或不在可编辑项集合内的键一律剔除。
@@ -62,6 +75,29 @@ export function validateSettingDraft(key: string, value: string): string | undef
         return 'settings.invalidProxyUrl'
       }
     }
+    case 'platform.public_base_url': {
+      if (v === '') return undefined
+      try {
+        const u = new URL(v)
+        return ['http:', 'https:'].includes(u.protocol) && u.host !== '' && u.username === '' && u.password === '' && u.search === '' && u.hash === ''
+          ? undefined
+          : 'settings.invalidPlatformPublicBaseUrl'
+      } catch {
+        return 'settings.invalidPlatformPublicBaseUrl'
+      }
+    }
+    case 'invite.smtp.port': {
+      if (v === '') return undefined
+      const port = Number(v)
+      return /^\d+$/.test(v) && port >= 1 && port <= 65535
+        ? undefined
+        : 'settings.invalidInviteSmtpPort'
+    }
+    case 'invite.smtp.password':
+      if (v === '' || v === '(已配置)') return undefined
+      return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(v)
+        ? undefined
+        : 'settings.invalidInviteSmtpPassword'
     default:
       return undefined
   }

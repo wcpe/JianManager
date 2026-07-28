@@ -1,6 +1,6 @@
 import { HttpResponse } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
-import { requireAuth } from '@jianmanager/devmock/auth-middleware'
+import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
 import { db } from '@jianmanager/devmock/db'
 import type { User } from '@jianmanager/devmock/handlers/domains/auth'
 
@@ -52,6 +52,20 @@ interface AuditLog {
   error: string
   createdAt: string
   user?: { id: number; username: string }
+}
+
+interface Invitation {
+  id: number
+  email: string
+  role: 0
+  expiresAt: string
+  used: boolean
+  usedAt?: string
+  revoked: boolean
+  createdBy: number
+  emailSentAt?: string
+  createdAt: string
+  token: string
 }
 
 // users 集合由地基 auth.ts 带 seedFn 声明，本域只读写、绝不重复 seedFn（spec §7）。
@@ -124,6 +138,8 @@ const audit = db<AuditLog>('audit', () => [
   },
 ])
 
+const invitations = db<Invitation>('invitations', () => [])
+
 /**
  * 把假后端 User 投影为前端 UserInfo（users.ts）。
  * 种子用户仅 {id,uuid,username,role}，此处补 UserInfo 所需的 status/createdAt
@@ -178,21 +194,19 @@ export const handlers = [
     )
   }),
 
-  // --- auth/register（公开：CreateUserDialog 先注册再按需升角色）---
-  domainRoute('post', '/auth/register', async ({ request }) => {
-    const { username, password } = (await request.json()) as { username: string; password: string }
+  // --- users ---
+  domainRoute('post', '/users', async (info) => {
+    const denied = requirePlatformAdmin(info)
+    if (denied) return denied
+    const { username, password, role, status } = (await info.request.json()) as { username: string; password: string; role: number; status: number }
     if (users.find((x) => x.username === username)) {
       return HttpResponse.json({ error: 'CONFLICT', message: 'username 已存在' }, { status: 409 })
     }
     const uuid = `u-${username}-${users.list().length + 1}`
-    const u = users.insert({ uuid, username, password, role: 0 })
-    return HttpResponse.json(
-      { id: u.uuid, username: u.username, createdAt: '2026-06-28T12:00:00Z' },
-      { status: 201 },
-    )
+    const u = users.insert({ uuid, username, password, role, disabled: status !== 0 })
+    return HttpResponse.json(toUserInfo(u), { status: 201 })
   }),
 
-  // --- users ---
   domainRoute('get', '/users', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -229,6 +243,53 @@ export const handlers = [
     if (denied) return denied
     users.remove(Number(info.params.id))
     return new HttpResponse(null, { status: 204 })
+  }),
+
+  domainRoute('post', '/users/invitations', async (info) => {
+    const denied = requirePlatformAdmin(info)
+    if (denied) return denied
+    const { email, sendEmail } = (await info.request.json()) as { email: string; sendEmail: boolean }
+    const id = invitations.list().reduce((max, item) => Math.max(max, item.id), 0) + 1
+    const token = `mock-invite-${id}`
+    const invitation = invitations.insert({
+      email,
+      role: 0,
+      expiresAt: '2026-08-04T00:00:00Z',
+      used: false,
+      revoked: false,
+      createdBy: 1,
+      emailSentAt: sendEmail ? '2026-07-28T00:00:00Z' : undefined,
+      createdAt: '2026-07-28T00:00:00Z',
+      token,
+    })
+    const { token: _, ...safeInvitation } = invitation
+    return HttpResponse.json({ ...safeInvitation, invitationUrl: `https://example.test/invite#${token}`, emailDelivery: sendEmail ? 'sent' : 'not_configured' }, { status: 201 })
+  }),
+
+  domainRoute('get', '/users/invitations', (info) => {
+    const denied = requirePlatformAdmin(info)
+    if (denied) return denied
+    return HttpResponse.json(invitations.list().map(({ token: _, ...invitation }) => invitation))
+  }),
+
+  domainRoute('delete', '/users/invitations/:id', (info) => {
+    const denied = requirePlatformAdmin(info)
+    if (denied) return denied
+    const invitation = invitations.get(Number(info.params.id))
+    if (!invitation) return notFound()
+    if (invitation.used) return HttpResponse.json({ error: 'INVITATION_ALREADY_USED' }, { status: 409 })
+    invitations.update(invitation.id, { revoked: true })
+    return HttpResponse.json({ message: '已撤销' })
+  }),
+
+  domainRoute('post', '/auth/invitations/accept', async ({ request }) => {
+    const { token, username, password } = (await request.json()) as { token: string; username: string; password: string }
+    const invitation = invitations.find((item) => item.token === token && !item.used && !item.revoked)
+    if (!invitation) return HttpResponse.json({ error: 'INVITATION_INVALID' }, { status: 401 })
+    if (users.find((user) => user.username === username)) return HttpResponse.json({ error: 'USER_EXISTS' }, { status: 409 })
+    const user = users.insert({ uuid: `u-${username}-${users.list().length + 1}`, username, password, role: 0 })
+    invitations.update(invitation.id, { used: true, usedAt: '2026-07-28T00:00:00Z' })
+    return HttpResponse.json({ id: user.id, username: user.username, createdAt: '2026-07-28T00:00:00Z' }, { status: 201 })
   }),
 
   // --- groups ---
@@ -348,4 +409,5 @@ export const handlers = [
 export function seed(): void {
   groups.seed()
   audit.seed()
+  invitations.seed()
 }

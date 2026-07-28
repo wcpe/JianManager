@@ -2,13 +2,20 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { toast } from 'sonner'
-import { Palette, ScrollText, Cpu, Archive, Lock, ShieldAlert, Network, type LucideIcon } from 'lucide-react'
+import { Palette, ScrollText, Cpu, Archive, Lock, ShieldAlert, Network, Mail, type LucideIcon } from 'lucide-react'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { changeLanguage } from '@/i18n'
 import { cn } from '@jianmanager/ui'
 import { useSettings, useUpdateSettings, type SettingItem } from '@/api/settings'
-import { diffSettings, hasUnsavedChanges, hasInvalidDraft, validateSettingDraft } from './settings-form'
+import {
+  diffSettings,
+  hasUnsavedChanges,
+  hasInvalidDraft,
+  keyCategory,
+  validateSettingDraft,
+  type SettingCategory,
+} from './settings-form'
 import { FieldError } from '@jianmanager/ui/components/field-label'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
@@ -39,24 +46,13 @@ const ROLE_PLATFORM_ADMIN = 10
 /** 日志级别可选值，用于可编辑项的下拉。 */
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const
 
-/** 设置分类（FR-063 + FR-185）：内部侧边栏据此分组。appearance 为客户端偏好，其余为平台配置。 */
-type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'network' | 'backup' | 'security'
-
-/** 把平台配置键映射到分类：可编辑项落 logging/runtime/network/backup，只读项落 security。 */
-function keyCategory(key: string): SettingCategory {
-  if (key.startsWith('log.') || key.startsWith('debug.')) return 'logging' // 调试模式（FR-225）归日志分类
-  if (key.startsWith('jdk.') || key.startsWith('graceful_stop.')) return 'runtime'
-  if (key.startsWith('proxy.')) return 'network' // 出站代理（FR-185）
-  if (key.startsWith('backup.')) return 'backup'
-  return 'security'
-}
-
 const CATEGORY_ICON: Record<SettingCategory, LucideIcon> = {
   appearance: Palette,
   logging: ScrollText,
   runtime: Cpu,
   network: Network,
   backup: Archive,
+  email: Mail,
   security: Lock,
 }
 
@@ -84,7 +80,7 @@ export default function SettingsPage() {
   const [pendingCat, setPendingCat] = useState<SettingCategory | null>(null)
 
   const categories: SettingCategory[] = isPlatformAdmin
-    ? ['appearance', 'logging', 'runtime', 'network', 'backup', 'security']
+    ? ['appearance', 'logging', 'runtime', 'network', 'backup', 'email', 'security']
     : ['appearance']
 
   // 当前分类的可编辑项（appearance 无平台项）。
@@ -240,7 +236,7 @@ function AppearanceSettings() {
 }
 
 /**
- * 平台配置分类面板：security 展示只读项（视觉隔离），其余（logging/runtime/backup）展示可编辑项 + 保存。
+ * 平台配置分类面板：security 展示只读项（视觉隔离），其余分类展示可编辑项 + 保存。
  * 数据/草稿由父组件提供，切分类拦截在父层处理。
  */
 function PlatformCategory({
@@ -328,6 +324,10 @@ function PlatformCategory({
             <p className="rounded-md bg-primary/10 px-3 py-2 text-xs text-muted-foreground">
               {t('settings.networkNotice')}
             </p>
+          ) : category === 'email' ? (
+            <p className="rounded-md bg-primary/10 px-3 py-2 text-xs text-muted-foreground">
+              {t('settings.emailNotice')}
+            </p>
           ) : (
             <p className="text-xs text-muted-foreground">{t('settings.editableHint', '保存后立即覆盖默认值。')}</p>
           )}
@@ -386,8 +386,9 @@ function EditableRow({
   onChange: (v: string) => void
 }) {
   const { t } = useTranslation()
-  // 文本类项按键做客户端校验（时长/非负整数/镜像非空/代理 URL），非法即红框+行内错误。
+  // 文本类项按键做客户端校验，非法即红框+行内错误。
   const draftError = validateSettingDraft(item.key, value)
+  const isInviteSMTPPassword = item.key === 'invite.smtp.password'
   return (
     <div className="flex items-center justify-between gap-4 px-3 py-2">
       <div className="min-w-0">
@@ -430,10 +431,13 @@ function EditableRow({
       ) : (
         <div className="w-56">
           <Input
+            type={isInviteSMTPPassword ? 'password' : 'text'}
             value={value}
             onChange={(e) => onChange(e.target.value)}
             className="h-8"
             inputMode={item.key === 'backup.retention_days' ? 'numeric' : undefined}
+            placeholder={isInviteSMTPPassword ? '${ENV_VAR}' : undefined}
+            autoComplete={isInviteSMTPPassword ? 'new-password' : undefined}
             aria-invalid={!!draftError}
           />
           <FieldError error={draftError} />

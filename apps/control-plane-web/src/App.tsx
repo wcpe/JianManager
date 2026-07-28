@@ -8,6 +8,7 @@ import { useThemeStore } from '@/stores/theme'
 const LoginPage = lazy(() => import('./pages/LoginPage'))
 const SetupPage = lazy(() => import('./pages/SetupPage'))
 const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const InvitePage = lazy(() => import('./pages/InvitePage'))
 
 /** 认证守卫：未登录时重定向到 /login。 */
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -37,6 +38,7 @@ function App() {
         <Routes>
           <Route path="/setup" element={<SetupPage />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/invite" element={<InvitePage />} />
           <Route
             path="/*"
             element={

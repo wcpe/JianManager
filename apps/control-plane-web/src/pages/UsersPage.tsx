@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { UserRound } from 'lucide-react'
-import { useUsers, useDeleteUser, useUpdateUser, type UserInfo } from '@/api/users'
+import { useUsers, useDeleteUser, useUpdateUser, useUserInvitations, useRevokeInvitation, type UserInfo } from '@/api/users'
+import { useAuthStore } from '@/stores/auth'
 import DangerConfirm from '@/components/DangerConfirm'
 import CreateUserDialog from '@/components/CreateUserDialog'
+import CreateInvitationDialog from '@/components/CreateInvitationDialog'
 import EditUserDialog from '@/components/EditUserDialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -27,12 +29,16 @@ import {
 export default function UsersPage() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
+  const [showInvite, setShowInvite] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; username: string } | null>(null)
   const [editUser, setEditUser] = useState<UserInfo | null>(null)
   const [view, setView] = useState<ConfigView>('list')
   const { data: users, isLoading } = useUsers()
+  const { data: invitations } = useUserInvitations()
   const deleteUser = useDeleteUser()
   const updateUser = useUpdateUser()
+  const revokeInvitation = useRevokeInvitation()
+  const isPlatformAdmin = useAuthStore((s) => s.role === 10)
 
   const roleLabel = (role: number): string => {
     switch (role) {
@@ -65,11 +71,13 @@ export default function UsersPage() {
         <h1 className="jm-page-title">{t('users.title')}</h1>
         <div className="flex items-center gap-2">
           <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
-          <Button onClick={() => setShowCreate(true)}>+ {t('users.createUser')}</Button>
+          {isPlatformAdmin && <Button variant="outline" onClick={() => setShowInvite(true)}>{t('users.inviteUser')}</Button>}
+          {isPlatformAdmin && <Button onClick={() => setShowCreate(true)}>+ {t('users.createUser')}</Button>}
         </div>
       </div>
 
       <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      <CreateInvitationDialog open={showInvite} onClose={() => setShowInvite(false)} />
 
       {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
@@ -166,6 +174,33 @@ export default function UsersPage() {
               ))}
             </TableBody>
           </Table>
+        </Panel>
+      )}
+
+      {isPlatformAdmin && (
+        <Panel>
+          <h2 className="text-sm font-semibold">{t('users.invitations')}</h2>
+          {!invitations || invitations.length === 0 ? (
+            <p className="mt-3 text-sm text-muted-foreground">{t('users.invitationsEmpty')}</p>
+          ) : (
+            <div className="mt-3 space-y-2">
+              {invitations.map((invitation) => (
+                <div key={invitation.id} className="flex items-center justify-between gap-3 rounded border px-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{invitation.email}</p>
+                    <p className="text-xs text-muted-foreground">{t('users.invitationExpiresAt', { date: new Date(invitation.expiresAt).toLocaleString() })}</p>
+                  </div>
+                  {invitation.revoked ? (
+                    <span className="text-xs text-muted-foreground">{t('users.invitationRevoked')}</span>
+                  ) : !invitation.used && (
+                    <Button variant="ghost" size="xs" onClick={() => revokeInvitation.mutate(invitation.id)} disabled={revokeInvitation.isPending}>
+                      {t('users.revokeInvitation')}
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </Panel>
       )}
 

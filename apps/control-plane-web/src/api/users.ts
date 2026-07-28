@@ -12,6 +12,24 @@ export interface UserInfo {
   createdAt: string
 }
 
+export interface UserInvitation {
+  id: number
+  email: string
+  role: 0
+  expiresAt: string
+  used: boolean
+  usedAt?: string
+  revoked: boolean
+  createdBy: number
+  emailSentAt?: string
+  createdAt: string
+}
+
+export interface CreateInvitationResponse extends UserInvitation {
+  invitationUrl: string
+  emailDelivery: 'sent' | 'not_configured' | 'failed'
+}
+
 export function useUsers() {
   return useQuery({
     queryKey: ['users'],
@@ -50,6 +68,24 @@ export function useUserSearch(params: UserSearchParams) {
       return data
     },
     placeholderData: (prev) => prev,
+  })
+}
+
+export function useUserInvitations() {
+  return useQuery({
+    queryKey: ['users', 'invitations'],
+    queryFn: async () => {
+      const { data } = await api.get<UserInvitation[]>('/users/invitations')
+      return data
+    },
+  })
+}
+
+export function useRevokeInvitation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.delete(`/users/invitations/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users', 'invitations'] }),
   })
 }
 

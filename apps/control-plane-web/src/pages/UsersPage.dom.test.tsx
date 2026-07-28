@@ -34,8 +34,9 @@ describe('UsersPage（mock 假后端）', () => {
     expect(screen.getAllByText('平台管理员').length).toBeGreaterThan(0)
   })
 
-  it('创建用户 → 列表联动出现新行（POST /auth/register → 重查 /users）', async () => {
-    loginMockUser()
+  it('管理员直接创建用户只调用受保护的 POST /users，不依赖已关闭的公开注册', async () => {
+    loginPlatformAdmin()
+    mockInject('post', '/auth/register', { kind: 'status', status: 404 })
     renderWithProviders(<UsersPage />)
     await screen.findByText('admin')
     const user = userEvent.setup()
@@ -50,8 +51,25 @@ describe('UsersPage（mock 假后端）', () => {
     expect(await screen.findByText('newbie')).toBeInTheDocument()
   })
 
+  it('可签发邀请并撤销未使用的邀请', async () => {
+    loginPlatformAdmin()
+    renderWithProviders(<UsersPage />)
+    await screen.findByText('admin')
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: '邀请用户' }))
+    const dialog = await screen.findByRole('dialog', { name: '邀请用户' })
+    await user.type(within(dialog).getByLabelText(/邮箱/), 'member@example.com')
+    await user.click(within(dialog).getByRole('button', { name: '创建邀请' }))
+
+    expect(await screen.findByText('member@example.com')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: '关闭' }))
+    await user.click(screen.getByRole('button', { name: '撤销邀请' }))
+    expect(await screen.findByText('已撤销')).toBeInTheDocument()
+  })
+
   it('创建与编辑用户对话框走共享 Dialog 并支持 Esc 关闭', async () => {
-    loginMockUser()
+    loginPlatformAdmin()
     renderWithProviders(<UsersPage />)
     await screen.findByText('admin')
     const user = userEvent.setup()
