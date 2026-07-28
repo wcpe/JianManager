@@ -44,6 +44,7 @@ function formatObservedAt(value: string | null, unknown: string): string {
 
 /** 首页仪表的有界受管资源 Tooltip，不展示任意 OS 进程。 */
 function GaugeAttributionTooltip({
+  gauge,
   label,
   children,
   active,
@@ -52,6 +53,7 @@ function GaugeAttributionTooltip({
   isLoading,
   isError,
 }: {
+  gauge: AttributionGauge
   label: string
   children: ReactNode
   active: boolean
@@ -61,6 +63,9 @@ function GaugeAttributionTooltip({
   isError: boolean
 }) {
   const { t } = useTranslation()
+  const formatValue = (cpuPct: number | null, rssBytes: number | null): string => (
+    gauge === 'cpu' ? displayNumber(cpuPct, '%') : rssBytes == null ? '--' : fmtBytes(rssBytes)
+  )
   return (
     <Panel bodyClassName="relative flex items-center justify-center py-3">
       <button
@@ -86,7 +91,7 @@ function GaugeAttributionTooltip({
                 {data.nodes.slice(0, 3).map((node) => (
                   <Link key={node.nodeId} to={`/monitoring?node=${encodeURIComponent(node.nodeUuid)}`} className="flex justify-between gap-2 hover:text-primary">
                     <span className="truncate">{node.name} · {t(`dashboard.freshness.${node.status}`, node.status)}</span>
-                    <span className="font-mono">{node.memoryUsedBytes == null ? '--' : fmtBytes(node.memoryUsedBytes)}</span>
+                    <span className="font-mono">{formatValue(node.cpuPct, node.memoryUsedBytes)}</span>
                   </Link>
                 ))}
               </div>
@@ -94,13 +99,13 @@ function GaugeAttributionTooltip({
                 {data.topInstances.slice(0, 3).map((instance) => (
                   <Link key={instance.instanceId} to={`/monitoring?instance=${encodeURIComponent(instance.instanceUuid)}`} className="flex justify-between gap-2 hover:text-primary">
                     <span className="truncate">{instance.instanceName}</span>
-                    <span className="font-mono">{fmtBytes(instance.rssBytes)}</span>
+                    <span className="font-mono">{formatValue(instance.cpuPct, instance.rssBytes)}</span>
                   </Link>
                 ))}
                 {data.topProcesses.slice(0, 4).map((process) => (
                   <Link key={`${process.instanceId}-${process.pid}`} to={`/monitoring?instance=${encodeURIComponent(process.instanceUuid)}`} className="flex justify-between gap-2 hover:text-primary">
                     <span className="truncate">{process.instanceName} / {process.name || `PID ${process.pid}`}</span>
-                    <span className="font-mono">{fmtBytes(process.rssBytes)}</span>
+                    <span className="font-mono">{formatValue(process.cpuPercent, process.rssBytes)}</span>
                   </Link>
                 ))}
               </div>
@@ -267,15 +272,15 @@ export default function OverviewPage() {
 
       {/* 顶部：环形仪表盘 + 统计块 */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
-        <GaugeAttributionTooltip label={t('dashboard.totalCpu')} active={activeGauge === 'cpu'} onToggle={() => setActiveGauge(activeGauge === 'cpu' ? null : 'cpu')} data={attribution.data} isLoading={attribution.isLoading} isError={attribution.isError}>
+        <GaugeAttributionTooltip gauge="cpu" label={t('dashboard.totalCpu')} active={activeGauge === 'cpu'} onToggle={() => setActiveGauge(activeGauge === 'cpu' ? null : 'cpu')} data={attribution.data} isLoading={attribution.isLoading} isError={attribution.isError}>
           <ResourceGauge label={t('dashboard.totalCpu')} value={totals?.cpuPct ?? 0} unit="%" />
         </GaugeAttributionTooltip>
-        <GaugeAttributionTooltip label={t('dashboard.totalLoad')} active={activeGauge === 'load'} onToggle={() => setActiveGauge(activeGauge === 'load' ? null : 'load')} data={attribution.data} isLoading={attribution.isLoading} isError={attribution.isError}>
+        <GaugeAttributionTooltip gauge="load" label={t('dashboard.totalLoad')} active={activeGauge === 'load'} onToggle={() => setActiveGauge(activeGauge === 'load' ? null : 'load')} data={attribution.data} isLoading={attribution.isLoading} isError={attribution.isError}>
           {/* 负载是「占总核数比例」：以倍数（load÷核）呈现而非百分比，环按 1.0=满核封顶，
               不再出现 >100% 的破环（FR-108）。grading 仍按占比走 resourceLevel（>0.8×→红）。 */}
           <ResourceGauge label={t('dashboard.totalLoad')} value={(totals?.loadAvg ?? 0) / 100} max={1} unit="×" decimals={2} />
         </GaugeAttributionTooltip>
-        <GaugeAttributionTooltip label={t('dashboard.totalMem')} active={activeGauge === 'memory'} onToggle={() => setActiveGauge(activeGauge === 'memory' ? null : 'memory')} data={attribution.data} isLoading={attribution.isLoading} isError={attribution.isError}>
+        <GaugeAttributionTooltip gauge="memory" label={t('dashboard.totalMem')} active={activeGauge === 'memory'} onToggle={() => setActiveGauge(activeGauge === 'memory' ? null : 'memory')} data={attribution.data} isLoading={attribution.isLoading} isError={attribution.isError}>
           <ResourceGauge label={t('dashboard.totalMem')} value={memPct} unit="%" />
         </GaugeAttributionTooltip>
         <StatCard

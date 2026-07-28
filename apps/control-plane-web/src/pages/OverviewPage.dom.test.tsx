@@ -82,6 +82,27 @@ describe('OverviewPage（mock 假后端）', () => {
     const tooltip = await screen.findByTestId('overview-resource-attribution')
     expect(within(tooltip).getByRole('link', { name: /节点 A/ })).toHaveAttribute('href', '/monitoring?node=node-a')
     expect(within(tooltip).getByRole('link', { name: /大厅/ })).toHaveAttribute('href', '/monitoring?instance=inst-a')
+    expect(within(tooltip).getAllByText('1K')).toHaveLength(2)
+  })
+
+  it('总 CPU 资源归因 Tooltip 显示 CPU 百分比而非 RSS', async () => {
+    server.use(
+      http.get(API('/metrics/resource-attribution'), () => HttpResponse.json({
+        sampledAt: '2026-07-28T00:00:00Z', freshness: 'fresh',
+        nodes: [{ nodeId: 1, nodeUuid: 'node-a', name: '节点 A', status: 'fresh', observedAt: '2026-07-28T00:00:00Z', cpuPct: 12.5, loadPct: 20, memoryUsedBytes: 1024, memoryTotalBytes: 2048, workerProcessRssBytes: null, workerProcessCpuPct: null, botWorker: { rssBytes: null, cpuPct: null, activeCount: null, connectingCount: null, eventLoopP95Ms: null, available: false, reason: '未启动' } }],
+        topInstances: [{ instanceId: 2, instanceUuid: 'inst-a', instanceName: '大厅', nodeId: 1, cpuPct: 25, rssBytes: 2 * 1024 * 1024 * 1024, sampledAt: '2026-07-28T00:00:00Z' }],
+        topProcesses: [],
+      })),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<OverviewPage />, { route: '/' })
+
+    await user.click(await screen.findByRole('button', { name: '总 CPU 资源归因' }))
+
+    const tooltip = await screen.findByTestId('overview-resource-attribution')
+    expect(within(tooltip).getByText('12.5%')).toBeInTheDocument()
+    expect(within(tooltip).getByText('25.0%')).toBeInTheDocument()
+    expect(within(tooltip).queryByText('2.0G')).not.toBeInTheDocument()
   })
 
   it('底部实例表渲染种子实例', async () => {

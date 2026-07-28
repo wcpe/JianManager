@@ -223,7 +223,7 @@ export interface MetricOverviewResponse {
   trends: OverviewTrend[]
 }
 
-/** 总览页跨节点聚合：当前总量 + 聚合曲线（FR-060；FR-221 增自定义粒度）。30s 轮询。 */
+/** 总览页跨节点聚合：当前总量 + 聚合曲线（FR-060；FR-221 增自定义粒度）。可见页每 10 秒轮询。 */
 export function useMetricOverview(range: MetricRange, resolution?: MetricResolution) {
   return useQuery({
     queryKey: ['metricOverview', range, resolution ?? 'auto'],
@@ -233,7 +233,8 @@ export function useMetricOverview(range: MetricRange, resolution?: MetricResolut
       const { data } = await api.get<MetricOverviewResponse>(`/metrics/overview?${q.toString()}`)
       return data
     },
-    refetchInterval: 30_000,
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
   })
 }
 
