@@ -210,13 +210,14 @@ func TestMetric_Overview(t *testing.T) {
 	svc := newMetricSvc(t)
 	require.NoError(t, svc.db.AutoMigrate(&model.Node{}, &model.Instance{}))
 	base := metricBase()
+	freshAt := base
 
 	// 两个在线节点（当前值用于 totals）
 	require.NoError(t, svc.db.Create(&model.Node{
-		Name: "n1", Status: model.NodeStatusOnline, CPUUsage: 0.4, MemoryUsedMB: 1024, MemoryMB: 4096, LoadAvg1: 1, CPUCores: 4, // 25%
+		Name: "n1", Status: model.NodeStatusOnline, LastHeartbeat: &freshAt, CPUUsage: 0.4, MemoryUsedMB: 1024, MemoryMB: 4096, LoadAvg1: 1, CPUCores: 4, // 25%
 	}).Error)
 	require.NoError(t, svc.db.Create(&model.Node{
-		Name: "n2", Status: model.NodeStatusOnline, CPUUsage: 0.6, MemoryUsedMB: 2048, MemoryMB: 4096, LoadAvg1: 3, CPUCores: 4, // 75%
+		Name: "n2", Status: model.NodeStatusOnline, LastHeartbeat: &freshAt, CPUUsage: 0.6, MemoryUsedMB: 2048, MemoryMB: 4096, LoadAvg1: 3, CPUCores: 4, // 75%
 	}).Error)
 	require.NoError(t, svc.db.Create(&model.Node{
 		Name: "n3", Status: model.NodeStatusOffline, CPUUsage: 0.9, MemoryUsedMB: 9999, MemoryMB: 4096,
@@ -264,6 +265,25 @@ func TestMetric_Overview(t *testing.T) {
 	players := findOverviewTrend(ov, model.MetricInstPlayersOnline)
 	require.NotNil(t, players)
 	require.InDelta(t, 8.0, *players.Points[0].Avg, 1e-9) // 5+3 合计
+}
+
+func TestMetric_OverviewExcludesStaleOnlineNode(t *testing.T) {
+	svc := newMetricSvc(t)
+	require.NoError(t, svc.db.AutoMigrate(&model.Node{}, &model.Instance{}))
+	base := metricBase()
+	freshAt := base.Add(-90 * time.Second)
+	staleAt := base.Add(-91 * time.Second)
+	require.NoError(t, svc.db.Create(&[]model.Node{
+		{Name: "fresh", Status: model.NodeStatusOnline, LastHeartbeat: &freshAt, CPUUsage: 0.4, MemoryUsedMB: 1024, MemoryMB: 4096},
+		{Name: "stale", Status: model.NodeStatusOnline, LastHeartbeat: &staleAt, CPUUsage: 0.9, MemoryUsedMB: 8192, MemoryMB: 8192},
+	}).Error)
+
+	got, err := svc.overviewAt(base, base.Add(-time.Hour), base, "raw")
+	require.NoError(t, err)
+	require.Equal(t, 2, got.Totals.NodeCount)
+	require.Equal(t, 1, got.Totals.OnlineNodeCount)
+	require.InDelta(t, 40.0, got.Totals.CPUPct, 1e-6)
+	require.Equal(t, int64(1024)*1024*1024, got.Totals.MemUsedBytes)
 }
 
 func findOverviewTrend(ov OverviewResult, metricKey string) *OverviewTrend {

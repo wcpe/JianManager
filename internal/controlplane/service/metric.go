@@ -584,6 +584,9 @@ type OverviewResult struct {
 // overviewRecentWindow 「当前在线人数」只计最近一窗内仍在上报的实例，避免已停实例的陈旧样本计入。
 const overviewRecentWindow = 2 * time.Minute
 
+// overviewNodeFreshWindow 与节点离线判定保持一致，过期心跳不应计入当前资源总览。
+const overviewNodeFreshWindow = 90 * time.Second
+
 // Overview 汇总跨节点当前总量 + 聚合历史曲线（总 CPU 均值 / 总内存合计 / 总在线玩家合计），
 // 供总览页一屏概览（FR-060）。曲线按区间自动选档并按档位桶跨序列对齐聚合。
 func (s *MetricService) Overview(from, to time.Time, resolution string) (OverviewResult, error) {
@@ -631,7 +634,7 @@ func (s *MetricService) overviewTotals(now time.Time) (OverviewTotals, error) {
 	var cpuSum, loadSum float64
 	var loadCount int
 	for _, n := range nodes {
-		if n.Status != model.NodeStatusOnline {
+		if n.Status != model.NodeStatusOnline || n.LastHeartbeat == nil || now.Sub(*n.LastHeartbeat) > overviewNodeFreshWindow {
 			continue
 		}
 		t.OnlineNodeCount++
