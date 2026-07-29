@@ -95,3 +95,14 @@ func TestSanitizeAuditDetail(t *testing.T) {
 		})
 	}
 }
+
+func TestDetermineManagedProcessAuditAction(t *testing.T) {
+	path := "/api/v1/instances/:id/processes/:pid/actions"
+
+	if got := determineActionWithBody(http.MethodPost, path, []byte(`{"action":"kill_tree","confirm":true}`)); got != "process.kill_tree" {
+		t.Fatalf("kill_tree action = %q, want process.kill_tree", got)
+	}
+	if got := determineActionWithBody(http.MethodPost, path, []byte(`{"action":"terminate","confirm":true}`)); got != "process.terminate" {
+		t.Fatalf("terminate action = %q, want process.terminate", got)
+	}
+}

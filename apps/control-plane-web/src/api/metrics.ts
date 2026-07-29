@@ -1,4 +1,5 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import api from '@/api/client'
 import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
 import type { MetricRange } from '@jianmanager/ui'
@@ -376,6 +377,58 @@ export interface ProcessTopItem {
   sampledAt: string
 }
 
+export interface ManagedProcessInfo {
+  pid: number
+  parentPid: number
+  name: string
+  isRoot: boolean
+  cpuPercent: number
+  rssBytes: number
+  readBytesPerSec: number
+  writeBytesPerSec: number
+  user: string
+  commandSummary: string
+  uptimeSeconds: number
+  threadCount: number
+  sampledAt: string
+  unavailableReason: string
+}
+
+export interface ManagedProcessDiagnostic {
+  code: string
+  severity: 'info' | 'warning' | 'danger' | string
+  title: string
+  evidence: string
+  suggestion: string
+}
+
+export interface ManagedProcessDetail {
+  instance: { id: number; uuid: string; name: string; nodeId: number; nodeUuid: string; nodeName: string }
+  rootPid: number
+  target: ManagedProcessInfo
+  ancestors: ManagedProcessInfo[]
+  children: ManagedProcessInfo[]
+  diagnostics: ManagedProcessDiagnostic[]
+  history: {
+    windowSeconds: number
+    sampleCount: number
+    latestSampledAt: string
+    rssDeltaBytes: number
+    avgCpuPercent: number
+    avgWriteBytesPerSec: number
+  }
+}
+
+export interface ManagedProcessActionResult {
+  success: boolean
+  action: 'terminate' | 'kill_tree' | string
+  pid: number
+  affectedPids: number[]
+  message: string
+}
+
+export type ManagedProcessAction = 'terminate' | 'kill_tree'
+
 export function useProcessTop(params: {
   instanceId?: number
   nodeId?: string
@@ -395,5 +448,43 @@ export function useProcessTop(params: {
     },
     enabled,
     refetchInterval: enabled ? 30_000 : false,
+  })
+}
+
+export function useManagedProcessDetail(instanceId: number | undefined, pid: number | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ['managedProcessDetail', instanceId ?? 0, pid ?? 0],
+    queryFn: async () => {
+      const { data } = await api.get<ManagedProcessDetail>(`/instances/${instanceId}/processes/${pid}`)
+      return data
+    },
+    enabled: enabled && !!instanceId && !!pid,
+    refetchInterval: enabled && instanceId && pid ? 10_000 : false,
+  })
+}
+
+export function useManagedProcessAction() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (params: { instanceId: number; pid: number; action: ManagedProcessAction }) => {
+      const { data } = await api.post<ManagedProcessActionResult>(
+        `/instances/${params.instanceId}/processes/${params.pid}/actions?confirm=true`,
+        { action: params.action, confirm: true },
+      )
+      return data
+    },
+    onSuccess: (result, params) => {
+      toast.success(result.message || '进程处置已提交')
+      qc.invalidateQueries({ queryKey: ['processTop'] })
+      qc.invalidateQueries({ queryKey: ['managedProcessDetail', params.instanceId, params.pid] })
+      qc.invalidateQueries({ queryKey: ['instances'] })
+      qc.invalidateQueries({ queryKey: ['instance'] })
+      qc.invalidateQueries({ queryKey: ['instanceMetrics'] })
+      qc.invalidateQueries({ queryKey: ['metricOverview'] })
+      qc.invalidateQueries({ queryKey: ['metricSeries'] })
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      toast.error(err.response?.data?.message || '进程处置失败')
+    },
   })
 }

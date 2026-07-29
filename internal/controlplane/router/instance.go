@@ -475,6 +475,95 @@ func (h *InstanceHandler) Kill(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已终止"})
 }
 
+// ProcessDetail 探查受管实例进程树内的单个 PID。
+func (h *InstanceHandler) ProcessDetail(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	pid, ok := parseProcessPID(c)
+	if !ok {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	detail, err := h.instanceSvc.InspectManagedProcess(id, pid)
+	if err != nil {
+		h.writeManagedProcessError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, detail)
+}
+
+type managedProcessActionRequest struct {
+	Action  string `json:"action" binding:"required"`
+	Confirm bool   `json:"confirm"`
+}
+
+// ProcessAction 处置受管实例进程树内的非根 PID。
+func (h *InstanceHandler) ProcessAction(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	pid, ok := parseProcessPID(c)
+	if !ok {
+		return
+	}
+	if !canManageInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	var req managedProcessActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	if c.Query("confirm") != "true" || !req.Confirm {
+		c.JSON(http.StatusConflict, gin.H{"error": "CONFIRM_REQUIRED", "message": "破坏性操作需二次确认（confirm=true）"})
+		return
+	}
+	result, err := h.instanceSvc.TerminateManagedProcess(id, pid, req.Action)
+	if err != nil {
+		h.writeManagedProcessError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func parseProcessPID(c *gin.Context) (int32, bool) {
+	pid, err := strconv.ParseInt(c.Param("pid"), 10, 32)
+	if err != nil || pid <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_PID", "message": "pid 必须为正整数"})
+		return 0, false
+	}
+	return int32(pid), true
+}
+
+func (h *InstanceHandler) writeManagedProcessError(c *gin.Context, err error) {
+	var mpErr *service.ManagedProcessError
+	if errors.As(err, &mpErr) {
+		switch mpErr.Code {
+		case "INVALID_PID", "INVALID_REQUEST":
+			c.JSON(http.StatusBadRequest, gin.H{"error": mpErr.Code, "message": mpErr.Error()})
+		case "INSTANCE_NOT_FOUND":
+			c.JSON(http.StatusNotFound, gin.H{"error": mpErr.Code, "message": mpErr.Error()})
+		case "INSTANCE_NOT_RUNNING", "PID_NOT_MANAGED", "ROOT_PROCESS_ACTION_DENIED", "PROCESS_ACTION_FAILED":
+			c.JSON(http.StatusConflict, gin.H{"error": mpErr.Code, "message": mpErr.Error()})
+		default:
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": mpErr.Code, "message": mpErr.Error()})
+		}
+		return
+	}
+	if errors.Is(err, service.ErrNodeOffline) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "NODE_OFFLINE", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error": "PROCESS_UNAVAILABLE", "message": err.Error()})
+}
+
 type instanceCommandRequest struct {
 	Command string `json:"command" binding:"required"`
 }
@@ -568,6 +657,8 @@ func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		instances.POST("/:id/stop", h.Stop)
 		instances.POST("/:id/restart", h.Restart)
 		instances.POST("/:id/kill", h.Kill)
+		instances.GET("/:id/processes/:pid", h.ProcessDetail)
+		instances.POST("/:id/processes/:pid/actions", h.ProcessAction)
 		instances.POST("/:id/command", h.Command)
 		instances.GET("/:id/metrics", h.Metrics)
 		instances.GET("/:id/env", h.Env)

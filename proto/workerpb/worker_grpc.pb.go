@@ -29,6 +29,8 @@ const (
 	WorkerService_StopInstance_FullMethodName                = "/worker.WorkerService/StopInstance"
 	WorkerService_RestartInstance_FullMethodName             = "/worker.WorkerService/RestartInstance"
 	WorkerService_KillInstance_FullMethodName                = "/worker.WorkerService/KillInstance"
+	WorkerService_InspectManagedProcess_FullMethodName       = "/worker.WorkerService/InspectManagedProcess"
+	WorkerService_TerminateManagedProcess_FullMethodName     = "/worker.WorkerService/TerminateManagedProcess"
 	WorkerService_PreflightStartInstance_FullMethodName      = "/worker.WorkerService/PreflightStartInstance"
 	WorkerService_SendCommand_FullMethodName                 = "/worker.WorkerService/SendCommand"
 	WorkerService_GetInstanceStatus_FullMethodName           = "/worker.WorkerService/GetInstanceStatus"
@@ -146,6 +148,10 @@ type WorkerServiceClient interface {
 	RestartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
 	// KillInstance 强制终止实例。
 	KillInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
+	// InspectManagedProcess 只读探查某实例受管进程树内的目标 PID（FR-407）。
+	InspectManagedProcess(ctx context.Context, in *ManagedProcessInspectRequest, opts ...grpc.CallOption) (*ManagedProcessInspectResponse, error)
+	// TerminateManagedProcess 处置某实例受管进程树内的非根目标 PID（FR-408）。
+	TerminateManagedProcess(ctx context.Context, in *ManagedProcessActionRequest, opts ...grpc.CallOption) (*ManagedProcessActionResponse, error)
 	// 启动前同步预检（FR-314）：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
 	PreflightStartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
 	// SendCommand 向实例发送命令。
@@ -446,6 +452,26 @@ func (c *workerServiceClient) KillInstance(ctx context.Context, in *InstanceActi
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InstanceActionResponse)
 	err := c.cc.Invoke(ctx, WorkerService_KillInstance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) InspectManagedProcess(ctx context.Context, in *ManagedProcessInspectRequest, opts ...grpc.CallOption) (*ManagedProcessInspectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ManagedProcessInspectResponse)
+	err := c.cc.Invoke(ctx, WorkerService_InspectManagedProcess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) TerminateManagedProcess(ctx context.Context, in *ManagedProcessActionRequest, opts ...grpc.CallOption) (*ManagedProcessActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ManagedProcessActionResponse)
+	err := c.cc.Invoke(ctx, WorkerService_TerminateManagedProcess_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1365,6 +1391,10 @@ type WorkerServiceServer interface {
 	RestartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
 	// KillInstance 强制终止实例。
 	KillInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
+	// InspectManagedProcess 只读探查某实例受管进程树内的目标 PID（FR-407）。
+	InspectManagedProcess(context.Context, *ManagedProcessInspectRequest) (*ManagedProcessInspectResponse, error)
+	// TerminateManagedProcess 处置某实例受管进程树内的非根目标 PID（FR-408）。
+	TerminateManagedProcess(context.Context, *ManagedProcessActionRequest) (*ManagedProcessActionResponse, error)
 	// 启动前同步预检（FR-314）：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
 	PreflightStartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
 	// SendCommand 向实例发送命令。
@@ -1597,6 +1627,12 @@ func (UnimplementedWorkerServiceServer) RestartInstance(context.Context, *Instan
 }
 func (UnimplementedWorkerServiceServer) KillInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method KillInstance not implemented")
+}
+func (UnimplementedWorkerServiceServer) InspectManagedProcess(context.Context, *ManagedProcessInspectRequest) (*ManagedProcessInspectResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InspectManagedProcess not implemented")
+}
+func (UnimplementedWorkerServiceServer) TerminateManagedProcess(context.Context, *ManagedProcessActionRequest) (*ManagedProcessActionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TerminateManagedProcess not implemented")
 }
 func (UnimplementedWorkerServiceServer) PreflightStartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PreflightStartInstance not implemented")
@@ -2030,6 +2066,42 @@ func _WorkerService_KillInstance_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).KillInstance(ctx, req.(*InstanceActionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_InspectManagedProcess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ManagedProcessInspectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).InspectManagedProcess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_InspectManagedProcess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).InspectManagedProcess(ctx, req.(*ManagedProcessInspectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_TerminateManagedProcess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ManagedProcessActionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).TerminateManagedProcess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_TerminateManagedProcess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).TerminateManagedProcess(ctx, req.(*ManagedProcessActionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3488,6 +3560,14 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "KillInstance",
 			Handler:    _WorkerService_KillInstance_Handler,
+		},
+		{
+			MethodName: "InspectManagedProcess",
+			Handler:    _WorkerService_InspectManagedProcess_Handler,
+		},
+		{
+			MethodName: "TerminateManagedProcess",
+			Handler:    _WorkerService_TerminateManagedProcess_Handler,
 		},
 		{
 			MethodName: "PreflightStartInstance",

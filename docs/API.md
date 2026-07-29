@@ -681,6 +681,22 @@
   ```
 - **错误**: 400 `INVALID_SORT`/`INVALID_INSTANCE`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`
 
+### GET /api/v1/instances/:id/processes/:pid
+- **描述**: 查询某实例当前受管进程树内目标 PID 的实时详情，并结合 `process_metric_snapshots` 最近窗口生成诊断标签。只返回该实例根进程及后代，不枚举、不泄露任意 OS 进程。
+- **关联 FR**: FR-407
+- **权限**: `instance.read`（且实例须可访问）
+- **响应**: `{ instance, rootPid, target, ancestors, children, diagnostics, history }`；`target` 含 `pid`、`parentPid`、`name`、`isRoot`、`cpuPercent`、`rssBytes`、`readBytesPerSec`、`writeBytesPerSec`、`user`、`commandSummary`、`uptimeSeconds`、`threadCount`、`sampledAt`、`unavailableReason`。`commandSummary` 必须截断/脱敏，不返回完整命令行或环境变量；`diagnostics[]` 每项含 `code`、`severity`、`title`、`evidence`、`suggestion`。
+- **错误**: 400 `INVALID_PID`；403 `FORBIDDEN`；404 `NOT_FOUND`；409 `INSTANCE_NOT_RUNNING`/`PID_NOT_MANAGED`；503 `NODE_OFFLINE`
+
+### POST /api/v1/instances/:id/processes/:pid/actions
+- **描述**: 对受管实例的非根子进程执行 PID 级处置。执行前 CP 按实例鉴权并定位节点，Worker 再实时重验目标 PID 仍属于该实例当前进程树；根进程必须走实例级 stop/restart/kill。
+- **关联 FR**: FR-408
+- **权限**: `instance.operate`（且实例须可访问）
+- **请求**: `{ "action": "terminate" | "kill_tree", "confirm": true }`
+- **响应**: `{ "success": true, "action": "kill_tree", "pid": 1234, "affectedPids": [1234,1250], "message": "已终止受管子进程树" }`
+- **错误**: 400 `INVALID_REQUEST`；409 `CONFIRM_REQUIRED`/`ROOT_PROCESS_ACTION_DENIED`/`PID_NOT_MANAGED`/`INSTANCE_NOT_RUNNING`；422 `UNSUPPORTED`；503 `NODE_OFFLINE`
+- **审计**: 成功和失败均记录 `process.terminate` 或 `process.kill_tree`，detail 仅含实例、节点、PID、动作、影响 PID 与结果码，不含完整命令行、环境变量或敏感字段。
+
 ### GET /api/v1/players
 - **描述**: 在线玩家列表，经 ServerProbe 探针事件实时聚合（FR-066/067），每个玩家标注所在子服（BC 跨服感知）；按可访问实例集合收敛
 - **权限**: `instance.read`

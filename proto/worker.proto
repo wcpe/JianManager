@@ -33,6 +33,10 @@ service WorkerService {
   rpc RestartInstance(InstanceActionRequest) returns (InstanceActionResponse);
   // KillInstance 强制终止实例。
   rpc KillInstance(InstanceActionRequest) returns (InstanceActionResponse);
+  // InspectManagedProcess 只读探查某实例受管进程树内的目标 PID（FR-407）。
+  rpc InspectManagedProcess(ManagedProcessInspectRequest) returns (ManagedProcessInspectResponse);
+  // TerminateManagedProcess 处置某实例受管进程树内的非根目标 PID（FR-408）。
+  rpc TerminateManagedProcess(ManagedProcessActionRequest) returns (ManagedProcessActionResponse);
   // 启动前同步预检（FR-314）：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
   rpc PreflightStartInstance(InstanceActionRequest) returns (InstanceActionResponse);
   // SendCommand 向实例发送命令。
@@ -521,6 +525,59 @@ message InstanceActionRequest {
 message InstanceActionResponse {
   bool success = 1;
   string error = 2;
+}
+
+// ManagedProcessInspectRequest 仅允许探查某实例受管进程树内的 PID。
+message ManagedProcessInspectRequest {
+  string instance_uuid = 1;
+  int32 pid = 2;
+}
+
+// ManagedProcessActionRequest 仅允许处置某实例受管进程树内的非根 PID。
+message ManagedProcessActionRequest {
+  string instance_uuid = 1;
+  int32 pid = 2;
+  string mode = 3; // terminate | kill_tree
+}
+
+message ManagedProcessInfo {
+  int32 pid = 1;
+  int32 ppid = 2;
+  string name = 3;
+  string user = 4;
+  string command_summary = 5;
+  int64 rss_bytes = 6;
+  double cpu_percent = 7;
+  int64 started_at_unix_ms = 8;
+  bool is_root = 9;
+  uint64 read_bytes_per_sec = 10;
+  uint64 write_bytes_per_sec = 11;
+  double uptime_seconds = 12;
+  int32 thread_count = 13;
+  int64 sampled_at_unix_ms = 14;
+  string unavailable_reason = 15;
+}
+
+message ManagedProcessInspectResponse {
+  bool success = 1;
+  string code = 2;
+  string message = 3;
+  int64 root_pid = 4;
+  ManagedProcessInfo target = 5;
+  repeated ManagedProcessInfo children = 6;
+  repeated ManagedProcessInfo ancestors = 7;
+  int64 sampled_at_unix_ms = 8;
+  string unavailable_reason = 9;
+}
+
+message ManagedProcessActionResponse {
+  bool success = 1;
+  string code = 2;
+  string message = 3;
+  int32 affected_count = 4;
+  int32 pid = 5;
+  string mode = 6;
+  repeated int32 affected_pids = 7;
 }
 
 message SendCommandRequest {

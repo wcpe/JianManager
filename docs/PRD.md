@@ -96,6 +96,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-404（Bot 乱斗场景与受管稳定性压测）：Scenario V2 的死亡重生恢复、混合目标搜敌与本地攻击活跃度，以及 MCP 场景创建入口；以受管 Paper + ServerProbe 做 50 Bot 一小时资源稳定性验证，不把客户端攻击动作冒充服务端伤害/击杀证据 → `docs/specs/bot-combat-soak/spec.md`（已审核，开发中）
 - FIX-观测刷新 + FR-400~403（平台全景观测 2026-07-27）：修复可见页面指标自动刷新与陈旧态；补齐受管资源归因与首页 Tooltip、Bot Worker 历史观测、平台总览下钻，以及平台/节点实例日志分流。范围只涵盖平台受管资源，不采集任意 OS 进程、不伪造单 Bot RSS；指标留存复用 ADR-013 的 48h raw / 30d 5m / 400d 1h。→ FR-400 `docs/specs/managed-resource-attribution/spec.md`、FR-401 `docs/specs/bot-runtime-observability/spec.md`、FR-402 `docs/specs/platform-observability-overview/spec.md`（均需 spec）；FR-403 免 spec。依赖序：FIX→400→401→402；FR-403 独立；计划见 `.tmp/brainstorm-platform-observability-2026-07-27.md`
 - FIX-公开注册 + FR-405（受控用户创建与邮箱邀请）：移除匿名注册；平台管理员可一次直建用户，或签发仅组成员、7 天、可撤销的一次性邮件邀请；受邀者通过系统设置的统一公共基址（HTTP 或 HTTPS）链接自行设置用户名和密码，后续绝对链接复用该基址。SMTP 配置独立于告警通道，密码仅允许环境变量引用。→ `docs/specs/user-invitation-and-registration-security/spec.md`、`api.md`，ADR-082（增量审核中）
+- FR-406~408（监控页全景观测与受管进程探查处置）：`/monitor` 收口平台/节点/实例观测，默认选中对比指标；受管实例进程详情按 `instanceId+pid` 查询并基于历史样本诊断；非根子进程提供 `terminate`/`kill_tree` 两档受控处置，根进程继续复用实例生命周期，全部限定受管资源且写审计 → `docs/specs/managed-process-diagnostics-control/spec.md`、`api.md`（开发中）
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 > **验收档位图例**：`·全真栈验收`=真 UI+真 CP/Worker+真外部进程端到端；`·四档验收`=单测/集测/单机截图/真浏览器截图（后端 mock 基底）；`·验收经 FR-XXX 覆盖`=能力面被后继 FR 重做/包含并在其验收中验证（映射依据 `.tmp/acceptance/UNMARKED-66-RECONCILE.md`）；**无后缀=交付未验收（真缺口，当前 1 个：099 需真客户端 OTA 场景）**。证据台账 `.tmp/acceptance/ACCEPTANCE-LEDGER.md`。
@@ -492,6 +493,9 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-403 | 日志中心平台与节点实例视图分流（feat，增强 FR-150/215）：同一路径分为「平台日志」（仅 CP）与「节点/实例日志」（Worker+实例，按节点/实例聚合筛选）两个主视图；平台管理员保留受控全量检索。复用既有日志表与筛选接口（免 spec） | P1 | 🔨 开发中 |
 | FR-404 | Bot 乱斗场景与受管稳定性压测（feat，增强 FR-274/352/398/399）：`attack_until` 加性支持死亡后受限重生恢复、混合玩家/敌对生物确定性随机目标、无目标寻路搜敌与客户端攻击活跃度；MCP `loadtest_run_create` 可提交冻结的 Scenario V2。使用受管隔离 Paper + ServerProbe 运行 1 Worker × 50 Bot × 1 小时，只验证客户端攻击活动、重生恢复和资源稳定性，不把它表述为服务端伤害/击杀或 TEST-500（需 spec，依赖 FR-398/399）→ `docs/specs/bot-combat-soak/spec.md` | P0 | 🔨 开发中 |
 | FR-405 | 受控用户创建与邮箱邀请（fix + feat，修 FR-001/002/156）：移除匿名注册；平台管理员单请求创建账号；管理员签发仅组成员、7 天、可撤销的一次性邀请，邮件链接由独立 SMTP 与系统设置的统一 HTTP/HTTPS 公共基址投递，后续绝对链接复用该基址，受邀者自助设置凭据（需 spec + ADR-082）→ `docs/specs/user-invitation-and-registration-security/spec.md` | P0 | 🔨 开发中 |
+| FR-406 | 监控页全景观测整合与默认多指标对比（feat，增强 FR-221/400/401/402）：`/monitor` 成为平台/节点/实例观测入口，默认选中对比指标，展示平台健康、异常 TopN、资源归因、共享 Bot Worker 与受管进程并支持 URL 下钻；首页健康与共享 Bot 区块保留在 `/`（免 spec） | P1 | 🔨 开发中 |
+| FR-407 | 受管进程详细探查与异常诊断（feat，增强 FR-170/400）：按 `instanceId+pid` 查询受管实例当前进程树内 PID，返回脱敏命令摘要、父子关系、CPU/RSS/IO/运行时长/线程数可用性，并结合历史样本输出带证据的 RSS 增长、CPU 高占用、IO 高写入、采样陈旧/不足诊断（需 spec）→ `docs/specs/managed-process-diagnostics-control/spec.md` | P1 | 🔨 开发中 |
+| FR-408 | 受管进程细粒度处置与多种关闭方式（feat，增强 FR-005/170/400）：根进程继续复用实例优雅停止/重启/强制终止；非根子进程提供 `terminate` 与 `kill_tree`，Worker 执行瞬间重验 PID 仍属目标实例树，前端 DangerConfirm + 后端 confirm 双保险并写脱敏审计（需 spec）→ `docs/specs/managed-process-diagnostics-control/spec.md` | P1 | 🔨 开发中 |
 ### 范围外（后续版本，暂不纳入 V1）
 
 | 编号 | 需求 | 预计版本 |

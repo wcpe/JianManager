@@ -41,7 +41,7 @@ func Audit(cfg AuditConfig) gin.HandlerFunc {
 				userID, _ := c.Get("userId")
 				uid, _ := userID.(uint)
 
-				action := determineAction(method, c.FullPath())
+				action := determineActionWithBody(method, c.FullPath(), body)
 				// 目标 ID 须从真实请求路径取，c.FullPath() 是 /instances/:id 路由模式，
 				// 会把审计目标记成占位符 :id（无法定位具体实例）。
 				targetType, targetID := determineTarget(c.Request.URL.Path)
@@ -139,6 +139,10 @@ func isSensitiveAuditKey(key string) bool {
 
 // determineAction 从 HTTP 方法和路径推断操作名称。
 func determineAction(method, path string) string {
+	return determineActionWithBody(method, path, nil)
+}
+
+func determineActionWithBody(method, path string, body []byte) string {
 	path = strings.TrimPrefix(path, "/api/v1")
 
 	switch {
@@ -154,6 +158,8 @@ func determineAction(method, path string) string {
 		return "instance.restart"
 	case method == "POST" && strings.Contains(path, "/instances") && strings.HasSuffix(path, "/kill"):
 		return "instance.kill"
+	case method == "POST" && strings.Contains(path, "/instances") && strings.Contains(path, "/processes/") && strings.HasSuffix(path, "/actions"):
+		return determineManagedProcessAction(body)
 	case method == "POST" && strings.HasSuffix(path, "/plugins/batch-deploy"):
 		return "plugin.batchDeploy"
 	case method == "POST" && strings.Contains(path, "/plugins") && strings.HasSuffix(path, "/toggle"):
@@ -214,6 +220,16 @@ func determineAction(method, path string) string {
 	default:
 		return ""
 	}
+}
+
+func determineManagedProcessAction(body []byte) string {
+	var req struct {
+		Action string `json:"action"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(body), &req); err == nil && req.Action == "kill_tree" {
+		return "process.kill_tree"
+	}
+	return "process.terminate"
 }
 
 // determineTarget 从路径推断操作目标类型和 ID。

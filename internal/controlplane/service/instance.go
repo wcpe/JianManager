@@ -780,10 +780,60 @@ func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 
 // stopForDelete 删除前的同步停止编排（FR-310）。与 Stop 的异步委托不同：删除必须确证
 // 进程处置已发起且 Worker 受理，才能继续删目录/删记录，故同步调 StopInstance 并等待结果。
-// 停机逻辑完全复用既有链路：Worker 侧按策略优雅停止（daemon wrapper 关服命令 / docker 宽限期），
-// 超时强杀进程树（GracefulStopTimeoutSeconds 语义，FR-063），CP 不重写停机。
-// 状态全程走状态机合法边：RUNNING/STARTING→STOPPING→STOPPED（STOPPING 在途则不重复转换）。
 func (s *InstanceService) stopForDelete(instance *model.Instance) error {
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("%w：实例所属节点记录不存在，无法停止并清理 Worker 数据；已中止删除，实例记录保留", ErrInstanceRunning)
+		}
+		return fmt.Errorf("查找节点失败: %w", err)
+	}
+	if node.Status != model.NodeStatusOnline {
+		return fmt.Errorf("%w：节点 %s 已离线，无法停止运行中的实例；请待节点恢复后重试删除", ErrInstanceRunning, node.Name)
+	}
+	if s.pool == nil {
+		return fmt.Errorf("%w：节点 %s 未连接，无法停止运行中的实例；请待节点恢复后重试删除", ErrInstanceRunning, node.Name)
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return fmt.Errorf("%w：节点 %s 未连接，无法停止运行中的实例；请待节点恢复后重试删除", ErrInstanceRunning, node.Name)
+	}
+	if instance.Status != model.InstanceStatusStopping {
+		if err := s.transition(instance.ID, model.InstanceStatusStopping, "停止"); err != nil {
+			return fmt.Errorf("%w：%v", ErrInstanceRunning, err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	resp, err := client.Worker.StopInstance(ctx, &workerpb.InstanceActionRequest{InstanceUuid: instance.UUID})
+	if err != nil {
+		return fmt.Errorf("%w：停止运行中的实例失败: %v", ErrInstanceRunning, err)
+	}
+	if resp != nil && !resp.Success {
+		if strings.Contains(resp.Error, "未运行") {
+			s.updateStatusFromTo(instance.ID, model.InstanceStatusStopping, model.InstanceStatusStopped)
+			return nil
+		}
+		return fmt.Errorf("%w：停止运行中的实例失败: %s", ErrInstanceRunning, resp.Error)
+	}
+	s.updateStatusFromTo(instance.ID, model.InstanceStatusStopping, model.InstanceStatusStopped)
+	return nil
+}
+
+// removeWorkerDataSettled 删除前的 Worker 数据清理（FR-310）。与 Stop 的异步委托不同：删除必须确证
+// Worker 已受理清理，才能继续删目录/删记录；刚停过的实例允许在停止收敛窗口内重试清理。
+func (s *InstanceService) removeWorkerDataSettled(instance *model.Instance, stoppedForDelete bool) error {
+	deadline := time.Now().Add(deleteStopSettleMargin)
+	for {
+		err := s.removeWorkerDataOnce(instance)
+		if err == nil || !stoppedForDelete || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(deleteStopSettleInterval)
+	}
+}
+
+func (s *InstanceService) removeWorkerDataOnce(instance *model.Instance) error {
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -796,89 +846,12 @@ func (s *InstanceService) stopForDelete(instance *model.Instance) error {
 			ErrNodeOffline, node.Name)
 	}
 	if s.pool == nil {
-		return fmt.Errorf("%w：节点 %s 未连接，无法停止运行中的实例；请待节点恢复后重试删除",
-			ErrInstanceRunning, node.Name)
-	}
-	client, ok := s.pool.Get(node.UUID)
-	if !ok {
-		return fmt.Errorf("%w：节点 %s 未连接，无法停止运行中的实例；请待节点恢复后重试删除",
-			ErrInstanceRunning, node.Name)
-	}
-
-	if instance.Status != model.InstanceStatusStopping {
-		if err := s.transition(instance.ID, model.InstanceStatusStopping, "删除前停止"); err != nil {
-			return err
-		}
-	}
-
-	// docker 策略的 ContainerStop 会同步阻塞到宽限期收尾，RPC 超时须覆盖整个优雅停止窗口 + 余量。
-	ctx, cancel := context.WithTimeout(context.Background(), s.deleteStopTimeout()+30*time.Second)
-	defer cancel()
-	resp, err := client.Worker.StopInstance(ctx, &workerpb.InstanceActionRequest{InstanceUuid: instance.UUID})
-	if err != nil {
-		// 停止未确认即中止删除（记录保留、状态留在 STOPPING，由心跳对账回真实状态）。
-		return fmt.Errorf("删除前停止实例失败（gRPC StopInstance）: %w；已中止删除，记录保留可重试", err)
-	}
-	if !resp.Success {
-		// Worker 报「未运行」= 现实已停止、DB 状态滞后（如 STOPPING 在途收尾），照常继续删除；
-		// 其余失败中止——Worker 侧 RemoveInstance 的运行态守卫仍是最后一道兜底。
-		if !strings.Contains(resp.Error, "未运行") {
-			return fmt.Errorf("删除前停止实例失败: %s；已中止删除，记录保留可重试", resp.Error)
-		}
-	}
-
-	// 条件回写 STOPPING→STOPPED（合法转换边）：心跳并发改过状态则不强改，避免覆盖真实观测。
-	s.updateStatusFromTo(instance.ID, model.InstanceStatusStopping, model.InstanceStatusStopped)
-	return nil
-}
-
-// deleteStopTimeout 返回删除编排应等待的优雅停止窗口：平台设置生效值，未配置时对齐
-// Worker wrapper 的默认优雅停止超时（30s，见 internal/worker/daemon gracefulStopTimeout）。
-func (s *InstanceService) deleteStopTimeout() time.Duration {
-	if sec := s.gracefulStopTimeoutSeconds(); sec > 0 {
-		return time.Duration(sec) * time.Second
-	}
-	return 30 * time.Second
-}
-
-// removeWorkerDataSettled 委托 Worker 清理实例数据；若删除编排刚同步停止过实例（FR-310），
-// 在停止收敛窗口（优雅停止超时 + margin）内对清理失败做有界重试——进程退出前工作目录
-// 存在文件锁属预期时序，不是终局失败。未经停止的直删保持一次性语义不变。
-func (s *InstanceService) removeWorkerDataSettled(instance *model.Instance, justStopped bool) error {
-	err := s.removeWorkerData(instance)
-	if err == nil || !justStopped {
-		return err
-	}
-	deadline := time.Now().Add(s.deleteStopTimeout() + deleteStopSettleMargin)
-	for time.Now().Before(deadline) {
-		time.Sleep(deleteStopSettleInterval)
-		if err = s.removeWorkerData(instance); err == nil {
-			return nil
-		}
-	}
-	return err
-}
-
-// removeWorkerData 委托 Worker 删除实例的工作目录与派生资产（RemoveInstance RPC）。
-// 只有节点在线且 Worker 明确清理成功后才能删除 CP 记录；节点缺失、离线或未连接均中止删除并保留实例。
-func (s *InstanceService) removeWorkerData(instance *model.Instance) error {
-	var node model.Node
-	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("%w：实例所属节点记录不存在，无法清理 Worker 数据；已中止删除，实例记录保留", ErrNodeOffline)
-		}
-		return fmt.Errorf("查找节点失败: %w", err)
-	}
-	if node.Status != model.NodeStatusOnline {
-		return fmt.Errorf("%w：节点 %s 已离线，无法清理 Worker 数据；已中止删除，实例记录保留",
-			ErrNodeOffline, node.Name)
-	}
-	if s.pool == nil {
 		return fmt.Errorf("%w：节点 %s 未连接，无法清理 Worker 数据；已中止删除，实例记录保留",
 			ErrNodeOffline, node.Name)
 	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
+
 		return fmt.Errorf("%w：节点 %s 未连接，无法清理 Worker 数据；已中止删除，实例记录保留",
 			ErrNodeOffline, node.Name)
 	}
@@ -1718,6 +1691,285 @@ type InstanceEnvData struct {
 // GetInstanceEnv 返回实例自定义启动环境变量 + 运行时进程实际环境（FR-344）。
 // configured 恒返回（解自 instance.EnvVars）；runtime 尽力而为——节点未连/未运行/平台受限时
 // runtimeAvailable=false + note，不阻塞 configured 返回（上区编辑不受运行态影响）。
+type ManagedProcessInfo struct {
+	PID               int32   `json:"pid"`
+	ParentPID         int32   `json:"parentPid"`
+	Name              string  `json:"name"`
+	IsRoot            bool    `json:"isRoot"`
+	CPUPercent        float64 `json:"cpuPercent"`
+	RSSBytes          int64   `json:"rssBytes"`
+	ReadBytesPerSec   uint64  `json:"readBytesPerSec"`
+	WriteBytesPerSec  uint64  `json:"writeBytesPerSec"`
+	User              string  `json:"user"`
+	CommandSummary    string  `json:"commandSummary"`
+	UptimeSeconds     float64 `json:"uptimeSeconds"`
+	ThreadCount       int32   `json:"threadCount"`
+	SampledAt         string  `json:"sampledAt"`
+	UnavailableReason string  `json:"unavailableReason"`
+}
+
+type ManagedProcessInstanceSummary struct {
+	ID       uint   `json:"id"`
+	UUID     string `json:"uuid"`
+	Name     string `json:"name"`
+	NodeID   uint   `json:"nodeId"`
+	NodeUUID string `json:"nodeUuid"`
+	NodeName string `json:"nodeName"`
+}
+
+type ManagedProcessDiagnostic struct {
+	Code       string `json:"code"`
+	Severity   string `json:"severity"`
+	Title      string `json:"title"`
+	Evidence   string `json:"evidence"`
+	Suggestion string `json:"suggestion"`
+}
+
+type ManagedProcessHistory struct {
+	WindowSeconds       int     `json:"windowSeconds"`
+	SampleCount         int     `json:"sampleCount"`
+	LatestSampledAt     string  `json:"latestSampledAt"`
+	RSSDeltaBytes       int64   `json:"rssDeltaBytes"`
+	AvgCPUPercent       float64 `json:"avgCpuPercent"`
+	AvgWriteBytesPerSec float64 `json:"avgWriteBytesPerSec"`
+}
+
+type ManagedProcessDetail struct {
+	Instance    ManagedProcessInstanceSummary `json:"instance"`
+	RootPID     int64                         `json:"rootPid"`
+	Target      ManagedProcessInfo            `json:"target"`
+	Ancestors   []ManagedProcessInfo          `json:"ancestors"`
+	Children    []ManagedProcessInfo          `json:"children"`
+	Diagnostics []ManagedProcessDiagnostic    `json:"diagnostics"`
+	History     ManagedProcessHistory         `json:"history"`
+}
+
+type ManagedProcessActionResult struct {
+	Success      bool    `json:"success"`
+	Action       string  `json:"action"`
+	PID          int32   `json:"pid"`
+	AffectedPids []int32 `json:"affectedPids"`
+	Message      string  `json:"message"`
+}
+
+type ManagedProcessError struct {
+	Code    string
+	Message string
+}
+
+func (e *ManagedProcessError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return e.Code
+}
+
+func (s *InstanceService) InspectManagedProcess(id uint, pid int32) (*ManagedProcessDetail, error) {
+	if pid <= 0 {
+		return nil, &ManagedProcessError{Code: "INVALID_PID", Message: "pid 必须为正整数"}
+	}
+	instance, node, client, err := s.managedProcessClient(id)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.Worker.InspectManagedProcess(ctx, &workerpb.ManagedProcessInspectRequest{InstanceUuid: instance.UUID, Pid: pid})
+	if err != nil {
+		return nil, fmt.Errorf("探查受管进程失败: %w", err)
+	}
+	if !resp.Success {
+		return nil, &ManagedProcessError{Code: resp.Code, Message: resp.Message}
+	}
+	history, rows, err := s.managedProcessHistory(instance.UUID, pid)
+	if err != nil {
+		return nil, fmt.Errorf("查询进程历史样本失败: %w", err)
+	}
+	diagnostics := managedProcessDiagnostics(history, rows)
+	return managedProcessDetailFromProto(resp, instance, node, history, diagnostics), nil
+}
+
+func (s *InstanceService) TerminateManagedProcess(id uint, pid int32, mode string) (*ManagedProcessActionResult, error) {
+	mode = strings.TrimSpace(mode)
+	if pid <= 0 {
+		return nil, &ManagedProcessError{Code: "INVALID_PID", Message: "pid 必须为正整数"}
+	}
+	if mode != "terminate" && mode != "kill_tree" {
+		return nil, &ManagedProcessError{Code: "INVALID_REQUEST", Message: "不支持的进程处置模式"}
+	}
+	instance, _, client, err := s.managedProcessClient(id)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.Worker.TerminateManagedProcess(ctx, &workerpb.ManagedProcessActionRequest{InstanceUuid: instance.UUID, Pid: pid, Mode: mode})
+	if err != nil {
+		return nil, fmt.Errorf("处置受管进程失败: %w", err)
+	}
+	if !resp.Success {
+		return nil, &ManagedProcessError{Code: resp.Code, Message: resp.Message}
+	}
+	return &ManagedProcessActionResult{Success: true, Action: resp.Mode, PID: resp.Pid, AffectedPids: resp.AffectedPids, Message: resp.Message}, nil
+}
+
+func (s *InstanceService) managedProcessClient(id uint) (*model.Instance, *model.Node, *cpgrpc.Client, error) {
+	instance, err := s.GetByID(id)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		return nil, nil, nil, fmt.Errorf("查找节点失败: %w", err)
+	}
+	if s.pool == nil {
+		return nil, nil, nil, fmt.Errorf("%w: %s", ErrNodeOffline, node.UUID)
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("%w: %s", ErrNodeOffline, node.UUID)
+	}
+	return instance, &node, client, nil
+}
+
+const managedProcessHistoryWindow = 30 * time.Minute
+
+func (s *InstanceService) managedProcessHistory(instanceUUID string, pid int32) (ManagedProcessHistory, []model.ProcessMetricSnapshot, error) {
+	var rows []model.ProcessMetricSnapshot
+	from := time.Now().Add(-managedProcessHistoryWindow)
+	err := s.db.Where("instance_uuid = ? AND pid = ? AND sampled_at >= ?", instanceUUID, pid, from).
+		Order("sampled_at ASC").Find(&rows).Error
+	if err != nil {
+		return ManagedProcessHistory{}, nil, err
+	}
+	return summarizeManagedProcessHistory(rows), rows, nil
+}
+
+func summarizeManagedProcessHistory(rows []model.ProcessMetricSnapshot) ManagedProcessHistory {
+	history := ManagedProcessHistory{WindowSeconds: int(managedProcessHistoryWindow.Seconds()), SampleCount: len(rows)}
+	if len(rows) == 0 {
+		return history
+	}
+	first, last := rows[0], rows[len(rows)-1]
+	history.LatestSampledAt = last.SampledAt.UTC().Format(time.RFC3339)
+	history.RSSDeltaBytes = int64(last.RSSBytes) - int64(first.RSSBytes)
+	for _, row := range rows {
+		history.AvgCPUPercent += row.CPUPercent
+		history.AvgWriteBytesPerSec += float64(row.WriteBytesPerSec)
+	}
+	history.AvgCPUPercent /= float64(len(rows))
+	history.AvgWriteBytesPerSec /= float64(len(rows))
+	return history
+}
+
+func managedProcessDiagnostics(history ManagedProcessHistory, rows []model.ProcessMetricSnapshot) []ManagedProcessDiagnostic {
+	if history.SampleCount < 3 {
+		return []ManagedProcessDiagnostic{managedProcessInsufficientSamples(history)}
+	}
+	diagnostics := make([]ManagedProcessDiagnostic, 0, 4)
+	if latestSampleStale(rows[len(rows)-1].SampledAt) {
+		diagnostics = append(diagnostics, ManagedProcessDiagnostic{Code: "stale_samples", Severity: "warning", Title: "采样陈旧", Evidence: "最近进程样本超过 90 秒未更新。", Suggestion: "请先确认 Worker 心跳和节点连通性，再判断进程趋势。"})
+	}
+	if history.AvgCPUPercent >= 80 {
+		diagnostics = append(diagnostics, ManagedProcessDiagnostic{Code: "high_cpu", Severity: "warning", Title: "CPU 持续高占用", Evidence: fmt.Sprintf("最近 %d 个样本平均 CPU %.1f%%。", history.SampleCount, history.AvgCPUPercent), Suggestion: "优先检查插件、脚本或任务循环；必要时先通过实例控制台做业务内降载。"})
+	}
+	if history.AvgWriteBytesPerSec >= 10*1024*1024 {
+		diagnostics = append(diagnostics, ManagedProcessDiagnostic{Code: "high_write_io", Severity: "warning", Title: "IO 写入偏高", Evidence: fmt.Sprintf("最近 %d 个样本平均写入 %.1f MiB/s。", history.SampleCount, history.AvgWriteBytesPerSec/1024/1024), Suggestion: "请检查日志刷屏、存档频繁写入或备份任务。"})
+	}
+	return append(diagnostics, rssGrowthDiagnostic(rows)...)
+}
+
+func managedProcessInsufficientSamples(history ManagedProcessHistory) ManagedProcessDiagnostic {
+	return ManagedProcessDiagnostic{Code: "insufficient_samples", Severity: "info", Title: "样本不足", Evidence: fmt.Sprintf("最近 %d 秒仅有 %d 个样本，不能判断趋势。", history.WindowSeconds, history.SampleCount), Suggestion: "等待至少 3 个采样周期后再查看诊断结论。"}
+}
+
+func latestSampleStale(sampledAt time.Time) bool {
+	return time.Since(sampledAt) > 90*time.Second
+}
+
+func rssGrowthDiagnostic(rows []model.ProcessMetricSnapshot) []ManagedProcessDiagnostic {
+	mid := len(rows) / 2
+	firstMax, secondMin := maxRSS(rows[:mid]), minRSS(rows[mid:])
+	if secondMin <= firstMax {
+		return nil
+	}
+	delta := int64(secondMin - firstMax)
+	if firstMax == 0 {
+		return nil
+	}
+	if delta < 256*1024*1024 && float64(delta)/float64(firstMax) < 0.2 {
+		return nil
+	}
+	return []ManagedProcessDiagnostic{{Code: "rss_growth", Severity: "warning", Title: "RSS 持续增长", Evidence: fmt.Sprintf("后半窗口最小 RSS 比前半窗口最大 RSS 高 %d MiB。", delta/1024/1024), Suggestion: "RSS 是操作系统观察值，请结合 JVM/插件指标确认是否存在内存泄漏。"}}
+}
+
+func maxRSS(rows []model.ProcessMetricSnapshot) uint64 {
+	var out uint64
+	for _, row := range rows {
+		if row.RSSBytes > out {
+			out = row.RSSBytes
+		}
+	}
+	return out
+}
+
+func minRSS(rows []model.ProcessMetricSnapshot) uint64 {
+	if len(rows) == 0 {
+		return 0
+	}
+	out := rows[0].RSSBytes
+	for _, row := range rows[1:] {
+		if row.RSSBytes < out {
+			out = row.RSSBytes
+		}
+	}
+	return out
+}
+
+func managedProcessDetailFromProto(resp *workerpb.ManagedProcessInspectResponse, instance *model.Instance, node *model.Node, history ManagedProcessHistory, diagnostics []ManagedProcessDiagnostic) *ManagedProcessDetail {
+	out := &ManagedProcessDetail{Instance: managedProcessInstanceSummary(instance, node), RootPID: resp.RootPid, Target: managedProcessInfoFromProto(resp.Target), History: history, Diagnostics: diagnostics}
+	for _, ancestor := range resp.Ancestors {
+		out.Ancestors = append(out.Ancestors, managedProcessInfoFromProto(ancestor))
+	}
+	for _, child := range resp.Children {
+		out.Children = append(out.Children, managedProcessInfoFromProto(child))
+	}
+	return out
+}
+
+func managedProcessInstanceSummary(instance *model.Instance, node *model.Node) ManagedProcessInstanceSummary {
+	return ManagedProcessInstanceSummary{ID: instance.ID, UUID: instance.UUID, Name: instance.Name, NodeID: node.ID, NodeUUID: node.UUID, NodeName: node.Name}
+}
+
+func managedProcessInfoFromProto(info *workerpb.ManagedProcessInfo) ManagedProcessInfo {
+	if info == nil {
+		return ManagedProcessInfo{}
+	}
+	return ManagedProcessInfo{
+		PID:               info.Pid,
+		ParentPID:         info.Ppid,
+		Name:              info.Name,
+		IsRoot:            info.IsRoot,
+		CPUPercent:        info.CpuPercent,
+		RSSBytes:          info.RssBytes,
+		ReadBytesPerSec:   info.ReadBytesPerSec,
+		WriteBytesPerSec:  info.WriteBytesPerSec,
+		User:              info.User,
+		CommandSummary:    info.CommandSummary,
+		UptimeSeconds:     info.UptimeSeconds,
+		ThreadCount:       info.ThreadCount,
+		SampledAt:         formatUnixMillis(info.SampledAtUnixMs),
+		UnavailableReason: info.UnavailableReason,
+	}
+}
+
+func formatUnixMillis(value int64) string {
+	if value <= 0 {
+		return ""
+	}
+	return time.UnixMilli(value).UTC().Format(time.RFC3339)
+}
+
 func (s *InstanceService) GetInstanceEnv(id uint) (*InstanceEnvData, error) {
 	instance, err := s.GetByID(id)
 	if err != nil {

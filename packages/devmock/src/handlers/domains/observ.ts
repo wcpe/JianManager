@@ -755,6 +755,22 @@ export const handlers = [
     })
   }),
 
+  domainRoute('get', '/metrics/bot-runtime', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const nodeId = Number(url.searchParams.get('nodeId') ?? 1)
+    return HttpResponse.json({
+      resolution: 'raw',
+      from: iso(-3600),
+      to: iso(0),
+      sharedRuntime: true,
+      notice: 'Bot Worker 资源为共享进程观察值，不代表任一 Bot 或会话的独占资源。',
+      nodes: [{ nodeId, nodeName: '北京节点', series: [] }],
+      unavailable: [],
+    })
+  }),
+
   domainRoute('get', '/metrics/processes/top', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -789,6 +805,98 @@ export const handlers = [
         sampledAt: now,
       },
     ])
+  }),
+
+  domainRoute('get', '/instances/:id/processes/:pid', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const instanceId = Number(info.params.id)
+    const pid = Number(info.params.pid)
+    const now = new Date().toISOString()
+    return HttpResponse.json({
+      instance: { id: instanceId, uuid: 'inst-1-uuid', name: 'survival', nodeId: 1, nodeUuid: 'node-a', nodeName: '北京节点' },
+      rootPid: 24512,
+      target: {
+        pid,
+        parentPid: pid === 24512 ? 0 : 24512,
+        name: pid === 24512 ? 'java' : 'worker-helper',
+        isRoot: pid === 24512,
+        cpuPercent: 42.5,
+        rssBytes: 2.4 * GIB,
+        readBytesPerSec: 1024 * 1024,
+        writeBytesPerSec: 512 * 1024,
+        user: 'minecraft',
+        commandSummary: pid === 24512 ? 'java -Xmx4G -jar server.jar' : 'worker-helper --child',
+        uptimeSeconds: 3661,
+        threadCount: 58,
+        sampledAt: now,
+        unavailableReason: '',
+      },
+      ancestors: pid === 24512 ? [] : [{
+        pid: 24512,
+        parentPid: 0,
+        name: 'java',
+        isRoot: true,
+        cpuPercent: 42.5,
+        rssBytes: 2.4 * GIB,
+        readBytesPerSec: 1024 * 1024,
+        writeBytesPerSec: 512 * 1024,
+        user: 'minecraft',
+        commandSummary: 'java -Xmx4G -jar server.jar',
+        uptimeSeconds: 3661,
+        threadCount: 58,
+        sampledAt: now,
+        unavailableReason: '',
+      }],
+      children: pid === 24512 ? [{
+        pid: 24518,
+        parentPid: 24512,
+        name: 'wrapper',
+        isRoot: false,
+        cpuPercent: 3.1,
+        rssBytes: 80 * MIB,
+        readBytesPerSec: 64 * 1024,
+        writeBytesPerSec: 16 * 1024,
+        user: 'minecraft',
+        commandSummary: 'jm-worker-daemon',
+        uptimeSeconds: 3600,
+        threadCount: 3,
+        sampledAt: now,
+        unavailableReason: '',
+      }] : [],
+      diagnostics: [{
+        code: 'cpu_sustained_high',
+        severity: 'warning',
+        title: 'CPU 持续高占用',
+        evidence: '最近窗口平均 CPU 42.5%',
+        suggestion: '优先检查插件任务或脚本循环，再考虑处置子进程。',
+      }],
+      history: {
+        windowSeconds: 1800,
+        sampleCount: 12,
+        latestSampledAt: now,
+        rssDeltaBytes: 256 * MIB,
+        avgCpuPercent: 40.2,
+        avgWriteBytesPerSec: 512 * 1024,
+      },
+    })
+  }),
+
+  domainRoute('post', '/instances/:id/processes/:pid/actions', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const body = await info.request.json().catch(() => ({})) as { action?: string; confirm?: boolean }
+    if (url.searchParams.get('confirm') !== 'true' || body.confirm !== true) {
+      return HttpResponse.json({ error: 'CONFIRM_REQUIRED', message: '破坏性操作需二次确认（confirm=true）' }, { status: 409 })
+    }
+    return HttpResponse.json({
+      success: true,
+      action: body.action ?? 'terminate',
+      pid: Number(info.params.pid),
+      affectedPids: [Number(info.params.pid)],
+      message: body.action === 'kill_tree' ? '已终止受管子进程树' : '已终止受管子进程',
+    })
   }),
 
   domainRoute('get', '/nodes/:id/metrics', (info) => {

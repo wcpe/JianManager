@@ -131,8 +131,9 @@ describe('MonitoringPage（mock 假后端）', () => {
     // 粒度选择器（auto/30s/5m/1h）。
     expect(screen.getByRole('tablist', { name: '聚合粒度' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: '5 分钟' })).toBeInTheDocument()
-    // 对比初始空选 → 提示语在位。
-    expect(screen.getByText('勾选上方指标以叠加对比')).toBeInTheDocument()
+    // 对比默认选中一个关键指标，避免空图态。
+    expect(screen.getByRole('button', { name: 'CPU' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByText('勾选上方指标以叠加对比')).not.toBeInTheDocument()
   })
 
   it('③ 下钻到实例后展示进程 TOP10（FR-170）', async () => {
@@ -146,6 +147,7 @@ describe('MonitoringPage（mock 假后端）', () => {
     await user.selectOptions(instanceDrill, 'inst-1-uuid')
 
     expect(await screen.findByText('进程 TOP10')).toBeInTheDocument()
+    expect(screen.getByText('仅展示 JianManager 受管实例进程树，命令摘要已脱敏。')).toBeInTheDocument()
     expect((await screen.findAllByText('java -Xmx4G -jar server.jar')).length).toBeGreaterThan(0)
     expect(screen.getAllByText('minecraft').length).toBeGreaterThan(0)
     expect(screen.getByText('1.5 MiB/s')).toBeInTheDocument()
@@ -158,7 +160,41 @@ describe('MonitoringPage（mock 假后端）', () => {
     expect(within(detail).getByText('1.0 MiB/s · 512.0 KiB/s')).toBeInTheDocument()
   })
 
-  it('④ 注入 500（/metrics/overview）→ 页面不崩溃，骨架仍在', async () => {
+  it('④ 支持受管进程详情探查与 PID 级处置确认（FR-407/408）', async () => {
+    const user = userEvent.setup()
+    let actionRequested = false
+    server.use(
+      http.post(API('/instances/:id/processes/:pid/actions'), async ({ request, params }) => {
+        const body = await request.json() as { action?: string; confirm?: boolean }
+        const url = new URL(request.url)
+        actionRequested = params.id === '1' && params.pid === '24518' && body.action === 'kill_tree' && body.confirm === true && url.searchParams.get('confirm') === 'true'
+        return HttpResponse.json({ success: true, action: 'kill_tree', pid: 24518, affectedPids: [24518], message: '已终止受管子进程树' })
+      }),
+    )
+    loginMockUser()
+    renderWithProviders(<MonitoringPage />)
+
+    const nodeDrill = (await screen.findByLabelText('下钻到实例')) as HTMLSelectElement
+    await user.selectOptions(nodeDrill, 'node-1-uuid')
+    const instanceDrill = (await screen.findByRole('combobox', { name: '下钻到实例' })) as HTMLSelectElement
+    await user.selectOptions(instanceDrill, 'inst-1-uuid')
+
+    const inspectButtons = await screen.findAllByRole('button', { name: '探查' })
+    await user.click(inspectButtons[1])
+
+    expect(await screen.findByText('进程 24518 详情')).toBeInTheDocument()
+    expect(screen.getByText('只探查当前实例的受管进程树，处置前会再次校验 PID 归属。')).toBeInTheDocument()
+    expect(screen.getByText('诊断建议')).toBeInTheDocument()
+    expect(screen.getByText('祖先链')).toBeInTheDocument()
+    expect(screen.getByText('后代进程')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '强制终止树' }))
+    expect(await screen.findByText('强制终止进程树')).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: '强制终止树' }).at(-1)!)
+    await waitFor(() => expect(actionRequested).toBe(true))
+  })
+
+  it('⑤ 注入 500（/metrics/overview）→ 页面不崩溃，骨架仍在', async () => {
     loginMockUser()
     mockInject('get', '/metrics/overview', { kind: 'status', status: 500 })
     renderWithProviders(<MonitoringPage />)
