@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/smtp"
+	"strings"
 )
 
 // ErrSMTPNotConfigured 表示 SMTP 配置不完整，调用方可降级为手动发送链接。
@@ -30,6 +31,11 @@ func (SMTPMessageSender) Send(config SMTPMessageConfig, to, subject, body string
 func sendSMTPMessage(config SMTPMessageConfig, recipients []string, subject, body string) error {
 	if config.Host == "" || config.Port < 1 || config.Port > 65535 || config.From == "" || len(recipients) == 0 {
 		return ErrSMTPNotConfigured
+	}
+	for _, recipient := range recipients {
+		if strings.TrimSpace(recipient) == "" {
+			return ErrSMTPNotConfigured
+		}
 	}
 	message := buildEmailMessage(config.From, recipients, subject, body)
 	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)

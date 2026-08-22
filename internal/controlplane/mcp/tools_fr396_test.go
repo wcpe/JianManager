@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -186,4 +187,122 @@ func TestFR396_ToolsRegistered(t *testing.T) {
 	} {
 		assert.True(t, names[want], "缺少工具 "+want)
 	}
+}
+
+// ---- FR-396 执行器级测试：直接调 tool handler，验证真实调用链 ----
+
+func TestFR396_SearchFiltersAndPaginates(t *testing.T) {
+	db := fr396TestDB(t)
+	agent, p, node, inst := fr396Seed(t, db)
+	// 追加第二个实例（同名前缀不同后缀），验证 q 过滤与分页。
+	other := &model.Instance{
+		UUID: "i-fr396-b", NodeID: node.ID, Name: "room-b",
+		Type: model.InstanceTypeGeneric, Role: model.InstanceRoleUniversal,
+		ProcessType: model.ProcessTypeDirect, StartCommand: "noop",
+		Status: model.InstanceStatusStopped, WorkDir: "/srv/room",
+	}
+	require.NoError(t, db.Create(other).Error)
+	deps := ToolDeps{Agent: agent, Node: service.NewNodeService(db)}
+
+	// q 过滤：只命中 room-1。
+	res := CallTool(context.Background(), deps, p, "instance_search", map[string]any{"q": "room-1"})
+	require.False(t, res.IsError, "search 不应失败: %v", res.Content)
+	assert.Contains(t, res.Content[0].Text, inst.Name)
+	assert.NotContains(t, res.Content[0].Text, "room-b")
+
+	// status 过滤：room-b 也是 stopped，q+status 组合只应命中 room-b。
+	res = CallTool(context.Background(), deps, p, "instance_search", map[string]any{
+		"q": "room-b", "status": "stopped",
+	})
+	require.False(t, res.IsError)
+	assert.Contains(t, res.Content[0].Text, "room-b")
+
+	// 分页：pageSize=1 时仅返回一条。
+	res = CallTool(context.Background(), deps, p, "instance_search", map[string]any{
+		"page": 1, "pageSize": float64(1),
+	})
+	require.False(t, res.IsError)
+	assert.Contains(t, res.Content[0].Text, "total")
+}
+
+func TestFR396_GetEnvSuccessAndOutOfScope(t *testing.T) {
+	db := fr396TestDB(t)
+	agent, p, node, inst := fr396Seed(t, db)
+	// 节点置离线：GetInstanceEnv 走「节点离线」分支，不触发 gRPC（测试无 ClientPool）。
+	require.NoError(t, db.Model(&model.Node{}).Where("id = ?", node.ID).Update("status", model.NodeStatusOffline).Error)
+	deps := ToolDeps{Agent: agent, Instance: service.NewInstanceService(db, nil, nil), Node: service.NewNodeService(db)}
+
+	// 在 scope 内：返回 env 视图（seed 无 env，也应返回空视图而非错误）。
+	res := CallTool(context.Background(), deps, p, "instance_get_env", map[string]any{
+		"id": float64(inst.ID),
+	})
+	require.False(t, res.IsError, "scope 内 get_env 不应失败: %v", res.Content)
+	assert.Contains(t, res.Content[0].Text, "节点离线")
+
+	// 越界实例：用仅实例 scope 的 token（不含节点 scope），确认越界被拒绝且不泄露存在性。
+	agentOnly := service.NewAgentTokenService(db)
+	_, plainOnly, err := agentOnly.Issue(service.IssueAgentTokenRequest{
+		Name: "only-inst", ScopedInstanceIDs: []uint{inst.ID},
+		PolicyVersion: service.AgentPolicyVersionV2, CapabilitiesProvided: true,
+		Capabilities: []string{service.AgentCapabilityInstanceRead},
+		CreatedBy:    1,
+	})
+	require.NoError(t, err)
+	pOnly, err := agentOnly.Authenticate(plainOnly)
+	require.NoError(t, err)
+
+	outScope := &model.Instance{
+		UUID: "i-fr396-out", NodeID: node.ID, Name: "out-scope",
+		Type: model.InstanceTypeGeneric, Role: model.InstanceRoleUniversal,
+		ProcessType: model.ProcessTypeDirect, StartCommand: "noop",
+		Status: model.InstanceStatusStopped, WorkDir: "/srv/out",
+	}
+	require.NoError(t, db.Create(outScope).Error)
+	depsOnly := ToolDeps{Agent: agentOnly, Instance: service.NewInstanceService(db, nil, nil), Node: service.NewNodeService(db)}
+	res = CallTool(context.Background(), depsOnly, pOnly, "instance_get_env", map[string]any{
+		"id": float64(outScope.ID),
+	})
+	assert.True(t, res.IsError, "越界实例必须拒绝")
+	assert.Contains(t, res.Content[0].Text, "能力/scope 不足")
+}
+
+func TestFR396_SendCommandRequiresScopeAndConfirm(t *testing.T) {
+	db := fr396TestDB(t)
+	agent, p, _, inst := fr396Seed(t, db)
+	instanceSvc := service.NewInstanceService(db, nil, nil)
+	deps := ToolDeps{Agent: agent, Instance: instanceSvc, Node: service.NewNodeService(db)}
+
+	// 无 confirm：破坏性工具要求精确确认（seed 实例未运行，先被运行状态闸拦截，也属安全护栏）。
+	res := CallTool(context.Background(), deps, p, "instance_send_command", map[string]any{
+		"id": float64(inst.ID), "command": "say hi",
+	})
+	assert.True(t, res.IsError)
+	text := res.Content[0].Text
+	assert.True(t,
+		strings.Contains(text, "确认") || strings.Contains(text, "confirm") || strings.Contains(text, "未运行"),
+		"应被运行状态或确认闸拦截，实际: %v", text)
+
+	// 仅实例 scope token：越界实例命令必须被拒绝。
+	agentOnly := service.NewAgentTokenService(db)
+	_, plainOnly, err := agentOnly.Issue(service.IssueAgentTokenRequest{
+		Name: "cmd-only", ScopedInstanceIDs: []uint{inst.ID},
+		PolicyVersion: service.AgentPolicyVersionV2, CapabilitiesProvided: true,
+		Capabilities: []string{service.AgentCapabilityInstanceCommand},
+		CreatedBy:    1,
+	})
+	require.NoError(t, err)
+	pOnly, err := agentOnly.Authenticate(plainOnly)
+	require.NoError(t, err)
+	outScope := &model.Instance{
+		UUID: "i-fr396-cmd-out", NodeID: inst.NodeID, Name: "cmd-out",
+		Type: model.InstanceTypeGeneric, Role: model.InstanceRoleUniversal,
+		ProcessType: model.ProcessTypeDirect, StartCommand: "noop",
+		Status: model.InstanceStatusStopped,
+	}
+	require.NoError(t, db.Create(outScope).Error)
+	res = CallTool(context.Background(), deps, pOnly, "instance_send_command", map[string]any{
+		"id": float64(outScope.ID), "command": "say hi", "confirm": true,
+	})
+	assert.True(t, res.IsError, "越界实例命令必须拒绝")
+	assert.Contains(t, res.Content[0].Text, "能力/scope 不足")
 }
