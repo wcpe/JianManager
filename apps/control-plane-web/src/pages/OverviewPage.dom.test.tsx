@@ -65,6 +65,10 @@ describe('OverviewPage（mock 假后端）', () => {
     expect(screen.getByText('Bot Worker（共享）')).toBeInTheDocument()
     expect(await screen.findByText('Bot Worker 资源为共享进程观察值，不代表任一 Bot 或会话的独占资源。')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'node-a 心跳陈旧' })).toHaveAttribute('href', '/monitoring?node=node-a')
+    expect(screen.getByTestId('platform-observability-grid')).toHaveClass('md:grid-cols-2', 'xl:grid-cols-3')
+    expect(screen.getByTestId('platform-observability-grid')).not.toHaveClass('lg:grid-cols-3')
+    expect(within(screen.getByTestId('platform-observability-health')).getByText('节点').parentElement?.parentElement?.parentElement).not.toHaveClass('sm:grid-cols-4')
+    expect(within(screen.getByTestId('platform-observability-bots')).getByText(/Bot Worker RSS/).parentElement).not.toHaveClass('sm:grid-cols-4')
   })
 
   it('资源仪表 Tooltip 只在打开后查询受管归因，并可下钻监控页', async () => {

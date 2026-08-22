@@ -154,7 +154,7 @@ function OverviewAggregationPanel({
       title={title}
       actions={<Link to={to} className="text-xs text-muted-foreground hover:text-foreground">查看全部</Link>}
       bodyClassName="p-0"
-      className="h-full overflow-hidden"
+      className="h-full min-w-0 overflow-hidden"
     >
       {content}
     </Panel>
@@ -170,11 +170,11 @@ function PlatformHealthPanel({ data, isLoading, isError }: { data?: PlatformObse
   return (
     <OverviewAggregationPanel testId="platform-observability-health" title={t('dashboard.platformHealth')} to="/monitoring" isLoading={isLoading} isError={isError} isEmpty={!data} emptyText={t('dashboard.noData')} errorText={t('dashboard.platformOverviewUnavailable')}>
       {data && <div className="space-y-3 p-3 text-sm">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <StatCard label={t('dashboard.nodes')} value={`${data.health.onlineNodeCount}/${data.health.nodeCount}`} sub={t('dashboard.online')} />
-          <StatCard label={t('dashboard.runningInstances')} value={String(data.health.runningInstanceCount)} sub={t('dashboard.instances')} />
-          <StatCard label={t('dashboard.totalCpu')} value={displayNumber(data.resources.cpuPct, '%')} sub={t(`dashboard.freshness.${data.resources.freshness}`)} />
-          <StatCard label={t('dashboard.totalMem')} value={data.resources.memoryUsedBytes == null ? '--' : fmtBytes(data.resources.memoryUsedBytes)} sub={data.resources.memoryTotalBytes == null ? '--' : fmtBytes(data.resources.memoryTotalBytes)} />
+        <div className="grid grid-cols-2 gap-2">
+          <StatCard className="min-w-0" label={t('dashboard.nodes')} value={`${data.health.onlineNodeCount}/${data.health.nodeCount}`} sub={t('dashboard.online')} />
+          <StatCard className="min-w-0" label={t('dashboard.runningInstances')} value={String(data.health.runningInstanceCount)} sub={t('dashboard.instances')} />
+          <StatCard className="min-w-0" label={t('dashboard.totalCpu')} value={displayNumber(data.resources.cpuPct, '%')} sub={t(`dashboard.freshness.${data.resources.freshness}`)} />
+          <StatCard className="min-w-0" label={t('dashboard.totalMem')} value={data.resources.memoryUsedBytes == null ? '--' : fmtBytes(data.resources.memoryUsedBytes)} sub={data.resources.memoryTotalBytes == null ? '--' : fmtBytes(data.resources.memoryTotalBytes)} />
         </div>
         <div className="grid grid-cols-1 gap-2 border-t pt-2 sm:grid-cols-2">
           <p className="text-muted-foreground">{t('dashboard.activeAlerts', { count: data.alerts.length })}</p>
@@ -202,14 +202,14 @@ function PlatformBotRuntimePanel({ data, isLoading, isError }: { data?: Platform
   return (
     <OverviewAggregationPanel testId="platform-observability-bots" title={t('dashboard.sharedBotRuntime')} to="/monitoring" isLoading={isLoading} isError={isError} isEmpty={!bots} emptyText={t('dashboard.noData')} errorText={t('dashboard.platformOverviewUnavailable')}>
       {bots && <div className="space-y-2 p-3 text-sm">
-        <p className="text-muted-foreground">{bots.notice}</p>
-        <div className="grid grid-cols-2 gap-2 text-muted-foreground sm:grid-cols-4">
-          <span>{t('dashboard.botRss')}: {bots.botWorkerRssBytes == null ? '--' : fmtBytes(bots.botWorkerRssBytes)}</span>
-          <span>{t('dashboard.botCpu')}: {displayNumber(bots.botWorkerCpuPct, '%')}</span>
-          <span>{t('dashboard.botCount')}: {displayNumber(bots.activeCount)}</span>
-          <span>{t('dashboard.botEventLoop')}: {displayNumber(bots.eventLoopP95Ms, 'ms')}</span>
+        <p className="break-words text-muted-foreground">{bots.notice}</p>
+        <div className="grid grid-cols-2 gap-2 text-muted-foreground">
+          <span className="min-w-0 break-words">{t('dashboard.botRss')}: {bots.botWorkerRssBytes == null ? '--' : fmtBytes(bots.botWorkerRssBytes)}</span>
+          <span className="min-w-0 break-words">{t('dashboard.botCpu')}: {displayNumber(bots.botWorkerCpuPct, '%')}</span>
+          <span className="min-w-0 break-words">{t('dashboard.botCount')}: {displayNumber(bots.activeCount)}</span>
+          <span className="min-w-0 break-words">{t('dashboard.botEventLoop')}: {displayNumber(bots.eventLoopP95Ms, 'ms')}</span>
         </div>
-        {bots.unavailable.length > 0 && <p className="text-amber-600">{t('dashboard.botUnavailable', { reason: bots.unavailable[0].reason })}</p>}
+        {bots.unavailable.length > 0 && <p className="break-words text-amber-600">{t('dashboard.botUnavailable', { reason: bots.unavailable[0].reason })}</p>}
       </div>}
     </OverviewAggregationPanel>
   )
@@ -372,7 +372,7 @@ export default function OverviewPage() {
       </div>
 
       {isPlatformAdmin && (
-        <div data-testid="platform-observability-grid" className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <div data-testid="platform-observability-grid" className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           <PlatformHealthPanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
           <PlatformExceptionsPanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
           <PlatformBotRuntimePanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
