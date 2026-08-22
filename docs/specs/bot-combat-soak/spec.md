@@ -1,6 +1,6 @@
 # 功能规格：Bot 乱斗场景与受管稳定性压测
 
-> 状态：已审核（用户授权代理自审，2026-07-28）　·　关联 PRD：FR-404　·　优先级：P0　·　依赖：FR-398、FR-399　·　分支：dev
+> 状态：开发中（用户授权代理自审，2026-07-28）　·　关联 PRD：FR-404　·　优先级：P0　·　依赖：FR-398、FR-399　·　分支：feature/fr-404-bot-combat-soak
 
 ## 1. 背景与目标
 
@@ -64,14 +64,14 @@
 
 ## 4. 任务拆分
 
-- [ ] 为 Scenario V2 的新增字段、范围校验与规范化快照补失败测试。
-- [ ] 为 Bot Worker 的死亡→单次重生→spawn→恢复攻击、重生失败上限、随机目标和搜敌补测试。
-- [ ] 实现 `attack_until` 的加性恢复、搜敌和本地攻击活跃度。
-- [ ] 修复持续动作的截止结算，并补 Control Plane 回归测试。
-- [ ] 为 MCP `loadtest_run_create.scenario` 透传补测试并实现。
+- [x] 为 Scenario V2 的新增字段、范围校验与规范化快照补失败测试。
+- [x] 为 Bot Worker 的死亡→单次重生→spawn→恢复攻击、重生失败上限、随机目标和搜敌补测试。
+- [x] 实现 `attack_until` 的加性恢复、搜敌和本地攻击活跃度。
+- [x] 修复持续动作的截止结算，并补 Control Plane 回归测试。
+- [x] 为 MCP `loadtest_run_create.scenario` 透传补测试并实现。
 - [ ] 创建受管隔离 Paper、部署 ServerProbe，并完成小规模重生兼容验证。
 - [ ] 运行 1 Worker × 50 Bot × 1 小时乱斗压测，导出指标、报告、动作结果和日志。
-- [ ] 文档同步：PRD、ARCHITECTURE、API、CHANGELOG。
+- [x] 文档同步：PRD、ARCHITECTURE、API、CHANGELOG。
 
 ## 5. 验收标准
 
