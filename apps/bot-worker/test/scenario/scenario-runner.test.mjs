@@ -402,6 +402,54 @@ test('Runner 在 run deadline 同毫秒先于 action tick 裁决且不重试', a
   assert.equal(runner.isTerminal, true)
 })
 
+test('Runner 在 run deadline 同毫秒先结算 attack_until 自身 duration', async () => {
+  const run = runnerOptions({
+    runDeadline: 1_100,
+    scenario: scenario([step('attack', 'attack_until', {
+      selector: { types: ['zombie'], radius: 20, priority: 'nearest' },
+      chase: false,
+      reacquire: true,
+      attackIntervalMs: 100,
+      stop: { durationMs: 100, minClientAttackAttempts: 1 },
+      timeoutMs: 1_000,
+    })]),
+  })
+  run.capabilities.entityValues = [{ id: 1, type: 'zombie', dead: false, position: { x: 2, y: 64, z: 0 } }]
+  const runner = new ScenarioRunner(run.options)
+  await runner.start()
+  run.capabilities.nowMs = 1_100
+  await runner.tick(run.capabilities.now())
+
+  assert.equal(run.events.at(-1).status, 'succeeded')
+  assert.equal(run.events.at(-1).errorCode, undefined)
+})
+
+test('Runner 在截止后首个 tick 仍先结算 attack_until 的自身 duration', async () => {
+  for (const [runDeadline, timeoutMs, offset] of [
+    [1_100, 1_000, 1],
+    [1_100, 1_000, 250],
+    [undefined, 100, 1],
+    [undefined, 100, 250],
+  ]) {
+    const run = runnerOptions({
+      runDeadline,
+      scenario: scenario([step('attack', 'attack_until', {
+        selector: { types: ['zombie'], radius: 20, priority: 'nearest' },
+        chase: false,
+        attackIntervalMs: 100,
+        stop: { durationMs: 100, minClientAttackAttempts: 1 },
+        timeoutMs,
+      })]),
+    })
+    run.capabilities.entityValues = [{ id: 1, type: 'zombie', dead: false, position: { x: 2, y: 64, z: 0 } }]
+    const runner = new ScenarioRunner(run.options)
+    await runner.start()
+    run.capabilities.nowMs = 1_100 + offset
+    await runner.tick(run.capabilities.now())
+    assert.equal(run.events.at(-1).status, 'succeeded')
+  }
+})
+
 test('Runner 在 signal 调用动作前裁决 step/run deadline 并安全跳过迟到完整信号', async () => {
   for (const useRunDeadline of [false, true]) {
     const run = runnerOptions({

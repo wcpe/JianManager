@@ -174,6 +174,47 @@ func TestCallTool_RunRetryFailed_PassesRequestIDUnchanged(t *testing.T) {
 	}
 }
 
+func TestCallTool_RunCreate_PassesScenarioSnapshot(t *testing.T) {
+	db := newBotToolDB(t)
+	f := seedBotToolFixture(t, db)
+	deps := ToolDeps{Agent: service.NewAgentTokenService(db), StressSession: service.NewBotStressSessionService(db, nil)}
+	scenario := map[string]any{
+		"version": float64(2),
+		"seed":    float64(20260728),
+		"cohorts": []any{map[string]any{
+			"key":     "combat",
+			"percent": float64(100),
+			"steps": []any{map[string]any{
+				"id":               "attack",
+				"type":             "attack_until",
+				"observationStep":  true,
+				"selector":         map[string]any{"kind": "hostile", "types": []any{"zombie"}, "radius": float64(16)},
+				"stop":             map[string]any{"durationMs": float64(1000), "damageAtLeast": float64(1)},
+				"attackIntervalMs": float64(600),
+			}},
+		}},
+	}
+
+	res := CallTool(context.Background(), deps, botLoadPrincipal(f), "loadtest_run_create", map[string]any{
+		"instanceId": float64(f.instance.ID),
+		"namePrefix": "fr404",
+		"count":      float64(1),
+		"config":     map[string]any{"server": "127.0.0.1", "port": float64(25565), "auth": "offline"},
+		"scenario":   scenario,
+	})
+	require.False(t, res.IsError, res.Content[0].Text)
+
+	var payload service.BotStressSessionView
+	require.NoError(t, json.Unmarshal([]byte(res.Content[0].Text), &payload))
+
+	var row model.BotStressSession
+	require.NoError(t, db.First(&row, payload.ID).Error)
+	stored, err := service.ParseScenarioSnapshot(row.ScenarioSnapshot)
+	require.NoError(t, err)
+	assert.Equal(t, int64(20260728), stored.Seed)
+	assert.Equal(t, service.ScenarioActionAttackUntil, stored.Cohorts[0].Steps[0].Type())
+}
+
 func TestCallTool_NodeCapacity_HidesNodesOutOfScope(t *testing.T) {
 	db := newBotToolDB(t)
 	f := seedBotToolFixture(t, db)

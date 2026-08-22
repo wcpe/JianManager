@@ -164,7 +164,7 @@ func scenarioActionFields(actionType ScenarioActionType, path string, allowLegac
 	case ScenarioActionFindEntity:
 		extras = []string{"selector"}
 	case ScenarioActionAttackUntil:
-		extras = []string{"selector", "stop", "attackIntervalMs", "chase", "reacquire", "targetNotFoundTimeoutMs"}
+		extras = []string{"selector", "searchArea", "stop", "attackIntervalMs", "chase", "reacquire", "targetNotFoundTimeoutMs", "maxPathFailures", "respawn"}
 		if allowLegacy {
 			extras = append(extras, "legacyDurationSuccess")
 		}
@@ -390,16 +390,41 @@ func validateScenarioAttackNodes(fields map[string]*yaml.Node, path string) erro
 	if err := validateScenarioSelectorNode(fields["selector"], path+".selector"); err != nil {
 		return err
 	}
+	if err := validateScenarioAreaNode(fields["searchArea"], path+".searchArea"); err != nil {
+		return err
+	}
 	if err := validateScenarioStopNode(fields["stop"], path+".stop"); err != nil {
 		return err
 	}
-	for _, name := range []string{"attackIntervalMs", "targetNotFoundTimeoutMs"} {
+	if err := validateScenarioAttackRespawnNode(fields["respawn"], path+".respawn"); err != nil {
+		return err
+	}
+	for _, name := range []string{"attackIntervalMs", "targetNotFoundTimeoutMs", "maxPathFailures"} {
 		if err := validateScenarioIntegerNode(fields[name], path+"."+name); err != nil {
 			return err
 		}
 	}
 	for _, name := range []string{"chase", "reacquire", "legacyDurationSuccess"} {
 		if err := validateScenarioBoolNode(fields[name], path+"."+name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateScenarioAttackRespawnNode(node *yaml.Node, path string) error {
+	if node == nil {
+		return nil
+	}
+	fields, err := scenarioMappingFields(node, path)
+	if err != nil {
+		return err
+	}
+	if err := rejectUnknownScenarioFields(fields, stringSet("maxAttempts", "retryBackoffMs", "timeoutMs"), path); err != nil {
+		return err
+	}
+	for _, name := range []string{"maxAttempts", "retryBackoffMs", "timeoutMs"} {
+		if err := validateScenarioIntegerNode(fields[name], path+"."+name); err != nil {
 			return err
 		}
 	}
@@ -414,11 +439,11 @@ func validateScenarioStopNode(node *yaml.Node, path string) error {
 	if err != nil {
 		return err
 	}
-	allowed := stringSet("durationMs", "damageAtLeast", "killsAtLeast", "probeEvent", "evidenceWindowMs", "minDamageEventsPerWindow", "successPolicy")
+	allowed := stringSet("durationMs", "damageAtLeast", "killsAtLeast", "probeEvent", "evidenceWindowMs", "minDamageEventsPerWindow", "minClientAttackAttempts", "successPolicy")
 	if err := rejectUnknownScenarioFields(fields, allowed, path); err != nil {
 		return err
 	}
-	for _, name := range []string{"durationMs", "damageAtLeast", "killsAtLeast", "evidenceWindowMs", "minDamageEventsPerWindow"} {
+	for _, name := range []string{"durationMs", "damageAtLeast", "killsAtLeast", "evidenceWindowMs", "minDamageEventsPerWindow", "minClientAttackAttempts"} {
 		if err := validateScenarioIntegerNode(fields[name], path+"."+name); err != nil {
 			return err
 		}

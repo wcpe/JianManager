@@ -103,6 +103,7 @@ func loadTestRunToolSpecs() []toolSpec {
 					"count":      numberProp("Bot 数量（非模板路径必填）"),
 					"behavior":   stringProp("可选：行为模式（非模板路径）"),
 					"config":     objectProp("连接配置 JSON 对象：{server,port,auth:\"offline\",version?}"),
+					"scenario":   objectProp("可选：Scenario V2 场景 JSON 对象，直接冻结为运行快照"),
 				}, []string{"instanceId", "namePrefix"}),
 			},
 			Action: service.AgentActionLoadTestRunCreate,
@@ -400,12 +401,17 @@ func createRunDirect(deps ToolDeps, instanceID uint, args map[string]any) ToolRe
 	if err != nil {
 		return toolErr("参数 config 无效: " + err.Error())
 	}
+	scenario, err := rawJSONArg(args, "scenario")
+	if err != nil {
+		return toolErr("参数 scenario 无效: " + err.Error())
+	}
 	view, err := deps.StressSession.Create(service.CreateBotStressSessionRequest{
 		InstanceID: instanceID,
 		Count:      intArg(args, "count"),
 		Behavior:   stringArg(args, "behavior"),
 		NamePrefix: stringArg(args, "namePrefix"),
 		Config:     config,
+		Scenario:   scenario,
 	})
 	if err != nil {
 		return toolErr("创建压测运行失败: " + err.Error())

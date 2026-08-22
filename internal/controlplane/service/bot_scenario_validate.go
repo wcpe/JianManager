@@ -210,31 +210,38 @@ func validateRoamAction(action *RoamInAreaAction, path string) error {
 	if err := validatePositiveDuration(action.DurationMS, path+".durationMs"); err != nil {
 		return err
 	}
-	switch action.Area.Type {
-	case "radius":
-		if err := validatePosition(action.Area.Center, path+".area.center"); err != nil {
-			return err
-		}
-		if err := validateRadius(action.Area.Radius, path+".area.radius"); err != nil {
-			return err
-		}
-	case "waypoints":
-		if len(action.Area.Waypoints) == 0 {
-			return scenarioValidationError(path+".area.waypoints", "至少需要一个航点")
-		}
-		for index, position := range action.Area.Waypoints {
-			if err := validatePosition(position, fmt.Sprintf("%s.area.waypoints[%d]", path, index)); err != nil {
-				return err
-			}
-		}
-	default:
-		return scenarioValidationError(path+".area.type", "必须为 radius 或 waypoints")
+	if err := validateArea(&action.Area, path+".area"); err != nil {
+		return err
 	}
 	if action.PauseMS.Min < 0 || action.PauseMS.Max < action.PauseMS.Min {
 		return scenarioValidationError(path+".pauseMs", "必须满足 0 <= min <= max")
 	}
 	if action.MaxPathFailures == 0 {
 		action.MaxPathFailures = 3
+	}
+	return nil
+}
+
+func validateArea(area *ScenarioArea, path string) error {
+	switch area.Type {
+	case "radius":
+		if err := validatePosition(area.Center, path+".center"); err != nil {
+			return err
+		}
+		if err := validateRadius(area.Radius, path+".radius"); err != nil {
+			return err
+		}
+	case "waypoints":
+		if len(area.Waypoints) == 0 {
+			return scenarioValidationError(path+".waypoints", "至少需要一个航点")
+		}
+		for index, position := range area.Waypoints {
+			if err := validatePosition(position, fmt.Sprintf("%s.waypoints[%d]", path, index)); err != nil {
+				return err
+			}
+		}
+	default:
+		return scenarioValidationError(path+".type", "必须为 radius 或 waypoints")
 	}
 	return nil
 }
@@ -317,8 +324,8 @@ func validateEntitySelector(selector ScenarioEntitySelector, path string) error 
 	if err := validateRadius(selector.Radius, path+".radius"); err != nil {
 		return err
 	}
-	if selector.Priority != "" && selector.Priority != "nearest" && selector.Priority != "lowest_health" {
-		return scenarioValidationError(path+".priority", "必须为 nearest 或 lowest_health")
+	if selector.Priority != "" && selector.Priority != "nearest" && selector.Priority != "lowest_health" && selector.Priority != "random" {
+		return scenarioValidationError(path+".priority", "必须为 nearest、lowest_health 或 random")
 	}
 	return nil
 }
@@ -333,11 +340,30 @@ func validateAttackAction(action *AttackUntilAction, path string, allowLegacy bo
 	if action.AttackIntervalMS < 100 || action.AttackIntervalMS > 5000 {
 		return scenarioValidationError(path+".attackIntervalMs", "必须在 100..5000 之间")
 	}
+	if action.MaxPathFailures < 0 || action.MaxPathFailures > 100 {
+		return scenarioValidationError(path+".maxPathFailures", "必须在 0..100 之间")
+	}
+	if action.SearchArea != nil {
+		if err := validateArea(action.SearchArea, path+".searchArea"); err != nil {
+			return err
+		}
+	}
+	if action.Respawn != nil {
+		if action.Respawn.MaxAttempts < 1 || action.Respawn.MaxAttempts > 1000 {
+			return scenarioValidationError(path+".respawn.maxAttempts", "必须在 1..1000 之间")
+		}
+		if action.Respawn.RetryBackoffMS < 0 || action.Respawn.RetryBackoffMS > 300000 {
+			return scenarioValidationError(path+".respawn.retryBackoffMs", "必须在 0..300000 之间")
+		}
+		if action.Respawn.TimeoutMS < 1 || action.Respawn.TimeoutMS > 300000 {
+			return scenarioValidationError(path+".respawn.timeoutMs", "必须在 1..300000 之间")
+		}
+	}
 	stop := &action.Stop
 	if err := validatePositiveDuration(stop.DurationMS, path+".stop.durationMs"); err != nil {
 		return err
 	}
-	if stop.DamageAtLeast < 0 || stop.KillsAtLeast < 0 {
+	if stop.DamageAtLeast < 0 || stop.KillsAtLeast < 0 || stop.MinClientAttackAttempts < 0 {
 		return scenarioValidationError(path+".stop", "可信计数不能为负数")
 	}
 	if stop.SuccessPolicy == "" {
@@ -349,9 +375,9 @@ func validateAttackAction(action *AttackUntilAction, path string, allowLegacy bo
 	if err := validateEvidenceWindow(stop, path); err != nil {
 		return err
 	}
-	trusted := stop.DamageAtLeast > 0 || stop.KillsAtLeast > 0 || strings.TrimSpace(stop.ProbeEvent) != "" || stop.MinDamageEventsPerWindow > 0
+	trusted := stop.DamageAtLeast > 0 || stop.KillsAtLeast > 0 || strings.TrimSpace(stop.ProbeEvent) != "" || stop.MinDamageEventsPerWindow > 0 || stop.MinClientAttackAttempts > 0
 	if !trusted && !allowLegacy {
-		return scenarioValidationError(path+".stop", "至少需要一个可信伤害、击杀、探针或证据窗条件")
+		return scenarioValidationError(path+".stop", "至少需要一个伤害、击杀、探针、证据窗或客户端攻击活跃度条件")
 	}
 	return nil
 }

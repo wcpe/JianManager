@@ -231,6 +231,73 @@ test('attack_until 可信击杀计入窗口且 observation-complete 前不提前
   assert.equal(run.events.at(-1).status, 'succeeded')
 })
 
+test('attack_until 死亡后只请求一次重生，新 spawn 后恢复同一动作', async () => {
+  const run = runnerOptions({
+    scenario: scenario([attackStep({
+      chase: false,
+      stop: { durationMs: 1_000, minClientAttackAttempts: 2, successPolicy: 'any' },
+      respawn: { maxAttempts: 2, retryBackoffMs: 0, timeoutMs: 1_000 },
+    })]),
+  })
+  run.capabilities.entityValues = [zombie(1, 2)]
+  const runner = new ScenarioRunner(run.options)
+  await runner.start()
+  assert.equal(run.capabilities.attackCalls.length, 1)
+
+  run.capabilities.dead = true
+  run.capabilities.advance(100)
+  await runner.tick(run.capabilities.now())
+  await runner.tick(run.capabilities.now())
+  assert.equal(run.capabilities.respawnCalls, 1)
+  assert.equal(run.capabilities.attackCalls.length, 1)
+
+  run.capabilities.spawn()
+  run.capabilities.advance(500)
+  await runner.tick(run.capabilities.now())
+  assert.equal(run.capabilities.attackCalls.length, 2)
+
+  run.capabilities.advance(500)
+  await runner.tick(run.capabilities.now())
+  assert.equal(run.events.at(-1).status, 'succeeded')
+  assert.equal(run.events.at(-1).result.respawnCount, 1)
+})
+
+test('attack_until 支持稳定随机目标与 searchArea 搜敌', async () => {
+  const fields = {
+    chase: false,
+    selector: { types: ['zombie'], radius: 20, priority: 'random' },
+    stop: { durationMs: 1_000, minClientAttackAttempts: 1, successPolicy: 'any' },
+  }
+  const first = runnerOptions({ scenario: scenario([attackStep(fields)]) })
+  const second = runnerOptions({ scenario: scenario([attackStep(fields)]) })
+  first.capabilities.entityValues = [zombie(1, 2), zombie(2, 2), zombie(3, 2)]
+  second.capabilities.entityValues = [zombie(3, 2), zombie(1, 2), zombie(2, 2)]
+  await new ScenarioRunner(first.options).start()
+  await new ScenarioRunner(second.options).start()
+  assert.equal(first.capabilities.attackCalls[0].entityId, second.capabilities.attackCalls[0].entityId)
+
+  const search = runnerOptions({
+    scenario: scenario([attackStep({
+      chase: true,
+      selector: { types: ['zombie'], radius: 20, priority: 'nearest' },
+      searchArea: { type: 'radius', center: { x: 0, y: 64, z: 0 }, radius: 8 },
+      targetNotFoundTimeoutMs: 10,
+      stop: { durationMs: 1_000, minClientAttackAttempts: 1, successPolicy: 'any' },
+    })]),
+  })
+  const runner = new ScenarioRunner(search.options)
+  await runner.start()
+  search.capabilities.advance(20)
+  await runner.tick(search.capabilities.now())
+  assert.equal(search.events.at(-1).status, 'running')
+  assert.ok(search.capabilities.pathfinderGoalCalls.length >= 1)
+
+  search.capabilities.entityValues = [zombie(9, 2)]
+  search.capabilities.advance(600)
+  await runner.tick(search.capabilities.now())
+  assert.equal(search.capabilities.attackCalls.at(-1).entityId, 9)
+})
+
 test('cancel 后攻击、追击与动作资源全部停止', async () => {
   const run = runnerOptions({ scenario: scenario([attackStep({ attackIntervalMs: 100 })]) })
   run.capabilities.entityValues = [zombie(1, 6)]

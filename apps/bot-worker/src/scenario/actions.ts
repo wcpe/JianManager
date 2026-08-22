@@ -301,8 +301,17 @@ class AttackUntilAction extends BaseScenarioAction {
   private nextAttackAt = 0
   private missingSince: number | undefined
   private hadTarget = false
+  private targetEntityId: ScenarioEntityId | undefined
   private chaseGoal: ScenarioPosition | undefined
+  private searchGoal: ScenarioPosition | undefined
+  private searchRandom: DeterministicRandom | undefined
   private pathEvents: ScenarioPathfinderEvents = { goalReached: 0, pathFailed: 0 }
+  private pathFailures = 0
+  private pathfinderGoals = 0
+  private reacquireCount = 0
+  private respawnCount = 0
+  private respawnRequestedAt: number | undefined
+  private respawnSpawnSeq = 0
   private observationStart: number | undefined
   private evidenceWindowMs: number | undefined
   private evidenceSatisfied: boolean | undefined
@@ -314,6 +323,7 @@ class AttackUntilAction extends BaseScenarioAction {
     if (error) return invalidStep(error)
     this.nextAttackAt = ctx.startedAt
     this.pathEvents = ctx.capabilities.pathfinderEvents()
+    this.searchRandom = new DeterministicRandom(`${ctx.seed ?? 0}|${ctx.botOrdinal ?? 0}|${ctx.step.id}|search`)
     this.evidenceWindowMs = numberField(recordValue(ctx.step.stop)?.evidenceWindowMs)
     return this.drive(ctx, ctx.startedAt)
   }
@@ -339,14 +349,16 @@ class AttackUntilAction extends BaseScenarioAction {
 
   private async drive(ctx: ScenarioActionContext, now: number): Promise<ActionTickResult> {
     if (ctx.cancelToken.cancelled) return running(this.result())
-    const target = this.resolveTarget(ctx, now)
+    const respawn = this.handleRespawn(ctx, now)
+    if (respawn) return respawn
+    const target = await this.resolveTarget(ctx, now)
     if (target.result) return target.result
     if (!target.entity) return running(this.result())
     const chase = await this.chase(ctx, target.entity)
     if (chase || ctx.cancelToken.cancelled) return chase ?? running(this.result())
     if (distance(ctx.capabilities.getPosition(), target.entity.position) <= ATTACK_REACH && now >= this.nextAttackAt) {
       if (!ctx.capabilities.attack(target.entity.id)) {
-        ctx.setLockedEntityId(undefined)
+        this.resetTarget(ctx)
         this.missingSince ??= now
         return running(this.result())
       }
@@ -356,29 +368,89 @@ class AttackUntilAction extends BaseScenarioAction {
     return running(this.result())
   }
 
-  private resolveTarget(ctx: ScenarioActionContext, now: number): { entity?: ScenarioEntity; result?: ActionTickResult } {
+  private async resolveTarget(ctx: ScenarioActionContext, now: number): Promise<{ entity?: ScenarioEntity; result?: ActionTickResult }> {
     const entities = ctx.capabilities.entities()
     const locked = entities.find((entity) => sameEntityId(entity.id, ctx.lockedEntityId()) && entityAlive(entity))
     if (locked) {
       this.hadTarget = true
+      this.targetEntityId = locked.id
       this.missingSince = undefined
       return { entity: locked }
     }
     ctx.setLockedEntityId(undefined)
+    this.targetEntityId = undefined
     const maySelect = !this.hadTarget || ctx.step.reacquire !== false
     const selected = maySelect ? selectEntity(ctx, ctx.step.selector) : {}
     if ('error' in selected && selected.error) return { result: invalidStep(selected.error) }
     if (selected.entity) {
+      if (this.hadTarget) this.reacquireCount++
       this.hadTarget = true
+      this.targetEntityId = selected.entity.id
+      this.searchGoal = undefined
       ctx.setLockedEntityId(selected.entity.id)
       this.missingSince = undefined
       return { entity: selected.entity }
     }
+    const search = await this.search(ctx)
+    if (search) return { result: search }
     this.missingSince ??= now
     const timeout = numberField(ctx.step.targetNotFoundTimeoutMs) ?? DEFAULT_TARGET_NOT_FOUND_MS
     return now - this.missingSince >= timeout
       ? { result: failed('TARGET_NOT_FOUND', '目标空窗超过允许时长', this.result()) }
       : {}
+  }
+
+  private handleRespawn(ctx: ScenarioActionContext, now: number): ActionTickResult | undefined {
+    const config = recordValue(ctx.step.respawn)
+    if (!config) return undefined
+    if (this.respawnRequestedAt !== undefined) {
+      if (ctx.capabilities.spawnEventSeq() > this.respawnSpawnSeq && ctx.capabilities.isSpawned() && !ctx.capabilities.isDead()) {
+        this.respawnRequestedAt = undefined
+        this.resetTarget(ctx)
+        return undefined
+      }
+      const timeout = numberField(config.timeoutMs) ?? 10_000
+      return now - this.respawnRequestedAt >= timeout
+        ? failed('RESPAWN_TIMEOUT', '重生等待超时', this.result())
+        : running(this.result())
+    }
+    if (!ctx.capabilities.isDead()) return undefined
+    const maxAttempts = Math.floor(numberField(config.maxAttempts) ?? 1)
+    if (this.respawnCount >= maxAttempts) return failed('RESPAWN_LIMIT_EXCEEDED', '重生次数达到上限', this.result())
+    this.respawnSpawnSeq = ctx.capabilities.spawnEventSeq()
+    this.respawnRequestedAt = now
+    this.respawnCount++
+    this.resetTarget(ctx)
+    ctx.capabilities.respawn()
+    return running(this.result())
+  }
+
+  private async search(ctx: ScenarioActionContext): Promise<ActionTickResult | undefined> {
+    const area = recordValue(ctx.step.searchArea)
+    if (!area) return undefined
+    const events = ctx.capabilities.pathfinderEvents()
+    const failedPath = events.pathFailed > this.pathEvents.pathFailed
+    this.pathEvents = events
+    if (failedPath) this.searchGoal = undefined
+    if (this.searchGoal && !failedPath) return running(this.result())
+    const goal = this.nextSearchGoal(area)
+    if (!goal) return invalidStep('searchArea 无效')
+    const result = await ctx.capabilities.setPathfinderGoal({ position: goal, radius: 1 })
+    if (ctx.cancelToken.cancelled) {
+      ctx.capabilities.clearPathfinderGoal()
+      return running(this.result())
+    }
+    if (result.status === 'unavailable') return failed('PATHFINDER_UNAVAILABLE', 'pathfinder 不可用')
+    if (result.status === 'failed') {
+      this.pathFailures++
+      this.searchGoal = undefined
+      return this.pathFailures >= maxPathFailures(ctx.step)
+        ? failed('PATH_NOT_FOUND', result.message ?? '无法规划搜敌路径', this.result())
+        : running(this.result())
+    }
+    this.pathfinderGoals++
+    this.searchGoal = goal
+    return running(this.result())
   }
 
   private async chase(ctx: ScenarioActionContext, entity: ScenarioEntity): Promise<ActionTickResult | undefined> {
@@ -397,8 +469,41 @@ class AttackUntilAction extends BaseScenarioAction {
       return running(this.result())
     }
     if (result.status === 'unavailable') return failed('PATHFINDER_UNAVAILABLE', 'pathfinder 不可用')
-    if (result.status === 'failed' || failedPath) return failed('PATH_NOT_FOUND', result.message ?? '无法追击目标')
+    if (result.status === 'failed' || failedPath) return this.chaseFailed(ctx, result.message)
+    this.pathFailures = 0
+    this.pathfinderGoals++
     this.chaseGoal = { ...entity.position }
+    return undefined
+  }
+
+  private chaseFailed(ctx: ScenarioActionContext, message: string | undefined): ActionTickResult | undefined {
+    this.pathFailures++
+    this.resetTarget(ctx)
+    if (recordValue(ctx.step.searchArea) && this.pathFailures < maxPathFailures(ctx.step)) return running(this.result())
+    return failed('PATH_NOT_FOUND', message ?? '无法追击目标', this.result())
+  }
+
+  private resetTarget(ctx: ScenarioActionContext): void {
+    ctx.setLockedEntityId(undefined)
+    this.targetEntityId = undefined
+    this.chaseGoal = undefined
+    this.searchGoal = undefined
+    ctx.capabilities.clearPathfinderGoal()
+  }
+
+  private nextSearchGoal(area: Record<string, unknown>): ScenarioPosition | undefined {
+    if (area.type === 'radius') {
+      const center = positionField(area.center)
+      const radius = numberField(area.radius)
+      if (!center || radius === undefined) return undefined
+      const angle = this.searchRandom!.next() * Math.PI * 2
+      const length = Math.sqrt(this.searchRandom!.next()) * radius
+      return { x: center.x + Math.cos(angle) * length, y: center.y, z: center.z + Math.sin(angle) * length }
+    }
+    if (area.type === 'waypoints' && Array.isArray(area.waypoints) && area.waypoints.length > 0) {
+      const index = this.searchRandom!.int(0, area.waypoints.length - 1)
+      return positionField(area.waypoints[index])
+    }
     return undefined
   }
 
@@ -476,18 +581,26 @@ class AttackUntilAction extends BaseScenarioAction {
   }
 
   private finishAtDeadline(ctx: ScenarioActionContext): ActionTickResult {
-    return ctx.step.legacyDurationSuccess === true || this.trustedSatisfied(ctx.step)
-      ? succeeded(this.result())
-      : failed('ATTACK_ASSERTION_UNMET', '攻击截止时可信条件未满足', this.result())
+    if (ctx.step.legacyDurationSuccess === true || this.trustedSatisfied(ctx.step)) return succeeded(this.result())
+    const minClient = positiveNumber(recordValue(ctx.step.stop)?.minClientAttackAttempts, 0)
+    if (minClient > 0) {
+      return this.clientAttackAttempts >= minClient
+        ? succeeded(this.result())
+        : failed('ATTACK_ACTIVITY_UNMET', '攻击截止时客户端攻击活跃度不足', this.result())
+    }
+    return failed('ATTACK_ASSERTION_UNMET', '攻击截止时可信条件未满足', this.result())
   }
 
   private result(): object {
     return {
-      targetEntityId: undefined,
+      targetEntityId: this.targetEntityId,
       trustedDamage: this.damage,
       trustedKills: this.kills,
       trustedDamageEvents: this.damageEvents,
       clientAttackAttempts: this.clientAttackAttempts,
+      respawnCount: this.respawnCount,
+      reacquireCount: this.reacquireCount,
+      pathfinderGoals: this.pathfinderGoals,
       evidenceSatisfied: this.evidenceSatisfied,
     }
   }
@@ -564,7 +677,7 @@ function selectEntity(ctx: ScenarioActionContext, selectorValue: unknown): { ent
   }
   const origin = ctx.capabilities.getPosition()
   const matches = ctx.capabilities.entities().filter((entity) => entityMatches(entity, selector, regex, origin))
-  matches.sort((left, right) => compareEntities(left, right, selector.priority, origin))
+  matches.sort((left, right) => compareEntities(ctx, left, right, selector.priority, origin))
   return { entity: matches[0] }
 }
 
@@ -585,17 +698,27 @@ function entityMatches(
 }
 
 function compareEntities(
+  ctx: ScenarioActionContext,
   left: ScenarioEntity,
   right: ScenarioEntity,
   priority: unknown,
   origin: ScenarioPosition | undefined
 ): number {
+  if (priority === 'random') {
+    const leftScore = stableEntityScore(ctx, left)
+    const rightScore = stableEntityScore(ctx, right)
+    if (leftScore !== rightScore) return leftScore - rightScore
+  }
   if (priority === 'lowest_health') {
     const health = (left.health ?? Number.POSITIVE_INFINITY) - (right.health ?? Number.POSITIVE_INFINITY)
     if (health !== 0) return health
   }
   const distanceDelta = distance(origin, left.position) - distance(origin, right.position)
   return distanceDelta !== 0 ? distanceDelta : String(left.id).localeCompare(String(right.id))
+}
+
+function stableEntityScore(ctx: ScenarioActionContext, entity: ScenarioEntity): number {
+  return hashSeed(`${ctx.seed ?? 0}|${ctx.botOrdinal ?? 0}|${ctx.step.id}|${String(entity.id)}`)
 }
 
 function entityAlive(entity: ScenarioEntity): boolean {

@@ -93,6 +93,7 @@ type ScenarioAttackStop struct {
 	ProbeEvent               string `json:"probeEvent,omitempty" yaml:"probeEvent,omitempty"`
 	EvidenceWindowMS         int    `json:"evidenceWindowMs,omitempty" yaml:"evidenceWindowMs,omitempty"`
 	MinDamageEventsPerWindow int    `json:"minDamageEventsPerWindow,omitempty" yaml:"minDamageEventsPerWindow,omitempty"`
+	MinClientAttackAttempts  int    `json:"minClientAttackAttempts,omitempty" yaml:"minClientAttackAttempts,omitempty"`
 	SuccessPolicy            string `json:"successPolicy,omitempty" yaml:"successPolicy,omitempty"`
 }
 
@@ -100,6 +101,13 @@ type ScenarioAttackStop struct {
 type ScenarioBarrierRelease struct {
 	Type  string `json:"type" yaml:"type"`
 	Value int    `json:"value,omitempty" yaml:"value,omitempty"`
+}
+
+// ScenarioAttackRespawn 是 attack_until 内联重生配置。
+type ScenarioAttackRespawn struct {
+	MaxAttempts    int `json:"maxAttempts" yaml:"maxAttempts"`
+	RetryBackoffMS int `json:"retryBackoffMs,omitempty" yaml:"retryBackoffMs,omitempty"`
+	TimeoutMS      int `json:"timeoutMs,omitempty" yaml:"timeoutMs,omitempty"`
 }
 
 // WaitSpawnAction 等待 Bot spawn。
@@ -155,11 +163,14 @@ type FindEntityAction struct {
 type AttackUntilAction struct {
 	ScenarioActionBase      `yaml:",inline"`
 	Selector                ScenarioEntitySelector `json:"selector" yaml:"selector"`
+	SearchArea              *ScenarioArea          `json:"searchArea,omitempty" yaml:"searchArea,omitempty"`
 	Stop                    ScenarioAttackStop     `json:"stop" yaml:"stop"`
 	AttackIntervalMS        int                    `json:"attackIntervalMs" yaml:"attackIntervalMs"`
 	Chase                   bool                   `json:"chase,omitempty" yaml:"chase,omitempty"`
 	Reacquire               bool                   `json:"reacquire,omitempty" yaml:"reacquire,omitempty"`
 	TargetNotFoundTimeoutMS int                    `json:"targetNotFoundTimeoutMs,omitempty" yaml:"targetNotFoundTimeoutMs,omitempty"`
+	MaxPathFailures         int                    `json:"maxPathFailures,omitempty" yaml:"maxPathFailures,omitempty"`
+	Respawn                 *ScenarioAttackRespawn `json:"respawn,omitempty" yaml:"respawn,omitempty"`
 	LegacyDurationSuccess   bool                   `json:"legacyDurationSuccess,omitempty" yaml:"legacyDurationSuccess,omitempty"`
 }
 

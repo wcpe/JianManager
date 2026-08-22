@@ -139,7 +139,7 @@ export class ScenarioRunner {
       await this.rejectResume(now)
       return
     }
-    if (this.runDeadlineReached(now)) {
+    if (!this.current && this.runDeadlineReached(now)) {
       this.attempt = 1
       await this.createCurrent(now)
       await this.timeoutAttempt(now)
@@ -169,11 +169,11 @@ export class ScenarioRunner {
 
   private async tickInternal(now: number): Promise<void> {
     if (!this.started || this.terminal || this.disposed) return
-    if (this.current && this.runDeadlineReached(now)) {
+    if (this.current && this.runDeadlineReached(now) && !canSettleAttackDuration(this.current, now)) {
       await this.timeoutAttempt(now)
       return
     }
-    if (this.runDeadlineReached(now)) {
+    if (!this.current && this.runDeadlineReached(now)) {
       await this.expireRun(now)
       return
     }
@@ -183,7 +183,7 @@ export class ScenarioRunner {
     }
     const attempt = this.current
     const stepDeadlineReached = now >= attempt.context.deadline
-    if (stepDeadlineReached && !canResolveAtDeadline(attempt, now)) {
+    if (stepDeadlineReached && !canResolveAtDeadline(attempt, now) && !canSettleAttackDuration(attempt, now)) {
       await this.timeoutAttempt(now)
       return
     }
@@ -194,7 +194,7 @@ export class ScenarioRunner {
       else await this.completeAttempt(result.state, result, now)
       return
     }
-    if (stepDeadlineReached) await this.timeoutAttempt(now)
+    if (stepDeadlineReached || this.runDeadlineReached(now)) await this.timeoutAttempt(now)
   }
 
   private async startAttempt(now: number): Promise<void> {
@@ -490,6 +490,12 @@ function canResolveAtDeadline(attempt: CurrentAttempt, now: number): boolean {
     && durationMs > 0
     && durationMs <= attempt.step.timeoutMs
     && attempt.context.startedAt + durationMs <= now
+}
+
+function canSettleAttackDuration(attempt: CurrentAttempt, now: number): boolean {
+  if (attempt.step.type !== 'attack_until') return false
+  const durationMs = intrinsicDurationMs(attempt.step)
+  return durationMs !== undefined && durationMs > 0 && attempt.context.startedAt + durationMs <= now
 }
 
 function canAcceptBarrierDecision(
