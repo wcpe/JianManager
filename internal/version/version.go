@@ -9,7 +9,7 @@ package version
 //
 // 真值由发布/构建管线（FR-173、`make dist`）在 go build 时经 -ldflags 注入覆盖此默认值：
 // go build -ldflags "-X github.com/wcpe/JianManager/internal/version.Version=X.Y.Z"
-var Version = "0.21.0-dev"
+var Version = "0.21.0"
 
 // Requested 报告命令行是否请求只输出版本并立即退出。
 func Requested(args []string) bool {

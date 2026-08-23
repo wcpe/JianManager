@@ -51,7 +51,7 @@
 `internal/version/version.go` 的 `Version` 是源码版本单一真源。当前正式发布提交为：
 
 ```text
-0.18.0
+0.21.0
 ```
 
 `metadata` job 使用 `actions/checkout` 的 `fetch-depth: 0`，执行 `node scripts/release-metadata.mjs`，读取源码版本并联合校验 Git ref、提交 SHA 与当前提交的精确 tag。后续 job 只消费它输出的 `version`、`release_tag`、`is_release`、`publish_release`。
@@ -160,7 +160,7 @@ task dist
 | `release-metadata.mjs` 从源码读取版本并校验正式 tag | 工作区已实现 |
 | 正式 `vX.Y.Z` 与二进制 `X.Y.Z` 分离 | 工作区已实现 |
 | 开发构建为 `X.Y.Z-dev+g<sha>` | 工作区已实现 |
-| 正式发布提交源码版本为 `0.18.0` | 已确认 |
+| 正式发布提交源码版本为 `0.21.0` | 已确认 |
 | Bot Worker build / audit / typecheck / lint 后内嵌 CP | 工作区已实现 |
 | Go 1.26.2 / Node.js 22 工具链 | 工作区已实现 |
 | 四个最终二进制在 Linux/Windows 原生 runner smoke | 工作区已实现 |
