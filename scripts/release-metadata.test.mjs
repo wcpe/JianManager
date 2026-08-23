@@ -6,8 +6,10 @@ import { extractSourceVersion, resolveReleaseMetadata } from './release-metadata
 
 test('master 推送与正式 tag 必须触发 CI', () => {
   const ciWorkflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  const releaseWorkflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
   assert.match(ciWorkflow, /^    branches:\s*\['\*\*'\]\s*$/m)
   assert.match(ciWorkflow, /^  push:\r?\n(?:    .*\r?\n)*?    tags:\s*\['v\*'\]\s*$/m)
+  assert.match(releaseWorkflow, /name: Checkout（读取源码版本与当前提交 tag）[\s\S]*?submodules: true/)
 })
 
 test('ServerProbe 私有仓库不得拦截公共 Gradle 插件解析', () => {
