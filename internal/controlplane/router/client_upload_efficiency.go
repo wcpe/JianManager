@@ -195,10 +195,9 @@ func (h *ClientUploadEfficiencyHandler) recordAudit(c *gin.Context, action strin
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
 	uid, _ := c.Get(middleware.CtxUserID)
 	id, _ := uid.(uint)
-	_ = h.audit.Record(id, action, "client_channel", "", string(raw), c.ClientIP())
+	h.audit.RecordSafe(id, action, "client_channel", "", marshalAuditDetail(detail), c.ClientIP())
 }
 
 // RegisterRoutes 注册上传增效端点（运营操作，须挂 JWT 平台管理员组）。

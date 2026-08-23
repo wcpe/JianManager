@@ -88,6 +88,7 @@ func allocPortsForNode(db *gorm.DB, nodeID uint) (AllocatedPorts, error) {
 	used := make(map[int]bool)
 	for _, in := range instances {
 		// in.RCONPort 为历史实例残留（新实例不再分配）：仍计入占用以免新端口撞上旧 rcon 端口。
+		//nolint:staticcheck // 为避免新分配端口撞上历史 RCON 端口，仍须读取兼容字段。
 		for _, p := range []int{in.ServerPort, in.RCONPort, in.QueryPort, in.ProbePort} {
 			if p > 0 {
 				used[p] = true

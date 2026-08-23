@@ -102,7 +102,7 @@ func cloneIncluded(rel string, include []string) bool {
 			return true
 		}
 		if !strings.Contains(pat, "/") {
-			if ok, _ := path.Match(pat, first); ok {
+			if ok, err := path.Match(pat, first); err == nil && ok {
 				return true
 			}
 		}
@@ -123,7 +123,7 @@ func cloneExcluded(rel string, patterns []string) bool {
 			return true
 		}
 		if !strings.Contains(pat, "/") {
-			if ok, _ := path.Match(pat, base); ok {
+			if ok, err := path.Match(pat, base); err == nil && ok {
 				return true
 			}
 		}

@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -25,7 +24,7 @@ func NewRuntimeAssetsHandler(svc *service.RuntimeAssetsService, audit *service.A
 }
 
 // Overview GET /runtime-assets/overview — 一次性返回 JDK 矩阵 + 引用关系 + 制品分组统计
-//（FR-301 起另含 runtimes 多运行时矩阵 / runtimeSyncs / syncedAt，加性扩展）。
+// （FR-301 起另含 runtimes 多运行时矩阵 / runtimeSyncs / syncedAt，加性扩展）。
 func (h *RuntimeAssetsHandler) Overview(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -59,10 +58,10 @@ func (h *RuntimeAssetsHandler) Refresh(c *gin.Context) {
 				okCount++
 			}
 		}
-		raw, _ := json.Marshal(map[string]any{
+		detail := marshalAuditDetail(map[string]any{
 			"total": len(outcome.Results), "ok": okCount, "failed": len(outcome.Results) - okCount,
 		})
-		_ = h.audit.Record(userID, "runtime_assets.refresh", "platform", "", string(raw), c.ClientIP())
+		h.audit.RecordSafe(userID, "runtime_assets.refresh", "platform", "", detail, c.ClientIP())
 	}
 	c.JSON(http.StatusOK, outcome)
 }

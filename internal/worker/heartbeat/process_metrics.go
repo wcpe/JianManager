@@ -97,11 +97,11 @@ func processTree(ctx context.Context, root *gopsprocess.Process, limit int) []*g
 }
 
 func sampleProcess(ctx context.Context, instanceUUID string, p *gopsprocess.Process, sampledAt int64) *workerpb.ProcessMetricSample {
-	name, _ := p.NameWithContext(ctx)
-	cpuPercent, _ := p.CPUPercentWithContext(ctx)
-	mem, _ := p.MemoryInfoWithContext(ctx)
-	user, _ := p.UsernameWithContext(ctx)
-	args, _ := p.CmdlineSliceWithContext(ctx)
+	name := optionalMetricValue(p.NameWithContext(ctx))
+	cpuPercent := optionalMetricValue(p.CPUPercentWithContext(ctx))
+	mem := optionalMetricValue(p.MemoryInfoWithContext(ctx))
+	user := optionalMetricValue(p.UsernameWithContext(ctx))
+	args := optionalMetricValue(p.CmdlineSliceWithContext(ctx))
 	rss := uint64(0)
 	if mem != nil {
 		rss = mem.RSS
@@ -122,6 +122,15 @@ func sampleProcess(ctx context.Context, instanceUUID string, p *gopsprocess.Proc
 		ReadBytesPerSec:  readBps,
 		WriteBytesPerSec: writeBps,
 	}
+}
+
+// optionalMetricValue 把单项采样失败视为缺测，避免权限或进程退出中断其他指标采集。
+func optionalMetricValue[T any](value T, err error) T {
+	if err == nil {
+		return value
+	}
+	var zero T
+	return zero
 }
 
 func topProcessSamples(samples []*workerpb.ProcessMetricSample, limit int) []*workerpb.ProcessMetricSample {

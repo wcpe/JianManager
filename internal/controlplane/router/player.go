@@ -241,16 +241,22 @@ func (h *PlayerHandler) PlayersEvents(c *gin.Context) {
 	ch, unsub := h.eventSvc.Subscribe(instanceUUID)
 	defer unsub()
 
+	// 初始帧：当前探针连接状态 + 在线名册快照，前端据此渲染初始在线列表与未连入提示。
+	snapshot := h.eventSvc.OnlineSnapshot(instanceUUID)
+	connected := h.eventSvc.IsProbeConnected(instanceUUID)
+	initBytes, err := json.Marshal(gin.H{"connected": connected, "players": snapshot})
+	if err != nil {
+		slog.Error("序列化玩家 SSE 初始帧失败", "instanceUUID", instanceUUID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
 
-	// 初始帧：当前探针连接状态 + 在线名册快照，前端据此渲染初始在线列表与未连入提示。
-	snapshot := h.eventSvc.OnlineSnapshot(instanceUUID)
-	connected := h.eventSvc.IsProbeConnected(instanceUUID)
-	initBytes, _ := json.Marshal(gin.H{"connected": connected, "players": snapshot})
 	fmt.Fprintf(c.Writer, "event: init\ndata: %s\n\n", initBytes)
 	c.Writer.Flush()
 
@@ -289,8 +295,7 @@ func (h *PlayerHandler) recordAudit(c *gin.Context, action, player string, detai
 		return
 	}
 	payload := map[string]any{"player": player, "detail": detail}
-	raw, _ := json.Marshal(payload)
-	_ = h.audit.Record(h.actorID(c), action, "player", player, string(raw), c.ClientIP())
+	h.audit.RecordSafe(h.actorID(c), action, "player", player, marshalAuditDetail(payload), c.ClientIP())
 }
 
 // RegisterRoutes 注册玩家管理路由（FR-054）。

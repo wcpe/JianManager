@@ -47,7 +47,9 @@ func (s *Server) RemoveInstance(ctx context.Context, req *workerpb.RemoveInstanc
 	}
 
 	// 先移除注册（幂等：不存在返回 nil），实例从此不可再被启动/文件操作。
-	_ = s.manager.Remove(req.InstanceUuid)
+	if err := s.manager.Remove(req.InstanceUuid); err != nil {
+		return &workerpb.RemoveInstanceResponse{Success: false, Error: fmt.Sprintf("移除实例注册失败: %v", err)}, nil
+	}
 
 	// FR-310：删除运行中 daemon 实例的竞态——manager.Remove 只杀 wrapper 组，Unix 上自成进程组的
 	// Java 子进程未死，会在下方 RemoveAll 之后继续写 world region 把工作目录重建出来（且遗留 pid/sock）。

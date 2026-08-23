@@ -411,7 +411,9 @@ func (s *ArtifactReconcileService) executeRun(run *model.ArtifactReconcileRun, c
 	// 终态：一个事务写差异明细 + 更新运行行。
 	now := s.now().UTC()
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		diffs := append(missing, orphans...)
+		diffs := make([]model.ArtifactReconcileDiff, 0, len(missing)+len(orphans))
+		diffs = append(diffs, missing...)
+		diffs = append(diffs, orphans...)
 		if len(diffs) > 0 {
 			if derr := tx.CreateInBatches(diffs, 200).Error; derr != nil {
 				return fmt.Errorf("落差异明细失败: %w", derr)

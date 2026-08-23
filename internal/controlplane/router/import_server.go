@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -76,8 +75,7 @@ func (h *ImportServerHandler) recordAudit(c *gin.Context, action string, detail 
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
-	_ = h.audit.Record(getUserID(c), action, "instance", "", string(raw), c.ClientIP())
+	h.audit.RecordSafe(getUserID(c), action, "instance", "", marshalAuditDetail(detail), c.ClientIP())
 }
 
 // RegisterRoutes 注册导入端点（挂平台管理员组）。

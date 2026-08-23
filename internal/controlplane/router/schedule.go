@@ -2,7 +2,6 @@ package router
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -21,8 +20,7 @@ func NewScheduleHandler(scheduleSvc *service.ScheduleService) *ScheduleHandler {
 func (h *ScheduleHandler) List(c *gin.Context) {
 	var instanceID *uint
 	if v := c.Query("instanceId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
-		u := uint(id)
+		u := uint(parseUintDefault(v, 0))
 		instanceID = &u
 	}
 	schedules, err := h.scheduleSvc.List(instanceID)
@@ -88,8 +86,8 @@ func (h *ScheduleHandler) ListExecutionLogs(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page := parseIntDefault(c.DefaultQuery("page", "1"), 1)
+	pageSize := parseIntDefault(c.DefaultQuery("pageSize", "20"), 20)
 
 	logs, total, err := h.scheduleSvc.ListExecutionLogs(id, page, pageSize)
 	if err != nil {

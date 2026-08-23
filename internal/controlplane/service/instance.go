@@ -261,7 +261,10 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		Status:           model.InstanceStatusStopped,
 	}
 	if len(req.EnvVars) > 0 {
-		raw, _ := json.Marshal(req.EnvVars)
+		raw, err := json.Marshal(req.EnvVars)
+		if err != nil {
+			return nil, fmt.Errorf("序列化实例环境变量失败: %w", err)
+		}
 		instance.EnvVars = string(raw)
 	}
 
@@ -674,12 +677,18 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 		updates["jdk_id"] = *f.JDKID
 	}
 	if f.EnvVars != nil {
-		raw, _ := json.Marshal(*f.EnvVars)
+		raw, err := json.Marshal(*f.EnvVars)
+		if err != nil {
+			return nil, fmt.Errorf("序列化实例环境变量失败: %w", err)
+		}
 		updates["env_vars"] = string(raw)
 	}
 	if f.Tags != nil {
 		// 规范化后持久化为 JSON；空集合落 "null"，ParseTags 读回为空，等价清空标签。
-		raw, _ := json.Marshal(model.NormalizeTags(*f.Tags))
+		raw, err := json.Marshal(model.NormalizeTags(*f.Tags))
+		if err != nil {
+			return nil, fmt.Errorf("序列化实例标签失败: %w", err)
+		}
 		updates["tags"] = string(raw)
 	}
 	// docker 资源限额（FR-079）：传指针即写入（含 0=清除限制）。变更对下一次启动生效（启动时随 spec 定型）。
@@ -1227,7 +1236,9 @@ func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (
 	// 把存储为 JSON 字符串的 EnvVars 解出来，原样下发给 Worker 注入到进程环境。
 	var envVars map[string]string
 	if strings.TrimSpace(instance.EnvVars) != "" {
-		_ = json.Unmarshal([]byte(instance.EnvVars), &envVars)
+		if err := json.Unmarshal([]byte(instance.EnvVars), &envVars); err != nil {
+			return nil, fmt.Errorf("解析实例环境变量失败: %w", err)
+		}
 	}
 
 	// 解析实例绑定的 JDK 安装路径下发给 Worker：Worker 启动时据此注入 JAVA_HOME 并把
@@ -1979,7 +1990,10 @@ func (s *InstanceService) GetInstanceEnv(id uint) (*InstanceEnvData, error) {
 	}
 	data := &InstanceEnvData{Configured: map[string]string{}}
 	if strings.TrimSpace(instance.EnvVars) != "" {
-		_ = json.Unmarshal([]byte(instance.EnvVars), &data.Configured)
+		if err := json.Unmarshal([]byte(instance.EnvVars), &data.Configured); err != nil {
+			data.Note = "解析已配置环境变量失败: " + err.Error()
+			return data, nil
+		}
 	}
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {

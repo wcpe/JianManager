@@ -245,7 +245,9 @@ func unmarshalDist(s string) map[string]int64 {
 		return map[string]int64{}
 	}
 	m := map[string]int64{}
-	_ = json.Unmarshal([]byte(s), &m)
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		slog.Warn("解析客户端分发统计失败，已忽略损坏数据", "error", err)
+	}
 	return m
 }
 

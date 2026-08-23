@@ -407,13 +407,16 @@ func (s *Server) GetInstanceStatus(ctx context.Context, req *workerpb.InstanceAc
 // ListInstances 列出所有实例。
 func (s *Server) ListInstances(ctx context.Context, req *workerpb.ListInstancesRequest) (*workerpb.ListInstancesResponse, error) {
 	instances := s.manager.ListInstances()
-	result := make([]*workerpb.InstanceInfo, len(instances))
-	for i, inst := range instances {
-		state, _ := s.manager.GetState(inst)
-		result[i] = &workerpb.InstanceInfo{
+	result := make([]*workerpb.InstanceInfo, 0, len(instances))
+	for _, inst := range instances {
+		state, err := s.manager.GetState(inst)
+		if err != nil {
+			continue
+		}
+		result = append(result, &workerpb.InstanceInfo{
 			InstanceUuid: inst,
 			State:        string(state),
-		}
+		})
 	}
 	return &workerpb.ListInstancesResponse{Instances: result}, nil
 }
@@ -471,7 +474,7 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 			}
 			// FR-343 系统级基础指标：无需 ServerProbe，直接采进程 CPU%/运行时长，让未部署/未连探针的
 			// 运行中实例在概览也有真实 CPU 与运行时长（内存 RSS 上面已采）。CPUPercent 为累计 CPU%
-			//（与 FR-170 进程采样器同源、非阻塞）；uptime 由进程创建时刻推算。探针可用时下方会覆盖。
+			// （与 FR-170 进程采样器同源、非阻塞）；uptime 由进程创建时刻推算。探针可用时下方会覆盖。
 			if cpu, err := proc.CPUPercentWithContext(ctx); err == nil {
 				resp.CpuPercent = cpu
 			}
@@ -671,7 +674,7 @@ func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest
 				return
 			}
 			// 成功结果序列化进任务 result，供 CP 终态副作用落 NodeJDK。
-			result, _ := json.Marshal(jdkResult{
+			result, err := json.Marshal(jdkResult{
 				Vendor:       info.Vendor,
 				MajorVersion: info.MajorVersion,
 				Version:      info.Version,
@@ -679,6 +682,10 @@ func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest
 				Path:         info.Path,
 				Managed:      info.Managed,
 			})
+			if err != nil {
+				s.tasks.Fail(taskID, "序列化 JDK 安装结果失败: "+err.Error())
+				return
+			}
 			s.tasks.Succeed(taskID, string(result))
 		}()
 		return &workerpb.InstallJDKResponse{Success: true, TaskId: taskID}, nil
@@ -924,7 +931,10 @@ func matchesBotWorkerGeneration(event *bot.BotWorkerEvent, subscriberGeneration,
 	if event == nil || event.WorkerEpochGeneration == 0 {
 		return true
 	}
-	return event.WorkerEpochGeneration == currentGeneration && event.WorkerEpochGeneration == subscriberGeneration
+	if event.WorkerEpochGeneration != subscriberGeneration {
+		return false
+	}
+	return subscriberGeneration == currentGeneration
 }
 
 func dispatchBotEventNonBlocking(ch chan *bot.BotWorkerEvent, event *bot.BotWorkerEvent) {
@@ -1176,7 +1186,11 @@ func botWorkerEventToProto(event *bot.BotWorkerEvent, filter string) []*workerpb
 		if filter != "" && event.BotID != filter {
 			return nil
 		}
-		data, _ := json.Marshal(map[string]string{"error": event.Error})
+		data, err := json.Marshal(map[string]string{"error": event.Error})
+		if err != nil {
+			slog.Error("序列化 Bot 错误事件失败", "botId", event.BotID, "error", err)
+			return nil
+		}
 		return []*workerpb.BotEvent{{
 			BotUuid:   event.BotID,
 			Type:      "error",
@@ -1187,13 +1201,17 @@ func botWorkerEventToProto(event *bot.BotWorkerEvent, filter string) []*workerpb
 		if filter != "" && event.BotID != filter {
 			return nil
 		}
-		data, _ := json.Marshal(map[string]any{
+		data, err := json.Marshal(map[string]any{
 			"scriptId": event.ScriptID,
 			"progress": event.Progress,
 			"total":    event.Total,
 			"status":   event.Status,
 			"step":     event.Step,
 		})
+		if err != nil {
+			slog.Error("序列化 Bot 脚本进度事件失败", "botId", event.BotID, "error", err)
+			return nil
+		}
 		return []*workerpb.BotEvent{{
 			BotUuid:   event.BotID,
 			Type:      "script-progress",

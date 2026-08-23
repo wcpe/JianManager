@@ -70,14 +70,7 @@ func TestManager_ReplayDesiredUsesBatchAndIdempotency(t *testing.T) {
 		return nil
 	}
 	configs := make([]BotConfig, 0, 55)
-	for i := 0; i < 55; i++ {
-		configs = append(configs, BotConfig{
-			ID: "bot-" + string(rune('a'+i%26)) + string(rune('0'+i/26)),
-			Generation: 1, ConfigHash: "hash", SessionID: "run",
-		})
-	}
 	// 使用稳定 id
-	configs = nil
 	for i := 0; i < 55; i++ {
 		configs = append(configs, BotConfig{
 			ID:         "bot-" + itoa(i),

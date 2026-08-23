@@ -226,24 +226,6 @@ func (s *BotLoadExecutionService) SetRunIntentService(intents *BotLoadRunIntentS
 	s.intents = intents
 }
 
-// recordRunEvent 在事务内追加一条 bot_load_run_events（幂等：同 actionRunId+type 只写一次）。
-func (s *BotLoadExecutionService) recordRunEvent(ctx context.Context, sessionID uint, runUUID string, eventType model.BotLoadRunEventType, payload map[string]any) {
-	if s == nil || s.db == nil || runUUID == "" {
-		return
-	}
-	payloadJSON, err := EncodeJSON(payload)
-	if err != nil {
-		return
-	}
-	ev := &model.BotLoadRunEvent{
-		StressSessionID: sessionID, RunUUID: runUUID, Type: eventType,
-		OccurredAt: s.clock.Now().UTC(), PayloadJSON: payloadJSON,
-	}
-	if err := s.db.WithContext(ctx).Create(ev).Error; err != nil {
-		slog.Debug("写入运行事件失败", "runId", sessionID, "type", eventType, "error", err)
-	}
-}
-
 // RecoverFleetSubscriptions 从持久化活动批次恢复已连接节点的 Fleet 订阅，不重派任务或重建 Bot。
 func (s *BotLoadExecutionService) RecoverFleetSubscriptions(ctx context.Context, connectedNodeUUIDs []string) error {
 	if s == nil || s.db == nil || s.subscriptions == nil || len(connectedNodeUUIDs) == 0 {
@@ -951,7 +933,11 @@ func botLoadAssignmentConfigHash(assignment *workerpb.BotAssignment) string {
 		ConnectNotBefore: assignment.ConnectNotBeforeUnixMs, ScenarioJSON: assignment.ScenarioJson,
 		ResumeStepID: assignment.ResumeStepId, CorrelationSeed: assignment.CorrelationSeed,
 	}
-	raw, _ := json.Marshal(canonical)
+	raw, err := json.Marshal(canonical)
+	if err != nil {
+		slog.Error("序列化 Bot 分配配置摘要失败", "botUuid", assignment.BotUuid, "error", err)
+		return ""
+	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
@@ -1335,7 +1321,11 @@ func structuredBotLoadError(code, status, message string) string {
 		Status  string `json:"status"`
 		Message string `json:"message"`
 	}{Code: code, Status: status, Message: message}
-	raw, _ := json.Marshal(value)
+	raw, err := json.Marshal(value)
+	if err != nil {
+		slog.Error("序列化 Bot 派发错误失败", "error", err)
+		return code
+	}
 	return string(raw)
 }
 
@@ -1554,7 +1544,11 @@ func botLoadStopSessionError(state, message string, reasons ...string) string {
 		Message   string `json:"message,omitempty"`
 		Reason    string `json:"reason,omitempty"`
 	}{Operation: "stop", State: state, Message: message, Reason: reason}
-	raw, _ := json.Marshal(value)
+	raw, err := json.Marshal(value)
+	if err != nil {
+		slog.Error("序列化停止 Bot 会话错误失败", "error", err)
+		return message
+	}
 	return string(raw)
 }
 
@@ -1772,8 +1766,10 @@ func (s *BotLoadExecutionService) cancelCommandSchedulesForBots(ctx context.Cont
 	// 本地将仍 open 的 checkpoint 标 cancelled（Worker 异步终态仍可再写，幂等）
 	ck := NewBotLoadCommandCheckpointService(s.db)
 	for _, row := range rows {
-		_ = ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
-			model.BotLoadCommandCheckpointCancelled, row.Attempt, ActionErrorCancelled)
+		if err := ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
+			model.BotLoadCommandCheckpointCancelled, row.Attempt, ActionErrorCancelled); err != nil {
+			return fmt.Errorf("标记已取消的 Bot 命令检查点失败: %w", err)
+		}
 	}
 	return nil
 }
@@ -2109,7 +2105,11 @@ func buildBotLoadReconcileRequest(sessionUUID string, generation int64, items []
 	for _, item := range items {
 		assignments = append(assignments, item.assignment)
 	}
-	raw, _ := json.Marshal(assignments)
+	raw, err := json.Marshal(assignments)
+	if err != nil {
+		slog.Error("序列化 Bot 对账分配摘要失败", "sessionUuid", sessionUUID, "error", err)
+		raw = nil
+	}
 	identity := fmt.Sprintf("reconcile|%s|%d|%s", sessionUUID, generation, stableBotLoadDigest(string(raw)))
 	expected := generation
 	for _, item := range items {
@@ -2283,21 +2283,6 @@ func (s *BotLoadExecutionService) drainLifecycle(key string) {
 		}
 		s.taskMu.Unlock()
 	}
-}
-
-func (s *BotLoadExecutionService) submitOnce(key string, task func()) error {
-	if !s.beginTask(key) {
-		return nil
-	}
-	err := s.runner.Submit(func() {
-		defer s.finishTask(key)
-		task()
-	})
-	if err != nil {
-		s.finishTask(key)
-		return fmt.Errorf("提交 Bot 负载后台任务失败: %w", err)
-	}
-	return nil
 }
 
 func (s *BotLoadExecutionService) beginTask(key string) bool {

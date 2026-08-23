@@ -262,7 +262,9 @@ func (d *daemonStrategy) Stop() error {
 	cmd := d.wrapperCmd
 	d.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
-		_ = killProcessTree(cmd)
+		if err := killProcessTree(cmd); err != nil {
+			return fmt.Errorf("停止 wrapper 进程树失败: %w", err)
+		}
 	}
 	return nil
 }
@@ -294,7 +296,9 @@ func (d *daemonStrategy) Kill() error {
 	conn := d.conn
 	d.mu.Unlock()
 	if conn != nil {
-		_ = d.sendControl(daemon.ControlKill)
+		if err := d.sendControl(daemon.ControlKill); err != nil {
+			slog.Warn("向 wrapper 下发强制停止失败，继续终止进程树", "instanceId", d.spec.UUID, "error", err)
+		}
 	}
 	// 兜底：直接终止 wrapper。必须杀整棵进程树（wrapper→cmd.exe→Java），不能只杀 wrapper PID——
 	// 否则 Windows 上 wrapper 被单独杀掉后 Java 孤儿化、继续占监听端口，重启时新进程端口冲突
@@ -303,7 +307,9 @@ func (d *daemonStrategy) Kill() error {
 	cmd := d.wrapperCmd
 	d.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
-		_ = killProcessTree(cmd)
+		if err := killProcessTree(cmd); err != nil {
+			return fmt.Errorf("终止 wrapper 进程树失败: %w", err)
+		}
 	}
 	return nil
 }

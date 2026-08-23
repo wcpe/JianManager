@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
@@ -62,8 +63,8 @@ type ClientDistEventInput struct {
 // ClientDistEventDetail 单条分发请求详情（FR-265）。
 type ClientDistEventDetail struct {
 	model.ClientDistEvent
-	PlayerName     string            `json:"playerName"`
-	CoreVersion    string            `json:"coreVersion"`
+	PlayerName      string            `json:"playerName"`
+	CoreVersion     string            `json:"coreVersion"`
 	RequestBody     string            `json:"requestBody"`
 	ResponseBody    string            `json:"responseBody"`
 	RequestHeaders  map[string]string `json:"requestHeaders"`
@@ -85,7 +86,7 @@ type ClientDistEventSearchFilter struct {
 // ClientDistEventView 分发事件与运行态诊断字段（FR-357，运行态字段为尽力关联）。
 type ClientDistEventView struct {
 	model.ClientDistEvent
-	PlayerName string `json:"playerName"`
+	PlayerName  string `json:"playerName"`
 	CoreVersion string `json:"coreVersion"`
 }
 
@@ -99,10 +100,10 @@ type ClientDistEventPage struct {
 
 // ClientDistErrorSummaryQuery 错误摘要查询条件（FR-357）。
 type ClientDistErrorSummaryQuery struct {
-	ChannelID string
-	From      time.Time
-	To        time.Time
-	TopN      int
+	ChannelID   string
+	From        time.Time
+	To          time.Time
+	TopN        int
 	SampleLimit int
 }
 
@@ -217,6 +218,13 @@ func (s *ClientDistTrackingService) Record(e ClientDistEventInput) error {
 	}).Error
 }
 
+// RecordSafe 记录不应阻断玩家请求的分发事件；失败时保留告警供运维排查。
+func (s *ClientDistTrackingService) RecordSafe(e ClientDistEventInput) {
+	if err := s.Record(e); err != nil {
+		slog.Warn("记录客户端分发事件失败", "kind", e.Kind, "channelId", e.ChannelID, "status", e.Status, "error", err)
+	}
+}
+
 // Cleanup 删除早于保留期的明细行（聚合长留）；返回删除行数。
 func (s *ClientDistTrackingService) Cleanup() (int64, error) {
 	cutoff := time.Now().Add(-time.Duration(s.retentionDays) * 24 * time.Hour)
@@ -234,7 +242,9 @@ func (s *ClientDistTrackingService) Start() {
 			case <-s.stop:
 				return
 			case <-t.C:
-				_, _ = s.Cleanup()
+				if _, err := s.Cleanup(); err != nil {
+					slog.Warn("清理客户端分发事件失败", "error", err)
+				}
 			}
 		}
 	}()
@@ -715,7 +725,11 @@ func mustJSON(v map[string]string) string {
 	if len(v) == 0 {
 		return "{}"
 	}
-	b, _ := json.Marshal(v)
+	b, err := json.Marshal(v)
+	if err != nil {
+		slog.Error("序列化客户端请求头失败", "error", err)
+		return "{}"
+	}
 	return string(b)
 }
 
@@ -724,6 +738,8 @@ func parseHeaderJSON(s string) map[string]string {
 	if s == "" {
 		return out
 	}
-	_ = json.Unmarshal([]byte(s), &out)
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		slog.Warn("解析客户端请求头失败，已忽略损坏数据", "error", err)
+	}
 	return out
 }

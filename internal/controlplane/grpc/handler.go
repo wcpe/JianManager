@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
+	"context"
 	"github.com/google/uuid"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -377,18 +377,18 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 
 func managedRuntimeUpdates(snapshot *workerpb.ManagedRuntimeSnapshot) map[string]interface{} {
 	updates := map[string]interface{}{
-		"managed_runtime_observed_at": nil,
-		"worker_process_rss_bytes":    nil,
-		"worker_process_cpu_pct":      nil,
-		"bot_worker_rss_bytes":        nil,
-		"bot_worker_cpu_pct":          nil,
-		"bot_active_count":            nil,
-		"bot_connecting_count":        nil,
-		"bot_event_loop_p95_ms":       nil,
-		"bot_capacity_max":            nil,
+		"managed_runtime_observed_at":     nil,
+		"worker_process_rss_bytes":        nil,
+		"worker_process_cpu_pct":          nil,
+		"bot_worker_rss_bytes":            nil,
+		"bot_worker_cpu_pct":              nil,
+		"bot_active_count":                nil,
+		"bot_connecting_count":            nil,
+		"bot_event_loop_p95_ms":           nil,
+		"bot_capacity_max":                nil,
 		"bot_capacity_unavailable_reason": "Worker 未上报受管运行时快照",
-		"bot_available":               false,
-		"bot_unavailable_reason":      "Worker 未上报受管运行时快照",
+		"bot_available":                   false,
+		"bot_unavailable_reason":          "Worker 未上报受管运行时快照",
 	}
 	if snapshot == nil {
 		return updates

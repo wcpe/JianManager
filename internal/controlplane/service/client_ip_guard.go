@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -40,7 +41,9 @@ type ClientIPGuardService struct {
 // NewClientIPGuardService 创建 IP 防护服务并载入规则快照。
 func NewClientIPGuardService(db *gorm.DB) *ClientIPGuardService {
 	s := &ClientIPGuardService{db: db}
-	_ = s.reload()
+	if err := s.reload(); err != nil {
+		slog.Error("加载客户端 IP 防护规则失败", "error", err)
+	}
 	return s
 }
 
@@ -112,7 +115,9 @@ func (s *ClientIPGuardService) AddRule(cidr, mode, note string, createdBy uint) 
 	if err := s.db.Create(rule).Error; err != nil {
 		return nil, fmt.Errorf("创建 IP 规则失败: %w", err)
 	}
-	_ = s.reload()
+	if err := s.reload(); err != nil {
+		slog.Warn("新增 IP 防护规则后重载缓存失败", "ruleId", rule.ID, "error", err)
+	}
 	return rule, nil
 }
 
@@ -125,7 +130,9 @@ func (s *ClientIPGuardService) RemoveRule(id uint) error {
 	if res.RowsAffected == 0 {
 		return ErrIPRuleNotFound
 	}
-	_ = s.reload()
+	if err := s.reload(); err != nil {
+		slog.Warn("删除 IP 防护规则后重载缓存失败", "ruleId", id, "error", err)
+	}
 	return nil
 }
 

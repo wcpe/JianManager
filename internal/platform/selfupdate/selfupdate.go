@@ -6,6 +6,7 @@
 package selfupdate
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -17,8 +18,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"golang.org/x/net/context"
 )
 
 // ErrChecksumMismatch 下载产物的 SHA-256 与期望值不符（完整性校验失败，绝不替换）。
@@ -125,7 +124,9 @@ func FileSHA256(path string) (string, error) {
 // 替换在同目录内进行以保证 rename 为原子操作（跨卷 rename 会失败）。
 func ReplaceExecutable(target, newPath string) error {
 	// 收敛新二进制权限为可执行（下载临时文件已 0755，这里再保险）。
-	_ = os.Chmod(newPath, 0o755)
+	if err := os.Chmod(newPath, 0o755); err != nil {
+		return fmt.Errorf("设置新二进制权限失败: %w", err)
+	}
 
 	if runtime.GOOS == "windows" {
 		old := target + ".old"
@@ -135,7 +136,9 @@ func ReplaceExecutable(target, newPath string) error {
 		}
 		if err := os.Rename(newPath, target); err != nil {
 			// 回滚：把旧二进制移回原位，避免目标缺失
-			_ = os.Rename(old, target)
+			if rollbackErr := os.Rename(old, target); rollbackErr != nil {
+				return fmt.Errorf("替换二进制失败，回滚旧二进制也失败: %w", errors.Join(err, rollbackErr))
+			}
 			return fmt.Errorf("替换二进制失败: %w", err)
 		}
 		return nil

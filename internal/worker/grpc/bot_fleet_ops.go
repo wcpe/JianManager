@@ -942,11 +942,12 @@ func botConfigFromAssignment(assignment *workerpb.BotAssignment) bot.BotConfig {
 
 func botItemResultToProto(result bot.BotItemResult) *workerpb.ApplyBotBatchItemResult {
 	statusValue := result.Status
-	if result.Accepted {
+	switch {
+	case result.Accepted:
 		statusValue = botBatchStatusAccepted
-	} else if statusValue == "" && result.Skipped {
+	case statusValue == "" && result.Skipped:
 		statusValue = botBatchStatusConflict
-	} else if statusValue == "" {
+	case statusValue == "":
 		statusValue = botBatchStatusUnavailable
 	}
 	return &workerpb.ApplyBotBatchItemResult{

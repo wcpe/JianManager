@@ -17,17 +17,17 @@ import (
 
 // BotLoadTemplateView 是模板 API 响应 DTO。
 type BotLoadTemplateView struct {
-	ID              uint                    `json:"id"`
-	UUID            string                  `json:"uuid"`
-	Name            string                  `json:"name"`
-	Description     string                  `json:"description"`
-	CommandSchedule json.RawMessage         `json:"commandSchedule"`
-	LoadProfile     BotLoadProfile          `json:"loadProfile"`
-	Thresholds      BotLoadThresholds       `json:"thresholds"`
-	Tags            []string                `json:"tags"`
-	CreatedBy       uint                    `json:"createdBy"`
-	CreatedAt       time.Time               `json:"createdAt"`
-	UpdatedAt       time.Time               `json:"updatedAt"`
+	ID              uint              `json:"id"`
+	UUID            string            `json:"uuid"`
+	Name            string            `json:"name"`
+	Description     string            `json:"description"`
+	CommandSchedule json.RawMessage   `json:"commandSchedule"`
+	LoadProfile     BotLoadProfile    `json:"loadProfile"`
+	Thresholds      BotLoadThresholds `json:"thresholds"`
+	Tags            []string          `json:"tags"`
+	CreatedBy       uint              `json:"createdBy"`
+	CreatedAt       time.Time         `json:"createdAt"`
+	UpdatedAt       time.Time         `json:"updatedAt"`
 }
 
 // BotLoadTemplateInput 创建/更新模板请求。
@@ -238,7 +238,10 @@ func (s *BotLoadTemplateService) CreateRunFromTemplate(
 	verdict := model.BotLoadVerdictPending
 	stage := 0
 	maxStable := 0
-	failSummary, _ := EncodeJSON(EmptyFailureSummary())
+	failSummary, err := EncodeJSON(EmptyFailureSummary())
+	if err != nil {
+		return nil, fmt.Errorf("序列化 Bot 负载失败摘要失败: %w", err)
+	}
 	tplID := tpl.ID
 	sess := &model.BotStressSession{
 		InstanceID:          instanceID,
@@ -328,7 +331,9 @@ func (s *BotLoadTemplateService) viewFromModel(tpl *model.BotLoadTemplate) (*Bot
 	}
 	var tags []string
 	if tpl.Tags != "" {
-		_ = json.Unmarshal([]byte(tpl.Tags), &tags)
+		if err := json.Unmarshal([]byte(tpl.Tags), &tags); err != nil {
+			return nil, fmt.Errorf("解析模板 tags 失败: %w", err)
+		}
 	}
 	if tags == nil {
 		tags = []string{}
@@ -336,7 +341,7 @@ func (s *BotLoadTemplateService) viewFromModel(tpl *model.BotLoadTemplate) (*Bot
 	return &BotLoadTemplateView{
 		ID: tpl.ID, UUID: tpl.UUID, Name: tpl.Name, Description: tpl.Description,
 		CommandSchedule: json.RawMessage(tpl.CommandSchedule),
-		LoadProfile: profile, Thresholds: thresholds, Tags: tags,
+		LoadProfile:     profile, Thresholds: thresholds, Tags: tags,
 		CreatedBy: tpl.CreatedBy, CreatedAt: tpl.CreatedAt, UpdatedAt: tpl.UpdatedAt,
 	}, nil
 }

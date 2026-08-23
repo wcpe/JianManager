@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -277,7 +278,11 @@ func barrierSignalInputs(scope BarrierScope, release *BarrierRelease) []ActionSi
 	if release.SignalType == "barrier-fail" {
 		payloadField = "failAtUnixMs"
 	}
-	payload, _ := json.Marshal(map[string]any{"round": scope.Round, payloadField: release.ReleaseAtUnixMS})
+	payload, err := json.Marshal(map[string]any{"round": scope.Round, payloadField: release.ReleaseAtUnixMS})
+	if err != nil {
+		slog.Error("序列化屏障信号载荷失败", "runId", scope.RunID, "error", err)
+		return nil
+	}
 	inputs := make([]ActionSignalInput, 0, len(release.Pending))
 	for _, participant := range release.Pending {
 		inputs = append(inputs, ActionSignalInput{

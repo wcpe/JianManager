@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -62,10 +61,9 @@ func (h *ClientDistObservabilityHandler) recordAudit(c *gin.Context, channelID s
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(map[string]any{"channelId": channelID})
 	uid, _ := c.Get(middleware.CtxUserID)
 	id, _ := uid.(uint)
-	_ = h.audit.Record(id, "client_dist_observability.query", "client_channel", channelID, string(raw), c.ClientIP())
+	h.audit.RecordSafe(id, "client_dist_observability.query", "client_channel", channelID, marshalAuditDetail(map[string]any{"channelId": channelID}), c.ClientIP())
 }
 
 // parseObsRange 解析查询区间：优先 from/to（RFC3339），否则按 range 枚举回退、默认 7d。

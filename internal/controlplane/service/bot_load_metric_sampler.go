@@ -224,7 +224,10 @@ func (s *BotLoadMetricSampler) SampleSession(ctx context.Context, sessionID uint
 		"scheduleLagP50Ms": nil, "scheduleLagP95Ms": nil, "scheduleLagP99Ms": nil,
 		"barrierReleaseLagP50Ms": nil, "barrierReleaseLagP95Ms": nil, "barrierReleaseLagP99Ms": nil,
 	}
-	latencyJSON, _ := json.Marshal(latency)
+	latencyJSON, err := json.Marshal(latency)
+	if err != nil {
+		return fmt.Errorf("序列化 Bot 延迟指标失败: %w", err)
+	}
 
 	row := model.BotLoadMetricSample{
 		StressSessionID:  sessionID,

@@ -45,7 +45,7 @@ type Reporter struct {
 }
 
 // New 创建上报器。节点身份注册成功后经 SetIdentity 注入；注入前的上报直接丢弃
-//（实例启动依赖 CP 下发，注册前不存在受管进程崩溃，实际不触达）。
+// （实例启动依赖 CP 下发，注册前不存在受管进程崩溃，实际不触达）。
 func New(cpAddr string) *Reporter {
 	return &Reporter{cpAddr: cpAddr}
 }

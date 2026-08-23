@@ -2,8 +2,8 @@ package service
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -131,6 +131,13 @@ func (s *ClientRuntimeStateService) RecordHeartbeat(in ClientRuntimeHeartbeatInp
 			"updated_at":        now,
 		}),
 	}).Create(row).Error
+}
+
+// RecordHeartbeatSafe 记录不应阻断客户端请求的运行态心跳；失败时保留告警供运维排查。
+func (s *ClientRuntimeStateService) RecordHeartbeatSafe(in ClientRuntimeHeartbeatInput) {
+	if err := s.RecordHeartbeat(in); err != nil {
+		slog.Warn("记录客户端运行态心跳失败", "channelId", in.ChannelID, "error", err)
+	}
 }
 
 // Overview 聚合客户端运行态和更新结果趋势。
@@ -322,15 +329,4 @@ func (s *ClientRuntimeStateService) updateSeries(channelID string, from, to time
 		return series, 0, 0, nil
 	}
 	return series, float64(success) / float64(total), float64(failure) / float64(total), nil
-}
-
-func parseRuntimeInt(s string) *int {
-	if s == "" {
-		return nil
-	}
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return nil
-	}
-	return &n
 }

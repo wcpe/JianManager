@@ -83,10 +83,16 @@ func parseJavaMajor(out string) (int, bool) {
 	if m == nil {
 		return 0, false
 	}
-	first, _ := strconv.Atoi(m[1])
+	first, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
 	if first == 1 && m[2] != "" {
 		// 旧式 1.X 命名 → 大版本取 X（如 1.8 → 8）。
-		second, _ := strconv.Atoi(m[2])
+		second, err := strconv.Atoi(m[2])
+		if err != nil {
+			return 0, false
+		}
 		return second, true
 	}
 	return first, true

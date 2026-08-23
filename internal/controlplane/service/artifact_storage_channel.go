@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -479,7 +480,11 @@ func probeArtifactStore(store blobstore.Store) error {
 		return err
 	}
 	// 探测对象尽力清理：Stat 失败也尝试删除，不留垃圾。
-	defer func() { _ = store.Delete(ctx, key) }()
+	defer func() {
+		if err := store.Delete(ctx, key); err != nil {
+			slog.Warn("清理制品存储探测对象失败", "key", key, "error", err)
+		}
+	}()
 	if _, err := store.Stat(ctx, key); err != nil {
 		return err
 	}

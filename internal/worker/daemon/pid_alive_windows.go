@@ -18,6 +18,5 @@ func IsPIDAlive(pid int) bool {
 	if err != nil {
 		return false
 	}
-	syscall.CloseHandle(handle)
-	return true
+	return syscall.CloseHandle(handle) == nil
 }

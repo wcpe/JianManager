@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,7 +148,9 @@ func writeKeyFileAtomic(path string, data []byte) error {
 	}
 	// 部分 Linux 挂载盘（如 CIFS/NTFS 兼容层）允许写文件但不支持 chmod。
 	// 权限收紧是安全加固而非持久化前提；失败时继续写入，避免零配置生产环境误降级为不可查看。
-	_ = chmodKeyFile(tmp, 0o600)
+	if err := chmodKeyFile(tmp, 0o600); err != nil {
+		slog.Warn("收紧客户端密钥临时文件权限失败，继续写入以兼容当前文件系统", "path", tmpName, "error", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("关闭临时文件失败: %w", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
@@ -88,7 +89,7 @@ type ClientVersionService struct {
 	// 用它自动产出 agent.core（取代运营手填/pin）；nil（无内嵌 jar）时省略 agent.core（不破 FR-087/088）。
 	embeddedCore *EmbeddedCore
 	// storageChannels 制品存储渠道服务（FR-347，见 ADR-073）：注入后 s3 制品的读取
-	//（预览/代理下载/补丁物化）与 302 预签名经渠道 BlobStore；不注入 = 纯 local（既有测试零改动）。
+	// （预览/代理下载/补丁物化）与 302 预签名经渠道 BlobStore；不注入 = 纯 local（既有测试零改动）。
 	storageChannels *ArtifactStorageChannelService
 }
 
@@ -120,7 +121,7 @@ func (s *ClientVersionService) PresignArtifactURL(asset *model.Asset) (string, e
 }
 
 // OpenArtifactContent 按记录自述路由打开制品内容流（FR-347）：local → os.Open CAS 文件
-//（缺失 ErrAssetNotFound，与历史降级口径一致）；s3 → 渠道 BlobStore.Open 拉取对象。
+// （缺失 ErrAssetNotFound，与历史降级口径一致）；s3 → 渠道 BlobStore.Open 拉取对象。
 // 供管理面代理下载/文本预览/补丁物化复用；玩家消费端点的 s3 分发走 302 预签名不经此。
 func (s *ClientVersionService) OpenArtifactContent(asset *model.Asset, absPath string) (io.ReadCloser, error) {
 	if asset.StorageBackend == model.AssetBackendS3 {
@@ -172,7 +173,10 @@ func (s *ClientVersionService) PublishFile(r io.Reader, p PublishFileParams) (*C
 	if codec == "" {
 		codec = "none"
 	}
-	meta, _ := json.Marshal(map[string]string{"codec": codec})
+	meta, err := json.Marshal(map[string]string{"codec": codec})
+	if err != nil {
+		return nil, fmt.Errorf("序列化客户端文件元数据失败: %w", err)
+	}
 	asset, err := s.assets.Ingest(r, IngestParams{
 		Type:           model.AssetTypeClientFile,
 		Filename:       p.Filename,
@@ -428,11 +432,14 @@ func encodeZstdPatch(oldContent, newContent []byte) ([]byte, error) {
 }
 
 func (s *ClientVersionService) ingestPatchArtifactFromPath(f ManifestFile, oldSHA, newSHA, patchPath string) (*model.Asset, error) {
-	meta, _ := json.Marshal(map[string]string{
+	meta, err := json.Marshal(map[string]string{
 		"codec":     manifestPatchCodec,
 		"oldSha256": oldSHA,
 		"newSha256": newSHA,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("序列化客户端补丁元数据失败: %w", err)
+	}
 	return s.assets.IngestFromPath(patchPath, IngestParams{
 		Type:     model.AssetTypeClientFile,
 		Filename: patchFilename(f),
@@ -567,59 +574,6 @@ func (s *ClientVersionService) patchTempDir() string {
 		}
 	}
 	return os.TempDir()
-}
-
-func (s *ClientVersionService) readManifestFileContent(f ManifestFile) ([]byte, bool, error) {
-	asset, absPath, err := s.OpenArtifact(f.Artifact.SHA256)
-	if errors.Is(err, ErrAssetNotFound) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	if asset.Type != model.AssetTypeClientFile {
-		return nil, false, nil
-	}
-	raw, err := os.ReadFile(absPath)
-	if err != nil {
-		return nil, false, nil
-	}
-	content, ok, err := decodeManifestArtifact(raw, f.Artifact.Codec)
-	if err != nil || !ok {
-		return nil, ok, err
-	}
-	if f.Size > 0 && int64(len(content)) != f.Size {
-		return nil, false, nil
-	}
-	if f.SHA256 != "" && !strings.EqualFold(sha256BytesHex(content), f.SHA256) {
-		return nil, false, nil
-	}
-	return content, true, nil
-}
-
-func decodeManifestArtifact(raw []byte, codec string) ([]byte, bool, error) {
-	switch strings.ToLower(strings.TrimSpace(codec)) {
-	case "", "none":
-		return raw, true, nil
-	case "zstd":
-		dec, err := zstd.NewReader(bytes.NewReader(raw))
-		if err != nil {
-			return nil, false, err
-		}
-		defer dec.Close()
-		out, err := io.ReadAll(dec)
-		if err != nil {
-			return nil, false, err
-		}
-		return out, true, nil
-	default:
-		return nil, false, nil
-	}
-}
-
-func sha256BytesHex(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
 }
 
 // BuildManifest 组装频道 latest 的 manifest（contract §2）。FR-256 起不再签名。
@@ -1323,7 +1277,9 @@ func decodeUpdaterCoreBuildMetadata(raw string) updaterCoreBuildMetadata {
 	if raw == "" {
 		return meta
 	}
-	_ = json.Unmarshal([]byte(raw), &meta)
+	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+		slog.Warn("解析更新核心构建元数据失败，已忽略损坏数据", "error", err)
+	}
 	return meta
 }
 

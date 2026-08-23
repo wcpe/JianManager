@@ -87,7 +87,7 @@ func (h *Handler) HandleStreamablePOST(c *gin.Context) {
 					c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "会话不属于当前 Token"})
 					return
 				}
-				_ = h.sessions.Touch(s.ID, "")
+				h.touchSession(s, "")
 				c.Header(HeaderSessionID, s.ID)
 				writeRPC(c, newResult(req.ID, initializeResult()))
 				return
@@ -127,7 +127,7 @@ func (h *Handler) HandleStreamablePOST(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "会话不属于当前 Token"})
 		return
 	}
-	_ = h.sessions.Touch(s.ID, "")
+	h.touchSession(s, "")
 
 	if req.IsNotification() {
 		// 通知：处理但不返回 body（accepted）
@@ -161,7 +161,7 @@ func (h *Handler) HandleStreamableGET(c *gin.Context) {
 		return
 	}
 	// 简单保活：返回 JSON 会话元数据（完整 SSE 多路复用留给兼容端点）
-	_ = h.sessions.Touch(s.ID, "")
+	h.touchSession(s, "")
 	c.Header(HeaderSessionID, s.ID)
 	c.JSON(http.StatusOK, gin.H{"session": s.Snapshot(), "ok": true})
 }
@@ -186,7 +186,7 @@ func (h *Handler) HandleSessionDELETE(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "会话不属于当前 Token"})
 		return
 	}
-	_ = h.sessions.Kick(sessionID, "客户端关闭")
+	h.kickSession(sessionID, "客户端关闭")
 	h.recordSessionEvent(s, "mcp.session.close", c.ClientIP(), true, "客户端关闭")
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -218,13 +218,15 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 	c.Status(http.StatusOK)
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		_ = h.sessions.Kick(s.ID, "不支持流式响应")
+		h.kickSession(s.ID, "不支持流式响应")
 		return
 	}
 
 	// endpoint 事件：客户端据此 POST 消息
 	endpoint := "/api/v1/mcp/message?sessionId=" + s.ID
-	_, _ = c.Writer.Write([]byte("event: endpoint\ndata: " + endpoint + "\n\n"))
+	if !h.writeSSE(c, s, []byte("event: endpoint\ndata: "+endpoint+"\n\n")) {
+		return
+	}
 	flusher.Flush()
 
 	// 保活 + 读出站消息
@@ -237,24 +239,30 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 	for {
 		select {
 		case <-clientGone:
-			_ = h.sessions.Kick(s.ID, "客户端断开")
+			h.kickSession(s.ID, "客户端断开")
 			return
 		case <-sessionDone:
 			// 踢线/超时：发 comment 后结束
-			_, _ = c.Writer.Write([]byte(": session closed\n\n"))
+			if !h.writeSSE(c, s, []byte(": session closed\n\n")) {
+				return
+			}
 			flusher.Flush()
 			return
 		case data, open := <-ch:
 			if !open {
 				return
 			}
-			_, _ = c.Writer.Write([]byte("event: message\ndata: "))
-			_, _ = c.Writer.Write(data)
-			_, _ = c.Writer.Write([]byte("\n\n"))
+			if !h.writeSSE(c, s, []byte("event: message\ndata: ")) ||
+				!h.writeSSE(c, s, data) ||
+				!h.writeSSE(c, s, []byte("\n\n")) {
+				return
+			}
 			flusher.Flush()
 		case <-ticker.C:
-			_ = h.sessions.Touch(s.ID, "")
-			_, _ = c.Writer.Write([]byte(": ping\n\n"))
+			h.touchSession(s, "")
+			if !h.writeSSE(c, s, []byte(": ping\n\n")) {
+				return
+			}
 			flusher.Flush()
 		}
 	}
@@ -293,10 +301,12 @@ func (h *Handler) HandleSSEMessage(c *gin.Context) {
 	var req RPCRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		c.JSON(http.StatusAccepted, gin.H{})
-		_ = s.SendSSE(mustJSON(newError(nil, -32700, "Parse error")))
+		if sendErr := s.SendSSE(mustJSON(newError(nil, -32700, "Parse error"))); sendErr != nil {
+			slog.Warn("MCP SSE 发送解析错误失败", "sessionId", s.ID, "error", sendErr)
+		}
 		return
 	}
-	_ = h.sessions.Touch(s.ID, "")
+	h.touchSession(s, "")
 
 	if req.IsNotification() {
 		h.dispatch(c, s, req, true)
@@ -353,7 +363,7 @@ func (h *Handler) AdminKickSession(c *gin.Context) {
 		// 与 JWT 中间件 CtxUserID 键一致（"userId"）
 		uid, _ := c.Get("userId")
 		userID, _ := uid.(uint)
-		_ = h.audit.RecordResult(userID, "mcp.session.kick", "mcp_session", id, "", c.ClientIP(), true, "")
+		h.audit.RecordResultSafe(userID, "mcp.session.kick", "mcp_session", id, "", c.ClientIP(), true, "")
 	}
 	if snap != nil {
 		h.recordSessionEvent(snap, "mcp.session.kick", c.ClientIP(), true, "管理员踢线")
@@ -389,7 +399,7 @@ func (h *Handler) dispatch(c *gin.Context, s *Session, req RPCRequest, notificat
 		if notification {
 			return RPCResponse{}
 		}
-		_ = h.sessions.Kick(s.ID, "客户端 shutdown")
+		h.kickSession(s.ID, "客户端 shutdown")
 		return newResult(req.ID, map[string]any{})
 	default:
 		if notification {
@@ -415,7 +425,7 @@ func (h *Handler) handleToolsCall(s *Session, req RPCRequest) RPCResponse {
 	if params.Arguments == nil {
 		params.Arguments = map[string]any{}
 	}
-	_ = h.sessions.Touch(s.ID, params.Name)
+	h.touchSession(s, params.Name)
 	start := time.Now()
 	result := CallTool(s.Context(), h.deps, s.Principal, params.Name, params.Arguments)
 	h.recordToolCall(s, params.Name, params.Arguments, result, time.Since(start))
@@ -490,14 +500,36 @@ func (h *Handler) recordSessionEvent(s *Session, action, ip string, success bool
 func (h *Handler) writeSessionLimit(c *gin.Context, err error) {
 	msg := err.Error()
 	code := "SESSION_LIMIT"
-	if errors.Is(err, ErrSessionLimitGlobal) {
+	switch {
+	case errors.Is(err, ErrSessionLimitGlobal):
 		msg = "MCP 全局并发会话已达上限，请稍后重试或联系管理员"
-	} else if errors.Is(err, ErrSessionLimitToken) {
+	case errors.Is(err, ErrSessionLimitToken):
 		msg = "该 Token 的 MCP 并发会话已达上限，请关闭空闲会话后重试"
-	} else {
+	default:
 		code = "BAD_REQUEST"
 	}
 	c.JSON(http.StatusTooManyRequests, gin.H{"error": code, "message": msg})
+}
+
+func (h *Handler) touchSession(s *Session, lastTool string) {
+	if err := h.sessions.Touch(s.ID, lastTool); err != nil {
+		slog.Debug("MCP 会话保活失败", "sessionId", s.ID, "error", err)
+	}
+}
+
+func (h *Handler) kickSession(sessionID, reason string) {
+	if err := h.sessions.Kick(sessionID, reason); err != nil && !errors.Is(err, ErrSessionNotFound) {
+		slog.Warn("关闭 MCP 会话失败", "sessionId", sessionID, "reason", reason, "error", err)
+	}
+}
+
+func (h *Handler) writeSSE(c *gin.Context, s *Session, data []byte) bool {
+	if _, err := c.Writer.Write(data); err != nil {
+		slog.Debug("MCP SSE 写入失败", "sessionId", s.ID, "error", err)
+		h.kickSession(s.ID, "客户端连接写入失败")
+		return false
+	}
+	return true
 }
 
 func getPrincipal(c *gin.Context) *service.AgentPrincipal {

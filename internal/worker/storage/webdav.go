@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -120,8 +121,12 @@ func drainClose(rc io.ReadCloser) {
 	if rc == nil {
 		return
 	}
-	_, _ = io.Copy(io.Discard, rc)
-	_ = rc.Close()
+	if _, err := io.Copy(io.Discard, rc); err != nil {
+		slog.Debug("读尽 WebDAV 响应体失败", "error", err)
+	}
+	if err := rc.Close(); err != nil {
+		slog.Debug("关闭 WebDAV 响应体失败", "error", err)
+	}
 }
 
 // bytesReader 便于测试时把内容包成 ReadCloser。

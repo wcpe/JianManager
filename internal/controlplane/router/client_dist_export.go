@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"sync"
@@ -103,11 +102,11 @@ func (h *ClientDistExportHandler) recordAudit(c *gin.Context, filter service.Cli
 	if h.audit == nil {
 		return
 	}
-	detail, _ := json.Marshal(map[string]any{
+	detail := marshalAuditDetail(map[string]any{
 		"kind": filter.Kind, "channelId": filter.ChannelID, "range": filter.Range,
 		"type": filter.LogType, "truncated": truncated,
 	})
-	_ = h.audit.Record(getUserID(c), "client_dist.export.csv", "client_dist", filter.Kind, string(detail), c.ClientIP())
+	h.audit.RecordSafe(getUserID(c), "client_dist.export.csv", "client_dist", filter.Kind, detail, c.ClientIP())
 }
 
 func parseClientDistExportFilter(c *gin.Context, now time.Time) (service.ClientDistExportFilter, bool) {

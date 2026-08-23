@@ -121,3 +121,22 @@ func TestReplaceExecutable(t *testing.T) {
 		t.Fatalf("替换后新二进制源文件应已被移走，仍存在: %v", statErr)
 	}
 }
+
+func TestReplaceExecutable_MissingNewBinaryKeepsTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "app")
+	if err := os.WriteFile(target, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ReplaceExecutable(target, filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("缺少新二进制时应返回错误")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("读取原目标失败: %v", err)
+	}
+	if string(got) != "v1" {
+		t.Fatalf("替换前校验失败不应改动原目标，实得 %q", got)
+	}
+}

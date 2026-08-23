@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -170,7 +171,9 @@ func (c *Cache) GetTo(sha, dest string) (bool, error) {
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); got != sha {
 		_ = os.Remove(tmpName)
-		_ = c.Evict(sha)
+		if err := c.Evict(sha); err != nil {
+			return false, fmt.Errorf("删除损坏缓存失败: %w", err)
+		}
 		return false, nil
 	}
 	if err := os.Rename(tmpName, dest); err != nil {
@@ -290,7 +293,9 @@ func (c *Cache) touch(sha string) {
 		}
 	}
 	m.LastUsedAt = time.Now()
-	_ = c.writeMeta(sha, m)
+	if err := c.writeMeta(sha, m); err != nil {
+		slog.Debug("刷新制品缓存访问时间失败", "sha256", sha, "error", err)
+	}
 }
 
 // setLastUsedForTest 仅供测试：直接改写某项 lastUsedAt，便于构造 LRU 冷热顺序。

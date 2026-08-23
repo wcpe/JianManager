@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -380,7 +381,11 @@ func (s *ClientDistExportService) securityTelemetryRows(f ClientDistExportFilter
 }
 
 func securityCSVRow(row securityExportItem) []string {
-	detail, _ := json.Marshal(maskExportValue(row.Detail, ""))
+	detail, err := json.Marshal(maskExportValue(row.Detail, ""))
+	if err != nil {
+		slog.Error("序列化安全导出详情失败", "recordId", row.ID, "error", err)
+		detail = nil
+	}
 	return []string{row.ID, row.Type, row.Title, row.ChannelID, maskExportID(row.MachineID), maskExportID(row.InstallID), maskExportPlayer(row.PlayerName), row.IP, row.Status, row.ErrCode, formatExportTime(row.CreatedAt), string(detail)}
 }
 

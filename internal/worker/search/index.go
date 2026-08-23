@@ -132,7 +132,9 @@ func (ix *Index) EnsureBuilding(workDir string) {
 		if buildStartHook != nil {
 			buildStartHook()
 		}
-		_, _ = ix.Update(workDir) // 顶层错误（如 workDir 被删）吞掉记账，置就绪自愈。
+		if _, err := ix.Update(workDir); err != nil {
+			return // 顶层错误（如 workDir 被删）仍置就绪，交给后续增量更新自愈。
+		}
 	}()
 }
 

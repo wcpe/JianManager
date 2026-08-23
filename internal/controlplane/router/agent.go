@@ -3,6 +3,7 @@ package router
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -70,7 +71,9 @@ func projectAgentToken(tok *model.AgentToken) agentTokenView {
 	}
 	caps := []string{}
 	if tok.PolicyVersion == service.AgentPolicyVersionV2 && tok.Capabilities != "" {
-		_ = json.Unmarshal([]byte(tok.Capabilities), &caps)
+		if err := json.Unmarshal([]byte(tok.Capabilities), &caps); err != nil {
+			slog.Warn("解析 Agent Token 能力集失败", "tokenId", tok.ID, "error", err)
+		}
 		if caps == nil {
 			caps = []string{}
 		}
@@ -141,10 +144,10 @@ func (h *AgentTokenHandler) Issue(c *gin.Context) {
 		return
 	}
 	if h.audit != nil {
-		detail, _ := json.Marshal(map[string]any{
+		detail := marshalAuditDetail(map[string]any{
 			"tokenId": tok.ID, "tokenPrefix": tok.TokenPrefix, "name": tok.Name,
 		})
-		_ = h.audit.RecordResult(userID, "agent.token.create", "agent_token", strconv.FormatUint(uint64(tok.ID), 10), string(detail), c.ClientIP(), true, "")
+		h.audit.RecordResultSafe(userID, "agent.token.create", "agent_token", strconv.FormatUint(uint64(tok.ID), 10), detail, c.ClientIP(), true, "")
 	}
 	c.JSON(http.StatusCreated, gin.H{
 		"token":     projectAgentToken(tok),
@@ -197,7 +200,7 @@ func (h *AgentTokenHandler) Revoke(c *gin.Context) {
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
 	if h.audit != nil {
-		_ = h.audit.RecordResult(userID, "agent.token.revoke", "agent_token", c.Param("id"), "", c.ClientIP(), true, "")
+		h.audit.RecordResultSafe(userID, "agent.token.revoke", "agent_token", c.Param("id"), "", c.ClientIP(), true, "")
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -321,8 +324,8 @@ func (h *AgentOpsHandler) auditAgent(c *gin.Context, p *service.AgentPrincipal, 
 	if h.audit == nil || p == nil {
 		return
 	}
-	detail, _ := json.Marshal(map[string]any{"actorKind": "agent", "agentName": p.Name, "tokenId": p.TokenID})
-	_ = h.audit.RecordResult(p.TokenID, action, targetType, targetID, string(detail), c.ClientIP(), ok, errMsg)
+	detail := marshalAuditDetail(map[string]any{"actorKind": "agent", "agentName": p.Name, "tokenId": p.TokenID})
+	h.audit.RecordResultSafe(p.TokenID, action, targetType, targetID, detail, c.ClientIP(), ok, errMsg)
 }
 
 // recordCall 写入 agent 调用流水（读+写+403）；失败只 WARN 不阻断。仅成功鉴权后调用。
@@ -420,7 +423,12 @@ func (h *AgentOpsHandler) ListInstances(c *gin.Context) {
 		h.forbid(c, "无实例 scope 或操作被拒绝")
 		return
 	}
-	auth, _ := service.CanDiscover(p, service.AgentActionListInstances)
+	auth, discoverErr := service.CanDiscover(p, service.AgentActionListInstances)
+	if discoverErr != nil {
+		h.recordCall(c, p, service.AgentActionListInstances, "", "instance", "", false, "forbidden")
+		h.forbid(c, "无实例 scope 或操作被拒绝")
+		return
+	}
 	h.recordCall(c, p, service.AgentActionListInstances, auth.Capability, "instance", "", true, "")
 	c.JSON(http.StatusOK, out)
 }

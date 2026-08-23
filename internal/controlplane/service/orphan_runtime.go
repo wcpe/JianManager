@@ -222,9 +222,9 @@ func (t *OrphanRuntimeTracker) cancelIfActive(nodeUUID, instanceUUID string, now
 		return
 	}
 	updates := map[string]interface{}{
-		"status":     model.OrphanRuntimeCancelled,
+		"status":       model.OrphanRuntimeCancelled,
 		"last_seen_at": now,
-		"last_error": "",
+		"last_error":   "",
 	}
 	if err := t.db.Model(&rec).Updates(updates).Error; err != nil {
 		slog.Warn("取消无主运行时跟踪失败", "nodeUUID", nodeUUID, "instanceUUID", instanceUUID, "error", err)
@@ -282,9 +282,9 @@ func (t *OrphanRuntimeTracker) upsertOrphan(nodeUUID, instanceUUID, state string
 
 	// pending / confirmed：刷新 lastSeen + 状态摘要。
 	updates := map[string]interface{}{
-		"last_seen_at":  now,
-		"worker_state":  state,
-		"worker_pid":    pid,
+		"last_seen_at": now,
+		"worker_state": state,
+		"worker_pid":   pid,
 	}
 	// 宽限期到 → confirmed。
 	if rec.Status == model.OrphanRuntimePending && !now.Before(rec.FirstSeenAt.Add(grace)) {
@@ -430,5 +430,5 @@ func (t *OrphanRuntimeTracker) recordDisposeAudit(userID uint, ip string, rec *m
 	}
 	detail := fmt.Sprintf(`{"orphanUuid":%q,"nodeUuid":%q,"instanceUuid":%q,"mode":%q}`,
 		rec.UUID, rec.NodeUUID, rec.InstanceUUID, mode)
-	_ = t.audit.RecordResult(userID, action, "orphan_runtime", rec.UUID, detail, ip, success, errMsg)
+	t.audit.RecordResultSafe(userID, action, "orphan_runtime", rec.UUID, detail, ip, success, errMsg)
 }

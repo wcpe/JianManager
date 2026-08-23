@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -420,6 +421,10 @@ func awsURIEncode(s string) string {
 
 // drainClose 读尽并关闭响应体，保 keep-alive 连接复用。
 func drainClose(rc io.ReadCloser) {
-	_, _ = io.Copy(io.Discard, io.LimitReader(rc, 1<<20))
-	_ = rc.Close()
+	if _, err := io.Copy(io.Discard, io.LimitReader(rc, 1<<20)); err != nil {
+		slog.Debug("读尽 S3 响应体失败", "error", err)
+	}
+	if err := rc.Close(); err != nil {
+		slog.Debug("关闭 S3 响应体失败", "error", err)
+	}
 }

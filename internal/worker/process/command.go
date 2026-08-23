@@ -123,7 +123,8 @@ func ComposeEnv(base []string, spec CommandSpec) []string {
 				removed = append(removed, kv)
 			}
 		}
-		out = append(removed, k+"="+v)
+		out = removed
+		out = append(out, k+"="+v)
 	}
 	return out
 }

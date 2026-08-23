@@ -1,9 +1,9 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -85,7 +85,9 @@ func (h *SelfUpdateHandler) RefreshCheck(c *gin.Context) {
 // UpgradeControlPlane POST /self-update/control-plane/upgrade — 升级 CP 自身。
 func (h *SelfUpdateHandler) UpgradeControlPlane(c *gin.Context) {
 	var req upgradeRequest
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		slog.Debug("Control Plane 自更新请求体按零值处理", "error", err)
+	}
 
 	from, to, err := h.svc.UpgradeControlPlane(c.Request.Context(), req.Version)
 	if err != nil {
@@ -103,7 +105,9 @@ func (h *SelfUpdateHandler) UpgradeNode(c *gin.Context) {
 		return
 	}
 	var req upgradeRequest
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		slog.Debug("节点自更新请求体按零值处理", "error", err)
+	}
 
 	from, to, err := h.svc.UpgradeNodeWithBaseURL(c.Request.Context(), id, req.Version, selfUpdateRequestBaseURL(c))
 	if err != nil {
@@ -143,7 +147,9 @@ func (h *SelfUpdateHandler) RollbackNode(c *gin.Context) {
 // UpgradeAll POST /self-update/nodes/upgrade-all — 全网逐节点升级编排（异步）。
 func (h *SelfUpdateHandler) UpgradeAll(c *gin.Context) {
 	var req upgradeAllRequest
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		slog.Debug("批量自更新请求体按零值处理", "error", err)
+	}
 
 	// FR-155：金丝雀 + 分批参数经 RolloutOptions 透传；零值=原「串行全部」行为。
 	ro, err := h.svc.StartRolloutWithOptions(c.Request.Context(), req.NodeIDs, req.Version, selfUpdateRequestBaseURL(c), service.RolloutOptions{
@@ -282,8 +288,7 @@ func (h *SelfUpdateHandler) recordAudit(c *gin.Context, action string, detail ma
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
-	_ = h.audit.Record(h.currentUserID(c), action, "self_update", "", string(raw), c.ClientIP())
+	h.audit.RecordSafe(h.currentUserID(c), action, "self_update", "", marshalAuditDetail(detail), c.ClientIP())
 }
 
 // RegisterRoutes 注册自更新路由（挂在平台管理员组下，无需再判 IsPlatformAdmin）。

@@ -124,8 +124,7 @@ func (h *BusinessHandler) recordWriteAudit(c *gin.Context, instanceID uint, req 
 			detail[k] = v
 		}
 	}
-	raw, _ := json.Marshal(detail)
-	_ = h.audit.Record(getUserID(c), "business.write", "instance", strconv.FormatUint(uint64(instanceID), 10), string(raw), c.ClientIP())
+	h.audit.RecordSafe(getUserID(c), "business.write", "instance", strconv.FormatUint(uint64(instanceID), 10), marshalAuditDetail(detail), c.ClientIP())
 }
 
 func inventoryWriteAuditDetail(payload string) map[string]any {

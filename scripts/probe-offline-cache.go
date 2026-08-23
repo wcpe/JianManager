@@ -370,7 +370,7 @@ func normalizeJar(src, dst string) error {
 	fixedTime := time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC)
 	for _, file := range files {
 		header := &zip.FileHeader{Name: file.Name, Method: zip.Deflate}
-		header.SetModTime(fixedTime)
+		header.Modified = fixedTime
 		header.SetMode(file.FileInfo().Mode().Perm())
 		w, err := zw.CreateHeader(header)
 		if err != nil {
@@ -479,13 +479,16 @@ func countLibraries(root string) (int, int, error) {
 func hasPrefixFile(root, prefix string) bool {
 	found := false
 	prefix = filepath.FromSlash(prefix)
-	_ = filepath.WalkDir(filepath.Join(root, filepath.FromSlash(strings.TrimSuffix(prefix, "/"))), func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(filepath.Join(root, filepath.FromSlash(strings.TrimSuffix(prefix, "/"))), func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
 		found = true
 		return filepath.SkipAll
 	})
+	if err != nil {
+		return false
+	}
 	return found
 }
 
@@ -532,7 +535,7 @@ func writeLibrariesZip(root, outPath string) error {
 		}
 		header.Name = rel
 		header.Method = zip.Deflate
-		header.SetModTime(fixedTime)
+		header.Modified = fixedTime
 		w, err := zw.CreateHeader(header)
 		if err != nil {
 			_ = out.Close()

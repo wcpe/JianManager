@@ -181,11 +181,15 @@ func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy 
 		TaskId:       taskID,
 	})
 	if err != nil {
-		_ = s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err))
+		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err)); markErr != nil {
+			slog.Warn("标记 JDK 安装任务失败状态失败", "taskId", taskID, "error", markErr)
+		}
 		return nil, fmt.Errorf("Worker InstallJDK RPC 失败: %w", err)
 	}
 	if !resp.Success {
-		_ = s.tasks.MarkFailed(taskID, fmt.Sprintf("Worker 拒绝安装: %s", resp.Error))
+		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("Worker 拒绝安装: %s", resp.Error)); markErr != nil {
+			slog.Warn("标记 JDK 安装任务失败状态失败", "taskId", taskID, "error", markErr)
+		}
 		return nil, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
 	}
 	if err := s.tasks.MarkRunning(taskID); err != nil {

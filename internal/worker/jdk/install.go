@@ -123,12 +123,6 @@ func zuluURL(client *http.Client, base string, major int, arch string) (string, 
 	return pkgs[0].DownloadURL, nil
 }
 
-// downloadAndExtract 下载归档到临时文件，按平台后缀解压到 destDir。
-// client 经进程级出站代理（FR-174/ADR-037）；为 nil 时回退一个 15min 超时的默认 client。
-func downloadAndExtract(ctx context.Context, client *http.Client, url, destDir string) error {
-	return downloadAndExtractWithProgress(ctx, client, url, destDir, nil)
-}
-
 // downloadAndExtractWithProgress 下载归档到临时文件并解压到 destDir，期间经 report 回调
 // 上报下载百分比与阶段日志（FR-183，见 ADR-040；report 可为 nil）。
 // 有 Content-Length 时按字节计算 0~100 的真实百分比；无则停在 0、靠阶段日志补充。
@@ -387,7 +381,7 @@ func untarGz(archivePath, destDir string) error {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, tar.TypeRegA: //nolint:staticcheck // 保留旧 tar 常规文件标记兼容，避免遗漏历史归档。
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}

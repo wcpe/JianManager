@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"regexp"
 	"sort"
@@ -151,7 +152,10 @@ func (s *ClientDistSecurityService) RecordHello(in ClientSecurityHelloInput, key
 	if !accepted {
 		errCode = "INVALID_REQUEST"
 	}
-	payload, _ := json.Marshal(in)
+	payload, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("序列化安全 hello 载荷失败: %w", err)
+	}
 	hello := &model.ClientSecurityHello{ChannelID: in.Channel, MachineID: in.MachineID, InstallID: in.InstallID, PlayerName: in.PlayerName, Accepted: accepted, ErrCode: errCode, IP: ip, UserAgent: truncateSecurity(userAgent, 255), PayloadJSON: string(payload), CreatedAt: now}
 	if key != nil {
 		hello.KeyID = key.ID
@@ -187,7 +191,10 @@ func (s *ClientDistSecurityService) ResolveProfilePlayerName(channelID, machineI
 }
 
 func (s *ClientDistSecurityService) RecordRiskEvent(code, channelID, machineID, installID, playerName, ip string, key *model.ClientPullKey, severity string, detail any) error {
-	raw, _ := json.Marshal(detail)
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("序列化安全风险详情失败: %w", err)
+	}
 	if severity == "" {
 		severity = "info"
 	}
@@ -197,6 +204,13 @@ func (s *ClientDistSecurityService) RecordRiskEvent(code, channelID, machineID, 
 		ev.KeyPrefix = key.KeyPrefix
 	}
 	return s.db.Create(ev).Error
+}
+
+// RecordRiskEventSafe 记录不应阻断请求的安全风险事件；失败时保留告警供运维排查。
+func (s *ClientDistSecurityService) RecordRiskEventSafe(code, channelID, machineID, installID, playerName, ip string, key *model.ClientPullKey, severity string, detail any) {
+	if err := s.RecordRiskEvent(code, channelID, machineID, installID, playerName, ip, key, severity, detail); err != nil {
+		slog.Warn("记录客户端分发风险事件失败", "code", code, "channelId", channelID, "error", err)
+	}
 }
 
 func (s *ClientDistSecurityService) BlockIP(ip, channelID, reason string, ttl time.Duration, createdBy uint) (*model.ClientProtectionAction, error) {

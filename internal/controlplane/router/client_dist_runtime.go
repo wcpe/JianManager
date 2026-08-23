@@ -1,7 +1,7 @@
 package router
 
 import (
-	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -63,9 +63,11 @@ func (h *ClientDistRuntimeHandler) Heartbeat(c *gin.Context) {
 		return
 	}
 	var body runtimeHeartbeatBody
-	_ = c.ShouldBindJSON(&body)
+	if err := c.ShouldBindJSON(&body); err != nil {
+		slog.Debug("客户端运行态心跳请求体按零值处理", "error", err)
+	}
 	machineID := c.GetHeader(machineIDHeader)
-	_ = h.runtime.RecordHeartbeat(service.ClientRuntimeHeartbeatInput{
+	h.runtime.RecordHeartbeatSafe(service.ClientRuntimeHeartbeatInput{
 		ChannelID: channelID, MachineID: machineID, PlayerName: h.playerNameFromRequest(c, channelID, machineID), IP: c.ClientIP(),
 		Platform: body.Platform, JavaVersion: body.JavaVersion, Launcher: body.Launcher,
 		CoreVersion: body.CoreVersion, LocalVersion: body.LocalVersion,
@@ -198,8 +200,7 @@ func (h *ClientDistRuntimeHandler) recordAudit(c *gin.Context, action string, de
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
 	uid, _ := c.Get(middleware.CtxUserID)
 	id, _ := uid.(uint)
-	_ = h.audit.Record(id, action, "client_dist", "", string(raw), c.ClientIP())
+	h.audit.RecordSafe(id, action, "client_dist", "", marshalAuditDetail(detail), c.ClientIP())
 }

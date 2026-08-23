@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -271,16 +272,24 @@ func (s *ActionResultService) syncCommandCheckpoint(ctx context.Context, bot *mo
 	}
 	switch status {
 	case model.BotLoadActionSucceeded:
-		_ = ck.MarkSent(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence, attempt, event.ObservedAtUnixMs)
+		if err := ck.MarkSent(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence, attempt, event.ObservedAtUnixMs); err != nil {
+			slog.Warn("同步命令检查点发送状态失败", "runUuid", row.RunUUID, "botUuid", row.BotUUID, "error", err)
+		}
 	case model.BotLoadActionFailed:
-		_ = ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
-			model.BotLoadCommandCheckpointFailed, attempt, event.ErrorCode)
+		if err := ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
+			model.BotLoadCommandCheckpointFailed, attempt, event.ErrorCode); err != nil {
+			slog.Warn("同步命令检查点失败状态失败", "runUuid", row.RunUUID, "botUuid", row.BotUUID, "error", err)
+		}
 	case model.BotLoadActionTimedOut:
-		_ = ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
-			model.BotLoadCommandCheckpointTimedOut, attempt, event.ErrorCode)
+		if err := ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
+			model.BotLoadCommandCheckpointTimedOut, attempt, event.ErrorCode); err != nil {
+			slog.Warn("同步命令检查点超时状态失败", "runUuid", row.RunUUID, "botUuid", row.BotUUID, "error", err)
+		}
 	case model.BotLoadActionCancelled:
-		_ = ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
-			model.BotLoadCommandCheckpointCancelled, attempt, event.ErrorCode)
+		if err := ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
+			model.BotLoadCommandCheckpointCancelled, attempt, event.ErrorCode); err != nil {
+			slog.Warn("同步命令检查点取消状态失败", "runUuid", row.RunUUID, "botUuid", row.BotUUID, "error", err)
+		}
 	}
 }
 
@@ -402,14 +411,22 @@ func truncateActionResultJSON(raw string) string {
 	preview := raw
 	for len(preview) > 0 {
 		preview = trimUTF8Bytes(preview, len([]byte(preview))-512)
-		encoded, _ := json.Marshal(map[string]any{
+		encoded, err := json.Marshal(map[string]any{
 			"truncated": true, "originalBytes": len([]byte(raw)), "preview": preview,
 		})
+		if err != nil {
+			slog.Error("序列化 Bot 操作结果截断摘要失败", "error", err)
+			break
+		}
 		if len(encoded) <= actionResultJSONLimit {
 			return string(encoded)
 		}
 	}
-	encoded, _ := json.Marshal(map[string]any{"truncated": true, "originalBytes": len([]byte(raw))})
+	encoded, err := json.Marshal(map[string]any{"truncated": true, "originalBytes": len([]byte(raw))})
+	if err != nil {
+		slog.Error("序列化 Bot 操作结果最小截断摘要失败", "error", err)
+		return `{"truncated":true}`
+	}
 	return string(encoded)
 }
 

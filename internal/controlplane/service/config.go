@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
@@ -453,7 +454,11 @@ func schemaToJSON(m *schema.ModelSchema) string {
 	if m == nil {
 		return ""
 	}
-	b, _ := json.Marshal(m)
+	b, err := json.Marshal(m)
+	if err != nil {
+		slog.Error("序列化配置模型失败", "error", err)
+		return ""
+	}
 	return string(b)
 }
 

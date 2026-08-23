@@ -30,7 +30,7 @@ type RuntimeAssetsService struct {
 }
 
 // RuntimeSyncer 单节点运行时库存强制同步（FR-301）。生产实现为 JDKService.SyncFromWorker
-//（node_runtimes 无 Worker 侧清单可同步：外部登记真相源即 CP 库，托管 Node 随 FR-299 再议）；
+// （node_runtimes 无 Worker 侧清单可同步：外部登记真相源即 CP 库，托管 Node 随 FR-299 再议）；
 // 接口化便于单测注入失败场景。
 type RuntimeSyncer interface {
 	SyncFromWorker(nodeID uint) error
@@ -287,7 +287,7 @@ func buildRuntimeSyncs(nodes []model.Node) ([]RuntimeNodeSync, *time.Time) {
 }
 
 // RuntimeRefreshResult 单节点强制同步结果（FR-301）。失败时 SyncedAt 保留旧时间戳
-//（nil = 从未同步过），供前端「显旧数据 + 提示」。
+// （nil = 从未同步过），供前端「显旧数据 + 提示」。
 type RuntimeRefreshResult struct {
 	NodeID   uint       `json:"nodeId"`
 	NodeName string     `json:"nodeName"`

@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -288,8 +287,7 @@ func (h *NodeHandler) recordRepairAudit(c *gin.Context, action, targetID string,
 	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
-	raw, _ := json.Marshal(detail)
-	_ = h.audit.Record(userID, action, "node", targetID, string(raw), c.ClientIP())
+	h.audit.RecordSafe(userID, action, "node", targetID, marshalAuditDetail(detail), c.ClientIP())
 }
 
 // repairUnavailable 当坏节点修复服务未注入时统一回 404（功能未开启）。

@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -61,8 +60,7 @@ func (h *PMConfigHandler) Put(c *gin.Context) {
 	if h.audit != nil {
 		uid, _ := c.Get(middleware.CtxUserID)
 		userID, _ := uid.(uint)
-		raw, _ := json.Marshal(map[string]any{"pm": view.PM, "registries": len(view.Registries)})
-		_ = h.audit.Record(userID, "node.pm.config", "node", c.Param("id"), string(raw), c.ClientIP())
+		h.audit.RecordSafe(userID, "node.pm.config", "node", c.Param("id"), marshalAuditDetail(map[string]any{"pm": view.PM, "registries": len(view.Registries)}), c.ClientIP())
 	}
 	c.JSON(http.StatusOK, view)
 }
@@ -109,8 +107,7 @@ func (h *PMConfigHandler) InstallPackage(c *gin.Context) {
 		return
 	}
 	if h.audit != nil {
-		raw, _ := json.Marshal(map[string]any{"name": in.Name, "version": in.Version})
-		_ = h.audit.Record(userID, "node.pkg.install", "node", c.Param("id"), string(raw), c.ClientIP())
+		h.audit.RecordSafe(userID, "node.pkg.install", "node", c.Param("id"), marshalAuditDetail(map[string]any{"name": in.Name, "version": in.Version}), c.ClientIP())
 	}
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
 }
@@ -137,8 +134,7 @@ func (h *PMConfigHandler) RemovePackage(c *gin.Context) {
 	if h.audit != nil {
 		uid, _ := c.Get(middleware.CtxUserID)
 		userID, _ := uid.(uint)
-		raw, _ := json.Marshal(map[string]any{"name": name})
-		_ = h.audit.Record(userID, "node.pkg.remove", "node", c.Param("id"), string(raw), c.ClientIP())
+		h.audit.RecordSafe(userID, "node.pkg.remove", "node", c.Param("id"), marshalAuditDetail(map[string]any{"name": name}), c.ClientIP())
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "已卸载"})
 }

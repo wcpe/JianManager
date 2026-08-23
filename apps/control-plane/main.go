@@ -270,7 +270,8 @@ func main() {
 	agentTransferSvc, err := service.NewAgentTransferTicketService(
 		service.DeriveAgentTransferTicketSecret([]byte(cfg.JWT.Secret)), agentTokenSvc, nil)
 	if err != nil {
-		log.Fatalf("初始化 Agent 传输票据服务失败: %v", err)
+		slog.Error("初始化 Agent 传输票据服务失败", "error", err)
+		return
 	}
 	// Agent 调用流水（FR-390，见 ADR-076）：读+写 Ops；默认保留 14 天；供 MCP 复用 Record。
 	agentCallLogSvc := service.NewAgentCallLogService(db)
@@ -330,7 +331,8 @@ func main() {
 	if err != nil {
 		if strings.TrimSpace(cfg.ClientDist.KeyEncSecret) != "" {
 			// 注入了非法 env 密钥：配错快失败，让运维即时修正。
-			log.Fatalf("初始化拉取密钥加密器失败: %v", err)
+			slog.Error("初始化拉取密钥加密器失败", "error", err)
+			return
 		}
 		// 自动生成/持久化失败：密钥不可查看，其余功能正常；记录真实原因便于排障。
 		slog.Warn("拉取密钥加密密钥自动生成/持久化失败，降级为不可查看；可检查数据根 etc/ 目录权限或经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入密钥", "path", keyEncPath, "error", err)
@@ -753,7 +755,8 @@ func main() {
 	grpcAddr := fmt.Sprintf(":%d", cfg.GRPC.Port)
 	grpcListener, err := net.Listen("tcp", grpcAddr)
 	if err != nil {
-		log.Fatalf("监听 gRPC 端口失败: %v", err)
+		slog.Error("监听 gRPC 端口失败", "error", err)
+		return
 	}
 
 	go func() {
@@ -770,7 +773,7 @@ func main() {
 	cpgrpc.StartOfflineDetector(db)
 
 	if err := runControlPlaneServer(func() error { return r.Run(addr) }, botLoadSvcs.subscriptions.Close); err != nil {
-		log.Fatalf("启动服务器失败: %v", err)
+		slog.Error("启动服务器失败", "error", err)
 	}
 }
 
@@ -799,7 +802,10 @@ func runResetPassword(args []string) {
 	username := fs.String("u", "", "要重置的用户名")
 	password := fs.String("p", "", "新密码（留空自动生成 16 位随机密码）")
 	list := fs.Bool("list", false, "仅列出全部用户名后退出")
-	_ = fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		log.Printf("解析重置密码命令参数失败: %v", err)
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {

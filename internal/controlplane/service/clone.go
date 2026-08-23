@@ -142,7 +142,9 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 	// 复制源的环境变量与所属组。
 	var envVars map[string]string
 	if strings.TrimSpace(src.EnvVars) != "" {
-		_ = json.Unmarshal([]byte(src.EnvVars), &envVars)
+		if err := json.Unmarshal([]byte(src.EnvVars), &envVars); err != nil {
+			return nil, fmt.Errorf("解析源实例环境变量失败: %w", err)
+		}
 	}
 	var gi model.GroupInstance
 	groupID := uint(0)

@@ -1,11 +1,11 @@
 package heartbeat
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"time"
 
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"

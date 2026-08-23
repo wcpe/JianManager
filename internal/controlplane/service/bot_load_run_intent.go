@@ -71,7 +71,10 @@ func (s *BotLoadRunIntentService) ApplyIntent(ctx context.Context, sessionID uin
 		if sess.Verdict != nil {
 			payload["verdict"] = *sess.Verdict
 		}
-		payloadJSON, _ := EncodeJSON(payload)
+		payloadJSON, err := EncodeJSON(payload)
+		if err != nil {
+			return fmt.Errorf("序列化运行状态事件失败: %w", err)
+		}
 		ev := &model.BotLoadRunEvent{
 			StressSessionID: sess.ID,
 			RunUUID:         sess.UUID,

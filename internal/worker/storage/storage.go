@@ -75,24 +75,28 @@ func Probe(ctx context.Context, cfg Config) error {
 
 	rc, err := backend.Download(ctx, key)
 	if err != nil {
-		_ = backend.Delete(ctx, key)
-		return err
+		return cleanupProbeObject(ctx, backend, key, err)
 	}
 	got, readErr := io.ReadAll(rc)
 	closeErr := rc.Close()
 	if readErr != nil {
-		_ = backend.Delete(ctx, key)
-		return readErr
+		return cleanupProbeObject(ctx, backend, key, readErr)
 	}
 	if closeErr != nil {
-		_ = backend.Delete(ctx, key)
-		return closeErr
+		return cleanupProbeObject(ctx, backend, key, closeErr)
 	}
 	if !bytes.Equal(got, payload) {
-		_ = backend.Delete(ctx, key)
-		return fmt.Errorf("探测对象内容校验失败")
+		return cleanupProbeObject(ctx, backend, key, fmt.Errorf("探测对象内容校验失败"))
 	}
 	return backend.Delete(ctx, key)
+}
+
+// cleanupProbeObject 在探测失败后删除临时对象；清理失败必须反馈，避免遗留探测垃圾。
+func cleanupProbeObject(ctx context.Context, backend Backend, key string, cause error) error {
+	if err := backend.Delete(ctx, key); err != nil {
+		return fmt.Errorf("%w；清理探测对象失败: %v", cause, err)
+	}
+	return cause
 }
 
 // ObjectKey 组合远程对象键：<prefix>/<instanceUUID>/<backupUUID>.tar.gz。

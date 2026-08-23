@@ -71,7 +71,9 @@ func (h *ProbeUpdateHandler) Update(c *gin.Context) {
 
 	var req probeUpdateRequest
 	// 请求体可选；非法 JSON 不阻断（按默认 restart=false 处理）。
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		slog.Debug("探针更新请求体按零值处理", "error", err)
+	}
 
 	res, err := h.updateSvc.Update(id)
 	if err != nil {

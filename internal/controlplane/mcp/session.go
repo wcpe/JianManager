@@ -131,7 +131,9 @@ func (m *SessionManager) Stop() {
 	}
 	m.mu.Unlock()
 	for _, id := range ids {
-		_ = m.Kick(id, "服务关闭")
+		if err := m.Kick(id, "服务关闭"); err != nil && !errors.Is(err, ErrSessionNotFound) {
+			slog.Warn("服务停止时关闭 MCP 会话失败", "sessionId", id, "error", err)
+		}
 	}
 }
 
@@ -308,7 +310,9 @@ func (m *SessionManager) reapOnce() {
 	m.mu.Unlock()
 
 	for _, v := range victims {
-		_ = m.Kick(v.id, v.reason)
+		if err := m.Kick(v.id, v.reason); err != nil && !errors.Is(err, ErrSessionNotFound) {
+			slog.Warn("清理超时 MCP 会话失败", "sessionId", v.id, "error", err)
+		}
 	}
 }
 

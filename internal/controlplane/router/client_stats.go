@@ -2,7 +2,6 @@ package router
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -24,7 +23,7 @@ func (h *ClientStatsHandler) Overview(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
 	}
-	days, _ := strconv.Atoi(c.Query("days"))
+	days := parseIntDefault(c.Query("days"), 0)
 	stats, err := h.svc.Overview(c.Query("channelId"), days)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "统计聚合失败"})

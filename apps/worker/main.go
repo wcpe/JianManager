@@ -211,7 +211,7 @@ func runWorker() {
 	}
 
 	// 本地身份提前加载（FR-275，见 ADR-061）：WS 令牌密钥初始值优先取身份文件持久化值
-	//（上次 CP 下发），回退 worker.yml jwt_secret（旧 CP/首装兼容）——须在 WS 服务器构造前
+	// （上次 CP 下发），回退 worker.yml jwt_secret（旧 CP/首装兼容）——须在 WS 服务器构造前
 	// 就绪，消除「注册完成前用旧密钥校验」窗口。注册流程复用本次加载结果，不二次读文件。
 	etcDir := root.EtcDir()
 	localIdentity, idErr := register.LoadIdentity(etcDir)
@@ -466,6 +466,8 @@ func runWorker() {
 			if cfg.EnrollToken == "" {
 				slog.Error("首次注册缺少 enrollment token：请在面板「添加节点」生成一键命令，" +
 					"或经 JIANMANAGER_ENROLL_TOKEN 提供。已有节点请确认本地身份文件 etc/node-identity.json 是否存在")
+				botMgr.Stop()
+				//nolint:gocritic // 此处已显式停止 Bot 管理器；进程必须以失败状态退出。
 				os.Exit(1)
 			}
 			regCfg.EnrollToken = cfg.EnrollToken

@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/net/context"
+	"context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -147,7 +147,11 @@ func swapIn(dir string, archive []byte, m localManifest) error {
 		_ = os.RemoveAll(tmp)
 		return err
 	}
-	raw, _ := json.Marshal(m)
+	raw, err := json.Marshal(m)
+	if err != nil {
+		_ = os.RemoveAll(tmp)
+		return fmt.Errorf("序列化 bot-worker 清单失败: %w", err)
+	}
 	if err := os.WriteFile(filepath.Join(tmp, localManifestName), raw, 0o644); err != nil {
 		_ = os.RemoveAll(tmp)
 		return err
@@ -160,7 +164,10 @@ func swapIn(dir string, archive []byte, m localManifest) error {
 	}
 	if err := os.Rename(tmp, dir); err != nil {
 		// 换入失败：把旧目录挪回去，现场不破坏。
-		_ = os.Rename(old, dir)
+		if rollbackErr := os.Rename(old, dir); rollbackErr != nil {
+			_ = os.RemoveAll(tmp)
+			return fmt.Errorf("换入 bot-worker 目录失败: %w；回滚旧目录失败: %v", err, rollbackErr)
+		}
 		_ = os.RemoveAll(tmp)
 		return err
 	}
@@ -227,8 +234,8 @@ func ensureNodeModulesLink(dir, target string) error {
 			return nil
 		}
 		if resolved, rerr := filepath.EvalSymlinks(link); rerr == nil {
-			want, _ := filepath.EvalSymlinks(target)
-			if resolved == want {
+			want, werr := filepath.EvalSymlinks(target)
+			if werr == nil && resolved == want {
 				return nil // 已就位
 			}
 		}

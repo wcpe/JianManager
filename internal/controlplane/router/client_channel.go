@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -318,10 +319,9 @@ func (h *ClientChannelHandler) recordAudit(c *gin.Context, action string, detail
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
 	uid, _ := c.Get(middleware.CtxUserID)
 	id, _ := uid.(uint)
-	_ = h.audit.Record(id, action, "client_channel", "", string(raw), c.ClientIP())
+	h.audit.RecordSafe(id, action, "client_channel", "", marshalAuditDetail(detail), c.ClientIP())
 }
 
 // parseOptionalTime 解析可选 RFC3339 时间；空串返回 nil。
@@ -338,9 +338,16 @@ func parseOptionalTime(s string) (*time.Time, error) {
 
 // keyWithPlaintext 把一次性明文并入密钥响应（仅创建/轮换返回；列表/详情不含）。
 func keyWithPlaintext(key any, plaintext string) gin.H {
-	raw, _ := json.Marshal(key)
+	raw, err := json.Marshal(key)
+	if err != nil {
+		slog.Warn("序列化拉取密钥响应失败", "error", err)
+		return gin.H{"key": plaintext}
+	}
 	var m map[string]any
-	_ = json.Unmarshal(raw, &m)
+	if err := json.Unmarshal(raw, &m); err != nil {
+		slog.Warn("解析拉取密钥响应失败", "error", err)
+		return gin.H{"key": plaintext}
+	}
 	m["key"] = plaintext
 	return m
 }

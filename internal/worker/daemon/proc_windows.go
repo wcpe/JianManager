@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"log/slog"
 	"os/exec"
 	"strconv"
 )
@@ -16,7 +17,9 @@ func killProcessTree(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	_ = exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run()
+	if err := exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run(); err != nil {
+		slog.Warn("终止 Windows 进程树失败", "pid", cmd.Process.Pid, "error", err)
+	}
 }
 
 // KillPIDTree 按 PID 用 taskkill /T /F 递归终止整棵进程树（FR-325 接管兜底：

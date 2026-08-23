@@ -189,7 +189,10 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 
 	channelIDs := ""
 	if len(req.ChannelIDs) > 0 {
-		raw, _ := json.Marshal(req.ChannelIDs)
+		raw, err := json.Marshal(req.ChannelIDs)
+		if err != nil {
+			return nil, fmt.Errorf("序列化告警通道失败: %w", err)
+		}
 		channelIDs = string(raw)
 	}
 
@@ -315,7 +318,10 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 		updates["level"] = *req.Level
 	}
 	if req.ChannelIDs != nil {
-		raw, _ := json.Marshal(*req.ChannelIDs)
+		raw, err := json.Marshal(*req.ChannelIDs)
+		if err != nil {
+			return nil, fmt.Errorf("序列化告警通道失败: %w", err)
+		}
 		updates["channel_ids"] = string(raw)
 	}
 	if req.DedupWindowSec != nil {

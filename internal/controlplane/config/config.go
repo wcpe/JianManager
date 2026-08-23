@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -255,9 +256,13 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("proxy.url", "")
 	v.SetDefault("proxy.no_proxy", "")
 	// 显式绑定任务约定的私钥环境变量名（敏感信息经 env 注入、不入库，config-files 规范）。
-	_ = v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY")
+	if err := v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY"); err != nil {
+		return nil, fmt.Errorf("绑定客户端签名私钥环境变量失败: %w", err)
+	}
 	// 拉取密钥可逆加密密钥（FR-192，见 ADR-044）：同惯例经 env 注入、不入库。
-	_ = v.BindEnv("client_dist.key_enc_secret", "JIANMANAGER_CLIENT_KEY_ENC_SECRET")
+	if err := v.BindEnv("client_dist.key_enc_secret", "JIANMANAGER_CLIENT_KEY_ENC_SECRET"); err != nil {
+		return nil, fmt.Errorf("绑定客户端密钥加密环境变量失败: %w", err)
+	}
 
 	// 配置文件：.yml 优先、找不到回退 .yaml（FR-224）。viper 默认搜索按 SupportedExts 顺序
 	// （yaml 先于 yml），无法据此让 .yml 优先；故显式按 [.yml, .yaml] 在搜索目录探测，命中即 SetConfigFile。
@@ -279,7 +284,12 @@ func Load(path string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
-	_ = v.ReadInConfig() // 配置文件可选
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			return nil, fmt.Errorf("读取配置文件失败: %w", err)
+		}
+	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {

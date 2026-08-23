@@ -40,7 +40,7 @@ func (f *fakeFileDownloadWorker) ReadFile(_ context.Context, req *workerpb.ReadF
 }
 
 // fakeDownloadFileStream 预分好片的 DownloadFile 客户端流；err 非空时首个 Recv 即返回该错误
-//（模拟老 Worker 的 Unimplemented：真实 gRPC 建流懒惰，错误在首个 Recv 才暴露）。
+// （模拟老 Worker 的 Unimplemented：真实 gRPC 建流懒惰，错误在首个 Recv 才暴露）。
 type fakeDownloadFileStream struct {
 	grpc.ClientStream
 	chunks []*workerpb.DownloadFileChunk

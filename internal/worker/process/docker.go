@@ -302,7 +302,9 @@ func (d *dockerStrategy) Stop() error {
 	if stopCmd == "" {
 		stopCmd = "stop"
 	}
-	_ = d.SendCommand(stopCmd)
+	if err := d.SendCommand(stopCmd); err != nil {
+		slog.Warn("向容器发送优雅停止命令失败，继续请求 Docker 停止", "containerId", containerID, "error", err)
+	}
 
 	timeout := int(dockerStopGracePeriod.Seconds())
 	if err := cli.ContainerStop(context.Background(), containerID, containertypes.StopOptions{Timeout: &timeout}); err != nil {
@@ -456,7 +458,9 @@ func (d *dockerStrategy) removeExistingContainer(ctx context.Context) {
 	for _, c := range containers {
 		for _, n := range c.Names {
 			if strings.TrimPrefix(n, "/") == name {
-				_ = d.cli.ContainerRemove(ctx, c.ID, containertypes.RemoveOptions{Force: true})
+				if err := d.cli.ContainerRemove(ctx, c.ID, containertypes.RemoveOptions{Force: true}); err != nil {
+					slog.Warn("删除同名残留容器失败", "containerId", c.ID, "error", err)
+				}
 				return
 			}
 		}

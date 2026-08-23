@@ -120,7 +120,7 @@ func auditExportLine(log model.AuditLog) auditExportRow {
 func (h *AuditHandler) recordAuditExport(c *gin.Context, filter service.AuditFilter, status string) {
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
-	_ = h.auditSvc.Record(userID, "audit.export", "audit", "", auditExportDetail(filter, status), c.ClientIP())
+	h.auditSvc.RecordSafe(userID, "audit.export", "audit", "", auditExportDetail(filter, status), c.ClientIP())
 }
 
 func auditExportDetail(filter service.AuditFilter, status string) string {
@@ -147,17 +147,17 @@ func auditExportDetail(filter service.AuditFilter, status string) string {
 	if len(filters) > 0 {
 		detail["filters"] = filters
 	}
-	b, _ := json.Marshal(detail)
-	return string(b)
+	return marshalAuditDetail(detail)
 }
 
 func parseAuditFilter(c *gin.Context) service.AuditFilter {
 	filter := service.AuditFilter{}
 
 	if v := c.Query("userId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
-		u := uint(id)
-		filter.UserID = &u
+		if id, err := strconv.ParseUint(v, 10, 64); err == nil {
+			u := uint(id)
+			filter.UserID = &u
+		}
 	}
 	if v := c.Query("action"); v != "" {
 		filter.Action = &v

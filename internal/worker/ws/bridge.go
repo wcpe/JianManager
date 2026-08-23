@@ -110,7 +110,9 @@ func parseBridgeEventData(data json.RawMessage) bridgeEventData {
 	if len(data) == 0 {
 		return d
 	}
-	_ = json.Unmarshal(data, &d) // 失败即零值，容错
+	if err := json.Unmarshal(data, &d); err != nil {
+		return bridgeEventData{}
+	}
 	return d
 }
 
@@ -149,7 +151,9 @@ type PluginSession struct {
 func (s *PluginSession) writeJSON(v interface{}) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	_ = s.Conn.SetWriteDeadline(time.Now().Add(bridgeWriteWait))
+	if err := s.Conn.SetWriteDeadline(time.Now().Add(bridgeWriteWait)); err != nil {
+		return err
+	}
 	return s.Conn.WriteJSON(v)
 }
 
@@ -290,7 +294,9 @@ func (s *PluginBridgeServer) addSession(session *PluginSession) {
 	s.mu.Unlock()
 	if old != nil {
 		slog.Info("插件桥旧会话被新连顶替", "instanceId", session.InstanceID)
-		_ = old.Conn.Close() // 旧 handleSession 读出错退出，自身负责清理与冒泡 disconnected
+		if err := old.Conn.Close(); err != nil {
+			slog.Debug("关闭被顶替的插件桥旧会话失败", "instanceId", session.InstanceID, "error", err)
+		}
 	}
 }
 
@@ -310,7 +316,9 @@ func (s *PluginBridgeServer) removeSession(session *PluginSession) bool {
 // 读循环（ping→pong、hello 记录平台/版本、event 冒泡），退出时冒泡 disconnected。
 func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 	defer func() {
-		_ = session.Conn.Close()
+		if err := session.Conn.Close(); err != nil {
+			slog.Debug("关闭插件桥会话失败", "instanceId", session.InstanceID, "error", err)
+		}
 		if s.removeSession(session) {
 			s.emit(PluginEvent{
 				InstanceUUID: session.InstanceID,
@@ -330,16 +338,24 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 		Timestamp:    time.Now().Unix(),
 	})
 	// 回执 welcome，确认会话建立。
-	_ = session.writeJSON(bridgeMessage{Type: "welcome", Instance: session.InstanceID})
+	if err := session.writeJSON(bridgeMessage{Type: "welcome", Instance: session.InstanceID}); err != nil {
+		slog.Debug("发送插件桥欢迎消息失败", "instanceId", session.InstanceID, "error", err)
+		return
+	}
 
 	// 心跳超时：任意帧到达刷新读 deadline；超时未收到帧即读出错、退出循环。
-	_ = session.Conn.SetReadDeadline(time.Now().Add(bridgePongWait))
+	if err := session.Conn.SetReadDeadline(time.Now().Add(bridgePongWait)); err != nil {
+		slog.Debug("设置插件桥读取截止时间失败", "instanceId", session.InstanceID, "error", err)
+		return
+	}
 	// 探针按心跳节奏发 WS ping 控制帧（OPCODE_PING）。gorilla 默认 ping handler 仅回 pong、
 	// 【不刷新读 deadline】，且控制帧不会让 ReadMessage 返回——故无玩家活动的空闲长连会在
 	// bridgePongWait 到点被误判断线（实测每 ~90s 断一次重连，扰动 FR-066 实时事件流）。
 	// 接管 ping handler：收到探针 ping 即刷新读 deadline 并回 pong，使空闲桥连接长期稳定。
 	session.Conn.SetPingHandler(func(appData string) error {
-		_ = session.Conn.SetReadDeadline(time.Now().Add(bridgePongWait))
+		if err := session.Conn.SetReadDeadline(time.Now().Add(bridgePongWait)); err != nil {
+			return err
+		}
 		err := session.Conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(bridgeWriteWait))
 		if errors.Is(err, websocket.ErrCloseSent) {
 			return nil
@@ -358,7 +374,10 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 			}
 			return
 		}
-		_ = session.Conn.SetReadDeadline(time.Now().Add(bridgePongWait))
+		if err := session.Conn.SetReadDeadline(time.Now().Add(bridgePongWait)); err != nil {
+			slog.Debug("刷新插件桥读取截止时间失败", "instanceId", session.InstanceID, "error", err)
+			return
+		}
 
 		var msg bridgeMessage
 		if err := json.Unmarshal(msgBytes, &msg); err != nil {
@@ -367,7 +386,10 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 
 		switch msg.Type {
 		case "ping":
-			_ = session.writeJSON(bridgeMessage{Type: "pong"})
+			if err := session.writeJSON(bridgeMessage{Type: "pong"}); err != nil {
+				slog.Debug("发送插件桥心跳响应失败", "instanceId", session.InstanceID, "error", err)
+				return
+			}
 			s.emit(PluginEvent{
 				InstanceUUID: session.InstanceID,
 				Type:         PluginEventHeartbeat,
@@ -383,13 +405,11 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 			// 无人等待（超时后到达/重发）则不阻塞，继续作为事件冒泡供观测。
 			if msg.Event == "command_result" {
 				var cr commandResultData
-				_ = json.Unmarshal(msg.Data, &cr)
-				session.deliverResult(CommandResult{
-					RequestID: cr.RequestID,
-					Success:   cr.Success,
-					Output:    cr.Output,
-					Error:     cr.Error,
-				})
+				if err := json.Unmarshal(msg.Data, &cr); err != nil {
+					slog.Debug("解析插件桥指令回执失败", "instanceId", session.InstanceID, "error", err)
+				} else {
+					session.deliverResult(CommandResult(cr))
+				}
 			}
 			// 业务事件冒泡（FR-066）：解析 data 里的结构化玩家字段填充事件，原始载荷一并透传（raw）。
 			// Worker 只解析、不消费语义（跨服感知聚合在 CP，治理执行在 FR-067）。

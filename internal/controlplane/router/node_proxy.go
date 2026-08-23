@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -97,8 +96,7 @@ func (h *NodeProxyHandler) recordAudit(c *gin.Context, action, targetID string, 
 	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
-	raw, _ := json.Marshal(detail)
-	_ = h.audit.Record(userID, action, "node", targetID, string(raw), c.ClientIP())
+	h.audit.RecordSafe(userID, action, "node", targetID, marshalAuditDetail(detail), c.ClientIP())
 }
 
 // RegisterRoutes 注册节点代理路由（FR-185）。

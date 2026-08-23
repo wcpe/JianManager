@@ -56,13 +56,14 @@ func probePathAccess(absPath string) pathAccess {
 		out.Readable = fileReadable(absPath)
 		out.Writable = fileWritable(absPath)
 	}
-	if !out.Readable && !out.Writable {
+	switch {
+	case !out.Readable && !out.Writable:
 		if out.Reason == "" {
 			out.Reason = "当前 Worker 用户对该路径既不可读也不可写"
 		}
-	} else if !out.Writable {
+	case !out.Writable:
 		out.Reason = "当前 Worker 用户可读但不可写该路径"
-	} else if !out.Readable {
+	case !out.Readable:
 		out.Reason = "当前 Worker 用户可写但不可读该路径"
 	}
 	return out

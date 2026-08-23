@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -25,7 +26,11 @@ func Audit(cfg AuditConfig) gin.HandlerFunc {
 			// 读取请求体用于审计
 			var body []byte
 			if c.Request.Body != nil {
-				body, _ = io.ReadAll(c.Request.Body)
+				var err error
+				body, err = io.ReadAll(c.Request.Body)
+				if err != nil {
+					slog.Warn("读取审计请求体失败", "path", c.Request.URL.Path, "error", err)
+				}
 				c.Request.Body = io.NopCloser(bytes.NewReader(body))
 			}
 

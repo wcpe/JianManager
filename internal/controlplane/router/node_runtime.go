@@ -1,10 +1,8 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -43,8 +41,7 @@ func (h *NodeRuntimeHandler) recordAudit(c *gin.Context, action, targetID string
 	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
-	raw, _ := json.Marshal(detail)
-	_ = h.audit.Record(userID, action, "node", targetID, string(raw), c.ClientIP())
+	h.audit.RecordSafe(userID, action, "node", targetID, marshalAuditDetail(detail), c.ClientIP())
 }
 
 // ListArtifactCache GET /nodes/:id/artifact-cache — 列出节点制品缓存 + 总占用 + 上限（只读）。
@@ -148,7 +145,7 @@ func (h *NodeRuntimeHandler) JDKCatalog(c *gin.Context) {
 	}
 	major := 0
 	if v := c.Query("major"); v != "" {
-		major, _ = strconv.Atoi(v)
+		major = parseIntDefault(v, 0)
 	}
 	pkgs, err := h.svc.JDKCatalog(nodeID, vendor, major, c.Query("arch"))
 	if err != nil {

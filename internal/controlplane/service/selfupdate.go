@@ -586,7 +586,9 @@ func (s *SelfUpdateService) UpgradeControlPlane(ctx context.Context, wantVersion
 	cacheDir := os.TempDir()
 	if s.root != nil {
 		cacheDir = s.root.CacheDir()
-		_ = os.MkdirAll(cacheDir, 0o755)
+		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+			return from, feed.Version, fmt.Errorf("创建升级缓存目录失败: %w", err)
+		}
 	}
 	dest := filepath.Join(cacheDir, fmt.Sprintf("control-plane-upgrade-%d", time.Now().UnixNano()))
 	if err := selfupdate.DownloadWith(ctx, s.outboundClient(), art.URL, art.SHA256, dest, s.cfg.AllowInsecure); err != nil {

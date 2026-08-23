@@ -124,7 +124,10 @@ func formatScalar(v any) string {
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
 	case map[string]any:
-		b, _ := json.Marshal(t)
+		b, err := json.Marshal(t)
+		if err != nil {
+			return fmt.Sprint(t)
+		}
 		return string(b)
 	case float64:
 		// JSON 数字默认 float64；整数则去小数
@@ -196,16 +199,17 @@ func formatNodeList(w io.Writer, v any) error {
 
 // nodeStatusText 将 Node.Status 数值转为可读标签。
 func nodeStatusText(v any) string {
-	switch n := v.(type) {
-	case float64:
-		switch int(n) {
-		case 0:
-			return "offline"
-		case 1:
-			return "online"
-		case 2:
-			return "starting"
-		}
+	n, ok := v.(float64)
+	if !ok {
+		return formatScalar(v)
+	}
+	switch int(n) {
+	case 0:
+		return "offline"
+	case 1:
+		return "online"
+	case 2:
+		return "starting"
 	}
 	return formatScalar(v)
 }

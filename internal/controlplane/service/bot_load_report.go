@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -71,7 +72,9 @@ func (s *BotLoadReportService) BuildJSON(sessionID uint) (*BotLoadReportJSON, er
 		rep.ReportSummary = sess.ReportSummary
 	}
 	if sess.FailureSummary != "" {
-		_ = json.Unmarshal([]byte(sess.FailureSummary), &rep.FailureSummary)
+		if err := json.Unmarshal([]byte(sess.FailureSummary), &rep.FailureSummary); err != nil {
+			slog.Warn("解析 Bot 负载失败摘要失败", "sessionId", sessionID, "error", err)
+		}
 	}
 	return rep, nil
 }
@@ -85,17 +88,21 @@ func (s *BotLoadReportService) BuildCSV(sessionID uint) ([]byte, error) {
 	var b strings.Builder
 	b.WriteString("\ufeff")
 	w := csv.NewWriter(&b)
-	_ = w.Write([]string{"runId", "runUuid", "runState", "verdict", "maxStableBots", "generatedAt", "capacityPeakBots", "capacityClaimedAs500", "capacityTargetProcessRssBytes", "capacityRecommendedTargetProcessRssBytes", "capacityTargetHostMemoryWithinReserve"})
+	if err := w.Write([]string{"runId", "runUuid", "runState", "verdict", "maxStableBots", "generatedAt", "capacityPeakBots", "capacityClaimedAs500", "capacityTargetProcessRssBytes", "capacityRecommendedTargetProcessRssBytes", "capacityTargetHostMemoryWithinReserve"}); err != nil {
+		return nil, fmt.Errorf("写入 Bot 负载报告 CSV 表头失败: %w", err)
+	}
 	maxStable := ""
 	if rep.MaxStableBots != nil {
 		maxStable = fmt.Sprintf("%d", *rep.MaxStableBots)
 	}
 	capacity := rep.Capacity
-	_ = w.Write([]string{
+	if err := w.Write([]string{
 		fmt.Sprintf("%d", rep.RunID), rep.RunUUID, rep.RunState, rep.Verdict,
 		maxStable, rep.GeneratedAt.Format(time.RFC3339), capacityCSVInt(capacity.TestedScale.PeakBots), fmt.Sprintf("%t", capacity.TestedScale.ClaimedAs500),
 		capacityCSVInt64(capacity.MeasuredPeak.TargetProcessRssBytes.Value), capacityCSVInt64(capacity.Recommended.TargetProcessRssBytes), capacityCSVBool(capacity.TargetHostMemory.WithinReserve),
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("写入 Bot 负载报告 CSV 数据失败: %w", err)
+	}
 	w.Flush()
 	if err := w.Error(); err != nil {
 		return nil, err

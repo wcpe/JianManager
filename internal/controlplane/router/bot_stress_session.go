@@ -91,8 +91,8 @@ func (h *BotStressSessionHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
 		return
 	}
-	page, _ := strconv.Atoi(c.Query("page"))
-	pageSize, _ := strconv.Atoi(c.Query("pageSize"))
+	page := parseIntDefault(c.Query("page"), 0)
+	pageSize := parseIntDefault(c.Query("pageSize"), 0)
 	res, err := h.svc.List(service.BotStressSessionListQuery{Page: page, PageSize: pageSize}, scopeIDs, scope)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
@@ -459,12 +459,11 @@ func (h *BotStressSessionHandler) recordRunAudit(c *gin.Context, action string, 
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
 	errMessage := ""
 	if operationErr != nil {
 		errMessage = operationErr.Error()
 	}
-	_ = h.audit.RecordResult(getUserID(c), action, "bot_load_run", strconv.FormatUint(uint64(id), 10), string(raw), c.ClientIP(), operationErr == nil, errMessage)
+	h.audit.RecordResultSafe(getUserID(c), action, "bot_load_run", strconv.FormatUint(uint64(id), 10), marshalAuditDetail(detail), c.ClientIP(), operationErr == nil, errMessage)
 }
 
 type botLoadHTTPError struct {

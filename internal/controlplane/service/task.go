@@ -158,14 +158,20 @@ func (s *TaskService) RunAsync(spec RunSpec, work func(ctx context.Context, stag
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		_ = s.MarkRunning(taskID)
+		if err := s.MarkRunning(taskID); err != nil {
+			slog.Warn("标记长操作任务运行中失败", "taskId", taskID, "error", err)
+		}
 		result, err := work(ctx, func(p int, text string) { s.SetStage(taskID, p, text) })
 		if err != nil {
 			slog.Error("长操作任务失败", "kind", spec.Kind, "taskId", taskID, "error", err)
-			_ = s.MarkFailed(taskID, err.Error())
+			if markErr := s.MarkFailed(taskID, err.Error()); markErr != nil {
+				slog.Warn("标记长操作任务失败状态失败", "taskId", taskID, "error", markErr)
+			}
 			return
 		}
-		_ = s.MarkSucceeded(taskID, result)
+		if err := s.MarkSucceeded(taskID, result); err != nil {
+			slog.Warn("标记长操作任务成功状态失败", "taskId", taskID, "error", err)
+		}
 	}()
 	return taskID
 }

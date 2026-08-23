@@ -162,19 +162,33 @@ func (s *TerminalServer) Handler() http.HandlerFunc {
 		slog.Info("终端已连接", "instanceId", instanceID, "permission", permission, "remote", r.RemoteAddr)
 
 		// 发送欢迎消息
-		conn.WriteJSON(TerminalMessage{
+		if err := conn.WriteJSON(TerminalMessage{
 			Type:       "stdout",
 			InstanceID: instanceID,
 			Data:       "已连接到实例 " + instanceID + "\r\n",
-		})
+		}); err != nil {
+			slog.Warn("发送终端欢迎消息失败", "instanceId", instanceID, "error", err)
+			s.removeSession(instanceID, session)
+			if closeErr := conn.Close(); closeErr != nil {
+				slog.Debug("关闭终端连接失败", "instanceId", instanceID, "error", closeErr)
+			}
+			return
+		}
 
 		// 回放环形缓冲区中的历史输出
 		if history := buf.ReadAll(); len(history) > 0 {
-			conn.WriteJSON(TerminalMessage{
+			if err := conn.WriteJSON(TerminalMessage{
 				Type:       "stdout",
 				InstanceID: instanceID,
 				Data:       string(history),
-			})
+			}); err != nil {
+				slog.Warn("回放终端历史输出失败", "instanceId", instanceID, "error", err)
+				s.removeSession(instanceID, session)
+				if closeErr := conn.Close(); closeErr != nil {
+					slog.Debug("关闭终端连接失败", "instanceId", instanceID, "error", closeErr)
+				}
+				return
+			}
 		}
 
 		// 处理消息循环
@@ -193,7 +207,10 @@ func (s *TerminalServer) handleSession(session *TerminalSession) {
 	conn := session.Conn
 	// 保活心跳（FR-140）：pong 到达即续读超时，配合定时 ping 让空闲连接不被中间层判超时断开。
 	if s.pongWait > 0 {
-		_ = conn.SetReadDeadline(time.Now().Add(s.pongWait))
+		if err := conn.SetReadDeadline(time.Now().Add(s.pongWait)); err != nil {
+			slog.Debug("设置终端读取截止时间失败", "instanceId", session.InstanceID, "error", err)
+			return
+		}
 		conn.SetPongHandler(func(string) error {
 			return conn.SetReadDeadline(time.Now().Add(s.pongWait))
 		})
@@ -215,7 +232,10 @@ func (s *TerminalServer) handleSession(session *TerminalSession) {
 		}
 		// 收到任意数据帧也视为对端存活，续读超时。
 		if s.pongWait > 0 {
-			_ = conn.SetReadDeadline(time.Now().Add(s.pongWait))
+			if err := conn.SetReadDeadline(time.Now().Add(s.pongWait)); err != nil {
+				slog.Debug("刷新终端读取截止时间失败", "instanceId", session.InstanceID, "error", err)
+				return
+			}
 		}
 
 		var msg TerminalMessage

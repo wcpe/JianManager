@@ -67,8 +67,8 @@ func (h *BotHandler) List(c *gin.Context) {
 		return
 	}
 
-	page, _ := strconv.Atoi(c.Query("page"))
-	pageSize, _ := strconv.Atoi(c.Query("pageSize"))
+	page := parseIntDefault(c.Query("page"), 0)
+	pageSize := parseIntDefault(c.Query("pageSize"), 0)
 	query := service.BotListQuery{Filter: parseBotFilter(c), Page: page, PageSize: pageSize}
 
 	res, err := h.botSvc.ListPaged(query, scopeIDs, scope)
@@ -387,13 +387,19 @@ func (h *BotHandler) Events(c *gin.Context) {
 		return
 	}
 
+	initBytes, err := json.Marshal(gin.H{"botId": bot.ID, "botUuid": bot.UUID})
+	if err != nil {
+		slog.Error("序列化 Bot SSE 初始帧失败", "botId", bot.ID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
 
-	initBytes, _ := json.Marshal(gin.H{"botId": bot.ID, "botUuid": bot.UUID})
 	fmt.Fprintf(c.Writer, "event: init\ndata: %s\n\n", initBytes)
 	c.Writer.Flush()
 

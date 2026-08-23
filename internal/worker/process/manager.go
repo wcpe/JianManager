@@ -637,8 +637,12 @@ func (m *Manager) killLocked(uuid string, inst *Instance) error {
 	m.mu.Unlock()
 
 	if strategy != nil {
-		_ = strategy.Kill()
-		_ = strategy.Close()
+		if err := strategy.Kill(); err != nil {
+			slog.Warn("强制终止实例策略失败，继续清理生命周期状态", "instanceId", uuid, "error", err)
+		}
+		if err := strategy.Close(); err != nil {
+			slog.Warn("关闭实例策略失败，继续清理生命周期状态", "instanceId", uuid, "error", err)
+		}
 	}
 
 	m.mu.Lock()
@@ -727,8 +731,12 @@ func (m *Manager) removeLocked(uuid string, inst *Instance) error {
 	m.mu.Unlock()
 
 	if strategy != nil {
-		_ = strategy.Kill()
-		_ = strategy.Close()
+		if err := strategy.Kill(); err != nil {
+			slog.Warn("移除实例时强制终止策略失败，继续删除实例记录", "instanceId", uuid, "error", err)
+		}
+		if err := strategy.Close(); err != nil {
+			slog.Warn("移除实例时关闭策略失败，继续删除实例记录", "instanceId", uuid, "error", err)
+		}
 	}
 
 	m.mu.Lock()

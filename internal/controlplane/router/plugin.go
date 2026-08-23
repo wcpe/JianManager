@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -213,8 +212,7 @@ func (h *PluginHandler) recordAudit(c *gin.Context, action string, detail any) {
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
-	_ = h.audit.Record(h.actorID(c), action, "plugin", "", string(raw), c.ClientIP())
+	h.audit.RecordSafe(h.actorID(c), action, "plugin", "", marshalAuditDetail(detail), c.ClientIP())
 }
 
 // RegisterRoutes 注册插件路由。

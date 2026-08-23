@@ -1,6 +1,9 @@
 package router
 
 import (
+	"encoding/json"
+	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -206,7 +209,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	protected.Use(middleware.JWTAuth(jwtSecret))
 	protected.Use(middleware.Audit(middleware.AuditConfig{
 		RecordFunc: func(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string) {
-			_ = svcs.Audit.RecordResult(userID, action, targetType, targetID, detail, ip, success, errMsg)
+			svcs.Audit.RecordResultSafe(userID, action, targetType, targetID, detail, ip, success, errMsg)
 		},
 	}))
 	// 加载授权上下文（用户角色 + 组成员关系），供后续权限判断使用
@@ -617,4 +620,21 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	embed.RegisterStaticRoutes(r)
 
 	return r
+}
+
+func marshalAuditDetail(detail any) string {
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		slog.Warn("序列化审计详情失败", "error", err)
+		return ""
+	}
+	return string(raw)
+}
+
+func parseUintDefault(raw string, fallback uint64) uint64 {
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return value
 }

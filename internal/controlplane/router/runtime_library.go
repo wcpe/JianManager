@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -51,8 +50,7 @@ func (h *RuntimeLibraryHandler) recordAudit(c *gin.Context, action, targetID str
 	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
-	raw, _ := json.Marshal(detail)
-	_ = h.audit.Record(userID, action, "node", targetID, string(raw), c.ClientIP())
+	h.audit.RecordSafe(userID, action, "node", targetID, marshalAuditDetail(detail), c.ClientIP())
 }
 
 // List GET /nodes/:id/runtimes — 统一 Runtime 视图（含 syncFromWorker 容忍语义）。

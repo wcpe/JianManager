@@ -273,7 +273,9 @@ func (h *ClientVersionHandler) DownloadArtifact(c *gin.Context) {
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", asset.SHA256))
 		c.Header("Content-Length", strconv.FormatInt(asset.Size, 10))
 		c.Status(http.StatusOK)
-		_, _ = io.Copy(c.Writer, rc)
+		if _, err := io.Copy(c.Writer, rc); err != nil {
+			slog.Debug("代理输出 S3 制品失败", "sha256", asset.SHA256, "error", err)
+		}
 		return
 	}
 	f, oerr := os.Open(absPath)
@@ -309,7 +311,7 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 	responseBody := ""
 	defer func() {
 		if h.tracking != nil {
-			_ = h.tracking.Record(service.ClientDistEventInput{
+			h.tracking.RecordSafe(service.ClientDistEventInput{
 				ChannelID: channelID, MachineID: mid, IP: c.ClientIP(), Kind: "manifest",
 				Version: manifestVersion, Bytes: int64(c.Writer.Size()), Status: c.Writer.Status(),
 				ErrCode: errCode, DurationMs: time.Since(start).Milliseconds(), Method: c.Request.Method,
@@ -334,7 +336,7 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 	// 机器码登记（FR-092）：鉴权通过后若携带 X-Machine-Id 则 best-effort upsert（弱一致、失败不阻断）。
 	// 机器码不可信，仅统计/辅助限流（限流主键为 IP，FR-096）。
 	if h.machine != nil && mid != "" {
-		_ = h.machine.Record(channelID, mid)
+		h.machine.RecordSafe(channelID, mid)
 	}
 
 	manifest, err := h.svc.BuildManifest(channelID)
@@ -371,7 +373,7 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 	responseBody := ""
 	defer func() {
 		if h.tracking != nil {
-			_ = h.tracking.Record(service.ClientDistEventInput{
+			h.tracking.RecordSafe(service.ClientDistEventInput{
 				ChannelID: channelID, MachineID: c.GetHeader(machineIDHeader), IP: c.ClientIP(),
 				Kind: "artifact", ArtifactSHA: sha, Bytes: int64(c.Writer.Size()),
 				Status: c.Writer.Status(), ErrCode: errCode, DurationMs: time.Since(start).Milliseconds(), Method: c.Request.Method,
@@ -410,13 +412,13 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 			return
 		}
 		if invalidMultiRange(c.GetHeader("Range")) {
-			_ = h.security.RecordRiskEvent("INVALID_RANGE", channelID, c.GetHeader(machineIDHeader), "", "", c.ClientIP(), key, "medium", nil)
+			h.security.RecordRiskEventSafe("INVALID_RANGE", channelID, c.GetHeader(machineIDHeader), "", "", c.ClientIP(), key, "medium", nil)
 			errCode = "INVALID_RANGE"
 			c.JSON(http.StatusRequestedRangeNotSatisfiable, gin.H{"error": "INVALID_RANGE", "message": "不支持多段 Range"})
 			return
 		}
 		if smallRange(c.GetHeader("Range")) {
-			_ = h.security.RecordRiskEvent("RANGE_SMALL", channelID, c.GetHeader(machineIDHeader), "", "", c.ClientIP(), key, "low", nil)
+			h.security.RecordRiskEventSafe("RANGE_SMALL", channelID, c.GetHeader(machineIDHeader), "", "", c.ClientIP(), key, "low", nil)
 		}
 		lease, err := h.security.AcquireArtifact(c.ClientIP(), key.ID, channelID)
 		if err != nil {
@@ -435,7 +437,7 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 	}
 
 	// s3 制品：鉴权/防护/限流/带宽检查全部照旧先行后，302 到预签名短时效 URL
-	//（FR-347，见 ADR-073 决策 1）。CP 只当授权与调度面，字节流量走对象存储出口；
+	// （FR-347，见 ADR-073 决策 1）。CP 只当授权与调度面，字节流量走对象存储出口；
 	// updater 已 setInstanceFollowRedirects(true) 自动跟随（跨协议限制见 spec §3.8 部署约束）。
 	if asset.StorageBackend == model.AssetBackendS3 {
 		if h.security != nil {
@@ -672,10 +674,9 @@ func (h *ClientVersionHandler) recordAudit(c *gin.Context, action string, detail
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
 	uid, _ := c.Get(middleware.CtxUserID)
 	id, _ := uid.(uint)
-	_ = h.audit.Record(id, action, "client_channel", "", string(raw), c.ClientIP())
+	h.audit.RecordSafe(id, action, "client_channel", "", marshalAuditDetail(detail), c.ClientIP())
 }
 
 // ListEvents GET /client-dist/events — 拉取/下载明细检索（运营，平台管理员；FR-093/249）。
@@ -703,8 +704,7 @@ func responseBodyForLog(body, errCode string) string {
 	if errCode == "" {
 		return ""
 	}
-	raw, _ := json.Marshal(gin.H{"error": errCode})
-	return string(raw)
+	return marshalAuditDetail(gin.H{"error": errCode})
 }
 
 func (h *ClientVersionHandler) ListEvents(c *gin.Context) {
@@ -793,7 +793,7 @@ func (h *ClientVersionHandler) GetUpdaterCore(c *gin.Context) {
 	responseBody := ""
 	defer func() {
 		if h.tracking != nil {
-			_ = h.tracking.Record(service.ClientDistEventInput{
+			h.tracking.RecordSafe(service.ClientDistEventInput{
 				ChannelID: channelID, MachineID: c.GetHeader(machineIDHeader), IP: c.ClientIP(), Kind: "core",
 				Bytes: int64(c.Writer.Size()), Status: c.Writer.Status(), ErrCode: errCode,
 				DurationMs: time.Since(start).Milliseconds(), Method: c.Request.Method,

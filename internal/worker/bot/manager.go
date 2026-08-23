@@ -944,7 +944,9 @@ func (m *Manager) Stop() {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Kill()
+			if err := cmd.Process.Kill(); err != nil {
+				slog.Warn("强制终止超时的 Bot Worker 失败", "error", err)
+			}
 		}
 		<-done
 	}
@@ -1037,14 +1039,14 @@ func (m *Manager) sendRequest(ctx context.Context, requestID string, cmd interfa
 		}
 	case <-ctx.Done():
 		m.removePendingRequest(requestID, resultCh)
-		if _, completed := pollWrite(writeDone); !completed {
+		if !writeCompleted(writeDone) {
 			m.isolateBlockedWriter(generation, encoder, ctx.Err())
 			<-writeDone
 		}
 		return nil, ctx.Err()
 	case <-timer.C:
 		m.removePendingRequest(requestID, resultCh)
-		if _, completed := pollWrite(writeDone); !completed {
+		if !writeCompleted(writeDone) {
 			err := fmt.Errorf("等待 Bot Worker stdin 写入超时: requestId=%s", requestID)
 			m.isolateBlockedWriter(generation, encoder, err)
 			<-writeDone
@@ -1091,6 +1093,15 @@ func pollWrite(done <-chan error) (error, bool) {
 	}
 }
 
+func writeCompleted(done <-chan error) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (m *Manager) isolateBlockedWriter(generation int64, encoder *json.Encoder, cause error) {
 	m.mu.Lock()
 	if !m.running || m.activeReaderGeneration != generation || m.stdin != encoder {
@@ -1110,7 +1121,9 @@ func (m *Manager) isolateBlockedWriter(generation int64, encoder *json.Encoder, 
 		cancel()
 	}
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		if err := cmd.Process.Kill(); err != nil {
+			slog.Warn("终止不健康的 Bot Worker 失败", "error", err)
+		}
 	}
 	if cb != nil {
 		cb(exitEvent)

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/net/context"
+	"context"
 	"google.golang.org/grpc"
 
 	"github.com/wcpe/JianManager/proto/workerpb"

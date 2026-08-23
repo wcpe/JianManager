@@ -379,11 +379,15 @@ func (s *RuntimeLibraryService) InstallAsync(nodeID uint, req InstallRuntimeRequ
 		TaskId:     taskID,
 	})
 	if err != nil {
-		_ = s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err))
+		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err)); markErr != nil {
+			slog.Warn("将运行时安装任务标记为失败时出错", "taskId", taskID, "error", markErr)
+		}
 		return nil, fmt.Errorf("Worker InstallRuntime RPC 失败: %w", err)
 	}
 	if !resp.Success {
-		_ = s.tasks.MarkFailed(taskID, fmt.Sprintf("Worker 拒绝安装: %s", resp.Error))
+		if markErr := s.tasks.MarkFailed(taskID, fmt.Sprintf("Worker 拒绝安装: %s", resp.Error)); markErr != nil {
+			slog.Warn("将运行时安装任务标记为失败时出错", "taskId", taskID, "error", markErr)
+		}
 		return nil, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
 	}
 	if err := s.tasks.MarkRunning(taskID); err != nil {

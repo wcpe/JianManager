@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
-
-const botLoadStreamDisclaimer = "命令发送成功仅表示 bot.chat 未同步抛错，不证明服务器接受或业务效果。"
 
 // BotLoadStreamSnapshot 会话 SSE 一帧聚合投影（FR-370/372）。
 type BotLoadStreamSnapshot struct {
@@ -116,9 +115,11 @@ func (s *BotLoadMetricSampler) ProjectStreamSnapshot(ctx context.Context, sessio
 	// 拼装 run 投影：优先复用 sessionView（含 counts/allocations/batches），再叠 V2 字段
 	run := map[string]any{}
 	if sessionView != nil {
-		raw, mErr := json.Marshal(sessionView)
-		if mErr == nil {
-			_ = json.Unmarshal(raw, &run)
+		raw, err := json.Marshal(sessionView)
+		if err != nil {
+			slog.Warn("序列化 Bot 负载会话投影失败", "sessionId", sessionID, "error", err)
+		} else if err := json.Unmarshal(raw, &run); err != nil {
+			slog.Warn("解析 Bot 负载会话投影失败", "sessionId", sessionID, "error", err)
 		}
 	}
 	run["schemaVersion"] = sess.SchemaVersion

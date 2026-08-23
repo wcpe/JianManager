@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -102,10 +101,9 @@ func (h *ClientIPRuleHandler) recordAudit(c *gin.Context, action string, detail 
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
 	uid, _ := c.Get(middleware.CtxUserID)
 	id, _ := uid.(uint)
-	_ = h.audit.Record(id, action, "client_ip_rule", "", string(raw), c.ClientIP())
+	h.audit.RecordSafe(id, action, "client_ip_rule", "", marshalAuditDetail(detail), c.ClientIP())
 }
 
 // RegisterRoutes 注册 IP 防护规则管理路由（须挂 JWT 平台管理员组）。

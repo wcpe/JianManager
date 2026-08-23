@@ -38,7 +38,7 @@ func (h *ProvisionHandler) Cores(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"type": coreType, "versions": versions})
 		return
 	}
-	build, _ := strconv.Atoi(c.Query("build"))
+	build := parseIntDefault(c.Query("build"), 0)
 	info, err := h.core.ResolveBuild(c.Request.Context(), coreType, mcVersion, build)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "CORE_REPO_ERROR", "message": err.Error()})

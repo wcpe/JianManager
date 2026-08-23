@@ -41,8 +41,8 @@ func (h *BotLoadTemplateHandler) List(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
 		return
 	}
-	page, _ := strconv.Atoi(c.Query("page"))
-	pageSize, _ := strconv.Atoi(c.Query("pageSize"))
+	page := parseIntDefault(c.Query("page"), 0)
+	pageSize := parseIntDefault(c.Query("pageSize"), 0)
 	q := service.BotLoadTemplateListQuery{
 		Page: page, PageSize: pageSize, Q: c.Query("q"), Tag: c.Query("tag"),
 	}

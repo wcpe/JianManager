@@ -22,7 +22,10 @@ func (s *Server) ListArtifactCache(_ context.Context, _ *workerpb.ListArtifactCa
 	if err != nil {
 		return nil, fmt.Errorf("列出制品缓存失败: %w", err)
 	}
-	total, _ := s.cache.TotalBytes()
+	total, err := s.cache.TotalBytes()
+	if err != nil {
+		return nil, fmt.Errorf("统计制品缓存占用失败: %w", err)
+	}
 	out := make([]*workerpb.ArtifactCacheItem, 0, len(items))
 	for _, it := range items {
 		out = append(out, &workerpb.ArtifactCacheItem{
@@ -71,7 +74,10 @@ func (s *Server) SetArtifactCacheCap(_ context.Context, req *workerpb.SetArtifac
 	if err := s.cache.EnforceCap(); err != nil {
 		return &workerpb.SetArtifactCacheCapResponse{Success: false, Error: err.Error()}, nil
 	}
-	total, _ := s.cache.TotalBytes()
+	total, err := s.cache.TotalBytes()
+	if err != nil {
+		return &workerpb.SetArtifactCacheCapResponse{Success: false, Error: fmt.Sprintf("统计制品缓存占用失败: %v", err)}, nil
+	}
 	return &workerpb.SetArtifactCacheCapResponse{Success: true, CapBytes: s.cache.Cap(), TotalBytes: total}, nil
 }
 

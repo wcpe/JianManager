@@ -109,7 +109,7 @@ func (m *matcher) ignored(rel string) bool {
 	for i := range segs {
 		dir := segs[i]
 		for _, p := range m.dirPrefixes {
-			if ok, _ := path.Match(p, dir); ok {
+			if ok, err := path.Match(p, dir); err == nil && ok {
 				return true
 			}
 		}
@@ -117,7 +117,7 @@ func (m *matcher) ignored(rel string) bool {
 
 	// basename glob。
 	for _, g := range m.baseGlobs {
-		if ok, _ := path.Match(g, base); ok {
+		if ok, err := path.Match(g, base); err == nil && ok {
 			return true
 		}
 	}

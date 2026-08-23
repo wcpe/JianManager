@@ -208,7 +208,10 @@ func findNodeExecutable(dir string) (string, bool) {
 		filepath.Join(dir, "bin", "node"),
 		filepath.Join(dir, "node.exe"),
 	}
-	entries, _ := os.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false
+	}
 	for _, e := range entries {
 		if e.IsDir() {
 			candidates = append(candidates,

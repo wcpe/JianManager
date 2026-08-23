@@ -118,7 +118,7 @@ func (s *ArtifactMigrationService) Start(targetID, createdBy uint) (string, erro
 	// 登记行与任务同步落库（手写生命周期而非 RunAsync 的原因：发起返回前四计数行必须已存在，
 	// 否则 goroutine 首条计数更新与前端首次查询都有丢失窗口）。
 	if cerr := s.db.Create(&model.ArtifactMigration{TaskID: taskID, TargetChannelID: target.ID}).Error; cerr != nil {
-		_ = s.tasks.MarkFailed(taskID, "创建迁移登记失败: "+cerr.Error())
+		s.markTaskFailed(taskID, "创建迁移登记失败: "+cerr.Error())
 		return "", fmt.Errorf("创建迁移登记失败: %w", cerr)
 	}
 	go s.run(taskID, target, targetStore)
@@ -129,12 +129,14 @@ func (s *ArtifactMigrationService) Start(targetID, createdBy uint) (string, erro
 func (s *ArtifactMigrationService) run(taskID string, target *model.ArtifactStorageChannel, targetStore blobstore.Store) {
 	ctx, cancel := context.WithTimeout(context.Background(), artifactMigrationTimeout)
 	defer cancel()
-	_ = s.tasks.MarkRunning(taskID)
+	if err := s.tasks.MarkRunning(taskID); err != nil {
+		slog.Warn("标记制品迁移任务运行中失败", "taskId", taskID, "error", err)
+	}
 
 	// 快照存量（发起后新上传按活跃渠道已落对位置，不进本次快照）。
 	var assets []model.Asset
 	if err := s.db.Where("type = ?", model.AssetTypeClientFile).Order("id asc").Find(&assets).Error; err != nil {
-		_ = s.tasks.MarkFailed(taskID, "查询存量制品失败: "+err.Error())
+		s.markTaskFailed(taskID, "查询存量制品失败: "+err.Error())
 		return
 	}
 	var eligible []model.Asset
@@ -167,7 +169,7 @@ func (s *ArtifactMigrationService) run(taskID string, target *model.ArtifactStor
 
 	for i := range eligible {
 		if ctx.Err() != nil {
-			_ = s.tasks.MarkFailed(taskID, "迁移执行超时中断；重新发起同目标迁移即续跑（已完成的制品自动跳过）")
+			s.markTaskFailed(taskID, "迁移执行超时中断；重新发起同目标迁移即续跑（已完成的制品自动跳过）")
 			return
 		}
 		// 强停（FR-227 复用）：NodeID=0 的取消由任务中心直接置 canceled，此处逐条检查退出。
@@ -188,11 +190,23 @@ func (s *ArtifactMigrationService) run(taskID string, target *model.ArtifactStor
 	}
 
 	if failed > 0 {
-		_ = s.tasks.MarkFailed(taskID, fmt.Sprintf("%d 条制品迁移失败，详见失败明细；重新发起同目标迁移可重试（成功条自动跳过）", failed))
+		s.markTaskFailed(taskID, fmt.Sprintf("%d 条制品迁移失败，详见失败明细；重新发起同目标迁移可重试（成功条自动跳过）", failed))
 		return
 	}
-	result, _ := json.Marshal(map[string]int{"total": total, "migrated": migrated, "failed": failed, "skipped": skipped})
-	_ = s.tasks.MarkSucceeded(taskID, string(result))
+	result, err := json.Marshal(map[string]int{"total": total, "migrated": migrated, "failed": failed, "skipped": skipped})
+	if err != nil {
+		s.markTaskFailed(taskID, "生成迁移结果失败: "+err.Error())
+		return
+	}
+	if err := s.tasks.MarkSucceeded(taskID, string(result)); err != nil {
+		slog.Warn("标记制品迁移任务成功失败", "taskId", taskID, "error", err)
+	}
+}
+
+func (s *ArtifactMigrationService) markTaskFailed(taskID, reason string) {
+	if err := s.tasks.MarkFailed(taskID, reason); err != nil {
+		slog.Warn("标记制品迁移任务失败状态失败", "taskId", taskID, "error", err)
+	}
 }
 
 // migrateOne 单条搬运，顺序不可变（FR-348）：源读取（sha256 复核）→ 写目标 →

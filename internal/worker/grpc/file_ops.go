@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -146,7 +147,11 @@ func validatePath(workDir, targetPath string) error {
 		return fmt.Errorf("解析目标路径失败: %w", err)
 	}
 
-	if absTarget != absWork && !filepath.HasPrefix(absTarget, absWork+string(filepath.Separator)) {
+	rel, err := filepath.Rel(absWork, absTarget)
+	if err != nil {
+		return fmt.Errorf("计算目标相对路径失败: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("路径越界: %s 不在工作目录 %s 下", targetPath, workDir)
 	}
 

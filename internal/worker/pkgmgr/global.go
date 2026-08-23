@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -291,7 +292,7 @@ func (m *Manager) ListGlobal(ctx context.Context, pm string) ([]GlobalPackage, e
 	}
 	// outdated best-effort：命令对「有可更新项」按惯例退出码非 0，只要 stdout 可解析就采纳。
 	oArgs := append([]string{"outdated", "--json"}, m.projectArgs(pm)...)
-	if oOut, _ := m.runner()(ctx, pmPath, oArgs, env, nil); len(oOut) > 0 {
+	if oOut, outdatedErr := m.runner()(ctx, pmPath, oArgs, env, nil); len(oOut) > 0 {
 		if latest := parseOutdatedJSON(oOut); len(latest) > 0 {
 			for i := range pkgs {
 				if v, ok := latest[pkgs[i].Name]; ok && v != pkgs[i].Version {
@@ -299,6 +300,8 @@ func (m *Manager) ListGlobal(ctx context.Context, pm string) ([]GlobalPackage, e
 				}
 			}
 		}
+	} else if outdatedErr != nil {
+		slog.Debug("探测全局包更新失败，沿用已安装版本", "packageManager", pm, "error", outdatedErr)
 	}
 	return pkgs, nil
 }
@@ -318,7 +321,7 @@ func (m *Manager) InstallGlobal(ctx context.Context, pm, name, version string, o
 	if err != nil {
 		return err
 	}
-	spec := name
+	var spec string
 	if version != "" {
 		spec = name + "@" + version
 	} else {

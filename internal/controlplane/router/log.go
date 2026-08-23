@@ -125,8 +125,8 @@ func (h *LogHandler) List(c *gin.Context) {
 	if !ok {
 		return
 	}
-	f.Page, _ = strconv.Atoi(c.Query("page"))
-	f.PageSize, _ = strconv.Atoi(c.Query("pageSize"))
+	f.Page = parseIntDefault(c.Query("page"), 0)
+	f.PageSize = parseIntDefault(c.Query("pageSize"), 0)
 
 	res, err := h.logSvc.Query(f)
 	if err != nil {
@@ -142,7 +142,7 @@ func (h *LogHandler) Export(c *gin.Context) {
 	if !ok {
 		return
 	}
-	maxRows, _ := strconv.Atoi(c.Query("limit"))
+	maxRows := parseIntDefault(c.Query("limit"), 0)
 
 	items, err := h.logSvc.Export(f, maxRows)
 	if err != nil {

@@ -2,13 +2,13 @@
 package grpc_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 

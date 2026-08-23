@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -28,8 +27,8 @@ func (h *AssetHandler) List(c *gin.Context) {
 		return
 	}
 	typeFilter := model.AssetType(c.Query("type"))
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	page := parseIntDefault(c.DefaultQuery("page", "1"), 1)
+	pageSize := parseIntDefault(c.DefaultQuery("pageSize", "20"), 20)
 
 	assets, total, err := h.svc.List(typeFilter, page, pageSize)
 	if err != nil {

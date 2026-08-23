@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"gorm.io/gorm"
@@ -85,6 +86,13 @@ func (s *ClientTelemetryService) Record(e ClientTelemetryInput) error {
 	}).Create(&model.ClientTelemetryDaily{Day: day, ChannelID: e.ChannelID, Result: result, Count: 1}).Error
 }
 
+// RecordSafe 记录不应阻断客户端请求的遥测事件；失败时保留告警供运维排查。
+func (s *ClientTelemetryService) RecordSafe(e ClientTelemetryInput) {
+	if err := s.Record(e); err != nil {
+		slog.Warn("记录客户端遥测失败", "channelId", e.ChannelID, "result", e.Result, "error", err)
+	}
+}
+
 // Cleanup 删除早于保留期的遥测明细（聚合长留）。
 func (s *ClientTelemetryService) Cleanup() (int64, error) {
 	cutoff := time.Now().Add(-time.Duration(s.retentionDays) * 24 * time.Hour)
@@ -102,7 +110,9 @@ func (s *ClientTelemetryService) Start() {
 			case <-s.stop:
 				return
 			case <-t.C:
-				_, _ = s.Cleanup()
+				if _, err := s.Cleanup(); err != nil {
+					slog.Warn("清理客户端遥测失败", "error", err)
+				}
 			}
 		}
 	}()

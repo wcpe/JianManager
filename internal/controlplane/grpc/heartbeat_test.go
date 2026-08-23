@@ -143,7 +143,7 @@ func TestHeartbeat_ValidSecretUpdatesNode(t *testing.T) {
 // TestHeartbeat_KeepsDamagedOnStoppedReport 覆盖 FR-342 真机回归：DAMAGED（搭建失败损毁）是
 // CP 侧生命周期态，Worker 不感知、对已注册但未运行的实例上报 STOPPED。心跳同步不得把
 // DAMAGED 降级为 STOPPED（否则损毁徽章与启动守卫在下一个心跳即失效）；上报运行类状态
-//（进程确实活着）时才允许覆盖。
+// （进程确实活着）时才允许覆盖。
 func TestHeartbeat_KeepsDamagedOnStoppedReport(t *testing.T) {
 	h, db := newHeartbeatHandler(t)
 	node := seedHeartbeatNode(t, db, model.NodeStatusOnline, time.Now())

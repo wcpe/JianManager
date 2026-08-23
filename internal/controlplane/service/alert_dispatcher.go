@@ -162,7 +162,11 @@ func (d *AlertDispatcher) notify(rule *model.AlertRule, note AlertNotification) 
 				slog.Warn("告警 webhook 直发配置无效", "rule", rule.Name, "error", err)
 				return
 			}
-			raw, _ := json.Marshal(cfg)
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				slog.Warn("序列化告警 webhook 配置失败", "rule", rule.Name, "error", err)
+				return
+			}
 			if err := d.notifier.Send(model.ChannelTypeWebhook, string(raw), note); err != nil {
 				slog.Warn("告警 webhook 直发失败", "rule", rule.Name, "error", err)
 			}

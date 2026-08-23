@@ -37,7 +37,7 @@ func newFR330Server(t *testing.T, instanceUUID, workDirName string) (*Server, st
 }
 
 // TestDownloadCore_CompositeKeyHitSkipsNetwork 组合键缓存（FR-330）：sha256 为空的下载源
-//（Sponge Maven 等）按 core|version|build 组合键缓存。首次下载入缓存；删工作目录文件、
+// （Sponge Maven 等）按 core|version|build 组合键缓存。首次下载入缓存；删工作目录文件、
 // 关掉下载源后再次请求同组合键，应命中缓存秒拷、完全不走网络，且响应带 cache_hit。
 func TestDownloadCore_CompositeKeyHitSkipsNetwork(t *testing.T) {
 	const uuid = "77777777-7777-7777-7777-777777777777"

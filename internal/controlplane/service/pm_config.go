@@ -20,8 +20,8 @@ const pmTokenMask = "********"
 
 // PMConfigService 管理节点包管理器与 registry 配置（FR-306）。
 type PMConfigService struct {
-	db   *gorm.DB
-	pool *cpgrpc.ClientPool
+	db    *gorm.DB
+	pool  *cpgrpc.ClientPool
 	tasks *TaskService // 任务中心（FR-307 异步装包）；SetTaskService 注入
 }
 
@@ -32,11 +32,11 @@ func NewPMConfigService(db *gorm.DB, pool *cpgrpc.ClientPool) *PMConfigService {
 
 // PMConfigView 对外表示（token 脱敏，tokenMasked 标识有无凭据）。
 type PMConfigView struct {
-	PM                string             `json:"pm"`
-	CorepackAvailable bool               `json:"corepackAvailable"`
-	PMVersion         string             `json:"pmVersion"`
-	NodeBin           string             `json:"nodeBin"`
-	Registries        []PMRegistryView   `json:"registries"`
+	PM                string           `json:"pm"`
+	CorepackAvailable bool             `json:"corepackAvailable"`
+	PMVersion         string           `json:"pmVersion"`
+	NodeBin           string           `json:"nodeBin"`
+	Registries        []PMRegistryView `json:"registries"`
 }
 
 // PMRegistryView 单条 registry 对外表示。
@@ -65,7 +65,9 @@ func (s *PMConfigService) load(nodeID uint) (*model.NodePMConfig, []model.PMRegi
 	}
 	var regs []model.PMRegistry
 	if strings.TrimSpace(cfg.Registries) != "" {
-		_ = json.Unmarshal([]byte(cfg.Registries), &regs)
+		if err := json.Unmarshal([]byte(cfg.Registries), &regs); err != nil {
+			return nil, nil, fmt.Errorf("解析节点包管理器配置失败: %w", err)
+		}
 	}
 	return &cfg, regs, nil
 }
@@ -148,7 +150,10 @@ func (s *PMConfigService) Set(nodeID uint, in SetPMConfigInput) (*PMConfigView, 
 	}
 
 	// Worker 成功才落库。
-	blob, _ := json.Marshal(newRegs)
+	blob, err := json.Marshal(newRegs)
+	if err != nil {
+		return nil, fmt.Errorf("序列化节点包管理器配置失败: %w", err)
+	}
 	cfg.PM = pm
 	cfg.Registries = string(blob)
 	cfg.UpdatedAt = time.Now()

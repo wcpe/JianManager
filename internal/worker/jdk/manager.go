@@ -112,7 +112,10 @@ func (m *Manager) List() ([]Info, error) {
 
 	// 1) 托管目录
 	if err := os.MkdirAll(m.rootDir, 0o755); err == nil {
-		entries, _ := os.ReadDir(m.rootDir)
+		entries, err := os.ReadDir(m.rootDir)
+		if err != nil {
+			return nil, fmt.Errorf("读取托管 JDK 目录失败: %w", err)
+		}
 		for _, e := range entries {
 			if !e.IsDir() {
 				continue
@@ -133,7 +136,10 @@ func (m *Manager) List() ([]Info, error) {
 
 	// 2) 系统目录
 	for _, root := range m.systemDirs {
-		entries, _ := os.ReadDir(root)
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
 		for _, e := range entries {
 			dir := filepath.Join(root, e.Name())
 			if seen[dir] {
@@ -460,6 +466,10 @@ func dirLooksLikeJDK(dir string) bool {
 
 // MarshalInfo 把 Info 转成 JSON 字符串，便于注册表持久化与跨进程传递。
 func (i Info) Marshal() string {
-	b, _ := json.Marshal(i)
+	b, err := json.Marshal(i)
+	if err != nil {
+		slog.Error("序列化 JDK 信息失败", "error", err)
+		return ""
+	}
 	return string(b)
 }

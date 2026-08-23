@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -113,7 +112,9 @@ func (h *ClientChunkUploadHandler) CompleteUpload(c *gin.Context) {
 	uploadID := c.Param("uploadId")
 	var body completeUploadRequest
 	// 请求体可空——绑定失败（无 body / 非 JSON）不阻断，用零值默认（codec 由服务补 none）。
-	_ = c.ShouldBindJSON(&body)
+	if err := c.ShouldBindJSON(&body); err != nil {
+		slog.Debug("分块上传完成请求体按空值处理", "error", err)
+	}
 
 	res, err := h.svc.Complete(channelID, uploadID, service.CompleteParams{
 		Codec:          body.Codec,
@@ -176,10 +177,9 @@ func (h *ClientChunkUploadHandler) recordAudit(c *gin.Context, action string, de
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
 	uid, _ := c.Get(middleware.CtxUserID)
 	id, _ := uid.(uint)
-	_ = h.audit.Record(id, action, "client_channel", "", string(raw), c.ClientIP())
+	h.audit.RecordSafe(id, action, "client_channel", "", marshalAuditDetail(detail), c.ClientIP())
 }
 
 // RegisterRoutes 注册分块上传端点（运营操作，须挂 JWT 平台管理员组）。

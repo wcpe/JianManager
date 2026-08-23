@@ -48,7 +48,7 @@ func TestBotCreate_DelegateFailureSurfacesInBot(t *testing.T) {
 }
 
 // TestBotCreate_DelegateSuccessClearsLastError 委托成功路径：状态置 connecting 且 lastError 清空
-//（覆盖「上次失败→依赖装好重连成功」翻篇）。
+// （覆盖「上次失败→依赖装好重连成功」翻篇）。
 func TestBotCreate_DelegateSuccessClearsLastError(t *testing.T) {
 	db := newFR038BotScaleDB(t)
 	pool := cpgrpc.NewClientPool()

@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -118,8 +117,11 @@ func (h *ArtifactReconcileHandler) Trigger(c *gin.Context) {
 
 // ListRuns GET /artifact-reconcile/runs?channelId=&limit= — 最近运行记录（id desc）。
 func (h *ArtifactReconcileHandler) ListRuns(c *gin.Context) {
-	channelID, _ := strconv.ParseUint(c.Query("channelId"), 10, 64)
-	limit, _ := strconv.Atoi(c.Query("limit"))
+	channelID := uint64(0)
+	if parsed, err := strconv.ParseUint(c.Query("channelId"), 10, 64); err == nil {
+		channelID = parsed
+	}
+	limit := parseIntDefault(c.Query("limit"), 0)
 	runs, err := h.svc.ListRuns(uint(channelID), limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
@@ -153,8 +155,8 @@ func (h *ArtifactReconcileHandler) ListDiffs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "kind 仅支持 missing | orphan"})
 		return
 	}
-	page, _ := strconv.Atoi(c.Query("page"))
-	pageSize, _ := strconv.Atoi(c.Query("pageSize"))
+	page := parseIntDefault(c.Query("page"), 0)
+	pageSize := parseIntDefault(c.Query("pageSize"), 0)
 	diffs, total, err := h.svc.ListDiffs(id, kind, page, pageSize)
 	if err != nil {
 		h.respondErr(c, err)
@@ -213,10 +215,9 @@ func (h *ArtifactReconcileHandler) recordAudit(c *gin.Context, action, targetID 
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
-	_ = h.audit.Record(userID, action, "artifact_reconcile", targetID, string(raw), c.ClientIP())
+	h.audit.RecordSafe(userID, action, "artifact_reconcile", targetID, marshalAuditDetail(detail), c.ClientIP())
 }
 
 // respondErr 统一错误映射（spec §3.7）：404 / 409 RECONCILE_IN_PROGRESS / 422 BUSINESS_ERROR / 500。

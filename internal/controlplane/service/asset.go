@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -285,9 +286,13 @@ func (s *AssetService) Ingest(r io.Reader, p IngestParams) (*model.Asset, error)
 	if err := s.db.Create(asset).Error; err != nil {
 		// DB 失败时回滚物理 blob，避免孤儿：local 删 CAS 文件，s3 尽力删已传对象（对称语义）。
 		if s3Store != nil {
-			_ = s3Store.Delete(context.Background(), relPath)
+			if deleteErr := s3Store.Delete(context.Background(), relPath); deleteErr != nil {
+				slog.Warn("回滚 S3 制品失败", "path", relPath, "error", deleteErr)
+			}
 		} else {
-			_ = os.Remove(absPath)
+			if removeErr := os.Remove(absPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				slog.Warn("回滚本地制品失败", "path", absPath, "error", removeErr)
+			}
 		}
 		return nil, fmt.Errorf("登记资产失败: %w", err)
 	}
@@ -392,13 +397,17 @@ func (s *AssetService) Delete(id uint) error {
 		return fmt.Errorf("删除资产记录失败: %w", err)
 	}
 	// 物理清理按记录后端路由（FR-347）：s3 → 渠道 store 删对象；local → 删 CAS 文件
-	//（均尽力而为，与既有删除语义一致）。
+	// （均尽力而为，与既有删除语义一致）。
 	if asset.StorageBackend == model.AssetBackendS3 && s.storageChannels != nil {
-		if store, serr := s.storageChannels.StoreForAsset(asset); serr == nil {
-			_ = store.Delete(context.Background(), asset.RelPath)
+		if store, serr := s.storageChannels.StoreForAsset(asset); serr != nil {
+			slog.Warn("解析制品存储渠道失败", "assetId", asset.ID, "error", serr)
+		} else if deleteErr := store.Delete(context.Background(), asset.RelPath); deleteErr != nil {
+			slog.Warn("删除 S3 制品失败", "assetId", asset.ID, "path", asset.RelPath, "error", deleteErr)
 		}
 	} else if asset.RelPath != "" && s.root != nil {
-		_ = os.Remove(s.root.Abs(asset.RelPath))
+		if removeErr := os.Remove(s.root.Abs(asset.RelPath)); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			slog.Warn("删除本地制品失败", "assetId", asset.ID, "path", asset.RelPath, "error", removeErr)
+		}
 	}
 	return nil
 }

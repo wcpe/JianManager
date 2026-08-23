@@ -155,10 +155,16 @@ func (m *Manager) findNodeBin() string {
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), "nodejs-") {
 			continue
 		}
-		major, _ := strconv.Atoi(strings.TrimPrefix(e.Name(), "nodejs-"))
+		major, err := strconv.Atoi(strings.TrimPrefix(e.Name(), "nodejs-"))
+		if err != nil {
+			continue
+		}
 		nodeDir := filepath.Join(m.runtimesRoot, e.Name())
 		// 归档解出的顶层子目录 <top>/bin/node
-		subs, _ := os.ReadDir(nodeDir)
+		subs, err := os.ReadDir(nodeDir)
+		if err != nil {
+			continue
+		}
 		for _, s := range subs {
 			if !s.IsDir() {
 				continue

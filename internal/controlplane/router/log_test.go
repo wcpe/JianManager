@@ -88,7 +88,7 @@ func TestLog_List_ViewSplit(t *testing.T) {
 
 	w = makeRequest(r, "GET", "/api/v1/logs?view=node_instance&nodeId=3", nil, adminToken)
 	require.Equal(t, http.StatusOK, w.Code)
-	items, total = parseLogPage(t, w)
+	_, total = parseLogPage(t, w)
 	require.Equal(t, 2, total)
 	assert.NotContains(t, w.Body.String(), "cp only")
 	assert.Contains(t, w.Body.String(), "worker line")

@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -128,10 +129,22 @@ func (s *BusinessEventService) applyEconomy(nodeUUID string, evt *workerpb.Plugi
 	if !ok {
 		return errors.New("经济事件 data 解析失败或缺字段")
 	}
-	ledgerID, _ := strconv.ParseInt(strings.TrimSpace(d.LedgerID), 10, 64)
-	seq, _ := strconv.ParseInt(strings.TrimSpace(d.Seq), 10, 64)
-	occurredAt, _ := strconv.ParseInt(strings.TrimSpace(d.OccurredAt), 10, 64)
-	currencyID, _ := strconv.Atoi(strings.TrimSpace(d.CurrencyID))
+	ledgerID, err := strconv.ParseInt(strings.TrimSpace(d.LedgerID), 10, 64)
+	if err != nil {
+		return fmt.Errorf("解析经济事件 ledgerId 失败: %w", err)
+	}
+	seq, err := strconv.ParseInt(strings.TrimSpace(d.Seq), 10, 64)
+	if err != nil {
+		return fmt.Errorf("解析经济事件 seq 失败: %w", err)
+	}
+	occurredAt, err := strconv.ParseInt(strings.TrimSpace(d.OccurredAt), 10, 64)
+	if err != nil {
+		return fmt.Errorf("解析经济事件 occurredAt 失败: %w", err)
+	}
+	currencyID, err := strconv.Atoi(strings.TrimSpace(d.CurrencyID))
+	if err != nil {
+		return fmt.Errorf("解析经济事件 currencyId 失败: %w", err)
+	}
 
 	// 审计 append（按 ledgerId 去重，与 envelope 同源；业务数据不降采样不丢，ADR-028）。
 	if err := s.appendLedger(nodeUUID, evt.InstanceUuid, d, ledgerID, seq, currencyID, occurredAt); err != nil {

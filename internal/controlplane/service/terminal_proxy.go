@@ -43,9 +43,12 @@ type terminalProxyStateMessage struct {
 func writeTerminalProxyState(conn *websocket.Conn, code, data string) {
 	msg, err := json.Marshal(terminalProxyStateMessage{Type: "state", State: "error", Code: code, Data: data})
 	if err != nil {
+		slog.Warn("序列化终端代理状态消息失败", "error", err)
 		return
 	}
-	_ = conn.WriteMessage(websocket.TextMessage, msg)
+	if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+		slog.Debug("写入终端代理状态消息失败", "error", err)
+	}
 }
 
 // TerminalProxy WebSocket 终端代理。
@@ -193,7 +196,10 @@ func (p *TerminalProxy) bridgeViaGRPC(browserConn *websocket.Conn, worker worker
 	if first.GetOpen() == nil {
 		// 协议期望首帧为就绪 ack；容错：若对端直接发数据帧则透传后继续。
 		if f := first.GetFrame(); f != nil {
-			_ = browserConn.WriteMessage(int(f.MsgType), f.Payload)
+			if err := browserConn.WriteMessage(int(f.MsgType), f.Payload); err != nil {
+				slog.Debug("透传终端首帧失败", "instanceUUID", instanceUUID, "error", err)
+				return true
+			}
 		}
 	}
 
@@ -257,7 +263,9 @@ func (p *TerminalProxy) setupKeepalive(conn *websocket.Conn) {
 	if p.pongWait <= 0 {
 		return
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(p.pongWait))
+	if err := conn.SetReadDeadline(time.Now().Add(p.pongWait)); err != nil {
+		slog.Debug("设置终端读取超时失败", "error", err)
+	}
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(p.pongWait))
 	})
@@ -268,7 +276,9 @@ func (p *TerminalProxy) extendReadDeadline(conn *websocket.Conn) {
 	if p.pongWait <= 0 {
 		return
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(p.pongWait))
+	if err := conn.SetReadDeadline(time.Now().Add(p.pongWait)); err != nil {
+		slog.Debug("续期终端读取超时失败", "error", err)
+	}
 }
 
 // pingConn 定时向连接发送 WS ping 帧保活（FR-140），直到 stop 关闭或写失败。

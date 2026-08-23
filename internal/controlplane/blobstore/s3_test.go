@@ -116,7 +116,7 @@ func (f *fakeS3) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 // answerList 仿真 ListObjectsV2：字典序 + max-keys 截断 + continuation-token 续传
-//（真实 S3 令牌不透明，此处用「上一页末键」当令牌，适配器按不透明字符串处理）。
+// （真实 S3 令牌不透明，此处用「上一页末键」当令牌，适配器按不透明字符串处理）。
 func (f *fakeS3) answerList(w http.ResponseWriter, r *http.Request) {
 	prefix := r.URL.Query().Get("prefix")
 	maxKeys := 1000

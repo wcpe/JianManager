@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -50,9 +51,13 @@ func streamOutput(conn io.Reader, out, errw io.Writer) error {
 		}
 		switch fr.Channel {
 		case daemon.ChannelStdout:
-			_, _ = out.Write(fr.Payload)
+			if _, err := out.Write(fr.Payload); err != nil {
+				return fmt.Errorf("写入标准输出: %w", err)
+			}
 		case daemon.ChannelStderr:
-			_, _ = errw.Write(fr.Payload)
+			if _, err := errw.Write(fr.Payload); err != nil {
+				return fmt.Errorf("写入标准错误: %w", err)
+			}
 		}
 	}
 }
@@ -157,7 +162,9 @@ func interact(conn net.Conn) error {
 
 	// A：daemon→终端。读循环结束即 daemon 退出。
 	go func() {
-		_ = streamOutput(conn, os.Stdout, os.Stderr)
+		if err := streamOutput(conn, os.Stdout, os.Stderr); err != nil {
+			log.Printf("读取紧急控制台输出失败: %v", err)
+		}
 		fmt.Println("\n[jmctl] 连接已断开，daemon 已退出")
 		close(done)
 	}()
@@ -186,10 +193,14 @@ func interact(conn net.Conn) error {
 			now := time.Now()
 			if !lastInt.IsZero() && now.Sub(lastInt) <= doubleCtrlCWindow {
 				fmt.Println("\n[jmctl] 已发送 kill 命令，强制终止...")
-				_ = sendControl(conn, daemon.ControlKill)
+				if err := sendControl(conn, daemon.ControlKill); err != nil {
+					return fmt.Errorf("发送 kill 命令: %w", err)
+				}
 			} else {
 				fmt.Println("\n[jmctl] 已发送 stop 命令，等待关服...（再次 Ctrl+C 强杀）")
-				_ = sendControl(conn, daemon.ControlStop)
+				if err := sendControl(conn, daemon.ControlStop); err != nil {
+					return fmt.Errorf("发送 stop 命令: %w", err)
+				}
 			}
 			lastInt = now
 		}

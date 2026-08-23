@@ -1,6 +1,7 @@
 package router
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -57,11 +58,13 @@ func (h *ClientTelemetryHandler) Post(c *gin.Context) {
 		return
 	}
 	var body telemetryBody
-	_ = c.ShouldBindJSON(&body) // 容忍部分字段缺失：遥测尽力收集，不因 body 不全拒绝。
+	if err := c.ShouldBindJSON(&body); err != nil {
+		slog.Debug("客户端遥测请求体按零值处理", "error", err)
+	}
 	if h.svc != nil {
 		machineID := c.GetHeader(machineIDHeader)
 		playerName := h.playerNameFromRequest(c, body.Channel, machineID)
-		_ = h.svc.Record(service.ClientTelemetryInput{
+		h.svc.RecordSafe(service.ClientTelemetryInput{
 			ChannelID:   body.Channel,
 			MachineID:   machineID,
 			PlayerName:  playerName,

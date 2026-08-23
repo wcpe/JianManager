@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"testing"
 
@@ -10,6 +11,14 @@ import (
 
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
+
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
 
 // TestSendStdin 用户输入行被编码为 ChannelStdin 的 Data 帧、附换行（镜像 daemonStrategy.SendCommand）。
 func TestSendStdin(t *testing.T) {
@@ -70,6 +79,16 @@ func TestStreamOutput_EmptyEOF(t *testing.T) {
 	require.NoError(t, streamOutput(&empty, &outBuf, &errBuf))
 	assert.Empty(t, outBuf.String())
 	assert.Empty(t, errBuf.String())
+}
+
+// TestStreamOutput_ReturnsWriterError 输出终端不可写时应把底层错误返回，避免静默丢失日志。
+func TestStreamOutput_ReturnsWriterError(t *testing.T) {
+	var wire bytes.Buffer
+	writeFrame(t, &wire, daemon.ChannelStdout, daemon.TypeData, []byte("server started\n"))
+
+	wantErr := errors.New("标准输出不可写")
+	err := streamOutput(&wire, failingWriter{err: wantErr}, &bytes.Buffer{})
+	require.ErrorIs(t, err, wantErr)
 }
 
 // writeFrame 向 buffer 写一帧（测试夹具，模拟 daemon 端编码）。

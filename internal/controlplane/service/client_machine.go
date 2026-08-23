@@ -1,6 +1,7 @@
 package service
 
 import (
+	"log/slog"
 	"time"
 
 	"gorm.io/gorm"
@@ -47,4 +48,11 @@ func (s *ClientMachineService) Record(channelID, machineID string) error {
 		FirstSeen: now,
 		LastSeen:  now,
 	}).Error
+}
+
+// RecordSafe 登记不应阻断玩家请求的机器码；失败时保留告警供运维排查。
+func (s *ClientMachineService) RecordSafe(channelID, machineID string) {
+	if err := s.Record(channelID, machineID); err != nil {
+		slog.Warn("登记客户端机器码失败", "channelId", channelID, "error", err)
+	}
 }

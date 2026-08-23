@@ -366,7 +366,10 @@ func (s *CoreService) getJSON(ctx context.Context, url string, v interface{}) er
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if readErr != nil {
+			return fmt.Errorf("读取核心仓库错误响应失败: %w", readErr)
+		}
 		return fmt.Errorf("核心仓库返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return json.NewDecoder(resp.Body).Decode(v)
@@ -384,7 +387,10 @@ func (s *CoreService) getXML(ctx context.Context, url string, v interface{}) err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if readErr != nil {
+			return fmt.Errorf("读取核心仓库错误响应失败: %w", readErr)
+		}
 		return fmt.Errorf("核心仓库返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return xml.NewDecoder(resp.Body).Decode(v)

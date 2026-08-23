@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -430,8 +429,7 @@ func (h *ClientSecurityHandler) recordAction(c *gin.Context, action, targetType,
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
-	_ = h.audit.Record(getUserID(c), action, targetType, targetID, string(raw), c.ClientIP())
+	h.audit.RecordSafe(getUserID(c), action, targetType, targetID, marshalAuditDetail(detail), c.ClientIP())
 }
 
 func respondSecurityAuthErr(c *gin.Context, svc *service.ClientDistSecurityService, err error) string {
@@ -474,6 +472,5 @@ func parseLimit(c *gin.Context) int {
 }
 
 func mustSecurityJSON(v any) string {
-	raw, _ := json.Marshal(v)
-	return string(raw)
+	return marshalAuditDetail(v)
 }

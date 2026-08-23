@@ -174,12 +174,8 @@ func (w *Wrapper) run(ready chan<- struct{}) error {
 	}
 
 	// 主循环：阻塞直到 closing 信号（Java 永久退出 / 收到 stop/kill）。
-	for {
-		select {
-		case <-w.closing:
-			return nil
-		}
-	}
+	<-w.closing
+	return nil
 }
 
 func (w *Wrapper) isClosed() bool {
@@ -218,7 +214,10 @@ func (w *Wrapper) startJava() error {
 	w.mu.Unlock()
 
 	// 补写 java pid 到 PID 文件
-	rec, _ := w.pidFile.ReadRecord()
+	rec, err := w.pidFile.ReadRecord()
+	if err != nil {
+		slog.Warn("读取 PID 文件失败，重新创建记录", "instanceId", w.cfg.InstanceUUID, "error", err)
+	}
 	if rec == nil {
 		rec = &PIDRecord{}
 	}
@@ -392,7 +391,9 @@ func (w *Wrapper) handleControl(cmd string) {
 		w.mu.Unlock()
 		if conn != nil {
 			resp := &Frame{Header: Header{Channel: ChannelControl, Type: TypeResponse}, Payload: []byte("pong")}
-			_ = resp.Encode(conn)
+			if err := resp.Encode(conn); err != nil {
+				slog.Debug("回写 wrapper 心跳响应失败", "instanceId", w.cfg.InstanceUUID, "error", err)
+			}
 		}
 	default:
 		slog.Warn("wrapper 收到未知控制命令", "cmd", cmd)
@@ -434,7 +435,12 @@ func (w *Wrapper) stopJava(force bool) {
 	}
 	if !wrote {
 		if runtime.GOOS != "windows" {
-			_ = cmd.Process.Signal(os.Interrupt)
+			if err := cmd.Process.Signal(os.Interrupt); err != nil {
+				slog.Warn("向 Java 发送中断信号失败，改为强制终止", "instanceId", w.cfg.InstanceUUID, "error", err)
+				w.forceKill(cmd)
+				w.signalClose()
+				return
+			}
 		} else {
 			w.forceKill(cmd)
 			w.signalClose()
@@ -462,7 +468,9 @@ func (w *Wrapper) forceKill(cmd *exec.Cmd) {
 }
 
 func (w *Wrapper) cleanupPIDFile() {
-	_ = w.pidFile.Remove()
+	if err := w.pidFile.Remove(); err != nil {
+		slog.Warn("删除 PID 文件失败", "instanceId", w.cfg.InstanceUUID, "error", err)
+	}
 	RemoveSocket(w.addr)
 }
 
@@ -478,7 +486,9 @@ func (o *wrapperOutput) Write(p []byte) (int, error) {
 	o.w.mu.Unlock()
 	if conn != nil {
 		f := &Frame{Header: Header{Channel: o.stream, Type: TypeData}, Payload: append([]byte(nil), p...)}
-		_ = f.Encode(conn)
+		if err := f.Encode(conn); err != nil {
+			slog.Debug("转发 Java 输出到 Worker 失败", "instanceId", o.w.cfg.InstanceUUID, "error", err)
+		}
 	}
 	return len(p), nil
 }
@@ -635,6 +645,6 @@ func ParseWrapperConfigFromEnv() (WrapperConfig, error) {
 
 // ParseAutoRestart 辅助从字符串解析布尔（供环境变量传递）。
 func ParseAutoRestart(s string) bool {
-	b, _ := strconv.ParseBool(s)
-	return b
+	b, err := strconv.ParseBool(s)
+	return err == nil && b
 }

@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"time"
 
-	"golang.org/x/net/context"
+	"context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"

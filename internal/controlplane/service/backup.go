@@ -132,9 +132,13 @@ func (s *BackupService) CreateWithOptions(instanceID uint, name string, opts Cre
 	// 同一结构体构成数据竞态（go test -race 可稳定复现）。复制后两者内存隔离。
 	async := *backup
 	// 纳入任务中心（FR-323）：进度/终态在任务中心可见，Backup record 状态仍由 executeBackup 自更
-	//（备份列表页不回归）。无任务中心（测试）回退旧后台 goroutine。
+	// （备份列表页不回归）。无任务中心（测试）回退旧后台 goroutine。
 	if s.tasks == nil {
-		go func() { _ = s.executeBackup(&async, nil) }()
+		go func() {
+			if err := s.executeBackup(&async, nil); err != nil {
+				slog.Error("后台执行备份失败", "backupId", async.ID, "error", err)
+			}
+		}()
 		return backup, nil
 	}
 	s.tasks.RunAsync(RunSpec{
@@ -215,7 +219,10 @@ func (s *BackupService) executeBackup(backup *model.Backup, stage func(int, stri
 		return s.failBackup(backup, "备份执行失败", errors.New(resp.Error))
 	}
 
-	manifestJSON, _ := json.Marshal(resp.Manifest)
+	manifestJSON, err := json.Marshal(resp.Manifest)
+	if err != nil {
+		return s.failBackup(backup, "序列化备份清单失败", err)
+	}
 	s.db.Model(backup).Updates(map[string]interface{}{
 		"status":        model.BackupStatusCompleted,
 		"file_size_mb":  float64(resp.SizeBytes) / (1024 * 1024),
@@ -272,7 +279,11 @@ func (s *BackupService) Restore(backupID uint) error {
 
 	// 纳入任务中心（FR-323）：恢复进度/终态可见。无任务中心（测试）回退旧后台 goroutine。
 	if s.tasks == nil {
-		go func() { _ = s.executeRestore(&backup, chain, nil) }()
+		go func() {
+			if err := s.executeRestore(&backup, chain, nil); err != nil {
+				slog.Error("后台执行备份恢复失败", "backupId", backup.ID, "error", err)
+			}
+		}()
 		return nil
 	}
 	s.tasks.RunAsync(RunSpec{

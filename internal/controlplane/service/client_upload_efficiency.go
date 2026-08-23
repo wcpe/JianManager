@@ -180,7 +180,7 @@ func (s *ClientUploadEfficiencyService) ValidateBatchMetas(metas []BatchFileMeta
 }
 
 // IngestBatchFile 聚合上传单文件入库：LimitReader(size+1) 防超量写盘 → 复用 PublishFile
-//（codec=none + 声明 sha256 强校验 + CAS 去重）。字节与声明不符（含长度不符）返回
+// （codec=none + 声明 sha256 强校验 + CAS 去重）。字节与声明不符（含长度不符）返回
 // ErrChecksumMismatch——长度不同必然 hash 不同，统一归为校验和不符。
 func (s *ClientUploadEfficiencyService) IngestBatchFile(meta BatchFileMeta, r io.Reader) (*ClientFileResult, error) {
 	return s.versions.PublishFile(io.LimitReader(r, meta.Size+1), PublishFileParams{

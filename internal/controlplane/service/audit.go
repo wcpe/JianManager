@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"gorm.io/gorm"
@@ -24,6 +25,13 @@ func (s *AuditService) Record(userID uint, action, targetType, targetID, detail,
 	return s.RecordResult(userID, action, targetType, targetID, detail, ip, true, "")
 }
 
+// RecordSafe 记录不应阻断主流程的成功审计；失败时保留告警供运维排查。
+func (s *AuditService) RecordSafe(userID uint, action, targetType, targetID, detail, ip string) {
+	if err := s.Record(userID, action, targetType, targetID, detail, ip); err != nil {
+		slog.Warn("记录审计日志失败", "action", action, "targetType", targetType, "targetID", targetID, "error", err)
+	}
+}
+
 // RecordResult 记录带结果的审计日志（FR-321）：失败操作也留痕并带错误内容，
 // 回答「这个操作为什么报错」（此前失败操作审计无错误内容）。
 func (s *AuditService) RecordResult(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string) error {
@@ -44,6 +52,13 @@ func (s *AuditService) RecordResult(userID uint, action, targetType, targetID, d
 		return fmt.Errorf("记录审计日志失败: %w", err)
 	}
 	return nil
+}
+
+// RecordResultSafe 记录不应阻断主流程的结果审计；失败时保留告警供运维排查。
+func (s *AuditService) RecordResultSafe(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string) {
+	if err := s.RecordResult(userID, action, targetType, targetID, detail, ip, success, errMsg); err != nil {
+		slog.Warn("记录审计结果失败", "action", action, "targetType", targetType, "targetID", targetID, "error", err)
+	}
 }
 
 // List 查询审计日志。

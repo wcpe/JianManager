@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"context"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 

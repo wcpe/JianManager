@@ -6,6 +6,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,14 +149,29 @@ func Load(path string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 	// 显式绑定与历史 main.go 不同名的环境变量，保持向后兼容。
-	_ = v.BindEnv("name", "JIANMANAGER_NODE_NAME")
+	if err := v.BindEnv("name", "JIANMANAGER_NODE_NAME"); err != nil {
+		return nil, fmt.Errorf("绑定节点名称环境变量失败: %w", err)
+	}
 	// 正式键 CONTROL_PLANE_GRPC；别名 CONTROL_PLANE 兼容旧 compose/文档误写（FR-354）。
-	_ = v.BindEnv("control_plane", "JIANMANAGER_CONTROL_PLANE_GRPC", "JIANMANAGER_CONTROL_PLANE")
-	_ = v.BindEnv("data_dir", "JIANMANAGER_DATA_DIR")
-	_ = v.BindEnv("servers_dir", "JIANMANAGER_WORK_DIR")
-	_ = v.BindEnv("enroll_token", "JIANMANAGER_ENROLL_TOKEN")
+	if err := v.BindEnv("control_plane", "JIANMANAGER_CONTROL_PLANE_GRPC", "JIANMANAGER_CONTROL_PLANE"); err != nil {
+		return nil, fmt.Errorf("绑定 Control Plane 环境变量失败: %w", err)
+	}
+	if err := v.BindEnv("data_dir", "JIANMANAGER_DATA_DIR"); err != nil {
+		return nil, fmt.Errorf("绑定数据目录环境变量失败: %w", err)
+	}
+	if err := v.BindEnv("servers_dir", "JIANMANAGER_WORK_DIR"); err != nil {
+		return nil, fmt.Errorf("绑定工作目录环境变量失败: %w", err)
+	}
+	if err := v.BindEnv("enroll_token", "JIANMANAGER_ENROLL_TOKEN"); err != nil {
+		return nil, fmt.Errorf("绑定注册令牌环境变量失败: %w", err)
+	}
 
-	_ = v.ReadInConfig() // 配置文件可选
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("读取 Worker 配置失败: %w", err)
+		}
+	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {

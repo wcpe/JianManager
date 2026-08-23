@@ -413,12 +413,20 @@ func (p *ProxyService) distributeToBackend(proxy, backend *model.Instance, isVel
 	}
 	// BungeeCord/Waterfall：spigot.yml settings.bungeecord=true + paper-global proxies.bungee-cord.online-mode=false
 	spig := p.readConfig(client, backend.UUID, "spigot.yml")
-	if mSpig, serr := mergeBungeeIntoSpigot(spig); serr == nil {
-		_ = p.writeConfig(client, backend.UUID, "spigot.yml", mSpig)
+	mSpig, serr := mergeBungeeIntoSpigot(spig)
+	if serr != nil {
+		return fmt.Sprintf("后端 %s 合并 spigot.yml 失败: %v", backend.Name, serr)
+	}
+	if err := p.writeConfig(client, backend.UUID, "spigot.yml", mSpig); err != nil {
+		return fmt.Sprintf("后端 %s 写 spigot.yml 失败: %v", backend.Name, err)
 	}
 	pg := p.readConfig(client, backend.UUID, "config/paper-global.yml")
-	if mPg, perr := mergeBungeeIntoPaperGlobal(pg); perr == nil {
-		_ = p.writeConfig(client, backend.UUID, "config/paper-global.yml", mPg)
+	mPg, perr := mergeBungeeIntoPaperGlobal(pg)
+	if perr != nil {
+		return fmt.Sprintf("后端 %s 合并 paper-global.yml 失败: %v", backend.Name, perr)
+	}
+	if err := p.writeConfig(client, backend.UUID, "config/paper-global.yml", mPg); err != nil {
+		return fmt.Sprintf("后端 %s 写 paper-global.yml 失败: %v", backend.Name, err)
 	}
 	return ""
 }

@@ -68,10 +68,8 @@ type indentEntry struct {
 
 func parseYAMLLine(raw string) (key, value string, ok bool) {
 	trimmed := strings.TrimSpace(raw)
-	if strings.HasPrefix(trimmed, "- ") {
-		// 简化：列表项以 "- key: value" 处理
-		trimmed = strings.TrimPrefix(trimmed, "- ")
-	}
+	// 简化：列表项以 "- key: value" 处理。
+	trimmed = strings.TrimPrefix(trimmed, "- ")
 	idx := strings.IndexAny(trimmed, ":")
 	if idx < 0 {
 		return "", "", false

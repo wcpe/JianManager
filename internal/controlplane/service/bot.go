@@ -37,7 +37,9 @@ type botConnConfig struct {
 func parseBotConn(cfg string) botConnConfig {
 	var c botConnConfig
 	if cfg != "" {
-		_ = json.Unmarshal([]byte(cfg), &c)
+		if err := json.Unmarshal([]byte(cfg), &c); err != nil {
+			slog.Debug("解析 Bot 连接配置失败，使用默认连接参数", "error", err)
+		}
 	}
 	return c
 }

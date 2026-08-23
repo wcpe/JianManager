@@ -41,9 +41,10 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		Tag: c.Query("tag"),
 	}
 	if v := c.Query("nodeId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
-		u := uint(id)
-		filter.NodeID = &u
+		if id, err := strconv.ParseUint(v, 10, 64); err == nil {
+			u := uint(id)
+			filter.NodeID = &u
+		}
 	}
 	if v := c.Query("status"); v != "" {
 		s := model.InstanceStatus(v)
@@ -54,8 +55,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		filter.Role = &r
 	}
 	if v := c.Query("networkId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
-		u := uint(id)
+		u := uint(parseUintDefault(v, 0))
 		filter.NetworkID = &u
 	}
 
@@ -76,8 +76,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 	}
 
 	if v := c.Query("groupId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
-		u := uint(id)
+		u := uint(parseUintDefault(v, 0))
 		filter.GroupID = &u
 	}
 
@@ -134,8 +133,7 @@ func parseInstanceSearchParams(c *gin.Context, isAdmin bool) service.InstanceSea
 	p.Env = c.Query("env")
 	p.Tag = c.Query("tag")
 	if v := c.Query("nodeId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
-		u := uint(id)
+		u := uint(parseUintDefault(v, 0))
 		p.NodeID = &u
 	}
 	if v := c.Query("status"); v != "" {
@@ -147,24 +145,20 @@ func parseInstanceSearchParams(c *gin.Context, isAdmin bool) service.InstanceSea
 		p.Role = &r
 	}
 	if v := c.Query("networkId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
-		u := uint(id)
+		u := uint(parseUintDefault(v, 0))
 		p.NetworkID = &u
 	}
 	if isAdmin {
 		if v := c.Query("groupId"); v != "" {
-			id, _ := strconv.ParseUint(v, 10, 64)
-			u := uint(id)
+			u := uint(parseUintDefault(v, 0))
 			p.GroupID = &u
 		}
 	}
 	if v := c.Query("page"); v != "" {
-		n, _ := strconv.Atoi(v)
-		p.Page = n
+		p.Page = parseIntDefault(v, 0)
 	}
 	if v := c.Query("pageSize"); v != "" {
-		n, _ := strconv.Atoi(v)
-		p.PageSize = n
+		p.PageSize = parseIntDefault(v, 0)
 	}
 	return p
 }

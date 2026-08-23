@@ -208,7 +208,7 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		readOnlyItem("database.dsn", maskDSN(s.cfg.Database.DSN), true),
 		readOnlyItem("jwt.secret", maskSecret(s.cfg.JWT.Secret), true),
 		// CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：显式配置时掩码显示；未配置时展示来源
-		//（生产 autogen / dev 回退），不回显解析后的密钥值（避免把生成密钥带进设置响应）。
+		// （生产 autogen / dev 回退），不回显解析后的密钥值（避免把生成密钥带进设置响应）。
 		readOnlyItem("jwt.ws_secret", s.wsTokenSecretDisplay(), s.cfg.JWT.WSSecret != ""),
 		readOnlyItem("jwt.access_ttl", s.cfg.JWT.AccessTTL.String(), false),
 		readOnlyItem("jwt.refresh_ttl", s.cfg.JWT.RefreshTTL.String(), false),

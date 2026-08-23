@@ -94,7 +94,7 @@ func (s *Server) InstallRuntime(ctx context.Context, req *workerpb.InstallRuntim
 			s.tasks.Fail(taskID, err.Error())
 			return
 		}
-		result, _ := json.Marshal(runtimeResult{
+		result, err := json.Marshal(runtimeResult{
 			Type:    info.Type,
 			Name:    info.Name,
 			Version: info.Version,
@@ -103,6 +103,10 @@ func (s *Server) InstallRuntime(ctx context.Context, req *workerpb.InstallRuntim
 			Path:    info.Path,
 			Managed: info.Managed,
 		})
+		if err != nil {
+			s.tasks.Fail(taskID, "序列化运行时安装结果失败: "+err.Error())
+			return
+		}
 		s.tasks.Succeed(taskID, string(result))
 	}()
 	return &workerpb.InstallRuntimeResponse{Success: true, TaskId: taskID}, nil

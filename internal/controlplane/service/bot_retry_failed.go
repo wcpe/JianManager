@@ -25,10 +25,10 @@ type BotLoadRetryRequest struct {
 
 // BotLoadRetryResult 是 retry-failed 202 响应。
 type BotLoadRetryResult struct {
-	Requested int                      `json:"requested"`
-	Accepted  int                      `json:"accepted"`
-	Skipped   int                      `json:"skipped"`
-	Errors    []BotLoadRetryItemError  `json:"errors"`
+	Requested int                     `json:"requested"`
+	Accepted  int                     `json:"accepted"`
+	Skipped   int                     `json:"skipped"`
+	Errors    []BotLoadRetryItemError `json:"errors"`
 }
 
 // BotLoadRetryItemError 描述单个 Bot 被跳过或失败的原因。
@@ -83,7 +83,9 @@ func (s *BotLoadExecutionService) RetryFailed(ctx context.Context, sessionID uin
 	result := &BotLoadRetryResult{Requested: len(candidates), Errors: []BotLoadRetryItemError{}}
 	if len(candidates) == 0 {
 		// 无失败 Bot 也记审计，保证幂等。
-		_ = s.persistRetryAudit(ctx, sessionID, requestID, result, nil)
+		if err := s.persistRetryAudit(ctx, sessionID, requestID, result, nil); err != nil {
+			return nil, err
+		}
 		return result, nil
 	}
 
@@ -257,7 +259,10 @@ func (s *BotLoadExecutionService) dispatchRetryBots(ctx context.Context, session
 		assignment.ConnectNotBeforeUnixMs = time.Now().UTC().UnixMilli()
 		assignments = append(assignments, assignment)
 	}
-	raw, _ := json.Marshal(assignments)
+	raw, err := json.Marshal(assignments)
+	if err != nil {
+		return nil, fmt.Errorf("序列化重试 Bot 分配摘要失败: %w", err)
+	}
 	identity := fmt.Sprintf("retry|%s|%s|%s", session.UUID, nodeUUID, stableBotLoadDigest(string(raw)))
 	request := &workerpb.ApplyBotBatchRequest{
 		BatchId:        stableBotLoadUUID(identity),
@@ -293,10 +298,13 @@ func (s *BotLoadExecutionService) loadRetryIdempotentResult(ctx context.Context,
 }
 
 func (s *BotLoadExecutionService) persistRetryAudit(ctx context.Context, sessionID uint, requestID string, result *BotLoadRetryResult, opErr error) error {
-	detail, _ := json.Marshal(map[string]any{
+	detail, err := json.Marshal(map[string]any{
 		"requestId": requestID,
 		"result":    result,
 	})
+	if err != nil {
+		return fmt.Errorf("序列化 Bot 重试审计详情失败: %w", err)
+	}
 	errMessage := ""
 	if opErr != nil {
 		errMessage = opErr.Error()

@@ -75,6 +75,8 @@ func SaveIdentity(etcDir string, id *Identity) error {
 		return fmt.Errorf("提交节点身份文件失败: %w", err)
 	}
 	// rename 在某些平台会沿用源文件权限；显式收敛到 0600（含敏感 node_secret）。
-	_ = os.Chmod(path, 0o600)
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("收敛节点身份文件权限失败: %w", err)
+	}
 	return nil
 }

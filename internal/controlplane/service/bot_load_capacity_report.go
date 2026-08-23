@@ -290,10 +290,6 @@ func capacityGrandMetrics(samples []botLoadCapacitySample, nodes []uint) (map[st
 	})
 }
 
-func capacityMetric(samples []botLoadCapacitySample, extract func(botLoadCapacitySample, string) *float64, key string) (BotLoadCapacityMetric, []string) {
-	return capacityMetricWithBots(samples, extract, key, func(s botLoadCapacitySample) *float64 { return s.connected })
-}
-
 func capacityMetricWithBots(samples []botLoadCapacitySample, extract func(botLoadCapacitySample, string) *float64, key string, bots func(botLoadCapacitySample) *float64) (BotLoadCapacityMetric, []string) {
 	points := make([]botLoadCapacitySeriesPoint, 0, len(samples))
 	for _, sample := range samples {

@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -190,8 +189,7 @@ func (h *EnrollTokenHandler) recordAudit(c *gin.Context, action string, detail m
 	if h.audit == nil {
 		return
 	}
-	raw, _ := json.Marshal(detail)
-	_ = h.audit.Record(h.currentUserID(c), action, "node_enroll_token", "", string(raw), c.ClientIP())
+	h.audit.RecordSafe(h.currentUserID(c), action, "node_enroll_token", "", marshalAuditDetail(detail), c.ClientIP())
 }
 
 // RegisterRoutes 注册 enrollment token 路由（挂在平台管理员组下，无需再判 IsPlatformAdmin）。
