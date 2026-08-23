@@ -12,19 +12,15 @@ test('master 推送与正式 tag 必须触发 CI', () => {
   assert.match(releaseWorkflow, /name: Checkout（读取源码版本与当前提交 tag）[\s\S]*?submodules: true/)
 })
 
-test('ServerProbe 私有制品直连发布仓库，公共插件不经私有镜像', () => {
+test('ServerProbe IoC 制品直连发布仓库，其余依赖保留聚合仓库', () => {
   const settings = readFileSync(new URL('../third_party/ServerProbe/settings.gradle.kts', import.meta.url), 'utf8')
   assert.match(
     settings,
-    /maven\("https:\/\/maven\.wcpe\.top\/repository\/maven-releases\/"\)\s*\{\s*content\s*\{\s*includeGroupByRegex\("top\\\\\.wcpe/,
+    /maven\("https:\/\/maven\.wcpe\.top\/repository\/maven-releases\/"\)\s*\{\s*content\s*\{\s*includeGroup\("top\.wcpe\.taboolib\.ioc"\)/,
   )
   assert.match(
     settings,
-    /maven\("https:\/\/maven\.wcpe\.top\/repository\/maven-snapshots\/"\)\s*\{\s*content\s*\{\s*includeGroupByRegex\("top\\\\\.wcpe/,
-  )
-  assert.match(
-    settings,
-    /maven\("https:\/\/maven\.wcpe\.top\/repository\/maven-public\/"\)\s*\{\s*content\s*\{\s*excludeGroupByRegex\("top\\\\\.wcpe/,
+    /^\s*maven\("https:\/\/maven\.wcpe\.top\/repository\/maven-public\/"\)\s*$/m,
   )
 })
 
