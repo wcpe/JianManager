@@ -1836,7 +1836,9 @@ const managedProcessHistoryWindow = 30 * time.Minute
 
 func (s *InstanceService) managedProcessHistory(instanceUUID string, pid int32) (ManagedProcessHistory, []model.ProcessMetricSnapshot, error) {
 	var rows []model.ProcessMetricSnapshot
-	from := time.Now().Add(-managedProcessHistoryWindow)
+	// 采样入库统一存 UTC（metric.go 写入 sampledAt.UTC()），查询窗口须用 UTC 时间对齐，
+	// 否则本地时区（如 +08:00）比较会把窗口起点推后 8 小时、永远查不到样本（真机验收 FR-407 抓到）。
+	from := time.Now().UTC().Add(-managedProcessHistoryWindow)
 	err := s.db.Where("instance_uuid = ? AND pid = ? AND sampled_at >= ?", instanceUUID, pid, from).
 		Order("sampled_at ASC").Find(&rows).Error
 	if err != nil {
