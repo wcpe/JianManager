@@ -98,6 +98,11 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := migrateGRPCPortColumn(db); err != nil {
 		return err
 	}
+	// 迁移 process_metric_snapshots.p_id → pid（真机验收 FR-407 抓到：
+	// GORM 把 PID 蛇形化为 p_id，与 managedProcessHistory 的 WHERE pid 查询不一致）。
+	if err := migrateProcessMetricPIDColumn(db); err != nil {
+		return err
+	}
 
 	if err := db.AutoMigrate(
 		&model.User{},
@@ -411,10 +416,26 @@ func migrateGRPCPortColumn(db *gorm.DB) error {
 	return nil
 }
 
+// migrateProcessMetricPIDColumn 将 process_metric_snapshots 的 p_id 列迁移为 pid。
+// GORM 默认 snake_case 命名把全大写缩写 PID 转成 p_id，而 managedProcessHistory 查询用
+// pid 列名，二者不一致导致 FR-407 进程历史样本查询报 no such column: pid（真机验收抓到）。
+// 迁移在 AutoMigrate 建表前执行：新库直接按模型建 pid 列；存量库检测到 p_id 时重命名。
+func migrateProcessMetricPIDColumn(db *gorm.DB) error {
+	if !db.Migrator().HasTable("process_metric_snapshots") {
+		return nil
+	}
+	if !db.Migrator().HasColumn("process_metric_snapshots", "p_id") {
+		return nil
+	}
+	if err := db.Migrator().RenameColumn("process_metric_snapshots", "p_id", "pid"); err != nil {
+		return fmt.Errorf("迁移 process_metric_snapshots.p_id → pid 失败: %w", err)
+	}
+	return nil
+}
+
 // migrateBackupStorageActiveNameKey 为活跃备份存储回填名称唯一键，并清空归档记录的键。
 // 以 nullable key + 普通唯一索引替代仅 SQLite 支持的部分唯一索引，保证 SQLite/MySQL 一致。
-func migrateBackupStorageActiveNameKey(db *gorm.DB) error {
-	if !db.Migrator().HasTable("backup_storages") || !db.Migrator().HasColumn("backup_storages", "active_name_key") {
+func migrateBackupStorageActiveNameKey(db *gorm.DB) error {	if !db.Migrator().HasTable("backup_storages") || !db.Migrator().HasColumn("backup_storages", "active_name_key") {
 		return nil
 	}
 	if err := db.Exec("UPDATE backup_storages SET active_name_key = NULL WHERE deleted_at IS NOT NULL AND active_name_key IS NOT NULL").Error; err != nil {

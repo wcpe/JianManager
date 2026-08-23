@@ -203,7 +203,7 @@ func (s *MetricService) freshAttributionProcessRows(cutoff time.Time) ([]attribu
 		Group("instance_uuid")
 	var rows []attributionProcessRow
 	err := s.db.Table("process_metric_snapshots AS p").
-		Select("p.node_uuid, p.instance_uuid, i.id AS instance_id, i.name AS instance_name, i.node_id, p.p_id AS pid, p.name, p.cpu_percent, p.rss_bytes, p.sampled_at").
+		Select("p.node_uuid, p.instance_uuid, i.id AS instance_id, i.name AS instance_name, i.node_id, p.pid AS pid, p.name, p.cpu_percent, p.rss_bytes, p.sampled_at").
 		Joins("JOIN (?) AS latest ON p.instance_uuid = latest.instance_uuid AND p.sampled_at = latest.sampled_at", latest).
 		Joins("JOIN instances AS i ON i.uuid = p.instance_uuid").
 		Where("i.status = ?", model.InstanceStatusRunning).
