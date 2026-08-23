@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import { extractSourceVersion, resolveReleaseMetadata } from './release-metadata.mjs'
+
+test('正式 tag 必须触发同 SHA CI', () => {
+  const ciWorkflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  assert.match(ciWorkflow, /^  push:\r?\n(?:    .*\r?\n)*?    tags:\s*\['v\*'\]\s*$/m)
+})
 
 test('从 Go 源码读取版本真值', () => {
   assert.equal(extractSourceVersion('package version\nvar Version = "0.18.0-dev"\n'), '0.18.0-dev')

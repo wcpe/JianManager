@@ -22,7 +22,7 @@
 ### 2.1 触发与渠道
 
 - push 到 `master`：覆盖固定 tag `latest` 的滚动预发布，`prerelease=true`，发布说明取 `CHANGELOG.md` 的 `[Unreleased]` 段。
-- push tag `vX.Y.Z`：创建正式 Release，`prerelease=false`，发布说明取 CHANGELOG 对应 `X.Y.Z` 版本段。
+- push tag `vX.Y.Z`：先触发同一提交 SHA 的 CI；CI 通过后创建正式 Release，`prerelease=false`，发布说明取 CHANGELOG 对应 `X.Y.Z` 版本段。
 - 普通分支源码若已是裸 `X.Y.Z` 且当前提交存在精确 tag `vX.Y.Z`，只执行构建验证，不重复覆盖 `latest`。
 
 ### 2.2 产物

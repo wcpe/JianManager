@@ -61,6 +61,10 @@ jobs:
           git fetch --no-tags origin master:refs/remotes/origin/master
           git rev-parse --verify origin/master
 
+      - name: 验证正式 tag 的 CI 触发契约
+        shell: bash
+        run: node --test scripts/release-metadata.test.mjs
+
       - name: 解析并校验发布元数据（正式 tag 须在 master 上）
         id: meta
         shell: bash
