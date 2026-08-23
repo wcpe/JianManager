@@ -45,10 +45,11 @@ test.describe('客户端分发运营闭环', () => {
 
     // 打开安全中心深链保留筛选（监控页日志区链接）
     await page.getByRole('tab', { name: '统计' }).click()
-    const securityLink = page.getByRole('link', { name: '打开安全中心' }).first()
-    if (await securityLink.isVisible().catch(() => false)) {
-      const href = await securityLink.getAttribute('href')
-      expect(href || '').toContain('/client-dist-security')
+    const href = await page.getByRole('link', { name: '打开安全中心' }).evaluateAll(
+      (links) => links[0]?.getAttribute('href') ?? null,
+    )
+    if (href) {
+      expect(href).toContain('/client-dist-security')
     }
   })
 
