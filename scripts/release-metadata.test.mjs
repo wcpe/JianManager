@@ -9,6 +9,14 @@ test('正式 tag 必须触发同 SHA CI', () => {
   assert.match(ciWorkflow, /^  push:\r?\n(?:    .*\r?\n)*?    tags:\s*\['v\*'\]\s*$/m)
 })
 
+test('ServerProbe 私有仓库不得拦截公共 Gradle 插件解析', () => {
+  const settings = readFileSync(new URL('../third_party/ServerProbe/settings.gradle.kts', import.meta.url), 'utf8')
+  assert.match(
+    settings,
+    /maven\("https:\/\/maven\.wcpe\.top\/repository\/maven-public\/"\)\s*\{\s*content\s*\{\s*includeGroupByRegex\("top\\\\\.wcpe/,
+  )
+})
+
 test('从 Go 源码读取版本真值', () => {
   assert.equal(extractSourceVersion('package version\nvar Version = "0.18.0-dev"\n'), '0.18.0-dev')
   assert.throws(() => extractSourceVersion('package version\n'), /读取 Version/)

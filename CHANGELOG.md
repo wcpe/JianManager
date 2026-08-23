@@ -10,6 +10,7 @@
 
 ### 修复
 - **正式发布 CI 触发**：`v*` tag 现在会触发同一 SHA 的 CI，release 在复用该门禁前会验证触发契约，避免轮询等待不存在的 CI 记录。
+- **发布许可清单构建**：ServerProbe 的私有插件仓库仅解析 `top.wcpe` 组件，公共 KSP 插件由 Maven Central 或 Gradle Plugin Portal 解析，避免私有镜像短暂异常阻断发布。
 
 ## 0.21.0（2026-08-24）
 
