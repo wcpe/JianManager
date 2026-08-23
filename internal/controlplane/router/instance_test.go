@@ -42,6 +42,34 @@ func TestInstance_Create_InvalidRequest(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// TestInstance_Create_PortsPropagate 真机验收 FR-404 抓到：路由层 createInstanceRequest
+// 缺 serverPort/queryPort/probePort 字段导致 gin 绑定静默丢弃、创建后恒为 0，
+// ServerProbe 插件桥上联 Worker 失败。回归断言三端口正确透传到 model。
+func TestInstance_Create_PortsPropagate(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+
+	body := map[string]interface{}{
+		"nodeId":       1,
+		"name":         "端口透传实例",
+		"type":         "minecraft_java",
+		"processType":  "direct",
+		"startCommand": "java -jar server.jar",
+		"serverPort":   25599,
+		"queryPort":    25599,
+		"probePort":    29999,
+	}
+	w := makeRequest(r, "POST", "/api/v1/instances", body, token)
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	resp := parseJSON(t, w)
+	assert.Equal(t, float64(25599), resp["serverPort"], "serverPort 必须透传")
+	assert.Equal(t, float64(25599), resp["queryPort"], "queryPort 必须透传")
+	assert.Equal(t, float64(29999), resp["probePort"], "probePort 必须透传")
+}
+
 func TestInstance_List_Empty(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

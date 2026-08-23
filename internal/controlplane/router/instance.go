@@ -223,6 +223,11 @@ type createInstanceRequest struct {
 	AutoStart   bool    `json:"autoStart"`
 	AutoRestart bool    `json:"autoRestart"`
 	GroupID     uint    `json:"groupId"`
+	// ServerPort/QueryPort/ProbePort 是 MC 实例的宿主监听端口（真机验收 FR-404 抓到：
+	// 此前缺这三个字段导致 gin 绑定静默丢弃、创建后恒为 0，ServerProbe 插件桥上联 Worker 失败）。
+	ServerPort int `json:"serverPort"`
+	QueryPort  int `json:"queryPort"`
+	ProbePort  int `json:"probePort"`
 }
 
 // Create 创建实例。
@@ -271,6 +276,9 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		AutoStart:        req.AutoStart,
 		AutoRestart:      req.AutoRestart,
 		GroupID:          req.GroupID,
+		ServerPort:       req.ServerPort,
+		QueryPort:        req.QueryPort,
+		ProbePort:        req.ProbePort,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrQuotaExceeded) {
