@@ -1,7 +1,7 @@
 # 前端与 bot-worker 质量门禁（见 ADR-047 决策 8 / spec §9）。
 #
-# 触发：pull_request + 非 master 分支 push —— 合并前 / 分支 push 即跑，把坏代码挡在合并前。
-#   release.yml 复用同提交的 CI 结果，不再重复执行前端质量门禁。
+# 触发：pull_request + 所有分支 push + 正式 v* tag。
+#   正式 tag 产生与发布提交相同 SHA 的 CI，release.yml 复用其结果，不重复执行前端质量门禁。
 #
 # 闸：前端 workspace 的 lint（tsc + eslint）+ vitest（全 workspace，含 devmock 包自检）+ build，
 #   Playwright E2E 按文件分成四个独立 runner 并行执行；任一失败 → web-quality 失败 → check 红。
@@ -21,7 +21,8 @@ name: ci
 on:
   pull_request:
   push:
-    branches-ignore: [master]
+    branches: ['**']
+    tags: ['v*']
 
 permissions:
   contents: read
