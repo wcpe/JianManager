@@ -12,11 +12,15 @@ test('master 推送与正式 tag 必须触发 CI', () => {
   assert.match(releaseWorkflow, /name: Checkout（读取源码版本与当前提交 tag）[\s\S]*?submodules: true/)
 })
 
-test('ServerProbe IoC 制品直连发布仓库，其余依赖保留聚合仓库', () => {
+test('ServerProbe 私有与缺失制品直连发布仓库，其余依赖保留聚合仓库', () => {
   const settings = readFileSync(new URL('../third_party/ServerProbe/settings.gradle.kts', import.meta.url), 'utf8')
   assert.match(
     settings,
     /maven\("https:\/\/maven\.wcpe\.top\/repository\/maven-releases\/"\)\s*\{\s*content\s*\{\s*includeGroup\("top\.wcpe\.taboolib\.ioc"\)/,
+  )
+  assert.match(
+    settings,
+    /maven\("https:\/\/repo\.tabooproject\.org\/repository\/releases\/"\)\s*\{\s*content\s*\{\s*includeGroup\("ink\.ptms\.core"\)/,
   )
   assert.match(
     settings,
