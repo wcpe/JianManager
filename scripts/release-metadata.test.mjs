@@ -9,6 +9,8 @@ test('master 推送与正式 tag 必须触发 CI', () => {
   const releaseWorkflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
   assert.match(ciWorkflow, /^    branches:\s*\['\*\*'\]\s*$/m)
   assert.match(ciWorkflow, /^  push:\r?\n(?:    .*\r?\n)*?    tags:\s*\['v\*'\]\s*$/m)
+  assert.doesNotMatch(ciWorkflow, /actions\/setup-go@v5/)
+  assert.match(ciWorkflow, /actions\/setup-go@v7/)
   assert.match(releaseWorkflow, /name: Checkout（读取源码版本与当前提交 tag）/)
   assert.doesNotMatch(releaseWorkflow, /third_party\/ServerProbe|submodules:\s*true/)
 })

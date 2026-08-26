@@ -36,7 +36,7 @@ export function SessionEvents({ runId }: { runId: number | string }) {
     }
   }, [page, query.data?.snapshotEventId])
 
-  const httpItems = query.data?.items ?? []
+  const httpItems = useMemo(() => query.data?.items ?? [], [query.data?.items])
   const total = query.data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 

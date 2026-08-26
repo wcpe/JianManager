@@ -91,10 +91,11 @@ export function SessionEventProvider({
     },
     [qc, runId],
   )
+  const snapshotRunState = snapshot?.runState
 
   useEffect(() => {
     // 终态不建 SSE。
-    if (terminalRef.current || (snapshot && isTerminalRunState(snapshot.runState))) {
+    if (terminalRef.current || (snapshotRunState && isTerminalRunState(snapshotRunState))) {
       setStreamStatus('closed')
       return
     }
@@ -109,7 +110,7 @@ export function SessionEventProvider({
     return () => {
       unsub()
     }
-  }, [runId, onEvent, snapshot?.runState])
+  }, [runId, onEvent, snapshotRunState])
 
   const run = live.run ?? snapshot ?? null
   const value = useMemo(

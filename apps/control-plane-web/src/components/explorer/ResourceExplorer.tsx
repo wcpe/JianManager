@@ -854,11 +854,11 @@ export default function ResourceExplorer({
 
   const cutSelection = useCallback(
     (names: string[]) => setClipboard(cutEntries(entriesFor(names))),
-    [entriesFor],
+    [entriesFor, setClipboard],
   )
   const copySelection = useCallback(
     (names: string[]) => setClipboard(copyEntries(entriesFor(names))),
-    [entriesFor],
+    [entriesFor, setClipboard],
   )
 
   const runFileOps = useCallback(
@@ -933,7 +933,7 @@ export default function ResourceExplorer({
       else toast.error(t('files.pasteFailed'))
       refreshAll()
     },
-    [clipboard, currentDir, existingNames, instanceId, refreshAll, runFileOps, t],
+    [clipboard, currentDir, existingNames, instanceId, refreshAll, runFileOps, setClipboard, t],
   )
 
   // 拖拽源：记录被拖动的文件名集合（拖单个未选中项时仅拖该项）。

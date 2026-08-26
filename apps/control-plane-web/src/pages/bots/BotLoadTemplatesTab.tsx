@@ -52,7 +52,7 @@ export default function BotLoadTemplatesTab() {
   const [wizardOpen, setWizardOpen] = useState(false)
   const [deleteId, setDeleteId] = useState<number | null>(null)
 
-  const items = query.data?.items ?? []
+  const items = useMemo(() => query.data?.items ?? [], [query.data?.items])
   const total = query.data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
