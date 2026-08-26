@@ -104,6 +104,22 @@ async function expectNoWorkspaceOverflow(page: Page, label: string, pageSelector
   await page.locator(pageSelector).evaluate((el) => el.removeAttribute('data-overflow-probe'))
 }
 
+/** 同一视口内逐页验证横向溢出；每个视口独立计时，避免慢 runner 把覆盖误判为超时。 */
+async function expectRoutesWithoutWorkspaceOverflow(
+  page: Page,
+  viewport: (typeof OVERVIEW_RESPONSIVE_VIEWPORTS)[number],
+): Promise<void> {
+  await page.setViewportSize({ width: viewport.width, height: viewport.height })
+  for (const route of ROUTES) {
+    await page.goto(route.href)
+    const ready = page.locator(route.readySelector)
+    await expect(ready, `${viewport.label} ${route.label} 页面就绪`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
+    await expectVirtualRendering(page, route)
+    await ready.evaluate((el) => el.setAttribute('data-overflow-probe', 'true'))
+    await expectNoWorkspaceOverflow(page, `${viewport.label} ${route.label}`, route.readySelector)
+  }
+}
+
 /** 检查共享表格由自身容器承接横向滚动，不把滚动传导到主工作区。 */
 async function expectTablesOwnHorizontalScroll(page: Page, label: string, pageSelector: string): Promise<void> {
   const result = await page.locator(pageSelector).evaluate((root) => {
@@ -459,21 +475,12 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
     }
   })
 
-  test('关键页面桌面和移动端均不产生横向溢出', async ({ page }) => {
-    test.setTimeout(60_000)
-
-    for (const viewport of OVERVIEW_RESPONSIVE_VIEWPORTS) {
-      await page.setViewportSize({ width: viewport.width, height: viewport.height })
-      for (const route of ROUTES) {
-        await page.goto(route.href)
-        const ready = page.locator(route.readySelector)
-        await expect(ready, `${viewport.label} ${route.label} 页面就绪`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
-        await expectVirtualRendering(page, route)
-        await ready.evaluate((el) => el.setAttribute('data-overflow-probe', 'true'))
-        await expectNoWorkspaceOverflow(page, `${viewport.label} ${route.label}`, route.readySelector)
-      }
-    }
-  })
+  for (const viewport of OVERVIEW_RESPONSIVE_VIEWPORTS) {
+    test(`关键页面 ${viewport.label} 不产生横向溢出`, async ({ page }) => {
+      test.setTimeout(60_000)
+      await expectRoutesWithoutWorkspaceOverflow(page, viewport)
+    })
+  }
 
   test('1024x768 关键表格只在自身容器内横向滚动', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 })
