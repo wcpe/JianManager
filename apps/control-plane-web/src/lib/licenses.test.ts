@@ -14,7 +14,7 @@ const make = (over: Partial<DepLike>): DepLike => ({
 describe('生成许可证清单', () => {
   const dependencies = licensesManifest.dependencies
 
-  it.each(['web', 'bot-worker', 'go', 'client-updater', 'serverprobe'])('%s 来源非空', (scope) => {
+  it.each(['web', 'bot-worker', 'go', 'client-updater'])('%s 来源非空', (scope) => {
     expect(dependencies.some((dependency) => dependency.scope === scope)).toBe(true)
   })
 
@@ -22,8 +22,8 @@ describe('生成许可证清单', () => {
     const runtime = dependencies.filter((dependency) => dependency.type === 'runtime')
     const dev = dependencies.filter((dependency) => dependency.type === 'dev')
 
-    // 条数随 gen-licenses 扫描结果浮动（如纳入 ServerProbe 后会涨）；只锁结构与防截断下界，不写死精确值。
-    expect(dependencies.length).toBeGreaterThanOrEqual(900)
+    // 条数随扫描结果浮动；只锁结构与防截断下界，不写死精确值。
+    expect(dependencies.length).toBeGreaterThanOrEqual(500)
     expect(runtime.length).toBeGreaterThan(0)
     expect(dev.length).toBeGreaterThan(0)
     expect(runtime.length + dev.length).toBe(dependencies.length)
@@ -39,11 +39,6 @@ describe('生成许可证清单', () => {
     expect(
       dependencies.some(
         (dependency) => dependency.scope === 'client-updater' && dependency.name.endsWith(':zstd-jni'),
-      ),
-    ).toBe(true)
-    expect(
-      dependencies.some(
-        (dependency) => dependency.scope === 'serverprobe' && dependency.name === 'org.ow2.asm:asm',
       ),
     ).toBe(true)
   })

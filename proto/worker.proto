@@ -1386,13 +1386,18 @@ message RemoveGlobalPackageResponse {
 
 message DeployServerProbeRequest {
   string instance_uuid = 1;
-  // jar 探针插件 jar 字节（CP 由 go:embed 取出后下发；为空表示未捆绑探针，跳过 jar 写入）。
+  // jar 旧 Worker 兼容字段；新版 CP 不再下发探针字节。
   bytes jar = 2;
   // config_yaml 生成的 plugins/ServerProbe/config.yml 内容（已按分配端口开启 /metrics）。
   string config_yaml = 3;
-  // libraries_zip 是构建期预置的 ServerProbe 运行库缓存包（zip 内根路径为 libraries/）。
-  // Worker 解压到实例工作目录根，避免探针首启联网拉 TabooLib/Kotlin 依赖（FR-114）。
+  // libraries_zip 旧 Worker 兼容字段；新版路径让游戏服首启自行拉取依赖。
   bytes libraries_zip = 4;
+  // download_url 是 Worker 从 CP 本地制品库拉取 jar 的短期授权 URL。
+  string download_url = 5;
+  // sha256 是 download_url 目标 jar 的十六进制 SHA-256，Worker 下载后必须校验。
+  string sha256 = 6;
+  // version 是仅供 Worker 日志与诊断展示的逻辑版本，不参与下载授权。
+  string version = 7;
 }
 
 message DeployServerProbeResponse {

@@ -75,6 +75,8 @@ type Node struct {
 	// JDKService.syncFromWorker 成功即刷新（含 JDK 面板隐式同步与运行时资产页手动刷新）；
 	// nil = 从未同步。运行时资产页据此显示「上次同步 <相对时间>」并识别陈旧节点。
 	RuntimeSyncedAt *time.Time     `json:"runtimeSyncedAt"`
+	// ProbeVersionID 是该 Worker 后续新实例的 ServerProbe 默认版本；0 表示继承全局默认（FR-409）。
+	ProbeVersionID uint           `gorm:"default:0;index" json:"probeVersionId"`
 	CreatedAt       time.Time      `json:"createdAt"`
 	UpdatedAt       time.Time      `json:"updatedAt"`
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`

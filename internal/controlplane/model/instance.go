@@ -112,6 +112,8 @@ type Instance struct {
 	QueryPort     int            `gorm:"default:0" json:"queryPort"`
 	// ProbePort 是 ServerProbe 监控探针 /metrics 端口（系统分配，FR-010）。0 表示未部署探针。
 	ProbePort     int            `gorm:"default:0" json:"probePort"`
+	// ProbeVersionID 是实例显式选择的 ServerProbe 版本；0 表示继承所属 Worker 或全局默认（FR-409）。
+	ProbeVersionID uint           `gorm:"default:0;index" json:"probeVersionId"`
 	PID           int            `gorm:"default:0" json:"pid"`
 	StartedAt     *time.Time     `json:"startedAt"`
 	CrashCount    int            `gorm:"default:0" json:"crashCount"`

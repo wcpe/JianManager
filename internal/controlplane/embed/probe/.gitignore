@@ -1,5 +1,4 @@
-# ServerProbe 探针 jar 与离线依赖缓存为构建产物（make embed-probe 注入），不入库。
-# 保留本 .gitignore 以维持目录存在，使 go:embed all:probe 不致编译失败。
+# 此目录保留以兼容历史部署目录；ServerProbe 制品已改由 CP 版本库缓存和下发。
 ServerProbe.jar
 probe-libraries.zip
 probe.json

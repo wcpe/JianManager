@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe ensure-probe-embed embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
+.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -52,15 +52,6 @@ embed-install-scripts:
 	cp scripts/install-worker.sh internal/controlplane/embed/install-scripts/install-worker.sh
 	cp scripts/install-worker.ps1 internal/controlplane/embed/install-scripts/install-worker.ps1
 
-# 构建 ServerProbe 探针 jar 与离线依赖缓存并注入 CP 内嵌目录（FR-010/FR-114，可选）。
-# 需 JDK 21（设 JAVA_HOME 指向 JDK21）+ 子模块已拉取（git submodule update --init）。
-# 不跑此目标时 CP 不捆绑探针，建服时自动部署优雅跳过，不影响其它构建。
-embed-probe:
-	cd third_party/ServerProbe && ./gradlew :plugin:jar :plugin:taboolibMainTask
-	mkdir -p internal/controlplane/embed/probe
-	cp third_party/ServerProbe/plugin/build/libs/ServerProbe-*.jar internal/controlplane/embed/probe/ServerProbe.jar
-	go run ./scripts/probe-offline-cache.go --probe-jar internal/controlplane/embed/probe/ServerProbe.jar --output-zip internal/controlplane/embed/probe/probe-libraries.zip --output-info internal/controlplane/embed/probe/probe.json
-
 # 构建客户端 OTA 更新器两件套 jar 并注入 CP 内嵌目录（FR-107 运营方接入指引，可选）。
 # 需 client-updater 可构建（toolchain 解析 Java 8）。不跑此目标时 CP 不捆绑更新器 jar，
 # 接入指引页下载按钮显示「未内嵌」，不影响其它构建。
@@ -83,16 +74,10 @@ embed-cfr:
 # 纯 Go（SQLite 用 glebarez 纯 Go 驱动、无 CGO）+ CGO_ENABLED=0，任意宿主（含 Windows）可交叉编译全平台产物。
 # 命名与版本注入与 CI 同式：dist/<组件>-<os>-<arch>[.exe]，-X internal/version.Version（ADR-036）。
 # VERSION 默认读 internal/version/version.go 当前值，可覆盖：make dist VERSION=1.0.0。
-# 注：probe jar / libraries zip 被 .gitignore，不入库；发布前须 ensure-probe-embed 或 make embed-probe，
-# 否则 CP 无 OTA 探针包（运行中实例探针仍可工作，但「更新探针」按钮不可用，真机 F2）。
+# ServerProbe 不再作为 CP 内嵌物；版本库运行时从来源同步并落既有 CAS，Worker 从 CP 本地拉取。
 # client-updater 内嵌物另见 embed-client-updater。
 VERSION ?= $(shell sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/version.go)
 DIST_LDFLAGS = -s -w -X github.com/wcpe/JianManager/internal/version.Version=$(VERSION)
-
-# 发布前探针内嵌门禁：目录内须有 ServerProbe.jar（本地曾 make embed-probe 即可；CI 应用缓存或显式构建）。
-# 探针在 full/slim 两档均为必选（OTA 推送与建服自动部署依赖）。
-ensure-probe-embed:
-	@test -f internal/controlplane/embed/probe/ServerProbe.jar || (echo "error: missing ServerProbe.jar; run make embed-probe first" >&2; exit 1)
 
 # 打包 bot-worker dist 注入 CP 内嵌目录（FR-308/ADR-070）：Worker 经 gRPC 自愈拉取，
 # bot 能力不再依赖手工拷贝 dist。产物不入库（目录 .gitignore 占位）；
@@ -115,16 +100,16 @@ clear-worker-embed:
 	@find internal/controlplane/embed/worker -type f ! -name '.gitignore' -delete 2>/dev/null || true
 	@test -f internal/controlplane/embed/worker/.gitignore || printf '%s\n' '*' '!.gitignore' > internal/controlplane/embed/worker/.gitignore
 
-# 两档共用的前端/探针/botworker 等内嵌（不含 Worker 内嵌）。
-dist-prep: gen-licenses build-web embed-web embed-install-scripts ensure-probe-embed embed-botworker
+# 两档共用的前端/botworker 等内嵌（不含 Worker 内嵌）。
+dist-prep: gen-licenses build-web embed-web embed-install-scripts embed-botworker
 
-# dist 默认 = 完整版（兼容旧习惯）：CP 内嵌双平台 Worker + 探针。
+# dist 默认 = 完整版（兼容旧习惯）：CP 内嵌双平台 Worker。
 dist: dist-full
 
 # 完整版：~100MB+ CP，节点安装/升级可优先从 CP 内嵌物化，无需外网拉 Worker。
 dist-full: dist-prep embed-worker dist-bin-full
 
-# 精简版：CP 不内嵌 Worker（体积约减 40MB+），探针仍必嵌；Worker 走独立产物或本机已有文件/镜像。
+# 精简版：CP 不内嵌 Worker（体积约减 40MB+）；Worker 走独立产物或本机已有文件/镜像。
 dist-slim: dist-prep clear-worker-embed dist-bin-slim
 
 # 一次产出 full + slim CP 与独立 worker（先 full 再 slim，避免 embed 目录互相污染）。

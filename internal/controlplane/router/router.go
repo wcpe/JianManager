@@ -80,10 +80,12 @@ type Services struct {
 	Authz             *service.AuthzService
 	Event             *service.EventService
 	Asset             *service.AssetService
-	Core              *service.CoreService
-	Provision         *service.ProvisionService
-	Proxy             *service.ProxyService
-	Clone             *service.CloneService
+	// ArtifactVersion 通用制品版本库（FR-409）；首期为 ServerProbe 提供来源、缓存和版本选择。
+	ArtifactVersion *service.ArtifactVersionService
+	Core            *service.CoreService
+	Provision       *service.ProvisionService
+	Proxy           *service.ProxyService
+	Clone           *service.CloneService
 	// ImportServer 导入现有服务器（FR-302，见 ADR-069）；nil 时导入端点关闭。
 	ImportServer *service.ImportServerService
 	Registration *service.RegistrationService
@@ -150,7 +152,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	}
 	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
 		Skip: func(c *gin.Context) bool {
-			return strings.HasPrefix(c.Request.URL.Path, "/worker-assets/")
+			return strings.HasPrefix(c.Request.URL.Path, "/worker-assets/") || strings.HasPrefix(c.Request.URL.Path, "/probe-artifacts/")
 		},
 	}))
 	r.Use(gin.Recovery())
@@ -269,10 +271,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			instanceGroupHandler.RegisterRoutes(protected)
 		}
 
-		// 探针在线更新（FR-068）：单实例 + 批量推送内嵌探针 jar，下次重启生效。instance:operate。
+		// 探针在线更新（FR-068）：单实例 + 批量下发已选版本，下次重启生效。instance:operate。
 		if svcs.ProbeUpdate != nil {
-			probeUpdateHandler := NewProbeUpdateHandler(svcs.ProbeUpdate, svcs.Instance, svcs.Authz)
+			probeUpdateHandler := NewProbeUpdateHandler(svcs.ProbeUpdate, svcs.Instance, svcs.Authz, svcs.ArtifactVersion)
 			probeUpdateHandler.RegisterRoutes(protected)
+		}
+		if svcs.ArtifactVersion != nil {
+			NewArtifactVersionHandler(svcs.ArtifactVersion).RegisterSelectionRoutes(protected)
 		}
 
 		terminalHandler := NewTerminalHandler(svcs.Terminal, svcs.Authz)
@@ -576,6 +581,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			selfUpdateHandler := NewSelfUpdateHandler(svcs.SelfUpdate, svcs.Audit)
 			selfUpdateHandler.RegisterRoutes(admin)
 		}
+		// 版本化制品包（FR-409）：手动同步来源、缓存 jar、设置全局/Worker 默认；仅平台管理员。
+		if svcs.ArtifactVersion != nil {
+			NewArtifactVersionHandler(svcs.ArtifactVersion).RegisterRoutes(admin)
+		}
 	}
 
 	// Agent 运维面（FR-384）：Bearer Agent Token（jmat_*），不走人类 JWT；策略在 CP 唯一真源。
@@ -614,6 +623,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	// Worker 二进制 CP-local 下载端点（FR-190）：匿名路径由短 token 保护，先于 SPA NoRoute 注册。
 	if svcs.SelfUpdate != nil {
 		NewSelfUpdateHandler(svcs.SelfUpdate, svcs.Audit).RegisterDownloadRoutes(r)
+	}
+	// ServerProbe 由 Worker 从 CP 本地 CAS 主动拉取；短 token 不经请求日志记录。
+	if svcs.ArtifactVersion != nil {
+		NewArtifactVersionHandler(svcs.ArtifactVersion).RegisterDownloadRoutes(r)
 	}
 
 	// 前端静态文件（go:embed 嵌入）

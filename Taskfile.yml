@@ -126,11 +126,6 @@ tasks:
 
   # ─────────────── 内嵌资产 / 发布（委托 Makefile 配方真源） ───────────────
 
-  probe:build:
-    desc: 构建 ServerProbe 探针 jar 并注入 CP 内嵌目录（需 JDK21 + 子模块）
-    cmds:
-      - make embed-probe
-
   embed:web:
     desc: 前端产物拷入 go:embed 目录
     cmds:

@@ -9,7 +9,7 @@
 param(
     [string]$InstallDir = ".",
     [string]$DownloadUrl = $(if ($env:JIANMANAGER_CP_DOWNLOAD_URL) { $env:JIANMANAGER_CP_DOWNLOAD_URL } else { "https://github.com/wcpe/JianManager/releases/latest/download" }),
-    # full=内嵌 Worker；slim=不内嵌 Worker（探针仍内嵌）。也可用环境变量 JIANMANAGER_CP_VARIANT。
+    # full=内嵌 Worker；slim=不内嵌 Worker。也可用环境变量 JIANMANAGER_CP_VARIANT。
     [ValidateSet("full", "slim")]
     [string]$Variant = $(if ($env:JIANMANAGER_CP_VARIANT -eq "slim") { "slim" } else { "full" }),
     [string]$Binary = "",

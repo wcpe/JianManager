@@ -4,7 +4,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -135,6 +137,54 @@ func TestDeployServerProbe(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, resp.Success)
 	})
+}
+
+// TestDeployServerProbe_DownloadsJarFromControlPlane 验证新版路径只让 Worker 从 CP 拉 jar：
+// 不预置运行库，校验成功后原子替换，校验失败保留旧 jar。
+func TestDeployServerProbe_DownloadsJarFromControlPlane(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	ctx := context.Background()
+	const uuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	workDir := filepath.Join(tmp, "inst")
+	requireCreatedProbeInstance(t, srv, ctx, uuid, workDir)
+
+	jar := []byte("serverprobe-from-control-plane")
+	jarSum := sha256.Sum256(jar)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(jar)
+	}))
+	defer server.Close()
+
+	oldJarPath := filepath.Join(workDir, "plugins", serverProbeJarName)
+	require.NoError(t, os.MkdirAll(filepath.Dir(oldJarPath), 0o755))
+	require.NoError(t, os.WriteFile(oldJarPath, []byte("old-probe"), 0o644))
+
+	resp, err := srv.DeployServerProbe(ctx, &workerpb.DeployServerProbeRequest{
+		InstanceUuid: uuid,
+		DownloadUrl:  server.URL + "/probe-artifacts/7/download?token=short-lived",
+		Sha256:       hex.EncodeToString(jarSum[:]),
+		Version:      "0.2.0",
+		ConfigYaml:   "metrics:\n  enabled: true\n",
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success, resp.Error)
+	got, err := os.ReadFile(oldJarPath)
+	require.NoError(t, err)
+	require.Equal(t, jar, got)
+	assert.NoDirExists(t, filepath.Join(workDir, "libraries"), "新版下发不应预置 TabooLib 运行库")
+
+	resp, err = srv.DeployServerProbe(ctx, &workerpb.DeployServerProbeRequest{
+		InstanceUuid: uuid,
+		DownloadUrl:  server.URL + "/probe-artifacts/7/download?token=short-lived",
+		Sha256:       strings.Repeat("0", 64),
+		Version:      "0.2.0",
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Success)
+	got, err = os.ReadFile(oldJarPath)
+	require.NoError(t, err)
+	require.Equal(t, jar, got, "校验失败不得覆盖已部署的 jar")
 }
 
 func makeProbeLibrariesZip(t *testing.T, files map[string]string) []byte {

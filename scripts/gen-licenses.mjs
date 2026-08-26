@@ -1,4 +1,4 @@
-// 构建期依赖与许可证扫描（FR-135）：覆盖 Web、Bot Worker、Go、客户端更新器与 ServerProbe，
+// 构建期依赖与许可证扫描（FR-135）：覆盖 Web、Bot Worker、Go 与客户端更新器，
 // 产出 apps/control-plane-web/public/licenses.json 供前端 /licenses 页读取。**构建期生成、不手维护**。
 //
 // 用法：node scripts/gen-licenses.mjs            （由 Makefile `gen-licenses` 调用，build 前置）
@@ -22,9 +22,8 @@ const REPO_ROOT = resolve(SCRIPT_DIR, '..')
 const WEB_DIR = join(REPO_ROOT, 'apps', 'control-plane-web')
 const BOT_DIR = join(REPO_ROOT, 'apps', 'bot-worker')
 const CLIENT_UPDATER_DIR = join(REPO_ROOT, 'client-updater')
-const SERVERPROBE_DIR = join(REPO_ROOT, 'third_party', 'ServerProbe')
 const OUT_FILE = join(WEB_DIR, 'public', 'licenses.json')
-const REQUIRED_SCOPES = ['web', 'bot-worker', 'go', 'client-updater', 'serverprobe']
+const REQUIRED_SCOPES = ['web', 'bot-worker', 'go', 'client-updater']
 
 const MAX_BUFFER = 128 * 1024 * 1024
 const MAX_LICENSE_TEXT = 64 * 1024
@@ -44,15 +43,6 @@ const DEPENDENCY_INPUT_FILES = [
   join(CLIENT_UPDATER_DIR, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
   join(CLIENT_UPDATER_DIR, 'wedge', 'build.gradle.kts'),
   join(CLIENT_UPDATER_DIR, 'updater-core', 'build.gradle.kts'),
-  join(SERVERPROBE_DIR, 'settings.gradle.kts'),
-  join(SERVERPROBE_DIR, 'build.gradle.kts'),
-  join(SERVERPROBE_DIR, 'gradle.properties'),
-  join(SERVERPROBE_DIR, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
-  join(SERVERPROBE_DIR, 'api', 'build.gradle.kts'),
-  join(SERVERPROBE_DIR, 'project', 'core', 'build.gradle.kts'),
-  join(SERVERPROBE_DIR, 'platform', 'platform-bukkit', 'build.gradle.kts'),
-  join(SERVERPROBE_DIR, 'platform', 'platform-bungee', 'build.gradle.kts'),
-  join(SERVERPROBE_DIR, 'plugin', 'build.gradle.kts'),
 ]
 const FINGERPRINT_FILES = [...DEPENDENCY_INPUT_FILES, SCRIPT_FILE]
 
@@ -400,7 +390,6 @@ const deps = [
   ...scanNpm('bot-worker', BOT_DIR),
   ...scanGo(),
   ...scanGradle('client-updater', CLIENT_UPDATER_DIR, ':updater-core', 'runtimeClasspath'),
-  ...scanGradle('serverprobe', SERVERPROBE_DIR, ':plugin', 'taboo'),
 ]
 assertRequiredScopes(deps)
 deps.sort((a, b) => a.scope.localeCompare(b.scope) || a.name.localeCompare(b.name))

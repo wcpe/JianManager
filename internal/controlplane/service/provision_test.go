@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +35,7 @@ type fakeProvisionWorker struct {
 	create   *workerpb.CreateInstanceRequest
 	download *workerpb.DownloadCoreRequest
 	install  *workerpb.InstallForgeServerRequest
+	probe    *workerpb.DeployServerProbeRequest
 	writes   map[string]string
 }
 
@@ -54,7 +57,8 @@ func (f *fakeProvisionWorker) InstallForgeServer(_ context.Context, in *workerpb
 // DeployServerProbe 桩：本地存在内嵌探针制品时 provisionOnWorker 会走探针部署分支，
 // 桩返回成功以免命中内嵌 WorkerServiceClient 接口的 nil 方法而空指针 panic
 // （干净检出/CI 无内嵌 jar 时该分支被跳过，不会走到这里）。
-func (f *fakeProvisionWorker) DeployServerProbe(_ context.Context, _ *workerpb.DeployServerProbeRequest, _ ...grpc.CallOption) (*workerpb.DeployServerProbeResponse, error) {
+func (f *fakeProvisionWorker) DeployServerProbe(_ context.Context, in *workerpb.DeployServerProbeRequest, _ ...grpc.CallOption) (*workerpb.DeployServerProbeResponse, error) {
+	f.probe = in
 	return &workerpb.DeployServerProbeResponse{Success: true}, nil
 }
 
@@ -82,6 +86,46 @@ func TestBuildServerProperties(t *testing.T) {
 	if on := buildServerProperties(25566, 25566, true); !strings.Contains(on, "online-mode=true") {
 		t.Fatalf("online-mode=true 未透传:\n%s", on)
 	}
+}
+
+func TestProvisionOnWorker_DeploysResolvedProbeByControlPlaneURL(t *testing.T) {
+	artifacts, assets := newArtifactVersionService(t)
+	pkg, source, err := artifacts.EnsureDefaultServerProbe()
+	require.NoError(t, err)
+	jar := []byte("serverprobe-0.2.0")
+	sum := sha256.Sum256(jar)
+	asset, err := assets.Ingest(strings.NewReader(string(jar)), IngestParams{
+		Type:     model.AssetTypeServerProbe,
+		Name:     "ServerProbe",
+		Version:  "0.2.0",
+		Filename: "ServerProbe-0.2.0.jar",
+	})
+	require.NoError(t, err)
+	version := &model.ArtifactVersion{
+		PackageID: pkg.ID, SourceID: source.ID, Version: "0.2.0", ReleaseRef: "v0.2.0",
+		AssetName: "ServerProbe-0.2.0.jar", ExpectedSHA256: hex.EncodeToString(sum[:]),
+		SourceURL: "https://github.example/ServerProbe-0.2.0.jar", AssetID: asset.ID,
+	}
+	require.NoError(t, artifacts.db.Create(version).Error)
+	require.NoError(t, artifacts.SetPackageDefaultVersion(pkg.ID, version.ID))
+
+	node := &model.Node{UUID: "probe-node", Name: "probe-node", Host: "127.0.0.1", Secret: "secret", Status: model.NodeStatusOnline}
+	require.NoError(t, artifacts.db.Create(node).Error)
+	inst := &model.Instance{Name: "paper", NodeID: node.ID, Type: model.InstanceTypeMinecraftJava, Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDirect, StartCommand: "java", ProbePort: 29940}
+	require.NoError(t, artifacts.db.Create(inst).Error)
+
+	pool := cpgrpc.NewClientPool()
+	worker := &fakeProvisionWorker{}
+	pool.SetWorkerClientForTest(node.UUID, worker)
+	svc := NewProvisionService(artifacts.db, pool, nil, nil, nil, artifacts)
+	err = svc.deployServerProbe(context.Background(), inst, node, "https://cp.example.test/base")
+	require.NoError(t, err)
+	require.NotNil(t, worker.probe)
+	require.Empty(t, worker.probe.Jar)
+	require.Empty(t, worker.probe.LibrariesZip)
+	require.Equal(t, version.Version, worker.probe.Version)
+	require.Equal(t, version.ExpectedSHA256, worker.probe.Sha256)
+	require.Contains(t, worker.probe.DownloadUrl, "/base/probe-artifacts/")
 }
 
 func TestProvisionServer_RejectsProxyCore(t *testing.T) {

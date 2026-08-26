@@ -11,7 +11,6 @@ import (
 
 	"gorm.io/gorm"
 
-	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -31,6 +30,8 @@ type ProvisionService struct {
 	// bridge 用于建服时签发实例级插件桥 token 并写入探针 config（FR-065，见 ADR-016）。
 	// 为 nil 时探针 config 不含 bridge 段（探针只跑 /metrics，不连反向 WS）。
 	bridge *PluginBridgeService
+	// artifacts 是版本化制品库；非 nil 时建服只下发 CP 本地下载引用，不再传 jar 字节。
+	artifacts *ArtifactVersionService
 	// tasks 任务中心（FR-319）：搭建的下载/写配置阶段经任务异步执行与展示；
 	// nil 时（测试/未接线）回退同步执行（旧行为）。
 	tasks *TaskService
@@ -41,8 +42,12 @@ func (p *ProvisionService) SetTaskService(t *TaskService) { p.tasks = t }
 
 // NewProvisionService 创建一键搭建服务。
 // bridge 可为 nil（未启用插件桥时）；非 nil 时建服自动为实例签发插件桥 token 并下发探针。
-func NewProvisionService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *InstanceService, core *CoreService, bridge *PluginBridgeService) *ProvisionService {
-	return &ProvisionService{db: db, pool: pool, instance: instance, core: core, bridge: bridge}
+func NewProvisionService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *InstanceService, core *CoreService, bridge *PluginBridgeService, artifacts ...*ArtifactVersionService) *ProvisionService {
+	var artifactSvc *ArtifactVersionService
+	if len(artifacts) > 0 {
+		artifactSvc = artifacts[0]
+	}
+	return &ProvisionService{db: db, pool: pool, instance: instance, core: core, bridge: bridge, artifacts: artifactSvc}
 }
 
 // ProvisionServerRequest 一键搭建后端子服请求。
@@ -81,7 +86,7 @@ func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionSer
 		return nil, err
 	}
 
-	if err := p.provisionOnWorker(ctx, inst, core, boolOr(req.OnlineMode, false), nil); err != nil {
+	if err := p.provisionOnWorkerWithBaseURL(ctx, inst, core, boolOr(req.OnlineMode, false), nil, ""); err != nil {
 		// 实例已落库（STOPPED），返回实例与错误，便于用户重试或删除。
 		return inst, fmt.Errorf("子服搭建失败: %w", err)
 	}
@@ -94,6 +99,11 @@ func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionSer
 // 47MB 需 4 分钟，同步链路被前端超时腰斩后留空壳实例且错误进黑洞）。
 // 失败：任务终态含错误链 + 实例 statusReason 标注「搭建未完成」+ slog 落平台日志。
 func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req ProvisionServerRequest, createdBy uint) (*model.Instance, string, error) {
+	return p.ProvisionServerAsyncWithBaseURL(ctx, req, createdBy, "")
+}
+
+// ProvisionServerAsyncWithBaseURL 在请求可见的 CP 公共基址下异步搭建，并把该基址用于 Worker 拉取探针。
+func (p *ProvisionService) ProvisionServerAsyncWithBaseURL(ctx context.Context, req ProvisionServerRequest, createdBy uint, probeBaseURL string) (*model.Instance, string, error) {
 	if p.tasks == nil {
 		inst, err := p.ProvisionServer(ctx, req)
 		return inst, "", err
@@ -128,7 +138,7 @@ func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req Provisi
 	taskID := p.tasks.RunAsync(RunSpec{
 		NodeID: req.NodeID, InstanceID: inst.ID, Kind: model.TaskKindProvision, Title: title, CreatedBy: createdBy,
 	}, func(ctx context.Context, stage func(int, string)) (string, error) {
-		if err := p.provisionOnWorker(ctx, inst, core, onlineMode, stage); err != nil {
+		if err := p.provisionOnWorkerWithBaseURL(ctx, inst, core, onlineMode, stage, probeBaseURL); err != nil {
 			// 搭建任一阶段失败 → 损毁态（FR-342）：直写 DAMAGED＋原因，参数已存 ProvisionSpec 可重建。
 			// statusReason 让实例卡片/详情可见「为什么不可用」，启动前一目了然（损毁态亦拦启动）。
 			_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
@@ -158,6 +168,11 @@ func (p *ProvisionService) InstanceRoleFor(id uint) (model.InstanceRole, error) 
 // 无需重填。仅 DAMAGED 且有 ProvisionSpec 的实例可重建；成功→STOPPED，失败→仍 DAMAGED。
 // 起后台任务（任务中心可见进度），返回任务 ID。
 func (p *ProvisionService) RebuildInstance(ctx context.Context, instanceID uint, createdBy uint) (string, error) {
+	return p.RebuildInstanceWithBaseURL(ctx, instanceID, createdBy, "")
+}
+
+// RebuildInstanceWithBaseURL 重建时沿用请求可见的 CP 公共基址，以便 Worker 拉取探针。
+func (p *ProvisionService) RebuildInstanceWithBaseURL(ctx context.Context, instanceID uint, createdBy uint, probeBaseURL string) (string, error) {
 	var inst model.Instance
 	if err := p.db.First(&inst, instanceID).Error; err != nil {
 		return "", err
@@ -187,7 +202,7 @@ func (p *ProvisionService) RebuildInstance(ctx context.Context, instanceID uint,
 	taskID := p.tasks.RunAsync(RunSpec{
 		NodeID: inst.NodeID, InstanceID: inst.ID, Kind: model.TaskKindProvision, Title: title, CreatedBy: createdBy,
 	}, func(ctx context.Context, stage func(int, string)) (string, error) {
-		if err := p.provisionOnWorker(ctx, &instCopy, core, onlineMode, stage); err != nil {
+		if err := p.provisionOnWorkerWithBaseURL(ctx, &instCopy, core, onlineMode, stage, probeBaseURL); err != nil {
 			// 重建仍失败：保持 DAMAGED，只更新原因（用户可再次重建）。
 			_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
 				Update("status_reason", "重建未完成："+err.Error()).Error
@@ -287,6 +302,10 @@ func (p *ProvisionService) NodePorts(nodeID uint) (*NodePortsResult, error) {
 // provisionOnWorker 在 Worker 上下载/安装核心并写入 eula.txt / server.properties。
 // stage 非 nil 时各阶段经任务中心上报（FR-319/323）；nil = 旧同步路径不上报。
 func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.Instance, core *CoreInfo, onlineMode bool, stageFn func(int, string)) error {
+	return p.provisionOnWorkerWithBaseURL(ctx, inst, core, onlineMode, stageFn, "")
+}
+
+func (p *ProvisionService) provisionOnWorkerWithBaseURL(ctx context.Context, inst *model.Instance, core *CoreInfo, onlineMode bool, stageFn func(int, string), probeBaseURL string) error {
 	stage := func(progress int, text string) {
 		if stageFn != nil {
 			stageFn(progress, text)
@@ -341,24 +360,47 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 		}
 	}
 
-	// 部署 ServerProbe 监控探针（FR-010）：CP 内嵌探针 jar 时下发 jar + 开启 /metrics 的 config.yml；
-	// 未内嵌（未跑 make embed-probe）则跳过。探针为辅助监控，部署失败仅告警、不阻断建服。
+	// 部署 ServerProbe 监控探针（FR-010/409）：只下发 CP 本地 jar 下载引用；
+	// 未选择已缓存版本时跳过。探针为辅助监控，部署失败仅告警、不阻断建服。
 	stage(85, "部署监控探针 …")
-	if jar := cpembed.ServerProbeJar(); len(jar) > 0 {
-		probeCtx, cancel3 := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel3()
-		dp, derr := client.Worker.DeployServerProbe(probeCtx, buildDeployServerProbeRequest(
-			inst.UUID,
-			jar,
-			embeddedProbeLibrariesZip(inst.UUID),
-			buildServerProbeConfig(inst.ProbePort, p.bridgeConfigBlock(inst.UUID, node.WSPort)),
-		))
-		switch {
-		case derr != nil:
-			slog.Warn("部署 ServerProbe 探针失败（不阻断建服）", "instance", inst.UUID, "err", derr)
-		case !dp.Success:
-			slog.Warn("部署 ServerProbe 探针失败（不阻断建服）", "instance", inst.UUID, "err", dp.Error)
-		}
+	if err := p.deployServerProbe(ctx, inst, &node, probeBaseURL); err != nil {
+		slog.Warn("部署 ServerProbe 探针失败（不阻断建服）", "instance", inst.UUID, "err", err)
+	}
+	return nil
+}
+
+// deployServerProbe 为一个新建或重建的实例下发探针版本引用；Worker 负责从 CP 拉 jar。
+func (p *ProvisionService) deployServerProbe(ctx context.Context, inst *model.Instance, node *model.Node, baseURL string) error {
+	if p.artifacts == nil {
+		return nil
+	}
+	version, _, err := p.artifacts.ResolveInstanceProbeVersion(inst.ID)
+	if err != nil {
+		return err
+	}
+	token, err := p.artifacts.IssueProbeDownloadToken(ProbeDownloadTokenScope{VersionID: version.ID, NodeUUID: node.UUID})
+	if err != nil {
+		return err
+	}
+	downloadURL, err := p.artifacts.BuildProbeDownloadURL(baseURL, version.ID, token)
+	if err != nil {
+		return err
+	}
+	client, ok := p.pool.Get(node.UUID)
+	if !ok {
+		return fmt.Errorf("Worker %s 未连接", node.UUID)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, probeDeployTimeout)
+	defer cancel()
+	resp, err := client.Worker.DeployServerProbe(probeCtx, buildDeployServerProbeDownloadRequest(
+		inst.UUID, downloadURL, version.ExpectedSHA256, version.Version,
+		buildServerProbeConfig(inst.ProbePort, p.bridgeConfigBlock(inst.UUID, node.WSPort)),
+	))
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
 	}
 	return nil
 }
@@ -416,21 +458,15 @@ func isSpongeForgeCore(core *CoreInfo) bool {
 	return core != nil && (project(core.Type) == "spongeforge" || (core.Runtime != nil && core.Runtime.Distribution == "spongeforge"))
 }
 
-func buildDeployServerProbeRequest(instanceUUID string, jar, librariesZip []byte, configYaml string) *workerpb.DeployServerProbeRequest {
+// buildDeployServerProbeDownloadRequest 构造新版引用式探针下发；Worker 从 CP 本地 CAS 拉 jar。
+func buildDeployServerProbeDownloadRequest(instanceUUID, downloadURL, sha256, version, configYAML string) *workerpb.DeployServerProbeRequest {
 	return &workerpb.DeployServerProbeRequest{
 		InstanceUuid: instanceUUID,
-		Jar:          jar,
-		ConfigYaml:   configYaml,
-		LibrariesZip: librariesZip,
+		DownloadUrl:  downloadURL,
+		Sha256:       sha256,
+		Version:      version,
+		ConfigYaml:   configYAML,
 	}
-}
-
-func embeddedProbeLibrariesZip(instanceUUID string) []byte {
-	libs := cpembed.ServerProbeLibrariesZip()
-	if len(libs) == 0 {
-		slog.Warn("ServerProbe 探针依赖缓存未内嵌，首启可能联网拉依赖", "instance", instanceUUID)
-	}
-	return libs
 }
 
 func stringOr(v, fallback string) string {

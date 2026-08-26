@@ -10,16 +10,13 @@ import (
 
 	"gorm.io/gorm"
 
-	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 探针在线更新（FR-068，见 ADR-016）：把 CP 内嵌的最新 ServerProbe jar 经已有 gRPC
-// DeployServerProbe（FR-010/ADR-014）推到实例 plugins 目录，覆盖在位 jar。jar 是 JVM 已加载
-// 的 class 来源，热替换不生效，故语义为「已就位，下次重启生效」；可选 restart=true 推送后重启使其立即生效。
-//
-// 不改 proto、不改子模块：复用 DeployServerProbe 与建服时的探针 config 构造（metrics + bridge 段）。
+// 探针在线更新（FR-068/409，见 ADR-016）：把 CP 已缓存版本的下载引用经已有 gRPC
+// DeployServerProbe 推到实例 plugins 目录。jar 是 JVM 已加载的 class 来源，热替换不生效，
+// 故语义为「已就位，下次重启生效」；可选 restart=true 推送后重启使其立即生效。
 
 const (
 	// maxProbeUpdateTargets 单次批量更新目标数上限，与实例批量（FR-058）对齐。
@@ -32,8 +29,8 @@ const (
 	probeDeployTimeout = 30 * time.Second
 )
 
-// ErrProbeNotEmbedded 表示 CP 未内嵌探针 jar（未跑 make embed-probe），无可推送内容。
-var ErrProbeNotEmbedded = errors.New("控制平面未内嵌 ServerProbe 探针 jar，无法推送更新")
+// ErrProbeNotEmbedded 保留旧错误名以兼容调用方；现在表示 CP 没有可下发的制品版本库。
+var ErrProbeNotEmbedded = errors.New("控制平面没有已缓存并选中的 ServerProbe 制品版本，无法推送更新")
 
 // ProbeConnChecker 查询某实例的探针是否经插件桥反向 WS 连入（FR-065/066）。
 // 生产环境由 PlayerEventService.IsProbeConnected 注入；为 nil 时一律视为未连入（仅影响展示）。
@@ -42,9 +39,10 @@ type ProbeConnChecker func(instanceUUID string) bool
 // ProbeUpdateService 探针在线更新服务（FR-068）。
 // 复用 InstanceService 的 gRPC 客户端池与 DB，批量更新走同步路径以精确计数（镜像 InstanceBatchService）。
 type ProbeUpdateService struct {
-	db     *gorm.DB
-	pool   *cpgrpc.ClientPool
-	bridge *PluginBridgeService
+	db        *gorm.DB
+	pool      *cpgrpc.ClientPool
+	bridge    *PluginBridgeService
+	artifacts *ArtifactVersionService
 	// connCheck 注入探针连接状态查询（FR-065/066 插件桥会话），nil 表示一律未连入。
 	connCheck ProbeConnChecker
 
@@ -56,11 +54,16 @@ type ProbeUpdateService struct {
 // NewProbeUpdateService 创建探针在线更新服务。
 // bridge 用于推送时重新生成探针 config 的 bridge 段（实例级 token，与建服一致）；可为 nil
 // （此时 config 不含 bridge 段，探针只跑 /metrics、不连反向 WS）。
-func NewProbeUpdateService(db *gorm.DB, pool *cpgrpc.ClientPool, bridge *PluginBridgeService) *ProbeUpdateService {
+func NewProbeUpdateService(db *gorm.DB, pool *cpgrpc.ClientPool, bridge *PluginBridgeService, artifacts ...*ArtifactVersionService) *ProbeUpdateService {
+	var artifactSvc *ArtifactVersionService
+	if len(artifacts) > 0 {
+		artifactSvc = artifacts[0]
+	}
 	return &ProbeUpdateService{
 		db:         db,
 		pool:       pool,
 		bridge:     bridge,
+		artifacts:  artifactSvc,
 		lastPushed: make(map[string]time.Time),
 	}
 }
@@ -72,16 +75,21 @@ func (s *ProbeUpdateService) SetConnChecker(c ProbeConnChecker) {
 
 // ProbeUpdateStatus 某实例的探针更新状态（供详情页「更新探针」区展示）。
 type ProbeUpdateStatus struct {
-	InstanceID          uint       `json:"instanceId"`
-	InstanceUUID        string     `json:"instanceUuid"`
-	ProbeConnected      bool       `json:"probeConnected"`
-	EmbeddedVersion     string     `json:"embeddedVersion"`
-	EmbeddedFingerprint string     `json:"embeddedFingerprint"`
-	EmbeddedAvailable   bool       `json:"embeddedAvailable"`
-	LibrariesAvailable  bool       `json:"librariesAvailable"`
-	LibrariesBytes      int        `json:"librariesBytes"`
-	LibrariesShortSha   string     `json:"librariesShortSha"`
-	LastPushedAt        *time.Time `json:"lastPushedAt"`
+	InstanceID          uint               `json:"instanceId"`
+	InstanceUUID        string             `json:"instanceUuid"`
+	ProbeConnected      bool               `json:"probeConnected"`
+	EmbeddedVersion     string             `json:"embeddedVersion"`
+	EmbeddedFingerprint string             `json:"embeddedFingerprint"`
+	EmbeddedAvailable   bool               `json:"embeddedAvailable"`
+	LibrariesAvailable  bool               `json:"librariesAvailable"`
+	LibrariesBytes      int                `json:"librariesBytes"`
+	LibrariesShortSha   string             `json:"librariesShortSha"`
+	VersionID           uint               `json:"versionId"`
+	Version             string             `json:"version"`
+	VersionSHA256       string             `json:"versionSha256"`
+	VersionOrigin       ProbeVersionOrigin `json:"versionOrigin"`
+	VersionError        string             `json:"versionError,omitempty"`
+	LastPushedAt        *time.Time         `json:"lastPushedAt"`
 }
 
 // ProbeUpdateResult 单实例推送结果。
@@ -95,6 +103,8 @@ type ProbeUpdateResult struct {
 	LibrariesAvailable  bool   `json:"librariesAvailable"`
 	LibrariesBytes      int    `json:"librariesBytes"`
 	LibrariesShortSha   string `json:"librariesShortSha"`
+	VersionID           uint   `json:"versionId"`
+	Version             string `json:"version"`
 	Message             string `json:"message"`
 }
 
@@ -123,72 +133,92 @@ type ProbeUpdateBatchResult struct {
 	Errors    []ProbeUpdateBatchError `json:"errors"`
 }
 
-// EmbeddedInfo 返回内嵌探针 jar 的元信息（版本 + 短指纹 + 是否内嵌）。
-func (s *ProbeUpdateService) EmbeddedInfo() cpembed.ProbeJarInfo {
-	return cpembed.ServerProbeJarInfo()
-}
-
 // Status 返回某实例的探针更新状态。实例不存在返回 gorm.ErrRecordNotFound。
 func (s *ProbeUpdateService) Status(instanceID uint) (*ProbeUpdateStatus, error) {
 	var inst model.Instance
 	if err := s.db.First(&inst, instanceID).Error; err != nil {
 		return nil, err
 	}
-	info := cpembed.ServerProbeJarInfo()
-	return &ProbeUpdateStatus{
-		InstanceID:          inst.ID,
-		InstanceUUID:        inst.UUID,
-		ProbeConnected:      s.isConnected(inst.UUID),
-		EmbeddedVersion:     info.Version,
-		EmbeddedFingerprint: info.Fingerprint,
-		EmbeddedAvailable:   info.Available,
-		LibrariesAvailable:  info.LibrariesAvailable,
-		LibrariesBytes:      info.LibrariesBytes,
-		LibrariesShortSha:   info.LibrariesShortSha,
-		LastPushedAt:        s.lastPushedAt(inst.UUID),
-	}, nil
+	result := &ProbeUpdateStatus{
+		InstanceID:     inst.ID,
+		InstanceUUID:   inst.UUID,
+		ProbeConnected: s.isConnected(inst.UUID),
+		LastPushedAt:   s.lastPushedAt(inst.UUID),
+	}
+	if s.artifacts == nil {
+		result.VersionError = "制品版本库未配置"
+		return result, nil
+	}
+	version, origin, err := s.artifacts.ResolveInstanceProbeVersion(inst.ID)
+	if err != nil {
+		result.VersionError = err.Error()
+		return result, nil
+	}
+	result.VersionID = version.ID
+	result.Version = version.Version
+	result.VersionSHA256 = version.ExpectedSHA256
+	result.VersionOrigin = origin
+	result.EmbeddedVersion = version.Version
+	result.EmbeddedFingerprint = version.ExpectedSHA256
+	result.EmbeddedAvailable = true
+	result.LibrariesAvailable = false
+	result.LibrariesBytes = 0
+	result.LibrariesShortSha = ""
+	return result, nil
 }
 
-// Update 把内嵌最新探针 jar 推到指定实例的 plugins 目录（下次重启生效）。
+// Update 把已解析探针版本推到指定实例的 plugins 目录（下次重启生效）。
 // restart=true 时推送成功后由调用方重启（本服务只标记 restarted 计划，实际重启委托 restartFn，
-// 见 router 装配）。jar 未内嵌返回 ErrProbeNotEmbedded；节点未连/下发失败返回包装错误。
+// 见 router 装配）。未选已缓存版本返回 ErrProbeNotEmbedded；节点未连/下发失败返回包装错误。
 func (s *ProbeUpdateService) Update(instanceID uint) (*ProbeUpdateResult, error) {
+	return s.UpdateWithBaseURL(instanceID, "")
+}
+
+// UpdateWithBaseURL 把解析后的版本引用下发给 Worker；Worker 从 CP 本地 CAS 拉 jar。
+func (s *ProbeUpdateService) UpdateWithBaseURL(instanceID uint, baseURL string) (*ProbeUpdateResult, error) {
 	var inst model.Instance
 	if err := s.db.Preload("Node").First(&inst, instanceID).Error; err != nil {
 		return nil, err
 	}
 	// 代理实例不适用探针（FIX，真机：对 BungeeCord 代理点「更新探针」走完整推送链路后在依赖预置阶段失败）：
 	// ServerProbe 是 Bukkit 插件，代理端（BungeeCord/Waterfall/Velocity）无法加载，推了也白推。
-	// 置于内嵌检查之前：不适用与是否捆绑探针无关。
+	// 置于版本解析之前：不适用与是否已选探针版本无关。
 	if inst.Role == model.InstanceRoleProxy {
 		return nil, fmt.Errorf("代理实例不适用 ServerProbe 探针（Bukkit 插件，代理端无法加载），无需推送")
 	}
-	info := cpembed.ServerProbeJarInfo()
-	if !info.Available {
-		return nil, ErrProbeNotEmbedded
+	if s.artifacts != nil {
+		version, _, err := s.artifacts.ResolveInstanceProbeVersion(inst.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.deployVersionTo(&inst, version, baseURL); err != nil {
+			return nil, err
+		}
+		s.markPushed(inst.UUID)
+		return &ProbeUpdateResult{
+			InstanceID:          inst.ID,
+			Deployed:            true,
+			ProbeConnected:      s.isConnected(inst.UUID),
+			EmbeddedVersion:     version.Version,
+			EmbeddedFingerprint: version.ExpectedSHA256,
+			VersionID:           version.ID,
+			Version:             version.Version,
+			Message:             "探针 jar 已就位，下次重启生效",
+		}, nil
 	}
-	if err := s.deployTo(&inst); err != nil {
-		return nil, err
-	}
-	s.markPushed(inst.UUID)
-	return &ProbeUpdateResult{
-		InstanceID:          inst.ID,
-		Deployed:            true,
-		ProbeConnected:      s.isConnected(inst.UUID),
-		EmbeddedVersion:     info.Version,
-		EmbeddedFingerprint: info.Fingerprint,
-		LibrariesAvailable:  info.LibrariesAvailable,
-		LibrariesBytes:      info.LibrariesBytes,
-		LibrariesShortSha:   info.LibrariesShortSha,
-		Message:             "探针 jar 已就位，下次重启生效",
-	}, nil
+	return nil, ErrProbeNotEmbedded
 }
 
 // Batch 批量推送：解析目标 → 资源隔离收敛 → 有界并发同步推送 → 计数（镜像 FR-058）。
-// jar 未内嵌时整体拒绝（ErrProbeNotEmbedded）。restart 由调用方在成功项上各自异步重启。
+// 未选已缓存版本时整体拒绝（ErrProbeNotEmbedded）。restart 由调用方在成功项上各自异步重启。
 // 返回结果中 Succeeded 列表通过 onDeployed 回调暴露给调用方（用于 restart）。
 func (s *ProbeUpdateService) Batch(req ProbeUpdateBatchRequest, scopeIDs []uint, scope bool, onDeployed func(inst *model.Instance)) (*ProbeUpdateBatchResult, error) {
-	if !cpembed.ServerProbeJarInfo().Available {
+	return s.BatchWithBaseURL(req, scopeIDs, scope, "", onDeployed)
+}
+
+// BatchWithBaseURL 按同一 CP 基址并发下发版本引用；每个 Worker 获得独立短期下载 token。
+func (s *ProbeUpdateService) BatchWithBaseURL(req ProbeUpdateBatchRequest, scopeIDs []uint, scope bool, baseURL string, onDeployed func(inst *model.Instance)) (*ProbeUpdateBatchResult, error) {
+	if s.artifacts == nil {
 		return nil, ErrProbeNotEmbedded
 	}
 	instances, skipped, err := s.resolveTargets(req, scopeIDs, scope)
@@ -221,7 +251,7 @@ func (s *ProbeUpdateService) Batch(req ProbeUpdateBatchRequest, scopeIDs []uint,
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			derr := s.deployTo(&inst)
+			derr := s.deployTarget(&inst, baseURL)
 
 			mu.Lock()
 			if derr != nil {
@@ -242,6 +272,17 @@ func (s *ProbeUpdateService) Batch(req ProbeUpdateBatchRequest, scopeIDs []uint,
 	wg.Wait()
 
 	return result, nil
+}
+
+func (s *ProbeUpdateService) deployTarget(inst *model.Instance, baseURL string) error {
+	if s.artifacts == nil {
+		return ErrProbeNotEmbedded
+	}
+	version, _, err := s.artifacts.ResolveInstanceProbeVersion(inst.ID)
+	if err != nil {
+		return err
+	}
+	return s.deployVersionTo(inst, version, baseURL)
 }
 
 // resolveTargets 解析批量目标实例（预加载节点），按可访问实例集合收敛。
@@ -273,36 +314,27 @@ func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeID
 	return instances, 0, nil
 }
 
-// deployTo 把内嵌探针 jar + 重新生成的探针 config 经 gRPC DeployServerProbe 推到实例所属 Worker。
-// 探针未连入也照常推送（jar 落盘即生效于下次重启）；节点未连/下发失败返回包装错误。
-func (s *ProbeUpdateService) deployTo(inst *model.Instance) error {
-	if inst.Node.UUID == "" {
-		return fmt.Errorf("实例 %d 缺少关联节点", inst.ID)
+// deployVersionTo 下发已缓存制品的 CP 本地 URL；不传 jar 字节或运行库压缩包。
+func (s *ProbeUpdateService) deployVersionTo(inst *model.Instance, version *model.ArtifactVersion, baseURL string) error {
+	client, err := s.workerForDeployment(inst)
+	if err != nil {
+		return err
 	}
-	// 节点离线快速失败（FIX，真机：探针/节点异常时点「更新探针」长时间转圈到超时）：
-	// 节点不在线时连接池可能残留失活的反向隧道客户端（pool.Get 仍返回 ok），
-	// DeployServerProbe 会阻塞到 probeDeployTimeout(30s) 才失败——前端看起来「一直 loading」。
-	// 先按心跳态判定：节点非在线直接返回明确原因（HTTP 4xx），让前端秒回错误、不空转。
-	// 置于 jar/pool 检查之前，确保离线态在任何 CP 构建（含未内嵌 jar 的开发环境）下均可命中。
-	if inst.Node.Status != model.NodeStatusOnline {
-		return fmt.Errorf("节点 %s 当前离线，无法推送探针：请先让节点上线再重试", inst.Node.Name)
+	token, err := s.artifacts.IssueProbeDownloadToken(ProbeDownloadTokenScope{VersionID: version.ID, NodeUUID: inst.Node.UUID})
+	if err != nil {
+		return err
 	}
-	jar := cpembed.ServerProbeJar()
-	if len(jar) == 0 {
-		return ErrProbeNotEmbedded
+	downloadURL, err := s.artifacts.BuildProbeDownloadURL(baseURL, version.ID, token)
+	if err != nil {
+		return err
 	}
-	client, ok := s.pool.Get(inst.Node.UUID)
-	if !ok {
-		return fmt.Errorf("Worker %s 未连接", inst.Node.UUID)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), probeDeployTimeout)
 	defer cancel()
-
-	resp, err := client.Worker.DeployServerProbe(ctx, buildDeployServerProbeRequest(
+	resp, err := client.Worker.DeployServerProbe(ctx, buildDeployServerProbeDownloadRequest(
 		inst.UUID,
-		jar,
-		embeddedProbeLibrariesZip(inst.UUID),
+		downloadURL,
+		version.ExpectedSHA256,
+		version.Version,
 		buildServerProbeConfig(inst.ProbePort, s.bridgeBlock(inst.UUID, inst.Node.WSPort)),
 	))
 	if err != nil {
@@ -312,6 +344,25 @@ func (s *ProbeUpdateService) deployTo(inst *model.Instance) error {
 		return fmt.Errorf("Worker 部署探针失败: %s", resp.Error)
 	}
 	return nil
+}
+
+func (s *ProbeUpdateService) workerForDeployment(inst *model.Instance) (*cpgrpc.Client, error) {
+	if inst.Node.UUID == "" {
+		return nil, fmt.Errorf("实例 %d 缺少关联节点", inst.ID)
+	}
+	// 节点离线快速失败（FIX，真机：探针/节点异常时点「更新探针」长时间转圈到超时）：
+	// 节点不在线时连接池可能残留失活的反向隧道客户端（pool.Get 仍返回 ok），
+	// DeployServerProbe 会阻塞到 probeDeployTimeout(30s) 才失败——前端看起来「一直 loading」。
+	// 先按心跳态判定：节点非在线直接返回明确原因（HTTP 4xx），让前端秒回错误、不空转。
+	// 置于 jar/pool 检查之前，确保离线态在任何 CP 构建（含未内嵌 jar 的开发环境）下均可命中。
+	if inst.Node.Status != model.NodeStatusOnline {
+		return nil, fmt.Errorf("节点 %s 当前离线，无法推送探针：请先让节点上线再重试", inst.Node.Name)
+	}
+	client, ok := s.pool.Get(inst.Node.UUID)
+	if !ok {
+		return nil, fmt.Errorf("Worker %s 未连接", inst.Node.UUID)
+	}
+	return client, nil
 }
 
 // bridgeBlock 为实例签发插件桥 token 并生成探针 config.yml 的 bridge 段（FR-065，与建服一致）。

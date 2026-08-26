@@ -601,26 +601,43 @@ func (s *Server) DeployServerProbe(ctx context.Context, req *workerpb.DeployServ
 	if !exists {
 		return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("实例 %s 未注册", req.InstanceUuid)}, nil
 	}
-	// 离线依赖 zip 必须先于依赖预置解压（FIX，真机：CN 主机 repo.tabooproject.org 连接被重置 EOF）：
-	// 预置按「本地缺文件才联网」判定，随请求内嵌下发的离线缓存正是这些依赖——先落盘则预置全命中
-	// 零联网；原顺序反了，离线缓存明明在手却先去外网下 pom 而整体失败。
-	if len(req.LibrariesZip) > 0 {
-		if err := deployServerProbeLibrariesZip(inst.WorkDir, req.LibrariesZip); err != nil {
-			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入探针依赖缓存失败: %v", err)}, nil
-		}
-	}
-	if len(req.Jar) > 0 {
-		if err := s.prepareServerProbeDependencies(ctx, inst.WorkDir, req.Jar); err != nil {
-			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("预置探针依赖失败: %v", err)}, nil
-		}
-	}
 	pluginsDir := filepath.Join(inst.WorkDir, "plugins")
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
 		return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("创建 plugins 目录失败: %v", err)}, nil
 	}
-	if len(req.Jar) > 0 {
-		if err := os.WriteFile(filepath.Join(pluginsDir, serverProbeJarName), req.Jar, 0o644); err != nil {
-			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入探针 jar 失败: %v", err)}, nil
+	// 新版路径只从 CP 本地制品库下载 jar。Worker 不接触 GitHub，不预置运行库；游戏服首启自行拉依赖。
+	if strings.TrimSpace(req.DownloadUrl) != "" {
+		if !validProbeSHA256(req.Sha256) || strings.TrimSpace(req.Version) == "" {
+			return &workerpb.DeployServerProbeResponse{Success: false, Error: "ServerProbe 下载请求缺少有效版本或 sha256"}, nil
+		}
+		candidate := filepath.Join(pluginsDir, fmt.Sprintf(".%s-%d.download", serverProbeJarName, time.Now().UnixNano()))
+		_, _, err := downloadAndVerify(ctx, s.outboundClient(), req.DownloadUrl, req.Sha256, candidate, "ServerProbe 探针 jar")
+		if err != nil {
+			_ = os.Remove(candidate)
+			return &workerpb.DeployServerProbeResponse{Success: false, Error: err.Error()}, nil
+		}
+		if err := os.Rename(candidate, filepath.Join(pluginsDir, serverProbeJarName)); err != nil {
+			_ = os.Remove(candidate)
+			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("原子替换探针 jar 失败: %v", err)}, nil
+		}
+	} else {
+		// 离线依赖 zip 必须先于依赖预置解压（FIX，真机：CN 主机 repo.tabooproject.org 连接被重置 EOF）：
+		// 预置按「本地缺文件才联网」判定，随请求内嵌下发的离线缓存正是这些依赖——先落盘则预置全命中
+		// 零联网；原顺序反了，离线缓存明明在手却先去外网下 pom 而整体失败。
+		if len(req.LibrariesZip) > 0 {
+			if err := deployServerProbeLibrariesZip(inst.WorkDir, req.LibrariesZip); err != nil {
+				return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入探针依赖缓存失败: %v", err)}, nil
+			}
+		}
+		if len(req.Jar) > 0 {
+			if err := s.prepareServerProbeDependencies(ctx, inst.WorkDir, req.Jar); err != nil {
+				return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("预置探针依赖失败: %v", err)}, nil
+			}
+		}
+		if len(req.Jar) > 0 {
+			if err := os.WriteFile(filepath.Join(pluginsDir, serverProbeJarName), req.Jar, 0o644); err != nil {
+				return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入探针 jar 失败: %v", err)}, nil
+			}
 		}
 	}
 	if cfg := req.ConfigYaml; cfg != "" {
@@ -633,6 +650,19 @@ func (s *Server) DeployServerProbe(ctx context.Context, req *workerpb.DeployServ
 		}
 	}
 	return &workerpb.DeployServerProbeResponse{Success: true}, nil
+}
+
+func validProbeSHA256(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, char := range value {
+		if !(char >= '0' && char <= '9') && !(char >= 'a' && char <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 const (

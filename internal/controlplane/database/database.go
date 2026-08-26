@@ -160,6 +160,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.InstanceConfigVersion{},
 		&model.FileVersion{},
 		&model.Asset{},
+		// 通用制品版本库（FR-409）：逻辑包/来源/版本映射到既有 Asset CAS，首个接入为 ServerProbe。
+		&model.ArtifactPackage{},
+		&model.ArtifactSource{},
+		&model.ArtifactVersion{},
 		// 制品存储渠道（FR-347，见 ADR-073）：client-file 制品外置对象存储的渠道配置，
 		// 内置「本机存储」行由 service EnsureBuiltin 幂等 seed。
 		&model.ArtifactStorageChannel{},
@@ -226,6 +230,9 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 	if err := migrateScopedUniqueIndexes(db); err != nil {
+		return err
+	}
+	if err := migrateArtifactVersionSourceVersionIndex(db); err != nil {
 		return err
 	}
 	// FR-365：幂等回填 bots.desired_state / desired_state_generation。
@@ -435,7 +442,8 @@ func migrateProcessMetricPIDColumn(db *gorm.DB) error {
 
 // migrateBackupStorageActiveNameKey 为活跃备份存储回填名称唯一键，并清空归档记录的键。
 // 以 nullable key + 普通唯一索引替代仅 SQLite 支持的部分唯一索引，保证 SQLite/MySQL 一致。
-func migrateBackupStorageActiveNameKey(db *gorm.DB) error {	if !db.Migrator().HasTable("backup_storages") || !db.Migrator().HasColumn("backup_storages", "active_name_key") {
+func migrateBackupStorageActiveNameKey(db *gorm.DB) error {
+	if !db.Migrator().HasTable("backup_storages") || !db.Migrator().HasColumn("backup_storages", "active_name_key") {
 		return nil
 	}
 	if err := db.Exec("UPDATE backup_storages SET active_name_key = NULL WHERE deleted_at IS NOT NULL AND active_name_key IS NOT NULL").Error; err != nil {
@@ -466,6 +474,48 @@ func migrateScopedUniqueIndexes(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+const artifactVersionSourceVersionIndexName = "idx_artifact_versions_source_version"
+
+// migrateArtifactVersionSourceVersionIndex 修复 FR-411 首版遗漏 Version 字段的唯一索引。
+// 来源已从属于制品包，故同一来源内只允许一个同名版本，允许同一来源有多个不同版本。
+func migrateArtifactVersionSourceVersionIndex(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&model.ArtifactVersion{}) {
+		return nil
+	}
+	correct, err := artifactVersionSourceVersionIndexIsCorrect(db)
+	if err != nil {
+		return err
+	}
+	if correct {
+		return nil
+	}
+	if db.Migrator().HasIndex(&model.ArtifactVersion{}, artifactVersionSourceVersionIndexName) {
+		if err := db.Migrator().DropIndex(&model.ArtifactVersion{}, artifactVersionSourceVersionIndexName); err != nil {
+			return fmt.Errorf("删除错误的制品版本唯一索引失败: %w", err)
+		}
+	}
+	if err := db.Migrator().CreateIndex(&model.ArtifactVersion{}, artifactVersionSourceVersionIndexName); err != nil {
+		return fmt.Errorf("创建制品来源版本唯一索引失败: %w", err)
+	}
+	return nil
+}
+
+func artifactVersionSourceVersionIndexIsCorrect(db *gorm.DB) (bool, error) {
+	indexes, err := db.Migrator().GetIndexes(&model.ArtifactVersion{})
+	if err != nil {
+		return false, fmt.Errorf("读取制品版本索引失败: %w", err)
+	}
+	for _, index := range indexes {
+		if index.Name() != artifactVersionSourceVersionIndexName {
+			continue
+		}
+		unique, known := index.Unique()
+		columns := index.Columns()
+		return known && unique && len(columns) == 2 && columns[0] == "source_id" && columns[1] == "version", nil
+	}
+	return false, nil
 }
 
 // dynamicGormLogger 让 GORM 的 SQL 日志跟随 FR-225 调试开关（FIX-7）。

@@ -146,3 +146,42 @@ func TestMigrateScopedUniqueIndexes_BackupStorageAllowsReuse(t *testing.T) {
 	require.NoError(t, db.Delete(&model.BackupStorage{}, first.ID).Error)
 	require.NoError(t, db.Create(&model.BackupStorage{Name: "archive", Type: model.BackupStorageS3}).Error)
 }
+
+func TestAutoMigrate_RepairsArtifactVersionSourceVersionIndex(t *testing.T) {
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.ArtifactPackage{}, &model.ArtifactSource{}, &model.ArtifactVersion{}))
+
+	pkg := &model.ArtifactPackage{Key: "serverprobe", Name: "ServerProbe", AssetType: model.AssetTypeServerProbe}
+	require.NoError(t, db.Create(pkg).Error)
+	source := &model.ArtifactSource{PackageID: pkg.ID, Provider: model.ArtifactProviderLocalUpload, Name: "本地上传", Config: "{}", Enabled: true}
+	require.NoError(t, db.Create(source).Error)
+	require.NoError(t, db.Create(&model.ArtifactVersion{
+		PackageID: pkg.ID, SourceID: source.ID, Version: "0.1.0", ReleaseRef: "local-upload",
+		AssetName: "ServerProbe-0.1.0.jar", ExpectedSHA256: "sha-0.1.0", SourceURL: "local://upload/1",
+	}).Error)
+
+	require.NoError(t, db.Migrator().DropIndex(&model.ArtifactVersion{}, artifactVersionSourceVersionIndexName))
+	require.NoError(t, db.Exec("CREATE UNIQUE INDEX idx_artifact_versions_source_version ON artifact_versions (package_id, source_id)").Error)
+	correct, err := artifactVersionSourceVersionIndexIsCorrect(db)
+	require.NoError(t, err)
+	require.False(t, correct)
+
+	require.NoError(t, AutoMigrate(db))
+	correct, err = artifactVersionSourceVersionIndexIsCorrect(db)
+	require.NoError(t, err)
+	require.True(t, correct)
+
+	var existing model.ArtifactVersion
+	require.NoError(t, db.Where("source_id = ? AND version = ?", source.ID, "0.1.0").First(&existing).Error)
+	require.NoError(t, db.Create(&model.ArtifactVersion{
+		PackageID: pkg.ID, SourceID: source.ID, Version: "0.1.1", ReleaseRef: "local-upload",
+		AssetName: "ServerProbe-0.1.1.jar", ExpectedSHA256: "sha-0.1.1", SourceURL: "local://upload/2",
+	}).Error)
+	err = db.Create(&model.ArtifactVersion{
+		PackageID: pkg.ID, SourceID: source.ID, Version: "0.1.1", ReleaseRef: "local-upload",
+		AssetName: "ServerProbe-0.1.1-copy.jar", ExpectedSHA256: "sha-0.1.1-copy", SourceURL: "local://upload/3",
+	}).Error
+	require.Error(t, err, "同一来源同版本必须仍受唯一约束保护")
+}

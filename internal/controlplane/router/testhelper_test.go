@@ -180,6 +180,7 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		Business:              service.NewBusinessService(db, pool),
 		BusinessEvent:         service.NewBusinessEventService(db),
 		Asset:                 assetSvc,
+		ArtifactVersion:       service.NewArtifactVersionService(db, assetSvc),
 		RuntimeAssets:         runtimeAssetsSvc,
 		Storage:               service.NewStorageService(db, root),
 		Log:                   service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),

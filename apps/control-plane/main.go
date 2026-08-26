@@ -256,6 +256,12 @@ func main() {
 	// 制品入库下载（如服务端核心 IngestFromURL）经进程级出站代理（FR-174，见 ADR-037）。
 	// 用持有者注入，使全局代理改动运行时即时生效（FR-185，见 ADR-043）。
 	assetSvc.SetHTTPClientProvider(outboundProvider.Client)
+	// 通用制品版本库（FR-409）：版本元数据与既有 CAS 分层，首个接入 ServerProbe 官方 Releases。
+	artifactVersionSvc := service.NewArtifactVersionService(db, assetSvc)
+	artifactVersionSvc.SetProvider(model.ArtifactProviderGitHubRelease, service.NewGitHubReleaseArtifactProvider(outboundProvider.Client))
+	if _, _, err := artifactVersionSvc.EnsureDefaultServerProbe(); err != nil {
+		log.Fatalf("初始化 ServerProbe 制品版本库失败: %v", err)
+	}
 	// 运行时与制品全局页聚合（FR-082）：跨节点 JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
 	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
 	// FR-301 手动刷新：强制全节点库存 syncFromWorker（失败容忍显旧数据）。
@@ -422,7 +428,7 @@ func main() {
 	coreSvc.SetHTTPClientProvider(outboundProvider.Client)
 	// 插件桥服务（FR-065，见 ADR-016）：建服时为实例签发插件桥 token 并写入探针 config 的 bridge 段。
 	pluginBridgeSvc := service.NewPluginBridgeService(wsTokenSecret)
-	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc, pluginBridgeSvc)
+	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc, pluginBridgeSvc, artifactVersionSvc)
 	registrationSvc := service.NewRegistrationService(db)
 	networkSvc := service.NewNetworkService(db, instanceSvc)
 	// 代理服务实现 RegistrationSyncer：注册变更后写代理配置 + 下发 Velocity secret（FR-035）。
@@ -452,10 +458,10 @@ func main() {
 	// 业务事件分流：同一上行流中 domain 非空的事件交业务汇聚（FR-122），玩家事件不受影响。
 	playerEventSvc.SetBusinessSink(businessEventSvc.Ingest)
 
-	// 探针在线更新服务（FR-068，见 ADR-016）：复用 gRPC DeployServerProbe 把内嵌探针 jar
-	// 推到实例（下次重启生效）。复用 pluginBridgeSvc 重新生成探针 config 的 bridge 段（实例级 token）；
+	// 探针在线更新服务（FR-068/409）：Worker 从 CP 本地 CAS 拉取已选 jar，
+	// 不再经 gRPC 传输探针字节。复用 pluginBridgeSvc 重新生成探针 config 的 bridge 段（实例级 token）；
 	// 探针连接状态取 FR-066 在线名册（IsProbeConnected）。
-	probeUpdateSvc := service.NewProbeUpdateService(db, pool, pluginBridgeSvc)
+	probeUpdateSvc := service.NewProbeUpdateService(db, pool, pluginBridgeSvc, artifactVersionSvc)
 	probeUpdateSvc.SetConnChecker(playerEventSvc.IsProbeConnected)
 
 	// 告警分发器（FR-085）：所有触发源经此统一去抖聚合 / 静默 / 分级路由 / 落库 / 通知。
@@ -650,6 +656,7 @@ func main() {
 		Authz:                   authzSvc,
 		Event:                   eventSvc,
 		Asset:                   assetSvc,
+		ArtifactVersion:         artifactVersionSvc,
 		Core:                    coreSvc,
 		Provision:               provisionSvc,
 		Proxy:                   proxySvc,

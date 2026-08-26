@@ -14,7 +14,7 @@ INSTALL_DIR="."
 BINARY=""
 SKIP_DOWNLOAD="0"
 DO_START="0"
-# 产物档位：full=内嵌 Worker 的完整 CP；slim=不内嵌 Worker（探针仍内嵌），体积更小。
+# 产物档位：full=内嵌 Worker 的完整 CP；slim=不内嵌 Worker，体积更小。
 # 也可用环境变量 JIANMANAGER_CP_VARIANT=slim|full。
 VARIANT="${JIANMANAGER_CP_VARIANT:-full}"
 
@@ -25,7 +25,7 @@ usage() {
 可选:
   --install-dir <dir>   安装目录（默认当前目录 .）
   --download-url <url>  下载基址（默认 GitHub Releases latest；可指向镜像）
-  --variant <full|slim> 产物档位（默认 full；slim=不内嵌 Worker，探针仍内嵌）
+  --variant <full|slim> 产物档位（默认 full；slim=不内嵌 Worker）
   --binary <path>       使用本地已有二进制（跳过下载）
   --skip-download       跳过下载，使用安装目录内 control-plane
   --start               安装后前台启动（默认只打印启动命令）

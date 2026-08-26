@@ -9701,13 +9701,18 @@ func (x *RemoveGlobalPackageResponse) GetError() string {
 type DeployServerProbeRequest struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	InstanceUuid string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
-	// jar 探针插件 jar 字节（CP 由 go:embed 取出后下发；为空表示未捆绑探针，跳过 jar 写入）。
+	// jar 旧 Worker 兼容字段；新版 CP 不再下发探针字节。
 	Jar []byte `protobuf:"bytes,2,opt,name=jar,proto3" json:"jar,omitempty"`
 	// config_yaml 生成的 plugins/ServerProbe/config.yml 内容（已按分配端口开启 /metrics）。
 	ConfigYaml string `protobuf:"bytes,3,opt,name=config_yaml,json=configYaml,proto3" json:"config_yaml,omitempty"`
-	// libraries_zip 是构建期预置的 ServerProbe 运行库缓存包（zip 内根路径为 libraries/）。
-	// Worker 解压到实例工作目录根，避免探针首启联网拉 TabooLib/Kotlin 依赖（FR-114）。
-	LibrariesZip  []byte `protobuf:"bytes,4,opt,name=libraries_zip,json=librariesZip,proto3" json:"libraries_zip,omitempty"`
+	// libraries_zip 旧 Worker 兼容字段；新版路径让游戏服首启自行拉取依赖。
+	LibrariesZip []byte `protobuf:"bytes,4,opt,name=libraries_zip,json=librariesZip,proto3" json:"libraries_zip,omitempty"`
+	// download_url 是 Worker 从 CP 本地制品库拉取 jar 的短期授权 URL。
+	DownloadUrl string `protobuf:"bytes,5,opt,name=download_url,json=downloadUrl,proto3" json:"download_url,omitempty"`
+	// sha256 是 download_url 目标 jar 的十六进制 SHA-256，Worker 下载后必须校验。
+	Sha256 string `protobuf:"bytes,6,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	// version 是仅供 Worker 日志与诊断展示的逻辑版本，不参与下载授权。
+	Version       string `protobuf:"bytes,7,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9768,6 +9773,27 @@ func (x *DeployServerProbeRequest) GetLibrariesZip() []byte {
 		return x.LibrariesZip
 	}
 	return nil
+}
+
+func (x *DeployServerProbeRequest) GetDownloadUrl() string {
+	if x != nil {
+		return x.DownloadUrl
+	}
+	return ""
+}
+
+func (x *DeployServerProbeRequest) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *DeployServerProbeRequest) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
 }
 
 type DeployServerProbeResponse struct {
@@ -16407,13 +16433,16 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"M\n" +
 	"\x1bRemoveGlobalPackageResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\x97\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xec\x01\n" +
 	"\x18DeployServerProbeRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x10\n" +
 	"\x03jar\x18\x02 \x01(\fR\x03jar\x12\x1f\n" +
 	"\vconfig_yaml\x18\x03 \x01(\tR\n" +
 	"configYaml\x12#\n" +
-	"\rlibraries_zip\x18\x04 \x01(\fR\flibrariesZip\"K\n" +
+	"\rlibraries_zip\x18\x04 \x01(\fR\flibrariesZip\x12!\n" +
+	"\fdownload_url\x18\x05 \x01(\tR\vdownloadUrl\x12\x16\n" +
+	"\x06sha256\x18\x06 \x01(\tR\x06sha256\x12\x18\n" +
+	"\aversion\x18\a \x01(\tR\aversion\"K\n" +
 	"\x19DeployServerProbeResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\xa1\x01\n" +

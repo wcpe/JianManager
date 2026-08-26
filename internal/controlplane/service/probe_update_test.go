@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
@@ -43,9 +42,9 @@ func TestProbeUpdate_Status_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
-// TestProbeUpdate_Status_ConnAndEmbedded 验证状态：连接由 checker 决定，
-// 内嵌信息透传，lastPushedAt 推送前为 nil。
-func TestProbeUpdate_Status_ConnAndEmbedded(t *testing.T) {
+// TestProbeUpdate_Status_ConnAndVersion 验证状态：连接由 checker 决定，
+// 未配置制品库时明确报告不可下发，lastPushedAt 推送前为 nil。
+func TestProbeUpdate_Status_ConnAndVersion(t *testing.T) {
 	db := newProbeUpdateTestDB(t)
 	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
 	inst := mkProbeInstance(t, db, "smp", 1)
@@ -55,8 +54,8 @@ func TestProbeUpdate_Status_ConnAndEmbedded(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, st.ProbeConnected)
 	require.Nil(t, st.LastPushedAt, "未推送过 lastPushedAt 应为 nil")
-	require.Equal(t, cpembed.ProbeEmbeddedVersion, st.EmbeddedVersion)
-	require.Equal(t, cpembed.ServerProbeJarInfo().Available, st.EmbeddedAvailable)
+	require.False(t, st.EmbeddedAvailable)
+	require.Equal(t, "制品版本库未配置", st.VersionError)
 	require.Equal(t, inst.UUID, st.InstanceUUID)
 
 	// 注入 checker：仅该实例 UUID 视为已连入。
@@ -81,12 +80,8 @@ func TestProbeUpdate_LastPushed(t *testing.T) {
 	require.True(t, st.LastPushedAt.After(before))
 }
 
-// TestProbeUpdate_NotEmbedded 未内嵌 jar 时 Update/Batch 返回 ErrProbeNotEmbedded。
-// 本环境 jar 为构建产物（gitignored）通常缺失，命中本用例；若已 make embed-probe 则跳过。
+// TestProbeUpdate_NotEmbedded 未配置制品库时 Update/Batch 返回 ErrProbeNotEmbedded。
 func TestProbeUpdate_NotEmbedded(t *testing.T) {
-	if cpembed.ServerProbeJarInfo().Available {
-		t.Skip("已内嵌探针 jar，跳过未内嵌路径用例")
-	}
 	db := newProbeUpdateTestDB(t)
 	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
 	inst := mkProbeInstance(t, db, "smp", 1)
@@ -96,37 +91,6 @@ func TestProbeUpdate_NotEmbedded(t *testing.T) {
 
 	_, err = svc.Batch(ProbeUpdateBatchRequest{IDs: []uint{inst.ID}}, nil, false, nil)
 	require.ErrorIs(t, err, ErrProbeNotEmbedded)
-}
-
-// TestProbeUpdate_DeployTo_NodeNotConnected jar 在位时（强制覆盖）节点未连接的失败路径。
-// 通过直接调用 deployTo 绕过内嵌 gate——此处只验证「无节点连接 → 失败」，不依赖真实 jar。
-func TestProbeUpdate_DeployTo_NodeNotConnected(t *testing.T) {
-	if !cpembed.ServerProbeJarInfo().Available {
-		t.Skip("未内嵌探针 jar，deployTo 在 jar 缺失时先于 pool 返回 ErrProbeNotEmbedded（无连接路径无法单测）")
-	}
-	db := newProbeUpdateTestDB(t)
-	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
-	inst := mkProbeInstance(t, db, "smp", 1)
-	// 节点在线（过离线快速失败闸）但不在连接池 → 命中「未连接」而非「离线」。
-	inst.Node = model.Node{UUID: "node-not-in-pool", Name: "n-online", Status: model.NodeStatusOnline, WSPort: 9102}
-
-	err := svc.deployTo(inst)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "未连接")
-}
-
-// TestProbeUpdate_DeployTo_NodeOffline 节点离线 → deployTo 先于 jar/pool 快速失败（明确「离线」原因），
-// 杜绝连接池残留失活隧道客户端致 DeployServerProbe 空转到 30s 超时（真机「更新探针一直 loading」）。
-// 无需内嵌 jar：离线闸置于 jar 检查之前，任何构建下均可命中。
-func TestProbeUpdate_DeployTo_NodeOffline(t *testing.T) {
-	db := newProbeUpdateTestDB(t)
-	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
-	inst := mkProbeInstance(t, db, "smp", 1)
-	inst.Node = model.Node{UUID: "n-off", Name: "node-off", Status: model.NodeStatusOffline}
-
-	err := svc.deployTo(inst)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "离线")
 }
 
 // TestProbeUpdate_ResolveTargets_Skipped 请求 IDs 中不存在的实例计入 skipped（存在性隐藏）。
@@ -179,22 +143,6 @@ func TestProbeUpdate_ResolveTargets_Filter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, insts, 2, "仅节点 1 的两个实例命中")
 	require.Equal(t, 0, skipped, "filter 模式 skipped 恒为 0")
-}
-
-// TestProbeUpdate_Batch_EmptyTargets 无命中目标时返回零计数、不报错。
-func TestProbeUpdate_Batch_EmptyTargets(t *testing.T) {
-	if !cpembed.ServerProbeJarInfo().Available {
-		t.Skip("未内嵌探针 jar，Batch 在 jar 缺失时整体返回 ErrProbeNotEmbedded")
-	}
-	db := newProbeUpdateTestDB(t)
-	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
-
-	res, err := svc.Batch(ProbeUpdateBatchRequest{IDs: []uint{9999}}, nil, false, nil)
-	require.NoError(t, err)
-	require.Equal(t, 0, res.Requested)
-	require.Equal(t, 1, res.Skipped)
-	require.Equal(t, 0, res.Succeeded)
-	require.Equal(t, 0, res.Failed)
 }
 
 // TestProbeUpdate_Update_RejectsProxy 真机回归（对 BungeeCord 代理点「更新探针」失败且原因被吞）：

@@ -1,6 +1,6 @@
 {
   "generatedAt": "",
-  "sourceHash": "d4b50647a4214eab375153dc0157aa654c7f6dae5b857aac1b5b4ea5512da273",
+  "sourceHash": "da6fb5b5de7d777165d6f301e65d171fe2ce2be4d688d6860dc1102a3dd78be2",
   "dependencies": [
     {
       "name": "@azure/msal-common",
@@ -2707,116 +2707,6 @@
       "ecosystem": "go",
       "type": "runtime",
       "licenseText": "Copyright (c) 2017 The Sqlite Authors. All rights reserved.\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions are met:\n\n1. Redistributions of source code must retain the above copyright notice, this\nlist of conditions and the following disclaimer.\n\n2. Redistributions in binary form must reproduce the above copyright notice,\nthis list of conditions and the following disclaimer in the documentation\nand/or other materials provided with the distribution.\n\n3. Neither the name of the copyright holder nor the names of its contributors\nmay be used to endorse or promote products derived from this software without\nspecific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND\nANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED\nWARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE\nDISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE\nFOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL\nDAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR\nSERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER\nCAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,\nOR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE\nOF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n"
-    },
-    {
-      "name": "io.izzel.taboolib:common",
-      "version": "6.3.0-afd75a7",
-      "license": "Unknown",
-      "author": "io.izzel.taboolib",
-      "url": "",
-      "scope": "serverprobe",
-      "ecosystem": "maven",
-      "type": "runtime",
-      "licenseText": ""
-    },
-    {
-      "name": "io.izzel.taboolib:platform-bukkit",
-      "version": "6.3.0-afd75a7",
-      "license": "Unknown",
-      "author": "io.izzel.taboolib",
-      "url": "",
-      "scope": "serverprobe",
-      "ecosystem": "maven",
-      "type": "runtime",
-      "licenseText": ""
-    },
-    {
-      "name": "io.izzel.taboolib:platform-bungee",
-      "version": "6.3.0-afd75a7",
-      "license": "Unknown",
-      "author": "io.izzel.taboolib",
-      "url": "",
-      "scope": "serverprobe",
-      "ecosystem": "maven",
-      "type": "runtime",
-      "licenseText": ""
-    },
-    {
-      "name": "org.ow2.asm:asm",
-      "version": "9.7.1",
-      "license": "BSD-3-Clause",
-      "author": "OW2",
-      "url": "https://asm.ow2.io",
-      "scope": "serverprobe",
-      "ecosystem": "maven",
-      "type": "runtime",
-      "licenseText": ""
-    },
-    {
-      "name": "org.ow2.asm:asm-commons",
-      "version": "9.7.1",
-      "license": "BSD-3-Clause",
-      "author": "OW2",
-      "url": "https://asm.ow2.io",
-      "scope": "serverprobe",
-      "ecosystem": "maven",
-      "type": "runtime",
-      "licenseText": ""
-    },
-    {
-      "name": "org.ow2.asm:asm-tree",
-      "version": "9.7.1",
-      "license": "BSD-3-Clause",
-      "author": "OW2",
-      "url": "https://asm.ow2.io",
-      "scope": "serverprobe",
-      "ecosystem": "maven",
-      "type": "runtime",
-      "licenseText": ""
-    },
-    {
-      "name": "top.wcpe.taboolib.ioc:taboolib-ioc",
-      "version": "1.2.0",
-      "license": "Unknown",
-      "author": "top.wcpe.taboolib.ioc",
-      "url": "",
-      "scope": "serverprobe",
-      "ecosystem": "maven",
-      "type": "runtime",
-      "licenseText": ""
-    },
-    {
-      "name": "top.wcpe.taboolib.ioc:taboolib-ioc-annotation",
-      "version": "1.2.0",
-      "license": "Unknown",
-      "author": "top.wcpe.taboolib.ioc",
-      "url": "",
-      "scope": "serverprobe",
-      "ecosystem": "maven",
-      "type": "runtime",
-      "licenseText": ""
-    },
-    {
-      "name": "top.wcpe.taboolib.ioc:taboolib-ioc-api",
-      "version": "1.2.0",
-      "license": "Unknown",
-      "author": "top.wcpe.taboolib.ioc",
-      "url": "",
-      "scope": "serverprobe",
-      "ecosystem": "maven",
-      "type": "runtime",
-      "licenseText": ""
-    },
-    {
-      "name": "top.wcpe.taboolib.ioc:taboolib-ioc-core",
-      "version": "1.2.0",
-      "license": "Unknown",
-      "author": "top.wcpe.taboolib.ioc",
-      "url": "",
-      "scope": "serverprobe",
-      "ecosystem": "maven",
-      "type": "runtime",
-      "licenseText": ""
     },
     {
       "name": "@adobe/css-tools",

@@ -33,6 +33,8 @@ const (
 	// make embed-client-updater 构建的新 core jar 入库归档为此类型（不覆盖旧版，内容寻址天然多版本）。
 	// 频道选定版本（ClientChannel.SelectedCoreSHA256）指向本类型制品的 sha256，coreEndpoint 据此返回版本信息。
 	AssetTypeClientUpdaterCore AssetType = "client-updater-core"
+	// AssetTypeServerProbe 由制品版本库管理的 ServerProbe 探针 jar（FR-409）。
+	AssetTypeServerProbe AssetType = "server-probe"
 )
 
 // AssetStorageState 制品存储状态，驱动归档/外置生命周期（归档策略为后续 FR，此处先立模型）。
@@ -98,7 +100,7 @@ type Asset struct {
 // ValidAssetType 校验类型是否在允许枚举内。
 func ValidAssetType(t AssetType) bool {
 	switch t {
-	case AssetTypeCore, AssetTypePlugin, AssetTypeImage, AssetTypeVideo, AssetTypeArchive, AssetTypeBlob, AssetTypeClientFile, AssetTypeClientPack, AssetTypeClientCore, AssetTypeClientUpdaterCore:
+	case AssetTypeCore, AssetTypePlugin, AssetTypeImage, AssetTypeVideo, AssetTypeArchive, AssetTypeBlob, AssetTypeClientFile, AssetTypeClientPack, AssetTypeClientCore, AssetTypeClientUpdaterCore, AssetTypeServerProbe:
 		return true
 	}
 	return false

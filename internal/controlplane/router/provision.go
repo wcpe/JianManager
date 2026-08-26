@@ -61,7 +61,7 @@ func (h *ProvisionHandler) ProvisionServer(c *gin.Context) {
 	if access != nil {
 		createdBy = access.UserID
 	}
-	inst, taskID, err := h.prov.ProvisionServerAsync(c.Request.Context(), req, createdBy)
+	inst, taskID, err := h.prov.ProvisionServerAsyncWithBaseURL(c.Request.Context(), req, createdBy, selfUpdateRequestBaseURL(c))
 	if err != nil {
 		// inst 非空表示实例已创建但后续步骤失败（异步模式下仅登记任务失败会至此），回报实例供重试/删除。
 		if inst != nil {
@@ -127,7 +127,7 @@ func (h *ProvisionHandler) Rebuild(c *gin.Context) {
 	if role == model.InstanceRoleProxy {
 		taskID, err = h.proxy.RebuildProxy(c.Request.Context(), uint(id), createdBy)
 	} else {
-		taskID, err = h.prov.RebuildInstance(c.Request.Context(), uint(id), createdBy)
+		taskID, err = h.prov.RebuildInstanceWithBaseURL(c.Request.Context(), uint(id), createdBy, selfUpdateRequestBaseURL(c))
 	}
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "REBUILD_FAILED", "message": err.Error()})

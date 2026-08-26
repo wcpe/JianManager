@@ -6,15 +6,19 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestBuildDeployServerProbeRequest_IncludesLibrariesZip(t *testing.T) {
-	jar := []byte("probe-jar")
-	libs := []byte("probe-libraries")
-	cfg := "metrics:\n  enabled: true\n"
-
-	req := buildDeployServerProbeRequest("inst-1", jar, libs, cfg)
+func TestBuildDeployServerProbeDownloadRequest_OnlyCarriesReference(t *testing.T) {
+	req := buildDeployServerProbeDownloadRequest(
+		"inst-1",
+		"https://cp.example.test/probe-artifacts/7/download?token=short",
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"0.2.0",
+		"metrics:\n  enabled: true\n",
+	)
 
 	assert.Equal(t, "inst-1", req.InstanceUuid)
-	assert.Equal(t, jar, req.Jar)
-	assert.Equal(t, cfg, req.ConfigYaml)
-	assert.Equal(t, libs, req.LibrariesZip)
+	assert.Empty(t, req.Jar)
+	assert.Empty(t, req.LibrariesZip)
+	assert.Equal(t, "0.2.0", req.Version)
+	assert.NotEmpty(t, req.DownloadUrl)
+	assert.Len(t, req.Sha256, 64)
 }
