@@ -7,11 +7,11 @@
 #   禁止从 feature/release/* 等非主干 tip 直接打 tag 出正式版。
 #
 # 产物：
-#   - control-plane（full，内嵌双平台 Worker）/ control-plane-slim（不内嵌 Worker，探针仍内嵌）
+#   - control-plane（full，内嵌双平台 Worker）/ control-plane-slim（不内嵌 Worker）
 #   - worker × linux/amd64 + windows/amd64
 #   共 6 个二进制 + checksums.txt；命名 `<component>[-slim]-<os>-<arch>[.exe]`（ADR-036 §1 扩展 slim 档）。
 #
-# 内嵌：发布二进制内嵌全部可选资产——CP 内嵌前端 + Bot Worker + 探针 jar + 客户端更新器两件套，
+# 内嵌：发布二进制内嵌全部可选资产——CP 内嵌前端 + Bot Worker + 客户端更新器两件套，
 # Worker 内嵌 CFR 反编译器（ADR-036 §5）。go:embed 缺目录即编译失败，故 prepare-embeds 必须
 # 产出所有 embed 目录内容、任一步失败即 fail-fast。
 #
@@ -37,7 +37,7 @@ concurrency:
 env:
   GO_VERSION: '1.26.2'
   NODE_VERSION: '22'
-  JAVA_VERSION: '21' # 探针需 JDK21；客户端更新器以 --release 8 在 JDK21 上构 Java8 字节码（无独立 toolchain 下载）
+  JAVA_VERSION: '21' # 客户端更新器以 --release 8 在 JDK21 上构 Java8 字节码（无独立 toolchain 下载）
 
 jobs:
   # ───────────────────────── metadata：统一解析源码版本、Git ref 与发布目标 ─────────────────────────
@@ -53,7 +53,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          submodules: true
 
       - name: 确保可解析 origin/master（正式 tag 祖先校验）
         shell: bash
@@ -131,10 +130,8 @@ jobs:
     if: needs.metadata.outputs.publish_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout（含子模块，embed-probe 需 third_party/ServerProbe）
+      - name: Checkout
         uses: actions/checkout@v7
-        with:
-          submodules: recursive
 
       - name: Setup Go
         uses: actions/setup-go@v7
@@ -153,13 +150,13 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
-      - name: 缓存 Gradle（探针 / 客户端更新器构建）
+      - name: 缓存 Gradle（客户端更新器构建）
         uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('client-updater/**/*.gradle*', 'third_party/ServerProbe/**/*.gradle*') }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('client-updater/**/*.gradle*') }}
           restore-keys: |
             gradle-${{ runner.os }}-
 
@@ -199,15 +196,6 @@ jobs:
           mkdir -p internal/controlplane/embed/dist
           cp -r apps/control-plane-web/dist/* internal/controlplane/embed/dist/
 
-      - name: 内嵌探针 jar 与离线依赖缓存（等价 make embed-probe）
-        shell: bash
-        run: |
-          set -euo pipefail
-          (cd third_party/ServerProbe && ./gradlew --no-daemon :plugin:jar :plugin:taboolibMainTask)
-          mkdir -p internal/controlplane/embed/probe
-          cp third_party/ServerProbe/plugin/build/libs/ServerProbe-*.jar internal/controlplane/embed/probe/ServerProbe.jar
-          go run ./scripts/probe-offline-cache.go --probe-jar internal/controlplane/embed/probe/ServerProbe.jar --output-zip internal/controlplane/embed/probe/probe-libraries.zip --output-info internal/controlplane/embed/probe/probe.json
-
       - name: 内嵌客户端更新器两件套（等价 make embed-client-updater）
         shell: bash
         run: |
@@ -234,13 +222,12 @@ jobs:
           curl -fsSL -o internal/worker/embed/cfr/cfr.jar https://repo1.maven.org/maven2/org/benf/cfr/0.152/cfr-0.152.jar
           echo "f686e8f3ded377d7bc87d216a90e9e9512df4156e75b06c655a16648ae8765b2  internal/worker/embed/cfr/cfr.jar" | sha256sum -c -
 
-      - name: 上传 CP embed 产物（dist + probe + client-updater + botworker）
+      - name: 上传 CP embed 产物（dist + client-updater + botworker）
         uses: actions/upload-artifact@v7
         with:
           name: embed-controlplane
           path: |
             internal/controlplane/embed/dist/
-            internal/controlplane/embed/probe/
             internal/controlplane/embed/client-updater/
             internal/controlplane/embed/botworker/
           retention-days: 1
@@ -366,7 +353,7 @@ jobs:
           VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
-          # 仅删内嵌 Worker 字节，保留 .gitignore；探针/前端/botworker 仍在
+          # 仅删内嵌 Worker 字节，保留 .gitignore；前端/botworker/客户端更新器仍在
           find internal/controlplane/embed/worker -type f ! -name '.gitignore' -delete
           LDFLAGS="-s -w -X github.com/wcpe/JianManager/internal/version.Version=${VERSION}"
           go build -trimpath -ldflags "${LDFLAGS}" \

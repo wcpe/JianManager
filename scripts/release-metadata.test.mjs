@@ -9,23 +9,8 @@ test('master 推送与正式 tag 必须触发 CI', () => {
   const releaseWorkflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
   assert.match(ciWorkflow, /^    branches:\s*\['\*\*'\]\s*$/m)
   assert.match(ciWorkflow, /^  push:\r?\n(?:    .*\r?\n)*?    tags:\s*\['v\*'\]\s*$/m)
-  assert.match(releaseWorkflow, /name: Checkout（读取源码版本与当前提交 tag）[\s\S]*?submodules: true/)
-})
-
-test('ServerProbe 私有与缺失制品直连发布仓库，其余依赖保留聚合仓库', () => {
-  const settings = readFileSync(new URL('../third_party/ServerProbe/settings.gradle.kts', import.meta.url), 'utf8')
-  assert.match(
-    settings,
-    /maven\("https:\/\/maven\.wcpe\.top\/repository\/maven-releases\/"\)\s*\{\s*content\s*\{\s*includeGroup\("top\.wcpe\.taboolib\.ioc"\)/,
-  )
-  assert.match(
-    settings,
-    /maven\("https:\/\/repo\.tabooproject\.org\/repository\/releases\/"\)\s*\{\s*content\s*\{\s*includeGroup\("ink\.ptms\.core"\)/,
-  )
-  assert.match(
-    settings,
-    /^\s*maven\("https:\/\/maven\.wcpe\.top\/repository\/maven-public\/"\)\s*$/m,
-  )
+  assert.match(releaseWorkflow, /name: Checkout（读取源码版本与当前提交 tag）/)
+  assert.doesNotMatch(releaseWorkflow, /third_party\/ServerProbe|submodules:\s*true/)
 })
 
 test('从 Go 源码读取版本真值', () => {
