@@ -1,5 +1,7 @@
 # FR-114 断网首启验收 Runbook
 
+> 已废弃：FR-409 / ADR-083 不再下发或维护 ServerProbe 依赖缓存。探针首次启动的依赖下载由游戏服自行完成；本手册仅保留历史排障记录。
+
 ## 目标
 
 验证 Worker 在部署 ServerProbe 前已把 TabooLib 运行期依赖预置到实例 `libraries/`，目标机器断开公网后，Paper 实例首次启动仍能 enable ServerProbe，并能经插件桥上报指标。

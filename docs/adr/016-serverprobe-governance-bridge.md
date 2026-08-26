@@ -4,6 +4,7 @@
 - **状态**: accepted
 - **取代**: [ADR-014](014-monitoring-via-serverprobe.md)（部分取代：保留「以 ServerProbe 作监控探针、内嵌 jar、建服自动部署」，**推翻其「探针只读 + 玩家治理走 RCON」的决策**，改由探针经反向 WS 承载治理/实时事件/全状态查询）
 - **复活并扩展**: [ADR-012](012-plugin-bridge-channel.md)（复活其「平台插件经 WS 连入 Worker」的通道设计；**载体由自写 Bukkit/BC 插件改为 ServerProbe 探针**，能力由「玩家事件 + 治理」扩展到「治理 + 在线更新 + 全状态查询」）
+- **再部分被取代**: [ADR-083](083-artifact-version-library-serverprobe-distribution.md) 取代决策 6 的制品来源与部署载荷（子模块、内嵌 jar、CP 直传 jar）；反向 WebSocket 桥、配置语义和本机回环边界保持不变。
 
 ## 上下文
 

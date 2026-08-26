@@ -1,5 +1,7 @@
 # FR-068 探针在线更新 — API Spec
 
+> 已由 FR-409 / ADR-083 取代：ServerProbe 不再由 CP 内嵌或下发离线依赖缓存。当前实现改为 CP 制品版本库缓存 jar，Worker 从 CP-local URL 拉取并在下次重启生效；以 `docs/specs/artifact-version-library/spec.md` 与 `docs/API.md` 为准。
+
 > 探针在线更新：平台「点一下」把 CP 内嵌的最新 ServerProbe jar 推到实例 plugins 目录，
 > 下次重启生效，可选「推送并重启」立即生效。复用已有 gRPC `DeployServerProbe`（FR-010/ADR-014），
 > **不改 proto、不改子模块**。见 ADR-016。

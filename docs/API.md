@@ -712,18 +712,57 @@
 - **关联 FR**: FR-066
 
 ### GET /api/v1/instances/:id/probe/update
-- **描述**: 探针在线更新状态（FR-068/FR-114）：探针连接状态 + CP 内嵌最新探针版本/指纹 + 上次推送时间；构建跑过 `make embed-probe` 时 CP 同时内嵌探针运行库缓存包，推送阶段随 gRPC 下发
+- **描述**: 探针在线更新状态（FR-068/FR-409）：探针连接状态、按实例 → Worker → 全局解析后的已缓存版本、继承来源与上次下发时间
 - **权限**: `instance.read`
-- **响应**: `{ "instanceId":3, "instanceUuid":"...", "probeConnected":true, "embeddedVersion":"0.1.0", "embeddedFingerprint":"<sha256 前缀>", "embeddedAvailable":true, "lastPushedAt":"2026-06-22T10:00:00Z" }`（`embeddedAvailable=false` 表示本次构建未 `make embed-probe`，无可推 jar）
-- **关联 FR**: FR-068 ｜ **关联 ADR**: ADR-016
+- **响应**: `{ "instanceId":3, "instanceUuid":"...", "probeConnected":true, "versionId":12, "version":"0.2.0", "versionSha256":"...", "versionOrigin":"node", "lastPushedAt":"2026-08-24T10:00:00Z" }`。未选择已缓存版本时返回 `versionError`，不伪造可下发内容。
+- **关联 FR**: FR-068 / FR-409 ｜ **关联 ADR**: ADR-083
 
 ### POST /api/v1/instances/:id/probe/update
-- **描述**: 把 CP 内嵌最新探针 jar 经 gRPC `DeployServerProbe` 推到该实例 `plugins/` 目录，并同步下发 FR-114 `libraries_zip` 到实例根 `libraries/`（**下次重启生效**）；`restart=true` 时推送后立即重启实例使其生效（FR-068/FR-114）
+- **描述**: 将当前解析的已缓存 ServerProbe 版本经 `DeployServerProbe` 下发给 Worker。Worker 只从 CP-local 短期 URL 拉取 jar、校验 SHA-256 后原子替换 `plugins/ServerProbe.jar`；不传 jar 字节或依赖缓存（**下次重启生效**）。`restart=true` 时推送后立即重启实例使其生效
 - **权限**: `instance.operate` ｜ **审计**: `instance.probe.update`
 - **请求**: `{ "restart": false }`
-- **响应**: `{ "instanceId":3, "deployed":true, "restarted":false, "probeConnected":true, "embeddedVersion":"0.1.0", "message":"已推送，下次重启生效" }`
-- **错误**: `422 PROBE_NOT_EMBEDDED`（构建未内嵌探针）、`404 NOT_FOUND`
-- **关联 FR**: FR-068
+- **响应**: `{ "instanceId":3, "deployed":true, "restarted":false, "versionId":12, "version":"0.2.0", "message":"探针 jar 已就位，下次重启生效" }`
+- **错误**: `422 PROBE_NOT_EMBEDDED`（兼容错误码：没有已缓存并选中的版本）、`404 NOT_FOUND`
+- **关联 FR**: FR-068 / FR-409
+
+### GET /api/v1/probe-versions
+
+- **描述**: 返回实例操作者可选择的、已缓存的 ServerProbe 版本；不返回来源配置
+- **权限**: `instance.operate`
+- **响应**: `{ "package": { "id":1, "key":"serverprobe", "defaultVersionId":12 }, "versions":[{ "id":12, "version":"0.2.0", "assetId":88, "expectedSha256":"..." }] }`
+
+### GET / PUT /api/v1/instances/:id/probe-version
+
+- **描述**: 读取或设置实例显式版本。`PUT` 的 `{ "versionId": 0 }` 表示恢复继承；非零值必须是已缓存版本。保存后立即通知该实例 Worker 拉取，运行中实例不自动重启
+- **权限**: `GET instance.read`；`PUT instance.operate`
+- **GET 响应**: `{ "instanceId":3, "versionId":0, "resolvedVersion":{ "id":12, "version":"0.2.0" }, "origin":"node" }`
+
+### GET / POST / PUT / DELETE /api/v1/artifact-packages/serverprobe/*
+
+- **描述**: ServerProbe 制品包管理：`GET /artifact-packages/serverprobe` 查看来源与版本；`POST /sources/:id/sync` 仅登记 GitHub Releases 新正式 Release；`POST /versions/:id/cache` 由 CP 下载、校验 SHA-256 并写入 CAS；`PUT /default-version` 显式设置全局默认；`DELETE /versions/:id` 仅允许删除未被全局、Worker 或实例引用的记录
+- **权限**: 平台管理员
+- **边界**: 同步、缓存和上传绝不自动改变全局默认；未缓存版本不可被选择。内置来源为 GitHub Releases（线上拉取，默认 `wcpe/ServerProbe`）与本地上传；同名版本按来源区分。
+
+### POST /api/v1/artifact-packages/serverprobe/versions/upload
+
+- **描述**: 上传本地 ServerProbe JAR，立即作为“本地上传”来源的已缓存版本登记到既有 CAS。服务端对 `file` part 直接流式计算 SHA-256 和 MD5 并写入 CAS，不采信客户端摘要；相同字节可复用既有 CAS asset。
+- **关联 FR**: FR-411 ｜ **关联 ADR**: ADR-085
+- **权限**: 平台管理员
+- **请求**: `multipart/form-data`，字段：`version`（必填，版本号）与 `file`（必填，`.jar`，最大 64 MiB）。**字段顺序是契约**：客户端必须先发送完整的 `version` 文本 part，再发送唯一的 `file` part；服务端按顺序读取 multipart body，遇到 `file` 前未取得有效 `version` 即以 `400 INVALID_REQUEST` 拒绝，不回退为全量解析。
+- **响应** (201): `{ "id": 13, "sourceId": 2, "version": "0.1.0", "releaseRef": "local-upload", "assetId": 88, "expectedSha256": "...", "cachedAt": "datetime" }`
+- **错误**: `400 INVALID_REQUEST`（缺字段、字段顺序错误、版本号无效、非 `.jar` 或 multipart 无效）｜`403 FORBIDDEN`｜`409 VERSION_EXISTS`（本地上传来源内版本号重复）｜`413 UPLOAD_TOO_LARGE`（`file` 字节数超过 64 MiB）
+- **流式边界**: 不得调用 `Request.ParseMultipartForm`、`FormFile`，也不得将文件 part 写入 multipart 临时文件或完整读入内存；应在 CAS 临时写入阶段按文件字节计数限额，超过 64 MiB 时删除临时内容且不创建 asset/version。`Content-Length` 只能在计入 multipart 开销后作早期拒绝优化，不能替代对文件 part 的计数。
+- **其他边界**: 上传不自动设为全局默认、不改 Worker 默认，也不下发或升级既有实例；本地上传来源不支持同步操作。
+
+### GET / PUT /api/v1/nodes/:id/probe-version
+
+- **描述**: 查看或设置某 Worker 的新实例默认版本。`versionId=0` 继承全局默认；更新**只影响之后创建的实例**，不枚举、不升级、不回滚已有实例
+- **权限**: 平台管理员
+
+### GET /probe-artifacts/:id/download
+
+- **描述**: Worker 使用 `DeployServerProbe` 中的短期下载 URL 从 CP 本地 CAS 拉取已缓存 jar。令牌 scope 记录目标版本和部署时的 Node UUID；直连下载将令牌作为短期 bearer capability，因此部署基址必须使用 TLS。下载路由不记录查询令牌
+- **权限**: 短期下载令牌（不走浏览器 JWT）
 
 ### GET /api/v1/instances/:id/server-state
 - **描述**: 按需查询某实例全量 Bukkit 内部状态（server/worlds/jvm/**classloader**/scheduler/listeners），经探针反向 WS 桥的 `QueryServerState`（action=`query_state`）同步取回探针采集的状态 JSON（FR-076）。轻指标走 `/metrics`；本端点仅前端开「服务器状态」tab/手动刷新时调用。探针采集异步非侵入、有界、超时降级，**绝不拖慢服务器**。CP 不解析 `state`（原样透传探针 JSON，探针字段演进无需改 CP）

@@ -22,7 +22,7 @@ JianManager 是面向中小型游戏服务器运营团队的自托管管理平�
 - **单二进制**：前端经 `go:embed` 内嵌，Control Plane 一个文件即整个面板；SQLite 零配置起步
 - **节点零入站接入**：Worker 主动建立 gRPC 反向隧道，NAT / 内网机器免端口映射；无隧道时节点不可调用
 - **一键装节点**：面板生成安装命令，目标机粘贴执行即注册上线（systemd / Windows 双平台，Worker 二进制内嵌在面板里，**离线 / 受限网络也能装**）
-- **SSH 推送部署**：`deploy-cp.sh` / `deploy-worker.sh` 从操作机一条命令部署 / 更新远程主机，配置与数据无损
+- **SSH 推送部署**：Linux 普通用户通过 `deploy-cp.sh` / `deploy-worker.sh` 获得永久版本目录、显式回滚与配置/数据/节点身份无损迁移
 - **在线自更新**：面板内检查新版 / 一键升级 / 回滚上一版（CP 与全部节点）
 
 **实例与 Minecraft**
@@ -119,16 +119,19 @@ Worker 须使用环境变量 `JIANMANAGER_CONTROL_PLANE_GRPC`（compose 已写�
 <details>
 <summary><b>SSH 推送部署（推荐用于远程 Linux 主机）</b></summary>
 
-在操作机把本地构建产物经 SSH 推送部署 / 更新，首次与更新自动判定、幂等可重复：
+在操作机把本地构建产物经 SSH 推送部署 / 更新，首次与更新自动判定、幂等可重复。普通用户的 systemd user 服务使用 `current → versions/<版本>--<UTC>--<sha12>`：每次部署永久保留，稳定配置、数据与 Worker 身份不随切换替换。
 
 ```bash
 # 部署面板
-JM_SSH_HOST=1.2.3.4 scripts/deploy-cp.sh
+JM_SSH_HOST=1.2.3.4 JM_SSH_USER=deploy JM_SERVICE_SCOPE=user scripts/deploy-cp.sh
 # 部署节点（首次需在面板签发 token；更新可省）
-JM_SSH_HOST=5.6.7.8 JM_CONTROL_PLANE=1.2.3.4:9100 JM_ENROLL_TOKEN=jmet_xxx scripts/deploy-worker.sh
+JM_SSH_HOST=5.6.7.8 JM_SSH_USER=deploy JM_SERVICE_SCOPE=user JM_CONTROL_PLANE=1.2.3.4:9100 JM_ENROLL_TOKEN=jmet_xxx scripts/deploy-worker.sh
+# 显式回滚到 versions/ 下列出的某个版本目录
+JM_SSH_HOST=1.2.3.4 JM_SSH_USER=deploy scripts/rollback-cp.sh <版本目录名>
+JM_SSH_HOST=5.6.7.8 JM_SSH_USER=deploy scripts/rollback-worker.sh <版本目录名>
 ```
 
-支持 root / 免密 sudo / 纯普通用户（user 级 systemd + linger）三种目标机形态，详见 [docs/DEPLOY.md](docs/DEPLOY.md)。
+版本化布局仅适用于普通用户（user 级 systemd + linger）；root / 免密 sudo 的 system scope 保持既有直装 `.bak` 更新行为。详见 [docs/DEPLOY.md](docs/DEPLOY.md)。
 </details>
 
 <details>

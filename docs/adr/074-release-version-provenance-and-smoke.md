@@ -3,6 +3,7 @@
 - **日期**: 2026-07-19
 - **状态**: accepted
 - **修订**: 追加修订 [ADR-036](036-release-pipeline-github.md) 的版本来源、Bot Worker 内嵌资产与发布前 smoke；不重写 ADR-036 的历史决策
+- **部分被取代**: [ADR-083](083-artifact-version-library-serverprobe-distribution.md) 取代决策 3 中 ServerProbe 及其离线依赖缓存作为发布版 CP 内嵌资产的单项描述；Bot Worker 与其他资产决策保持有效。
 
 ## 上下文
 

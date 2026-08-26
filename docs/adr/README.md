@@ -16,6 +16,7 @@
 
 ## 索引（最近新增）
 
+- [ADR-085](085-local-serverprobe-upload-source.md) ServerProbe 本地上传来源（FR-411，修订 ADR-083 来源范围）
 - [ADR-078](078-explorer-cross-window-clipboard-dnd.md) 资源管理器跨窗剪贴板与拖放总线（FR-377）
 - [ADR-079](079-instance-reverse-reconcile.md) CP↔Worker 实例反向对账（FR-326：无主运行时宽限+默认不自动杀）
 - [ADR-075](075-bot-command-orchestration.md) Bot 命令编排与动作成功边界（仅取代 ADR-074 的业务成功真源部分）

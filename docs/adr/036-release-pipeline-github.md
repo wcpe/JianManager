@@ -2,6 +2,7 @@
 
 - **日期**: 2026-06-27
 - **状态**: accepted
+- **部分被取代**: [ADR-083](083-artifact-version-library-serverprobe-distribution.md) 取代决策 5 中「CP 内嵌 ServerProbe jar 与离线依赖缓存」的单项资产立场；其余发布产物、校验与渠道契约保持有效。
 - **上下文**: 仓库当前**无任何 CI**（无 `.github/`），发版靠手工 `make build`（且产物只到 Windows `.exe`）。面板/节点自更新（FR-081 已交付，见 `docs/specs/self-update/api.md`）的设计前提是「从某处下载带 sha256 的二进制制品并替换」，但**没有任何东西产出可供消费的 release 与制品**——自更新现阶段只能靠手工搭 feed / 内网 URL 兜底（ADR-020 §4 立的「可配 feed 源」）。要让发布与自更新形成闭环，必须先有「**自动产出 release 制品**」的发布管线，并确立一套**产物命名 / 完整性校验 / 发布渠道**契约，让产出侧（CI）与消费侧（自更新 FR-175）对齐同一心智。本 ADR 由 FR-173（CI/CD 发布管线）创建，落地 GitHub Actions 发布管线并固化该契约；契约本身由 FR-173 与 FR-175 共享。
 
 ## 决策

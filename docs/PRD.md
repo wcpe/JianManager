@@ -97,6 +97,9 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FIX-观测刷新 + FR-400~403（平台全景观测 2026-07-27）：修复可见页面指标自动刷新与陈旧态；补齐受管资源归因与首页 Tooltip、Bot Worker 历史观测、平台总览下钻，以及平台/节点实例日志分流。范围只涵盖平台受管资源，不采集任意 OS 进程、不伪造单 Bot RSS；指标留存复用 ADR-013 的 48h raw / 30d 5m / 400d 1h。→ FR-400 `docs/specs/managed-resource-attribution/spec.md`、FR-401 `docs/specs/bot-runtime-observability/spec.md`、FR-402 `docs/specs/platform-observability-overview/spec.md`（均需 spec）；FR-403 免 spec。依赖序：FIX→400→401→402；FR-403 独立；计划见 `.tmp/brainstorm-platform-observability-2026-07-27.md`（✅ 均已交付@v0.21.0；真 CP 多节点鲜度/断隧道按 checklist 确认）
 - FIX-公开注册 + FR-405（受控用户创建与邮箱邀请）：移除匿名注册；平台管理员可一次直建用户，或签发仅组成员、7 天、可撤销的一次性邮件邀请；受邀者通过系统设置的统一公共基址（HTTP 或 HTTPS）链接自行设置用户名和密码，后续绝对链接复用该基址。SMTP 配置独立于告警通道，密码仅允许环境变量引用。→ `docs/specs/user-invitation-and-registration-security/spec.md`、`api.md`，ADR-082（✅ 已交付@v0.21.0；SMTP 真实投递按 checklist 确认）
 - FR-406~408（监控页全景观测与受管进程探查处置）：`/monitor` 收口平台/节点/实例观测，默认选中对比指标；受管实例进程详情按 `instanceId+pid` 查询并基于历史样本诊断；非根子进程提供 `terminate`/`kill_tree` 两档受控处置，根进程继续复用实例生命周期，全部限定受管资源且写审计 → `docs/specs/managed-process-diagnostics-control/spec.md`、`api.md`（✅ 已交付@v0.21.0；进程处置真机按 checklist 确认）
+- FR-409（制品版本库与 ServerProbe 在线分发）：在既有 CAS 制品库之上新增制品包 / 来源 / 版本层；ServerProbe 首个接入，CP 从 GitHub Releases 校验缓存 jar、Worker 从 CP 拉取，支持全局 / Worker / 实例版本选择与回滚。旧制品消费者保持兼容 → `docs/specs/artifact-version-library/spec.md`（✅ 已交付@v0.21.0）
+- FR-410（Linux 用户级 systemd 版本化直装与节点部署）：将 CP / Worker 的 user unit 部署升级为 `current` 指针 + 不可变版本目录 + 稳定数据目录，自动迁移旧布局并提供显式回滚脚本；不引入公开镜像或 Docker Compose 生产路径 → `docs/specs/versioned-user-systemd-deploy/spec.md`（✅ 已交付@v0.21.0）
+- FR-411（ServerProbe 本地上传来源）：在既有 ServerProbe 制品包中新增本地上传来源，与 GitHub Releases 线上来源明确标识；上传即入 CAS 并可复用既有全局 / Worker / 实例选择与 CP→Worker 下发链路，不自动切换默认版本 → `docs/specs/local-serverprobe-upload/spec.md`（✅ 已交付@v0.21.0）
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 > **验收档位图例**：`·全真栈验收`=真 UI+真 CP/Worker+真外部进程端到端；`·四档验收`=单测/集测/单机截图/真浏览器截图（后端 mock 基底）；`·验收经 FR-XXX 覆盖`=能力面被后继 FR 重做/包含并在其验收中验证（映射依据 `.tmp/acceptance/UNMARKED-66-RECONCILE.md`）；**无后缀=交付未验收（真缺口，当前 1 个：099 需真客户端 OTA 场景）**。证据台账 `.tmp/acceptance/ACCEPTANCE-LEDGER.md`。
@@ -496,6 +499,9 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-406 | 监控页全景观测整合与默认多指标对比（feat，增强 FR-221/400/401/402）：`/monitor` 成为平台/节点/实例观测入口，默认选中对比指标，展示平台健康、异常 TopN、资源归因、共享 Bot Worker 与受管进程并支持 URL 下钻；首页健康与共享 Bot 区块保留在 `/`（免 spec） | P1 | ✅ 已交付@v0.21.0 |
 | FR-407 | 受管进程详细探查与异常诊断（feat，增强 FR-170/400）：按 `instanceId+pid` 查询受管实例当前进程树内 PID，返回脱敏命令摘要、父子关系、CPU/RSS/IO/运行时长/线程数可用性，并结合历史样本输出带证据的 RSS 增长、CPU 高占用、IO 高写入、采样陈旧/不足诊断（需 spec）→ `docs/specs/managed-process-diagnostics-control/spec.md` | P1 | ✅ 已交付@v0.21.0 |
 | FR-408 | 受管进程细粒度处置与多种关闭方式（feat，增强 FR-005/170/400）：根进程继续复用实例优雅停止/重启/强制终止；非根子进程提供 `terminate` 与 `kill_tree`，Worker 执行瞬间重验 PID 仍属目标实例树，前端 DangerConfirm + 后端 confirm 双保险并写脱敏审计（需 spec）→ `docs/specs/managed-process-diagnostics-control/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-409 | 制品版本库与 ServerProbe 在线分发（feat，增强 FR-045/068/114/173/174）：在既有 CAS `assets` 上新增通用制品包 / 来源 / 版本层；首个包 ServerProbe 由 CP 同步 GitHub Releases、校验并缓存 jar，Worker 从 CP 拉取。版本按全局默认 → Worker 默认 → 实例显式覆盖解析；Worker 改默认仅影响新实例，已有实例须手动切换以升级或回滚。不再嵌入 ServerProbe 源码、jar 或依赖缓存（需 spec + ADR）→ `docs/specs/artifact-version-library/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-410 | Linux 用户级 systemd 版本化直装与节点部署（feat，增强 FR-277/282）：操作机 SSH 推送 CP 或 Worker 至 Linux 普通用户，二进制按版本/UTC 时间/摘要落入永久保留的不可变目录，`current` 原子指针决定运行版本；稳定保留 `data`、CP 配置与 Worker 身份，旧裸二进制布局首次自动迁移；新增 CP / Worker 显式回滚脚本。仅覆盖 user unit，不引入公开镜像、Docker Compose 生产部署或 Kubernetes（需 spec + ADR）→ `docs/specs/versioned-user-systemd-deploy/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-411 | ServerProbe 本地上传来源（feat，增强 FR-409）：为 `serverprobe` 制品包新增 `local-upload` 内置来源，管理员上传 `.jar` 即流式入现有 CAS 并立即形成可选版本；来源与版本明确区分 GitHub Releases（线上拉取）和本地上传，同名版本按来源消歧；复用全局→Worker→实例选择和 CP-local Worker 拉取，不自动改默认或升级已有实例（需 spec + ADR-085）→ `docs/specs/local-serverprobe-upload/spec.md` | P1 | ✅ 已交付@v0.21.0 |
 ### 范围外（后续版本，暂不纳入 V1）
 
 | 编号 | 需求 | 预计版本 |

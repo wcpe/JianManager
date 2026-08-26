@@ -156,6 +156,37 @@ export JIANMANAGER_BOT_WORKER_PATH="$(pwd)/dist/index.js"
 - **升级**：停 Control Plane 与 Worker，替换二进制，重启。SQLite/MySQL 表结构由 GORM 自动迁移。daemon 方式启动的游戏服为脱离进程，Worker 重启会经 PID 文件重连恢复，不影响在运行的游戏服。
 - **备份**：定期备份 Control Plane 数据库（SQLite 即 `data/jianmanager.db` 文件）与各 Worker 数据根 `var/servers/`（游戏存档）。
 
+### 9.1 Linux 普通用户 systemd 的版本化 SSH 部署（FR-410）
+
+在操作机执行 `scripts/deploy-cp.sh` / `scripts/deploy-worker.sh`，并显式使用 `JM_SERVICE_SCOPE=user`。部署成功后安装根结构如下：
+
+```text
+<安装根>/
+├── current -> versions/<版本>--<UTC>--<sha12>/
+├── versions/<版本目录>/{jianmanager-cp|jianmanager-worker,manifest.env}
+├── data/
+├── control-plane.yml       # 仅 CP
+└── service.env             # 仅 CP，0600
+```
+
+每次部署先校验二进制 SHA-256，再创建不可变版本目录并原子切换 `current`；历史版本不会自动删除。首次运行会将旧安装根的裸二进制及 `.bak` 归档到 `versions/`，保留 CP 配置、数据、Worker `worker.yml` 与节点身份。已有 CP 的 JWT 不旋转；新 CP 在 `service.env` 生成随机 JWT，unit 以 `EnvironmentFile` 读取。
+
+```bash
+# CP（普通用户目标）
+JM_SSH_HOST=<cp-host> JM_SSH_USER=<user> JM_SERVICE_SCOPE=user scripts/deploy-cp.sh
+
+# 新 Worker 首次仍需 CP 地址与一次性 token；已安装 Worker 更新无需二者
+JM_SSH_HOST=<worker-host> JM_SSH_USER=<user> JM_SERVICE_SCOPE=user \
+  JM_CONTROL_PLANE=<cp-host>:9100 JM_ENROLL_TOKEN=<jmet_...> scripts/deploy-worker.sh
+
+# 先在目标机列出 <安装根>/versions/，再显式指定目录名回滚
+JM_SSH_HOST=<cp-host> JM_SSH_USER=<user> scripts/rollback-cp.sh <版本目录名>
+JM_SSH_HOST=<worker-host> JM_SSH_USER=<user> JM_INSTALL_DIR=/home/<user>/jianmanager-node2 \
+  scripts/rollback-worker.sh <版本目录名>
+```
+
+新版本健康检查失败时脚本会恢复先前 `current`；但数据库 schema、CP 制品数据和 Worker 身份不会随回滚倒退。版本化模型仅覆盖 `user` scope；`system` scope 仍是旧的直接二进制加 `.bak` 更新方式。
+
 ## 10. 多节点
 
 Control Plane 一台，Worker 多台：各 Worker 设相同 `JIANMANAGER_CONTROL_PLANE_GRPC`（指向同一 CP）、不同 `JIANMANAGER_NODE_NAME`；WS 令牌密钥经注册/心跳自动下发（FR-275），无需在各 Worker 同步 `JIANMANAGER_JWT_SECRET`。注册后在「节点」页统一可见、可分别调度实例。
@@ -214,13 +245,13 @@ docker compose logs -f control-plane
 
 ### 产物档位（full / slim）
 
-| 档位 | 资产名示例 | 内嵌 Worker | 内嵌探针 | 体积（约） | 适用 |
-|---|---|---|---|---|---|
-| **full**（默认） | `control-plane-linux-amd64` | 是（双平台） | 是 | ~100MB+ | 离线/一键装节点、不想另下 Worker |
-| **slim** | `control-plane-slim-linux-amd64` | **否** | 是 | 约减 40MB+ | 已有本机 Worker / 镜像源；体积敏感 |
+| 档位 | 资产名示例 | 内嵌 Worker | 体积（约） | 适用 |
+|---|---|---|---|---|
+| **full**（默认） | `control-plane-linux-amd64` | 是（双平台） | ~100MB+ | 离线/一键装节点、不想另下 Worker |
+| **slim** | `control-plane-slim-linux-amd64` | **否** | 约减 40MB+ | 已有本机 Worker / 镜像源；体积敏感 |
 
 本地构建：`make dist-full`（或 `make dist`）/ `make dist-slim` / `make dist-all`。  
-探针在两档均为必嵌（`ensure-probe-embed`）。
+ServerProbe 不属于发布内嵌资产；由 CP 在运行时缓存所选版本并向 Worker 分发。
 
 ```bash
 # Linux / macOS — 完整版（默认）

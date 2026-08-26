@@ -39,7 +39,7 @@
 
 ### 2.3 内嵌资产
 
-- Control Plane：React 前端、Bot Worker 归档、ServerProbe jar 与离线依赖缓存、客户端更新器两件套、Linux/Windows Worker 二进制及 manifest。
+- Control Plane：React 前端、Bot Worker 归档、客户端更新器两件套、Linux/Windows Worker 二进制及 manifest。ServerProbe jar 由运行时制品版本库缓存与 CP-local 分发，不属于发布内嵌资产。
 - Worker：CFR 反编译器。
 
 任一必需内嵌目录缺失或构建失败时 fail-fast，不允许生成“可发布但资产不完整”的二进制。
@@ -91,7 +91,7 @@ metadata → prepare-embeds → test → build → smoke → release
 | Job | 职责 | 关键门禁 |
 |---|---|---|
 | `metadata` | 读取源码版本，校验 ref/tag/SHA，输出全链路唯一发布元数据 | 正式 tag 与源码裸版本不一致即失败；开发分支非法版本即失败 |
-| `prepare-embeds` | 构建全部平台无关内嵌资产 | Bot Worker、前端、探针、客户端更新器、CFR 任一步失败即停止 |
+| `prepare-embeds` | 构建全部平台无关内嵌资产 | Bot Worker、前端、客户端更新器、CFR 任一步失败即停止；ServerProbe 在运行时按版本库拉取 |
 | `test` | 在发布前运行 Go 与前端质量门禁 | `go build`、`go vet`、`go test`；前端 lint、vitest、build、Playwright E2E |
 | `build` | 两目标 matrix 交叉编译，并为 CP 注入两平台 Worker | `linux/amd64`、`windows/amd64`；全部版本取 metadata output |
 | `smoke` | 在目标系统原生执行四个最终发布产物 | Linux/Windows 各执行 CP、Worker 的 `--version` |

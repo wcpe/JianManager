@@ -290,7 +290,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - `UploadFile` 单文件**client-stream 流式上传**（FR-304，与 `DownloadFile` 对称）：首帧携带 `instance_uuid+path`、后续帧纯内容（~64KiB 分片）；Worker 同目录临时文件接收、收完 `os.Rename` 原子覆盖目标，中途任何失败删临时文件不动既有目标；响应回报 `bytes_written` 供 CP 完整性比对。**零帧即关流约定返回业务级失败（无副作用）**，CP 借此逐次探测老 Worker（返回 `Unimplemented`）并回退 `WriteFile` unary（≤64MB，超限明确报错引导升级）。CP 上传 handler 流式读 multipart（目标路径经 query 参数先行）不整块缓冲；FR-052/053 插件单发与批量扇出部署经同一 `uploadToWorker` 统一入口走本 RPC，老 Worker 自动回退，不为插件部署另设 RPC
   - `DownloadArchive` 把选中的文件/目录（目录递归，仅常规文件）即时打包为 zip 边遍历边分片流式返回（每条目经 `validatePath` 防越界/zip-slip，~32KiB 分片，不缓冲整包）；CP `FileHandler.DownloadArchive` 逐帧 `Recv` 写响应并 `Flush`，转为 HTTP `application/zip`（批量下载，FR-070）。资源管理器树内拖拽「移动」复用 `RenameFile`，无独立 move RPC
   - `SearchFiles` 对实例工作目录做全文搜索 / 文件名快速打开（FR-074，见 ADR-017）。索引是 **Worker 本地派生资产**（落数据根 `var/index/<instance-uuid>/`，**不进 CP 数据库**）：Worker 每实例持有一份倒排索引（token→文件集合）+ 文件指纹表，查询前按指纹比对增量更新（增/改/删）再倒排取候选、候选内精确行扫描；`mode=filename` 走文件名子串匹配（行号 0）。CP 仅经 gRPC 转发查询、不持有索引
-- **单消息尺寸上限统一（FR-305）**：CP↔Worker 反向隧道两方向共用 **64MiB** 单一真值（`internal/platform/grpcmsg.MaxMessageBytes`）。grpctunnel 不受理 grpc.ServerOption（原天花板为 4GB 硬编码），由 `grpcmsg.WrapRegistrar` 在注册层以双向拦截器（请求进 handler 前、响应发送前 `proto.Size` 判限）施加守卫，超限一律 `ResourceExhausted`+中文引导。大载荷一律走流式 RPC（UploadFile/DownloadFile/DownloadArchive），unary 仅承载 <64MiB 载荷（现存最大 DeployServerProbe ~7.6MB）。
+- **单消息尺寸上限统一（FR-305）**：CP↔Worker 反向隧道两方向共用 **64MiB** 单一真值（`internal/platform/grpcmsg.MaxMessageBytes`）。grpctunnel 不受理 grpc.ServerOption（原天花板为 4GB 硬编码），由 `grpcmsg.WrapRegistrar` 在注册层以双向拦截器（请求进 handler 前、响应发送前 `proto.Size` 判限）施加守卫，超限一律 `ResourceExhausted`+中文引导。大载荷一律走流式 RPC（UploadFile/DownloadFile/DownloadArchive）；`DeployServerProbe` 现只传 CP-local URL、SHA-256 与版本，不再承载 jar 字节。
 - 归档浏览与反编译（FR-075；见 ADR-018）：ListArchiveEntries, ReadArchiveEntry, DecompileClass
   - `ListArchiveEntries`/`ReadArchiveEntry` 用 Go `archive/zip` **只读**列举/读取 jar/zip 内部条目（不起进程、零落盘，条目名经 zip-slip 校验，条目数/单条目字节有上限超出截断，内容嗅探 NUL 判二进制）；`DecompileClass` 经实例绑定 JDK（或系统候选 JDK / `JAVA_HOME` 兜底）**受控 exec** CFR 单 jar 把 `.class`/`.jar`（或 jar 内某 `.class` 抽临时文件）反编译为 Java 源码——CFR 仅静态分析字节码、不加载/运行目标代码，`context` 超时 + 输入体积上限 + 输出截断 + 失败/降级以 `success=false`+结构化 error 返回（不抛错）。CP 加性端点 `GET .../files/archive/entries`、`GET .../files/archive/read`（octet-stream + `X-Truncated`/`X-Binary` 头）、`POST .../files/decompile`，均复用文件「查看」级权限。CFR 分发：配置路径 > 内嵌（`make embed-cfr`，gitignore 不入库）> 数据根缓存 `var/tools/cfr-<ver>.jar` > Maven Central 按需下载（sha256 pin）
 - 终端：IssueTerminalToken
@@ -301,7 +301,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - 普通 stream 事件必须按 desired generation、configHash、Bot Worker epoch generation 与 eventSeq 单调前进；完整 baseline 仍校验执行节点、session、desired generation 与 configHash，但允许用当前子进程的较低 epoch 重置旧基线。空 snapshot 同样是有效完整基线：活动 Bot 缺失项收敛为 `disconnected`，已有停止意图时收敛为 `stopped`，并重算批次 `connected_count`
   - `capacityGeneration` 只在 max/features、Worker/Bot Worker epoch 或 admission ready/unavailable 等**容量语义**变化时递增；active/connecting 只是即时利用率快照，不单独使 planToken 失效
   - `BotFleetEvent.action_event` 由 CP `ScenarioActionEventService` 接入，先经 `ActionResultService` 按执行节点、session、Bot 与 desired generation 强校验并写入 `bot_load_action_results`：V2 `correlationToken` 必须非空且为 UUID，非法 start/finish/barrier 在落账与屏障冻结前拒绝；actionRunId 幂等创建 running，首个终态条件更新胜出，重复/迟到事件不改账本；result JSON 最大 16KiB，超限改存带 `truncated/originalBytes/preview` 的可识别元数据。Worker gRPC 层为 action-event 维护当前进程内、非持久化的有界压缩 journal：按 `actionRunId` identity 只保留最新 running/waiting 或首个 terminal，容量上限 60,000 条；新订阅按接收序号 replay 后再接 live。Worker 进程重启后 Bot desired 集合由 CP reconcile 恢复（FR-365）；action journal 本身仍不落盘。`barrier-arrived` 再进入 `BarrierCoordinator`，兼容外部动作信号由 `ActionSignalRouter` 经 `SignalBotActions` 投递。ADR-075 起，`send_command` 的通用成功只表示 Bot Worker 调用 `bot.chat` 时未同步抛错；调用前路由、IPC、参数处理失败或调用同步抛错仍记动作失败，ServerProbe/TPS/MSPT 不参与通用命令结果。
-- 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml + 运行库缓存 `libraries_zip` 经 gRPC 下发，FR-010/FR-114；见 ADR-014/016）。Worker 写入实例 `plugins/` 并把缓存包解压到实例根 `libraries/`，**在线更新**（FR-068）复用本 RPC 推最新内嵌 jar 与缓存（下次重启生效，可选推送并重启），经 `GET/POST /instances/:id/probe/update`
+- 探针部署：`ArtifactPackage/Source/Version` 叠加在既有 CAS 上（FR-409/411、ADR-083/085）。CP 手动同步 GitHub Releases 或由平台管理员按顺序提交 `version` 后提交本地 JAR；上传接口直接流式写入 CAS，不经 multipart 临时文件或完整内存缓冲，并以文件字节数实施 64 MiB 上限。来源由版本记录关联的 SourceID 判定，避免共享 CAS asset 混淆来源。版本按全局→Worker→实例解析；`DeployServerProbe` 只下发 CP-local 下载 URL、摘要、版本和生成的 config.yml。Worker 拉取到临时文件、校验后原子替换 `plugins/ServerProbe.jar`。不再分发 `libraries_zip`，游戏服首启自行联网解析依赖；实例更新只在下次重启生效。
 - 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
   - **JBIS 业务事件汇聚上行（FR-122；见 ADR-027/028）**：同一条 StreamPluginEvents 流复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义）。CP 侧 `PlayerEventService` 据 `domain` 分流：玩家/监控事件走在线名册 + SSE，业务事件交 `BusinessEventService` 按 (domain,node_uuid,zone_id,dedup_key) 去重落 `business_events` 通用信封；经济域(`economy`)再解析信封维护 `economy_balance_mirrors`(node→zone 维度、seq 单调)+`economy_ledger_entries`(node→zone→ledger 幂等审计)。探针侧由 mce `PlayerEconomyChangeEvent`/`PlayerEconomyCatchupEvent` 折算上报（覆盖 web 后台/跨服一切余额变更），currencyId Int→identifier 折算保证跨服聚合不串味。CP 插件无关、只认信封
 - 指标：`GetNodeMetrics` 采集 Worker 所在节点 CPU / 内存 / 磁盘实时快照；`GetInstanceMetrics` 请求带 `probe_port`，由 Worker 抓 ServerProbe `/metrics`（**RCON 已退役（FR-067/ADR-016）**——探针未就绪时富指标 N/A，不再回退 RCON）。`GET /api/v1/nodes/:id/metrics` 节点面板端点优先经已连接 Worker 主动拉取，连接池暂无该节点时回退 CP 中最新心跳快照；实例实时面板继续按需 `GetInstanceMetrics` 拉取；**历史时序**（FR-060）由 Worker 心跳推送 `instance_metrics`，二者互补。FR-400 在同一已认证反向隧道 Heartbeat 追加 `managed_runtime`：只读上报 Go Worker 与已运行共享 Bot Worker 的 RSS/CPU、Bot 聚合运行态、真实 `bot_capacity_max` 和观测时间；容量未就绪、缺失或无效时保持 `null` 并附原因。不得调用会拉起 Bot Worker 的 RPC，也不扫描任意 OS 进程。CP 仅保存 Node 当前快照，首页经管理员 `GET /metrics/resource-attribution` 聚合鲜节点、RUNNING 受管实例树和进程 TopN；CPU 首帧/PID 切换为空值，陈旧超过 90 秒不伪装成实时。FR-401 的 `BotRuntimeMetricSampler` 只读取该已认证快照，每 30 秒写入 ADR-013 node scope 时序；离线/陈旧/不可用字段写 `NULL` 断点，查询经 `/metrics/bot-runtime` 由节点、实例或压测会话解析关联节点并始终标明共享语义，不新增 Worker RPC、端口或数据库直连。FR-402 的 `PlatformObservabilityService` 仅用有界集合查询构造平台管理员首页读模型：鲜活节点资源、节点/实例健康、未解决告警、进行中/失败任务与共享 Bot 观察值；每类列表上限 5，跨节点事件循环 P95 取可用节点最大值。该端点不做逐项查询、绝不触发 Worker RPC，普通成员不请求也不渲染管理员区块。FR-406 把 `/monitor` 收口为平台/节点/实例观测入口，默认选中对比指标并复用 FR-400/401/402 与进程 TopN 数据；FR-407 在实例维度新增受管进程详情读模型，结合 `process_metric_snapshots` 最近窗口输出带样本数、窗口和数值证据的诊断标签；FR-408 的 PID 级处置只开放非根子进程并要求前端 DangerConfirm 与后端 `confirm=true`，审计 detail 不记录完整命令行、环境变量或密钥。
@@ -358,17 +358,17 @@ Browser → CP (/ws/terminal?token=xxx) → CP 校验 → TerminalSession（反�
 
 ### 6.2.1 监控探针 ServerProbe（Worker 抓 `/metrics`，FR-010 / ADR-014）
 
-ServerProbe 是第三方监控探针（TabooLib，单 jar 多端 Bukkit+BungeeCord），作 git 子模块引入 `third_party/ServerProbe`。
-CP 经 `go:embed` 内嵌探针 jar 与构建期运行库缓存（`internal/controlplane/embed/probe/`，`make embed-probe` 目标可选构建）。
-建服 provision 时经 gRPC `DeployServerProbe(jar, config_yaml, libraries_zip)` 把 jar 与最小 config.yml 写入实例 `plugins/`，并把 TabooLib/Kotlin 运行库缓存解压到实例工作目录的 Maven local repository（默认 `libraries/`）。
-Worker 对运行库缓存只接受 `libraries/` 根路径，拒绝绝对路径、路径穿越、反斜杠路径和超体积条目；预置失败会让 `DeployServerProbe` 返回明确错误，避免慢网/离线首启时才暴露依赖下载问题（FR-114）。
+ServerProbe 是第三方监控探针（TabooLib，单 jar 多端 Bukkit+BungeeCord），作为 FR-409/411 的首个通用制品包接入既有 CAS。
+CP 管理 GitHub Releases（线上拉取）和本地上传两种来源的版本元数据；管理员可手动同步线上正式 Release，或按 `version` 在前、`file` 在后的 multipart 契约上传不超过 64 MiB 的 JAR。上传版本直接流式缓存入 CAS，来源标签由版本记录判定；发布二进制不携带 ServerProbe 子模块、源码、jar 或运行库缓存。
+建服 provision 时按全局默认 → Worker 默认 → 实例显式版本解析目标，经 gRPC `DeployServerProbe(download_url, sha256, version, config_yaml)` 通知 Worker。Worker 只从 CP-local 下载端点拉取 jar，校验摘要后原子写入实例 `plugins/`。
+CP 不再预置 TabooLib/Kotlin 运行库。游戏服第一次启动时由 ServerProbe 自行联网解析依赖；无外网或依赖源不可达时探针可能无法启动，这不阻断核心游戏服创建。
 
 每实例系统分配一个 probe 端口（默认 29940 段，同节点唯一）；config.yml 仅开启 `/metrics`、绑定 `127.0.0.1`、监听分配端口。
-Worker 抓取链路完全在本机回环、无对外网络面、无 token；依赖缓存 zip 仅接受 `libraries/` 根路径，拒绝绝对路径、路径穿越、反斜杠路径和超体积条目：
+Worker 抓取链路完全在本机回环、无对外网络面、无 token：
 
 ```
-provision → CP DeployServerProbe(jar+config+libraries_zip)
-          → Worker 写 plugins/ServerProbe.jar + plugins/ServerProbe/config.yml + libraries/**
+provision / 实例切换 → CP DeployServerProbe(download_url+sha256+version+config)
+                     → Worker 从 CP 拉取并原子写 plugins/ServerProbe.jar + plugins/ServerProbe/config.yml
 GetInstanceMetrics(req) → Worker → HTTP GET http://127.0.0.1:<probe_port>/metrics → 解析 serverprobe_* → 富指标
                                   ↓ 探针未就绪/抓取失败
                                   富指标 N/A（RCON 已退役 FR-067/ADR-016，不再回退）
@@ -1213,7 +1213,7 @@ proxy:
 `.github/workflows/release.yml` 固定使用 Go 1.26.2、Node.js 22 与 JDK21，当前 job 链路为 `metadata → prepare-embeds → test → build → smoke → release`：
 
 - **metadata**：完整 checkout Git 历史后执行 `scripts/release-metadata.mjs`，读取 `internal/version/version.go` 并联合校验 Git ref、SHA 与精确 tag；统一输出 `version`、`release_tag`、`is_release`、`publish_release`，后续 job 不再各自推导版本。当前正式发布提交使用裸版本 `0.18.0`，对应 tag `v0.18.0`。正式 tag `vX.Y.Z` 要求源码同提交为裸 `X.Y.Z`，Git tag / Release 保留 `v`，二进制与内嵌资产注入裸 `X.Y.Z`；开发构建从源码 `X.Y.Z-dev` 派生为 `X.Y.Z-dev+g<7位sha>`。普通分支位于已打 tag 的裸版本提交时只验证、不重复发布 `latest`。
-- **prepare-embeds**：一次性构建平台无关资产并作为 artifact 复用。除前端、探针及离线依赖缓存、客户端更新器与 CFR 外，发布链路还对 `apps/bot-worker` 执行 `npm ci`、生产依赖审计、类型检查、lint、build，再以 metadata 版本打确定性归档内嵌 CP。发布版 CP 因而自带前端 + Bot Worker + 探针 + 客户端更新器；Worker 自带 CFR。Bot 构建使用 Node.js 22，节点执行时仍要求 Node.js `>=22.13.0`（ADR-072）。任一必需 embed 缺失即 fail-fast；客户端 `wedge.jar` 与 `updater-core.jar` 复制后另做非空硬校验，缺失或 0 字节均以中文错误终止发布。
+- **prepare-embeds**：一次性构建平台无关资产并作为 artifact 复用。发布链路对前端、Bot Worker、客户端更新器与 CFR 执行各自构建；其中 `apps/bot-worker` 执行 `npm ci`、生产依赖审计、类型检查、lint、build，再以 metadata 版本打确定性归档内嵌 CP。发布版 CP 自带前端 + Bot Worker + 客户端更新器，Worker 自带 CFR；ServerProbe 改由运行时制品版本库缓存和分发。Bot 构建使用 Node.js 22，节点执行时仍要求 Node.js `>=22.13.0`（ADR-072）。任一必需 embed 缺失即 fail-fast；客户端 `wedge.jar` 与 `updater-core.jar` 复制后另做非空硬校验，缺失或 0 字节均以中文错误终止发布。
 - **test**：还原同一批 embed 资产后运行 `go build ./...`、`go vet ./...`、`go test ./...`，以及前端 lint、vitest、生产构建和 Playwright E2E；门禁失败则不进入制品构建。
 - **build**：matrix 交叉编译 `linux/amd64` 与 `windows/amd64` 的 Control Plane / Worker 共 4 个最终二进制；构建 CP 前还注入同版本的两平台 Worker 与 manifest。全部二进制、Bot 归档和 Worker manifest 只消费 metadata 的同一 `version`。
 - **smoke**：四项矩阵逐一验证最终产物——两个 Linux 二进制在 `ubuntu-latest` 原生执行，两个 Windows `.exe` 在 `windows-latest` 原生执行；`--version` 必须退出码 0、stdout 严格等于 metadata 版本且 stderr 为空。`release` 直接依赖全部 smoke 成功。
@@ -1221,13 +1221,13 @@ proxy:
 
 ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布前 smoke，不重写其历史；ADR-036 的产物命名、校验和 stable/prerelease 渠道契约继续生效。当前实现尚未按用户选择推送远端，GitHub-hosted runner、artifact 传递、权限与实际 Release 创建仍为 **Actions 待验**。
 
-### 12.2 SSH 推送式远程部署（FR-277，见 ADR-063）
+### 12.2 SSH 推送式远程部署（FR-277 / FR-410，见 ADR-063 / ADR-084）
 
 在既有**拉取式**安装（目标机上 `curl <cp>/install-worker.sh | sh`，§5.1）之外的**推送式**通道：操作机执行 `scripts/deploy-cp.sh` / `scripts/deploy-worker.sh`（POSIX sh），经 SSH 密钥把本地 `make dist` 产物推送部署 / 更新到 Linux + systemd 主机。配置全经 `JM_*` 环境变量（与目标机二进制消费的 `JIANMANAGER_*` 命名空间隔离，按需显式映射）。
 
-- **定位**：传输 + 编排层，零上线逻辑。Worker 首次上线 = scp 二进制 + 仓内 `install-worker.sh` → 远端 `--binary … --service` 执行（上线语义全走 ADR-051：worker 自配 setup、token 经 env 不落普通文件）；CP 首次部署 = 推二进制 + 最小 `control-plane.yml`（端口 + sqlite，密钥零写入，靠 ADR-061 生产态自动生成）+ unit + HTTP 探活。
-- **更新部署**：远端有无 unit 自动判定；stop → 旧二进制留 `.bak` → 换新 → start，不碰 `control-plane.yml` / `worker.yml` / `node-identity.json` / unit。幂等可重复执行。
-- **服务档位双轨**（ADR-063 §2）：`system`（root 直连或非 root 免密 sudo，`/etc/systemd/system`）/ `user`（纯普通用户，`~/.config/systemd/user` + `systemctl --user`，强制 linger 保断连常驻、开不了即报错）。`install-worker.sh` 为此扩 `--service-scope system|user`（默认 system 现状零变化），拉取式一键安装同获非 root 能力。
+- **定位**：传输 + 编排层。Worker 首次上线仍复用仓内 `install-worker.sh` 的自配/注册语义，token 仅经环境变量交给首个进程；CP 首装创建最小 `control-plane.yml`、稳定的 0600 `service.env` 与 user unit。
+- **普通用户版本化布局**（FR-410）：`<install>/current` 原子指向 `versions/<版本>--<UTC>--<sha12>/`；每个版本目录包含二进制与完整 SHA-256 manifest，永久保留。数据根、CP 配置/JWT 环境文件、Worker 配置与节点身份保持在版本目录外。部署会校验传输摘要；新版本健康失败时恢复旧 `current` 并重启。旧安装根的裸二进制和 `.bak` 会自动归档迁移；显式 `rollback-*.sh <版本目录名>` 复核 manifest 后切换。该回滚不回退数据库 schema。
+- **服务档位双轨**（ADR-063 §2）：`system`（root 直连或非 root 免密 sudo，`/etc/systemd/system`）维持直装 `.bak` 更新；`user`（纯普通用户，`~/.config/systemd/user` + `systemctl --user`）使用上述版本化布局并强制 linger 保断连常驻。Worker unit 名根据安装目录派生，确保同机多个 Worker 互不误操作。
 
 ## 13. MC 群组服模型（V2）
 
