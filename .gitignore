@@ -50,3 +50,4 @@ docker-compose.override.yml
 /data-demo/
 /evidence/
 test-results/
+/.workbuddy/
