@@ -37,6 +37,8 @@ DATA_DIR=""             # 数据根（缺省 <install-dir>/data）
 WS_PORT="9102"          # Worker WS 终端端口
 INSTALL_SERVICE="0"     # 是否注册 systemd 服务
 SERVICE_SCOPE="system"  # systemd 档位：system（/etc/systemd/system，需 root）| user（~/.config/systemd/user，普通用户，FR-277/ADR-063）
+SERVICE_EXEC=""         # 可选 systemd ExecStart 路径（版本化部署指向 current）
+SERVICE_NAME_OVERRIDE="" # 可选 systemd 服务名（多 Worker 部署与编排脚本共用）
 DOWNLOAD_ONLY="0"       # 仅下载、不上线
 SKIP_DOWNLOAD="0"       # 跳过下载、直接上线
 
@@ -59,6 +61,8 @@ usage() {
   --service                注册 systemd 服务（开机自启、常驻自连）
   --service-scope <s>      systemd 档位：system（默认，需 root）| user（普通用户
                            unit，需 linger 保断连常驻，脚本自动检查/尝试开启）
+  --service-exec <path>    systemd ExecStart 路径（版本化部署使用 current 内二进制）
+  --service-name <name>    systemd 服务名（默认根据安装目录推导）
   --download-only          只下载/准备二进制，不上线
   --skip-download          跳过下载，直接用安装目录已有二进制上线
   -h, --help               显示本帮助
@@ -83,6 +87,8 @@ while [ $# -gt 0 ]; do
         --ws-port)       WS_PORT="$2"; shift 2 ;;
         --service)       INSTALL_SERVICE="1"; shift ;;
         --service-scope) SERVICE_SCOPE="$2"; shift 2 ;;
+        --service-exec)  SERVICE_EXEC="$2"; shift 2 ;;
+        --service-name)  SERVICE_NAME_OVERRIDE="$2"; shift 2 ;;
         --download-only) DOWNLOAD_ONLY="1"; shift ;;
         --skip-download) SKIP_DOWNLOAD="1"; shift ;;
         -h|--help)       usage; exit 0 ;;
@@ -284,6 +290,20 @@ if [ "$INSTALL_SERVICE" = "1" ]; then
         _suffix=$(printf '%s' "$_dir_base" | sed -e 's/^jianmanager-\{0,1\}//' -e 's/[^A-Za-z0-9_-]/-/g')
         [ -n "$_suffix" ] && SERVICE_NAME="jianmanager-worker-$_suffix"
     fi
+    [ -z "$SERVICE_NAME_OVERRIDE" ] || SERVICE_NAME="$SERVICE_NAME_OVERRIDE"
+    case "$SERVICE_NAME" in
+        *[!A-Za-z0-9_.@-]*|"")
+            echo "错误: --service-name 仅支持字母、数字、.、_、@、-" >&2; exit 1 ;;
+    esac
+    UNIT_EXEC="$BIN_PATH"
+    if [ -n "$SERVICE_EXEC" ]; then
+        case "$SERVICE_EXEC" in
+            /*) : ;;
+            *) echo "错误: --service-exec 必须是绝对路径" >&2; exit 1 ;;
+        esac
+        [ -f "$SERVICE_EXEC" ] || { echo "错误: --service-exec 指向的文件不存在: $SERVICE_EXEC" >&2; exit 1; }
+        UNIT_EXEC="$SERVICE_EXEC"
+    fi
     echo "[3/4] 注册 systemd 服务 $SERVICE_NAME（$SERVICE_SCOPE 档，ExecStart 跑 worker 自配 setup）"
     UNIT="$UNIT_DIR/$SERVICE_NAME.service"
     # 首次启动：worker 无配置 → 自启 setup，读环境里的 CP/token/节点名等完成写配置 + 注册 +
@@ -304,7 +324,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$BIN_PATH
+ExecStart=$UNIT_EXEC
 $SVC_ENV
 Restart=always
 RestartSec=5

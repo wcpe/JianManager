@@ -1,3 +1,6 @@
 CHANGELOG.md merge=union
 scripts/install-worker.* text eol=lf
 internal/controlplane/embed/install-scripts/install-worker.* text eol=lf
+scripts/deploy-*.sh text eol=lf
+scripts/rollback-*.sh text eol=lf
+scripts/lib/*.sh text eol=lf

@@ -2,10 +2,9 @@
 # JianManager Control Plane（面板）SSH 推送式部署脚本（FR-277，见 ADR-063）。在操作机执行。
 #
 # 首次部署 = scp 本地 dist 二进制 → 建目录 → 生成最小 control-plane.yml（端口 + sqlite +
-#            dev_mode:false，其余吃程序默认；JWT/WS 密钥不写，CP 生产态自动生成，ADR-061）
-#            → 写 systemd unit → 启动 → HTTP 探活。
-# 更新部署 = stop → 旧二进制留 .bak → 新二进制就位 → start；不重写 control-plane.yml 与
-#            unit（既有配置视为运维现场，不覆盖）。
+#            dev_mode:false）→ 写 systemd unit → 启动 → HTTP 探活。
+# user 档使用 versions/<版本>--<UTC>--<sha12> 与 current 软链接，首次生成 service.env
+# 保存 JWT；更新时校验制品、归档旧裸二进制并保留既有配置。system 档保留原 direct/.bak 行为。
 # 首次 / 更新由远端有无对应 systemd unit 自动判定；幂等可重复执行。
 #
 # 服务档位（JM_SERVICE_SCOPE，ADR-063 §2）：
@@ -36,6 +35,7 @@ BIN_NAME="jianmanager-cp"
 # ---- 配置解析 ----
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+VERSIONED_HELPER="$SCRIPT_DIR/lib/versioned-user-layout.sh"
 
 JM_SSH_HOST="${JM_SSH_HOST:-}"
 JM_SSH_PORT="${JM_SSH_PORT:-22}"
@@ -75,7 +75,7 @@ if [ "$DRY_RUN" = "1" ]; then
     else
         echo "[dry-run] 本地产物: $BIN_GUESS (缺失，JM_BUILD=$JM_BUILD$([ "$JM_BUILD" = "1" ] && echo '，将自动 make dist' || echo '，实跑将报错'))"
     fi
-    echo "[dry-run] 步骤: 远端探测(架构/权限/有无 unit) → scp 二进制 → 首次: 建目录+最小 control-plane.yml+unit+启动 / 更新: stop→留 .bak→换二进制→start → HTTP 探活验证"
+    echo "[dry-run] 步骤: 远端探测(架构/权限/有无 unit) → scp 二进制 → user 档归档旧布局并切换 current/版本目录，system 档维持 direct/.bak → HTTP 探活验证"
     exit 0
 fi
 
@@ -154,6 +154,12 @@ if [ ! -f "$BIN_LOCAL" ]; then
 else
     echo "[2/5] 本地产物就绪: $BIN_LOCAL"
 fi
+BIN_SHA=""
+if [ "$SCOPE" = "user" ]; then
+    BIN_SHA=$(sha256sum "$BIN_LOCAL" | awk 'NR == 1 { print $1 }')
+    [ "${#BIN_SHA}" -eq 64 ] || die "无法计算本地产物 SHA-256: $BIN_LOCAL"
+    case "$BIN_SHA" in *[!0123456789abcdef]*) die "无法计算本地产物 SHA-256: $BIN_LOCAL" ;; esac
+fi
 
 # ---- 推送 ----
 echo "[3/5] 推送产物到目标机 ..."
@@ -161,9 +167,164 @@ RTMP=$(rsh "mktemp -d /tmp/jm-deploy.XXXXXX")
 cleanup() { rsh "rm -rf '$RTMP'" 2>/dev/null || true; }
 trap cleanup EXIT
 rcp "$BIN_LOCAL" "$RTMP/$BIN_NAME"
+if [ "$SCOPE" = "user" ]; then
+    [ -f "$VERSIONED_HELPER" ] || die "缺少用户级版本部署公共函数: $VERSIONED_HELPER"
+    rcp "$VERSIONED_HELPER" "$RTMP/versioned-user-layout.sh"
+fi
 
 # ---- 首次 / 更新 ----
-if [ "$MODE" = "install" ]; then
+if [ "$SCOPE" = "user" ]; then
+    echo "[4/5] 用户级版本化部署：归档旧布局 → 写入版本目录 → 切换 current → 启动"
+    USER_DEPLOY="set -e
+$XDG
+. '$RTMP/versioned-user-layout.sh'
+expected_sha='$BIN_SHA'
+actual_sha=\$(versioned_sha256_file '$RTMP/$BIN_NAME')
+[ \"\$actual_sha\" = \"\$expected_sha\" ] || { echo '错误: 推送产物 SHA-256 校验失败' >&2; exit 1; }
+mkdir -p '$INSTALL_DIR/versions' '$DATA_DIR' '$UNIT_DIR'
+
+previous_current=
+if [ -L '$INSTALL_DIR/current' ]; then
+    previous_current=\$(readlink '$INSTALL_DIR/current')
+    case \"\$previous_current\" in
+        versions/*)
+            versioned_verify_manifest \"$INSTALL_DIR/\$previous_current\" '$BIN_NAME' || { echo '错误: current 指向的版本制品校验失败' >&2; exit 1; }
+            ;;
+        *) echo '错误: current 不是受管版本目录' >&2; exit 1 ;;
+    esac
+fi
+
+legacy_backup=
+legacy_primary=
+if [ -f '$INSTALL_DIR/$BIN_NAME.bak' ]; then
+    versioned_archive_legacy_binary '$INSTALL_DIR' '$BIN_NAME' '$INSTALL_DIR/$BIN_NAME.bak'
+    legacy_backup=versions/\$VERSIONED_RELEASE_NAME
+fi
+if [ -f '$INSTALL_DIR/$BIN_NAME' ]; then
+    versioned_archive_legacy_binary '$INSTALL_DIR' '$BIN_NAME' '$INSTALL_DIR/$BIN_NAME'
+    legacy_primary=versions/\$VERSIONED_RELEASE_NAME
+fi
+if [ -z \"\$previous_current\" ]; then
+    if [ -n \"\$legacy_primary\" ]; then
+        previous_current=\$legacy_primary
+    else
+        previous_current=\$legacy_backup
+    fi
+    if [ -n \"\$previous_current\" ]; then
+        versioned_restore_current '$INSTALL_DIR' \"\$previous_current\"
+    fi
+fi
+
+release_version=\$(versioned_binary_version '$RTMP/$BIN_NAME')
+versioned_reserve_version_dir '$INSTALL_DIR' \"\$release_version\" \"\$actual_sha\"
+mv '$RTMP/$BIN_NAME' \"\$VERSIONED_RELEASE_DIR/$BIN_NAME\"
+chmod +x \"\$VERSIONED_RELEASE_DIR/$BIN_NAME\"
+versioned_write_manifest \"\$VERSIONED_RELEASE_DIR\" \"\$release_version\" \"\$actual_sha\"
+new_release=\$VERSIONED_RELEASE_NAME
+
+if [ ! -f '$INSTALL_DIR/control-plane.yml' ]; then
+cat > '$INSTALL_DIR/control-plane.yml' <<'YML_EOF'
+# 由 deploy-cp.sh 生成的最小配置（FR-410）。其余配置项均取程序默认值。
+server:
+  host: 0.0.0.0
+  port: $JM_CP_HTTP_PORT
+  dev_mode: false
+
+grpc:
+  port: $JM_CP_GRPC_PORT
+
+database:
+  driver: sqlite
+  dsn: $DATA_DIR/jianmanager.db
+YML_EOF
+fi
+
+if [ ! -f '$INSTALL_DIR/service.env' ] || ! grep -q '^JIANMANAGER_JWT_SECRET=.' '$INSTALL_DIR/service.env'; then
+    legacy_secret=
+    for legacy_dropin in '$UNIT_DIR/$SVC.service.d/'*.conf; do
+        [ -f \"\$legacy_dropin\" ] || continue
+        legacy_secret=\$(sed -n 's/^Environment=JIANMANAGER_JWT_SECRET=//p' \"\$legacy_dropin\" | sed -n '1p')
+        [ -n \"\$legacy_secret\" ] && break
+    done
+    if [ -z \"\$legacy_secret\" ] && [ -f '$UNIT_DIR/$SVC.service' ]; then
+        legacy_secret=\$(sed -n 's/^Environment=JIANMANAGER_JWT_SECRET=//p' '$UNIT_DIR/$SVC.service' | sed -n '1p')
+    fi
+    if [ -n \"\$legacy_secret\" ]; then
+        jwt_secret=\$legacy_secret
+    else
+        jwt_secret=\$(od -An -N32 -tx1 /dev/urandom | tr -d ' \\n')
+    fi
+    [ -n \"\$jwt_secret\" ] || { echo '错误: 无法生成 CP JWT 密钥' >&2; exit 1; }
+    umask 077
+    if [ -f '$INSTALL_DIR/service.env' ]; then
+        printf 'JIANMANAGER_JWT_SECRET=%s\\n' \"\$jwt_secret\" >> '$INSTALL_DIR/service.env'
+    else
+        printf 'JIANMANAGER_JWT_SECRET=%s\\n' \"\$jwt_secret\" > '$INSTALL_DIR/service.env'
+    fi
+fi
+chmod 600 '$INSTALL_DIR/service.env'
+
+if [ ! -f '$UNIT_DIR/$SVC.service' ]; then
+    export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+    if command -v loginctl >/dev/null 2>&1 && [ \"\$(loginctl show-user \"\$(id -un)\" --property=Linger --value 2>/dev/null)\" != yes ]; then
+        loginctl enable-linger \"\$(id -un)\" 2>/dev/null || { echo '错误: 无权开启 linger，请让管理员执行 loginctl enable-linger <用户>' >&2; exit 1; }
+    fi
+    cat > '$UNIT_DIR/$SVC.service' <<'UNIT_EOF'
+[Unit]
+Description=JianManager Control Plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$INSTALL_DIR/current/$BIN_NAME $INSTALL_DIR/control-plane.yml
+EnvironmentFile=$INSTALL_DIR/service.env
+Environment=JIANMANAGER_DATA_DIR=$DATA_DIR
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=$WANTED_BY
+UNIT_EOF
+else
+    if grep -Fqx 'ExecStart=$INSTALL_DIR/$BIN_NAME $INSTALL_DIR/control-plane.yml' '$UNIT_DIR/$SVC.service'; then
+        sed -i 's|^ExecStart=$INSTALL_DIR/$BIN_NAME $INSTALL_DIR/control-plane.yml$|ExecStart=$INSTALL_DIR/current/$BIN_NAME $INSTALL_DIR/control-plane.yml|' '$UNIT_DIR/$SVC.service'
+    elif ! grep -Fqx 'ExecStart=$INSTALL_DIR/current/$BIN_NAME $INSTALL_DIR/control-plane.yml' '$UNIT_DIR/$SVC.service'; then
+        echo '错误: 既有 CP unit 的 ExecStart 不可安全迁移，请人工处理后重试' >&2
+        exit 1
+    fi
+    if ! grep -Fqx 'EnvironmentFile=$INSTALL_DIR/service.env' '$UNIT_DIR/$SVC.service'; then
+        sed -i '/^\[Service\]$/a EnvironmentFile=$INSTALL_DIR/service.env' '$UNIT_DIR/$SVC.service'
+    fi
+fi
+
+$SC daemon-reload
+$SC enable '$SVC' >/dev/null 2>&1 || true
+switch_started=0
+restore_after_error() {
+    result=\$?
+    if [ \"\$switch_started\" = 1 ] && [ -n \"\$previous_current\" ]; then
+        versioned_restore_current '$INSTALL_DIR' \"\$previous_current\" || true
+        $SC daemon-reload || true
+        $SC start '$SVC' || true
+    fi
+    exit \"\$result\"
+}
+trap restore_after_error 0
+$SC stop '$SVC' || true
+switch_started=1
+versioned_switch_current '$INSTALL_DIR' \"\$new_release\"
+$SC restart '$SVC'
+switch_started=0
+trap - 0
+rm -f '$INSTALL_DIR/$BIN_NAME' '$INSTALL_DIR/$BIN_NAME.bak'
+printf 'VERSIONED_PREVIOUS_CURRENT=%s\\n' \"\$previous_current\"
+printf 'VERSIONED_CURRENT=%s\\n' \"\$new_release\""
+    DEPLOY_RESULT=$(printf '%s\n' "$USER_DEPLOY" | rsh "sh -s")
+    printf '%s\n' "$DEPLOY_RESULT"
+    PREVIOUS_CURRENT=$(printf '%s\n' "$DEPLOY_RESULT" | sed -n 's/^VERSIONED_PREVIOUS_CURRENT=//p' | sed -n '1p')
+elif [ "$MODE" = "install" ]; then
     echo "[4/5] 首次部署：建目录 + 最小 control-plane.yml + systemd unit + 启动"
     # 远端首装脚本：本地展开配置值；\$ 开头的是远端运行期求值（linger/XDG）。
     # yml 仅在不存在时写（重跑幂等）；密钥零写入——CP 生产态自动生成持久化（ADR-061）。
@@ -283,6 +444,16 @@ case "$HC_RESULT" in
     *)
         echo "HTTP 探活失败（$HC_RESULT），最近日志:" >&2
         if [ "$SCOPE" = "user" ]; then
+            if [ -n "${PREVIOUS_CURRENT:-}" ]; then
+                echo "正在恢复探活前的 current: $PREVIOUS_CURRENT" >&2
+                RESTORE="set -e
+$XDG
+. '$RTMP/versioned-user-layout.sh'
+versioned_restore_current '$INSTALL_DIR' '$PREVIOUS_CURRENT'
+$SC daemon-reload
+$SC restart '$SVC'"
+                printf '%s\n' "$RESTORE" | rsh "sh -s" || true
+            fi
             rsh "$XDG journalctl --user -u $SVC -n 40 --no-pager" >&2 || true
         elif [ "$NEED_SUDO" = "1" ]; then
             rsh "sudo -n journalctl -u $SVC -n 40 --no-pager" >&2 || true
