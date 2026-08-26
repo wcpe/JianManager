@@ -5,27 +5,22 @@ import { toast } from 'sonner'
 import { useMetricSeries, type MetricSeries, useInstanceMetrics } from '@/api/metrics'
 import { useInstance } from '@/api/instances'
 import { useProbeUpdateStatus, useUpdateProbe } from '@/api/probe'
+import { useInstanceProbeVersion, useSelectableProbeVersions, useSetInstanceProbeVersion } from '@/api/artifactVersions'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
 import { TimeSeriesChart, type ChartReferenceLine, type ChartSeries } from '@jianmanager/ui'
 import { RangePicker, type MetricRange } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
 
-function formatProbeCacheBytes(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const mib = bytes / 1024 / 1024
-  return mib >= 1 ? `${mib.toFixed(1)} MiB` : `${Math.round(bytes / 1024)} KiB`
-}
-
 /**
- * 探针在线更新卡（FR-068/FR-114）：展示探针连接状态 + 内嵌最新版本 + 离线依赖缓存 + 上次推送时间，
- * 「更新探针」推送内嵌 jar（下次重启生效），「更新并重启」推送后立即重启实例生效。
+ * 探针在线更新卡（FR-068/409）：展示探针连接状态、当前解析版本和上次下发时间。
+ * 实例可显式选择已缓存版本或恢复继承；切换后立即通知 Worker 拉取，但只在下次重启生效。
  *
  * 连接态分两路（真机 F2 修正）：
  * - 插件桥 WS 名册（st.probeConnected）：玩家事件/业务写依赖
  * - 运行时 metrics.probeAvailable：Worker 抓 /metrics 成功即视为探针在跑（控制台 TPS 同源）
  * 二者任一为真 → 展示「运行中」；仅桥连成功 → 「已连接」；否则「未连接」。
- * 「未内嵌 jar」只影响 OTA 推送按钮，不得掩盖「探针已在实例内运行」的事实。
+ * 未选择可用版本不影响「探针已在实例内运行」的事实。
  */
 function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()
@@ -35,6 +30,9 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
   // 与 HealthStrip 同钩：RUNNING 时拉实时指标，读 probeAvailable（与 TPS 同源，不依赖插件桥）。
   const { data: metrics } = useInstanceMetrics(instanceId, isRunning)
   const update = useUpdateProbe(instanceId)
+  const { data: selectable } = useSelectableProbeVersions()
+  const { data: selection } = useInstanceProbeVersion(instanceId)
+  const setVersion = useSetInstanceProbeVersion(instanceId)
   // ServerProbe 是 Bukkit 插件，代理端（BungeeCord/Waterfall/Velocity）无法加载：
   // 代理实例不渲染探针卡（后端同有守卫），避免「更新探针必失败」的陷阱按钮。
   if (inst?.role === 'proxy') return null
@@ -58,6 +56,16 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
         toast.error(msg ? `${t('probe.updateFailed')}：${msg}` : t('probe.updateFailed'))
       },
     })
+  const changeVersion = (value: string) => {
+    const versionId = Number(value)
+    setVersion.mutate(versionId, {
+      onSuccess: () => toast.success(t('probe.versionChanged')),
+      onError: (e) => {
+        const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+        toast.error(msg || t('probe.versionChangeFailed'))
+      },
+    })
+  }
   return (
     <Panel title={t('probe.title')}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 p-2 text-xs">
@@ -65,10 +73,8 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
           {statusLabel}
         </span>
         <span className="text-muted-foreground">
-          {t('probe.embeddedVersion')}: {st.embeddedAvailable ? st.embeddedVersion || '—' : 'N/A'}
-        </span>
-        <span className={st.librariesAvailable ? 'text-muted-foreground' : 'text-status-warning'}>
-          {t('probe.offlineCache')}: {st.librariesAvailable ? t('probe.offlineCacheReady', { size: formatProbeCacheBytes(st.librariesBytes), sha: st.librariesShortSha || '—' }) : t('probe.offlineCacheMissing')}
+          {t('probe.selectedVersion')}: {st.version || '—'}
+          {st.versionOrigin ? ` · ${t(`probe.origin.${st.versionOrigin}`)}` : ''}
         </span>
         {st.lastPushedAt && (
           <span className="text-muted-foreground">
@@ -76,22 +82,38 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
           </span>
         )}
         <div className="ml-auto flex gap-2">
-          <Button size="sm" variant="outline" className="gap-1" disabled={!st.embeddedAvailable || update.isPending} onClick={() => doUpdate(false)}>
+          <Button size="sm" variant="outline" className="gap-1" disabled={!st.versionId || update.isPending} onClick={() => doUpdate(false)}>
             {update.isPending && <Loader2 className="size-3.5 animate-spin" />}
             {t('probe.update')}
           </Button>
-          <Button size="sm" variant="outline" className="gap-1" disabled={!st.embeddedAvailable || update.isPending} onClick={() => doUpdate(true)}>
+          <Button size="sm" variant="outline" className="gap-1" disabled={!st.versionId || update.isPending} onClick={() => doUpdate(true)}>
             {update.isPending && <Loader2 className="size-3.5 animate-spin" />}
             {t('probe.updateRestart')}
           </Button>
         </div>
       </div>
-      {!st.embeddedAvailable && (
-        <div className="px-2 pb-2 text-xs text-muted-foreground">
-          {probeRunning ? t('probe.notEmbeddedButRunning') : t('probe.notEmbedded')}
-        </div>
+      <div className="flex flex-wrap items-center gap-2 px-2 pb-2 text-xs">
+        <label className="text-muted-foreground" htmlFor={`probe-version-${instanceId}`}>{t('probe.instanceVersion')}</label>
+        <select
+          id={`probe-version-${instanceId}`}
+          className="h-8 min-w-52 rounded-md border bg-background px-2 text-xs"
+          value={String(selection?.versionId ?? 0)}
+          disabled={setVersion.isPending || !selectable}
+          onChange={(event) => changeVersion(event.target.value)}
+        >
+          <option value="0">
+            {t('probe.inheritVersion', { version: selection?.resolvedVersion?.version || st.version || '—' })}
+          </option>
+          {(selectable?.versions ?? []).map((version) => (
+            <option key={version.id} value={version.id}>{version.version}</option>
+          ))}
+        </select>
+        <span className="text-muted-foreground">{t('probe.switchHint')}</span>
+      </div>
+      {!st.versionId && (
+        <div className="px-2 pb-2 text-xs text-status-warning">{st.versionError || t('probe.noVersion')}</div>
       )}
-      {!probeRunning && st.embeddedAvailable && (
+      {!probeRunning && st.versionId > 0 && (
         <div className="mx-2 mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           {t('probe.installHint')}
         </div>

@@ -502,6 +502,77 @@ export const handlers = [
 
   // ---------- 探针在线更新 ----------
 
+  domainRoute('get', '/artifact-packages/serverprobe', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({
+      package: { id: 1, key: 'serverprobe', name: 'ServerProbe', assetType: 'server-probe', defaultVersionId: 1 },
+      sources: [{ id: 1, packageId: 1, provider: 'github-release', name: '官方 GitHub Releases', enabled: true, lastSyncedAt: '2026-08-24T00:00:00Z', lastError: '' }],
+      versions: [{ id: 1, packageId: 1, sourceId: 1, version: '0.2.0', releaseRef: 'v0.2.0', assetName: 'ServerProbe-0.2.0.jar', expectedSha256: '9332ef4d9fdbc371ea60f250bb983a0f6973ae8116e1f437adcecaaaf8aa159a', assetId: 1, cachedAt: '2026-08-24T00:00:00Z', lastError: '' }],
+    })
+  }),
+
+  domainRoute('post', '/artifact-packages/serverprobe/sources/:id/sync', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ created: 0 })
+  }),
+
+  domainRoute('post', '/artifact-packages/serverprobe/versions/:id/cache', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ id: Number(info.params.id), packageId: 1, sourceId: 1, version: '0.2.0', releaseRef: 'v0.2.0', assetName: 'ServerProbe-0.2.0.jar', expectedSha256: '9332ef4d9fdbc371ea60f250bb983a0f6973ae8116e1f437adcecaaaf8aa159a', assetId: 1, cachedAt: '2026-08-24T00:00:00Z', lastError: '' })
+  }),
+
+  domainRoute('put', '/artifact-packages/serverprobe/default-version', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json().catch(() => ({}))) as { versionId?: number }
+    return HttpResponse.json({ defaultVersionId: body.versionId ?? 0 })
+  }),
+
+  domainRoute('get', '/nodes/:id/probe-version', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ nodeId: Number(info.params.id), versionId: 0 })
+  }),
+
+  domainRoute('put', '/nodes/:id/probe-version', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json().catch(() => ({}))) as { versionId?: number }
+    return HttpResponse.json({ nodeId: Number(info.params.id), versionId: body.versionId ?? 0 })
+  }),
+
+  domainRoute('get', '/probe-versions', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({
+      package: { id: 1, key: 'serverprobe', name: 'ServerProbe', assetType: 'server-probe', defaultVersionId: 1 },
+      versions: [{ id: 1, packageId: 1, sourceId: 1, version: '0.2.0', releaseRef: 'v0.2.0', assetName: 'ServerProbe-0.2.0.jar', expectedSha256: '9332ef4d9fdbc371ea60f250bb983a0f6973ae8116e1f437adcecaaaf8aa159a', assetId: 1, cachedAt: '2026-08-24T00:00:00Z', lastError: '' }],
+    })
+  }),
+
+  domainRoute('get', '/instances/:id/probe-version', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    return HttpResponse.json({
+      instanceId: id,
+      versionId: 0,
+      resolvedVersion: { id: 1, packageId: 1, sourceId: 1, version: '0.2.0', releaseRef: 'v0.2.0', assetName: 'ServerProbe-0.2.0.jar', expectedSha256: '9332ef4d9fdbc371ea60f250bb983a0f6973ae8116e1f437adcecaaaf8aa159a', assetId: 1, cachedAt: '2026-08-24T00:00:00Z', lastError: '' },
+      origin: 'global',
+    })
+  }),
+
+  domainRoute('put', '/instances/:id/probe-version', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const body = (await info.request.json().catch(() => ({}))) as { versionId?: number }
+    return HttpResponse.json({ instanceId: id, deployed: true, restarted: false, versionId: body.versionId ?? 0, version: '0.2.0', message: '探针 jar 已就位，下次重启生效' })
+  }),
+
   domainRoute('get', '/instances/:id/probe/update', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -510,12 +581,10 @@ export const handlers = [
       instanceId: id,
       instanceUuid: `inst-${id}`,
       probeConnected: true,
-      embeddedVersion: '0.1.0',
-      embeddedFingerprint: 'abc123',
-      embeddedAvailable: true,
-      librariesAvailable: true,
-      librariesBytes: 6_604_478,
-      librariesShortSha: '9ca6579c',
+      versionId: 1,
+      version: '0.2.0',
+      versionSha256: '9332ef4d9fdbc371ea60f250bb983a0f6973ae8116e1f437adcecaaaf8aa159a',
+      versionOrigin: 'global',
       lastPushedAt: '2026-06-22T10:00:00Z',
     })
   }),
@@ -530,11 +599,8 @@ export const handlers = [
       deployed: true,
       restarted: !!body.restart,
       probeConnected: true,
-      embeddedVersion: '0.1.0',
-      embeddedFingerprint: 'abc123',
-      librariesAvailable: true,
-      librariesBytes: 6_604_478,
-      librariesShortSha: '9ca6579c',
+      versionId: 1,
+      version: '0.2.0',
       message: body.restart ? '已推送并重启' : '已推送，下次重启生效',
     })
   }),

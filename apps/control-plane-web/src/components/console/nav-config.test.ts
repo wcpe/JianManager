@@ -76,12 +76,14 @@ describe('console nav config', () => {
 
     expect(operatorTargets).not.toContain('/database')
     expect(operatorTargets).not.toContain('/system-update')
+    expect(operatorTargets).not.toContain('/artifact-versions')
     expect(operatorTargets).not.toContain('/agent-tokens')
     expect(operatorTargets).not.toContain('/mcp-sessions')
     expect(operatorTargets).not.toContain('/agent-call-logs')
 
     expect(adminTargets).toContain('/database')
     expect(adminTargets).toContain('/system-update')
+    expect(adminTargets).toContain('/artifact-versions')
     expect(adminTargets).toContain('/agent-tokens')
     expect(adminTargets).toContain('/mcp-sessions')
     expect(adminTargets).toContain('/agent-call-logs')
@@ -92,6 +94,7 @@ describe('console nav config', () => {
       ['nav.agentCallLogs', '/agent-call-logs'],
     ])
     expect(maintSection?.children.map((item) => [item.labelKey, item.to])).toEqual([
+      ['nav.artifactVersions', '/artifact-versions'],
       ['nav.database', '/database'],
       ['nav.systemUpdate', '/system-update'],
     ])

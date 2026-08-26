@@ -16,19 +16,19 @@ beforeAll(() => {
   }
 })
 
-/** MetricsSegment 详情页监控增强：探针安装指引、离线缓存状态与当前指标阈值色条。 */
+/** MetricsSegment 详情页监控增强：探针版本选择、安装指引与当前指标阈值色条。 */
 describe('MetricsSegment（mock 假后端）', () => {
   beforeEach(() => {
     loginMockUser()
   })
 
-  it('展示 ServerProbe 离线依赖缓存大小与短指纹', async () => {
+  it('展示 ServerProbe 当前版本与实例继承选择', async () => {
     renderWithProviders(<MetricsSegment instanceUuid="inst-1" instanceId={1} />)
 
     expect(await screen.findByText('ServerProbe 探针更新')).toBeInTheDocument()
     expect(screen.getByText('探针已连接')).toBeInTheDocument()
-    expect(screen.getByText(/内嵌版本: 0\.1\.0/)).toBeInTheDocument()
-    expect(screen.getByText(/离线依赖缓存: 已内嵌 6\.3 MiB · 9ca6579c/)).toBeInTheDocument()
+    expect(screen.getByText(/当前版本: 0\.2\.0 · 全局默认/)).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: '实例版本' })).toHaveValue('0')
   })
 
   it('探针未连接时显示可操作安装指引', async () => {
@@ -39,9 +39,9 @@ describe('MetricsSegment（mock 假后端）', () => {
         instanceId: 1,
         instanceUuid: 'inst-1',
         probeConnected: false,
-        embeddedVersion: '0.1.0',
-        embeddedFingerprint: 'abc123',
-        embeddedAvailable: true,
+        versionId: 1,
+        version: '0.2.0',
+        versionOrigin: 'global',
         lastPushedAt: null,
       },
     })
@@ -65,11 +65,11 @@ describe('MetricsSegment（mock 假后端）', () => {
     renderWithProviders(<MetricsSegment instanceUuid="inst-1" instanceId={1} />)
 
     expect(await screen.findByText('探针未连接')).toBeInTheDocument()
-    expect(screen.getByText(/可先推送内嵌探针/)).toBeInTheDocument()
+    expect(screen.getByText(/可先下发当前版本/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '更新并重启' })).toBeEnabled()
   })
 
-  it('F2：桥未连但 metrics.probeAvailable 时显示运行中，未内嵌不掩盖运行态', async () => {
+  it('F2：桥未连但 metrics.probeAvailable 时显示运行中，未选版本不掩盖运行态', async () => {
     mockInject('get', '/instances/:id/probe/update', {
       kind: 'status',
       status: 200,
@@ -77,12 +77,9 @@ describe('MetricsSegment（mock 假后端）', () => {
         instanceId: 1,
         instanceUuid: 'inst-1',
         probeConnected: false,
-        embeddedVersion: '0.1.0',
-        embeddedFingerprint: '',
-        embeddedAvailable: false,
-        librariesAvailable: false,
-        librariesBytes: 0,
-        librariesShortSha: '',
+        versionId: 0,
+        version: '',
+        versionError: '制品版本库未配置',
         lastPushedAt: null,
       },
     })
@@ -105,7 +102,7 @@ describe('MetricsSegment（mock 假后端）', () => {
     renderWithProviders(<MetricsSegment instanceUuid="inst-1" instanceId={1} />)
 
     expect(await screen.findByText('探针运行中（指标通道）')).toBeInTheDocument()
-    expect(screen.getByText(/无法 OTA 推送/)).toBeInTheDocument()
+    expect(screen.getByText(/制品版本库未配置/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '更新探针' })).toBeDisabled()
     expect(screen.queryByText('探针未连接')).not.toBeInTheDocument()
   })

@@ -68,6 +68,7 @@ import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
 import NodeArtifactCachePanel from '@/components/NodeArtifactCachePanel'
 import NodeProxyPanel from '@/components/NodeProxyPanel'
+import NodeProbeVersionPanel from '@/components/NodeProbeVersionPanel'
 import NodeRepairPanel from '@/components/NodeRepairPanel'
 import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialog from '@/components/AddNodeDialog'
@@ -211,8 +212,8 @@ function NodePurgeBlockedDialog({
 }
 
 /** 右栏分段（FR-177 §3.3 + FR-185）：概览/实例/JDK/缓存/端口/代理/监控/坏节点修复。 */
-type DetailTab = 'overview' | 'instances' | 'runtime' | 'cache' | 'ports' | 'proxy' | 'monitor' | 'repair'
-const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'runtime', 'cache', 'ports', 'proxy', 'monitor', 'repair']
+type DetailTab = 'overview' | 'instances' | 'runtime' | 'cache' | 'ports' | 'proxy' | 'probe' | 'monitor' | 'repair'
+const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'runtime', 'cache', 'ports', 'proxy', 'probe', 'monitor', 'repair']
 
 /** 从 URL `?tab=` 解析激活分段（FR-128 可寻址；非法值回退默认 overview）。 */
 function readDetailTab(searchParams: URLSearchParams): DetailTab {
@@ -1195,6 +1196,11 @@ function NodeDetailPane({
         {tab === 'proxy' && (
           <Panel title={t('nodeProxy.title')}>
             <NodeProxyPanel nodeId={node.id} active />
+          </Panel>
+        )}
+        {tab === 'probe' && (
+          <Panel title={t('probe.nodeVersionTitle')}>
+            <NodeProbeVersionPanel nodeId={node.id} active />
           </Panel>
         )}
         {tab === 'monitor' && <NodeMonitorCharts node={node} />}

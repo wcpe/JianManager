@@ -167,6 +167,7 @@ const PLATFORM_ADMIN_SECTIONS: NavSection[] = [
   {
     labelKey: 'nav.systemMaintenance',
     children: [
+      { to: '/artifact-versions', labelKey: 'nav.artifactVersions', icon: Archive },
       { to: '/database', labelKey: 'nav.database', icon: Database },
       { to: '/system-update', labelKey: 'nav.systemUpdate', icon: RefreshCw },
     ],
