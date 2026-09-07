@@ -80,6 +80,11 @@ func waitForProcGone(t *testing.T, pid int) {
 
 // testWorkDir 等价 t.TempDir()，但清理带 Windows 重试退避。
 //
+// 观察项（2026-09-07）：全量并行负载下本包曾偶发 runtime netpoll fatal
+// （单跑/复跑均未复现）。同轮已修复 wrapper 停止后 server 侧连接句柄
+// 泄漏与测试 TempDir 句柄残留两类确定性 flake，netpoll 若再复现，
+// 从「stop 未等 goroutine 退出即关 pipe」的并发 close 方向深挖。
+//
 // 只等 javaPID（cmd.exe）退出还不够：taskkill /T /F 异步终止整棵进程树，孙进程
 // （ping 等）可能比父进程晚消失几百毫秒，其继承的 CWD 句柄仍占用 pidDir——
 // t.TempDir() 的 RemoveAll 届时直接 fatal。故改用自定义清理：RemoveAll 失败时
