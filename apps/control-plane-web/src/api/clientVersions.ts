@@ -200,6 +200,10 @@ export function usePublishClientVersion() {
         cleanExclude: vars.cleanExclude,
         agent: vars.agent ?? undefined,
         note: vars.note,
+      }, {
+        // 修复：发布默认吃 10s 全局超时——大清单/多改动文件发布（服务端构建增量补丁）必然超时失败。
+        // 给足 10 分钟；正常发布经服务端补丁预算收敛在秒级，这里是防御上限。
+        timeout: 600_000,
       })
       return data
     },

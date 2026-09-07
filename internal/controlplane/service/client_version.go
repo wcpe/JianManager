@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -91,12 +92,17 @@ type ClientVersionService struct {
 	// storageChannels 制品存储渠道服务（FR-347，见 ADR-073）：注入后 s3 制品的读取
 	// （预览/代理下载/补丁物化）与 302 预签名经渠道 BlobStore；不注入 = 纯 local（既有测试零改动）。
 	storageChannels *ArtifactStorageChannelService
+	// patchBudget 发布时构建增量 patch 的总时长预算；<=0 用 patchBuildDefaultBudget。测试可注入。
+	patchBudget time.Duration
 }
 
 // NewClientVersionService 创建版本服务。
 func NewClientVersionService(db *gorm.DB, assets *AssetService, channel *ClientChannelService) *ClientVersionService {
 	return &ClientVersionService{db: db, assets: assets, channel: channel}
 }
+
+// SetPatchBudget 覆盖发布 patch 构建总预算（测试/调优用；<=0 回落默认）。
+func (s *ClientVersionService) SetPatchBudget(d time.Duration) { s.patchBudget = d }
 
 // SetEmbeddedCore 注入 CP 内嵌的默认 updater-core 信息（FR-193，见 ADR-045 改写）。
 // 注入后 BuildManifest 的 agent.core 由内嵌 core 自动驱动（version + 三平台同制品）；不注入则省略 agent.core。
@@ -302,6 +308,14 @@ const (
 	manifestPatchTempFileTemplate   = "client-patch-*.zst"
 )
 
+// patch 预算与并发（修复「发布过多改动文件超时/报错」）：patch 是纯加速优化，不是必需数据——
+// 构建慢/失败都不应拖垮发布。默认总预算 30s（超时后剩余文件跳过 patch，玩家侧对它们走全量下载）；
+// 有 zstd 可执行时 4 并发（进程外、内存廉价），内存 fallback 路径恒串行（old/new 全量进内存，防撑爆小内存 VPS）。
+const (
+	patchBuildDefaultBudget = 30 * time.Second
+	patchBuildMaxWorkers    = 4
+)
+
 func (s *ClientVersionService) withPatchArtifacts(channelID string, files []ManifestFile) ([]ManifestFile, error) {
 	out := append([]ManifestFile(nil), files...)
 	ch, err := s.getChannel(channelID)
@@ -326,6 +340,10 @@ func (s *ClientVersionService) withPatchArtifacts(channelID string, files []Mani
 	for _, f := range prevFiles {
 		prevByKey[manifestFilePatchKey(f)] = f
 	}
+
+	// 收集待打 patch 的下标；逐项预算/并发调度。
+	type patchJob struct{ idx int }
+	jobs := make([]patchJob, 0, len(out))
 	for i := range out {
 		if out[i].Patch != nil || out[i].Sync != "strict" || out[i].Artifact.SHA256 == "" {
 			continue
@@ -334,14 +352,66 @@ func (s *ClientVersionService) withPatchArtifacts(channelID string, files []Mani
 		if !ok || prevFile.SHA256 == "" || prevFile.SHA256 == out[i].SHA256 || prevFile.Artifact.SHA256 == "" {
 			continue
 		}
-		patch, ok, err := s.buildPatchArtifact(prevFile, out[i])
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			out[i].Patch = patch
-		}
+		jobs = append(jobs, patchJob{idx: i})
 	}
+	if len(jobs) == 0 {
+		return out, nil
+	}
+
+	budget := s.patchBudget
+	if budget <= 0 {
+		budget = patchBuildDefaultBudget
+	}
+	workers := 1
+	if _, lookErr := exec.LookPath("zstd"); lookErr == nil {
+		workers = patchBuildMaxWorkers
+	}
+	if workers > len(jobs) {
+		workers = len(jobs)
+	}
+
+	jobCh := make(chan patchJob)
+	// stopCh 在预算耗尽时由 AfterFunc 关闭（真实定时器，不依赖逐项 time.Now 的时钟粒度——
+	// Windows 时钟粒度可达 0.5ms+，逐项检查在快路径下会连发多个 job）。耗尽后至多 workers 个在途。
+	stopCh := make(chan struct{})
+	stopTimer := time.AfterFunc(budget, func() { close(stopCh) })
+	defer stopTimer.Stop()
+
+	go func() {
+		defer close(jobCh)
+		for _, job := range jobs {
+			select {
+			case <-stopCh:
+				slog.Warn("客户端分发 patch 预算耗尽，剩余文件跳过补丁", "total", len(jobs), "budget", budget.String())
+				return
+			default:
+			}
+			select {
+			case jobCh <- job:
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobCh {
+				patch, ok, perr := s.buildPatchArtifact(prevByKey[manifestFilePatchKey(out[job.idx])], out[job.idx])
+				switch {
+				case perr != nil:
+					// patch 是优化：单文件构建失败只记日志跳过，绝不让整个发布 500（FR 修复：INTERNAL_ERROR）。
+					slog.Warn("客户端分发 patch 构建失败，跳过该文件补丁", "path", out[job.idx].Path, "error", perr)
+				case ok:
+					out[job.idx].Patch = patch
+				}
+			}
+		}()
+	}
+	wg.Wait()
 	return out, nil
 }
 

@@ -638,7 +638,16 @@ func (h *ClientVersionHandler) respondErr(c *gin.Context, err error) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "CHECKSUM_MISMATCH", "message": err.Error()})
 	default:
 		slog.Error("客户端分发发布端点内部错误", "path", c.Request.URL.Path, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "操作失败"})
+		// 平台管理员专用端点：500 附带简短原因（首行、截断），让运营在界面直接看到「为什么失败」，
+		// 不必再翻服务端日志。端点仅平台管理员可达，不构成信息泄露面。
+		reason := err.Error()
+		if i := strings.IndexByte(reason, '\n'); i >= 0 {
+			reason = reason[:i]
+		}
+		if len(reason) > 200 {
+			reason = reason[:200]
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "操作失败：" + reason})
 	}
 }
 

@@ -1560,4 +1560,6 @@ db<SettingsRow>('settings', () => [
   { id: 4, key: 'database.dsn', value: 'sqlite://****', editable: false, sensitive: true, overridden: false, effectiveImmediately: false },
   { id: 5, key: 'jwt.secret', value: '****', editable: false, sensitive: true, overridden: false, effectiveImmediately: false },
   { id: 6, key: 'debug.mode', value: 'false', editable: true, sensitive: false, overridden: false, effectiveImmediately: true },
+  // github.token（FR-409）：敏感项，回显掩码（与后端 maskSecret 行为一致）。
+  { id: 7, key: 'github.token', value: 'ghp***eed', editable: true, sensitive: true, overridden: false, effectiveImmediately: true },
 ])
