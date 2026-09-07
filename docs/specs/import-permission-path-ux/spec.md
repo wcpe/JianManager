@@ -7,7 +7,7 @@
 ## 1. 背景与目标
 
 ### 问题（用户现场）
-- `读取目录失败: open /home/wxys233: permission denied`：只能点选浏览，失败文案裸 errno，无引导。
+- `读取目录失败: open /home/mcuser: permission denied`：只能点选浏览，失败文案裸 errno，无引导。
 - 无法自己输入绝对路径做探测。
 - 导入后写 `server.properties` 才报 `permission denied`，导入半成功。
 
@@ -104,7 +104,7 @@ onTryFix(path):
 4. 就地 + 根或 server.properties 不可写：提交按钮禁用或提交被拒，并引导 migrate/修复。  
 5. migrate 模式：源可读即可提交（不要求源可写）。  
 6. DOM 测绿；i18n 中英键对称。  
-7. 真机（用户确认）：复现 wxys233 类目录场景至少一条闭环。
+7. 真机（用户确认）：复现 mcuser 类目录场景至少一条闭环。
 
 ## 6. 风险 / 待定
 

@@ -3,7 +3,7 @@
 ## 问题
 
 实例配置的启动命令被附带多余引号，导致 Windows 执行时报错：
-`'"C:\Users\Admin\.jdks\jbr-17.0.12\bin\java.exe\"' 不是内部或外部命令`
+`'"C:\Users\<user>\.jdks\jbr-17.0.12\bin\java.exe\"' 不是内部或外部命令`
 
 ## 根因分析
 

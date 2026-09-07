@@ -73,7 +73,9 @@ func NewS3(cfg S3Config) (Store, error) {
 	}
 	client := cfg.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Minute}
+		// 不设全局 Timeout：大对象上传/下载在慢链路上会被一刀切掐断（如 1GB @ 3MB/s ≈ 5.7min > 5min）。
+		// 超时按操作粒度收敛到各方法的 context（见 reqTimeout/putTimeout）。
+		client = &http.Client{}
 	}
 	return &s3Store{
 		endpoint:  ep,
@@ -104,12 +106,30 @@ func (s *s3Store) objURL(key string) string {
 	return fmt.Sprintf("%s://%s/%s/%s", s.scheme, s.endpoint, s.bucket, s3EscapeKey(s.fullKey(key)))
 }
 
+// putTimeout 按（压缩后）对象大小估算上传超时：保底 10 分钟，按 ≥4MB/s 估增量，上限 60 分钟。
+// 修复：原 5 分钟全局超时把大制品单 PUT 掐死（「上传过大文件报错」）。
+func putTimeout(size int64) time.Duration {
+	t := 10 * time.Minute
+	if extra := time.Duration(size/(4<<20)) * time.Second; extra > 0 {
+		t += extra
+	}
+	if t > 60*time.Minute {
+		t = 60 * time.Minute
+	}
+	return t
+}
+
+// reqTimeout 普通请求（HEAD/DELETE/列举）的超时；Open（大对象流式下载）单独放宽。
+func reqTimeout() time.Duration { return 2 * time.Minute }
+
 func (s *s3Store) PutFile(ctx context.Context, key, srcPath string, size int64) error {
 	f, err := os.Open(srcPath)
 	if err != nil {
 		return fmt.Errorf("打开待上传文件失败: %w", err)
 	}
 	defer f.Close()
+	ctx, cancel := context.WithTimeout(ctx, putTimeout(size))
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, s.objURL(key), f)
 	if err != nil {
 		return err
@@ -128,28 +148,52 @@ func (s *s3Store) PutFile(ctx context.Context, key, srcPath string, size int64) 
 	return nil
 }
 
+// openBody 是 Open 返回的响应体包装：流式大对象的生命周期比 Open 调用本身长，
+// cancel 必须随 Close 释放而不是 defer 在 Open 返回时立即触发——否则请求 ctx 在
+// 调用方开始读之前就被取消，Read 报 context canceled（补丁物化 / 管理面代理下载
+// 等大制品场景必现）。Read/其余行为透传。
+type openBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *openBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
+
 func (s *s3Store) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	// 放宽到 30min：ctx 同时覆盖响应体流式读取（补丁物化/管理面代理下载大制品）。
+	// cancel 不 defer：随 openBody.Close 释放（见 openBody 注释）。
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.objURL(key), nil)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	signV4(req, emptyPayloadHash, s.accessKey, s.secretKey, s.region, s.now().UTC())
 	resp, err := s.client.Do(req)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("S3 下载失败: %w", err)
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		drainClose(resp.Body)
+		cancel()
 		return nil, ErrBlobNotFound
 	}
 	if resp.StatusCode/100 != 2 {
 		drainClose(resp.Body)
+		cancel()
 		return nil, fmt.Errorf("S3 下载失败: HTTP %d", resp.StatusCode)
 	}
-	return resp.Body, nil
+	return &openBody{ReadCloser: resp.Body, cancel: cancel}, nil
 }
 
 func (s *s3Store) Stat(ctx context.Context, key string) (*ObjectInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, reqTimeout())
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, s.objURL(key), nil)
 	if err != nil {
 		return nil, err
@@ -175,6 +219,8 @@ func (s *s3Store) Stat(ctx context.Context, key string) (*ObjectInfo, error) {
 
 // Delete 幂等删除。S3 DELETE 对不存在对象返回 204，无需特判 404。
 func (s *s3Store) Delete(ctx context.Context, key string) error {
+	ctx, cancel := context.WithTimeout(ctx, reqTimeout())
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, s.objURL(key), nil)
 	if err != nil {
 		return err
@@ -222,6 +268,8 @@ func (s *s3Store) ListPage(ctx context.Context, prefix string, limit int, token 
 		q.Set("continuation-token", token)
 	}
 	listURL := fmt.Sprintf("%s://%s/%s?%s", s.scheme, s.endpoint, s.bucket, q.Encode())
+	ctx, cancel := context.WithTimeout(ctx, reqTimeout())
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
 	if err != nil {
 		return nil, "", err

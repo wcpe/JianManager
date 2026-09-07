@@ -79,10 +79,10 @@ describe('ImportServerWizard（FR-302 / FR-374）', () => {
     renderWithProviders(<ImportServerWizard open onClose={vi.fn()} initialNodeId={1} />)
     const input = await screen.findByLabelText(/绝对路径|Absolute path/i)
     await user.clear(input)
-    await user.type(input, '/home/wxys233/server')
+    await user.type(input, '/home/mcuser/server')
     await user.click(screen.getByRole('button', { name: /探测|Inspect/i }))
     expect(inspectMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ nodeId: 1, path: '/home/wxys233/server' }),
+      expect.objectContaining({ nodeId: 1, path: '/home/mcuser/server' }),
       expect.anything(),
     )
   })

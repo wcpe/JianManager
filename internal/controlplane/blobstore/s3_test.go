@@ -65,6 +65,11 @@ type fakeS3 struct {
 	bucket  string
 	objects map[string][]byte // key（不含 bucket 段）→ 内容
 	lastPut http.Header
+	// streamChunk/streamDelay 非零时，GET 按块分批慢速下发（模拟大对象流式传输，
+	// 使响应体在 client.Do 返回后仍未读完——defer cancel() 式缺陷只在这种场景暴露）。
+	streamChunk  int
+	streamDelay  time.Duration
+	lastStreamed string // 最近一次流式下发的 key（测试断言用）
 }
 
 func newFakeS3(t *testing.T, bucket string) (*fakeS3, *httptest.Server) {
@@ -95,6 +100,26 @@ func (f *fakeS3) handle(w http.ResponseWriter, r *http.Request) {
 		b, ok := f.objects[key]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if f.streamChunk > 0 {
+			// 流式下发：显式 Content-Length + 逐块 Write/Flush + 间隔，
+			// 保证 client.Do 返回（收到响应头）时响应体仍在途。
+			f.lastStreamed = key
+			w.Header().Set("Content-Length", intToStr(len(b)))
+			w.WriteHeader(http.StatusOK)
+			flusher, _ := w.(http.Flusher)
+			for start := 0; start < len(b); start += f.streamChunk {
+				end := start + f.streamChunk
+				if end > len(b) {
+					end = len(b)
+				}
+				_, _ = w.Write(b[start:end])
+				if flusher != nil {
+					flusher.Flush()
+				}
+				time.Sleep(f.streamDelay)
+			}
 			return
 		}
 		_, _ = w.Write(b)
@@ -217,6 +242,34 @@ func TestS3Store_RoundTrip_FakeServer(t *testing.T) {
 	require.ErrorIs(t, err, ErrBlobNotFound)
 	_, err = store.Stat(ctx, key)
 	require.ErrorIs(t, err, ErrBlobNotFound)
+}
+
+// TestS3Store_Open_StreamingBody 回归（评审 P0-1）：Open 返回时响应体仍在途的流式场景。
+// 1MB 分块慢速下发，Open 返回后必须仍能读全——防「defer cancel()」式回归：
+// 那种写法在小对象（响应体恰在 Do 返回前已缓冲完）上侥幸通过，
+// 只有超过 socket 缓冲、分块到达的大对象才暴露「Read 报 context canceled」的缺陷。
+func TestS3Store_Open_StreamingBody(t *testing.T) {
+	fake, srv := newFakeS3(t, "jm-artifacts")
+	store := newTestS3Store(t, srv, "jm-prefix")
+	fake.streamChunk = 64 << 10 // 64KB/块，共 16 块
+	fake.streamDelay = 5 * time.Millisecond
+
+	content := make([]byte, 1<<20) // 1MB，远大于 loopback socket 缓冲
+	for i := range content {
+		content[i] = byte(i % 251)
+	}
+	key := "var/artifacts/streaming/big.bin"
+	fake.objects["jm-prefix/"+key] = content
+
+	ctx := context.Background()
+	rc, err := store.Open(ctx, key)
+	require.NoError(t, err)
+	got, err := io.ReadAll(rc)
+	require.NoError(t, rc.Close())
+	require.NoError(t, err, "流式响应体在 Open 返回后必须仍可读全（cancel 不得提前触发）")
+	require.Len(t, got, len(content))
+	require.Equal(t, content, got)
+	require.Equal(t, "jm-prefix/"+key, fake.lastStreamed)
 }
 
 // TestS3Store_List_FakeServer List 走 ListObjectsV2 且返回键剥掉渠道 Prefix。

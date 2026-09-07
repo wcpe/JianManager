@@ -3,8 +3,8 @@ import { joinAbsPath, isPermissionErrorMessage } from './import-server-path'
 
 describe('import-server-path（FR-374）', () => {
   it('joinAbsPath Unix', () => {
-    expect(joinAbsPath('/home/wxys233', 'server.properties')).toBe('/home/wxys233/server.properties')
-    expect(joinAbsPath('/home/wxys233/', 'server.properties')).toBe('/home/wxys233/server.properties')
+    expect(joinAbsPath('/home/mcuser', 'server.properties')).toBe('/home/mcuser/server.properties')
+    expect(joinAbsPath('/home/mcuser/', 'server.properties')).toBe('/home/mcuser/server.properties')
   })
 
   it('joinAbsPath Windows', () => {
