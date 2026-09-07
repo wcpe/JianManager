@@ -2,9 +2,11 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -243,4 +245,33 @@ func TestArtifactVersionDownload_RequiresShortToken(t *testing.T) {
 	r.ServeHTTP(bad, httptest.NewRequest(http.MethodGet, "/probe-artifacts/"+itoa(version.ID)+"/download?token=bad", nil))
 	require.Equal(t, http.StatusForbidden, bad.Code)
 
+}
+
+// rateLimitedReleaseProvider 模拟 GitHub 匿名限额耗尽：ListVersions 直接返回归一后的限流错误。
+type rateLimitedReleaseProvider struct{}
+
+func (rateLimitedReleaseProvider) ListVersions(_ context.Context, _ model.ArtifactSource) ([]service.ArtifactRelease, error) {
+	return nil, fmt.Errorf("请求 GitHub Releases 失败: %w", service.ErrUpdateRateLimited)
+}
+
+// TestArtifactVersionSyncRateLimited 复现线上故障：GitHub 匿名限额（60 次/时/IP）耗尽后同步报
+// 「HTTP 403」。修复后错误归一为限流语义，端点须回 429 + GITHUB_RATE_LIMITED，并透出带配额
+// 重置时间与 github_token 提示的完整 message，让管理员能对症处理。
+func TestArtifactVersionSyncRateLimited(t *testing.T) {
+	db := setupTestDB(t)
+	root, err := dataroot.Init(filepath.Join(t.TempDir(), "data"))
+	require.NoError(t, err)
+	versions := service.NewArtifactVersionService(db, service.NewAssetService(db, root))
+	versions.SetProvider(model.ArtifactProviderGitHubRelease, rateLimitedReleaseProvider{})
+	_, source, err := versions.EnsureDefaultServerProbe()
+	require.NoError(t, err)
+
+	r := gin.New()
+	NewArtifactVersionHandler(versions).RegisterRoutes(r.Group(""))
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/artifact-packages/serverprobe/sources/"+itoa(source.ID)+"/sync", nil))
+	require.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+	require.Equal(t, "GITHUB_RATE_LIMITED", parseJSON(t, w)["error"])
+	require.Contains(t, w.Body.String(), "限流")
 }

@@ -255,6 +255,10 @@ func (h *ArtifactVersionHandler) respondError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrArtifactSourceNotFound), errors.Is(err, service.ErrArtifactVersionNotFound), errors.Is(err, service.ErrNodeNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": err.Error()})
+	case errors.Is(err, service.ErrUpdateRateLimited):
+		// GitHub 匿名限额耗尽（429/403+Remaining:0）是可自愈的暂态：回 429 并透出带配额重置
+		// 时间的完整错误，管理员据此知道等重置或配 update.github_token，而非对着 502 摸不着头脑。
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "GITHUB_RATE_LIMITED", "message": err.Error()})
 	case errors.Is(err, service.ErrArtifactVersionNotCached), errors.Is(err, service.ErrArtifactVersionInUse), errors.Is(err, service.ErrArtifactReleaseInvalid), errors.Is(err, service.ErrArtifactSourceNotSyncable):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 	default:

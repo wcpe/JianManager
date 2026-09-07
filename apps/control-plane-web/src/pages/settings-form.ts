@@ -16,7 +16,7 @@ export type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'network' |
 export function keyCategory(key: string): SettingCategory {
   if (key.startsWith('log.') || key.startsWith('debug.')) return 'logging'
   if (key.startsWith('jdk.') || key.startsWith('graceful_stop.')) return 'runtime'
-  if (key.startsWith('proxy.')) return 'network'
+  if (key.startsWith('proxy.') || key === 'github.token') return 'network'
   if (key.startsWith('backup.')) return 'backup'
   if (key === 'platform.public_base_url' || key.startsWith('invite.')) return 'email'
   return 'security'

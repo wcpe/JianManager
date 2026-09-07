@@ -51,7 +51,7 @@ enroll:
 update:
   github_repo: "wcpe/JianManager"  # GitHub Releases 源 owner/repo；非空即启用（权威来源）。留空回退 feed_url
   channel: "stable"                # stable=取最新正式 release（/releases/latest）；prerelease=取滚动 latest 预发布（FR-182）
-  github_token: ""                 # 可选 GitHub API token，提升限流额度（匿名 60 次/时够手动用）；经 ${ENV} 注入勿硬编码
+  github_token: ""                 # 可选 GitHub API token，提升限流额度（匿名仅 60 次/时/IP，共享出口 IP 极易耗尽 → 403）；自更新与 ServerProbe 制品版本库同步共用，经 ${ENV} 注入勿硬编码
   feed_url: ""                     # 可选回退：release feed JSON 地址（github_repo 空且此项非空时走原 feed 路径）
   binary_base_url: ""              # 私有二进制基址（可选兜底）：无 feed 时按 <base>/<component>-<os>-<arch> 拼下载地址
   allow_insecure: false            # 是否允许 http 下载源（默认仅 https 防中间人篡改；本地/内网自测可开）

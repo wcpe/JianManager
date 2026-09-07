@@ -2,7 +2,10 @@ package router
 
 import (
 	"net/http"
+	"strings"
 	"testing"
+
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // TestSelfUpdate_Check_AdminUnconfigured 未配源时管理员检查更新返回 200 + configured=false。
@@ -143,5 +146,54 @@ func TestSelfUpdate_RefreshCheck_Unconfigured(t *testing.T) {
 	}
 	if cached, _ := resp["cached"].(bool); !cached {
 		t.Fatalf("refresh 成功应写缓存并标 cached=true: %v", resp)
+	}
+}
+
+// TestSelfUpdate_UpgradeNode_FailureAudited 升级失败同样落审计（failed=true + 脱敏错误）。
+// E2E 验收发现：此前 respondUpgradeError 只回 HTTP 不写审计，升级失败历史无法追溯（FR-321 语义）。
+func TestSelfUpdate_UpgradeNode_FailureAudited(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+
+	w := makeRequest(r, http.MethodPost, "/api/v1/self-update/nodes/"+itoa(node.ID)+"/upgrade", map[string]any{}, token)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("未配源应 409，实得 %d: %s", w.Code, w.Body.String())
+	}
+
+	// 审计表应有一条 self_update.node 失败记录，错误内容为脱敏后的原因。
+	var logs []model.AuditLog
+	if err := db.Where("action = ?", "self_update.node").Find(&logs).Error; err != nil {
+		t.Fatalf("查询审计日志失败: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("升级失败应落 1 条审计，实得 %d", len(logs))
+	}
+	if !logs[0].Failed {
+		t.Fatalf("审计记录应标 failed=true: %+v", logs[0])
+	}
+	if logs[0].Error != "未配置更新源" {
+		t.Fatalf("审计错误内容应为「未配置更新源」: %q", logs[0].Error)
+	}
+	if logs[0].TargetID != itoa(node.ID) {
+		t.Fatalf("审计 targetID 应为节点 ID %q: %q", itoa(node.ID), logs[0].TargetID)
+	}
+}
+
+// TestSanitizeWorkerAssetToken 错误摘要中的下载凭据（token=…）统一脱敏（ADR-059）。
+func TestSanitizeWorkerAssetToken(t *testing.T) {
+	in := `节点升级失败: Get "http://cp/worker-assets/1.0.0/windows/amd64/worker?token=eyJhbGciOiJ9": dial tcp: connection refused`
+	got := sanitizeWorkerAssetToken(in)
+	if strings.Contains(got, "eyJhbGciOiJ9") {
+		t.Fatalf("token 明文应被脱敏: %q", got)
+	}
+	if !strings.Contains(got, "token=REDACTED") {
+		t.Fatalf("应替换为 token=REDACTED: %q", got)
+	}
+	// 无 token 的消息原样透传
+	plain := "校验不符: 期望 abc 实得 def"
+	if sanitizeWorkerAssetToken(plain) != plain {
+		t.Fatalf("普通消息不应被改写: %q", sanitizeWorkerAssetToken(plain))
 	}
 }

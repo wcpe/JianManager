@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/mail"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -53,6 +54,12 @@ const (
 	SettingKeyInviteSMTPUsername = "invite.smtp.username"
 	SettingKeyInviteSMTPPassword = "invite.smtp.password"
 	SettingKeyInviteSMTPFrom     = "invite.smtp.from"
+	// SettingKeyGitHubToken 可选 GitHub API token（敏感，脱敏展示）。落库即时生效（各 GitHub API
+	// 调用点在发请求时读取生效值）：自更新（FR-175）与 ServerProbe 制品版本库同步（FR-409）共用，
+	// 非空时请求带 Authorization 把额度从匿名 60 次/时/IP 提升到 5000 次/时——共享出口 IP 耗尽
+	// 匿名额度即 403。基线取 update.github_token（yml/env），优先级 DB > yml > env；值支持
+	// ${ENV_VAR} 引用（与 SMTP 密码同约定）或字面令牌。明文落库的暴露面与 proxy.url 含凭据时一致。
+	SettingKeyGitHubToken = "github.token"
 )
 
 var (
@@ -198,6 +205,8 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		s.editableItem(SettingKeyInviteSMTPUsername, s.defaultValue(SettingKeyInviteSMTPUsername), overrides, true),
 		s.inviteSMTPPasswordItem(overrides),
 		s.editableItem(SettingKeyInviteSMTPFrom, s.defaultValue(SettingKeyInviteSMTPFrom), overrides, true),
+		// GitHub API 令牌（敏感，脱敏展示）：自更新与制品版本库同步发请求时读取生效值，即时生效。
+		s.githubTokenItem(overrides),
 	}
 
 	readOnly := []SettingItem{
@@ -314,6 +323,27 @@ func (s *SettingsService) inviteSMTPPasswordItem(overrides map[string]string) Se
 	}
 }
 
+// githubTokenItem 组装 GitHub API 令牌项（敏感）：已配置时回显掩码（保留首尾各 3 字符，
+// 管理员可据此核对用的是哪个令牌前缀），不回显明文；空串=未配置（回退 yml/env 基线）。
+func (s *SettingsService) githubTokenItem(overrides map[string]string) SettingItem {
+	val, overridden := overrides[SettingKeyGitHubToken]
+	if !overridden {
+		val = s.defaultValue(SettingKeyGitHubToken)
+	}
+	display := ""
+	if trimmed := strings.TrimSpace(val); trimmed != "" {
+		display = maskSecret(trimmed)
+	}
+	return SettingItem{
+		Key:                  SettingKeyGitHubToken,
+		Value:                display,
+		Editable:             true,
+		Sensitive:            true,
+		Overridden:           overridden,
+		EffectiveImmediately: true,
+	}
+}
+
 func maskConfigured(configured bool) string {
 	if configured {
 		return "(已配置)"
@@ -356,6 +386,9 @@ func (s *SettingsService) defaultValue(key string) string {
 	case SettingKeyPlatformPublicBaseURL, SettingKeyInviteSMTPHost, SettingKeyInviteSMTPPort,
 		SettingKeyInviteSMTPUsername, SettingKeyInviteSMTPPassword, SettingKeyInviteSMTPFrom:
 		return ""
+	case SettingKeyGitHubToken:
+		// 基线取 update.github_token（yml/env），DB 覆盖优先于基线（同 proxy.* 语义）。
+		return s.cfg.Update.GitHubToken
 	}
 	return ""
 }
@@ -421,7 +454,8 @@ func isWritableSettingKey(key string) bool {
 		SettingKeyProxyURL, SettingKeyProxyNoProxy,
 		SettingKeyOrphanGracePeriod, SettingKeyOrphanAutoDispose,
 		SettingKeyPlatformPublicBaseURL, SettingKeyInviteSMTPHost, SettingKeyInviteSMTPPort,
-		SettingKeyInviteSMTPUsername, SettingKeyInviteSMTPPassword, SettingKeyInviteSMTPFrom:
+		SettingKeyInviteSMTPUsername, SettingKeyInviteSMTPPassword, SettingKeyInviteSMTPFrom,
+		SettingKeyGitHubToken:
 		return true
 	}
 	return false
@@ -491,6 +525,12 @@ func validateSettingValue(key, val string) error {
 	case SettingKeyInviteSMTPPassword:
 		if val != "" && !environmentReferencePattern.MatchString(val) {
 			return fmt.Errorf("%w: SMTP 密码必须为 ${ENV_VAR} 引用", ErrSettingValueInvalid)
+		}
+	case SettingKeyGitHubToken:
+		// 空=清除覆盖回退 yml/env 基线；非空允许字面令牌或 ${ENV_VAR} 引用，仅挡含空白的明显误贴
+		//（令牌与环境变量名都不含空白）。实际能否通过 GitHub 鉴权由调用结果反馈，不做格式臆测。
+		if strings.TrimSpace(val) != val || strings.ContainsAny(val, " \t\r\n") {
+			return fmt.Errorf("%w: GitHub 令牌不能含空白字符", ErrSettingValueInvalid)
 		}
 	}
 	return nil

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -91,7 +93,7 @@ func (h *SelfUpdateHandler) UpgradeControlPlane(c *gin.Context) {
 
 	from, to, err := h.svc.UpgradeControlPlane(c.Request.Context(), req.Version)
 	if err != nil {
-		h.respondUpgradeError(c, err)
+		h.respondUpgradeError(c, "self_update.control_plane", "", err)
 		return
 	}
 	h.recordAudit(c, "self_update.control_plane", map[string]any{"fromVersion": from, "toVersion": to})
@@ -111,7 +113,7 @@ func (h *SelfUpdateHandler) UpgradeNode(c *gin.Context) {
 
 	from, to, err := h.svc.UpgradeNodeWithBaseURL(c.Request.Context(), id, req.Version, selfUpdateRequestBaseURL(c))
 	if err != nil {
-		h.respondUpgradeError(c, err)
+		h.respondUpgradeError(c, "self_update.node", strconv.FormatUint(uint64(id), 10), err)
 		return
 	}
 	h.recordAudit(c, "self_update.node", map[string]any{"nodeId": id, "fromVersion": from, "toVersion": to})
@@ -122,7 +124,7 @@ func (h *SelfUpdateHandler) UpgradeNode(c *gin.Context) {
 func (h *SelfUpdateHandler) RollbackControlPlane(c *gin.Context) {
 	from, to, err := h.svc.RollbackControlPlane(c.Request.Context())
 	if err != nil {
-		h.respondUpgradeError(c, err)
+		h.respondUpgradeError(c, "self_update.control_plane_rollback", "", err)
 		return
 	}
 	h.recordAudit(c, "self_update.control_plane_rollback", map[string]any{"fromVersion": from, "toVersion": to})
@@ -137,7 +139,7 @@ func (h *SelfUpdateHandler) RollbackNode(c *gin.Context) {
 	}
 	from, to, err := h.svc.RollbackNode(c.Request.Context(), id)
 	if err != nil {
-		h.respondUpgradeError(c, err)
+		h.respondUpgradeError(c, "self_update.node_rollback", strconv.FormatUint(uint64(id), 10), err)
 		return
 	}
 	h.recordAudit(c, "self_update.node_rollback", map[string]any{"nodeId": id, "fromVersion": from, "toVersion": to})
@@ -242,23 +244,45 @@ func (h *SelfUpdateHandler) DownloadWorkerAsset(c *gin.Context) {
 }
 
 // respondUpgradeError 把升级错误映射为合适的 HTTP 状态码。
-func (h *SelfUpdateHandler) respondUpgradeError(c *gin.Context, err error) {
+// 失败同样落审计（failed=true + 脱敏错误摘要）：升级失败历史与成功记录同表可查，
+// 语义对齐 agent/bot 处理器的 RecordResultSafe 用法（E2E 验收发现：此前失败不落审计）。
+func (h *SelfUpdateHandler) respondUpgradeError(c *gin.Context, action, targetID string, err error) {
+	status, code, message := upgradeErrorMessage(err)
+	// 错误摘要可能携带 CP-local 下载 URL（含短期 token）——响应与审计统一脱敏（ADR-059）。
+	message = sanitizeWorkerAssetToken(message)
+	if h.audit != nil {
+		h.audit.RecordResultSafe(h.currentUserID(c), action, "self_update", targetID, "", c.ClientIP(), false, message)
+	}
+	c.JSON(status, gin.H{"error": code, "message": message})
+}
+
+// upgradeErrorMessage 把升级错误映射为 HTTP 状态码、稳定错误码与展示消息。
+func upgradeErrorMessage(err error) (int, string, string) {
 	switch {
 	case errors.Is(err, service.ErrUpdateNotConfigured):
-		c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_NOT_CONFIGURED", "message": "未配置更新源"})
+		return http.StatusConflict, "UPDATE_NOT_CONFIGURED", "未配置更新源"
 	case errors.Is(err, service.ErrUpdateRateLimited):
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "UPDATE_RATE_LIMITED", "message": "GitHub API 限流，请稍后重试或配置 github_token"})
+		return http.StatusTooManyRequests, "UPDATE_RATE_LIMITED", "GitHub API 限流，请稍后重试或配置 github_token"
 	case errors.Is(err, service.ErrUpdateAlreadyLatest):
-		c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_ALREADY_LATEST", "message": "已是最新版本"})
+		return http.StatusConflict, "UPDATE_ALREADY_LATEST", "已是最新版本"
 	case errors.Is(err, service.ErrNoBackup):
-		c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_NO_BACKUP", "message": "无可回滚的备份（尚未升级过或备份缺失）"})
+		return http.StatusConflict, "UPDATE_NO_BACKUP", "无可回滚的备份（尚未升级过或备份缺失）"
 	case errors.Is(err, service.ErrUpdateNoArtifact):
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "UPDATE_NO_ARTIFACT", "message": "更新源无匹配本平台的制品"})
+		return http.StatusUnprocessableEntity, "UPDATE_NO_ARTIFACT", "更新源无匹配本平台的制品"
 	case errors.Is(err, service.ErrNodeOffline):
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "NODE_OFFLINE", "message": "节点未连接"})
+		return http.StatusServiceUnavailable, "NODE_OFFLINE", "节点未连接"
 	default:
-		c.JSON(http.StatusBadGateway, gin.H{"error": "UPDATE_FAILED", "message": err.Error()})
+		return http.StatusBadGateway, "UPDATE_FAILED", err.Error()
 	}
+}
+
+// workerAssetTokenPattern 匹配 Worker 资产下载 URL 的 query token。
+// ADR-059：token 位于 URL query，路由、审计、访问日志与错误响应必须脱敏或不记录明文。
+var workerAssetTokenPattern = regexp.MustCompile(`([?&]token=)[^&\s"']+`)
+
+// sanitizeWorkerAssetToken 脱敏消息中的下载凭据（token=… → token=REDACTED）。
+func sanitizeWorkerAssetToken(msg string) string {
+	return workerAssetTokenPattern.ReplaceAllString(msg, "${1}REDACTED")
 }
 
 func (h *SelfUpdateHandler) respondWorkerAssetError(c *gin.Context, err error) {

@@ -44,6 +44,12 @@ var (
 // ServerProbeUploadMaxSize 限制单个本地上传的 ServerProbe jar 为 64 MiB。
 const ServerProbeUploadMaxSize int64 = 64 << 20
 
+// serverProbeCacheTimeout 是单次缓存下载的自限上限。
+// 缓存下载脱离 HTTP 请求生命周期后必须自带边界，否则异常慢的源会无限占用连接与 goroutine。
+// ServerProbe jar 为数十 MB 量级（v0.3.0 约 39MB），慢链路上实测可达十分钟量级，
+// 故与备份等长耗时操作同取 30 分钟口径，既覆盖极慢链路也避免请求无限悬挂。
+const serverProbeCacheTimeout = 30 * time.Minute
+
 // ArtifactRelease 是 provider 归一后的一个可下载发布资产。
 type ArtifactRelease struct {
 	Version    string
@@ -394,7 +400,13 @@ func (s *ArtifactVersionService) CacheVersion(ctx context.Context, versionID uin
 	if err != nil {
 		return nil, err
 	}
-	asset, err := s.assets.IngestFromURL(ctx, version.SourceURL, IngestParams{
+	// 下载不绑定调用方（HTTP 请求）生命周期：ServerProbe jar 数十 MB，耗时常超浏览器侧
+	// 超时，客户端一断连就会取消请求 ctx，沿用它会把已开始的下载掐断成
+	// 「写入临时文件失败: context canceled」，版本永远停在「尚未缓存」。
+	// 脱离取消链后客户端断连只影响响应回传，下载仍会跑完并落库；同时用自有超时兜底。
+	downloadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serverProbeCacheTimeout)
+	defer cancel()
+	asset, err := s.assets.IngestFromURL(downloadCtx, version.SourceURL, IngestParams{
 		Type:           pkg.AssetType,
 		Name:           pkg.Name,
 		Version:        version.Version,

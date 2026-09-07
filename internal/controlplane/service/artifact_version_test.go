@@ -231,6 +231,78 @@ func TestArtifactVersionService_ProbeDownloadTokenIsBoundToVersionAndWorker(t *t
 	require.Equal(t, token, parsed.Query().Get("token"))
 }
 
+// TestArtifactVersionService_CacheVersionOutlivesCallerContextCancel 复现缓存大 jar 时被
+// 调用方 ctx 取消掐断的缺陷：ServerProbe 0.3.0 约 40MB，下载耗时远超浏览器侧默认超时，
+// 客户端断连会取消 HTTP 请求的 ctx。若缓存下载沿用该 ctx，下载会被中途掐断成
+// 「写入临时文件失败: context canceled」，版本永远停在「尚未缓存」。
+func TestArtifactVersionService_CacheVersionOutlivesCallerContextCancel(t *testing.T) {
+	svc, _ := newArtifactVersionService(t)
+	pkg, source, err := svc.EnsureDefaultServerProbe()
+	require.NoError(t, err)
+
+	jar := []byte("serverprobe-v0.3.0-large-jar-payload")
+	half := len(jar) / 2
+	halfWritten := make(chan struct{})
+	release := make(chan struct{})
+	// 模拟慢速大文件源：先吐一半并保持连接，直到调用方放行或自己观察到客户端断连。
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(jar[:half])
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		close(halfWritten)
+		select {
+		case <-release:
+			_, _ = w.Write(jar[half:])
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+
+	svc.SetProvider(model.ArtifactProviderGitHubRelease, fakeArtifactVersionProvider{releases: []ArtifactRelease{{
+		Version:    "0.3.0",
+		ReleaseRef: "v0.3.0",
+		AssetName:  "ServerProbe-0.3.0.jar",
+		URL:        server.URL + "/ServerProbe-0.3.0.jar",
+		SHA256:     sha256Text(string(jar)),
+	}}})
+	_, err = svc.SyncSource(context.Background(), source.ID)
+	require.NoError(t, err)
+	versions, err := svc.ListVersions(pkg.ID)
+	require.NoError(t, err)
+	require.Len(t, versions, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type cacheResult struct {
+		version *model.ArtifactVersion
+		err     error
+	}
+	done := make(chan cacheResult, 1)
+	go func() {
+		cached, cerr := svc.CacheVersion(ctx, versions[0].ID)
+		done <- cacheResult{version: cached, err: cerr}
+	}()
+
+	<-halfWritten
+	// 等响应头与首个分块送达客户端，确保取消发生在「下载已开始流式传输」之后
+	// （对应真实场景：jar 已传了一半，浏览器侧才超时断连）。
+	time.Sleep(150 * time.Millisecond)
+	cancel() // 浏览器断连：调用方 ctx 取消
+	// 给仍绑定请求 ctx 的实现留出传播取消的时间；脱离请求生命周期的实现不受影响。
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err, "调用方断连不应掐断已开始的缓存下载")
+		require.NotZero(t, got.version.AssetID)
+		require.Equal(t, sha256Text(string(jar)), got.version.Asset.SHA256)
+	case <-time.After(15 * time.Second):
+		t.Fatal("缓存下载未在预期时间内完成")
+	}
+}
+
 func sha256Text(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])

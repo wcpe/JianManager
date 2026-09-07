@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { toast } from 'sonner'
-import { Palette, ScrollText, Cpu, Archive, Lock, ShieldAlert, Network, Mail, type LucideIcon } from 'lucide-react'
+import { Palette, ScrollText, Cpu, Archive, Lock, ShieldAlert, Network, Mail, ExternalLink, type LucideIcon } from 'lucide-react'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { changeLanguage } from '@/i18n'
@@ -45,6 +45,16 @@ const ROLE_PLATFORM_ADMIN = 10
 
 /** 日志级别可选值，用于可编辑项的下拉。 */
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const
+
+/**
+ * GitHub 新建 fine-grained 个人访问令牌页（FR-409）：官方 URL 模板预填表单——
+ * 名字、描述、永不过期（expires_in=none，不传则默认 30 天过期，届时 CP 同步会再次报错）；
+ * 权限参数刻意留空即最小权限——fine-grained 令牌内建对所有公开仓库的只读访问，
+ * 而本令牌唯一用途就是读公开仓库 releases 提升 API 限额。
+ */
+const GITHUB_TOKEN_NEW_URL = `https://github.com/settings/personal-access-tokens/new?name=JianManager&description=${encodeURIComponent(
+  'JianManager 控制台专用：读取公开仓库 Releases 提升 GitHub API 限额（零权限即可）',
+)}&expires_in=none`
 
 const CATEGORY_ICON: Record<SettingCategory, LucideIcon> = {
   appearance: Palette,
@@ -388,7 +398,9 @@ function EditableRow({
   const { t } = useTranslation()
   // 文本类项按键做客户端校验，非法即红框+行内错误。
   const draftError = validateSettingDraft(item.key, value)
-  const isInviteSMTPPassword = item.key === 'invite.smtp.password'
+  // 凭据类输入：密码框遮显 + 关闭自动填充（SMTP 密码 / GitHub API 令牌，FR-063/FR-409）。
+  const isSecretInput = item.key === 'invite.smtp.password' || item.key === 'github.token'
+  const placeholder = item.key === 'invite.smtp.password' ? '${ENV_VAR}' : item.key === 'github.token' ? t('settings.githubTokenPlaceholder', 'github_pat_… 或 ${ENV_VAR}') : undefined
   return (
     <div className="flex items-center justify-between gap-4 px-3 py-2">
       <div className="min-w-0">
@@ -429,18 +441,33 @@ function EditableRow({
           </SelectContent>
         </Select>
       ) : (
-        <div className="w-56">
-          <Input
-            type={isInviteSMTPPassword ? 'password' : 'text'}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            className="h-8"
-            inputMode={item.key === 'backup.retention_days' ? 'numeric' : undefined}
-            placeholder={isInviteSMTPPassword ? '${ENV_VAR}' : undefined}
-            autoComplete={isInviteSMTPPassword ? 'new-password' : undefined}
-            aria-invalid={!!draftError}
-          />
-          <FieldError error={draftError} />
+        <div className="flex items-center gap-2">
+          <div className="w-56">
+            <Input
+              type={isSecretInput ? 'password' : 'text'}
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              className="h-8"
+              inputMode={item.key === 'backup.retention_days' ? 'numeric' : undefined}
+              placeholder={placeholder}
+              autoComplete={isSecretInput ? 'new-password' : undefined}
+              aria-invalid={!!draftError}
+            />
+            <FieldError error={draftError} />
+          </div>
+          {item.key === 'github.token' && (
+            // 快捷创建（FR-409）：新标签直达 GitHub 令牌创建页（名字已预填），创建后复制回填保存。
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              title={t('settings.githubTokenHint')}
+              onClick={() => window.open(GITHUB_TOKEN_NEW_URL, '_blank', 'noopener,noreferrer')}
+            >
+              <ExternalLink className="mr-1 size-3.5" />
+              {t('settings.githubTokenCreate')}
+            </Button>
+          )}
         </div>
       )}
     </div>

@@ -96,16 +96,27 @@ export function useUploadServerProbeVersion() {
       form.append('file', file)
       return api.post<ArtifactVersion>('/artifact-packages/serverprobe/versions/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: SERVER_PROBE_TRANSFER_TIMEOUT_MS,
       }).then((r) => r.data)
     },
     onSuccess: invalidateProbeVersions(qc),
   })
 }
 
+/**
+ * ServerProbe jar 传输类请求的超时（缓存与本地上传共用）。
+ * 共享 api 实例的默认超时仅 10s，而 jar 常达数十 MB（v0.3.0 约 39MB，上传上限 64MiB）：
+ * - 缓存：CP 从 GitHub Releases 拉取整个 jar，慢链路实测十分钟量级；被掐断会让在途下载
+ *   中断成「写入临时文件失败: context canceled」，版本停在「尚未缓存」。
+ * - 本地上传：请求体本身就是 jar，超时即丢失上传体，服务端只看到半截 multipart。
+ * 取值与 CP 侧缓存下载自限超时对齐（30 分钟），既覆盖极慢链路也避免请求无限悬挂。
+ */
+const SERVER_PROBE_TRANSFER_TIMEOUT_MS = 30 * 60 * 1000
+
 export function useCacheServerProbeVersion() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (versionId: number) => api.post<ArtifactVersion>(`/artifact-packages/serverprobe/versions/${versionId}/cache`).then((r) => r.data),
+    mutationFn: (versionId: number) => api.post<ArtifactVersion>(`/artifact-packages/serverprobe/versions/${versionId}/cache`, null, { timeout: SERVER_PROBE_TRANSFER_TIMEOUT_MS }).then((r) => r.data),
     onSuccess: invalidateProbeVersions(qc),
   })
 }

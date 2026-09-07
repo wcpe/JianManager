@@ -324,3 +324,45 @@ func TestCheckUpdate_RateLimitedPropagates(t *testing.T) {
 	require.ErrorIs(t, err, ErrUpdateRateLimited, "限流应从 CheckUpdate 透出")
 	require.True(t, errors.Is(err, ErrUpdateRateLimited))
 }
+
+// TestSelfUpdate_EffectiveGitHubToken 令牌解析：动态读取器（设置面板 github.token）优先于
+// 启动基线；`${ENV_VAR}` 引用经环境变量展开（FR-063/FR-409）。
+func TestSelfUpdate_EffectiveGitHubToken(t *testing.T) {
+	svc := NewSelfUpdateService(newSelfUpdateTestDB(t), cpgrpc.NewClientPool(), SelfUpdateConfig{GitHubToken: "ghp_base"}, nil)
+	require.Equal(t, "ghp_base", svc.effectiveGitHubToken())
+
+	svc.SetGitHubTokenProvider(func() string { return "ghp_dynamic" })
+	require.Equal(t, "ghp_dynamic", svc.effectiveGitHubToken())
+
+	svc.SetGitHubTokenProvider(func() string { return "" })
+	require.Equal(t, "ghp_base", svc.effectiveGitHubToken())
+
+	t.Setenv("JM_TEST_GH_TOKEN", "ghp_env")
+	svc.SetGitHubTokenProvider(func() string { return "${JM_TEST_GH_TOKEN}" })
+	require.Equal(t, "ghp_env", svc.effectiveGitHubToken())
+}
+
+// TestFetchGitHubRelease_SendsEffectiveToken 端到端：自更新 GitHub API 请求携带设置面板的
+// 生效令牌（而非启动基线），保证改设置后无需重启即生效。
+func TestFetchGitHubRelease_SendsEffectiveToken(t *testing.T) {
+	var got string
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	cpName := assetName(ComponentControlPlane)
+	mux.HandleFunc("/assets/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("aaa  " + cpName + "\n"))
+	})
+	mux.HandleFunc("/repos/owner/repo/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"tag_name":"v1.2.3","prerelease":false,"assets":[` +
+			`{"name":"` + cpName + `","browser_download_url":"` + srv.URL + `/assets/` + cpName + `"},` +
+			`{"name":"checksums.txt","browser_download_url":"` + srv.URL + `/assets/checksums.txt"}]}`))
+	})
+
+	svc := newGHService(t, srv.URL, "stable")
+	svc.SetGitHubTokenProvider(func() string { return "ghp_settings" })
+	_, err := svc.fetchGitHubRelease(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "Bearer ghp_settings", got)
+}

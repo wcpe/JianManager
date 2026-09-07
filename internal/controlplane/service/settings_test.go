@@ -369,3 +369,57 @@ func TestDebugMode_BaselineAppliesGinRelease(t *testing.T) {
 	require.NotNil(t, ginDebug)
 	require.False(t, *ginDebug)
 }
+
+// TestGitHubToken_BaselineFromYAMLAndMasked github.token（FR-063/FR-409）：无 DB 覆盖时展示
+// yml/env 基线（update.github_token）的掩码，敏感、可编辑、即时生效；生效值走基线。
+func TestGitHubToken_BaselineFromYAMLAndMasked(t *testing.T) {
+	cfg := testConfig()
+	cfg.Update.GitHubToken = "ghp_baseline123"
+	svc := NewSettingsService(newSettingsTestDB(t), cfg)
+	view, err := svc.Get()
+	require.NoError(t, err)
+
+	item, ok := findItem(view.Editable, SettingKeyGitHubToken)
+	require.True(t, ok)
+	require.True(t, item.Sensitive)
+	require.True(t, item.Editable)
+	require.True(t, item.EffectiveImmediately)
+	require.False(t, item.Overridden)
+	require.Equal(t, "ghp***123", item.Value)
+	require.NotContains(t, item.Value, "baseline", "明文不外泄")
+
+	require.Equal(t, "ghp_baseline123", svc.EffectiveValue(SettingKeyGitHubToken))
+}
+
+// TestGitHubToken_DBOverrideWins DB 覆盖优先于 yml 基线；展示掩码并标注已覆盖。
+func TestGitHubToken_DBOverrideWins(t *testing.T) {
+	db := newSettingsTestDB(t)
+	require.NoError(t, db.Save(&model.PlatformSetting{Key: SettingKeyGitHubToken, Value: "ghp_override99"}).Error)
+	svc := NewSettingsService(db, testConfig())
+	view, err := svc.Get()
+	require.NoError(t, err)
+
+	item, ok := findItem(view.Editable, SettingKeyGitHubToken)
+	require.True(t, ok)
+	require.True(t, item.Overridden)
+	require.Equal(t, "ghp***e99", item.Value)
+	require.Equal(t, "ghp_override99", svc.EffectiveValue(SettingKeyGitHubToken))
+}
+
+// TestGitHubToken_UpdateValidation 白名单可写：接受字面令牌、${ENV_VAR} 引用与空（清除覆盖回退
+// 基线）；拒绝含空白的明显误贴（令牌与环境变量名都不含空白）。
+func TestGitHubToken_UpdateValidation(t *testing.T) {
+	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+
+	require.NoError(t, svc.Update(map[string]string{SettingKeyGitHubToken: "ghp_live"}))
+	require.Equal(t, "ghp_live", svc.EffectiveValue(SettingKeyGitHubToken))
+
+	require.NoError(t, svc.Update(map[string]string{SettingKeyGitHubToken: "${GH_TOKEN}"}))
+	require.Equal(t, "${GH_TOKEN}", svc.EffectiveValue(SettingKeyGitHubToken))
+
+	require.NoError(t, svc.Update(map[string]string{SettingKeyGitHubToken: ""}))
+	require.Empty(t, svc.EffectiveValue(SettingKeyGitHubToken))
+
+	err := svc.Update(map[string]string{SettingKeyGitHubToken: "ghp bad token"})
+	require.ErrorIs(t, err, ErrSettingValueInvalid)
+}

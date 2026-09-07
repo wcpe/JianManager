@@ -258,7 +258,11 @@ func main() {
 	assetSvc.SetHTTPClientProvider(outboundProvider.Client)
 	// 通用制品版本库（FR-409）：版本元数据与既有 CAS 分层，首个接入 ServerProbe 官方 Releases。
 	artifactVersionSvc := service.NewArtifactVersionService(db, assetSvc)
-	artifactVersionSvc.SetProvider(model.ArtifactProviderGitHubRelease, service.NewGitHubReleaseArtifactProvider(outboundProvider.Client))
+	// GitHub Releases provider 复用自更新同源的 update.github_token：匿名 API 限流 60 次/时/IP，
+	// 共享出口 IP 的 CP 同步制品版本时极易被限流成 403，配令牌后额度提升到 5000 次/时。
+	// settingsSvc 就绪后再注入设置面板的运行时令牌读取器（github.token，优先于该基线）。
+	githubReleaseProvider := service.NewGitHubReleaseArtifactProvider(outboundProvider.Client, cfg.Update.GitHubToken)
+	artifactVersionSvc.SetProvider(model.ArtifactProviderGitHubRelease, githubReleaseProvider)
 	if _, _, err := artifactVersionSvc.EnsureDefaultServerProbe(); err != nil {
 		log.Fatalf("初始化 ServerProbe 制品版本库失败: %v", err)
 	}
@@ -463,6 +467,8 @@ func main() {
 	// 探针连接状态取 FR-066 在线名册（IsProbeConnected）。
 	probeUpdateSvc := service.NewProbeUpdateService(db, pool, pluginBridgeSvc, artifactVersionSvc)
 	probeUpdateSvc.SetConnChecker(playerEventSvc.IsProbeConnected)
+	// FR-411 补口：部署探针前为导入/历史实例补分配缺失的探针端口（probe_port=0 会写出坏配置）。
+	probeUpdateSvc.SetInstanceService(instanceSvc)
 
 	// 告警分发器（FR-085）：所有触发源经此统一去抖聚合 / 静默 / 分级路由 / 落库 / 通知。
 	alertDispatcher := service.NewAlertDispatcher(db)
@@ -557,6 +563,11 @@ func main() {
 	// 平台配置：在 YAML+env 基线上叠加 DB 覆盖层，白名单项可运行时调整（FR-063/ADR-015）。
 	// 构造时重放已落库的可即时生效覆盖（如日志级别），保证重启后覆盖仍生效。
 	settingsSvc := service.NewSettingsService(db, cfg)
+	// GitHub API 令牌改从设置面板读生效值（github.token，DB > update.github_token 基线）：
+	// 自更新与 ServerProbe 制品版本库同步共用同一读取器，保存即生效、无需重启（FR-409）。
+	githubTokenReader := func() string { return settingsSvc.EffectiveValue(service.SettingKeyGitHubToken) }
+	githubReleaseProvider.SetTokenProvider(githubTokenReader)
+	selfUpdateSvc.SetGitHubTokenProvider(githubTokenReader)
 	// 把设置读取器注入消费方，使覆盖项真生效（FR-063）：
 	//   JDK 安装读 jdk.mirror.<vendor>；实例启动读 graceful_stop.timeout 随启动下发；
 	//   备份裁剪读 backup.retention_days 定期回收旧备份。

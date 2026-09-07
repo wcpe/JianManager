@@ -88,6 +88,9 @@ type SelfUpdateService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
 	cfg  SelfUpdateConfig
+	// githubTokenFunc 运行时令牌读取器（settings.github.token 生效值，FR-063），
+	// 非空返回值优先于 cfg.GitHubToken 基线；使设置面板改令牌即时生效。由 main 注入。
+	githubTokenFunc func() string
 	root *dataroot.Root
 	// httpClient 出站 client（经进程级代理，FR-174/ADR-037）：拉 feed 与 CP 自身二进制下载共用。
 	// 为 nil 时回退 http.DefaultClient（向后兼容）。
@@ -131,6 +134,27 @@ func (s *SelfUpdateService) SetHTTPClient(c *http.Client) {
 // 使全局代理改动即时生效（CP「检查更新」立即走新代理）。优先于固定 client。
 func (s *SelfUpdateService) SetHTTPClientProvider(p func() *http.Client) {
 	s.httpProvider = p
+}
+
+// SetGitHubTokenProvider 注入运行时令牌读取器（settings.github.token 生效值，FR-063/FR-409）：
+// 非空返回值优先于启动基线 cfg.GitHubToken，使设置面板改令牌即时生效。由 main 装配。
+func (s *SelfUpdateService) SetGitHubTokenProvider(fn func() string) {
+	if s == nil {
+		return
+	}
+	s.githubTokenFunc = fn
+}
+
+// effectiveGitHubToken 解析当前生效令牌：运行时读取器 > 启动基线；`${ENV_VAR}` 引用经环境变量展开。
+func (s *SelfUpdateService) effectiveGitHubToken() string {
+	value := ""
+	if s != nil && s.githubTokenFunc != nil {
+		value = strings.TrimSpace(s.githubTokenFunc())
+	}
+	if value == "" && s != nil {
+		value = strings.TrimSpace(s.cfg.GitHubToken)
+	}
+	return resolveGitHubTokenValue(value)
 }
 
 // outboundClient 返回出站 client：优先运行时持有者（取当前），其次固定注入，再回退 DefaultClient。

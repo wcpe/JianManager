@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   diffSettings,
   hasUnsavedChanges,
+  keyCategory,
   validateSettingDraft,
   hasInvalidDraft,
   type DraftDiffItem,
@@ -90,5 +91,15 @@ describe('hasInvalidDraft', () => {
   })
   it('草稿缺省回落当前值（合法）为 false', () => {
     expect(hasInvalidDraft(items, {})).toBe(false)
+  })
+})
+
+describe('keyCategory（github.token 归网络类，与出站代理同面板）', () => {
+  it('github.token 落 network，其余前缀规则不变', () => {
+    expect(keyCategory('github.token')).toBe('network')
+    expect(keyCategory('proxy.url')).toBe('network')
+    expect(keyCategory('log.level')).toBe('logging')
+    expect(keyCategory('invite.smtp.password')).toBe('email')
+    expect(keyCategory('jwt.secret')).toBe('security')
   })
 })

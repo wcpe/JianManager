@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
@@ -83,5 +83,24 @@ describe('SettingsPage（mock 假后端）', () => {
     expect(validateSettingDraft('platform.public_base_url', 'https://panel.example.com?source=test')).toBe('settings.invalidPlatformPublicBaseUrl')
     expect(validateSettingDraft('platform.public_base_url', 'https://panel.example.com#invite')).toBe('settings.invalidPlatformPublicBaseUrl')
     expect(validateSettingDraft('platform.public_base_url', 'http://user:pass@panel.example.com')).toBe('settings.invalidPlatformPublicBaseUrl')
+  })
+
+  // github.token（FR-409）：网络分类可编辑 + 快捷创建按钮新标签打开 GitHub fine-grained 令牌创建页（名字/描述/永不过期预填）。
+  it('github.token 归网络分类，快捷按钮直达 GitHub 创建页', async () => {
+    loginAsPlatformAdmin()
+    const user = userEvent.setup()
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+    renderWithProviders(<SettingsPage />)
+
+    await user.click(await screen.findByRole('button', { name: /网络/ }))
+    expect(await screen.findByText('github.token')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /去 GitHub 创建/ }))
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://github.com/settings/personal-access-tokens/new?name=JianManager&description=JianManager%20%E6%8E%A7%E5%88%B6%E5%8F%B0%E4%B8%93%E7%94%A8%EF%BC%9A%E8%AF%BB%E5%8F%96%E5%85%AC%E5%BC%80%E4%BB%93%E5%BA%93%20Releases%20%E6%8F%90%E5%8D%87%20GitHub%20API%20%E9%99%90%E9%A2%9D%EF%BC%88%E9%9B%B6%E6%9D%83%E9%99%90%E5%8D%B3%E5%8F%AF%EF%BC%89&expires_in=none',
+      '_blank',
+      'noopener,noreferrer',
+    )
+    openSpy.mockRestore()
   })
 })

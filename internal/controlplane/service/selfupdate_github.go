@@ -199,7 +199,7 @@ func (s *SelfUpdateService) getGitHubRelease(ctx context.Context, endpoint strin
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if tok := strings.TrimSpace(s.cfg.GitHubToken); tok != "" {
+	if tok := s.effectiveGitHubToken(); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 
@@ -247,7 +247,7 @@ func (s *SelfUpdateService) fetchChecksums(ctx context.Context, url string) (map
 	if err != nil {
 		return nil, fmt.Errorf("构造 checksums 请求失败: %w", err)
 	}
-	if tok := strings.TrimSpace(s.cfg.GitHubToken); tok != "" {
+	if tok := s.effectiveGitHubToken(); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	resp, err := s.outboundClient().Do(req)
