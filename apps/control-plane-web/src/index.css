@@ -76,6 +76,10 @@
 }
 
 :root {
+  /* color-scheme 让浏览器原生件（滚动条/表单控件/插入符）跟随明暗；
+     mode=system 时明暗 class 随系统切换，原生件无需额外规则即保持正确观感。 */
+  color-scheme: light;
+
   /* A+C 亮色控制台 token：冷灰工作区、白面板、Jian 绿主操作、钴蓝信息链接。 */
   --background: #f5f6f8;
   --foreground: #172033;
@@ -121,6 +125,8 @@
 }
 
 .dark {
+  color-scheme: dark;
+
   /* B 方案暗色控制台 token：低亮深底、冷灰面板、紫蓝主操作，保留 C 的拓扑标识语言。 */
   --background: #0f141b;
   --foreground: #e7edf6;
@@ -163,19 +169,41 @@
   --workspace-bg-image: none;
 }
 
-/* 第二主题 · 青绿 #14B8A6（FR-164）：与明暗正交，仅覆盖品牌变量组
-   （--primary/--primary-foreground/--accent/--accent-foreground/--ring/--brand-shadow/--chart-1）。
-   结构色（背景/卡片/边框）与状态色（--status-*）不动；Jian 绿为默认（无 data-theme 即承 :root/.dark）。
-   选择器特异性 [data-theme="teal"] 等于单类，与 :root 同级但因书写在后而胜出；
-   暗色用 [data-theme="teal"].dark 叠加，特异性高于 .dark 单类，正交生效。 */
+/* ── 主题色覆盖组（FR-164 扩展）：每套主题「品牌 + 结构」完整 token 组 ──
+   与明暗正交：亮色 [data-theme="x"]（特异性等于单类，书写在 :root/.dark 之后而胜出）；
+   暗色 [data-theme="x"].dark（特异性高于 .dark 单类，正交生效）。
+   除默认 indigo（承 :root/.dark 根变量，零回归）外，每套主题按自身色相调温：
+   结构色（背景/卡片/边框/次要面）带各主题的色温倾向，明暗两套都覆盖——
+   这是「切主题观感变化大」的关键；品牌 7 变量（primary/accent/ring/brand-shadow/chart-1 等）
+   决定主操作与晕染色。--status-* 语义状态色与 --chart-2..5 全局不动。
+   --workspace-bg-image：亮色组不声明即继承 :root 品牌图；暗色组不声明即继承 .dark 的 none（别给暗色加图）。
+   暗色下 .jm-console-shell 等结构覆写用 color-mix 基于 --card/--background/--primary 计算，自动跟主题。 */
+
+/* 第二主题 · 青绿 teal：微青灰结构色 + 青绿品牌色。品牌色相沿用原值；
+   亮色按钮文本由近白改为深青墨（近白对 oklch(0.704) 青绿仅 2.39:1，不达 4.5:1；
+   深青墨实测 7.18:1），暗色本就是深底思路不变。仅新增结构色。 */
 [data-theme="teal"] {
   --primary: oklch(0.704 0.123 183);
-  --primary-foreground: oklch(0.985 0.012 183);
+  --primary-foreground: oklch(0.2 0.04 183);
   --accent: oklch(0.955 0.028 183);
   --accent-foreground: oklch(0.62 0.11 183);
   --ring: oklch(0.704 0.123 183);
   --brand-shadow: 20 184 166;
   --chart-1: oklch(0.704 0.123 183);
+
+  /* 结构色：白卡片承青灰底的冷青倾向 */
+  --background: #f2f6f5;
+  --foreground: #122b28;
+  --card: #ffffff;
+  --card-foreground: #122b28;
+  --popover: #ffffff;
+  --popover-foreground: #122b28;
+  --secondary: #e6efed;
+  --secondary-foreground: #1f3d39;
+  --muted: #f5fafa;
+  --muted-foreground: #5d7a75;
+  --border: #d5e3e0;
+  --input: #d5e3e0;
 }
 
 [data-theme="teal"].dark {
@@ -186,6 +214,171 @@
   --ring: oklch(0.76 0.12 183);
   --brand-shadow: 45 212 191;
   --chart-1: oklch(0.76 0.12 183);
+
+  /* 结构色：低亮深底带青温，与暗色默认（冷墨蓝）区分 */
+  --background: #0c1514;
+  --foreground: #e2efec;
+  --card: #12211f;
+  --card-foreground: #e2efec;
+  --popover: #132320;
+  --popover-foreground: #e2efec;
+  --secondary: #1b2f2c;
+  --secondary-foreground: #e2efec;
+  --muted: #162522;
+  --muted-foreground: #93aca6;
+  --border: #243b36;
+  --input: #2f4c46;
+}
+
+/* 海洋蓝 ocean：冷蓝灰结构色 + 钴蓝主操作（#2563eb 系），运维台「冷静可靠」的观感。 */
+[data-theme="ocean"] {
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --accent: #e3ecfb;
+  --accent-foreground: #1d4ed8;
+  --ring: #2563eb;
+  --brand-shadow: 37 99 235;
+  --chart-1: #2563eb;
+
+  /* 结构色：冷蓝灰底、纯蓝墨前景 */
+  --background: #f2f5f9;
+  --foreground: #14202e;
+  --card: #ffffff;
+  --card-foreground: #14202e;
+  --popover: #ffffff;
+  --popover-foreground: #14202e;
+  --secondary: #e5ecf4;
+  --secondary-foreground: #22354a;
+  --muted: #f6f9fc;
+  --muted-foreground: #5f7189;
+  --border: #d2dce8;
+  --input: #d2dce8;
+}
+
+[data-theme="ocean"].dark {
+  /* 暗色主色提亮保证按钮文本对比（深蓝墨文字 #0b1a33 vs #6d9cff） */
+  --primary: #6d9cff;
+  --primary-foreground: #0b1a33;
+  --accent: #1f3352;
+  --accent-foreground: #cfe0ff;
+  --ring: #6d9cff;
+  --brand-shadow: 109 156 255;
+  --chart-1: #6d9cff;
+
+  /* 结构色：蓝墨深底，比暗色默认更深一档的冷蓝温 */
+  --background: #0d1420;
+  --foreground: #e3ebf7;
+  --card: #141e2e;
+  --card-foreground: #e3ebf7;
+  --popover: #152031;
+  --popover-foreground: #e3ebf7;
+  --secondary: #1e2b3e;
+  --secondary-foreground: #e3ebf7;
+  --muted: #182334;
+  --muted-foreground: #93a5bd;
+  --border: #26364c;
+  --input: #31445d;
+}
+
+/* 紫罗兰 violet：冷紫灰结构色 + 紫罗兰主操作（#7c3aed 系）。 */
+[data-theme="violet"] {
+  --primary: #7c3aed;
+  --primary-foreground: #ffffff;
+  --accent: #efe7fd;
+  --accent-foreground: #6d28d9;
+  --ring: #7c3aed;
+  --brand-shadow: 124 58 237;
+  --chart-1: #7c3aed;
+
+  /* 结构色：冷紫灰底、紫墨前景 */
+  --background: #f4f3f8;
+  --foreground: #1d1830;
+  --card: #ffffff;
+  --card-foreground: #1d1830;
+  --popover: #ffffff;
+  --popover-foreground: #1d1830;
+  --secondary: #ebe8f4;
+  --secondary-foreground: #322a4a;
+  --muted: #f8f7fb;
+  --muted-foreground: #6b6580;
+  --border: #dcd8e8;
+  --input: #dcd8e8;
+}
+
+[data-theme="violet"].dark {
+  /* 暗色用较亮的紫蓝 #9b7bff，深紫墨文字保证对比 */
+  --primary: #9b7bff;
+  --primary-foreground: #17102e;
+  --accent: #322a52;
+  --accent-foreground: #ded4ff;
+  --ring: #9b7bff;
+  --brand-shadow: 155 123 255;
+  --chart-1: #9b7bff;
+
+  /* 结构色：紫墨深底，冷紫温 */
+  --background: #12101d;
+  --foreground: #e9e5f5;
+  --card: #1a1728;
+  --card-foreground: #e9e5f5;
+  --popover: #1b1829;
+  --popover-foreground: #e9e5f5;
+  --secondary: #262138;
+  --secondary-foreground: #e9e5f5;
+  --muted: #201c30;
+  --muted-foreground: #9d97b3;
+  --border: #2e2945;
+  --input: #3a3455;
+}
+
+/* 落日橙 sunset：暖灰结构色 + 落日橙主操作（#ea8a3a 系）。
+   橙色亮度较高，按钮文本用深琥珀墨（对 #ea8a3a 对比约 6:1），不走白字。 */
+[data-theme="sunset"] {
+  --primary: #ea8a3a;
+  --primary-foreground: #331c04;
+  --accent: #fdeedd;
+  --accent-foreground: #b45309;
+  --ring: #ea8a3a;
+  --brand-shadow: 234 138 58;
+  --chart-1: #ea8a3a;
+
+  /* 结构色：暖灰底、琥珀墨前景 */
+  --background: #f7f4f0;
+  --foreground: #2b2119;
+  --card: #ffffff;
+  --card-foreground: #2b2119;
+  --popover: #ffffff;
+  --popover-foreground: #2b2119;
+  --secondary: #f0e9e1;
+  --secondary-foreground: #453628;
+  --muted: #faf7f3;
+  --muted-foreground: #6f6459;
+  --border: #e4dcd2;
+  --input: #e4dcd2;
+}
+
+[data-theme="sunset"].dark {
+  /* 暗色主色提亮为 #f5a35c，深琥珀墨文字对比充足 */
+  --primary: #f5a35c;
+  --primary-foreground: #2b1601;
+  --accent: #45301c;
+  --accent-foreground: #ffd9ad;
+  --ring: #f5a35c;
+  --brand-shadow: 245 163 92;
+  --chart-1: #f5a35c;
+
+  /* 结构色：暖棕深底，暖温 */
+  --background: #16120e;
+  --foreground: #f2e9df;
+  --card: #201a14;
+  --card-foreground: #f2e9df;
+  --popover: #211b15;
+  --popover-foreground: #f2e9df;
+  --secondary: #2c241b;
+  --secondary-foreground: #f2e9df;
+  --muted: #241e17;
+  --muted-foreground: #ada094;
+  --border: #372e24;
+  --input: #463a2d;
 }
 
 /* 呼吸灯（FR-163）：运行对象脉动光环。环色取 currentColor，套用方设 text-* 即定色。 */
@@ -339,6 +532,11 @@ body {
   font-size: 13px;
   margin: 0;
   min-width: 0;
+  /* 主题切换平滑过渡：只对 body 底色/前景色做短过渡（时长/缓动取 motion token），
+     避免全局 * 过渡的性能灾难；卡片/面板等已有各自的 [data-slot='panel'] 等过渡。 */
+  transition:
+    background-color var(--motion-duration-normal) var(--motion-easing-standard),
+    color var(--motion-duration-normal) var(--motion-easing-standard);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

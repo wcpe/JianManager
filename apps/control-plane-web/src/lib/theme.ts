@@ -1,13 +1,19 @@
 /**
  * 主题纯逻辑（FR-164 全局双主题 + 明暗）。
  *
- * 主题色（colorTheme: indigo|teal）与明暗（mode: light|dark|system）**正交**，各自 localStorage 持久。
+ * 主题色（colorTheme: indigo|teal|ocean|violet|sunset）与明暗（mode: light|dark|system）**正交**，
+ * 各自 localStorage 持久。主题色从 2 种扩到 5 种后，每套主题在 index.css 拥有「品牌 + 结构」完整
+ * token 组（背景/卡片/边框随主题色相调温），CSS 侧的叠加规则不变：indigo 承 :root/.dark 根变量，
+ * 其余主题用 [data-theme]（亮）与 [data-theme].dark（暗）覆盖，特异性保证与明暗正交。
  * 纯函数（解析/循环/属性决策）可单测；DOM 套用与系统媒体查询封装为薄 helper，供 store 与 app 入口共享，
  * 保证「明暗初始化提到入口、登录页也套」与首屏无闪一处实现、不重复。
  */
 
-/** 主题色：Jian 绿为默认（兼容旧 indigo 存储值，无 data-theme，承根变量）；青绿为第二主题。 */
-export type ColorTheme = 'indigo' | 'teal'
+/** 主题色：indigo（Jian 绿）为默认（兼容旧存储值，无 data-theme，承根变量）；其余 4 色见 index.css 覆盖组。 */
+export type ColorTheme = 'indigo' | 'teal' | 'ocean' | 'violet' | 'sunset'
+
+/** 主题色全集：顺序即 ThemeSwitcher 圆点的 UI 展示顺序。 */
+export const COLOR_THEMES: readonly ColorTheme[] = ['indigo', 'teal', 'ocean', 'violet', 'sunset']
 
 /** 明暗偏好三态。 */
 export type ThemeMode = 'light' | 'dark' | 'system'
@@ -21,9 +27,11 @@ export const MODE_KEY = 'theme'
 /** 主题色持久键。 */
 export const COLOR_THEME_KEY = 'colorTheme'
 
-/** 将任意持久值/输入归一为合法主题色，未知回退 indigo（默认品牌主题）。 */
+/** 将任意持久值/输入归一为合法主题色，未知回退 indigo（默认品牌主题；旧用户 teal 等继续有效）。 */
 export function resolveColorTheme(value: string | null | undefined): ColorTheme {
-  return value === 'teal' ? 'teal' : 'indigo'
+  return value !== null && value !== undefined && (COLOR_THEMES as readonly string[]).includes(value)
+    ? (value as ColorTheme)
+    : 'indigo'
 }
 
 /** 将任意持久值/输入归一为合法明暗三态，未知回退 system。 */
@@ -33,15 +41,16 @@ export function resolveMode(value: string | null | undefined): ThemeMode {
 
 /**
  * 主题色 → `<html data-theme>` 属性值决策：
- * indigo=null（移除属性，回落 :root 根品牌变量）；teal="teal"（命中 [data-theme="teal"] 覆盖组）。
+ * indigo=null（移除属性，回落 :root 根品牌变量）；其余 → 自身字符串（命中对应 [data-theme] 覆盖组）。
  */
 export function colorThemeAttr(theme: ColorTheme): string | null {
-  return theme === 'teal' ? 'teal' : null
+  return theme === 'indigo' ? null : theme
 }
 
-/** 主题色双向循环（圆点直选之外的快捷切换备用）。 */
+/** 主题色按 COLOR_THEMES 顺序双向循环（圆点直选之外的快捷切换备用）。 */
 export function cycleColorTheme(theme: ColorTheme): ColorTheme {
-  return theme === 'indigo' ? 'teal' : 'indigo'
+  const index = COLOR_THEMES.indexOf(theme)
+  return COLOR_THEMES[(index + 1) % COLOR_THEMES.length]
 }
 
 /** 明暗三态循环 light → dark → system → light。 */

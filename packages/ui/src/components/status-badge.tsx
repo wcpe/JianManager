@@ -43,7 +43,7 @@ export function StatusBadge({
         className,
       )}
     >
-      {dot && <span className={cn('size-1.5 shrink-0 rounded-full', DOT_CLASS[level], pulse && 'animate-pulse')} />}
+      {dot && <span className={cn('size-1.5 shrink-0 rounded-full', DOT_CLASS[level], pulse && 'animate-pulse motion-reduce:animate-none')} />}
       {label}
     </span>
   )
