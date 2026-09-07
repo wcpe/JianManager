@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@jianmanager/ui/components/button'
+import { copyToClipboard } from '@/lib/clipboard'
 import { useSessionEvents } from './SessionEventProvider'
 
 export function SessionConfig() {
@@ -25,12 +26,12 @@ export function SessionConfig() {
         : '')
 
   const copy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      toast.success(t('common.copied', '已复制'))
-    } catch {
-      toast.error(t('common.copyFailed'))
-    }
+    // 统一走 copyToClipboard：面板常跑在 http://<LAN-IP>:50100 非安全上下文，
+    // 那里 navigator.clipboard 为 undefined，裸调 writeText 必抛错、复制永远失败；
+    // 封装内有 execCommand 回退（FR-188），非安全上下文下仍能复制成功。
+    const ok = await copyToClipboard(text)
+    if (ok) toast.success(t('common.copied', '已复制'))
+    else toast.error(t('common.copyFailed'))
   }
 
   return (

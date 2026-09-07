@@ -20,7 +20,8 @@ describe('InstanceConsolePage 崩溃诊断卡（FR-313）', () => {
     renderWithProviders(<InstanceConsolePage instanceId={3} />, { route: '/instances/3' })
 
     const card = await screen.findByTestId('crash-diagnostics')
-    expect(within(card).getByText('崩溃诊断')).toBeInTheDocument()
+    // 快照异步到达；无快照时该段只显示一行灰字（FR-423 空态收缩），标题随数据出现。
+    expect(await within(card).findByText('崩溃诊断')).toBeInTheDocument()
 
     const rows = await within(card).findAllByRole('button', { expanded: false })
     expect(rows).toHaveLength(2)

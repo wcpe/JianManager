@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useEffect } from 'react'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -9,6 +9,7 @@ import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import ResourceExplorer, { type ConfigCapabilities } from './ResourceExplorer'
+import { resetClipboardBusForTests } from './explorer-clipboard-bus'
 
 /**
  * 资源管理器（文件管理器主视图）强断言（FR-204 文件归档域）。
@@ -18,6 +19,12 @@ import ResourceExplorer, { type ConfigCapabilities } from './ResourceExplorer'
  */
 
 describe('ResourceExplorer（mock 假后端）', () => {
+  // 剪贴板真源是模块级的实例总线，跨用例残留（如上一例剪切后部分失败保留的条目）会让
+  // 「粘贴不可用」这类前置条件失真。每例重置，用例间互不影响。
+  beforeEach(() => {
+    resetClipboardBusForTests()
+  })
+
   it('渲染工作目录种子：根级文件与目录', async () => {
     loginMockUser()
     renderWithProviders(<ResourceExplorer instanceId={1} />)
@@ -105,7 +112,7 @@ describe('ResourceExplorer（mock 假后端）', () => {
 
     await user.dblClick(await screen.findByText('large.log'))
     expect(await screen.findByText(/文件过大/)).toBeInTheDocument()
-    // 预览区与工具栏各有「下载」：断言至少存在可点的预览下载入口
+    // 预览区保留「下载」入口（FR-422 后工具栏的下载仅在有选中时明文出现，此处无选中）。
     expect(screen.getAllByRole('button', { name: '下载' }).length).toBeGreaterThanOrEqual(1)
 
     await user.dblClick(await screen.findByText('icon.png'))
@@ -139,7 +146,11 @@ describe('ResourceExplorer（mock 假后端）', () => {
       await user.dblClick(plugins)
     }
     expect(await screen.findByText('config.yml')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /粘贴/ }))
+    // FR-422：粘贴收进工具栏「更多操作」下拉（低频动作），故先开下拉再点条目。
+    await user.click(screen.getByRole('button', { name: '更多操作' }))
+    const pasteItem = await screen.findByRole('menuitem', { name: /粘贴/ })
+    expect(pasteItem).not.toHaveAttribute('aria-disabled', 'true')
+    await user.click(pasteItem)
 
     const status = await screen.findByRole('status')
     await waitFor(() => expect(status).toHaveTextContent('已完成 2/2'))
@@ -244,11 +255,19 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(await screen.findByText('locked.txt')).toBeInTheDocument()
     expect(screen.getByTitle('不可写')).toBeInTheDocument()
 
-    // 地址栏跳转
+    // 地址栏跳转。FR-422：默认位展示面包屑，点「编辑路径」才换出可输入的地址栏
+    //（同一条横栏内互换，不再面包屑与输入框各占一行）。
+    expect(screen.queryByLabelText('地址栏')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '编辑路径' }))
     const addr = screen.getByLabelText('地址栏')
     await user.clear(addr)
     await user.type(addr, 'plugins{Enter}')
     expect(await screen.findByText('config.yml')).toBeInTheDocument()
+    // 提交后退回面包屑：路径段可点，且不再有第二份路径 UI。
+    expect(screen.queryByLabelText('地址栏')).not.toBeInTheDocument()
+    expect(
+      within(screen.getByRole('navigation', { name: '路径导航' })).getByRole('button', { name: 'plugins' }),
+    ).toBeInTheDocument()
 
     // 后退回根
     const back = screen.getByRole('button', { name: '后退' })
@@ -263,6 +282,85 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(screen.getByRole('button', { name: '列表' })).toHaveAttribute('aria-pressed', 'true')
     await user.click(screen.getByRole('button', { name: '详细信息' }))
     expect(screen.getByRole('button', { name: '详细信息' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('FR-422：分段/导航/面包屑/工具/视图同处一条横栏，面包屑只一份', async () => {
+    loginMockUser()
+    renderWithProviders(
+      <ResourceExplorer instanceId={1} toolbarLeading={<button type="button">分段占位</button>} />,
+    )
+    await screen.findByText('server.properties')
+
+    // 原先四条横栏（分段 / 导航+地址栏+视图 / 面包屑 / 八个平铺按钮）现在同处一个横栏容器。
+    const bar = screen.getByTestId('explorer-toolbar')
+    expect(within(bar).getByRole('button', { name: '分段占位' })).toBeInTheDocument()
+    expect(within(bar).getByRole('button', { name: '后退' })).toBeInTheDocument()
+    expect(within(bar).getByRole('button', { name: '前进' })).toBeInTheDocument()
+    expect(within(bar).getByRole('navigation', { name: '路径导航' })).toBeInTheDocument()
+    expect(within(bar).getByRole('button', { name: '新建' })).toBeInTheDocument()
+    expect(within(bar).getByRole('button', { name: '上传' })).toBeInTheDocument()
+    expect(within(bar).getByRole('button', { name: '搜索' })).toBeInTheDocument()
+    expect(within(bar).getByRole('button', { name: '更多操作' })).toBeInTheDocument()
+    expect(within(bar).getByRole('button', { name: '详细信息' })).toBeInTheDocument()
+
+    // 病症之一是「路径输入框里一份、下面再渲染一份」——现在全局只有一份路径 UI。
+    expect(screen.getAllByRole('navigation', { name: '路径导航' })).toHaveLength(1)
+    expect(screen.queryByLabelText('地址栏')).not.toBeInTheDocument()
+
+    // 目录汇总取自真实列表（种子根目录 3 项 + 唯一文件的字节数），不是写死的装饰。
+    expect(within(bar).getByRole('button', { name: '编辑路径' })).toHaveTextContent(/^3 项 · \d+ B$/)
+  })
+
+  it('FR-422：收进「更多操作」的动作仍可达、可键盘打开、可触发', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    renderWithProviders(<ResourceExplorer instanceId={1} />)
+    await screen.findByText('server.properties')
+
+    const bar = screen.getByTestId('explorer-toolbar')
+    const more = within(bar).getByRole('button', { name: '更多操作' })
+
+    // 键盘可达：聚焦下拉触发器后回车即展开（Radix DropdownMenu 语义）。
+    more.focus()
+    await user.keyboard('{Enter}')
+    const menu = await screen.findByRole('menu')
+
+    // 收进下拉 ≠ 删掉：五个低频动作全在，且 disabled 语义与原平铺按钮逐一对应
+    //（无选中 → 下载/删除/清空选择 不可用；剪贴板空 → 粘贴不可用）。
+    expect(within(menu).getByRole('menuitem', { name: /下载/ })).toHaveAttribute('aria-disabled', 'true')
+    expect(within(menu).getByRole('menuitem', { name: /删除/ })).toHaveAttribute('aria-disabled', 'true')
+    expect(within(menu).getByRole('menuitem', { name: /粘贴/ })).toHaveAttribute('aria-disabled', 'true')
+    expect(within(menu).getByRole('menuitem', { name: /清空选择/ })).toHaveAttribute('aria-disabled', 'true')
+
+    // 可触发：下拉里的「全选」真的选中全部条目。
+    await user.click(within(menu).getByRole('menuitem', { name: /全选/ }))
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'server.properties' })).toBeChecked())
+    expect(screen.getByRole('checkbox', { name: 'plugins' })).toBeChecked()
+
+    // 有选中后下载/删除提升为明文按钮（此时它们是用户的下一步动作，不该藏起来）。
+    expect(within(bar).getByRole('button', { name: '下载' })).toBeEnabled()
+    expect(within(bar).getByRole('button', { name: '删除' })).toBeEnabled()
+
+    // 「清空选择」转可用，且从下拉里点得动。
+    await user.click(within(bar).getByRole('button', { name: '更多操作' }))
+    const clear = within(await screen.findByRole('menu')).getByRole('menuitem', { name: /清空选择/ })
+    expect(clear).not.toHaveAttribute('aria-disabled', 'true')
+    await user.click(clear)
+    await waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: 'server.properties' })).not.toBeChecked(),
+    )
+    // 选中清空后下载/删除退回下拉，明文位不再有永久 disabled 的噪声按钮。
+    expect(within(bar).queryByRole('button', { name: '下载' })).not.toBeInTheDocument()
+    expect(within(bar).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
+  })
+
+  it('FR-422：目录汇总不造数——加载失败时不显示项数与大小', async () => {
+    loginMockUser()
+    mockInject('get', '/instances/:id/files', { kind: 'status', status: 500 })
+    renderWithProviders(<ResourceExplorer instanceId={1} />)
+
+    await waitFor(() => expect(screen.getByText('注入的模拟错误')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: '编辑路径' })).toHaveTextContent('')
   })
 })
 

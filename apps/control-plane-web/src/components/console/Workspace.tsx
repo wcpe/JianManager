@@ -96,8 +96,14 @@ export default function Workspace() {
 
   return (
     <Suspense fallback={<div className="p-6 text-muted-foreground">{t('common.loading')}</div>}>
-      <div className={isInstanceRoute ? 'jm-workspace-bg h-full w-full overflow-auto p-3 [scrollbar-gutter:stable]' : 'jm-workspace-bg h-full w-full overflow-auto p-3 [scrollbar-gutter:stable] sm:p-5 lg:p-6'}>
-        <div key={routeKey} data-slot="workspace-route-transition" className="jm-route-transition min-h-full">
+      {/* 实例路由走视口自适应骨架（FR-422）：外层不滚动，滚动收口到页内卡片；
+          顶栏与 Tab 栏因此常驻可见，底部不再随屏幕变大而留白。其他路由保持整页滚动不变。 */}
+      <div className={isInstanceRoute ? 'jm-workspace-bg flex h-full w-full flex-col overflow-hidden p-3' : 'jm-workspace-bg h-full w-full overflow-auto p-3 [scrollbar-gutter:stable] sm:p-5 lg:p-6'}>
+        <div
+          key={routeKey}
+          data-slot="workspace-route-transition"
+          className={isInstanceRoute ? 'jm-route-transition flex min-h-0 flex-1 flex-col' : 'jm-route-transition min-h-full'}
+        >
           <Routes>
             <Route index element={<OverviewPage />} />
             <Route path="monitor" element={<MonitoringPage />} />

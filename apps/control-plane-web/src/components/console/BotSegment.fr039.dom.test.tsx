@@ -28,7 +28,7 @@ describe('FR-039 控制台实例内 Bot 管理段', () => {
     loginMockUser()
     renderWithProviders(<InstanceConsolePage instanceId={1} />)
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Bot' }))
+    await userEvent.click(await screen.findByRole('tab', { name: 'Bot' }))
 
     expect(await screen.findByText('当前筛选 2 个 Bot')).toBeInTheDocument()
     expect(screen.getByText('GuardBot')).toBeInTheDocument()

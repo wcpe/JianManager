@@ -157,6 +157,11 @@ interface ResourceExplorerProps {
    * 避免同实例多 Explorer 互相覆盖草稿登记。
    */
   draftKey?: string
+  /**
+   * FR-422：透传给工具栏左端插槽的宿主控件（如资源卡的「管理/文件/浏览」分段）。
+   * 宿主借此把自己的分段切换并入工具栏这一条横栏，而不是在其上再叠一条。
+   */
+  toolbarLeading?: ReactNode
 }
 
 /** 打开的编辑文件状态。 */
@@ -306,6 +311,7 @@ export default function ResourceExplorer({
   initialFile,
   onContextChange,
   draftKey = 'resource-file',
+  toolbarLeading,
 }: ResourceExplorerProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
@@ -408,6 +414,19 @@ export default function ResourceExplorer({
   // 有序文件名（shift 范围选择 / 全选基于此；与列表展示排序一致，FR-375）。
   const orderedNames = useMemo(() => sortFiles(files, fileSort).map((f) => f.name), [files, fileSort])
   const existingNames = useMemo(() => new Set(orderedNames), [orderedNames])
+
+  /**
+   * FR-422：当前目录汇总（条目数 + 文件字节总计），供工具栏在面包屑旁显示。
+   * 加载中/出错时为 undefined——此时 `files` 是空数组或上一目录的残留，报 0 会是编造的事实。
+   * 字节只累计非目录条目：后端给目录的 size 无意义（不递归），加进去等于凭空放大总量。
+   */
+  const dirSummary = useMemo(() => {
+    if (loading || error) return undefined
+    return {
+      itemCount: files.length,
+      totalSize: files.reduce((sum, f) => (f.isDir ? sum : sum + f.size), 0),
+    }
+  }, [files, loading, error])
 
   /** 拉取某目录内容并复位选中/错误。 */
   const loadDir = useCallback(
@@ -1061,6 +1080,9 @@ export default function ResourceExplorer({
           searchActive={searchOpen}
           viewMode={viewMode}
           onViewModeChange={changeViewMode}
+          leading={toolbarLeading}
+          itemCount={dirSummary?.itemCount}
+          totalSize={dirSummary?.totalSize}
         />
 
         <BatchOperationNotice state={batchOperation} onDismiss={() => setBatchOperation(null)} />

@@ -1,22 +1,30 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, FileWarning } from 'lucide-react'
+import { toast } from 'sonner'
+import { ChevronDown, Copy, FileWarning } from 'lucide-react'
 
 import { useCrashSnapshots, type CrashSnapshot } from '@/api/crashSnapshots'
+import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@jianmanager/ui'
 
-/** 崩溃诊断卡（FR-313）：实例控制台概览区的快照列表 + 尾部输出展开。 */
-interface CrashDiagnosticsCardProps {
+interface CrashDiagnosticsProps {
   /** 实例 ID。 */
   instanceId: number
 }
 
 /**
- * 崩溃诊断卡（FR-313）：展示实例最近的崩溃快照（后端滚动保留 5 条），
+ * 崩溃诊断（FR-313）：实例最近的崩溃快照（后端滚动保留 5 条），
  * 每条含发生时间/退出码/信号/运行时长，展开可见崩溃前终端尾部输出（等宽字体）。
- * 与 FR-312 失败横幅互补：横幅一句话说「为什么没起来」，此卡留「死前现场」。
+ * 与 FR-312 失败横幅互补：横幅一句话说「为什么没起来」，这里留「死前现场」。
+ *
+ * FR-423 起不再自带卡壳，而是作为一段嵌进概览的「动态与告警」流——
+ * 原先它单独占一张卡，无崩溃时仍撑 88px 说一句「暂无」，纯属浪费；
+ * 现在无快照就是流末尾一行灰字。
+ *
+ * FR-417 给崩溃尾部输出补复制按钮：那段 `<pre>` 装的正是 Java 异常堆栈，
+ * 而堆栈靠鼠标拖选是最难受的复制场景。
  */
-export default function CrashDiagnosticsCard({ instanceId }: CrashDiagnosticsCardProps) {
+export default function CrashDiagnostics({ instanceId }: CrashDiagnosticsProps) {
   const { t } = useTranslation()
   const { data: snapshots = [] } = useCrashSnapshots(instanceId)
   // 记录展开的快照 id 集合：允许同时展开多条对比（如连崩场景）。
@@ -31,33 +39,55 @@ export default function CrashDiagnosticsCard({ instanceId }: CrashDiagnosticsCar
     })
   }
 
+  // 容器恒存在（testid 挂在此层）：快照是异步数据，若空态与列表各自是根节点，
+  // 拿到的节点引用会在数据到达时被换掉，调用方（含测试）无法在同一容器内等待。
   return (
-    <section data-testid="crash-diagnostics" className="rounded-lg border bg-card p-3 shadow-soft">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="flex items-center gap-1.5 text-sm font-semibold">
-          <FileWarning className="size-4 text-status-danger" />
-          {t('serverConsole.crashDiagnostics')}
-        </h2>
-        <span className="text-[11px] text-muted-foreground">{t('serverConsole.crashKeepHint')}</span>
-      </div>
-
+    <div data-testid="crash-diagnostics" className={cn(snapshots.length > 0 && 'border-b last:border-b-0')}>
       {snapshots.length === 0 ? (
-        <p className="rounded-md border border-dashed bg-muted/50 px-3 py-4 text-center text-xs text-muted-foreground">
-          {t('serverConsole.crashEmpty')}
-        </p>
+        <div className="flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-muted-foreground/40" />
+          <span>{t('serverConsole.crashEmpty')}</span>
+        </div>
       ) : (
-        <ul className="space-y-1.5">
-          {snapshots.map((snap) => (
-            <CrashSnapshotRow key={snap.id} snapshot={snap} expanded={expanded.has(snap.id)} onToggle={() => toggle(snap.id)} />
-          ))}
-        </ul>
+        <>
+          <div className="flex items-center gap-1.5 px-2.5 pt-2 text-[11px] font-medium text-status-danger">
+            <FileWarning className="size-3.5" />
+            {/* 标题独占一个元素：与右侧提示同处一个 div 会让 textContent 连在一起，破坏按名查询。 */}
+            <span>{t('serverConsole.crashDiagnostics')}</span>
+            <span className="ml-auto font-normal text-muted-foreground">{t('serverConsole.crashKeepHint')}</span>
+          </div>
+          <ul className="space-y-1.5 p-2">
+            {snapshots.map((snap) => (
+              <CrashSnapshotRow key={snap.id} snapshot={snap} expanded={expanded.has(snap.id)} onToggle={() => toggle(snap.id)} />
+            ))}
+          </ul>
+        </>
       )}
-    </section>
+    </div>
   )
 }
 
 function CrashSnapshotRow({ snapshot, expanded, onToggle }: { snapshot: CrashSnapshot; expanded: boolean; onToggle: () => void }) {
   const { t } = useTranslation()
+
+  /**
+   * 复制崩溃现场（FR-417）：带上时间/退出码/信号的抬头再接尾部输出。
+   * 只复制 `tailOutput` 会丢掉「哪次崩溃、怎么死的」，贴给别人看时对方要反问一轮。
+   */
+  const copySnapshot = async () => {
+    const header = [
+      `${new Date(snapshot.occurredAt).toLocaleString()}`,
+      `${t('serverConsole.crashExitCode')} ${snapshot.exitCode}`,
+      snapshot.signal ? `${t('serverConsole.crashSignal')} ${snapshot.signal}` : '',
+      `${t('serverConsole.crashDuration')} ${formatCrashDuration(snapshot.durationMs)}`,
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    const ok = await copyToClipboard(`${header}\n${snapshot.tailOutput ?? ''}`.trimEnd())
+    if (ok) toast.success(t('common.copied'))
+    else toast.error(t('common.copyFailed'))
+  }
+
   return (
     <li className="rounded-md border bg-muted/50">
       <button
@@ -83,9 +113,21 @@ function CrashSnapshotRow({ snapshot, expanded, onToggle }: { snapshot: CrashSna
       {expanded && (
         <div className="border-t px-2.5 py-2">
           {snapshot.tailOutput ? (
-            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-relaxed text-foreground">
-              {snapshot.tailOutput}
-            </pre>
+            <>
+              <div className="mb-1 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => void copySnapshot()}
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <Copy className="size-3" />
+                  {t('serverConsole.crashCopy')}
+                </button>
+              </div>
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-relaxed text-foreground">
+                {snapshot.tailOutput}
+              </pre>
+            </>
           ) : (
             <p className="text-xs text-muted-foreground">{t('serverConsole.crashNoOutput')}</p>
           )}

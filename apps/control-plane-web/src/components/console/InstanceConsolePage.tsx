@@ -1,7 +1,8 @@
-import { Activity, useEffect, useMemo, useState } from 'react'
+import { Activity, Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { Activity as ActivityIcon, AlertTriangle, Gauge, Hammer, HardDrive, Layers, Loader2, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
+import { toast } from 'sonner'
+import { Activity as ActivityIcon, AlertTriangle, Bot, ChevronDown, ChevronUp, Coins, Copy, DatabaseBackup, FolderTree, Gauge, Hammer, HardDrive, Layers, LayoutDashboard, Loader2, MoreHorizontal, Play, Puzzle, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
 
 import { useInstance, useKillInstance, useRebuildInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -10,36 +11,41 @@ import { useLogs } from '@/api/logs'
 import { useNodes } from '@/api/nodes'
 import { useServerState } from '@/api/serverState'
 import { Button } from '@jianmanager/ui/components/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@jianmanager/ui/components/dropdown-menu'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { cn, instanceStatusLevel } from '@jianmanager/ui'
+import { copyToClipboard } from '@/lib/clipboard'
 import { instanceStatusGlowClass } from '@/lib/instance-glow'
 import type { CardType } from '@/lib/workspace-card'
-import CrashDiagnosticsCard from './CrashDiagnosticsCard'
+import InstanceActivityFeed from './InstanceActivityFeed'
 import InstanceBackupSegment from './InstanceBackupSegment'
-import InstanceEnvSegment from './InstanceEnvSegment'
 import InstancePlayersSegment from './InstancePlayersSegment'
+import InstanceResourceSegment, { type ResourceSegment } from './InstanceResourceSegment'
 import WorkspaceCardBody from './WorkspaceCardBody'
 import { recordRecentServer } from './server-selection'
 
-type TabKey = 'overview' | 'terminal' | 'resource' | 'env' | 'metrics' | 'players' | 'plugins' | 'backup' | 'business' | 'bot'
+type TabKey = 'overview' | 'terminal' | 'resource' | 'metrics' | 'players' | 'plugins' | 'backup' | 'business' | 'bot'
 
 const TAB_CARD_TYPE: Partial<Record<TabKey, CardType>> = {
   terminal: 'terminal',
-  resource: 'resource',
   metrics: 'metrics',
   plugins: 'plugins',
   business: 'business',
   bot: 'bot',
 }
 
-const TAB_KEYS: TabKey[] = ['overview', 'terminal', 'resource', 'env', 'metrics', 'players', 'plugins', 'backup', 'business', 'bot']
+// Tab 重组（FR-413）：原「环境变量」并入「文件配置」的一个分段，10 → 9 个页签；
+// 分隔线按职能分组（运行 / 配置 / 观测 / 运营），减少 Tab 栏横向溢出。
+const TAB_KEYS: TabKey[] = ['overview', 'terminal', 'resource', 'plugins', 'metrics', 'players', 'business', 'bot', 'backup']
+
+/** 在该 key 之前插入分组分隔线。 */
+const TAB_GROUP_BREAK: ReadonlySet<TabKey> = new Set<TabKey>(['resource', 'metrics', 'business'])
 
 const TAB_LABEL_KEY: Record<TabKey, string> = {
   overview: 'serverConsole.overview',
   terminal: 'serverConsole.console',
   resource: 'serverConsole.filesConfig',
-  env: 'serverConsole.env',
   metrics: 'serverConsole.metrics',
   players: 'serverConsole.players',
   plugins: 'serverConsole.plugins',
@@ -48,13 +54,31 @@ const TAB_LABEL_KEY: Record<TabKey, string> = {
   bot: 'serverConsole.bot',
 }
 
+const TAB_ICON: Record<TabKey, LucideIcon> = {
+  overview: LayoutDashboard,
+  terminal: TerminalSquare,
+  resource: FolderTree,
+  metrics: ActivityIcon,
+  players: Users,
+  plugins: Puzzle,
+  backup: DatabaseBackup,
+  business: Coins,
+  bot: Bot,
+}
+
 interface InstanceConsolePageProps {
   instanceId: number
 }
 
 function readActiveTab(searchParams: URLSearchParams): TabKey {
   const tab = searchParams.get('tab')
+  // 旧深链兼容（FR-413）：`?tab=env` 曾是独立页签，现落到「文件配置」的环境变量分段。
+  if (tab === 'env') return 'resource'
   return TAB_KEYS.includes(tab as TabKey) ? (tab as TabKey) : 'overview'
+}
+
+function readResourceSegment(searchParams: URLSearchParams): ResourceSegment {
+  return searchParams.get('tab') === 'env' || searchParams.get('seg') === 'env' ? 'env' : 'files'
 }
 
 /**
@@ -67,6 +91,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = readActiveTab(searchParams)
+  const resourceSegment = readResourceSegment(searchParams)
   // 访问过即保活：渲染期把新激活页签并入集合（React 官方「渲染期间调整状态」模式）。
   const [mountedTabs, setMountedTabs] = useState<TabKey[]>([activeTab])
   if (!mountedTabs.includes(activeTab)) {
@@ -84,6 +109,11 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const rebuild = useRebuildInstance()
   // 强杀走统一危险操作确认（FR-059），不直发请求。
   const [killConfirmOpen, setKillConfirmOpen] = useState(false)
+  // 指标条折叠偏好（FR-412）：跨实例与刷新保留，收起后顶栏再省一行给内容区。
+  const [metricsBarOpen, setMetricsBarOpen] = useState(readMetricsBarPref)
+  useEffect(() => {
+    try { localStorage.setItem(METRICS_BAR_KEY, metricsBarOpen ? '1' : '0') } catch { /* 隐私模式忽略 */ }
+  }, [metricsBarOpen])
 
   // FR-293：直接经路由/深链进入实例也计入「最近打开」（与选择器/侧栏常驻列同一存储）；
   // store 侧对内容未变的写入不广播，轮询刷新不会造成订阅方空转。
@@ -95,7 +125,50 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const online = serverState?.state?.server?.onlinePlayers ?? metrics?.onlinePlayers ?? 0
   const maxPlayers = serverState?.state?.server?.maxPlayers ?? 200
   const richMetricsAvailable = metrics?.probeAvailable ?? false
-  const watchItems = useMemo(() => buildWatchItems({ status: instance?.status, metrics, probeConnected: serverState?.connected }), [instance?.status, metrics, serverState?.connected])
+  // 关注事项走 i18n（修硬编码中文）：告警文案直接进英文界面是验收硬伤。
+  const watchItems = useMemo(
+    () => buildWatchItems({ status: instance?.status, metrics, probeConnected: serverState?.connected, t }),
+    [instance?.status, metrics, serverState?.connected, t],
+  )
+
+  // ---- 以下 hooks 必须全部位于 `if (!instance)` 早退之前（hooks 顺序不变量）----
+  // Tab 栏：激活项滚进视野 + 仅在真溢出时加边缘渐隐。
+  const tabRefs = useRef(new Map<TabKey, HTMLButtonElement>())
+  const navRef = useRef<HTMLElement>(null)
+  const [navOverflowing, setNavOverflowing] = useState(false)
+  useEffect(() => {
+    const el = navRef.current
+    if (!el) return
+    const sync = () => setNavOverflowing(el.scrollWidth > el.clientWidth + 4)
+    sync()
+    window.addEventListener('resize', sync)
+    return () => window.removeEventListener('resize', sync)
+  }, [])
+  useEffect(() => {
+    // matchMedia/scrollIntoView 均带存在性守卫：jsdom 未实现，测试环境不应炸。
+    const reduceMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    tabRefs.current.get(activeTab)?.scrollIntoView?.({
+      inline: 'nearest',
+      block: 'nearest',
+      behavior: reduceMotion ? 'auto' : 'smooth',
+    })
+  }, [activeTab])
+  const isNarrow = useIsNarrowViewport()
+  // roving tabindex 简化版：方向键移动焦点并激活（Tab 数量少，激活随焦点走最直觉）。
+  const activateSiblingTab = (current: TabKey, delta: 1 | -1) => {
+    const index = TAB_KEYS.indexOf(current)
+    const next = TAB_KEYS[(index + delta + TAB_KEYS.length) % TAB_KEYS.length]
+    tabRefs.current.get(next)?.focus()
+    setActiveTab(next)
+  }
+  const activateEdgeTab = (edge: 'first' | 'last') => {
+    const key = edge === 'first' ? TAB_KEYS[0] : TAB_KEYS[TAB_KEYS.length - 1]
+    tabRefs.current.get(key)?.focus()
+    setActiveTab(key)
+  }
 
   if (!instance) {
     return <div className="rounded-lg border bg-card p-6 text-sm text-muted-foreground shadow-soft">{t('serverConsole.noInstance')}</div>
@@ -114,27 +187,62 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   // 横幅纯受查询数据驱动消失，不留本地状态。
   // 搭建中的 statusReason 是进行时状态而非失败（FR-331）：不落红色失败横幅，走下方琥珀状态横幅。
   const startFailReason = provisioning || rebuilding ? undefined : instance.statusReason?.trim()
+  // <md 主操作（可用性增强）：按状态给唯一带文字的主按钮，其余收进「更多」菜单。
+  const primaryAction = canStart
+    ? { label: t('instances.start'), icon: Play, disabled: provisioning, title: provisioning ? t('instances.provisioningBlocked') : undefined, onClick: () => start.mutate(instance.id) }
+    : isDamaged
+      ? { label: t('serverConsole.rebuild'), icon: Hammer, disabled: rebuilding, title: rebuilding ? t('serverConsole.rebuilding') : undefined, onClick: () => rebuild.mutate(instance.id) }
+      : canControl
+        ? { label: t('serverConsole.restart'), icon: RotateCw, disabled: false, title: undefined, onClick: () => restart.mutate(instance.id) }
+        : null
   const setActiveTab = (tab: TabKey) => {
     const next = new URLSearchParams(searchParams)
     if (tab === 'overview') next.delete('tab')
     else next.set('tab', tab)
+    // 离开文件配置就清掉分段参数，避免 URL 残留无意义的 seg。
+    if (tab !== 'resource') next.delete('seg')
+    setSearchParams(next)
+  }
+  const setResourceSegment = (segment: ResourceSegment) => {
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', 'resource')
+    if (segment === 'files') next.delete('seg')
+    else next.set('seg', segment)
     setSearchParams(next)
   }
 
   return (
-    <div data-page="instance-console" className="jm-page-stack min-h-full w-full text-[13px] text-foreground">
-      <div className="w-full space-y-3">
+    // 视口自适应骨架（FR-422）：根与内层都是 flex 列，横幅/顶栏/Tab 栏 flex-none、
+    // Tab 内容区 flex-1 min-h-0——滚动收口到页内卡片，顶栏常驻可见、底部不留白。
+    <div data-page="instance-console" className="jm-page-stack flex min-h-0 flex-1 flex-col text-[13px] text-foreground">
+      <div className="flex min-h-0 flex-1 flex-col gap-2">
         {startFailReason && (
           <div
             role="alert"
             className="flex items-start gap-2 rounded-md border border-status-danger/40 bg-status-danger/10 px-3 py-2 text-xs text-status-danger"
           >
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="font-semibold">{t('serverConsole.lastStartFailed')}</p>
               {/* 原因全文可读：不 truncate / line-clamp，长错误换行展示。 */}
               <p className="mt-0.5 whitespace-pre-wrap break-words">{startFailReason}</p>
             </div>
+            {/* FR-417：失败原因常是一段带路径/堆栈的长文本，要贴去搜索或问人——
+                原先只能拖选。复制走 copyToClipboard（含 HTTP 非安全上下文兜底）并给回执。 */}
+            <button
+              type="button"
+              onClick={() => {
+                void copyToClipboard(`${t('serverConsole.lastStartFailed')}: ${startFailReason}`).then((ok) => {
+                  if (ok) toast.success(t('common.copied'))
+                  else toast.error(t('common.copyFailed'))
+                })
+              }}
+              aria-label={t('serverConsole.copyFailReason')}
+              className="mt-0.5 flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-status-danger/15"
+            >
+              <Copy className="size-3" />
+              {t('common.copy')}
+            </button>
           </div>
         )}
         {/* 搭建中状态横幅（FR-331）：琥珀而非红（是进行时不是失败），随 provision 任务终态清 reason 自动消失。 */}
@@ -153,20 +261,30 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
             </div>
           </div>
         )}
-        <header className={cn('rounded-lg border bg-card/95 p-3 shadow-soft backdrop-blur-sm', instanceStatusGlowClass(instance.status))}>
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <StatusBadge
-                  level={instanceStatusLevel(instance.status)}
-                  label={t(`instances.${instance.status.toLowerCase()}`, instance.status)}
-                  pulse={instance.status === 'STARTING' || instance.status === 'STOPPING'}
-                />
-                <h1 className="truncate text-lg font-semibold tracking-tight">{t('serverConsole.title')} / {instance.name}</h1>
+        {/* 瘦身顶栏（FR-412）：标题只留实例名（原「服务器控制台 /」前缀与无信息副标题已删），
+            节点/端口/运行时长压成一行内联元信息，指标从 7 格 MetaCell 网格改为可收起的 pill 条。 */}
+        <header className={cn('flex-none rounded-lg border bg-card/95 px-3 py-2 shadow-soft backdrop-blur-sm', instanceStatusGlowClass(instance.status))}>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <StatusBadge
+                level={instanceStatusLevel(instance.status)}
+                label={t(`instances.${instance.status.toLowerCase()}`, instance.status)}
+                pulse={instance.status === 'STARTING' || instance.status === 'STOPPING'}
+              />
+              <h1 className="truncate text-base font-semibold tracking-tight">{instance.name}</h1>
+              <div className="hidden min-w-0 items-center gap-1.5 border-l pl-2 text-xs text-muted-foreground md:flex">
+                <span className="truncate">{node?.name ?? t('console.unknownNode', { id: instance.nodeId })}</span>
+                <span aria-hidden>·</span>
+                <span className="font-mono">:{instance.serverPort || '—'}</span>
+                <span aria-hidden>·</span>
+                <span className="whitespace-nowrap">{t('serverConsole.uptime')} <em className="font-mono not-italic text-foreground">{formatUptime(metrics?.uptimeSeconds)}</em></span>
+                <span aria-hidden>·</span>
+                <span className="font-mono">{instance.uuid.slice(0, 8)}</span>
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">{t('serverConsole.subtitle')}</p>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5">
+            {/* 桌面：五钮平铺（原样）。 */}
+            {!isNarrow && (
+            <div className="ml-auto flex flex-wrap items-center gap-1.5">
               {canStart && (
                 // 禁用按钮带 disabled:pointer-events-none，tooltip 由外层 span 承载（FR-331）。
                 <span title={provisioning ? t('instances.provisioningBlocked') : undefined}>
@@ -197,47 +315,171 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                 <AlertTriangle className="size-3.5" />
                 {t('serverConsole.kill')}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setActiveTab('terminal')}>
-                <TerminalSquare className="size-3.5" />
-                {t('serverConsole.openTerminal')}
-              </Button>
             </div>
+            )}
+            {/* 窄屏：主操作 + 「更多」菜单，顶栏不再被四五个按钮挤成三行。 */}
+            {isNarrow && (
+            <div className="ml-auto flex items-center gap-1.5">
+              {primaryAction && (
+                <span title={primaryAction.title}>
+                  <Button size="sm" disabled={primaryAction.disabled} onClick={primaryAction.onClick}>
+                    <primaryAction.icon className="size-3.5" />
+                    {primaryAction.label}
+                  </Button>
+                </span>
+              )}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="outline" aria-label={t('serverConsole.moreActions')} title={t('serverConsole.moreActions')}>
+                    <MoreHorizontal className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem disabled={!canControl} onClick={() => restart.mutate(instance.id)}>
+                    <RotateCw className="size-3.5" />
+                    {t('serverConsole.restart')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={!canControl} onClick={() => stop.mutate(instance.id)}>
+                    <Square className="size-3.5" />
+                    {t('serverConsole.stop')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={!canControl}
+                    className="text-status-danger focus:text-status-danger"
+                    onClick={() => setKillConfirmOpen(true)}
+                  >
+                    <AlertTriangle className="size-3.5" />
+                    {t('serverConsole.kill')}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            )}
           </div>
 
-          <div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
-            <MetaCell label={t('serverConsole.node')} value={node?.name ?? t('console.unknownNode', { id: instance.nodeId })} />
-            <MetaCell label={t('serverConsole.port')} value={`:${instance.serverPort || '—'}`} mono />
-            <MetaCell label={t('serverConsole.online')} value={richMetricsAvailable ? `${online}/${maxPlayers}` : t('serverConsole.probeRequired')} mono />
-            <MetaCell label={t('serverConsole.tps')} value={richMetricsAvailable ? formatNumber(metrics?.tps, 1) : t('serverConsole.probeRequired')} mono tone={richMetricsAvailable ? (metrics?.tps != null && metrics.tps < 18 ? 'warn' : 'ok') : undefined} />
-            <MetaCell label={t('serverConsole.mspt')} value={richMetricsAvailable ? `${formatNumber(metrics?.msptMillis, 0)}ms` : t('serverConsole.probeRequired')} mono tone={richMetricsAvailable ? (metrics?.msptMillis != null && metrics.msptMillis > 50 ? 'danger' : 'ok') : undefined} />
-            <MetaCell label={t('serverConsole.uptime')} value={formatUptime(metrics?.uptimeSeconds)} mono />
-            <MetaCell label="UUID" value={instance.uuid.slice(0, 8)} mono />
-          </div>
+          {metricsBarOpen && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              {/* 方案 B 分段状态条：label + 等宽值成段、细分隔线隔开，阈值越线才上色。
+                  探针缺失的 TPS/MSPT/在线 不再逐项写「需探针」（三个灰词比数据还抢眼），
+                  折叠为右侧一枚状态芯片，悬停可见不可用项清单（FR-343 诚实标记改为聚合式）。 */}
+              {richMetricsAvailable && (
+                <>
+                  <MetricSegment label={t('serverConsole.tps')} value={formatNumber(metrics?.tps, 1)} tone={metrics?.tps != null && metrics.tps < 18 ? 'warn' : undefined} dot />
+                  <MetricDivider />
+                  <MetricSegment label={t('serverConsole.mspt')} value={`${formatNumber(metrics?.msptMillis, 0)}ms`} tone={metrics?.msptMillis != null && metrics.msptMillis > 50 ? 'danger' : undefined} dot />
+                  <MetricDivider />
+                  <MetricSegment label={t('serverConsole.online')} value={`${online}/${maxPlayers}`} />
+                  <MetricDivider />
+                </>
+              )}
+              <MetricSegment label={t('serverConsole.cpu')} value={`${Math.round(metrics?.cpuPercent ?? 0)}%`} tone={(metrics?.cpuPercent ?? 0) > 85 ? 'warn' : undefined} />
+              <MetricDivider />
+              <MetricSegment label={t('serverConsole.memory')} value={(metrics?.heapMaxMb ?? 0) > 0 ? `${formatNumber(metrics?.memoryMb, 0)}/${formatNumber(metrics?.heapMaxMb, 0)}M` : `${formatNumber(metrics?.memoryMb, 0)}M`} />
+              <MetricDivider />
+              <MetricSegment label={t('serverConsole.diskNode')} value={`${Math.round(node?.diskUsage ?? 0)}%`} tone={(node?.diskUsage ?? 0) > 85 ? 'warn' : undefined} />
+              {!richMetricsAvailable && <ProbeMissingChip />}
+              {/* 元信息在窄屏没进标题行，补一条 pill 兜住（md 以下） */}
+              <span className="rounded-full border bg-muted/70 px-2 py-0.5 text-[11px] text-muted-foreground md:hidden">
+                {node?.name ?? t('console.unknownNode', { id: instance.nodeId })} · <span className="font-mono">:{instance.serverPort || '—'}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setMetricsBarOpen(false)}
+                aria-expanded={metricsBarOpen}
+                className="flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <ChevronUp className="size-3" />
+                {t('serverConsole.collapseMetrics', '收起指标')}
+              </button>
+            </div>
+          )}
+          {!metricsBarOpen && (
+            <button
+              type="button"
+              onClick={() => setMetricsBarOpen(true)}
+              aria-expanded={metricsBarOpen}
+              className="mt-1 flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <ChevronDown className="size-3" />
+              {t('serverConsole.expandMetrics', '展开指标')}
+            </button>
+          )}
         </header>
 
-        <nav className="flex gap-1 overflow-x-auto rounded-lg border bg-card/95 px-2 pt-2 shadow-soft backdrop-blur-sm">
-          {TAB_KEYS.map((key) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setActiveTab(key)}
-              aria-pressed={activeTab === key}
-              className={cn(
-                'shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors',
-                activeTab === key
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t(TAB_LABEL_KEY[key])}
-            </button>
-          ))}
+        {/* WAI-ARIA tabs（可用性增强）：方向键循环 + roving tabindex + aria-selected；
+            溢出时两侧渐隐提示可横滚，激活项由 effect 自动滚进视野。 */}
+        <nav
+          ref={navRef}
+          role="tablist"
+          aria-label={t('serverConsole.instanceTabs')}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowRight') {
+              event.preventDefault()
+              activateSiblingTab(activeTab, 1)
+            } else if (event.key === 'ArrowLeft') {
+              event.preventDefault()
+              activateSiblingTab(activeTab, -1)
+            } else if (event.key === 'Home') {
+              event.preventDefault()
+              activateEdgeTab('first')
+            } else if (event.key === 'End') {
+              event.preventDefault()
+              activateEdgeTab('last')
+            }
+          }}
+          className={cn(
+            'flex flex-none gap-1 overflow-x-auto rounded-lg border bg-card/95 px-2 pt-1.5 shadow-soft backdrop-blur-sm',
+            navOverflowing && '[mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)]',
+          )}
+        >
+          {TAB_KEYS.map((key) => {
+            const Icon = TAB_ICON[key]
+            return (
+              <Fragment key={key}>
+                {TAB_GROUP_BREAK.has(key) && <span aria-hidden className="my-1.5 w-px shrink-0 bg-border" />}
+                <button
+                  ref={(el) => {
+                    if (el) tabRefs.current.set(key, el)
+                    else tabRefs.current.delete(key)
+                  }}
+                  id={`instance-tab-${key}`}
+                  role="tab"
+                  type="button"
+                  aria-selected={activeTab === key}
+                  aria-controls={`instance-tabpanel-${key}`}
+                  tabIndex={activeTab === key ? 0 : -1}
+                  onClick={() => setActiveTab(key)}
+                  className={cn(
+                    'inline-flex shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium transition-colors',
+                    activeTab === key
+                      ? 'border-primary text-primary'
+                      : 'border-transparent text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <Icon className="size-3.5 shrink-0" />
+                  {t(TAB_LABEL_KEY[key])}
+                </button>
+              </Fragment>
+            )
+          })}
         </nav>
 
         {/* 页签 keep-alive（FR-295）：访问过的页签全部保持挂载，非活跃者 Activity 隐藏——
             DOM/本地状态（终端缓冲、文件树展开态、未保存草稿）保留，轮询自动暂停。 */}
         {mountedTabs.map((tab) => (
           <Activity key={tab} mode={tab === activeTab ? 'visible' : 'hidden'}>
+            {/* 每个页签自身是 flex 列容器（FR-422）：吃满内容区剩余高度。
+                卡片型页签（终端/文件/监控…）内部自己滚，故此层 hidden；
+                纵向堆叠型页签（概览/环境变量/玩家/备份）在此层滚。 */}
+            <div
+              id={`instance-tabpanel-${tab}`}
+              role="tabpanel"
+              aria-labelledby={`instance-tab-${tab}`}
+              className={cn(
+              'flex min-h-0 flex-col',
+              tab === activeTab ? 'flex-1' : 'hidden',
+              TAB_CARD_TYPE[tab] ? 'overflow-hidden' : 'overflow-auto',
+            )}>
             {tab === 'overview' ? (
               <OverviewPanel
                 instanceId={instance.id}
@@ -249,10 +491,15 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                 logs={logs?.items ?? []}
                 watchItems={watchItems}
                 probeConnected={serverState?.connected ?? false}
+                uptimeSeconds={metrics?.uptimeSeconds}
               />
-            ) : tab === 'env' ? (
-              /* 环境变量页签（FR-344）：上区编辑自定义启动 env（写 .env）、下区运行时实际环境只读。 */
-              <InstanceEnvSegment instanceId={instance.id} />
+            ) : tab === 'resource' ? (
+              /* 文件配置（FR-413）：文件管理器 + 环境变量（FR-344）两分段，均保活。 */
+              <InstanceResourceSegment
+                instanceId={instance.id}
+                segment={resourceSegment}
+                onSegmentChange={setResourceSegment}
+              />
             ) : tab === 'players' ? (
               /* 玩家分区接真（FR-339）：本实例作用域的在线/踢封/封禁/白名单。 */
               <InstancePlayersSegment instanceId={instance.id} />
@@ -260,11 +507,13 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
               /* 备份·定时分区接真（FR-339）：本实例定时任务启停/删 + 备份创建/恢复/删除。 */
               <InstanceBackupSegment instanceId={instance.id} />
             ) : TAB_CARD_TYPE[tab] ? (
-              <div className="min-h-[520px] rounded-lg border bg-card shadow-soft">
+              // 去掉原 min-h-[520px]（FR-422）：卡片吃满剩余高度，内部自行滚动。
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card shadow-soft">
                 {/* persistTerminal：终端连接由管理器常驻，页签隐藏/切换不断 WS（FR-295）。 */}
                 <WorkspaceCardBody instanceId={instance.id} type={TAB_CARD_TYPE[tab]!} persistTerminal />
               </div>
             ) : null}
+            </div>
           </Activity>
         ))}
       </div>
@@ -283,12 +532,76 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   )
 }
 
-function MetaCell({ label, value, mono, tone }: { label: string; value: string; mono?: boolean; tone?: 'ok' | 'warn' | 'danger' }) {
+const METRICS_BAR_KEY = 'console.metricsBar'
+
+function readMetricsBarPref(): boolean {
+  try { return localStorage.getItem(METRICS_BAR_KEY) !== '0' } catch { return true }
+}
+
+/**
+ * 窄视口检测（顶栏按钮收敛用）。
+ *
+ * 用 JS 状态而不是 `md:hidden` CSS：隐藏式双渲染会让两组按钮同时进可访问树，
+ * 屏幕阅读器会读到重复的「启动/强杀」；真渲染分支在桌面端完全不挂载移动组。
+ * matchMedia 缺失（jsdom/老 WebView）回退桌面布局。
+ */
+function useIsNarrowViewport(): boolean {
+  const [narrow, setNarrow] = useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 767px)').matches
+      : false,
+  )
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mql = window.matchMedia('(max-width: 767px)')
+    const sync = () => setNarrow(mql.matches)
+    sync()
+    mql.addEventListener?.('change', sync)
+    return () => mql.removeEventListener?.('change', sync)
+  }, [])
+  return narrow
+}
+
+/** 顶栏指标分段（方案 B 状态条）：label + 等宽值成一段，阈值越线才上色；dot 为状态圆点。 */
+function MetricSegment({ label, value, tone, dot }: { label: string; value: string; tone?: 'warn' | 'danger'; dot?: boolean }) {
   return (
-    <div className="rounded-md border bg-muted/70 px-2 py-1.5">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className={cn('mt-0.5 truncate font-medium', mono && 'font-mono tabular-nums', tone === 'ok' && 'text-status-success', tone === 'warn' && 'text-status-warning', tone === 'danger' && 'text-status-danger')}>{value}</p>
-    </div>
+    // title 补全精确值与口径：分段只显「12%」，悬停能看到「CPU 12%」上下文。
+    <span className="inline-flex items-center gap-1.5" title={`${label} ${value}`}>
+      {dot && (
+        <span
+          aria-hidden
+          className={cn(
+            'size-1.5 rounded-full',
+            tone === 'warn' ? 'bg-status-warning' : tone === 'danger' ? 'bg-status-danger' : 'bg-status-success',
+          )}
+        />
+      )}
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <b className={cn(
+        'font-mono text-xs font-semibold tabular-nums',
+        tone === 'warn' && 'text-status-warning',
+        tone === 'danger' && 'text-status-danger',
+      )}>{value}</b>
+    </span>
+  )
+}
+
+/** 分段之间的细分隔线。 */
+function MetricDivider() {
+  return <span aria-hidden className="h-3 w-px shrink-0 bg-border" />
+}
+
+/** 探针缺失聚合芯片（方案 B）：取代逐项「需探针」，悬停列出不可用项。 */
+function ProbeMissingChip() {
+  const { t } = useTranslation()
+  return (
+    <span
+      title={t('serverConsole.probeUnavailable')}
+      className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
+    >
+      <span aria-hidden className="size-1.5 rounded-full bg-muted-foreground/60" />
+      {t('serverConsole.probeChip')}
+    </span>
   )
 }
 
@@ -302,6 +615,7 @@ function OverviewPanel({
   logs,
   watchItems,
   probeConnected,
+  uptimeSeconds,
 }: {
   instanceId: number
   instanceUuid: string
@@ -312,6 +626,7 @@ function OverviewPanel({
   logs: Array<{ id: number; level: string; message: string; time: string }>
   watchItems: string[]
   probeConnected: boolean
+  uptimeSeconds?: number
 }) {
   const { t } = useTranslation()
   const hasHeapMax = (metrics?.heapMaxMb ?? 0) > 0
@@ -322,19 +637,29 @@ function OverviewPanel({
   const hasProbe = metrics?.probeAvailable ?? false
   // FR-343 去 mock-api：实例 TPS 真实时序火花线（取末段点位），无数据/无探针显空态而非假图。
   const { data: seriesData } = useMetricSeries({ scope: 'instance', targetId: instanceUuid, range: '1h', metrics: ['inst_tps'], enabled: !!instanceUuid })
-  const tpsBars = (seriesData?.series.find((s) => s.metricKey === 'inst_tps' && s.world === '')?.points ?? [])
+  const tpsPoints = (seriesData?.series.find((s) => s.metricKey === 'inst_tps' && s.world === '')?.points ?? [])
     .filter((p) => p.avg != null)
-    .slice(-24)
-    .map((p) => Math.max(2, Math.min(100, ((p.avg as number) / 20) * 100)))
+    .map((p) => p.avg as number)
+  const tpsBars = tpsPoints.slice(-24).map((v) => Math.max(2, Math.min(100, (v / 20) * 100)))
+  // 火花线的 aria 摘要（可访问性）：屏幕阅读器拿得到 min/max/avg，而不是一片空 span。
+  const tpsStats = tpsPoints.length > 0
+    ? {
+        min: Math.min(...tpsPoints),
+        max: Math.max(...tpsPoints),
+        avg: tpsPoints.reduce((sum, v) => sum + v, 0) / tpsPoints.length,
+      }
+    : null
 
   return (
-    <div className="space-y-3">
-      <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+    // 分栏重排（FR-423）：KPI 一行在上，下方左 62%（图表 + 日志）/ 右 38%（动态与告警）。
+    // 全部 flex 撑满内容区，不再整块纵向堆叠后在底部留白。
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <div className="grid flex-none gap-2 [grid-template-columns:repeat(auto-fit,minmax(122px,1fr))]">
         <KpiCard icon={Gauge} label={t('serverConsole.cpu')} value={`${cpuPct}%`} progress={Math.min(100, cpuPct)} />
         <KpiCard icon={HardDrive} label={t('serverConsole.memory')} value={hasHeapMax ? `${memoryPct}%` : `${formatNumber(metrics?.memoryMb, 0)} MB`} sub={hasHeapMax ? `${formatNumber(metrics?.memoryMb, 0)} / ${formatNumber(metrics?.heapMaxMb, 0)} MB` : 'RSS'} progress={memoryPct} />
         <KpiCard icon={ActivityIcon} label={t('serverConsole.tps')} value={hasProbe ? formatNumber(metrics?.tps, 1) : t('serverConsole.probeRequired')} progress={hasProbe ? Math.min(100, ((metrics?.tps ?? 0) / 20) * 100) : 0} />
         <KpiCard icon={Users} label={t('serverConsole.online')} value={hasProbe ? `${online}/${maxPlayers}` : t('serverConsole.probeRequired')} progress={hasProbe && maxPlayers > 0 ? (online / maxPlayers) * 100 : 0} />
-        <KpiCard icon={Layers} label={t('serverConsole.disk')} value={`${diskPct}%`} progress={diskPct} />
+        <KpiCard icon={Layers} label={t('serverConsole.diskNode')} value={`${diskPct}%`} progress={diskPct} />
         <KpiCard icon={AlertTriangle} label={t('serverConsole.alerts')} value={String(alertCount)} danger={alertCount > 0} progress={alertCount > 0 ? 100 : 0} />
       </div>
 
@@ -344,89 +669,85 @@ function OverviewPanel({
         </div>
       )}
 
-      <div className="grid gap-3 xl:grid-cols-[1.2fr_1fr_0.9fr]">
-        <section className="rounded-lg border bg-card p-3 shadow-soft">
-          <h2 className="mb-2 text-sm font-semibold">{t('serverConsole.tps')} / {t('serverConsole.mspt')}</h2>
-          {hasProbe && tpsBars.length > 0 ? (
-            <div className="grid h-44 grid-cols-24 items-end gap-1 rounded-md border bg-muted/40 p-2">
-              {tpsBars.map((v, i) => (
-                <span key={i} className="rounded-t-sm bg-primary/75" style={{ height: `${v}%` }} />
-              ))}
-            </div>
-          ) : (
-            <div className="flex h-44 items-center justify-center rounded-md border border-dashed bg-muted/40 px-3 text-center text-xs text-muted-foreground">
-              {hasProbe ? t('serverConsole.noSeriesYet') : t('serverConsole.probeUnavailable')}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-lg border bg-card p-3 shadow-soft">
-          <h2 className="mb-2 text-sm font-semibold">{t('serverConsole.recentEvents')}</h2>
-          <div className="space-y-1.5">
-            {logs.slice(0, 5).map((log) => (
-              <div key={log.id} className="flex items-start gap-2 rounded-md border bg-muted/70 px-2 py-1.5 text-xs">
-                <span className={cn('mt-1 size-1.5 shrink-0 rounded-full', log.level === 'error' ? 'bg-status-danger' : log.level === 'warn' ? 'bg-status-warning' : 'bg-status-info')} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate">{log.message}</p>
-                  <p className="font-mono text-[10px] text-muted-foreground">{new Date(log.time).toLocaleTimeString()}</p>
-                </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row">
+        {/* 左栏 62%：图表在上（占 42% 高）、日志表在下吃满剩余——日志需要横向空间放消息全文。 */}
+        <div className="flex min-h-0 flex-[1.6] flex-col gap-2">
+          <section className="flex min-h-0 flex-[0_0_42%] flex-col rounded-lg border bg-card shadow-soft">
+            <h2 className="flex-none border-b px-3 py-2 text-sm font-semibold">{t('serverConsole.tps')} / {t('serverConsole.mspt')}</h2>
+            {hasProbe && tpsBars.length > 0 ? (
+              <div
+                role="img"
+                aria-label={tpsStats ? t('serverConsole.tpsSparklineAria', {
+                  min: tpsStats.min.toFixed(1),
+                  max: tpsStats.max.toFixed(1),
+                  avg: tpsStats.avg.toFixed(1),
+                }) : undefined}
+                className="grid min-h-0 flex-1 grid-cols-24 items-end gap-1 p-3"
+              >
+                {tpsBars.map((v, i) => (
+                  <span key={i} className="rounded-t-sm bg-primary/75" style={{ height: `${v}%` }} />
+                ))}
               </div>
-            ))}
-            {logs.length === 0 && <p className="text-xs text-muted-foreground">{t('serverConsole.noLogs')}</p>}
-          </div>
-        </section>
-
-        <section className="rounded-lg border bg-card p-3 shadow-soft">
-          <h2 className="mb-2 text-sm font-semibold">{t('serverConsole.watchItems')}</h2>
-          <div className="space-y-1.5">
-            {watchItems.map((item) => (
-              <div key={item} className="flex items-center gap-2 rounded-md border bg-muted/70 px-2 py-1.5 text-xs">
-                <AlertTriangle className="size-3.5 text-status-warning" />
-                <span>{item}</span>
-              </div>
-            ))}
-            {watchItems.length === 0 && (
-              <div className="flex items-center gap-2 rounded-sm border border-status-success/35 bg-status-success/10 px-2 py-1.5 text-xs text-status-success">
-                <span className="size-1.5 rounded-full bg-status-success" />
-                <span>运行状态正常</span>
+            ) : (
+              <div className="flex min-h-0 flex-1 items-center justify-center px-3 text-center text-xs text-muted-foreground">
+                {hasProbe ? t('serverConsole.noSeriesYet') : t('serverConsole.probeUnavailable')}
               </div>
             )}
+          </section>
+
+          <section className="flex min-h-0 flex-1 flex-col rounded-lg border bg-card shadow-soft">
+            <div className="flex flex-none items-center justify-between gap-2 border-b px-3 py-2">
+              <h2 className="text-sm font-semibold">{t('serverConsole.logsPreview')}</h2>
+              {/* 预览只有 8 行：给一条到日志中心的出口（FR-403 页面接受 ?instanceId=），行与全量接起来。 */}
+              <Link
+                to={`/logs?instanceId=${instanceId}`}
+                className="shrink-0 text-[11px] text-muted-foreground underline-offset-2 transition-colors hover:text-primary hover:underline"
+              >
+                {t('serverConsole.viewAllLogs')} →
+              </Link>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-20">{t('serverConsole.logTime')}</TableHead>
+                    <TableHead className="w-16">{t('serverConsole.logLevel')}</TableHead>
+                    <TableHead>{t('serverConsole.logMessage')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {logs.slice(0, 8).map((log) => (
+                    <TableRow key={log.id}>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{new Date(log.time).toLocaleTimeString()}</TableCell>
+                      <TableCell className="font-mono text-xs uppercase">{log.level}</TableCell>
+                      <TableCell className="max-w-0 truncate">{log.message}</TableCell>
+                    </TableRow>
+                  ))}
+                  {logs.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={3} className="text-center text-muted-foreground">{t('serverConsole.noLogs')}</TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </section>
+        </div>
+
+        {/* 右栏 38%：三卡合流（FR-423）——最近事件 + 关注事项 + 崩溃诊断同一条时间线。 */}
+        <section className="flex min-h-0 flex-1 flex-col rounded-lg border bg-card shadow-soft">
+          <div className="flex flex-none items-center justify-between gap-2 border-b px-3 py-2">
+            <h2 className="text-sm font-semibold">{t('serverConsole.activityFeed')}</h2>
+            <span className="text-[11px] text-muted-foreground">{t('serverConsole.activityFeedHint')}</span>
           </div>
+          <InstanceActivityFeed
+            instanceId={instanceId}
+            logs={logs}
+            watchItems={watchItems}
+            uptimeSeconds={uptimeSeconds}
+          />
         </section>
       </div>
-
-      <section className="rounded-lg border bg-card p-3 shadow-soft">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-semibold">{t('serverConsole.logsPreview')}</h2>
-          <span className="text-[11px] text-muted-foreground">tail -n 8</span>
-        </div>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-32">{t('serverConsole.logTime')}</TableHead>
-              <TableHead className="w-20">{t('serverConsole.logLevel')}</TableHead>
-              <TableHead>{t('serverConsole.logMessage')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {logs.slice(0, 8).map((log) => (
-              <TableRow key={log.id}>
-                <TableCell className="font-mono text-xs text-muted-foreground">{new Date(log.time).toLocaleTimeString()}</TableCell>
-                <TableCell className="font-mono text-xs uppercase">{log.level}</TableCell>
-                <TableCell className="max-w-0 truncate">{log.message}</TableCell>
-              </TableRow>
-            ))}
-            {logs.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={3} className="text-center text-muted-foreground">{t('serverConsole.noLogs')}</TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </section>
-
-      {/* 崩溃诊断（FR-313）：与失败横幅（FR-312）互补——横幅一句话，此卡看现场。 */}
-      <CrashDiagnosticsCard instanceId={instanceId} />
     </div>
   )
 }
@@ -466,21 +787,27 @@ function formatUptime(sec: number | undefined): string {
   return `${Math.floor(sec)}s`
 }
 
+/** 关注事项文案的翻译签名（够用即可，不引 i18next 全量类型）。 */
+type Translate = (key: string, opts?: Record<string, unknown>) => string
+
 function buildWatchItems({
   status,
   metrics,
   probeConnected,
+  t,
 }: {
   status?: string
   metrics?: { tps: number; msptMillis: number; cpuPercent: number; probeAvailable: boolean }
   probeConnected?: boolean
+  t: Translate
 }) {
   const items: string[] = []
-  if (status === 'CRASHED') items.push('服务器处于崩溃状态，请检查启动日志')
-  if (status === 'STARTING' || status === 'STOPPING') items.push('服务器处于过渡态，操作按钮已收敛')
-  if (metrics?.probeAvailable && metrics.tps < 18) items.push('TPS 低于 18，建议检查插件或实体数量')
-  if (metrics?.probeAvailable && metrics.msptMillis > 50) items.push('MSPT 超过 50ms，主线程可能卡顿')
-  if (metrics?.cpuPercent != null && metrics.cpuPercent > 85) items.push('CPU 使用率偏高')
-  if (!probeConnected) items.push('ServerProbe 未连接，部分运行态数据不可用')
+  // 走 i18n（修硬编码中文）：这些文案会出现在英文界面的「动态与告警」时间线里。
+  if (status === 'CRASHED') items.push(t('serverConsole.watch.crashed'))
+  if (status === 'STARTING' || status === 'STOPPING') items.push(t('serverConsole.watch.transition'))
+  if (metrics?.probeAvailable && metrics.tps < 18) items.push(t('serverConsole.watch.tpsLow'))
+  if (metrics?.probeAvailable && metrics.msptMillis > 50) items.push(t('serverConsole.watch.msptHigh'))
+  if (metrics?.cpuPercent != null && metrics.cpuPercent > 85) items.push(t('serverConsole.watch.cpuHigh'))
+  if (!probeConnected) items.push(t('serverConsole.watch.probeOffline'))
   return items
 }

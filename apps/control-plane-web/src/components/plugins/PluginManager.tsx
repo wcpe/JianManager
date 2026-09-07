@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Store } from 'lucide-react'
+import { AlertTriangle, Puzzle, Store, UploadCloud } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   usePlugins,
@@ -15,6 +15,8 @@ import { useInstanceSearch, type InstanceInfo } from '@/api/instances'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { EmptyState } from '@jianmanager/ui/components/empty-state'
+import { Panel } from '@jianmanager/ui/components/panel'
 import {
   Dialog,
   DialogContent,
@@ -70,6 +72,15 @@ interface PluginManagerProps {
   instanceId: number
 }
 
+/**
+ * 分栏（FR-423，spec §3.1 插件 62:38）：左 62% 是插件表（5 列 × 4 个目录分组，横向要空间、纵向要行数），
+ * 右 38% 收「需关注」（重启提示）+ 上传投放 + 插件市场——这些都是内容驱动的窄块，
+ * 原先横铺整宽压在表格上方，把表格挤到折叠线以下（重启横幅 + 投放区 ≈ 110px 纯装饰高度）。
+ *
+ * 高度策略统一为「内容驱动高度 + 栏高封顶（`max-h-full min-h-0 flex-none`）+ 卡内滚动」（spec §3.2）：
+ * 插件多时撑到栏高上限后表体内部滚，少时贴合内容；右栏三块一律 `flex-none`，
+ * 空白落在栏位空隙而非卡片内部。
+ */
 export default function PluginManager({ instanceId }: PluginManagerProps) {
   const { t } = useTranslation()
   const { data: plugins, isLoading, error } = usePlugins(instanceId)
@@ -137,164 +148,196 @@ export default function PluginManager({ instanceId }: PluginManagerProps) {
   }
 
   return (
-    <div className="space-y-4">
-      {/* 工具栏：选择目标目录 + 上传 */}
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold">{t('plugins.title')}</h2>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Select value={uploadDir} onValueChange={(v) => setUploadDir(v as ManagedDir)}>
-            <SelectTrigger size="sm" className="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {MANAGED_DIRS.map((dir) => (
-                <SelectItem key={dir} value={dir}>
-                  {dirLabel(t, dir)}
-                </SelectItem>
+    <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row">
+      {/* 左栏 62%：插件表。批量部署留在卡头 actions——它作用于表内容，滚动时也需常驻可点。 */}
+      <div className="flex flex-none flex-col xl:min-h-0 xl:flex-[1.6]">
+        <Panel
+          className="max-h-full min-h-0 flex-none"
+          bodyClassName="flex min-h-0 flex-col overflow-hidden p-0"
+          icon={<Puzzle className="size-3.5" />}
+          title={t('plugins.title')}
+          actions={
+            <Button size="sm" variant="outline" onClick={() => setBatchDeployOpen(true)}>
+              {t('plugins.batchDeploy.action')}
+            </Button>
+          }
+        >
+          {isLoading ? (
+            <p className="p-3 text-sm text-muted-foreground">{t('plugins.loading')}</p>
+          ) : error ? (
+            <p className="p-3 text-sm text-destructive">
+              {(error as Error & { response?: { data?: { message?: string } } }).response?.data?.message ||
+                t('plugins.loadFailed')}
+            </p>
+          ) : !plugins || plugins.length === 0 ? (
+            /* 空态高度按内容走（spec §3.2）：去掉原 p-8 虚线大方块，不再为一句话占固定高度。 */
+            <EmptyState icon={<Puzzle />} title={t('plugins.empty')} />
+          ) : (
+            <div className="min-h-0 space-y-3 overflow-auto p-3">
+              {grouped.map(({ dir, items }) => (
+                <section key={dir} aria-label={dirLabel(t, dir)} className="rounded-lg border">
+                  <div className="flex items-center gap-2 border-b bg-muted/50 px-3 py-2">
+                    <h3 className="text-sm font-semibold">{dirLabel(t, dir)}</h3>
+                    <Badge variant="outline">{items.length}</Badge>
+                  </div>
+                  {items.length === 0 ? (
+                    <p className="px-3 py-3 text-center text-sm text-muted-foreground">{t('plugins.sectionEmpty')}</p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>{t('plugins.name')}</TableHead>
+                          <TableHead>{t('plugins.metadata')}</TableHead>
+                          <TableHead className="w-24">{t('plugins.status')}</TableHead>
+                          <TableHead className="w-24 text-right">{t('plugins.size')}</TableHead>
+                          <TableHead className="w-44 text-right">{t('plugins.actions')}</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {items.map((p) => (
+                          <TableRow key={`${p.dir}/${p.name}`}>
+                            <TableCell>
+                              <div className="font-mono text-xs">{p.name}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">{p.dir}</div>
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {pluginMetadata(p)}
+                            </TableCell>
+                            <TableCell>
+                              {p.enabled ? (
+                                <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                                  {t('plugins.statusEnabled')}
+                                </Badge>
+                              ) : (
+                                <Badge variant="secondary">{t('plugins.statusDisabled')}</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
+                              {formatSize(p.size)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1.5">
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  disabled={toggle.isPending}
+                                  onClick={() => toggle.mutate({ name: p.name, dir: p.dir })}
+                                >
+                                  {p.enabled ? t('plugins.disable') : t('plugins.enable')}
+                                </Button>
+                                <Button
+                                  size="xs"
+                                  variant="ghost"
+                                  className="text-destructive hover:text-destructive"
+                                  disabled={remove.isPending}
+                                  onClick={() => setDeleteTarget(p)}
+                                >
+                                  {t('plugins.delete')}
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </section>
               ))}
-            </SelectContent>
-          </Select>
-          <Button size="sm" disabled={upload.isPending} onClick={() => fileInputRef.current?.click()}>
-            {t('plugins.upload')}
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setBatchDeployOpen(true)}>
-            {t('plugins.batchDeploy.action')}
-          </Button>
+            </div>
+          )}
+        </Panel>
+      </div>
+
+      {/* 右栏 38%：需关注 + 上传投放 + 市场。xl 以下退成整页纵向堆叠，权重只在 xl 生效——
+          窄屏若仍按权重分高度，两栏会互相挤压，页面该滚的时候滚不动。 */}
+      <div className="flex flex-none flex-col gap-2 xl:min-h-0 xl:flex-1">
+        {/* 需关注：重启才生效是本页最容易踩的坑，原先是横铺整宽的琥珀条，现在收成一张窄卡。 */}
+        <Panel
+          className="flex-none"
+          tone="warning"
+          icon={<AlertTriangle className="size-3.5" />}
+          title={t('plugins.noticeTitle')}
+        >
+          <p className="text-xs text-status-warning">{t('plugins.restartHint')}</p>
+        </Panel>
+
+        {/* 上传投放：目录选择 / 上传按钮 / 拖拽区 / 进度条同属一件事，合到一张卡里，
+            不再让「选目录」在页头、「拖到这里」在页中隔着一条横幅。 */}
+        <Panel
+          className="flex-none"
+          bodyClassName="flex flex-col gap-2 p-3"
+          icon={<UploadCloud className="size-3.5" />}
+          title={t('plugins.upload')}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={uploadDir} onValueChange={(v) => setUploadDir(v as ManagedDir)}>
+              <SelectTrigger size="sm" className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MANAGED_DIRS.map((dir) => (
+                  <SelectItem key={dir} value={dir}>
+                    {dirLabel(t, dir)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button size="sm" disabled={upload.isPending} onClick={() => fileInputRef.current?.click()}>
+              {t('plugins.upload')}
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={UPLOAD_ACCEPT[uploadDir]}
+              className="hidden"
+              onChange={onPickFile}
+            />
+          </div>
+          <div
+            data-testid="plugin-dropzone"
+            className={cn(
+              'rounded-lg border border-dashed px-3 py-2.5 text-xs transition-colors',
+              dragActive ? 'border-primary bg-primary/5 text-primary' : 'border-muted-foreground/30 text-muted-foreground',
+            )}
+            onDragEnter={(e) => {
+              e.preventDefault()
+              setDragActive(true)
+            }}
+            onDragOver={(e) => {
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'copy'
+            }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={onDrop}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span>{t('plugins.dropUploadHint', { dir: dirLabel(t, uploadDir), extensions: UPLOAD_ACCEPT[uploadDir] })}</span>
+              {uploadProgress && (
+                <span className="font-mono text-xs" role="status">
+                  {t('plugins.uploadProgress', {
+                    name: uploadProgress.fileName,
+                    percent: uploadPercent(uploadProgress),
+                  })}
+                </span>
+              )}
+            </div>
+            {uploadProgress && (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${uploadPercent(uploadProgress)}%` }} />
+              </div>
+            )}
+          </div>
+        </Panel>
+
+        {/* 市场：入口尚未接通（按钮 disabled），单独一张窄卡说明缘由，不再占页头一格。 */}
+        <Panel className="flex-none" bodyClassName="flex flex-col items-start gap-2 p-3" icon={<Store className="size-3.5" />} title={t('plugins.market')}>
+          <p className="text-xs text-muted-foreground">{t('plugins.marketSoon')}</p>
           <Button size="sm" variant="outline" disabled title={t('plugins.marketSoon')}>
             <Store className="mr-1 size-3.5" aria-hidden="true" />
             {t('plugins.market')}
           </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={UPLOAD_ACCEPT[uploadDir]}
-            className="hidden"
-            onChange={onPickFile}
-          />
-        </div>
+        </Panel>
       </div>
-      <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-        {t('plugins.restartHint')}
-      </div>
-      <div
-        data-testid="plugin-dropzone"
-        className={cn(
-          'rounded-lg border border-dashed px-4 py-3 text-sm transition-colors',
-          dragActive ? 'border-primary bg-primary/5 text-primary' : 'border-muted-foreground/30 text-muted-foreground',
-        )}
-        onDragEnter={(e) => {
-          e.preventDefault()
-          setDragActive(true)
-        }}
-        onDragOver={(e) => {
-          e.preventDefault()
-          e.dataTransfer.dropEffect = 'copy'
-        }}
-        onDragLeave={() => setDragActive(false)}
-        onDrop={onDrop}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span>{t('plugins.dropUploadHint', { dir: dirLabel(t, uploadDir), extensions: UPLOAD_ACCEPT[uploadDir] })}</span>
-          {uploadProgress && (
-            <span className="font-mono text-xs" role="status">
-              {t('plugins.uploadProgress', {
-                name: uploadProgress.fileName,
-                percent: uploadPercent(uploadProgress),
-              })}
-            </span>
-          )}
-        </div>
-        {uploadProgress && (
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${uploadPercent(uploadProgress)}%` }} />
-          </div>
-        )}
-      </div>
-
-      {isLoading ? (
-        <p className="text-sm text-muted-foreground">{t('plugins.loading')}</p>
-      ) : error ? (
-        <p className="text-sm text-destructive">
-          {(error as Error & { response?: { data?: { message?: string } } }).response?.data?.message ||
-            t('plugins.loadFailed')}
-        </p>
-      ) : !plugins || plugins.length === 0 ? (
-        <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          {t('plugins.empty')}
-        </p>
-      ) : (
-        <div className="space-y-4">
-          {grouped.map(({ dir, items }) => (
-            <section key={dir} aria-label={dirLabel(t, dir)} className="rounded-lg border">
-              <div className="flex items-center gap-2 border-b bg-muted/50 px-3 py-2">
-                <h3 className="text-sm font-semibold">{dirLabel(t, dir)}</h3>
-                <Badge variant="outline">{items.length}</Badge>
-              </div>
-              {items.length === 0 ? (
-                <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('plugins.sectionEmpty')}</p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{t('plugins.name')}</TableHead>
-                      <TableHead>{t('plugins.metadata')}</TableHead>
-                      <TableHead className="w-24">{t('plugins.status')}</TableHead>
-                      <TableHead className="w-24 text-right">{t('plugins.size')}</TableHead>
-                      <TableHead className="w-44 text-right">{t('plugins.actions')}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {items.map((p) => (
-                      <TableRow key={`${p.dir}/${p.name}`}>
-                        <TableCell>
-                          <div className="font-mono text-xs">{p.name}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">{p.dir}</div>
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {pluginMetadata(p)}
-                        </TableCell>
-                        <TableCell>
-                          {p.enabled ? (
-                            <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
-                              {t('plugins.statusEnabled')}
-                            </Badge>
-                          ) : (
-                            <Badge variant="secondary">{t('plugins.statusDisabled')}</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
-                          {formatSize(p.size)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1.5">
-                            <Button
-                              size="xs"
-                              variant="outline"
-                              disabled={toggle.isPending}
-                              onClick={() => toggle.mutate({ name: p.name, dir: p.dir })}
-                            >
-                              {p.enabled ? t('plugins.disable') : t('plugins.enable')}
-                            </Button>
-                            <Button
-                              size="xs"
-                              variant="ghost"
-                              className="text-destructive hover:text-destructive"
-                              disabled={remove.isPending}
-                              onClick={() => setDeleteTarget(p)}
-                            >
-                              {t('plugins.delete')}
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </section>
-          ))}
-        </div>
-      )}
 
       <DangerConfirm
         open={!!deleteTarget}

@@ -28,7 +28,8 @@ describe('InstanceDetailPage（mock 深链）', () => {
   it('路由 /instances/1 → 直接渲染种子实例控制台', async () => {
     renderDetail('/instances/1')
 
-    expect(await screen.findByText(/服务器控制台 \/ survival-1/)).toBeInTheDocument()
+    // 顶栏标题只留实例名（FR-412 瘦身，「服务器控制台 /」前缀已删）。
+    expect(await screen.findByRole('heading', { name: 'survival-1' })).toBeInTheDocument()
     expect(screen.getByText('运行', { selector: '[data-slot="status-badge"]' })).toBeInTheDocument()
   })
 
@@ -36,7 +37,7 @@ describe('InstanceDetailPage（mock 深链）', () => {
     const user = userEvent.setup()
     renderDetail('/instances/2')
 
-    expect(await screen.findByText(/服务器控制台 \/ lobby-proxy/)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'lobby-proxy' })).toBeInTheDocument()
     expect(screen.getByText('停止', { selector: '[data-slot="status-badge"]' })).toBeInTheDocument()
 
     await user.click(await screen.findByRole('button', { name: /启动/ }))

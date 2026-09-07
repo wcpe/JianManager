@@ -28,31 +28,58 @@ describe('InstanceConsolePage', () => {
   it('渲染服务器状态条、固定分区和概览 KPI', async () => {
     renderWithProviders(<InstanceConsolePage instanceId={1} />)
 
-    expect(await screen.findByText(/服务器控制台 \/ survival-1/)).toBeInTheDocument()
+    // 瘦身顶栏（FR-412）：标题只留实例名，「服务器控制台 /」前缀与副标题已删；
+    // 「打开终端」按钮亦删（控制台就是一个页签，无需重复入口）。
+    expect(await screen.findByRole('heading', { name: 'survival-1' })).toBeInTheDocument()
     expect(screen.getByText('运行')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /打开终端/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /打开终端/ })).not.toBeInTheDocument()
 
     for (const tab of ['概览', '控制台', '文件配置', '监控', '玩家', '插件', '备份定时', '业务', 'Bot']) {
-      expect(screen.getByRole('button', { name: tab })).toBeInTheDocument()
+      // WAI-ARIA tabs：页签是 tab 角色（不再是裸 button），激活态是 aria-selected。
+      expect(screen.getByRole('tab', { name: tab })).toBeInTheDocument()
     }
 
-    expect(screen.getByText('CPU')).toBeInTheDocument()
-    expect(screen.getByText('内存')).toBeInTheDocument()
+    // CPU/内存 现在顶栏指标条与概览 KPI 卡各出现一次。
+    expect(screen.getAllByText('CPU')).toHaveLength(2)
+    expect(screen.getAllByText('内存')).toHaveLength(2)
     expect(screen.getAllByText('TPS').length).toBeGreaterThan(0)
-    expect(screen.getByText('最近事件')).toBeInTheDocument()
+    // 三卡合流（FR-423）：「最近事件 / 关注事项 / 崩溃诊断」并为一条「动态与告警」流。
+    expect(screen.getByText('动态与告警')).toBeInTheDocument()
+    expect(screen.queryByText('最近事件')).toBeNull()
+    expect(screen.queryByText('关注事项')).toBeNull()
     expect(screen.getByText('运行日志预览')).toBeInTheDocument()
+  })
+
+  it('Tab 重组（FR-413）：环境变量并入文件配置分段，?tab=env 旧深链仍落到该分段', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<InstanceConsolePage instanceId={1} />, { route: '/instances/1?tab=env' })
+
+    // 「环境变量」不再是顶级页签（Tab 栏内查不到），文件配置页签被旧深链激活。
+    const tabBar = await screen.findByRole('tablist')
+    expect(within(tabBar).getByRole('tab', { name: '文件配置' })).toHaveAttribute('aria-selected', 'true')
+    expect(within(tabBar).queryByRole('tab', { name: '环境变量' })).toBeNull()
+
+    // 旧深链落到环境变量分段：分段按钮按下态。
+    const envSegment = screen.getByRole('button', { name: '环境变量' })
+    expect(envSegment).toHaveAttribute('aria-pressed', 'true')
+
+    // 切到文件分段 → URL 去掉 seg；再切回环境变量 → seg=env。
+    await user.click(screen.getByRole('button', { name: '文件' }))
+    await waitFor(() => expect(window.location.search).toBe('?tab=resource'))
+    await user.click(envSegment)
+    await waitFor(() => expect(window.location.search).toBe('?tab=resource&seg=env'))
   })
 
   it('从 URL 恢复激活 Tab，切换后同步回 searchParams', async () => {
     const user = userEvent.setup()
     renderWithProviders(<InstanceConsolePage instanceId={1} />, { route: '/instances/1?tab=players' })
 
-    expect(await screen.findByRole('button', { name: '玩家' })).toHaveAttribute('aria-pressed', 'true')
+    expect(await screen.findByRole('tab', { name: '玩家' })).toHaveAttribute('aria-selected', 'true')
 
-    await user.click(screen.getByRole('button', { name: '概览' }))
+    await user.click(screen.getByRole('tab', { name: '概览' }))
 
     expect(new URLSearchParams(window.location.search).get('tab')).toBeNull()
-    expect(screen.getByRole('button', { name: '概览' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('tab', { name: '概览' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('强杀必须经危险操作确认框，确认后才发 kill 请求（FR-059）', async () => {

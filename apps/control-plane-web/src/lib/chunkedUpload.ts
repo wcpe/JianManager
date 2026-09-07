@@ -112,13 +112,15 @@ export async function uploadFileChunked(
 
   try {
     // 2) 顺序 PUT 各分片（原始字节切片）。片粒度进度：每片完成后回调。
+    // 分片默认吃 10s 全局超时——慢上行传 8MiB 轻易超 10s 即整单报废（「上传过大文件报错」）。
+    // 单片放宽到 5 分钟（8MiB @ ≥0.03MB/s 均可完成），complete 同理（服务端拼装大文件耗时）。
     for (const r of ranges) {
       if (signal?.aborted) throw abortError()
       const blob = file.slice(r.start, r.end)
       await api.put(
         `/client-channels/${channelId}/uploads/${init.uploadId}/chunks/${r.index}`,
         blob,
-        { headers: { 'Content-Type': 'application/octet-stream' }, signal },
+        { headers: { 'Content-Type': 'application/octet-stream' }, signal, timeout: 300_000 },
       )
       onProgress?.(progressBytes(r.index + 1, init.chunkSize, file.size), file.size)
     }
@@ -132,7 +134,7 @@ export async function uploadFileChunked(
     const { data: result } = await api.post<ClientFileResult>(
       `/client-channels/${channelId}/uploads/${init.uploadId}/complete`,
       expectedSha256 ? { codec: 'none', expectedSha256 } : { codec: 'none' },
-      { signal },
+      { signal, timeout: 300_000 },
     )
     return result
   } catch (err) {

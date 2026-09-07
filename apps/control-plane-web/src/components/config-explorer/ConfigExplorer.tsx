@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import ResourceExplorer, { type ConfigCapabilities } from '@/components/explorer/ResourceExplorer'
 import ConfigFileEditor from './ConfigFileEditor'
 import ConfigVersionDrawer from './ConfigVersionDrawer'
@@ -23,9 +23,11 @@ import {
  */
 interface ConfigExplorerProps {
   instanceId: number
+  /** FR-422：透传到资源管理器工具栏左端的宿主控件（分段切换并入同一条横栏）。 */
+  toolbarLeading?: ReactNode
 }
 
-export default function ConfigExplorer({ instanceId }: ConfigExplorerProps) {
+export default function ConfigExplorer({ instanceId, toolbarLeading }: ConfigExplorerProps) {
   const storage = browserStorage()
   const [favorites, setFavorites] = useState<string[]>(() => loadFavorites(storage, instanceId))
 
@@ -90,6 +92,7 @@ export default function ConfigExplorer({ instanceId }: ConfigExplorerProps) {
     <ResourceExplorer
       instanceId={instanceId}
       config={config}
+      toolbarLeading={toolbarLeading}
       openPathRef={(open) => {
         openRef.current = open
       }}

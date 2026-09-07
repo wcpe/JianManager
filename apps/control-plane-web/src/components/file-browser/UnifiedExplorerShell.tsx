@@ -25,6 +25,12 @@ export interface UnifiedExplorerShellProps {
   children?: ReactNode
   /** 壳顶栏（可选）。 */
   header?: ReactNode
+  /**
+   * FR-422：塞进内层管理器已有横栏左端的控件（instance-files 模式 → ExplorerTabHost 标签条）。
+   * 与 `header` 的区别：`header` 自成一条横栏，`leading` 蹭已有横栏、不增加高度。
+   * browser / custom 模式没有可蹭的横栏，此时被忽略——宿主该用 `header`。
+   */
+  leading?: ReactNode
   className?: string
   refreshKey?: number
 }
@@ -42,6 +48,7 @@ export default function UnifiedExplorerShell({
   initialFile,
   children,
   header,
+  leading,
   className,
   refreshKey,
 }: UnifiedExplorerShellProps) {
@@ -59,6 +66,7 @@ export default function UnifiedExplorerShell({
             instanceId={instanceId}
             initialDir={initialDir}
             initialFile={initialFile}
+            leading={leading}
           />
         )}
         {capability.mode === 'browser' && source && (

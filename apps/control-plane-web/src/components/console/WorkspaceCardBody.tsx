@@ -50,14 +50,19 @@ export default function WorkspaceCardBody({ instanceId, type, persistTerminal = 
         </div>
       )
     case 'plugins':
+      // FR-423：插件段自己分栏并在卡内滚，外层退成 flex 列——若仍是 `h-full overflow-auto`（块级），
+      // 内部的 flex 权重与 max-h-full 都失去可解析的高度。
+      // 保留 overflow-y-auto 而非 hidden：xl 以下两栏降级为纵向堆叠、卡片改为纯内容驱动，
+      // 总高会超出内容区，此时必须有人能滚（hidden 会把下半栏直接裁掉）。xl 及以上无溢出、无滚动条。
       return (
-        <div className="h-full overflow-auto p-3">
+        <div className="flex h-full min-h-0 flex-col overflow-y-auto p-3">
           <PluginManager instanceId={instanceId} />
         </div>
       )
     case 'metrics':
+      // FR-423：监控段头部常驻 + 图表区自滚，故滚动交给内部（同上）。
       return (
-        <div className="h-full overflow-auto">
+        <div className="flex h-full min-h-0 flex-col overflow-y-auto">
           <MetricsSegment instanceUuid={instance?.uuid ?? ''} instanceId={instanceId} />
         </div>
       )
@@ -68,8 +73,9 @@ export default function WorkspaceCardBody({ instanceId, type, persistTerminal = 
         </div>
       )
     case 'business':
+      // FR-423：业务段分栏（能力清单 / 下发面板）并各自卡内滚；overflow-y-auto 兜窄屏堆叠（同 plugins）。
       return (
-        <div className="h-full overflow-auto">
+        <div className="flex h-full min-h-0 flex-col overflow-y-auto">
           <BusinessSegment instanceId={instanceId} />
         </div>
       )
@@ -86,8 +92,9 @@ export default function WorkspaceCardBody({ instanceId, type, persistTerminal = 
         </div>
       )
     case 'bot':
+      // FR-423：Bot 段分栏（Bot 表 / 运行概览），列表在卡内滚；overflow-y-auto 兜窄屏堆叠（同 plugins）。
       return (
-        <div className="h-full overflow-auto">
+        <div className="flex h-full min-h-0 flex-col overflow-y-auto">
           <BotSegment instanceId={instanceId} />
         </div>
       )

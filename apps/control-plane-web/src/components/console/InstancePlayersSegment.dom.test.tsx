@@ -27,9 +27,17 @@ function loginMockAdmin(): void {
   useAuthStore.getState().login(token, 'r-admin')
 }
 
-/** 按 Panel 标题定位其面板容器（在线/白名单表都含「玩家」列头与 Alice，需分区隔离断言）。 */
+/** 按 Panel 标题定位其面板容器（在线/白名单都含 Alice，需分区隔离断言）。 */
 function panelByTitle(title: string): HTMLElement {
   return screen.getByText(title).closest('[data-slot="panel"]') as HTMLElement
+}
+
+/**
+ * 按玩家名定位其所在行卡片（FR-423：在线玩家与白名单由 2 列表格改为 ul/li 行卡片，
+ * 故行容器是 li 而非 tr；封禁记录仍是宽表，继续用 tr）。
+ */
+function playerRow(scope: HTMLElement, name: string): HTMLElement {
+  return within(scope).getByText(name).closest('li') as HTMLElement
 }
 
 describe('InstancePlayersSegment（mock 假后端）', () => {
@@ -57,7 +65,8 @@ describe('InstancePlayersSegment（mock 假后端）', () => {
     renderWithProviders(<InstancePlayersSegment instanceId={1} />)
 
     const online = panelByTitle('在线玩家')
-    const row = (await within(online).findByText('Alice')).closest('tr') as HTMLElement
+    await within(online).findByText('Alice')
+    const row = playerRow(online, 'Alice')
     await user.click(within(row).getByRole('button', { name: '踢出' }))
 
     const dialog = await screen.findByRole('dialog', { name: '踢出玩家' })
@@ -85,7 +94,8 @@ describe('InstancePlayersSegment（mock 假后端）', () => {
     renderWithProviders(<InstancePlayersSegment instanceId={1} />)
 
     const online = panelByTitle('在线玩家')
-    const row = (await within(online).findByText('Alice')).closest('tr') as HTMLElement
+    await within(online).findByText('Alice')
+    const row = playerRow(online, 'Alice')
     await user.click(within(row).getByRole('button', { name: '封禁' }))
 
     const dialog = await screen.findByRole('dialog', { name: '封禁玩家' })
@@ -136,6 +146,46 @@ describe('InstancePlayersSegment（mock 假后端）', () => {
     await user.click(within(wlPanel).getByRole('button', { name: '添加' }))
 
     await waitFor(() => expect(within(panelByTitle('白名单')).getByText('Carl')).toBeInTheDocument())
+  })
+
+  it('分栏后三块内容同屏可达且各自可操作（FR-423）', async () => {
+    const user = userEvent.setup()
+    loginMockAdmin()
+    renderWithProviders(<InstancePlayersSegment instanceId={1} />)
+
+    const online = panelByTitle('在线玩家')
+    const whitelist = panelByTitle('白名单')
+    const bans = panelByTitle('封禁记录')
+
+    // 分栏不得把任何一块挪出 DOM（xl 以下只是降级为纵向堆叠，仍全部挂载）。
+    await within(online).findByText('Alice')
+    await within(bans).findByText('Griefer')
+    expect(within(whitelist).getByText('Bob')).toBeInTheDocument()
+
+    // 左栏（在线 + 白名单）与右栏（封禁）是同一分栏根下的两个兄弟栏位。
+    const leftColumn = online.parentElement as HTMLElement
+    const rightColumn = bans.parentElement as HTMLElement
+    expect(whitelist.parentElement).toBe(leftColumn)
+    expect(rightColumn).not.toBe(leftColumn)
+    const splitRoot = leftColumn.parentElement as HTMLElement
+    expect(rightColumn.parentElement).toBe(splitRoot)
+
+    // 分栏根遵循 FR-422 骨架契约（吃满内容区），并在 xl 起分左右；左 38% / 右 62% 权重。
+    expect(splitRoot).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col', 'xl:flex-row')
+    expect(leftColumn).toHaveClass('xl:flex-1')
+    expect(rightColumn).toHaveClass('xl:flex-[1.6]')
+
+    // 三块卡一律「内容驱动 + 栏高封顶」并卡内滚动：记录少时不被拉平成死区，
+    // 多时撑到上限后滚动。写死 flex-1 会让 2 条封禁也撑满 800+px。
+    expect(bans).toHaveClass('max-h-full', 'min-h-0', 'flex-none')
+    expect((within(bans).getByText('Griefer').closest('table') as HTMLElement).parentElement?.parentElement).toHaveClass('overflow-auto')
+
+    // 三块各自的入口动作都还在且可点：白名单删除、封禁解封、在线踢出（点开确认弹窗为止）。
+    expect(within(playerRow(whitelist, 'Bob')).getByRole('button', { name: '删除' })).toBeEnabled()
+    const grieferRow = within(bans).getByText('Griefer').closest('tr') as HTMLElement
+    expect(within(grieferRow).getByRole('button', { name: '解封' })).toBeEnabled()
+    await user.click(within(playerRow(online, 'Alice')).getByRole('button', { name: '踢出' }))
+    expect(await screen.findByRole('dialog', { name: '踢出玩家' })).toBeInTheDocument()
   })
 
   it('本实例探针不可达 → 在线面板显降级横幅并落空态', async () => {

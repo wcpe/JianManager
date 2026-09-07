@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -27,6 +27,11 @@ interface ExplorerTabHostProps {
   /** 可选初始目录（深链页可传）。 */
   initialDir?: string
   initialFile?: string
+  /**
+   * FR-422：标签条左端插槽。宿主的分段切换塞进已有的标签条，
+   * 避免在标签条之上再多一条只放几个 pill 的横栏。
+   */
+  leading?: ReactNode
 }
 
 interface FloatGeom {
@@ -58,6 +63,7 @@ export default function ExplorerTabHost({
   instanceId,
   initialDir = '',
   initialFile,
+  leading,
 }: ExplorerTabHostProps) {
   const { t } = useTranslation()
   const [state, setState] = useState<ExplorerTabsState>(() =>
@@ -212,8 +218,9 @@ export default function ExplorerTabHost({
   return (
     // min-h：停靠 pane 为 absolute，不撑开父级；控制台资源卡等祖先未给满高时避免高度塌成 0（真机 FR-378）
     <div className="flex h-full min-h-[480px] flex-col" data-testid="explorer-tab-host">
-      {/* 标签条：仅非浮动签 */}
+      {/* 标签条：仅非浮动签。左端先放宿主插槽（FR-422 横栏合并）。 */}
       <div className="flex shrink-0 items-center gap-1 border-b bg-muted/20 px-1 py-1">
+        {leading}
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
           {dockedTabs.map((tab) => (
             <div

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight } from 'lucide-react'
+import { Bot, ChevronRight, Gauge } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   useBots,
@@ -23,7 +23,9 @@ import BotStatusDot from './BotStatusDot'
 import CreateBotDialog from './CreateBotDialog'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Button } from '@jianmanager/ui/components/button'
+import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Input } from '@jianmanager/ui/components/input'
+import { Panel } from '@jianmanager/ui/components/panel'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Select,
@@ -43,6 +45,13 @@ const STATUS_VALUES = ['connected', 'connecting', 'disconnected', 'error'] as co
  * 控制台工作区的 Bot 段（FR-039）：聚合优先（概览卡片 + 筛选/分组 + 分页 + 批量），
  * 永不一次性铺开全部 Bot。概览计数来自 `GET /bots/summary`（全量聚合），
  * 列表分页拉 `GET /bots`，分组仅作用于当前页数据。
+ *
+ * 布局为分栏（FR-423，spec §3.1 Bot 62:38）：左 62% 是 Bot 表（工具栏 + 批量条 + 分组列表 + 分页），
+ * 右 38% 是运行概览（四档聚合计数）。原先四张概览卡横铺整宽压在列表上方，
+ * 每张卡里一个数字撑着 68px、四张一起吃掉一整条横带，把真正要看的列表往下推。
+ *
+ * 注：spec 该行右栏还写了「压测」，但压测（bot-load）是 `/bots` 独立页的会话/模板能力，
+ * 不在本页签内，故右栏只有运行概览。
  */
 interface BotSegmentProps {
   /** 当前工作区打开的实例 id */
@@ -93,109 +102,132 @@ export default function BotSegment({ instanceId }: BotSegmentProps) {
     })
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
-        {/* 概览卡片：总计 / 在线 / 连接中 / 异常（聚合，覆盖全量） */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <SummaryCard label={t('bots.summaryTotal')} value={counts.total} tone="neutral" />
-          <SummaryCard label={t('bots.summaryOnline')} value={counts.online} tone="online" />
-          <SummaryCard label={t('bots.summaryConnecting')} value={counts.connecting} tone="connecting" />
-          <SummaryCard label={t('bots.summaryError')} value={counts.error} tone="error" />
-        </div>
-
-        {/* 工具栏：搜索 + 状态筛选 + 行为筛选 + 分组切换 + 新建 */}
-        <div className="flex flex-wrap items-center gap-2">
-          <Input
-            value={q}
-            onChange={(e) => {
-              setQ(e.target.value)
-              resetPage()
-            }}
-            placeholder={t('bots.searchPlaceholder')}
-            className="h-9 w-44"
-          />
-          <Select
-            value={statusFilter || 'all'}
-            onValueChange={(v: string) => {
-              setStatusFilter(v === 'all' ? '' : v)
-              resetPage()
-            }}
-          >
-            <SelectTrigger className="h-9 w-32">
-              <SelectValue placeholder={t('bots.status')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">{t('bots.allStatus')}</SelectItem>
-              {STATUS_VALUES.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {t(`bots.${s}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={behaviorFilter || 'all'}
-            onValueChange={(v: string) => {
-              setBehaviorFilter(v === 'all' ? '' : v)
-              resetPage()
-            }}
-          >
-            <SelectTrigger className="h-9 w-32">
-              <SelectValue placeholder={t('bots.behavior')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">{t('bots.allBehavior')}</SelectItem>
-              {BEHAVIOR_VALUES.map((b) => (
-                <SelectItem key={b} value={b}>
-                  {t(`bots.${b}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={groupBy} onValueChange={(v: string) => setGroupBy(v as BotGroupBy)}>
-            <SelectTrigger className="h-9 w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="behavior">{t('bots.groupByBehavior')}</SelectItem>
-              <SelectItem value="status">{t('bots.groupByStatus')}</SelectItem>
-            </SelectContent>
-          </Select>
-          <div className="ml-auto">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 p-4 xl:flex-row">
+      {/* 左栏 62%：Bot 表。新建按钮上提到卡头 actions——列表滚动时它仍常驻可点。 */}
+      <div className="flex flex-none flex-col xl:min-h-0 xl:flex-[1.6]">
+        {/* 内容驱动 + 栏高封顶（spec §3.2）：Bot 多时撑到栏高上限后列表内部滚，少时贴合内容。
+            不写死 flex-1——否则 3 个 Bot 也把卡撑满整栏，正是本批要消灭的「矮内容被拉平成死区」。 */}
+        <Panel
+          className="max-h-full min-h-0 flex-none"
+          bodyClassName="flex min-h-0 flex-col gap-3 overflow-hidden p-3"
+          icon={<Bot className="size-3.5" />}
+          title={t('bots.title')}
+          actions={
             <Button size="sm" onClick={() => setShowCreate(true)}>
               + {t('bots.createBot')}
             </Button>
+          }
+        >
+          {/* 工具栏：搜索 + 状态筛选 + 行为筛选 + 分组切换 */}
+          <div className="flex flex-none flex-wrap items-center gap-2">
+            <Input
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value)
+                resetPage()
+              }}
+              placeholder={t('bots.searchPlaceholder')}
+              className="h-9 w-44"
+            />
+            <Select
+              value={statusFilter || 'all'}
+              onValueChange={(v: string) => {
+                setStatusFilter(v === 'all' ? '' : v)
+                resetPage()
+              }}
+            >
+              <SelectTrigger className="h-9 w-32">
+                <SelectValue placeholder={t('bots.status')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t('bots.allStatus')}</SelectItem>
+                {STATUS_VALUES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {t(`bots.${s}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={behaviorFilter || 'all'}
+              onValueChange={(v: string) => {
+                setBehaviorFilter(v === 'all' ? '' : v)
+                resetPage()
+              }}
+            >
+              <SelectTrigger className="h-9 w-32">
+                <SelectValue placeholder={t('bots.behavior')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t('bots.allBehavior')}</SelectItem>
+                {BEHAVIOR_VALUES.map((b) => (
+                  <SelectItem key={b} value={b}>
+                    {t(`bots.${b}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={groupBy} onValueChange={(v: string) => setGroupBy(v as BotGroupBy)}>
+              <SelectTrigger className="h-9 w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="behavior">{t('bots.groupByBehavior')}</SelectItem>
+                <SelectItem value="status">{t('bots.groupByStatus')}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-        </div>
 
-        {/* 批量条：作用于当前筛选集或选中集 */}
-        <BotBatchBar
-          filter={filter}
-          selectedIds={[...selected]}
-          filteredTotal={total}
-          onDone={clearSelection}
-        />
-
-        {/* 分组 + 分页列表 */}
-        {isLoading ? (
-          <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
-        ) : total === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('bots.empty')}</p>
-        ) : (
-          <div className="space-y-2">
-            {groups.map((group) => (
-              <BotGroupBlock
-                key={group.key}
-                groupBy={groupBy}
-                groupKey={group.key}
-                bots={group.bots}
-                selected={selected}
-                onToggleSelect={toggleSelect}
-              />
-            ))}
-            <Pagination page={page} totalPages={totalPages} total={total} onChange={setPage} />
+          {/* 批量条：作用于当前筛选集或选中集（flex-none：与工具栏同属常驻控制区，不随列表滚走） */}
+          <div className="flex-none">
+            <BotBatchBar
+              filter={filter}
+              selectedIds={[...selected]}
+              filteredTotal={total}
+              onDone={clearSelection}
+            />
           </div>
-        )}
+
+          {/* 分组 + 分页列表：本卡唯一的滚动容器 */}
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+          ) : total === 0 ? (
+            <EmptyState icon={<Bot />} title={t('bots.empty')} />
+          ) : (
+            <div className="min-h-0 space-y-2 overflow-auto">
+              {groups.map((group) => (
+                <BotGroupBlock
+                  key={group.key}
+                  groupBy={groupBy}
+                  groupKey={group.key}
+                  bots={group.bots}
+                  selected={selected}
+                  onToggleSelect={toggleSelect}
+                />
+              ))}
+              <Pagination page={page} totalPages={totalPages} total={total} onChange={setPage} />
+            </div>
+          )}
+        </Panel>
+      </div>
+
+      {/* 右栏 38%：运行概览（聚合计数覆盖全量，不受分页/分组影响）。
+          xl 以下退成整页纵向堆叠，权重只在 xl 生效——窄屏若仍按权重分高度，
+          两栏会互相挤压，页面该滚的时候滚不动。 */}
+      <div className="flex flex-none flex-col gap-2 xl:min-h-0 xl:flex-1">
+        {/* 内容驱动高度：四个数字就是全部内容，撑高只会在卡内留死区（spec §3.2）。 */}
+        <Panel
+          className="flex-none"
+          icon={<Gauge className="size-3.5" />}
+          title={t('bots.runtimeOverview')}
+        >
+          <div className="grid grid-cols-2 gap-2">
+            <SummaryCard label={t('bots.summaryTotal')} value={counts.total} tone="neutral" />
+            <SummaryCard label={t('bots.summaryOnline')} value={counts.online} tone="online" />
+            <SummaryCard label={t('bots.summaryConnecting')} value={counts.connecting} tone="connecting" />
+            <SummaryCard label={t('bots.summaryError')} value={counts.error} tone="error" />
+          </div>
+        </Panel>
       </div>
 
       <CreateBotDialog open={showCreate} onOpenChange={setShowCreate} instanceId={instanceId} />
