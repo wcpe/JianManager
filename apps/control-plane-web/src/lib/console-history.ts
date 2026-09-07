@@ -9,6 +9,9 @@ import { createLogLineParser, type LogLine, type LogStream } from './console-log
  * 数据源分层（spec §4.1）：内存环形缓冲覆盖最新输出，数据库活日志覆盖更早，归档 NDJSON
  * 本批不做。未溢出时接缝是会话开始；溢出后接缝推进到最早保留行的浏览器接收时刻，故被挤掉
  * 的会话内日志也会被数据库回溯补上。DB/WS 的极短写入时差由 mergeHistoryAndLive 去重。
+ *
+ * **接缝冻结**（spec §4.3 修订）：接缝只在实例切换时重置；同一实例内接缝随缓冲溢出
+ * 前移不重置——DB 行不会消失，重置只会把已加载历史整体作废重拉。
  */
 
 /** 单页行数。比页码分页默认的 50 大：回溯是「一屏一屏往上翻」，页太小会把滚动切碎成一串请求。 */
@@ -103,7 +106,13 @@ export type HistoryJumpOutcome = 'reached' | 'exhausted' | 'capped' | 'failed'
 
 export interface UseConsoleHistoryOptions {
   instanceId: number
-  /** 内存缓冲历史接缝 ISO；会话尚未建立时可为 undefined，首次请求前兜底为「现在」。 */
+  /**
+   * 内存缓冲历史接缝 ISO；会话尚未建立时可为 undefined，首次请求前兜底为「现在」。
+   *
+   * **冻结语义**：本 hook 只在实例切换时跟随该 prop 更新内部接缝，同一实例内
+   * 接缝随缓冲溢出前移**不会**作废已加载历史——DB 行不会消失，本就无需重置；
+   * 若每次前移都换数据 key，用户翻着历史时日志一涌、已加载的页会整体蒸发。
+   */
   anchorTime?: string
 }
 
@@ -171,16 +180,34 @@ function dataKey(instanceId: number, anchorTime: string | undefined): string {
  * 拿同一个 cursor 而把同一页 prepend 两次。
  */
 export function useConsoleHistory({ instanceId, anchorTime }: UseConsoleHistoryOptions): ConsoleHistoryState {
+  // **接缝冻结**：内部接缝（frozen.anchorTime）只在实例切换时跟随 prop 更新，
+  // 同一实例内接缝随缓冲溢出前移不变化——若直接用 prop 做 key，每丢一行前移一次
+  // 就把已加载历史整体作废重拉（用户翻着历史时日志一涌、加载的页全部蒸发）。
+  //
+  // 重置用 React 官方的「渲染期调整 state」模式（条件式 setState during render）：
+  // 不用 effect，避免「新实例已提交、effect 未跑」的窗口里拿着旧接缝发请求；
+  // 同实例内 anchorTime 前移不进入条件，被有意忽略（冻结语义）。
+  const [frozen, setFrozen] = useState(() => ({ instanceId, anchorTime }))
+  const [frozenFor, setFrozenFor] = useState(instanceId)
+  if (frozenFor !== instanceId) {
+    setFrozenFor(instanceId)
+    setFrozen({ instanceId, anchorTime })
+  }
+
   // 已加载历史与其所属实例、接缝**打包成一份状态**。
   //
   // 把 key 放进状态里，是为了让「实例或接缝变了 → 已加载的行作废」成为**派生结论**而不是一次写操作：
-  // 若用「渲染期比对并重置」，就得在渲染里改 ref / setState；若用 effect 重置，则在提交前的
+  // 上面的渲染期 setState 只调整冻结接缝本身，**不直接清空历史数据**——若在渲染期比对并重置
+  // 数据，就得在渲染里改 ref / setState 清空 rows；若用 effect 重置，则在提交前的
   // 那段窗口里 loadEarlier 会拿着旧游标发请求，新接缝的页被 prepend 到旧实例的行前面，
-  // 屏上出现一段混合结果。
-  const [state, setState] = useState<HistoryData>(() => ({ key: dataKey(instanceId, anchorTime), ...EMPTY_DATA }))
+  // 屏上出现一段混合结果。派生方式下，清空发生在下一次取页时（见 fetchPage 的 base）。
+  const [state, setState] = useState<HistoryData>(() => ({
+    key: dataKey(frozen.instanceId, frozen.anchorTime),
+    ...EMPTY_DATA,
+  }))
   const [loading, setLoading] = useState(false)
 
-  const key = dataKey(instanceId, anchorTime)
+  const key = dataKey(frozen.instanceId, frozen.anchorTime)
   // 实例或接缝不匹配即视为「什么都还没加载」：真正的清空发生在下一次取页时（见 fetchPage 的 base）。
   const data = state.key === key ? state : { key, ...EMPTY_DATA }
 
@@ -208,10 +235,11 @@ export function useConsoleHistory({ instanceId, anchorTime }: UseConsoleHistoryO
     commit({ ...base, error: null })
     try {
       const page = await fetchLogCursorPage({
-        instanceId,
+        instanceId: frozen.instanceId,
         source: 'instance',
         // to 是数据层接缝：只取内存缓冲最早保留行之前的日志（spec §4.1）。
-        to: anchorTime ?? new Date().toISOString(),
+        // 冻结接缝：多次取页共用同一上界，同实例内缓冲溢出前移不改变它。
+        to: frozen.anchorTime ?? new Date().toISOString(),
         cursor: cursorRef.current,
         limit: HISTORY_PAGE_SIZE,
       })
@@ -228,7 +256,7 @@ export function useConsoleHistory({ instanceId, anchorTime }: UseConsoleHistoryO
       inFlightRef.current = false
       setLoading(false)
     }
-  }, [anchorTime, instanceId, key])
+  }, [frozen, key])
 
   const loadEarlier = useCallback(() => {
     void fetchPage()
@@ -258,7 +286,7 @@ export function useConsoleHistory({ instanceId, anchorTime }: UseConsoleHistoryO
       // limit=1 + 关键字：只要「最近一条」的时间，不拉整段——定位用不到内容。
       // 不带 to 上界：启动行可能位于会话起点之后（缓冲丢过行的那一段），先拿到时间再说。
       const page = await fetchLogCursorPage({
-        instanceId,
+        instanceId: frozen.instanceId,
         source: 'instance',
         keyword: STARTUP_KEYWORD,
         limit: 1,
@@ -271,7 +299,7 @@ export function useConsoleHistory({ instanceId, anchorTime }: UseConsoleHistoryO
       setState(next)
       return null
     }
-  }, [instanceId])
+  }, [frozen.instanceId])
 
   const seqAtTime = useCallback(
     (targetIso: string): number | null => {

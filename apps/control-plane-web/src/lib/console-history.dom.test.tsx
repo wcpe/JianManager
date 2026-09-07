@@ -143,4 +143,78 @@ describe('FR-419 控制台游标回溯', () => {
     expect(mockedFetch.mock.calls[1][0]).toMatchObject({ cursor: 'cursor-2' })
     expect(result.current.seqAtTime('2026-08-27T00:00:01Z')).toBe(-3)
   })
+
+  it('接缝冻结：同实例内 anchorTime 前移（模拟缓冲溢出）不作废已加载历史、不发新请求', async () => {
+    mockedFetch
+      .mockResolvedValueOnce({
+        items: [
+          row(3, '2026-08-27T00:00:03Z', 'newer'),
+          row(2, '2026-08-27T00:00:02Z', 'older'),
+        ],
+        nextCursor: 'cursor-2',
+        limit: 200,
+      })
+      .mockResolvedValueOnce({
+        items: [row(1, '2026-08-27T00:00:01Z', 'oldest')],
+        nextCursor: null,
+        limit: 200,
+      })
+    const { result, rerender } = renderHook(
+      (props: { instanceId: number; anchorTime: string }) => useConsoleHistory(props),
+      { initialProps: { instanceId: 7, anchorTime: '2026-08-27T00:00:04Z' } },
+    )
+
+    act(() => result.current.loadEarlier())
+    await waitFor(() => expect(result.current.rowCount).toBe(2))
+
+    // 模拟环形缓冲溢出：接缝前移。已加载的行必须原样保留，且此变化本身不触发任何请求。
+    rerender({ instanceId: 7, anchorTime: '2026-08-27T00:00:05Z' })
+    expect(result.current.rowCount).toBe(2)
+    expect(mockedFetch).toHaveBeenCalledTimes(1)
+
+    // 继续翻更早一页：仍用**冻结的接缝**（首次挂载值）作上界，游标继续，行 prepend 不作废。
+    act(() => result.current.loadEarlier())
+    await waitFor(() => expect(result.current.rowCount).toBe(3))
+    expect(mockedFetch).toHaveBeenCalledTimes(2)
+    expect(mockedFetch.mock.calls[1][0]).toMatchObject({
+      instanceId: 7,
+      to: '2026-08-27T00:00:04Z',
+      cursor: 'cursor-2',
+    })
+    expect(result.current.lines.map((line) => line.raw)).toEqual(['oldest', 'older', 'newer'])
+  })
+
+  it('实例切换仍重置：已加载行清空，下一次取页用新实例与全新游标', async () => {
+    mockedFetch
+      .mockResolvedValueOnce({
+        items: [row(1, '2026-08-27T00:00:01Z', 'old-instance')],
+        nextCursor: 'cursor-old',
+        limit: 200,
+      })
+      .mockResolvedValueOnce({
+        items: [row(9, '2026-08-27T00:01:01Z', 'new-instance')],
+        nextCursor: null,
+        limit: 200,
+      })
+    const { result, rerender } = renderHook(
+      (props: { instanceId: number; anchorTime: string }) => useConsoleHistory(props),
+      { initialProps: { instanceId: 7, anchorTime: '2026-08-27T00:00:04Z' } },
+    )
+
+    act(() => result.current.loadEarlier())
+    await waitFor(() => expect(result.current.rowCount).toBe(1))
+
+    rerender({ instanceId: 8, anchorTime: '2026-08-27T00:00:06Z' })
+    expect(result.current.rowCount).toBe(0)
+
+    act(() => result.current.loadEarlier())
+    await waitFor(() => expect(result.current.rowCount).toBe(1))
+    expect(mockedFetch).toHaveBeenCalledTimes(2)
+    expect(mockedFetch.mock.calls[1][0]).toMatchObject({
+      instanceId: 8,
+      to: '2026-08-27T00:00:06Z',
+      cursor: undefined,
+    })
+    expect(result.current.lines.map((line) => line.raw)).toEqual(['new-instance'])
+  })
 })
