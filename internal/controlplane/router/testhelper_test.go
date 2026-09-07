@@ -35,12 +35,24 @@ import (
 // 对账执行需注入假 BlobStore（SetStoreFactory），路由测试串行执行下按引用注入安全。
 var testArtifactReconcile *service.ArtifactReconcileService
 
-// setupTestDB 创建临时 SQLite 数据库并运行自动迁移。
-// 通过 t.Cleanup 确保测试结束时关闭数据库连接。
+// setupTestDB 创建临时 SQLite 数据库（磁盘文件，每测试独立目录）并运行自动迁移。
+// 通过 t.Cleanup 确保测试结束时关闭数据库连接并删除临时目录。
+//
+// 为什么不用 mode=memory&cache=shared：共享缓存内存库的并发写走表锁语义，
+// 报 SQLITE_LOCKED（"database table is locked (6)"），busy_timeout 对其无效
+// （busy handler 只管 SQLITE_BUSY），TestAuth_SetupAdminConcurrentRequests
+// CreateOnlyOneAdmin 曾因此偶发失败。改用磁盘文件库后：
+//   - journal_mode=WAL 允许读写并发、写写排队；
+//   - busy_timeout(5000) 让并发写等待锁而非立即报错。
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	gin.DefaultWriter = io.Discard
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	dir, err := os.MkdirTemp("", "jm-testdb-")
+	if err != nil {
+		t.Fatalf("创建测试数据库目录失败: %v", err)
+	}
+	dsn := "file:" + filepath.ToSlash(filepath.Join(dir, "test.db")) +
+		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Discard,
 	})
@@ -55,6 +67,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		if sqlDB != nil {
 			sqlDB.Close()
 		}
+		os.RemoveAll(dir)
 	})
 	return db
 }
