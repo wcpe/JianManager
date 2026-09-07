@@ -17,15 +17,29 @@ type AuditConfig struct {
 	RecordFunc func(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string)
 }
 
+// auditBodyCaptureMaxBytes 审计捕获请求体的上限。超过则不缓冲（body 原样留给 handler），
+// detail 记「过大未捕获」。发布清单等合法 JSON 一般 < 8 MiB，正常捕获不受影响。
+const auditBodyCaptureMaxBytes = 8 << 20 // 8 MiB
+
 // Audit 审计日志中间件，自动记录关键操作（成功与失败都记，FR-321）。
 func Audit(cfg AuditConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 只记录写操作
 		method := c.Request.Method
 		if method != "GET" && method != "OPTIONS" && method != "HEAD" {
-			// 读取请求体用于审计
+			// 读取请求体用于审计。
+			//
+			// 修复（客户端分发「上传过大文件报错」）：文件上传（multipart）与分片流（octet-stream）
+			// 绝不缓冲——此前 io.ReadAll 会把整个 2GB 上传体读进内存再回填，小内存机器直接 OOM；
+			// 且上传的审计 detail 本就该是文件元数据（handler 自己 recordAudit），不需要请求体。
+			// JSON 体超过上限同样跳过缓冲（handler 不受影响，仅 detail 记占位）。
 			var body []byte
-			if c.Request.Body != nil {
+			ct := c.GetHeader("Content-Type")
+			isMultipart := strings.HasPrefix(ct, "multipart/form-data")
+			isRawStream := strings.HasPrefix(ct, "application/octet-stream")
+			declared := c.Request.ContentLength
+			skipCapture := isMultipart || isRawStream || declared > auditBodyCaptureMaxBytes
+			if c.Request.Body != nil && !skipCapture {
 				var err error
 				body, err = io.ReadAll(c.Request.Body)
 				if err != nil {
