@@ -259,8 +259,14 @@ func (s *AssetService) Ingest(r io.Reader, p IngestParams) (*model.Asset, error)
 			return nil, fmt.Errorf("创建制品目录失败: %w", err)
 		}
 		// 原子落位：把临时文件移动到 CAS 路径。若并发已落位则覆盖为同一内容，无害。
+		// Windows 例外：并发 rename 同一目标会报 Access is denied（目标被胜者句柄占用）——
+		// 此时内容寻址保证目标即同内容制品，直接复用胜者落位结果、丢弃本路临时文件即可。
 		if err := os.Rename(tmpPath, absPath); err != nil {
-			return nil, fmt.Errorf("移动制品到 CAS 失败: %w", err)
+			if st, serr := os.Stat(absPath); serr == nil && st.Size() == size {
+				slog.Debug("并发落位 CAS 命中，复用既有制品", "path", absPath)
+			} else {
+				return nil, fmt.Errorf("移动制品到 CAS 失败: %w", err)
+			}
 		}
 	}
 
@@ -284,6 +290,15 @@ func (s *AssetService) Ingest(r io.Reader, p IngestParams) (*model.Asset, error)
 		LastUsedAt:       &now,
 	}
 	if err := s.db.Create(asset).Error; err != nil {
+		// 并发去重竞态（发布重试/并发上传同内容常见）：另一个请求已登记同 (type, sha256)——
+		// 唯一索引 idx_assets_type_sha256 冲突。内容相同幂等：复用既有记录即成功，不算失败。
+		var winner model.Asset
+		if qerr := s.db.Where("type = ? AND sha256 = ?", p.Type, sum256).First(&winner).Error; qerr == nil {
+			now2 := time.Now()
+			_ = s.db.Model(&winner).Update("last_used_at", &now2)
+			winner.LastUsedAt = &now2
+			return &winner, nil
+		}
 		// DB 失败时回滚物理 blob，避免孤儿：local 删 CAS 文件，s3 尽力删已传对象（对称语义）。
 		if s3Store != nil {
 			if deleteErr := s3Store.Delete(context.Background(), relPath); deleteErr != nil {
