@@ -6,219 +6,54 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 
-const xtermHarness = vi.hoisted(() => {
-  type DataHandler = (data: string) => void
-  type ScrollHandler = (line: number) => void
-  type KeyHandler = (event: KeyboardEvent) => boolean
-
-  class MockBufferLine {
-    constructor(private readonly text: string) {}
-
-    translateToString() {
-      return this.text
-    }
-  }
-
-  class MockTerminal {
-    cols = 80
-    rows = 24
-    options: { fontSize?: number }
-    lines = ['']
-    viewportY = 0
-    scrollCalls: number[] = []
-    buffer: {
-      active: {
-        readonly length: number
-        readonly viewportY: number
-        getLine: (index: number) => MockBufferLine | undefined
-      }
-    }
-    private rowsEl: HTMLDivElement | null = null
-    private dataHandlers: DataHandler[] = []
-    private scrollHandlers: ScrollHandler[] = []
-    private keyHandler: KeyHandler | null = null
-    private selection = ''
-
-    constructor(options: { fontSize?: number }) {
-      this.options = options
-      instances.push(this)
-      this.buffer = {
-        active: {
-          get length() {
-            return 0
-          },
-          get viewportY() {
-            return 0
-          },
-          getLine: (index: number) => {
-            const line = this.lines[index]
-            return line === undefined ? undefined : new MockBufferLine(line)
-          },
-        },
-      }
-      Object.defineProperty(this.buffer.active, 'length', { get: () => this.lines.length })
-      Object.defineProperty(this.buffer.active, 'viewportY', { get: () => this.viewportY })
-    }
-
-    loadAddon() {}
-
-    open(container: HTMLElement) {
-      this.rowsEl = document.createElement('div')
-      this.rowsEl.className = 'xterm-rows'
-      container.append(this.rowsEl)
-      this.renderRows()
-    }
-
-    write(data: string) {
-      const parts = data.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
-      this.lines[this.lines.length - 1] += parts[0]
-      for (const part of parts.slice(1)) this.lines.push(part)
-      this.renderRows()
-    }
-
-    attachCustomKeyEventHandler(handler: KeyHandler) {
-      this.keyHandler = handler
-    }
-
-    onData(handler: DataHandler) {
-      this.dataHandlers.push(handler)
-      return { dispose: () => { this.dataHandlers = this.dataHandlers.filter((item) => item !== handler) } }
-    }
-
-    onScroll(handler: ScrollHandler) {
-      this.scrollHandlers.push(handler)
-      return { dispose: () => { this.scrollHandlers = this.scrollHandlers.filter((item) => item !== handler) } }
-    }
-
-    emitData(data: string) {
-      this.dataHandlers.forEach((handler) => handler(data))
-    }
-
-    emitKey(event: KeyboardEvent) {
-      return this.keyHandler?.(event)
-    }
-
-    scrollToLine(line: number) {
-      this.viewportY = Math.max(0, Math.min(line, this.lines.length - 1))
-      this.scrollCalls.push(this.viewportY)
-      this.renderRows()
-      this.scrollHandlers.forEach((handler) => handler(this.viewportY))
-    }
-
-    selectAll() {
-      this.selection = this.lines.join('\n')
-    }
-
-    getSelection() {
-      return this.selection
-    }
-
-    clearSelection() {
-      this.selection = ''
-    }
-
-    clear() {
-      this.lines = ['']
-      this.renderRows()
-    }
-
-    focus() {}
-
-    dispose() {}
-
-    private renderRows() {
-      if (!this.rowsEl) return
-      this.rowsEl.replaceChildren()
-      for (const line of this.lines.slice(this.viewportY, this.viewportY + this.rows)) {
-        const row = document.createElement('div')
-        row.textContent = line
-        this.rowsEl.append(row)
-      }
-    }
-  }
-
-  class MockFitAddon {
-    fit() {}
-  }
-
-  const instances: MockTerminal[] = []
-  return { instances, MockTerminal, MockFitAddon }
+vi.mock('@xterm/xterm', async () => {
+  const harness = await import('@/test/xterm-ws-harness')
+  return { Terminal: harness.MockTerminal }
+})
+vi.mock('@xterm/addon-fit', async () => {
+  const harness = await import('@/test/xterm-ws-harness')
+  return { FitAddon: harness.MockFitAddon }
 })
 
-const wsHarness = vi.hoisted(() => {
-  class MockWebSocket {
-    static CONNECTING = 0
-    static OPEN = 1
-    static CLOSED = 3
-    readyState = MockWebSocket.CONNECTING
-    sent: string[] = []
-    onopen: ((event: Event) => void) | null = null
-    onmessage: ((event: MessageEvent) => void) | null = null
-    onclose: ((event: CloseEvent) => void) | null = null
-    onerror: ((event: Event) => void) | null = null
-
-    constructor(readonly url: string) {
-      sockets.push(this)
-      window.setTimeout(() => {
-        this.readyState = MockWebSocket.OPEN
-        this.onopen?.(new Event('open'))
-      }, 0)
-    }
-
-    send(data: string) {
-      this.sent.push(data)
-    }
-
-    close() {
-      this.readyState = MockWebSocket.CLOSED
-      this.onclose?.(new CloseEvent('close'))
-    }
-
-    emitMessage(data: unknown) {
-      this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent)
-    }
-  }
-
-  const sockets: MockWebSocket[] = []
-  return { sockets, MockWebSocket }
-})
-
-vi.mock('@xterm/xterm', () => ({
-  Terminal: xtermHarness.MockTerminal,
-}))
-
-vi.mock('@xterm/addon-fit', () => ({
-  FitAddon: xtermHarness.MockFitAddon,
-}))
-
+import { MockWebSocket, resetTerminalHarness, wsSockets, xtermInstances } from '@/test/xterm-ws-harness'
+import { terminalSessionManager } from '@/lib/terminal-session-manager'
 import TerminalPane from './TerminalPane'
 
 beforeEach(() => {
-  xtermHarness.instances.length = 0
-  wsHarness.sockets.length = 0
-  vi.stubGlobal('WebSocket', wsHarness.MockWebSocket)
+  resetTerminalHarness()
+  vi.stubGlobal('WebSocket', MockWebSocket)
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function findTerminal() {
-  await waitFor(() => expect(xtermHarness.instances.length).toBeGreaterThan(0))
-  return xtermHarness.instances.at(-1)!
+/** 等控制台输出区挂载（FR-415 起是 DOM 虚拟列表，不再是 xterm 画布）。 */
+async function findOutput() {
+  return screen.findByTestId('console-output')
 }
 
 async function findSocket() {
-  await waitFor(() => expect(wsHarness.sockets.length).toBeGreaterThan(0))
-  return wsHarness.sockets.at(-1)!
+  await waitFor(() => expect(wsSockets.length).toBeGreaterThan(0))
+  return wsSockets.at(-1)!
+}
+
+/** 当前搜索命中所在行的 seq（取代旧实现对 xterm `scrollToLine` 调用的断言）。 */
+function currentMatchSeq() {
+  const mark = document.querySelector('mark[data-terminal-search-current="true"]')
+  return mark?.closest('[data-console-line-seq]')?.getAttribute('data-console-line-seq')
 }
 
 /**
- * TerminalPane FIX-B/FR-345 回归：停机（STOPPED）实例打开终端必须回放 DB 历史，
- * 不挂载 xterm、不发起 WS（杜绝死循环刷断连）；运行中实例放行终端。
+ * TerminalPane FIX-B/FR-345 回归：停机（STOPPED）实例打开控制台必须回放 DB 历史，
+ * 不发起 WS（杜绝死循环刷断连）；运行中实例放行控制台。
  * seed：id=1 RUNNING、id=2 STOPPED（见 mocks/handlers/domains/instance.ts）。
+ *
+ * FR-415 起控制台是「DOM 输出区 + 原生命令栏」（ADR-086），故本文件的断言从
+ * 「xterm 实例/缓冲」平移到「输出区 DOM / 权威行缓冲」，并新增「这条路径零 xterm」的守卫。
  */
 describe('TerminalPane（mock 假后端）', () => {
+
   it('停机实例：按旧→新回放历史正文，重新挂载仍持久且不发起 WS', async () => {
     loginMockUser()
     let logReads = 0
@@ -242,32 +77,48 @@ describe('TerminalPane（mock 假后端）', () => {
 
     const firstMount = renderWithProviders(<TerminalPane instanceId={2} hideHeader />)
 
-    expect(await screen.findByText(/实例未运行（STOPPED）/)).toBeInTheDocument()
+    expect(await screen.findByText('实例未运行（STOPPED），显示历史日志')).toBeInTheDocument()
     const oldLine = await screen.findByText('[Server thread/INFO]: Saving chunks for level minecraft:overworld')
     const newLine = screen.getByText('[Server thread/INFO]: ThreadedAnvilChunkStorage: All dimensions are saved')
     expect(oldLine.compareDocumentPosition(newLine) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(screen.getByRole('link', { name: '查看完整历史' })).toHaveAttribute('href', '/logs?instanceId=2')
-    expect(xtermHarness.instances).toHaveLength(0)
-    expect(wsHarness.sockets).toHaveLength(0)
+    expect(xtermInstances).toHaveLength(0)
+    expect(wsSockets).toHaveLength(0)
 
     firstMount.unmount()
     renderWithProviders(<TerminalPane instanceId={2} hideHeader />)
     expect(await screen.findByText('[Server thread/INFO]: Saving chunks for level minecraft:overworld')).toBeInTheDocument()
     await waitFor(() => expect(logReads).toBeGreaterThanOrEqual(2))
-    expect(xtermHarness.instances).toHaveLength(0)
-    expect(wsHarness.sockets).toHaveLength(0)
+    expect(xtermInstances).toHaveLength(0)
+    expect(wsSockets).toHaveLength(0)
   })
 
-  it('运行中实例：挂载终端（不显示停机占位）', async () => {
+  /** spec §2.3：停机态输入禁用 + 一行原因 + 「启动实例」直达动作。 */
+  it('停机实例：命令栏禁用并给出原因与「启动实例」直达动作', async () => {
+    loginMockUser()
+    server.use(
+      http.get('*/api/v1/logs', () => HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 300 })),
+    )
+    renderWithProviders(<TerminalPane instanceId={2} hideHeader />)
+
+    const input = await screen.findByRole('textbox', { name: '控制台命令输入' })
+    expect(input).toBeDisabled()
+    expect(screen.getByText('实例未运行（STOPPED），命令输入已禁用')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '启动实例' })).toBeEnabled()
+  })
+
+  it('运行中实例：挂载控制台（不显示停机占位），且不创建 xterm', async () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
-    // 状态拉到 RUNNING 后挂载终端。
-    await findTerminal()
+    // 状态拉到 RUNNING 后挂载控制台。
+    await findOutput()
     await findSocket()
     await waitFor(() => {
       expect(screen.queryByText(/实例未运行/)).not.toBeInTheDocument()
     })
+    // ADR-086：实例控制台路径不再经 xterm 渲染。
+    expect(xtermInstances).toHaveLength(0)
   })
 
   it('运行中实例：显示读写徽标、重连和字号工具', async () => {
@@ -275,13 +126,14 @@ describe('TerminalPane（mock 假后端）', () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
-    expect((await findTerminal()).options.fontSize).toBe(14)
+    // 字号落在输出区的行内 style 上（DOM 输出区的字号是纯 CSS，不再是 xterm option）。
+    expect(await findOutput()).toHaveStyle({ fontSize: '14px' })
     expect(screen.getByText('可写')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '重新连接' })).toBeInTheDocument()
 
     await user.click(await screen.findByRole('button', { name: '放大字号' }))
     expect(await screen.findByText('15px')).toBeInTheDocument()
-    expect((await findTerminal()).options.fontSize).toBe(15)
+    expect(await findOutput()).toHaveStyle({ fontSize: '15px' })
   })
 
   it('运行中实例：全屏按钮可切换并保留可访问状态', async () => {
@@ -289,7 +141,7 @@ describe('TerminalPane（mock 假后端）', () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
-    await findTerminal()
+    await findOutput()
     const fullscreen = screen.getByRole('button', { name: '全屏' })
     await user.click(fullscreen)
 
@@ -299,13 +151,14 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(screen.getByRole('button', { name: '全屏' })).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('运行中实例：搜索按钮和 Ctrl+F 打开终端搜索，输入后显示匹配反馈', async () => {
+  it('运行中实例：搜索按钮和 Ctrl+F 打开控制台搜索，输入后显示匹配反馈', async () => {
     const user = userEvent.setup()
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
-    const term = await findTerminal()
-    act(() => term.write('stop\r\nsay hello\r\nstop again'))
+    await findOutput()
+    const ws = await findSocket()
+    act(() => ws.emitMessage({ type: 'stdout', data: 'stop\nsay hello\nstop again\n' }))
     await user.click(screen.getByRole('button', { name: '搜索终端' }))
 
     const input = screen.getByRole('searchbox', { name: '搜索终端输入' })
@@ -315,7 +168,9 @@ describe('TerminalPane（mock 假后端）', () => {
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('searchbox', { name: '搜索终端输入' })).not.toBeInTheDocument()
 
-    act(() => term.emitKey(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true })))
+    // Ctrl+F 由 TerminalPane 的 keydown 承接（原实现挂在 xterm 的自定义键处理上）。
+    await user.click(screen.getByRole('textbox', { name: '控制台命令输入' }))
+    await user.keyboard('{Control>}f{/Control}')
     expect(screen.getByRole('searchbox', { name: '搜索终端输入' })).toBeInTheDocument()
   })
 
@@ -324,7 +179,7 @@ describe('TerminalPane（mock 假后端）', () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
-    const term = await findTerminal()
+    await findOutput()
     const ws = await findSocket()
     act(() => {
       ws.emitMessage({ type: 'stdout', data: 'alpha stop\nbeta stop\nstop gamma\n' })
@@ -336,23 +191,24 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(screen.getByRole('status')).toHaveTextContent('第 1 / 3 项')
     expect(document.querySelectorAll('mark[data-terminal-search-match="true"]')).toHaveLength(3)
     expect(document.querySelector('mark[data-terminal-search-current="true"]')).toHaveTextContent('stop')
-    expect(term.scrollCalls.at(-1)).toBe(0)
+    // 当前项落在第 1 行（seq 0），取代旧实现对 scrollToLine(0) 的断言。
+    expect(currentMatchSeq()).toBe('0')
 
     await user.click(screen.getByRole('button', { name: '下一条匹配' }))
     expect(screen.getByRole('status')).toHaveTextContent('第 2 / 3 项')
     expect(document.querySelectorAll('mark[data-terminal-search-current="true"]')).toHaveLength(1)
-    expect(term.scrollCalls.at(-1)).toBe(1)
+    expect(currentMatchSeq()).toBe('1')
 
     await user.click(screen.getByRole('button', { name: '上一条匹配' }))
     expect(screen.getByRole('status')).toHaveTextContent('第 1 / 3 项')
-    expect(term.scrollCalls.at(-1)).toBe(0)
+    expect(currentMatchSeq()).toBe('0')
   })
 
   it('FR-276：WORKER_TOKEN_REJECTED 错误显示密钥不一致定向诊断，而非裸 [状态: error]', async () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
-    const term = await findTerminal()
+    await findOutput()
     const ws = await findSocket()
     act(() => {
       ws.emitMessage({
@@ -363,34 +219,51 @@ describe('TerminalPane（mock 假后端）', () => {
       })
     })
 
-    const text = term.lines.join('\n')
-    expect(text).toContain('[终端令牌被节点拒绝]')
-    expect(text).toContain('WS 令牌密钥与平台不一致')
+    // 断言渲染出的 DOM 而非缓冲字符串：诊断必须真的出现在用户眼前。
+    expect(await screen.findByText('[终端令牌被节点拒绝]')).toBeInTheDocument()
+    expect(screen.getByText(/WS 令牌密钥与平台不一致/)).toBeInTheDocument()
   })
 
   it('FR-276：一般错误态带出 data 原因；无 data 维持原 [状态: xxx] 行为', async () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
-    const term = await findTerminal()
+    await findOutput()
     const ws = await findSocket()
     act(() => {
       ws.emitMessage({ type: 'state', state: 'error', data: '连接 Worker 失败: dial tcp: refused' })
       ws.emitMessage({ type: 'state', state: 'running' })
     })
 
-    const text = term.lines.join('\n')
-    expect(text).toContain('[状态: error] 连接 Worker 失败: dial tcp: refused')
-    expect(text).toContain('[状态: running]')
-    expect(text).not.toContain('[终端令牌被节点拒绝]')
+    expect(await screen.findByText('[状态: error] 连接 Worker 失败: dial tcp: refused')).toBeInTheDocument()
+    expect(screen.getByText('[状态: running]')).toBeInTheDocument()
+    expect(screen.queryByText('[终端令牌被节点拒绝]')).not.toBeInTheDocument()
   })
 
-  /**
-   * FR-140 回归：终端一次性 token 首连即被 CP 消费失效（onetimetoken.Store），
-   * 点「重新连接」必须重新拉取一条新的一次性 token；若复用已消费的旧 token，
-   * /ws/terminal 会以 401「token already used」拒绝，导致重连永不恢复。
-   * 断言重连触发了新的 terminal-token 拉取，且新连接携带的是新 token（非复用旧 token）。
-   */
+  /** spec §2.2：Enter 提交整行 + 本地回显 kind:'command'；data 不补行尾（Worker 侧补）。 */
+  it('运行中实例：命令栏 Enter 提交整行并本地回显', async () => {
+    const user = userEvent.setup()
+    loginMockUser()
+    renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
+
+    await findOutput()
+    const ws = await findSocket()
+    await waitFor(() => expect(terminalSessionManager.getState(1)).toBe('connected'))
+
+    await user.type(screen.getByRole('textbox', { name: '控制台命令输入' }), 'say 大家好{Enter}')
+
+    // 本地回显：不等服务端就出现在输出区。
+    expect(await screen.findByText('say 大家好')).toBeInTheDocument()
+    expect(terminalSessionManager.getLines(1).at(-1)).toMatchObject({ kind: 'command', body: 'say 大家好' })
+    // 整行下发一次，且不含额外换行（Worker 的 SendCommand 自己补 \n）。
+    expect(ws.sent.map((raw) => JSON.parse(raw))).toEqual([
+      { type: 'stdin', instanceId: '1', data: 'say 大家好' },
+    ])
+    // 提交后输入框清空。
+    expect(screen.getByRole('textbox', { name: '控制台命令输入' })).toHaveValue('')
+  })
+
+  /** FR-140 回归：一次性 token 首连即被消费，重连必须重取。 */
   it('FR-140：点重新连接必须重新拉取一次性 token，不复用已消费的旧 token', async () => {
     const user = userEvent.setup()
     loginMockUser()
@@ -417,8 +290,8 @@ describe('TerminalPane（mock 假后端）', () => {
     await user.click(screen.getByRole('button', { name: '重新连接' }))
 
     // 重连应新建一条 WS 连接。
-    await waitFor(() => expect(wsHarness.sockets.length).toBeGreaterThan(1))
-    const secondSocket = wsHarness.sockets.at(-1)!
+    await waitFor(() => expect(wsSockets.length).toBeGreaterThan(1))
+    const secondSocket = wsSockets.at(-1)!
     const secondToken = new URL(secondSocket.url).searchParams.get('token')
 
     // 重连必须重新拉取 token（bug 表现为 0 次重取）。

@@ -27,6 +27,23 @@ export const terminalWsHandler = terminal.addEventListener('connection', ({ clie
     }
     if (msg.type !== 'stdin') return
     const cmd = (msg.data ?? '').trim()
+    const flood = /^flood\s+(\d{1,5})$/.exec(cmd)
+    if (flood) {
+      // 灌量命令（FR-415 性能闸）：spec §2.3 要求「灌 10000 行滚动 ≥50fps」，
+      // 没有它这条验收标准在 mock 环境里无法复现。分批发送，模拟真实分包节奏。
+      const total = Number(flood[1])
+      const batch = 200
+      for (let start = 0; start < total; start += batch) {
+        const lines: string[] = []
+        for (let i = start; i < Math.min(start + batch, total); i++) {
+          lines.push(
+            `[09:${String(Math.floor(i / 60) % 60).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}] [Server thread/INFO]: flood line ${i} — lorem ipsum dolor sit amet consectetur`,
+          )
+        }
+        client.send(JSON.stringify({ type: 'stdout', data: `${lines.join('\n')}\n` }))
+      }
+      return
+    }
     if (cmd === 'list') {
       client.send(JSON.stringify({ type: 'stdout', data: 'There are 2 of a max of 20 players online: admin, operator\r\n' }))
     } else if (cmd === 'stop') {

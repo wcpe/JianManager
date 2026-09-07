@@ -4,8 +4,9 @@ import type { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { useDirectorRender } from '@/lib/director-render'
 import { terminalSessionManager } from '@/lib/terminal-session-manager'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard, readClipboard } from '@/lib/clipboard'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 interface TerminalComponentProps {
   instanceId: string
@@ -147,6 +148,12 @@ export default function TerminalComponent({
   persistSession = false,
 }: TerminalComponentProps) {
   const { t } = useTranslation()
+  // t 走 ref 供剪贴板回执使用：直接把 t 放进 copySelection 的依赖，会让下方那个
+  // 「acquire + attach + onData 订阅」的 effect 在切换语言时重建（detach → release → 断连重连）。
+  const tRef = useRef(t)
+  useEffect(() => {
+    tRef.current = t
+  }, [t])
   const numericId = Number(instanceId)
   const terminalRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -241,24 +248,38 @@ export default function TerminalComponent({
     termRef.current?.focus()
   }, [replaceLine])
 
+  // 复制回执：成功/失败都要提示。把 copyToClipboard 的 Promise<boolean> 直接 void 掉，
+  // 用户点了看不到任何结果，体感就是「点了没反应 / 悄悄报错」。
+  const notifyCopyResult = useCallback((ok: boolean) => {
+    if (ok) toast.success(tRef.current('common.copied'))
+    else toast.error(tRef.current('common.copyFailedManual'))
+  }, [])
+
   // 复制当前选区到剪贴板
   const copySelection = useCallback(() => {
     const sel = termRef.current?.getSelection()
     if (sel) {
-      void copyToClipboard(sel)
+      void copyToClipboard(sel).then(notifyCopyResult)
       termRef.current?.clearSelection()
     }
-  }, [])
+  }, [notifyCopyResult])
 
   const pasteClipboard = useCallback(async () => {
-    try {
-      const text = await navigator.clipboard?.readText()
-      if (text) {
-        const oneLine = text.replace(/[\r\n]+/g, ' ')
-        lineBufRef.current += oneLine
-        termRef.current?.write(oneLine)
-      }
-    } catch { /* 剪贴板不可用时忽略 */ }
+    // 走 readClipboard 而非裸 navigator.clipboard?.readText()：面板常跑在
+    // http://<LAN-IP>:50100 非安全上下文，此时整个 navigator.clipboard 为 undefined，
+    // 可选链只静默返回 undefined，原实现落到 `if (text)` 为假 → 点粘贴毫无反应。
+    // 读方向没有 execCommand 兜底（浏览器禁用 execCommand('paste')），只能明确引导
+    // 用户改按 Ctrl+V——原生粘贴事件不经剪贴板 API，非安全上下文下依然可用。
+    const result = await readClipboard()
+    if (!result.ok) {
+      toast.error(tRef.current('common.clipboardReadUnavailable'))
+      termRef.current?.focus()
+      return
+    }
+    const oneLine = result.text.replace(/[\r\n]+/g, ' ')
+    if (!oneLine) return
+    lineBufRef.current += oneLine
+    termRef.current?.write(oneLine)
   }, [])
 
   // 全选终端可见+滚动缓冲区内容
@@ -382,8 +403,8 @@ export default function TerminalComponent({
   // 复制全部日志到剪贴板
   const copyAll = useCallback(() => {
     const text = getAllText()
-    if (text) void copyToClipboard(text)
-  }, [getAllText])
+    if (text) void copyToClipboard(text).then(notifyCopyResult)
+  }, [getAllText, notifyCopyResult])
 
   // 保存当前日志为本地文件
   const saveLog = useCallback(() => {

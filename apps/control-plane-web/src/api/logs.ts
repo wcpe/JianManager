@@ -44,6 +44,39 @@ export interface LogPage {
   pageSize: number
 }
 
+/**
+ * 游标分页查询参数（FR-419，spec §4.2）。
+ *
+ * 与页码分页并存：日志中心翻页仍用 {@link LogQueryParams} 的 `page/pageSize`（需要 total、
+ * 需要跳页），控制台向上回溯用游标——回溯期间新日志持续涌入表头，OFFSET 的「跳过前 N 行」
+ * 在两次请求间指向不同的行，会漂移出重复行或丢行。
+ */
+export interface LogCursorParams extends Omit<LogQueryParams, 'page' | 'pageSize'> {
+  /** 上一页返回的 `nextCursor`；省略即从最新一条开始。 */
+  cursor?: string
+  /** 单页行数，上限 500（与 pageSize 同源）。传它即让后端切到游标模式。 */
+  limit?: number
+}
+
+/** 游标分页响应（FR-419）。刻意无 total——游标模式不做全表 COUNT。 */
+export interface LogCursorPage {
+  items: LogEntry[]
+  /** 下一页（更早）起点；`null` 表示已到最早，没有更早日志。 */
+  nextCursor: string | null
+  limit: number
+}
+
+/**
+ * 取一页更早的日志（游标分页，FR-419）。
+ *
+ * 不走 useQuery：回溯是「按用户滚动逐页累积」的命令式流程，缓存键会随 cursor 变化而无限增长，
+ * 且页与页之间必须严格串行（上一页的 nextCursor 是下一页的入参），交给 react-query 反而更绕。
+ */
+export async function fetchLogCursorPage(params: LogCursorParams): Promise<LogCursorPage> {
+  const { data } = await api.get<LogCursorPage>('/logs', { params })
+  return data
+}
+
 /** useLogs 可选项。 */
 export interface UseLogsOptions {
   /**

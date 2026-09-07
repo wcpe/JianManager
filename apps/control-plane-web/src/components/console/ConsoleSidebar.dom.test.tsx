@@ -137,13 +137,19 @@ describe('ConsoleSidebar 高密度控制台 IA（FR-268）', () => {
     expect(screen.getByRole('link', { name: '网络拓扑' })).not.toHaveAttribute('aria-current')
   })
 
-  it('颜色调节和主题切换保留在侧栏底部原位置', () => {
+  it('颜色调节和主题切换保留在侧栏底部原位置（主题色收进调色板下拉）', async () => {
+    const user = userEvent.setup()
     renderWithProviders(<ConsoleSidebar />)
 
-    expect(screen.getByText('主题色')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Jian 绿' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '青绿' })).toBeInTheDocument()
+    // 收起后侧栏底部只保留两枚入口图标：调色板（主题色）与明暗切换
+    const paletteTrigger = screen.getByRole('button', { name: '主题色' })
     expect(screen.getByRole('button', { name: '切换主题' })).toBeInTheDocument()
+
+    // 主题色 5 选点开才展开，不再常驻圆点
+    await user.click(paletteTrigger)
+    for (const name of ['Jian 绿', '青绿', '海洋蓝', '紫罗兰', '落日橙']) {
+      expect(await screen.findByRole('menuitem', { name: new RegExp(name) })).toBeInTheDocument()
+    }
   })
 
   it('侧栏宽度动画由专用 drawer CSS 管理', () => {

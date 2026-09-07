@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -188,6 +189,10 @@ type LogFilter struct {
 	InstanceIDs []uint // 资源级隔离：非平台管理员收敛到可访问实例集（平台与 Worker 日志由 router 层隔离）
 	Page        int
 	PageSize    int
+	// Cursor 游标分页起点（FR-419）：nil 表示从最新一条开始。仅 QueryCursor 读取。
+	Cursor *LogCursor
+	// Limit 游标分页单页行数（FR-419）：<=0 取默认，上限与 PageSize 同为 500。仅 QueryCursor 读取。
+	Limit int
 }
 
 // LogPage 分页查询结果。
@@ -227,6 +232,107 @@ func (s *LogService) Query(filter LogFilter) (*LogPage, error) {
 	}
 
 	return &LogPage{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
+}
+
+// 游标分页参数（FR-419）。上限与页码分页的 pageSize 保持同一个 500，避免出现两套「单次最多拿多少」。
+const (
+	logCursorDefaultLimit = 200
+	logCursorMaxLimit     = 500
+	// logCursorSep 分隔游标的时间与自增主键。RFC3339Nano 与十进制 ID 都不含下划线，故不会歧义。
+	logCursorSep = "_"
+)
+
+// LogCursor 是「(时间, 自增主键)」复合游标（FR-419）。
+//
+// 为什么不用 OFFSET：`/logs` 按 `time DESC, id DESC` 排序，OFFSET 的语义是「跳过前 N 行」，
+// 而控制台向上回溯期间新日志正在持续涌入表头——同一个 offset 在两次请求间指向不同的行，
+// 于是翻页结果既可能重复也可能丢行。游标把「翻到哪了」表达为数据本身的位置而非序号，
+// 表头插入多少行都不影响 `(time, id) < (cursorTime, cursorId)` 的判定。
+//
+// ID 是必需的第二维：同一毫秒内批量入库的日志时间完全相同（log_ingest 批量 INSERT），
+// 只按 time 比较会在时间相等处反复返回同一批或整批跳过。
+type LogCursor struct {
+	Time time.Time
+	ID   uint
+}
+
+// String 编码为 `<RFC3339Nano>_<id>`。用 RFC3339Nano 而非 Unix 时间戳，
+// 与既有 from/to 参数的时间表达保持一致，且出问题时肉眼可读。
+func (c LogCursor) String() string {
+	return c.Time.Format(time.RFC3339Nano) + logCursorSep + strconv.FormatUint(uint64(c.ID), 10)
+}
+
+// ParseLogCursor 解析游标字符串。非法格式返回错误（由 router 转 400，不静默降级为「从最新开始」
+// ——静默降级会让客户端在翻页中途悄悄跳回表头，表现为无限重复加载同一页）。
+func ParseLogCursor(s string) (LogCursor, error) {
+	idx := strings.LastIndex(s, logCursorSep)
+	if idx <= 0 || idx == len(s)-1 {
+		return LogCursor{}, fmt.Errorf("游标格式非法: %q", s)
+	}
+	ts, err := time.Parse(time.RFC3339Nano, s[:idx])
+	if err != nil {
+		return LogCursor{}, fmt.Errorf("游标时间非法: %w", err)
+	}
+	id, err := strconv.ParseUint(s[idx+1:], 10, 64)
+	if err != nil {
+		return LogCursor{}, fmt.Errorf("游标主键非法: %w", err)
+	}
+	return LogCursor{Time: ts, ID: uint(id)}, nil
+}
+
+// LogCursorPage 游标分页结果（FR-419）。
+//
+// 刻意不带 total：游标分页用于「一直往更早翻」，每页再做一次全表 COUNT 纯属浪费
+// （SQLite 下尤其明显），而调用方需要的「还有没有更早的」由 NextCursor 是否为 nil 表达。
+type LogCursorPage struct {
+	Items []model.LogEntry `json:"items"`
+	// NextCursor 下一页（更早）的起点；nil 表示已到最早，没有更早日志。
+	NextCursor *string `json:"nextCursor"`
+	Limit      int     `json:"limit"`
+}
+
+// QueryCursor 按 (time, id) 游标向更早方向分页检索日志（FR-419）。
+//
+// 与 Query 并存而非取代：日志中心的页码分页需要 total 与任意跳页，控制台回溯需要的是
+// 「表头插入不影响的稳定顺序流」，两种语义各用各的入口（spec §4.2）。
+//
+// 排序与 Query 完全一致（`time DESC, id DESC`），故复合索引 idx_logs_instance_time
+// 等既有索引照样吃得上；游标条件写成 `time < ? OR (time = ? AND id < ?)` 的展开形式
+// 而非行值比较 `(time,id) < (?,?)`，因为展开形式在 SQLite 与 MySQL 上的索引利用都可靠。
+func (s *LogService) QueryCursor(filter LogFilter) (*LogCursorPage, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = logCursorDefaultLimit
+	}
+	if limit > logCursorMaxLimit {
+		limit = logCursorMaxLimit
+	}
+
+	q := s.applyFilter(s.db.Model(&model.LogEntry{}), filter)
+	if filter.Cursor != nil {
+		q = q.Where("time < ? OR (time = ? AND id < ?)", filter.Cursor.Time, filter.Cursor.Time, filter.Cursor.ID)
+	}
+
+	// 多取一行探测「是否还有更早的」：拿满 limit+1 才说明后面还有，
+	// 否则本页即末页。这样末页不需要额外一次返回空数组的往返。
+	var rows []model.LogEntry
+	if err := q.Order("time DESC").Order("id DESC").Limit(limit + 1).Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("游标查询日志失败: %w", err)
+	}
+
+	page := &LogCursorPage{Limit: limit}
+	if len(rows) > limit {
+		rows = rows[:limit]
+		last := rows[len(rows)-1]
+		next := LogCursor{Time: last.Time, ID: last.ID}.String()
+		page.NextCursor = &next
+	}
+	// items 恒为非 nil 切片：JSON 里 `null` 与 `[]` 对前端是两种类型，别让调用方分情况处理。
+	if rows == nil {
+		rows = []model.LogEntry{}
+	}
+	page.Items = rows
+	return page, nil
 }
 
 // Export 按过滤条件导出日志（按时间正序，便于阅读），上限 maxRows 防止一次拉取过大。

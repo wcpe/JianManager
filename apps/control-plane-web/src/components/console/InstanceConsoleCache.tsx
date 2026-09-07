@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import type { InstanceInfo } from '@/api/instances'
 import { clearInstanceDrafts, hasInstanceDraft } from '@/lib/console-draft-registry'
 import { pickEvictionTarget, promoteHotSet } from '@/lib/console-hot-cache'
-import { HOT_SET_SIZE, terminalSessionManager } from '@/lib/terminal-session-manager'
+import { resolveHotSetCapacity, terminalSessionManager } from '@/lib/terminal-session-manager'
 import InstanceConsolePage from './InstanceConsolePage'
 
 interface InstanceConsoleCacheProps {
@@ -15,10 +15,12 @@ interface InstanceConsoleCacheProps {
 }
 
 /**
- * 跨服务器控制台热缓存宿主（FR-296，ADR-067）：维护最近打开的 ≤{@link HOT_SET_SIZE} 个
- * 服控制台（LRU），每个成员一份 `<Activity>` 包裹的 {@link InstanceConsolePage}——
- * 命中热集切 visible 瞬时呈现，未命中入列、超容按淘汰偏好（先无草稿者）整体卸载释放。
- * 成员可见性联动终端连接管理器：hidden 起 10 分钟闲置断连计时、visible 取消并按需重连。
+ * 跨服务器控制台热缓存宿主（FR-296，ADR-067）：维护最近打开的若干服控制台（LRU），
+ * 每个成员一份 `<Activity>` 包裹的 {@link InstanceConsolePage}——命中热集切 visible
+ * 瞬时呈现，未命中入列、超容按淘汰偏好（先无草稿者）整体卸载释放。
+ * 成员可见性联动终端连接管理器：hidden 起闲置断连计时、visible 取消并按需重连。
+ *
+ * 容量以 {@link HOT_SET_SIZE} 为基线，按实际可见终端数动态提升（FR-414）。
  */
 export default function InstanceConsoleCache({ instanceId }: InstanceConsoleCacheProps) {
   const { t } = useTranslation()
@@ -30,8 +32,12 @@ export default function InstanceConsoleCache({ instanceId }: InstanceConsoleCach
   if (hotSet[0] !== instanceId) {
     setHotSet((prev) => {
       const promoted = promoteHotSet(prev, instanceId)
-      if (promoted.length <= HOT_SET_SIZE) return promoted
-      const victim = pickEvictionTarget(promoted, hasInstanceDraft)
+      // 容量按实际可见终端数动态提升（FR-414）：分屏/多 window 下多个终端同时可见，
+      // 照用固定基线会把正在被看的那个淘汰掉。硬上限见 HOT_SET_SIZE_MAX。
+      // getVisibleCount 是纯读取（不改外部状态），故在更新器里取值安全。
+      const capacity = resolveHotSetCapacity(terminalSessionManager.getVisibleCount())
+      if (promoted.length <= capacity) return promoted
+      const victim = pickEvictionTarget(promoted, hasInstanceDraft, capacity)
       return victim == null ? promoted : promoted.filter((id) => id !== victim)
     })
   }

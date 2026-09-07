@@ -1,18 +1,22 @@
 import { useCallback, useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useInstance } from '@/api/instances'
+import { toast } from 'sonner'
+import { useInstance, useStartInstance } from '@/api/instances'
 import { useTerminalToken } from '@/api/terminal'
-import TerminalComponent from '@/components/Terminal'
+import ConsoleCommandBar from './ConsoleCommandBar'
+import InstanceConsoleView from './InstanceConsoleView'
 import StoppedLogsView from './StoppedLogsView'
 import { terminalSessionManager } from '@/lib/terminal-session-manager'
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
-import { Eye, Maximize2, Minimize2, Pencil, RotateCcw, Search, ZoomIn, ZoomOut } from 'lucide-react'
+import { Eye, Maximize2, Minimize2, Pencil, Play, RotateCcw, Search, ZoomIn, ZoomOut } from 'lucide-react'
 
 /**
- * 工作区终端面板：为单个实例打开终端（ADR-009 / FR-037）。
- * 复用一次性 token + xterm，逻辑与实例详情页「终端」Tab 一致：
- * 运行态用 write token，否则 read token 只读。
+ * 工作区终端面板：为单个实例打开控制台（ADR-009 / FR-037）。
+ * 复用一次性 token，逻辑与实例详情页「终端」Tab 一致：运行态可写，否则只读。
+ *
+ * FR-415 起承载的是输出/输入分离的新控制台（{@link InstanceConsoleView}，ADR-086），
+ * 不再是 xterm 渲染壳。工具栏语义（重连 / 字号 / 搜索 / 全屏）保持不变。
  */
 interface TerminalPaneProps {
   /** 当前打开终端的实例 id */
@@ -28,9 +32,16 @@ interface TerminalPaneProps {
    * 卸载/隐藏不释放连接；独立表面（画布卡片等）保持默认卸载即释放。
    */
   persistSession?: boolean
+  /** pane 获得鼠标/键盘焦点时通知沉浸层更新焦点边框。 */
+  onPaneFocus?: () => void
 }
 
-export default function TerminalPane({ instanceId, hideHeader = false, persistSession = false }: TerminalPaneProps) {
+export default function TerminalPane({
+  instanceId,
+  hideHeader = false,
+  persistSession = false,
+  onPaneFocus,
+}: TerminalPaneProps) {
   const { t } = useTranslation()
   const [fullscreen, setFullscreen] = useState(false)
   const [fontSize, setFontSize] = useState(14)
@@ -57,7 +68,29 @@ export default function TerminalPane({ instanceId, hideHeader = false, persistSe
     }
     return { wsUrl: data.wsUrl, token: data.token }
   }, [refetch])
+  const startInstance = useStartInstance()
   const adjustFont = (delta: number) => setFontSize((value) => Math.min(20, Math.max(11, value + delta)))
+
+  // 命令栏禁用时的一行原因 + 直达动作（spec §2.2）。
+  // 停机/崩溃给「启动实例」；STARTING/STOPPING 是过渡态，给按钮只会诱导用户重复触发。
+  const canStart = isStopped || status === 'CRASHED'
+  const disabledReason = status ? t('instanceDetail.consoleInputDisabled', { status }) : undefined
+  const startAction = canStart ? (
+    <Button
+      size="xs"
+      variant="outline"
+      disabled={startInstance.isPending}
+      onClick={() => {
+        startInstance.mutate(instanceId, {
+          onError: (error) => toast.error(error instanceof Error ? error.message : t('common.error')),
+        })
+      }}
+    >
+      <Play className="mr-1 size-3" />
+      {t('instanceDetail.consoleStartInstance')}
+    </Button>
+  ) : undefined
+
   const handlePaneKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
       event.preventDefault()
@@ -69,7 +102,15 @@ export default function TerminalPane({ instanceId, hideHeader = false, persistSe
   }
 
   return (
-    <div className={cn('flex h-full flex-col bg-background', fullscreen && 'fixed inset-4 z-50 rounded-xl border shadow-2xl')} onKeyDown={handlePaneKeyDown}>
+    <div
+      className={cn(
+        'flex h-full min-w-0 w-full flex-col bg-background',
+        fullscreen && 'fixed inset-4 z-50 rounded-xl border shadow-2xl',
+      )}
+      onKeyDown={handlePaneKeyDown}
+      onFocusCapture={onPaneFocus}
+      onMouseDownCapture={onPaneFocus}
+    >
       {/* 工具栏：面包屑 + 禁用占位按钮（分段模式下由父组件承载，隐藏） */}
       {!hideHeader && (
         <div className="flex items-center justify-between border-b px-4 py-2">
@@ -141,17 +182,29 @@ export default function TerminalPane({ instanceId, hideHeader = false, persistSe
         </div>
       )}
 
-      {/* 终端区 */}
-      <div className="min-h-0 flex-1 p-2">
+      {/* 控制台区 */}
+      <div className="flex min-h-0 flex-1 flex-col p-2">
         {!status ? (
-          // 实例状态未知（加载中）：先不挂载终端，避免拿不到状态就拨号/闪现。
+          // 实例状态未知（加载中）：先不挂载控制台，避免拿不到状态就拨号/闪现。
           <div className="flex min-h-[400px] items-center justify-center rounded-lg bg-[#1a1b26] p-4">
             <p className="text-sm text-gray-500">{t('instanceDetail.connecting')}</p>
           </div>
         ) : isStopped ? (
-          // 完全停机：不挂载 xterm、不连 WS（避免死循环刷断连 FIX-B），改从 DB 回放历史日志（FR-345）——
-          // 令关服过程/崩溃现场在停机态仍可见，替代此前空白「实例未运行」占位。
-          <StoppedLogsView instanceId={instanceId} status={status} />
+          // 完全停机：不连 WS（避免死循环刷断连 FIX-B），改从 DB 回放历史日志（FR-345）——
+          // 令关服过程/崩溃现场在停机态仍可见。命令栏仍在位但禁用 + 带「启动实例」直达动作
+          // （spec §2.2）：让「为什么输不进去、怎么才能输」在同一处说清，而不是干脆没有输入框。
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <StoppedLogsView instanceId={instanceId} status={status} />
+            </div>
+            <ConsoleCommandBar
+              disabled
+              disabledReason={disabledReason}
+              action={startAction}
+              onSubmit={() => {}}
+              fontSize={fontSize}
+            />
+          </div>
         ) : error ? (
           <div className="flex min-h-[400px] items-center justify-center rounded-lg bg-[#1a1b26] p-4">
             <p className="text-sm text-muted-foreground">
@@ -159,9 +212,9 @@ export default function TerminalPane({ instanceId, hideHeader = false, persistSe
             </p>
           </div>
         ) : (
-          <TerminalComponent
+          <InstanceConsoleView
             key={String(instanceId)}
-            instanceId={String(instanceId)}
+            instanceId={instanceId}
             fetchToken={fetchToken}
             readOnly={!isRunning}
             isLoading={isLoading}
@@ -169,9 +222,12 @@ export default function TerminalPane({ instanceId, hideHeader = false, persistSe
             searchOpen={terminalSearchOpen}
             onSearchOpenChange={setTerminalSearchOpen}
             persistSession={persistSession}
+            disabledReason={disabledReason}
+            disabledAction={startAction}
           />
         )}
       </div>
+
     </div>
   )
 }

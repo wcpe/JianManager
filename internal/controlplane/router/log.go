@@ -119,12 +119,45 @@ func (h *LogHandler) buildFilter(c *gin.Context) (service.LogFilter, bool) {
 	return f, true
 }
 
-// List 日志分页查询（FR-049/FR-050）。过滤与分页在 DB 完成，不全量序列化。
+// List 日志分页查询（FR-049/FR-050），支持页码与游标两种分页（FR-419）。
+//
+// 分页模式由参数选择，二者并存互不影响（spec §4.2）：
+//   - 页码（默认）：`page` / `pageSize`，返回 `{items,total,page,pageSize}`——日志中心翻页与
+//     跳页需要 total，行为一字不改；
+//   - 游标：出现 `limit` 或 `cursor` 即切换，返回 `{items,nextCursor,limit}`——控制台向上回溯
+//     期间新日志持续涌入表头，OFFSET 会漂移出重复行/丢行，故用 (time,id) 游标。
+//
+// 过滤条件（含 view 权限收敛、level、instanceId、keyword、from/to）两种模式共用 buildFilter，
+// 不存在「游标模式下权限视图变松」的分叉。
 func (h *LogHandler) List(c *gin.Context) {
 	f, ok := h.buildFilter(c)
 	if !ok {
 		return
 	}
+
+	rawCursor := c.Query("cursor")
+	rawLimit := c.Query("limit")
+	if rawCursor != "" || rawLimit != "" {
+		if rawCursor != "" {
+			cursor, err := service.ParseLogCursor(rawCursor)
+			if err != nil {
+				// 不静默回退到「从最新开始」：那会让翻页中途悄悄跳回表头，表现为反复加载同一页。
+				c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "cursor 格式非法，应为 <RFC3339 时间>_<id>"})
+				return
+			}
+			f.Cursor = &cursor
+		}
+		f.Limit = parseIntDefault(rawLimit, 0)
+
+		res, err := h.logSvc.QueryCursor(f)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询日志失败"})
+			return
+		}
+		c.JSON(http.StatusOK, res)
+		return
+	}
+
 	f.Page = parseIntDefault(c.Query("page"), 0)
 	f.PageSize = parseIntDefault(c.Query("pageSize"), 0)
 
