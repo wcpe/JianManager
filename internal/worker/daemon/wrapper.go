@@ -352,6 +352,10 @@ func (w *Wrapper) signalClose() {
 
 // readLoop 处理 Worker 下发的帧：stdin 数据 / 控制命令。
 func (w *Wrapper) readLoop(conn netConn) {
+	// 连接断开后释放 server 侧句柄：Windows 上残留句柄会阻碍同名管道重建
+	// （Access denied）。兜底路径：readLoop 退出即关（此处）、Accept 替换旧连接时
+	// 关旧连接、wrapper 进程退出后由 OS 回收剩余句柄。
+	defer func() { _ = conn.Close() }()
 	for {
 		fr, err := Decode(conn)
 		if err != nil {
