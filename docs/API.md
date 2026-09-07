@@ -2629,14 +2629,16 @@
 > 实例运行日志（stdout/stderr）、Worker 日志与平台结构化日志统一持久化、检索与导出。FR-403 在同一路径按视图分流，存储模型不变；过滤与分页在 DB 完成，不全量序列化。
 
 ### GET /api/v1/logs
-- **描述**: 分页查询日志；默认进入节点/实例视图
-- **关联 FR**: FR-049, FR-050, FR-403
+- **描述**: 分页查询日志；默认进入节点/实例视图。页码模式供日志中心任意跳页；游标模式供实例控制台稳定地向更早日志回溯。
+- **关联 FR**: FR-049, FR-050, FR-403, FR-419
 - **权限**: 所有认证用户可查节点/实例视图。平台管理员可另查平台或全部视图；组成员/组管理员仅见有权实例日志，平台和全部视图均返回 `403 FORBIDDEN`，节点 Worker 日志不对其开放。
 - **Query**: `?view=node_instance&level=error&instanceId=12&nodeId=3&keyword=NPE&from=2026-01-01T00:00:00Z&to=2026-12-31T23:59:59Z&page=1&pageSize=50`
 - **参数说明**:
   - `view`: `platform`（仅 `control_plane`，仅平台管理员）/ `node_instance`（默认，聚合 `worker` 与 `instance`）/ `all`（全部来源，仅平台管理员）
   - `source`: `instance` / `control_plane` / `worker`；仅在平台管理员的 `view=all` 时生效
   - `level`: `debug` / `info` / `warn` / `error`
+  - **页码模式（默认）**：不传 `limit`/`cursor` 时使用 `page`/`pageSize`，响应保留 `total/page/pageSize`，现有日志中心调用行为不变。
+  - **游标模式（FR-419）**：传 `limit`（默认 200、最大 500）或 `cursor` 时启用；`cursor` 是上页返回的 `<RFC3339Nano>_<id>`，省略表示从最新开始。响应为 `{items,nextCursor,limit}`，`nextCursor=null` 表示已到最早。排序和续页条件均为 `time DESC,id DESC` / `(time,id)<cursor`，避免新日志插入时 OFFSET 漂移造成重复或漏行。
   - `keyword`: 在 message 上做 DB 侧 LIKE 检索
   - `from`/`to`: RFC3339 时间，按日志产生时间筛选
   - `page`（默认 1）/`pageSize`（默认 50，上限 500）
@@ -2715,7 +2717,7 @@
 - **描述**: 写入一批白名单配置覆盖。非白名单键或值不合法时整体拒绝（422）且不落库；成功后返回更新后的最新视图。设置页按外观、日志、运行时、网络、备份、邀请邮件、安全 / 系统共 **7 类**展示；是否立即改变 CP 行为以每项 `effectiveImmediately` 与下列生效链路为准，不能泛化为所有白名单项无条件热生效
 - **权限**: 平台管理员
 - **关联 FR**: FR-063
-- **可写白名单键**: `log.level`（debug|info|warn|error）、`debug.mode`（true|false）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`runtime.mirror.nodejs`（FR-299）、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）、`instance_reverse_reconcile.grace_period` / `instance_reverse_reconcile.auto_dispose`（FR-326）、`platform.public_base_url`、`invite.smtp.host` / `invite.smtp.port` / `invite.smtp.username` / `invite.smtp.password` / `invite.smtp.from`（FR-405）
+- **可写白名单键**: `log.level`（debug|info|warn|error）、`debug.mode`（true|false）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`runtime.mirror.nodejs`（FR-299）、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）、`instance_reverse_reconcile.grace_period` / `instance_reverse_reconcile.auto_dispose`（FR-326）、`platform.public_base_url`、`invite.smtp.host` / `invite.smtp.port` / `invite.smtp.username` / `invite.smtp.password` / `invite.smtp.from`（FR-405）、`github.token`（network 类，敏感，FR-409）
 - **各项生效方式**（FR-063 / FR-185 / FR-225 / FR-326）：
   - `log.level`：`effectiveImmediately=true`，落库即在 CP 内切换（slog LevelVar）
   - `debug.mode`：`effectiveImmediately=true`，开启时切换 CP 日志与 Gin debug 模式；关闭时恢复 `log.level` 基线与 Gin release 模式
@@ -2728,6 +2730,7 @@
   - `instance_reverse_reconcile.auto_dispose`（FR-326）：`effectiveImmediately=true`，`true|false`（**默认 false**）；宽限后是否自动下发 `DisposeOrphanRuntime`，关则仅列表/日志，管理员手动确认
   - `platform.public_base_url`（FR-405）：平台生成绝对链接的唯一公共基址，必须为无查询参数、无 fragment 的完整 HTTP 或 HTTPS 地址；签发邀请时据此生成 `<base>/invite#<token>`，未配置或非法时拒绝签发，绝不从请求 Host 或转发头推断。无 TLS 的自托管内网可使用 HTTP，公网部署应使用 HTTPS。
   - `invite.smtp.host` / `invite.smtp.port` / `invite.smtp.username` / `invite.smtp.password` / `invite.smtp.from`（FR-405）：独立于告警通道的邀请邮件配置；密码仅接受 `${ENV_VAR}`，GET 仅回显“已配置”状态。邮件未配置或投递失败时邀请仍创建，响应带 `emailDelivery` 与一次性手动发送链接。
+  - `github.token`（FR-409）：可选 GitHub API 令牌，自更新（FR-175）与 ServerProbe 制品版本库同步共用；非空时 GitHub API 请求带 `Authorization`，额度从匿名 60 次/时/IP 提升到 5000 次/时。`effectiveImmediately=true`（各调用点发请求时读取生效值，保存即生效、无需重启）；敏感项回显仅掩码（首尾各 3 字符）；接受字面令牌或 `${ENV_VAR}` 引用（引用未配置的环境变量视同未配置），空=清除覆盖回退 `update.github_token` 基线（优先级 settings DB > yml > env）；含空白字符的值整体拒绝（422）。未配置时共享出口 IP 耗尽匿名限额即同步 403，错误信息带配额重置时间。
 - **请求**: `{ "values": { "log.level": "debug", "backup.retention_days": "30" } }`
 
 ---

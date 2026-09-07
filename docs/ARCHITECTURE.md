@@ -65,7 +65,7 @@ Worker Node (Go) × 20~100
 | 前端 | React 19 + Vite 6 + shadcn/ui + TailwindCSS |
 | 前端状态 | TanStack Query + Zustand |
 | 前端路由 | React Router 7 |
-| 终端前端 | xterm.js |
+| 终端前端 | 实例控制台：DOM 虚拟日志列表 + 原生命令输入；xterm.js 仅保留遗留兼容渲染器 |
 | 图表 | Recharts |
 | 编辑器 | CodeMirror 6 |
 | Bot 运行时 | Node.js >=22.13.0 + Mineflayer |
@@ -696,7 +696,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 | 客户端状态 | Zustand（auth / theme / sidebar） |
 | UI 组件 | shadcn/ui + Radix |
 | 样式 | TailwindCSS 4 |
-| 终端 | xterm.js |
+| 终端 | DOM 虚拟日志列表 + 原生命令栏（xterm.js 仅遗留兼容） |
 | 图表 | Recharts |
 | 编辑器 | CodeMirror 6 |
 | 国际化 | i18next |
@@ -715,7 +715,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 │ ┌────────────┐ ├─────────────────────────────────────────┤
 │ │ 总览        │ │                                         │
 │ │ ▾ 集群      │ │   工作区                                 │
-│ │  节点 实例  │ │   · 点实例 → 该实例终端（单个，xterm）    │
+│ │  节点 实例  │ │   · 点实例 → 该实例控制台（输出/输入分离） │
 │ │  [全部节点▼]│ │   · 其余导航 → 按路由渲染对应页面          │
 │ │  ● Survival│ │   · 未开终端 → 空状态                     │
 │ │ ▾ 观测      │ │                                         │
@@ -746,7 +746,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
     - **统一通知铃铛**（FR-216，见 ADR-048）：**合并原「站内信收件箱(FR-183)」+「告警铃铛(FR-162)」为单一入口**（`NotificationBell`，原 `inbox`/`alertBell` 两槽并为单 `notifications` 槽）。统一未读计数（`GET /notifications/feed/unread-count` = 本人站内信未读 + 全局告警未读，30s 轮询）+ 下拉只读预览最近混合通知（消息/告警各带来源标识与级别色点，`GET /notifications/feed?pageSize=8`）+「查看全部」跳 `/notifications` 通知中心页。+ **账户菜单**（用户名/角色 + 退出登录）始终显示（窄屏不隐，确保核心能力常驻）。
 - **右 = 工作区（路由页面 + 服务器统一控制台，FR-166/269）**：
   - 点实例 → 直接导航到 `/instances/:id` 并打开**服务器统一控制台**（`InstanceConsolePage`）：固定分区为概览 / 控制台 / 文件配置 / 监控 / 玩家 / 插件 / 备份定时 / 业务 / Bot，激活分区写入 `?tab=`，刷新可还原；顶部状态条提供运行态、节点、端口、在线玩家、TPS/MSPT 与启动 / 停止 / 重启 / 强杀 / 打开终端等操作。FR-166 可组合卡片画布仍保留为超级工作台 / 导播台等高级拼屏能力，不作为单服默认入口。
-  - **控制台 keep-alive 与跨服热缓存**（FR-295/296，见 ADR-067）：`/instances/:id` 不再直接挂 `InstanceConsolePage`，而由跨服热缓存宿主 `InstanceConsoleCache` 渲染——维护最近打开的 ≤3 个服控制台（LRU，`lib/console-hot-cache.ts` 纯逻辑），每个成员一份 `<Activity mode>` 包裹的控制台，命中热集切 `visible` 瞬时呈现、未命中入列、超容按淘汰偏好（先无草稿者，草稿由 `lib/console-draft-registry.ts` 登记）整体卸载释放；配合 `Workspace` 把 `/instances/*` 路由 key 归并为固定值，实例间切换不触发路由级 remount。单服内部 9 个页签访问过即以 `<Activity mode="hidden">` 保活（DOM/本地状态保留、effects 卸载 → 隐藏页签轮询自动暂停），切回瞬时。**终端连接抽为模块级单例 `lib/terminal-session-manager`**（组件订阅制：xterm 实例与 WS 常驻管理器，组件/页签卸载只解绑渲染层不断连；重连退避 FIX-B、一次性 token 现取 FR-140、401 诊断 FR-276 语义原样迁入），热集成员用 `pin`/`markVisible`/`markHidden` 联动——hidden 成员 WS 保持连接、闲置超 10 分钟自动断连降级、切回自动重连；LRU 淘汰 / 离开控制台 / 登出（`disposeAll`）即整体释放。**独立表面（FR-166 画布卡片 / FR-168 导播台）仍卸载即释放**（`release` 受 `pinnedIds` 约束，非 pin 即 dispose，ADR-035 资源模型不变）。
+  - **控制台 keep-alive 与跨服热缓存**（FR-295/296/414，见 ADR-067）：`/instances/:id` 不再直接挂 `InstanceConsolePage`，而由跨服热缓存宿主 `InstanceConsoleCache` 渲染——默认保活最近 6 个服、按实际可见终端数动态提升且硬上限 12（LRU，`lib/console-hot-cache.ts` 纯逻辑），每个成员一份 `<Activity mode>` 包裹的控制台，命中热集切 `visible` 瞬时呈现、未命中入列、超容按淘汰偏好（先无草稿者，草稿由 `lib/console-draft-registry.ts` 登记）整体卸载释放；配合 `Workspace` 把 `/instances/*` 路由 key 归并为固定值，实例间切换不触发路由级 remount。单服内部 9 个页签访问过即以 `<Activity mode="hidden">` 保活（DOM/本地状态保留、effects 卸载 → 隐藏页签轮询自动暂停），切回瞬时。**终端连接抽为模块级单例 `lib/terminal-session-manager`**（组件订阅制：行缓冲与 WS 常驻管理器，组件/页签卸载只解绑渲染层不断连；重连退避 FIX-B、一次性 token 现取 FR-140、401 诊断 FR-276 语义原样迁入），热集成员用 `pin`/`markVisible`/`markHidden` 联动——hidden 成员 WS 保持连接、闲置超 5 分钟自动断连降级、切回自动重连；LRU 淘汰 / 离开控制台 / 登出（`disposeAll`）即整体释放。**独立表面（FR-166 画布卡片 / FR-168 导播台）仍卸载即释放**（`release` 受 `pinnedIds` 约束，非 pin 即 dispose，ADR-035 资源模型不变）。
   - **统一卡壳** `WorkspaceCard`：grip 拖拽手柄（`draggableHandle=".workspace-card-grip"`，仅按住卡头 grip 才移动，卡内终端/编辑器交互不被吞）+ 实例·功能标签 + 全屏（临时最大化单卡）+ 关闭。卡 resize / 全屏切换后派发 `window` resize，触发终端 `fit` 与编辑器 relayout。
   - **惰性挂载**（承 ADR「未挂载卡不建 WS」）：仅渲染当前画布上的卡片，故终端 WS / metrics 轮询只对画布上的卡建立；未加入画布的功能不预渲染。
   - **预设（个人级 localStorage）**：命名保存画布布局（纯函数 `lib/workspace-preset.ts` 序列化/校验/规整 + `lib/workspace-card.ts` 卡片类型目录，vitest 覆盖）。内置「快捷预设」= **运维台**（默认：大终端 + 状态 + 资源）/ 纯终端 / 资源；用户可「另存为」自定义预设、删除。画布/卡片/预设运行态由 `stores/workspace.ts`（Zustand，按实例 id 记忆，各卡自管 dirty）承载，**不进 URL**（与 `console.ts` 的侧栏/选中态分离）。`/instances/:id` 由 `InstanceDetailPage` 直接挂载服务器统一控制台；需要拼屏时从超级工作台或导播台进入画布能力。
@@ -855,6 +855,24 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 
 **分页/聚合查询地基**（FR-247/235/137/128）：既有 `GET /instances` 一次性返回全量裸数组，实例上千时响应体过大 + 前端全量渲染卡顿。新增两个只读端点作为规模化查询地基（供 FR-235/240/241 消费）：`GET /instances/search`（分页 + 名称子串搜索 + 多维筛选 + 排序，新信封 `{items,total,page,pageSize}`）与 `GET /instances/aggregate`（按状态/节点/角色维度计数，零补全全枚举键）。`/instances` 主页面已消费这两个端点：搜索/状态/节点/网络/环境/标签/视图/分组/排序/方向/pageSize 写入 URL，卡片视图、平铺表格与分组单表均用 `useVirtualRows` 只挂载可视窗口并按需翻页，分组列表用 sticky 组头避免每组重复表头；滚动位置按 `pathname+search` 存 sessionStorage。复用既有权限作用域与筛选语义；`GET /instances` 保持不变，仍供尚未迁移的页面使用。
 
+#### 实例控制台日志与沉浸模式
+
+`/instances/:id?tab=terminal` 的 `TerminalPane → InstanceConsoleView` 已按 ADR-086 拆开输出和输入：
+输出区消费 `terminalSessionManager` 的 5000 行环形缓冲，以 DOM 固定行高虚拟列表渲染，保留 ANSI
+着色、级别过滤、搜索、Java 堆栈折叠和按 `seq` 的跨行锚点选择；命令区是原生 `<input>`，整行
+通过既有 `stdin` WS 消息下发，历史/补全/多行粘贴保护在前端完成。组件卸载只退订渲染，连接与
+缓冲仍由 ADR-067 的管理器保活。
+
+历史回溯使用同一个 `/logs` 读接口的 `(time,id)` 游标模式（`limit`/`cursor`，见 API.md）：实时新
+日志插入表头不再让 OFFSET 翻页重复或漏行。数据库页完整取回后才按级别过滤，避免 stdout/INFO
+形式落库的 Java 调用栈帧被精确 `level=error` 查询截断。
+
+控制台可按 F11 进入 `ConsoleImmersiveMode`：portal 覆盖路由壳，以顶部工作台头部展示当前实例、
+TPS/在线/CPU、退出和布局操作；多实例/最多 4 个 pane 的分屏、切换实例、聚焦、最大化和关闭全部
+由可见按钮完成。沉浸 pane 直接复用鼠标锚点选择、堆栈复制和 HTTP 剪贴板兜底，**不注册 `Ctrl+B`、
+tmux 前缀键或键盘复制模式**。它与 `/super` 的鼠标画布、`/director` 的场景播放并存：前者适合自由
+拖拽，后者适合预设瞬切，沉浸模式适合单次排障时的专注工作面。
+
 #### 可组合卡片画布（超级工作台 / 导播台高级拼屏引擎）
 
 单服默认入口已是固定分区的**服务器统一控制台**（FR-269 / ADR-056，见上「点击实例名」），可组合卡片画布不再作为单实例默认工作区、也不再有单实例画布路由。该画布引擎（FR-166，取代 ADR-030 的固定分屏方向）保留为**跨实例超级工作台**（FR-167，`SuperWorkbenchPage` + `SuperWorkbenchToolbar`，`/super`）与**工作区导播台**（FR-168，`DirectorConsolePage` + `DirectorCanvas`，`/director`）的高级拼屏能力：任意实例的功能卡自由拖拽 / 缩放拼合、命名预设个人级持久化（`stores/workspace.ts`、`workspace-card` / `workspace-preset`）。示意：
@@ -865,7 +883,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 │  实例库拖拽添加 · 卡片携各自 instanceId                 │
 │  ┌──────────────────────────┐ ┌────────────────────┐  │
 │  │ ⠿ 终端  Survival          │ │ ⠿ 服务器状态        │  │
-│  │  (xterm 经 CP WS 中转)    │ │  (在线/世界/运行态) │  │
+│  │  (DOM 日志经 CP WS 中转)  │ │  (在线/世界/运行态) │  │
 │  │                          │ ├────────────────────┤  │
 │  │                          │ │ ⠿ 资源（文件+配置） │  │
 │  └──────────────────────────┘ └────────────────────┘  │
@@ -875,7 +893,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 **画布工具栏**（`SuperWorkbenchToolbar`，FR-167）：标题 + 跨实例快捷预设 ▾ / 添加卡片 / 另存预设；跨实例画布无「当前实例」，故不含单实例生命周期操作，卡片来自左侧实例库拖拽、各携自己的 `instanceId`。导播台（`DirectorCanvas`）为只读播放视图，不可编辑布局。单实例生命周期（启动 / 停止 / 重启 / 强制终止 + 打开终端）由服务器统一控制台状态条承载（FR-269，见上）。与全局顶栏（FR-162/179）同色系同圆角（`bg-card/40` + 语义令牌，明暗 + 双主题随 CSS 变量切换）。
 
 - **卡片类型**（各复用既有面板，惰性挂载，未上画布不建 WS）：
-  - **终端** — 可交互终端（读写 xterm.js，经 CP `/ws/terminal` 中转，`TerminalPane`；FR-281 后 CP→Worker 段优先走 TerminalSession gRPC 桥）
+- **终端** — 输出/输入分离的控制台（DOM 虚拟日志列表 + 原生命令栏，经 CP `/ws/terminal` 中转，`TerminalPane`；FR-281 后 CP→Worker 段优先走 TerminalSession gRPC 桥）
   - **资源** — 文件 + 配置**合一**（`ConfigExplorer` = `ResourceExplorer` + 配置能力，承 FR-130）：文件树 + CodeMirror 编辑器 + 配置 schema 双模式/校验/版本 + 收藏
   - **插件** — 插件安装与管理（`PluginManager`）
   - **监控** — FR-060 历史曲线 + 实时指标（`MetricsSegment`）

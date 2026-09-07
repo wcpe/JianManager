@@ -41,6 +41,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 > 标 `已交付` 是有门的：仅该 FR 的 spec 验收全过 + 测试 / 真机通过后，由 `sdd-release-version` 发版统一标 `已交付@vX.Y.Z`；开发中不得自标。false-done 走 `sdd-fix-bug` 归真，撤 / 推迟走 `sdd-rollback-change`。
 
 **活跃 FR 详细规格索引**（PRD 只留索引行，详情见 spec）：
+- FR-412~424（2026-08-26 控制台与实例界面重设计批）→ 需 spec 的六项：FR-415 / FR-418 / FR-419 `docs/specs/console-log-view-redesign/spec.md`（+ ADR-086 输出/输入分离取代 xterm 直通输入）、FR-420 / FR-421 `docs/specs/console-immersive-workspace/spec.md`（+ ADR-087 可见控制优先工作台，取代未入库的 tmux 前缀键提案）、FR-422 / FR-423 `docs/specs/instance-layout-redesign/spec.md`；免 spec 的六项：FR-412 / FR-413 / FR-414 / FR-416 / FR-417 / FR-424
 - FR-342~345（2026-07-16 迭代批：搭建损毁重建 / 实例系统级指标 / 环境变量管理 / 历史日志）→ FR-342 `docs/specs/provision-damaged-rebuild/`、FR-343 `docs/specs/instance-system-metrics/`、FR-344 `docs/specs/instance-env-vars/`、FR-345 `docs/specs/instance-log-history/`（四项均已交付@v0.18.0）
 - FR-335~340（2026-07-15 验收分诊批二：规模化与全栈补缺）→ FR-335 `docs/specs/topology-scale/`、FR-336 `docs/specs/users-search-pagination/`、FR-337 `docs/specs/tasks-pagination/`、FR-338 `docs/specs/backup-storage-update/`、FR-339 `docs/specs/console-players-backup-segments/`、FR-340 `docs/specs/metrics-batch-series/`；随批一并做的前端消费 gap：节点页聚合（gap:FR-270）/实例列表可供性（gap:FR-235）/超级工作台虚拟化（gap:FR-167）/备份实例选择器 Combobox/端口表虚拟化
 - FR-313（进程级崩溃诊断链路：环形缓冲 + 退出码快照上报持久化 + 前端崩溃诊断面板）→ `docs/specs/crash-diagnostics/spec.md`（需 spec，开发中创建）
@@ -502,6 +503,19 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-409 | 制品版本库与 ServerProbe 在线分发（feat，增强 FR-045/068/114/173/174）：在既有 CAS `assets` 上新增通用制品包 / 来源 / 版本层；首个包 ServerProbe 由 CP 同步 GitHub Releases、校验并缓存 jar，Worker 从 CP 拉取。版本按全局默认 → Worker 默认 → 实例显式覆盖解析；Worker 改默认仅影响新实例，已有实例须手动切换以升级或回滚。不再嵌入 ServerProbe 源码、jar 或依赖缓存（需 spec + ADR）→ `docs/specs/artifact-version-library/spec.md` | P1 | ✅ 已交付@v0.21.0 |
 | FR-410 | Linux 用户级 systemd 版本化直装与节点部署（feat，增强 FR-277/282）：操作机 SSH 推送 CP 或 Worker 至 Linux 普通用户，二进制按版本/UTC 时间/摘要落入永久保留的不可变目录，`current` 原子指针决定运行版本；稳定保留 `data`、CP 配置与 Worker 身份，旧裸二进制布局首次自动迁移；新增 CP / Worker 显式回滚脚本。仅覆盖 user unit，不引入公开镜像、Docker Compose 生产部署或 Kubernetes（需 spec + ADR）→ `docs/specs/versioned-user-systemd-deploy/spec.md` | P1 | ✅ 已交付@v0.21.0 |
 | FR-411 | ServerProbe 本地上传来源（feat，增强 FR-409）：为 `serverprobe` 制品包新增 `local-upload` 内置来源，管理员上传 `.jar` 即流式入现有 CAS 并立即形成可选版本；来源与版本明确区分 GitHub Releases（线上拉取）和本地上传，同名版本按来源消歧；复用全局→Worker→实例选择和 CP-local Worker 拉取，不自动改默认或升级已有实例（需 spec + ADR-085）→ `docs/specs/local-serverprobe-upload/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-412 | 实例顶栏瘦身与实例切换器（feat，增强 FR-293/296）：删除 `服务器控制台 /` 前缀与无信息副标题，7 格 MetaCell 网格改为一行 pill 指标条（可收起并记住偏好），实例名即切换器（复用最近/收藏 + 模糊搜索），切换命中热集不重建终端连接；顶栏无横幅时 ≤ 90px（免 spec） | P1 | 🔨 开发中 |
+| FR-413 | 实例 Tab 重组（feat，增强 FR-037）：「环境变量」并入「文件配置」形成分段，10 → 9 个 Tab 并加图标与分组分隔线，1366px 宽下不横向滚动；`?tab=env` 旧深链自动落到新分段（免 spec） | P1 | 🔨 开发中 |
+| FR-414 | 终端热集上限治理（feat，增强 FR-296/ADR-067）：`HOT_SET_SIZE` 由写死 3 改为可配（默认 6），按实际可见终端数动态提升保活集，闲置断连策略随之调整，为分屏与多 window 场景铺底（免 spec） | P1 | 🔨 开发中 |
+| FR-415 | 控制台输出/输入分离（feat，取代 Terminal 的 xterm 直通输入）：后端为 stdin 管道而非 pty，故输出区改 DOM 虚拟列表（只读、结构化行模型、MC/Java 日志行解析、ANSI 解析、5000 行环形缓冲），输入改真 `<input>` 命令栏以获得原生行编辑/输入法/粘贴；非运行态明确禁用并给出原因与直达动作（需 spec + ADR-086）→ `docs/specs/console-log-view-redesign/spec.md` | P0 | 🔨 开发中 |
+| FR-416 | 命令栏智能输入（feat，依赖 FR-415）：历史按实例持久化（上限 500、相邻去重）、`^R` 模糊搜索、候选式 Tab 补全（命令 + 第二段玩家名，ghost 预览不盲补）、多行粘贴确认（逐行/仅首行/取消）（免 spec） | P1 | 🔨 开发中 |
+| FR-417 | 输出区观察能力（feat，依赖 FR-415）：日志级别过滤、行内搜索与高亮计数、跳到底部浮标、复制范围菜单（选区/可见屏/全缓冲/仅错误/存 .log），并为停机日志回放、崩溃诊断、启动失败横幅三处补复制按钮（免 spec） | P1 | 🔨 开发中 |
+| FR-418 | 大范围选取与堆栈块复制（feat，依赖 FR-415）：跨行改用锚点选区（行号区间 + 边缘自动滚动，文本取自数据源而非 DOM，规避虚拟列表选区断裂），单行内保留原生字符级选取；Java/MC 异常按堆栈形态归并为可折叠块并支持一键复制整块（需 spec，沉浸 pane 直接复用鼠标选区与复制能力）→ `docs/specs/console-log-view-redesign/spec.md` | P1 | 🔨 开发中 |
+| FR-419 | 历史日志无限回溯（feat，增强 FR-150/345）：`/logs` 由 OFFSET/LIMIT 增加 `(time,id)` 游标分页以消除向上翻页时的 offset 漂移；控制台滚到顶自动加载更早并保持滚动锚定，提供「跳到本次启动」与「跳到时间点」，横幅标明回溯位置与数据层级。归档 NDJSON（超保留期）不纳入本次范围（需 spec）→ `docs/specs/console-log-view-redesign/spec.md` | P1 | 🔨 开发中 |
+| FR-420 | 控制台沉浸工作台（feat，依赖 FR-415/414）：`F11` 进入全屏沉浸态（侧栏/顶栏/Tab 退场），顶部工作台头部承载当前实例、TPS/在线/CPU、可见布局操作与退出；不注册 tmux 前缀键或底部状态栏（需 spec + ADR-087）→ `docs/specs/console-immersive-workspace/spec.md` | P2 | 🔨 开发中 |
+| FR-421 | 沉浸工作台可视化分屏（feat，依赖 FR-420/418）：通过可见按钮提供左右/上下分屏、添加/切换实例、聚焦、最大化和关闭 pane（最多 4 个）；复制直接复用 FR-418 鼠标锚点/堆栈复制，不提供键盘复制模式（需 spec）→ `docs/specs/console-immersive-workspace/spec.md` | P2 | 🔨 开发中 |
+| FR-422 | 实例界面视口自适应骨架（feat，增强 FR-269/296）：实例路由内容区由 `min-h-[520px]` + 整页滚动改为 `flex h-full` 骨架——顶栏与 Tab 栏 `flex-none`、内容区 `flex-1 min-h-0`、滚动收口到卡片内部，使顶栏常驻可见且底部不再留白（屏幕越大原浪费越多）；分段栏与工具栏合并为单条横栏。仅覆盖实例详情路由，不改其他页面滚动模型（需 spec）→ `docs/specs/instance-layout-redesign/spec.md` | P1 | 🔨 开发中 |
+| FR-423 | 实例各 Tab 分栏重排与空态收缩（feat，依赖 FR-422）：按内容宽度需求分栏（窄内容与宽表格分列），等高栏改为不撑高矮卡，空态高度按内容走；概览的「最近事件 / 关注事项 / 崩溃诊断」三个低信息量卡合流为单条「动态与告警」时间线（需 spec）→ `docs/specs/instance-layout-redesign/spec.md` | P1 | 🔨 开发中 |
+| FR-424 | 宽表格列宽与稀疏表治理（feat，依赖 FR-422）：宽表格显式约束列宽与总宽上限，避免主列无限扩张导致名称与元数据之间断开视觉连接；超宽稀疏表（在线玩家、白名单等 2 列表）改行卡片形态，复用 FR-195 的行卡片范式（免 spec） | P1 | 🔨 开发中 |
 ### 范围外（后续版本，暂不纳入 V1）
 
 | 编号 | 需求 | 预计版本 |
