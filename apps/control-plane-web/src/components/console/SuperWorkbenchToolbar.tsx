@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
-import { Clapperboard, LayoutGrid, Save, Trash2 } from 'lucide-react'
+import { Clapperboard, LayoutGrid, Save, SquareTerminal, Trash2 } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -26,6 +26,10 @@ interface SuperWorkbenchToolbarProps {
   onApplyPreset: (presetId: string) => void
   onSavePreset: (name: string) => void
   onDeletePreset: (presetId: string) => void
+  /** 打开「专注终端」（沉浸终端模式，ADR-087）：取画布上首个终端卡实例。未提供=不渲染按钮。 */
+  onOpenFocusTerminals?: () => void
+  /** 禁用原因（画布无终端卡等）；给出时按钮禁用并以 title 提示。 */
+  focusTerminalsDisabledReason?: string
 }
 
 export default function SuperWorkbenchToolbar({
@@ -34,6 +38,8 @@ export default function SuperWorkbenchToolbar({
   onApplyPreset,
   onSavePreset,
   onDeletePreset,
+  onOpenFocusTerminals,
+  focusTerminalsDisabledReason,
 }: SuperWorkbenchToolbarProps) {
   const { t } = useTranslation()
   const [saveOpen, setSaveOpen] = useState(false)
@@ -48,6 +54,22 @@ export default function SuperWorkbenchToolbar({
       </div>
 
       <div className="ml-auto flex items-center gap-1.5">
+        {/* 专注终端（融合入口，职责分层决策）：监看混排留在画布，纯终端重度操作进沉浸台。
+            取画布首个终端卡的实例为起点；画布无终端卡时禁用并提示。 */}
+        {onOpenFocusTerminals && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={Boolean(focusTerminalsDisabledReason)}
+            title={focusTerminalsDisabledReason ?? t('superWorkbench.focusTerminals')}
+            onClick={onOpenFocusTerminals}
+          >
+            <SquareTerminal className="size-4" />
+            <span className="hidden sm:inline">{t('superWorkbench.focusTerminals')}</span>
+          </Button>
+        )}
+
         {/* 进导播台（FR-168）：把已存的跨实例预设当场景预热瞬切。 */}
         <Button asChild size="sm" variant="outline" title={t('director.enter')}>
           <Link to="/director">

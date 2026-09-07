@@ -10,6 +10,7 @@ import { terminalSessionManager } from '@/lib/terminal-session-manager'
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
 import { Eye, Maximize2, Minimize2, Pencil, Play, RotateCcw, Search, ZoomIn, ZoomOut } from 'lucide-react'
+import ConsoleImmersiveMode from './ConsoleImmersiveMode'
 
 /**
  * 工作区终端面板：为单个实例打开控制台（ADR-009 / FR-037）。
@@ -32,6 +33,8 @@ interface TerminalPaneProps {
    * 卸载/隐藏不释放连接；独立表面（画布卡片等）保持默认卸载即释放。
    */
   persistSession?: boolean
+  /** 沉浸模式内的 pane：去掉自身工具栏与 F11 入口，避免嵌套打开第二层 portal。 */
+  embeddedImmersive?: boolean
   /** pane 获得鼠标/键盘焦点时通知沉浸层更新焦点边框。 */
   onPaneFocus?: () => void
 }
@@ -40,10 +43,12 @@ export default function TerminalPane({
   instanceId,
   hideHeader = false,
   persistSession = false,
+  embeddedImmersive = false,
   onPaneFocus,
 }: TerminalPaneProps) {
   const { t } = useTranslation()
   const [fullscreen, setFullscreen] = useState(false)
+  const [immersive, setImmersive] = useState(false)
   const [fontSize, setFontSize] = useState(14)
   const [terminalSearchOpen, setTerminalSearchOpen] = useState(false)
   const { data: instance } = useInstance(instanceId)
@@ -92,7 +97,10 @@ export default function TerminalPane({
   ) : undefined
 
   const handlePaneKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+    if (!embeddedImmersive && event.key === 'F11') {
+      event.preventDefault()
+      setImmersive((value) => !value)
+    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
       event.preventDefault()
       setTerminalSearchOpen(true)
     } else if (event.key === 'Escape' && terminalSearchOpen) {
@@ -106,6 +114,7 @@ export default function TerminalPane({
       className={cn(
         'flex h-full min-w-0 w-full flex-col bg-background',
         fullscreen && 'fixed inset-4 z-50 rounded-xl border shadow-2xl',
+        embeddedImmersive && 'bg-[#161a22]',
       )}
       onKeyDown={handlePaneKeyDown}
       onFocusCapture={onPaneFocus}
@@ -132,7 +141,7 @@ export default function TerminalPane({
 
       {/* 顶栏（REF 方案 A）：三层 chrome 收敛为单条扁平工具栏——去浮卡/去阴影/去外边距，
           状态提示并入行首（不再独占整行），控件右对齐、扁平 ghost，把纵向空间还给日志区。 */}
-      {canAttach && (
+      {canAttach && !embeddedImmersive && (
         <div className="flex flex-wrap items-center gap-1 border-b bg-card/40 px-3 py-1.5 text-xs">
           <span
             className={cn(
@@ -179,11 +188,20 @@ export default function TerminalPane({
             {fullscreen ? <Minimize2 className="mr-1 size-3.5" /> : <Maximize2 className="mr-1 size-3.5" />}
             {fullscreen ? t('instanceDetail.terminalExitFullscreen') : t('instanceDetail.terminalFullscreen')}
           </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 rounded-md px-2 text-xs"
+            onClick={() => setImmersive(true)}
+          >
+            <Maximize2 className="mr-1 size-3.5" />
+            {t('instanceDetail.consoleImmersiveEnter')}
+          </Button>
         </div>
       )}
 
       {/* 控制台区 */}
-      <div className="flex min-h-0 flex-1 flex-col p-2">
+      <div className={cn('flex min-h-0 flex-1 flex-col', embeddedImmersive ? 'p-0' : 'p-2')}>
         {!status ? (
           // 实例状态未知（加载中）：先不挂载控制台，避免拿不到状态就拨号/闪现。
           <div className="flex min-h-[400px] items-center justify-center rounded-lg bg-[#1a1b26] p-4">
@@ -203,6 +221,7 @@ export default function TerminalPane({
               action={startAction}
               onSubmit={() => {}}
               fontSize={fontSize}
+              immersive={embeddedImmersive}
             />
           </div>
         ) : error ? (
@@ -224,10 +243,29 @@ export default function TerminalPane({
             persistSession={persistSession}
             disabledReason={disabledReason}
             disabledAction={startAction}
+            immersive={embeddedImmersive}
           />
         )}
       </div>
 
+      {immersive && !embeddedImmersive && (
+        <ConsoleImmersiveMode
+          initialInstanceId={instanceId}
+          onExit={() => setImmersive(false)}
+          renderPane={({ instanceId: paneInstanceId, onFocus }) => (
+            <TerminalPane
+              instanceId={paneInstanceId}
+              hideHeader
+              embeddedImmersive
+              onPaneFocus={onFocus}
+              // 沉浸 pane 与底层主视图共享同一会话：pane 卸载（退出沉浸台）绝不能触发
+              // release-dispose，否则会连带释放实例页主视图正在用的会话导致控制台空白。
+              // 会话生命周期由管理器 LRU（FR-296）兜底，这里只租不还。
+              persistSession
+            />
+          )}
+        />
+      )}
     </div>
   )
 }

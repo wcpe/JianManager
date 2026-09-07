@@ -16,6 +16,7 @@
 
 ## 索引（最近新增）
 
+- [ADR-087](087-console-immersive-visible-controls.md) 沉浸控制台采用可见控制优先的工作台（取代未入库的 tmux 前缀键提案）
 - [ADR-085](085-local-serverprobe-upload-source.md) ServerProbe 本地上传来源（FR-411，修订 ADR-083 来源范围）
 - [ADR-078](078-explorer-cross-window-clipboard-dnd.md) 资源管理器跨窗剪贴板与拖放总线（FR-377）
 - [ADR-079](079-instance-reverse-reconcile.md) CP↔Worker 实例反向对账（FR-326：无主运行时宽限+默认不自动杀）

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
@@ -53,6 +53,20 @@ function currentMatchSeq() {
  * 「xterm 实例/缓冲」平移到「输出区 DOM / 权威行缓冲」，并新增「这条路径零 xterm」的守卫。
  */
 describe('TerminalPane（mock 假后端）', () => {
+  it('F11 进入沉浸模式，覆盖实例详情外壳而不改当前路由', async () => {
+    loginMockUser()
+    const { container } = renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
+
+    await findOutput()
+    fireEvent.keyDown(container.firstElementChild!, { key: 'F11', bubbles: true })
+
+    const immersive = await screen.findByLabelText('专注终端工作台')
+    expect(immersive).toHaveClass('bg-[#0f1115]')
+    expect(within(immersive).getByRole('textbox', { name: '控制台命令输入' })).toHaveClass(
+      'bg-[#101419]',
+      'text-slate-100',
+    )
+  })
 
   it('停机实例：按旧→新回放历史正文，重新挂载仍持久且不发起 WS', async () => {
     loginMockUser()

@@ -8,6 +8,8 @@ import { cardsToLayout, type PlacedCard } from '@/lib/workspace-preset'
 import { parseDragPayload } from '@/lib/instance-library'
 import { cn } from '@jianmanager/ui'
 import WorkspaceCard from './WorkspaceCard'
+import TerminalPane from './TerminalPane'
+import ConsoleImmersiveMode from './ConsoleImmersiveMode'
 import InstanceLibrary from './InstanceLibrary'
 import SuperWorkbenchToolbar from './SuperWorkbenchToolbar'
 import 'react-grid-layout/css/styles.css'
@@ -60,6 +62,9 @@ export default function SuperWorkbenchPage() {
   }, [ensureSuperCanvas])
 
   const cards = canvas?.cards ?? EMPTY_CARDS
+  // 专注终端（融合入口）：画布上首个终端卡的实例作为沉浸台起点；无终端卡则按钮禁用提示。
+  const firstTerminalInstanceId = cards.find((card) => card.type === 'terminal')?.instanceId ?? null
+  const [focusInstanceId, setFocusInstanceId] = useState<number | null>(null)
   const fullscreenId = canvas?.fullscreenCardId ?? null
   const layout = useMemo<Layout[]>(() => cardsToLayout(cards), [cards])
 
@@ -109,6 +114,10 @@ export default function SuperWorkbenchPage() {
           onApplyPreset={applySuperPreset}
           onSavePreset={saveSuperPresetAs}
           onDeletePreset={deleteUserPreset}
+          onOpenFocusTerminals={() => {
+            if (firstTerminalInstanceId != null) setFocusInstanceId(firstTerminalInstanceId)
+          }}
+          focusTerminalsDisabledReason={firstTerminalInstanceId == null ? t('superWorkbench.focusTerminalsEmpty') : undefined}
         />
 
         {/* 放置区：整块画布是落点；dragover 高亮（主色虚线，复用 token）。 */}
@@ -184,6 +193,23 @@ export default function SuperWorkbenchPage() {
           )}
         </div>
       </div>
+
+      {/* 专注终端（ADR-087 沉浸台）：从工作台画布进入的纯终端全屏模式；退出回本页。
+          pane 渲染复用 TerminalPane（embeddedImmersive + hideHeader），会话经 persistSession 保活。 */}
+      {focusInstanceId != null && (
+        <ConsoleImmersiveMode
+          initialInstanceId={focusInstanceId}
+          onExit={() => setFocusInstanceId(null)}
+          renderPane={({ instanceId: paneInstanceId, onFocus }) => (
+            <TerminalPane
+              instanceId={paneInstanceId}
+              hideHeader
+              embeddedImmersive
+              onPaneFocus={onFocus}
+            />
+          )}
+        />
+      )}
     </div>
   )
 }
