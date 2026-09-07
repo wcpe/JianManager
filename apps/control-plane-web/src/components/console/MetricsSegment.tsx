@@ -118,6 +118,13 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
           {t('probe.installHint')}
         </div>
       )}
+      {/* FR-411 真机排障：桥已连接 ≠ 指标通道健康。桥通而 /metrics 不采（probeAvailable=false）
+          时历史曲线与实时 TPS 全空，用户极易把「探针已连接」误读为监控正常——显式点破断链与去向。 */}
+      {bridgeConnected && !metricsActive && isRunning && (
+        <div className="mx-2 mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          {t('probe.metricsGapHint')}
+        </div>
+      )}
     </Panel>
   )
 }
@@ -259,9 +266,47 @@ function fmtBytes(b: number): string {
   return `${(b / 1024).toFixed(0)}K`
 }
 
+/** 序列是否有任何非空点：全空等价于「无数据」，用于把空图收成一行字（FR-423 §3.2）。 */
+function hasSeriesData(series: ChartSeries[]): boolean {
+  return series.some((s) => s.points.some((p) => p.value != null))
+}
+
+/**
+ * 图表卡（FR-423）：有数据渲染曲线，无数据只留一行灰字。
+ *
+ * {@link TimeSeriesChart} 自带的空态会按 `height` 占满整块（本页 160px），9 张图全空就是
+ * 一屏半的「暂无数据」——spec §1 记的正是这种「空态占固定高度块」。故空判提到卡这一层。
+ */
+function ChartPanel({
+  title,
+  series,
+  valueFormatter,
+  referenceLines,
+}: {
+  title: string
+  series: ChartSeries[]
+  valueFormatter?: (v: number) => string
+  referenceLines?: ChartReferenceLine[]
+}) {
+  const { t } = useTranslation()
+  return (
+    <Panel className="flex-none" title={title}>
+      {hasSeriesData(series) ? (
+        <TimeSeriesChart series={series} height={160} valueFormatter={valueFormatter} referenceLines={referenceLines} />
+      ) : (
+        <p className="text-xs text-muted-foreground">{t('common.noData')}</p>
+      )}
+    </Panel>
+  )
+}
+
 /**
  * 实例监控段（FR-060/FR-061）：消费 /metrics/series（scope=instance）渲染历史曲线——
  * TPS/MSPT/堆/在线/线程/CPU + 分世界区块。探针不可用时段渲染为断点。
+ *
+ * 布局（FR-423）：本页不左右分栏——图表是等宽同构的，按 spec §3.1 的 62:38 切开只会把
+ * 同一族曲线拆成两种宽度。改为「实例指标上下两行（xl 三列 × 6 张）+ 世界统计独立一段」，
+ * 头部（标题 + 区间选择）`flex-none` 常驻，其余内容在下方单一滚动容器内滚（FR-422 骨架）。
  */
 export default function MetricsSegment({ instanceUuid, instanceId }: { instanceUuid: string; instanceId: number }) {
   const { t } = useTranslation()
@@ -286,62 +331,75 @@ export default function MetricsSegment({ instanceUuid, instanceId }: { instanceU
     return <div className="p-4 text-sm text-muted-foreground">{t('common.loading')}</div>
   }
 
+  const worldChunks = byWorld('world_loaded_chunks')
+  const worldEntities = byWorld('world_entities')
+  const worldTiles = byWorld('world_tile_entities')
+  // 分世界指标要么整族有（探针上报世界维度）、要么整族无，故按族判空收成一行字，
+  // 而不是留三张空图各占 160px。
+  const hasWorldData = [worldChunks, worldEntities, worldTiles].some(hasSeriesData)
+
   return (
-    <div className="space-y-3 p-4">
-      <div className="flex items-center justify-between">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+      {/* 区间选择常驻：改区间是本页主操作，不该被曲线滚出视野。 */}
+      <div className="flex flex-none items-center justify-between">
         <h3 className="text-sm font-semibold">{t('metrics.title')}</h3>
         <RangePicker value={range} onChange={setRange} />
       </div>
-      <ProbeUpdateCard instanceId={instanceId} />
-      <HealthStrip instanceId={instanceId} />
-      <ResourceLimitCard instanceId={instanceId} />
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
-        <Panel title={t('metrics.tps')}>
-          <TimeSeriesChart
+      {/* 本页唯一滚动容器（FR-422：滚动收口在卡内，顶栏与 Tab 栏不滚）。 */}
+      <div className="min-h-0 flex-1 space-y-3 overflow-auto">
+        <ProbeUpdateCard instanceId={instanceId} />
+        <HealthStrip instanceId={instanceId} />
+        <ResourceLimitCard instanceId={instanceId} />
+        {/* 实例指标：xl 三列 × 6 张 = 上下两行（spec §3.1 监控行）。
+            items-start 是必需的（spec §3.2）：grid 默认 stretch 会把「暂无数据」的一行字卡
+            拉到同排曲线卡的高度（实测被拉成 222px，卡内 141px 死区）。 */}
+        <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2 xl:grid-cols-3">
+          <ChartPanel
+            title={t('metrics.tps')}
             series={one('inst_tps', t('metrics.tps'))}
-            height={160}
             valueFormatter={(v) => v.toFixed(1)}
             referenceLines={tpsThresholds(t)}
           />
-        </Panel>
-        <Panel title={t('metrics.mspt')}>
-          <TimeSeriesChart
+          <ChartPanel
+            title={t('metrics.mspt')}
             series={one('inst_mspt', t('metrics.mspt'))}
-            height={160}
             valueFormatter={(v) => `${v.toFixed(1)}ms`}
             referenceLines={msptThresholds(t)}
           />
-        </Panel>
-        <Panel title={t('metrics.heap')}>
-          <TimeSeriesChart
+          <ChartPanel
+            title={t('metrics.heap')}
             series={many(['inst_heap_used', t('metrics.heapUsed')], ['inst_heap_max', t('metrics.heapMax')])}
-            height={160}
             valueFormatter={fmtBytes}
           />
-        </Panel>
-        <Panel title={t('metrics.players')}>
-          <TimeSeriesChart series={one('inst_players_online', t('metrics.players'))} height={160} valueFormatter={(v) => v.toFixed(0)} />
-        </Panel>
-        <Panel title={t('metrics.threads')}>
-          <TimeSeriesChart series={one('inst_threads', t('metrics.threads'))} height={160} valueFormatter={(v) => v.toFixed(0)} />
-        </Panel>
-        <Panel title={t('metrics.cpu')}>
-          <TimeSeriesChart
+          <ChartPanel
+            title={t('metrics.players')}
+            series={one('inst_players_online', t('metrics.players'))}
+            valueFormatter={(v) => v.toFixed(0)}
+          />
+          <ChartPanel
+            title={t('metrics.threads')}
+            series={one('inst_threads', t('metrics.threads'))}
+            valueFormatter={(v) => v.toFixed(0)}
+          />
+          <ChartPanel
+            title={t('metrics.cpu')}
             series={one('inst_cpu_pct', t('metrics.cpu'))}
-            height={160}
             valueFormatter={(v) => `${v.toFixed(0)}%`}
             referenceLines={cpuThresholds(t)}
           />
-        </Panel>
-        <Panel title={t('metrics.worldChunks')}>
-          <TimeSeriesChart series={byWorld('world_loaded_chunks')} height={160} valueFormatter={(v) => v.toFixed(0)} />
-        </Panel>
-        <Panel title={t('metrics.worldEntities')}>
-          <TimeSeriesChart series={byWorld('world_entities')} height={160} valueFormatter={(v) => v.toFixed(0)} />
-        </Panel>
-        <Panel title={t('metrics.worldTileEntities')}>
-          <TimeSeriesChart series={byWorld('world_tile_entities')} height={160} valueFormatter={(v) => v.toFixed(0)} />
-        </Panel>
+        </div>
+        {/* 世界统计：与实例指标分段，无世界维度数据时整段收成一行字。 */}
+        {hasWorldData ? (
+          <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2 xl:grid-cols-3">
+            <ChartPanel title={t('metrics.worldChunks')} series={worldChunks} valueFormatter={(v) => v.toFixed(0)} />
+            <ChartPanel title={t('metrics.worldEntities')} series={worldEntities} valueFormatter={(v) => v.toFixed(0)} />
+            <ChartPanel title={t('metrics.worldTileEntities')} series={worldTiles} valueFormatter={(v) => v.toFixed(0)} />
+          </div>
+        ) : (
+          <Panel className="flex-none" title={t('metrics.worldStats')}>
+            <p className="text-xs text-muted-foreground">{t('metrics.noWorldData')}</p>
+          </Panel>
+        )}
       </div>
     </div>
   )

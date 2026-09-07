@@ -45,6 +45,8 @@ type ProbeUpdateService struct {
 	artifacts *ArtifactVersionService
 	// connCheck 注入探针连接状态查询（FR-065/066 插件桥会话），nil 表示一律未连入。
 	connCheck ProbeConnChecker
+	// instanceSvc 供部署前补分配缺失的探针端口（FR-411 补口）；nil 时缺端口实例拒绝部署并给出明确原因。
+	instanceSvc *InstanceService
 
 	// lastPushed 记录每实例「上次经本服务推送探针」的时间（CP 进程内内存态，重启清空）。
 	mu         sync.RWMutex
@@ -71,6 +73,12 @@ func NewProbeUpdateService(db *gorm.DB, pool *cpgrpc.ClientPool, bridge *PluginB
 // SetConnChecker 注入探针连接状态查询（FR-066 在线名册）。在 main 装配阶段调用，避免服务间循环依赖。
 func (s *ProbeUpdateService) SetConnChecker(c ProbeConnChecker) {
 	s.connCheck = c
+}
+
+// SetInstanceService 注入实例服务（FR-411 补口）：部署前为导入/历史实例补分配缺失的探针端口。
+// 在 main 装配阶段调用；不注入时缺端口实例在部署阶段得到明确错误而非写出 port: 0 的坏配置。
+func (s *ProbeUpdateService) SetInstanceService(svc *InstanceService) {
+	s.instanceSvc = svc
 }
 
 // ProbeUpdateStatus 某实例的探针更新状态（供详情页「更新探针」区展示）。
@@ -315,7 +323,20 @@ func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeID
 }
 
 // deployVersionTo 下发已缓存制品的 CP 本地 URL；不传 jar 字节或运行库压缩包。
+// 部署前确保实例已分配探针端口（FR-411 补口）：导入/历史实例 probe_port=0 时自动补口并
+// 幂等重注册 Worker，避免写出 `port: 0` 的探针配置（探针绑到 OS 随机端口，监控永无数据）。
 func (s *ProbeUpdateService) deployVersionTo(inst *model.Instance, version *model.ArtifactVersion, baseURL string) error {
+	if inst.ProbePort <= 0 {
+		if s.instanceSvc == nil {
+			return fmt.Errorf("实例 %s 未分配探针端口（probe_port=0），无法安装探针：请升级面板后重试或联系管理员", inst.Name)
+		}
+		if _, err := s.instanceSvc.EnsureProbePort(inst); err != nil {
+			return err
+		}
+		if inst.ProbePort <= 0 {
+			return fmt.Errorf("实例 %s 探针端口补分配未生效，取消部署", inst.Name)
+		}
+	}
 	client, err := s.workerForDeployment(inst)
 	if err != nil {
 		return err

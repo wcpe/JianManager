@@ -262,6 +262,18 @@ func (m *Manager) SetGracefulStopTimeout(uuid string, seconds int) {
 	}
 }
 
+// SetProbePort 更新已登记实例的 ServerProbe /metrics 端口（FR-411 补口）。
+// 供 CP 幂等重注册时刷新：导入/历史实例起初 probe_port=0，CP 部署探针前补分配端口后经
+// 重注册下发，Worker 内存表随即生效——心跳下一拍即开始采集该实例指标，无需等待实例重启。
+// 实例不存在则忽略（容错风格与 SetGracefulStopTimeout 一致）。
+func (m *Manager) SetProbePort(uuid string, port int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst, ok := m.instances[uuid]; ok {
+		inst.ProbePort = port
+	}
+}
+
 // SetDockerConfig 设置已登记实例的 docker 镜像、端口映射与资源限额（ADR-019 / FR-079）。
 // 由 CP 在创建/重注册 docker 实例时下发，使镜像/端口/限额对下一次启动生效（值在 Start 时随 spec 定型）。
 // 实例不存在则忽略（与 SetGracefulStopTimeout 容错风格一致，不阻塞启动路径）。

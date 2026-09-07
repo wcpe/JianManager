@@ -1198,6 +1198,46 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 	return s.registerOnWorkerLocked(current)
 }
 
+// EnsureProbePort 确保实例已分配探针 /metrics 端口（FR-411 补口，真机：导入实例装探针后监控永无数据）。
+// 导入/历史实例不经 allocPortsForNode，probe_port 保持 0：探针 config 被写成 port: 0（探针绑 OS 随机端口），
+// Worker 心跳又按 ProbePort>0 过滤采集，形成「探针桥已连接但监控永无数据」的静默断链。
+// 已有端口时幂等直返（changed=false）；否则分配、落库并幂等重注册 Worker（刷新其内存表 ProbePort，
+// 使下一拍心跳立即采集，无需等待实例重启）。重注册失败不阻断（Worker 离线时下次启动/重连重推补齐）。
+func (s *InstanceService) EnsureProbePort(instance *model.Instance) (changed bool, err error) {
+	if instance.ProbePort > 0 {
+		return false, nil
+	}
+	release := s.acquireInstanceOperation(instance.ID)
+	defer release()
+
+	// 锁内重读：并发部署/删除期间状态可能已变；重读后仍缺端口才补口。
+	current, err := s.GetByID(instance.ID)
+	if err != nil {
+		return false, err
+	}
+	if current.ProbePort > 0 {
+		instance.ProbePort = current.ProbePort
+		return false, nil
+	}
+	port, err := allocProbePortForNode(s.db, current.NodeID)
+	if err != nil {
+		return false, fmt.Errorf("为实例 %s 补分配探针端口失败: %w", current.Name, err)
+	}
+	if err := s.db.Model(&model.Instance{}).Where("id = ?", current.ID).Update("probe_port", port).Error; err != nil {
+		return false, fmt.Errorf("持久化探针端口失败: %w", err)
+	}
+	current.ProbePort = port
+	instance.ProbePort = port
+	slog.Info("已为缺探针端口实例补分配端口", "instanceId", current.ID, "name", current.Name, "probePort", port)
+
+	// 幂等重注册：Worker 侧「已存在」分支刷新内存表 ProbePort（含运行中实例），心跳下一拍即采集。
+	if regErr := s.registerOnWorkerLocked(current); regErr != nil {
+		slog.Warn("补分配探针端口后重注册 Worker 失败（不阻断部署；下次启动/重连重推自动补齐）",
+			"instanceId", current.UUID, "probePort", port, "error", regErr)
+	}
+	return true, nil
+}
+
 // registerOnWorkerLocked 注册当前实例；调用方必须持有对应实例生命周期锁。
 func (s *InstanceService) registerOnWorkerLocked(instance *model.Instance) error {
 	var node model.Node

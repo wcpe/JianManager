@@ -58,6 +58,34 @@ func TestAllocPortsForNode(t *testing.T) {
 	require.Equal(t, 25566, p4.ServerPort) // p2 的端口被回收
 }
 
+func TestAllocProbePortForNode(t *testing.T) {
+	db := newPortsTestDB(t)
+
+	// 空节点：探针端口取起点
+	port, err := allocProbePortForNode(db, 1)
+	require.NoError(t, err)
+	require.Equal(t, 29940, port)
+
+	// 既有实例占用的探针端口被跳过（含历史实例残留）
+	require.NoError(t, db.Create(mkInstance("a", 1, AllocatedPorts{ServerPort: 25565, QueryPort: 25565, ProbePort: 29940})).Error)
+	port2, err := allocProbePortForNode(db, 1)
+	require.NoError(t, err)
+	require.Equal(t, 29941, port2)
+
+	// 不同节点独立计数
+	port3, err := allocProbePortForNode(db, 2)
+	require.NoError(t, err)
+	require.Equal(t, 29940, port3)
+
+	// 软删除实例释放其探针端口
+	inst := mkInstance("b", 1, AllocatedPorts{ServerPort: 25566, QueryPort: 25566, ProbePort: 29941})
+	require.NoError(t, db.Create(inst).Error)
+	require.NoError(t, db.Delete(inst).Error)
+	port4, err := allocProbePortForNode(db, 1)
+	require.NoError(t, err)
+	require.Equal(t, 29941, port4)
+}
+
 func TestNodePortUsage(t *testing.T) {
 	db := newPortsTestDB(t)
 	require.NoError(t, db.Create(mkInstance("b", 1, AllocatedPorts{ServerPort: 25566, QueryPort: 25566})).Error)

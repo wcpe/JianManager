@@ -80,9 +80,44 @@ func NodePortUsage(db *gorm.DB, nodeID uint) ([]PortUsage, error) {
 // 在各自范围内取最低的、未被本节点其它实例占用的端口；已软删除的实例不计入占用。
 // RCON 已退役（FR-067）：不再分配 rcon 端口，但仍把历史实例残留的 rcon 端口计入占用集合避免撞号。
 func allocPortsForNode(db *gorm.DB, nodeID uint) (AllocatedPorts, error) {
+	used, err := occupiedPortsForNode(db, nodeID)
+	if err != nil {
+		return AllocatedPorts{}, err
+	}
+
+	server, err := pickPort(used, serverPortBase)
+	if err != nil {
+		return AllocatedPorts{}, err
+	}
+	probe, err := pickPort(used, probePortBase)
+	if err != nil {
+		return AllocatedPorts{}, err
+	}
+	return AllocatedPorts{ServerPort: server, QueryPort: server, ProbePort: probe}, nil
+}
+
+// allocProbePortForNode 只为节点分配一个空闲探针端口（FR-411 补口）。
+// 导入实例（FR-302）与历史实例不经过 allocPortsForNode，probe_port 保持 0——这类实例
+// 安装探针时写出的 config 是 port: 0（探针绑到 OS 随机端口），Worker 侧又按 ProbePort>0
+// 过滤采集，形成「探针桥已连接但监控永无数据」的静默断链。部署探针前经此函数补口。
+//
+// TODO(端口分配并发竞态)：同节点两个实例并发分配（同时补口/建服）时，各自拿到的
+// occupiedPortsForNode 都是无事务快照，可能选中同一端口。与 allocPortsForNode 同款
+// 已知竞态（ EnsureProbePort 的实例级锁只防同实例重入，防不了跨实例），留待引入
+// 节点级端口分配锁（或占用约束 + 冲突重试）时一并收敛。
+func allocProbePortForNode(db *gorm.DB, nodeID uint) (int, error) {
+	used, err := occupiedPortsForNode(db, nodeID)
+	if err != nil {
+		return 0, err
+	}
+	return pickPort(used, probePortBase)
+}
+
+// occupiedPortsForNode 汇总某节点已占用端口集合（server/rcon 残留/query/probe），已软删除实例不计入。
+func occupiedPortsForNode(db *gorm.DB, nodeID uint) (map[int]bool, error) {
 	var instances []model.Instance
 	if err := db.Where("node_id = ?", nodeID).Find(&instances).Error; err != nil {
-		return AllocatedPorts{}, fmt.Errorf("查询节点实例端口失败: %w", err)
+		return nil, fmt.Errorf("查询节点实例端口失败: %w", err)
 	}
 
 	used := make(map[int]bool)
@@ -95,24 +130,16 @@ func allocPortsForNode(db *gorm.DB, nodeID uint) (AllocatedPorts, error) {
 			}
 		}
 	}
+	return used, nil
+}
 
-	pick := func(base int) (int, error) {
-		for p := base; p < base+portRangeSize; p++ {
-			if !used[p] {
-				used[p] = true // 防止本次分配内的多个端口相互撞号
-				return p, nil
-			}
+// pickPort 在 [base, base+portRangeSize) 内取未被占用的最低端口；已取端口写入 used 防同批撞号。
+func pickPort(used map[int]bool, base int) (int, error) {
+	for p := base; p < base+portRangeSize; p++ {
+		if !used[p] {
+			used[p] = true
+			return p, nil
 		}
-		return 0, fmt.Errorf("端口范围 [%d,%d) 已耗尽", base, base+portRangeSize)
 	}
-
-	server, err := pick(serverPortBase)
-	if err != nil {
-		return AllocatedPorts{}, err
-	}
-	probe, err := pick(probePortBase)
-	if err != nil {
-		return AllocatedPorts{}, err
-	}
-	return AllocatedPorts{ServerPort: server, QueryPort: server, ProbePort: probe}, nil
+	return 0, fmt.Errorf("端口范围 [%d,%d) 已耗尽", base, base+portRangeSize)
 }

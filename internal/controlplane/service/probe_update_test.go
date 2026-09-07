@@ -163,6 +163,61 @@ func TestProbeUpdate_Update_RejectsProxy(t *testing.T) {
 	require.Contains(t, err.Error(), "代理实例不适用", "拒绝原因必须明确指向代理不适用")
 }
 
+// TestProbeUpdate_DeployVersionTo_RejectsMissingProbePortWithoutSvc FR-411 守卫：
+// probe_port=0 的实例（导入/历史）在未注入 instanceSvc 时，部署必须明确拒绝，
+// 绝不写出 `port: 0` 的探针配置（探针绑 OS 随机端口 → 监控永无数据的静默断链）。
+func TestProbeUpdate_DeployVersionTo_RejectsMissingProbePortWithoutSvc(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
+	inst := mkProbeInstance(t, db, "imported", 1)
+	require.NoError(t, db.Model(&model.Instance{}).Where("id = ?", inst.ID).Update("probe_port", 0).Error)
+	inst.ProbePort = 0
+
+	err := svc.deployVersionTo(inst, &model.ArtifactVersion{}, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "未分配探针端口", "拒绝原因必须明确指向缺失端口")
+}
+
+// TestProbeUpdate_DeployVersionTo_AutoAllocatesProbePort FR-411 补口主路径：
+// 注入 instanceSvc 后，probe_port=0 的实例在部署前自动补分配端口、落库并刷新传入实例，
+// 随后链路继续推进到 Worker 下发阶段（此处 pool 无 Worker，停在「未连接」而非端口错误）。
+func TestProbeUpdate_DeployVersionTo_AutoAllocatesProbePort(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	svc := NewProbeUpdateService(db, pool, nil)
+	svc.SetInstanceService(NewInstanceService(db, nil, pool))
+	inst := mkProbeInstance(t, db, "imported", 1)
+	require.NoError(t, db.Model(&model.Instance{}).Where("id = ?", inst.ID).Update("probe_port", 0).Error)
+	inst.ProbePort = 0
+
+	err := svc.deployVersionTo(inst, &model.ArtifactVersion{}, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "缺少关联节点", "应越过端口守卫推进到 Worker 下发阶段（测试未建 Node 行）")
+
+	require.Positive(t, inst.ProbePort, "传入实例应已被补分配探针端口")
+	var fresh model.Instance
+	require.NoError(t, db.First(&fresh, inst.ID).Error)
+	require.Equal(t, inst.ProbePort, fresh.ProbePort, "端口应已持久化到实例记录")
+
+	// 再次部署：端口已就位，幂等（不再重复分配——仍停在 Worker 下发阶段）。
+	err = svc.deployVersionTo(inst, &model.ArtifactVersion{}, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "缺少关联节点")
+}
+
+// TestEnsureProbePort_Idempotent 已有端口实例直返 changed=false，不改任何状态。
+func TestEnsureProbePort_Idempotent(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	isvc := NewInstanceService(db, nil, pool)
+	inst := mkProbeInstance(t, db, "smp", 1)
+
+	changed, err := isvc.EnsureProbePort(inst)
+	require.NoError(t, err)
+	require.False(t, changed, "已有端口应幂等直返")
+	require.Equal(t, 29940, inst.ProbePort)
+}
+
 // TestProbeUpdate_ResolveTargets_SkipsProxy 批量目标解析静默跳过代理实例（计入 skipped）。
 func TestProbeUpdate_ResolveTargets_SkipsProxy(t *testing.T) {
 	db := newProbeUpdateTestDB(t)

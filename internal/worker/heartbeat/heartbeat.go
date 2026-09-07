@@ -21,6 +21,14 @@ import (
 // 抓取本身有 5s 超时（见 metrics.ScrapeServerProbe）；实例规模化下的进一步优化见 spec 开放问题。
 const maxConcurrentProbeScrapes = 8
 
+// probeScrapeState 记录各实例上一次探针抓取的结果，用于「错误变化才告警」的降噪：
+// 同一错误每拍重刷会淹没日志中心（探针未部署的实例会永久失败），而完全静默又会让
+// 「探针桥已连接但 /metrics 不通」（FR-411：导入实例 probe_port=0、端口被占、探针降级）无从排障。
+var probeScrapeState = struct {
+	sync.Mutex
+	lastErr map[string]string
+}{lastErr: map[string]string{}}
+
 // nodeSecretHeader gRPC metadata 中携带 node_secret 的 header 名。
 // 心跳鉴权不放进 proto 字段，改用 gRPC metadata（HTTP/2 header），
 // 避免改动 proto 与重新生成代码。
@@ -282,6 +290,7 @@ func collectInstanceMetrics(snaps []process.InstanceSnapshot) []*workerpb.Instan
 			sample := &workerpb.InstanceMetricSample{InstanceUuid: t.UUID}
 			// 探针与实例同机，抓 localhost:probe_port；本机白名单放行，无需 token。
 			if snap, err := metrics.ScrapeServerProbe("localhost", t.ProbePort, ""); err == nil && snap != nil {
+				recordProbeScrapeResult(t.UUID, "")
 				sample.ProbeAvailable = true
 				sample.Tps = snap.TPS
 				sample.MsptMillis = snap.MSPTAvgMillis
@@ -299,10 +308,41 @@ func collectInstanceMetrics(snaps []process.InstanceSnapshot) []*workerpb.Instan
 						TileEntities: w.TileEntities,
 					})
 				}
+			} else {
+				// 探针抓取失败（未部署/端口不对/探针降级/桥通而 HTTP 端点挂）：本拍缺测，
+				// CP 落 NULL 断点。同一错误只告警一次，错误变化或恢复时再报，兼顾排障与降噪。
+				reason := "未知错误"
+				if err != nil {
+					reason = err.Error()
+				}
+				recordProbeScrapeResult(t.UUID, reason)
 			}
-			out[i] = sample
-		}(i, t)
+		out[i] = sample
+	}(i, t)
 	}
 	wg.Wait()
 	return out
+}
+
+// recordProbeScrapeResult 记录一次探针抓取结果并按变化告警：新错误/错误变化 → WARN，
+// 恢复 → INFO；同一错误持续存在则保持静默（避免每拍刷屏）。
+func recordProbeScrapeResult(instanceUUID, errText string) {
+	probeScrapeState.Lock()
+	prev, had := probeScrapeState.lastErr[instanceUUID]
+	if errText == "" {
+		delete(probeScrapeState.lastErr, instanceUUID)
+	} else {
+		probeScrapeState.lastErr[instanceUUID] = errText
+	}
+	probeScrapeState.Unlock()
+
+	switch {
+	case errText == "":
+		if had {
+			slog.Info("实例探针 /metrics 抓取已恢复", "instanceId", instanceUUID)
+		}
+	case !had || prev != errText:
+		slog.Warn("实例探针 /metrics 抓取失败（监控时序将缺测；请检查探针是否部署、probe_port 与探针 config 是否一致、探针日志是否降级）",
+			"instanceId", instanceUUID, "error", errText)
+	}
 }
