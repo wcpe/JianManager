@@ -175,15 +175,19 @@ func (s *BotFreshnessSweeper) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.done = make(chan struct{})
+	// done 经参数传入 loop：字段由 mu 保护且 Stop 会置 nil，goroutine 内直接读
+	// 字段会与 Stop 的写形成 data race（-race 下 TestBotFreshnessSweeper_
+	// StopReleasesGoroutine 偶发复现）。Start 持锁期间读一次后传值即无竞争。
+	done := s.done
 	interval := s.interval
 	if interval <= 0 {
 		interval = botFreshnessSweepInterval
 	}
-	go s.loop(ctx, interval)
+	go s.loop(ctx, interval, done)
 }
 
-func (s *BotFreshnessSweeper) loop(ctx context.Context, interval time.Duration) {
-	defer close(s.done)
+func (s *BotFreshnessSweeper) loop(ctx context.Context, interval time.Duration, done chan struct{}) {
+	defer close(done)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
