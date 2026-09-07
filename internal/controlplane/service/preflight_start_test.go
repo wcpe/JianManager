@@ -17,10 +17,14 @@ import (
 
 // fakeWorkerClient 假 WorkerServiceClient（FR-314 CP 预检测试）：仅覆盖预检/注册/启动三方法，
 // 其余走嵌入接口（本测试不触达）。
+// CreateInstance 默认 Success:true——与真实 Worker 的幂等语义一致（已注册也返回成功）；
+// 注册失败场景用 createResp/createErr 显式注入。
 type fakeWorkerClient struct {
 	workerpb.WorkerServiceClient
 	preflightResp *workerpb.InstanceActionResponse
 	preflightErr  error
+	createResp    *workerpb.CreateInstanceResponse
+	createErr     error
 }
 
 func (f *fakeWorkerClient) PreflightStartInstance(ctx context.Context, in *workerpb.InstanceActionRequest, opts ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
@@ -28,7 +32,13 @@ func (f *fakeWorkerClient) PreflightStartInstance(ctx context.Context, in *worke
 }
 
 func (f *fakeWorkerClient) CreateInstance(ctx context.Context, in *workerpb.CreateInstanceRequest, opts ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
-	return &workerpb.CreateInstanceResponse{}, nil
+	if f.createErr != nil {
+		return &workerpb.CreateInstanceResponse{Success: false, Error: f.createErr.Error()}, f.createErr
+	}
+	if f.createResp != nil {
+		return f.createResp, nil
+	}
+	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
 func (f *fakeWorkerClient) StartInstance(ctx context.Context, in *workerpb.InstanceActionRequest, opts ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
@@ -114,6 +124,35 @@ func TestStartPreflight_OK(t *testing.T) {
 	got, err := svc.GetByID(inst.ID)
 	require.NoError(t, err)
 	assert.Equal(t, model.InstanceStatusStarting, got.Status)
+}
+
+// 预检前的幂等重注册失败（如 Worker 侧工作目录不可创建）→ 预检以「重注册失败」根因终止：
+// 状态保持 STOPPED、根因写入 statusReason。不得再吞成 Debug 后让预检报下游症状「实例未注册」，
+// 那会把「mkdir /app: permission denied」这类一句话根因埋进两台机器的日志时序里。
+func TestStartPreflight_RegisterFailedSurfacesRootCause(t *testing.T) {
+	svc, pool, node, inst := newPreflightFixture(t)
+	pool.SetWorkerClientForTest(node.UUID, &fakeWorkerClient{
+		createResp: &workerpb.CreateInstanceResponse{
+			Success: false,
+			Error:   "创建工作目录失败: mkdir /app: permission denied",
+		},
+		preflightResp: &workerpb.InstanceActionResponse{
+			Success: false,
+			Error:   "实例未注册: " + inst.UUID,
+		},
+	})
+
+	err := svc.Start(inst.ID)
+	var pfErr *PreflightError
+	require.ErrorAs(t, err, &pfErr)
+	assert.Contains(t, pfErr.Reason, "启动前实例重注册失败", "应报重注册根因")
+	assert.Contains(t, pfErr.Reason, "permission denied", "根因需包含 Worker 返回的原始错误")
+	assert.NotContains(t, pfErr.Reason, "实例未注册", "不得报下游症状误导排障")
+
+	got, err := svc.GetByID(inst.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.InstanceStatusStopped, got.Status, "重注册失败状态不得进 STARTING")
+	assert.Contains(t, got.StatusReason, "启动前实例重注册失败", "根因应写入 statusReason")
 }
 
 // 代理无启用后端注册 → 启动前拦截返回 *PreflightError（杜绝 BungeeCord「No servers defined」崩溃），

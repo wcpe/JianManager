@@ -1340,6 +1340,19 @@ func (s *InstanceService) ResyncNode(nodeUUID string) {
 		slog.Warn("重连重推实例规格失败", "nodeUUID", nodeUUID, "count", len(specs), "error", err)
 		return
 	}
+	// 计数对账（可观测性）：Worker 对单条注册失败只记 Worker 侧日志且不计数，
+	// 会出现 registered+skipped < pushed 的「推送成功但一台都没注册」。这类静默部分失败
+	// 必须升格 WARN 指明缺口与根因去向，否则 CP 侧只留下一条看似正常的 INFO。
+	if missing := len(specs) - int(resp.Registered) - int(resp.Skipped); missing > 0 {
+		slog.Warn("重连重推存在未注册实例",
+			"nodeUUID", nodeUUID,
+			"pushed", len(specs),
+			"registered", resp.Registered,
+			"skipped", resp.Skipped,
+			"missing", missing,
+			"hint", "逐条根因见对应 Worker 日志「重连同步实例失败」")
+		return
+	}
 	slog.Info("已向 Worker 重推实例规格", "nodeUUID", nodeUUID, "pushed", len(specs), "registered", resp.Registered, "skipped", resp.Skipped)
 }
 
@@ -2054,8 +2067,15 @@ func (s *InstanceService) preflightStart(instance *model.Instance) error {
 		return ErrNodeOffline
 	}
 
+	// 启动前幂等重注册（ADR-050）：Worker 对已注册实例幂等返回成功，故走到这里报错的
+	// 一定是真实失败（如工作目录不可创建、节点配置漂移）。失败必须升格为预检失败并携带
+	// 根因——否则预检只会报下游症状「实例未注册: <uuid>」，真正的根因（如 mkdir /app:
+	// permission denied）被 Debug 日志吞掉，排障得跨两台机器的日志对时序。
 	if regErr := s.registerOnWorkerLocked(instance); regErr != nil {
-		slog.Debug("预检前实例注册（已注册或失败均不阻断）", "instanceId", instance.UUID, "error", regErr)
+		reason := "启动前实例重注册失败: " + regErr.Error()
+		slog.Warn("预检前实例注册失败，预检终止", "instanceId", instance.UUID, "error", regErr)
+		s.updateStatusReasonOnly(instance.ID, reason)
+		return &PreflightError{Reason: reason}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

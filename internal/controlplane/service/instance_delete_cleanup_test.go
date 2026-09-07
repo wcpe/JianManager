@@ -55,7 +55,9 @@ type blockingDeleteResyncWorker struct {
 }
 
 func (f *blockingStartDeleteWorker) CreateInstance(context.Context, *workerpb.CreateInstanceRequest, ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
-	return &workerpb.CreateInstanceResponse{}, nil
+	// 幂等成功语义与真实 Worker 一致（ADR-050）：预检把「重注册失败」升格为预检失败后，
+	// 零值响应（Success=false）会被误判为真实失败而中断启动委托。
+	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
 func (f *blockingStartDeleteWorker) PreflightStartInstance(context.Context, *workerpb.InstanceActionRequest, ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
