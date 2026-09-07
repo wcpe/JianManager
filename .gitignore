@@ -33,6 +33,8 @@ data/
 .env
 .env.local
 .env.*.local
+# 部署用环境变量（含服务器主机/账号信息，禁止入库）
+.env.prod
 
 # 日志
 *.log
@@ -51,3 +53,4 @@ docker-compose.override.yml
 /evidence/
 test-results/
 /.workbuddy/
+/.e2e-upgrade/

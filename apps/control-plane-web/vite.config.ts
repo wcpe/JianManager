@@ -21,6 +21,10 @@ export default defineConfig({
   // recharts/codemirror/xterm 等不再被卷进某个应用 chunk（原「PluginManager」单 chunk ~798KB），
   // 改善首屏体积与缓存命中（vendor 极少变动、可长期缓存）。
   build: {
+    // safe-delete 环境下 vite 清空 dist/assets（>50 文件的批量 rmSync）会被拦截报错
+    // （SAFE_DELETE_BULK_CONFIRM_REQUIRED，见 .workbuddy 部署日志）。产物全部带内容哈希、
+    // index.html 只引用本次构建的文件，残留旧 chunk 无害；彻底清理走脚本 rename 迁移。
+    emptyOutDir: false,
     rollupOptions: {
       output: {
         manualChunks(id: string) {
