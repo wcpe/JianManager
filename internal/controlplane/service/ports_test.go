@@ -1,12 +1,15 @@
 package service
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
@@ -105,4 +108,50 @@ func TestNodePortUsage(t *testing.T) {
 	ranges := DefaultPortRanges()
 	require.Equal(t, 25565, ranges.ServerPortBase)
 	require.Equal(t, 2000, ranges.RangeSize)
+}
+
+// TestEnsureProbePortConcurrentDistinct 验证节点级端口分配互斥（nodePortAllocMu）：
+// 同节点多实例并发补口（EnsureProbePort）时端口互异。occupiedPortsForNode 是无事务
+// 快照，修复前并发分配可能选中同一端口（-race 下复现概率更高）。
+func TestEnsureProbePortConcurrentDistinct(t *testing.T) {
+	db := newPortsTestDB(t)
+	svc := NewInstanceService(db, nil, cpgrpc.NewClientPool())
+
+	const n = 16
+	instances := make([]*model.Instance, n)
+	for i := range instances {
+		inst := mkInstance(fmt.Sprintf("probe-%d", i), 1, AllocatedPorts{})
+		require.NoError(t, db.Create(inst).Error)
+		instances[i] = inst
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i, inst := range instances {
+		wg.Add(1)
+		go func(i int, inst *model.Instance) {
+			defer wg.Done()
+			_, errs[i] = svc.EnsureProbePort(inst)
+		}(i, inst)
+	}
+	wg.Wait()
+
+	assigned := make(map[int]bool, n)
+	for i, inst := range instances {
+		require.NoError(t, errs[i], "实例 %d 补口失败", i)
+		require.Greater(t, inst.ProbePort, 0, "实例 %d 未分到端口", i)
+		require.False(t, assigned[inst.ProbePort], "并发补口选中重复探针端口 %d", inst.ProbePort)
+		assigned[inst.ProbePort] = true
+	}
+
+	// 库内一致性：同节点所有实例的 probe_port 互异（含 0 之外的全部分配结果）。
+	var rows []model.Instance
+	require.NoError(t, db.Where("node_id = ?", 1).Find(&rows).Error)
+	require.Len(t, rows, n)
+	dbPorts := make(map[int]bool, n)
+	for _, r := range rows {
+		require.Greater(t, r.ProbePort, 0)
+		require.False(t, dbPorts[r.ProbePort], "库内出现重复探针端口 %d", r.ProbePort)
+		dbPorts[r.ProbePort] = true
+	}
 }

@@ -222,6 +222,10 @@ func (p *ProvisionService) RebuildInstanceWithBaseURL(ctx context.Context, insta
 
 // createProvisionInstance 同步段的「分配端口 + 结构化启动 + 建实例」（与旧同步路径共用）。
 func (p *ProvisionService) createProvisionInstance(req ProvisionServerRequest, core *CoreInfo) (*model.Instance, error) {
+	// 节点级端口分配互斥：从占用快照到实例落库（Create）全程持锁，防同节点并发
+	// 建服/克隆/代理分配选中同一端口。
+	releasePortAlloc := p.instance.lockNodePortAlloc()
+	defer releasePortAlloc()
 	ports, err := allocPortsForNode(p.db, req.NodeID)
 	if err != nil {
 		return nil, err

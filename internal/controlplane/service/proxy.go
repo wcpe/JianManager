@@ -132,6 +132,10 @@ func (p *ProxyService) prepareProxy(ctx context.Context, req ProvisionProxyReque
 }
 
 func (p *ProxyService) createProxyInstance(req ProvisionProxyRequest) (*model.Instance, string, error) {
+	// 节点级端口分配互斥：从占用快照到实例落库（Create）全程持锁，防同节点并发
+	// 建服/克隆/代理分配选中同一端口。
+	releasePortAlloc := p.instance.lockNodePortAlloc()
+	defer releasePortAlloc()
 	ports, err := allocPortsForNode(p.db, req.NodeID)
 	if err != nil {
 		return nil, "", err

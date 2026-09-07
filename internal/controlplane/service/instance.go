@@ -76,6 +76,19 @@ type InstanceService struct {
 	// 防止删除越过在途启动后，旧实例指针又在 Worker 重建注册并启动孤儿进程。
 	operationLocksMu sync.Mutex
 	operationLocks   map[uint]*instanceOperationLock
+
+	// nodePortAllocMu 节点级端口分配互斥：同节点「占用快照 → 端口落库」全程串行，
+	// 防跨实例并发分配选中同一端口（occupiedPortsForNode 是无事务快照，实例级操作锁
+	// 防不了跨实例）。进程内互斥，生产单 CP 实例前提下成立；多 CP 实例部署需 DB 层
+	// 唯一约束 + 冲突重试，暂超范围（见 ports.go 注释）。
+	nodePortAllocMu sync.Mutex
+}
+
+// lockNodePortAlloc 获取节点级端口分配互斥；返回的释放函数必须且只能调用一次。
+// 调用方（建服/克隆/代理端口分配、EnsureProbePort 补口）须覆盖占用快照到端口落库的全程。
+func (s *InstanceService) lockNodePortAlloc() func() {
+	s.nodePortAllocMu.Lock()
+	return s.nodePortAllocMu.Unlock
 }
 
 // NewInstanceService 创建实例服务。
@@ -1219,12 +1232,24 @@ func (s *InstanceService) EnsureProbePort(instance *model.Instance) (changed boo
 		instance.ProbePort = current.ProbePort
 		return false, nil
 	}
-	port, err := allocProbePortForNode(s.db, current.NodeID)
-	if err != nil {
-		return false, fmt.Errorf("为实例 %s 补分配探针端口失败: %w", current.Name, err)
-	}
-	if err := s.db.Model(&model.Instance{}).Where("id = ?", current.ID).Update("probe_port", port).Error; err != nil {
-		return false, fmt.Errorf("持久化探针端口失败: %w", err)
+	// 节点级端口分配互斥：占用快照 + 探针端口落库全程持锁，防同节点跨实例并发
+	// 补口选中同一端口（实例级操作锁只防同实例重入）。重注册（网络 IO）不持锁。
+	var port int
+	releaseAlloc := s.lockNodePortAlloc()
+	allocErr := func() error {
+		p, err := allocProbePortForNode(s.db, current.NodeID)
+		if err != nil {
+			return fmt.Errorf("为实例 %s 补分配探针端口失败: %w", current.Name, err)
+		}
+		if err := s.db.Model(&model.Instance{}).Where("id = ?", current.ID).Update("probe_port", p).Error; err != nil {
+			return fmt.Errorf("持久化探针端口失败: %w", err)
+		}
+		port = p
+		return nil
+	}()
+	releaseAlloc()
+	if allocErr != nil {
+		return false, allocErr
 	}
 	current.ProbePort = port
 	instance.ProbePort = port

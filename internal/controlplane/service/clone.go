@@ -113,20 +113,14 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 		return nil, ErrSourceRunning
 	}
 
-	ports, err := allocPortsForNode(s.db, src.NodeID)
-	if err != nil {
-		return nil, err
-	}
-
-	var warnings []string
-	// 名称冲突预检：仅告警，不阻断（实例名非唯一约束）。
-	var nameDup int64
-	s.db.Model(&model.Instance{}).Where("name = ?", req.Name).Count(&nameDup)
-	if nameDup > 0 {
-		warnings = append(warnings, fmt.Sprintf("已存在同名实例「%s」，复制仍会创建独立新实例", req.Name))
-	}
-
+	// 节点级端口分配互斥段：从占用快照到实例落库（Create）全程持锁，防同节点并发
+	// 建服/克隆/代理分配选中同一端口。锁内段独立成方法并以 defer 释放（而非手动
+	// 多点释放）：即使中途 panic 也不会永久占用进程级互斥。dst 为 nil 表示 dryRun
+	//（不落库，锁只护分配本身）；错误时 result 的 Instance 同样为 nil（Create 失败
+	// 或未执行），路由层按「实例已建则回报」的既有分支处理，行为不变。
 	cloneInclude, cloneExclude := cloneFilters(req)
+	// envVars/groupID 仅在锁内段构造实例时使用，此处不消费。
+	warnings, ports, _, _, dst, err := s.cloneAllocAndCreate(&src, req)
 	result := &CloneResult{
 		Allocated: CloneAllocation{ServerPort: ports.ServerPort, QueryPort: ports.QueryPort},
 		Excluded:  cloneExclude,
@@ -138,37 +132,6 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 		result.Allocated.WorkDir = allocWorkDirRel(req.Name)
 		return result, nil
 	}
-
-	// 复制源的环境变量与所属组。
-	var envVars map[string]string
-	if strings.TrimSpace(src.EnvVars) != "" {
-		if err := json.Unmarshal([]byte(src.EnvVars), &envVars); err != nil {
-			return nil, fmt.Errorf("解析源实例环境变量失败: %w", err)
-		}
-	}
-	var gi model.GroupInstance
-	groupID := uint(0)
-	if err := s.db.Where("instance_id = ?", src.ID).First(&gi).Error; err == nil {
-		groupID = gi.GroupID
-	}
-
-	// 创建独立新实例（系统分配新目录；同款结构化启动/JDK；新端口）。RCON 已退役（FR-067），治理走探针。
-	dst, err := s.instance.Create(CreateInstanceRequest{
-		NodeID:           src.NodeID,
-		Name:             req.Name,
-		Type:             src.Type,
-		Role:             model.InstanceRoleBackend,
-		ProcessType:      src.ProcessType,
-		StartCommand:     src.StartCommand,
-		JDKID:            src.JDKID,
-		JavaMajorVersion: src.JavaMajorVersion,
-		LaunchSpec:       src.LaunchSpec,
-		EnvVars:          envVars,
-		AutoRestart:      src.AutoRestart,
-		GroupID:          groupID,
-		ServerPort:       ports.ServerPort,
-		QueryPort:        ports.QueryPort,
-	})
 	if err != nil {
 		return result, err
 	}
@@ -199,6 +162,67 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 		return "", nil
 	})
 	return result, nil
+}
+
+// cloneAllocAndCreate 克隆的「分配端口 → 建实例」段，全程持节点级端口分配互斥
+//（InstanceService.nodePortAllocMu）：occupiedPortsForNode 是无事务快照，须覆盖
+// 快照到端口落库的全程才能防同节点跨实例并发分配选中同一端口。
+// 以 defer 释放锁：即使中途 panic 也不会永久占用进程级互斥。
+// dst 为 nil 表示 dryRun（不落库，锁只护分配本身）或 Create 失败。
+func (s *CloneService) cloneAllocAndCreate(src *model.Instance, req CloneInstanceRequest) (
+	warnings []string, ports AllocatedPorts, envVars map[string]string, groupID uint, dst *model.Instance, err error,
+) {
+	releasePortAlloc := s.instance.lockNodePortAlloc()
+	defer releasePortAlloc()
+
+	ports, err = allocPortsForNode(s.db, src.NodeID)
+	if err != nil {
+		return nil, ports, nil, 0, nil, err
+	}
+
+	// 名称冲突预检：仅告警，不阻断（实例名非唯一约束）。
+	var nameDup int64
+	s.db.Model(&model.Instance{}).Where("name = ?", req.Name).Count(&nameDup)
+	if nameDup > 0 {
+		warnings = append(warnings, fmt.Sprintf("已存在同名实例「%s」，复制仍会创建独立新实例", req.Name))
+	}
+
+	if req.DryRun {
+		// dryRun 不落库：锁只护分配本身，返回即释放。
+		return warnings, ports, nil, 0, nil, nil
+	}
+
+	// 复制源的环境变量与所属组。
+	envVars = make(map[string]string)
+	if strings.TrimSpace(src.EnvVars) != "" {
+		if err := json.Unmarshal([]byte(src.EnvVars), &envVars); err != nil {
+			return warnings, ports, nil, 0, nil, fmt.Errorf("解析源实例环境变量失败: %w", err)
+		}
+	}
+	var gi model.GroupInstance
+	if err := s.db.Where("instance_id = ?", src.ID).First(&gi).Error; err == nil {
+		groupID = gi.GroupID
+	}
+
+	// 创建独立新实例（系统分配新目录；同款结构化启动/JDK；新端口）。RCON 已退役（FR-067），治理走探针。
+	dst, err = s.instance.Create(CreateInstanceRequest{
+		NodeID:           src.NodeID,
+		Name:             req.Name,
+		Type:             src.Type,
+		Role:             model.InstanceRoleBackend,
+		ProcessType:      src.ProcessType,
+		StartCommand:     src.StartCommand,
+		JDKID:            src.JDKID,
+		JavaMajorVersion: src.JavaMajorVersion,
+		LaunchSpec:       src.LaunchSpec,
+		EnvVars:          envVars,
+		AutoRestart:      src.AutoRestart,
+		GroupID:          groupID,
+		ServerPort:       ports.ServerPort,
+		QueryPort:        ports.QueryPort,
+	})
+	// 端口已随实例落库（或落库失败须重新分配），分配互斥到 defer 释放为止。
+	return warnings, ports, envVars, groupID, dst, err
 }
 
 // finishCloneWork 克隆的长段：复制工作目录（排除运行态文件）→ 配置修正 → 可选代理注册。

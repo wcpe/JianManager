@@ -101,10 +101,10 @@ func allocPortsForNode(db *gorm.DB, nodeID uint) (AllocatedPorts, error) {
 // 安装探针时写出的 config 是 port: 0（探针绑到 OS 随机端口），Worker 侧又按 ProbePort>0
 // 过滤采集，形成「探针桥已连接但监控永无数据」的静默断链。部署探针前经此函数补口。
 //
-// TODO(端口分配并发竞态)：同节点两个实例并发分配（同时补口/建服）时，各自拿到的
-// occupiedPortsForNode 都是无事务快照，可能选中同一端口。与 allocPortsForNode 同款
-// 已知竞态（ EnsureProbePort 的实例级锁只防同实例重入，防不了跨实例），留待引入
-// 节点级端口分配锁（或占用约束 + 冲突重试）时一并收敛。
+// 并发安全：本函数只做「占用快照 + 选口」，快照是无事务的——跨实例并发互斥由调用方
+// 持 InstanceService.nodePortAllocMu 保证（EnsureProbePort 的补口、建服/克隆/代理的
+// allocPortsForNode 均从快照到端口落库全程持锁）。边界：进程内互斥，生产单 CP 实例
+// 前提下成立；多 CP 实例部署需 DB 层唯一约束 + 冲突重试，暂超范围。
 func allocProbePortForNode(db *gorm.DB, nodeID uint) (int, error) {
 	used, err := occupiedPortsForNode(db, nodeID)
 	if err != nil {
