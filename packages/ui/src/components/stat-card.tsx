@@ -29,6 +29,8 @@ export interface StatCardProps {
   deltaGoodWhen?: 'up' | 'down'
   /** 走势型自定义视觉（如趋势线）。 */
   trend?: React.ReactNode
+  /** 悬停提示（口径说明），经原生 title 呈现。 */
+  title?: string
   className?: string
 }
 
@@ -42,12 +44,14 @@ export function StatCard({
   delta,
   deltaGoodWhen,
   trend,
+  title,
   className,
 }: StatCardProps) {
   const dt = delta !== undefined ? deltaTone(delta, deltaGoodWhen) : null
   return (
     <div
       data-slot="stat-card"
+      title={title}
       className={cn(
         'flex flex-col rounded-lg border bg-card/95 px-3 py-2.5 text-card-foreground shadow-soft backdrop-blur-sm',
         className,

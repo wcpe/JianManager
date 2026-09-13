@@ -109,10 +109,9 @@ export function Combobox({
   }
 
   return (
-    // modal：在模态 Dialog 内使用时，Popover 自身注册滚动锁分片；否则 Dialog 的
-    // react-remove-scroll 会把 portal 到 body 的下拉内容当「模态外区域」吞掉滚轮/触摸
-    // 滚动，长列表（如 Paper 全版本）不可滚不可选（FR-328）。
-    <PopoverPrimitive.Root open={open} onOpenChange={onOpenChange} modal>
+    // 不用 modal：Dialog 内 Combobox 的 modal 层会和 Dialog 遮罩抢点击，导致「点下拉却关弹窗」。
+    // 滚动锁由 Dialog 侧处理；下拉自身 overflow-y-auto 可滚。
+    <PopoverPrimitive.Root open={open} onOpenChange={onOpenChange} modal={false}>
       <PopoverPrimitive.Trigger asChild>
         <button
           type="button"
@@ -136,7 +135,8 @@ export function Combobox({
           align="start"
           sideOffset={4}
           data-slot="combobox-content"
-          className="z-50 w-(--radix-popover-trigger-width) origin-(--radix-popover-content-transform-origin) overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+          style={{ pointerEvents: 'auto' }}
+          className="z-[300] pointer-events-auto w-(--radix-popover-trigger-width) origin-(--radix-popover-content-transform-origin) overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           <input
             ref={inputRef}

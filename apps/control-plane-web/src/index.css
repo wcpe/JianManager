@@ -122,6 +122,23 @@
   --chart-3: #d97706;
   --chart-4: #7c3aed;
   --chart-5: #dc2626;
+
+  /* ── 方案 A「精工卡片」派生令牌（表格视觉工艺）──
+     只服务 opt-in 的 Table appearance="refined"：发丝分隔线、次要前景、柔和实底状态 chip、
+     主色刻度线指针用的弱底/墨色。品牌相关值（--primary-weak/ink/line）用 color-mix 从 --primary
+     推导——因 html 根上叠加 [data-theme]/..dark 会同时改写 --primary，派生值随之自动换肤；
+     状态色（success/danger）语义固定，明暗各给一套。未在别处使用时不影响任何既有观感。 */
+  --hairline: #eef2f6;
+  --subtle-fg: #475569;
+  --primary-weak: color-mix(in srgb, var(--primary) 13%, var(--card));
+  --primary-ink: color-mix(in srgb, var(--primary) 74%, #04120b);
+  --primary-line: color-mix(in srgb, var(--primary) 30%, var(--card));
+  --success-weak: #e8f7ee;
+  --success-ink: #11613f;
+  --success-line: #cdebdb;
+  --danger-weak: #fef2f2;
+  --danger-ink: #b91c1c;
+  --danger-line: #f9d7d7;
 }
 
 .dark {
@@ -167,6 +184,17 @@
   --chart-4: #d879ff;
   --chart-5: #f87171;
   --workspace-bg-image: none;
+
+  /* 方案 A 派生令牌的暗色覆盖：发丝线用边框色与卡片 mix，状态 chip 底/墨在深底上提亮。
+     --primary-weak/ink/line 仍由 :root 的 color-mix 自动跟随暗色 --primary，无需重复声明。 */
+  --hairline: color-mix(in srgb, var(--border) 62%, var(--card));
+  --subtle-fg: color-mix(in srgb, var(--foreground) 78%, var(--muted-foreground));
+  --success-weak: color-mix(in srgb, var(--status-success) 22%, var(--card));
+  --success-ink: color-mix(in srgb, var(--status-success) 82%, #ffffff);
+  --success-line: color-mix(in srgb, var(--status-success) 32%, var(--card));
+  --danger-weak: color-mix(in srgb, var(--status-danger) 18%, var(--card));
+  --danger-ink: color-mix(in srgb, var(--status-danger) 86%, #ffffff);
+  --danger-line: color-mix(in srgb, var(--status-danger) 36%, var(--card));
 }
 
 /* ── 主题色覆盖组（FR-164 扩展）：每套主题「品牌 + 结构」完整 token 组 ──
@@ -1015,3 +1043,22 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .jm-status-glow-transitioning { animation: none; }
 }
+
+/*
+ * Dialog 内嵌 Select/Combobox：Radix 下拉展开时会 disableOutsidePointerEvents
+ * （内联 style），把 Dialog 内容变成 pointer-events:none，点击「弹窗空白」落到
+ * 遮罩上 → 整个弹窗被关。下拉打开期间用 !important 压过内联：遮罩不吃点击，
+ * 弹窗本体保持可点（只关下拉，不关 Dialog）。
+ */
+body:has([data-slot="select-content"][data-state="open"]) [data-slot="dialog-overlay"],
+body:has([data-slot="combobox-content"][data-state="open"]) [data-slot="dialog-overlay"],
+body:has([data-slot="dropdown-menu-content"][data-state="open"]) [data-slot="dialog-overlay"] {
+  pointer-events: none !important;
+}
+
+body:has([data-slot="select-content"][data-state="open"]) [data-slot="dialog-content"],
+body:has([data-slot="combobox-content"][data-state="open"]) [data-slot="dialog-content"],
+body:has([data-slot="dropdown-menu-content"][data-state="open"]) [data-slot="dialog-content"] {
+  pointer-events: auto !important;
+}
+

@@ -19,6 +19,18 @@ const badgeVariants = cva(
           "border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         link: "text-primary underline-offset-4 [a&]:hover:underline",
+        // 方案 A「精工卡片」柔和实底状态 chip（opt-in）：浅实底 + 描边 + 前导圆点（取 currentColor），
+        // 密度比 default/outline 更紧凑（11px/600、6px 圆角）。基础类带胶囊圆角与常规字号，
+        // 这里用 important 覆盖圆角/字号/内距等冲突项，仅在本变体生效，不影响既有 variant 观感。
+        // 颜色走 --status-* 派生的 weak/ink/line 令牌，明暗自适应。
+        "chip-ok":
+          "rounded-[6px]! gap-1.5! px-2! py-[3px]! text-[11px]! font-semibold! border-[color:var(--success-line)]! bg-[color:var(--success-weak)]! text-[color:var(--success-ink)]! before:content-[''] before:size-1.5 before:shrink-0 before:rounded-full before:bg-current",
+        "chip-bad":
+          "rounded-[6px]! gap-1.5! px-2! py-[3px]! text-[11px]! font-semibold! border-[color:var(--danger-line)]! bg-[color:var(--danger-weak)]! text-[color:var(--danger-ink)]! before:content-[''] before:size-1.5 before:shrink-0 before:rounded-full before:bg-current",
+        "chip-idle":
+          "rounded-[6px]! gap-1.5! px-2! py-[3px]! text-[11px]! font-semibold! border-border! bg-muted! text-muted-foreground! before:content-[''] before:size-1.5 before:shrink-0 before:rounded-full before:bg-current",
+        "chip-neutral":
+          "rounded-[6px]! gap-1.5! px-2! py-[3px]! text-[11px]! font-semibold! border-border! bg-secondary! text-secondary-foreground!",
       },
     },
     defaultVariants: {

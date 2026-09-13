@@ -47,10 +47,16 @@ function DialogOverlay({
   )
 }
 
+/**
+ * 表单型 Dialog：点遮罩/外部不关闭（避免下拉展开时误关整个弹窗）。
+ * 仅 取消 / 右上角 X / ESC 关闭。下拉打开期间的 pointer-events 修复见 index.css。
+ */
 function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onPointerDownOutside,
+  onInteractOutside,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
@@ -60,6 +66,17 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        onPointerDownOutside={(e) => {
+          e.preventDefault()
+          onPointerDownOutside?.(e)
+        }}
+        onInteractOutside={(e) => {
+          e.preventDefault()
+          onInteractOutside?.(e)
+        }}
+        onFocusOutside={(e) => {
+          e.preventDefault()
+        }}
         className={cn(
           // FR-244 收敛：进/出场时长绑 motion token（normal≈180ms），机制仍走 tw-animate 的 data-[state] 淡入缩放，
           // 只把散落的硬编码时长换成 token 取值，避免脱离全局动画节奏。
