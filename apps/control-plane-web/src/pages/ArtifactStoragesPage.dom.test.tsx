@@ -124,7 +124,9 @@ describe('ArtifactStoragesPage（mock）', () => {
     renderWithProviders(<ArtifactStoragesPage />)
     const s3Row = (await screen.findByText('rustfs-主渠道')).closest('tr') as HTMLElement
 
-    await user.click(within(s3Row).getByRole('button', { name: '删除' }))
+    // 删除已收进行尾「更多操作」下拉（低频操作），先展开菜单再点删除项。
+    await user.click(within(s3Row).getByRole('button', { name: '更多操作' }))
+    await user.click(await screen.findByRole('menuitem', { name: '删除' }))
     const confirm = await screen.findByRole('dialog')
     await user.click(within(confirm).getByRole('button', { name: '删除' }))
 
@@ -140,7 +142,9 @@ describe('ArtifactStoragesPage（mock）', () => {
     renderWithProviders(<ArtifactStoragesPage />)
     const s3Row = (await screen.findByText('rustfs-主渠道')).closest('tr') as HTMLElement
 
-    await user.click(within(s3Row).getByRole('button', { name: '编辑' }))
+    // 编辑已收进行尾「更多操作」下拉（低频操作），先展开菜单再点编辑项。
+    await user.click(within(s3Row).getByRole('button', { name: '更多操作' }))
+    await user.click(await screen.findByRole('menuitem', { name: '编辑' }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('编辑存储渠道')).toBeInTheDocument()
 
@@ -161,6 +165,8 @@ describe('ArtifactStoragesPage（mock）', () => {
     mockInject('get', '/artifact-storages', { kind: 'status', status: 500 })
     renderWithProviders(<ArtifactStoragesPage />)
     expect(await screen.findByText('暂无存储渠道')).toBeInTheDocument()
+    // 空态说明需可换行：承载 EmptyState 的单元格必须覆盖表格基类 whitespace-nowrap。
+    expect(screen.getByText('暂无存储渠道').closest('td')).toHaveClass('whitespace-normal')
     await waitFor(() => {
       expect(screen.queryByText('rustfs-主渠道')).not.toBeInTheDocument()
     })

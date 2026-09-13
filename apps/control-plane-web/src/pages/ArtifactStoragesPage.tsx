@@ -17,9 +17,29 @@ import {
   type SaveArtifactStorageBody,
 } from '@/api/artifactStorages'
 import { useCancelTask, isTerminalTask } from '@/api/tasks'
+import { ArrowRightLeft, CircleCheck, HardDrive, MoreHorizontal, Pencil, Trash2, Zap } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@jianmanager/ui/components/dropdown-menu'
+import {
+  Table,
+  TableBody,
+  TableCard,
+  TableCardFooter,
+  TableCardHeader,
+  TableCell,
+  TableEmptyRow,
+  TableHead,
+  TableHeader,
+  TableIconButton,
+  TableRow,
+  TableSkeletonRows,
+} from '@jianmanager/ui/components/table'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Dialog,
@@ -52,6 +72,7 @@ function formatBytes(bytes: number): string {
  * 文件存储配置页（FR-347，见 ADR-073）：客户端分发制品的外置对象存储渠道管理。
  * 活跃渠道 = 新上传制品落点（存量制品按各自记录读取）；凭证直填、后端可逆加密，
  * 编辑不回显明文（留空 = 保留）。仅平台管理员可访问。
+ * 表格外观为方案 A「精工卡片」（opt-in appearance="refined"）。
  */
 export default function ArtifactStoragesPage() {
   const { t } = useTranslation()
@@ -91,6 +112,8 @@ export default function ArtifactStoragesPage() {
         total: migInfo.total, migrated: migInfo.migrated, failed: migInfo.failed, skipped: migInfo.skipped,
       })
     : ''
+
+  const activeChannelName = (channels ?? []).find((c) => c.active)?.name ?? '—'
 
   const handleStartMigration = (targetChannelId: number) => {
     startMigration.mutate(targetChannelId, {
@@ -219,21 +242,6 @@ export default function ArtifactStoragesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div>
-          <h1 className="text-2xl font-bold">{t('artifactStorages.title', '文件存储配置')}</h1>
-          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            {t('artifactStorages.subtitle', '配置客户端分发制品的存储渠道。活跃渠道决定新上传制品的落点；S3 兼容渠道（rustfs / MinIO 等）由对象存储直接分发下载流量，主控不中继大文件。')}
-          </p>
-        </div>
-        <button
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          onClick={() => { setForm(emptyForm); setEditing(null); setDraftTestResult(null); gate.reset(); setShowForm(true) }}
-        >
-          {t('artifactStorages.add', '新增 S3 渠道')}
-        </button>
-      </div>
-
       <Dialog open={showForm} onOpenChange={(o) => { setShowForm(o); if (!o) { setDraftTestResult(null); setEditing(null) } }}>
         <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
           <DialogHeader>
@@ -382,91 +390,146 @@ export default function ArtifactStoragesPage() {
         </div>
       )}
 
-      <div className="overflow-hidden rounded-lg border">
-        <Table>
-          <TableHeader className="bg-muted/50">
+      {/* 方案 A「精工卡片」：页面标题 + 功能说明 + 主操作全部收进卡片头。 */}
+      <TableCard>
+        <TableCardHeader
+          title={t('artifactStorages.title', '文件存储配置')}
+          count={t('artifactStorages.cardCount', { total: (channels ?? []).length })}
+          description={t('artifactStorages.subtitle', '配置客户端分发制品的存储渠道。活跃渠道决定新上传制品的落点；S3 兼容渠道（rustfs / MinIO 等）由对象存储直接分发下载流量，主控不中继大文件。')}
+          actions={
+            <Button
+              onClick={() => { setForm(emptyForm); setEditing(null); setDraftTestResult(null); gate.reset(); setShowForm(true) }}
+            >
+              {t('artifactStorages.add', '新增 S3 渠道')}
+            </Button>
+          }
+        />
+
+        <Table appearance="refined">
+          <TableHeader>
             <TableRow>
               <TableHead>{t('artifactStorages.name', '名称')}</TableHead>
               <TableHead>{t('artifactStorages.type', '类型')}</TableHead>
               <TableHead>{t('artifactStorages.endpoint', 'Endpoint')}</TableHead>
-              <TableHead>{t('artifactStorages.presignTtlShort', '签名时效')}</TableHead>
+              <TableHead align="right">{t('artifactStorages.presignTtlShort', '签名时效')}</TableHead>
               <TableHead>{t('artifactStorages.lastTest', '最近测试')}</TableHead>
-              <TableHead className="text-right">{t('artifactStorages.actions', '操作')}</TableHead>
+              <TableHead align="right">{t('artifactStorages.actions', '操作')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(channels ?? []).map((ch: ArtifactStorageChannel) => (
-              <TableRow key={ch.id}>
-                <TableCell className="font-medium">
-                  <span className="inline-flex items-center gap-2">
-                    {ch.name}
-                    {ch.builtin && <Badge variant="outline">{t('artifactStorages.builtin', '内置')}</Badge>}
-                    {ch.active && <Badge>{t('artifactStorages.active', '活跃')}</Badge>}
-                  </span>
-                </TableCell>
-                <TableCell><Badge variant="outline">{ch.type.toUpperCase()}</Badge></TableCell>
-                <TableCell className="font-mono text-xs">
-                  {ch.type === 's3' ? `${ch.endpoint} / ${ch.bucket}${ch.prefix ? ` / ${ch.prefix}` : ''}` : t('artifactStorages.localEndpoint', '主控数据根')}
-                </TableCell>
-                <TableCell className="text-xs">{ch.type === 's3' ? `${ch.presignTtlSeconds}s` : '-'}</TableCell>
-                <TableCell className="text-xs">
-                  {ch.lastTestAt ? (
-                    <span className={ch.lastTestOk ? 'text-status-success' : 'text-status-danger'}>
-                      {ch.lastTestMessage || (ch.lastTestOk ? t('artifactStorages.testOk', '连接正常') : t('artifactStorages.testFailed', '测试连接失败'))}
+            {(channels ?? []).map((ch: ArtifactStorageChannel) => {
+              // 最近测试文案：优先后端 message，回落到「连接正常 / 测试连接失败」。
+              const lastTestText =
+                ch.lastTestMessage ||
+                (ch.lastTestOk ? t('artifactStorages.testOk', '连接正常') : t('artifactStorages.testFailed', '测试连接失败'))
+              const endpointText =
+                ch.type === 's3' ? `${ch.endpoint} / ${ch.bucket}${ch.prefix ? ` / ${ch.prefix}` : ''}` : t('artifactStorages.localEndpoint', '主控数据根')
+              return (
+                <TableRow key={ch.id}>
+                  <TableCell className="font-medium text-foreground">
+                    <span className="inline-flex items-center gap-2">
+                      {ch.name}
+                      {ch.builtin && <Badge variant="outline">{t('artifactStorages.builtin', '内置')}</Badge>}
+                      {ch.active && <Badge>{t('artifactStorages.active', '活跃')}</Badge>}
                     </span>
-                  ) : '-'}
-                </TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => handleTest(ch.id)}
-                    disabled={testSaved.isPending && testSaved.variables === ch.id}
-                  >
-                    {t('artifactStorages.test', '测试')}
-                  </Button>
-                  {/* 迁移入口（FR-348）：任意渠道可为目标（含内置本机 = 回迁）；在途迁移时禁用。 */}
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => setMigrateTarget(ch)}
-                    disabled={migrationActive || startMigration.isPending}
-                  >
-                    {t('artifactStorages.migrate.action', '迁移到此')}
-                  </Button>
-                  {!ch.active && (
-                    <Button variant="ghost" size="xs" onClick={() => setActivateTarget(ch)}>
-                      {t('artifactStorages.setActive', '设活跃')}
-                    </Button>
-                  )}
-                  {/* 内置行不可编辑/删除；活跃行禁删（先切走活跃）。 */}
-                  {!ch.builtin && (
-                    <>
-                      <Button variant="ghost" size="xs" onClick={() => openEdit(ch)}>
-                        {t('common.edit', '编辑')}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        className="text-status-danger hover:text-status-danger"
-                        disabled={ch.active}
-                        onClick={() => setDeleteTarget(ch)}
+                  </TableCell>
+                  <TableCell><Badge variant="chip-neutral">{ch.type.toUpperCase()}</Badge></TableCell>
+                  <TableCell className="font-mono text-xs">
+                    <span className="block max-w-[20rem] truncate" title={endpointText}>{endpointText}</span>
+                  </TableCell>
+                  <TableCell align="right" className="text-xs tabular-nums">{ch.type === 's3' ? `${ch.presignTtlSeconds}s` : '—'}</TableCell>
+                  <TableCell className="text-xs">
+                    {ch.lastTestAt ? (
+                      <Badge
+                        variant={ch.lastTestOk ? 'chip-ok' : 'chip-bad'}
+                        title={lastTestText}
+                        className="max-w-[14rem]"
                       >
-                        {t('common.delete', '删除')}
-                      </Button>
-                    </>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
+                        <span className="min-w-0 truncate">{lastTestText}</span>
+                      </Badge>
+                    ) : (
+                      <Badge variant="chip-idle">{t('artifactStorages.testNever', '未测试')}</Badge>
+                    )}
+                  </TableCell>
+                  {/* 操作列：主操作（测试/迁移/设活跃）直显图标；低频（编辑/删除）收起进「更多」。
+                      图标按钮走方案 A：28px 命中区 / 15px 图标 / 主操作弱底。 */}
+                  <TableCell align="right">
+                    <div className="flex items-center justify-end gap-1">
+                      <TableIconButton
+                        tone="primary"
+                        aria-label={t('artifactStorages.test', '测试')}
+                        title={t('artifactStorages.test', '测试')}
+                        onClick={() => handleTest(ch.id)}
+                        disabled={testSaved.isPending && testSaved.variables === ch.id}
+                      >
+                        <Zap />
+                      </TableIconButton>
+                      {/* 迁移入口（FR-348）：任意渠道可为目标（含内置本机 = 回迁）；在途迁移时禁用。 */}
+                      <TableIconButton
+                        aria-label={t('artifactStorages.migrate.action', '迁移到此')}
+                        title={t('artifactStorages.migrate.action', '迁移到此')}
+                        onClick={() => setMigrateTarget(ch)}
+                        disabled={migrationActive || startMigration.isPending}
+                      >
+                        <ArrowRightLeft />
+                      </TableIconButton>
+                      {!ch.active && (
+                        <TableIconButton
+                          aria-label={t('artifactStorages.setActive', '设活跃')}
+                          title={t('artifactStorages.setActive', '设活跃')}
+                          onClick={() => setActivateTarget(ch)}
+                        >
+                          <CircleCheck />
+                        </TableIconButton>
+                      )}
+                      {/* 内置行不可编辑/删除；活跃行禁删（先切走活跃）。 */}
+                      {!ch.builtin && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <TableIconButton
+                              aria-label={t('common.moreActions', '更多操作')}
+                              title={t('common.moreActions', '更多操作')}
+                            >
+                              <MoreHorizontal />
+                            </TableIconButton>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onSelect={() => openEdit(ch)}>
+                              <Pencil className="size-3.5" />
+                              {t('common.edit', '编辑')}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              variant="destructive"
+                              disabled={ch.active}
+                              onSelect={() => { if (!ch.active) setDeleteTarget(ch) }}
+                            >
+                              <Trash2 className="size-3.5" />
+                              {t('common.delete', '删除')}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+            {isLoading && <TableSkeletonRows rows={3} cols={6} />}
             {(!channels || channels.length === 0) && !isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} className="h-16 text-center text-muted-foreground">{t('artifactStorages.empty', '暂无存储渠道')}</TableCell>
-              </TableRow>
+              <TableEmptyRow
+                colSpan={6}
+                icon={<HardDrive />}
+                title={t('artifactStorages.empty', '暂无存储渠道')}
+                description={t('artifactStorages.emptyHint')}
+              />
             )}
           </TableBody>
         </Table>
-      </div>
+
+        <TableCardFooter>
+          {t('artifactStorages.cardSummary', { total: (channels ?? []).length, active: activeChannelName })}
+        </TableCardFooter>
+      </TableCard>
 
       {/* 设活跃确认：影响后续上传落点（存量制品不迁移、按原渠道读取）。 */}
       <Dialog open={activateTarget !== null} onOpenChange={(o) => { if (!o) setActivateTarget(null) }}>

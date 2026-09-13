@@ -56,6 +56,8 @@ describe('SchedulesPage（mock）', () => {
     renderWithProviders(<SchedulesPage />)
     // 列表查询失败 → schedules 为 undefined → 渲染空态文案，页面不崩。
     expect(await screen.findByText('暂无定时任务')).toBeInTheDocument()
+    // 空态说明需可换行：承载 EmptyState 的单元格必须覆盖表格基类 whitespace-nowrap。
+    expect(screen.getByText('暂无定时任务').closest('td')).toHaveClass('whitespace-normal')
     await waitFor(() => {
       expect(screen.queryByText('每晚重启')).not.toBeInTheDocument()
     })

@@ -424,7 +424,8 @@
     "copyFailedManual": "复制失败，请手动选中文本后按 Ctrl+C",
     "clipboardReadUnavailable": "浏览器不允许读取剪贴板（当前为 HTTP 非安全上下文），请改按 Ctrl+V 粘贴",
     "reset": "重置",
-    "uploading": "上传中…"
+    "uploading": "上传中…",
+    "moreActions": "更多操作"
   },
   "nav": {
     "dashboard": "仪表盘",
@@ -633,7 +634,12 @@
     "botCount": "活跃 Bot",
     "botEventLoop": "事件循环 P95",
     "botUnavailable": "当前不可用：{{reason}}",
-    "freshness": { "fresh": "新鲜", "stale": "陈旧", "offline": "离线", "unavailable": "不可用" }
+    "freshness": {
+      "fresh": "新鲜",
+      "stale": "陈旧",
+      "offline": "离线",
+      "unavailable": "不可用"
+    }
   },
   "metrics": {
     "tab": "监控",
@@ -2096,6 +2102,7 @@
     "enabled": "启用",
     "lastRun": "上次执行",
     "empty": "暂无定时任务",
+    "emptyHint": "创建定时任务后可在此查看执行计划与历史日志。",
     "neverRun": "从未执行",
     "createSchedule": "创建任务",
     "editSchedule": "编辑任务",
@@ -2147,7 +2154,9 @@
     "summaryDisabled": "停用",
     "nextRunLabel": "下次执行",
     "disabledLabel": "已停用",
-    "notScheduled": "未计划"
+    "notScheduled": "未计划",
+    "cardCount": "{{total}} 个任务",
+    "cardSummary": "共 {{total}} 个任务 · 启用 {{enabled}} · 停用 {{disabled}}"
   },
   "backups": {
     "title": "备份管理",
@@ -2231,6 +2240,7 @@
     "testFailed": "测试连接失败",
     "testOkWithLatency": "连通 {{latency}} ms",
     "empty": "暂无存储后端，备份默认存于节点本地",
+    "emptyHint": "点击「新增存储后端」接入 S3 / SFTP / WebDAV。",
     "create": "创建",
     "cancel": "取消",
     "deleteConfirm": "确定删除此存储后端？",
@@ -2249,7 +2259,10 @@
     "edit": "编辑存储后端",
     "updated": "已更新",
     "updateFailed": "更新存储后端失败",
-    "editInUseHint": "该后端已被备份引用：修改 Endpoint/Bucket/前缀不会迁移已有备份对象，可能影响旧备份的恢复定位。"
+    "editInUseHint": "该后端已被备份引用：修改 Endpoint/Bucket/前缀不会迁移已有备份对象，可能影响旧备份的恢复定位。",
+    "testNever": "未测试",
+    "cardCount": "{{total}} 个后端",
+    "cardSummary": "共 {{total}} 个后端 · 已用 {{used}}"
   },
   "artifactStorages": {
     "title": "文件存储配置",
@@ -2292,6 +2305,10 @@
     "deleteConfirm": "确定删除此存储渠道？",
     "deleteFailed": "删除失败",
     "empty": "暂无存储渠道",
+    "emptyHint": "点击「新增 S3 渠道」接入 rustfs / MinIO 等对象存储。",
+    "testNever": "未测试",
+    "cardCount": "{{total}} 个渠道",
+    "cardSummary": "共 {{total}} 个渠道 · 活跃：{{active}}",
     "migrate": {
       "action": "迁移到此",
       "confirmTitle": "迁移存量制品到「{{name}}」？",
@@ -3428,6 +3445,7 @@
     "delete": "删除",
     "deleteConfirm": "确定删除？",
     "empty": "暂无用户",
+    "emptyHint": "新建用户后可在此管理角色与启用状态。",
     "member": "组成员",
     "groupAdmin": "组管理员",
     "platformAdmin": "平台管理员",
@@ -3446,7 +3464,9 @@
     "roleDesc_10": "平台管理员：拥有全部权限，含用户、节点与平台设置。",
     "created": "用户已创建",
     "updated": "用户已更新",
-    "deleted": "用户已删除"
+    "deleted": "用户已删除",
+    "cardCount": "{{total}} 个用户",
+    "cardSummary": "共 {{total}} 个用户 · 启用 {{enabled}}"
   },
   "groups": {
     "title": "用户组管理",
@@ -3636,7 +3656,7 @@
     "overridden": "已覆盖",
     "workerSide": "Worker 侧生效",
     "effectTimingHint": "此项非在 Control Plane 内即时生效，需改配置/重启或在 Worker 侧生效。",
-        "githubTokenPlaceholder": "github_pat_… 或 ${ENV_VAR}",
+    "githubTokenPlaceholder": "github_pat_… 或 ${ENV_VAR}",
     "githubTokenCreate": "去 GitHub 创建",
     "githubTokenHint": "新标签打开 GitHub fine-grained 令牌创建页：名字、描述、永不过期均已预填，权限无需勾选（公开仓库只读内建，即最小权限）。到页面点 Generate 后复制令牌粘贴到左侧并保存即可。若将来要读私有仓库，需在该页手动添加仓库并授予 contents:read。",
     "masked": "已脱敏",
@@ -3684,8 +3704,8 @@
       "graceful_stop.timeout": "优雅停止超时",
       "backup.retention_days": "默认备份保留天数",
       "proxy.url": "出站代理地址",
-            "github.token": "GitHub API 令牌（自更新 / 制品版本库同步）",
-"proxy.no_proxy": "免代理列表",
+      "github.token": "GitHub API 令牌（自更新 / 制品版本库同步）",
+      "proxy.no_proxy": "免代理列表",
       "platform.public_base_url": "平台公共基址",
       "invite.smtp.host": "SMTP 主机",
       "invite.smtp.port": "SMTP 端口",

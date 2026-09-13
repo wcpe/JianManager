@@ -14,10 +14,15 @@ import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import {
   Table,
   TableBody,
+  TableCard,
+  TableCardFooter,
+  TableCardHeader,
   TableCell,
+  TableEmptyRow,
   TableHead,
   TableHeader,
   TableRow,
+  TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
 import {
   ConfigRow,
@@ -65,82 +70,110 @@ export default function UsersPage() {
       },
     )
 
+  const totalUsers = users?.length ?? 0
+  const enabledUsers = (users ?? []).filter((u) => u.status === 0).length
+
   return (
     <div data-page="users" className="jm-page-stack space-y-4">
-      <div className="jm-page-header">
-        <h1 className="jm-page-title">{t('users.title')}</h1>
-        <div className="flex items-center gap-2">
-          <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
-          {isPlatformAdmin && <Button variant="outline" onClick={() => setShowInvite(true)}>{t('users.inviteUser')}</Button>}
-          {isPlatformAdmin && <Button onClick={() => setShowCreate(true)}>+ {t('users.createUser')}</Button>}
-        </div>
-      </div>
+      {/* 方案 A「精工卡片」：标题/计数/主操作收进卡片头，表格套 refined 外观，底部一句汇总。 */}
+      <TableCard>
+        <TableCardHeader
+          title={t('users.title')}
+          count={t('users.cardCount', { total: totalUsers })}
+          actions={
+            <>
+              <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
+              {isPlatformAdmin && <Button variant="outline" onClick={() => setShowInvite(true)}>{t('users.inviteUser')}</Button>}
+              {isPlatformAdmin && <Button onClick={() => setShowCreate(true)}>+ {t('users.createUser')}</Button>}
+            </>
+          }
+        />
 
-      <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />
-      <CreateInvitationDialog open={showInvite} onClose={() => setShowInvite(false)} />
-
-      {isLoading ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
-      ) : !users || users.length === 0 ? (
-        <Panel>
-          <p className="py-6 text-center text-sm text-muted-foreground">{t('users.empty')}</p>
-        </Panel>
-      ) : view === 'card' ? (
-        <div className="flex flex-col gap-2.5">
-          {users.map((u) => (
-            <ConfigRow
-              key={u.id}
-              icon={<UserRound className="size-[18px]" />}
-              tone={u.status === 0 ? 'primary' : 'neutral'}
-              title={u.username}
-              subtitle={`${roleLabel(u.role)} · ${new Date(u.createdAt).toLocaleDateString()}`}
-              trailing={
-                <>
-                  <StatusBadge level={roleTone(u.role)} label={roleLabel(u.role)} dot={false} />
-                  <StatusBadge
-                    level={u.status === 0 ? 'success' : 'neutral'}
-                    label={u.status === 0 ? t('users.enabled') : t('users.disabled')}
-                  />
-                  <ConfigSwitch
-                    checked={u.status === 0}
-                    disabled={updateUser.isPending}
-                    onChange={() => toggleStatus(u)}
-                    label={t('users.status')}
-                    onLabel={t('users.enabled')}
-                    offLabel={t('users.disabled')}
-                  />
-                  <Button variant="ghost" size="xs" onClick={() => setEditUser(u)}>
-                    {t('common.edit')}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="text-status-danger hover:text-status-danger"
-                    onClick={() => setDeleteTarget({ id: u.id, username: u.username })}
-                  >
-                    {t('common.delete')}
-                  </Button>
-                </>
-              }
-            />
-          ))}
-        </div>
-      ) : (
-        <Panel bodyClassName="p-0">
-          <Table>
+        {isLoading ? (
+          <Table appearance="refined">
             <TableHeader>
               <TableRow>
                 <TableHead>{t('users.username')}</TableHead>
                 <TableHead>{t('users.role')}</TableHead>
                 <TableHead>{t('users.status')}</TableHead>
-                <TableHead>{t('users.createdAt')}</TableHead>
-                <TableHead className="text-right">{t('users.actions')}</TableHead>
+                <TableHead align="right">{t('users.createdAt')}</TableHead>
+                <TableHead align="right">{t('users.actions')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableSkeletonRows rows={4} cols={5} />
+            </TableBody>
+          </Table>
+        ) : !users || users.length === 0 ? (
+          <Table appearance="refined">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('users.username')}</TableHead>
+                <TableHead>{t('users.role')}</TableHead>
+                <TableHead>{t('users.status')}</TableHead>
+                <TableHead align="right">{t('users.createdAt')}</TableHead>
+                <TableHead align="right">{t('users.actions')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableEmptyRow colSpan={5} icon={<UserRound />} title={t('users.empty')} description={t('users.emptyHint')} />
+            </TableBody>
+          </Table>
+        ) : view === 'card' ? (
+          <div className="flex flex-col gap-2.5 p-3">
+            {users.map((u) => (
+              <ConfigRow
+                key={u.id}
+                icon={<UserRound className="size-[18px]" />}
+                tone={u.status === 0 ? 'primary' : 'neutral'}
+                title={u.username}
+                subtitle={`${roleLabel(u.role)} · ${new Date(u.createdAt).toLocaleDateString()}`}
+                trailing={
+                  <>
+                    <StatusBadge level={roleTone(u.role)} label={roleLabel(u.role)} dot={false} />
+                    <StatusBadge
+                      level={u.status === 0 ? 'success' : 'neutral'}
+                      label={u.status === 0 ? t('users.enabled') : t('users.disabled')}
+                    />
+                    <ConfigSwitch
+                      checked={u.status === 0}
+                      disabled={updateUser.isPending}
+                      onChange={() => toggleStatus(u)}
+                      label={t('users.status')}
+                      onLabel={t('users.enabled')}
+                      offLabel={t('users.disabled')}
+                    />
+                    <Button variant="ghost" size="xs" onClick={() => setEditUser(u)}>
+                      {t('common.edit')}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-status-danger hover:text-status-danger"
+                      onClick={() => setDeleteTarget({ id: u.id, username: u.username })}
+                    >
+                      {t('common.delete')}
+                    </Button>
+                  </>
+                }
+              />
+            ))}
+          </div>
+        ) : (
+          <Table appearance="refined">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('users.username')}</TableHead>
+                <TableHead>{t('users.role')}</TableHead>
+                <TableHead>{t('users.status')}</TableHead>
+                <TableHead align="right">{t('users.createdAt')}</TableHead>
+                <TableHead align="right">{t('users.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {users.map((u) => (
                 <TableRow key={u.id}>
-                  <TableCell className="font-medium">{u.username}</TableCell>
+                  <TableCell className="font-medium text-foreground">{u.username}</TableCell>
                   <TableCell>
                     <StatusBadge level={roleTone(u.role)} label={roleLabel(u.role)} dot={false} />
                   </TableCell>
@@ -154,8 +187,8 @@ export default function UsersPage() {
                       offLabel={t('users.disabled')}
                     />
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell align="right" className="text-muted-foreground tabular-nums">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
+                  <TableCell align="right">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="xs" onClick={() => setEditUser(u)}>
                         {t('common.edit')}
@@ -174,8 +207,15 @@ export default function UsersPage() {
               ))}
             </TableBody>
           </Table>
-        </Panel>
-      )}
+        )}
+
+        <TableCardFooter>
+          {t('users.cardSummary', { total: totalUsers, enabled: enabledUsers })}
+        </TableCardFooter>
+      </TableCard>
+
+      <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      <CreateInvitationDialog open={showInvite} onClose={() => setShowInvite(false)} />
 
       {isPlatformAdmin && (
         <Panel>

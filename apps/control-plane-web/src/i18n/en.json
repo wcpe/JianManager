@@ -424,7 +424,8 @@
     "copyFailedManual": "Copy failed. Select the text manually and press Ctrl+C.",
     "clipboardReadUnavailable": "The browser will not allow clipboard reads (insecure HTTP context). Press Ctrl+V to paste instead.",
     "reset": "Reset",
-    "uploading": "Uploading…"
+    "uploading": "Uploading…",
+    "moreActions": "More actions"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -656,7 +657,12 @@
     "botCount": "Active Bots",
     "botEventLoop": "Event-loop P95",
     "botUnavailable": "Currently unavailable: {{reason}}",
-    "freshness": { "fresh": "Fresh", "stale": "Stale", "offline": "Offline", "unavailable": "Unavailable" }
+    "freshness": {
+      "fresh": "Fresh",
+      "stale": "Stale",
+      "offline": "Offline",
+      "unavailable": "Unavailable"
+    }
   },
   "metrics": {
     "tab": "Monitor",
@@ -2117,6 +2123,7 @@
     "enabled": "Enabled",
     "lastRun": "Last Run",
     "empty": "No schedules",
+    "emptyHint": "Create a schedule to review its execution plan and logs here.",
     "neverRun": "Never run",
     "createSchedule": "Create Schedule",
     "editSchedule": "Edit Schedule",
@@ -2168,7 +2175,9 @@
     "summaryDisabled": "Disabled",
     "nextRunLabel": "Next run",
     "disabledLabel": "Disabled",
-    "notScheduled": "Not scheduled"
+    "notScheduled": "Not scheduled",
+    "cardCount": "{{total}} schedules",
+    "cardSummary": "{{total}} schedules · {{enabled}} enabled · {{disabled}} disabled"
   },
   "backups": {
     "title": "Backup Management",
@@ -2252,6 +2261,7 @@
     "testFailed": "Connection test failed",
     "testOkWithLatency": "Reachable {{latency}} ms",
     "empty": "No backends. Backups are stored on the node locally by default.",
+    "emptyHint": "Click \"Add backend\" to connect S3 / SFTP / WebDAV.",
     "create": "Create",
     "cancel": "Cancel",
     "deleteConfirm": "Delete this storage backend?",
@@ -2270,7 +2280,10 @@
     "edit": "Edit Backend",
     "updated": "Updated",
     "updateFailed": "Failed to update storage backend",
-    "editInUseHint": "This backend is referenced by backups: changing the endpoint/bucket/prefix does not migrate existing backup objects and may break restore lookup for old backups."
+    "editInUseHint": "This backend is referenced by backups: changing the endpoint/bucket/prefix does not migrate existing backup objects and may break restore lookup for old backups.",
+    "testNever": "Untested",
+    "cardCount": "{{total}} backends",
+    "cardSummary": "{{total}} backends · {{used}} used"
   },
   "artifactStorages": {
     "title": "File Storage",
@@ -2313,6 +2326,10 @@
     "deleteConfirm": "Delete this storage channel?",
     "deleteFailed": "Delete failed",
     "empty": "No storage channels",
+    "emptyHint": "Click \"Add S3 channel\" to connect rustfs / MinIO and other object storage.",
+    "testNever": "Untested",
+    "cardCount": "{{total}} channels",
+    "cardSummary": "{{total}} channels · Active: {{active}}",
     "migrate": {
       "action": "Migrate here",
       "confirmTitle": "Migrate existing artifacts to \"{{name}}\"?",
@@ -3449,6 +3466,7 @@
     "delete": "Delete",
     "deleteConfirm": "Are you sure?",
     "empty": "No users",
+    "emptyHint": "Create a user to manage roles and enabled status here.",
     "member": "Member",
     "groupAdmin": "Group Admin",
     "platformAdmin": "Platform Admin",
@@ -3467,7 +3485,9 @@
     "roleDesc_10": "Platform admin: full access including users, nodes and platform settings.",
     "created": "User created",
     "updated": "User updated",
-    "deleted": "User deleted"
+    "deleted": "User deleted",
+    "cardCount": "{{total}} users",
+    "cardSummary": "{{total}} users · {{enabled}} enabled"
   },
   "groups": {
     "title": "Group Management",
@@ -3657,7 +3677,7 @@
     "overridden": "Overridden",
     "workerSide": "Effective on Worker",
     "effectTimingHint": "This does not take effect immediately in the Control Plane; it requires a config change/restart or applies on the Worker side.",
-        "githubTokenPlaceholder": "github_pat_… or ${ENV_VAR}",
+    "githubTokenPlaceholder": "github_pat_… or ${ENV_VAR}",
     "githubTokenCreate": "Create on GitHub",
     "githubTokenHint": "Opens the GitHub fine-grained token creation page in a new tab: name, description, and no-expiry are pre-filled, and no permissions need to be selected (read-only access to public repos is built in — least privilege). Click Generate on the page, then copy the token back and save. To read private repos later, add repos and grant contents:read manually on that page.",
     "masked": "Masked",
@@ -3705,8 +3725,8 @@
       "graceful_stop.timeout": "Graceful stop timeout",
       "backup.retention_days": "Default backup retention (days)",
       "proxy.url": "Outbound proxy URL",
-            "github.token": "GitHub API token (self-update / artifact sync)",
-"proxy.no_proxy": "No-proxy list",
+      "github.token": "GitHub API token (self-update / artifact sync)",
+      "proxy.no_proxy": "No-proxy list",
       "platform.public_base_url": "Platform public base URL",
       "invite.smtp.host": "SMTP host",
       "invite.smtp.port": "SMTP port",

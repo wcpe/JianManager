@@ -12,9 +12,23 @@ import {
   type BackupStorageTestResult,
   type CreateBackupStorageBody,
 } from '@/api/backupStorages'
+import { Database, Pencil, Trash2, Zap } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import {
+  Table,
+  TableBody,
+  TableCard,
+  TableCardFooter,
+  TableCardHeader,
+  TableCell,
+  TableEmptyRow,
+  TableHead,
+  TableHeader,
+  TableIconButton,
+  TableRow,
+  TableSkeletonRows,
+} from '@jianmanager/ui/components/table'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import {
@@ -56,6 +70,7 @@ function formatBytes(bytes: number | undefined) {
  * 备份远程存储后端管理页（FR-057，编辑=FR-338）。
  * 凭证以 ${ENV_VAR} 形式引用环境变量，不收明文（config-files.md）；仅平台管理员可访问。
  * 弹窗 create/edit 双模式：编辑受控回显现值（凭证即 ${VAR} 引用，非明文），type 不可改。
+ * 表格外观为方案 A「精工卡片」（opt-in appearance="refined"）。
  */
 export default function BackupStoragesPage() {
   const { t } = useTranslation()
@@ -166,20 +181,123 @@ export default function BackupStoragesPage() {
     })
   }
 
+  const totalUsed = (storages ?? []).reduce((sum, s) => sum + Number(s.usedBytes ?? 0), 0)
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div>
-          <h1 className="text-2xl font-bold">{t('backupStorages.title', '备份存储后端')}</h1>
-          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">{t('backupStorages.subtitle', '')}</p>
-        </div>
-        <button
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          onClick={() => { setForm(emptyForm); setEditing(null); setDraftTestResult(null); gate.reset(); setShowForm(true) }}
-        >
-          {t('backupStorages.add', '新增存储后端')}
-        </button>
-      </div>
+      {/* 方案 A「精工卡片」：页面标题 + 功能说明 + 主操作全部收进卡片头。 */}
+      <TableCard>
+        <TableCardHeader
+          title={t('backupStorages.title', '备份存储后端')}
+          count={t('backupStorages.cardCount', { total: (storages ?? []).length })}
+          description={t('backupStorages.subtitle', '')}
+          actions={
+            <Button
+              onClick={() => { setForm(emptyForm); setEditing(null); setDraftTestResult(null); gate.reset(); setShowForm(true) }}
+            >
+              {t('backupStorages.add', '新增存储后端')}
+            </Button>
+          }
+        />
+
+        <Table appearance="refined">
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('backupStorages.name', '名称')}</TableHead>
+              <TableHead>{t('backupStorages.type', '类型')}</TableHead>
+              <TableHead>{t('backupStorages.endpoint', 'Endpoint')}</TableHead>
+              <TableHead>{t('backupStorages.prefix', '前缀')}</TableHead>
+              <TableHead align="right">{t('backupStorages.capacity', '容量')}</TableHead>
+              <TableHead>{t('backupStorages.lastTest', '最近测试')}</TableHead>
+              <TableHead>{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</TableHead>
+              <TableHead align="right">{t('backupStorages.actions', '操作')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(storages ?? []).map((s: BackupStorage) => {
+              // 最近测试文案：优先后端 message，回落到「连接正常 / 测试失败」。
+              const lastTestText =
+                s.lastTestMessage ||
+                (s.lastTestOk ? t('backupStorages.testOk', '连接正常') : t('backupStorages.testFailed', '测试失败'))
+              return (
+                <TableRow key={s.id}>
+                  <TableCell className="font-medium text-foreground">{s.name}</TableCell>
+                  <TableCell><Badge variant="chip-neutral">{s.type.toUpperCase()}</Badge></TableCell>
+                  <TableCell className="font-mono text-xs">
+                    <span className="block max-w-[18rem] truncate" title={s.bucket ? `${s.endpoint} / ${s.bucket}` : s.endpoint}>
+                      {s.endpoint}{s.bucket ? ` / ${s.bucket}` : ''}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <span className="block max-w-[10rem] truncate" title={s.prefix || undefined}>{s.prefix || '-'}</span>
+                  </TableCell>
+                  <TableCell align="right" className="text-xs tabular-nums">
+                    {formatBytes(s.usedBytes)} · {t('backupStorages.backupCount', '{{count}} 个备份', { count: s.backupCount })}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {s.lastTestAt ? (
+                      <Badge
+                        variant={s.lastTestOk ? 'chip-ok' : 'chip-bad'}
+                        title={lastTestText}
+                        className="max-w-[14rem]"
+                      >
+                        <span className="min-w-0 truncate">{lastTestText}</span>
+                      </Badge>
+                    ) : (
+                      <Badge variant="chip-idle">{t('backupStorages.testNever', '未测试')}</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    <span className="block max-w-[14rem] truncate" title={s.accessKeyEnv || undefined}>{s.accessKeyEnv || '-'}</span>
+                  </TableCell>
+                  {/* 3 个操作 → 图标按钮（方案 A：28px 命中区 / 15px 图标，主操作弱底）；aria-label 保留原文案可达名。 */}
+                  <TableCell align="right">
+                    <div className="flex items-center justify-end gap-1">
+                      <TableIconButton
+                        tone="primary"
+                        aria-label={t('backupStorages.test', '测试')}
+                        title={t('backupStorages.test', '测试')}
+                        onClick={() => handleTest(s.id)}
+                        disabled={testStorage.isPending && testStorage.variables === s.id}
+                      >
+                        <Zap />
+                      </TableIconButton>
+                      <TableIconButton
+                        aria-label={t('common.edit', '编辑')}
+                        title={t('common.edit', '编辑')}
+                        onClick={() => openEdit(s)}
+                      >
+                        <Pencil />
+                      </TableIconButton>
+                      <TableIconButton
+                        tone="danger"
+                        aria-label={t('common.delete', '删除')}
+                        title={t('common.delete', '删除')}
+                        onClick={() => setDeleteTarget(s.id)}
+                      >
+                        <Trash2 />
+                      </TableIconButton>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+            {isLoading && <TableSkeletonRows rows={3} cols={8} />}
+            {(!storages || storages.length === 0) && !isLoading && (
+              <TableEmptyRow
+                colSpan={8}
+                icon={<Database />}
+                title={t('backupStorages.empty', '暂无存储后端')}
+                description={t('backupStorages.emptyHint')}
+              />
+            )}
+          </TableBody>
+        </Table>
+
+        <TableCardFooter>
+          {t('backupStorages.cardSummary', { total: (storages ?? []).length, used: formatBytes(totalUsed) })}
+        </TableCardFooter>
+      </TableCard>
 
       <Dialog open={showForm} onOpenChange={(o) => { setShowForm(o); if (!o) { setDraftTestResult(null); setEditing(null) } }}>
         <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
@@ -283,70 +401,6 @@ export default function BackupStoragesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <div className="overflow-hidden rounded-lg border">
-        <Table>
-          <TableHeader className="bg-muted/50">
-            <TableRow>
-              <TableHead>{t('backupStorages.name', '名称')}</TableHead>
-              <TableHead>{t('backupStorages.type', '类型')}</TableHead>
-              <TableHead>{t('backupStorages.endpoint', 'Endpoint')}</TableHead>
-              <TableHead>{t('backupStorages.prefix', '前缀')}</TableHead>
-              <TableHead>{t('backupStorages.capacity', '容量')}</TableHead>
-              <TableHead>{t('backupStorages.lastTest', '最近测试')}</TableHead>
-              <TableHead>{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</TableHead>
-              <TableHead className="text-right">{t('backupStorages.actions', '操作')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(storages ?? []).map((s: BackupStorage) => (
-              <TableRow key={s.id}>
-                <TableCell className="font-medium">{s.name}</TableCell>
-                <TableCell><Badge variant="outline">{s.type.toUpperCase()}</Badge></TableCell>
-                <TableCell className="font-mono text-xs">{s.endpoint}{s.bucket ? ` / ${s.bucket}` : ''}</TableCell>
-                <TableCell>{s.prefix || '-'}</TableCell>
-                <TableCell className="text-xs">
-                  {formatBytes(s.usedBytes)} · {t('backupStorages.backupCount', '{{count}} 个备份', { count: s.backupCount })}
-                </TableCell>
-                <TableCell className="text-xs">
-                  {s.lastTestAt ? (
-                    <span className={s.lastTestOk ? 'text-status-success' : 'text-status-danger'}>
-                      {s.lastTestMessage || (s.lastTestOk ? t('backupStorages.testOk', '连接正常') : t('backupStorages.testFailed', '测试失败'))}
-                    </span>
-                  ) : '-'}
-                </TableCell>
-                <TableCell className="font-mono text-xs">{s.accessKeyEnv || '-'}</TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => handleTest(s.id)}
-                    disabled={testStorage.isPending && testStorage.variables === s.id}
-                  >
-                    {t('backupStorages.test', '测试')}
-                  </Button>
-                  <Button variant="ghost" size="xs" onClick={() => openEdit(s)}>
-                    {t('common.edit', '编辑')}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="text-status-danger hover:text-status-danger"
-                    onClick={() => setDeleteTarget(s.id)}
-                  >
-                    {t('common.delete', '删除')}
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-            {(!storages || storages.length === 0) && !isLoading && (
-              <TableRow>
-                <TableCell colSpan={8} className="h-16 text-center text-muted-foreground">{t('backupStorages.empty', '暂无存储后端')}</TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
 
       <DangerConfirm
         open={deleteTarget !== null}

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Clock } from 'lucide-react'
+import { Clock, Pencil, ScrollText, Trash2 } from 'lucide-react'
 import {
   useSchedules,
   useCreateSchedule,
@@ -44,10 +44,16 @@ import { FieldLabel } from '@jianmanager/ui/components/field-label'
 import {
   Table,
   TableBody,
+  TableCard,
+  TableCardFooter,
+  TableCardHeader,
   TableCell,
+  TableEmptyRow,
   TableHead,
   TableHeader,
+  TableIconButton,
   TableRow,
+  TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/DangerConfirm'
 
@@ -111,14 +117,7 @@ export default function SchedulesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">{t('schedules.title')}</h1>
-        <div className="flex items-center gap-2">
-          <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
-          <Button onClick={() => setShowCreate(true)}>+ {t('schedules.createSchedule')}</Button>
-        </div>
-      </div>
-
+      {/* 汇总筛选条保持在卡片外（作用于列表视图的可见行）。 */}
       <ConfigSummaryChips
         chips={[
           { label: t('schedules.summaryAll'), value: (schedules ?? []).length, active: filter === null, onClick: () => setFilter(null) },
@@ -139,72 +138,21 @@ export default function SchedulesPage() {
         ]}
       />
 
-      {isLoading ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
-      ) : visible.length === 0 ? (
-        <Panel>
-          <p className="py-6 text-center text-sm text-muted-foreground">{t('schedules.empty')}</p>
-        </Panel>
-      ) : view === 'card' ? (
-        <div className="flex flex-col gap-2.5">
-          {visible.map((s) => (
-            <ConfigRow
-              key={s.id}
-              icon={<Clock className="size-[18px]" />}
-              tone={s.enabled ? 'primary' : 'neutral'}
-              title={s.name}
-              code={s.cronExpr}
-              subtitle={`${instanceName(s.instanceId)} · ${t(`schedules.action_${s.action}`, { defaultValue: s.action })} · ${cronReadable(s.cronExpr)}`}
-              meta={
-                <>
-                  <div>{s.enabled ? t('schedules.nextRunLabel') : t('schedules.disabledLabel')}</div>
-                  <div>
-                    {s.enabled
-                      ? validateCron(s.cronExpr).valid
-                        ? (nextRuns(s.cronExpr, 1)[0]?.toLocaleString() ?? t('schedules.notScheduled'))
-                        : t('schedules.notScheduled')
-                      : s.lastRun
-                        ? new Date(s.lastRun).toLocaleString()
-                        : t('schedules.neverRun')}
-                  </div>
-                </>
-              }
-              trailing={
-                <>
-                  <ConfigSwitch
-                    checked={s.enabled}
-                    onChange={() => handleToggleEnabled(s)}
-                    label={t('schedules.enabled')}
-                    onLabel={t('schedules.enable')}
-                    offLabel={t('schedules.disable')}
-                  />
-                  <Button variant="ghost" size="xs" onClick={() => setLogsId(logsId === s.id ? null : s.id)}>
-                    {logsId === s.id ? t('schedules.hideLogs') : t('schedules.viewLogs')}
-                  </Button>
-                  <Button variant="ghost" size="xs" onClick={() => setEditing(s)}>
-                    {t('common.edit')}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="text-status-danger hover:text-status-danger"
-                    onClick={() => setDeleteTarget(s)}
-                  >
-                    {t('common.delete')}
-                  </Button>
-                </>
-              }
-            />
-          ))}
-          {logsId !== null && visible.some((s) => s.id === logsId) && (
-            <Panel bodyClassName="p-0">
-              <ScheduleLogs scheduleId={logsId} />
-            </Panel>
-          )}
-        </div>
-      ) : (
-        <Panel bodyClassName="p-0">
-          <Table>
+      {/* 方案 A「精工卡片」：标题/计数/主操作进卡片头，表格 refined 外观，底部汇总。 */}
+      <TableCard>
+        <TableCardHeader
+          title={t('schedules.title')}
+          count={t('schedules.cardCount', { total: (schedules ?? []).length })}
+          actions={
+            <>
+              <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
+              <Button onClick={() => setShowCreate(true)}>+ {t('schedules.createSchedule')}</Button>
+            </>
+          }
+        />
+
+        {isLoading ? (
+          <Table appearance="refined">
             <TableHeader>
               <TableRow>
                 <TableHead>{t('schedules.name')}</TableHead>
@@ -212,8 +160,99 @@ export default function SchedulesPage() {
                 <TableHead>{t('schedules.cron')}</TableHead>
                 <TableHead>{t('schedules.action')}</TableHead>
                 <TableHead>{t('schedules.enabled')}</TableHead>
-                <TableHead>{t('schedules.lastRun')}</TableHead>
-                <TableHead className="text-right">{t('common.actions')}</TableHead>
+                <TableHead align="right">{t('schedules.lastRun')}</TableHead>
+                <TableHead align="right">{t('common.actions')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableSkeletonRows rows={4} cols={7} />
+            </TableBody>
+          </Table>
+        ) : visible.length === 0 ? (
+          <Table appearance="refined">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('schedules.name')}</TableHead>
+                <TableHead>{t('schedules.instance')}</TableHead>
+                <TableHead>{t('schedules.cron')}</TableHead>
+                <TableHead>{t('schedules.action')}</TableHead>
+                <TableHead>{t('schedules.enabled')}</TableHead>
+                <TableHead align="right">{t('schedules.lastRun')}</TableHead>
+                <TableHead align="right">{t('common.actions')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableEmptyRow colSpan={7} icon={<Clock />} title={t('schedules.empty')} description={t('schedules.emptyHint')} />
+            </TableBody>
+          </Table>
+        ) : view === 'card' ? (
+          <div className="flex flex-col gap-2.5 p-3">
+            {visible.map((s) => (
+              <ConfigRow
+                key={s.id}
+                icon={<Clock className="size-[18px]" />}
+                tone={s.enabled ? 'primary' : 'neutral'}
+                title={s.name}
+                code={s.cronExpr}
+                subtitle={`${instanceName(s.instanceId)} · ${t(`schedules.action_${s.action}`, { defaultValue: s.action })} · ${cronReadable(s.cronExpr)}`}
+                meta={
+                  <>
+                    <div>{s.enabled ? t('schedules.nextRunLabel') : t('schedules.disabledLabel')}</div>
+                    <div>
+                      {s.enabled
+                        ? validateCron(s.cronExpr).valid
+                          ? (nextRuns(s.cronExpr, 1)[0]?.toLocaleString() ?? t('schedules.notScheduled'))
+                          : t('schedules.notScheduled')
+                        : s.lastRun
+                          ? new Date(s.lastRun).toLocaleString()
+                          : t('schedules.neverRun')}
+                    </div>
+                  </>
+                }
+                trailing={
+                  <>
+                    <ConfigSwitch
+                      checked={s.enabled}
+                      onChange={() => handleToggleEnabled(s)}
+                      label={t('schedules.enabled')}
+                      onLabel={t('schedules.enable')}
+                      offLabel={t('schedules.disable')}
+                    />
+                    <Button variant="ghost" size="xs" onClick={() => setLogsId(logsId === s.id ? null : s.id)}>
+                      {logsId === s.id ? t('schedules.hideLogs') : t('schedules.viewLogs')}
+                    </Button>
+                    <Button variant="ghost" size="xs" onClick={() => setEditing(s)}>
+                      {t('common.edit')}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-status-danger hover:text-status-danger"
+                      onClick={() => setDeleteTarget(s)}
+                    >
+                      {t('common.delete')}
+                    </Button>
+                  </>
+                }
+              />
+            ))}
+            {logsId !== null && visible.some((s) => s.id === logsId) && (
+              <Panel bodyClassName="p-0">
+                <ScheduleLogs scheduleId={logsId} />
+              </Panel>
+            )}
+          </div>
+        ) : (
+          <Table appearance="refined" stickyHeader containerClassName="max-h-[70vh] overflow-y-auto">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('schedules.name')}</TableHead>
+                <TableHead>{t('schedules.instance')}</TableHead>
+                <TableHead>{t('schedules.cron')}</TableHead>
+                <TableHead>{t('schedules.action')}</TableHead>
+                <TableHead>{t('schedules.enabled')}</TableHead>
+                <TableHead align="right">{t('schedules.lastRun')}</TableHead>
+                <TableHead align="right">{t('common.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -222,7 +261,7 @@ export default function SchedulesPage() {
                 return (
                   <Fragment key={s.id}>
                     <TableRow>
-                      <TableCell className="font-medium">{s.name}</TableCell>
+                      <TableCell className="font-medium text-foreground">{s.name}</TableCell>
                       <TableCell className="text-muted-foreground">{instanceName(s.instanceId)}</TableCell>
                       <TableCell className="font-mono text-xs">
                         <div>{s.cronExpr}</div>
@@ -238,32 +277,40 @@ export default function SchedulesPage() {
                           offLabel={t('schedules.disable')}
                         />
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
+                      <TableCell align="right" className="text-muted-foreground tabular-nums">
                         {s.lastRun ? new Date(s.lastRun).toLocaleString() : t('schedules.neverRun')}
                       </TableCell>
-                      <TableCell className="space-x-3 text-right whitespace-nowrap">
-                        <button
-                          className="text-xs text-primary hover:underline"
-                          onClick={() => setLogsId(expanded ? null : s.id)}
-                        >
-                          {expanded ? t('schedules.hideLogs') : t('schedules.viewLogs')}
-                        </button>
-                        <button
-                          className="text-xs text-primary hover:underline"
-                          onClick={() => setEditing(s)}
-                        >
-                          {t('common.edit')}
-                        </button>
-                        <button
-                          className="text-xs text-status-danger hover:underline"
-                          onClick={() => setDeleteTarget(s)}
-                        >
-                          {t('common.delete')}
-                        </button>
+                      {/* 3 个操作 → 图标按钮（方案 A：28px 命中区 / 15px 图标）；aria-label 保留原文案可达名。 */}
+                      <TableCell align="right">
+                        <div className="flex items-center justify-end gap-1">
+                          <TableIconButton
+                            aria-label={expanded ? t('schedules.hideLogs') : t('schedules.viewLogs')}
+                            title={expanded ? t('schedules.hideLogs') : t('schedules.viewLogs')}
+                            aria-expanded={expanded}
+                            onClick={() => setLogsId(expanded ? null : s.id)}
+                          >
+                            <ScrollText />
+                          </TableIconButton>
+                          <TableIconButton
+                            aria-label={t('common.edit')}
+                            title={t('common.edit')}
+                            onClick={() => setEditing(s)}
+                          >
+                            <Pencil />
+                          </TableIconButton>
+                          <TableIconButton
+                            tone="danger"
+                            aria-label={t('common.delete')}
+                            title={t('common.delete')}
+                            onClick={() => setDeleteTarget(s)}
+                          >
+                            <Trash2 />
+                          </TableIconButton>
+                        </div>
                       </TableCell>
                     </TableRow>
                     {expanded && (
-                      <TableRow>
+                      <TableRow data-flat>
                         <TableCell colSpan={7} className="p-0">
                           <ScheduleLogs scheduleId={s.id} />
                         </TableCell>
@@ -274,8 +321,16 @@ export default function SchedulesPage() {
               })}
             </TableBody>
           </Table>
-        </Panel>
-      )}
+        )}
+
+        <TableCardFooter>
+          {t('schedules.cardSummary', {
+            total: (schedules ?? []).length,
+            enabled: enabledCount,
+            disabled: (schedules ?? []).length - enabledCount,
+          })}
+        </TableCardFooter>
+      </TableCard>
 
       {/* 创建对话框 */}
       <ScheduleFormDialog

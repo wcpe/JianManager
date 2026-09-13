@@ -94,7 +94,10 @@ describe('ArtifactStoragesPage 存量迁移（mock）', () => {
     await screen.findByText('存量迁移进行中 → rustfs-主渠道')
     expect(screen.getByText('共 5 · 已迁 2 · 失败 0 · 跳过 1')).toBeInTheDocument()
 
-    for (const btn of screen.getAllByRole('button', { name: '迁移到此' })) {
+    // 先 pin 数量（devmock 两个渠道：内置 + s3，各一迁移入口），避免某行丢按钮时断言静默通过。
+    const migrateButtons = screen.getAllByRole('button', { name: '迁移到此' })
+    expect(migrateButtons).toHaveLength(2)
+    for (const btn of migrateButtons) {
       expect(btn).toBeDisabled()
     }
   })

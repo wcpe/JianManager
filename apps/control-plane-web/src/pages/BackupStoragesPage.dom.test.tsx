@@ -126,6 +126,8 @@ describe('BackupStoragesPage（mock）', () => {
     renderWithProviders(<BackupStoragesPage />)
     // 列表查询失败 → storages 为 undefined → 渲染空态文案，页面不崩。
     expect(await screen.findByText('暂无存储后端，备份默认存于节点本地')).toBeInTheDocument()
+    // 空态说明需可换行：承载 EmptyState 的单元格必须覆盖表格基类 whitespace-nowrap。
+    expect(screen.getByText('暂无存储后端，备份默认存于节点本地').closest('td')).toHaveClass('whitespace-normal')
     await waitFor(() => {
       expect(screen.queryByText('s3-primary')).not.toBeInTheDocument()
     })

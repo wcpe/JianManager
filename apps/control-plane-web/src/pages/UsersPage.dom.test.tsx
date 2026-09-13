@@ -111,5 +111,8 @@ describe('UsersPage（mock 假后端）', () => {
     // useUsers 失败 → data undefined → 渲染空态文案，证明未崩溃且种子不再出现。
     expect(await screen.findByText('暂无用户')).toBeInTheDocument()
     expect(screen.queryByText('admin')).not.toBeInTheDocument()
+    // 空态说明需可换行：承载 EmptyState 的单元格必须覆盖表格基类 whitespace-nowrap，否则长文案溢出被裁。
+    const emptyCell = screen.getByText('暂无用户').closest('td')
+    expect(emptyCell).toHaveClass('whitespace-normal')
   })
 })
