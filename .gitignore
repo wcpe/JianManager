@@ -54,3 +54,23 @@ docker-compose.override.yml
 test-results/
 /.workbuddy/
 /.e2e-upgrade/
+
+# 构建残留与工具缓存（本地跑构建/e2e 的副产物，一律不带前导斜杠 + 通配符，避免再漏任意层级）
+# 注意：gitignore 不支持行尾注释，说明必须独占一行，否则整行会被当成字面模式而失效。
+# safe-delete 环境的改名回收站（dist 等删不掉时改名留下的产物目录）
+.trash-*/
+# vite 缓存临时目录（node_modules 之外的残留）
+.vite-*/
+# vitest 覆盖率产物（lcov / coverage-final.json 等）
+coverage/
+# playwright 报告与浏览器缓存
+playwright-report/
+blob-report/
+.playwright/
+.cache/
+*.cache
+.eslintcache
+.stylelintcache
+
+# 本地工具目录（原先只写在本机 .git/info/exclude，换机器克隆会漏成未跟踪噪声）
+/.narrafork/
