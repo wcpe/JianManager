@@ -37,6 +37,18 @@ class TelemetryTest {
     }
 
     @Test
+    void buildCarriesRedactedLaunchArgs() {
+        String json = Telemetry.build("skyblock-s1", Updater.OK, 4, 5, 1234, "1.2.3+abc",
+                "net.fabricmc.loader.impl.launch.knot.KnotClient --username Amazon2 --accessToken *** --uuid abc-123");
+        Object parsed = Json.parse(json);
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> m = (java.util.Map<String, Object>) parsed;
+        // FR-426 增补：完整启动参数（脱敏后）应进入遥测体。
+        assertEquals("net.fabricmc.loader.impl.launch.knot.KnotClient --username Amazon2 --accessToken *** --uuid abc-123",
+                m.get("launchArgs"));
+    }
+
+    @Test
     void failStaticReportsNotBootSuccess() {
         String json = Telemetry.build("ch", Updater.FAIL_STATIC, 5, 5, 10, "core-x");
         @SuppressWarnings("unchecked")

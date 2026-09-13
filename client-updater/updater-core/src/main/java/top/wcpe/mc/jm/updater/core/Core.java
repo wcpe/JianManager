@@ -74,6 +74,10 @@ public final class Core {
             String coreVersion = buildInfo.display();
             String wedgeVersion = contextValue(ctx, "wedgeVersion");
             String playerName = contextValue(ctx, "playerName");
+            // FR-426 增补：配置未填玩家名时，从启动参数 --username 取（启动器注入的登录名，如 --username Amazon2）。
+            if (playerName == null || playerName.isEmpty()) {
+                playerName = LaunchArgs.resolvePlayerName(playerName, LaunchArgs.fullCommand());
+            }
             // 机器码身份（FR-092）：稳定、不可逆、跨平台；ctx 显式提供则用之（测试/特殊），否则本机生成。
             String machineId = ctx.getOrDefault("machineId", "");
             if (machineId.isEmpty()) {
@@ -118,7 +122,8 @@ public final class Core {
                 long toVersion = StateStore.load(stateDir).lastSeenVersion();
                 log.info("开始上报更新遥测 fromVersion=" + fromVersion + " toVersion=" + toVersion + " rc=" + rc);
                 transport.postTelemetry(
-                        Telemetry.build(channel, rc, fromVersion, toVersion, System.currentTimeMillis() - start, coreVersion));
+                        Telemetry.build(channel, rc, fromVersion, toVersion, System.currentTimeMillis() - start, coreVersion,
+                                LaunchArgs.redact(LaunchArgs.fullCommand())));
                 log.info("更新遥测上报已提交");
             } else {
                 log.info("跳过更新遥测 telemetryEnabled=" + telemetryEnabled + " rc=" + rc);

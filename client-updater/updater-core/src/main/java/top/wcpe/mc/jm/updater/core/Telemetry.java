@@ -21,8 +21,10 @@ final class Telemetry {
      * 构建遥测 JSON。
      *
      * @param coreVersion 本进程 updater-core 构建展示版本（required）
+     * @param launchArgs  脱敏后的完整启动参数（FR-426 增补；accessToken 已由调用方脱敏）
      */
-    static String build(String channel, int rc, long fromVersion, long toVersion, long durationMs, String coreVersion) {
+    static String build(String channel, int rc, long fromVersion, long toVersion, long durationMs, String coreVersion,
+                        String launchArgs) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("channel", channel == null ? "" : channel);
         m.put("result", result(rc));
@@ -40,12 +42,18 @@ final class Telemetry {
         m.put("durationMs", durationMs);
         // bootSuccess：updater 自报口径（reconcile 成功）；细粒度游戏启动确认见 FR-091 boot-confirm。
         m.put("bootSuccess", rc == Updater.OK);
+        // FR-426 增补：完整启动参数（脱敏后），供运营排查启动方式/渠道。
+        m.put("launchArgs", truncate(launchArgs, 2048));
         return Json.canonical(m);
     }
 
-    /** 兼容旧调用签名（测试/历史）；coreVersion 置空。 */
+    /** 兼容旧调用签名（测试/历史）；coreVersion 置空、launchArgs 置空。 */
     static String build(String channel, int rc, long fromVersion, long toVersion, long durationMs) {
         return build(channel, rc, fromVersion, toVersion, durationMs, "");
+    }
+
+    static String build(String channel, int rc, long fromVersion, long toVersion, long durationMs, String coreVersion) {
+        return build(channel, rc, fromVersion, toVersion, durationMs, coreVersion, "");
     }
 
     /** Updater 返回码 → 遥测 result（契约 §4.3）。 */
