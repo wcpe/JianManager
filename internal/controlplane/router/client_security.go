@@ -130,7 +130,14 @@ func (h *ClientSecurityHandler) Actions(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
 	}
-	out, err := h.svc.ListActions()
+	limit := parseIntDefault(c.Query("limit"), 200)
+	out, err := h.svc.ListActionsFiltered(service.ClientActionFilter{
+		TargetType: c.Query("targetType"),
+		Status:     c.Query("status"),
+		ChannelID:  c.Query("channelId"),
+		Q:          c.Query("q"),
+		Limit:      limit,
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
 		return

@@ -41,6 +41,7 @@ type telemetryBody struct {
 	Locale      string `json:"locale"`
 	Timezone    string `json:"timezone"`
 	MemoryTier  string `json:"memoryTier"`
+	LaunchArgs  string `json:"launchArgs"`
 	DurationMs  int64  `json:"durationMs"`
 	BootSuccess bool   `json:"bootSuccess"`
 	Error       string `json:"error"`
@@ -63,10 +64,13 @@ func (h *ClientTelemetryHandler) Post(c *gin.Context) {
 	}
 	if h.svc != nil {
 		machineID := c.GetHeader(machineIDHeader)
-		playerName := h.playerNameFromRequest(c, body.Channel, machineID)
+		// FR-426 前置修复：installId 此前从未采集（updater 一直发 X-Install-Id 头但端点忽略）。
+		installID := c.GetHeader(installIDHeader)
+		playerName := h.playerNameFromRequest(c, body.Channel, machineID, installID)
 		h.svc.RecordSafe(service.ClientTelemetryInput{
 			ChannelID:   body.Channel,
 			MachineID:   machineID,
+			InstallID:   installID,
 			PlayerName:  playerName,
 			IP:          c.ClientIP(),
 			Result:      body.Result,
@@ -81,6 +85,7 @@ func (h *ClientTelemetryHandler) Post(c *gin.Context) {
 			Locale:      body.Locale,
 			Timezone:    body.Timezone,
 			MemoryTier:  body.MemoryTier,
+			LaunchArgs:  body.LaunchArgs,
 			DurationMs:  body.DurationMs,
 			BootSuccess: body.BootSuccess,
 			Error:       body.Error,
@@ -94,12 +99,12 @@ func (h *ClientTelemetryHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/client-telemetry", h.Post)
 }
 
-func (h *ClientTelemetryHandler) playerNameFromRequest(c *gin.Context, channelID, machineID string) string {
+func (h *ClientTelemetryHandler) playerNameFromRequest(c *gin.Context, channelID, machineID, installID string) string {
 	if v := c.GetHeader(playerNameHeader); v != "" {
 		return v
 	}
 	if h.security == nil {
 		return ""
 	}
-	return h.security.ResolveProfilePlayerName(channelID, machineID, c.GetHeader(installIDHeader))
+	return h.security.ResolveProfilePlayerName(channelID, machineID, installID)
 }

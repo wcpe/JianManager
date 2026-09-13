@@ -9,6 +9,7 @@ type ClientTelemetry struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	ChannelID   string    `gorm:"column:channel_id;type:varchar(64);index:idx_ct_channel_time" json:"channelId"`
 	MachineID   string    `gorm:"column:machine_id;type:varchar(128);index" json:"machineId"`
+	InstallID   string    `gorm:"column:install_id;type:varchar(64);index" json:"installId"`
 	PlayerName  string    `gorm:"column:player_name;type:varchar(32);index" json:"playerName"`
 	IP          string    `gorm:"type:varchar(64)" json:"ip"`
 	Result      string    `gorm:"type:varchar(16);not null" json:"result"` // success|fail-static|rolled-back|error
@@ -23,6 +24,8 @@ type ClientTelemetry struct {
 	Locale      string    `gorm:"column:locale;type:varchar(32)" json:"locale"`
 	Timezone    string    `gorm:"column:timezone;type:varchar(64)" json:"timezone"`
 	MemoryTier  string    `gorm:"column:memory_tier;type:varchar(16)" json:"memoryTier"`
+	// FR-426 增补：脱敏后的完整启动参数（sun.java.command，--accessToken 值已由客户端替换为 ***）。
+	LaunchArgs  string    `gorm:"column:launch_args;type:varchar(2048)" json:"launchArgs"`
 	DurationMs  int64     `gorm:"column:duration_ms;default:0;not null" json:"durationMs"`
 	BootSuccess bool      `gorm:"column:boot_success;default:false;not null" json:"bootSuccess"`
 	Error       string    `gorm:"type:varchar(512)" json:"error"`

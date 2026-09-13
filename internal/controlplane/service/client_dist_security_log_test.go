@@ -101,3 +101,42 @@ func logTypes(items []ClientDistSecurityLogItem) []string {
 	}
 	return out
 }
+
+func TestListActionsFiltered(t *testing.T) {
+	db := newSecurityLogDB(t)
+	svc := NewClientDistSecurityService(db, nil, nil)
+	now := time.Now()
+	require.NoError(t, db.Create(&model.ClientProtectionAction{TargetType: "ip", TargetValue: "192.0.2.9", ChannelID: "s1", Action: "temp_block", Status: "active", Reason: "spike", CreatedAt: now}).Error)
+	require.NoError(t, db.Create(&model.ClientProtectionAction{TargetType: "key", TargetValue: "7", ChannelID: "s1", Action: "key_state", Status: "active", Reason: "throttle", CreatedAt: now.Add(-time.Minute)}).Error)
+	require.NoError(t, db.Create(&model.ClientProtectionAction{TargetType: "ip", TargetValue: "198.51.100.1", ChannelID: "s2", Action: "temp_block", Status: "expired", Reason: "old", CreatedAt: now.Add(-2 * time.Minute)}).Error)
+
+	all, err := svc.ListActionsFiltered(ClientActionFilter{})
+	require.NoError(t, err)
+	require.Len(t, all, 3)
+
+	ips, err := svc.ListActionsFiltered(ClientActionFilter{TargetType: "ip"})
+	require.NoError(t, err)
+	require.Len(t, ips, 2)
+
+	active, err := svc.ListActionsFiltered(ClientActionFilter{Status: "active"})
+	require.NoError(t, err)
+	require.Len(t, active, 2)
+
+	byQ, err := svc.ListActionsFiltered(ClientActionFilter{Q: "spike"})
+	require.NoError(t, err)
+	require.Len(t, byQ, 1)
+	require.Equal(t, "192.0.2.9", byQ[0].TargetValue)
+
+	byChannel, err := svc.ListActionsFiltered(ClientActionFilter{ChannelID: "s2"})
+	require.NoError(t, err)
+	require.Len(t, byChannel, 1)
+	require.Equal(t, "expired", byChannel[0].Status)
+
+	// 超上限钳到 500，缺省/非法回落 200。
+	over, err := svc.ListActionsFiltered(ClientActionFilter{Limit: 600})
+	require.NoError(t, err)
+	require.Len(t, over, 3)
+	neg, err := svc.ListActionsFiltered(ClientActionFilter{Limit: -1})
+	require.NoError(t, err)
+	require.Len(t, neg, 3)
+}

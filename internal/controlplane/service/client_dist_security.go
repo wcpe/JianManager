@@ -235,8 +235,41 @@ func (s *ClientDistSecurityService) CancelAction(id uint) error {
 	return s.db.Model(&model.ClientProtectionAction{}).Where("id = ?", id).Updates(map[string]any{"status": "canceled", "canceled_at": &now}).Error
 }
 func (s *ClientDistSecurityService) ListActions() ([]model.ClientProtectionAction, error) {
+	return s.ListActionsFiltered(ClientActionFilter{})
+}
+
+// ClientActionFilter 处置流水服务端筛选（缺省=近 200 条全量）。
+type ClientActionFilter struct {
+	TargetType string
+	Status     string
+	ChannelID  string
+	Q          string
+	Limit      int
+}
+
+func (s *ClientDistSecurityService) ListActionsFiltered(f ClientActionFilter) ([]model.ClientProtectionAction, error) {
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 200
+	} else if limit > 500 {
+		limit = 500
+	}
+	q := s.db.Model(&model.ClientProtectionAction{})
+	if f.TargetType != "" {
+		q = q.Where("target_type = ?", f.TargetType)
+	}
+	if f.Status != "" {
+		q = q.Where("status = ?", f.Status)
+	}
+	if f.ChannelID != "" {
+		q = q.Where("channel_id = ?", f.ChannelID)
+	}
+	if kw := strings.TrimSpace(f.Q); kw != "" {
+		like := "%" + kw + "%"
+		q = q.Where("target_value LIKE ? OR action LIKE ? OR reason LIKE ?", like, like, like)
+	}
 	var a []model.ClientProtectionAction
-	return a, s.db.Order("created_at DESC").Limit(200).Find(&a).Error
+	return a, q.Order("created_at DESC").Limit(limit).Find(&a).Error
 }
 
 func (s *ClientDistSecurityService) SetKeyState(keyID uint, state, note string) error {
@@ -819,6 +852,8 @@ func (s *ClientDistSecurityService) securityTelemetryLogs(f ClientDistSecurityLo
 			"os": r.OS, "arch": r.Arch, "javaVersion": r.JavaVersion, "javaVendor": r.JavaVendor,
 			"launcher": r.Launcher, "locale": r.Locale, "timezone": r.Timezone, "memoryTier": r.MemoryTier,
 			"durationMs": r.DurationMs, "bootSuccess": r.BootSuccess,
+			// FR-426 增补：安装 ID 与脱敏后的完整启动参数（--username 即玩家登录名）。
+			"installId": r.InstallID, "launchArgs": r.LaunchArgs,
 		}})
 	}
 	return out, nil

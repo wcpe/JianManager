@@ -29,6 +29,7 @@ func NewClientTelemetryService(db *gorm.DB) *ClientTelemetryService {
 type ClientTelemetryInput struct {
 	ChannelID   string
 	MachineID   string
+	InstallID   string
 	PlayerName  string
 	IP          string
 	Result      string
@@ -43,6 +44,7 @@ type ClientTelemetryInput struct {
 	Locale      string
 	Timezone    string
 	MemoryTier  string
+	LaunchArgs  string
 	DurationMs  int64
 	BootSuccess bool
 	Error       string
@@ -66,14 +68,18 @@ func (s *ClientTelemetryService) Record(e ClientTelemetryInput) error {
 	if len(e.MachineID) > machineIDMaxLen {
 		e.MachineID = e.MachineID[:machineIDMaxLen]
 	}
+	if len(e.InstallID) > 64 {
+		e.InstallID = e.InstallID[:64]
+	}
 	result := validTelemetryResult(e.Result)
 	now := time.Now().UTC()
 	row := &model.ClientTelemetry{
-		ChannelID: e.ChannelID, MachineID: e.MachineID, PlayerName: trunc(e.PlayerName, 32), IP: e.IP, Result: result,
+		ChannelID: e.ChannelID, MachineID: e.MachineID, InstallID: trunc(e.InstallID, 64), PlayerName: trunc(e.PlayerName, 32), IP: e.IP, Result: result,
 		FromVersion: e.FromVersion, ToVersion: e.ToVersion,
 		CoreVersion: trunc(e.CoreVersion, 64), OS: trunc(e.OS, 32), Arch: trunc(e.Arch, 16),
 		JavaVersion: trunc(e.JavaVersion, 32), JavaVendor: trunc(e.JavaVendor, 64), Launcher: trunc(e.Launcher, 32),
 		Locale: trunc(e.Locale, 32), Timezone: trunc(e.Timezone, 64), MemoryTier: trunc(e.MemoryTier, 16),
+		LaunchArgs: trunc(e.LaunchArgs, 2048),
 		DurationMs: e.DurationMs, BootSuccess: e.BootSuccess, Error: trunc(e.Error, 512), CreatedAt: now,
 	}
 	if err := s.db.Create(row).Error; err != nil {

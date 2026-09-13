@@ -205,6 +205,7 @@ func TestClientRuntimeClientsEndpoint_UsesTelemetryUpdateResults(t *testing.T) {
 	require.NoError(t, db.Where("channel_id = ?", "stable").First(&written).Error)
 	require.Equal(t, "success", written.Result)
 
+
 	w := makeRequest(r, "GET", "/api/v1/client-dist/clients?channelId=stable&range=7d", nil, token)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var clients struct {
@@ -221,4 +222,22 @@ func TestClientRuntimeClientsEndpoint_UsesTelemetryUpdateResults(t *testing.T) {
 	require.Equal(t, 0.0, clients.Summary.UpdateFailureRate)
 	require.NotEmpty(t, clients.UpdateResultSeries)
 	require.Equal(t, int64(1), clients.UpdateResultSeries[0].Success)
+
+	// FR-426 前置修复回归：X-Install-Id 头此前被端点忽略（库内无 install_id）——现在必须落库。
+	// 用 result=error 避免污染下方 clients 端点的 success 计数断言。
+	telemetry2Body := map[string]any{"channel": "stable", "result": "error", "fromVersion": 6, "toVersion": 6,
+		"launchArgs": "net.fabricmc.loader.impl.launch.knot.KnotClient --username Amazon2 --accessToken *** --uuid abc-123 --gameDir /tmp/g"}
+	telemetry2 := makeRuntimeRequest(r, "POST", "/api/v1/client-telemetry", telemetry2Body, map[string]string{
+		"X-Client-Key": "secret", "X-Machine-Id": "machine-a", "X-Install-Id": "install-xyz", "X-Player-Name": "Steve",
+	})
+	require.Equal(t, http.StatusAccepted, telemetry2.Code, telemetry2.Body.String())
+	var withIdentity model.ClientTelemetry
+	require.NoError(t, db.Where("channel_id = ? AND install_id = ?", "stable", "install-xyz").First(&withIdentity).Error)
+	require.Equal(t, "install-xyz", withIdentity.InstallID)
+	require.Equal(t, "Steve", withIdentity.PlayerName)
+	require.Equal(t, "machine-a", withIdentity.MachineID)
+	// FR-426 增补：完整启动参数（客户端已脱敏 accessToken）应原样落库。
+	require.Contains(t, withIdentity.LaunchArgs, "--username Amazon2")
+	require.Contains(t, withIdentity.LaunchArgs, "--accessToken ***")
+	require.Contains(t, withIdentity.LaunchArgs, "--uuid abc-123")
 }
