@@ -1,13 +1,21 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router'
 import { useClientStats } from '@/api/clientStats'
 import {
   useClientDistObservability,
   type ObservabilityRange,
+  type ObservabilityWindow,
   type ObservabilityPlatformDist,
   type ObservabilityVersionDist,
   type ObservabilityLagDist,
 } from '@/api/clientDistObservability'
+import InsightCards from '@/components/client-dist/InsightCards'
+import UpdateHeatmap from '@/components/client-dist/UpdateHeatmap'
+import MachineListPanel from '@/components/client-dist/MachineListPanel'
+import { ObsTimeRangePicker } from '@/components/client-dist/ObsTimeRangePicker'
+import type { ObsWindow } from '@/components/client-dist/obs-window'
+import { readClientDistQuery } from '@/lib/client-dist-query'
 import {
   KPI_I18N,
   activeClientsHintKey,
@@ -18,13 +26,6 @@ import {
   resolveUpdateRates,
 } from '@/lib/client-dist-kpi'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
 
 /** 字节数转人类可读。 */
 function formatBytes(n: number): string {
@@ -36,6 +37,21 @@ function formatBytes(n: number): string {
 
 /** 天数窗口 → 观测端点 range 枚举（两看板共用一个时间选择器）。 */
 const DAYS_TO_RANGE: Record<number, ObservabilityRange> = { 7: '7d', 30: '30d', 90: '90d' }
+
+/** 预设档 → FR-095 日看板天数。 */
+const DAYS_TO_RANGE_DAYS: Record<string, number> = { '24h': 1, '7d': 7, '30d': 30, '90d': 90, '180d': 180 }
+
+/** 自定义跨度 → 最近预设天数（FR-095 日看板暂不支持任意窗，取最近档近似）。 */
+function spanToDays(fromIso: string, toIso: string): number {
+  const f = new Date(fromIso)
+  const t = new Date(toIso)
+  if (Number.isNaN(f.getTime()) || Number.isNaN(t.getTime()) || t <= f) return 30
+  const days = Math.ceil((t.getTime() - f.getTime()) / 86_400_000)
+  if (days <= 1) return 1
+  if (days <= 7) return 7
+  if (days <= 30) return 30
+  return 90
+}
 
 /** 平台 os 标识 → 展示名（空串=未知）。 */
 function platformLabel(os: string): string {
@@ -51,10 +67,18 @@ function platformLabel(os: string): string {
  */
 export default function ClientStatsPanel({ channelId }: { channelId: string }) {
   const { t } = useTranslation()
-  const [days, setDays] = useState(30)
+  // FR-425：统一时间筛选（预设 + 任意起止），窗口与 URL 深链双向同步；预设档映射回天数供 FR-095 日看板查询。
+  const [searchParams] = useSearchParams()
+  const urlQuery = readClientDistQuery(searchParams)
+  const [window, setWindow] = useState<ObsWindow>(
+    urlQuery.from && urlQuery.to ? { from: urlQuery.from, to: urlQuery.to } : { range: '30d' },
+  )
+  const days = 'range' in window ? DAYS_TO_RANGE_DAYS[window.range] ?? 30 : spanToDays(window.from, window.to)
   const { data, isLoading } = useClientStats(channelId, days)
-  const obsRange = DAYS_TO_RANGE[days] ?? '30d'
-  const { data: obs, isLoading: obsLoading } = useClientDistObservability(channelId, obsRange)
+  const obsWindow: ObservabilityWindow = 'range' in window
+    ? { range: DAYS_TO_RANGE[days] ?? '30d' }
+    : { from: window.from, to: window.to }
+  const { data: obs, isLoading: obsLoading } = useClientDistObservability(channelId, obsWindow)
 
   const downloadSeries: ChartSeries[] = [
     {
@@ -94,17 +118,11 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
         <p className="text-sm text-muted-foreground max-w-2xl">
           {t('clientStats.subtitle', '分发统计（来自拉取追踪与遥测聚合）。机器码不可信，仅作统计维度。')}
         </p>
-        <Select value={String(days)} onValueChange={(v: string) => setDays(Number(v))}>
-          <SelectTrigger size="sm" className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="7">{t('clientStats.days7', '近 7 天')}</SelectItem>
-            <SelectItem value="30">{t('clientStats.days30', '近 30 天')}</SelectItem>
-            <SelectItem value="90">{t('clientStats.days90', '近 90 天')}</SelectItem>
-          </SelectContent>
-        </Select>
+        <ObsTimeRangePicker value={window} onChange={setWindow} />
       </div>
+
+      {/* FR-428 洞察卡：同环比 + 异常标记 + 口径解释。 */}
+      {obs ? <InsightCards summary={obs.summary} compare={obs.compare} /> : null}
 
       {emptyKey ? (
         <p
@@ -227,6 +245,10 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
           {formatBytes(data.downloads.reduce((s, d) => s + d.bytes, 0))}
         </p>
       )}
+
+      {/* FR-427 更新活动热力图 + FR-426 机器更新排行（observability 窗口内）。 */}
+      <UpdateHeatmap series={obs?.series ?? []} />
+      <MachineListPanel channelId={channelId} from={obs?.from ?? ''} to={obs?.to ?? ''} />
     </div>
   )
 }

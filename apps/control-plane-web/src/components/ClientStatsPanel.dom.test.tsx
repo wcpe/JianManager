@@ -25,22 +25,24 @@ describe('ClientStatsPanel（mock 假后端，FR-219/356）', () => {
     loginMockUser()
     renderWithProviders(<ClientStatsPanel channelId="skyblock-s1" />)
 
-    // 等观测数据解析后断言：活跃客户端取观测去重计数（512）。
-    // 默认窗 30d 超明细保留窗 → 标注「人次近似」。
-    expect(await screen.findByText('512')).toBeInTheDocument()
-    expect(screen.getByText('活跃客户端')).toBeInTheDocument()
-    expect(screen.getByText('人次近似')).toBeInTheDocument()
+    // 等观测数据解析后断言结构与口径标注（FR-425 起 mock 按真实时间确定性生成，数值随时间变化，
+    // 故断言标签/形态而非写死数值——旧断言 512/360/330 随生成器升级失效）。
+    // 默认窗 30d 超明细保留窗 → 标注「人次近似」（obs 异步解析后才出现，需 findBy；并行负载下放宽超时）。
+    expect(await screen.findByText('活跃客户端')).toBeInTheDocument()
+    expect(await screen.findByText('人次近似', {}, { timeout: 5000 })).toBeInTheDocument()
 
     // 更新绝对数与率并列，且下载 bytes 有独立趋势。
     expect(screen.getByText('更新总次数')).toBeInTheDocument()
-    expect(screen.getByText('360')).toBeInTheDocument()
     expect(screen.getByText('更新成功')).toBeInTheDocument()
-    expect(screen.getByText('330')).toBeInTheDocument()
-    expect(screen.getByText('更新成功率')).toBeInTheDocument()
+    // FR-428 洞察卡与 FR-356 口径网格都有「更新成功率」卡。
+    expect(screen.getAllByText('更新成功率').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('fail-static 率')).toBeInTheDocument()
-    expect(screen.getByText('91.7%')).toBeInTheDocument()
-    expect(screen.getByText('2.8%')).toBeInTheDocument()
     expect(screen.getByText('下载字节趋势')).toBeInTheDocument()
+
+    // FR-428 洞察卡 + FR-427 热力图 + FR-426 机器排行（新增区块一并在统计 Tab 呈现）。
+    expect(screen.getByTestId('client-dist-insight-cards')).toBeInTheDocument()
+    expect(screen.getByText('更新活动热力图')).toBeInTheDocument()
+    expect(screen.getByText('机器更新排行')).toBeInTheDocument()
 
     // 平台分布段落渲染并出现 Windows 行。
     expect(screen.getByText('平台分布')).toBeInTheDocument()

@@ -21,14 +21,21 @@ describe('useClientDistObservability（FR-217 消费）', () => {
     const { result } = renderHook(() => useClientDistObservability('skyblock-s1', '30d'), { wrapper })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
+    // FR-425 起 mock 按真实时间确定性生成（数值随时间漂移），断言口径与形态而非写死数值。
     const d = result.current.data!
-    expect(d.summary.activeMachines).toBe(512)
+    expect(d.summary.activeMachines).toBeGreaterThan(0)
     // 30d 超明细保留窗 → 人次近似（activeMachinesExact=false）。
     expect(d.summary.activeMachinesExact).toBe(false)
-    expect(d.summary.failStaticRate).toBeCloseTo(0.0278)
-    expect(d.versionDist[0]).toMatchObject({ version: 7, count: 900 })
-    expect(d.platformDist[0]).toMatchObject({ os: 'windows', count: 1200 })
-    expect(d.lagDist[0]).toMatchObject({ lag: 0, count: 320 })
+    expect(d.summary.failStaticRate).toBeGreaterThanOrEqual(0)
+    expect(d.summary.failStaticRate).toBeLessThanOrEqual(1)
+    expect(d.series.length).toBeGreaterThan(0)
+    // 分布首位=占比最大项：版本最新档 / 平台 windows / 滞后 0。
+    expect(d.versionDist[0].version).toBeGreaterThanOrEqual(30)
+    expect(d.platformDist[0]).toMatchObject({ os: 'windows' })
+    expect(d.lagDist[0]).toMatchObject({ lag: 0 })
+    // FR-428：compare=前一等长窗口同环比基数。
+    expect(d.compare).toBeDefined()
+    expect(d.compare?.updateTotal).toBeGreaterThanOrEqual(0)
   })
 
   it('短窗 7d 落保留窗内 → activeMachinesExact=true', async () => {

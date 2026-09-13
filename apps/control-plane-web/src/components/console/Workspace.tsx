@@ -30,9 +30,9 @@ const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const StoragePage = lazy(() => import('@/pages/StoragePage'))
 const LogsPage = lazy(() => import('@/pages/LogsPage'))
 const StatisticsPage = lazy(() => import('@/pages/StatisticsPage'))
-const ClientDistMonitoringPage = lazy(() => import('@/pages/ClientDistMonitoringPage'))
 const ClientChannelsPage = lazy(() => import('@/pages/ClientChannelsPage'))
 const ProtectionCenterPage = lazy(() => import('@/pages/ProtectionCenterPage'))
+const ClientDistRedirect = lazy(() => import('@/pages/ClientDistRedirect'))
 const ClientPublishPage = lazy(() => import('@/pages/ClientPublishPage'))
 const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
 const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
@@ -134,15 +134,18 @@ export default function Workspace() {
             <Route path="tasks" element={<TasksPage />} />
             {/* 通知中心（FR-216）：站内信 + 告警合并的统一通知流页。 */}
             <Route path="notifications" element={<NotificationCenterPage />} />
-            <Route path="client-channels" element={<ClientChannelsPage />} />
-            <Route path="client-dist-security" element={<ProtectionCenterPage />} />
+            {/* FR-430：页面 A「客户端分发」补平台管理员守卫（此前仅靠侧栏按角色隐藏）。 */}
+            <Route path="client-channels" element={<RequirePlatformAdmin><ClientChannelsPage /></RequirePlatformAdmin>} />
+            {/* FR-430：页面 B「客户端分发运维」新路由（7 Tab，观测 + 研判处置合并）+ 守卫。 */}
+            <Route path="client-dist-ops" element={<RequirePlatformAdmin><ProtectionCenterPage /></RequirePlatformAdmin>} />
+            {/* FR-430：旧安全中心路由 → 页面 B 参数翻译重定向（透传 query，不包守卫，仅 Navigate）。 */}
+            <Route path="client-dist-security" element={<ClientDistRedirect source="security" />} />
             <Route path="client-channels/:id/publish" element={<ClientPublishPage />} />
             <Route path="logs" element={<LogsPage />} />
             {/* 观测·统计占位页（FR-215）；实质内容由 FR-220 补齐。 */}
             <Route path="statistics" element={<StatisticsPage />} />
-            {/* 观测·客户端分发监控页（FR-218）：消费 FR-217 观测底座出时序趋势 + 分布/榜单，总览 + 频道筛选。
-                用平级路径（非 /monitor/* 嵌套）避免侧栏「监控总览」NavLink 前缀匹配误高亮。 */}
-            <Route path="client-dist-monitor" element={<ClientDistMonitoringPage />} />
+            {/* FR-430：旧监控路由改重定向到页面 B「客户端分发运维」（观测入口已并入）。 */}
+            <Route path="client-dist-monitor" element={<ClientDistRedirect source="monitor" />} />
             {/* 观测域同义旧链接重定向兼容（FR-215）：避免外部/手输旧路径 404。 */}
             <Route path="monitoring" element={<Navigate to="/monitor" replace />} />
             <Route path="stats" element={<Navigate to="/statistics" replace />} />

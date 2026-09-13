@@ -30,7 +30,18 @@ describe('breadcrumbTrail', () => {
     ])
   })
 
-  it('观测域 客户端分发监控 与导航文案一致（FR-245 补漏）', () => {
+  it('平台管理域 客户端分发运维 与导航文案一致（FR-430）', () => {
+    expect(breadcrumbTrail('/client-dist-ops')).toEqual([
+      { labelKey: 'nav.platformManagement' },
+      { labelKey: 'nav.clientDistOps' },
+    ])
+    // 旧安全中心路由（重定向容错）保留映射，指向新运维页文案。
+    expect(breadcrumbTrail('/client-dist-security')).toEqual([
+      { labelKey: 'nav.clientDistOps' },
+    ])
+  })
+
+  it('观测域 客户端分发监控 保留旧映射作重定向容错（FR-430 后入口已迁出）', () => {
     expect(breadcrumbTrail('/client-dist-monitor')).toEqual([
       { labelKey: 'nav.observability' },
       { labelKey: 'nav.clientDistMonitor' },

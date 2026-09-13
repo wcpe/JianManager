@@ -196,7 +196,7 @@ describe('ClientChannelsPage（mock 假后端）', () => {
     expect(screen.getByRole('tab', { name: '统计' })).toHaveAttribute('data-state', 'active')
     expect(link).toHaveAttribute(
       'href',
-      '/client-dist-security?channelId=skyblock-s1&ip=192.0.2.9&machineId=m-1&errCode=RATE_LIMITED&version=2&tab=logs',
+      '/client-dist-ops?channelId=skyblock-s1&ip=192.0.2.9&machineId=m-1&errCode=RATE_LIMITED&version=2&tab=logs',
     )
   })
 })

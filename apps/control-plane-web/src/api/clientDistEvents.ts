@@ -133,25 +133,6 @@ export interface ClientDistErrorSummary {
   samples: ClientDistFailureSample[]
 }
 
-/**
- * 客户端分发明细事件检索（FR-093/249 兼容旧端点）：**平台管理员**端点。
- * 非管理员经 `enabled=false` 不发起请求；403 快速失败不重试。
- */
-export function useClientDistEvents(filter: ClientDistEventFilter) {
-  const { channelId, machineId, ip, kind, outcome, errCode, version, limit, enabled = true } = filter
-  return useQuery({
-    queryKey: ['client-dist-events', channelId ?? 'all', machineId ?? '', ip ?? '', kind ?? 'all', outcome ?? 'all', errCode ?? '', version ?? '', limit ?? 200],
-    queryFn: async () => {
-      const { data } = await api.get<ClientDistEvent[]>('/client-dist/events', {
-        params: compactParams({ channelId, machineId, ip, kind, outcome, errCode, version, limit }),
-      })
-      return data
-    },
-    enabled,
-    retry: false,
-  })
-}
-
 /** 分页检索分发事件（FR-265），支持运行态维度联动过滤。 */
 export function useClientDistEventSearch(filter: ClientDistEventSearchFilter) {
   const {

@@ -34,12 +34,20 @@ describe('ConsoleSidebar 高密度控制台 IA（FR-268）', () => {
     expect(screen.queryByRole('button', { name: '监控' })).toBeNull()
   })
 
-  it('观测域下含 监控总览/客户端分发监控/日志中心/统计分析 子项，链接正确', () => {
+  it('观测域下含 监控总览/日志中心/统计分析 子项，且不再有客户端分发监控入口', () => {
     renderWithProviders(<ConsoleSidebar />)
+    const obsGroup = screen.getByRole('button', { name: '观测' }).parentElement as HTMLElement
     expect(screen.getByRole('link', { name: '监控总览' })).toHaveAttribute('href', '/monitor')
-    expect(screen.getByRole('link', { name: '客户端分发监控' })).toHaveAttribute('href', '/client-dist-monitor')
     expect(screen.getByRole('link', { name: '日志中心' })).toHaveAttribute('href', '/logs')
     expect(screen.getByRole('link', { name: '统计分析' })).toHaveAttribute('href', '/statistics')
+    // FR-430：客户端分发监控入口已从观测域移除（并入平台管理「客户端分发运维」）。
+    expect(within(obsGroup).queryByRole('link', { name: '客户端分发监控' })).toBeNull()
+  })
+
+  it('平台管理「内容与分发」有「客户端分发运维」→ /client-dist-ops（FR-430）', () => {
+    renderWithProviders(<ConsoleSidebar />)
+    const platformGroup = screen.getByRole('button', { name: '平台管理' }).parentElement as HTMLElement
+    expect(within(platformGroup).getByRole('link', { name: '客户端分发运维' })).toHaveAttribute('href', '/client-dist-ops')
   })
 
   it('FR-272 页面在桌面侧栏归入指定导航域', () => {

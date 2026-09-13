@@ -9,6 +9,20 @@ import { requireAuth } from '@jianmanager/devmock/auth-middleware'
  * 受保护端点首行 requireAuth；字段严格匹配 web/src/api/{clientChannels,clientVersions,clientStats,licenses,settings}.ts。
  */
 
+// ── 种子时间平移（FR-095/265 体验修复）──────────────────────────────────────
+// 静态种子里的时间写死在 2026-06~07，而页面默认窗口是「近 24h/7d/30d」→ 取不到数据、
+// 图表全空。这里把所有种子时间整体平移一个常量偏移（不改变事件之间的相对间隔），
+// 使**最新一条分发事件** ≈ 当前时间，默认窗口（含近 24h）即可看到数据。
+// 个别种子的时间晚于该锚点（如频道 createdAt），平移后会落到未来 → 一律钳到当下。
+// 注意：T() 只用于种子数据；运行时生成的时序（如 buildHourlySeries）本就相对当前时间。
+const SEED_ANCHOR_TS = Date.parse('2026-06-28T10:09:00Z') // 最晚一条 distEvent
+const SEED_SHIFT_MS = Date.now() - SEED_ANCHOR_TS
+const T = (iso: string): string => {
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return iso
+  return new Date(Math.min(t + SEED_SHIFT_MS, Date.now())).toISOString()
+}
+
 // ── client-channels（频道 + 拉取密钥，FR-086/187）────────────────────────────
 
 /** 假后端分发频道（匹配 ClientChannel；createdAt/updatedAt 为字符串）。 */
@@ -59,8 +73,8 @@ const channels = db<MockChannel>('client-channels', () => [
     name: '空岛一区',
     description: '空岛生存主分发频道',
     currentVersion: 2,
-    createdAt: '2026-06-01T08:00:00Z',
-    updatedAt: '2026-06-20T08:00:00Z',
+    createdAt: T('2026-06-01T08:00:00Z'),
+    updatedAt: T('2026-06-20T08:00:00Z'),
   },
   {
     id: 2,
@@ -68,8 +82,8 @@ const channels = db<MockChannel>('client-channels', () => [
     name: '生存二区',
     description: '生存服灰度频道',
     currentVersion: 0,
-    createdAt: '2026-06-10T08:00:00Z',
-    updatedAt: '2026-06-10T08:00:00Z',
+    createdAt: T('2026-06-10T08:00:00Z'),
+    updatedAt: T('2026-06-10T08:00:00Z'),
   },
 ])
 
@@ -82,8 +96,8 @@ const keys = db<MockKey>('client-keys', () => [
     plain: 'jmck_ab12_secret_release',
     revoked: false,
     expiresAt: null,
-    lastUsedAt: '2026-06-25T10:00:00Z',
-    createdAt: '2026-06-01T09:00:00Z',
+    lastUsedAt: T('2026-06-25T10:00:00Z'),
+    createdAt: T('2026-06-01T09:00:00Z'),
     revealable: true,
   },
   {
@@ -95,8 +109,66 @@ const keys = db<MockKey>('client-keys', () => [
     revoked: false,
     expiresAt: null,
     lastUsedAt: null,
-    createdAt: '2026-06-05T09:00:00Z',
+    createdAt: T('2026-06-05T09:00:00Z'),
     revealable: true,
+  },
+])
+
+/** 安全处置动作流水（可写 mock）。 */
+interface MockProtectionAction {
+  id: number
+  targetType: string
+  targetValue: string
+  channelId: string
+  action: string
+  status: string
+  reason: string
+  auto: boolean
+  expiresAt: string | null
+  createdBy: number
+  createdAt: string
+  updatedAt: string
+}
+
+/** 安全分组（可写 mock）。 */
+interface MockSecurityGroup {
+  id: number
+  name: string
+  kind: string
+  targetType: string
+  enabled: boolean
+  createdBy: number
+  createdAt: string
+  updatedAt: string
+}
+
+const protectionActions = db<MockProtectionAction>('client-protection-actions', () => [
+  {
+    id: 1,
+    targetType: 'ip',
+    targetValue: '203.0.113.20',
+    channelId: '',
+    action: 'temp_block',
+    status: 'active',
+    reason: '异常拉取',
+    auto: false,
+    expiresAt: T('2026-06-28T11:09:00Z'),
+    createdBy: 1,
+    createdAt: T('2026-06-28T10:09:00Z'),
+    updatedAt: T('2026-06-28T10:09:00Z'),
+  },
+])
+
+const securityGroups = db<MockSecurityGroup>('client-security-groups', () => [
+  {
+    id: 1,
+    name: '高风险 IP',
+    kind: 'manual',
+    targetType: 'ip',
+    enabled: true,
+    createdBy: 1,
+    createdAt: T('2026-06-28T10:00:00Z'),
+    updatedAt: T('2026-06-28T10:00:00Z'),
   },
 ])
 
@@ -107,7 +179,7 @@ const versions = db<MockVersion>('client-versions', () => [
     version: 1,
     note: '首发版本',
     createdBy: 1,
-    createdAt: '2026-06-01T10:00:00Z',
+    createdAt: T('2026-06-01T10:00:00Z'),
     managedDirs: ['mods', 'config'],
     files: [
       {
@@ -127,7 +199,7 @@ const versions = db<MockVersion>('client-versions', () => [
     version: 2,
     note: '修复材质包',
     createdBy: 1,
-    createdAt: '2026-06-20T10:00:00Z',
+    createdAt: T('2026-06-20T10:00:00Z'),
     managedDirs: ['mods', 'config', 'resourcepacks'],
     files: [
       {
@@ -194,7 +266,7 @@ const distEvents = db<MockDistEvent>('client-dist-events', (): MockDistEvent[] =
     requestHeaders: { 'User-Agent': 'JM-Updater/1.0', 'X-Client-Key': 'present', 'X-Machine-Id': 'm-aaaa' },
     responseHeaders: { ETag: '"v2"', 'Cache-Control': 'no-store' },
     durationMs: 4,
-    createdAt: '2026-06-28T10:05:00Z',
+    createdAt: T('2026-06-28T10:05:00Z'),
   },
   {
     id: 2,
@@ -213,7 +285,7 @@ const distEvents = db<MockDistEvent>('client-dist-events', (): MockDistEvent[] =
     requestHeaders: { 'User-Agent': 'JM-Updater/1.0', Range: 'bytes=0-2047', 'X-Machine-Id': 'm-bbbb' },
     responseHeaders: { ETag: '"artifact-a"', 'Content-Range': 'bytes 0-2047/4096' },
     durationMs: 12,
-    createdAt: '2026-06-28T10:04:00Z',
+    createdAt: T('2026-06-28T10:04:00Z'),
   },
   {
     id: 3,
@@ -232,7 +304,7 @@ const distEvents = db<MockDistEvent>('client-dist-events', (): MockDistEvent[] =
     requestHeaders: { 'User-Agent': 'JM-Updater/1.0', 'X-Client-Key': 'present', 'X-Machine-Id': 'm-cccc' },
     responseHeaders: { 'Cache-Control': 'no-store' },
     durationMs: 1,
-    createdAt: '2026-06-28T10:03:00Z',
+    createdAt: T('2026-06-28T10:03:00Z'),
   },
   {
     id: 4,
@@ -251,7 +323,7 @@ const distEvents = db<MockDistEvent>('client-dist-events', (): MockDistEvent[] =
     requestHeaders: { 'User-Agent': 'JM-Updater/1.0', 'X-Client-Key': 'present', 'X-Machine-Id': 'm-dddd' },
     responseHeaders: { 'Cache-Control': 'no-store' },
     durationMs: 2,
-    createdAt: '2026-06-28T10:02:00Z',
+    createdAt: T('2026-06-28T10:02:00Z'),
   },
 ])
 
@@ -285,10 +357,10 @@ const runtimeStates = db<MockRuntimeState>('client-runtime-states', () => [
     launcher: 'hmcl',
     coreVersion: '3',
     localVersion: 2,
-    firstSeenAt: '2026-06-28T09:50:00Z',
-    lastHeartbeatAt: '2026-06-28T10:05:00Z',
-    createdAt: '2026-06-28T09:50:00Z',
-    updatedAt: '2026-06-28T10:05:00Z',
+    firstSeenAt: T('2026-06-28T09:50:00Z'),
+    lastHeartbeatAt: T('2026-06-28T10:05:00Z'),
+    createdAt: T('2026-06-28T09:50:00Z'),
+    updatedAt: T('2026-06-28T10:05:00Z'),
   },
   {
     id: 2,
@@ -301,10 +373,10 @@ const runtimeStates = db<MockRuntimeState>('client-runtime-states', () => [
     launcher: 'pcl',
     coreVersion: '3',
     localVersion: 1,
-    firstSeenAt: '2026-06-28T08:10:00Z',
-    lastHeartbeatAt: '2026-06-28T10:01:00Z',
-    createdAt: '2026-06-28T08:10:00Z',
-    updatedAt: '2026-06-28T10:01:00Z',
+    firstSeenAt: T('2026-06-28T08:10:00Z'),
+    lastHeartbeatAt: T('2026-06-28T10:01:00Z'),
+    createdAt: T('2026-06-28T08:10:00Z'),
+    updatedAt: T('2026-06-28T10:01:00Z'),
   },
   {
     id: 3,
@@ -317,10 +389,10 @@ const runtimeStates = db<MockRuntimeState>('client-runtime-states', () => [
     launcher: 'hmcl',
     coreVersion: '2',
     localVersion: 0,
-    firstSeenAt: '2026-06-28T09:00:00Z',
-    lastHeartbeatAt: '2026-06-28T09:58:00Z',
-    createdAt: '2026-06-28T09:00:00Z',
-    updatedAt: '2026-06-28T09:58:00Z',
+    firstSeenAt: T('2026-06-28T09:00:00Z'),
+    lastHeartbeatAt: T('2026-06-28T09:58:00Z'),
+    createdAt: T('2026-06-28T09:00:00Z'),
+    updatedAt: T('2026-06-28T09:58:00Z'),
   },
 ])
 
@@ -430,7 +502,11 @@ function keyToMeta(k: MockKey) {
 
 /** 构造频道分发统计（匹配 ClientDistStats；只从分发请求事件派生）。 */
 function buildStats(channelId: string, days: number) {
-  const rows = distEvents.list((e) => !channelId || e.channelId === channelId)
+  // days 口径此前被忽略（时间选择器形同虚设）——按 createdAt 落在窗口内过滤（含当天）。
+  const cutoff = Date.now() - days * 86_400_000
+  const rows = distEvents.list(
+    (e) => (!channelId || e.channelId === channelId) && Date.parse(e.createdAt) >= cutoff,
+  )
   const byDay = new Map<string, { day: string; requests: number; bytes: number }>()
   const versions = new Map<number, number>()
   const ips = new Map<string, number>()
@@ -467,54 +543,251 @@ function buildStats(channelId: string, days: number) {
   }
 }
 
-/** 构造频道观测视图（匹配 ClientDistObservability，FR-217）。 */
-function buildObservability(channelId: string, range: string) {
-  const series = Array.from({ length: 3 }, (_, i) => ({
-    ts: `2026-06-2${5 + i}T10:00:00Z`,
-    manifestPulls: 120 + i * 10,
-    artifactPulls: 35 + i * 5,
-    downloadBytes: (120 + i * 10) * 70_000,
-    activeMachines: 48 + i,
-    updateTotal: 30,
-    updateSuccess: 27,
-    updateFailStatic: 1,
-    updateRolledBack: 1,
-    updateError: 1,
-  }))
+/** 构造频道观测视图（匹配 ClientDistObservability，FR-217）。
+ *  FR-425/428：支持任意 from/to（RFC3339，与真后端 parseObsRange 语义一致）并透出 compare（前一等长窗口同环比）。
+ *  series 按「天×小时」确定性生成（seed = channelId|bucketTs，同窗口多次请求稳定），模拟晚间高峰 / 周末回落 / 偶发静默。 */
+function hashSeed(s: string): number {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+function mulberry32(seed: number): () => number {
+  let a = seed
+  return () => {
+    a |= 0
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/** 解析观测窗口：from/to 优先，回退 range 预设；窗口上限钳制 180d。返回 [from, to, exactInWindow]。 */
+function parseObsWindow(url: URL): { from: Date; to: Date; range: string } {
+  const now = new Date()
+  const fromStr = url.searchParams.get('from') ?? ''
+  const toStr = url.searchParams.get('to') ?? ''
+  const range = url.searchParams.get('range') ?? '7d'
+  const presetMs: Record<string, number> = { '24h': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000, '90d': 90 * 86_400_000, '180d': 180 * 86_400_000 }
+  let from: Date
+  let to: Date
+  if (fromStr && toStr) {
+    const f = new Date(fromStr)
+    const t = new Date(toStr)
+    from = Number.isNaN(f.getTime()) ? new Date(now.getTime() - (presetMs[range] ?? presetMs['7d'])) : f
+    to = Number.isNaN(t.getTime()) || t <= from ? now : t
+  } else {
+    from = new Date(now.getTime() - (presetMs[range] ?? presetMs['7d']))
+    to = now
+  }
+  const maxSpan = 180 * 86_400_000
+  if (to.getTime() - from.getTime() > maxSpan) from = new Date(to.getTime() - maxSpan)
+  return { from, to, range }
+}
+
+/** 小时桶序列生成（确定性）：晚间高峰 / 周末回落 / 偶发整段静默 / 成功率 90~98%。 */
+function buildHourlySeries(channelId: string, from: Date, to: Date) {
+  const series: Array<{
+    ts: string; manifestPulls: number; artifactPulls: number; downloadBytes: number; activeMachines: number
+    updateTotal: number; updateSuccess: number; updateFailStatic: number; updateRolledBack: number; updateError: number
+  }> = []
+  const cursor = new Date(from.getTime())
+  cursor.setUTCMinutes(0, 0, 0)
+  while (cursor < to) {
+    const ts = cursor.toISOString().replace(/\.\d{3}Z$/, 'Z')
+    const rnd = mulberry32(hashSeed(`${channelId}|${ts}`))
+    const hour = cursor.getUTCHours()
+    const weekday = cursor.getUTCDay()
+    const evening = hour >= 17 && hour <= 23 ? 2.2 : hour >= 12 && hour <= 16 ? 1.3 : hour <= 6 ? 0.15 : 0.7
+    const weekend = weekday === 0 || weekday === 6 ? 1.35 : 1
+    const dead = rnd() < 0.06
+    const manifestPulls = dead ? 0 : Math.round((14 + rnd() * 26) * evening * weekend)
+    const artifactPulls = dead ? 0 : Math.round(manifestPulls * (0.2 + rnd() * 0.25))
+    const activeMachines = dead ? 0 : Math.round((6 + rnd() * 14) * evening * weekend)
+    const updateTotal = dead ? 0 : Math.max(0, Math.round(activeMachines * (0.25 + rnd() * 0.5)))
+    const successRate = 0.9 + rnd() * 0.08
+    const updateSuccess = Math.round(updateTotal * successRate)
+    const rest = updateTotal - updateSuccess
+    const updateFailStatic = Math.round(rest * 0.45)
+    const updateRolledBack = Math.round(rest * 0.35)
+    const updateError = rest - updateFailStatic - updateRolledBack
+    const downloadBytes = artifactPulls * Math.round((45_000 + rnd() * 60_000) / 1000) * 1000
+    series.push({ ts, manifestPulls, artifactPulls, downloadBytes, activeMachines, updateTotal, updateSuccess, updateFailStatic, updateRolledBack, updateError })
+    cursor.setUTCHours(cursor.getUTCHours() + 1)
+  }
+  return series
+}
+
+function aggregateSeries(series: ReturnType<typeof buildHourlySeries>, exact: boolean) {
+  const sum = (pick: (p: (typeof series)[number]) => number) => series.reduce((s, p) => s + pick(p), 0)
+  const updateTotal = sum((p) => p.updateTotal)
+  const updateSuccess = sum((p) => p.updateSuccess)
+  const updateFailStatic = sum((p) => p.updateFailStatic)
+  const updateRolledBack = sum((p) => p.updateRolledBack)
+  const updateError = sum((p) => p.updateError)
+  const denom = updateSuccess + updateFailStatic + updateRolledBack + updateError
+  return {
+    manifestPulls: sum((p) => p.manifestPulls),
+    artifactPulls: sum((p) => p.artifactPulls),
+    downloadBytes: sum((p) => p.downloadBytes),
+    updateTotal,
+    updateSuccess,
+    updateFailStatic,
+    updateRolledBack,
+    updateError,
+    successRate: denom > 0 ? updateSuccess / denom : 0,
+    failStaticRate: denom > 0 ? updateFailStatic / denom : 0,
+    rollbackRate: denom > 0 ? updateRolledBack / denom : 0,
+    activeMachines: Math.max(0, ...series.map((p) => p.activeMachines), 0),
+    // FR-425/426：窗口落在 14 天明细保留窗内=精确去重；超出=小时桶近似（与真后端 ADR-049 语义一致）。
+    activeMachinesExact: exact,
+  }
+}
+
+function buildObservability(channelId: string, from: Date, to: Date) {
+  const series = buildHourlySeries(channelId, from, to)
+  // 14 天明细保留窗：窗口起点在窗内=exact。
+  const exact = from.getTime() >= Date.now() - 14 * 86_400_000
+  const span = to.getTime() - from.getTime()
+  const compareSeries = buildHourlySeries(channelId, new Date(from.getTime() - span), from)
+  const summary = aggregateSeries(series, exact)
+  const compare = (() => {
+    const s = aggregateSeries(compareSeries)
+    const { activeMachinesExact: _e, ...rest } = s
+    return rest
+  })()
+  // 版本/平台/滞后分布：按窗口活动量确定性生成。
+  const rnd = mulberry32(hashSeed(`dist|${channelId}|${from.toISOString().slice(0, 10)}`))
+  const latest = 30 + Math.floor(rnd() * 4)
+  const versionDist = [0, 1, 2, 3].map((i) => ({ version: latest - i, count: Math.round(summary.updateTotal * [0.55, 0.25, 0.13, 0.07][i] * (0.8 + rnd() * 0.4)) })).filter((v) => v.count > 0)
+  const platformDist = [
+    { os: 'windows', count: Math.round(summary.activeMachines * 0.72) },
+    { os: 'linux', count: Math.round(summary.activeMachines * 0.21) },
+    { os: 'macos', count: Math.round(summary.activeMachines * 0.07) },
+  ].filter((p) => p.count > 0)
+  const lagDist = [0, 1, 2, 3, 5].map((lag, i) => ({ lag, count: Math.round(summary.activeMachines * [0.62, 0.2, 0.1, 0.05, 0.03][i] * (0.85 + rnd() * 0.3)) })).filter((v) => v.count > 0)
   return {
     channelId,
-    from: '2026-06-21T00:00:00Z',
-    to: '2026-06-28T00:00:00Z',
+    from: from.toISOString(),
+    to: to.toISOString(),
     series,
-    summary: {
-      manifestPulls: 1500,
-      artifactPulls: 400,
-      downloadBytes: 99_000_000,
-      updateTotal: 360,
-      updateSuccess: 330,
-      updateFailStatic: 10,
-      updateRolledBack: 12,
-      updateError: 8,
-      successRate: 0.9167,
-      failStaticRate: 0.0278,
-      rollbackRate: 0.0333,
-      activeMachines: 512,
-      // 短窗（24h/7d）落明细保留窗内→精确去重；长窗超窗→人次近似。
-      activeMachinesExact: range === '24h' || range === '7d',
-    },
-    versionDist: [
-      { version: 7, count: 900 },
-      { version: 6, count: 600 },
-    ],
-    platformDist: [
-      { os: 'windows', count: 1200 },
-      { os: 'linux', count: 300 },
-    ],
-    lagDist: [
-      { lag: 0, count: 320 },
-      { lag: 1, count: 30 },
-    ],
+    summary,
+    compare,
+    versionDist,
+    platformDist,
+    lagDist,
   }
+}
+
+// ── 机器级更新聚合（FR-426 mock）─────────────────────────────────────────────
+
+interface MockMachineSummary {
+  machineId: string
+  channelId: string
+  updates: number
+  lastUpdateAt: string
+  latestVersion: number
+  currentVersion: number
+  versionLag: number
+  downloadBytes: number
+  /** FR-426 增补：身份三件套（真实栈由后端脱敏后返回；未知为空串）。 */
+  playerName: string
+  installId: string
+  ip: string
+}
+
+/** 机器池：按 channelId 确定性生成 24~56 台（跨频道总取并集池），id 形如 m-3f9a2c71。 */
+function machinePool(channelId: string, from: Date): string[] {
+  const rnd = mulberry32(hashSeed(`pool|${channelId}|${from.toISOString().slice(0, 7)}`))
+  const count = 24 + Math.floor(rnd() * 32)
+  const ids: string[] = []
+  while (ids.length < count) {
+    const id = `m-${Math.floor(rnd() * 0xffffffff).toString(16).padStart(8, '0')}`
+    if (!ids.includes(id)) ids.push(id)
+  }
+  return ids
+}
+
+/** 机器池玩家名候选（MC 社区风格；约 1/4 机器「未上报」模拟老版本客户端）。 */
+const MOCK_PLAYER_NAMES = [
+  'Alex', 'Steve', 'Notch', 'Dream', 'Grian', 'Mumbo', 'Etho', 'Tango', 'Keralis', 'RenDog',
+  'Cubfan', 'xBcrafted', 'Welsknight', 'Docm77', 'Zedaph', 'Impulse', 'Pearl', 'Gemini',
+]
+
+function buildMachineSummaries(channelId: string, from: Date, to: Date): MockMachineSummary[] {
+  const channels = channelId ? [channelId] : ['skyblock-s1', 'survival-s2']
+  const rnd = mulberry32(hashSeed(`machines|${channelId}|${from.toISOString()}|${to.toISOString()}`))
+  const latest = 30 + Math.floor(rnd() * 4)
+  // 种子机器的身份来自运行态画像（客户端 Tab 同源），保证演示时排行里能对上人。
+  const runtimeById = new Map(runtimeStates.list(() => true).map((r) => [`${r.channelId}|${r.machineId}`, r]))
+  const out: MockMachineSummary[] = []
+  for (const ch of channels) {
+    for (const machineId of machinePool(ch, from)) {
+      if (channelId === '' && out.some((m) => m.machineId === machineId)) continue
+      // 更新次数：重尾分布——多数机器低频、少数高频（真实玩家群体形态）。
+      const r = rnd()
+      const updates = r < 0.55 ? Math.floor(r * 8) + 1 : r < 0.85 ? Math.floor(8 + (r - 0.55) * 60) : Math.floor(26 + (r - 0.85) * 120)
+      // 最近更新：偏向窗口后段（活跃机器）或早段（流失机器）。
+      const skew = rnd()
+      const lastTs = new Date(from.getTime() + (to.getTime() - from.getTime()) * Math.pow(skew, 0.6))
+      const lag = r < 0.62 ? 0 : r < 0.82 ? 1 : r < 0.92 ? 2 : Math.floor(3 + rnd() * 4)
+      const currentVersion = Math.max(1, latest - lag)
+      // 身份三件套：种子机器优先取运行态画像；池机器确定性生成（~75% 有玩家名，模拟未上报比例）。
+      const seed = runtimeById.get(`${ch}|${machineId}`)
+      const hasPlayer = !!seed || rnd() < 0.75
+      const playerName = seed?.playerName ?? (hasPlayer ? MOCK_PLAYER_NAMES[Math.floor(rnd() * MOCK_PLAYER_NAMES.length)] + (rnd() < 0.4 ? String(Math.floor(rnd() * 99)) : '') : '')
+      const installId = `inst-${Math.floor(rnd() * 0xffff).toString(16).padStart(4, '0')}${Math.floor(rnd() * 0xffff).toString(16).padStart(4, '0')}`
+      const ip = seed?.ip ?? `203.0.${Math.floor(rnd() * 255)}.${Math.floor(rnd() * 254) + 1}`
+      out.push({
+        machineId,
+        channelId: ch,
+        updates,
+        lastUpdateAt: lastTs.toISOString(),
+        latestVersion: latest,
+        currentVersion,
+        versionLag: latest - currentVersion,
+        downloadBytes: updates * Math.round(2_000_000 + rnd() * 30_000_000),
+        playerName,
+        installId,
+        ip,
+      })
+    }
+  }
+  return out
+}
+
+interface MockMachineEvent {
+  ts: string
+  version: number
+  result: 'success' | 'fail-static' | 'rollback' | 'error'
+  bytes: number
+  durationMs: number
+}
+
+/** 单机器更新事件时间线：updates 次事件确定性散布在窗口内，结果比例 90/5/3/2。 */
+function buildMachineEvents(machineId: string, channelId: string, from: Date, to: Date): MockMachineEvent[] {
+  const summaries = buildMachineSummaries(channelId, from, to)
+  const mine = summaries.find((m) => m.machineId === machineId)
+  if (!mine) return []
+  const rnd = mulberry32(hashSeed(`events|${machineId}|${from.toISOString()}`))
+  const events: MockMachineEvent[] = []
+  for (let i = 0; i < mine.updates; i++) {
+    const ts = new Date(from.getTime() + (to.getTime() - from.getTime()) * (rnd() * 0.94 + 0.03))
+    const r = rnd()
+    const result: MockMachineEvent['result'] = r < 0.9 ? 'success' : r < 0.95 ? 'fail-static' : r < 0.98 ? 'rollback' : 'error'
+    events.push({
+      ts: ts.toISOString(),
+      version: Math.max(1, mine.currentVersion - Math.floor(rnd() * 3) + (result === 'success' ? 1 : 0)),
+      result,
+      bytes: Math.round(1_500_000 + rnd() * 28_000_000),
+      durationMs: Math.round(600 + rnd() * 9_000),
+    })
+  }
+  return events.sort((a, b) => b.ts.localeCompare(a.ts))
 }
 
 function buildErrorSummary(channelId: string) {
@@ -527,8 +800,8 @@ function buildErrorSummary(channelId: string) {
     counts.set(code, (counts.get(code) ?? 0) + 1)
   }
   return {
-    from: '2026-06-21T00:00:00Z',
-    to: '2026-06-28T23:59:59Z',
+    from: T('2026-06-21T00:00:00Z'),
+    to: T('2026-06-28T23:59:59Z'),
     topErrors: [...counts.entries()]
       .map(([errCode, count]) => ({ errCode, count }))
       .sort((a, b) => b.count - a.count || a.errCode.localeCompare(b.errCode))
@@ -549,7 +822,7 @@ function buildErrorSummary(channelId: string) {
 
 function buildRealtime(channelId: string) {
   const rows = distEvents.list((e) => !channelId || e.channelId === channelId)
-  const summaryRows = rows.filter((e) => e.createdAt >= '2026-06-28T09:05:00Z')
+  const summaryRows = rows.filter((e) => e.createdAt >= T('2026-06-28T09:05:00Z'))
   const byHour = new Map<string, { ts: string; manifest: number; artifact: number; error: number }>()
   const ips = new Map<string, number>()
   const machines = new Set<string>()
@@ -596,21 +869,21 @@ function buildRuntimeOverview(channelId: string, range: string) {
   const latest = new Map<string, number>()
   for (const row of rows) latest.set(row.channelId, Math.max(latest.get(row.channelId) ?? 0, row.localVersion))
   const updateResultSeries = [
-    { ts: '2026-06-27T00:00:00Z', success: 6, failStatic: 1, rolledBack: 0, error: 1 },
-    { ts: '2026-06-28T00:00:00Z', success: 8, failStatic: 0, rolledBack: 1, error: 1 },
+    { ts: T('2026-06-27T00:00:00Z'), success: 6, failStatic: 1, rolledBack: 0, error: 1 },
+    { ts: T('2026-06-28T00:00:00Z'), success: 8, failStatic: 0, rolledBack: 1, error: 1 },
   ]
   const total = updateResultSeries.reduce((sum, p) => sum + p.success + p.failStatic + p.rolledBack + p.error, 0)
   const success = updateResultSeries.reduce((sum, p) => sum + p.success, 0)
   const failure = updateResultSeries.reduce((sum, p) => sum + p.failStatic + p.error, 0)
   return {
     channelId,
-    from: range === '24h' ? '2026-06-27T10:00:00Z' : '2026-06-21T10:00:00Z',
-    to: '2026-06-28T10:00:00Z',
+    from: range === '24h' ? T('2026-06-27T10:00:00Z') : T('2026-06-21T10:00:00Z'),
+    to: T('2026-06-28T10:00:00Z'),
     summary: {
-      recentStarted: rows.filter((s) => s.lastHeartbeatAt >= '2026-06-28T10:00:00Z').length,
-      todayStarted: rows.filter((s) => s.lastHeartbeatAt >= '2026-06-28T00:00:00Z').length,
-      recentStarts: rows.filter((s) => s.lastHeartbeatAt >= '2026-06-28T10:00:00Z').length,
-      todayStarts: rows.filter((s) => s.lastHeartbeatAt >= '2026-06-28T00:00:00Z').length,
+      recentStarted: rows.filter((s) => s.lastHeartbeatAt >= T('2026-06-28T10:00:00Z')).length,
+      todayStarted: rows.filter((s) => s.lastHeartbeatAt >= T('2026-06-28T00:00:00Z')).length,
+      recentStarts: rows.filter((s) => s.lastHeartbeatAt >= T('2026-06-28T10:00:00Z')).length,
+      todayStarts: rows.filter((s) => s.lastHeartbeatAt >= T('2026-06-28T00:00:00Z')).length,
       updateSuccessRate: total > 0 ? success / total : 0,
       updateFailureRate: total > 0 ? failure / total : 0,
     },
@@ -696,7 +969,7 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     const body = (await info.request.json()) as { channelId: string; name: string; description?: string }
-    const now = '2026-06-28T00:00:00Z'
+    const now = T('2026-06-28T00:00:00Z')
     const ch = channels.insert({
       channelId: body.channelId,
       name: body.name,
@@ -735,7 +1008,7 @@ export const handlers = [
       revoked: false,
       expiresAt: body.expiresAt ?? null,
       lastUsedAt: null,
-      createdAt: '2026-06-28T00:00:00Z',
+      createdAt: T('2026-06-28T00:00:00Z'),
       revealable: true,
     })
     return HttpResponse.json({ ...keyToMeta(k), key: plain }, { status: 201 })
@@ -990,7 +1263,7 @@ export const handlers = [
       version: nextVersion,
       note: body.note ?? '',
       createdBy: 1,
-      createdAt: '2026-06-28T00:00:00Z',
+      createdAt: T('2026-06-28T00:00:00Z'),
       managedDirs: body.managedDirs,
       cleanExclude: body.cleanExclude,
       files: body.files,
@@ -1015,7 +1288,7 @@ export const handlers = [
       version: nextVersion,
       note: body.note ?? `回滚自 v${body.sourceVersion}`,
       createdBy: 1,
-      createdAt: '2026-06-28T00:00:00Z',
+      createdAt: T('2026-06-28T00:00:00Z'),
       managedDirs: src.managedDirs,
       files: src.files,
       agent: src.agent,
@@ -1063,6 +1336,7 @@ export const handlers = [
       'stats-summary': 'channelId,from,to,manifestPulls,artifactPulls,downloadBytes,activeMachines\nall,2026-06-21T00:00:00Z,2026-06-28T00:00:00Z,12,34,4096,3\n',
       'dist-events': 'id,channelId,machineId,playerName,ip,kind,status,errCode,createdAt\n1,skyblock-s1,m-aaaa…aaaa,Alex,203.0.113.1,manifest,200,,2026-06-28T10:00:00Z\n',
       'security-logs': 'id,type,title,channelId,machineId,installId,playerName,ip,status,errCode,createdAt,detail\nhello:1,hello,安全画像上报,skyblock-s1,m-aaaa…aaaa,instal…0001,Alex,203.0.113.1,accepted,,2026-06-28T10:00:00Z,{}\n',
+      'machine-updates': 'machineId,playerName,installId,ip,channelId,updates,lastUpdateAt,latestVersion,currentVersion,versionLag,downloadBytes\nm-3f9a2c71,Grian,inst-3f9a2c71,203.0.10.5,skyblock-s1,34,2026-06-27T21:04:00Z,33,33,0,412000000\n',
     }
     const csv = csvByKind[kind]
     if (!csv) return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'kind 非法' }, { status: 400 })
@@ -1085,14 +1359,65 @@ export const handlers = [
   }),
 
   // 客户端分发观测（FR-217，消费方含 FR-220 平台统计页）：跨频道/单频道汇总 + 分布。
+  // FR-425/428：支持任意 from/to（RFC3339）+ summary.compare（前一等长窗口同环比）。
   // 平台管理员端点；mock 默认用户 role=10，requireAuth 即可放行（真后端按 role 403）。
   domainRoute('get', '/client-dist/observability', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
     const channelId = url.searchParams.get('channelId') ?? ''
-    const range = url.searchParams.get('range') ?? '7d'
-    return HttpResponse.json(buildObservability(channelId, range))
+    const win = parseObsWindow(url)
+    return HttpResponse.json(buildObservability(channelId, win.from, win.to))
+  }),
+
+  // 机器级更新清单（FR-426）：按频道+窗口聚合每台机器的更新次数/最近更新/版本滞后。
+  // 明细窗（14 天）内 exact=true；超窗由小时桶近似（mock 恒按生成数据精确，字段语义对齐真后端）。
+  domainRoute('get', '/client-dist/machines', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const channelId = url.searchParams.get('channelId') ?? ''
+    const win = parseObsWindow(url)
+    const sort = url.searchParams.get('sort') ?? 'updates'
+    const order = url.searchParams.get('order') ?? 'desc'
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? 1))
+    const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? 20)))
+    const machines = buildMachineSummaries(channelId, win.from, win.to)
+    machines.sort((a, b) => {
+      const dir = order === 'asc' ? 1 : -1
+      if (sort === 'lastUpdateAt') return a.lastUpdateAt.localeCompare(b.lastUpdateAt) * dir
+      if (sort === 'versionLag') return (a.versionLag - b.versionLag) * dir
+      return (a.updates - b.updates) * dir
+    })
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({
+      channelId,
+      from: win.from.toISOString(),
+      to: win.to.toISOString(),
+      exact: true,
+      total: machines.length,
+      page,
+      pageSize,
+      items: machines.slice(start, start + pageSize),
+    })
+  }),
+
+  // 单机器更新事件时间线（FR-426 钻取）。
+  domainRoute('get', '/client-dist/machines/:machineId/events', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const machineId = decodeURIComponent(info.params.machineId as string)
+    const channelId = url.searchParams.get('channelId') ?? ''
+    const win = parseObsWindow(url)
+    const items = buildMachineEvents(machineId, channelId, win.from, win.to)
+    return HttpResponse.json({
+      machineId,
+      channelId,
+      from: win.from.toISOString(),
+      to: win.to.toISOString(),
+      items,
+    })
   }),
 
   // 客户端分发安全（FR-264）：mock 模式下提供最小可验收数据。
@@ -1125,10 +1450,10 @@ export const handlers = [
     const items = [
       ...runtimeStates.list().map((s) => ({ id: `runtime:${s.id}`, type: 'runtime', title: '运行态心跳', channelId: s.channelId, machineId: s.machineId, playerName: s.playerName, ip: s.ip, status: s.coreVersion, createdAt: s.lastHeartbeatAt, detail: { platform: s.platform, javaVersion: s.javaVersion, launcher: s.launcher, localVersion: s.localVersion } })),
       ...distEvents.list().map((e) => ({ id: `request:${e.id}`, type: 'request', title: e.kind, channelId: e.channelId, machineId: e.machineId, playerName: '', ip: e.ip, status: String(e.status), errCode: e.errCode, createdAt: e.createdAt, detail: { path: e.path, bytes: e.bytes, requestHeaders: e.requestHeaders } })),
-      { id: 'hello:1', type: 'hello', title: '安全画像上报', channelId: 'skyblock-s1', machineId: 'm-aaaa', playerName: 'Alex', ip: '203.0.113.1', status: 'accepted', createdAt: '2026-06-28T10:06:00Z', detail: { installId: 'install-a', keyPrefix: 'jmck_ab12' } },
-      { id: 'telemetry:1', type: 'telemetry', title: '更新遥测', channelId: 'skyblock-s1', machineId: 'm-aaaa', playerName: 'Alex', ip: '203.0.113.1', status: 'success', createdAt: '2026-06-28T10:07:00Z', detail: { fromVersion: 1, toVersion: 2, durationMs: 830 } },
-      { id: 'risk:1', type: 'risk', title: 'INVALID_PLAYER_NAME', channelId: 'survival-s2', machineId: 'm-dddd', playerName: 'Herobrine', ip: '203.0.113.20', status: 'low', errCode: 'INVALID_PLAYER_NAME', createdAt: '2026-06-28T10:08:00Z', detail: { reason: '玩家名异常' } },
-      { id: 'action:1', type: 'action', title: 'temp_block', channelId: '', machineId: '', playerName: '', ip: '203.0.113.20', status: 'active', createdAt: '2026-06-28T10:09:00Z', detail: { targetType: 'ip', targetValue: '203.0.113.20', reason: '异常拉取' } },
+      { id: 'hello:1', type: 'hello', title: '安全画像上报', channelId: 'skyblock-s1', machineId: 'm-aaaa', playerName: 'Alex', ip: '203.0.113.1', status: 'accepted', createdAt: T('2026-06-28T10:06:00Z'), detail: { installId: 'install-a', keyPrefix: 'jmck_ab12' } },
+      { id: 'telemetry:1', type: 'telemetry', title: '更新遥测', channelId: 'skyblock-s1', machineId: 'm-aaaa', playerName: 'Alex', ip: '203.0.113.1', status: 'success', createdAt: T('2026-06-28T10:07:00Z'), detail: { fromVersion: 1, toVersion: 2, durationMs: 830 } },
+      { id: 'risk:1', type: 'risk', title: 'INVALID_PLAYER_NAME', channelId: 'survival-s2', machineId: 'm-dddd', playerName: 'Herobrine', ip: '203.0.113.20', status: 'low', errCode: 'INVALID_PLAYER_NAME', createdAt: T('2026-06-28T10:08:00Z'), detail: { reason: '玩家名异常' } },
+      { id: 'action:1', type: 'action', title: 'temp_block', channelId: '', machineId: '', playerName: '', ip: '203.0.113.20', status: 'active', createdAt: T('2026-06-28T10:09:00Z'), detail: { targetType: 'ip', targetValue: '203.0.113.20', reason: '异常拉取' } },
     ].filter((item) => (!type || item.type === type) && (!playerName || item.playerName === playerName))
     return HttpResponse.json({ items, total: items.length, page: 1, pageSize: 100 })
   }),
@@ -1136,7 +1461,7 @@ export const handlers = [
   domainRoute('get', '/client-dist/security/events', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    return HttpResponse.json([{ id: 1, subjectType: 'client', subjectValue: 'install-a', channelId: 'survival-s2', machineId: 'm-dddd', installId: 'install-a', playerName: 'Herobrine', ip: '203.0.113.20', keyId: 1, keyPrefix: 'jmck_ab12', ruleCode: 'INVALID_PLAYER_NAME', severity: 'warn', scoreDelta: 1, action: 'observe', reason: '玩家名异常', createdAt: '2026-06-28T10:08:00Z' }])
+    return HttpResponse.json([{ id: 1, subjectType: 'client', subjectValue: 'install-a', channelId: 'survival-s2', machineId: 'm-dddd', installId: 'install-a', playerName: 'Herobrine', ip: '203.0.113.20', keyId: 1, keyPrefix: 'jmck_ab12', ruleCode: 'INVALID_PLAYER_NAME', severity: 'warn', scoreDelta: 1, action: 'observe', reason: '玩家名异常', createdAt: T('2026-06-28T10:08:00Z') }])
   }),
 
   domainRoute('get', '/client-dist/security/profiles', (info) => {
@@ -1206,7 +1531,7 @@ export const handlers = [
   domainRoute('get', '/client-dist/security/ip-analysis', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    return HttpResponse.json(rankBy(distEvents.list(), 'ip').map((r) => ({ ip: r.subject, requestCount: r.count, rejectCount: r.subject === '203.0.113.20' ? 1 : 0, invalidKeyCount: 0, notFoundCount: 0, rangeCount: 1, downloadBytes: r.bytes ?? 0, keyCount: 1, channelCount: 1, riskScore: 1, blocked: r.subject === '203.0.113.20', lastSeen: '2026-06-28T10:09:00Z' })))
+    return HttpResponse.json(rankBy(distEvents.list(), 'ip').map((r) => ({ ip: r.subject, requestCount: r.count, rejectCount: r.subject === '203.0.113.20' ? 1 : 0, invalidKeyCount: 0, notFoundCount: 0, rangeCount: 1, downloadBytes: r.bytes ?? 0, keyCount: 1, channelCount: 1, riskScore: 1, blocked: r.subject === '203.0.113.20', lastSeen: T('2026-06-28T10:09:00Z') })))
   }),
 
   domainRoute('get', '/client-dist/security/player-analysis', (info) => {
@@ -1215,16 +1540,178 @@ export const handlers = [
     return HttpResponse.json(runtimeStates.list().map((s) => ({ playerName: s.playerName, installCount: 1, machineCount: 1, ipCount: 1, keyCount: 1, channelCount: 1, downloadBytes: 2048, abnormalRequests: s.playerName === 'Herobrine' ? 1 : 0, riskScore: s.playerName === 'Herobrine' ? 1 : 0, lastSeen: s.lastHeartbeatAt })))
   }),
 
+  // ── 安全处置：动作流水 + 分组（可写 mock，支撑处置按钮/模态） ──
   domainRoute('get', '/client-dist/security/actions', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    return HttpResponse.json([{ id: 1, targetType: 'ip', targetValue: '203.0.113.20', channelId: '', action: 'temp_block', status: 'active', reason: '异常拉取', auto: false, expiresAt: '2026-06-28T11:09:00Z', createdBy: 1, createdAt: '2026-06-28T10:09:00Z', updatedAt: '2026-06-28T10:09:00Z' }])
+    const url = new URL(info.request.url)
+    const targetType = url.searchParams.get('targetType') ?? ''
+    const status = url.searchParams.get('status') ?? ''
+    const channelId = url.searchParams.get('channelId') ?? ''
+    const q = (url.searchParams.get('q') ?? '').toLowerCase()
+    let rows = protectionActions.list()
+    if (targetType) rows = rows.filter((a) => a.targetType === targetType)
+    if (status) rows = rows.filter((a) => a.status === status)
+    if (channelId) rows = rows.filter((a) => a.channelId === channelId)
+    if (q) {
+      rows = rows.filter(
+        (a) =>
+          a.targetValue.toLowerCase().includes(q) ||
+          a.action.toLowerCase().includes(q) ||
+          (a.reason || '').toLowerCase().includes(q),
+      )
+    }
+    const limit = Number(url.searchParams.get('limit') ?? 200) || 200
+    return HttpResponse.json(rows.slice(0, Math.min(limit, 500)))
+  }),
+
+  domainRoute('post', '/client-dist/security/ip-blocks', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json().catch(() => ({}))) as {
+      ip?: string
+      channelId?: string
+      reason?: string
+      durationMinutes?: number
+    }
+    const ip = (body.ip ?? '').trim()
+    if (!ip) return HttpResponse.json({ error: 'INVALID_IP', message: 'IP 必填' }, { status: 400 })
+    const minutes = Number(body.durationMinutes) || 30
+    const now = new Date()
+    const row = protectionActions.insert({
+      id: Date.now(),
+      targetType: 'ip',
+      targetValue: ip,
+      channelId: body.channelId ?? '',
+      action: 'temp_block',
+      status: 'active',
+      reason: body.reason || '手动安全处置',
+      auto: false,
+      expiresAt: new Date(now.getTime() + minutes * 60_000).toISOString(),
+      createdBy: 1,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    })
+    return HttpResponse.json(row, { status: 201 })
+  }),
+
+  domainRoute('post', '/client-dist/security/ip-blocks/:id/cancel', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = protectionActions.find((a) => a.id === id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '动作不存在' }, { status: 404 })
+    const updated = protectionActions.update(id, { status: 'canceled', updatedAt: new Date().toISOString() })
+    return HttpResponse.json(updated)
+  }),
+
+  domainRoute('post', '/client-dist/security/keys/:id/state', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json().catch(() => ({}))) as { state?: string; reason?: string }
+    const now = new Date().toISOString()
+    const row = protectionActions.insert({
+      id: Date.now(),
+      targetType: 'key',
+      targetValue: String(info.params.id),
+      channelId: '',
+      action: 'key_state',
+      status: 'active',
+      reason: body.reason || `状态调整为 ${body.state || 'observe'}`,
+      auto: false,
+      expiresAt: null,
+      createdBy: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+    return HttpResponse.json(row, { status: 201 })
+  }),
+
+  domainRoute('put', '/client-dist/security/channels/:id/protection', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json().catch(() => ({}))) as { mode?: string; reason?: string; retryAfterSeconds?: number }
+    const now = new Date().toISOString()
+    const row = protectionActions.insert({
+      id: Date.now(),
+      targetType: 'channel',
+      targetValue: String(info.params.id),
+      channelId: String(info.params.id),
+      action: `protect_${body.mode || 'throttle'}`,
+      status: 'active',
+      reason: body.reason || '频道防护',
+      auto: false,
+      expiresAt: null,
+      createdBy: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+    return HttpResponse.json(row, { status: 201 })
+  }),
+
+  domainRoute('delete', '/client-dist/security/channels/:id/protection', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const channelId = String(info.params.id)
+    protectionActions.list().forEach((a) => {
+      if (a.targetType === 'channel' && a.targetValue === channelId && a.status === 'active') {
+        protectionActions.update(a.id, { status: 'canceled', updatedAt: new Date().toISOString() })
+      }
+    })
+    return new HttpResponse(null, { status: 204 })
   }),
 
   domainRoute('get', '/client-dist/security/groups', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    return HttpResponse.json([{ id: 1, name: '高风险 IP', kind: 'manual', targetType: 'ip', enabled: true, createdBy: 1, createdAt: '2026-06-28T10:00:00Z', updatedAt: '2026-06-28T10:00:00Z' }])
+    return HttpResponse.json(securityGroups.list())
+  }),
+
+  domainRoute('post', '/client-dist/security/groups', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json().catch(() => ({}))) as {
+      name?: string
+      kind?: string
+      targetType?: string
+      enabled?: boolean
+    }
+    const name = (body.name ?? '').trim()
+    if (!name) return HttpResponse.json({ error: 'INVALID_NAME', message: '名称必填' }, { status: 400 })
+    const now = new Date().toISOString()
+    const row = securityGroups.insert({
+      id: Date.now(),
+      name,
+      kind: body.kind || 'manual',
+      targetType: body.targetType || 'ip',
+      enabled: body.enabled ?? true,
+      createdBy: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+    return HttpResponse.json(row, { status: 201 })
+  }),
+
+  domainRoute('put', '/client-dist/security/groups/:id', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const body = (await info.request.json().catch(() => ({}))) as Record<string, unknown>
+    const row = securityGroups.find((g) => g.id === id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '分组不存在' }, { status: 404 })
+    const updated = securityGroups.update(id, { ...body, updatedAt: new Date().toISOString() } as never)
+    return HttpResponse.json(updated)
+  }),
+
+  domainRoute('delete', '/client-dist/security/groups/:id', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    if (!securityGroups.find((g) => g.id === id)) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '分组不存在' }, { status: 404 })
+    }
+    securityGroups.remove(id)
+    return new HttpResponse(null, { status: 204 })
   }),
 
   // 运行态启动心跳（FR-265）：mock 接收后 upsert 运行态，避免端点 404。
@@ -1365,13 +1852,13 @@ export const handlers = [
         displayVersion: '0.1.0-SNAPSHOT+abc123def456.dirty',
         gitCommit: 'abc123def456',
         dirty: true,
-        buildTime: '2026-07-01T09:55:00Z',
+        buildTime: T('2026-07-01T09:55:00Z'),
         sha256: 'a'.repeat(64),
         size: 1_048_576,
-        createdAt: '2026-07-01T10:00:00Z',
+        createdAt: T('2026-07-01T10:00:00Z'),
         selected: true,
       },
-      { version: 1, sha256: 'b'.repeat(64), size: 1_024_000, createdAt: '2026-06-28T10:00:00Z', selected: false },
+      { version: 1, sha256: 'b'.repeat(64), size: 1_024_000, createdAt: T('2026-06-28T10:00:00Z'), selected: false },
     ])
   }),
 
@@ -1447,7 +1934,7 @@ export const handlers = [
   // 静态资源端点（非 /api/v1，前端用原生 fetch）：用裸 http.get 注册到 licenses.json。
   http.get('*/licenses.json', () =>
     HttpResponse.json({
-      generatedAt: '2026-06-28T00:00:00Z',
+      generatedAt: T('2026-06-28T00:00:00Z'),
       dependencies: [
         {
           name: 'react',

@@ -21,12 +21,19 @@ export default function PageBreadcrumb({ leaf }: { leaf?: string }) {
     return <h1 className="min-w-0 truncate text-sm font-semibold">{t('header.console')}</h1>
   }
 
-  // 末级是否为 leaf：有 leaf 则 leaf 是末级、轨迹全部可点（页面节点已带 to）。
-  const items: Array<{ key: string; text: string; to?: string }> = trail.map((c, i) => ({
-    key: `${c.labelKey}-${i}`,
-    text: t(c.labelKey),
-    to: c.to,
-  }))
+  // 末级是否为 leaf：有 leaf 则 leaf 是末级、页面节点可点回列表。
+  // 路径态详情（如 /instances/:id）breadcrumbTrail 已自带 to；query 态详情（如 /client-channels?channelId=）
+  // pathname 无更深段，需按首段合成列表路径，否则「域 › 页面 › 名」里页面节点点不回去。
+  const firstSeg = pathname.split('/').filter(Boolean)[0]
+  const listPath = firstSeg ? `/${firstSeg}` : '/'
+  const items: Array<{ key: string; text: string; to?: string }> = trail.map((c, i) => {
+    const isPageNode = i === trail.length - 1
+    return {
+      key: `${c.labelKey}-${i}`,
+      text: t(c.labelKey),
+      to: c.to ?? (leaf && isPageNode ? listPath : undefined),
+    }
+  })
   if (leaf) items.push({ key: 'leaf', text: leaf })
 
   const lastIdx = items.length - 1

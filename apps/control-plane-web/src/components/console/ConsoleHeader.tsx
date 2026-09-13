@@ -1,12 +1,13 @@
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useLocation, useNavigate } from 'react-router'
+import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Bell, Boxes, ListChecks, Loader2, LogOut, PanelLeftClose, RotateCw, Search, Server, UserRound, Users } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import { useInstance, useInstanceAggregate, useSearchInstances, type InstanceInfo } from '@/api/instances'
+import { useClientChannel } from '@/api/clientChannels'
 import { useNodes } from '@/api/nodes'
 import { useInstanceMetrics, useMetricOverview } from '@/api/metrics'
 import { useTasks, isTerminalTask, TASK_KIND_LABEL_KEYS, type Task } from '@/api/tasks'
@@ -110,17 +111,29 @@ function BrandSegment() {
 
 /**
  * 左侧面包屑（FR-134 + FR-162）：打开实例工作区时末级补实例名（域›实例›名称），
+ * 打开频道工作台（query 态 /client-channels?channelId=）时补频道名；
  * 否则按路由渲染「域 › 页面」轨迹。统一页头组件 `PageBreadcrumb` 承载。
  */
 function TitleArea() {
   const location = useLocation()
+  const [searchParams] = useSearchParams()
   const routeInstanceId = Number(location.pathname.match(/^\/instances\/(\d+)/)?.[1] ?? 0)
   const activeInstanceId = routeInstanceId > 0 ? routeInstanceId : null
   const { data: openInst } = useInstance(activeInstanceId ?? 0)
+
+  // 频道工作台用 query 切入，pathname 仍停在列表；仅精确匹配列表路由，避免误吃 publish 等子路径。
+  const channelSlug =
+    location.pathname === '/client-channels'
+      ? (searchParams.get('channelId') || searchParams.get('channel') || '').trim() || null
+      : null
+  const { data: openChannel } = useClientChannel(channelSlug)
+
+  // 仅在实例路由下采用实例名，避免 useInstance(0) 缓存/mock 污染其它页 leaf。
+  const instanceLeaf = activeInstanceId ? openInst?.name : undefined
   // min-w-0 让面包屑可截断，避免长轨迹把右侧操作区挤出页眉（窄屏防翻屏）。
   return (
     <div className="min-w-0 flex-1">
-      <PageBreadcrumb leaf={openInst?.name} />
+      <PageBreadcrumb leaf={instanceLeaf ?? openChannel?.name} />
     </div>
   )
 }

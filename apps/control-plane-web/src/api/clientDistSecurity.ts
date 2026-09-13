@@ -199,6 +199,10 @@ export interface ClientDistSecurityListParams {
   limit?: number
   page?: number
   pageSize?: number
+  /** 处置流水服务端筛选（S2.5）。 */
+  targetType?: SecurityTargetType
+  status?: ProtectionActionStatus
+  q?: string
 }
 
 export interface BlockIPRequest {

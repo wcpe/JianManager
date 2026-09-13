@@ -3,14 +3,13 @@ import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
+  ArrowLeft,
   ArrowRight,
   Ban,
   Check,
-  ChevronLeft,
   Copy,
   DownloadCloud,
   Eye,
-  KeyRound,
   Pencil,
   Plus,
   ShieldAlert,
@@ -125,9 +124,7 @@ export default function ClientChannelsPage() {
     <div data-page="client-channels" className="jm-page-stack space-y-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="jm-page-title flex items-center gap-2">
-            <DownloadCloud className="size-6" /> {t('clientChannels.title', '客户端分发')}
-          </h1>
+          <h1 className="jm-page-title">{t('nav.clientChannels')}</h1>
           <p className="jm-page-subtitle">
             {t('clientChannels.subtitle', '管理客户端分发频道与拉取密钥。每服一个频道，密钥用于玩家侧更新器拉取。')}
           </p>
@@ -348,6 +345,7 @@ function CreateChannelDialog({
 /**
  * 频道工作台：顶部就绪度步骤器（状态由 keyCount/currentVersion 推导）+
  * 密钥 / 版本 / 统计 / 接入指引 分段。取代原 ChannelDetail，全程模态化。
+ * 频道名由顶栏面包屑末级承载（ConsoleHeader leaf）；返回仍给页内显式按钮，避免只靠面包屑。
  */
 function riskBadgeVariant(level?: SecurityLevel): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (level === 'critical' || level === 'high') return 'destructive'
@@ -361,7 +359,7 @@ function ChannelSecuritySummaryBar({ channelId }: { channelId: string }) {
   const [searchParams] = useSearchParams()
   const { data, isError, isLoading } = useClientChannelSecuritySummary(channelId)
   const summary = data as ClientChannelSecuritySummary | undefined
-  const securityHref = buildClientDistHref('/client-dist-security', searchParams, { channelId, tab: 'logs' })
+  const securityHref = buildClientDistHref('/client-dist-ops', searchParams, { channelId, tab: 'logs' })
 
   return (
     <div
@@ -445,19 +443,15 @@ function ChannelWorkbench({
   return (
     <div data-page="client-channel-workbench" className="jm-page-stack space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          <button
-            className="text-muted-foreground hover:text-foreground"
-            onClick={onBack}
-            aria-label={t('common.back', '返回')}
-          >
-            <ChevronLeft className="size-5" />
-          </button>
-          <div>
-            <h1 className="jm-page-title flex items-center gap-2">
-              <KeyRound className="size-5" /> {detail?.name ?? channelId}
-            </h1>
-            <p className="text-xs text-muted-foreground font-mono mt-1">{channelId}</p>
+        {/* 面包屑表达层级；返回仍给页内显式入口（纯面包屑不够直观）。 */}
+        <div className="flex min-w-0 items-center gap-3">
+          <Button variant="ghost" size="sm" className="shrink-0 -ml-1.5 text-muted-foreground" onClick={onBack}>
+            <ArrowLeft className="size-4" />
+            {t('clientChannels.backToList', '返回列表')}
+          </Button>
+          <div className="min-w-0">
+            <h1 className="sr-only">{detail?.name ?? channelId}</h1>
+            <p className="text-xs text-muted-foreground font-mono truncate">{channelId}</p>
           </div>
         </div>
         <button

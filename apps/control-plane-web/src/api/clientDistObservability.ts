@@ -58,6 +58,19 @@ export interface ObservabilityLagDist {
   count: number
 }
 
+/** FR-428：前一等长窗口的同环比基数（缺省=后端未升级，前端不渲染同环比）。 */
+export interface ObservabilityCompare {
+  manifestPulls: number
+  artifactPulls: number
+  downloadBytes: number
+  updateTotal: number
+  updateSuccess: number
+  updateFailStatic: number
+  updateRolledBack: number
+  updateError: number
+  activeMachines: number
+}
+
 /** 客户端分发观测视图（FR-217，见 ADR-049）。channelId 省略=跨频道总。 */
 export interface ClientDistObservability {
   channelId: string
@@ -65,22 +78,35 @@ export interface ClientDistObservability {
   to: string
   series: ObservabilitySeriesPoint[]
   summary: ObservabilitySummary
+  /** FR-428：前一等长窗口同环比基数（缺省=后端未升级，前端不渲染同环比）。 */
+  compare?: ObservabilityCompare
   versionDist: ObservabilityVersionDist[]
   platformDist: ObservabilityPlatformDist[]
   lagDist: ObservabilityLagDist[]
 }
+
+/** FR-425：观测窗口 = 预设档 或 任意起止（RFC3339，后端 parseObsRange 已支持）。 */
+export type ObservabilityWindow = { range: ObservabilityRange } | { from: string; to: string }
 
 /**
  * 客户端分发观测时序 + 分布 + 汇总（FR-217）。
  * 频道工作台统计 Tab（FR-219）传 channelId 取单频道；observability 监控页（FR-218）省略取总。
  * 与 FR-095 `/client-dist/stats`（按日看板）并存：本端点提供小时级时序 + 平台/滞后维度。
  */
-export function useClientDistObservability(channelId: string | null, range: ObservabilityRange) {
+export function useClientDistObservability(channelId: string | null, window: ObservabilityWindow | ObservabilityRange = { range: '7d' }) {
+  // 兼容旧调用形态（裸 '7d' 字符串）与新对象形态 { range } | { from, to }。
+  const w: ObservabilityWindow = typeof window === 'string' ? { range: window } : window
+  const from = 'from' in w ? w.from : undefined
+  const to = 'to' in w ? w.to : undefined
+  const range = 'range' in w ? w.range : undefined
   return useQuery({
-    queryKey: ['client-dist-observability', channelId, range],
+    queryKey: ['client-dist-observability', channelId, range ?? '', from ?? '', to ?? ''],
     queryFn: async () => {
       const { data } = await api.get<ClientDistObservability>('/client-dist/observability', {
-        params: { channelId, range },
+        params: {
+          ...(channelId ? { channelId } : {}),
+          ...(from && to ? { from, to } : { range: range ?? '7d' }),
+        },
       })
       return data
     },

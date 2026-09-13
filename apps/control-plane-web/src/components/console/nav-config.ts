@@ -90,7 +90,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/monitor', labelKey: 'nav.monitoring', icon: Activity },
       { to: '/logs', labelKey: 'nav.logs', icon: ScrollText },
       { to: '/statistics', labelKey: 'nav.statistics', icon: BarChart3 },
-      { to: '/client-dist-monitor', labelKey: 'nav.clientDistMonitor', icon: DownloadCloud },
     ],
   },
   {
@@ -99,12 +98,12 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Settings,
     sections: [
       {
-        // 模板 / 客户端频道 / 分发安全
+        // 模板 / 客户端频道 / 客户端分发运维（FR-430：分发安全入口并入运维页）
         labelKey: 'nav.contentDistribution',
         children: [
           { to: '/templates', labelKey: 'nav.templates', icon: LayoutTemplate },
           { to: '/client-channels', labelKey: 'nav.clientChannels', icon: DownloadCloud },
-          { to: '/client-dist-security', labelKey: 'nav.clientDistSecurity', icon: ShieldCheck },
+          { to: '/client-dist-ops', labelKey: 'nav.clientDistOps', icon: ShieldCheck },
         ],
       },
       {

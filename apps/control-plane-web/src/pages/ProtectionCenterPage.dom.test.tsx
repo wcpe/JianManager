@@ -9,6 +9,10 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { useAuthStore } from '@/stores/auth'
 import ProtectionCenterPage from './ProtectionCenterPage'
 
+/**
+ * 页面 B 安全侧行为（FR-264/430）：全量日志聚合视图、画像详情、事件行 DangerConfirm 写入门控。
+ * 页面已重写为「客户端分发运维」外壳；`data-page="client-dist-ops"`，Tab/路由均改新体系。
+ */
 function loginPlatformAdmin(): void {
   const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
   const token = `mock.${payload}.sig`
@@ -16,9 +20,9 @@ function loginPlatformAdmin(): void {
   useAuthStore.getState().login(token, 'test-refresh-token')
 }
 
-describe('ProtectionCenterPage', () => {
-  it('展示客户端分发安全标题并渲染全量日志详情', async () => {
-    loginMockUser('admin')
+describe('ProtectionCenterPage（页面 B · 安全侧）', () => {
+  it('展示「客户端分发运维」标题并渲染全量日志聚合视图', async () => {
+    loginPlatformAdmin()
     server.use(
       domainRoute('get', '/client-dist/security/overview', () => HttpResponse.json({
         activeDownloads: 0,
@@ -68,14 +72,13 @@ describe('ProtectionCenterPage', () => {
       })),
     )
 
-    const { container } = renderWithProviders(<ProtectionCenterPage />)
+    const { container } = renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops?tab=logs&type=all' })
 
-    expect(container.firstElementChild).toHaveAttribute('data-page', 'client-dist-security')
+    expect(container.firstElementChild).toHaveAttribute('data-page', 'client-dist-ops')
     expect(container.firstElementChild).toHaveClass('jm-page-stack')
-    expect(screen.getByRole('heading', { name: '客户端分发安全' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '客户端分发运维' })).toBeInTheDocument()
     expect(screen.getByRole('tablist')).toHaveClass('jm-toolbar-surface')
     expect(screen.queryByRole('tab', { name: '遥测告知' })).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('tab', { name: '日志详情' }))
 
     const table = await screen.findByRole('table')
     expect(within(table).getByText('Security Hello')).toBeInTheDocument()
@@ -84,22 +87,20 @@ describe('ProtectionCenterPage', () => {
     expect(within(table).getByText(/install-1/)).toBeInTheDocument()
   })
 
-  it('带 query 打开日志页时预填统一筛选并生成保留筛选的跨页链接', async () => {
+  it('带 query 打开全量日志时预填统一筛选并生成保留筛选的跨页链接', async () => {
     loginPlatformAdmin()
     renderWithProviders(<ProtectionCenterPage />, {
-      route: '/client-dist-security?channelId=skyblock-s1&ip=192.0.2.9&machineId=machine-1&errCode=RATE_SPIKE&version=3&tab=logs',
+      route: '/client-dist-ops?channelId=skyblock-s1&ip=192.0.2.9&machineId=machine-1&errCode=RATE_SPIKE&version=3&tab=logs&type=all',
     })
 
     expect(await screen.findByDisplayValue('skyblock-s1')).toBeInTheDocument()
     expect(screen.getByDisplayValue('192.0.2.9')).toBeInTheDocument()
     expect(screen.getByDisplayValue('machine-1')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '打开分发监控' })).toHaveAttribute(
-      'href',
-      '/client-dist-monitor?channelId=skyblock-s1&ip=192.0.2.9&machineId=machine-1&errCode=RATE_SPIKE&version=3&tab=logs',
-    )
+    // 页头「打开分发监控」按钮已随合并删除。
+    expect(screen.queryByRole('link', { name: '打开分发监控' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: '打开频道工作台' })).toHaveAttribute(
       'href',
-      '/client-channels?channelId=skyblock-s1&ip=192.0.2.9&machineId=machine-1&errCode=RATE_SPIKE&version=3&tab=stats',
+      '/client-channels?channelId=skyblock-s1&ip=192.0.2.9&machineId=machine-1&errCode=RATE_SPIKE&version=3&tab=stats&type=all',
     )
   })
 
@@ -132,7 +133,7 @@ describe('ProtectionCenterPage', () => {
       }),
     )
     const user = userEvent.setup()
-    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-security?tab=events' })
+    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops?tab=events' })
 
     await user.click(await screen.findByRole('button', { name: '封禁 IP' }))
     const dialog = await screen.findByRole('dialog')
@@ -176,7 +177,7 @@ describe('ProtectionCenterPage', () => {
       }),
     )
     const user = userEvent.setup()
-    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-security?tab=events' })
+    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops?tab=events' })
 
     await user.click(await screen.findByRole('button', { name: '改 key 态' }))
     const keyDialog = await screen.findByRole('dialog')
@@ -194,7 +195,7 @@ describe('ProtectionCenterPage', () => {
   })
 
   it('画像详情展示脱敏字段、环境信息与风险时间线', async () => {
-    loginMockUser('admin')
+    loginPlatformAdmin()
     const profile = {
       id: 1,
       channelId: 'skyblock-s1',
@@ -236,7 +237,7 @@ describe('ProtectionCenterPage', () => {
       })),
     )
     const user = userEvent.setup()
-    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-security?tab=profiles' })
+    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops?tab=profiles' })
 
     await user.click(await screen.findByRole('button', { name: '查看详情' }))
     const dialog = await screen.findByRole('dialog')

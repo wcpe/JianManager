@@ -74,6 +74,19 @@ export interface ClientDistObservabilitySummary {
   activeMachinesExact: boolean
 }
 
+/** FR-428：前一等长窗口的同环比基数（不含率值与 exact 标记；率由消费方现算）。 */
+export interface ClientDistObservabilityCompare {
+  manifestPulls: number
+  artifactPulls: number
+  downloadBytes: number
+  updateTotal: number
+  updateSuccess: number
+  updateFailStatic: number
+  updateRolledBack: number
+  updateError: number
+  activeMachines: number
+}
+
 /** 版本/平台/滞后分布项（区间内跨桶合并）。 */
 export interface ClientDistDistItem {
   version?: number
@@ -106,6 +119,8 @@ export interface ClientDistObservability {
   to: string
   series: ClientDistSeriesPoint[]
   summary: ClientDistObservabilitySummary
+  /** FR-428：前一等长窗口同环比基数（缺省=后端未升级，前端不渲染同环比）。 */
+  compare?: ClientDistObservabilityCompare
   versionDist: ClientDistDistItem[]
   platformDist: ClientDistDistItem[]
   lagDist: ClientDistDistItem[]
@@ -113,15 +128,21 @@ export interface ClientDistObservability {
 
 /**
  * 客户端分发观测（FR-217）：省略 channelId=跨频道总。
+ * FR-425/428：窗口支持预设 range 或任意 from/to（RFC3339，后端 parseObsRange 已支持）；summary.compare=前一等长窗口同环比。
  * **平台管理员**端点：非管理员返 403 → 调用方据 query error 局部降级（retry:false 让 403 快速失败、不重试）。
  */
-export function useClientDistObservability(params: { channelId?: string; range: string; enabled?: boolean }) {
-  const { channelId, range, enabled = true } = params
+export type ClientDistWindow = { range: string } | { from: string; to: string }
+
+export function useClientDistObservability(params: { channelId?: string; window?: ClientDistWindow; range?: string; enabled?: boolean }) {
+  const { channelId, window, range = '7d', enabled = true } = params
+  const from = window && 'from' in window ? window.from : undefined
+  const to = window && 'to' in window ? window.to : undefined
+  const effRange = window && 'range' in window ? window.range : range
   return useQuery({
-    queryKey: ['client-dist-observability', channelId ?? 'all', range],
+    queryKey: ['client-dist-observability', channelId ?? 'all', effRange, from ?? '', to ?? ''],
     queryFn: async () => {
       const { data } = await api.get<ClientDistObservability>('/client-dist/observability', {
-        params: { ...(channelId ? { channelId } : {}), range },
+        params: { ...(channelId ? { channelId } : {}), ...(from && to ? { from, to } : { range: effRange }) },
       })
       return data
     },

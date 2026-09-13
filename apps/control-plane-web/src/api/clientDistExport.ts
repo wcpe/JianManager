@@ -1,6 +1,6 @@
 import api from '@/api/client'
 
-export type ClientDistExportKind = 'stats-summary' | 'dist-events' | 'security-logs'
+export type ClientDistExportKind = 'stats-summary' | 'dist-events' | 'security-logs' | 'machine-updates'
 
 export interface ClientDistExportFilters {
   channelId?: string
