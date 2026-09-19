@@ -13,7 +13,7 @@ func runWhoami(c *Client, cfg Config, args []string) error {
 		return err
 	}
 	if len(args) > 0 {
-		return fmt.Errorf("用法: jmagent whoami")
+		return fmt.Errorf("用法: %s whoami", progName())
 	}
 	body, err := c.get("/api/v1/agent/whoami", nil)
 	if err != nil {
@@ -28,12 +28,12 @@ func runList(c *Client, cfg Config, args []string) error {
 		return err
 	}
 	if len(args) < 1 {
-		return fmt.Errorf("用法: jmagent list nodes | jmagent list instances [--node <id>]")
+		return fmt.Errorf("用法: %s list nodes | %s list instances [--node <id>]", progName(), progName())
 	}
 	switch args[0] {
 	case "nodes":
 		if len(args) > 1 {
-			return fmt.Errorf("用法: jmagent list nodes")
+			return fmt.Errorf("用法: %s list nodes", progName())
 		}
 		body, err := c.get("/api/v1/agent/nodes", nil)
 		if err != nil {
@@ -73,7 +73,7 @@ func parseListInstancesFlags(args []string) (nodeID string, err error) {
 		case strings.HasPrefix(a, "--node="):
 			nodeID = strings.TrimSpace(strings.TrimPrefix(a, "--node="))
 		default:
-			return "", fmt.Errorf("未知参数: %s；用法: jmagent list instances [--node <id>]", a)
+			return "", fmt.Errorf("未知参数: %s；用法: %s list instances [--node <id>]", a, progName())
 		}
 	}
 	return nodeID, nil
@@ -85,7 +85,7 @@ func runInstance(c *Client, cfg Config, args []string) error {
 		return err
 	}
 	if len(args) < 2 {
-		return fmt.Errorf("用法: jmagent instance status|metrics|start|stop|restart <id>")
+		return fmt.Errorf("用法: %s instance status|metrics|start|stop|restart <id>", progName())
 	}
 	action := args[0]
 	id := strings.TrimSpace(args[1])
@@ -96,7 +96,7 @@ func runInstance(c *Client, cfg Config, args []string) error {
 		return fmt.Errorf("实例 id 须为正整数，收到 %q", id)
 	}
 	if len(args) > 2 {
-		return fmt.Errorf("用法: jmagent instance %s <id>", action)
+		return fmt.Errorf("用法: %s instance %s <id>", progName(), action)
 	}
 
 	switch action {
@@ -131,7 +131,7 @@ func runNode(c *Client, cfg Config, args []string) error {
 	}
 	// node maintenance enter|leave <id>
 	if len(args) < 3 || args[0] != "maintenance" {
-		return fmt.Errorf("用法: jmagent node maintenance enter|leave <id>")
+		return fmt.Errorf("用法: %s node maintenance enter|leave <id>", progName())
 	}
 	action := args[1]
 	id := strings.TrimSpace(args[2])
@@ -142,7 +142,7 @@ func runNode(c *Client, cfg Config, args []string) error {
 		return fmt.Errorf("节点 id 须为正整数，收到 %q", id)
 	}
 	if len(args) > 3 {
-		return fmt.Errorf("用法: jmagent node maintenance enter|leave <id>")
+		return fmt.Errorf("用法: %s node maintenance enter|leave <id>", progName())
 	}
 
 	var path string

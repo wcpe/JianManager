@@ -10,7 +10,7 @@
 ## 2. 需求（要什么）
 
 ### 范围内
-- 二进制 `apps/jmagent/`（或 `apps/jm-agent/`，落地与 monorepo 约定一致）
+- 二进制 `apps/jmagent/`（全名 `jmagent`；推荐短别名 `jm`，`make build-jmagent` 同 main 产出两个文件名，argv[0] 决定展示名）
 - 配置：`--token` / `--cp-url`；env `JM_AGENT_TOKEN` / `JM_AGENT_CP`
 - 命令：
   - `whoami`

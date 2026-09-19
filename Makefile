@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
+.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -27,6 +27,11 @@ build-worker:
 # 构建 jmctl 紧急控制台 CLI（独立轻量二进制，仅链 daemon 帧协议包，~3.6MB，FR-184/ADR-041）
 build-jmctl:
 	go build -o bin/jmctl.exe ./apps/jmctl
+
+# 构建 jmagent Agent 管理 CLI（FR-385）；jm 为推荐短别名（同一 main，两个二进制名）
+build-jmagent:
+	go build -o bin/jmagent.exe ./apps/jmagent
+	go build -o bin/jm.exe ./apps/jmagent
 
 # 构建前端（FR-283：pnpm workspace，主应用在 apps/control-plane-web）
 build-web:
