@@ -24,7 +24,7 @@ func NewDBBrowseHandler(svc *service.DBBrowseService) *DBBrowseHandler {
 
 // Tables GET /db/tables — 列出 CP 数据库全部表及行数（仅平台管理员）。
 func (h *DBBrowseHandler) Tables(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "system.db.browse") {
 		return
 	}
 	tables, err := h.svc.Tables()
@@ -37,7 +37,7 @@ func (h *DBBrowseHandler) Tables(c *gin.Context) {
 
 // Rows GET /db/tables/:name/rows — 分页查询某表的行（仅平台管理员，敏感列脱敏）。
 func (h *DBBrowseHandler) Rows(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "system.db.browse") {
 		return
 	}
 	name := c.Param("name")

@@ -149,7 +149,8 @@ func TestBotLoadNodes_RoutePermissionIsolationCacheAndRedaction(t *testing.T) {
 
 	memberToken := getMemberToken(t, ctx.router, "reader", "password123")
 	forbidden := makeRequest(ctx.router, http.MethodGet, "/api/v1/bots/load-nodes?instanceId="+itoa(ctx.instanceID), nil, memberToken)
-	assert.Equal(t, http.StatusForbidden, forbidden.Code)
+	// 默认 member 有 bot.read/instance.read，但不属于该实例组 → 存在性隐藏 404
+	assert.Equal(t, http.StatusNotFound, forbidden.Code)
 
 	otherGroup := createGroupViaAPI(t, ctx.router, ctx.token, "other")
 	otherInstance := createInstanceViaAPI(t, ctx.router, ctx.token, ctx.node.ID, otherGroup)

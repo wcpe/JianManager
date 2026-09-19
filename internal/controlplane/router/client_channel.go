@@ -59,7 +59,7 @@ type updateKeyRequest struct {
 
 // ListChannels GET /client-channels — 列出全部频道。
 func (h *ClientChannelHandler) ListChannels(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireClientChannel(c) {
 		return
 	}
 	list, err := h.svc.ListChannels()
@@ -72,7 +72,10 @@ func (h *ClientChannelHandler) ListChannels(c *gin.Context) {
 
 // CreateChannel POST /client-channels — 创建频道。
 func (h *ClientChannelHandler) CreateChannel(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireClientChannelWrite(c) {
+		return
+	}
+	if !requireClientChannel(c) {
 		return
 	}
 	var body createChannelRequest
@@ -97,7 +100,7 @@ func (h *ClientChannelHandler) CreateChannel(c *gin.Context) {
 
 // GetChannel GET /client-channels/:id — 频道详情（含密钥元数据，无明文）。
 func (h *ClientChannelHandler) GetChannel(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireClientChannel(c) {
 		return
 	}
 	detail, err := h.svc.GetChannel(c.Param("id"))
@@ -110,7 +113,10 @@ func (h *ClientChannelHandler) GetChannel(c *gin.Context) {
 
 // UpdateChannel PUT /client-channels/:id — 更新名称/描述。
 func (h *ClientChannelHandler) UpdateChannel(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireClientChannelWrite(c) {
+		return
+	}
+	if !requireClientChannel(c) {
 		return
 	}
 	var body updateChannelRequest
@@ -128,7 +134,10 @@ func (h *ClientChannelHandler) UpdateChannel(c *gin.Context) {
 
 // DeleteChannel DELETE /client-channels/:id — 删除频道及其密钥。
 func (h *ClientChannelHandler) DeleteChannel(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireClientChannelWrite(c) {
+		return
+	}
+	if !requireClientChannel(c) {
 		return
 	}
 	channelID := c.Param("id")
@@ -142,7 +151,7 @@ func (h *ClientChannelHandler) DeleteChannel(c *gin.Context) {
 
 // ListKeys GET /client-channels/:id/keys — 列出密钥（仅元数据）。
 func (h *ClientChannelHandler) ListKeys(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireClientChannel(c) {
 		return
 	}
 	keys, err := h.svc.ListKeys(c.Param("id"))
@@ -155,7 +164,10 @@ func (h *ClientChannelHandler) ListKeys(c *gin.Context) {
 
 // CreateKey POST /client-channels/:id/keys — 创建密钥；明文一次性返回。
 func (h *ClientChannelHandler) CreateKey(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireClientChannelWrite(c) {
+		return
+	}
+	if !requireClientChannel(c) {
 		return
 	}
 	var body createKeyRequest
@@ -185,7 +197,10 @@ func (h *ClientChannelHandler) CreateKey(c *gin.Context) {
 // UpdateKey PUT /client-channels/:id/keys/:kid — 编辑密钥（值/名称；FR-192，见 ADR-044）。
 // 仅平台管理员 + 审计。改值时重算 KeyHash（鉴权切到新值）+ 重写 KeyEnc（可查看），新明文随响应回显。
 func (h *ClientChannelHandler) UpdateKey(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireClientChannelWrite(c) {
+		return
+	}
+	if !requireClientChannel(c) {
 		return
 	}
 	channelID := c.Param("id")
@@ -245,7 +260,7 @@ func (h *ClientChannelHandler) UpdateKey(c *gin.Context) {
 // RevealKey GET /client-channels/:id/keys/:kid/reveal — 查看密钥明文（FR-192，见 ADR-044）。
 // 仅平台管理员 + 审计 client_key.reveal（detail 绝不含明文）。无 KeyEnc → 404 KEY_NOT_REVEALABLE。
 func (h *ClientChannelHandler) RevealKey(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireClientChannel(c) {
 		return
 	}
 	channelID := c.Param("id")
@@ -272,7 +287,10 @@ func (h *ClientChannelHandler) RevealKey(c *gin.Context) {
 
 // RevokeKey DELETE /client-channels/:id/keys/:kid — 吊销密钥。
 func (h *ClientChannelHandler) RevokeKey(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireClientChannelWrite(c) {
+		return
+	}
+	if !requireClientChannel(c) {
 		return
 	}
 	channelID := c.Param("id")
@@ -367,4 +385,15 @@ func (h *ClientChannelHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		ch.GET("/:id/keys/:kid/reveal", h.RevealKey)
 		ch.DELETE("/:id/keys/:kid", h.RevokeKey)
 	}
+}
+
+
+// requireClientChannel 读侧：频道/分发相关读节点。
+func requireClientChannel(c *gin.Context) bool {
+	return requireNodes(c, "channel.read", "channel.write", "dist.publish", "dist.ops.read")
+}
+
+// requireClientChannelWrite 写侧（F-07）：频道/密钥写。
+func requireClientChannelWrite(c *gin.Context) bool {
+	return requireNodes(c, "channel.write", "dist.publish")
 }

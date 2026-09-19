@@ -47,7 +47,7 @@ func (h *GroupHandler) List(c *gin.Context) {
 	}
 
 	// 非平台管理员按可访问组过滤
-	if !access.IsPlatformAdmin {
+	if !access.IsPlatformAdmin && !access.HasNode("group.manage") {
 		filtered := make([]model.Group, 0, len(groups))
 		for i := range groups {
 			if access.CanAccessGroup(groups[i].ID) {
@@ -177,8 +177,12 @@ type addMemberRequest struct {
 	Role   model.GroupMemberRole `json:"role"`
 }
 
-// AddMember 添加组成员（组管理员或平台管理员）。
+// AddMember 添加组成员（组管理员或平台管理员 + group.member.write）。
 func (h *GroupHandler) AddMember(c *gin.Context) {
+	// F5-03：权限树 deny group.member.write 必须生效（与 CanManageGroup 叠加）
+	if !requireNodes(c, "group.member.write") {
+		return
+	}
 	groupID, err := parseID(c)
 	if err != nil {
 		return
@@ -208,8 +212,11 @@ func (h *GroupHandler) AddMember(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已添加"})
 }
 
-// RemoveMember 移除组成员（组管理员或平台管理员）。
+// RemoveMember 移除组成员（组管理员或平台管理员 + group.member.write）。
 func (h *GroupHandler) RemoveMember(c *gin.Context) {
+	if !requireNodes(c, "group.member.write") {
+		return
+	}
 	groupID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的组 ID"})

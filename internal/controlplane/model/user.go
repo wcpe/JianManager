@@ -13,6 +13,8 @@ type UserRole int
 const (
 	RoleMember         UserRole = 0  // 组成员
 	RoleGroupAdmin     UserRole = 1  // 组管理员
+	RoleGroupOperator  UserRole = 2  // 组运维（FR-432）
+	RoleGroupViewer    UserRole = 3  // 组只读（FR-432）
 	RolePlatformAdmin  UserRole = 10 // 平台管理员
 )
 

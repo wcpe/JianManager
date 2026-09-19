@@ -241,6 +241,10 @@ func main() {
 	templateSvc := service.NewTemplateService(db)
 	auditSvc := service.NewAuditService(db)
 	authzSvc := service.NewAuthzService(db)
+	// 权限树 seed（FR-432）：系统角色模板幂等写入；失败不阻断启动，路由侧会再 seed。
+	if err := authzSvc.Permissions().SeedSystemRoles(); err != nil {
+		slog.Warn("seed permission role templates", "err", err)
+	}
 	eventSvc := service.NewEventService(pool)
 	// 日志中心：采集实例输出与平台日志入库、归档到数据根 var/log、按策略保留（FR-049）。
 	logSvc := service.NewLogService(db, root, cfg.LogStore)
@@ -622,6 +626,7 @@ func main() {
 		Auth:                    authSvc,
 		User:                    userSvc,
 		Group:                   groupSvc,
+		Permission:              authzSvc.Permissions(),
 		Node:                    nodeSvc,
 		NodeRepair:              nodeRepairSvc,
 		NodeProxy:               nodeProxySvc,

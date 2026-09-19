@@ -27,6 +27,9 @@ func (h *TemplateHandler) List(c *gin.Context) {
 }
 
 func (h *TemplateHandler) Create(c *gin.Context) {
+	if !requireNodes(c, "template.manage") {
+		return
+	}
 	var req service.CreateTemplateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
@@ -43,6 +46,9 @@ func (h *TemplateHandler) Create(c *gin.Context) {
 }
 
 func (h *TemplateHandler) Delete(c *gin.Context) {
+	if !requireNodes(c, "template.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return

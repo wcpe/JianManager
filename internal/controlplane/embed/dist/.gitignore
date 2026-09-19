@@ -1,4 +1,2 @@
-# 前端构建产物（vite build 输出）不入库，构建时注入。
-# 保留本 .gitignore 以维持目录存在，使 go:embed all:dist 不致编译失败。
 *
 !.gitignore

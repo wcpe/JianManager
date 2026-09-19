@@ -313,6 +313,9 @@ type updateInstanceRequest struct {
 
 // Update 更新实例配置。
 func (h *InstanceHandler) Update(c *gin.Context) {
+	if !requireNodes(c, "instance.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -361,6 +364,9 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 
 // Delete 删除实例。
 func (h *InstanceHandler) Delete(c *gin.Context) {
+	if !requireNodes(c, "instance.delete") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -389,6 +395,9 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 
 // Start 启动实例。
 func (h *InstanceHandler) Start(c *gin.Context) {
+	if !requireNodes(c, "instance.operate") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -419,6 +428,9 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 
 // Stop 停止实例。
 func (h *InstanceHandler) Stop(c *gin.Context) {
+	if !requireNodes(c, "instance.operate") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -439,6 +451,9 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 
 // Restart 重启实例。
 func (h *InstanceHandler) Restart(c *gin.Context) {
+	if !requireNodes(c, "instance.operate") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -459,6 +474,9 @@ func (h *InstanceHandler) Restart(c *gin.Context) {
 
 // Kill 强制终止实例。
 func (h *InstanceHandler) Kill(c *gin.Context) {
+	if !requireNodes(c, "instance.operate") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -506,6 +524,9 @@ type managedProcessActionRequest struct {
 
 // ProcessAction 处置受管实例进程树内的非根 PID。
 func (h *InstanceHandler) ProcessAction(c *gin.Context) {
+	if !requireNodes(c, "instance.operate") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -573,6 +594,9 @@ type instanceCommandRequest struct {
 // Command 向运行中的实例下发控制台命令（FR-005）。
 // 仅对 RUNNING 实例生效，复用既有 SendCommand 委托；命令不改变实例状态。
 func (h *InstanceHandler) Command(c *gin.Context) {
+	if !requireNodes(c, "terminal.access", "instance.operate") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return

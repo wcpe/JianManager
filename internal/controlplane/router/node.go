@@ -24,19 +24,26 @@ func NewNodeHandler(nodeSvc *service.NodeService, repairSvc *service.NodeRepairS
 	return &NodeHandler{nodeSvc: nodeSvc, repairSvc: repairSvc, audit: audit}
 }
 
-// requirePlatformAdmin 校验当前用户是否为平台管理员。
+// requireNodeRead 节点只读。
+func requireNodeRead(c *gin.Context) bool {
+	return requireNodes(c, "node.read", "node.manage")
+}
+
+// requireNodeManage 节点写/维护。
+func requireNodeManage(c *gin.Context) bool {
+	return requireNodes(c, "node.manage")
+}
+
+// requirePlatformAdmin 平台管理域**写/危险**默认门禁（F-01）。
+// 历史误用为 node.read；现严格为 node.manage（超管恒过）。
+// 只读 handler 请改用 requireNodeRead 或域读节点。
 func requirePlatformAdmin(c *gin.Context) bool {
-	access := getAccess(c)
-	if access == nil || !access.IsPlatformAdmin {
-		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
-		return false
-	}
-	return true
+	return requireNodes(c, "node.manage")
 }
 
 // List 节点列表（仅平台管理员）。
 func (h *NodeHandler) List(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodeRead(c) {
 		return
 	}
 	nodes, err := h.nodeSvc.List()
@@ -52,7 +59,7 @@ func (h *NodeHandler) List(c *gin.Context) {
 
 // Get 节点详情（仅平台管理员）。
 func (h *NodeHandler) Get(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodeRead(c) {
 		return
 	}
 	id, err := parseID(c)
@@ -79,8 +86,9 @@ type maintenanceRequest struct {
 }
 
 // Maintenance 置/解节点维护模式（cordon，仅平台管理员）。参见 FR-048。
+// Maintenance 维护模式（写）。
 func (h *NodeHandler) Maintenance(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodeManage(c) {
 		return
 	}
 	id, err := parseID(c)
@@ -108,8 +116,9 @@ func (h *NodeHandler) Maintenance(c *gin.Context) {
 }
 
 // Drain 排空节点：停止其上运行实例（仅平台管理员，危险操作）。参见 FR-048。
+// Drain 排空节点（写）。
 func (h *NodeHandler) Drain(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodeManage(c) {
 		return
 	}
 	id, err := parseID(c)
@@ -133,8 +142,9 @@ func (h *NodeHandler) Drain(c *gin.Context) {
 // Delete 主动下线节点：解除注册并保留记录（仅平台管理员，危险操作）。参见 FR-048。
 // FR-309 实例守卫：名下有实例回 409 并携实例清单；离线节点可 `?force=true` 显式级联
 // 删除实例平台记录（不清理远端文件）；在线节点无论 force 一律拒绝。
+// Delete 删除节点（写）。
 func (h *NodeHandler) Delete(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodeManage(c) {
 		return
 	}
 	id, err := parseID(c)
@@ -171,7 +181,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 
 // ListArchived 已下线（软删）节点列表（FR-393，仅平台管理员）。
 func (h *NodeHandler) ListArchived(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodeRead(c) {
 		return
 	}
 	nodes, err := h.nodeSvc.ListArchived()
@@ -184,7 +194,7 @@ func (h *NodeHandler) ListArchived(c *gin.Context) {
 
 // GetArchived 单个归档节点详情（FR-393，仅平台管理员）。
 func (h *NodeHandler) GetArchived(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodeRead(c) {
 		return
 	}
 	id, err := parseID(c)
@@ -204,8 +214,9 @@ func (h *NodeHandler) GetArchived(c *gin.Context) {
 }
 
 // PurgeArchived 彻底清理归档节点（FR-394，硬删库记录，不清理远端文件）。
+// PurgeArchived 清理归档节点（写）。
 func (h *NodeHandler) PurgeArchived(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodeManage(c) {
 		return
 	}
 	id, err := parseID(c)
@@ -253,7 +264,7 @@ func (h *NodeHandler) PurgeArchived(c *gin.Context) {
 
 // Metrics 返回节点实时指标快照（仅平台管理员）。
 func (h *NodeHandler) Metrics(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodeRead(c) {
 		return
 	}
 	id, err := parseID(c)
@@ -300,8 +311,9 @@ func (h *NodeHandler) repairUnavailable(c *gin.Context) bool {
 }
 
 // Suspects GET /nodes/repair/suspects — 列出疑似被串改/重名的节点（只读诊断，仅平台管理员）。参见 ADR-039 §2。
+// Suspects 坏节点可疑列表（读）。
 func (h *NodeHandler) Suspects(c *gin.Context) {
-	if !requirePlatformAdmin(c) || h.repairUnavailable(c) {
+	if !requireNodeRead(c) || h.repairUnavailable(c) {
 		return
 	}
 	suspects, err := h.repairSvc.ListSuspects()
@@ -313,8 +325,9 @@ func (h *NodeHandler) Suspects(c *gin.Context) {
 }
 
 // Orphans GET /nodes/:id/orphans — 统计节点上孤立 JDK/实例数量（只读，仅平台管理员）。参见 ADR-039 §2。
+// Orphans 孤儿列表（读）。
 func (h *NodeHandler) Orphans(c *gin.Context) {
-	if !requirePlatformAdmin(c) || h.repairUnavailable(c) {
+	if !requireNodeRead(c) || h.repairUnavailable(c) {
 		return
 	}
 	id, err := parseID(c)
@@ -335,8 +348,9 @@ func (h *NodeHandler) Orphans(c *gin.Context) {
 
 // Reenroll POST /nodes/:id/reenroll — 把被挤占机器作为新节点重新 enroll（轮换 UUID/secret，破坏性，
 // 需 confirm=true，仅平台管理员，入审计）。参见 ADR-039 §2。
+// Reenroll 重新注册（写）。
 func (h *NodeHandler) Reenroll(c *gin.Context) {
-	if !requirePlatformAdmin(c) || h.repairUnavailable(c) {
+	if !requireNodeManage(c) || h.repairUnavailable(c) {
 		return
 	}
 	id, err := parseID(c)
@@ -359,8 +373,9 @@ func (h *NodeHandler) Reenroll(c *gin.Context) {
 
 // PurgeOrphans POST /nodes/:id/purge-orphans — 清理节点上孤立 JDK/实例（破坏性，需 confirm=true，
 // 仅平台管理员，入审计）。参见 ADR-039 §2。
+// PurgeOrphans 清理孤儿（写）。
 func (h *NodeHandler) PurgeOrphans(c *gin.Context) {
-	if !requirePlatformAdmin(c) || h.repairUnavailable(c) {
+	if !requireNodeManage(c) || h.repairUnavailable(c) {
 		return
 	}
 	id, err := parseID(c)

@@ -41,7 +41,7 @@ type playerActionRequest struct {
 // Online 在线玩家列表（聚合可达后端 RCON 的 list，标注所在子服）。
 func (h *PlayerHandler) Online(c *gin.Context) {
 	access := getAccess(c)
-	if access == nil || !access.HasPermission(service.PermInstanceRead) {
+	if access == nil || !(access.Can("player.read") || access.Can("instance.read")) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
 		return
 	}
@@ -77,7 +77,7 @@ func (h *PlayerHandler) Unban(c *gin.Context) {
 // 破坏性操作（kick/ban）经显式审计记录玩家名/范围/原因（自动审计中间件不识别玩家路由）。
 func (h *PlayerHandler) action(c *gin.Context, kind string) {
 	access := getAccess(c)
-	if access == nil || !access.HasPermission(service.PermInstanceOperate) {
+	if access == nil || !(access.Can("instance.operate") || access.Can("player.manage")) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
 		return
 	}
@@ -192,7 +192,7 @@ func (h *PlayerHandler) WhitelistAction(c *gin.Context) {
 // Bans 封禁记录查询。
 func (h *PlayerHandler) Bans(c *gin.Context) {
 	access := getAccess(c)
-	if access == nil || !access.HasPermission(service.PermInstanceRead) {
+	if access == nil || !(access.Can("player.read") || access.Can("instance.read")) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
 		return
 	}

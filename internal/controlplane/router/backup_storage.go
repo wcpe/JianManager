@@ -42,6 +42,9 @@ type createStorageRequest struct {
 }
 
 func (h *BackupStorageHandler) Create(c *gin.Context) {
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	var req createStorageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
@@ -78,6 +81,9 @@ func (h *BackupStorageHandler) Create(c *gin.Context) {
 // Update 全量替换式编辑存储后端（FR-338）。body 同 Create（复用 createStorageRequest）；
 // type 不可改、名称冲突排除自身，404/422 语义与既有端点对齐。
 func (h *BackupStorageHandler) Update(c *gin.Context) {
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -150,6 +156,9 @@ func (h *BackupStorageHandler) TestSaved(c *gin.Context) {
 }
 
 func (h *BackupStorageHandler) Delete(c *gin.Context) {
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return

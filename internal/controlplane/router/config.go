@@ -21,6 +21,9 @@ func NewConfigHandler(svc *service.ConfigService, authz *service.AuthzService) *
 }
 
 func (h *ConfigHandler) List(c *gin.Context) {
+	if !requireNodes(c, "file.read", "instance.read") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -39,6 +42,9 @@ func (h *ConfigHandler) List(c *gin.Context) {
 
 // Discover 递归发现实例工作目录下全部配置文件（FR-071）。
 func (h *ConfigHandler) Discover(c *gin.Context) {
+	if !requireNodes(c, "file.read", "instance.read") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -56,6 +62,9 @@ func (h *ConfigHandler) Discover(c *gin.Context) {
 }
 
 func (h *ConfigHandler) Read(c *gin.Context) {
+	if !requireNodes(c, "file.read", "instance.read") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -84,6 +93,9 @@ type configWriteRequest struct {
 }
 
 func (h *ConfigHandler) Write(c *gin.Context) {
+	if !requireNodes(c, "file.write", "instance.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -115,6 +127,9 @@ type configWriteFieldsRequest struct {
 
 // WriteFields 表单模式保存：字段级补丁回原文（保留注释），生成新版本。
 func (h *ConfigHandler) WriteFields(c *gin.Context) {
+	if !requireNodes(c, "file.write", "instance.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -139,6 +154,9 @@ func (h *ConfigHandler) WriteFields(c *gin.Context) {
 }
 
 func (h *ConfigHandler) Versions(c *gin.Context) {
+	if !requireNodes(c, "file.read", "instance.read") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -161,6 +179,9 @@ type rollbackRequest struct {
 }
 
 func (h *ConfigHandler) Rollback(c *gin.Context) {
+	if !requireNodes(c, "file.write", "instance.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -202,6 +223,9 @@ func (h *ConfigHandler) RegisterRoutes(rg *gin.RouterGroup) {
 // Diff 返回 fromID -> toID 的差异。
 // toID=0 表示与当前文件内容对比。
 func (h *ConfigHandler) Diff(c *gin.Context) {
+	if !requireNodes(c, "file.read", "instance.read") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -244,6 +268,10 @@ type crossCheckRequest struct {
 }
 
 func (h *ConfigHandler) CrossCheck(c *gin.Context) {
+	// 只读校验：与配置读路径同门禁（file.read / instance.read）
+	if !requireNodes(c, "file.read", "instance.read") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return

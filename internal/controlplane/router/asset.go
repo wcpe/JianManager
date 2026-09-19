@@ -23,7 +23,7 @@ func NewAssetHandler(svc *service.AssetService) *AssetHandler {
 
 // List GET /assets — 按 type 筛选、分页列出资产。
 func (h *AssetHandler) List(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "node.read", "node.manage") {
 		return
 	}
 	typeFilter := model.AssetType(c.Query("type"))
@@ -49,7 +49,7 @@ func (h *AssetHandler) List(c *gin.Context) {
 
 // Get GET /assets/:id — 资产详情。
 func (h *AssetHandler) Get(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "node.read", "node.manage") {
 		return
 	}
 	id, err := parseUintParam(c, "id")

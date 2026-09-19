@@ -413,7 +413,7 @@ func (h *MetricHandler) Overview(c *gin.Context) {
 // ResourceAttribution 返回首页 Tooltip 使用的有界受管资源归因（FR-400）。
 // 节点和跨实例进程明细只对平台管理员开放，避免扩展原 overview 的聚合权限边界。
 func (h *MetricHandler) ResourceAttribution(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "monitor.read", "node.read") {
 		return
 	}
 	sortBy := c.DefaultQuery("sort", "memory")

@@ -247,6 +247,18 @@ func (s *BackupService) ListByInstance(instanceID uint) ([]model.Backup, error) 
 	return backups, nil
 }
 
+// GetByID 按 id 读取备份元数据（权限门禁用：备份→实例→组）。
+func (s *BackupService) GetByID(backupID uint) (*model.Backup, error) {
+	var backup model.Backup
+	if err := s.db.First(&backup, backupID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrBackupNotFound
+		}
+		return nil, err
+	}
+	return &backup, nil
+}
+
 // Restore 恢复备份：解析备份链（全量基 + 各增量）并委托 Worker 按序回放。
 func (s *BackupService) Restore(backupID uint) error {
 	var backup model.Backup

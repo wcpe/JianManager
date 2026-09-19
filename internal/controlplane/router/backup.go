@@ -12,15 +12,32 @@ import (
 // BackupHandler 备份路由处理器。
 type BackupHandler struct {
 	backupSvc *service.BackupService
+	authz     *service.AuthzService
 }
 
-func NewBackupHandler(backupSvc *service.BackupService) *BackupHandler {
-	return &BackupHandler{backupSvc: backupSvc}
+func NewBackupHandler(backupSvc *service.BackupService, authz *service.AuthzService) *BackupHandler {
+	return &BackupHandler{backupSvc: backupSvc, authz: authz}
+}
+
+// backupInstanceID 取备份所属实例 id，用于组隔离。
+func (h *BackupHandler) backupInstanceID(backupID uint) (uint, error) {
+	b, err := h.backupSvc.GetByID(backupID)
+	if err != nil {
+		return 0, err
+	}
+	return b.InstanceID, nil
 }
 
 func (h *BackupHandler) List(c *gin.Context) {
+	if !requireNodes(c, "backup.read") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
 		return
 	}
 	backups, err := h.backupSvc.ListByInstance(id)
@@ -40,8 +57,15 @@ type createBackupRequest struct {
 }
 
 func (h *BackupHandler) Create(c *gin.Context) {
+	if !requireNodes(c, "backup.write") {
+		return
+	}
 	instanceID, err := parseID(c)
 	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, instanceID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
 		return
 	}
 	var req createBackupRequest
@@ -66,8 +90,16 @@ func (h *BackupHandler) Create(c *gin.Context) {
 }
 
 func (h *BackupHandler) Restore(c *gin.Context) {
+	if !requireNodes(c, "backup.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
+		return
+	}
+	instID, ierr := h.backupInstanceID(id)
+	if ierr != nil || !canManageInstance(c, h.authz, instID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "备份不存在"})
 		return
 	}
 	if err := h.backupSvc.Restore(id); err != nil {
@@ -83,8 +115,16 @@ func (h *BackupHandler) Restore(c *gin.Context) {
 }
 
 func (h *BackupHandler) Delete(c *gin.Context) {
+	if !requireNodes(c, "backup.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
+		return
+	}
+	instID, ierr := h.backupInstanceID(id)
+	if ierr != nil || !canManageInstance(c, h.authz, instID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "备份不存在"})
 		return
 	}
 	if err := h.backupSvc.Delete(id); err != nil {

@@ -36,6 +36,9 @@ type updateSettingsRequest struct {
 
 // Update 按白名单写入配置覆盖；非法键/值整体拒绝。
 func (h *SettingsHandler) Update(c *gin.Context) {
+	if !requireNodes(c, "settings.write") {
+		return
+	}
 	var req updateSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})

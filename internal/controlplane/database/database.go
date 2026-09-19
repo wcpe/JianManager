@@ -108,6 +108,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.User{},
 		&model.UserInvitation{},
 		&model.AuthSetupLock{},
+		// 权限树（FR-432 / ADR-089）：角色模板 + 节点 + 用户绑定 + 覆盖
+		&model.RoleTemplate{},
+		&model.RolePermission{},
+		&model.UserRoleBinding{},
+		&model.UserPermissionOverride{},
 		&model.Group{},
 		&model.GroupMember{},
 		&model.GroupQuota{},

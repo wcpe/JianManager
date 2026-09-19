@@ -84,6 +84,9 @@ type writeRequest struct {
 
 // Write 写入文件。
 func (h *FileHandler) Write(c *gin.Context) {
+	if !requireNodes(c, "file.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -122,6 +125,9 @@ type deleteFileRequest struct {
 
 // Delete 删除文件。
 func (h *FileHandler) Delete(c *gin.Context) {
+	if !requireNodes(c, "file.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -152,6 +158,9 @@ func (h *FileHandler) Delete(c *gin.Context) {
 // 目标路径优先经 query 参数 `path` 传递；兼容先于 file 部分的 multipart path 字段
 // （流式顺序读所限：读到 file 时必须已知目标路径）。
 func (h *FileHandler) Upload(c *gin.Context) {
+	if !requireNodes(c, "file.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -392,6 +401,9 @@ type renameRequest struct {
 
 // Rename 重命名文件或目录。
 func (h *FileHandler) Rename(c *gin.Context) {
+	if !requireNodes(c, "file.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -611,6 +623,9 @@ type fileRollbackRequest struct {
 
 // Rollback 把文件回滚到指定版本（FR-051），回滚前自动快照当前内容。
 func (h *FileHandler) Rollback(c *gin.Context) {
+	if !requireNodes(c, "file.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -661,6 +676,9 @@ func (h *FileHandler) CheckAccess(c *gin.Context) {
 
 // Chmod POST /instances/:id/files/chmod — 单 path 非递归 chmod（FR-373）。
 func (h *FileHandler) Chmod(c *gin.Context) {
+	if !requireNodes(c, "file.write") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return

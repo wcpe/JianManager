@@ -36,6 +36,9 @@ func (h *RegistrationHandler) List(c *gin.Context) {
 
 // Create POST /proxies/:id/registrations
 func (h *RegistrationHandler) Create(c *gin.Context) {
+	if !requireNodes(c, "network.manage") {
+		return
+	}
 	proxyID, err := parseID(c)
 	if err != nil {
 		return
@@ -60,6 +63,9 @@ func (h *RegistrationHandler) Create(c *gin.Context) {
 
 // Update PATCH /proxies/:id/registrations/:rid
 func (h *RegistrationHandler) Update(c *gin.Context) {
+	if !requireNodes(c, "network.manage") {
+		return
+	}
 	proxyID, err := parseID(c)
 	if err != nil {
 		return
@@ -87,6 +93,9 @@ func (h *RegistrationHandler) Update(c *gin.Context) {
 
 // Delete DELETE /proxies/:id/registrations/:rid
 func (h *RegistrationHandler) Delete(c *gin.Context) {
+	if !requireNodes(c, "network.manage") {
+		return
+	}
 	proxyID, err := parseID(c)
 	if err != nil {
 		return

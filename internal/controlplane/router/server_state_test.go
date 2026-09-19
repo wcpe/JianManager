@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 // TestServerState_RouteRegisters 路由注册不 panic（与 /instances/:id/... 其余参数段共存）。
@@ -46,7 +47,7 @@ func TestServerState_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-// TestServerState_Forbidden_NoPermission 无 instance:read 权限的普通成员被拒（403，权限先于可见性）。
+// TestServerState_Forbidden_NoPermission：空权限树 403；默认 member 有 instance.read 但无组 → 404。
 func TestServerState_Forbidden_NoPermission(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -55,7 +56,19 @@ func TestServerState_Forbidden_NoPermission(t *testing.T) {
 	g := createGroupViaAPI(t, r, token, "g")
 	id := makeInstanceInGroup(t, db, node.ID, g, "smp", model.InstanceStatusRunning)
 
-	bobToken := getMemberToken(t, r, "bob", "password123") // 不属于任何组，无 instance:read
+	// 默认 member（种子含 instance.read）但不属于组 → 存在性隐藏 404
+	bobToken := getMemberToken(t, r, "bob", "password123")
 	w := makeRequest(r, "GET", "/api/v1/instances/"+itoa(id)+"/server-state", nil, bobToken)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	// 空权限树用户 → 403
+	perm := service.NewAuthzService(db).Permissions()
+	u, err := service.NewUserService(db).Create("zero_user", "password123", model.RoleMember, model.UserStatusActive)
+	require.NoError(t, err)
+	role, err := perm.CreateRole("zero-role", "", nil)
+	require.NoError(t, err)
+	require.NoError(t, perm.BindUserRole(u.ID, role.ID))
+	zeroTok := loginTestUser(t, r, "zero_user", "password123")
+	w = makeRequest(r, "GET", "/api/v1/instances/"+itoa(id)+"/server-state", nil, zeroTok)
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }

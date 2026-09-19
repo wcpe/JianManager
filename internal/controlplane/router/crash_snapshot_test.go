@@ -6,11 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 // seedCrashSnapshot 直接落库一条崩溃快照（写侧在 gRPC 层，路由测试只造读侧数据）。
@@ -67,8 +69,8 @@ func TestCrashSnapshots_EmptyList(t *testing.T) {
 	assert.Empty(t, snaps)
 }
 
-// TestCrashSnapshots_Permission 权限面（spec §5）：无 instance:read 的用户 403；
-// 不存在的实例 404（存在性隐藏）。
+// TestCrashSnapshots_Permission 权限面（spec §5）：
+// 无权限树节点的用户 403；有 instance.read 但不属于组的用户按存在性隐藏返回 404。
 func TestCrashSnapshots_Permission(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -78,14 +80,36 @@ func TestCrashSnapshots_Permission(t *testing.T) {
 	id := makeInstanceInGroup(t, db, node.ID, g, "smp", model.InstanceStatusCrashed)
 	seedCrashSnapshot(t, db, id, time.Now(), 1)
 
-	// 不属于任何组的普通成员：无 instance:read → 403。
-	bobToken := getMemberToken(t, r, "bob", "password123")
-	w := makeRequest(r, "GET", "/api/v1/instances/"+itoa(id)+"/crash-snapshots", nil, bobToken)
+	// 空权限树用户 → RequireAnyPerm 403
+	perm := service.NewAuthzService(db).Permissions()
+	emptyUser, err := service.NewUserService(db).Create("bob_noperm", "password123", model.RoleMember, model.UserStatusActive)
+	require.NoError(t, err)
+	emptyRole, err := perm.CreateRole("crash-empty", "", nil)
+	require.NoError(t, err)
+	require.NoError(t, perm.BindUserRole(emptyUser.ID, emptyRole.ID))
+	bobEmpty := getMemberToken(t, r, "bob_noperm2", "password123")
+	// bob_noperm2 使用默认 member 种子（有 instance.read）但不属于组 → 404
+	w := makeRequest(r, "GET", "/api/v1/instances/"+itoa(id)+"/crash-snapshots", nil, bobEmpty)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	// 真正无 instance.read：自定义空角色登录
+	emptyUser2, err := service.NewUserService(db).Create("bob_zero", "password123", model.RoleMember, model.UserStatusActive)
+	require.NoError(t, err)
+	require.NoError(t, perm.BindUserRole(emptyUser2.ID, emptyRole.ID))
+	bobZero := loginTestUser(t, r, "bob_zero", "password123")
+	w = makeRequest(r, "GET", "/api/v1/instances/"+itoa(id)+"/crash-snapshots", nil, bobZero)
 	assert.Equal(t, http.StatusForbidden, w.Code)
 
 	// 不存在的实例 → 404。
 	w = makeRequest(r, "GET", "/api/v1/instances/99999/crash-snapshots", nil, token)
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func loginTestUser(t *testing.T, r *gin.Engine, user, pass string) string {
+	t.Helper()
+	w := makeRequest(r, http.MethodPost, "/api/v1/auth/login", map[string]string{"username": user, "password": pass}, "")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	return parseJSON(t, w)["accessToken"].(string)
 }
 
 // TestCrashSnapshots_CascadeDeleteWithInstance 删除实例级联清快照（spec §3/§5）。

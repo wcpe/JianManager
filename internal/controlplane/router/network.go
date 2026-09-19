@@ -37,6 +37,9 @@ type createNetworkRequest struct {
 
 // Create POST /networks
 func (h *NetworkHandler) Create(c *gin.Context) {
+	if !requireNodes(c, "network.manage") {
+		return
+	}
 	var req createNetworkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
@@ -75,6 +78,9 @@ type updateNetworkRequest struct {
 
 // Update PATCH /networks/:id
 func (h *NetworkHandler) Update(c *gin.Context) {
+	if !requireNodes(c, "network.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -94,6 +100,9 @@ func (h *NetworkHandler) Update(c *gin.Context) {
 
 // Delete DELETE /networks/:id
 func (h *NetworkHandler) Delete(c *gin.Context) {
+	if !requireNodes(c, "network.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -111,6 +120,9 @@ type addMembersRequest struct {
 
 // AddMembers POST /networks/:id/members
 func (h *NetworkHandler) AddMembers(c *gin.Context) {
+	if !requireNodes(c, "network.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -130,6 +142,9 @@ func (h *NetworkHandler) AddMembers(c *gin.Context) {
 
 // RemoveMember DELETE /networks/:id/members/:instanceId
 func (h *NetworkHandler) RemoveMember(c *gin.Context) {
+	if !requireNodes(c, "network.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -152,6 +167,9 @@ type networkActionRequest struct {
 
 // Actions POST /networks/:id/actions
 func (h *NetworkHandler) Actions(c *gin.Context) {
+	if !requireNodes(c, "network.manage") {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return

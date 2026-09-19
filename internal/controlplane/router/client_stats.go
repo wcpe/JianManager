@@ -20,7 +20,7 @@ func NewClientStatsHandler(svc *service.ClientDistStatsService) *ClientStatsHand
 
 // Overview GET /client-dist/stats?channelId=&days= — 频道分发统计复合视图（下载趋势/版本分布/成功率/活跃机器码/TopIP）。
 func (h *ClientStatsHandler) Overview(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "stats.read") {
 		return
 	}
 	days := parseIntDefault(c.Query("days"), 0)

@@ -141,6 +141,9 @@ type updateUserRequest struct {
 
 // Update 更新用户。
 func (h *UserHandler) Update(c *gin.Context) {
+	if !requireNodes(c, "user.manage") {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -161,6 +164,10 @@ func (h *UserHandler) Update(c *gin.Context) {
 
 	user, err := h.userSvc.Update(uint(id), req.Role, req.Status, req.Password)
 	if err != nil {
+		if errors.Is(err, service.ErrSuperAdminLocked) || errors.Is(err, service.ErrSuperAdminUnique) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "SUPER_ADMIN_LOCKED", "message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "NOT_FOUND",
 			"message": "用户不存在",
@@ -180,6 +187,9 @@ func (h *UserHandler) Update(c *gin.Context) {
 
 // Delete 删除用户。
 func (h *UserHandler) Delete(c *gin.Context) {
+	if !requireNodes(c, "user.manage") {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -209,6 +219,9 @@ type createUserRequest struct {
 
 // Create 由平台管理员在单一请求中创建用户与权限状态。
 func (h *UserHandler) Create(c *gin.Context) {
+	if !requireNodes(c, "user.manage") {
+		return
+	}
 	var req createUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
@@ -216,6 +229,10 @@ func (h *UserHandler) Create(c *gin.Context) {
 	}
 	user, err := h.userSvc.Create(req.Username, req.Password, *req.Role, *req.Status)
 	if err != nil {
+		if errors.Is(err, service.ErrSuperAdminUnique) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "SUPER_ADMIN_LOCKED", "message": err.Error()})
+			return
+		}
 		switch {
 		case errors.Is(err, service.ErrUserExists):
 			c.JSON(http.StatusConflict, gin.H{"error": "USER_EXISTS", "message": "用户名已存在"})
@@ -236,6 +253,9 @@ type createInvitationRequest struct {
 
 // CreateInvitation 签发一次性成员邀请；邮件失败时仍返回手动发送链接。
 func (h *UserHandler) CreateInvitation(c *gin.Context) {
+	if !requireNodes(c, "user.manage") {
+		return
+	}
 	var req createInvitationRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
@@ -278,6 +298,9 @@ func (h *UserHandler) ListInvitations(c *gin.Context) {
 
 // RevokeInvitation 撤销未使用邀请。
 func (h *UserHandler) RevokeInvitation(c *gin.Context) {
+	if !requireNodes(c, "user.manage") {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的邀请 ID"})

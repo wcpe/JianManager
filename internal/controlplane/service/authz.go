@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -53,12 +54,15 @@ const (
 )
 
 // UserAccess 当前用户的授权上下文，由 LoadUserAccess 构建。
-// 平台管理员的 IsPlatformAdmin 为 true，其余集合为空但权限检查全部放行。
+// 平台管理员的 IsPlatformAdmin 为 true，权限检查全部放行；
+// 其余用户 Nodes 为权限树有效集合（FR-432 / ADR-089）。
 type UserAccess struct {
 	UserID            uint
 	Role              model.UserRole
 	AuthVersion       uint
 	IsPlatformAdmin   bool
+	RoleKey           string
+	Nodes             map[string]struct{}
 	AdminGroupIDs     map[uint]struct{} // 以组管理员身份管理的组 ID 集合
 	MemberGroupIDs    map[uint]struct{} // 以普通成员身份所属的组 ID 集合
 	AccessibleGroups  map[uint]struct{} // AdminGroupIDs ∪ MemberGroupIDs，用于读权限
@@ -66,16 +70,23 @@ type UserAccess struct {
 
 // AuthzService 授权服务，负责加载用户授权上下文并执行权限判断。
 // 参见 ADR-004: 用户组替代多租户（基于用户组而非 tenant_id 做隔离）。
+// 权限树节点见 ADR-089（FR-432）。
 type AuthzService struct {
-	db *gorm.DB
+	db   *gorm.DB
+	perm *PermissionService
 }
 
 // NewAuthzService 创建授权服务。
 func NewAuthzService(db *gorm.DB) *AuthzService {
-	return &AuthzService{db: db}
+	s := &AuthzService{db: db}
+	s.perm = NewPermissionService(db)
+	return s
 }
 
-// LoadUserAccess 加载用户的全局角色与组成员关系，构建授权上下文。
+// Permissions 暴露权限服务（路由 / 中间件复用）。
+func (s *AuthzService) Permissions() *PermissionService { return s.perm }
+
+// LoadUserAccess 加载用户的全局角色、组成员关系与有效权限节点。
 func (s *AuthzService) LoadUserAccess(userID uint) (*UserAccess, error) {
 	var user model.User
 	if err := s.db.First(&user, userID).Error; err != nil {
@@ -88,11 +99,21 @@ func (s *AuthzService) LoadUserAccess(userID uint) (*UserAccess, error) {
 		return nil, ErrUserDisabled
 	}
 
+	nodes, roleKey, err := s.perm.EffectiveForUser(user.ID, user.Role)
+	if err != nil {
+		return nil, fmt.Errorf("加载权限节点失败: %w", err)
+	}
+
+	// ADR-089：role==10 **或** 绑定/映射 platform_admin 模板 均视为超级管理员短路。
+	isSuper := user.Role == model.RolePlatformAdmin || roleKey == model.RoleKeyPlatformAdmin
+
 	access := &UserAccess{
 		UserID:           user.ID,
 		Role:             user.Role,
 		AuthVersion:      user.AuthVersion,
-		IsPlatformAdmin:  user.Role == model.RolePlatformAdmin,
+		IsPlatformAdmin:  isSuper,
+		RoleKey:          roleKey,
+		Nodes:            nodes,
 		AdminGroupIDs:    map[uint]struct{}{},
 		MemberGroupIDs:   map[uint]struct{}{},
 		AccessibleGroups: map[uint]struct{}{},
@@ -118,27 +139,57 @@ func (s *AuthzService) LoadUserAccess(userID uint) (*UserAccess, error) {
 }
 
 // HasPermission 判断用户是否拥有指定权限节点（不含资源级隔离）。
-// 平台管理员拥有全部权限；组管理员/组成员对管理类权限需要结合资源判断（见 CanManageGroup）。
+// 权限树 Nodes 非 nil 时：**只认树**（含冒号→点号兼容）；树中无节点即拒绝，
+// 不再回退「属于用户组即可操作」的启发式——否则清空角色模板后 API 仍放行。
+// Nodes 为 nil（未加载权限树，如纯单测桩）时保留历史组启发式。
 func (a *UserAccess) HasPermission(node PermissionNode) bool {
 	if a.IsPlatformAdmin {
 		return true
 	}
+	raw := string(node)
+	dotted := strings.ReplaceAll(raw, ":", ".")
+	if a.Nodes != nil {
+		if _, ok := a.Nodes[raw]; ok {
+			return true
+		}
+		if _, ok := a.Nodes[dotted]; ok {
+			return true
+		}
+		return false
+	}
 	switch node {
 	case PermGroupRead, PermGroupQuotaRead,
 		PermInstanceRead, PermFileRead, PermBotRead:
-		// 只读权限：只要属于任意组即拥有（资源级再过滤）
 		return len(a.AccessibleGroups) > 0
 	case PermGroupMemberWrite:
-		// 组管理员可管理本组成员
 		return len(a.AdminGroupIDs) > 0
 	case PermInstanceWrite, PermInstanceOperate, PermInstanceCreate,
 		PermInstanceDelete, PermInstanceBusinessWrite, PermFileWrite, PermTerminalAccess, PermBotManage:
-		// 实例操作类权限：组管理员或组成员均可，具体实例由 CanAccessInstance 收敛
 		return len(a.AccessibleGroups) > 0
 	default:
-		// 用户管理、组/节点管理类仅平台管理员拥有
 		return false
 	}
+}
+
+// HasNode 权限树节点检查（FR-432）。
+func (a *UserAccess) HasNode(node string) bool {
+	if a == nil {
+		return false
+	}
+	if a.IsPlatformAdmin {
+		return true
+	}
+	_, ok := a.Nodes[node]
+	return ok
+}
+
+// Can 平台级能力检查：超级管理员或权限树授予该节点。
+// handler 内替代「仅 IsPlatformAdmin」判断，使角色模板可配置平台能力。
+func (a *UserAccess) Can(node string) bool {
+	if a == nil {
+		return false
+	}
+	return a.IsPlatformAdmin || a.HasNode(node)
 }
 
 // CanManageGroup 判断用户是否能管理指定组（平台管理员或该组的组管理员）。

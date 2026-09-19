@@ -57,7 +57,7 @@ func (h *ClientSecurityHandler) Hello(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) Overview(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	out, err := h.svc.Overview()
@@ -68,7 +68,7 @@ func (h *ClientSecurityHandler) Overview(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 func (h *ClientSecurityHandler) Profiles(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	out, err := h.svc.ListProfiles()
@@ -80,7 +80,7 @@ func (h *ClientSecurityHandler) Profiles(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) Profile(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	id, err := parseUintParam(c, "id")
@@ -100,7 +100,7 @@ func (h *ClientSecurityHandler) Profile(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) ChannelSummary(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	out, err := h.svc.ChannelSummary(c.Param("id"), time.Hour)
@@ -116,7 +116,7 @@ func (h *ClientSecurityHandler) ChannelSummary(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) Events(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	out, err := h.svc.ListRiskEvents()
@@ -127,7 +127,7 @@ func (h *ClientSecurityHandler) Events(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 func (h *ClientSecurityHandler) Actions(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	limit := parseIntDefault(c.Query("limit"), 200)
@@ -146,7 +146,7 @@ func (h *ClientSecurityHandler) Actions(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) Logs(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	out, err := h.svc.SearchLogs(service.ClientDistSecurityLogFilter{Type: c.Query("type"), ChannelID: c.Query("channelId"), MachineID: c.Query("machineId"), PlayerName: c.Query("playerName"), IP: c.Query("ip"), Page: parseIntDefault(c.Query("page"), 1), PageSize: parseIntDefault(c.Query("pageSize"), 50)})
@@ -166,7 +166,7 @@ type ipBlockRequest struct {
 }
 
 func (h *ClientSecurityHandler) BlockIP(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.write") {
 		return
 	}
 	var body ipBlockRequest
@@ -189,7 +189,7 @@ func (h *ClientSecurityHandler) BlockIP(c *gin.Context) {
 	c.JSON(http.StatusCreated, a)
 }
 func (h *ClientSecurityHandler) CancelAction(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.write") {
 		return
 	}
 	id, err := parseUintParam(c, "id")
@@ -210,7 +210,7 @@ type keyStateRequest struct {
 }
 
 func (h *ClientSecurityHandler) SetKeyState(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.write") {
 		return
 	}
 	id, err := parseUintParam(c, "id")
@@ -239,7 +239,7 @@ type channelProtectionRequest struct {
 }
 
 func (h *ClientSecurityHandler) SetChannelProtection(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.write") {
 		return
 	}
 	var body channelProtectionRequest
@@ -260,7 +260,7 @@ func (h *ClientSecurityHandler) SetChannelProtection(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) ClearChannelProtection(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.write") {
 		return
 	}
 	if err := h.svc.SetChannelProtection(c.Param("id"), service.ClientChannelModeNormal); err != nil {
@@ -275,14 +275,14 @@ func (h *ClientSecurityHandler) ClearChannelProtection(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) StubOK(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	c.JSON(http.StatusOK, []any{})
 }
 
 func (h *ClientSecurityHandler) IPAnalysis(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	rows, err := h.svc.ListIPAnalysis(parseLimit(c))
@@ -294,7 +294,7 @@ func (h *ClientSecurityHandler) IPAnalysis(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) PlayerAnalysis(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	rows, err := h.svc.ListPlayerAnalysis(parseLimit(c))
@@ -306,7 +306,7 @@ func (h *ClientSecurityHandler) PlayerAnalysis(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) Groups(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	groups, err := h.svc.ListGroups()
@@ -327,7 +327,7 @@ type securityGroupRequest struct {
 }
 
 func (h *ClientSecurityHandler) CreateGroup(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.write") {
 		return
 	}
 	var body securityGroupRequest
@@ -352,7 +352,7 @@ func (h *ClientSecurityHandler) CreateGroup(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) UpdateGroup(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.write") {
 		return
 	}
 	id, err := parseUintParam(c, "id")
@@ -379,7 +379,7 @@ func (h *ClientSecurityHandler) UpdateGroup(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) DeleteGroup(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.write") {
 		return
 	}
 	id, err := parseUintParam(c, "id")
@@ -394,7 +394,7 @@ func (h *ClientSecurityHandler) DeleteGroup(c *gin.Context) {
 }
 
 func (h *ClientSecurityHandler) PrivacyNotice(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{

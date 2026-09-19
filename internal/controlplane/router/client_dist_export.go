@@ -48,7 +48,7 @@ func (h *ClientDistExportHandler) RegisterRoutes(rg *gin.RouterGroup) {
 
 // Export 校验筛选、执行每用户一分钟冷却，并流式写出 CSV。
 func (h *ClientDistExportHandler) Export(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "stats.read") {
 		return
 	}
 	filter, ok := parseClientDistExportFilter(c, h.now().UTC())

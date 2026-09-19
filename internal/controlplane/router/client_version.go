@@ -65,7 +65,7 @@ const playerNameHeader = "X-Player-Name"
 // multipart 表单：file（必）、codec（可，zstd|none）、expectedSha256（可，制品自身 sha256 校验）。
 // 返回的 sha256 即 manifest files[].artifact.sha256；玩家按此值 GET /client-artifacts/{sha256}。
 func (h *ClientVersionHandler) PublishFile(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.write", "dist.publish") {
 		return
 	}
 	channelID := c.Param("id")
@@ -109,7 +109,7 @@ type publishVersionRequest struct {
 // PublishVersion POST /client-channels/:id/versions — 发布版本并切 latest 指针（运营，平台管理员）。
 // version 由服务端单调递增分配（防降级基准，contract §3）；不接受客户端指定版本号。
 func (h *ClientVersionHandler) PublishVersion(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.write", "dist.publish") {
 		return
 	}
 	channelID := c.Param("id")
@@ -145,7 +145,7 @@ func (h *ClientVersionHandler) PublishVersion(c *gin.Context) {
 // ListVersions GET /client-channels/:id/versions — 版本历史列表（运营，平台管理员；FR-088）。
 // 历史**仅供管理面**（运营回滚/审计）；玩家侧只认 latest（contract §2），不经此端点拉取任意版本。
 func (h *ClientVersionHandler) ListVersions(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.read", "channel.write", "dist.publish") {
 		return
 	}
 	versions, err := h.svc.ListVersions(c.Param("id"))
@@ -158,7 +158,7 @@ func (h *ClientVersionHandler) ListVersions(c *gin.Context) {
 
 // GetVersion GET /client-channels/:id/versions/:version — 版本详情（含文件清单，运营，平台管理员；FR-088）。
 func (h *ClientVersionHandler) GetVersion(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.read", "channel.write", "dist.publish") {
 		return
 	}
 	version, err := strconv.Atoi(c.Param("version"))
@@ -185,7 +185,7 @@ type clientRollbackRequest struct {
 // RollbackVersion POST /client-channels/:id/rollback — 运营回滚（运营，平台管理员；FR-088）。
 // 以更高版本号重发历史内容为新 latest（不下发更低号、保持单调、不触发客户端防降级，ADR-022 §3）。
 func (h *ClientVersionHandler) RollbackVersion(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.write", "dist.publish") {
 		return
 	}
 	channelID := c.Param("id")
@@ -216,7 +216,7 @@ func (h *ClientVersionHandler) RollbackVersion(c *gin.Context) {
 // 管理台无拉取密钥不能复用之取预览。故补此 JWT **只读**端点，仅服务发布页/版本详情的内容预览（FR-214）。
 // 二进制/压缩/超大由服务层判定并以 kind 显式返回，前端据此渲染或降级。
 func (h *ClientVersionHandler) GetArtifactContent(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.read", "channel.write", "dist.publish") {
 		return
 	}
 	sha := c.Query("sha256")
@@ -237,7 +237,7 @@ func (h *ClientVersionHandler) GetArtifactContent(c *gin.Context) {
 // 与 GetArtifactContent 同理：玩家制品端点走拉取密钥，管理台浏览器需一个 JWT 下载入口（含降级态「不可预览必可下载」）。
 // 复用 OpenArtifact 取物理文件，附下载文件名（取 sha 末段，前端 source 会以 manifest path 末段重命名亦可）。
 func (h *ClientVersionHandler) DownloadArtifact(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.read", "channel.write", "dist.publish") {
 		return
 	}
 	sha := c.Query("sha256")
@@ -717,7 +717,7 @@ func responseBodyForLog(body, errCode string) string {
 }
 
 func (h *ClientVersionHandler) ListEvents(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.read", "channel.write", "dist.publish") {
 		return
 	}
 	if h.tracking == nil {
@@ -796,6 +796,9 @@ func (h *ClientVersionHandler) RegisterConsumerRoutes(rg *gin.RouterGroup) {
 // GetUpdaterCore GET /client-channels/:id/updater-core — 返回频道选定 core 版本信息（玩家，拉取密钥鉴权）。
 // 返回 {version, sha256, downloadUrl, size}（spec §2.5.3 冻结格式），楔子据此下载 core jar。
 func (h *ClientVersionHandler) GetUpdaterCore(c *gin.Context) {
+	if !requireNodes(c, "channel.write", "dist.publish") {
+		return
+	}
 	channelID := c.Param("id")
 	start := time.Now()
 	errCode := ""
@@ -842,7 +845,7 @@ func (h *ClientVersionHandler) GetUpdaterCore(c *gin.Context) {
 
 // ListUpdaterCoreVersions GET /client-channels/:id/updater-core/versions — 列出所有归档 core 版本（运营，平台管理员）。
 func (h *ClientVersionHandler) ListUpdaterCoreVersions(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.read", "channel.write", "dist.publish") {
 		return
 	}
 	// 校验频道存在。
@@ -861,7 +864,7 @@ func (h *ClientVersionHandler) ListUpdaterCoreVersions(c *gin.Context) {
 
 // UploadUpdaterCoreVersion POST /client-channels/:id/updater-core/versions — 手动上传 updater-core.jar（运营，平台管理员；hotfix）。
 func (h *ClientVersionHandler) UploadUpdaterCoreVersion(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.write", "dist.publish") {
 		return
 	}
 	channelID := c.Param("id")
@@ -906,7 +909,7 @@ type selectUpdaterCoreRequest struct {
 
 // SelectUpdaterCore PUT /client-channels/:id/updater-core/selected — 切换频道选定 core 版本（运营，平台管理员；FR-259 回滚）。
 func (h *ClientVersionHandler) SelectUpdaterCore(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "channel.write", "dist.publish") {
 		return
 	}
 	channelID := c.Param("id")

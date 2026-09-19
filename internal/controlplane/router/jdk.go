@@ -14,7 +14,7 @@ type JDKHandler struct{ svc *service.JDKService }
 func NewJDKHandler(svc *service.JDKService) *JDKHandler { return &JDKHandler{svc: svc} }
 
 func (h *JDKHandler) List(c *gin.Context) {
-	if !requirePlatformAdmin(c) { return }
+	if !requireNodes(c, "node.read", "node.manage") { return }
 	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
 	jdks, err := h.svc.List(nodeID)
 	if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error":"INTERNAL_ERROR","message":"查询 JDK 列表失败"}); return }

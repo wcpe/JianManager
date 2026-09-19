@@ -24,7 +24,7 @@ func NewClientIPRuleHandler(svc *service.ClientIPGuardService, audit *service.Au
 
 // List GET /client-dist/ip-rules — 列出全部 IP 规则。
 func (h *ClientIPRuleHandler) List(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	rules, err := h.svc.ListRules()
@@ -44,7 +44,7 @@ type addIPRuleRequest struct {
 
 // Add POST /client-dist/ip-rules — 新增 IP 规则（运行时生效，入审计）。
 func (h *ClientIPRuleHandler) Add(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.write") {
 		return
 	}
 	var body addIPRuleRequest
@@ -69,7 +69,7 @@ func (h *ClientIPRuleHandler) Add(c *gin.Context) {
 
 // Remove DELETE /client-dist/ip-rules/:id — 删除 IP 规则（运行时生效，入审计）。
 func (h *ClientIPRuleHandler) Remove(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.write") {
 		return
 	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -91,7 +91,7 @@ func (h *ClientIPRuleHandler) Remove(c *gin.Context) {
 
 // Stats GET /client-dist/protection-stats — 防护拦截计数（可观测；内存计数、不写库）。
 func (h *ClientIPRuleHandler) Stats(c *gin.Context) {
-	if !requirePlatformAdmin(c) {
+	if !requireNodes(c, "dist.ops.read", "dist.ops.write") {
 		return
 	}
 	c.JSON(http.StatusOK, h.svc.Stats())
