@@ -109,9 +109,9 @@ export function Combobox({
   }
 
   return (
-    // 不用 modal：Dialog 内 Combobox 的 modal 层会和 Dialog 遮罩抢点击，导致「点下拉却关弹窗」。
-    // 滚动锁由 Dialog 侧处理；下拉自身 overflow-y-auto 可滚。
-    <PopoverPrimitive.Root open={open} onOpenChange={onOpenChange} modal={false}>
+    // FR-328：modal=true，Popover 自持滚动锁分片（body[data-scroll-locked] +1），
+    // 放行 portal 到 body 的下拉滚轮；Dialog 侧已 preventDefault outside 点击，不会误关弹窗。
+    <PopoverPrimitive.Root open={open} onOpenChange={onOpenChange} modal>
       <PopoverPrimitive.Trigger asChild>
         <button
           type="button"
@@ -138,6 +138,8 @@ export function Combobox({
           // Dialog(z-200) 内下拉：zIndex 进 popper wrapper（Radix 从 Content style 取），否则列表被遮罩盖住
           style={{ pointerEvents: 'auto', zIndex: 300 }}
           className="z-[300] pointer-events-auto w-(--radix-popover-trigger-width) origin-(--radix-popover-content-transform-origin) overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
         >
           <input
             ref={inputRef}

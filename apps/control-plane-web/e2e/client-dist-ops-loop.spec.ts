@@ -50,8 +50,11 @@ test.describe('客户端分发运营闭环', () => {
 
     const banBtn = page.getByRole('button', { name: '封禁 IP' }).first()
     await banBtn.click()
-    await expect(page.getByRole('dialog')).toBeVisible()
-    await expect(page.getByText(/临时封禁 IP/)).toBeVisible()
+    const banDialog = page.getByRole('dialog')
+    await expect(banDialog).toBeVisible()
+    // 现网处置弹窗：标题「封禁 IP」+ 描述含「临时封禁」（旧 DangerConfirm 的「临时封禁 IP {{ip}}」已下线）
+    await expect(banDialog.getByRole('heading', { name: '封禁 IP', exact: true })).toBeVisible()
+    await expect(banDialog.getByText(/临时封禁/).first()).toBeVisible()
     await page.keyboard.press('Escape')
 
     await page.screenshot({ path: path.join(evidenceDir, '03-ops-actions.png'), fullPage: true })
