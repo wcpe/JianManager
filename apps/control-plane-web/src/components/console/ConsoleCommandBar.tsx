@@ -537,6 +537,8 @@ export default function ConsoleCommandBar({
             type="text"
             value={value}
             disabled={disabled}
+            data-testid="console-command-input"
+            data-terminal-access={disabled ? 'denied' : 'allowed'}
             onChange={(event) => {
               setValue(event.target.value)
               // 候选开着时随输入重算：不重算会让列表停留在过时的前缀上。

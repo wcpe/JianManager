@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
 import { useConsoleStore } from '@/stores/console'
 import { changeLanguage } from '@/i18n'
 import { cn } from '@jianmanager/ui'
@@ -31,18 +32,21 @@ import ServerSelector from './ServerSelector'
 import SidebarServerList from './SidebarServerList'
 import SidebarNavLink from './SidebarNavLink'
 import ThemeSwitcher from './ThemeSwitcher'
-import { navGroupsForRole, type NavGroup, type NavSection } from './nav-config'
+import { navGroupsForPermissions, navGroupsForRole, type NavGroup, type NavSection } from './nav-config'
 
 /** 分节小标题图标（仅视觉，折叠态不显）。 */
 const SECTION_ICON: Record<string, LucideIcon> = {
-  'nav.contentDistribution': Wrench,
-  'nav.storageRuntime': Boxes,
-  'nav.taskNotification': Bell,
   'nav.identityAccess': UsersRound,
+  'nav.taskSchedule': Bell,
+  'nav.storageRuntime': Boxes,
+  'nav.contentTemplates': Wrench,
   'nav.auditSettings': ShieldCheck,
   'nav.agentAccess': KeyRound,
   'nav.systemMaintenance': Wrench,
   // 兼容旧 key（若测试/外部仍引用）
+  'nav.contentDistribution': Wrench,
+  'nav.taskNotification': Bell,
+  'nav.platformManagement': Wrench,
   'nav.accountAudit': ShieldCheck,
   'nav.admin': Wrench,
 }
@@ -57,7 +61,13 @@ const SIDEBAR_CONTENT_SWAP_MS = 320
  */
 export default function ConsoleSidebar() {
   const role = useAuthStore((s) => s.role)
-  const groups = useMemo(() => navGroupsForRole(role), [role])
+  const permNodes = usePermissionsStore((s) => s.nodes)
+  const permAdmin = usePermissionsStore((s) => s.isPlatformAdmin)
+  const permLoaded = usePermissionsStore((s) => s.loaded)
+  const groups = useMemo(() => {
+    if (permLoaded) return navGroupsForPermissions(permNodes, permAdmin)
+    return navGroupsForRole(role)
+  }, [permLoaded, permNodes, permAdmin, role])
   const collapsed = useConsoleStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
   const [renderCollapsed, setRenderCollapsed] = useState(collapsed)

@@ -3,11 +3,12 @@ import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 
-/** 侧栏导航项（多级侧栏共用）。 */
+/** 侧栏导航项（多级侧栏共用）。`perm` 为权限节点，数组表示 any-of（FR-431）。 */
 export interface NavEntry {
   to: string
   labelKey: string
   icon?: LucideIcon
+  perm?: string | string[]
 }
 
 /** 侧栏单个导航链接（FR-061 高密度 + MC 绿激活态）；`/` 用 end 精确匹配。 */

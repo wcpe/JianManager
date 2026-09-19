@@ -6,6 +6,7 @@ import { server } from '@jianmanager/devmock/server'
 import { resetDb } from '@jianmanager/devmock/db'
 import { clearInjections } from '@jianmanager/devmock/inject'
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
 import type { TerminalSessionManager } from '@/lib/terminal-session-manager'
 
 /**
@@ -71,6 +72,7 @@ afterEach(() => {
   clearInjections()
   localStorage.clear()
   useAuthStore.getState().logout()
+  usePermissionsStore.getState().reset()
   // 每例后统一释放终端会话，防止会话（WS/xterm/计时器）泄漏到下个用例。
   terminalSessionManager?.disposeAll()
 })

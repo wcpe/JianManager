@@ -29,6 +29,8 @@ import {
 const ROLE_LABEL_KEY: Record<number, string> = {
   0: 'users.member',
   1: 'users.groupAdmin',
+  2: 'users.groupOperator',
+  3: 'users.groupViewer',
   10: 'users.platformAdmin',
 }
 

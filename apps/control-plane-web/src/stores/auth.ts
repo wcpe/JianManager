@@ -1,6 +1,13 @@
 import { create } from 'zustand'
 import { decodeJwt } from '@/lib/jwt'
 
+/** 登录/恢复后异步拉取 /auth/me，填充权限 store（失败由 store 自身回落）。 */
+function schedulePermissionsLoad(): void {
+  void import('@/stores/permissions').then((m) => {
+    void m.usePermissionsStore.getState().loadFromAuthMe()
+  })
+}
+
 interface AuthState {
   accessToken: string | null
   refreshToken: string | null
@@ -40,12 +47,14 @@ export const useAuthStore = create<AuthState>((set) => ({
       role: claims?.role ?? null,
       username: claims?.username ?? null,
     })
+    schedulePermissionsLoad()
   },
 
   logout: () => {
     localStorage.removeItem('accessToken')
     localStorage.removeItem('refreshToken')
     set({ accessToken: null, refreshToken: null, isAuthenticated: false, role: null, username: null })
+    void import('@/stores/permissions').then((m) => m.usePermissionsStore.getState().reset())
     // 登出即整体释放全部终端会话（FR-295/296，ADR-067）：连接常驻管理器不随组件卸载断开，
     // 必须在此统一 dispose 防孤儿 WS。动态 import 避免把 xterm 卷进首屏 chunk。
     void import('@/lib/terminal-session-manager').then((m) => m.terminalSessionManager.disposeAll())
@@ -55,12 +64,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     const accessToken = localStorage.getItem('accessToken')
     const refreshToken = localStorage.getItem('refreshToken')
     const claims = decodeJwt(accessToken)
+    const authenticated = !!accessToken
     set({
       accessToken,
       refreshToken,
-      isAuthenticated: !!accessToken,
+      isAuthenticated: authenticated,
       role: claims?.role ?? null,
       username: claims?.username ?? null,
     })
+    if (authenticated) schedulePermissionsLoad()
   },
 }))

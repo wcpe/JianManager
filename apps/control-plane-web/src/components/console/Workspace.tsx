@@ -14,6 +14,7 @@ const InstanceWizardPage = lazy(() => import('@/pages/InstanceWizardPage'))
 const NetworksPage = lazy(() => import('@/pages/NetworksPage'))
 const PlayersPage = lazy(() => import('@/pages/PlayersPage'))
 const UsersPage = lazy(() => import('@/pages/UsersPage'))
+const PermissionsPage = lazy(() => import('@/pages/PermissionsPage'))
 const GroupsPage = lazy(() => import('@/pages/GroupsPage'))
 const SchedulesPage = lazy(() => import('@/pages/SchedulesPage'))
 const BackupsPage = lazy(() => import('@/pages/BackupsPage'))
@@ -69,6 +70,9 @@ export default function Workspace() {
   const { t } = useTranslation()
   const location = useLocation()
   const isInstanceRoute = /^\/instances\/\d+/.test(location.pathname)
+  // 权限配置页：固定视口高度，仅中栏滚动（与实例控制台同款骨架）
+  const isPermissionsRoute = location.pathname === '/permissions' || location.pathname.startsWith('/permissions')
+  const isFixedViewportRoute = isInstanceRoute || isPermissionsRoute
   // 路由过渡容器 key 仅按 pathname——同页仅 query 变化（如发布向导 ?step= 步骤切换、列表筛选、
   // tab 切换）不得 remount 路由子树，否则会清空页内本地状态（如发布向导本地暂存的 drafts）。
   // 页面级切换（pathname 变）仍会换 key 重放进场动画。
@@ -98,11 +102,11 @@ export default function Workspace() {
     <Suspense fallback={<div className="p-6 text-muted-foreground">{t('common.loading')}</div>}>
       {/* 实例路由走视口自适应骨架（FR-422）：外层不滚动，滚动收口到页内卡片；
           顶栏与 Tab 栏因此常驻可见，底部不再随屏幕变大而留白。其他路由保持整页滚动不变。 */}
-      <div className={isInstanceRoute ? 'jm-workspace-bg flex h-full w-full flex-col overflow-hidden p-3' : 'jm-workspace-bg h-full w-full overflow-auto p-3 [scrollbar-gutter:stable] sm:p-5 lg:p-6'}>
+      <div className={isFixedViewportRoute ? 'jm-workspace-bg flex h-full w-full flex-col overflow-hidden p-3' : 'jm-workspace-bg h-full w-full overflow-auto p-3 [scrollbar-gutter:stable] sm:p-5 lg:p-6'}>
         <div
           key={routeKey}
           data-slot="workspace-route-transition"
-          className={isInstanceRoute ? 'jm-route-transition flex min-h-0 flex-1 flex-col' : 'jm-route-transition min-h-full'}
+          className={isFixedViewportRoute ? 'jm-route-transition flex min-h-0 flex-1 flex-col' : 'jm-route-transition min-h-full'}
         >
           <Routes>
             <Route index element={<OverviewPage />} />
@@ -121,6 +125,8 @@ export default function Workspace() {
             <Route path="bots/sessions/:id" element={<BotLoadSessionPage />} />
             <Route path="alerts" element={<AlertsPage />} />
             <Route path="users" element={<UsersPage />} />
+            {/* FR-432 权限树：路由级 RequirePlatformAdmin + 页内 rbac.read 双闸。 */}
+            <Route path="permissions" element={<RequirePlatformAdmin><PermissionsPage /></RequirePlatformAdmin>} />
             <Route path="groups" element={<GroupsPage />} />
             <Route path="templates" element={<TemplatesPage />} />
             <Route path="runtime-assets" element={<RuntimeAssetsPage />} />

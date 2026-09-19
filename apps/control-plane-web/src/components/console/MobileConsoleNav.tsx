@@ -4,8 +4,9 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
 import { cn } from '@jianmanager/ui'
-import { navGroupsForRole, type NavGroup, type NavSection } from './nav-config'
+import { navGroupsForPermissions, navGroupsForRole, type NavGroup, type NavSection } from './nav-config'
 
 /** 收集一个分组下所有可导航路由，用于移动端主域高亮。 */
 function groupRoutes(group: NavGroup): string[] {
@@ -25,7 +26,10 @@ function isRouteActive(pathname: string, to: string): boolean {
 export default function MobileConsoleNav() {
   const { t } = useTranslation()
   const role = useAuthStore((s) => s.role)
-  const groups = navGroupsForRole(role)
+  const permNodes = usePermissionsStore((s) => s.nodes)
+  const permAdmin = usePermissionsStore((s) => s.isPlatformAdmin)
+  const permLoaded = usePermissionsStore((s) => s.loaded)
+  const groups = permLoaded ? navGroupsForPermissions(permNodes, permAdmin) : navGroupsForRole(role)
   const location = useLocation()
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [panelGroup, setPanelGroup] = useState<NavGroup | null>(null)

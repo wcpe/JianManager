@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useInstance, useStartInstance } from '@/api/instances'
 import { useTerminalToken } from '@/api/terminal'
+import { usePermissionsStore } from '@/stores/permissions'
 import ConsoleCommandBar from './ConsoleCommandBar'
 import InstanceConsoleView from './InstanceConsoleView'
 import StoppedLogsView from './StoppedLogsView'
@@ -74,17 +75,24 @@ export default function TerminalPane({
     return { wsUrl: data.wsUrl, token: data.token }
   }, [refetch])
   const startInstance = useStartInstance()
+  const canAccessTerminal = usePermissionsStore((s) => s.hasPerm('terminal.access'))
   const adjustFont = (delta: number) => setFontSize((value) => Math.min(20, Math.max(11, value + delta)))
 
   // 命令栏禁用时的一行原因 + 直达动作（spec §2.2）。
   // 停机/崩溃给「启动实例」；STARTING/STOPPING 是过渡态，给按钮只会诱导用户重复触发。
+  // FR-432：无 terminal.access 时命令栏禁用（平台管理员 hasPerm 恒 true）。
   const canStart = isStopped || status === 'CRASHED'
-  const disabledReason = status ? t('instanceDetail.consoleInputDisabled', { status }) : undefined
+  const disabledReason = !canAccessTerminal
+    ? t('permissions.terminalDenied')
+    : status
+      ? t('instanceDetail.consoleInputDisabled', { status })
+      : undefined
   const startAction = canStart ? (
     <Button
       size="xs"
       variant="outline"
-      disabled={startInstance.isPending}
+      data-testid="instance-operate-start-from-terminal"
+      disabled={startInstance.isPending || !canAccessTerminal}
       onClick={() => {
         startInstance.mutate(instanceId, {
           onError: (error) => toast.error(error instanceof Error ? error.message : t('common.error')),
@@ -207,10 +215,11 @@ export default function TerminalPane({
           <div className="flex min-h-[400px] items-center justify-center rounded-lg bg-[#1a1b26] p-4">
             <p className="text-sm text-gray-500">{t('instanceDetail.connecting')}</p>
           </div>
-        ) : isStopped ? (
+        ) : isStopped || !canAccessTerminal ? (
           // 完全停机：不连 WS（避免死循环刷断连 FIX-B），改从 DB 回放历史日志（FR-345）——
           // 令关服过程/崩溃现场在停机态仍可见。命令栏仍在位但禁用 + 带「启动实例」直达动作
           // （spec §2.2）：让「为什么输不进去、怎么才能输」在同一处说清，而不是干脆没有输入框。
+          // FR-432：无 terminal.access 同样禁用输入，只读输出仍可看。
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-hidden">
               <StoppedLogsView instanceId={instanceId} status={status} />
@@ -235,7 +244,7 @@ export default function TerminalPane({
             key={String(instanceId)}
             instanceId={instanceId}
             fetchToken={fetchToken}
-            readOnly={!isRunning}
+            readOnly={!isRunning || !canAccessTerminal}
             isLoading={isLoading}
             fontSize={fontSize}
             searchOpen={terminalSearchOpen}

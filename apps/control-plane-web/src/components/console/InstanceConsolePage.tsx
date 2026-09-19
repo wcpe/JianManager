@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Activity as ActivityIcon, AlertTriangle, Bot, ChevronDown, ChevronUp, Coins, Copy, DatabaseBackup, FolderTree, Gauge, Hammer, HardDrive, Layers, LayoutDashboard, Loader2, MoreHorizontal, Play, Puzzle, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
 
 import { useInstance, useKillInstance, useRebuildInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
+import { usePermissionsStore } from '@/stores/permissions'
 import DangerConfirm from '@/components/DangerConfirm'
 import { useInstanceMetrics, useMetricSeries } from '@/api/metrics'
 import { useLogs } from '@/api/logs'
@@ -107,6 +108,8 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const start = useStartInstance()
   const kill = useKillInstance()
   const rebuild = useRebuildInstance()
+  // FR-432 首批写门禁：无 instance.operate 时主操作按钮禁用（平台管理员 hasPerm 恒 true）。
+  const canOperate = usePermissionsStore((s) => s.hasPerm('instance.operate'))
   // 强杀走统一危险操作确认（FR-059），不直发请求。
   const [killConfirmOpen, setKillConfirmOpen] = useState(false)
   // 指标条折叠偏好（FR-412）：跨实例与刷新保留，收起后顶栏再省一行给内容区。
@@ -189,11 +192,11 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const startFailReason = provisioning || rebuilding ? undefined : instance.statusReason?.trim()
   // <md 主操作（可用性增强）：按状态给唯一带文字的主按钮，其余收进「更多」菜单。
   const primaryAction = canStart
-    ? { label: t('instances.start'), icon: Play, disabled: provisioning, title: provisioning ? t('instances.provisioningBlocked') : undefined, onClick: () => start.mutate(instance.id) }
+    ? { label: t('instances.start'), icon: Play, disabled: provisioning || !canOperate, title: !canOperate ? t('permissions.operateDenied') : provisioning ? t('instances.provisioningBlocked') : undefined, onClick: () => start.mutate(instance.id) }
     : isDamaged
-      ? { label: t('serverConsole.rebuild'), icon: Hammer, disabled: rebuilding, title: rebuilding ? t('serverConsole.rebuilding') : undefined, onClick: () => rebuild.mutate(instance.id) }
+      ? { label: t('serverConsole.rebuild'), icon: Hammer, disabled: rebuilding || !canOperate, title: !canOperate ? t('permissions.operateDenied') : rebuilding ? t('serverConsole.rebuilding') : undefined, onClick: () => rebuild.mutate(instance.id) }
       : canControl
-        ? { label: t('serverConsole.restart'), icon: RotateCw, disabled: false, title: undefined, onClick: () => restart.mutate(instance.id) }
+        ? { label: t('serverConsole.restart'), icon: RotateCw, disabled: !canOperate, title: !canOperate ? t('permissions.operateDenied') : undefined, onClick: () => restart.mutate(instance.id) }
         : null
   const setActiveTab = (tab: TabKey) => {
     const next = new URLSearchParams(searchParams)
@@ -287,8 +290,8 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
             <div className="ml-auto flex flex-wrap items-center gap-1.5">
               {canStart && (
                 // 禁用按钮带 disabled:pointer-events-none，tooltip 由外层 span 承载（FR-331）。
-                <span title={provisioning ? t('instances.provisioningBlocked') : undefined}>
-                  <Button size="sm" disabled={provisioning} onClick={() => start.mutate(instance.id)}>
+                <span title={!canOperate ? t('permissions.operateDenied') : provisioning ? t('instances.provisioningBlocked') : undefined}>
+                  <Button size="sm" disabled={provisioning || !canOperate} data-testid="instance-operate-start" onClick={() => start.mutate(instance.id)}>
                     <Play className="size-3.5" />
                     {t('instances.start')}
                   </Button>
@@ -296,22 +299,22 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
               )}
               {isDamaged && (
                 // 损毁实例（FR-342）：显「重建」复用参数重跑搭建；重建在途禁用（tooltip 提示）。
-                <span title={rebuilding ? t('serverConsole.rebuilding') : undefined}>
-                  <Button size="sm" disabled={rebuilding} onClick={() => rebuild.mutate(instance.id)}>
+                <span title={!canOperate ? t('permissions.operateDenied') : rebuilding ? t('serverConsole.rebuilding') : undefined}>
+                  <Button size="sm" disabled={rebuilding || !canOperate} data-testid="instance-operate-rebuild" onClick={() => rebuild.mutate(instance.id)}>
                     <Hammer className="size-3.5" />
                     {t('serverConsole.rebuild')}
                   </Button>
                 </span>
               )}
-              <Button size="sm" variant="outline" disabled={!canControl} onClick={() => restart.mutate(instance.id)}>
+              <Button size="sm" variant="outline" disabled={!canControl || !canOperate} data-testid="instance-operate-restart" title={!canOperate ? t('permissions.operateDenied') : undefined} onClick={() => restart.mutate(instance.id)}>
                 <RotateCw className="size-3.5" />
                 {t('serverConsole.restart')}
               </Button>
-              <Button size="sm" variant="outline" disabled={!canControl} onClick={() => stop.mutate(instance.id)}>
+              <Button size="sm" variant="outline" disabled={!canControl || !canOperate} data-testid="instance-operate-stop" title={!canOperate ? t('permissions.operateDenied') : undefined} onClick={() => stop.mutate(instance.id)}>
                 <Square className="size-3.5" />
                 {t('serverConsole.stop')}
               </Button>
-              <Button size="sm" variant="destructive" disabled={!canControl} onClick={() => setKillConfirmOpen(true)}>
+              <Button size="sm" variant="destructive" disabled={!canControl || !canOperate} data-testid="instance-operate-kill" title={!canOperate ? t('permissions.operateDenied') : undefined} onClick={() => setKillConfirmOpen(true)}>
                 <AlertTriangle className="size-3.5" />
                 {t('serverConsole.kill')}
               </Button>

@@ -7,6 +7,7 @@ import { Box, CornerDownLeft, Network, Search, Server, Terminal } from 'lucide-r
 import { useInstanceSearch } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
 import { useConsoleStore } from '@/stores/console'
 import { cn } from '@jianmanager/ui'
 import { instanceStatusLevel } from '@jianmanager/ui'
@@ -31,6 +32,9 @@ export default function CommandPalette() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const role = useAuthStore((s) => s.role)
+  const permNodes = usePermissionsStore((s) => s.nodes)
+  const permAdmin = usePermissionsStore((s) => s.isPlatformAdmin)
+  const permLoaded = usePermissionsStore((s) => s.loaded)
   const open = useConsoleStore((s) => s.commandPaletteOpen)
   const setOpen = useConsoleStore((s) => s.setCommandPaletteOpen)
   const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
@@ -68,10 +72,13 @@ export default function CommandPalette() {
     [t],
   )
 
-  const pages = useMemo(
-    () => flatNavItems(role).map((n) => ({ to: n.to, label: t(n.labelKey) })),
-    [role, t],
-  )
+  const pages = useMemo(() => {
+    const permNodes = usePermissionsStore.getState().nodes
+    const permAdmin = usePermissionsStore.getState().isPlatformAdmin
+    const permLoaded = usePermissionsStore.getState().loaded
+    if (permLoaded) return flatNavItems(permNodes, permAdmin).map((n) => ({ to: n.to, label: t(n.labelKey) }))
+    return flatNavItems(role).map((n) => ({ to: n.to, label: t(n.labelKey) }))
+  }, [role, permNodes, permAdmin, permLoaded, t])
 
   const entries = useMemo(
     () =>

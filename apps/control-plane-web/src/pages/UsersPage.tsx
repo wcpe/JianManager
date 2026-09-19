@@ -1,9 +1,12 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { UserRound } from 'lucide-react'
+import { Shield, UserRound } from 'lucide-react'
 import { useUsers, useDeleteUser, useUpdateUser, useUserInvitations, useRevokeInvitation, type UserInfo } from '@/api/users'
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
+import { isPlatformAdmin as isAdminRole } from '@/lib/roles'
 import DangerConfirm from '@/components/DangerConfirm'
 import CreateUserDialog from '@/components/CreateUserDialog'
 import CreateInvitationDialog from '@/components/CreateInvitationDialog'
@@ -43,7 +46,10 @@ export default function UsersPage() {
   const deleteUser = useDeleteUser()
   const updateUser = useUpdateUser()
   const revokeInvitation = useRevokeInvitation()
-  const isPlatformAdmin = useAuthStore((s) => s.role === 10)
+  const isPlatformAdmin = useAuthStore((s) => isAdminRole(s.role))
+  // FR-432：用户写操作与 API 对齐（user.manage），不再仅看 role===10
+  const hasPerm = usePermissionsStore((s) => s.hasPerm)
+  const canManageUsers = isPlatformAdmin || hasPerm('user.manage')
 
   const roleLabel = (role: number): string => {
     switch (role) {
@@ -51,6 +57,10 @@ export default function UsersPage() {
         return t('users.member')
       case 1:
         return t('users.groupAdmin')
+      case 2:
+        return t('users.groupOperator')
+      case 3:
+        return t('users.groupViewer')
       case 10:
         return t('users.platformAdmin')
       default:
@@ -59,7 +69,7 @@ export default function UsersPage() {
   }
 
   // 平台管理员主色 pill，其余中性，作角色 pill 着色。
-  const roleTone = (role: number) => (role === 10 ? 'info' : 'neutral')
+  const roleTone = (role: number) => (isAdminRole(role) ? 'info' : 'neutral')
   // 用户状态 0=启用。toggle 即在 0/1 间切换。
   const toggleStatus = (u: UserInfo) =>
     updateUser.mutate(
@@ -83,8 +93,8 @@ export default function UsersPage() {
           actions={
             <>
               <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
-              {isPlatformAdmin && <Button variant="outline" onClick={() => setShowInvite(true)}>{t('users.inviteUser')}</Button>}
-              {isPlatformAdmin && <Button onClick={() => setShowCreate(true)}>+ {t('users.createUser')}</Button>}
+              {canManageUsers && <Button variant="outline" onClick={() => setShowInvite(true)}>{t('users.inviteUser')}</Button>}
+              {canManageUsers && <Button onClick={() => setShowCreate(true)}>+ {t('users.createUser')}</Button>}
             </>
           }
         />
@@ -143,6 +153,14 @@ export default function UsersPage() {
                       onLabel={t('users.enabled')}
                       offLabel={t('users.disabled')}
                     />
+                    {canManageUsers && (
+                      <Button variant="ghost" size="xs" asChild data-testid={`users-permissions-link-${u.id}`}>
+                        <Link to={`/permissions?user=${u.id}`} title={t('permissions.openForUser')}>
+                          <Shield className="mr-1 size-3" />
+                          {t('permissions.title')}
+                        </Link>
+                      </Button>
+                    )}
                     <Button variant="ghost" size="xs" onClick={() => setEditUser(u)}>
                       {t('common.edit')}
                     </Button>
@@ -190,6 +208,14 @@ export default function UsersPage() {
                   <TableCell align="right" className="text-muted-foreground tabular-nums">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
                   <TableCell align="right">
                     <div className="flex justify-end gap-1">
+                      {canManageUsers && (
+                        <Button variant="ghost" size="xs" asChild data-testid={`users-permissions-link-${u.id}`}>
+                          <Link to={`/permissions?user=${u.id}`} title={t('permissions.openForUser')}>
+                            <Shield className="mr-1 size-3" />
+                            {t('permissions.title')}
+                          </Link>
+                        </Button>
+                      )}
                       <Button variant="ghost" size="xs" onClick={() => setEditUser(u)}>
                         {t('common.edit')}
                       </Button>
@@ -217,7 +243,7 @@ export default function UsersPage() {
       <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />
       <CreateInvitationDialog open={showInvite} onClose={() => setShowInvite(false)} />
 
-      {isPlatformAdmin && (
+      {canManageUsers && (
         <Panel>
           <h2 className="text-sm font-semibold">{t('users.invitations')}</h2>
           {!invitations || invitations.length === 0 ? (

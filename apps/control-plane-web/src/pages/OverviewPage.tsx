@@ -7,6 +7,7 @@ import { useTasks, type TaskState } from '@/api/tasks'
 import { useAlertEvents } from '@/api/alerts'
 import { useMetricOverview, usePlatformObservabilityOverview, useResourceAttribution, type PlatformObservabilityOverviewResponse, type ResourceAttributionResponse } from '@/api/metrics'
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { ResourceGauge } from '@jianmanager/ui/components/gauge'
@@ -221,13 +222,16 @@ export default function OverviewPage() {
   const [range, setRange] = useState<MetricRange>('24h')
   const [activeGauge, setActiveGauge] = useState<AttributionGauge | null>(null)
   const isPlatformAdmin = useAuthStore((state) => state.role === 10)
+  // FR-432：平台观测区与权限树对齐（node.read / monitor.read 或超管）
+  const hasPerm = usePermissionsStore((s) => s.hasPerm)
+  const canSeePlatformObs = isPlatformAdmin || hasPerm('monitor.read') || hasPerm('node.read')
   const { data: nodes } = useNodes()
   const instancesQuery = useInstances()
   const tasksQuery = useTasks({ limit: 5 })
   const alertsQuery = useAlertEvents({ resolved: false, pageSize: 5 })
   const { data: overview } = useMetricOverview(range)
   const attribution = useResourceAttribution(activeGauge !== null, activeGauge === 'memory' ? 'memory' : 'cpu')
-  const platformObservability = usePlatformObservabilityOverview(isPlatformAdmin)
+  const platformObservability = usePlatformObservabilityOverview(canSeePlatformObs)
   const instanceRows = instancesQuery.data ?? []
   const exceptionRows = instanceRows.filter((instance) => instance.status === 'CRASHED').slice(0, 5)
   const recentTasks = tasksQuery.data?.items.slice(0, 5) ?? []
@@ -371,7 +375,7 @@ export default function OverviewPage() {
         </OverviewAggregationPanel>
       </div>
 
-      {isPlatformAdmin && (
+      {canSeePlatformObs && (
         <div data-testid="platform-observability-grid" className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           <PlatformHealthPanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
           <PlatformExceptionsPanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />

@@ -37,6 +37,8 @@ export default function EditUserDialog({ user, onClose }: EditUserDialogProps) {
   const roleOptions: ComboboxOption[] = [
     { value: '0', label: t('users.member') },
     { value: '1', label: t('users.groupAdmin') },
+    { value: '2', label: t('users.groupOperator') },
+    { value: '3', label: t('users.groupViewer') },
     { value: '10', label: t('users.platformAdmin') },
   ]
 

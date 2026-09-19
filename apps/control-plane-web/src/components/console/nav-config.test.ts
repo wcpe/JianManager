@@ -1,113 +1,130 @@
 import { describe, expect, it } from 'vitest'
-import { flatNavItems, navGroupsForRole, NAV_GROUPS } from './nav-config'
+import { flatNavItems, navGroupsForPermissions, navGroupsForRole, NAV_GROUPS, type NavGroup } from './nav-config'
+import { ALL_PERMISSION_NODE_IDS, ROLE_GROUP_VIEWER, ROLE_PLATFORM_ADMIN } from '@/lib/roles'
 
-describe('console nav config', () => {
-  it('routes group network entries to distinct list and topology surfaces', () => {
-    const group = NAV_GROUPS.find((item) => item.key === 'groupNetwork')
-    const links = group?.children?.map((item) => [item.labelKey, item.to])
+const adminNodes = new Set(ALL_PERMISSION_NODE_IDS)
 
-    expect(links).toContainEqual(['nav.groupManagement', '/networks'])
-    expect(links).toContainEqual(['nav.networkTopology', '/networks/topology'])
+function pathsFromGroups(groups: NavGroup[]): string[] {
+  const out: string[] = []
+  for (const g of groups) {
+    if (g.to) out.push(g.to)
+    for (const c of g.children ?? []) out.push(c.to)
+    for (const s of g.sections ?? []) for (const c of s.children) out.push(c.to)
+  }
+  return out
+}
+
+describe('console nav config（FR-431 六域 IA）', () => {
+  it('顶层六域 + 平台首页，URL 不变且无 /alerts', () => {
+    const keys = NAV_GROUPS.map((g) => g.key)
+    expect(keys).toEqual([
+      'platformHome',
+      'servers',
+      'groupNetwork',
+      'workbench',
+      'observability',
+      'clientDistribution',
+      'platformSettings',
+    ])
+    const all = flatNavItems(ROLE_PLATFORM_ADMIN).map((i) => i.to)
+    expect(all).toContain('/')
+    expect(all).toContain('/instances')
+    expect(all).toContain('/nodes')
+    expect(all).toContain('/players')
+    expect(all).toContain('/bots')
+    expect(all).toContain('/networks')
+    expect(all).toContain('/networks/topology')
+    expect(all).toContain('/super')
+    expect(all).toContain('/director')
+    expect(all).toContain('/monitor')
+    expect(all).toContain('/logs')
+    expect(all).toContain('/statistics')
+    expect(all).toContain('/notifications')
+    expect(all).toContain('/client-channels')
+    expect(all).toContain('/client-dist-ops')
+    expect(all).toContain('/permissions')
+    expect(all).toContain('/templates')
+    expect(all).not.toContain('/alerts')
   })
 
-  it('keeps FR-112 platform/runtime entries under platform management without changing URLs', () => {
-    const platform = NAV_GROUPS.find((item) => item.key === 'platformManagement')
-    const sections = platform?.sections ?? []
-    const routeByLabel = new Map(
-      sections.flatMap((section) => section.children.map((item) => [item.labelKey, item.to] as const)),
-    )
+  it('工作台独立域；templates 在平台设置而非客户端分发', () => {
+    const workbench = NAV_GROUPS.find((g) => g.key === 'workbench')
+    expect(workbench?.children?.map((c) => c.to)).toEqual(['/super', '/director'])
 
-    expect(platform?.labelKey).toBe('nav.platformManagement')
-    expect(routeByLabel.get('nav.runtimeAssets')).toBe('/runtime-assets')
-    expect(routeByLabel.get('nav.clientChannels')).toBe('/client-channels')
-    expect(routeByLabel.get('nav.storage')).toBe('/storage')
-    expect(routeByLabel.get('nav.users')).toBe('/users')
-    expect(routeByLabel.get('nav.groups')).toBe('/groups')
-    expect(routeByLabel.get('nav.audit')).toBe('/audit')
-    expect(routeByLabel.get('nav.systemSettings')).toBe('/settings')
+    const client = NAV_GROUPS.find((g) => g.key === 'clientDistribution')
+    expect(client?.children?.map((c) => c.to)).toEqual(['/client-channels', '/client-dist-ops'])
+
+    const settings = NAV_GROUPS.find((g) => g.key === 'platformSettings')
+    const templatesSection = settings?.sections?.find((s) => s.labelKey === 'nav.contentTemplates')
+    expect(templatesSection?.children.map((c) => c.to)).toEqual(['/templates'])
   })
 
-  it('把 FR-272 页面纳入统一导航真源并归入指定分组', () => {
-    const servers = NAV_GROUPS.find((item) => item.key === 'servers')
-    const platform = NAV_GROUPS.find((item) => item.key === 'platformManagement')
-    const storageRuntime = platform?.sections?.find((section) => section.labelKey === 'nav.storageRuntime')
-    const taskNotification = platform?.sections?.find((section) => section.labelKey === 'nav.taskNotification')
-    const flatRoutes = flatNavItems(1)
-
-    expect(servers?.children?.map((item) => [item.labelKey, item.to])).toEqual(
-      expect.arrayContaining([
-        ['nav.players', '/players'],
-        ['nav.bots', '/bots'],
-      ]),
-    )
-    expect(storageRuntime?.children.map((item) => [item.labelKey, item.to])).toContainEqual(['nav.backups', '/backups'])
-    expect(taskNotification?.children.map((item) => [item.labelKey, item.to])).toContainEqual(['nav.schedules', '/schedules'])
-    expect(flatRoutes).toEqual(
-      expect.arrayContaining([
-        { labelKey: 'nav.players', to: '/players' },
-        { labelKey: 'nav.bots', to: '/bots' },
-        { labelKey: 'nav.schedules', to: '/schedules' },
-        { labelKey: 'nav.backups', to: '/backups' },
-      ]),
-    )
-  })
-
-  it('平台管理按业务域分节：身份与权限 / 审计与设置 拆分', () => {
-    const platform = NAV_GROUPS.find((item) => item.key === 'platformManagement')
-    const sectionKeys = platform?.sections?.map((s) => s.labelKey) ?? []
+  it('平台设置分节齐全：身份/任务/存储/模板/审计/Agent/维护', () => {
+    const settings = NAV_GROUPS.find((g) => g.key === 'platformSettings')
+    const sectionKeys = settings?.sections?.map((s) => s.labelKey) ?? []
     expect(sectionKeys).toEqual([
-      'nav.contentDistribution',
-      'nav.storageRuntime',
-      'nav.taskNotification',
       'nav.identityAccess',
-      'nav.auditSettings',
-    ])
-    // 非管理员看不到 Agent / 系统维护
-    expect(sectionKeys).not.toContain('nav.agentAccess')
-    expect(sectionKeys).not.toContain('nav.systemMaintenance')
-  })
-
-  it('平台管理员追加 Agent 接入 + 系统维护两节；业务路由 URL 不变', () => {
-    const operatorTargets = flatNavItems(1).map((item) => item.to)
-    const adminTargets = flatNavItems(10).map((item) => item.to)
-    const adminGroup = navGroupsForRole(10).find((item) => item.key === 'platformManagement')
-    const agentSection = adminGroup?.sections?.find((section) => section.labelKey === 'nav.agentAccess')
-    const maintSection = adminGroup?.sections?.find((section) => section.labelKey === 'nav.systemMaintenance')
-
-    expect(operatorTargets).not.toContain('/database')
-    expect(operatorTargets).not.toContain('/system-update')
-    expect(operatorTargets).not.toContain('/artifact-versions')
-    expect(operatorTargets).not.toContain('/agent-tokens')
-    expect(operatorTargets).not.toContain('/mcp-sessions')
-    expect(operatorTargets).not.toContain('/agent-call-logs')
-
-    expect(adminTargets).toContain('/database')
-    expect(adminTargets).toContain('/system-update')
-    expect(adminTargets).toContain('/artifact-versions')
-    expect(adminTargets).toContain('/agent-tokens')
-    expect(adminTargets).toContain('/mcp-sessions')
-    expect(adminTargets).toContain('/agent-call-logs')
-
-    expect(agentSection?.children.map((item) => [item.labelKey, item.to])).toEqual([
-      ['nav.agentTokens', '/agent-tokens'],
-      ['nav.mcpSessions', '/mcp-sessions'],
-      ['nav.agentCallLogs', '/agent-call-logs'],
-    ])
-    expect(maintSection?.children.map((item) => [item.labelKey, item.to])).toEqual([
-      ['nav.artifactVersions', '/artifact-versions'],
-      ['nav.database', '/database'],
-      ['nav.systemUpdate', '/system-update'],
-    ])
-
-    // 分节顺序：业务五节 + 管理员两节
-    expect(adminGroup?.sections?.map((s) => s.labelKey)).toEqual([
-      'nav.contentDistribution',
+      'nav.taskSchedule',
       'nav.storageRuntime',
-      'nav.taskNotification',
-      'nav.identityAccess',
+      'nav.contentTemplates',
       'nav.auditSettings',
       'nav.agentAccess',
       'nav.systemMaintenance',
     ])
+    const identity = settings?.sections?.find((s) => s.labelKey === 'nav.identityAccess')
+    expect(identity?.children.map((c) => [c.labelKey, c.to])).toEqual([
+      ['nav.users', '/users'],
+      ['nav.groups', '/groups'],
+      ['nav.permissions', '/permissions'],
+    ])
+  })
+
+  it('平台管理员（权限全开）可见系统维护与 Agent 入口', () => {
+    const adminTargets = flatNavItems(adminNodes, true).map((i) => i.to)
+    expect(adminTargets).toEqual(
+      expect.arrayContaining([
+        '/database',
+        '/system-update',
+        '/artifact-versions',
+        '/agent-tokens',
+        '/mcp-sessions',
+        '/agent-call-logs',
+        '/permissions',
+      ]),
+    )
+  })
+
+  it('group_viewer 种子：无系统/Agent/用户/客户端分发入口，实例与观测仍在', () => {
+    const groups = navGroupsForRole(ROLE_GROUP_VIEWER)
+    const targets = pathsFromGroups(groups)
+
+    expect(targets).toContain('/instances')
+    expect(targets).toContain('/monitor')
+    expect(targets).toContain('/logs')
+    expect(targets).toContain('/notifications')
+    expect(targets).toContain('/backups')
+
+    expect(targets).not.toContain('/database')
+    expect(targets).not.toContain('/system-update')
+    expect(targets).not.toContain('/agent-tokens')
+    expect(targets).not.toContain('/users')
+    expect(targets).not.toContain('/permissions')
+    expect(targets).not.toContain('/client-channels')
+    expect(targets).not.toContain('/templates')
+    expect(targets).not.toContain('/super')
+  })
+
+  it('navGroupsForPermissions：空集合仅保留无 perm 入口；平台管理员全开', () => {
+    const empty = navGroupsForPermissions(new Set(), false)
+    expect(pathsFromGroups(empty)).toEqual(['/'])
+
+    const admin = navGroupsForPermissions(null, true)
+    expect(pathsFromGroups(admin).length).toBeGreaterThan(20)
+  })
+
+  it('flatNavItems 角色包装与 Set+admin 签名并存', () => {
+    const byRole = flatNavItems(ROLE_PLATFORM_ADMIN).map((i) => i.to).sort()
+    const byNodes = flatNavItems(adminNodes, true).map((i) => i.to).sort()
+    expect(byRole).toEqual(byNodes)
   })
 })
