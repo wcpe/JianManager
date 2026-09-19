@@ -1,6 +1,6 @@
 # 功能规格：客户端分发信息架构合并（分发监控并入「客户端分发运维」页）
 
-> 状态：开发中（代码已合入 feature 分支 HEAD，待发版标交付）　·　关联 PRD：**FR-430**　·　关联 ADR：**088**　·　类型：feat（前端 IA/路由/权限/i18n，**后端零业务改动**）
+> 状态：✅ 已交付@v0.22.0　·　关联 PRD：**FR-430**　·　关联 ADR：**088**　·　类型：feat（前端 IA/路由/权限/i18n，**后端零业务改动**）
 > 关联既有：FR-215 / FR-264 / FR-265 / FR-356~359 / FR-425~429；ADR-049 / ADR-055
 > 详细设计：[`design.md`](./design.md)；时序图：[`sequence-diagram.mermaid`](./sequence-diagram.mermaid)；类图：[`class-diagram.mermaid`](./class-diagram.mermaid)
 >
