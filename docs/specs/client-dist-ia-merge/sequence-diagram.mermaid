@@ -1,0 +1,16 @@
+sequenceDiagram
+  participant U as 用户/外部链接
+  participant R as Router(Workspace)
+  participant G as ClientDistRedirect(source)
+  participant P as ProtectionCenterPage (/client-dist-ops)
+  participant H as 对应 Tab 组件 hooks
+  U->>R: GET /client-dist-security?tab=ip&channelId=X  (或 /client-dist-monitor?tab=logs&channelId=X&from=…&to=…)
+  R->>G: 命中 client-dist-security / client-dist-monitor 路由
+  G->>G: readClientDistQuery + normalizeOpsTab(raw, source)
+  Note over G: security: ip→profiles(seg=ip); monitor: logs→logs(type=request)
+  G->>G: buildClientDistHref('/client-dist-ops', patch={tab,seg,type})
+  G-->>R: Navigate to /client-dist-ops?tab=…&seg=…&type=…&channelId=X&from=…&to=… (replace)
+  R->>P: 命中 /client-dist-ops（RequirePlatformAdmin 通过）
+  P->>P: normalizeOpsTab 兜底 + 读取 seg/type
+  P->>H: 挂载对应 Tab 组件
+  H-->>U: 渲染（请求侧/更新侧/研判处置侧）

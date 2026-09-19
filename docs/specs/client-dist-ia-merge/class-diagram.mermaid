@@ -1,0 +1,61 @@
+classDiagram
+  class ProtectionCenterPage {
+    +data-page: client-dist-ops
+    +tab: OpsTab
+    +seg: string
+    +render() 7 Tabs
+  }
+  class ClientDistRedirect {
+    +source: security|monitor
+    +normalize(rawTab, source) OpsTab
+    +render() Navigate 透传 query
+  }
+  class client_dist_ops_tab {
+    +normalizeOpsTab(raw, source) OpsTab
+    +defaultSegOf(tab, rawKey) string
+  }
+  class ClientDistLogsTab {
+    +type: all|hello|risk|action|request|runtime|telemetry
+    +link: RuntimeLink
+    +render() 聚合流|请求流
+  }
+  class OpsStatisticsTab
+  class OpsRealtimeTab
+  class OpsClientsTab
+  class ops_shared {
+    +DistPanel()
+    +LinkableDistPanel()
+    +TrendCard()
+    +ErrorPanel()
+    +ResultBadge()
+  }
+  class useClientDistSecurityLogs
+  class useClientDistEventSearch
+  class useClientDistEventDetail
+  class useClientDistObservability
+  class useClientDistMachines
+  class useClientRuntimeOverview
+  class useClientStats
+  class useClientDistRealtime
+  class useClientDistSecurityOverview
+  class useClientDistSecurityEvents
+
+  ProtectionCenterPage --> ClientDistLogsTab
+  ProtectionCenterPage --> OpsStatisticsTab
+  ProtectionCenterPage --> OpsRealtimeTab
+  ProtectionCenterPage --> OpsClientsTab
+  ClientDistRedirect ..> ProtectionCenterPage : Navigate replace
+  ClientDistRedirect ..> client_dist_ops_tab : normalizeOpsTab
+  ProtectionCenterPage ..> client_dist_ops_tab : normalizeOpsTab
+  ClientDistLogsTab --> useClientDistSecurityLogs
+  ClientDistLogsTab --> useClientDistEventSearch
+  ClientDistLogsTab --> useClientDistEventDetail
+  OpsStatisticsTab --> useClientStats
+  OpsRealtimeTab --> useClientDistRealtime
+  OpsRealtimeTab --> useClientDistSecurityEvents
+  OpsClientsTab --> useClientDistObservability
+  OpsClientsTab --> useClientDistMachines
+  OpsClientsTab --> useClientRuntimeOverview
+  OpsStatisticsTab ..> ops_shared
+  OpsRealtimeTab ..> ops_shared
+  OpsClientsTab ..> ops_shared
