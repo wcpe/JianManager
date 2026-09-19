@@ -83,9 +83,17 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
   const inspect = useInspectImportDir()
   const importServer = useImportServer()
 
-  const nodeOptions: ComboboxOption[] = (nodes ?? [])
-    .filter((n) => n.status === 1)
-    .map((n) => ({ value: String(n.id), label: n.name }))
+  /** 节点状态文案（下拉展示；离线也可选，导入失败由服务端报错）。 */
+  const nodeStatusLabel = (status: number): string => {
+    if (status === 1) return t('importServer.nodeOnline')
+    if (status === 2) return t('importServer.nodeStarting')
+    return t('importServer.nodeOffline')
+  }
+
+  const nodeOptions: ComboboxOption[] = (nodes ?? []).map((n) => ({
+    value: String(n.id),
+    label: `${n.name} · ${nodeStatusLabel(n.status)}`,
+  }))
   const jdkOptions: ComboboxOption[] = (jdks ?? []).map((j) => ({
     value: String(j.id),
     label: `${j.vendor} ${j.majorVersion} (${j.version})`,

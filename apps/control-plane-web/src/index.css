@@ -1062,3 +1062,13 @@ body:has([data-slot="dropdown-menu-content"][data-state="open"]) [data-slot="dia
   pointer-events: auto !important;
 }
 
+/*
+ * Radix popper wrapper 默认 z-index 低于 Dialog(200)，浮层在 DOM 里却被遮罩盖住。
+ * Dialog 内 Select/Combobox/下拉打开时把 wrapper 抬到 300，与组件 style zIndex 对齐。
+ */
+body:has([data-slot="select-content"][data-state="open"]) [data-radix-popper-content-wrapper],
+body:has([data-slot="combobox-content"][data-state="open"]) [data-radix-popper-content-wrapper],
+body:has([data-slot="dropdown-menu-content"][data-state="open"]) [data-radix-popper-content-wrapper] {
+  z-index: 300 !important;
+}
+

@@ -146,6 +146,15 @@ describe('FR-244 全局动画 token 化', () => {
     expect(appCss).toMatch(/\.jm-toolbar-surface[\s\S]*transition:\s*background-color var\(--motion-duration-normal\) var\(--motion-easing-standard\)/)
   })
 
+  it('Dialog 内 Combobox/Select 浮层抬高到 300 且遮罩不吃点击', () => {
+    expect(appCss).toMatch(
+      /body:has\(\[data-slot="combobox-content"\]\[data-state="open"\]\) \[data-slot="dialog-overlay"\][\s\S]*pointer-events:\s*none !important/,
+    )
+    expect(appCss).toMatch(
+      /body:has\(\[data-slot="combobox-content"\]\[data-state="open"\]\) \[data-radix-popper-content-wrapper\][\s\S]*z-index:\s*300 !important/,
+    )
+  })
+
   // 全站动效收敛（FR-244 剩余缺口）：共享原语的一次性交互动效从散落的 duration-200/300 收敛到 motion token。
   // 每项断言「不含硬编码定值」+「引用 motion-duration token」，防新代码或回退再引入脱离节奏的毫秒值。
   const CONVERGED_MOTION_PRIMITIVES = [

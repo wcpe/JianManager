@@ -31,7 +31,12 @@ vi.mock('@/api/importServer', () => ({
   useImportServer: () => ({ mutate: importMutate, isPending: false }),
 }))
 vi.mock('@/api/nodes', () => ({
-  useNodes: () => ({ data: [{ id: 1, name: 'node-a', status: 1 }] }),
+  useNodes: () => ({
+    data: [
+      { id: 1, name: 'node-a', status: 1 },
+      { id: 2, name: 'node-b', status: 0 },
+    ],
+  }),
 }))
 vi.mock('@/api/jdks', () => ({
   useNodeJDKs: () => ({ data: [] }),
@@ -146,5 +151,14 @@ describe('ImportServerWizard（FR-302 / FR-374）', () => {
   it('open=false 不渲染', () => {
     renderWithProviders(<ImportServerWizard open={false} onClose={vi.fn()} initialNodeId={1} />)
     expect(screen.queryByRole('button', { name: 'pick-dir' })).not.toBeInTheDocument()
+  })
+
+  it('未预选节点时下拉列出在线与离线节点（含状态文案）', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<ImportServerWizard open onClose={vi.fn()} />)
+    await user.click(await screen.findByRole('button', { name: /选择节点|Select node/i }))
+    expect(await screen.findByRole('button', { name: /node-a/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /node-b/ })).toBeInTheDocument()
+    expect(screen.getByText(/离线|offline/i)).toBeInTheDocument()
   })
 })

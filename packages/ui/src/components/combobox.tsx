@@ -135,7 +135,8 @@ export function Combobox({
           align="start"
           sideOffset={4}
           data-slot="combobox-content"
-          style={{ pointerEvents: 'auto' }}
+          // Dialog(z-200) 内下拉：zIndex 进 popper wrapper（Radix 从 Content style 取），否则列表被遮罩盖住
+          style={{ pointerEvents: 'auto', zIndex: 300 }}
           className="z-[300] pointer-events-auto w-(--radix-popover-trigger-width) origin-(--radix-popover-content-transform-origin) overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           <input
