@@ -63,7 +63,7 @@ func TestDirUsage_Missing(t *testing.T) {
 // Overview 覆盖全部 FHS 子目录，cache 标 Clearable，占用按目录归集，总计累加。
 func TestStorage_Overview(t *testing.T) {
 	svc, root := newStorageTestService(t)
-	writeFile(t, root, "cache/tmp.part", []byte("0123456789")) // 10B 入 cache
+	writeFile(t, root, "cache/tmp.part", []byte("0123456789"))       // 10B 入 cache
 	writeFile(t, root, "var/artifacts/core/ab/x.jar", []byte("JAR")) // 3B 入 artifacts
 
 	ov, err := svc.Overview()

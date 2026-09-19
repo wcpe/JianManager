@@ -25,19 +25,22 @@ test('FR-220 统计页 平台级聚合', async ({ page }) => {
   await page.screenshot({ path: '../.tmp/acceptance/FR-220/single-machine-statistics.png', fullPage: true })
 })
 
-test('FR-215 观测 IA（监控/日志/统计 子类 + 分发监控）', async ({ page }) => {
+test('FR-215 观测 IA（监控/日志/统计 子类 + 客户端分发域）', async ({ page }) => {
   await login(page)
   await page.goto('/')
   const nav = page.locator('aside')
   await expect(nav.getByRole('link', { name: '监控总览' })).toBeVisible()
   await expect(nav.getByRole('link', { name: '日志中心' })).toBeVisible()
   await expect(nav.getByRole('link', { name: '统计分析' })).toBeVisible()
-  await expect(nav.getByRole('link', { name: '客户端分发监控' })).toBeVisible()
+  // FR-430/431：旧「客户端分发监控」并入「客户端分发运维」，观测入口不再挂在观测域
+  await expect(nav.getByRole('button', { name: '客户端分发' })).toBeVisible()
+  await expect(nav.getByRole('link', { name: '客户端分发运维' })).toBeVisible()
 })
 
-test('FR-218 客户端分发监控页', async ({ page }) => {
+test('FR-218/FR-430 旧监控路由重定向到客户端分发运维', async ({ page }) => {
   await login(page)
   await page.goto('/client-dist-monitor')
-  await expect(page.locator('[data-page="client-dist-monitor"]')).toBeVisible()
-  await expect(page.getByRole('heading').first()).toBeVisible()
+  await expect(page).toHaveURL(/\/client-dist-ops/)
+  await expect(page.locator('[data-page="client-dist-ops"]')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '客户端分发运维' })).toBeVisible()
 })

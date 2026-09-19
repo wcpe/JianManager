@@ -54,7 +54,7 @@ func TestBuildVelocityToml_Empty(t *testing.T) {
 // 引用不存在的 server 导致 "configuration is invalid"，代理反复崩溃无法启动。
 func TestBuildVelocityToml_AlwaysEmitsForcedHosts(t *testing.T) {
 	cases := map[string][]proxyServerEntry{
-		"无后端":               nil,
+		"无后端":                nil,
 		"有后端但均无 forced-host": {{Alias: "lobby", Address: "127.0.0.1:25566"}},
 	}
 	for name, entries := range cases {

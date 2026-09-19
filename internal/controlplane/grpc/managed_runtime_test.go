@@ -13,7 +13,7 @@ func TestManagedRuntimeUpdates_ClearsUnavailableBotValues(t *testing.T) {
 	capacity := int32(50)
 	updates := managedRuntimeUpdates(&workerpb.ManagedRuntimeSnapshot{
 		WorkerProcessRssBytes: &rss,
-		BotCapacityMax:       &capacity,
+		BotCapacityMax:        &capacity,
 		BotAvailable:          false,
 		BotUnavailableReason:  "未启动",
 	})
@@ -28,8 +28,8 @@ func TestManagedRuntimeUpdates_ClearsUnavailableBotValues(t *testing.T) {
 func TestManagedRuntimeUpdates_PersistsBotCapacityWhenAvailable(t *testing.T) {
 	capacity := int32(50)
 	updates := managedRuntimeUpdates(&workerpb.ManagedRuntimeSnapshot{
-		BotAvailable:    true,
-		BotCapacityMax:  &capacity,
+		BotAvailable:     true,
+		BotCapacityMax:   &capacity,
 		ObservedAtUnixMs: 1,
 	})
 	require.Equal(t, &capacity, updates["bot_capacity_max"])

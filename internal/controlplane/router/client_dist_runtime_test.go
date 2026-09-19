@@ -205,7 +205,6 @@ func TestClientRuntimeClientsEndpoint_UsesTelemetryUpdateResults(t *testing.T) {
 	require.NoError(t, db.Where("channel_id = ?", "stable").First(&written).Error)
 	require.Equal(t, "success", written.Result)
 
-
 	w := makeRequest(r, "GET", "/api/v1/client-dist/clients?channelId=stable&range=7d", nil, token)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var clients struct {

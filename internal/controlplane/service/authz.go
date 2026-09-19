@@ -21,10 +21,10 @@ const (
 
 	// 用户组管理
 	PermGroupRead        PermissionNode = "group:read"
-	PermGroupManage      PermissionNode = "group:manage"        // 创建/编辑/删除组（平台管理员）
-	PermGroupMemberWrite PermissionNode = "group:member:write"  // 管理组成员（组管理员/平台管理员）
-	PermGroupQuotaWrite  PermissionNode = "group:quota:write"   // 管理组配额（平台管理员）
-	PermGroupQuotaRead   PermissionNode = "group:quota:read"    // 查看组配额用量
+	PermGroupManage      PermissionNode = "group:manage"       // 创建/编辑/删除组（平台管理员）
+	PermGroupMemberWrite PermissionNode = "group:member:write" // 管理组成员（组管理员/平台管理员）
+	PermGroupQuotaWrite  PermissionNode = "group:quota:write"  // 管理组配额（平台管理员）
+	PermGroupQuotaRead   PermissionNode = "group:quota:read"   // 查看组配额用量
 
 	// 节点管理（仅平台管理员）
 	PermNodeRead   PermissionNode = "node:read"
@@ -57,15 +57,15 @@ const (
 // 平台管理员的 IsPlatformAdmin 为 true，权限检查全部放行；
 // 其余用户 Nodes 为权限树有效集合（FR-432 / ADR-089）。
 type UserAccess struct {
-	UserID            uint
-	Role              model.UserRole
-	AuthVersion       uint
-	IsPlatformAdmin   bool
-	RoleKey           string
-	Nodes             map[string]struct{}
-	AdminGroupIDs     map[uint]struct{} // 以组管理员身份管理的组 ID 集合
-	MemberGroupIDs    map[uint]struct{} // 以普通成员身份所属的组 ID 集合
-	AccessibleGroups  map[uint]struct{} // AdminGroupIDs ∪ MemberGroupIDs，用于读权限
+	UserID           uint
+	Role             model.UserRole
+	AuthVersion      uint
+	IsPlatformAdmin  bool
+	RoleKey          string
+	Nodes            map[string]struct{}
+	AdminGroupIDs    map[uint]struct{} // 以组管理员身份管理的组 ID 集合
+	MemberGroupIDs   map[uint]struct{} // 以普通成员身份所属的组 ID 集合
+	AccessibleGroups map[uint]struct{} // AdminGroupIDs ∪ MemberGroupIDs，用于读权限
 }
 
 // AuthzService 授权服务，负责加载用户授权上下文并执行权限判断。
@@ -335,13 +335,13 @@ func (s *AuthzService) getBotInstanceID(botID uint) (uint, error) {
 
 // QuotaUsage 组配额用量。
 type QuotaUsage struct {
-	GroupID        uint `json:"groupId"`
-	MaxInstances   int  `json:"maxInstances"`
-	MaxBots        int  `json:"maxBots"`
-	MaxStorageMB   int  `json:"maxStorageMb"`
-	UsedInstances  int  `json:"usedInstances"`
-	UsedBots       int  `json:"usedBots"`
-	UsedStorageMB  int  `json:"usedStorageMb"`
+	GroupID       uint `json:"groupId"`
+	MaxInstances  int  `json:"maxInstances"`
+	MaxBots       int  `json:"maxBots"`
+	MaxStorageMB  int  `json:"maxStorageMb"`
+	UsedInstances int  `json:"usedInstances"`
+	UsedBots      int  `json:"usedBots"`
+	UsedStorageMB int  `json:"usedStorageMb"`
 }
 
 // GetQuotaUsage 查询组配额及当前用量。

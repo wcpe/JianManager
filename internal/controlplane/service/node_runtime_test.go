@@ -18,12 +18,12 @@ import (
 // fakeRuntimeWorker 伪 WorkerServiceClient：覆盖缓存/catalog/browse RPC。
 type fakeRuntimeWorker struct {
 	workerpb.WorkerServiceClient
-	listResp  *workerpb.ListArtifactCacheResponse
-	evicted   string
-	cleared   bool
-	capSet    int64
-	catalog   *workerpb.JDKCatalogResponse
-	browse    *workerpb.BrowseDirResponse
+	listResp *workerpb.ListArtifactCacheResponse
+	evicted  string
+	cleared  bool
+	capSet   int64
+	catalog  *workerpb.JDKCatalogResponse
+	browse   *workerpb.BrowseDirResponse
 }
 
 func (f *fakeRuntimeWorker) ListArtifactCache(_ context.Context, _ *workerpb.ListArtifactCacheRequest, _ ...grpc.CallOption) (*workerpb.ListArtifactCacheResponse, error) {

@@ -14,12 +14,12 @@ import (
 
 // FR-365 状态新鲜度窗口：快照周期约 3 秒，默认 10 秒未刷新则从 connected/connecting 收敛。
 const (
-	botFreshnessStaleWindow    = 10 * time.Second
-	botFreshnessMissingWindow  = 90 * time.Second
-	botFreshnessSweepInterval  = 3 * time.Second
-	botStatusErrorCodeStale    = "STATUS_STALE"
-	botStatusErrorCodeMissing  = "RUNTIME_MISSING"
-	botStatusErrorCodeOffline  = "EXECUTOR_OFFLINE"
+	botFreshnessStaleWindow   = 10 * time.Second
+	botFreshnessMissingWindow = 90 * time.Second
+	botFreshnessSweepInterval = 3 * time.Second
+	botStatusErrorCodeStale   = "STATUS_STALE"
+	botStatusErrorCodeMissing = "RUNTIME_MISSING"
+	botStatusErrorCodeOffline = "EXECUTOR_OFFLINE"
 )
 
 // BotFreshnessRepository 封装新鲜度批量归真所需的数据访问。
@@ -78,8 +78,8 @@ func (r *gormBotFreshnessRepository) MarkExecutorOffline(ctx context.Context, no
 		Where("executor_node_id = ? OR (executor_node_id IS NULL AND instance_id IN (?))",
 			nodeID, r.db.Model(&model.Instance{}).Select("id").Where("node_id = ?", nodeID)).
 		Updates(map[string]any{
-			"status":     model.BotStatusDisconnected,
-			"last_error": botStatusErrorCodeOffline,
+			"status":       model.BotStatusDisconnected,
+			"last_error":   botStatusErrorCodeOffline,
 			"last_seen_at": gorm.Expr("CASE WHEN last_seen_at IS NULL OR last_seen_at < ? THEN ? ELSE last_seen_at END", now, now),
 		})
 	return result.RowsAffected, result.Error

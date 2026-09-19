@@ -144,7 +144,7 @@ func TestToolsForPrincipal_BotCapabilityMatrix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &service.AgentPrincipal{
-				PolicyVersion: service.AgentPolicyVersionV2,
+				PolicyVersion:     service.AgentPolicyVersionV2,
 				ScopedInstanceIDs: inst, Capabilities: tt.caps,
 			}
 			names := make(map[string]bool)

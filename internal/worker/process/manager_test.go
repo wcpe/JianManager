@@ -62,7 +62,7 @@ func TestManager_Remove(t *testing.T) {
 
 func TestBackoffDelay(t *testing.T) {
 	tests := []struct {
-		crashCount int
+		crashCount  int
 		wantSeconds int
 	}{
 		{1, 1},
@@ -145,4 +145,3 @@ func TestManager_DockerStartWithoutImageFails(t *testing.T) {
 	st, _ := m.GetState("inst-d")
 	assert.Equal(t, StateCrashed, st)
 }
-

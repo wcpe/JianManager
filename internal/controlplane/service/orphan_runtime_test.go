@@ -22,10 +22,10 @@ func (f fakeSettings) EffectiveValue(key string) string { return f[key] }
 
 // fakeDispose 记录处置调用，可注入错误。
 type fakeDispose struct {
-	mu      sync.Mutex
-	calls   []string // nodeUUID/instanceUUID
-	err     error
-	callN   int
+	mu    sync.Mutex
+	calls []string // nodeUUID/instanceUUID
+	err   error
+	callN int
 }
 
 func (f *fakeDispose) DisposeOrphanRuntime(ctx context.Context, nodeUUID, instanceUUID string) error {
@@ -65,7 +65,7 @@ func TestOrphan_PendingThenCancelWithinGrace(t *testing.T) {
 	disp := &fakeDispose{}
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	tr := newTracker(t, db, fakeSettings{
-		SettingKeyOrphanGracePeriod:  "10m",
+		SettingKeyOrphanGracePeriod: "10m",
 		SettingKeyOrphanAutoDispose: "false",
 	}, disp)
 	tr.SetNow(func() time.Time { return now })
@@ -106,7 +106,7 @@ func TestOrphan_AfterGrace_AutoDispose(t *testing.T) {
 	disp := &fakeDispose{}
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	tr := newTracker(t, db, fakeSettings{
-		SettingKeyOrphanGracePeriod:  "10m",
+		SettingKeyOrphanGracePeriod: "10m",
 		SettingKeyOrphanAutoDispose: "true",
 	}, disp)
 	tr.SetNow(func() time.Time { return now })
@@ -149,7 +149,7 @@ func TestOrphan_AutoOff_OnlyList_ManualConfirm(t *testing.T) {
 	disp := &fakeDispose{}
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	tr := newTracker(t, db, fakeSettings{
-		SettingKeyOrphanGracePeriod:  "10m",
+		SettingKeyOrphanGracePeriod: "10m",
 		SettingKeyOrphanAutoDispose: "false",
 	}, disp)
 	tr.SetNow(func() time.Time { return now })
@@ -265,7 +265,7 @@ func TestOrphan_DisposeFailure_KeepsActive(t *testing.T) {
 	disp := &fakeDispose{err: errors.New("boom")}
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	tr := newTracker(t, db, fakeSettings{
-		SettingKeyOrphanGracePeriod:  "1m",
+		SettingKeyOrphanGracePeriod: "1m",
 		SettingKeyOrphanAutoDispose: "true",
 	}, disp)
 	tr.SetNow(func() time.Time { return now })

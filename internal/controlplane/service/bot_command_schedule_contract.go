@@ -18,18 +18,18 @@ import (
 
 // 命令编排相关常量与错误码，遵循 FR-369 规格（ADR-075 bot.chat 成功边界）。
 const (
-	commandScheduleMinCommands      = 1
-	commandScheduleMaxCommands      = 100
-	commandScheduleMaxOccurrences   = 1000
-	commandScheduleMaxJSONBytes     = 256 * 1024
-	commandScheduleMaxDurationMS    = 86_400_000
-	commandScheduleMaxJitterMS      = 60_000
-	commandScheduleCommandIDMaxLen  = 64
-	commandScheduleCommandMaxBytes  = 1024
-	commandScheduleMaxIntervalMS    = 86_400_000
-	commandScheduleDefaultStepID    = "command-schedule"
-	commandScheduleBotChatAttempts  = 3
-	commandScheduleRetryBackoffMS   = 250
+	commandScheduleMinCommands     = 1
+	commandScheduleMaxCommands     = 100
+	commandScheduleMaxOccurrences  = 1000
+	commandScheduleMaxJSONBytes    = 256 * 1024
+	commandScheduleMaxDurationMS   = 86_400_000
+	commandScheduleMaxJitterMS     = 60_000
+	commandScheduleCommandIDMaxLen = 64
+	commandScheduleCommandMaxBytes = 1024
+	commandScheduleMaxIntervalMS   = 86_400_000
+	commandScheduleDefaultStepID   = "command-schedule"
+	commandScheduleBotChatAttempts = 3
+	commandScheduleRetryBackoffMS  = 250
 )
 
 // 命令编排动作结果状态（与现有 BotLoadActionResultStatus 共用枚举），用于 Bot Worker 上报。
@@ -45,13 +45,13 @@ var errCommandArgumentInvalid = errors.New(CommandErrorArgumentInvalid)
 
 // FR-369 错误码；与 ActionResult allowlist 合并。
 const (
-	CommandErrorRouteFailed         = "COMMAND_ROUTE_FAILED"
-	CommandErrorIPCFailed           = "COMMAND_IPC_FAILED"
-	CommandErrorArgumentInvalid     = "COMMAND_ARGUMENT_INVALID"
-	CommandErrorRuntimeUnavailable  = "COMMAND_RUNTIME_UNAVAILABLE"
-	CommandErrorScheduleRejected    = "COMMAND_SCHEDULE_REJECTED"
-	CommandErrorDeadlineExceeded    = "COMMAND_DEADLINE_EXCEEDED"
-	CommandErrorSendFailed          = "COMMAND_SEND_FAILED"
+	CommandErrorRouteFailed        = "COMMAND_ROUTE_FAILED"
+	CommandErrorIPCFailed          = "COMMAND_IPC_FAILED"
+	CommandErrorArgumentInvalid    = "COMMAND_ARGUMENT_INVALID"
+	CommandErrorRuntimeUnavailable = "COMMAND_RUNTIME_UNAVAILABLE"
+	CommandErrorScheduleRejected   = "COMMAND_SCHEDULE_REJECTED"
+	CommandErrorDeadlineExceeded   = "COMMAND_DEADLINE_EXCEEDED"
+	CommandErrorSendFailed         = "COMMAND_SEND_FAILED"
 )
 
 // CommandScheduleVariable 白名单模板变量。
@@ -69,17 +69,17 @@ var commandScheduleJitterSeedPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,19})
 
 // CommandScheduleInput 是 CP 接收的命令计划原始结构，与 API 字段保持一致。
 type CommandScheduleInput struct {
-	Commands    []CommandScheduleInputCommand `json:"commands"`
-	DurationMS  int64                         `json:"durationMs"`
-	JitterMS    *int64                        `json:"jitterMs,omitempty"`
+	Commands   []CommandScheduleInputCommand `json:"commands"`
+	DurationMS int64                         `json:"durationMs"`
+	JitterMS   *int64                        `json:"jitterMs,omitempty"`
 }
 
 // CommandScheduleInputCommand 单条命令；repeat 字段可选且按规格只描述重复配置。
 type CommandScheduleInputCommand struct {
-	ID        string                       `json:"id"`
-	AtMS      int64                        `json:"atMs"`
-	Command   string                       `json:"command"`
-	Repeat    *CommandScheduleInputRepeat  `json:"repeat,omitempty"`
+	ID      string                      `json:"id"`
+	AtMS    int64                       `json:"atMs"`
+	Command string                      `json:"command"`
+	Repeat  *CommandScheduleInputRepeat `json:"repeat,omitempty"`
 }
 
 // CommandScheduleInputRepeat repeat 配置。
@@ -195,10 +195,10 @@ func NormalizeCommandSchedule(input *CommandScheduleInput) (*CommandSchedulePlan
 	// 展开全部 occurrence 后按 (baseAtMs, declarationIndex, occurrence) 排序。
 	type expanded struct {
 		declarationIndex int
-		occurrence        int
-		baseAtMS          int64
-		commandID         string
-		template          string
+		occurrence       int
+		baseAtMS         int64
+		commandID        string
+		template         string
 	}
 	var list []expanded
 	for i := range input.Commands {
@@ -212,10 +212,10 @@ func NormalizeCommandSchedule(input *CommandScheduleInput) (*CommandSchedulePlan
 		for k := 0; k < occurrences; k++ {
 			list = append(list, expanded{
 				declarationIndex: i,
-				occurrence:        k,
-				baseAtMS:          cmd.AtMS + int64(k)*interval,
-				commandID:         cmd.ID,
-				template:          cmd.Command,
+				occurrence:       k,
+				baseAtMS:         cmd.AtMS + int64(k)*interval,
+				commandID:        cmd.ID,
+				template:         cmd.Command,
 			})
 		}
 	}

@@ -114,8 +114,8 @@ func TestNodeProxy_ViewSanitizes(t *testing.T) {
 	view, err := svc.NodeProxyView(node.ID)
 	require.NoError(t, err)
 	require.Equal(t, "custom", view.Mode)
-	require.NotContains(t, view.URL, "np")            // 节点 URL 脱敏
+	require.NotContains(t, view.URL, "np") // 节点 URL 脱敏
 	require.Contains(t, view.URL, "node:8080")
-	require.NotContains(t, view.EffectiveURL, "np")   // 生效 URL 脱敏
+	require.NotContains(t, view.EffectiveURL, "np")         // 生效 URL 脱敏
 	require.NotContains(t, view.GlobalDefaultURL, "secret") // 全局默认脱敏
 }

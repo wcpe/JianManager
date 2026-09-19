@@ -241,7 +241,6 @@ func (s *PermissionService) DeleteRole(id uint) error {
 	return s.db.Delete(&model.RoleTemplate{}, id).Error
 }
 
-
 // userIsSuperAdmin：users.role==10 或当前绑定模板为 platform_admin。
 func (s *PermissionService) userIsSuperAdmin(user *model.User) bool {
 	if user.Role == model.RolePlatformAdmin {
@@ -407,10 +406,10 @@ type RoleDetail struct {
 
 // UserPermissionView 用户权限视图。
 type UserPermissionView struct {
-	UserID        uint     `json:"userId"`
-	RoleKey       string   `json:"roleKey"`
-	RoleID        *uint    `json:"roleId,omitempty"`
-	Nodes         []string `json:"nodes"`
-	Overrides     []model.UserPermissionOverride `json:"overrides"`
-	IsPlatformAdmin bool   `json:"isPlatformAdmin"`
+	UserID          uint                           `json:"userId"`
+	RoleKey         string                         `json:"roleKey"`
+	RoleID          *uint                          `json:"roleId,omitempty"`
+	Nodes           []string                       `json:"nodes"`
+	Overrides       []model.UserPermissionOverride `json:"overrides"`
+	IsPlatformAdmin bool                           `json:"isPlatformAdmin"`
 }

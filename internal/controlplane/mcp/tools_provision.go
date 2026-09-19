@@ -80,12 +80,12 @@ func init() {
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"nodeId":  map[string]any{"type": "number"},
-						"path":    map[string]any{"type": "string"},
-						"mode":    map[string]any{"type": "string", "description": "in_place 或 migrate"},
-						"name":    map[string]any{"type": "string"},
-						"jarPath": map[string]any{"type": "string", "description": "相对 path 的 jar 路径"},
-						"jdkId":   map[string]any{"type": "number"},
+						"nodeId":   map[string]any{"type": "number"},
+						"path":     map[string]any{"type": "string"},
+						"mode":     map[string]any{"type": "string", "description": "in_place 或 migrate"},
+						"name":     map[string]any{"type": "string"},
+						"jarPath":  map[string]any{"type": "string", "description": "相对 path 的 jar 路径"},
+						"jdkId":    map[string]any{"type": "number"},
 						"memoryMb": map[string]any{"type": "number"},
 					},
 					"required": []string{"nodeId", "path", "mode", "name", "jarPath"},

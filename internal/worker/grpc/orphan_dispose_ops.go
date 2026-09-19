@@ -15,6 +15,7 @@ import (
 //  1. 若注册表中有该实例且进程在跑 → Kill 进程树；
 //  2. 移除 Worker 注册表条目；
 //  3. ReapDaemonForDelete：强杀遗留 wrapper/Java 进程树并清 PID/sock。
+//
 // 幂等：实例未注册且无 PID 文件时仍 success（已干净）。
 func (s *Server) DisposeOrphanRuntime(ctx context.Context, req *workerpb.DisposeOrphanRuntimeRequest) (*workerpb.DisposeOrphanRuntimeResponse, error) {
 	if req == nil || req.InstanceUuid == "" {

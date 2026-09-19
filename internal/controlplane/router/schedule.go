@@ -104,9 +104,9 @@ func (h *ScheduleHandler) ListExecutionLogs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"items": logs,
-		"total": total,
-		"page":  page,
+		"items":    logs,
+		"total":    total,
+		"page":     page,
 		"pageSize": pageSize,
 	})
 }

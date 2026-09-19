@@ -15,9 +15,12 @@ test.describe('配置文件管理引擎（FR-031，mock 模式）', () => {
 
   test('文件配置页可打开 schema 文件、切表单、校验并查看版本 diff/回滚入口', async ({ page }) => {
     await page.goto('/instances/1')
-    await expect(page.getByText(/服务器控制台 \/ survival-1/)).toBeVisible()
+    // FR-412：标题为实例名，无「服务器控制台 /」前缀
+    await expect(page.getByRole('heading', { name: 'survival-1', exact: true })).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('[data-page="instance-console"]')).toBeVisible()
 
-    await page.getByRole('button', { name: '文件配置', exact: true }).click()
+    // FR-413：实例分区为 role=tab（tablist「实例页签」）
+    await page.getByRole('tab', { name: '文件配置', exact: true }).click()
     await expect(page.getByRole('button', { name: /已发现配置/ })).toBeVisible()
     await expect(page.getByText('server.properties').first()).toBeVisible()
 

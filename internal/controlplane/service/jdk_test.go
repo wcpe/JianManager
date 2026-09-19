@@ -76,4 +76,3 @@ func TestJDKService_ResolveForInstance(t *testing.T) {
 	require.NotNil(t, got)
 	require.Equal(t, b.Path, got.Path)
 }
-

@@ -24,9 +24,9 @@ test('FR-134 面包屑随导航反映当前位置（域 › 页面）', async ({
   await expect(crumb).toContainText('观测')
   await expect(crumb).toContainText('监控总览')
 
-  // 开源许可页 → 「平台管理 › 开源许可」
+  // 开源许可页 → 「审计与设置 › 开源许可」（FR-431 六域：licenses 挂平台设置分节）
   await page.goto('/licenses')
-  await expect(crumb).toContainText('平台管理')
+  await expect(crumb).toContainText('审计与设置')
   await expect(crumb).toContainText('开源许可')
   await page.screenshot({ path: '../.tmp/acceptance/FR-134/single-machine-breadcrumb-licenses.png', fullPage: false })
 })

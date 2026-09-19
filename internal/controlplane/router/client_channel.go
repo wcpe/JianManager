@@ -387,7 +387,6 @@ func (h *ClientChannelHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	}
 }
 
-
 // requireClientChannel 读侧：频道/分发相关读节点。
 func requireClientChannel(c *gin.Context) bool {
 	return requireNodes(c, "channel.read", "channel.write", "dist.publish", "dist.ops.read")

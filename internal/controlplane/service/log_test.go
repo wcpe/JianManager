@@ -269,11 +269,11 @@ func TestLog_IngestInstanceOutput(t *testing.T) {
 	node := model.Node{UUID: "node-uuid-1", Name: "n1", Host: "127.0.0.1"}
 	require.NoError(t, db.Create(&node).Error)
 	inst := model.Instance{
-		UUID:        "inst-uuid-1",
-		Name:        "srv",
-		NodeID:      node.ID,
-		Type:        model.InstanceTypeGeneric,
-		ProcessType: model.ProcessTypeDirect,
+		UUID:         "inst-uuid-1",
+		Name:         "srv",
+		NodeID:       node.ID,
+		Type:         model.InstanceTypeGeneric,
+		ProcessType:  model.ProcessTypeDirect,
 		StartCommand: "echo hi",
 	}
 	require.NoError(t, db.Create(&inst).Error)

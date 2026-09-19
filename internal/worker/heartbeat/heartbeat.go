@@ -317,8 +317,8 @@ func collectInstanceMetrics(snaps []process.InstanceSnapshot) []*workerpb.Instan
 				}
 				recordProbeScrapeResult(t.UUID, reason)
 			}
-		out[i] = sample
-	}(i, t)
+			out[i] = sample
+		}(i, t)
 	}
 	wg.Wait()
 	return out

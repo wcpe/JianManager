@@ -11,11 +11,11 @@ import (
 type UserRole int
 
 const (
-	RoleMember         UserRole = 0  // 组成员
-	RoleGroupAdmin     UserRole = 1  // 组管理员
-	RoleGroupOperator  UserRole = 2  // 组运维（FR-432）
-	RoleGroupViewer    UserRole = 3  // 组只读（FR-432）
-	RolePlatformAdmin  UserRole = 10 // 平台管理员
+	RoleMember        UserRole = 0  // 组成员
+	RoleGroupAdmin    UserRole = 1  // 组管理员
+	RoleGroupOperator UserRole = 2  // 组运维（FR-432）
+	RoleGroupViewer   UserRole = 3  // 组只读（FR-432）
+	RolePlatformAdmin UserRole = 10 // 平台管理员
 )
 
 // UserStatus 用户状态。
@@ -28,17 +28,17 @@ const (
 
 // User 用户模型。
 type User struct {
-	ID        uint           `gorm:"primaryKey" json:"id"`
-	UUID      string         `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	Username  string         `gorm:"type:varchar(64);uniqueIndex;not null" json:"username"`
-	Password  string         `gorm:"type:varchar(128);not null" json:"-"`
-	Role      UserRole       `gorm:"default:0" json:"role"`
-	Status    UserStatus     `gorm:"default:0" json:"status"`
+	ID       uint       `gorm:"primaryKey" json:"id"`
+	UUID     string     `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	Username string     `gorm:"type:varchar(64);uniqueIndex;not null" json:"username"`
+	Password string     `gorm:"type:varchar(128);not null" json:"-"`
+	Role     UserRole   `gorm:"default:0" json:"role"`
+	Status   UserStatus `gorm:"default:0" json:"status"`
 	// AuthVersion 在密码、状态或角色发生安全相关变更时递增，用于立即吊销旧会话。
 	AuthVersion uint           `gorm:"not null;default:0" json:"-"`
-	CreatedAt time.Time      `json:"createdAt"`
-	UpdatedAt time.Time      `json:"updatedAt"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // BeforeCreate 创建前自动生成 UUID。

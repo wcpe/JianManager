@@ -135,8 +135,8 @@ func TestRefreshCheck_Unconfigured(t *testing.T) {
 
 // TestCachedCheck_RefreshesStaleLocalVersion 复现 F1：库里缓存了旧 currentVersion（0.17.0-dev）
 // 与更低的 latestVersion（v0.16.0）且 updateAvailable=true；读缓存时必须：
-//  1) 用本进程 version.Version 覆盖 CP currentVersion；
-//  2) 按 versionIsUpgrade 重算，禁止把更低 feed 标成可升级。
+//  1. 用本进程 version.Version 覆盖 CP currentVersion；
+//  2. 按 versionIsUpgrade 重算，禁止把更低 feed 标成可升级。
 func TestCachedCheck_RefreshesStaleLocalVersion(t *testing.T) {
 	db := newCacheTestDB(t)
 	svc := NewSelfUpdateService(db, cpgrpc.NewClientPool(), SelfUpdateConfig{GitHubRepo: "wcpe/JianManager"}, nil)

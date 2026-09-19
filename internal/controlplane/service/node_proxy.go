@@ -69,6 +69,7 @@ func (s *NodeProxyService) EffectiveNodeProxyByUUID(uuid string) (url, noProxy, 
 // UpdateNodeProxy 更新节点代理模式/自定义值（FR-185）。
 //   - mode=custom：url 必须为合法代理地址（复用 httpclient 校验），落库 url+no_proxy；
 //   - mode=inherit：清空 custom 字段（避免脏数据下发），改用全局默认。
+//
 // 非法 mode / custom 空或非法 URL → ErrSettingValueInvalid（不落库）。
 func (s *NodeProxyService) UpdateNodeProxy(nodeID uint, mode, url, noProxy string) (*model.Node, error) {
 	mode = strings.TrimSpace(mode)

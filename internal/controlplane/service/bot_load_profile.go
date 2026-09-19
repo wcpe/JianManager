@@ -48,9 +48,9 @@ type BotLoadProfileStepStage struct {
 
 // BotLoadProfileStep 阶梯升压负载。
 type BotLoadProfileStep struct {
-	Type                   string                   `json:"type"`
+	Type                   string                    `json:"type"`
 	Stages                 []BotLoadProfileStepStage `json:"stages"`
-	StopOnThresholdFailure bool                     `json:"stopOnThresholdFailure"`
+	StopOnThresholdFailure bool                      `json:"stopOnThresholdFailure"`
 }
 
 // BotLoadProfileSpikeBarrier spike 可选屏障。
@@ -61,11 +61,11 @@ type BotLoadProfileSpikeBarrier struct {
 
 // BotLoadProfileSpike 突发洪峰负载。
 type BotLoadProfileSpike struct {
-	Type                 string                     `json:"type"`
-	TargetBots           int                        `json:"targetBots"`
-	ConnectWindowSeconds int                        `json:"connectWindowSeconds"`
+	Type                 string                      `json:"type"`
+	TargetBots           int                         `json:"targetBots"`
+	ConnectWindowSeconds int                         `json:"connectWindowSeconds"`
 	Barrier              *BotLoadProfileSpikeBarrier `json:"barrier,omitempty"`
-	HoldSeconds          int                        `json:"holdSeconds"`
+	HoldSeconds          int                         `json:"holdSeconds"`
 }
 
 // BotLoadProfile 规范化后的负载曲线联合类型。

@@ -62,30 +62,30 @@ const (
 
 // Instance 实例。
 type Instance struct {
-	ID            uint           `gorm:"primaryKey" json:"id"`
-	UUID          string         `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	NodeID        uint           `gorm:"not null;index" json:"nodeId"`
-	Name          string         `gorm:"type:varchar(128);not null;index" json:"name"`
-	Type          InstanceType   `gorm:"type:varchar(64);not null" json:"type"`
-	Role          InstanceRole   `gorm:"type:varchar(16);default:universal;index" json:"role"`
-	ProcessType   ProcessType    `gorm:"type:varchar(32);not null" json:"processType"`
-	Status        InstanceStatus `gorm:"type:varchar(32);default:STOPPED;index" json:"status"`
+	ID          uint           `gorm:"primaryKey" json:"id"`
+	UUID        string         `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	NodeID      uint           `gorm:"not null;index" json:"nodeId"`
+	Name        string         `gorm:"type:varchar(128);not null;index" json:"name"`
+	Type        InstanceType   `gorm:"type:varchar(64);not null" json:"type"`
+	Role        InstanceRole   `gorm:"type:varchar(16);default:universal;index" json:"role"`
+	ProcessType ProcessType    `gorm:"type:varchar(32);not null" json:"processType"`
+	Status      InstanceStatus `gorm:"type:varchar(32);default:STOPPED;index" json:"status"`
 	// StatusReason 记录当前状态的原因，主要用于 CRASHED：异步委托（启动/停止）失败时写入具体错误
 	// （如「实例未绑定 JDK…」），供前端显示，不再让用户只见「崩溃」无因。正常状态推进时清空。
-	StatusReason  string         `gorm:"type:varchar(512)" json:"statusReason"`
-	StartCommand      string         `gorm:"type:varchar(1024);not null" json:"startCommand"`
-	JDKID             uint           `gorm:"index" json:"jdkId"`
-	JavaMajorVersion  int            `gorm:"index" json:"javaMajorVersion"`
-	LaunchSpec        string         `gorm:"type:text" json:"launchSpec"`
+	StatusReason     string `gorm:"type:varchar(512)" json:"statusReason"`
+	StartCommand     string `gorm:"type:varchar(1024);not null" json:"startCommand"`
+	JDKID            uint   `gorm:"index" json:"jdkId"`
+	JavaMajorVersion int    `gorm:"index" json:"javaMajorVersion"`
+	LaunchSpec       string `gorm:"type:text" json:"launchSpec"`
 	// ProvisionSpec 存一键搭建/代理搭建的原始请求（JSON），供损毁后「重建」复用参数重跑搭建（FR-342）。
 	// 仅经搭建入口创建的实例有值；手动/导入实例为空、不适用重建。
-	ProvisionSpec     string         `gorm:"type:text" json:"provisionSpec,omitempty"`
-	WorkDir           string         `gorm:"type:varchar(512)" json:"workDir"`
+	ProvisionSpec string `gorm:"type:text" json:"provisionSpec,omitempty"`
+	WorkDir       string `gorm:"type:varchar(512)" json:"workDir"`
 	// WorkDirInPlace 就地导入标记（FR-302，见 ADR-069）：工作目录为托管区外的原始绝对路径
 	// （ADR-007 系统分配原则的唯一合法例外）。删除实例时 CP 据此指示 Worker 跳过目录删除，
 	// 原目录永不清理（双保险之一，另一道是 Worker 托管区守卫）。
-	WorkDirInPlace bool `gorm:"default:false" json:"workDirInPlace"`
-	EnvVars           string         `gorm:"type:text" json:"envVars"` // JSON
+	WorkDirInPlace bool   `gorm:"default:false" json:"workDirInPlace"`
+	EnvVars        string `gorm:"type:text" json:"envVars"` // JSON
 	// Image 是 docker 模式的容器镜像引用（如 itzg/minecraft-server:latest），仅 process_type=docker 使用（FR-078，ADR-019）。
 	Image string `gorm:"type:varchar(256)" json:"image"`
 	// ContainerID 记录 docker 模式实例最近一次运行的容器 ID（排障/展示用，运行态由 Worker 持有）。
@@ -96,8 +96,8 @@ type Instance struct {
 	MemLimitMB int64 `gorm:"default:0" json:"memLimitMb"`
 	// DiskLimitMB 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入（依赖存储驱动）（FR-079）。
 	DiskLimitMB int64 `gorm:"default:0" json:"diskLimitMb"`
-	AutoStart     bool           `gorm:"default:false" json:"autoStart"`
-	AutoRestart   bool           `gorm:"default:true" json:"autoRestart"`
+	AutoStart   bool  `gorm:"default:false" json:"autoStart"`
+	AutoRestart bool  `gorm:"default:true" json:"autoRestart"`
 	// Deprecated: RCON 已退役（FR-067，见 ADR-016）——治理改走 ServerProbe 探针。
 	// 列保留仅为迁移安全（不破坏既有库与历史实例数据），新实例不再写入、读取方不再使用。
 	RCONPort     int    `gorm:"default:0" json:"rconPort"`
@@ -108,19 +108,19 @@ type Instance struct {
 	// ProxyOnlineMode 代理是否向 Mojang 校验正版（true=正版网络，false=离线模式群组服）。
 	// 仅代理实例使用；持久化以便 SyncProxy 重新生成配置时保留选择（默认 true）。参见 FR-035。
 	ProxyOnlineMode bool `gorm:"default:true" json:"proxyOnlineMode"`
-	ServerPort    int            `gorm:"default:0" json:"serverPort"`
-	QueryPort     int            `gorm:"default:0" json:"queryPort"`
+	ServerPort      int  `gorm:"default:0" json:"serverPort"`
+	QueryPort       int  `gorm:"default:0" json:"queryPort"`
 	// ProbePort 是 ServerProbe 监控探针 /metrics 端口（系统分配，FR-010）。0 表示未部署探针。
-	ProbePort     int            `gorm:"default:0" json:"probePort"`
+	ProbePort int `gorm:"default:0" json:"probePort"`
 	// ProbeVersionID 是实例显式选择的 ServerProbe 版本；0 表示继承所属 Worker 或全局默认（FR-409）。
 	ProbeVersionID uint           `gorm:"default:0;index" json:"probeVersionId"`
-	PID           int            `gorm:"default:0" json:"pid"`
-	StartedAt     *time.Time     `json:"startedAt"`
-	CrashCount    int            `gorm:"default:0" json:"crashCount"`
-	Tags          string         `gorm:"type:text" json:"tags"` // JSON
-	CreatedAt     time.Time      `json:"createdAt"`
-	UpdatedAt     time.Time      `json:"updatedAt"`
-	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+	PID            int            `gorm:"default:0" json:"pid"`
+	StartedAt      *time.Time     `json:"startedAt"`
+	CrashCount     int            `gorm:"default:0" json:"crashCount"`
+	Tags           string         `gorm:"type:text" json:"tags"` // JSON
+	CreatedAt      time.Time      `json:"createdAt"`
+	UpdatedAt      time.Time      `json:"updatedAt"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 
 	Node Node `gorm:"foreignKey:NodeID" json:"node,omitempty"`
 }
@@ -135,8 +135,8 @@ func (i *Instance) BeforeCreate(tx *gorm.DB) error {
 
 // GroupInstance 实例与用户组的关联。
 type GroupInstance struct {
-	ID         uint `gorm:"primaryKey" json:"id"`
-	GroupID    uint `gorm:"not null;index" json:"groupId"`
-	InstanceID uint `gorm:"uniqueIndex;not null" json:"instanceId"`
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	GroupID    uint      `gorm:"not null;index" json:"groupId"`
+	InstanceID uint      `gorm:"uniqueIndex;not null" json:"instanceId"`
 	CreatedAt  time.Time `json:"createdAt"`
 }

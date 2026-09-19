@@ -55,9 +55,9 @@ func (s *BotLoadCommandCheckpointService) EnsureOccurrences(ctx context.Context,
 			res := tx.Where("run_uuid = ? AND bot_uuid = ? AND step_id = ? AND command_id = ? AND occurrence = ?",
 				runUUID, botUUID, stepID, occ.CommandID, occ.Occurrence).
 				Assign(model.BotLoadCommandCheckpoint{
-					Generation:     generation,
-					ScheduleRunID:  scheduleRunID,
-					ActionRunID:    actionRunID,
+					Generation:    generation,
+					ScheduleRunID: scheduleRunID,
+					ActionRunID:   actionRunID,
 				}).FirstOrCreate(&row)
 			if res.Error != nil {
 				return res.Error
@@ -76,8 +76,8 @@ func (s *BotLoadCommandCheckpointService) MarkSent(ctx context.Context, runUUID,
 		Where("run_uuid = ? AND bot_uuid = ? AND step_id = ? AND command_id = ? AND occurrence = ?",
 			runUUID, botUUID, stepID, commandID, occurrence).
 		Updates(map[string]interface{}{
-			"status":       model.BotLoadCommandCheckpointSent,
-			"attempt":      attempt,
+			"status":          model.BotLoadCommandCheckpointSent,
+			"attempt":         attempt,
 			"sent_at_unix_ms": sentAtUnixMs,
 		})
 	if res.Error != nil {

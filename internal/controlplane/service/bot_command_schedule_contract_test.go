@@ -35,7 +35,7 @@ func TestNormalizeCommandSchedule_RejectsCommandRange(t *testing.T) {
 		path  string
 	}{
 		{
-			name: "0 命令",
+			name:  "0 命令",
 			input: &CommandScheduleInput{DurationMS: 1000},
 			path:  "commands",
 		},
@@ -78,10 +78,10 @@ func TestNormalizeCommandSchedule_RejectsRepeatOverflow(t *testing.T) {
 	jitter := int64(0)
 	input := &CommandScheduleInput{
 		Commands: []CommandScheduleInputCommand{{
-			ID:       "a",
-			AtMS:     500,
-			Command:  "/say hi",
-			Repeat:   &CommandScheduleInputRepeat{IntervalMS: 200, Count: 5},
+			ID:      "a",
+			AtMS:    500,
+			Command: "/say hi",
+			Repeat:  &CommandScheduleInputRepeat{IntervalMS: 200, Count: 5},
 		}},
 		DurationMS: 1000,
 		JitterMS:   &jitter,

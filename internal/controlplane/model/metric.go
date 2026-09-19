@@ -95,7 +95,7 @@ type ProcessMetricSnapshot struct {
 	// NodeUUID 所属节点。
 	NodeUUID string `gorm:"type:varchar(64);not null;index:idx_process_metric_node_sampled,priority:1" json:"nodeUuid"`
 	// InstanceUUID 受管实例 UUID。
-	InstanceUUID     string    `gorm:"type:varchar(64);not null;index:idx_process_metric_instance_sampled,priority:1" json:"instanceUuid"`
+	InstanceUUID string `gorm:"type:varchar(64);not null;index:idx_process_metric_instance_sampled,priority:1" json:"instanceUuid"`
 	// PID 显式列名 pid：避免 GORM 把 PID 缩写蛇形化为 p_id，与 managedProcessHistory 的
 	// WHERE pid = ? 查询对齐（真机验收 FR-407 抓到：SQL logic error: no such column: pid）。
 	PID              int32     `gorm:"column:pid;not null" json:"pid"`

@@ -13,11 +13,11 @@ test('FR-152 备份存储 容量+备份数 展示 与 行内测试连接反馈',
   await page.goto('/backup-storages')
 
   await expect(page.getByRole('heading', { name: '备份存储后端' })).toBeVisible()
-  // 容量（已用 + 备份数）
-  await expect(page.getByText('256 MB')).toBeVisible()
+  // 容量（表格单元格；页脚也有「已用 256 MB」，避免 getByText 严格模式歧义）
+  await expect(page.getByRole('cell', { name: /256 MB/ }).first()).toBeVisible()
   await expect(page.getByText('1 个备份')).toBeVisible()
   // 最近测试状态
-  await expect(page.getByText('连接正常')).toBeVisible()
+  await expect(page.getByText('连接正常').first()).toBeVisible()
 
   // 先监听行内测试请求，避免列表已有状态文案掩盖请求未完成的问题。
   const testResponsePromise = page.waitForResponse((response) => {

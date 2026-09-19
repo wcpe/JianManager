@@ -73,27 +73,27 @@ func (c *acceptanceClient) do(method, path string, body interface{}) (*http.Resp
 
 // acceptanceEvidence 是最终输出到 stdout 的机器可读证据。
 type acceptanceEvidence struct {
-	Verdict            string                   `json:"verdict"` // passed | failed | blocked
-	RunID              uint                     `json:"runId"`
-	RunUUID            string                   `json:"runUuid"`
-	TemplateID         uint                     `json:"templateId"`
-	BotCount           int                      `json:"botCount"`
-	DurationMinutes    int                      `json:"durationMinutes"`
-	Checks             []acceptanceCheckResult  `json:"checks"`
-	MetricsSnapshots   []map[string]interface{} `json:"metricsSnapshots,omitempty"`
-	Report             map[string]interface{}   `json:"report,omitempty"`
-	StartedAt          string                   `json:"startedAt"`
-	FinishedAt         string                   `json:"finishedAt"`
-	FailureReason      string                   `json:"failureReason,omitempty"`
+	Verdict          string                   `json:"verdict"` // passed | failed | blocked
+	RunID            uint                     `json:"runId"`
+	RunUUID          string                   `json:"runUuid"`
+	TemplateID       uint                     `json:"templateId"`
+	BotCount         int                      `json:"botCount"`
+	DurationMinutes  int                      `json:"durationMinutes"`
+	Checks           []acceptanceCheckResult  `json:"checks"`
+	MetricsSnapshots []map[string]interface{} `json:"metricsSnapshots,omitempty"`
+	Report           map[string]interface{}   `json:"report,omitempty"`
+	StartedAt        string                   `json:"startedAt"`
+	FinishedAt       string                   `json:"finishedAt"`
+	FailureReason    string                   `json:"failureReason,omitempty"`
 }
 
 // acceptanceCheckResult 单项验收检查结果。
 type acceptanceCheckResult struct {
-	Name    string  `json:"name"`
-	Passed  bool    `json:"passed"`
-	Value   float64 `json:"value"`
-	Target  float64 `json:"target"`
-	Detail  string  `json:"detail,omitempty"`
+	Name   string  `json:"name"`
+	Passed bool    `json:"passed"`
+	Value  float64 `json:"value"`
+	Target float64 `json:"target"`
+	Detail string  `json:"detail,omitempty"`
 }
 
 // 验收阈值常量（spec §38 默认严格验收）。

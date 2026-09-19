@@ -23,8 +23,8 @@ func TestComposeEnv_JavaHomeAndPath(t *testing.T) {
 	spec := CommandSpec{
 		JavaHome: "/opt/jdk-21",
 		EnvVars: map[string]string{
-			"FOO":              "override",
-			"MINECRAFT_EULA":   "true",
+			"FOO":            "override",
+			"MINECRAFT_EULA": "true",
 		},
 	}
 	out := ComposeEnv(base, spec)

@@ -75,10 +75,10 @@ func (s *NodeRepairService) ListSuspects() ([]SuspectNode, error) {
 
 // ReenrollResult 重新 enroll 结果，返回轮换后的新身份（new secret 仅此一次随响应返回）。
 type ReenrollResult struct {
-	NodeID     uint   `json:"nodeId"`
-	NewUUID    string `json:"newUuid"`
-	NewSecret  string `json:"newSecret"`
-	OldUUID    string `json:"oldUuid"`
+	NodeID    uint   `json:"nodeId"`
+	NewUUID   string `json:"newUuid"`
+	NewSecret string `json:"newSecret"`
+	OldUUID   string `json:"oldUuid"`
 }
 
 // Reenroll 把被挤占的机器作为新节点重新 enroll（见 ADR-039 §2）：为该节点行轮换全新 UUID + secret，
@@ -115,8 +115,8 @@ func (s *NodeRepairService) Reenroll(nodeID uint, confirm bool) (*ReenrollResult
 
 // OrphanReport 某节点上孤立资源引用的统计（只读，见 ADR-039 §2）。
 type OrphanReport struct {
-	NodeID       uint  `json:"nodeId"`
-	JDKCount     int64 `json:"jdkCount"`
+	NodeID        uint  `json:"nodeId"`
+	JDKCount      int64 `json:"jdkCount"`
 	InstanceCount int64 `json:"instanceCount"`
 }
 

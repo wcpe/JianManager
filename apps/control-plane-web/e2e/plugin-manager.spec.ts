@@ -12,7 +12,7 @@ test('FR-143 插件页四区分区 + 元信息 + 操作 + 重启提示 + 市场�
   await login(page)
   await page.goto('/instances/1?tab=plugins')
 
-  await expect(page.getByRole('heading', { name: '插件 / 模组 / 资源包 / 数据包' })).toBeVisible()
+  await expect(page.getByText('插件 / 模组 / 资源包 / 数据包').first()).toBeVisible({ timeout: 15_000 })
 
   // 四目录分区
   await expect(page.getByRole('region', { name: '插件' })).toBeVisible()

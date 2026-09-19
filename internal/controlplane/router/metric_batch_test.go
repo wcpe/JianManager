@@ -192,7 +192,7 @@ func TestMetricSeriesBatch_ForbiddenSkipped(t *testing.T) {
 	aliceID := findUserIDByUsername(t, db, "alice")
 	addMemberViaAPI(t, r, adminToken, groupA, aliceID, model.GroupMemberRoleMember)
 
-	allowed := makeInstanceWithMetric(t, db, node.UUID, node.ID, groupA, "allowed-1") // alice 有权
+	allowed := makeInstanceWithMetric(t, db, node.UUID, node.ID, groupA, "allowed-1")     // alice 有权
 	forbidden := makeInstanceWithMetric(t, db, node.UUID, node.ID, groupB, "forbidden-1") // alice 越权
 
 	body := map[string]interface{}{

@@ -59,11 +59,11 @@ func TestParseMajor(t *testing.T) {
 
 func TestNormalizeVendor(t *testing.T) {
 	cases := map[string]string{
-		"Eclipse Adoptium": "Temurin",
-		"Azul Systems":     "Zulu",
-		"Amazon Corretto":  "Corretto",
-		"Microsoft":        "OpenJDK",
-		"":                 "Unknown",
+		"Eclipse Adoptium":   "Temurin",
+		"Azul Systems":       "Zulu",
+		"Amazon Corretto":    "Corretto",
+		"Microsoft":          "OpenJDK",
+		"":                   "Unknown",
 		"Random Distributor": "Random Distributor",
 	}
 	for in, want := range cases {

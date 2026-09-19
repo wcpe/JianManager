@@ -7,11 +7,11 @@ import (
 // RingBuffer 环形缓冲区，用于存储最近的输出。
 // 支持多个观察者同时读取。
 type RingBuffer struct {
-	mu      sync.RWMutex
-	buf     []byte
-	size    int
+	mu       sync.RWMutex
+	buf      []byte
+	size     int
 	writePos int
-	wrapped bool
+	wrapped  bool
 }
 
 // NewRingBuffer 创建指定大小的环形缓冲区。

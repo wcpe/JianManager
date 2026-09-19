@@ -379,23 +379,23 @@ func (s *NodeService) Delete(id uint, force bool) (*NodeDeleteResult, error) {
 
 // ArchivedNode 归档节点对外视图（FR-393）：公开字段 + deletedAt，不含 secret。
 type ArchivedNode struct {
-	ID              uint              `json:"id"`
-	UUID            string            `json:"uuid"`
-	Name            string            `json:"name"`
-	Host            string            `json:"host"`
-	GRPCPort        int               `json:"grpcPort"`
-	WSPort          int               `json:"wsPort"`
-	Status          model.NodeStatus  `json:"status"`
-	OS              string            `json:"os"`
-	Arch            string            `json:"arch"`
-	CPUCores        int               `json:"cpuCores"`
-	MemoryMB        int64             `json:"memoryMb"`
-	DiskTotalMB     int64             `json:"diskTotalMb"`
-	Maintenance     bool              `json:"maintenance"`
-	LastHeartbeat   *time.Time        `json:"lastHeartbeat"`
-	CreatedAt       time.Time         `json:"createdAt"`
-	UpdatedAt       time.Time         `json:"updatedAt"`
-	DeletedAt       time.Time         `json:"deletedAt"`
+	ID            uint             `json:"id"`
+	UUID          string           `json:"uuid"`
+	Name          string           `json:"name"`
+	Host          string           `json:"host"`
+	GRPCPort      int              `json:"grpcPort"`
+	WSPort        int              `json:"wsPort"`
+	Status        model.NodeStatus `json:"status"`
+	OS            string           `json:"os"`
+	Arch          string           `json:"arch"`
+	CPUCores      int              `json:"cpuCores"`
+	MemoryMB      int64            `json:"memoryMb"`
+	DiskTotalMB   int64            `json:"diskTotalMb"`
+	Maintenance   bool             `json:"maintenance"`
+	LastHeartbeat *time.Time       `json:"lastHeartbeat"`
+	CreatedAt     time.Time        `json:"createdAt"`
+	UpdatedAt     time.Time        `json:"updatedAt"`
+	DeletedAt     time.Time        `json:"deletedAt"`
 }
 
 // toArchivedNode 将软删 Node 映射为归档 DTO。

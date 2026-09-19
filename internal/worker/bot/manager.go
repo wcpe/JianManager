@@ -113,65 +113,65 @@ type ScriptProgress struct {
 
 // BotWorkerEvent Bot Worker 发出的事件（JSON 解码目标）。
 type BotWorkerEvent struct {
-	Evt                   string             `json:"evt"`
-	RequestID             string             `json:"requestId,omitempty"`
-	BatchID               string             `json:"batchId,omitempty"`
-	IdempotencyKey        string             `json:"idempotencyKey,omitempty"`
-	Bots                  []BotState         `json:"bots,omitempty"`
-	Results               []BotItemResult    `json:"results,omitempty"`
-	SignalResults         []SignalItemResult `json:"signalResults,omitempty"`
-	CommandResults        []CommandScheduleItemResult `json:"commandResults,omitempty"`
-	ScheduleRunID         string             `json:"scheduleRunId,omitempty"`
-	Accepted              bool               `json:"accepted,omitempty"`
-	AlreadyReleased       bool               `json:"alreadyReleased,omitempty"`
-	AlreadyCancelled      bool               `json:"alreadyCancelled,omitempty"`
-	ErrorCode             string             `json:"errorCode,omitempty"`
-	Action                *ActionEvent       `json:"action,omitempty"`
-	BotID                 string             `json:"botId,omitempty"`
-	Type                  string             `json:"type,omitempty"`
-	Data                  json.RawMessage    `json:"data,omitempty"`
-	Error                 string             `json:"error,omitempty"`
-	ScriptID              string             `json:"scriptId,omitempty"`
-	Progress              int                `json:"progress,omitempty"`
-	Total                 int                `json:"total,omitempty"`
-	Status                string             `json:"status,omitempty"`
-	Step                  string             `json:"step,omitempty"`
+	Evt              string                      `json:"evt"`
+	RequestID        string                      `json:"requestId,omitempty"`
+	BatchID          string                      `json:"batchId,omitempty"`
+	IdempotencyKey   string                      `json:"idempotencyKey,omitempty"`
+	Bots             []BotState                  `json:"bots,omitempty"`
+	Results          []BotItemResult             `json:"results,omitempty"`
+	SignalResults    []SignalItemResult          `json:"signalResults,omitempty"`
+	CommandResults   []CommandScheduleItemResult `json:"commandResults,omitempty"`
+	ScheduleRunID    string                      `json:"scheduleRunId,omitempty"`
+	Accepted         bool                        `json:"accepted,omitempty"`
+	AlreadyReleased  bool                        `json:"alreadyReleased,omitempty"`
+	AlreadyCancelled bool                        `json:"alreadyCancelled,omitempty"`
+	ErrorCode        string                      `json:"errorCode,omitempty"`
+	Action           *ActionEvent                `json:"action,omitempty"`
+	BotID            string                      `json:"botId,omitempty"`
+	Type             string                      `json:"type,omitempty"`
+	Data             json.RawMessage             `json:"data,omitempty"`
+	Error            string                      `json:"error,omitempty"`
+	ScriptID         string                      `json:"scriptId,omitempty"`
+	Progress         int                         `json:"progress,omitempty"`
+	Total            int                         `json:"total,omitempty"`
+	Status           string                      `json:"status,omitempty"`
+	Step             string                      `json:"step,omitempty"`
 	// FR-369 command-schedule-result 异步 occurrence 终态。
-	CommandResult *CommandScheduleResultPayload `json:"commandScheduleResult,omitempty"`
-	WorkerEpoch           string             `json:"workerEpoch,omitempty"`
-	WorkerEpochGeneration int64              `json:"workerEpochGeneration,omitempty"`
-	BotWorkerVersion      string             `json:"botWorkerVersion,omitempty"`
-	MaxBots               int                `json:"maxBots,omitempty"`
-	Features              []string           `json:"features,omitempty"`
-	ActiveBots            int                `json:"activeBots,omitempty"`
-	ConnectingBots        int                `json:"connectingBots,omitempty"`
-	RSSBytes              int64              `json:"rssBytes,omitempty"`
-	EventLoopP95Ms        float64            `json:"eventLoopP95Ms,omitempty"`
-	DroppedEvents         int64              `json:"droppedEvents,omitempty"`
-	CapacityGeneration    int64              `json:"capacityGeneration,omitempty"`
+	CommandResult         *CommandScheduleResultPayload `json:"commandScheduleResult,omitempty"`
+	WorkerEpoch           string                        `json:"workerEpoch,omitempty"`
+	WorkerEpochGeneration int64                         `json:"workerEpochGeneration,omitempty"`
+	BotWorkerVersion      string                        `json:"botWorkerVersion,omitempty"`
+	MaxBots               int                           `json:"maxBots,omitempty"`
+	Features              []string                      `json:"features,omitempty"`
+	ActiveBots            int                           `json:"activeBots,omitempty"`
+	ConnectingBots        int                           `json:"connectingBots,omitempty"`
+	RSSBytes              int64                         `json:"rssBytes,omitempty"`
+	EventLoopP95Ms        float64                       `json:"eventLoopP95Ms,omitempty"`
+	DroppedEvents         int64                         `json:"droppedEvents,omitempty"`
+	CapacityGeneration    int64                         `json:"capacityGeneration,omitempty"`
 }
 
 // CommandScheduleResultPayload 是 Bot Worker 异步 command-schedule-result 事件载荷。
 type CommandScheduleResultPayload struct {
-	RunID            string                  `json:"runId"`
-	RunUUID          string                  `json:"runUuid"`
-	BotUUID          string                  `json:"botUuid"`
-	Generation       int64                   `json:"generation"`
-	StepID           string                  `json:"stepId"`
-	ScheduleRunID    string                  `json:"scheduleRunId"`
-	ActionRunID      string                  `json:"actionRunId"`
-	CorrelationToken string                  `json:"correlationToken"`
-	CommandID        string                  `json:"commandId"`
-	Occurrence       int                     `json:"occurrence"`
-	Attempt          int                     `json:"attempt"`
-	DurationMs       int64                   `json:"durationMs"`
-	ObservedAtUnixMs int64                   `json:"observedAtUnixMs"`
-	Status           string                  `json:"status"`
-	PlannedAtUnixMs  int64                   `json:"plannedAtUnixMs"`
-	SentAtUnixMs     *int64                  `json:"sentAtUnixMs,omitempty"`
-	ErrorCode        string                  `json:"errorCode,omitempty"`
-	Message          string                  `json:"message,omitempty"`
-	AttemptErrors    []CommandAttemptError   `json:"attemptErrors,omitempty"`
+	RunID            string                `json:"runId"`
+	RunUUID          string                `json:"runUuid"`
+	BotUUID          string                `json:"botUuid"`
+	Generation       int64                 `json:"generation"`
+	StepID           string                `json:"stepId"`
+	ScheduleRunID    string                `json:"scheduleRunId"`
+	ActionRunID      string                `json:"actionRunId"`
+	CorrelationToken string                `json:"correlationToken"`
+	CommandID        string                `json:"commandId"`
+	Occurrence       int                   `json:"occurrence"`
+	Attempt          int                   `json:"attempt"`
+	DurationMs       int64                 `json:"durationMs"`
+	ObservedAtUnixMs int64                 `json:"observedAtUnixMs"`
+	Status           string                `json:"status"`
+	PlannedAtUnixMs  int64                 `json:"plannedAtUnixMs"`
+	SentAtUnixMs     *int64                `json:"sentAtUnixMs,omitempty"`
+	ErrorCode        string                `json:"errorCode,omitempty"`
+	Message          string                `json:"message,omitempty"`
+	AttemptErrors    []CommandAttemptError `json:"attemptErrors,omitempty"`
 }
 
 // CommandAttemptError 是单次失败尝试的摘要，最多保留 2 条。
@@ -392,24 +392,24 @@ type Manager struct {
 	waitDone               chan struct{} // 本代子进程 Wait 归来即关闭（单一 waiter，Stop 复用）
 	bots                   map[string]*BotState
 	// desired 本节点期望 Bot 集合；bot-worker 崩溃后据此重放（FR-365）。
-	desired map[string]*desiredAssignment
-	onEvent EventCallback
-	eventSubs              map[uint64]*eventSubscriber
-	nextSubID              uint64
-	pending                map[string]chan pendingRequestResult
-	requestTimeout         time.Duration
-	capacity               BotCapacitySnapshot
-	readyCh                chan struct{}
-	prewarm                int
-	botWorker              string        // bot-worker 脚本路径
-	nodeRes                *NodeResolver // node 可执行解析器（FR-300：托管/扫描 Node 优先，回退 PATH）
-	extraEnv               []string      // spawn 追加环境（FR-308：NODE_PATH 仅作 CJS 兜底）
+	desired        map[string]*desiredAssignment
+	onEvent        EventCallback
+	eventSubs      map[uint64]*eventSubscriber
+	nextSubID      uint64
+	pending        map[string]chan pendingRequestResult
+	requestTimeout time.Duration
+	capacity       BotCapacitySnapshot
+	readyCh        chan struct{}
+	prewarm        int
+	botWorker      string        // bot-worker 脚本路径
+	nodeRes        *NodeResolver // node 可执行解析器（FR-300：托管/扫描 Node 优先，回退 PATH）
+	extraEnv       []string      // spawn 追加环境（FR-308：NODE_PATH 仅作 CJS 兜底）
 	// prepareSpawn 在依赖预检前刷新受控 dist 的 ESM node_modules 链接。
 	prepareSpawn func(distDir string) error
 	// depsPrecheck spawn 前只按 ESM 可见路径检查依赖，避免裸全局根误放行。
 	depsPrecheck func(distDir string) error
 	// 崩溃自动恢复：连续 5 次/5 分钟开路 60 秒（FR-365）。
-	crashTimes      []time.Time
+	crashTimes       []time.Time
 	circuitOpenUntil time.Time
 	autoRestarting   bool
 	// startFn 可注入，便于测试崩溃重放而不真实 spawn。

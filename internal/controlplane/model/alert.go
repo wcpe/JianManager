@@ -46,11 +46,11 @@ const (
 // 多条规则可路由到同一通道。敏感凭证字段（webhook 地址含 secret、SMTP 密码、bot token）
 // 必须以 ${ENV_VAR} 形式引用环境变量，不得硬编码明文（见 .claude/rules/config-files.md）。
 type AlertChannel struct {
-	ID        uint           `gorm:"primaryKey" json:"id"`
-	UUID      string         `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	Name      string         `gorm:"type:varchar(128);not null" json:"name"`
-	Type      string         `gorm:"type:varchar(32);not null" json:"type"`
-	Enabled   bool           `gorm:"default:true" json:"enabled"`
+	ID      uint   `gorm:"primaryKey" json:"id"`
+	UUID    string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	Name    string `gorm:"type:varchar(128);not null" json:"name"`
+	Type    string `gorm:"type:varchar(32);not null" json:"type"`
+	Enabled bool   `gorm:"default:true" json:"enabled"`
 	// Config 通道连接配置的 JSON 串。各类型字段不同（见 service/channel_notifier.go ChannelConfig）：
 	//   webhook/dingtalk/wecom/feishu/discord: {"url":"${ENV}"}（URL 含 access_token/secret，强制 ${ENV} 引用）
 	//   telegram: {"token":"${ENV}","chatId":"..."}
@@ -73,9 +73,9 @@ func (c *AlertChannel) BeforeCreate(tx *gorm.DB) error {
 
 // AlertRule 告警规则（FR-011 + FR-085 扩展）。
 type AlertRule struct {
-	ID         uint   `gorm:"primaryKey" json:"id"`
-	UUID       string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	Name       string `gorm:"type:varchar(128);not null" json:"name"`
+	ID   uint   `gorm:"primaryKey" json:"id"`
+	UUID string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	Name string `gorm:"type:varchar(128);not null" json:"name"`
 	// TriggerType 触发类型（FR-085）：metric|instance_crash|node_offline|log_keyword|player_event|backup_failed。
 	// 为兼容 FR-011 存量规则，空值按 metric 处理。
 	TriggerType string `gorm:"type:varchar(32);default:metric" json:"triggerType"`
@@ -85,8 +85,8 @@ type AlertRule struct {
 	TargetID   *uint  `json:"targetId"`                                    // nil 表示全局
 
 	// ── metric 触发专用（FR-011）──
-	Metric      string  `gorm:"type:varchar(64)" json:"metric"`   // cpu, memory, disk
-	Operator    string  `gorm:"type:varchar(4)" json:"operator"`  // >, <, >=, <=, ==
+	Metric      string  `gorm:"type:varchar(64)" json:"metric"`  // cpu, memory, disk
+	Operator    string  `gorm:"type:varchar(4)" json:"operator"` // >, <, >=, <=, ==
 	Threshold   float64 `json:"threshold"`
 	DurationSec int     `gorm:"default:0" json:"durationSec"`
 
@@ -128,9 +128,9 @@ func (a *AlertRule) BeforeCreate(tx *gorm.DB) error {
 
 // AlertEvent 告警事件（FR-011 + FR-085 扩展）。
 type AlertEvent struct {
-	ID       uint   `gorm:"primaryKey" json:"id"`
-	RuleID   uint   `gorm:"not null;index" json:"ruleId"`
-	TargetID uint   `json:"targetId"`
+	ID       uint `gorm:"primaryKey" json:"id"`
+	RuleID   uint `gorm:"not null;index" json:"ruleId"`
+	TargetID uint `json:"targetId"`
 	// Level/TriggerType 冗余快照规则当时的级别与类型，便于历史筛选（规则可能被改/删）。
 	Level       string `gorm:"type:varchar(16);default:warn" json:"level"`
 	TriggerType string `gorm:"type:varchar(32);default:metric" json:"triggerType"`
@@ -139,9 +139,9 @@ type AlertEvent struct {
 	Value    float64 `json:"value"`
 	Message  string  `gorm:"type:varchar(512)" json:"message"`
 	// Count 聚合计数：去抖窗口内该告警被触发的次数（≥1）。
-	Count    int        `gorm:"default:1" json:"count"`
-	Resolved bool       `gorm:"default:false" json:"resolved"`
-	FiredAt  time.Time  `json:"firedAt"`
+	Count    int       `gorm:"default:1" json:"count"`
+	Resolved bool      `gorm:"default:false" json:"resolved"`
+	FiredAt  time.Time `json:"firedAt"`
 	// LastFiredAt 最近一次复发时间（聚合时更新）。
 	LastFiredAt *time.Time `json:"lastFiredAt"`
 	ResolvedAt  *time.Time `json:"resolvedAt"`

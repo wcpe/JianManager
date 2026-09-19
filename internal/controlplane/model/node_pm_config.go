@@ -12,7 +12,7 @@ type NodePMConfig struct {
 	// PM 包管理器偏好：npm（默认）/ pnpm / yarn。pnpm/yarn 经 corepack enable 激活。
 	PM string `gorm:"type:varchar(16);not null;default:npm" json:"pm"`
 	// Registries JSON 数组（[]PMRegistry）：默认源用 scope="" 那条，其余为 @scope 域源。
-	Registries string `gorm:"type:text" json:"-"`
+	Registries string    `gorm:"type:text" json:"-"`
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
 }

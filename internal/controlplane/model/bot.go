@@ -29,14 +29,14 @@ const (
 
 // Bot Mineflayer Bot。
 type Bot struct {
-	ID                     uint       `gorm:"primaryKey" json:"id"`
-	UUID                   string     `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	InstanceID             uint       `gorm:"not null;index" json:"instanceId"`
-	StressSessionID        *uint      `gorm:"index" json:"stressSessionId,omitempty"`
-	ExecutorNodeID         *uint      `gorm:"index;index:idx_bots_executor_generation,priority:1" json:"executorNodeId,omitempty"`
-	LoadBatchID            *uint      `gorm:"index" json:"loadBatchId,omitempty"`
-	Name                   string     `gorm:"type:varchar(128);not null" json:"name"`
-	Status                 BotStatus  `gorm:"type:varchar(32);default:pending" json:"status"`
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	UUID            string    `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	InstanceID      uint      `gorm:"not null;index" json:"instanceId"`
+	StressSessionID *uint     `gorm:"index" json:"stressSessionId,omitempty"`
+	ExecutorNodeID  *uint     `gorm:"index;index:idx_bots_executor_generation,priority:1" json:"executorNodeId,omitempty"`
+	LoadBatchID     *uint     `gorm:"index" json:"loadBatchId,omitempty"`
+	Name            string    `gorm:"type:varchar(128);not null" json:"name"`
+	Status          BotStatus `gorm:"type:varchar(32);default:pending" json:"status"`
 	// DesiredState 是 CP 对 Bot 的期望运行态（running/stopped），与 runtime Status 分离（FR-365）。
 	DesiredState           BotDesiredState `gorm:"type:varchar(16);not null;default:stopped;index" json:"desiredState"`
 	WorkerEpoch            string          `gorm:"type:varchar(36);not null;default:''" json:"workerEpoch"`
@@ -116,39 +116,39 @@ const (
 
 // BotStressSession Bot 压测会话。
 type BotStressSession struct {
-	ID                    uint                   `gorm:"primaryKey" json:"id"`
-	UUID                  string                 `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	InstanceID            uint                   `gorm:"not null;index" json:"instanceId"`
-	Name                  string                 `gorm:"type:varchar(128);not null" json:"name"`
-	NamePrefix            string                 `gorm:"type:varchar(64);not null" json:"namePrefix"`
-	Status                BotStressSessionStatus `gorm:"type:varchar(32);default:pending;index" json:"status"`
-	BotCount              int                    `gorm:"not null" json:"botCount"`
-	Behavior              string                 `gorm:"type:varchar(64)" json:"behavior"`
-	Config                string                 `gorm:"type:text" json:"config"`
-	OrchestrationYAML     string                 `gorm:"type:text" json:"orchestrationYaml,omitempty"`
-	OrchestrationSummary  string                 `gorm:"type:text" json:"orchestrationSummary,omitempty"`
-	ScenarioSnapshot      string                 `gorm:"type:longtext" json:"scenarioSnapshot,omitempty"`
-	CommandScheduleSnap   string                 `gorm:"type:longtext" json:"commandScheduleSnapshot,omitempty"`
-	AllocationPlan        string                 `gorm:"type:text" json:"allocationPlan,omitempty"`
-	SchemaVersion         int                    `gorm:"type:smallint;not null;default:1;index" json:"schemaVersion"`
+	ID                   uint                   `gorm:"primaryKey" json:"id"`
+	UUID                 string                 `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	InstanceID           uint                   `gorm:"not null;index" json:"instanceId"`
+	Name                 string                 `gorm:"type:varchar(128);not null" json:"name"`
+	NamePrefix           string                 `gorm:"type:varchar(64);not null" json:"namePrefix"`
+	Status               BotStressSessionStatus `gorm:"type:varchar(32);default:pending;index" json:"status"`
+	BotCount             int                    `gorm:"not null" json:"botCount"`
+	Behavior             string                 `gorm:"type:varchar(64)" json:"behavior"`
+	Config               string                 `gorm:"type:text" json:"config"`
+	OrchestrationYAML    string                 `gorm:"type:text" json:"orchestrationYaml,omitempty"`
+	OrchestrationSummary string                 `gorm:"type:text" json:"orchestrationSummary,omitempty"`
+	ScenarioSnapshot     string                 `gorm:"type:longtext" json:"scenarioSnapshot,omitempty"`
+	CommandScheduleSnap  string                 `gorm:"type:longtext" json:"commandScheduleSnapshot,omitempty"`
+	AllocationPlan       string                 `gorm:"type:text" json:"allocationPlan,omitempty"`
+	SchemaVersion        int                    `gorm:"type:smallint;not null;default:1;index" json:"schemaVersion"`
 	// FR-370 V2 专属列：schemaVersion=1 历史行允许 null，schemaVersion=2 由 service 强制完整。
-	TemplateID            *uint                  `gorm:"index" json:"templateId,omitempty"`
-	LoadProfile           string                 `gorm:"type:longtext" json:"loadProfile,omitempty"`
-	Thresholds            string                 `gorm:"type:longtext" json:"thresholds,omitempty"`
-	RunState              *BotLoadRunState       `gorm:"type:varchar(32);index" json:"runState,omitempty"`
-	CurrentStage          *int                   `json:"currentStage,omitempty"`
-	Verdict               *BotLoadVerdict        `gorm:"type:varchar(16);index" json:"verdict,omitempty"`
-	MaxStableBots         *int                   `json:"maxStableBots,omitempty"`
-	FailureSummary        string                 `gorm:"type:longtext" json:"failureSummary,omitempty"`
-	ReportSummary         string                 `gorm:"type:longtext" json:"reportSummary,omitempty"`
-	Succeeded             int                    `gorm:"default:0" json:"succeeded"`
-	Failed                int                    `gorm:"default:0" json:"failed"`
-	LastError             string                 `gorm:"type:text" json:"lastError,omitempty"`
-	StartedAt             *time.Time             `json:"startedAt,omitempty"`
-	EndedAt               *time.Time             `json:"endedAt,omitempty"`
-	CreatedAt             time.Time              `json:"createdAt"`
-	UpdatedAt             time.Time              `json:"updatedAt"`
-	DeletedAt             gorm.DeletedAt         `gorm:"index" json:"-"`
+	TemplateID     *uint            `gorm:"index" json:"templateId,omitempty"`
+	LoadProfile    string           `gorm:"type:longtext" json:"loadProfile,omitempty"`
+	Thresholds     string           `gorm:"type:longtext" json:"thresholds,omitempty"`
+	RunState       *BotLoadRunState `gorm:"type:varchar(32);index" json:"runState,omitempty"`
+	CurrentStage   *int             `json:"currentStage,omitempty"`
+	Verdict        *BotLoadVerdict  `gorm:"type:varchar(16);index" json:"verdict,omitempty"`
+	MaxStableBots  *int             `json:"maxStableBots,omitempty"`
+	FailureSummary string           `gorm:"type:longtext" json:"failureSummary,omitempty"`
+	ReportSummary  string           `gorm:"type:longtext" json:"reportSummary,omitempty"`
+	Succeeded      int              `gorm:"default:0" json:"succeeded"`
+	Failed         int              `gorm:"default:0" json:"failed"`
+	LastError      string           `gorm:"type:text" json:"lastError,omitempty"`
+	StartedAt      *time.Time       `json:"startedAt,omitempty"`
+	EndedAt        *time.Time       `json:"endedAt,omitempty"`
+	CreatedAt      time.Time        `json:"createdAt"`
+	UpdatedAt      time.Time        `json:"updatedAt"`
+	DeletedAt      gorm.DeletedAt   `gorm:"index" json:"-"`
 
 	Instance Instance         `gorm:"foreignKey:InstanceID" json:"instance,omitempty"`
 	Template *BotLoadTemplate `gorm:"foreignKey:TemplateID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`

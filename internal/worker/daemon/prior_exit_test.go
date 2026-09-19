@@ -32,6 +32,7 @@ func reapedPID(t *testing.T) int {
 //   - 无 PID 文件：立即返回（上一代已自清理）
 //   - PID 文件中进程已死：立即返回
 //   - PID 文件中进程仍存活：等满超时后尽力而为返回（不无限期阻塞、也不提前返回）
+//
 // 这是 FR-035 代理重启竞态（旧进程占端口致新进程 exit status 1）的回归测试。
 func TestWaitForPriorExit(t *testing.T) {
 	t.Run("无 PID 文件立即返回", func(t *testing.T) {

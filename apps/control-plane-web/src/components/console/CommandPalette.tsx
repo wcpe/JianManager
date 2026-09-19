@@ -73,9 +73,6 @@ export default function CommandPalette() {
   )
 
   const pages = useMemo(() => {
-    const permNodes = usePermissionsStore.getState().nodes
-    const permAdmin = usePermissionsStore.getState().isPlatformAdmin
-    const permLoaded = usePermissionsStore.getState().loaded
     if (permLoaded) return flatNavItems(permNodes, permAdmin).map((n) => ({ to: n.to, label: t(n.labelKey) }))
     return flatNavItems(role).map((n) => ({ to: n.to, label: t(n.labelKey) }))
   }, [role, permNodes, permAdmin, permLoaded, t])

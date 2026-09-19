@@ -25,7 +25,7 @@ test.describe('整站导航（mock 模式）', () => {
   test('备份存储页展示容量并可测试连接', async ({ page }) => {
     await page.goto('/backup-storages')
     await expect(page.getByRole('heading', { name: '备份存储后端' })).toBeVisible()
-    await expect(page.getByText('256 MB')).toBeVisible()
+    await expect(page.getByRole('cell', { name: /256 MB/ }).first()).toBeVisible()
     // 先监听行内测试请求，避免列表已有的「连接正常」文本被误当作点击完成信号。
     const testResponsePromise = page.waitForResponse((response) => {
       const request = response.request()

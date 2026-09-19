@@ -245,14 +245,14 @@ func TestAuthorizeBotRunExecutorNodes_StartRejectsAnyOutOfScope(t *testing.T) {
 
 func TestAgentBotActionCatalog_V1DeniedAndCapabilitiesRegistered(t *testing.T) {
 	wantCapabilities := map[string]string{
-		AgentActionBotList:              AgentCapabilityBotRead,
-		AgentActionBotGet:               AgentCapabilityBotRead,
-		AgentActionBotCreate:            AgentCapabilityBotManage,
-		AgentActionBotSetBehavior:       AgentCapabilityBotManage,
-		AgentActionBotSendCommand:       AgentCapabilityBotManage,
-		AgentActionBotDelete:            AgentCapabilityBotManage,
-		AgentActionLoadTestTemplateList: AgentCapabilityBotRead,
-		AgentActionLoadTestTemplateGet:  AgentCapabilityBotRead,
+		AgentActionBotList:                AgentCapabilityBotRead,
+		AgentActionBotGet:                 AgentCapabilityBotRead,
+		AgentActionBotCreate:              AgentCapabilityBotManage,
+		AgentActionBotSetBehavior:         AgentCapabilityBotManage,
+		AgentActionBotSendCommand:         AgentCapabilityBotManage,
+		AgentActionBotDelete:              AgentCapabilityBotManage,
+		AgentActionLoadTestTemplateList:   AgentCapabilityBotRead,
+		AgentActionLoadTestTemplateGet:    AgentCapabilityBotRead,
 		AgentActionLoadTestTemplateCreate: AgentCapabilityBotLoad,
 		AgentActionLoadTestTemplateUpdate: AgentCapabilityBotLoad,
 		AgentActionLoadTestTemplateDelete: AgentCapabilityBotLoad,

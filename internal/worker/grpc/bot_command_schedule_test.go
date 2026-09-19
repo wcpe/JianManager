@@ -108,9 +108,9 @@ func TestCancelBotCommandSchedules_AlreadyCancelled(t *testing.T) {
 
 func TestCommandScheduleResultMapping_SentToSucceeded(t *testing.T) {
 	event := &bot.BotWorkerEvent{
-		Evt:  "command-schedule-result",
+		Evt:   "command-schedule-result",
 		BotID: "00000000-0000-0000-0000-000000000001",
-		Data: []byte(`{"runUuid":"00000000-0000-0000-0000-000000000099","botUuid":"00000000-0000-0000-0000-000000000001","generation":1,"stepId":"command-schedule","scheduleRunId":"00000000-0000-0000-0000-0000000000aa","actionRunId":"00000000-0000-0000-0000-0000000000bb","correlationToken":"00000000-0000-0000-0000-0000000000cc","commandId":"a","occurrence":0,"attempt":1,"durationMs":5,"observedAtUnixMs":100,"status":"sent","plannedAtUnixMs":95,"sentAtUnixMs":100,"attemptErrors":[]}`),
+		Data:  []byte(`{"runUuid":"00000000-0000-0000-0000-000000000099","botUuid":"00000000-0000-0000-0000-000000000001","generation":1,"stepId":"command-schedule","scheduleRunId":"00000000-0000-0000-0000-0000000000aa","actionRunId":"00000000-0000-0000-0000-0000000000bb","correlationToken":"00000000-0000-0000-0000-0000000000cc","commandId":"a","occurrence":0,"attempt":1,"durationMs":5,"observedAtUnixMs":100,"status":"sent","plannedAtUnixMs":95,"sentAtUnixMs":100,"attemptErrors":[]}`),
 	}
 	fleet := botWorkerEventToFleetProto(event, "")
 	require.Len(t, fleet, 1)
@@ -123,9 +123,9 @@ func TestCommandScheduleResultMapping_SentToSucceeded(t *testing.T) {
 
 func TestCommandScheduleResultMapping_TimedOutMappedToDeadlineExceeded(t *testing.T) {
 	event := &bot.BotWorkerEvent{
-		Evt:  "command-schedule-result",
+		Evt:   "command-schedule-result",
 		BotID: "00000000-0000-0000-0000-000000000001",
-		Data: []byte(`{"runUuid":"00000000-0000-0000-0000-000000000099","botUuid":"00000000-0000-0000-0000-000000000001","generation":1,"stepId":"command-schedule","scheduleRunId":"00000000-0000-0000-0000-0000000000aa","actionRunId":"00000000-0000-0000-0000-0000000000bb","correlationToken":"00000000-0000-0000-0000-0000000000cc","commandId":"a","occurrence":0,"attempt":1,"durationMs":0,"observedAtUnixMs":100,"status":"timed_out","plannedAtUnixMs":95,"sentAtUnixMs":null,"errorCode":"COMMAND_DEADLINE_EXCEEDED","message":"deadline","attemptErrors":[]}`),
+		Data:  []byte(`{"runUuid":"00000000-0000-0000-0000-000000000099","botUuid":"00000000-0000-0000-0000-000000000001","generation":1,"stepId":"command-schedule","scheduleRunId":"00000000-0000-0000-0000-0000000000aa","actionRunId":"00000000-0000-0000-0000-0000000000bb","correlationToken":"00000000-0000-0000-0000-0000000000cc","commandId":"a","occurrence":0,"attempt":1,"durationMs":0,"observedAtUnixMs":100,"status":"timed_out","plannedAtUnixMs":95,"sentAtUnixMs":null,"errorCode":"COMMAND_DEADLINE_EXCEEDED","message":"deadline","attemptErrors":[]}`),
 	}
 	fleet := botWorkerEventToFleetProto(event, "")
 	require.Equal(t, "timed_out", fleet[0].GetActionEvent().Status)
@@ -134,9 +134,9 @@ func TestCommandScheduleResultMapping_TimedOutMappedToDeadlineExceeded(t *testin
 
 func TestCommandScheduleResultMapping_CancelledToCancelled(t *testing.T) {
 	event := &bot.BotWorkerEvent{
-		Evt:  "command-schedule-result",
+		Evt:   "command-schedule-result",
 		BotID: "00000000-0000-0000-0000-000000000001",
-		Data: []byte(`{"runUuid":"00000000-0000-0000-0000-000000000099","botUuid":"00000000-0000-0000-0000-000000000001","generation":1,"stepId":"command-schedule","scheduleRunId":"00000000-0000-0000-0000-0000000000aa","actionRunId":"00000000-0000-0000-0000-0000000000bb","correlationToken":"00000000-0000-0000-0000-0000000000cc","commandId":"a","occurrence":0,"attempt":1,"durationMs":0,"observedAtUnixMs":100,"status":"cancelled","plannedAtUnixMs":95,"sentAtUnixMs":null,"errorCode":"ACTION_CANCELLED","message":"x","attemptErrors":[]}`),
+		Data:  []byte(`{"runUuid":"00000000-0000-0000-0000-000000000099","botUuid":"00000000-0000-0000-0000-000000000001","generation":1,"stepId":"command-schedule","scheduleRunId":"00000000-0000-0000-0000-0000000000aa","actionRunId":"00000000-0000-0000-0000-0000000000bb","correlationToken":"00000000-0000-0000-0000-0000000000cc","commandId":"a","occurrence":0,"attempt":1,"durationMs":0,"observedAtUnixMs":100,"status":"cancelled","plannedAtUnixMs":95,"sentAtUnixMs":null,"errorCode":"ACTION_CANCELLED","message":"x","attemptErrors":[]}`),
 	}
 	fleet := botWorkerEventToFleetProto(event, "")
 	require.Equal(t, "cancelled", fleet[0].GetActionEvent().Status)
@@ -145,9 +145,9 @@ func TestCommandScheduleResultMapping_CancelledToCancelled(t *testing.T) {
 
 func TestCommandScheduleResultMapping_SessionFilterApplies(t *testing.T) {
 	event := &bot.BotWorkerEvent{
-		Evt:  "command-schedule-result",
+		Evt:   "command-schedule-result",
 		BotID: "00000000-0000-0000-0000-000000000001",
-		Data: []byte(`{"runUuid":"filtered","botUuid":"00000000-0000-0000-0000-000000000001","generation":1,"stepId":"command-schedule","scheduleRunId":"00000000-0000-0000-0000-0000000000aa","actionRunId":"00000000-0000-0000-0000-0000000000bb","correlationToken":"00000000-0000-0000-0000-0000000000cc","commandId":"a","occurrence":0,"attempt":1,"durationMs":0,"observedAtUnixMs":100,"status":"sent","plannedAtUnixMs":95,"sentAtUnixMs":100,"attemptErrors":[]}`),
+		Data:  []byte(`{"runUuid":"filtered","botUuid":"00000000-0000-0000-0000-000000000001","generation":1,"stepId":"command-schedule","scheduleRunId":"00000000-0000-0000-0000-0000000000aa","actionRunId":"00000000-0000-0000-0000-0000000000bb","correlationToken":"00000000-0000-0000-0000-0000000000cc","commandId":"a","occurrence":0,"attempt":1,"durationMs":0,"observedAtUnixMs":100,"status":"sent","plannedAtUnixMs":95,"sentAtUnixMs":100,"attemptErrors":[]}`),
 	}
 	require.Nil(t, botWorkerEventToFleetProto(event, "other-session"))
 }
@@ -179,13 +179,13 @@ func makeApplyItem() *workerpb.ApplyBotCommandScheduleItem {
 
 func makeReleaseItem() *workerpb.ReleaseBotCommandScheduleItem {
 	return &workerpb.ReleaseBotCommandScheduleItem{
-		RunUuid:          "11111111-2222-3333-4444-555555555555",
-		BotUuid:          "00000000-0000-0000-0000-000000000001",
-		Generation:       1,
-		StepId:           "command-schedule",
-		ScheduleRunId:    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-		BarrierKey:       "main",
-		ReleaseAtUnixMs:  1_500,
+		RunUuid:         "11111111-2222-3333-4444-555555555555",
+		BotUuid:         "00000000-0000-0000-0000-000000000001",
+		Generation:      1,
+		StepId:          "command-schedule",
+		ScheduleRunId:   "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		BarrierKey:      "main",
+		ReleaseAtUnixMs: 1_500,
 	}
 }
 

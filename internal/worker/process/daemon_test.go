@@ -136,4 +136,3 @@ func TestManager_DaemonStopAllGraceful(t *testing.T) {
 	// wrapperPID == os.Getpid()，不可用 killProcessTree（会杀掉测试自身）。
 	// 真实部署中 wrapper 是独立子进程，stop 已通过 taskkill /T 清理 Java 树。
 }
-

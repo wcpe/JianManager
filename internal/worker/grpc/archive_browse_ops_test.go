@@ -30,10 +30,10 @@ func TestListZipEntries(t *testing.T) {
 	work := t.TempDir()
 	jar := filepath.Join(work, "plugin.jar")
 	makeTestZip(t, jar, map[string]string{
-		"plugin.yml":              "name: Foo\nmain: com.example.Foo\n",
-		"config.yml":              "enabled: true\n",
-		"com/example/Foo.class":   "\x00\x01\x02binary",
-		"META-INF/MANIFEST.MF":    "Manifest-Version: 1.0\n",
+		"plugin.yml":            "name: Foo\nmain: com.example.Foo\n",
+		"config.yml":            "enabled: true\n",
+		"com/example/Foo.class": "\x00\x01\x02binary",
+		"META-INF/MANIFEST.MF":  "Manifest-Version: 1.0\n",
 	})
 
 	entries, truncated, err := listZipEntries(jar)

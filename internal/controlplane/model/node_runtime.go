@@ -15,7 +15,7 @@ type NodeRuntime struct {
 	// Version 完整版本（如 "22.17.0"）。
 	Version string `gorm:"type:varchar(64);not null" json:"version"`
 	// Major 主版本（如 22），排序/选择用。
-	Major int `gorm:"not null;index" json:"major"`
+	Major int    `gorm:"not null;index" json:"major"`
 	Arch  string `gorm:"type:varchar(32)" json:"arch"`
 	Path  string `gorm:"type:varchar(512);not null;uniqueIndex:uniq_node_runtime_type_path" json:"path"`
 	// Managed 是否平台托管（波1 登记均为外部发现 false；FR-299 安装器落 true）。

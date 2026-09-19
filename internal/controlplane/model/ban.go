@@ -25,8 +25,8 @@ const (
 // 本表是 JianManager 侧的可查询审计台账：谁、何时、为何、对哪个范围封禁了某玩家，
 // 以及该封禁当前是否仍被本平台视为生效（解封时置 Active=false 而非删除，保留历史）。
 type BanRecord struct {
-	ID         uint   `gorm:"primaryKey" json:"id"`
-	UUID       string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	ID   uint   `gorm:"primaryKey" json:"id"`
+	UUID string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
 	// PlayerName 被封禁玩家名（大小写按客户端原样存储）。
 	PlayerName string `gorm:"type:varchar(64);not null;index" json:"playerName"`
 	// Reason 封禁原因（下发给 RCON ban 命令并入库留档）。

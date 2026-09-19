@@ -14,9 +14,9 @@ test('FR-132 底部主题/语言图标 + 三态直选主题 + 版本/开源许�
   await login(page)
   const aside = page.locator('aside').first()
 
-  // ① 底部主题切换按钮（图标）+ 主题色圆点直选（承 FR-164/132）
+  // ① 底部主题：调色板入口 aria-label=「主题色」+ 明暗「切换主题」（色名在 dropdown 内，非常驻按钮）
   await expect(aside.getByRole('button', { name: '切换主题' })).toBeVisible()
-  await expect(aside.getByRole('button', { name: 'Jian 绿' })).toBeVisible()
+  await expect(aside.getByRole('button', { name: '主题色' })).toBeVisible()
   // 语言切换（图标 + 语言名，中文默认）
   await expect(aside.getByRole('button', { name: '中文', exact: true })).toBeVisible()
 

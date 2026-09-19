@@ -91,7 +91,7 @@ type SelfUpdateService struct {
 	// githubTokenFunc 运行时令牌读取器（settings.github.token 生效值，FR-063），
 	// 非空返回值优先于 cfg.GitHubToken 基线；使设置面板改令牌即时生效。由 main 注入。
 	githubTokenFunc func() string
-	root *dataroot.Root
+	root            *dataroot.Root
 	// httpClient 出站 client（经进程级代理，FR-174/ADR-037）：拉 feed 与 CP 自身二进制下载共用。
 	// 为 nil 时回退 http.DefaultClient（向后兼容）。
 	httpClient *http.Client
@@ -280,6 +280,7 @@ func normalizeVersionCore(v string) string {
 //  1. 先对双方做 normalizeVersionCore（去 v 前缀与 -dev 等后缀），再按「点分数字」逐段比较；
 //  2. 段数不足右侧补 0（1.2 与 1.2.0 等价）；
 //  3. 任一方无法解析为数字段时回退到「规范化后字符串不等」——避免把 0.18.0 提示成可升到 v0.16.0。
+//
 // 真机 F1：缓存里 current=0.17.0-dev、latest=v0.16.0 曾被 versionDiffers 误标「可升级」（实际是降级）。
 func versionIsUpgrade(current, latest string) bool {
 	c := normalizeVersionCore(current)

@@ -17,8 +17,8 @@ type Group struct {
 	UpdatedAt   time.Time      `json:"updatedAt"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 
-	Members  []GroupMember  `gorm:"foreignKey:GroupID" json:"members,omitempty"`
-	Quota    *GroupQuota    `gorm:"foreignKey:GroupID" json:"quota,omitempty"`
+	Members []GroupMember `gorm:"foreignKey:GroupID" json:"members,omitempty"`
+	Quota   *GroupQuota   `gorm:"foreignKey:GroupID" json:"quota,omitempty"`
 }
 
 // BeforeCreate 创建前自动生成 UUID。
@@ -51,11 +51,11 @@ type GroupMember struct {
 
 // GroupQuota 组配额。
 type GroupQuota struct {
-	ID            uint `gorm:"primaryKey" json:"id"`
-	GroupID       uint `gorm:"uniqueIndex;not null" json:"groupId"`
-	MaxInstances  int  `gorm:"default:10" json:"maxInstances"`
-	MaxBots       int  `gorm:"default:50" json:"maxBots"`
-	MaxStorageMB  int  `gorm:"default:10240" json:"maxStorageMb"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	GroupID      uint      `gorm:"uniqueIndex;not null" json:"groupId"`
+	MaxInstances int       `gorm:"default:10" json:"maxInstances"`
+	MaxBots      int       `gorm:"default:50" json:"maxBots"`
+	MaxStorageMB int       `gorm:"default:10240" json:"maxStorageMb"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }

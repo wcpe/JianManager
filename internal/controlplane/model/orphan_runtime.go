@@ -24,15 +24,15 @@ const (
 // OrphanRuntime 记录 Worker 有、CP 无实例记录的无主运行时（FR-326 反向对账）。
 // 不重建业务实例，仅跟踪发现/宽限/处置；处置后终态保留供列表与审计对照。
 type OrphanRuntime struct {
-	ID           uint                `gorm:"primaryKey" json:"id"`
-	UUID         string              `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	NodeUUID     string              `gorm:"type:char(36);not null;index:idx_orphan_node_inst,priority:1" json:"nodeUuid"`
-	InstanceUUID string              `gorm:"type:char(36);not null;index:idx_orphan_node_inst,priority:2" json:"instanceUuid"`
+	ID           uint   `gorm:"primaryKey" json:"id"`
+	UUID         string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	NodeUUID     string `gorm:"type:char(36);not null;index:idx_orphan_node_inst,priority:1" json:"nodeUuid"`
+	InstanceUUID string `gorm:"type:char(36);not null;index:idx_orphan_node_inst,priority:2" json:"instanceUuid"`
 	// WorkerState 最近一次心跳上报的状态摘要（RUNNING/STOPPED/…）。
 	WorkerState string `gorm:"type:varchar(32)" json:"workerState"`
 	// WorkerPID 最近一次心跳上报的进程 PID（0=未知）。
 	// 列名显式 worker_pid：避免 GORM 把 PID 缩写蛇形化为 worker_p_id（同 grpc_port 先例）。
-	WorkerPID int `gorm:"column:worker_pid;default:0" json:"workerPid"`
+	WorkerPID   int                 `gorm:"column:worker_pid;default:0" json:"workerPid"`
 	Status      OrphanRuntimeStatus `gorm:"type:varchar(32);not null;index;default:pending" json:"status"`
 	FirstSeenAt time.Time           `gorm:"not null;index" json:"firstSeenAt"`
 	LastSeenAt  time.Time           `gorm:"not null" json:"lastSeenAt"`

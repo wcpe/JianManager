@@ -61,13 +61,13 @@ type Server struct {
 	// 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误。由 SetBotManager 注入。
 	botMgr *bot.Manager
 	// botFleet 允许 Fleet RPC 复用 Manager，并为协议测试注入最小替身。
-	botFleet        botFleetManager
-	botStartMu      sync.Mutex
-	botBatchMu      sync.Mutex
+	botFleet   botFleetManager
+	botStartMu sync.Mutex
+	botBatchMu sync.Mutex
 	// managedRuntimeMu 保护 Worker/Bot Worker CPU 时间差的上一次采样基线（FR-400）。
 	managedRuntimeMu  sync.Mutex
 	managedRuntimeCPU map[int]managedRuntimeCPUBaseline
-	botBatchResults map[string]*botBatchCacheEntry
+	botBatchResults   map[string]*botBatchCacheEntry
 	// botOwnershipMu 同时保护 Fleet ownership 账本并串行化 Fleet Apply 与 legacy mutation，
 	// 防止 legacy RPC 在 accepted 回执与 ownership 落账之间越过。
 	botOwnershipMu sync.Mutex
@@ -154,12 +154,12 @@ type Server struct {
 // jdkMgr 可为 nil（未启用 JDK 托管时）。root 用于解析相对工作目录，可为 nil（按绝对路径处理）。
 func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Collector, jdkMgr *jdk.Manager, root *dataroot.Root) *Server {
 	s := &Server{
-		manager:         manager,
-		nodeUUID:        nodeUUID,
-		collector:       collector,
-		jdkMgr:          jdkMgr,
-		root:            root,
-		botBatchResults: make(map[string]*botBatchCacheEntry),
+		manager:           manager,
+		nodeUUID:          nodeUUID,
+		collector:         collector,
+		jdkMgr:            jdkMgr,
+		root:              root,
+		botBatchResults:   make(map[string]*botBatchCacheEntry),
 		managedRuntimeCPU: make(map[int]managedRuntimeCPUBaseline),
 		botOwnership:      make(map[string]botFleetOwnership),
 		searchIndexes:     make(map[string]*search.Index),

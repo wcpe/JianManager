@@ -15,7 +15,9 @@ test('FR-164 双色主题 + 明暗模式切换 + 持久', async ({ page }) => {
   )
 
   // 切青绿 → --primary 变 + localStorage.colorTheme=teal
-  await page.getByRole('button', { name: '青绿', exact: true }).click()
+  // ThemeSwitcher：主题色在「主题色」dropdown 内为 menuitem，非常驻按钮
+  await page.getByRole('button', { name: '主题色' }).first().click()
+  await page.getByRole('menuitem', { name: '青绿', exact: true }).click()
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem('colorTheme')))
     .toBe('teal')

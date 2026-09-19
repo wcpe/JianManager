@@ -78,9 +78,9 @@ type Services struct {
 	Audit             *service.AuditService
 	Authz             *service.AuthzService
 	// Permission 可选显式权限服务；nil 时从 Authz.Permissions() 取（FR-432）。
-	Permission        *service.PermissionService
-	Event             *service.EventService
-	Asset             *service.AssetService
+	Permission *service.PermissionService
+	Event      *service.EventService
+	Asset      *service.AssetService
 	// ArtifactVersion 通用制品版本库（FR-409）；首期为 ServerProbe 提供来源、缓存和版本选择。
 	ArtifactVersion *service.ArtifactVersionService
 	Core            *service.CoreService
@@ -453,7 +453,6 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 群组拓扑聚合（FR-335）：一次返全量 proxy 注册 + network 成员归属，消 per-proxy N+1。平台管理员。
 		topologyHandler := NewTopologyHandler(svcs.Registration, svcs.Network)
 		topologyHandler.RegisterRoutes(permRead("network.read", "network.manage"))
-
 
 		// 备份远程存储后端：含凭证 env 引用，平台级配置（FR-057）。
 		if svcs.BackupStorage != nil {

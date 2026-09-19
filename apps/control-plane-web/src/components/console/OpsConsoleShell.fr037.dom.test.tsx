@@ -42,7 +42,7 @@ describe('FR-037 运维控制台 Shell（mock 假后端）', () => {
     expect(container.querySelector('[data-slot="console-main"]')).toHaveClass('jm-console-main')
     expect(within(sidebar).getByRole('link', { name: '平台首页' })).toHaveAttribute('href', '/')
     expect(within(sidebar).getByRole('button', { name: '服务器', exact: true })).toBeInTheDocument()
-    expect(within(sidebar).getByRole('button', { name: '平台管理', exact: true })).toBeInTheDocument()
+    expect(within(sidebar).getByRole('button', { name: '平台设置', exact: true })).toBeInTheDocument()
 
     // 方案 C：品牌 Logo 落顶栏品牌区，节点作用域下拉已下线。
     expect(await within(header).findByText('JianManager')).toBeInTheDocument()

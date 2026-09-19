@@ -198,8 +198,8 @@ func TestUpdate_AtomicOnPartialInvalid(t *testing.T) {
 	svc := NewSettingsService(db, testConfig())
 
 	err := svc.Update(map[string]string{
-		SettingKeyBackupRetentionDays: "30",        // 合法
-		"jwt.secret":                  "leaked",    // 非法（只读/敏感）
+		SettingKeyBackupRetentionDays: "30",     // 合法
+		"jwt.secret":                  "leaked", // 非法（只读/敏感）
 	})
 	require.Error(t, err)
 

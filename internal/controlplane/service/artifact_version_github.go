@@ -58,8 +58,8 @@ func (p *GitHubReleaseArtifactProvider) effectiveToken() string {
 }
 
 // resolveGitHubTokenValue 把令牌配置值解析为实际令牌：`${ENV_VAR}` 引用经环境变量展开
-//（与 SMTP 密码同约定，凭据可不入库），其余按字面令牌。引用了未配置的环境变量视同未配置
-//（返回空串），不把引用文本当令牌发出去。
+// （与 SMTP 密码同约定，凭据可不入库），其余按字面令牌。引用了未配置的环境变量视同未配置
+// （返回空串），不把引用文本当令牌发出去。
 func resolveGitHubTokenValue(value string) string {
 	if value == "" {
 		return ""

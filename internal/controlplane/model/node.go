@@ -49,18 +49,18 @@ type Node struct {
 	LoadAvg1 float64 `gorm:"default:0" json:"loadAvg1"`
 	// ManagedRuntimeObservedAt 是 Worker 随已认证 Heartbeat 上报受管运行时快照的实际观测时间。
 	// 运行时不可用或旧 Worker 未上报时，相关字段必须清空，避免陈旧值被当成当前资源。
-	ManagedRuntimeObservedAt *time.Time `json:"managedRuntimeObservedAt"`
-	WorkerProcessRSSBytes    *int64     `json:"workerProcessRssBytes"`
-	WorkerProcessCPUPct      *float64   `json:"workerProcessCpuPct"`
-	BotWorkerRSSBytes        *int64     `json:"botWorkerRssBytes"`
-	BotWorkerCPUPct          *float64   `json:"botWorkerCpuPct"`
-	BotActiveCount           *int32     `json:"botActiveCount"`
-	BotConnectingCount       *int32     `json:"botConnectingCount"`
-	BotEventLoopP95MS        *float64   `json:"botEventLoopP95Ms"`
-	BotCapacityMax           *int32     `json:"botCapacityMax"`
-	BotCapacityUnavailableReason string `gorm:"type:varchar(256)" json:"botCapacityUnavailableReason"`
-	BotAvailable             bool       `gorm:"default:false" json:"botAvailable"`
-	BotUnavailableReason     string     `gorm:"type:varchar(256)" json:"botUnavailableReason"`
+	ManagedRuntimeObservedAt     *time.Time `json:"managedRuntimeObservedAt"`
+	WorkerProcessRSSBytes        *int64     `json:"workerProcessRssBytes"`
+	WorkerProcessCPUPct          *float64   `json:"workerProcessCpuPct"`
+	BotWorkerRSSBytes            *int64     `json:"botWorkerRssBytes"`
+	BotWorkerCPUPct              *float64   `json:"botWorkerCpuPct"`
+	BotActiveCount               *int32     `json:"botActiveCount"`
+	BotConnectingCount           *int32     `json:"botConnectingCount"`
+	BotEventLoopP95MS            *float64   `json:"botEventLoopP95Ms"`
+	BotCapacityMax               *int32     `json:"botCapacityMax"`
+	BotCapacityUnavailableReason string     `gorm:"type:varchar(256)" json:"botCapacityUnavailableReason"`
+	BotAvailable                 bool       `gorm:"default:false" json:"botAvailable"`
+	BotUnavailableReason         string     `gorm:"type:varchar(256)" json:"botUnavailableReason"`
 	// ProxyMode 节点出站代理模式（FR-185，见 ADR-043）：
 	//   inherit（默认）= 用平台全局默认代理（settings DB > control-plane.yml > env）；
 	//   custom         = 用本节点自定义 ProxyURL/ProxyNoProxy。
@@ -74,12 +74,12 @@ type Node struct {
 	// RuntimeSyncedAt 上次运行时库存从 Worker 同步成功的时间（FR-301）。
 	// JDKService.syncFromWorker 成功即刷新（含 JDK 面板隐式同步与运行时资产页手动刷新）；
 	// nil = 从未同步。运行时资产页据此显示「上次同步 <相对时间>」并识别陈旧节点。
-	RuntimeSyncedAt *time.Time     `json:"runtimeSyncedAt"`
+	RuntimeSyncedAt *time.Time `json:"runtimeSyncedAt"`
 	// ProbeVersionID 是该 Worker 后续新实例的 ServerProbe 默认版本；0 表示继承全局默认（FR-409）。
 	ProbeVersionID uint           `gorm:"default:0;index" json:"probeVersionId"`
-	CreatedAt       time.Time      `json:"createdAt"`
-	UpdatedAt       time.Time      `json:"updatedAt"`
-	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	CreatedAt      time.Time      `json:"createdAt"`
+	UpdatedAt      time.Time      `json:"updatedAt"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 
 	// TunnelConnected 该节点当前是否有活跃反向隧道（FR-281，见 ADR-066）。
 	// 运行态字段不落库（gorm:"-"），由 NodeService 在响应时据 TunnelRegistry 填充：

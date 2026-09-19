@@ -20,12 +20,12 @@ type ProfileStagePlan struct {
 
 // ProfileRunPlan 是整次运行的 profile 展开结果。
 type ProfileRunPlan struct {
-	Type           string
-	MaxTargetBots  int
-	Stages         []ProfileStagePlan
-	StopOnFailure  bool // step 专用
-	DurationSecs   int  // stable 观察时长
-	RampUpSecs     int  // stable 爬坡
+	Type          string
+	MaxTargetBots int
+	Stages        []ProfileStagePlan
+	StopOnFailure bool // step 专用
+	DurationSecs  int  // stable 观察时长
+	RampUpSecs    int  // stable 爬坡
 }
 
 // PlanLoadProfile 将规范化 profile 展开为阶段计划。

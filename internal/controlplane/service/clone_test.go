@@ -25,9 +25,9 @@ func TestPatchProperties(t *testing.T) {
 	out := patchProperties(content, map[string]string{"server-port": "25600", "motd": "New", "rcon.password": "secret"})
 	require.Contains(t, out, "server-port=25600")
 	require.Contains(t, out, "motd=New")
-	require.Contains(t, out, "level-name=world") // 保留未涉及键
-	require.Contains(t, out, "# 注释")            // 保留注释
-	require.Contains(t, out, "rcon.password=secret") // 缺失键追加
+	require.Contains(t, out, "level-name=world")            // 保留未涉及键
+	require.Contains(t, out, "# 注释")                        // 保留注释
+	require.Contains(t, out, "rcon.password=secret")        // 缺失键追加
 	require.Equal(t, 1, strings.Count(out, "server-port=")) // 不重复
 }
 

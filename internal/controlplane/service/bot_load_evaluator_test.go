@@ -13,7 +13,7 @@ func TestEvaluateThresholds_AllPass(t *testing.T) {
 		HasCommandSchedule: true, HasBarrier: false,
 		ExpectedBots: 100, SampleCount: 100, ExpectedSampleCount: 100,
 		ConsecutiveGapSeconds: 0,
-		MinOnlineRate: 0.995, MinCommandSentRate: 0.995, MinScheduleCompleteRate: 0.995,
+		MinOnlineRate:         0.995, MinCommandSentRate: 0.995, MinScheduleCompleteRate: 0.995,
 		MinWorkerHealthRate: 1.0, ScheduleLagP95MS: &lag, ProcessCrashes: 0,
 	}, nil)
 	require.True(t, ev.Passed)
@@ -44,7 +44,7 @@ func TestEvaluateThresholds_FailOnlineRate(t *testing.T) {
 	lag := 50.0
 	ev := EvaluateThresholds(&th, BotLoadMetricWindow{
 		HasCommandSchedule: true,
-		SampleCount: 10, ExpectedSampleCount: 10,
+		SampleCount:        10, ExpectedSampleCount: 10,
 		MinOnlineRate: 0.5, MinCommandSentRate: 1, MinScheduleCompleteRate: 1,
 		MinWorkerHealthRate: 1, ScheduleLagP95MS: &lag, ProcessCrashes: 0,
 	}, nil)
@@ -64,7 +64,7 @@ func TestEvaluateThresholds_ConsecutiveGapFails(t *testing.T) {
 	lag := 10.0
 	ev := EvaluateThresholds(&th, BotLoadMetricWindow{
 		HasCommandSchedule: true,
-		SampleCount: 5, ExpectedSampleCount: 5, ConsecutiveGapSeconds: 31,
+		SampleCount:        5, ExpectedSampleCount: 5, ConsecutiveGapSeconds: 31,
 		MinOnlineRate: 1, MinCommandSentRate: 1, MinScheduleCompleteRate: 1,
 		MinWorkerHealthRate: 1, ScheduleLagP95MS: &lag, ProcessCrashes: 0,
 	}, nil)
@@ -103,7 +103,7 @@ func TestEvaluateThresholds_CrashFails(t *testing.T) {
 	lag := 10.0
 	ev := EvaluateThresholds(&th, BotLoadMetricWindow{
 		HasCommandSchedule: true,
-		SampleCount: 5, ExpectedSampleCount: 5,
+		SampleCount:        5, ExpectedSampleCount: 5,
 		MinOnlineRate: 1, MinCommandSentRate: 1, MinScheduleCompleteRate: 1,
 		MinWorkerHealthRate: 1, ScheduleLagP95MS: &lag, ProcessCrashes: 1,
 	}, nil)

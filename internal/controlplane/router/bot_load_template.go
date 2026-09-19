@@ -138,13 +138,13 @@ func (h *BotLoadTemplateHandler) Delete(c *gin.Context) {
 }
 
 type createRunFromTemplateBody struct {
-	InstanceID          uint            `json:"instanceId"`
-	Name                string          `json:"name"`
-	NamePrefix          string          `json:"namePrefix"`
-	Config              json.RawMessage `json:"config"`
-	CommandSchedule     json.RawMessage `json:"commandScheduleOverride"`
-	LoadProfile         json.RawMessage `json:"loadProfileOverride"`
-	Thresholds          json.RawMessage `json:"thresholdsOverride"`
+	InstanceID      uint            `json:"instanceId"`
+	Name            string          `json:"name"`
+	NamePrefix      string          `json:"namePrefix"`
+	Config          json.RawMessage `json:"config"`
+	CommandSchedule json.RawMessage `json:"commandScheduleOverride"`
+	LoadProfile     json.RawMessage `json:"loadProfileOverride"`
+	Thresholds      json.RawMessage `json:"thresholdsOverride"`
 }
 
 func (h *BotLoadTemplateHandler) CreateRun(c *gin.Context) {
@@ -209,4 +209,3 @@ func writeBotLoadTemplateError(c *gin.Context, err error) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "模板操作失败"})
 	}
 }
-

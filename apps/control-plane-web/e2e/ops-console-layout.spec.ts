@@ -29,7 +29,9 @@ test.describe('FR-037 运维控制台布局（mock 模式真浏览器）', () =>
     const sidebar = page.locator('[data-slot="console-sidebar"]')
     await expect(sidebar.getByRole('link', { name: '平台首页', exact: true })).toBeVisible()
     await expect(sidebar.getByRole('button', { name: '服务器', exact: true })).toBeVisible()
-    await expect(sidebar.getByRole('button', { name: '平台管理', exact: true })).toBeVisible()
+    // FR-431 六域：原「平台管理」改为「平台设置」（内含审计与设置等分节）
+    await expect(sidebar.getByRole('button', { name: '平台设置', exact: true })).toBeVisible()
+    await expect(sidebar.getByRole('button', { name: '客户端分发', exact: true })).toBeVisible()
     // 方案 C：品牌 Logo 位于顶栏品牌区，节点作用域下拉已下线。
     await expect(page.locator('[data-slot="console-header"]').getByText('JianManager')).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr037-e2e-console-shell.png'), fullPage: true })

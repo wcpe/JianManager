@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/wcpe/JianManager/internal/controlplane/model"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // TestPMConfigGet_EmptyRegistriesMarshalsArray 无任何 registry 配置的节点（全新节点）

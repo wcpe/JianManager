@@ -1113,18 +1113,18 @@ func commandScheduleResultFromEvent(event *bot.BotWorkerEvent) (*workerpb.BotAct
 		generation = 1
 	}
 	return &workerpb.BotActionEvent{
-		BotUuid:         payload.BotUUID,
-		SessionUuid:     payload.RunUUID,
-		Generation:      generation,
-		ActionRunId:     payload.ActionRunID,
-		StepId:          payload.StepID,
-		Attempt:         int32(payload.Attempt),
-		Status:          status,
-		ErrorCode:       errorCode,
-		Message:         message,
+		BotUuid:          payload.BotUUID,
+		SessionUuid:      payload.RunUUID,
+		Generation:       generation,
+		ActionRunId:      payload.ActionRunID,
+		StepId:           payload.StepID,
+		Attempt:          int32(payload.Attempt),
+		Status:           status,
+		ErrorCode:        errorCode,
+		Message:          message,
 		CorrelationToken: payload.CorrelationToken,
-		ResultJson:      resultJSON,
-		DurationMs:      payload.DurationMs,
+		ResultJson:       resultJSON,
+		DurationMs:       payload.DurationMs,
 		ObservedAtUnixMs: payload.ObservedAtUnixMs,
 	}, nil
 }
@@ -1152,13 +1152,13 @@ func mapCommandScheduleStatus(status, errorCode, message string) (string, string
 
 func buildCommandScheduleResultJSON(payload bot.CommandScheduleResultPayload) string {
 	envelope := map[string]interface{}{
-		"scheduleRunId":    payload.ScheduleRunID,
-		"commandId":        payload.CommandID,
-		"occurrence":       payload.Occurrence,
-		"plannedAtUnixMs":  payload.PlannedAtUnixMs,
-		"sentAtUnixMs":     payload.SentAtUnixMs,
-		"status":           payload.Status,
-		"attemptErrors":    payload.AttemptErrors,
+		"scheduleRunId":   payload.ScheduleRunID,
+		"commandId":       payload.CommandID,
+		"occurrence":      payload.Occurrence,
+		"plannedAtUnixMs": payload.PlannedAtUnixMs,
+		"sentAtUnixMs":    payload.SentAtUnixMs,
+		"status":          payload.Status,
+		"attemptErrors":   payload.AttemptErrors,
 	}
 	if payload.ErrorCode != "" {
 		envelope["errorCode"] = payload.ErrorCode

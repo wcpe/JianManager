@@ -24,13 +24,13 @@ var (
 
 // 探针治理指令 action（FR-067，见 ADR-016；与探针侧 BridgePlayerGovernor 约定一致）。
 const (
-	pluginActionKick           = "kick"
-	pluginActionBan            = "ban"
-	pluginActionUnban          = "unban"
-	pluginActionWhitelistAdd   = "whitelist_add"
+	pluginActionKick            = "kick"
+	pluginActionBan             = "ban"
+	pluginActionUnban           = "unban"
+	pluginActionWhitelistAdd    = "whitelist_add"
 	pluginActionWhitelistRemove = "whitelist_remove"
-	pluginActionList           = "list"            // 在线玩家列表
-	pluginActionWhitelistList  = "whitelist_list"  // 白名单列表
+	pluginActionList            = "list"           // 在线玩家列表
+	pluginActionWhitelistList   = "whitelist_list" // 白名单列表
 )
 
 // pluginExecTimeout 单次治理指令的 gRPC 调用超时（含 Worker 等探针回执的时间）。
@@ -76,12 +76,12 @@ type OnlinePlayersResult struct {
 
 // PlayerActionResult 踢/封/解封在多后端上的执行汇总。
 type PlayerActionResult struct {
-	Player    string                `json:"player"`
-	Action    string                `json:"action"`
-	Total     int                   `json:"total"`
-	Succeeded int                   `json:"succeeded"`
-	Failed    int                   `json:"failed"`
-	Results   []PlayerActionItem    `json:"results"`
+	Player    string             `json:"player"`
+	Action    string             `json:"action"`
+	Total     int                `json:"total"`
+	Succeeded int                `json:"succeeded"`
+	Failed    int                `json:"failed"`
+	Results   []PlayerActionItem `json:"results"`
 }
 
 // PlayerActionItem 单后端上的动作结果。

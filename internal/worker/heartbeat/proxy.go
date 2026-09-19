@@ -17,9 +17,9 @@ type proxyApplier struct {
 	// rebuild 用给定代理配置重建并替换 Worker 出站持有者；由 main 注入（包裹 Provider.Rebuild）。
 	rebuild func(httpclient.Config) error
 
-	mu          sync.Mutex
-	appliedGen  string // 上次成功应用的 generation（空串=当前为空配/直连）
-	hasApplied  bool   // 是否已应用过一次（区分「初始未应用」与「已应用空配」）
+	mu         sync.Mutex
+	appliedGen string // 上次成功应用的 generation（空串=当前为空配/直连）
+	hasApplied bool   // 是否已应用过一次（区分「初始未应用」与「已应用空配」）
 }
 
 // newProxyApplier 创建代理应用器。rebuild 为 nil 时不应用（向后兼容：CP 未下发代理）。

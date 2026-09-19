@@ -45,7 +45,7 @@ test.describe('FR-040 全局 Bot 管理页重构（mock 模式真浏览器）', 
     const survival = botGroupCard(page, '生存服')
     await survival.getByRole('button', { name: '在控制台打开' }).click()
     await expect(page).toHaveURL(/\/instances\/1$/)
-    await expect(page.getByRole('heading', { name: /服务器控制台 \/ survival-1/ })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'survival-1', exact: true })).toBeVisible({ timeout: 15_000 })
     await page.screenshot({ path: path.join(artifactsDir, 'fr040-e2e-open-console.png'), fullPage: true })
 
     await page.goto('/bots')

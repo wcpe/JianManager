@@ -21,25 +21,25 @@ import (
 )
 
 type fakeBotFleetManager struct {
-	capacity       bot.BotCapacitySnapshot
-	bots           []bot.BotState
-	applyCalls     int
-	stopCalls      int
-	signalCalls    int
-	apply          *bot.BotWorkerEvent
-	applyErr       error
-	applyConfigs   []bot.BotConfig
-	applyStarted   chan struct{}
-	applyRelease   chan struct{}
-	stop           *bot.BotWorkerEvent
-	stopStarted    chan struct{}
-	stopRelease    chan struct{}
-	signal         *bot.BotWorkerEvent
-	snapshot       *bot.BotWorkerEvent
-	release        *bot.BotWorkerEvent
-	releaseErr     error
-	cancel         *bot.BotWorkerEvent
-	cancelErr      error
+	capacity     bot.BotCapacitySnapshot
+	bots         []bot.BotState
+	applyCalls   int
+	stopCalls    int
+	signalCalls  int
+	apply        *bot.BotWorkerEvent
+	applyErr     error
+	applyConfigs []bot.BotConfig
+	applyStarted chan struct{}
+	applyRelease chan struct{}
+	stop         *bot.BotWorkerEvent
+	stopStarted  chan struct{}
+	stopRelease  chan struct{}
+	signal       *bot.BotWorkerEvent
+	snapshot     *bot.BotWorkerEvent
+	release      *bot.BotWorkerEvent
+	releaseErr   error
+	cancel       *bot.BotWorkerEvent
+	cancelErr    error
 }
 
 func (f *fakeBotFleetManager) CapacitySnapshot() bot.BotCapacitySnapshot { return f.capacity }

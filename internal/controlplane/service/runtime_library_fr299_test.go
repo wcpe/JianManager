@@ -29,8 +29,8 @@ func TestNormalizeNodeArch(t *testing.T) {
 		{"aarch64", "arm64", false},
 		{"armv7l", "armv7l", false},
 		{"ppc64le", "ppc64le", false},
-		{"", "", false},        // 空放行：Worker 按本机推导
-		{"mips64", "", true},   // 未知拒绝
+		{"", "", false},      // 空放行：Worker 按本机推导
+		{"mips64", "", true}, // 未知拒绝
 		{"sparc", "", true},
 	}
 	for _, tt := range tests {

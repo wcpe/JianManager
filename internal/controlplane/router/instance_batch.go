@@ -20,10 +20,10 @@ func NewInstanceBatchHandler(batchSvc *service.InstanceBatchService, authz *serv
 }
 
 type instanceBatchRequest struct {
-	Action  string                          `json:"action"`
-	IDs     []uint                          `json:"ids"`
-	Filter  *service.InstanceBatchFilterIn  `json:"filter"`
-	Command string                          `json:"command"`
+	Action  string                         `json:"action"`
+	IDs     []uint                         `json:"ids"`
+	Filter  *service.InstanceBatchFilterIn `json:"filter"`
+	Command string                         `json:"command"`
 }
 
 // Batch 批量执行 command/start/stop/restart/kill，经 gRPC 委托对应 Worker（FR-058）。

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Ban, Gauge, RadioTower } from 'lucide-react'
 import { toast } from 'sonner'
@@ -163,14 +163,19 @@ function BlockIpDialog({
   const [channelId, setChannelId] = useState('')
   const [durationMinutes, setDurationMinutes] = useState('30')
   const [reason, setReason] = useState(() => t('clientDistOps.actions.reasonBlock'))
+  const [prevOpen, setPrevOpen] = useState(open)
+  const [prevDefaultChannelId, setPrevDefaultChannelId] = useState(defaultChannelId)
 
-  useEffect(() => {
+  // 渲染期重置（React 官方「props 变化时重置 state」范式），避免 effect 内同步 setState。
+  if (open !== prevOpen || defaultChannelId !== prevDefaultChannelId) {
+    setPrevOpen(open)
+    setPrevDefaultChannelId(defaultChannelId)
     if (open) {
       setIp('')
       setReason(t('clientDistOps.actions.reasonBlock'))
       if (defaultChannelId) setChannelId(defaultChannelId)
     }
-  }, [open, defaultChannelId, t])
+  }
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -287,24 +292,28 @@ function KeyStateDialog({
   const setKeyState = useSetClientDistKeyState()
   const { data: channelDetail } = useClientChannel(channelId || null)
   const keys = channelDetail?.keys ?? []
+  const [prevOpen, setPrevOpen] = useState(open)
+  const [prevDefaultChannelId, setPrevDefaultChannelId] = useState(defaultChannelId)
 
-  useEffect(() => {
+  if (open !== prevOpen || defaultChannelId !== prevDefaultChannelId) {
+    setPrevOpen(open)
+    setPrevDefaultChannelId(defaultChannelId)
     if (open) {
       setReason(t('clientDistOps.actions.reasonKeyState'))
       setKeyId('')
       if (defaultChannelId) setChannelId(defaultChannelId)
     }
-  }, [open, defaultChannelId, t])
+  }
 
-  useEffect(() => {
-    if (keyId && keys.length > 0 && !keys.some((k) => String(k.id) === keyId)) setKeyId('')
-  }, [keys, keyId])
+  // keys 变化后 keyId 失效：渲染期校正，不进 effect。
+  const keyIdValid = !keyId || keys.some((k) => String(k.id) === keyId)
+  const effectiveKeyId = keyIdValid ? keyId : ''
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    if (!keyId) return
+    if (!effectiveKeyId) return
     setKeyState.mutate(
-      { keyId, body: { state, reason } },
+      { keyId: effectiveKeyId, body: { state, reason } },
       {
         onSuccess: () => {
           toast.success(t('clientDistOps.actions.toastKeyOk'))
@@ -344,7 +353,7 @@ function KeyStateDialog({
             </label>
             <label className="flex flex-col gap-1 text-sm">
               {t('clientDistOps.actions.fieldKey')}
-              <Select value={keyId || 'none'} onValueChange={(v) => setKeyId(v === 'none' ? '' : v)}>
+              <Select value={effectiveKeyId || 'none'} onValueChange={(v) => setKeyId(v === 'none' ? '' : v)}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
@@ -384,7 +393,7 @@ function KeyStateDialog({
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t('common.cancel')}
               </Button>
-              <Button type="submit" disabled={setKeyState.isPending || !keyId}>
+              <Button type="submit" disabled={setKeyState.isPending || !effectiveKeyId}>
                 {t('clientDistOps.actions.submitKeyState')}
               </Button>
             </DialogFooter>
@@ -413,13 +422,17 @@ function ChannelProtectionDialog({
   const setProtection = useSetClientDistChannelProtection()
   const clearProtection = useClearClientDistChannelProtection()
   const summary = useClientChannelSecuritySummary(channelId || '')
+  const [prevOpen, setPrevOpen] = useState(open)
+  const [prevDefaultChannelId, setPrevDefaultChannelId] = useState(defaultChannelId)
 
-  useEffect(() => {
+  if (open !== prevOpen || defaultChannelId !== prevDefaultChannelId) {
+    setPrevOpen(open)
+    setPrevDefaultChannelId(defaultChannelId)
     if (open) {
       setReason(t('clientDistOps.actions.reasonProtection'))
       if (defaultChannelId) setChannelId(defaultChannelId)
     }
-  }, [open, defaultChannelId, t])
+  }
 
   const submit = (e: FormEvent) => {
     e.preventDefault()

@@ -14,94 +14,174 @@ type JDKHandler struct{ svc *service.JDKService }
 func NewJDKHandler(svc *service.JDKService) *JDKHandler { return &JDKHandler{svc: svc} }
 
 func (h *JDKHandler) List(c *gin.Context) {
-	if !requireNodes(c, "node.read", "node.manage") { return }
-	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
+	if !requireNodes(c, "node.read", "node.manage") {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
 	jdks, err := h.svc.List(nodeID)
-	if err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error":"INTERNAL_ERROR","message":"查询 JDK 列表失败"}); return }
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询 JDK 列表失败"})
+		return
+	}
 	c.JSON(http.StatusOK, jdks)
 }
 
 func (h *JDKHandler) Create(c *gin.Context) {
-	if !requirePlatformAdmin(c) { return }
-	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
 	var req service.CreateJDKRequest
-	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"请求参数错误"}); return }
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
 	jdk, err := h.svc.Create(nodeID, req)
-	if err != nil { c.JSON(http.StatusUnprocessableEntity, gin.H{"error":"BUSINESS_ERROR","message":err.Error()}); return }
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
 	c.JSON(http.StatusCreated, jdk)
 }
 
 // Install 异步发起 JDK 安装（FR-183，见 ADR-040）：建任务、令 Worker 启动即返回，
 // 立即回 202 + {taskId}（不再阻塞最长 20min）。进度/完成经任务中心与站内信查看。
 func (h *JDKHandler) Install(c *gin.Context) {
-	if !requirePlatformAdmin(c) { return }
-	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
 	var req service.InstallJDKRequest
-	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"请求参数错误"}); return }
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
 	access := getAccess(c)
 	var createdBy uint
-	if access != nil { createdBy = access.UserID }
+	if access != nil {
+		createdBy = access.UserID
+	}
 	task, err := h.svc.InstallAsync(nodeID, req, createdBy)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidJDKArch) {
 			// FR-289：未知 arch 明确 422 拒绝，不再直透下载源产出误导性 404。
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"error":"INVALID_ARCH","message":err.Error()}); return
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INVALID_ARCH", "message": err.Error()})
+			return
 		}
 		if errors.Is(err, service.ErrNodeOffline) {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error":"NODE_OFFLINE","message":"节点未连接，无法下发安装任务"}); return
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "NODE_OFFLINE", "message": "节点未连接，无法下发安装任务"})
+			return
 		}
 		if errors.Is(err, service.ErrNodeNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error":"NOT_FOUND","message":"节点不存在"}); return
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
+			return
 		}
-		c.JSON(http.StatusBadGateway, gin.H{"error":"INSTALL_FAILED","message":err.Error()}); return
+		c.JSON(http.StatusBadGateway, gin.H{"error": "INSTALL_FAILED", "message": err.Error()})
+		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
 }
 
 // Probe 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 信息（FR-228），供登记自动填。
 func (h *JDKHandler) Probe(c *gin.Context) {
-	if !requirePlatformAdmin(c) { return }
-	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
 	var req struct {
 		Path string `json:"path" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"缺少 path"}); return }
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path"})
+		return
+	}
 	res, err := h.svc.Probe(nodeID, req.Path)
 	if err != nil {
-		if errors.Is(err, service.ErrNodeOffline) { c.JSON(http.StatusServiceUnavailable, gin.H{"error":"NODE_OFFLINE","message":"节点未连接"}); return }
-		if errors.Is(err, service.ErrNodeNotFound) { c.JSON(http.StatusNotFound, gin.H{"error":"NOT_FOUND","message":"节点不存在"}); return }
-		c.JSON(http.StatusBadGateway, gin.H{"error":"PROBE_FAILED","message":err.Error()}); return
+		if errors.Is(err, service.ErrNodeOffline) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "NODE_OFFLINE", "message": "节点未连接"})
+			return
+		}
+		if errors.Is(err, service.ErrNodeNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": "PROBE_FAILED", "message": err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, res)
 }
 
 func (h *JDKHandler) Update(c *gin.Context) {
-	if !requirePlatformAdmin(c) { return }
-	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
-	jdkID, err := parseUintParam(c, "jid"); if err != nil { return }
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	jdkID, err := parseUintParam(c, "jid")
+	if err != nil {
+		return
+	}
 	var req service.CreateJDKRequest
-	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"bad request"}); return }
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "bad request"})
+		return
+	}
 	jdk, err := h.svc.Update(nodeID, jdkID, req)
 	if err != nil {
-		if errors.Is(err, service.ErrJDKInUse) { c.JSON(http.StatusConflict, gin.H{"error":"JDK_IN_USE","message":"jdk in use"}); return }
-		if errors.Is(err, service.ErrJDKNotFound) { c.JSON(http.StatusNotFound, gin.H{"error":"NOT_FOUND","message":"jdk not found"}); return }
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error":"BUSINESS_ERROR","message":err.Error()}); return
+		if errors.Is(err, service.ErrJDKInUse) {
+			c.JSON(http.StatusConflict, gin.H{"error": "JDK_IN_USE", "message": "jdk in use"})
+			return
+		}
+		if errors.Is(err, service.ErrJDKNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "jdk not found"})
+			return
+		}
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, jdk)
 }
 
-
 func (h *JDKHandler) Delete(c *gin.Context) {
-	if !requirePlatformAdmin(c) { return }
-	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
-	jdkID, err := parseUintParam(c, "jid"); if err != nil { return }
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	jdkID, err := parseUintParam(c, "jid")
+	if err != nil {
+		return
+	}
 	used, err := h.svc.Delete(nodeID, jdkID)
 	if err != nil {
-		if errors.Is(err, service.ErrJDKInUse) { c.JSON(http.StatusConflict, gin.H{"error":"JDK_IN_USE","message":"JDK 正被实例占用","instances":used}); return }
-		if errors.Is(err, service.ErrJDKNotFound) { c.JSON(http.StatusNotFound, gin.H{"error":"NOT_FOUND","message":"JDK 不存在"}); return }
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error":"BUSINESS_ERROR","message":err.Error()}); return
+		if errors.Is(err, service.ErrJDKInUse) {
+			c.JSON(http.StatusConflict, gin.H{"error": "JDK_IN_USE", "message": "JDK 正被实例占用", "instances": used})
+			return
+		}
+		if errors.Is(err, service.ErrJDKNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "JDK 不存在"})
+			return
+		}
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message":"已删除"})
+	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
 func (h *JDKHandler) RegisterRoutes(rg *gin.RouterGroup) {
@@ -116,6 +196,9 @@ func (h *JDKHandler) RegisterRoutes(rg *gin.RouterGroup) {
 
 func parseUintParam(c *gin.Context, name string) (uint, error) {
 	v, err := strconv.ParseUint(c.Param(name), 10, 64)
-	if err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_ID","message":"ID 格式错误"}); return 0, err }
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_ID", "message": "ID 格式错误"})
+		return 0, err
+	}
 	return uint(v), nil
 }

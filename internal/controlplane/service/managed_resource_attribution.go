@@ -54,15 +54,15 @@ type ResourceAttributionNode struct {
 
 // ResourceAttributionBotWorker 表示共享 Bot Worker，而非任一 Bot 的资源。
 type ResourceAttributionBotWorker struct {
-	RSSBytes        *int64   `json:"rssBytes"`
-	CPUPct          *float64 `json:"cpuPct"`
-	ActiveCount     *int32   `json:"activeCount"`
-	ConnectingCount *int32   `json:"connectingCount"`
-	EventLoopP95MS  *float64 `json:"eventLoopP95Ms"`
-	CapacityMax     *int32   `json:"capacityMax"`
-	CapacityUnavailableReason string `json:"capacityUnavailableReason"`
-	Available       bool     `json:"available"`
-	Reason          string   `json:"reason"`
+	RSSBytes                  *int64   `json:"rssBytes"`
+	CPUPct                    *float64 `json:"cpuPct"`
+	ActiveCount               *int32   `json:"activeCount"`
+	ConnectingCount           *int32   `json:"connectingCount"`
+	EventLoopP95MS            *float64 `json:"eventLoopP95Ms"`
+	CapacityMax               *int32   `json:"capacityMax"`
+	CapacityUnavailableReason string   `json:"capacityUnavailableReason"`
+	Available                 bool     `json:"available"`
+	Reason                    string   `json:"reason"`
 }
 
 // ResourceAttributionInstance 是受管实例进程树的聚合观察值。
@@ -191,7 +191,7 @@ func attributionNode(node model.Node, status ResourceFreshness) ResourceAttribut
 		ActiveCount: node.BotActiveCount, ConnectingCount: node.BotConnectingCount,
 		EventLoopP95MS: node.BotEventLoopP95MS, CapacityMax: node.BotCapacityMax,
 		CapacityUnavailableReason: node.BotCapacityUnavailableReason,
-		Available: node.BotAvailable, Reason: node.BotUnavailableReason,
+		Available:                 node.BotAvailable, Reason: node.BotUnavailableReason,
 	}
 	return item
 }

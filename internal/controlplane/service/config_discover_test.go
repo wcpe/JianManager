@@ -30,10 +30,10 @@ func TestWalkConfigPaths_RecursiveDiscoveryFlat(t *testing.T) {
 	tree := fakeTree{
 		"": {
 			{Name: "server.properties", IsDir: false},
-			{Name: "world", IsDir: true},        // 非配置文件 / 子目录
+			{Name: "world", IsDir: true}, // 非配置文件 / 子目录
 			{Name: "plugins", IsDir: true},
-			{Name: "start.sh", IsDir: false},     // 非配置扩展名，过滤掉
-			{Name: "eula.txt", IsDir: false},     // txt 算配置
+			{Name: "start.sh", IsDir: false}, // 非配置扩展名，过滤掉
+			{Name: "eula.txt", IsDir: false}, // txt 算配置
 		},
 		"world": {
 			{Name: "level.dat", IsDir: false}, // 过滤
@@ -109,7 +109,7 @@ func TestWalkConfigPaths_DepthLimitTruncates(t *testing.T) {
 
 func TestWalkConfigPaths_DirCountLimitTruncates(t *testing.T) {
 	tree := fakeTree{
-		"":  {{Name: "d1", IsDir: true}, {Name: "d2", IsDir: true}},
+		"":   {{Name: "d1", IsDir: true}, {Name: "d2", IsDir: true}},
 		"d1": {{Name: "x.yml", IsDir: false}},
 		"d2": {{Name: "y.yml", IsDir: false}},
 	}

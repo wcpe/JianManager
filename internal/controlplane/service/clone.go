@@ -165,7 +165,7 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 }
 
 // cloneAllocAndCreate 克隆的「分配端口 → 建实例」段，全程持节点级端口分配互斥
-//（InstanceService.nodePortAllocMu）：occupiedPortsForNode 是无事务快照，须覆盖
+// （InstanceService.nodePortAllocMu）：occupiedPortsForNode 是无事务快照，须覆盖
 // 快照到端口落库的全程才能防同节点跨实例并发分配选中同一端口。
 // 以 defer 释放锁：即使中途 panic 也不会永久占用进程级互斥。
 // dst 为 nil 表示 dryRun（不落库，锁只护分配本身）或 Create 失败。

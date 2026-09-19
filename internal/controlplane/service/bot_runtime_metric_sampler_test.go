@@ -20,7 +20,7 @@ func TestBotRuntimeMetricSampler_SampleAtWritesCurrentSnapshot(t *testing.T) {
 	node := model.Node{
 		Name: "node-a", Status: model.NodeStatusOnline, LastHeartbeat: &fresh,
 		ManagedRuntimeObservedAt: &fresh,
-		WorkerProcessRSSBytes: &workerRSS, WorkerProcessCPUPct: &workerCPU,
+		WorkerProcessRSSBytes:    &workerRSS, WorkerProcessCPUPct: &workerCPU,
 		BotWorkerRSSBytes: &botRSS, BotWorkerCPUPct: &botCPU,
 		BotActiveCount: &active, BotConnectingCount: &connecting,
 		BotEventLoopP95MS: &eventLoop, BotCapacityMax: &capacity, BotAvailable: true,

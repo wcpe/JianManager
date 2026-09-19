@@ -72,9 +72,9 @@ type BotLoadMetricWindow struct {
 	ProcessCrashes          int
 
 	// safety 连续 sustain 秒内持续超标
-	SafetyMemoryRateSustained    *float64 // 持续窗口内最大 memory rate
-	SafetyEventLoopP95Sustained  *float64
-	SafetySustainMet             bool // 是否已连续 sustainSeconds 超标
+	SafetyMemoryRateSustained   *float64 // 持续窗口内最大 memory rate
+	SafetyEventLoopP95Sustained *float64
+	SafetySustainMet            bool // 是否已连续 sustainSeconds 超标
 }
 
 // EvaluateThresholds 按冻结阈值评估当前窗口。

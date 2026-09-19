@@ -30,70 +30,70 @@ func newAuthzTestDB(t *testing.T) *gorm.DB {
 
 func TestUserAccess_HasPermission(t *testing.T) {
 	tests := []struct {
-		name  string
+		name   string
 		access *UserAccess
-		node  PermissionNode
-		want  bool
+		node   PermissionNode
+		want   bool
 	}{
 		{
-			name:  "平台管理员拥有全部权限",
+			name:   "平台管理员拥有全部权限",
 			access: &UserAccess{IsPlatformAdmin: true},
-			node:  PermUserManage,
-			want:  true,
+			node:   PermUserManage,
+			want:   true,
 		},
 		{
-			name:  "组成员可读实例",
+			name:   "组成员可读实例",
 			access: &UserAccess{MemberGroupIDs: map[uint]struct{}{1: {}}, AccessibleGroups: map[uint]struct{}{1: {}}},
-			node:  PermInstanceRead,
-			want:  true,
+			node:   PermInstanceRead,
+			want:   true,
 		},
 		{
-			name:  "无组的成员不可读实例",
+			name:   "无组的成员不可读实例",
 			access: &UserAccess{},
-			node:  PermInstanceRead,
-			want:  false,
+			node:   PermInstanceRead,
+			want:   false,
 		},
 		{
-			name:  "组成员不可管理用户",
+			name:   "组成员不可管理用户",
 			access: &UserAccess{MemberGroupIDs: map[uint]struct{}{1: {}}, AccessibleGroups: map[uint]struct{}{1: {}}},
-			node:  PermUserManage,
-			want:  false,
+			node:   PermUserManage,
+			want:   false,
 		},
 		{
-			name:  "组管理员可管理组成员",
+			name:   "组管理员可管理组成员",
 			access: &UserAccess{AdminGroupIDs: map[uint]struct{}{1: {}}, AccessibleGroups: map[uint]struct{}{1: {}}},
-			node:  PermGroupMemberWrite,
-			want:  true,
+			node:   PermGroupMemberWrite,
+			want:   true,
 		},
 		{
-			name:  "普通成员不可管理组成员",
+			name:   "普通成员不可管理组成员",
 			access: &UserAccess{MemberGroupIDs: map[uint]struct{}{1: {}}, AccessibleGroups: map[uint]struct{}{1: {}}},
-			node:  PermGroupMemberWrite,
-			want:  false,
+			node:   PermGroupMemberWrite,
+			want:   false,
 		},
 		{
-			name:  "组管理（创建/删除）仅平台管理员",
+			name:   "组管理（创建/删除）仅平台管理员",
 			access: &UserAccess{AdminGroupIDs: map[uint]struct{}{1: {}}, AccessibleGroups: map[uint]struct{}{1: {}}},
-			node:  PermGroupManage,
-			want:  false,
+			node:   PermGroupManage,
+			want:   false,
 		},
 		{
-			name:  "组成员可持有业务高危写（FR-121，资源由 CanAccessInstance 收敛）",
+			name:   "组成员可持有业务高危写（FR-121，资源由 CanAccessInstance 收敛）",
 			access: &UserAccess{MemberGroupIDs: map[uint]struct{}{1: {}}, AccessibleGroups: map[uint]struct{}{1: {}}},
-			node:  PermInstanceBusinessWrite,
-			want:  true,
+			node:   PermInstanceBusinessWrite,
+			want:   true,
 		},
 		{
-			name:  "无组用户不可持有业务高危写",
+			name:   "无组用户不可持有业务高危写",
 			access: &UserAccess{},
-			node:  PermInstanceBusinessWrite,
-			want:  false,
+			node:   PermInstanceBusinessWrite,
+			want:   false,
 		},
 		{
-			name:  "平台管理员拥有业务高危写",
+			name:   "平台管理员拥有业务高危写",
 			access: &UserAccess{IsPlatformAdmin: true},
-			node:  PermInstanceBusinessWrite,
-			want:  true,
+			node:   PermInstanceBusinessWrite,
+			want:   true,
 		},
 	}
 	for _, tt := range tests {
@@ -133,10 +133,10 @@ func TestAuthz_CanAccessInstance(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		access    *UserAccess
-		instance  uint
-		want      bool
+		name     string
+		access   *UserAccess
+		instance uint
+		want     bool
 	}{
 		{"平台管理员访问任意实例", platformAdmin, inst1.ID, true},
 		{"组1成员访问组1实例", memberOfGroup1, inst1.ID, true},

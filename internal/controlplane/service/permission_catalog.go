@@ -2,8 +2,8 @@ package service
 
 // PermissionDomain 权限树的一个能力域。
 type PermissionDomain struct {
-	Domain string       `json:"domain"`
-	Label  string       `json:"label"`
+	Domain string        `json:"domain"`
+	Label  string        `json:"label"`
 	Nodes  []PermNodeDef `json:"nodes"`
 }
 
@@ -237,4 +237,3 @@ func EffectivePermissionNodes(roleKey string, roleNodes []string, overrides []Pe
 	}
 	return set
 }
-

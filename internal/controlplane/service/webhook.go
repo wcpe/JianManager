@@ -23,12 +23,12 @@ func NewWebhookNotifier() *WebhookNotifier {
 
 // WebhookPayload Webhook 载荷。
 type WebhookPayload struct {
-	Event   string      `json:"event"`
-	RuleID  string      `json:"ruleId"`
-	Target  string      `json:"target"`
-	Value   float64     `json:"value"`
-	Message string      `json:"message"`
-	Time    string      `json:"time"`
+	Event   string  `json:"event"`
+	RuleID  string  `json:"ruleId"`
+	Target  string  `json:"target"`
+	Value   float64 `json:"value"`
+	Message string  `json:"message"`
+	Time    string  `json:"time"`
 }
 
 // Send 发送 Webhook 通知。

@@ -4,11 +4,11 @@ import "encoding/json"
 
 // MCP 协议常量（JSON-RPC 2.0 子集，对齐 2024-11-05 / Streamable HTTP）。
 const (
-	JSONRPCVersion   = "2.0"
-	ServerName       = "jianmanager-cp-mcp"
-	ServerVersion    = "0.1.0"
-	ProtocolVersion  = "2024-11-05"
-	HeaderSessionID  = "Mcp-Session-Id"
+	JSONRPCVersion  = "2.0"
+	ServerName      = "jianmanager-cp-mcp"
+	ServerVersion   = "0.1.0"
+	ProtocolVersion = "2024-11-05"
+	HeaderSessionID = "Mcp-Session-Id"
 )
 
 // RPCRequest JSON-RPC 2.0 请求。

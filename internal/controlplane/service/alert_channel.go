@@ -30,10 +30,10 @@ func NewAlertChannelService(db *gorm.DB) *AlertChannelService {
 
 // ChannelRequest 创建/更新通道请求。Config 为 ChannelConfig 的结构化字段（前端直接传对象）。
 type ChannelRequest struct {
-	Name    string         `json:"name" binding:"required"`
-	Type    string         `json:"type" binding:"required"`
-	Enabled *bool          `json:"enabled"`
-	Config  ChannelConfig  `json:"config"`
+	Name    string        `json:"name" binding:"required"`
+	Type    string        `json:"type" binding:"required"`
+	Enabled *bool         `json:"enabled"`
+	Config  ChannelConfig `json:"config"`
 }
 
 // Create 创建通道。校验类型 + 凭证 ${ENV} 引用，配置序列化为 JSON 落库。

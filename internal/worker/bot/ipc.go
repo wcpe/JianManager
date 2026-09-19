@@ -149,28 +149,28 @@ type CommandOccurrenceKey struct {
 
 // CommandSchedulePlan 命令计划冻结 plan。
 type CommandSchedulePlan struct {
-	DurationMS  int64                     `json:"durationMs"`
-	JitterMS    int64                     `json:"jitterMs"`
+	DurationMS  int64                       `json:"durationMs"`
+	JitterMS    int64                       `json:"jitterMs"`
 	Occurrences []CommandScheduleOccurrence `json:"occurrences"`
 }
 
 // CommandScheduleCommand FR-369 命令计划准备（Worker → Bot Worker）。
 type CommandScheduleCommand struct {
-	Cmd                   string              `json:"cmd"`
-	RequestID             string              `json:"requestId"`
-	RunID                 string              `json:"runId"`
-	RunUUID               string              `json:"runUuid"`
-	BotUUID               string              `json:"botUuid"`
-	Generation            int64               `json:"generation"`
-	StepID                string              `json:"stepId"`
-	ScheduleRunID         string              `json:"scheduleRunId"`
-	CorrelationToken      string              `json:"correlationToken"`
-	StartMode             string              `json:"startMode"`
-	ScheduleStartAtUnixMs int64               `json:"scheduleStartAtUnixMs"`
-	BarrierKey            string              `json:"barrierKey"`
-	RunDeadlineUnixMs     int64               `json:"runDeadlineUnixMs"`
-	JitterSeed            string              `json:"jitterSeed"`
-	Plan                  CommandSchedulePlan `json:"plan"`
+	Cmd                   string                 `json:"cmd"`
+	RequestID             string                 `json:"requestId"`
+	RunID                 string                 `json:"runId"`
+	RunUUID               string                 `json:"runUuid"`
+	BotUUID               string                 `json:"botUuid"`
+	Generation            int64                  `json:"generation"`
+	StepID                string                 `json:"stepId"`
+	ScheduleRunID         string                 `json:"scheduleRunId"`
+	CorrelationToken      string                 `json:"correlationToken"`
+	StartMode             string                 `json:"startMode"`
+	ScheduleStartAtUnixMs int64                  `json:"scheduleStartAtUnixMs"`
+	BarrierKey            string                 `json:"barrierKey"`
+	RunDeadlineUnixMs     int64                  `json:"runDeadlineUnixMs"`
+	JitterSeed            string                 `json:"jitterSeed"`
+	Plan                  CommandSchedulePlan    `json:"plan"`
 	SkipOccurrences       []CommandOccurrenceKey `json:"skipOccurrences"`
 }
 
@@ -189,14 +189,14 @@ type CommandScheduleReleaseCommand struct {
 
 // CommandScheduleCancelCommand FR-369 cancel 命令计划。
 type CommandScheduleCancelCommand struct {
-	Cmd             string `json:"cmd"`
-	RequestID       string `json:"requestId"`
-	RunUUID         string `json:"runUuid"`
-	BotUUID         string `json:"botUuid"`
-	Generation      int64  `json:"generation"`
-	StepID          string `json:"stepId"`
-	ScheduleRunID   string `json:"scheduleRunId"`
-	Reason          string `json:"reason"`
+	Cmd              string `json:"cmd"`
+	RequestID        string `json:"requestId"`
+	RunUUID          string `json:"runUuid"`
+	BotUUID          string `json:"botUuid"`
+	Generation       int64  `json:"generation"`
+	StepID           string `json:"stepId"`
+	ScheduleRunID    string `json:"scheduleRunId"`
+	Reason           string `json:"reason"`
 	CorrelationToken string `json:"correlationToken"`
 }
 

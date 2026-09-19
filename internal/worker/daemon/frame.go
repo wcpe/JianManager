@@ -20,9 +20,9 @@ const (
 type Type uint8
 
 const (
-	TypeData     Type = 0x01
-	TypeCommand  Type = 0x02
-	TypeResponse Type = 0x03
+	TypeData      Type = 0x01
+	TypeCommand   Type = 0x02
+	TypeResponse  Type = 0x03
 	TypeHeartbeat Type = 0x04
 	// TypeEvent 事件帧（wrapper→Worker 单向，ChannelControl，payload=JSON，FR-313）。
 	// 版本互不炸：老 Worker 的 readLoop 只消费 stdout/stderr 通道、忽略未知帧；

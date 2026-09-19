@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus } from 'lucide-react'
 import { toast } from 'sonner'
@@ -43,13 +43,16 @@ export function GroupsTab() {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [targetType, setTargetType] = useState<SecurityTargetType>('ip')
+  const [prevOpen, setPrevOpen] = useState(open)
 
-  useEffect(() => {
+  // 打开时重置表单（渲染期，避免 effect 内同步 setState）
+  if (open !== prevOpen) {
+    setPrevOpen(open)
     if (open) {
       setName('')
       setTargetType('ip')
     }
-  }, [open])
+  }
 
   const submit = (e: FormEvent) => {
     e.preventDefault()

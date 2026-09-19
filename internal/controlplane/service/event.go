@@ -26,10 +26,10 @@ type LogSink interface {
 
 // EventService 订阅所有 Worker 的实例事件流并扇出给前端 SSE 客户端。
 type EventService struct {
-	pool  *cpgrpc.ClientPool
-	mu    sync.RWMutex
-	subs  []chan InstanceEvent
-	ctx   context.Context
+	pool   *cpgrpc.ClientPool
+	mu     sync.RWMutex
+	subs   []chan InstanceEvent
+	ctx    context.Context
 	cancel context.CancelFunc
 	// logSink 可选：非 nil 时把 stdout/stderr 事件落库（FR-049）。
 	logSink LogSink

@@ -94,7 +94,7 @@ func TestCache_ListMissingMetaFallsBackToSizeOnly(t *testing.T) {
 
 func TestCache_TotalBytes(t *testing.T) {
 	c := New(t.TempDir())
-	a, sumA := writeTemp(t, []byte("aaaa")) // 4
+	a, sumA := writeTemp(t, []byte("aaaa"))   // 4
 	b, sumB := writeTemp(t, []byte("bbbbbb")) // 6
 	require.NoError(t, c.Put(sumA, a, Meta{Size: 4}))
 	require.NoError(t, c.Put(sumB, b, Meta{Size: 6}))

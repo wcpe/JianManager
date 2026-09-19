@@ -82,7 +82,7 @@ type Index struct {
 	loaded   bool
 
 	ready    atomic.Bool   // 是否已完成至少一次构建（可信查询）
-	building atomic.Bool    // 是否有后台构建在途（CAS 单飞）
+	building atomic.Bool   // 是否有后台构建在途（CAS 单飞）
 	builtCh  chan struct{} // 首建完成时关闭
 }
 
