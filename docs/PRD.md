@@ -41,6 +41,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 > 标 `已交付` 是有门的：仅该 FR 的 spec 验收全过 + 测试 / 真机通过后，由 `sdd-release-version` 发版统一标 `已交付@vX.Y.Z`；开发中不得自标。false-done 走 `sdd-fix-bug` 归真，撤 / 推迟走 `sdd-rollback-change`。
 
 **活跃 FR 详细规格索引**（PRD 只留索引行，详情见 spec）：
+- FR-430（2026-09-10 客户端分发信息架构合并：三页[客户端分发/分发监控/安全中心]收敛为两页，观测页并入独立「客户端分发运维」`/client-dist-ops` 7 Tab；旧两条路由透传 query 重定向；全量日志双视图合一；补平台管理员守卫；页面 B 全量 i18n。纯前端零后端改动）→ `docs/specs/client-dist-ia-merge/spec.md`（+ ADR-088）
+- FR-425~429（2026-09-07 客户端分发监控统计优化批：三页[频道工作台/分发监控/安全中心]统一自定义时间筛选 / 机器级更新清单与钻取 / 更新活动热力图 / 概览洞察卡同环比与口径解读 / 布局统一重排；**UI mock 先行**——devmock 模式完成可演示再接真栈，当前工作区内直跑不建 worktree）→ 需 spec 的两项：FR-426 `docs/specs/client-dist-machine-drilldown/spec.md`、FR-428 `docs/specs/client-dist-insight-cards/spec.md`；免 spec 的三项：FR-425 / FR-427 / FR-429
 - FR-412~424（2026-08-26 控制台与实例界面重设计批）→ 需 spec 的六项：FR-415 / FR-418 / FR-419 `docs/specs/console-log-view-redesign/spec.md`（+ ADR-086 输出/输入分离取代 xterm 直通输入）、FR-420 / FR-421 `docs/specs/console-immersive-workspace/spec.md`（+ ADR-087 可见控制优先工作台，取代未入库的 tmux 前缀键提案）、FR-422 / FR-423 `docs/specs/instance-layout-redesign/spec.md`；免 spec 的六项：FR-412 / FR-413 / FR-414 / FR-416 / FR-417 / FR-424
 - FR-342~345（2026-07-16 迭代批：搭建损毁重建 / 实例系统级指标 / 环境变量管理 / 历史日志）→ FR-342 `docs/specs/provision-damaged-rebuild/`、FR-343 `docs/specs/instance-system-metrics/`、FR-344 `docs/specs/instance-env-vars/`、FR-345 `docs/specs/instance-log-history/`（四项均已交付@v0.18.0）
 - FR-335~340（2026-07-15 验收分诊批二：规模化与全栈补缺）→ FR-335 `docs/specs/topology-scale/`、FR-336 `docs/specs/users-search-pagination/`、FR-337 `docs/specs/tasks-pagination/`、FR-338 `docs/specs/backup-storage-update/`、FR-339 `docs/specs/console-players-backup-segments/`、FR-340 `docs/specs/metrics-batch-series/`；随批一并做的前端消费 gap：节点页聚合（gap:FR-270）/实例列表可供性（gap:FR-235）/超级工作台虚拟化（gap:FR-167）/备份实例选择器 Combobox/端口表虚拟化
@@ -101,6 +103,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-409（制品版本库与 ServerProbe 在线分发）：在既有 CAS 制品库之上新增制品包 / 来源 / 版本层；ServerProbe 首个接入，CP 从 GitHub Releases 校验缓存 jar、Worker 从 CP 拉取，支持全局 / Worker / 实例版本选择与回滚。旧制品消费者保持兼容 → `docs/specs/artifact-version-library/spec.md`（✅ 已交付@v0.21.0）
 - FR-410（Linux 用户级 systemd 版本化直装与节点部署）：将 CP / Worker 的 user unit 部署升级为 `current` 指针 + 不可变版本目录 + 稳定数据目录，自动迁移旧布局并提供显式回滚脚本；不引入公开镜像或 Docker Compose 生产路径 → `docs/specs/versioned-user-systemd-deploy/spec.md`（✅ 已交付@v0.21.0）
 - FR-411（ServerProbe 本地上传来源）：在既有 ServerProbe 制品包中新增本地上传来源，与 GitHub Releases 线上来源明确标识；上传即入 CAS 并可复用既有全局 / Worker / 实例选择与 CP→Worker 下发链路，不自动切换默认版本 → `docs/specs/local-serverprobe-upload/spec.md`（✅ 已交付@v0.21.0）
+- FR-431~432（控制台六域导航 IA + 可配置权限树：单平台多用户；权限目录/角色模板/用户覆盖/`/permissions` 页；侧栏与 API 共用节点；不引入租户；超管唯一且不可撤销）→ `docs/specs/nav-ia-role-model/spec.md` + ADR-089。UI 原型 `preview.html` / 根目录 `index.html` **gitignore，不入库**。线上 57/57 权限节点验收通过（待发版标交付）
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 > **验收档位图例**：`·全真栈验收`=真 UI+真 CP/Worker+真外部进程端到端；`·四档验收`=单测/集测/单机截图/真浏览器截图（后端 mock 基底）；`·验收经 FR-XXX 覆盖`=能力面被后继 FR 重做/包含并在其验收中验证（映射依据 `.tmp/acceptance/UNMARKED-66-RECONCILE.md`）；**无后缀=交付未验收（真缺口，当前 1 个：099 需真客户端 OTA 场景）**。证据台账 `.tmp/acceptance/ACCEPTANCE-LEDGER.md`。
@@ -516,6 +519,14 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-422 | 实例界面视口自适应骨架（feat，增强 FR-269/296）：实例路由内容区由 `min-h-[520px]` + 整页滚动改为 `flex h-full` 骨架——顶栏与 Tab 栏 `flex-none`、内容区 `flex-1 min-h-0`、滚动收口到卡片内部，使顶栏常驻可见且底部不再留白（屏幕越大原浪费越多）；分段栏与工具栏合并为单条横栏。仅覆盖实例详情路由，不改其他页面滚动模型（需 spec）→ `docs/specs/instance-layout-redesign/spec.md` | P1 | 🔨 开发中 |
 | FR-423 | 实例各 Tab 分栏重排与空态收缩（feat，依赖 FR-422）：按内容宽度需求分栏（窄内容与宽表格分列），等高栏改为不撑高矮卡，空态高度按内容走；概览的「最近事件 / 关注事项 / 崩溃诊断」三个低信息量卡合流为单条「动态与告警」时间线（需 spec）→ `docs/specs/instance-layout-redesign/spec.md` | P1 | 🔨 开发中 |
 | FR-424 | 宽表格列宽与稀疏表治理（feat，依赖 FR-422）：宽表格显式约束列宽与总宽上限，避免主列无限扩张导致名称与元数据之间断开视觉连接；超宽稀疏表（在线玩家、白名单等 2 列表）改行卡片形态，复用 FR-195 的行卡片范式（免 spec） | P1 | 🔨 开发中 |
+| FR-425 | 分发三页统一自定义时间筛选（feat，增强 FR-265/357/359）：频道工作台/分发监控/安全中心统一时间范围组件——保留既有预设档并新增任意起止日期时间（后端 from/to RFC3339 已支持，纯前端组件化），URL 深链同步进 FR-359 体系；区间超 14 天明细保留窗时自动标注「活跃机器为近似值」（消费 activeMachinesExact；免 spec） | P1 | 📋 计划 |
+| FR-426 | 机器级更新清单与钻取（feat，增强 FR-217/265）：选时间段列出每台机器（machineId）更新次数/最近更新时间/版本滞后，支持排序分页；点机器看该机器更新事件时间线（时间/版本/结果）；新后端查询端点——明细 14 天窗内精确、超窗小时桶近似并在 UI 明示，machineId 展示脱敏对齐 FR-265 先例，沿用 FR-361 CSV 导出（需 spec → `docs/specs/client-dist-machine-drilldown/spec.md`） | P1 | 📋 计划 |
+| FR-427 | 更新活动时间线/热力图（feat，增强 FR-218）：按天×小时热力图消费既有小时桶 series（updateTotal/updateSuccess），一眼看出哪些天/哪些小时有更新行为与密度；空数据友好空态；入分发监控页与工作台统计 Tab（免 spec，纯前端） | P2 | 📋 计划 |
+| FR-428 | 分发概览洞察卡（feat，增强 FR-357）：三页顶部洞察卡——同环比（自动对比前一等长窗口，后端 summary 扩 compare 字段一次请求拿齐）、突降/激增/长时间无更新等异常标记（口径规则 spec 定）、每个 KPI 带口径解释 tooltip 与健康基准（需 spec → `docs/specs/client-dist-insight-cards/spec.md`） | P1 | 📋 计划 |
+| FR-429 | 分发三页布局统一重排（ref，依赖 FR-425~428）：三页统一信息架构=洞察卡→时间筛选→概览数字→趋势/热力→明细清单；纯结构与样式，行为不变（免 spec） | P2 | 📋 计划 |
+| FR-430 | 客户端分发信息架构合并（观测页并入独立「客户端分发运维」页）（feat，增强 FR-215/264/265/356~359/425~429）：客户端分发由三页收敛为两页——「客户端分发」`/client-channels`（不变）+「客户端分发运维」`/client-dist-ops`（7 Tab：总览/统计/实时监控/全量日志/机器·客户端/画像/处置）；旧 `/client-dist-security`、`/client-dist-monitor` 保留为透传 query 的参数翻译重定向；`request` 类日志两套 UI 合一（全量日志 Tab 双视图）；两页补 `RequirePlatformAdmin` 路由守卫；页面 B 文案全量 i18n（新 `clientDistOps.*`，约 190 键）。纯前端，后端零改动（需 spec + ADR-088）→ `docs/specs/client-dist-ia-merge/spec.md` | P1 | 🔨 开发中 |
+| FR-431 | 控制台六域导航 IA（feat，增强 FR-268/215/272）：顶层收敛为首页/服务器/群组网络/工作台/观测/客户端分发/平台设置；业务 URL 不变；`/templates` 迁出内容分发；`/alerts` 维持无入口；侧栏可见性改由权限节点裁剪（依赖 FR-432）→ `docs/specs/nav-ia-role-model/spec.md` | P1 | 🔨 开发中·线上验收通过（待发版标交付） |
+| FR-432 | 可配置权限树与角色模板（feat，增强 FR-002/156）：静态能力域权限目录 + 角色模板/用户绑定/用户 allow-deny 覆盖（deny 永胜；**超管唯一**、不可撤销/降权）+ `RequireAnyPerm` 路由门禁 + `/permissions` 管理页；单平台多用户（ADR-089，不推翻 ADR-004）→ `docs/specs/nav-ia-role-model/spec.md` | P0 | 🔨 开发中·线上验收通过（待发版标交付） |
 ### 范围外（后续版本，暂不纳入 V1）
 
 | 编号 | 需求 | 预计版本 |

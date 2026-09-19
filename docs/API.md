@@ -65,6 +65,32 @@
 
 > `POST /api/v1/auth/register` 已移除，任何请求均为 404；初始管理员仍只能通过首次启动的 `POST /api/v1/setup` 创建。
 
+### GET /api/v1/auth/me
+- **描述**: 当前用户有效权限节点与角色模板 key（FR-432）
+- **关联 FR**: FR-432
+- **权限**: 已登录（JWT）
+- **响应** (200):
+  ```json
+  { "userId": 1, "username": "admin", "role": 10, "roleKey": "platform_admin", "isPlatformAdmin": true, "nodes": ["instance.read", "rbac.manage"] }
+  ```
+
+### RBAC 权限树管理（FR-432）
+
+| 方法 | 路径 | 权限节点 | 说明 |
+|---|---|---|---|
+| GET | `/api/v1/rbac/catalog` | 登录即可 | 静态权限目录（域+节点） |
+| GET | `/api/v1/rbac/roles` | `rbac.read` | 角色模板列表（含 nodes） |
+| GET | `/api/v1/rbac/roles/:id` | `rbac.read` | 单个角色 |
+| POST | `/api/v1/rbac/roles` | `rbac.manage` | 新建自定义角色 `{name,description?,nodes?}` |
+| PATCH | `/api/v1/rbac/roles/:id` | `rbac.manage` | 更新名称/描述/节点 |
+| DELETE | `/api/v1/rbac/roles/:id` | `rbac.manage` | 删除自定义角色（系统 key 拒绝） |
+| PUT | `/api/v1/rbac/roles/:id/permissions` | `rbac.manage` | 整表替换角色节点 `{nodes:[]}` |
+| GET | `/api/v1/rbac/users/:id/permissions` | `rbac.read` | 用户 effective + overrides |
+| PUT | `/api/v1/rbac/users/:id/role` | `rbac.manage` | 绑定角色 `{roleId}` |
+| PUT | `/api/v1/rbac/users/:id/overrides` | `rbac.manage` | 覆盖 `{overrides:[{node,effect}]}`，effect=`allow`\|`deny` |
+
+有效权限算法：平台管理员（`users.role==10` 或模板 `platform_admin`）全开且不可被 deny 降权；其余 `effective = 角色模板 ⊕ 覆盖`，**deny 永胜**。
+
 ---
 
 ## 用户

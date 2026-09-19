@@ -46,7 +46,7 @@ Worker Node (Go) × 20~100
 
 | 客户端 | 语言 | 职责 |
 |---|---|---|
-| jmagent | Go 独立二进制 | 经 CP Agent API 的脚本/CI 入口（FR-385） |
+| jmagent（别名 `jm`） | Go 独立二进制 | 经 CP Agent API 的脚本/CI 入口（FR-385） |
 | IDE / MCP 客户端 | 任意 | 经 CP 内嵌 MCP（`/api/v1/mcp`，FR-389 / ADR-077）持 jmat_ 长连 |
 | ~~mcp-bridge~~ | ~~Go 独立二进制~~ | ~~旧 stdio 适配（FR-386，已退役@FR-392）~~ |
 | jmctl | Go 独立二进制 | 本机紧急直连 daemon（FR-184 / ADR-041）；**不是** Agent 日常面 |
@@ -115,26 +115,53 @@ apps/jmctl/       # 紧急 daemon CLI（FR-184）
 
 ### 4.1 权限模型（RBAC）
 
-基于「三级角色 + 用户组隔离」的权限模型，参见 ADR-004（用户组替代多租户）。
+基于「角色兼容位 + 可配置权限树 + 用户组隔离」的权限模型。用户组隔离见 ADR-004；权限树与六域导航见 ADR-089（FR-432/431）。
 
 ```
-角色层级
-  平台管理员 (role=10) → 拥有全部权限，可管理所有用户/组/节点/实例
-  组管理员   (role=1)  → 受限于其任组管理员身份的组（group_members.role=1）
-  组成员     (role=0)  → 受限于其所属组（group_members.role=0）
+角色兼容位（users.role，JWT 声明）
+  平台管理员 (role=10) → 短路全量权限，不可被用户覆盖降权
+  组管理员   (role=1)  → 默认模板 group_admin（组内全权 + 管成员）
+  组运维     (role=2)  → 默认模板 group_operator（实例操作，无成员管理/高危启动规格）
+  组只读     (role=3)  → 默认模板 group_viewer（各类 read）
+  组成员     (role=0)  → 默认模板 member（组内实例操作，兼容历史）
 ```
 
-**权限节点**（`service/authz.go`）：`user:*`、`group:*`、`node:*`、`instance:*`、`file:*`、`terminal:access`、`bot:*`。
+**权限树**（`service/permission_catalog.go`）：静态能力域目录 `platform` / `runtime` / `observability` / `distribution` / `agent` / `workspace`，节点形如 `instance.operate`、`rbac.manage`。有效权限：
 
-**授权链路（人类 JWT）**：
+```
+effective(user) =
+  if role==10 or 绑定 platform_admin: 全部节点
+  else: 角色模板节点 ⊕ 用户覆盖(allow 加入, deny 永胜删除)
+```
+
+存储：`roles` · `role_permissions` · `user_role_bindings` · `user_permission_overrides`；启动时 seed 系统模板。
+
+**授权链路（人类 JWT）— 三层门禁（ADR-089 / FR-432）**：
+
+| 层 | 位置 | 职责 | 示例 |
+|---|---|---|---|
+| ① 路由节点 | `router.go` `RequireAnyPerm` / `permRead(...)` | 路由族能否进入 | `instances` 组要求 `instance.read`；`backups` 组要求 `backup.read`/`backup.write` |
+| ② handler 能力节点 | `requireNodes` / `access.HasNode` | **写/危险操作**额外要写节点 | `Start`=`instance.operate`；`Delete`=`instance.delete`；`file.Write`=`file.write`；节点 `Drain`=`node.manage`（**不含** `node.read`） |
+| ③ 组隔离 | `CanAccessInstance` / `CanManageGroup` / `AccessibleGroups` | 有节点也不代表能碰该资源 | 组外实例一律 404（存在性隐藏）；备份 Restore/Delete 按 backup→instance→group 收敛 |
+
+```
+请求 → JWTAuth → LoadAccess(Nodes+Groups)
+     → 路由 RequireAnyPerm(读/写节点)
+     → handler requireNodes(写节点)   // 写路径必须
+     → 组级 CanAccessInstance/…       // 资源边界
+```
+
 1. `middleware.JWTAuth` → 解析 JWT，写入 `userId/role`
-2. `middleware.LoadAccess` → 调用 `AuthzService.LoadUserAccess` 加载用户的组成员关系（管理组/所属组集合），写入 `access` 上下文
-3. 处理器内调用 `AuthzService.CanAccessInstance/CanManageGroup/CanAccessBot` 做资源级隔离判断；平台管理员全量放行
+2. `middleware.LoadAccess` → `AuthzService.LoadUserAccess` 加载组关系 + **权限树节点集合**（`UserAccess.Nodes`）；`IsPlatformAdmin = role==10 || roleKey==platform_admin`
+3. 平台级/业务路由挂 `RequireAnyPerm`；**写 handler 内再校验写节点**（仅有 `*.read` 的 `group_viewer` 不得启停/删实例/写文件/改备份）
+4. 资源级仍用 `CanAccessInstance/CanManageGroup/CanAccessBot`
+5. `GET /api/v1/auth/me` 返回 `nodes[]` + `roleKey` 供前端导航裁剪；管理面 `/api/v1/rbac/*`（`rbac.read`/`rbac.manage`）
 
 **隔离规则**：
 - 实例：通过 `group_instances` 关联判断归属；未分配组的实例仅平台管理员可访问
 - 跨组隔离：组 A 成员不能读写组 B 的实例/文件/终端/Bot；未授权访问返回 404（避免泄露存在性）
-- 节点管理：限平台管理员
+- 节点管理：**仅** `node.manage`（超管默认全开）；`node.read` 只读列表/指标
+- 用户组列表：仅超管或 `group.manage` 可见全平台组；`group.read` 按可访问组过滤
 - 配额：创建实例时校验 `MaxInstances`/`MaxBots`/`MaxStorageMB`（0 表示不限）；`GET /groups/:id/quota` 返回用量
 
 ### 4.1.1 Agent 接入与策略真源（FR-384~388 / FR-395 / ADR-076/077/080）
@@ -547,7 +574,9 @@ Control Plane 新增一类**面向玩家公网**的 HTTP 分发端点（客户�
 
 **观测数据底座（FR-217，见 ADR-049；FR-265 修订口径）**：`ClientDistObservabilityService` 后台 goroutine（每 10min，复用 scheduler 式 ticker，同 `MetricService`）**离线**把保留窗内的 `client_dist_events`+`client_telemetry` 卷积为按**频道×小时桶**的快照 `client_dist_snapshots`（幂等 upsert、重算近 48h 完结桶纳延迟明细、单档小时桶留 ≥180d 自清），与玩家热路径的写时聚合（`*_daily`）**解耦**。查询端点 `GET /client-dist/observability`（平台管理员 + 审计）返**跨频道/单频道**时序 + 区间分布聚合 + 汇总率；**machineId 去重口径**：桶内精确计数，跨区间在明细保留窗(14d)内回查明细做精确去重（`activeMachinesExact=true`）、窗外退化为各桶人次求和近似（`false`），不谎报精确独立数。聚合落 CP（架构不变量：Worker 不直连 DB）。
 
-**客户端分发观测四 Tab（FR-265）**：管理台 `/client-dist-monitor` 标题统一为「客户端分发观测」，同页拆 **统计 / 监控 / 日志 / 客户端** 四个 Tab，并建立清晰数据边界：统计 / 监控 / 日志只消费 `client_dist_events` 与 `client_dist_daily`，分别看请求历史统计、近实时健康度和脱敏明细；客户端 Tab 消费 `client_runtime_states` 最新心跳与 `client_telemetry` 更新结果，展示运行版本 / core 版本 / 平台 / 启动器 / 滞后分布与更新结果趋势。启动心跳 `POST /client-channels/:id/telemetry/heartbeat` 只 upsert 运行态，不写 `client_telemetry`，因此不会污染更新成功率；页面文案只称「近 5 分钟启动客户端 / 今日启动客户端」，不承诺真实在线。
+**客户端分发观测四 Tab（FR-265）**：管理台 `/client-dist-monitor` 标题统一为「客户端分发观测」，同页拆 **统计 / 监控 / 日志 / 客户端** 四个 Tab，并建立清晰数据边界：统计 / 监控 / 日志只消费 `client_dist_events` 与 `client_dist_daily`，分别看请求历史统计、近实时健康度和脱敏明细；客户端 Tab 消费 `client_runtime_states` 最新心跳与 `client_telemetry` 更新结果，展示运行版本 / core 版本 / 平台 / 启动器 / 滞后分布与更新结果趋势。启动心跳 `POST /client-channels/:id/telemetry/heartbeat` 只 upsert 运行态，不写 `client_telemetry`，因此不会污染更新成功率；页面文案只称「近 5 分钟启动客户端 / 今日启动客户端」，不承诺真实在线。**（FR-430 起该页并入下方「客户端分发运维」，`/client-dist-monitor` 保留为重定向。）**
+
+**客户端分发信息架构合并（FR-430 / ADR-088）**：客户端分发由**三页收敛为两页**——「客户端分发」（`/client-channels`，作者/发布侧，不变）+「客户端分发运维」（`/client-dist-ops`，观测 + 研判处置合并，7 Tab：总览 / 统计 / 实时监控 / 全量日志 / 机器·客户端 / 画像 / 处置）。原「客户端分发监控」四 Tab 与「客户端分发安全（防护中心）」八 Tab 按语义重组进这 7 个 Tab（`seg` 分档：实时监控 `seg=live|events`、画像 `seg=client|ip|player`、处置 `seg=actions|groups`），能力零丢失。`request` 类日志的两套 UI（监控页加厚请求表 vs 安全页聚合 `request` 类）合并为「全量日志」Tab 双视图：`type=request` 走 `useClientDistEventSearch` + 脱敏详情，`type!=request` 走 `useClientDistSecurityLogs`（服务端聚合 6 类）。旧路由 `/client-dist-security`、`/client-dist-monitor` 保留为**透传 query 的参数翻译重定向**（`ClientDistRedirect` + `normalizeOpsTab`，`<Navigate replace>`），冻结 query 键新增 `type`/`seg`。`/client-channels` 与 `/client-dist-ops` 补 `RequirePlatformAdmin` 路由守卫（旧重定向路由不包）；页面 B 文案全量抽取到新命名空间 `clientDistOps.*`（zh/en）。**后端零改动**，全部端点复用。
 
 **接入指引 + 内嵌更新器 jar（FR-107/259）**：CP 经 `go:embed` 内嵌 wedge.jar（~30KB）+ updater-core.jar（`make embed-client-updater` 注入，CP 启动时自动归档入库供楔子拉取），经平台管理员端点 `GET /client-dist/updater-jars[/:component]` 下载 wedge（管理面 JWT，不用拉取密钥）。管理台频道详情「接入指引」Tab 面向**运营方**一页拿齐：下载 wedge.jar + 该频道**专属可复制** `jm-updater.json`（channel/API 根 endpoint/密钥占位，FR-259 起不再含签名公钥与 coreEndpoint 配置字段；可从频道密钥列表选择一把 revealable 密钥并自动填入明文，复制与下载同源）+ 启动器 `-javaagent:jm-updater\wedge.jar` 参数（相对路径推荐）+ 放置步骤 + 行为说明（fail-static/fail-open/进度窗/与 authlib-injector 共存）。updater-core 不在整合包内——楔子首次启动按 endpoint 自动拼接端点并拉取，运营可在「Core 版本」Tab 切换回滚。纯运营面、不改 OTA 协议/manifest/客户端 jar。
 
@@ -734,7 +763,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
   - **服务器**组展开 = 全部服务器、跨服玩家、Bot 总览、节点、超级工作台、导播台。服务器选择不依赖常驻实例树，主要走全部服务器页、节点页、命令面板搜索与 `/instances/:id` 深链。
   - **常驻服务器列（FR-293，增强 FR-240，`SidebarServerList`）**：「选择服务器」按钮（`ServerSelector`）下方常驻两区 = 收藏（置顶）+ 最近打开（LRU ≤8，已收藏去重）；行 = 状态点 + 名称（title 含节点名），点击进该服控制台并计入最近，行内星标可收藏/取消。与选择器弹窗共用 localStorage（`server-selector.favorites` / `server-selector.recent`），读写收敛 `components/console/server-selection.ts` 共享 store（模块级订阅 + `useSyncExternalStore`），弹窗、常驻列与直接路由进入实例（`InstanceConsolePage` 记入最近）三路互通；状态点数据走列表内 id 的低频合并查询（60s，复用 `['instances', id]` 同源端点），不为侧栏引入高频轮询；双空显示引导文案，折叠图标轨态不渲染。
   - **群组网络**组展开 = 网络拓扑（`/networks/topology`）与分组管理（`/networks`）。`/networks` 精确匹配，避免拓扑页同时点亮两个入口。
-  - **观测 / 平台管理**承载跨服务器能力：监控总览、日志中心、统计分析、客户端分发监控，以及模板、客户端分发、运行时资产、存储、备份仓库、全局备份、任务中心、定时任务、通知中心、用户、用户组、审计、设置、许可、数据库、系统更新等平台级页面。`/players`、`/bots`、`/backups`、`/schedules` 均进入统一导航真源，桌面侧栏、移动导航与命令面板同步可达（FR-272）。
+  - **观测 / 平台管理**承载跨服务器能力：观测组 = 监控总览、日志中心、统计分析；平台管理 = 模板、客户端分发、客户端分发运维（`/client-dist-ops`，FR-430 由原「客户端分发监控」观测页与「客户端分发安全/防护中心」合并为 7 Tab）、运行时资产、存储、备份仓库、全局备份、任务中心、定时任务、通知中心、用户、用户组、审计、设置、许可、数据库、系统更新等平台级页面。`/players`、`/bots`、`/backups`、`/schedules` 均进入统一导航真源，桌面侧栏、移动导航与命令面板同步可达（FR-272）。
   - **可折叠图标轨（FR-131）**：可折叠为 `3.5rem` 仅域级图标轨（浏览器 100% 缩放、默认根字号下为 **56 CSS px**；设备像素截图不替代 CSS 宽度口径）。hover tooltip 显 label；折叠态域图标直接导航到该域第一个有权限的子路由，Logo / `PanelLeftOpen` 负责显式展开。导航区滚动条隐藏但保留滚动（`.scrollbar-none`）。折叠态 / 分组折叠态 / 选中节点持久化 `localStorage`（`stores/console.ts`：`sidebar.collapsed` / `sidebar.collapsedGroups` / `sidebar.selectedNodeId`）。
   - **品牌区折叠/展开（FR-181，增强 FR-131；顶栏贯通 FR-334/ADR-071 后迁至顶栏品牌区）**：logo（品牌图标 + `JianManager` 文字）整体为一个 `<button>`，点击复用 `console.toggleSidebar` 收缩/展开；折叠态仅图标仍可点回展开。`aria-label` 描述「将发生的动作」（展开态=收起 / 折叠态=展开，纯函数 `sidebar-logo.ts:logoToggleLabelKey`）。展开态品牌区右侧另有 `PanelLeftClose` 显式收起按钮、折叠态导航区顶部有 `PanelLeftOpen` 展开按钮，均调同一 action。
   - 底部（FR-164/FR-132）：**全局主题切换器** `ThemeSwitcher`——主题色圆点（Jian 绿默认，兼容旧 `indigo` 存储值 / 青绿第二主题）+ 明暗（lucide 图标 + dropdown 三态直选）；版本号（左下）+ 开源许可入口（右下 → `/licenses`，FR-135）；退出登录已迁至顶栏账户菜单（FR-162）。切语言同步 `<html lang>` 见 `i18n`。

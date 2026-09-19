@@ -36,8 +36,12 @@ data/
 # 部署用环境变量（含服务器主机/账号信息，禁止入库）
 .env.prod
 
-# 日志
-*.log
+# 预览 / 过程稿（禁止入库：UI 原型与临时验收脚本）
+/index.html
+preview.html
+docs/**/preview.html
+docs/compose/
+.tmp/
 logs/
 
 # 操作系统
