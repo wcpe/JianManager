@@ -111,7 +111,7 @@ initialize(auth) → Authenticate → 检查并发 → 创建 session → tools/
 4. 会话列表可见 token 名/前缀、IP、时长、最近 tool、传输类型；踢线后客户端无法继续 call  
 5. 空闲超时、绝对超时、全局/每 Token 并发上限行为符合配置；超限中文原因  
 6. 单测：会话并发、超时、踢线、鉴权失败、动态 tools/list  
-7. **真机**（需用户环境或既有 `103.45.143.199`）：HTTPS 远程走通至少一条 Streamable HTTP 或 SSE 全路径  
+7. **真机**（需用户环境或既有验收 CP）：HTTPS 远程走通至少一条 Streamable HTTP 或 SSE 全路径  
 
 ## 6. 风险 / 待定
 

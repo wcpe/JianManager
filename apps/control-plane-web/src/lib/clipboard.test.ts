@@ -50,7 +50,7 @@ describe('copyToClipboard', () => {
 })
 
 /**
- * BUG-1 复现：HTTP 非安全上下文（如 http://103.45.143.199:50100）下整个
+ * BUG-1 复现：HTTP 非安全上下文（如 http://panel.example.invalid:8080）下整个
  * navigator.clipboard 为 undefined。裸写 `navigator.clipboard?.readText()` 时可选链
  * 既不抛错也读不到内容，只静默返回 undefined，调用方判 `if (text)` 为假就完全没反应。
  * readClipboard 必须把这种情况报成**可识别的失败**，让 UI 能提示改按 Ctrl+V。

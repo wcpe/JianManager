@@ -66,7 +66,7 @@ afterEach(() => {
 
 /**
  * BUG-1 / BUG-2 回归：终端剪贴板在 HTTP 非安全上下文（生产验收主机
- * http://103.45.143.199:50100）下的行为。此时整个 navigator.clipboard 为 undefined：
+ * http://panel.example.invalid:8080）下的行为。此时整个 navigator.clipboard 为 undefined：
  * - 复制：必须走 execCommand 回退，且成功/失败都出 toast（原实现 void 掉 Promise，静默）
  * - 粘贴：读方向无 JS 兜底，必须明确提示改按 Ctrl+V（原实现 `?.readText()` 静默返回
  *   undefined，落到 `if (text)` 为假 → 点了毫无反应）

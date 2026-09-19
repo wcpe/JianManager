@@ -108,7 +108,7 @@
 5. 幂等：连续执行两次同一脚本无报错、结果一致。
 6. 预检失败路径：SSH 不通 / 产物缺失 / 首次缺 token / 显式 system 档无提权 / user 档 linger 不可开，均给出可操作中文报错而非莫名堆栈。
 7. **真机验收（必须，用户确认）**：真实 Linux 主机——先查操作机 `~/.ssh` 密钥（无则生成 ed25519 公钥交用户装入主机）→ 用户提供 IP/端口/用户 → `deploy-cp.sh` 部面板 → 浏览器首启引导 + 签 token → `deploy-worker.sh` 部节点 → 面板节点在线 → 两脚本各再跑一次更新部署复验 §5.4/§5.5。按用户主机实际权限档执行（用户已确认目标机为纯普通用户 → 真机主验 user 档；system 档以 dry-run 断言 + 可得 root 环境时补验）。单测 / 静态检查绿不替代本项。
-   - **[x] 已通过（2026-07-12，Debian 目标机 103.45.143.199:1001，纯普通用户 `jianmanager`，user 档）**：`deploy-cp.sh` 部面板（HTTP 50100，避开仅放行 >50100 端口的安全组）→ 真浏览器登录 + 面板「添加节点」签 token → `deploy-worker.sh` 部节点（WS 50102）→ 面板 node-main **在线**（linux/amd64、4 核、实时指标）；CP+Worker 各再跑一次更新部署（**均不带首次参数/token**）→ 节点身份 md5 不变、`control-plane.yml`/`worker.yml` mtime 不变、DB 仅服务写时序增长、`.bak` 各留一份、更新后节点仍在线同一 UUID。真机复验发现并当场修复：**CP 更新部署探活端口误用默认 8080**（更新不重传端口时探活错端口误报），改为更新模式从远端 `control-plane.yml` 的 `server.port` 解析（awk 限定 server 段避开 grpc 同名 port），修复后探活正确读到 50100 通过。
+   - **[x] 已通过（2026-07-12，Debian 目标机·验收环境，纯普通用户部署，user 档）**：`deploy-cp.sh` 部面板（HTTP 面板端口，避开安全组仅放行的高位端口段）→ 真浏览器登录 + 面板「添加节点」签 token → `deploy-worker.sh` 部节点（WS 节点端口）→ 面板 node-main **在线**（linux/amd64、4 核、实时指标）；CP+Worker 各再跑一次更新部署（**均不带首次参数/token**）→ 节点身份 md5 不变、`control-plane.yml`/`worker.yml` mtime 不变、DB 仅服务写时序增长、`.bak` 各留一份、更新后节点仍在线同一 UUID。真机复验发现并当场修复：**CP 更新部署探活端口误用默认 8080**（更新不重传端口时探活错端口误报），改为更新模式从远端 `control-plane.yml` 的 `server.port` 解析（awk 限定 server 段避开 grpc 同名 port），修复后探活按 yml 端口通过。
 
 ## 6. 风险 / 待定
 
