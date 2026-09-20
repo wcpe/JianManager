@@ -202,12 +202,15 @@ func TestMCP_AdminListAndKick(t *testing.T) {
 	r.ServeHTTP(kw, req)
 	require.Equal(t, http.StatusOK, kw.Code, kw.Body.String())
 
-	// 踢线后 tools/call 失败
+	// 踢线后 tools/call 失败。
+	// 期望 404：MCP Streamable HTTP 规范规定会话终止后对该会话 ID 的请求 MUST 回 404，
+	// 客户端据此重新 initialize（见 internal/controlplane/mcp/handler.go writeSessionGone）。
 	w = mcpPOST(t, r, "/api/v1/mcp", plain, sid, map[string]any{
 		"jsonrpc": "2.0", "id": 9, "method": "tools/call",
 		"params": map[string]any{"name": "agent_whoami"},
 	})
 	assert.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "SESSION_GONE")
 }
 
 func TestMCP_HumanJWT_CannotOpenSession(t *testing.T) {

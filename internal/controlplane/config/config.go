@@ -75,9 +75,10 @@ type MCPConfig struct {
 	IdleTimeout time.Duration `mapstructure:"idle_timeout"`
 	// AbsoluteTimeout 绝对超时（默认 24h）。
 	AbsoluteTimeout time.Duration `mapstructure:"absolute_timeout"`
-	// MaxGlobalSessions 全局并发会话上限（默认 32）。
+	// MaxGlobalSessions 全局并发会话上限；0（默认）= 不限制。
+	// 会话生命周期由空闲/绝对超时兜底，并发上限仅在需要限流时显式设正值。
 	MaxGlobalSessions int `mapstructure:"max_global_sessions"`
-	// MaxSessionsPerToken 每 Token 并发上限（默认 4）。
+	// MaxSessionsPerToken 每 Token 并发上限；0（默认）= 不限制。
 	MaxSessionsPerToken int `mapstructure:"max_sessions_per_token"`
 }
 
@@ -247,11 +248,13 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("update.feed_url", "")
 	v.SetDefault("update.binary_base_url", "")
 	v.SetDefault("update.allow_insecure", false)
-	// 内嵌 MCP 网关（FR-389）：空闲 30m、绝对 24h、全局 32、每 Token 4。
+	// 内嵌 MCP 网关（FR-389）：空闲 30m、绝对 24h、并发不限制（0）。
+	// 并发不限制是刻意的：会话由超时兜底，而上限在「客户端重连不关旧会话」时会被耗尽，
+	// 导致连 initialize 都建不了新会话（只能靠重启控制面清空内存会话恢复）。
 	v.SetDefault("mcp.idle_timeout", "30m")
 	v.SetDefault("mcp.absolute_timeout", "24h")
-	v.SetDefault("mcp.max_global_sessions", 32)
-	v.SetDefault("mcp.max_sessions_per_token", 4)
+	v.SetDefault("mcp.max_global_sessions", 0)
+	v.SetDefault("mcp.max_sessions_per_token", 0)
 	// 出站代理（FR-174，见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
 	v.SetDefault("proxy.url", "")
 	v.SetDefault("proxy.no_proxy", "")

@@ -153,10 +153,11 @@ func (m *SessionManager) Create(p CreateParams) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if len(m.sessions) >= m.cfg.MaxGlobalSessions {
+	// 并发上限 <=0 表示不限制（见 Config 注释）；仅在显式配置正值时才限流。
+	if m.cfg.MaxGlobalSessions > 0 && len(m.sessions) >= m.cfg.MaxGlobalSessions {
 		return nil, ErrSessionLimitGlobal
 	}
-	if m.perToken[p.Principal.TokenID] >= m.cfg.MaxSessionsPerToken {
+	if m.cfg.MaxSessionsPerToken > 0 && m.perToken[p.Principal.TokenID] >= m.cfg.MaxSessionsPerToken {
 		return nil, ErrSessionLimitToken
 	}
 
