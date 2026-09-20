@@ -201,7 +201,9 @@ func TestBotLoadCapacityDirectory_UnavailableReasonsAndReservations(t *testing.T
 			"node-4": {Ready: true, MaxBots: 50, CapacityGeneration: 1, ObservedAt: clock.Now()},
 			"node-5": {Ready: true, Legacy: true, MaxBots: 50, CapacityGeneration: 1, ObservedAt: clock.Now()},
 			"node-6": {Ready: false, MaxBots: 50, CapacityGeneration: 2, Features: []string{"fleet-v1"}, ObservedAt: clock.Now(), UnavailableReason: "bot-worker 依赖缺失"},
-			"node-7": workerCapacity(clock.Now().Add(-16*time.Second), 50, 0, 3),
+			// 构造超龄快照：偏移须明显大于 botLoadCapacitySnapshotAge（当前 30s，为
+			// bot-worker 10s 心跳的 3 倍），否则不会判 stale。
+			"node-7": workerCapacity(clock.Now().Add(-botLoadCapacitySnapshotAge-time.Second), 50, 0, 3),
 		},
 		errors: map[string]error{"node-8": errors.New("rpc unavailable")},
 	}

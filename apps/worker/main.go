@@ -347,7 +347,7 @@ func runWorker() {
 		NodeResolver: bot.NewNodeResolver("", func() []runtimescan.Candidate {
 			return runtimeScanner.Scan([]string{runtimescan.TypeNodeJS})
 		}),
-		ExtraEnv: []string{botdist.NodePathEnv(globalNM)},
+		ExtraEnv: append([]string{botdist.NodePathEnv(globalNM)}, cfg.BotWorker.ApplyEnv()...),
 		PrepareSpawn: func(distDir string) error {
 			if filepath.Clean(distDir) != filepath.Clean(managedBotWorkerDir) {
 				return nil

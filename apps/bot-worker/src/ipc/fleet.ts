@@ -22,6 +22,22 @@ const MAX_BATCH_SIZE = 50
 const MAX_SIGNAL_BATCH_SIZE = 100
 const DEFAULT_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE = 1000
+/** 大舰队默认客户端视距：'tiny'(6 区块) 可把服务端下发区块量降到 far(12) 的约 1/4。 */
+const DEFAULT_VIEW_DISTANCE = process.env.JM_BOT_WORKER_VIEW_DISTANCE || 'tiny'
+/**
+ * 无需本地物理模拟的行为集合：这些行为不让 Bot 自行移动。
+ * Mineflayer 给每个 Bot 挂一个 50ms 物理 timer（碰撞/重力/区块查询），
+ * 数百 Bot 时是单线程事件循环的最大开销，会导致 keepalive 滞后被服务器
+ * 判 Timed out 集体踢下线；站立不动的 Bot 关掉它可显著降低稳态占用。
+ */
+const PHYSICS_FREE_BEHAVIORS = new Set(['idle'])
+
+/** 解析该 Bot 是否启用客户端物理；显式配置优先，其次按行为判定。 */
+function resolvePhysicsEnabled(config: BotConfig): boolean {
+  if (config.disablePhysics !== undefined) return config.disablePhysics !== true
+  const behavior = (config.behavior || 'idle').toLowerCase()
+  return !PHYSICS_FREE_BEHAVIORS.has(behavior)
+}
 /** 自动重连：base=1s、max=60s、jitter=20%；连续失败 ≥10 次后固定 max delay（FR-365）。 */
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 60_000
@@ -540,6 +556,13 @@ export class FleetController {
         version: config.version,
         auth: config.auth,
         hideErrors: true,
+        // 大舰队常驻场景关闭客户端物理：Mineflayer 为每个 Bot 起一个 50ms 物理
+        // timer，数百 Bot 会打爆单线程事件循环，keepalive 滞后后服务器集体判
+        // Timed out 踢人。仅 idle/custom 等不依赖本地碰撞的行为可关闭；需要自行
+        // 走路（follow/patrol/guard）的行为保持开启，否则 Bot 无法移动。
+        physicsEnabled: resolvePhysicsEnabled(config),
+        // 视距越小，服务端下发的区块数据越少（压测 Bot 不看世界）。
+        viewDistance: config.viewDistance ?? DEFAULT_VIEW_DISTANCE,
       })
       if (this.bots.get(botId) !== instance || !instance.desiredRunning) {
         try { mcBot.quit() } catch { /* 已取消 */ }

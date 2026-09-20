@@ -51,6 +51,23 @@ type Config struct {
 	// MemoryGuard 启动内存闸（FR-317）：可用内存不足以再塞下待启实例时拒绝启动，
 	// 防止把节点内存跑满至失去响应。零值即启用 + 默认保留水位 max(512MB, 总内存 10%)。
 	MemoryGuard MemoryGuardConfig `mapstructure:"memory_guard"`
+	// BotWorker bot-worker 子进程容量与资源参数（FR-398 压测编排）。
+	BotWorker BotWorkerConfig `mapstructure:"bot_worker"`
+}
+
+// BotWorkerConfig bot-worker 子进程调参；零值即用内置默认（容量 50）。
+type BotWorkerConfig struct {
+	// MaxBots 单进程可创建的 Bot 上限；0 = 默认 50。
+	// 大压测（数百 Bot）需调高，同时关注 eventLoopP95Ms 与 RSS。
+	MaxBots int `mapstructure:"max_bots"`
+}
+
+// ApplyEnv 把 MaxBots 落到子进程环境变量（供 bot-worker 读取）。
+func (c BotWorkerConfig) ApplyEnv() []string {
+	if c.MaxBots <= 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("JM_BOT_WORKER_MAX_BOTS=%d", c.MaxBots)}
 }
 
 // MemoryGuardConfig 启动内存闸配置（FR-317）。
