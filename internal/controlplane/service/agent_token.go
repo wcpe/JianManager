@@ -50,9 +50,30 @@ const (
 	AgentActionInstanceUpdateConfig       = "agent.instance_update_config"
 	AgentActionTaskGet                    = "agent.task_get"
 	AgentActionInstanceSendCommand        = "agent.instance_send_command"
-	AgentActionInstanceBatch              = "agent.instance_batch"
-	AgentActionInstanceKill               = "agent.instance_kill"
-	AgentActionInstanceDelete             = "agent.instance_delete"
+	// 实例分组（FR-165 / ADR-033）：分组仅承载运维归类，读走 instance.read、写走 instance.write。
+	AgentActionInstanceGroupList          = "agent.instance_group_list"
+	AgentActionInstanceGroupRead          = "agent.instance_group_read"
+	AgentActionInstanceGroupCreate        = "agent.instance_group_create"
+	AgentActionInstanceGroupUpdate        = "agent.instance_group_update"
+	AgentActionInstanceGroupDelete        = "agent.instance_group_delete"
+	AgentActionInstanceGroupAddMembers    = "agent.instance_group_add_members"
+	AgentActionInstanceGroupRemoveMembers = "agent.instance_group_remove_members"
+	// 群组服 Network 软标签与代理注册（FR-032 / FR-335）：仅承载运维归类与代理↔后端关系，
+	// 读走 instance.read、写走 instance.write（与实例分组同权限面）。
+	AgentActionNetworkList         = "agent.network_list"
+	AgentActionNetworkRead         = "agent.network_read"
+	AgentActionNetworkCreate       = "agent.network_create"
+	AgentActionNetworkUpdate       = "agent.network_update"
+	AgentActionNetworkDelete       = "agent.network_delete"
+	AgentActionNetworkAddMembers   = "agent.network_add_members"
+	AgentActionNetworkRemoveMember = "agent.network_remove_member"
+	AgentActionTopologyGet         = "agent.topology_get"
+	AgentActionRegistrationList    = "agent.registration_list"
+	AgentActionRegistrationCreate  = "agent.registration_create"
+	AgentActionRegistrationDelete  = "agent.registration_delete"
+	AgentActionInstanceBatch       = "agent.instance_batch"
+	AgentActionInstanceKill        = "agent.instance_kill"
+	AgentActionInstanceDelete      = "agent.instance_delete"
 
 	// FR-397 文件域 action（MCP 专属，不进 HTTP 契约投影）。
 	AgentActionFileList                = "agent.file_list"

@@ -50,6 +50,11 @@ type ToolDeps struct {
 	Config      *service.ConfigService
 	Plugin      *service.PluginService
 	Transfer    *service.AgentTransferTicketService
+	// 实例分组（FR-165 / ADR-033）；nil 时分组工具返回中文「服务不可用」。
+	InstanceGroup *service.InstanceGroupService
+	// 群组服 Network 软标签与代理注册（FR-032 / FR-335）；nil 时对应工具返回中文「服务不可用」。
+	Network      *service.NetworkService
+	Registration *service.RegistrationService
 	// FR-398：Bot 舰队与压测编排；任一为 nil 时对应工具返回中文「服务不可用」。
 	Bot           *service.BotService
 	LoadTemplate  *service.BotLoadTemplateService

@@ -14,6 +14,7 @@ const (
 	AgentCapabilityNodeOperate         = "node.operate"
 	AgentCapabilityNodeDestructive     = "node.destructive"
 	AgentCapabilityInstanceRead        = "instance.read"
+	AgentCapabilityInstanceWrite       = "instance.write"
 	AgentCapabilityInstanceLife        = "instance.life"
 	AgentCapabilityInstanceCommand     = "instance.command"
 	AgentCapabilityInstanceProvision   = "instance.provision"
@@ -73,6 +74,7 @@ var agentKnownCapabilities = map[string]struct{}{
 	AgentCapabilityNodeOperate:         {},
 	AgentCapabilityNodeDestructive:     {},
 	AgentCapabilityInstanceRead:        {},
+	AgentCapabilityInstanceWrite:       {},
 	AgentCapabilityInstanceLife:        {},
 	AgentCapabilityInstanceCommand:     {},
 	AgentCapabilityInstanceProvision:   {},
@@ -170,6 +172,14 @@ var fr396DomainActions = []AgentActionDescriptor{
 	{Action: AgentActionInstanceUpdateConfig, V2Capability: AgentCapabilityInstanceConfigure, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	// task_get 无固定资源类型：先按 task 关联实例归属重验，再走 instance.read 能力。
 	{Action: AgentActionTaskGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
+	// 实例分组：分组自身无独立资源类型，按节点/实例 scope 判定可发现性（复用 instance 分支）。
+	{Action: AgentActionInstanceGroupList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionInstanceGroupRead, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionInstanceGroupCreate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceGroupUpdate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceGroupDelete, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true},
+	{Action: AgentActionInstanceGroupAddMembers, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceGroupRemoveMembers, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	{Action: AgentActionInstanceSendCommand, V2Capability: AgentCapabilityInstanceCommand, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	{Action: AgentActionInstanceBatch, V2Capability: AgentCapabilityInstanceLife, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	{Action: AgentActionInstanceKill, V2Capability: AgentCapabilityInstanceDestructive, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true},
@@ -178,6 +188,30 @@ var fr396DomainActions = []AgentActionDescriptor{
 
 func init() {
 	for _, d := range fr396DomainActions {
+		agentActionCatalog[d.Action] = d
+	}
+}
+
+// networkDomainActions 是群组服 Network 软标签与代理注册（FR-032 / FR-335）的 MCP 专属 action。
+// 与实例分组同权限面（读 instance.read、写 instance.write）：这些操作改的是实例间的归属
+// 与代理注册关系，不是实例内容，故不占用 configure/content 等更细能力。
+// 全部 V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /networks、/topology 路由）。
+var networkDomainActions = []AgentActionDescriptor{
+	{Action: AgentActionNetworkList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionNetworkRead, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionNetworkCreate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionNetworkUpdate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionNetworkDelete, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationDestructive, RequiresConfirm: true},
+	{Action: AgentActionNetworkAddMembers, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionNetworkRemoveMember, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionTopologyGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionRegistrationList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionRegistrationCreate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionRegistrationDelete, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+}
+
+func init() {
+	for _, d := range networkDomainActions {
 		agentActionCatalog[d.Action] = d
 	}
 }
