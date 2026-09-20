@@ -14,8 +14,29 @@ import (
 )
 
 // BotLoadCapacityProvider 是 preflight 对容量目录的最小依赖。
+//
+// 只要求 Snapshot；若实现同时提供 Refresh（强制刷新），preflight 会优先用它——
+// 预检必须基于实时容量，而 Snapshot 走 15s TTL 缓存，长时间运行的舰队里缓存可能已陈旧
+//（真机表现：节点明明有可用容量，预检却报「可用容量 0」+ CAPACITY_SNAPSHOT_STALE，
+// 需反复重试才偶尔命中新鲜快照）。用可选接口而非强制方法，避免牵动其它调用方的替身实现。
 type BotLoadCapacityProvider interface {
 	Snapshot(ctx context.Context, excludeRunID uint) (*BotLoadCapacitySnapshot, error)
+}
+
+// botLoadCapacityRefresher 由容量目录实现；调用方借此拿到实时快照。
+type botLoadCapacityRefresher interface {
+	Refresh(ctx context.Context, excludeRunID uint) (*BotLoadCapacitySnapshot, error)
+}
+
+// RefreshBotLoadCapacity 取实时容量：实现支持则 Refresh，否则退回 Snapshot 缓存读。
+//
+// 供所有「必须基于实时值决策」的场景复用（预检、容量规划工具）。用可选接口而非给
+// BotLoadCapacityProvider 加强制方法，是为避免牵动其它调用方的替身实现。
+func RefreshBotLoadCapacity(ctx context.Context, p BotLoadCapacityProvider, runID uint) (*BotLoadCapacitySnapshot, error) {
+	if r, ok := p.(botLoadCapacityRefresher); ok {
+		return r.Refresh(ctx, runID)
+	}
+	return p.Snapshot(ctx, runID)
 }
 
 // BotLoadPreflightInput 是纯核心预检输入；权限、HTTP 与场景 V2 校验由上层负责。
@@ -60,7 +81,7 @@ func (s *BotLoadPreflightService) Preflight(ctx context.Context, session *model.
 	if err := ValidateBotLoadScenarioForSession(session); err != nil {
 		return nil, err
 	}
-	capacitySnapshot, err := s.capacities.Snapshot(ctx, session.ID)
+	capacitySnapshot, err := RefreshBotLoadCapacity(ctx, s.capacities, session.ID)
 	if err != nil {
 		return nil, err
 	}

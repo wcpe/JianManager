@@ -112,6 +112,17 @@ export interface BotConfig {
   connectNotBefore?: number
   connectNotBeforeUnixMs?: number
   correlationSeed?: string
+  /**
+   * 关闭 Mineflayer 客户端物理模拟（默认 true=关闭）。
+   *
+   * 压测 Bot 只做登录/聊天/统计，不需要本地碰撞与重力模拟；
+   * 而 Mineflayer 为每个 Bot 起一个 50ms 物理 timer，数百 Bot 会把
+   * 单线程事件循环打爆（实测 500 容量下 p95 达 5s），keepalive 跟不上
+   * 导致服务器集体判 Timed out 踢人。默认关闭以保证大规模常驻稳定。
+   */
+  disablePhysics?: boolean
+  /** 客户端上报的视距（'tiny'|'short'|'normal'|'far' 或 2..32 数值）；越小下行区块越少。 */
+  viewDistance?: number | string
 }
 
 /** probe/barrier/cancel 等外部动作信号的冻结信封。 */

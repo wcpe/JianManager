@@ -16,8 +16,14 @@ import (
 )
 
 const (
-	botLoadCapacityCacheTTL    = 15 * time.Second
-	botLoadCapacitySnapshotAge = 15 * time.Second
+	botLoadCapacityCacheTTL = 15 * time.Second
+	// botLoadCapacitySnapshotAge 是容量快照可被采信的最大年龄。
+	//
+	// bot-worker 心跳周期为 10s（JM_BOT_WORKER 侧 health.intervalMs），故阈值必须显著大于
+	// 一个心跳周期，否则一旦某拍心跳因 GC/负载抖动稍晚到达，快照就被判 stale、availableBots
+	// 归零，压测预检直接以「可用容量 0」失败（真机表现：容量时有时无，需反复重试才偶尔成功）。
+	// 取 3 倍心跳周期留足抖动余量。
+	botLoadCapacitySnapshotAge = 30 * time.Second
 	botLoadCapacityNodeTimeout = 3 * time.Second
 	botLoadCapacityConcurrency = 16
 )
