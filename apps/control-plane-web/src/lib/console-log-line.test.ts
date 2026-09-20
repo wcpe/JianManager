@@ -123,6 +123,24 @@ describe('LogLineParser 级别兜底（spec §1.2：与后端 log_ingest 同一�
   it('已解析出级别时不被流兜底覆盖', () => {
     expect(parseOne('[09:12:13] [main/WARN]: x', 'stderr').level).toBe('WARN')
   })
+
+  it('stderr 上的 Go slog level=INFO 不得按 ERROR 兜底（Beacon 等全量 stderr 进程）', () => {
+    const raw =
+      'time=2026-09-20T12:24:28.732+08:00 level=INFO msg=访问 方法=GET 路径=/beacon/v2/agent/registration 状态=200'
+    const line = parseOne(raw, 'stderr')
+    expect(line.level).toBe('INFO')
+  })
+
+  it('结构化 level= 覆盖各常见级别与引号形态，且不被 stream 兜底改写', () => {
+    expect(parseOne('time=x level=error msg=失败', 'stdout').level).toBe('ERROR')
+    expect(parseOne('time=x level=WARN msg=慢', 'stderr').level).toBe('WARN')
+    expect(parseOne('time=x level="debug" msg=细节', 'stderr').level).toBe('DEBUG')
+  })
+
+  it('正文里非 level 键值（如 状态=200）不得污染级别；无 level= 时仍按 stream 兜底', () => {
+    expect(parseOne('状态=200 耗时=1ms', 'stderr').level).toBe('ERROR')
+    expect(parseOne('msg=访问 level_token=INFO', 'stderr').level).toBe('ERROR')
+  })
 })
 
 describe('LogLineParser 堆栈（为 FR-418 铺路）', () => {

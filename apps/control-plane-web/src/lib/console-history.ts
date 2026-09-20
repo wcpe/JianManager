@@ -58,7 +58,8 @@ export function historySeqAt(index: number, total: number): number {
  *
  * 走与实时输出**同一个解析器**（spec §1.2）：同一条日志无论来自 WS 还是数据库，拆出的
  * 时间/级别/来源与堆栈归属都必须一致，否则用户滚过接缝会看到同格式的行长得不一样。
- * 级别兜底用 DB 的 `stream` 列（stdout→INFO、stderr→ERROR），与 log_ingest 的推断同源。
+ * 级别：优先解析行内（MC 前缀 / 结构化 level=）；都没有时用 DB 的 stream 列兜底
+ * （stdout→INFO、stderr→ERROR），与 log_ingest 的推断同源。
  *
  * 必须整段重解析而非只解析新页：堆栈帧的 `stackOf` 依赖前一行，新加载的更早页里可能正是
  * 某个异常头，只解析新页会让接缝处的堆栈挂错头。

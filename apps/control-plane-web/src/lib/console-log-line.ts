@@ -15,7 +15,7 @@ export type LogKind = 'log' | 'command' | 'stack-frame' | 'stack-cause' | 'syste
 
 export type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' | 'TRACE'
 
-/** 行的来源流。级别兜底用（spec §1.2：stderr→ERROR、stdout→INFO）。 */
+/** 行的来源流。无结构化/MC 级别时的兜底用（stderr→ERROR、stdout→INFO）。 */
 export type LogStream = 'stdout' | 'stderr'
 
 /** 结构化日志行。`seq` 是环形缓冲内的唯一单调标识——选区与定位一律用它，不用数组下标。 */
@@ -60,6 +60,16 @@ const LEVEL_ALIASES: Record<string, LogLevel> = {
 }
 
 const LEVEL_TOKEN = '(INFO|WARNING|WARN|ERROR|SEVERE|FATAL|DEBUG|TRACE)'
+
+/**
+ * 结构化日志的 `level=` 键（Go slog / logrus 等）。
+ * 只认独立 key=value token，值必须落在 LEVEL_ALIASES 白名单；
+ * `状态=` / `level_token=` 等不会误命中。
+ */
+const STRUCTURED_LEVEL = new RegExp(
+  `(?:^|[\\s])level=["']?${LEVEL_TOKEN}["']?(?:[\\s]|$)`,
+  'i',
+)
 
 /** MC 原生 / Paper：`[09:12:13] [Server thread/INFO]: 正文`。 */
 const PREFIX_TIME_THREAD_LEVEL = new RegExp(`^\\[(\\d{2}:\\d{2}:\\d{2})\\] \\[([^\\]]*)/${LEVEL_TOKEN}\\]:[ ]?`)
@@ -139,6 +149,11 @@ function parsePrefix(raw: string): PrefixResult {
     ts = shortMatch[1]
     level = LEVEL_ALIASES[shortMatch[2]]
     consumed = shortMatch[0].length
+  } else {
+    // MC 前缀未命中时，再认结构化 level=（slog/logrus）。不改 body 消费偏移——
+    // level 键散落在正文中，行模型仍保留完整原文。
+    const structured = STRUCTURED_LEVEL.exec(plain)
+    if (structured) level = LEVEL_ALIASES[structured[1].toUpperCase()]
   }
 
   const afterTime = plain.slice(consumed)
@@ -208,8 +223,10 @@ export class LogLineParser {
     const bodyPlain = ansiPlainText(prefix.body).plain
     const kind = classify(bodyPlain)
 
-    // 级别兜底与后端 log_ingest 的推断保持同一套规则（stderr→ERROR、stdout→INFO），
-    // 不引入第二套判定——否则同一行在控制台与日志中心会显示不同级别。
+    // 级别兜底与后端 log_ingest 的推断保持同一套规则：
+    // 1) 行内已解析出的级别（MC 前缀或结构化 level=）优先；
+    // 2) 否则 stderr→ERROR、stdout→INFO。
+    // 否则同一行在控制台与日志中心会显示不同级别。
     const level = prefix.level ?? (stream === 'stderr' ? 'ERROR' : 'INFO')
 
     // 时间列一致性（FR-415）：ts 保持「解析不出就留空」的 spec 语义——**绝不猜**

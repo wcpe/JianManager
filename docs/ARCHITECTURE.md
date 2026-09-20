@@ -308,7 +308,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - Docker 镜像管理（FR-078，ADR-019）：ListImages, PullImage, RemoveImage
   - CP 不直连 Docker，节点级镜像列出/拉取/删除经 Worker 委托（守架构边界）；`ListImages` 在节点 Docker 不可用时回 `docker_available=false`，CP 据此提示安装 Docker
 - 实例事件流：StreamInstanceEvents (server stream)
-  - 同一流承载两类事件：`state_change`（状态转换）与 `stdout`/`stderr`（进程输出）。Worker 进程输出回调分流为「WS 终端广播 + 事件流上报」两路，互不阻塞。CP 侧 EventService 把 `stdout`/`stderr` 经 LogService 落库（日志中心 FR-049），`state_change` 经 SSE 推前端
+  - 同一流承载两类事件：`state_change`（状态转换）与 `stdout`/`stderr`（进程输出）。Worker 进程输出回调分流为「WS 终端广播 + 事件流上报」两路，互不阻塞。CP 侧 EventService 把 `stdout`/`stderr` 经 LogService 落库（日志中心 FR-049），`state_change` 经 SSE 推前端。实例日志入库级别：优先解析行内结构化 `level=`（Go slog / logrus 等）；无结构化级别时 stderr→error、stdout→info（与前端控制台解析同源）
 - 崩溃快照上报：`ReportCrashSnapshot`（FR-313；CP 侧实现，Worker 调用，与注册/心跳同信道）——进程非正常退出（退出码≠0 或 RUNNING/STARTING 态意外退出）时 Worker 组装崩溃现场（退出码/信号/时长 + 终端环形缓冲尾部 200 行/64KB）异步上报，凭 `node_uuid+node_secret` 鉴权且实例须属于该节点；CP 落 `instance_crash_snapshots` 并同事务按实例滚动只留最近 5 条。上报失败（网络/老 CP `Unimplemented`）Worker 记日志丢弃不阻塞状态机；daemon 模式退出码经 wrapper 控制通道事件帧（`TypeEvent`+`java_exit` JSON）上抛，老 wrapper 不发帧、老 Worker 忽略未知帧，新旧互不炸
 - 文件操作：ListFiles, ReadFile, WriteFile, UploadFile (client stream), DeleteFile, RenameFile（跨目录即移动）, DownloadFile (server stream), DownloadArchive (server stream), SearchFiles
   - `ReadFile` 是**在线编辑器**读取能力，带 10MiB 护栏（超限截断；前端另有大文件/二进制预览拦截）。**下载不得复用 ReadFile**——曾因下载端点借用它导致超限大文件被静默截断（详见 `DownloadFile`）

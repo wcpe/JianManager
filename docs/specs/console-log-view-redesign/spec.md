@@ -36,8 +36,7 @@ interface LogLine {
 4. **Caused by**：`Caused by: <exception>` → `kind:'stack-cause'`
 5. **异常头**：正文匹配 `<fqcn>(Exception|Error|Throwable): ...` 或其后紧跟 stack-frame → 该行为异常头
 
-**级别兜底**：解析不出级别时，stderr 流记 `ERROR`、stdout 流记 `INFO`（与后端 `log_ingest` 现有推断一致，
-不引入第二套规则）。
+**级别推断**：优先解析行内级别——MC/Paper 前缀（`[HH:MM:SS] [thread/LEVEL]:`）或结构化 `level=` 键（Go slog / logrus，`level=INFO` / `level="error"` 等）；两者都没有时，stderr 流记 `ERROR`、stdout 流记 `INFO`（与后端 `log_ingest` 同一套推断，不引入第二套规则）。结构化 `level=` 解析使 Beacon 等「slog 全量 stderr」进程的 INFO 访问日志不再被误标为错误。
 
 **时间继承（lastTs，2026-09-07 增补）**：Paper 多行日志（如 spark 告警）的续行没有 `[HH:MM:SS]` 前缀，
 若时间列整行空白会破坏扫读。规则：`ts = prefix.ts ?? state.lastTs`——无时间前缀的日志行**继承最近一次

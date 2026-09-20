@@ -75,7 +75,8 @@ func (s *LogService) resolveNode(nodeUUID string) uint {
 }
 
 // IngestInstanceOutput 实现 EventService.LogSink：把实例进程输出落库（FR-049）。
-// 多行 chunk 拆成每行一条记录，便于按行检索；空行跳过。stderr 归为 error 级，stdout 归为 info 级。
+// 多行 chunk 拆成每行一条记录，便于按行检索；空行跳过。
+// 级别推断：优先解析行内结构化 level=（slog/logrus 等）；没有则 stderr→error、stdout→info。
 func (s *LogService) IngestInstanceOutput(nodeUUID, instanceUUID, stream, message string, ts int64) {
 	if !s.cfg.Enabled || message == "" {
 		return
@@ -86,10 +87,6 @@ func (s *LogService) IngestInstanceOutput(nodeUUID, instanceUUID, stream, messag
 		nodeID = s.resolveNode(nodeUUID)
 	}
 
-	level := model.LogLevelInfo
-	if stream == "stderr" {
-		level = model.LogLevelError
-	}
 	t := time.Now()
 	if ts > 0 {
 		t = time.Unix(ts, 0)
@@ -102,7 +99,7 @@ func (s *LogService) IngestInstanceOutput(nodeUUID, instanceUUID, stream, messag
 		}
 		s.Ingest(IngestEntry{
 			Source:       model.LogSourceInstance,
-			Level:        level,
+			Level:        instanceLineLogLevel(stream, line),
 			InstanceID:   ref.instanceID,
 			InstanceUUID: instanceUUID,
 			NodeID:       nodeID,

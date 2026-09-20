@@ -14,7 +14,8 @@ const (
 	LogSourceWorker LogSource = "worker"
 )
 
-// LogLevel 日志级别。实例 stdout 默认归为 info、stderr 归为 error；平台日志沿用 slog 级别。
+// LogLevel 日志级别。实例日志优先取行内结构化 level=（slog/logrus 等）；
+// 无结构化级别时 stdout 默认归为 info、stderr 归为 error；平台日志沿用 slog 级别。
 type LogLevel string
 
 const (
