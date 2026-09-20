@@ -29,7 +29,14 @@ const (
 	InstanceTypeGeneric       InstanceType = "generic"
 )
 
-// InstanceRole 实例在 MC 群组服拓扑中的角色（ADR-007）。
+// InstanceRole 实例角色。
+//
+// 分两类语义：
+//   - MC 群组服角色（backend/proxy）：参与 proxy↔backend 拓扑、后端注册、玩家查询，
+//     是 server_registrations 的合法两端。
+//   - 非群组服角色（universal/beacon）：受 JM 生命周期管理，但不参与群组拓扑。
+//
+// 详见 ADR-007。
 type InstanceRole string
 
 const (
@@ -39,12 +46,16 @@ const (
 	InstanceRoleProxy InstanceRole = "proxy"
 	// InstanceRoleUniversal 通用实例（默认；非群组服角色，保留自由命令）。
 	InstanceRoleUniversal InstanceRole = "universal"
+	// InstanceRoleBeacon 配套服务实例（如 Beacon 控制面）。
+	// 非群组服角色：不参与 proxy↔backend 拓扑、不适用 MC 探针与后端注册、不参与玩家查询；
+	// 仅作为受 JM 生命周期管理的普通服务进程存在，因此无法被选为代理或后端。
+	InstanceRoleBeacon InstanceRole = "beacon"
 )
 
 // ValidInstanceRole 校验角色是否在允许枚举内。
 func ValidInstanceRole(r InstanceRole) bool {
 	switch r {
-	case InstanceRoleBackend, InstanceRoleProxy, InstanceRoleUniversal:
+	case InstanceRoleBackend, InstanceRoleProxy, InstanceRoleUniversal, InstanceRoleBeacon:
 		return true
 	}
 	return false

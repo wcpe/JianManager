@@ -1437,7 +1437,7 @@ function BackendsInline({ proxyId }: { proxyId: number }) {
   )
 }
 
-/** 角色三态统一语义色徽标（FR-136）：proxy 主色 / backend 次色 / universal 中性。 */
+/** 角色统一语义色徽标（FR-136）：proxy 主色 / backend 次色 / beacon 提示色 / universal 中性。 */
 function RoleBadge({ role, compact = false }: { role: string; compact?: boolean }) {
   const { t } = useTranslation()
   if (role === 'proxy') {
@@ -1451,6 +1451,14 @@ function RoleBadge({ role, compact = false }: { role: string; compact?: boolean 
     return (
       <Badge variant="outline" className="border-status-info/40 text-status-info">
         {t('networks.role_backend')}
+      </Badge>
+    )
+  }
+  if (role === 'beacon') {
+    // 配套服务实例（非 MC 群组服角色）：用中性偏提示的样式与集群服角色区分开。
+    return (
+      <Badge variant="outline" className="border-status-warning/40 text-status-warning">
+        {t('networks.role_beacon')}
       </Badge>
     )
   }

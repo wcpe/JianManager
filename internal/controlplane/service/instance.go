@@ -27,6 +27,8 @@ var (
 	ErrInstanceStopped    = errors.New("实例已停止")
 	ErrInstanceNotRunning = errors.New("实例未运行")
 	ErrQuotaExceeded      = errors.New("组配额已满")
+	// ErrInvalidInstanceRole 实例角色不在允许枚举内（backend/proxy/universal/beacon）。
+	ErrInvalidInstanceRole = errors.New("无效的实例角色")
 	// ErrStartCommandRequired 非 docker 实例缺启动命令（docker 可空，交镜像 entrypoint 自管启动，FR-078）。
 	ErrStartCommandRequired = errors.New("非 docker 实例必须提供启动命令")
 )
@@ -591,7 +593,10 @@ func (s *InstanceService) AggregateInstances(scope []uint, p InstanceSearchParam
 	} {
 		agg.ByStatus[string(st)] = 0
 	}
-	for _, r := range []model.InstanceRole{model.InstanceRoleBackend, model.InstanceRoleProxy, model.InstanceRoleUniversal} {
+	for _, r := range []model.InstanceRole{
+		model.InstanceRoleBackend, model.InstanceRoleProxy,
+		model.InstanceRoleUniversal, model.InstanceRoleBeacon,
+	} {
 		agg.ByRole[string(r)] = 0
 	}
 	if scope != nil && len(scope) == 0 {
@@ -656,6 +661,11 @@ type UpdateInstanceFields struct {
 	JDKID        *uint
 	EnvVars      *map[string]string
 	Tags         *[]string
+	// Role 实例角色（backend/proxy/universal/beacon）；nil=不变。
+	// 允许改角色是为了纠正建实例时的误选（如把 BungeeCord 建成了 backend，
+	// 导致群组拓扑与注册关系都认不出它是代理）。变更只写本表，不做级联：
+	// 原为 proxy 的 server_registrations 保留，避免误删运维数据。
+	Role *model.InstanceRole
 	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（FR-079）；nil=不变，0=清除限制。
 	CPULimit    *float64
 	MemLimitMB  *int64
@@ -688,6 +698,15 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 	}
 	if f.JDKID != nil {
 		updates["jdk_id"] = *f.JDKID
+	}
+	if f.Role != nil {
+		// 与 Create 的 grandfather 语义刻意不同：Create 对未指定/非法值静默回落 universal
+		// （兼容不传 role 的既有创建路径）；Update 是用户显式改角色，静默回落会让调用方
+		// 误以为改成功，故非法值直接拒绝。
+		if !model.ValidInstanceRole(*f.Role) {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidInstanceRole, *f.Role)
+		}
+		updates["role"] = *f.Role
 	}
 	if f.EnvVars != nil {
 		raw, err := json.Marshal(*f.EnvVars)

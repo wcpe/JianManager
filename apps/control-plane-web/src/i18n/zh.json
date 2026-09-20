@@ -127,6 +127,7 @@
     "role_proxy": "代理",
     "role_backend": "后端",
     "role_universal": "通用",
+    "role_beacon": "控制面",
     "manage": "管理",
     "viewList": "列表",
     "viewTopology": "拓扑",

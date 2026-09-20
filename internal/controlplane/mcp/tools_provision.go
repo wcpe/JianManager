@@ -126,7 +126,7 @@ func init() {
 		toolSpec{
 			Def: ToolDef{
 				Name:        "instance_update_config",
-				Description: "更新实例结构化配置字段（名称/启动命令/自启/JDK/资源限额等；须 instance.configure）",
+				Description: "更新实例结构化配置字段（名称/启动命令/自启/JDK/标签/角色/资源限额等；须 instance.configure）。角色取值 backend/proxy/universal/beacon，用于纠正建实例时的误选（如把 BungeeCord 建成 backend 导致群组拓扑认不出它是代理）",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -136,9 +136,15 @@ func init() {
 						"autoStart":    map[string]any{"type": "boolean"},
 						"autoRestart":  map[string]any{"type": "boolean"},
 						"jdkId":        map[string]any{"type": "number"},
-						"cpuLimit":     map[string]any{"type": "number"},
-						"memLimitMb":   map[string]any{"type": "number"},
-						"diskLimitMb":  map[string]any{"type": "number"},
+						"tags":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "标签列表（例如 region:r1）"},
+						"role": map[string]any{
+							"type":        "string",
+							"enum":        []string{"backend", "proxy", "universal", "beacon"},
+							"description": "实例角色：backend 后端子服 / proxy 代理 / universal 通用 / beacon 配套服务（如 Beacon 控制面）",
+						},
+						"cpuLimit":    map[string]any{"type": "number"},
+						"memLimitMb":  map[string]any{"type": "number"},
+						"diskLimitMb": map[string]any{"type": "number"},
 					},
 					"required": []string{"id"},
 				},
@@ -396,6 +402,17 @@ func execInstanceUpdateConfig(_ context.Context, deps ToolDeps, p *service.Agent
 		if n, e := toUint(v); e == nil {
 			f.JDKID = &n
 		}
+	}
+	if v, ok := args["tags"]; ok {
+		tags := toStringSlice(v)
+		f.Tags = &tags
+	}
+	if _, ok := args["role"]; ok {
+		role := model.InstanceRole(stringArg(args, "role"))
+		if !model.ValidInstanceRole(role) {
+			return toolErr("无效的实例角色: " + string(role) + "（可选 backend/proxy/universal/beacon）")
+		}
+		f.Role = &role
 	}
 	if v, ok := args["cpuLimit"]; ok {
 		if n, e := toFloat(v); e == nil {
