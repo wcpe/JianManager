@@ -43,7 +43,9 @@ build-web:
 gen-licenses:
 	node scripts/gen-licenses.mjs
 
-# 将前端构建产物复制到嵌入目录（go:embed 目标目录不变，仅源路径随 FR-283 迁移）
+# 将前端构建产物复制到嵌入目录（go:embed 目标目录不变，仅源路径随 FR-283 迁移）。
+# dist/ 下的 index.html 与 assets/* 均为构建产物、不入库（目录仅跟踪 .gitignore）；
+# 正式 build/dist 必须先跑本目标。清洁克隆未注入时 RegisterStaticRoutes 使用内置占位 HTML。
 embed-web:
 	mkdir -p internal/controlplane/embed/dist
 	cp -r apps/control-plane-web/dist/* internal/controlplane/embed/dist/
