@@ -230,15 +230,19 @@ func TestInstanceBatch_ByFilter_ScopeConverged(t *testing.T) {
 	assert.Equal(t, float64(1), m["requested"])
 }
 
-// TestInstanceBatch_Forbidden 无 instance:operate 权限（不属于任何组的用户）被拒。
+// TestInstanceBatch_Forbidden FR-432：member 模板含 instance.operate 能力，资源隔离由组决定。
+// 无组用户不拒 403，而是 scope 为空 → 目标实例 skipped（存在性隐藏），不执行操作。
 func TestInstanceBatch_Forbidden(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 	getAdminToken(t, r) // 完成 setup，使后续 register 走普通注册
-	// bob 不属于任何组 → 无 instance:operate
+	// bob 不属于任何组 → 模板仍有 instance.operate，但 AccessibleInstanceIDs 为空
 	bobToken := getMemberToken(t, r, "bob", "password123")
 
 	body := map[string]interface{}{"action": "stop", "ids": []uint{1}}
 	w := makeRequest(r, "POST", "/api/v1/instances/batch", body, bobToken)
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	m := parseJSON(t, w)
+	assert.Equal(t, float64(0), m["requested"])
+	assert.Equal(t, float64(1), m["skipped"])
 }

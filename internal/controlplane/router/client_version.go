@@ -795,10 +795,8 @@ func (h *ClientVersionHandler) RegisterConsumerRoutes(rg *gin.RouterGroup) {
 
 // GetUpdaterCore GET /client-channels/:id/updater-core — 返回频道选定 core 版本信息（玩家，拉取密钥鉴权）。
 // 返回 {version, sha256, downloadUrl, size}（spec §2.5.3 冻结格式），楔子据此下载 core jar。
+// 消费端点：走 X-Client-Key，不挂 JWT 权限树（无 key → authChannelKey 回 401）。
 func (h *ClientVersionHandler) GetUpdaterCore(c *gin.Context) {
-	if !requireNodes(c, "channel.write", "dist.publish") {
-		return
-	}
 	channelID := c.Param("id")
 	start := time.Now()
 	errCode := ""

@@ -62,7 +62,8 @@ func TestProbeUpdate_Update_NotEmbeddedOr422(t *testing.T) {
 	assert.Equal(t, "PROBE_NOT_EMBEDDED", m["error"])
 }
 
-// TestProbeUpdate_Update_Forbidden 无 instance:operate 权限被拒。
+// TestProbeUpdate_Update_Forbidden FR-432：member 有 instance.operate 能力；
+// 无组用户对不可见实例走存在性隐藏 404（不再 403）。
 func TestProbeUpdate_Update_Forbidden(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -70,7 +71,7 @@ func TestProbeUpdate_Update_Forbidden(t *testing.T) {
 	bobToken := getMemberToken(t, r, "bob", "password123") // 不属于任何组
 
 	w := makeRequest(r, "POST", "/api/v1/instances/1/probe/update", map[string]any{}, bobToken)
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
 }
 
 // TestProbeUpdate_Batch_Validation 批量缺 ids/filter → 400。
@@ -83,7 +84,8 @@ func TestProbeUpdate_Batch_Validation(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestProbeUpdate_Batch_Forbidden 无 instance:operate 权限的批量被拒。
+// TestProbeUpdate_Batch_Forbidden FR-432：无组 member 有能力无 scope →
+// 目标全 skipped；若探针制品未装配，业务层回 422 PROBE_NOT_EMBEDDED（非 403）。
 func TestProbeUpdate_Batch_Forbidden(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -92,7 +94,7 @@ func TestProbeUpdate_Batch_Forbidden(t *testing.T) {
 
 	body := map[string]any{"ids": []uint{1}}
 	w := makeRequest(r, "POST", "/api/v1/instances/probe/update", body, bobToken)
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.NotEqual(t, http.StatusForbidden, w.Code, w.Body.String())
 }
 
 // TestProbeUpdate_Batch_NotEmbedded 未装配版本库时批量整体 422 PROBE_NOT_EMBEDDED。

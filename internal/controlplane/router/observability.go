@@ -24,8 +24,9 @@ func (h *ObservabilityHandler) RegisterRoutes(rg *gin.RouterGroup) {
 }
 
 // Overview 返回平台管理员首页使用的有界总览读模型。
+// 平台级聚合，不向普通成员开放（即使其模板含 monitor.read）。
 func (h *ObservabilityHandler) Overview(c *gin.Context) {
-	if !requireNodes(c, "monitor.read", "stats.read", "node.read") {
+	if !requirePlatformAdmin(c) {
 		return
 	}
 	result, err := h.svc.Overview()
