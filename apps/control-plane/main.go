@@ -542,6 +542,11 @@ func main() {
 		Config:      configSvc,
 		Plugin:      pluginSvc,
 		Transfer:    agentTransferSvc,
+		// 实例分组（FR-165 / ADR-033）：按结构树批量运维。
+		InstanceGroup: instanceGroupSvc,
+		// 群组服 Network 软标签与代理注册（FR-032 / FR-335）：群组管理与拓扑图数据。
+		Network:      networkSvc,
+		Registration: registrationSvc,
 		// FR-398：Bot 舰队与压测编排复用管理面同一批 service 实例，不另建策略副本。
 		Bot:           botSvc,
 		LoadTemplate:  botLoadTemplateSvc,
