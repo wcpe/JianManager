@@ -127,6 +127,7 @@
     "role_proxy": "Proxy",
     "role_backend": "Backend",
     "role_universal": "Universal",
+    "role_beacon": "Control Plane",
     "manage": "Manage",
     "viewList": "List",
     "viewTopology": "Topology",

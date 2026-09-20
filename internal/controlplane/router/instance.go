@@ -305,6 +305,8 @@ type updateInstanceRequest struct {
 	EnvVars      *map[string]string `json:"envVars"`
 	// Tags 环境/标签维度（FR-047）：传 null/缺省不变，传数组（含空数组）覆盖。
 	Tags *[]string `json:"tags"`
+	// Role 实例角色（backend/proxy/universal/beacon）：传 null/缺省不变，传值覆盖（非法值 400）。
+	Role *model.InstanceRole `json:"role"`
 	// CPULimit/MemLimitMB/DiskLimitMB docker 资源限额（FR-079）：传 null/缺省不变，传值（含 0）覆盖。
 	CPULimit    *float64 `json:"cpuLimit"`
 	MemLimitMB  *int64   `json:"memLimitMb"`
@@ -346,6 +348,7 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		JDKID:        req.JDKID,
 		EnvVars:      req.EnvVars,
 		Tags:         req.Tags,
+		Role:         req.Role,
 		CPULimit:     req.CPULimit,
 		MemLimitMB:   req.MemLimitMB,
 		DiskLimitMB:  req.DiskLimitMB,
@@ -353,6 +356,10 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, service.ErrInstanceNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+			return
+		}
+		if errors.Is(err, service.ErrInvalidInstanceRole) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "更新失败"})
