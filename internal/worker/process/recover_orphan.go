@@ -1,6 +1,7 @@
 package process
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"time"
@@ -15,6 +16,10 @@ import (
 
 // recoverRetryBackoff reconnect 失败的有界重试间隔（递增）。首拨失败后按此序列重试。
 var recoverRetryBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+
+// errOrphanedWrapperGone 标记「wrapper 已死、仅剩 Java 孤儿」的接管场景：
+// 无需再杀 wrapper（已不存在），只需清掉残留的 Java，故跳过其杀树与存活复核。
+var errOrphanedWrapperGone = errors.New("wrapper 已不存活，仅剩 Java 孤儿")
 
 // 强杀后存活复核的有界等待：Windows taskkill /T /F 异步终止进程树，
 // 杀完立查可能误报存活，故轮询确认（上限 attempts×interval）。
@@ -77,20 +82,38 @@ func (m *Manager) reconnectWithRetry(strategy *daemonStrategy, addr, instanceUUI
 	return err
 }
 
-// reapOrphanWrapper 处置 reconnect 重试耗尽后的孤儿 wrapper（FR-325）。
-// 先杀 wrapper 树（防其自动重启 Java），再补杀 Java 树——Unix 上 Java 经 wrapper 的
-// applyProcAttr 自成进程组，杀 wrapper 组够不到它，而 Java 正是占 session.lock 的真孤儿；
-// Windows 上 taskkill /T 已覆盖子树，补杀已死 PID 报错无害（以存活复核为准）。
+// reapOrphanWrapper 处置孤儿进程树（FR-325 及同源的 wrapper 已死场景）。
+//
+// 两种入口：
+//   - reconnectErr == errOrphanedWrapperGone：wrapper 已经不在，只剩 Java 孤儿。
+//     只清 Java，跳过对已消失 wrapper 的杀树与存活复核。
+//   - 其余（reconnect 重试耗尽）：先杀 wrapper 树（防其自动重启 Java），再补杀 Java 树——
+//     Unix 上 Java 经 wrapper 的 applyProcAttr 自成进程组，杀 wrapper 组够不到它，
+//     而 Java 正是占 session.lock 的真孤儿；Windows 上 taskkill /T 已覆盖子树，
+//     补杀已死 PID 报错无害（以存活复核为准）。
+//
 // PID 文件处置语义：确认全部死透 → 清 PID 文件与残留 socket；仍有存活（权限不足等）→
 // 保留 PID 文件，让下次 Worker 重启的接管扫描仍能发现并再次兜底，杜绝孤儿永久失联。
 func (m *Manager) reapOrphanWrapper(instanceUUID, pidPath string, rec *daemon.PIDRecord, reconnectErr error) {
-	slog.Warn("reconnect wrapper 重试耗尽，按 PID 记录强杀孤儿进程树",
-		"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID,
-		"error", reconnectErr)
+	wrapperGone := errors.Is(reconnectErr, errOrphanedWrapperGone)
+	if wrapperGone {
+		slog.Warn("wrapper 已不存活但 Java 仍活，按 PID 记录强杀 Java 孤儿",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID)
+	} else {
+		slog.Warn("reconnect wrapper 重试耗尽，按 PID 记录强杀孤儿进程树",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID,
+			"error", reconnectErr)
+	}
 
-	if err := m.killTree(rec.WrapperPID); err != nil {
-		slog.Warn("强杀 wrapper 进程树报错（可能已死或权限不足，以存活复核为准）",
-			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "error", err)
+	// wrapper 已消失时跳过杀树：对已死 PID 杀树只会刷无意义告警，且其 PGID 可能已被
+	// 系统复用，误杀无关进程。存活复核同样只针对 Java。
+	pids := []int{rec.JavaPID}
+	if !wrapperGone {
+		if err := m.killTree(rec.WrapperPID); err != nil {
+			slog.Warn("强杀 wrapper 进程树报错（可能已死或权限不足，以存活复核为准）",
+				"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "error", err)
+		}
+		pids = append(pids, rec.WrapperPID)
 	}
 	if rec.JavaPID > 0 && rec.JavaPID != rec.WrapperPID && m.pidAlive(rec.JavaPID) {
 		if err := m.killTree(rec.JavaPID); err != nil {
@@ -99,7 +122,7 @@ func (m *Manager) reapOrphanWrapper(instanceUUID, pidPath string, rec *daemon.PI
 		}
 	}
 
-	if !m.waitPIDsGone([]int{rec.WrapperPID, rec.JavaPID}) {
+	if !m.waitPIDsGone(pids) {
 		slog.Warn("孤儿进程树强杀后仍有存活，保留 PID 文件待下次接管扫描再兜底",
 			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID)
 		return
@@ -109,7 +132,7 @@ func (m *Manager) reapOrphanWrapper(instanceUUID, pidPath string, rec *daemon.PI
 	if rec.SocketAddr != "" {
 		daemon.RemoveSocket(rec.SocketAddr)
 	}
-	slog.Warn("孤儿 wrapper 进程树已强杀并清理 PID 文件",
+	slog.Warn("孤儿进程树已强杀并清理 PID 文件",
 		"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID)
 }
 

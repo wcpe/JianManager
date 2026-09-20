@@ -171,3 +171,98 @@ func TestRecoverDaemonInstances_KillVerifyWaitsAsyncExit(t *testing.T) {
 	assert.Equal(t, 0, recovered)
 	assert.NoFileExists(t, pidPath, "异步退出窗口结束后应完成清理")
 }
+
+// TestRecoverDaemonInstances_WrapperGoneJavaAlive 覆盖「wrapper 已死、Java 仍活」的接管场景。
+//
+// 真机事故：Worker 重启后 wrapper 因故消失，而它托管的 Java 仍活着（父进程变为 init）。
+// 旧逻辑只检查 wrapper，见到 wrapper 死就直接删 PID 文件——活着的 Java 从此不可发现，
+// 继续占着服务端口与 Paper session.lock，面板却显示 STOPPED，实例再也起不来。
+// 正确行为：按 PID 记录强杀 Java 树；死透才清理，杀不死则保留 PID 文件待下次兜底。
+func TestRecoverDaemonInstances_WrapperGoneJavaAlive(t *testing.T) {
+	tests := []struct {
+		name           string
+		killMakesDead  bool
+		wantKilled     []int
+		wantPIDFile    bool
+		wantRegistered bool
+	}{
+		{
+			name:          "Java 孤儿被杀→清理 PID 文件",
+			killMakesDead: true,
+			// 只杀 Java：wrapper 已不存在，对其杀树会刷无意义告警且 PGID 可能已被复用
+			wantKilled:     []int{testJavaPID},
+			wantPIDFile:    false,
+			wantRegistered: false,
+		},
+		{
+			name:           "Java 杀不死（权限不足）→保留 PID 文件待下次兜底",
+			killMakesDead:  false,
+			wantKilled:     []int{testJavaPID},
+			wantPIDFile:    true,
+			wantRegistered: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			uuid := "orphan-wrapper-gone"
+			pidPath := writeOrphanPIDRecord(t, dir, uuid)
+
+			m := NewManager(dir)
+			dead := map[int]bool{testWrapperPID: true} // wrapper 已死，Java 仍活
+			var killed []int
+			dials := 0
+
+			m.recoverPIDAlive = func(pid int) bool { return !dead[pid] }
+			m.recoverSleep = func(time.Duration) {}
+			m.recoverKillTree = func(pid int) error {
+				killed = append(killed, pid)
+				if tt.killMakesDead {
+					dead[pid] = true
+				}
+				return nil
+			}
+			m.recoverDial = func(_ *daemonStrategy, _ string) error {
+				dials++
+				return nil
+			}
+
+			recovered, err := m.RecoverDaemonInstances()
+			require.NoError(t, err)
+			assert.Equal(t, 0, recovered)
+			assert.Equal(t, 0, dials, "wrapper 已死时不应尝试 reconnect")
+			assert.Equal(t, tt.wantKilled, killed, "只强杀 Java 孤儿，不碰已消失的 wrapper")
+
+			if tt.wantPIDFile {
+				assert.FileExists(t, pidPath, "Java 未死透时应保留 PID 文件供下次兜底")
+			} else {
+				assert.NoFileExists(t, pidPath, "Java 死透后应清理 PID 文件")
+			}
+
+			_, stErr := m.GetState(uuid)
+			assert.Error(t, stErr, "兜底处置后不应登记实例")
+		})
+	}
+}
+
+// TestRecoverDaemonInstances_WrapperAndJavaBothGone 回归保护：wrapper 与 Java 都已死时，
+// 仍走原有的轻量清理路径（不触发杀树），避免遗留 PID 文件。
+func TestRecoverDaemonInstances_WrapperAndJavaBothGone(t *testing.T) {
+	dir := t.TempDir()
+	uuid := "orphan-both-gone"
+	pidPath := writeOrphanPIDRecord(t, dir, uuid)
+
+	m := NewManager(dir)
+	dead := map[int]bool{testWrapperPID: true, testJavaPID: true}
+	var killed []int
+	m.recoverPIDAlive = func(pid int) bool { return !dead[pid] }
+	m.recoverSleep = func(time.Duration) {}
+	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); return nil }
+
+	recovered, err := m.RecoverDaemonInstances()
+	require.NoError(t, err)
+	assert.Equal(t, 0, recovered)
+	assert.Empty(t, killed, "两者都已死时无需杀树")
+	assert.NoFileExists(t, pidPath, "两者都已死时应清理 PID 文件")
+}

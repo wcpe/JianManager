@@ -823,8 +823,17 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 			continue
 		}
 
-		// wrapper 进程不存活：清理 PID 文件 + 残留 socket
+		// wrapper 不存活：先看 Java 是否还在。
 		if rec.WrapperPID <= 0 || !m.pidAlive(rec.WrapperPID) {
+			// wrapper 已死但 Java 仍活：wrapper 是 Java 的唯一被托管入口，wrapper 一走
+			// 就再没人能 stop 它（socket 随之消失、reconnect 无从谈起）。此时删 PID 文件
+			// 会把活着的 Java 变成永久孤儿——继续占着服务端口与 Paper session.lock，
+			// 面板却因实例已从注册表消失而显示 STOPPED，实例再也起不来。
+			// 故与 FR-325 同源处置：按 PID 记录强杀 Java 树，死透才清理 PID 文件。
+			if rec.JavaPID > 0 && rec.JavaPID != rec.WrapperPID && m.pidAlive(rec.JavaPID) {
+				m.reapOrphanWrapper(instanceUUID, pidPath, rec, errOrphanedWrapperGone)
+				continue
+			}
 			slog.Info("daemon wrapper 已不存活，清理残留", "instanceId", rec.InstanceUUID, "wrapperPid", rec.WrapperPID)
 			_ = os.Remove(pidPath)
 			if rec.SocketAddr != "" {
