@@ -470,7 +470,8 @@ Flags:   bit0=compressed(zlib)
 - **优雅停止命令按角色派生**：收到 `stop` 控制帧后，wrapper 向进程 stdin 写「关服命令」——MC 后端用 `stop`、代理（BungeeCord/Waterfall/Velocity）用 `end`（代理不认 `stop`，误发会挂到超时才强杀）。该命令由 CP 按实例角色派生、经 `CreateInstance` 的 `stop_command` 字段下发并烤进 `WrapperConfig`；为空时回退 `stop`。超时（`JIANMANAGER_GRACEFUL_STOP_TIMEOUT`，默认 30s）仍未退出则强杀兜底。
 - **重启前等待上一代退出**：daemon 策略 `Start` 前按 PID 文件等待上一代 wrapper/Java 完全退出（`WaitForPriorExit`，上限 `JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT`，默认 15s），避免快速 stop→start 时旧进程仍占监听端口/socket 导致新进程端口冲突崩溃（`exit status 1`）。
 - **强制终止杀整树**：`daemonStrategy.Kill`（重启/强制终止路径）除发 `kill` 控制帧外，兜底用 `taskkill /T` 终止 wrapper→cmd→Java 整棵进程树；不可只杀 wrapper PID，否则 Windows 上 Java 孤儿化继续占监听端口，紧接的 `Start` 会因端口被占而 `BindException` 崩溃。
-- **PID 文件恢复**：wrapper 写 `<pidDir>/<uuid>.pid`（JSON：wrapper pid、java pid、socket 地址、instance uuid）。Worker 启动时 `Manager.RecoverDaemonInstances` 扫描 PID 文件，wrapper pid 存活则 reconnect socket 恢复管理，wrapper 已死则清理文件与残留 socket。wrapper 存活但 reconnect 拨号失败时（FR-325 兜底）：有界重试（3 次、间隔 1s/2s/4s 递增，期间保留 PID 文件保证实例仍可发现）；耗尽后按 PID 记录先强杀 wrapper 进程树再补杀 Java 树（`daemon.KillPIDTree`：Windows `taskkill /T /F`、Unix 杀进程组，Java 在 Unix 上自成进程组故须补杀），存活复核确认死透才清 PID 文件与 socket；杀不死（权限等）保留 PID 文件待下次接管扫描再兜底——杜绝孤儿永久失联（真机事故：残留 java 占 Paper `session.lock`）。
+- **PID 文件恢复**：wrapper 写 `<pidDir>/<uuid>.pid`（JSON：wrapper pid、java pid、socket 地址、instance uuid）。Worker 启动时 `Manager.RecoverDaemonInstances` 扫描 PID 文件，wrapper pid 存活则 reconnect socket 恢复管理。wrapper 存活但 reconnect 拨号失败时（FR-325 兜底）：有界重试（3 次、间隔 1s/2s/4s 递增，期间保留 PID 文件保证实例仍可发现）；耗尽后按 PID 记录先强杀 wrapper 进程树再补杀 Java 树（`daemon.KillPIDTree`：Windows `taskkill /T /F`、Unix 杀进程组，Java 在 Unix 上自成进程组故须补杀），存活复核确认死透才清 PID 文件与 socket；杀不死（权限等）保留 PID 文件待下次接管扫描再兜底——杜绝孤儿永久失联（真机事故：残留 java 占 Paper `session.lock`）。
+- **wrapper 已死而 Java 仍活时同样按孤儿处置（FR-436）**：wrapper 是 Java 的唯一受管入口，它一死就再没人能 stop 那个 Java（socket 随之消失、reconnect 无从谈起）。旧逻辑见到 wrapper 不存活便直接删 PID 文件——活着的 Java 从此不可发现：继续占服务端口与 Paper `session.lock`，面板却因实例已从注册表消失而显示 STOPPED，实例再也起不来（真机事故：控制面重启后 63 个实例集体失联，日志可见「daemon wrapper 已不存活，清理残留」却对应着仍在监听的 Java）。现先看 Java 是否还活，活则复用 FR-325 同源的强杀链路；wrapper 确已消失时跳过对它的杀树与存活复核——避免对已死 PID 刷无意义告警、且其 PGID 可能已被系统复用而误杀无关进程。
 - **优雅退出**：daemon 模式下 `Manager.StopAll` 只断开与 wrapper 的连接，不杀游戏服（direct 模式才终止进程）。
 - **Worker 重启后 wrapper 存活（FR-341，落地 ADR-003 承诺）**：daemon wrapper 须在 Worker 升级/崩溃/`systemctl restart` 后存活、由恢复的 Worker 经 socket 重连接管（即上条「PID 文件恢复」的 reconnect 分支，而非「清理残留」）。真机验证曾因三处叠加缺陷 wrapper 全被杀、只命中「清理残留」，已各个击破：① wrapper 的 stdout/stderr 是父 Worker 建立的 OS 管道，Worker 死后写 fd 1/2 触发 SIGPIPE、被 Go 运行时对标准流的默认动作终止——wrapper 启动即 `signal.Ignore(SIGPIPE)`（Unix，见 `daemon.IgnoreBrokenPipe`；Windows 无此语义为空操作），改为 EPIPE 丢弃不崩；② systemd worker 单元默认 `KillMode=control-group` 会连坐 SIGKILL cgroup 内经 setsid 脱离的 wrapper——单元改 `KillMode=process`（`install-worker.sh` + CP 内嵌副本，仅向主进程发信号，`install_scripts_test.go` 守护）；③ Worker 收到 SIGTERM 时先在 5 秒上限内关闭本地 WS 服务，再停止本地管理器；不再存在入站 gRPC server 的优雅停止等待。删除运行中实例仍强杀两棵进程树（上条 FR-310），与「重启存活」正交。
 
@@ -628,7 +629,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | group_members | group_id, user_id, role(0=member/1=admin) |
 | group_quotas | group_id(UNIQUE), max_instances, max_bots, max_storage_mb |
 | nodes | uuid(UNIQUE，身份锚定键，ADR-039), name(活跃唯一：部分唯一索引 `uniq_nodes_name_active` WHERE deleted_at IS NULL，软删可释放名), host, grpc_port, ws_port, secret, status(0/1/2), maintenance(bool, cordon 维护模式，与在线/离线正交), os, arch, cpu_cores, memory_mb, disk_total_mb, load_avg1(V2, 系统负载, FR-062), managed_runtime_observed_at、bot_capacity_max(均为当前受管运行时快照，NULL=缺测)、bot_capacity_unavailable_reason(FR-400), proxy_mode(inherit/custom, 出站代理模式, 默认 inherit, FR-185/ADR-043), proxy_url(节点自定义代理, 仅 custom, 含凭据/API 脱敏), proxy_no_proxy(节点自定义免代理列表, 仅 custom), last_heartbeat, runtime_synced_at(V2, FR-301, 上次运行时库存从 Worker 同步成功时间——JDK syncFromWorker 成功即刷新, NULL=从未同步, 运行时资产页「上次同步」锚点), deleted_at |
-| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), image(docker 模式镜像引用, FR-078), container_id(docker 模式最近容器 ID), cpu_limit/mem_limit_mb/disk_limit_mb(docker 资源限额，0=不限制，磁盘仅展示), forwarding_secret(V2, Velocity 转发), proxy_online_mode(V2, 代理正版校验), server_port/query_port, probe_port(V2, ServerProbe /metrics 端口, 29940 段), mc_*, tags(JSON), work_dir_in_place(FR-302, 就地导入标记=工作目录在托管区外、删除不删原目录) |
+| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal/beacon, V2；后三者非群组服角色，FR-433 支持经 API 变更), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), image(docker 模式镜像引用, FR-078), container_id(docker 模式最近容器 ID), cpu_limit/mem_limit_mb/disk_limit_mb(docker 资源限额，0=不限制，磁盘仅展示), forwarding_secret(V2, Velocity 转发), proxy_online_mode(V2, 代理正版校验), server_port/query_port, probe_port(V2, ServerProbe /metrics 端口, 29940 段), mc_*, tags(JSON), work_dir_in_place(FR-302, 就地导入标记=工作目录在托管区外、删除不删原目录) |
 | group_instances | group_id, instance_id(UNIQUE) |
 | instance_group_nodes (V2, FR-165) | uuid, name, parent_id(自引用 FK, NULL=根), sort, deleted_at（实例组织分组树节点，邻接表表达多级嵌套；正交于用户组/网络群组，仅组织归类，ADR-033）；INDEX(parent_id) |
 | instance_group_members (V2, FR-165) | group_id(FK instance_group_nodes), instance_id(FK)；UNIQUE(group_id, instance_id)（实例-组织分组 M:N，一实例可属多组；删组只解绑、不删实例） |
@@ -1281,9 +1282,13 @@ ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布�
 > 对应 PRD FR-031~036、ADR-007/008。代理 + 多 Bukkit 子服的开服与运维。开发中。
 
 ### 13.1 角色与关系
-- 实例 `role`：`proxy`（BungeeCord/Velocity）、`backend`（Bukkit/Paper 子服）、`universal`（通用进程）。实例是独立原子单元。
+- 实例 `role` 分两类语义（FR-433）：
+  - **MC 群组服角色**：`proxy`（BungeeCord/Velocity）、`backend`（Bukkit/Paper 子服）——参与 proxy↔backend 拓扑、后端注册与玩家查询，是 `server_registrations` 的合法两端。
+  - **非群组服角色**：`universal`（通用进程）、`beacon`（配套服务实例，如 Beacon 控制面）——受 JM 生命周期管理，但不参与群组拓扑；`beacon` 另不适用 MC 探针与后端注册。
+  - 实例是独立原子单元。角色可在创建时指定，也可经 `PUT /instances/:id` 变更（FR-433，仅 `backend`/`proxy`/`universal`/`beacon` 四值，非法拒绝）；变更**不做级联**——原为 proxy 的注册关系保留。
 - **proxy ↔ backend 为 M:N**（`server_registrations`）：一个 backend 可注册进多个 proxy（共享大厅/小游戏）；每条注册带「代理内本地属性」alias/priority/forced_host/restricted。
 - **群组（Network）为非独占软标签**（`network_members` M:N）：仅供分组/筛选/批量操作，子服可属多群组；真实路由只由 `server_registrations` 驱动。
+- **MCP 侧同能力**（FR-434/435）：群组、拓扑、代理注册与实例分组均可经 MCP 工具维护，权限与实例分组同面（读 `instance.read`、写 `instance.write`）。
 
 ### 13.2 资源所有权（系统分配）
 - **工作目录**：系统在数据根 `var/servers` 下分配 `<name-slug>-<shortid>`（CP 分配并按相对路径登记，Worker 解析为绝对路径），用户不可输入，路径只读展示（取代 BUG-004 必填 UI，落位见 §11.1 / ADR-010）。

@@ -371,7 +371,7 @@
   - `nodeId` 节点 ID
   - `groupId` 用户组 ID（非平台管理员忽略，强制按可访问组过滤）
   - `status` 状态（`RUNNING` 等）
-  - `role` 角色（`backend`/`proxy`/`universal`）
+  - `role` 角色（`backend`/`proxy`/`universal`/`beacon`）
   - `networkId` 群组（Network 软标签）ID（FR-047）
   - `env` 环境维度（`dev`/`test`/`prod`，对应 `env:` 前缀标签，FR-047）
   - `tag` 单个自由标签精确匹配（FR-047）
@@ -442,7 +442,7 @@
 
 ### PUT /api/v1/instances/:id
 - **描述**: 更新实例配置
-- **关联 FR**: FR-005, FR-047, FR-079（资源限额）
+- **关联 FR**: FR-005, FR-047, FR-079（资源限额）, FR-433（角色）
 - **权限**: `instance.write`
 - **请求**（字段均可选，缺省/`null` 表示不变）:
   ```json
@@ -454,12 +454,14 @@
     "jdkId": 3,
     "envVars": { "TZ": "Asia/Shanghai" },
     "tags": ["env:prod", "survival"],
+    "role": "proxy",
     "cpuLimit": 2,
     "memLimitMb": 4096,
     "diskLimitMb": 0
   }
   ```
 - **说明**: `tags` 传数组（含空数组 `[]` 清空）覆盖标签；环境维度复用 `env:` 前缀（FR-047），无独立字段。`cpuLimit`/`memLimitMb`/`diskLimitMb` 为 docker 模式资源限额（FR-079），传值覆盖、缺省/`null` 不变；`0` 或负值会归一化为不限制。变更对实例下一次启动生效，仅 docker 模式生效；磁盘限额当前仅持久化展示，不强制限制 bind mount 工作目录。
+- **`role`（FR-433）**: 取值 `backend`/`proxy`/`universal`/`beacon`。用于纠正建实例时的角色误选——如 BungeeCord 代理被建成 `backend` 时，群组拓扑（查 `role='proxy'`）与代理注册都认不出它。**非法值返回 400**（与 `POST /instances` 的 grandfather 语义刻意不同：创建时未指定/非法静默回落 `universal` 以兼容旧调用，而更新是显式改角色，静默回落会让调用方误以为改成功）。**不做隐式级联**：把 `proxy` 改成其他角色时，该实例原有的 `server_registrations` 保留而非自动清理——与「删除 network 不触及注册关系」同口径，避免误删运维数据；如需清理请走 `DELETE /proxies/:id/registrations/:rid`。`beacon` 为配套服务实例角色（如 Beacon 控制面），属非群组服角色：不参与 proxy↔backend 拓扑、不适用 MC 探针与后端注册、不参与玩家查询。
 
 ### DELETE /api/v1/instances/:id
 - **描述**: 删除实例。运行中/启动中/停止中的实例由 CP 先同步停止再删（FR-310）：删除前经状态机合法转换（RUNNING/STARTING→STOPPING→STOPPED）同步调 Worker `StopInstance`（复用优雅停止链路，超时强杀进程树），停止失败中止删除并透传原因（记录保留可重试）；节点记录缺失、节点已离线或连接池无可用 Worker 时一律拒绝删除，避免 CP 记录消失而节点进程/目录成为孤儿，其中运行态无法停止返回 422 `INSTANCE_RUNNING`，其余清理路由失败返回 500 并携带明确原因。仅节点在线且 gRPC `RemoveInstance` 成功清理 Worker 注册、工作目录与派生索引后才删除 CP 记录；刚停止实例在优雅停止收敛窗口内对文件锁类清理失败有界重试。托管区（数据根 `var/servers`）外的历史手填目录与 FR-302 就地导入目录由 Worker/CP 双重 `SkipWorkDir` 保护，保留原目录但仍清理 Worker 注册后删除 CP 记录
@@ -3592,7 +3594,10 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
   - 压测模板（FR-398，`bot.read`/`bot.load`）：`loadtest_template_list`、`loadtest_template_get`、`loadtest_template_create`、`loadtest_template_update`、`loadtest_template_delete`
   - 运行编排（FR-398，`bot.read`/`bot.load`）：`loadtest_run_create`、`loadtest_run_list`、`loadtest_run_get`、`loadtest_node_capacity`、`loadtest_run_preflight`、`loadtest_run_start`、`loadtest_run_stop`、`loadtest_run_retry_failed`
   - 观测报告（FR-398，`bot.read`；指标类 `observability.read`）：`loadtest_run_bots`、`loadtest_run_failures`、`loadtest_run_events`、`loadtest_run_metrics`、`loadtest_run_report`
-- **FR-398/404 工具约定**：全部 `V1Allowed=false`（V1 Token 既不可见也不可调用），且不进 HTTP 契约投影（无对应 `/api/v1/agent/*` 端点）。`loadtest_run_create` 可选接收结构化 `scenario`，由同一服务链路解析、校验并冻结，不能绕过目标、执行节点 scope 或预检；省略时保持既有创建语义。运行类工具在目标实例之外逐一校验 executor 节点：启动方向（preflight/start/retry_failed）任一越界即整体拒绝；停止方向仍执行但在响应 `outOfScopeExecutorNodeIds` 中列出越界节点。`loadtest_run_preflight` 返回的 `planToken` 不透明、6 分钟 TTL，MCP 不解析/不重签/不缓存，仅原样回传给 `loadtest_run_start`；过期或容量世代变化由 service 中文错误引导重新预检。`bot_send_command` 成功语义严格限定为「已发送（`bot.chat` 调用成功）」（ADR-075）。危险操作 `bot_delete`/`loadtest_template_delete` 要求 `confirmBotName`/`confirmTemplateName` 精确等于真实名称。模板按平台级视角管理（持 `bot.load` 可管全部，ADR-080 附注）。
+  - 实例分组（FR-435，`instance.read`/`instance.write`）：`instance_group_tree`、`instance_group_members`、`instance_group_create`、`instance_group_update`、`instance_group_delete`、`instance_group_add_members`、`instance_group_remove_members`
+  - 群组服与拓扑（FR-434，`instance.read`/`instance.write`）：`network_list`、`network_get`、`network_create`、`network_update`、`network_delete`、`network_add_members`、`network_remove_member`、`topology_get`、`registration_list`、`registration_create`、`registration_delete`
+- **FR-398/404 工具约定**：全部 `V1Allowed=false`（V1 Token 既不可见也不可调用），且不进 HTTP 契约投影（无对应 `/api/v1/agent/*` 端点）。`loadtest_run_create` 可选接收结构化 `scenario`，由同一服务链路解析、校验并冻结，不能绕过目标、执行节点 scope 或预检；省略时保持既有创建语义。运行类工具在目标实例之外逐一校验 executor 节点：启动方向（preflight/start/retry_failed）任一越界即整体拒绝；停止方向仍执行但在响应 `outOfScopeExecutorNodeIds` 中列出越界节点。`loadtest_run_preflight` 返回的 `planToken` 不透明、6 分钟 TTL，MCP 不解析/不重签/不缓存，仅原样回传给 `loadtest_run_start`；过期或容量世代变化由 service 中文错误引导重新预检。`bot_send_command` 成功语义严格限定为「已发送（`bot.chat` 调用成功）」（ADR-075）。危险操作 `bot_delete`/`loadtest_template_delete`/`network_delete` 要求 `confirmBotName`/`confirmTemplateName`/`confirmName` 精确等于真实名称。模板按平台级视角管理（持 `bot.load` 可管全部，ADR-080 附注）。
+- **FR-433/434/435 工具约定**：群组服、实例分组与角色维护类工具同样 `V1Allowed=false`、不进 HTTP 契约投影，权限与实例分组同面（读 `instance.read`、写 `instance.write`）——这些操作改的是实例间归属与代理注册关系，不是实例内容，故不占用 configure/content 等更细能力。`instance_update_config` 的 `role` 参数取值 `backend`/`proxy`/`universal`/`beacon`，非法值在参数校验阶段即以中文错误拒绝（早于服务调用）。`network_delete` 需 `confirmName` 与目标群组名精确相符；`registration_create` 要求目标为 `role=proxy`、后端为 `role=backend`，注册成功会同步改写代理的配置文件。`topology_get` 一次返回全量代理及其注册关系 + 各群组成员归属，替代按代理逐个查询的 N+1；其 `networks[].memberInstanceIds` 只含与代理有注册关系的成员（拓扑图用于分层布局，非群组全量成员）。
 - **tools/list**：按当前 Token 的能力与潜在可用 scope **动态裁剪**（V1 兼容解释器；V2 capability）。空能力 V2 仅见 `agent_whoami`。
 - **tools/call**：无论是否出现在 list，均做最终授权；可信目标由 CP 解析；生命周期写操作使用 expected-node 派发。策略拒绝 → HTTP **200** + MCP `result.isError=true` + 中文 message（**不得 5xx**）。
 - **并发/超时**（配置 `mcp.*`，默认空闲 30m / 绝对 24h / 全局 32 / 每 Token 4）：超限 HTTP **429**，中文 `message`
