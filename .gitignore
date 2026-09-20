@@ -7,6 +7,9 @@
 # Go
 /bin/
 /dist/
+# 裸 go build 默认落根目录的 CP/Worker 二进制（正式产物在 bin/ 与 dist/）
+/control-plane
+/worker
 *.exe
 *.exe~
 *.dll
