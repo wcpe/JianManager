@@ -76,6 +76,35 @@ func TestSessionManager_PerTokenLimit(t *testing.T) {
 	assert.Contains(t, err.Error(), "Token")
 }
 
+// TestSessionManager_UnlimitedByDefault 验证并发上限 0 = 不限制是默认且生效的。
+//
+// 背景：连接方（MCP 客户端）重连时不主动关旧会话，若并发上限为正数会被耗尽，
+// 之后连 initialize 都建不了新会话——表现为永久 429 SESSION_LIMIT，只能重启控制面恢复。
+// 故默认不限制；需要限流的环境显式设正值（见 TestSessionManager_GlobalLimit / PerTokenLimit）。
+func TestSessionManager_UnlimitedByDefault(t *testing.T) {
+	cfg := DefaultConfig()
+	require.Zero(t, cfg.MaxGlobalSessions, "默认全局上限应为 0=不限制")
+	require.Zero(t, cfg.MaxSessionsPerToken, "默认每 Token 上限应为 0=不限制")
+	// Normalize 不得把 0 回落到正数（否则「不限制」无法表达）。
+	norm := Config{}.Normalize()
+	require.Zero(t, norm.MaxGlobalSessions, "Normalize 应保留 0=不限制")
+	require.Zero(t, norm.MaxSessionsPerToken, "Normalize 应保留 0=不限制")
+
+	m := NewSessionManager(cfg)
+	// 同一 Token 连开 20 个会话都不应被拒。
+	p := testPrincipal(9, "busy")
+	for i := 0; i < 20; i++ {
+		_, err := m.Create(CreateParams{Principal: p, Transport: TransportStreamableHTTP})
+		require.NoError(t, err, "第 %d 个会话不应被上限拒绝", i+1)
+	}
+	// 多个不同 Token 交叉创建亦不受全局上限约束。
+	for i := 0; i < 20; i++ {
+		_, err := m.Create(CreateParams{Principal: testPrincipal(uint(100+i), "x"), Transport: TransportStreamableHTTP})
+		require.NoError(t, err, "第 %d 个跨 Token 会话不应被上限拒绝", i+1)
+	}
+	assert.Len(t, m.List(), 40)
+}
+
 func TestSessionManager_Kick(t *testing.T) {
 	m := NewSessionManager(DefaultConfig())
 	s, err := m.Create(CreateParams{Principal: testPrincipal(1, "a"), Transport: TransportStreamableHTTP})

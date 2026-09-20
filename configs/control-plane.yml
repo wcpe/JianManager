@@ -75,8 +75,8 @@ client_dist:
 mcp:
   idle_timeout: 30m            # 空闲超时
   absolute_timeout: 24h        # 绝对超时
-  max_global_sessions: 32      # 全局并发会话上限
-  max_sessions_per_token: 4    # 每 Token 并发上限
+  max_global_sessions: 0       # 全局并发会话上限；0=不限制（默认）
+  max_sessions_per_token: 0    # 每 Token 并发上限；0=不限制（默认）
 
 # 出站网络代理（FR-174，见 ADR-037；可视化配置 + 节点下发见 FR-185 / ADR-043）。CP 所有出站下载
 #（自更新 feed/二进制、服务端 jar、客户端制品入库等）经此代理。url 留空=直连（仍尊重

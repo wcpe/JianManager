@@ -52,6 +52,22 @@ func (h *Handler) RegisterAdminRoutes(rg *gin.RouterGroup) {
 	g.DELETE("/:id", h.AdminKickSession)
 }
 
+// writeSessionGone 回应「客户端持有的会话已不存在」。
+//
+// 必须是 404 —— MCP Streamable HTTP 规范（2025-06-18, Session Management）规定：
+// 服务器终止会话后，对携带该会话 ID 的请求 MUST 回 404；客户端收到 404 后 MUST
+// 重新发 InitializeRequest 开新会话。
+//
+// 注意：曾试过改为 401 以「提示客户端重新鉴权」，但这是错的——401 在本协议里
+// 属鉴权层面，会让符合规范的客户端去走 OAuth 重认证而非重新 initialize；
+// 且实测对不发 initialize 的客户端两种码都无效。故保持规范要求的 404。
+func writeSessionGone(c *gin.Context) {
+	c.JSON(http.StatusNotFound, gin.H{
+		"error":   "SESSION_GONE",
+		"message": "MCP 会话不存在或已关闭，请重新 initialize 建立新会话",
+	})
+}
+
 // ---- Streamable HTTP ----
 
 // HandleStreamablePOST POST /api/v1/mcp — initialize 或带 session 的 JSON-RPC。
@@ -119,7 +135,7 @@ func (h *Handler) HandleStreamablePOST(c *gin.Context) {
 	}
 	s, err := h.sessions.Get(sessionID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "MCP 会话不存在或已关闭"})
+		writeSessionGone(c)
 		return
 	}
 	// 会话须归属当前 Token
@@ -152,7 +168,7 @@ func (h *Handler) HandleStreamableGET(c *gin.Context) {
 	}
 	s, err := h.sessions.Get(sessionID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "MCP 会话不存在或已关闭"})
+		writeSessionGone(c)
 		return
 	}
 	p := getPrincipal(c)
@@ -178,7 +194,7 @@ func (h *Handler) HandleSessionDELETE(c *gin.Context) {
 	}
 	s, err := h.sessions.Get(sessionID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "MCP 会话不存在或已关闭"})
+		writeSessionGone(c)
 		return
 	}
 	p := getPrincipal(c)
@@ -285,7 +301,7 @@ func (h *Handler) HandleSSEMessage(c *gin.Context) {
 	}
 	s, err := h.sessions.Get(sessionID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "MCP 会话不存在或已关闭"})
+		writeSessionGone(c)
 		return
 	}
 	if s.TokenID != p.TokenID {
