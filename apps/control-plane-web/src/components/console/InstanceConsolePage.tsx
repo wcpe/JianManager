@@ -178,8 +178,6 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   }, [instance])
 
   const node = nodes.find((n) => n.id === instance?.nodeId)
-  // 在线数取值与可用性（FR-446/447）：探针 server-state 为权威，其次实时直探（playersAvailable）。
-  // playersAvailable=false 时不得回退成 0——那会把「不可用」误显示为「0 人在线」。
   const serverStatePlayers = serverState?.state?.server?.onlinePlayers
   const serverStateMax = serverState?.state?.server?.maxPlayers
   const playersAvailable = serverStatePlayers != null || (metrics?.playersAvailable ?? false)
@@ -187,10 +185,12 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const maxPlayers = serverStateMax ?? (metrics?.maxPlayersAvailable ? metrics!.maxPlayers : 0)
   const maxPlayersAvailable = serverStateMax != null || (metrics?.maxPlayersAvailable ?? false)
   const richMetricsAvailable = metrics?.probeAvailable ?? false
+  // 探针缺失芯片只在 MC 世界语义实例出现——非 MC 实例本不该有 ServerProbe，提示只会误导。
+  const showProbeChip = profile.mcSemantics && !richMetricsAvailable
   // 关注事项走 i18n（修硬编码中文）：告警文案直接进英文界面是验收硬伤。
   const watchItems = useMemo(
-    () => buildWatchItems({ status: instance?.status, metrics, probeConnected: serverState?.connected, t }),
-    [instance?.status, metrics, serverState?.connected, t],
+    () => buildWatchItems({ status: instance?.status, metrics, probeConnected: serverState?.connected, mcSemantics: profile.mcSemantics, t }),
+    [instance?.status, metrics, serverState?.connected, profile.mcSemantics, t],
   )
 
   // ---- 以下 hooks 必须全部位于 `if (!instance)` 早退之前（hooks 顺序不变量）----
@@ -421,10 +421,11 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
 
           {metricsBarOpen && (
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-              {/* 方案 B 分段状态条（FR-412/446/447）：探针深度指标（TPS/MSPT）仅在探针可用时显示真实值，
-                  否则显「不可用」；在线数由探针 → SLP → Query 任一来源提供，三源皆无亦显「不可用」，
-                  不再以 0 冒充「0 人在线」。来源由右侧来源芯片标注（探针/SLP/Query）。 */}
-              {richMetricsAvailable ? (
+              {/* 方案 B 分段状态条（FR-412/446/447/448）：TPS/MSPT 是世界语义专属字段（mcSemantics），
+                  仅在 MC 实例出现；探针可用显真实值，否则显「不可用」；在线数由探针 → SLP → Query
+                  任一来源提供，三源皆无亦显「不可用」——不再以 0 冒充「0 人在线」；
+                  来源由右侧来源芯片标注（探针/SLP/Query）。 */}
+              {profile.mcSemantics && (richMetricsAvailable ? (
                 <>
                   <MetricSegment label={t('serverConsole.tps')} value={formatNumber(metrics?.tps, 1)} tone={metrics?.tps != null && metrics.tps < 18 ? 'warn' : undefined} dot />
                   <MetricDivider />
@@ -436,7 +437,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                   <MetricSegment label={t('serverConsole.tps')} value={t('metrics.unavailable')} />
                   <MetricDivider />
                 </>
-              )}
+              ))}
               <MetricSegment
                 label={t('serverConsole.online')}
                 value={playersAvailable ? `${online}/${maxPlayersAvailable ? maxPlayers : '—'}` : t('metrics.unavailable')}
@@ -449,7 +450,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
               <MetricSegment label={t('serverConsole.diskNode')} value={`${Math.round(node?.diskUsage ?? 0)}%`} tone={(node?.diskUsage ?? 0) > 85 ? 'warn' : undefined} />
               <span className="ml-auto flex items-center gap-1.5">
                 <MetricSourceChips metrics={metrics ?? {}} />
-                {!richMetricsAvailable && <ProbeMissingChip />}
+                {showProbeChip && <ProbeMissingChip />}
               </span>
               {/* 元信息在窄屏没进标题行，补一条 pill 兜住（md 以下） */}
               <span className="rounded-full border bg-muted/70 px-2 py-0.5 text-[11px] text-muted-foreground md:hidden">
@@ -901,20 +902,24 @@ function buildWatchItems({
   status,
   metrics,
   probeConnected,
+  mcSemantics,
   t,
 }: {
   status?: string
   metrics?: { tps: number; msptMillis: number; cpuPercent: number; probeAvailable: boolean }
   probeConnected?: boolean
+  /** 是否 MC 世界语义（FR-448）：TPS/MSPT 与探针相关告警只对世界语义实例成立。 */
+  mcSemantics: boolean
   t: Translate
 }) {
   const items: string[] = []
   // 走 i18n（修硬编码中文）：这些文案会出现在英文界面的「动态与告警」时间线里。
   if (status === 'CRASHED') items.push(t('serverConsole.watch.crashed'))
   if (status === 'STARTING' || status === 'STOPPING') items.push(t('serverConsole.watch.transition'))
-  if (metrics?.probeAvailable && metrics.tps < 18) items.push(t('serverConsole.watch.tpsLow'))
-  if (metrics?.probeAvailable && metrics.msptMillis > 50) items.push(t('serverConsole.watch.msptHigh'))
+  // TPS/MSPT 与探针在线是世界语义专属（FR-448）：proxy/二进制/beacon 不该出现这些 MC 告警。
+  if (mcSemantics && metrics?.probeAvailable && metrics.tps < 18) items.push(t('serverConsole.watch.tpsLow'))
+  if (mcSemantics && metrics?.probeAvailable && metrics.msptMillis > 50) items.push(t('serverConsole.watch.msptHigh'))
   if (metrics?.cpuPercent != null && metrics.cpuPercent > 85) items.push(t('serverConsole.watch.cpuHigh'))
-  if (!probeConnected) items.push(t('serverConsole.watch.probeOffline'))
+  if (mcSemantics && !probeConnected) items.push(t('serverConsole.watch.probeOffline'))
   return items
 }
