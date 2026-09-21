@@ -16,6 +16,12 @@
 
 ## 索引（最近新增）
 
+- [ADR-093](093-process-lifecycle-resilience.md) 进程生命周期韧性与孤儿治理（FR-455/456/459：防误杀、孤儿周期兜底、状态真源收敛、重推多源化）
+- [ADR-092](092-config-surface-and-direct-probe.md) 实例配置源明面化与 MC 直探能力（FR-446/447/451：SLP+Query 直探、配置项内联/文件引用二态）
+- [ADR-091](091-instance-capability-profile.md) 实例能力画像与多形态详情界面（FR-445/448/449/450/452/453：(type,role) 声明式画像驱动 Tab 显隐）
+- [ADR-090](090-binary-provision-and-beacon-sync.md) 通用二进制搭建与 Beacon 可选协同（FR-441~444）
+- [ADR-089](089-configurable-permission-tree-and-six-domain-nav.md) 可配置权限树与六域导航 IA（FR-431/432）
+- [ADR-088](088-client-dist-ia-merge-ops-page.md) 客户端分发信息架构合并（FR-430）
 - [ADR-087](087-console-immersive-visible-controls.md) 沉浸控制台采用可见控制优先的工作台（取代未入库的 tmux 前缀键提案）
 - [ADR-085](085-local-serverprobe-upload-source.md) ServerProbe 本地上传来源（FR-411，修订 ADR-083 来源范围）
 - [ADR-078](078-explorer-cross-window-clipboard-dnd.md) 资源管理器跨窗剪贴板与拖放总线（FR-377）

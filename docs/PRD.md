@@ -108,6 +108,25 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-430（客户端分发 IA 合并：两页 + 7 Tab + 旧路由重定向 + 守卫 + i18n）→ `docs/specs/client-dist-ia-merge/spec.md` + ADR-088。代码在分支 HEAD；✅ 已交付@v0.22.0
 - FR-431~432（控制台六域导航 IA + 可配置权限树）→ `docs/specs/nav-ia-role-model/spec.md` + ADR-089。**线上验收通过**；UI 原型 gitignore 不入库。✅ 已交付@v0.22.0
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
+- **FR-445~470（生产就绪查漏补缺批 2026-09-21）**：P0 重启韧性/孤儿进程 + P1 集群运维与观测 + 实例详情多形态适配与 MC 直探 + P2 增强。**依赖序**：`FR-445→448/449/450`、`FR-445→452→453`、`FR-446→447`、`FR-451→446/458`、`FR-455/456/462→459`（其余相互独立）。**实现分阶段**：批 1 并行为 P0 韧性（455/456）+ P1 运维（457/458/459/460）+ P1 观测（461/462）+ 界面采集（445~454）；批 2 依赖批 1（453、459）；P2（463~470）最后。ADR：091（能力画像）/ 092（配置源与直探）/ 093（进程韧性）。
+  - FR-445 实例能力画像抽象（type × role capabilities）→ `docs/specs/instance-capability-profile/spec.md` + ADR-091
+  - FR-446~447 MC 直探（SLP + Query）与采集优先级降级编排 → `docs/specs/mc-direct-probe/spec.md` + ADR-092（依赖 FR-451）
+  - FR-448~450 详情界面多形态适配（backend / proxy / beacon / generic）→ `docs/specs/instance-detail-adaptation/spec.md`（依赖 FR-445）
+  - FR-451 实例配置源明面化（启动参数 + server.properties，可引用文件）→ `docs/specs/instance-config-surface/spec.md` + ADR-092
+  - FR-452~453 实例列表树表（可切换分组维度）与拓扑页完整网络视图 → `docs/specs/instance-list-and-topology/spec.md`（依赖 FR-445）
+  - FR-454 beacon/binary 探针误配修正 → **fix，免 spec**（记 CHANGELOG）
+  - FR-455~456 重启韧性加固与孤儿进程周期兜底 → `docs/specs/restart-resilience/spec.md` + ADR-093（**P0 上线阻塞**）
+  - FR-457~458 集群级滚动/分批/灰度编排与配置批量下发收敛 → `docs/specs/cluster-ops-orchestration/spec.md`
+  - FR-459 实例健康巡检与自愈 → `docs/specs/instance-health-selfheal/spec.md`（依赖 FR-455/456/462）
+  - FR-460 失效 bot 自动回收与补足 → `docs/specs/bot-reclaim/spec.md`
+  - FR-461~462 集群健康总览墙与异常自动检测（动态基线）→ `docs/specs/cluster-observability/spec.md`
+  - FR-463~464 SLO/可用性统计与容量趋势预测 → `docs/specs/capacity-and-slo/spec.md`
+  - FR-465 性能归因（含 GC 采集）→ `docs/specs/performance-attribution/spec.md`
+  - FR-466 服务器快照与一键回滚 → `docs/specs/instance-snapshot-rollback/spec.md`
+  - FR-467 运行期配额强制 → `docs/specs/runtime-quota-enforcement/spec.md`
+  - FR-468 二进制/Beacon 版本管理与升级 → `docs/specs/binary-version-management/spec.md`
+  - FR-469 跨实例排行与玩家在线趋势 → `docs/specs/cross-instance-ranking/spec.md`
+  - FR-470 崩溃诊断增强 → `docs/specs/crash-diagnostics-enhancement/spec.md`
 
 > **验收档位图例**：`·全真栈验收`=真 UI+真 CP/Worker+真外部进程端到端；`·四档验收`=单测/集测/单机截图/真浏览器截图（后端 mock 基底）；`·验收经 FR-XXX 覆盖`=能力面被后继 FR 重做/包含并在其验收中验证（映射依据 `.tmp/acceptance/UNMARKED-66-RECONCILE.md`）；**无后缀=交付未验收（真缺口，当前 1 个：099 需真客户端 OTA 场景）**。证据台账 `.tmp/acceptance/ACCEPTANCE-LEDGER.md`。
 
@@ -542,6 +561,32 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-442 | 内置 Beacon 快速搭建预设（feat，依赖 FR-441，见 ADR-090）：在 `coreType=binary` 之上提供 Beacon 预设——制品来源优先级为「制品库已有版本 > Beacon GitHub Releases」，默认启动命令 `./beacon-1.1.0-linux-amd64`、默认角色 `beacon`（FR-433）、默认 JVM 无关（Go 二进制）。一键搭建后管理台可完成首次鉴权初始化。Beacon 与本平台为**可选协同**关系：未部署 Beacon 时本平台全部能力不受影响。**真机验收通过**：`coreType=beacon` 一键搭建产出 `role=beacon`、`jdkId=0`、`startCommand=./beacon-1.1.0-linux-amd64`（由落盘名派生）的实例；来源解析命中 GitHub Releases（E2E 制品库为空，走「制品库 > GitHub」的第二档，`source=url` 取件 30593289 字节落盘可执行）；实例启动后 Beacon 完成真实初始化（生成 `beacon.db`/`config.yml`/`secrets/`），配独立端口后**持续运行且 HTTP 200**，管理台 `POST /admin/v1/auth/login` 登录成功（首次鉴权初始化闭环） | P1 | 🔨 开发中·真机验收通过（待发版） |
 | FR-443 | 向 Beacon 推送拓扑变更（feat，依赖 Beacon FR-222，见 ADR-090）：实例创建/删除/改归属（name/role/tags）时，若配置了 Beacon 协同端点则推送增量事件，使 Beacon 侧 server 归属与默认入口自动对齐，免去人工双写。**兼容非依赖**：未配置端点即整体跳过；推送失败只写审计与告警、**绝不阻塞或回滚本机操作**；投递尽力而为不做重试队列。实例启停不推送（Beacon 在线状态由 agent 心跳自维护）。**真机验收通过**：正向拉通 mock Beacon（收包含 `X-Beacon-Token` 与 `namespace:prod`，`create`/`ownership` 事件按变更触发，审计落 `instance.beacon_push_ok`）；端点不可达时本机操作**零阻塞**（改名 39ms 完成）且写失败审计；实例启停确认不推送 | P2 | 🔨 开发中·真机验收通过（待发版） |
 | FR-444 | 从 Beacon 拉取拓扑并映射为分组树（feat，见 ADR-090）：读取 Beacon 的区服结构（BC 集群 → 大区 → 小区）与 server 归属，映射为 JianManager 实例分组树（FR-165）并为实例补 `region:`/`zone:`/`role:` 标签（FR-440）。首次拉取为手动触发，避免自动建树与人工分组冲突；Beacon 不可达时返回明确错误且**不改动本地任何数据**。**真机验收通过**：空树 → 拉取创建 4 个分组（BC 集群→大区→小区 三层层级正确落库），本地不存在的 server 被跳过并列 `skippedServers`；二次拉取幂等（`createdGroups=0`）；审计落 `instance.beacon_pull_ok`；不可达时本地数据零改动 | P2 | 🔨 开发中·真机验收通过（待发版） |
+| FR-445 | 实例能力画像抽象（feat，见 ADR-091）：实例按「类型 × 角色」声明自身能力画像（`capabilities`：有哪些 Tab、依赖探针否、是否 MC 语义），前端据画像显隐内容而非 `if role==='proxy'` 硬编码；新增产品类型只需注册描述符。**验收**：新增一种角色/类型，详情页自动按其声明显隐 Tab，前端零硬编码改动；`generic`/`beacon`/`backend`/`proxy` 四种画像各自正确 | P1 | 📋 计划 |
+| FR-446 | MC 直探能力（SLP + Query）（feat，依赖 FR-451，见 ADR-092）：新增 Minecraft **Server List Ping**（零配置，取 MOTD/版本/在线人数/最大人数/favicon）与 **GameSpy4 Query**（需开 `enable-query`，取实名玩家名单/插件列表/地图名）协议客户端，不依赖探针。**验收**：对任意在跑 MC 服不装探针即可拿 MOTD/版本/人数；开启 query 后可拿实名玩家名单；明文 http 拒绝、超时可配 | P1 | 📋 计划 |
+| FR-447 | 采集优先级与降级编排（feat，依赖 FR-446）：统一采集编排——**有探针走探针 → 无探针走直探 → 都没有显示"不可用"**（不报错、不伪装 `-1`）；同一指标多源时以探针为准。**验收**：同一实例三态（探针+直探 / 仅直探 / 都无）下详情页均正确呈现，无探针不留占位符垃圾值 | P1 | 📋 计划 |
+| FR-448 | 详情界面按能力画像适配（feat，依赖 FR-445）：详情页按 role × type × 探针有无 三轴显隐 Tab 与内容；隐藏 MC 专有 Tab（世界/区块/TPS/插件）对非 MC 实例。**验收**：backend / proxy / beacon / generic 四种实例打开详情页，Tab 与内容各不相同且均合理 | P1 | 📋 计划 |
+| FR-449 | BC（proxy）专用界面（feat，依赖 FR-445/447）：BC 实例专属视图——子服列表与各自状态、跨服玩家分布与全网总数、BC 自身运行指标、BC 配置管理（config.yml 关键项）。**验收**：BC 实例可见上述四块，且与已有拓扑/注册关系数据一致、不重复维护 | P2 | 📋 计划 |
+| FR-450 | 二进制 / beacon 专用界面（feat，依赖 FR-445）：非 MC 实例专属视图——进程运行指标（CPU/内存/线程/句柄/时长/重启次数）、端口与主动健康检查（HTTP GET/TCP 探活）、配置文件管理、启动命令/参数编辑；**保留基础文件目录管理与 CPU 等基础监控**；抽象到可适配更多产品。**验收**：beacon 与通用二进制实例均呈现该视图且无 MC 专有 Tab | P1 | 📋 计划 |
+| FR-451 | 实例配置源明面化（feat，见 ADR-092）：实例启动参数（startCommand/JVM 参数）与 `server.properties` 关键项在详情页**明面可编辑**，并支持**直接引用外部文件**（内联值 vs 文件引用二选一）；不再藏于犄角旮旯。**验收**：可在详情页直接改启动参数与关键配置项并持久化；可切换为引用文件模式且生效 | P1 | 📋 计划 |
+| FR-452 | 实例列表树表 + 可切换分组维度（feat，依赖 FR-445）：实例列表由平铺卡片改为**多级可折叠树表**，分组维度**可切换**（标签 region/zone 默认 / 实例分组树 / 网络 / 角色 / 类型 / 节点 / 不分组）；无分组信息的实例（bc/beacon/独立服务）自然落「未分组」。**验收**：64 台一屏可管、点击分组头折叠展开、切换维度即时重排、未分组与二进制实例正确归位 | P1 | 📋 计划 |
+| FR-453 | 拓扑页重做：完整网络视图（feat，依赖 FR-452）：拓扑由「仅已注册关系」改为**完整网络视图**（含未注册实例与配套服务），层级从所选分组维度推导（默认标签 region/zone），节点带健康着色与负载标签。**验收**：全部实例上拓扑（不再只 12 台）、层级正确、健康/负载可见、布局均衡 | P1 | 📋 计划 |
+| FR-454 | 修正 beacon/binary 探针误配（fix，缺陷修复 FR-441/442）：binary/beacon 实例仍被分配 `ProbePort`，心跳每拍对它们抓 `/metrics` 必失败；`probe_update` 仅排除 `proxy`、未排除 beacon/binary，可对其推送无效 Bukkit jar。现两处补排斥；并归正线上 `beacon` 实例 `type`（`minecraft_java`→`generic`）。**验收**：binary/beacon 不再分配探针端口、心跳不再抓取、`probe_update` 对其返回明确拒绝 | P1 | 📋 计划 |
+| FR-455 | 重启韧性加固（fix/feat，缺陷修复 FR-325/436 同源，见 ADR-093）：①接管重试仅 3 次（约 7s）失败即 `reapOrphanWrapper` 强杀 wrapper+Java，会**误杀本可接管的健康服务器**——改为更长退避 + 存活复核（cmdline 校验）后才处置；②重推仅隧道 `n==1` 触发，CP 重启后可能漏推——补多触发点与幂等；③正向对账以心跳清单为唯一真源导致状态误判——收敛真源。**验收**：真机重启 CP/Worker 后已运行服务器**零误杀、状态不误判、重推不漏**；FR-436 的 wrapper 死/Java 活分支**真机验证通过** | P0 | 📋 计划 |
+| FR-456 | 孤儿进程周期检测与兜底（feat，依赖 FR-455，见 ADR-093）：现有清理只发生在 Worker 启动时——`wrapper` 运行期死亡、`direct` 硬崩、`docker` 未恢复三条路径产生的孤儿/状态错位**无周期兜底**。新增运行期周期扫描 + 反向对账覆盖 direct/docker。**验收**：运行期制造 wrapper 死/Java 活、direct 孤儿、docker 残留，均在有限周期内被识别并按策略处置（不静默、不误杀） | P0 | 📋 计划 |
+| FR-457 | 集群级滚动/分批/灰度运维编排（feat，增强 FR-058/139）：`instance_batch` 现为无状态并发扇出（固定 16 并发、一次性、无分批/暂停/失败即停），无法安全滚动重启。新增**分批/间隔/失败即停/暂停继续/按比例灰度**语义与进度、取消。**验收**：可对 60+ 台执行「每批 5 台、批间隔 N 秒、失败即停」的滚动重启；有进度与取消 | P1 | 📋 计划 |
+| FR-458 | 配置批量下发与跨实例收敛（feat，增强 FR-031）：配置链路现全单实例，跨实例只有只读端口冲突检查。新增「配置模板推送到 N 台」「跨实例配置漂移检测」「一键收敛到基线」。**验收**：可把一份 `server.properties` 推送到选定分组并在漂移时检出与收敛 | P1 | 📋 计划 |
+| FR-459 | 实例健康巡检与自愈（feat，依赖 FR-455/456/462）：现仅「进程退出后按退避自动重启」，无假死检测（探针挂但进程在不会重启）、无集群级巡检。新增存活/响应巡检 + 受控自愈策略（自动重启卡死实例、崩溃熔断）。**验收**：模拟假死实例被巡检识别并按策略自动处置；策略可配、动作写审计 | P1 | 📋 计划 |
+| FR-460 | 失效 bot 自动回收与补足（feat，增强 FR-398）：`workerEpoch` 不匹配的旧 bot（`desiredState=running`/`status=error`）占容量不产生连接，平台无回收能力（遗留 18 个僵死 bot）。新增自动回收 + 容量自动补足回目标数。**验收**：分片/CP 重启后僵死 bot 有限周期内被清、容量自动补回目标；回收动作写审计 | P1 | 📋 计划 |
+| FR-461 | 集群健康总览墙（feat，增强 FR-402）：平台总览现只给计数 + TopN≤5，60+ 台无法一屏看谁异常。新增**逐台健康矩阵/热力墙** + 排序 + 一键定位。**验收**：60+ 台一屏呈现逐台健康态并可下钻到单台 | P1 | 📋 计划 |
+| FR-462 | 异常自动检测（动态基线）（feat，增强 FR-011/085）：告警现仅静态阈值（且仅 node cpu/mem/disk）+ 节点离线。新增动态基线（EWMA/同环比）、突降突升、饱和度检测，并覆盖实例级指标。**验收**：注入缓慢劣化/突降，规则在无手工阈值下触发且噪声可控 | P1 | 📋 计划 |
+| FR-463 | SLO / 可用性统计（feat，增强 FR-011/220）：无 uptime 达成率 / MTTR / MTBF / 误差预算。新增按窗口的可用性与可靠性统计与展示。**验收**：可查看指定窗口内实例/平台的可用率、故障次数、平均恢复时长 | P2 | 📋 计划 |
+| FR-464 | 容量规划 / 趋势预测（feat，增强 FR-013/221）：无法回答"磁盘/内存按当前增速还剩多久"。新增时序外推与容量趋势告警。**验收**：给出关键资源的耗尽预测时间与置信区间 | P2 | 📋 计划 |
+| FR-465 | 性能归因（GC 采集）（feat，增强 FR-060）：原始指标齐（TPS/MSPT/heap/threads/世界）但无归因；探针已暴露 `serverprobe_gc_*` 却未采集。先补 GC 采集入库，再做归因（TPS 低是 GC/区块/实体）。**验收**：GC 次数/耗时入时序；给出 TPS 劣化的主要贡献因子 | P2 | 📋 计划 |
+| FR-466 | 服务器快照 / 一键回滚（feat，增强 FR-013/056）：仅有备份（需停服、链式回放）与文件/配置版本回滚，无整机快照 + 时间点回滚。新增快照与一键回滚闭环（回滚前自动建快照）。**验收**：可对实例打快照并从快照一键回滚，过程可追溯 | P2 | 📋 计划 |
+| FR-467 | 运行期配额强制（feat，增强 FR-078/079/317）：组配额仅在 Create 校验、运行期不强制；Docker 资源限额仅 docker 模式生效。新增运行期 CPU/内存/磁盘配额强制与超限处置。**验收**：超限实例被识别并按策略处置（告警/限流/停止），非 docker 模式亦生效 | P2 | 📋 计划 |
+| FR-468 | 二进制 / Beacon 版本管理与升级（feat，增强 FR-441/442）：二进制/Beacon 重建只重取件、无版本比对/回滚/升级。新增二进制制品版本管理与受控升级（可回滚）。**验收**：可查看当前版本、升到指定版本、并回滚到上一版本 | P2 | 📋 计划 |
+| FR-469 | 跨实例排行 + 玩家在线趋势（feat，增强 FR-340/054）：跨实例对比仅限节点内前 12、单指标；无玩家在线趋势分析。新增跨节点/跨实例全局排行与在线趋势/时段分析。**验收**：可按 TPS/MSPT/CPU/内存/在线排序全量实例；给出在线趋势与时段分布 | P2 | 📋 计划 |
+| FR-470 | 崩溃诊断增强（feat，增强 FR-313/407）：崩溃仅有退出码+尾 200 行快照，无堆栈解析/同类聚合/OOM 关联。新增堆栈根因归类与崩溃趋势聚合。**验收**：连续崩溃被归类聚合、给出根因线索（OOM/异常类） | P2 | 📋 计划 |
 ### 范围外（后续版本，暂不纳入 V1）
 
 | 编号 | 需求 | 预计版本 |
