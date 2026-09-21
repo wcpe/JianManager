@@ -28,6 +28,24 @@ const (
 	AlertTriggerPlayerEvent = "player_event"
 	// AlertTriggerBackupFailed 备份失败。
 	AlertTriggerBackupFailed = "backup_failed"
+	// AlertTriggerBaseline 动态基线偏离（FR-462）：EWMA / 同环比 / 突升突降，无需人工死阈值。
+	AlertTriggerBaseline = "baseline"
+	// AlertTriggerSaturation 饱和度（FR-462）：used/max 逼近上限（disk/mem/heap）持续触发。
+	AlertTriggerSaturation = "saturation"
+)
+
+// 动态基线（FR-462）配置枚举。
+const (
+	// 基线方法：ewma 指数加权残差偏离；roc 变化率（突升突降）；mom 环比；yoy 同比。
+	BaselineMethodEWMA = "ewma"
+	BaselineMethodROC  = "roc"
+	BaselineMethodMoM  = "mom"
+	BaselineMethodYoY  = "yoy"
+
+	// 偏离方向过滤。
+	BaselineDirectionUp   = "up"
+	BaselineDirectionDown = "down"
+	BaselineDirectionBoth = "both"
 )
 
 // 通知通道类型（FR-085）。在通用 webhook 之外扩展主流 IM / 邮件 / 站内。
@@ -76,7 +94,7 @@ type AlertRule struct {
 	ID   uint   `gorm:"primaryKey" json:"id"`
 	UUID string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
 	Name string `gorm:"type:varchar(128);not null" json:"name"`
-	// TriggerType 触发类型（FR-085）：metric|instance_crash|node_offline|log_keyword|player_event|backup_failed。
+	// TriggerType 触发类型（FR-085 + FR-462）：metric|instance_crash|node_offline|log_keyword|player_event|backup_failed|baseline|saturation。
 	// 为兼容 FR-011 存量规则，空值按 metric 处理。
 	TriggerType string `gorm:"type:varchar(32);default:metric" json:"triggerType"`
 	// Level 告警级别（FR-085）：info|warn|critical。空值按 warn 处理。
@@ -85,10 +103,26 @@ type AlertRule struct {
 	TargetID   *uint  `json:"targetId"`                                    // nil 表示全局
 
 	// ── metric 触发专用（FR-011）──
-	Metric      string  `gorm:"type:varchar(64)" json:"metric"`  // cpu, memory, disk
+	// Metric 指标键。node 目标兼容 cpu/memory/disk 别名，亦可用 node_cpu_pct 等标准键；
+	// instance 目标用 inst_tps / inst_players_online / inst_heap_used 等（FR-462 补齐实例级评估）。
+	Metric      string  `gorm:"type:varchar(64)" json:"metric"`
 	Operator    string  `gorm:"type:varchar(4)" json:"operator"` // >, <, >=, <=, ==
 	Threshold   float64 `json:"threshold"`
 	DurationSec int     `gorm:"default:0" json:"durationSec"`
+
+	// ── 动态基线 / 饱和度触发专用（FR-462）──
+	// BaselineMethod 基线方法：ewma（默认）| roc（突升突降）| mom（环比）| yoy（同比）。
+	BaselineMethod string `gorm:"type:varchar(16)" json:"baselineMethod"`
+	// BaselineWindowSec 基线窗口（秒），默认 3600。
+	BaselineWindowSec int `gorm:"default:3600" json:"baselineWindowSec"`
+	// Sensitivity 灵敏度：ewma/roc 为 k 倍标准差；mom/yoy 为偏离比阈值，默认 3。
+	Sensitivity float64 `json:"sensitivity"`
+	// MinDelta 最小绝对增量，滤除小幅噪声（默认 0）。
+	MinDelta float64 `json:"minDelta"`
+	// Direction 偏离方向：up | down | both（默认 both）。
+	Direction string `gorm:"type:varchar(8)" json:"direction"`
+	// Scope 评估维度：node | instance，缺省按 TargetType 推导。
+	Scope string `gorm:"type:varchar(16)" json:"scope"`
 
 	// ── 非指标触发专用（FR-085）──
 	// Keyword 日志关键字触发的匹配子串（log_keyword）。

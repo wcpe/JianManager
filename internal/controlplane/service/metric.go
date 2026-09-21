@@ -529,6 +529,42 @@ func (s *MetricService) QuerySeriesBatch(q SeriesQuery, instanceIDs []string) (s
 	return res, out, nil
 }
 
+// LatestValue 返回某 (scope, target, metric_key) 序列在 since 之后的最新非空样本值；
+// 无序列或无样本返回 nil。node scope 用 nodeUUID 定位，instance scope 用 instanceID 定位（FR-462）。
+func (s *MetricService) LatestValue(scope model.MetricScope, nodeUUID, instanceID, metricKey string, since time.Time) (*float64, error) {
+	q := s.db.Model(&model.MetricSeries{}).Where("scope = ? AND metric_key = ?", scope, metricKey)
+	if scope == model.MetricScopeNode {
+		q = q.Where("node_uuid = ?", nodeUUID)
+	} else {
+		q = q.Where("instance_id = ?", instanceID)
+	}
+	var series []model.MetricSeries
+	if err := q.Find(&series).Error; err != nil {
+		return nil, err
+	}
+	var best *float64
+	var bestTS time.Time
+	for _, se := range series {
+		var row model.MetricSampleRaw
+		err := s.db.Where("series_id = ? AND value IS NOT NULL AND ts >= ?", se.ID, since.UTC()).
+			Order("ts DESC").First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if row.Value == nil {
+			continue
+		}
+		if best == nil || !row.TS.Before(bestTS) {
+			v := *row.Value
+			best, bestTS = &v, row.TS
+		}
+	}
+	return best, nil
+}
+
 func (s *MetricService) queryPoints(seriesID uint, res string, from, to time.Time) ([]SeriesPoint, error) {
 	switch res {
 	case "raw":
