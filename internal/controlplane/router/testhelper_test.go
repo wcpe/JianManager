@@ -77,6 +77,17 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 	return setupTestRouterWithPool(db, cpgrpc.NewClientPool())
 }
 
+// setupTestRouterWithBeacon 同 setupTestRouter，但装配 Beacon 拉取服务（FR-444）：
+// pullEnabled=false 时模拟「配了端点未开能力」，endpoint 指向不可达地址以覆盖失败路径。
+func setupTestRouterWithBeacon(db *gorm.DB, endpoint string, pullEnabled bool) *gin.Engine {
+	client := service.NewBeaconClient(service.BeaconClientConfig{
+		Endpoint: endpoint, PullEnabled: pullEnabled,
+	})
+	beaconSync := service.NewBeaconSyncService(db, client, service.BeaconSyncConfig{})
+	beaconSync.SetAuditService(service.NewAuditService(db))
+	return setupTestRouterWithOptions(db, cpgrpc.NewClientPool(), beaconSync)
+}
+
 type testImmediateBotLoadRunner struct{}
 
 func (testImmediateBotLoadRunner) Submit(task func()) error {
@@ -104,6 +115,12 @@ func connectDeleteTestWorker(pool *cpgrpc.ClientPool, nodeUUID string) {
 // setupTestRouterWithPool 同 setupTestRouter，但使用调用方提供的连接池，
 // 便于用 SetWorkerClientForTest 注入 fake Worker 测试经 gRPC 委托的路径。
 func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
+	return setupTestRouterWithOptions(db, pool, nil)
+}
+
+// setupTestRouterWithOptions 是测试路由装配的真身：beaconSync 为 nil 时 /beacon/topology
+// 端点不注册（等价「未部署 Beacon」，用于验证未配置协同时平台其余功能不受影响）。
+func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *service.BeaconSyncService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	jwtCfg := config.JWTConfig{
 		Secret:     "test-secret-key-for-testing",
@@ -165,6 +182,7 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		Instance:              instanceSvc,
 		InstanceBatch:         instanceBatchSvc,
 		InstanceGroup:         service.NewInstanceGroupService(db),
+		BeaconSync:            beaconSync,
 		NodeRuntime:           service.NewNodeRuntimeService(db, pool),
 		ProbeUpdate:           service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),
 		Terminal:              service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),

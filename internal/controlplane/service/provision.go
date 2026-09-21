@@ -35,10 +35,36 @@ type ProvisionService struct {
 	// tasks 任务中心（FR-319）：搭建的下载/写配置阶段经任务异步执行与展示；
 	// nil 时（测试/未接线）回退同步执行（旧行为）。
 	tasks *TaskService
+	// binaryAssets 是制品库资产服务（FR-441）：coreType=binary 且 kind=asset 时据此取
+	// 资产元数据与 sha256，再经签名分发通道交给 Worker。
+	binaryAssets *AssetService
+	// artifactVersions 是制品版本库服务（FR-441）：复用其签名分发通道（token 签发/校验与
+	// 下载端点）交付 asset 来源，不另起第二套密码学体系。
+	artifactVersions *ArtifactVersionService
+	// binaryRoots 返回 node_file 来源的受控放行根（FR-441）；nil 时一律拒绝该来源。
+	// 以函数而非切片注入，使运维改配置后无需重启即对后续搭建生效（与其它运行时可改项同口径）。
+	binaryRoots func() []string
+	// binaryBaseURL 返回 CP 公共基址（asset 来源拼下载地址用）；nil 时回退平台公共基址设置。
+	binaryBaseURL func() string
 }
 
 // SetTaskService 注入任务中心（FR-319，main 接线）：非 nil 后搭建走异步任务模式。
 func (p *ProvisionService) SetTaskService(t *TaskService) { p.tasks = t }
+
+// SetBinaryAssets 注入制品库资产服务（FR-441，main 接线）：coreType=binary 的 asset 来源经此取件。
+func (p *ProvisionService) SetBinaryAssets(a *AssetService) { p.binaryAssets = a }
+
+// SetBinaryArtifactVersions 注入制品版本库服务（FR-441，main 接线）：
+// asset 来源复用其签名分发通道（FR-441 spec §3.2 的「复用 artifact_version_delivery 的签名 token」）。
+func (p *ProvisionService) SetBinaryArtifactVersions(a *ArtifactVersionService) {
+	p.artifactVersions = a
+}
+
+// SetBinaryNodeFileRoots 注入 node_file 来源的受控放行根提供者（FR-441，main 接线）。
+// 传 nil 或不调用 = 放行根为空集，node_file 来源一律被拒（默认安全的关闭态）。
+func (p *ProvisionService) SetBinaryNodeFileRoots(provider func() []string) {
+	p.binaryRoots = provider
+}
 
 // NewProvisionService 创建一键搭建服务。
 // bridge 可为 nil（未启用插件桥时）；非 nil 时建服自动为实例签发插件桥 token 并下发探针。
@@ -52,10 +78,12 @@ func NewProvisionService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *Instanc
 
 // ProvisionServerRequest 一键搭建后端子服请求。
 type ProvisionServerRequest struct {
-	NodeID    uint     `json:"nodeId" binding:"required"`
-	Name      string   `json:"name" binding:"required,min=1,max=128"`
-	CoreType  string   `json:"coreType" binding:"required"` // paper / spongevanilla / spongeforge
-	MCVersion string   `json:"mcVersion" binding:"required"`
+	NodeID   uint   `json:"nodeId" binding:"required"`
+	Name     string `json:"name" binding:"required,min=1,max=128"`
+	CoreType string `json:"coreType" binding:"required"` // paper / spongevanilla / spongeforge / binary
+	// MCVersion MC 核心版本；coreType=binary 不需要（二进制无「版本 → 构建」解析语义）。
+	// 非 binary 时必填，由服务层校验（绑定层不做条件必填，避免 binary 被误拒）。
+	MCVersion string   `json:"mcVersion"`
 	Build     int      `json:"build"` // 0 = 最新构建
 	JDKID     uint     `json:"jdkId"`
 	MemoryMb  int      `json:"memoryMb"`
@@ -63,16 +91,52 @@ type ProvisionServerRequest struct {
 	GroupID   uint     `json:"groupId"`
 	// OnlineMode 子服是否向 Mojang 校验正版（缺省 false=代理就绪/离线；独立正版服可传 true）。
 	OnlineMode *bool `json:"onlineMode"`
+	// BinarySource 制品来源（FR-441）：coreType=binary 时必填，三类来源见 BinarySource。
+	BinarySource *BinarySource `json:"binarySource,omitempty"`
+	// StartCommand 显式启动命令（FR-441，spec §3.4 决策 2A：复用 startCommand，不引入新结构）。
+	// 仅 coreType=binary 使用；留空则由落盘文件名派生 `./<filename>`。
+	// 需要附加参数时（如 `./beacon-1.1.0-linux-amd64 -config config.yml`）在此指定。
+	StartCommand string `json:"startCommand,omitempty"`
 }
 
 // ProvisionBukkitRequest 保留旧 /instances/provision/bukkit 的请求体兼容。
 type ProvisionBukkitRequest = ProvisionServerRequest
+
+// ValidateProvisionRequest 做绑定层无法表达的条件校验（供 router 在绑定后调用）。
+// 目前只有一条：MC 核心必填 mcVersion，binary 不需要。
+// 放在这里而不是 binding 标签上，是因为 binding 无法按另一字段的条件分支：
+// `mcVersion` 若保留 `binding:"required"` 会把合法的 binary 请求一起拒掉。
+// 响应码/文案与原先的绑定失败保持一致（400 INVALID_REQUEST），MC 路径行为不变。
+func ValidateProvisionRequest(req ProvisionServerRequest) error {
+	if IsBinaryCore(req.CoreType) {
+		return nil
+	}
+	if strings.TrimSpace(req.MCVersion) == "" {
+		return errors.New("缺少 mcVersion")
+	}
+	return nil
+}
+
+// requireMCVersion 校验 MC 核心路径必填的 mcVersion。
+//
+// 与 ValidateProvisionRequest 的分工：前者是 HTTP 入口的准入校验，本函数是服务层内部
+// 各入口（同步/异步/重建）的最后一道防线——不经 HTTP 的调用方（如其它服务直接调
+// ProvisionServerAsync）同样不该拿到「空版本去解析核心」的行为。
+func requireMCVersion(req ProvisionServerRequest) error {
+	if strings.TrimSpace(req.MCVersion) == "" {
+		return fmt.Errorf("%s 缺少 mcVersion", req.CoreType)
+	}
+	return nil
+}
 
 // ProvisionServer 端到端搭建一个后端子服，返回创建的实例（STOPPED，可一键启动）。
 // coreType 可选 Paper/SpongeVanilla/SpongeForge；代理核心必须走代理搭建入口。
 func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionServerRequest) (*model.Instance, error) {
 	if IsProxyCore(req.CoreType) {
 		return nil, fmt.Errorf("代理核心请使用代理搭建入口: %s", req.CoreType)
+	}
+	if err := requireMCVersion(req); err != nil {
+		return nil, err
 	}
 	core, err := p.core.ResolveBuild(ctx, req.CoreType, req.MCVersion, req.Build)
 	if err != nil {
@@ -103,13 +167,23 @@ func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req Provisi
 }
 
 // ProvisionServerAsyncWithBaseURL 在请求可见的 CP 公共基址下异步搭建，并把该基址用于 Worker 拉取探针。
+//
+// coreType=binary（FR-441）在此分流到二进制搭建路径：两者只共享「同步段建实例 + 登记任务 +
+// 后台取件 + 失败进 DAMAGED」的骨架，而核心解析、制品获取方式、实例默认属性均不同，
+// 故各自成函数而非在同一函数里堆分支。
 func (p *ProvisionService) ProvisionServerAsyncWithBaseURL(ctx context.Context, req ProvisionServerRequest, createdBy uint, probeBaseURL string) (*model.Instance, string, error) {
+	if IsBinaryCore(req.CoreType) {
+		return p.ProvisionBinaryAsync(ctx, req, createdBy, probeBaseURL)
+	}
 	if p.tasks == nil {
 		inst, err := p.ProvisionServer(ctx, req)
 		return inst, "", err
 	}
 	if IsProxyCore(req.CoreType) {
 		return nil, "", fmt.Errorf("代理核心请使用代理搭建入口: %s", req.CoreType)
+	}
+	if err := requireMCVersion(req); err != nil {
+		return nil, "", err
 	}
 	core, err := p.core.ResolveBuild(ctx, req.CoreType, req.MCVersion, req.Build)
 	if err != nil {
@@ -189,6 +263,10 @@ func (p *ProvisionService) RebuildInstanceWithBaseURL(ctx context.Context, insta
 	}
 	if p.tasks == nil {
 		return "", fmt.Errorf("重建需任务中心底座")
+	}
+	// binary 实例（FR-441）走二进制重建：取件方式与 MC 核心完全不同，且不重解析核心版本。
+	if IsBinaryCore(req.CoreType) {
+		return p.rebuildBinaryInstance(ctx, &inst, req, createdBy, probeBaseURL)
 	}
 	core, err := p.core.ResolveBuild(ctx, req.CoreType, req.MCVersion, req.Build)
 	if err != nil {

@@ -39,19 +39,34 @@ func init() {
 		toolSpec{
 			Def: ToolDef{
 				Name:        "instance_provision_server",
-				Description: "一键搭建后端子服（异步，返回 taskId；须 instance.provision）",
+				Description: "一键搭建后端子服（异步，返回 taskId；须 instance.provision）。coreType=binary 时为通用二进制搭建（FR-441）：须提供 binarySource，支持 asset/url/node_file 三类来源；coreType=beacon 时为内置 Beacon 预设（FR-442）：无需 binarySource，按「制品库已有 beacon 制品 > GitHub Releases wcpe/Beacon」自动选源，落 beacon 角色",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"nodeId":    map[string]any{"type": "number", "description": "目标节点 ID"},
 						"name":      map[string]any{"type": "string"},
-						"coreType":  map[string]any{"type": "string", "description": "paper / spongevanilla / spongeforge"},
-						"mcVersion": map[string]any{"type": "string"},
+						"coreType":  map[string]any{"type": "string", "description": "paper / spongevanilla / spongeforge / velocity / waterfall / bungeecord / binary / beacon"},
+						"mcVersion": map[string]any{"type": "string", "description": "MC 核心版本（coreType=binary/beacon 时不需要）"},
 						"build":     map[string]any{"type": "number", "description": "0=最新构建"},
-						"jdkId":     map[string]any{"type": "number"},
+						"jdkId":     map[string]any{"type": "number", "description": "绑定 JDK（二进制实例不需要，默认不绑定）"},
 						"memoryMb":  map[string]any{"type": "number"},
+						"binarySource": map[string]any{
+							"type":        "object",
+							"description": "coreType=binary 的制品来源（FR-441）：kind=asset 用 assetId；kind=url 用 url（须 https）+ 可选 sha256；kind=node_file 用 nodePath（节点绝对路径，须在运维放行目录内）。coreType=beacon 时不需要（来源自动解析）",
+							"properties": map[string]any{
+								"kind":       map[string]any{"type": "string", "enum": []string{"asset", "url", "node_file"}},
+								"assetId":    map[string]any{"type": "number", "description": "kind=asset：制品库资产 ID"},
+								"url":        map[string]any{"type": "string", "description": "kind=url：远程下载地址（须 https）"},
+								"sha256":     map[string]any{"type": "string", "description": "可选内容校验（64 位十六进制）"},
+								"nodePath":   map[string]any{"type": "string", "description": "kind=node_file：节点上的源文件绝对路径"},
+								"filename":   map[string]any{"type": "string", "description": "落盘文件名（相对实例工作目录），如 beacon-1.1.0-linux-amd64"},
+								"executable": map[string]any{"type": "boolean", "description": "是否置可执行位（默认 true）"},
+							},
+							"required": []string{"kind", "filename"},
+						},
+						"startCommand": map[string]any{"type": "string", "description": "coreType=binary/beacon 的显式启动命令；留空则由落盘文件名派生 ./<filename>"},
 					},
-					"required": []string{"nodeId", "name", "coreType", "mcVersion"},
+					"required": []string{"nodeId", "name", "coreType"},
 				},
 			},
 			Action: service.AgentActionInstanceProvisionServer,
@@ -232,6 +247,16 @@ func execInstanceProvisionServer(ctx context.Context, deps ToolDeps, p *service.
 		CoreType:  strings.TrimSpace(stringArg(args, "coreType")),
 		MCVersion: strings.TrimSpace(stringArg(args, "mcVersion")),
 	}
+	// 通用二进制搭建（FR-441）：来源与启动命令由请求体直供；非 binary 时解析出的空值无副作用
+	//（服务层按核心类型分派，MC 路径不读这两个字段）。
+	if src, err := binarySourceArg(args); err != nil {
+		return toolErr(err.Error())
+	} else if src != nil {
+		req.BinarySource = src
+	}
+	if v := strings.TrimSpace(stringArg(args, "startCommand")); v != "" {
+		req.StartCommand = v
+	}
 	if v, ok := args["build"]; ok {
 		if n, e := toUint(v); e == nil {
 			req.Build = int(n)
@@ -253,6 +278,42 @@ func execInstanceProvisionServer(ctx context.Context, deps ToolDeps, p *service.
 		return toolErr("搭建失败: " + err.Error())
 	}
 	return toolOK(map[string]any{"instance": inst, "taskId": taskID})
+}
+
+// binarySourceArg 解析 binarySource 对象参数（FR-441）。
+// 未提供时返回 (nil, nil)：MC 核心路径不关心该参数，缺省不应报错——
+// 「是否必填」由服务层按 coreType 判定（binary 缺来源即报「缺少 binarySource.kind」）。
+func binarySourceArg(args map[string]any) (*service.BinarySource, error) {
+	raw, ok := args["binarySource"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("binarySource 须为对象（{kind, filename, ...}）")
+	}
+	src := &service.BinarySource{
+		Kind:     service.BinarySourceKind(strings.TrimSpace(stringArg(obj, "kind"))),
+		URL:      strings.TrimSpace(stringArg(obj, "url")),
+		SHA256:   strings.TrimSpace(stringArg(obj, "sha256")),
+		NodePath: strings.TrimSpace(stringArg(obj, "nodePath")),
+		Filename: strings.TrimSpace(stringArg(obj, "filename")),
+	}
+	if v, ok := obj["assetId"]; ok {
+		n, err := toUint(v)
+		if err != nil {
+			return nil, fmt.Errorf("binarySource.assetId 须为数字")
+		}
+		src.AssetID = n
+	}
+	if v, ok := obj["executable"]; ok {
+		b, isBool := v.(bool)
+		if !isBool {
+			return nil, fmt.Errorf("binarySource.executable 须为布尔值")
+		}
+		src.Executable = &b
+	}
+	return src, nil
 }
 
 func execInstanceImportInspect(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult {

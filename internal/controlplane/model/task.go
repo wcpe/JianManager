@@ -35,6 +35,12 @@ const (
 	// TaskKindProvision 一键搭建后端子服任务（FR-319）：与其它 kind 不同，执行体在 CP 后台
 	// goroutine（下载在 worker、编排在 CP），进度/终态由 CP 直写而非 worker 心跳快照。
 	TaskKindProvision = "provision"
+	// TaskKindBinaryProvision 通用二进制搭建任务（FR-441，CP 后台 goroutine）。
+	// 与 TaskKindProvision 同属「CP 编排 + Worker 取制品」两段式，但制品来源为请求直供的
+	// 三类（制品库 asset / 远程 URL / 节点本地文件），不涉及 MC 核心的版本→构建→URL 解析。
+	// 单列 kind 的理由：二进制体积大（30MB 级）、下载可达分钟级，任务中心与启动闸需按
+	// 二进制语义单独筛选与提示（前端按 kind 展示「搭建中」文案）。
+	TaskKindBinaryProvision = "binary_provision"
 	// TaskKindImport 导入现有服务器（migrate 搬迁）任务（FR-323，CP 后台 goroutine）。
 	TaskKindImport = "import"
 	// TaskKindClone 克隆实例（拷贝工作目录）任务（FR-323，CP 后台 goroutine）。

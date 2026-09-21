@@ -126,6 +126,9 @@ func main() {
 	if err := config.ValidateJWTSecret(cfg.JWT.Secret, cfg.Server.DevMode); err != nil {
 		log.Fatalf("JWT 配置无效: %v", err)
 	}
+	if err := config.ValidateBeaconConfig(cfg.Beacon); err != nil {
+		log.Fatalf("Beacon 协同配置无效: %v", err)
+	}
 
 	initLogger(cfg.Log)
 
@@ -240,6 +243,32 @@ func main() {
 	backupSvc.SetStorageService(backupStorageSvc)
 	templateSvc := service.NewTemplateService(db)
 	auditSvc := service.NewAuditService(db)
+	// Beacon 可选协同（FR-444，见 ADR-090）：未配置 beacon.endpoint 时客户端为 nil、
+	// 服务整体跳过——本平台全部功能不受影响；拉取恒为手动触发，此处不注册任何定时器。
+	// 出站经进程级代理持有者（与其他出站调用同口径，FR-174/185）。
+	beaconClient := service.NewBeaconClient(service.BeaconClientConfig{
+		Endpoint:    cfg.Beacon.Endpoint,
+		Token:       cfg.Beacon.Token,
+		PullEnabled: cfg.Beacon.PullEnabled,
+	})
+	beaconClient.SetHTTPClientProvider(outboundProvider.Client)
+	beaconSyncSvc := service.NewBeaconSyncService(db, beaconClient, service.BeaconSyncConfig{})
+	beaconSyncSvc.SetAuditService(auditSvc)
+	// 拓扑推送（FR-443，见 ADR-090 §6）：端点为空的客户端为 nil、push-enabled=false 时
+	// Enabled()=false，两类情形下 instance.go 的推送触发点直接返回（连 goroutine 都不起）。
+	// 与拉取共用同一 endpoint/token/出站代理持有者，不另立一套配置。
+	beaconPushSvc := service.NewBeaconPushService(db, service.NewBeaconPushClient(service.BeaconPushClientConfig{
+		Endpoint:    cfg.Beacon.Endpoint,
+		Token:       cfg.Beacon.Token,
+		PushEnabled: cfg.Beacon.PushEnabled,
+		Namespace:   cfg.Beacon.Namespace,
+	}))
+	beaconPushSvc.SetAuditService(auditSvc)
+	instanceSvc.SetBeaconPush(beaconPushSvc)
+	defer beaconPushSvc.Shutdown()
+	if cfg.Beacon.Endpoint != "" {
+		slog.Info("Beacon 协同端点已配置", "pullEnabled", cfg.Beacon.PullEnabled, "pushEnabled", cfg.Beacon.PushEnabled)
+	}
 	authzSvc := service.NewAuthzService(db)
 	// 权限树 seed（FR-432）：系统角色模板幂等写入；失败不阻断启动，路由侧会再 seed。
 	if err := authzSvc.Permissions().SeedSystemRoles(); err != nil {
@@ -437,6 +466,11 @@ func main() {
 	// 插件桥服务（FR-065，见 ADR-016）：建服时为实例签发插件桥 token 并写入探针 config 的 bridge 段。
 	pluginBridgeSvc := service.NewPluginBridgeService(wsTokenSecret)
 	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc, pluginBridgeSvc, artifactVersionSvc)
+	// 通用二进制搭建（FR-441，见 ADR-090）：asset 来源复用制品库的签名分发通道；
+	// node_file 放行根默认空集＝该来源关闭，由配置 binary.node_file_roots 显式打开。
+	provisionSvc.SetBinaryAssets(assetSvc)
+	provisionSvc.SetBinaryArtifactVersions(artifactVersionSvc)
+	provisionSvc.SetBinaryNodeFileRoots(func() []string { return cfg.Binary.NodeFileRoots })
 	registrationSvc := service.NewRegistrationService(db)
 	networkSvc := service.NewNetworkService(db, instanceSvc)
 	// 代理服务实现 RegistrationSyncer：注册变更后写代理配置 + 下发 Velocity secret（FR-035）。
@@ -544,6 +578,8 @@ func main() {
 		Transfer:    agentTransferSvc,
 		// 实例分组（FR-165 / ADR-033）：按结构树批量运维。
 		InstanceGroup: instanceGroupSvc,
+		// Beacon 拓扑拉取（FR-444，见 ADR-090）：手动触发映射集群→大区→小区分组树。
+		BeaconSync: beaconSyncSvc,
 		// 群组服 Network 软标签与代理注册（FR-032 / FR-335）：群组管理与拓扑图数据。
 		Network:      networkSvc,
 		Registration: registrationSvc,
@@ -638,6 +674,7 @@ func main() {
 		Instance:                instanceSvc,
 		InstanceBatch:           instanceBatchSvc,
 		InstanceGroup:           instanceGroupSvc,
+		BeaconSync:              beaconSyncSvc,
 		JDK:                     jdkSvc,
 		NodeRuntime:             nodeRuntimeSvc,
 		RuntimeLibrary:          runtimeLibrarySvc,

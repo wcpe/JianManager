@@ -59,6 +59,7 @@ export const TASK_KIND_LABEL_KEYS: Record<string, string> = {
   runtime_install: 'tasks.kind.runtimeInstall',
   pkg_install: 'tasks.kind.pkgInstall',
   provision: 'tasks.kind.provision',
+  binary_provision: 'tasks.kind.binaryProvision',
   import: 'tasks.kind.import',
   clone: 'tasks.kind.clone',
   backup_create: 'tasks.kind.backupCreate',
