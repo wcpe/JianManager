@@ -321,6 +321,53 @@ export function usePlatformObservabilityOverview(enabled: boolean) {
   })
 }
 
+/** FR-461 健康墙单格分级。 */
+export type HealthLevel = 'offline' | 'stale' | 'degraded' | 'healthy'
+
+/** FR-461 健康墙单格：一台节点的当前只读快照。 */
+export interface HealthWallNode {
+  nodeId: number
+  nodeUuid: string
+  name: string
+  zone?: string
+  freshness: 'fresh' | 'stale' | 'offline'
+  cpuPct: number | null
+  memPct: number | null
+  diskPct: number | null
+  running: number
+  crashed: number
+  stopped: number
+  activeAlerts: number
+  botActive: number | null
+  botConnecting: number | null
+  level: HealthLevel
+  /** 一键定位下钻地址：/monitoring?node=<uuid>。 */
+  href: string
+}
+
+/** FR-461 健康墙读模型。 */
+export interface HealthWallResponse {
+  nodes: HealthWallNode[]
+}
+
+/** 健康墙服务端排序键。 */
+export type HealthWallSort = 'level' | 'cpu' | 'mem' | 'disk' | 'instances'
+
+/** 集群健康墙（FR-461）：只读快照一次查询给全，不触发 Worker RPC。 */
+export function useHealthWall(enabled: boolean, sort: HealthWallSort = 'level') {
+  return useQuery({
+    queryKey: ['healthWall', sort],
+    queryFn: async () => {
+      const { data } = await api.get<HealthWallResponse>('/observability/health-wall', { params: { sort } })
+      return data
+    },
+    enabled,
+    staleTime: 0,
+    refetchInterval: enabled ? 15_000 : false,
+    refetchIntervalInBackground: false,
+  })
+}
+
 export interface ResourceAttributionBotWorker {
   rssBytes: number | null
   cpuPct: number | null

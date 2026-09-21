@@ -6,6 +6,7 @@ import { useInstances } from '@/api/instances'
 import { useTasks, type TaskState } from '@/api/tasks'
 import { useAlertEvents } from '@/api/alerts'
 import { useMetricOverview, usePlatformObservabilityOverview, useResourceAttribution, type PlatformObservabilityOverviewResponse, type ResourceAttributionResponse } from '@/api/metrics'
+import { HealthWall } from '@/components/HealthWall'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -382,6 +383,9 @@ export default function OverviewPage() {
           <PlatformBotRuntimePanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
         </div>
       )}
+
+      {/* FR-461：逐台集群健康墙（热力矩阵 + 分级 + 排序 + 一键下钻）。 */}
+      {canSeePlatformObs && <HealthWall enabled={canSeePlatformObs} />}
 
       {/* 中部：聚合历史曲线（FR-060） */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
