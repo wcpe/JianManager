@@ -147,4 +147,79 @@ describe('MetricsSegment（mock 假后端）', () => {
     expect(screen.getByText('CPU 警戒 75%')).toBeInTheDocument()
     expect(screen.getByText('CPU 危险 90%')).toBeInTheDocument()
   })
+
+  it('探针不可用：当前健康 TPS/MSPT 显「不可用」（FR-447），CPU 仍显值', async () => {
+    mockInject('get', '/instances/:id/metrics', {
+      kind: 'status',
+      status: 200,
+      body: {
+        tps: 0,
+        onlinePlayers: 0,
+        memoryMb: 512,
+        msptMillis: 0,
+        threads: 0,
+        cpuPercent: 5,
+        heapMaxMb: 1024,
+        uptimeSeconds: 60,
+        worlds: [],
+        probeAvailable: false,
+        playersAvailable: false,
+        slpAvailable: false,
+        queryAvailable: false,
+        sourceMask: 0,
+      },
+    })
+    const { container } = renderWithProviders(<MetricsSegment instanceUuid="inst-1" instanceId={1} />)
+
+    expect(await screen.findByText('当前健康')).toBeInTheDocument()
+    // TPS + MSPT 两枚「不可用」；CPU 与探针无关，仍按阈值渲染（不进入 unavailable 态）。
+    expect(container.querySelectorAll('[data-health-level="unavailable"]')).toHaveLength(2)
+    expect(container.querySelectorAll('[data-health-level="unavailable"]')[0]).toHaveTextContent('不可用')
+  })
+
+  it('直探（SLP/Query）有数据：展示直探信息卡与来源芯片（FR-446/447）', async () => {
+    mockInject('get', '/instances/:id/metrics', {
+      kind: 'status',
+      status: 200,
+      body: {
+        tps: 15,
+        onlinePlayers: 5,
+        memoryMb: 1024,
+        msptMillis: 10,
+        threads: 40,
+        cpuPercent: 5,
+        heapMaxMb: 2048,
+        uptimeSeconds: 60,
+        worlds: [],
+        probeAvailable: true,
+        playersAvailable: true,
+        motd: 'Hello MC',
+        motdAvailable: true,
+        version: '1.20.4',
+        versionAvailable: true,
+        maxPlayers: 20,
+        maxPlayersAvailable: true,
+        playerNames: ['Steve'],
+        playerNamesAvailable: true,
+        playerNamesPartial: false,
+        plugins: ['Paper'],
+        pluginsAvailable: true,
+        map: 'world',
+        mapAvailable: true,
+        slpAvailable: true,
+        queryAvailable: true,
+        sourceMask: 7,
+      },
+    })
+    renderWithProviders(<MetricsSegment instanceUuid="inst-1" instanceId={1} />)
+
+    expect(await screen.findByText('直探信息（SLP / Query）')).toBeInTheDocument()
+    expect(screen.getByText('Hello MC')).toBeInTheDocument()
+    expect(screen.getByText('1.20.4')).toBeInTheDocument()
+    expect(screen.getByText('Steve')).toBeInTheDocument()
+    expect(screen.getByText('Paper')).toBeInTheDocument()
+    const chip = document.querySelector('[data-metric-sources]')
+    expect(chip).toHaveAttribute('data-metric-sources', 'probe,slp,query')
+    expect(chip).toHaveTextContent('探针')
+  })
 })

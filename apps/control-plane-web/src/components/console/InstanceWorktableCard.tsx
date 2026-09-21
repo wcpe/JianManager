@@ -81,6 +81,13 @@ export function InstanceWorktableCard({
   // 标签用绝对值（docker/无探针实例 heapMaxMb 为 0 时，百分比恒 0 看不出占用，故统一显绝对内存）。
   const cpuLabel = running ? `${cpuPct.toFixed(cpuPct > 0 && cpuPct < 10 ? 1 : 0)}%` : '--'
   const memLabel = running && memMb > 0 ? fmtMem(memMb) : '--'
+  // FR-446/447 可用性位：运行态缺测显示「不可用」，不再把 0 当「0 人在线」/0.0 TPS。
+  // 停机态保留「--」（是明确的「不适用」，非缺测）。在线数任一来源（探针/SLP/Query）有值即显值。
+  const unavailable = t('metrics.unavailable')
+  const playersAvailable = running && (metrics?.playersAvailable ?? false)
+  const playersLabel = !running ? '--' : playersAvailable ? String(metrics!.onlinePlayers) : unavailable
+  const tpsAvailable = running && (metrics?.probeAvailable ?? false)
+  const tpsLabel = !running ? '--' : tpsAvailable ? metrics!.tps.toFixed(1) : unavailable
 
   return (
     <div
@@ -149,13 +156,15 @@ export function InstanceWorktableCard({
       <div className="mt-3 flex items-center gap-3 border-t pt-3">
         <span className="inline-flex items-center gap-1 text-sm font-semibold text-primary">
           <Users className="size-3.5" />
-          <span className="tabular-nums">{running && metrics ? metrics.onlinePlayers : '--'}</span>
+          <span className={cn('tabular-nums', running && !playersAvailable && 'text-xs font-normal text-muted-foreground')}>
+            {playersLabel}
+          </span>
         </span>
         {!isProxy && (
           <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
             <Zap className="size-3.5" />
-            <span className="tabular-nums">
-              {running && metrics?.probeAvailable ? metrics.tps.toFixed(1) : '--'}
+            <span className={cn('tabular-nums', running && !tpsAvailable && 'text-xs')}>
+              {tpsLabel}
             </span>
           </span>
         )}

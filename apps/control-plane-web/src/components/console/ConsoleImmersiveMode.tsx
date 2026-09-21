@@ -516,13 +516,14 @@ function ImmersiveHeader({
       <span aria-hidden className="h-3.5 w-px shrink-0 bg-white/10" />
 
       <span className="flex min-w-0 items-center gap-3 overflow-x-auto">
-        {/* 探针离线时隐藏 TPS/在线 段：真实数据见工作台指标条聚合芯片。 */}
-        {probeAvailable && (
-          <>
-            <MetricSegment label="TPS" value={metrics?.tps.toFixed(1) ?? '—'} />
-            <MetricSegment label={t('serverConsole.online')} value={String(metrics?.onlinePlayers ?? 0)} />
-          </>
+        {/* TPS 仅探针可得；在线数由探针 → SLP → Query 任一来源提供。缺测显「不可用」，
+            不以 0 冒充「0 人在线」（FR-446/447）。 */}
+        {probeAvailable ? (
+          <MetricSegment label="TPS" value={metrics?.tps.toFixed(1) ?? '—'} />
+        ) : (
+          <MetricSegment label="TPS" value={t('metrics.unavailable')} />
         )}
+        <MetricSegment label={t('serverConsole.online')} value={metrics?.playersAvailable ? String(metrics.onlinePlayers) : t('metrics.unavailable')} />
         <MetricSegment label="CPU" value={metrics ? `${Math.round(metrics.cpuPercent)}%` : '—'} />
         <MetricSegment label={t('instanceDetail.consoleImmersivePaneCount')} value={`${count}/${maxPanes}`} />
       </span>

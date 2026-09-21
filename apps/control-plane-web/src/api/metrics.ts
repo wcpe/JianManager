@@ -32,6 +32,29 @@ export interface InstanceMetricsData {
   uptimeSeconds: number
   worlds: WorldMetric[] | null
   probeAvailable: boolean
+  // === MC 直探（SLP / Query，FR-446 / FR-447）补充字段与显式可用性位 ===
+  // 采集优先级链 `探针 → SLP → Query → 不可用`：`*Available=false` 即「不可用」，
+  // 前端据此渲染「不可用」而非 `0` / `-1` / `--` 伪值（消除「0 人在线」回归）。
+  playersAvailable: boolean
+  motd: string
+  motdAvailable: boolean
+  version: string
+  versionAvailable: boolean
+  favicon: string
+  maxPlayers: number
+  maxPlayersAvailable: boolean
+  playerNames: string[] | null
+  playerNamesAvailable: boolean
+  /** true=名单取自 SLP sample（弱信息，可能不完整，非实名）。 */
+  playerNamesPartial: boolean
+  plugins: string[] | null
+  pluginsAvailable: boolean
+  map: string
+  mapAvailable: boolean
+  slpAvailable: boolean
+  queryAvailable: boolean
+  /** 本拍命中来源位：1=探针 2=SLP 4=Query（与后端 `metrics.SourceMask` 对齐）。 */
+  sourceMask: number
 }
 
 export function useNodeMetrics(nodeId: number) {

@@ -581,8 +581,10 @@
 - **错误**: 400 `INVALID_REQUEST`（action 非法 / 目标皆空 / command 缺 command / 超上限）；403 `FORBIDDEN`
 
 ### GET /api/v1/instances/:id/metrics
-- **描述**: 实例指标。经 ServerProbe `/metrics` 取富指标（**RCON 已退役 FR-067/ADR-016**——探针未部署/抓取失败时富指标 N/A，不再回退 RCON）
-- **关联 FR**: FR-010
+- **描述**: 实例指标。采集优先级链 `探针 → SLP → Query → 不可用`（FR-446/447，ADR-092）：经 ServerProbe `/metrics` 取富指标（TPS/MSPT/堆/线程/世界），探针缺失该指标时用 MC 直探回填基础信息（MOTD/版本/在线/最大人数/玩家名单/插件/地图）。**RCON 已退役 FR-067/ADR-016**。缺测以**显式可用性位**表达——
+  **不再以 `tps=-1` / `onlinePlayers=-1` / `--` 伪值占位**；`*Available=false` 即「不可用」，前端据此渲染「不可用」。
+- **关联 FR**: FR-010, FR-446, FR-447 ｜ **关联 ADR**: ADR-092
+- **权限**: `instance.read`
 - **响应**:
   ```json
   {
@@ -595,10 +597,31 @@
     "heapMaxMb": 2048,
     "uptimeSeconds": 112.7,
     "worlds": [{"name":"world","loadedChunks":49,"entities":84,"tileEntities":2}],
-    "probeAvailable": true
+    "probeAvailable": true,
+    "playersAvailable": true,
+    "motd": "A Minecraft Server",
+    "motdAvailable": true,
+    "version": "1.20.4",
+    "versionAvailable": true,
+    "favicon": "data:image/png;base64,...",
+    "maxPlayers": 20,
+    "maxPlayersAvailable": true,
+    "playerNames": ["Steve"],
+    "playerNamesAvailable": true,
+    "playerNamesPartial": false,
+    "plugins": ["Paper", "Vault"],
+    "pluginsAvailable": true,
+    "map": "world",
+    "mapAvailable": true,
+    "slpAvailable": true,
+    "queryAvailable": false,
+    "sourceMask": 3
   }
   ```
-  `probeAvailable=false` 时富指标为零值，调用方仅展示 tps/onlinePlayers/memoryMb 与提示「未安装 ServerProbe 探针」。
+  - `probeAvailable=false` 时探针富指标（TPS/MSPT/线程/堆/世界）不可用；在线人数由 `playersAvailable` 指示（探针 / SLP / Query 任一命中即为 true）。
+  - 各 `*Available=false` 表示该指标本拍缺测，调用方须渲染「不可用」而非 0 / `--`。
+  - `playerNamesPartial=true`：名单取自 SLP `players.sample`（弱信息、可能不完整、非实名）；实名名单只认 Query（此时为 false）。
+  - `sourceMask` 本拍命中来源位：`1`=探针、`2`=SLP、`4`=Query（可位或，如 `3`=探针+SLP）；供前端标注数据来源。
 
 ### GET /api/v1/instances/:id/env
 - **描述**: 实例环境（FR-344 环境变量页签）：`configured`=自定义启动环境变量（可编辑源，解自 `instance.EnvVars`，恒返回）；`runtime`=运行中 JVM 进程实际环境（含继承 PATH/JAVA_HOME，Worker 经 gopsutil 读 Linux `/proc/pid/environ`，只读），实例未运行 / 平台受限（Windows 等）时 `runtimeAvailable=false` + `note`。上区编辑复用 `PUT /instances/:id`（`envVars`），启动时 Worker 物化为 `<workDir>/.env`（单向生成物）
