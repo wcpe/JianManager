@@ -62,8 +62,11 @@ func TestGetInstanceMetrics_RunningWithoutProbeUsesSystemMetrics(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond)
 
 	assert.False(t, resp.ProbeAvailable)
-	assert.Equal(t, float32(-1), resp.Tps)
-	assert.Equal(t, int32(-1), resp.OnlinePlayers)
+	// FR-447：无探针且未下发直探端口 → 在线人数显式「不可用」（可用位 false，零值），
+	// 不再以 -1 伪值占位。
+	assert.False(t, resp.PlayersAvailable)
+	assert.Zero(t, resp.Tps)
+	assert.Zero(t, resp.OnlinePlayers)
 	assert.Greater(t, resp.MemoryMb, int64(0), "无探针时应返回游戏进程 RSS")
 	assert.Greater(t, resp.CpuPercent, float64(0), "无探针时应返回游戏进程 CPU")
 	assert.Greater(t, resp.UptimeSeconds, float64(0), "无探针时应返回游戏进程运行时长")

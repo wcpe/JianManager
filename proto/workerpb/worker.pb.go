@@ -1010,8 +1010,21 @@ type InstanceMetricSample struct {
 	UptimeSeconds  float64                `protobuf:"fixed64,10,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
 	Worlds         []*WorldMetric         `protobuf:"bytes,11,rep,name=worlds,proto3" json:"worlds,omitempty"`
 	MsptP95Millis  float64                `protobuf:"fixed64,12,opt,name=mspt_p95_millis,json=msptP95Millis,proto3" json:"mspt_p95_millis,omitempty"` // ServerProbe 最近 60 秒原始 Tick 时长 p95；老探针缺失时为零值并由 probe_available/上层缺测语义判定
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// 以下为 MC 直探（SLP/Query，FR-446/447）补充字段：探针缺该指标时按 SLP → Query 回填；
+	// slp_available/query_available 记录本拍各直探来源可用性，probe_available 记探针。
+	// 三者皆 false 时对应指标为「不可用」（缺测），CP 落 NULL 断点而非伪值。
+	Motd               string   `protobuf:"bytes,13,opt,name=motd,proto3" json:"motd,omitempty"`                                                          // 来自 SLP description / Query hostname
+	Version            string   `protobuf:"bytes,14,opt,name=version,proto3" json:"version,omitempty"`                                                    // 来自 SLP version.name / Query version
+	MaxPlayers         int32    `protobuf:"varint,15,opt,name=max_players,json=maxPlayers,proto3" json:"max_players,omitempty"`                           // 来自 SLP players.max / Query maxplayers
+	PlayerNames        []string `protobuf:"bytes,16,rep,name=player_names,json=playerNames,proto3" json:"player_names,omitempty"`                         // 实名优先取 Query，否则 SLP sample（弱信息）
+	Plugins            []string `protobuf:"bytes,17,rep,name=plugins,proto3" json:"plugins,omitempty"`                                                    // 仅 Query 提供
+	Map                string   `protobuf:"bytes,18,opt,name=map,proto3" json:"map,omitempty"`                                                            // 仅 Query 提供
+	SourceMask         []byte   `protobuf:"bytes,19,opt,name=source_mask,json=sourceMask,proto3" json:"source_mask,omitempty"`                            // 本拍命中来源位：1=探针 2=SLP 4=Query
+	SlpAvailable       bool     `protobuf:"varint,20,opt,name=slp_available,json=slpAvailable,proto3" json:"slp_available,omitempty"`                     // 本拍 SLP 是否可用
+	QueryAvailable     bool     `protobuf:"varint,21,opt,name=query_available,json=queryAvailable,proto3" json:"query_available,omitempty"`               // 本拍 Query 是否可用
+	PlayerNamesPartial bool     `protobuf:"varint,22,opt,name=player_names_partial,json=playerNamesPartial,proto3" json:"player_names_partial,omitempty"` // true=名单取自 SLP sample（可能不完整，非实名）
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *InstanceMetricSample) Reset() {
@@ -1126,6 +1139,76 @@ func (x *InstanceMetricSample) GetMsptP95Millis() float64 {
 		return x.MsptP95Millis
 	}
 	return 0
+}
+
+func (x *InstanceMetricSample) GetMotd() string {
+	if x != nil {
+		return x.Motd
+	}
+	return ""
+}
+
+func (x *InstanceMetricSample) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *InstanceMetricSample) GetMaxPlayers() int32 {
+	if x != nil {
+		return x.MaxPlayers
+	}
+	return 0
+}
+
+func (x *InstanceMetricSample) GetPlayerNames() []string {
+	if x != nil {
+		return x.PlayerNames
+	}
+	return nil
+}
+
+func (x *InstanceMetricSample) GetPlugins() []string {
+	if x != nil {
+		return x.Plugins
+	}
+	return nil
+}
+
+func (x *InstanceMetricSample) GetMap() string {
+	if x != nil {
+		return x.Map
+	}
+	return ""
+}
+
+func (x *InstanceMetricSample) GetSourceMask() []byte {
+	if x != nil {
+		return x.SourceMask
+	}
+	return nil
+}
+
+func (x *InstanceMetricSample) GetSlpAvailable() bool {
+	if x != nil {
+		return x.SlpAvailable
+	}
+	return false
+}
+
+func (x *InstanceMetricSample) GetQueryAvailable() bool {
+	if x != nil {
+		return x.QueryAvailable
+	}
+	return false
+}
+
+func (x *InstanceMetricSample) GetPlayerNamesPartial() bool {
+	if x != nil {
+		return x.PlayerNamesPartial
+	}
+	return false
 }
 
 // ProcessMetricSample 受管实例进程 TOPN 快照（FR-170）。
@@ -1511,7 +1594,13 @@ type CreateInstanceRequest struct {
 	MemLimitMb int64 `protobuf:"varint,17,opt,name=mem_limit_mb,json=memLimitMb,proto3" json:"mem_limit_mb,omitempty"`
 	// disk_limit_mb 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入。
 	// bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容（FR-079）。
-	DiskLimitMb   int64 `protobuf:"varint,18,opt,name=disk_limit_mb,json=diskLimitMb,proto3" json:"disk_limit_mb,omitempty"`
+	DiskLimitMb int64 `protobuf:"varint,18,opt,name=disk_limit_mb,json=diskLimitMb,proto3" json:"disk_limit_mb,omitempty"`
+	// server_port 是实例 server-port（MC 游戏端口），Worker 据此做 SLP 直探（FR-446）。
+	// 0=未知，心跳不直探 SLP。
+	ServerPort int32 `protobuf:"varint,19,opt,name=server_port,json=serverPort,proto3" json:"server_port,omitempty"`
+	// query_port 是实例 query.port（Query/GameSpy4 端口），Worker 据此做 Query 直探（FR-446）。
+	// 0=未开启 Query，心跳不直探 Query。
+	QueryPort     int32 `protobuf:"varint,20,opt,name=query_port,json=queryPort,proto3" json:"query_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1668,6 +1757,20 @@ func (x *CreateInstanceRequest) GetMemLimitMb() int64 {
 func (x *CreateInstanceRequest) GetDiskLimitMb() int64 {
 	if x != nil {
 		return x.DiskLimitMb
+	}
+	return 0
+}
+
+func (x *CreateInstanceRequest) GetServerPort() int32 {
+	if x != nil {
+		return x.ServerPort
+	}
+	return 0
+}
+
+func (x *CreateInstanceRequest) GetQueryPort() int32 {
+	if x != nil {
+		return x.QueryPort
 	}
 	return 0
 }
@@ -5477,7 +5580,11 @@ type GetInstanceMetricsRequest struct {
 	InstanceUuid string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
 	// probe_port 是 ServerProbe /metrics 端口（0=未部署探针，指标返回 N/A）。
 	// RCON 回退已退役（FR-067，见 ADR-016）：指标纯探针，未部署探针即 N/A。
-	ProbePort     int32 `protobuf:"varint,2,opt,name=probe_port,json=probePort,proto3" json:"probe_port,omitempty"`
+	ProbePort int32 `protobuf:"varint,2,opt,name=probe_port,json=probePort,proto3" json:"probe_port,omitempty"`
+	// server_port / query_port 是 MC 直探端口（FR-446）：CP 下发后 Worker 据此做 SLP/Query 直探，
+	// 探针缺失时用于回填 MOTD/版本/在线人数/玩家名单等基础信息。0=未知/未开启。
+	ServerPort    int32 `protobuf:"varint,3,opt,name=server_port,json=serverPort,proto3" json:"server_port,omitempty"`
+	QueryPort     int32 `protobuf:"varint,4,opt,name=query_port,json=queryPort,proto3" json:"query_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5526,6 +5633,20 @@ func (x *GetInstanceMetricsRequest) GetProbePort() int32 {
 	return 0
 }
 
+func (x *GetInstanceMetricsRequest) GetServerPort() int32 {
+	if x != nil {
+		return x.ServerPort
+	}
+	return 0
+}
+
+func (x *GetInstanceMetricsRequest) GetQueryPort() int32 {
+	if x != nil {
+		return x.QueryPort
+	}
+	return 0
+}
+
 type GetInstanceMetricsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Tps           float32                `protobuf:"fixed32,1,opt,name=tps,proto3" json:"tps,omitempty"`
@@ -5538,12 +5659,32 @@ type GetInstanceMetricsResponse struct {
 	HeapMaxMb     int64          `protobuf:"varint,7,opt,name=heap_max_mb,json=heapMaxMb,proto3" json:"heap_max_mb,omitempty"`
 	UptimeSeconds float64        `protobuf:"fixed64,8,opt,name=uptime_seconds,json=uptimeSeconds,proto3" json:"uptime_seconds,omitempty"`
 	Worlds        []*WorldMetric `protobuf:"bytes,9,rep,name=worlds,proto3" json:"worlds,omitempty"`
-	// probe_available=true 表示指标来自 ServerProbe；false 表示探针未部署/未就绪（指标 N/A）。
-	// RCON 回退已退役（FR-067，见 ADR-016）：不再有 RCON/进程内存兜底的 TPS/在线人数。
+	// probe_available=true 表示指标来自 ServerProbe（FR-010）；false 表示探针未部署/未就绪
+	// （TPS/MSPT/JVM/世界等深度指标 N/A）。RCON 回退已退役（FR-067，见 ADR-016）。
 	ProbeAvailable bool    `protobuf:"varint,10,opt,name=probe_available,json=probeAvailable,proto3" json:"probe_available,omitempty"`
 	MsptP95Millis  float32 `protobuf:"fixed32,11,opt,name=mspt_p95_millis,json=msptP95Millis,proto3" json:"mspt_p95_millis,omitempty"` // ServerProbe 最近 60 秒原始 Tick 时长 p95；不得由 avg 二次聚合冒充
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// 以下为 MC 直探（SLP/Query，FR-446/447）字段与显式可用性位。
+	// 采集优先级链 `探针 → SLP → Query → 不可用`；不再以 -1/-- 伪值占位，前端按可用性位渲染「不可用」。
+	PlayersAvailable     bool     `protobuf:"varint,12,opt,name=players_available,json=playersAvailable,proto3" json:"players_available,omitempty"` // online_players 是否有效（探针/SLP/Query 任一命中）
+	Motd                 string   `protobuf:"bytes,13,opt,name=motd,proto3" json:"motd,omitempty"`
+	Version              string   `protobuf:"bytes,14,opt,name=version,proto3" json:"version,omitempty"`
+	MaxPlayers           int32    `protobuf:"varint,15,opt,name=max_players,json=maxPlayers,proto3" json:"max_players,omitempty"`
+	PlayerNames          []string `protobuf:"bytes,16,rep,name=player_names,json=playerNames,proto3" json:"player_names,omitempty"` // 实名优先取 Query，否则 SLP sample
+	Plugins              []string `protobuf:"bytes,17,rep,name=plugins,proto3" json:"plugins,omitempty"`
+	Map                  string   `protobuf:"bytes,18,opt,name=map,proto3" json:"map,omitempty"`
+	Favicon              string   `protobuf:"bytes,19,opt,name=favicon,proto3" json:"favicon,omitempty"`                         // 仅 SLP 提供（data:image/png;base64,...）
+	SourceMask           []byte   `protobuf:"bytes,20,opt,name=source_mask,json=sourceMask,proto3" json:"source_mask,omitempty"` // 本拍命中来源位：1=探针 2=SLP 4=Query
+	SlpAvailable         bool     `protobuf:"varint,21,opt,name=slp_available,json=slpAvailable,proto3" json:"slp_available,omitempty"`
+	QueryAvailable       bool     `protobuf:"varint,22,opt,name=query_available,json=queryAvailable,proto3" json:"query_available,omitempty"`
+	MotdAvailable        bool     `protobuf:"varint,23,opt,name=motd_available,json=motdAvailable,proto3" json:"motd_available,omitempty"`
+	VersionAvailable     bool     `protobuf:"varint,24,opt,name=version_available,json=versionAvailable,proto3" json:"version_available,omitempty"`
+	MaxPlayersAvailable  bool     `protobuf:"varint,25,opt,name=max_players_available,json=maxPlayersAvailable,proto3" json:"max_players_available,omitempty"`
+	PlayerNamesAvailable bool     `protobuf:"varint,26,opt,name=player_names_available,json=playerNamesAvailable,proto3" json:"player_names_available,omitempty"`
+	PluginsAvailable     bool     `protobuf:"varint,27,opt,name=plugins_available,json=pluginsAvailable,proto3" json:"plugins_available,omitempty"`
+	MapAvailable         bool     `protobuf:"varint,28,opt,name=map_available,json=mapAvailable,proto3" json:"map_available,omitempty"`
+	PlayerNamesPartial   bool     `protobuf:"varint,29,opt,name=player_names_partial,json=playerNamesPartial,proto3" json:"player_names_partial,omitempty"` // true=名单取自 SLP sample（可能不完整，非实名）
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *GetInstanceMetricsResponse) Reset() {
@@ -5651,6 +5792,132 @@ func (x *GetInstanceMetricsResponse) GetMsptP95Millis() float32 {
 		return x.MsptP95Millis
 	}
 	return 0
+}
+
+func (x *GetInstanceMetricsResponse) GetPlayersAvailable() bool {
+	if x != nil {
+		return x.PlayersAvailable
+	}
+	return false
+}
+
+func (x *GetInstanceMetricsResponse) GetMotd() string {
+	if x != nil {
+		return x.Motd
+	}
+	return ""
+}
+
+func (x *GetInstanceMetricsResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *GetInstanceMetricsResponse) GetMaxPlayers() int32 {
+	if x != nil {
+		return x.MaxPlayers
+	}
+	return 0
+}
+
+func (x *GetInstanceMetricsResponse) GetPlayerNames() []string {
+	if x != nil {
+		return x.PlayerNames
+	}
+	return nil
+}
+
+func (x *GetInstanceMetricsResponse) GetPlugins() []string {
+	if x != nil {
+		return x.Plugins
+	}
+	return nil
+}
+
+func (x *GetInstanceMetricsResponse) GetMap() string {
+	if x != nil {
+		return x.Map
+	}
+	return ""
+}
+
+func (x *GetInstanceMetricsResponse) GetFavicon() string {
+	if x != nil {
+		return x.Favicon
+	}
+	return ""
+}
+
+func (x *GetInstanceMetricsResponse) GetSourceMask() []byte {
+	if x != nil {
+		return x.SourceMask
+	}
+	return nil
+}
+
+func (x *GetInstanceMetricsResponse) GetSlpAvailable() bool {
+	if x != nil {
+		return x.SlpAvailable
+	}
+	return false
+}
+
+func (x *GetInstanceMetricsResponse) GetQueryAvailable() bool {
+	if x != nil {
+		return x.QueryAvailable
+	}
+	return false
+}
+
+func (x *GetInstanceMetricsResponse) GetMotdAvailable() bool {
+	if x != nil {
+		return x.MotdAvailable
+	}
+	return false
+}
+
+func (x *GetInstanceMetricsResponse) GetVersionAvailable() bool {
+	if x != nil {
+		return x.VersionAvailable
+	}
+	return false
+}
+
+func (x *GetInstanceMetricsResponse) GetMaxPlayersAvailable() bool {
+	if x != nil {
+		return x.MaxPlayersAvailable
+	}
+	return false
+}
+
+func (x *GetInstanceMetricsResponse) GetPlayerNamesAvailable() bool {
+	if x != nil {
+		return x.PlayerNamesAvailable
+	}
+	return false
+}
+
+func (x *GetInstanceMetricsResponse) GetPluginsAvailable() bool {
+	if x != nil {
+		return x.PluginsAvailable
+	}
+	return false
+}
+
+func (x *GetInstanceMetricsResponse) GetMapAvailable() bool {
+	if x != nil {
+		return x.MapAvailable
+	}
+	return false
+}
+
+func (x *GetInstanceMetricsResponse) GetPlayerNamesPartial() bool {
+	if x != nil {
+		return x.PlayerNamesPartial
+	}
+	return false
 }
 
 // GetInstanceResourceSnapshotRequest 查询实例根进程及其完整子进程树的资源快照。
@@ -16259,7 +16526,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\"N\n" +
 	"\x1cDisposeOrphanRuntimeResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xbd\x03\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xfc\x05\n" +
 	"\x14InstanceMetricSample\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12'\n" +
 	"\x0fprobe_available\x18\x02 \x01(\bR\x0eprobeAvailable\x12\x10\n" +
@@ -16274,7 +16541,19 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x0euptime_seconds\x18\n" +
 	" \x01(\x01R\ruptimeSeconds\x12+\n" +
 	"\x06worlds\x18\v \x03(\v2\x13.worker.WorldMetricR\x06worlds\x12&\n" +
-	"\x0fmspt_p95_millis\x18\f \x01(\x01R\rmsptP95Millis\"\xe4\x02\n" +
+	"\x0fmspt_p95_millis\x18\f \x01(\x01R\rmsptP95Millis\x12\x12\n" +
+	"\x04motd\x18\r \x01(\tR\x04motd\x12\x18\n" +
+	"\aversion\x18\x0e \x01(\tR\aversion\x12\x1f\n" +
+	"\vmax_players\x18\x0f \x01(\x05R\n" +
+	"maxPlayers\x12!\n" +
+	"\fplayer_names\x18\x10 \x03(\tR\vplayerNames\x12\x18\n" +
+	"\aplugins\x18\x11 \x03(\tR\aplugins\x12\x10\n" +
+	"\x03map\x18\x12 \x01(\tR\x03map\x12\x1f\n" +
+	"\vsource_mask\x18\x13 \x01(\fR\n" +
+	"sourceMask\x12#\n" +
+	"\rslp_available\x18\x14 \x01(\bR\fslpAvailable\x12'\n" +
+	"\x0fquery_available\x18\x15 \x01(\bR\x0equeryAvailable\x120\n" +
+	"\x14player_names_partial\x18\x16 \x01(\bR\x12playerNamesPartial\"\xe4\x02\n" +
 	"\x13ProcessMetricSample\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x10\n" +
 	"\x03pid\x18\x02 \x01(\x05R\x03pid\x12\x12\n" +
@@ -16316,7 +16595,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x0eproxy_no_proxy\x18\x03 \x01(\tR\fproxyNoProxy\x12)\n" +
 	"\x10proxy_generation\x18\x04 \x01(\tR\x0fproxyGeneration\x12&\n" +
 	"\x0fcancel_task_ids\x18\x05 \x03(\tR\rcancelTaskIds\x12&\n" +
-	"\x0fws_token_secret\x18\x06 \x01(\tR\rwsTokenSecret\"\xe2\x05\n" +
+	"\x0fws_token_secret\x18\x06 \x01(\tR\rwsTokenSecret\"\xa2\x06\n" +
 	"\x15CreateInstanceRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -16339,7 +16618,11 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\tcpu_limit\x18\x10 \x01(\x01R\bcpuLimit\x12 \n" +
 	"\fmem_limit_mb\x18\x11 \x01(\x03R\n" +
 	"memLimitMb\x12\"\n" +
-	"\rdisk_limit_mb\x18\x12 \x01(\x03R\vdiskLimitMb\x1a:\n" +
+	"\rdisk_limit_mb\x18\x12 \x01(\x03R\vdiskLimitMb\x12\x1f\n" +
+	"\vserver_port\x18\x13 \x01(\x05R\n" +
+	"serverPort\x12\x1d\n" +
+	"\n" +
+	"query_port\x18\x14 \x01(\x05R\tqueryPort\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"m\n" +
@@ -16631,11 +16914,15 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x0fmemory_total_mb\x18\x05 \x01(\x03R\rmemoryTotalMb\x12 \n" +
 	"\fdisk_used_mb\x18\x06 \x01(\x03R\n" +
 	"diskUsedMb\x12\"\n" +
-	"\rdisk_total_mb\x18\a \x01(\x03R\vdiskTotalMb\"_\n" +
+	"\rdisk_total_mb\x18\a \x01(\x03R\vdiskTotalMb\"\x9f\x01\n" +
 	"\x19GetInstanceMetricsRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x1d\n" +
 	"\n" +
-	"probe_port\x18\x02 \x01(\x05R\tprobePort\"\x93\x03\n" +
+	"probe_port\x18\x02 \x01(\x05R\tprobePort\x12\x1f\n" +
+	"\vserver_port\x18\x03 \x01(\x05R\n" +
+	"serverPort\x12\x1d\n" +
+	"\n" +
+	"query_port\x18\x04 \x01(\x05R\tqueryPort\"\xa9\b\n" +
 	"\x1aGetInstanceMetricsResponse\x12\x10\n" +
 	"\x03tps\x18\x01 \x01(\x02R\x03tps\x12%\n" +
 	"\x0eonline_players\x18\x02 \x01(\x05R\ronlinePlayers\x12\x1b\n" +
@@ -16650,7 +16937,27 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x06worlds\x18\t \x03(\v2\x13.worker.WorldMetricR\x06worlds\x12'\n" +
 	"\x0fprobe_available\x18\n" +
 	" \x01(\bR\x0eprobeAvailable\x12&\n" +
-	"\x0fmspt_p95_millis\x18\v \x01(\x02R\rmsptP95Millis\"I\n" +
+	"\x0fmspt_p95_millis\x18\v \x01(\x02R\rmsptP95Millis\x12+\n" +
+	"\x11players_available\x18\f \x01(\bR\x10playersAvailable\x12\x12\n" +
+	"\x04motd\x18\r \x01(\tR\x04motd\x12\x18\n" +
+	"\aversion\x18\x0e \x01(\tR\aversion\x12\x1f\n" +
+	"\vmax_players\x18\x0f \x01(\x05R\n" +
+	"maxPlayers\x12!\n" +
+	"\fplayer_names\x18\x10 \x03(\tR\vplayerNames\x12\x18\n" +
+	"\aplugins\x18\x11 \x03(\tR\aplugins\x12\x10\n" +
+	"\x03map\x18\x12 \x01(\tR\x03map\x12\x18\n" +
+	"\afavicon\x18\x13 \x01(\tR\afavicon\x12\x1f\n" +
+	"\vsource_mask\x18\x14 \x01(\fR\n" +
+	"sourceMask\x12#\n" +
+	"\rslp_available\x18\x15 \x01(\bR\fslpAvailable\x12'\n" +
+	"\x0fquery_available\x18\x16 \x01(\bR\x0equeryAvailable\x12%\n" +
+	"\x0emotd_available\x18\x17 \x01(\bR\rmotdAvailable\x12+\n" +
+	"\x11version_available\x18\x18 \x01(\bR\x10versionAvailable\x122\n" +
+	"\x15max_players_available\x18\x19 \x01(\bR\x13maxPlayersAvailable\x124\n" +
+	"\x16player_names_available\x18\x1a \x01(\bR\x14playerNamesAvailable\x12+\n" +
+	"\x11plugins_available\x18\x1b \x01(\bR\x10pluginsAvailable\x12#\n" +
+	"\rmap_available\x18\x1c \x01(\bR\fmapAvailable\x120\n" +
+	"\x14player_names_partial\x18\x1d \x01(\bR\x12playerNamesPartial\"I\n" +
 	"\"GetInstanceResourceSnapshotRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\"\xfd\x02\n" +
 	"#GetInstanceResourceSnapshotResponse\x12\x19\n" +

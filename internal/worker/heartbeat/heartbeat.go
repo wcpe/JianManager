@@ -2,7 +2,9 @@ package heartbeat
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -263,13 +265,15 @@ func (h *Heartbeat) sendHeartbeat() error {
 	return nil
 }
 
-// collectInstanceMetrics 对 RUNNING 且部署了探针的实例并发抓取本机 ServerProbe /metrics，
-// 构造心跳负载里的每实例富指标快照（FR-060 时序）。抓取失败时该实例 probe_available=false（缺测，
-// CP 落库为 NULL，曲线断点），不阻塞其他实例采集。无可采实例时返回 nil。
+// collectInstanceMetrics 对 RUNNING 且任一采集源端口已知的实例并发采集本机指标，
+// 构造心跳负载里的每实例快照（FR-060 时序 + FR-446/447 直探）。
+// 采集走统一编排链 `探针 → SLP → Query → 不可用`：探针失败时由 SLP/Query 直探补基础信息；
+// 三源皆不可用则为「不可用」（CP 落 NULL 断点，不补假值），不阻塞其他实例采集。无可采实例时返回 nil。
 func collectInstanceMetrics(snaps []process.InstanceSnapshot) []*workerpb.InstanceMetricSample {
 	targets := make([]process.InstanceSnapshot, 0, len(snaps))
 	for _, s := range snaps {
-		if s.State == string(process.StateRunning) && s.ProbePort > 0 {
+		// 运行中且任一来源端口已知（探针 / server-port / query.port）才采集。
+		if s.State == string(process.StateRunning) && (s.ProbePort > 0 || s.ServerPort > 0 || s.QueryPort > 0) {
 			targets = append(targets, s)
 		}
 	}
@@ -288,40 +292,74 @@ func collectInstanceMetrics(snaps []process.InstanceSnapshot) []*workerpb.Instan
 			defer func() { <-sem }()
 
 			sample := &workerpb.InstanceMetricSample{InstanceUuid: t.UUID}
-			// 探针与实例同机，抓 localhost:probe_port；本机白名单放行，无需 token。
-			if snap, err := metrics.ScrapeServerProbe("localhost", t.ProbePort, ""); err == nil && snap != nil {
-				recordProbeScrapeResult(t.UUID, "")
-				sample.ProbeAvailable = true
-				sample.Tps = snap.TPS
-				sample.MsptMillis = snap.MSPTAvgMillis
-				sample.PlayersOnline = snap.PlayersOnline
-				sample.HeapUsedBytes = snap.HeapUsedBytes
-				sample.HeapMaxBytes = snap.HeapMaxBytes
-				sample.Threads = snap.Threads
-				sample.CpuLoad = snap.SystemCPULoad
-				sample.UptimeSeconds = snap.UptimeSeconds
-				for name, w := range snap.Worlds {
-					sample.Worlds = append(sample.Worlds, &workerpb.WorldMetric{
-						Name:         name,
-						LoadedChunks: w.LoadedChunks,
-						Entities:     w.Entities,
-						TileEntities: w.TileEntities,
-					})
-				}
-			} else {
-				// 探针抓取失败（未部署/端口不对/探针降级/桥通而 HTTP 端点挂）：本拍缺测，
-				// CP 落 NULL 断点。同一错误只告警一次，错误变化或恢复时再报，兼顾排障与降噪。
-				reason := "未知错误"
-				if err != nil {
-					reason = err.Error()
-				}
-				recordProbeScrapeResult(t.UUID, reason)
-			}
+			// 探针与实例同机，直探 localhost；编排链内部串行探针 → SLP → Query。
+			tel := metrics.CollectInstanceTelemetry(metrics.CollectConfig{
+				ProbePort:  t.ProbePort,
+				ServerPort: t.ServerPort,
+				QueryPort:  t.QueryPort,
+				Host:       "localhost",
+			})
+			fillInstanceMetricSample(sample, tel)
+			// 降噪：任一来源可用则清空告警；三源皆不可用才记来源化错误（变化才告警）。
+			recordProbeScrapeResult(t.UUID, unreachableSourcesReason(t, tel))
 			out[i] = sample
 		}(i, t)
 	}
 	wg.Wait()
 	return out
+}
+
+// fillInstanceMetricSample 把编排链结果填入心跳负载的每实例快照（FR-060/446/447）。
+func fillInstanceMetricSample(sample *workerpb.InstanceMetricSample, tel *metrics.InstanceTelemetry) {
+	sample.ProbeAvailable = tel.ProbeAvailable
+	sample.Tps = tel.TPS
+	sample.MsptMillis = tel.MSPTMillis
+	sample.PlayersOnline = tel.PlayersOnline
+	sample.HeapUsedBytes = tel.HeapUsedBytes
+	sample.HeapMaxBytes = tel.HeapMaxBytes
+	sample.Threads = tel.Threads
+	sample.CpuLoad = tel.CPULoad
+	sample.UptimeSeconds = tel.UptimeSeconds
+	for name, w := range tel.Worlds {
+		sample.Worlds = append(sample.Worlds, &workerpb.WorldMetric{
+			Name:         name,
+			LoadedChunks: w.LoadedChunks,
+			Entities:     w.Entities,
+			TileEntities: w.TileEntities,
+		})
+	}
+	// 直探（SLP/Query）补充字段：探针缺该指标时由编排链回填。
+	sample.Motd = tel.Motd
+	sample.Version = tel.Version
+	sample.MaxPlayers = tel.PlayersMax
+	sample.PlayerNames = tel.PlayerNames
+	sample.Plugins = tel.Plugins
+	sample.Map = tel.Map
+	sample.SourceMask = []byte{byte(tel.Sources)}
+	sample.SlpAvailable = tel.SLPAvailable
+	sample.QueryAvailable = tel.QueryAvailable
+	sample.PlayerNamesPartial = tel.PlayerNamesPartial
+}
+
+// unreachableSourcesReason 生成「三源皆不可用」时的来源化描述（供变化告警）；任一来源可用返回空串。
+func unreachableSourcesReason(t process.InstanceSnapshot, tel *metrics.InstanceTelemetry) string {
+	if tel.ProbeAvailable || tel.SLPAvailable || tel.QueryAvailable {
+		return ""
+	}
+	var parts []string
+	if t.ProbePort > 0 {
+		parts = append(parts, fmt.Sprintf("探针(probe_port=%d)", t.ProbePort))
+	}
+	if t.ServerPort > 0 {
+		parts = append(parts, fmt.Sprintf("SLP(server_port=%d)", t.ServerPort))
+	}
+	if t.QueryPort > 0 {
+		parts = append(parts, fmt.Sprintf("Query(query_port=%d)", t.QueryPort))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "实例指标来源皆不可用: " + strings.Join(parts, ", ")
 }
 
 // recordProbeScrapeResult 记录一次探针抓取结果并按变化告警：新错误/错误变化 → WARN，

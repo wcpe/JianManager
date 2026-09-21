@@ -41,6 +41,10 @@ type Instance struct {
 	// ProbePort 是实例 ServerProbe /metrics 端口（CP 分配后随 Create 下发）。
 	// 心跳采集器据此自采每实例富指标（FR-060）；0=未部署探针，心跳跳过该实例。
 	ProbePort int
+	// ServerPort 是实例 server-port（MC 游戏端口），用于 SLP 直探（FR-446）；0=未知。
+	ServerPort int
+	// QueryPort 是实例 query.port（Query/GameSpy4 端口），用于 Query 直探（FR-446）；0=未开启。
+	QueryPort int
 	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发，FR-063）。daemon 启动时
 	// 透传到 wrapper 做超时强杀兜底；0=未指定，wrapper 回退 env/默认。值在启动时随 spec 定型。
 	GracefulStopTimeoutSeconds int
@@ -228,10 +232,12 @@ func (m *Manager) markStrategyState(uuid string, newState InstanceState) {
 
 // InstanceSnapshot 表示单个实例的状态快照（用于心跳上报）。
 type InstanceSnapshot struct {
-	UUID      string
-	State     string // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
-	ProbePort int    // ServerProbe /metrics 端口；>0 且 RUNNING 时心跳采集器自采富指标（FR-060）
-	PID       int    // 受管实例根进程 PID；>0 时心跳可采集进程 TOPN（FR-170）
+	UUID       string
+	State      string // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
+	ProbePort  int    // ServerProbe /metrics 端口；>0 且 RUNNING 时心跳采集器自采富指标（FR-060）
+	ServerPort int    // server-port（MC 游戏端口）；>0 时心跳做 SLP 直探（FR-446）
+	QueryPort  int    // query.port；>0 时心跳做 Query 直探（FR-446）
+	PID        int    // 受管实例根进程 PID；>0 时心跳可采集进程 TOPN（FR-170）
 }
 
 // GetAllInstanceStates 返回所有实例的状态快照（用于心跳上报）。
@@ -252,10 +258,12 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 			pid = inst.strategy.GetPID()
 		}
 		states = append(states, InstanceSnapshot{
-			UUID:      uuid,
-			State:     string(state),
-			ProbePort: inst.ProbePort,
-			PID:       pid,
+			UUID:       uuid,
+			State:      string(state),
+			ProbePort:  inst.ProbePort,
+			ServerPort: inst.ServerPort,
+			QueryPort:  inst.QueryPort,
+			PID:        pid,
 		})
 	}
 	return states
@@ -314,6 +322,26 @@ func (m *Manager) SetProbePort(uuid string, port int) {
 	defer m.mu.Unlock()
 	if inst, ok := m.instances[uuid]; ok {
 		inst.ProbePort = port
+	}
+}
+
+// SetServerPort 更新已登记实例的 server-port（MC 游戏端口），供 SLP 直探（FR-446）。
+// 供 CP 幂等重注册时刷新：端口迁移/导入实例后经重注册下发，Worker 内存表随即生效，
+// 心跳下一拍即按新端口直探（无需重启进程）。实例不存在则忽略（容错风格与 SetProbePort 一致）。
+func (m *Manager) SetServerPort(uuid string, port int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst, ok := m.instances[uuid]; ok {
+		inst.ServerPort = port
+	}
+}
+
+// SetQueryPort 更新已登记实例的 query.port，供 Query 直探（FR-446）。容错风格与 SetProbePort 一致。
+func (m *Manager) SetQueryPort(uuid string, port int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst, ok := m.instances[uuid]; ok {
+		inst.QueryPort = port
 	}
 }
 

@@ -1410,6 +1410,8 @@ func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (
 		AutoRestart:                instance.AutoRestart,
 		JdkPath:                    jdkPath,
 		ProbePort:                  int32(instance.ProbePort),
+		ServerPort:                 int32(instance.ServerPort),
+		QueryPort:                  int32(instance.QueryPort),
 		GracefulStopTimeoutSeconds: s.gracefulStopTimeoutSeconds(),
 		Image:                      instance.Image,
 		PortMappings:               dockerPortMappings(instance),
@@ -1793,6 +1795,28 @@ type MetricsData struct {
 	UptimeSeconds  float64       `json:"uptimeSeconds"`
 	Worlds         []WorldMetric `json:"worlds"`
 	ProbeAvailable bool          `json:"probeAvailable"`
+	// 以下为 MC 直探（SLP/Query，FR-446/447）补充字段与显式可用性位。
+	// 采集优先级链 `探针 → SLP → Query → 不可用`；*Available=false 即「不可用」，前端据此渲染，
+	// 不再依赖 -1/-- 伪值。
+	PlayersAvailable     bool     `json:"playersAvailable"`
+	Motd                 string   `json:"motd"`
+	MotdAvailable        bool     `json:"motdAvailable"`
+	Version              string   `json:"version"`
+	VersionAvailable     bool     `json:"versionAvailable"`
+	Favicon              string   `json:"favicon"`
+	MaxPlayers           int32    `json:"maxPlayers"`
+	MaxPlayersAvailable  bool     `json:"maxPlayersAvailable"`
+	PlayerNames          []string `json:"playerNames"`
+	PlayerNamesAvailable bool     `json:"playerNamesAvailable"`
+	PlayerNamesPartial   bool     `json:"playerNamesPartial"`
+	Plugins              []string `json:"plugins"`
+	PluginsAvailable     bool     `json:"pluginsAvailable"`
+	Map                  string   `json:"map"`
+	MapAvailable         bool     `json:"mapAvailable"`
+	SlpAvailable         bool     `json:"slpAvailable"`
+	QueryAvailable       bool     `json:"queryAvailable"`
+	// SourceMask 本拍命中来源位：1=探针 2=SLP 4=Query（供前端标注数据来源）。
+	SourceMask uint8 `json:"sourceMask"`
 }
 
 // WorldMetric 单个世界的负载（来自 ServerProbe），供前端 FR-010 监控页展示。
@@ -1823,10 +1847,13 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 指标纯探针（FR-067 退役 RCON）：仅下发 probe_port，未部署探针即 N/A。
+	// 下发探针端口 + MC 直探端口（server_port / query_port，FR-446）：Worker 据此走
+	// `探针 → SLP → Query → 不可用` 编排链，探针缺失时用直探回填基础信息。
 	resp, err := client.Worker.GetInstanceMetrics(ctx, &workerpb.GetInstanceMetricsRequest{
 		InstanceUuid: instance.UUID,
 		ProbePort:    int32(instance.ProbePort),
+		ServerPort:   int32(instance.ServerPort),
+		QueryPort:    int32(instance.QueryPort),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("获取指标失败: %w", err)
@@ -1842,6 +1869,25 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 		HeapMaxMB:      resp.HeapMaxMb,
 		UptimeSeconds:  resp.UptimeSeconds,
 		ProbeAvailable: resp.ProbeAvailable,
+		// FR-446/447：直探补充字段与显式可用性位（清除 -1/-- 占位）。
+		PlayersAvailable:     resp.PlayersAvailable,
+		Motd:                 resp.Motd,
+		MotdAvailable:        resp.MotdAvailable,
+		Version:              resp.Version,
+		VersionAvailable:     resp.VersionAvailable,
+		Favicon:              resp.Favicon,
+		MaxPlayers:           resp.MaxPlayers,
+		MaxPlayersAvailable:  resp.MaxPlayersAvailable,
+		PlayerNames:          resp.PlayerNames,
+		PlayerNamesAvailable: resp.PlayerNamesAvailable,
+		PlayerNamesPartial:   resp.PlayerNamesPartial,
+		Plugins:              resp.Plugins,
+		PluginsAvailable:     resp.PluginsAvailable,
+		Map:                  resp.Map,
+		MapAvailable:         resp.MapAvailable,
+		SlpAvailable:         resp.SlpAvailable,
+		QueryAvailable:       resp.QueryAvailable,
+		SourceMask:           sourceMaskFromBytes(resp.SourceMask),
 	}
 	for _, w := range resp.Worlds {
 		data.Worlds = append(data.Worlds, WorldMetric{
@@ -1852,6 +1898,14 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 		})
 	}
 	return data, nil
+}
+
+// sourceMaskFromBytes 把 proto 的 bytes 来源位转成 uint8（缺省/超长视为 0/截断）。
+func sourceMaskFromBytes(b []byte) uint8 {
+	if len(b) == 0 {
+		return 0
+	}
+	return b[0]
 }
 
 // InstanceEnvData 实例环境（FR-344 环境变量页签）：configured=自定义启动 env（可编辑源），

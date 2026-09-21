@@ -436,6 +436,19 @@ message InstanceMetricSample {
   double uptime_seconds = 10;
   repeated WorldMetric worlds = 11;
   double mspt_p95_millis = 12; // ServerProbe 最近 60 秒原始 Tick 时长 p95；老探针缺失时为零值并由 probe_available/上层缺测语义判定
+  // 以下为 MC 直探（SLP/Query，FR-446/447）补充字段：探针缺该指标时按 SLP → Query 回填；
+  // slp_available/query_available 记录本拍各直探来源可用性，probe_available 记探针。
+  // 三者皆 false 时对应指标为「不可用」（缺测），CP 落 NULL 断点而非伪值。
+  string motd = 13;                    // 来自 SLP description / Query hostname
+  string version = 14;                 // 来自 SLP version.name / Query version
+  int32 max_players = 15;              // 来自 SLP players.max / Query maxplayers
+  repeated string player_names = 16;   // 实名优先取 Query，否则 SLP sample（弱信息）
+  repeated string plugins = 17;        // 仅 Query 提供
+  string map = 18;                     // 仅 Query 提供
+  bytes source_mask = 19;              // 本拍命中来源位：1=探针 2=SLP 4=Query
+  bool slp_available = 20;             // 本拍 SLP 是否可用
+  bool query_available = 21;           // 本拍 Query 是否可用
+  bool player_names_partial = 22;      // true=名单取自 SLP sample（可能不完整，非实名）
 }
 
 // ProcessMetricSample 受管实例进程 TOPN 快照（FR-170）。
@@ -528,6 +541,12 @@ message CreateInstanceRequest {
   // disk_limit_mb 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入。
   // bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容（FR-079）。
   int64 disk_limit_mb = 18;
+  // server_port 是实例 server-port（MC 游戏端口），Worker 据此做 SLP 直探（FR-446）。
+  // 0=未知，心跳不直探 SLP。
+  int32 server_port = 19;
+  // query_port 是实例 query.port（Query/GameSpy4 端口），Worker 据此做 Query 直探（FR-446）。
+  // 0=未开启 Query，心跳不直探 Query。
+  int32 query_port = 20;
 }
 
 // PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。
@@ -939,6 +958,10 @@ message GetInstanceMetricsRequest {
   // probe_port 是 ServerProbe /metrics 端口（0=未部署探针，指标返回 N/A）。
   // RCON 回退已退役（FR-067，见 ADR-016）：指标纯探针，未部署探针即 N/A。
   int32 probe_port = 2;
+  // server_port / query_port 是 MC 直探端口（FR-446）：CP 下发后 Worker 据此做 SLP/Query 直探，
+  // 探针缺失时用于回填 MOTD/版本/在线人数/玩家名单等基础信息。0=未知/未开启。
+  int32 server_port = 3;
+  int32 query_port = 4;
 }
 
 message GetInstanceMetricsResponse {
@@ -952,10 +975,30 @@ message GetInstanceMetricsResponse {
   int64 heap_max_mb = 7;
   double uptime_seconds = 8;
   repeated WorldMetric worlds = 9;
-  // probe_available=true 表示指标来自 ServerProbe；false 表示探针未部署/未就绪（指标 N/A）。
-  // RCON 回退已退役（FR-067，见 ADR-016）：不再有 RCON/进程内存兜底的 TPS/在线人数。
+  // probe_available=true 表示指标来自 ServerProbe（FR-010）；false 表示探针未部署/未就绪
+  // （TPS/MSPT/JVM/世界等深度指标 N/A）。RCON 回退已退役（FR-067，见 ADR-016）。
   bool probe_available = 10;
   float mspt_p95_millis = 11; // ServerProbe 最近 60 秒原始 Tick 时长 p95；不得由 avg 二次聚合冒充
+  // 以下为 MC 直探（SLP/Query，FR-446/447）字段与显式可用性位。
+  // 采集优先级链 `探针 → SLP → Query → 不可用`；不再以 -1/-- 伪值占位，前端按可用性位渲染「不可用」。
+  bool players_available = 12;         // online_players 是否有效（探针/SLP/Query 任一命中）
+  string motd = 13;
+  string version = 14;
+  int32 max_players = 15;
+  repeated string player_names = 16;   // 实名优先取 Query，否则 SLP sample
+  repeated string plugins = 17;
+  string map = 18;
+  string favicon = 19;                 // 仅 SLP 提供（data:image/png;base64,...）
+  bytes source_mask = 20;              // 本拍命中来源位：1=探针 2=SLP 4=Query
+  bool slp_available = 21;
+  bool query_available = 22;
+  bool motd_available = 23;
+  bool version_available = 24;
+  bool max_players_available = 25;
+  bool player_names_available = 26;
+  bool plugins_available = 27;
+  bool map_available = 28;
+  bool player_names_partial = 29;      // true=名单取自 SLP sample（可能不完整，非实名）
 }
 
 // GetInstanceResourceSnapshotRequest 查询实例根进程及其完整子进程树的资源快照。
