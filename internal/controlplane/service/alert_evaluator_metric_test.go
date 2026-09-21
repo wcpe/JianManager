@@ -129,17 +129,20 @@ func TestEvaluator_BaselineROCDetectsStepDown(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, inst.ID, events[0].TargetID)
 	assert.Contains(t, events[0].Message, "下")
+	// FR-462：突降方向应结构化落库（不只用自然语言塞进 message）。
+	assert.Equal(t, model.BaselineDirectionDown, events[0].Direction)
 }
 
 func TestEvaluator_SaturationRuleFires(t *testing.T) {
 	db := newAlertTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}))
-	node := &model.Node{Name: "n1", UUID: "node-sat", Status: model.NodeStatusOnline}
+	// 节点快照携带磁盘总容量（来自注册心跳）；生产从不写 node_disk_total 序列。
+	node := &model.Node{Name: "n1", UUID: "node-sat", Status: model.NodeStatusOnline, DiskTotalMB: 100000}
 	require.NoError(t, db.Create(node).Error)
 
 	fake := newFakeMetricSource()
-	fake.setLatest(model.MetricScopeNode, "node-sat", "", model.MetricNodeDiskUsed, 95e9)
-	fake.setLatest(model.MetricScopeNode, "node-sat", "", model.MetricNodeDiskTotal, 100e9)
+	// 只注入已用序列，不注入 node_disk_total——覆盖真实缺口：饱和度必须回退用节点快照容量。
+	fake.setLatest(model.MetricScopeNode, "node-sat", "", model.MetricNodeDiskUsed, 95000*1024*1024)
 
 	eval := NewAlertEvaluator(db, NewAlertDispatcher(db))
 	eval.SetMetrics(fake)
@@ -158,6 +161,67 @@ func TestEvaluator_SaturationRuleFires(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, node.ID, events[0].TargetID)
 	assert.InDelta(t, 95, events[0].Value, 0.01)
+}
+
+// TestEvaluator_SaturationInstanceHeapUsesPairedSeries 覆盖饱和度「有配对上限序列」路径
+// （instance heap 的 inst_heap_max 由心跳真实写入），确认回退逻辑不误伤既有分支。
+func TestEvaluator_SaturationInstanceHeapUsesPairedSeries(t *testing.T) {
+	db := newAlertTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}))
+	inst := &model.Instance{UUID: "inst-heap", Name: "heapy", Status: model.InstanceStatusRunning, NodeID: 1}
+	require.NoError(t, db.Create(inst).Error)
+
+	fake := newFakeMetricSource()
+	fake.setLatest(model.MetricScopeInstance, "", "inst-heap", model.MetricInstHeapUsed, 920e6)
+	fake.setLatest(model.MetricScopeInstance, "", "inst-heap", model.MetricInstHeapMax, 1000e6)
+
+	eval := NewAlertEvaluator(db, NewAlertDispatcher(db))
+	eval.SetMetrics(fake)
+
+	rule := &model.AlertRule{
+		Name: "heap-sat", UUID: "r-heap-sat", Enabled: true,
+		TriggerType: model.AlertTriggerSaturation, Level: model.AlertLevelWarn,
+		TargetType: "instance", Scope: "instance", Metric: "heap", Threshold: 90,
+	}
+	require.NoError(t, db.Create(rule).Error)
+
+	eval.evaluate()
+
+	var events []model.AlertEvent
+	require.NoError(t, db.Where("trigger_type = ?", model.AlertTriggerSaturation).Find(&events).Error)
+	require.Len(t, events, 1)
+	assert.Equal(t, inst.ID, events[0].TargetID)
+	assert.InDelta(t, 92, events[0].Value, 0.01)
+}
+
+// TestEvaluator_BaselineColdStartSkipsBelowWindow 冷启动门槛：样本不足一个窗口（默认 3600s ≈ 120 点）
+// 时跳过，即使已缓慢劣化也不评估（spec §5）。
+func TestEvaluator_BaselineColdStartSkipsBelowWindow(t *testing.T) {
+	db := newAlertTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}))
+	node := &model.Node{Name: "n1", UUID: "node-cold", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(node).Error)
+
+	fake := newFakeMetricSource()
+	// 仅 30 点（15 分钟），远不足一个 3600s 窗口。
+	fake.setSeries(model.MetricScopeNode, "node-cold", "", model.MetricNodeMemUsed, rampSeries(30, 1000, 50))
+
+	eval := NewAlertEvaluator(db, NewAlertDispatcher(db))
+	eval.SetMetrics(fake)
+
+	rule := &model.AlertRule{
+		Name: "mem-baseline", UUID: "r-cold", Enabled: true,
+		TriggerType: model.AlertTriggerBaseline, Level: model.AlertLevelWarn,
+		TargetType: "node", Scope: "node", Metric: model.MetricNodeMemUsed,
+		BaselineMethod: model.BaselineMethodEWMA, Sensitivity: 3,
+	}
+	require.NoError(t, db.Create(rule).Error)
+
+	eval.evaluate()
+
+	var count int64
+	require.NoError(t, db.Model(&model.AlertEvent{}).Where("trigger_type = ?", model.AlertTriggerBaseline).Count(&count).Error)
+	assert.Zero(t, count, "样本不足一个窗口时应跳过（冷启动）")
 }
 
 func TestEvaluator_InstanceMetricRuleEvaluated(t *testing.T) {

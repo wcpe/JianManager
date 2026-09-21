@@ -18,7 +18,9 @@ type AlertTrigger struct {
 	// DedupKey 去抖键：同一键在窗口内复发聚合为同一活跃事件。通常为 rule.ID + target + 触发标识。
 	DedupKey string
 	Value    float64
-	Message  string
+	// Direction 结构化偏离方向（up|down），仅基线触发使用；空串表示无方向语义。
+	Direction string
+	Message   string
 	// Resolvable 标记该触发是否可恢复（metric/instance_crash/node_offline 可；日志/玩家事件为瞬时，不可恢复）。
 	Resolvable bool
 }
@@ -59,19 +61,13 @@ func (d *AlertDispatcher) Fire(trig AlertTrigger) {
 		// 去抖窗口内：累计计数、更新复发时间，不重复建事件。
 		windowSec := rule.DedupWindowSec
 		if windowSec > 0 && now.Sub(deref(active.LastFiredAt, active.FiredAt)) < time.Duration(windowSec)*time.Second {
-			d.db.Model(&active).Updates(map[string]interface{}{
-				"count":         active.Count + 1,
-				"last_fired_at": now,
-			})
+			d.aggregateActive(&active, now, trig.Direction)
 			// 窗口内复发不再通知（去抖）。
 			return
 		}
 		// 已有活跃事件但超出去抖窗口（或未配置去抖）：对可恢复型不重复建（避免风暴），仅累计。
 		if trig.Resolvable {
-			d.db.Model(&active).Updates(map[string]interface{}{
-				"count":         active.Count + 1,
-				"last_fired_at": now,
-			})
+			d.aggregateActive(&active, now, trig.Direction)
 			return
 		}
 		// 不可恢复型（日志/玩家事件）：超窗后视为新一轮，落新事件。
@@ -85,6 +81,7 @@ func (d *AlertDispatcher) Fire(trig AlertTrigger) {
 		TriggerType: ruleTriggerType(rule),
 		DedupKey:    trig.DedupKey,
 		Value:       trig.Value,
+		Direction:   trig.Direction,
 		Message:     trig.Message,
 		Count:       1,
 		Resolved:    !trig.Resolvable, // 瞬时事件直接落为已解决（无需后续恢复）。
@@ -116,6 +113,19 @@ func (d *AlertDispatcher) Fire(trig AlertTrigger) {
 		Count:   event.Count,
 		Time:    now,
 	})
+}
+
+// aggregateActive 累计一次去抖复发：计数 +1、刷新复发时间，并在方向有变化时同步最新偏离方向
+// （N6：baseline 事件在窗口内由 up 翻转为 down 时，事件仍显示旧方向会误导排障）。
+func (d *AlertDispatcher) aggregateActive(active *model.AlertEvent, now time.Time, direction string) {
+	updates := map[string]interface{}{
+		"count":         active.Count + 1,
+		"last_fired_at": now,
+	}
+	if direction != "" && direction != active.Direction {
+		updates["direction"] = direction
+	}
+	d.db.Model(active).Updates(updates)
 }
 
 // Resolve 标记某去抖键的活跃事件为已恢复，并按 NotifyRecover 发送恢复通知。

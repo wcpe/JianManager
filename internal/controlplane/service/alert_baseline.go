@@ -45,14 +45,31 @@ type BaselineResult struct {
 }
 
 const (
-	// baselineMinSamples 冷启动阈值：样本不足一个合理窗口时不评估（跳过，避免开服误报）。
+	// baselineMinSamples 基线算法的最小样本下限：样本过少时 EWMA/MAD 尺度估计不可靠，直接跳过。
+	// 注意：这是算法层的统计下限，不是冷启动窗口门槛（后者见 baselineWindowCovered）。
 	baselineMinSamples = 5
 	baselineEpsilon    = 1e-9
 	// madToSigma MAD 换算正态标准差的常数（1/0.6745）。
 	madToSigma = 1.4826
 	// baselineEWMAMemory EWMA 有效记忆拍数上限（缩短预热，兼顾突变与缓变）。
 	baselineEWMAMemory = 10
+	// baselineWindowCoverageRatio 冷启动覆盖比例：样本时间跨度至少达到窗口时长的该比例才评估，
+	// 避免因子档（raw/5m/1h）边界对齐导致的极小缺口误判为「不足一个窗口」。
+	baselineWindowCoverageRatio = 0.9
 )
+
+// baselineWindowCovered 判断窗口内样本是否已覆盖足够长的时间（spec §5：样本不足一个窗口则跳过）。
+// 用样本时间跨度而非固定点数推导门槛，对 raw（30s）/5m/1h 各分辨率都成立。
+func baselineWindowCovered(points []BaselinePoint, windowSec int) bool {
+	if len(points) < baselineMinSamples {
+		return false
+	}
+	if windowSec <= 0 {
+		windowSec = baselineDefaultWindowSec
+	}
+	span := points[len(points)-1].TS.Sub(points[0].TS).Seconds()
+	return span >= float64(windowSec)*baselineWindowCoverageRatio
+}
 
 // EvaluateBaseline 按配置方法求值窗口，返回是否越界。
 func EvaluateBaseline(points []BaselinePoint, cfg BaselineConfig) BaselineResult {
@@ -347,4 +364,28 @@ func saturationPercent(usedKey string, used, limit *float64) (float64, bool) {
 // saturationLimitKey 返回某「已用」指标对应的上限指标键（无则空）。
 func saturationLimitKey(usedKey string) string {
 	return saturationMaxKey[usedKey]
+}
+
+// nodeSnapshotLimit 从节点快照（node 表）推导饱和度上限（字节）。生产心跳从不写
+// node_mem_total/node_disk_total 序列（HeartbeatRequest 无 total 字段，见 metric.go 的
+// ingestHeartbeatAt），故无配对上限序列时以注册快照容量兜底，否则 disk/mem 饱和度规则永不触发。
+// 返回 nil 表示该指标无可用快照上限。
+func nodeSnapshotLimit(usedKey string, node *model.Node) *float64 {
+	if node == nil {
+		return nil
+	}
+	const mbToBytes = 1024 * 1024
+	switch usedKey {
+	case model.MetricNodeMemUsed:
+		if node.MemoryMB > 0 {
+			v := float64(node.MemoryMB) * mbToBytes
+			return &v
+		}
+	case model.MetricNodeDiskUsed:
+		if node.DiskTotalMB > 0 {
+			v := float64(node.DiskTotalMB) * mbToBytes
+			return &v
+		}
+	}
+	return nil
 }

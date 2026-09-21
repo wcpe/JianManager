@@ -81,11 +81,17 @@ function HealthLegend({ nodes }: { nodes: HealthWallNode[] }) {
 /**
  * 集群健康墙（FR-461）：逐节点热力矩阵 + 分级 + 排序 + 一键下钻。
  * 只读 CP 快照一次查询给全（零 Worker RPC）；行内排序由服务端 ?sort 完成。
+ * 大集群下默认分批渲染（避免一次挂载数百 DOM 节点），可「显示更多」逐批展开。
  */
+const HEALTH_WALL_PAGE_SIZE = 200
+
 export function HealthWall({ enabled }: { enabled: boolean }) {
   const [sort, setSort] = useState<HealthWallSort>('level')
+  const [visible, setVisible] = useState(HEALTH_WALL_PAGE_SIZE)
   const query = useHealthWall(enabled, sort)
   const nodes = query.data?.nodes ?? []
+  const truncated = query.data?.truncated ?? false
+  const shown = nodes.slice(0, visible)
 
   let body
   if (query.isError) {
@@ -96,8 +102,25 @@ export function HealthWall({ enabled }: { enabled: boolean }) {
     body = (
       <>
         <div data-testid="health-wall-grid" className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-          {nodes.map((node) => <HealthCell key={node.nodeId} node={node} />)}
+          {shown.map((node) => <HealthCell key={node.nodeId} node={node} />)}
         </div>
+        {nodes.length > shown.length && (
+          <div className="mt-3 text-center">
+            <button
+              type="button"
+              data-testid="health-wall-more"
+              onClick={() => setVisible((v) => v + HEALTH_WALL_PAGE_SIZE)}
+              className="rounded border bg-background px-3 py-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              显示更多（剩余 {nodes.length - shown.length} 台）
+            </button>
+          </div>
+        )}
+        {truncated && (
+          <p data-testid="health-wall-truncated" className="mt-2 text-center text-xs text-muted-foreground">
+            节点过多，仅展示最严重的 {nodes.length} 台
+          </p>
+        )}
         <HealthLegend nodes={nodes} />
       </>
     )

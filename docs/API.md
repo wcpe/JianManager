@@ -702,7 +702,7 @@
 - **关联 FR**: FR-461（增强 FR-402）
 - **权限**: 平台管理员。
 - **Query**: `sort=level|cpu|mem|disk|instances`（默认 `level`，按严重度降序）。
-- **响应** (200): `{ nodes: [{ nodeId, nodeUuid, name, zone?, freshness, cpuPct, memPct, diskPct, running, crashed, stopped, activeAlerts, botActive, botConnecting, level, href }] }`。资源水位仅对鲜活节点给出（陈旧/离线为 `null`）；`href` 为 `/monitoring?node=<uuid>`。节点全量（≤500）。
+- **响应** (200): `{ nodes: [{ nodeId, nodeUuid, name, zone?, freshness, cpuPct, memPct, diskPct, running, crashed, stopped, activeAlerts, botActive, botConnecting, level, href }], truncated }`。资源水位仅对鲜活节点给出（陈旧/离线为 `null`）；`href` 为 `/monitoring?node=<uuid>`。节点全量（上限 500）；超出时先按 `sort` 排序再截断，`truncated=true` 表示响应已被截断（最严重节点优先保留）。
 - **错误**: 403 `FORBIDDEN`；500 `INTERNAL_ERROR`。
 
 ### GET /api/v1/metrics/resource-attribution
@@ -2150,7 +2150,7 @@
 - **描述**: 告警事件分页列表（含规则名预加载，按触发时间倒序，FR-149）
 - **关联 FR**: FR-011, FR-085, FR-149
 - **Query**: `ruleId` `resolved`(true/false) `acknowledged`(true/false) `level` `triggerType` `keyword`(模糊匹配 message) `from`/`to`(RFC3339 时间范围) `page`(从 1 起) `pageSize`(默认 50)
-- **响应**: `{ "items": [...], "total": <命中总数> }`；事件含 `level` `triggerType` `count`(聚合计数) `resolved` `acknowledged` `acknowledgedBy` `acknowledgedAt` `read`
+- **响应**: `{ "items": [...], "total": <命中总数> }`；事件含 `level` `triggerType` `count`(聚合计数) `direction`(基线/饱和度偏离方向 `up`|`down`，其余触发类型省略) `resolved` `acknowledged` `acknowledgedBy` `acknowledgedAt` `read`
 
 #### GET /api/v1/alerts/events/unread-count
 - **描述**: 未读告警数（站内角标）

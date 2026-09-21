@@ -273,20 +273,21 @@ func (e *AlertEvaluator) evaluateBaselineRule(rule *model.AlertRule) {
 	}
 	now := time.Now().UTC()
 	from := now.Add(-time.Duration(window) * time.Second)
+	// 冷启动门槛：窗口内样本时间跨度不足一个窗口时跳过（spec §5），避免开服即误报。
 	e.forEachMetricTarget(scope, rule.TargetID, func(nodeUUID, instanceID string, targetID uint, name string) {
-		e.evaluateBaselineTarget(rule, scope, metricKey, cfg, nodeUUID, instanceID, targetID, name, from, now)
+		e.evaluateBaselineTarget(rule, scope, metricKey, cfg, nodeUUID, instanceID, targetID, name, from, now, window)
 	})
 }
 
 // evaluateBaselineTarget 对单目标求基线并触发/恢复。
-func (e *AlertEvaluator) evaluateBaselineTarget(rule *model.AlertRule, scope, metricKey string, cfg BaselineConfig, nodeUUID, instanceID string, targetID uint, name string, from, now time.Time) {
+func (e *AlertEvaluator) evaluateBaselineTarget(rule *model.AlertRule, scope, metricKey string, cfg BaselineConfig, nodeUUID, instanceID string, targetID uint, name string, from, now time.Time, windowSec int) {
 	points, err := e.fetchBaselinePoints(scope, nodeUUID, instanceID, metricKey, from, now)
 	if err != nil {
 		slog.Warn("告警评估：查询基线窗口失败", "rule", rule.Name, "target", targetID, "error", err)
 		return
 	}
-	if len(points) < baselineMinSamples {
-		return // 冷启动：样本不足一个合理窗口，跳过（不发告警，避免开服误报）
+	if !baselineWindowCovered(points, windowSec) {
+		return // 冷启动：样本不足一个窗口，跳过（不发告警，避免开服误报）
 	}
 	result := EvaluateBaseline(points, cfg)
 	key := fmt.Sprintf("baseline:%d:%d:%s", rule.ID, targetID, rule.Metric)
@@ -296,6 +297,7 @@ func (e *AlertEvaluator) evaluateBaselineTarget(rule *model.AlertRule, scope, me
 			TargetID:   targetID,
 			DedupKey:   key,
 			Value:      result.Value,
+			Direction:  result.Direction,
 			Message:    fmt.Sprintf("%s %s 基线%s偏离：当前 %g，基线 %g，偏离 %g", scopeLabel(scope), name, directionLabel(result.Direction), result.Value, result.Baseline, result.Deviation),
 			Resolvable: true,
 		})
@@ -317,7 +319,7 @@ func (e *AlertEvaluator) evaluateSaturationRule(rule *model.AlertRule) {
 	limitKey := saturationLimitKey(usedKey)
 	metricScope := metricScopeOf(scope)
 	since := time.Now().UTC().Add(-alertMetricFreshWindow)
-	e.forEachMetricTarget(scope, rule.TargetID, func(nodeUUID, instanceID string, targetID uint, name string) {
+	e.forEachSaturationTarget(scope, rule.TargetID, usedKey, func(nodeUUID, instanceID string, targetID uint, name string, snapshotLimit *float64) {
 		used, err := e.metrics.LatestValue(metricScope, nodeUUID, instanceID, usedKey, since)
 		if err != nil {
 			slog.Warn("告警评估：查询饱和度已用值失败", "rule", rule.Name, "target", targetID, "error", err)
@@ -330,8 +332,20 @@ func (e *AlertEvaluator) evaluateSaturationRule(rule *model.AlertRule) {
 				return
 			}
 		}
+		// 回退：无配对上限序列时用节点快照容量（生产从未写入 node_*_total 序列）。
+		if limit == nil {
+			limit = snapshotLimit
+		}
 		pct, ok := saturationPercent(usedKey, used, limit)
 		if !ok {
+			// N2：used/limit 任一缺失时 saturationPercent 返回 false，此处既非 Fire 也非 Resolve。
+			// 若因节点容量快照缺失（memory_mb/disk_total_mb ≤ 0，见 nodeSnapshotLimit）而无上限，
+			// 明确留痕告警，避免「disk/mem 永不触发」再次静默复发且无任何诊断信号。
+			if limit == nil {
+				slog.Warn("告警评估：饱和度上限缺失，跳过评估",
+					"rule", rule.Name, "target", targetID, "metric", rule.Metric, "scope", scope,
+					"reason", "节点容量快照缺失（memory_mb/disk_total_mb 为 0）且无配对上限序列")
+			}
 			return
 		}
 		key := fmt.Sprintf("saturation:%d:%d:%s", rule.ID, targetID, rule.Metric)
@@ -369,6 +383,29 @@ func (e *AlertEvaluator) forEachMetricTarget(scope string, targetID *uint, fn fu
 	}
 	for i := range nodes {
 		fn(nodes[i].UUID, "", nodes[i].ID, nodes[i].Name)
+	}
+}
+
+// forEachSaturationTarget 遍历饱和度评估目标，并在节点维度附带快照上限回退值
+// （instance 维度无节点快照，heap 上限由 inst_heap_max 序列提供，故传 nil）。
+func (e *AlertEvaluator) forEachSaturationTarget(scope string, targetID *uint, usedKey string, fn func(nodeUUID, instanceID string, id uint, name string, snapshotLimit *float64)) {
+	if scope == "instance" {
+		for _, inst := range e.metricTargetInstances(targetID) {
+			fn("", inst.UUID, inst.ID, inst.Name, nil)
+		}
+		return
+	}
+	var nodes []model.Node
+	q := e.db.Model(&model.Node{}).Select("id, uuid, name, memory_mb, disk_total_mb")
+	if targetID != nil {
+		q = q.Where("id = ?", *targetID)
+	}
+	if err := q.Find(&nodes).Error; err != nil {
+		slog.Warn("告警评估：查询评估节点失败", "error", err)
+		return
+	}
+	for i := range nodes {
+		fn(nodes[i].UUID, "", nodes[i].ID, nodes[i].Name, nodeSnapshotLimit(usedKey, &nodes[i]))
 	}
 }
 

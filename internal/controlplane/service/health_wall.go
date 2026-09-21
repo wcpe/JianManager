@@ -53,6 +53,8 @@ type HealthWallNode struct {
 // HealthWall 是逐台健康矩阵读模型（FR-461）。
 type HealthWall struct {
 	Nodes []HealthWallNode `json:"nodes"`
+	// Truncated 为 true 表示节点数超过 healthWallNodeLimit，响应已被按 severity 截断。
+	Truncated bool `json:"truncated"`
 }
 
 // HealthWall 返回逐台健康矩阵（默认按 severity 降序）。只读 CP 快照，绝不触发 Worker RPC。
@@ -69,14 +71,22 @@ func (s *PlatformObservabilityService) HealthWallAt(now time.Time, sortKey strin
 	for i := range nodes {
 		nodes[i].Level = healthLevelAt(nodes[i])
 	}
+	// 先全量排序再按 severity 截断：避免「按 id 截断」丢最严重节点，并如实回报截断标记。
 	sortHealthWall(nodes, sortKey)
-	return HealthWall{Nodes: nodes}, nil
+	truncated := false
+	if len(nodes) > healthWallNodeLimit {
+		nodes = nodes[:healthWallNodeLimit]
+		truncated = true
+	}
+	return HealthWall{Nodes: nodes, Truncated: truncated}, nil
 }
 
-// loadHealthWallNodes 以固定条数查询聚合出每台节点的健康快照（无逐台查询）。
+// loadHealthWallNodes 全量载入节点快照（数量受 fleet 规模约束，不做逐台查询），并以常数条
+// 聚合查询补齐实例计数与活跃告警。节点数不再在查询层按 id 截断——截断推迟到按 severity
+// 排序之后，避免丢失最严重节点。
 func (s *PlatformObservabilityService) loadHealthWallNodes(now time.Time) ([]HealthWallNode, error) {
 	var rawNodes []model.Node
-	if err := s.db.Order("id ASC").Limit(healthWallNodeLimit).Find(&rawNodes).Error; err != nil {
+	if err := s.db.Order("id ASC").Find(&rawNodes).Error; err != nil {
 		return nil, fmt.Errorf("查询健康墙节点失败: %w", err)
 	}
 	if len(rawNodes) == 0 {
@@ -87,7 +97,7 @@ func (s *PlatformObservabilityService) loadHealthWallNodes(now time.Time) ([]Hea
 	if err != nil {
 		return nil, err
 	}
-	alertCounts, err := s.healthWallAlertCounts(instances.nodeByInstance)
+	alertCounts, err := s.healthWallAlertCounts()
 	if err != nil {
 		return nil, err
 	}
@@ -121,72 +131,102 @@ func (s *PlatformObservabilityService) loadHealthWallNodes(now time.Time) ([]Hea
 	return out, nil
 }
 
-// healthWallInstanceAgg 汇总每节点的实例状态计数与 instance_id→node_id 归属。
+// healthWallInstanceAgg 汇总每节点的实例状态计数。
 type healthWallInstanceAgg struct {
 	running, crashed, stopped map[uint]int
-	nodeByInstance            map[uint]uint
 }
 
-// healthWallInstances 一次查询全量实例，按节点聚合状态计数（替代逐台 GROUP BY）。作有界聚合。
+// healthWallInstances 以 GROUP BY (node_id, status) 在库侧聚合各节点实例状态计数（有界聚合，
+// 替代全表加载逐行累加）。
 func (s *PlatformObservabilityService) healthWallInstances() (healthWallInstanceAgg, error) {
 	agg := healthWallInstanceAgg{
-		running:        map[uint]int{},
-		crashed:        map[uint]int{},
-		stopped:        map[uint]int{},
-		nodeByInstance: map[uint]uint{},
+		running: map[uint]int{},
+		crashed: map[uint]int{},
+		stopped: map[uint]int{},
 	}
 	type row struct {
-		ID     uint
 		NodeID uint
 		Status model.InstanceStatus
+		Count  int
 	}
 	var rows []row
-	if err := s.db.Model(&model.Instance{}).Select("id, node_id, status").Find(&rows).Error; err != nil {
+	if err := s.db.Model(&model.Instance{}).
+		Select("node_id, status, COUNT(*) AS count").
+		Group("node_id, status").Find(&rows).Error; err != nil {
 		return agg, fmt.Errorf("查询健康墙实例计数失败: %w", err)
 	}
 	for _, r := range rows {
-		agg.nodeByInstance[r.ID] = r.NodeID
 		switch r.Status {
 		case model.InstanceStatusRunning:
-			agg.running[r.NodeID]++
+			agg.running[r.NodeID] += r.Count
 		case model.InstanceStatusCrashed:
-			agg.crashed[r.NodeID]++
+			agg.crashed[r.NodeID] += r.Count
 		case model.InstanceStatusStopped:
-			agg.stopped[r.NodeID]++
+			agg.stopped[r.NodeID] += r.Count
 		}
 	}
 	return agg, nil
 }
 
 // healthWallAlertCounts 统计归属到每台节点的未解决告警数：节点级规则按其 target、
-// 实例级规则按实例所属节点归因（借规则 TargetType 消歧 node/instance 的 ID 空间重叠）。
-func (s *PlatformObservabilityService) healthWallAlertCounts(nodeByInstance map[uint]uint) (map[uint]int, error) {
+// 实例级规则经 instances 表把实例 ID 映射回所属节点（借规则 Scope/TargetType/触发类型
+// 消歧 node/instance 的 ID 空间重叠；维度缺失时按触发类型推断，仍无法判别则不归因，
+// 避免把实例 ID 当节点 ID 错归因到某台节点）。
+func (s *PlatformObservabilityService) healthWallAlertCounts() (map[uint]int, error) {
 	counts := map[uint]int{}
 	type row struct {
-		TargetID    uint
-		TargetType  string
-		TriggerType string
+		TargetID       uint
+		TargetType     string
+		Scope          string
+		TriggerType    string
+		InstanceNodeID *uint
 	}
 	var rows []row
 	err := s.db.Table("alert_events AS e").
-		Select("e.target_id, r.target_type, e.trigger_type").
+		Select("e.target_id, COALESCE(r.target_type, '') AS target_type, COALESCE(r.scope, '') AS scope, COALESCE(e.trigger_type, '') AS trigger_type, i.node_id AS instance_node_id").
 		Joins("JOIN alert_rules AS r ON r.id = e.rule_id").
+		Joins("LEFT JOIN instances AS i ON i.id = e.target_id AND i.deleted_at IS NULL").
 		Where("e.resolved = ?", false).
 		Scan(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("查询健康墙活跃告警失败: %w", err)
 	}
 	for _, r := range rows {
-		switch {
-		case r.TriggerType == model.AlertTriggerNodeOffline || r.TargetType == "node":
-			counts[r.TargetID]++
-		case r.TargetType == "instance":
-			if nodeID, ok := nodeByInstance[r.TargetID]; ok {
-				counts[nodeID]++
-			}
+		if nodeID, ok := attributeAlertNode(r.TargetID, r.TargetType, r.Scope, r.TriggerType, r.InstanceNodeID); ok {
+			counts[nodeID]++
 		}
 	}
 	return counts, nil
+}
+
+// attributeAlertNode 把一条活跃告警归因到节点 ID。维度判定优先级：显式 Scope > TargetType >
+// 触发类型家族（node_offline 恒为节点，实例家族恒为实例）。
+//   - 节点维度：target 直接作节点 ID；
+//   - 实例维度：经 instances 映射回所属节点，映射不到则不归因；
+//   - 维度完全缺失（scope/target_type 皆空，如前 FR-462 存量行的 baseline/saturation）：node 与
+//     instance 的 target_id 数字空间重叠，无法安全判别，故不归因（宁可少计，也不把 instance 的
+//     target_id 当节点 ID 错归因到某台节点）。
+func attributeAlertNode(targetID uint, targetType, scope, triggerType string, instanceNodeID *uint) (uint, bool) {
+	if targetType == "node" || scope == "node" || triggerType == model.AlertTriggerNodeOffline {
+		return targetID, true
+	}
+	if targetType == "instance" || scope == "instance" || isInstanceScopedTrigger(triggerType) {
+		if instanceNodeID != nil {
+			return *instanceNodeID, true
+		}
+		return 0, false
+	}
+	return 0, false
+}
+
+// isInstanceScopedTrigger 判断触发类型是否天然作用于实例维度。
+func isInstanceScopedTrigger(triggerType string) bool {
+	switch triggerType {
+	case model.AlertTriggerInstanceCrash, model.AlertTriggerLogKeyword,
+		model.AlertTriggerPlayerEvent, model.AlertTriggerBackupFailed:
+		return true
+	}
+	return false
 }
 
 // healthWallFreshness 把资源鲜度映射为健康墙三态（online 但无心跳视为 stale）。
