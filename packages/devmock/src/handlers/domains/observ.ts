@@ -930,6 +930,26 @@ export const handlers = [
         { name: 'world_nether', loadedChunks: 210, entities: 90, tileEntities: 40 },
       ],
       probeAvailable: true,
+      // MC 直探可用性位与来源位（FR-446/447）：三源皆命中的满配种子，
+      // 供前端渲染「不可用」语义与数据来源标注（1=探针 2=SLP 4=Query）。
+      playersAvailable: true,
+      motd: 'A Mock Server',
+      motdAvailable: true,
+      version: '1.20.4',
+      versionAvailable: true,
+      favicon: '',
+      maxPlayers: 20,
+      maxPlayersAvailable: true,
+      playerNames: ['Steve', 'Alex'],
+      playerNamesAvailable: true,
+      playerNamesPartial: false,
+      plugins: ['Paper', 'Vault'],
+      pluginsAvailable: true,
+      map: 'world',
+      mapAvailable: true,
+      slpAvailable: true,
+      queryAvailable: true,
+      sourceMask: 7,
     })
   }),
 

@@ -341,7 +341,7 @@ function RunningInstanceRow({ instance, nodeName, open }: { instance: InstanceIn
       {metrics && (
         <span className="flex shrink-0 items-center gap-1 tabular-nums text-muted-foreground">
           <Users className="size-3" />
-          {t('header.onlinePlayersCount', { count: metrics.onlinePlayers })}
+          {metrics.playersAvailable ? t('header.onlinePlayersCount', { count: metrics.onlinePlayers }) : t('metrics.unavailable')}
         </span>
       )}
     </DropdownMenuItem>

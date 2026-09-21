@@ -23,6 +23,7 @@ import InstanceActivityFeed from './InstanceActivityFeed'
 import InstanceBackupSegment from './InstanceBackupSegment'
 import InstancePlayersSegment from './InstancePlayersSegment'
 import InstanceResourceSegment, { type ResourceSegment } from './InstanceResourceSegment'
+import { MetricSourceChips } from './MetricSourceChips'
 import WorkspaceCardBody from './WorkspaceCardBody'
 import { recordRecentServer } from './server-selection'
 
@@ -125,8 +126,14 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   }, [instance])
 
   const node = nodes.find((n) => n.id === instance?.nodeId)
-  const online = serverState?.state?.server?.onlinePlayers ?? metrics?.onlinePlayers ?? 0
-  const maxPlayers = serverState?.state?.server?.maxPlayers ?? 200
+  // 在线数取值与可用性（FR-446/447）：探针 server-state 为权威，其次实时直探（playersAvailable）。
+  // playersAvailable=false 时不得回退成 0——那会把「不可用」误显示为「0 人在线」。
+  const serverStatePlayers = serverState?.state?.server?.onlinePlayers
+  const serverStateMax = serverState?.state?.server?.maxPlayers
+  const playersAvailable = serverStatePlayers != null || (metrics?.playersAvailable ?? false)
+  const online = serverStatePlayers ?? (metrics?.playersAvailable ? metrics!.onlinePlayers : 0)
+  const maxPlayers = serverStateMax ?? (metrics?.maxPlayersAvailable ? metrics!.maxPlayers : 0)
+  const maxPlayersAvailable = serverStateMax != null || (metrics?.maxPlayersAvailable ?? false)
   const richMetricsAvailable = metrics?.probeAvailable ?? false
   // 关注事项走 i18n（修硬编码中文）：告警文案直接进英文界面是验收硬伤。
   const watchItems = useMemo(
@@ -362,25 +369,36 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
 
           {metricsBarOpen && (
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-              {/* 方案 B 分段状态条：label + 等宽值成段、细分隔线隔开，阈值越线才上色。
-                  探针缺失的 TPS/MSPT/在线 不再逐项写「需探针」（三个灰词比数据还抢眼），
-                  折叠为右侧一枚状态芯片，悬停可见不可用项清单（FR-343 诚实标记改为聚合式）。 */}
-              {richMetricsAvailable && (
+              {/* 方案 B 分段状态条（FR-412/446/447）：探针深度指标（TPS/MSPT）仅在探针可用时显示真实值，
+                  否则显「不可用」；在线数由探针 → SLP → Query 任一来源提供，三源皆无亦显「不可用」，
+                  不再以 0 冒充「0 人在线」。来源由右侧来源芯片标注（探针/SLP/Query）。 */}
+              {richMetricsAvailable ? (
                 <>
                   <MetricSegment label={t('serverConsole.tps')} value={formatNumber(metrics?.tps, 1)} tone={metrics?.tps != null && metrics.tps < 18 ? 'warn' : undefined} dot />
                   <MetricDivider />
                   <MetricSegment label={t('serverConsole.mspt')} value={`${formatNumber(metrics?.msptMillis, 0)}ms`} tone={metrics?.msptMillis != null && metrics.msptMillis > 50 ? 'danger' : undefined} dot />
                   <MetricDivider />
-                  <MetricSegment label={t('serverConsole.online')} value={`${online}/${maxPlayers}`} />
+                </>
+              ) : (
+                <>
+                  <MetricSegment label={t('serverConsole.tps')} value={t('metrics.unavailable')} />
                   <MetricDivider />
                 </>
               )}
+              <MetricSegment
+                label={t('serverConsole.online')}
+                value={playersAvailable ? `${online}/${maxPlayersAvailable ? maxPlayers : '—'}` : t('metrics.unavailable')}
+              />
+              <MetricDivider />
               <MetricSegment label={t('serverConsole.cpu')} value={`${Math.round(metrics?.cpuPercent ?? 0)}%`} tone={(metrics?.cpuPercent ?? 0) > 85 ? 'warn' : undefined} />
               <MetricDivider />
               <MetricSegment label={t('serverConsole.memory')} value={(metrics?.heapMaxMb ?? 0) > 0 ? `${formatNumber(metrics?.memoryMb, 0)}/${formatNumber(metrics?.heapMaxMb, 0)}M` : `${formatNumber(metrics?.memoryMb, 0)}M`} />
               <MetricDivider />
               <MetricSegment label={t('serverConsole.diskNode')} value={`${Math.round(node?.diskUsage ?? 0)}%`} tone={(node?.diskUsage ?? 0) > 85 ? 'warn' : undefined} />
-              {!richMetricsAvailable && <ProbeMissingChip />}
+              <span className="ml-auto flex items-center gap-1.5">
+                <MetricSourceChips metrics={metrics ?? {}} />
+                {!richMetricsAvailable && <ProbeMissingChip />}
+              </span>
               {/* 元信息在窄屏没进标题行，补一条 pill 兜住（md 以下） */}
               <span className="rounded-full border bg-muted/70 px-2 py-0.5 text-[11px] text-muted-foreground md:hidden">
                 {node?.name ?? t('console.unknownNode', { id: instance.nodeId })} · <span className="font-mono">:{instance.serverPort || '—'}</span>
@@ -490,6 +508,8 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                 metrics={metrics}
                 online={online}
                 maxPlayers={maxPlayers}
+                playersAvailable={playersAvailable}
+                maxPlayersAvailable={maxPlayersAvailable}
                 nodeDiskUsage={node?.diskUsage}
                 logs={logs?.items ?? []}
                 watchItems={watchItems}
@@ -594,13 +614,13 @@ function MetricDivider() {
   return <span aria-hidden className="h-3 w-px shrink-0 bg-border" />
 }
 
-/** 探针缺失聚合芯片（方案 B）：取代逐项「需探针」，悬停列出不可用项。 */
+/** 探针缺失聚合芯片（方案 B）：取代逐项「需探针」，悬停列出不可用项。对齐交由外层容器管理。 */
 function ProbeMissingChip() {
   const { t } = useTranslation()
   return (
     <span
       title={t('serverConsole.probeUnavailable')}
-      className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
+      className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
     >
       <span aria-hidden className="size-1.5 rounded-full bg-muted-foreground/60" />
       {t('serverConsole.probeChip')}
@@ -614,6 +634,8 @@ function OverviewPanel({
   metrics,
   online,
   maxPlayers,
+  playersAvailable,
+  maxPlayersAvailable,
   nodeDiskUsage,
   logs,
   watchItems,
@@ -625,6 +647,10 @@ function OverviewPanel({
   metrics?: { tps: number; msptMillis: number; memoryMb: number; heapMaxMb: number; cpuPercent: number; onlinePlayers: number; probeAvailable: boolean }
   online: number
   maxPlayers: number
+  /** 在线数是否可用（探针 server-state 或直探 SLP/Query 任一命中）。 */
+  playersAvailable: boolean
+  /** 最大人数是否可用（同上，缺测不得以 0 冒充）。 */
+  maxPlayersAvailable: boolean
   nodeDiskUsage?: number
   logs: Array<{ id: number; level: string; message: string; time: string }>
   watchItems: string[]
@@ -660,8 +686,8 @@ function OverviewPanel({
       <div className="grid flex-none gap-2 [grid-template-columns:repeat(auto-fit,minmax(122px,1fr))]">
         <KpiCard icon={Gauge} label={t('serverConsole.cpu')} value={`${cpuPct}%`} progress={Math.min(100, cpuPct)} />
         <KpiCard icon={HardDrive} label={t('serverConsole.memory')} value={hasHeapMax ? `${memoryPct}%` : `${formatNumber(metrics?.memoryMb, 0)} MB`} sub={hasHeapMax ? `${formatNumber(metrics?.memoryMb, 0)} / ${formatNumber(metrics?.heapMaxMb, 0)} MB` : 'RSS'} progress={memoryPct} />
-        <KpiCard icon={ActivityIcon} label={t('serverConsole.tps')} value={hasProbe ? formatNumber(metrics?.tps, 1) : t('serverConsole.probeRequired')} progress={hasProbe ? Math.min(100, ((metrics?.tps ?? 0) / 20) * 100) : 0} />
-        <KpiCard icon={Users} label={t('serverConsole.online')} value={hasProbe ? `${online}/${maxPlayers}` : t('serverConsole.probeRequired')} progress={hasProbe && maxPlayers > 0 ? (online / maxPlayers) * 100 : 0} />
+        <KpiCard icon={ActivityIcon} label={t('serverConsole.tps')} value={hasProbe ? formatNumber(metrics?.tps, 1) : t('metrics.unavailable')} progress={hasProbe ? Math.min(100, ((metrics?.tps ?? 0) / 20) * 100) : 0} />
+        <KpiCard icon={Users} label={t('serverConsole.online')} value={playersAvailable ? `${online}/${maxPlayersAvailable ? maxPlayers : '—'}` : t('metrics.unavailable')} progress={playersAvailable && maxPlayers > 0 ? (online / maxPlayers) * 100 : 0} />
         <KpiCard icon={Layers} label={t('serverConsole.diskNode')} value={`${diskPct}%`} progress={diskPct} />
         <KpiCard icon={AlertTriangle} label={t('serverConsole.alerts')} value={String(alertCount)} danger={alertCount > 0} progress={alertCount > 0 ? 100 : 0} />
       </div>

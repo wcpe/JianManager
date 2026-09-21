@@ -2,15 +2,17 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { useMetricSeries, type MetricSeries, useInstanceMetrics } from '@/api/metrics'
+import { useMetricSeries, type MetricSeries, useInstanceMetrics, type InstanceMetricsData } from '@/api/metrics'
 import { useInstance } from '@/api/instances'
 import { useProbeUpdateStatus, useUpdateProbe } from '@/api/probe'
 import { useInstanceProbeVersion, useSelectableProbeVersions, useSetInstanceProbeVersion } from '@/api/artifactVersions'
+import { activeMetricSources } from '@/lib/metrics-availability'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
 import { TimeSeriesChart, type ChartReferenceLine, type ChartSeries } from '@jianmanager/ui'
 import { RangePicker, type MetricRange } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
+import { MetricSourceChips } from './MetricSourceChips'
 
 /**
  * 探针在线更新卡（FR-068/409）：展示探针连接状态、当前解析版本和上次下发时间。
@@ -184,6 +186,49 @@ function ResourceLimitCard({ instanceId }: { instanceId: number }) {
   )
 }
 
+/**
+ * 直探信息卡（FR-446 / FR-447）：展示 SLP / Query 直探回填的基础信息——
+ * MOTD / 版本 / 在线人数 / 最大人数 / 玩家名单 / 插件列表 / 地图名。
+ *
+ * 每项按**可用性位**渲染：有值显示值，缺测显示「不可用」，不以 0 / 空串冒充。
+ * 三源皆无（探针未装、SLP/Query 均不可达）时整卡不渲染——诚实标记由探针卡与健康条承载。
+ */
+function DirectProbeCard({ metrics, isRunning }: { metrics?: InstanceMetricsData; isRunning: boolean }) {
+  const { t } = useTranslation()
+  if (!isRunning || !metrics) return null
+  if (activeMetricSources(metrics).length === 0) return null
+  const unavailable = t('metrics.unavailable')
+  const names = metrics.playerNames ?? []
+  const plugins = metrics.plugins ?? []
+  const field = (label: string, available: boolean | undefined, value: string) => (
+    <div className="flex items-baseline justify-between gap-2 rounded-md border px-2 py-1.5">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span
+        className={cn('min-w-0 truncate text-right font-medium', (available ?? false) || 'text-muted-foreground')}
+        title={available ? value : unavailable}
+      >
+        {available ? value : unavailable}
+      </span>
+    </div>
+  )
+  const playerNamesValue = names.length
+    ? `${names.join('、')}${metrics.playerNamesPartial ? ` ${t('metrics.playerNamesPartial')}` : ''}`
+    : t('metrics.emptyList')
+  const pluginsValue = plugins.length ? plugins.join('、') : t('metrics.emptyList')
+  return (
+    <Panel title={t('metrics.directProbe')}>
+      <div className="grid grid-cols-1 gap-2 p-2 text-xs sm:grid-cols-2">
+        {field(t('metrics.motd'), metrics.motdAvailable, metrics.motd)}
+        {field(t('metrics.version'), metrics.versionAvailable, metrics.version)}
+        {field(t('metrics.players'), metrics.playersAvailable, `${metrics.onlinePlayers}/${metrics.maxPlayersAvailable ? metrics.maxPlayers : '—'}`)}
+        {field(t('metrics.map'), metrics.mapAvailable, metrics.map)}
+        {field(t('metrics.playerNames'), metrics.playerNamesAvailable, playerNamesValue)}
+        {field(t('metrics.plugins'), metrics.pluginsAvailable, pluginsValue)}
+      </div>
+    </Panel>
+  )
+}
+
 function HealthStrip({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()
   const { data: inst } = useInstance(instanceId)
@@ -198,25 +243,30 @@ function HealthStrip({ instanceId }: { instanceId: number }) {
     )
   }
   if (!metrics) return null
+  // TPS/MSPT 仅探针可得（FR-447）：探针不可用显「不可用」，不以 0/0.0 冒充真实值。
+  const probeOk = metrics.probeAvailable
+  const unavailable = t('metrics.unavailable')
   return (
     <Panel title={t('metrics.currentHealth')}>
       <div className="grid grid-cols-1 gap-2 p-2 text-xs sm:grid-cols-3">
-        <HealthPill label={t('metrics.tps')} value={metrics.tps.toFixed(1)} level={tpsLevel(metrics.tps)} />
-        <HealthPill label={t('metrics.mspt')} value={`${metrics.msptMillis.toFixed(0)}ms`} level={msptLevel(metrics.msptMillis)} />
+        <HealthPill label={t('metrics.tps')} value={probeOk ? metrics.tps.toFixed(1) : unavailable} level={tpsLevel(metrics.tps)} unavailable={!probeOk} />
+        <HealthPill label={t('metrics.mspt')} value={probeOk ? `${metrics.msptMillis.toFixed(0)}ms` : unavailable} level={msptLevel(metrics.msptMillis)} unavailable={!probeOk} />
         <HealthPill label={t('metrics.cpu')} value={`${metrics.cpuPercent.toFixed(0)}%`} level={cpuLevel(metrics.cpuPercent)} />
       </div>
     </Panel>
   )
 }
 
-function HealthPill({ label, value, level }: { label: string; value: string; level: HealthLevel }) {
-  const tone = {
-    ok: 'border-status-success/40 bg-status-success/10 text-status-success',
-    warn: 'border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-200',
-    danger: 'border-status-danger/40 bg-status-danger/10 text-status-danger',
-  }[level]
+function HealthPill({ label, value, level, unavailable }: { label: string; value: string; level: HealthLevel; unavailable?: boolean }) {
+  const tone = unavailable
+    ? 'border-border bg-muted/60 text-muted-foreground'
+    : {
+        ok: 'border-status-success/40 bg-status-success/10 text-status-success',
+        warn: 'border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-200',
+        danger: 'border-status-danger/40 bg-status-danger/10 text-status-danger',
+      }[level]
   return (
-    <div className={cn('rounded-md border px-3 py-2', tone)} data-health-level={level}>
+    <div className={cn('rounded-md border px-3 py-2', tone)} data-health-level={unavailable ? 'unavailable' : level}>
       <p className="text-muted-foreground">{label}</p>
       <p className="mt-1 text-base font-semibold tabular-nums">{value}</p>
     </div>
@@ -312,6 +362,9 @@ export default function MetricsSegment({ instanceUuid, instanceId }: { instanceU
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>('24h')
   const { data, isLoading } = useMetricSeries({ scope: 'instance', targetId: instanceUuid, range })
+  const { data: inst } = useInstance(instanceId)
+  const running = inst?.status === 'RUNNING'
+  const { data: directMetrics } = useInstanceMetrics(instanceId, running)
 
   const series = data?.series ?? []
   const one = (metricKey: string, name: string): ChartSeries[] => {
@@ -342,12 +395,17 @@ export default function MetricsSegment({ instanceUuid, instanceId }: { instanceU
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       {/* 区间选择常驻：改区间是本页主操作，不该被曲线滚出视野。 */}
       <div className="flex flex-none items-center justify-between">
-        <h3 className="text-sm font-semibold">{t('metrics.title')}</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold">{t('metrics.title')}</h3>
+          {/* 数据来源标注（FR-447）：探针 / SLP 直探 / Query 直探。 */}
+          <MetricSourceChips metrics={directMetrics ?? {}} />
+        </div>
         <RangePicker value={range} onChange={setRange} />
       </div>
       {/* 本页唯一滚动容器（FR-422：滚动收口在卡内，顶栏与 Tab 栏不滚）。 */}
       <div className="min-h-0 flex-1 space-y-3 overflow-auto">
         <ProbeUpdateCard instanceId={instanceId} />
+        <DirectProbeCard metrics={directMetrics} isRunning={running} />
         <HealthStrip instanceId={instanceId} />
         <ResourceLimitCard instanceId={instanceId} />
         {/* 实例指标：xl 三列 × 6 张 = 上下两行（spec §3.1 监控行）。

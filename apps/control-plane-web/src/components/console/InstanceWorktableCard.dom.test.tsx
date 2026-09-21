@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
+import { mockInject } from '@jianmanager/devmock/inject'
 import { renderWithProviders } from '@/test/render'
 import type { InstanceInfo } from '@/api/instances'
 import { InstanceWorktableCard } from './InstanceWorktableCard'
@@ -107,5 +108,65 @@ describe('InstanceWorktableCard 点击卡片打开实例（FIX-9）', () => {
 
     expect(opened).toEqual([42])
     expect(window.location.pathname).toBe('/instances')
+  })
+})
+
+/** 运行态可用性渲染（FR-446/447）：缺测显「不可用」，有值显真实值，不再以 0 冒充「0 人在线」。 */
+describe('InstanceWorktableCard 卡内在线数/TPS 可用性', () => {
+  const runningInst = { ...stoppedInst, status: 'RUNNING' } as InstanceInfo
+
+  beforeEach(() => {
+    window.history.pushState({}, '', '/instances')
+  })
+
+  function injectMetrics(body: Record<string, unknown>) {
+    mockInject('get', '/instances/:id/metrics', { kind: 'status', status: 200, body })
+  }
+
+  it('三源皆无：在线数与 TPS 均显「不可用」，不出现 0', async () => {
+    injectMetrics({
+      tps: 0,
+      onlinePlayers: 0,
+      memoryMb: 1024,
+      msptMillis: 0,
+      threads: 0,
+      cpuPercent: 12,
+      heapMaxMb: 2048,
+      uptimeSeconds: 60,
+      worlds: [],
+      probeAvailable: false,
+      playersAvailable: false,
+      slpAvailable: false,
+      queryAvailable: false,
+      sourceMask: 0,
+    })
+    renderWithProviders(<InstanceWorktableCard inst={runningInst} nodeName="node-a" roleBadge={null} menu={null} />, { route: '/instances' })
+
+    // 玩家 + TPS 各一处「不可用」。
+    expect(await screen.findAllByText('不可用')).toHaveLength(2)
+  })
+
+  it('仅直探（SLP）有在线数：在线数显真实值，TPS 仍「不可用」', async () => {
+    injectMetrics({
+      tps: 0,
+      onlinePlayers: 7,
+      memoryMb: 1024,
+      msptMillis: 0,
+      threads: 0,
+      cpuPercent: 12,
+      heapMaxMb: 2048,
+      uptimeSeconds: 60,
+      worlds: [],
+      probeAvailable: false,
+      playersAvailable: true,
+      slpAvailable: true,
+      queryAvailable: false,
+      sourceMask: 2,
+    })
+    renderWithProviders(<InstanceWorktableCard inst={runningInst} nodeName="node-a" roleBadge={null} menu={null} />, { route: '/instances' })
+
+    expect(await screen.findByText('7')).toBeInTheDocument()
+    // TPS 仅探针可得 → 仍「不可用」（仅一处）。
+    expect(screen.getAllByText('不可用')).toHaveLength(1)
   })
 })
