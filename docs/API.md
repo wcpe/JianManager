@@ -902,9 +902,10 @@
 ### GET /api/v1/cores
 - **描述**: 查询服务端核心可用版本/构建。无 `mcVersion` 返回版本列表；带 `mcVersion` 返回下载信息
 - **权限**: 平台管理员
-- **Query**: `type=paper`（默认）/`velocity`/`waterfall`（PaperMC API）/`bungeecord`（md-5 Jenkins，仅 `latest`）/`spongevanilla`（Sponge 官方 Maven metadata）、`mcVersion`、`build`（可选，PaperMC 缺省最新；SpongeVanilla 按 MC 版本取最新 artifact）
+- **Query**: `type=paper`（默认）/`velocity`/`waterfall`（PaperMC API）/`bungeecord`（md-5 Jenkins，仅 `latest`）/`spongevanilla`（Sponge 官方 Maven metadata）/`beacon`（FR-442 预设，仅 `latest`）、`mcVersion`、`build`（可选，PaperMC 缺省最新；SpongeVanilla 按 MC 版本取最新 artifact）
 - **响应（带 mcVersion）**: `{ "type":"paper","mcVersion":"1.21.1","build":196,"filename":"...","downloadUrl":"...","sha256":"...","javaMajorRequired":21 }`。`javaMajorRequired` 为该 MC 版本所需最低 Java 大版本（FR-316 搭建向导 JDK 预检）：Paper 取 fill v3 官方元数据、失败回退 CP 内置保守映射表（≤1.16→8、1.17→16、1.18~1.20.4→17、1.20.5+→21、26.1+→25）；Sponge 用映射表；代理核心/未知版本省略该字段（不设需求，前端不据此拦截）
-- **关联 FR**: FR-034, FR-046, FR-316
+- **`type=beacon`（FR-442）**: 无版本选择语义（恒取最新），`mcVersion` 缺省时返回 `{"type":"beacon","versions":["latest"]}`；带 `mcVersion` 时解析 GitHub Releases `wcpe/Beacon` 的最新 `linux-amd64` 产物，返回 `filename=beacon-{version}-linux-amd64`。**不返回 `binary` 的版本列表**（binary 无官方版本源，显式报错而非空列表）
+- **关联 FR**: FR-034, FR-046, FR-316, FR-442
 
 ### POST /api/v1/instances/provision/server
 - **描述**: 一键搭建后端子服（FR-319 异步化）：同步段解析核心 → 分配端口 → 系统分配目录 + 结构化启动 → 建实例 + 登记任务后**立即返回**；下载核心 + 写 eula/server.properties + 部署探针在 CP 后台任务推进（独立 context，前端断开不影响），进度/失败原因见任务中心（kind=`provision`）。失败时任务含错误链、实例 `statusReason` 标注「搭建未完成：…」
@@ -912,6 +913,41 @@
 - **请求**: `{ "nodeId":1,"name":"lobby","coreType":"spongevanilla","mcVersion":"1.21.1","build":0,"jdkId":1,"memoryMb":4096,"jvmArgs":["-XX:+UseG1GC"],"groupId":0,"onlineMode":false }`（`onlineMode` 缺省 false=代理就绪/离线；独立正版服可传 true）
 - **响应**: `201 { "instance": {...}, "taskId": "..." }`；`422 PROVISION_FAILED`（核心解析/建实例失败，含代理核心误入）；`502 PROVISION_FAILED`（实例已建但任务登记失败，含实例供重试/删除）
 - **关联 FR**: FR-034, FR-046, FR-319
+
+### POST /api/v1/instances/provision/server（`coreType=binary` 通用二进制，FR-441）
+- **描述**: 同一端点的二进制分流（见 ADR-090）：`coreType=binary` 时**跳过 MC 的「版本 → 构建 → 下载 URL」三段解析**，制品来源由 `binarySource` 直供。**强制异步**——同步段只做「校验来源 → 建实例 → 登记任务」，取件（下载/复制）在 CP 后台经 Worker 执行，任务 kind=`binary_provision`；二进制体积可达数十 MB，前端据阶段进度区分「在下载」与「卡住」。失败进 `DAMAGED` 且 `statusReason` 标注「搭建未完成：…」，`provisionSpec` 保留可重建
+- **权限**: 平台管理员
+- **请求**: `{ "nodeId":1,"name":"beacon-1","coreType":"binary","binarySource":{...},"startCommand":"","groupId":0 }`
+  - `mcVersion` 不需要（二进制无版本解析语义，填了也会被忽略）；`jdkId` 不需要（编译型二进制不绑定 JDK）
+  - `binarySource.kind` 三选一：
+    - `asset`：`{"kind":"asset","assetId":12,"filename":"beacon-1.1.0-linux-amd64"}` —— 复用制品库既有 asset；CP 校验资产可用后签发 10 分钟签名 token，Worker 从 CP 拉取（sha256 取自制品库记录，请求内自填的 `sha256` 被忽略）
+    - `url`：`{"kind":"url","url":"https://.../beacon-linux-amd64","sha256":"<64位十六进制，可选>","filename":"..."}` —— **必须 https**（明文可被中间人替换，http/ftp/file 一律 422）；**由 Worker 直连下载**，避免 CP 中转大文件
+    - `node_file`：`{"kind":"node_file","nodePath":"/opt/binaries/beacon","sha256":"...","filename":"..."}` —— 节点本地绝对路径就地复制；**路径须落在运维放行目录内**（CP 配置 `binary.node_file_roots`，默认空集＝该来源关闭），越界一律 422 且不建实例；Worker 侧另有「必须常规文件」的纵深防御（拒绝符号链接/目录/设备）
+  - `binarySource.executable` 缺省 true（置可执行位）；纯数据文件传 false
+  - `startCommand` 可选：留空则按 `./<filename>` 派生（决策 2A：复用既有 startCommand 字段，不引入新启动结构）；带参数时显式给出，如 `"./beacon -config config.yml"`
+- **响应**: `201 { "instance": {...,"type":"generic","role":"universal","jdkId":0,"startCommand":"./beacon-1.1.0-linux-amd64"}, "taskId": "..." }`；来源不合法 `422 PROVISION_FAILED`（不建实例、不登记任务）；`502` 任务登记失败
+- **安全约束**: `filename` 会被拼进 `sh -c` 执行的启动命令，只接受紧凑字符集（字母/数字/`.`/`-`/`_`/`+`，≤128）；`node_file` 默认关闭
+- **关联 FR**: FR-441 | **Spec**: `docs/specs/binary-runtime-provision/` | **ADR**: ADR-090
+
+### POST /api/v1/instances/provision/server（`coreType=beacon` 内置预设，FR-442）
+- **描述**: 在 `coreType=binary` 之上的**语法糖**（见 ADR-090 §4.2）：把「Beacon 用哪个二进制、叫什么名字、怎么启动、什么角色」内置，用户不需提供 `binarySource` 即可一键搭出可用实例。内部展开为 `binary` + 固定参数，取件通道、异步语义、失败进 `DAMAGED` 可重建等全部与 FR-441 一致
+- **权限**: 平台管理员
+- **请求**: `{ "nodeId":1,"name":"beacon-1","coreType":"beacon","startCommand":"","groupId":0 }`
+  - `binarySource` **不需要**（提供也不生效——来源由系统按优先级解析）；`mcVersion` / `jdkId` 不需要
+- **制品来源优先级**（spec §4.1，搭建时自动解析）：
+  1. **制品库已有 beacon 制品（最新版本）→ 优先**。命中文件名形如 `beacon-*-linux-amd64` 的制品，取 id 最大（入库时间最新）且可交付（尺寸 >0、非失效）的一条；交付走既有签名分发通道（同 `kind=asset`）。优先理由是内网环境往往访问不了 GitHub，且已入库字节经过 sha256 校验
+  2. 回落 **GitHub Releases**（仓库 `wcpe/Beacon`）→ `GET /repos/wcpe/Beacon/releases/latest`，取 tag（去 `v` 前缀）与对应 `linux-amd64` 资产的下载地址；`sha256` 取资产的 `digest` 字段（上游未提供则不做校验）。下载地址须为 https
+- **默认参数**：落盘名沿用制品原始名（合规时），否则 `beacon-{version}-linux-amd64`；`startCommand` 由其派生为 `./beacon-{version}-linux-amd64`（显式 `startCommand` 优先）；`role=beacon`（FR-433，**不参与** MC 群组拓扑）；`type=generic`；不绑 JDK
+- **响应**: `201 { "instance": {...,"type":"generic","role":"beacon","jdkId":0,"startCommand":"./beacon-1.1.0-linux-amd64"}, "taskId": "..." }`；`502` 任务登记失败
+- **来源解析失败**：两条来源都不可用时**不静默失败**——实例照样创建（角色已定），任务终态 failed 并带上底层原因（含「先把二进制上传到制品库」的可操作提示），实例进 `DAMAGED` 且 `provisionSpec` 保留；环境修好后点重建即重新解析来源，无需重填
+- **重建**：重新按优先级解析来源（不冻结上次选中的具体制品），因此把新版本传入制品库后重建即升级到新版本；解析到不同落盘名时 `startCommand` 同步更新
+- **可选协同**：Beacon 与本平台是可选协同关系，**未部署 Beacon 时本平台全部能力不受影响**（本预设只在被调用时才会去解析来源）
+- **关联 FR**: FR-442 | **Spec**: `docs/specs/binary-runtime-provision/` §4 | **ADR**: ADR-090
+
+### GET /binary-assets/:id/download?token=…（FR-441 asset 来源分发）
+- **描述**: 二进制制品分发端点，与 `/probe-artifacts/:id/download` 同族（匿名路径 + 短 token 保护，同 HMAC 签名密钥、同 token 形态）；scope 为 `assetId`。Worker 据此拉取 `kind=asset` 的制品。无 token / token 过期 / token 绑定其它资产 / 跨用途（拿 probe token 复用）一律 `403`
+- **权限**: 匿名（凭短 token；token 由 CP 在搭建时签发，TTL 10 分钟）
+- **关联 FR**: FR-441
 
 ### POST /api/v1/instances/provision/bukkit
 - **描述**: 旧 Paper/Bukkit 兼容入口，实际直接复用异步 `ProvisionServer` 处理器；同步创建实例并登记 `provision` 任务后立即返回，后台继续下载核心与写入配置。新增前端能力不再通过该入口创建 SpongeVanilla
@@ -3596,6 +3632,9 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
   - 观测报告（FR-398，`bot.read`；指标类 `observability.read`）：`loadtest_run_bots`、`loadtest_run_failures`、`loadtest_run_events`、`loadtest_run_metrics`、`loadtest_run_report`
   - 实例分组（FR-435，`instance.read`/`instance.write`）：`instance_group_tree`、`instance_group_members`、`instance_group_create`、`instance_group_update`、`instance_group_delete`、`instance_group_add_members`、`instance_group_remove_members`
   - 群组服与拓扑（FR-434，`instance.read`/`instance.write`）：`network_list`、`network_get`、`network_create`、`network_update`、`network_delete`、`network_add_members`、`network_remove_member`、`topology_get`、`registration_list`、`registration_create`、`registration_delete`
+  - 标签与 Beacon 协同（FR-440/444，`instance.read`/`instance.write`）：`instance_update_tags`、`beacon_topology_status`、`beacon_topology_pull`
+- **FR-440 工具约定**：`instance_update_tags` 独立 action `agent.instance_update_tags`（V2 能力 `instance.write`，资源类型 instance，`V1Allowed=false`）。**三态语义**：参数缺省＝不改动、`tags: []`＝清空（落 `null`）、非空数组＝整体覆盖（不做合并）。补齐前 `instance_update_config` 未暴露 `tags` 字段，打标签只能绕开 MCP 走 HTTP、无法进 Agent 审计流水。
+- **FR-443/444 工具约定**：`beacon_topology_status` 只读查询协同可用性（是否配置端点、是否开启拉取），`beacon_topology_pull` 手动触发拉取（首次须手动，避免自动建树与人工分组冲突）。二者均 `V1Allowed=false`。**兼容非依赖**：未配置 Beacon 端点时 `beacon_topology_status` 正常返回「未配置」，`beacon_topology_pull` 返回明确错误且**不改动本地任何数据**；推送方向失败只写审计、绝不阻塞本机操作。
 - **FR-398/404 工具约定**：全部 `V1Allowed=false`（V1 Token 既不可见也不可调用），且不进 HTTP 契约投影（无对应 `/api/v1/agent/*` 端点）。`loadtest_run_create` 可选接收结构化 `scenario`，由同一服务链路解析、校验并冻结，不能绕过目标、执行节点 scope 或预检；省略时保持既有创建语义。运行类工具在目标实例之外逐一校验 executor 节点：启动方向（preflight/start/retry_failed）任一越界即整体拒绝；停止方向仍执行但在响应 `outOfScopeExecutorNodeIds` 中列出越界节点。`loadtest_run_preflight` 返回的 `planToken` 不透明、6 分钟 TTL，MCP 不解析/不重签/不缓存，仅原样回传给 `loadtest_run_start`；过期或容量世代变化由 service 中文错误引导重新预检。`bot_send_command` 成功语义严格限定为「已发送（`bot.chat` 调用成功）」（ADR-075）。危险操作 `bot_delete`/`loadtest_template_delete`/`network_delete` 要求 `confirmBotName`/`confirmTemplateName`/`confirmName` 精确等于真实名称。模板按平台级视角管理（持 `bot.load` 可管全部，ADR-080 附注）。
 - **FR-433/434/435 工具约定**：群组服、实例分组与角色维护类工具同样 `V1Allowed=false`、不进 HTTP 契约投影，权限与实例分组同面（读 `instance.read`、写 `instance.write`）——这些操作改的是实例间归属与代理注册关系，不是实例内容，故不占用 configure/content 等更细能力。`instance_update_config` 的 `role` 参数取值 `backend`/`proxy`/`universal`/`beacon`，非法值在参数校验阶段即以中文错误拒绝（早于服务调用）。`network_delete` 需 `confirmName` 与目标群组名精确相符；`registration_create` 要求目标为 `role=proxy`、后端为 `role=backend`，注册成功会同步改写代理的配置文件。`topology_get` 一次返回全量代理及其注册关系 + 各群组成员归属，替代按代理逐个查询的 N+1；其 `networks[].memberInstanceIds` 只含与代理有注册关系的成员（拓扑图用于分层布局，非群组全量成员）。
 - **tools/list**：按当前 Token 的能力与潜在可用 scope **动态裁剪**（V1 兼容解释器；V2 capability）。空能力 V2 仅见 `agent_whoami`。
