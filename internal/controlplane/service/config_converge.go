@@ -31,6 +31,19 @@ const (
 // BaselineScopeAllKey 是「全部实例」的 scope 键。
 const BaselineScopeAllKey = "all"
 
+// ErrBaselineScopeForbidden 表示非管理员试图创建/覆盖 scope 超出其可访问实例范围的基线（FR-458 越权修复）。
+var ErrBaselineScopeForbidden = errors.New("基线 scope 超出可访问实例范围")
+
+// ErrBaselineScopeGroupNotFound 表示 group:<id> 的 id 在组织树（ADR-033 InstanceGroupNode）中不存在。
+// 与用户组（ADR-004 GroupInstance）/网络群组（ADR-007 Network）的 id 空间正交，极易混淆——
+// 因此这里 fail-closed 报错，绝不静默解析为空集（FR-458 修复：误填用户组 id 会被明确拒绝）。
+var ErrBaselineScopeGroupNotFound = errors.New("基线 scope 引用的组织树分组不存在")
+
+// ErrBaselineScopeGroupEmpty 表示 group:<id> 指向的组织树分组存在，但其子树内没有任何成员实例。
+// 与「分组不存在」区分开：分组是真的，只是当前没有任何实例会被该基线覆盖（同样 fail-closed，
+// 否则运维会以为已下发，实际无人接收）。
+var ErrBaselineScopeGroupEmpty = errors.New("基线 scope 引用的组织树分组没有成员实例")
+
 // ConfigBaselineService 配置基线服务（FR-458）。
 type ConfigBaselineService struct {
 	db     *gorm.DB
@@ -140,23 +153,87 @@ func (s *ConfigBaselineService) UpsertBaseline(in BaselineInput, authorID uint) 
 	return &existing, nil
 }
 
+// UpsertBaselineScoped 在校验调用者归属后创建/更新基线（FR-458 越权修复）。
+// 非管理员（scoped=true）仅能创建/覆盖「scopeKey 指向的实例全部落在其可访问集合内」的基线，
+// 防止组成员以 scopeKey:"all" 覆盖平台基线；平台管理员（scoped=false）不受限。
+func (s *ConfigBaselineService) UpsertBaselineScoped(in BaselineInput, authorID uint, scopeIDs []uint, scoped bool) (*model.ConfigBaseline, error) {
+	if err := s.ensureScopeOwned(in.ScopeKey, scopeIDs, scoped); err != nil {
+		return nil, err
+	}
+	return s.UpsertBaseline(in, authorID)
+}
+
+// ensureScopeOwned 校验调用者对 scopeKey 指向的实例集合拥有完整访问权（FR-458 越权修复）。
+// scopeKey 非法、未匹配任何实例、或存在可访问集合之外的实例 → ErrBaselineScopeForbidden（fail-closed）。
+func (s *ConfigBaselineService) ensureScopeOwned(scopeKey string, scopeIDs []uint, scoped bool) error {
+	if !scoped {
+		return nil
+	}
+	insts, err := s.resolveScopeInstances(scopeKey)
+	if err != nil {
+		return err
+	}
+	if len(insts) == 0 {
+		return ErrBaselineScopeForbidden
+	}
+	if len(filterInstancesByScope(insts, scopeIDs, scoped)) != len(insts) {
+		return ErrBaselineScopeForbidden
+	}
+	return nil
+}
+
 // ListBaselines 列出全部基线。
 func (s *ConfigBaselineService) ListBaselines() ([]model.ConfigBaseline, error) {
+	return s.ListBaselinesScoped(nil, false)
+}
+
+// ListBaselinesScoped 列出调用者可见的基线（FR-458 越权修复）。
+// 非平台管理员（scoped=true）仅返回 scope 与可访问实例集合相交的基线，避免读到无关基线与内容。
+func (s *ConfigBaselineService) ListBaselinesScoped(scopeIDs []uint, scoped bool) ([]model.ConfigBaseline, error) {
 	var rows []model.ConfigBaseline
 	if err := s.db.Order("id asc").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	return rows, nil
+	if !scoped {
+		return rows, nil
+	}
+	out := make([]model.ConfigBaseline, 0, len(rows))
+	for _, row := range rows {
+		insts, err := s.resolveScopeInstances(row.ScopeKey)
+		if err != nil {
+			continue // 非法 scope 的脏数据不对非管理员暴露
+		}
+		if len(filterInstancesByScope(insts, scopeIDs, scoped)) > 0 {
+			out = append(out, row)
+		}
+	}
+	return out, nil
 }
 
 // GetBaseline 读取单条基线。
 func (s *ConfigBaselineService) GetBaseline(id uint) (*model.ConfigBaseline, error) {
+	return s.GetBaselineScoped(id, nil, false)
+}
+
+// GetBaselineScoped 读取单条基线并按 scope 过滤可见性（越权时以 NOT_FOUND 隐藏存在性）。
+func (s *ConfigBaselineService) GetBaselineScoped(id uint, scopeIDs []uint, scoped bool) (*model.ConfigBaseline, error) {
 	var row model.ConfigBaseline
 	if err := s.db.First(&row, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrRollingOpNotFound
 		}
 		return nil, err
+	}
+	if scoped {
+		insts, err := s.resolveScopeInstances(row.ScopeKey)
+		if err != nil {
+			// fail-closed：scope 无法解析（如分组已被删除）时视为不可见，且不因错误码差异泄露存在性
+			// （与 ListBaselinesScoped 跳过脏数据同一口径）。
+			return nil, ErrRollingOpNotFound
+		}
+		if len(filterInstancesByScope(insts, scopeIDs, scoped)) == 0 {
+			return nil, ErrRollingOpNotFound
+		}
 	}
 	return &row, nil
 }
@@ -166,9 +243,32 @@ func (s *ConfigBaselineService) DeleteBaseline(id uint) error {
 	return s.db.Delete(&model.ConfigBaseline{}, id).Error
 }
 
+// DeleteBaselineScoped 按 scope 归属删除基线（FR-458 越权修复）。
+// 非管理员仅能删除「scopeKey 指向的实例全部落在其可访问集合内」的基线；越权/不可见
+// 一律以 ErrRollingOpNotFound 隐藏存在性，避免探测与跨 scope 破坏性删除（如删除平台 all 基线）。
+func (s *ConfigBaselineService) DeleteBaselineScoped(id uint, scopeIDs []uint, scoped bool) error {
+	bl, err := s.GetBaselineScoped(id, scopeIDs, scoped)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureScopeOwned(bl.ScopeKey, scopeIDs, scoped); err != nil {
+		if errors.Is(err, ErrBaselineScopeForbidden) {
+			return ErrRollingOpNotFound
+		}
+		return err
+	}
+	return s.DeleteBaseline(id)
+}
+
 // DetectDrift 对 scope 内每台实例取该 filePath 的当前内容哈希并与基线比对（只读，零副作用）。
 func (s *ConfigBaselineService) DetectDrift(baselineID uint) ([]DriftItem, error) {
-	bl, err := s.GetBaseline(baselineID)
+	return s.DetectDriftScoped(baselineID, nil, false)
+}
+
+// DetectDriftScoped 在 scope 限定下检测漂移（FR-458 越权修复）：非管理员（scoped=true）
+// 只对「scope ∩ 可访问实例」求交后的集合检测，越权基线直接以 NOT_FOUND 隐藏。
+func (s *ConfigBaselineService) DetectDriftScoped(baselineID uint, scopeIDs []uint, scoped bool) ([]DriftItem, error) {
+	bl, err := s.GetBaselineScoped(baselineID, scopeIDs, scoped)
 	if err != nil {
 		return nil, err
 	}
@@ -176,13 +276,14 @@ func (s *ConfigBaselineService) DetectDrift(baselineID uint) ([]DriftItem, error
 	if err != nil {
 		return nil, err
 	}
+	insts = filterInstancesByScope(insts, scopeIDs, scoped)
 	out := make([]DriftItem, 0, len(insts))
 	for _, in := range insts {
 		item := DriftItem{InstanceID: in.ID, InstanceName: in.Name, BaselineHash: bl.ContentHash}
 		cur, has, herr := s.currentHash(in.ID, bl.FilePath)
 		if herr != nil {
+			// 读取错误单独分类：仅置 Error，不计入漂移（保守起见不触发收敛覆盖）。
 			item.Error = herr.Error()
-			item.Drift = true
 		} else {
 			item.CurrentHash = cur
 			item.HasVersion = has
@@ -195,14 +296,24 @@ func (s *ConfigBaselineService) DetectDrift(baselineID uint) ([]DriftItem, error
 
 // Converge 对所有漂移实例推送基线内容，收敛后再跑一次检测复核并回报残余漂移（FR-458）。
 func (s *ConfigBaselineService) Converge(baselineID uint, opts ConvergeOptions, authorID uint) (*ConvergeResult, error) {
-	bl, err := s.GetBaseline(baselineID)
+	return s.ConvergeScoped(baselineID, opts, authorID, nil, false)
+}
+
+// ConvergeScoped 在 scope 限定下收敛（FR-458 越权修复）：非管理员（scoped=true）只收敛
+// 「scope ∩ 可访问实例」，绝不下发到 scope 外的实例。
+//
+// 取舍（spec §5）：本方法同步阻塞至收敛完成，未复用 FR-457 的 InstanceRollingService 会话实体
+// （无独立 progress/cancel 端点）。收敛是幂等写，失败以「逐台失败明细 + 收敛后残余漂移」暴露；
+// 客户端可轮询 DetectDrift 观察进度（漂移数递减）。
+func (s *ConfigBaselineService) ConvergeScoped(baselineID uint, opts ConvergeOptions, authorID uint, scopeIDs []uint, scoped bool) (*ConvergeResult, error) {
+	bl, err := s.GetBaselineScoped(baselineID, scopeIDs, scoped)
 	if err != nil {
 		return nil, err
 	}
 	if s.config == nil && s.convergeWrite == nil {
 		return nil, errors.New("配置服务未注入")
 	}
-	drifts, err := s.DetectDrift(baselineID)
+	drifts, err := s.DetectDriftScoped(baselineID, scopeIDs, scoped)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +333,7 @@ func (s *ConfigBaselineService) Converge(baselineID uint, opts ConvergeOptions, 
 		}
 	}
 
-	residual, err := s.DetectDrift(baselineID)
+	residual, err := s.DetectDriftScoped(baselineID, scopeIDs, scoped)
 	if err != nil {
 		return res, err
 	}
@@ -291,6 +402,11 @@ func (s *ConfigBaselineService) currentHash(instanceID uint, filePath string) (s
 
 // resolveScopeInstances 解析 scopeKey 限定的实例集合。
 // 支持 group:<id>（含子树）/ network:<id> / tag:<tag> / instance:<id> / all 或空。
+//
+// group:<id> 的 id 是「组织树分组」（ADR-033 InstanceGroupNode），与用户组（ADR-004 GroupInstance）、
+// 网络群组（ADR-007）的 id 空间正交。为避免误填用户组 id 后静默解析为空集（既不报错也不下发），
+// 该分支 fail-closed：分组不存在 → ErrBaselineScopeGroupNotFound；分组存在但无成员实例 →
+// ErrBaselineScopeGroupEmpty（详见 instancesByGroupNode）。
 func (s *ConfigBaselineService) resolveScopeInstances(scopeKey string) ([]model.Instance, error) {
 	key := strings.TrimSpace(scopeKey)
 	if key == "" || key == BaselineScopeAllKey {
@@ -310,7 +426,7 @@ func (s *ConfigBaselineService) resolveScopeInstances(scopeKey string) ([]model.
 		if err != nil {
 			return nil, fmt.Errorf("非法分组 ID: %s", raw)
 		}
-		return s.instancesByGroups(s.groupSubtreeIDs(id))
+		return s.instancesByGroupNode(id)
 	case baselineScopeNetwork:
 		id, err := parseUintArg(raw)
 		if err != nil {
@@ -336,6 +452,31 @@ func (s *ConfigBaselineService) resolveScopeInstances(scopeKey string) ([]model.
 	default:
 		return nil, fmt.Errorf("不支持的 scopeKey 前缀: %s", kind)
 	}
+}
+
+// instancesByGroupNode 解析组织树分组（ADR-033，含子树）的成员实例，fail-closed：
+//   - 分组 id 不在组织树中 → ErrBaselineScopeGroupNotFound（很可能是误填了用户组/网络群组 id）；
+//   - 分组存在但子树内无成员实例 → ErrBaselineScopeGroupEmpty。
+//
+// 二者均返回错误而非空集：空的 scope 会让「基线已创建」与「真的覆盖到实例」产生错觉，且会让
+// 越权隔离断言以空集空转通过（FR-458 修复）。
+func (s *ConfigBaselineService) instancesByGroupNode(root uint) ([]model.Instance, error) {
+	var node model.InstanceGroupNode
+	if err := s.db.First(&node, root).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w：group:%d（\"group:\" 需填组织树分组 id，不是用户组 id）",
+				ErrBaselineScopeGroupNotFound, root)
+		}
+		return nil, err
+	}
+	insts, err := s.instancesByGroups(s.groupSubtreeIDs(root))
+	if err != nil {
+		return nil, err
+	}
+	if len(insts) == 0 {
+		return nil, fmt.Errorf("%w：group:%d（%s）", ErrBaselineScopeGroupEmpty, root, node.Name)
+	}
+	return insts, nil
 }
 
 func (s *ConfigBaselineService) instancesByGroups(groupIDs []uint) ([]model.Instance, error) {
@@ -409,6 +550,25 @@ func collectInstanceIDs(members []model.InstanceGroupMember) []uint {
 	out := make([]uint, 0, len(members))
 	for _, m := range members {
 		out = append(out, m.InstanceID)
+	}
+	return out
+}
+
+// filterInstancesByScope 把实例集合收敛到调用者可访问集合（scoped=false 表示平台管理员，不收敛）。
+// 与 applyInstanceBatchFilter / AccessibleInstanceIDs 同一语义：非管理员仅可见其可访问组下的实例。
+func filterInstancesByScope(insts []model.Instance, scopeIDs []uint, scoped bool) []model.Instance {
+	if !scoped {
+		return insts
+	}
+	allow := make(map[uint]struct{}, len(scopeIDs))
+	for _, id := range scopeIDs {
+		allow[id] = struct{}{}
+	}
+	out := make([]model.Instance, 0, len(insts))
+	for _, in := range insts {
+		if _, ok := allow[in.ID]; ok {
+			out = append(out, in)
+		}
 	}
 	return out
 }

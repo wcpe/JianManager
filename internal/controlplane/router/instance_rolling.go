@@ -64,6 +64,11 @@ func (h *InstanceRollingHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "策略参数越界"})
 		return
 	}
+	if h.authz == nil {
+		// fail-closed：无授权服务时无法计算可访问集合，拒绝而非放行（避免越权编排）。
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "授权服务不可用"})
+		return
+	}
 	scopeIDs, scope, err := h.authz.AccessibleInstanceIDs(access)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
@@ -84,14 +89,14 @@ func (h *InstanceRollingHandler) Create(c *gin.Context) {
 		f := req.Filter.ToFilter()
 		svcReq.Filter = &f
 	}
-	op, err := h.svc.Create(svcReq, scopeIDs, scope)
+	uid, _ := c.Get(middleware.CtxUserID)
+	authorID, _ := uid.(uint)
+	op, err := h.svc.Create(svcReq, scopeIDs, scope, authorID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
 		return
 	}
 	if h.audit != nil {
-		uid, _ := c.Get(middleware.CtxUserID)
-		authorID, _ := uid.(uint)
 		h.audit.RecordSafe(authorID, "instance_rolling_create", "instance_rolling",
 			strconv.FormatUint(uint64(op.ID), 10),
 			"action="+string(action)+" requested="+strconv.Itoa(op.Requested), c.ClientIP())
@@ -109,12 +114,65 @@ func (h *InstanceRollingHandler) Get(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的编排 ID"})
 		return
 	}
+	if _, ok := h.authorizeOp(c, uint(opID)); !ok {
+		return
+	}
 	op, err := h.svc.Get(uint(opID))
 	if err != nil {
 		h.respondOpErr(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, op)
+}
+
+// authorizeOp 加载编排会话并校验调用者对其全部目标有访问权（FR-457 越权修复，IDOR）。
+// 平台管理员放行；非管理员要求 op.Targets ⊆ 可访问实例集合，否则以 404 隐藏存在性。
+func (h *InstanceRollingHandler) authorizeOp(c *gin.Context, opID uint) (*model.InstanceRollingOp, bool) {
+	op, err := h.svc.Get(opID)
+	if err != nil {
+		h.respondOpErr(c, err)
+		return nil, false
+	}
+	access := getAccess(c)
+	if access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return nil, false
+	}
+	if access.IsPlatformAdmin {
+		return op, true
+	}
+	if h.authz == nil {
+		// fail-closed：无法判定归属时拒绝，避免退化为放行（与空目标集真空通过同源）。
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限校验不可用"})
+		return nil, false
+	}
+	scopeIDs, scoped, err := h.authz.AccessibleInstanceIDs(access)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return nil, false
+	}
+	if !scoped {
+		return op, true
+	}
+	// 空目标集无法用「op.Targets ⊆ 可访问」判定归属（循环会真空通过）：仅创建者可见，其余以 404 隐藏存在性。
+	if len(op.Targets) == 0 {
+		if op.CreatedBy != access.UserID {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "编排会话不存在"})
+			return nil, false
+		}
+		return op, true
+	}
+	allow := make(map[uint]struct{}, len(scopeIDs))
+	for _, id := range scopeIDs {
+		allow[id] = struct{}{}
+	}
+	for _, t := range op.Targets {
+		if _, ok := allow[t]; !ok {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "编排会话不存在"})
+			return nil, false
+		}
+	}
+	return op, true
 }
 
 // Pause 暂停编排。
@@ -141,6 +199,10 @@ func (h *InstanceRollingHandler) control(c *gin.Context, fn func(uint) error, ac
 	opID, err := strconv.ParseUint(c.Param("opId"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的编排 ID"})
+		return
+	}
+	// 越权校验（FR-457 IDOR）：非管理员仅能控制其可访问实例集合内的编排。
+	if _, ok := h.authorizeOp(c, uint(opID)); !ok {
 		return
 	}
 	if err := fn(uint(opID)); err != nil {

@@ -28,7 +28,11 @@ func (h *ConfigBaselineHandler) List(c *gin.Context) {
 	if !requireNodes(c, "file.read", "instance.read") {
 		return
 	}
-	rows, err := h.svc.ListBaselines()
+	scopeIDs, scoped, ok := h.scope(c)
+	if !ok {
+		return
+	}
+	rows, err := h.svc.ListBaselinesScoped(scopeIDs, scoped)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
@@ -36,7 +40,29 @@ func (h *ConfigBaselineHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"baselines": rows})
 }
 
-// Create 创建/更新基线。
+// scope 解析调用者可访问实例集合（FR-458 越权修复）。平台管理员返回 (nil,false)（不收敛）。
+// 出错时已写响应并返回 ok=false。
+func (h *ConfigBaselineHandler) scope(c *gin.Context) ([]uint, bool, bool) {
+	access := getAccess(c)
+	if access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权限"})
+		return nil, false, false
+	}
+	if h.authz == nil {
+		// fail-closed（FR-458 越权修复）：授权服务不可用时拒绝，绝不退化为「不收敛」的平台管理员视图。
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限校验不可用"})
+		return nil, false, false
+	}
+	scopeIDs, scoped, err := h.authz.AccessibleInstanceIDs(access)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return nil, false, false
+	}
+	return scopeIDs, scoped, true
+}
+
+// Create 创建/更新基线（FR-458）。非管理员仅能创建/覆盖 scope 落在其可访问实例集合内的基线，
+// 防止以 scopeKey:"all" 覆盖平台基线（越权修复）。
 func (h *ConfigBaselineHandler) Create(c *gin.Context) {
 	if !requireNodes(c, "file.write", "instance.write") {
 		return
@@ -46,11 +72,15 @@ func (h *ConfigBaselineHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
+	scopeIDs, scoped, ok := h.scope(c)
+	if !ok {
+		return
+	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	authorID, _ := uid.(uint)
-	row, err := h.svc.UpsertBaseline(in, authorID)
+	row, err := h.svc.UpsertBaselineScoped(in, authorID, scopeIDs, scoped)
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		h.respondErr(c, err)
 		return
 	}
 	if h.audit != nil {
@@ -65,12 +95,16 @@ func (h *ConfigBaselineHandler) Get(c *gin.Context) {
 	if !requireNodes(c, "file.read", "instance.read") {
 		return
 	}
+	scopeIDs, scoped, ok := h.scope(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的基线 ID"})
 		return
 	}
-	row, err := h.svc.GetBaseline(uint(id))
+	row, err := h.svc.GetBaselineScoped(uint(id), scopeIDs, scoped)
 	if err != nil {
 		h.respondErr(c, err)
 		return
@@ -78,9 +112,14 @@ func (h *ConfigBaselineHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, row)
 }
 
-// Delete 删除基线。
+// Delete 删除基线（FR-458）。先按 scope 可见性校验归属（同 GetBaselineScoped 的 404 隐藏语义），
+// 越权删除以 NOT_FOUND 拒绝，防止非管理员删除任意基线。
 func (h *ConfigBaselineHandler) Delete(c *gin.Context) {
 	if !requireNodes(c, "file.write", "instance.write") {
+		return
+	}
+	scopeIDs, scoped, ok := h.scope(c)
+	if !ok {
 		return
 	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -88,7 +127,8 @@ func (h *ConfigBaselineHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的基线 ID"})
 		return
 	}
-	if err := h.svc.DeleteBaseline(uint(id)); err != nil {
+	// 归属校验：非管理员仅能删除 scope 全部落在其可访问集合内的基线；越权/不可见以 404 隐藏存在性。
+	if err := h.svc.DeleteBaselineScoped(uint(id), scopeIDs, scoped); err != nil {
 		h.respondErr(c, err)
 		return
 	}
@@ -105,12 +145,16 @@ func (h *ConfigBaselineHandler) Drift(c *gin.Context) {
 	if !requireNodes(c, "file.read", "instance.read") {
 		return
 	}
+	scopeIDs, scoped, ok := h.scope(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的基线 ID"})
 		return
 	}
-	items, err := h.svc.DetectDrift(uint(id))
+	items, err := h.svc.DetectDriftScoped(uint(id), scopeIDs, scoped)
 	if err != nil {
 		h.respondErr(c, err)
 		return
@@ -134,6 +178,10 @@ func (h *ConfigBaselineHandler) Converge(c *gin.Context) {
 	if !requireNodes(c, "file.write", "instance.write") {
 		return
 	}
+	scopeIDs, scoped, ok := h.scope(c)
+	if !ok {
+		return
+	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的基线 ID"})
@@ -149,7 +197,7 @@ func (h *ConfigBaselineHandler) Converge(c *gin.Context) {
 	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	authorID, _ := uid.(uint)
-	res, err := h.svc.Converge(uint(id), service.ConvergeOptions{BatchSize: req.BatchSize, FailFast: req.FailFast}, authorID)
+	res, err := h.svc.ConvergeScoped(uint(id), service.ConvergeOptions{BatchSize: req.BatchSize, FailFast: req.FailFast}, authorID, scopeIDs, scoped)
 	if err != nil {
 		h.respondErr(c, err)
 		return
@@ -164,6 +212,18 @@ func (h *ConfigBaselineHandler) Converge(c *gin.Context) {
 func (h *ConfigBaselineHandler) respondErr(c *gin.Context, err error) {
 	if errors.Is(err, service.ErrRollingOpNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "基线不存在"})
+		return
+	}
+	if errors.Is(err, service.ErrBaselineScopeGroupNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "SCOPE_GROUP_NOT_FOUND", "message": err.Error()})
+		return
+	}
+	if errors.Is(err, service.ErrBaselineScopeGroupEmpty) {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "SCOPE_GROUP_EMPTY", "message": err.Error()})
+		return
+	}
+	if errors.Is(err, service.ErrBaselineScopeForbidden) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})

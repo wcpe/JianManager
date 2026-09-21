@@ -99,7 +99,7 @@ func TestRollingOp_BatchSizeZeroBackwardCompatible(t *testing.T) {
 		return nil
 	})
 
-	op, err := svc.Create(RollingRequest{Action: InstanceBatchRestart, IDs: ids}, nil, false)
+	op, err := svc.Create(RollingRequest{Action: InstanceBatchRestart, IDs: ids}, nil, false, 0)
 	require.NoError(t, err)
 	require.Equal(t, len(ids), op.Requested)
 
@@ -130,7 +130,7 @@ func TestRollingOp_FailFastStopsSubsequentBatches(t *testing.T) {
 	op, err := svc.Create(RollingRequest{
 		Action: InstanceBatchRestart, IDs: ids,
 		Policy: model.RollingPolicy{BatchSize: 1, FailFast: true},
-	}, nil, false)
+	}, nil, false, 0)
 	require.NoError(t, err)
 
 	done := waitRollingState(t, svc, op.ID, model.RollingStateDone)
@@ -148,6 +148,8 @@ func TestRollingOp_FailFastStopsSubsequentBatches(t *testing.T) {
 func TestRollingOp_RatioSamplesFirstBatch(t *testing.T) {
 	db := newRollingTestDB(t)
 	ids := seedPlainInstances(t, db, 4)
+	var node model.Node
+	require.NoError(t, db.First(&node).Error)
 
 	var mu sync.Mutex
 	executed := 0
@@ -158,10 +160,12 @@ func TestRollingOp_RatioSamplesFirstBatch(t *testing.T) {
 		return nil
 	})
 
+	// Ratio 灰度仅在 filter 模式有意义（spec §2.1）；ids 模式为显式指定，不抽样。
 	op, err := svc.Create(RollingRequest{
-		Action: InstanceBatchRestart, IDs: ids,
+		Action: InstanceBatchRestart,
+		Filter: &InstanceBatchFilter{NodeID: &node.ID},
 		Policy: model.RollingPolicy{Ratio: 0.5},
-	}, nil, false)
+	}, nil, false, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, op.Requested, "灰度按比例抽样目标集")
 	require.Equal(t, []uint{ids[0], ids[1]}, op.Targets)
@@ -170,6 +174,103 @@ func TestRollingOp_RatioSamplesFirstBatch(t *testing.T) {
 	mu.Lock()
 	require.Equal(t, 2, executed)
 	mu.Unlock()
+}
+
+// TestRollingOp_IdsModeIgnoresRatio 覆盖 spec §2.1：ids 模式不抽样（Ratio 仅 filter 模式有意义）。
+func TestRollingOp_IdsModeIgnoresRatio(t *testing.T) {
+	db := newRollingTestDB(t)
+	ids := seedPlainInstances(t, db, 4)
+	svc := newRollingSvcForTest(t, db, func(_ InstanceBatchRequest, _ *model.Instance) error { return nil })
+
+	op, err := svc.Create(RollingRequest{
+		Action: InstanceBatchRestart, IDs: ids,
+		Policy: model.RollingPolicy{Ratio: 0.5},
+	}, nil, false, 0)
+	require.NoError(t, err)
+	require.Equal(t, len(ids), op.Requested, "ids 模式显式指定目标，Ratio 不生效")
+	waitRollingState(t, svc, op.ID, model.RollingStateDone)
+}
+
+// TestRollingOp_ConcurrentCreateConflictRejected 覆盖 spec §2.1：并发创建同一目标集合的编排应被拒绝（互斥）。
+func TestRollingOp_ConcurrentCreateConflictRejected(t *testing.T) {
+	db := newRollingTestDB(t)
+	ids := seedPlainInstances(t, db, 3)
+
+	release := make(chan struct{})
+	svc := newRollingSvcForTest(t, db, func(_ InstanceBatchRequest, _ *model.Instance) error {
+		<-release // 首批阻塞，保持编活跃
+		return nil
+	})
+
+	op1, err := svc.Create(RollingRequest{
+		Action: InstanceBatchRestart, IDs: ids,
+		Policy: model.RollingPolicy{BatchSize: 1},
+	}, nil, false, 0)
+	require.NoError(t, err)
+	// 目标集合重叠 → 拒绝。
+	_, err = svc.Create(RollingRequest{
+		Action: InstanceBatchRestart, IDs: []uint{ids[0]},
+	}, nil, false, 0)
+	require.Error(t, err, "活跃编排目标重叠应被拒绝")
+
+	close(release)
+	waitRollingState(t, svc, op1.ID, model.RollingStateDone)
+
+	// 终态后可再次创建。
+	op3, err := svc.Create(RollingRequest{
+		Action: InstanceBatchRestart, IDs: []uint{ids[0]},
+	}, nil, false, 0)
+	require.NoError(t, err)
+	require.NotZero(t, op3.ID)
+}
+
+// TestRollingOp_RecoverInterruptedMarksPaused 覆盖 CP 重启恢复：未终态编排置 paused，可经 Resume 续跑。
+func TestRollingOp_RecoverInterruptedMarksPaused(t *testing.T) {
+	db := newRollingTestDB(t)
+	ids := seedPlainInstances(t, db, 2)
+	op := &model.InstanceRollingOp{
+		Action: string(InstanceBatchRestart), State: model.RollingStateRunning,
+		TargetsJSON: "[1,2]", ErrorsJSON: "[]", Requested: len(ids), BatchSize: 1,
+	}
+	require.NoError(t, db.Create(op).Error)
+
+	svc := newRollingSvcForTest(t, db, func(_ InstanceBatchRequest, _ *model.Instance) error { return nil })
+	require.NoError(t, svc.RecoverInterrupted())
+
+	got, err := svc.Get(op.ID)
+	require.NoError(t, err)
+	require.Equal(t, model.RollingStatePaused, got.State)
+
+	// Resume 从游标续跑至终态。
+	require.NoError(t, svc.Resume(op.ID))
+	waitRollingState(t, svc, op.ID, model.RollingStateDone)
+}
+
+// TestRollingOp_PauseInterruptsBatchInterval 覆盖：Pause 应打断批间隔等待，而非等到间隔结束。
+func TestRollingOp_PauseInterruptsBatchInterval(t *testing.T) {
+	db := newRollingTestDB(t)
+	ids := seedPlainInstances(t, db, 2)
+	svc := newRollingSvcForTest(t, db, func(_ InstanceBatchRequest, _ *model.Instance) error { return nil })
+
+	op, err := svc.Create(RollingRequest{
+		Action: InstanceBatchRestart, IDs: ids,
+		Policy: model.RollingPolicy{BatchSize: 1, BatchIntervalSec: 5},
+	}, nil, false, 0)
+	require.NoError(t, err)
+
+	// 首批完成进入批间隔后暂停；若暂停不能打断等待，State 会长时间停留在 running。
+	eventually(t, 2*time.Second, func() bool {
+		cur, err := svc.Get(op.ID)
+		return err == nil && cur.Succeeded >= 1
+	})
+	require.NoError(t, svc.Pause(op.ID))
+	paused, err := svc.Get(op.ID)
+	require.NoError(t, err)
+	require.Equal(t, model.RollingStatePaused, paused.State)
+
+	// 取消收尾，避免第二次间隔等待拖慢测试。
+	require.NoError(t, svc.Cancel(op.ID))
+	waitRollingState(t, svc, op.ID, model.RollingStateCanceled)
 }
 
 func TestRollingOp_PauseResume(t *testing.T) {
@@ -194,7 +295,7 @@ func TestRollingOp_PauseResume(t *testing.T) {
 	op, err := svc.Create(RollingRequest{
 		Action: InstanceBatchRestart, IDs: ids,
 		Policy: model.RollingPolicy{BatchSize: 1},
-	}, nil, false)
+	}, nil, false, 0)
 	require.NoError(t, err)
 
 	eventually(t, 2*time.Second, func() bool { return count() == 2 })
@@ -234,7 +335,7 @@ func TestRollingOp_Cancel(t *testing.T) {
 	op, err := svc.Create(RollingRequest{
 		Action: InstanceBatchRestart, IDs: ids,
 		Policy: model.RollingPolicy{BatchSize: 1},
-	}, nil, false)
+	}, nil, false, 0)
 	require.NoError(t, err)
 
 	eventually(t, 2*time.Second, func() bool { return count() == 2 })
@@ -261,7 +362,7 @@ func TestRollingOp_BatchIntervalHonored(t *testing.T) {
 	op, err := svc.Create(RollingRequest{
 		Action: InstanceBatchRestart, IDs: ids,
 		Policy: model.RollingPolicy{BatchSize: 1, BatchIntervalSec: 1},
-	}, nil, false)
+	}, nil, false, 0)
 	require.NoError(t, err)
 	waitRollingState(t, svc, op.ID, model.RollingStateDone)
 

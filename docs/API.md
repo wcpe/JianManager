@@ -1355,45 +1355,47 @@
 - **说明**: 直接经 `POST /configs/write` / `write-fields` 改到受管 `file` 项时，响应附 `warnings`（不静默覆盖，仅提示）
 
 ### POST /api/v1/instances/rolling
-- **描述**: 创建并启动实例滚动/分批/灰度编排会话（FR-457）。支持批大小、批间隔、失败即停、按比例灰度；`batchSize=0` 时单批全量（向后兼容旧批量语义）。逐台仍复用既有 per-instance RPC
+- **描述**: 创建并启动实例滚动/分批/灰度编排会话（FR-457）。支持批大小、批间隔、失败即停、按比例灰度；`batchSize=0` 时单批全量（向后兼容旧批量语义）。逐台仍复用既有 per-instance RPC。`ratio` 灰度抽样**仅在 `filter` 模式生效**（`ids` 为显式指定，不抽样）。若目标集合与任一活跃编排（pending/running/paused）重叠则拒绝（幂等/互斥，spec §2.1）
 - **关联 FR**: FR-457
 - **权限**: `instance.operate`
-- **请求**: `{ "action": "restart|start|stop|kill|command", "ids": [1,2], "filter": { "role": "backend" }, "command": "say hi", "batchSize": 5, "batchIntervalSec": 30, "failFast": true, "ratio": 0.2 }`
-- **响应**: `{ "id": 7, "action": "restart", "state": "running", "targets": [1,2], "requested": 2, "cursor": 0, "succeeded": 0, "failed": 0, "errors": [] }`
+- **请求**: `{ "action": "restart|start|stop|kill|command", "ids": [1,2], "filter": { "role": "backend", "instanceIds": [1,2] }, "command": "say hi", "batchSize": 5, "batchIntervalSec": 30, "failFast": true, "ratio": 0.2 }`
+  - `filter.instanceIds`（可选）：按显式实例集合走 **filter 语义**；前端滚动对话框据此下发选中实例，使 `ratio` 灰度抽样真正生效（若只发 `ids` 又带 `ratio`，后端按 spec §2.1 不抽样 → 会静默退化为全量）
+- **响应**: `{ "id": 7, "action": "restart", "state": "running", "targets": [1,2], "requested": 2, "cursor": 0, "succeeded": 0, "failed": 0, "errors": [] }`（`state` 为启动后回读，非 `pending`）
 
 ### GET /api/v1/instances/rolling/:opId
-- **描述**: 查询编排会话（含进度游标/计数/失败明细）
+- **描述**: 查询编排会话（含进度游标/计数/失败明细）。**scope 隔离**：非平台管理员仅能访问其目标集合全部落在可访问实例内的会话，否则返回 404
 - **关联 FR**: FR-457
 - **权限**: `instance.read` / `instance.operate`
 
 ### POST /api/v1/instances/rolling/:opId/pause · /resume · /cancel
-- **描述**: 暂停（阻塞在批边界）/ 继续（CP 重启后按 DB 游标续跑）/ 取消后续批。写审计
+- **描述**: 暂停（阻塞在批边界，并打断批间隔等待）/ 继续（CP 重启后按 DB 游标续跑）/ 取消后续批。写审计。**scope 隔离**同 GET（越权返回 404）
 - **关联 FR**: FR-457
 - **权限**: `instance.operate`
 
 ### GET /api/v1/config-baselines
-- **描述**: 列出配置基线（模板）。基线键为 `(scopeKey, filePath)`，`scopeKey` 限定应共享该基线的实例（`group:<id>` 含子树 / `network:<id>` / `tag:<tag>` / `instance:<id>` / `all`）
+- **描述**: 列出配置基线（模板）。基线键为 `(scopeKey, filePath)`，`scopeKey` 限定应共享该基线的实例（`group:<id>` 含子树 / `network:<id>` / `tag:<tag>` / `instance:<id>` / `all`）。**scope 隔离**：非平台管理员仅返回 scope 与可访问实例集合相交的基线
 - **关联 FR**: FR-458
 - **权限**: `file.read` / `instance.read`
 
 ### POST /api/v1/config-baselines
-- **描述**: 创建或更新基线（同 scopeKey+filePath 覆盖），计算内容 sha256
+- **描述**: 创建或更新基线（同 scopeKey+filePath 覆盖），计算内容 sha256。**scope 归属校验**：非平台管理员仅能创建/覆盖 scope 指向的实例全部落在其可访问集合内的基线（防止以 `scopeKey:"all"` 覆盖平台基线），越权返回 403
+- **scope 解析（fail-closed）**: `group:<id>` 的 id 是**组织树分组**（ADR-033 `InstanceGroupNode`，含子树），与用户组（ADR-004）、网络群组（ADR-007）三者 id 空间正交、不可混用。分组 id 在组织树中不存在 → `404 SCOPE_GROUP_NOT_FOUND`；分组存在但子树内无成员实例 → `422 SCOPE_GROUP_EMPTY`；两者都不再静默解析为空集。`network:<id>` / `instance:<id>` / `tag:<tag>` 目前仍允许解析为空集（口径差异，未收敛）
 - **关联 FR**: FR-458
 - **权限**: `file.write` / `instance.write`
 - **请求**: `{ "scopeKey": "group:1", "filePath": "server.properties", "content": "server-port=25566\n", "message": "string?" }`
 
 ### GET /api/v1/config-baselines/:id · DELETE /api/v1/config-baselines/:id
-- **描述**: 读取 / 删除基线
+- **描述**: 读取 / 删除基线。**scope 隔离**：非平台管理员读取 scope 不相交的基线返回 404；删除要求 scope 全部落在其可访问集合内，越权/不可见一律 404（隐藏存在性，防止跨 scope 破坏性删除）
 - **关联 FR**: FR-458
 - **权限**: `file.read`/`instance.read`（读）、`file.write`/`instance.write`（删）
 
 ### GET /api/v1/config-baselines/:id/drift
-- **描述**: 漂移检测（只读、零副作用）：对 scope 内每台实例取该文件当前内容哈希（优先最新配置版本，缺失则现场读取），与基线比对。返回逐台 `{instanceId, drift, currentHash, baselineHash}`
+- **描述**: 漂移检测（只读、零副作用）：对 scope 内每台实例取该文件当前内容哈希（优先最新配置版本，缺失则现场读取），与基线比对。返回逐台 `{instanceId, drift, currentHash, baselineHash, error?}`。读取错误仅记 `error`、**不计入 drift**。**scope 隔离**：非平台管理员只检测 `scope ∩ 可访问实例`
 - **关联 FR**: FR-458
 - **权限**: `file.read` / `instance.read`
 
 ### POST /api/v1/config-baselines/:id/converge
-- **描述**: 一键收敛：把基线推送到所有漂移实例（复用 `ConfigService.Write`，逐台落新版本），收敛后再跑一次检测复核并回报残余漂移
+- **描述**: 一键收敛：把基线推送到所有漂移实例（复用 `ConfigService.Write`，逐台落新版本），收敛后再跑一次检测复核并回报残余漂移。**scope 隔离**：非平台管理员只收敛 `scope ∩ 可访问实例`。同步阻塞至收敛完成（取舍见 spec）
 - **关联 FR**: FR-458
 - **权限**: `file.write` / `instance.write`
 - **请求**: `{ "batchSize": 0, "failFast": false }`

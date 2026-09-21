@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { GitCompareArrows, Plus, RefreshCw, Trash2 } from 'lucide-react'
@@ -10,6 +10,7 @@ import {
   useConvergeBaseline,
   type ConfigBaseline,
 } from '@/api/configBaselines'
+import { useInstanceGroups, type InstanceGroupNode } from '@/api/instanceGroups'
 import { composeScopeKey, isValidScopeKey, scopeKindOf, scopeValueOf, shortHash, type ScopeKind } from '@/lib/config-baseline'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -143,6 +144,10 @@ function BaselineDriftPanel({ baselineId, onClose }: { baselineId: number; onClo
   const { data: drift, isLoading, refetch, isFetching } = useBaselineDrift(baselineId)
   const converge = useConvergeBaseline()
   const [result, setResult] = useState<{ targeted: number; succeeded: number; failed: number } | null>(null)
+  // 读取失败的行无法判定一致性（FR-458 nit）：全部 drifted===0 时若仍有 error 行，
+  // 不能报「已全部一致」，否则运维会误以为集群齐平。
+  const errorCount = (drift?.items ?? []).filter((it) => it.error).length
+  const allConverged = !!drift && drift.drifted === 0 && errorCount === 0
 
   return (
     <Panel
@@ -179,7 +184,10 @@ function BaselineDriftPanel({ baselineId, onClose }: { baselineId: number; onClo
         <div className="space-y-2 p-3">
           <div className="flex items-center gap-2 text-sm">
             <span>{t('baselines.driftedCount', { count: drift?.drifted ?? 0, total: drift?.items.length ?? 0 })}</span>
-            {drift && drift.drifted === 0 && <StatusBadge level="success" label={t('baselines.allConverged')} />}
+            {allConverged && <StatusBadge level="success" label={t('baselines.allConverged')} />}
+            {drift && errorCount > 0 && (
+              <StatusBadge level="warning" label={t('baselines.readFailedHint', { count: errorCount })} />
+            )}
           </div>
 
           {result && (
@@ -233,10 +241,54 @@ function BaselineDriftPanel({ baselineId, onClose }: { baselineId: number; onClo
 
 const SCOPE_KINDS: ScopeKind[] = ['all', 'group', 'network', 'tag', 'instance']
 
+/** 组织树分组选项（含层级缩进），供 scope 选择器使用。 */
+interface GroupOption {
+  id: number
+  name: string
+  depth: number
+}
+
+/**
+ * 把后端扁平组织树节点（ADR-033，parentId 邻接表）按层级展开为下拉选项。
+ * 只读展示用途：对孤儿/环节点健壮——先走可达节点，未覆盖的兜底按根追加，绝不丢节点
+ * （否则运维会遇到「分组存在但选不到」）。
+ */
+function flattenGroupOptions(nodes: InstanceGroupNode[]): GroupOption[] {
+  const known = new Set(nodes.map((n) => n.id))
+  const childrenOf = new Map<number | null, InstanceGroupNode[]>()
+  for (const n of nodes) {
+    const parent = n.parentId != null && known.has(n.parentId) ? n.parentId : null
+    const bucket = childrenOf.get(parent)
+    if (bucket) bucket.push(n)
+    else childrenOf.set(parent, [n])
+  }
+  const sortFn = (a: InstanceGroupNode, b: InstanceGroupNode) =>
+    a.sort !== b.sort ? a.sort - b.sort : a.id - b.id
+  const out: GroupOption[] = []
+  const seen = new Set<number>()
+  const walk = (parent: number | null, depth: number) => {
+    for (const n of [...(childrenOf.get(parent) ?? [])].sort(sortFn)) {
+      if (seen.has(n.id)) continue
+      seen.add(n.id)
+      out.push({ id: n.id, name: n.name, depth })
+      walk(n.id, depth + 1)
+    }
+  }
+  walk(null, 0)
+  for (const n of nodes) {
+    if (!seen.has(n.id)) out.push({ id: n.id, name: n.name, depth: 0 })
+  }
+  return out
+}
+
 /** 创建/编辑基线对话框。 */
 function BaselineEditorDialog({ initial, onClose }: { initial: ConfigBaseline | null; onClose: () => void }) {
   const { t } = useTranslation()
   const upsert = useUpsertBaseline()
+  // 组织树分组（ADR-033）才是 `group:<id>` 的 id 空间：手填数字极易误填「用户组 id」
+  // （两者 id 正交、数值上常巧合相等），故改为从分组树选择（NEW-ISSUE 修复）。
+  const { data: orgGroups } = useInstanceGroups()
+  const groupOptions = useMemo(() => flattenGroupOptions(orgGroups ?? []), [orgGroups])
   const [kind, setKind] = useState<ScopeKind>(initial ? scopeKindOf(initial.scopeKey) : 'all')
   const [scopeValue, setScopeValue] = useState(initial ? scopeValueOf(initial.scopeKey) : '')
   const [filePath, setFilePath] = useState(initial?.filePath ?? 'server.properties')
@@ -245,6 +297,8 @@ function BaselineEditorDialog({ initial, onClose }: { initial: ConfigBaseline | 
 
   const scopeKey = composeScopeKey(kind, scopeValue)
   const valid = isValidScopeKey(scopeKey) && filePath.trim() !== ''
+  // 编辑既有基线时，其分组可能已被删除（脏数据）：仍列出来，避免静默丢掉原 scope 取值。
+  const orphanGroup = kind === 'group' && scopeValue !== '' && !groupOptions.some((g) => String(g.id) === scopeValue)
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -281,16 +335,41 @@ function BaselineEditorDialog({ initial, onClose }: { initial: ConfigBaseline | 
                   </option>
                 ))}
               </select>
-              {kind !== 'all' && (
-                <Input
+              {kind === 'group' ? (
+                <select
                   aria-label={t('baselines.scopeValue')}
-                  className="h-8 font-mono text-xs"
+                  data-testid="baseline-scope-value"
+                  className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs"
                   value={scopeValue}
                   onChange={(e) => setScopeValue(e.target.value)}
-                  placeholder={kind === 'tag' ? 'prod' : '1'}
-                />
+                >
+                  <option value="">{t('baselines.scopeGroupPlaceholder')}</option>
+                  {groupOptions.map((g) => (
+                    <option key={g.id} value={String(g.id)}>
+                      {`${'\u3000'.repeat(g.depth)}${g.name} (#${g.id})`}
+                    </option>
+                  ))}
+                  {orphanGroup && (
+                    <option value={scopeValue}>{t('baselines.scopeGroupOrphan', { id: scopeValue })}</option>
+                  )}
+                </select>
+              ) : (
+                kind !== 'all' && (
+                  <Input
+                    aria-label={t('baselines.scopeValue')}
+                    className="h-8 font-mono text-xs"
+                    value={scopeValue}
+                    onChange={(e) => setScopeValue(e.target.value)}
+                    placeholder={kind === 'tag' ? 'prod' : '1'}
+                  />
+                )
               )}
             </div>
+            {kind === 'group' && (
+              <p className="mt-1 text-[11px] text-muted-foreground" data-testid="baseline-scope-group-hint">
+                {t('baselines.scopeGroupHint')}
+              </p>
+            )}
             <p className="mt-1 font-mono text-[11px] text-muted-foreground">{scopeKey}</p>
           </div>
 

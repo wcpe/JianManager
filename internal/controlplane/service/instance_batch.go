@@ -73,18 +73,22 @@ type InstanceBatchFilter struct {
 	NodeID *uint
 	Status *model.InstanceStatus
 	Role   *model.InstanceRole
+	// InstanceIDs 显式实例集合（可选）。用于「按选中实例」走 filter 语义，使滚动编排的
+	// 灰度抽样（ratio）在 filter 模式下生效（FR-457）；为空时不附加该谓词。
+	InstanceIDs []uint
 }
 
 // InstanceBatchFilterIn 批量请求体中的筛选 DTO（JSON 可绑定），经 ToFilter 转为内部筛选条件。
 type InstanceBatchFilterIn struct {
-	NodeID *uint   `json:"nodeId"`
-	Status *string `json:"status"`
-	Role   *string `json:"role"`
+	NodeID      *uint   `json:"nodeId"`
+	Status      *string `json:"status"`
+	Role        *string `json:"role"`
+	InstanceIDs []uint  `json:"instanceIds"`
 }
 
 // ToFilter 将请求 DTO 转为内部筛选条件。
 func (in InstanceBatchFilterIn) ToFilter() InstanceBatchFilter {
-	f := InstanceBatchFilter{NodeID: in.NodeID}
+	f := InstanceBatchFilter{NodeID: in.NodeID, InstanceIDs: in.InstanceIDs}
 	if in.Status != nil {
 		s := model.InstanceStatus(*in.Status)
 		f.Status = &s
@@ -138,6 +142,9 @@ func applyInstanceBatchFilter(q *gorm.DB, f InstanceBatchFilter, scopeIDs []uint
 	}
 	if f.Role != nil {
 		q = q.Where("instances.role = ?", *f.Role)
+	}
+	if len(f.InstanceIDs) > 0 {
+		q = q.Where("instances.id IN ?", f.InstanceIDs)
 	}
 	return q
 }

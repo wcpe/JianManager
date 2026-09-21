@@ -184,3 +184,53 @@ func containsFR031Issue(issues []map[string]any, needle string) bool {
 	}
 	return false
 }
+
+// TestFR031ConfigService_CrossCheckNoVersionSiblingInlinePorts 覆盖 FR-451 §2.4 补漏：
+// 同节点兄弟实例「无配置版本、端口仅以 inline 登记」时，也应并入跨实例端口校验触发冲突。
+func TestFR031ConfigService_CrossCheckNoVersionSiblingInlinePorts(t *testing.T) {
+	db := newConfigTestDB(t)
+	if err := db.AutoMigrate(&model.Node{}, &model.Instance{}); err != nil {
+		t.Fatalf("迁移节点和实例失败: %v", err)
+	}
+
+	const nodeUUID = "node-noversion"
+	const instanceUUID = "inst-nv-a"
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "server.properties"), []byte("server-port=25565\n"), 0644); err != nil {
+		t.Fatalf("写入初始配置失败: %v", err)
+	}
+
+	pool := cpgrpc.NewClientPool()
+	conn := newFR031WorkerConn(t, nodeUUID, instanceUUID, workDir)
+	pool.SetWorkerClientForTest(nodeUUID, workerpb.NewWorkerServiceClient(conn))
+
+	node := &model.Node{UUID: nodeUUID, Name: "nv-node", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s"}
+	if err := db.Create(node).Error; err != nil {
+		t.Fatalf("插入节点失败: %v", err)
+	}
+	inst := &model.Instance{UUID: instanceUUID, NodeID: node.ID, Name: "nv-a", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "java -jar server.jar", WorkDir: workDir}
+	if err := db.Create(inst).Error; err != nil {
+		t.Fatalf("插入实例失败: %v", err)
+	}
+	// 兄弟实例：无任何 InstanceConfigVersion，但内联登记了 server-port=25565。
+	sibling := &model.Instance{UUID: "inst-nv-b", NodeID: node.ID, Name: "nv-b", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "java -jar server.jar", WorkDir: t.TempDir()}
+	if err := db.Create(sibling).Error; err != nil {
+		t.Fatalf("插入同节点实例失败: %v", err)
+	}
+
+	svc := NewConfigService(db, pool)
+	svc.SetInlinePortProvider(func(instanceID uint) map[string]string {
+		if instanceID == sibling.ID {
+			return map[string]string{"server-port": "25565"}
+		}
+		return nil
+	})
+
+	issues, err := svc.CheckCrossFile(inst.ID, "server.properties", "server-port=25565\n")
+	if err != nil {
+		t.Fatalf("跨实例一致性校验失败: %v", err)
+	}
+	if !containsFR031Issue(issues, "端口 25565 重复") {
+		t.Fatalf("应检出「无版本兄弟的内联端口」与当前实例的冲突，实际 %+v", issues)
+	}
+}

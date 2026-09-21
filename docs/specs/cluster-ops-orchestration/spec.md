@@ -40,7 +40,7 @@
 
 ### 2.2 FR-458：配置模板下发、漂移检测、一键收敛
 
-- **配置基线（模板）**：新增 `ConfigBaseline`（model），键为 `(scopeKey, filePath)`，值为基线内容 + 内容哈希（sha256，与 `config.go` 落 `InstanceConfigVersion.ContentHash` 同口径）。scopeKey 可为分组/网络/标签集合，限定「哪些实例应共享该基线」。
+- **配置基线（模板）**：新增 `ConfigBaseline`（model），键为 `(scopeKey, filePath)`，值为基线内容 + 内容哈希（sha256，与 `config.go` 落 `InstanceConfigVersion.ContentHash` 同口径）。scopeKey 可为分组/网络/标签集合，限定「哪些实例应共享该基线」。其中 `group:<id>` 的 id 是**组织树分组**（ADR-033，含子树），与用户组（ADR-004）、网络群组（ADR-007）id 空间正交；`group:` 解析 fail-closed（不存在 → 404、存在但无成员 → 422），不再静默解析为空集——空 scope 既造成「已下发」的错觉，也会让越权隔离用例以空集空转通过。前端 scope 取值从组织树分组列表选择，避免手填数字误填用户组 id。
 - **推送到 N 台**：`Converge` 服务方法接收目标实例集合与基线，逐台调用既有 `ConfigService.Write(instanceID, filePath, content, ...)`——**复用**其版本落库、Worker 侧 `WriteConfig` 校验与字段补丁（`WriteFields`），不另建写入通道。批量结果复用 2.1 的编排会话（可分批/失败即停/进度）。
 - **漂移检测**：`DetectDrift(baselineID)` 对 scope 内每台实例取该 `filePath` 的**当前内容哈希**（优先读最新 `InstanceConfigVersion`，缺失则现场 `ConfigService.Read` + 计算哈希），与基线哈希比对；不一致即 drift。输出逐台 `{instanceID, drift: bool, currentHash, baselineHash}`。只读、零副作用。
 - **一键收敛**：`Converge` = 对所有 drift 实例推送基线；收敛后再跑一次 `DetectDrift` 复核并将残余漂移回报。
@@ -76,3 +76,4 @@
 - **灰度抽样稳定性**：`Ratio` 抽样需稳定序（按 id），避免每次抽样不同导致漏收敛。
 - **配置写入的原子性**：逐台 `Write` 非事务；单台失败不回滚已写台。以「收敛后复核 + 失败明细」暴露残差，不追求全局事务。
 - **与 FR-052/插件批量部署的关系**：本 spec 只做实例配置（`ConfigService` 覆盖的配置文件），不含制品/jar 批量（归 `plugin-batch-deploy`）。
+- **T4 收敛未复用 2.1 编排会话（取舍）**：`Converge` 当前为**同步阻塞**实现——逐批（`BatchSize`）有界并发写入、`FailFast` 提前停、收敛后复核残余漂移，一次性返回 `ConvergeResult`。未复用 `InstanceRollingService` 的会话实体（无独立 progress/cancel 端点）。取舍理由：收敛是**幂等写**（重推基线无副作用，与重启类编排的幂等性诉求不同），失败以「逐台失败明细 + 残余漂移」暴露即可；改为异步会话需新增 progress/cancel 端点与会话生命周期，工程量大且收益有限。**降级缓解**：客户端可轮询 `GET /config-baselines/:id/drift` 观察收敛进度（drift 数递减即进度）；同步 HTTP 请求被客户端取消时 CP 侧已发出的批会完成（不追求全局事务，见上条）。后续如需统一编排语义，可将 `Converge` 改为「构造目标集合 → 复用 `InstanceRollingService` 会话」。

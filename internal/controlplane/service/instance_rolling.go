@@ -43,6 +43,10 @@ type InstanceRollingService struct {
 
 	mu       sync.Mutex
 	runtimes map[uint]*rollingRuntime
+
+	// createMu 串行化「活跃编排冲突检查 + 落库」，与 mu（runtimes 映射）分离：
+	// 避免 create 期间的 DB 查询长时间占用 mu、阻塞运行态注册/清理（FR-457 #I）。
+	createMu sync.Mutex
 }
 
 // NewInstanceRollingService 创建滚动编排服务。
@@ -109,13 +113,21 @@ func (rt *rollingRuntime) isCanceled() bool {
 	return rt.canceled
 }
 
-// sleepInterruptible 批间隔等待；取消时提前返回 false。
+// sleepInterruptible 批间隔等待；取消时返回 false（外层停止），暂停时提前返回 true
+// （外层回到批边界 waitRunnable 阻塞），从而让 Pause 能打断批间隔。
 func (rt *rollingRuntime) sleepInterruptible(d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for {
-		if rt.isCanceled() {
+		rt.mu.Lock()
+		if rt.canceled {
+			rt.mu.Unlock()
 			return false
 		}
+		if rt.state == model.RollingStatePaused {
+			rt.mu.Unlock()
+			return true
+		}
+		rt.mu.Unlock()
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return true
@@ -148,7 +160,8 @@ type rollingSession struct {
 
 // Create 解析目标、冻结为会话、异步启动执行，返回会话。
 // Ratio<1 时按稳定序抽样本会话目标集（首批灰度）；BatchSize=0 时单批全量（与旧 Batch 一致）。
-func (s *InstanceRollingService) Create(req RollingRequest, scopeIDs []uint, scope bool) (*model.InstanceRollingOp, error) {
+// authorID 记录创建者（越权修复归属）；scopeIDs/scope 为调用者可访问集合（平台管理员 scoped=false）。
+func (s *InstanceRollingService) Create(req RollingRequest, scopeIDs []uint, scope bool, authorID uint) (*model.InstanceRollingOp, error) {
 	if !ValidInstanceBatchAction(req.Action) {
 		return nil, fmt.Errorf("不支持的滚动动作: %s", req.Action)
 	}
@@ -170,8 +183,20 @@ func (s *InstanceRollingService) Create(req RollingRequest, scopeIDs []uint, sco
 	for _, in := range instances {
 		targets = append(targets, in.ID)
 	}
-	targets = sampleTargets(targets, req.Policy.Ratio)
+	// 灰度抽样按 spec §2.1 仅在 filter 模式有意义（ids 模式为运维显式指定，不抽样）。
+	// 两段式灰度为「新建会话」语义：先以 ratio<1 建会话跑首批，观察无异常后以剩余目标/ratio=1 另建会话续跑。
+	if req.Filter != nil {
+		targets = sampleTargets(targets, req.Policy.Ratio)
+	}
 
+	// 互斥约束（spec §2.1）：任一活跃编排（pending/running/paused）与本会话目标集合存在重叠即拒绝，
+	// 避免并发创建同一目标集合的编排互相打翻。校验与落库在同一把 createMu 内，防止 TOCTOU；
+	// createMu 与 runtime 映射的 mu 分离，使 DB 查询不阻塞其它会话的运行态注册（FR-457 #I）。
+	s.createMu.Lock()
+	if err := s.ensureNoActiveConflictLocked(targets); err != nil {
+		s.createMu.Unlock()
+		return nil, err
+	}
 	op := &model.InstanceRollingOp{
 		Action:           string(req.Action),
 		Command:          req.Command,
@@ -179,6 +204,7 @@ func (s *InstanceRollingService) Create(req RollingRequest, scopeIDs []uint, sco
 		BatchIntervalSec: req.Policy.BatchIntervalSec,
 		FailFast:         req.Policy.FailFast,
 		Ratio:            req.Policy.Ratio,
+		CreatedBy:        authorID,
 		State:            model.RollingStatePending,
 		Requested:        len(targets),
 		Skipped:          skipped,
@@ -186,12 +212,42 @@ func (s *InstanceRollingService) Create(req RollingRequest, scopeIDs []uint, sco
 	raw, _ := json.Marshal(targets)
 	op.TargetsJSON = string(raw)
 	op.ErrorsJSON = "[]"
-	if err := s.db.Create(op).Error; err != nil {
-		return nil, fmt.Errorf("创建滚动编排会话失败: %w", err)
+	createErr := s.db.Create(op).Error
+	s.createMu.Unlock()
+	if createErr != nil {
+		return nil, fmt.Errorf("创建滚动编排会话失败: %w", createErr)
 	}
 	s.attachTargets(op, targets)
+	// 同步置 running 再异步启动，避免响应返回 pending（与 DB/docs/API.md 的 running 对齐）。
 	s.launch(s.sessionFromOp(op), targets)
-	return op, nil
+	return s.Get(op.ID)
+}
+
+// ensureNoActiveConflictLocked 在持有 createMu 时检测活跃编排与目标集合的重叠（spec §2.1 幂等/互斥）。
+func (s *InstanceRollingService) ensureNoActiveConflictLocked(targets []uint) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	var active []model.InstanceRollingOp
+	if err := s.db.Where("state IN ?", []model.RollingState{
+		model.RollingStatePending, model.RollingStateRunning, model.RollingStatePaused,
+	}).Find(&active).Error; err != nil {
+		return fmt.Errorf("检查活跃编排失败: %w", err)
+	}
+	want := make(map[uint]struct{}, len(targets))
+	for _, id := range targets {
+		want[id] = struct{}{}
+	}
+	for i := range active {
+		decodeRollingOp(&active[i])
+		for _, id := range active[i].Targets {
+			if _, ok := want[id]; ok {
+				// 只回「目标存在进行中编排」，不泄露他方会话 id/state（FR-457 越权修复）。
+				return errors.New("目标实例存在进行中的编排，请先等待其结束或取消")
+			}
+		}
+	}
+	return nil
 }
 
 // Get 读取会话（含解码 targets/errors）。
@@ -223,6 +279,7 @@ func (s *InstanceRollingService) Pause(opID uint) error {
 }
 
 // Resume 继续；进程重启后（内存运行态丢失）由 DB 游标续跑剩余批。
+// 「查询运行态 + 占位」在 s.mu 内原子完成，避免并发两次 Resume 双推进（FR-457 竞态修复）。
 func (s *InstanceRollingService) Resume(opID uint) error {
 	op, err := s.Get(opID)
 	if err != nil {
@@ -231,21 +288,49 @@ func (s *InstanceRollingService) Resume(opID uint) error {
 	if op.State != model.RollingStatePaused && op.State != model.RollingStateRunning {
 		return fmt.Errorf("仅暂停/运行中的编排可继续（当前 %s）", op.State)
 	}
-	if rt := s.runtime(opID); rt != nil {
-		rt.setRunning()
+	// 原子占位：已有运行态则仅广播唤醒；否则新建 runtime 占坑后再拉起，杜绝双推进。
+	rt := newRollingRuntime(model.RollingStateRunning)
+	s.mu.Lock()
+	existing, ok := s.runtimes[opID]
+	if !ok {
+		s.runtimes[opID] = rt
+	}
+	s.mu.Unlock()
+	if ok {
+		existing.setRunning()
 		return s.setOpState(opID, model.RollingStateRunning)
 	}
-	// 内存运行态缺失（CP 重启）：按 DB 游标重新拉起。
-	targets := op.Targets
+	// 内存运行态缺失（CP 重启/首次）：按 DB 游标重新拉起。
 	session := s.sessionFromOp(op)
 	session.cursor = op.Cursor
 	session.succeeded = op.Succeeded
 	session.failed = op.Failed
 	session.errors = op.Errors
+	session.rt = rt
 	if err := s.setOpState(opID, model.RollingStateRunning); err != nil {
+		s.clearRuntime(opID)
 		return err
 	}
-	s.launch(session, targets)
+	go s.run(session)
+	return nil
+}
+
+// RecoverInterrupted CP 重启后把未终态（pending/running）编排置为 paused：内存运行态已丢失，
+// 无法安全自动续跑，交由运维经 Resume 从 DB 游标续跑，避免状态永久停留在 running/pending。
+func (s *InstanceRollingService) RecoverInterrupted() error {
+	var active []model.InstanceRollingOp
+	if err := s.db.Where("state IN ?", []model.RollingState{
+		model.RollingStatePending, model.RollingStateRunning,
+	}).Find(&active).Error; err != nil {
+		return err
+	}
+	for i := range active {
+		if err := s.setOpState(active[i].ID, model.RollingStatePaused); err != nil {
+			slog.Warn("CP 重启恢复：置 paused 失败", "opId", active[i].ID, "error", err)
+			continue
+		}
+		slog.Info("CP 重启恢复：未终态编排已置为 paused，可从游标续跑", "opId", active[i].ID, "cursor", active[i].Cursor)
+	}
 	return nil
 }
 

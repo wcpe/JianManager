@@ -47,7 +47,9 @@ export default function RollingBatchDialog({ selected, onClose }: RollingBatchDi
     create.mutate(
       {
         action,
-        ids: selected.map((s) => s.id),
+        // 目标经 filter（instanceIds）下发，而非 ids：后端灰度的 ratio 抽样仅在 filter 模式生效
+        // （ids 模式为运维显式指定、不抽样）。若发 ids 又带 ratio，会静默退化为全量（安全方向反转）。
+        filter: { instanceIds: selected.map((s) => s.id) },
         ...(action === 'command' ? { command } : {}),
         batchSize: batchSize > 0 ? batchSize : 0,
         batchIntervalSec: batchIntervalSec > 0 ? batchIntervalSec : 0,

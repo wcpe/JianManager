@@ -526,16 +526,18 @@ let rollingSeq = 100
 let groupSeq = 100
 let memberSeq = 100
 
-/** 解析滚动编排目标：ids 优先，否则按 filter 筛选。 */
+/** 解析滚动编排目标：ids 优先，否则按 filter 筛选（含 filter.instanceIds 显式集合）。 */
 function resolveRollingTargets(body: {
   ids?: number[]
-  filter?: { nodeId?: number; status?: string; role?: string }
+  filter?: { nodeId?: number; status?: string; role?: string; instanceIds?: number[] }
 }): { targets: MockInstance[]; skipped: number } {
   if (body.ids?.length) {
     const found = body.ids.map((id) => instances.get(id)).filter((i): i is MockInstance => !!i)
     return { targets: found, skipped: body.ids.length - found.length }
   }
+  const scoped = body.filter?.instanceIds
   const rows = instances.list((i) => {
+    if (scoped?.length && !scoped.includes(i.id)) return false
     if (body.filter?.nodeId && i.nodeId !== body.filter.nodeId) return false
     if (body.filter?.status && i.status !== body.filter.status) return false
     if (body.filter?.role && i.role !== body.filter.role) return false
@@ -588,7 +590,7 @@ export const handlers = [
     const body = (await info.request.json()) as {
       action: string
       ids?: number[]
-      filter?: { nodeId?: number; status?: string; role?: string }
+      filter?: { nodeId?: number; status?: string; role?: string; instanceIds?: number[] }
       command?: string
       batchSize?: number
       batchIntervalSec?: number

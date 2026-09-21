@@ -228,6 +228,10 @@ func main() {
 	})
 	// 实例滚动/分批/灰度编排（FR-457）：复用 InstanceBatchService 的目标解析与单实例委托。
 	instanceRollingSvc := service.NewInstanceRollingService(db, instanceBatchSvc)
+	// CP 重启恢复：内存运行态随进程丢失，把未终态编排置 paused，由运维经 Resume 从游标续跑。
+	if err := instanceRollingSvc.RecoverInterrupted(); err != nil {
+		slog.Warn("CP 重启恢复滚动编排失败", "error", err)
+	}
 	// 配置基线下发/漂移/收敛（FR-458）：复用 configSvc.Write。
 	configBaselineSvc := service.NewConfigBaselineService(db, configSvc)
 	botSvc := service.NewBotService(db, pool)

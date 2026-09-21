@@ -41,6 +41,8 @@ type InstanceRollingOp struct {
 	BatchIntervalSec int            `gorm:"default:0" json:"batchIntervalSec"`
 	FailFast         bool           `gorm:"default:false" json:"failFast"`
 	Ratio            float64        `gorm:"default:0" json:"ratio"`
+	// CreatedBy 记录创建者用户 ID（FR-457 越权修复：用于会话归属与审计追溯）。
+	CreatedBy        uint           `gorm:"default:0;index" json:"createdBy"`
 	TargetsJSON      string         `gorm:"type:text" json:"-"`
 	Targets          []uint         `gorm:"-" json:"targets"`
 	Cursor           int            `gorm:"default:0" json:"cursor"`

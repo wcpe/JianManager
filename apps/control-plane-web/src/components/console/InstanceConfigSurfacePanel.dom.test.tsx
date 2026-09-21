@@ -42,7 +42,7 @@ describe('InstanceConfigSurfacePanel（FR-451 配置源明面化）', () => {
     )
   })
 
-  it('把文件引用项切为内联并提交 source=inline', async () => {
+  it('把文件引用项切为内联并提交 source=inline（以文件现值为初值，不清空）', async () => {
     const { user } = renderPanel()
     let captured: unknown = null
     server.use(
@@ -55,11 +55,16 @@ describe('InstanceConfigSurfacePanel（FR-451 配置源明面化）', () => {
     const row = await screen.findByTestId('config-surface-row-props.motd')
     // 文件中立开关：点「内联」后该行出现可编辑输入。
     await user.click(within(row).getByRole('button', { name: '内联' }))
-    expect(within(row).getByLabelText('服务器描述')).toBeInTheDocument()
+    const input = within(row).getByLabelText('服务器描述')
+    expect(input).toBeInTheDocument()
+    // file→inline 以文件当前生效值预填，避免破坏性写入空值。
+    expect(input).toHaveValue('A Mock Minecraft Server')
 
     await user.click(screen.getByTestId('config-surface-save'))
     await waitFor(() =>
-      expect(captured).toEqual({ items: [{ itemKey: 'props.motd', source: 'inline', inlineValue: '' }] }),
+      expect(captured).toEqual({
+        items: [{ itemKey: 'props.motd', source: 'inline', inlineValue: 'A Mock Minecraft Server' }],
+      }),
     )
   })
 
@@ -67,5 +72,38 @@ describe('InstanceConfigSurfacePanel（FR-451 配置源明面化）', () => {
     renderPanel()
     await screen.findByTestId('config-surface-panel')
     expect(screen.getByTestId('config-surface-save')).toBeDisabled()
+  })
+
+  it('文件现值不可用（读取失败）时切内联并保存不发送 inlineValue（交后端迁移兜底，避免破坏性写入）', async () => {
+    server.use(
+      http.get(API('/instances/1/configs/surface'), () =>
+        HttpResponse.json({
+          items: [
+            {
+              itemKey: 'props.motd', source: 'file', registered: true, filePath: 'server.properties',
+              fileKey: 'motd', effectiveValue: '', effectiveSource: 'file', editable: false,
+              group: '展示与容量', description: '服务器描述', type: 'string', previewError: '节点离线，无法读取文件',
+            },
+          ],
+        }),
+      ),
+    )
+    let captured: unknown = null
+    server.use(
+      http.put(API('/instances/1/configs/surface'), async ({ request }) => {
+        captured = await request.json()
+        return HttpResponse.json({ items: [] })
+      }),
+    )
+    const { user } = renderPanel()
+
+    const row = await screen.findByTestId('config-surface-row-props.motd')
+    await user.click(within(row).getByRole('button', { name: '内联' }))
+    await user.click(screen.getByTestId('config-surface-save'))
+
+    // 不发送 inlineValue（置 nil），后端 file→inline 迁移读取文件现值兜底。
+    await waitFor(() =>
+      expect(captured).toEqual({ items: [{ itemKey: 'props.motd', source: 'inline' }] }),
+    )
   })
 })

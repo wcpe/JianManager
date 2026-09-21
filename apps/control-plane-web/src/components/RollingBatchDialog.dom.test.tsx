@@ -57,10 +57,12 @@ describe('RollingBatchDialog（FR-457 滚动/分批/灰度编排）', () => {
     await user.click(screen.getByRole('button', { name: '20%' }))
     await user.click(screen.getByRole('button', { name: '开始编排' }))
 
+    // 灰度为「子集」语义：目标须经 filter（instanceIds）下发，ratio 才在 filter 模式被抽样；
+    // 若发 ids 又带 ratio，后端会静默退化为全量（ratioPercent=20 被忽略）。
     await waitFor(() =>
       expect(captured).toEqual({
         action: 'restart',
-        ids: [101, 102],
+        filter: { instanceIds: [101, 102] },
         batchSize: 0,
         batchIntervalSec: 0,
         failFast: true,
