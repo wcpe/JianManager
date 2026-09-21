@@ -13,6 +13,12 @@ import ConfigFileEditor from '@/components/config-explorer/ConfigFileEditor'
  * 递归发现实例工作目录下的配置文件（`config_discover`），左侧选择、右侧编辑：
  * 复用 {@link ConfigFileEditor} 获得「schema 表单 / 原文文本」双模式与配置版本能力。
  * BC 的 `config.yml`（监听端口 / online_mode / servers）与原生二进制的配置文件走同一条路径。
+ *
+ * TODO(FR-449 §2.2.4)：BC `config.yml` 的「关键项面板」（监听端口 / online_mode /
+ * servers / forced_hosts）目前依赖后端 `schema.BungeeCordYAMLModel` 的 schema 表单；
+ * 但该 schema 仅覆盖 listeners[].host/max_players/ip_forward，且键名与 yaml 扁平解析器
+ * （`parseFlatYAML` → 点号路径）不一致，故 servers/forced_hosts 等映射项无法结构化。
+ * 待补：为 config.yml 提供覆盖关键项且键名与解析器对齐的 schema（或专用关键项表单）。
  */
 export default function GenericConfigSegment({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()

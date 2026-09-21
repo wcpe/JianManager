@@ -5,22 +5,21 @@ import { Save, Terminal } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { useInstance, useUpdateInstance } from '@/api/instances'
-import { HealthPanel } from './HealthPanel'
 import { ProcessPanel } from './ProcessPanel'
 
 /**
- * 二进制 / beacon 专属分段（FR-450）——抽象自产品：不写死 beacon 名，
- * 一律由画像 `capabilities` 驱动（新增原生二进制产品只需在注册表加一条描述符）。
+ * 进程能力分段（FR-450）——不写死产品名，由画像 `process` 能力驱动
+ * （新增原生二进制产品只需在注册表加一条描述符）。
  *
- * 承载：进程运行指标（{@link ProcessPanel}）+ 端口健康检查（{@link HealthPanel}）+
- * 启动参数编辑（{@link LaunchParamsPanel}）。文件目录管理（files 能力）与基础 CPU 监控
- * 由 process 档与 resource 页签保留，不在此重复。
+ * 承载：进程运行指标（{@link ProcessPanel}）+ 启动参数编辑（{@link LaunchParamsPanel}）。
+ * 端口 + 健康检查归 `health` 页签（{@link HealthPanel}）独有，本分段**不再**内联，
+ * 避免同一实例的 `process` 与 `health` 两个页签重复渲染 HealthPanel（minor 5 单一归属）。
+ * 文件目录管理（files 能力）与基础 CPU 监控由 `files` 页签保留，不在此重复。
  */
 export default function BinarySegment({ instanceId }: { instanceId: number }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
       <ProcessPanel instanceId={instanceId} />
-      <HealthPanel instanceId={instanceId} />
       <LaunchParamsPanel instanceId={instanceId} />
     </div>
   )

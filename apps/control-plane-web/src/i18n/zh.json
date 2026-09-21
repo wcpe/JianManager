@@ -4987,6 +4987,7 @@
     "state": {
       "reachable": "可达",
       "unreachable": "不可达",
+      "timeout": "超时",
       "unknown": "未知"
     }
   },
@@ -5004,8 +5005,9 @@
   "bc": {
     "subServers": "子服列表",
     "noSubServers": "该代理未注册任何子服",
-    "playersTitle": "跨服玩家分布（全网 {{count}}）",
+    "playersTitle": "跨服玩家分布（本代理已注册子服共 {{count}} 人在线）",
     "playersUnknown": "未知（探针不可达）",
-    "playersNone": "无在线玩家"
+    "playersNone": "无在线玩家",
+    "playersTotalCaveat": "以上仅统计本代理已注册子服，不含 {{count}} 个探针不可达子服（其在线玩家未知）"
   }
 }

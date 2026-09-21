@@ -16,7 +16,8 @@ func TestProfileFor_BuiltinProfiles(t *testing.T) {
 	assert.Equal(t, []model.Capability{
 		model.CapOverview, model.CapTerminal, model.CapFiles, model.CapPlugins,
 		model.CapMetrics, model.CapPlayers, model.CapBusiness, model.CapBot, model.CapBackup,
-	}, backend.Capabilities, "backend = 现有 9 Tab")
+		model.CapClone, // 动作级能力（不落 Tab）：仅后端子服可克隆
+	}, backend.Capabilities, "backend = 现有 9 Tab + 动作级 clone")
 
 	proxy := ProfileFor(model.InstanceTypeMinecraftJava, model.InstanceRoleProxy)
 	assert.False(t, proxy.MCSemantics)
@@ -35,6 +36,19 @@ func TestProfileFor_BuiltinProfiles(t *testing.T) {
 		for _, mc := range []model.Capability{model.CapMetrics, model.CapPlugins, model.CapPlayers, model.CapBusiness, model.CapBot} {
 			assert.NotContains(t, p.Capabilities, mc)
 		}
+	}
+}
+
+// FR-445 零硬编码：动作级能力 clone（可克隆）只由后端子服类实例声明，
+// 前端行菜单据 hasCapability(profile,'clone') 显隐，取代 role === 'backend' 硬编码。
+func TestProfileFor_CloneCapabilityBackendOnly(t *testing.T) {
+	for _, k := range KnownProfileTypes() {
+		p := ProfileFor(k.Type, k.Role)
+		if k.Type == model.InstanceTypeMinecraftJava && k.Role == model.InstanceRoleBackend {
+			assert.Contains(t, p.Capabilities, model.CapClone, "后端子服应可克隆")
+			continue
+		}
+		assert.NotContains(t, p.Capabilities, model.CapClone, "%s/%s 不应可克隆", k.Type, k.Role)
 	}
 }
 

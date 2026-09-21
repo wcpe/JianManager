@@ -8,10 +8,10 @@ import { server } from '@jianmanager/devmock/server'
 import NetworksPage from './NetworksPage'
 
 const instances = [
-  { id: 10, uuid: 'i-survival-proxy', nodeId: 1, name: 'survival-proxy', type: 'minecraft_proxy', role: 'proxy', processType: 'daemon', status: 'RUNNING', startCommand: '', workDir: '/servers/survival-proxy', serverPort: 25570, autoStart: true, autoRestart: true, tags: '[]', createdAt: '2026-06-01T00:00:00Z' },
+  { id: 10, uuid: 'i-survival-proxy', nodeId: 1, name: 'survival-proxy', type: 'minecraft_java', role: 'proxy', processType: 'daemon', status: 'RUNNING', startCommand: '', workDir: '/servers/survival-proxy', serverPort: 25570, autoStart: true, autoRestart: true, tags: '[]', createdAt: '2026-06-01T00:00:00Z' },
   { id: 11, uuid: 'i-survival-lobby', nodeId: 1, name: 'survival-lobby', type: 'minecraft_java', role: 'backend', processType: 'daemon', status: 'RUNNING', startCommand: '', workDir: '/servers/survival-lobby', serverPort: 25566, autoStart: true, autoRestart: true, tags: '[]', createdAt: '2026-06-01T00:00:00Z' },
   { id: 12, uuid: 'i-survival-world', nodeId: 2, name: 'survival-world', type: 'minecraft_java', role: 'backend', processType: 'daemon', status: 'CRASHED', startCommand: '', workDir: '/servers/survival-world', serverPort: 25567, autoStart: false, autoRestart: true, tags: '[]', createdAt: '2026-06-01T00:00:00Z' },
-  { id: 20, uuid: 'i-creative-proxy', nodeId: 1, name: 'creative-proxy', type: 'minecraft_proxy', role: 'proxy', processType: 'daemon', status: 'RUNNING', startCommand: '', workDir: '/servers/creative-proxy', serverPort: 25580, autoStart: true, autoRestart: true, tags: '[]', createdAt: '2026-06-01T00:00:00Z' },
+  { id: 20, uuid: 'i-creative-proxy', nodeId: 1, name: 'creative-proxy', type: 'minecraft_java', role: 'proxy', processType: 'daemon', status: 'RUNNING', startCommand: '', workDir: '/servers/creative-proxy', serverPort: 25580, autoStart: true, autoRestart: true, tags: '[]', createdAt: '2026-06-01T00:00:00Z' },
 ]
 
 beforeEach(() => {

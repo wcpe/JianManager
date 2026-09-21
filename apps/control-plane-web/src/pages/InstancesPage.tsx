@@ -29,7 +29,7 @@ import CloneInstanceDialog from '@/components/CloneInstanceDialog'
 import InstanceTagsDialog from '@/components/InstanceTagsDialog'
 import EditInstanceLimitsDialog from '@/components/EditInstanceLimitsDialog'
 import EditInstanceConfigDialog from '@/components/EditInstanceConfigDialog'
-import { resolveCapabilities } from '@/lib/capabilities'
+import { hasCapability, resolveCapabilities } from '@/lib/capabilities'
 import { InstanceWorktableCard } from '@/components/console/InstanceWorktableCard'
 import { InstanceGroupManager } from '@/components/console/InstanceGroupManager'
 import {
@@ -1592,8 +1592,10 @@ function FilterSelect({
  * 实例行的「⋯」次要操作菜单（FR-138）：标签 / 资源限额 / 代理后端 / 克隆 / 删除收入下拉，
  * 行内只保留启停/重启主操作。运行态下克隆改禁用 + tooltip（非消失）；删除标红且运行态
  * 仍可用（FR-310：后端编排先停止再删除），tooltip 提示该行为。
+ *
+ * 导出供按键/能力画像门控的针对性测试直接挂载（避免整页渲染）。
  */
-function InstanceRowMenu({
+export function InstanceRowMenu({
   inst,
   onTags,
   onEditConfig,
@@ -1631,7 +1633,9 @@ function InstanceRowMenu({
         {resolveCapabilities(inst).capabilities.includes('bcTopology') && (
           <DropdownMenuItem onSelect={onProxy}>{t('proxy.manageBackends')}</DropdownMenuItem>
         )}
-        {resolveCapabilities(inst).mcSemantics && (
+        {/* 「可克隆」由能力画像 `clone` 承担（仅后端子服类实例声明），不复用 `role === 'backend'`
+            硬编码，也不拿 `mcSemantics` 当门控（那是 MC 世界语义，proxy 无世界语义 ≠ 不可克隆）。 */}
+        {hasCapability(resolveCapabilities(inst), 'clone') && (
           <DropdownMenuItem
             title={stopped ? undefined : t('instances.cloneRunningHint')}
             className={stopped ? undefined : 'opacity-50 cursor-not-allowed'}

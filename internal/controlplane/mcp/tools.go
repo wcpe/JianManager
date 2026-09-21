@@ -366,6 +366,10 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		if err != nil {
 			return toolForbidden(err)
 		}
+		// FR-445：详情查询在序列化前附加能力画像，与 HTTP GET /instances/:id 同口径。
+		// 仅在真正会把它序列化出去的 get_instance 路径附加，不塞回 ResolveInstanceTarget，
+		// 以免启停/命令等所有实例级动作都携带无用字段。
+		service.AttachCapabilities(inst)
 		return toolOK(inst)
 
 	case "agent_get_instance_metrics":

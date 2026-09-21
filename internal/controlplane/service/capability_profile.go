@@ -29,6 +29,8 @@ var capabilityRegistry = map[profileKey]model.InstanceCapabilityProfile{
 		Capabilities: []model.Capability{
 			model.CapOverview, model.CapTerminal, model.CapFiles, model.CapPlugins,
 			model.CapMetrics, model.CapPlayers, model.CapBusiness, model.CapBot, model.CapBackup,
+			// 动作级能力（不落 Tab）：仅后端子服可克隆（复制工作目录/配置）。
+			model.CapClone,
 		},
 		Sources: map[model.Capability][]model.DataSource{
 			model.CapMetrics: {model.SourceProbe, model.SourceDirect},
@@ -109,11 +111,19 @@ func KnownProfileTypes() []profileKey {
 }
 
 // AttachCapabilities 给实例挂上按当前 (type, role) 现算的画像（FR-445 §2.4）。
-// 仅在详情/单查路径调用（列表不计，故列表响应不带 capabilities）。
+// 详情/单查路径与列表路径都会调用（列表逐行，故列表响应也带 capabilities）。
 func AttachCapabilities(inst *model.Instance) {
 	if inst == nil {
 		return
 	}
 	p := ProfileFor(inst.Type, inst.Role)
 	inst.Capabilities = &p
+}
+
+// attachCapabilitiesAll 给一批实例逐行挂画像（FR-445 §2.4/§2.5）：列表也优先用后端画像，
+// 前端本地兜底表仅作降级。纯计算（map 查表 + 切片拷贝），不查库、不落库。
+func attachCapabilitiesAll(insts []model.Instance) {
+	for i := range insts {
+		AttachCapabilities(&insts[i])
+	}
 }

@@ -200,6 +200,11 @@ func VelocityTomlModel() ModelSchema {
 }
 
 // BungeeCordYAMLModel BungeeCord config.yml（节选）。
+//
+// TODO(FR-449 §2.2.4)：当前仅覆盖 listeners[].host/max_players 与 ip_forward，
+// 缺少 spec 明确要求的「关键项」——监听端口、online_mode、servers、forced_hosts；
+// 且本 schema 键名（`listeners[].host`）与 `parseFlatYAML` 产出的点号路径（`listeners.host`）
+// 不一致，导致 form 模式无法绑定真实值。补齐前，config.yml 关键项编辑依赖文本模式。
 func BungeeCordYAMLModel() ModelSchema {
 	return ModelSchema{
 		Name:        "config.yml",
