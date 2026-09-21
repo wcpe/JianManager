@@ -34,6 +34,8 @@ beforeEach(() => {
         trends: [],
       }),
     ),
+    // FR-461 健康墙属同域，默认空桩（具体用例按需覆盖）。
+    http.get(API('/observability/health-wall'), () => HttpResponse.json({ nodes: [] })),
   )
 })
 
@@ -57,11 +59,21 @@ describe('OverviewPage（mock 假后端）', () => {
           exceptions: [{ kind: 'node_stale', nodeId: 2, title: 'node-a 心跳陈旧', href: '/monitoring?node=node-a' }],
         }),
       ),
+      http.get(API('/observability/health-wall'), () =>
+        HttpResponse.json({
+          nodes: [
+            { nodeId: 2, nodeUuid: 'node-a', name: 'node-a', freshness: 'stale', cpuPct: null, memPct: null, diskPct: null, running: 0, crashed: 0, stopped: 0, activeAlerts: 0, botActive: null, botConnecting: null, level: 'stale', href: '/monitoring?node=node-a' },
+          ],
+        }),
+      ),
     )
 
     renderWithProviders(<OverviewPage />, { route: '/' })
 
     expect(await screen.findByText('平台健康')).toBeInTheDocument()
+    // FR-461：平台总览页内嵌集群健康墙，单元格可一键下钻。
+    const healthWall = within(await screen.findByTestId('health-wall'))
+    expect(healthWall.getByRole('link', { name: 'node-a 陈旧' })).toHaveAttribute('href', '/monitoring?node=node-a')
     expect(screen.getByText('Bot Worker（共享）')).toBeInTheDocument()
     expect(await screen.findByText('Bot Worker 资源为共享进程观察值，不代表任一 Bot 或会话的独占资源。')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'node-a 心跳陈旧' })).toHaveAttribute('href', '/monitoring?node=node-a')
