@@ -40,6 +40,14 @@ type CreateRuleRequest struct {
 	Threshold   float64 `json:"threshold"`
 	DurationSec int     `json:"durationSec"`
 
+	// 动态基线 / 饱和度触发（FR-462）
+	BaselineMethod    string  `json:"baselineMethod"`
+	BaselineWindowSec int     `json:"baselineWindowSec"`
+	Sensitivity       float64 `json:"sensitivity"`
+	MinDelta          float64 `json:"minDelta"`
+	Direction         string  `json:"direction"`
+	Scope             string  `json:"scope"`
+
 	// 非指标触发
 	Keyword    string `json:"keyword"`
 	EventMatch string `json:"eventMatch"`
@@ -61,7 +69,18 @@ var validTriggerTypes = map[string]bool{
 	model.AlertTriggerMetric: true, model.AlertTriggerInstanceCrash: true,
 	model.AlertTriggerNodeOffline: true, model.AlertTriggerLogKeyword: true,
 	model.AlertTriggerPlayerEvent: true, model.AlertTriggerBackupFailed: true,
+	model.AlertTriggerBaseline: true, model.AlertTriggerSaturation: true,
 }
+
+// 动态基线/饱和度（FR-462）字段合法枚举。
+var validBaselineMethods = map[string]bool{
+	"": true, model.BaselineMethodEWMA: true, model.BaselineMethodROC: true,
+	model.BaselineMethodMoM: true, model.BaselineMethodYoY: true,
+}
+var validBaselineDirections = map[string]bool{
+	"": true, model.BaselineDirectionUp: true, model.BaselineDirectionDown: true, model.BaselineDirectionBoth: true,
+}
+var validRuleScopes = map[string]bool{"": true, "node": true, "instance": true}
 var validLevels = map[string]bool{
 	model.AlertLevelInfo: true, model.AlertLevelWarn: true, model.AlertLevelCritical: true,
 }
@@ -89,14 +108,61 @@ func normalizeRuleTypeAndLevel(triggerType, level string) (string, string, error
 	return triggerType, level, nil
 }
 
-// expectedTargetTypeForTrigger 返回触发类型要求的目标类型。
+// expectedTargetTypeForTrigger 返回触发类型要求的目标类型；空串表示 targetType 均可
+// （baseline/saturation 的维度由 Scope 决定，node/instance 都合法）。
 func expectedTargetTypeForTrigger(triggerType string) string {
 	switch triggerType {
 	case model.AlertTriggerMetric, model.AlertTriggerNodeOffline:
 		return "node"
+	case model.AlertTriggerBaseline, model.AlertTriggerSaturation:
+		return ""
 	default:
 		return "instance"
 	}
+}
+
+// scopeForRule 解析规则评估维度：显式 Scope 优先，否则按 TargetType 推导。
+func scopeForRule(scope, targetType string) string {
+	if scope == "node" || scope == "instance" {
+		return scope
+	}
+	if targetType == "instance" {
+		return "instance"
+	}
+	return "node"
+}
+
+// validateBaselineFields 校验 FR-462 基线/饱和度扩展字段。
+func validateBaselineFields(triggerType, method, direction, scope string) error {
+	if !validBaselineMethods[method] {
+		return fmt.Errorf("非法基线方法: %s", method)
+	}
+	if !validBaselineDirections[direction] {
+		return fmt.Errorf("非法偏离方向: %s", direction)
+	}
+	if !validRuleScopes[scope] {
+		return fmt.Errorf("非法评估维度: %s", scope)
+	}
+	return nil
+}
+
+// normalizeBaselineFields 为基线规则补默认值（方法 ewma / 方向 both / 窗口 3600s / 灵敏度 3）。
+func normalizeBaselineFields(triggerType, method string, window int, sensitivity float64, direction string) (string, int, float64, string) {
+	if triggerType == model.AlertTriggerBaseline {
+		if method == "" {
+			method = model.BaselineMethodEWMA
+		}
+		if direction == "" {
+			direction = model.BaselineDirectionBoth
+		}
+	}
+	if window <= 0 {
+		window = baselineDefaultWindowSec
+	}
+	if sensitivity <= 0 {
+		sensitivity = 3
+	}
+	return method, window, sensitivity, direction
 }
 
 // validateSilenceTime 校验 HH:MM 静默时间，空串表示未设置。
@@ -115,7 +181,7 @@ func validateRuleFields(triggerType, targetType, keyword, eventMatch, silenceSta
 	if !validTargetTypes[targetType] {
 		return fmt.Errorf("非法目标类型: %s", targetType)
 	}
-	if want := expectedTargetTypeForTrigger(triggerType); targetType != want {
+	if want := expectedTargetTypeForTrigger(triggerType); want != "" && targetType != want {
 		return fmt.Errorf("触发类型 %s 必须使用 %s 目标", triggerType, want)
 	}
 	if durationSec < 0 {
@@ -175,6 +241,9 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 	if err := validateRuleFields(triggerType, req.TargetType, req.Keyword, req.EventMatch, req.SilenceStart, req.SilenceEnd, req.DurationSec, req.DedupWindowSec); err != nil {
 		return nil, err
 	}
+	if err := validateBaselineFields(triggerType, req.BaselineMethod, req.Direction, req.Scope); err != nil {
+		return nil, err
+	}
 	if err := s.validateChannelIDs(req.ChannelIDs); err != nil {
 		return nil, err
 	}
@@ -187,6 +256,8 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 		notifyRecover = *req.NotifyRecover
 	}
 
+	baselineMethod, baselineWindow, sensitivity, direction := normalizeBaselineFields(triggerType, req.BaselineMethod, req.BaselineWindowSec, req.Sensitivity, req.Direction)
+
 	channelIDs := ""
 	if len(req.ChannelIDs) > 0 {
 		raw, err := json.Marshal(req.ChannelIDs)
@@ -197,25 +268,31 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 	}
 
 	rule := &model.AlertRule{
-		Name:           req.Name,
-		TriggerType:    triggerType,
-		Level:          level,
-		TargetType:     req.TargetType,
-		TargetID:       req.TargetID,
-		Metric:         req.Metric,
-		Operator:       req.Operator,
-		Threshold:      req.Threshold,
-		DurationSec:    req.DurationSec,
-		Keyword:        req.Keyword,
-		EventMatch:     req.EventMatch,
-		ChannelIDs:     channelIDs,
-		DedupWindowSec: req.DedupWindowSec,
-		SilenceStart:   req.SilenceStart,
-		SilenceEnd:     req.SilenceEnd,
-		NotifyRecover:  notifyRecover,
-		NotifyType:     req.NotifyType,
-		NotifyTarget:   req.NotifyTarget,
-		Enabled:        true,
+		Name:              req.Name,
+		TriggerType:       triggerType,
+		Level:             level,
+		TargetType:        req.TargetType,
+		TargetID:          req.TargetID,
+		Metric:            req.Metric,
+		Operator:          req.Operator,
+		Threshold:         req.Threshold,
+		DurationSec:       req.DurationSec,
+		BaselineMethod:    baselineMethod,
+		BaselineWindowSec: baselineWindow,
+		Sensitivity:       sensitivity,
+		MinDelta:          req.MinDelta,
+		Direction:         direction,
+		Scope:             scopeForRule(req.Scope, req.TargetType),
+		Keyword:           req.Keyword,
+		EventMatch:        req.EventMatch,
+		ChannelIDs:        channelIDs,
+		DedupWindowSec:    req.DedupWindowSec,
+		SilenceStart:      req.SilenceStart,
+		SilenceEnd:        req.SilenceEnd,
+		NotifyRecover:     notifyRecover,
+		NotifyType:        req.NotifyType,
+		NotifyTarget:      req.NotifyTarget,
+		Enabled:           true,
 	}
 	if err := s.db.Create(rule).Error; err != nil {
 		return nil, fmt.Errorf("创建告警规则失败: %w", err)
@@ -258,6 +335,14 @@ type UpdateRuleRequest struct {
 	NotifyRecover  *bool    `json:"notifyRecover"`
 	Keyword        *string  `json:"keyword"`
 	EventMatch     *string  `json:"eventMatch"`
+
+	// FR-462 动态基线 / 饱和度可调字段。
+	BaselineMethod    *string  `json:"baselineMethod"`
+	BaselineWindowSec *int     `json:"baselineWindowSec"`
+	Sensitivity       *float64 `json:"sensitivity"`
+	MinDelta          *float64 `json:"minDelta"`
+	Direction         *string  `json:"direction"`
+	Scope             *string  `json:"scope"`
 }
 
 // UpdateRule 更新告警规则。
@@ -301,6 +386,22 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 	if err := validateRuleFields(ruleTriggerType(&current), current.TargetType, keyword, eventMatch, silenceStart, silenceEnd, current.DurationSec, dedup); err != nil {
 		return nil, err
 	}
+	// FR-462：合并并校验基线/饱和度字段。
+	baselineMethod := current.BaselineMethod
+	if req.BaselineMethod != nil {
+		baselineMethod = *req.BaselineMethod
+	}
+	direction := current.Direction
+	if req.Direction != nil {
+		direction = *req.Direction
+	}
+	scope := current.Scope
+	if req.Scope != nil {
+		scope = *req.Scope
+	}
+	if err := validateBaselineFields(ruleTriggerType(&current), baselineMethod, direction, scope); err != nil {
+		return nil, err
+	}
 	if req.ChannelIDs != nil {
 		if err := s.validateChannelIDs(*req.ChannelIDs); err != nil {
 			return nil, err
@@ -341,6 +442,25 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 	}
 	if req.EventMatch != nil {
 		updates["event_match"] = *req.EventMatch
+	}
+	// FR-462 扩展字段。
+	if req.BaselineMethod != nil {
+		updates["baseline_method"] = *req.BaselineMethod
+	}
+	if req.BaselineWindowSec != nil {
+		updates["baseline_window_sec"] = *req.BaselineWindowSec
+	}
+	if req.Sensitivity != nil {
+		updates["sensitivity"] = *req.Sensitivity
+	}
+	if req.MinDelta != nil {
+		updates["min_delta"] = *req.MinDelta
+	}
+	if req.Direction != nil {
+		updates["direction"] = *req.Direction
+	}
+	if req.Scope != nil {
+		updates["scope"] = *req.Scope
 	}
 	if len(updates) > 0 {
 		if err := s.db.Model(&current).Updates(updates).Error; err != nil {

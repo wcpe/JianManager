@@ -549,6 +549,8 @@ func main() {
 	metricSvc := service.NewMetricService(db)
 	metricSvc.Start()
 	defer metricSvc.Stop()
+	// FR-462：把时序数据源注入告警评估器，启用动态基线/饱和度与实例级 metric 规则评估。
+	alertEvaluator.SetMetrics(metricSvc)
 	platformObservabilitySvc := service.NewPlatformObservabilityService(db)
 	// FR-401：仅将已认证 Heartbeat 的当前快照按固定周期沉淀为节点级历史指标。
 	botRuntimeMetricSampler := service.NewBotRuntimeMetricSampler(db, metricSvc)
