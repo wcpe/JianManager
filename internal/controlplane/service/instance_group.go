@@ -407,3 +407,8 @@ func (s *InstanceGroupService) get(id uint) (*model.InstanceGroupNode, error) {
 	}
 	return &node, nil
 }
+
+// Get 按 ID 取分组节点（只读）；供上层解析目标名称等用途，例如 MCP destructive 精确确认。
+func (s *InstanceGroupService) Get(id uint) (*model.InstanceGroupNode, error) {
+	return s.get(id)
+}
