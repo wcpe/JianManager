@@ -2,14 +2,16 @@ import { Activity } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@jianmanager/ui'
 
+import InstanceConfigSurfacePanel from './InstanceConfigSurfacePanel'
 import InstanceEnvSegment from './InstanceEnvSegment'
 import WorkspaceCardBody from './WorkspaceCardBody'
 
-/** 文件配置页签内的分段（FR-413）。 */
-export type ResourceSegment = 'files' | 'env'
+/** 文件配置页签内的分段（FR-413；FR-451 增「关键配置」段）。 */
+export type ResourceSegment = 'files' | 'config' | 'env'
 
 // 分段标签用「文件」而非「文件配置」——后者是本页签自己的名字，同名会撞可访问性名称。
 const SEGMENTS: Array<{ key: ResourceSegment; labelKey: string }> = [
+  { key: 'config', labelKey: 'serverConsole.segConfig' },
   { key: 'files', labelKey: 'serverConsole.segFiles' },
   { key: 'env', labelKey: 'serverConsole.env' },
 ]
@@ -50,6 +52,13 @@ export default function InstanceResourceSegment({ instanceId, segment, onSegment
           ))}
         </div>
       </div>
+
+      {/* 关键配置段（FR-451）：启动参数 + server.properties 关键项明面化，在此层滚。 */}
+      <Activity mode={segment === 'config' ? 'visible' : 'hidden'}>
+        <div className={cn('flex min-h-0 flex-col overflow-auto', segment === 'config' ? 'flex-1' : 'hidden')}>
+          <InstanceConfigSurfacePanel instanceId={instanceId} />
+        </div>
+      </Activity>
 
       {/* 文件段：管理器内部自己收口滚动，故此层 overflow-hidden。 */}
       <Activity mode={segment === 'files' ? 'visible' : 'hidden'}>

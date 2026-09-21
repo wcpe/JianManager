@@ -80,7 +80,10 @@ function readActiveTab(searchParams: URLSearchParams): TabKey {
 }
 
 function readResourceSegment(searchParams: URLSearchParams): ResourceSegment {
-  return searchParams.get('tab') === 'env' || searchParams.get('seg') === 'env' ? 'env' : 'files'
+  // 旧深链兼容（FR-413）：`?tab=env` 落到「环境变量」分段；`?seg=config` 落到「关键配置」分段（FR-451）。
+  if (searchParams.get('tab') === 'env') return 'env'
+  const seg = searchParams.get('seg')
+  return seg === 'env' || seg === 'config' ? seg : 'files'
 }
 
 /**

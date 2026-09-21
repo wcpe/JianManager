@@ -12,6 +12,7 @@ import {
   DownloadCloud,
   FileClock,
   GitBranch,
+  GitCompareArrows,
   HardDrive,
   KeyRound,
   Layers,
@@ -69,6 +70,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Server,
     children: [
       { to: '/instances', labelKey: 'nav.allInstances', icon: Box, perm: 'instance.read' },
+      { to: '/config-baselines', labelKey: 'nav.configBaselines', icon: GitCompareArrows, perm: ['file.read', 'instance.read'] },
       { to: '/nodes', labelKey: 'nav.nodes', icon: Server, perm: 'node.read' },
       { to: '/players', labelKey: 'nav.players', icon: User, perm: 'player.read' },
       { to: '/bots', labelKey: 'nav.bots', icon: Bot, perm: 'bot.read' },
