@@ -1,8 +1,7 @@
-import { useInstance } from '@/api/instances'
 import type { CardType } from '@/lib/workspace-card'
 import TerminalPane from './TerminalPane'
 import BotSegment from './BotSegment'
-import MetricsSegment from './MetricsSegment'
+import MetricsTabSegment from './MetricsTabSegment'
 import ServerStateSegment from './ServerStateSegment'
 import BusinessSegment from './BusinessSegment'
 import EconomySegment from './EconomySegment'
@@ -15,7 +14,7 @@ import PluginManager from '@/components/plugins/PluginManager'
  *
  * **不丢任何功能**——画布化后所有原工作区段都作为卡片可用：
  * 终端 {@link TerminalPane} / 资源（{@link InstanceResourceCard}，文件+配置合一，承 FR-130/213）/
- * 插件 {@link PluginManager} / 监控 {@link MetricsSegment} / 服务器状态 {@link ServerStateSegment} /
+ * 插件 {@link PluginManager} / 监控 {@link MetricsTabSegment} / 服务器状态 {@link ServerStateSegment} /
  * JBIS 业务 {@link BusinessSegment} / 经济 {@link EconomySegment} / 背包 {@link InventorySegment} /
  * Bot {@link BotSegment}。
  *
@@ -35,8 +34,6 @@ interface WorkspaceCardBodyProps {
 }
 
 export default function WorkspaceCardBody({ instanceId, type, persistTerminal = false }: WorkspaceCardBodyProps) {
-  const { data: instance } = useInstance(instanceId)
-
   switch (type) {
     case 'terminal':
       return <TerminalPane instanceId={instanceId} hideHeader persistSession={persistTerminal} />
@@ -60,10 +57,11 @@ export default function WorkspaceCardBody({ instanceId, type, persistTerminal = 
         </div>
       )
     case 'metrics':
-      // FR-423：监控段头部常驻 + 图表区自滚，故滚动交给内部（同上）。
+      // FR-448：监控卡按探针有无分流（探针全量 / 轻量进程·直探），分流器自带 instance，
+      // 无需在此再取实例。滚动仍交给内部（监控段头部常驻 + 内容区自滚，FR-423）。
       return (
         <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-          <MetricsSegment instanceUuid={instance?.uuid ?? ''} instanceId={instanceId} />
+          <MetricsTabSegment instanceId={instanceId} />
         </div>
       )
     case 'serverstate':
