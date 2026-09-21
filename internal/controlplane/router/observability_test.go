@@ -18,3 +18,17 @@ func TestPlatformObservabilityOverview_AdminOnly(t *testing.T) {
 	w = makeRequest(r, http.MethodGet, "/api/v1/observability/overview", nil, admin)
 	require.Equalf(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 }
+
+// TestHealthWall_AdminOnly 集群健康墙（FR-461）平台级权限：非平台管理员被拒，管理员可读。
+func TestHealthWall_AdminOnly(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	admin := getAdminToken(t, r)
+	member := getMemberToken(t, r, "member", "password123")
+
+	w := makeRequest(r, http.MethodGet, "/api/v1/observability/health-wall", nil, member)
+	require.Equalf(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
+	w = makeRequest(r, http.MethodGet, "/api/v1/observability/health-wall?sort=cpu", nil, admin)
+	require.Equalf(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	require.Contains(t, w.Body.String(), "nodes")
+}
