@@ -74,6 +74,7 @@ const (
 	WorkerService_RemoveGlobalPackage_FullMethodName         = "/worker.WorkerService/RemoveGlobalPackage"
 	WorkerService_DownloadCore_FullMethodName                = "/worker.WorkerService/DownloadCore"
 	WorkerService_InstallForgeServer_FullMethodName          = "/worker.WorkerService/InstallForgeServer"
+	WorkerService_FetchBinary_FullMethodName                 = "/worker.WorkerService/FetchBinary"
 	WorkerService_ListArtifactCache_FullMethodName           = "/worker.WorkerService/ListArtifactCache"
 	WorkerService_EvictArtifactCache_FullMethodName          = "/worker.WorkerService/EvictArtifactCache"
 	WorkerService_ClearArtifactCache_FullMethodName          = "/worker.WorkerService/ClearArtifactCache"
@@ -129,7 +130,7 @@ type WorkerServiceClient interface {
 	// 携带节点身份鉴权 + 本地已知 sha256，指纹一致回空归档（省流），否则回 tar.gz 字节。
 	FetchBotWorkerArchive(ctx context.Context, in *FetchBotWorkerArchiveRequest, opts ...grpc.CallOption) (*FetchBotWorkerArchiveResponse, error)
 	// ReportCrashSnapshot Worker 上报实例崩溃快照（FR-313，CP 侧实现）：进程非正常退出
-	// （退出码 ≠ 0 或 RUNNING/STARTING 态意外退出）时携带节点身份上报现场（退出码/信号/
+	//（退出码 ≠ 0 或 RUNNING/STARTING 态意外退出）时携带节点身份上报现场（退出码/信号/
 	// 时长/尾部输出），CP 持久化并按实例滚动保留最近 5 条。与注册/心跳同信道（隧道/直拨
 	// 双模式天然可用）；老 CP 返回 Unimplemented，Worker 记日志丢弃、不阻塞状态机。
 	ReportCrashSnapshot(ctx context.Context, in *ReportCrashSnapshotRequest, opts ...grpc.CallOption) (*ReportCrashSnapshotResponse, error)
@@ -252,6 +253,15 @@ type WorkerServiceClient interface {
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
 	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
 	InstallForgeServer(ctx context.Context, in *InstallForgeServerRequest, opts ...grpc.CallOption) (*InstallForgeServerResponse, error)
+	// FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（FR-441 通用二进制运行时搭建）。
+	// 与 DownloadCore 的分工：DownloadCore 只服务 MC 核心 jar（绑定节点核心缓存与组合键），
+	// 本 RPC 服务 coreType=binary 的两类 Worker 侧来源——url=Worker 直连远程下载（避免 CP 中转
+	// 大文件）、node_file=节点本地文件就地复制（路径须过受管区校验）。asset 来源由 CP 签发短期
+	// token 转成 url 形态下发（复用制品库签名分发通道），故本 RPC 无需感知制品库语义。
+	//
+	// 服务端流式（非 unary）：二进制体积可达数十 MB、慢链路分钟级，与 FR-319 异步化同因——
+	// 必须让前端看见「在下载」而非「卡住」，故周期性上报字节进度，末帧携带终态结果。
+	FetchBinary(ctx context.Context, in *FetchBinaryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FetchBinaryProgress], error)
 	// ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限。
 	ListArtifactCache(ctx context.Context, in *ListArtifactCacheRequest, opts ...grpc.CallOption) (*ListArtifactCacheResponse, error)
 	// EvictArtifactCache 逐项清除指定 sha256 的缓存。
@@ -938,6 +948,25 @@ func (c *workerServiceClient) InstallForgeServer(ctx context.Context, in *Instal
 	return out, nil
 }
 
+func (c *workerServiceClient) FetchBinary(ctx context.Context, in *FetchBinaryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FetchBinaryProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[5], WorkerService_FetchBinary_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[FetchBinaryRequest, FetchBinaryProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_FetchBinaryClient = grpc.ServerStreamingClient[FetchBinaryProgress]
+
 func (c *workerServiceClient) ListArtifactCache(ctx context.Context, in *ListArtifactCacheRequest, opts ...grpc.CallOption) (*ListArtifactCacheResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListArtifactCacheResponse)
@@ -1150,7 +1179,7 @@ func (c *workerServiceClient) RunBotScript(ctx context.Context, in *RunBotScript
 
 func (c *workerServiceClient) StreamBotEvents(ctx context.Context, in *StreamBotEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[5], WorkerService_StreamBotEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[6], WorkerService_StreamBotEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1199,7 +1228,7 @@ func (c *workerServiceClient) GetBotFleetSnapshot(ctx context.Context, in *GetBo
 
 func (c *workerServiceClient) StreamBotFleetEvents(ctx context.Context, in *StreamBotFleetEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotFleetEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[6], WorkerService_StreamBotFleetEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[7], WorkerService_StreamBotFleetEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1258,7 +1287,7 @@ func (c *workerServiceClient) CancelBotCommandSchedules(ctx context.Context, in 
 
 func (c *workerServiceClient) StreamPluginEvents(ctx context.Context, in *StreamPluginEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[7], WorkerService_StreamPluginEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[8], WorkerService_StreamPluginEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1327,7 +1356,7 @@ func (c *workerServiceClient) UpgradeWorker(ctx context.Context, in *UpgradeWork
 
 func (c *workerServiceClient) TerminalSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalFrame, TerminalFrame], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[8], WorkerService_TerminalSession_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[9], WorkerService_TerminalSession_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1372,7 +1401,7 @@ type WorkerServiceServer interface {
 	// 携带节点身份鉴权 + 本地已知 sha256，指纹一致回空归档（省流），否则回 tar.gz 字节。
 	FetchBotWorkerArchive(context.Context, *FetchBotWorkerArchiveRequest) (*FetchBotWorkerArchiveResponse, error)
 	// ReportCrashSnapshot Worker 上报实例崩溃快照（FR-313，CP 侧实现）：进程非正常退出
-	// （退出码 ≠ 0 或 RUNNING/STARTING 态意外退出）时携带节点身份上报现场（退出码/信号/
+	//（退出码 ≠ 0 或 RUNNING/STARTING 态意外退出）时携带节点身份上报现场（退出码/信号/
 	// 时长/尾部输出），CP 持久化并按实例滚动保留最近 5 条。与注册/心跳同信道（隧道/直拨
 	// 双模式天然可用）；老 CP 返回 Unimplemented，Worker 记日志丢弃、不阻塞状态机。
 	ReportCrashSnapshot(context.Context, *ReportCrashSnapshotRequest) (*ReportCrashSnapshotResponse, error)
@@ -1495,6 +1524,15 @@ type WorkerServiceServer interface {
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
 	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
 	InstallForgeServer(context.Context, *InstallForgeServerRequest) (*InstallForgeServerResponse, error)
+	// FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（FR-441 通用二进制运行时搭建）。
+	// 与 DownloadCore 的分工：DownloadCore 只服务 MC 核心 jar（绑定节点核心缓存与组合键），
+	// 本 RPC 服务 coreType=binary 的两类 Worker 侧来源——url=Worker 直连远程下载（避免 CP 中转
+	// 大文件）、node_file=节点本地文件就地复制（路径须过受管区校验）。asset 来源由 CP 签发短期
+	// token 转成 url 形态下发（复用制品库签名分发通道），故本 RPC 无需感知制品库语义。
+	//
+	// 服务端流式（非 unary）：二进制体积可达数十 MB、慢链路分钟级，与 FR-319 异步化同因——
+	// 必须让前端看见「在下载」而非「卡住」，故周期性上报字节进度，末帧携带终态结果。
+	FetchBinary(*FetchBinaryRequest, grpc.ServerStreamingServer[FetchBinaryProgress]) error
 	// ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限。
 	ListArtifactCache(context.Context, *ListArtifactCacheRequest) (*ListArtifactCacheResponse, error)
 	// EvictArtifactCache 逐项清除指定 sha256 的缓存。
@@ -1762,6 +1800,9 @@ func (UnimplementedWorkerServiceServer) DownloadCore(context.Context, *DownloadC
 }
 func (UnimplementedWorkerServiceServer) InstallForgeServer(context.Context, *InstallForgeServerRequest) (*InstallForgeServerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InstallForgeServer not implemented")
+}
+func (UnimplementedWorkerServiceServer) FetchBinary(*FetchBinaryRequest, grpc.ServerStreamingServer[FetchBinaryProgress]) error {
+	return status.Error(codes.Unimplemented, "method FetchBinary not implemented")
 }
 func (UnimplementedWorkerServiceServer) ListArtifactCache(context.Context, *ListArtifactCacheRequest) (*ListArtifactCacheResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListArtifactCache not implemented")
@@ -2848,6 +2889,17 @@ func _WorkerService_InstallForgeServer_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_FetchBinary_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(FetchBinaryRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(WorkerServiceServer).FetchBinary(m, &grpc.GenericServerStream[FetchBinaryRequest, FetchBinaryProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_FetchBinaryServer = grpc.ServerStreamingServer[FetchBinaryProgress]
+
 func _WorkerService_ListArtifactCache_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListArtifactCacheRequest)
 	if err := dec(in); err != nil {
@@ -3892,6 +3944,11 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "UploadFile",
 			Handler:       _WorkerService_UploadFile_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "FetchBinary",
+			Handler:       _WorkerService_FetchBinary_Handler,
+			ServerStreams: true,
 		},
 		{
 			StreamName:    "StreamBotEvents",

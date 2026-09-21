@@ -48,8 +48,11 @@ const (
 	AgentActionInstanceClone              = "agent.instance_clone"
 	AgentActionInstanceRebuild            = "agent.instance_rebuild"
 	AgentActionInstanceUpdateConfig       = "agent.instance_update_config"
-	AgentActionTaskGet                    = "agent.task_get"
-	AgentActionInstanceSendCommand        = "agent.instance_send_command"
+	// 实例标签维护（FR-440）：与 UpdateConfig 分离为独立动作，使打标签与改配置各有清晰授权面
+	// （UpdateConfig 走 instance.configure，本动作走 instance.write，语义更轻）。
+	AgentActionInstanceUpdateTags  = "agent.instance_update_tags"
+	AgentActionTaskGet             = "agent.task_get"
+	AgentActionInstanceSendCommand = "agent.instance_send_command"
 	// 实例分组（FR-165 / ADR-033）：分组仅承载运维归类，读走 instance.read、写走 instance.write。
 	AgentActionInstanceGroupList          = "agent.instance_group_list"
 	AgentActionInstanceGroupRead          = "agent.instance_group_read"
@@ -58,6 +61,11 @@ const (
 	AgentActionInstanceGroupDelete        = "agent.instance_group_delete"
 	AgentActionInstanceGroupAddMembers    = "agent.instance_group_add_members"
 	AgentActionInstanceGroupRemoveMembers = "agent.instance_group_remove_members"
+	// Beacon 拓扑拉取（FR-444，见 ADR-090）：手动触发把 Beacon 区服结构树映射为
+	// 本地分组树并补 region:/zone:/role: 标签。改的是实例归属与分组，故与实例分组同权限面
+	// （instance.write）；不做 destructive——它是幂等对账而非删除语义。
+	AgentActionBeaconTopologyPull   = "agent.beacon_topology_pull"
+	AgentActionBeaconTopologyStatus = "agent.beacon_topology_status"
 	// 群组服 Network 软标签与代理注册（FR-032 / FR-335）：仅承载运维归类与代理↔后端关系，
 	// 读走 instance.read、写走 instance.write（与实例分组同权限面）。
 	AgentActionNetworkList         = "agent.network_list"

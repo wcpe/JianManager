@@ -435,6 +435,37 @@ func (s *AssetService) AbsPath(a *model.Asset) string {
 	return s.root.Abs(a.RelPath)
 }
 
+// OpenContent 按资产记录自述路由打开内容读取流（FR-347 语义，与客户端制品读取同口径）：
+// local → 打开 CAS 物理文件（缺失返回 ErrAssetNotFound）；s3 → 经渠道 BlobStore 拉取对象。
+// 供二进制搭建（FR-441）的签名分发端点流式返回资产内容。
+func (s *AssetService) OpenContent(a *model.Asset) (io.ReadCloser, error) {
+	if a == nil {
+		return nil, ErrAssetNotFound
+	}
+	if a.StorageBackend == model.AssetBackendS3 {
+		if s.storageChannels == nil {
+			return nil, fmt.Errorf("制品存储渠道服务未装配，无法读取 s3 制品")
+		}
+		store, err := s.storageChannels.StoreForAsset(a)
+		if err != nil {
+			return nil, err
+		}
+		return store.Open(context.Background(), a.RelPath)
+	}
+	absPath := s.AbsPath(a)
+	if absPath == "" {
+		return nil, ErrAssetNotFound
+	}
+	f, err := os.Open(absPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrAssetNotFound
+		}
+		return nil, fmt.Errorf("打开资产文件失败: %w", err)
+	}
+	return f, nil
+}
+
 // ensureAssetDeletable 阻止删除平台运行或客户端发布版本仍依赖的资产。
 func (s *AssetService) ensureAssetDeletable(asset *model.Asset) error {
 	if asset.Type == model.AssetTypeClientFile {

@@ -84,6 +84,11 @@ type InstanceService struct {
 	// 防不了跨实例）。进程内互斥，生产单 CP 实例前提下成立；多 CP 实例部署需 DB 层
 	// 唯一约束 + 冲突重试，暂超范围（见 ports.go 注释）。
 	nodePortAllocMu sync.Mutex
+
+	// beaconPush 是 FR-443 的 Beacon 拓扑推送钩子（可选协同）。为 nil 表示未部署协同，
+	// 或未开启 beacon.push-enabled——此时全部触发点直接返回，实例创建/删除/改名照常成功。
+	// 由 main 装配阶段经 SetBeaconPush 注入，避免 service 层反向依赖装配顺序。
+	beaconPush *BeaconPushService
 }
 
 // lockNodePortAlloc 获取节点级端口分配互斥；返回的释放函数必须且只能调用一次。
@@ -133,6 +138,34 @@ func (s *InstanceService) acquireInstanceOperation(id uint) func() {
 // SetSettingsReader 注入平台设置读取器（FR-063）。在 main 装配阶段调用，避免构造期循环依赖。
 func (s *InstanceService) SetSettingsReader(r SettingsReader) {
 	s.settings = r
+}
+
+// SetBeaconPush 注入 Beacon 拓扑推送服务（FR-443，见 ADR-090）。在 main 装配阶段调用。
+//
+// **可选协同，绝非依赖**：传 nil（未配置 beacon.endpoint 或未开 push-enabled）时全部推送
+// 触发点直接返回——实例创建/删除/改名照常成功，无任何报错或降级提示。
+func (s *InstanceService) SetBeaconPush(p *BeaconPushService) {
+	s.beaconPush = p
+}
+
+// pushTopologyAsync 是 FR-443 的推送触发点：把一次**拓扑变更**异步推给 Beacon。
+//
+// 只有四类事件会走到这里：实例创建 / 删除 / 改名 / 改归属（role、tags）。
+// **实例启停与重启刻意不推送**（ADR-090 §6）：高频操作（批量重启 60 台 = 120 次推送），
+// 且 Beacon 的在线状态本就由 agent 心跳自维护，推送只会造成重复真源。
+//
+// 本方法恒不返回错误、恒不阻塞：未配置协同时内部直接返回（连 goroutine 都不起），
+// 失败只写审计（不重试、不回滚）。调用点因此可以像写一行注释一样追加它。
+//
+// 审计主体刻意记系统（userID=0，与 orphan_runtime 自动处置同口径）：本方法位于 service 层，
+// 拿不到 HTTP 请求的登录用户（Create/Update/Delete 签名里没有 ctx/actor）。「谁改的」已由
+// 中间件的 instance.create/update/delete 审计承载；beacon_push_* 审计只回答
+// 「这次同步到 Beacon 成没成」，故以实例名作 target、事件类型作 detail。
+func (s *InstanceService) pushTopologyAsync(event string, inst *model.Instance) {
+	if s.beaconPush == nil {
+		return
+	}
+	s.beaconPush.PushInstance(0, "", event, inst)
 }
 
 // gracefulStopTimeoutSeconds 取优雅停止超时（秒）的生效值（平台设置 graceful_stop.timeout）。
@@ -354,6 +387,10 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 	if err := s.registerOnWorker(instance); err != nil {
 		slog.Warn("实例已创建但未注册到 Worker，启动时将重试", "instanceId", instance.UUID, "error", err)
 	}
+
+	// 拓扑推送（FR-443）：实例创建 = 需在 Beacon 建立 server 记录。异步、失败只写审计，
+	// 未配置协同则整体跳过——本函数的成功返回不受其影响（可选协同，绝非依赖）。
+	s.pushTopologyAsync(beaconPushEventCreate, instance)
 
 	return instance, nil
 }
@@ -682,6 +719,10 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 		return nil, err
 	}
 
+	// 推送判定要在写入**前**取旧值：GORM 的 Updates(map) 会把新值反射写回 instance 指针，
+	// 写入后再读 instance 已是新值，改名/改归属的比较必然相等（会静默漏推）。
+	prevName, prevRole, prevTags := instance.Name, instance.Role, instance.Tags
+
 	updates := map[string]interface{}{}
 	if f.Name != nil {
 		updates["name"] = *f.Name
@@ -751,6 +792,21 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 			slog.Warn("实例启动规格已保存但同步在线 Worker 失败", "instanceId", updated.UUID, "error", err)
 		}
 	}
+
+	// 拓扑推送（FR-443 §3.1）：只推**幂等语义变更**——改名（serverId 语义变更）与改归属
+	// （role/tags 影响区服分派）。其它字段（启动命令/环境变量/JDK/资源限额）属实例内部配置，
+	// 不改变拓扑，推了只是噪声。
+	//
+	// 两个维度同时变更只推一次：一次注册携带改名后的完整归属，Beacon 按 serverId 幂等 upsert，
+	// 推两次纯属浪费。未配置协同时内部直接返回，本函数的成功返回不受其影响。
+	if f.Name != nil || f.Role != nil || f.Tags != nil {
+		renamed := f.Name != nil && strings.TrimSpace(*f.Name) != strings.TrimSpace(prevName)
+		reowned := (f.Role != nil && *f.Role != prevRole) ||
+			(f.Tags != nil && !sameTags(model.ParseTags(prevTags), *f.Tags))
+		if event := beaconUpdateEvent(renamed, reowned); event != "" {
+			s.pushTopologyAsync(event, updated)
+		}
+	}
 	return updated, nil
 }
 
@@ -806,7 +862,7 @@ func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 		return fmt.Errorf("清理实例数据失败: %w", err)
 	}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		// 删除组关联
 		tx.Where("instance_id = ?", id).Delete(&model.GroupInstance{})
 		// 级联删除群组服关系（ADR-007）：作为代理或后端的注册记录、群组成员关系。
@@ -816,7 +872,15 @@ func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 		tx.Where("instance_id = ?", id).Delete(&model.InstanceCrashSnapshot{})
 		// 删除实例
 		return tx.Delete(&model.Instance{}, id).Error
-	})
+	}); err != nil {
+		return err
+	}
+
+	// 拓扑推送（FR-443 §3.1）：实例删除 = 需在 Beacon 侧归档记录。
+	// 刻意放在事务**提交成功之后**：事务失败时实例仍在本地，推删除会让两侧不一致。
+	// 传入删除前的实例快照（instance 是本函数开头读出的副本，名字仍在），故投影不依赖已删的记录。
+	s.pushTopologyAsync(beaconPushEventDelete, instance)
+	return nil
 }
 
 // stopForDelete 删除前的同步停止编排（FR-310）。与 Stop 的异步委托不同：删除必须确证
@@ -986,7 +1050,8 @@ func (s *InstanceService) startInternal(id, expectedNodeID uint) error {
 }
 
 // longOpInFlightGate 拦截「工作目录尚未就绪就点启动」（FR-319 二轮②，FR-323 补漏扩展）：
-// 搭建（provision，核心下载中）/导入（import，migrate 搬迁中）/克隆（clone，目录拷贝中）
+// 搭建（provision，核心下载中）/二进制搭建（binary_provision，制品取件中）/
+// 导入（import，migrate 搬迁中）/克隆（clone，目录拷贝中）
 // 任一未终态（pending/running）任务关联本实例即拒启，文案按 kind 区分并引导看任务中心。
 // 包级函数：单实例 Start 与批量 start/restart（FR-331 补漏）共用同一道闸。
 func longOpInFlightGate(db *gorm.DB, instanceID uint) error {
@@ -994,7 +1059,7 @@ func longOpInFlightGate(db *gorm.DB, instanceID uint) error {
 	err := db.Model(&model.Task{}).
 		Where("instance_id = ? AND kind IN ? AND state IN ?",
 			instanceID,
-			[]string{model.TaskKindProvision, model.TaskKindImport, model.TaskKindClone},
+			[]string{model.TaskKindProvision, model.TaskKindBinaryProvision, model.TaskKindImport, model.TaskKindClone},
 			[]model.TaskState{model.TaskStatePending, model.TaskStateRunning}).
 		Order("id").
 		Pluck("kind", &kinds).Error
@@ -1006,6 +1071,8 @@ func longOpInFlightGate(db *gorm.DB, instanceID uint) error {
 		return fmt.Errorf("实例正在导入中（目录搬迁未完成），请等待任务中心的导入任务完成后再启动")
 	case model.TaskKindClone:
 		return fmt.Errorf("实例正在克隆中（工作目录复制未完成），请等待任务中心的克隆任务完成后再启动")
+	case model.TaskKindBinaryProvision:
+		return fmt.Errorf("实例正在搭建中（二进制尚未取件完成），请等待任务中心的搭建任务完成后再启动")
 	default:
 		return fmt.Errorf("实例正在搭建中（核心下载未完成），请等待任务中心的搭建任务完成后再启动")
 	}

@@ -140,6 +140,15 @@ service WorkerService {
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
   // InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
   rpc InstallForgeServer(InstallForgeServerRequest) returns (InstallForgeServerResponse);
+  // FetchBinary 把通用二进制制品取到实例工作目录并置可执行位（FR-441 通用二进制运行时搭建）。
+  // 与 DownloadCore 的分工：DownloadCore 只服务 MC 核心 jar（绑定节点核心缓存与组合键），
+  // 本 RPC 服务 coreType=binary 的两类 Worker 侧来源——url=Worker 直连远程下载（避免 CP 中转
+  // 大文件）、node_file=节点本地文件就地复制（路径须过受管区校验）。asset 来源由 CP 签发短期
+  // token 转成 url 形态下发（复用制品库签名分发通道），故本 RPC 无需感知制品库语义。
+  //
+  // 服务端流式（非 unary）：二进制体积可达数十 MB、慢链路分钟级，与 FR-319 异步化同因——
+  // 必须让前端看见「在下载」而非「卡住」，故周期性上报字节进度，末帧携带终态结果。
+  rpc FetchBinary(FetchBinaryRequest) returns (stream FetchBinaryProgress);
 
   // === 节点制品缓存（FR-178）===
   //
@@ -1163,6 +1172,39 @@ message InstallForgeServerResponse {
   string error = 2;
   string launch_jar = 3;
   int64 spongeforge_size = 4;
+}
+
+// FetchBinaryRequest 通用二进制取件请求（FR-441）。来源由 source_kind 决定用哪组字段。
+message FetchBinaryRequest {
+  string instance_uuid = 1;
+  // source_kind 制品来源：url（远程下载）| node_file（节点本地复制）。
+  // asset 来源不经本字段——CP 先经制品库签发短期下载 URL 与 sha256，再以 url 形态下发，
+  // Worker 无需感知制品库语义，分发通道与 ServerProbe 复用同一条签名链路。
+  string source_kind = 2;
+  // dest_filename 落盘文件名（相对实例工作目录），禁止路径分隔符与穿越。
+  string dest_filename = 3;
+  // download_url 远程下载地址（source_kind=url）。
+  string download_url = 4;
+  // sha256 内容校验（可选；非空时不符即失败并清理半成品）。url/asset 来源应提供。
+  string sha256 = 5;
+  // node_path 节点上的源文件绝对路径（source_kind=node_file）；须落在节点受管区或放行根内。
+  string node_path = 6;
+  // executable 是否置可执行位（默认 true；纯数据文件可传 false）。
+  bool executable = 7;
+}
+
+// FetchBinaryProgress 取件进度（服务端流，FR-441）。每帧二选一：中间帧带字节计数，末帧带终态。
+message FetchBinaryProgress {
+  // 字节进度（中间帧；downloaded 单调递增，total<0 表示上游未给 Content-Length）。
+  int64 downloaded = 1;
+  int64 total = 2;
+  // done 为 true 表示末帧：此后所有字段为终态结果，流随即结束。
+  bool done = 3;
+  bool success = 4;
+  string error = 5;
+  int64 size = 6;       // 落盘字节数
+  string sha256 = 7;    // 实际内容摘要（供 CP 记录/对账）
+  bool from_local = 8;  // 本地上游：URL 命中节点制品缓存，或 node_file 直接复制（免网络）
 }
 
 // === 节点制品缓存（FR-178） ===

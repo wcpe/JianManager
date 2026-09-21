@@ -26,8 +26,10 @@ type Services struct {
 	Instance      *service.InstanceService
 	InstanceBatch *service.InstanceBatchService
 	InstanceGroup *service.InstanceGroupService
-	JDK           *service.JDKService
-	NodeRuntime   *service.NodeRuntimeService
+	// BeaconSync Beacon 拓扑拉取映射（FR-444，见 ADR-090）；nil 时 /beacon/topology 端点关闭。
+	BeaconSync  *service.BeaconSyncService
+	JDK         *service.JDKService
+	NodeRuntime *service.NodeRuntimeService
 	// RuntimeLibrary 节点运行时库（FR-298）：统一 Runtime 视图 + 扫描发现 + 泛化登记；
 	// nil 时 /nodes/:id/runtimes 端点关闭。
 	RuntimeLibrary *service.RuntimeLibraryService
@@ -288,6 +290,14 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.InstanceGroup != nil {
 			instanceGroupHandler := NewInstanceGroupHandler(svcs.InstanceGroup, svcs.Authz)
 			instanceGroupHandler.RegisterRoutes(permRead("instance.read"))
+		}
+
+		// Beacon 拓扑拉取（FR-444，见 ADR-090）：手动触发从 Beacon 拉取区服结构树并映射为
+		// 分组树 + 补 region:/zone:/role: 标签。可选协同——未配置 beacon.endpoint 时端点仍注册
+		// 但返回 503 明确提示（不静默成功），未部署 Beacon 时本平台全部功能不受影响。
+		if svcs.BeaconSync != nil {
+			beaconHandler := NewBeaconHandler(svcs.BeaconSync, svcs.Authz)
+			beaconHandler.RegisterRoutes(permRead("instance.write"))
 		}
 
 		// 探针在线更新（FR-068）：单实例 + 批量下发已选版本，下次重启生效。instance:operate。

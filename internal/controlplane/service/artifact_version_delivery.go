@@ -34,44 +34,24 @@ func (s *ArtifactVersionService) IssueProbeDownloadToken(scope ProbeDownloadToke
 		return "", err
 	}
 	scope.ExpiresAt = time.Now().Add(probeDownloadTokenTTL).Unix()
-	payload, err := json.Marshal(scope)
-	if err != nil {
-		return "", err
-	}
 	key, err := s.probeDownloadSigningKey()
 	if err != nil {
 		return "", err
 	}
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write(payload)
-	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+	return signScopedToken(key, scope), nil
 }
 
 // ValidateProbeDownloadToken 校验 token 签名、有效期和目标 scope。
 func (s *ArtifactVersionService) ValidateProbeDownloadToken(token string, expected ProbeDownloadTokenScope) (*ProbeDownloadTokenScope, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return nil, ErrProbeDownloadTokenInvalid
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return nil, ErrProbeDownloadTokenInvalid
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, ErrProbeDownloadTokenInvalid
-	}
 	key, err := s.probeDownloadSigningKey()
 	if err != nil {
-		return nil, err
-	}
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write(payload)
-	if !hmac.Equal(signature, mac.Sum(nil)) {
 		return nil, ErrProbeDownloadTokenInvalid
 	}
 	var scope ProbeDownloadTokenScope
-	if err := json.Unmarshal(payload, &scope); err != nil || normalizeProbeDownloadScope(&scope) != nil {
+	if !verifyScopedToken(key, token, &scope) {
+		return nil, ErrProbeDownloadTokenInvalid
+	}
+	if normalizeProbeDownloadScope(&scope) != nil {
 		return nil, ErrProbeDownloadTokenInvalid
 	}
 	if scope.ExpiresAt <= time.Now().Unix() ||
@@ -80,6 +60,41 @@ func (s *ArtifactVersionService) ValidateProbeDownloadToken(token string, expect
 		return nil, ErrProbeDownloadTokenInvalid
 	}
 	return &scope, nil
+}
+
+// signScopedToken 把任意 scope 结构签为 `<base64url(payload)>.<base64url(HMAC)>`。
+// probe（FR-010）与二进制分发（FR-441）共用同一实现与同一密钥，仅 scope 结构不同——
+// 分发 token 的编解码只有一条真源。
+func signScopedToken(key []byte, scope any) string {
+	payload, err := json.Marshal(scope)
+	if err != nil {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(payload)
+	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// verifyScopedToken 校验签名并反序列化 scope 到 out；签名不符/格式非法返回 false。
+func verifyScopedToken(key []byte, token string, out any) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return false
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(payload)
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return false
+	}
+	return json.Unmarshal(payload, out) == nil
 }
 
 // BuildProbeDownloadURL 拼出供 Worker 拉取的 CP 本地 URL。

@@ -52,6 +52,8 @@ type ToolDeps struct {
 	Transfer    *service.AgentTransferTicketService
 	// 实例分组（FR-165 / ADR-033）；nil 时分组工具返回中文「服务不可用」。
 	InstanceGroup *service.InstanceGroupService
+	// BeaconSync Beacon 拓扑拉取映射（FR-444，见 ADR-090）；nil 时 beacon_topology_* 返回未启用提示。
+	BeaconSync *service.BeaconSyncService
 	// 群组服 Network 软标签与代理注册（FR-032 / FR-335）；nil 时对应工具返回中文「服务不可用」。
 	Network      *service.NetworkService
 	Registration *service.RegistrationService

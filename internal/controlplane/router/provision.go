@@ -56,6 +56,13 @@ func (h *ProvisionHandler) ProvisionServer(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
+	// mcVersion 的条件必填（FR-441）：MC 核心需要，binary 不需要。
+	// 原先靠 binding:"required" 拦下并回 400；下移到此处是为了让 coreType=binary 能不带
+	// mcVersion 通过绑定，同时保持 MC 路径对缺参的响应码与文案完全不变。
+	if err := service.ValidateProvisionRequest(req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+		return
+	}
 	access := getAccess(c)
 	var createdBy uint
 	if access != nil {

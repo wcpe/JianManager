@@ -4383,6 +4383,7 @@
       "runtimeInstall": "Runtime install",
       "pkgInstall": "Global package install",
       "provision": "Provision",
+      "binaryProvision": "Binary provision",
       "import": "Import Server",
       "clone": "Clone Instance",
       "backupCreate": "Backup Create",

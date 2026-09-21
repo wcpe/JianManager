@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -251,6 +254,67 @@ func (h *ArtifactVersionHandler) Download(c *gin.Context) {
 	http.ServeContent(c.Writer, c.Request, filename, info.ModTime(), file)
 }
 
+// DownloadBinaryAsset GET /binary-assets/:id/download — 短 token 保护的二进制制品分发端点（FR-441）。
+//
+// 与 Download（probe jar）同族：同注册方式（匿名路径 + 短 token 保护）、同 token 形态
+// （ArtifactVersionService 的 HMAC 签名），仅 scope 不同（assetId vs versionId）。
+// Worker 经此拉取 coreType=binary 且 kind=asset 的制品；无 token / token 跨用途 一律 403。
+func (h *ArtifactVersionHandler) DownloadBinaryAsset(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if _, err := h.svc.ValidateBinaryDownloadToken(c.Query("token"), service.BinaryDownloadTokenScope{AssetID: id}); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "INVALID_BINARY_DOWNLOAD_TOKEN"})
+		return
+	}
+	asset, content, err := h.svc.OpenAssetForDownload(id)
+	if err != nil {
+		h.respondBinaryAssetError(c, err)
+		return
+	}
+	defer func() { _ = content.Close() }()
+
+	filename := binaryAssetFilename(asset)
+	contentType := asset.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	// 二进制体积可能数十 MB，Content-Length 让 Worker 能显示确定进度并检出截断下载。
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	if asset.Size > 0 {
+		c.Header("Content-Length", strconv.FormatInt(asset.Size, 10))
+	}
+	c.Status(http.StatusOK)
+	if _, err := io.Copy(c.Writer, content); err != nil {
+		// 响应已开始（状态码已写出），只能记录：Worker 侧会因字节数不符/摘要不符判定失败。
+		slog.Debug("二进制制品分发中断", "assetId", asset.ID, "error", err)
+	}
+}
+
+// binaryAssetFilename 给出下载响应建议文件名（优先资产原始名，回退摘要前缀）。
+func binaryAssetFilename(asset *model.Asset) string {
+	if name := filepath.Base(strings.TrimSpace(asset.Filename)); name != "" && name != "." && name != "/" {
+		return name
+	}
+	if len(asset.SHA256) >= 12 {
+		return asset.SHA256[:12]
+	}
+	return "binary"
+}
+
+func (h *ArtifactVersionHandler) respondBinaryAssetError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrBinaryDownloadTokenInvalid):
+		c.JSON(http.StatusForbidden, gin.H{"error": "INVALID_BINARY_DOWNLOAD_TOKEN"})
+	case errors.Is(err, service.ErrAssetNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "BINARY_ASSET_NOT_FOUND", "message": err.Error()})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+	}
+}
+
 func (h *ArtifactVersionHandler) respondError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrArtifactSourceNotFound), errors.Is(err, service.ErrArtifactVersionNotFound), errors.Is(err, service.ErrNodeNotFound):
@@ -325,4 +389,6 @@ func (h *ArtifactVersionHandler) RegisterSelectionRoutes(rg *gin.RouterGroup) {
 // RegisterDownloadRoutes 注册 CP 本地 jar 下载端点。
 func (h *ArtifactVersionHandler) RegisterDownloadRoutes(r gin.IRouter) {
 	r.GET("/probe-artifacts/:id/download", h.Download)
+	// 二进制制品分发（FR-441 kind=asset）：与 probe 端点同族（短 token 保护）。
+	r.GET("/binary-assets/:id/download", h.DownloadBinaryAsset)
 }

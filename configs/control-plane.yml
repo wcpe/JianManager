@@ -78,6 +78,30 @@ mcp:
   max_global_sessions: 0       # 全局并发会话上限；0=不限制（默认）
   max_sessions_per_token: 0    # 每 Token 并发上限；0=不限制（默认）
 
+# 通用二进制运行时搭建（FR-441，见 ADR-090）。coreType=binary 让非 Minecraft 的预编译二进制
+# （Go/Rust 等配套服务）也能纳入平台的搭建/任务追踪/制品管理，不适用 server.properties/EULA/版本构建号。
+# node_file_roots 是 kind=node_file 来源的受控放行根（节点上的绝对路径）：
+#   - 默认空集 = 该来源整体关闭（不设限即等于「可读节点任意文件」的通道，故默认安全关闭）；
+#   - 只有显式列出目录后，该目录内的文件才允许被复制进实例工作目录；
+#   - 需要放行集之外的文件时，正规做法是先上传到制品库，再以 kind=asset 为来源（更安全，且自动获得 sha256）。
+# asset 来源另需能确定 CP 公共基址（Worker 据此回拉制品）：请求基址 > 设置面板 platform.public_base_url。
+# binary:
+#   node_file_roots:
+#     - /opt/binaries
+
+# Beacon 协同（FR-443 推送 / FR-444 拉取，见 ADR-090）。**可选协同，非依赖**：
+# endpoint 留空 = 整体不启用协同，本平台全部能力不受影响（兼容非依赖的硬要求）。
+# 启用推送（push-enabled: true）时 namespace 为**启动期强校验项**——Beacon 需据此解析归属
+# 才能落 server 行与身份，缺失会导致推送必然被拒，故缺失即拒绝启动（fail-fast）而非静默跳过。
+# token 为管理面凭据（敏感项）：经 ${ENV_VAR} 引用、勿硬编码。
+# 拉取（pull-enabled）即便开启也**只由手动触发**（`beacon_topology_pull` 工具），不自动建树。
+# beacon:
+#   endpoint: ""                  # 例：http://beacon.internal:8090（不带路径与尾斜杠）
+#   token: "${BEACON_API_TOKEN}"  # 管理面凭据，经环境变量注入
+#   namespace: ""                 # 推送目标 Beacon 环境 code（如 prod）；启用推送时必填
+#   push-enabled: false           # 拓扑变更推送（实例创建/删除/改归属时增量推送）
+#   pull-enabled: false           # 允许手动拉取区服结构并映射为分组树
+
 # 出站网络代理（FR-174，见 ADR-037；可视化配置 + 节点下发见 FR-185 / ADR-043）。CP 所有出站下载
 #（自更新 feed/二进制、服务端 jar、客户端制品入库等）经此代理。url 留空=直连（仍尊重
 # HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），不破坏现状；非空时优先于环境变量。

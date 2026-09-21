@@ -170,6 +170,8 @@ var fr396DomainActions = []AgentActionDescriptor{
 	{Action: AgentActionInstanceClone, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	{Action: AgentActionInstanceRebuild, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	{Action: AgentActionInstanceUpdateConfig, V2Capability: AgentCapabilityInstanceConfigure, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	// 实例标签（FR-440）：权限面比 configure 更轻（instance.write），仅动 tags 字段。
+	{Action: AgentActionInstanceUpdateTags, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	// task_get 无固定资源类型：先按 task 关联实例归属重验，再走 instance.read 能力。
 	{Action: AgentActionTaskGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
 	// 实例分组：分组自身无独立资源类型，按节点/实例 scope 判定可发现性（复用 instance 分支）。
@@ -212,6 +214,23 @@ var networkDomainActions = []AgentActionDescriptor{
 
 func init() {
 	for _, d := range networkDomainActions {
+		agentActionCatalog[d.Action] = d
+	}
+}
+
+// beaconDomainActions 是 Beacon 拓扑拉取（FR-444，见 ADR-090）的 MCP 专属 action。
+// 权限面与实例分组一致（读 instance.read、写 instance.write）：拉取改的是分组树与实例标签
+// （归属类信息），不是实例内容，故不占用 configure/content 等更细能力。
+// 刻意不标 destructive——拉取是幂等对账（重复拉取不产生重复分组、不删本地数据），
+// 与「删除分组」的破坏性语义不同；Beacon 不可达时更是一字节不改。
+// 全部 V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /beacon/topology 路由）。
+var beaconDomainActions = []AgentActionDescriptor{
+	{Action: AgentActionBeaconTopologyPull, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionBeaconTopologyStatus, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+}
+
+func init() {
+	for _, d := range beaconDomainActions {
 		agentActionCatalog[d.Action] = d
 	}
 }

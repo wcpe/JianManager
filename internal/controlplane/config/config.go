@@ -67,6 +67,43 @@ type Config struct {
 	// Proxy CP 出站代理配置（FR-174，见 ADR-037）：自更新 feed/二进制、服务端 jar 等
 	// 出站下载经此代理。url 留空=直连（沿用环境变量代理）。与各 Worker 各自独立配置。
 	Proxy httpclient.Config `mapstructure:"proxy"`
+	// Beacon 与 Beacon 区服配置中心的可选协同（FR-443/444，见 ADR-090 §5）。
+	Beacon BeaconConfig `mapstructure:"beacon"`
+	// Binary 通用二进制运行时搭建（FR-441，见 ADR-090）。
+	Binary BinaryConfig `mapstructure:"binary"`
+}
+
+// BinaryConfig 是通用二进制搭建（FR-441）的配置。
+type BinaryConfig struct {
+	// NodeFileRoots 是 kind=node_file 来源的受控放行根（节点上的绝对路径列表）。
+	//
+	// 默认**空集**＝一律拒绝该来源：node_file 让 CP 指示 Worker 读取节点本地文件，
+	// 不设限即等于「可读节点任意文件的通道」。运维显式声明放行目录（如 /opt/binaries）
+	// 后才启用；需要放行集外的文件时，正规做法是先上传到制品库再以 kind=asset 为来源
+	//（既安全，又自动获得 sha256 校验）。
+	NodeFileRoots []string `mapstructure:"node_file_roots"`
+}
+
+// BeaconConfig 是 JianManager ↔ Beacon 可选协同配置（FR-443 推送 / FR-444 拉取）。
+//
+// **可选协同，绝非依赖**（ADR-090 §5）：三个字段全部可选，endpoint 留空即整体跳过协同
+// （推送不发起、拉取端点返回未配置提示），未部署 Beacon 时本平台全部功能不受影响。
+type BeaconConfig struct {
+	// Endpoint Beacon 基址（如 http://beacon.internal:8090），不带路径与尾斜杠。
+	// 留空 = 不启用协同（默认）。
+	Endpoint string `mapstructure:"endpoint"`
+	// Token 管理面凭据（X-Beacon-Api-Key / Authorization: Bearer 二选一发送，FR-222）。
+	// 敏感信息：经 ${ENV_VAR} 引用、不硬编码（config-files 规范）。
+	Token string `mapstructure:"token"`
+	// Namespace 推送目标 Beacon 环境 code（如 prod/test），FR-443 机器注册必须携带——
+	// Beacon 要据此解析归属才能落 server 行与身份，缺省即无从绑定。
+	// 留空时推送在后台被跳过并留痕（不盲推被拒）。单环境配置项，不做多环境映射（ADR-090 §7 未决项）。
+	Namespace string `mapstructure:"namespace"`
+	// PushEnabled 是否启用拓扑变更推送（FR-443）。默认 false，且 endpoint 为空时无效。
+	PushEnabled bool `mapstructure:"push-enabled"`
+	// PullEnabled 是否允许从 Beacon 拉取拓扑（FR-444）。默认 false。
+	// 注意：即便为 true，拉取也**只由手动触发**（ADR-090：不自动建树）。
+	PullEnabled bool `mapstructure:"pull-enabled"`
 }
 
 // MCPConfig 内嵌 MCP 会话与并发（FR-389）。
@@ -174,6 +211,27 @@ func ValidateJWTSecret(secret string, devMode bool) error {
 	return nil
 }
 
+// ValidateBeaconConfig 校验 Beacon 协同配置（FR-443 / FR-444）。
+//
+// 原则是「明确 opt-in 就 fail-fast」：未启用推送的部署零影响；一旦显式开启 push-enabled，
+// 缺失的必需项（endpoint / namespace）在启动期就报错，而不是留到每次拓扑变更时
+// 产生一堆看不出原因的 fail 审计（真机排障成本高）。
+//
+// 未校验 pull-enabled：拉取失败会直接反馈给发起人（手动触发、同步返回错误），
+// 不需要启动期拦截。
+func ValidateBeaconConfig(c BeaconConfig) error {
+	if !c.PushEnabled {
+		return nil
+	}
+	if strings.TrimSpace(c.Endpoint) == "" {
+		return errors.New("启用 beacon.push-enabled 时必须配置 beacon.endpoint（推送目标基址）")
+	}
+	if strings.TrimSpace(c.Namespace) == "" {
+		return errors.New("启用 beacon.push-enabled 时必须配置 beacon.namespace（Beacon 环境的 namespace code，如 prod）")
+	}
+	return nil
+}
+
 // LogConfig 日志配置。
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
@@ -258,6 +316,15 @@ func Load(path string) (*Config, error) {
 	// 出站代理（FR-174，见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
 	v.SetDefault("proxy.url", "")
 	v.SetDefault("proxy.no_proxy", "")
+	// Beacon 可选协同（FR-443/444，见 ADR-090 §5）：默认全关——未配置 endpoint 即整体跳过，
+	// 未部署 Beacon 时本平台全部功能正常、无任何报错。
+	v.SetDefault("beacon.endpoint", "")
+	v.SetDefault("beacon.token", "")
+	v.SetDefault("beacon.namespace", "")
+	v.SetDefault("beacon.push-enabled", false)
+	v.SetDefault("beacon.pull-enabled", false)
+	// 通用二进制搭建（FR-441）：node_file 放行根默认空集＝该来源关闭（默认安全的关闭态）。
+	v.SetDefault("binary.node_file_roots", []string{})
 	// 显式绑定任务约定的私钥环境变量名（敏感信息经 env 注入、不入库，config-files 规范）。
 	if err := v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY"); err != nil {
 		return nil, fmt.Errorf("绑定客户端签名私钥环境变量失败: %w", err)

@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
 
@@ -245,6 +246,67 @@ func TestArtifactVersionDownload_RequiresShortToken(t *testing.T) {
 	r.ServeHTTP(bad, httptest.NewRequest(http.MethodGet, "/probe-artifacts/"+itoa(version.ID)+"/download?token=bad", nil))
 	require.Equal(t, http.StatusForbidden, bad.Code)
 
+}
+
+// TestBinaryAssetDownload_RequiresShortToken 二进制分发端点（FR-441 kind=asset）：
+// 同 probe 端点族（短 token 保护），无 token/错 token 一律 403；正确 token 逐字节返回资产内容。
+func TestBinaryAssetDownload_RequiresShortToken(t *testing.T) {
+	db := setupTestDB(t)
+	root, err := dataroot.Init(filepath.Join(t.TempDir(), "data"))
+	require.NoError(t, err)
+	assets := service.NewAssetService(db, root)
+	versions := service.NewArtifactVersionService(db, assets)
+
+	payload := []byte("beacon-binary-bytes")
+	asset, err := assets.Ingest(bytes.NewReader(payload), service.IngestParams{
+		Type: model.AssetTypeBlob, Name: "beacon", Version: "1.1.0", Filename: "beacon-1.1.0-linux-amd64",
+	})
+	require.NoError(t, err)
+
+	r := gin.New()
+	h := NewArtifactVersionHandler(versions)
+	h.RegisterDownloadRoutes(r)
+	token, err := versions.IssueBinaryDownloadToken(service.BinaryDownloadTokenScope{AssetID: asset.ID})
+	require.NoError(t, err)
+
+	ok := httptest.NewRecorder()
+	r.ServeHTTP(ok, httptest.NewRequest(http.MethodGet, "/binary-assets/"+itoa(asset.ID)+"/download?token="+url.QueryEscape(token), nil))
+	require.Equal(t, http.StatusOK, ok.Code)
+	require.Equal(t, payload, ok.Body.Bytes())
+	require.Contains(t, ok.Header().Get("Content-Disposition"), "beacon-1.1.0-linux-amd64")
+
+	for _, tc := range []struct{ name, target string }{
+		{"无 token", "/binary-assets/" + itoa(asset.ID) + "/download"},
+		{"错误 token", "/binary-assets/" + itoa(asset.ID) + "/download?token=bad"},
+		{"token 绑定其它资产", "/binary-assets/" + itoa(asset.ID+999) + "/download?token=" + url.QueryEscape(token)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.target, nil))
+			require.Equal(t, http.StatusForbidden, w.Code)
+		})
+	}
+}
+
+// TestBinaryAssetDownload_RejectsProbeTokenScope 跨用途 token 必须被拒：
+// probe token 的 scope 是 versionId，二进制端点按 assetId 校验，两者不通用。
+func TestBinaryAssetDownload_RejectsProbeTokenScope(t *testing.T) {
+	db := setupTestDB(t)
+	root, err := dataroot.Init(filepath.Join(t.TempDir(), "data"))
+	require.NoError(t, err)
+	assets := service.NewAssetService(db, root)
+	versions := service.NewArtifactVersionService(db, assets)
+	_, _, err = versions.EnsureDefaultServerProbe()
+	require.NoError(t, err)
+
+	probeToken, err := versions.IssueProbeDownloadToken(service.ProbeDownloadTokenScope{VersionID: 7, NodeUUID: "node-1"})
+	require.NoError(t, err)
+
+	r := gin.New()
+	NewArtifactVersionHandler(versions).RegisterDownloadRoutes(r)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/binary-assets/7/download?token="+url.QueryEscape(probeToken), nil))
+	require.Equal(t, http.StatusForbidden, w.Code, "probe scope 的 token 不可用于二进制分发")
 }
 
 // rateLimitedReleaseProvider 模拟 GitHub 匿名限额耗尽：ListVersions 直接返回归一后的限流错误。
