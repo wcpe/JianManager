@@ -18,13 +18,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { cn, instanceStatusLevel } from '@jianmanager/ui'
 import { copyToClipboard } from '@/lib/clipboard'
 import { instanceStatusGlowClass } from '@/lib/instance-glow'
-import { useInstanceCapabilities, type Capability } from '@/lib/capabilities'
+import { useInstanceCapabilities, hasCapability, type Capability } from '@/lib/capabilities'
 import type { CardType } from '@/lib/workspace-card'
 import InstanceActivityFeed from './InstanceActivityFeed'
 import InstanceBackupSegment from './InstanceBackupSegment'
 import InstancePlayersSegment from './InstancePlayersSegment'
 import InstanceResourceSegment, { type ResourceSegment } from './InstanceResourceSegment'
 import BcSegment from './BcSegment'
+import BcPlayersPanel from './BcPlayersPanel'
 import BinarySegment from './BinarySegment'
 import GenericConfigSegment from './GenericConfigSegment'
 import { HealthPanel } from './HealthPanel'
@@ -83,10 +84,12 @@ const TAB_ICON: Record<TabKey, LucideIcon> = {
 }
 
 /**
- * 能力 → Tab 映射（FR-445）：画像 `capabilities` 中的每一项落成一个 Tab。
+ * 能力 → Tab 映射（FR-445）：画像 `capabilities` 中的每项**若对应一个 Tab**则落成 Tab。
  * 注意 `files` 能力对应 `resource` Tab（页签名「文件配置」），二者命名不同是历史包袱。
+ * 动作级能力（如 `clone`：可克隆，用于行菜单显隐）刻意**不登记**，故为 Partial，
+ * 会被 `visibleTabsFor` 过滤掉，不产生幽灵页签。
  */
-const CAPABILITY_TAB: Record<Capability, TabKey> = {
+const CAPABILITY_TAB: Partial<Record<Capability, TabKey>> = {
   overview: 'overview',
   terminal: 'terminal',
   files: 'resource',
@@ -579,16 +582,23 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                 onSegmentChange={setResourceSegment}
               />
             ) : tab === 'players' ? (
-              /* 玩家分区接真（FR-339）：本实例作用域的在线/踢封/封禁/白名单。 */
-              <InstancePlayersSegment instanceId={instance.id} />
+              /* 玩家分区（FR-445 §2.3 按角色语义）：backend = 本实例单服实名名单（FR-339）；
+                 proxy 语义（画像含 bcTopology）= 跨服玩家分布（FR-449 §2.2.2）。
+                 Tab 显隐仍只由 capabilities 决定，此处仅决定同一 Tab 内的呈现形态。 */
+              hasCapability(profile, 'bcTopology') ? (
+                <BcPlayersPanel instanceId={instance.id} />
+              ) : (
+                <InstancePlayersSegment instanceId={instance.id} />
+              )
             ) : tab === 'backup' ? (
               /* 备份·定时分区接真（FR-339）：本实例定时任务启停/删 + 备份创建/恢复/删除。 */
               <InstanceBackupSegment instanceId={instance.id} />
             ) : tab === 'bcTopology' ? (
-              /* BC 子服拓扑（FR-449）：子服列表/跨服玩家/自身指标/配置，由 bcTopology 能力驱动。 */
+              /* BC 子服拓扑（FR-449）：子服列表 + 各自状态，由 bcTopology 能力驱动。
+                 跨服玩家/进程指标/config 分别归 players/process/config 页签（单一归属）。 */
               <BcSegment instanceId={instance.id} />
             ) : tab === 'process' ? (
-              /* 二进制/beacon 进程视图（FR-450）：进程指标 + 端口健康 + 启动参数。 */
+              /* 进程视图（FR-450）：进程指标 + 启动参数。端口健康归 health 页签。 */
               <BinarySegment instanceId={instance.id} />
             ) : tab === 'health' ? (
               /* 端口 + 主动健康检查（FR-450）。 */
@@ -767,7 +777,9 @@ function OverviewPanel({
         <KpiCard icon={AlertTriangle} label={t('serverConsole.alerts')} value={String(alertCount)} danger={alertCount > 0} progress={alertCount > 0 ? 100 : 0} />
       </div>
 
-      {!probeConnected && (
+      {/* 探针缺失横幅是世界语义专属（FR-448）：非 MC 实例（proxy/generic/beacon）本不该有
+          ServerProbe，横幅只会误导；与顶栏 showProbeChip 的 mcSemantics 门控保持一致。 */}
+      {mcSemantics && !probeConnected && (
         <div className="rounded-md border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
           {t('serverConsole.probeUnavailable')}
         </div>

@@ -16,12 +16,28 @@ import {
  * 后端下发的 `capabilities` 优先，缺失时按 (type, role) 本地兜底。
  */
 describe('capabilityProfileFor（本地兜底表）', () => {
-  it('backend 画像 = 现有 9 Tab，具备 MC 世界语义', () => {
+  it('backend 画像 = 现有 9 Tab + 动作级 clone，具备 MC 世界语义', () => {
     const p = capabilityProfileFor('minecraft_java', 'backend')
     expect(p.mcSemantics).toBe(true)
     expect(p.capabilities).toEqual([
-      'overview', 'terminal', 'files', 'plugins', 'metrics', 'players', 'business', 'bot', 'backup',
+      'overview', 'terminal', 'files', 'plugins', 'metrics', 'players', 'business', 'bot', 'backup', 'clone',
     ])
+  })
+
+  it('动作级 clone 能力仅后端子服声明（零硬编码判据）', () => {
+    for (const [type, role] of [
+      ['minecraft_java', 'backend'],
+      ['minecraft_java', 'proxy'],
+      ['generic', 'beacon'],
+      ['generic', 'universal'],
+    ] as const) {
+      const p = capabilityProfileFor(type, role)
+      if (type === 'minecraft_java' && role === 'backend') {
+        expect(p.capabilities, `${type}:${role}`).toContain('clone')
+      } else {
+        expect(p.capabilities, `${type}:${role}`).not.toContain('clone')
+      }
+    }
   })
 
   it('proxy 画像：有 bcTopology/process/health/config，无 metrics(TPS)/business/bot', () => {
@@ -49,10 +65,6 @@ describe('capabilityProfileFor（本地兜底表）', () => {
   it('未知 (type, role) 回退安全子集，不白屏', () => {
     expect(capabilityProfileFor('mythical_binary', 'wizard')).toBe(UNIVERSAL_FALLBACK)
     expect(UNIVERSAL_FALLBACK.capabilities).toEqual(['overview', 'terminal', 'files', 'backup'])
-  })
-
-  it('minecraft_proxy 归一为 minecraft_java（devmock 兼容）', () => {
-    expect(capabilityProfileFor('minecraft_proxy', 'proxy')).toBe(capabilityProfileFor('minecraft_java', 'proxy'))
   })
 
   it('注册表四种内置画像齐全', () => {
@@ -94,5 +106,10 @@ describe('hasCapability', () => {
     const backend = capabilityProfileFor('minecraft_java', 'backend')
     expect(hasCapability(backend, 'metrics')).toBe(true)
     expect(hasCapability(backend, 'bcTopology')).toBe(false)
+  })
+
+  it('clone 为动作级能力：后端子服 true、代理 false', () => {
+    expect(hasCapability(capabilityProfileFor('minecraft_java', 'backend'), 'clone')).toBe(true)
+    expect(hasCapability(capabilityProfileFor('minecraft_java', 'proxy'), 'clone')).toBe(false)
   })
 })

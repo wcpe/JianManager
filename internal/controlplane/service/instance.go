@@ -465,7 +465,10 @@ func (s *InstanceService) List(f InstanceFilter) ([]model.Instance, error) {
 	if err := q.Find(&instances).Error; err != nil {
 		return nil, fmt.Errorf("查询实例列表失败: %w", err)
 	}
-	return filterByTags(instances, f.Env, f.Tag), nil
+	out := filterByTags(instances, f.Env, f.Tag)
+	// 列表也下发能力画像（FR-445 §2.4/§2.5）：前端列表优先用后端画像，本地兜底表仅作降级。
+	attachCapabilitiesAll(out)
+	return out, nil
 }
 
 // ListByGroups 返回指定组集合内的实例列表，用于非平台管理员的权限过滤。
@@ -483,7 +486,9 @@ func (s *InstanceService) ListByGroups(groupIDs []uint, f InstanceFilter) ([]mod
 	if err := q.Find(&instances).Error; err != nil {
 		return nil, fmt.Errorf("查询实例列表失败: %w", err)
 	}
-	return filterByTags(instances, f.Env, f.Tag), nil
+	out := filterByTags(instances, f.Env, f.Tag)
+	attachCapabilitiesAll(out)
+	return out, nil
 }
 
 // ── FR-247 实例规模化：服务端分页搜索 + 维度聚合 ─────────────────────────────
@@ -617,6 +622,7 @@ func (s *InstanceService) SearchInstances(scope []uint, p InstanceSearchParams) 
 		Find(&items).Error; err != nil {
 		return nil, 0, fmt.Errorf("查询实例列表失败: %w", err)
 	}
+	attachCapabilitiesAll(items)
 	return items, total, nil
 }
 

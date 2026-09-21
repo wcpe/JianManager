@@ -11,6 +11,11 @@ import { useInstanceMetrics } from '@/api/metrics'
  * 数据来自节点侧进程采集通道（`/instances/:id/metrics` 的 CPU/内存/线程/运行时长档）：
  * - 有 JVM 堆语义（heapMaxMb>0）展示「已用/上限」；无 JVM 堆（beacon 等原生二进制）展示 RSS。
  * - 探针缺失时**不伪造 -1 占位**，缺测项显「—」，与 FR-447 三态语义一致。
+ * - `threads` 仅 ServerProbe（JVM）提供；节点侧对非 JVM 进程恒返回 0（伪值），故无数据时
+ *   显「—」而非 0。
+ *
+ * TODO(FR-450 §2.3.1)：文件句柄（fd）与重启次数尚无数据源——需在 worker 指标通道补采
+ * （`GetInstanceMetricsResponse` 增可用标记字段）后再落到本面板；当前不伪造占位值。
  */
 export function ProcessPanel({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()
@@ -20,7 +25,9 @@ export function ProcessPanel({ instanceId }: { instanceId: number }) {
   const mem = metrics?.memoryMb
   const heapMax = metrics?.heapMaxMb ?? 0
   const hasHeap = heapMax > 0
-  const threads = metrics?.threads
+  // threads <= 0 视为「无数据」（进程至少有 1 个线程，0 是节点侧占位伪值）。
+  const threads = metrics?.threads ?? 0
+  const threadsKnown = threads > 0
   const uptime = metrics?.uptimeSeconds
 
   return (
@@ -38,7 +45,7 @@ export function ProcessPanel({ instanceId }: { instanceId: number }) {
           value={mem == null ? '—' : hasHeap ? `${formatMb(mem)} / ${formatMb(heapMax)}` : `${formatMb(mem)} RSS`}
           tone={hasHeap && mem != null && mem / heapMax > 0.9 ? 'warn' : undefined}
         />
-        <ProcessStat icon={Waypoints} label={t('process.threads')} value={threads == null ? '—' : String(threads)} />
+        <ProcessStat icon={Waypoints} label={t('process.threads')} value={threadsKnown ? String(threads) : '—'} />
         <ProcessStat icon={Timer} label={t('process.uptime')} value={formatUptime(uptime)} />
       </div>
     </Panel>

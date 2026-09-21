@@ -52,6 +52,8 @@ func (s *AgentTokenService) ListAccessibleInstances(p *AgentPrincipal, optionalN
 }
 
 // ResolveInstanceTarget 从 CP 可信数据解析实例目标；不存在返回 ErrInstanceNotFound。
+// 仅解析目标 + 实例，不挂能力画像：画像只在真正会把它序列化出去的 get_instance 路径附加
+// （见 router/agent.go GetInstance），避免所有实例级动作（启停/命令…）都带上无用字段。
 func (s *AgentTokenService) ResolveInstanceTarget(instanceID uint) (AgentTrustedTarget, *model.Instance, error) {
 	if s == nil || s.db == nil {
 		return AgentTrustedTarget{}, nil, fmt.Errorf("agent token service 未初始化")
@@ -60,8 +62,6 @@ func (s *AgentTokenService) ResolveInstanceTarget(instanceID uint) (AgentTrusted
 	if err := s.db.First(&inst, instanceID).Error; err != nil {
 		return AgentTrustedTarget{}, nil, ErrInstanceNotFound
 	}
-	// MCP agent_get_instance 同源透出能力画像（FR-445 §2.4）。
-	AttachCapabilities(&inst)
 	return AgentTrustedTarget{
 		ResourceType: AgentResourceInstance,
 		InstanceID:   inst.ID,

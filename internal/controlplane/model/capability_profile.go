@@ -19,6 +19,8 @@ const (
 	CapProcess    Capability = "process"    // 通用进程指标（CPU/内存/线程/句柄，FR-450）
 	CapHealth     Capability = "health"     // 端口 + 健康检查（FR-450）
 	CapConfig     Capability = "config"     // 结构化配置编辑（FR-451）
+	// 动作级能力：可被克隆（复制后端子服工作目录/配置），不落 Tab，仅后端子服类实例声明。
+	CapClone Capability = "clone"
 )
 
 // DataSource 能力的数据来源偏好，按序降级（FR-447 编排语义，本 FR 只声明不实现编排）。

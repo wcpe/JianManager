@@ -6,14 +6,17 @@ import { cn } from '@jianmanager/ui'
 import { useInstance } from '@/api/instances'
 import { useServerState } from '@/api/serverState'
 
-type Reachability = 'reachable' | 'unreachable' | 'unknown'
+type Reachability = 'reachable' | 'unreachable' | 'timeout' | 'unknown'
 
 /**
  * 端口 + 主动健康检查面板（FR-450 §2.3.2）——不写死产品名。
  *
- * 实例声明的监听端口逐项列出；可达性按 FR-447 三态语义呈现（可达 / 不可达 / 未知），
- * **不报错、不装 -1**。主动探活（HTTP GET / TCP connect）执行侧尚未接入（spec §5 待定），
- * 当前可达性由探针/直探连接态派生，并在界面诚实标注口径。
+ * 实例声明的监听端口逐项列出；可达性按 FR-447 三态语义呈现（可达 / 不可达 / 超时，
+ * 另加「未知」= 无探针），**不报错、不装 -1**。
+ *
+ * 主动探活（HTTP GET / TCP connect）+ 周期/超时参数执行侧尚未接入（spec §5 待定），
+ * 当前可达性由探针/直探连接态派生（connected=探针在位；available=本次取回成功；
+ * 在位但取不回 = 超时），并在界面诚实标注口径（见 {@link health.probeHint} 文案）。
  */
 export function HealthPanel({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()
@@ -21,13 +24,16 @@ export function HealthPanel({ instanceId }: { instanceId: number }) {
   const running = inst?.status === 'RUNNING'
   const { data: serverState } = useServerState(instanceId, true, 15_000)
 
+  // 四态：未运行 → 不可达；探针在位且本次取回成功 → 可达；探针在位但取不回 → 超时；无探针 → 未知。
   const reachability: Reachability = !inst
     ? 'unknown'
     : !running
       ? 'unreachable'
-      : serverState?.connected || serverState?.available
+      : serverState?.available
         ? 'reachable'
-        : 'unknown'
+        : serverState?.connected
+          ? 'timeout'
+          : 'unknown'
 
   const ports: Array<{ label: string; value: number }> = []
   if (inst?.serverPort) ports.push({ label: t('health.portGame'), value: inst.serverPort })
@@ -37,6 +43,7 @@ export function HealthPanel({ instanceId }: { instanceId: number }) {
   const tone: Record<Reachability, string> = {
     reachable: 'border-status-success/40 bg-status-success/10 text-status-success',
     unreachable: 'border-status-danger/40 bg-status-danger/10 text-status-danger',
+    timeout: 'border-status-warning/40 bg-status-warning/10 text-status-warning',
     unknown: 'border-muted bg-muted/40 text-muted-foreground',
   }
 

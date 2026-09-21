@@ -453,6 +453,9 @@ func (h *AgentOpsHandler) GetInstance(c *gin.Context) {
 		return
 	}
 	h.recordCall(c, p, service.AgentActionGetInstance, auth.Capability, "instance", c.Param("id"), true, "")
+	// 仅本路径（get_instance 的响应体会被序列化出去）挂能力画像（FR-445 §2.4）；
+	// 其它实例级动作不附加无用字段，故画像不在 ResolveInstanceTarget 内统一加。
+	service.AttachCapabilities(inst)
 	c.JSON(http.StatusOK, inst)
 }
 

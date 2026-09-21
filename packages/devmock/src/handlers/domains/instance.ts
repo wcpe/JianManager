@@ -2,6 +2,7 @@ import { HttpResponse, type HttpResponseResolver } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
+import { capabilityProfileFor, type MockCapabilityProfile } from '@jianmanager/devmock/capability-profile'
 
 /**
  * 实例核心域 mock handler（FR-201，照 spec §7 范式）。
@@ -123,7 +124,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     uuid: 'i-lobby',
     nodeId: 1,
     name: 'lobby-proxy',
-    type: 'minecraft_proxy',
+    type: 'minecraft_java',
     role: 'proxy',
     processType: 'daemon',
     status: 'STOPPED',
@@ -170,7 +171,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     uuid: 'i-survival-proxy',
     nodeId: 1,
     name: 'survival-proxy',
-    type: 'minecraft_proxy',
+    type: 'minecraft_java',
     role: 'proxy',
     processType: 'daemon',
     status: 'RUNNING',
@@ -234,7 +235,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     uuid: 'i-creative-proxy',
     nodeId: 1,
     name: 'creative-proxy',
-    type: 'minecraft_proxy',
+    type: 'minecraft_java',
     role: 'proxy',
     processType: 'daemon',
     status: 'RUNNING',
@@ -310,7 +311,7 @@ function buildGeneratedInstance(id: number): MockInstance {
     uuid: `i-scale-${id}`,
     nodeId: id % 2 === 0 ? 2 : 1,
     name,
-    type: role === 'proxy' ? 'minecraft_proxy' : 'minecraft_java',
+    type: 'minecraft_java',
     role,
     processType: id % 4 === 0 ? 'docker' : 'daemon',
     status,
@@ -338,48 +339,19 @@ function seedInstances(): MockInstance[] {
 
 const instances = db<MockInstance>('instances', seedInstances)
 
-/**
- * 实例能力画像（FR-445）：镜像后端 `service/capability_profile.go` 的注册表，
- * 随详情响应下发 `capabilities`。代理在 devmock 里以 `minecraft_proxy` 表达实现形态，
- * 语义等同 `minecraft_java`（role=proxy），故归一后按 (type, role) 取表。
- */
-export interface MockCapabilityProfile {
-  type: string
-  role: string
-  mcSemantics: boolean
-  capabilities: string[]
-  sources?: Record<string, string[]>
-}
-
-const CAPABILITY_PROFILES: Record<string, Omit<MockCapabilityProfile, 'type' | 'role'>> = {
-  'minecraft_java:backend': {
-    mcSemantics: true,
-    capabilities: ['overview', 'terminal', 'files', 'plugins', 'metrics', 'players', 'business', 'bot', 'backup'],
-    sources: { metrics: ['probe', 'direct'], players: ['probe', 'direct'], process: ['node'] },
-  },
-  'minecraft_java:proxy': {
-    mcSemantics: false,
-    capabilities: ['overview', 'terminal', 'files', 'bcTopology', 'players', 'plugins', 'process', 'health', 'config', 'backup'],
-    sources: { bcTopology: ['node'], players: ['probe', 'direct'], process: ['node'], health: ['direct'], config: ['node'] },
-  },
-  'generic:beacon': {
-    mcSemantics: false,
-    capabilities: ['overview', 'terminal', 'files', 'process', 'health', 'config', 'backup'],
-    sources: { process: ['node'], health: ['direct'], config: ['node'] },
-  },
-  'generic:universal': {
-    mcSemantics: false,
-    capabilities: ['overview', 'terminal', 'files', 'process', 'health', 'config', 'backup'],
-    sources: { process: ['node'], health: ['direct'], config: ['node'] },
-  },
-}
-
+/** 按实例 (type, role) 取能力画像（真源抽到 `@jianmanager/devmock/capability-profile`）。 */
 function capabilitiesFor(inst: MockInstance): MockCapabilityProfile {
-  const type = inst.type === 'minecraft_proxy' ? 'minecraft_java' : inst.type
-  const profile = CAPABILITY_PROFILES[`${type}:${inst.role}`]
-  if (profile) return { type: inst.type, role: inst.role, ...profile }
-  // 未知组合回退安全子集。
-  return { type: inst.type, role: inst.role, mcSemantics: false, capabilities: ['overview', 'terminal', 'files', 'backup'] }
+  return capabilityProfileFor(inst.type, inst.role)
+}
+
+/**
+ * 列表响应逐行补能力画像（FR-445 §2.4）：列表也优先用后端下发的画像，
+ * 前端仅在画像缺失时才走本地兜底表。与详情响应保持同一真源。
+ */
+function withCapabilities(
+  rows: MockInstance[],
+): Array<MockInstance & { capabilities: MockCapabilityProfile }> {
+  return rows.map((i) => ({ ...i, capabilities: capabilitiesFor(i) }))
 }
 
 const instanceGroups = db<MockInstanceGroup>('instanceGroups', () => [
@@ -718,7 +690,7 @@ export const handlers = [
     const rows = sortInstances(filterInstancesByQuery(url), url)
     const start = (page - 1) * pageSize
     return HttpResponse.json({
-      items: rows.slice(start, start + pageSize),
+      items: withCapabilities(rows.slice(start, start + pageSize)),
       total: rows.length,
       page,
       pageSize,
@@ -765,7 +737,7 @@ export const handlers = [
       void networkId
       return true
     })
-    return HttpResponse.json(rows)
+    return HttpResponse.json(withCapabilities(rows))
   }),
 
   domainRoute('get', '/instances/search', (info) => {
@@ -775,7 +747,7 @@ export const handlers = [
     const rows = sortedInstances(filteredInstances(url), url)
     const { page, pageSize } = pageParam(url)
     const start = (page - 1) * pageSize
-    return HttpResponse.json({ items: rows.slice(start, start + pageSize), total: rows.length, page, pageSize })
+    return HttpResponse.json({ items: withCapabilities(rows.slice(start, start + pageSize)), total: rows.length, page, pageSize })
   }),
 
   domainRoute('get', '/instances/aggregate', (info) => {

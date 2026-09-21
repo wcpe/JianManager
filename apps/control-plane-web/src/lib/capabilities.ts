@@ -3,12 +3,15 @@ import { useMemo } from 'react'
 /**
  * 实例能力画像（FR-445，ADR-091）——前端门控的唯一真源。
  *
- * 后端 `GET /instances/:id`（及 MCP `agent_get_instance`）在响应里下发 `capabilities`；
- * 前端**优先**用它，缺失时（离线/mock 兼容/旧响应）按 `(type, role)` 走本地兜底表。
- * 本地兜底表与后端 `service/capability_profile.go` 的注册表一一对应，修改须同步。
+ * 后端**详情路径**（HTTP `GET /instances/:id` 与 MCP `agent_get_instance`）在序列化前
+ * 现算并以 `capabilities` 字段下发权威画像；列表/搜索响应同样逐行下发。前端**优先**用它。
+ * 下面的 `CAPABILITY_REGISTRY` 只是**显式标注的降级兜底**：仅当响应缺 `capabilities`
+ * （离线 / 旧响应 / 手工构造的实例对象）时按 `(type, role)` 查表，避免详情页白屏。
+ * 兜底表与后端 `service/capability_profile.go` 注册表、devmock `capability-profile.ts`
+ * 三份须逐画像一致，由 `capabilities.contract.test.ts` 枚举比对看守。
  */
 
-/** 能力：一个能力对应详情页的一个 Tab。 */
+/** 能力：多数能力对应详情页的一个 Tab，也有少数是**动作级**能力（如 `clone`，不落 Tab）。 */
 export type Capability =
   | 'overview'
   | 'terminal'
@@ -23,6 +26,8 @@ export type Capability =
   | 'process'
   | 'health'
   | 'config'
+  /** 动作级能力：可被克隆（复制后端子服工作目录/配置），仅后端子服类实例声明，不映射为 Tab。 */
+  | 'clone'
 
 /** 能力数据来源偏好（按序降级）。 */
 export type DataSource = 'probe' | 'direct' | 'node' | 'none'
@@ -49,13 +54,13 @@ export const UNIVERSAL_FALLBACK: InstanceCapabilityProfile = {
   capabilities: [...BASE, 'backup'],
 }
 
-/** 本地兜底表（键 `${type}:${role}`），与后端注册表一一对应。 */
+/** 降级兜底表（键 `${type}:${role}`），与后端注册表、devmock 真源一一对应。 */
 export const CAPABILITY_REGISTRY: Record<string, InstanceCapabilityProfile> = {
   'minecraft_java:backend': {
     type: 'minecraft_java',
     role: 'backend',
     mcSemantics: true,
-    capabilities: ['overview', 'terminal', 'files', 'plugins', 'metrics', 'players', 'business', 'bot', 'backup'],
+    capabilities: ['overview', 'terminal', 'files', 'plugins', 'metrics', 'players', 'business', 'bot', 'backup', 'clone'],
     sources: { metrics: ['probe', 'direct'], players: ['probe', 'direct'], process: ['node'] },
   },
   'minecraft_java:proxy': {
@@ -88,12 +93,9 @@ export interface CapabilitySubject {
   capabilities?: InstanceCapabilityProfile | null
 }
 
-/** 按 (type, role) 取本地兜底画像。 */
+/** 按 (type, role) 取本地降级兜底画像（仅在响应未下发 `capabilities` 时使用）。 */
 export function capabilityProfileFor(type?: string, role?: string): InstanceCapabilityProfile {
-  // 归一：部分数据源（devmock 等）以 `minecraft_proxy` 表达代理实现形态，
-  // 语义上与 `minecraft_java` 同属 Java 代理（role=proxy），故归一后查表。
-  const normType = type === 'minecraft_proxy' ? 'minecraft_java' : type
-  if (normType && role && CAPABILITY_REGISTRY[`${normType}:${role}`]) return CAPABILITY_REGISTRY[`${normType}:${role}`]
+  if (type && role && CAPABILITY_REGISTRY[`${type}:${role}`]) return CAPABILITY_REGISTRY[`${type}:${role}`]
   return UNIVERSAL_FALLBACK
 }
 

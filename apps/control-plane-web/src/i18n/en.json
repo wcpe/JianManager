@@ -4987,6 +4987,7 @@
     "state": {
       "reachable": "Reachable",
       "unreachable": "Unreachable",
+      "timeout": "Timed out",
       "unknown": "Unknown"
     }
   },
@@ -5004,8 +5005,9 @@
   "bc": {
     "subServers": "Sub-servers",
     "noSubServers": "This proxy has no registered sub-servers",
-    "playersTitle": "Cross-server players (total {{count}})",
+    "playersTitle": "Cross-server players ({{count}} online across this proxy's registered sub-servers)",
     "playersUnknown": "Unknown (probe unreachable)",
-    "playersNone": "No online players"
+    "playersNone": "No online players",
+    "playersTotalCaveat": "Counts only this proxy's registered sub-servers; excludes {{count}} sub-server(s) with unreachable probes (player count unknown)"
   }
 }
