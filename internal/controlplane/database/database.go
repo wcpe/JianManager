@@ -163,6 +163,12 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Template{},
 		&model.AuditLog{},
 		&model.InstanceConfigVersion{},
+		// 受管配置项来源登记表（FR-451）：二态来源（内联/文件引用）。
+		&model.InstanceConfigSource{},
+		// 实例滚动/分批/灰度编排会话（FR-457）。
+		&model.InstanceRollingOp{},
+		// 配置基线（模板）与漂移收敛（FR-458）。
+		&model.ConfigBaseline{},
 		&model.FileVersion{},
 		&model.Asset{},
 		// 通用制品版本库（FR-409）：逻辑包/来源/版本映射到既有 Asset CAS，首个接入为 ServerProbe。

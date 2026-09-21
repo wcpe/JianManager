@@ -23,6 +23,17 @@ func (p ParsedConfig) fieldLookup(key string) string {
 	return ""
 }
 
+// SetValue 覆盖或追加一个字段值（FR-451 §2.4）：内联受管端口并入校验输入时使用。
+func (p *ParsedConfig) SetValue(key, value string) {
+	for _, f := range p.Fields {
+		if f.Key == key {
+			f.Value = value
+			return
+		}
+	}
+	p.Fields = append(p.Fields, &workerpb.ConfigField{Key: key, Value: value})
+}
+
 // IsTruthy 判断布尔型字段是否启用。
 func (p ParsedConfig) IsTruthy(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(p.fieldLookup(key))) {

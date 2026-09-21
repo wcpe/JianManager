@@ -45,10 +45,16 @@ type Services struct {
 	PlayerEvent *service.PlayerEventService
 	ServerState *service.ServerStateService
 	// CrashSnapshot 实例崩溃快照只读查询（FR-313）；nil 时端点关闭。
-	CrashSnapshot    *service.CrashSnapshotService
-	Business         *service.BusinessService
-	BusinessEvent    *service.BusinessEventService
-	Config           *service.ConfigService
+	CrashSnapshot *service.CrashSnapshotService
+	Business      *service.BusinessService
+	BusinessEvent *service.BusinessEventService
+	Config        *service.ConfigService
+	// ConfigSource 配置源明面化（FR-451）；nil 时 /instances/:id/configs/surface 端点关闭。
+	ConfigSource *service.ConfigSourceService
+	// InstanceRolling 实例滚动/分批/灰度编排（FR-457）；nil 时 /instances/rolling 端点关闭。
+	InstanceRolling *service.InstanceRollingService
+	// ConfigBaseline 配置基线下发/漂移/收敛（FR-458）；nil 时 /config-baselines 端点关闭。
+	ConfigBaseline   *service.ConfigBaselineService
 	Bot              *service.BotService
 	BotStressSession *service.BotStressSessionService
 	// BotLoadCapacity/Preflight/Execution 是 FR-351 进程级共享单例；nil 时仅保留旧会话入口。
@@ -285,6 +291,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		instanceBatchHandler := NewInstanceBatchHandler(svcs.InstanceBatch, svcs.Authz)
 		instanceBatchHandler.RegisterRoutes(permRead("instance.read", "instance.operate", "instance.write"))
 
+		// 实例滚动/分批/灰度编排（FR-457）：独立 handler，挂 /instances/rolling。
+		if svcs.InstanceRolling != nil {
+			NewInstanceRollingHandler(svcs.InstanceRolling, svcs.Authz, svcs.Audit).
+				RegisterRoutes(permRead("instance.read", "instance.operate"))
+		}
+
 		// 实例组织分组树（FR-165，见 ADR-033）：多级嵌套文件夹式归类 + 实例 M:N，
 		// 正交于用户组 / 网络群组；读 instance:read、写 instance:write，挂 /instance-groups。
 		if svcs.InstanceGroup != nil {
@@ -320,7 +332,15 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		pluginHandler.RegisterRoutes(permRead("file.read", "file.write"))
 
 		configHandler := NewConfigHandler(svcs.Config, svcs.Authz)
+		configHandler.SetConfigSource(svcs.ConfigSource)
+		configHandler.SetAudit(svcs.Audit)
 		configHandler.RegisterRoutes(permRead("file.read", "instance.read", "file.write", "instance.write"))
+
+		// 配置基线下发/漂移/收敛（FR-458）：独立 handler，挂 /config-baselines。
+		if svcs.ConfigBaseline != nil {
+			NewConfigBaselineHandler(svcs.ConfigBaseline, svcs.Authz, svcs.Audit).
+				RegisterRoutes(permRead("file.read", "instance.read", "file.write", "instance.write"))
+		}
 
 		// Bot 分布式容量静态路由必须先于 /bots/:id 注册，且复用进程级 CapacityDirectory。
 		if svcs.BotLoadCapacity != nil {

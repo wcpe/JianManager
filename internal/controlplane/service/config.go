@@ -58,10 +58,18 @@ type ConfigDiff struct {
 type ConfigService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
+	// inlinePorts 由配置源服务注入：返回某实例上以 inline 登记的端口项（键→值），
+	// 供跨实例端口唯一性校验并入（FR-451 §2.4）。nil 时仅用文件值。
+	inlinePorts func(instanceID uint) map[string]string
 }
 
 func NewConfigService(db *gorm.DB, pool *cpgrpc.ClientPool) *ConfigService {
 	return &ConfigService{db: db, pool: pool}
+}
+
+// SetInlinePortProvider 注入内联端口提供者（配置源服务），使跨实例端口校验覆盖内联值（FR-451）。
+func (s *ConfigService) SetInlinePortProvider(p func(instanceID uint) map[string]string) {
+	s.inlinePorts = p
 }
 
 // DiscoveredConfig 是递归发现到的单个配置文件（相对工作目录）。
@@ -365,8 +373,8 @@ func (s *ConfigService) CheckCrossFile(instanceID uint, filePath, content string
 	if err != nil {
 		return nil, err
 	}
-	// 当前实例：解析传入 content
-	current := parseToSchema(inst, filePath, content)
+	// 当前实例：解析传入 content（并入内联端口，避免「文件里没有/被覆盖」的端口漏检）。
+	current := s.applyInlinePorts(parseToSchema(inst, filePath, content), inst.ID)
 	// 同节点其它实例的最新版本内容
 	var siblings []model.Instance
 	if err := s.db.Where("node_id = ? AND id <> ?", inst.NodeID, instanceID).Find(&siblings).Error; err != nil {
@@ -381,7 +389,7 @@ func (s *ConfigService) CheckCrossFile(instanceID uint, filePath, content string
 			}
 			return nil, err
 		}
-		cfgs = append(cfgs, parseToSchema(&sib, filePath, latest.Content))
+		cfgs = append(cfgs, s.applyInlinePorts(parseToSchema(&sib, filePath, latest.Content), sib.ID))
 	}
 	issues := schema.CheckAll(cfgs)
 	out := make([]map[string]any, 0, len(issues))
@@ -404,6 +412,27 @@ func (s *ConfigService) client(instanceID uint) (*model.Instance, *cpgrpc.Client
 		return nil, nil, ErrNodeNotConnected
 	}
 	return &inst, client, nil
+}
+
+// applyInlinePorts 把实例上以 inline 登记的端口值并入解析结果（内联优先，覆盖文件值）。
+// inlinePorts 未注入或实例无内联端口时原样返回（FR-451 §2.4）。
+func (s *ConfigService) applyInlinePorts(cfg schema.ParsedConfig, instanceID uint) schema.ParsedConfig {
+	if s.inlinePorts == nil {
+		return cfg
+	}
+	return mergeInlinePorts(cfg, s.inlinePorts(instanceID))
+}
+
+// mergeInlinePorts 把内联端口（键→值）覆盖到解析结果；空值跳过。
+// 纯函数，便于单测「两实例内联同端口被检出」。
+func mergeInlinePorts(cfg schema.ParsedConfig, inline map[string]string) schema.ParsedConfig {
+	for k, v := range inline {
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		cfg.SetValue(k, v)
+	}
+	return cfg
 }
 
 // parseToSchema 把（实例, 路径, 内容）解析为 schema.ParsedConfig，便于复用校验。
