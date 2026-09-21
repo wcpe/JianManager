@@ -383,13 +383,17 @@ func (s *ConfigService) CheckCrossFile(instanceID uint, filePath, content string
 	cfgs := []schema.ParsedConfig{current}
 	for _, sib := range siblings {
 		var latest model.InstanceConfigVersion
-		if err := s.db.Where("instance_id = ? AND file_path = ?", sib.ID, filePath).Order("id DESC").First(&latest).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				continue
-			}
+		err := s.db.Where("instance_id = ? AND file_path = ?", sib.ID, filePath).Order("id DESC").First(&latest).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
 		}
-		cfgs = append(cfgs, s.applyInlinePorts(parseToSchema(&sib, filePath, latest.Content), sib.ID))
+		// 无配置版本的兄弟不再直接跳过：用空内容 + 内联端口构造 cfg（FR-451 §2.4），
+		// 否则「兄弟端口仅以 inline 登记、无文件版本」时会漏检跨实例端口冲突。
+		content := ""
+		if err == nil {
+			content = latest.Content
+		}
+		cfgs = append(cfgs, s.applyInlinePorts(parseToSchema(&sib, filePath, content), sib.ID))
 	}
 	issues := schema.CheckAll(cfgs)
 	out := make([]map[string]any, 0, len(issues))

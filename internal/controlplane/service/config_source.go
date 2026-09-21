@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -20,11 +21,16 @@ import (
 const (
 	ConfigItemStartupCommand    = "startup.command"
 	ConfigItemStartupLaunchSpec = "startup.launchSpec"
-	ConfigItemPropsPrefix       = "props."
-	ConfigItemFlagsPrefix       = "flags."
+	// ConfigItemStartupPrefix 启动项前缀（startup.*）。
+	ConfigItemStartupPrefix = "startup."
+	ConfigItemPropsPrefix   = "props."
+	ConfigItemFlagsPrefix   = "flags."
 
 	// defaultServerPropertiesPath 是内联 props 项的固定落点（切回内联后平台只写标准路径，避免写出两个文件）。
 	defaultServerPropertiesPath = "server.properties"
+
+	// maxStartupFilePreviewLen 整文件引用生效值预览的截断长度（FR-451 nit：避免整份文件刷屏）。
+	maxStartupFilePreviewLen = 512
 )
 
 // surfacePropKeys 是明面化的 server.properties 关键项（顺序即渲染顺序）。
@@ -114,10 +120,17 @@ type previewResult struct {
 // Surface 返回实例的受管配置项清单（FR-451）。
 // 旧实例登记表为空时：startup.command 视作 inline（取 Instance.StartCommand），关键 props 视作文件隐含，
 // 保证平滑过渡、不报错。file 项的 effectiveValue 为解析预览（只读）。
+//
+// 能力画像过滤（FR-451 验收 #8 / ADR-091）：startup.* 与 props.* 均为 MC 语义配置项，仅对具备
+// MC 配置语义的实例（minecraft_java 且非配套服务角色）呈现；generic / beacon 返回空清单，
+// 使其走各自画像，不出现 MC 专有配置项。
 func (s *ConfigSourceService) Surface(instanceID uint) ([]SurfaceItem, error) {
 	inst, err := s.getInstance(instanceID)
 	if err != nil {
 		return nil, err
+	}
+	if !mcSemanticConfigSurface(inst) {
+		return []SurfaceItem{}, nil
 	}
 	rows, err := s.loadSources(instanceID)
 	if err != nil {
@@ -221,7 +234,9 @@ func (s *ConfigSourceService) resolveSourceItem(item SurfaceItem, row model.Inst
 		if row.FileKey != "" {
 			item.EffectiveValue = pr.values[row.FileKey]
 		} else {
-			item.EffectiveValue = strings.TrimSpace(pr.content)
+			// 整文件引用（当前仅 props 全文件引用可达；startup 引用已被拒）：
+			// effectiveValue 展示被引用文件正文的截断预览，避免整份文件刷屏。
+			item.EffectiveValue = truncatePreview(strings.TrimSpace(pr.content), maxStartupFilePreviewLen)
 		}
 		return item
 	default: // inline
@@ -259,6 +274,10 @@ func (s *ConfigSourceService) UpdateSource(instanceID uint, items []SurfaceUpdat
 func (s *ConfigSourceService) applySourceUpdate(inst *model.Instance, it SurfaceUpdateItem, authorID uint) error {
 	if !isManagedItemKey(it.ItemKey) {
 		return fmt.Errorf("未知受管配置项: %s", it.ItemKey)
+	}
+	// 画像门控（FR-451 验收 #8）：无 MC 配置语义的实例（generic / beacon）不接受 MC 专有受管项写入。
+	if !mcSemanticConfigSurface(inst) {
+		return fmt.Errorf("实例 %d（type=%s role=%s）无 MC 配置语义，不支持受管项 %s", inst.ID, inst.Type, inst.Role, it.ItemKey)
 	}
 	if !model.ValidConfigSourceKind(it.Source) {
 		return fmt.Errorf("非法配置来源: %s", it.Source)
@@ -316,6 +335,11 @@ func (s *ConfigSourceService) resolveInlineValue(inst *model.Instance, it Surfac
 
 // resolveFileRef 归一化 file 引用的路径与键。
 func (s *ConfigSourceService) resolveFileRef(it SurfaceUpdateItem) (string, string, error) {
+	// 启动项不接受文件引用来源（FR-451 审计）：startup.* 登记为 file 后既不读文件也无消费路径，
+	// 启动仍用 Instance.StartCommand。故显式拒绝，UI 侧同步隐藏启动项的「引用文件」切换。
+	if strings.HasPrefix(it.ItemKey, ConfigItemStartupPrefix) {
+		return "", "", fmt.Errorf("启动项 %s 不支持文件引用来源：启动命令须由平台持有（对下次启动生效）", it.ItemKey)
+	}
 	isProps := strings.HasPrefix(it.ItemKey, ConfigItemPropsPrefix)
 	path := strings.TrimSpace(it.FilePath)
 	if path == "" {
@@ -360,6 +384,10 @@ func (s *ConfigSourceService) applyInline(inst *model.Instance, itemKey, value s
 	case ConfigItemStartupLaunchSpec:
 		if s.instance == nil {
 			return errors.New("实例服务未注入")
+		}
+		// launchSpec 以纯字符串暴露，写入前做 JSON 校验，避免落库非法 JSON（FR-451 nit）。
+		if trimmed := strings.TrimSpace(value); trimmed != "" && !json.Valid([]byte(trimmed)) {
+			return fmt.Errorf("startup.launchSpec 必须是合法 JSON")
 		}
 		_, err := s.instance.Update(inst.ID, UpdateInstanceFields{LaunchSpec: &value})
 		return err
@@ -521,4 +549,46 @@ func isManagedItemKey(key string) bool {
 		return ok
 	}
 	return false
+}
+
+// mcSemanticConfigSurface 判定实例是否具备 MC 配置语义（FR-451 验收 #8 / ADR-091 能力画像）。
+// 语义对齐 FR-445 能力画像的 `MCSemantics`：仅「运行 Minecraft 服务端（server.properties）」的实例
+// 呈现 startup.* / props.* 受管项。明文排除：
+//   - proxy：BungeeCord/Waterfall/Velocity 使用 config.yml，无 server.properties 语义（W6 画像 MCSemantics=false）；
+//   - beacon：配套服务角色（FR-450），走各自画像；
+//   - generic 类型：通用二进制。
+//
+// 取舍：W6 画像把未知组合 `(minecraft_java, universal)` 归入「兜底 universal（MCSemantics=false）」，
+// 但本 FR 保留该组合为 MC 语义——`minecraft_java` 且未显式设角色（GORM 默认 universal）是
+// 手动/MCP `instance_create` 创建 MC 服务端的现实路径（provision/proxy/import/clone 才显式落 backend/proxy），
+// 若一并排除会把这些存量实例的关键配置面板静默清空。故此处按「排除 proxy/beacon/generic」收敛，
+// 与 FR-451 spec（`props.*`/`startup.*` 对 `minecraft_java` 呈现）一致。
+func mcSemanticConfigSurface(inst *model.Instance) bool {
+	if inst == nil {
+		return false
+	}
+	return instanceMCSemantics(inst.Type, inst.Role)
+}
+
+// instanceMCSemantics 是 FR-445 能力画像 `MCSemantics` 在本 FR 的最小实现（以 (type, role) 为键）。
+func instanceMCSemantics(t model.InstanceType, r model.InstanceRole) bool {
+	if t != model.InstanceTypeMinecraftJava {
+		return false
+	}
+	switch r {
+	case model.InstanceRoleProxy, model.InstanceRoleBeacon:
+		return false
+	}
+	return true
+}
+// truncatePreview 截断过长的预览文本（按 rune 计数，避免截断 UTF-8）。
+func truncatePreview(s string, max int) string {
+	if max <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }

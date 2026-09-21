@@ -352,6 +352,8 @@ export interface InstanceBatchFilter {
   nodeId?: number
   status?: string
   role?: string
+  /** 显式实例集合（可选）：按选中实例走 filter 语义，使滚动编排的灰度抽样（ratio）生效（FR-457）。 */
+  instanceIds?: number[]
 }
 
 /** 批量操作请求，目标由 ids 或 filter 二选一指定。 */
