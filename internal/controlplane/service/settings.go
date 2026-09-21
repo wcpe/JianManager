@@ -51,6 +51,10 @@ const (
 	SettingKeyOrphanGracePeriod = "instance_reverse_reconcile.grace_period"
 	// SettingKeyOrphanAutoDispose 宽限后是否自动下发处置（true|false，FR-326）。默认 false：只列表/日志，管理员手动确认。
 	SettingKeyOrphanAutoDispose = "instance_reverse_reconcile.auto_dispose"
+	// SettingKeyBotReclaimGracePeriod 失效 Bot 回收宽限期（Go duration，FR-460）。默认 2m——Bot 生命周期短，容忍一次世代迁移窗口即可。
+	SettingKeyBotReclaimGracePeriod = "bot_reclaim.grace_period"
+	// SettingKeyBotReclaimAuto 宽限后是否自动回收失效 Bot（true|false，FR-460）。默认 true，但仅对 Fleet 归属 Bot 生效；V1 手动 Bot 永不自动回收。
+	SettingKeyBotReclaimAuto = "bot_reclaim.auto_reclaim"
 	// SettingKeyPlatformPublicBaseURL 是平台生成绝对链接唯一允许使用的公共基址（FR-405）。
 	// 允许 HTTP 供无 TLS 的自托管内网使用；不允许由请求头推断。
 	SettingKeyPlatformPublicBaseURL = "platform.public_base_url"
@@ -252,6 +256,9 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		// 实例反向对账护栏（FR-326）：宽限期与自动处置开关；读侧即时生效（下一次心跳观察即用）。
 		s.editableItem(SettingKeyOrphanGracePeriod, s.defaultValue(SettingKeyOrphanGracePeriod), overrides, true),
 		s.editableItem(SettingKeyOrphanAutoDispose, s.defaultValue(SettingKeyOrphanAutoDispose), overrides, true),
+		// 失效 Bot 自动回收护栏（FR-460）：宽限期与自动回收开关；读侧即时生效（下一拍巡检即用）。
+		s.editableItem(SettingKeyBotReclaimGracePeriod, s.defaultValue(SettingKeyBotReclaimGracePeriod), overrides, true),
+		s.editableItem(SettingKeyBotReclaimAuto, s.defaultValue(SettingKeyBotReclaimAuto), overrides, true),
 		s.editableItem(SettingKeyPlatformPublicBaseURL, s.defaultValue(SettingKeyPlatformPublicBaseURL), overrides, true),
 		s.editableItem(SettingKeyInviteSMTPHost, s.defaultValue(SettingKeyInviteSMTPHost), overrides, true),
 		s.editableItem(SettingKeyInviteSMTPPort, s.defaultValue(SettingKeyInviteSMTPPort), overrides, true),
@@ -438,6 +445,10 @@ func (s *SettingsService) defaultValue(key string) string {
 		return "10m"
 	case SettingKeyOrphanAutoDispose:
 		return "false"
+	case SettingKeyBotReclaimGracePeriod:
+		return "2m"
+	case SettingKeyBotReclaimAuto:
+		return "true"
 	case SettingKeyPlatformPublicBaseURL, SettingKeyInviteSMTPHost, SettingKeyInviteSMTPPort,
 		SettingKeyInviteSMTPUsername, SettingKeyInviteSMTPPassword, SettingKeyInviteSMTPFrom:
 		return ""
@@ -509,6 +520,7 @@ func isWritableSettingKey(key string) bool {
 		SettingKeyDirectProbeSLPTimeout, SettingKeyDirectProbeQueryTimeout,
 		SettingKeyProxyURL, SettingKeyProxyNoProxy,
 		SettingKeyOrphanGracePeriod, SettingKeyOrphanAutoDispose,
+		SettingKeyBotReclaimGracePeriod, SettingKeyBotReclaimAuto,
 		SettingKeyPlatformPublicBaseURL, SettingKeyInviteSMTPHost, SettingKeyInviteSMTPPort,
 		SettingKeyInviteSMTPUsername, SettingKeyInviteSMTPPassword, SettingKeyInviteSMTPFrom,
 		SettingKeyGitHubToken:
@@ -572,6 +584,15 @@ func validateSettingValue(key, val string) error {
 	case SettingKeyOrphanAutoDispose:
 		if val != "true" && val != "false" {
 			return fmt.Errorf("%w: 自动处置须为 true|false", ErrSettingValueInvalid)
+		}
+	case SettingKeyBotReclaimGracePeriod:
+		d, err := time.ParseDuration(val)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("%w: 失效 Bot 回收宽限期须为正的 Go duration（如 2m）", ErrSettingValueInvalid)
+		}
+	case SettingKeyBotReclaimAuto:
+		if val != "true" && val != "false" {
+			return fmt.Errorf("%w: 失效 Bot 自动回收须为 true|false", ErrSettingValueInvalid)
 		}
 	case SettingKeyPlatformPublicBaseURL:
 		if err := validatePublicBaseURL(val); err != nil {

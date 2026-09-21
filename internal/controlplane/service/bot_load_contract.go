@@ -54,19 +54,21 @@ func normalizeBotLoadClock(clock BotLoadClock) BotLoadClock {
 
 // BotLoadNodeCapacity 是 API 冻结的发压节点容量领域 DTO。
 type BotLoadNodeCapacity struct {
-	NodeID                            uint       `json:"nodeId"`
-	NodeUUID                          string     `json:"nodeUuid"`
-	NodeName                          string     `json:"nodeName"`
-	Online                            bool       `json:"online"`
-	TunnelConnected                   bool       `json:"tunnelConnected"`
-	BotWorkerReady                    bool       `json:"botWorkerReady"`
-	Legacy                            bool       `json:"legacy"`
-	MaxBots                           int        `json:"maxBots"`
-	ActiveBots                        int        `json:"activeBots"`
-	ReservedBots                      int        `json:"reservedBots"`
-	AvailableBots                     int        `json:"availableBots"`
-	CapacityGeneration                int64      `json:"capacityGeneration"`
-	WorkerEpoch                       string     `json:"workerEpoch,omitempty"`
+	NodeID             uint   `json:"nodeId"`
+	NodeUUID           string `json:"nodeUuid"`
+	NodeName           string `json:"nodeName"`
+	Online             bool   `json:"online"`
+	TunnelConnected    bool   `json:"tunnelConnected"`
+	BotWorkerReady     bool   `json:"botWorkerReady"`
+	Legacy             bool   `json:"legacy"`
+	MaxBots            int    `json:"maxBots"`
+	ActiveBots         int    `json:"activeBots"`
+	ReservedBots       int    `json:"reservedBots"`
+	AvailableBots      int    `json:"availableBots"`
+	CapacityGeneration int64  `json:"capacityGeneration"`
+	WorkerEpoch        string `json:"workerEpoch,omitempty"`
+	// WorkerEpochGeneration 是 bot-worker 分片世代号真源（FR-460）；失效 Bot 回收据此比对 Bot 侧记录。
+	WorkerEpochGeneration             int64      `json:"workerEpochGeneration,omitempty"`
 	BotWorkerVersion                  string     `json:"botWorkerVersion,omitempty"`
 	RuntimeSource                     string     `json:"runtimeSource,omitempty"`
 	RSSBytes                          int64      `json:"rssBytes,omitempty"`
