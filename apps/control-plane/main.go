@@ -823,6 +823,9 @@ func main() {
 	// 注入节点期望代理解析器（FR-185，见 ADR-043）：每次心跳响应携带该节点期望出站代理
 	// （custom→节点值，inherit→全局默认）+ generation，Worker 据变化运行时重建出站 client。
 	grpcHandler.SetNodeProxyResolver(nodeProxySvc)
+	// 注入 MC 直探（SLP / Query）超时解析器（FR-446）：每次心跳响应携带 direct_probe.* 的
+	// 生效超时（毫秒），Worker 存内存填入采集编排链，使超时真可配且无需重启 Worker。
+	grpcHandler.SetDirectProbeTimeoutResolver(settingsSvc)
 	// 反向隧道注册表（FR-281，见 ADR-066）：Worker 主动在本 gRPC 端口开常驻反向隧道，
 	// CP 指令仅经反向隧道下发，Worker 不开放任何 CP 直拨入口。
 	// 鉴权拦截器仅拦 OpenReverseTunnel，其余流式方法（心跳等）原样放行。

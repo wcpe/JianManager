@@ -1827,6 +1827,33 @@ type WorldMetric struct {
 	TileEntities int64  `json:"tileEntities"`
 }
 
+// metricsFetchTimeout 计算实时指标链路（Worker.GetInstanceMetrics）的 CP 侧截止时间（FR-446 复审 N2）。
+//
+// Worker 侧编排链是**串行**的：探针 `/metrics`（HTTP 硬编码 `directprobe.ProbeScrapeTimeoutCap`）→
+// SLP(t_slp) → Query(t_query)，故单实例最坏时延 = 5s + t_slp + t_query。固定 10s 在默认 3s 下即已偏紧
+// （5+3+3=11s > 10s），在超时上界时更会必然超时：gRPC 被 DROP，实例详情页直接「获取指标失败」。
+// 因此按生效直探超时 + 该实例**实际配置的来源端口**给出预算，再留固定余量，
+// 保证截止严格大于最坏时延（未配置的来源不占用预算）。
+func (s *InstanceService) metricsFetchTimeout(inst *model.Instance) time.Duration {
+	slp := defaultDirectProbeTimeout
+	query := defaultDirectProbeTimeout
+	if s.settings != nil {
+		slp = parseDurationOr(s.settings.EffectiveValue(SettingKeyDirectProbeSLPTimeout), defaultDirectProbeTimeout)
+		query = parseDurationOr(s.settings.EffectiveValue(SettingKeyDirectProbeQueryTimeout), defaultDirectProbeTimeout)
+	}
+	budget := realtimeMetricsBudgetMargin
+	if inst.ProbePort > 0 {
+		budget += probeScrapeTimeoutCap
+	}
+	if inst.ServerPort > 0 {
+		budget += slp
+	}
+	if inst.QueryPort > 0 {
+		budget += query
+	}
+	return budget
+}
+
 // GetMetrics 通过 gRPC 从 Worker 获取实例指标。
 func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 	instance, err := s.GetByID(id)
@@ -1844,7 +1871,9 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 		return nil, fmt.Errorf("节点 %s 未连接", node.UUID)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// 实时链路预算随生效直探超时与来源端口动态给出（FR-446 复审 N2）：固定 10s 会被
+	// Worker 侧的串行 `探针→SLP→Query` 最坏时延追上而 DROP，详情页误报「获取指标失败」。
+	ctx, cancel := context.WithTimeout(context.Background(), s.metricsFetchTimeout(instance))
 	defer cancel()
 
 	// 下发探针端口 + MC 直探端口（server_port / query_port，FR-446）：Worker 据此走

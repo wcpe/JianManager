@@ -268,9 +268,16 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 			samples = append(samples, instSample(model.MetricInstTPS, "tps", nil))
 		}
 
-		// 在线人数：探针 / SLP / Query（FR-446 直探保底）任一命中即落点，让未装/未连探针的
-		// 实例（含代理、二进制服务）也能有真实在线人数曲线；三源皆无 → NULL 断点。
-		if im.ProbeAvailable || im.SlpAvailable || im.QueryAvailable {
+		// 在线人数：仅当**在线人数本身可用**时落点，三源皆无/该指标缺测 → NULL 断点（FR-447）。
+		// 判定主用 im.PlayersOnlineAvailable（Worker 置位，Query 有响应但缺 numplayers 时为 false）。
+		//
+		// 兼容判定（FR-446/447 复审 N1）：不置该位的旧/中间版本 Worker 有两个来源可安全回退——
+		//  · 探针可用：探针必然给出 players_online（serverprobe_players_online / 代理回退），旧 CP 亦按此判定；
+		//  · SLP 可用：`players.online` 是 SLP 协议**必带**字段（不像 Query 的 numplayers 可缺），直探命中即有真值。
+		// 中间版本 Worker 正是「有直探、置 SlpAvailable=true + 真实 PlayersOnline，但缺 players_online_available」，
+		// 若不回退会把 SLP-only 实例的在线人数整段写成 NULL，污染全网总在线合计与 bot 容量采样。
+		// **Query-only 仍不信任**：Query 可响应而缺 numplayers，回退会重新引入「伪造 0」。
+		if im.PlayersOnlineAvailable || im.ProbeAvailable || im.SlpAvailable {
 			samples = append(samples, instSample(model.MetricInstPlayersOnline, "count", ptr(float64(im.PlayersOnline))))
 		} else {
 			samples = append(samples, instSample(model.MetricInstPlayersOnline, "count", nil))

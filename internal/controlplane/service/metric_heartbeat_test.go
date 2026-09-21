@@ -113,6 +113,119 @@ func TestMetric_IngestHeartbeat_ProbeUnavailableWritesNull(t *testing.T) {
 	require.Nil(t, findSeries(instSeries, model.MetricInstHeapUsed, ""))
 }
 
+// TestMetric_IngestHeartbeat_PlayersUnavailableWritesNull 直探来源可用但**在线人数缺测**时
+// 落 NULL 断点而非伪造 0（FR-447；Query 有响应但缺 numplayers 的场景）。
+// 注意：兼容回退刻意**不含 Query**（FR-446 复审 N1）——Query 可响应而缺 numplayers，回退会重新
+// 引入「伪造 0」；故 Query-only 且未置 players_online_available 时仍写 NULL。
+func TestMetric_IngestHeartbeat_PlayersUnavailableWritesNull(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:   "inst-1",
+			QueryAvailable: true, // 来源可用
+			SlpAvailable:   false,
+			PlayersOnline:  0, // 但 numplayers 缺测（Worker 明确置 false）
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players, "仍写一条断点序列")
+	require.Len(t, players.Points, 1)
+	require.Nil(t, players.Points[0].Avg, "缺测写 NULL，绝不写成 0 在线")
+}
+
+// TestMetric_IngestHeartbeat_PlayersAvailableFromDirectProbe 直探明确给出在线人数时落真实值。
+func TestMetric_IngestHeartbeat_PlayersAvailableFromDirectProbe(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:           "inst-1",
+			SlpAvailable:           true,
+			PlayersOnline:          5,
+			PlayersOnlineAvailable: true,
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players)
+	require.NotNil(t, players.Points[0].Avg)
+	require.Equal(t, 5.0, *players.Points[0].Avg)
+	// 探针不可用 → TPS 仍断点。
+	tps := findSeries(instSeries, model.MetricInstTPS, "")
+	require.NotNil(t, tps)
+	require.Nil(t, tps.Points[0].Avg)
+}
+
+// TestMetric_IngestHeartbeat_PlayersAvailableLegacySlpSample 中间版本 Worker（有直探、置 SlpAvailable
+// 与真实 PlayersOnline，但缺 players_online_available）仍落真实值而非 NULL（FR-446 复审 N1）：
+// SLP 命中的实例在线人数被误判为缺测会污染全网总在线合计与 bot 容量采样。
+func TestMetric_IngestHeartbeat_PlayersAvailableLegacySlpSample(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:  "inst-1",
+			SlpAvailable:  true, // 直探命中 SLP
+			PlayersOnline: 7,    // SLP 协议必带字段，真实值
+			// PlayersOnlineAvailable 缺省 false（中间版本 Worker 尚未置该位）
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players)
+	require.NotNil(t, players.Points[0].Avg, "SLP 可用时在线人数是协议必带真值，不得写 NULL")
+	require.Equal(t, 7.0, *players.Points[0].Avg)
+}
+
+// TestMetric_IngestHeartbeat_PlayersAvailableLegacyProbeSample 旧 Worker 不置 players_online_available
+// 但探针可用时仍落点（向后兼容，避免升级期曲线整段断掉）。
+func TestMetric_IngestHeartbeat_PlayersAvailableLegacyProbeSample(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:   "inst-1",
+			ProbeAvailable: true,
+			PlayersOnline:  9,
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players)
+	require.NotNil(t, players.Points[0].Avg)
+	require.Equal(t, 9.0, *players.Points[0].Avg)
+}
+
 func TestMetric_IngestHeartbeat_ProcessTop(t *testing.T) {
 	svc := newMetricSvc(t)
 	require.NoError(t, svc.db.AutoMigrate(&model.Node{}, &model.Instance{}))

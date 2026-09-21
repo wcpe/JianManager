@@ -33,13 +33,14 @@ func testSLP() *SLPSnapshot {
 
 func testQuery() *QuerySnapshot {
 	return &QuerySnapshot{
-		Motd:          "Query MOTD",
-		Version:       "1.20.4",
-		Plugins:       []string{"WorldEdit"},
-		Map:           "world",
-		PlayersOnline: 6,
-		PlayersMax:    30,
-		PlayerNames:   []string{"RealPlayer"},
+		Motd:                   "Query MOTD",
+		Version:                "1.20.4",
+		Plugins:                []string{"WorldEdit"},
+		Map:                    "world",
+		PlayersOnline:          6,
+		PlayersOnlineAvailable: true,
+		PlayersMax:             30,
+		PlayerNames:            []string{"RealPlayer"},
 	}
 }
 
@@ -101,6 +102,8 @@ func TestOrchestrateQueryOnly(t *testing.T) {
 	assert.True(t, tel.QueryAvailable)
 	assert.Equal(t, SourceQuery, tel.Sources)
 	assert.Equal(t, "Query MOTD", tel.Motd)
+	assert.True(t, tel.PlayersOnlineAvailable)
+	assert.Equal(t, int32(6), tel.PlayersOnline)
 	assert.True(t, tel.PlayerNamesAvailable)
 	assert.False(t, tel.PlayerNamesPartial, "Query 是实名来源")
 	assert.Equal(t, []string{"RealPlayer"}, tel.PlayerNames)
@@ -110,6 +113,23 @@ func TestOrchestrateQueryOnly(t *testing.T) {
 	assert.Equal(t, "world", tel.Map)
 	assert.True(t, tel.PlayersMaxAvailable)
 	assert.Equal(t, int32(30), tel.PlayersMax)
+}
+
+// TestOrchestrateQueryMissingNumplayersKeepsPlayersUnavailable Query 可用但缺 numplayers →
+// 在线人数保持「不可用」，绝不落成 0（FR-447 不伪造 0）。
+func TestOrchestrateQueryMissingNumplayersKeepsPlayersUnavailable(t *testing.T) {
+	q := testQuery()
+	q.PlayersOnlineAvailable = false
+	q.PlayersOnline = 0
+	tel := Orchestrate(nil, nil, q)
+	assert.True(t, tel.QueryAvailable, "Query 本身仍算可用（其它指标照常回填）")
+	assert.False(t, tel.PlayersOnlineAvailable, "缺 numplayers 时不得声称在线人数可用")
+	assert.True(t, tel.PlayerNamesAvailable, "实名名单不受 numplayers 缺失影响")
+	// SLP 存在时仍由 SLP 回填在线人数（SLP 的 players.online 为协议必带字段）。
+	slp := testSLP()
+	tel2 := Orchestrate(nil, slp, q)
+	assert.True(t, tel2.PlayersOnlineAvailable)
+	assert.Equal(t, int32(5), tel2.PlayersOnline)
 }
 
 // TestOrchestrateProbeWinsSameMetric 同指标多源以探针为准（在线人数取探针值）。

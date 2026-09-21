@@ -505,11 +505,16 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 
 	// 采集优先级链 `探针 → SLP → Query → 不可用`（FR-447）：与心跳链路共用同一编排函数，
 	// 确保两条链路的来源与「不可用」语义一致。探针与实例同机，直探 localhost。
+	// 直探超时取 CP 经心跳下发的生效值（FR-446：超时可配）；此链路是用户手动触发的实时查询，
+	// **不做失败退避**，永远给最新结果（退避只用于 30s 时序采样，见 heartbeat）。
+	slpTimeout, queryTimeout := metrics.DirectProbeTimeouts()
 	tel := metrics.CollectInstanceTelemetry(metrics.CollectConfig{
-		ProbePort:  int(req.ProbePort),
-		ServerPort: int(req.ServerPort),
-		QueryPort:  int(req.QueryPort),
-		Host:       "localhost",
+		ProbePort:    int(req.ProbePort),
+		ServerPort:   int(req.ServerPort),
+		QueryPort:    int(req.QueryPort),
+		Host:         "localhost",
+		SLPTimeout:   slpTimeout,
+		QueryTimeout: queryTimeout,
 	})
 
 	// 探针深度指标（TPS/MSPT/JVM/世界）。
@@ -543,6 +548,9 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 	resp.MotdAvailable = tel.MotdAvailable
 	resp.Version = tel.Version
 	resp.VersionAvailable = tel.VersionAvailable
+	// favicon 端到端已通（SLP → 本响应 → CP MetricsData.favicon → 前端 InstanceMetricsData.favicon），
+	// 但前端当前仅声明字段、未渲染，属**预留字段**：服务端图标是一张 base64 PNG（可达 ~50KB），
+	// 前端若要展示应在详情页 MOTD 卡片按需渲染，而非默认注入卡片列表（FR-446 审计项 7）。
 	resp.Favicon = tel.Favicon
 	resp.MaxPlayers = tel.PlayersMax
 	resp.MaxPlayersAvailable = tel.PlayersMaxAvailable

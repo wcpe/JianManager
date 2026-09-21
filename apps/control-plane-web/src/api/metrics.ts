@@ -40,6 +40,11 @@ export interface InstanceMetricsData {
   motdAvailable: boolean
   version: string
   versionAvailable: boolean
+  /**
+   * 服务端图标（`data:image/png;base64,...`，可达 ~50KB）。**预留字段**：后端 SLP → Worker →
+   * `MetricsData.favicon` 已端到端回传，前端当前仅声明未渲染；若要展示应在实例详情页 MOTD
+   * 卡片按需渲染，避免把大 base64 注入卡片列表（FR-446 审计项 7）。
+   */
   favicon: string
   maxPlayers: number
   maxPlayersAvailable: boolean

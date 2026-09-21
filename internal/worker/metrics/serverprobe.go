@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // ProbeSnapshot 是从 ServerProbe `/metrics` 解析出的服务器运维指标子集。
@@ -53,7 +52,9 @@ func ScrapeServerProbe(host string, port int, token string) (*ProbeSnapshot, err
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	// HTTP 客户端超时取共享契约值（internal/platform/directprobe）：它同时被心跳采集预算
+	// 计入「单实例同源串行最坏」，两处必须是同一个数（FR-446 复审 NEW-ISSUE A）。
+	client := &http.Client{Timeout: probeScrapeTimeoutCap}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ServerProbe /metrics 抓取失败: %w", err)

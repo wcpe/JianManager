@@ -2049,4 +2049,7 @@ db<SettingsRow>('settings', () => [
   { id: 6, key: 'debug.mode', value: 'false', editable: true, sensitive: false, overridden: false, effectiveImmediately: true },
   // github.token（FR-409）：敏感项，回显掩码（与后端 maskSecret 行为一致）。
   { id: 7, key: 'github.token', value: 'ghp***eed', editable: true, sensitive: true, overridden: false, effectiveImmediately: true },
+  // MC 直探超时（FR-446）：同 graceful_stop.timeout 的 Go duration；Worker 侧生效（经心跳下发）。
+  { id: 8, key: 'direct_probe.slp_timeout', value: '3s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { id: 9, key: 'direct_probe.query_timeout', value: '3s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
 ])
