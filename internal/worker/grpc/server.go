@@ -288,6 +288,9 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 			// 补分配端口并重注册本 RPC——不及时刷新的话，心跳采集器仍按旧值 0 过滤，
 			// 形成「探针桥已连接但监控永无数据」的静默断链（下一拍心跳即采集，无需重启）。
 			s.manager.SetProbePort(req.InstanceUuid, int(req.ProbePort))
+			// FR-446 直探端口：同步刷新 server_port / query_port，使端口迁移/导入后直探打对新端口。
+			s.manager.SetServerPort(req.InstanceUuid, int(req.ServerPort))
+			s.manager.SetQueryPort(req.InstanceUuid, int(req.QueryPort))
 			// 刷新启动配置（启动命令 / 绑定 JDK / 环境变量），使配置编辑（FR-233 重绑 JDK 等）对下次启动生效——
 			// 否则 worker 保留旧 spec，重绑的 JDK 不被采用、preflight 仍报「未绑定 JDK」。
 			s.manager.SetLaunchConfig(req.InstanceUuid, req.StartCommand, req.JdkPath, req.JdkBinPath, req.EnvVars, req.AutoRestart)
@@ -302,6 +305,9 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 	if req.ProcessType == string(process.ProcessTypeDocker) {
 		s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings), req.CpuLimit, req.MemLimitMb, req.DiskLimitMb)
 	}
+	// FR-446 直探端口：新登记实例同步记下 server_port / query_port（心跳据此直探）。
+	s.manager.SetServerPort(req.InstanceUuid, int(req.ServerPort))
+	s.manager.SetQueryPort(req.InstanceUuid, int(req.QueryPort))
 	return true, nil
 }
 
@@ -316,7 +322,11 @@ func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstan
 			continue
 		}
 		// 已在内存表 → 跳过（不覆盖 RUNNING 恢复实例；重复重推幂等）。
+		// 但仍刷新 MC 直探端口（FR-446）：Worker 重启后恢复的 daemon 实例不携带直探端口，
+		// 重连重推时补齐，使直探对恢复实例也打对端口（不触碰运行态、不重启进程）。
 		if _, exists := s.manager.GetInstance(spec.InstanceUuid); exists {
+			s.manager.SetServerPort(spec.InstanceUuid, int(spec.ServerPort))
+			s.manager.SetQueryPort(spec.InstanceUuid, int(spec.QueryPort))
 			skipped++
 			continue
 		}
@@ -446,10 +456,12 @@ func (s *Server) GetNodeMetrics(ctx context.Context, req *workerpb.GetNodeMetric
 	}, nil
 }
 
-// GetInstanceMetrics 获取实例指标（纯 ServerProbe，FR-067 退役 RCON 后）。
-// 抓取 ServerProbe /metrics（localhost:probe_port，FR-010 富指标：TPS/MSPT/堆/线程/世界）；
-// 探针未部署或抓取失败时 TPS/在线人数返回 N/A（-1，probe_available=false），不再有 RCON 兜底。
-// OS 进程内存近似仍作为 memory_mb 的可用回退（与探针无关）。
+// GetInstanceMetrics 获取实例指标（采集优先级链 `探针 → SLP → Query → 不可用`，FR-446/447）。
+// 与心跳链路共用 metrics.CollectInstanceTelemetry：抓 ServerProbe /metrics（FR-010 富指标：
+// TPS/MSPT/堆/线程/世界）；探针缺失时用 SLP/Query 直探（FR-446）回填 MOTD/版本/在线人数/最大人数/
+// 玩家名单/插件/地图。不再以 TPS/在线人数 = -1 占位：改为显式可用性位（probe_available /
+// players_available / *_available），三档皆无即「不可用」。
+// OS 进程内存/CPU/运行时长近似仍作为回退（与探针无关）。
 func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstanceMetricsRequest) (*workerpb.GetInstanceMetricsResponse, error) {
 	resp := &workerpb.GetInstanceMetricsResponse{}
 
@@ -491,38 +503,59 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 		}
 	}
 
-	// 优先 ServerProbe /metrics（FR-010 富指标，取代 RCON 粗指标）。
-	// 探针与实例同机，抓 localhost:probe_port；本机 IP 白名单放行，无需 token。
-	if req.ProbePort > 0 {
-		if snap, perr := metrics.ScrapeServerProbe("localhost", int(req.ProbePort), ""); perr == nil {
-			resp.Tps = float32(snap.TPS)
-			resp.OnlinePlayers = snap.PlayersOnline
-			if snap.HeapUsedBytes > 0 {
-				resp.MemoryMb = snap.HeapUsedBytes / (1024 * 1024)
-			}
-			resp.MsptMillis = float32(snap.MSPTAvgMillis)
-			resp.Threads = snap.Threads
-			resp.CpuPercent = snap.SystemCPULoad * 100
-			resp.HeapMaxMb = snap.HeapMaxBytes / (1024 * 1024)
-			resp.UptimeSeconds = snap.UptimeSeconds
-			for name, w := range snap.Worlds {
-				resp.Worlds = append(resp.Worlds, &workerpb.WorldMetric{
-					Name:         name,
-					LoadedChunks: w.LoadedChunks,
-					Entities:     w.Entities,
-					TileEntities: w.TileEntities,
-				})
-			}
-			resp.ProbeAvailable = true
-			return resp, nil
+	// 采集优先级链 `探针 → SLP → Query → 不可用`（FR-447）：与心跳链路共用同一编排函数，
+	// 确保两条链路的来源与「不可用」语义一致。探针与实例同机，直探 localhost。
+	tel := metrics.CollectInstanceTelemetry(metrics.CollectConfig{
+		ProbePort:  int(req.ProbePort),
+		ServerPort: int(req.ServerPort),
+		QueryPort:  int(req.QueryPort),
+		Host:       "localhost",
+	})
+
+	// 探针深度指标（TPS/MSPT/JVM/世界）。
+	if tel.ProbeAvailable {
+		resp.Tps = float32(tel.TPS)
+		resp.MsptMillis = float32(tel.MSPTMillis)
+		resp.Threads = tel.Threads
+		resp.CpuPercent = tel.CPULoad * 100
+		if tel.HeapUsedBytes > 0 {
+			resp.MemoryMb = tel.HeapUsedBytes / (1024 * 1024)
 		}
-		// 探针未就绪/抓取失败 → 指标 N/A（FR-067 退役 RCON 后无兜底）。
+		resp.HeapMaxMb = tel.HeapMaxBytes / (1024 * 1024)
+		resp.UptimeSeconds = tel.UptimeSeconds
+		for name, w := range tel.Worlds {
+			resp.Worlds = append(resp.Worlds, &workerpb.WorldMetric{
+				Name:         name,
+				LoadedChunks: w.LoadedChunks,
+				Entities:     w.Entities,
+				TileEntities: w.TileEntities,
+			})
+		}
+		resp.ProbeAvailable = true
 	}
 
-	// 探针未部署或抓取失败：TPS/在线人数为 N/A（-1），probe_available 默认 false。
-	// memory_mb 若上面已由 OS 进程内存填充则保留，否则为 0。
-	resp.Tps = -1
-	resp.OnlinePlayers = -1
+	// 基础信息（探针 / SLP / Query）：显式可用性位，缺测即「不可用」，不留 -1/-- 伪值。
+	resp.PlayersAvailable = tel.PlayersOnlineAvailable
+	if tel.PlayersOnlineAvailable {
+		resp.OnlinePlayers = tel.PlayersOnline
+	}
+	resp.Motd = tel.Motd
+	resp.MotdAvailable = tel.MotdAvailable
+	resp.Version = tel.Version
+	resp.VersionAvailable = tel.VersionAvailable
+	resp.Favicon = tel.Favicon
+	resp.MaxPlayers = tel.PlayersMax
+	resp.MaxPlayersAvailable = tel.PlayersMaxAvailable
+	resp.PlayerNames = tel.PlayerNames
+	resp.PlayerNamesAvailable = tel.PlayerNamesAvailable
+	resp.PlayerNamesPartial = tel.PlayerNamesPartial
+	resp.Plugins = tel.Plugins
+	resp.PluginsAvailable = tel.PluginsAvailable
+	resp.Map = tel.Map
+	resp.MapAvailable = tel.MapAvailable
+	resp.SlpAvailable = tel.SLPAvailable
+	resp.QueryAvailable = tel.QueryAvailable
+	resp.SourceMask = []byte{byte(tel.Sources)}
 	return resp, nil
 }
 

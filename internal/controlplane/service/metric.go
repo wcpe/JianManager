@@ -237,36 +237,43 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 		instSample := func(key, unit string, v *float64) Sample {
 			return Sample{NodeUUID: node, InstanceID: iid, Scope: model.MetricScopeInstance, MetricKey: key, Unit: unit, TS: now, Value: v}
 		}
-		if !im.ProbeAvailable {
-			// 探针不可用：写 NULL 断点（曲线断开，不补假值）。
-			samples = append(samples, instSample(model.MetricInstTPS, "tps", nil))
-			continue
-		}
-		samples = append(samples,
-			instSample(model.MetricInstTPS, "tps", ptr(im.Tps)),
-			instSample(model.MetricInstMSPT, "ms", ptr(im.MsptMillis)),
-			instSample(model.MetricInstPlayersOnline, "count", ptr(float64(im.PlayersOnline))),
-			instSample(model.MetricInstHeapUsed, "bytes", ptr(float64(im.HeapUsedBytes))),
-			instSample(model.MetricInstHeapMax, "bytes", ptr(float64(im.HeapMaxBytes))),
-			instSample(model.MetricInstThreads, "count", ptr(float64(im.Threads))),
-			instSample(model.MetricInstUptime, "seconds", ptr(im.UptimeSeconds)),
-		)
-		// 系统 CPU 0~1，<0 表示探针未取到 → 跳过该指标。
-		if im.CpuLoad >= 0 {
-			samples = append(samples, instSample(model.MetricInstCPUPct, "pct", ptr(im.CpuLoad*100)))
-		}
-		for _, w := range im.Worlds {
-			if w.Name == "" {
-				continue
-			}
-			worldSample := func(key, unit string, v *float64) Sample {
-				return Sample{NodeUUID: node, InstanceID: iid, Scope: model.MetricScopeWorld, World: w.Name, MetricKey: key, Unit: unit, TS: now, Value: v}
-			}
+		// 探针指标（TPS/MSPT/JVM/世界）：仅探针提供。探针不可用 → TPS 写 NULL 断点（曲线断开，不补假值）。
+		if im.ProbeAvailable {
 			samples = append(samples,
-				worldSample(model.MetricWorldLoadedChunks, "count", ptr(float64(w.LoadedChunks))),
-				worldSample(model.MetricWorldEntities, "count", ptr(float64(w.Entities))),
-				worldSample(model.MetricWorldTileEntities, "count", ptr(float64(w.TileEntities))),
+				instSample(model.MetricInstTPS, "tps", ptr(im.Tps)),
+				instSample(model.MetricInstMSPT, "ms", ptr(im.MsptMillis)),
+				instSample(model.MetricInstHeapUsed, "bytes", ptr(float64(im.HeapUsedBytes))),
+				instSample(model.MetricInstHeapMax, "bytes", ptr(float64(im.HeapMaxBytes))),
+				instSample(model.MetricInstThreads, "count", ptr(float64(im.Threads))),
+				instSample(model.MetricInstUptime, "seconds", ptr(im.UptimeSeconds)),
 			)
+			// 系统 CPU 0~1，<0 表示探针未取到 → 跳过该指标。
+			if im.CpuLoad >= 0 {
+				samples = append(samples, instSample(model.MetricInstCPUPct, "pct", ptr(im.CpuLoad*100)))
+			}
+			for _, w := range im.Worlds {
+				if w.Name == "" {
+					continue
+				}
+				worldSample := func(key, unit string, v *float64) Sample {
+					return Sample{NodeUUID: node, InstanceID: iid, Scope: model.MetricScopeWorld, World: w.Name, MetricKey: key, Unit: unit, TS: now, Value: v}
+				}
+				samples = append(samples,
+					worldSample(model.MetricWorldLoadedChunks, "count", ptr(float64(w.LoadedChunks))),
+					worldSample(model.MetricWorldEntities, "count", ptr(float64(w.Entities))),
+					worldSample(model.MetricWorldTileEntities, "count", ptr(float64(w.TileEntities))),
+				)
+			}
+		} else {
+			samples = append(samples, instSample(model.MetricInstTPS, "tps", nil))
+		}
+
+		// 在线人数：探针 / SLP / Query（FR-446 直探保底）任一命中即落点，让未装/未连探针的
+		// 实例（含代理、二进制服务）也能有真实在线人数曲线；三源皆无 → NULL 断点。
+		if im.ProbeAvailable || im.SlpAvailable || im.QueryAvailable {
+			samples = append(samples, instSample(model.MetricInstPlayersOnline, "count", ptr(float64(im.PlayersOnline))))
+		} else {
+			samples = append(samples, instSample(model.MetricInstPlayersOnline, "count", nil))
 		}
 	}
 
