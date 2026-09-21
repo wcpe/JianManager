@@ -84,14 +84,19 @@
   - `GetInstanceMetricsResponse`：把 `-1` 占位改为显式可用性位（`players_available`），移除 `Tps=-1`/`OnlinePlayers=-1` 约定（`internal/worker/grpc/server.go:524-525`）。
 - `internal/worker/process/manager.go`：`Instance`/`InstanceSnapshot` 加 `ServerPort`/`QueryPort`；`Create(...)` 签名加两参（同步更新所有调用点与 `SetServerPort/SetQueryPort` 热更新，参照 `SetProbePort`）。
 - CP 注册链 `registerOnWorkerLocked` / `ResyncInstances`：下发 `server_port`/`query_port`。
-- CP `MetricService.ingestHeartbeatAt`：`!ProbeAvailable` 分支不只写 TPS 断点，改为按直探结果补落 `inst_players_online` 等；直探也无则不落点（维持 NULL 断点，曲线断而不造假值）。
+- CP `MetricService.ingestHeartbeatAt`：`!ProbeAvailable` 分支不只写 TPS 断点，改为按直探结果补落 `inst_players_online` 等；直探也无则不落点（维持 NULL 断点，曲线断而不造假值）。判定在线人数是否可落点用 `players_online_available`，对不置该位的旧/中间版本 Worker 保留**兼容回退**：`probe_available`（探针必给 `players_online`）或 `slp_available`（SLP `players.online` 是协议必带字段）为真即落真实值；**Query-only 不回退**（Query 可响应而缺 `numplayers`，回退会重新引入伪造 0）。
 
 ### 2.6 超时 / 错误处理 / 并发
 
-- **超时可配**：SLP/Query 各默认 2~3s（对齐 `ScrapeServerProbe` 的 5s 量级，但直探更轻），经平台设置下发（与 `graceful_stop.timeout` 同风格）。超时/连接拒绝/UDP 无响应 → 该来源记"不可用"，**不阻塞**其它来源、**不 panic**。
+- **超时可配（上界由心跳护栏反推，不是另一个拍脑袋的常量）**：SLP/Query 各默认 3s（对齐 `ScrapeServerProbe` 的 5s 量级，但直探更轻），经平台设置下发（与 `graceful_stop.timeout` 同风格）。**下发通道**：平台设置 `direct_probe.slp_timeout` / `direct_probe.query_timeout`（Go duration）→ 心跳响应 `HeartbeatResponse.direct_probe_{slp,query}_timeout_ms` → Worker 存进程生效值（`metrics.SetDirectProbeTimeouts`），命中**两条**采集链路（心跳时序 + `GetInstanceMetrics` 实时），改设置后 Worker 不重启即在下一拍（≤30s）生效。超时/连接拒绝/UDP 无响应 → 该来源记"不可用"，**不阻塞**其它来源、**不 panic**。
+  - **上界 = 10s，且必须由「单拍采集预算 < 心跳节拍」反推得出**（FR-446 复审 NEW-ISSUE A）：单实例同源串行最坏 = `ProbeScrapeTimeoutCap(5s) + slp + query`，单拍采集总预算 = `余量 + 上述最坏`，且必须 ≤ `节拍(30s) − 节拍余量(4s)`。即 `slp + query ≤ 30 − 4 − 1 − 5 = 20s` → 两来源对称上界 ≤ 10s。放宽容许会让「超时可配」与「心跳护栏」互相矛盾（旧实现：硬编码 15s 预算 vs 可配 30s 超时 → 最坏 65s，该实例时序每拍被预算静默砍成「不可用」而无任何告警）。
+  - **单一数值来源**：默认值、上界、探针抓取上限、节拍与预算余量统一定义在 `internal/platform/directprobe`，由下列四处共同引用，不得各写一份字面量——**写路径** `settings.go:validateSettingValue`（拒收 > 上界）、**读/下发路径** `parseDurationOr`（钳制）、**Worker 归一** `metrics.normalizeProbeTimeout`（独立钳制）、**心跳采集预算** `heartbeat.collectInstanceBudget`。跨包一致性由 `internal/platform/directprobe/contract_test.go` 的不变量断言与 CP/Worker 两侧的"上界同源"用例锁定。故 yaml/env 基线或历史落库值也无法突破。
+- **心跳链路的一拍采集预算（推导值，非定值）**：`heartbeat.collectInstanceBudget()` = `directprobe.CollectBudgetFor(生效 slp, 生效 query)` = `余量(1s) + 探针上限(5s) + slp + query`，恒 ≥ 单实例同源串行最坏，且上界 26s < 30s 节拍（默认值下为 12s，与旧硬编码 15s 同量级）。预算耗尽仍按既有语义处理：用**已完成部分**返回、未完成实例补「全部不可用」空样本（CP 落 NULL 断点，绝不把缺测伪装成 0），并记 WARN——**不静默丢弃**。另有防御性闸门：若预算与节拍不再自洽（`directprobe.BudgetCoversTick` 为假），首次即 WARN 一次，避免退化成"部分实例指标静默消失"。
+- **实时链路的 CP 侧预算**：`InstanceService.GetMetrics` 的 gRPC 截止时间随生效直探超时与实例实际配置的来源端口动态给出（`metricsFetchTimeout`），以覆盖 Worker 侧**串行** `探针(HTTP ≤5s)→SLP(t)→Query(t)` 的最坏时延（固定 10s 在默认 3s 下即已偏紧、上界放大时必然超时被 DROP）。
 - **并发**：复用 `heartbeat.go` 的 `maxConcurrentProbeScrapes=8` 信号量；SLP/Query 在**同一实例任务内串行**（先探针，失败才 SLP，再 Query），避免为每实例翻倍 UDP/TCP 连接。
 - **明文约束**：Query 是 UDP、SLP 是 TCP，均**无 TLS**（MC 协议本身明文）——仅限**同机 localhost / 内网**直连，CP 侧不下发游戏端口外的裸探（与二进制 FR-441 的 https 约束不同：此处是协议内建限制，不是传输选择）。
-- **降噪**：沿用 `recordProbeScrapeResult`（`heartbeat.go:327`）的"错误变化才告警"，把来源名并入错误串，避免每拍刷屏。
+- **降噪**：按**稳定判据**做"变化才告警"（`unreachableSourcesSignature` 只含"哪些来源不可用"的来源标签集合），错误类别抖动（timeout↔connection refused↔unreachable）或来源进出退避（错误文案↔"退避中"）都不触发重发 WARN；含错误类别/退避标注的完整文案（`unreachableSourcesReason`）只作告警正文附带。
+- **插件名形态判别**：Query 的 `plugins` 字段只在 ":" 之前**像服务端软件描述段**时才剥离该前缀（`looksLikeServerSoftware`：含 `" on "` 的 `<软件> on <平台>` 形态，或整个前缀恰为已知软件名），避免把含 ":" 的插件名（如 `MyPlugin:v1.0`）误截。
 
 ## 3. 任务拆分
 
@@ -119,8 +124,21 @@
 
 ## 5. 风险 / 待定
 
+- **Query 分片头格式未真机验证**（FR-446 审计项 6）：本实现按「**每一片**负载都以 11 字节
+  `splitnum\0` + count + index 头开头」判定多分片（`internal/worker/metrics/query.go` 的
+  `querySplitHeaderLen` / `queryResponseComplete` / `reassembleQueryFullStat`）。该假设仅来自社区对
+  Notchian 服务端的逆向描述，**本项目真机上只覆盖了单包路径**（现代服务端响应很小，几乎总是单包；
+  只有玩家/插件极多时才分片）。遇到分片响应解析失败时，须先用 tcpdump/Wireshark 抓真实 UDP 分片再据实
+  修正，不要只调常量。**标注为未真机验证项，待有条件时补真机证据。**
+- **心跳采集节奏的护栏**（FR-446 审计项 2，NEW-ISSUE A 修正）：单拍采集总预算**由生效直探超时推导**
+  （`heartbeat.collectInstanceBudget` = `directprobe.CollectBudgetFor`，上界 26s < 30s 节拍；不再是硬编码
+  15s，否则与"可配超时"自相矛盾），
+  超预算即用已完成部分返回、未完成实例按「不可用」落 NULL；持续性失败的来源按「连续失败 ≥2 次后
+  指数退避（60s→120s，首档严格大于 30s 心跳节拍，且退避窗口自**探测完成时刻**起算）」跳拍，
+  避免 `query.port` 已分配但 `enable-query` 未开这类实例每拍白等
+  一个 UDP 超时。退避**只作用于 30s 时序采样**，详情页实时链路（`GetInstanceMetrics`）不做退避。
 - **SLP sample 的可信度**：`players.sample` 可被服务端插件伪造/截断，且不含稳定 UUID。规格明确它是弱信息，**实名以 Query 为准**；若某部署对玩家身份敏感，可配置为"仅 Query 展示名单"。
 - **Query 分片拼接**：跨包 UDP 顺序/丢包在公网不稳；同机 localhost 基本可靠。首版按 token 校验 + 首包总长度拼接，超长响应设上限（如 64KB）防内存放大。
 - **代理服 Query**：BungeeCord 的 Query 支持情况随版本而异，SLP 才是代理的可靠保底；Query 对代理可能长期"不可用"，属预期。
 - **端口下发与热更新**：`server_port`/`query_port` 变更（导入实例、端口迁移）须经 `SetServerPort/SetQueryPort` 热刷 Worker 内存表，否则直探打旧端口；与 `EnsureProbePort` 同风格补口。
-- **旧 CP/Worker 兼容**：新 Worker 对旧 CP 时直探采样字段为空——`InstanceMetricSample` 新字段为可选，旧 CP 忽略即可；`-1` 语义移除需前后端同步发布，避免中间态前端把 0 当"0 人在线"。
+- **旧 CP/Worker 兼容**：新 Worker 对旧 CP 时直探采样字段为空——`InstanceMetricSample` 新字段为可选，旧 CP 忽略即可；`-1` 语义移除需前后端同步发布，避免中间态前端把 0 当"0 人在线"。新 CP 对旧/中间版本 Worker 时，在线人数落库保留 `probe_available || slp_available` 兼容回退（不含 Query，见 §2.5），保证升级期 SLP-only 实例的在线人数不整段落 NULL。

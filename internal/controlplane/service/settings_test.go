@@ -11,6 +11,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/platform/directprobe"
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
@@ -190,6 +191,87 @@ func TestUpdate_RejectsInvalidValue(t *testing.T) {
 	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyGracefulStopTimeout: "-5s"}), ErrSettingValueInvalid)
 	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyGracefulStopTimeout: "notaduration"}), ErrSettingValueInvalid)
 	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyBackupRetentionDays: "-1"}), ErrSettingValueInvalid)
+}
+
+// TestDirectProbeTimeoutsSetting MC 直探超时可配：默认 3s、覆盖生效、非正/超上界被拒（FR-446）。
+// 上界与「单拍采集预算 < 心跳节拍」自洽（FR-446 复审 NEW-ISSUE A），故断言直接引用共享常量，
+// 上界调整时本用例自动跟随。
+func TestDirectProbeTimeoutsSetting(t *testing.T) {
+	db := newSettingsTestDB(t)
+	svc := NewSettingsService(db, testConfig())
+
+	// 基线默认。
+	slp, query := svc.DirectProbeTimeouts()
+	require.Equal(t, 3*time.Second, slp)
+	require.Equal(t, 3*time.Second, query)
+	view, err := svc.Get()
+	require.NoError(t, err)
+	item, ok := findItem(view.Editable, SettingKeyDirectProbeSLPTimeout)
+	require.True(t, ok, "直探超时须作为可编辑平台设置项暴露")
+	require.Equal(t, "3s", item.Value)
+	require.False(t, item.EffectiveImmediately, "Worker 侧生效，非 CP 内即时")
+
+	// 覆盖生效。
+	require.NoError(t, svc.Update(map[string]string{
+		SettingKeyDirectProbeSLPTimeout:   "1500ms",
+		SettingKeyDirectProbeQueryTimeout: "2s",
+	}))
+	slp, query = svc.DirectProbeTimeouts()
+	require.Equal(t, 1500*time.Millisecond, slp)
+	require.Equal(t, 2*time.Second, query)
+
+	// 恰好等于上界可接受；超上界（哪怕 1s）被拒。
+	require.NoError(t, svc.Update(map[string]string{
+		SettingKeyDirectProbeQueryTimeout: maxDirectProbeTimeout.String(),
+	}))
+	_, query = svc.DirectProbeTimeouts()
+	require.Equal(t, maxDirectProbeTimeout, query)
+
+	// 非法值被拒（非 duration / 非正 / 超上界）。
+	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyDirectProbeSLPTimeout: "abc"}), ErrSettingValueInvalid)
+	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyDirectProbeSLPTimeout: "0s"}), ErrSettingValueInvalid)
+	require.ErrorIs(t, svc.Update(map[string]string{
+		SettingKeyDirectProbeQueryTimeout: (maxDirectProbeTimeout + time.Second).String(),
+	}), ErrSettingValueInvalid)
+	// 被拒后仍是上一有效值。
+	slp, query = svc.DirectProbeTimeouts()
+	require.Equal(t, 1500*time.Millisecond, slp)
+	require.Equal(t, maxDirectProbeTimeout, query)
+}
+
+// TestDirectProbeTimeoutBoundMatchesSharedContract 锁定 CP 侧（写校验/读钳制/实时链路估算所引用的）
+// 直探超时默认与上界与共享契约包一致（FR-446 复审 NEW-ISSUE A）：任一处改走独立字面量即失败。
+func TestDirectProbeTimeoutBoundMatchesSharedContract(t *testing.T) {
+	require.Equal(t, directprobe.DefaultTimeout, defaultDirectProbeTimeout)
+	require.Equal(t, directprobe.MaxTimeout, maxDirectProbeTimeout)
+	require.Equal(t, directprobe.ProbeScrapeTimeoutCap, probeScrapeTimeoutCap)
+
+	// 上界由心跳护栏反推：两个来源都取上界时，单拍预算仍须 ≤ 节拍 − 余量。
+	require.LessOrEqual(t,
+		directprobe.CollectBudgetFor(directprobe.MaxTimeout, directprobe.MaxTimeout)+directprobe.HeartbeatTickReserve,
+		directprobe.HeartbeatInterval)
+}
+
+// TestDirectProbeTimeoutsFallsBackOnBadPersistedValue 落库值非法时回退默认，不把消费方卡死。
+func TestDirectProbeTimeoutsFallsBackOnBadPersistedValue(t *testing.T) {
+	db := newSettingsTestDB(t)
+	require.NoError(t, db.Save(&model.PlatformSetting{Key: SettingKeyDirectProbeQueryTimeout, Value: "garbage"}).Error)
+	svc := NewSettingsService(db, testConfig())
+
+	_, query := svc.DirectProbeTimeouts()
+	require.Equal(t, 3*time.Second, query)
+}
+
+// TestDirectProbeTimeoutsClampsReadSideToUpperBound 读/下发路径同样钳制到共享上界（FR-446 复审 N3）：
+// 绕过写校验直接落库（模拟 yaml/env 基线或历史值）也不得把生效超时推到上界之上，
+// 否则每实例每拍最坏阻塞量会拖垮心跳采集预算与节拍（NEW-ISSUE A）。
+func TestDirectProbeTimeoutsClampsReadSideToUpperBound(t *testing.T) {
+	db := newSettingsTestDB(t)
+	require.NoError(t, db.Save(&model.PlatformSetting{Key: SettingKeyDirectProbeSLPTimeout, Value: "90s"}).Error)
+	svc := NewSettingsService(db, testConfig())
+
+	slp, _ := svc.DirectProbeTimeouts()
+	require.Equal(t, maxDirectProbeTimeout, slp)
 }
 
 // TestUpdate_AtomicOnPartialInvalid 一批中有非法键时整体拒绝、合法键也不落库（原子性）。

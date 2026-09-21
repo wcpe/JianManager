@@ -62,6 +62,13 @@ type NodeProxyResolver interface {
 	EffectiveNodeProxyByUUID(nodeUUID string) (url, noProxy, generation string)
 }
 
+// DirectProbeTimeoutResolver 提供 MC 直探（SLP / Query）当前生效超时，供心跳响应下发（FR-446）。
+// 同 MetricIngester 以接口声明、由 service.SettingsService 实现，避免 grpc→service 反向依赖。
+// 返回 <=0 表示未配置（Worker 回退内置默认）。
+type DirectProbeTimeoutResolver interface {
+	DirectProbeTimeouts() (slp, query time.Duration)
+}
+
 // ControlPlaneHandler Control Plane 侧的 gRPC 处理器。
 // 处理来自 Worker Node 的 Register 和 Heartbeat 请求。
 // OrphanRuntimeIngester 心跳反向对账入口（FR-326）；由 service.OrphanRuntimeTracker 实现。
@@ -74,12 +81,13 @@ type ControlPlaneHandler struct {
 	workerpb.WorkerServiceServer
 	db            *gorm.DB
 	pool          *ClientPool
-	metrics       MetricIngester        // 时序指标入库（nil 时心跳不落时序）
-	tasks         TaskIngester          // 任务进度入库（nil 时心跳不落任务，FR-183）
-	enroll        EnrollmentValidator   // enrollment token 校验消费（nil 时退化为 FR-004 自助注册）
-	proxy         NodeProxyResolver     // 节点期望代理解析（nil 时心跳响应不携带代理，FR-185）
-	wsTokenSecret string                // CP↔Worker WS 令牌密钥（空时注册/心跳响应不携带，FR-275）
-	orphans       OrphanRuntimeIngester // 反向对账（nil 时不启用，FR-326）
+	metrics       MetricIngester             // 时序指标入库（nil 时心跳不落时序）
+	tasks         TaskIngester               // 任务进度入库（nil 时心跳不落任务，FR-183）
+	enroll        EnrollmentValidator        // enrollment token 校验消费（nil 时退化为 FR-004 自助注册）
+	proxy         NodeProxyResolver          // 节点期望代理解析（nil 时心跳响应不携带代理，FR-185）
+	directProbe   DirectProbeTimeoutResolver // MC 直探超时解析（nil 时心跳响应不携带直探超时，FR-446）
+	wsTokenSecret string                     // CP↔Worker WS 令牌密钥（空时注册/心跳响应不携带，FR-275）
+	orphans       OrphanRuntimeIngester      // 反向对账（nil 时不启用，FR-326）
 	// evidence 进程侧证据拉取客户端（nil 时 syncInstanceStates 退化为旧行为，FR-455③）。
 	evidence EvidenceProbeClient
 	// orphanAudit 孤儿处置审计落库器（nil 时丢弃上报，FR-455/456）。
@@ -141,6 +149,13 @@ func (h *ControlPlaneHandler) SetEnrollmentValidator(v EnrollmentValidator) {
 // 变化运行时重建出站 client；不注入则心跳响应不带代理（退化为 Worker 仅用本地 yaml/env，向后兼容）。
 func (h *ControlPlaneHandler) SetNodeProxyResolver(r NodeProxyResolver) {
 	h.proxy = r
+}
+
+// SetDirectProbeTimeoutResolver 注入 MC 直探超时解析器（FR-446）。
+// 注入后每次心跳响应携带直探超时毫秒值，Worker 据此配置采集编排链（无需重启 Worker）；
+// 不注入则心跳响应不带该字段（0），Worker 回退内置默认 3s（向后兼容）。
+func (h *ControlPlaneHandler) SetDirectProbeTimeoutResolver(r DirectProbeTimeoutResolver) {
+	h.directProbe = r
 }
 
 // SetOrphanRuntimeIngester 注入实例反向对账跟踪器（FR-326）。
@@ -407,6 +422,13 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		resp.WsTokenSecret = h.wsTokenSecret
 		if h.proxy != nil {
 			resp.ProxyUrl, resp.ProxyNoProxy, resp.ProxyGeneration = h.proxy.EffectiveNodeProxyByUUID(req.NodeUuid)
+		}
+		// 携带 MC 直探（SLP / Query）超时（FR-446）：取自平台设置 direct_probe.*，Worker 存内存
+		// 并填入采集编排链，使超时真可配且无需重启 Worker。每次心跳重发，幂等。
+		if h.directProbe != nil {
+			slp, query := h.directProbe.DirectProbeTimeouts()
+			resp.DirectProbeSlpTimeoutMs = int32(slp / time.Millisecond)
+			resp.DirectProbeQueryTimeoutMs = int32(query / time.Millisecond)
 		}
 		// 携带该节点「已请求取消」的任务 id，Worker 据此真中断对应运行中任务（FR-227）。
 		if h.tasks != nil {

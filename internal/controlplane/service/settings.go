@@ -12,6 +12,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/platform/directprobe"
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
@@ -34,6 +35,11 @@ const (
 	// SettingKeyGracefulStopTimeout 优雅停止超时（Go duration 文本）。
 	// 启动实例时 CP 取生效值经 CreateInstanceRequest 下发 Worker→wrapper，对其后新启动的实例生效（FR-063）。
 	SettingKeyGracefulStopTimeout = "graceful_stop.timeout"
+	// SettingKeyDirectProbeSLPTimeout / QueryTimeout 是 MC 直探（SLP / Query）超时（Go duration 文本，FR-446）。
+	// 心跳响应按拍下发（HeartbeatResponse.direct_probe_*_timeout_ms），Worker 填入采集编排链；
+	// 与 graceful_stop.timeout 同风格：DB 覆盖 > 基线默认，Worker 侧生效、无需重启。
+	SettingKeyDirectProbeSLPTimeout   = "direct_probe.slp_timeout"
+	SettingKeyDirectProbeQueryTimeout = "direct_probe.query_timeout"
 	// SettingKeyBackupRetentionDays 默认备份保留天数（整数）。CP 后台巡检据此裁剪超期备份（FR-063）。
 	SettingKeyBackupRetentionDays = "backup.retention_days"
 	// SettingKeyProxyURL CP 出站代理地址（network 类，FR-185/ADR-043）。敏感（脱敏展示）。
@@ -153,6 +159,50 @@ func (s *SettingsService) EffectiveProxy() httpclient.Config {
 	return httpclient.Config{URL: url, NoProxy: noProxy}
 }
 
+// DirectProbeTimeouts 返回 MC 直探（SLP / Query）当前生效超时（FR-446）。
+// 心跳响应据此下发毫秒值给 Worker，使其填入采集编排链（无需重启 Worker）。
+// 值非法/无覆盖时回退基线默认（3s），保证消费方始终拿到可用正超时。
+func (s *SettingsService) DirectProbeTimeouts() (slp, query time.Duration) {
+	return parseDurationOr(s.EffectiveValue(SettingKeyDirectProbeSLPTimeout), defaultDirectProbeTimeout),
+		parseDurationOr(s.EffectiveValue(SettingKeyDirectProbeQueryTimeout), defaultDirectProbeTimeout)
+}
+
+// defaultDirectProbeTimeout / maxDirectProbeTimeout / probeScrapeTimeoutCap 是 MC 直探相关数值。
+//
+// **单一来源**：一律引用 internal/platform/directprobe（FR-446 复审 NEW-ISSUE A），
+// 与 Worker 侧（`internal/worker/metrics` 的归一、`internal/worker/heartbeat` 的采集预算）
+// 引用同一批常量。上界 maxDirectProbeTimeout 由心跳节拍护栏反推（推导见 directprobe 包文档），
+// 故「超时可配」与「心跳护栏」不可能再出现各写一份字面量而互相矛盾的情况。
+const (
+	// defaultDirectProbeTimeout 是 MC 直探超时基线（未配置时生效）。
+	defaultDirectProbeTimeout = directprobe.DefaultTimeout
+	// maxDirectProbeTimeout 是 MC 直探超时上界：写路径（validateSettingValue）拒收超限值，
+	// 读取/下发路径（parseDurationOr）同样钳制到本上界，令 yaml/env 基线或历史落库值也不会突破。
+	maxDirectProbeTimeout = directprobe.MaxTimeout
+	// probeScrapeTimeoutCap 是 Worker 抓取 ServerProbe `/metrics` 的硬编码 HTTP 上限
+	// （见 internal/worker/metrics.ScrapeServerProbe），仅用于 CP 侧估算实时链路最坏时延
+	// （见 InstanceService.metricsFetchTimeout），非可配项。
+	probeScrapeTimeoutCap = directprobe.ProbeScrapeTimeoutCap
+)
+
+// realtimeMetricsBudgetMargin 是实时指标链路额外余量：吸收 gRPC 往返、容器/进程采样与调度抖动，
+// 使 CP 侧截止始终严格大于 Worker 侧串行编排链的最坏时延。
+const realtimeMetricsBudgetMargin = 5 * time.Second
+
+// parseDurationOr 解析 Go duration 文本；解析失败或非正时回退 fallback，并钳制到 MC 直探超时上界。
+// 仅供直探超时（SLP/Query）读取，故读侧钳制与写侧校验对称（FR-446 复审 N3）：基线（yaml/env）或
+// 历史落库值即便超限也只以 maxDirectProbeTimeout 生效，不让无限大超时冻结详情页与采集链。
+//
+// 归一委托 directprobe.NormalizeTimeout（FR-446 复审 NEW-ISSUE A）：与 Worker 侧归一、CP 写校验
+// 引用同一上界，三处不可能漂移。
+func parseDurationOr(raw string, fallback time.Duration) time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return directprobe.NormalizeTimeout(d)
+}
+
 // SettingItem 单个配置项的对外表示。
 type SettingItem struct {
 	Key string `json:"key"`
@@ -191,6 +241,9 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		// Node.js dist 镜像源（FR-299）：随安装下发 Worker（同 jdk.mirror.*，非 CP 内即时生效）。
 		s.editableItem(SettingKeyRuntimeMirrorNodeJS, s.defaultValue(SettingKeyRuntimeMirrorNodeJS), overrides, false),
 		s.editableItem(SettingKeyGracefulStopTimeout, s.defaultValue(SettingKeyGracefulStopTimeout), overrides, false),
+		// MC 直探超时（FR-446）：经心跳下发 Worker，Worker 侧生效（非 CP 内即时生效）。
+		s.editableItem(SettingKeyDirectProbeSLPTimeout, s.defaultValue(SettingKeyDirectProbeSLPTimeout), overrides, false),
+		s.editableItem(SettingKeyDirectProbeQueryTimeout, s.defaultValue(SettingKeyDirectProbeQueryTimeout), overrides, false),
 		s.editableItem(SettingKeyBackupRetentionDays, s.defaultValue(SettingKeyBackupRetentionDays), overrides, false),
 		// 出站代理（network 类，FR-185/ADR-043）：保存即在 CP 内重建出站持有者（即时生效）。
 		// proxy.url 标 sensitive：含凭据时回显脱敏（仅展示 scheme://host:port），不外泄明文密码。
@@ -373,6 +426,8 @@ func (s *SettingsService) defaultValue(key string) string {
 		return "https://nodejs.org/dist"
 	case SettingKeyGracefulStopTimeout:
 		return "30s"
+	case SettingKeyDirectProbeSLPTimeout, SettingKeyDirectProbeQueryTimeout:
+		return "3s"
 	case SettingKeyBackupRetentionDays:
 		return strconv.Itoa(s.cfg.LogStore.RetentionDays)
 	case SettingKeyProxyURL:
@@ -451,6 +506,7 @@ func isWritableSettingKey(key string) bool {
 		SettingKeyJDKMirrorTemurin, SettingKeyJDKMirrorCorretto, SettingKeyJDKMirrorZulu,
 		SettingKeyRuntimeMirrorNodeJS,
 		SettingKeyGracefulStopTimeout, SettingKeyBackupRetentionDays,
+		SettingKeyDirectProbeSLPTimeout, SettingKeyDirectProbeQueryTimeout,
 		SettingKeyProxyURL, SettingKeyProxyNoProxy,
 		SettingKeyOrphanGracePeriod, SettingKeyOrphanAutoDispose,
 		SettingKeyPlatformPublicBaseURL, SettingKeyInviteSMTPHost, SettingKeyInviteSMTPPort,
@@ -476,6 +532,19 @@ func validateSettingValue(key, val string) error {
 		d, err := time.ParseDuration(val)
 		if err != nil || d <= 0 {
 			return fmt.Errorf("%w: 优雅停止超时须为正的 Go duration（如 30s）", ErrSettingValueInvalid)
+		}
+	case SettingKeyDirectProbeSLPTimeout, SettingKeyDirectProbeQueryTimeout:
+		d, err := time.ParseDuration(val)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("%w: MC 直探超时须为正的 Go duration（如 3s）", ErrSettingValueInvalid)
+		}
+		// 上界守护：直探超时是每实例每拍的最坏阻塞量，过大直接把心跳节拍拖垮（见 ADR-013 与
+		// FR-446 审计项 2 / 复审 NEW-ISSUE A）。上界由节拍护栏反推（directprobe.MaxTimeout），
+		// 超出拒绝而非静默截断，使「可配」与「护栏」始终自洽。
+		if d > maxDirectProbeTimeout {
+			return fmt.Errorf("%w: MC 直探超时不得大于 %s（单拍采集预算 = 余量 + 探针 %s + slp + query，"+
+				"必须小于 %s 心跳节拍）", ErrSettingValueInvalid,
+				maxDirectProbeTimeout, probeScrapeTimeoutCap, directprobe.HeartbeatInterval)
 		}
 	case SettingKeyBackupRetentionDays:
 		n, err := strconv.Atoi(val)

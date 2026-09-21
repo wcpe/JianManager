@@ -22,8 +22,12 @@ type QuerySnapshot struct {
 	Map           string
 	PlayersOnline int32
 	PlayersMax    int32
-	PlayerNames   []string // 实名玩家名单（唯一可信来源）
-	HostPort      int
+	// PlayersOnlineAvailable 报告 numplayers 键**存在且可解析**（FR-447）。
+	// Query 有响应但缺 numplayers 时该位为 false：编排链据此保持「在线人数不可用」，
+	// 绝不把「协议未给出」伪装成 0 在线。
+	PlayersOnlineAvailable bool
+	PlayerNames            []string // 实名玩家名单（唯一可信来源）
+	HostPort               int
 }
 
 const (
@@ -35,7 +39,18 @@ const (
 	queryTypeStat = 0x00
 	// queryMaxResponseBytes 是 Query 响应（含分片拼接）上限，防内存放大。
 	queryMaxResponseBytes = 64 << 10 // 64KiB
+	// queryMaxFragments 是 Full Stat 分片数上限：既是内存/循环次数的兜底，也让畸形（或伪造）
+	// 响应无法把分片计数拉到任意大而空转接收循环。
+	queryMaxFragments = 64
 	// querySplitHeaderLen 是 Full Stat 负载前的固定头长度："splitnum\0" + 分片计数 + 分片索引。
+	//
+	// ⚠ 协议假设（**未经真机验证**，FR-446 审计项 6）：本实现对「多分片」的判定是
+	// 「**每一片**负载都以 11 字节 splitnum 头（"splitnum\0" + count + index）开头」。
+	// 该假设源自社区对 Notchian 服务端的逆向描述，**未在本项目的真机环境验证过**：
+	// 不同服务端/版本在分片时的头布局、count 高位 0x80 语义、以及分片是否一定带该头，
+	// 都只有单包路径被真机覆盖（现代服务端响应很小，几乎总是单包）。若遇到分片响应解析失败，
+	// 应先用 tcpdump/Wireshark 抓取真实 UDP 分片再据实修正，而不是只调这里的常量。
+	// 单包路径（count 高位 0x80 或无该头）不依赖此假设。
 	querySplitHeaderLen = 11
 	// querySessionID 是会话 ID；MC 只用低 4 位且现代版本不校验，固定值即可。
 	querySessionID = 0x01
@@ -151,6 +166,7 @@ func readQueryDatagram(conn net.Conn) ([]byte, error) {
 
 // readQueryFullStatDatagrams 读取 Full Stat 响应；分片时按分片头继续收下一片直到完整、读到超时或超上限。
 // 已有分片后再读超时按「分片收齐」处理（UDP 无流结束标记，best-effort）。
+// 上限有两道：总字节 queryMaxResponseBytes（防内存放大）与分片数 queryMaxFragments（防畸形响应空转）。
 func readQueryFullStatDatagrams(conn net.Conn) ([][]byte, error) {
 	var out [][]byte
 	total := 0
@@ -167,6 +183,9 @@ func readQueryFullStatDatagrams(conn net.Conn) ([][]byte, error) {
 			return nil, fmt.Errorf("Query 响应超过上限 %d 字节", queryMaxResponseBytes)
 		}
 		out = append(out, d)
+		if len(out) > queryMaxFragments {
+			return nil, fmt.Errorf("Query Full Stat 分片数超过上限 %d", queryMaxFragments)
+		}
 		if queryResponseComplete(out) {
 			return out, nil
 		}
@@ -330,6 +349,7 @@ func buildQuerySnapshot(kv map[string]string, players []string) *QuerySnapshot {
 	}
 	if v, err := strconv.Atoi(strings.TrimSpace(kv["numplayers"])); err == nil {
 		snap.PlayersOnline = int32(v)
+		snap.PlayersOnlineAvailable = true
 	}
 	if v, err := strconv.Atoi(strings.TrimSpace(kv["maxplayers"])); err == nil {
 		snap.PlayersMax = int32(v)
@@ -343,11 +363,25 @@ func buildQuerySnapshot(kv map[string]string, players []string) *QuerySnapshot {
 
 // splitQueryPlugins 把 Query 的 plugins 字段拆成插件名列表。
 // 原始格式形如 "CraftBukkit on Bukkit 1.2.5-R4.0: WorldEdit 5.3; CommandBook 2.1" 或 "Paper on 1.20.4"，
-// 以 ";" 或 "," 分隔；空串（vanilla）返回 nil。首段可能是服务端软件描述，一并保留。
+// 以 ";" 或 "," 分隔；空串返回 nil。
+//
+// 服务端软件描述与插件列表以 ":" 分隔（":" 之前是 "CraftBukkit on Bukkit 1.2.5-R4.0" 这类软件/平台
+// 描述，不是插件），直接按分隔符切分会把软件描述与第一个插件粘连成一个假插件名，故丢弃该描述段
+// （FR-446 审计项 8）。**但剥离须加形态判别**（FR-446 复审 N8）：无软件描述段、只在插件名里含 ":"
+// 的服务器（如 "MyPlugin:v1.0; OtherPlugin"）若一律剥到首个 ":" 之后，会误截插件名。故仅当前缀
+// 形态像软件名时剥离（见 looksLikeServerSoftware），否则整段按插件列表处理。
+// 无 ":" 时同样整段按插件列表处理：部分服务端（含 vanilla 的 "vanilla"）只用该字段报软件名，
+// 此时它会作为一个条目出现，属预期。
 func splitQueryPlugins(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
+	}
+	if idx := strings.IndexByte(raw, ':'); idx >= 0 {
+		prefix := raw[:idx]
+		if looksLikeServerSoftware(prefix) {
+			raw = raw[idx+1:]
+		}
 	}
 	var out []string
 	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ';' || r == ',' }) {
@@ -356,4 +390,36 @@ func splitQueryPlugins(raw string) []string {
 		}
 	}
 	return out
+}
+
+// knownServerSoftware 是"裸软件名"形态的白名单（用于 looksLikeServerSoftware 的第二种形态）。
+// 仅在 plugins 字段以 "<软件名>: <插件列表>"（无 " on " 描述段）出现时用于判别，避免把含 ":" 的
+// 插件名误当软件描述段剥离。用小写比较。
+var knownServerSoftware = map[string]struct{}{
+	"bukkit": {}, "craftbukkit": {}, "spigot": {}, "paper": {}, "purpur": {}, "folia": {},
+	"forge": {}, "neoforge": {}, "fabric": {}, "quilt": {}, "vanilla": {},
+	"glowstone": {}, "sponge": {}, "spongeforge": {}, "spongevanilla": {},
+	"mohist": {}, "magma": {}, "catserver": {}, "arclight": {},
+	"bungeecord": {}, "waterfall": {}, "velocity": {}, "travertine": {}, "pufferfish": {},
+	"leaves": {}, "peaceful": {},
+}
+
+// looksLikeServerSoftware 判别 ":" 之前的前缀是否像"服务端软件描述段"（可安全剥离），
+// 而非含 ":" 的插件名的一部分（FR-446 复审 N8）。两种形态：
+//  1. `<软件> on <平台/版本>`：Bukkit 家族的标准形态，前缀含 " on "；
+//  2. 裸软件名：整个前缀（无空白）恰为已知服务端软件名，如 "Bukkit"、"Spigot"。
+//
+// 其余形态（如 "MyPlugin"、"My Plugin"、"MyPlugin:v1"）一律判定为**不像**软件名，不剥离，
+// 以免误截插件名——代价是无描述段又非白名单软件名时不剥前缀，最多留下一个稍不干净的条目，
+// 绝不丢数据。
+func looksLikeServerSoftware(prefix string) bool {
+	p := strings.ToLower(strings.TrimSpace(prefix))
+	if p == "" {
+		return false
+	}
+	if strings.Contains(p, " on ") {
+		return true
+	}
+	_, ok := knownServerSoftware[p]
+	return ok
 }

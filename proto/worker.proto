@@ -445,10 +445,18 @@ message InstanceMetricSample {
   repeated string player_names = 16;   // 实名优先取 Query，否则 SLP sample（弱信息）
   repeated string plugins = 17;        // 仅 Query 提供
   string map = 18;                     // 仅 Query 提供
-  bytes source_mask = 19;              // 本拍命中来源位：1=探针 2=SLP 4=Query
+  bytes source_mask = 19;              // 本拍命中来源位：1=探针 2=SLP 4=Query（预留，心跳当前不填）
   bool slp_available = 20;             // 本拍 SLP 是否可用
   bool query_available = 21;           // 本拍 Query 是否可用
-  bool player_names_partial = 22;      // true=名单取自 SLP sample（可能不完整，非实名）
+  bool player_names_partial = 22;      // true=名单取自 SLP sample（可能不完整，非实名）；预留，心跳当前不填
+  // players_online_available 记录本拍在线人数是否真实可用（FR-447）。Query 有响应但响应里缺
+  // numplayers（或不可解析）时该位为 false：CP 据此落 NULL 断点，绝不把「缺测」伪装成 0 在线。
+  // 老 Worker 不置该位（false），CP 侧对「探针可用」的新老样本另有兼容判定。
+  bool players_online_available = 23;
+  // 上方的 motd / version / max_players / player_names / plugins / map / source_mask /
+  // player_names_partial 是**预留字段**：实时详情链路（GetInstanceMetrics）已端到端提供这些值，
+  // 而心跳时序链路（本消息）的 CP 消费者只用到可用位与 players_online；故 Worker 不再每拍填充，
+  // 避免 69 实例规模下每 30s 的文本载荷放大（FR-446 审计项 3）。
 }
 
 // ProcessMetricSample 受管实例进程 TOPN 快照（FR-170）。
@@ -498,6 +506,13 @@ message HeartbeatResponse {
   // 与当前生效值不同才热应用 + 持久化——CP 轮换密钥后 Worker 不重启即自愈（≤1 心跳周期）。
   // 空 = 旧 CP 未下发，Worker 不动作。
   string ws_token_secret = 6;
+  // direct_probe_slp_timeout_ms / direct_probe_query_timeout_ms 是 CP 下发的 MC 直探
+  // （SLP / Query）超时毫秒值（FR-446）：取自平台设置 direct_probe.slp_timeout /
+  // direct_probe.query_timeout（Go duration 文本）。Worker 存内存并填入心跳与实时两条
+  // 采集链路的 metrics.CollectConfig，使超时真可配且无需重启 Worker。
+  // <=0 = 未配置（老 CP 不下发），Worker 回退内置默认 3s。
+  int32 direct_probe_slp_timeout_ms = 7;
+  int32 direct_probe_query_timeout_ms = 8;
 }
 
 // === 实例操作 ===

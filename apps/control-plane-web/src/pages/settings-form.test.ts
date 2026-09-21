@@ -5,6 +5,7 @@ import {
   keyCategory,
   validateSettingDraft,
   hasInvalidDraft,
+  MAX_DIRECT_PROBE_TIMEOUT_MS,
   type DraftDiffItem,
 } from './settings-form'
 
@@ -58,6 +59,17 @@ describe('validateSettingDraft（与后端 validateSettingValue 规则一致）'
     ['graceful_stop.timeout', '30', false],
     ['graceful_stop.timeout', '0s', false],
     ['graceful_stop.timeout', '-5s', false],
+    // direct_probe.*（FR-446 MC 直探超时）：同 Go duration 规则，另限上界（= directprobe.MaxTimeout，10s）
+    ['direct_probe.slp_timeout', '3s', true],
+    ['direct_probe.slp_timeout', '1500ms', true],
+    ['direct_probe.slp_timeout', '10s', true],
+    ['direct_probe.query_timeout', '2s', true],
+    ['direct_probe.query_timeout', '10s', true],
+    ['direct_probe.query_timeout', 'abc', false],
+    ['direct_probe.query_timeout', '0s', false],
+    ['direct_probe.query_timeout', '11s', false],
+    ['direct_probe.query_timeout', '10001ms', false],
+    ['direct_probe.query_timeout', '1m', false],
     // backup.retention_days：非负整数
     ['backup.retention_days', '0', true],
     ['backup.retention_days', '30', true],
@@ -91,6 +103,21 @@ describe('hasInvalidDraft', () => {
   })
   it('草稿缺省回落当前值（合法）为 false', () => {
     expect(hasInvalidDraft(items, {})).toBe(false)
+  })
+})
+
+describe('MAX_DIRECT_PROBE_TIMEOUT_MS（与后端 directprobe.MaxTimeout 同值，10s）', () => {
+  it('上界为 10s，且边界恰好可接受、多 1ms 即拒绝', () => {
+    // 由「单拍采集预算 < 30s 心跳节拍」反推：余量 1s + 探针 5s + slp + query ≤ 30s − 4s。
+    expect(MAX_DIRECT_PROBE_TIMEOUT_MS).toBe(10_000)
+    expect(validateSettingDraft('direct_probe.slp_timeout', '10s')).toBeUndefined()
+    expect(validateSettingDraft('direct_probe.slp_timeout', '10000ms')).toBeUndefined()
+    expect(validateSettingDraft('direct_probe.slp_timeout', '10001ms')).toBe(
+      'settings.invalidDirectProbeTimeout',
+    )
+    expect(validateSettingDraft('direct_probe.query_timeout', '10.001s')).toBe(
+      'settings.invalidDirectProbeTimeout',
+    )
   })
 })
 

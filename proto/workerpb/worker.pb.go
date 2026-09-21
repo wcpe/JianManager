@@ -1019,12 +1019,16 @@ type InstanceMetricSample struct {
 	PlayerNames        []string `protobuf:"bytes,16,rep,name=player_names,json=playerNames,proto3" json:"player_names,omitempty"`                         // 实名优先取 Query，否则 SLP sample（弱信息）
 	Plugins            []string `protobuf:"bytes,17,rep,name=plugins,proto3" json:"plugins,omitempty"`                                                    // 仅 Query 提供
 	Map                string   `protobuf:"bytes,18,opt,name=map,proto3" json:"map,omitempty"`                                                            // 仅 Query 提供
-	SourceMask         []byte   `protobuf:"bytes,19,opt,name=source_mask,json=sourceMask,proto3" json:"source_mask,omitempty"`                            // 本拍命中来源位：1=探针 2=SLP 4=Query
+	SourceMask         []byte   `protobuf:"bytes,19,opt,name=source_mask,json=sourceMask,proto3" json:"source_mask,omitempty"`                            // 本拍命中来源位：1=探针 2=SLP 4=Query（预留，心跳当前不填）
 	SlpAvailable       bool     `protobuf:"varint,20,opt,name=slp_available,json=slpAvailable,proto3" json:"slp_available,omitempty"`                     // 本拍 SLP 是否可用
 	QueryAvailable     bool     `protobuf:"varint,21,opt,name=query_available,json=queryAvailable,proto3" json:"query_available,omitempty"`               // 本拍 Query 是否可用
-	PlayerNamesPartial bool     `protobuf:"varint,22,opt,name=player_names_partial,json=playerNamesPartial,proto3" json:"player_names_partial,omitempty"` // true=名单取自 SLP sample（可能不完整，非实名）
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	PlayerNamesPartial bool     `protobuf:"varint,22,opt,name=player_names_partial,json=playerNamesPartial,proto3" json:"player_names_partial,omitempty"` // true=名单取自 SLP sample（可能不完整，非实名）；预留，心跳当前不填
+	// players_online_available 记录本拍在线人数是否真实可用（FR-447）。Query 有响应但响应里缺
+	// numplayers（或不可解析）时该位为 false：CP 据此落 NULL 断点，绝不把「缺测」伪装成 0 在线。
+	// 老 Worker 不置该位（false），CP 侧对「探针可用」的新老样本另有兼容判定。
+	PlayersOnlineAvailable bool `protobuf:"varint,23,opt,name=players_online_available,json=playersOnlineAvailable,proto3" json:"players_online_available,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *InstanceMetricSample) Reset() {
@@ -1207,6 +1211,13 @@ func (x *InstanceMetricSample) GetQueryAvailable() bool {
 func (x *InstanceMetricSample) GetPlayerNamesPartial() bool {
 	if x != nil {
 		return x.PlayerNamesPartial
+	}
+	return false
+}
+
+func (x *InstanceMetricSample) GetPlayersOnlineAvailable() bool {
+	if x != nil {
+		return x.PlayersOnlineAvailable
 	}
 	return false
 }
@@ -1479,8 +1490,15 @@ type HeartbeatResponse struct {
 	// 与当前生效值不同才热应用 + 持久化——CP 轮换密钥后 Worker 不重启即自愈（≤1 心跳周期）。
 	// 空 = 旧 CP 未下发，Worker 不动作。
 	WsTokenSecret string `protobuf:"bytes,6,opt,name=ws_token_secret,json=wsTokenSecret,proto3" json:"ws_token_secret,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// direct_probe_slp_timeout_ms / direct_probe_query_timeout_ms 是 CP 下发的 MC 直探
+	// （SLP / Query）超时毫秒值（FR-446）：取自平台设置 direct_probe.slp_timeout /
+	// direct_probe.query_timeout（Go duration 文本）。Worker 存内存并填入心跳与实时两条
+	// 采集链路的 metrics.CollectConfig，使超时真可配且无需重启 Worker。
+	// <=0 = 未配置（老 CP 不下发），Worker 回退内置默认 3s。
+	DirectProbeSlpTimeoutMs   int32 `protobuf:"varint,7,opt,name=direct_probe_slp_timeout_ms,json=directProbeSlpTimeoutMs,proto3" json:"direct_probe_slp_timeout_ms,omitempty"`
+	DirectProbeQueryTimeoutMs int32 `protobuf:"varint,8,opt,name=direct_probe_query_timeout_ms,json=directProbeQueryTimeoutMs,proto3" json:"direct_probe_query_timeout_ms,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *HeartbeatResponse) Reset() {
@@ -1553,6 +1571,20 @@ func (x *HeartbeatResponse) GetWsTokenSecret() string {
 		return x.WsTokenSecret
 	}
 	return ""
+}
+
+func (x *HeartbeatResponse) GetDirectProbeSlpTimeoutMs() int32 {
+	if x != nil {
+		return x.DirectProbeSlpTimeoutMs
+	}
+	return 0
+}
+
+func (x *HeartbeatResponse) GetDirectProbeQueryTimeoutMs() int32 {
+	if x != nil {
+		return x.DirectProbeQueryTimeoutMs
+	}
+	return 0
 }
 
 type CreateInstanceRequest struct {
@@ -16526,7 +16558,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\"N\n" +
 	"\x1cDisposeOrphanRuntimeResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xfc\x05\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xb6\x06\n" +
 	"\x14InstanceMetricSample\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12'\n" +
 	"\x0fprobe_available\x18\x02 \x01(\bR\x0eprobeAvailable\x12\x10\n" +
@@ -16553,7 +16585,8 @@ const file_proto_worker_proto_rawDesc = "" +
 	"sourceMask\x12#\n" +
 	"\rslp_available\x18\x14 \x01(\bR\fslpAvailable\x12'\n" +
 	"\x0fquery_available\x18\x15 \x01(\bR\x0equeryAvailable\x120\n" +
-	"\x14player_names_partial\x18\x16 \x01(\bR\x12playerNamesPartial\"\xe4\x02\n" +
+	"\x14player_names_partial\x18\x16 \x01(\bR\x12playerNamesPartial\x128\n" +
+	"\x18players_online_available\x18\x17 \x01(\bR\x16playersOnlineAvailable\"\xe4\x02\n" +
 	"\x13ProcessMetricSample\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x10\n" +
 	"\x03pid\x18\x02 \x01(\x05R\x03pid\x12\x12\n" +
@@ -16588,14 +16621,16 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x11_bot_active_countB\x17\n" +
 	"\x15_bot_connecting_countB\x18\n" +
 	"\x16_bot_event_loop_p95_msB\x13\n" +
-	"\x11_bot_capacity_max\"\xef\x01\n" +
+	"\x11_bot_capacity_max\"\xef\x02\n" +
 	"\x11HeartbeatResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\x12\x1b\n" +
 	"\tproxy_url\x18\x02 \x01(\tR\bproxyUrl\x12$\n" +
 	"\x0eproxy_no_proxy\x18\x03 \x01(\tR\fproxyNoProxy\x12)\n" +
 	"\x10proxy_generation\x18\x04 \x01(\tR\x0fproxyGeneration\x12&\n" +
 	"\x0fcancel_task_ids\x18\x05 \x03(\tR\rcancelTaskIds\x12&\n" +
-	"\x0fws_token_secret\x18\x06 \x01(\tR\rwsTokenSecret\"\xa2\x06\n" +
+	"\x0fws_token_secret\x18\x06 \x01(\tR\rwsTokenSecret\x12<\n" +
+	"\x1bdirect_probe_slp_timeout_ms\x18\a \x01(\x05R\x17directProbeSlpTimeoutMs\x12@\n" +
+	"\x1ddirect_probe_query_timeout_ms\x18\b \x01(\x05R\x19directProbeQueryTimeoutMs\"\xa2\x06\n" +
 	"\x15CreateInstanceRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +

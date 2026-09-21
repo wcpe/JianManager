@@ -227,3 +227,60 @@ func TestQueryServerUnavailable(t *testing.T) {
 	_, err = QueryServer("127.0.0.1", port, 300*time.Millisecond)
 	assert.Error(t, err)
 }
+
+// TestBuildQuerySnapshotNumplayersPresence 只有 numplayers 存在且可解析才置可用位（FR-447 不伪造 0）。
+func TestBuildQuerySnapshotNumplayersPresence(t *testing.T) {
+	present := buildQuerySnapshot(map[string]string{"numplayers": "0", "maxplayers": "20"}, nil)
+	assert.True(t, present.PlayersOnlineAvailable, "numplayers=0 是真实值，仍算可用")
+	assert.Equal(t, int32(0), present.PlayersOnline)
+
+	missing := buildQuerySnapshot(map[string]string{"maxplayers": "20"}, nil)
+	assert.False(t, missing.PlayersOnlineAvailable, "缺 numplayers 不得声称可用")
+
+	unparsable := buildQuerySnapshot(map[string]string{"numplayers": "n/a"}, nil)
+	assert.False(t, unparsable.PlayersOnlineAvailable, "numplayers 不可解析不得声称可用")
+}
+
+// TestSplitQueryPluginsStripsServerSoftware 首元素粘连的服务端软件描述应被剥离（FR-446 审计项 8）。
+func TestSplitQueryPluginsStripsServerSoftware(t *testing.T) {
+	assert.Equal(t, []string{"WorldEdit 5.3", "CommandBook 2.1"},
+		splitQueryPlugins("CraftBukkit on Bukkit 1.2.5-R4.0: WorldEdit 5.3; CommandBook 2.1"))
+	// 无 ":" 的"仅软件名"形态（含 vanilla）原样保留，属预期（见 splitQueryPlugins 注释）。
+	assert.Equal(t, []string{"vanilla"}, splitQueryPlugins("vanilla"))
+	assert.Equal(t, []string{"Paper on 1.20.4", "WorldEdit 7.2"},
+		splitQueryPlugins("Paper on 1.20.4; WorldEdit 7.2"))
+	// 裸软件名形态（无 " on " 描述段）：白名单命中时剥离。
+	assert.Equal(t, []string{"WorldEdit 5.3"}, splitQueryPlugins("Bukkit: WorldEdit 5.3"))
+}
+
+// TestSplitQueryPluginsKeepsColonInPluginName 无软件描述段、插件名含 ":" 时不得误截（FR-446 复审 N8）：
+// 一律剥到首个 ":" 会把 "MyPlugin:v1.0" 截成 "v1.0"。
+func TestSplitQueryPluginsKeepsColonInPluginName(t *testing.T) {
+	assert.Equal(t, []string{"MyPlugin:v1.0", "OtherPlugin"},
+		splitQueryPlugins("MyPlugin:v1.0; OtherPlugin"))
+	// 插件名含空白但不含 " on " 亦不剥离（非软件名形态）。
+	assert.Equal(t, []string{"My Plugin:v2", "Other"},
+		splitQueryPlugins("My Plugin:v2; Other"))
+}
+
+// repeatingDatagramConn 每次 Read 都返回同一份数据报，用于验证接收循环的兜底上限。
+type repeatingDatagramConn struct{ datagram []byte }
+
+func (c *repeatingDatagramConn) Read(p []byte) (int, error)       { return copy(p, c.datagram), nil }
+func (c *repeatingDatagramConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (c *repeatingDatagramConn) Close() error                     { return nil }
+func (c *repeatingDatagramConn) LocalAddr() net.Addr              { return nil }
+func (c *repeatingDatagramConn) RemoteAddr() net.Addr             { return nil }
+func (c *repeatingDatagramConn) SetDeadline(time.Time) error      { return nil }
+func (c *repeatingDatagramConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *repeatingDatagramConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestReadQueryFullStatDatagramsFragmentCap 声明 100 片但永远收不齐时，分片数上限兜底而非空转（FR-446 审计项 9）。
+func TestReadQueryFullStatDatagramsFragmentCap(t *testing.T) {
+	conn := &repeatingDatagramConn{
+		datagram: buildQueryDatagram(queryTypeStat, buildFullStatFragment(100, 0, []byte("x"))),
+	}
+	_, err := readQueryFullStatDatagrams(conn)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "分片数超过上限")
+}
