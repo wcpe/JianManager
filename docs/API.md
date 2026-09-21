@@ -697,6 +697,14 @@
 - **响应** (200): `{ sampledAt, health, resources, bots, alerts, tasks, exceptions }`；`alerts`、`tasks`、`exceptions` 各最多 5 条，异常项提供既有 `/monitoring?...` 或 `/instances/:id` 下钻链接。`resources` 仅聚合鲜活节点；`bots.sharedRuntime=true`，RSS/CPU/Bot 数为共享进程观察值，绝不归属到单 Bot/会话。`bots.eventLoopP95Ms` 取可用节点 P95 的最大值（最差节点），无可用节点时为 `null` 且由 `unavailable` 说明。
 - **错误**: 403 `FORBIDDEN`；500 `INTERNAL_ERROR`。
 
+### GET /api/v1/observability/health-wall
+- **描述**: 集群健康墙（FR-461）。逐台节点一格的只读健康矩阵：每格含鲜度、资源水位、实例计数与活跃告警数，并给出分级 `offline|stale|degraded|healthy` 与一键下钻链接。只读 Control Plane 已持久化快照，一次查询给全，**不触发 Worker RPC**（无逐台 N+1）。
+- **关联 FR**: FR-461（增强 FR-402）
+- **权限**: 平台管理员。
+- **Query**: `sort=level|cpu|mem|disk|instances`（默认 `level`，按严重度降序）。
+- **响应** (200): `{ nodes: [{ nodeId, nodeUuid, name, zone?, freshness, cpuPct, memPct, diskPct, running, crashed, stopped, activeAlerts, botActive, botConnecting, level, href }] }`。资源水位仅对鲜活节点给出（陈旧/离线为 `null`）；`href` 为 `/monitoring?node=<uuid>`。节点全量（≤500）。
+- **错误**: 403 `FORBIDDEN`；500 `INTERNAL_ERROR`。
+
 ### GET /api/v1/metrics/resource-attribution
 - **描述**: 首页仪表 Tooltip 的有界受管资源归因。节点当前资源来自已认证 Heartbeat；实例/进程只来自 RUNNING 的 JianManager 受管实例进程树最新快照。Worker 与共享 Bot Worker 资源均为观察值，RSS 可能含共享页，不能与节点已用内存相加或当作单 Bot 资源。
 - **关联 FR**: FR-400
@@ -2117,9 +2125,10 @@
   }
   ```
 - **字段**:
-  - `triggerType`: `metric` | `instance_crash` | `node_offline` | `log_keyword` | `player_event` | `backup_failed`（缺省 `metric`）
+  - `triggerType`: `metric` | `instance_crash` | `node_offline` | `log_keyword` | `player_event` | `backup_failed` | `baseline` | `saturation`（缺省 `metric`）。`metric` 现同时评估 node 与 instance 目标（FR-462 补齐实例级评估缺口）。
   - `level`: `info` | `warn` | `critical`（缺省 `warn`）
-  - `targetType`/`targetId`: `metric`、`node_offline` 使用 `node`；`instance_crash`、`log_keyword`、`player_event`、`backup_failed` 使用 `instance`；`targetId=null` 表示该目标类型全局匹配
+  - `targetType`/`targetId`: `metric`、`node_offline` 使用 `node`；`instance_crash`、`log_keyword`、`player_event`、`backup_failed` 使用 `instance`；`baseline`、`saturation` 可用 `node` 或 `instance`（维度由 `scope` 决定）；`targetId=null` 表示该目标类型全局匹配
+  - FR-462 动态基线/饱和度字段：`baselineMethod`（`ewma`(缺省) | `roc` 突升突降 | `mom` 环比 | `yoy` 同比）、`baselineWindowSec`（默认 3600）、`sensitivity`（ewma/roc 为 k 倍标准差，mom/yoy 为偏离比，默认 3）、`minDelta`（最小绝对增量，默认 0）、`direction`（`up` | `down` | `both`(缺省)）、`scope`（`node` | `instance`，缺省按 `targetType` 推导）。`saturation` 用 `metric`（如 `disk`/`memory`/`heap`）+ `threshold`（饱和度百分比）判定 used/max 逼近上限。
   - `keyword`: 仅 `log_keyword` 用且必填；`eventMatch`: 仅 `player_event` 用（`join`/`quit`/`chat`/`cross_server`，空=任意）
   - `channelIds`: 路由的通知通道 ID 列表（空=不外发，仍入事件库 + 站内）
   - `dedupWindowSec`: 去抖聚合窗口；`silenceStart`/`silenceEnd`: 静默窗口（`HH:MM`，支持跨午夜）
@@ -2129,7 +2138,7 @@
 #### PUT /api/v1/alerts/rules/:id
 - **描述**: 更新告警规则可变字段（`triggerType`/`targetType` 不可改）
 - **关联 FR**: FR-011, FR-085
-- **请求**（均可选）: `enabled` `threshold` `level` `channelIds` `dedupWindowSec` `silenceStart` `silenceEnd` `notifyRecover` `keyword` `eventMatch`
+- **请求**（均可选）: `enabled` `threshold` `level` `channelIds` `dedupWindowSec` `silenceStart` `silenceEnd` `notifyRecover` `keyword` `eventMatch`，以及 FR-462 基线字段 `baselineMethod` `baselineWindowSec` `sensitivity` `minDelta` `direction` `scope`
 
 #### DELETE /api/v1/alerts/rules/:id
 - **描述**: 删除告警规则
