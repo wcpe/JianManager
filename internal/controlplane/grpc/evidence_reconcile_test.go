@@ -124,6 +124,25 @@ func TestSyncInstanceStates_EvidenceErrorThenRunningResets(t *testing.T) {
 	require.Equal(t, model.InstanceStatusRunning, status, "清计数后重新计拍，不应立即落 STOPPED")
 }
 
+// TestSyncInstanceStates_GraceResetsWhenReported FR-456 F7：实例重新出现在心跳清单时应复位宽限计数
+// （宽限语义为「连续 N 拍缺失」，非累计）。
+func TestSyncInstanceStates_GraceResetsWhenReported(t *testing.T) {
+	h, db, node := newReconcileFixture(t)
+	seedRunningInstance(t, db, node.ID, "i-flap", model.InstanceStatusRunning)
+	h.SetEvidenceProbe(&fakeEvidenceProbe{err: errors.New("offline")})
+
+	h.syncInstanceStates(node.UUID, nil) // 缺 1 拍 → 宽限 1
+	h.syncInstanceStates(node.UUID, nil) // 缺 2 拍 → 宽限 2
+	// 重新上报（清单包含该实例）→ 宽限必须复位。
+	h.syncInstanceStates(node.UUID, []*workerpb.InstanceState{{InstanceUuid: "i-flap", State: "RUNNING"}})
+	// 再缺 1 拍：若未复位，宽限会累计到 3 而误落 STOPPED；正确应复位后仅计 1 拍。
+	h.syncInstanceStates(node.UUID, nil)
+
+	status, _ := statusOf(t, db, "i-flap")
+	require.Equal(t, model.InstanceStatusRunning, status,
+		"清单重新上报应复位宽限计数，不得累计到阈值而误落 STOPPED")
+}
+
 // TestSyncInstanceStates_NoEvidenceClientKeepsLegacyBehavior 未注入证据客户端 → 保持旧行为（直接 STOPPED）。
 func TestSyncInstanceStates_NoEvidenceClientKeepsLegacyBehavior(t *testing.T) {
 	h, db, node := newReconcileFixture(t)

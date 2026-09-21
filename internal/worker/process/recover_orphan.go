@@ -91,9 +91,13 @@ func (m *Manager) reconnectWithRetry(strategy *daemonStrategy, addr, instanceUUI
 // reapOrphanWrapper 处置孤儿进程树（FR-325 及同源的 wrapper 已死场景）。
 //
 // 两种入口：
-//   - reconnectErr == errOrphanedWrapperGone：wrapper 已经不在，只剩 Java 孤儿。
+//   - reconnectErr == errOrphanedWrapperGone：wrapper 已经不在，只剩 Java 孤儿（**真孤儿**）。
 //     只清 Java，跳过对已消失 wrapper 的杀树与存活复核。
-//   - 其余（reconnect 重试耗尽）：先杀 wrapper 树（防其自动重启 Java），再补杀 Java 树——
+//   - 其余（reconnect 重试耗尽）：先判定 wrapper 是否仍存活——
+//     · wrapper 仍存活：属「确属本实例、仅 socket 瞬时不可达/暂不健康」（ADR-093 决策 1），
+//     **只告警 + 落审计、保留 PID 文件、不杀**，等下一轮扫描或人工介入（强杀会误杀一个
+//     wrapper 与 Java 都健康、只是 socket 一时拨不通的运行中服务器）；
+//     · wrapper 已在重试期间死亡：退化为真孤儿场景，按 PID 记录强杀 Java 树。
 //     Unix 上 Java 经 wrapper 的 applyProcAttr 自成进程组，杀 wrapper 组够不到它，
 //     而 Java 正是占 session.lock 的真孤儿；Windows 上 taskkill /T 已覆盖子树，
 //     补杀已死 PID 报错无害（以存活复核为准）。
@@ -106,26 +110,38 @@ func (m *Manager) reconnectWithRetry(strategy *daemonStrategy, addr, instanceUUI
 // 不杀**，并保留 PID 文件等下一轮扫描或人工介入，杜绝误杀。
 func (m *Manager) reapOrphanWrapper(instanceUUID, pidPath string, rec *daemon.PIDRecord, reconnectErr error) {
 	wrapperGone := errors.Is(reconnectErr, errOrphanedWrapperGone)
-	if wrapperGone {
-		slog.Warn("wrapper 已不存活但 Java 仍活，按 PID 记录强杀 Java 孤儿",
+
+	// ADR-093 决策 1（覆盖 spec §2.1 旧表述「复核不通过→只告警」）：接管重试耗尽但 wrapper 仍存活，
+	// 判为「确属本实例、仅瞬时不可达」——只告警、保留 PID 文件、不杀。只有当 wrapper 已确证死亡
+	// （真孤儿）才进入处置。存活判据即「wrapper 进程仍存活」，与 socket 是否拨通无关。
+	if !wrapperGone && rec.WrapperPID > 0 && m.pidAlive(rec.WrapperPID) {
+		detail := fmt.Sprintf(`{"instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"reason":"alive_unreachable"}`,
+			instanceUUID, rec.WrapperPID, rec.JavaPID)
+		m.auditOrphan("orphan.dispose_blocked", instanceUUID, detail, false,
+			"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），按 ADR-093 只告警不杀")
+		slog.Warn("接管重试耗尽但 wrapper 仍存活，按 ADR-093 只告警不杀，保留 PID 文件等下一轮/人工介入",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "error", reconnectErr)
+		return
+	}
+	if !wrapperGone {
+		// wrapper 已在重试期间死亡：退化为「wrapper 死 / Java 活」真孤儿场景，仅处置 Java。
+		slog.Warn("reconnect 重试期间 wrapper 已死亡，退化为 Java 真孤儿处置",
 			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID)
-	} else {
-		slog.Warn("reconnect wrapper 重试耗尽，按 PID 记录强杀孤儿进程树",
-			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID,
-			"error", reconnectErr)
 	}
 
-	// 组装待处置目标：wrapper 已消失时只针对 Java（对已死 PID 杀树只会刷无意义告警，
-	// 且其 PGID 可能已被系统复用，误杀无关进程）。仅对仍存活的 PID 建目标。
+	// 到达此处仅剩「wrapper 已不存活、Java 仍活」的真孤儿场景（wrapper 存活的瞬时不可达已在上面
+	// 只告警返回）。
+	slog.Warn("wrapper 已不存活但 Java 仍活，按 PID 记录强杀 Java 孤儿",
+		"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID)
+
+	// 组装待处置目标：wrapper 已消失，只针对 Java（对已死 PID 杀树只会刷无意义告警，
+	// 且其 PGID 可能已被系统复用，误杀无关进程）。仅对仍存活的 Java 建目标。
 	type orphanTarget struct {
 		pid           int
 		expectWrapper bool
 		role          string
 	}
-	targets := make([]orphanTarget, 0, 2)
-	if !wrapperGone && rec.WrapperPID > 0 {
-		targets = append(targets, orphanTarget{pid: rec.WrapperPID, expectWrapper: true, role: "wrapper"})
-	}
+	targets := make([]orphanTarget, 0, 1)
 	if rec.JavaPID > 0 && rec.JavaPID != rec.WrapperPID && m.pidAlive(rec.JavaPID) {
 		targets = append(targets, orphanTarget{pid: rec.JavaPID, expectWrapper: false, role: "java"})
 	}

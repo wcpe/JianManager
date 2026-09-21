@@ -82,11 +82,16 @@ type ControlPlaneHandler struct {
 	orphans       OrphanRuntimeIngester // 反向对账（nil 时不启用，FR-326）
 	// evidence 进程侧证据拉取客户端（nil 时 syncInstanceStates 退化为旧行为，FR-455③）。
 	evidence EvidenceProbeClient
+	// orphanAudit 孤儿处置审计落库器（nil 时丢弃上报，FR-455/456）。
+	orphanAudit OrphanAuditRecorder
 	// resyncTrigger 注册成功后/心跳兜底触发的幂等重推入口（FR-455②）；nil 时不触发。
 	resyncTrigger func(nodeUUID string)
 	// reconcileGrace 记录「DB 运行态但清单缺失、进程侧证据未确认停机」的连续心跳拍数（FR-455③）。
 	reconcileMu    sync.Mutex
 	reconcileGrace map[string]int
+	// reconcileDispatcher 派发一次证据对账任务（FR-456 F10）；nil 时同步内联执行（保持既有语义，
+	// 测试默认）。生产装配为「按节点单飞 + 异步」的派发器，把最长 8s 的证据拉取移出心跳应答关键路径。
+	reconcileDispatcher func(nodeUUID string, task func())
 }
 
 // NewControlPlaneHandler 创建处理器。
@@ -98,6 +103,13 @@ func NewControlPlaneHandler(db *gorm.DB, pool *ClientPool) *ControlPlaneHandler 
 // 注入后：Register 成功与心跳均触发该入口（由实现方按节点去重），使重推触发多源化、消除单点漏推。
 func (h *ControlPlaneHandler) SetResyncTrigger(fn func(nodeUUID string)) {
 	h.resyncTrigger = fn
+}
+
+// SetReconcileDispatcher 注入证据对账任务的派发器（FR-456 F10）。
+// 注入后，心跳里的「清单缺失实例 + 进程侧证据」对账在派发器上执行（生产为异步单飞、移出心跳应答
+// 关键路径，避免最长 8s 的证据拉取阻塞心跳）；不注入则同步内联执行（保持既有语义）。
+func (h *ControlPlaneHandler) SetReconcileDispatcher(fn func(nodeUUID string, task func())) {
+	h.reconcileDispatcher = fn
 }
 
 // triggerResync 触发幂等重推（未注入/空节点则忽略）。
@@ -508,8 +520,21 @@ func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*work
 	// 旧行为一律置 STOPPED——但心跳清单只是「Worker 内存表」的快照，任何让内存表暂缺已运行实例的
 	// 情形（FR-436：CP 重启后 63 实例集体失联）都会误判成「面板 STOPPED 而进程在跑」。
 	// FR-455③：先向该 Worker 拉进程侧证据，证据也认为不在跑才落 STOPPED；证据显示在跑则保持当前态。
+	// FR-455③ / F7：本拍清单里出现的实例，其「连续缺失」宽限计数必须复位——否则实例重新上报后
+	// 计数不归零，下一拍再缺失就会累计到阈值而误落 STOPPED（宽限语义要求「连续 N 拍缺失」）。
+	for _, uuid := range reported {
+		h.clearReconcileGrace(uuid)
+	}
+
 	var node model.Node
 	if err := h.db.Where("uuid = ?", nodeUUID).First(&node).Error; err != nil {
+		return
+	}
+	// FR-456 F10：证据对账（进程侧拉取，最长 evidenceProbeTimeout=8s）交由派发器执行，生产装配为
+	// 「按节点单飞 + 异步」，把耗时移出心跳应答关键路径（与 spec §2.4「重推不应阻塞心跳」一致）；
+	// 未注入派发器则同步内联（保持既有语义，测试默认）。
+	if h.reconcileDispatcher != nil {
+		h.reconcileDispatcher(node.UUID, func() { h.reconcileMissingInstances(node, reported) })
 		return
 	}
 	h.reconcileMissingInstances(node, reported)

@@ -18,6 +18,12 @@ service WorkerService {
   // 时长/尾部输出），CP 持久化并按实例滚动保留最近 5 条。与注册/心跳同信道（隧道/直拨
   // 双模式天然可用）；老 CP 返回 Unimplemented，Worker 记日志丢弃、不阻塞状态机。
   rpc ReportCrashSnapshot(ReportCrashSnapshotRequest) returns (ReportCrashSnapshotResponse);
+  // ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（FR-455/456，CP 侧实现）：
+  // 运行期周期扫描与接管兜底的处置动作（scan_detected / scan_disposed / scan_dispose_blocked /
+  // dispose_blocked / dispose_reaped）经与注册/心跳同信道（隧道/直拨双模式天然可用）上报，
+  // 携带节点身份鉴权，CP 经审计服务入库（保证孤儿处置「不静默」）。老 CP 返回 Unimplemented，
+  // Worker 记日志丢弃、不阻塞处置路径。
+  rpc ReportOrphanAudit(ReportOrphanAuditRequest) returns (ReportOrphanAuditResponse);
   // CreateInstance 在指定 Worker 上创建实例。
   rpc CreateInstance(CreateInstanceRequest) returns (CreateInstanceResponse);
   // ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
@@ -329,6 +335,24 @@ message ReportCrashSnapshotRequest {
 
 // ReportCrashSnapshotResponse 无负载确认（语义等价 Empty，遵循本 proto 的 Request/Response 命名惯例）。
 message ReportCrashSnapshotResponse {
+}
+
+// === 孤儿处置审计上报（FR-455/456，CP 侧实现）===
+
+// ReportOrphanAuditRequest 一条孤儿处置/误杀拦截审计。
+message ReportOrphanAuditRequest {
+  string node_uuid = 1;   // 节点身份（与崩溃快照上报同源校验）
+  string node_secret = 2;
+  string action = 3;      // 审计动作名：orphan.scan_detected / orphan.scan_disposed /
+                          // orphan.scan_dispose_blocked / orphan.dispose_blocked / orphan.dispose_reaped
+  string target_id = 4;   // 目标标识（实例 UUID 或 direct 孤儿工作目录）
+  string detail = 5;      // 补充说明（JSON）
+  bool success = 6;       // 处置是否成功（拦截/未处置为 false）
+  string error = 7;       // 失败原因（成功为空）
+}
+
+// ReportOrphanAuditResponse 无负载确认（语义等价 Empty，遵循本 proto 的 Request/Response 命名惯例）。
+message ReportOrphanAuditResponse {
 }
 
 // === 心跳 ===

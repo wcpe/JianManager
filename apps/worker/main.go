@@ -29,6 +29,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/heartbeat"
 	jdks "github.com/wcpe/JianManager/internal/worker/jdk"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
+	"github.com/wcpe/JianManager/internal/worker/orphanaudit"
 	"github.com/wcpe/JianManager/internal/worker/pkgmgr"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/register"
@@ -262,6 +263,30 @@ func runWorker() {
 	} else {
 		slog.Info("JDK manager disabled by JIANMANAGER_DISABLE_JDK=1")
 	}
+	// 孤儿处置审计回调（FR-455/456）：误杀拦截/孤儿处置既落 Worker 结构化日志（不静默），
+	// 又经 Worker→CP 出站信道上报落 CP 审计库（spec §2.2）。
+	//
+	// 装配顺序（FR-456 N2）：必须在 RecoverDaemonInstances **之前**。接管兜底的处置/误杀拦截动作
+	// 就发生在启动恢复期，若回调晚装配，这些真孤儿处置只落 slog、进不了 CP 审计库（reviewer 无从查证）。
+	cpAddr := cfg.ControlPlane
+	if cpAddr == "" {
+		cpAddr = "localhost:9100"
+	}
+	orphanAuditReporter := orphanaudit.New(cpAddr)
+	// 进程退出前释放复用的上报连接与派发 goroutine（FR-456 N4）。
+	defer orphanAuditReporter.Close()
+	// 身份注入同样提前：本地身份文件已在启动早期加载（重注册路径），此处先注入，使**启动期**恢复
+	// 的处置也能凭既有身份上报。首装尚无身份时上报安全丢弃；注册成功后于下方再注入一次覆盖运行期。
+	if localIdentity != nil {
+		orphanAuditReporter.SetIdentity(localIdentity.NodeUUID, localIdentity.NodeSecret)
+	}
+	manager.SetOrphanAuditHandler(func(action, targetID, detail string, success bool, errMsg string) {
+		slog.Warn("孤儿处置审计", "action", action, "target", targetID, "detail", detail, "success", success, "error", errMsg)
+		orphanAuditReporter.Report(orphanaudit.Event{
+			Action: action, TargetID: targetID, Detail: detail, Success: success, ErrMsg: errMsg,
+		})
+	})
+
 	// 这是 ADR-003「平台重启不杀游戏服」的关键路径。
 	recovered, recoverErr := manager.RecoverDaemonInstances()
 	if recoverErr != nil {
@@ -271,16 +296,10 @@ func runWorker() {
 		slog.Info("已恢复 daemon 实例连接", "count", recovered)
 	}
 
-	// 孤儿处置审计回调（FR-455/456）：把误杀拦截/孤儿处置落 Worker 结构化日志，保证「不静默」。
-	manager.SetOrphanAuditHandler(func(action, targetID, detail string, success bool, errMsg string) {
-		slog.Warn("孤儿处置审计", "action", action, "target", targetID, "detail", detail, "success", success, "error", errMsg)
-	})
-
 	// 运行期周期孤儿扫描（FR-456）：随 Worker 常驻，持续兜底 wrapper 死/Java 活、direct 孤儿、
 	// docker 残留，按策略处置（默认 warn 只告警，可配 auto 自动清理）。补齐「仅启动时清理」的缺口。
 	if !cfg.OrphanScan.Disabled {
 		policy := process.NormalizeOrphanDisposePolicy(cfg.OrphanScan.DisposePolicy)
-		manager.SetOrphanDisposePolicy(policy)
 		orphanScanner := process.NewOrphanScanner(manager, cfg.OrphanScan.ScanInterval(), policy)
 		scannerCtx, cancelScanner := context.WithCancel(context.Background())
 		defer cancelScanner()
@@ -440,11 +459,6 @@ func runWorker() {
 
 	// 注册到 Control Plane（FR-080，见 ADR-020）。
 	// Control Plane 未启动时 Worker 不退出，按指数退避重试直到注册成功。
-	cpAddr := cfg.ControlPlane
-	if cpAddr == "" {
-		cpAddr = "localhost:9100"
-	}
-
 	// 崩溃快照上报（FR-313）：进程非正常退出时，把策略捕获的退出码/信号/时长 +
 	// 终端环形缓冲的尾部输出（最后 200 行 / 64KB）组装为快照，异步经 gRPC 上报 CP
 	// 持久化。上报失败（网络 / 老 CP Unimplemented）记日志丢弃，不阻塞状态机。
@@ -543,6 +557,8 @@ func runWorker() {
 
 	// 节点身份就绪后崩溃快照上报可用（FR-313）：两条注册路径（setup 首注册 / 常规注册）在此汇合。
 	crashReporter.SetIdentity(nodeUUID, regResult.NodeSecret)
+	// 孤儿处置审计上报（FR-455/456）同样就绪：此后运行期扫描/接管兜底的处置动作可落 CP 审计库。
+	orphanAuditReporter.SetIdentity(nodeUUID, regResult.NodeSecret)
 
 	// bot-worker dist 自愈下发（FR-308，见 ADR-072）：注册成功即持身份从 CP 拉取内嵌归档，
 	// 物化到数据根后切换 bot 入口路径。显式 JIANMANAGER_BOT_WORKER_PATH 时尊重覆盖不自愈；

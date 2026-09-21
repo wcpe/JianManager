@@ -1,12 +1,27 @@
 package process
 
 import (
+	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	psproc "github.com/shirou/gopsutil/v4/process"
 )
+
+// readProcessEnviron 读取进程环境块（Linux: /proc/<pid>/environ），NUL 分隔转空格便于 contains。
+// 平台不支持（如 Windows/macOS 无 /proc）或权限不足时返回错误，调用方保守处理。
+func readProcessEnviron(pid int) (string, error) {
+	if pid <= 0 {
+		return "", os.ErrInvalid
+	}
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+	if err != nil {
+		return "", err
+	}
+	return strings.ReplaceAll(string(b), "\x00", " "), nil
+}
 
 // DefaultVerifyProcessOwnership 以进程侧证据判定 pid 是否确属 instanceUUID 对应的受管进程（FR-455①）。
 //
@@ -18,7 +33,14 @@ import (
 // 一律返回 false，调用方据此只告警不处置。判定采用「多特征任一命中」的宽口径，兼顾 wrapper 与 Java：
 //   - cmdline 含实例 UUID（部分部署把 UUID 写进启动参数）；
 //   - cmdline 含实例工作目录绝对路径，或进程 cwd 等于工作目录（Java 常以工作目录为 cwd）；
-//   - expectWrapper 时，cmdline 形如 jianmanager worker 的 `... daemon`（wrapper 标识）。
+//   - expectWrapper 时，进程命令行形如 jianmanager worker 的 `... daemon`，**且**该进程环境
+//     （/proc/<pid>/environ）确携带本实例 UUID（FR-456 F11）。
+//
+// F11：wrapper 由 `exec.Command(exe, "daemon")` 启动，实例 UUID 只在 env
+// （daemon.EnvWrapperConfig → JM_DAEMON_WRAPPER_CONFIG JSON）而不在 argv——argv 对**任何**实例
+// 的 wrapper 都相同。若仅按 argv「... daemon」判真，则节点上所有 wrapper 都会被判为「本实例」，
+// 一旦 PID 被复用/串号即误杀他人 wrapper。故 wrapper 分支必须再校验进程环境的实例 UUID，
+// 单靠 argv 不再单独判真；环境读不到（权限/平台不支持）时保守返回 false（不杀）。
 //
 // 匹配口径的误判率需真机标定（spec §5）：过宽会放过真孤儿，过窄会误拦截。
 func DefaultVerifyProcessOwnership(pid int, instanceUUID, workDir string, expectWrapper bool) bool {
@@ -45,10 +67,26 @@ func DefaultVerifyProcessOwnership(pid int, instanceUUID, workDir string, expect
 			return true
 		}
 	}
-	if expectWrapper && looksLikeJianManagerDaemon(cmdline) {
+	if expectWrapper && looksLikeJianManagerDaemon(cmdline) && processEnvMatchesInstance(pid, instanceUUID) {
 		return true
 	}
 	return false
+}
+
+// processEnvMatchesInstance 校验 pid 的进程环境是否携带该实例 UUID（FR-456 F11）。
+//
+// wrapper 把实例 UUID 放在 env（JM_DAEMON_WRAPPER_CONFIG JSON 内），argv 不含。读
+// /proc/<pid>/environ 做精确归属确认；instanceUUID 为空（无从比对）或环境读不到一律返回 false
+// （保守：无法确认即不判属，杜绝按 argv 空判误杀）。
+func processEnvMatchesInstance(pid int, instanceUUID string) bool {
+	if instanceUUID == "" {
+		return false
+	}
+	environ, err := readProcessEnviron(pid)
+	if err != nil || environ == "" {
+		return false
+	}
+	return strings.Contains(environ, instanceUUID)
 }
 
 // looksLikeJianManagerDaemon 判定 cmdline 是否为 JianManager worker 的 daemon 子命令（wrapper 标识）。

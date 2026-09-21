@@ -24,9 +24,10 @@ type TunnelRegistry struct {
 	db      *gorm.DB
 	handler *grpctunnel.TunnelServiceHandler
 
-	mu          sync.RWMutex
-	active      map[string]int // nodeUUID → 活跃隧道数（常态 ≤1；重建瞬间旧未关新已开可短暂为 2）
-	onConnected func(nodeUUID string)
+	mu               sync.RWMutex
+	active           map[string]int // nodeUUID → 活跃隧道数（常态 ≤1；重建瞬间旧未关新已开可短暂为 2）
+	onConnected      func(nodeUUID string)
+	onFirstConnected func(nodeUUID string)
 }
 
 // NewTunnelRegistry 创建反向隧道注册表。
@@ -95,11 +96,22 @@ func (r *TunnelRegistry) Channel(nodeUUID string) (grpc.ClientConnInterface, boo
 	return channel, true
 }
 
-// SetOnConnected 设置节点首次建立反向隧道后的回调。
+// SetOnConnected 设置「每次隧道建立」回调（含瞬时 active=2 的新连）。用于幂等重推等
+// 每次连接都应尝试触发的工作（去重由回调侧 ResyncDeduper 吸收）。
 func (r *TunnelRegistry) SetOnConnected(fn func(nodeUUID string)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.onConnected = fn
+}
+
+// SetOnFirstConnected 设置「节点从无活跃隧道变为有活跃隧道（active 0→1）」回调。
+// 用于只应每连接建立**一次**的长驻订阅类工作（事件流 / 插件事件流 / Bot Fleet 恢复），
+// 避免瞬时 active=2 时重复建立长驻订阅流（FR-456 F4：重复订阅会导致 stdout/stderr 双写、
+// 事件重复扇出）。
+func (r *TunnelRegistry) SetOnFirstConnected(fn func(nodeUUID string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onFirstConnected = fn
 }
 
 // ConnectedNodes 返回当前存在活跃反向隧道的节点 UUID。
@@ -130,6 +142,7 @@ func (r *TunnelRegistry) onOpen(t grpctunnel.TunnelChannel) {
 	r.active[uuid]++
 	n := r.active[uuid]
 	onConnected := r.onConnected
+	onFirstConnected := r.onFirstConnected
 	r.mu.Unlock()
 	slog.Info("节点反向隧道已建立", "nodeUUID", uuid, "active", n)
 	// FR-455②：不再以 n==1 为触发条件。CP 重启后旧隧道 onClose 常晚于新隧道 onOpen
@@ -137,6 +150,12 @@ func (r *TunnelRegistry) onOpen(t grpctunnel.TunnelChannel) {
 	// 改为「隧道建立即触发」，由回调侧按节点去重 + 幂等（ResyncDeduper）吸收重复触发。
 	if onConnected != nil {
 		go onConnected(uuid)
+	}
+	// FR-456 F4：长驻订阅类副作用（事件流 / 插件事件流 / Bot Fleet 恢复）只在节点「从无到有」
+	//（active 0→1）时触发一次，避免瞬时 active=2 时重复建立长驻订阅流。重推仍走上面的
+	// onConnected（每次建立都触发，由 ResyncDeduper 幂等）——两条语义分离，互不影响。
+	if n == 1 && onFirstConnected != nil {
+		go onFirstConnected(uuid)
 	}
 }
 

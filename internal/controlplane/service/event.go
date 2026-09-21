@@ -33,6 +33,11 @@ type EventService struct {
 	cancel context.CancelFunc
 	// logSink 可选：非 nil 时把 stdout/stderr 事件落库（FR-049）。
 	logSink LogSink
+	// streamMu/streaming 保证每节点只起一条事件流订阅（FR-456 F4）：重复的 StartWorkerStream
+	// 会建立重复长驻订阅，导致 stdout/stderr 双写、事件重复扇出。订阅 goroutine 退出时清除标记，
+	// 使节点真正重连后仍能重建订阅。
+	streamMu  sync.Mutex
+	streaming map[string]struct{}
 }
 
 // NewEventService 创建事件服务。
@@ -66,7 +71,7 @@ func (es *EventService) Subscribe() (<-chan InstanceEvent, func()) {
 	return ch, unsub
 }
 
-// StartWorkerStream 启动到指定 Worker 的事件流订阅。
+// StartWorkerStream 启动到指定 Worker 的事件流订阅（每节点单飞，FR-456 F4）。
 // nodeUUID 为空时自动订阅所有已连接节点。
 func (es *EventService) StartWorkerStream(nodeUUID string) {
 	client, ok := es.pool.Get(nodeUUID)
@@ -75,7 +80,27 @@ func (es *EventService) StartWorkerStream(nodeUUID string) {
 		return
 	}
 
-	go es.streamFromWorker(nodeUUID, client)
+	// 每节点单飞：已在订阅则忽略重复触发（瞬时 active=2 的 over-trigger 不得起重复长驻流）。
+	es.streamMu.Lock()
+	if es.streaming == nil {
+		es.streaming = make(map[string]struct{})
+	}
+	if _, busy := es.streaming[nodeUUID]; busy {
+		es.streamMu.Unlock()
+		slog.Debug("EventService: 事件流已订阅，忽略重复触发", "nodeUUID", nodeUUID)
+		return
+	}
+	es.streaming[nodeUUID] = struct{}{}
+	es.streamMu.Unlock()
+
+	go func() {
+		defer func() {
+			es.streamMu.Lock()
+			delete(es.streaming, nodeUUID)
+			es.streamMu.Unlock()
+		}()
+		es.streamFromWorker(nodeUUID, client)
+	}()
 }
 
 // streamFromWorker 从单个 Worker 拉取事件并扇出。
