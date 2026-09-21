@@ -321,10 +321,13 @@ func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstan
 		if spec == nil || spec.InstanceUuid == "" {
 			continue
 		}
-		// 已在内存表 → 跳过（不覆盖 RUNNING 恢复实例；重复重推幂等）。
-		// 但仍刷新 MC 直探端口（FR-446）：Worker 重启后恢复的 daemon 实例不携带直探端口，
-		// 重连重推时补齐，使直探对恢复实例也打对端口（不触碰运行态、不重启进程）。
+		// 已在内存表 → 不覆盖启动/运行态（不覆盖 RUNNING 恢复实例；重复重推幂等），
+		// 但以 CP 为准刷新探针端口（FR-454）与 MC 直探端口（FR-446）：Worker 重启经
+		// RecoverDaemonInstances 从 PID 文件恢复的 RUNNING 实例不携带这些端口，重连重推时补齐。
+		// CP 已按适用性收敛 probe_port（代理/Beacon/通用二进制为 0）；心跳采集按 ProbePort>0 过滤，
+		// 补直探端口使直探对恢复实例也打对端口（不触碰运行态、不重启进程）。
 		if _, exists := s.manager.GetInstance(spec.InstanceUuid); exists {
+			s.manager.SetProbePort(spec.InstanceUuid, int(spec.ProbePort))
 			s.manager.SetServerPort(spec.InstanceUuid, int(spec.ServerPort))
 			s.manager.SetQueryPort(spec.InstanceUuid, int(spec.QueryPort))
 			skipped++

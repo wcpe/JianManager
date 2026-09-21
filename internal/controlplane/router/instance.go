@@ -307,6 +307,10 @@ type updateInstanceRequest struct {
 	Tags *[]string `json:"tags"`
 	// Role 实例角色（backend/proxy/universal/beacon）：传 null/缺省不变，传值覆盖（非法值 400）。
 	Role *model.InstanceRole `json:"role"`
+	// Type 实例类型（minecraft_java/generic）：传 null/缺省不变，传值覆盖（非法值 400）。
+	// 与 role 独立——改 role 不会替调用方猜 type；把 beacon 实例恢复为可加载探针的 MC 服务端需显式传
+	// type=minecraft_java（FR-454）。role=beacon 时该字段被忽略并强制归一为 generic。
+	Type *model.InstanceType `json:"type"`
 	// CPULimit/MemLimitMB/DiskLimitMB docker 资源限额（FR-079）：传 null/缺省不变，传值（含 0）覆盖。
 	CPULimit    *float64 `json:"cpuLimit"`
 	MemLimitMB  *int64   `json:"memLimitMb"`
@@ -349,6 +353,7 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		EnvVars:      req.EnvVars,
 		Tags:         req.Tags,
 		Role:         req.Role,
+		Type:         req.Type,
 		CPULimit:     req.CPULimit,
 		MemLimitMB:   req.MemLimitMB,
 		DiskLimitMB:  req.DiskLimitMB,
@@ -359,6 +364,10 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, service.ErrInvalidInstanceRole) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+			return
+		}
+		if errors.Is(err, service.ErrInvalidInstanceType) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
 			return
 		}

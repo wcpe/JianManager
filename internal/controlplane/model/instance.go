@@ -52,6 +52,18 @@ const (
 	InstanceRoleBeacon InstanceRole = "beacon"
 )
 
+// ValidInstanceType 校验实例类型是否在允许枚举内。
+//
+// 用于显式改 type 的入口（如 UpdateInstanceFields.Type）拒绝未知值：静默回落会让调用方
+// 误以为改成功，而 type 是探针适用性判定（IsProbeApplicable）的关键输入，脏值代价高。
+func ValidInstanceType(t InstanceType) bool {
+	switch t {
+	case InstanceTypeMinecraftJava, InstanceTypeGeneric:
+		return true
+	}
+	return false
+}
+
 // ValidInstanceRole 校验角色是否在允许枚举内。
 func ValidInstanceRole(r InstanceRole) bool {
 	switch r {
@@ -79,6 +91,23 @@ func IsProbeApplicable(t InstanceType, r InstanceRole) bool {
 		return false
 	}
 	return true
+}
+
+// NormalizeInstanceType 按 role 归一实例 type（FR-454），创建与更新两条路径共用同一口径，
+// 避免「建实例归一并了、改 role 又把它改回脏值」的可复用缺陷。
+//
+// 归一规则（**单向**，仅定义 role→type 的必要约束）：
+//
+//	role=beacon ⇒ type=generic：Beacon 配套服务不是 Minecraft Java 进程，type 只能是 generic。
+//
+// 其余 role 保持传入 type 不变：generic 对 universal/backend/proxy 均是合法值（FR-441 通用
+// 二进制、代理亦非 Bukkit 载体），因此**不能**反向强推 minecraft_java——那会把用户的通用二进制
+// 误标成 MC Java 服务端。若需要把实例从 generic 恢复为 minecraft_java，调用方须显式传 type。
+func NormalizeInstanceType(t InstanceType, r InstanceRole) InstanceType {
+	if r == InstanceRoleBeacon {
+		return InstanceTypeGeneric
+	}
+	return t
 }
 
 // ProcessType 启动方式。

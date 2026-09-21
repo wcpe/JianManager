@@ -248,8 +248,79 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := migrateArtifactVersionSourceVersionIndex(db); err != nil {
 		return err
 	}
+	// FR-454：幂等归正 role=beacon 的历史实例 type（早期误记为 minecraft_java）→ generic，
+	// 并顺带归零非适用实例的历史脏 probe_port。best-effort：这是「仅告警/补偿」的数据归正，
+	// 不承担 CP 启动的关键路径（失败不阻断启动，仅日志告警，因而不 return err）。
+	if err := backfillBeaconInstanceType(db); err != nil {
+		slog.Warn("FR-454 Beacon 实例 type/probe_port 归正未完成（不阻断启动）", "error", err)
+	}
 	// FR-365：幂等回填 bots.desired_state / desired_state_generation。
 	return backfillBotDesiredState(db)
+}
+
+// backfillBeaconInstanceType 幂等归正 role=beacon 的历史实例 type → generic（FR-454 验收③），
+// 并顺带归零非适用实例的历史脏 probe_port（FR-454 补口）。
+//
+// 背景：Beacon 配套服务实例（FR-442）不是 Minecraft Java 进程，早期搭建路径把其 type 误记为
+// minecraft_java，于是 ServerProbe（Bukkit 插件）被误判为可加载。运行时 IsProbeApplicable 已按
+// role 兜底（端口分配/心跳采集/探针推送三处均收口），但库中 type 仍是脏值；验收③要求数据层归正。
+//
+// 语义边界：**只按 role 归正**（type 的唯一身份依据是 role=beacon，不是 name）。name 含 "beacon"
+// 但 role 非 beacon 的实例不擅自修改——名字是可变标签、不构成身份依据，误改会污染用户数据；
+// 这类实例仅在日志中列出供人工复核（见 listBeaconNamedNonBeaconInstances）。
+//
+// 幂等：条件 `type <> 'generic'`，重复执行不再命中，可安全随每次 CP 启动重跑。
+// 时机：随 AutoMigrate 在 CP 启动时执行；本次修复本身不改动任何生产库，归正在将来部署新二进制时发生。
+func backfillBeaconInstanceType(db *gorm.DB) error {
+	if !db.Migrator().HasTable("instances") {
+		return nil
+	}
+	res := db.Model(&model.Instance{}).
+		Where("role = ? AND type <> ?", model.InstanceRoleBeacon, model.InstanceTypeGeneric).
+		Update("type", model.InstanceTypeGeneric)
+	if res.Error != nil {
+		return fmt.Errorf("归正 Beacon 实例 type 失败: %w", res.Error)
+	}
+	if res.RowsAffected > 0 {
+		slog.Info("已将 role=beacon 实例的 type 归正为 generic（FR-454）", "rows", res.RowsAffected)
+	}
+	// 顺带归零非适用实例的历史脏 probe_port（FR-454）：早期误配会在代理/Beacon/通用二进制上
+	// 留下一个永不被采集的探针端口。SQL 条件与 model.IsProbeApplicable 严格同口径的反面：
+	// 不适用 ⇔ type<>minecraft_java（type 非空）或 role∈(proxy,beacon)。role IS NULL 视为适用
+	// （NULL 既不等于 proxy 也不等于 beacon），故不会被本条件命中而误清。
+	if res := db.Model(&model.Instance{}).
+		Where("probe_port <> 0 AND (type <> ? OR role IN ?)",
+			string(model.InstanceTypeMinecraftJava),
+			[]string{string(model.InstanceRoleProxy), string(model.InstanceRoleBeacon)}).
+		Update("probe_port", 0); res.Error != nil {
+		return fmt.Errorf("归零非适用实例探针端口失败: %w", res.Error)
+	} else if res.RowsAffected > 0 {
+		slog.Info("已归零非适用实例的历史探针端口（FR-454）", "rows", res.RowsAffected)
+	}
+	// 仅日志提示，绝不写入；纯诊断，失败不应影响启动（best-effort）。
+	if ids := listBeaconNamedNonBeaconInstances(db); len(ids) > 0 {
+		slog.Warn("存在名称含 beacon 但 role 非 beacon 的实例，未自动归正 type，请人工复核",
+			"instanceIds", ids)
+	}
+	return nil
+}
+
+// listBeaconNamedNonBeaconInstances 返回 name 含 beacon（大小写不敏感）但 role 非 beacon 的实例 ID，
+// 仅供调用方打日志提示人工复核，不做任何写入（FR-454：name 不是身份依据，不擅自归正名字匹配的实例）。
+//
+// best-effort：本函数是纯诊断，若把 error 冒泡给 AutoMigrate（CP 启动关键路径），一条「告警查询」
+// 失败就会让 CP 起不来——收益与代价严重不匹配，故失败仅降级为一条 warn 日志并返回 nil（N4）。
+// 判空用 `role IS NULL OR role <> 'beacon'`：SQL 三值逻辑下 `role <> 'beacon'` 对 NULL 行恒为 NULL，
+// 会静默漏掉 role 为 NULL 的历史行（N2）。
+func listBeaconNamedNonBeaconInstances(db *gorm.DB) []uint {
+	var ids []uint
+	if err := db.Model(&model.Instance{}).
+		Where("(role IS NULL OR role <> ?) AND LOWER(name) LIKE ?", model.InstanceRoleBeacon, "%beacon%").
+		Pluck("id", &ids).Error; err != nil {
+		slog.Warn("查询待人工复核的 Beacon 命名实例失败（不影响启动，仅少一条诊断）", "error", err)
+		return nil
+	}
+	return ids
 }
 
 // backfillBotDesiredState 将历史 Bot 的 desired_state 按活动会话与 runtime status 回填（FR-365）。

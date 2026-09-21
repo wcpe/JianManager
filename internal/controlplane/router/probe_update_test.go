@@ -129,6 +129,35 @@ func TestProbeUpdate_Batch_Validation(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// TestProbeUpdate_SetVersion_RejectsNonApplicableBeforeSideEffect FR-454：不适用探针的实例设置探针
+// 版本必须在任何副作用之前拒绝（422 + 明确原因），且库中 probe_version_id 保持原值——不得先落库。
+func TestProbeUpdate_SetVersion_RejectsNonApplicableBeforeSideEffect(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	g := createGroupViaAPI(t, r, token, "g")
+
+	inst := &model.Instance{
+		NodeID: node.ID, Name: "legacy-beacon", Type: model.InstanceTypeMinecraftJava,
+		Role: model.InstanceRoleBeacon, ProcessType: model.ProcessTypeDirect,
+		StartCommand: "x", Status: model.InstanceStatusStopped,
+	}
+	require.NoError(t, db.Create(inst).Error)
+	require.NoError(t, db.Create(&model.GroupInstance{GroupID: g, InstanceID: inst.ID}).Error)
+
+	w := makeRequest(r, "PUT", "/api/v1/instances/"+itoa(inst.ID)+"/probe-version",
+		map[string]any{"versionId": 123}, token)
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+	m := parseJSON(t, w)
+	assert.Equal(t, "BUSINESS_ERROR", m["error"])
+	assert.Contains(t, m["message"], "Beacon 实例不适用")
+
+	var loaded model.Instance
+	require.NoError(t, db.First(&loaded, inst.ID).Error)
+	assert.Zero(t, loaded.ProbeVersionID, "拒绝必须发生在落库之前（副作用前置检查）")
+}
+
 // TestProbeUpdate_Batch_Forbidden FR-432：无组 member 有能力无 scope →
 // 目标全 skipped；若探针制品未装配，业务层回 422 PROBE_NOT_EMBEDDED（非 403）。
 func TestProbeUpdate_Batch_Forbidden(t *testing.T) {

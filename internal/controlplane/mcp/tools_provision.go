@@ -155,7 +155,12 @@ func init() {
 						"role": map[string]any{
 							"type":        "string",
 							"enum":        []string{"backend", "proxy", "universal", "beacon"},
-							"description": "实例角色：backend 后端子服 / proxy 代理 / universal 通用 / beacon 配套服务（如 Beacon 控制面）",
+							"description": "实例角色：backend 后端子服 / proxy 代理 / universal 通用 / beacon 配套服务（如 Beacon 控制面）。改 role=beacon 会强制 type=generic 并归零探针端口",
+						},
+						"type": map[string]any{
+							"type":        "string",
+							"enum":        []string{"minecraft_java", "generic"},
+							"description": "实例类型：minecraft_java MC Java 服务端 / generic 通用二进制。与 role 独立——把 beacon 实例改回可加载探针的 MC 服务端需同时传 type=minecraft_java；role=beacon 时本字段被强制归一为 generic",
 						},
 						"cpuLimit":    map[string]any{"type": "number"},
 						"memLimitMb":  map[string]any{"type": "number"},
@@ -474,6 +479,13 @@ func execInstanceUpdateConfig(_ context.Context, deps ToolDeps, p *service.Agent
 			return toolErr("无效的实例角色: " + string(role) + "（可选 backend/proxy/universal/beacon）")
 		}
 		f.Role = &role
+	}
+	if _, ok := args["type"]; ok {
+		typ := model.InstanceType(stringArg(args, "type"))
+		if !model.ValidInstanceType(typ) {
+			return toolErr("无效的实例类型: " + string(typ) + "（可选 minecraft_java/generic）")
+		}
+		f.Type = &typ
 	}
 	if v, ok := args["cpuLimit"]; ok {
 		if n, e := toFloat(v); e == nil {
