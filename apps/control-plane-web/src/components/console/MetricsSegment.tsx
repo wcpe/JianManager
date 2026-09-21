@@ -41,7 +41,12 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
   const { data: selectable } = useSelectableProbeVersions()
   const { data: selection } = useInstanceProbeVersion(instanceId)
   const setVersion = useSetInstanceProbeVersion(instanceId)
+  // ServerProbe 是 Bukkit 插件，只有 Minecraft Java 服务端能加载：代理端（BungeeCord/Waterfall/
+  // Velocity）、Beacon 配套服务（role=beacon）与通用二进制（type=generic）都无法加载。
+  // 与后端 model.IsProbeApplicable 同口径：这类实例不渲染探针卡，避免「更新探针必失败」的陷阱按钮。
+  const probeApplicable = inst?.type === 'minecraft_java' && inst?.role !== 'proxy' && inst?.role !== 'beacon'
   if (!probeCapable) return null
+  if (inst && !probeApplicable) return null
   if (!st) return null
 
   const bridgeConnected = !!st.probeConnected

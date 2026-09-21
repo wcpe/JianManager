@@ -456,6 +456,7 @@
     "envVars": { "TZ": "Asia/Shanghai" },
     "tags": ["env:prod", "survival"],
     "role": "proxy",
+    "type": "minecraft_java",
     "cpuLimit": 2,
     "memLimitMb": 4096,
     "diskLimitMb": 0
@@ -463,6 +464,8 @@
   ```
 - **说明**: `tags` 传数组（含空数组 `[]` 清空）覆盖标签；环境维度复用 `env:` 前缀（FR-047），无独立字段。`cpuLimit`/`memLimitMb`/`diskLimitMb` 为 docker 模式资源限额（FR-079），传值覆盖、缺省/`null` 不变；`0` 或负值会归一化为不限制。变更对实例下一次启动生效，仅 docker 模式生效；磁盘限额当前仅持久化展示，不强制限制 bind mount 工作目录。
 - **`role`（FR-433）**: 取值 `backend`/`proxy`/`universal`/`beacon`。用于纠正建实例时的角色误选——如 BungeeCord 代理被建成 `backend` 时，群组拓扑（查 `role='proxy'`）与代理注册都认不出它。**非法值返回 400**（与 `POST /instances` 的 grandfather 语义刻意不同：创建时未指定/非法静默回落 `universal` 以兼容旧调用，而更新是显式改角色，静默回落会让调用方误以为改成功）。**不做隐式级联**：把 `proxy` 改成其他角色时，该实例原有的 `server_registrations` 保留而非自动清理——与「删除 network 不触及注册关系」同口径，避免误删运维数据；如需清理请走 `DELETE /proxies/:id/registrations/:rid`。`beacon` 为配套服务实例角色（如 Beacon 控制面），属非群组服角色：不参与 proxy↔backend 拓扑、不适用 MC 探针与后端注册、不参与玩家查询。
+- **`type`（FR-454）**: 取值 `minecraft_java`/`generic`（**非法值返回 400**）。与 `role` 是**两个独立字段**，改 `role` 不会替调用方猜 `type`。**硬不变量**：`role=beacon` ⇒ `type=generic`——传 `role=beacon` 时 `type` 一律被归一为 `generic`（即便同请求显式传 `minecraft_java`），并把 `probe_port` 归零；改为其它不适用探针的角色/类型（`proxy`、`generic`）时 `probe_port` 同样归零。因此把 Beacon 实例改回可加载探针的 MC 服务端时，必须**同时显式传** `{"role":"backend","type":"minecraft_java"}`——否则实例会停留在 `IsProbeApplicable=false`（不分配探针端口、不采集 `/metrics`）。未改 `role`/`type` 的普通更新不触碰 `type`/`probe_port`。
+- **关联 FR**: FR-005, FR-047, FR-079（资源限额）, FR-433（角色）, FR-454（role/type 与探针端口自洽）
 
 ### DELETE /api/v1/instances/:id
 - **描述**: 删除实例。运行中/启动中/停止中的实例由 CP 先同步停止再删（FR-310）：删除前经状态机合法转换（RUNNING/STARTING→STOPPING→STOPPED）同步调 Worker `StopInstance`（复用优雅停止链路，超时强杀进程树），停止失败中止删除并透传原因（记录保留可重试）；节点记录缺失、节点已离线或连接池无可用 Worker 时一律拒绝删除，避免 CP 记录消失而节点进程/目录成为孤儿，其中运行态无法停止返回 422 `INSTANCE_RUNNING`，其余清理路由失败返回 500 并携带明确原因。仅节点在线且 gRPC `RemoveInstance` 成功清理 Worker 注册、工作目录与派生索引后才删除 CP 记录；刚停止实例在优雅停止收敛窗口内对文件锁类清理失败有界重试。托管区（数据根 `var/servers`）外的历史手填目录与 FR-302 就地导入目录由 Worker/CP 双重 `SkipWorkDir` 保护，保留原目录但仍清理 Worker 注册后删除 CP 记录
@@ -782,8 +785,18 @@
 - **权限**: `instance.operate` ｜ **审计**: `instance.probe.update`
 - **请求**: `{ "restart": false }`
 - **响应**: `{ "instanceId":3, "deployed":true, "restarted":false, "versionId":12, "version":"0.2.0", "message":"探针 jar 已就位，下次重启生效" }`
-- **错误**: `422 PROBE_NOT_EMBEDDED`（兼容错误码：没有已缓存并选中的版本）、`404 NOT_FOUND`
+- **错误**: `422 PROBE_NOT_EMBEDDED`（兼容错误码：没有已缓存并选中的版本）、`422 BUSINESS_ERROR`（该实例不适用 ServerProbe：代理/Beacon/通用二进制，附带可读原因）、`404 NOT_FOUND`
 - **关联 FR**: FR-068 / FR-409
+
+### POST /api/v1/instances/probe/update
+- **描述**: 批量推送已选探针版本（按 `ids` 或 `filter`）。与单实例推送同语义（**下次重启生效**），`restart=true` 时对每个推送成功的实例异步重启
+- **权限**: `instance.operate` ｜ **审计**: `instance.probe.update.batch`
+- **请求**: `{ "ids": [3,4], "filter": { ... }, "restart": false }`（`ids` 与 `filter` 至少给一个）
+- **响应**: `{ "requested":2, "succeeded":1, "failed":0, "skipped":1, "excluded":[ { "instanceId":5, "name":"gate", "reason":"代理实例不适用 ServerProbe 探针（Bukkit 插件，代理端无法加载），无需推送" } ], "errors":[] }`
+  - `skipped`：请求 ID 未命中（不存在或越权被剔除），沿用存在性隐藏，不泄露；
+  - `excluded[]`（**FR-454**）：ID 命中且可见，但该实例不适用 ServerProbe（代理/Beacon/通用二进制），逐条给出 `instanceId`、`name`、`reason`——此前这类目标被静默计入 `skipped`，调用方无从得知「谁被跳过、为什么」。`filter` 模式下不适用实例在 SQL 侧直接排除且不逐条列名单（可能数千条、无界）；其排除原因可由单实例端点或 `ids` 模式获得。
+- **错误**: `400 INVALID_REQUEST`（未给 `ids`/`filter` 或参数错误）、`422 PROBE_NOT_EMBEDDED`（未装配制品版本库）
+- **关联 FR**: FR-068 / FR-409 / FR-454 ｜ **关联 ADR**: ADR-083
 
 ### GET /api/v1/probe-versions
 
@@ -796,6 +809,8 @@
 - **描述**: 读取或设置实例显式版本。`PUT` 的 `{ "versionId": 0 }` 表示恢复继承；非零值必须是已缓存版本。保存后立即通知该实例 Worker 拉取，运行中实例不自动重启
 - **权限**: `GET instance.read`；`PUT instance.operate`
 - **GET 响应**: `{ "instanceId":3, "versionId":0, "resolvedVersion":{ "id":12, "version":"0.2.0" }, "origin":"node" }`
+- **PUT 校验顺序（**FR-454**，有意为之，调用方勿依赖旧行为）**: `400 INVALID_REQUEST`（请求体非法）→ `404 NOT_FOUND`（实例不可见/不存在）→ `422 BUSINESS_ERROR`（该实例不适用 ServerProbe，附带可读原因）→ `503 ARTIFACT_VERSION_LIBRARY_UNAVAILABLE`（未装配制品版本库）→ 落库并下发。适用性判定被前移到制品库可用性检查之前：「该实例不适用探针」是与制品库是否配置无关的固有事实，必须在任何副作用（落库）之前拒绝，否则拒绝时库中已被写入不适用实例的探针版本（脏写）。因此**未配置制品库时**，坏请求体仍返回 `400`、不适用实例仍返回 `422`（而非 `503`）。
+- **关联 FR**: FR-068 / FR-409 / FR-454
 
 ### GET / POST / PUT / DELETE /api/v1/artifact-packages/serverprobe/*
 

@@ -217,13 +217,27 @@ func (h *ProbeUpdateHandler) SetVersion(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
 		return
 	}
-	if h.artifacts == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ARTIFACT_VERSION_LIBRARY_UNAVAILABLE"})
-		return
-	}
 	var req setInstanceProbeVersionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	// FR-454：适用性判定必须置于任何副作用之前，且先于制品库可用性检查——「该实例不适用探针」是
+	// 与制品库是否配置无关的固有事实。此前 SetInstanceProbeVersion 先落库、再到 UpdateWithBaseURL
+	// 阶段才 422，拒绝时库中已被写入不适用实例的探针版本（脏写）。
+	if reason, err := h.updateSvc.ApplicabilityReason(id); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询实例失败"})
+		return
+	} else if reason != "" {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": reason})
+		return
+	}
+	if h.artifacts == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ARTIFACT_VERSION_LIBRARY_UNAVAILABLE"})
 		return
 	}
 	if err := h.artifacts.SetInstanceProbeVersion(id, req.VersionID); err != nil {

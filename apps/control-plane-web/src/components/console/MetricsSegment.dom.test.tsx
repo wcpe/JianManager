@@ -222,4 +222,43 @@ describe('MetricsSegment（mock 假后端）', () => {
     expect(chip).toHaveAttribute('data-metric-sources', 'probe,slp,query')
     expect(chip).toHaveTextContent('探针')
   })
+
+  // FR-454：ServerProbe 是 Bukkit 插件，代理/Beacon/通用二进制都加载不了——
+  // 与后端 model.IsProbeApplicable 同口径，这类实例不渲染探针卡（不出现必失败的「更新探针」按钮）。
+  it.each([
+    { name: '代理实例', type: 'minecraft_java', role: 'proxy' },
+    { name: 'Beacon 实例', type: 'generic', role: 'beacon' },
+    { name: '通用二进制实例', type: 'generic', role: 'universal' },
+    { name: '历史误记 type 的 Beacon', type: 'minecraft_java', role: 'beacon' },
+  ])('$name 不渲染探针卡', async ({ type, role }) => {
+    mockInject('get', '/instances/:id', {
+      kind: 'status',
+      status: 200,
+      body: {
+        id: 1,
+        uuid: 'inst-1',
+        nodeId: 1,
+        name: 'na',
+        type,
+        role,
+        processType: 'daemon',
+        // 停机态：与探针卡无关的 HealthStrip 会渲染固定的折叠文案，可作稳定锚点。
+        status: 'STOPPED',
+        startCommand: 'x',
+        workDir: '/servers/na',
+        serverPort: 25565,
+        autoStart: false,
+        autoRestart: true,
+        tags: '[]',
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+    })
+    renderWithProviders(<MetricsSegment instanceUuid="inst-1" instanceId={1} />)
+
+    // 先等与本卡无关的稳定锚点（停机折叠文案），证明实例详情已加载，再断言探针卡缺失，
+    // 避免「实例详情尚未请求到」造成的假通过。
+    await screen.findByText('实例未运行，当前指标已折叠；可继续查看下方历史曲线。')
+    expect(screen.queryByText('ServerProbe 探针更新')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '更新并重启' })).not.toBeInTheDocument()
+  })
 })

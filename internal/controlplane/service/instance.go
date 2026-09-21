@@ -29,6 +29,8 @@ var (
 	ErrQuotaExceeded      = errors.New("组配额已满")
 	// ErrInvalidInstanceRole 实例角色不在允许枚举内（backend/proxy/universal/beacon）。
 	ErrInvalidInstanceRole = errors.New("无效的实例角色")
+	// ErrInvalidInstanceType 实例类型不在允许枚举内（minecraft_java/generic）。
+	ErrInvalidInstanceType = errors.New("无效的实例类型")
 	// ErrStartCommandRequired 非 docker 实例缺启动命令（docker 可空，交镜像 entrypoint 自管启动，FR-078）。
 	ErrStartCommandRequired = errors.New("非 docker 实例必须提供启动命令")
 )
@@ -285,10 +287,22 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		role = model.InstanceRoleUniversal
 	}
 
+	// FR-454 归一口径（与搭建路径 createBeaconInstance 一致）：Beacon 配套服务不是 MC Java 进程，
+	// role=beacon 时 type 一律归一为 generic，避免手工 API / 后续路径再次写入 minecraft_java 脏值
+	// （历史脏值另有 database.backfillBeaconInstanceType 幂等回填）。仅看 role，不看 name。
+	// 归一逻辑收敛到 model.NormalizeInstanceType，与 Update 共用一份口径防漂移。
+	instType := model.NormalizeInstanceType(req.Type, role)
+	// FR-454：不适用 ServerProbe 的实例（代理/Beacon/通用二进制）一律不落探针端口，
+	// 防手工 API 直落非 0 probe_port（此前会写出 port>0 的探针配置、心跳每拍抓 /metrics 必失败）。
+	probePort := req.ProbePort
+	if !model.IsProbeApplicable(instType, role) {
+		probePort = 0
+	}
+
 	instance := &model.Instance{
 		NodeID:           req.NodeID,
 		Name:             req.Name,
-		Type:             req.Type,
+		Type:             instType,
 		Role:             role,
 		ProcessType:      req.ProcessType,
 		StartCommand:     req.StartCommand,
@@ -305,7 +319,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		AutoRestart:      req.AutoRestart,
 		ServerPort:       req.ServerPort,
 		QueryPort:        req.QueryPort,
-		ProbePort:        req.ProbePort,
+		ProbePort:        probePort,
 		Status:           model.InstanceStatusStopped,
 	}
 	if len(req.EnvVars) > 0 {
@@ -714,7 +728,18 @@ type UpdateInstanceFields struct {
 	// 允许改角色是为了纠正建实例时的误选（如把 BungeeCord 建成了 backend，
 	// 导致群组拓扑与注册关系都认不出它是代理）。变更只写本表，不做级联：
 	// 原为 proxy 的 server_registrations 保留，避免误删运维数据。
+	//
+	// 与 Type 的约束（FR-454）：改 role=beacon 会强制把 type 归一为 generic，并把 probe_port 归零；
+	// 改为不适用探针的 role/type 时 probe_port 一并归零。见 Update 内的不变量收口。
 	Role *model.InstanceRole
+	// Type 实例类型（minecraft_java/generic）；nil=不变。
+	//
+	// 用途（FR-454）：role 与 type 是**两个独立字段**，改 role 不会替调用方猜测 type。
+	// 特别是「beacon→backend」时实例的 type 仍是 generic（Beacon 搭建/幂等回填会把它归一为
+	// generic），此时若要恢复为可加载探针的 MC 服务端，必须**同时显式**传 Type=minecraft_java
+	// ——否则实例会永久停留在 IsProbeApplicable=false，且此前无任何 API 可修回（本字段即为修回入口）。
+	// 非法值直接拒绝（不静默回落）。role=beacon 时本字段被忽略并强制归一为 generic（硬不变量）。
+	Type *model.InstanceType
 	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（FR-079）；nil=不变，0=清除限制。
 	CPULimit    *float64
 	MemLimitMB  *int64
@@ -764,6 +789,13 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 		}
 		updates["role"] = *f.Role
 	}
+	if f.Type != nil {
+		// 与 role 同口径：显式改 type 时非法值直接拒绝，静默回落会让调用方误以为改成功。
+		if !model.ValidInstanceType(*f.Type) {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidInstanceType, *f.Type)
+		}
+		updates["type"] = *f.Type
+	}
 	if f.EnvVars != nil {
 		raw, err := json.Marshal(*f.EnvVars)
 		if err != nil {
@@ -788,6 +820,43 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 	}
 	if f.DiskLimitMB != nil {
 		updates["disk_limit_mb"] = normalizeResourceLimitMB(*f.DiskLimitMB)
+	}
+
+	// FR-454 不变量收口：role 与 type/probe_port 必须自洽，且**与创建路径共用同一口径**，
+	// 否则「改 role」会把探索路径刚消灭的脏值（beacon 的 type=minecraft_java）重新制造出来。
+	//
+	// 此前缺陷：
+	//   - role→beacon 只写 role、不归一 type，仍留 minecraft_java；也不归零 probe_port；
+	//   - beacon→backend 时 type 仍是 generic（归一回填所致），而 UpdateInstanceFields 没有 Type 字段，
+	//     该实例永久 IsProbeApplicable=false 且无 API 可修回（本块 + 上面的 f.Type 即为修回入口）。
+	//
+	// 归一规则（复用 model.NormalizeInstanceType，role=beacon ⇒ type=generic）只保证必要约束，
+	// 不反向强推 minecraft_java（generic 对 universal/backend/proxy 均合法）。
+	// 仅在调用方传了 role/type 时收口：未触碰这两者的普通更新（改名/标签/限额等）不产生额外副作用，
+	// 历史脏值由 database 启动期幂等归正兜底。
+	if f.Role != nil || f.Type != nil {
+		effRole := instance.Role
+		if f.Role != nil {
+			effRole = *f.Role
+		}
+		effType := instance.Type
+		if f.Type != nil {
+			effType = *f.Type
+		}
+		// 这一步同时修正「已传 type=minecraft_java 但 role 为 beacon」的被忽略写入。
+		normType := model.NormalizeInstanceType(effType, effRole)
+		if normType != instance.Type {
+			updates["type"] = normType
+		} else {
+			// 归一后与现值一致：撤掉此前按 f.Type 写入的值，避免把 type 改回脏值。
+			delete(updates, "type")
+		}
+		// probe_port 随适用性单向收敛：不适用（代理/Beacon/通用二进制）一律归零，防改 role 后
+		// 残留一个永不被采集的探针端口。反向不在此补分配——probe_port=0 是「探针未部署」的合法
+		// 状态（与 Create 的手工 API 路径一致），端口在安装探针时经 EnsureProbePort 懒分配。
+		if !model.IsProbeApplicable(normType, effRole) && instance.ProbePort != 0 {
+			updates["probe_port"] = 0
+		}
 	}
 
 	if len(updates) > 0 {
@@ -1318,6 +1387,11 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 // 已有端口时幂等直返（changed=false）；否则分配、落库并幂等重注册 Worker（刷新其内存表 ProbePort，
 // 使下一拍心跳立即采集，无需等待实例重启）。重注册失败不阻断（Worker 离线时下次启动/重连重推补齐）。
 func (s *InstanceService) EnsureProbePort(instance *model.Instance) (changed bool, err error) {
+	// FR-454 防御性守卫：不适用探针的实例（代理/Beacon/通用二进制）永不补分配探针端口。
+	// 否则会为这类实例写回一个永远不会被采集的 probe_port，并让调用方误以为「探针端口已就绪」。
+	if !model.IsProbeApplicable(instance.Type, instance.Role) {
+		return false, nil
+	}
 	if instance.ProbePort > 0 {
 		return false, nil
 	}
@@ -1899,11 +1973,17 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.metricsFetchTimeout(instance))
 	defer cancel()
 
-	// 下发探针端口 + MC 直探端口（server_port / query_port，FR-446）：Worker 据此走
-	// `探针 → SLP → Query → 不可用` 编排链，探针缺失时用直探回填基础信息。
+	// 下发探针端口（适用性收敛，FR-454）+ MC 直探端口（server_port / query_port，FR-446）：
+	// Worker 据此走 `探针 → SLP → Query → 不可用` 编排链，探针缺失时用直探回填基础信息。
+	// FR-454：不适用探针的实例（代理/Beacon/通用二进制）探针端口一律下发 0——与 CreateInstance/Resync
+	// 同口径收敛，兜底历史脏数据，避免 Worker 对 localhost:probe_port 空抓。
+	probePort := 0
+	if model.IsProbeApplicable(instance.Type, instance.Role) {
+		probePort = instance.ProbePort
+	}
 	resp, err := client.Worker.GetInstanceMetrics(ctx, &workerpb.GetInstanceMetricsRequest{
 		InstanceUuid: instance.UUID,
-		ProbePort:    int32(instance.ProbePort),
+		ProbePort:    int32(probePort),
 		ServerPort:   int32(instance.ServerPort),
 		QueryPort:    int32(instance.QueryPort),
 	})

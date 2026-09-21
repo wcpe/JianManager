@@ -132,13 +132,26 @@ type ProbeUpdateBatchError struct {
 	Error      string `json:"error"`
 }
 
+// ProbeUpdateBatchExclusion 批量目标中「命中但不适用探针」的实例及可读原因（FR-454）。
+//
+// 与 Skipped 语义严格区分：
+//   - Skipped：请求 ID 未命中（不存在或越权被剔除），保持存在性隐藏不泄露；
+//   - Excluded：ID 命中且可见，但该实例不适用 ServerProbe（代理/Beacon/通用二进制），
+//     给出明确原因而非静默丢弃，让调用方知道「谁被跳过、为什么」。
+type ProbeUpdateBatchExclusion struct {
+	InstanceID uint   `json:"instanceId"`
+	Name       string `json:"name"`
+	Reason     string `json:"reason"`
+}
+
 // ProbeUpdateBatchResult 批量更新结果计数。
 type ProbeUpdateBatchResult struct {
-	Requested int                     `json:"requested"`
-	Succeeded int                     `json:"succeeded"`
-	Failed    int                     `json:"failed"`
-	Skipped   int                     `json:"skipped"`
-	Errors    []ProbeUpdateBatchError `json:"errors"`
+	Requested int                         `json:"requested"`
+	Succeeded int                         `json:"succeeded"`
+	Failed    int                         `json:"failed"`
+	Skipped   int                         `json:"skipped"`
+	Excluded  []ProbeUpdateBatchExclusion `json:"excluded"`
+	Errors    []ProbeUpdateBatchError     `json:"errors"`
 }
 
 // Status 返回某实例的探针更新状态。实例不存在返回 gorm.ErrRecordNotFound。
@@ -230,7 +243,7 @@ func (s *ProbeUpdateService) BatchWithBaseURL(req ProbeUpdateBatchRequest, scope
 	if s.artifacts == nil {
 		return nil, ErrProbeNotEmbedded
 	}
-	instances, skipped, err := s.resolveTargets(req, scopeIDs, scope)
+	instances, skipped, excluded, err := s.resolveTargets(req, scopeIDs, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +254,11 @@ func (s *ProbeUpdateService) BatchWithBaseURL(req ProbeUpdateBatchRequest, scope
 	result := &ProbeUpdateBatchResult{
 		Requested: len(instances),
 		Skipped:   skipped,
+		Excluded:  excluded,
 		Errors:    []ProbeUpdateBatchError{},
+	}
+	if result.Excluded == nil {
+		result.Excluded = []ProbeUpdateBatchExclusion{}
 	}
 	if len(instances) == 0 {
 		return result, nil
@@ -295,22 +312,35 @@ func (s *ProbeUpdateService) deployTarget(inst *model.Instance, baseURL string) 
 }
 
 // resolveTargets 解析批量目标实例（预加载节点），按可访问实例集合收敛。
-// 不适用探针的实例（代理/Beacon 角色、通用二进制类型，FR-454）一律排除。
-// 返回 (目标实例列表, skipped)。skipped 为请求 IDs 中不存在或越权被剔除的数量（存在性隐藏）。
-func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeIDs []uint, scope bool) ([]model.Instance, int, error) {
+// 返回 (目标实例列表, skipped, excluded, err)：
+//   - IDs 模式：先取回请求 IDs 中可见的实例，再显式分流——适用探针者进目标，不适用者进 excluded
+//     并带可读原因（FR-454：不再静默计入 skipped）；未命中（不存在/越权）才计 skipped。
+//   - Filter 模式：批量选择器，不适用实例在 SQL 侧直接排除且不逐条列名单（可能是数千条，
+//     逐条回传无意义也无界）；被排除原因可由单实例 Update 或 IDs 模式获得。
+func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeIDs []uint, scope bool) ([]model.Instance, int, []ProbeUpdateBatchExclusion, error) {
 	var instances []model.Instance
 
 	if len(req.IDs) > 0 {
 		q := applyInstanceBatchFilter(s.db.Model(&model.Instance{}).Preload("Node"), InstanceBatchFilter{}, scopeIDs, scope)
-		// 不适用探针的实例（代理/Beacon/通用二进制）批量目标静默跳过并计入 skipped。
-		if err := applyProbeApplicableScope(q).Where("instances.id IN ?", req.IDs).Find(&instances).Error; err != nil {
-			return nil, 0, fmt.Errorf("查询批量目标失败: %w", err)
+		if err := q.Where("instances.id IN ?", req.IDs).Find(&instances).Error; err != nil {
+			return nil, 0, nil, fmt.Errorf("查询批量目标失败: %w", err)
+		}
+		targets := make([]model.Instance, 0, len(instances))
+		excluded := make([]ProbeUpdateBatchExclusion, 0)
+		for i := range instances {
+			if reason := probeInapplicableReason(&instances[i]); reason != "" {
+				excluded = append(excluded, ProbeUpdateBatchExclusion{
+					InstanceID: instances[i].ID, Name: instances[i].Name, Reason: reason,
+				})
+				continue
+			}
+			targets = append(targets, instances[i])
 		}
 		skipped := len(req.IDs) - len(instances)
 		if skipped < 0 {
 			skipped = 0
 		}
-		return instances, skipped, nil
+		return targets, skipped, excluded, nil
 	}
 
 	f := InstanceBatchFilter{}
@@ -319,17 +349,20 @@ func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeID
 	}
 	q := applyInstanceBatchFilter(s.db.Model(&model.Instance{}).Preload("Node"), f, scopeIDs, scope)
 	if err := applyProbeApplicableScope(q).Limit(maxProbeUpdateTargets + 1).Find(&instances).Error; err != nil {
-		return nil, 0, fmt.Errorf("查询批量目标失败: %w", err)
+		return nil, 0, nil, fmt.Errorf("查询批量目标失败: %w", err)
 	}
-	return instances, 0, nil
+	return instances, 0, nil, nil
 }
 
-// applyProbeApplicableScope 追加「探针适用实例」筛选（FR-454）：排除代理/Beacon 角色与通用二进制类型。
-// 与 model.IsProbeApplicable 同口径（SQL 侧镜像），确保批量目标解析与单实例推送守卫一致。
+// applyProbeApplicableScope 追加「探针适用实例」筛选（FR-454）：排除代理/Beacon 角色与非 MC Java 类型。
+// 与 model.IsProbeApplicable 严格同口径（SQL 侧镜像：t == minecraft_java 且 role 非 proxy/beacon）：
+//   - role 允许 NULL（历史/异常行）→ 视为适用（NULL 既不等于 proxy 也不等于 beacon），
+//     修正此前 `role NOT IN (…)` 在 role IS NULL 时 SQL 三值逻辑恒为 NULL、把实例误排除的问题；
+//   - type 用等值而非 `<> generic`，避免未来新增类型时 SQL 与 Go 判定漂移。
 func applyProbeApplicableScope(q *gorm.DB) *gorm.DB {
-	return q.Where("instances.role NOT IN ? AND instances.type <> ?",
-		[]string{string(model.InstanceRoleProxy), string(model.InstanceRoleBeacon)},
-		string(model.InstanceTypeGeneric))
+	return q.Where("instances.type = ? AND (instances.role IS NULL OR instances.role NOT IN ?)",
+		string(model.InstanceTypeMinecraftJava),
+		[]string{string(model.InstanceRoleProxy), string(model.InstanceRoleBeacon)})
 }
 
 // probeInapplicableReason 返回实例不适用探针的可读原因；适用时返回空串（FR-454）。
@@ -346,6 +379,17 @@ func probeInapplicableReason(inst *model.Instance) string {
 	default:
 		return "通用二进制实例不适用 ServerProbe 探针（非 Minecraft Java 服务端），无需推送"
 	}
+}
+
+// ApplicabilityReason 返回某实例不适用探针的可读原因；适用返回空串（FR-454）。
+// 实例不存在返回 gorm.ErrRecordNotFound。供路由在产生任何副作用（落库/下发）之前先行拒绝——
+// 例如 probe-version 设置：SetInstanceProbeVersion 会写库，必须先判定再落库，否则拒绝时库已被脏写。
+func (s *ProbeUpdateService) ApplicabilityReason(instanceID uint) (string, error) {
+	var inst model.Instance
+	if err := s.db.First(&inst, instanceID).Error; err != nil {
+		return "", err
+	}
+	return probeInapplicableReason(&inst), nil
 }
 
 // deployVersionTo 下发已缓存制品的 CP 本地 URL；不传 jar 字节或运行库压缩包。
