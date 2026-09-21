@@ -176,6 +176,18 @@ func validateSilenceTime(value string) error {
 	return nil
 }
 
+// validateSaturationThreshold 校验饱和度阈值落在 (0,100]。threshold 缺省 0 会使
+// `pct >= 0` 恒真（告警风暴），故饱和度规则必须显式给出合法阈值。其余触发类型不约束。
+func validateSaturationThreshold(triggerType string, threshold float64) error {
+	if triggerType != model.AlertTriggerSaturation {
+		return nil
+	}
+	if threshold <= 0 || threshold > 100 {
+		return fmt.Errorf("饱和度阈值必须落在 (0,100]，当前 %g", threshold)
+	}
+	return nil
+}
+
 // validateRuleFields 校验规则字段之间的语义约束。
 func validateRuleFields(triggerType, targetType, keyword, eventMatch, silenceStart, silenceEnd string, durationSec, dedupWindowSec int) error {
 	if !validTargetTypes[targetType] {
@@ -244,6 +256,9 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 	if err := validateBaselineFields(triggerType, req.BaselineMethod, req.Direction, req.Scope); err != nil {
 		return nil, err
 	}
+	if err := validateSaturationThreshold(triggerType, req.Threshold); err != nil {
+		return nil, err
+	}
 	if err := s.validateChannelIDs(req.ChannelIDs); err != nil {
 		return nil, err
 	}
@@ -257,6 +272,12 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 	}
 
 	baselineMethod, baselineWindow, sensitivity, direction := normalizeBaselineFields(triggerType, req.BaselineMethod, req.BaselineWindowSec, req.Sensitivity, req.Direction)
+
+	// baseline 规则不使用静态阈值（基线自算），忽略并清零 threshold，避免误配。
+	threshold := req.Threshold
+	if triggerType == model.AlertTriggerBaseline {
+		threshold = 0
+	}
 
 	channelIDs := ""
 	if len(req.ChannelIDs) > 0 {
@@ -275,7 +296,7 @@ func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, erro
 		TargetID:          req.TargetID,
 		Metric:            req.Metric,
 		Operator:          req.Operator,
-		Threshold:         req.Threshold,
+		Threshold:         threshold,
 		DurationSec:       req.DurationSec,
 		BaselineMethod:    baselineMethod,
 		BaselineWindowSec: baselineWindow,
@@ -386,6 +407,15 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 	if err := validateRuleFields(ruleTriggerType(&current), current.TargetType, keyword, eventMatch, silenceStart, silenceEnd, current.DurationSec, dedup); err != nil {
 		return nil, err
 	}
+	// FR-462：饱和度阈值必须合法（缺省 0 会恒真）；baseline 忽略阈值。
+	triggerType := ruleTriggerType(&current)
+	effectiveThreshold := current.Threshold
+	if req.Threshold != nil {
+		effectiveThreshold = *req.Threshold
+	}
+	if err := validateSaturationThreshold(triggerType, effectiveThreshold); err != nil {
+		return nil, err
+	}
 	// FR-462：合并并校验基线/饱和度字段。
 	baselineMethod := current.BaselineMethod
 	if req.BaselineMethod != nil {
@@ -412,7 +442,7 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled
 	}
-	if req.Threshold != nil {
+	if req.Threshold != nil && triggerType != model.AlertTriggerBaseline {
 		updates["threshold"] = *req.Threshold
 	}
 	if req.Level != nil {

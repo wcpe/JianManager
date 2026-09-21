@@ -67,4 +67,36 @@ describe('HealthWall（mock 假后端）', () => {
     expect(screen.queryAllByTestId('health-wall-cell')).toHaveLength(0)
     expect(lastSort).toBeNull()
   })
+
+  it('超限时展示截断提示，并分批「显示更多」展开', async () => {
+    const many = Array.from({ length: 205 }, (_, i) => ({
+      nodeId: i + 1,
+      nodeUuid: `n-${i}`,
+      name: `node-${i}`,
+      freshness: 'fresh',
+      cpuPct: 10,
+      memPct: 20,
+      diskPct: 30,
+      running: 0,
+      crashed: 0,
+      stopped: 0,
+      activeAlerts: 0,
+      botActive: null,
+      botConnecting: null,
+      level: 'healthy',
+      href: `/monitoring?node=n-${i}`,
+    }))
+    server.use(
+      http.get(API('/observability/health-wall'), () => HttpResponse.json({ nodes: many, truncated: true })),
+    )
+    renderWithProviders(<HealthWall enabled />, { route: '/' })
+
+    // 截断提示如实呈现（大集群仅展示最严重的一批）。
+    await screen.findByTestId('health-wall-truncated')
+    expect(screen.getByText(/仅展示最严重的 205 台/)).toBeInTheDocument()
+    // 默认只渲染一页（200 格），其余经「显示更多」逐批展开，避免一次挂载数百 DOM。
+    expect(screen.getAllByTestId('health-wall-cell')).toHaveLength(200)
+    await userEvent.setup().click(screen.getByTestId('health-wall-more'))
+    expect(screen.getAllByTestId('health-wall-cell')).toHaveLength(205)
+  })
 })

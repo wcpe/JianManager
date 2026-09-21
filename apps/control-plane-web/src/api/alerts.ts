@@ -36,6 +36,8 @@ export interface AlertEventInfo {
   level: string
   triggerType: string
   value: number
+  /** 基线/突升突降偏离方向（up|down）；其余触发类型缺省。 */
+  direction?: string
   message: string
   count: number
   resolved: boolean

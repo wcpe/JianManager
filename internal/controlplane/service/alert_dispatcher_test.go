@@ -225,6 +225,29 @@ func TestDispatcher_FR011WebhookFallbackRejectsPlaintext(t *testing.T) {
 	assert.Equal(t, int64(0), atomic.LoadInt64(&hits))
 }
 
+// TestDispatcher_DedupRefreshesDirection 覆盖 N6：去抖窗口内复发时，事件方向应同步为最新
+// 偏离方向（baseline 由 up 翻转为 down），避免事件长期显示过期方向误导排障。
+func TestDispatcher_DedupRefreshesDirection(t *testing.T) {
+	db := newAlertTestDB(t)
+	d := NewAlertDispatcher(db)
+	clock := time.Now()
+	d.now = func() time.Time { return clock }
+
+	rule := &model.AlertRule{Name: "base", Level: model.AlertLevelWarn, TriggerType: model.AlertTriggerBaseline, DedupWindowSec: 300}
+	require.NoError(t, db.Create(rule).Error)
+
+	key := "baseline:1:tps"
+	d.Fire(AlertTrigger{Rule: rule, TargetID: 1, DedupKey: key, Value: 150, Direction: model.BaselineDirectionUp, Message: "突升", Resolvable: true})
+	clock = clock.Add(30 * time.Second)
+	d.Fire(AlertTrigger{Rule: rule, TargetID: 1, DedupKey: key, Value: 20, Direction: model.BaselineDirectionDown, Message: "突降", Resolvable: true})
+
+	var events []model.AlertEvent
+	require.NoError(t, db.Find(&events).Error)
+	require.Len(t, events, 1, "去抖窗口内仍应只有一个活跃事件")
+	assert.Equal(t, model.BaselineDirectionDown, events[0].Direction, "复发应同步最新方向")
+	assert.Equal(t, 2, events[0].Count)
+}
+
 // itoa 避免在测试中引 strconv。
 func itoa(v uint) string {
 	if v == 0 {

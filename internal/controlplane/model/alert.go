@@ -171,7 +171,9 @@ type AlertEvent struct {
 	// DedupKey 去抖键（rule + target + 触发标识）。聚合窗口内复发更新同一活跃事件而非新建。
 	DedupKey string  `gorm:"type:varchar(256);index" json:"-"`
 	Value    float64 `json:"value"`
-	Message  string  `gorm:"type:varchar(512)" json:"message"`
+	// Direction 基线/突升突降偏离方向的结构化落库字段：up | down（其余触发类型为空）。
+	Direction string `gorm:"type:varchar(8)" json:"direction,omitempty"`
+	Message   string `gorm:"type:varchar(512)" json:"message"`
 	// Count 聚合计数：去抖窗口内该告警被触发的次数（≥1）。
 	Count    int       `gorm:"default:1" json:"count"`
 	Resolved bool      `gorm:"default:false" json:"resolved"`

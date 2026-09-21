@@ -348,6 +348,8 @@ export interface HealthWallNode {
 /** FR-461 健康墙读模型。 */
 export interface HealthWallResponse {
   nodes: HealthWallNode[]
+  /** 节点数超过服务端上限、响应已按 severity 截断时为 true。 */
+  truncated?: boolean
 }
 
 /** 健康墙服务端排序键。 */
