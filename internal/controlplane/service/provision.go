@@ -304,7 +304,8 @@ func (p *ProvisionService) createProvisionInstance(req ProvisionServerRequest, c
 	// 建服/克隆/代理分配选中同一端口。
 	releasePortAlloc := p.instance.lockNodePortAlloc()
 	defer releasePortAlloc()
-	ports, err := allocPortsForNode(p.db, req.NodeID)
+	// MC 服务端适用探针（Bukkit 插件），分配探针端口。
+	ports, err := allocPortsForNode(p.db, req.NodeID, true)
 	if err != nil {
 		return nil, err
 	}

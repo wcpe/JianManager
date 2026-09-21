@@ -1414,6 +1414,14 @@ func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (
 		return nil, err
 	}
 
+	// 探针端口下发给 Worker 前做适用性收敛（FR-454）：代理/通用二进制/Beacon 不适用探针，
+	// 下发的 probe_port 一律置 0——worker 侧心跳采集按 ProbePort>0 过滤，从而不再对这类实例
+	// 每拍抓取 /metrics 必失败。此举同时兜底历史脏数据（早期误配的 probe_port 仍留在库中）。
+	probePort := 0
+	if model.IsProbeApplicable(instance.Type, instance.Role) {
+		probePort = instance.ProbePort
+	}
+
 	return &workerpb.CreateInstanceRequest{
 		InstanceUuid:               instance.UUID,
 		Name:                       instance.Name,
@@ -1424,7 +1432,7 @@ func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (
 		EnvVars:                    envVars,
 		AutoRestart:                instance.AutoRestart,
 		JdkPath:                    jdkPath,
-		ProbePort:                  int32(instance.ProbePort),
+		ProbePort:                  int32(probePort),
 		ServerPort:                 int32(instance.ServerPort),
 		QueryPort:                  int32(instance.QueryPort),
 		GracefulStopTimeoutSeconds: s.gracefulStopTimeoutSeconds(),

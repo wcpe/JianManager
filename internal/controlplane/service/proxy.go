@@ -136,7 +136,8 @@ func (p *ProxyService) createProxyInstance(req ProvisionProxyRequest) (*model.In
 	// 建服/克隆/代理分配选中同一端口。
 	releasePortAlloc := p.instance.lockNodePortAlloc()
 	defer releasePortAlloc()
-	ports, err := allocPortsForNode(p.db, req.NodeID)
+	// 代理端无法加载 Bukkit 探针插件（FR-454），不分配探针端口（ProbePort 恒 0）。
+	ports, err := allocPortsForNode(p.db, req.NodeID, false)
 	if err != nil {
 		return nil, "", err
 	}

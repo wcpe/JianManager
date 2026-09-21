@@ -423,7 +423,8 @@ func (p *ProvisionService) createBeaconInstance(req ProvisionServerRequest, plan
 	}
 	releasePortAlloc := p.instance.lockNodePortAlloc()
 	defer releasePortAlloc()
-	ports, err := allocPortsForNode(p.db, req.NodeID)
+	// Beacon 非 MC Java 服务端，探针（Bukkit 插件）不适用，不分配探针端口（FR-454）。
+	ports, err := allocPortsForNode(p.db, req.NodeID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +438,6 @@ func (p *ProvisionService) createBeaconInstance(req ProvisionServerRequest, plan
 		StartCommand: startCommand,
 		ServerPort:   ports.ServerPort,
 		QueryPort:    ports.QueryPort,
-		ProbePort:    ports.ProbePort,
 		AutoRestart:  true,
 		GroupID:      req.GroupID,
 	})
@@ -813,7 +813,8 @@ func (p *ProvisionService) createBinaryInstance(req ProvisionServerRequest, plan
 	// 端口分配互斥同 MC 路径：防同节点并发创建选中同一端口。
 	releasePortAlloc := p.instance.lockNodePortAlloc()
 	defer releasePortAlloc()
-	ports, err := allocPortsForNode(p.db, req.NodeID)
+	// 通用二进制非 MC Java 进程，探针（Bukkit 插件）不适用，不分配探针端口（FR-454）。
+	ports, err := allocPortsForNode(p.db, req.NodeID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -830,7 +831,6 @@ func (p *ProvisionService) createBinaryInstance(req ProvisionServerRequest, plan
 		StartCommand: startCommand,
 		ServerPort:   ports.ServerPort,
 		QueryPort:    ports.QueryPort,
-		ProbePort:    ports.ProbePort,
 		AutoRestart:  true,
 		GroupID:      req.GroupID,
 	})

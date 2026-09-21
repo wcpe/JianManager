@@ -61,6 +61,26 @@ func ValidInstanceRole(r InstanceRole) bool {
 	return false
 }
 
+// IsProbeApplicable 判断该实例是否适用 ServerProbe（Bukkit 插件）监控探针（FR-454）。
+//
+// ServerProbe 是 Bukkit 插件，只有 Minecraft Java 服务端能加载：
+//   - 代理端（BungeeCord/Waterfall/Velocity，role=proxy）无法加载 Bukkit 插件；
+//   - 通用二进制（type=generic，FR-441）与 Beacon（role=beacon，FR-442）不是 MC Java 进程。
+//
+// 因此不适用探针的实例不应被分配探针端口、不参与 /metrics 抓取、也不接收探针 jar 推送。
+// 判定同时看 type 与 role：即使历史数据把 beacon 实例的 type 误记为 minecraft_java，
+// role=beacon 仍会被正确判为不适用（FR-454 数据归正的代码层兜底）。
+func IsProbeApplicable(t InstanceType, r InstanceRole) bool {
+	if t != InstanceTypeMinecraftJava {
+		return false
+	}
+	switch r {
+	case InstanceRoleProxy, InstanceRoleBeacon:
+		return false
+	}
+	return true
+}
+
 // ProcessType 启动方式。
 type ProcessType string
 
