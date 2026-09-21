@@ -201,11 +201,11 @@ func TestBotReclaim_V1BotNotAutoDisposed(t *testing.T) {
 	now = now.Add(2 * time.Minute)
 	require.NoError(t, svc.Sweep(context.Background()))
 
+	// F7：V1 手动 Bot 不进入回收判定（既不能自动处置、也无法经回收端点处置），
+	// 纳入只会产生无法收敛的死条目；此处应零记录、零下发。
 	recs, err := svc.List("", false, 0)
 	require.NoError(t, err)
-	require.Len(t, recs, 1)
-	require.False(t, recs[0].FleetOwned)
-	require.Equal(t, model.FleetBotReclaimConfirmed, recs[0].Status, "V1 手动 Bot 不得自动回收")
+	require.Empty(t, recs, "V1 手动 Bot 不得进入回收列表")
 	require.Equal(t, 0, stop.count())
 }
 

@@ -25,6 +25,29 @@ const (
 	botReclaimSweepInterval = 60 * time.Second
 	// botReclaimFreshnessWindow 复用 FR-365 的 botFreshnessMissingWindow 口径（90s）。
 	botReclaimFreshnessWindow = botFreshnessMissingWindow
+	// botReclaimConnectingFirstSeenWindow N1：从未上报（last_seen_at 为空）的 connecting Bot 的
+	// 判定上限（比通用新鲜度窗口宽松 10×），既容忍慢节点首次登录，又避免永久豁免 empty_epoch。
+	botReclaimConnectingFirstSeenWindow = 10 * botReclaimFreshnessWindow
+
+	// botReclaimRefillMinGapRatio 补足缺口比例阈值（spec §5）：缺口低于目标的比例时不补足，
+	// 抑制连接建立中的瞬时抖动（connecting）触发过度补发。
+	botReclaimRefillMinGapRatio = 0.02
+	// botReclaimRefillSmallGapStreak N5：小缺口（低于比例阈值）连续 N 拍仍未收敛时仍补足。
+	// 否则大 target（≥51）下「单台缺失」永久落在阈值内，容量就永久缺一格。
+	botReclaimRefillSmallGapStreak = 2
+	// defaultBotReclaimSnapshotTimeout 单次 Fleet 实存快照 RPC 超时（N3：防止节点假死拖住整拍巡检）。
+	defaultBotReclaimSnapshotTimeout = 10 * time.Second
+	// botReclaimRefillMaxAttempts 单会话连续补足尝试上限；达到后转入长冷却，避免 60s 无条件重发。
+	botReclaimRefillMaxAttempts = 6
+	// botReclaimRefillBaseBackoff / botReclaimRefillMaxBackoff 补足指数退避起点与上限。
+	botReclaimRefillBaseBackoff = 60 * time.Second
+	botReclaimRefillMaxBackoff  = 10 * time.Minute
+	// botReclaimRearmCooldown 被回收 / 重新武装 Bot 的冷却窗，消除 stop+create 振荡。
+	botReclaimRearmCooldown = 5 * time.Minute
+	// botReclaimListLimitMax List 单次返回条数上限（nit：避免无界返回）。
+	botReclaimListLimitMax = 500
+	// botReclaimDetectLimit 单拍判定候选上限（nit：避免无界扫描）。
+	botReclaimDetectLimit = 2000
 )
 
 // 失效判据命中说明（§2.1 条件 3）。
@@ -53,10 +76,35 @@ var (
 // BotReclaimNodeEpoch 是判定失效所需的执行节点世代视图（真源取自容量快照）。
 type BotReclaimNodeEpoch struct {
 	NodeID                uint
+	NodeUUID              string
 	Exists                bool
 	Online                bool
 	WorkerEpoch           string
 	WorkerEpochGeneration int64
+}
+
+// BotReclaimFleetSnapshotSource 提供执行节点 Worker 的 Fleet 实存快照。
+//
+// FR-460 §2.4.3 要求补足与回收都先与 Worker 快照对账；F1 亦以「Bot 是否仍在 Worker 实存中」
+// 作为分片世代分叉场景下判定健康与否的真源。生产实现复用既有隧道连接池，不新增协议。
+type BotReclaimFleetSnapshotSource interface {
+	GetBotFleetSnapshot(ctx context.Context, nodeUUID, sessionUUID string) (*workerpb.GetBotFleetSnapshotResponse, error)
+}
+
+// botReclaimNodePresence 是某执行节点 Worker 当前实存的 Bot 集合与容量世代。
+// Known=false 表示本轮未能取到快照（节点不可达 / RPC 失败），调用方须走保守兜底。
+type botReclaimNodePresence struct {
+	Known              bool
+	Present            map[string]struct{}
+	CapacityGeneration int64
+}
+
+func (p botReclaimNodePresence) contains(botUUID string) bool {
+	if p.Present == nil {
+		return false
+	}
+	_, ok := p.Present[botUUID]
+	return ok
 }
 
 // BotReclaimCapacitySource 提供执行节点当前世代；生产实现包装 BotLoadCapacityDirectory。
@@ -85,7 +133,7 @@ func (d directoryBotReclaimCapacity) NodeEpochs(ctx context.Context) (map[uint]B
 	out := make(map[uint]BotReclaimNodeEpoch, len(snapshot.NodeCapacities))
 	for _, capacity := range snapshot.NodeCapacities {
 		out[capacity.NodeID] = BotReclaimNodeEpoch{
-			NodeID: capacity.NodeID, Exists: true, Online: capacity.Online,
+			NodeID: capacity.NodeID, NodeUUID: capacity.NodeUUID, Exists: true, Online: capacity.Online,
 			WorkerEpoch: capacity.WorkerEpoch, WorkerEpochGeneration: capacity.WorkerEpochGeneration,
 		}
 	}
@@ -163,7 +211,7 @@ type botReclaimStale struct {
 // BotReclaimService 失效 Bot 自动回收与容量自动补足（FR-460）。
 //
 // 每拍：按 workerEpoch 不匹配 + 状态判据识别失效 Fleet Bot → 宽限观察（pending）→ 宽限后
-// confirmed → auto 且 Fleet 归属则下发停用并 CP 账本去账 → 触发容量补足回 planned_count 目标。
+// confirmed → auto 且 Fleet 归属则下发停用并 CP 账本去账 → 触发容量补足回计划数目标。
 // V1 手动 Bot（无 load_batch_id/stress_session_id）只入列表等人工确认，永不自动处置。
 type BotReclaimService struct {
 	db         *gorm.DB
@@ -172,11 +220,36 @@ type BotReclaimService struct {
 	stopper    BotReclaimStopper
 	audit      *AuditService
 	resolver   *BotExecutorResolver
-	// refill 复用执行核心的补足助手（rebuildRunningAssignment / ApplyBotBatch / 结果回写）。
+	// fleet 提供执行节点 Worker 的 Fleet 实存快照（FR-460 §2.4.3 对账真源）；nil 时退回保守世代比对。
+	fleet BotReclaimFleetSnapshotSource
+	// refill 复用执行核心的补足助手（rebuildRunningAssignment / ApplyBotLoadBatch / 结果回写）。
 	refill *BotLoadExecutionService
 	now    func() time.Time
 	// stopTimeout 单次停用下发 RPC 超时。
 	stopTimeout time.Duration
+	// snapshotTimeout 单次 Fleet 实存快照 RPC 超时（N3）。
+	snapshotTimeout time.Duration
+
+	// guardMu 保护补足退避与冷却窗状态（进程内，随巡检生命周期）。
+	guardMu sync.Mutex
+	// refillAttempts 记录各会话连续补足尝试与下次允许时刻（指数退避）。
+	refillAttempts map[uint]botReclaimRefillState
+	// smallGapStreak 记录各会话「低于缺口阈值」的连续拍数（N5），连续超限后强制补足。
+	smallGapStreak map[uint]int
+	// rearmed 记录最近被重新武装（refill 下发 running）的 Bot 及时间，用于回收冷却窗。
+	rearmed map[string]time.Time
+
+	// sweepMu 保护单拍共享视图缓存（N3/N7）：同一拍内节点世代与 Fleet 快照各只取一次。
+	sweepMu    sync.Mutex
+	sweepDepth int
+	sweepEpoch map[uint]BotReclaimNodeEpoch
+	sweepSeen  map[string]botReclaimNodePresence
+}
+
+// botReclaimRefillState 是单会话的补足尝试状态机（attempts + 下次允许时刻）。
+type botReclaimRefillState struct {
+	attempts      int
+	nextAllowedAt time.Time
 }
 
 // NewBotReclaimService 创建失效 Bot 回收服务。settings/stopper/execution 可为 nil（单测裁剪）。
@@ -184,17 +257,23 @@ func NewBotReclaimService(db *gorm.DB, settings SettingsReader, capacities BotRe
 	return &BotReclaimService{
 		db: db, settings: settings, capacities: capacities, stopper: stopper,
 		resolver: NewBotExecutorResolver(db), refill: execution, now: time.Now,
-		stopTimeout: 30 * time.Second,
+		stopTimeout: 30 * time.Second, snapshotTimeout: defaultBotReclaimSnapshotTimeout,
 	}
 }
 
 // NewGRPCBotReclaimService 使用连接池与既有容量目录/执行核心装配生产实例。
 func NewGRPCBotReclaimService(db *gorm.DB, settings SettingsReader, directory *BotLoadCapacityDirectory, pool *cpgrpc.ClientPool, execution *BotLoadExecutionService) *BotReclaimService {
-	return NewBotReclaimService(db, settings, NewDirectoryBotReclaimCapacity(directory), poolBotReclaimStopper{pool: pool}, execution)
+	svc := NewBotReclaimService(db, settings, NewDirectoryBotReclaimCapacity(directory), poolBotReclaimStopper{pool: pool}, execution)
+	// 复用既有隧道优先连接池做 Worker Fleet 快照对账，不新增 RPC。
+	svc.fleet = poolBotFleetRuntimeClient{pool: pool}
+	return svc
 }
 
 // SetAudit 注入审计服务（自动/手动回收与补足均记）；nil 时跳过审计。
 func (s *BotReclaimService) SetAudit(a *AuditService) { s.audit = a }
+
+// SetFleetSnapshotSource 注入 Worker Fleet 快照来源（对账真源，测试/裁剪场景可省略）。
+func (s *BotReclaimService) SetFleetSnapshotSource(src BotReclaimFleetSnapshotSource) { s.fleet = src }
 
 // SetNow 注入时钟（测试用）。
 func (s *BotReclaimService) SetNow(fn func() time.Time) {
@@ -231,6 +310,197 @@ func (s *BotReclaimService) autoReclaim() bool {
 	return raw == "true"
 }
 
+// refillAllowed 判断某会话本轮是否允许补足（指数退避 + 尝试上限）。
+func (s *BotReclaimService) refillAllowed(sessionID uint, now time.Time) bool {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	state, ok := s.refillAttempts[sessionID]
+	if !ok {
+		return true
+	}
+	return !now.Before(state.nextAllowedAt)
+}
+
+// noteRefillAttempt 记录一次补足尝试并推进指数退避；达上限后转入长冷却（10m）。
+func (s *BotReclaimService) noteRefillAttempt(sessionID uint, now time.Time) {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	if s.refillAttempts == nil {
+		s.refillAttempts = make(map[uint]botReclaimRefillState)
+	}
+	state := s.refillAttempts[sessionID]
+	state.attempts++
+	backoff := botReclaimRefillBaseBackoff << min(state.attempts-1, 4)
+	if state.attempts >= botReclaimRefillMaxAttempts || backoff > botReclaimRefillMaxBackoff {
+		backoff = botReclaimRefillMaxBackoff
+	}
+	state.nextAllowedAt = now.Add(backoff)
+	s.refillAttempts[sessionID] = state
+}
+
+// clearRefillState 清零某会话的补足退避状态（缺口已收敛时调用，避免历史退避抑制后续正常补足）。
+func (s *BotReclaimService) clearRefillState(sessionID uint) {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	delete(s.refillAttempts, sessionID)
+	delete(s.smallGapStreak, sessionID)
+}
+
+// noteSmallGap 记录一次「低于缺口阈值」的观测并返回连续拍数（N5）。
+func (s *BotReclaimService) noteSmallGap(sessionID uint) int {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	if s.smallGapStreak == nil {
+		s.smallGapStreak = make(map[uint]int)
+	}
+	s.smallGapStreak[sessionID]++
+	return s.smallGapStreak[sessionID]
+}
+
+// clearSmallGap 清零某会话的小缺口连续拍数（已决定补足或缺口已收敛）。
+func (s *BotReclaimService) clearSmallGap(sessionID uint) {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	delete(s.smallGapStreak, sessionID)
+}
+
+// pruneRefillState 裁剪已结束会话的退避/小缺口状态（N6：进程内 map 不得对已结束会话无限累积）。
+func (s *BotReclaimService) pruneRefillState(active map[uint]struct{}) {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	for id := range s.refillAttempts {
+		if _, ok := active[id]; !ok {
+			delete(s.refillAttempts, id)
+		}
+	}
+	for id := range s.smallGapStreak {
+		if _, ok := active[id]; !ok {
+			delete(s.smallGapStreak, id)
+		}
+	}
+}
+
+// beginSweepView 开启单拍共享视图（N3/N7），Sweep 内节点世代与 Fleet 快照各只取一次。
+func (s *BotReclaimService) beginSweepView() {
+	s.sweepMu.Lock()
+	defer s.sweepMu.Unlock()
+	if s.sweepDepth == 0 {
+		// sweepEpoch 为 nil 表示「本拍尚未取过节点世代」，与「已取到空视图」区分。
+		s.sweepEpoch = nil
+		s.sweepSeen = make(map[string]botReclaimNodePresence)
+	}
+	s.sweepDepth++
+}
+
+// endSweepView 关闭单拍共享视图；最外层退出时释放缓存。
+func (s *BotReclaimService) endSweepView() {
+	s.sweepMu.Lock()
+	defer s.sweepMu.Unlock()
+	if s.sweepDepth > 0 {
+		s.sweepDepth--
+	}
+	if s.sweepDepth == 0 {
+		s.sweepEpoch = nil
+		s.sweepSeen = nil
+	}
+}
+
+// cachedNodeEpochs 读取本拍已缓存的节点世代视图（无活动拍时返回 false）。
+func (s *BotReclaimService) cachedNodeEpochs() (map[uint]BotReclaimNodeEpoch, bool) {
+	s.sweepMu.Lock()
+	defer s.sweepMu.Unlock()
+	if s.sweepDepth == 0 || s.sweepEpoch == nil {
+		return nil, false
+	}
+	return s.sweepEpoch, true
+}
+
+// storeNodeEpochs 将节点世代视图写入本拍缓存。
+func (s *BotReclaimService) storeNodeEpochs(epochs map[uint]BotReclaimNodeEpoch) {
+	s.sweepMu.Lock()
+	defer s.sweepMu.Unlock()
+	if s.sweepDepth > 0 {
+		s.sweepEpoch = epochs
+	}
+}
+
+// nodeEpochs 读取执行节点世代视图；单拍内复用（N7：避免每回收一台 Bot 追加一次容量快照）。
+func (s *BotReclaimService) nodeEpochs(ctx context.Context) (map[uint]BotReclaimNodeEpoch, error) {
+	if s.capacities == nil {
+		return map[uint]BotReclaimNodeEpoch{}, nil
+	}
+	if cached, ok := s.cachedNodeEpochs(); ok {
+		return cached, nil
+	}
+	epochs, err := s.capacities.NodeEpochs(ctx)
+	if err != nil {
+		// N7：失败也占位本拍缓存，避免同一拍内每回收一台 Bot 就重打一次注定失败的容量快照。
+		s.storeNodeEpochs(map[uint]BotReclaimNodeEpoch{})
+		return nil, err
+	}
+	if epochs == nil {
+		epochs = map[uint]BotReclaimNodeEpoch{}
+	}
+	s.storeNodeEpochs(epochs)
+	return epochs, nil
+}
+
+// cachedNodePresence 读取本拍已缓存的节点 Fleet 快照。
+func (s *BotReclaimService) cachedNodePresence(nodeUUID string) (botReclaimNodePresence, bool) {
+	s.sweepMu.Lock()
+	defer s.sweepMu.Unlock()
+	if s.sweepDepth == 0 || s.sweepSeen == nil {
+		return botReclaimNodePresence{}, false
+	}
+	presence, ok := s.sweepSeen[nodeUUID]
+	return presence, ok
+}
+
+// storeNodePresence 将节点 Fleet 快照写入本拍缓存（失败结果也缓存，避免同拍重复打同一假死节点）。
+func (s *BotReclaimService) storeNodePresence(nodeUUID string, presence botReclaimNodePresence) {
+	s.sweepMu.Lock()
+	defer s.sweepMu.Unlock()
+	if s.sweepDepth == 0 || s.sweepSeen == nil {
+		return
+	}
+	s.sweepSeen[nodeUUID] = presence
+}
+
+// noteRearmed 记录被重新武装（refill 下发 running）的 Bot，进入回收冷却窗。
+func (s *BotReclaimService) noteRearmed(uuids []string, now time.Time) {
+	if len(uuids) == 0 {
+		return
+	}
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	if s.rearmed == nil {
+		s.rearmed = make(map[string]time.Time)
+	}
+	for _, uuid := range uuids {
+		if uuid != "" {
+			s.rearmed[uuid] = now
+		}
+	}
+	if len(s.rearmed) > 4096 {
+		for uuid, at := range s.rearmed {
+			if now.Sub(at) > botReclaimRearmCooldown*4 {
+				delete(s.rearmed, uuid)
+			}
+		}
+	}
+}
+
+// isRecentlyRearmed 判断 Bot 是否仍在重新武装冷却窗内（冷却窗内不判失效，消除 stop+create 振荡）。
+func (s *BotReclaimService) isRecentlyRearmed(botUUID string, now time.Time) bool {
+	if botUUID == "" {
+		return false
+	}
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	at, ok := s.rearmed[botUUID]
+	return ok && now.Sub(at) < botReclaimRearmCooldown
+}
+
 // Sweep 执行一轮巡检：判定失效 → 宽限状态机 → 自动处置 → 容量补足。
 // 各阶段独立推进，前段失败不阻断后段（便于容量 RPC 抖动时仍能补足）。
 func (s *BotReclaimService) Sweep(ctx context.Context) error {
@@ -238,6 +508,9 @@ func (s *BotReclaimService) Sweep(ctx context.Context) error {
 		return nil
 	}
 	now := s.now().UTC()
+	// N3/N7：本拍内节点世代与 Fleet 快照各只取一次，供判定/回收/补足三阶段复用。
+	s.beginSweepView()
+	defer s.endSweepView()
 	stale, err := s.detectStale(ctx, now)
 	if err != nil {
 		slog.Warn("失效 Bot 判定失败", "error", err)
@@ -253,29 +526,55 @@ func (s *BotReclaimService) Sweep(ctx context.Context) error {
 	return nil
 }
 
-// detectStale 命中 §2.1 判据的失效 Bot 集合（SQL 粗筛 + 内存世代精判）。
+// botReclaimScan 是单拍失效判定所需的执行节点世代 + Worker 实存视图。
+type botReclaimScan struct {
+	epochs            map[uint]BotReclaimNodeEpoch
+	epochFromCapacity bool
+	// presence 节点 → 该节点 Worker 当前实存 Bot 集合（缺省 Known=false，走保守兜底）。
+	presence map[uint]botReclaimNodePresence
+	// cutoff 新鲜度窗口边界（now - 90s），用于 F2「新 Bot 首拍不判失效」。
+	cutoff time.Time
+	// connectingCutoff 从未上报 connecting Bot 的判定上限（now - 15m，N1）。
+	connectingCutoff time.Time
+}
+
+// detectStale 命中 §2.1 判据的失效 Bot 集合（SQL 粗筛 + 内存世代/实存精判）。
 func (s *BotReclaimService) detectStale(ctx context.Context, now time.Time) ([]botReclaimStale, error) {
-	epochs := map[uint]BotReclaimNodeEpoch{}
-	if s.capacities != nil {
-		observed, err := s.capacities.NodeEpochs(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("查询执行节点世代失败: %w", err)
-		}
-		epochs = observed
+	// N7：单拍内复用节点世代视图（Sweep 已缓存时不再追加容量快照 RPC）。
+	epochs, err := s.nodeEpochs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("查询执行节点世代失败: %w", err)
 	}
 	cutoff := now.Add(-botReclaimFreshnessWindow)
 	var bots []model.Bot
 	if err := s.db.WithContext(ctx).
 		Where("deleted_at IS NULL").
 		Where("desired_state = ?", model.BotDesiredRunning).
+		// F7：仅 Fleet 归属 Bot 进入回收判定（V1 手动 Bot 无 batch/session，属用户资源，
+		// 既不能自动处置也无法经回收端点处置，纳入只会产生无法收敛的死条目）。括号必须显式，
+		// 否则 OR 会破坏与其它 AND 条件的优先级。
+		Where("(load_batch_id IS NOT NULL OR stress_session_id IS NOT NULL)").
 		Where("status IN ?", []model.BotStatus{model.BotStatusError, model.BotStatusDisconnected, model.BotStatusConnecting}).
 		Where("last_seen_at IS NULL OR last_seen_at < ?", cutoff).
+		Order("id ASC").
+		Limit(botReclaimDetectLimit).
 		Find(&bots).Error; err != nil {
 		return nil, fmt.Errorf("查询失效 Bot 候选失败: %w", err)
 	}
+	scan := botReclaimScan{
+		epochs: epochs, epochFromCapacity: s.capacities != nil,
+		cutoff: cutoff, connectingCutoff: now.Add(-botReclaimConnectingFirstSeenWindow),
+	}
+	if s.fleet != nil && len(bots) > 0 {
+		scan.presence = s.nodePresences(ctx, bots, epochs)
+	}
 	out := make([]botReclaimStale, 0, len(bots))
 	for i := range bots {
-		reason, ok := staleBotReclaimReason(&bots[i], epochs, s.capacities != nil)
+		// 冷却窗：刚被补足（重新武装）的 Bot 不立即再次判定失效，消除 stop+create 振荡。
+		if s.isRecentlyRearmed(bots[i].UUID, now) {
+			continue
+		}
+		reason, ok := staleBotReclaimReason(&bots[i], scan)
 		if !ok {
 			continue
 		}
@@ -288,9 +587,47 @@ func (s *BotReclaimService) detectStale(ctx context.Context, now time.Time) ([]b
 	return out, nil
 }
 
+// nodePresences 逐节点取 Worker 实存快照，构建 Bot UUID 集合与容量世代。
+// 取不到快照的节点标记 Known=false，判定侧退回保守兜底（不因节点抖动而误回收）。
+func (s *BotReclaimService) nodePresences(ctx context.Context, bots []model.Bot, epochs map[uint]BotReclaimNodeEpoch) map[uint]botReclaimNodePresence {
+	out := make(map[uint]botReclaimNodePresence)
+	for i := range bots {
+		nodeID := botReclaimNodeID(&bots[i])
+		if nodeID == 0 {
+			continue
+		}
+		if _, done := out[nodeID]; done {
+			continue
+		}
+		node, ok := epochs[nodeID]
+		if !ok || !node.Exists || node.NodeUUID == "" {
+			continue
+		}
+		out[nodeID] = s.fetchNodePresence(ctx, node.NodeUUID, "")
+	}
+	return out
+}
+
+// currentNodeGeneration 返回 Bot 所属执行节点的当前 Worker 世代号；未知时返回 0。
+func (s *BotReclaimService) currentNodeGeneration(ctx context.Context, bot *model.Bot) int64 {
+	if bot == nil || bot.ExecutorNodeID == nil {
+		return 0
+	}
+	// N7：复用本拍节点世代视图，避免「每回收一台就追加一次容量快照」。
+	epochs, err := s.nodeEpochs(ctx)
+	if err != nil {
+		return 0
+	}
+	node, ok := epochs[*bot.ExecutorNodeID]
+	if !ok || !node.Exists {
+		return 0
+	}
+	return node.WorkerEpochGeneration
+}
+
 // staleBotReclaimReason 判定单条 Bot 的世代失效原因（§2.1 条件 3）。
 // epochFromCapacity=false（未装配世代来源）时只判空 epoch/空节点，保守避免误回收。
-func staleBotReclaimReason(bot *model.Bot, epochs map[uint]BotReclaimNodeEpoch, epochFromCapacity bool) (string, bool) {
+func staleBotReclaimReason(bot *model.Bot, scan botReclaimScan) (string, bool) {
 	if bot == nil || bot.DesiredState != model.BotDesiredRunning {
 		return "", false
 	}
@@ -300,22 +637,76 @@ func staleBotReclaimReason(bot *model.Bot, epochs map[uint]BotReclaimNodeEpoch, 
 		return "", false
 	}
 	if bot.WorkerEpoch == "" {
+		if bot.LastSeenAt == nil && bot.Status == model.BotStatusConnecting {
+			// N1：从未上报（last_seen_at 为空）的 connecting Bot 也必须受上限约束，否则
+			// 「create 已被接受但从未上报」的 Bot 永久豁免 empty_epoch：既不被回收也不被补足
+			// （补足侧同样跳过 connecting），容量永久缺一格；新鲜度归真只看 last_seen_at 也会漏过它。
+			// 上限用更宽松的 connectingCutoff，容忍节点首次登录较慢。
+			if !botReclaimAgedOut(bot, scan.connectingCutoff) {
+				return "", false
+			}
+			// 仍在执行节点 Worker 实存中则视为健康（F1：实存是真源），只判「实存中确实不存在」的僵尸。
+			if bot.ExecutorNodeID != nil {
+				if presence, ok := scan.presence[*bot.ExecutorNodeID]; ok && presence.Known && presence.contains(bot.UUID) {
+					return "", false
+				}
+			}
+			return BotReclaimStaleEmptyEpoch, true
+		}
+		// F2：新 Bot 首拍（创建/首发事件未超新鲜度窗口）不判失效，
+		// 否则「刚创建 → 立即判失效 → 误回收 → 补足重建」形成 stop+create 振荡。
+		if !botReclaimAgedOut(bot, scan.cutoff) {
+			return "", false
+		}
 		return BotReclaimStaleEmptyEpoch, true
 	}
 	if bot.ExecutorNodeID == nil {
 		return BotReclaimStaleNodeMissing, true
 	}
-	if !epochFromCapacity {
+	if !scan.epochFromCapacity {
 		return "", false
 	}
-	node, ok := epochs[*bot.ExecutorNodeID]
+	node, ok := scan.epochs[*bot.ExecutorNodeID]
 	if !ok || !node.Exists {
 		return BotReclaimStaleNodeMissing, true
 	}
-	if bot.WorkerEpochGeneration < node.WorkerEpochGeneration {
+	return botReclaimEpochReason(bot, node, scan.presence[*bot.ExecutorNodeID])
+}
+
+// botReclaimEpochReason 判定世代落后（§2.1 条件 3 第三款）。
+//
+// F1：节点级 WorkerEpochGeneration 是各分片世代号的 **max**（worker sharded.go 聚合），
+// 而每分片 Manager 独立自增、Bot 记录的是其所属分片的世代号。生产多分片下任一分片独立
+// 崩溃自愈都会让节点 max 领先于健康 Bot 的分片世代 → 健康/瞬时断线 Bot 被误判 epoch_mismatch。
+// 因此世代落后只是「嫌疑」，真源取 Worker 实存快照：仍在实存中的 Bot 一律视为健康。
+func botReclaimEpochReason(bot *model.Bot, node BotReclaimNodeEpoch, presence botReclaimNodePresence) (string, bool) {
+	if bot.WorkerEpochGeneration >= node.WorkerEpochGeneration {
+		return "", false
+	}
+	if presence.Known {
+		if presence.contains(bot.UUID) {
+			return "", false
+		}
 		return BotReclaimStaleEpochMismatch, true
 	}
-	return "", false
+	// 快照不可用：保守兜底。
+	// 多分片（节点 epoch 形如 "<分片epoch>:<分片数>"）无法把 Bot 分片世代与节点聚合世代逐一对齐，
+	// 保守不判失效；单分片时节点 epoch 即该子进程世代标识，Bot 记录的 epoch 与之相同即视为同世代健康。
+	if strings.Contains(node.WorkerEpoch, ":") {
+		return "", false
+	}
+	if node.WorkerEpoch != "" && bot.WorkerEpoch == node.WorkerEpoch {
+		return "", false
+	}
+	return BotReclaimStaleEpochMismatch, true
+}
+
+// botReclaimAgedOut 判断 Bot 是否已超新鲜度窗口（F2：新 Bot 首拍不判失效）。
+func botReclaimAgedOut(bot *model.Bot, cutoff time.Time) bool {
+	if bot.LastSeenAt != nil {
+		return bot.LastSeenAt.Before(cutoff)
+	}
+	return !bot.CreatedAt.IsZero() && bot.CreatedAt.Before(cutoff)
 }
 
 // applyGrace 对失效集合推进 pending/confirmed 状态机，并取消已被新世代认领的跟踪。
@@ -416,7 +807,8 @@ func (s *BotReclaimService) disposeOne(ctx context.Context, rec *model.FleetBotR
 	var bot model.Bot
 	if err := s.db.WithContext(ctx).First(&bot, rec.BotID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Bot 已不存在（分片早已清掉）：幂等收敛为 disposed。
+			// Bot 已不存在（分片早已清掉）：幂等收敛为 disposed，并补审计（F6：终态路径也须留痕）。
+			s.recordDisposeAudit(userID, ip, nil, rec, mode, true, "Bot 记录已不存在，视为已回收")
 			return s.finishDispose(ctx, rec, mode, userID, ip, "Bot 记录已不存在，视为已回收")
 		}
 		return err
@@ -447,10 +839,16 @@ func (s *BotReclaimService) disposeOne(ctx context.Context, rec *model.FleetBotR
 		return err
 	}
 	// 账本去账：desired_state/status → stopped、清 worker_epoch，并修正批次 connected_count。
+	// F8：同时把 worker_epoch_generation 抬升到节点当前世代，使旧世代（分片重启前）的迟到事件
+	// 被 classifyRuntimeEpoch 判为 stale 而丢弃，避免 stopped 被翻回 connected。
+	reclaimEpochGeneration := bot.WorkerEpochGeneration
+	if current := s.currentNodeGeneration(ctx, &bot); current > reclaimEpochGeneration {
+		reclaimEpochGeneration = current
+	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.Bot{}).Where("id = ?", bot.ID).Updates(map[string]any{
 			"desired_state": model.BotDesiredStopped, "status": model.BotStatusStopped,
-			"worker_epoch": "", "last_error": "",
+			"worker_epoch": "", "worker_epoch_generation": reclaimEpochGeneration, "last_error": "",
 		}).Error; err != nil {
 			return err
 		}
@@ -459,6 +857,9 @@ func (s *BotReclaimService) disposeOne(ctx context.Context, rec *model.FleetBotR
 		}
 		return nil
 	}); err != nil {
+		// F6：账本事务失败也须留痕（否则「回收失败无审计」）。
+		s.markDisposeError(ctx, rec, err.Error())
+		s.recordDisposeAudit(userID, ip, &bot, rec, mode, false, err.Error())
 		return err
 	}
 	slog.Info("失效 Bot 已回收", "botUuid", bot.UUID, "nodeUuid", nodeUUID, "mode", mode,
@@ -547,12 +948,22 @@ func (s *BotReclaimService) refillRunningSessions(ctx context.Context) error {
 		return nil
 	}
 	var sessions []model.BotStressSession
+	// N8：必须带 Instance 关联。补足预扫描会按计划重建期望行并逐字段比对（含含 InstanceUuid 的
+	// ConfigHash），缺 Instance 时会算出与落库值不同的 ConfigHash → materialize 直接失败，
+	// 补足整条路径退化为空转（每拍仅打一条 WARN）。
 	if err := s.db.WithContext(ctx).
 		Where("status = ? AND deleted_at IS NULL", model.BotStressSessionRunning).
+		Preload("Instance").
 		Find(&sessions).Error; err != nil {
 		return fmt.Errorf("查询 running Bot 压测会话失败: %w", err)
 	}
 	var errs []error
+	// N6：裁剪已结束会话的进程内状态，避免退避/小缺口 map 无界累积。
+	active := make(map[uint]struct{}, len(sessions))
+	for i := range sessions {
+		active[sessions[i].ID] = struct{}{}
+	}
+	s.pruneRefillState(active)
 	for i := range sessions {
 		if botLoadStopIntentRecorded(sessions[i].LastError) {
 			continue
@@ -569,6 +980,14 @@ func (s *BotReclaimService) refillSession(ctx context.Context, session *model.Bo
 	plan, err := decodeStartAllocationPlan(session)
 	if err != nil {
 		return nil // 无服务端计划的会话（历史 V1）不补足。
+	}
+	// N8：期望行比对依赖 session.Instance——InstanceUuid 参与 ConfigHash，缺失会让按计划重建的
+	// 期望行与落库行不一致，materialize 直接失败。此处兜底补齐，避免调用方漏 Preload。
+	if session.Instance.ID == 0 && session.InstanceID != 0 {
+		var instance model.Instance
+		if err := s.db.WithContext(ctx).First(&instance, session.InstanceID).Error; err == nil {
+			session.Instance = instance
+		}
 	}
 	config, err := parseBotLoadConnectionConfig(session.Config)
 	if err != nil {
@@ -606,7 +1025,22 @@ func (s *BotReclaimService) refillSession(ctx context.Context, session *model.Bo
 		return fmt.Errorf("统计 Bot 负载在线数失败: %w", err)
 	}
 	if int(actual) >= target {
-		return nil // 已达标：不抖动补足。
+		s.clearRefillState(session.ID) // 缺口已收敛：清零退避，避免历史退避抑制后续正常补足。
+		return nil
+	}
+	// F4：缺口比例阈值（spec §5）——缺口低于目标比例时不补足，抑制连接建立中的瞬时抖动。
+	// N5：比例阈值须向下取整并至少有 1 台的绝对下限，否则大 target（≥51）下「单台缺失」永远落在
+	// 阈值内（1/51 < 2%），容量永久缺一格；仍被阈值拦下的小缺口，连续 N 拍未收敛后强制补足。
+	gap := target - int(actual)
+	if gap < refillMinGap(target) {
+		if s.noteSmallGap(session.ID) < botReclaimRefillSmallGapStreak {
+			return nil
+		}
+	}
+	s.clearSmallGap(session.ID)
+	// F4：指数退避 + 尝试上限，避免每拍无条件重发造成 stop+create 振荡。
+	if !s.refillAllowed(session.ID, s.now().UTC()) {
+		return nil
 	}
 	expected, err := expectedBotLoadBots(prepared, batchesByOrdinal)
 	if err != nil {
@@ -618,94 +1052,228 @@ func (s *BotReclaimService) refillSession(ctx context.Context, session *model.Bo
 	}); err != nil {
 		return err
 	}
-	return s.refillDispatch(ctx, session, expected)
+	dispatched, err := s.refillDispatch(ctx, session, expected)
+	// N6：只对真正发生派发（或真实下发失败）的尝试消耗退避预算；0 派发（Worker 实存中已存在）
+	// 不是一次真实尝试，不该烧掉预算。
+	if dispatched > 0 || err != nil {
+		s.noteRefillAttempt(session.ID, s.now().UTC())
+	}
+	// F6：0 派发 / 失败路径也须留痕（此前仅在派发>0 时记审计）。
+	if dispatched == 0 || err != nil {
+		s.recordRefillAudit(session, dispatched, target, err)
+	}
+	return err
 }
 
-// refillDispatch 对「当前非在线/连接中」的计划内 Bot 重新下发 running assignment（补足在线数）。
+// refillMinGap 计算补足所需的最小缺口台数（N5）：比例阈值向下取整，且至少 1 台。
+func refillMinGap(target int) int {
+	if target <= 0 {
+		return 1
+	}
+	minGap := int(float64(target) * botReclaimRefillMinGapRatio)
+	if minGap < 1 {
+		minGap = 1
+	}
+	return minGap
+}
+
+// botRefillGroup 是同一执行节点上待重新武装的 Bot 及其本拍实存快照。
+type botRefillGroup struct {
+	nodeUUID string
+	presence botReclaimNodePresence
+	bots     []model.Bot
+}
+
+// refillDispatch 对「当前非在线/连接中且不在 Worker 实存中」的计划内 Bot 重新下发 running assignment。
 //
-// 选路：仅处理未在连接/已连接中的 Bot（避免与 ReconcileBotFleetSnapshot 重复派发与抖振）；被回收
-// （desired=stopped）或重建（pending）的 Bot 一并恢复 desired=running 后下发，使 Worker 与 CP 同时回到
-// 目标集合。
-func (s *BotReclaimService) refillDispatch(ctx context.Context, session *model.BotStressSession, expected []model.Bot) error {
+// 选路（F3，spec §2.4.3）：仅处理未在连接/已连接中的 Bot，且经 Worker 快照对账确认其实存中确实缺失，
+// 避免与 ReconcileBotFleetSnapshot 重复派发与抖振；被回收（desired=stopped）或重建（pending）的 Bot
+// 一并恢复 desired=running 后下发，使 Worker 与 CP 同时回到目标集合。
+//
+// N2：CP 账本重置（worker_epoch / 事件序号 / 世代）只在「确认将被派发」之后执行——若 Bot 仍在
+// Worker 实存中（CP 显示 error 但 Worker 实际健康），不得清掉其世代与 last_event_seq，
+// 否则会把去重基线清空却不重派发，使迟到的旧世代事件得以翻状态。
+//
+// N3：本拍按执行节点只取一次实存快照，分派阶段复用。
+//
+// N4：重新武装时递增 desired_state_generation，使重派发的 assignment 载荷、幂等键都变化，
+// 同一 Bot 1h 内再次掉线时不会被 Worker 的幂等缓存去重成 no-op。
+func (s *BotReclaimService) refillDispatch(ctx context.Context, session *model.BotStressSession, expected []model.Bot) (int, error) {
 	var bots []model.Bot
 	if err := s.db.WithContext(ctx).
 		Where("stress_session_id = ? AND deleted_at IS NULL", session.ID).Find(&bots).Error; err != nil {
-		return fmt.Errorf("查询补足候选 Bot 失败: %w", err)
+		return 0, fmt.Errorf("查询补足候选 Bot 失败: %w", err)
 	}
-	var rearm []model.Bot
+	now := s.now().UTC()
+	groups := make(map[string]*botRefillGroup, 4)
+	order := make([]string, 0, 4)
 	for i := range bots {
 		bot := bots[i]
 		if bot.Status == model.BotStatusConnected || bot.Status == model.BotStatusConnecting {
 			continue // 不重复派发：在线/连接中的不动。
 		}
-		rearm = append(rearm, bot)
-	}
-	if len(rearm) == 0 {
-		return nil
-	}
-	// 先恢复 CP desired=running，避免 reconcile 视其为 stopped 再次停用。
-	ids := make([]uint, 0, len(rearm))
-	for i := range rearm {
-		ids = append(ids, rearm[i].ID)
-	}
-	if err := s.db.WithContext(ctx).Model(&model.Bot{}).Where("id IN ?", ids).
-		Update("desired_state", model.BotDesiredRunning).Error; err != nil {
-		return err
-	}
-	dispatched, err := s.dispatchRefillAssignments(ctx, session, rearm)
-	if dispatched > 0 {
-		s.recordRefillAudit(session, dispatched, len(expected))
-	}
-	return err
-}
-
-func (s *BotReclaimService) dispatchRefillAssignments(ctx context.Context, session *model.BotStressSession, bots []model.Bot) (int, error) {
-	groups := make(map[string][]botLoadReconcileItem)
-	for i := range bots {
-		bot := bots[i]
+		if s.isRecentlyRearmed(bot.UUID, now) {
+			continue // 冷却窗：刚被补足的 Bot 不重复下发。
+		}
 		nodeUUID := s.resolveExecutorNodeUUID(ctx, &bot)
 		if nodeUUID == "" {
 			continue
 		}
-		assignment, err := s.refill.rebuildRunningAssignment(ctx, session, &bot)
-		if err != nil || assignment == nil {
+		group, ok := groups[nodeUUID]
+		if !ok {
+			// N3：节点实存快照按节点取一次，供本地过滤与后续派发复用。
+			group = &botRefillGroup{nodeUUID: nodeUUID, presence: s.fetchNodePresence(ctx, nodeUUID, "")}
+			groups[nodeUUID] = group
+			order = append(order, nodeUUID)
+		}
+		// F3 §2.4.3：Worker 实存中已有该 Bot → 不重置世代、不重复派发（避免与 reconcile 打架）。
+		if group.presence.Known && group.presence.contains(bot.UUID) {
 			continue
 		}
-		groups[nodeUUID] = append(groups[nodeUUID], botLoadReconcileItem{
-			assignment: assignment, bot: &bot, mode: botLoadReconcileRunning,
-		})
+		group.bots = append(group.bots, bot)
 	}
 	var errs []error
 	dispatched := 0
-	for nodeUUID, items := range groups {
-		for start := 0; start < len(items); start += maxBotLoadBatchSize {
-			end := min(start+maxBotLoadBatchSize, len(items))
-			chunk := items[start:end]
-			request := buildBotLoadReconcileRequest(session.UUID, 0, chunk)
-			response, rpcErr := s.refill.applyBotLoadBatch(ctx, nodeUUID, request)
-			if err := s.refill.persistBotLoadReconcileResult(ctx, chunk, request, response, rpcErr); err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			dispatched += len(chunk)
+	for _, nodeUUID := range order {
+		group := groups[nodeUUID]
+		if len(group.bots) == 0 {
+			continue
 		}
+		// N2：只对「确实将派发」的 Bot 恢复 CP desired=running，避免 reconcile 视其为 stopped 再次停用；
+		// 同时重置 worker_epoch/世代/事件序号建立新基线（F8 回收侧抬升世代后仍需接受重建后的新事件）。
+		updates := map[string]any{
+			"desired_state": model.BotDesiredRunning, "worker_epoch": "",
+			"worker_epoch_generation": 0, "last_event_seq": 0,
+		}
+		// N4：仅在有「实存中确实缺失」的正向证据时递增 desired_state_generation——世代推进会让
+		// assignment 载荷与幂等键都变化，使同一 Bot 再次掉线后的重派发不被 Worker 的 1h 幂等缓存
+		// 去重成 no-op。快照不可用（Known=false）时不推进，避免与 Worker 世代分叉。
+		bumpGeneration := group.presence.Known
+		if bumpGeneration {
+			updates["desired_state_generation"] = gorm.Expr("CASE WHEN desired_state_generation < 1 THEN 1 ELSE desired_state_generation + 1 END")
+		}
+		ids := make([]uint, 0, len(group.bots))
+		for i := range group.bots {
+			ids = append(ids, group.bots[i].ID)
+		}
+		if err := s.db.WithContext(ctx).Model(&model.Bot{}).Where("id IN ?", ids).Updates(updates).Error; err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if bumpGeneration {
+			for i := range group.bots {
+				generation := group.bots[i].DesiredStateGeneration + 1
+				if generation < 1 {
+					generation = 1
+				}
+				group.bots[i].DesiredStateGeneration = generation
+			}
+		}
+		n, err := s.dispatchRefillAssignments(ctx, session, group.nodeUUID, group.presence, group.bots)
+		dispatched += n
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if dispatched > 0 {
+		s.recordRefillAudit(session, dispatched, len(expected), nil)
 	}
 	return dispatched, errors.Join(errs...)
 }
 
-func (s *BotReclaimService) recordRefillAudit(session *model.BotStressSession, refilled, target int) {
+// dispatchRefillAssignments 按执行节点下发重新武装的 running assignment；复用调用方已取的实存快照，
+// 并用快照容量世代作为 reconcile 世代（恢复幂等键稳定）。派发结果（而非尝试）才计入 dispatched。
+func (s *BotReclaimService) dispatchRefillAssignments(ctx context.Context, session *model.BotStressSession, nodeUUID string, presence botReclaimNodePresence, bots []model.Bot) (int, error) {
+	items := make([]botLoadReconcileItem, 0, len(bots))
+	rearmed := make([]string, 0, len(bots))
+	for i := range bots {
+		bot := bots[i]
+		assignment, err := s.refill.rebuildRunningAssignment(ctx, session, &bot)
+		if err != nil || assignment == nil {
+			continue
+		}
+		items = append(items, botLoadReconcileItem{
+			assignment: assignment, bot: &bot, mode: botLoadReconcileRunning,
+		})
+		rearmed = append(rearmed, bot.UUID)
+	}
+	if len(items) == 0 {
+		return 0, nil
+	}
+	var errs []error
+	dispatched := 0
+	generation := presence.CapacityGeneration // 快照不可用时为 0（沿用旧行为）。
+	for start := 0; start < len(items); start += maxBotLoadBatchSize {
+		end := min(start+maxBotLoadBatchSize, len(items))
+		chunk := items[start:end]
+		request := buildBotLoadReconcileRequest(session.UUID, generation, chunk)
+		response, rpcErr := s.refill.applyBotLoadBatch(ctx, nodeUUID, request)
+		if err := s.refill.persistBotLoadReconcileResult(ctx, chunk, request, response, rpcErr); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		dispatched += len(chunk)
+	}
+	s.noteRearmed(rearmed, s.now().UTC())
+	return dispatched, errors.Join(errs...)
+}
+
+// fetchNodePresence 取单节点 Worker Fleet 实存快照；失败时返回 Known=false（调用方走保守兜底）。
+//
+// N3：RPC 带独立超时，避免节点假死把整拍巡检挂住；同一拍内同一节点复用缓存，不再重复发起快照。
+func (s *BotReclaimService) fetchNodePresence(ctx context.Context, nodeUUID, sessionUUID string) botReclaimNodePresence {
+	if s.fleet == nil || nodeUUID == "" {
+		return botReclaimNodePresence{}
+	}
+	if sessionUUID == "" {
+		if cached, ok := s.cachedNodePresence(nodeUUID); ok {
+			return cached
+		}
+	}
+	timeout := s.snapshotTimeout
+	if timeout <= 0 {
+		timeout = defaultBotReclaimSnapshotTimeout
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	snapshot, err := s.fleet.GetBotFleetSnapshot(rpcCtx, nodeUUID, sessionUUID)
+	if err != nil || snapshot == nil {
+		slog.Warn("取执行节点 Fleet 快照失败", "nodeUuid", nodeUUID, "error", err)
+		s.storeNodePresence(nodeUUID, botReclaimNodePresence{})
+		return botReclaimNodePresence{}
+	}
+	present := make(map[string]struct{}, len(snapshot.Bots))
+	for _, runtime := range snapshot.Bots {
+		if runtime != nil && runtime.BotUuid != "" {
+			present[runtime.BotUuid] = struct{}{}
+		}
+	}
+	out := botReclaimNodePresence{Known: true, Present: present, CapacityGeneration: snapshot.CapacityGeneration}
+	s.storeNodePresence(nodeUUID, out)
+	return out
+}
+
+func (s *BotReclaimService) recordRefillAudit(session *model.BotStressSession, refilled, target int, err error) {
 	if s.audit == nil || session == nil {
 		return
 	}
-	detail := fmt.Sprintf(`{"sessionUuid":%q,"sessionId":%d,"refilled":%d,"target":%d}`,
-		session.UUID, session.ID, refilled, target)
-	s.audit.RecordSafe(0, "bot_reclaim.refill", "bot_stress_session", session.UUID, detail, "")
+	errMsg := ""
+	success := err == nil && refilled > 0
+	if err != nil {
+		errMsg = err.Error()
+	}
+	detail := fmt.Sprintf(`{"sessionUuid":%q,"sessionId":%d,"refilled":%d,"target":%d,"success":%t}`,
+		session.UUID, session.ID, refilled, target, success)
+	s.audit.RecordResultSafe(0, "bot_reclaim.refill", "bot_stress_session", session.UUID, detail, "", success, errMsg)
 }
 
 // List 列出失效 Bot 回收记录。status 空=全部；activeOnly 时仅 pending+confirmed。
 func (s *BotReclaimService) List(status string, activeOnly bool, limit int) ([]model.FleetBotReclaim, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	if limit > botReclaimListLimitMax {
+		limit = botReclaimListLimitMax // 上限：避免无界返回拖垮巡检/接口。
 	}
 	q := s.db.Model(&model.FleetBotReclaim{}).Order("first_seen_at DESC").Limit(limit)
 	if status != "" {
