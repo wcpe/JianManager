@@ -1,11 +1,13 @@
 package grpc
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
-	"context"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -78,11 +80,31 @@ type ControlPlaneHandler struct {
 	proxy         NodeProxyResolver     // 节点期望代理解析（nil 时心跳响应不携带代理，FR-185）
 	wsTokenSecret string                // CP↔Worker WS 令牌密钥（空时注册/心跳响应不携带，FR-275）
 	orphans       OrphanRuntimeIngester // 反向对账（nil 时不启用，FR-326）
+	// evidence 进程侧证据拉取客户端（nil 时 syncInstanceStates 退化为旧行为，FR-455③）。
+	evidence EvidenceProbeClient
+	// resyncTrigger 注册成功后/心跳兜底触发的幂等重推入口（FR-455②）；nil 时不触发。
+	resyncTrigger func(nodeUUID string)
+	// reconcileGrace 记录「DB 运行态但清单缺失、进程侧证据未确认停机」的连续心跳拍数（FR-455③）。
+	reconcileMu    sync.Mutex
+	reconcileGrace map[string]int
 }
 
 // NewControlPlaneHandler 创建处理器。
 func NewControlPlaneHandler(db *gorm.DB, pool *ClientPool) *ControlPlaneHandler {
-	return &ControlPlaneHandler{db: db, pool: pool}
+	return &ControlPlaneHandler{db: db, pool: pool, reconcileGrace: make(map[string]int)}
+}
+
+// SetResyncTrigger 注入实例规格重推的幂等入口（FR-455②）。
+// 注入后：Register 成功与心跳均触发该入口（由实现方按节点去重），使重推触发多源化、消除单点漏推。
+func (h *ControlPlaneHandler) SetResyncTrigger(fn func(nodeUUID string)) {
+	h.resyncTrigger = fn
+}
+
+// triggerResync 触发幂等重推（未注入/空节点则忽略）。
+func (h *ControlPlaneHandler) triggerResync(nodeUUID string) {
+	if h.resyncTrigger != nil && nodeUUID != "" {
+		h.resyncTrigger(nodeUUID)
+	}
 }
 
 // SetMetricIngester 注入时序指标入库器（FR-060）；不注入则心跳仅更新节点当前值不落时序。
@@ -191,6 +213,9 @@ func (h *ControlPlaneHandler) reregisterExisting(node *model.Node, req *workerpb
 	}
 	slog.Info("节点已重新注册", "name", req.Name, "uuid", node.UUID, "matchBy", matchBy)
 
+	// FR-455②：注册成功即触发一次幂等重推（去重器吸收与隧道 onOpen 的重复触发）。
+	h.triggerResync(node.UUID)
+
 	// WS 令牌密钥随重注册下发（FR-275）：存量节点升级/重启即拿到密钥，无需人工同步。
 	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret, WsTokenSecret: h.wsTokenSecret}, nil
 }
@@ -236,6 +261,9 @@ func (h *ControlPlaneHandler) createNewNode(ctx context.Context, req *workerpb.R
 		return nil, err
 	}
 	slog.Info("新节点已注册", "name", req.Name, "uuid", node.UUID)
+
+	// FR-455②：首注册成功即触发一次幂等重推（新节点此刻可能尚无实例，重推为空亦无副作用）。
+	h.triggerResync(node.UUID)
 
 	// WS 令牌密钥随首注册下发（FR-275）：一键安装的新节点开箱终端/插件桥可用。
 	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret, WsTokenSecret: h.wsTokenSecret}, nil
@@ -333,6 +361,9 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		// 同步实例状态并对账（即使 Worker 上报空也要对账：
 		// Worker 重启未恢复某实例时，DB 会永远卡在 RUNNING 致所有生命周期操作 422）。
 		h.syncInstanceStates(req.NodeUuid, req.Instances)
+
+		// FR-455②：心跳作为重推的自然兜底触发源（低频；由 ResyncDeduper 按节点节流吸收）。
+		h.triggerResync(req.NodeUuid)
 
 		// 反向对账（FR-326）：Worker 有、CP 无记录的无主运行时跟踪/宽限/自动处置。
 		// 在正向对账之后执行；不改写正向语义。nil 注入=关闭。
@@ -473,19 +504,89 @@ func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*work
 		}
 	}
 
-	// 对账：本节点上 DB 认为在运行（RUNNING/STARTING/STOPPING）但 Worker 未上报的实例，
-	// 说明 Worker 已不再持有它（如 Worker 重启未恢复），置为 STOPPED，
-	// 否则实例永远卡 RUNNING、start/stop/kill 全部 422，无法操作。
+	// 对账：本节点上 DB 认为在运行（RUNNING/STARTING/STOPPING）但 Worker 未上报的实例。
+	// 旧行为一律置 STOPPED——但心跳清单只是「Worker 内存表」的快照，任何让内存表暂缺已运行实例的
+	// 情形（FR-436：CP 重启后 63 实例集体失联）都会误判成「面板 STOPPED 而进程在跑」。
+	// FR-455③：先向该 Worker 拉进程侧证据，证据也认为不在跑才落 STOPPED；证据显示在跑则保持当前态。
 	var node model.Node
 	if err := h.db.Where("uuid = ?", nodeUUID).First(&node).Error; err != nil {
 		return
 	}
-	q := h.db.Model(&model.Instance{}).
-		Where("node_id = ? AND status IN ?", node.ID, []string{"RUNNING", "STARTING", "STOPPING"})
+	h.reconcileMissingInstances(node, reported)
+}
+
+// runningStatuses DB 侧「运行类」状态集合。
+var runningStatuses = []string{"RUNNING", "STARTING", "STOPPING"}
+
+// reconcileMissingInstances 处理「DB 运行态但心跳清单缺失」的实例（FR-455③）。
+// 未注入证据客户端时退化为旧行为（直接落 STOPPED）。
+func (h *ControlPlaneHandler) reconcileMissingInstances(node model.Node, reported []string) {
+	q := h.db.Model(&model.Instance{}).Where("node_id = ? AND status IN ?", node.ID, runningStatuses)
 	if len(reported) > 0 {
 		q = q.Where("uuid NOT IN ?", reported)
 	}
-	if err := q.Update("status", "STOPPED").Error; err != nil {
-		slog.Warn("对账离线实例状态失败", "nodeUUID", nodeUUID, "error", err)
+	if h.evidence == nil {
+		if err := q.Update("status", "STOPPED").Error; err != nil {
+			slog.Warn("对账离线实例状态失败", "nodeUUID", node.UUID, "error", err)
+		}
+		return
+	}
+
+	var missing []struct {
+		UUID   string
+		Status string
+	}
+	if err := q.Select("uuid", "status").Scan(&missing).Error; err != nil {
+		slog.Warn("对账查询缺失实例失败", "nodeUUID", node.UUID, "error", err)
+		return
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	uuids := make([]string, 0, len(missing))
+	for _, m := range missing {
+		uuids = append(uuids, m.UUID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), evidenceProbeTimeout)
+	defer cancel()
+	evidence, evErr := h.evidence.ProbeInstanceEvidence(ctx, node.UUID, uuids)
+	if evErr != nil {
+		slog.Warn("实例对账证据拉取失败，本轮按不可得宽限处理", "nodeUUID", node.UUID, "error", evErr)
+	}
+
+	for _, m := range missing {
+		running, hasEvidence := evidence[m.UUID]
+		switch {
+		case evErr == nil && hasEvidence && running:
+			// 证据确认仍在跑：保持当前态 + 标 statusReason（消除通道抖动误判），清宽限计数。
+			h.clearReconcileGrace(m.UUID)
+			if err := h.db.Model(&model.Instance{}).Where("uuid = ?", m.UUID).
+				Update("status_reason", "进程侧证据显示实例仍在运行（心跳清单暂缺，已延迟对账）").Error; err != nil {
+				slog.Warn("更新对账 statusReason 失败", "instanceUUID", m.UUID, "error", err)
+			}
+		case evErr == nil && hasEvidence && !running:
+			// 证据确认已不在跑：落 STOPPED（PID 无、socket 不可达）。
+			h.clearReconcileGrace(m.UUID)
+			h.setStopped(m.UUID)
+		default:
+			// 证据缺失/拉取失败：宽限计数，连续 N 拍才落 STOPPED，避免抖动误判。
+			beats := h.bumpReconcileGrace(m.UUID)
+			if beats >= evidenceReconcileGraceBeats {
+				h.clearReconcileGrace(m.UUID)
+				h.setStopped(m.UUID)
+			} else if err := h.db.Model(&model.Instance{}).Where("uuid = ?", m.UUID).
+				Update("status_reason", fmt.Sprintf("进程侧证据暂不可得，宽限对账中（第 %d/%d 拍）", beats, evidenceReconcileGraceBeats)).Error; err != nil {
+				slog.Warn("更新对账 statusReason 失败", "instanceUUID", m.UUID, "error", err)
+			}
+		}
+	}
+}
+
+// setStopped 把实例置 STOPPED 并清空 statusReason。
+func (h *ControlPlaneHandler) setStopped(uuid string) {
+	if err := h.db.Model(&model.Instance{}).Where("uuid = ?", uuid).
+		Updates(map[string]interface{}{"status": "STOPPED", "status_reason": ""}).Error; err != nil {
+		slog.Warn("对账落 STOPPED 失败", "instanceUUID", uuid, "error", err)
 	}
 }

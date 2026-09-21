@@ -53,6 +53,27 @@ type Config struct {
 	MemoryGuard MemoryGuardConfig `mapstructure:"memory_guard"`
 	// BotWorker bot-worker 子进程容量与资源参数（FR-398 压测编排）。
 	BotWorker BotWorkerConfig `mapstructure:"bot_worker"`
+	// OrphanScan 运行期周期孤儿扫描（FR-456）：把孤儿清理从「仅启动时」升级为「运行期持续兜底」。
+	OrphanScan OrphanScanConfig `mapstructure:"orphan_scan"`
+}
+
+// OrphanScanConfig 运行期周期孤儿扫描配置（FR-456）。
+type OrphanScanConfig struct {
+	// Disabled 显式关闭周期扫描（默认 false=启用）。应急逃生口。
+	Disabled bool `mapstructure:"disabled"`
+	// Interval 扫描周期（time.ParseDuration 字符串，默认 60s）。
+	Interval string `mapstructure:"interval"`
+	// DisposePolicy 处置策略：warn（默认，只告警 + 落审计）/ auto（自动清理）。
+	DisposePolicy string `mapstructure:"dispose_policy"`
+}
+
+// ScanInterval 解析扫描周期：非法/空回退 60s。
+func (c OrphanScanConfig) ScanInterval() time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(c.Interval))
+	if err != nil || d <= 0 {
+		return 60 * time.Second
+	}
+	return d
 }
 
 // BotWorkerConfig bot-worker 子进程调参；零值即用内置默认（总容量 50、单进程）。
@@ -179,6 +200,10 @@ func Load(path string) (*Config, error) {
 	// 出站代理（FR-174，见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
 	v.SetDefault("proxy.url", "")
 	v.SetDefault("proxy.no_proxy", "")
+	// 运行期周期孤儿扫描（FR-456）：默认启用、周期 60s、只告警（可配 auto 自动清理）。
+	v.SetDefault("orphan_scan.disabled", false)
+	v.SetDefault("orphan_scan.interval", "60s")
+	v.SetDefault("orphan_scan.dispose_policy", "warn")
 
 	if path != "" {
 		v.SetConfigFile(path)

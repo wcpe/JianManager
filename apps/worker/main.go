@@ -271,6 +271,22 @@ func runWorker() {
 		slog.Info("已恢复 daemon 实例连接", "count", recovered)
 	}
 
+	// 孤儿处置审计回调（FR-455/456）：把误杀拦截/孤儿处置落 Worker 结构化日志，保证「不静默」。
+	manager.SetOrphanAuditHandler(func(action, targetID, detail string, success bool, errMsg string) {
+		slog.Warn("孤儿处置审计", "action", action, "target", targetID, "detail", detail, "success", success, "error", errMsg)
+	})
+
+	// 运行期周期孤儿扫描（FR-456）：随 Worker 常驻，持续兜底 wrapper 死/Java 活、direct 孤儿、
+	// docker 残留，按策略处置（默认 warn 只告警，可配 auto 自动清理）。补齐「仅启动时清理」的缺口。
+	if !cfg.OrphanScan.Disabled {
+		policy := process.NormalizeOrphanDisposePolicy(cfg.OrphanScan.DisposePolicy)
+		manager.SetOrphanDisposePolicy(policy)
+		orphanScanner := process.NewOrphanScanner(manager, cfg.OrphanScan.ScanInterval(), policy)
+		scannerCtx, cancelScanner := context.WithCancel(context.Background())
+		defer cancelScanner()
+		orphanScanner.Start(scannerCtx)
+	}
+
 	// 初始化指标采集器
 	collector := metrics.NewCollector(30 * time.Second)
 	collector.StartPeriodic(func(m metrics.NodeMetrics) {

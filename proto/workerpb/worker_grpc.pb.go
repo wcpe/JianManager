@@ -114,6 +114,7 @@ const (
 	WorkerService_TerminalSession_FullMethodName             = "/worker.WorkerService/TerminalSession"
 	WorkerService_InspectServerDir_FullMethodName            = "/worker.WorkerService/InspectServerDir"
 	WorkerService_ImportServerDir_FullMethodName             = "/worker.WorkerService/ImportServerDir"
+	WorkerService_ProbeInstanceEvidence_FullMethodName       = "/worker.WorkerService/ProbeInstanceEvidence"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -355,6 +356,11 @@ type WorkerServiceClient interface {
 	// ImportServerDir 导入现成目录：migrate 模式把目录整体搬进托管区系统分配目录
 	// （同盘 os.Rename 优先，跨盘递归拷贝 + 数量/字节校验 + 清源）；in_place 模式 no-op 回原路径。
 	ImportServerDir(ctx context.Context, in *ImportServerDirRequest, opts ...grpc.CallOption) (*ImportServerDirResponse, error)
+	// ProbeInstanceEvidence CP 对账时向 Worker 拉取一批实例的进程侧证据（FR-455③）：
+	// wrapper/Java PID 是否存活、daemon socket 是否可达、docker 容器是否在跑。
+	// CP 据此在「心跳清单缺失」时二次确认实例是否真已停机，避免通道抖动误判（消除
+	// 「面板 STOPPED 而进程在跑」）。老 Worker 返回 Unimplemented，CP 退化为旧行为。
+	ProbeInstanceEvidence(ctx context.Context, in *ProbeInstanceEvidenceRequest, opts ...grpc.CallOption) (*ProbeInstanceEvidenceResponse, error)
 }
 
 type workerServiceClient struct {
@@ -1387,6 +1393,16 @@ func (c *workerServiceClient) ImportServerDir(ctx context.Context, in *ImportSer
 	return out, nil
 }
 
+func (c *workerServiceClient) ProbeInstanceEvidence(ctx context.Context, in *ProbeInstanceEvidenceRequest, opts ...grpc.CallOption) (*ProbeInstanceEvidenceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProbeInstanceEvidenceResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ProbeInstanceEvidence_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerServiceServer is the server API for WorkerService service.
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
@@ -1626,6 +1642,11 @@ type WorkerServiceServer interface {
 	// ImportServerDir 导入现成目录：migrate 模式把目录整体搬进托管区系统分配目录
 	// （同盘 os.Rename 优先，跨盘递归拷贝 + 数量/字节校验 + 清源）；in_place 模式 no-op 回原路径。
 	ImportServerDir(context.Context, *ImportServerDirRequest) (*ImportServerDirResponse, error)
+	// ProbeInstanceEvidence CP 对账时向 Worker 拉取一批实例的进程侧证据（FR-455③）：
+	// wrapper/Java PID 是否存活、daemon socket 是否可达、docker 容器是否在跑。
+	// CP 据此在「心跳清单缺失」时二次确认实例是否真已停机，避免通道抖动误判（消除
+	// 「面板 STOPPED 而进程在跑」）。老 Worker 返回 Unimplemented，CP 退化为旧行为。
+	ProbeInstanceEvidence(context.Context, *ProbeInstanceEvidenceRequest) (*ProbeInstanceEvidenceResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -1920,6 +1941,9 @@ func (UnimplementedWorkerServiceServer) InspectServerDir(context.Context, *Inspe
 }
 func (UnimplementedWorkerServiceServer) ImportServerDir(context.Context, *ImportServerDirRequest) (*ImportServerDirResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ImportServerDir not implemented")
+}
+func (UnimplementedWorkerServiceServer) ProbeInstanceEvidence(context.Context, *ProbeInstanceEvidenceRequest) (*ProbeInstanceEvidenceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProbeInstanceEvidence not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -3570,6 +3594,24 @@ func _WorkerService_ImportServerDir_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ProbeInstanceEvidence_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProbeInstanceEvidenceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ProbeInstanceEvidence(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ProbeInstanceEvidence_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ProbeInstanceEvidence(ctx, req.(*ProbeInstanceEvidenceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3916,6 +3958,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ImportServerDir",
 			Handler:    _WorkerService_ImportServerDir_Handler,
+		},
+		{
+			MethodName: "ProbeInstanceEvidence",
+			Handler:    _WorkerService_ProbeInstanceEvidence_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

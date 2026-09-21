@@ -93,6 +93,8 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			var sleeps []time.Duration
 			dials := 0
 
+			// FR-455①：夹具 PID 非真实进程，注入复核桩恒通过（本用例关注重试/杀树流程）。
+			m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
 			m.recoverPIDAlive = func(pid int) bool { return !dead[pid] }
 			m.recoverSleep = func(d time.Duration) { sleeps = append(sleeps, d) }
 			m.recoverKillTree = func(pid int) error {
@@ -155,6 +157,7 @@ func TestRecoverDaemonInstances_KillVerifyWaitsAsyncExit(t *testing.T) {
 	aliveChecksAfterKill := 0
 	killIssued := false
 	m.recoverSleep = func(time.Duration) {}
+	m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
 	m.recoverDial = func(_ *daemonStrategy, _ string) error { return errors.New("dial refused") }
 	m.recoverKillTree = func(int) error { killIssued = true; return nil }
 	m.recoverPIDAlive = func(pid int) bool {
@@ -214,6 +217,7 @@ func TestRecoverDaemonInstances_WrapperGoneJavaAlive(t *testing.T) {
 			var killed []int
 			dials := 0
 
+			m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
 			m.recoverPIDAlive = func(pid int) bool { return !dead[pid] }
 			m.recoverSleep = func(time.Duration) {}
 			m.recoverKillTree = func(pid int) error {
@@ -265,4 +269,46 @@ func TestRecoverDaemonInstances_WrapperAndJavaBothGone(t *testing.T) {
 	assert.Equal(t, 0, recovered)
 	assert.Empty(t, killed, "两者都已死时无需杀树")
 	assert.NoFileExists(t, pidPath, "两者都已死时应清理 PID 文件")
+}
+
+// TestRecoverDaemonInstances_OwnershipVerifyBlocksKill 覆盖 FR-455① 的误杀拦截：
+// 处置前置存活复核不通过（PID 可能已被 OS 复用给无关进程）时，不得强杀任何进程，
+// 且要保留 PID 文件等下一轮/人工介入，并落审计（不静默）。
+func TestRecoverDaemonInstances_OwnershipVerifyBlocksKill(t *testing.T) {
+	dir := t.TempDir()
+	uuid := "orphan-verify-block"
+	pidPath := writeOrphanPIDRecord(t, dir, uuid)
+
+	m := NewManager(dir)
+	dead := map[int]bool{}
+	var killed []int
+	type auditRec struct {
+		action   string
+		targetID string
+		success  bool
+	}
+	var audits []auditRec
+
+	m.recoverSleep = func(time.Duration) {}
+	m.recoverPIDAlive = func(pid int) bool { return !dead[pid] }
+	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); dead[pid] = true; return nil }
+	m.recoverDial = func(_ *daemonStrategy, _ string) error { return errors.New("dial refused") }
+	// 复核对所有 PID 均不通过：模拟 PID 被复用为无关进程，无法确认归属。
+	m.recoverVerifyOwner = func(int, string, string, bool) bool { return false }
+	m.onOrphanAudit = func(action, targetID, detail string, success bool, errMsg string) {
+		audits = append(audits, auditRec{action: action, targetID: targetID, success: success})
+	}
+
+	recovered, err := m.RecoverDaemonInstances()
+	require.NoError(t, err)
+	assert.Equal(t, 0, recovered)
+	assert.Empty(t, killed, "复核不通过时不得强杀任何进程")
+	assert.FileExists(t, pidPath, "复核不通过应保留 PID 文件待下一轮/人工介入")
+
+	require.Len(t, audits, 2, "wrapper 与 Java 各落一条拦截审计")
+	for _, a := range audits {
+		assert.Equal(t, "orphan.dispose_blocked", a.action)
+		assert.Equal(t, uuid, a.targetID)
+		assert.False(t, a.success, "拦截审计应为未处置")
+	}
 }

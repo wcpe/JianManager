@@ -283,6 +283,11 @@ service WorkerService {
   // ImportServerDir 导入现成目录：migrate 模式把目录整体搬进托管区系统分配目录
   // （同盘 os.Rename 优先，跨盘递归拷贝 + 数量/字节校验 + 清源）；in_place 模式 no-op 回原路径。
   rpc ImportServerDir(ImportServerDirRequest) returns (ImportServerDirResponse);
+  // ProbeInstanceEvidence CP 对账时向 Worker 拉取一批实例的进程侧证据（FR-455③）：
+  // wrapper/Java PID 是否存活、daemon socket 是否可达、docker 容器是否在跑。
+  // CP 据此在「心跳清单缺失」时二次确认实例是否真已停机，避免通道抖动误判（消除
+  // 「面板 STOPPED 而进程在跑」）。老 Worker 返回 Unimplemented，CP 退化为旧行为。
+  rpc ProbeInstanceEvidence(ProbeInstanceEvidenceRequest) returns (ProbeInstanceEvidenceResponse);
 }
 
 // === 注册 ===
@@ -2109,4 +2114,24 @@ message CancelBotCommandSchedulesRequest {
 message CancelBotCommandSchedulesResponse {
   string request_id = 1;
   repeated CancelBotCommandScheduleItemResult results = 2;
+}
+
+// ProbeInstanceEvidenceRequest CP 请求 Worker 拉取一批实例的进程侧证据（FR-455③）。
+message ProbeInstanceEvidenceRequest {
+  repeated string instance_uuids = 1;
+}
+
+// InstanceEvidence 单个实例的进程侧证据（FR-455③）。
+message InstanceEvidence {
+  string instance_uuid = 1;
+  bool running = 2;           // 进程/容器侧证据是否显示该实例仍在运行（主判据）
+  int32 root_pid = 3;         // 证据来源根进程 PID（0=未知）
+  bool process_alive = 4;     // 受管进程存活
+  bool socket_reachable = 5;  // daemon socket 可达（daemon 模式）
+  bool container_running = 6; // docker 容器在跑
+  string detail = 7;          // 证据摘要（供 statusReason）
+}
+
+message ProbeInstanceEvidenceResponse {
+  repeated InstanceEvidence evidence = 1;
 }

@@ -106,6 +106,64 @@ type Manager struct {
 	recoverKillTree func(pid int) error
 	recoverPIDAlive func(pid int) bool
 	recoverSleep    func(d time.Duration)
+	// recoverVerifyOwner 是「处置前置存活复核」（FR-455①）的可注入桩：nil=真实现
+	// （DefaultVerifyProcessOwnership，读 cmdline/cwd）。返回 false=无法确认 PID 确属目标实例 → 不杀。
+	recoverVerifyOwner func(pid int, instanceUUID, workDir string, expectWrapper bool) bool
+	// onOrphanAudit 是孤儿处置/误杀拦截的审计回调（FR-455/456）：由 worker main 注入落结构化审计。
+	// nil 时回退 slog（仍保证「不静默」）。
+	onOrphanAudit func(action, targetID, detail string, success bool, errMsg string)
+	// orphanPolicy 运行期周期孤儿扫描的处置策略（FR-456）：warn（默认，只告警）/auto（自动清理）。
+	orphanPolicy OrphanDisposePolicy
+}
+
+// SetOrphanAuditHandler 注入孤儿处置审计回调（FR-455/456）。
+// worker main 装配时调用一次；不调用则回退 slog。
+func (m *Manager) SetOrphanAuditHandler(handler func(action, targetID, detail string, success bool, errMsg string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onOrphanAudit = handler
+}
+
+// SetOrphanDisposePolicy 设置运行期孤儿扫描处置策略（FR-456）：warn（默认）/auto。
+func (m *Manager) SetOrphanDisposePolicy(policy OrphanDisposePolicy) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if policy == "" {
+		policy = OrphanPolicyWarn
+	}
+	m.orphanPolicy = policy
+}
+
+// OrphanDisposePolicyValue 返回当前生效的孤儿处置策略（缺省 warn）。
+func (m *Manager) OrphanDisposePolicyValue() OrphanDisposePolicy {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.orphanPolicy == "" {
+		return OrphanPolicyWarn
+	}
+	return m.orphanPolicy
+}
+
+// verifyProcessOwnership 判定 pid 是否确属 instanceUUID 的受管进程（FR-455①）。
+// 处置任何 killTree 之前调用；false=无法确认（只告警不杀）。
+func (m *Manager) verifyProcessOwnership(pid int, instanceUUID, workDir string, expectWrapper bool) bool {
+	if pid <= 0 {
+		return false
+	}
+	if m.recoverVerifyOwner != nil {
+		return m.recoverVerifyOwner(pid, instanceUUID, workDir, expectWrapper)
+	}
+	return DefaultVerifyProcessOwnership(pid, instanceUUID, workDir, expectWrapper)
+}
+
+// auditOrphan 记录一条孤儿处置审计（FR-455/456）：优先经注入回调，缺省回退 slog。
+// 保证孤儿处置/误杀拦截「不静默」。
+func (m *Manager) auditOrphan(action, targetID, detail string, success bool, errMsg string) {
+	if m.onOrphanAudit != nil {
+		m.onOrphanAudit(action, targetID, detail, success, errMsg)
+		return
+	}
+	slog.Warn("孤儿处置审计", "action", action, "target", targetID, "detail", detail, "success", success, "error", errMsg)
 }
 
 // NewManager 创建进程管理器。
