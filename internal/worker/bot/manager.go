@@ -98,6 +98,9 @@ type RuntimeSnapshot struct {
 	PID      int
 	Running  bool
 	Capacity BotCapacitySnapshot
+	// ShardPIDs 各分片的 bot-worker 子进程 PID；单进程部署时长度 1 且等于 PID。
+	// 由分片管理器填充，供运行时诊断确认「确实起了 N 个进程」。
+	ShardPIDs []int
 }
 
 // ScriptProgress 脚本进度。
@@ -149,6 +152,9 @@ type BotWorkerEvent struct {
 	EventLoopP95Ms        float64                       `json:"eventLoopP95Ms,omitempty"`
 	DroppedEvents         int64                         `json:"droppedEvents,omitempty"`
 	CapacityGeneration    int64                         `json:"capacityGeneration,omitempty"`
+	// ShardIndex 事件来自哪个 bot-worker 分片；单进程部署恒为 0。
+	// 由分片管理器在分发前补写，便于排障时区分事件来源。
+	ShardIndex int `json:"shardIndex,omitempty"`
 }
 
 // CommandScheduleResultPayload 是 Bot Worker 异步 command-schedule-result 事件载荷。
@@ -1040,6 +1046,11 @@ func (m *Manager) sendRequest(ctx context.Context, requestID string, cmd interfa
 	case <-ctx.Done():
 		m.removePendingRequest(requestID, resultCh)
 		if !writeCompleted(writeDone) {
+			// 诊断：多分片部署下曾出现启动期误隔离（片被主动 kill）。
+			// 记录请求与取消原因，便于区分「调用方主动取消」与「写入真的卡住」。
+			slog.Warn("IPC 请求被取消，判定 stdin 是否阻塞",
+				"requestId", requestID, "ctxErr", ctx.Err(),
+				"writeCompleted", writeCompleted(writeDone))
 			m.isolateBlockedWriter(generation, encoder, ctx.Err())
 			<-writeDone
 		}
@@ -1048,6 +1059,8 @@ func (m *Manager) sendRequest(ctx context.Context, requestID string, cmd interfa
 		m.removePendingRequest(requestID, resultCh)
 		if !writeCompleted(writeDone) {
 			err := fmt.Errorf("等待 Bot Worker stdin 写入超时: requestId=%s", requestID)
+			slog.Warn("IPC 请求写入超时，判定 stdin 阻塞",
+				"requestId", requestID, "timeout", timeout, "generation", generation)
 			m.isolateBlockedWriter(generation, encoder, err)
 			<-writeDone
 			return nil, err
