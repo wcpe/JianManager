@@ -474,6 +474,16 @@ func authorizeDestructiveTarget(p *service.AgentPrincipal, action string, args m
 	if !ok {
 		return service.ErrAgentForbidden
 	}
+	// FR-435：实例分组 / 群组的确认目标既不是实例也不是节点——descriptor 复用 instance 资源类型
+	// 只为按节点/实例 scope 判定可发现性，其 id 指向分组/群组自身。若沿用实例目标授权，
+	// principalCanAccessInstance(分组id, 0) 因实例 scope 不含该 id（且 NodeID=0 使节点 scope 兜底失效）
+	// 而恒为 false → 任何 token 都删不掉分组。这类「容器」目标改按节点 scope 授权。
+	if isContainerTargetAction(action) {
+		if !service.PrincipalHasNodeScope(p) {
+			return service.ErrAgentForbidden
+		}
+		return nil
+	}
 	target := service.AgentTrustedTarget{ResourceType: d.ResourceType}
 	switch d.ResourceType {
 	case service.AgentResourceInstance:
@@ -485,6 +495,18 @@ func authorizeDestructiveTarget(p *service.AgentPrincipal, action string, args m
 	}
 	_, err = service.Authorize(p, action, target)
 	return err
+}
+
+// isContainerTargetAction 判定 action 的确认目标是否为「容器」资源（实例分组 / 群组）：
+// 其 id 不是实例/节点 id，授权与精确确认均需按容器资源解析，不能当作实例。
+// （network_delete 目前走 handler 内联确认，不经过本路径；此处一并纳入，避免同一类缺陷复发。）
+func isContainerTargetAction(action string) bool {
+	switch action {
+	case service.AgentActionInstanceGroupDelete, service.AgentActionNetworkDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 // findToolSpec 按工具名查找注册表条目。
@@ -512,38 +534,9 @@ func verifyDestructiveConfirm(deps ToolDeps, action string, args map[string]any,
 	if !ok {
 		return fmt.Errorf("未知动作")
 	}
-	var actual string
-	switch d.ResourceType {
-	case service.AgentResourceInstance:
-		if deps.Instance == nil {
-			return fmt.Errorf("实例服务不可用")
-		}
-		inst, e := deps.Instance.GetByID(id)
-		if e != nil {
-			return fmt.Errorf("确认名称与目标不符")
-		}
-		actual = inst.Name
-	case service.AgentResourceNode:
-		if deps.Node == nil {
-			return fmt.Errorf("节点服务不可用")
-		}
-		var n interface{ GetName() string }
-		if action == service.AgentActionNodePurgeArchived {
-			archived, e := deps.Node.GetArchived(id)
-			if e != nil {
-				return fmt.Errorf("确认名称与目标不符")
-			}
-			n = archived
-		} else {
-			active, e := deps.Node.GetByID(id)
-			if e != nil {
-				return fmt.Errorf("确认名称与目标不符")
-			}
-			n = nodeName{active.Name}
-		}
-		actual = n.GetName()
-	default:
-		return fmt.Errorf("确认参数仅适用于节点/实例目标")
+	actual, err := confirmTargetName(deps, action, d.ResourceType, id)
+	if err != nil {
+		return err
 	}
 	if raw != actual {
 		return fmt.Errorf("确认名称与目标不符")
@@ -551,9 +544,61 @@ func verifyDestructiveConfirm(deps ToolDeps, action string, args map[string]any,
 	return nil
 }
 
-type nodeName struct{ name string }
-
-func (n nodeName) GetName() string { return n.name }
+// confirmTargetName 解析 destructive 目标的当前名称用于精确确认。
+// 容器资源（实例分组 / 群组）优先按各自领域服务解析名称——其 id 是分组/群组 id 而非实例 id，
+// 不能按实例解析（否则会命中同号实例的名称，误判「确认名称与目标不符」，FR-435）；
+// 其余按 descriptor 的资源类型解析实例 / 节点。
+func confirmTargetName(deps ToolDeps, action, resourceType string, id uint) (string, error) {
+	switch {
+	case action == service.AgentActionInstanceGroupDelete:
+		if deps.InstanceGroup == nil {
+			return "", fmt.Errorf("实例分组服务不可用")
+		}
+		node, e := deps.InstanceGroup.Get(id)
+		if e != nil {
+			return "", fmt.Errorf("确认名称与目标不符")
+		}
+		return node.Name, nil
+	case action == service.AgentActionNetworkDelete:
+		if deps.Network == nil {
+			return "", fmt.Errorf("群组服务不可用")
+		}
+		detail, e := deps.Network.Get(id)
+		if e != nil {
+			return "", fmt.Errorf("确认名称与目标不符")
+		}
+		return detail.Name, nil
+	}
+	switch resourceType {
+	case service.AgentResourceInstance:
+		if deps.Instance == nil {
+			return "", fmt.Errorf("实例服务不可用")
+		}
+		inst, e := deps.Instance.GetByID(id)
+		if e != nil {
+			return "", fmt.Errorf("确认名称与目标不符")
+		}
+		return inst.Name, nil
+	case service.AgentResourceNode:
+		if deps.Node == nil {
+			return "", fmt.Errorf("节点服务不可用")
+		}
+		if action == service.AgentActionNodePurgeArchived {
+			archived, e := deps.Node.GetArchived(id)
+			if e != nil {
+				return "", fmt.Errorf("确认名称与目标不符")
+			}
+			return archived.GetName(), nil
+		}
+		active, e := deps.Node.GetByID(id)
+		if e != nil {
+			return "", fmt.Errorf("确认名称与目标不符")
+		}
+		return active.Name, nil
+	default:
+		return "", fmt.Errorf("确认参数仅适用于节点/实例目标")
+	}
+}
 
 // registerToolSpecs 追加工具到全局目录（FR-396+ 域文件 init 调用）。
 func registerToolSpecs(specs ...toolSpec) {

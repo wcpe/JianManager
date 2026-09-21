@@ -445,6 +445,16 @@ func PrincipalCanAccessNode(p *AgentPrincipal, nodeID uint) bool {
 	return principalCanAccessNode(p, nodeID)
 }
 
+// PrincipalHasNodeScope 判断主体是否具备节点 scope（V2 节点 scope 可继承实例）。
+//
+// 供实例分组、群组等「非实例、非节点」目标的 destructive 授权使用：这类资源自身无独立资源类型
+// （descriptor 复用 instance 以便按节点/实例 scope 判定可发现性），其 id 也不是实例 id，
+// 无法按实例目标授权；改按节点 scope 判定（与可发现性口径一致），避免把分组/群组 id 误当实例 id
+// 而导致授权恒拒（FR-435）。
+func PrincipalHasNodeScope(p *AgentPrincipal) bool {
+	return p != nil && p.PolicyVersion == AgentPolicyVersionV2 && len(p.ScopedNodeIDs) > 0
+}
+
 // CanDiscover 判断 Token 是否可在 tools/list / 契约枚举中看到该 action。
 func CanDiscover(p *AgentPrincipal, action string) (AgentAuthorization, error) {
 	if p == nil {
