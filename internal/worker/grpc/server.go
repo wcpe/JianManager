@@ -59,7 +59,10 @@ type Server struct {
 	root *dataroot.Root
 	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。参见 ADR-006。
 	// 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误。由 SetBotManager 注入。
-	botMgr *bot.Manager
+	//
+	// 用接口而非 *bot.Manager：单进程部署注入 *Manager，多分片部署注入 *ShardedManager
+	//（见 ADR-006 的分片说明），grpc 层无需感知差异。
+	botMgr botManager
 	// botFleet 允许 Fleet RPC 复用 Manager，并为协议测试注入最小替身。
 	botFleet   botFleetManager
 	botStartMu sync.Mutex
@@ -830,8 +833,28 @@ func (s *Server) StreamInstanceEvents(req *workerpb.StreamInstanceEventsRequest,
 // botMgr 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误而非 panic。
 // Bot 状态（connecting/connected/disconnected）由 CP 经 ListBots 拉取回填（懒拉取，见 BotService.refreshStatus）。
 
+// botManager 是 grpc 层对 Bot 管理器的最小依赖面。
+//
+// 由 *bot.Manager（单进程）与 *bot.ShardedManager（多分片）共同实现。
+// 窄接口让上层对「几个 bot-worker 进程」保持无知；Fleet RPC 另见 botFleetManager。
+type botManager interface {
+	botFleetManager
+	Start(ctx context.Context) error
+	WaitReady(ctx context.Context) error
+	IsRunning() bool
+	RuntimeSnapshot() bot.RuntimeSnapshot
+	GetBot(botID string) (*bot.BotState, bool)
+	GetBots() map[string]*bot.BotState
+	CreateBots(configs []bot.BotConfig) error
+	StopBots(botIDs []string) error
+	SetBehavior(botID, behavior, target string) error
+	SendBotCommand(botID, command string) error
+	// SubscribeEvents 订阅 bot-worker 事件流（含 action journal 窗口）。
+	SubscribeEvents(buffer int) (<-chan *bot.BotWorkerEvent, func())
+}
+
 // SetBotManager 注入 Bot 管理器，由 Worker 主进程在启动时设置。
-func (s *Server) SetBotManager(m *bot.Manager) {
+func (s *Server) SetBotManager(m botManager) {
 	s.botEventMu.Lock()
 	if s.botEventCancel != nil {
 		s.botEventCancel()

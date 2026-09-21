@@ -22,8 +22,14 @@ const MAX_BATCH_SIZE = 50
 const MAX_SIGNAL_BATCH_SIZE = 100
 const DEFAULT_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE = 1000
-/** 大舰队默认客户端视距：'tiny'(6 区块) 可把服务端下发区块量降到 far(12) 的约 1/4。 */
-const DEFAULT_VIEW_DISTANCE = process.env.JM_BOT_WORKER_VIEW_DISTANCE || 'tiny'
+/**
+ * 大舰队默认客户端视距：2 是协议允许的最小值。
+ *
+ * 实测（30 Bot 稳态，同机同服）：视距从 'tiny'(6) 降到 2，
+ * 每 Bot 内存 31.7MB → 16.6MB（-47.6%）、下行流量 137.8MB → 60.1MB（-56%），
+ * CPU 持平——区块解析开销在收到时已付清，常驻的是区块数据本身。
+ */
+const DEFAULT_VIEW_DISTANCE = process.env.JM_BOT_WORKER_VIEW_DISTANCE || 2
 /**
  * 无需本地物理模拟的行为集合：这些行为不让 Bot 自行移动。
  * Mineflayer 给每个 Bot 挂一个 50ms 物理 timer（碰撞/重力/区块查询），
@@ -31,6 +37,76 @@ const DEFAULT_VIEW_DISTANCE = process.env.JM_BOT_WORKER_VIEW_DISTANCE || 'tiny'
  * 判 Timed out 集体踢下线；站立不动的 Bot 关掉它可显著降低稳态占用。
  */
 const PHYSICS_FREE_BEHAVIORS = new Set(['idle'])
+/**
+ * 大舰队默认禁用的 Mineflayer 内建插件。
+ *
+ * Mineflayer 无条件加载 39 个插件，其中多数只服务于「真实玩法」（挖矿、合成、
+ * 附魔、床、钓鱼、告示牌…）。压测舰队用不到它们，而每个插件都会注册收包监听器
+ * 与状态机。实测禁用后每 Bot CPU 0.713% → 0.537%（-24.7%）。
+ *
+ * 必须保留的插件（被 pathfinder / 本项目代码依赖）：
+ *   - blocks     : blockAt（pathfinder + ray_trace 依赖）
+ *   - entities   : attack / nearestEntity / 实体追踪
+ *   - physics    : setControlState / lookAt（移动与视线）
+ *   - game       : 游戏状态机（登录、维度、时间基准）
+ *   - settings   : 客户端设置（视距上报，禁掉会直接报错）
+ *   - chat       : bot.chat（本项目 5 处调用）
+ *   - health     : 血量/食物状态（状态上报）
+ *   - inventory  : pathfinder 依赖 bot.inventory 判断手持物品
+ *   - simple_inventory : inventory.js 的收包处理会直接调用 bot.setQuickBarSlot，禁用即崩
+ *   - digging    : 经 block.digTime 注入挖掘耗时，pathfinder/movements 计算通行代价时调用
+ *   - plugin_channels / time / tablist / team 等由 mineflayer 内部或状态采集使用
+ */
+export const DISABLED_MELEE_PLUGINS = [
+  'anvil',
+  'bed',
+  'block_actions',
+  'book',
+  'boss_bar',
+  'chest',
+  'command_block',
+  'craft',
+  'creative',
+  'enchantment_table',
+  'experience',
+  'explosion',
+  'fishing',
+  'furnace',
+  'generic_place',
+  'particle',
+  'place_block',
+  'place_entity',
+  'rain',
+  'resource_pack',
+  'scoreboard',
+  'sound',
+  'spawn_point',
+  'title',
+] as const
+
+/** 构造 Mineflayer 插件开关表；JM_BOT_WORKER_KEEP_PLUGINS=all 可整体关闭裁剪。 */
+export function resolvePluginOptions(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, boolean> {
+  if ((env.JM_BOT_WORKER_KEEP_PLUGINS || '').toLowerCase() === 'all') return {}
+  const opts: Record<string, boolean> = {}
+  for (const name of DISABLED_MELEE_PLUGINS) opts[name] = false
+  return opts
+}
+
+/** 供回归测试断言：pathfinder 与本项目代码依赖的插件绝不允许出现在禁用清单里。 */
+export const REQUIRED_PLUGINS = [
+  'blocks',
+  'entities',
+  'physics',
+  'game',
+  'settings',
+  'chat',
+  'health',
+  'inventory',
+  'simple_inventory',
+  'digging',
+] as const
 
 /** 解析该 Bot 是否启用客户端物理；显式配置优先，其次按行为判定。 */
 function resolvePhysicsEnabled(config: BotConfig): boolean {
@@ -272,11 +348,35 @@ export class FleetController {
     this.tickInFlight = true
     try {
       for (const [botId, instance] of this.bots) {
+        // 快速跳过无实际工作的 Bot。
+        //
+        // 必要性：本 tick 每 250ms 跑一次全量 Bot。若对每个 Bot 都 await 一次
+        //（即使 IdleBehavior.tick 是空函数），500 Bot 会产生 2000 次/秒的微任务
+        // 让出与恢复，与 mineflayer 的收包处理争抢事件循环调度，实测把 p95 推到
+        // 十几秒（心跳/keepalive 随之停发）。这里把「不需要 tick」的判定提到 await 之前，
+        // 让纯 idle 的 Bot 完全不产生微任务。
+        if (!this.needsTick(instance)) continue
         await this.tickInstance(botId, instance, now)
       }
     } finally {
       this.tickInFlight = false
     }
+  }
+
+  /**
+   * 该实例本轮是否需要执行行为 tick。
+   *
+   * 只有「有场景脚本」或「行为确实需要周期性推进」的实例才需要；
+   * 站桩类行为（idle）不推进任何状态，跳过它们可显著降低大舰队的空转开销。
+   */
+  private needsTick(instance: BotInstance): boolean {
+    if (instance.scenarioRunner) return true
+    if (instance.status !== 'connected') return false
+    const behavior = instance.behavior
+    if (!behavior) return false
+    // 站桩行为无需周期推进：其 tick 不做任何事，await 只为让出事件循环。
+    // 复用 PHYSICS_FREE_BEHAVIORS（同一组「不让 Bot 自行移动」的行为）。
+    return !PHYSICS_FREE_BEHAVIORS.has(behavior.name)
   }
 
   /** 返回当前全部 Bot 的完整运行快照。 */
@@ -563,6 +663,8 @@ export class FleetController {
         physicsEnabled: resolvePhysicsEnabled(config),
         // 视距越小，服务端下发的区块数据越少（压测 Bot 不看世界）。
         viewDistance: config.viewDistance ?? DEFAULT_VIEW_DISTANCE,
+        // 裁剪只服务于真实玩法的内建插件，降低每 Bot 收包监听与状态机开销。
+        plugins: resolvePluginOptions(),
       })
       if (this.bots.get(botId) !== instance || !instance.desiredRunning) {
         try { mcBot.quit() } catch { /* 已取消 */ }

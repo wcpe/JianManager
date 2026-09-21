@@ -55,19 +55,55 @@ type Config struct {
 	BotWorker BotWorkerConfig `mapstructure:"bot_worker"`
 }
 
-// BotWorkerConfig bot-worker 子进程调参；零值即用内置默认（容量 50）。
+// BotWorkerConfig bot-worker 子进程调参；零值即用内置默认（总容量 50、单进程）。
 type BotWorkerConfig struct {
-	// MaxBots 单进程可创建的 Bot 上限；0 = 默认 50。
-	// 大压测（数百 Bot）需调高，同时关注 eventLoopP95Ms 与 RSS。
+	// MaxBots 本节点可创建的 Bot 总上限（多分片时为各片之和）；0 = 默认 50。
+	// 大压测（数百 Bot）需调高，同时关注各片 eventLoopP95Ms 与 RSS。
 	MaxBots int `mapstructure:"max_bots"`
+	// Shards bot-worker 子进程分片数；0/1 = 单进程（与旧版行为一致）。
+	//
+	// 为什么需要分片：单 Node 进程承载 mineflayer bot 有硬上限——实测 272 bot 时
+	// 主线程持续 99.9% CPU、RSS 9.2GB，事件循环排不上 10s 心跳定时器，stdout 停止输出，
+	// 控制面据此判定容量快照过期（CAPACITY_SNAPSHOT_STALE）并使可用容量归零，
+	// 新 bot 再也起不来。按 ~150 bot/片拆分可让每片的心跳保持可调度。
+	Shards int `mapstructure:"shards"`
 }
 
-// ApplyEnv 把 MaxBots 落到子进程环境变量（供 bot-worker 读取）。
+// Normalize 归一化分片配置：Shards<=0 视为 1（单进程），MaxBots<=0 用默认 50。
+func (c BotWorkerConfig) Normalize() BotWorkerConfig {
+	out := c
+	if out.Shards <= 0 {
+		out.Shards = 1
+	}
+	if out.MaxBots <= 0 {
+		out.MaxBots = 50
+	}
+	return out
+}
+
+// PerShardMaxBots 返回每片的容量上限（总容量按片数向上取整均分）。
+func (c BotWorkerConfig) PerShardMaxBots() int {
+	n := c.Normalize()
+	return (n.MaxBots + n.Shards - 1) / n.Shards
+}
+
+// ApplyEnv 把总容量落到子进程环境变量（单进程场景；多分片请用 ApplyEnvForShard）。
 func (c BotWorkerConfig) ApplyEnv() []string {
 	if c.MaxBots <= 0 {
 		return nil
 	}
 	return []string{fmt.Sprintf("JM_BOT_WORKER_MAX_BOTS=%d", c.MaxBots)}
+}
+
+// ApplyEnvForShard 把「单片容量」落到子进程环境变量（供 bot-worker 读取）。
+//
+// 多分片时每个子进程只应知道自己那一片的上限，否则各片都按总容量准入，
+// 合起来会超出节点可承载量。perShardMax<=0 时回退到总容量（保持旧行为）。
+func (c BotWorkerConfig) ApplyEnvForShard(perShardMax int) []string {
+	if perShardMax > 0 {
+		return []string{fmt.Sprintf("JM_BOT_WORKER_MAX_BOTS=%d", perShardMax)}
+	}
+	return c.ApplyEnv()
 }
 
 // MemoryGuardConfig 启动内存闸配置（FR-317）。

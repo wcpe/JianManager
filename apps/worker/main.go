@@ -342,21 +342,38 @@ func runWorker() {
 	globalNM := botdist.GlobalNodeModulesCandidates(runtimeMgr.RootDir())
 	managedBotWorkerDir := root.BotWorkerDir()
 	// FR-300/308：扫描只提供候选路径，NodeResolver 会逐个真实探测并强制 >=22.13.0。
-	botMgr := bot.NewManager(bot.ManagerConfig{
-		BotWorkerPath: botWorkerPath,
-		NodeResolver: bot.NewNodeResolver("", func() []runtimescan.Candidate {
-			return runtimeScanner.Scan([]string{runtimescan.TypeNodeJS})
-		}),
-		ExtraEnv: append([]string{botdist.NodePathEnv(globalNM)}, cfg.BotWorker.ApplyEnv()...),
-		PrepareSpawn: func(distDir string) error {
-			if filepath.Clean(distDir) != filepath.Clean(managedBotWorkerDir) {
-				return nil
-			}
-			return botdist.RefreshNodeModulesLink(distDir, runtimeMgr.RootDir())
-		},
-		DepsPrecheck: botdist.CheckDeps,
+	//
+	// 分片（shards）：单 Node 进程承载 bot 有硬上限——实测 272 bot 时主线程 99.9% CPU、
+	// RSS 9.2GB，事件循环排不上 10s 心跳，stdout 停更致控制面判定容量快照过期。
+	// 故按 shards 起多个 bot-worker 进程，每片承载 ceil(max_bots/shards)。
+	// shards<=1 时行为与旧版单进程完全一致（可随时回退）。
+	newBotWorkerMgr := func(perShardMax int) *bot.Manager {
+		return bot.NewManager(bot.ManagerConfig{
+			BotWorkerPath: botWorkerPath,
+			NodeResolver: bot.NewNodeResolver("", func() []runtimescan.Candidate {
+				return runtimeScanner.Scan([]string{runtimescan.TypeNodeJS})
+			}),
+			ExtraEnv: append([]string{botdist.NodePathEnv(globalNM)}, cfg.BotWorker.ApplyEnvForShard(perShardMax)...),
+			PrepareSpawn: func(distDir string) error {
+				if filepath.Clean(distDir) != filepath.Clean(managedBotWorkerDir) {
+					return nil
+				}
+				return botdist.RefreshNodeModulesLink(distDir, runtimeMgr.RootDir())
+			},
+			DepsPrecheck: botdist.CheckDeps,
+		})
+	}
+	shardCfg := cfg.BotWorker.Normalize()
+	botMgr := bot.NewShardedManager(bot.ShardedManagerConfig{
+		Shards:   shardCfg.Shards,
+		MaxBots:  shardCfg.MaxBots,
+		NewShard: func(_ int, perShardMax int) *bot.Manager { return newBotWorkerMgr(perShardMax) },
 	})
 	defer botMgr.Stop()
+	if n := botMgr.ShardCount(); n > 1 {
+		slog.Info("Bot Worker 已启用多进程分片",
+			"shards", n, "totalMaxBots", shardCfg.MaxBots, "perShardMaxBots", (shardCfg.MaxBots+n-1)/n)
+	}
 	workerServer.SetBotManager(botMgr)
 
 	// 反编译器（FR-075，见 ADR-018）：解析 CFR jar（配置路径>内嵌>数据根缓存>按需下载 sha256 pin），
