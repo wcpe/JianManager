@@ -112,8 +112,6 @@ type Manager struct {
 	// onOrphanAudit 是孤儿处置/误杀拦截的审计回调（FR-455/456）：由 worker main 注入落结构化审计。
 	// nil 时回退 slog（仍保证「不静默」）。
 	onOrphanAudit func(action, targetID, detail string, success bool, errMsg string)
-	// orphanPolicy 运行期周期孤儿扫描的处置策略（FR-456）：warn（默认，只告警）/auto（自动清理）。
-	orphanPolicy OrphanDisposePolicy
 }
 
 // SetOrphanAuditHandler 注入孤儿处置审计回调（FR-455/456）。
@@ -122,26 +120,6 @@ func (m *Manager) SetOrphanAuditHandler(handler func(action, targetID, detail st
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onOrphanAudit = handler
-}
-
-// SetOrphanDisposePolicy 设置运行期孤儿扫描处置策略（FR-456）：warn（默认）/auto。
-func (m *Manager) SetOrphanDisposePolicy(policy OrphanDisposePolicy) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if policy == "" {
-		policy = OrphanPolicyWarn
-	}
-	m.orphanPolicy = policy
-}
-
-// OrphanDisposePolicyValue 返回当前生效的孤儿处置策略（缺省 warn）。
-func (m *Manager) OrphanDisposePolicyValue() OrphanDisposePolicy {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if m.orphanPolicy == "" {
-		return OrphanPolicyWarn
-	}
-	return m.orphanPolicy
 }
 
 // verifyProcessOwnership 判定 pid 是否确属 instanceUUID 的受管进程（FR-455①）。
@@ -158,9 +136,16 @@ func (m *Manager) verifyProcessOwnership(pid int, instanceUUID, workDir string, 
 
 // auditOrphan 记录一条孤儿处置审计（FR-455/456）：优先经注入回调，缺省回退 slog。
 // 保证孤儿处置/误杀拦截「不静默」。
+//
+// 回调经 RLock 读取（与 SetOrphanAuditHandler 的写锁配对）：装配期 SetOrphanAuditHandler 在
+// 锁内写入，运行期扫描/处置路径并发读取——不加锁读取 m.onOrphanAudit 属数据竞争（FR-456）。
+// 回调在锁外执行，避免回调内再触达 Manager 造成重入死锁。
 func (m *Manager) auditOrphan(action, targetID, detail string, success bool, errMsg string) {
-	if m.onOrphanAudit != nil {
-		m.onOrphanAudit(action, targetID, detail, success, errMsg)
+	m.mu.RLock()
+	handler := m.onOrphanAudit
+	m.mu.RUnlock()
+	if handler != nil {
+		handler(action, targetID, detail, success, errMsg)
 		return
 	}
 	slog.Warn("孤儿处置审计", "action", action, "target", targetID, "detail", detail, "success", success, "error", errMsg)
@@ -904,9 +889,10 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 		// WorkDir 从 PID 记录恢复，否则文件/配置操作会因空工作目录失败（open :）。
 		strategy := newDaemonStrategy(m, CommandSpec{UUID: instanceUUID, WorkDir: rec.WorkDir, ProcessType: ProcessTypeDaemon, ProbePort: rec.ProbePort})
 		if err := m.reconnectWithRetry(strategy, rec.SocketAddr, instanceUUID); err != nil {
-			// FR-325：重试耗尽仍拨不通。此前只删 PID 文件，活着的 wrapper/Java 从此不可
-			// 发现（孤儿永久化，真机事故：残留 java 占 Paper session.lock）。改为按 PID
-			// 记录强杀孤儿进程树，死透才清理；杀不死则保留 PID 文件待下次扫描再兜底。
+			// FR-325 / ADR-093：重试耗尽仍拨不通。此前一律按 PID 记录强杀 wrapper + Java，
+			// 会把「wrapper 与 Java 都健康、仅 socket 瞬时不可达」的运行中服务器误杀。
+			// 现改由 reapOrphanWrapper 自行判定：wrapper 仍存活 → 只告警、保留 PID 文件、不杀
+			//（确属本实例但仅瞬时不可达，等下一轮扫描/人工介入）；仅当 wrapper 已死亡（真孤儿）才处置。
 			m.reapOrphanWrapper(instanceUUID, pidPath, rec, err)
 			continue
 		}

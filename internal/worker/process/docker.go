@@ -63,10 +63,24 @@ func newDockerStrategy(mgr *Manager, spec CommandSpec) *dockerStrategy {
 	}
 }
 
+// containerNamePrefix 是 docker 策略容器名前缀（见 dockerStrategy.containerName）。
+const containerNamePrefix = "jianmanager-"
+
+// 平台受管容器标签（FR-456 N5）：dockerStrategy 创建容器时打标，运行期扫描的 docker 残留
+// 「归属复核」据它把「确为本平台创建」与「仅名字形如本平台」两档区分开（见 verifyContainerOwnership）。
+const (
+	// containerManagedLabelKey 标识容器由本平台创建。
+	containerManagedLabelKey = "com.jianmanager.managed"
+	// containerManagedLabelValue 受管标签取值。
+	containerManagedLabelValue = "true"
+	// containerInstanceLabelKey 记录容器所属实例 UUID，供与容器名交叉核对。
+	containerInstanceLabelKey = "com.jianmanager.instance"
+)
+
 // containerName 返回实例对应的容器名（jianmanager-<uuid>）。
 // 命名稳定便于排障与孤儿回收，且天然防重名。
 func (d *dockerStrategy) containerName() string {
-	return "jianmanager-" + d.spec.UUID
+	return containerNamePrefix + d.spec.UUID
 }
 
 // dockerClientFromEnv 从环境（FromEnv，含 DOCKER_HOST）创建本机 Docker 客户端。
@@ -141,6 +155,11 @@ func (d *dockerStrategy) Start(ctx context.Context) error {
 		Env:          dockerEnv(d.spec.EnvVars),
 		WorkingDir:   containerWorkDir,
 		ExposedPorts: exposed,
+		// 平台受管标签（FR-456 N5）：为运行期孤儿扫描的归属复核提供强证据（容器名可能被他人伪造同名）。
+		Labels: map[string]string{
+			containerManagedLabelKey:  containerManagedLabelValue,
+			containerInstanceLabelKey: d.spec.UUID,
+		},
 		// tty=false + 三路 attach：stdout/stderr 多路复用，便于分流到日志采集（FR-049）。
 		Tty:          false,
 		OpenStdin:    true,

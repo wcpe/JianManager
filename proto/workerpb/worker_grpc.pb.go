@@ -23,6 +23,7 @@ const (
 	WorkerService_Heartbeat_FullMethodName                   = "/worker.WorkerService/Heartbeat"
 	WorkerService_FetchBotWorkerArchive_FullMethodName       = "/worker.WorkerService/FetchBotWorkerArchive"
 	WorkerService_ReportCrashSnapshot_FullMethodName         = "/worker.WorkerService/ReportCrashSnapshot"
+	WorkerService_ReportOrphanAudit_FullMethodName           = "/worker.WorkerService/ReportOrphanAudit"
 	WorkerService_CreateInstance_FullMethodName              = "/worker.WorkerService/CreateInstance"
 	WorkerService_ResyncInstances_FullMethodName             = "/worker.WorkerService/ResyncInstances"
 	WorkerService_StartInstance_FullMethodName               = "/worker.WorkerService/StartInstance"
@@ -135,6 +136,12 @@ type WorkerServiceClient interface {
 	// 时长/尾部输出），CP 持久化并按实例滚动保留最近 5 条。与注册/心跳同信道（隧道/直拨
 	// 双模式天然可用）；老 CP 返回 Unimplemented，Worker 记日志丢弃、不阻塞状态机。
 	ReportCrashSnapshot(ctx context.Context, in *ReportCrashSnapshotRequest, opts ...grpc.CallOption) (*ReportCrashSnapshotResponse, error)
+	// ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（FR-455/456，CP 侧实现）：
+	// 运行期周期扫描与接管兜底的处置动作（scan_detected / scan_disposed / scan_dispose_blocked /
+	// dispose_blocked / dispose_reaped）经与注册/心跳同信道（隧道/直拨双模式天然可用）上报，
+	// 携带节点身份鉴权，CP 经审计服务入库（保证孤儿处置「不静默」）。老 CP 返回 Unimplemented，
+	// Worker 记日志丢弃、不阻塞处置路径。
+	ReportOrphanAudit(ctx context.Context, in *ReportOrphanAuditRequest, opts ...grpc.CallOption) (*ReportOrphanAuditResponse, error)
 	// CreateInstance 在指定 Worker 上创建实例。
 	CreateInstance(ctx context.Context, in *CreateInstanceRequest, opts ...grpc.CallOption) (*CreateInstanceResponse, error)
 	// ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
@@ -408,6 +415,16 @@ func (c *workerServiceClient) ReportCrashSnapshot(ctx context.Context, in *Repor
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReportCrashSnapshotResponse)
 	err := c.cc.Invoke(ctx, WorkerService_ReportCrashSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ReportOrphanAudit(ctx context.Context, in *ReportOrphanAuditRequest, opts ...grpc.CallOption) (*ReportOrphanAuditResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportOrphanAuditResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ReportOrphanAudit_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1421,6 +1438,12 @@ type WorkerServiceServer interface {
 	// 时长/尾部输出），CP 持久化并按实例滚动保留最近 5 条。与注册/心跳同信道（隧道/直拨
 	// 双模式天然可用）；老 CP 返回 Unimplemented，Worker 记日志丢弃、不阻塞状态机。
 	ReportCrashSnapshot(context.Context, *ReportCrashSnapshotRequest) (*ReportCrashSnapshotResponse, error)
+	// ReportOrphanAudit Worker 上报一条孤儿处置/误杀拦截审计（FR-455/456，CP 侧实现）：
+	// 运行期周期扫描与接管兜底的处置动作（scan_detected / scan_disposed / scan_dispose_blocked /
+	// dispose_blocked / dispose_reaped）经与注册/心跳同信道（隧道/直拨双模式天然可用）上报，
+	// 携带节点身份鉴权，CP 经审计服务入库（保证孤儿处置「不静默」）。老 CP 返回 Unimplemented，
+	// Worker 记日志丢弃、不阻塞处置路径。
+	ReportOrphanAudit(context.Context, *ReportOrphanAuditRequest) (*ReportOrphanAuditResponse, error)
 	// CreateInstance 在指定 Worker 上创建实例。
 	CreateInstance(context.Context, *CreateInstanceRequest) (*CreateInstanceResponse, error)
 	// ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
@@ -1668,6 +1691,9 @@ func (UnimplementedWorkerServiceServer) FetchBotWorkerArchive(context.Context, *
 }
 func (UnimplementedWorkerServiceServer) ReportCrashSnapshot(context.Context, *ReportCrashSnapshotRequest) (*ReportCrashSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportCrashSnapshot not implemented")
+}
+func (UnimplementedWorkerServiceServer) ReportOrphanAudit(context.Context, *ReportOrphanAuditRequest) (*ReportOrphanAuditResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportOrphanAudit not implemented")
 }
 func (UnimplementedWorkerServiceServer) CreateInstance(context.Context, *CreateInstanceRequest) (*CreateInstanceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateInstance not implemented")
@@ -2023,6 +2049,24 @@ func _WorkerService_ReportCrashSnapshot_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).ReportCrashSnapshot(ctx, req.(*ReportCrashSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ReportOrphanAudit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportOrphanAuditRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ReportOrphanAudit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ReportOrphanAudit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ReportOrphanAudit(ctx, req.(*ReportOrphanAuditRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3630,6 +3674,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportCrashSnapshot",
 			Handler:    _WorkerService_ReportCrashSnapshot_Handler,
+		},
+		{
+			MethodName: "ReportOrphanAudit",
+			Handler:    _WorkerService_ReportOrphanAudit_Handler,
 		},
 		{
 			MethodName: "CreateInstance",

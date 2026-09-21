@@ -783,6 +783,10 @@ func main() {
 	grpcHandler.SetWSTokenSecret(wsTokenSecret)
 	// FR-455③：进程侧证据拉取（心跳清单缺失时二次确认实例是否真已停机）。
 	grpcHandler.SetEvidenceProbe(cpgrpc.NewEvidenceProbeFromPool(pool))
+	// FR-456 F10：证据对账异步 + 按节点单飞，移出心跳应答关键路径（最长 8s 的证据拉取不得阻塞心跳）。
+	grpcHandler.SetReconcileDispatcher(cpgrpc.NewEvidenceReconcileDispatcher().Dispatch)
+	// FR-455/456：Worker 孤儿处置/误杀拦截审计落 CP 审计库（不静默）。
+	grpcHandler.SetOrphanAuditRecorder(auditSvc)
 	// FR-455②：重推去重器（按节点单飞 + 冷却），吸收隧道/注册/心跳多源触发的重复重推，
 	// 既保证「每次事件都尝试触发、不漏推」，又避免瞬时多源「猛推」。
 	resyncDeduper := cpgrpc.NewResyncDeduper(60 * time.Second)
@@ -790,17 +794,21 @@ func main() {
 	grpcHandler.SetResyncTrigger(func(nodeUUID string) {
 		resyncDeduper.Trigger(nodeUUID, instanceSvc.ResyncNode)
 	})
-	onWorkerTunnelConnected := func(nodeUUID string) {
+	// FR-456 F4：长驻订阅类副作用（事件流 / 插件事件流 / Bot Fleet 恢复）只在节点「从无到有」
+	//（active 0→1）时建立一次——瞬时 active=2（旧隧道 onClose 晚于新 onOpen）时重复触发会建立
+	// 重复长驻订阅流，导致 stdout/stderr 双写、事件重复扇出。
+	onWorkerFirstConnected := func(nodeUUID string) {
 		eventSvc.StartWorkerStream(nodeUUID)
 		// 玩家事件流（探针经反向 WS 上报）同步订阅（FR-066）。
 		playerEventSvc.StartWorkerStream(nodeUUID)
 		if err := recoverConnectedBotFleetSubscriptions(context.Background(), botLoadSvcs.execution, pool, nodeUUID); err != nil {
 			slog.Warn("恢复 Worker 的 Bot Fleet 订阅失败", "nodeUUID", nodeUUID, "error", err)
 		}
-		// Worker 重连/重注册后重推该节点全部实例规格，让重启后丢失的 STOPPED 实例
-		// 在 Worker 侧重新可被文件/配置/归档 op 定位（修 bug #2，见 ADR-050）。
-		// FR-455②：隧道建立即触发（去重器吸收瞬时 active=2 的重复触发），不再依赖 n==1。
-		// 异步执行：该回调可能在心跳处理路径内触发，重推不应阻塞心跳应答。
+	}
+	// FR-455②：隧道每次建立都触发重推（不依赖 n==1，避免瞬时 active=2 漏推）；由去重器按节点
+	// 吸收瞬时重复触发。与上面的长驻订阅副作用分离，互不影响。
+	// 异步执行：该回调可能在心跳处理路径内触发，重推不应阻塞心跳应答。
+	onWorkerTunnelConnected := func(nodeUUID string) {
 		resyncDeduper.Trigger(nodeUUID, instanceSvc.ResyncNode)
 	}
 	// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
@@ -819,6 +827,7 @@ func main() {
 	// CP 指令仅经反向隧道下发，Worker 不开放任何 CP 直拨入口。
 	// 鉴权拦截器仅拦 OpenReverseTunnel，其余流式方法（心跳等）原样放行。
 	tunnelReg := cpgrpc.NewTunnelRegistry(db)
+	tunnelReg.SetOnFirstConnected(onWorkerFirstConnected)
 	tunnelReg.SetOnConnected(onWorkerTunnelConnected)
 	pool.SetTunnelProvider(tunnelReg)
 	// 节点与 Bot 容量观测面共用实时隧道状态，不读取 gorm:- 运行态字段。

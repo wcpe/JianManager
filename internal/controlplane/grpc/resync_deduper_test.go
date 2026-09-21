@@ -120,20 +120,31 @@ func (f *fakeTunnelChannel) Context() context.Context { return f.ctx }
 func (f *fakeTunnelChannel) Done() <-chan struct{}    { return nil }
 func (f *fakeTunnelChannel) Err() error               { return nil }
 
-// TestTunnelRegistry_OnOpenAlwaysNotifies FR-455②：隧道建立即触发 onConnected，
-// 不再依赖 active 计数 n==1，消除 CP 重启后瞬时 active=2 时新连不触发重推的漏推。
-func TestTunnelRegistry_OnOpenAlwaysNotifies(t *testing.T) {
+// TestTunnelRegistry_OnOpenNotifiesWithFirstConnectDedup FR-455② + FR-456 F4：
+// 语义分两条——每次隧道建立都触发 onConnected（幂等重推，不因瞬时 active=2 漏推）；
+// 而长驻订阅类副作用走 onFirstConnected，仅在节点「从无到有」（active 0→1）时触发一次，
+// 避免瞬时 active=2 时重复建立长驻订阅流（stdout/stderr 双写、事件重复扇出）。
+func TestTunnelRegistry_OnOpenNotifiesWithFirstConnectDedup(t *testing.T) {
 	reg := NewTunnelRegistry(nil)
-	got := make(chan string, 4)
-	reg.SetOnConnected(func(u string) { got <- u })
+	onConn := make(chan string, 4)
+	onFirst := make(chan string, 4)
+	reg.SetOnConnected(func(u string) { onConn <- u })
+	reg.SetOnFirstConnected(func(u string) { onFirst <- u })
 
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{nodeUUIDHeader: "n1"}))
 	ch := &fakeTunnelChannel{ctx: ctx}
 
-	reg.onOpen(ch) // active=1
-	reg.onOpen(ch) // active=2（瞬时旧未关新已开）
+	reg.onOpen(ch) // active=1：onConnected + onFirstConnected
+	reg.onOpen(ch) // active=2（瞬时旧未关新已开）：仅 onConnected
 
-	require.Equal(t, "n1", <-got, "首次建立应触发")
-	require.Equal(t, "n1", <-got, "瞬时 active=2 时新连也应触发（不因 n!=1 漏推）")
+	require.Equal(t, "n1", <-onConn, "首次建立应触发 onConnected")
+	require.Equal(t, "n1", <-onConn, "瞬时 active=2 时新连也应触发 onConnected（不因 n!=1 漏推）")
+	require.Equal(t, "n1", <-onFirst, "首次建立（active 0→1）应触发一次 onFirstConnected")
+
+	select {
+	case u := <-onFirst:
+		t.Fatalf("active=2 不应再次触发 onFirstConnected（否则会重复建立长驻订阅流），got %s", u)
+	case <-time.After(50 * time.Millisecond):
+	}
 	require.True(t, reg.Connected("n1"))
 }

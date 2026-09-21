@@ -15,6 +15,7 @@ import (
 type scanAudit struct {
 	action   string
 	targetID string
+	detail   string
 	success  bool
 }
 
@@ -24,7 +25,7 @@ func newTestScanner(t *testing.T, dir string, policy OrphanDisposePolicy) (*Orph
 	m := NewManager(dir)
 	audits := &[]scanAudit{}
 	m.onOrphanAudit = func(action, targetID, detail string, success bool, errMsg string) {
-		*audits = append(*audits, scanAudit{action: action, targetID: targetID, success: success})
+		*audits = append(*audits, scanAudit{action: action, targetID: targetID, detail: detail, success: success})
 	}
 	s := NewOrphanScanner(m, time.Minute, policy)
 	s.listProcesses = func() ([]ScannedProcess, error) { return nil, nil }
@@ -92,6 +93,8 @@ func TestOrphanScan_DirectOrphan(t *testing.T) {
 		}, nil
 	}
 	var killed []int
+	// FR-456 F1：direct 孤儿处置前新增归属复核；夹具 PID 非真实进程，注入复核桩恒通过。
+	m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
 	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); return nil }
 
 	findings := s.ScanOnce()
@@ -102,6 +105,91 @@ func TestOrphanScan_DirectOrphan(t *testing.T) {
 	assert.Equal(t, []int{9001}, killed)
 	assert.True(t, findings[0].Disposed)
 	require.Len(t, *audits, 1)
+	assert.Equal(t, "orphan.scan_disposed", (*audits)[0].action)
+}
+
+// TestOrphanScan_DirectOrphan_OwnershipBlocked FR-456 F1：auto 档归属复核不通过 → 只告警不杀。
+func TestOrphanScan_DirectOrphan_OwnershipBlocked(t *testing.T) {
+	serversDir := t.TempDir()
+	orphanDir := filepath.Join(serversDir, "survival-abc123")
+	require.NoError(t, os.MkdirAll(orphanDir, 0o755))
+
+	s, m, audits := newTestScanner(t, serversDir, OrphanPolicyAuto)
+	s.listProcesses = func() ([]ScannedProcess, error) {
+		return []ScannedProcess{
+			{PID: 9001, Cmdline: "java -jar server.jar nogui", Cwd: orphanDir},
+		}, nil
+	}
+	var killed []int
+	m.recoverVerifyOwner = func(int, string, string, bool) bool { return false } // 复核不通过
+	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); return nil }
+
+	findings := s.ScanOnce()
+	require.Len(t, findings, 1)
+	assert.Empty(t, killed, "归属复核不通过时不得强杀")
+	assert.False(t, findings[0].Disposed, "未处置时 Disposed 应为 false")
+	require.Len(t, *audits, 1)
+	assert.Equal(t, "orphan.scan_dispose_blocked", (*audits)[0].action)
+	assert.False(t, (*audits)[0].success, "被拦截的处置审计 success 应为 false")
+}
+
+// TestOrphanScan_DirectOrphan_StoppingInstanceSkipped FR-456 F2：优雅停止期（STOPPING）实例
+// 的 Java 不得被判为 direct 孤儿（否则 auto 档强杀会绕过优雅关服）。
+func TestOrphanScan_DirectOrphan_StoppingInstanceSkipped(t *testing.T) {
+	serversDir := t.TempDir()
+	managedDir := filepath.Join(serversDir, "stopping-xyz")
+	require.NoError(t, os.MkdirAll(managedDir, 0o755))
+
+	s, m, audits := newTestScanner(t, serversDir, OrphanPolicyAuto)
+	require.NoError(t, m.Create("stopping-uuid", "s", "java -jar s.jar", "stop", managedDir, nil, false, ProcessTypeDirect, "", "", 0, 0))
+	m.mu.Lock()
+	inst := m.instances["stopping-uuid"]
+	inst.State = StateStopping // 优雅停止中
+	inst.strategy = &fakePIDStrategy{pid: 8001}
+	m.mu.Unlock()
+
+	s.listProcesses = func() ([]ScannedProcess, error) {
+		return []ScannedProcess{{PID: 8001, Cmdline: "java -jar s.jar", Cwd: managedDir}}, nil
+	}
+	var killed []int
+	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); return nil }
+
+	findings := s.ScanOnce()
+	assert.Empty(t, findings, "STOPPING 实例的进程属受管，不得判为 direct 孤儿")
+	assert.Empty(t, killed)
+	assert.Empty(t, *audits)
+}
+
+// TestOrphanScan_DirectOrphan_StoppedInstanceDirStillScanned FR-456 N1 回归负例：
+// STOPPED 实例的工作目录**不**受保护——Worker 硬崩重启后 CP 会把 direct 实例按 STOPPED + WorkDir
+// 重登记，此时目录下残留的 Java（真实孤儿，占 Paper session.lock）仍必须被识别为 direct 孤儿，
+// 否则兜底扫描对这个目标场景完全失效。
+func TestOrphanScan_DirectOrphan_StoppedInstanceDirStillScanned(t *testing.T) {
+	serversDir := t.TempDir()
+	managedDir := filepath.Join(serversDir, "stopped-xyz")
+	require.NoError(t, os.MkdirAll(managedDir, 0o755))
+
+	s, m, audits := newTestScanner(t, serversDir, OrphanPolicyAuto)
+	// 重登记后的 STOPPED direct 实例：有 WorkDir、无 strategy（无活进程）。
+	require.NoError(t, m.Create("stopped-uuid", "s", "java -jar s.jar", "stop", managedDir, nil, false, ProcessTypeDirect, "", "", 0, 0))
+	m.mu.Lock()
+	require.Equal(t, StateStopped, m.instances["stopped-uuid"].State)
+	m.mu.Unlock()
+
+	// 该目录下仍有残留 Java（cwd 即该实例的 WorkDir）——必须仍被识别。
+	s.listProcesses = func() ([]ScannedProcess, error) {
+		return []ScannedProcess{{PID: 9101, Cmdline: "java -jar s.jar nogui", Cwd: managedDir}}, nil
+	}
+	var killed []int
+	m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
+	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); return nil }
+
+	findings := s.ScanOnce()
+	require.Len(t, findings, 1, "STOPPED 实例目录下的残留进程仍应被识别为 direct 孤儿")
+	assert.Equal(t, OrphanKindDirect, findings[0].Kind)
+	assert.Equal(t, managedDir, findings[0].WorkDir)
+	assert.Equal(t, []int{9101}, killed)
+	require.NotEmpty(t, *audits)
 	assert.Equal(t, "orphan.scan_disposed", (*audits)[0].action)
 }
 
@@ -147,6 +235,111 @@ func TestOrphanScan_DockerLeftover(t *testing.T) {
 	assert.False(t, findings[0].Disposed)
 	require.Len(t, *audits, 1)
 	assert.Equal(t, "orphan.scan_detected", (*audits)[0].action)
+}
+
+// TestOrphanScan_DockerLeftoverAuto FR-456 F1/F13：auto 档只删「已退出 + 内存表无该实例 + 平台容器」；
+// running 容器与内存表在册实例的容器保守不删。
+func TestOrphanScan_DockerLeftoverAuto(t *testing.T) {
+	s, m, audits := newTestScanner(t, t.TempDir(), OrphanPolicyAuto)
+	// 内存表登记一个实例（其容器即便已退出也不得被扫描删除）。
+	require.NoError(t, m.Create("registered-uuid", "r", "java -jar s.jar", "stop", t.TempDir(), nil, false, ProcessTypeDaemon, "", "", 0, 0))
+
+	s.listContainers = func(context.Context) ([]ManagedContainer, error) {
+		return []ManagedContainer{
+			{UUID: "exited-uuid", Name: "jianmanager-exited-uuid", Running: false},         // 应删
+			{UUID: "running-uuid", Name: "jianmanager-running-uuid", Running: true},        // running → 不删
+			{UUID: "registered-uuid", Name: "jianmanager-registered-uuid", Running: false}, // 在册 → 不删
+		}, nil
+	}
+	var removed []string
+	s.removeContainer = func(_ context.Context, name string) error {
+		removed = append(removed, name)
+		return nil
+	}
+
+	findings := s.ScanOnce()
+	require.Len(t, findings, 3)
+	assert.Equal(t, []string{"jianmanager-exited-uuid"}, removed, "仅删已退出且无主且平台归属的容器")
+
+	var disposed, blocked int
+	for _, a := range *audits {
+		switch a.action {
+		case "orphan.scan_disposed":
+			disposed++
+			assert.True(t, a.success, "已处置审计应为成功")
+		case "orphan.scan_dispose_blocked":
+			blocked++
+			assert.False(t, a.success, "保守不删审计应为未处置")
+		}
+	}
+	assert.Equal(t, 1, disposed, "1 个容器实际删除")
+	assert.Equal(t, 2, blocked, "running 与在册实例的容器各落一条保守审计")
+}
+
+// TestOrphanScan_DockerLeftoverOwnership FR-456 N5：docker 归属复核不再是恒真的伪复核。
+//   - 带受管标签且标签实例与容器名一致 → 强归属（managed_label），可删；
+//   - 带受管标签但标签实例与容器名矛盾 → 归属不通过（label_mismatch），只告警不删；
+//   - 无标签（本 FR 之前的存量容器）→ 退化为容器名格式校验（name_format_only），仍可删但证据如实入审计。
+func TestOrphanScan_DockerLeftoverOwnership(t *testing.T) {
+	s, _, audits := newTestScanner(t, t.TempDir(), OrphanPolicyAuto)
+	s.listContainers = func(context.Context) ([]ManagedContainer, error) {
+		return []ManagedContainer{
+			{UUID: "labeled-ok", Name: "jianmanager-labeled-ok", Running: false, ManagedLabel: true, LabelInstanceUUID: "labeled-ok"},
+			{UUID: "labeled-bad", Name: "jianmanager-labeled-bad", Running: false, ManagedLabel: true, LabelInstanceUUID: "someone-else"},
+			{UUID: "legacy", Name: "jianmanager-legacy", Running: false},
+		}, nil
+	}
+	var removed []string
+	s.removeContainer = func(_ context.Context, name string) error {
+		removed = append(removed, name)
+		return nil
+	}
+
+	findings := s.ScanOnce()
+	require.Len(t, findings, 3)
+	assert.ElementsMatch(t, []string{"jianmanager-labeled-ok", "jianmanager-legacy"}, removed,
+		"强归属与仅名字格式匹配者删除；标签与容器名矛盾者拒绝")
+
+	joined := ""
+	for _, a := range *audits {
+		joined += a.detail + "\n"
+	}
+	assert.Contains(t, joined, "managed_label", "强归属档位应入审计")
+	assert.Contains(t, joined, "name_format_only", "存量无标签容器的降级证据应如实入审计")
+	assert.Contains(t, joined, "label_mismatch", "标签矛盾档位应入审计")
+}
+
+// TestVerifyContainerOwnership 归属复核判据的直测（FR-456 N5）。
+func TestVerifyContainerOwnership(t *testing.T) {
+	// 名字格式不符：无论标签如何都拒绝。
+	ev, ok := verifyContainerOwnership("some-other-container", true, "x")
+	assert.False(t, ok)
+	assert.Equal(t, "name_format_invalid", ev)
+
+	// 带受管标签且标签实例与容器名一致 → 强归属。
+	ev, ok = verifyContainerOwnership("jianmanager-abc", true, "abc")
+	assert.True(t, ok)
+	assert.Equal(t, "managed_label", ev)
+
+	// 带受管标签但标签缺实例 UUID：无从矛盾，仍算强归属。
+	ev, ok = verifyContainerOwnership("jianmanager-abc", true, "")
+	assert.True(t, ok)
+	assert.Equal(t, "managed_label", ev)
+
+	// 标签实例与容器名矛盾 → 拒绝（真判据，可失败）。
+	ev, ok = verifyContainerOwnership("jianmanager-abc", true, "xyz")
+	assert.False(t, ok)
+	assert.Equal(t, "label_mismatch", ev)
+
+	// 无标签（存量容器）→ 仅名字格式校验，放行但证据标注降级。
+	ev, ok = verifyContainerOwnership("jianmanager-abc", false, "")
+	assert.True(t, ok)
+	assert.Equal(t, "name_format_only", ev)
+
+	// 容忍 docker 展示名的前导斜杠。
+	ev, ok = verifyContainerOwnership("/jianmanager-abc", false, "")
+	assert.True(t, ok)
+	assert.Equal(t, "name_format_only", ev)
 }
 
 // TestOrphanScan_ListFailureDegrades 进程/容器枚举失败仅告警降级，不 panic、不误处置。

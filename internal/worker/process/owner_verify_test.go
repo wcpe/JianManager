@@ -2,10 +2,14 @@ package process
 
 import (
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestDefaultVerifyProcessOwnership_SelfProcess 用当前测试进程做确定性验证：
@@ -56,6 +60,26 @@ func TestLooksLikeJianManagerDaemon(t *testing.T) {
 	for _, c := range cases {
 		assert.Equal(t, c.want, looksLikeJianManagerDaemon(c.cmdline), "cmdline=%q", c.cmdline)
 	}
+}
+
+// TestProcessEnvMatchesInstance FR-456 F11：wrapper 归属复核须读进程环境校验实例 UUID。
+// wrapper argv 仅 `<worker> daemon`、不含 UUID，单凭 argv 会把任何实例的 wrapper 都判真。
+func TestProcessEnvMatchesInstance(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("依赖 /proc/<pid>/environ（Linux/macOS）")
+	}
+	cmd := exec.Command("sleep", "30")
+	cmd.Env = append(os.Environ(), `JM_DAEMON_WRAPPER_CONFIG={"instance_uuid":"target-uuid-1234"}`)
+	require.NoError(t, cmd.Start())
+	defer func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() }()
+
+	// exec 完成前 /proc/<pid>/environ 可能仍是父进程副本，故轮询等待。
+	require.Eventually(t, func() bool {
+		return processEnvMatchesInstance(cmd.Process.Pid, "target-uuid-1234")
+	}, 2*time.Second, 20*time.Millisecond, "环境含本实例 UUID 应判属")
+	assert.False(t, processEnvMatchesInstance(cmd.Process.Pid, "other-uuid-5678"),
+		"环境不含该实例 UUID 应判不属（杜绝按 argv 空判误杀他人 wrapper）")
+	assert.False(t, processEnvMatchesInstance(cmd.Process.Pid, ""), "空 UUID 无从比对应保守判不属")
 }
 
 // TestSamePath 路径等价判定（相对路径/相等/不等）。

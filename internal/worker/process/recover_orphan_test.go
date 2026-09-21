@@ -38,9 +38,12 @@ func writeOrphanPIDRecord(t *testing.T, dir, uuid string) string {
 func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 	tests := []struct {
 		name string
-		// succeedOnDial 第 N 次拨号成功；0 = 永不成功（触发杀树兜底）。
+		// succeedOnDial 第 N 次拨号成功；0 = 永不成功（触发兜底）。
 		succeedOnDial int
 		killErr       error
+		// wrapperDiesDuringRetry 模拟「进入 reconnect 时 wrapper 存活、重试期间才死亡」：
+		// 此时接管重试耗尽后应退化为「wrapper 死/Java 活」真孤儿，仅处置 Java。
+		wrapperDiesDuringRetry bool
 		// killMakesDead 杀树桩是否把目标 PID 置为已死（模拟杀树生效 / 权限不足杀不死）。
 		killMakesDead  bool
 		wantRecovered  int
@@ -48,6 +51,7 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 		wantKilled     []int
 		wantPIDFile    bool
 		wantRegistered bool
+		wantBlocked    bool
 	}{
 		{
 			name:           "reconnect 失败→重试→成功恢复",
@@ -59,25 +63,37 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			wantRegistered: true,
 		},
 		{
-			name:           "重试耗尽→杀树→清理",
+			name:           "重试耗尽但 wrapper 仍存活→按 ADR-093 只告警不杀",
 			succeedOnDial:  0,
-			killMakesDead:  true,
 			wantRecovered:  0,
 			wantDials:      1 + len(recoverRetryBackoff),
-			wantKilled:     []int{testWrapperPID, testJavaPID},
-			wantPIDFile:    false,
-			wantRegistered: false,
-		},
-		{
-			name:           "杀树失败→记日志保留 PID 文件",
-			succeedOnDial:  0,
-			killErr:        errors.New("access denied"),
-			killMakesDead:  false,
-			wantRecovered:  0,
-			wantDials:      1 + len(recoverRetryBackoff),
-			wantKilled:     []int{testWrapperPID, testJavaPID},
+			wantKilled:     nil,
 			wantPIDFile:    true,
 			wantRegistered: false,
+			wantBlocked:    true,
+		},
+		{
+			name:                   "重试期间 wrapper 已死→退化为 Java 真孤儿处置→杀树清理",
+			succeedOnDial:          0,
+			wrapperDiesDuringRetry: true,
+			killMakesDead:          true,
+			wantRecovered:          0,
+			wantDials:              1 + len(recoverRetryBackoff),
+			wantKilled:             []int{testJavaPID},
+			wantPIDFile:            false,
+			wantRegistered:         false,
+		},
+		{
+			name:                   "wrapper 已死但 Java 杀不死→保留 PID 文件",
+			succeedOnDial:          0,
+			wrapperDiesDuringRetry: true,
+			killErr:                errors.New("access denied"),
+			killMakesDead:          false,
+			wantRecovered:          0,
+			wantDials:              1 + len(recoverRetryBackoff),
+			wantKilled:             []int{testJavaPID},
+			wantPIDFile:            true,
+			wantRegistered:         false,
 		},
 	}
 
@@ -91,11 +107,21 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			dead := map[int]bool{}
 			var killed []int
 			var sleeps []time.Duration
+			var audits []string
 			dials := 0
 
-			// FR-455①：夹具 PID 非真实进程，注入复核桩恒通过（本用例关注重试/杀树流程）。
+			// FR-455①：夹具 PID 非真实进程，注入复核桩恒通过（本用例关注重试/处置流程）。
 			m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
-			m.recoverPIDAlive = func(pid int) bool { return !dead[pid] }
+			// wrapper：入口存活；若 wrapperDiesDuringRetry，则在开始重试（dials>0）后视为死亡。
+			m.recoverPIDAlive = func(pid int) bool {
+				if pid == testWrapperPID {
+					if tt.wrapperDiesDuringRetry {
+						return dials == 0
+					}
+					return true
+				}
+				return !dead[pid]
+			}
 			m.recoverSleep = func(d time.Duration) { sleeps = append(sleeps, d) }
 			m.recoverKillTree = func(pid int) error {
 				killed = append(killed, pid)
@@ -103,6 +129,11 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 					dead[pid] = true
 				}
 				return tt.killErr
+			}
+			m.onOrphanAudit = func(action, targetID, detail string, success bool, errMsg string) {
+				if !success {
+					audits = append(audits, action)
+				}
 			}
 			m.recoverDial = func(_ *daemonStrategy, _ string) error {
 				dials++
@@ -119,7 +150,11 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantRecovered, recovered)
 			assert.Equal(t, tt.wantDials, dials, "拨号次数 = 初拨 + 有界重试")
-			assert.Equal(t, tt.wantKilled, killed, "杀树目标应先 wrapper 树再补杀 Java 树")
+			assert.Equal(t, tt.wantKilled, killed, "wrapper 已死时只补杀 Java 树；wrapper 存活时不杀")
+			if tt.wantBlocked {
+				assert.Contains(t, audits, "orphan.dispose_blocked",
+					"wrapper 仍存活（瞬时不可达）时应落 dispose_blocked 审计")
+			}
 
 			// 重试间隔递增：失败几次就应等待 recoverRetryBackoff 的对应前缀
 			retrySleeps := len(recoverRetryBackoff)
@@ -161,6 +196,9 @@ func TestRecoverDaemonInstances_KillVerifyWaitsAsyncExit(t *testing.T) {
 	m.recoverDial = func(_ *daemonStrategy, _ string) error { return errors.New("dial refused") }
 	m.recoverKillTree = func(int) error { killIssued = true; return nil }
 	m.recoverPIDAlive = func(pid int) bool {
+		if pid == testWrapperPID {
+			return false // wrapper 已死：走「wrapper 死/Java 活」真孤儿处置路径（强杀 Java）
+		}
 		if !killIssued {
 			return true
 		}
@@ -280,7 +318,7 @@ func TestRecoverDaemonInstances_OwnershipVerifyBlocksKill(t *testing.T) {
 	pidPath := writeOrphanPIDRecord(t, dir, uuid)
 
 	m := NewManager(dir)
-	dead := map[int]bool{}
+	dead := map[int]bool{testWrapperPID: true} // wrapper 已死：只剩 Java 孤儿，进入逐 PID 处置前的复核
 	var killed []int
 	type auditRec struct {
 		action   string
@@ -305,7 +343,7 @@ func TestRecoverDaemonInstances_OwnershipVerifyBlocksKill(t *testing.T) {
 	assert.Empty(t, killed, "复核不通过时不得强杀任何进程")
 	assert.FileExists(t, pidPath, "复核不通过应保留 PID 文件待下一轮/人工介入")
 
-	require.Len(t, audits, 2, "wrapper 与 Java 各落一条拦截审计")
+	require.Len(t, audits, 1, "仅剩 Java 孤儿时对其落一条拦截审计")
 	for _, a := range audits {
 		assert.Equal(t, "orphan.dispose_blocked", a.action)
 		assert.Equal(t, uuid, a.targetID)

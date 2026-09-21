@@ -127,6 +127,11 @@ type PlayerEventService struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// streamMu/streaming 保证每节点只起一条插件事件流订阅（FR-456 F4）：重复订阅会导致事件重复
+	// 扇出与业务事件重复落库。订阅 goroutine 退出时清除标记，使节点真正重连后仍能重建订阅。
+	streamMu  sync.Mutex
+	streaming map[string]struct{}
 }
 
 // playerSub 一个 SSE 订阅：channel + 实例 UUID 过滤（空=全部）。
@@ -199,14 +204,34 @@ func (s *PlayerEventService) IsProbeConnected(instanceUUID string) bool {
 	return ok
 }
 
-// StartWorkerStream 启动到指定 Worker 的插件事件流订阅。
+// StartWorkerStream 启动到指定 Worker 的插件事件流订阅（每节点单飞，FR-456 F4）。
 func (s *PlayerEventService) StartWorkerStream(nodeUUID string) {
 	client, ok := s.pool.Get(nodeUUID)
 	if !ok {
 		slog.Warn("PlayerEventService: 无法获取 Worker 客户端", "nodeUUID", nodeUUID)
 		return
 	}
-	go s.streamFromWorker(nodeUUID, client)
+	// 每节点单飞：已在订阅则忽略重复触发（瞬时 active=2 的 over-trigger 不得起重复长驻流）。
+	s.streamMu.Lock()
+	if s.streaming == nil {
+		s.streaming = make(map[string]struct{})
+	}
+	if _, busy := s.streaming[nodeUUID]; busy {
+		s.streamMu.Unlock()
+		slog.Debug("PlayerEventService: 插件事件流已订阅，忽略重复触发", "nodeUUID", nodeUUID)
+		return
+	}
+	s.streaming[nodeUUID] = struct{}{}
+	s.streamMu.Unlock()
+
+	go func() {
+		defer func() {
+			s.streamMu.Lock()
+			delete(s.streaming, nodeUUID)
+			s.streamMu.Unlock()
+		}()
+		s.streamFromWorker(nodeUUID, client)
+	}()
 }
 
 // streamFromWorker 从单个 Worker 拉取插件事件流：演进名册 + 翻译 + 扇出。

@@ -20,20 +20,27 @@
 ### 2.1 处置前置存活复核 + 更长退避（FR-455①）
 
 - **更长退避**：`recoverRetryBackoff` 从 `{1s,2s,4s}` 扩为覆盖分钟级的递增序列（如 `{1s,2s,4s,8s,16s,32s,64s}` ≈ 127s），并可经配置注入（测试用小值）。理由：交接窗口的 socket 未就绪/资源紧张常是瞬时的，多等一轮即可接管，无需牺牲服务器。
-- **处置前 cmdline 存活复核**：新增 `verifyProcessOwnership(pid int, instanceUUID string) bool`，在 `reapOrphanWrapper` **任何** `killTree` 之前调用：
-  - Unix：读 `/proc/<pid>/cmdline`，校验其确含该实例工作目录/启动命令特征（wrapper 为 `jianmanager` wrapper 标识，Java 为 `-D...` 与工作目录匹配）；
-  - Windows：以 PID 查进程镜像路径与命令行做同口径匹配；
+- **处置前 cmdline/环境存活复核**：新增 `verifyProcessOwnership(pid int, instanceUUID string, workDir string, expectWrapper bool) bool`，在 `reapOrphanWrapper` **任何** `killTree` 之前调用：
+  - Unix：读 `/proc/<pid>/cmdline`，校验其确含该实例工作目录/启动命令特征；wrapper 分支再读 `/proc/<pid>/environ` 校验 `JM_DAEMON_WRAPPER_CONFIG` 内的实例 UUID（wrapper argv 仅 `<worker> daemon`、不含 UUID，单凭 argv 会把**任何**实例的 wrapper 都判真）；
+  - Windows：以 PID 查进程镜像路径与命令行做同口径匹配，wrapper 分支同样要求命令行携带实例 UUID（wrapper argv 携带 UUID）；
   - **复核不通过 → 只告警 + 落审计，不杀**，保留 PID 文件等下一轮扫描或人工介入（PID 被 OS 复用给无关进程时，杜绝误杀）。
+
+> **ADR-093 决策（本节旧表述「复核不通过→只告警」的对齐）**：处置判据是「**确属真孤儿**」——即 **wrapper 已确证死亡、仅剩 Java 孤儿**。当复核**通过**（确属本实例）但进程**仍存活/仅瞬时不可达**时（典型：接管 `reconnectWithRetry` 重试耗尽、wrapper 进程未死），**只告警、保留 PID 文件、不杀**——绝不强杀一个 wrapper 与 Java 都健康、只是 socket 一时拨不通的运行中服务器。存活判据优先于「socket 是否拨通」。
 - `pidAlive`（`daemon.IsPIDAlive`）保留用于「是否还活着」判断；`verifyProcessOwnership` 用于「是否确属目标实例」判断，二者正交。
 
 ### 2.2 运行期周期孤儿扫描（FR-456）
 
-- Worker 侧新增**周期兜底任务**（`manager` 内 goroutine，随 `apps/worker/main.go` 启动），配置 `worker.orphan_scan_enabled`（默认开）与 `worker.orphan_scan_interval`（默认 60s），复用启动期 `RecoverDaemonInstances` 的扫描基座与 `daemon.KillPIDTree`。
-- 扫描三态孤儿，按策略处置（`worker.orphan_dispose_policy`，默认 `warn`，可配 `auto`）：
+- Worker 侧新增**周期兜底任务**（`apps/worker/main.go` 启动），配置键（**与实现统一**，见 `internal/worker/config.go`）：
+  - `orphan_scan.disabled`（bool，默认 `false` = **默认启用**；应急逃生口，显式 `true` 关闭周期扫描，见 `Config.SetDefault("orphan_scan.disabled", false)`）；
+  - `orphan_scan.interval`（duration 字符串，默认 `60s`；非法/空回退 60s）；
+  - `orphan_scan.dispose_policy`（`warn`（默认，只告警 + 落审计）/ `auto`（自动清理））。
+  - 复用启动期 `RecoverDaemonInstances` 的扫描基座与 `daemon.KillPIDTree`。
+- 扫描三态孤儿，按策略处置：
   1. **wrapper 死 / Java 活**：遍历 PID 目录，`!pidAlive(WrapperPID) && pidAlive(JavaPID)` → 走 `reapOrphanWrapper(..., errOrphanedWrapperGone)`（经 2.1 复核）。
-  2. **direct 孤儿**：Worker 内存表已丢失该实例（Worker 曾硬崩），故需按进程命令行匹配本节点所有受管实例的启动命令/工作目录，发现无主 Java → 按策略告警/清理。与 FR-326 反向对账（`orphanRuntimeSvc`）互补：本项补「Worker 侧扫得到、内存表里没有」的场景。
-  3. **docker 残留**：列本机容器（名字 `jianmanager-<uuid>`，见 `dockerStrategy.containerName`），DB/内存表未认作 RUNNING 却容器在跑（含已退出容器）→ 按策略告警/清理。
-- 处置动作一律落审计（`internal/controlplane/service/audit.go` 的 `RecordResultSafe`），保证「不静默」。
+  2. **direct 孤儿**：Worker 内存表已丢失该实例（Worker 曾硬崩），故需按进程命令行匹配本节点所有受管实例的启动命令/工作目录，发现无主 Java → 按策略告警/清理。判据以内存表为准：**受保护工作目录集合只收「可能仍有活进程」的状态（RUNNING/STARTING/STOPPING）**——含 STOPPING 可避免优雅停止期 Java 被误杀、绕过优雅关服；STOPPED/CRASHED 的进程已死，其工作目录**不**受保护（其 WorkDir 下的残留 Java 须能被识别：Worker 硬崩重启后 CP 会把 direct 实例按 STOPPED + WorkDir 重登记，若一并保护则残留 Java 被漏报）。根 PID 集合按「管理器记名」收（实例 strategy 报出的 PID 即受管）。与 FR-326 反向对账（`orphanRuntimeSvc`）互补。
+  3. **docker 残留**：列本机容器（名字 `jianmanager-<uuid>`，见 `dockerStrategy.containerName`），DB/内存表未认作 RUNNING 却容器在跑（含已退出容器）→ 按策略告警/清理。**auto 档保守**：`Running=true` 的容器或内存表仍登记该实例时只告警不删（避免误删启动中/停止中实例的容器），仅删「已退出且内存表无该实例」的平台容器。
+- **任何 killTree/removeContainer 前先做归属复核**（FR-455①）：direct 走 `verifyProcessOwnership`；docker 走 `verifyContainerOwnership`——**显式两级证据**：(a) 容器带平台受管标签（`com.jianmanager.managed=true`）且标签内实例 UUID 与容器名一致 = 强归属确证；(b) 标签与容器名不一致 = 归属不通过、拒绝删除；(c) 无标签（本 FR 之前创建的存量容器）= 退化为**容器名格式校验**（`name_format_only`），不构成强归属证明，该降级如实写入审计 detail 的 `evidence` 字段供运维核查。复核不通过只告警不杀，审计 success 依逐项实际结果判定。
+- 处置动作一律落审计（`internal/controlplane/service/audit.go` 的 `RecordResultSafe`，经 Worker→CP 出站信道 `ReportOrphanAudit` 上报），保证「不静默」。
 
 ### 2.3 状态真源收敛（FR-455③）
 
@@ -43,9 +50,11 @@
 
 ### 2.4 重推多源化 + 幂等（FR-455②）
 
-- `onOpen`（`tunnel.go:135`）去掉 `n == 1` 限制：隧道建立即触发 `onConnected`，由回调**按节点去重 + 幂等**（在 `onWorkerTunnelConnected` 内加 per-node 单飞/节流），避免瞬时 active=2 漏推。
+- `onOpen`（`tunnel.go`）去掉 `n == 1` 限制：隧道**每次**建立都触发 `onConnected`（幂等重推，由 `ResyncDeduper` 按节点去重），避免瞬时 active=2 漏推。
+- 长驻订阅类副作用（`EventService.StartWorkerStream` / `PlayerEventService.StartWorkerStream` / `recoverConnectedBotFleetSubscriptions`）与重推**语义分离**：走 `onFirstConnected`，仅在节点「从无到有」（active 0→1）时触发**一次**，避免瞬时 active=2 重复建立长驻订阅流（stdout/stderr 双写、事件重复扇出）；两个 `StartWorkerStream` 另加 per-node 单飞守卫做纵深防御。
 - 追加触发源：`Register` 成功后与心跳（低频，作自然兜底）均可触发同一幂等重推入口。
-- Worker 侧 `ResyncInstances`（`internal/worker/grpc/server.go:312`）已是「只补不覆盖」语义，天然幂等，无需改动。
+- Worker 侧 `ResyncInstances`（`internal/worker/grpc/server.go`）已是「只补不覆盖」语义，天然幂等，无需改动。
+- 心跳里 `syncInstanceStates` 的**证据对账异步化**（`NewEvidenceReconcileDispatcher`，按节点单飞）：最长 8s 的进程侧证据拉取移出心跳应答关键路径（重推/心跳不被阻塞）。
 
 ## 3. 任务拆分
 
@@ -61,7 +70,8 @@
 | # | 验收项 | 方式 |
 |---|---|---|
 | 1 | 存活 wrapper 因 socket 瞬时不可达时，退避窗口内接管成功，**不误杀** | 单测 + 真机 |
-| 2 | cmdline 复核不通过（PID 被复用）时只告警不杀，PID 文件保留 | 单测 + 负例 |
+| 2 | cmdline/环境复核不通过（PID 被复用）时只告警不杀，PID 文件保留 | 单测 + 负例 |
+| 2b | 退避耗尽但 wrapper 仍存活（确属本实例、仅瞬时不可达）时只告警不杀、保留 PID 文件；仅 wrapper 已死（真孤儿）才处置（ADR-093） | 单测 + 真机 |
 | 3 | 运行期制造 wrapper 死/Java 活、direct 孤儿、docker 残留，均在有限周期内被识别并按策略处置，且落审计 | 真机 |
 | 4 | 心跳清单缺项但进程侧证据显示在跑时，状态不翻 STOPPED | 单测 + 真机 |
 | 5 | 隧道瞬时 active=2 时新连仍触发重推，且重复触发幂等无副作用 | 单测 |
@@ -80,6 +90,47 @@
 ## 5. 风险 / 待定
 
 - **cmdline 匹配的误判率**：匹配特征过宽会误复核通过（放过真孤儿），过窄会误拦截（放过误杀）。待定：以工作目录绝对路径为主键 + 启动命令特征为辅，真机标定。
-- **direct 孤儿扫描成本**：全机进程枚举的 CPU/权限开销，需设定扫描上限与降级（枚举失败仅告警）。
+- **direct 孤儿扫描成本**：全机进程枚举的 CPU/权限开销，需设定扫描上限与降级（枚举失败仅告警）。已实现单轮上限（见 §6）。
 - **状态收敛的宽限期**：`N` 取值需在「抖动容忍」与「及时反映」间权衡，待真机观察心跳周期后拍板。
 - **对账 RPC 频率**：仅对「DB 运行态但清单缺失」的少数实例触发，避免每拍全量拉取。
+
+## 6. 关键常量 / 配置键 / 审计 action 登记（实现-文档对齐）
+
+下表把实现中的关键常量、配置键与审计 action 名统一登记，供 reviewer 与文档核对（实现为准，文档随实现更新）。
+
+**配置键**（`internal/worker/config.go`，`worker.yml` 下 `orphan_scan.*`，Viper `SetDefault`）：
+
+| 键 | 默认 | 语义 |
+|---|---|---|
+| `orphan_scan.disabled` | `false` | `true` = 关闭周期扫描（应急逃生口）。注意：本文早前误写为 `worker.orphan_scan_enabled`（默认开），**以实现为准**——语义等价（都表示「默认启用」）。 |
+| `orphan_scan.interval` | `60s` | 扫描周期；非法/空回退 60s。 |
+| `orphan_scan.dispose_policy` | `warn` | `warn` 只告警 + 落审计 / `auto` 自动清理。 |
+
+**关键常量**：
+
+| 常量 | 值 | 位置 | 语义 |
+|---|---|---|---|
+| `recoverRetryBackoff` | `1s→2s→4s→8s→16s→32s→64s`（≈127s） | `recover_orphan.go` | 接管 reconnect 的有界递增重试窗口 |
+| `orphanKillVerifyAttempts` / `orphanKillVerifyInterval` | `10` / `100ms` | `recover_orphan.go` | 强杀后存活复核的次数/间隔 |
+| `maxScannedProcesses` | `8192` | `orphan_scan.go` | 单轮 direct 扫描进程枚举上限（超限降级告警） |
+| `maxScannedContainers` | `2048` | `orphan_scan.go` | 单轮 docker 残留扫描容器枚举上限 |
+| `maxScanRoundDuration` | `30s` | `orphan_scan.go` | 单轮扫描耗时告警阈值 |
+| `evidenceSocketProbeTimeout` | `500ms` | `evidence.go` | 单次 daemon socket 探活超时 |
+| `evidenceReconcileGraceBeats` | `3` | `evidence.go` | 证据不可得时的连续宽限拍数 |
+| `evidenceProbeTimeout` | `8s` | `evidence.go` | CP→Worker 证据拉取超时（现经派发器异步，不再阻塞心跳） |
+| `ResyncDeduper` cooldown | `60s` | `apps/control-plane/main.go`（`NewResyncDeduper`） | 重推按节点冷却窗口 |
+| `reportTimeout`（orphan audit） | `10s` | `internal/worker/orphanaudit` | 孤儿审计上报超时 |
+
+**审计 action 名**（`internal/controlplane/service/audit.go#RecordResultSafe`，targetType=`orphan`；direct 孤儿以 WorkDir 为 targetID）：
+
+| action | 触发 |
+|---|---|
+| `orphan.scan_detected` | warn 档发现孤儿（三态） |
+| `orphan.scan_disposed` | auto 档实际处置（success 依逐项结果） |
+| `orphan.scan_dispose_blocked` | auto 档归属复核不过 / docker running 容器或内存表在册实例保守不删 |
+| `orphan.dispose_blocked` | 接管兜底：wrapper 仍存活（瞬时不可达）或归属复核不过 → 只告警不杀 |
+| `orphan.dispose_reaped` | 接管兜底：真孤儿强杀并清理 PID/socket |
+
+**Worker→CP 上报通道**：`ReportOrphanAudit`（`proto/worker.proto`；CP 实现 `internal/controlplane/grpc/orphan_audit.go`；Worker 侧 `internal/worker/orphanaudit`）——与 `ReportCrashSnapshot` 同源的出站信道 + 节点身份鉴权，落 `RecordResultSafe`。
+
+**主要装配入口**：`Manager.SetOrphanAuditHandler`（Worker 审计回调）、`ControlPlaneHandler.SetOrphanAuditRecorder`、`ControlPlaneHandler.SetReconcileDispatcher`、`TunnelRegistry.SetOnConnected` / `SetOnFirstConnected`。

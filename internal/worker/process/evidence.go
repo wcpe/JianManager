@@ -149,22 +149,18 @@ func evidenceDetail(ev InstanceEvidence) string {
 }
 
 // probeSocketReachable 对 daemon socket 做有界探活（拨通即视为可达）。空地址恒 false。
+//
+// FR-456（F9）：改用带超时的 Dial（daemon.DialTimeout）——此前无超时 Dial 放在 goroutine 里，
+// 超时返回后该 goroutine 仍在阻塞拨号（Unix socket accept 队列打满等），造成 goroutine 泄漏。
+// 现由 DialTimeout 保证拨号在 timeout 内返回，无需额外 goroutine。
 func probeSocketReachable(addr string, timeout time.Duration) bool {
 	if addr == "" {
 		return false
 	}
-	done := make(chan error, 1)
-	go func() {
-		conn, err := daemon.Dial(addr)
-		if err == nil {
-			_ = conn.Close()
-		}
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		return err == nil
-	case <-time.After(timeout):
+	conn, err := daemon.DialTimeout(addr, timeout)
+	if err != nil {
 		return false
 	}
+	_ = conn.Close()
+	return true
 }
