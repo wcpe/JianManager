@@ -358,6 +358,7 @@ func (d *BotLoadCapacityDirectory) applyWorkerCapacity(capacity *BotLoadNodeCapa
 	capacity.ActiveBots = max(0, worker.ActiveBots)
 	capacity.CapacityGeneration = worker.CapacityGeneration
 	capacity.WorkerEpoch = worker.WorkerEpoch
+	capacity.WorkerEpochGeneration = worker.WorkerEpochGeneration
 	capacity.BotWorkerVersion = worker.BotWorkerVersion
 	capacity.RuntimeSource = "worker-grpc"
 	capacity.RSSBytes = worker.RSSBytes

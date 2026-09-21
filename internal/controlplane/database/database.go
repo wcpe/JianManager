@@ -139,6 +139,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.InstanceCrashSnapshot{},
 		// 无主运行时反向对账跟踪（FR-326）：Worker 有、CP 无记录的实例宽限/处置状态。
 		&model.OrphanRuntime{},
+		// 失效 Bot 自动回收（FR-460）：按 workerEpoch 换代判定僵死 Fleet Bot 的宽限/处置状态。
+		&model.FleetBotReclaim{},
 		&model.ServerRegistration{},
 		&model.Network{},
 		&model.NetworkMember{},

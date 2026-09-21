@@ -106,6 +106,8 @@ type Services struct {
 	Settings              *service.SettingsService
 	// OrphanRuntime 实例反向对账无主运行时列表/确认处置（FR-326）；nil 时端点关闭。
 	OrphanRuntime *service.OrphanRuntimeTracker
+	// BotReclaim 失效 Bot 回收列表/确认处置（FR-460）；nil 时端点关闭。
+	BotReclaim    *service.BotReclaimService
 	ProbeUpdate   *service.ProbeUpdateService
 	ClientChannel *service.ClientChannelService
 	ClientVersion *service.ClientVersionService
@@ -511,6 +513,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		if svcs.OrphanRuntime != nil {
 			NewOrphanRuntimeHandler(svcs.OrphanRuntime).RegisterRoutes(permRead("node.manage", "instance.read"))
+		}
+
+		if svcs.BotReclaim != nil {
+			NewBotReclaimHandler(svcs.BotReclaim).RegisterRoutes(permRead("bot.manage", "bot.read"))
 		}
 
 		if svcs.Diagnostics != nil {

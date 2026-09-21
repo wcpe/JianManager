@@ -646,6 +646,15 @@ func main() {
 	orphanRuntimeSvc := service.NewOrphanRuntimeTracker(db, settingsSvc, pool)
 	orphanRuntimeSvc.SetAudit(auditSvc)
 
+	// 失效 Bot 自动回收与容量补足（FR-460）：按 workerEpoch 换代识别僵死 Fleet Bot，宽限后自动回收
+	// 并复用执行核心把在线数补回 planned_count 目标。默认 auto_reclaim=true 但仅对 Fleet 归属 Bot
+	// 生效；V1 手动 Bot 永不自动回收。宽限/开关经 platform_settings 白名单键即时生效。
+	botReclaimSvc := service.NewGRPCBotReclaimService(db, settingsSvc, botLoadSvcs.capacity, pool, botLoadSvcs.execution)
+	botReclaimSvc.SetAudit(auditSvc)
+	botReclaimSweeper := service.NewBotReclaimSweeper(botReclaimSvc)
+	botReclaimSweeper.Start()
+	defer botReclaimSweeper.Stop()
+
 	// 出站代理可视化配置（FR-185，见 ADR-043）：
 	//   - settings 保存 proxy.* 后重建 CP 出站持有者（优先级 settings DB > yaml > env）；
 	//   - 启动时若 DB 已有代理覆盖，按当前生效代理重建一次（保证重启后覆盖仍生效）；
@@ -747,6 +756,7 @@ func main() {
 		PlatformObservability:   platformObservabilitySvc,
 		Settings:                settingsSvc,
 		OrphanRuntime:           orphanRuntimeSvc,
+		BotReclaim:              botReclaimSvc,
 		ProbeUpdate:             probeUpdateSvc,
 		ClientChannel:           clientChannelSvc,
 		ClientVersion:           clientVersionSvc,
