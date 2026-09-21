@@ -516,7 +516,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		}
 
 		if svcs.BotReclaim != nil {
-			NewBotReclaimHandler(svcs.BotReclaim).RegisterRoutes(permRead("bot.manage", "bot.read"))
+			// F5：读路由挂 bot.read|bot.manage；处置写路由仅挂 bot.manage（避免仅持 bot.read 即可停用）。
+			NewBotReclaimHandler(svcs.BotReclaim).RegisterRoutes(
+				permRead("bot.manage", "bot.read"),
+				permRead("bot.manage"),
+			)
 		}
 
 		if svcs.Diagnostics != nil {

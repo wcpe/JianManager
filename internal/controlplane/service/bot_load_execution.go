@@ -736,11 +736,17 @@ func materializeBotLoadBots(tx *gorm.DB, sessionID uint, expected []model.Bot) e
 	return nil
 }
 
+// samePlannedBotLoadBot 判定已存在行是否仍与「服务端分配计划」一致。
+//
+// 注意：desired_state_generation 属 CP 运行时状态而非计划字段——重试失败（RetryFailed +1）与
+// FR-460 的失效 Bot 重新武装（+1，使重派发获得新的 Worker 幂等键）都会合法推进它。
+// 把它纳入计划一致性比对，会让任何一次世代推进后的补足/重启被永久拒绝（「与服务端计划不一致」），
+// 因此这里只比对真正的计划字段。
 func samePlannedBotLoadBot(existing, expected model.Bot) bool {
 	return existing.InstanceID == expected.InstanceID && equalUintPointers(existing.StressSessionID, expected.StressSessionID) &&
 		equalUintPointers(existing.ExecutorNodeID, expected.ExecutorNodeID) && equalUintPointers(existing.LoadBatchID, expected.LoadBatchID) &&
 		existing.Name == expected.Name && existing.Config == expected.Config && existing.ConfigHash == expected.ConfigHash &&
-		existing.DesiredStateGeneration == expected.DesiredStateGeneration && existing.CohortKey == expected.CohortKey
+		existing.CohortKey == expected.CohortKey
 }
 
 func equalUintPointers(left, right *uint) bool {
@@ -2039,9 +2045,40 @@ func (s *BotLoadExecutionService) rebuildRunningAssignment(ctx context.Context, 
 		Generation: bot.DesiredStateGeneration, DesiredState: "running", ConfigHash: bot.ConfigHash,
 		Name: bot.Name, Host: config.Server, Port: int32(config.Port), Username: username,
 		Version: config.Version, Auth: config.Auth, CohortKey: bot.CohortKey,
-		ConnectNotBeforeUnixMs: time.Now().UTC().UnixMilli(),
+		ConnectNotBeforeUnixMs: s.deterministicBotConnectNotBefore(ctx, session, bot),
 		CorrelationSeed:        stableBotLoadDigest(session.UUID + "|" + bot.UUID + "|correlation"),
 	}, nil
+}
+
+// deterministicBotConnectNotBefore 由批次 ConnectStartAt + 该 Bot 在批次内的 ordinal 偏移
+// 推导确定性的 ConnectNotBefore（FR-460 F3 / spec §2.4.3）。
+//
+// 原实现用 time.Now() 使每次 sweep 构建出的 assignment 字节不同 → reconcile 幂等键每次都变 →
+// Worker 无法去重，与 ReconcileBotFleetSnapshot 反复重复派发同一 ordinal。改为确定性后可恢复
+// 幂等键稳定（同一 ordinal 只派发一次）。缺批次/计划信息时退回 0（Worker 视为「立即可连」）。
+func (s *BotLoadExecutionService) deterministicBotConnectNotBefore(ctx context.Context, session *model.BotStressSession, bot *model.Bot) int64 {
+	if session == nil || bot == nil || bot.LoadBatchID == nil {
+		return 0
+	}
+	plan, err := decodeStartAllocationPlan(session)
+	if err != nil {
+		return 0
+	}
+	ordinal := botLoadOrdinalFromUUID(session.UUID, plan.TargetBots, bot.UUID)
+	if ordinal <= 0 {
+		return 0
+	}
+	var batch model.BotLoadBatch
+	if err := s.db.WithContext(ctx).
+		Select("id", "ordinal", "connect_start_at", "connect_interval_ms").
+		First(&batch, *bot.LoadBatchID).Error; err != nil {
+		return 0
+	}
+	if batch.ConnectStartAt.IsZero() {
+		return 0
+	}
+	localIndex := botLoadAllocationLocalIndex(plan, batch.Ordinal, ordinal)
+	return batch.ConnectStartAt.Add(time.Duration(localIndex*batch.ConnectIntervalMS) * time.Millisecond).UnixMilli()
 }
 
 func (s *BotLoadExecutionService) loadReconcileDesired(ctx context.Context, nodeID uint, sessionUUID string) (*model.BotStressSession, []model.Bot, error) {

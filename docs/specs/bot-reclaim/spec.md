@@ -35,6 +35,10 @@
 
 节点**当前 epoch 真源**取自心跳/容量快照：`BotLoadCapacityDirectory.applyWorkerCapacity`（`bot_load_capacity.go`）已把 `WorkerEpoch`/`WorkerEpochGeneration` 落到 `BotLoadNodeCapacity`，直接复用，不新增 RPC。
 
+> **多分片世代口径（FR-460 修正）**：节点级 `WorkerEpochGeneration` 是各分片世代号的 **max**（`worker/bot/sharded.go` 聚合），而每分片 `Manager` 独立自增、Bot 记录的是其所属分片的世代号。多分片下任一分片独立崩溃自愈都会让节点 max 领先于健康 Bot 的分片世代，故「世代落后」只是**嫌疑**而非充分判据；判定还需与 **Worker Fleet 实存快照**（`GetBotFleetSnapshot`）对账：仍在实存中的 Bot 一律视为健康，只有实存中确实缺失才判失效。快照不可用时退回保守兜底（多分片不判失效、单分片比对 epoch 字符串）。
+
+> **V1 手动 Bot（FR-460 修正）**：`load_batch_id`/`stress_session_id` 为空的 V1 Bot **不纳入回收判定**——它既不能自动处置，也无法经回收端点处置，纳入只会产生无法收敛的死条目。V1 Bot 的清理由既有 `DELETE /bots/:id` 承担。
+
 > 与 FR-365 的关系：`classifyRuntimeEpoch` 只「丢弃过期事件」（第 322 行）；本 FR 增加「过期即判失效 → 回收」的**动作**，二者互补。
 
 ### 2.2 宽限与状态机（复用 FR-326 范式）
@@ -62,7 +66,7 @@ type FleetBotReclaim struct {
 ```
 
 **宽限**：`SettingKeyBotReclaimGracePeriod = "bot_reclaim.grace_period"`（默认 `2m`，短于 FR-326 的 10m——Bot 生命周期短，且容忍一次世代迁移窗口即可）。
-**自动化开关**：`SettingKeyBotReclaimAuto = "bot_reclaim.auto_reclaim"`，**默认 `true` 但仅对 Fleet 归属 Bot 生效**；`pending` 超宽限 → `confirmed` → 自动处置。手动 V1 Bot 永不自动处置，只进列表等人工确认。
+**自动化开关**：`SettingKeyBotReclaimAuto = "bot_reclaim.auto_reclaim"`，**默认 `true` 但仅对 Fleet 归属 Bot 生效**；`pending` 超宽限 → `confirmed` → 自动处置。V1 手动 Bot 不进入回收判定（见 §2.1 修正：纳入只会产生无法处置的死条目）。
 
 > 决策理由：Fleet Bot 由编排器幂等重建、可安全回收；V1 Bot 是用户资源，误删不可逆——因此「自动」严格限定在 `loadBatchId != nil || stressSessionId != nil`。
 
@@ -105,7 +109,7 @@ type FleetBotReclaim struct {
 
 | # | 步骤 | 依赖 |
 |---|---|---|
-| 1 | `model.FleetBotReclaim` + 迁移；设置项三键（`bot_reclaim.grace_period`/`auto_reclaim`）登记 | — |
+| 1 | `model.FleetBotReclaim` + 迁移；设置项两键（`bot_reclaim.grace_period`/`auto_reclaim`）登记 | — |
 | 2 | `service/bot_reclaim.go`：判定查询（§2.1，纯 SQL，注入 clock） | 1 |
 | 3 | 宽限/状态机 + `BotReclaimSweeper` 周期巡检（`pending→confirmed`） | 2 |
 | 4 | 回收动作：`StopBotBatch`/`DeleteBot` 幂等封装 + CP 账本事务 + 审计 | 3 |

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -23,13 +24,21 @@ func NewBotReclaimHandler(svc *service.BotReclaimService) *BotReclaimHandler {
 	return &BotReclaimHandler{svc: svc}
 }
 
-// RegisterRoutes 注册 /bot-reclaims 路由组（须挂在 admin 组下）。
-func (h *BotReclaimHandler) RegisterRoutes(rg *gin.RouterGroup) {
-	g := rg.Group("/bot-reclaims")
+// RegisterRoutes 注册 /bot-reclaims 路由组。
+//
+// readGroup 承载列表/详情（bot.read 或 bot.manage 均可）；writeGroup 承载处置写路由
+// （F5：必须仅挂 bot.manage，避免「仅持 bot.read 即可触发停用」）。
+func (h *BotReclaimHandler) RegisterRoutes(readGroup, writeGroup *gin.RouterGroup) {
+	if readGroup == nil {
+		return
+	}
+	g := readGroup.Group("/bot-reclaims")
 	{
 		g.GET("", h.List)
 		g.GET("/:uuid", h.Get)
-		g.POST("/:uuid/reclaim", h.Reclaim)
+	}
+	if writeGroup != nil {
+		writeGroup.Group("/bot-reclaims").POST("/:uuid/reclaim", h.Reclaim)
 	}
 }
 
@@ -71,12 +80,25 @@ func (h *BotReclaimHandler) Get(c *gin.Context) {
 }
 
 // Reclaim POST /bot-reclaims/:uuid/reclaim — 管理员手动确认回收。
+//
+// F5：要求 body 精确确认（{"confirm":"<uuid>"}），避免误触发放置；写路由仅挂 bot.manage。
 func (h *BotReclaimHandler) Reclaim(c *gin.Context) {
+	uuid := c.Param("uuid")
+	var body struct {
+		Confirm string `json:"confirm"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.Confirm) != uuid {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "BOT_RECLAIM_CONFIRM_REQUIRED",
+			"message": `须在请求体回传 {"confirm":"<uuid>"} 且与路径一致以确认回收`,
+		})
+		return
+	}
 	userID := uint(0)
 	if uid, ok := c.Get(middleware.CtxUserID); ok {
 		userID, _ = uid.(uint)
 	}
-	rec, err := h.svc.ConfirmReclaim(c.Param("uuid"), userID, c.ClientIP())
+	rec, err := h.svc.ConfirmReclaim(uuid, userID, c.ClientIP())
 	if err != nil {
 		h.respondErr(c, err)
 		return
