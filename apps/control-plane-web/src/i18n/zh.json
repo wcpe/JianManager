@@ -3824,7 +3824,13 @@
       "cpuHigh": "CPU 使用率偏高",
       "probeOffline": "ServerProbe 未连接，部分运行态数据不可用"
     },
-    "segConfig": "关键配置"
+    "segConfig": "关键配置",
+    "bcTopology": "子服拓扑",
+    "process": "进程",
+    "health": "健康检查",
+    "config": "配置",
+    "nonMcTitle": "世界语义指标",
+    "nonMcHint": "该实例不适用 TPS/世界指标（非 MC 世界语义）；进程与端口健康见对应页签。"
   },
   "palette": {
     "title": "命令面板",
@@ -4955,5 +4961,43 @@
     "content": "基线内容",
     "message": "说明",
     "invalid": "请填写合法的范围与文件路径"
+  },
+  "process": {
+    "title": "进程指标",
+    "cpu": "CPU",
+    "memory": "内存",
+    "threads": "线程",
+    "uptime": "运行时长"
+  },
+  "health": {
+    "title": "端口与健康检查",
+    "portGame": "游戏端口",
+    "portQuery": "查询端口",
+    "portProbe": "探针端口",
+    "probeHint": "可达性由探针/直探连接态派生；主动探活（HTTP/TCP）执行侧待接入。",
+    "noPort": "未声明监听端口",
+    "state": {
+      "reachable": "可达",
+      "unreachable": "不可达",
+      "unknown": "未知"
+    }
+  },
+  "binary": {
+    "launchTitle": "启动参数",
+    "launchCommand": "启动命令",
+    "launchPlaceholder": "如 ./beacon-1.1.0-linux-amd64 --config config.yaml",
+    "launchHint": "变更对下次启动生效；编辑启动规格需实例管理权限。"
+  },
+  "config2": {
+    "title": "配置文件",
+    "empty": "未发现可管理的配置文件",
+    "selectHint": "从左侧选择配置文件开始编辑"
+  },
+  "bc": {
+    "subServers": "子服列表",
+    "noSubServers": "该代理未注册任何子服",
+    "playersTitle": "跨服玩家分布（全网 {{count}}）",
+    "playersUnknown": "未知（探针不可达）",
+    "playersNone": "无在线玩家"
   }
 }

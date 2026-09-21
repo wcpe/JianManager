@@ -60,6 +60,8 @@ func (s *AgentTokenService) ResolveInstanceTarget(instanceID uint) (AgentTrusted
 	if err := s.db.First(&inst, instanceID).Error; err != nil {
 		return AgentTrustedTarget{}, nil, ErrInstanceNotFound
 	}
+	// MCP agent_get_instance 同源透出能力画像（FR-445 §2.4）。
+	AttachCapabilities(&inst)
 	return AgentTrustedTarget{
 		ResourceType: AgentResourceInstance,
 		InstanceID:   inst.ID,

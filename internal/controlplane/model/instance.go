@@ -134,6 +134,10 @@ type Instance struct {
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 
 	Node Node `gorm:"foreignKey:NodeID" json:"node,omitempty"`
+
+	// Capabilities 实例能力画像（FR-445，ADR-091）：按当前 (type, role) 现算，不落库、不缓存。
+	// gorm:"-" 使其不参与持久化；仅详情/单查路径填充（列表不计），故对既有响应零影响。
+	Capabilities *InstanceCapabilityProfile `gorm:"-" json:"capabilities,omitempty"`
 }
 
 // BeforeCreate 创建前自动生成 UUID。

@@ -438,7 +438,8 @@
 
 ### GET /api/v1/instances/:id
 - **描述**: 实例详情
-- **关联 FR**: FR-005
+- **关联 FR**: FR-005, FR-445
+- **说明**: 详情/单查响应增 `capabilities` —— 按当前 `(type, role)` 现算的实例能力画像（FR-445/ADR-091，结构见 `model.InstanceCapabilityProfile`：`type`/`role`/`mcSemantics`/有序 `capabilities[]`/各能力 `sources`）。**不落库、不缓存**，仅在详情/单查路径填充（列表响应不带）；前端据此显隐详情页 Tab。Tab 显隐只由 `capabilities` 决定，`mcSemantics` 只影响同一 Tab 内字段取舍。MCP `agent_get_instance` 同源透出。
 
 ### PUT /api/v1/instances/:id
 - **描述**: 更新实例配置
