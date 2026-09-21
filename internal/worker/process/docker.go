@@ -443,6 +443,28 @@ func dockerMemUsage(m containertypes.MemoryStats) uint64 {
 	return m.Usage
 }
 
+// dockerContainerRunning 探测指定名字的容器当前是否在跑（FR-455③ 进程侧证据 / FR-456 残留扫描）。
+// 守护进程不可达 / 查询失败返回 error，由调用方按「证据不可得」降级。
+func dockerContainerRunning(ctx context.Context, name string) (bool, error) {
+	cli, err := dockerClientFromEnv()
+	if err != nil {
+		return false, err
+	}
+	defer cli.Close()
+	containers, err := cli.ContainerList(ctx, containertypes.ListOptions{All: true})
+	if err != nil {
+		return false, err
+	}
+	for _, c := range containers {
+		for _, n := range c.Names {
+			if strings.TrimPrefix(n, "/") == name {
+				return strings.EqualFold(c.State, "running"), nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // removeExistingContainer 删除同名残留容器（上次异常退出未清理时）。
 // 调用方持有 d.mu。
 func (d *dockerStrategy) removeExistingContainer(ctx context.Context) {

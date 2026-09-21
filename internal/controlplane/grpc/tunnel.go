@@ -132,7 +132,10 @@ func (r *TunnelRegistry) onOpen(t grpctunnel.TunnelChannel) {
 	onConnected := r.onConnected
 	r.mu.Unlock()
 	slog.Info("节点反向隧道已建立", "nodeUUID", uuid, "active", n)
-	if n == 1 && onConnected != nil {
+	// FR-455②：不再以 n==1 为触发条件。CP 重启后旧隧道 onClose 常晚于新隧道 onOpen
+	//（瞬时 active=2），若只在 n==1 触发，新连不触发重推、该轮节点规格同步丢失。
+	// 改为「隧道建立即触发」，由回调侧按节点去重 + 幂等（ResyncDeduper）吸收重复触发。
+	if onConnected != nil {
 		go onConnected(uuid)
 	}
 }

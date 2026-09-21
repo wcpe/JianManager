@@ -4,10 +4,40 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestLoad_OrphanScanDefaults 运行期孤儿扫描默认启用、周期 60s、策略 warn（FR-456）。
+func TestLoad_OrphanScanDefaults(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.False(t, cfg.OrphanScan.Disabled, "默认启用周期扫描")
+	assert.Equal(t, "warn", cfg.OrphanScan.DisposePolicy, "默认只告警")
+	assert.Equal(t, 60*time.Second, cfg.OrphanScan.ScanInterval())
+}
+
+// TestLoad_OrphanScanEnvOverride 运行期孤儿扫描可经环境变量覆盖（FR-456）。
+func TestLoad_OrphanScanEnvOverride(t *testing.T) {
+	t.Setenv("JIANMANAGER_ORPHAN_SCAN_DISABLED", "true")
+	t.Setenv("JIANMANAGER_ORPHAN_SCAN_INTERVAL", "15s")
+	t.Setenv("JIANMANAGER_ORPHAN_SCAN_DISPOSE_POLICY", "auto")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.True(t, cfg.OrphanScan.Disabled)
+	assert.Equal(t, 15*time.Second, cfg.OrphanScan.ScanInterval())
+	assert.Equal(t, "auto", cfg.OrphanScan.DisposePolicy)
+}
+
+// TestOrphanScanConfig_ScanIntervalParsing 非法/空周期回退 60s；合法值原样解析。
+func TestOrphanScanConfig_ScanIntervalParsing(t *testing.T) {
+	assert.Equal(t, 60*time.Second, OrphanScanConfig{}.ScanInterval())
+	assert.Equal(t, 60*time.Second, OrphanScanConfig{Interval: "bogus"}.ScanInterval())
+	assert.Equal(t, 60*time.Second, OrphanScanConfig{Interval: "-5s"}.ScanInterval())
+	assert.Equal(t, 90*time.Second, OrphanScanConfig{Interval: "90s"}.ScanInterval())
+}
 
 // TestLoad_Defaults 零配置（无文件、无 env）时加载合理默认值（FR-080，见 ADR-020）。
 func TestLoad_Defaults(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jhump/grpctunnel/tunnelpb"
@@ -780,6 +781,15 @@ func main() {
 	grpcHandler := cpgrpc.NewControlPlaneHandler(db, pool)
 	// WS 令牌密钥经注册/心跳下发 Worker（FR-275，见 ADR-061）。
 	grpcHandler.SetWSTokenSecret(wsTokenSecret)
+	// FR-455③：进程侧证据拉取（心跳清单缺失时二次确认实例是否真已停机）。
+	grpcHandler.SetEvidenceProbe(cpgrpc.NewEvidenceProbeFromPool(pool))
+	// FR-455②：重推去重器（按节点单飞 + 冷却），吸收隧道/注册/心跳多源触发的重复重推，
+	// 既保证「每次事件都尝试触发、不漏推」，又避免瞬时多源「猛推」。
+	resyncDeduper := cpgrpc.NewResyncDeduper(60 * time.Second)
+	// Register 成功 / 心跳兜底经此同一幂等入口触发重推（多源化的后两源）。
+	grpcHandler.SetResyncTrigger(func(nodeUUID string) {
+		resyncDeduper.Trigger(nodeUUID, instanceSvc.ResyncNode)
+	})
 	onWorkerTunnelConnected := func(nodeUUID string) {
 		eventSvc.StartWorkerStream(nodeUUID)
 		// 玩家事件流（探针经反向 WS 上报）同步订阅（FR-066）。
@@ -789,8 +799,9 @@ func main() {
 		}
 		// Worker 重连/重注册后重推该节点全部实例规格，让重启后丢失的 STOPPED 实例
 		// 在 Worker 侧重新可被文件/配置/归档 op 定位（修 bug #2，见 ADR-050）。
+		// FR-455②：隧道建立即触发（去重器吸收瞬时 active=2 的重复触发），不再依赖 n==1。
 		// 异步执行：该回调可能在心跳处理路径内触发，重推不应阻塞心跳应答。
-		go instanceSvc.ResyncNode(nodeUUID)
+		resyncDeduper.Trigger(nodeUUID, instanceSvc.ResyncNode)
 	}
 	// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
 	grpcHandler.SetMetricIngester(metricSvc)
