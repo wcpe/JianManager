@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { useInstanceBatch, type InstanceBatchAction, type InstanceBatchResult } from '@/api/instances'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
+import { Layers } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -12,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
+import RollingBatchDialog from './RollingBatchDialog'
 
 /** 批量栏所需的选中实例最小信息（含状态，用于状态感知禁用与失败明细，FR-058/FR-139）。 */
 export interface BatchSelectedInstance {
@@ -50,6 +52,8 @@ export default function InstanceBatchBar({ selected, onClear, onRetainFailed }: 
   const [pending, setPending] = useState<InstanceBatchAction | null>(null)
   const [keyword, setKeyword] = useState('')
   const [failures, setFailures] = useState<{ name: string; error: string }[] | null>(null)
+  // 集群级滚动/分批/灰度编排（FR-457）入口。
+  const [rollingOpen, setRollingOpen] = useState(false)
 
   const selectedIds = selected.map((s) => s.id)
   const count = selectedIds.length
@@ -184,6 +188,21 @@ export default function InstanceBatchBar({ selected, onClear, onRetainFailed }: 
         {t('instanceBatch.kill')}
       </Button>
 
+      <div className="mx-2 h-5 w-px bg-border" />
+
+      {/* 集群级滚动/分批/灰度编排（FR-457）：打开策略对话框，不再一次性扇出。 */}
+      <Button
+        variant="outline"
+        size="sm"
+        title={count === 0 ? t('instanceBatch.selectFirst') : undefined}
+        disabled={count === 0}
+        onClick={() => setRollingOpen(true)}
+        data-testid="instance-batch-rolling"
+      >
+        <Layers className="mr-1 size-3.5" />
+        {t('rolling.open')}
+      </Button>
+
       {/* 停止/强杀/命令下发的二次确认。 */}
       <Dialog open={pending !== null} onOpenChange={(v) => { if (!v) setPending(null) }}>
         <DialogContent>
@@ -250,6 +269,9 @@ export default function InstanceBatchBar({ selected, onClear, onRetainFailed }: 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 滚动/分批/灰度编排策略与进度（FR-457）。 */}
+      {rollingOpen && <RollingBatchDialog selected={selected} onClose={() => setRollingOpen(false)} />}
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { HttpResponse } from 'msw'
+import { HttpResponse, type HttpResponseResolver } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
@@ -58,6 +58,27 @@ export interface MockGroupMembership {
   id: number
   groupId: number
   instanceId: number
+}
+
+/** 滚动编排会话（FR-457）：字段对齐 web/src/api/instanceRolling.ts 的 RollingOp。 */
+export interface MockRollingOp {
+  id: number
+  action: string
+  command?: string
+  batchSize: number
+  batchIntervalSec: number
+  failFast: boolean
+  ratio: number
+  targets: number[]
+  cursor: number
+  state: 'pending' | 'running' | 'paused' | 'done' | 'canceled'
+  requested: number
+  succeeded: number
+  failed: number
+  skipped: number
+  errors: { instanceId: number; error: string }[]
+  createdAt: string
+  updatedAt: string
 }
 
 /** 崩溃快照（FR-313）：字段对齐 web/src/api/crashSnapshots.ts 的 CrashSnapshot。 */
@@ -498,10 +519,126 @@ function aggregateRows(rows: MockInstance[]) {
   }
 }
 
+/** 滚动编排会话集合（FR-457）。 */
+const rollingOps = db<MockRollingOp>('instanceRollingOps', () => [])
+
+let rollingSeq = 100
 let groupSeq = 100
 let memberSeq = 100
 
+/** 解析滚动编排目标：ids 优先，否则按 filter 筛选。 */
+function resolveRollingTargets(body: {
+  ids?: number[]
+  filter?: { nodeId?: number; status?: string; role?: string }
+}): { targets: MockInstance[]; skipped: number } {
+  if (body.ids?.length) {
+    const found = body.ids.map((id) => instances.get(id)).filter((i): i is MockInstance => !!i)
+    return { targets: found, skipped: body.ids.length - found.length }
+  }
+  const rows = instances.list((i) => {
+    if (body.filter?.nodeId && i.nodeId !== body.filter.nodeId) return false
+    if (body.filter?.status && i.status !== body.filter.status) return false
+    if (body.filter?.role && i.role !== body.filter.role) return false
+    return true
+  })
+  return { targets: rows, skipped: 0 }
+}
+
+/** 对一批目标执行动作（镜像 /instances/batch 的假后端语义）。 */
+function applyRollingAction(action: string, targets: MockInstance[]): {
+  succeeded: number
+  failed: number
+  errors: { instanceId: number; error: string }[]
+} {
+  const nextStatus: Record<string, string> = { start: 'RUNNING', stop: 'STOPPED', restart: 'RUNNING', kill: 'STOPPED' }
+  let succeeded = 0
+  const errors: { instanceId: number; error: string }[] = []
+  for (const inst of targets) {
+    if (action === 'command') {
+      if (inst.status === 'RUNNING') succeeded++
+      else errors.push({ instanceId: inst.id, error: '实例未运行，无法下发命令' })
+    } else if (nextStatus[action]) {
+      instances.update(inst.id, { status: nextStatus[action] })
+      succeeded++
+    }
+  }
+  return { succeeded, failed: errors.length, errors }
+}
+
+/** 暂停/继续/取消滚动编排：终态会话幂等返回原状态。 */
+function rollingControl(
+  info: Parameters<HttpResponseResolver>[0],
+  next: 'paused' | 'running' | 'canceled',
+) {
+  const denied = requireAuth(info)
+  if (denied) return denied
+  const opId = Number((info.params as { opId: string }).opId)
+  const op = rollingOps.get(opId)
+  if (!op) return HttpResponse.json({ error: 'NOT_FOUND', message: '编排会话不存在' }, { status: 404 })
+  const terminal = op.state === 'done' || op.state === 'canceled'
+  if (!terminal) rollingOps.update(opId, { state: next, updatedAt: new Date().toISOString() })
+  return HttpResponse.json(rollingOps.get(opId))
+}
+
 export const handlers = [
+  // ---- 滚动/分批/灰度编排（FR-457）；须在 /instances/:id 之前注册（避免 'rolling' 被当 id）----
+  domainRoute('post', '/instances/rolling', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json()) as {
+      action: string
+      ids?: number[]
+      filter?: { nodeId?: number; status?: string; role?: string }
+      command?: string
+      batchSize?: number
+      batchIntervalSec?: number
+      failFast?: boolean
+      ratio?: number
+    }
+    const { targets: resolved, skipped } = resolveRollingTargets(body)
+    // 灰度抽样（稳定序：按 id 升序取前 ceil(n*ratio) 台）。
+    const sorted = [...resolved].sort((a, b) => a.id - b.id)
+    const ratio = body.ratio ?? 0
+    const targets = ratio > 0 && ratio < 1 ? sorted.slice(0, Math.max(1, Math.round(sorted.length * ratio))) : sorted
+    const { succeeded, failed, errors } = applyRollingAction(body.action, targets)
+    const batchSize = body.batchSize ?? 0
+    const totalBatches = batchSize > 0 ? Math.ceil(targets.length / batchSize) : 1
+    const now = new Date().toISOString()
+    const op = rollingOps.insert({
+      id: rollingSeq++,
+      action: body.action,
+      command: body.command,
+      batchSize,
+      batchIntervalSec: body.batchIntervalSec ?? 0,
+      failFast: !!body.failFast,
+      ratio,
+      targets: targets.map((t) => t.id),
+      cursor: totalBatches,
+      state: 'done',
+      requested: targets.length,
+      succeeded,
+      failed,
+      skipped,
+      errors,
+      createdAt: now,
+      updatedAt: now,
+    })
+    return HttpResponse.json(op)
+  }),
+
+  domainRoute('get', '/instances/rolling/:opId', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const op = rollingOps.get(Number((info.params as { opId: string }).opId))
+    if (!op) return HttpResponse.json({ error: 'NOT_FOUND', message: '编排会话不存在' }, { status: 404 })
+    return HttpResponse.json(op)
+  }),
+
+  // 暂停/继续/取消：终态会话直接返回原状态（幂等）。
+  domainRoute('post', '/instances/rolling/:opId/pause', (info) => rollingControl(info, 'paused')),
+  domainRoute('post', '/instances/rolling/:opId/resume', (info) => rollingControl(info, 'running')),
+  domainRoute('post', '/instances/rolling/:opId/cancel', (info) => rollingControl(info, 'canceled')),
+
   // ---- 实例 CRUD ----
   domainRoute('get', '/instances/search', (info) => {
     const denied = requireAuth(info)
