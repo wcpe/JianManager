@@ -75,11 +75,14 @@ func NodePortUsage(db *gorm.DB, nodeID uint) ([]PortUsage, error) {
 	return usage, nil
 }
 
-// allocPortsForNode 为节点上的新 MC 实例分配同节点唯一的 server 端口，
+// allocPortsForNode 为节点上的新实例分配同节点唯一的 server 端口，
 // query 端口约定与 server-port 一致（MC query 默认走 server-port，UDP 与 TCP 端口空间独立）。
 // 在各自范围内取最低的、未被本节点其它实例占用的端口；已软删除的实例不计入占用。
 // RCON 已退役（FR-067）：不再分配 rcon 端口，但仍把历史实例残留的 rcon 端口计入占用集合避免撞号。
-func allocPortsForNode(db *gorm.DB, nodeID uint) (AllocatedPorts, error) {
+//
+// probeApplicable 为 false 时不分配探针端口（FR-454：ServerProbe 是 Bukkit 插件，代理/通用二进制/
+// Beacon 均无法加载），返回的 ProbePort 为 0；server/query 仍照常分配（binary/beacon 的通用端口约定）。
+func allocPortsForNode(db *gorm.DB, nodeID uint, probeApplicable bool) (AllocatedPorts, error) {
 	used, err := occupiedPortsForNode(db, nodeID)
 	if err != nil {
 		return AllocatedPorts{}, err
@@ -89,11 +92,16 @@ func allocPortsForNode(db *gorm.DB, nodeID uint) (AllocatedPorts, error) {
 	if err != nil {
 		return AllocatedPorts{}, err
 	}
+	out := AllocatedPorts{ServerPort: server, QueryPort: server}
+	if !probeApplicable {
+		return out, nil
+	}
 	probe, err := pickPort(used, probePortBase)
 	if err != nil {
 		return AllocatedPorts{}, err
 	}
-	return AllocatedPorts{ServerPort: server, QueryPort: server, ProbePort: probe}, nil
+	out.ProbePort = probe
+	return out, nil
 }
 
 // allocProbePortForNode 只为节点分配一个空闲探针端口（FR-411 补口）。

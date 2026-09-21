@@ -175,7 +175,8 @@ func (s *CloneService) cloneAllocAndCreate(src *model.Instance, req CloneInstanc
 	releasePortAlloc := s.instance.lockNodePortAlloc()
 	defer releasePortAlloc()
 
-	ports, err = allocPortsForNode(s.db, src.NodeID)
+	// 克隆源限 MC Java 后端（clone.go 上游校验 Role=backend/Type=minecraft_java），适用探针。
+	ports, err = allocPortsForNode(s.db, src.NodeID, true)
 	if err != nil {
 		return nil, ports, nil, 0, nil, err
 	}

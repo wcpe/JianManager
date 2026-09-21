@@ -188,11 +188,12 @@ func (s *ProbeUpdateService) UpdateWithBaseURL(instanceID uint, baseURL string) 
 	if err := s.db.Preload("Node").First(&inst, instanceID).Error; err != nil {
 		return nil, err
 	}
-	// 代理实例不适用探针（FIX，真机：对 BungeeCord 代理点「更新探针」走完整推送链路后在依赖预置阶段失败）：
-	// ServerProbe 是 Bukkit 插件，代理端（BungeeCord/Waterfall/Velocity）无法加载，推了也白推。
-	// 置于版本解析之前：不适用与是否已选探针版本无关。
-	if inst.Role == model.InstanceRoleProxy {
-		return nil, fmt.Errorf("代理实例不适用 ServerProbe 探针（Bukkit 插件，代理端无法加载），无需推送")
+	// 不适用探针的实例不推送（FR-454）：ServerProbe 是 Bukkit 插件，仅 Minecraft Java 服务端
+	// 可加载——代理端（BungeeCord/Waterfall/Velocity）无法加载；通用二进制（type=generic）与
+	// Beacon（role=beacon）不是 MC Java 进程。推了也白推（此前仅排除 proxy，对 beacon/binary
+	// 会推入无效 Bukkit jar）。置于版本解析之前：不适用与是否已选探针版本无关。
+	if reason := probeInapplicableReason(&inst); reason != "" {
+		return nil, errors.New(reason)
 	}
 	if s.artifacts != nil {
 		version, _, err := s.artifacts.ResolveInstanceProbeVersion(inst.ID)
@@ -294,14 +295,15 @@ func (s *ProbeUpdateService) deployTarget(inst *model.Instance, baseURL string) 
 }
 
 // resolveTargets 解析批量目标实例（预加载节点），按可访问实例集合收敛。
+// 不适用探针的实例（代理/Beacon 角色、通用二进制类型，FR-454）一律排除。
 // 返回 (目标实例列表, skipped)。skipped 为请求 IDs 中不存在或越权被剔除的数量（存在性隐藏）。
 func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeIDs []uint, scope bool) ([]model.Instance, int, error) {
 	var instances []model.Instance
 
 	if len(req.IDs) > 0 {
 		q := applyInstanceBatchFilter(s.db.Model(&model.Instance{}).Preload("Node"), InstanceBatchFilter{}, scopeIDs, scope)
-		// 代理实例不适用探针（Bukkit 插件），批量目标静默跳过并计入 skipped。
-		if err := q.Where("instances.id IN ? AND instances.role <> ?", req.IDs, model.InstanceRoleProxy).Find(&instances).Error; err != nil {
+		// 不适用探针的实例（代理/Beacon/通用二进制）批量目标静默跳过并计入 skipped。
+		if err := applyProbeApplicableScope(q).Where("instances.id IN ?", req.IDs).Find(&instances).Error; err != nil {
 			return nil, 0, fmt.Errorf("查询批量目标失败: %w", err)
 		}
 		skipped := len(req.IDs) - len(instances)
@@ -316,10 +318,34 @@ func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeID
 		f = *req.Filter
 	}
 	q := applyInstanceBatchFilter(s.db.Model(&model.Instance{}).Preload("Node"), f, scopeIDs, scope)
-	if err := q.Where("instances.role <> ?", model.InstanceRoleProxy).Limit(maxProbeUpdateTargets + 1).Find(&instances).Error; err != nil {
+	if err := applyProbeApplicableScope(q).Limit(maxProbeUpdateTargets + 1).Find(&instances).Error; err != nil {
 		return nil, 0, fmt.Errorf("查询批量目标失败: %w", err)
 	}
 	return instances, 0, nil
+}
+
+// applyProbeApplicableScope 追加「探针适用实例」筛选（FR-454）：排除代理/Beacon 角色与通用二进制类型。
+// 与 model.IsProbeApplicable 同口径（SQL 侧镜像），确保批量目标解析与单实例推送守卫一致。
+func applyProbeApplicableScope(q *gorm.DB) *gorm.DB {
+	return q.Where("instances.role NOT IN ? AND instances.type <> ?",
+		[]string{string(model.InstanceRoleProxy), string(model.InstanceRoleBeacon)},
+		string(model.InstanceTypeGeneric))
+}
+
+// probeInapplicableReason 返回实例不适用探针的可读原因；适用时返回空串（FR-454）。
+// 判定与 model.IsProbeApplicable 一致（只看 role 即可兜底历史误记为 minecraft_java 的 beacon）。
+func probeInapplicableReason(inst *model.Instance) string {
+	if model.IsProbeApplicable(inst.Type, inst.Role) {
+		return ""
+	}
+	switch inst.Role {
+	case model.InstanceRoleProxy:
+		return "代理实例不适用 ServerProbe 探针（Bukkit 插件，代理端无法加载），无需推送"
+	case model.InstanceRoleBeacon:
+		return "Beacon 实例不适用 ServerProbe 探针（非 Minecraft Java 服务端），无需推送"
+	default:
+		return "通用二进制实例不适用 ServerProbe 探针（非 Minecraft Java 服务端），无需推送"
+	}
 }
 
 // deployVersionTo 下发已缓存制品的 CP 本地 URL；不传 jar 字节或运行库压缩包。

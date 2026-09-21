@@ -465,3 +465,15 @@ func TestFillInstanceMetricSampleTrimsUnconsumedFields(t *testing.T) {
 	assert.Empty(t, sample.SourceMask)
 	assert.False(t, sample.PlayerNamesPartial)
 }
+
+// TestCollectInstanceMetrics_SkipsNonProbeInstances FR-454：探针不适用（代理/通用二进制/Beacon）
+// 的实例不分配探针端口（ProbePort=0），心跳采集据 ProbePort>0 过滤——不再对它们每拍抓取 /metrics
+// 必失败（采集器只对 ProbePort>0 的 RUNNING 实例发起抓取，此类实例无目标返回 nil）。
+func TestCollectInstanceMetrics_SkipsNonProbeInstances(t *testing.T) {
+	out := collectInstanceMetrics([]process.InstanceSnapshot{
+		{UUID: "beacon", State: "RUNNING", ProbePort: 0},
+		{UUID: "binary", State: "RUNNING", ProbePort: 0},
+		{UUID: "proxy", State: "RUNNING", ProbePort: 0},
+	})
+	require.Nil(t, out, "无探针端口的实例不被采集，避免每拍必失败")
+}

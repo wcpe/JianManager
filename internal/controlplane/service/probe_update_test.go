@@ -242,3 +242,86 @@ func TestProbeUpdate_ResolveTargets_SkipsProxy(t *testing.T) {
 		require.NotEqual(t, model.InstanceRoleProxy, in.Role, "filter 模式亦不得纳入代理")
 	}
 }
+
+// TestProbeUpdate_Update_RejectsNonApplicable FR-454：不适用探针的实例（Beacon/通用二进制，及历史
+// 误记 type=minecraft_java 的 Beacon）单发推送直接拒绝并带明确原因，不再推入无效 Bukkit jar。
+func TestProbeUpdate_Update_RejectsNonApplicable(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
+
+	cases := []struct {
+		name     string
+		inst     *model.Instance
+		wantWord string
+	}{
+		{
+			name: "Beacon",
+			inst: &model.Instance{
+				Name: "beacon", NodeID: 1, Type: model.InstanceTypeGeneric,
+				Role: model.InstanceRoleBeacon, ProcessType: model.ProcessTypeDaemon,
+				StartCommand: "x", Status: model.InstanceStatusStopped,
+			},
+			wantWord: "Beacon 实例不适用",
+		},
+		{
+			name: "通用二进制",
+			inst: &model.Instance{
+				Name: "bin", NodeID: 1, Type: model.InstanceTypeGeneric,
+				Role: model.InstanceRoleUniversal, ProcessType: model.ProcessTypeDaemon,
+				StartCommand: "x", Status: model.InstanceStatusStopped,
+			},
+			wantWord: "通用二进制实例不适用",
+		},
+		{
+			name: "历史误配 Beacon（type=minecraft_java）",
+			inst: &model.Instance{
+				Name: "legacy-beacon", NodeID: 1, Type: model.InstanceTypeMinecraftJava,
+				Role: model.InstanceRoleBeacon, ProcessType: model.ProcessTypeDaemon,
+				StartCommand: "x", Status: model.InstanceStatusStopped,
+			},
+			wantWord: "Beacon 实例不适用",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, db.Create(tc.inst).Error)
+			_, err := svc.Update(tc.inst.ID)
+			require.Error(t, err, "不适用实例必须拒绝而非推入无效 jar")
+			require.Contains(t, err.Error(), tc.wantWord)
+		})
+	}
+}
+
+// TestProbeUpdate_ResolveTargets_SkipsNonApplicable FR-454：批量目标解析排除代理/Beacon/通用二进制，
+// 仅保留适用实例；被排除者计入 skipped。
+func TestProbeUpdate_ResolveTargets_SkipsNonApplicable(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
+	backend := mkProbeInstance(t, db, "smp", 1)
+	beacon := &model.Instance{
+		Name: "beacon", NodeID: 1, Type: model.InstanceTypeGeneric,
+		Role: model.InstanceRoleBeacon, ProcessType: model.ProcessTypeDaemon,
+		StartCommand: "x", Status: model.InstanceStatusStopped,
+	}
+	bin := &model.Instance{
+		Name: "bin", NodeID: 1, Type: model.InstanceTypeGeneric,
+		Role: model.InstanceRoleUniversal, ProcessType: model.ProcessTypeDaemon,
+		StartCommand: "x", Status: model.InstanceStatusStopped,
+	}
+	require.NoError(t, db.Create(beacon).Error)
+	require.NoError(t, db.Create(bin).Error)
+
+	insts, skipped, err := svc.resolveTargets(
+		ProbeUpdateBatchRequest{IDs: []uint{backend.ID, beacon.ID, bin.ID}}, nil, false)
+	require.NoError(t, err)
+	require.Len(t, insts, 1, "仅适用探针的实例命中")
+	require.Equal(t, backend.ID, insts[0].ID)
+	require.Equal(t, 2, skipped, "被排除的 beacon/binary 计入 skipped")
+
+	// filter 模式不得纳入不适用实例。
+	insts, _, err = svc.resolveTargets(ProbeUpdateBatchRequest{}, nil, false)
+	require.NoError(t, err)
+	for _, in := range insts {
+		require.True(t, model.IsProbeApplicable(in.Type, in.Role), "filter 模式亦不得纳入不适用实例")
+	}
+}
