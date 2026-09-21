@@ -9,6 +9,7 @@ import {
   type InstanceInfo,
 } from '@/api/instances'
 import { useInstanceMetrics } from '@/api/metrics'
+import { resolveCapabilities } from '@/lib/capabilities'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { Button } from '@jianmanager/ui/components/button'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
@@ -68,7 +69,8 @@ export function InstanceWorktableCard({
   // 仅运行态拉实时指标；停机/过渡态不轮询（省请求，避免离线 422）。
   const { data: metrics } = useInstanceMetrics(inst.id, running)
   const level: StatusLevel = instanceStatusLevel(inst.status)
-  const isProxy = inst.role === 'proxy'
+  // 代理图标由画像 `bcTopology` 能力判定（FR-445），取代写死的 `inst.role === 'proxy'`。
+  const isProxy = resolveCapabilities(inst).capabilities.includes('bcTopology')
   const Icon = isProxy ? Route : Box
 
   const statusLabel = t(`instances.${inst.status.toLowerCase()}`, inst.status)

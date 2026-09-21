@@ -29,6 +29,7 @@ import CloneInstanceDialog from '@/components/CloneInstanceDialog'
 import InstanceTagsDialog from '@/components/InstanceTagsDialog'
 import EditInstanceLimitsDialog from '@/components/EditInstanceLimitsDialog'
 import EditInstanceConfigDialog from '@/components/EditInstanceConfigDialog'
+import { resolveCapabilities } from '@/lib/capabilities'
 import { InstanceWorktableCard } from '@/components/console/InstanceWorktableCard'
 import { InstanceGroupManager } from '@/components/console/InstanceGroupManager'
 import {
@@ -496,7 +497,8 @@ export default function InstancesPage() {
     const st = statusConfig[inst.status] || statusConfig.STOPPED
     const instEnv = envOf(inst)
     const free = freeTagsOf(inst)
-    const isProxy = inst.role === 'proxy'
+    // 代理的分组展开行由画像 `bcTopology` 能力判定（FR-445），取代写死的 role === 'proxy'。
+    const isProxy = resolveCapabilities(inst).capabilities.includes('bcTopology')
     const proxyExpanded = expandedProxies.has(inst.id)
     return (
       <Fragment key={inst.id}>
@@ -1626,10 +1628,10 @@ function InstanceRowMenu({
         {inst.processType === 'docker' && (
           <DropdownMenuItem onSelect={onLimits}>{t('instances.resourceLimit')}</DropdownMenuItem>
         )}
-        {inst.role === 'proxy' && (
+        {resolveCapabilities(inst).capabilities.includes('bcTopology') && (
           <DropdownMenuItem onSelect={onProxy}>{t('proxy.manageBackends')}</DropdownMenuItem>
         )}
-        {inst.role === 'backend' && (
+        {resolveCapabilities(inst).mcSemantics && (
           <DropdownMenuItem
             title={stopped ? undefined : t('instances.cloneRunningHint')}
             className={stopped ? undefined : 'opacity-50 cursor-not-allowed'}

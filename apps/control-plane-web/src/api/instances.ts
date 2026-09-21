@@ -2,6 +2,7 @@ import { keepPreviousData, queryOptions, useInfiniteQuery, useQuery, useMutation
 import { toast } from 'sonner'
 import api from '@/api/client'
 import { removeServer } from '@/components/console/server-selection'
+import type { InstanceCapabilityProfile } from '@/lib/capabilities'
 
 /**
  * 实例域查询缓存保留时长（FR-297）：控制台来回切换（页签/跨服）时命中缓存先呈现旧数据、
@@ -37,6 +38,10 @@ export interface InstanceInfo {
   diskLimitMb?: number
   /** 系统分配的游戏服监听端口（FR-032），Bot 默认据此连入所属实例。 */
   serverPort: number
+  /** MC 查询端口（Query 协议）；0/缺省=未启用。 */
+  queryPort?: number
+  /** ServerProbe 监控探针 /metrics 端口（系统分配，FR-010）；0=未部署探针。 */
+  probePort?: number
   autoStart: boolean
   autoRestart: boolean
   /**
@@ -45,6 +50,11 @@ export interface InstanceInfo {
    * envVars/launchSpec 一致；消费前一律经 `parseTags()` 规范化为数组，勿直接当数组用。
    */
   tags: string | string[] | null
+  /**
+   * 实例能力画像（FR-445，ADR-091）：仅详情/单查响应携带（列表不计），前端据此显隐 Tab。
+   * 缺失时前端按 (type, role) 本地兜底（`lib/capabilities.ts`），故为可选。
+   */
+  capabilities?: InstanceCapabilityProfile | null
   createdAt: string
 }
 

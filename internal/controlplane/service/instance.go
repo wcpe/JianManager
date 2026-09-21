@@ -684,6 +684,8 @@ func (s *InstanceService) GetByID(id uint) (*model.Instance, error) {
 		}
 		return nil, fmt.Errorf("查询实例失败: %w", err)
 	}
+	// 详情/单查路径支付能力画像（FR-445 §2.4）：按当前 (type, role) 现算，不落库。
+	AttachCapabilities(&instance)
 	return &instance, nil
 }
 

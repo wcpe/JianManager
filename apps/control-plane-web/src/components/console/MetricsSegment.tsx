@@ -4,6 +4,7 @@ import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useMetricSeries, type MetricSeries, useInstanceMetrics, type InstanceMetricsData } from '@/api/metrics'
 import { useInstance } from '@/api/instances'
+import { useInstanceCapabilities } from '@/lib/capabilities'
 import { useProbeUpdateStatus, useUpdateProbe } from '@/api/probe'
 import { useInstanceProbeVersion, useSelectableProbeVersions, useSetInstanceProbeVersion } from '@/api/artifactVersions'
 import { activeMetricSources } from '@/lib/metrics-availability'
@@ -27,6 +28,11 @@ import { MetricSourceChips } from './MetricSourceChips'
 function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()
   const { data: inst } = useInstance(instanceId)
+  // 能力画像（FR-445，ADR-091）：探针卡只在画像声明「metrics 能力以 probe 为来源」时渲染。
+  // ServerProbe 是 Bukkit 插件，代理/二进制/beacon 等非 MC 实例无法加载——改由画像 `sources`
+  // 判定，取代原先写死的 `if (inst?.role === 'proxy') return null`（避免「更新探针必失败」的陷阱按钮）。
+  const profile = useInstanceCapabilities(inst)
+  const probeCapable = profile.sources?.metrics?.includes('probe') ?? false
   const { data: st } = useProbeUpdateStatus(instanceId)
   const isRunning = inst?.status === 'RUNNING'
   // 与 HealthStrip 同钩：RUNNING 时拉实时指标，读 probeAvailable（与 TPS 同源，不依赖插件桥）。
@@ -35,9 +41,7 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
   const { data: selectable } = useSelectableProbeVersions()
   const { data: selection } = useInstanceProbeVersion(instanceId)
   const setVersion = useSetInstanceProbeVersion(instanceId)
-  // ServerProbe 是 Bukkit 插件，代理端（BungeeCord/Waterfall/Velocity）无法加载：
-  // 代理实例不渲染探针卡（后端同有守卫），避免「更新探针必失败」的陷阱按钮。
-  if (inst?.role === 'proxy') return null
+  if (!probeCapable) return null
   if (!st) return null
 
   const bridgeConnected = !!st.probeConnected

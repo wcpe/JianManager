@@ -271,6 +271,29 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     tags: '["env:test","creative","plot"]',
     createdAt: '2026-01-21T00:00:00Z',
   },
+  {
+    // 配套服务（FR-450）：Go 原生二进制，type=generic、role=beacon，无 MC 世界语义。
+    id: 30,
+    uuid: 'i-beacon',
+    nodeId: 1,
+    name: 'beacon-1',
+    type: 'generic',
+    role: 'beacon',
+    processType: 'daemon',
+    status: 'RUNNING',
+    startCommand: './beacon-1.1.0-linux-amd64 --config config.yaml',
+    jdkId: 0,
+    workDir: '/servers/beacon-1',
+    image: '',
+    cpuLimit: 0,
+    memLimitMb: 0,
+    diskLimitMb: 0,
+    serverPort: 8080,
+    autoStart: true,
+    autoRestart: true,
+    tags: '["env:prod","infra"]',
+    createdAt: '2026-01-30T00:00:00Z',
+  },
 ]
 
 const INSTANCE_SEED_SIZE = 1200
@@ -314,6 +337,50 @@ function seedInstances(): MockInstance[] {
 }
 
 const instances = db<MockInstance>('instances', seedInstances)
+
+/**
+ * 实例能力画像（FR-445）：镜像后端 `service/capability_profile.go` 的注册表，
+ * 随详情响应下发 `capabilities`。代理在 devmock 里以 `minecraft_proxy` 表达实现形态，
+ * 语义等同 `minecraft_java`（role=proxy），故归一后按 (type, role) 取表。
+ */
+export interface MockCapabilityProfile {
+  type: string
+  role: string
+  mcSemantics: boolean
+  capabilities: string[]
+  sources?: Record<string, string[]>
+}
+
+const CAPABILITY_PROFILES: Record<string, Omit<MockCapabilityProfile, 'type' | 'role'>> = {
+  'minecraft_java:backend': {
+    mcSemantics: true,
+    capabilities: ['overview', 'terminal', 'files', 'plugins', 'metrics', 'players', 'business', 'bot', 'backup'],
+    sources: { metrics: ['probe', 'direct'], players: ['probe', 'direct'], process: ['node'] },
+  },
+  'minecraft_java:proxy': {
+    mcSemantics: false,
+    capabilities: ['overview', 'terminal', 'files', 'bcTopology', 'players', 'plugins', 'process', 'health', 'config', 'backup'],
+    sources: { bcTopology: ['node'], players: ['probe', 'direct'], process: ['node'], health: ['direct'], config: ['node'] },
+  },
+  'generic:beacon': {
+    mcSemantics: false,
+    capabilities: ['overview', 'terminal', 'files', 'process', 'health', 'config', 'backup'],
+    sources: { process: ['node'], health: ['direct'], config: ['node'] },
+  },
+  'generic:universal': {
+    mcSemantics: false,
+    capabilities: ['overview', 'terminal', 'files', 'process', 'health', 'config', 'backup'],
+    sources: { process: ['node'], health: ['direct'], config: ['node'] },
+  },
+}
+
+function capabilitiesFor(inst: MockInstance): MockCapabilityProfile {
+  const type = inst.type === 'minecraft_proxy' ? 'minecraft_java' : inst.type
+  const profile = CAPABILITY_PROFILES[`${type}:${inst.role}`]
+  if (profile) return { type: inst.type, role: inst.role, ...profile }
+  // 未知组合回退安全子集。
+  return { type: inst.type, role: inst.role, mcSemantics: false, capabilities: ['overview', 'terminal', 'files', 'backup'] }
+}
 
 const instanceGroups = db<MockInstanceGroup>('instanceGroups', () => [
   { id: 1, uuid: 'g-asia', name: '亚洲区', parentId: null, sort: 0 },
@@ -755,7 +822,8 @@ export const handlers = [
     if (denied) return denied
     const inst = instances.get(Number(info.params.id))
     if (!inst) return HttpResponse.json({ error: 'NOT_FOUND', message: '实例不存在' }, { status: 404 })
-    return HttpResponse.json(inst)
+    // 详情响应下发能力画像（FR-445），列表不计（前端列表走 lib/capabilities 本地兜底）。
+    return HttpResponse.json({ ...inst, capabilities: capabilitiesFor(inst) })
   }),
 
   domainRoute('put', '/instances/:id', async (info) => {

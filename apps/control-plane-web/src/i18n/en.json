@@ -3824,7 +3824,13 @@
       "cpuHigh": "CPU usage is high",
       "probeOffline": "ServerProbe is offline; some runtime data is unavailable"
     },
-    "segConfig": "Key config"
+    "segConfig": "Key config",
+    "bcTopology": "Sub-servers",
+    "process": "Process",
+    "health": "Health",
+    "config": "Config",
+    "nonMcTitle": "World metrics",
+    "nonMcHint": "TPS/world metrics do not apply to this instance (no MC world semantics). See the dedicated tabs for process and health."
   },
   "palette": {
     "title": "Command palette",
@@ -4955,5 +4961,43 @@
     "content": "Baseline content",
     "message": "Message",
     "invalid": "Please provide a valid scope and file path"
+  },
+  "process": {
+    "title": "Process Metrics",
+    "cpu": "CPU",
+    "memory": "Memory",
+    "threads": "Threads",
+    "uptime": "Uptime"
+  },
+  "health": {
+    "title": "Ports & Health",
+    "portGame": "Game port",
+    "portQuery": "Query port",
+    "portProbe": "Probe port",
+    "probeHint": "Reachability is derived from the probe/direct connection state; active health checks (HTTP/TCP) are pending.",
+    "noPort": "No listening port declared",
+    "state": {
+      "reachable": "Reachable",
+      "unreachable": "Unreachable",
+      "unknown": "Unknown"
+    }
+  },
+  "binary": {
+    "launchTitle": "Launch Parameters",
+    "launchCommand": "Launch command",
+    "launchPlaceholder": "e.g. ./beacon-1.1.0-linux-amd64 --config config.yaml",
+    "launchHint": "Takes effect on next start; editing launch spec requires instance manage permission."
+  },
+  "config2": {
+    "title": "Config Files",
+    "empty": "No manageable config files found",
+    "selectHint": "Select a config file on the left to edit"
+  },
+  "bc": {
+    "subServers": "Sub-servers",
+    "noSubServers": "This proxy has no registered sub-servers",
+    "playersTitle": "Cross-server players (total {{count}})",
+    "playersUnknown": "Unknown (probe unreachable)",
+    "playersNone": "No online players"
   }
 }

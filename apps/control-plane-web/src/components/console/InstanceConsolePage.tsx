@@ -2,7 +2,7 @@ import { Activity, Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Activity as ActivityIcon, AlertTriangle, Bot, ChevronDown, ChevronUp, Coins, Copy, DatabaseBackup, FolderTree, Gauge, Hammer, HardDrive, Layers, LayoutDashboard, Loader2, MoreHorizontal, Play, Puzzle, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
+import { Activity as ActivityIcon, AlertTriangle, Bot, ChevronDown, ChevronUp, Coins, Copy, DatabaseBackup, FileCog, FolderTree, Gauge, Hammer, HardDrive, HeartPulse, Layers, LayoutDashboard, Loader2, MoreHorizontal, Network, Play, Puzzle, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
 
 import { useInstance, useKillInstance, useRebuildInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
 import { usePermissionsStore } from '@/stores/permissions'
@@ -18,16 +18,21 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { cn, instanceStatusLevel } from '@jianmanager/ui'
 import { copyToClipboard } from '@/lib/clipboard'
 import { instanceStatusGlowClass } from '@/lib/instance-glow'
+import { useInstanceCapabilities, type Capability } from '@/lib/capabilities'
 import type { CardType } from '@/lib/workspace-card'
 import InstanceActivityFeed from './InstanceActivityFeed'
 import InstanceBackupSegment from './InstanceBackupSegment'
 import InstancePlayersSegment from './InstancePlayersSegment'
 import InstanceResourceSegment, { type ResourceSegment } from './InstanceResourceSegment'
+import BcSegment from './BcSegment'
+import BinarySegment from './BinarySegment'
+import GenericConfigSegment from './GenericConfigSegment'
+import { HealthPanel } from './HealthPanel'
 import { MetricSourceChips } from './MetricSourceChips'
 import WorkspaceCardBody from './WorkspaceCardBody'
 import { recordRecentServer } from './server-selection'
 
-type TabKey = 'overview' | 'terminal' | 'resource' | 'metrics' | 'players' | 'plugins' | 'backup' | 'business' | 'bot'
+type TabKey = 'overview' | 'terminal' | 'resource' | 'metrics' | 'players' | 'plugins' | 'backup' | 'business' | 'bot' | 'bcTopology' | 'process' | 'health' | 'config'
 
 const TAB_CARD_TYPE: Partial<Record<TabKey, CardType>> = {
   terminal: 'terminal',
@@ -37,12 +42,13 @@ const TAB_CARD_TYPE: Partial<Record<TabKey, CardType>> = {
   bot: 'bot',
 }
 
-// Tab 重组（FR-413）：原「环境变量」并入「文件配置」的一个分段，10 → 9 个页签；
-// 分隔线按职能分组（运行 / 配置 / 观测 / 运营），减少 Tab 栏横向溢出。
-const TAB_KEYS: TabKey[] = ['overview', 'terminal', 'resource', 'plugins', 'metrics', 'players', 'business', 'bot', 'backup']
+// Tab 全量登记表（FR-445/448）：这是「有哪些 Tab、顺序如何、图标标签是什么」的唯一登记处；
+// **实际渲染的可见集合由能力画像 `capabilities` 过滤**（见 useInstanceCapabilities），不再硬编码角色分支。
+// Tab 重组（FR-413）：原「环境变量」并入「文件配置」的一个分段；分隔线按职能分组（运行/配置/观测/运营）。
+const TAB_KEYS: TabKey[] = ['overview', 'terminal', 'resource', 'plugins', 'metrics', 'players', 'business', 'bot', 'backup', 'bcTopology', 'process', 'health', 'config']
 
 /** 在该 key 之前插入分组分隔线。 */
-const TAB_GROUP_BREAK: ReadonlySet<TabKey> = new Set<TabKey>(['resource', 'metrics', 'business'])
+const TAB_GROUP_BREAK: ReadonlySet<TabKey> = new Set<TabKey>(['resource', 'metrics', 'business', 'bcTopology', 'process'])
 
 const TAB_LABEL_KEY: Record<TabKey, string> = {
   overview: 'serverConsole.overview',
@@ -54,6 +60,10 @@ const TAB_LABEL_KEY: Record<TabKey, string> = {
   backup: 'serverConsole.backupSchedule',
   business: 'serverConsole.business',
   bot: 'serverConsole.bot',
+  bcTopology: 'serverConsole.bcTopology',
+  process: 'serverConsole.process',
+  health: 'serverConsole.health',
+  config: 'serverConsole.config',
 }
 
 const TAB_ICON: Record<TabKey, LucideIcon> = {
@@ -66,6 +76,36 @@ const TAB_ICON: Record<TabKey, LucideIcon> = {
   backup: DatabaseBackup,
   business: Coins,
   bot: Bot,
+  bcTopology: Network,
+  process: Gauge,
+  health: HeartPulse,
+  config: FileCog,
+}
+
+/**
+ * 能力 → Tab 映射（FR-445）：画像 `capabilities` 中的每一项落成一个 Tab。
+ * 注意 `files` 能力对应 `resource` Tab（页签名「文件配置」），二者命名不同是历史包袱。
+ */
+const CAPABILITY_TAB: Record<Capability, TabKey> = {
+  overview: 'overview',
+  terminal: 'terminal',
+  files: 'resource',
+  plugins: 'plugins',
+  metrics: 'metrics',
+  players: 'players',
+  business: 'business',
+  bot: 'bot',
+  backup: 'backup',
+  bcTopology: 'bcTopology',
+  process: 'process',
+  health: 'health',
+  config: 'config',
+}
+
+/** 按画像能力集合推导有序可见 Tab（画像为空回退全量，保证非白屏）。 */
+function visibleTabsFor(capabilities: Capability[]): TabKey[] {
+  const tabs = capabilities.map((c) => CAPABILITY_TAB[c]).filter((k): k is TabKey => !!k)
+  return tabs.length > 0 ? tabs : TAB_KEYS
 }
 
 interface InstanceConsolePageProps {
@@ -95,14 +135,23 @@ function readResourceSegment(searchParams: URLSearchParams): ResourceSegment {
 export default function InstanceConsolePage({ instanceId }: InstanceConsolePageProps) {
   const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
-  const activeTab = readActiveTab(searchParams)
   const resourceSegment = readResourceSegment(searchParams)
+  const { data: instance } = useInstance(instanceId)
+  // 能力画像（FR-445）：Tab 显隐与顺序的唯一门控来源——后端下发的 capabilities 优先，
+  // 缺失时按 (type, role) 本地兜底（离线/mock 兼容）。不再有零散 role === '...' 分支。
+  const profile = useInstanceCapabilities(instance)
+  const visibleTabs = useMemo(
+    () => (instance ? visibleTabsFor(profile.capabilities) : TAB_KEYS),
+    [instance, profile],
+  )
+  const activeTabFromUrl = readActiveTab(searchParams)
+  // 深链落在隐藏 Tab（FR-448）：回退 overview，不白屏。
+  const activeTab: TabKey = visibleTabs.includes(activeTabFromUrl) ? activeTabFromUrl : 'overview'
   // 访问过即保活：渲染期把新激活页签并入集合（React 官方「渲染期间调整状态」模式）。
   const [mountedTabs, setMountedTabs] = useState<TabKey[]>([activeTab])
   if (!mountedTabs.includes(activeTab)) {
     setMountedTabs((prev) => (prev.includes(activeTab) ? prev : [...prev, activeTab]))
   }
-  const { data: instance } = useInstance(instanceId)
   const { data: nodes = [] } = useNodes({ refetchInterval: 30_000 })
   const { data: metrics } = useInstanceMetrics(instanceId, true)
   const { data: serverState } = useServerState(instanceId, true, 15_000)
@@ -172,13 +221,13 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const isNarrow = useIsNarrowViewport()
   // roving tabindex 简化版：方向键移动焦点并激活（Tab 数量少，激活随焦点走最直觉）。
   const activateSiblingTab = (current: TabKey, delta: 1 | -1) => {
-    const index = TAB_KEYS.indexOf(current)
-    const next = TAB_KEYS[(index + delta + TAB_KEYS.length) % TAB_KEYS.length]
+    const index = visibleTabs.indexOf(current)
+    const next = visibleTabs[(index + delta + visibleTabs.length) % visibleTabs.length]
     tabRefs.current.get(next)?.focus()
     setActiveTab(next)
   }
   const activateEdgeTab = (edge: 'first' | 'last') => {
-    const key = edge === 'first' ? TAB_KEYS[0] : TAB_KEYS[TAB_KEYS.length - 1]
+    const key = edge === 'first' ? visibleTabs[0] : visibleTabs[visibleTabs.length - 1]
     tabRefs.current.get(key)?.focus()
     setActiveTab(key)
   }
@@ -456,7 +505,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
             navOverflowing && '[mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)]',
           )}
         >
-          {TAB_KEYS.map((key) => {
+          {visibleTabs.map((key) => {
             const Icon = TAB_ICON[key]
             return (
               <Fragment key={key}>
@@ -489,8 +538,9 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
         </nav>
 
         {/* 页签 keep-alive（FR-295）：访问过的页签全部保持挂载，非活跃者 Activity 隐藏——
-            DOM/本地状态（终端缓冲、文件树展开态、未保存草稿）保留，轮询自动暂停。 */}
-        {mountedTabs.map((tab) => (
+            DOM/本地状态（终端缓冲、文件树展开态、未保存草稿）保留，轮询自动暂停。
+            FR-448：仅渲染画像可见 Tab（实例加载后画像可能收窄，须过滤掉残留的旧 mounted 项）。 */}
+        {mountedTabs.filter((tab) => visibleTabs.includes(tab)).map((tab) => (
           <Activity key={tab} mode={tab === activeTab ? 'visible' : 'hidden'}>
             {/* 每个页签自身是 flex 列容器（FR-422）：吃满内容区剩余高度。
                 卡片型页签（终端/文件/监控…）内部自己滚，故此层 hidden；
@@ -518,6 +568,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                 watchItems={watchItems}
                 probeConnected={serverState?.connected ?? false}
                 uptimeSeconds={metrics?.uptimeSeconds}
+                mcSemantics={profile.mcSemantics}
               />
             ) : tab === 'resource' ? (
               /* 文件配置（FR-413）：文件管理器 + 环境变量（FR-344）两分段，均保活。 */
@@ -532,6 +583,18 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
             ) : tab === 'backup' ? (
               /* 备份·定时分区接真（FR-339）：本实例定时任务启停/删 + 备份创建/恢复/删除。 */
               <InstanceBackupSegment instanceId={instance.id} />
+            ) : tab === 'bcTopology' ? (
+              /* BC 子服拓扑（FR-449）：子服列表/跨服玩家/自身指标/配置，由 bcTopology 能力驱动。 */
+              <BcSegment instanceId={instance.id} />
+            ) : tab === 'process' ? (
+              /* 二进制/beacon 进程视图（FR-450）：进程指标 + 端口健康 + 启动参数。 */
+              <BinarySegment instanceId={instance.id} />
+            ) : tab === 'health' ? (
+              /* 端口 + 主动健康检查（FR-450）。 */
+              <HealthPanel instanceId={instance.id} />
+            ) : tab === 'config' ? (
+              /* 结构化配置编辑（FR-451 衔接）：BC config.yml / 原生二进制配置。 */
+              <GenericConfigSegment instanceId={instance.id} />
             ) : TAB_CARD_TYPE[tab] ? (
               // 去掉原 min-h-[520px]（FR-422）：卡片吃满剩余高度，内部自行滚动。
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card shadow-soft">
@@ -644,6 +707,7 @@ function OverviewPanel({
   watchItems,
   probeConnected,
   uptimeSeconds,
+  mcSemantics,
 }: {
   instanceId: number
   instanceUuid: string
@@ -659,6 +723,8 @@ function OverviewPanel({
   watchItems: string[]
   probeConnected: boolean
   uptimeSeconds?: number
+  /** 是否具备 MC 世界语义（FR-448）：只决定本 Tab 内字段取舍（TPS/世界 vs 连接/跨服），不作 Tab 级门控。 */
+  mcSemantics: boolean
 }) {
   const { t } = useTranslation()
   const hasHeapMax = (metrics?.heapMaxMb ?? 0) > 0
@@ -668,7 +734,8 @@ function OverviewPanel({
   const alertCount = watchItems.length
   const hasProbe = metrics?.probeAvailable ?? false
   // FR-343 去 mock-api：实例 TPS 真实时序火花线（取末段点位），无数据/无探针显空态而非假图。
-  const { data: seriesData } = useMetricSeries({ scope: 'instance', targetId: instanceUuid, range: '1h', metrics: ['inst_tps'], enabled: !!instanceUuid })
+  // 非 MC 世界语义（proxy/generic）不适用 TPS，不拉序列（省一次请求且避免空图）。
+  const { data: seriesData } = useMetricSeries({ scope: 'instance', targetId: instanceUuid, range: '1h', metrics: ['inst_tps'], enabled: !!instanceUuid && mcSemantics })
   const tpsPoints = (seriesData?.series.find((s) => s.metricKey === 'inst_tps' && s.world === '')?.points ?? [])
     .filter((p) => p.avg != null)
     .map((p) => p.avg as number)
@@ -689,8 +756,12 @@ function OverviewPanel({
       <div className="grid flex-none gap-2 [grid-template-columns:repeat(auto-fit,minmax(122px,1fr))]">
         <KpiCard icon={Gauge} label={t('serverConsole.cpu')} value={`${cpuPct}%`} progress={Math.min(100, cpuPct)} />
         <KpiCard icon={HardDrive} label={t('serverConsole.memory')} value={hasHeapMax ? `${memoryPct}%` : `${formatNumber(metrics?.memoryMb, 0)} MB`} sub={hasHeapMax ? `${formatNumber(metrics?.memoryMb, 0)} / ${formatNumber(metrics?.heapMaxMb, 0)} MB` : 'RSS'} progress={memoryPct} />
-        <KpiCard icon={ActivityIcon} label={t('serverConsole.tps')} value={hasProbe ? formatNumber(metrics?.tps, 1) : t('metrics.unavailable')} progress={hasProbe ? Math.min(100, ((metrics?.tps ?? 0) / 20) * 100) : 0} />
-        <KpiCard icon={Users} label={t('serverConsole.online')} value={playersAvailable ? `${online}/${maxPlayersAvailable ? maxPlayers : '—'}` : t('metrics.unavailable')} progress={playersAvailable && maxPlayers > 0 ? (online / maxPlayers) * 100 : 0} />
+        {/* TPS 是世界语义专属字段（FR-448）：仅具备 MC 世界语义的实例展示，proxy/generic 不显示伪 TPS；
+            探针不可用时显「不可用」而非 0（FR-446/447 诚实标记）。 */}
+        {mcSemantics && (
+          <KpiCard icon={ActivityIcon} label={t('serverConsole.tps')} value={hasProbe ? formatNumber(metrics?.tps, 1) : t('metrics.unavailable')} progress={hasProbe ? Math.min(100, ((metrics?.tps ?? 0) / 20) * 100) : 0} />
+        )}
+        <KpiCard icon={Users} label={t('serverConsole.online')} value={mcSemantics ? (playersAvailable ? `${online}/${maxPlayersAvailable ? maxPlayers : '—'}` : t('metrics.unavailable')) : String(online)} progress={mcSemantics && playersAvailable && maxPlayers > 0 ? (online / maxPlayers) * 100 : 0} />
         <KpiCard icon={Layers} label={t('serverConsole.diskNode')} value={`${diskPct}%`} progress={diskPct} />
         <KpiCard icon={AlertTriangle} label={t('serverConsole.alerts')} value={String(alertCount)} danger={alertCount > 0} progress={alertCount > 0 ? 100 : 0} />
       </div>
@@ -705,8 +776,12 @@ function OverviewPanel({
         {/* 左栏 62%：图表在上（占 42% 高）、日志表在下吃满剩余——日志需要横向空间放消息全文。 */}
         <div className="flex min-h-0 flex-[1.6] flex-col gap-2">
           <section className="flex min-h-0 flex-[0_0_42%] flex-col rounded-lg border bg-card shadow-soft">
-            <h2 className="flex-none border-b px-3 py-2 text-sm font-semibold">{t('serverConsole.tps')} / {t('serverConsole.mspt')}</h2>
-            {hasProbe && tpsBars.length > 0 ? (
+            <h2 className="flex-none border-b px-3 py-2 text-sm font-semibold">{mcSemantics ? `${t('serverConsole.tps')} / ${t('serverConsole.mspt')}` : t('serverConsole.nonMcTitle')}</h2>
+            {!mcSemantics ? (
+              <div className="flex min-h-0 flex-1 items-center justify-center px-3 text-center text-xs text-muted-foreground">
+                {t('serverConsole.nonMcHint')}
+              </div>
+            ) : hasProbe && tpsBars.length > 0 ? (
               <div
                 role="img"
                 aria-label={tpsStats ? t('serverConsole.tpsSparklineAria', {
