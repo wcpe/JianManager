@@ -693,11 +693,15 @@ func (s *InstanceService) GetByID(id uint) (*model.Instance, error) {
 type UpdateInstanceFields struct {
 	Name         *string
 	StartCommand *string
-	AutoStart    *bool
-	AutoRestart  *bool
-	JDKID        *uint
-	EnvVars      *map[string]string
-	Tags         *[]string
+	// LaunchSpec MC 结构化启动规格 JSON（FR-451 配置源明面化：startup.launchSpec 内联项写入）。
+	// nil=不变；写入仅更新持久化字段并同步 Worker 下次启动规格，不在 Update 内重派生 start_command
+	// （start_command 由 Create 派生，二者保持一致由调用方负责）。
+	LaunchSpec  *string
+	AutoStart   *bool
+	AutoRestart *bool
+	JDKID       *uint
+	EnvVars     *map[string]string
+	Tags        *[]string
 	// Role 实例角色（backend/proxy/universal/beacon）；nil=不变。
 	// 允许改角色是为了纠正建实例时的误选（如把 BungeeCord 建成了 backend，
 	// 导致群组拓扑与注册关系都认不出它是代理）。变更只写本表，不做级联：
@@ -730,6 +734,9 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 	if f.StartCommand != nil {
 		sanitized := sanitizeStartCommand(*f.StartCommand)
 		updates["start_command"] = sanitized
+	}
+	if f.LaunchSpec != nil {
+		updates["launch_spec"] = *f.LaunchSpec
 	}
 	if f.AutoStart != nil {
 		updates["auto_start"] = *f.AutoStart
@@ -785,7 +792,7 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 	if err != nil {
 		return nil, err
 	}
-	launchSpecChanged := f.StartCommand != nil || f.AutoRestart != nil || f.JDKID != nil || f.EnvVars != nil
+	launchSpecChanged := f.StartCommand != nil || f.LaunchSpec != nil || f.AutoRestart != nil || f.JDKID != nil || f.EnvVars != nil
 	if launchSpecChanged && s.pool != nil {
 		// 保存只更新 Worker 的下次启动规格，不触发任何生命周期动作；同步失败由后续 Start/Restart 重注册兜底。
 		if err := s.registerOnWorkerLocked(updated); err != nil {

@@ -1340,7 +1340,67 @@
 - **关联 FR**: FR-031
 - **请求**: `{ "versionId": 12, "message": "string?" }`
 
+### GET /api/v1/instances/:id/configs/surface
+- **描述**: 受管配置项清单（配置源明面化）。每项显式声明来源：`inline` 内联值（平台持有、可编辑、可版本化）或 `file` 文件引用（平台不覆写，只读展示生效值预览）。涵盖启动项（`startup.command`/`startup.launchSpec`）与 `server.properties` 关键项（含 `props.enable-query`/`props.query.port`/`props.view-distance`）。旧实例（登记表为空）平滑过渡：启动项视作内联取实例现值，关键 props 视作文件隐含
+- **关联 FR**: FR-451
+- **权限**: `file.read` / `instance.read`（可访问实例）
+- **响应**: `{ "items": [{ "itemKey": "props.query.port", "source": "file", "registered": true, "effectiveValue": "25566", "effectiveSource": "file", "editable": false, "filePath": "server.properties", "fileKey": "query.port" }] }`
+
+### PUT /api/v1/instances/:id/configs/surface
+- **描述**: 按项更新配置源。二态互斥、显式：`source=inline` 时写回真源（`startup.*` 经实例 Update、`props.*` 经 `write-fields` 保留注释/顺序并生成版本）；`source=file` 时仅登记引用（+ 预览校验，离线降级不阻断）。`file→inline` 以文件现值为初值；`inline→file` 不删除文件原值。变更写审计
+- **关联 FR**: FR-451
+- **权限**: `file.write` / `instance.write`（可管理实例）
+- **请求**: `{ "items": [{ "itemKey": "props.query.port", "source": "file", "filePath": "server.properties", "fileKey": "query.port" }] }`
+- **响应**: `{ "items": [...] }`（刷新后的清单）
+- **说明**: 直接经 `POST /configs/write` / `write-fields` 改到受管 `file` 项时，响应附 `warnings`（不静默覆盖，仅提示）
+
+### POST /api/v1/instances/rolling
+- **描述**: 创建并启动实例滚动/分批/灰度编排会话（FR-457）。支持批大小、批间隔、失败即停、按比例灰度；`batchSize=0` 时单批全量（向后兼容旧批量语义）。逐台仍复用既有 per-instance RPC
+- **关联 FR**: FR-457
+- **权限**: `instance.operate`
+- **请求**: `{ "action": "restart|start|stop|kill|command", "ids": [1,2], "filter": { "role": "backend" }, "command": "say hi", "batchSize": 5, "batchIntervalSec": 30, "failFast": true, "ratio": 0.2 }`
+- **响应**: `{ "id": 7, "action": "restart", "state": "running", "targets": [1,2], "requested": 2, "cursor": 0, "succeeded": 0, "failed": 0, "errors": [] }`
+
+### GET /api/v1/instances/rolling/:opId
+- **描述**: 查询编排会话（含进度游标/计数/失败明细）
+- **关联 FR**: FR-457
+- **权限**: `instance.read` / `instance.operate`
+
+### POST /api/v1/instances/rolling/:opId/pause · /resume · /cancel
+- **描述**: 暂停（阻塞在批边界）/ 继续（CP 重启后按 DB 游标续跑）/ 取消后续批。写审计
+- **关联 FR**: FR-457
+- **权限**: `instance.operate`
+
+### GET /api/v1/config-baselines
+- **描述**: 列出配置基线（模板）。基线键为 `(scopeKey, filePath)`，`scopeKey` 限定应共享该基线的实例（`group:<id>` 含子树 / `network:<id>` / `tag:<tag>` / `instance:<id>` / `all`）
+- **关联 FR**: FR-458
+- **权限**: `file.read` / `instance.read`
+
+### POST /api/v1/config-baselines
+- **描述**: 创建或更新基线（同 scopeKey+filePath 覆盖），计算内容 sha256
+- **关联 FR**: FR-458
+- **权限**: `file.write` / `instance.write`
+- **请求**: `{ "scopeKey": "group:1", "filePath": "server.properties", "content": "server-port=25566\n", "message": "string?" }`
+
+### GET /api/v1/config-baselines/:id · DELETE /api/v1/config-baselines/:id
+- **描述**: 读取 / 删除基线
+- **关联 FR**: FR-458
+- **权限**: `file.read`/`instance.read`（读）、`file.write`/`instance.write`（删）
+
+### GET /api/v1/config-baselines/:id/drift
+- **描述**: 漂移检测（只读、零副作用）：对 scope 内每台实例取该文件当前内容哈希（优先最新配置版本，缺失则现场读取），与基线比对。返回逐台 `{instanceId, drift, currentHash, baselineHash}`
+- **关联 FR**: FR-458
+- **权限**: `file.read` / `instance.read`
+
+### POST /api/v1/config-baselines/:id/converge
+- **描述**: 一键收敛：把基线推送到所有漂移实例（复用 `ConfigService.Write`，逐台落新版本），收敛后再跑一次检测复核并回报残余漂移
+- **关联 FR**: FR-458
+- **权限**: `file.write` / `instance.write`
+- **请求**: `{ "batchSize": 0, "failFast": false }`
+- **响应**: `{ "baselineId": 3, "targeted": 5, "succeeded": 5, "failed": 0, "results": [{ "instanceId": 1, "success": true, "versionId": 42 }], "residualDrift": [] }`
+
 ---
+
 
 ## 插件 / 模组
 

@@ -1301,6 +1301,7 @@ ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布�
 - 跨文件/跨实例/跨网络一致性校验：端口唯一、`online-mode=false` 与代理转发配套、`forwarding-secret` 在共享 backend 的所有 proxy 间一致。
 - 每次保存生成 `instance_config_versions`，可 diff / 回滚。
 - **通用文件版本（FR-051）**：编辑器保存或上传覆盖**已存在**的任意文件前，CP 经 gRPC 读旧内容落库 `file_versions`（base64 二进制安全），提供版本列表 / diff / 一键回滚。与配置版本同机制但刻意分表：配置版本带 schema/校验语义，通用文件版本只关心字节内容。保留上限与触发快照大小阈值由 `file_version.max_per_file` / `file_version.max_size_bytes` 配置，超大文件（如世界存档）跳过快照。复用 `unifiedDiff`、`ErrNodeNotConnected` 等既有领域逻辑。
+- **配置源明面化（FR-451，ADR-092）**：受管配置项登记表 `instance_config_sources` 显式声明每项**二态来源**（`inline` 内联值 / `file` 文件引用，互斥）——杜绝「平台改了却被文件覆盖」的静默冲突。启动项（`startup.command`/`startup.launchSpec`）与 `server.properties` 关键项（含 `enable-query`/`query.port`/`view-distance`）明面可编辑：`inline` 写回真源（启动项经实例 `Update`、props 经字段补丁并生成版本），`file` 项平台**不覆写**、只读展示解析生效值预览。`enable-query`/`query.port` 纳入受管由平台经内联值注入，跨实例端口唯一性校验并入内联值（文件值缺失/被覆盖也检出）。端点挂在既有 `/instances/:id/configs` 组下的 `/surface`（读/写）。
 
 ### 13.4 结构化启动（取代自由文本命令）
 - MC 实例由 `jdk + jvm_args + core_jar + args` 派生启动命令，Worker 组装 `cd <workDir> && <jdk>/bin/java <args> -jar core.jar nogui`（根治 BUG-005 引号问题）；universal 实例仍可自由命令。
@@ -1308,6 +1309,10 @@ ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布�
 ### 13.5 一键复制子服
 - 复制产出独立新实例（系统分配新目录/端口）；拷贝 workDir 时排除 session.lock / logs / 缓存 / usercache。
 - 配置引擎修正身份字段（端口 / 名称 / motd，可选 level-name），保留 forwarding secret；按勾选注册进 0/1/多个代理（写入各代理 servers + priorities）。
+
+### 13.6 集群滚动编排与配置基线收敛（FR-457 / FR-458）
+- **滚动/分批/灰度编排（FR-457）**：会话实体 `instance_rolling_ops` 持久化进度（游标/计数/状态/失败明细）。批大小（`batchSize=0` 时单批全量，向后兼容旧 `Batch()` 一次性并发语义）、批间隔、失败即停、按比例灰度（稳定序抽样，首批即灰度）；暂停/继续/取消在 CP 重启后按 DB 游标恢复。批内仍用有界并发，逐台复用既有 per-instance RPC（不新增 Worker 侧语义）。端点 `/instances/rolling`。
+- **配置基线（FR-458）**：`config_baselines` 以 `(scopeKey, filePath)` 为键、内容 sha256 哈希（与配置版本同口径）。漂移检测只读零副作用（优先最新 `instance_config_versions`，缺失则现场读取计算）；一键收敛**复用** `ConfigService.Write`（版本落库 + Worker 校验）逐台推送，收敛后再跑一次检测复核残余漂移。scope 支持分组（含子树）/网络/标签/单实例/all。端点 `/config-baselines`。
 
 ## 14. 制品库（内容寻址，ADR-011）
 

@@ -169,6 +169,13 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 	runtimeAssetsSvc.SetJDKSync(service.NewJDKService(db, pool))
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
 	instanceBatchSvc.SetInstanceService(instanceSvc)
+	// FR-451/457/458：配置源明面化 / 滚动编排 / 配置基线，供对应端点测试装配。
+	configSourceSvc := service.NewConfigSourceService(db, instanceSvc, configSvc)
+	configSvc.SetInlinePortProvider(func(instanceID uint) map[string]string {
+		return configSourceSvc.InlinePropValues(instanceID, []string{"server-port", "query.port"})
+	})
+	instanceRollingSvc := service.NewInstanceRollingService(db, instanceBatchSvc)
+	configBaselineSvc := service.NewConfigBaselineService(db, configSvc)
 	authSvc := service.NewAuthService(db, jwtCfg)
 	authSvc.SetPasswordCostForTest(bcrypt.MinCost)
 	userSvc := service.NewUserService(db)
@@ -190,6 +197,9 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 		FileVersion:           fileVersionSvc,
 		Plugin:                service.NewPluginService(db, pool, assetSvc),
 		Config:                configSvc,
+		ConfigSource:          configSourceSvc,
+		InstanceRolling:       instanceRollingSvc,
+		ConfigBaseline:        configBaselineSvc,
 		Bot:                   botSvc,
 		BotStressSession:      service.NewBotStressSessionService(db, botSvc),
 		BotLoadCapacity:       botLoadCapacity,

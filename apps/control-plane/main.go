@@ -220,6 +220,16 @@ func main() {
 		MaxSizeBytes: cfg.FileVersion.MaxSizeBytes,
 	})
 	configSvc := service.NewConfigService(db, pool)
+	// 配置源明面化（FR-451）：复用 configSvc 的 Read/WriteFields 与 instanceSvc 的 Update 写回真源；
+	// 反向把内联端口提供者注入 configSvc，令跨实例端口校验覆盖内联值。
+	configSourceSvc := service.NewConfigSourceService(db, instanceSvc, configSvc)
+	configSvc.SetInlinePortProvider(func(instanceID uint) map[string]string {
+		return configSourceSvc.InlinePropValues(instanceID, []string{"server-port", "query.port"})
+	})
+	// 实例滚动/分批/灰度编排（FR-457）：复用 InstanceBatchService 的目标解析与单实例委托。
+	instanceRollingSvc := service.NewInstanceRollingService(db, instanceBatchSvc)
+	// 配置基线下发/漂移/收敛（FR-458）：复用 configSvc.Write。
+	configBaselineSvc := service.NewConfigBaselineService(db, configSvc)
 	botSvc := service.NewBotService(db, pool)
 	botStressSessionSvc := service.NewBotStressSessionService(db, botSvc)
 	// FR-370 命令压测模板服务。
@@ -693,6 +703,9 @@ func main() {
 		Business:                businessSvc,
 		BusinessEvent:           businessEventSvc,
 		Config:                  configSvc,
+		ConfigSource:            configSourceSvc,
+		InstanceRolling:         instanceRollingSvc,
+		ConfigBaseline:          configBaselineSvc,
 		Bot:                     botSvc,
 		BotStressSession:        botStressSessionSvc,
 		BotLoadCapacity:         botLoadSvcs.capacity,

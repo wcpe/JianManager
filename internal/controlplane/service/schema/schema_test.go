@@ -117,6 +117,36 @@ func TestCrossFileConsistency_PortUnique(t *testing.T) {
 	}
 }
 
+func TestCrossFileConsistency_QueryPortUnique(t *testing.T) {
+	// FR-451：query.port 纳入端口唯一性校验（与 server-port 同口径）。
+	cfgs := []ParsedConfig{
+		{Path: "a/server.properties", Fields: []*workerpb.ConfigField{{Key: "query.port", Value: "25566"}}},
+		{Path: "b/server.properties", Fields: []*workerpb.ConfigField{{Key: "query.port", Value: "25566"}}},
+	}
+	issues := CheckPortConflicts(cfgs)
+	hasDup := false
+	for _, it := range issues {
+		if strings.Contains(it.Message, "重复") {
+			hasDup = true
+		}
+	}
+	if !hasDup {
+		t.Fatalf("应当检出重复的 query.port: %+v", issues)
+	}
+}
+
+func TestParsedConfig_SetValue(t *testing.T) {
+	cfg := ParsedConfig{Fields: []*workerpb.ConfigField{{Key: "server-port", Value: "25565"}}}
+	cfg.SetValue("server-port", "25600") // 覆盖已有键
+	cfg.SetValue("query.port", "25601")  // 追加新键
+	if got := cfg.fieldLookup("server-port"); got != "25600" {
+		t.Fatalf("覆盖失败: %s", got)
+	}
+	if got := cfg.fieldLookup("query.port"); got != "25601" {
+		t.Fatalf("追加失败: %s", got)
+	}
+}
+
 func TestCrossFileConsistency_OnlineModeAndProxyForwarding(t *testing.T) {
 	cfgs := []ParsedConfig{
 		{Path: "server.properties", Fields: []*workerpb.ConfigField{{Key: "online-mode", Value: "true"}}},
