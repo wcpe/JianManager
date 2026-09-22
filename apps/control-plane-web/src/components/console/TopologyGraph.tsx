@@ -4,10 +4,21 @@ import { Maximize2, Search } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { useTopology } from '@/api/topology'
+import { useNodes } from '@/api/nodes'
+import { useInstanceGroups } from '@/api/instanceGroups'
+import {
+  buildGroupTreeSource,
+  buildKeyMap,
+  GROUP_DIMENSIONS,
+  type GroupDimension,
+  type GroupKeyLabels,
+  type InstanceGroupKeyMap,
+} from '@/components/console/instance-grouping'
 import {
   buildTopology,
-  groupTopology,
+  groupTopologyByDimension,
   layoutTopologyGrouped,
+  type LaidBand,
   type LaidNode,
   type ProxyRegistrations,
 } from '@/lib/topology'
@@ -50,6 +61,14 @@ interface TopologyGraphProps {
 export default function TopologyGraph({ className }: TopologyGraphProps) {
   const { t } = useTranslation()
   const { data, isLoading } = useTopology()
+  // 节点负载标签数据源（FR-453）：复用节点列表已带的 cpuUsage/memoryUsage（0..1），
+  // 单条已缓存查询、无 per-instance N+1；无该节点数据时不显示（不装 0）。
+  const { data: nodes } = useNodes()
+  // 层级维度（FR-453）：与列表页共用 GroupDimension 枚举，默认 region（大区/小区两级）。
+  const [dim, setDim] = useState<GroupDimension>('region')
+  // groupTree 维度专用数据源（FR-452）：`/instance-groups` 组织分组树，与 network 的
+  // `/topology.networks` 是两个独立维度（键映射分离，绝不互相借数据）；仅选中该维度时才拉取。
+  const { data: groupNodes } = useInstanceGroups({ enabled: dim === 'groupTree' })
 
   // 状态：搜索词、仅显示匹配、状态筛选集合、禁用连线显隐。
   const [search, setSearch] = useState('')
@@ -57,7 +76,20 @@ export default function TopologyGraph({ className }: TopologyGraphProps) {
   const [activeStatus, setActiveStatus] = useState<Set<StatusFilterKey>>(new Set())
   const [showDisabled, setShowDisabled] = useState(true)
 
-  // 布局：由聚合结果构图 → 分组 → 分层布局（纯函数，随数据变重算）。
+  // 节点负载：nodeId → 该节点当前 CPU% / 内存%（0..1 → 百分比）。
+  // 仅在线节点（status===1）且有有限数值才建条目——离线/未知节点不装 0、直接不显示标签。
+  const nodeLoad = useMemo(() => {
+    const map = new Map<number, TopoNodeLoad>()
+    for (const n of nodes ?? []) {
+      if (n.status !== 1) continue
+      const cpu = Number.isFinite(n.cpuUsage) ? n.cpuUsage * 100 : null
+      const mem = Number.isFinite(n.memoryUsage) ? n.memoryUsage * 100 : null
+      if (cpu != null || mem != null) map.set(n.id, { cpuPct: cpu, memPct: mem })
+    }
+    return map
+  }, [nodes])
+
+  // 布局：由聚合结果构图（含未注册实例）→ 按所选维度分带 → 分层布局（纯函数，随数据变重算）。
   const laid = useMemo(() => {
     const input: ProxyRegistrations[] = (data?.proxies ?? []).map((p) => ({
       proxy: {
@@ -80,7 +112,23 @@ export default function TopologyGraph({ className }: TopologyGraphProps) {
       },
       registrations: p.registrations,
     }))
-    const grouped = groupTopology(buildTopology(input), data?.networks ?? [])
+    const instances = data?.instances ?? []
+    // 未注册实例（beacon/独立服务/未挂 BC 的后端）作为孤立节点上拓扑（FR-453）。
+    const topo = buildTopology(input, instances)
+    // 维度数据源分离（FR-452 自审修复）：
+    // - network：`/topology.networks` 群组软标签成员归属，键为群组名；
+    // - groupTree：`/instance-groups` 组织分组树，键为组 id + 层级（同名不同组不合并）；
+    // - 数据源不可用 → 该维度退化为全「未分组」，绝不借另一维度数据源。
+    let keys: InstanceGroupKeyMap | undefined
+    let labels: GroupKeyLabels | undefined
+    if (dim === 'network') {
+      keys = buildKeyMap((data?.networks ?? []).map((n) => ({ key: n.name, instanceIds: n.memberInstanceIds })))
+    } else if (dim === 'groupTree') {
+      const source = buildGroupTreeSource(groupNodes ?? [])
+      keys = source.keys
+      labels = source.labels
+    }
+    const grouped = groupTopologyByDimension(topo, dim, instances, keys, labels)
     return layoutTopologyGrouped(grouped, {
       width: CANVAS_W,
       rowHeight: ROW_H,
@@ -89,7 +137,7 @@ export default function TopologyGraph({ className }: TopologyGraphProps) {
       bandHeaderHeight: BAND_HEADER_H,
       bandGap: BAND_GAP,
     })
-  }, [data])
+  }, [data, dim, groupNodes])
 
   const contentBox = useMemo<ViewBox>(
     () => ({ x: 0, y: 0, w: CANVAS_W, h: Math.max(laid.height, VIEWPORT_H) }),
@@ -180,16 +228,22 @@ export default function TopologyGraph({ className }: TopologyGraphProps) {
     )
   }
 
-  const proxyCount = data?.proxies.length ?? 0
-  if (proxyCount === 0) {
+  // 空态（FR-453 自审修复）：`laid.nodes` 已含 proxy（`buildTopology` 首段即入），
+  // 故节点数为 0 时「有 proxy」恒为假——原 hasProxy 分支为死代码，删去。
+  // 仅在「无任何实例（含未注册/配套服务）」时显示空态；有实例但无 proxy 由下方提示单列。
+  const totalNodes = laid.nodes.length
+  if (totalNodes === 0) {
     return (
       <div className={cn('flex h-40 items-center justify-center text-sm text-muted-foreground', className)}>
-        {t('networks.topoNoProxy')}
+        {t('networks.topoNoNodes', { defaultValue: 'No instances yet' })}
       </div>
     )
   }
 
-  const hasBackend = laid.nodes.some((n) => n.kind === 'backend')
+  const hasProxy = laid.nodes.some((n) => n.kind === 'proxy')
+  // 提示判定（FR-453 自审修复）：以「是否存在任一注册关系」判定，而非「有无 backend 节点」——
+  // 全量实例上拓扑后 backend 节点恒存在（未注册后端/beacon 都算），原判定被稀释恒真。
+  const hasRegistration = (data?.proxies ?? []).some((p) => (p.registrations?.length ?? 0) > 0)
 
   return (
     <div className={cn('w-full', className)}>
@@ -212,6 +266,23 @@ export default function TopologyGraph({ className }: TopologyGraphProps) {
         <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
           <input type="checkbox" checked={onlyMatch} onChange={(e) => setOnlyMatch(e.target.checked)} className="size-3.5" />
           {t('networks.topoOnlyMatch', { defaultValue: 'Only matches' })}
+        </label>
+        {/* 层级维度选择器（FR-453）：与列表页共用 GroupDimension，默认 region 两级。 */}
+        <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+          {t('networks.topoLayer', { defaultValue: 'Layer' })}
+          <select
+            value={dim}
+            onChange={(e) => setDim(e.target.value as GroupDimension)}
+            aria-label={t('networks.topoLayer', { defaultValue: 'Layer' })}
+            data-testid="topology-dimension"
+            className="h-7 rounded-md border bg-background px-1.5 text-xs"
+          >
+            {GROUP_DIMENSIONS.map((d) => (
+              <option key={d} value={d}>
+                {t(`grouping.dim_${d}`)}
+              </option>
+            ))}
+          </select>
         </label>
         <span className="mx-1 h-4 w-px bg-border" aria-hidden />
         <StatusFilterPills active={activeStatus} onToggle={toggleStatus} t={t} />
@@ -240,10 +311,10 @@ export default function TopologyGraph({ className }: TopologyGraphProps) {
           onPointerUp={onPointerUp}
           onPointerLeave={onPointerUp}
         >
-          {/* 分组带背景 + 标题 */}
+          {/* 分组带背景 + 标题（层级随所选维度变化；region 维度带 `大区` 外层、groupTree 带祖先路径） */}
           <g>
             {laid.bands.map((band, i) => (
-              <g key={`${band.id ?? 'ungrouped'}-${i}`}>
+              <g key={`${band.key ?? band.id ?? 'ungrouped'}-${i}`}>
                 <rect
                   x={4}
                   y={band.y}
@@ -256,10 +327,15 @@ export default function TopologyGraph({ className }: TopologyGraphProps) {
                   strokeWidth={1}
                   strokeDasharray="3 4"
                 />
-                <text x={16} y={band.y + 16} fill="var(--muted-foreground)" fontSize={11} fontWeight={600}>
-                  {band.id === null
-                    ? t('networks.topoUngrouped', { defaultValue: 'Ungrouped' })
-                    : band.name}
+                <text
+                  x={16}
+                  y={band.y + 16}
+                  fill="var(--muted-foreground)"
+                  fontSize={11}
+                  fontWeight={600}
+                  data-testid="topology-band-label"
+                >
+                  {bandLabel(band, t)}
                 </text>
               </g>
             ))}
@@ -308,6 +384,7 @@ export default function TopologyGraph({ className }: TopologyGraphProps) {
                   t={t}
                   dim={!matched}
                   multiHomed={laid.multiHomed.has(n.id)}
+                  load={n.nodeId != null ? nodeLoad.get(n.nodeId) : undefined}
                 />
               )
             })}
@@ -315,7 +392,11 @@ export default function TopologyGraph({ className }: TopologyGraphProps) {
         </svg>
       </div>
 
-      {!hasBackend && (
+      {/* 单列提示（FR-453 自审修复）：有实例但无 proxy → 暂无代理；有代理但无任一注册关系 → 未注册后端。 */}
+      {!hasProxy && (
+        <p className="mt-2 text-center text-xs text-muted-foreground">{t('networks.topoNoProxy')}</p>
+      )}
+      {hasProxy && !hasRegistration && (
         <p className="mt-2 text-center text-xs text-muted-foreground">{t('networks.topoNoBackend')}</p>
       )}
     </div>
@@ -362,17 +443,36 @@ function StatusFilterPills({
   )
 }
 
-/** 单个拓扑节点盒（代理用主色描边、后端按状态着色；非匹配降透明、多归属加角标）。 */
+/** 分组带标题：有外层值（region 的大区 / groupTree 的祖先路径）时拼「外层 / 内层」；
+ *  内层空名回落该维度的「未分…」文案（region 无 zone → 「未分小区」，与列表 zoneNone 一致）；
+ *  无外层且无名称 → 「未分组」。 */
+function bandLabel(band: LaidBand, t: (k: string, o?: Record<string, unknown>) => string): string {
+  if (band.parent) {
+    return t('networks.topoLevel', { parent: band.parent, name: band.name || t('grouping.zoneNone') })
+  }
+  if (!band.name) return t('networks.topoUngrouped', { defaultValue: 'Ungrouped' })
+  return band.name
+}
+
+/** 节点负载标签（CPU/内存百分比）：无数据不显示（不装 0）。 */
+export interface TopoNodeLoad {
+  cpuPct: number | null
+  memPct: number | null
+}
+
+/** 单个拓扑节点盒（代理用主色描边、后端按状态着色；非匹配降透明、多归属加角标、右下角负载标签）。 */
 function TopoNodeBox({
   node,
   t,
   dim,
   multiHomed,
+  load,
 }: {
   node: LaidNode
   t: (k: string, o?: Record<string, unknown>) => string
   dim: boolean
   multiHomed: boolean
+  load?: TopoNodeLoad
 }) {
   const x = node.x - NODE_W / 2
   const y = node.y - NODE_H / 2
@@ -403,6 +503,34 @@ function TopoNodeBox({
         {roleLabel}
         {node.port ? ` · :${node.port}` : ''}
       </text>
+      {/* 负载标签（CPU/内存 %）：来自**节点级**指标（同节点上所有实例共享），无数据不显示（不装 0）。
+          左侧加「节点」角标，避免被误读为实例级指标。 */}
+      {load && (load.cpuPct != null || load.memPct != null) && (
+        <g>
+          <text
+            x={x + NODE_W - 8}
+            y={y + NODE_H - 6}
+            fill="var(--muted-foreground)"
+            fontSize={9}
+            textAnchor="end"
+            data-testid="topology-node-load"
+          >
+            {[
+              load.cpuPct != null ? t('networks.topoLoadCpu', { value: `${Math.round(load.cpuPct)}%` }) : null,
+              load.memPct != null ? t('networks.topoLoadMem', { value: `${Math.round(load.memPct)}%` }) : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </text>
+          <g data-testid="topology-node-load-badge">
+            <rect x={x + 8} y={y + NODE_H - 15} width={24} height={11} rx={3} fill="var(--muted)" fillOpacity={0.8} />
+            <text x={x + 20} y={y + NODE_H - 6.5} fill="var(--muted-foreground)" fontSize={7.5} textAnchor="middle">
+              {t('networks.topoLoadNodeTag', { defaultValue: 'NODE' })}
+            </text>
+            <title>{t('networks.topoLoadNodeHint')}</title>
+          </g>
+        </g>
+      )}
       {/* 多归属角标（软标签可属多 network，落首带 + 提示） */}
       {multiHomed && (
         <g>

@@ -50,18 +50,17 @@ function collectInstanceRequests() {
 
 describe('InstancesPage（mock 假后端）', () => {
   it('渲染种子实例（名称可见）', async () => {
-    const user = userEvent.setup()
-    const { container } = renderWithProviders(<InstancesPage />, { route: '/instances' })
+    // FR-452：默认视图改为分组树表 + region 维度，故显式请求平铺以断言「实例名可见」。
+    const { container } = renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
     expect(container.firstElementChild).toHaveAttribute('data-page', 'instances')
     expect(container.firstElementChild).toHaveClass('jm-page-stack')
-    await switchToListView(user)
     expect(await screen.findByText('survival-1')).toBeInTheDocument()
     expect(screen.getByText('lobby-proxy')).toBeInTheDocument()
     expect(screen.getByText('creative-1')).toBeInTheDocument()
   })
 
-  it('1000+ mock 实例下默认卡片视图只渲染可视窗口', async () => {
-    renderWithProviders(<InstancesPage />, { route: '/instances' })
+  it('1000+ mock 实例下卡片视图只渲染可视窗口', async () => {
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=none' })
 
     const surface = await screen.findByTestId('instances-card-virtual')
     expect(Number(surface.dataset.totalCount)).toBeGreaterThanOrEqual(1000)
@@ -72,7 +71,7 @@ describe('InstancesPage（mock 假后端）', () => {
   it('1000+ 实例页首屏走分页搜索与聚合，不再拉取全集', async () => {
     const requests = collectInstanceRequests()
     try {
-      renderWithProviders(<InstancesPage />, { route: '/instances' })
+      renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=none' })
       await screen.findByTestId('instances-card-virtual')
 
       expect(requests.paths).toContain('/api/v1/instances/search')
@@ -92,11 +91,11 @@ describe('InstancesPage（mock 假后端）', () => {
     fireEvent.click(screen.getByRole('button', { name: /运行/ }))
     await waitFor(() => expect(new URLSearchParams(window.location.search).get('status')).toBe('RUNNING'))
 
+    // FR-452：list 已成为默认视图 → 选中它时不再写 view 参数（缺省即 list）。
+    fireEvent.click(screen.getByRole('button', { name: '卡片视图' }))
+    expect(new URLSearchParams(window.location.search).get('view')).toBe('card')
     fireEvent.click(screen.getByRole('button', { name: '列表视图' }))
-    expect(new URLSearchParams(window.location.search).get('view')).toBe('list')
-
-    fireEvent.click(screen.getByRole('button', { name: '组织分组' }))
-    expect(new URLSearchParams(window.location.search).get('orgView')).toBe('1')
+    expect(new URLSearchParams(window.location.search).get('view')).toBeNull()
   })
 
   it('点击实例名称直接进入实例深链，不再依赖临时工作区状态', async () => {
@@ -233,9 +232,8 @@ describe('InstancesPage（mock 假后端）', () => {
 
   it('页眉节点作用域会收敛全部服务器列表', async () => {
     useConsoleStore.setState({ selectedNodeId: 2 })
-    const user = userEvent.setup()
-    renderWithProviders(<InstancesPage />, { route: '/instances' })
-    await switchToListView(user)
+    // 平铺视图避免分组头把种子实例挤出虚拟窗口。
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
 
     expect(await screen.findByText('creative-1')).toBeInTheDocument()
     expect(screen.queryByText('survival-1')).not.toBeInTheDocument()

@@ -17,6 +17,8 @@ import {
 } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useNetworks } from '@/api/networks'
+import { useTopology } from '@/api/topology'
+import { useInstanceGroups } from '@/api/instanceGroups'
 import { useRegistrations } from '@/api/registrations'
 import { useConsoleStore } from '@/stores/console'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -33,14 +35,20 @@ import { hasCapability, resolveCapabilities } from '@/lib/capabilities'
 import { InstanceWorktableCard } from '@/components/console/InstanceWorktableCard'
 import { InstanceGroupManager } from '@/components/console/InstanceGroupManager'
 import {
+  buildGroupTreeSource,
+  buildKeyMap,
   collectEnvs,
   collectTags,
   envOf,
   freeTagsOf,
   groupInstances,
+  groupInstancesByGroupTree,
   parseTags,
+  GROUP_DIMENSIONS,
   type GroupDimension,
+  type InstanceGroup,
 } from '@/components/console/instance-grouping'
+import { memberHealth, type MemberHealth } from '@/lib/topology'
 import { summarizeInstances, summaryFilterStatus, type SummaryFilterKey } from '@/lib/instance-summary'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
@@ -87,7 +95,8 @@ type InstanceUrlState = Partial<{
   sort: InstanceSortKey
   order: InstanceSortOrder
   pageSize: string
-  orgView: boolean
+  /** 折叠的分组键（FR-452），逗号分隔、逐键 encodeURIComponent。 */
+  collapsed: string
   networkId: string
   env: string
   tag: string
@@ -100,14 +109,45 @@ type InstanceSortOrder = NonNullable<InstanceSearchParams['order']>
 const INSTANCE_SORT_KEYS: InstanceSortKey[] = ['name', 'status', 'createdAt', 'nodeId']
 const INSTANCE_PAGE_SIZES = [50, 100, 200] as const
 
+/**
+ * 视图模式：FR-452 起 `list`（分组树表）为 `/instances` 默认——64 台跨区可一屏折叠管理。
+ * 卡片视图保留为紧凑模式（`?view=card`）。
+ */
 function readViewMode(searchParams: URLSearchParams): ViewMode {
-  return searchParams.get('view') === 'list' ? 'list' : 'card'
+  return searchParams.get('view') === 'card' ? 'card' : 'list'
 }
+
+/** 默认分组维度：region/zone 两级（FR-452）。 */
+const DEFAULT_GROUP_DIMENSION: GroupDimension = 'region'
 
 function readGroupDimension(searchParams: URLSearchParams): GroupDimension {
   const value = searchParams.get('groupBy')
-  if (value === 'node' || value === 'env' || value === 'status') return value
-  return 'none'
+  if (value && (GROUP_DIMENSIONS as string[]).includes(value)) return value as GroupDimension
+  return DEFAULT_GROUP_DIMENSION
+}
+
+/** 读取折叠分组键集合（FR-452）：URL `?collapsed=` 逗号分隔、逐键 decode。 */
+function readCollapsed(searchParams: URLSearchParams): Set<string> {
+  const raw = searchParams.get('collapsed')
+  if (!raw) return new Set()
+  return new Set(
+    raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => {
+        try {
+          return decodeURIComponent(s)
+        } catch {
+          return s
+        }
+      }),
+  )
+}
+
+/** 序列化折叠键集合（稳定序，便于断言与缓存）。 */
+function writeCollapsed(collapsed: Set<string>): string {
+  return [...collapsed].sort().map((k) => encodeURIComponent(k)).join(',')
 }
 
 function readSortKey(searchParams: URLSearchParams): InstanceSortKey {
@@ -143,15 +183,12 @@ function writeInstanceUrlState(searchParams: URLSearchParams, updates: InstanceU
   if (updates.q !== undefined) writeParam(searchParams, 'q', updates.q, '')
   if (updates.status !== undefined) writeParam(searchParams, 'status', updates.status)
   if (updates.page !== undefined) writeParam(searchParams, 'page', updates.page, '1')
-  if (updates.view !== undefined) writeParam(searchParams, 'view', updates.view, 'card')
-  if (updates.groupBy !== undefined) writeParam(searchParams, 'groupBy', updates.groupBy, 'none')
+  if (updates.view !== undefined) writeParam(searchParams, 'view', updates.view, 'list')
+  if (updates.groupBy !== undefined) writeParam(searchParams, 'groupBy', updates.groupBy, DEFAULT_GROUP_DIMENSION)
   if (updates.sort !== undefined) writeParam(searchParams, 'sort', updates.sort, 'createdAt')
   if (updates.order !== undefined) writeParam(searchParams, 'order', updates.order, 'asc')
   if (updates.pageSize !== undefined) writeParam(searchParams, 'pageSize', updates.pageSize, '200')
-  if (updates.orgView !== undefined) {
-    if (updates.orgView) searchParams.set('orgView', '1')
-    else searchParams.delete('orgView')
-  }
+  if (updates.collapsed !== undefined) writeParam(searchParams, 'collapsed', updates.collapsed, '')
   if (updates.networkId !== undefined) writeParam(searchParams, 'networkId', updates.networkId)
   if (updates.env !== undefined) writeParam(searchParams, 'env', updates.env)
   if (updates.tag !== undefined) writeParam(searchParams, 'tag', updates.tag)
@@ -193,9 +230,10 @@ export default function InstancesPage() {
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   // 工作台卡 ⇄ 列表视图（FR-136，§4.5）；运行实体默认卡片。
   const [view, setView] = useState<ViewMode>(() => readViewMode(searchParams))
-  // 组织分组视图开关（FR-165，§4.4）：开启后切到「左分组树 + 右列表」专用形态，
-  // 与既有筛选/groupBy 分组并列、互不破坏；关闭回到原平铺/分组视图。
-  const [orgView, setOrgView] = useState(() => searchParams.get('orgView') === '1')
+  // 分组树表：折叠态入 URL（FR-452，`?collapsed=`），切换维度即时重排（客户端聚合）。
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => readCollapsed(searchParams))
+  // 「管理分组」面板开关（FR-165 的组织分组能力在 groupTree 维度内可达，不再单开 orgView 视图）。
+  const [groupManagerOpen, setGroupManagerOpen] = useState(false)
   // proxy 行 inline 展开已注册 backend 的代理 id 集合（FR-136）。
   const [expandedProxies, setExpandedProxies] = useState<Set<number>>(new Set())
 
@@ -240,7 +278,7 @@ export default function InstancesPage() {
       setSortOrder(readSortOrder(nextParams))
       setPage(readPage(nextParams))
       setPageSize(readPageSize(nextParams))
-      setOrgView(nextParams.get('orgView') === '1')
+      setCollapsedGroups(readCollapsed(nextParams))
 
       const hasNode = nextParams.has('nodeId')
       if (hasNode) {
@@ -287,6 +325,11 @@ export default function InstancesPage() {
   const { data: aggregate } = useInstanceAggregate(aggregateParams)
   const { data: nodes } = useNodes()
   const { data: networks } = useNetworks()
+  // FR-452 `network` / `groupTree` 维度取数：均为一次请求、无 N+1；按维度分别按需预取——
+  // network 维度只需 `/topology`（群组成员映射），groupTree 维度只需 `/instance-groups`（分组树）；
+  // 其余维度两者皆不请求（避免「任一为真即同时预取」造成多余请求）。
+  const { data: topology } = useTopology({ enabled: groupBy === 'network' })
+  const { data: groupTree } = useInstanceGroups({ enabled: groupBy === 'groupTree' })
 
   const start = useStartInstance()
   const stop = useStopInstance()
@@ -318,7 +361,25 @@ export default function InstancesPage() {
   const tagOptions = useMemo(() => collectTags(scopedAllInstances), [scopedAllInstances])
   const nodeName = (id: number) => nodes?.find((n) => n.id === id)?.name ?? t('console.unknownNode', { id })
 
-  const groups = useMemo(() => groupInstances(instances, groupBy), [instances, groupBy])
+  // 「实例→分组键」映射（FR-452）：仅 network 维度需要外部映射（键=群组名）；
+  // groupTree 维度走独立的层级聚合（键=组 id + 按 parentId 重建的层级，见下）。
+  // 维度数据源不可用（预取未启用/未加载）时返回空映射 → 该维度整体落「未分组」，绝不借错数据源。
+  const networkKeyMap = useMemo(() => {
+    if (groupBy !== 'network') return undefined
+    return buildKeyMap((topology?.networks ?? []).map((n) => ({ key: n.name, instanceIds: n.memberInstanceIds })))
+  }, [groupBy, topology])
+
+  // groupTree 维度组键 → 展示元数据（组名 / 祖先路径），供组头命名；键为组 id（同名不同组不合并）。
+  const groupTreeLabels = useMemo(
+    () => (groupBy === 'groupTree' ? buildGroupTreeSource(groupTree ?? []).labels : undefined),
+    [groupBy, groupTree],
+  )
+
+  // 分组聚合（FR-452）：groupTree 走多级层级聚合（父组头 → 子组头 → 成员）；其余维度单级/两级。
+  const groups = useMemo(() => {
+    if (groupBy === 'groupTree') return groupInstancesByGroupTree(instances, groupTree ?? [])
+    return groupInstances(instances, groupBy, networkKeyMap)
+  }, [instances, groupBy, networkKeyMap, groupTree])
 
   // 汇总头计数随页眉节点作用域收敛，但不受状态/标签等本页细筛选影响。
   const counts = useMemo(() => {
@@ -386,9 +447,19 @@ export default function InstancesPage() {
     setPageSize(next)
     updateUrl({ pageSize: String(next), page: '1' })
   }
-  const setOrgViewParam = (value: boolean) => {
-    setOrgView(value)
-    updateUrl({ orgView: value })
+  /** 切换某分组折叠态并写回 URL（FR-452，`?collapsed=`）。 */
+  const toggleGroupCollapsed = (key: string) => {
+    // 纯计算放在 updater 之外：setState updater 须为纯函数（URL 写入是副作用，不能在里面）。
+    const next = new Set(collapsedGroups)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setCollapsedGroups(next)
+    updateUrl({ collapsed: writeCollapsed(next) })
+  }
+  const setAllCollapsed = (collapse: boolean, keys: string[]) => {
+    const next = collapse ? new Set(keys) : new Set<string>()
+    setCollapsedGroups(next)
+    updateUrl({ collapsed: writeCollapsed(next) })
   }
 
   const hasActiveFilter =
@@ -452,13 +523,50 @@ export default function InstancesPage() {
     CRASHED: { text: t('instances.crashed'), variant: 'destructive' },
   }
 
-  /** 按分组维度给出分组标题；env 维度的空 key 显示「未分环境」。 */
-  const groupLabel = (key: string): string => {
-    if (groupBy === 'node') return nodeName(Number(key))
-    if (groupBy === 'env') return key === '' ? t('grouping.envNone') : t(`grouping.env_${key}`, { defaultValue: key })
-    if (groupBy === 'status') return statusConfig[key]?.text ?? key
-    return ''
+  /**
+   * 按分组维度给出分组标题（FR-452 各维度统一落此处）；空 key 显示该维度的「未分…」文案。
+   * 多级维度由 `level` 区分层级（region：外层大区 / 内层小区；groupTree：按 `groupTreeLabels` 的组名）。
+   */
+  const groupLabel = (key: string, level: number = 0): string => {
+    switch (groupBy) {
+      case 'node':
+        return nodeName(Number(key))
+      case 'env':
+        return key === '' ? t('grouping.envNone') : t(`grouping.env_${key}`, { defaultValue: key })
+      case 'status':
+        return statusConfig[key]?.text ?? key
+      case 'region':
+        if (level === 1) return key === '' ? t('grouping.zoneNone') : key
+        return key === '' ? t('grouping.regionNone') : key
+      case 'zone':
+        return key === '' ? t('grouping.zoneNone') : key
+      case 'role':
+        return key === '' ? t('grouping.ungrouped') : t(`networks.role_${key}`, { defaultValue: key })
+      case 'type':
+        // 类型列与列表行一致显示原始枚举值（minecraft_java / generic），不额外造 i18n 键。
+        return key === '' ? t('grouping.ungrouped') : key
+      case 'groupTree':
+        // 键为组 id（`g:<id>`），组名从分组树元数据取（同 id 唯一，同名不同组各自成组）。
+        return key === '' ? t('grouping.ungrouped') : (groupTreeLabels?.get(key)?.name ?? key)
+      case 'network':
+        return key === '' ? t('grouping.ungrouped') : key
+      default:
+        return ''
+    }
   }
+
+  // 树表行模型（FR-452）：分组头 + 成员行统一行模型，供单个虚拟表渲染。
+  const treeRows = useMemo(
+    () => buildInstanceTreeRows(groups, groupBy, groupLabel, collapsedGroups),
+    // groupLabel 依赖 nodes/t/groupBy/groupTreeLabels，随其变化重算；折叠态变化即时反映。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groups, groupBy, collapsedGroups, nodes, t, groupTreeLabels],
+  )
+  /** 当前可折叠的全部分组键（「全部折叠」用），不含已折叠分支不可见的子键统计差异。 */
+  const allCollapsibleGroupKeys = useMemo(
+    () => treeRows.filter((r) => r.kind === 'group').map((r) => (r as { collapseKey: string }).collapseKey),
+    [treeRows],
+  )
 
   const buildMenu = (inst: InstanceInfo) => (
     <InstanceRowMenu
@@ -731,14 +839,39 @@ export default function InstancesPage() {
                 {t('grouping.clearFilters')}
               </Button>
             )}
-            <Button
-              variant={orgView ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setOrgViewParam(!orgView)}
-              aria-pressed={orgView}
-            >
-              <FolderTree className="size-4" /> {t('instanceGroups.orgView')}
-            </Button>
+            {/* FR-452：分组树表提供全部折叠/展开（长列表一屏可管）。 */}
+            {groupBy !== 'none' && view === 'list' && (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="instances-collapse-all"
+                  onClick={() => setAllCollapsed(true, allCollapsibleGroupKeys)}
+                >
+                  {t('grouping.collapseAll')}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="instances-expand-all"
+                  disabled={collapsedGroups.size === 0}
+                  onClick={() => setAllCollapsed(false, [])}
+                >
+                  {t('grouping.expandAll')}
+                </Button>
+              </>
+            )}
+            {/* 组织分组视图（FR-165）收敛为 groupTree 维度；分组管理入口随之挂在该维度下。 */}
+            {groupBy === 'groupTree' && (
+              <Button
+                variant={groupManagerOpen ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setGroupManagerOpen((v) => !v)}
+                aria-pressed={groupManagerOpen}
+              >
+                <FolderTree className="size-4" /> {t('instanceGroups.manage')}
+              </Button>
+            )}
           </div>
         </div>
         {!filtersCollapsed && (
@@ -773,18 +906,19 @@ export default function InstancesPage() {
               onChange={setStatusFilterParam}
               options={Object.entries(statusConfig).map(([k, v]) => ({ value: k, label: v.text }))}
             />
-            {!orgView && (
+            {(
               <div className="flex items-center gap-2">
                 <span className="text-sm text-muted-foreground">{t('grouping.groupBy')}</span>
                 <Select value={groupBy} onValueChange={(v) => setGroupByParam(v as GroupDimension)}>
-                  <SelectTrigger size="sm" className="w-32">
+                  <SelectTrigger size="sm" className="w-36" aria-label={t('grouping.groupBy')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">{t('grouping.dim_none')}</SelectItem>
-                    <SelectItem value="node">{t('grouping.dim_node')}</SelectItem>
-                    <SelectItem value="env">{t('grouping.dim_env')}</SelectItem>
-                    <SelectItem value="status">{t('grouping.dim_status')}</SelectItem>
+                    {GROUP_DIMENSIONS.map((dim) => (
+                      <SelectItem key={dim} value={dim}>
+                        {t(`grouping.dim_${dim}`)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -833,9 +967,7 @@ export default function InstancesPage() {
         />
       )}
 
-      {orgView ? (
-        <InstanceGroupManager />
-      ) : isLoading ? (
+      {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
         <div className="space-y-3">
@@ -905,10 +1037,11 @@ export default function InstancesPage() {
             />
           ) : (
             <VirtualizedGroupedInstanceTable
-              groups={groups}
+              rows={treeRows}
               totalCount={totalCount}
               loadedCount={instances.length}
               onNeedMore={loadMoreInstances}
+              onToggleCollapse={toggleGroupCollapsed}
               scrollStorageKey={scrollStorageKey}
               header={
                 <InstanceTableHeader
@@ -921,10 +1054,11 @@ export default function InstancesPage() {
                 />
               }
               renderRow={renderRow}
-              groupLabel={groupLabel}
               emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
             />
           )}
+          {/* 组织分组管理（FR-165）：收敛到 groupTree 维度下的可选面板，保留建组/移入能力。 */}
+          {groupBy === 'groupTree' && groupManagerOpen && <InstanceGroupManager />}
         </div>
       )}
 
@@ -956,42 +1090,193 @@ export default function InstancesPage() {
   )
 }
 
-type GroupedInstanceRow =
-  | { kind: 'group'; key: string; label: string; count: number }
+/**
+ * 树表统一行模型（FR-452）：分组头行与成员实例行同属一个虚拟化列表，
+ * 避免「每组一个虚拟表」的分片表头与滚动错位。
+ * - group：分组头（可折叠），带成员计数与聚合健康色带；`depth` 区分 region 两级（0=大区 / 1=小区）。
+ * - instance：成员实例行（沿用既有 `renderRow`）。
+ */
+type InstanceTreeRow =
+  | {
+      kind: 'group'
+      key: string
+      /** 折叠态在 URL 中的稳定键（组头行自身用 key 渲染，与 collapseKey 解耦）。 */
+      collapseKey: string
+      label: string
+      /** 层级深度（0 起）；region 两级为 0/1，groupTree 为分组树实际深度。 */
+      depth: number
+      count: number
+      health: MemberHealth
+      collapsed: boolean
+    }
   | { kind: 'instance'; key: string; instance: InstanceInfo }
 
-function buildGroupedInstanceRows(
-  groups: { key: string; instances: InstanceInfo[] }[],
-  groupLabel: (key: string) => string,
-): GroupedInstanceRow[] {
-  return groups.flatMap((group) => [
-    { kind: 'group' as const, key: `group:${group.key || '__none__'}`, label: groupLabel(group.key), count: group.instances.length },
-    ...group.instances.map((instance) => ({ kind: 'instance' as const, key: `instance:${instance.id}`, instance })),
-  ])
+/**
+ * 由分组结果 + 维度 + 折叠态构建树表行（FR-452）。
+ * - region 维度：大区头（depth 0）→ 小区头（depth 1）→ 成员；折叠大区隐藏其全部小区。
+ * - groupTree 维度：多级——组头（depth=树深度）→ 本组**直接**成员行 → 递归子组头 → 其成员；
+ *   折叠某组隐藏其后代（子组头与全部成员行）。键为组 id，同名不同组各自成组。
+ * - 其余维度：单级分组头 → 成员；`none` 维度直接平铺（无分组头）。
+ * 未分组（空 key）由聚合函数保证排在末尾，此处不额外排序。
+ */
+function buildInstanceTreeRows(
+  groups: InstanceGroup[],
+  dim: GroupDimension,
+  labelOf: (key: string, level: number) => string,
+  collapsed: Set<string>,
+): InstanceTreeRow[] {
+  if (dim === 'none') {
+    return groups.flatMap((g) =>
+      g.instances.map((instance) => ({ kind: 'instance' as const, key: `instance:${instance.id}`, instance })),
+    )
+  }
+  const rows: InstanceTreeRow[] = []
+  if (dim === 'region') {
+    for (const region of groups) {
+      const regionKey = `region:${region.key}`
+      const regionCollapsed = collapsed.has(regionKey)
+      rows.push({
+        kind: 'group',
+        key: `group:${regionKey}`,
+        collapseKey: regionKey,
+        label: labelOf(region.key, 0),
+        depth: 0,
+        count: region.instances.length,
+        health: memberHealth(region.instances),
+        collapsed: regionCollapsed,
+      })
+      if (regionCollapsed) continue
+      const zones = region.children ?? [{ key: '', instances: region.instances }]
+      for (const zone of zones) {
+        const zoneKey = `region:${region.key}/zone:${zone.key}`
+        const zoneCollapsed = collapsed.has(zoneKey)
+        rows.push({
+          kind: 'group',
+          key: `group:${zoneKey}`,
+          collapseKey: zoneKey,
+          label: labelOf(zone.key, 1),
+          depth: 1,
+          count: zone.instances.length,
+          health: memberHealth(zone.instances),
+          collapsed: zoneCollapsed,
+        })
+        if (zoneCollapsed) continue
+        for (const instance of zone.instances) {
+          rows.push({ kind: 'instance', key: `instance:${instance.id}`, instance })
+        }
+      }
+    }
+    return rows
+  }
+  if (dim === 'groupTree') {
+    // 多级层级展开：组头 → 直接成员 → 子组（递归）；折叠即隐藏整棵子树。
+    const walk = (list: InstanceGroup[], depth: number) => {
+      for (const group of list) {
+        const collapseKey = `${dim}:${group.key}`
+        const groupCollapsed = collapsed.has(collapseKey)
+        rows.push({
+          kind: 'group',
+          key: `group:${collapseKey}`,
+          collapseKey,
+          label: labelOf(group.key, depth),
+          depth,
+          count: group.instances.length,
+          health: memberHealth(group.instances),
+          collapsed: groupCollapsed,
+        })
+        if (groupCollapsed) continue
+        for (const instance of group.direct ?? group.instances) {
+          rows.push({ kind: 'instance', key: `instance:${instance.id}`, instance })
+        }
+        if (group.children && group.children.length > 0) walk(group.children, depth + 1)
+      }
+    }
+    walk(groups, 0)
+    return rows
+  }
+  for (const group of groups) {
+    const collapseKey = `${dim}:${group.key}`
+    const groupCollapsed = collapsed.has(collapseKey)
+    rows.push({
+      kind: 'group',
+      key: `group:${collapseKey}`,
+      collapseKey,
+      label: labelOf(group.key, 0),
+      depth: 0,
+      count: group.instances.length,
+      health: memberHealth(group.instances),
+      collapsed: groupCollapsed,
+    })
+    if (groupCollapsed) continue
+    for (const instance of group.instances) {
+      rows.push({ kind: 'instance', key: `instance:${instance.id}`, instance })
+    }
+  }
+  return rows
 }
 
+/** 分组头行的聚合健康色带（运行/过渡/崩溃/停止分段；FR-452 验收）。 */
+function GroupHealthBand({ health }: { health: MemberHealth }) {
+  const { t } = useTranslation()
+  const segs: { value: number; className: string; label: string }[] = [
+    { value: health.running, className: 'bg-status-success', label: t('networks.healthRunning') },
+    { value: health.transitioning, className: 'bg-status-warning', label: t('networks.healthTransitioning') },
+    { value: health.crashed, className: 'bg-status-danger', label: t('networks.healthCrashed') },
+    { value: health.stopped, className: 'bg-muted-foreground/40', label: t('networks.healthStopped') },
+  ]
+  const summary = t('grouping.healthBand', {
+    running: health.running,
+    transitioning: health.transitioning,
+    crashed: health.crashed,
+    stopped: health.stopped,
+  })
+  return (
+    <span
+      className="flex h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted"
+      role="img"
+      aria-label={summary}
+      title={summary}
+      data-testid="instances-group-health"
+    >
+      {segs.map((s, i) =>
+        s.value > 0 ? (
+          <span
+            key={i}
+            className={s.className}
+            style={{ width: `${(s.value / Math.max(health.total, 1)) * 100}%` }}
+          />
+        ) : null,
+      )}
+    </span>
+  )
+}
+
+/**
+ * 实例分组树表（FR-452）：单个虚拟表承载「分组头行（可折叠）+ 成员实例行」。
+ * 分组头行显示折叠箭头 + 分组名 + 成员计数 + 聚合健康色带；折叠态由父级写回 URL（`?collapsed=`）。
+ */
 function VirtualizedGroupedInstanceTable({
-  groups,
+  rows,
   totalCount,
   loadedCount,
   onNeedMore,
+  onToggleCollapse,
   scrollStorageKey,
   header,
   renderRow,
-  groupLabel,
   emptyLabel,
 }: {
-  groups: { key: string; instances: InstanceInfo[] }[]
+  rows: InstanceTreeRow[]
   totalCount: number
   loadedCount: number
   onNeedMore: () => void
+  onToggleCollapse: (key: string) => void
   scrollStorageKey: string
   header: React.ReactNode
   renderRow: (inst: InstanceInfo) => React.ReactNode
-  groupLabel: (key: string) => string
   emptyLabel: string
 }) {
-  const rows = useMemo(() => buildGroupedInstanceRows(groups, groupLabel), [groupLabel, groups])
+  const { t } = useTranslation()
   const {
     containerRef,
     onScroll,
@@ -1027,11 +1312,32 @@ function VirtualizedGroupedInstanceTable({
             </TableRow>
           )}
           {rows.slice(range.start, range.end).map((row) => row.kind === 'group' ? (
-            <TableRow key={row.key} data-testid="instances-group-row" className="sticky top-9 z-10 bg-muted/80 backdrop-blur">
+            <TableRow
+              key={row.key}
+              data-testid="instances-group-row"
+              data-group-depth={row.depth}
+              data-collapsed={row.collapsed ? 'true' : 'false'}
+              className="sticky top-9 z-10 bg-muted/80 backdrop-blur"
+            >
               <TableCell colSpan={8} className="h-11 px-4 py-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2" style={{ paddingLeft: row.depth * 16 }}>
+                  <button
+                    type="button"
+                    onClick={() => onToggleCollapse(row.collapseKey)}
+                    aria-expanded={!row.collapsed}
+                    aria-label={
+                      row.collapsed
+                        ? t('grouping.expandGroup', { name: row.label })
+                        : t('grouping.collapseGroup', { name: row.label })
+                    }
+                    data-testid="instances-group-toggle"
+                    className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  >
+                    {row.collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+                  </button>
                   <span className="text-sm font-medium">{row.label}</span>
                   <Badge variant="outline" className="font-normal">{row.count}</Badge>
+                  <GroupHealthBand health={row.health} />
                 </div>
               </TableCell>
             </TableRow>
@@ -1254,15 +1560,39 @@ function CardView({
   if (groupBy === 'none') {
     return grid(groups[0]?.instances ?? [], totalCount, onNeedMore)
   }
+  // groupTree 为多级树：卡片视图按树前序展平为「每组一段」（每段只画本组**直接**成员，
+  // 子组各自成段），保留层级结构；其余维度沿用顶层单段（region 的顶层 instances 即全量成员）。
+  // `count` 为组头徽标计数：groupTree 用子树并集（含后代去重，与列表组头一致），
+  // `instances` 仅为该段实际渲染的直接成员卡片。
+  const segments: { key: string; label: string; instances: InstanceInfo[]; count: number; depth: number }[] = []
+  if (groupBy === 'groupTree') {
+    const walk = (list: InstanceGroup[], depth: number) => {
+      for (const g of list) {
+        segments.push({
+          key: `${g.key}`,
+          label: groupLabel(g.key),
+          instances: g.direct ?? g.instances,
+          count: g.instances.length,
+          depth,
+        })
+        if (g.children && g.children.length > 0) walk(g.children, depth + 1)
+      }
+    }
+    walk(groups, 0)
+  } else {
+    for (const g of groups) {
+      segments.push({ key: g.key, label: groupLabel(g.key), instances: g.instances, count: g.instances.length, depth: 0 })
+    }
+  }
   return (
     <div className="space-y-4">
-      {groups.map((g) => (
-        <div key={g.key || '__none__'} className="space-y-2">
-          <div className="flex items-center gap-2 px-1">
-            <span className="text-sm font-medium">{groupLabel(g.key)}</span>
-            <Badge variant="outline" className="font-normal">{g.instances.length}</Badge>
+      {segments.map((seg) => (
+        <div key={seg.key || '__none__'} className="space-y-2">
+          <div className="flex items-center gap-2 px-1" style={{ paddingLeft: 4 + seg.depth * 16 }}>
+            <span className="text-sm font-medium">{seg.label}</span>
+            <Badge variant="outline" className="font-normal">{seg.count}</Badge>
           </div>
-          {grid(g.instances, g.instances.length, () => undefined, `${scrollStorageKey}:group:${g.key || '__none__'}`)}
+          {grid(seg.instances, seg.instances.length, () => undefined, `${scrollStorageKey}:group:${seg.key || '__none__'}`)}
         </div>
       ))}
     </div>

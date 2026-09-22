@@ -374,10 +374,23 @@ export interface TopologyNetwork {
   memberInstanceIds: number[]
 }
 
-/** 全量群组拓扑聚合响应（GET /topology，FR-335）。 */
+/** 拓扑里的全量实例最小投影（FR-452/453）：含未注册实例与配套服务。 */
+export interface TopologyInstance {
+  id: number
+  name: string
+  type: string
+  role: string
+  status: string
+  nodeId: number
+  serverPort: number
+  tags: string
+}
+
+/** 全量群组拓扑聚合响应（GET /topology，FR-335 / FR-453）。 */
 export interface TopologyResponse {
   proxies: TopologyProxy[]
   networks: TopologyNetwork[]
+  instances: TopologyInstance[]
 }
 
 // ─────────────────────────── 搭建代理（proxy） ───────────────────────────
