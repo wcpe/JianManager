@@ -36,9 +36,13 @@ import (
 var testArtifactReconcile *service.ArtifactReconcileService
 
 // setupTestDB 创建临时 SQLite 数据库（磁盘文件，每测试独立目录）并运行自动迁移。
-// 目录用 t.TempDir()：路径落在进程级 TMPDIR（见 main_test.go 的 TestMain）之下，
-// 由 testing 框架在用例结束时自动清理；测试进程被杀或 panic 时也不会在 /tmp 里
-// 留下孤儿目录（此前用 os.MkdirTemp("") + t.Cleanup 组合，中断即残留 jm-testdb-*）。
+// 目录用 `t.TempDir()`：testing 框架把落点定为 `os.MkdirTemp(os.Getenv("GOTMPDIR"), ...)`，
+// 而 `GOTMPDIR` 为空时 `os.MkdirTemp("", ...)` 会走 `os.TempDir()`——后者**每次调用都读**
+// `TMPDIR`（无缓存）。本包 `main_test.go` 的 `TestMain` 在 `m.Run()` 之前把 `TMPDIR`
+// /`GOTMPDIR` 指向进程级临时根，故此处创建的所有用例目录都落在那个可整体删除的根之下，
+// 由 testing 框架在用例结束时自动清理；即使测试进程被杀或 panic 也不会在 /tmp 里留下
+// 孤儿目录——启动时的 `sweepStaleTestRoots` 会自愈收掉上一次的遗留根（详见 main_test.go）。
+// 此前用 os.MkdirTemp("") + t.Cleanup 组合，中断即残留 jm-testdb-* 目录。
 //
 // 为什么不用 mode=memory&cache=shared：共享缓存内存库的并发写走表锁语义，
 // 报 SQLITE_LOCKED（"database table is locked (6)"），busy_timeout 对其无效
@@ -70,7 +74,17 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// setupTestRouter 创建配置好所有服务的测试路由引擎。
+// newTestSnapshotService 建测试用快照服务（复用测试路由的备份与实例服务）。
+func newTestSnapshotService(db *gorm.DB, pool *cpgrpc.ClientPool, instanceSvc *service.InstanceService) *service.SnapshotService {
+	return service.NewSnapshotService(db, service.NewBackupService(db, pool), instanceSvc)
+}
+
+// newTestBinaryVersionService 建测试用二进制版本服务（ProvisionService 供制品解析与绑定读写）。
+func newTestBinaryVersionService(db *gorm.DB, pool *cpgrpc.ClientPool, instanceSvc *service.InstanceService) *service.BinaryVersionService {
+	return service.NewBinaryVersionService(db, service.NewProvisionService(db, pool, instanceSvc, nil, nil))
+}
+
+// setupTestRouter 创建配置好所有服务的测试路由引擎（真实服务装配；无 Worker 连接）。
 func setupTestRouter(db *gorm.DB) *gin.Engine {
 	return setupTestRouterWithPool(db, cpgrpc.NewClientPool())
 }
@@ -235,7 +249,10 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 		SelfUpdate:            service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{}, root),
 		ServerState:           service.NewServerStateService(db, pool),
 		CrashSnapshot:         service.NewCrashSnapshotService(db),
-		ImportServer:          service.NewImportServerService(db, pool, instanceSvc),
+		// 实例整机快照（FR-466）与二进制版本管理（FR-468）：B-2 权限门禁测试需要真实路由。
+		Snapshot:      newTestSnapshotService(db, pool, instanceSvc),
+		BinaryVersion: newTestBinaryVersionService(db, pool, instanceSvc),
+		ImportServer:  service.NewImportServerService(db, pool, instanceSvc),
 		// Agent Token 策略真源（FR-384/388）：测试路由需挂 agent 管理/运维面。
 		AgentToken: service.NewAgentTokenService(db),
 		// Agent 调用流水（FR-390）：Ops 读+写记流水；Token 列表 callCount24h。

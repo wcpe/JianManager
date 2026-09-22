@@ -251,6 +251,9 @@ type updateQuotaRequest struct {
 	MaxInstances *int `json:"maxInstances"`
 	MaxBots      *int `json:"maxBots"`
 	MaxStorageMB *int `json:"maxStorageMb"`
+	// EnforceMode 组级运行期配额强制档位（FR-467）：alert | throttle | stop。
+	// 留空（或不传）= 继承平台默认 quota.enforce_mode。
+	EnforceMode *string `json:"enforceMode"`
 }
 
 // UpdateQuota 更新组配额（仅平台管理员）。
@@ -272,9 +275,13 @@ func (h *GroupHandler) UpdateQuota(c *gin.Context) {
 		return
 	}
 
-	if err := h.groupSvc.UpdateQuota(id, req.MaxInstances, req.MaxBots, req.MaxStorageMB); err != nil {
+	if err := h.groupSvc.UpdateQuota(id, req.MaxInstances, req.MaxBots, req.MaxStorageMB, req.EnforceMode); err != nil {
 		if errors.Is(err, service.ErrGroupNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "用户组不存在"})
+			return
+		}
+		if errors.Is(err, service.ErrInvalidEnforceMode) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "更新配额失败"})

@@ -27,6 +27,9 @@ import InstanceResourceSegment, { type ResourceSegment } from './InstanceResourc
 import BcSegment from './BcSegment'
 import BcPlayersPanel from './BcPlayersPanel'
 import BinarySegment from './BinarySegment'
+import BinaryVersionPanel from './BinaryVersionPanel'
+import QuotaPanel from './QuotaPanel'
+import SnapshotPanel from './SnapshotPanel'
 import GenericConfigSegment from './GenericConfigSegment'
 import { HealthPanel } from './HealthPanel'
 import { MetricSourceChips } from './MetricSourceChips'
@@ -559,21 +562,30 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
               TAB_CARD_TYPE[tab] ? 'overflow-hidden' : 'overflow-auto',
             )}>
             {tab === 'overview' ? (
-              <OverviewPanel
-                instanceId={instance.id}
-                instanceUuid={instance.uuid}
-                metrics={metrics}
-                online={online}
-                maxPlayers={maxPlayers}
-                playersAvailable={playersAvailable}
-                maxPlayersAvailable={maxPlayersAvailable}
-                nodeDiskUsage={node?.diskUsage}
-                logs={logs?.items ?? []}
-                watchItems={watchItems}
-                probeConnected={serverState?.connected ?? false}
-                uptimeSeconds={metrics?.uptimeSeconds}
-                mcSemantics={profile.mcSemantics}
-              />
+              /* 概览（FR-445）：动态与告警流 + 指标条。FR-467/468 起把「该实例当前的可操作面」
+                 两个面板并入概览——配额（限额来源 + 实时用量 + 强制状态）与二进制版本
+                 （受控升级 / 一级回滚）。选概览而非「进程」页签：overview 是所有画像（含未知
+                 回退）都存在的唯一 Tab，而 process 只在部分画像下出现——放 process 会让
+                 backend 画像（唯一没有 process 的画像）看不到这两个能力。 */
+              <div className="space-y-3">
+                <QuotaPanel instanceId={instance.id} />
+                <BinaryVersionPanel instanceId={instance.id} />
+                <OverviewPanel
+                  instanceId={instance.id}
+                  instanceUuid={instance.uuid}
+                  metrics={metrics}
+                  online={online}
+                  maxPlayers={maxPlayers}
+                  playersAvailable={playersAvailable}
+                  maxPlayersAvailable={maxPlayersAvailable}
+                  nodeDiskUsage={node?.diskUsage}
+                  logs={logs?.items ?? []}
+                  watchItems={watchItems}
+                  probeConnected={serverState?.connected ?? false}
+                  uptimeSeconds={metrics?.uptimeSeconds}
+                  mcSemantics={profile.mcSemantics}
+                />
+              </div>
             ) : tab === 'resource' ? (
               /* 文件配置（FR-413）：文件管理器 + 环境变量（FR-344）两分段，均保活。 */
               <InstanceResourceSegment
@@ -591,8 +603,14 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                 <InstancePlayersSegment instanceId={instance.id} />
               )
             ) : tab === 'backup' ? (
-              /* 备份·定时分区接真（FR-339）：本实例定时任务启停/删 + 备份创建/恢复/删除。 */
-              <InstanceBackupSegment instanceId={instance.id} />
+              /* 备份·定时分区接真（FR-339）：本实例定时任务启停/删 + 备份创建/恢复/删除。
+                 FR-466 起追加「整机快照」面板：快照底层复用同一套归档通道（全量备份 +
+                 回放），与备份同页签是单一归属——两者放一起运维才看得到「归档 vs 时间点」
+                 的分工，也不会在 backend/proxy/generic 三种画像里各缺一处。 */
+              <div className="space-y-3">
+                <InstanceBackupSegment instanceId={instance.id} />
+                <SnapshotPanel instanceId={instance.id} />
+              </div>
             ) : tab === 'bcTopology' ? (
               /* BC 子服拓扑（FR-449）：子服列表 + 各自状态，由 bcTopology 能力驱动。
                  跨服玩家/进程指标/config 分别归 players/process/config 页签（单一归属）。 */

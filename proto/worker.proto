@@ -59,6 +59,9 @@ service WorkerService {
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
   // ReadFile 读取文件内容。
   rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
+  // HashFile 计算实例工作目录内文件的 SHA-256（FR-468 §2.5 版本漂移检测）。
+  // 与 ReadFile 分开：哈希只需读盘不需传内容，避免为校验把数十 MB 二进制经 gRPC 搬回 CP。
+  rpc HashFile(HashFileRequest) returns (HashFileResponse);
   // WriteFile 写入文件内容。
   rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
   // DeleteFile 删除文件。
@@ -620,6 +623,24 @@ message ResyncInstancesResponse {
 
 message InstanceActionRequest {
   string instance_uuid = 1;
+  // 生效资源限额随启动/重启请求**一并下发**（N-3 / FR-467 throttle 生效链）。
+  //
+  // 为什么不能只靠启动前的幂等重注册（CreateInstance）刷新：重注册失败时 CP 侧
+  // 只记 Debug 日志且**不阻断**启动，Worker 于是继续沿用旧 spec 里的 cgroup 限额——
+  // 配额巡检登记的「待收紧限额」静默不生效，而审计已记 success=true。
+  // 把限额随动作请求直接送达，使收紧不再依赖「重注册一定成功」这一非契约前提。
+  // 0 表示请求未携带（旧版 CP / 非 docker 实例），此时 Worker 保持既有 spec 行为。
+  double cpu_limit = 2;
+  int64 mem_limit_mb = 3;
+  // with_limits 显式标注「本次请求携带生效限额」。protobuf3 的标量无法区分
+  // 「未设置」与「显式设 0」，而 0 在限额语义里是**有效值**（=不限制，用于解除收紧），
+  // 故用一个独立的 bool 表达「限额字段有效」。
+  //
+  // 消费方（edge m-7）：只有 StartInstance / RestartInstance 会读取并落地这两个限额字段；
+  // StopInstance / KillInstance 路径**忽略**它们（限额只在构造容器时生效，停止无需应用）。
+  // CP 侧对所有动作都填 WithLimits=true，语义是「请求里可能有、Worker 按需消费」，
+  // 而不是「每个动作都会用」。
+  bool with_limits = 4;
 }
 
 message InstanceActionResponse {
@@ -801,6 +822,28 @@ message ReadFileRequest {
 
 message ReadFileResponse {
   bytes content = 1;
+}
+
+// HashFileRequest 计算实例工作目录内某文件的 SHA-256（FR-468 §2.5）。
+message HashFileRequest {
+  string instance_uuid = 1;
+  // path 为实例工作目录相对路径；必须指向工作目录内的**常规文件**——
+  // 符号链接被拒绝（Worker 侧用 Lstat 判定，不跟随链接到工作目录外）。
+  string path = 2;
+  // max_bytes 为调用方自限（0 = 不额外限制）；Worker 侧另有硬上限（512MiB），
+  // 超过硬上限的文件一律返回 too_large。即生效上限 = min(max_bytes, 硬上限)，
+  // 调用方无法通过放大本字段绕过服务端兜底。
+  int64 max_bytes = 3;
+}
+
+message HashFileResponse {
+  // sha256 为小写十六进制摘要；文件不存在/不可读/超限时为空。
+  string sha256 = 1;
+  int64 size_bytes = 2;
+  // too_large 超过 max_bytes 限制（摘要未计算）。
+  bool too_large = 3;
+  // error 读取失败原因（文件不存在/权限不足等）；空表示成功。
+  string error = 4;
 }
 
 message WriteFileRequest {
@@ -1060,6 +1103,11 @@ message GetInstanceResourceSnapshotResponse {
   bool cpu_available = 7;
   bool uptime_available = 8;
   string unavailable_reason = 9;
+  // work_dir_bytes 实例工作目录占用（字节，FR-467 运行期配额强制用）。
+  // 与进程指标不同源：磁盘占用看目录树大小而非进程 RSS，故独立采集 + 独立可用标记。
+  int64 work_dir_bytes = 10;
+  // work_dir_available 工作目录大小是否可用于配额判定（目录不存在/统计失败时为 false）。
+  bool work_dir_available = 11;
 }
 
 // WorldMetric 单个世界的负载（来自 ServerProbe serverprobe_world_*）。

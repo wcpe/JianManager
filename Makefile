@@ -162,9 +162,15 @@ vet:
 lint:
 	golangci-lint run
 
-# Go 测试
+# Go 测试（竞态检测）
+#
+# 注意：`internal/controlplane/router` 包在 `-race` 下必然超时（实测非 race 全包 316s，
+# race 插桩约放大 10 倍 → 约 53 分钟，远超 go test 默认 10m 上限；主因是该包 837 处
+# setupTestRouter*/setupTestDB 调用点、每次 AutoMigrate 115 个模型，属既有规模问题）。
+# 故门禁经 scripts/go-test-race.sh 分两组跑：常规包用默认时限、router 包单独放宽
+# （RACE_TIMEOUT，默认 60m）。直接 `go test -race ./...` 会在该包上失败。
 test:
-	go test -race ./...
+	scripts/go-test-race.sh all
 
 # E2E 端到端测试（需启动真实 CP + Worker 进程）
 # 全链路用例（FR-043）会 spawn 真实 bot-worker(Node) 并让真实 Bot 进服，
@@ -172,9 +178,9 @@ test:
 e2e: build-bot
 	go test -tags=e2e -run TestE2E ./internal/e2e/ -v -timeout 240s
 
-# Go 测试覆盖率
+# Go 测试覆盖率（router 包同样需放宽时限，见 test 目标说明）
 test-cover:
-	go test -race -cover ./...
+	RACE_TIMEOUT=60m scripts/go-test-race.sh all
 
 # 前端类型检查 + lint
 lint-web:

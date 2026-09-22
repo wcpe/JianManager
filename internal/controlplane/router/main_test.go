@@ -22,13 +22,20 @@ const testRootPrefix = "jm-router-tests-"
 //
 // 三件事：
 //  1. 先清扫**上一次**遗留的根（见 sweepStaleTestRoots）；
-//  2. 把 TMPDIR 改指到本进程专属目录，使 `t.TempDir()`、`os.MkdirTemp("")` 与
-//     `dataroot` 派生目录全部落在这个可整体删除的根之下（比逐处改签名更彻底，
+//  2. 把 TMPDIR / GOTMPDIR 改指到本进程专属目录，使 `t.TempDir()`、`os.MkdirTemp("")`
+//     与 `dataroot` 派生目录全部落在这个可整体删除的根之下（比逐处改签名更彻底，
 //     且不动 500+ 个既有调用点）；
 //  3. m.Run 返回后移除整棵根；即使个别用例只做了部分清理，也不会留下残渣。
 //
-// 注意：必须在任何 t.TempDir() 之前设置 TMPDIR —— testing 框架在首次调用
-// t.TempDir() 时读取 TMPDIR 并缓存，故在 TestMain 入口处设置是唯一可靠时机。
+// 关于两个变量（R29）：testing 框架 `t.TempDir()` 的实现是
+// `os.MkdirTemp(os.Getenv("GOTMPDIR"), pattern)`，**优先读 GOTMPDIR**；
+// 而 `GOTMPDIR` 为空时 `os.MkdirTemp("", ...)` 落到 `os.TempDir()`，后者每次调用
+// 都读 `TMPDIR`（无缓存）。因此只设 TMPDIR 在当前 Go 版本下确实生效，
+// 但依赖的是 `os.TempDir()` 的实现细节；这里**两个都设**，使语义与 testing 框架的
+// `GOTMPDIR` 约定一致，避免将来 Go 改动或有人显式设置 GOTMPDIR 时承诺静默失效。
+//
+// 注意：必须在任何 t.TempDir() 之前设置 —— `t.TempDir()` 首次调用时会缓存
+// 目录单例（缓存的是结果，不是环境变量值），故 TestMain 入口处设置是唯一可靠时机。
 func TestMain(m *testing.M) {
 	// 自愈：若上次运行被外部杀死（`go test -timeout`、CI 取消、SIGKILL），下面的
 	// 退出清理不会执行，遗留根会一直占着 tmpfs。这里在启动时先把旧的一并收掉。
@@ -37,7 +44,7 @@ func TestMain(m *testing.M) {
 	root, err := os.MkdirTemp("", testRootPrefix)
 	if err != nil {
 		// 连临时根都建不出来时不静默：直接失败，避免测试在错误前提下继续。
-		// m11：用 stderr + os.Exit(1) 而非 panic——后者会打出整段 goroutine 栈，
+		// 用 stderr + os.Exit(1) 而非 panic——后者会打出整段 goroutine 栈，
 		// 把「TMPDIR 不可用」这一条事实淹没在噪音里；两者都让测试进程以非 0 退出，
 		// 但一行 stderr 更贴近 Go 测试约定的 TestMain 失败形态。
 		fmt.Fprintf(os.Stderr, "router 测试：创建测试临时根失败: %v\n", err)
@@ -45,6 +52,10 @@ func TestMain(m *testing.M) {
 	}
 	if err := os.Setenv("TMPDIR", root); err != nil {
 		fmt.Fprintf(os.Stderr, "router 测试：设置 TMPDIR 失败: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Setenv("GOTMPDIR", root); err != nil {
+		fmt.Fprintf(os.Stderr, "router 测试：设置 GOTMPDIR 失败: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -121,6 +132,12 @@ func removeTreeWithRetry(root string) {
 		}
 		// 目录权限刚被放开，稍等一拍再试（并行用例可能仍在写文件）。
 		time.Sleep(100 * time.Millisecond)
+	}
+	// edge m-9：全部轮次仍失败时留一行痕（stderr，不改退出码）。
+	// 清理是 best-effort，但「静默」意味着 CI 上的 tmpfs 残留不会被发现——
+	// 打一行足够让日志里可辨认「该提高重试轮次了」，同时不影响测试结论。
+	if _, err := os.Stat(root); err == nil {
+		fmt.Fprintf(os.Stderr, "警告：测试临时根清理失败，仍残留 %s（属 best-effort，不影响退出码）\n", root)
 	}
 }
 

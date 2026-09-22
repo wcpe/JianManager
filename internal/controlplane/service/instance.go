@@ -1000,6 +1000,11 @@ func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 		stoppedForDelete = true
 	}
 
+	// N-6：先算好该实例快照底链的清理计划，事务内据此清理。
+	//
+	// 时序：必须在事务**之前**算（事务会删掉这些 Backup 行，行没了就查不到依赖关系）。
+	snapshotCleanup := s.planSnapshotCleanup(instance.ID)
+
 	if err := s.removeWorkerDataSettled(instance, stoppedForDelete); err != nil {
 		return fmt.Errorf("清理实例数据失败: %w", err)
 	}
@@ -1012,6 +1017,36 @@ func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 		tx.Where("instance_id = ?", id).Delete(&model.NetworkMember{})
 		// 级联清理崩溃快照（FR-313）。
 		tx.Where("instance_id = ?", id).Delete(&model.InstanceCrashSnapshot{})
+		// N-6：级联清理实例快照与其**快照专属**底链（origin=snapshot）。
+		//
+		// 缺陷现场：原先这里只清上面四张表，快照行与其底链全部滞留。而 B-1 让
+		// origin='snapshot' 的底链豁免 backup.retention_days，快照自身的保留策略又只对
+		// **现存快照行**生效（按 created_at/条数裁，与实例是否存活无关）——删了实例后
+		// 这批底链既不被实例清理、也不再被任何策略扫描到，记录只增不减（B-1 的新泄漏路径）。
+		//
+		// 手工备份（origin=''）一律不动：它们有独立的保留策略（backup.retention_days），
+		// 误删就是替用户销毁数据。
+		tx.Where("instance_id = ?", id).Delete(&model.InstanceSnapshot{})
+		// R9：计划在事务外算出，与事务内执行之间存在 TOCTOU 窗口——期间用户可能新建
+		// 增量备份把某条底链占为 parent。此处复算一次可删集合（删除语句自带
+		// NOT EXISTS 判定，不在两条语句间留窗口），避免绕过 BackupService.Delete
+		// 的「拒删有子备份」护栏而割裂用户的增量链。
+		if deletable := deletableBacklinkIDsInTx(tx, snapshotCleanup.deletable); len(deletable) > 0 {
+			tx.Where("id IN ?", deletable).Delete(&model.Backup{})
+		}
+		// R27：**在同一事务内**把剩下仍残留的 origin=snapshot 底链降级为普通备份。
+		//
+		// 这些行正是「被（可能刚新增的）增量备份占为父、因而没被上面删掉」的那批：
+		// 快照行已在本事务内删除，它们不再需要豁免 backup.retention_days，继续挂着
+		// origin=snapshot 只会让它们永久逃过唯一还在扫描它们的策略（N-6 要消除的泄漏）。
+		//
+		// 为什么放进事务（改动点）：原先该 UPDATE 写在**提交之后**且失败仅 slog.Warn，
+		// 于是失败时实例与快照行都已删除、底链仍带 snapshot 标记且不再被任何策略扫描——
+		// 泄漏以更窄的路径复活且无痕迹。放进事务后要么一起成功、要么整体回滚
+		// （删除失败，用户可重试），不一致窗口消失。
+		if err := demoteRemainingSnapshotBacklinksInTx(tx, id); err != nil {
+			return err
+		}
 		// 删除实例
 		return tx.Delete(&model.Instance{}, id).Error
 	}); err != nil {
@@ -1023,6 +1058,111 @@ func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 	// 传入删除前的实例快照（instance 是本函数开头读出的副本，名字仍在），故投影不依赖已删的记录。
 	s.pushTopologyAsync(beaconPushEventDelete, instance)
 	return nil
+}
+
+// snapshotCleanupPlan 删实例时对快照底链的清理计划（N-6）。
+type snapshotCleanupPlan struct {
+	// deletable 可安全删除的底链 Backup ID（origin=snapshot，且无任何子备份依赖）。
+	deletable []uint
+	// demote 不能删（被子备份引用）但需回归常规裁剪的底链 Backup ID。
+	demote []uint
+}
+
+// planSnapshotCleanup 计算删实例时要处理的快照底链（N-6）。必须在删除事务**之前**调用：
+// 事务会删掉这些行，行没了就查不出依赖关系。
+//
+// 只处理 origin='snapshot' 的行。用户手工备份（origin=”）既不在本计划内、也有独立的
+// backup.retention_days 裁剪，绝不能被实例删除牵连。
+//
+// 为什么要区分 deletable/demote：底链是**全量**基，可能已被用户的手工**增量**备份
+// （FR-056 的 ParentID 链）占为父。直接删除会让用户的增量备份失去基准（BackupService.Delete
+// 正是为此拒绝删有子备份的行）。这类底链保留行但清除 snapshot 标记，使其回归
+// backup.retention_days 的裁剪范围——泄漏仍在「有策略管辖」的集合里，而不是无主滞留。
+//
+// R11（失败降级方向）：本函数在**查询依赖失败**时只做保守的 `deletable` 清空，
+// 不把底链放进 `demote`。计划在事务外算出、事务内据以删除（R9 的 TOCTOU 由事务内的
+// 二次护栏兜住），故失败降级只需保证「不删任何东西」——把全部底链降级为普通备份会让
+// 本可保持快照语义的归档在 backup.retention_days 到期后被常规裁剪清掉，
+// 方向与注释「不能删的才降级」相反（demote 的语义是「被引用、删不得」）。
+func (s *InstanceService) planSnapshotCleanup(instanceID uint) snapshotCleanupPlan {
+	var plan snapshotCleanupPlan
+	if s.db == nil || instanceID == 0 {
+		return plan
+	}
+	var backlinkIDs []uint
+	if err := s.db.Model(&model.Backup{}).
+		Where("instance_id = ? AND origin = ?", instanceID, model.BackupOriginSnapshot).
+		Pluck("id", &backlinkIDs).Error; err != nil || len(backlinkIDs) == 0 {
+		if err != nil {
+			slog.Warn("查询快照底链失败，跳过底链级联清理", "instanceId", instanceID, "error", err)
+		}
+		return plan
+	}
+	// 一次查出「被引用为父」的集合，避免逐条 COUNT。
+	var referenced []uint
+	if err := s.db.Model(&model.Backup{}).
+		Where("parent_id IN ?", backlinkIDs).
+		Distinct().Pluck("parent_id", &referenced).Error; err != nil {
+		// 查不出依赖关系时保守处理：**一条都不删也不降级**（与「查不出依赖」同口径）。
+		// 降级是「该底链被手工增量引用、删不得」的处置手段；查询失败不能冒充该前提，
+		// 否则会把本可继续作为快照底链豁免常规裁剪的归档拖入 backup.retention_days 的
+		// 裁剪范围，用户在保留期后静默丢失快照数据（只有一条 slog.Warn，无告警计数）。
+		slog.Warn("查询快照底链的子备份依赖失败，本次不处理任何底链（不删也不降级）",
+			"instanceId", instanceID, "backlinkCount", len(backlinkIDs), "error", err)
+		return plan
+	}
+	blocked := make(map[uint]bool, len(referenced))
+	for _, id := range referenced {
+		blocked[id] = true
+	}
+	for _, id := range backlinkIDs {
+		if blocked[id] {
+			plan.demote = append(plan.demote, id)
+			continue
+		}
+		plan.deletable = append(plan.deletable, id)
+	}
+	return plan
+}
+
+// deletableBacklinkIDsInTx 事务内复算「可安全删除的底链」（R9）。
+//
+// 为什么需要它：计划在事务外算出，到事务内执行之间存在 TOCTOU 窗口——期间用户可能
+// 新建一条增量备份把某条底链占为 parent，而事务内的 `tx.Where("id IN ?").Delete(...)`
+// 会绕过 `BackupService.Delete` 的「拒删有子备份」护栏，导致用户增量链断裂
+// （`resolveChain` 随后报「父备份缺失」）。
+//
+// 实现为**删除语句自身的条件**而非先查后删：`NOT EXISTS` 子查询与 DELETE 在同一条
+// 语句里求值，窗口不复存在。软删语义下子备份判定必须显式带 `deleted_at IS NULL`
+// ——已软删的增量备份不再依赖该底链，不应拦住清理（否则底链永远删不掉）。
+func deletableBacklinkIDsInTx(tx *gorm.DB, candidates []uint) []uint {
+	if len(candidates) == 0 {
+		return nil
+	}
+	var keep []uint
+	if err := tx.Model(&model.Backup{}).
+		Where("id IN ?", candidates).
+		Where("NOT EXISTS (SELECT 1 FROM backups AS child WHERE child.parent_id = backups.id AND child.deleted_at IS NULL)").
+		Pluck("id", &keep).Error; err != nil {
+		return nil
+	}
+	return keep
+}
+
+// demoteRemainingSnapshotBacklinksInTx 在删除事务**内**把该实例残留的 origin=snapshot
+// 底链降级为普通备份（R27），使其回归 backup.retention_days 的裁剪范围（N-6 方案②）。
+//
+// 这些行是「被（可能刚新增的）增量备份占为父、因而没被删除」的那批：快照行已在本事务内
+// 删除，它们不再需要豁免常规裁剪，继续挂着 origin=snapshot 只会永久逃过唯一还在扫描
+// 它们的策略。判据用「instance_id + origin」而非计划里的 ID 列表，自动覆盖
+// 「事务内复查才发现被新增子备份保住」的行（R9）。
+//
+// 返回 error 由调用方回滚整个删除事务：不一致窗口就此消失（原先写在提交后、失败仅 Warn，
+// 会导致实例与快照行已删而底链永久滞留且无痕迹）。
+func demoteRemainingSnapshotBacklinksInTx(tx *gorm.DB, instanceID uint) error {
+	return tx.Model(&model.Backup{}).
+		Where("instance_id = ? AND origin = ?", instanceID, model.BackupOriginSnapshot).
+		Update("origin", model.BackupOriginManual).Error
 }
 
 // stopForDelete 删除前的同步停止编排（FR-310）。与 Stop 的异步委托不同：删除必须确证
@@ -1570,10 +1710,51 @@ func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (
 		GracefulStopTimeoutSeconds: s.gracefulStopTimeoutSeconds(),
 		Image:                      instance.Image,
 		PortMappings:               dockerPortMappings(instance),
-		CpuLimit:                   instance.CPULimit,
-		MemLimitMb:                 instance.MemLimitMB,
+		CpuLimit:                   effectiveCPULimit(instance),
+		MemLimitMb:                 effectiveMemLimitMB(instance),
 		DiskLimitMb:                instance.DiskLimitMB,
 	}, nil
+}
+
+// effectiveCPULimit 合并「运维配置的 cgroup 限额」与「运行期配额强制登记待收紧的限额」（M-1）。
+//
+// 取较小非零值：throttle 档的本意是收紧，绝不能因待收紧项而放宽运维显式配置的限额。
+// 两者皆为 0（都未设限）时返回 0，保持 Docker 默认（不限制）。
+func effectiveCPULimit(instance *model.Instance) float64 {
+	return minPositiveFloat(instance.CPULimit, instance.ThrottleCPULimit)
+}
+
+// effectiveMemLimitMB 同 effectiveCPULimit，对内存维度取较小非零值。
+func effectiveMemLimitMB(instance *model.Instance) int64 {
+	return minPositiveInt64(instance.MemLimitMB, instance.ThrottleMemLimitMB)
+}
+
+// minPositiveFloat 取两个限额里较小的正数；都为 0 时返回 0。
+func minPositiveFloat(a, b float64) float64 {
+	switch {
+	case a <= 0:
+		return b
+	case b <= 0:
+		return a
+	case b < a:
+		return b
+	default:
+		return a
+	}
+}
+
+// minPositiveInt64 取两个限额里较小的正数；都为 0 时返回 0。
+func minPositiveInt64(a, b int64) int64 {
+	switch {
+	case a <= 0:
+		return b
+	case b <= 0:
+		return a
+	case b < a:
+		return b
+	default:
+		return a
+	}
 }
 
 // ResyncNode 在 Worker 重连/重注册成功后，把该节点全部实例规格一次性重推给 Worker（见 ADR-050）。
@@ -1800,8 +1981,17 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// N-3：启动/重启请求**随附生效限额**，不依赖「启动前的幂等重注册一定成功」。
+	//
+	// 缺陷现场：effectiveCPULimit/effectiveMemLimitMB 原先唯一消费点是 registerOnWorkerLocked
+	// → CreateInstance，而启动路径对重注册失败只记 Debug 日志且不阻断；Worker 于是沿用旧
+	// spec 里的 cgroup 限额——配额巡检登记的「待收紧限额」静默不生效，而审计已记 success=true。
+	// 现在限额直接进动作请求，Worker 在启动前落地（见 worker grpc applyActionLimits）。
 	req := &workerpb.InstanceActionRequest{
 		InstanceUuid: instance.UUID,
+		WithLimits:   true,
+		CpuLimit:     effectiveCPULimit(instance),
+		MemLimitMb:   effectiveMemLimitMB(instance),
 	}
 
 	var err error

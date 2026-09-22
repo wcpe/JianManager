@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
+	"github.com/wcpe/JianManager/internal/controlplane/crashdiag"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -57,16 +58,44 @@ func (h *ControlPlaneHandler) ReportCrashSnapshot(ctx context.Context, req *work
 		DurationMs: req.DurationMs,
 		TailOutput: req.TailOutput,
 	}
+	// statErr 记录本次趋势统计是否未计入（仅用于终态日志，不影响落库结果）。
+	var statErr error
 	if err := h.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&snap).Error; err != nil {
 			return err
 		}
-		return pruneCrashSnapshots(tx, inst.ID)
+		// FR-470：事务内同步分类并回填分类列 + upsert 日粒度统计，
+		// 保证「快照行」与「趋势统计行」一致（统计不受下方 K=5 裁剪影响）。
+		//
+		// m-8 容错：统计 upsert 失败**不得**回滚快照落库——崩溃现场是稀缺且不可重放的证据，
+		// 为了趋势统计的一张表把原始现场一起丢掉，代价远大于「这条未计入趋势」。
+		// 降级：分类结果照常写入（分类是纯函数，不会失败），只标记统计未计，
+		// 趋势统计的缺口可由 Reclassify 重跑补上（幂等）。
+		if err := crashdiag.ClassifyCrashSnapshotRecord(tx, &snap); err != nil {
+			slog.Warn("崩溃快照统计未计入（分类结果保留，现场照常落库）",
+				"instanceId", inst.ID, "rootCause", snap.RootCause, "error", err)
+			statErr = err
+		}
+		if err := tx.Model(&model.InstanceCrashSnapshot{}).Where("id = ?", snap.ID).
+			Updates(map[string]any{
+				"root_cause": snap.RootCause,
+				"signature":  snap.Signature,
+				"evidence":   snap.Evidence,
+				"confidence": snap.Confidence,
+			}).Error; err != nil {
+			return err
+		}
+		// 裁剪失败同样不应抹掉刚写入的现场：它只是保留策略，下一条上报会再裁一次。
+		if err := pruneCrashSnapshots(tx, inst.ID); err != nil {
+			slog.Warn("崩溃快照裁剪失败（保留策略，下轮重试）", "instanceId", inst.ID, "error", err)
+		}
+		return nil
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "崩溃快照落库失败: %v", err)
 	}
 
-	slog.Info("崩溃快照已入库", "instance", inst.Name, "exitCode", snap.ExitCode, "durationMs", snap.DurationMs)
+	slog.Info("崩溃快照已入库", "instance", inst.Name, "exitCode", snap.ExitCode,
+		"durationMs", snap.DurationMs, "rootCause", snap.RootCause, "statDegraded", statErr != nil)
 	return &workerpb.ReportCrashSnapshotResponse{}, nil
 }
 

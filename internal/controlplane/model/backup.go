@@ -34,11 +34,27 @@ const (
 	BackupModeIncremental BackupMode = 1 // 增量：仅打包相对父备份变化的文件
 )
 
+// BackupOrigin 备份的来源（FR-466 §2.2「快照必须自包含」）。
+//
+// 用途：快照的底层全量备份**必须**能独立于普通备份的保留策略存活——
+// 否则 backup.retention_days（默认 14）会先于 snapshot.retention_days（默认 30）
+// 把快照的底链裁掉，快照退化成一个指向软删行的死链，而列表仍显示「可回滚」。
+type BackupOrigin string
+
+const (
+	// BackupOriginManual 普通备份，由运维/API 直接创建（受 backup.retention_days 裁剪）。
+	BackupOriginManual BackupOrigin = ""
+	// BackupOriginSnapshot 快照的底层全量备份：不受时间裁剪，生命周期由快照自身决定。
+	BackupOriginSnapshot BackupOrigin = "snapshot"
+)
+
 // Backup 备份记录。
 type Backup struct {
-	ID         uint         `gorm:"primaryKey" json:"id"`
-	UUID       string       `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	InstanceID uint         `gorm:"not null;index" json:"instanceId"`
+	ID         uint   `gorm:"primaryKey" json:"id"`
+	UUID       string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	InstanceID uint   `gorm:"not null;index" json:"instanceId"`
+	// Origin 备份来源（空=普通备份）。snapshot 来源的备份被快照保留策略独占管理。
+	Origin     BackupOrigin `gorm:"type:varchar(24);not null;default:'';index" json:"origin,omitempty"`
 	Name       string       `gorm:"type:varchar(128);not null" json:"name"`
 	FilePath   string       `gorm:"type:varchar(512)" json:"filePath"`
 	FileSizeMB float64      `gorm:"default:0" json:"fileSizeMb"`

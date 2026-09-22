@@ -79,7 +79,10 @@ func (f *fakeStopDeleteWorker) RemoveInstance(_ context.Context, _ *workerpb.Rem
 func newRunningDeleteEnv(t *testing.T, status model.InstanceStatus) (*InstanceService, *cpgrpc.ClientPool, *model.Node, *model.Instance) {
 	t.Helper()
 	db := newCloneTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NetworkMember{}))
+	// Backups/InstanceSnapshot 必须迁移：删除事务内会级联清理快照底链并降级被增量引用的底链
+	// （N-6/R9/R27），缺表会让删除整体报错。
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NetworkMember{},
+		&model.Backup{}, &model.InstanceSnapshot{}))
 	pool := cpgrpc.NewClientPool()
 	svc := NewInstanceService(db, nil, pool)
 	t.Cleanup(svc.Shutdown)

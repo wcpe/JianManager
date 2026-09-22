@@ -190,10 +190,36 @@ type binaryWorkerStub struct {
 	requests []*workerpb.FetchBinaryRequest
 	// frames 是回放的进度帧；为空时默认回「成功」终态。
 	frames []*workerpb.FetchBinaryProgress
+	// hashRequests / hashResp 供磁盘内容比对路径（N-4）用：为空时回「文件不存在」。
+	hashRequests []*workerpb.HashFileRequest
+	hashResp     *workerpb.HashFileResponse
 }
 
 func (f *binaryWorkerStub) CreateInstance(_ context.Context, _ *workerpb.CreateInstanceRequest, _ ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
+}
+
+// HashFile 实现磁盘内容比对（FR-468 §2.5）的 Worker 侧契约（N-4）。
+//
+// 必须显式实现：嵌入的 workerpb.WorkerServiceClient 是**接口**，零值 nil——未实现的方法
+// 一旦被调用就是 nil 解引用 panic。N-4 修正 View 的 status 漏选后，停止态实例的磁盘比对
+// 真正开始执行，任何走 binaryWorkerStub 的用例都会打到这条路径，于是「静默不执行」的
+// 旧缺陷被暴露成显式 panic。返回「无此文件」与真实 Worker 在文件缺失时的行为一致。
+func (f *binaryWorkerStub) HashFile(_ context.Context, in *workerpb.HashFileRequest, _ ...grpc.CallOption) (*workerpb.HashFileResponse, error) {
+	f.mu.Lock()
+	f.hashRequests = append(f.hashRequests, in)
+	resp := f.hashResp
+	f.mu.Unlock()
+	if resp != nil {
+		return resp, nil
+	}
+	return &workerpb.HashFileResponse{Error: "no such file: " + in.Path}, nil
+}
+
+func (f *binaryWorkerStub) hashCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.hashRequests)
 }
 
 func (f *binaryWorkerStub) FetchBinary(_ context.Context, in *workerpb.FetchBinaryRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[workerpb.FetchBinaryProgress], error) {

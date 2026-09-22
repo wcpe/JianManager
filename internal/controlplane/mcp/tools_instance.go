@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
@@ -47,6 +48,23 @@ func init() {
 			},
 			Action: service.AgentActionInstanceListCrashSnapshots,
 			Exec:   execInstanceListCrashSnapshots,
+		},
+		toolSpec{
+			Def: ToolDef{
+				Name:        "instance_crash_trend",
+				Description: "读取实例崩溃趋势（按天/根因计数 + 同类聚合，来源独立汇总表，不受 K=5 快照裁剪影响；须 observability.read）",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id": map[string]any{"type": "number", "description": "实例 ID"},
+						"days": map[string]any{"type": "number", "description": "可选：趋势窗口天数，默认 " +
+							strconv.Itoa(service.CrashTrendDefaultDays) + "，上限 " + strconv.Itoa(service.CrashTrendMaxDays)},
+					},
+					"required": []string{"id"},
+				},
+			},
+			Action: service.AgentActionInstanceCrashTrend,
+			Exec:   execInstanceCrashTrend,
 		},
 		toolSpec{
 			Def: ToolDef{
@@ -213,6 +231,32 @@ func execInstanceListCrashSnapshots(_ context.Context, deps ToolDeps, p *service
 		return toolErr("查询崩溃快照失败: " + err.Error())
 	}
 	return toolOK(list)
+}
+
+// execInstanceCrashTrend 读取实例崩溃趋势（FR-470）：按天/根因趋势 + 同类聚合。
+func execInstanceCrashTrend(_ context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult {
+	id, e := requireID(args)
+	if e != nil {
+		return toolErr(e.Error())
+	}
+	if deps.Agent == nil {
+		return toolErr("策略服务不可用")
+	}
+	if _, _, err := deps.Agent.AuthorizeInstanceAction(p, action, id); err != nil {
+		return toolForbidden(err)
+	}
+	if deps.Crash == nil {
+		return toolErr("崩溃快照服务不可用")
+	}
+	days := 30
+	if v, ok := args["days"].(float64); ok && v > 0 {
+		days = int(v)
+	}
+	trend, err := deps.Crash.TrendByInstance(id, days)
+	if err != nil {
+		return toolErr("查询崩溃趋势失败: " + err.Error())
+	}
+	return toolOK(trend)
 }
 
 func execInstanceSendCommand(_ context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult {

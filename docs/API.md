@@ -191,13 +191,14 @@
 - **关联 FR**: FR-003
 
 ### PUT /api/v1/groups/:id/quota
-- **描述**: 更新组配额（平台管理员）
-- **关联 FR**: FR-003
-- **请求**: `{ "maxInstances": 10, "maxBots": 50, "maxStorageMb": 10240 }`
+- **描述**: 更新组配额（平台管理员）。FR-467 起新增 `enforceMode`：组级运行期配额强制档位，留空表示继承平台默认 `quota.enforce_mode`
+- **关联 FR**: FR-003 ｜ **关联 FR**: FR-467
+- **请求**: `{ "maxInstances": 10, "maxBots": 50, "maxStorageMb": 10240, "enforceMode": "alert" }`
+  - `enforceMode`（可选）：`alert` | `throttle` | `stop` 或 `""`（继承默认）；非法值 `400 INVALID_REQUEST`
 
 ### GET /api/v1/groups/:id/quota
-- **描述**: 查询组配额及当前用量（组成员可查看本组，组管理员/平台管理员同）
-- **关联 FR**: FR-003
+- **描述**: 查询组配额及当前用量（组成员可查看本组，组管理员/平台管理员同）。FR-467 起响应含 `enforceMode`（空串 = 继承平台默认）
+- **关联 FR**: FR-003 ｜ **关联 FR**: FR-467
 - **权限**: `group:quota:read`（本组可访问）
 - **响应**:
   ```json
@@ -208,7 +209,8 @@
     "maxStorageMb": 10240,
     "usedInstances": 3,
     "usedBots": 15,
-    "usedStorageMb": 2100
+    "usedStorageMb": 2100,
+    "enforceMode": "stop"
   }
   ```
 - **错误**: 404 用户组不存在或无权访问
@@ -937,13 +939,121 @@
 - **关联 FR**: FR-076 ｜ **关联 ADR**: ADR-016
 
 ### GET /api/v1/instances/:id/crash-snapshots
-- **描述**: 实例崩溃快照列表（FR-313）：进程非正常退出的现场留存（Worker 经 gRPC `ReportCrashSnapshot` 上报入库，每实例滚动保留最近 5 条，删实例级联清）。按发生时间倒序返回（最新在前），空结果回 `[]`；供实例控制台「崩溃诊断」卡
+- **描述**: 实例崩溃快照列表（FR-313，增强 FR-470）：进程非正常退出的现场留存（Worker 经 gRPC `ReportCrashSnapshot` 上报入库，每实例滚动保留最近 5 条，删实例级联清）。按发生时间倒序返回（最新在前），空结果回 `[]`；供实例控制台「崩溃诊断」卡。**FR-470 起每条附根因归类 + 置信度 + 命中证据 + 资源关联**
 - **权限**: `instance.read`（且实例须可访问；不可访问按存在性隐藏返回 404）
-- **响应**: `200`，`[{ "id":1, "instanceId":3, "occurredAt":"2026-07-13T02:15:00Z", "exitCode":1, "signal":"killed", "durationMs":2500, "tailOutput":"...", "createdAt":"..." }]`
+- **响应**: `200`，`[{ "id":1, "instanceId":3, "occurredAt":"2026-07-13T02:15:00Z", "exitCode":1, "signal":"killed", "durationMs":2500, "tailOutput":"...", "rootCause":"oom", "signature":"Java heap space", "confidence":0.92, "evidenceLines":["java.lang.OutOfMemoryError: Java heap space"], "correlation": {"nearOom":true,"rssAtCrash":1073741824,"memLimitMb":1024,"heapUsedMax":0,"gcNote":"GC 关联待 FR-465 落地"}, "createdAt":"..." }]`
   - `exitCode`：进程退出码，无法获知时为 `-1`；`signal`：Unix 终止信号名，Windows / 非信号退出为空
   - `tailOutput`：崩溃前终端尾部输出（Worker 侧截取，≤200 行 / 64KB）
+  - `rootCause`（FR-470）：`oom` / `port_in_use` / `class_not_found` / `jvm_args` / `permission` / `segfault` / `corrupt_data` / `unknown`；**FR-470 之前入库的旧快照为空**（读侧按 unknown 渲染）
+  - `signature`：归一化「同类指纹」（抹掉时间戳/地址/行号），用于同类聚合
+  - `evidenceLines`：命中规则的原文行（最多 8 行），供人复核启发式判定
+  - `correlation`：崩前 5 分钟窗口内的进程 RSS 峰值 / 内存上限 / 堆已用峰值（OOM 证据链）
 - **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
-- **关联 FR**: FR-313
+- **关联 FR**: FR-313 ｜ **关联 FR（增强）**: FR-470
+
+### GET /api/v1/instances/:id/crash-trend
+- **描述**: 实例崩溃趋势（FR-470）：按天 × 根因的计数序列 + Top 根因 + 同类聚合（按 `signature`）。**数据来自独立汇总表 `instance_crash_stats`，不受 K=5 快照滚动裁剪影响**——连崩超过 5 次后列表只剩 5 条，趋势计数仍完整
+- **权限**: `instance.read`（且实例须可访问）
+- **查询参数**: `days`（趋势窗口天数，默认 30，上限 365；非法值回落默认）
+- **响应**: `200`，`{ "instanceId":3, "days":30, "total":7, "points":[{"day":"2026-07-13","rootCause":"oom","count":2}], "byRootCause":[{"rootCause":"oom","count":6}], "topSignatures":[{"signature":"Java heap space","rootCause":"oom","count":6}] }`
+- **`points` 聚合口径（必须如此理解）**: 汇总表的唯一键是 (实例 × 天 × 根因 × **指纹**)，故同一天同一根因会有多行（每个指纹一行）；`points` 已**按 (天 × 根因) 求和**，每对 (天, 根因) 恰好一个点，`count` 是该对的**合计次数**（不是单行计数）。`sum(points[].count)` 恒等于 `total`，且与 `byRootCause` 同口径。前端无需再自行合并同天同因的点
+- **错误**: `403 FORBIDDEN`、`404 NOT_FOUND`
+- **关联 FR**: FR-470
+
+### GET /api/v1/crash-overview
+- **描述**: 崩溃总览（FR-470）：时间窗内 Top 根因 / Top 实例 / Top 同类 + 按天趋势。**按调用方可访问实例收敛**——响应会回填实例名，不按范围过滤等于跨组泄露实例清单
+- **权限**: `instance.read`（且结果收敛到 `AccessibleInstanceIDs`；平台管理员不限）
+- **查询参数**: `days`（默认 30，上限 365）
+- **响应**: `200`，`{ "days":30, "total":12, "trend":[...], "topRootCauses":[...], "topInstances":[{"instanceId":3,"instanceName":"creative-1","count":4}], "topSignatures":[...] }`
+- **`trend` 聚合口径**: 与 `GET /instances/:id/crash-trend` 的 `points` 同口径——按 (天 × 根因) 跨实例、跨指纹求和，每对恰好一个点；`sum(trend[].count)` 恒等于 `total`
+- **关联 FR**: FR-470
+
+### POST /api/v1/crash-snapshots/reclassify
+- **描述**: 对历史崩溃快照按当前规则重跑分类（FR-470，平台管理员）。回填快照的分类列并**差量修正**趋势统计（旧桶减 1、新桶加 1；FR-470 之前无分类的旧快照按回填处理），因此可重复执行且幂等
+- **权限**: 平台管理员（`isPlatformAdmin`）；审计动作 `crash.reclassify`
+- **响应**: `200`，`{ "scanned":120, "updated":8, "backfilled":5 }`
+- **错误**: `403 FORBIDDEN`（非平台管理员）、`500 INTERNAL_ERROR`
+- **关联 FR**: FR-470
+
+### GET /api/v1/instances/:id/quota
+- **描述**: 实例运行期配额与实时用量（FR-467）：限额（含来源）+ 实时用量 + 强制状态。配额来源优先级为**实例级字段 > 组配额派生 > 不限**
+- **权限**: `instance.read`（且实例须可访问）
+- **响应**: `200`，`{ "instanceId":3, "cpuCores":1.5, "memLimitMb":2048, "diskLimitMb":0, "enforceMode":"alert", "memSource":"instance", "diskSource":"group", "cpuSource":"instance", "groupId":2, "cpuPercent":42.5, "rssBytes":536870912, "diskBytes":3221225472, "sampleNote":"实例未运行，无实时用量", "enforcedCpu":false, "enforcedMem":false, "enforcedDisk":false, "supportedThrottle":true }`
+  - `*Source`：`instance`（实例级字段）/ `group`（组配额派生，磁盘按「组 MaxStorageMB − 组内已用」软限）/ `none`（不限）
+  - `enforceMode`：`alert` | `throttle` | `stop`（实例所属组的 `enforceMode` 覆盖平台默认 `quota.enforce_mode`）
+  - `supportedThrottle`：仅 `processType=docker` 为 `true`——**非 docker 模式无法内核级限流，CPU 超限只告警**（诚实边界，见 FR-467 spec §2.4）
+  - `enforceStateScope`：恒为 `in_process` —— `enforced*` 是 CP **本次进程内**的连续计数状态，重启后重新累积；历史事实查审计 `instance.quota_*`
+  - `throttleCpuLimit` / `throttleMemLimitMb`：throttle 档登记的**待收紧限额**（0=无）。docker 的 cgroup 限额只能在创建容器时注入，故触发时落库、下次启动生效；启动时生效限额取 `min(配置限额, 待收紧限额)`。**超限解除（连续 K 次回落正常）时这两个字段按维度独立清零并落库**——否则实例会被永久钉在收紧后的硬顶，扩容/清理等解除动作都不再有用
+  - 限额的写入沿用既有路径：实例级走 `PUT /instances/:id` 的 `cpuLimit`/`memLimitMb`/`diskLimitMb`，组级走 `PUT /groups/:id/quota`
+- **错误**: `403 FORBIDDEN`、`404 NOT_FOUND`
+- **关联 FR**: FR-467
+
+### GET /api/v1/instances/:id/binary-version
+- **描述**: 实例二进制/Beacon 版本（FR-468）：当前版本 + 可升级候选 + 可回滚性 + 漂移提示。版本真源是制品库 asset（内容寻址），本端点只读「实例当前跑的是哪个 asset」这一绑定
+- **权限**: `instance.read`（且实例须可访问）
+- **响应**: `200`，`{ "instanceId":30, "bound":true, "currentAssetId":11, "currentVersion":"1.0.0", "currentFilename":"beacon-1.0.0-linux-amd64", "currentSha256":"...", "hasRollback":false, "previousAssetId":0, "previousVersion":"", "previousFilename":"", "driftDetected":false, "noLibraryVersion":false, "candidates":[{"assetId":12,"filename":"beacon-1.1.0-linux-amd64","version":"1.1.0","sha256":"...","size":32505856}] }`
+  - `bound=false`：该实例未登记版本绑定（非 binary/beacon 实例，或搭建早于 FR-468）
+  - `noLibraryVersion=true`：当前二进制来自 url / node_file 来源，无制品库版本（升级入口应提示先入库）
+  - `driftDetected`：三层判据任一命中——①启动命令已不指向绑定文件；②绑定摘要与制品库摘要不一致；③**工作目录中实际文件的 sha256 与绑定摘要不一致**（人工同名覆盖，唯一能发现该场景的判据）
+  - `diskSha256` / `diskSha256Checked`：③的比对结果与**是否真的读过盘**。`diskSha256Checked=false` 表示本次未比对（实例运行中 / 节点未连接 / 文件超过 512MiB）——**未校验 ≠ 没有漂移**，不得渲染成「已核对」
+- **错误**: `403 FORBIDDEN`、`404 NOT_FOUND`
+- **关联 FR**: FR-468 ｜ **关联 ADR**: ADR-090
+
+### POST /api/v1/instances/:id/binary-upgrade
+- **描述**: 受控升级到指定制品版本（FR-468）：校验目标制品 → 校验实例状态（**须已停止**）→ 记录回滚点 → 下发取件 → 落盘名变化则更新启动命令 → 换绑定 → 审计 `instance.binary_upgrade`。异步任务（`kind=binary_upgrade`）
+- **权限**: `instance.write` 权限节点 **且** 实例写权限（替换实例可执行文件属破坏性写操作，只读角色不得执行）
+- **请求**: `{ "assetId": 12 }`
+- **响应**: `202`，`{ "taskId":"...", "instanceId":30, "fromAssetId":11, "fromVersion":"1.0.0", "toAssetId":12, "toVersion":"1.1.0", "toFilename":"beacon-1.1.0-linux-amd64", "startCommand":"./beacon-1.1.0-linux-amd64", "commandChanged":true }`
+- **错误**: `400 INVALID_TARGET`（目标制品为空/失效/名非法/与当前版本相同）、`403 FORBIDDEN`、`404 NOT_FOUND`、`409 CONFLICT`（实例运行中 / 同实例已有在途操作）
+- **关联 FR**: FR-468
+
+### POST /api/v1/instances/:id/binary-rollback
+- **描述**: 回滚到上一版本（FR-468 一级回滚，语义对称：回滚本身也可再回滚）
+- **权限**: `instance.write` 权限节点 **且** 实例写权限
+- **响应**: `202`，同升级响应结构（`from` / `to` 方向相反）
+- **错误**: `400 NO_PREVIOUS_VERSION`（从未升级过，无回滚点）、`403 FORBIDDEN`、`404 NOT_FOUND`、`409 CONFLICT`（实例运行中 / 同实例已有在途操作）
+- **审计**: `instance.binary_rollback`（成功与失败分别记一条）
+- **关联 FR**: FR-468
+
+### GET /api/v1/instances/:id/snapshots
+- **描述**: 实例整机快照列表（FR-466）：一次快照 = 一个时间点语义的整机可回滚点（底层是一次**全量**备份 + 二进制指纹）。按创建时间倒序，空结果回 `[]`
+- **权限**: `instance.read`（且实例须可访问）
+- **响应**: `200`，`[{ "id":2, "uuid":"...", "instanceId":3, "name":"升级前整机快照", "kind":"manual", "state":"completed", "rootBackupId":902, "binaryName":"server.jar", "binarySha256":"...", "configHash":"...", "configSummary":"start=java -Xmx2G -jar server.jar", "triggeredBy":1, "triggeredByRollbackId":0, "sizeMb":256.1, "note":"", "failureReason":"", "rootBackupState":"ok", "createdAt":"...", "updatedAt":"..." }]`
+  - `kind`：`manual`（手动）/ `pre_rollback`（回滚前自动创建，**强制且不可关闭**）/ `scheduled`（预留）
+  - `state`：`pending` / `running` / `completed` / `failed` / `rolled_back`；仅 `completed` 与 `rolled_back` 可作回滚目标
+  - `note`：创建时的一致性提示（运行态创建会标注「MC 世界文件可能非一致」）
+  - `rootBackupState`：`ok` / `missing`（底层备份已不存在，**读时派生**）
+  - `notRollableReason`：**有值即表示不可回滚**（典型为底链已被删除或保留策略清理）。前端据此禁用回滚按钮并展示原因；`state=completed` 但该字段非空时**不代表可回滚**
+- **错误**: `403 FORBIDDEN`、`404 NOT_FOUND`
+- **关联 FR**: FR-466
+
+### POST /api/v1/instances/:id/snapshots
+- **描述**: 创建整机快照（FR-466）：登记快照 → 全量打包工作目录 → 回填 `rootBackupId` → 采集二进制指纹。异步任务（`kind=snapshot_create`）
+- **权限**: `instance.write` 权限节点 **且** 实例写权限（`requireNodes("instance.write")` + `canManageInstance`）——只读角色即使属于该组也不得创建（创建会占用节点磁盘）
+- **请求**: `{ "name": "升级前快照" }`（`name` 可选，留空自动按时间命名）
+- **响应**: `202`，同列表项结构（`state=pending` 起步）
+- **错误**: `403 FORBIDDEN`、`404 NOT_FOUND`、`409 OPERATION_IN_FLIGHT`（同实例已有在途 `snapshot_*` / `binary_upgrade` 任务）、`409 SNAPSHOT_QUOTA_EXCEEDED`（已达 `snapshot.max_per_instance` / `snapshot.max_total_mb`）
+- **审计**: `instance.snapshot_create`
+- **关联 FR**: FR-466
+
+### POST /api/v1/snapshots/:sid/rollback
+- **描述**: 一键回滚到指定快照（FR-466 核心闭环）。顺序**强制**为：①校验快照可回滚**且底链存在** → ②拒绝同实例在途的 `snapshot_*` / `binary_upgrade` 任务 → ③【强制】创建 `pre_rollback` 快照（失败即中止，不留无退路的操作）→ ④运行态则先优雅停服（**非拒绝**，由快照负责停服编排；停服超时则回退 `STOPPING` 状态并清理本次 `pre_rollback`）→ ⑤取实例互斥锁并**重验实例已停止**后回放目标快照的底层全量备份 → ⑥回滚后实例恒为 **STOPPED（不自动拉起）**。异步任务（`kind=snapshot_rollback`）
+- **权限**: `instance.write` 权限节点 **且** 实例写权限（覆盖实例工作目录属破坏性写操作，只读角色不得执行）
+- **请求**: `{ "confirmSnapshotId": 2 }` 或 `{ "confirmName": "升级前整机快照" }` —— **破坏性操作确认要素，至少一项且必须与目标快照一致**（避免误点/脚本变量写错直接覆盖生产数据）
+- **响应**: `202`，`{ "taskId":"...", "snapshotId":2, "preRollbackSnapshotId":5, "instanceId":3, "stopped":true, "binaryMismatch":false, "binaryNote":"", "finalStatus":"STOPPED" }`
+  - `preRollbackSnapshotId`：回滚前留下的快照 ID —— 可据此退回回滚前状态（闭环可逆）
+  - `binaryMismatch` / `binaryNote`：目标快照的二进制与当前不一致（**仅提示，不越权替换可执行文件**；二进制回滚走 `binary-rollback`）
+- **错误**: `400 CONFIRM_REQUIRED`（缺确认要素或不匹配）、`403 FORBIDDEN`、`404 NOT_FOUND`、`409 CONFLICT`（快照未完成 / 底链缺失 / 同实例有在途操作 / 运行中且无法自动停服）
+- **审计**: `instance.snapshot_rollback`（**成功与失败分别记一条**）、`instance.snapshot_rollback_pre`
+- **关联 FR**: FR-466
+
+### DELETE /api/v1/snapshots/:sid
+- **描述**: 删除快照（含底层备份）
+- **权限**: `instance.delete` 权限节点 **且** 实例写权限（销毁归档数据与删除实例同权，`instance.write` 不足）
+- **响应**: `200`，`{ "deleted": true }`
+- **错误**: `403 FORBIDDEN`、`404 NOT_FOUND`
+- **审计**: `instance.snapshot_delete`
+- **关联 FR**: FR-466
 
 ### POST /api/v1/instances/:id/business
 - **描述**: JBIS 业务对接——向某实例下发一条业务命令（`domain.action` + 结构化 `payload`）并取回结果（FR-116/FR-121，见 ADR-026/027/029）。CP **插件无关**：经既有探针桥（ADR-016）把信封下发到目标实例 ServerProbe 业务对接层（BusinessHost→per-plugin Provider 执行），结果 JSON 原样透传，CP 不解析。`domain` 区分业务域（`economy`/`inventory`…），与监控/治理（`core.*`）同桥分流
@@ -3831,10 +3941,18 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
   - 实例分组（FR-435，`instance.read`/`instance.write`）：`instance_group_tree`、`instance_group_members`、`instance_group_create`、`instance_group_update`、`instance_group_delete`、`instance_group_add_members`、`instance_group_remove_members`
   - 群组服与拓扑（FR-434，`instance.read`/`instance.write`）：`network_list`、`network_get`、`network_create`、`network_update`、`network_delete`、`network_add_members`、`network_remove_member`、`topology_get`、`registration_list`、`registration_create`、`registration_delete`
   - 标签与 Beacon 协同（FR-440/444，`instance.read`/`instance.write`）：`instance_update_tags`、`beacon_topology_status`、`beacon_topology_pull`
+  - 整机快照（FR-466，`instance.read`/`instance.write`）：`instance_snapshot_list`、`instance_snapshot_create`、`instance_snapshot_rollback`
+  - 运行期配额（FR-467，`observability.read`）：`instance_quota_status`
+  - 二进制/Beacon 版本（FR-468，`instance.read`/`instance.write`）：`instance_binary_version_get`、`instance_binary_upgrade`、`instance_binary_rollback`
+  - 崩溃诊断增强（FR-470，`observability.read`）：`instance_crash_trend`（既有 `instance_list_crash_snapshots` 同面）
 - **FR-440 工具约定**：`instance_update_tags` 独立 action `agent.instance_update_tags`（V2 能力 `instance.write`，资源类型 instance，`V1Allowed=false`）。**三态语义**：参数缺省＝不改动、`tags: []`＝清空（落 `null`）、非空数组＝整体覆盖（不做合并）。补齐前 `instance_update_config` 未暴露 `tags` 字段，打标签只能绕开 MCP 走 HTTP、无法进 Agent 审计流水。
 - **FR-443/444 工具约定**：`beacon_topology_status` 只读查询协同可用性（是否配置端点、是否开启拉取），`beacon_topology_pull` 手动触发拉取（首次须手动，避免自动建树与人工分组冲突）。二者均 `V1Allowed=false`。**兼容非依赖**：未配置 Beacon 端点时 `beacon_topology_status` 正常返回「未配置」，`beacon_topology_pull` 返回明确错误且**不改动本地任何数据**；推送方向失败只写审计、绝不阻塞本机操作。
 - **FR-398/404 工具约定**：全部 `V1Allowed=false`（V1 Token 既不可见也不可调用），且不进 HTTP 契约投影（无对应 `/api/v1/agent/*` 端点）。`loadtest_run_create` 可选接收结构化 `scenario`，由同一服务链路解析、校验并冻结，不能绕过目标、执行节点 scope 或预检；省略时保持既有创建语义。运行类工具在目标实例之外逐一校验 executor 节点：启动方向（preflight/start/retry_failed）任一越界即整体拒绝；停止方向仍执行但在响应 `outOfScopeExecutorNodeIds` 中列出越界节点。`loadtest_run_preflight` 返回的 `planToken` 不透明、6 分钟 TTL，MCP 不解析/不重签/不缓存，仅原样回传给 `loadtest_run_start`；过期或容量世代变化由 service 中文错误引导重新预检。`bot_send_command` 成功语义严格限定为「已发送（`bot.chat` 调用成功）」（ADR-075）。危险操作 `bot_delete`/`loadtest_template_delete`/`network_delete` 要求 `confirmBotName`/`confirmTemplateName`/`confirmName` 精确等于真实名称。模板按平台级视角管理（持 `bot.load` 可管全部，ADR-080 附注）。
 - **FR-433/434/435 工具约定**：群组服、实例分组与角色维护类工具同样 `V1Allowed=false`、不进 HTTP 契约投影，权限与实例分组同面（读 `instance.read`、写 `instance.write`）——这些操作改的是实例间归属与代理注册关系，不是实例内容，故不占用 configure/content 等更细能力。`instance_update_config` 的 `role` 参数取值 `backend`/`proxy`/`universal`/`beacon`，非法值在参数校验阶段即以中文错误拒绝（早于服务调用）。`network_delete` 需 `confirmName` 与目标群组名精确相符；`registration_create` 要求目标为 `role=proxy`、后端为 `role=backend`，注册成功会同步改写代理的配置文件。`topology_get` 一次返回全量代理及其注册关系 + 各群组成员归属，替代按代理逐个查询的 N+1；其 `networks[].memberInstanceIds` 只含与代理有注册关系的成员（拓扑图用于分层布局，非群组全量成员）。
+- **FR-466 工具约定**：`instance_snapshot_list` 读（`instance.read`）；`instance_snapshot_create` / `instance_snapshot_rollback` 写（`instance.write`）。回滚是**可再回滚**的操作（后端强制先建 `pre_rollback` 快照），故不落 destructive；真正的破坏性动作（`DELETE /snapshots/:sid`，连带删除底层归档、HTTP 侧需 `instance.delete`）**不通过 MCP 暴露**。`instance_snapshot_rollback` 沿用 HTTP 侧 m-1 的确认要素：必须显式传 `confirmSnapshotId`（须等于目标快照 ID）或 `confirmName`（须与快照名完全相同）之一，缺省或与目标不一致即以中文错误拒绝——避免「脚本循环变量写错」直接覆盖生产实例数据。三者均 `V1Allowed=false`、`HTTPInContract=false`（HTTP 侧另有 `/instances/:id/snapshots`、`/snapshots/:sid/rollback`）。
+- **FR-467 工具约定**：`instance_quota_status` 为观测聚合读（`observability.read`），不改实例。`V1Allowed=false`、`HTTPInContract=false`（HTTP 侧另有 `/instances/:id/quota`）。**能力面口径（M-2）**：本工具与 `instance_crash_trend` 走 `observability.read`，是其 HTTP 端点权限（`instance.read`）的**有意放宽**，与既有 `instance_list_crash_snapshots` 沿袭同一面——目的是让「纯观测 Token」无需持有实例读写能力即可读取配额与崩溃趋势；HTTP 侧仍按 `instance.read` 收敛，两侧差异以本节为准（不再视为漂移）。
+- **FR-468 工具约定**：读 `instance.read`、升级/回滚 `instance.write`（改可执行内容但可一级回滚，比 destructive 轻）。升级/回滚都要求实例**已停止**（运行中返回中文错误），且都记 `binary_upgrade` 任务。三者均 `V1Allowed=false`、`HTTPInContract=false`（HTTP 侧另有 `/binary-version` 三端点）。
+- **FR-470 工具约定**：`instance_crash_trend` 返回按 (天 × 根因) 聚合的趋势 + 同类聚合，来源是**独立汇总表**（`InstanceCrashStat`，不随 K=5 快照裁剪而丢失历史）；可选 `days` 默认 30、上限 365。`V1Allowed=false`、`HTTPInContract=false`（HTTP 侧另有 `/crash-trend`）。
 - **tools/list**：按当前 Token 的能力与潜在可用 scope **动态裁剪**（V1 兼容解释器；V2 capability）。空能力 V2 仅见 `agent_whoami`。
 - **tools/call**：无论是否出现在 list，均做最终授权；可信目标由 CP 解析；生命周期写操作使用 expected-node 派发。策略拒绝 → HTTP **200** + MCP `result.isError=true` + 中文 message（**不得 5xx**）。
 - **并发/超时**（配置 `mcp.*`，默认空闲 30m / 绝对 24h / 全局 32 / 每 Token 4）：超限 HTTP **429**，中文 `message`

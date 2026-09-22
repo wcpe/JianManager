@@ -342,6 +342,9 @@ type QuotaUsage struct {
 	UsedInstances int  `json:"usedInstances"`
 	UsedBots      int  `json:"usedBots"`
 	UsedStorageMB int  `json:"usedStorageMb"`
+	// EnforceMode 组级运行期配额强制档位（FR-467）：alert | throttle | stop；
+	// 空串表示继承平台默认 quota.enforce_mode。
+	EnforceMode string `json:"enforceMode"`
 }
 
 // GetQuotaUsage 查询组配额及当前用量。
@@ -360,6 +363,7 @@ func (s *AuthzService) GetQuotaUsage(groupID uint) (*QuotaUsage, error) {
 		MaxInstances: quota.MaxInstances,
 		MaxBots:      quota.MaxBots,
 		MaxStorageMB: quota.MaxStorageMB,
+		EnforceMode:  quota.EnforceMode,
 	}
 
 	// 实例数

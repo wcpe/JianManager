@@ -43,7 +43,13 @@ type ToolDeps struct {
 	Batch     *service.InstanceBatchService
 	Docker    *service.DockerImageService
 	Crash     *service.CrashSnapshotService
-	Task      *service.TaskService
+	// BinaryVersion 二进制/Beacon 版本管理（FR-468）；nil 时对应工具返回中文「服务不可用」。
+	BinaryVersion *service.BinaryVersionService
+	// Quota 运行期配额强制（FR-467）；nil 时 instance_quota_status 返回中文「服务不可用」。
+	Quota *service.QuotaEnforcer
+	// Snapshot 实例整机快照与一键回滚（FR-466）；nil 时对应工具返回中文「服务不可用」。
+	Snapshot *service.SnapshotService
+	Task     *service.TaskService
 	// FR-397 内容运维依赖；nil 时对应工具返回中文「服务不可用」。
 	File        *service.FileService
 	FileVersion *service.FileVersionService

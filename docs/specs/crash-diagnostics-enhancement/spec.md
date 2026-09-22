@@ -1,6 +1,6 @@
 # 崩溃诊断增强（FR-470）
 
-> 状态：📋 计划　·　关联 PRD：FR-470　·　依赖：FR-313、FR-407、FR-170、FR-465　·　关联 ADR：无（沿用既有 gRPC 信道与建模模式）
+> 状态：🟡 **代码与单测已交付，真机验收待做**（FR-470 端到端已实现，单测/构建覆盖通过；§4 中标「真机」的验收项尚未在真机验证）　·　关联 PRD：FR-470　·　依赖：FR-313、FR-407、FR-170、FR-465　·　关联 ADR：无（沿用既有 gRPC 信道与建模模式）
 
 ## 1. 背景与目标
 
@@ -95,25 +95,25 @@ type InstanceCrashStat struct {
 
 ## 3. 任务拆分
 
-- [ ] `service/crash_classify.go`：规则引擎（根因枚举 + 指纹归一 + 证据提取 + 退出码/信号先验）+ 单测（每类正例/负例、多规则命中、unknown 兜底）
-- [ ] `model/instance_crash_snapshot.go` 加列 + `model/instance_crash_stat.go` + AutoMigrate + 单测
-- [ ] `grpc/crash_snapshot.go`：入库时同步分类 + upsert 统计；单测（事务内分类与统计一致）
-- [ ] 资源关联：`service/crash_correlation.go`（查 ProcessMetricSnapshot + 指标时序）+ 单测（窗口、无数据降级）
-- [ ] `POST /crash-snapshots/reclassify` 批处理 + 审计 + 单测
-- [ ] `service/crash_snapshot.go`：趋势查询 + 同类聚合；`router/crash_snapshot.go` 新端点 + 权限；MCP `instance_crash_trend`
-- [ ] 前端卡片：根因标签 / 证据 / 证据链 / 趋势图 / 同类聚合 + i18n 中英 + 双主题
-- [ ] 文档同步：ARCHITECTURE（列 + 统计表）、API.md、PRD 状态、CHANGELOG
+- [x] `crashdiag/classify.go`：规则引擎（根因枚举 + 指纹归一 + 证据提取 + 退出码/信号先验）+ 单测（每类正例/负例、多规则命中、unknown 兜底）
+- [x] `model/instance_crash_snapshot.go` 加列 + `model/instance_crash_stat.go` + AutoMigrate + 单测
+- [x] `grpc/crash_snapshot.go`：入库时同步分类 + upsert 统计；单测（事务内分类与统计一致）
+- [x] **分类/统计失败不阻断现场落库（m-8）**：统计 upsert 失败只降级该条的趋势计入，分类结果与现场照常落库 + 测试
+- [x] **分类器修正（m-4）**：补 `UnsupportedClassVersionError`（归 `jvm_args`）；`java.io.FileNotFoundException`
+      移出 `permission`（改归 `corrupt_data`，仅文案含 `Permission denied` 才判权限）+ 正负例测试
+- [x] 资源关联：`service/crash_correlation.go`（查 ProcessMetricSnapshot + 指标时序）+ 单测（窗口、无数据降级）
+- [x] `POST /crash-snapshots/reclassify` 批处理 + 审计 + 单测
+- [x] `service/crash_snapshot.go`：趋势查询 + 同类聚合；`router/crash_snapshot.go` 新端点 + 权限；MCP `instance_crash_trend`
+- [x] **总览按可访问实例收敛（m-3）**：`GET /crash-overview` 不再跨组泄露实例名与崩溃量 + 测试
+- [x] 前端卡片：根因标签 / 证据 / 证据链 / 趋势图 / 同类聚合 + i18n 中英 + 双主题
+- [x] 文档同步：ARCHITECTURE（列 + 统计表）、API.md、PRD 状态、CHANGELOG
 
 ## 4. 验收标准
 
-- 单测全绿：分类规则（OOM/端口/类找不到/参数/权限/段错误/数据损坏/未知）、指纹归一稳定、证据提取、退出码+信号先验、统计 upsert 幂等、资源关联窗口；前端 vitest：根因标签、证据展开、趋势图、同类聚合、空态
-- **真机（要真机过）**：① **OOM 崩溃**（低 `-Xmx` 后灌数据）→ 根因标 `oom`、证据含 `OutOfMemoryError`、关联显示崩前 RSS/堆顶满；② **端口占用**（两实例抢同端口）→ 根因 `port_in_use`、证据含 `Address already in use`；③ **类找不到 / JVM 参数错误** → 对应根因；④ **趋势不受 K=5 影响**：连崩 >5 次后列表只剩 5 条但趋势计数完整（>5）；⑤ **同类聚合**：同原因崩 N 次归为同一 Signature、计数 N；⑥ 历史快照重分类后根因/统计正确回填
-- 横切：FR-313 上报通道与 K=5 语义不回归；老 Worker 快照（无新字段）分类降级为 `unknown` 不报错
+- 单测全绿：分类正/负例（含 `UnsupportedClassVersionError` → `jvm_args`、**无** `Permission denied` 的
+  `FileNotFoundException` → `corrupt_data`）、指纹归一、统计 upsert/递减幂等、重分类幂等、
+  **统计失败仍保留现场与分类**、**总览按可访问实例收敛**
+- **真机（待真机验收）**：① 人为让实例崩溃（OOM/端口占用）→ 快照落库且根因正确、证据可读；
+  ② 同一异常多次崩溃 → 指纹一致、同类聚合计数正确；③ 趋势图与统计表一致；④ 重分类后趋势同步修正
+- 横切：崩溃快照既有上报链路不回归（`grpc` 用例）；`K=5` 滚动保留行为不变
 
-## 5. 风险 / 待定
-
-- **分类规则覆盖率与误报**：规则是启发式，可能误判。缓解：返回置信度 + 证据原文（人可复核），多规则命中记多标签；规则可持续迭代 + 重分类回补。
-- **FR-465 依赖（GC 关联）**：GC 指标尚未采集（`serverprobe_gc_*` 探针已暴露但未入库）。GC 关联部分**待 FR-465 落地后启用**，本 FR 先做 RSS/堆关联。
-- **统计表膨胀**：日粒度 + 根因/指纹维度，行数 = 实例 × 天 × 根因数。缓解：日粒度 + 保留窗口（如 90 天，复用设置键模式 `crash.stat_retention_days`）。
-- **多语言堆栈**：非 JVM 进程（Go/Rust 二进制，FR-441）崩溃日志形态不同（如 Go panic）。首版规则以 JVM + 通用 OS 错误为主，非 JVM panic 先归 `unknown`。
-- **与 FR-407 边界**：FR-407 做「受管进程运行期诊断」，FR-470 做「崩溃时点归类」，二者共用 `ProcessMetricSnapshot` 但用途不同，文档明确不重复。

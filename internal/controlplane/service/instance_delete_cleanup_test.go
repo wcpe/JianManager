@@ -103,7 +103,10 @@ func (f *blockingDeleteResyncWorker) StartInstance(context.Context, *workerpb.In
 func newDeleteCleanupEnv(t *testing.T) (*InstanceService, *cpgrpc.ClientPool, *model.Node, *model.Instance) {
 	t.Helper()
 	db := newCloneTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NetworkMember{}, &model.Task{}, &model.InstanceCrashSnapshot{}))
+	// Backups/InstanceSnapshot 必须迁移：删除实例的事务内要级联清理快照专属底链
+	// 并把被增量引用的底链降级（N-6/R9/R27），缺表会让删除整体报错。
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NetworkMember{}, &model.Task{},
+		&model.InstanceCrashSnapshot{}, &model.Backup{}, &model.InstanceSnapshot{}))
 	pool := cpgrpc.NewClientPool()
 	svc := NewInstanceService(db, nil, pool)
 	t.Cleanup(svc.Shutdown)

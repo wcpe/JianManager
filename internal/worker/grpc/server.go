@@ -359,6 +359,9 @@ func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstan
 // 完成。自动重启路径（direct/docker waitLoop 回调 Manager.Start）不经此处，因此熔断期间不会被
 // 自己解除；配置编辑（SetLaunchConfig）也不再隐式清熔断（复审项 6）。
 func (s *Server) StartInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
+	// N-3：先应用请求携带的生效限额，再启动。运行期配额登记的「待收紧限额」因此
+	// 不再依赖「启动前的幂等重注册一定成功」——重注册失败时限额仍随本请求送达。
+	s.applyActionLimits(req)
 	if reason, released := s.manager.ReleaseCircuitBreaker(req.InstanceUuid); released {
 		slog.Info("人工启动解除实例崩溃熔断", "instanceId", req.InstanceUuid, "wasReason", reason)
 	}
@@ -366,6 +369,18 @@ func (s *Server) StartInstance(ctx context.Context, req *workerpb.InstanceAction
 		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
 	}
 	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
+
+// applyActionLimits 把启动/重启请求携带的生效限额落到实例记账（N-3）。
+//
+// 语义边界：只在请求显式声明 with_limits 时才覆盖——0 是**有效值**（不限制），
+// 不能用「非 0 才应用」的写法，否则收紧后想解除（改回 0）就永远生效不了。
+// 未声明时保持既有 spec，兼容旧版 CP。
+func (s *Server) applyActionLimits(req *workerpb.InstanceActionRequest) {
+	if req == nil || !req.WithLimits {
+		return
+	}
+	s.manager.SetResourceLimits(req.InstanceUuid, req.CpuLimit, req.MemLimitMb)
 }
 
 // PreflightStartInstance 启动前同步预检（FR-314）：返回逐项检查聚合结果。success=全部通过，
@@ -398,6 +413,8 @@ func (s *Server) StopInstance(ctx context.Context, req *workerpb.InstanceActionR
 
 // RestartInstance 重启实例。
 func (s *Server) RestartInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
+	// N-3：重启同样应用请求携带的生效限额（CP 的重启路径也带限额）。
+	s.applyActionLimits(req)
 	if err := s.manager.Restart(req.InstanceUuid); err != nil {
 		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
 	}

@@ -75,7 +75,8 @@ func newImportEnv(t *testing.T) (*ImportServerService, *fakeImportWorker, *gorm.
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.Instance{}, &model.Node{}, &model.NodeJDK{},
-		&model.GroupInstance{}, &model.ServerRegistration{}, &model.NetworkMember{}))
+		&model.GroupInstance{}, &model.ServerRegistration{}, &model.NetworkMember{},
+		&model.Backup{}, &model.InstanceSnapshot{}))
 
 	pool := cpgrpc.NewClientPool()
 	instSvc := NewInstanceService(db, nil, pool)

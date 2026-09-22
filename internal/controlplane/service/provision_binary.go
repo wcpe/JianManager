@@ -48,6 +48,10 @@ const (
 	// binaryFetchTimeout 是一次二进制取件的自限超时。二进制可达数十 MB，取 30 分钟口径与
 	// ServerProbe 缓存下载/备份等长耗时操作一致，覆盖慢链路又不无限悬挂。
 	binaryFetchTimeout = 30 * time.Minute
+	// binaryDiskDigestTimeout 是版本视图里磁盘 sha256 比对的超时（FR-468 §2.5）。
+	// 比对要流式读整个二进制（上限 binaryDiskDigestMaxBytes），故比普通读文件宽；
+	// 但版本视图是交互式读接口，仍需比取件短得多，避免详情页被一次哈希拖住。
+	binaryDiskDigestTimeout = 2 * time.Minute
 )
 
 // 阶段进度常量（spec §3.3 的表格）。
@@ -92,6 +96,9 @@ type binaryFetchPlan struct {
 	NodePath    string
 	Filename    string
 	Executable  bool
+	// AssetID 制品库来源的资产 ID（FR-468）：非 0 时该 plan 可登记为版本绑定，
+	// 使重建能冻结版本、并提供受控升级/回滚。url / node_file 来源为 0。
+	AssetID uint
 }
 
 // binarySourceOf 取出请求里的制品来源（nil 视为未提供，由来源校验给出「缺少 kind」错误）。
@@ -116,10 +123,10 @@ func binarySourceOf(req ProvisionServerRequest) BinarySource {
 // beaconPlaceholderPlan 是来源解析失败时的占位取件计划。
 //
 // 为什么需要它：FR-441 的既有语义是「来源不合法 → 立刻失败且不建实例」，因为那类错误
-//（kind 缺失、url 非 https、node_file 越界）用户改一下请求就能修好。Beacon 预设的来源是
+// （kind 缺失、url 非 https、node_file 越界）用户改一下请求就能修好。Beacon 预设的来源是
 // **系统自动解析**的，失败原因多为「内网访问不了 GitHub 且制品库没有 beacon 制品」这类
 // 需要运维介入的环境问题——此时若按「同步段立即失败」处理，用户拿不到任何可观察痕迹
-//（没有实例、没有任务、没有站内信），只能反复重试。故此处建实例 + 登记任务，
+// （没有实例、没有任务、没有站内信），只能反复重试。故此处建实例 + 登记任务，
 // 把失败原因作为**任务终态 + 实例 DAMAGED 原因**呈现，保留 FR-441 的「取件失败 → 损毁可重建」闭环。
 //
 // 该 plan 永不真正下发：后台段在取件前先用 resolveErr 短路，不会发起下载。
@@ -132,8 +139,8 @@ func beaconPlaceholderPlan() *binaryFetchPlan {
 
 // resolveBeaconPresetSource 按 spec §4.1 的优先级解析 Beacon 制品来源：
 //
-//	1. 制品库已有 beacon 制品（最新版本）→ 优先；
-//	2. 回落 GitHub Releases（wcpe/Beacon）→ 取最新正式发布的 linux-amd64 产物。
+//  1. 制品库已有 beacon 制品（最新版本）→ 优先；
+//  2. 回落 GitHub Releases（wcpe/Beacon）→ 取最新正式发布的 linux-amd64 产物。
 //
 // 优先制品库的两个理由（spec §4.1）：内网环境往往访问不了 GitHub；且已入库的字节
 // **经过 sha256 校验**，可信度高于「刚从一个外部地址拉下来的东西」。
@@ -199,13 +206,14 @@ func (p *ProvisionService) resolveBeaconArtifactFromLibrary(requestBaseURL strin
 		SHA256:      strings.ToLower(strings.TrimSpace(asset.SHA256)),
 		Filename:    beaconAssetFilename(asset),
 		Executable:  true,
+		AssetID:     asset.ID,
 	}, fmt.Sprintf("制品库 asset#%d（%s）", asset.ID, asset.Filename), nil
 }
 
 // beaconAssetFilename 决定制品库来源的落盘名（同时决定启动命令）。
 //
 // 优先沿用资产原始名：运维上传 `beacon-1.1.0-linux-amd64` 时，落盘名与启动命令
-//（`./beacon-1.1.0-linux-amd64`）就与生产实例既有运行方式完全一致，运维不必二次核对。
+// （`./beacon-1.1.0-linux-amd64`）就与生产实例既有运行方式完全一致，运维不必二次核对。
 // 原始名不合预设形态时（如不带版本号的 `beacon-linux-amd64`）改用
 // `beacon-{asset.Version}-linux-amd64`；版本也缺失时用资产 ID 兜底，保证名始终合法可区分。
 func beaconAssetFilename(asset *model.Asset) string {
@@ -294,6 +302,8 @@ func (p *ProvisionService) ProvisionBinaryAsync(ctx context.Context, req Provisi
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
 			Update("provision_spec", string(specJSON)).Error
 	}
+	// FR-468：登记版本绑定（asset 来源记 assetID；url/node_file 记落盘名+摘要）。
+	p.recordBinaryBindingOnProvision(inst, plan, plan.AssetID)
 	p.markBinaryProvisioning(inst.ID)
 
 	title := fmt.Sprintf("二进制搭建 %s（%s）", inst.Name, sourceText)
@@ -358,6 +368,8 @@ func (p *ProvisionService) provisionBeaconPresetAsync(ctx context.Context, req P
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
 			Update("provision_spec", string(specJSON)).Error
 	}
+	// FR-468：登记版本绑定（Beacon 制品库来源记 assetID；GitHub/占位来源记落盘名+摘要）。
+	p.recordBinaryBindingOnProvision(inst, plan, plan.AssetID)
 	p.markBinaryProvisioning(inst.ID)
 
 	title := fmt.Sprintf("Beacon 搭建 %s（%s）", inst.Name, sourceText)
@@ -493,6 +505,7 @@ func (p *ProvisionService) resolveBinarySource(src BinarySource, requestBaseURL 
 			SHA256:      strings.ToLower(strings.TrimSpace(asset.SHA256)),
 			Filename:    filename,
 			Executable:  src.ExecutableOrDefault(),
+			AssetID:     asset.ID,
 		}, fmt.Sprintf("制品库 asset#%d（%s）", asset.ID, asset.Filename), nil
 
 	case BinarySourceURL:
@@ -838,15 +851,33 @@ func (p *ProvisionService) createBinaryInstance(req ProvisionServerRequest, plan
 
 // rebuildBinaryInstance 重建损毁的 binary 实例（FR-441 + FR-342 语义）：
 // 复用存库的搭建参数重跑取件到既有实例，不需再次提供来源；成功 → STOPPED，失败 → 仍 DAMAGED。
+//
+// FR-468 起**冻结版本**：优先读 InstanceBinaryBinding 取绑定版本重取，而非重新按优先级
+// 解析来源。旧行为（ADR-090 原文「重解析而非复用上次制品」）会在制品库出现更高版本时
+// 把重建变成一次静默升降级，运维无法预期；「吃到新版本」现由受控升级
+// （BinaryVersionService.Upgrade）显式承担，重建回归「恢复原状」职责。
+//
+// 逃生口：请求显式给了 binarySource（或 Beacon 用 default 占位外的显式来源）时仍以请求为准
+// ——那是有意换来源，不该被绑定冻结。
 func (p *ProvisionService) rebuildBinaryInstance(ctx context.Context, inst *model.Instance, req ProvisionServerRequest, createdBy uint, requestBaseURL string) (string, error) {
-	// Beacon 预设（FR-442）重建：来源重新按优先级解析（制品库 > GitHub），
-	// 而非复用上次选中的具体制品——否则运维把新版本传进制品库后，重建仍钉在旧版本上，
-	// 与「制品库优先」的意图相反。
 	beacon := IsBeaconCore(req.CoreType)
 	var plan *binaryFetchPlan
 	var sourceText string
 	var err error
-	if beacon {
+
+	binding, bindErr := p.instanceBinaryBinding(inst.ID)
+	if bindErr != nil {
+		return "", bindErr
+	}
+	if explicitBinarySourceProvided(req) {
+		// 显式覆盖：以请求为准（逃生口）。
+		plan, sourceText, err = p.resolveBinarySource(binarySourceOf(req), requestBaseURL)
+	} else if binding != nil && binding.CurrentAssetID != 0 {
+		// 冻结版本：绑定存在且来自制品库 → 固定取该 asset。
+		plan, err = p.binaryPlanFromBinding(binding, requestBaseURL)
+		sourceText = fmt.Sprintf("绑定版本 asset#%d", binding.CurrentAssetID)
+	} else if beacon {
+		// 无制品库绑定的 Beacon（GitHub 来源 / 早期实例）：保持既有「按优先级解析」行为。
 		plan, sourceText, err = p.resolveBeaconPresetSource(ctx, requestBaseURL)
 	} else {
 		plan, sourceText, err = p.resolveBinarySource(binarySourceOf(req), requestBaseURL)
@@ -862,12 +893,13 @@ func (p *ProvisionService) rebuildBinaryInstance(ctx context.Context, inst *mode
 	}
 	title := fmt.Sprintf("重建 %s（%s，%s）", inst.Name, kindText, sourceText)
 	instCopy := *inst
-	// Beacon 重建时落盘名可能随解析到的版本变化（新版本 = 新文件名）：startCommand 须同步更新，
-	// 否则实例仍指向旧文件名，重建成功后一启动就是 command not found。
-	// 仅在用户未显式指定启动命令时更新——显式命令是运维的明确意图，不该被系统改写。
-	beaconStartCommand := ""
-	if beacon && strings.TrimSpace(req.StartCommand) == "" {
-		beaconStartCommand = deriveBinaryStartCommand(plan.Filename)
+	// 落盘名可能随取件计划变化：启动命令须同步替换旧文件名引用，否则实例仍指向旧文件名，
+	// 重建成功后一启动就是 command not found。
+	// 仅在启动命令确实引用旧文件名时替换——`./run.sh` 这类不含旧名的命令是运维的明确意图，
+	// 不该被系统改写。
+	binaryStartCommand, commandRewritten := replaceBinaryTokenInStartCommand(inst.StartCommand, bindingFilenameOf(binding, inst), plan.Filename)
+	if !commandRewritten {
+		binaryStartCommand = ""
 	}
 	taskID := p.tasks.RunAsync(RunSpec{
 		NodeID: inst.NodeID, InstanceID: inst.ID, Kind: model.TaskKindBinaryProvision,
@@ -882,10 +914,12 @@ func (p *ProvisionService) rebuildBinaryInstance(ctx context.Context, inst *mode
 		}
 		stage(binaryStageDeriveCmd, "派生启动命令…")
 		updates := map[string]any{"status": model.InstanceStatusStopped, "status_reason": ""}
-		if beaconStartCommand != "" {
-			updates["start_command"] = beaconStartCommand
+		if binaryStartCommand != "" {
+			updates["start_command"] = binaryStartCommand
 		}
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).Updates(updates).Error
+		// FR-468：重建完成后刷新绑定的落盘名/摘要（冻结版本的实例可能曾被人手换过文件）。
+		p.refreshBindingAfterRebuild(inst.ID, plan)
 		slog.Info("二进制实例重建完成", "instance", inst.Name, "instanceId", inst.ID, "preset", kindText)
 		return "", nil
 	})
@@ -893,6 +927,22 @@ func (p *ProvisionService) rebuildBinaryInstance(ctx context.Context, inst *mode
 		return "", errors.New("登记重建任务失败")
 	}
 	return taskID, nil
+}
+
+// bindingFilenameOf 取绑定的落盘名作为「旧文件名」；无绑定时由既有启动命令兜底解析。
+//
+// 兜底：命令形如 `./xxx`（单 token 相对路径）时取 `xxx`，使未登记绑定的早期实例
+// 在重建换名时同样能正确改写启动命令。
+func bindingFilenameOf(binding *model.InstanceBinaryBinding, inst *model.Instance) string {
+	if binding != nil && strings.TrimSpace(binding.CurrentFilename) != "" {
+		return binding.CurrentFilename
+	}
+	cmd := strings.TrimSpace(inst.StartCommand)
+	if !strings.HasPrefix(cmd, "./") {
+		return ""
+	}
+	first := strings.Fields(cmd)[0]
+	return strings.TrimPrefix(first, "./")
 }
 
 // markBinaryInstanceDamaged 把实例置为损毁态并标注「搭建未完成」原因

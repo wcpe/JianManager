@@ -15,7 +15,8 @@ func newRegTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.ServerRegistration{}, &model.Network{}, &model.NetworkMember{}, &model.GroupInstance{}))
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.ServerRegistration{}, &model.Network{}, &model.NetworkMember{}, &model.GroupInstance{},
+		&model.Backup{}, &model.InstanceSnapshot{}))
 	return db
 }
 

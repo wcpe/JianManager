@@ -156,8 +156,17 @@ type Instance struct {
 	MemLimitMB int64 `gorm:"default:0" json:"memLimitMb"`
 	// DiskLimitMB 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入（依赖存储驱动）（FR-079）。
 	DiskLimitMB int64 `gorm:"default:0" json:"diskLimitMb"`
-	AutoStart   bool  `gorm:"default:false" json:"autoStart"`
-	AutoRestart bool  `gorm:"default:true" json:"autoRestart"`
+	// ThrottleCPULimit / ThrottleMemLimitMB 是**运行期配额强制**（FR-467 throttle 档）登记的
+	// 「待收紧限额」：docker 的 cgroup 限额只能在创建容器时注入，运行期收紧必须下次启动生效，
+	// 故此处必须持久化该意图——否则「已登记限流」只是一条审计记录，重启后无人读取，
+	// 限流永不生效（M-1：审计记成功却没有任何持久化意图）。
+	//
+	// 语义：0 表示无待收紧项；非 0 时启动/重建容器时与 CPULimit/MemLimitMB 取**较小值**合并
+	// （收紧是单向的，永不因待收紧项而放宽运维显式配置的限额）。
+	ThrottleCPULimit   float64 `gorm:"default:0" json:"throttleCpuLimit"`
+	ThrottleMemLimitMB int64   `gorm:"default:0" json:"throttleMemLimitMb"`
+	AutoStart          bool    `gorm:"default:false" json:"autoStart"`
+	AutoRestart        bool    `gorm:"default:true" json:"autoRestart"`
 	// Deprecated: RCON 已退役（FR-067，见 ADR-016）——治理改走 ServerProbe 探针。
 	// 列保留仅为迁移安全（不破坏既有库与历史实例数据），新实例不再写入、读取方不再使用。
 	RCONPort     int    `gorm:"default:0" json:"rconPort"`

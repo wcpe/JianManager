@@ -399,6 +399,57 @@ func backupChainRestoreArgs(chain []model.Backup) ([]string, []string, []string)
 	return relPaths, storageKeys, checksums
 }
 
+// RegisterFull 登记一条**全量**备份记录（Pending），不启动任何后台执行（FR-466）。
+//
+// 用途：快照服务需要「先登记 Backup、再由自己的任务驱动执行」——因为快照的任务阶段
+// 文案（停服 → 建回滚前快照 → 回放数据 → 校验）与备份任务不同，复用 CreateWithOptions
+// 会注册出第二个任务（同一份工作出现两条任务记录）。归档/回放实现仍是同一份。
+//
+// Origin 固定为 BackupOriginSnapshot：快照底链必须豁免 backup.retention_days 裁剪
+// （见 pruneExpiredOnce 注释），否则快照会沦为指向软删行的死链。
+func (s *BackupService) RegisterFull(instanceID uint, name string) (*model.Backup, error) {
+	backup := &model.Backup{
+		InstanceID: instanceID,
+		Name:       name,
+		Type:       model.BackupTypeManual,
+		Mode:       model.BackupModeFull,
+		Status:     model.BackupStatusPending,
+		Origin:     model.BackupOriginSnapshot,
+	}
+	if err := s.db.Create(backup).Error; err != nil {
+		return nil, fmt.Errorf("创建备份失败: %w", err)
+	}
+	return backup, nil
+}
+
+// ExecuteBackup 同步执行一条已登记的全量备份（FR-466 快照创建调用）。
+// stage 为 nil 时不上报阶段。返回 error 表示归档失败（Backup 记录状态已在内部置 failed）。
+func (s *BackupService) ExecuteBackup(backup *model.Backup, stage func(int, string)) error {
+	return s.executeBackup(backup, stage)
+}
+
+// ExecuteRestore 同步回放一条已完成的备份及其链（FR-466 快照回滚调用）。
+//
+// 运行态守卫**刻意不做**：快照回滚的语义是「由快照服务负责停服编排」，停服在调用方
+// 完成后再调本函数；若此处再拦一次，会出现「已停服却因状态收敛滞后被拒」的假失败。
+// 调用方（SnapshotService.Rollback）必须保证实例已停。
+func (s *BackupService) ExecuteRestore(backup *model.Backup, stage func(int, string)) error {
+	chain, err := s.resolveChain(backup)
+	if err != nil {
+		return err
+	}
+	return s.executeRestore(backup, chain, stage)
+}
+
+// ResolveRestoreChain 解析备份的完整回放链（全量基在前），供快照回滚预检与测试断言。
+func (s *BackupService) ResolveRestoreChain(backupID uint) ([]model.Backup, error) {
+	backup, err := s.GetByID(backupID)
+	if err != nil {
+		return nil, err
+	}
+	return s.resolveChain(backup)
+}
+
 // Delete 删除备份。被增量子备份引用时拒绝，避免割裂备份链使后续增量不可恢复。
 func (s *BackupService) Delete(backupID uint) error {
 	var children int64
@@ -527,6 +578,11 @@ func (s *BackupService) runRetentionLoop(stop <-chan struct{}) {
 // 删除 CreatedAt 早于 now-N天 的备份。retentionDays<=0 视为不裁剪（保留全部）。
 // 逐个走 Delete（含删文件 + 拒删被增量子链引用者，保链完整）；单条失败仅记录不中断。
 // 返回成功删除的条数，便于测试断言。
+//
+// **快照底链豁免**（FR-466 §2.2）：origin=snapshot 的备份不参与本策略裁剪。
+// 快照是全量自包含的时间点，其生命周期只能由 snapshot.retention_days 决定；
+// 若让 backup.retention_days（默认 14）先裁掉它，快照会变成指向软删行的死链，
+// 而列表仍显示「可回滚」，直到用户点下去才发现失败。
 func (s *BackupService) pruneExpiredOnce() int {
 	days := s.retentionDays()
 	if days <= 0 {
@@ -535,7 +591,8 @@ func (s *BackupService) pruneExpiredOnce() int {
 	cutoff := time.Now().AddDate(0, 0, -days)
 
 	var expired []model.Backup
-	if err := s.db.Where("created_at < ?", cutoff).Order("created_at ASC, id ASC").Find(&expired).Error; err != nil {
+	if err := s.db.Where("created_at < ? AND (origin IS NULL OR origin <> ?)", cutoff, model.BackupOriginSnapshot).
+		Order("created_at ASC, id ASC").Find(&expired).Error; err != nil {
 		slog.Error("查询超期备份失败", "err", err)
 		return 0
 	}

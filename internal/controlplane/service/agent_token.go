@@ -41,13 +41,25 @@ const (
 	AgentActionInstanceSearch             = "agent.instance_search"
 	AgentActionInstanceGetEnv             = "agent.instance_get_env"
 	AgentActionInstanceListCrashSnapshots = "agent.instance_list_crash_snapshots"
-	AgentActionInstanceCreate             = "agent.instance_create"
-	AgentActionInstanceProvisionServer    = "agent.instance_provision_server"
-	AgentActionInstanceImportInspect      = "agent.instance_import_inspect"
-	AgentActionInstanceImport             = "agent.instance_import"
-	AgentActionInstanceClone              = "agent.instance_clone"
-	AgentActionInstanceRebuild            = "agent.instance_rebuild"
-	AgentActionInstanceUpdateConfig       = "agent.instance_update_config"
+	// FR-470：崩溃趋势读（同类聚合/根因/日粒度），观测面只读。
+	AgentActionInstanceCrashTrend      = "agent.instance_crash_trend"
+	AgentActionInstanceCreate          = "agent.instance_create"
+	AgentActionInstanceProvisionServer = "agent.instance_provision_server"
+	AgentActionInstanceImportInspect   = "agent.instance_import_inspect"
+	AgentActionInstanceImport          = "agent.instance_import"
+	AgentActionInstanceClone           = "agent.instance_clone"
+	AgentActionInstanceRebuild         = "agent.instance_rebuild"
+	AgentActionInstanceUpdateConfig    = "agent.instance_update_config"
+	// FR-468：实例二进制/Beacon 版本读取与受控升级/一级回滚。
+	AgentActionInstanceBinaryVersionGet = "agent.instance_binary_version_get"
+	AgentActionInstanceBinaryUpgrade    = "agent.instance_binary_upgrade"
+	AgentActionInstanceBinaryRollback   = "agent.instance_binary_rollback"
+	// FR-467：实例运行期配额与实时用量读取。
+	AgentActionInstanceQuotaStatus = "agent.instance_quota_status"
+	// FR-466：实例整机快照列表 / 创建 / 一键回滚。
+	AgentActionInstanceSnapshotList     = "agent.instance_snapshot_list"
+	AgentActionInstanceSnapshotCreate   = "agent.instance_snapshot_create"
+	AgentActionInstanceSnapshotRollback = "agent.instance_snapshot_rollback"
 	// 实例标签维护（FR-440）：与 UpdateConfig 分离为独立动作，使打标签与改配置各有清晰授权面
 	// （UpdateConfig 走 instance.configure，本动作走 instance.write，语义更轻）。
 	AgentActionInstanceUpdateTags  = "agent.instance_update_tags"
