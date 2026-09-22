@@ -59,6 +59,9 @@ type InstanceTelemetry struct {
 	CPULoad       float64
 	UptimeSeconds float64
 	Worlds        map[string]WorldStat
+	// GC（FR-465）：cumulative counter（跨收集器求和），仅探针提供。
+	GCCountTotal int64
+	GCTimeMillis float64
 
 	// 基础信息（探针 / SLP / Query 任一命中）。
 	Motd               string
@@ -109,6 +112,8 @@ func Orchestrate(probe *ProbeSnapshot, slp *SLPSnapshot, query *QuerySnapshot) *
 		t.CPULoad = probe.SystemCPULoad
 		t.UptimeSeconds = probe.UptimeSeconds
 		t.Worlds = probe.Worlds
+		t.GCCountTotal = probe.GCCountTotal
+		t.GCTimeMillis = probe.GCTimeMillis
 		// 探针无最大人数/MOTD/版本/名单；仅在线人数可用。
 		t.PlayersOnline = probe.PlayersOnline
 		t.PlayersOnlineAvailable = true

@@ -175,9 +175,15 @@ type AlertEvent struct {
 	Direction string `gorm:"type:varchar(8)" json:"direction,omitempty"`
 	Message   string `gorm:"type:varchar(512)" json:"message"`
 	// Count 聚合计数：去抖窗口内该告警被触发的次数（≥1）。
-	Count    int       `gorm:"default:1" json:"count"`
-	Resolved bool      `gorm:"default:false" json:"resolved"`
-	FiredAt  time.Time `json:"firedAt"`
+	Count    int  `gorm:"default:1" json:"count"`
+	Resolved bool `gorm:"default:false" json:"resolved"`
+	// FiredAt 触发时间。索引 `idx_alert_events_fired_at` 服务 SLO 的窗口聚合
+	// （`sloEventQuery`：`e.fired_at >= ? AND e.fired_at <= ? AND e.trigger_type IN ?`，
+	// 见 service/slo.go）：无索引时该查询对事件表**全表扫 + 排序**，而 SLO 是常驻读路径
+	// （前端 60s 轮询 × platform/node/instance 三个维度），事件表又只增不减（无 TTL）。
+	// M-2 修复：本轮新增的 SLO 查询形态引入了这条访问路径，故随模型补索引，由
+	// AutoMigrate 在存量库上补建（纯新增，不覆盖既有 idx_alert_events_rule_id/dedup_key）。
+	FiredAt time.Time `gorm:"index:idx_alert_events_fired_at" json:"firedAt"`
 	// LastFiredAt 最近一次复发时间（聚合时更新）。
 	LastFiredAt *time.Time `json:"lastFiredAt"`
 	ResolvedAt  *time.Time `json:"resolvedAt"`

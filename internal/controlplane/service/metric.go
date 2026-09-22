@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +74,10 @@ type MetricService struct {
 	// lastNet 记录每节点上次心跳的累计网络字节与时刻，用于据相邻差推导速率。
 	netMu   sync.Mutex
 	lastNet map[string]netCounters
+
+	// lastGC 记录每实例上次心跳的累计 GC counter（FR-465），用于据相邻差推导 GC 速率。
+	gcMu   sync.Mutex
+	lastGC map[string]gcCounters
 }
 
 // netCounters 某节点上次心跳的累计网络字节快照。
@@ -83,9 +86,16 @@ type netCounters struct {
 	ts         time.Time
 }
 
+// gcCounters 某实例上次心跳的累计 GC counter 快照（FR-465）。
+type gcCounters struct {
+	count  int64
+	millis float64
+	ts     time.Time
+}
+
 // NewMetricService 创建时序指标服务。
 func NewMetricService(db *gorm.DB) *MetricService {
-	return &MetricService{db: db, lastNet: map[string]netCounters{}}
+	return &MetricService{db: db, lastNet: map[string]netCounters{}, lastGC: map[string]gcCounters{}}
 }
 
 // ResolveInstanceUUID 由数值实例 ID 取 UUID，供进程 TOPN 查询过滤。
@@ -108,6 +118,59 @@ func (s *MetricService) NodeExists(uuid string) (bool, error) {
 		return false, err
 	}
 	return n > 0, nil
+}
+
+// NodeByUUID 按 UUID 取节点（FR-463/464：容量预测取名称与容量快照）。不存在返回 found=false。
+func (s *MetricService) NodeByUUID(uuid string) (model.Node, bool) {
+	var node model.Node
+	err := s.db.Where("uuid = ?", uuid).First(&node).Error
+	if err == nil {
+		return node, true
+	}
+	return model.Node{}, false
+}
+
+// NodeIDByUUID 由节点 UUID 取数值 ID（告警事件目标 ID 用）；不存在返回 0。
+func (s *MetricService) NodeIDByUUID(uuid string) (uint, error) {
+	var node model.Node
+	err := s.db.Select("id").Where("uuid = ?", uuid).First(&node).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return node.ID, nil
+}
+
+// InstanceByID 由数值 ID 取实例（FR-464：容量趋势告警文案取名称）。不存在返回 found=false。
+func (s *MetricService) InstanceByID(id uint) (model.Instance, bool) {
+	var inst model.Instance
+	err := s.db.First(&inst, id).Error
+	if err == nil {
+		return inst, true
+	}
+	return model.Instance{}, false
+}
+
+// ResolveInstanceUUIDs 批量由数值 ID 取实例 UUID（FR-463 平台级 SLO 的可见集收敛）。
+// 输入为 nil 时返回 nil（表示不收敛）；查不到的 ID 不出现在结果中。
+func (s *MetricService) ResolveInstanceUUIDs(ids []uint) ([]string, error) {
+	if ids == nil {
+		return nil, nil
+	}
+	out := make([]string, 0, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var instances []model.Instance
+	if err := s.db.Select("uuid").Where("id IN ?", ids).Find(&instances).Error; err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		out = append(out, inst.UUID)
+	}
+	return out, nil
 }
 
 // ResolveInstanceID 由实例 UUID 取数值 ID（供 RBAC 校验）；不存在返回 found=false。
@@ -251,6 +314,23 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 			if im.CpuLoad >= 0 {
 				samples = append(samples, instSample(model.MetricInstCPUPct, "pct", ptr(im.CpuLoad*100)))
 			}
+			// GC 速率（FR-465）：探针累计 counter（次数/耗时）据相邻心跳差推导速率。
+			// 差为负（实例重启 counter 归零）→ 跳过该拍，不产生负速率假尖峰；首拍无前值同样跳过。
+			// m3 修复：读前值与写现值放进**同一段**临界区（与上方 lastNet 同构），
+			// 避免两段临界区之间插入其它路径的更新，导致同一心跳被重复差值或前值错位。
+			s.gcMu.Lock()
+			if prevGC, ok := s.lastGC[iid]; ok {
+				if dt := now.Sub(prevGC.ts).Seconds(); dt > 0 {
+					if dc := im.GcCountTotal - prevGC.count; dc >= 0 {
+						samples = append(samples, instSample(model.MetricInstGCCount, "count_per_sec", ptr(float64(dc)/dt)))
+					}
+					if dm := im.GcTimeMillis - prevGC.millis; dm >= 0 {
+						samples = append(samples, instSample(model.MetricInstGCTime, "ms_per_sec", ptr(dm/dt)))
+					}
+				}
+			}
+			s.lastGC[iid] = gcCounters{count: im.GcCountTotal, millis: im.GcTimeMillis, ts: now}
+			s.gcMu.Unlock()
 			for _, w := range im.Worlds {
 				if w.Name == "" {
 					continue
@@ -265,7 +345,12 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 				)
 			}
 		} else {
-			samples = append(samples, instSample(model.MetricInstTPS, "tps", nil))
+			// 探针不可用：TPS 与 GC 速率均写 NULL 断点（缺测不补假值，FR-465）。
+			samples = append(samples,
+				instSample(model.MetricInstTPS, "tps", nil),
+				instSample(model.MetricInstGCCount, "count_per_sec", nil),
+				instSample(model.MetricInstGCTime, "ms_per_sec", nil),
+			)
 		}
 
 		// 在线人数：仅当**在线人数本身可用**时落点，三源皆无/该指标缺测 → NULL 断点（FR-447）。
@@ -719,23 +804,54 @@ func (s *MetricService) overviewTotals(now time.Time) (OverviewTotals, error) {
 }
 
 // latestSum 取某 scope+metric_key 下每条序列在 since 之后的最新非空样本并求和（如总在线人数）。
+//
+// N-8 修复：改为**单条聚合 SQL**。原实现先查序列表、再对每条序列各发一条
+// `ORDER BY ts DESC LIMIT 1`，查询数随序列数线性增长；本函数挂在 `/metrics/overview` 上，
+// 而总览页每 10s 轮询一次（`useMetricOverview` 的 `refetchInterval`），故序列数会直接放大成
+// 持续往返成本。这里用「按序列取 MAX(ts)、再自联接回该行取 value」的经典写法，一条 SQL 搞定。
+//
+// 自联接而非窗口函数：SQLite 在 3.25 才支持窗口函数，而本项目只支持 sqlite 驱动
+// （`database.New` 仅 sqlite 分支），直写 `MAX(ts)`+自联接在所有版本上都可用。
+//
+// B-1 修复：自联接的 ON 条件必须锚定**唯一行**，不能是 `latest.mts = v.ts` 这样的等值匹配。
+// 原本按 ts 匹配时，同一序列同一 ts 有几行就命中几行，外层 SUM 全部计入 → 在线人数被放大。
+// 这不是理论风险：`metric_sample_raws` 无任何唯一约束（仅 id 自增主键）、
+// `idx_metric_raw_series_ts` 是普通索引、`Ingest` 对样本纯追加且无去重，
+// 心跳重放/重试即产生同 (series_id, ts) 多行。
+//
+// 「取一行」的写法有三种，只有第三种同时满足「按 ts 取最新」与「同刻确定性」：
+//   - 只按 `MAX(id)` 锚定（`latest.mid = v.id`）**不够**——它依据写入先后而非 ts：心跳重试
+//     可能让**更旧**的拍后到，此时 id 最大的那行 ts 更旧，会把陈旧值当当前值报出
+//     （实测：最新拍 7 + 陈旧拍 3 后到 → 错报 3）。
+//   - 同时要求 `latest.mts = v.ts AND latest.mid = v.id` **更糟**——但两个 MAX 是独立聚合，
+//     (mts, mid) 未必取自同一行；乱序到达时没有任何行同时满足两个条件 → 该序列 SUM 丢成 0。
+//   - 故：先用 `MAX(ts)` 收敛到「最新拍」（保留原 JOIN），再用相关子查询在该 ts 内取
+//     `MAX(id)` 决胜（`v.id = (SELECT MAX(v3.id) … v3.ts = v.ts)`）。同刻多行只可能是重放，
+//     取最后写入者才是最新观测。子查询只对「已是最新拍的候选行」求值，命中
+//     `(series_id, ts)` 索引；仍是**单条** SQL，不恢复 N+1。
+//
+// 与修复前的时间语义完全一致，只把「同刻多行全取」收紧为「同刻取最后一次观测」。
 func (s *MetricService) latestSum(scope model.MetricScope, metricKey string, since time.Time) (float64, error) {
-	var series []model.MetricSeries
-	if err := s.db.Where("scope = ? AND metric_key = ?", scope, metricKey).Find(&series).Error; err != nil {
+	var sum *float64
+	err := s.db.Raw(
+		"SELECT SUM(v.value) FROM metric_sample_raws AS v "+
+			"JOIN metric_series AS s ON s.id = v.series_id "+
+			"JOIN (SELECT v2.series_id AS sid, MAX(v2.ts) AS mts FROM metric_sample_raws AS v2 "+
+			"JOIN metric_series AS s2 ON s2.id = v2.series_id "+
+			"WHERE s2.scope = ? AND s2.metric_key = ? AND v2.value IS NOT NULL AND v2.ts >= ? "+
+			"GROUP BY v2.series_id) AS latest ON latest.sid = v.series_id AND latest.mts = v.ts "+
+			"WHERE s.scope = ? AND s.metric_key = ? AND v.value IS NOT NULL "+
+			"AND v.id = (SELECT MAX(v3.id) FROM metric_sample_raws AS v3 "+
+			"WHERE v3.series_id = v.series_id AND v3.value IS NOT NULL AND v3.ts = v.ts)",
+		string(scope), metricKey, since.UTC(), string(scope), metricKey,
+	).Scan(&sum).Error
+	if err != nil {
 		return 0, err
 	}
-	var sum float64
-	for _, se := range series {
-		var row model.MetricSampleRaw
-		err := s.db.Where("series_id = ? AND value IS NOT NULL AND ts >= ?", se.ID, since).
-			Order("ts DESC").First(&row).Error
-		if err == nil && row.Value != nil {
-			sum += *row.Value
-		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return 0, err
-		}
+	if sum == nil {
+		return 0, nil
 	}
-	return sum, nil
+	return *sum, nil
 }
 
 // overviewBucket 据查询档位选择跨序列对齐的桶大小（raw 用 1m 把 30s 样本并桶）。
@@ -750,67 +866,70 @@ func overviewBucket(res string) time.Duration {
 	}
 }
 
+// overviewTrendSource 据查询档位选择样本表与列名。返回 (表名, 值列, 时间列)。
+// 与 queryPoints 的三档选择保持一致（raw→metric_sample_raws、5m→metric_rollup5ms、1h→metric_rollup1hs）。
+func overviewTrendSource(namer interface{ TableName(string) string }, res string) (string, string, string) {
+	switch res {
+	case "1h":
+		return namer.TableName("MetricRollup1h"), "avg", "bucket_ts"
+	case "5m":
+		return namer.TableName("MetricRollup5m"), "avg", "bucket_ts"
+	default: // raw
+		return namer.TableName("MetricSampleRaw"), "value", "ts"
+	}
+}
+
 // aggregateTrend 把某 scope+metric_key 下的所有序列按档位桶对齐后跨序列聚合成一条曲线。
 // 每条序列在同一桶内先取其样本均值作代表值，再按 sum/avg 跨序列合并。
+//
+// N-8 修复：改为**单条聚合 SQL**（原实现先查序列表、再对每条序列调 queryPoints，
+// 且 raw 档 queryPoints 每序列还多发一条 COUNT——查询数随序列数线性增长）。
+// 两级聚合语义与原内存实现严格一致：
+//   - 内层 `GROUP BY series_id, b`：每条序列在同一对外桶内的样本求均值作代表值（对应原 perSeries）；
+//   - 外层 `GROUP BY b`：跨序列按 sum/avg 合并（对应原 combined）。
+//
+// 时间分桶用 `strftime('%s', <ts>) / <桶秒>`（**不是**把 `MIN(<ts>)` 截断到桶起点）：
+// 存储文本在 raw 档带纳秒+时区偏移、rollup 档为分钟对齐，直接截断文本会与 Go 侧
+// `p.TS.Truncate(bucket)` 得出不同结果；`strftime→unix 秒→整除` 才与 Go 侧严格一致。
+// 点位时间取该桶最早样本时刻——与 Truncate 截断是同一个值（桶内任意样本都落在同一桶起点）。
+//
+// 注意：`bucketSec` 与聚合函数名（SUM/AVG）由本函数按 `res`/`sum` 生成，不接受外部输入。
 func (s *MetricService) aggregateTrend(scope model.MetricScope, metricKey, unit string, from, to time.Time, res string, sum bool) (OverviewTrend, error) {
 	bucket := overviewBucket(res)
-	var series []model.MetricSeries
-	if err := s.db.Where("scope = ? AND metric_key = ?", scope, metricKey).Find(&series).Error; err != nil {
+	valueTable, valueCol, tsCol := overviewTrendSource(s.db.NamingStrategy, res)
+	bucketSec := int64(bucket.Seconds())
+
+	outerAgg := "SUM(rep)"
+	if !sum {
+		outerAgg = "AVG(rep)"
+	}
+	sqlText := fmt.Sprintf(
+		"SELECT b, %s AS val, ts_unix FROM ("+
+			"SELECT (CAST(strftime('%%s', v.%s) AS INTEGER) / %d) AS b, "+
+			"AVG(v.%s) AS rep, CAST(strftime('%%s', MIN(v.%s)) AS INTEGER) AS ts_unix "+
+			"FROM %s AS v JOIN metric_series AS s ON s.id = v.series_id "+
+			"WHERE s.scope = ? AND s.metric_key = ? AND v.%s >= ? AND v.%s <= ? AND v.%s IS NOT NULL "+
+			"GROUP BY s.id, b"+
+			") GROUP BY b ORDER BY b",
+		outerAgg, tsCol, bucketSec, valueCol, tsCol, valueTable, tsCol, tsCol, valueCol,
+	)
+
+	var rows []struct {
+		B      int64   `gorm:"column:b"`
+		Val    float64 `gorm:"column:val"`
+		TSUnix int64   `gorm:"column:ts_unix"`
+	}
+	if err := s.db.Raw(sqlText, string(scope), metricKey, from.UTC(), to.UTC()).Scan(&rows).Error; err != nil {
 		return OverviewTrend{}, err
 	}
 
-	type acc struct {
-		sum float64
-		n   int
-	}
-	combined := map[int64]*acc{}
-	for _, se := range series {
-		pts, err := s.queryPoints(se.ID, res, from, to)
-		if err != nil {
-			return OverviewTrend{}, err
-		}
-		perSeries := map[int64]*acc{}
-		for _, p := range pts {
-			if p.Avg == nil {
-				continue
-			}
-			b := p.TS.Truncate(bucket).UnixNano()
-			a := perSeries[b]
-			if a == nil {
-				a = &acc{}
-				perSeries[b] = a
-			}
-			a.sum += *p.Avg
-			a.n++
-		}
-		for b, a := range perSeries {
-			rep := a.sum / float64(a.n)
-			g := combined[b]
-			if g == nil {
-				g = &acc{}
-				combined[b] = g
-			}
-			g.sum += rep
-			g.n++
-		}
-	}
-
-	keys := make([]int64, 0, len(combined))
-	for b := range combined {
-		keys = append(keys, b)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-
-	points := make([]SeriesPoint, 0, len(keys))
-	for _, b := range keys {
-		g := combined[b]
-		v := g.sum
-		if !sum && g.n > 0 {
-			v = g.sum / float64(g.n)
-		}
-		val := v
-		ts := time.Unix(0, b).UTC()
-		points = append(points, SeriesPoint{TS: ts, Avg: &val, Min: &val, Max: &val})
+	points := make([]SeriesPoint, 0, len(rows))
+	for _, r := range rows {
+		val := r.Val
+		points = append(points, SeriesPoint{
+			TS:  time.Unix(r.TSUnix, 0).UTC().Truncate(bucket),
+			Avg: &val, Min: &val, Max: &val,
+		})
 	}
 	return OverviewTrend{MetricKey: metricKey, Unit: unit, Points: points}, nil
 }

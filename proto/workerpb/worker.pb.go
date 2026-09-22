@@ -1048,8 +1048,13 @@ type InstanceMetricSample struct {
 	// numplayers（或不可解析）时该位为 false：CP 据此落 NULL 断点，绝不把「缺测」伪装成 0 在线。
 	// 老 Worker 不置该位（false），CP 侧对「探针可用」的新老样本另有兼容判定。
 	PlayersOnlineAvailable bool `protobuf:"varint,23,opt,name=players_online_available,json=playersOnlineAvailable,proto3" json:"players_online_available,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// gc_count_total / gc_time_millis 为 ServerProbe 暴露的 GC cumulative counter（FR-465），
+	// 跨 gc 收集器求和。CP 侧据相邻心跳差推导速率（重启归零拍跳过），故这里存累计值而非速率。
+	// 字段号 24/25：13/14 已被预留的 motd/version 占用（spec 原稿写 13/14，实现按现状顺延）。
+	GcCountTotal  int64   `protobuf:"varint,24,opt,name=gc_count_total,json=gcCountTotal,proto3" json:"gc_count_total,omitempty"`  // Σ serverprobe_gc_count_total{gc=...}
+	GcTimeMillis  float64 `protobuf:"fixed64,25,opt,name=gc_time_millis,json=gcTimeMillis,proto3" json:"gc_time_millis,omitempty"` // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *InstanceMetricSample) Reset() {
@@ -1241,6 +1246,20 @@ func (x *InstanceMetricSample) GetPlayersOnlineAvailable() bool {
 		return x.PlayersOnlineAvailable
 	}
 	return false
+}
+
+func (x *InstanceMetricSample) GetGcCountTotal() int64 {
+	if x != nil {
+		return x.GcCountTotal
+	}
+	return 0
+}
+
+func (x *InstanceMetricSample) GetGcTimeMillis() float64 {
+	if x != nil {
+		return x.GcTimeMillis
+	}
+	return 0
 }
 
 // ProcessMetricSample 受管实例进程 TOPN 快照（FR-170）。
@@ -16660,7 +16679,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\"N\n" +
 	"\x1cDisposeOrphanRuntimeResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xb6\x06\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x82\a\n" +
 	"\x14InstanceMetricSample\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12'\n" +
 	"\x0fprobe_available\x18\x02 \x01(\bR\x0eprobeAvailable\x12\x10\n" +
@@ -16688,7 +16707,9 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\rslp_available\x18\x14 \x01(\bR\fslpAvailable\x12'\n" +
 	"\x0fquery_available\x18\x15 \x01(\bR\x0equeryAvailable\x120\n" +
 	"\x14player_names_partial\x18\x16 \x01(\bR\x12playerNamesPartial\x128\n" +
-	"\x18players_online_available\x18\x17 \x01(\bR\x16playersOnlineAvailable\"\xe4\x02\n" +
+	"\x18players_online_available\x18\x17 \x01(\bR\x16playersOnlineAvailable\x12$\n" +
+	"\x0egc_count_total\x18\x18 \x01(\x03R\fgcCountTotal\x12$\n" +
+	"\x0egc_time_millis\x18\x19 \x01(\x01R\fgcTimeMillis\"\xe4\x02\n" +
 	"\x13ProcessMetricSample\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x10\n" +
 	"\x03pid\x18\x02 \x01(\x05R\x03pid\x12\x12\n" +

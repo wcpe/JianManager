@@ -14,6 +14,8 @@ import { RangePicker, type MetricRange } from '@jianmanager/ui'
 import { summarizeInstances } from '@/lib/instance-summary'
 import { summarizeNodes } from '@/lib/node-summary'
 import { tallyBy, summarizeProbeReachability, type DistBucket } from '@/lib/platform-stats'
+import { SLOSection } from '@/components/metrics/SLOSection'
+import { PlayerTrendCard } from '@/components/metrics/PlayerTrendCard'
 
 const ROLE_PLATFORM_ADMIN = 10
 
@@ -183,6 +185,12 @@ export default function StatisticsPage() {
         <DistPanel title={t('statistics.distByOs')} buckets={nodeByOs} empty={t('nodes.empty')} />
         <DistPanel title={t('statistics.distByArch')} buckets={nodeByArch} empty={t('nodes.empty')} />
       </div>
+
+      {/* 可用性（FR-463）：平台级窗口可用率/故障次数/MTTR/MTBF/误差预算。 */}
+      <SLOSection range={range} scope="platform" />
+
+      {/* 玩家在线趋势与时段分布（FR-469）。 */}
+      <PlayerTrendCard range={range} />
 
       {/* 客户端分发概览（平台管理员） */}
       {isPlatformAdmin ? (

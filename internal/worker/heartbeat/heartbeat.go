@@ -505,6 +505,9 @@ func fillInstanceMetricSample(sample *workerpb.InstanceMetricSample, tel *metric
 	sample.Threads = tel.Threads
 	sample.CpuLoad = tel.CPULoad
 	sample.UptimeSeconds = tel.UptimeSeconds
+	// GC（FR-465）：探针 cumulative counter，CP 侧据相邻心跳差推导速率。
+	sample.GcCountTotal = tel.GCCountTotal
+	sample.GcTimeMillis = tel.GCTimeMillis
 	for name, w := range tel.Worlds {
 		sample.Worlds = append(sample.Worlds, &workerpb.WorldMetric{
 			Name:         name,

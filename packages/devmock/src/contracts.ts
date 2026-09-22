@@ -415,3 +415,97 @@ export interface ProvisionProxyResult {
   registrations: unknown[]
   warnings?: string[]
 }
+
+// ─────────────────── 观测·统计（FR-463/464/465/469） ───────────────────
+// 与 docs/API.md 及 CP `internal/controlplane/service/{slo,capacity,attribution,ranking}.go`
+// 的响应 DTO 同构；形状漂移由 dom 测试看守（真组件打真 mock）。
+
+/** 性能归因因子（FR-465）。correlation 为与目标指标的 Pearson 相关，weight 为归一化贡献权重。 */
+export interface AttributionFactorInfo {
+  metricKey: string
+  label: string
+  correlation: number
+  weight: number
+  note?: string
+}
+
+/** 性能归因结果（FR-465）。status=insufficient 时 factors 为空，不伪造排序。 */
+export interface AttributionInfo {
+  target: string
+  window: { from: string; to: string }
+  status: 'ok' | 'insufficient'
+  tldr: string
+  factors: AttributionFactorInfo[]
+  samples: number
+}
+
+/** 跨实例排行一项（FR-469）。 */
+export interface RankingItemInfo {
+  instanceId: number
+  instanceUuid: string
+  name: string
+  nodeUuid: string
+  value: number
+  rank: number
+  sampledAt: string
+}
+
+/** 跨实例排行结果（FR-469）。scoped=true 表示非管理员的受限视图。 */
+export interface RankingResultInfo {
+  metricKey: string
+  order: 'asc' | 'desc'
+  windowSeconds: number
+  scoped: boolean
+  skippedNoData: number
+  items: RankingItemInfo[]
+}
+
+/** 玩家在线趋势与时段分析（FR-469）。hourlyDist 恒为 24 项，按 timezone 分桶。 */
+export interface PlayerTrendInfo {
+  resolution: string
+  timezone: string
+  trend: { ts: string; avg: number | null; min: number | null; max: number | null }[]
+  hourlyDist: number[]
+  peakValue: number
+  peakAt: string | null
+  dailyAvg: number
+}
+
+/** 可用性/SLO 结果（FR-463）。mttrSeconds/mtbfSeconds 为 null 表示无已恢复故障/无故障（非 Infinity）。 */
+export interface SLOInfo {
+  scope: 'platform' | 'node' | 'instance'
+  availability: number
+  totalSamples: number
+  upSamples: number
+  incidents: number
+  activeIncidents: number
+  mttrSeconds: number | null
+  mtbfSeconds: number | null
+  budgetAllowedSec: number
+  budgetBurnedSec: number
+  target: number
+  approximatedBuckets: boolean
+  /** false=窗口内无可用证据（分母为 0）：可用率与误差预算均不适用（m1）。 */
+  applicable: boolean
+}
+
+/** 容量外推结果（FR-464）。exhaust* 为 null 表示无增长/样本不足，不伪造预测。 */
+export interface ForecastInfo {
+  targetId: string
+  metricKey: string
+  nowValue: number
+  limitValue: number
+  slopePerSec: number
+  exhaustAt: string | null
+  exhaustLowDays: number | null
+  exhaustHighDays: number | null
+  confidence: 'high' | 'low' | 'insufficient'
+  samples: number
+  note?: string
+}
+
+/** 容量预测响应（FR-464）。 */
+export interface CapacityForecastInfo {
+  forecasts: ForecastInfo[]
+}
+

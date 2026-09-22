@@ -50,6 +50,24 @@ func TestParseServerProbeMetrics_RealSample(t *testing.T) {
 	assert.Equal(t, int64(84), snap.Worlds["world"].Entities)
 	assert.Equal(t, int64(2), snap.Worlds["world"].TileEntities)
 	assert.Equal(t, int64(12), snap.Worlds["world_nether"].LoadedChunks)
+
+	// GC（FR-465）：真机样本只有 serverprobe_gc_count_total{gc="G1 Young Generation"}=16。
+	assert.Equal(t, int64(16), snap.GCCountTotal)
+	assert.InDelta(t, 0, snap.GCTimeMillis, 0.0001)
+}
+
+// TestParseServerProbeMetrics_GC 覆盖 GC 跨收集器累加与耗时秒→毫秒（FR-465）。
+func TestParseServerProbeMetrics_GC(t *testing.T) {
+	snap := parseServerProbeMetrics(realProbeMetrics + `# TYPE serverprobe_gc_count_total counter
+serverprobe_gc_count_total{gc="G1 Old Generation"} 3
+serverprobe_gc_count_total{gc="G1 Young Generation"} 17
+serverprobe_gc_time_seconds_total{gc="G1 Young Generation"} 1.5
+serverprobe_gc_time_seconds_total{gc="G1 Old Generation"} 0.25
+`)
+	// 累加：Young(16+17) + Old(3) = 36
+	assert.Equal(t, int64(36), snap.GCCountTotal)
+	// 秒→毫秒：(1.5 + 0.25) * 1000 = 1750
+	assert.InDelta(t, 1750, snap.GCTimeMillis, 0.001)
 }
 
 // TestParseServerProbeMetrics_ProxyFallback 代理端无 players_online，用 proxy_players_online 回退。
@@ -73,4 +91,26 @@ func TestParsePromLine(t *testing.T) {
 
 	_, ok3 := parsePromLine(`# HELP something`)
 	assert.False(t, ok3)
+}
+
+// TestParseServerProbeMetrics_GCNoDoubleCount （S2）同名变体多收集器继续累加，
+// 但不同命名变体并存时只认首个命中的（避免同一份耗时重复累加、成倍放大 GC 占用）。
+func TestParseServerProbeMetrics_GCNoDoubleCount(t *testing.T) {
+	// ① 同变体多收集器：仍应累加。
+	same := parseServerProbeMetrics(`serverprobe_gc_time_seconds_total{gc="G1 Young Generation"} 1.5
+serverprobe_gc_time_seconds_total{gc="G1 Old Generation"} 0.25
+`)
+	assert.InDelta(t, 1750, same.GCTimeMillis, 0.001, "同变体多收集器需继续累加")
+
+	// ② 秒变体在前、毫秒变体在后：只认秒变体（首条命中）。
+	mixed := parseServerProbeMetrics(`serverprobe_gc_time_seconds_total{gc="A"} 2
+serverprobe_gc_time_millis_total{gc="A"} 2000
+`)
+	assert.InDelta(t, 2000, mixed.GCTimeMillis, 0.001, "异变体不得重复累加")
+
+	// ③ 毫秒变体在前、秒变体在后：只认毫秒变体。
+	mixed2 := parseServerProbeMetrics(`serverprobe_gc_time_ms_total{gc="A"} 2000
+serverprobe_gc_time_seconds_total{gc="A"} 2
+`)
+	assert.InDelta(t, 2000, mixed2.GCTimeMillis, 0.001, "异变体不得重复累加")
 }

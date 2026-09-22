@@ -14,6 +14,8 @@ import { TimeSeriesChart, type ChartReferenceLine, type ChartSeries } from '@jia
 import { RangePicker, type MetricRange } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
 import { MetricSourceChips } from './MetricSourceChips'
+import { AttributionCard } from '@/components/metrics/AttributionCard'
+import { CapacityForecastCard } from '@/components/metrics/CapacityForecastCard'
 
 /**
  * 探针在线更新卡（FR-068/409）：展示探针连接状态、当前解析版本和上次下发时间。
@@ -361,10 +363,10 @@ function ChartPanel({
 
 /**
  * 实例监控段（FR-060/FR-061）：消费 /metrics/series（scope=instance）渲染历史曲线——
- * TPS/MSPT/堆/在线/线程/CPU + 分世界区块。探针不可用时段渲染为断点。
+ * TPS/MSPT/堆/在线/线程/CPU + GC 次数/GC 暂停（FR-465）+ 分世界区块。探针不可用时段渲染为断点。
  *
  * 布局（FR-423）：本页不左右分栏——图表是等宽同构的，按 spec §3.1 的 62:38 切开只会把
- * 同一族曲线拆成两种宽度。改为「实例指标上下两行（xl 三列 × 6 张）+ 世界统计独立一段」，
+ * 同一族曲线拆成两种宽度。改为「实例指标上下两行（xl 四列 × 8 张）+ 世界统计独立一段」，
  * 头部（标题 + 区间选择）`flex-none` 常驻，其余内容在下方单一滚动容器内滚（FR-422 骨架）。
  */
 export default function MetricsSegment({ instanceUuid, instanceId }: { instanceUuid: string; instanceId: number }) {
@@ -417,10 +419,12 @@ export default function MetricsSegment({ instanceUuid, instanceId }: { instanceU
         <DirectProbeCard metrics={directMetrics} isRunning={running} />
         <HealthStrip instanceId={instanceId} />
         <ResourceLimitCard instanceId={instanceId} />
-        {/* 实例指标：xl 三列 × 6 张 = 上下两行（spec §3.1 监控行）。
+        {/* 实例指标：xl 四列 × 8 张 = 上下两行（spec §3.1 监控行）。
+            列数取 4 而非 3：本 grid 内实为 8 张卡（含 FR-465 新增的 2 张 GC 曲线），
+            三列会排成 3+3+2、末行留一个空位，与「上下两行」的布局意图不符（自审 M10）。
             items-start 是必需的（spec §3.2）：grid 默认 stretch 会把「暂无数据」的一行字卡
             拉到同排曲线卡的高度（实测被拉成 222px，卡内 141px 死区）。 */}
-        <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2 xl:grid-cols-4">
           <ChartPanel
             title={t('metrics.tps')}
             series={one('inst_tps', t('metrics.tps'))}
@@ -454,6 +458,24 @@ export default function MetricsSegment({ instanceUuid, instanceId }: { instanceU
             valueFormatter={(v) => `${v.toFixed(0)}%`}
             referenceLines={cpuThresholds(t)}
           />
+          {/* GC（FR-465）：探针累计 counter 经 CP 相邻心跳差推导的速率（次数/s、暂停 ms/s）。
+              标题走 `metrics.*`：与本 grid 其余 6 张卡同命名空间，避免与「性能归因」卡片耦合
+              （改归因措辞不应顺带改监控页图表标题；自审 M4）。 */}
+          <ChartPanel
+            title={t('metrics.gcCount')}
+            series={one('inst_gc_count', t('metrics.gcCount'))}
+            valueFormatter={(v) => `${v.toFixed(2)}/s`}
+          />
+          <ChartPanel
+            title={t('metrics.gcTime')}
+            series={one('inst_gc_time_ms', t('metrics.gcTime'))}
+            valueFormatter={(v) => `${v.toFixed(1)}ms/s`}
+          />
+        </div>
+        {/* 性能归因 + 容量预测（FR-465 / FR-464）：按需查询，与曲线区并列展示。 */}
+        <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2">
+          <AttributionCard instanceUuid={instanceUuid} range={range} />
+          <CapacityForecastCard scope="instance" targetId={instanceUuid} range={range} />
         </div>
         {/* 世界统计：与实例指标分段，无世界维度数据时整段收成一行字。 */}
         {hasWorldData ? (

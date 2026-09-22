@@ -25,7 +25,9 @@
 | unit | varchar(16) | `pct`\|`bytes`\|`bytes_per_sec`\|`count`\|`ms`\|`tps`\|`seconds` |
 | created_at / last_seen_at | datetime | |
 
-唯一索引 `UNIQUE(node_uuid, instance_id, scope, metric_key, world)`。
+唯一索引 `UNIQUE(node_uuid, instance_id, scope, metric_key, world)`（`idx_metric_series_identity`）。
+
+另有**非唯一**复合索引 `(scope, metric_key)`（`idx_metric_series_scope_metric`），由 `AutoMigrate` 在**存量库**上一并补建（无需破坏性迁移）。它与上面的唯一索引**独立命名、共存**，唯一索引的列与优先级不受影响。用途：排行（FR-469）、SLO 可用率（FR-463）、玩家趋势（FR-469）等按「某 scope 的某指标」筛序列的查询，无它则只能全表扫 `metric_series`；`EXPLAIN QUERY PLAN` 走 `COVERING INDEX`。
 
 ### `metric_sample_raw`（原始，留 ~48h）
 `(series_id, ts, value double NULL)`，索引 `(series_id, ts)`；`value=NULL` 表示缺测。
@@ -47,6 +49,8 @@
 | instance | inst_threads | count | ServerProbe |
 | instance | inst_cpu_pct | pct | ServerProbe `system_cpu_load`×100 |
 | instance | inst_uptime | seconds | ServerProbe |
+| instance | inst_gc_count | count_per_sec | ServerProbe `serverprobe_gc_count_total`（FR-465：CP 据相邻心跳累计差算速率） |
+| instance | inst_gc_time_ms | ms_per_sec | ServerProbe `serverprobe_gc_time_seconds_total`（FR-465：累计秒→毫秒后算速率；探针仅暴露次数时该因子退化） |
 | world | world_loaded_chunks / world_entities / world_tile_entities | count | ServerProbe（`world` 标签） |
 
 ## gRPC 变更（`proto/worker.proto`）
@@ -61,6 +65,9 @@ message InstanceMetricSample {
   double cpu_load = 9;                 // 0~1 系统 CPU；<0 不可用
   double uptime_seconds = 10;
   repeated WorldMetric worlds = 11;    // 复用 GetInstanceMetrics 既有 WorldMetric
+  // FR-465 追加（**字段号 24/25**：13/14 已被预留的 motd/version 占用，FR-465 spec 原稿写的 13/14 已按现状顺延）
+  int64 gc_count_total = 24;           // Σ serverprobe_gc_count_total{gc=...}（cumulative counter，跨收集器求和）
+  double gc_time_millis = 25;          // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000（cumulative counter）
 }
 // HeartbeatRequest  += repeated InstanceMetricSample instance_metrics = 10;
 // CreateInstanceRequest += int32 probe_port = 12;  // CP 分配后下发，Worker 持久化到 PID 记录
@@ -87,7 +94,7 @@ Worker 心跳 tick 对每个 RUNNING 且 `ProbePort>0` 的实例 `ScrapeServerPr
 
 ### GET /api/v1/metrics/overview
 - **权限**: 登录（聚合总量与曲线，不暴露单实例明细；与 node 维度指标一致）。
-- **Query**: `range`(1h|6h|24h|7d|30d|90d) 或 `from`/`to`（默认 24h）；`resolution`(auto|raw|5m|1h)。
+- **Query**: `range`(1h|6h|24h|7d|30d|90d|1y) 或 `from`/`to`（默认 24h）；`resolution`(auto|raw|5m|1h)。
 - **响应 200**（实际实现形状）:
 ```json
 { "totals": { "nodeCount": 3, "onlineNodeCount": 2, "runningInstances": 5,
@@ -107,9 +114,32 @@ Worker 心跳 tick 对每个 RUNNING 且 `ProbePort>0` 的实例 `ScrapeServerPr
 | HTTP | error | 场景 |
 |---|---|---|
 | 400 | INVALID_SCOPE / INVALID_RANGE / INVALID_RESOLUTION | 参数非法 |
+| 400 | INVALID_METRIC / INVALID_ORDER / INVALID_WINDOW / INVALID_LIMIT / INVALID_TARGET / INVALID_THRESHOLD / INVALID_TZ | FR-463/464/465/469 新端点参数非法 |
 | 403 | FORBIDDEN | 越权访问节点/实例指标 |
 | 404 | TARGET_NOT_FOUND | 节点/实例不存在 |
+| 422 | TOO_MANY_TARGETS | 批量对比目标 > 50 |
 | 500 | INTERNAL_ERROR | 查询/聚合失败 |
+
+## FR-463/464/465/469 派生端点（同一 `/metrics` 路由组）
+
+| 端点 | 语义 | 权限 |
+|---|---|---|
+| `GET /metrics/performance/attribution?scope=instance&targetId=&range=7d&metric=inst_tps` | 性能归因（FR-465） | instance 维度 `CanAccessInstance`，无权 403 |
+| `GET /metrics/instances/ranking?metric=&order=&window=&limit=&nodeId=` | 跨实例全局排行（FR-469） | 非管理员按 `AccessibleInstanceIDs` 收敛（`scoped=true`），不整拒 |
+| `GET /metrics/players/trend?range=7d&resolution=auto&tz=` | 玩家在线趋势 + 24 时段（FR-469） | 登录（聚合总量，与 overview 同口径） |
+| `GET /metrics/slo?scope=platform\|node\|instance&targetId=&range=&target=` | 可用性/SLO（FR-463） | platform/node 登录即可（platform 对非管理员收敛到可访问实例）；instance 无权 403 |
+| `GET /metrics/capacity/forecast?scope=&targetId=&metrics=&range=7d&thresholdDays=` | 容量耗尽预测（FR-464） | node 登录即可；instance 无权 403 |
+
+- **FR-465**：`AttributionResult{target,window,status,tldr,factors[],samples}`，`status=insufficient`（对齐点 <30 或无显著因子）时 `factors` 为空，不伪造排序。
+- **FR-469**：`RankingResult{metricKey,order,windowSeconds,scoped,skippedNoData,items[]}`，代表值取窗口内均值；窗口内无样本的实例不入榜。支持指标：`inst_tps|inst_mspt|inst_cpu_pct|inst_heap_used|inst_players_online`（`limit` 1~100，`window` ≤30d）。排行**不复用** `/series/batch`，走单条聚合 SQL。
+- **FR-463**：`SLOResult{availability,totalSamples,upSamples,incidents,activeIncidents,mttrSeconds,mtbfSeconds,budgetAllowedSec,budgetBurnedSec,target,approximatedBuckets}`。可用证据 = 非 NULL `inst_uptime` 拍（节点维度用 `node_cpu_pct` 拍）；分母按窗口/30s 推算，缺拍计不可用；**MTTR/MTBF 无故障时为 `null`，不是 `Infinity`**；窗口 >48h 按 rollup 桶近似（`approximatedBuckets=true`，一个 5m 桶最多 10 拍）。
+- **FR-464**：`{forecasts:[ForecastResult]}`，Theil–Sen 稳健斜率 + 残差/斜率标准误合成的 80% 区间。`confidence=insufficient` 表示样本不足 / β≤0 / β 的 80% 区间跨 0（趋势不显著），此时 `exhaust*` 全为 `null` 且 `note` 给出原因。命中「预计 N 天内耗尽」时经既有 metric 规则发趋势告警（DedupKey 含 target+metricKey，去抖）。
+- **总览聚合成本（N-8，决策）**：`/metrics/overview` 的 `totals` 与 `trends` 曾按序列逐条查询（每条趋势序列 1~2 次往返），而总览页每 **10s** 轮询（`useMetricOverview` 的 `refetchInterval`）——成本会随实例数**线性**增长。现已全部改为**常数条聚合 SQL**（`aggregateTrend` 用内层 `GROUP BY series_id, 桶` + 外层 `GROUP BY 桶` 的单条两级聚合；`latestSum` 用 `MAX(ts)`+`MAX(id)` 自联接的单条查询），实测 4 序列与 40 序列的 SQL 条数相同（7 条），不再随实例数增长。
+  - **`latestSum` 的「每序列只计一行」是硬约束（B-1）**：**不能**用 `latest.mts = v.ts` 这类等值自联接收尾——`metric_sample_raws` 无任何唯一约束（仅 `id` 自增主键）、`idx_metric_raw_series_ts` 是**普通索引非 UNIQUE**、`Ingest` 对样本**纯追加**且无 `OnConflict` 去重，故心跳重放/重试会产生同 `(series_id, ts)` 多行；按 `ts` 等值匹配会让这些行**全部**计入外层 `SUM`，使在线人数按重放次数翻倍（实测：真实 7 报 21）。
+    - **「取一行」的写法有讲究**：子查询只带 `MAX(id)` 并让 ON 锚定它（`latest.mid = v.id`）**不够**——那是按写入先后而非 `ts` 取值，心跳重试让更旧的拍后到时会把陈旧值当当前值报出（实测：最新拍 7 + 陈旧拍 3 后到 → 错报 3）。而让 ON 同时要求 `mts = v.ts AND mid = v.id` **更糟**——`MAX(ts)` 与 `MAX(id)` 是**独立**聚合，乱序到达时二者未必取自同一行，没有任何行能同时满足两个条件，该序列的 SUM 会丢成 0。
+    - **正解**：先用 `MAX(ts)` 收敛到「最新拍」（保留原 JOIN 形态），再用相关子查询在该 `ts` 内取 `MAX(id)` 决胜——`AND v.id = (SELECT MAX(v3.id) … v3.ts = v.ts)`。「窗口内最新非空拍」的时间语义与改造前完全一致，仅把「同刻多行全取」收紧为「同刻取最后一次观测」（同刻多行只可能是重放，后到者才是最新观测）。子查询只对「已是最新拍的候选行」求值、命中 `(series_id, ts)` 索引，仍是**单条**聚合 SQL，不恢复 N+1（`TestMetric_OverviewTrendQueryCountIsConstant` 守住常数条查询）。
+  - `1y`（365d）区间的代价因此**不再是往返次数**，而是单次聚合的扫描行数：`selectResolution` 对 >30d 选 `1h` 档，`1y` 下每序列约 8760 桶，故扫描行数 ≈ `场景数 × 8760`。这是 ADR-013 三档降采样的固有取捨，不是新的规模化隐患；若将来实例数增长到让单次聚合超时，应下沉为「跨序列预聚合表」而非恢复逐序列查询。
+  - 时间分桶用 `strftime('%s', ts) / 桶秒`，**不是**把 `MIN(ts)` 截断到桶起点：`raw` 档存储文本带纳秒与时区偏移、rollup 档为分钟对齐，直接截断文本会与 Go 侧 `TS.Truncate(bucket)` 得出不同结果。
 
 ## 一致性
 - 与 `docs/ARCHITECTURE.md` 数据库模型章节（新增 4 张 metric 表）+ 通信协议章节（`Heartbeat` 负载扩展）一致——实现时同步。

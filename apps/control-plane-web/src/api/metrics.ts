@@ -571,3 +571,212 @@ export function useManagedProcessAction() {
     },
   })
 }
+
+// === FR-463/464/465/469：SLO 可用性 / 容量预测 / 性能归因 / 跨实例排行与玩家趋势 ===
+
+/** 归因因子（FR-465）：与目标的 Pearson 相关、归一化贡献权重。 */
+export interface AttributionFactor {
+  metricKey: string
+  label: string
+  correlation: number
+  weight: number
+  note?: string
+}
+
+/** 性能归因结果（FR-465）。status=insufficient 时 factors 为空，不伪造排序。 */
+export interface AttributionResult {
+  target: string
+  window: { from: string; to: string }
+  status: 'ok' | 'insufficient'
+  tldr: string
+  factors: AttributionFactor[]
+  samples: number
+}
+
+/**
+ * 实例性能归因（FR-465）：按需触发（enabled=false 时不请求），不做常驻轮询——
+ * 归因基于窗口相关分析，随每 30s 心跳变动的意义不大。
+ */
+export function usePerformanceAttribution(params: {
+  targetId: string
+  range: MetricRange
+  metric?: string
+  enabled?: boolean
+}) {
+  const { targetId, range, metric, enabled = false } = params
+  return useQuery({
+    queryKey: ['performanceAttribution', targetId, range, metric ?? 'inst_tps'],
+    queryFn: async () => {
+      const q = new URLSearchParams({ scope: 'instance', targetId, range })
+      if (metric) q.set('metric', metric)
+      const { data } = await api.get<AttributionResult>(`/metrics/performance/attribution?${q.toString()}`)
+      return data
+    },
+    enabled: enabled && !!targetId,
+  })
+}
+
+/** 排行支持的指标键（与后端 rankingSupportedMetrics 对齐）。 */
+export type RankingMetric = 'inst_tps' | 'inst_mspt' | 'inst_cpu_pct' | 'inst_heap_used' | 'inst_players_online'
+
+/** 排行一项（FR-469）。 */
+export interface RankingItem {
+  instanceId: number
+  instanceUuid: string
+  name: string
+  nodeUuid: string
+  value: number
+  rank: number
+  sampledAt: string
+}
+
+/** 排行结果（FR-469）。scoped=true 表示非管理员受限视图。 */
+export interface RankingResult {
+  metricKey: string
+  order: 'asc' | 'desc'
+  windowSeconds: number
+  scoped: boolean
+  skippedNoData: number
+  items: RankingItem[]
+}
+
+/** 跨实例全局排行（FR-469）。30s 轮询与采样节奏对齐。 */
+export function useInstanceRanking(params: {
+  metric: RankingMetric
+  window?: string
+  limit?: number
+  nodeId?: string
+  order?: 'asc' | 'desc'
+  enabled?: boolean
+}) {
+  const { metric, window = '5m', limit = 20, nodeId, order, enabled = true } = params
+  return useQuery({
+    queryKey: ['instanceRanking', metric, window, limit, nodeId ?? '', order ?? ''],
+    queryFn: async () => {
+      const q = new URLSearchParams({ metric, window, limit: String(limit) })
+      if (nodeId) q.set('nodeId', nodeId)
+      if (order) q.set('order', order)
+      const { data } = await api.get<RankingResult>(`/metrics/instances/ranking?${q.toString()}`)
+      return data
+    },
+    enabled,
+    refetchInterval: 30_000,
+  })
+}
+
+/** 玩家在线趋势结果（FR-469）：全网合计曲线 + 24 时段分布 + 峰值/日均。 */
+export interface PlayerTrendResult {
+  resolution: string
+  timezone: string
+  trend: SeriesPoint[]
+  hourlyDist: number[]
+  peakValue: number
+  peakAt: string | null
+  dailyAvg: number
+}
+
+/**
+ * 玩家在线趋势与时段分析（FR-469）。tz 缺省时后端按服务器本地时区分桶，
+ * 前端用浏览器时区下发以便时段口径与运维所在时区一致。
+ */
+export function usePlayerTrend(params: { range: MetricRange; resolution?: MetricResolution; tz?: string; enabled?: boolean }) {
+  const { range, resolution, tz, enabled = true } = params
+  return useQuery({
+    queryKey: ['playerTrend', range, resolution ?? 'auto', tz ?? ''],
+    queryFn: async () => {
+      const q = new URLSearchParams({ range })
+      if (resolution && resolution !== 'auto') q.set('resolution', resolution)
+      if (tz) q.set('tz', tz)
+      const { data } = await api.get<PlayerTrendResult>(`/metrics/players/trend?${q.toString()}`)
+      return data
+    },
+    enabled,
+    refetchInterval: 60_000,
+  })
+}
+
+/** 可用性/SLO 结果（FR-463）。MTTR/MTBF 为 null 表示无已恢复故障/无故障（不是 Infinity）。 */
+export interface SLOResult {
+  scope: 'platform' | 'node' | 'instance'
+  availability: number
+  totalSamples: number
+  upSamples: number
+  incidents: number
+  activeIncidents: number
+  mttrSeconds: number | null
+  mtbfSeconds: number | null
+  budgetAllowedSec: number
+  budgetBurnedSec: number
+  target: number
+  approximatedBuckets: boolean
+  /** false=窗口内无可用证据（分母为 0）：可用率与误差预算均不适用，前端显示「不适用」。 */
+  applicable: boolean
+}
+
+/**
+ * 平台/实例/节点可用性与 SLO 聚合（FR-463）。platform 为非管理员的可见实例汇总；
+ * node/instance 维度需 targetId，实例无权时后端 403。
+ */
+export function useSLO(params: {
+  scope: 'platform' | 'node' | 'instance'
+  targetId?: string
+  range: MetricRange
+  target?: number
+  enabled?: boolean
+}) {
+  const { scope, targetId, range, target, enabled = true } = params
+  return useQuery({
+    queryKey: ['slo', scope, targetId ?? '', range, target ?? 0],
+    queryFn: async () => {
+      const q = new URLSearchParams({ scope, range })
+      if (targetId) q.set('targetId', targetId)
+      if (target) q.set('target', String(target))
+      const { data } = await api.get<SLOResult>(`/metrics/slo?${q.toString()}`)
+      return data
+    },
+    enabled: enabled && (scope === 'platform' || !!targetId),
+    refetchInterval: 60_000,
+  })
+}
+
+/** 单指标容量外推结果（FR-464）。Exhaust* 为 null 表示无增长/样本不足，不伪造预测。 */
+export interface ForecastResult {
+  targetId: string
+  metricKey: string
+  nowValue: number
+  limitValue: number
+  slopePerSec: number
+  exhaustAt: string | null
+  exhaustLowDays: number | null
+  exhaustHighDays: number | null
+  confidence: 'high' | 'low' | 'insufficient'
+  samples: number
+  note?: string
+}
+
+/** 容量预测响应（FR-464）。 */
+export interface CapacityForecastResponse {
+  forecasts: ForecastResult[]
+}
+
+/** 实例/节点容量耗尽预测（FR-464）。60s 轮询。 */
+export function useCapacityForecast(params: {
+  scope: 'node' | 'instance'
+  targetId: string
+  range: MetricRange
+  metrics?: string[]
+  enabled?: boolean
+}) {
+  const { scope, targetId, range, metrics, enabled = true } = params
+  return useQuery({
+    queryKey: ['capacityForecast', scope, targetId, range, metrics?.join(',') ?? ''],
+    queryFn: async () => {
+      const q = new URLSearchParams({ scope, targetId, range })
+      if (metrics?.length) q.set('metrics', metrics.join(','))
+      const { data } = await api.get<CapacityForecastResponse>(`/metrics/capacity/forecast?${q.toString()}`)
+      return data
+    },
+    enabled: enabled && !!targetId,
+    refetchInterval: 60_000,
+  })
+}

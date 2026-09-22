@@ -1,6 +1,6 @@
 # 性能归因（含 GC 采集）（FR-465）
 
-> 状态：📋 计划　·　关联 PRD：FR-465　·　依赖：FR-060（时序底座，已交付）、ADR-013（分级降采样）、ADR-014（ServerProbe 为实例指标源）　·　关联：FR-464（容量预测，同用外推/相关分析）、`docs/specs/cluster-observability/spec.md`
+> 状态：🟡 **代码与单测已交付，真机验收待做**（R-1；FR-465 端到端已实现，单测/构建覆盖通过；§4 中标「真机」的验收项尚未在真机注入验证）　·　关联 PRD：FR-465　·　依赖：FR-060（时序底座，已交付）、ADR-013（分级降采样）、ADR-014（ServerProbe 为实例指标源）　·　关联：FR-464（容量预测，同用外推/相关分析）、`docs/specs/cluster-observability/spec.md`
 
 ## 1. 背景与目标
 
@@ -34,10 +34,10 @@ GCTimeMillis  float64 // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000（
 ```
 `parseServerProbeMetrics` 的 `switch s.name` 新增两个 case，按 `gc` 标签累加（收集器名如 `G1 Young Generation`）。
 
-**② gRPC（`proto/worker.proto` `InstanceMetricSample`）** 追加向后兼容字段：
+**② gRPC（`proto/worker.proto` `InstanceMetricSample`）** 追加向后兼容字段（**实现按现状顺延为 24/25**：13/14 已被预留的 `motd`/`version` 占用，见 `proto/worker.proto`）：
 ```proto
-int64 gc_count_total = 13;      // 累计 GC 次数（counter，跨收集器求和）
-double gc_time_millis = 14;     // 累计 GC 耗时（ms，counter）
+int64 gc_count_total = 24;      // 累计 GC 次数（counter，跨收集器求和）
+double gc_time_millis = 25;     // 累计 GC 耗时（ms，counter）
 ```
 
 **③ Worker 上报（`internal/worker/heartbeat/heartbeat.go` `collectInstanceMetrics`）** 抓到快照后 `sample.GCCountTotal = snap.GCCountTotal; sample.GCTimeMillis = snap.GCTimeMillis`。
@@ -54,7 +54,8 @@ MetricInstGCTime  = "inst_gc_time_ms"    // 单位 ms_per_sec：GC 暂停占用�
 
 新增 `internal/controlplane/service/attribution.go`，`AttributionService.Analyze(q)`：
 
-- **对齐**：把窗口（默认 7d，走 5m rollup）内 TPS 与各候选因子按同一 `bucket_ts` 对齐成样本对；世界级因子（区块/实体/方块实体）先按 `instance_id` 跨 world **求和**成实例级序列。
+- **对齐**：把窗口（`range` 缺省 **24h**，按跨度自动选档——≤6h 走 raw、≤30d 走 5m、更长走 1h）内 TPS 与各候选因子按同一 `bucket_ts` 对齐成样本对；世界级因子（区块/实体/方块实体）先按 `instance_id` 跨 world **求和**成实例级序列。
+  - 同一实例同指标若存在多条实例级序列（如实例换节点后 node_uuid 变化会新起序列），按 series 身份**择一**（取首个有值的序列），不静默覆盖；world 级序列跨 world 求和（分区可加）。
 - **候选因子**：`inst_gc_time_ms`（GC 占用）、`world_loaded_chunks`（区块）、`world_entities`（实体）、`world_tile_entities`（方块实体）、`inst_heap_used / inst_heap_max`（堆比）、`inst_threads`（线程）。
 - **评分（决策：Pearson 相关 + 标准化系数）**：
   1. 对每个因子算与 TPS 的 Pearson 相关 r（TPS 越低因子越高时 r 为负）；
@@ -75,34 +76,37 @@ type AttributionResult struct {
 
 | 端点 | 语义 |
 |---|---|
-| `GET /metrics/performance/attribution?scope=instance&targetId=&range=7d&metric=inst_tps` | `AttributionResult` |
+| `GET /metrics/performance/attribution?scope=instance&targetId=&range=24h&metric=inst_tps` | `AttributionResult`（`range` 缺省 24h；更长窗口自动降档） |
 
 路由挂 `internal/controlplane/router/metric.go` 的 `RegisterRoutes`；实例维度权限复用 `authz.CanAccessInstance`（与 `Series` 同口径）。前端：实例详情新增「性能归因」卡片（延迟加载，按需点击分析），GC 速率两条曲线并入实例时序图（复用 `packages/ui` 图表）。
 
 ## 3. 任务拆分
 
-- [ ] ① Worker：`parseServerProbeMetrics` 解析 `serverprobe_gc_*` + `ProbeSnapshot` 加字段 + `serverprobe_test.go` 扩样本断言（依赖：无）。
-- [ ] ② proto：`InstanceMetricSample` 加 13/14 字段 + `make proto` 重新生成（依赖 ①）。
-- [ ] ③ Worker 心跳：`collectInstanceMetrics` 填充 GC 字段（依赖 ②）。
-- [ ] ④ CP 入库：`lastGC` 速率推导 + 两个新 metric_key + 单测（含 counter 归零跳过）（依赖 ③）。
-- [ ] ⑤ `attribution.go`：对齐 + 相关/权重（纯函数可测）+ 单测（依赖 ④）。
-- [ ] ⑥ 路由 + 前端归因卡片 + 时序图加 GC 曲线（依赖 ⑤）。
-- [ ] ⑦ 文档同步：本 spec、`timeseries-metrics/api.md` 指标键、PRD FR-465 状态、ARCHITECTURE/API。
+- [x] ① Worker：`parseServerProbeMetrics` 解析 `serverprobe_gc_*` + `ProbeSnapshot` 加字段 + `serverprobe_test.go` 扩样本断言（依赖：无）。
+- [x] ② proto：`InstanceMetricSample` 加 **24/25** 字段 + `make proto` 重新生成（依赖 ①）。
+- [x] ③ Worker 心跳：`collectInstanceMetrics` 填充 GC 字段（依赖 ②）。
+- [x] ④ CP 入库：`lastGC` 速率推导 + 两个新 metric_key + 单测（含 counter 归零跳过）（依赖 ③）。
+- [x] ⑤ `attribution.go`：对齐 + 相关/权重（纯函数可测）+ 单测（依赖 ④）。
+- [x] ⑥ 路由 + 前端归因卡片 + 时序图加 GC 曲线（依赖 ⑤）。
+- [x] ⑦ 文档同步：本 spec、`timeseries-metrics/api.md` 指标键、PRD FR-465 状态、ARCHITECTURE/API。
+- [ ] ⑧ **待真机验收**：真机确认探针 GC 耗时命名变体（现接受三种命名、命中首个变体即锁定）、GC 抖动注入看归因结论（验收 5）。
 
 ## 4. 验收标准
 
-| # | 验收项 | 方式 |
-|---|---|---|
-| 1 | GC 次数与耗时进入 `metric_series` 时序（`inst_gc_count`/`inst_gc_time_ms`），曲线可查 | 单测 + 真机 |
-| 2 | counter 归零（实例重启）拍被跳过，不产生负速率假尖峰 | 单测（构造序列） |
-| 3 | 探针不可用时 GC 指标写 NULL 断点，不补假值 | 单测 |
-| 4 | 给出 TPS 劣化的主要贡献因子与权重，样本不足时返回 insufficient | 单测 + 真机 |
-| 5 | 注入 GC 抖动（或区块暴涨）后，归因结论指向对应因子 | 真机（注入） |
-| 6 | 实例维度归因对无权用户返回 403 | 单测 |
+> **交付状态**：下表「方式」列的**单测**部分已由本次实现覆盖并通过；标 **真机（注入）** 的条目为**待真机验收**，故不标 ✅。
+
+| # | 验收项 | 方式 | 状态 |
+|---|---|---|---|
+| 1 | GC 次数与耗时进入 `metric_series` 时序（`inst_gc_count`/`inst_gc_time_ms`），曲线可查 | 单测 + 真机 | [x] 单测 / [ ] 真机 |
+| 2 | counter 归零（实例重启）拍被跳过，不产生负速率假尖峰 | 单测（构造序列） | [x] |
+| 3 | 探针不可用时 GC 指标写 NULL 断点，不补假值 | 单测 | [x] |
+| 4 | 给出 TPS 劣化的主要贡献因子与权重，样本不足时返回 insufficient | 单测 + 真机 | [x] 单测 / [ ] 真机 |
+| 5 | 注入 GC 抖动（或区块暴涨）后，归因结论指向对应因子 | 真机（注入） | [ ] 待真机验收 |
+| 6 | 实例维度归因对无权用户返回 403 | 单测 | [x] |
 
 ## 5. 风险 / 待定
 
-- **GC 耗时指标名待确认**：真机样本只确证 `serverprobe_gc_count_total`；`serverprobe_gc_time_seconds_total`（或 `..._millis_total`）命名需对照 ServerProbe 源码/README 确认（submodule `third_party/ServerProbe` 当前工作树未检出）。若探针仅暴露次数不暴露耗时，「GC 占用」因子退化为次数速率。
+- **GC 耗时指标名**：真机样本只确证 `serverprobe_gc_count_total`；实现同时接受 `serverprobe_gc_time_seconds_total`（秒→毫秒）与 `serverprobe_gc_time_millis_total` / `serverprobe_gc_time_ms_total`（毫秒变体）三种命名，故探针源码确认后无需改代码。若探针仅暴露次数不暴露耗时，「GC 占用」因子自然退化为仅「GC 次数」可用（耗时序列无数据 → 不参与归因）。
 - **counter 与并发**：`lastGC` 是 CP 内存态，CP 重启后首拍不出速率（与 `lastNet` 同局限，可接受）。
 - **相关性非因果**：GC 与区块/实体常同源共变（都因负载上升），权重可能分散；首版接受，必要时 TS 引入偏相关或 FR-462 基线对照。
 - **世界因子聚合口径**：跨 world 求和会掩盖单世界异常，后续可支持下钻到 world 维度。

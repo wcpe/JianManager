@@ -12,6 +12,8 @@ const (
 	MetricScopeInstance MetricScope = "instance"
 	// MetricScopeWorld 实例下单个世界的负载，来自 ServerProbe serverprobe_world_*。
 	MetricScopeWorld MetricScope = "world"
+	// MetricScopePlatform 平台汇总维度（FR-463 平台级 SLO）：仅作查询维度，不作为序列身份存储。
+	MetricScopePlatform MetricScope = "platform"
 )
 
 // ValidMetricScope 校验 scope 是否在允许枚举内。
@@ -53,6 +55,9 @@ const (
 	MetricInstThreads       = "inst_threads"
 	MetricInstCPUPct        = "inst_cpu_pct"
 	MetricInstUptime        = "inst_uptime"
+	// FR-465：GC 累计 counter 经 CP 相邻心跳差推导的速率（探针累计值不直接当曲线）。
+	MetricInstGCCount = "inst_gc_count"   // GC 次数速率（count_per_sec）
+	MetricInstGCTime  = "inst_gc_time_ms" // GC 暂停占用（ms_per_sec）
 
 	MetricWorldLoadedChunks = "world_loaded_chunks"
 	MetricWorldEntities     = "world_entities"
@@ -69,12 +74,14 @@ type MetricSeries struct {
 	// InstanceID 实例级/世界级序列才有；节点级为空字符串。
 	InstanceID string `gorm:"type:varchar(64);not null;default:'';uniqueIndex:idx_metric_series_identity,priority:2" json:"instanceId"`
 	// Scope 作用域：node / instance / world。
-	Scope MetricScope `gorm:"type:varchar(16);not null;uniqueIndex:idx_metric_series_identity,priority:3" json:"scope"`
+	// 与前缀 idx_metric_series_scope_metric 联合成 (scope, metric_key) 索引（M5）：
+	// 排行/SLO/趋势等按「某 scope 的某指标」全表筛序列，无该索引时只能全表扫。
+	Scope MetricScope `gorm:"type:varchar(16);not null;uniqueIndex:idx_metric_series_identity,priority:3;index:idx_metric_series_scope_metric,priority:1" json:"scope"`
 	// MetricKey 指标键，见上方常量。
-	MetricKey string `gorm:"type:varchar(48);not null;uniqueIndex:idx_metric_series_identity,priority:4" json:"metricKey"`
+	MetricKey string `gorm:"type:varchar(48);not null;uniqueIndex:idx_metric_series_identity,priority:4;index:idx_metric_series_scope_metric,priority:2" json:"metricKey"`
 	// World scope=world 时的世界名，其余为空字符串。
 	World string `gorm:"type:varchar(64);not null;default:'';uniqueIndex:idx_metric_series_identity,priority:5" json:"world"`
-	// Unit 单位：pct/bytes/bytes_per_sec/count/ms/tps/seconds。
+	// Unit 单位：pct/bytes/bytes_per_sec/count/ms/tps/seconds/load/count_per_sec/ms_per_sec。
 	Unit       string    `gorm:"type:varchar(16)" json:"unit"`
 	CreatedAt  time.Time `json:"createdAt"`
 	LastSeenAt time.Time `json:"lastSeenAt"`

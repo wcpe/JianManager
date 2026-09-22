@@ -24,6 +24,10 @@ type ProbeSnapshot struct {
 	SystemCPULoad float64              // serverprobe_system_cpu_load（0~1，<0 表示不可用）
 	UptimeSeconds float64              // serverprobe_uptime_seconds
 	Worlds        map[string]WorldStat // 按世界名聚合的世界负载
+
+	// GC（FR-465）：cumulative counter，跨收集器（gc 标签）求和。不直接当曲线用，CP 侧据相邻差推导速率。
+	GCCountTotal int64   // Σ serverprobe_gc_count_total{gc=...}
+	GCTimeMillis float64 // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000（秒→毫秒）
 }
 
 // WorldStat 单个世界的负载（serverprobe_world_*{world="..."}）。
@@ -74,6 +78,8 @@ func ScrapeServerProbe(host string, port int, token string) (*ProbeSnapshot, err
 // 纯函数、无 IO，便于对真实 /metrics 样本穷举测试。
 func parseServerProbeMetrics(text string) *ProbeSnapshot {
 	snap := &ProbeSnapshot{Worlds: map[string]WorldStat{}}
+	// gcTimeVariant 记录 GC 耗时首个命中的指标命名变体（见下方 S2 说明）。
+	gcTimeVariant := ""
 	sc := bufio.NewScanner(strings.NewReader(text))
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
@@ -112,6 +118,24 @@ func parseServerProbeMetrics(text string) *ProbeSnapshot {
 			snap.SystemCPULoad = s.value
 		case "serverprobe_uptime_seconds":
 			snap.UptimeSeconds = s.value
+		case "serverprobe_gc_count_total":
+			// GC 事件计数（counter），按 gc 收集器标签累加求和（FR-465）。
+			snap.GCCountTotal += int64(s.value)
+		case "serverprobe_gc_time_seconds_total":
+			// GC 耗时（counter，秒），按 gc 收集器标签累加并转毫秒（FR-465）。
+			if gcTimeVariant == "" || gcTimeVariant == s.name {
+				snap.GCTimeMillis += s.value * 1000
+				gcTimeVariant = s.name
+			}
+		case "serverprobe_gc_time_millis_total", "serverprobe_gc_time_ms_total":
+			// 探针以毫秒暴露耗时的变体命名，直接累加（FR-465）。
+			// S2：耗时命名有多个变体，同一份 exposition 只会暴露其中一种。
+			// 记录首个命中的变体，同变体的多收集器行继续累加，异变体行一律忽略——
+			// 避免「未来多命名并存」时把同一份耗时重复累加、成倍放大 GC 占用。
+			if gcTimeVariant == "" || gcTimeVariant == s.name {
+				snap.GCTimeMillis += s.value
+				gcTimeVariant = s.name
+			}
 		case "serverprobe_world_loaded_chunks":
 			w := snap.Worlds[s.labels["world"]]
 			w.LoadedChunks = int64(s.value)
