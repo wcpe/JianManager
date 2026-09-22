@@ -11,6 +11,10 @@ import (
 	"os"
 	"strings"
 	"time"
+	// M4：内嵌 IANA 时区库。`/metrics/players/trend` 的 `tz` 参数依赖
+	// `time.LoadLocation`，而官方容器镜像（alpine）不带 tzdata，systemd/裸机也可能缺
+	// /usr/share/zoneinfo —— 缺库时任何合法时区名都会解析失败。内嵌后跨部署形态一致。
+	_ "time/tzdata"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jhump/grpctunnel/tunnelpb"
@@ -525,6 +529,8 @@ func main() {
 
 	// 告警分发器（FR-085）：所有触发源经此统一去抖聚合 / 静默 / 分级路由 / 落库 / 通知。
 	alertDispatcher := service.NewAlertDispatcher(db)
+	// 容量趋势告警器（FR-464）：容量预测命中「预计 N 天内耗尽」时经 metric 规则同构路径发趋势告警。
+	capacityTrendAlerter := service.NewCapacityTrendAlerter(db, alertDispatcher)
 	// 轮询型告警评估器：每 60s 评估指标阈值（FR-011）与节点离线（FR-085）。
 	alertEvaluator := service.NewAlertEvaluator(db, alertDispatcher)
 	alertEvaluator.Start()
@@ -753,6 +759,7 @@ func main() {
 		Network:                 networkSvc,
 		Log:                     logSvc,
 		Metric:                  metricSvc,
+		CapacityTrend:           capacityTrendAlerter,
 		PlatformObservability:   platformObservabilitySvc,
 		Settings:                settingsSvc,
 		OrphanRuntime:           orphanRuntimeSvc,

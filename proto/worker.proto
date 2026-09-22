@@ -460,6 +460,11 @@ message InstanceMetricSample {
   // numplayers（或不可解析）时该位为 false：CP 据此落 NULL 断点，绝不把「缺测」伪装成 0 在线。
   // 老 Worker 不置该位（false），CP 侧对「探针可用」的新老样本另有兼容判定。
   bool players_online_available = 23;
+  // gc_count_total / gc_time_millis 为 ServerProbe 暴露的 GC cumulative counter（FR-465），
+  // 跨 gc 收集器求和。CP 侧据相邻心跳差推导速率（重启归零拍跳过），故这里存累计值而非速率。
+  // 字段号 24/25：13/14 已被预留的 motd/version 占用（spec 原稿写 13/14，实现按现状顺延）。
+  int64 gc_count_total = 24;   // Σ serverprobe_gc_count_total{gc=...}
+  double gc_time_millis = 25;  // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000
   // 上方的 motd / version / max_players / player_names / plugins / map / source_mask /
   // player_names_partial 是**预留字段**：实时详情链路（GetInstanceMetrics）已端到端提供这些值，
   // 而心跳时序链路（本消息）的 CP 消费者只用到可用位与 players_online；故 Worker 不再每拍填充，

@@ -36,7 +36,9 @@ import (
 var testArtifactReconcile *service.ArtifactReconcileService
 
 // setupTestDB 创建临时 SQLite 数据库（磁盘文件，每测试独立目录）并运行自动迁移。
-// 通过 t.Cleanup 确保测试结束时关闭数据库连接并删除临时目录。
+// 目录用 t.TempDir()：路径落在进程级 TMPDIR（见 main_test.go 的 TestMain）之下，
+// 由 testing 框架在用例结束时自动清理；测试进程被杀或 panic 时也不会在 /tmp 里
+// 留下孤儿目录（此前用 os.MkdirTemp("") + t.Cleanup 组合，中断即残留 jm-testdb-*）。
 //
 // 为什么不用 mode=memory&cache=shared：共享缓存内存库的并发写走表锁语义，
 // 报 SQLITE_LOCKED（"database table is locked (6)"），busy_timeout 对其无效
@@ -47,10 +49,7 @@ var testArtifactReconcile *service.ArtifactReconcileService
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	gin.DefaultWriter = io.Discard
-	dir, err := os.MkdirTemp("", "jm-testdb-")
-	if err != nil {
-		t.Fatalf("创建测试数据库目录失败: %v", err)
-	}
+	dir := t.TempDir()
 	dsn := "file:" + filepath.ToSlash(filepath.Join(dir, "test.db")) +
 		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
@@ -67,7 +66,6 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		if sqlDB != nil {
 			sqlDB.Close()
 		}
-		os.RemoveAll(dir)
 	})
 	return db
 }
@@ -140,7 +138,8 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 	instanceSvc.Shutdown()
 	// 回填实例服务，供节点排空（drain）测试复用实例停止逻辑（FR-048）。
 	nodeSvc.SetInstanceService(instanceSvc)
-	// 制品库需要数据根；测试用临时根，进程退出后由 OS 回收。
+	// 制品库需要数据根；测试用临时根，落在本包的进程级 TMPDIR（见 main_test.go
+	// 的 TestMain）之下，随整棵根在包退出时统一回收。
 	root, _ := dataroot.Init(filepath.Join(os.TempDir(), "jm-test-"+strconv.FormatInt(time.Now().UnixNano(), 10)))
 	assetSvc := service.NewAssetService(db, root)
 	backupStorageSvc := service.NewBackupStorageService(db, pool)

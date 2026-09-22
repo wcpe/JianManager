@@ -2,7 +2,14 @@ import { HttpResponse } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 import { db } from '@jianmanager/devmock/db'
-import type { Task } from '@jianmanager/devmock/contracts'
+import type {
+  AttributionInfo,
+  CapacityForecastInfo,
+  PlayerTrendInfo,
+  RankingResultInfo,
+  SLOInfo,
+  Task,
+} from '@jianmanager/devmock/contracts'
 
 /**
  * 可观测与日志域 mock handler（FR-208）：metrics / alerts / notifications / tasks / logs。
@@ -556,6 +563,212 @@ function rangePlan(range: string): { count: number; step: number } {
 const MIB = 1024 * 1024
 const GIB = 1024 * MIB
 
+/** range 字符串 → 毫秒跨度（SLO/容量预测窗口用）。 */
+function rangeSpanMs(range: string): number {
+  const { count, step } = rangePlan(range)
+  return count * step
+}
+
+/** window 字符串 → 秒（排行响应回显 windowSeconds）。 */
+function windowSeconds(window: string): number {
+  switch (window) {
+    case '5m':
+      return 300
+    case '1h':
+      return 3600
+    case '24h':
+      return 86400
+    case '7d':
+      return 7 * 86400
+    default:
+      return 300
+  }
+}
+
+/** 时区名 → 相对 UTC 的小时偏移（仅用于演示时段分布随时区整体平移）。 */
+function tzHourOffset(tz: string): number {
+  if (tz === 'UTC' || tz === 'Etc/UTC') return 0
+  const m = /^UTC([+-])(\d{1,2})$/.exec(tz)
+  if (m) return (m[1] === '-' ? -1 : 1) * Number(m[2])
+  // 常见 IANA 名兜底（假后端不求完备，够演示「时段随时区变化」即可）。
+  if (tz.includes('Shanghai') || tz.includes('Chongqing') || tz.includes('Asia/Shanghai')) return 8
+  if (tz.includes('Tokyo')) return 9
+  if (tz.includes('New_York')) return -5
+  if (tz.includes('London')) return 0
+  return 0
+}
+
+/**
+ * 排行种子行（FR-469）：假后端从实例集合取前若干台，按指标的「差」方向造值。
+ *
+ * `nodeUuid` 必须是**真实 seed 的节点 UUID**：真后端 `RankingItem.nodeUuid` 取
+ * `metric_series.node_uuid`，前端 `InstanceRankingPanel` 用
+ * `nodes.find(n => n.uuid === row.nodeUuid)?.name` 渲染「节点」列——杜撰的 UUID 会
+ * 解析不出名称、退化成截断 UUID（`node-moc…`），而节点筛选下拉的 value 正是节点 UUID，
+ * 两边对不上就成了「选了没反应」。
+ */
+function rankingSeed(
+  metricKey: string,
+  nodeUUID?: string,
+): { instanceId: number; instanceUuid: string; name: string; nodeUuid: string; value: number }[] {
+  // 只读借用实例 / 节点集合（不重复声明 seedFn，避免覆盖它域播种）。
+  const nodeUuidById = new Map(
+    db<{ id: number; uuid: string }>('nodes')
+      .list()
+      .map((n) => [n.id, n.uuid]),
+  )
+  let rows = db<{ id: number; uuid: string; name: string; nodeId: number }>('instances').list().slice(0, 12)
+  // 节点筛选：真后端按 `s.node_uuid = ?` 过滤（router/metric.go 的 nodeId → RankingQuery.NodeUUID），
+  // 此处同样**消费**该参数，否则下拉选了没反应。
+  // 注意取样与过滤的先后：先取候选池（slice 保持原有 12 条上限）再过滤，筛选才能剪掉条目；
+  // 若反过来「每个节点各取 12 条」，节点筛选就永远返回满额、看起来依然没反应。
+  // 只认**节点 UUID**（与真后端一致）：假后端实例只存 nodeId（数字），
+  // 故必须经 nodeUuidById 换成 UUID 再比，避免拿数字 id 冒充 UUID 过滤。
+  if (nodeUUID) rows = rows.filter((inst) => nodeUuidById.get(inst.nodeId) === nodeUUID)
+  return rows.slice(0, 12).map((inst) => {
+    // 用确定性伪随机（按 id 哈希）避免每次请求数值抖动导致表格跳动。
+    const h = (inst.id * 2654435761) % 1000
+    const frac = h / 1000
+    const value =
+      metricKey === 'inst_tps'
+        ? Number((8 + frac * 12).toFixed(2))
+        : metricKey === 'inst_mspt'
+          ? Number((18 + frac * 82).toFixed(1))
+          : metricKey === 'inst_cpu_pct'
+            ? Number((12 + frac * 78).toFixed(1))
+            : metricKey === 'inst_heap_used'
+              ? Math.round((0.4 + frac * 1.5) * GIB)
+              : Math.round(frac * 60)
+    return {
+      instanceId: inst.id,
+      instanceUuid: inst.uuid,
+      name: inst.name,
+      // 取实例所属节点的真实 UUID。节点已归档/已删时按空串处理（真后端 JOIN instances
+      // 且序列 node_uuid 恒有值，此处只兜住 seed 不一致，不杜撰、不显示假节点）。
+      nodeUuid: nodeUuidById.get(inst.nodeId) ?? '',
+      value,
+    }
+  })
+}
+
+/**
+ * 容量上限指标键（与 Go 侧 `saturationMaxKey`（alert_baseline.go:338）逐条对齐）。
+ * 真后端 `forecastLimit` 优先取该上限序列，缺序列时才回退节点注册快照。
+ */
+const CAPACITY_LIMIT_KEY: Record<string, string> = {
+  node_disk_used: 'node_disk_total',
+  node_mem_used: 'node_mem_total',
+  inst_heap_used: 'inst_heap_max',
+}
+
+/**
+ * 演示用外推天数（天）。**只有在此表内的「已用」指标**才是「有增长可外推」，
+ * 其余键按真后端 `β ≤ 0` 分支返回「无增长趋势，不预测」——刻意保留 node_mem_used 不在表内，
+ * 让「不预测」负例在 mock 模式下可复现（真后端同窗口下该指标同样算不出正增长）。
+ */
+const CAPACITY_GROWTH_DAYS: Record<string, number> = {
+  node_disk_used: 5.2,
+  inst_heap_used: 12.5,
+}
+
+/** 80% 置信区间（天），与点估计成比例，保证 low < days < high。 */
+const CAPACITY_CI_DAYS: Record<string, { low: number; high: number }> = {
+  node_disk_used: { low: 4.1, high: 7.0 },
+  inst_heap_used: { low: 9.8, high: 16.2 },
+}
+
+/** 三种 insufficient 原因（与 capacity.go:173/:179/:189 的 note 逐字一致）。 */
+const CAPACITY_NOTE_NO_SAMPLES = '样本不足，不预测'
+const CAPACITY_NOTE_NO_LIMIT = '缺少容量上限（无上限序列且无节点容量快照），不预测'
+const CAPACITY_NOTE_NO_TREND = '无增长趋势，不预测'
+
+/** 真后端 capacityMinSamples（capacity.go:16）：少于该点数一律「样本不足，不预测」。 */
+const CAPACITY_MIN_SAMPLES = 100
+
+/**
+ * 窗口内的样本点数，按真后端 `selectResolution` 的档位口径推算
+ * （≤48h → raw 30s；≤30d → 5m；更长 → 1h；见 capacity.go:150 的 `selectResolution(span, "auto")`）。
+ *
+ * 不直接用 `rangePlan(range).count`：那是**图表**的分桶点数（如 24h → 96 个 15min 桶），
+ * 而容量外推消费的是原始/归档样本点（24h → 2880 拍）。混用会让默认 24h 视图被误判为
+ * 「样本不足」（96 < capacityMinSamples），与真后端行为相反。
+ */
+function capacitySamples(range: string): number {
+  const spanSec = rangeSpanMs(range) / 1000
+  const intervalSec = spanSec <= 48 * 3600 ? 30 : spanSec <= 30 * 86400 ? 300 : 3600
+  return Math.floor(spanSec / intervalSec)
+}
+
+/**
+ * 取 mock 自身时序的最新值（序列不存在返回 undefined）。
+ *
+ * 关键：容量卡与同页曲线图**共用同一份派生时序**，故 `nowValue`/`limitValue` 必须从这里取，
+ * 而不是另写一套常量——旧实现给 `node_mem_used` 硬编码 heap 量级的 2 GiB 上限，
+ * 与页面上同指标的曲线量级互相矛盾（M1）。
+ */
+function seriesLatestValue(range: string, scope: string, metricKey: string): number | undefined {
+  const all = scope === 'instance' ? instanceSeries(range) : nodeSeries(range)
+  const hit = all.find((s) => s.metricKey === metricKey)
+  const last = hit?.points[hit.points.length - 1]
+  return last ? last.avg : undefined
+}
+
+/**
+ * 单指标容量预测行（FR-464）。分档顺序刻意复刻真后端 `ForecastCapacity`：
+ * ① 无序列 / 点数 < capacityMinSamples → 「样本不足，不预测」；
+ * ② 无配对上限（`CAPACITY_LIMIT_KEY` 无该键或上限序列缺失）→ 「缺少容量上限…」；
+ * ③ 无可外推趋势（不在 `CAPACITY_GROWTH_DAYS`）→ 「无增长趋势，不预测」；
+ * ④ 否则给低置信度点估计 + 80% CI。
+ *
+ * 未知指标键由此**不再静默降级**：它拿不到序列，走 ① 并显式 `samples: 0`，
+ * 与真后端「该键无序列 → 样本不足」的响应一致，而不是伪造 `samples: 1840` 的成功体（M1/M9）。
+ */
+function capacityForecastRow(
+  scope: string,
+  range: string,
+  targetId: string,
+  metricKey: string,
+): CapacityForecastInfo['forecasts'][number] {
+  const base = {
+    targetId,
+    metricKey,
+    slopePerSec: 0,
+    exhaustAt: null,
+    exhaustLowDays: null,
+    exhaustHighDays: null,
+    confidence: 'insufficient' as const,
+  }
+  const nowValue = seriesLatestValue(range, scope, metricKey)
+  const limitValue = seriesLatestValue(range, scope, CAPACITY_LIMIT_KEY[metricKey] ?? '')
+  // 真后端样本数 = 窗口内该指标的对齐点数；mock 无该序列时为 0（如实反映「查不到」）。
+  const samples = nowValue === undefined ? 0 : capacitySamples(range)
+  if (nowValue === undefined || samples < CAPACITY_MIN_SAMPLES) {
+    return { ...base, nowValue: 0, limitValue: 0, samples, note: CAPACITY_NOTE_NO_SAMPLES }
+  }
+  if (limitValue === undefined || limitValue <= 0) {
+    return { ...base, nowValue, limitValue: 0, samples, note: CAPACITY_NOTE_NO_LIMIT }
+  }
+  const days = CAPACITY_GROWTH_DAYS[metricKey]
+  const ci = CAPACITY_CI_DAYS[metricKey]
+  if (days === undefined || ci === undefined) {
+    return { ...base, nowValue, limitValue, samples, note: CAPACITY_NOTE_NO_TREND }
+  }
+  // slope 反推自 (limit - now) / 天数，使三者在同一响应内自洽（不再各写各的常量）。
+  return {
+    targetId,
+    metricKey,
+    nowValue,
+    limitValue,
+    slopePerSec: (limitValue - nowValue) / (days * 86400),
+    exhaustAt: iso(days * 86400_000),
+    exhaustLowDays: ci.low,
+    exhaustHighDays: ci.high,
+    confidence: 'low',
+    samples,
+    note: '',
+  }
+}
+
 /** 节点序列：CPU%/负载/内存/磁盘/网络（metricKey 对齐 lib/monitor-metrics NODE_CHART_DEFS）。 */
 function nodeSeries(range: string) {
   const { count, step } = rangePlan(range)
@@ -661,6 +874,35 @@ function mergedFeed(): FeedItemMock[] {
     resolved: e.resolved,
   }))
   return [...messages, ...alerts]
+}
+
+/**
+ * SLO 是否拿到「可用证据」（FR-463）。真后端平台维按「存在 `inst_uptime` 序列 && 实例仍存在」
+ * 判定（slo.go:213-217），实例维按该实例的 `inst_uptime` 拍、节点维按 `node_cpu_pct` 拍
+ * （slo.go:72）。对应到 mock：证据序列等价于「目标在跑」——
+ * - platform：至少一台实例 RUNNING（无 RUNNING 实例 ⇒ 无任何 uptime 拍）；
+ * - instance：该 UUID 的实例存在且 RUNNING；
+ * - node：该 UUID 的节点在线（status===1 且未归档，归档节点不再上报）。
+ * 目标不存在时同样返回 false（真后端给 404/403，此处保守按「无证据」让前端渲染「不适用」）。
+ */
+function hasSLOEvidence(scope: 'platform' | 'node' | 'instance', targetId: string): boolean {
+  interface SloInstance {
+    id: number
+    uuid: string
+    nodeId: number
+    status: string
+  }
+  const running = db<SloInstance>('instances').list((i) => i.status === 'RUNNING')
+  if (scope === 'platform') return running.length > 0
+  if (scope === 'instance') return running.some((i) => i.uuid === targetId)
+  interface SloNode {
+    id: number
+    uuid: string
+    status: number
+    deletedAt?: string
+  }
+  const node = db<SloNode>('nodes').find((n) => n.uuid === targetId)
+  return !!node && node.status === 1 && !node.deletedAt
 }
 
 export const handlers = [
@@ -769,6 +1011,180 @@ export const handlers = [
       nodes: [{ nodeId, nodeName: '北京节点', series: [] }],
       unavailable: [],
     })
+  }),
+
+  // ===== FR-463/464/465/469：SLO 可用性 / 容量预测 / 性能归因 / 跨实例排行与玩家趋势 =====
+
+  // 性能归因（FR-465）：假后端给一个「GC 暂停占用为主因」的结论，让归因卡有内容可渲染。
+  domainRoute('get', '/metrics/performance/attribution', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const targetId = url.searchParams.get('targetId') ?? ''
+    const range = url.searchParams.get('range') ?? '7d'
+    const target = url.searchParams.get('metric') ?? 'inst_tps'
+    // 无 targetId 与真后端一致拒绝（INVALID_TARGET）。
+    if (!targetId) {
+      return HttpResponse.json({ error: 'INVALID_TARGET', message: 'targetId 非空' }, { status: 400 })
+    }
+    const body: AttributionInfo = {
+      target,
+      window: { from: iso(-rangeSpanMs(range)), to: iso(0) },
+      status: 'ok',
+      tldr: '劣化主因：GC 暂停占用（权重 0.62）',
+      factors: [
+        { metricKey: 'inst_gc_time_ms', label: 'GC 暂停占用', correlation: -0.81, weight: 0.62, note: '相关性非因果' },
+        { metricKey: 'world_loaded_chunks', label: '已加载区块', correlation: -0.44, weight: 0.23, note: '相关性非因果' },
+        { metricKey: 'world_entities', label: '实体数', correlation: -0.31, weight: 0.15, note: '相关性非因果' },
+      ],
+      samples: 2016,
+    }
+    return HttpResponse.json(body)
+  }),
+
+  // 跨实例全局排行（FR-469）：镜像真后端契约（items 排序 + rank + skippedNoData）。
+  domainRoute('get', '/metrics/instances/ranking', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const metricKey = url.searchParams.get('metric') ?? 'inst_tps'
+    const order = url.searchParams.get('order') ?? (metricKey === 'inst_tps' ? 'asc' : 'desc')
+    const window = url.searchParams.get('window') ?? '5m'
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') ?? '20')))
+    // nodeId 是**节点 UUID**（真后端 `c.Query("nodeId")` → RankingQuery.NodeUUID）。
+    // 节点不存在时真后端返 404 TARGET_NOT_FOUND，此处同口径（否则前端筛了个不存在的节点会静默拿到全量榜）。
+    const nodeUUID = url.searchParams.get('nodeId') ?? ''
+    if (nodeUUID) {
+      const known = db<{ id: number; uuid: string }>('nodes')
+        .list()
+        .some((n) => n.uuid === nodeUUID)
+      if (!known) {
+        return HttpResponse.json({ error: 'TARGET_NOT_FOUND', message: '节点不存在' }, { status: 404 })
+      }
+    }
+    const rows = rankingSeed(metricKey, nodeUUID || undefined).sort((a, b) =>
+      order === 'asc' ? a.value - b.value : b.value - a.value,
+    )
+    const items = rows.slice(0, limit).map((r, i) => ({ ...r, rank: i + 1, sampledAt: iso(-60_000) }))
+    const body: RankingResultInfo = {
+      metricKey,
+      order: order === 'asc' ? 'asc' : 'desc',
+      windowSeconds: windowSeconds(window),
+      scoped: false,
+      skippedNoData: 2,
+      items,
+    }
+    return HttpResponse.json(body)
+  }),
+
+  // 玩家在线趋势与时段分析（FR-469）：24 时段分布按 tz 参数整体平移，便于验证时区口径。
+  domainRoute('get', '/metrics/players/trend', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const range = url.searchParams.get('range') ?? '7d'
+    const tz = url.searchParams.get('tz') ?? 'UTC'
+    const { count, step } = rangePlan(range)
+    const trend = makeSeriesPoints(count, step, 220, 160)
+    const shift = tzHourOffset(tz)
+    const dist = Array.from({ length: 24 }, (_, h) => {
+      const local = (h + shift + 24) % 24
+      // 双峰：晚间 20 点与午后 14 点高峰。
+      return Number((120 + 90 * Math.exp(-((local - 20) ** 2) / 8) + 45 * Math.exp(-((local - 14) ** 2) / 12)).toFixed(1))
+    })
+    const peak = Math.max(...dist)
+    const body: PlayerTrendInfo = {
+      resolution: '5m',
+      timezone: tz,
+      trend,
+      hourlyDist: dist,
+      peakValue: peak,
+      peakAt: iso(-3600_000),
+      dailyAvg: Number((dist.reduce((a, b) => a + b, 0) / 24).toFixed(1)),
+    }
+    return HttpResponse.json(body)
+  }),
+
+  // 可用性 / SLO（FR-463）：平台与实例维度同构；MTTR/MTBF 用 null 演示「无故障」语义。
+  domainRoute('get', '/metrics/slo', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const scope = url.searchParams.get('scope') ?? 'platform'
+    const target = Number(url.searchParams.get('target') ?? '0') || 0.995
+    const range = url.searchParams.get('range') ?? '24h'
+    const targetId = url.searchParams.get('targetId') ?? ''
+    if (scope !== 'platform' && !targetId) {
+      return HttpResponse.json({ error: 'INVALID_SCOPE', message: 'node/instance 维度要求 targetId 非空' }, { status: 400 })
+    }
+    const spanSec = rangeSpanMs(range) / 1000
+    const scopeNorm = scope === 'node' || scope === 'instance' ? scope : 'platform'
+    // 「有无可用证据」由 **seed 数据** 决定，而不是恒为「有」——
+    // 真后端 applicable=false 的条件是「窗口内该维度查不到可用证据序列」
+    // （slo.go:213-217：平台维 len(series)==0 → 不适用；spec §4 验收点 1 要求前端渲染「不适用」）。
+    // 对应到 mock：证据序列等价于「目标在跑」——实例维看 status==='RUNNING'（探针只在运行时上报
+    // inst_uptime），节点维看 status===1（在线节点才上报 node_cpu_pct）。若一律给 applicable=true，
+    // `npm run dev:mock` 下这条关键语义永远复现不出，而真机沙箱恰好就是该态（spec 备注：inst_uptime 序列数 = 0）。
+    const evidence = hasSLOEvidence(scopeNorm, targetId)
+    if (!evidence) {
+      // 与真后端同构：分母为 0 时不给可用率/误差预算数字，否则前端会读成「预算充裕」
+      // 或「100% 已消耗」（m1）。故障/恢复仍按窗口给值——它们来自 AlertEvent，与证据无关。
+      const body: SLOInfo = {
+        scope: scopeNorm,
+        availability: 0,
+        totalSamples: 0,
+        upSamples: 0,
+        incidents: 3,
+        activeIncidents: 1,
+        mttrSeconds: 412.5,
+        mtbfSeconds: spanSec / 3,
+        budgetAllowedSec: 0,
+        budgetBurnedSec: 0,
+        target,
+        approximatedBuckets: false,
+        applicable: false,
+      }
+      return HttpResponse.json(body)
+    }
+    const totalSamples = Math.max(1, Math.round(spanSec / 30))
+    const upSamples = Math.round(totalSamples * 0.9975)
+    const availability = upSamples / totalSamples
+    const allowed = spanSec * (1 - target)
+    const body: SLOInfo = {
+      scope: scopeNorm,
+      availability,
+      totalSamples,
+      upSamples,
+      incidents: 3,
+      activeIncidents: 1,
+      mttrSeconds: 412.5,
+      mtbfSeconds: spanSec / 3,
+      budgetAllowedSec: allowed,
+      budgetBurnedSec: spanSec * (1 - availability),
+      target,
+      approximatedBuckets: rangeSpanMs(range) > 48 * 3600_000,
+      applicable: true,
+    }
+    return HttpResponse.json(body)
+  }),
+
+  // 容量预测（FR-464）：磁盘/堆给「有增长」结果，节点内存给「无增长不预测」负例。
+  domainRoute('get', '/metrics/capacity/forecast', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const scope = url.searchParams.get('scope') ?? 'node'
+    const targetId = url.searchParams.get('targetId') ?? ''
+    if (!targetId) {
+      return HttpResponse.json({ error: 'INVALID_SCOPE', message: 'scope 必须为 node 或 instance，且 targetId 非空' }, { status: 400 })
+    }
+    const wanted = (url.searchParams.get('metrics') ?? (scope === 'node' ? 'node_disk_used,node_mem_used' : 'inst_heap_used')).split(',').filter(Boolean)
+    const range = url.searchParams.get('range') ?? '24h'
+    const forecasts: CapacityForecastInfo['forecasts'] = wanted.map((metricKey) =>
+      capacityForecastRow(scope, range, targetId, metricKey),
+    )
+    const body: CapacityForecastInfo = { forecasts }
+    return HttpResponse.json(body)
   }),
 
   domainRoute('get', '/metrics/processes/top', (info) => {

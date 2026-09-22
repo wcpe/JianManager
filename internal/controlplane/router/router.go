@@ -101,6 +101,8 @@ type Services struct {
 	Network      *service.NetworkService
 	Log          *service.LogService
 	Metric       *service.MetricService
+	// CapacityTrend 容量趋势告警器（FR-464）；nil 时容量预测仍可用，仅不发趋势告警。
+	CapacityTrend *service.CapacityTrendAlerter
 	// PlatformObservability 是平台管理员首页的有界总览读模型（FR-402）。
 	PlatformObservability *service.PlatformObservabilityService
 	Settings              *service.SettingsService
@@ -425,7 +427,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		logHandler.RegisterRoutes(permRead("log.read"))
 
 		// 时序监控历史曲线（FR-060）：node 维度对认证用户开放，instance 维度按 CanAccessInstance 收敛。
-		metricHandler := NewMetricHandler(svcs.Metric, svcs.Authz)
+		metricHandler := NewMetricHandler(svcs.Metric, svcs.Authz, svcs.CapacityTrend)
 		metricHandler.RegisterRoutes(permRead("monitor.read", "stats.read"))
 		if svcs.PlatformObservability != nil {
 			observabilityHandler := NewObservabilityHandler(svcs.PlatformObservability)

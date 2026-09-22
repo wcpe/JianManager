@@ -79,37 +79,16 @@ func waitForProcGone(t *testing.T, pid int) {
 	}, 5*time.Second, 50*time.Millisecond, "子进程应已退出")
 }
 
-// testWorkDir 等价 t.TempDir()，但清理带 Windows 重试退避。
+// testWorkDir 返回本用例专属工作目录，由 testing 框架（t.TempDir）负责回收，
+// 不再用 os.MkdirTemp("") 往系统 /tmp 堆积目录（开发机 /tmp 常为 tmpfs）。
 //
 // 观察项（2026-09-07）：全量并行负载下本包曾偶发 runtime netpoll fatal
 // （单跑/复跑均未复现）。同轮已修复 wrapper 停止后 server 侧连接句柄
 // 泄漏与测试 TempDir 句柄残留两类确定性 flake，netpoll 若再复现，
 // 从「stop 未等 goroutine 退出即关 pipe」的并发 close 方向深挖。
-//
-// 只等 javaPID（cmd.exe）退出还不够：taskkill /T /F 异步终止整棵进程树，孙进程
-// （ping 等）可能比父进程晚消失几百毫秒，其继承的 CWD 句柄仍占用 pidDir——
-// t.TempDir() 的 RemoveAll 届时直接 fatal。故改用自定义清理：RemoveAll 失败时
-// 以 100ms 步进重试至 5s；仍失败则放任（进程树终会退出，目录由 OS 临时目录回收），
-// 不让清理噪音淹没真实测试结果。
 func testWorkDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "jm-wrapper-test-")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			err := os.RemoveAll(dir)
-			if err == nil {
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Logf("测试目录清理失败（放任由 OS 回收）: %v", err)
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	})
-	return dir
+	return t.TempDir()
 }
 
 // TestWrapper_StopControl 验证 wrapper 端到端：

@@ -15,6 +15,9 @@ import { MetricsOverviewStrip } from '@jianmanager/ui'
 import { MetricComparePanel } from '@/components/charts/MetricComparePanel'
 import { DrillTargetPicker, targetKey, type DrillTarget } from '@/components/charts/DrillTargetPicker'
 import { useTargetSeries } from '@/components/charts/use-target-series'
+import { InstanceRankingPanel } from '@/components/metrics/InstanceRankingPanel'
+import { CapacityForecastCard } from '@/components/metrics/CapacityForecastCard'
+import { SLOSection } from '@/components/metrics/SLOSection'
 import {
   NODE_CHART_DEFS,
   INSTANCE_CHART_DEFS,
@@ -418,6 +421,17 @@ export default function MonitoringPage() {
       </Panel>
 
       <ProcessTopPanel rows={processTop} onInspect={setSelectedProcess} />
+
+      {/* 全局排行（FR-469）：跨节点全量实例排序 + 名次 + 下钻；非管理员只见可访问实例。 */}
+      <InstanceRankingPanel nodes={nodes} />
+
+      {/* 容量预测（FR-464）：仅在有明确目标时渲染（实例详情/节点详情语义下才有意义）。 */}
+      {target.kind !== 'platform' && (
+        <CapacityForecastCard scope={target.kind} targetId={target.uuid} range={range} />
+      )}
+
+      {/* 可用性（FR-463）：平台级汇总；下钻到实例/节点时改为该目标口径。 */}
+      <SLOSection range={range} scope={target.kind === 'platform' ? 'platform' : target.kind} targetId={target.kind === 'platform' ? undefined : target.uuid} />
 
       <ProcessDetailDialog
         open={!!selectedProcess}

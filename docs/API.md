@@ -637,7 +637,7 @@
 - **描述**: 节点/实例历史曲线。Worker 心跳上报节点指标 + 每实例 ServerProbe 快照，CP 分级降采样持久化（raw 48h / 5m 30d / 1h ≥1y，ADR-013），按区间自动选档返回
 - **关联 FR**: FR-060 ｜ **关联 ADR**: ADR-013, ADR-014
 - **权限**: 登录；`scope=node` 对认证用户开放，`scope=instance` 按 `instance.read` 收敛（越权 403）
-- **Query**: `scope`(node\|instance) 必填；`targetId` 必填（node_uuid 或 instance_uuid）；`metrics` 可选（逗号分隔指标键；`scope=instance` 含 `world_*` 时按 world 维度返回多序列）；`range`(1h\|6h\|24h\|7d\|30d\|90d) 或 `from`/`to`(RFC3339)；`resolution`(auto\|raw\|5m\|1h，默认 auto)
+- **Query**: `scope`(node\|instance) 必填；`targetId` 必填（node_uuid 或 instance_uuid）；`metrics` 可选（逗号分隔指标键；`scope=instance` 含 `world_*` 时按 world 维度返回多序列）；`range`(1h\|6h\|24h\|7d\|30d\|90d\|1y) 或 `from`/`to`(RFC3339)；`resolution`(auto\|raw\|5m\|1h，默认 auto)
 - **响应**:
   ```json
   {
@@ -743,6 +743,94 @@
   ]
   ```
 - **错误**: 400 `INVALID_SORT`/`INVALID_INSTANCE`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`
+
+### GET /api/v1/metrics/performance/attribution
+- **描述**: 对指定实例窗口内的目标指标（默认 `inst_tps`）做相关性 + 标准化系数归因，给出劣化主要贡献因子与权重（相关性非因果）。世界级因子（区块/实体/方块实体）先按 `instance_id` 跨 world 求和成实例级序列。样本不足（对齐点 <30）或无显著因子时返回 `status=insufficient` 且不给排序。
+- **关联 FR**: FR-465
+- **权限**: 登录；instance 维度按实例可访问性收敛（无权 403），与 `GET /metrics/series` 同口径
+- **Query**: `scope=instance`（默认）、`targetId`（实例 UUID）、`metric?`（默认 `inst_tps`）、`range`(默认 24h；按跨度自动选档——≤6h raw、≤30d 5m、更长 1h) 或 `from`/`to`
+- **响应**:
+  ```json
+  { "target": "inst_tps", "window": { "from": "...", "to": "..." }, "status": "ok",
+    "tldr": "劣化主因：GC 暂停占用（权重 0.62）",
+    "factors": [ { "metricKey": "inst_gc_time_ms", "label": "GC 暂停占用", "correlation": -0.81, "weight": 0.62, "note": "相关性非因果" } ],
+    "samples": 2016 }
+  ```
+- **错误**: 400 `INVALID_SCOPE`/`INVALID_RANGE`/`INVALID_TARGET`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`
+
+### GET /api/v1/metrics/instances/ranking
+- **描述**: 跨节点全量实例按指标窗口代表值（窗口内均值，比最新一拍稳健）排序，带名次与代表值。窗口内无样本的实例**不入榜**（不伪造 0）。走单条聚合 SQL（不逐实例查询），不复用 `/metrics/series/batch`。
+- **关联 FR**: FR-469
+- **权限**: 登录；平台管理员全量，非管理员仅可在其可访问实例集合内排行（响应 `scoped=true`），不整拒
+- **Query**: `metric=inst_tps|inst_mspt|inst_cpu_pct|inst_heap_used|inst_players_online`（默认 `inst_tps`）、`order=asc|desc`（默认按指标语义：TPS 越低越差 → asc，其余 desc）、`window`（白名单 `5m|15m|1h|6h|24h|7d|30d`，默认 `5m`；不接受 `1h30m` 这类自由格式时长）、`limit=1..100`（默认 20）、`nodeId?`（node_uuid，限定节点）
+- **响应**:
+  ```json
+  { "metricKey": "inst_tps", "order": "asc", "windowSeconds": 300, "scoped": false, "skippedNoData": 2,
+    "items": [ { "instanceId": 1, "instanceUuid": "uuid", "name": "survival-1", "nodeUuid": "node-uuid",
+                 "value": 8.4, "rank": 1, "sampledAt": "2026-07-06T12:00:00Z" } ] }
+  ```
+- **口径注记**: 样本档按窗口跨度选：**≤6h→raw、≤7d→5m、≤30d→1h**（30d 走 1h 是为控制聚合行数——500 实例 × 2016 个 5m 桶约 100 万行；1h 档均值为同窗口等价代表值）。`skippedNoData` 为「有该指标序列但窗口内无样本」的实例数，与进榜计数由**同一条**条件聚合 SQL 一次算出。`metric_series` 上建有 `(scope, metric_key)` 复合索引支撑序列筛选。
+  - **UI 实传 `limit=50`**（`InstanceRankingPanel` 显式传参，非 hook 缺省 20）：控制台页面展示前 50 名，与 `processes/top` 的上限对齐。按文档缺省 `limit=20` 手测会得到与页面不同的条数，非缺陷。
+- **错误**: 400 `INVALID_METRIC`/`INVALID_ORDER`/`INVALID_WINDOW`/`INVALID_LIMIT`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`
+
+### GET /api/v1/metrics/players/trend
+- **描述**: 全网玩家在线趋势曲线（跨实例合计，复用 `aggregateTrend` 的 sum 语义）+ 24 时段分布 + 峰值/日均。时段按其 `bucket_ts` 的**小时**归并求均值，时区口径由 `tz` 决定（缺省服务器本地时区），响应回显 `timezone`。
+  - **`tz` 不可解析时回退 UTC 而非 400**：回显形如 `"UTC (fallback from Not/AZone)"`，前端据此显示提示。官方容器镜像（alpine）不含 tzdata，故 CP 入口内嵌 `time/tzdata` 保证合法时区名必可解析。
+  - **半小时偏移时区**（如 `Asia/Kolkata`，UTC+5:30）：桶按整点（UTC）对齐、按时区偏移展示，故时段边界落在 **:30**（0 时段覆盖该时区 00:00~00:30 的样本）。
+  - **UI 自动下发浏览器时区**：`PlayerTrendCard` 每次请求都带上 `Intl.DateTimeFormat().resolvedOptions().timeZone`，故控制台展示的时段分布按**运维所在时区**切分。不带 `tz` 手测（缺省服务器本地时区）会得到与页面不同的时段分布，非缺陷。
+- **关联 FR**: FR-469
+- **权限**: 登录（仅聚合总量与曲线，不暴露单实例明细，与 `/metrics/overview` 同口径）
+- **Query**: `range`(1h|6h|24h|7d|30d|90d|1y，默认 24h) 或 `from`/`to`；`resolution=auto|raw|5m|1h`；`tz?`（IANA 时区名，如 `Asia/Shanghai`）
+- **响应**:
+  ```json
+  { "resolution": "5m", "timezone": "Asia/Shanghai",
+    "trend": [ { "ts": "...", "avg": 3180, "min": 3180, "max": 3180 } ],
+    "hourlyDist": [ /* 恒 24 项，0~23 时 */ ], "peakValue": 4210,
+    "peakAt": "2026-07-06T12:00:00Z", "dailyAvg": 2980.5 }
+  ```
+  `peakAt` 可为 `null`（窗口内无有效点）。
+- **错误**: 400 `INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`（`tz` 非法不再 400，回退 UTC）
+
+### GET /api/v1/metrics/slo
+- **描述**: 窗口内可用率、故障次数、MTTR/MTBF 与误差预算（FR-463）。可用证据 = 该拍存在非 NULL 的 `inst_uptime` 样本（节点维度用 `node_cpu_pct` 拍）；分母按 `窗口时长 / 30s` 推算，**缺拍计为不可用**（「无证据即不可用」的保守默认）。故障以 `AlertEvent`（triggerType ∈ {`instance_crash`,`node_offline`,`metric`}）的 `FiredAt` 计次。**MTTR/MTBF 无故障时返回 `null`（不是 `Infinity`）**。
+- **关联 FR**: FR-463
+- **权限**: 登录；`platform`/`node` 对认证用户开放（`platform` 对非管理员收敛到可访问实例集合）；`instance` 按实例可访问性收敛（无权 403）
+- **Query**: `scope=platform|node|instance`（默认 platform）、`targetId`（node/instance 维度必填）、`range`(1h|6h|24h|7d|30d|90d|1y，默认 24h) 或 `from`/`to`、`target?`（可用性目标，默认 0.995）
+- **响应**:
+  ```json
+  { "scope": "instance", "availability": 0.9995, "totalSamples": 2880, "upSamples": 2878,
+    "incidents": 2, "activeIncidents": 0, "mttrSeconds": 300, "mtbfSeconds": 43200,
+    "budgetAllowedSec": 432, "budgetBurnedSec": 1.5, "target": 0.995,
+    "approximatedBuckets": false, "applicable": true }
+  ```
+- **口径注记**:
+  - 超过 raw 留存（48h）的窗口按档位近似：**≤48h 走 raw 逐样本、≤30d 走 5m 桶、更长走 1h 桶**，rollup 档每桶计入拍数取 `min(count, 桶秒/30)`（5m→10、1h→120），此时 `approximatedBuckets=true`；平台维度 = 各实例可用拍求和 / 总拍求和（不做简单平均，避免实例数变化扭曲）。
+  - **`applicable=false`**：窗口内没有任何可用证据（分母为 0，如平台尚无探针实例）时置 false，此时 `availability=0`、`budgetAllowedSec=0`、`budgetBurnedSec=0` 都**不适用**，前端显示「不适用」而非「误差预算 100% 已消耗」。
+    - 平台维度触发条件具体为：窗口内不存在「`scope=instance`、`metric_key=inst_uptime`、且实例仍存在」的序列（即没有任何实例上报过探针 uptime）。此时 `totalSamples=0`。这是**预期口径**而非缺陷——真机验收平台可用率前须先接入 ServerProbe，否则应验实例维度。
+    - **退化窗口同样置 false（B-3）**：平台分母 = 「窗口跨度 / 采样间隔」取整 × 参与实例数；当窗口**不足一个采样间隔**（raw 档 < 30s，如 `from=T&to=T+5s`）时分母为 0，与「无可用证据」同构处理为 `applicable=false` 且各数值字段为 0。此分支此前会算出 `availability=NaN`，而 `encoding/json` 编不出 NaN → gin 写出 **200 + 空 body**，调用方既拿不到数据也拿不到错误。
+  - **出口无 NaN/Inf（B-3）**：`availability`/`budgetAllowedSec`/`budgetBurnedSec`/`mttrSeconds`/`mtbfSeconds`/`target` 一律不返回 NaN/Inf。`target` 参数经归一化——`ParseFloat("NaN")` 会成功返回 NaN 且 `NaN <= 0` 为 false，故非有限值或 ≤0 一律回落默认 `0.995`（避免 `1-target` 污染全部预算字段）。
+  - **故障事件的目标维度收敛**：`trigger_type=metric` 同时存在于 **node 与 instance 两个目标维度**，而 `alert_events.target_id` 只有一个数字列（`nodes.id` 与 `instances.id` 各自独立自增，会撞号）。故 `node` 维度只收 `target_type=node` 的规则事件、`instance` 维度只收 `target_type=instance`、**`platform` 维度只收 `instance` 目标**（平台是实例集合的汇总，节点离线事件不属于该集合）。规则缺 `target_type` 的存量行按触发类型家族保守判定——`node_offline` 恒归节点、`instance_crash` 恒归实例；**`metric` 因两维度都存在而无法安全判别，一律不计**（宁可少计，也不跨维度错计，与健康墙归因同口径）。
+  - **平台分母只统计现存实例**：`metric_series` 从不删除，实例删除后会残留孤儿序列；平台维度按 `instances` 现存的 UUID 收敛，故已删除实例不再拉低平台可用率。装过探针后**长期离线但实例仍存在**的实例仍计入分母（窗口内无新样本 → 计为不可用），属「缺拍计不可用」的预期口径。
+- **错误**: 400 `INVALID_SCOPE`/`INVALID_RANGE`/`INVALID_TARGET`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`
+
+### GET /api/v1/metrics/capacity/forecast
+- **描述**: 对关键资源（节点磁盘/内存、实例堆内存）做 Theil–Sen 稳健线性外推，给出耗尽时间与 80% 置信区间（由残差标准差 σ_res 与斜率标准误 σ_β 合成，正态近似）。`β ≤ 0`（无增长）、样本不足（<100 点）、`β` 的 80% 区间跨 0（趋势不显著）或耗尽时间超出可预测上界时返回 `confidence=insufficient` 且 `exhaust*` 全为 `null`，**不伪造预测**。命中「预计 N 天内耗尽」时经既有 metric 规则发趋势告警（键含 targetId + metricKey）。
+- **关联 FR**: FR-464
+- **权限**: 登录；node 维度对认证用户开放；instance 维度按实例可访问性收敛（无权 403）
+- **Query**: `scope=node|instance`（默认 node）、`targetId`（node_uuid 或实例 UUID，必填）、`metrics?`（逗号分隔的「已用」指标键，缺省 node→`node_disk_used,node_mem_used`、instance→`inst_heap_used`）、`range`(1h|6h|24h|7d|30d|90d|1y，默认 24h；推荐 7d 走 5m 档) 或 `from`/`to`、`thresholdDays?`（趋势告警阈值，默认 7）
+- **响应**:
+  ```json
+  { "forecasts": [ { "targetId": "node-uuid", "metricKey": "node_disk_used",
+      "nowValue": 83751862272, "limitValue": 107374182400, "slopePerSec": 51200.5,
+      "exhaustAt": "2026-07-11T12:00:00Z", "exhaustLowDays": 4.1, "exhaustHighDays": 7.0,
+      "confidence": "low", "samples": 1840, "note": "" } ] }
+  ```
+- **口径注记**:
+  - **容量上限**优先取上限序列（`node_*_total` / `inst_heap_max`），生产从不写 `node_*_total` 序列时回退节点注册快照（`memory_mb` / `disk_total_mb`）；两者皆无则 `confidence=insufficient` 并在 `note` 说明。
+  - **截距**取 `median(v − β·t)`（对离群稳健，非「窗口末值」）。
+  - **可预测上界 100 年**：耗尽时间（或 80% 置信上界）超出时按「实际不耗尽」处理（`exhaust*` 全 null + `note`），**不返回过去时间**。原因是 `time.Duration` 以纳秒为 int64（约 292 年溢出），β 极小时会把耗尽时间算成过去时间、让前端把「几乎不增长」误读为「马上耗尽」。
+  - **趋势告警为瞬时型**（不复用可恢复事件的恢复路径）：落库即视为已解决；重复抑制靠重发间隔（默认 6h，规则配了 `dedupWindowSec` 时以它为准）。故「首次命中 → 条件恢复 → 再次恶化」时第二次仍能告警，同时 60s 轮询不会每天堆出上千条事件。
+- **错误**: 400 `INVALID_SCOPE`/`INVALID_RANGE`/`INVALID_THRESHOLD`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`
 
 ### GET /api/v1/instances/:id/processes/:pid
 - **描述**: 查询某实例当前受管进程树内目标 PID 的实时详情，并结合 `process_metric_snapshots` 最近窗口生成诊断标签。只返回该实例根进程及后代，不枚举、不泄露任意 OS 进程。
