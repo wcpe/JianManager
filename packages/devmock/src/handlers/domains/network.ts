@@ -10,7 +10,12 @@ import type {
   BatchActionResult,
 } from '@jianmanager/devmock/contracts'
 import type { Registration, CreateRegistrationBody } from '@jianmanager/devmock/contracts'
-import type { TopologyProxy, TopologyNetwork, TopologyResponse } from '@jianmanager/devmock/contracts'
+import type {
+  TopologyProxy,
+  TopologyNetwork,
+  TopologyInstance,
+  TopologyResponse,
+} from '@jianmanager/devmock/contracts'
 import type { ProvisionProxyBody, ProvisionProxyResult } from '@jianmanager/devmock/contracts'
 import type { InstanceInfo } from '@jianmanager/devmock/contracts'
 
@@ -346,7 +351,19 @@ export const handlers = [
       memberInstanceIds: n.members.map((m) => m.instanceId).filter((iid) => existing.has(iid)),
     }))
 
-    const resp: TopologyResponse = { proxies, networks: nets }
+    // 全量实例投影（FR-452/453）：含未注册实例与配套服务，供拓扑完整网络视图。
+    const briefs: TopologyInstance[] = instances.list().map((i) => ({
+      id: i.id,
+      name: i.name,
+      type: i.type,
+      role: i.role,
+      status: i.status,
+      nodeId: i.nodeId,
+      serverPort: i.serverPort,
+      tags: i.tags ?? '',
+    }))
+
+    const resp: TopologyResponse = { proxies, networks: nets, instances: briefs }
     return HttpResponse.json(resp)
   }),
 

@@ -615,6 +615,64 @@ func (s *InstanceService) scopedBase(scope []uint, p InstanceSearchParams) *gorm
 	return q
 }
 
+// TopologyInstanceBrief 是 GET /topology 里的全量实例最小投影（FR-452/453）：
+// 让未注册实例（beacon / 独立服务 / 已建未挂 BC 的后端）也能上拓扑图。
+// 一次全表查询组装（无 N+1），字段与拓扑前端消费面一致。
+type TopologyInstanceBrief struct {
+	ID         uint                 `json:"id"`
+	Name       string               `json:"name"`
+	Type       model.InstanceType   `json:"type"`
+	Role       model.InstanceRole   `json:"role"`
+	Status     model.InstanceStatus `json:"status"`
+	NodeID     uint                 `json:"nodeId"`
+	ServerPort int                  `json:"serverPort"`
+	// Tags 为 JSON 列原文（与列表接口一致，空标签为 ""），前端统一 parseTags 解析。
+	Tags string `json:"tags"`
+}
+
+// AllBriefs 返回实例的最小投影（FR-452/453），供 GET /topology 一次带出。
+// scope==nil 表示平台管理员（全量，不收敛）；scope 非 nil 时按可访问实例集合收敛
+// （非管理员；空切片=无可访问实例 → 空结果），口径与 SearchInstances/scopedBase 一致。
+// 单条 SELECT 固定列查询，无 per-instance 二次查询；id asc 保序，前端聚合稳定。
+func (s *InstanceService) AllBriefs(scope []uint) ([]TopologyInstanceBrief, error) {
+	if scope != nil && len(scope) == 0 {
+		return []TopologyInstanceBrief{}, nil
+	}
+	var rows []struct {
+		ID         uint
+		Name       string
+		Type       model.InstanceType
+		Role       model.InstanceRole
+		Status     model.InstanceStatus
+		NodeID     uint
+		ServerPort int
+		Tags       string
+	}
+	q := s.db.Model(&model.Instance{}).
+		Select("id, name, type, role, status, node_id, server_port, tags").
+		Order("id asc")
+	if scope != nil {
+		q = q.Where("instances.id IN ?", scope)
+	}
+	if err := q.Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("查询实例概况失败: %w", err)
+	}
+	out := make([]TopologyInstanceBrief, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, TopologyInstanceBrief{
+			ID:         r.ID,
+			Name:       r.Name,
+			Type:       r.Type,
+			Role:       r.Role,
+			Status:     r.Status,
+			NodeID:     r.NodeID,
+			ServerPort: r.ServerPort,
+			Tags:       r.Tags,
+		})
+	}
+	return out, nil
+}
+
 // SearchInstances 分页搜索实例（FR-247）。返回当前页实例 + 筛选下全量 total。
 // scope==nil=平台管理员；非空=限定可访问组；非空且为空集=无可访问组，直接空结果。
 func (s *InstanceService) SearchInstances(scope []uint, p InstanceSearchParams) ([]model.Instance, int64, error) {

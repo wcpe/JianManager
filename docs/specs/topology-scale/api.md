@@ -51,14 +51,38 @@
     ],
     "networks": [
       { "id": 1, "name": "survival", "memberInstanceIds": [30, 21] }
+    ],
+    "instances": [
+      {
+        "id": 30,
+        "name": "velocity-main",
+        "type": "minecraft_java",
+        "role": "proxy",
+        "status": "RUNNING",
+        "nodeId": 1,
+        "serverPort": 25565,
+        "tags": "[\"env:prod\",\"region:r1\",\"zone:z1\"]"
+      },
+      {
+        "id": 40,
+        "name": "beacon-cp",
+        "type": "generic",
+        "role": "beacon",
+        "status": "RUNNING",
+        "nodeId": 2,
+        "serverPort": 0,
+        "tags": "[\"region:r1\",\"zone:z1\"]"
+      }
     ]
   }
   ```
   - `proxies[].registrations` 条目与既有 `GET /proxies/:id/registrations` 响应元素同构（`model.ServerRegistration` JSON + `backend` 概要）；后端实例已删时 `backend: null`（既有容错语义）。
   - `registrations` 排序 `priority asc, id asc`（与单代理列表一致）。
   - `networks[].memberInstanceIds` 为实例数值 ID（含 proxy 与 backend），供前端分组布局；悬空成员（实例已删）不出现。
-  - 无 proxy 时 `proxies: []`（前端空态）。
-- **错误**: `403 FORBIDDEN`（非平台管理员，中间件统一）；`500 INTERNAL_ERROR`。错误体 `{ "error": "<码>", "message": "<中文>" }`。
+  - `instances` 为实例最小投影（FR-452/453，`service.TopologyInstanceBrief`）：`id/name/type/role/status/nodeId/serverPort/tags`，含**未注册实例与配套服务**（beacon、独立服务、已建未挂 BC 的后端），供拓扑完整网络视图与列表页 `network` 维度分组。`tags` 为 JSON 列原文（与列表接口一致，空为 `""`），前端统一 `parseTags` 解析。单条 `SELECT ... WHERE id IN (可访问实例) ORDER BY id asc`，无 N+1。
+  - **权限收敛（FR-453 自审修复）**：本路由守卫为 `network.read`（组管理员/组运维/组只读亦持有），故 `instances` 投影**按调用者可访问实例集合收敛**——平台管理员取全量，非管理员仅含其可访问用户组下的实例（无可访问组 → `instances: []`，不回落全量）。`proxies`/`networks` 维持既有全量契约不变。
+  - 无 proxy 时 `proxies: []`；无可见实例时 `instances: []`（前端空态）。
+- **错误**: `403 FORBIDDEN`（中间件统一）；`500 INTERNAL_ERROR`。错误体 `{ "error": "<码>", "message": "<中文>" }`。
 
 ### GET /api/v1/networks（变更：响应增字段）
 
@@ -95,6 +119,11 @@
       registrations: Registration[]   // 复用 api/registrations.ts 既有 Registration
     }[]
     networks: { id: number; name: string; memberInstanceIds: number[] }[]
+    // FR-452/453：全量实例最小投影（含未注册/配套服务）
+    instances: {
+      id: number; name: string; type: string; role: string
+      status: string; nodeId: number; serverPort: number; tags: string
+    }[]
   }
   interface MemberStatusCounts { running: number; stopped: number; crashed: number; starting: number; stopping: number }
   // NetworkSummary 增：memberStatus: MemberStatusCounts

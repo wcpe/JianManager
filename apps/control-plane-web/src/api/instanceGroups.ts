@@ -15,6 +15,11 @@ export interface InstanceGroupNode {
   sort: number
   /** 子树（含自身及所有后代）去重后的实例数。 */
   instanceCount: number
+  /**
+   * 该组**直接**挂载（不含后代）的实例 ID（FR-452）。
+   * 供列表页 `groupTree` 维度一次取数构建「实例→组」映射，避免 per-group N+1。旧后端缺省。
+   */
+  memberInstanceIds?: number[]
 }
 
 /** 分组成员实例概要。 */
@@ -26,14 +31,15 @@ export interface InstanceGroupMember {
   status: string
 }
 
-/** 分组树（扁平节点列表）。 */
-export function useInstanceGroups() {
+/** 分组树（扁平节点列表）。`enabled=false` 时挂起（按需预取）。 */
+export function useInstanceGroups(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['instanceGroups'],
     queryFn: async () => {
       const { data } = await api.get<InstanceGroupNode[]>('/instance-groups')
       return data
     },
+    enabled: options.enabled ?? true,
   })
 }
 

@@ -482,8 +482,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		networkHandler := NewNetworkHandler(svcs.Network)
 		networkHandler.RegisterRoutes(permRead("network.read", "network.manage"))
 
-		// 群组拓扑聚合（FR-335）：一次返全量 proxy 注册 + network 成员归属，消 per-proxy N+1。平台管理员。
-		topologyHandler := NewTopologyHandler(svcs.Registration, svcs.Network)
+		// 群组拓扑聚合（FR-335）：一次返全量 proxy 注册 + network 成员归属，消 per-proxy N+1。
+		// 权限面 network.read/network.manage（组管理员/运维/只读亦持 network.read），
+		// 故 instances 投影在 handler 内按调用者可访问实例收敛（FR-453 自审修复）。
+		topologyHandler := NewTopologyHandler(svcs.Registration, svcs.Network, svcs.Instance, svcs.Authz)
 		topologyHandler.RegisterRoutes(permRead("network.read", "network.manage"))
 
 		// 备份远程存储后端：含凭证 env 引用，平台级配置（FR-057）。

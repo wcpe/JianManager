@@ -30,7 +30,8 @@ func NewInstanceGroupService(db *gorm.DB) *InstanceGroupService {
 	return &InstanceGroupService{db: db}
 }
 
-// InstanceGroupNodeView 树视图中的一个分组节点：基础字段 + 子树聚合（去重）实例数。
+// InstanceGroupNodeView 树视图中的一个分组节点：基础字段 + 子树聚合（去重）实例数
+// + 直接挂载的实例 ID（FR-452：供列表页 groupTree 维度一次取数做「实例→组」映射，避免 per-group N+1）。
 type InstanceGroupNodeView struct {
 	ID            uint   `json:"id"`
 	UUID          string `json:"uuid"`
@@ -38,6 +39,8 @@ type InstanceGroupNodeView struct {
 	ParentID      *uint  `json:"parentId"`
 	Sort          int    `json:"sort"`
 	InstanceCount int    `json:"instanceCount"`
+	// MemberInstanceIDs 该组**直接**挂载（不含后代）的实例 ID；空组为 []。
+	MemberInstanceIDs []uint `json:"memberInstanceIds"`
 }
 
 // InstanceGroupMemberView 分组成员实例概要。
@@ -169,13 +172,18 @@ func (s *InstanceGroupService) Tree() ([]InstanceGroupNodeView, error) {
 	counts := subtreeCounts(nodes, members)
 	out := make([]InstanceGroupNodeView, 0, len(nodes))
 	for _, n := range nodes {
+		direct := members[n.ID]
+		if direct == nil {
+			direct = []uint{}
+		}
 		out = append(out, InstanceGroupNodeView{
-			ID:            n.ID,
-			UUID:          n.UUID,
-			Name:          n.Name,
-			ParentID:      n.ParentID,
-			Sort:          n.Sort,
-			InstanceCount: counts[n.ID],
+			ID:                n.ID,
+			UUID:              n.UUID,
+			Name:              n.Name,
+			ParentID:          n.ParentID,
+			Sort:              n.Sort,
+			InstanceCount:     counts[n.ID],
+			MemberInstanceIDs: direct,
 		})
 	}
 	return out, nil

@@ -8,7 +8,24 @@
 import type { Registration } from '@/api/registrations'
 import type { InstanceInfo } from '@/api/instances'
 import type { NetworkMember } from '@/api/networks'
+import {
+  dimensionValueOf,
+  regionOf,
+  zoneOf,
+  type GroupDimension,
+  type GroupKeyLabels,
+  type InstanceGroupKeyMap,
+} from '@/components/console/instance-grouping'
 import { instanceStatusLevel, type StatusLevel } from '@/lib/threshold'
+
+/**
+ * 拓扑构图所需的实例最小投影（FR-453 全量实例上拓扑）：
+ * 注册关系提供的 proxy/backend 概要 + `GET /topology` 的 `instances` 全量投影都可满足。
+ */
+export type TopoInstanceInput = Pick<
+  InstanceInfo,
+  'id' | 'name' | 'status' | 'serverPort' | 'nodeId' | 'role' | 'type' | 'tags'
+>
 
 /** 单个代理及其已注册后端（拓扑构建入参单元）。 */
 export interface ProxyRegistrations {
@@ -65,8 +82,11 @@ export function edgeLevel(enabled: boolean, backendStatus: string): StatusLevel 
  * - backend 节点跨 proxy 按 id 去重，registrationCount 累加被注册次数。
  * - 每条 registration 产出一条 edge（M:N），共享后端 → 多 edge 单节点。
  * - 容错缺失的 backend 概要（仅有 backendId 时名称回退 `#<id>`、状态未知）。
+ * - `allInstances`（FR-453）：未出现在任何注册关系里的实例（beacon/独立服务/已建未挂 BC 的后端）
+ *   作为**孤立节点**（registrationCount=0）保留，使拓扑成为完整网络视图；缺省不保留任何孤立节点，
+ *   保持既有调用方（仅传注册）行为不变。
  */
-export function buildTopology(input: ProxyRegistrations[]): Topology {
+export function buildTopology(input: ProxyRegistrations[], allInstances: TopoInstanceInput[] = []): Topology {
   const nodes: TopoNode[] = []
   const edges: TopoEdge[] = []
   const backendNodes = new Map<number, TopoNode>()
@@ -107,6 +127,24 @@ export function buildTopology(input: ProxyRegistrations[]): Topology {
         level: edgeLevel(r.enabled, b?.status ?? ''),
       })
     }
+  }
+
+  // 孤立节点补齐（FR-453）：未注册实例也上拓扑，避免「拓扑只画已注册」的信息缺口。
+  // 去重按**实例 id**（`seenIds`）：前一循环已从注册关系建出的 proxy/backend 节点保持原 kind，
+  // 全量投影里的同一实例直接跳过（不重复上节点、不覆盖注册侧的角色）。
+  const seenIds = new Set<number>(nodes.map((n) => n.id))
+  for (const inst of allInstances) {
+    if (seenIds.has(inst.id)) continue
+    seenIds.add(inst.id)
+    nodes.push({
+      id: inst.id,
+      kind: inst.role === 'proxy' ? 'proxy' : 'backend',
+      name: inst.name,
+      status: inst.status,
+      port: inst.serverPort,
+      nodeId: inst.nodeId,
+      registrationCount: 0,
+    })
   }
 
   return { nodes, edges }
@@ -238,7 +276,7 @@ export function memberHealthFromStatus(counts: MemberStatusCounts): MemberHealth
  * 统计成员状态分布，供列表行健康分布条与摘要。
  * 等级复用 instanceStatusLevel：success=运行 / danger=崩溃 / warning=过渡 / 其余=停止桶。
  */
-export function memberHealth(members: NetworkMember[]): MemberHealth {
+export function memberHealth(members: Pick<NetworkMember, 'status'>[]): MemberHealth {
   const h: MemberHealth = { total: 0, running: 0, crashed: 0, transitioning: 0, stopped: 0 }
   for (const m of members) {
     h.total += 1
@@ -270,9 +308,13 @@ export interface TopoGroupBrief {
 
 /** 已分带的拓扑：每带一个 network（或未分组兜底带），带内保留 proxy/backend 节点子集与全量连线。 */
 export interface TopoBand {
-  /** network id；未分组兜底带为 null。 */
+  /** network id；未分组兜底带为 null（按维度分带时同样为 null，标识改用 `key`）。 */
   id: number | null
   name: string
+  /** 分带唯一键（按维度分带时使用；network 分带缺省，渲染回退到 id）。 */
+  key?: string
+  /** 二级维度（region）的外层值（如大区名），供渲染层拼「大区 / 小区」标签。 */
+  parent?: string
   nodes: TopoNode[]
 }
 
@@ -294,6 +336,10 @@ const UNGROUPED_BAND_ID = null
  * - multiHomed 记录归属 >1 个 group 的节点 id（渲染层加角标 +n）。
  * - 连线原样携带（渲染层按端点节点所在带跨带连接）。
  * 纯函数，便于 vitest 校验归带与多归属判定。
+ *
+ * @deprecated FR-452 起渲染层统一走 `groupTopologyByDimension`（按所选维度分带，含 groupTree 多级层级）；
+ * 本函数为 FR-335 单一 network 分带的历史实现，生产代码已无引用，仅保留供既有 vitest 回归。
+ * 新代码请勿使用；若确认无回归价值可一并删除（连同 `topology.test.ts` 对应用例）。
  */
 export function groupTopology(topo: Topology, groups: TopoGroupBrief[]): GroupedTopology {
   // 每个实例 id → 命中的 group 序号列表（判定多归属 + 取首带）。
@@ -338,6 +384,157 @@ export function groupTopology(topo: Topology, groups: TopoGroupBrief[]): Grouped
   return { bands, edges: topo.edges, multiHomed }
 }
 
+// ─────────────────── 按分组维度分带（FR-452/453） ───────────────────
+
+/** 按维度分带用的内部规格：带键 + 展示名 + 可选外层值 + 可选树序 + 成员实例 id。 */
+interface DimBandSpec {
+  key: string
+  name: string
+  parent?: string
+  /** 显示序（groupTree 复用分组树前序）；有值时优先按它排序，保证层级带与列表同序。 */
+  ord?: number
+  ids: Set<number>
+}
+
+/**
+ * 分带排序（FR-452/453）：
+ * - groupTree：两侧都有 `ord` 时按分组树前序（与列表树表同序）。
+ * - 完全未分组带（无外层、无名称）恒排末尾。
+ * - 其余按外层值字典序，再按展示名字典序；同外层下空名（如 region 维的「未分小区」）排末尾。
+ */
+function sortDimBandSpecs(specs: DimBandSpec[]): DimBandSpec[] {
+  return specs.sort((a, b) => {
+    if (a.ord != null && b.ord != null && a.ord !== b.ord) return a.ord - b.ord
+    const aNone = a.name === '' && !a.parent
+    const bNone = b.name === '' && !b.parent
+    if (aNone && !bNone) return 1
+    if (bNone && !aNone) return -1
+    const pc = (a.parent ?? '').localeCompare(b.parent ?? '')
+    if (pc !== 0) return pc
+    const ae = a.name === ''
+    const be = b.name === ''
+    if (ae && !be) return 1
+    if (be && !ae) return -1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+/**
+ * 由维度 + 全量实例推导分带规格（FR-452/453）。
+ * - none：单带（空名）含全部实例。
+ * - region：**两级**——按 `region:` 外层、`zone:` 内层；每 (region,zone) 一带、`parent` 记大区，
+ *   无 zone 者与 zone 带同外层（渲染为「大区 / 未分小区」，与列表 `zoneNone` 同序同文案）；
+ *   无 region 标签落未分组（排末尾）。
+ * - 其余单级维度（zone/env/status/role/type/node/network/groupTree）按维度值一带。
+ * - network/groupTree 依赖外部「实例→分组键」映射（多归属取首个，口径同 groupTopology）；
+ *   groupTree 另接 `labels` 提供组名/祖先路径/树序（键为 `g:<组 id>`，同名不同组不合并）。
+ */
+function dimensionBandSpecs(
+  dim: GroupDimension,
+  instances: TopoInstanceInput[],
+  extra?: InstanceGroupKeyMap,
+  labels?: GroupKeyLabels,
+): DimBandSpec[] {
+  if (dim === 'none') {
+    return [{ key: 'dim:none', name: '', ids: new Set(instances.map((i) => i.id)) }]
+  }
+  if (dim === 'region') {
+    const byKey = new Map<string, DimBandSpec>()
+    for (const inst of instances) {
+      const r = regionOf(inst)
+      const z = zoneOf(inst)
+      // 无 region 标签（r=''、z=''）→ 未分组带（末尾）；有 region 无 zone → 与 zone 带同外层的空名带。
+      // 注意（NEW-9，低概率）：仅有 `zone:` 而无 `region:` 时 r='' → parent=undefined，该带退化为
+      // 顶层单名带（只显示小区名），与「大区名」在视觉上不可区分。标签成对写入的场景不会出现；
+      // 若未来出现需补一个「无大区」外层前缀以消歧。
+      const key = `region:${r}/zone:${z}`
+      let spec = byKey.get(key)
+      if (!spec) {
+        spec = { key, name: z, parent: r || undefined, ids: new Set() }
+        byKey.set(key, spec)
+      }
+      spec.ids.add(inst.id)
+    }
+    return sortDimBandSpecs([...byKey.values()])
+  }
+  // network/groupTree：按外部映射的**全部**分组键登记，使多归属实例可命中多个带
+  // （渲染层落首带 + multiHomed 角标，口径与 groupTopology 完全一致）。
+  const keysOf = (inst: TopoInstanceInput): string[] => {
+    if (dim === 'network' || dim === 'groupTree') return extra?.get(inst.id) ?? []
+    return [dimensionValueOf(inst, dim, extra)]
+  }
+  const byKey = new Map<string, DimBandSpec>()
+  for (const inst of instances) {
+    for (const value of keysOf(inst)) {
+      const key = `dim:${dim}:${value}`
+      let spec = byKey.get(key)
+      if (!spec) {
+        const label = labels?.get(value)
+        spec = {
+          key,
+          name: label?.name ?? value,
+          parent: label?.parent,
+          ord: label?.order,
+          ids: new Set(),
+        }
+        byKey.set(key, spec)
+      }
+      spec.ids.add(inst.id)
+    }
+  }
+  return sortDimBandSpecs([...byKey.values()])
+}
+
+/**
+ * 按所选分组维度把拓扑节点归带（FR-452/453）：层级随维度变化，默认 `region`（region→zone 两级）。
+ * 口径与 `groupTopology` 一致：软标签多归属**落首个**所属带（multiHomed 记角标），
+ * 无归属节点落「未分组」带（排末尾）；仅保留有节点的带（空带不占位）。
+ * groupTree 维度另接 `labels`（组键→组名/祖先路径/树序），键为组 id，故同名不同组不合并。
+ * 纯函数，便于 vitest 校验层级与未注册实例上带。
+ */
+export function groupTopologyByDimension(
+  topo: Topology,
+  dim: GroupDimension,
+  instances: TopoInstanceInput[],
+  extra?: InstanceGroupKeyMap,
+  labels?: GroupKeyLabels,
+): GroupedTopology {
+  const specs = dimensionBandSpecs(dim, instances, extra, labels)
+
+  // 实例 id → 命中的 spec 序号列表（判定多归属 + 取首带）。
+  const hit = new Map<number, number[]>()
+  specs.forEach((s, si) => {
+    for (const id of s.ids) {
+      const arr = hit.get(id)
+      if (arr) arr.push(si)
+      else hit.set(id, [si])
+    }
+  })
+  const multiHomed = new Set<number>()
+  for (const [id, arr] of hit) {
+    if (arr.length > 1) multiHomed.add(id)
+  }
+
+  const bandNodes: TopoNode[][] = specs.map(() => [])
+  const ungrouped: TopoNode[] = []
+  for (const n of topo.nodes) {
+    const arr = hit.get(n.id)
+    if (arr && arr.length > 0) bandNodes[arr[0]].push(n)
+    else ungrouped.push(n)
+  }
+
+  const bands: TopoBand[] = []
+  specs.forEach((s, si) => {
+    if (bandNodes[si].length > 0) {
+      bands.push({ id: null, key: s.key, name: s.name, parent: s.parent, nodes: bandNodes[si] })
+    }
+  })
+  if (ungrouped.length > 0) {
+    bands.push({ id: null, key: '', name: '', nodes: ungrouped })
+  }
+  return { bands, edges: topo.edges, multiHomed }
+}
+
 /** 分组布局参数（像素）。 */
 export interface GroupedLayoutOptions extends LayoutOptions {
   /** 每带标题条高度（含上下留白）。 */
@@ -350,6 +547,10 @@ export interface GroupedLayoutOptions extends LayoutOptions {
 export interface LaidBand {
   id: number | null
   name: string
+  /** 分带唯一键（按维度分带时使用；network 分带缺省）。 */
+  key?: string
+  /** 二级维度（region）的外层值（供渲染层拼层级标签）。 */
+  parent?: string
   /** 带顶部 y（含标题条）。 */
   y: number
   /** 带总高度（标题条 + 内容）。 */
@@ -402,7 +603,14 @@ export function layoutTopologyGrouped(
     placeColumn(backends, 1)
 
     const bandHeight = bandHeaderHeight + contentHeight + paddingY
-    bands.push({ id: band.id, name: band.name, y: bandTop, height: bandHeight })
+    bands.push({
+      id: band.id,
+      name: band.name,
+      key: band.key,
+      parent: band.parent,
+      y: bandTop,
+      height: bandHeight,
+    })
     cursorY = bandTop + bandHeight
   })
 

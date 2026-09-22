@@ -116,7 +116,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     serverPort: 25565,
     autoStart: false,
     autoRestart: true,
-    tags: '["env:prod","survival"]',
+    tags: '["env:prod","survival","region:r1","zone:z1"]',
     createdAt: '2026-01-01T00:00:00Z',
   },
   {
@@ -139,7 +139,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     serverPort: 25577,
     autoStart: true,
     autoRestart: true,
-    tags: '["env:prod"]',
+    tags: '["env:prod","region:r1","zone:z1"]',
     createdAt: '2026-01-02T00:00:00Z',
   },
   {
@@ -163,7 +163,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     serverPort: 25566,
     autoStart: false,
     autoRestart: false,
-    tags: '["env:test","creative"]',
+    tags: '["env:test","creative","region:r2","zone:z2"]',
     createdAt: '2026-01-03T00:00:00Z',
   },
   {
@@ -184,7 +184,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     serverPort: 25570,
     autoStart: true,
     autoRestart: true,
-    tags: '["env:prod","survival","edge"]',
+    tags: '["env:prod","survival","edge","region:r1","zone:z1"]',
     createdAt: '2026-01-10T00:00:00Z',
   },
   {
@@ -205,7 +205,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     serverPort: 25566,
     autoStart: true,
     autoRestart: true,
-    tags: '["env:prod","survival","lobby"]',
+    tags: '["env:prod","survival","lobby","region:r1","zone:z1"]',
     createdAt: '2026-01-11T00:00:00Z',
   },
   {
@@ -227,7 +227,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     serverPort: 25567,
     autoStart: false,
     autoRestart: true,
-    tags: '["env:prod","survival","world"]',
+    tags: '["env:prod","survival","world","region:r1","zone:z2"]',
     createdAt: '2026-01-12T00:00:00Z',
   },
   {
@@ -248,7 +248,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     serverPort: 25580,
     autoStart: true,
     autoRestart: true,
-    tags: '["env:test","creative","edge"]',
+    tags: '["env:test","creative","edge","region:r2","zone:z1"]',
     createdAt: '2026-01-20T00:00:00Z',
   },
   {
@@ -269,7 +269,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     serverPort: 25581,
     autoStart: false,
     autoRestart: true,
-    tags: '["env:test","creative","plot"]',
+    tags: '["env:test","creative","plot","region:r2","zone:z2"]',
     createdAt: '2026-01-21T00:00:00Z',
   },
   {
@@ -325,7 +325,14 @@ function buildGeneratedInstance(id: number): MockInstance {
     serverPort: 25565 + id,
     autoStart: id % 3 === 0,
     autoRestart: id % 5 !== 0,
-    tags: JSON.stringify([`env:${env}`, role === 'proxy' ? 'edge' : 'survival']),
+    // FR-452：多数实例带 region:/zone: 标签（供 region/zone 维度分组），
+    // 少数（id%13===0 无 region，id%5===0 无 zone）不带，覆盖「未分组」落末尾场景。
+    tags: JSON.stringify([
+      `env:${env}`,
+      role === 'proxy' ? 'edge' : 'survival',
+      ...(id % 13 === 0 ? [] : [`region:r${(id % 3) + 1}`]),
+      ...(id % 5 === 0 ? [] : [`zone:z${(id % 4) + 1}`]),
+    ]),
     createdAt: new Date(Date.UTC(2026, 2, 1 + id)).toISOString(),
   }
 }
@@ -456,6 +463,11 @@ function countBy(rows: MockInstance[], key: 'status' | 'role'): Record<string, n
     acc[value] = (acc[value] ?? 0) + 1
     return acc
   }, {})
+}
+
+/** 该组**直接**挂载（不含后代）的实例 ID，对应树视图 memberInstanceIds（FR-452）。 */
+function directMemberIds(groupId: number): number[] {
+  return groupMembers.list((m) => m.groupId === groupId).map((m) => m.instanceId)
 }
 
 /** 子树（含自身及所有后代）去重的实例 ID 集合，对应 instanceCount / GET …/instances 语义。 */
@@ -978,6 +990,7 @@ export const handlers = [
       parentId: g.parentId,
       sort: g.sort,
       instanceCount: subtreeInstanceIds(g.id).length,
+      memberInstanceIds: directMemberIds(g.id),
     }))
     return HttpResponse.json(rows)
   }),

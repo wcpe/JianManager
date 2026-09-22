@@ -5,6 +5,7 @@ import {
   memberHealth,
   memberHealthFromStatus,
   groupTopology,
+  groupTopologyByDimension,
   layoutTopologyGrouped,
   edgeLevel,
   type ProxyRegistrations,
@@ -30,6 +31,31 @@ function proxy(id: number, name: string, status = 'RUNNING'): InstanceInfo {
     autoStart: false,
     autoRestart: false,
     tags: null,
+    createdAt: '',
+  }
+}
+
+/** FR-453 全量实例投影（拓扑孤立节点来源）的最小构造器。 */
+function inst(
+  id: number,
+  name: string,
+  opts: { role?: string; type?: string; status?: string; tags?: string[] | null; nodeId?: number } = {},
+): InstanceInfo {
+  return {
+    id,
+    uuid: `u-${id}`,
+    nodeId: opts.nodeId ?? 1,
+    name,
+    type: opts.type ?? 'minecraft_java',
+    role: opts.role ?? 'backend',
+    processType: 'daemon',
+    status: opts.status ?? 'RUNNING',
+    startCommand: '',
+    workDir: '',
+    serverPort: 25000 + id,
+    autoStart: false,
+    autoRestart: false,
+    tags: opts.tags ?? null,
     createdAt: '',
   }
 }
@@ -152,6 +178,141 @@ describe('buildTopology', () => {
     const b = g.nodes.find((n) => n.id === 99 && n.kind === 'backend')!
     expect(b.name).toBe('#99')
     expect(g.edges).toHaveLength(1)
+  })
+
+  it('FR-453：未注册实例作为孤立节点保留（不出连线）', () => {
+    const g = buildTopology(
+      [{ proxy: proxy(1, 'p'), registrations: [reg(10, 1, 100)] }],
+      [
+        inst(1, 'p', { role: 'proxy', status: 'RUNNING' }),
+        inst(40, 'beacon-cp', { role: 'beacon', type: 'generic', status: 'RUNNING' }),
+        inst(41, 'orphan-backend', { role: 'backend', status: 'STOPPED' }),
+      ],
+    )
+    // 已注册的 proxy(1)/backend(100) 不重复；孤立 beacon/orphan 上带。
+    expect(g.nodes.map((n) => n.id).sort((a, b) => a - b)).toEqual([1, 40, 41, 100])
+    const beacon = g.nodes.find((n) => n.id === 40)!
+    expect(beacon.name).toBe('beacon-cp')
+    // beacon 非 proxy → backend 列（布局唯一二列）。
+    expect(beacon.kind).toBe('backend')
+    expect(beacon.registrationCount).toBe(0)
+    expect(g.edges).toHaveLength(1)
+  })
+})
+
+describe('groupTopologyByDimension', () => {
+  const instances = [
+    inst(1, 'velocity-a', { role: 'proxy', tags: ['region:r1', 'zone:z1'] }),
+    inst(2, 'lobby', { role: 'backend', tags: ['region:r1', 'zone:z2'] }),
+    inst(3, 'creative', { role: 'backend', tags: ['region:r2', 'zone:z1'] }),
+    inst(40, 'beacon-cp', { role: 'beacon', type: 'generic' }),
+  ]
+  const topo = buildTopology(
+    [{ proxy: proxy(1, 'velocity-a'), registrations: [reg(10, 1, 2, { bName: 'lobby' })] }],
+    instances,
+  )
+
+  it('region 维度：层级按 region→zone 两级带，未分组末尾', () => {
+    const g = groupTopologyByDimension(topo, 'region', instances)
+    // r1/z1, r1/z2, r2/z1 先（按大区再小区）；未分组（beacon 无 region 标签）末尾。
+    expect(g.bands.map((b) => b.name)).toEqual(['z1', 'z2', 'z1', ''])
+    expect(g.bands.map((b) => b.parent)).toEqual(['r1', 'r1', 'r2', undefined])
+    expect(g.bands[0].nodes.map((n) => n.id)).toEqual([1])
+    expect(g.bands[1].nodes.map((n) => n.id)).toEqual([2])
+    expect(g.bands[2].nodes.map((n) => n.id)).toEqual([3])
+    expect(g.bands[3].nodes.map((n) => n.id)).toEqual([40])
+  })
+
+  it('role 维度：层级随维度变化（proxy/backend/beacon）', () => {
+    const g = groupTopologyByDimension(topo, 'role', instances)
+    expect(g.bands.map((b) => b.name)).toEqual(['backend', 'beacon', 'proxy'])
+    expect(g.bands[2].nodes.map((n) => n.id)).toEqual([1])
+  })
+
+  it('type 维度：generic 与 minecraft_java', () => {
+    const g = groupTopologyByDimension(topo, 'type', instances)
+    expect(g.bands.map((b) => b.name)).toEqual(['generic', 'minecraft_java'])
+  })
+
+  it('network 维度：按外部映射落首带，未命中落未分组末尾且记多归属', () => {
+    const keys = new Map<number, string[]>([
+      [1, ['survival', 'creative']],
+      [2, ['survival']],
+    ])
+    const g = groupTopologyByDimension(topo, 'network', instances, keys)
+    expect(g.bands.map((b) => b.name)).toEqual(['creative', 'survival', ''])
+    expect(g.multiHomed.has(1)).toBe(true)
+    expect(g.multiHomed.has(2)).toBe(false)
+    expect(g.bands[2].nodes.map((n) => n.id)).toEqual([3, 40].sort((a, b) => a - b))
+  })
+
+  it('none 维度：单带含全部节点，无未分组带', () => {
+    const g = groupTopologyByDimension(topo, 'none', instances)
+    expect(g.bands).toHaveLength(1)
+    expect(g.bands[0].name).toBe('')
+    expect(g.bands[0].nodes).toHaveLength(4)
+  })
+
+  it('带键唯一（region 两级用 region:r/zone:z 组合键）', () => {
+    const g = groupTopologyByDimension(topo, 'region', instances)
+    const keys = g.bands.map((b) => b.key)
+    expect(new Set(keys).size).toBe(keys.length)
+    expect(keys[0]).toBe('region:r1/zone:z1')
+  })
+
+  it('region 维度：有 region 无 zone 的成员空名带与该 region 的 zone 带同外层、排在 zone 之后（与列表 zoneNone 同序）', () => {
+    const withNoZone = [
+      inst(1, 'velocity-a', { role: 'proxy', tags: ['region:r1', 'zone:z1'] }),
+      inst(2, 'lobby', { role: 'backend', tags: ['region:r1'] }), // 有 region 无 zone
+      inst(50, 'no-region', { role: 'backend' }), // 无 region → 未分组
+    ]
+    const t2 = buildTopology([], withNoZone)
+    const g = groupTopologyByDimension(t2, 'region', withNoZone)
+    // r1/z1 → r1/（未分小区）→ 未分组，三层顺序与列表「大区 → 小区 → 未分小区 → 未分大区」一致。
+    expect(g.bands.map((b) => ({ name: b.name, parent: b.parent }))).toEqual([
+      { name: 'z1', parent: 'r1' },
+      { name: '', parent: 'r1' },
+      { name: '', parent: undefined },
+    ])
+  })
+
+  it('groupTree 维度：键用组 id + labels 提供组名/祖先路径，按树前序排序，未命中落未分组末尾', () => {
+    const nodes = [
+      inst(1, 'velocity-a', { role: 'proxy' }),
+      inst(2, 'lobby', { role: 'backend' }),
+      inst(3, 'creative', { role: 'backend' }),
+      inst(40, 'beacon-cp', { role: 'beacon', type: 'generic' }),
+    ]
+    const t2 = buildTopology([], nodes)
+    const keys = new Map<number, string[]>([
+      [1, ['g:2']],
+      [2, ['g:5']],
+      [3, ['g:3']],
+    ])
+    const labels = new Map<string, { name: string; parent?: string; order: number; depth: number }>([
+      ['g:2', { name: '生存', parent: '亚洲区', order: 1, depth: 1 }],
+      ['g:3', { name: '创造', parent: '亚洲区', order: 2, depth: 1 }],
+      ['g:5', { name: '生存', parent: '欧洲区', order: 4, depth: 1 }],
+    ])
+    const g = groupTopologyByDimension(t2, 'groupTree', nodes, keys, labels)
+    // 带名为组名（非组键）、parent 为祖先路径；按树前序（g:2 → g:3 → g:5）而非名称排序。
+    expect(g.bands.map((b) => ({ key: b.key, name: b.name, parent: b.parent }))).toEqual([
+      { key: 'dim:groupTree:g:2', name: '生存', parent: '亚洲区' },
+      { key: 'dim:groupTree:g:3', name: '创造', parent: '亚洲区' },
+      { key: 'dim:groupTree:g:5', name: '生存', parent: '欧洲区' },
+      { key: '', name: '', parent: undefined },
+    ])
+    // 同名不同组各自成带（键唯一）。
+    expect(new Set(g.bands.map((b) => b.key)).size).toBe(g.bands.length)
+    // 未命中任何组的 beacon 落未分组。
+    expect(g.bands[g.bands.length - 1].nodes.map((n) => n.id)).toEqual([40])
+  })
+
+  it('groupTree 维度：数据源不可用（无映射/无 labels）→ 全部落未分组，不借错数据源', () => {
+    const g = groupTopologyByDimension(topo, 'groupTree', instances)
+    expect(g.bands).toHaveLength(1)
+    expect(g.bands[0].name).toBe('')
+    expect(g.bands[0].key).toBe('')
   })
 })
 
