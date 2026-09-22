@@ -69,6 +69,34 @@ type DirectProbeTimeoutResolver interface {
 	DirectProbeTimeouts() (slp, query time.Duration)
 }
 
+// HealthPolicySnapshot 是一次实例健康巡检策略（FR-459）的只读快照，供心跳响应下发 Worker。
+// 值 <=0 的周期/阈值表示未配置，Worker 侧归一取默认。
+type HealthPolicySnapshot struct {
+	Enabled                 bool
+	ScanInterval            time.Duration
+	ProbeKind               string
+	SuspicionThreshold      int
+	Action                  string
+	CircuitBreakerThreshold int
+	CircuitBreakerWindow    time.Duration
+	// StartupWarmup 启动宽限期（FR-459 复审项 2）；SelfHealMaxRestarts 假死自愈次数上限（复审项 7）。
+	StartupWarmup       time.Duration
+	SelfHealMaxRestarts int
+}
+
+// HealthPolicyResolver 提供实例健康巡检当前生效策略，供心跳响应下发（FR-459）。
+// 同 MetricIngester 以接口声明、由 service.SettingsService 实现，避免 grpc→service 反向依赖。
+type HealthPolicyResolver interface {
+	HealthScanPolicy() HealthPolicySnapshot
+}
+
+// HealthAlertNotifier 在健康巡检上报熔断时投递站内信告警（FR-459 T4「发站内信告警」）。
+// 由 service 侧实现（组装站内信 + 收件人查询），以接口声明避免 grpc→service 反向依赖。
+// 未注入则只落审计与日志（仍保证「不静默」）。
+type HealthAlertNotifier interface {
+	NotifyInstanceCircuitBroken(nodeUUID, instanceUUID, reason string)
+}
+
 // ControlPlaneHandler Control Plane 侧的 gRPC 处理器。
 // 处理来自 Worker Node 的 Register 和 Heartbeat 请求。
 // OrphanRuntimeIngester 心跳反向对账入口（FR-326）；由 service.OrphanRuntimeTracker 实现。
@@ -79,15 +107,22 @@ type OrphanRuntimeIngester interface {
 
 type ControlPlaneHandler struct {
 	workerpb.WorkerServiceServer
-	db            *gorm.DB
-	pool          *ClientPool
-	metrics       MetricIngester             // 时序指标入库（nil 时心跳不落时序）
-	tasks         TaskIngester               // 任务进度入库（nil 时心跳不落任务，FR-183）
-	enroll        EnrollmentValidator        // enrollment token 校验消费（nil 时退化为 FR-004 自助注册）
-	proxy         NodeProxyResolver          // 节点期望代理解析（nil 时心跳响应不携带代理，FR-185）
-	directProbe   DirectProbeTimeoutResolver // MC 直探超时解析（nil 时心跳响应不携带直探超时，FR-446）
-	wsTokenSecret string                     // CP↔Worker WS 令牌密钥（空时注册/心跳响应不携带，FR-275）
-	orphans       OrphanRuntimeIngester      // 反向对账（nil 时不启用，FR-326）
+	db          *gorm.DB
+	pool        *ClientPool
+	metrics     MetricIngester             // 时序指标入库（nil 时心跳不落时序）
+	tasks       TaskIngester               // 任务进度入库（nil 时心跳不落任务，FR-183）
+	enroll      EnrollmentValidator        // enrollment token 校验消费（nil 时退化为 FR-004 自助注册）
+	proxy       NodeProxyResolver          // 节点期望代理解析（nil 时心跳响应不携带代理，FR-185）
+	directProbe DirectProbeTimeoutResolver // MC 直探超时解析（nil 时心跳响应不携带直探超时，FR-446）
+	// healthPolicy 实例健康巡检策略解析（nil 时心跳响应不携带巡检策略，FR-459）。
+	healthPolicy HealthPolicyResolver
+	// healthNotifier 健康熔断站内信告警投递（nil 时只落审计/日志，FR-459）。
+	healthNotifier HealthAlertNotifier
+	// healthAlerted 记录各实例最近一次已告警的熔断原因，避免每拍重复发信（FR-459，按 nodeUUID+uuid 去重）。
+	healthAlertedMu sync.Mutex
+	healthAlerted   map[string]string
+	wsTokenSecret   string                // CP↔Worker WS 令牌密钥（空时注册/心跳响应不携带，FR-275）
+	orphans         OrphanRuntimeIngester // 反向对账（nil 时不启用，FR-326）
 	// evidence 进程侧证据拉取客户端（nil 时 syncInstanceStates 退化为旧行为，FR-455③）。
 	evidence EvidenceProbeClient
 	// orphanAudit 孤儿处置审计落库器（nil 时丢弃上报，FR-455/456）。
@@ -104,7 +139,7 @@ type ControlPlaneHandler struct {
 
 // NewControlPlaneHandler 创建处理器。
 func NewControlPlaneHandler(db *gorm.DB, pool *ClientPool) *ControlPlaneHandler {
-	return &ControlPlaneHandler{db: db, pool: pool, reconcileGrace: make(map[string]int)}
+	return &ControlPlaneHandler{db: db, pool: pool, reconcileGrace: make(map[string]int), healthAlerted: make(map[string]string)}
 }
 
 // SetResyncTrigger 注入实例规格重推的幂等入口（FR-455②）。
@@ -156,6 +191,18 @@ func (h *ControlPlaneHandler) SetNodeProxyResolver(r NodeProxyResolver) {
 // 不注入则心跳响应不带该字段（0），Worker 回退内置默认 3s（向后兼容）。
 func (h *ControlPlaneHandler) SetDirectProbeTimeoutResolver(r DirectProbeTimeoutResolver) {
 	h.directProbe = r
+}
+
+// SetHealthPolicyResolver 注入实例健康巡检策略解析器（FR-459）。
+// 注入后每次心跳响应携带巡检策略（enabled/interval/probe_kind/阈值/动作），Worker 据此配置
+// 巡检器（无需重启 Worker）；不注入则心跳响应不带该字段，Worker 回退本地 worker.yml。
+func (h *ControlPlaneHandler) SetHealthPolicyResolver(r HealthPolicyResolver) {
+	h.healthPolicy = r
+}
+
+// SetHealthAlertNotifier 注入健康熔断站内信告警投递器（FR-459）；不注入则只落审计/日志。
+func (h *ControlPlaneHandler) SetHealthAlertNotifier(n HealthAlertNotifier) {
+	h.healthNotifier = n
 }
 
 // SetOrphanRuntimeIngester 注入实例反向对账跟踪器（FR-326）。
@@ -430,6 +477,21 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			resp.DirectProbeSlpTimeoutMs = int32(slp / time.Millisecond)
 			resp.DirectProbeQueryTimeoutMs = int32(query / time.Millisecond)
 		}
+		// 携带实例健康巡检策略（FR-459）：取自平台设置 health.*，Worker 存内存并写入巡检器生效值。
+		// enabled 用 optional（非 nil）表达「本 CP 已下发策略」，每次心跳重发、幂等。
+		if h.healthPolicy != nil {
+			p := h.healthPolicy.HealthScanPolicy()
+			enabled := p.Enabled
+			resp.HealthScanEnabled = &enabled
+			resp.HealthScanIntervalMs = int32(p.ScanInterval / time.Millisecond)
+			resp.HealthProbeKind = p.ProbeKind
+			resp.HealthSuspicionThreshold = int32(p.SuspicionThreshold)
+			resp.HealthAction = p.Action
+			resp.HealthCircuitBreakerThreshold = int32(p.CircuitBreakerThreshold)
+			resp.HealthCircuitBreakerWindowMs = int32(p.CircuitBreakerWindow / time.Millisecond)
+			resp.HealthStartupWarmupMs = int32(p.StartupWarmup / time.Millisecond)
+			resp.HealthSelfHealMaxRestarts = int32(p.SelfHealMaxRestarts)
+		}
 		// 携带该节点「已请求取消」的任务 id，Worker 据此真中断对应运行中任务（FR-227）。
 		if h.tasks != nil {
 			resp.CancelTaskIds = h.tasks.PendingCancelTaskIDsByNodeUUID(req.NodeUuid)
@@ -521,21 +583,72 @@ func StartOfflineDetector(db *gorm.DB) {
 
 // syncInstanceStates 从心跳数据同步实例状态到数据库。
 func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*workerpb.InstanceState) {
+	emptyReason := ""
 	reported := make([]string, 0, len(states))
 	for _, s := range states {
 		reported = append(reported, s.InstanceUuid)
 		status := model.InstanceStatus(s.State)
-		q := h.db.Model(&model.Instance{}).Where("uuid = ?", s.InstanceUuid)
+		// status_reason 的待写值（nil=本拍无可写原因，不动该列）。
+		// FR-459 终验 Major：status 与 status_reason 的写入条件不同，必须拆成两条 UPDATE——
+		// status 恒写（仅带 DAMAGED 守卫），status_reason 在泛化原因场景下额外带「库中原因为空」
+		// 的 WHERE 条件。若二者挤在同一条 UPDATE，该条件会连带冻结 status：实例 RUNNING 被判假死
+		// 写入非空 status_reason 后真崩溃，本拍命中 CRASHED 分支置 reasonEmptyCond=true，
+		// 整条 UPDATE 因 status_reason 非空而不匹配 → status 永远停在 RUNNING（desync 卡死）。
+		var reasonValue *string
+		// reasonEmptyCond：仅当库中 status_reason 为空/未记录时才写巡检泛化原因（见下方分支）。
+		reasonEmptyCond := false
+		// FR-459：健康巡检原因 → instances.status_reason。
+		//   - 熔断原因（health=="circuit_broken"）是需要在面板可见的具体升级原因 → 恒写入；
+		//   - CRASHED 的巡检原因是泛化文案（如「实例已崩溃…」），**不得覆盖 CP 已写入的具体原因**
+		//     （如「未绑定 JDK」「Worker 操作失败: …」，FR-312）：仅在库中原因为空时补写；
+		//   - 其余情况（假死/嫌疑）按上报写入，使假死在面板与健康墙可见；
+		//   - 巡检明确健康（health=="healthy"）且无原因 → 清空历史原因（假死已恢复）。
+		// 老 Worker 不上报 health/status_reason（均空），此分支不触发，保持既有语义。
+		switch {
+		case s.StatusReason == "" && status == model.InstanceStatusRunning && s.Health == healthFaultHealthy:
+			reasonValue = &emptyReason
+		case s.StatusReason == "":
+			// 无原因可写（含老 Worker / 健康实例）：不动 status_reason。
+		case s.Health == healthFaultCircuitBroken:
+			reasonValue = &s.StatusReason
+		case status == model.InstanceStatusCrashed:
+			// 具体原因优先：仅当库中原因为空/未记录时写入泛化巡检原因。
+			reasonValue = &s.StatusReason
+			reasonEmptyCond = true
+		default:
+			reasonValue = &s.StatusReason
+		}
 		// DAMAGED（FR-342 搭建失败损毁）是 CP 侧生命周期态，Worker 不感知：损毁实例在 Worker
 		// 记账里本就是「没在跑」（STOPPED/CRASHED），与损毁不矛盾。此前无条件覆写会在搭建失败后的
 		// 下一个心跳把 DAMAGED 降级成 STOPPED，启动守卫随即失效（真机回归）。仅当 Worker 上报
 		// 运行类状态（进程确实活着）才允许覆盖 DAMAGED。
-		if status == model.InstanceStatusStopped || status == model.InstanceStatusCrashed {
-			q = q.Where("status <> ?", model.InstanceStatusDamaged)
+		damagedGuard := status == model.InstanceStatusStopped || status == model.InstanceStatusCrashed
+
+		// ① status 恒写（不含 reasonEmptyCond，避免原因条件连带冻结状态）。
+		statusQ := h.db.Model(&model.Instance{}).Where("uuid = ?", s.InstanceUuid)
+		if damagedGuard {
+			statusQ = statusQ.Where("status <> ?", model.InstanceStatusDamaged)
 		}
-		if err := q.Update("status", status).Error; err != nil {
+		if err := statusQ.Update("status", status).Error; err != nil {
 			slog.Warn("同步实例状态失败", "instanceUUID", s.InstanceUuid, "state", s.State, "error", err)
 		}
+
+		// ② status_reason 单独写：泛化原因场景附加「库中原因为空」条件；DAMAGED 守卫与 status 一致，
+		//    以免把巡检原因写到不打算改动状态的损毁实例上。
+		if reasonValue != nil {
+			reasonQ := h.db.Model(&model.Instance{}).Where("uuid = ?", s.InstanceUuid)
+			if damagedGuard {
+				reasonQ = reasonQ.Where("status <> ?", model.InstanceStatusDamaged)
+			}
+			if reasonEmptyCond {
+				reasonQ = reasonQ.Where("status_reason IS NULL OR status_reason = ''")
+			}
+			if err := reasonQ.Update("status_reason", *reasonValue).Error; err != nil {
+				slog.Warn("同步实例状态原因失败", "instanceUUID", s.InstanceUuid, "state", s.State, "error", err)
+			}
+		}
+		// FR-459：熔断上报 → 站内信告警（按实例去重，原因变化才重发）。
+		h.maybeNotifyCircuitBroken(nodeUUID, s)
 	}
 
 	// 对账：本节点上 DB 认为在运行（RUNNING/STARTING/STOPPING）但 Worker 未上报的实例。
@@ -564,6 +677,40 @@ func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*work
 
 // runningStatuses DB 侧「运行类」状态集合。
 var runningStatuses = []string{"RUNNING", "STARTING", "STOPPING"}
+
+// FR-459 健康巡检结论标识（与 internal/worker/process 的 HealthFault* 取值对齐）。
+const (
+	healthFaultHealthy       = "healthy"
+	healthFaultCircuitBroken = "circuit_broken"
+)
+
+// maybeNotifyCircuitBroken 在心跳上报健康熔断时为实例投递站内信告警（FR-459 T4）。
+// 按 nodeUUID+uuid 去重：原因未变化不重复发信；实例恢复（health 不再为熔断）时清除记录。
+func (h *ControlPlaneHandler) maybeNotifyCircuitBroken(nodeUUID string, s *workerpb.InstanceState) {
+	if s == nil || s.InstanceUuid == "" {
+		return
+	}
+	key := nodeUUID + "|" + s.InstanceUuid
+	if s.Health != healthFaultCircuitBroken {
+		h.healthAlertedMu.Lock()
+		delete(h.healthAlerted, key)
+		h.healthAlertedMu.Unlock()
+		return
+	}
+	reason := s.StatusReason
+	h.healthAlertedMu.Lock()
+	prev, seen := h.healthAlerted[key]
+	if seen && prev == reason {
+		h.healthAlertedMu.Unlock()
+		return
+	}
+	h.healthAlerted[key] = reason
+	notifier := h.healthNotifier
+	h.healthAlertedMu.Unlock()
+	if notifier != nil {
+		notifier.NotifyInstanceCircuitBroken(nodeUUID, s.InstanceUuid, reason)
+	}
+}
 
 // reconcileMissingInstances 处理「DB 运行态但心跳清单缺失」的实例（FR-455③）。
 // 未注入证据客户端时退化为旧行为（直接落 STOPPED）。

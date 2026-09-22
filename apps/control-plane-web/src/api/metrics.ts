@@ -337,6 +337,12 @@ export interface HealthWallNode {
   running: number
   crashed: number
   stopped: number
+  /**
+   * FR-459/FR-461：活着但已不可服务的实例数（状态仍 RUNNING，巡检已写入 status_reason，
+   * 如假死 / 崩溃熔断）。假死进程不会退出、状态也不转 CRASHED，只按 status 分级会漏掉，
+   * 故服务端单列计数并据此把节点降级。老 CP 不返回本字段。
+   */
+  degraded?: number
   activeAlerts: number
   botActive: number | null
   botConnecting: number | null

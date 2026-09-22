@@ -39,6 +39,22 @@ func TestOrphanScanConfig_ScanIntervalParsing(t *testing.T) {
 	assert.Equal(t, 90*time.Second, OrphanScanConfig{Interval: "90s"}.ScanInterval())
 }
 
+// TestHealthScanConfig 巡检周期/熔断窗口解析回退默认 30s/10m；策略组装对齐本地配置（FR-459）。
+func TestHealthScanConfig(t *testing.T) {
+	assert.Equal(t, 30*time.Second, HealthScanConfig{}.ScanInterval())
+	assert.Equal(t, 30*time.Second, HealthScanConfig{Interval: "bogus"}.ScanInterval())
+	assert.Equal(t, 45*time.Second, HealthScanConfig{Interval: "45s"}.ScanInterval())
+	assert.Equal(t, 10*time.Minute, HealthScanConfig{}.CircuitWindow())
+	assert.Equal(t, 15*time.Minute, HealthScanConfig{CircuitBreakerWindow: "15m"}.CircuitWindow())
+
+	pol := HealthScanConfig{Interval: "45s", Action: "restart", SuspicionThreshold: 4}.HealthPolicy()
+	assert.True(t, pol.Enabled)
+	assert.Equal(t, 45*time.Second, pol.ScanInterval)
+	assert.Equal(t, "restart", pol.Action)
+	assert.Equal(t, 4, pol.SuspicionThreshold)
+	assert.False(t, HealthScanConfig{Disabled: true}.HealthPolicy().Enabled, "Disabled 应映射为 Enabled=false")
+}
+
 // TestLoad_Defaults 零配置（无文件、无 env）时加载合理默认值（FR-080，见 ADR-020）。
 func TestLoad_Defaults(t *testing.T) {
 	// 指向不存在的文件，强制走默认值（ReadInConfig 容错）。

@@ -288,7 +288,8 @@ func (d *dockerStrategy) waitLoop() {
 	})
 	slog.Warn("docker 实例崩溃", "instanceId", d.spec.UUID, "exitCode", exitCode, "crashCount", crashCount)
 
-	if d.spec.AutoRestart {
+	// FR-459：熔断期间不再自动重启（窗口内崩溃重启超限即熔断）。
+	if d.spec.AutoRestart && d.mgr.autoRestartAllowed(d.spec.UUID) {
 		delay := backoffDelay(crashCount)
 		slog.Info("将在延迟后自动重启", "instanceId", d.spec.UUID, "delay", delay, "crashCount", crashCount)
 		time.Sleep(delay)

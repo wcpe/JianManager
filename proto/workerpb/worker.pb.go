@@ -336,7 +336,9 @@ type ReportOrphanAuditRequest struct {
 	NodeUuid   string                 `protobuf:"bytes,1,opt,name=node_uuid,json=nodeUuid,proto3" json:"node_uuid,omitempty"` // 节点身份（与崩溃快照上报同源校验）
 	NodeSecret string                 `protobuf:"bytes,2,opt,name=node_secret,json=nodeSecret,proto3" json:"node_secret,omitempty"`
 	Action     string                 `protobuf:"bytes,3,opt,name=action,proto3" json:"action,omitempty"` // 审计动作名：orphan.scan_detected / orphan.scan_disposed /
-	// orphan.scan_dispose_blocked / orphan.dispose_blocked / orphan.dispose_reaped
+	// orphan.scan_dispose_blocked / orphan.dispose_blocked / orphan.dispose_reaped /
+	// health.dead_detected / health.selfheal_restart / health.selfheal_exhausted /
+	// health.circuit_broken / health.circuit_released（FR-459，detail 内标 operator=auto）
 	TargetId      string `protobuf:"bytes,4,opt,name=target_id,json=targetId,proto3" json:"target_id,omitempty"` // 目标标识（实例 UUID 或 direct 孤儿工作目录）
 	Detail        string `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`                     // 补充说明（JSON）
 	Success       bool   `protobuf:"varint,6,opt,name=success,proto3" json:"success,omitempty"`                  // 处置是否成功（拦截/未处置为 false）
@@ -839,7 +841,12 @@ type InstanceState struct {
 	State        string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"` // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
 	// pid 受管实例根进程 PID（可选，FR-326 反向对账诊断；0/缺省=未知或未运行）。
 	// 老 Worker 不上报本字段（零值），老 CP 忽略；不改变正向对账语义。
-	Pid           int32 `protobuf:"varint,3,opt,name=pid,proto3" json:"pid,omitempty"`
+	Pid int32 `protobuf:"varint,3,opt,name=pid,proto3" json:"pid,omitempty"`
+	// health 是 FR-459 健康巡检结论标识（可选）：healthy/suspected_dead/dead/crashed/circuit_broken。
+	// 空=无巡检结论（老 Worker 或该实例未参与巡检，如无端口/未运行）。老 CP 忽略，不改正向对账语义。
+	Health string `protobuf:"bytes,4,opt,name=health,proto3" json:"health,omitempty"`
+	// status_reason 是健康巡检给出的原因说明（假死/熔断等，FR-459）；空=正常。CP 据此写 instances.status_reason。
+	StatusReason  string `protobuf:"bytes,5,opt,name=status_reason,json=statusReason,proto3" json:"status_reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -893,6 +900,20 @@ func (x *InstanceState) GetPid() int32 {
 		return x.Pid
 	}
 	return 0
+}
+
+func (x *InstanceState) GetHealth() string {
+	if x != nil {
+		return x.Health
+	}
+	return ""
+}
+
+func (x *InstanceState) GetStatusReason() string {
+	if x != nil {
+		return x.StatusReason
+	}
+	return ""
 }
 
 // DisposeOrphanRuntimeRequest CP 请求 Worker 清理无主运行时（FR-326）。
@@ -1497,6 +1518,22 @@ type HeartbeatResponse struct {
 	// <=0 = 未配置（老 CP 不下发），Worker 回退内置默认 3s。
 	DirectProbeSlpTimeoutMs   int32 `protobuf:"varint,7,opt,name=direct_probe_slp_timeout_ms,json=directProbeSlpTimeoutMs,proto3" json:"direct_probe_slp_timeout_ms,omitempty"`
 	DirectProbeQueryTimeoutMs int32 `protobuf:"varint,8,opt,name=direct_probe_query_timeout_ms,json=directProbeQueryTimeoutMs,proto3" json:"direct_probe_query_timeout_ms,omitempty"`
+	// === FR-459 实例健康巡检与自愈策略下发 ===
+	// health_scan_enabled 用 optional 表达「CP 是否下发了策略」：nil=老 CP 未下发（Worker 沿用本地
+	// worker.yml 配置），非 nil=采用本响应全部 health_* 字段。避免 proto3 零值无法区分「关闭」与「未配置」。
+	HealthScanEnabled             *bool  `protobuf:"varint,9,opt,name=health_scan_enabled,json=healthScanEnabled,proto3,oneof" json:"health_scan_enabled,omitempty"`                                  // 巡检总开关（CP 侧生效值）
+	HealthScanIntervalMs          int32  `protobuf:"varint,10,opt,name=health_scan_interval_ms,json=healthScanIntervalMs,proto3" json:"health_scan_interval_ms,omitempty"`                            // 巡检周期（毫秒）
+	HealthProbeKind               string `protobuf:"bytes,11,opt,name=health_probe_kind,json=healthProbeKind,proto3" json:"health_probe_kind,omitempty"`                                              // 响应维度探针类型：tcp / http（空=auto）
+	HealthSuspicionThreshold      int32  `protobuf:"varint,12,opt,name=health_suspicion_threshold,json=healthSuspicionThreshold,proto3" json:"health_suspicion_threshold,omitempty"`                  // 连续判假死次数阈值
+	HealthAction                  string `protobuf:"bytes,13,opt,name=health_action,json=healthAction,proto3" json:"health_action,omitempty"`                                                         // 假死动作：warn / restart
+	HealthCircuitBreakerThreshold int32  `protobuf:"varint,14,opt,name=health_circuit_breaker_threshold,json=healthCircuitBreakerThreshold,proto3" json:"health_circuit_breaker_threshold,omitempty"` // 崩溃熔断：窗口内重启次数阈值
+	HealthCircuitBreakerWindowMs  int32  `protobuf:"varint,15,opt,name=health_circuit_breaker_window_ms,json=healthCircuitBreakerWindowMs,proto3" json:"health_circuit_breaker_window_ms,omitempty"`  // 崩溃熔断：滚动窗口（毫秒）
+	// health_startup_warmup_ms 是启动宽限期（毫秒，FR-459 复审项 2）：Start 返回 RUNNING 后这段时间
+	// 内不做假死判定，避免慢启动 MC 被判假死并反复重启。<=0 = 未配置，Worker 回退内置默认 5m。
+	HealthStartupWarmupMs int32 `protobuf:"varint,16,opt,name=health_startup_warmup_ms,json=healthStartupWarmupMs,proto3" json:"health_startup_warmup_ms,omitempty"`
+	// health_self_heal_max_restarts 是假死自愈在熔断窗口内的重启次数上限（FR-459 复审项 7，
+	// 避免假死路径重启风暴）。<=0 = 未配置，Worker 回退内置默认 3。
+	HealthSelfHealMaxRestarts int32 `protobuf:"varint,17,opt,name=health_self_heal_max_restarts,json=healthSelfHealMaxRestarts,proto3" json:"health_self_heal_max_restarts,omitempty"`
 	unknownFields             protoimpl.UnknownFields
 	sizeCache                 protoimpl.SizeCache
 }
@@ -1583,6 +1620,69 @@ func (x *HeartbeatResponse) GetDirectProbeSlpTimeoutMs() int32 {
 func (x *HeartbeatResponse) GetDirectProbeQueryTimeoutMs() int32 {
 	if x != nil {
 		return x.DirectProbeQueryTimeoutMs
+	}
+	return 0
+}
+
+func (x *HeartbeatResponse) GetHealthScanEnabled() bool {
+	if x != nil && x.HealthScanEnabled != nil {
+		return *x.HealthScanEnabled
+	}
+	return false
+}
+
+func (x *HeartbeatResponse) GetHealthScanIntervalMs() int32 {
+	if x != nil {
+		return x.HealthScanIntervalMs
+	}
+	return 0
+}
+
+func (x *HeartbeatResponse) GetHealthProbeKind() string {
+	if x != nil {
+		return x.HealthProbeKind
+	}
+	return ""
+}
+
+func (x *HeartbeatResponse) GetHealthSuspicionThreshold() int32 {
+	if x != nil {
+		return x.HealthSuspicionThreshold
+	}
+	return 0
+}
+
+func (x *HeartbeatResponse) GetHealthAction() string {
+	if x != nil {
+		return x.HealthAction
+	}
+	return ""
+}
+
+func (x *HeartbeatResponse) GetHealthCircuitBreakerThreshold() int32 {
+	if x != nil {
+		return x.HealthCircuitBreakerThreshold
+	}
+	return 0
+}
+
+func (x *HeartbeatResponse) GetHealthCircuitBreakerWindowMs() int32 {
+	if x != nil {
+		return x.HealthCircuitBreakerWindowMs
+	}
+	return 0
+}
+
+func (x *HeartbeatResponse) GetHealthStartupWarmupMs() int32 {
+	if x != nil {
+		return x.HealthStartupWarmupMs
+	}
+	return 0
+}
+
+func (x *HeartbeatResponse) GetHealthSelfHealMaxRestarts() int32 {
+	if x != nil {
+		return x.HealthSelfHealMaxRestarts
 	}
 	return 0
 }
@@ -16549,11 +16649,13 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\bprogress\x18\x03 \x01(\x05R\bprogress\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12\x16\n" +
 	"\x06result\x18\x05 \x01(\tR\x06result\x12(\n" +
-	"\x10recent_log_lines\x18\x06 \x03(\tR\x0erecentLogLines\"\\\n" +
+	"\x10recent_log_lines\x18\x06 \x03(\tR\x0erecentLogLines\"\x99\x01\n" +
 	"\rInstanceState\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12\x10\n" +
-	"\x03pid\x18\x03 \x01(\x05R\x03pid\"B\n" +
+	"\x03pid\x18\x03 \x01(\x05R\x03pid\x12\x16\n" +
+	"\x06health\x18\x04 \x01(\tR\x06health\x12#\n" +
+	"\rstatus_reason\x18\x05 \x01(\tR\fstatusReason\"B\n" +
 	"\x1bDisposeOrphanRuntimeRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\"N\n" +
 	"\x1cDisposeOrphanRuntimeResponse\x12\x18\n" +
@@ -16621,7 +16723,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x11_bot_active_countB\x17\n" +
 	"\x15_bot_connecting_countB\x18\n" +
 	"\x16_bot_event_loop_p95_msB\x13\n" +
-	"\x11_bot_capacity_max\"\xef\x02\n" +
+	"\x11_bot_capacity_max\"\x8e\a\n" +
 	"\x11HeartbeatResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\x12\x1b\n" +
 	"\tproxy_url\x18\x02 \x01(\tR\bproxyUrl\x12$\n" +
@@ -16630,7 +16732,18 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x0fcancel_task_ids\x18\x05 \x03(\tR\rcancelTaskIds\x12&\n" +
 	"\x0fws_token_secret\x18\x06 \x01(\tR\rwsTokenSecret\x12<\n" +
 	"\x1bdirect_probe_slp_timeout_ms\x18\a \x01(\x05R\x17directProbeSlpTimeoutMs\x12@\n" +
-	"\x1ddirect_probe_query_timeout_ms\x18\b \x01(\x05R\x19directProbeQueryTimeoutMs\"\xa2\x06\n" +
+	"\x1ddirect_probe_query_timeout_ms\x18\b \x01(\x05R\x19directProbeQueryTimeoutMs\x123\n" +
+	"\x13health_scan_enabled\x18\t \x01(\bH\x00R\x11healthScanEnabled\x88\x01\x01\x125\n" +
+	"\x17health_scan_interval_ms\x18\n" +
+	" \x01(\x05R\x14healthScanIntervalMs\x12*\n" +
+	"\x11health_probe_kind\x18\v \x01(\tR\x0fhealthProbeKind\x12<\n" +
+	"\x1ahealth_suspicion_threshold\x18\f \x01(\x05R\x18healthSuspicionThreshold\x12#\n" +
+	"\rhealth_action\x18\r \x01(\tR\fhealthAction\x12G\n" +
+	" health_circuit_breaker_threshold\x18\x0e \x01(\x05R\x1dhealthCircuitBreakerThreshold\x12F\n" +
+	" health_circuit_breaker_window_ms\x18\x0f \x01(\x05R\x1chealthCircuitBreakerWindowMs\x127\n" +
+	"\x18health_startup_warmup_ms\x18\x10 \x01(\x05R\x15healthStartupWarmupMs\x12@\n" +
+	"\x1dhealth_self_heal_max_restarts\x18\x11 \x01(\x05R\x19healthSelfHealMaxRestartsB\x16\n" +
+	"\x14_health_scan_enabled\"\xa2\x06\n" +
 	"\x15CreateInstanceRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -18492,6 +18605,7 @@ func file_proto_worker_proto_init() {
 		return
 	}
 	file_proto_worker_proto_msgTypes[15].OneofWrappers = []any{}
+	file_proto_worker_proto_msgTypes[16].OneofWrappers = []any{}
 	file_proto_worker_proto_msgTypes[191].OneofWrappers = []any{
 		(*TerminalFrame_Open)(nil),
 		(*TerminalFrame_Frame)(nil),

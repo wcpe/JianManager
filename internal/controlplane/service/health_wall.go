@@ -39,6 +39,10 @@ type HealthWallNode struct {
 	Running int `json:"running"`
 	Crashed int `json:"crashed"`
 	Stopped int `json:"stopped"`
+	// Degraded 是「活着但已不可服务」的实例数（FR-459/FR-461 验收 7）：状态仍为 RUNNING
+	// 但巡检已写入 status_reason（假死 / 崩溃熔断等）。假死进程不会退出、状态也不会转 CRASHED，
+	// 只按 status 分级会让这类实例在健康墙上完全不可见，故单列计数并参与降级判定。
+	Degraded int `json:"degraded"`
 	// ActiveAlerts 归属本节点的未解决告警数（含本节点上的实例告警）。
 	ActiveAlerts int `json:"activeAlerts"`
 	// BotActive/BotConnecting 共享 Bot Worker 运行时计数（缺测为 nil）。
@@ -116,6 +120,7 @@ func (s *PlatformObservabilityService) loadHealthWallNodes(now time.Time) ([]Hea
 		item.Running = instances.running[node.ID]
 		item.Crashed = instances.crashed[node.ID]
 		item.Stopped = instances.stopped[node.ID]
+		item.Degraded = instances.degraded[node.ID]
 		item.ActiveAlerts = alertCounts[node.ID]
 		if freshness == ResourceFreshnessFresh {
 			item.CPUPct = float64Pointer(float64(node.CPUUsage) * 100)
@@ -133,25 +138,32 @@ func (s *PlatformObservabilityService) loadHealthWallNodes(now time.Time) ([]Hea
 
 // healthWallInstanceAgg 汇总每节点的实例状态计数。
 type healthWallInstanceAgg struct {
-	running, crashed, stopped map[uint]int
+	running, crashed, stopped, degraded map[uint]int
 }
 
 // healthWallInstances 以 GROUP BY (node_id, status) 在库侧聚合各节点实例状态计数（有界聚合，
 // 替代全表加载逐行累加）。
+//
+// degraded 取 RUNNING 且 status_reason 非空的行数（FR-459：假死实例状态仍是 RUNNING，
+// 只看 status 分级会让它对健康墙完全不可见）。
 func (s *PlatformObservabilityService) healthWallInstances() (healthWallInstanceAgg, error) {
 	agg := healthWallInstanceAgg{
-		running: map[uint]int{},
-		crashed: map[uint]int{},
-		stopped: map[uint]int{},
+		running:  map[uint]int{},
+		crashed:  map[uint]int{},
+		stopped:  map[uint]int{},
+		degraded: map[uint]int{},
 	}
 	type row struct {
 		NodeID uint
 		Status model.InstanceStatus
 		Count  int
+		// Reasoned 是该 (node,status) 分组内 status_reason 非空的行数。
+		Reasoned int
 	}
 	var rows []row
 	if err := s.db.Model(&model.Instance{}).
-		Select("node_id, status, COUNT(*) AS count").
+		Select("node_id, status, COUNT(*) AS count, " +
+			"SUM(CASE WHEN status_reason IS NOT NULL AND status_reason <> '' THEN 1 ELSE 0 END) AS reasoned").
 		Group("node_id, status").Find(&rows).Error; err != nil {
 		return agg, fmt.Errorf("查询健康墙实例计数失败: %w", err)
 	}
@@ -159,6 +171,7 @@ func (s *PlatformObservabilityService) healthWallInstances() (healthWallInstance
 		switch r.Status {
 		case model.InstanceStatusRunning:
 			agg.running[r.NodeID] += r.Count
+			agg.degraded[r.NodeID] += r.Reasoned
 		case model.InstanceStatusCrashed:
 			agg.crashed[r.NodeID] += r.Count
 		case model.InstanceStatusStopped:
@@ -249,7 +262,7 @@ func healthLevelAt(item HealthWallNode) string {
 	case "stale":
 		return HealthLevelStale
 	}
-	if item.Crashed > 0 || item.ActiveAlerts > 0 {
+	if item.Crashed > 0 || item.Degraded > 0 || item.ActiveAlerts > 0 {
 		return HealthLevelDegraded
 	}
 	for _, v := range []*float64{item.CPUPct, item.MemPct, item.DiskPct} {

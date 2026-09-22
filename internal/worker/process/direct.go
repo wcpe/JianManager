@@ -126,8 +126,9 @@ func (d *directStrategy) waitLoop() {
 
 	slog.Warn("direct 实例崩溃", "instanceId", d.spec.UUID, "err", err, "crashCount", crashCount)
 
-	// 指数退避自动重启交给 Manager.Start（它会在 CRASHED 状态下允许重启）
-	if d.spec.AutoRestart {
+	// 指数退避自动重启交给 Manager.Start（它会在 CRASHED 状态下允许重启）。
+	// FR-459：熔断期间（窗口内崩溃重启超限）不再自动重启——镜像 wrapper.javaWait 的 fastCrashes 守卫。
+	if d.spec.AutoRestart && d.mgr.autoRestartAllowed(d.spec.UUID) {
 		delay := backoffDelay(crashCount)
 		slog.Info("将在延迟后自动重启", "instanceId", d.spec.UUID, "delay", delay, "crashCount", crashCount)
 		time.Sleep(delay)
@@ -164,6 +165,9 @@ func (d *directStrategy) Stop() error {
 func (d *directStrategy) Kill() error {
 	d.mu.Lock()
 	cmd := d.cmd
+	// 先落 StateStopping（对齐 docker 策略）：waitLoop 以 Stopping/Stopped 判定「正常停止」，
+	// 否则强杀会被记成崩溃——既污染 FR-459 崩溃熔断窗口，又误发崩溃快照（FR-459 复审项 8）。
+	d.state = StateStopping
 	d.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
 		return nil

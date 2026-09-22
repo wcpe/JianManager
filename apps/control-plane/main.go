@@ -855,6 +855,11 @@ func main() {
 	// 注入 MC 直探（SLP / Query）超时解析器（FR-446）：每次心跳响应携带 direct_probe.* 的
 	// 生效超时（毫秒），Worker 存内存填入采集编排链，使超时真可配且无需重启 Worker。
 	grpcHandler.SetDirectProbeTimeoutResolver(settingsSvc)
+	// 注入实例健康巡检策略解析器（FR-459）：每次心跳响应携带 health.* 生效策略（enabled/周期/
+	// 探针类型/阈值/动作/熔断阈值），Worker 写入巡检器生效值，无需重启 Worker。
+	grpcHandler.SetHealthPolicyResolver(settingsSvc)
+	// 注入健康熔断站内信告警投递器（FR-459）：Worker 经心跳上报熔断时给平台管理员发站内信。
+	grpcHandler.SetHealthAlertNotifier(service.NewHealthAlertNotifier(db, notificationSvc))
 	// 反向隧道注册表（FR-281，见 ADR-066）：Worker 主动在本 gRPC 端口开常驻反向隧道，
 	// CP 指令仅经反向隧道下发，Worker 不开放任何 CP 直拨入口。
 	// 鉴权拦截器仅拦 OpenReverseTunnel，其余流式方法（心跳等）原样放行。

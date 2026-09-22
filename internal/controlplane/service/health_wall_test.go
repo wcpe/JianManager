@@ -282,3 +282,43 @@ func TestHealthWall_NoWorkerRPCAndBoundedQueries(t *testing.T) {
 	assert.Equal(t, few, grown, "查询次数不得随节点数增长（无 N+1）")
 	assert.LessOrEqual(t, grown, int32(3), "健康墙查询应为常数级有界（无 Worker RPC）")
 }
+
+// FR-461/FR-459 验收 7：假死实例状态仍是 RUNNING（进程在、只是不响应），只按 status 分级
+// 会让它在健康墙上完全不可见；健康墙须把「RUNNING 但 status_reason 非空」计为降级。
+func TestHealthWall_DegradedCountsHangingInstances(t *testing.T) {
+	svc := newHealthWallSvc(t)
+	base := metricBase()
+	fresh := base.Add(-10 * time.Second)
+
+	require.NoError(t, svc.db.Create(&[]model.Node{
+		{Name: "hang-node", UUID: "n-hang", Status: model.NodeStatusOnline, LastHeartbeat: &fresh, CPUUsage: 0.1, MemoryUsedMB: 10, MemoryMB: 100, DiskUsage: 0.1},
+		{Name: "idle-node", UUID: "n-idle", Status: model.NodeStatusOnline, LastHeartbeat: &fresh, CPUUsage: 0.1, MemoryUsedMB: 10, MemoryMB: 100, DiskUsage: 0.1},
+	}).Error)
+
+	var hang, idle model.Node
+	require.NoError(t, svc.db.Where("uuid = ?", "n-hang").First(&hang).Error)
+	require.NoError(t, svc.db.Where("uuid = ?", "n-idle").First(&idle).Error)
+
+	require.NoError(t, svc.db.Create(&[]model.Instance{
+		// 假死：RUNNING 但巡检已写原因。
+		{UUID: "i-hang", NodeID: hang.ID, Name: "hang", Status: model.InstanceStatusRunning,
+			StatusReason: "假死：进程在但 tcp 响应探测连续失败 3 次"},
+		// 健康 RUNNING：无原因。
+		{UUID: "i-ok", NodeID: hang.ID, Name: "ok", Status: model.InstanceStatusRunning},
+		// 另一个节点全健康。
+		{UUID: "i-idle", NodeID: idle.ID, Name: "idle", Status: model.InstanceStatusRunning},
+	}).Error)
+
+	got, err := svc.HealthWallAt(base, "level")
+	require.NoError(t, err)
+
+	byUUID := map[string]HealthWallNode{}
+	for _, n := range got.Nodes {
+		byUUID[n.UUID] = n
+	}
+	assert.Equal(t, 1, byUUID["n-hang"].Degraded, "假死实例应计入 degraded")
+	assert.Equal(t, 2, byUUID["n-hang"].Running, "RUNNING 计数不受影响")
+	assert.Equal(t, HealthLevelDegraded, byUUID["n-hang"].Level, "存在假死实例的节点应降级")
+	assert.Equal(t, 0, byUUID["n-idle"].Degraded)
+	assert.Equal(t, HealthLevelHealthy, byUUID["n-idle"].Level)
+}

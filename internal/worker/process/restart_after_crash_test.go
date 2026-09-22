@@ -15,6 +15,10 @@ type fakeStrategy struct {
 	startCount int
 	stopCount  int
 	killCount  int
+	// disarmCount 记录收到「禁用自动重启」的次数（FR-459 熔断的 daemon 生效路径）。
+	disarmCount int
+	// rearmCount 记录收到「恢复自动重启」的次数（FR-459 终验 Major：人工解除熔断的复位路径）。
+	rearmCount int
 	state      InstanceState
 	// onStart 可选钩子：在 Start 记账为 RUNNING 后、返回前同步触发，用于确定性地模拟
 	// 「进程在 strategy.Start 返回前就崩溃」的并发时序（启动窗口竞态），无需真实进程与 sleep。
@@ -35,6 +39,12 @@ func (f *fakeStrategy) SendCommand(string) error { return nil }
 func (f *fakeStrategy) State() InstanceState     { return f.state }
 func (f *fakeStrategy) Close() error             { return nil }
 func (f *fakeStrategy) GetPID() int              { return 0 }
+
+// DisableAutoRestart 让替身满足 autoRestartDisarmer（模拟 daemon 策略的控制帧能力）。
+func (f *fakeStrategy) DisableAutoRestart() error { f.disarmCount++; return nil }
+
+// EnableAutoRestart 让替身满足 autoRestartRearmer（模拟 daemon 策略的对称复位帧能力）。
+func (f *fakeStrategy) EnableAutoRestart() error { f.rearmCount++; return nil }
 
 // TestManager_MarkStrategyState_AllowsRestart 确定性单测（不 spawn 进程）：
 // 策略异步崩溃经 markStrategyState 同步后，Manager 记账须转为 CRASHED 且可重启（复用已注入策略）。

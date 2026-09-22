@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -49,19 +50,30 @@ const (
 )
 
 // controlCommand 是 Worker 通过 ChannelControl 下发的控制命令。
-// 约定 payload 为 "stop" / "kill" / "ping" 文本。
+// 约定 payload 为 "stop" / "kill" / "ping" / "disable_restart" / "enable_restart" 文本。
 const (
 	CtrlStop = "stop"
 	CtrlKill = "kill"
 	CtrlPing = "ping"
+	// CtrlDisableRestart 由 Worker 在 FR-459 崩溃熔断时下发：令 wrapper 永久停止自动重启
+	// （粘性，不复位），使熔断对「Worker 无法直接触及的 wrapper 内重启」也生效。
+	// 版本互不炸：老 wrapper 收到未知控制命令只记日志忽略，不影响既有链路。
+	CtrlDisableRestart = "disable_restart"
+	// CtrlEnableRestart 是 CtrlDisableRestart 的对称复位帧（FR-459 终验 Major）：
+	// 人工解除熔断（ReleaseCircuitBreaker）时下发，清掉 autoRestartOff，使 wrapper 恢复自动重启。
+	// 否则「熔断解除」对仍在托管运行中 Java 的 wrapper 只是一句空话——Java 下次崩溃仍被 wrapper 拒绝重启。
+	// 同样版本互不炸：老 wrapper 收到未知命令只记日志忽略。
+	CtrlEnableRestart = "enable_restart"
 )
 
-// ControlStop / ControlKill / ControlPing 是导出的控制命令常量，
-// 供 daemonStrategy 跨包引用。
+// ControlStop / ControlKill / ControlPing / ControlDisableRestart / ControlEnableRestart 是导出的
+// 控制命令常量，供 daemonStrategy 跨包引用。
 const (
-	ControlStop = CtrlStop
-	ControlKill = CtrlKill
-	ControlPing = CtrlPing
+	ControlStop           = CtrlStop
+	ControlKill           = CtrlKill
+	ControlPing           = CtrlPing
+	ControlDisableRestart = CtrlDisableRestart
+	ControlEnableRestart  = CtrlEnableRestart
 )
 
 // Wrapper 是 daemon wrapper 子进程的运行体。
@@ -84,6 +96,13 @@ type Wrapper struct {
 	crashCount    int
 	fastCrashes   int       // 连续「快速崩溃」（启动后很快退出）计数
 	javaStartedAt time.Time // 本次 Java 启动时刻，用于判断是否快速崩溃
+	// autoRestartOff 是 FR-459 崩溃熔断下发的「永久停止自动重启」粘性开关：
+	// 一旦置位，javaWait 不再重启 Java（收到帧时若确无 Java 在跑则 wrapper 立即收摊退出）。
+	// 与 cfg.AutoRestart 分开记账，避免与启动期配置快照相互覆盖。
+	autoRestartOff bool
+	// javaStarting 标记「startJava 已发起、javaCmd 尚未登记」的窗口。
+	// 熔断禁用帧据此判断是否有 Java 启动在飞，避免把正在启动的 Java 变成无人托管的孤儿。
+	javaStarting bool
 }
 
 // netConn 别名避免直接依赖 net（便于测试替换）。
@@ -170,6 +189,10 @@ func (w *Wrapper) run(ready chan<- struct{}) error {
 
 	// 启动 Java
 	if err := w.startJava(); err != nil {
+		if errors.Is(err, errAutoRestartSuppressed) {
+			// 启动临界区内即被判禁用/关闭（启动期 autoRestartOff 为 false，理论不可达）——静默收摊。
+			return nil
+		}
 		return fmt.Errorf("启动 Java 失败: %w", err)
 	}
 
@@ -184,15 +207,31 @@ func (w *Wrapper) isClosed() bool {
 	return w.closed
 }
 
+// errAutoRestartSuppressed 表示 startJava 在临界区内发现「wrapper 已关闭 / 自动重启已被熔断禁用」，
+// 因而未拉起 Java（FR-459 终验 Low #5）。调用方据此静默收摊，不按启动失败告警。
+var errAutoRestartSuppressed = errors.New("wrapper 已关闭或自动重启已被禁用")
+
 // startJava 启动 Java 进程并写入 java pid。
 func (w *Wrapper) startJava() error {
 	w.mu.Lock()
+	// FR-459 终验 Low #5：在**同一临界区**内复核 closed/autoRestartOff 后再标记 javaStarting，
+	// 消除 javaWait 复核点（判 autoRestartOff）与 startJava 取锁之间的窄 TOCTOU：
+	// 否则该窗口内到达的 CtrlDisableRestart 会看到 javaCmd==nil && !javaStarting（判「空闲」而
+	// 立即收摊退出），紧接着 startJava 却把 Java 拉起 → wrapper 已退出、Java 无人托管的孤儿。
+	// 临界区内二者互斥：要么禁用先置位（此处直接放弃启动），要么 javaStarting 先置位
+	// （disableAutoRestart 见其非空闲而保持托管，待 Java 退出后由 javaWait 拦下重启）。
+	if w.closed || w.autoRestartOff {
+		w.mu.Unlock()
+		return errAutoRestartSuppressed
+	}
 	w.state = StateStarting
+	w.javaStarting = true
 	w.mu.Unlock()
 
 	cmd := buildJavaCmd(w.cfg)
 	javaStdin, err := cmd.StdinPipe()
 	if err != nil {
+		w.finishJavaStarting()
 		w.setState(StateCrashed)
 		return fmt.Errorf("创建 Java stdin 管道失败: %w", err)
 	}
@@ -202,6 +241,7 @@ func (w *Wrapper) startJava() error {
 	cmd.Stderr = &wrapperOutput{w: w, stream: ChannelStderr}
 
 	if err := cmd.Start(); err != nil {
+		w.finishJavaStarting()
 		w.setState(StateCrashed)
 		return fmt.Errorf("Java 启动失败: %w", err)
 	}
@@ -210,6 +250,7 @@ func (w *Wrapper) startJava() error {
 	w.javaCmd = cmd
 	w.javaStdin = javaStdin
 	w.state = StateRunning
+	w.javaStarting = false
 	javaPID := cmd.Process.Pid
 	w.mu.Unlock()
 
@@ -286,7 +327,7 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 		return
 	}
 
-	if !w.cfg.AutoRestart || w.isClosed() {
+	if !w.cfg.AutoRestart || w.isAutoRestartOff() || w.isClosed() {
 		w.signalClose()
 		return
 	}
@@ -301,10 +342,68 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 	if w.isClosed() {
 		return
 	}
+	// FR-459：退避等待期间可能收到「禁用自动重启」控制帧（崩溃熔断）——必须在真正拉起前复核，
+	// 否则熔断只阻止「下一次」重启、本次仍会拉起一个注定要崩的 Java。
+	if w.isAutoRestartOff() {
+		slog.Warn("自动重启已被禁用（实例崩溃熔断），wrapper 收摊退出", "instanceId", w.cfg.InstanceUUID)
+		w.signalClose()
+		return
+	}
 	if err := w.startJava(); err != nil {
-		slog.Error("wrapper 重启 Java 失败", "instanceId", w.cfg.InstanceUUID, "error", err)
+		// 复核点是尽力而为的提前退出；真正的护栏在 startJava 临界区内（消除 TOCTOU）。
+		if errors.Is(err, errAutoRestartSuppressed) {
+			slog.Warn("自动重启在启动临界区内被禁用，wrapper 收摊退出", "instanceId", w.cfg.InstanceUUID)
+		} else {
+			slog.Error("wrapper 重启 Java 失败", "instanceId", w.cfg.InstanceUUID, "error", err)
+		}
 		w.signalClose()
 	}
+}
+
+// disableAutoRestart 处理 FR-459 崩溃熔断下发的禁用自动重启指令。
+//
+// 语义：置位后 wrapper 不再自动重启 Java。若此刻确实没有 Java 在跑也没有启动在飞
+// （崩溃退避窗口），立即收摊退出，使实例稳定停在 CRASHED 而不空占进程；否则保持托管
+// （不打断正在启动/运行的服务），由 javaWait 在其退出后的复核点拦下自动重启。
+//
+// 复位只经对称的 enableAutoRestart（CtrlEnableRestart）——人工解除熔断时下发；
+// 状态变化（崩溃/停止）本身不会复位该标志。
+func (w *Wrapper) disableAutoRestart() {
+	w.mu.Lock()
+	w.autoRestartOff = true
+	idle := w.javaCmd == nil && !w.javaStarting
+	w.mu.Unlock()
+	slog.Warn("wrapper 收到禁用自动重启（FR-459 崩溃熔断）", "instanceId", w.cfg.InstanceUUID, "idle", idle)
+	if idle {
+		w.signalClose()
+	}
+}
+
+// enableAutoRestart 处理 FR-459 熔断人工解除时下发的对称复位帧：清掉粘性 autoRestartOff，
+// 使 wrapper 恢复「Java 退出按 cfg.AutoRestart 自动重启」的行为（Java 仍在跑时不打断服务，
+// 待其下次退出后按策略重启）。幂等。
+func (w *Wrapper) enableAutoRestart() {
+	w.mu.Lock()
+	was := w.autoRestartOff
+	w.autoRestartOff = false
+	w.mu.Unlock()
+	if was {
+		slog.Info("wrapper 收到恢复自动重启（FR-459 熔断人工解除）", "instanceId", w.cfg.InstanceUUID)
+	}
+}
+
+// finishJavaStarting 清除「Java 启动在飞」标记（startJava 失败路径）。
+func (w *Wrapper) finishJavaStarting() {
+	w.mu.Lock()
+	w.javaStarting = false
+	w.mu.Unlock()
+}
+
+// isAutoRestartOff 报告是否已被熔断禁用自动重启。
+func (w *Wrapper) isAutoRestartOff() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.autoRestartOff
 }
 
 // emitExitEvent 把被托管进程的非正常退出现场（退出码/信号/时长）作为事件帧发给已连接的
@@ -399,6 +498,10 @@ func (w *Wrapper) handleControl(cmd string) {
 				slog.Debug("回写 wrapper 心跳响应失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 			}
 		}
+	case CtrlDisableRestart:
+		w.disableAutoRestart()
+	case CtrlEnableRestart:
+		w.enableAutoRestart()
 	default:
 		slog.Warn("wrapper 收到未知控制命令", "cmd", cmd)
 	}

@@ -163,6 +163,9 @@ type Heartbeat struct {
 	// wsSecretApplier 据心跳响应里 CP 下发的 WS 令牌密钥热应用（FR-275，见 ADR-061）；
 	// 为 nil 时不应用（向后兼容旧 CP：Worker 沿用启动时生效值）。
 	wsSecretApplier *wsSecretApplier
+	// healthApplier 据心跳响应里 CP 下发的实例健康巡检策略（FR-459）热应用到巡检器；
+	// 为 nil 时不应用（Worker 沿用本地 worker.yml 配置，向后兼容旧 CP）。
+	healthApplier func(process.HealthPolicy)
 }
 
 // New 创建心跳上报器。
@@ -201,6 +204,12 @@ func (h *Heartbeat) SetProxyRebuilder(rebuild func(httpclient.Config) error) {
 // 持久化身份文件）。不调用则忽略 CP 下发的密钥（向后兼容）。
 func (h *Heartbeat) SetWSSecretApplier(current string, apply func(secret string) error) {
 	h.wsSecretApplier = newWSSecretApplier(current, apply)
+}
+
+// SetHealthPolicyApplier 注入「据心跳下发的实例健康巡检策略热应用」回调（FR-459）。
+// 由 main 装配（包裹 HealthScanner.SetPolicy）；不调用则忽略 CP 下发策略（向后兼容旧 CP）。
+func (h *Heartbeat) SetHealthPolicyApplier(apply func(process.HealthPolicy)) {
+	h.healthApplier = apply
 }
 
 // Start 启动心跳上报。
@@ -284,10 +293,13 @@ func (h *Heartbeat) buildHeartbeatRequest() (*workerpb.HeartbeatRequest, []strin
 		req.Instances = make([]*workerpb.InstanceState, 0, len(states))
 		for _, s := range states {
 			// pid 可选字段（FR-326）：供 CP 反向对账诊断；老 CP 忽略，零值兼容。
+			// health/status_reason（FR-459）：健康巡检结论与原因，供 CP 写 status_reason 与健康总览。
 			req.Instances = append(req.Instances, &workerpb.InstanceState{
 				InstanceUuid: s.UUID,
 				State:        s.State,
 				Pid:          int32(s.PID),
+				Health:       s.Health,
+				StatusReason: s.StatusReason,
 			})
 		}
 		req.InstanceMetrics = collectInstanceMetrics(states)
@@ -354,6 +366,9 @@ func (h *Heartbeat) sendHeartbeat(req *workerpb.HeartbeatRequest) error {
 
 	// 应用 CP 下发的 MC 直探超时（FR-446）：写入 metrics 生效值，心跳与实时两条链路共用。
 	applyDirectProbeTimeouts(reply)
+
+	// 应用 CP 下发的实例健康巡检策略（FR-459）：写入巡检器生效值，无需重启 Worker 即生效。
+	h.applyHealthPolicy(reply)
 
 	// 应用 CP 下发的取消请求（FR-227）：真中断对应运行中任务（如下载），canceled 经下一拍心跳上报。
 	if h.taskProvider != nil {

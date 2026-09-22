@@ -40,6 +40,27 @@ const (
 	// 与 graceful_stop.timeout 同风格：DB 覆盖 > 基线默认，Worker 侧生效、无需重启。
 	SettingKeyDirectProbeSLPTimeout   = "direct_probe.slp_timeout"
 	SettingKeyDirectProbeQueryTimeout = "direct_probe.query_timeout"
+	// SettingKeyHealth* 是实例健康巡检与自愈（FR-459）策略：心跳响应按拍下发
+	// （HeartbeatResponse.health_*），Worker 写入巡检器生效值；与 direct_probe.* 同风格
+	// （DB 覆盖 > 基线默认，Worker 侧生效、无需重启）。
+	//   - scan_enabled 巡检总开关（默认 true）；
+	//   - scan_interval 巡检周期（默认 30s）；
+	//   - probe_kind 响应维度探针类型 tcp|http|空(auto)；
+	//   - suspicion_threshold 连续判假死次数阈值（默认 3）；
+	//   - action 假死动作 warn（默认）|restart；
+	//   - circuit_breaker_threshold 熔断窗口内重启次数阈值（默认 5）；
+	//   - circuit_breaker_window 熔断滚动窗口（默认 10m）；
+	//   - startup_warmup 启动宽限期（默认 5m，FR-459 复审项 2：慢启动 MC 不被误判假死）；
+	//   - self_heal_max_restarts 假死自愈在熔断窗口内的重启次数上限（默认 3，复审项 7）。
+	SettingKeyHealthScanEnabled         = "health.scan_enabled"
+	SettingKeyHealthScanInterval        = "health.scan_interval"
+	SettingKeyHealthProbeKind           = "health.probe_kind"
+	SettingKeyHealthSuspicionThreshold  = "health.suspicion_threshold"
+	SettingKeyHealthAction              = "health.action"
+	SettingKeyHealthCircuitThreshold    = "health.circuit_breaker_threshold"
+	SettingKeyHealthCircuitWindow       = "health.circuit_breaker_window"
+	SettingKeyHealthStartupWarmup       = "health.startup_warmup"
+	SettingKeyHealthSelfHealMaxRestarts = "health.self_heal_max_restarts"
 	// SettingKeyBackupRetentionDays 默认备份保留天数（整数）。CP 后台巡检据此裁剪超期备份（FR-063）。
 	SettingKeyBackupRetentionDays = "backup.retention_days"
 	// SettingKeyProxyURL CP 出站代理地址（network 类，FR-185/ADR-043）。敏感（脱敏展示）。
@@ -248,6 +269,16 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		// MC 直探超时（FR-446）：经心跳下发 Worker，Worker 侧生效（非 CP 内即时生效）。
 		s.editableItem(SettingKeyDirectProbeSLPTimeout, s.defaultValue(SettingKeyDirectProbeSLPTimeout), overrides, false),
 		s.editableItem(SettingKeyDirectProbeQueryTimeout, s.defaultValue(SettingKeyDirectProbeQueryTimeout), overrides, false),
+		// 实例健康巡检与自愈（FR-459）：经心跳下发 Worker，Worker 侧生效（非 CP 内即时生效）。
+		s.editableItem(SettingKeyHealthScanEnabled, s.defaultValue(SettingKeyHealthScanEnabled), overrides, false),
+		s.editableItem(SettingKeyHealthScanInterval, s.defaultValue(SettingKeyHealthScanInterval), overrides, false),
+		s.editableItem(SettingKeyHealthProbeKind, s.defaultValue(SettingKeyHealthProbeKind), overrides, false),
+		s.editableItem(SettingKeyHealthSuspicionThreshold, s.defaultValue(SettingKeyHealthSuspicionThreshold), overrides, false),
+		s.editableItem(SettingKeyHealthAction, s.defaultValue(SettingKeyHealthAction), overrides, false),
+		s.editableItem(SettingKeyHealthCircuitThreshold, s.defaultValue(SettingKeyHealthCircuitThreshold), overrides, false),
+		s.editableItem(SettingKeyHealthCircuitWindow, s.defaultValue(SettingKeyHealthCircuitWindow), overrides, false),
+		s.editableItem(SettingKeyHealthStartupWarmup, s.defaultValue(SettingKeyHealthStartupWarmup), overrides, false),
+		s.editableItem(SettingKeyHealthSelfHealMaxRestarts, s.defaultValue(SettingKeyHealthSelfHealMaxRestarts), overrides, false),
 		s.editableItem(SettingKeyBackupRetentionDays, s.defaultValue(SettingKeyBackupRetentionDays), overrides, false),
 		// 出站代理（network 类，FR-185/ADR-043）：保存即在 CP 内重建出站持有者（即时生效）。
 		// proxy.url 标 sensitive：含凭据时回显脱敏（仅展示 scheme://host:port），不外泄明文密码。
@@ -435,6 +466,24 @@ func (s *SettingsService) defaultValue(key string) string {
 		return "30s"
 	case SettingKeyDirectProbeSLPTimeout, SettingKeyDirectProbeQueryTimeout:
 		return "3s"
+	case SettingKeyHealthScanEnabled:
+		return "true"
+	case SettingKeyHealthScanInterval:
+		return "30s"
+	case SettingKeyHealthProbeKind:
+		return ""
+	case SettingKeyHealthSuspicionThreshold:
+		return "3"
+	case SettingKeyHealthAction:
+		return "warn"
+	case SettingKeyHealthCircuitThreshold:
+		return "5"
+	case SettingKeyHealthCircuitWindow:
+		return "10m"
+	case SettingKeyHealthStartupWarmup:
+		return "5m"
+	case SettingKeyHealthSelfHealMaxRestarts:
+		return "3"
 	case SettingKeyBackupRetentionDays:
 		return strconv.Itoa(s.cfg.LogStore.RetentionDays)
 	case SettingKeyProxyURL:
@@ -518,6 +567,10 @@ func isWritableSettingKey(key string) bool {
 		SettingKeyRuntimeMirrorNodeJS,
 		SettingKeyGracefulStopTimeout, SettingKeyBackupRetentionDays,
 		SettingKeyDirectProbeSLPTimeout, SettingKeyDirectProbeQueryTimeout,
+		SettingKeyHealthScanEnabled, SettingKeyHealthScanInterval, SettingKeyHealthProbeKind,
+		SettingKeyHealthSuspicionThreshold, SettingKeyHealthAction,
+		SettingKeyHealthCircuitThreshold, SettingKeyHealthCircuitWindow,
+		SettingKeyHealthStartupWarmup, SettingKeyHealthSelfHealMaxRestarts,
 		SettingKeyProxyURL, SettingKeyProxyNoProxy,
 		SettingKeyOrphanGracePeriod, SettingKeyOrphanAutoDispose,
 		SettingKeyBotReclaimGracePeriod, SettingKeyBotReclaimAuto,
@@ -557,6 +610,48 @@ func validateSettingValue(key, val string) error {
 			return fmt.Errorf("%w: MC 直探超时不得大于 %s（单拍采集预算 = 余量 + 探针 %s + slp + query，"+
 				"必须小于 %s 心跳节拍）", ErrSettingValueInvalid,
 				maxDirectProbeTimeout, probeScrapeTimeoutCap, directprobe.HeartbeatInterval)
+		}
+	case SettingKeyHealthScanEnabled:
+		if val != "true" && val != "false" {
+			return fmt.Errorf("%w: 健康巡检总开关须为 true|false", ErrSettingValueInvalid)
+		}
+	case SettingKeyHealthScanInterval:
+		d, err := time.ParseDuration(val)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("%w: 健康巡检周期须为正的 Go duration（如 30s）", ErrSettingValueInvalid)
+		}
+	case SettingKeyHealthSuspicionThreshold:
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return fmt.Errorf("%w: 假死判定阈值须为 ≥1 的整数", ErrSettingValueInvalid)
+		}
+	case SettingKeyHealthAction:
+		if val != "warn" && val != "restart" {
+			return fmt.Errorf("%w: 假死动作须为 warn|restart", ErrSettingValueInvalid)
+		}
+	case SettingKeyHealthCircuitThreshold:
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return fmt.Errorf("%w: 崩溃熔断阈值须为 ≥1 的整数", ErrSettingValueInvalid)
+		}
+	case SettingKeyHealthCircuitWindow:
+		d, err := time.ParseDuration(val)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("%w: 崩溃熔断窗口须为正的 Go duration（如 10m）", ErrSettingValueInvalid)
+		}
+	case SettingKeyHealthStartupWarmup:
+		d, err := time.ParseDuration(val)
+		if err != nil || d < 0 {
+			return fmt.Errorf("%w: 启动宽限期须为非负的 Go duration（如 5m；0 表示回退默认）", ErrSettingValueInvalid)
+		}
+	case SettingKeyHealthSelfHealMaxRestarts:
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return fmt.Errorf("%w: 假死自愈重启上限须为 ≥1 的整数", ErrSettingValueInvalid)
+		}
+	case SettingKeyHealthProbeKind:
+		if val != "" && val != "tcp" && val != "http" {
+			return fmt.Errorf("%w: 探针类型须为 tcp|http 或留空(auto)", ErrSettingValueInvalid)
 		}
 	case SettingKeyBackupRetentionDays:
 		n, err := strconv.Atoi(val)

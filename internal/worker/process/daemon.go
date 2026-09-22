@@ -274,6 +274,16 @@ func (d *daemonStrategy) Stop() error {
 // 不缓存该连接到 d.conn：connectLoop 仍会按其节奏建立长连接接管输出读取，此处仅补发停止信号；
 // wrapper 端 listener 持续 Accept 多连接，额外的一次性 stop 连接无副作用。
 func (d *daemonStrategy) stopViaFreshDial() bool {
+	if d.sendControlViaFreshDial(daemon.ControlStop) {
+		slog.Info("连接窗口内停止：即时拨号补发 stop 控制帧", "instanceId", d.spec.UUID, "addr", daemon.SocketAddr(d.pidDir, d.spec.UUID))
+		return true
+	}
+	return false
+}
+
+// sendControlViaFreshDial 即时拨号 wrapper socket 下发一条控制帧（不缓存连接）。
+// 供「连接尚未建立 / 既有连接已断」的兜底路径复用（FIX-C 停止、FR-459 熔断禁用自动重启）。
+func (d *daemonStrategy) sendControlViaFreshDial(cmd string) bool {
 	addr := daemon.SocketAddr(d.pidDir, d.spec.UUID)
 	conn, err := daemon.Dial(addr)
 	if err != nil {
@@ -282,13 +292,45 @@ func (d *daemonStrategy) stopViaFreshDial() bool {
 	defer conn.Close()
 	f := &daemon.Frame{
 		Header:  daemon.Header{Channel: daemon.ChannelControl, Type: daemon.TypeCommand},
-		Payload: []byte(daemon.ControlStop),
+		Payload: []byte(cmd),
 	}
-	if err := f.Encode(conn); err != nil {
-		return false
+	return f.Encode(conn) == nil
+}
+
+// DisableAutoRestart 实现 FR-459 崩溃熔断的 daemon 生效路径：向 wrapper 下发「禁用自动重启」
+// 控制帧（粘性），使 wrapper 内部按启动期 env 快照完成的自动重启被真正拦住——Worker 无法
+// 直接触及 wrapper 内部状态，必须经此控制通道。
+//
+// 幂等；连接不可用时即时拨号兜底（同 stopViaFreshDial 的连接窗口处理）。
+func (d *daemonStrategy) DisableAutoRestart() error {
+	if err := d.sendControl(daemon.ControlDisableRestart); err == nil {
+		return nil
+	} else if !d.sendControlViaFreshDial(daemon.ControlDisableRestart) {
+		return fmt.Errorf("下发禁用自动重启控制帧失败: %w", err)
 	}
-	slog.Info("连接窗口内停止：即时拨号补发 stop 控制帧", "instanceId", d.spec.UUID, "addr", addr)
-	return true
+	slog.Info("既有 wrapper 控制连接不可用，改用即时拨号下发禁用自动重启",
+		"instanceId", d.spec.UUID, "addr", daemon.SocketAddr(d.pidDir, d.spec.UUID))
+	return nil
+}
+
+// EnableAutoRestart 实现 FR-459 熔断人工解除的 daemon 复位路径：向 wrapper 下发「恢复自动重启」
+// 控制帧（清 wrapper 内粘性 autoRestartOff），与 DisableAutoRestart 对称。
+//
+// 必要性（终验 Major）：熔断在 Java 仍在运行时触发时只发禁用帧、保 RUNNING；人工解除若只清 Worker
+// 内存账而不复位 wrapper，Java 下次崩溃仍被 wrapper 拒绝重启，而 CP/Worker 却认为已解除。
+//
+// 幂等；连接不可用时即时拨号兜底（同 DisableAutoRestart）。wrapper 已收摊退出（熔断时确无 Java
+// 在跑）时下发会失败——此场景实例已停/重建，下一次启动会 spawn 全新 wrapper（autoRestartOff 默认 false），
+// 故失败无害，仅记日志。
+func (d *daemonStrategy) EnableAutoRestart() error {
+	if err := d.sendControl(daemon.ControlEnableRestart); err == nil {
+		return nil
+	} else if !d.sendControlViaFreshDial(daemon.ControlEnableRestart) {
+		return fmt.Errorf("下发恢复自动重启控制帧失败: %w", err)
+	}
+	slog.Info("既有 wrapper 控制连接不可用，改用即时拨号下发恢复自动重启",
+		"instanceId", d.spec.UUID, "addr", daemon.SocketAddr(d.pidDir, d.spec.UUID))
+	return nil
 }
 
 func (d *daemonStrategy) Kill() error {
