@@ -143,6 +143,9 @@ func (e *AlertEvaluator) evaluate() {
 			e.evaluateBaselineRule(rule)
 		case model.AlertTriggerSaturation:
 			e.evaluateSaturationRule(rule)
+		case model.AlertTriggerQuotaExceeded:
+			// FR-467：配额超限由 QuotaEnforcer 巡检循环触发（它持有实时用量与配额基准），
+			// 不在此评估器内重复判定——两条链路各判一次会产生重复事件。
 		}
 	}
 }

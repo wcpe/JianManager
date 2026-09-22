@@ -63,6 +63,27 @@ const (
 	SettingKeyHealthSelfHealMaxRestarts = "health.self_heal_max_restarts"
 	// SettingKeyBackupRetentionDays 默认备份保留天数（整数）。CP 后台巡检据此裁剪超期备份（FR-063）。
 	SettingKeyBackupRetentionDays = "backup.retention_days"
+	// SettingKeyQuotaEnforceInterval 运行期配额强制巡检周期（Go duration，FR-467）。默认 60s（M-2）。
+	SettingKeyQuotaEnforceInterval = "quota.enforce_interval"
+	// SettingKeyQuotaEnforceMode 平台默认的运行期配额超限处置档位（alert|throttle|stop，FR-467）。
+	// 默认 alert：最保守，绝不因配额误停实例；组的 EnforceMode 可覆盖本值。
+	SettingKeyQuotaEnforceMode = "quota.enforce_mode"
+	// SettingKeyQuotaEnforceStreak 连续超限拍数阈值（整数，FR-467）。默认 5（M-2：与 60s 组合约 5 分钟窗口）。
+	SettingKeyQuotaEnforceStreak = "quota.enforce_streak"
+	// SettingKeySnapshotRetentionCount 实例快照按条数保留上限（整数，FR-466）。默认 10。
+	SettingKeySnapshotRetentionCount = "snapshot.retention_count"
+	// SettingKeySnapshotRetentionDays 实例快照按天数保留上限（整数，FR-466）。默认 30。
+	SettingKeySnapshotRetentionDays = "snapshot.retention_days"
+	// SettingKeySnapshotPreRollbackKeep pre_rollback 快照保留条数下限（整数，FR-466）。
+	// pre_rollback 不受 snapshot.retention_count 裁剪，至少保留这么多条，避免「回滚把回滚点挤掉」。
+	SettingKeySnapshotPreRollbackKeep = "snapshot.pre_rollback_keep"
+	// SettingKeySnapshotMaxPerInstance 单实例快照条数上限（整数，FR-466 m-2）。默认 20；0=不限。
+	// 创建前保护：拦截「保留策略尚未生效就把磁盘写满」的自伤（快照是全量归档）。
+	SettingKeySnapshotMaxPerInstance = "snapshot.max_per_instance"
+	// SettingKeySnapshotMaxTotalMB 单实例快照总占用上限（MiB 整数，FR-466 m-2）。默认 0=不限。
+	SettingKeySnapshotMaxTotalMB = "snapshot.max_total_mb"
+	// SettingKeyCrashStatRetentionDays 崩溃趋势统计保留天数（整数，FR-470）。默认 90。
+	SettingKeyCrashStatRetentionDays = "crash.stat_retention_days"
 	// SettingKeyProxyURL CP 出站代理地址（network 类，FR-185/ADR-043）。敏感（脱敏展示）。
 	// 落库即重建 CP 出站持有者（优先级 DB > control-plane.yml > env）；同时作为各节点默认代理。
 	SettingKeyProxyURL = "proxy.url"
@@ -280,6 +301,19 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		s.editableItem(SettingKeyHealthStartupWarmup, s.defaultValue(SettingKeyHealthStartupWarmup), overrides, false),
 		s.editableItem(SettingKeyHealthSelfHealMaxRestarts, s.defaultValue(SettingKeyHealthSelfHealMaxRestarts), overrides, false),
 		s.editableItem(SettingKeyBackupRetentionDays, s.defaultValue(SettingKeyBackupRetentionDays), overrides, false),
+		// 运行期配额强制（FR-467）：CP 后台巡检读取生效值（即时生效，下一拍用新值）。
+		s.editableItem(SettingKeyQuotaEnforceInterval, s.defaultValue(SettingKeyQuotaEnforceInterval), overrides, true),
+		s.editableItem(SettingKeyQuotaEnforceMode, s.defaultValue(SettingKeyQuotaEnforceMode), overrides, true),
+		s.editableItem(SettingKeyQuotaEnforceStreak, s.defaultValue(SettingKeyQuotaEnforceStreak), overrides, true),
+		// 实例快照保留（FR-466）：CP 后台裁剪循环读取生效值。
+		s.editableItem(SettingKeySnapshotRetentionCount, s.defaultValue(SettingKeySnapshotRetentionCount), overrides, true),
+		s.editableItem(SettingKeySnapshotRetentionDays, s.defaultValue(SettingKeySnapshotRetentionDays), overrides, true),
+		s.editableItem(SettingKeySnapshotPreRollbackKeep, s.defaultValue(SettingKeySnapshotPreRollbackKeep), overrides, true),
+		// 快照创建上限（FR-466 m-2）：创建前保护，读侧即时生效。
+		s.editableItem(SettingKeySnapshotMaxPerInstance, s.defaultValue(SettingKeySnapshotMaxPerInstance), overrides, true),
+		s.editableItem(SettingKeySnapshotMaxTotalMB, s.defaultValue(SettingKeySnapshotMaxTotalMB), overrides, true),
+		// 崩溃趋势统计保留（FR-470）：日粒度统计表的清理窗口。
+		s.editableItem(SettingKeyCrashStatRetentionDays, s.defaultValue(SettingKeyCrashStatRetentionDays), overrides, true),
 		// 出站代理（network 类，FR-185/ADR-043）：保存即在 CP 内重建出站持有者（即时生效）。
 		// proxy.url 标 sensitive：含凭据时回显脱敏（仅展示 scheme://host:port），不外泄明文密码。
 		s.proxyURLItem(overrides),
@@ -486,6 +520,32 @@ func (s *SettingsService) defaultValue(key string) string {
 		return "3"
 	case SettingKeyBackupRetentionDays:
 		return strconv.Itoa(s.cfg.LogStore.RetentionDays)
+	case SettingKeyQuotaEnforceInterval:
+		// M-2：30s×3=90s 窗口短于 MC 世界加载/GC 长尾，stop 档误停风险高；改 60s。
+		// 周期下限与规模有关：一轮最坏耗时 ≈ ceil(限额实例数 / quotaSampleConcurrency)
+		// × quotaDiskTimeout(15s)，64 服时应为 120s（详见 spec §2.3）。默认 60s 对
+		// ≤32 个限额实例成立；周期偏小只会把实际节拍拖长为「一轮耗时」，不会丢样本。
+		return "60s"
+	case SettingKeyQuotaEnforceMode:
+		// 默认 alert：最保守档，不干预进程（spec §2.5「alert 默认」）。
+		return "alert"
+	case SettingKeyQuotaEnforceStreak:
+		// M-2：与 60s 组合给出约 5 分钟判定窗口，跨过加载/GC 长尾再处置。
+		return "5"
+	case SettingKeySnapshotRetentionCount:
+		return "10"
+	case SettingKeySnapshotRetentionDays:
+		return "30"
+	case SettingKeySnapshotPreRollbackKeep:
+		return "3"
+	case SettingKeySnapshotMaxPerInstance:
+		// 默认 20：约等于「10 条保留 + 一组回滚点」的量级，作为磁盘自伤前的最后一道闸。
+		return "20"
+	case SettingKeySnapshotMaxTotalMB:
+		// 默认 0=不限：不同实例工作目录体积差异过大，不宜预设阈值；需限容的部署自行开。
+		return "0"
+	case SettingKeyCrashStatRetentionDays:
+		return "90"
 	case SettingKeyProxyURL:
 		return s.cfg.Proxy.URL
 	case SettingKeyProxyNoProxy:
@@ -566,6 +626,10 @@ func isWritableSettingKey(key string) bool {
 		SettingKeyJDKMirrorTemurin, SettingKeyJDKMirrorCorretto, SettingKeyJDKMirrorZulu,
 		SettingKeyRuntimeMirrorNodeJS,
 		SettingKeyGracefulStopTimeout, SettingKeyBackupRetentionDays,
+		SettingKeyQuotaEnforceInterval, SettingKeyQuotaEnforceMode, SettingKeyQuotaEnforceStreak,
+		SettingKeySnapshotRetentionCount, SettingKeySnapshotRetentionDays, SettingKeySnapshotPreRollbackKeep,
+		SettingKeySnapshotMaxPerInstance, SettingKeySnapshotMaxTotalMB,
+		SettingKeyCrashStatRetentionDays,
 		SettingKeyDirectProbeSLPTimeout, SettingKeyDirectProbeQueryTimeout,
 		SettingKeyHealthScanEnabled, SettingKeyHealthScanInterval, SettingKeyHealthProbeKind,
 		SettingKeyHealthSuspicionThreshold, SettingKeyHealthAction,
@@ -614,6 +678,45 @@ func validateSettingValue(key, val string) error {
 	case SettingKeyHealthScanEnabled:
 		if val != "true" && val != "false" {
 			return fmt.Errorf("%w: 健康巡检总开关须为 true|false", ErrSettingValueInvalid)
+		}
+	case SettingKeyQuotaEnforceInterval:
+		d, err := time.ParseDuration(val)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("%w: 配额巡检周期须为正的 Go duration（如 30s）", ErrSettingValueInvalid)
+		}
+	case SettingKeyQuotaEnforceMode:
+		if val != "alert" && val != "throttle" && val != "stop" {
+			return fmt.Errorf("%w: 配额处置档位须为 alert|throttle|stop", ErrSettingValueInvalid)
+		}
+	case SettingKeyQuotaEnforceStreak:
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return fmt.Errorf("%w: 配额连续超限阈值须为 ≥1 的整数", ErrSettingValueInvalid)
+		}
+	case SettingKeySnapshotRetentionCount:
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return fmt.Errorf("%w: 快照保留条数须为 ≥1 的整数", ErrSettingValueInvalid)
+		}
+	case SettingKeySnapshotPreRollbackKeep:
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return fmt.Errorf("%w: pre_rollback 保留条数须为 ≥1 的整数", ErrSettingValueInvalid)
+		}
+	case SettingKeySnapshotRetentionDays, SettingKeyCrashStatRetentionDays:
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 {
+			return fmt.Errorf("%w: 保留天数须为 ≥1 的整数", ErrSettingValueInvalid)
+		}
+	case SettingKeySnapshotMaxPerInstance, SettingKeySnapshotMaxTotalMB:
+		// m-2 磁盘防护开关（R4）：两键默认/兜底口径都是 **0=不限**，故 0 与正数接受、只拒负数。
+		// 与 intSetting 的回落条件（`err != nil || n < 0` 才用 fallback，0 会被采纳）严格一致：
+		// 若这里改判 `n < 1`，运维就**无法表达「不限」**（如 max_total_mb 想关掉总量闸），
+		// 「可配」又在另一个方向上失真。负数是唯一真正无意义的取值（无对应语义、且会被
+		// intSetting 静默回落为不限，写进去等于没写）。
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 0 {
+			return fmt.Errorf("%w: 该上限须为 ≥0 的整数（0=不限）", ErrSettingValueInvalid)
 		}
 	case SettingKeyHealthScanInterval:
 		d, err := time.ParseDuration(val)

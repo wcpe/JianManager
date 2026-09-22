@@ -110,6 +110,9 @@ func newBeaconPushTestDB(t *testing.T) *gorm.DB {
 		&model.NetworkMember{},
 		&model.InstanceCrashSnapshot{},
 		&model.Task{},
+		// 删除事务内会级联清理快照底链并降级被增量引用的底链（N-6/R9/R27），缺表会让删除报错。
+		&model.Backup{},
+		&model.InstanceSnapshot{},
 	))
 	return db
 }

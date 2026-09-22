@@ -32,6 +32,10 @@ const (
 	AlertTriggerBaseline = "baseline"
 	// AlertTriggerSaturation 饱和度（FR-462）：used/max 逼近上限（disk/mem/heap）持续触发。
 	AlertTriggerSaturation = "saturation"
+	// AlertTriggerQuotaExceeded 运行期配额超限（FR-467）：实例 CPU/RSS/磁盘持续超出
+	// 该实例（或所属组派生）的配额。单列触发类型使「配额超限」可独立配置通知渠道与静默窗口，
+	// 不与被观测的常规指标阈值告警混淆。
+	AlertTriggerQuotaExceeded = "quota_exceeded"
 )
 
 // 动态基线（FR-462）配置枚举。

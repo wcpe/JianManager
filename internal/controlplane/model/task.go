@@ -52,6 +52,18 @@ const (
 	// TaskKindArtifactMigrate 制品存量迁移任务（FR-348，CP 后台 goroutine）：
 	// 逐制品搬运到目标存储渠道（先改记录再删源），全程一次仅允许一个在途。
 	TaskKindArtifactMigrate = "artifact_migrate"
+	// TaskKindBinaryUpgrade 二进制/Beacon 版本变更任务（FR-468，CP 后台 goroutine）：
+	// 升级与一级回滚共用。阶段：解析目标版本 → 取目标版本 → 校验 → 落盘 →
+	// 更新启动命令 → 换版本绑定 → 完成。单列 kind 的理由同 binary_provision：
+	// 二进制体积大、耗时可分钟级，且与「搭建」语义不同（改的是既有实例的版本）。
+	TaskKindBinaryUpgrade = "binary_upgrade"
+	// TaskKindSnapshotCreate 实例整机快照创建任务（FR-466，CP 后台 goroutine）：
+	// 全量备份工作目录 + 采集二进制指纹。阶段：登记 → 打包工作目录 → 采集指纹 → 完成。
+	TaskKindSnapshotCreate = "snapshot_create"
+	// TaskKindSnapshotRollback 实例整机快照一键回滚任务（FR-466，CP 后台 goroutine）。
+	// 阶段：停服 → 建回滚前快照 → 回放数据 → 校验 → 完成。
+	// 单列 kind：回滚是可造成数据覆盖的高风险长操作，任务中心须能一眼分辨。
+	TaskKindSnapshotRollback = "snapshot_rollback"
 )
 
 // Task 一条长耗时跨进程任务（如 JDK 安装）。

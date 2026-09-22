@@ -1,6 +1,6 @@
 # 二进制 / Beacon 版本管理与受控升级（FR-468）
 
-> 状态：📋 计划　·　关联 PRD：FR-468　·　依赖：FR-441、FR-442、FR-409、FR-051、FR-342　·　关联 ADR：ADR-090
+> 状态：🟡 **代码与单测已交付，真机验收待做**（FR-468 端到端已实现，单测/构建覆盖通过；§4 中标「真机」的验收项尚未在真机验证）　·　关联 PRD：FR-468　·　依赖：FR-441、FR-442、FR-409、FR-051、FR-342　·　关联 ADR：ADR-090
 
 ## 1. 背景与目标
 
@@ -84,7 +84,23 @@ type InstanceBinaryBinding struct {
 ### 2.5 版本漂移检测
 
 - 列表页展示 `CurrentVersion` + 制品库是否有更新版本（`latestBeaconAsset` 或同 package 更高 `id`），给出「可升级到 X」提示。
-- 巡检（可选）：发现工作目录二进制的实际 sha256 与绑定 sha256 不一致（人工换文件）→ 标注「版本漂移」，告警可选。复用 FR-399 的资源快照/文件读取通道计算 sha256。
+- 漂移判据为**三层**，从「确定」到「可疑」（`BinaryVersionService.View`）：
+  1. **启动命令是否仍指向绑定文件**——最确定的漂移（命令被人工改过）；
+  2. **绑定记录摘要 vs 制品库摘要**——能发现「制品内容被替换或重新入库」（DB vs DB 比较，
+     注意这一层在「人工同名覆盖了工作目录里的二进制」场景下**恒等**，检测不到）；
+  3. **工作目录中实际文件的 sha256 vs 绑定摘要**——唯一能发现人工同名覆盖的判据。
+
+**第 3 层的实现（M-3）**：经新增的 Worker RPC `HashFile`（`proto/worker.proto`）在 Worker 本地
+流式读盘计算 SHA-256 后只回传摘要。**不复用 `ReadFile`**：后者有 10MiB 截断，
+对二进制会得到「前 10MiB 的摘要」——一个看似成功实则错误的结论；且为校验把数十 MB
+搬回 CP 纯属浪费带宽。比对约束与诚实边界：
+- 单次读盘上限 `binaryDiskDigestMaxBytes = 512MiB`，超限**放弃比对并如实说明**（不静默略过）；
+- 实例处于运行中时不比对（可执行文件可能被正常写入/自动更新改动，结论不可靠）；
+- 节点未连接/通道异常时不比对——**未校验不等于没有漂移**，响应以独立字段
+  `diskSha256Checked` 表达，前端据此区分「已核对且一致」与「本次未读盘」；
+- 文件不存在时判为漂移并点明「文件可能已被人工删除或移动」。
+
+> 早期实现只做了第 1、2 层，且文档写成「实际 sha256 漂移」——与实现不符，已按上述更正。
 
 ### 2.6 API / MCP
 
@@ -93,21 +109,25 @@ type InstanceBinaryBinding struct {
 
 ## 3. 任务拆分
 
-- [ ] `model/instance_binary_binding.go` + AutoMigrate + 单测
-- [ ] 搭建/Beacon 预设路径写入绑定（`provision_binary.go`：`binaryProvisionRunner` / `createBeaconInstance`）+ 单测
-- [ ] `rebuildBinaryInstance` 改为读绑定冻结版本（保留显式覆盖逃生口）+ 单测（不漂移、随绑定、显式覆盖生效）
-- [ ] `service/binary_version.go`：Upgrade（取件 + 落盘名/startCommand 更新 + 绑定切换 + 审计）+ 单测
-- [ ] `service/binary_version.go`：Rollback（一级回滚 + 绑定交换）+ 单测（无可回滚、对称性）
-- [ ] `model/task.go` 新增 `TaskKindBinaryUpgrade`；阶段文案
-- [ ] 漂移检测（sha256 比对）+ 可升级提示
-- [ ] `router` 三端点 + 权限 + 审计动作；MCP 三工具
-- [ ] 前端实例详情「二进制版本」区：当前版本 / 升级选择 / 回滚按钮（二次确认）+ i18n
-- [ ] 文档同步：ARCHITECTURE、API.md、PRD 状态、CHANGELOG；ADR-090 补「重建冻结版本 + 受控升级」决策
+- [x] `model/instance_binary_binding.go` + AutoMigrate + 单测
+- [x] 搭建/Beacon 预设路径写入绑定（`provision_binary.go`：`binaryProvisionRunner` / `createBeaconInstance`）+ 单测
+- [x] `rebuildBinaryInstance` 改为读绑定冻结版本（保留显式覆盖逃生口）+ 单测（不漂移、随绑定、显式覆盖生效）
+- [x] `service/binary_version.go`：Upgrade（取件 + 落盘名/startCommand 更新 + 绑定切换 + 审计）+ 单测
+- [x] `service/binary_version.go`：Rollback（一级回滚 + 绑定交换）+ 单测（无可回滚、对称性）
+- [x] `model/task.go` 新增 `TaskKindBinaryUpgrade`；阶段文案
+- [x] **漂移检测（M-3）**：三层判据，含 Worker `HashFile` RPC 现算真实磁盘 sha256 + `diskSha256Checked` 显式表达「未校验」
+- [x] **并发互斥（M-4）**：入队前拒在途任务 + 任务体内实例互斥锁 + 执行前状态重验
+- [x] **终态审计（M-6）**：成功/失败分别写审计（不再入队即记成功）
+- [x] **命令与绑定同事务（m-9）**：`commitVersionChange` 包在单事务内，避免「命令已改、绑定未改」
+- [x] `router` 三端点 + 权限（`instance.write` 节点）+ 审计动作；MCP 三工具
+- [x] 前端实例详情「二进制版本」区：当前版本 / 升级选择 / 回滚按钮（二次确认）+ i18n
+- [x] 文档同步：ARCHITECTURE、API.md、PRD 状态、CHANGELOG；ADR-090 补「重建冻结版本 + 受控升级」决策
 
 ## 4. 验收标准
 
-- 单测全绿：绑定写入/读取、重建冻结版本（不漂移）、升级（绑定切换 + startCommand）、一级回滚（对称）、无可回滚报错、显式覆盖逃生口
-- **真机（要真机过）**：① 从制品库搭建 Beacon → 显示当前版本；升级到另一版本 → 落盘/启动命令/绑定三者一致；回滚到上一版本 → 恢复旧文件与旧启动命令；② **重建不再漂移**：制品库新增更高版本后对既有实例执行「重建」→ 仍取绑定版本，**不静默升级**（对照 ADR-090 旧行为）；③ 升级/回滚全程任务中心可见、审计可查、站内信可达；④ 落盘名不变与变两种路径的 `startCommand` 处理均正确；⑤ 无 `kind=asset` 绑定的 url/node_file 实例升级入口给出明确「无制品库版本」提示
+- 单测全绿：绑定写入/读取、重建冻结版本（不漂移）、升级（绑定切换 + startCommand）、一级回滚（对称）、无可回滚报错、显式覆盖逃生口、
+  **磁盘 sha256 漂移检测**、**并发拒绝**、**失败审计**、**同事务提交**
+- **真机（待真机验收）**：① 从制品库搭建 Beacon → 显示当前版本；升级到另一版本 → 落盘/启动命令/绑定三者一致；回滚到上一版本 → 恢复旧文件与旧启动命令；② **重建不再漂移**：制品库新增更高版本后对既有实例执行「重建」→ 仍取绑定版本，**不静默升级**（对照 ADR-090 旧行为）；③ 升级/回滚全程任务中心可见、审计可查、站内信可达；④ 落盘名不变与变两种路径的 `startCommand` 处理均正确；⑤ 无 `kind=asset` 绑定的 url/node_file 实例升级入口给出明确「无制品库版本」提示；⑥ **人工同名覆盖工作目录二进制 → 版本视图报漂移**（M-3 核心场景）；⑦ 实例运行中访问版本视图时 `diskSha256Checked=false`（不得渲染成「已核对」）
 - 横切：FR-441/442 搭建闭环不回归；未部署 Beacon 时无影响
 
 ## 5. 风险 / 待定

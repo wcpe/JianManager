@@ -136,7 +136,16 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.InstanceGroupNode{},
 		&model.InstanceGroupMember{},
 		// 实例崩溃快照（FR-313）：进程非正常退出现场留存，每实例滚动保留最近 5 条。
+		// FR-470 起快照增根因/指纹/证据/置信度列（旧行为空，读侧降级 unknown）。
 		&model.InstanceCrashSnapshot{},
+		// 崩溃趋势汇总（FR-470）：按 (实例, 天, 根因, 指纹) 计数，独立于 K=5 滚动裁剪，
+		// 使「连崩 >5 次」「同类聚合」等趋势不被快照裁剪抹掉。
+		&model.InstanceCrashStat{},
+		// 实例二进制版本绑定（FR-468）：记录实例当前/上一版本制品，使重建冻结版本、
+		// 并提供受控升级与一级回滚。
+		&model.InstanceBinaryBinding{},
+		// 实例整机快照（FR-466）：时间点语义的可回滚点，底层复用 Backup 的归档与回放。
+		&model.InstanceSnapshot{},
 		// 无主运行时反向对账跟踪（FR-326）：Worker 有、CP 无记录的实例宽限/处置状态。
 		&model.OrphanRuntime{},
 		// 失效 Bot 自动回收（FR-460）：按 workerEpoch 换代判定僵死 Fleet Bot 的宽限/处置状态。

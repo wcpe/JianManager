@@ -85,6 +85,9 @@ type CrashInfo struct {
 	Signal string
 	// DurationMs 本次运行时长（毫秒）。
 	DurationMs int64
+	// OOMKilled 容器被 cgroup OOM killer 终止（FR-467）。仅 docker 模式可判定：
+	// 容器退出码恒为 137 且宿主侧无信号，只有 ContainerInspect 的 State.OOMKilled 能给出这个事实。
+	OOMKilled bool
 	// OccurredAt 崩溃发生时刻。
 	OccurredAt time.Time
 }
@@ -388,6 +391,36 @@ func (m *Manager) SetDockerConfig(uuid, image string, mappings []PortMapping, cp
 		inst.CPULimit = cpuLimit
 		inst.MemLimitMB = memLimitMB
 		inst.DiskLimitMB = diskLimitMB
+	}
+}
+
+// SetResourceLimits 只刷新实例记账里的 CPU/内存限额，其余启动配置不动（N-3）。
+//
+// 与 SetDockerConfig 的区别：后者要求 CP 把镜像/端口映射一并重推（一次完整重注册），
+// 而启动/重启请求随附的限额是**运行期配额收紧**这一个字段的变化，不该顺带重写镜像与端口。
+//
+// 为什么必须标记 strategyStale：启动策略在构造时就定型了限额（见 startLocked 的 CommandSpec），
+// 若不置过期标记，startLocked 会**复用旧策略**——收紧值照样不生效，只是把缺陷挪了个位置。
+// 置位后由既有路径处理：运行中仅标记（cgroup 限额无法热改，停止时随旧策略一并丢弃），
+// 停止/崩溃态则在下次 startLocked 入口锁外 Close 旧策略并重建（复用一条已验证的释放路径，
+// 避免在此处重复实现「锁外关闭」而引入新的资源泄漏）。
+//
+// 仅在**值真的变化**时置过期：startLocked 每次启动都会调用本函数，无条件置位会让停止/崩溃态
+// 的实例每次启停都被迫重建策略（多一次多余的构造与资源释放），且掩盖「限额未变」这一事实。
+func (m *Manager) SetResourceLimits(uuid string, cpuLimit float64, memLimitMB int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.instances[uuid]
+	if !ok {
+		return
+	}
+	if inst.CPULimit == cpuLimit && inst.MemLimitMB == memLimitMB {
+		return
+	}
+	inst.CPULimit = cpuLimit
+	inst.MemLimitMB = memLimitMB
+	if inst.strategy != nil {
+		inst.strategyStale = true
 	}
 }
 

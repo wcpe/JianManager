@@ -45,7 +45,7 @@ import {
 } from './config-row'
 
 type Tab = 'rules' | 'events' | 'channels'
-const ALERT_TRIGGER_TYPES = ['metric', 'instance_crash', 'node_offline', 'log_keyword', 'player_event', 'backup_failed'] as const
+const ALERT_TRIGGER_TYPES = ['metric', 'instance_crash', 'node_offline', 'log_keyword', 'player_event', 'backup_failed', 'saturation', 'baseline', 'quota_exceeded'] as const
 
 export default function AlertsPage() {
   const { t } = useTranslation()

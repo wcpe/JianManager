@@ -1,8 +1,8 @@
 # ADR-090: 通用二进制搭建与 Beacon 可选协同
 
-- **日期**: 2026-09-20
-- **状态**: accepted
-- **关联**: FR-441 / FR-442 / FR-443 / FR-444 · 依赖 Beacon FR-221 / FR-222 · 增强 [ADR-011](011-artifact-repository.md)（制品库）· [ADR-007](007-mc-network-model.md)（不推翻）
+- **日期**: 2026-09-20（补记 2026-09-22，见文末「补记（FR-468）」）
+- **状态**: accepted（决策 4 的「重建重解析」语义已修订，见补记）
+- **关联**: FR-441 / FR-442 / FR-443 / FR-444 / FR-468 · 依赖 Beacon FR-221 / FR-222 · 增强 [ADR-011](011-artifact-repository.md)（制品库）· [ADR-007](007-mc-network-model.md)（不推翻）
 
 ## 上下文
 
@@ -59,3 +59,33 @@ JianManager 的 `provision_server` 只覆盖 Minecraft 生态（paper / sponge /
 - **拉取自动建树**：被否——会与人工分组冲突，且首次映射规则需人工确认。
 - **用 mTLS 替代共享 token**：被否——Beacon 已有共享 token 通道，mTLS 需双方证书体系改造，性价比不足；已用「强制强随机值 + 默认关闭」缓解。
 - **启停也推送**：被否——高频且与 agent 心跳形成重复真源。
+
+---
+
+## 补记（2026-09-22，FR-468）：重建从「重解析」改为「冻结版本」，吃到新版本改由受控升级承担
+
+### 修订内容
+
+本 ADR 决策 4 落地时，重建（`rebuildBinaryInstance`）刻意「重新按优先级解析来源而非复用上次选中的具体制品」，理由是「让制品库里的新版本在重建时生效」。**这条语义现被修订**：
+
+1. **重建读版本绑定（`instance_binary_bindings`）冻结版本**：绑定存在且来自制品库（`CurrentAssetID != 0`）时，重建固定取该 asset，**不再 `latestBeaconAsset` 漂移**。重建回归「恢复原状」职责。
+2. **「吃到新版本」由受控升级显式承担**：新增 `BinaryVersionService.Upgrade`（`POST /instances/:id/binary-upgrade`）与一级回滚（`POST /instances/:id/binary-rollback`），二者都是运维的**显式动作**，且全程走任务中心与审计。
+3. **保留显式覆盖逃生口**：请求里显式给了 `binarySource` 时仍以请求为准（那是有意换来源，不该被绑定冻结）。Beacon 且无制品库绑定的实例（GitHub 来源 / 早期实例）保持原有「按优先级解析」行为不变。
+
+### 修订理由
+
+原语义对**运行中的实例**是不可预期的行为：运维为了修「实例损毁」点了重建，制品库恰好新上传了一版，重建就会把实例静默升级/降级到另一个版本——一次「恢复」动作变成了未声明的版本变更，且没有任何入口能查「现在跑的是哪一版」。这是 FR-468 背景里明确列出的痛点。
+
+拆开后两条语义各自清晰：**重建 = 恢复原状**（可用性动作），**升级 = 换版本**（变更动作）。二者都不再互相污染。
+
+### 修订的代价与缓解
+
+- **靠重建吃新版本的既有运维习惯失效**：缓解 = 显式覆盖逃生口（请求带 `binarySource`）+ 面板上的升级入口（`GET /instances/:id/binary-version` 列出可升级候选）。
+- **url / node_file 来源无版本可冻结**：这类实例 `CurrentAssetID=0`，重建仍走「请求来源 / Beacon 优先级解析」旧路径，且版本视图明确提示「无制品库版本，如需版本管理请先入库」。
+- **不自动回滚二进制**：FR-466 快照回滚发现二进制不一致时**只提示不替换可执行文件**，二进制回滚必须由运维经 `binary-rollback` 显式执行——避免「一次数据回滚顺带换了可执行文件」的越权行为。
+
+### 新增的数据与接口（本节为 FR-468 落地记录）
+
+- 新表 `instance_binary_bindings`（`CurrentAssetID` / `PreviousAssetID` / `CurrentFilename` / `CurrentSHA256` / `CurrentVersion`）。
+- 新任务类型 `TaskKind=binary_upgrade`（升级与一级回滚共用）。
+- 新审计动作 `instance.binary_upgrade` / `instance.binary_rollback`。

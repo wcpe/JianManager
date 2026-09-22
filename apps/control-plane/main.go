@@ -503,8 +503,12 @@ func main() {
 	// 取回某实例全量 Bukkit 内部状态（前端「服务器状态」tab 开/刷新才查，FR-077）。
 	serverStateSvc := service.NewServerStateService(db, pool)
 
-	// 崩溃快照只读查询（FR-313）：写入在 gRPC 层（Worker 上报），REST 只读供实例控制台「崩溃诊断」卡。
+	// 崩溃快照只读查询（FR-313）+ 趋势/聚合/重分类（FR-470）：写入在 gRPC 层（Worker 上报，
+	// 事务内同步分类 + 统计 upsert），REST 提供列表 / 趋势 / 总览与管理员重分类。
 	crashSnapshotSvc := service.NewCrashSnapshotService(db)
+	// 崩溃与资源关联（FR-470 §2.3）：查崩前 5min 的进程 RSS / 堆指标，为 OOM 提供证据链。
+	crashCorrelationSvc := service.NewCrashCorrelationService(db)
+	crashSnapshotSvc.SetCorrelation(crashCorrelationSvc)
 	// 业务对接编排服务（FR-116，见 ADR-026/027）：经探针桥下发业务命令（domain.action+payload）
 	// 并透传结果，CP 插件无关、降级即默认。JBIS 业务对接平台 M1 脊柱。
 	businessSvc := service.NewBusinessService(db, pool)
@@ -557,6 +561,8 @@ func main() {
 	defer metricSvc.Stop()
 	// FR-462：把时序数据源注入告警评估器，启用动态基线/饱和度与实例级 metric 规则评估。
 	alertEvaluator.SetMetrics(metricSvc)
+	// FR-470：把时序数据源注入崩溃关联服务，为崩溃提供堆指标证据链。
+	crashCorrelationSvc.SetMetrics(metricSvc)
 	platformObservabilitySvc := service.NewPlatformObservabilityService(db)
 	// FR-401：仅将已认证 Heartbeat 的当前快照按固定周期沉淀为节点级历史指标。
 	botRuntimeMetricSampler := service.NewBotRuntimeMetricSampler(db, metricSvc)
@@ -580,6 +586,26 @@ func main() {
 	importServerSvc.SetTaskService(taskSvc)
 	cloneSvc.SetTaskService(taskSvc)
 	backupSvc.SetTaskService(taskSvc)
+	// 二进制/Beacon 版本管理（FR-468）：实例当前版本查询 + 受控升级 + 一级回滚。
+	// 取件复用 ProvisionService 的 Worker FetchBinary 通道与制品签名分发，不另起链路。
+	binaryVersionSvc := service.NewBinaryVersionService(db, provisionSvc)
+	binaryVersionSvc.SetAudit(auditSvc)
+
+	// 运行期配额强制（FR-467）：配额解析 + 巡检处置（alert/throttle/stop 三档）。
+	// 裁决在 CP（配额真源在 DB），Worker 只执行停服动作；非 docker 的 CPU 不做内核节流（诚实边界）。
+	quotaSvc := service.NewQuotaService(db)
+	quotaEnforcerSvc := service.NewQuotaEnforcer(db, quotaSvc)
+	quotaEnforcerSvc.SetMetrics(service.NewMetricQuotaSource(db, metricSvc, pool))
+	quotaEnforcerSvc.SetInstanceService(instanceSvc)
+	quotaEnforcerSvc.SetDispatcher(alertDispatcher)
+	quotaEnforcerSvc.SetAudit(auditSvc)
+	quotaEnforcerSvc.SetNotificationService(notificationSvc)
+
+	// 实例整机快照与一键回滚（FR-466）：全量归档复用 BackupService 的归档/回放实现，
+	// 不重建归档管线；回滚前强制建 pre_rollback 快照，回滚后停在 STOPPED 不自动拉起。
+	snapshotSvc := service.NewSnapshotService(db, backupSvc, instanceSvc)
+	snapshotSvc.SetTaskService(taskSvc)
+	snapshotSvc.SetAudit(auditSvc)
 	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等 FR-396/397/398 依赖服务全部就绪。
 	mcpHandler := mcp.NewHandler(mcpSessions, agentTokenSvc, mcp.ToolDeps{
 		Instance:  instanceSvc,
@@ -592,7 +618,13 @@ func main() {
 		Batch:     instanceBatchSvc,
 		Docker:    dockerImageSvc,
 		Crash:     crashSnapshotSvc,
-		Task:      taskSvc,
+		// FR-468：二进制/Beacon 版本管理（读 + 受控升级 + 一级回滚）。
+		BinaryVersion: binaryVersionSvc,
+		// FR-467：运行期配额与实时用量读取。
+		Quota: quotaEnforcerSvc,
+		// FR-466：整机快照列表 / 创建 / 一键回滚。
+		Snapshot: snapshotSvc,
+		Task:     taskSvc,
 		// FR-397 内容运维：文件/配置/插件工具与大文件传输票据签发。
 		File:        fileSvc,
 		FileVersion: fileVersionSvc,
@@ -647,6 +679,23 @@ func main() {
 	backupSvc.Start()
 	defer backupSvc.Stop()
 
+	// 运行期配额强制（FR-467）与会话/设置读取器接线（构造在 mcpHandler 之前，见上）。
+	quotaSvc.SetDefaultModeReader(func() service.EnforceMode {
+		return service.EnforceMode(settingsSvc.EffectiveValue(service.SettingKeyQuotaEnforceMode))
+	})
+	quotaEnforcerSvc.SetSettingsReader(settingsSvc)
+	quotaEnforcerSvc.Start()
+	defer quotaEnforcerSvc.Stop()
+
+	snapshotSvc.SetSettingsReader(settingsSvc)
+	snapshotSvc.Start()
+	defer snapshotSvc.Stop()
+
+	// 崩溃统计保留窗口（FR-470）：日粒度汇总表需有界，否则随时间无限增长。
+	crashSnapshotSvc.SetSettingsReader(settingsSvc)
+	crashSnapshotSvc.Start()
+	defer crashSnapshotSvc.Stop()
+
 	// 实例反向对账（FR-326）：Worker 心跳在管清单 vs CP instances，无主运行时宽限/列表/手动或自动处置。
 	// 默认 auto_dispose=false；配置经 platform_settings 白名单键即时生效。
 	orphanRuntimeSvc := service.NewOrphanRuntimeTracker(db, settingsSvc, pool)
@@ -696,31 +745,35 @@ func main() {
 	settingsSvc.ApplyDebugBaseline()
 
 	r := router.Setup(&router.Services{
-		Auth:                    authSvc,
-		User:                    userSvc,
-		Group:                   groupSvc,
-		Permission:              authzSvc.Permissions(),
-		Node:                    nodeSvc,
-		NodeRepair:              nodeRepairSvc,
-		NodeProxy:               nodeProxySvc,
-		Instance:                instanceSvc,
-		InstanceBatch:           instanceBatchSvc,
-		InstanceGroup:           instanceGroupSvc,
-		BeaconSync:              beaconSyncSvc,
-		JDK:                     jdkSvc,
-		NodeRuntime:             nodeRuntimeSvc,
-		RuntimeLibrary:          runtimeLibrarySvc,
-		PMConfig:                pmConfigSvc,
-		Diagnostics:             diagnosticsSvc,
-		DockerImage:             dockerImageSvc,
-		Terminal:                terminalSvc,
-		File:                    fileSvc,
-		FileVersion:             fileVersionSvc,
-		Plugin:                  pluginSvc,
-		Player:                  playerSvc,
-		PlayerEvent:             playerEventSvc,
-		ServerState:             serverStateSvc,
-		CrashSnapshot:           crashSnapshotSvc,
+		Auth:           authSvc,
+		User:           userSvc,
+		Group:          groupSvc,
+		Permission:     authzSvc.Permissions(),
+		Node:           nodeSvc,
+		NodeRepair:     nodeRepairSvc,
+		NodeProxy:      nodeProxySvc,
+		Instance:       instanceSvc,
+		InstanceBatch:  instanceBatchSvc,
+		InstanceGroup:  instanceGroupSvc,
+		BeaconSync:     beaconSyncSvc,
+		JDK:            jdkSvc,
+		NodeRuntime:    nodeRuntimeSvc,
+		RuntimeLibrary: runtimeLibrarySvc,
+		PMConfig:       pmConfigSvc,
+		Diagnostics:    diagnosticsSvc,
+		DockerImage:    dockerImageSvc,
+		Terminal:       terminalSvc,
+		File:           fileSvc,
+		FileVersion:    fileVersionSvc,
+		Plugin:         pluginSvc,
+		Player:         playerSvc,
+		PlayerEvent:    playerEventSvc,
+		ServerState:    serverStateSvc,
+		CrashSnapshot:  crashSnapshotSvc,
+		BinaryVersion:  binaryVersionSvc,
+		// FR-467 / FR-466：配额巡检视图与整机快照端点。
+		Quota:                   quotaEnforcerSvc,
+		Snapshot:                snapshotSvc,
 		Business:                businessSvc,
 		BusinessEvent:           businessEventSvc,
 		Config:                  configSvc,

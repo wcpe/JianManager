@@ -281,12 +281,18 @@ func (d *dockerStrategy) waitLoop() {
 	d.mgr.markStrategyState(d.spec.UUID, StateCrashed)
 
 	// 非正常退出：容器退出码 + 时长扇出崩溃现场（容器无宿主信号语义，signal 留空，FR-313）。
+	// FR-467：容器被 cgroup OOM killer 杀掉时（State.OOMKilled=true）在退出码口径之外**单独标注**，
+	// 因为容器退出码是 137 而宿主侧看不到信号——CP 侧配额巡检需要据此把这次崩溃归因为「配额超限」，
+	// 而不是当成普通崩溃（这是 docker 模式唯一能拿到 OOM 事实的地方）。
+	oomKilled := d.containerOOMKilled(cli, containerID)
 	d.mgr.emitCrash(d.spec.UUID, CrashInfo{
 		ExitCode:   int(exitCode),
+		OOMKilled:  oomKilled,
 		DurationMs: time.Since(startedAt).Milliseconds(),
 		OccurredAt: time.Now(),
 	})
-	slog.Warn("docker 实例崩溃", "instanceId", d.spec.UUID, "exitCode", exitCode, "crashCount", crashCount)
+	slog.Warn("docker 实例崩溃", "instanceId", d.spec.UUID, "exitCode", exitCode,
+		"oomKilled", oomKilled, "crashCount", crashCount)
 
 	// FR-459：熔断期间不再自动重启（窗口内崩溃重启超限即熔断）。
 	if d.spec.AutoRestart && d.mgr.autoRestartAllowed(d.spec.UUID) {
@@ -407,6 +413,22 @@ func (d *dockerStrategy) GetPID() int {
 		return 0
 	}
 	return info.State.Pid
+}
+
+// containerOOMKilled 读取容器是否被 cgroup OOM killer 终止（FR-467 归因）。
+//
+// ContainerInspect 而非 Wait 结果：Docker 的 Wait 只给退出码（OOM 被杀恒为 137），
+// 与普通 SIGKILL/`exit 137` 无法区分；State.OOMKilled 才是权威标记。
+// Inspect 失败时返回 false（宁可漏标一次归因，也不误报 OOM）。
+func (d *dockerStrategy) containerOOMKilled(cli client.APIClient, containerID string) bool {
+	if cli == nil || containerID == "" {
+		return false
+	}
+	info, err := cli.ContainerInspect(context.Background(), containerID)
+	if err != nil || info.State == nil {
+		return false
+	}
+	return info.State.OOMKilled
 }
 
 // Stats 经 Docker Engine API 采集容器 CPU%/内存（cgroup 口径），返回内存占用、内存上限（字节）。

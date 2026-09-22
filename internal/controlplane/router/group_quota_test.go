@@ -186,3 +186,40 @@ func TestGroup_RemoveMember_Success(t *testing.T) {
 	w = makeRequest(r, "DELETE", "/api/v1/groups/"+itoa(groupID)+"/members/"+itoa(memberID), nil, token)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+// TestGroup_UpdateQuota_EnforceMode 组级运行期配额强制档位（FR-467 §2.6）：
+// 合法三档可写可读；非法值 400 拒绝（写进库的值会被配额巡检直接当处置力度用）。
+func TestGroup_UpdateQuota_EnforceMode(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+	group := createGroupViaAPI(t, r, token, "档位组")
+
+	// 设置 stop 档 → 读回一致。
+	w := makeRequest(r, "PUT", "/api/v1/groups/"+itoa(group)+"/quota", map[string]interface{}{
+		"maxStorageMb": 1024, "enforceMode": "stop",
+	}, token)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	w = makeRequest(r, "GET", "/api/v1/groups/"+itoa(group)+"/quota", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "stop", parseJSON(t, w)["enforceMode"])
+
+	// 留空 = 继承平台默认（合法）。
+	w = makeRequest(r, "PUT", "/api/v1/groups/"+itoa(group)+"/quota", map[string]interface{}{
+		"enforceMode": "",
+	}, token)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	// 非法档位拒绝。
+	w = makeRequest(r, "PUT", "/api/v1/groups/"+itoa(group)+"/quota", map[string]interface{}{
+		"enforceMode": "delete",
+	}, token)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// 非法值不得被写入（仍是空 = 继承默认）。
+	w = makeRequest(r, "GET", "/api/v1/groups/"+itoa(group)+"/quota", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "", parseJSON(t, w)["enforceMode"])
+}

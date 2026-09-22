@@ -70,6 +70,7 @@ var validTriggerTypes = map[string]bool{
 	model.AlertTriggerNodeOffline: true, model.AlertTriggerLogKeyword: true,
 	model.AlertTriggerPlayerEvent: true, model.AlertTriggerBackupFailed: true,
 	model.AlertTriggerBaseline: true, model.AlertTriggerSaturation: true,
+	model.AlertTriggerQuotaExceeded: true,
 }
 
 // 动态基线/饱和度（FR-462）字段合法枚举。
@@ -114,7 +115,7 @@ func expectedTargetTypeForTrigger(triggerType string) string {
 	switch triggerType {
 	case model.AlertTriggerMetric, model.AlertTriggerNodeOffline:
 		return "node"
-	case model.AlertTriggerBaseline, model.AlertTriggerSaturation:
+	case model.AlertTriggerBaseline, model.AlertTriggerSaturation, model.AlertTriggerQuotaExceeded:
 		return ""
 	default:
 		return "instance"

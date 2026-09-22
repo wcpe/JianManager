@@ -235,6 +235,64 @@ func init() {
 	}
 }
 
+// fr470DomainActions 是崩溃诊断增强（FR-470）的 MCP 专属 action：崩溃趋势读。
+// 与既有 instance_list_crash_snapshots 同权限面（observability.read）——趋势是观测聚合，
+// 不改实例，故只读。V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /crash-trend 路由）。
+var fr470DomainActions = []AgentActionDescriptor{
+	{Action: AgentActionInstanceCrashTrend, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+}
+
+func init() {
+	for _, d := range fr470DomainActions {
+		agentActionCatalog[d.Action] = d
+	}
+}
+
+// fr468DomainActions 是二进制/Beacon 版本管理（FR-468）的 MCP 专属 action。
+// 读走 instance.read；升级/回滚改的是实例的二进制版本（影响可执行内容），
+// 故走 instance.write（比 destructive 轻——不回数据、删文件，且可一级回滚）。
+// V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /binary-version 三端点）。
+var fr468DomainActions = []AgentActionDescriptor{
+	{Action: AgentActionInstanceBinaryVersionGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionInstanceBinaryUpgrade, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceBinaryRollback, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+}
+
+func init() {
+	for _, d := range fr468DomainActions {
+		agentActionCatalog[d.Action] = d
+	}
+}
+
+// fr467DomainActions 是运行期配额强制（FR-467）的 MCP 专属 action：配额与实时用量读。
+// V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /instances/:id/quota）。
+var fr467DomainActions = []AgentActionDescriptor{
+	{Action: AgentActionInstanceQuotaStatus, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+}
+
+func init() {
+	for _, d := range fr467DomainActions {
+		agentActionCatalog[d.Action] = d
+	}
+}
+
+// fr466DomainActions 是实例整机快照（FR-466）的 MCP 专属 action。
+// 列表走 instance.read；创建快照与一键回滚走 instance.write——回滚会覆盖工作目录，
+// 但它是**可再回滚**的（强制 pre_rollback 快照），故不落 destructive；
+// 真正的破坏性动作（删除快照）暂不通过 MCP 暴露。
+// V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /instances/:id/snapshots 等）。
+var fr466DomainActions = []AgentActionDescriptor{
+	{Action: AgentActionInstanceSnapshotList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionInstanceSnapshotCreate, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionInstanceSnapshotRollback, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+}
+
+func init() {
+	for _, d := range fr466DomainActions {
+		agentActionCatalog[d.Action] = d
+	}
+}
+
 // botDomainActions 是 FR-398 新增 action 的紧凑声明：action → (capability, resource, operation)。
 // 全部 V1Allowed=false、HTTPInContract=false，故不逐条重复这两个字段。
 var botDomainActions = []AgentActionDescriptor{

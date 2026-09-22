@@ -294,7 +294,13 @@ func (s *InstanceBatchService) delegateBatchOne(req InstanceBatchRequest, inst *
 		return nil
 	}
 
-	actionReq := &workerpb.InstanceActionRequest{InstanceUuid: inst.UUID}
+	// N-3：同单实例路径——启动/重启随附生效限额，使运行期配额收紧不依赖重注册成功。
+	actionReq := &workerpb.InstanceActionRequest{
+		InstanceUuid: inst.UUID,
+		WithLimits:   true,
+		CpuLimit:     effectiveCPULimit(inst),
+		MemLimitMb:   effectiveMemLimitMB(inst),
+	}
 	var (
 		resp   *workerpb.InstanceActionResponse
 		err    error

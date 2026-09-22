@@ -2,6 +2,7 @@ package service
 
 import (
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -199,9 +200,17 @@ func TestConfigBaseline_ScopeFiltering(t *testing.T) {
 	require.Len(t, all, 3)
 
 	// 收敛只写可访问集合内的实例。
-	var written []uint
+	//
+	// 写入回调由 convergeBatch 的**并发 worker** 调用，累加必须加锁：无锁 `append` 在
+	// `-race` 下是真实 DATA RACE（既是测试缺陷，也会淹没本包的竞态结论）。
+	var (
+		writtenMu sync.Mutex
+		written   []uint
+	)
 	svc.SetConvergeWriterForTest(func(instanceID uint, filePath, content, message string, authorID uint) (uint, error) {
+		writtenMu.Lock()
 		written = append(written, instanceID)
+		writtenMu.Unlock()
 		v := &model.InstanceConfigVersion{InstanceID: instanceID, FilePath: filePath, ContentHash: hashContent(content), Content: content}
 		require.NoError(t, db.Create(v).Error)
 		return v.ID, nil

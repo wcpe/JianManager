@@ -505,3 +505,58 @@ func TestGitHubToken_UpdateValidation(t *testing.T) {
 	err := svc.Update(map[string]string{SettingKeyGitHubToken: "ghp bad token"})
 	require.ErrorIs(t, err, ErrSettingValueInvalid)
 }
+
+// TestUpdate_SnapshotCreationLimitsWritable R4 复现：快照创建上限（m-2 磁盘防护）宣告可编辑
+// 却写不进去——`Get()` 里这两个键标了 Editable=true，但 `isWritableSettingKey` 的白名单不含
+// 它们，`Update` 必返 ErrSettingKeyNotWritable。
+//
+// 缺陷现场：结果是 `snapshot.max_per_instance` 恒为默认 20、`snapshot.max_total_mb` 恒为默认
+// 0=不限，**m-2 的磁盘防护在产品上完全不可达**；而 UI 把它们显示为可编辑，等于欺骗运维。
+func TestUpdate_SnapshotCreationLimitsWritable(t *testing.T) {
+	db := newSettingsTestDB(t)
+	svc := NewSettingsService(db, testConfig())
+
+	// ① 两键必须在可编辑列表里（否则「可写」这半句就是无意义的）。
+	view, err := svc.Get()
+	require.NoError(t, err)
+	perInstance, ok := findItem(view.Editable, SettingKeySnapshotMaxPerInstance)
+	require.True(t, ok, "snapshot.max_per_instance 必须出现在可编辑列表")
+	require.True(t, perInstance.Editable, "宣告可编辑就必须真的可写")
+	totalMB, ok := findItem(view.Editable, SettingKeySnapshotMaxTotalMB)
+	require.True(t, ok, "snapshot.max_total_mb 必须出现在可编辑列表")
+	require.True(t, totalMB.Editable)
+
+	// ② 真的能写（修复前此处返 ErrSettingKeyNotWritable）。
+	require.NoError(t, svc.Update(map[string]string{SettingKeySnapshotMaxPerInstance: "5"}),
+		"宣告可编辑的键必须写得进去")
+	require.Equal(t, "5", svc.EffectiveValue(SettingKeySnapshotMaxPerInstance))
+	require.NoError(t, svc.Update(map[string]string{SettingKeySnapshotMaxTotalMB: "1024"}))
+	require.Equal(t, "1024", svc.EffectiveValue(SettingKeySnapshotMaxTotalMB))
+
+	// ③ 确认真的落库（不是只在内存里生效）。
+	var rec model.PlatformSetting
+	require.NoError(t, db.Where("key = ?", SettingKeySnapshotMaxPerInstance).First(&rec).Error)
+	require.Equal(t, "5", rec.Value)
+}
+
+// TestUpdate_SnapshotCreationLimitsValueSemantics R4 值语义：两键默认口径下 0 是**有效值**
+// （0=不限），故 0 与正数接受、负数拒绝——与 `intSetting` 只对 n<0 回落缺省的行为对齐
+// （见 snapshot.go 的 intSetting：`err != nil || n < 0` 才用 fallback，0 会被采纳）。
+//
+// 若这里错用 `n < 1`（同族 retention_count 的写法），运维就**无法表达「不限」**，只能改库，
+// 那又是一次「宣告可配而实际不可配」。
+func TestUpdate_SnapshotCreationLimitsValueSemantics(t *testing.T) {
+	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+
+	for _, key := range []string{SettingKeySnapshotMaxPerInstance, SettingKeySnapshotMaxTotalMB} {
+		require.NoError(t, svc.Update(map[string]string{key: "0"}),
+			"%s：0=不限是有效语义，必须接受", key)
+		require.NoError(t, svc.Update(map[string]string{key: "1"}), "%s：正数必须接受", key)
+		require.ErrorIs(t, svc.Update(map[string]string{key: "-1"}), ErrSettingValueInvalid,
+			"%s：负数非法（默认/兜底是 0=不限，负数无对应语义）", key)
+		require.ErrorIs(t, svc.Update(map[string]string{key: "abc"}), ErrSettingValueInvalid,
+			"%s：非整数必须拒绝", key)
+		require.ErrorIs(t, svc.Update(map[string]string{key: ""}), ErrSettingValueInvalid,
+			"%s：空串必须拒绝（空=无意义的缺省，应显式写 0）", key)
+	}
+}

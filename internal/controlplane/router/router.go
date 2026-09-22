@@ -46,6 +46,12 @@ type Services struct {
 	ServerState *service.ServerStateService
 	// CrashSnapshot 实例崩溃快照只读查询（FR-313）；nil 时端点关闭。
 	CrashSnapshot *service.CrashSnapshotService
+	// BinaryVersion 实例二进制/Beacon 版本管理（FR-468）；nil 时相关信息端点关闭。
+	BinaryVersion *service.BinaryVersionService
+	// Quota 运行期配额强制（FR-467）；nil 时 /instances/:id/quota 关闭。
+	Quota *service.QuotaEnforcer
+	// Snapshot 实例整机快照与一键回滚（FR-466）；nil 时快照端点关闭。
+	Snapshot      *service.SnapshotService
 	Business      *service.BusinessService
 	BusinessEvent *service.BusinessEventService
 	Config        *service.ConfigService
@@ -373,9 +379,26 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			serverStateHandler.RegisterRoutes(permRead("instance.read"))
 		}
 
-		// 崩溃诊断：实例崩溃快照只读列表（FR-313），instance:read 且实例可访问。
+		// 崩溃诊断：实例崩溃快照列表/趋势 + 平台总览（FR-313 增强 FR-470），instance:read 且实例可访问。
 		if svcs.CrashSnapshot != nil {
-			NewCrashSnapshotHandler(svcs.CrashSnapshot, svcs.Authz).RegisterRoutes(permRead("instance.read"))
+			NewCrashSnapshotHandler(svcs.CrashSnapshot, svcs.Authz, svcs.Audit).RegisterRoutes(permRead("instance.read"))
+		}
+
+		// 二进制/Beacon 版本管理（FR-468）：读走 instance.read；升级/回滚在 handler 内叠加
+		// instance.write 权限节点 + canManageInstance（B-2：只读角色不得替换实例可执行文件）。
+		if svcs.BinaryVersion != nil {
+			NewBinaryVersionHandler(svcs.BinaryVersion, svcs.Authz).RegisterRoutes(permRead("instance.read"))
+		}
+
+		// 运行期配额（FR-467）：配额视图 + 实时用量 + 强制状态，instance:read 且实例可访问。
+		if svcs.Quota != nil {
+			NewQuotaHandler(svcs.Quota, svcs.Authz).RegisterRoutes(permRead("instance.read"))
+		}
+
+		// 实例整机快照与一键回滚（FR-466）：读走 instance.read；创建/回滚在 handler 内叠加
+		// instance.write 权限节点、删除用 instance.delete（B-2：只读角色不得覆盖实例目录）。
+		if svcs.Snapshot != nil {
+			NewSnapshotHandler(svcs.Snapshot, svcs.Authz, svcs.Audit).RegisterRoutes(permRead("instance.read"))
 		}
 
 		// JBIS 业务对接：经探针桥下发业务命令（domain.action+payload）并透传结果（FR-116），instance:operate 且实例可访问。

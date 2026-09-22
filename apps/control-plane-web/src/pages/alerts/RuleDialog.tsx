@@ -45,7 +45,7 @@ interface RuleDialogProps {
   onClose: () => void
 }
 
-const TRIGGER_TYPES = ['metric', 'instance_crash', 'node_offline', 'log_keyword', 'player_event', 'backup_failed'] as const
+const TRIGGER_TYPES = ['metric', 'instance_crash', 'node_offline', 'log_keyword', 'player_event', 'backup_failed', 'saturation', 'baseline', 'quota_exceeded'] as const
 const LEVELS = ['info', 'warn', 'critical'] as const
 const PLAYER_EVENTS = ['join', 'quit', 'chat', 'cross_server'] as const
 

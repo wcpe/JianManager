@@ -42,6 +42,21 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
+// crashSignal 归一化崩溃上报的信号名（FR-467）。
+//
+// docker 模式被 cgroup OOM killer 终止时，容器退出码恒为 137 而宿主侧没有信号——
+// 此处补 "killed"（SIGKILL/137 口径），使 CP 侧崩溃归类能识别为 OOM，而不是退化成 unknown。
+// 其余情况沿用进程/容器给出的信号名（daemon/direct 走 WaitStatus.Signal().String()）。
+func crashSignal(info process.CrashInfo) string {
+	if info.Signal != "" {
+		return info.Signal
+	}
+	if info.OOMKilled {
+		return "killed"
+	}
+	return ""
+}
+
 // main 是 Worker Node 入口。
 // 若以 `daemon` 子命令模式启动（由 daemonStrategy spawn），则运行 wrapper 而非 Worker 主进程。
 // 见 ADR-003: 守护进程 Wrapper 模式。
@@ -479,9 +494,12 @@ func runWorker() {
 			InstanceUUID: instanceID,
 			OccurredAt:   info.OccurredAt,
 			ExitCode:     info.ExitCode,
-			Signal:       info.Signal,
-			DurationMs:   info.DurationMs,
-			TailOutput:   crashreport.Tail(terminalServer.BufferedOutput(instanceID), crashreport.DefaultTailLines, crashreport.DefaultTailBytes),
+			// FR-467：docker 容器被 cgroup OOM killer 杀掉时，宿主侧拿不到信号，
+			// 用 "killed" 语义补齐（对齐 SIGKILL/137 口径），使 CP 的根因归类能判 oom；
+			// 非 OOM 情况沿用进程/容器给出的信号名。
+			Signal:     crashSignal(info),
+			DurationMs: info.DurationMs,
+			TailOutput: crashreport.Tail(terminalServer.BufferedOutput(instanceID), crashreport.DefaultTailLines, crashreport.DefaultTailBytes),
 		})
 	})
 

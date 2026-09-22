@@ -26,6 +26,10 @@ type fakeBackupWorker struct {
 	createReq  *workerpb.CreateBackupRequest
 	createResp *workerpb.CreateBackupResponse
 	restoreReq *workerpb.RestoreBackupRequest
+	// restoreErr 非 nil 时让 RestoreBackup 返回该错误（M-6 失败路径测试注入用）。
+	restoreErr error
+	// restoreResp 覆盖默认成功响应；为 nil 时用默认成功。
+	restoreResp *workerpb.RestoreBackupResponse
 }
 
 func (f *fakeBackupWorker) CreateBackup(_ context.Context, in *workerpb.CreateBackupRequest, _ ...grpc.CallOption) (*workerpb.CreateBackupResponse, error) {
@@ -35,6 +39,12 @@ func (f *fakeBackupWorker) CreateBackup(_ context.Context, in *workerpb.CreateBa
 
 func (f *fakeBackupWorker) RestoreBackup(_ context.Context, in *workerpb.RestoreBackupRequest, _ ...grpc.CallOption) (*workerpb.RestoreBackupResponse, error) {
 	f.restoreReq = in
+	if f.restoreErr != nil {
+		return nil, f.restoreErr
+	}
+	if f.restoreResp != nil {
+		return f.restoreResp, nil
+	}
 	return &workerpb.RestoreBackupResponse{Success: true, RestoredFiles: 3}, nil
 }
 

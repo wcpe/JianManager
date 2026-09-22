@@ -40,6 +40,7 @@ const (
 	WorkerService_IssueTerminalToken_FullMethodName          = "/worker.WorkerService/IssueTerminalToken"
 	WorkerService_ListFiles_FullMethodName                   = "/worker.WorkerService/ListFiles"
 	WorkerService_ReadFile_FullMethodName                    = "/worker.WorkerService/ReadFile"
+	WorkerService_HashFile_FullMethodName                    = "/worker.WorkerService/HashFile"
 	WorkerService_WriteFile_FullMethodName                   = "/worker.WorkerService/WriteFile"
 	WorkerService_DeleteFile_FullMethodName                  = "/worker.WorkerService/DeleteFile"
 	WorkerService_RenameFile_FullMethodName                  = "/worker.WorkerService/RenameFile"
@@ -177,6 +178,9 @@ type WorkerServiceClient interface {
 	ListFiles(ctx context.Context, in *ListFilesRequest, opts ...grpc.CallOption) (*ListFilesResponse, error)
 	// ReadFile 读取文件内容。
 	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (*ReadFileResponse, error)
+	// HashFile 计算实例工作目录内文件的 SHA-256（FR-468 §2.5 版本漂移检测）。
+	// 与 ReadFile 分开：哈希只需读盘不需传内容，避免为校验把数十 MB 二进制经 gRPC 搬回 CP。
+	HashFile(ctx context.Context, in *HashFileRequest, opts ...grpc.CallOption) (*HashFileResponse, error)
 	// WriteFile 写入文件内容。
 	WriteFile(ctx context.Context, in *WriteFileRequest, opts ...grpc.CallOption) (*WriteFileResponse, error)
 	// DeleteFile 删除文件。
@@ -594,6 +598,16 @@ func (c *workerServiceClient) ReadFile(ctx context.Context, in *ReadFileRequest,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReadFileResponse)
 	err := c.cc.Invoke(ctx, WorkerService_ReadFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) HashFile(ctx context.Context, in *HashFileRequest, opts ...grpc.CallOption) (*HashFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HashFileResponse)
+	err := c.cc.Invoke(ctx, WorkerService_HashFile_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1479,6 +1493,9 @@ type WorkerServiceServer interface {
 	ListFiles(context.Context, *ListFilesRequest) (*ListFilesResponse, error)
 	// ReadFile 读取文件内容。
 	ReadFile(context.Context, *ReadFileRequest) (*ReadFileResponse, error)
+	// HashFile 计算实例工作目录内文件的 SHA-256（FR-468 §2.5 版本漂移检测）。
+	// 与 ReadFile 分开：哈希只需读盘不需传内容，避免为校验把数十 MB 二进制经 gRPC 搬回 CP。
+	HashFile(context.Context, *HashFileRequest) (*HashFileResponse, error)
 	// WriteFile 写入文件内容。
 	WriteFile(context.Context, *WriteFileRequest) (*WriteFileResponse, error)
 	// DeleteFile 删除文件。
@@ -1742,6 +1759,9 @@ func (UnimplementedWorkerServiceServer) ListFiles(context.Context, *ListFilesReq
 }
 func (UnimplementedWorkerServiceServer) ReadFile(context.Context, *ReadFileRequest) (*ReadFileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReadFile not implemented")
+}
+func (UnimplementedWorkerServiceServer) HashFile(context.Context, *HashFileRequest) (*HashFileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method HashFile not implemented")
 }
 func (UnimplementedWorkerServiceServer) WriteFile(context.Context, *WriteFileRequest) (*WriteFileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method WriteFile not implemented")
@@ -2348,6 +2368,24 @@ func _WorkerService_ReadFile_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).ReadFile(ctx, req.(*ReadFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_HashFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HashFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).HashFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_HashFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).HashFile(ctx, req.(*HashFileRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3738,6 +3776,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReadFile",
 			Handler:    _WorkerService_ReadFile_Handler,
+		},
+		{
+			MethodName: "HashFile",
+			Handler:    _WorkerService_HashFile_Handler,
 		},
 		{
 			MethodName: "WriteFile",
