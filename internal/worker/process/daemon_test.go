@@ -1,6 +1,7 @@
 package process
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -135,4 +136,84 @@ func TestManager_DaemonStopAllGraceful(t *testing.T) {
 	// 注意：本测试在进程内运行 wrapper（goroutine，非子进程），
 	// wrapperPID == os.Getpid()，不可用 killProcessTree（会杀掉测试自身）。
 	// 真实部署中 wrapper 是独立子进程，stop 已通过 taskkill /T 清理 Java 树。
+}
+
+// exitAfterCmd 返回一个「存活若干秒后自行退出」的跨平台命令（验证 wrapper 自动重启用）。
+func exitAfterCmd(seconds int) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("ping -n %d 127.0.0.1 > nul", seconds+1)
+	}
+	return fmt.Sprintf("sleep %d", seconds)
+}
+
+// autoRestartToggler 暴露 daemon 策略的禁用/恢复自动重启控制帧能力（wrapper 协议）。
+type autoRestartToggler interface {
+	DisableAutoRestart() error
+	EnableAutoRestart() error
+}
+
+// FR-459 终验 Major 端到端回归：熔断禁用自动重启后经人工解除（对称 enable 帧），仍在托管的
+// wrapper 必须恢复「Java 退出后自动重启」。修复前没有 enable 帧，wrapper 收到禁用后收摊退出，
+// 而 Worker/CP 认为熔断已解除 → Java 下次崩溃不再被拉起（假解除）。
+func TestManager_DaemonEnableRestartReArmsWrapper(t *testing.T) {
+	pidDir := t.TempDir()
+	uuid := "daemon-rearm"
+	cfg := daemon.WrapperConfig{
+		InstanceUUID: uuid,
+		StartCommand: exitAfterCmd(4),
+		WorkDir:      pidDir,
+		AutoRestart:  true,
+		PIDDir:       pidDir,
+	}
+	ready := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() { done <- daemon.RunWithReady(cfg, ready) }()
+	<-ready
+
+	pidPath := filepath.Join(pidDir, uuid+".pid")
+	pf := daemon.NewPIDFile(pidPath)
+	var firstJavaPID int
+	require.Eventually(t, func() bool {
+		rec, err := pf.ReadRecord()
+		if err != nil || rec.JavaPID == 0 {
+			return false
+		}
+		firstJavaPID = rec.JavaPID
+		return true
+	}, 5*time.Second, 20*time.Millisecond, "应能读到首个 Java pid")
+
+	m := NewManager(pidDir)
+	require.NoError(t, m.Create(uuid, "Daemon", exitAfterCmd(4), "", pidDir, nil, true, ProcessTypeDaemon, "", "", 0, 0))
+	recovered, recErr := m.RecoverDaemonInstances()
+	require.NoError(t, recErr)
+	require.Equal(t, 1, recovered, "应恢复 1 个 daemon 实例")
+
+	m.mu.RLock()
+	strategy := m.instances[uuid].strategy
+	m.mu.RUnlock()
+	toggler, ok := strategy.(autoRestartToggler)
+	require.True(t, ok, "daemon 策略应实现禁用/恢复自动重启控制帧")
+
+	// 熔断禁用（此刻 Java 仍在跑：只发禁用帧、保持托管）→ 人工解除（对称 enable 帧复位粘性开关）。
+	require.NoError(t, toggler.DisableAutoRestart())
+	require.NoError(t, toggler.EnableAutoRestart())
+
+	// 首个 Java 退出后 wrapper 应自动拉起新 Java（pid 变化）。
+	// 修复前 enable 缺失 → wrapper 收摊退出、PID 文件被清理，本断言必失败。
+	require.Eventually(t, func() bool {
+		rec, readErr := pf.ReadRecord()
+		return readErr == nil && rec.JavaPID != 0 && rec.JavaPID != firstJavaPID
+	}, 20*time.Second, 100*time.Millisecond, "恢复自动重启后 wrapper 应在 Java 退出后拉起新进程")
+
+	// 清理：下发 kill 结束 wrapper（进程内运行，不能 killProcessTree 自身）。
+	if conn, dialErr := daemon.Dial(daemon.SocketAddr(pidDir, uuid)); dialErr == nil {
+		f := &daemon.Frame{Header: daemon.Header{Channel: daemon.ChannelControl, Type: daemon.TypeCommand}, Payload: []byte(daemon.ControlKill)}
+		_ = f.Encode(conn)
+		_ = conn.Close()
+	}
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		t.Log("wrapper 未在 8s 内退出（清理超时）")
+	}
 }

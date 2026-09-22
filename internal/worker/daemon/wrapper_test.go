@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -277,4 +278,134 @@ func TestWrapper_PIDFileCleanup(t *testing.T) {
 	// 工作目录导致 t.TempDir() 清理失败。等待 Java pid 真正消失后再返回，
 	// 让 TempDir 的 RemoveAll 能成功（统一走 waitForProcGone helper）。
 	waitForProcGone(t, javaPID)
+}
+
+// crashImmediatelyCommand 返回一个「启动即崩溃」的命令（跨平台），
+// 用于验证 FR-459 崩溃熔断的 daemon 生效路径：wrapper 收到「禁用自动重启」后不得再拉起 Java。
+func crashImmediatelyCommand() string {
+	if runtime.GOOS == "windows" {
+		return "exit /b 1"
+	}
+	return "exit 1"
+}
+
+// TestWrapper_DisableRestartStopsAutoRestart 验证 FR-459 blocker 的 daemon 生效路径：
+// AutoRestart=true 且 Java 启动即崩溃时，wrapper 本会按退避自动重启；一旦 Worker 下发
+// ControlDisableRestart（崩溃熔断），wrapper 必须停止自动重启并自行收摊退出。
+//
+// 判定依据：wrapper 的 fastCrashes 放弃阈值是 5 次、退避序列 1s+2s+4s+8s（≥15s）才会自退，
+// 故「5s 内退出」只可能来自熔断禁用帧，而非 wrapper 自身的快速崩溃放弃逻辑。
+func TestWrapper_DisableRestartStopsAutoRestart(t *testing.T) {
+	pidDir := testWorkDir(t)
+	uuid := "test-disable-restart"
+	cfg := WrapperConfig{
+		InstanceUUID: uuid,
+		StartCommand: crashImmediatelyCommand(),
+		WorkDir:      pidDir,
+		AutoRestart:  true,
+		PIDDir:       pidDir,
+	}
+
+	ready, done := runWrapperWithReady(t, cfg)
+	addr := SocketAddr(pidDir, uuid)
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("wrapper 在就绪前退出: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("wrapper 监听就绪超时")
+	}
+
+	conn, err := Dial(addr)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// 下发「禁用自动重启」（崩溃熔断）。
+	frame := &Frame{Header: Header{Channel: ChannelControl, Type: TypeCommand}, Payload: []byte(ControlDisableRestart)}
+	require.NoError(t, frame.Encode(conn))
+
+	// wrapper 应在退避窗口内复核熔断标志并收摊退出（不再拉起 Java）。
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("收到禁用自动重启后 wrapper 仍在自动重启（未退出）")
+	}
+}
+
+// TestWrapper_DisableAutoRestartIsSticky 验证禁用自动重启是粘性状态（不复位），
+// 且不误伤正在启动中的 Java（避免熔断帧把在启动的 Java 变成孤儿）。
+func TestWrapper_DisableAutoRestartIsSticky(t *testing.T) {
+	w := &Wrapper{cfg: WrapperConfig{AutoRestart: true}, closing: make(chan struct{}), state: StateStopped}
+	require.False(t, w.isAutoRestartOff())
+
+	// Java 启动在飞：不得立即收摊（否则新拉起的 Java 无人托管）。
+	w.mu.Lock()
+	w.javaStarting = true
+	w.mu.Unlock()
+	w.disableAutoRestart()
+	require.True(t, w.isAutoRestartOff())
+	require.False(t, w.isClosed(), "启动在飞时不得立即关闭 wrapper")
+
+	// Java 在跑：同样保持托管。
+	w.mu.Lock()
+	w.javaStarting = false
+	w.javaCmd = &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}
+	w.mu.Unlock()
+	w.disableAutoRestart()
+	require.False(t, w.isClosed(), "Java 在跑时不得立即关闭 wrapper")
+
+	// 状态变化（崩溃/停止）不得复位熔断标志。
+	w.setState(StateCrashed)
+	require.True(t, w.isAutoRestartOff(), "禁用自动重启在状态变化后仍保持")
+
+	// 确无 Java 在跑也无启动在飞（崩溃退避窗口）→ 立即收摊。
+	w.mu.Lock()
+	w.javaCmd = nil
+	w.mu.Unlock()
+	w.disableAutoRestart()
+	require.True(t, w.isClosed(), "空闲态应立即收摊，避免空占进程")
+}
+
+// FR-459 终验 Major：对称的 enable_restart 控制帧必须清掉粘性「禁用自动重启」，使 wrapper
+// 恢复自动重启（人工解除熔断的 daemon 复位路径）。
+func TestWrapper_EnableAutoRestartClearsSticky(t *testing.T) {
+	w := &Wrapper{cfg: WrapperConfig{AutoRestart: true}, closing: make(chan struct{}), state: StateStopped}
+
+	// Java 在跑时禁用不立即收摊（保持托管）。
+	w.mu.Lock()
+	w.javaCmd = &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}}
+	w.mu.Unlock()
+
+	w.handleControl(ControlDisableRestart)
+	require.True(t, w.isAutoRestartOff(), "禁用帧应置位粘性开关")
+	require.False(t, w.isClosed(), "Java 在跑时禁用不得关闭 wrapper")
+
+	// 对称复位帧：清除粘性开关且不得关闭 wrapper。
+	w.handleControl(ControlEnableRestart)
+	require.False(t, w.isAutoRestartOff(), "enable_restart 必须复位粘性禁用")
+	require.False(t, w.isClosed(), "恢复自动重启不得关闭 wrapper")
+
+	// 幂等：重复下发无副作用。
+	w.handleControl(ControlEnableRestart)
+	require.False(t, w.isAutoRestartOff())
+}
+
+// FR-459 终验 Low #5：startJava 在临界区内复核「已关闭/已禁用」，消除 javaWait 复核点与 startJava
+// 取锁之间的 TOCTOU——否则该窗口内到达的禁用帧会误判空闲而收摊，紧接着 startJava 却拉起 Java，
+// 造成 wrapper 已退出、Java 无人托管的孤儿。
+func TestWrapper_StartJavaRefusesWhenAutoRestartDisabled(t *testing.T) {
+	w := &Wrapper{cfg: WrapperConfig{AutoRestart: true, StartCommand: crashImmediatelyCommand()},
+		closing: make(chan struct{}), state: StateStopped}
+
+	w.mu.Lock()
+	w.autoRestartOff = true
+	w.mu.Unlock()
+
+	err := w.startJava()
+	require.ErrorIs(t, err, errAutoRestartSuppressed, "已禁用自动重启时 startJava 必须拒绝拉起")
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	require.Nil(t, w.javaCmd, "拒绝启动时不得登记 Java 进程（避免孤儿）")
+	require.False(t, w.javaStarting, "拒绝启动不得遗留「启动在飞」标记")
+	require.Equal(t, StateStopped, w.state, "拒绝启动不得改写状态")
 }

@@ -344,7 +344,9 @@ message ReportOrphanAuditRequest {
   string node_uuid = 1;   // 节点身份（与崩溃快照上报同源校验）
   string node_secret = 2;
   string action = 3;      // 审计动作名：orphan.scan_detected / orphan.scan_disposed /
-                          // orphan.scan_dispose_blocked / orphan.dispose_blocked / orphan.dispose_reaped
+                          // orphan.scan_dispose_blocked / orphan.dispose_blocked / orphan.dispose_reaped /
+                          // health.dead_detected / health.selfheal_restart / health.selfheal_exhausted /
+                          // health.circuit_broken / health.circuit_released（FR-459，detail 内标 operator=auto）
   string target_id = 4;   // 目标标识（实例 UUID 或 direct 孤儿工作目录）
   string detail = 5;      // 补充说明（JSON）
   bool success = 6;       // 处置是否成功（拦截/未处置为 false）
@@ -407,6 +409,11 @@ message InstanceState {
   // pid 受管实例根进程 PID（可选，FR-326 反向对账诊断；0/缺省=未知或未运行）。
   // 老 Worker 不上报本字段（零值），老 CP 忽略；不改变正向对账语义。
   int32 pid = 3;
+  // health 是 FR-459 健康巡检结论标识（可选）：healthy/suspected_dead/dead/crashed/circuit_broken。
+  // 空=无巡检结论（老 Worker 或该实例未参与巡检，如无端口/未运行）。老 CP 忽略，不改正向对账语义。
+  string health = 4;
+  // status_reason 是健康巡检给出的原因说明（假死/熔断等，FR-459）；空=正常。CP 据此写 instances.status_reason。
+  string status_reason = 5;
 }
 
 // DisposeOrphanRuntimeRequest CP 请求 Worker 清理无主运行时（FR-326）。
@@ -513,6 +520,22 @@ message HeartbeatResponse {
   // <=0 = 未配置（老 CP 不下发），Worker 回退内置默认 3s。
   int32 direct_probe_slp_timeout_ms = 7;
   int32 direct_probe_query_timeout_ms = 8;
+  // === FR-459 实例健康巡检与自愈策略下发 ===
+  // health_scan_enabled 用 optional 表达「CP 是否下发了策略」：nil=老 CP 未下发（Worker 沿用本地
+  // worker.yml 配置），非 nil=采用本响应全部 health_* 字段。避免 proto3 零值无法区分「关闭」与「未配置」。
+  optional bool health_scan_enabled = 9;      // 巡检总开关（CP 侧生效值）
+  int32 health_scan_interval_ms = 10;         // 巡检周期（毫秒）
+  string health_probe_kind = 11;              // 响应维度探针类型：tcp / http（空=auto）
+  int32 health_suspicion_threshold = 12;      // 连续判假死次数阈值
+  string health_action = 13;                  // 假死动作：warn / restart
+  int32 health_circuit_breaker_threshold = 14; // 崩溃熔断：窗口内重启次数阈值
+  int32 health_circuit_breaker_window_ms = 15; // 崩溃熔断：滚动窗口（毫秒）
+  // health_startup_warmup_ms 是启动宽限期（毫秒，FR-459 复审项 2）：Start 返回 RUNNING 后这段时间
+  // 内不做假死判定，避免慢启动 MC 被判假死并反复重启。<=0 = 未配置，Worker 回退内置默认 5m。
+  int32 health_startup_warmup_ms = 16;
+  // health_self_heal_max_restarts 是假死自愈在熔断窗口内的重启次数上限（FR-459 复审项 7，
+  // 避免假死路径重启风暴）。<=0 = 未配置，Worker 回退内置默认 3。
+  int32 health_self_heal_max_restarts = 17;
 }
 
 // === 实例操作 ===

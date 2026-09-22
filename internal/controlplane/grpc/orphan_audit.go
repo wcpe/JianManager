@@ -30,7 +30,10 @@ func (h *ControlPlaneHandler) SetOrphanAuditRecorder(r OrphanAuditRecorder) {
 //
 // 与 docs/specs/restart-resilience/spec.md §审计动作表、proto/worker.proto 的 action 注释逐一对应：
 //   - orphan.scan_detected / scan_disposed / scan_dispose_blocked：运行期周期扫描三态发现与处置；
-//   - orphan.dispose_blocked / dispose_reaped：启动期接管兜底的误杀拦截与真孤儿清理。
+//   - orphan.dispose_blocked / dispose_reaped：启动期接管兜底的误杀拦截与真孤儿清理；
+//   - health.dead_detected / health.selfheal_restart / health.selfheal_exhausted /
+//     health.circuit_broken / health.circuit_released：FR-459 健康巡检的假死告警、自愈重启、
+//     自愈重启达上限（重启风暴护栏）、崩溃熔断与熔断解除（detail 内标 operator=auto）。
 //
 // 白名单是**强校验**（不在表内一律拒绝）：审计库是运维追责面，不能让 Worker 侧以任意 action 名写入。
 // 新增动作必须同时更新本表、spec 与 proto 注释，三者保持一致。
@@ -40,6 +43,21 @@ var orphanAuditAllowedActions = map[string]struct{}{
 	"orphan.scan_dispose_blocked": {},
 	"orphan.dispose_blocked":      {},
 	"orphan.dispose_reaped":       {},
+	"health.dead_detected":        {},
+	"health.selfheal_restart":     {},
+	"health.selfheal_exhausted":   {},
+	"health.circuit_broken":       {},
+	"health.circuit_released":     {},
+}
+
+// auditTargetTypeFor 按 action 归正审计 targetType（FR-459 复审项 11）：
+// health.* 系动作的靶子是**在册实例**，此前硬编码 "orphan" 会让健康自愈/熔断在审计面
+// 被误标为孤儿处置，按 targetType 过滤时归错类。
+func auditTargetTypeFor(action string) string {
+	if strings.HasPrefix(action, "health.") {
+		return "health"
+	}
+	return "orphan"
 }
 
 const (
@@ -102,7 +120,7 @@ func (h *ControlPlaneHandler) ReportOrphanAudit(ctx context.Context, req *worker
 	}
 	// 自动处置无登录用户：以 0 表示系统（与 OrphanRuntimeTracker.recordDisposeAudit 同源约定）。
 	// detail 追加 nodeUuid 便于按节点溯源（N3）——同一 UUID 可能在不同节点上出现，缺节点维度难归因。
-	h.orphanAudit.RecordResultSafe(0, action, "orphan",
+	h.orphanAudit.RecordResultSafe(0, action, auditTargetTypeFor(action),
 		truncateUTF8(req.TargetId, maxOrphanAuditTargetLen),
 		wrapOrphanAuditDetail(req.NodeUuid, truncateUTF8(req.Detail, maxOrphanAuditDetailLen)),
 		"", req.Success, req.Error)

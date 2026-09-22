@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
 // Config Worker Node 配置。
@@ -55,6 +56,90 @@ type Config struct {
 	BotWorker BotWorkerConfig `mapstructure:"bot_worker"`
 	// OrphanScan 运行期周期孤儿扫描（FR-456）：把孤儿清理从「仅启动时」升级为「运行期持续兜底」。
 	OrphanScan OrphanScanConfig `mapstructure:"orphan_scan"`
+	// HealthScan 运行期实例健康巡检与自愈（FR-459）：识别假死、受控自愈、崩溃熔断。
+	HealthScan HealthScanConfig `mapstructure:"health_scan"`
+}
+
+// HealthScanConfig 运行期实例健康巡检与自愈配置（FR-459）。
+//
+// 本地基线（worker.yml）提供逃生口与默认口径；运行期策略（阈值/动作/探针类型）可经 CP
+// 心跳响应下发覆盖（见 internal/worker/heartbeat 的 health policy 应用）。
+type HealthScanConfig struct {
+	// Disabled 显式关闭周期巡检（默认 false=启用）。应急逃生口：关闭后巡检不产生任何动作（spec §4 验收 9）。
+	Disabled bool `mapstructure:"disabled"`
+	// Interval 巡检周期（time.ParseDuration 字符串，默认 30s）。
+	Interval string `mapstructure:"interval"`
+	// ProbeKind 响应维度探针类型：tcp（连服务端口）/ http（GET 探针 /metrics）；空=auto。
+	ProbeKind string `mapstructure:"probe_kind"`
+	// SuspicionThreshold 连续判假死次数阈值（默认 3，越抖越保守）。
+	SuspicionThreshold int `mapstructure:"suspicion_threshold"`
+	// Action 假死动作：warn（默认，仅告警 + 审计 + 标原因）/ restart（优雅重启自愈）。
+	Action string `mapstructure:"action"`
+	// CircuitBreakerThreshold 滚动窗口内崩溃重启次数阈值（默认 5）。
+	CircuitBreakerThreshold int `mapstructure:"circuit_breaker_threshold"`
+	// CircuitBreakerWindow 崩溃熔断滚动窗口（time.ParseDuration 字符串，默认 10m）。
+	CircuitBreakerWindow string `mapstructure:"circuit_breaker_window"`
+	// StartupWarmup 启动宽限期（time.ParseDuration 字符串，默认 5m）：Start 返回 RUNNING 后
+	// 这段时间内不做假死判定，避免慢启动 MC 被误判；"-1s"（负值）=关闭宽限。
+	StartupWarmup string `mapstructure:"startup_warmup"`
+	// SelfHealMaxRestarts 一熔断窗口内假死自愈重启次数上限（默认 3；0=用默认）。
+	SelfHealMaxRestarts int `mapstructure:"self_heal_max_restarts"`
+}
+
+// ScanInterval 解析巡检周期：非法/空回退 30s（与 spec §2.1 默认一致）。
+func (c HealthScanConfig) ScanInterval() time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(c.Interval))
+	if err != nil || d <= 0 {
+		return process.DefaultHealthScanInterval
+	}
+	return d
+}
+
+// CircuitWindow 解析熔断滚动窗口：非法/空回退 10m。
+func (c HealthScanConfig) CircuitWindow() time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(c.CircuitBreakerWindow))
+	if err != nil || d <= 0 {
+		return process.DefaultCircuitBreakerWindow
+	}
+	return d
+}
+
+// StartupWarmupDuration 解析启动宽限期：非法/空回退 5m；显式 "-1s"（负值）=关闭宽限（测试/特殊场景）。
+func (c HealthScanConfig) StartupWarmupDuration() time.Duration {
+	raw := strings.TrimSpace(c.StartupWarmup)
+	if raw == "" {
+		return process.DefaultStartupWarmup
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return process.DefaultStartupWarmup
+	}
+	if d < 0 {
+		return -1 // 显式关闭（归一化层把负值原样保留为「关闭」语义）
+	}
+	if d == 0 {
+		return process.DefaultStartupWarmup
+	}
+	return d
+}
+
+// 默认值单一真源说明：巡检周期/熔断窗口/启动宽限的默认口径一律取自 process 包导出的
+// Default* 常量（见 internal/worker/process/health_scan.go），本地不再重复定义字面量，
+// 避免「本地默认」与「进程归一默认」两处漂移（FR-459 复审项 12）。
+
+// HealthPolicy 把本地配置组装为进程包可用的巡检策略（阈值/窗口未配时交给进程侧归一取默认）。
+func (c HealthScanConfig) HealthPolicy() process.HealthPolicy {
+	return process.HealthPolicy{
+		Enabled:                 !c.Disabled,
+		ScanInterval:            c.ScanInterval(),
+		ProbeKind:               c.ProbeKind,
+		SuspicionThreshold:      c.SuspicionThreshold,
+		Action:                  c.Action,
+		CircuitBreakerThreshold: c.CircuitBreakerThreshold,
+		CircuitBreakerWindow:    c.CircuitWindow(),
+		StartupWarmup:           c.StartupWarmupDuration(),
+		SelfHealMaxRestarts:     c.SelfHealMaxRestarts,
+	}
 }
 
 // OrphanScanConfig 运行期周期孤儿扫描配置（FR-456）。
@@ -204,6 +289,14 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("orphan_scan.disabled", false)
 	v.SetDefault("orphan_scan.interval", "60s")
 	v.SetDefault("orphan_scan.dispose_policy", "warn")
+	// 运行期实例健康巡检与自愈（FR-459）：默认启用、周期 30s、只告警（可配 restart 自愈）。
+	v.SetDefault("health_scan.disabled", false)
+	v.SetDefault("health_scan.interval", "30s")
+	v.SetDefault("health_scan.probe_kind", "")
+	v.SetDefault("health_scan.suspicion_threshold", 3)
+	v.SetDefault("health_scan.action", "warn")
+	v.SetDefault("health_scan.circuit_breaker_threshold", 5)
+	v.SetDefault("health_scan.circuit_breaker_window", "10m")
 
 	if path != "" {
 		v.SetConfigFile(path)

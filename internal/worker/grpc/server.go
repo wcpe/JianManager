@@ -353,7 +353,15 @@ func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstan
 }
 
 // StartInstance 启动实例。
+//
+// FR-459：这是**人工启动**（CP 操作员动作）入口，故先显式解除崩溃熔断——「熔断期间人工启动
+// 不受阻」且「移除熔断锁后恢复自动重启」（spec §4 验收 5 / §5 人工确认解除）由同一次人工动作
+// 完成。自动重启路径（direct/docker waitLoop 回调 Manager.Start）不经此处，因此熔断期间不会被
+// 自己解除；配置编辑（SetLaunchConfig）也不再隐式清熔断（复审项 6）。
 func (s *Server) StartInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
+	if reason, released := s.manager.ReleaseCircuitBreaker(req.InstanceUuid); released {
+		slog.Info("人工启动解除实例崩溃熔断", "instanceId", req.InstanceUuid, "wasReason", reason)
+	}
 	if err := s.manager.Start(req.InstanceUuid); err != nil {
 		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
 	}

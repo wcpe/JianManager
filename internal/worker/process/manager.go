@@ -60,6 +60,9 @@ type Instance struct {
 	State       InstanceState
 	AutoRestart bool
 	CrashCount  int
+	// StartedAt 是最近一次跨入 RUNNING 的时刻（FR-459 启动宽限期的纪元起点）。
+	// 零值=未知（PID 恢复等路径），此时巡检不做宽限、保持既有判定。
+	StartedAt time.Time
 	// operationMu 串行同一实例的生命周期操作，不阻塞其他实例。
 	operationMu sync.Mutex
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
@@ -114,8 +117,22 @@ type Manager struct {
 	// （DefaultVerifyProcessOwnership，读 cmdline/cwd）。返回 false=无法确认 PID 确属目标实例 → 不杀。
 	recoverVerifyOwner func(pid int, instanceUUID, workDir string, expectWrapper bool) bool
 	// onOrphanAudit 是孤儿处置/误杀拦截的审计回调（FR-455/456）：由 worker main 注入落结构化审计。
-	// nil 时回退 slog（仍保证「不静默」）。
+	// nil 时回退 slog（仍保证「不静默」）。FR-459 的健康/自愈审计复用同一通道（action 前缀 health.*）。
 	onOrphanAudit func(action, targetID, detail string, success bool, errMsg string)
+	// health FR-459 健康记账：逐实例健康故障 + 崩溃重启窗口 + 熔断锁（自有锁，见 health_scan.go）。
+	health *healthState
+	// healthOnce 惰性初始化 health（零值 Manager / 直接结构体构造时的防御）。
+	healthOnce sync.Once
+}
+
+// healthState 返回健康记账，必要时惰性初始化（对非 NewManager 构造的 Manager 亦安全）。
+func (m *Manager) healthState() *healthState {
+	m.healthOnce.Do(func() {
+		if m.health == nil {
+			m.health = newHealthState()
+		}
+	})
+	return m.health
 }
 
 // SetOrphanAuditHandler 注入孤儿处置审计回调（FR-455/456）。
@@ -161,6 +178,7 @@ func NewManager(serversDir string) *Manager {
 		instances:  make(map[string]*Instance),
 		serversDir: serversDir,
 		pidDir:     serversDir,
+		health:     newHealthState(),
 	}
 }
 
@@ -184,7 +202,9 @@ func (m *Manager) SetCrashHandler(handler func(instanceID string, info CrashInfo
 }
 
 // emitCrash 触发崩溃回调（未设置则忽略）。
+// FR-459：同时把本次崩溃计入熔断滚动窗口（覆盖 direct/docker waitLoop 与 daemon 退出事件三条崩溃来源）。
 func (m *Manager) emitCrash(instanceID string, info CrashInfo) {
+	m.noteProcessCrash(instanceID)
 	if m.onCrash != nil {
 		m.onCrash(instanceID, info)
 	}
@@ -238,6 +258,11 @@ type InstanceSnapshot struct {
 	ServerPort int    // server-port（MC 游戏端口）；>0 时心跳做 SLP 直探（FR-446）
 	QueryPort  int    // query.port；>0 时心跳做 Query 直探（FR-446）
 	PID        int    // 受管实例根进程 PID；>0 时心跳可采集进程 TOPN（FR-170）
+	// Health 是 FR-459 健康巡检结论标识（healthy/suspected_dead/dead/crashed/circuit_broken；空=无结论）。
+	// 经心跳上报 CP，供健康总览墙（FR-461）与动态基线（FR-462）消费。
+	Health string
+	// StatusReason 是健康巡检给出的原因说明（假死/熔断等，FR-459）；空=正常。
+	StatusReason string
 }
 
 // GetAllInstanceStates 返回所有实例的状态快照（用于心跳上报）。
@@ -257,13 +282,16 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 		if inst.strategy != nil {
 			pid = inst.strategy.GetPID()
 		}
+		fault, reason := m.healthFault(uuid)
 		states = append(states, InstanceSnapshot{
-			UUID:       uuid,
-			State:      string(state),
-			ProbePort:  inst.ProbePort,
-			ServerPort: inst.ServerPort,
-			QueryPort:  inst.QueryPort,
-			PID:        pid,
+			UUID:         uuid,
+			State:        string(state),
+			ProbePort:    inst.ProbePort,
+			ServerPort:   inst.ServerPort,
+			QueryPort:    inst.QueryPort,
+			PID:          pid,
+			Health:       fault,
+			StatusReason: reason,
 		})
 	}
 	return states
@@ -281,6 +309,9 @@ func (m *Manager) Create(uuid, name, startCommand, stopCommand, workDir string, 
 	if _, exists := m.instances[uuid]; exists {
 		return fmt.Errorf("实例 %s 已存在", uuid)
 	}
+	// 同 UUID 重新登记时回收上一代健康记账（健康故障/崩溃窗口/熔断态/自愈计数），
+	// 避免历史崩溃污染新实例的熔断判定（FR-459 复审项 10）。
+	m.dropHealthAccounting(uuid)
 
 	m.instances[uuid] = &Instance{
 		UUID:                       uuid,
@@ -588,6 +619,10 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 	inst.State = StateStarting
 	m.mu.Unlock()
 
+	// FR-459：启动即开启新的健康纪元——上一代的假死/崩溃故障标识不再适用，先清空，
+	// 避免重启后在启动宽限期内继续对外暴露陈旧原因（宽限期内巡检不动故障标识）。
+	m.clearHealthFault(uuid)
+
 	m.emitStateChange(uuid, oldState, StateStarting)
 
 	if err := strategy.Start(context.Background()); err != nil {
@@ -607,6 +642,9 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 	startedClean := inst.State == StateStarting
 	if startedClean {
 		inst.State = StateRunning
+		// FR-459 启动宽限期的纪元起点：Start 返回 RUNNING 即开始计时，宽限期内不做假死判定
+		// （慢启动 MC 常达 90s+，否则会被连续探针失败误判并反复重启）。
+		inst.StartedAt = time.Now()
 	}
 	m.mu.Unlock()
 	if !startedClean {
@@ -664,6 +702,8 @@ func (m *Manager) stopLocked(uuid string, inst *Instance) error {
 	inst.State = StateStopped
 	inst.CrashCount = 0
 	m.mu.Unlock()
+	// FR-459：人工/正常停止清空崩溃重启窗口（给予一次干净的重启配额，避免历史崩溃影响后续熔断判定）。
+	m.clearRestartWindow(uuid)
 	m.emitStateChange(uuid, oldState, StateStopped)
 	return nil
 }
@@ -683,7 +723,11 @@ func (m *Manager) Restart(uuid string) error {
 		return fmt.Errorf("实例 %s 不存在", uuid)
 	}
 	defer inst.operationMu.Unlock()
+	return m.restartLocked(uuid, inst)
+}
 
+// restartLocked 在已持有实例生命周期锁时优雅重启：运行类先优雅停止、等旧进程退出，再启动。
+func (m *Manager) restartLocked(uuid string, inst *Instance) error {
 	m.mu.RLock()
 	state := inst.State
 	m.mu.RUnlock()
@@ -694,6 +738,31 @@ func (m *Manager) Restart(uuid string) error {
 		}
 	}
 	return m.startLocked(uuid, inst)
+}
+
+// RestartIfRunning 是 FR-459 假死自愈的受锁入口：与 Restart 相同地优雅重启，但**仅当**实例在
+// 持锁复核时仍处 `RUNNING` 才动作。
+//
+// 只接受 RUNNING（spec §5：自愈不得与人工操作抢状态）：
+//   - STOPPED/CRASHED 已被人工停掉或本就未运行 → 拒绝，绝不把「已被人工停止的实例」误启动；
+//   - STARTING/STOPPING 是过渡态：假死判定的前提是「进程在跑且不响应」，而过渡态本身尚未定型，
+//     此时重启会与人工 Start/Stop 抢生命周期（原实现允许过渡态，与 spec 意图相悖，FR-459 复审项 4）。
+//
+// 复用 stopLocked/startLocked 既有优雅路径，**不新增杀进程路径**（spec §1/§5）。
+func (m *Manager) RestartIfRunning(uuid string) error {
+	inst, exists := m.lockInstanceOperation(uuid)
+	if !exists {
+		return fmt.Errorf("实例 %s 不存在", uuid)
+	}
+	defer inst.operationMu.Unlock()
+
+	m.mu.RLock()
+	state := inst.State
+	m.mu.RUnlock()
+	if state != StateRunning {
+		return fmt.Errorf("实例 %s 当前状态 %s 非运行中，跳过假死自愈", uuid, state)
+	}
+	return m.restartLocked(uuid, inst)
 }
 
 // Kill 强制终止实例。
@@ -732,6 +801,8 @@ func (m *Manager) killLocked(uuid string, inst *Instance) error {
 	oldState := inst.State
 	inst.State = StateStopped
 	m.mu.Unlock()
+	// FR-459：强制终止同样清空崩溃重启窗口。
+	m.clearRestartWindow(uuid)
 	m.emitStateChange(uuid, oldState, StateStopped)
 	return nil
 }
@@ -827,6 +898,8 @@ func (m *Manager) removeLocked(uuid string, inst *Instance) error {
 	if current, ok := m.instances[uuid]; ok && current == inst {
 		delete(m.instances, uuid)
 	}
+	// FR-459 复审项 10：实例移除时回收健康记账，避免残留记录随 UUID 复用污染后续熔断判定。
+	m.dropHealthAccounting(uuid)
 	return nil
 }
 
@@ -926,19 +999,28 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 		}
 		strategy.SetWrapperPID(rec.WrapperPID)
 
+		// FR-459 终验 Low #3：若 Worker 重启前该实例已熔断，从状态文件恢复熔断态——否则 Worker
+		// 会「忘掉」熔断（以为可自动重启）而 wrapper 粘性 autoRestartOff 仍在拒绝重启，形成反向 desync。
+		restored := m.restorePersistedCircuit(instanceUUID)
+
 		m.mu.Lock()
 		m.instances[instanceUUID] = &Instance{
 			UUID:        instanceUUID,
 			State:       StateRunning,
-			AutoRestart: true,
+			AutoRestart: !restored,
 			WorkDir:     rec.WorkDir,
 			ProbePort:   rec.ProbePort,
 			strategy:    strategy,
 			processType: ProcessTypeDaemon,
 		}
 		m.mu.Unlock()
+		if restored {
+			// 恢复熔断后须让 wrapper 与 Worker 记账对齐：worker 重启前 wrapper 的粘性开关可能已置位，
+			// 也可能因重启窗口丢失该帧——幂等补发一次禁用帧（wrapper 已置位时无副作用）。
+			m.disarmAutoRestart(instanceUUID, "恢复熔断态（Worker 重启）")
+		}
 		recovered++
-		slog.Info("已恢复 daemon 实例", "instanceId", instanceUUID, "wrapperPid", rec.WrapperPID)
+		slog.Info("已恢复 daemon 实例", "instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "circuitRestored", restored)
 	}
 	return recovered, nil
 }

@@ -307,6 +307,16 @@ func runWorker() {
 		orphanScanner.Start(scannerCtx)
 	}
 
+	// 运行期实例健康巡检与自愈（FR-459）：存活 ∧ 响应双维识别假死，受控自愈（warn/restart）
+	// 与崩溃熔断（窗口内重启超限即停自动重启）。本地配置 worker.health_scan.*；运行期阈值/动作
+	// 可经心跳响应下发覆盖（见下方 heartbeat.SetHealthPolicyApplier）。
+	healthScanner := process.NewHealthScanner(manager, !cfg.HealthScan.Disabled, cfg.HealthScan.ScanInterval(), cfg.HealthScan.HealthPolicy())
+	if !cfg.HealthScan.Disabled {
+		healthCtx, cancelHealth := context.WithCancel(context.Background())
+		defer cancelHealth()
+		healthScanner.Start(healthCtx)
+	}
+
 	// 初始化指标采集器
 	collector := metrics.NewCollector(30 * time.Second)
 	collector.StartPeriodic(func(m metrics.NodeMetrics) {
@@ -629,6 +639,11 @@ func runWorker() {
 		}
 		identityForPersist.WSTokenSecret = secret
 		return register.SaveIdentity(etcDir, identityForPersist)
+	})
+	// CP 经心跳响应下发实例健康巡检策略（FR-459）：阈值/动作/探针类型/熔断阈值写入巡检器生效值，
+	// 无需重启即生效；本地开关（worker.health_scan_disabled）为硬关，CP 无法远程开启。
+	hb.SetHealthPolicyApplier(func(p process.HealthPolicy) {
+		healthScanner.SetPolicy(p)
 	})
 	hb.Start()
 	defer hb.Stop()

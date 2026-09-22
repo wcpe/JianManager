@@ -101,7 +101,7 @@ func TestReportOrphanAudit_AuthRejected(t *testing.T) {
 	require.Empty(t, rec.calls)
 }
 
-// TestReportOrphanAudit_AllowedActions FR-456 N2：白名单内五个动作全部放行（与 spec 审计动作表一致）。
+// TestReportOrphanAudit_AllowedActions FR-456 N2 / FR-459：白名单内动作全部放行（与 spec 审计动作表一致）。
 func TestReportOrphanAudit_AllowedActions(t *testing.T) {
 	for _, action := range []string{
 		"orphan.scan_detected",
@@ -109,6 +109,11 @@ func TestReportOrphanAudit_AllowedActions(t *testing.T) {
 		"orphan.scan_dispose_blocked",
 		"orphan.dispose_blocked",
 		"orphan.dispose_reaped",
+		// FR-459 健康巡检动作。
+		"health.dead_detected",
+		"health.selfheal_restart",
+		"health.circuit_broken",
+		"health.circuit_released",
 	} {
 		t.Run(action, func(t *testing.T) {
 			h, _, node, rec := newOrphanAuditFixture(t)
@@ -210,4 +215,48 @@ func TestReportOrphanAudit_TargetNodeBinding(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, rec.calls, 2)
+}
+
+// FR-459 复审项 11：health.* 动作的审计 targetType 应为 health（而非孤儿处置的 orphan），
+// 使健康自愈/熔断在审计面可按类型正确归类；orphan.* 仍为 orphan。
+func TestReportOrphanAudit_HealthActionTargetType(t *testing.T) {
+	h, _, node, rec := newOrphanAuditFixture(t)
+
+	_, err := h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
+		NodeUuid:   node.UUID,
+		NodeSecret: node.Secret,
+		Action:     "health.circuit_broken",
+		TargetId:   "inst-health",
+		Detail:     `{"operator":"auto","kind":"health"}`,
+		Success:    true,
+	})
+	require.NoError(t, err)
+	require.Len(t, rec.calls, 1)
+	require.Equal(t, "health", rec.calls[0].targetTyp, "health.* 动作应归 health targetType")
+
+	// 新增的「自愈重启达上限」动作同样在白名单内且归 health。
+	_, err = h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
+		NodeUuid:   node.UUID,
+		NodeSecret: node.Secret,
+		Action:     "health.selfheal_exhausted",
+		TargetId:   "inst-health",
+		Detail:     `{"operator":"auto"}`,
+		Success:    true,
+	})
+	require.NoError(t, err)
+	require.Len(t, rec.calls, 2)
+	require.Equal(t, "health", rec.calls[1].targetTyp)
+	require.Equal(t, "health.selfheal_exhausted", rec.calls[1].action)
+
+	// orphan.* 不受影响。
+	_, err = h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
+		NodeUuid:   node.UUID,
+		NodeSecret: node.Secret,
+		Action:     "orphan.dispose_reaped",
+		TargetId:   "inst-health",
+		Success:    true,
+	})
+	require.NoError(t, err)
+	require.Len(t, rec.calls, 3)
+	require.Equal(t, "orphan", rec.calls[2].targetTyp)
 }
