@@ -7,8 +7,11 @@ import { extractSourceVersion, resolveReleaseMetadata } from './release-metadata
 test('master 推送与正式 tag 必须触发 CI', () => {
   const ciWorkflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
   const releaseWorkflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
-  assert.match(ciWorkflow, /^    branches:\s*\['\*\*'\]\s*$/m)
+  // 单主干 GitHub Flow：CI 须在主干 master 推送时触发（主干始终可发布），
+  // 短分支的门禁由 pull_request 承担，故 branches 只列 master。
+  assert.match(ciWorkflow, /^  push:\r?\n(?:    .*\r?\n)*?    branches:\s*\[master\]\s*$/m)
   assert.match(ciWorkflow, /^  push:\r?\n(?:    .*\r?\n)*?    tags:\s*\['v\*'\]\s*$/m)
+  assert.match(ciWorkflow, /^  pull_request:\s*$/m)
   assert.doesNotMatch(ciWorkflow, /actions\/setup-go@v5/)
   assert.match(ciWorkflow, /actions\/setup-go@v7/)
   assert.match(releaseWorkflow, /name: Checkout（读取源码版本与当前提交 tag）/)
