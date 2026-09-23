@@ -347,17 +347,53 @@ func TestPreflight_WorkDirBusy(t *testing.T) {
 			{PID: 1234, Cmdline: "java -jar server.jar nogui", Cwd: workDir},
 		}, nil
 	}
-	err := checkWorkDirBusy(workDir)
+	err := checkWorkDirBusy(workDir, 0)
 	require.Error(t, err, "目录下有活进程应失败")
 	assert.Contains(t, err.Error(), "1234")
 	assert.Contains(t, err.Error(), "可能为未纳管进程或残留，请先接管或清理")
 
-	assert.NoError(t, checkWorkDirBusy(otherDir), "其它目录不应被牵连")
-	assert.NoError(t, checkWorkDirBusy(""), "空工作目录由 work_dir 项负责，本项放行")
+	assert.NoError(t, checkWorkDirBusy(otherDir, 0), "其它目录不应被牵连")
+	assert.NoError(t, checkWorkDirBusy("", 0), "空工作目录由 work_dir 项负责，本项放行")
 
 	// 进程枚举失败时不拦启动（只告警降级）。
 	preflightListProcesses = func() ([]ScannedProcess, error) { return nil, os.ErrPermission }
-	assert.NoError(t, checkWorkDirBusy(workDir))
+	assert.NoError(t, checkWorkDirBusy(workDir, 0))
+}
+
+// TestPreflight_WorkDirBusy_ExcludesOwnProcessTree FR-471 回归修复：work_dir_busy 必须排除
+// **本实例自己的进程树**（根 + 后代），否则重启会被自己挡下。
+//
+// 缺陷现场（真机）：重启运行中的 r3-z1-g2 时被判「工作目录下已有活进程」，占用的正是它自己的 java——
+// CP 在**停止之前**调用预检，此刻实例的 daemon wrapper 与 java 都还在。若不排除自身，任何 RUNNING
+// 实例的「重启」都无法执行。修复后：自身进程树不计占用，而**外部/残留**进程仍照拦。
+func TestPreflight_WorkDirBusy_ExcludesOwnProcessTree(t *testing.T) {
+	orig := preflightListProcesses
+	defer func() { preflightListProcesses = orig }()
+
+	workDir := t.TempDir()
+	// 根 5000（wrapper）→ 5001（sh -c）→ 5002（java，占目录）；另有外来 9000 也占同目录。
+	preflightListProcesses = func() ([]ScannedProcess, error) {
+		return []ScannedProcess{
+			{PID: 5000, PPID: 1, Cmdline: "jianmanager-worker daemon", Cwd: "/"},
+			{PID: 5001, PPID: 5000, Cmdline: "sh -c java -jar server.jar", Cwd: workDir},
+			{PID: 5002, PPID: 5001, Cmdline: "java -jar server.jar nogui", Cwd: workDir},
+		}, nil
+	}
+	assert.NoError(t, checkWorkDirBusy(workDir, 5000),
+		"实例自己的进程树（含后代）不得被判为工作目录占用，否则重启被自己挡下")
+
+	// 混入一个外来进程（非自身后代）：仍应判占用。
+	preflightListProcesses = func() ([]ScannedProcess, error) {
+		return []ScannedProcess{
+			{PID: 5000, PPID: 1, Cmdline: "jianmanager-worker daemon", Cwd: "/"},
+			{PID: 5002, PPID: 5000, Cmdline: "java -jar server.jar nogui", Cwd: workDir},
+			{PID: 9000, PPID: 1, Cmdline: "java -jar other.jar nogui", Cwd: workDir},
+		}, nil
+	}
+	err := checkWorkDirBusy(workDir, 5000)
+	require.Error(t, err, "外来进程占用仍应被判为占用")
+	assert.Contains(t, err.Error(), "9000")
+	assert.NotContains(t, err.Error(), "5002", "自身进程不应出现在占用提示里")
 }
 
 // TestPreflight_PortFree FR-471 预检正反各一例：真占一个端口 → 失败并带端口号；空闲端口 → 通过；
@@ -442,6 +478,60 @@ func TestManager_PreflightStart_IncludesFR471Checks(t *testing.T) {
 	}
 	assert.Contains(t, failed["work_dir_busy"], "4321")
 	assert.Contains(t, failed["port_free"], "25599")
+}
+
+// TestManager_PreflightStart_SkipsOccupancyWhenRunning FR-471 回归修复：实例处于**运行类状态**时，
+// 现场占用两项（work_dir_busy / port_free）必须跳过。
+//
+// 缺陷现场（真机）：重启 RUNNING 实例被自己的 java 挡下——先被 work_dir_busy 拒（进程占着工作目录），
+// 修掉进程树排除后又因 port_free 拒（自己的 java 正监听 server-port）。CP 在停止之前调用预检，
+// 故运行类状态下这两项必然「命中自己」。修复：仅当实例不在运行类状态时才检查。
+func TestManager_PreflightStart_SkipsOccupancyWhenRunning(t *testing.T) {
+	origList, origPort := preflightListProcesses, preflightPortFree
+	defer func() { preflightListProcesses, preflightPortFree = origList, origPort }()
+	withJavaProbe(t, func(string) (int, bool) { return 21, true })
+
+	workDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "server.jar"), []byte("x"), 0o644))
+	m := NewManager(t.TempDir())
+	uuid := "preflight-running"
+	require.NoError(t, m.Create(uuid, "实例", "java -jar server.jar nogui", "stop", workDir, nil, false, ProcessTypeDirect, "/opt/jdk21", "", 0, 0))
+	m.SetServerPort(uuid, 25566)
+
+	// 现场「有占用」：目录有活进程、端口被监听。若照常检查必然失败。
+	preflightListProcesses = func() ([]ScannedProcess, error) {
+		return []ScannedProcess{{PID: 7777, Cmdline: "java -jar server.jar", Cwd: workDir}}, nil
+	}
+	preflightPortFree = func(port int) error { return fmt.Errorf("端口 %d 已被监听", port) }
+
+	// RUNNING 态：两项跳过 → 仅三个基础项。
+	m.mu.Lock()
+	m.instances[uuid].State = StateRunning
+	m.mu.Unlock()
+	checks, err := m.PreflightStart(uuid)
+	require.NoError(t, err)
+	names := make([]string, 0, len(checks))
+	for _, c := range checks {
+		names = append(names, c.Name)
+		assert.True(t, c.OK, "运行类状态下 %s 不应失败：%s", c.Name, c.Message)
+	}
+	assert.Equal(t, []string{"java_runtime", "work_dir", "launch_target"}, names,
+		"运行类状态应跳过现场占用两项（否则重启被自己挡下）")
+
+	// STOPPED 态：两项恢复 → 外部占用照拦（这才是 FR-471 要防的双开）。
+	m.mu.Lock()
+	m.instances[uuid].State = StateStopped
+	m.mu.Unlock()
+	checks, err = m.PreflightStart(uuid)
+	require.NoError(t, err)
+	failed := map[string]string{}
+	for _, c := range checks {
+		if !c.OK {
+			failed[c.Name] = c.Message
+		}
+	}
+	assert.Contains(t, failed["work_dir_busy"], "7777", "STOPPED 时外部占用必须被拦")
+	assert.Contains(t, failed["port_free"], "25566", "STOPPED 时端口占用必须被拦")
 }
 
 // TestCheckPortFree_RealListener 直测真实端口探测实现（不经替换桩）。

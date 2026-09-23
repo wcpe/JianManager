@@ -87,6 +87,7 @@ type OrphanFinding struct {
 // ScannedProcess 进程枚举快照（供 direct 孤儿扫描；可由测试注入）。
 type ScannedProcess struct {
 	PID     int
+	PPID    int // 父进程 PID（用于按进程树归属判定，如 preflight 排除实例自身进程树，FR-471）
 	Cmdline string
 	Cwd     string
 }
@@ -655,7 +656,8 @@ func defaultListProcesses() ([]ScannedProcess, error) {
 			continue
 		}
 		cwd, _ := p.Cwd()
-		out = append(out, ScannedProcess{PID: int(p.Pid), Cmdline: cmdline, Cwd: cwd})
+		ppid, _ := p.Ppid()
+		out = append(out, ScannedProcess{PID: int(p.Pid), PPID: int(ppid), Cmdline: cmdline, Cwd: cwd})
 	}
 	return out, nil
 }
