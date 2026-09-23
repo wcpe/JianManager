@@ -17,6 +17,10 @@
 # bot-quality：apps/bot-worker 质量门禁（npm 自管、不入 pnpm workspace，见 ADR-064）——
 #   npm ci 后依次执行生产依赖审计、类型检查、lint 与构建；
 #   npm 缓存以 apps/bot-worker/package-lock.json 为 key。
+#
+# workflow-contract：发布工作流契约闸（脚本 release-metadata.test.mjs）。
+#   断言 ci.yml / release.yml 的触发条件、runner 与版本来源；原先只在 release.yml 里跑，
+#   而 release.yml 不挂 PR，故契约被改坏时 PR 全绿、合入主干才红。前移到 PR 门禁堵住该缺口。
 
 name: ci
 
@@ -206,3 +210,22 @@ jobs:
           go test ./internal/controlplane/service/ -run 'AgentToken|AgentGate' -count=1
           go test ./internal/controlplane/router/ -run AgentGate -count=1
           go test ./apps/jmagent/... -count=1
+
+  # 工作流契约闸：校验 ci.yml / release.yml 的触发条件、runner 与版本来源不被静默改坏。
+  # 这些断言原先只在 release.yml 的 metadata job 里跑，而 release.yml 刻意不挂 PR
+  # （PR 的 ref 无法解析出合法版本），导致契约被改坏时 PR 全绿、合入主干才红。
+  workflow-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 校验发布工作流契约（触发条件 / runner / 版本来源）
+        run: node --test scripts/release-metadata.test.mjs

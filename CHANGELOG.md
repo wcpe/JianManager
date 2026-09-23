@@ -8,6 +8,9 @@
 
 > 本段为下一开发窗口归档区；正式发版时整理为新版本段。
 
+### 修复
+- **工作流契约测试未在 PR 上执行，导致 PR 全绿而合入主干才红（本次工作流变更自身暴露）**：`scripts/release-metadata.test.mjs` 断言 ci.yml 的推送分支为 `branches: ['**']`，而单主干改造把它收窄成了 `[master]`，该断言随之失败。**问题不在断言本身，而在于它只在 `release.yml` 的 metadata job 里跑**——而 `release.yml` 刻意不挂 PR（PR 的 ref 无法解析出合法版本），于是这道闸在 PR 阶段完全失效：PR 上 9 项检查全绿，squash 合入 `master` 后 `Release` 才亮红。现做两件事：①断言改为按单主干语义校验（`branches: [master]` + `tags: ['v*']` + 存在 `pull_request`），并加注释说明为何只列 master；②在 `ci.yml` 新增 `workflow-contract` job，把该契约测试**前移到 PR 门禁**，堵住「契约被改坏但 PR 无感」的缺口。同类断言（`release-workflow-contract.test.ts`）由 `web-static` 的 vitest 在 PR 上执行，本次 runner 断言即由它拦下，故无需重复迁移。
+
 ### 变更
 - **协作工作流统一为单主干 GitHub Flow（分支 / 合并 / 发布 / Issue·PR 整合规范）**：此前仓库事实上是双分支（`dev` 日常开发 + `master` 发布），但这条规则从未写进文档，`dev` 已积压 40 个未合提交、`version.go` 停在已发布的裸 `0.22.0` 形成漂移，而「禁直推主干」只停留在文字、没有分支保护兜底。现统一为**单主干**：主干唯一 `master`、始终可发布；一切变更（含发版提交）必须经 PR 合入，不允许直推；短分支命名收敛为 `feature/*`、`fix/*`、`refactor/*`、`hotfix/*`（从发布 tag 切出）、`docs/*`、`chore/*`；合并优先 rebase + fast-forward，禁止 squash 多意图 PR、禁止「整版本一个大提交」、合后删分支；回滚用 `git revert`，严禁 force push 主干 / `--no-verify` / amend 已 push 提交。
   - **发布渠道收窄为「仅打 tag」**：唯一发布动作是推送 `vX.Y.Z` tag。`master` push 与新增的手工触发只做构建校验，不再产出发布物。
