@@ -905,7 +905,148 @@ function hasSLOEvidence(scope: 'platform' | 'node' | 'instance', targetId: strin
   return !!node && node.status === 1 && !node.deletedAt
 }
 
+/** 全景观测读模型用到的节点快照字段（从 db('nodes') 派生，仅为本地类型收窄）。 */
+interface ObsNode {
+  id: number
+  uuid: string
+  name: string
+  status: number
+  cpuUsage?: number
+  memoryUsage?: number
+  diskUsage?: number
+  deletedAt?: string
+}
+
+/** 全景观测读模型用到的实例快照字段（从 db('instances') 派生）。 */
+interface ObsInstance {
+  nodeId: number
+  status: string
+}
+
+/** 健康墙分级（对齐前端 HealthLevel）。 */
+type HealthWallLevel = 'offline' | 'stale' | 'degraded' | 'healthy'
+
+/** 健康墙单格（对齐前端 HealthWallNode）。 */
+interface HealthWallNodeInfo {
+  nodeId: number
+  nodeUuid: string
+  name: string
+  freshness: 'fresh' | 'stale' | 'offline'
+  cpuPct: number | null
+  memPct: number | null
+  diskPct: number | null
+  running: number
+  crashed: number
+  stopped: number
+  degraded?: number
+  activeAlerts: number
+  botActive: number | null
+  botConnecting: number | null
+  level: HealthWallLevel
+  href: string
+}
+
 export const handlers = [
+  // ===== 平台全景观测（FR-402 / FR-461） =====
+  //
+  // 说明（FR-461 补齐）：`/observability/overview` 与 `/observability/health-wall` 是平台首页
+  // 与总览页的读模型，此前 devmock 缺这两条 handler——前端请求 MSW 不拦截即透传 vite proxy，
+  // 真后端不存在时报 ECONNREFUSED，E2E（navigation-benchmark / metrics-probe）随之失败。
+  // 此处按真实响应结构（api/metrics.ts 的 PlatformObservabilityOverviewResponse / HealthWallResponse）
+  // 从 db('nodes') + db('instances') 派生，保持「有内容且自洽」。
+  domainRoute('get', '/observability/overview', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const nodes = db<ObsNode>('nodes').filter((n) => !n.deletedAt)
+    const insts = db<ObsInstance>('instances')
+    const online = nodes.filter((n) => n.status === 1).length
+    return HttpResponse.json({
+      sampledAt: new Date().toISOString(),
+      health: {
+        nodeCount: nodes.length,
+        onlineNodeCount: online,
+        staleNodeCount: 0,
+        offlineNodeCount: nodes.length - online,
+        runningInstanceCount: insts.filter((i) => i.status === 'RUNNING').length,
+        crashedInstanceCount: insts.filter((i) => i.status === 'CRASHED').length,
+        stoppedInstanceCount: insts.filter((i) => i.status === 'STOPPED').length,
+      },
+      resources: {
+        cpuPct: 47,
+        loadPct: 38,
+        memoryUsedBytes: 120 * GIB,
+        memoryTotalBytes: 320 * GIB,
+        freshness: 'fresh',
+      },
+      bots: {
+        sharedRuntime: true,
+        notice: 'Bot Worker 为节点级共享进程，资源不归属单个 Bot 或会话。',
+        nodeCount: nodes.length,
+        botWorkerRssBytes: 96 * MIB,
+        botWorkerCpuPct: 12,
+        workerProcessRssBytes: 32 * MIB,
+        workerProcessCpuPct: 3,
+        activeCount: 24,
+        connectingCount: 2,
+        eventLoopP95Ms: 18,
+        unavailable: [],
+      },
+      alerts: [],
+      tasks: [],
+      exceptions: [],
+    })
+  }),
+
+  // FR-461 健康墙：逐节点只读快照 + 分级。排序键与真后端一致（level/cpu/mem/disk/instances）。
+  domainRoute('get', '/observability/health-wall', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const sort = new URL(info.request.url).searchParams.get('sort') ?? 'level'
+    const nodes = db<ObsNode>('nodes').filter((n) => !n.deletedAt)
+    const insts = db<ObsInstance>('instances')
+    const nodes4: HealthWallNodeInfo[] = nodes.map((n) => {
+      const mine = insts.filter((i) => i.nodeId === n.id)
+      const crashed = mine.filter((i) => i.status === 'CRASHED').length
+      const online = n.status === 1
+      // 与真后端分级一致：离线 → offline；在线但有崩溃实例 → degraded；其余 healthy。
+      const level: HealthWallLevel = !online ? 'offline' : crashed > 0 ? 'degraded' : 'healthy'
+      return {
+        nodeId: n.id,
+        nodeUuid: n.uuid,
+        name: n.name,
+        freshness: online ? 'fresh' : 'offline',
+        cpuPct: Math.round((n.cpuUsage ?? 0) * 100),
+        memPct: Math.round((n.memoryUsage ?? 0) * 100),
+        diskPct: Math.round((n.diskUsage ?? 0) * 100),
+        running: mine.filter((i) => i.status === 'RUNNING').length,
+        crashed,
+        stopped: mine.filter((i) => i.status === 'STOPPED').length,
+        degraded: 0,
+        activeAlerts: 0,
+        botActive: 0,
+        botConnecting: 0,
+        level,
+        href: `/monitoring?node=${n.uuid}`,
+      }
+    })
+    const levelRank: Record<HealthWallLevel, number> = { offline: 0, degraded: 1, stale: 2, healthy: 3 }
+    const sorted = [...nodes4].sort((a, b) => {
+      switch (sort) {
+        case 'cpu':
+          return (b.cpuPct ?? 0) - (a.cpuPct ?? 0)
+        case 'mem':
+          return (b.memPct ?? 0) - (a.memPct ?? 0)
+        case 'disk':
+          return (b.diskPct ?? 0) - (a.diskPct ?? 0)
+        case 'instances':
+          return b.running + b.crashed + b.stopped - (a.running + a.crashed + a.stopped)
+        default:
+          return levelRank[a.level] - levelRank[b.level]
+      }
+    })
+    return HttpResponse.json({ nodes: sorted })
+  }),
+
   // ===== metrics（FR-060/061） =====
   domainRoute('get', '/metrics/overview', (info) => {
     const denied = requireAuth(info)

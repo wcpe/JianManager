@@ -11,7 +11,10 @@ import { login } from './helpers'
  * 无需等过渡轮询。用 SPA 点侧栏链接进页（保留会话内存库联动），不 page.goto 以免重置内存库。
  */
 
-/** 实例页默认卡片视图：每张工作台卡是含实例名按钮的卡片容器（带 bg-card）。 */
+/**
+ * 工作台卡：每张卡是含实例名按钮的卡片容器（带 bg-card）。
+ * FR-452 起 `/instances` 默认走分组树表，故 gotoInstances 会显式切到卡片视图再断言。
+ */
 function instanceCard(page: Page, name: string): Locator {
   return page.locator('div.bg-card').filter({
     has: page.getByRole('button', { name, exact: true }),
@@ -26,6 +29,7 @@ function cardStatus(card: Locator): Locator {
 /**
  * 登录后经侧栏「全部服务器」链接 SPA 进入实例管理页（保留会话内状态联动）。
  * 「全部服务器」在可折叠的「服务器」域下，默认展开；若被折叠则先点组头展开再点链接。
+ * FR-452 起默认视图是分组树表（`view=list`），本 spec 断言工作台卡，故进页后显式切到卡片视图。
  */
 async function gotoInstances(page: Page): Promise<void> {
   const link = page.getByRole('link', { name: '全部服务器', exact: true })
@@ -34,6 +38,11 @@ async function gotoInstances(page: Page): Promise<void> {
   }
   await link.click()
   await expect(page.locator('[data-page="instances"]')).toBeVisible()
+  // 显式切卡片视图（ViewToggle aria-label = grouping.viewCard「卡片视图」）。
+  // 卡片视图按分组维度分段渲染，页面上会有多个 instances-card-virtual 分段容器，
+  // 故以切换按钮的 aria-pressed 作为「已进入卡片视图」的就绪信号。
+  await page.getByRole('button', { name: '卡片视图' }).click()
+  await expect(page.getByRole('button', { name: '卡片视图' })).toHaveAttribute('aria-pressed', 'true')
 }
 
 test.describe('实例生命周期（mock 模式，FR-211）', () => {

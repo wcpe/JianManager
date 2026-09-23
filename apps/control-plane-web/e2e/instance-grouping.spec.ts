@@ -11,7 +11,13 @@ test('FR-165 实例组织分组 多级嵌套树', async ({ page }) => {
   await login(page)
   await page.goto('/instances')
 
-  await page.getByRole('button', { name: '组织分组' }).click()
+  // FR-452：分组维度控件由独立按钮改为 Radix Select（aria-label = grouping.groupBy「分组」）。
+  // 选「组织分组」把列表切到 groupTree 维度，组管理入口随之出现在工具栏。
+  await page.getByRole('combobox', { name: '分组' }).click()
+  await page.getByRole('option', { name: '组织分组' }).click()
+
+  // groupTree 维度下才渲染「管理分组」入口，点开组树面板。
+  await page.getByRole('button', { name: '管理分组' }).click()
 
   const tree = page.getByRole('tree', { name: '分组树' })
   await expect(tree).toBeVisible()

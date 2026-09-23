@@ -39,12 +39,15 @@ test('FR-142 运行态：当前健康阈值色条 + 探针卡 + 历史曲线阈�
 
 test('FR-142 停机态：当前指标折叠不占大块空白', async ({ page }) => {
   await login(page)
+  // 取「停机且具备 metrics 能力」的种子：实例 21（creative-plot，minecraft_java:backend，STOPPED）。
+  // 原用实例 2（lobby-proxy）已不再适用——FR-445/448 能力画像下 proxy 画像不含 metrics，
+  // `?tab=metrics` 会回落到概览页，看不到指标卡折叠。
   // 停机态健康条依赖实例详情状态，导航前监听该请求，避免整套慢速运行时抢在状态回填前断言。
   const instanceResponsePromise = page.waitForResponse((response) => {
     const request = response.request()
-    return request.method() === 'GET' && new URL(response.url()).pathname === '/api/v1/instances/2'
+    return request.method() === 'GET' && new URL(response.url()).pathname === '/api/v1/instances/21'
   })
-  await page.goto('/instances/2?tab=metrics')
+  await page.goto('/instances/21?tab=metrics')
   const instanceResponse = await instanceResponsePromise
   expect(instanceResponse.ok()).toBe(true)
 
