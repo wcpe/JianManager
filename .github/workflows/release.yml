@@ -3,13 +3,15 @@
 # 分支模型：单主干 GitHub Flow，主干唯一 master，一切变更经 PR 合入。
 #
 # 触发：
-#   - push 到 master              → 仅构建校验（master 始终可发布），不发布。
-#   - push tag `v*`（如 v0.22.0） → 唯一发布动作：构建 + 建 GitHub Release。
-#   - workflow_dispatch           → 手工触发构建校验（沿用当前 ref 解析版本），不发布。
+#   - push tag `v*`（如 v0.22.1） → 唯一发布动作：构建 + 建 GitHub Release。
+#   - workflow_dispatch           → 手工重跑（须在正式 tag ref 上）。
 #
-# 刻意**不**挂 pull_request：PR 的 ref 是 refs/pull/N/merge，metadata job 无法解析出
-#   合法版本（裸版本分支要求同 SHA 存在 vX.Y.Z tag，见 scripts/release-metadata.mjs），
-#   加了会让每个 PR 门禁无故失败。PR 门禁由 ci.yml（web-quality / bot-quality / agent-gate）承担。
+# 刻意**不**监听主干 push，也不监听 pull_request：
+#   metadata job 用 scripts/release-metadata.mjs 解析版本，该脚本要求「裸 X.Y.Z 版本必须存在
+#   同 SHA 的 vX.Y.Z tag」。主干/开发分支上的源码是裸版本或 X.Y.Z-dev，两者都不满足，会直接
+#   失败（实测：主干 push 时 metadata job 0s 报「普通分支源码使用裸版本 0.22.0，但当前提交没有
+#   同 SHA tag v0.22.0」）；PR 的 ref 是 refs/pull/N/merge，同样解析不出合法版本。
+#   故主干与 PR 的构建校验统一由 ci.yml 承担，本工作流只负责发版。
 # 硬门禁：正式 tag 对应提交必须已在 origin/master 历史上（release-metadata.mjs 校验）。
 #   禁止从 feature/* 等非主干 tip 直接打 tag 出正式版；顺序必须"先合 PR 到主干，后打 tag"，
 #   否则该提交掉出 --generate-notes 的统计区间（只统计两 tag 间合并的 PR）。
@@ -31,7 +33,6 @@ name: Release
 
 on:
   push:
-    branches: [master]
     tags: ['v*']
   workflow_dispatch:
 

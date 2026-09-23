@@ -1264,7 +1264,7 @@ proxy:
 - **test**：还原同一批 embed 资产后运行 `go build ./...`、`go vet ./...`、`go test ./...`，以及前端 lint、vitest、生产构建和 Playwright E2E；门禁失败则不进入制品构建。
 - **build**：matrix 交叉编译 `linux/amd64` 与 `windows/amd64` 的 Control Plane / Worker 共 4 个最终二进制；构建 CP 前还注入同版本的两平台 Worker 与 manifest。全部二进制、Bot 归档和 Worker manifest 只消费 metadata 的同一 `version`。
 - **smoke**：四项矩阵逐一验证最终产物——两个 Linux 二进制在 `ubuntu-24.04` 原生执行，两个 Windows `.exe` 在 `windows-latest` 原生执行；`--version` 必须退出码 0、stdout 严格等于 metadata 版本且 stderr 为空。`release` 直接依赖全部 smoke 成功。全部 runner 显式锁定版本，不用 `-latest` 浮动标签。
-- **release**：汇总 4 个二进制并生成 `checksums.txt`（ADR-036 命名 / sha256 契约），说明由 `gh release create --generate-notes` 自动生成（只统计相邻两 tag 间合并的 PR，故必须「先合 PR 到主干、后打 tag」）。唯一发布动作是 push tag `vX.Y.Z`；push `master` 只做构建校验，不再产出发布物，`latest` 滚动预发布渠道已移除。
+- **release**：汇总 4 个二进制并生成 `checksums.txt`（ADR-036 命名 / sha256 契约），说明由 `gh release create --generate-notes` 自动生成（只统计相邻两 tag 间合并的 PR，故必须「先合 PR 到主干、后打 tag」）。唯一发布动作是 push tag `vX.Y.Z`；`release.yml` 不监听主干 push 与 `pull_request`（非 tag ref 上源码版本解析不出合法版本），主干与 PR 的构建校验由 `ci.yml` 承担，`latest` 滚动预发布渠道已移除。
 
 ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布前 smoke，不重写其历史；ADR-036 的产物命名、校验和 stable/prerelease 渠道契约继续生效。当前实现尚未按用户选择推送远端，GitHub-hosted runner、artifact 传递、权限与实际 Release 创建仍为 **Actions 待验**。
 

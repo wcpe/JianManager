@@ -9,19 +9,21 @@
 > 本段为下一开发窗口归档区；正式发版时整理为新版本段。
 
 ### 修复
+- **release.yml 在主干 push 上必然失败：metadata 解析裸版本报错，并与 ci 重复触发（上线后真机暴露）**：`Release` workflow 监听 `push: branches: [master]`，而 `scripts/release-metadata.mjs` 规定「裸 `X.Y.Z` 版本必须存在同 SHA 的 `vX.Y.Z` tag」——`version.go` 当前仍是已发布的裸 `0.22.0`，主干 HEAD 已不再有该 tag（tag 指向旧发版提交），于是**每次主干 push 的 metadata job 都在 0s 失败**，报「普通分支源码使用裸版本 0.22.0，但当前提交没有同 SHA tag v0.22.0」。这也让主干 push 上 `ci` 与 `Release` 两条流水线重复触发，其中 `Release` 必红。现让 `release.yml` **只监听正式 tag**（保留 `workflow_dispatch` 供在 tag ref 上手工重跑），主干与 PR 的构建校验统一由 `ci.yml` 承担——不丢覆盖：发布构建本就只在打 tag 时才需要，质量门禁 ci.yml 已在主干 push 上全跑。
+- **契约闸漏了「release.yml 触发条件」这一项，导致「PR 全绿、主干才红」再次发生**：上一轮把契约测试前移到 `workflow-contract` job 后，覆盖面仍不含 release.yml 的触发条件。现补断言：release.yml 必须只以 `tags: ['v*']` 触发，不得监听分支 push、不得监听 `pull_request`，使此类回归在 PR 阶段即被拦下。
 - **工作流契约测试未在 PR 上执行，导致 PR 全绿而合入主干才红（本次工作流变更自身暴露）**：`scripts/release-metadata.test.mjs` 断言 ci.yml 的推送分支为 `branches: ['**']`，而单主干改造把它收窄成了 `[master]`，该断言随之失败。**问题不在断言本身，而在于它只在 `release.yml` 的 metadata job 里跑**——而 `release.yml` 刻意不挂 PR（PR 的 ref 无法解析出合法版本），于是这道闸在 PR 阶段完全失效：PR 上 9 项检查全绿，squash 合入 `master` 后 `Release` 才亮红。现做两件事：①断言改为按单主干语义校验（`branches: [master]` + `tags: ['v*']` + 存在 `pull_request`），并加注释说明为何只列 master；②在 `ci.yml` 新增 `workflow-contract` job，把该契约测试**前移到 PR 门禁**，堵住「契约被改坏但 PR 无感」的缺口。同类断言（`release-workflow-contract.test.ts`）由 `web-static` 的 vitest 在 PR 上执行，本次 runner 断言即由它拦下，故无需重复迁移。
 
 ### 变更
 - **协作工作流统一为单主干 GitHub Flow（分支 / 合并 / 发布 / Issue·PR 整合规范）**：此前仓库事实上是双分支（`dev` 日常开发 + `master` 发布），但这条规则从未写进文档，`dev` 已积压 40 个未合提交、`version.go` 停在已发布的裸 `0.22.0` 形成漂移，而「禁直推主干」只停留在文字、没有分支保护兜底。现统一为**单主干**：主干唯一 `master`、始终可发布；一切变更（含发版提交）必须经 PR 合入，不允许直推；短分支命名收敛为 `feature/*`、`fix/*`、`refactor/*`、`hotfix/*`（从发布 tag 切出）、`docs/*`、`chore/*`；合并优先 rebase + fast-forward，禁止 squash 多意图 PR、禁止「整版本一个大提交」、合后删分支；回滚用 `git revert`，严禁 force push 主干 / `--no-verify` / amend 已 push 提交。
-  - **发布渠道收窄为「仅打 tag」**：唯一发布动作是推送 `vX.Y.Z` tag。`master` push 与新增的手工触发只做构建校验，不再产出发布物。
+  - **发布渠道收窄为「仅打 tag」**：`release.yml` 只监听 `vX.Y.Z` tag（保留 `workflow_dispatch` 供在 tag ref 上手工重跑），不再监听主干 push 与 `pull_request`；主干与 PR 的构建校验统一由 `ci.yml` 承担。
   - **Release 说明改为自动生成**：由 `gh release create --generate-notes` 生成，只统计相邻两 tag 之间合并的 PR——直推主干的提交不会进说明，这正是强制走 PR 的直接动因；因此顺序必须是「先合 PR 到主干，再打 tag」，反了会掉出统计区间。**迁移**：说明来源由 `CHANGELOG.md` 版本段落（`scripts/changelog-extract.mjs`）改为自动生成，读法随之改变；`CHANGELOG.md` 本身仍按 `doc-evolution.md` 维护，不再作为 Release 正文。
-  - **移除 `latest` 滚动预发布渠道**：原先 `master` 的每次 push 都会覆盖固定 tag `latest` 的预发布，现整条渠道取消，`master` push 只验证可构建。**迁移**：依赖 `latest` 预发布产物的下游须改用正式 `vX.Y.Z` tag 发布物。
+  - **移除 `latest` 滚动预发布渠道**：原先 `master` 的每次 push 都会覆盖固定 tag `latest` 的预发布，现整条渠道取消，主干 push 不再触发任何发布流水线。**迁移**：依赖 `latest` 预发布产物的下游须改用正式 `vX.Y.Z` tag 发布物。
   - **版本号单一真源不变**：仍为 `internal/version/version.go`（ADR-065），**未**引入根 `VERSION` / `gradle.properties` 造成双源。
   - **新增 `dependabot.yml`**：覆盖 gomod（根）、npm（pnpm workspace 根）、npm（`apps/bot-worker`，npm 自管见 ADR-064）、gradle（`client-updater`）、github-actions 五处，weekly、每周上限 5 个 PR、提交前缀统一 `build(deps)`；`org.junit.jupiter:junit-jupiter` 的 major 更新先 ignore（客户端更新器以 `--release 8` 构 Java8 字节码，受兼容矩阵约束）。
   - **新增 `codeql.yml` 代码扫描**：Go（autobuild，`go build ./...` 已验证可直接跑通）+ JavaScript/TypeScript（`build-mode: none`，纯源码抽取）双语言矩阵，结果进仓库 Security → Code scanning。触发为主干 push + 每周一定时 + 手工；**刻意不挂 PR**——`ci.yml` 已监听 PR，两个工作流同时监听会让同一 PR 每次推送各起一个 run，故安全扫描改在合入主干后立即跑。**注意**：私有仓库使用 CodeQL 需已启用 GitHub Advanced Security（code scanning），公开仓库免费。
   - **契约测试与文档同步**：`release-workflow-contract.test.ts` 的 runner 断言、`docs/ARCHITECTURE.md` 的发布流程描述、`docs/adr/074` 与 `docs/specs/release-pipeline/spec.md` 的 runner 表随之更新，避免文档与工作流真值漂移。
   - **CI runner 固定为 `ubuntu-24.04`**：原先 CI / 发布全用 `ubuntu-latest`，会命中「`ubuntu-latest` 将于 2026-10-19 起迁移到 Ubuntu 26」的迁移通知并带来非预期环境漂移；现全部改为显式 `ubuntu-24.04`。发布流程的 `softprops/action-gh-release` 已换成 `gh release create`，消除其 Node.js 20 弃用告警。Windows runner 沿用 `windows-latest`（本次通知未涉及）。
-  - **CI 触发收窄**：`ci.yml` 由「所有分支 push + PR + tag」收窄为「PR + 主干 `master` push + `v*` tag」——短分支的门禁由 PR 承担，不再对任意分支重复跑门禁。`release.yml` **刻意不挂 `pull_request`**：PR 的 ref 为 `refs/pull/N/merge`，`release-metadata.mjs` 无法解析出合法版本（裸版本分支要求同 SHA 存在 `vX.Y.Z` tag），挂上会让每个 PR 门禁无故失败。
+  - **CI 触发收窄**：`ci.yml` 由「所有分支 push + PR + tag」收窄为「PR + 主干 `master` push + `v*` tag」——短分支的门禁由 PR 承担，不再对任意分支重复跑门禁。`release.yml` **刻意既不监听 `pull_request`，也不监听主干 push**：PR 的 ref 为 `refs/pull/N/merge`，解析不出合法版本；主干上的源码是裸 `X.Y.Z`，metadata 会因找不到同 SHA 的 tag 而失败（见上修复）。主干与 PR 的构建校验统一由 `ci.yml` 承担。
   - **文档与规则同步**：`docs/CONTRIBUTING.md` §2 改写为单主干，新增 §8「分支保护（新建仓即开启）」与 §9「标签」；`.claude/rules/git-commit.md` 新增 §7 分支模型、§8 合并/回滚/禁止事项；`gate-merge.md` 的 `main` 校正为 `master` 并在发版检查中补「经 PR 合并、未直推主干」；`versioning.md` 开发态分支措辞改为主干；`.claude/rules/README.md` 索引同步；Issue / PR 模板补 `Closes #N` 与「分支合规」自检项。
   - **待人工在仓库设置中完成（提交无法自动生效）**：①为 `master` 开启分支保护——必须经 PR、必须 `web-quality` 与 `agent-gate` 通过、管理员同样受限、禁 force push、禁删除主干、建议要求线性历史；②仓库合并选项禁用 `Squash and merge`，保留 `Rebase and merge`。
 
