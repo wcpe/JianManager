@@ -381,6 +381,22 @@ func TestPreflight_PortFree(t *testing.T) {
 	assert.NoError(t, checkPortFree(0), "未配置端口不检查")
 }
 
+// TestPreflight_PortFree_NoFalsePositiveOnRepeatedProbe 回归 F7：对**同一空闲端口连续探测多次**
+// 必须始终判空闲。
+//
+// 缺陷现场（真机）：早先实现「试绑失败即判占用」，同一次启动偶发被误拒（重试即成功）——
+// 试绑会被探测自身/并发预检的瞬时监听 socket 误伤。现改为「连接探测 + 试绑有一次重试」，
+// 对空闲端口无论如何都不应误报。本用例连续探测以捕捉自碰撞类误报。
+func TestPreflight_PortFree_NoFalsePositiveOnRepeatedProbe(t *testing.T) {
+	ln := mustListenLocal(t)
+	port := listenerPort(t, ln)
+	require.NoError(t, ln.Close(), "释放端口使之为空闲")
+	// 端口刚释放，进入探测循环（含重试窗口），不得误判占用。
+	for i := 0; i < 5; i++ {
+		assert.NoError(t, checkPortFree(port), "空闲端口第 %d 次探测不应误报占用", i+1)
+	}
+}
+
 // TestManager_PreflightStart_IncludesFR471Checks FR-471：PreflightStart 在既有三项后返回
 // work_dir_busy 与 port_free 两项（docker 仍整体放行）。
 func TestManager_PreflightStart_IncludesFR471Checks(t *testing.T) {

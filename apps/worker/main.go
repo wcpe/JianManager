@@ -464,6 +464,13 @@ func runWorker() {
 		workerServer.EmitOutput(instanceID, stream, text)
 	})
 
+	// FR-471 缺陷修复：实例每次开始新一轮运行即重置其终端环形缓冲，使崩溃快照（FR-313）截取的
+	// 尾部输出只含本次运行——否则上一轮的崩溃文本会残留并被分类器按优先级取走，把本次崩溃误判成
+	// 上一轮的原因（真机实测：注入端口占用却因残留 OutOfMemoryError 行被判 oom）。
+	manager.SetInstanceStartHandler(func(instanceID string) {
+		terminalServer.ResetBuffer(instanceID)
+	})
+
 	// 桥接终端输入到进程 stdin
 	terminalServer.SetStdinHandler(func(instanceID, data string) {
 		if err := manager.SendCommand(instanceID, data); err != nil {

@@ -106,7 +106,8 @@ func newDeleteCleanupEnv(t *testing.T) (*InstanceService, *cpgrpc.ClientPool, *m
 	// Backups/InstanceSnapshot 必须迁移：删除实例的事务内要级联清理快照专属底链
 	// 并把被增量引用的底链降级（N-6/R9/R27），缺表会让删除整体报错。
 	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NetworkMember{}, &model.Task{},
-		&model.InstanceCrashSnapshot{}, &model.Backup{}, &model.InstanceSnapshot{}))
+		&model.InstanceCrashSnapshot{}, &model.Backup{}, &model.InstanceSnapshot{},
+		&model.InstanceBinaryBinding{}))
 	pool := cpgrpc.NewClientPool()
 	svc := NewInstanceService(db, nil, pool)
 	t.Cleanup(svc.Shutdown)
@@ -120,6 +121,27 @@ func newDeleteCleanupEnv(t *testing.T) (*InstanceService, *cpgrpc.ClientPool, *m
 	}
 	require.NoError(t, db.Create(inst).Error)
 	return svc, pool, node, inst
+}
+
+// TestDeleteInstanceRemovesBinaryBinding F5（FR-468）：删除实例必须级联清理其二进制版本绑定。
+//
+// 缺陷现场：绑定表无 DB 级外键，删除事务原本只清四张关系表 + 崩溃快照 + 快照底链，
+// 绑定行滞留成孤儿（真机发现：删实例后 instance_binary_bindings 仍留 1 行）。
+func TestDeleteInstanceRemovesBinaryBinding(t *testing.T) {
+	svc, pool, node, inst := newDeleteCleanupEnv(t)
+	pool.SetWorkerClientForTest(node.UUID, &fakeRemoveWorker{})
+
+	require.NoError(t, svc.db.Create(&model.InstanceBinaryBinding{
+		InstanceID: inst.ID, CurrentAssetID: 7, CurrentVersion: "1.2.3",
+		CurrentFilename: "beacon-1.2.3", PreviousAssetID: 6,
+	}).Error)
+
+	require.NoError(t, svc.Delete(inst.ID))
+
+	var n int64
+	require.NoError(t, svc.db.Model(&model.InstanceBinaryBinding{}).
+		Where("instance_id = ?", inst.ID).Count(&n).Error)
+	require.Zero(t, n, "删除实例后不得残留二进制版本绑定")
 }
 
 // 删除实例必须委托 Worker 清理工作目录（复现真机走查缺陷：删除后 worker 目录残留）。
