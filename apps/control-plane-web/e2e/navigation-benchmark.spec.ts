@@ -31,9 +31,10 @@ const ROUTES: BenchRoute[] = [
     label: '全部服务器',
     href: '/instances',
     readySelector: '[data-page="instances"]',
+    // FR-452 起 `/instances` 默认走分组树表（虚拟化 container = instances-table-virtual）。
     virtual: {
-      surfaceSelector: '[data-testid="instances-card-virtual"]',
-      itemSelector: '[data-testid="instances-card-virtual-item"]',
+      surfaceSelector: '[data-testid="instances-table-virtual"]',
+      itemSelector: '[data-testid="instances-table-virtual"] tbody tr',
       minTotal: 1000,
       maxRendered: 80,
     },
@@ -438,8 +439,8 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
   test('全部服务器首屏只走分页端点，返回后恢复滚动并附截图', async ({ page }) => {
     await page.goto('/instances?status=RUNNING&pageSize=50')
     await expect(page.locator('[data-page="instances"]'), '全部服务器页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
-    const surface = page.locator('[data-testid="instances-card-virtual"]')
-    await expect(surface, '实例卡片虚拟列表存在').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
+    const surface = page.locator('[data-testid="instances-table-virtual"]')
+    await expect(surface, '实例树表虚拟列表存在').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
     const collectInstancePaths = () =>
       page.evaluate(() =>
         ((window as Window & { __jmApiRequestPaths?: string[] }).__jmApiRequestPaths ?? []).filter((path) => path.startsWith('/api/v1/instances')),
@@ -459,7 +460,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       el.dispatchEvent(new Event('scroll', { bubbles: true }))
     })
     await expect.poll(async () => surface.evaluate((el) => Math.round(el.scrollTop)), { message: '滚动位置写入前置条件' }).toBe(352)
-    await test.info().attach('instances-card-before-detail', {
+    await test.info().attach('instances-table-before-detail', {
       body: await page.screenshot(),
       contentType: 'image/png',
     })
@@ -468,9 +469,9 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
     await expect(page.locator('[data-page="instance-console"]'), '实例详情深链就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
     await page.goBack()
     await expect(page.locator('[data-page="instances"]'), '返回全部服务器页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
-    const restored = page.locator('[data-testid="instances-card-virtual"]')
+    const restored = page.locator('[data-testid="instances-table-virtual"]')
     await expect.poll(async () => restored.evaluate((el) => Math.round(el.scrollTop)), { message: '返回后恢复列表滚动位置' }).toBeGreaterThanOrEqual(300)
-    await test.info().attach('instances-card-after-back', {
+    await test.info().attach('instances-table-after-back', {
       body: await page.screenshot(),
       contentType: 'image/png',
     })

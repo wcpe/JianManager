@@ -21,7 +21,8 @@ test.describe('FR-036 一键复制子服（mock 模式真浏览器）', () => {
   test('复制子服：打开菜单、预检资源、提交后副本实例出现', async ({ page }) => {
     const name = `fr036-clone-${Date.now()}`
 
-    await page.goto('/instances')
+    // FR-452 起 `/instances` 默认走分组树表；本用例断言工作台卡，显式带 view=card。
+    await page.goto('/instances?view=card')
     await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible()
     const sourceCard = instanceCard(page, 'creative-1')
     await expect(sourceCard).toBeVisible()

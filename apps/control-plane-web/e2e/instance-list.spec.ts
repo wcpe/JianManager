@@ -20,8 +20,8 @@ test('FR-235 实例列表首屏走服务端分页搜索，不拉裸数组', asyn
 
   await page.goto('/instances')
 
-  // 首屏虚拟渲染壳就位（默认卡片视图），data-total-count 反映 1200 规模数据集。
-  const surface = page.getByTestId('instances-card-virtual')
+  // 首屏虚拟渲染壳就位（FR-452 起默认分组树表），data-total-count 反映 1200 规模数据集。
+  const surface = page.getByTestId('instances-table-virtual')
   await expect(surface).toBeVisible()
   await expect
     .poll(async () => Number((await surface.getAttribute('data-total-count')) ?? '0'))
@@ -34,11 +34,11 @@ test('FR-235 实例列表首屏走服务端分页搜索，不拉裸数组', asyn
   // 首屏绝不请求裸数组列表端点 GET /instances（1200 全量拉取）。
   expect(instancePaths).not.toContain('/api/v1/instances')
 
-  // 先等待虚拟项实际挂载，再断言可视窗口 + overscan 远少于 1200 全量卡片。
-  const virtualItems = page.getByTestId('instances-card-virtual-item')
-  await expect.poll(() => virtualItems.count()).toBeGreaterThan(0)
-  const cardCount = await virtualItems.count()
-  expect(cardCount).toBeLessThan(80)
+  // 先等待虚拟行实际挂载，再断言可视窗口 + overscan 远少于 1200 全量行/卡片。
+  const virtualRows = surface.locator('tbody tr')
+  await expect.poll(() => virtualRows.count()).toBeGreaterThan(0)
+  const renderedCount = await virtualRows.count()
+  expect(renderedCount).toBeLessThan(80)
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-235/single-machine-instances.png', fullPage: false })
 })

@@ -7,7 +7,7 @@ import { login } from './helpers'
  * 危险动作（批量强制关服）弹二次确认并要求输入 FORCE 关键字后才放行。
  * （批量下发 payload、部分失败保留重试、状态感知禁用由 InstanceBatchBar.dom.test.tsx 单测覆盖）
  *
- * 说明：实例页默认卡片虚拟视图（FR-235），批量多选复选框在列表视图，故用 `view=list` 深链；
+ * 说明：FR-452 起实例页默认为分组树表；批量多选复选框在列表视图（树表）行内，故用 `view=list` 深链；
  * mock 生成 1200 实例（server-XXXX），status = STATUS_POOL[id%5]，故 id%5==0 为 RUNNING。
  * 用 `q=` + `status=RUNNING` 深链把可见集合钉到已知运行中实例，行复选框 aria-label = 实例名。
  * 证据落 .tmp/acceptance/FR-058/。
