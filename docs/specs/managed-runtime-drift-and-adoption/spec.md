@@ -63,6 +63,24 @@
 实例详情页与列表/卡片在 `runtimeDriftPid > 0` 时显示「运行态漂移」标记（含未纳管 PID 与命令行摘要），
 并提供**接管**按钮（写操作，走二次确认）。i18n zh/en，双主题。
 
+### 3.5 启动期孤儿处置改为非破坏（本次事故驱动）
+
+真机事故（2026-09-23）：换二进制重启 Worker 时，`RecoverDaemonInstances` 依**遗留 daemon PID 记录**
+把「wrapper 已死、Java 仍活」判为真孤儿并**强杀 Java 树**，一次打断 54 台在跑农场（其 cwd 与 in-place
+实例的 `workDir` 相同，故 FR-455① 的归属复核也**无法区分**「我们起的 java」与「他人同目录起的 java」）。
+
+旧判据的立意（防「面板 STOPPED 却占端口、实例再也起不来」）现已被本 FR 的启动冲突预检与接管入口
+非破坏地覆盖，故修订：
+
+| 路径 | 旧行为 | 新行为 |
+|---|---|---|
+| 启动恢复：wrapper 已死 / Java 活 | 按 PID 记录强杀 Java 树 | **只观测**（审计 `orphan.startup_detected_not_reaped` + WARN）、**保留 PID 记录**，交周期扫描与接管流程 |
+| 启动恢复：reconnect 失败且 wrapper 已死 | 同上强杀 | 同上只观测 |
+| 启动恢复：reconnect 失败但 wrapper 仍活 | 只告警不杀（ADR-093） | 不变 |
+| 周期孤儿扫描（`orphan.dispose_policy=auto`） | 按策略强杀 | **不变**（显式 opt-in 保留杀能力；默认 `warn`） |
+
+**不变量**：启动路径（高频运维动作）不再有任何静默破坏；强杀能力只保留在显式开启的 `auto` 策略下。
+
 ## 4. 验收
 
 - **真机判据**：对 `/home/wxys233/server` 农场，平台逐台报出漂移；点「接管」→ 实例转 RUNNING 且与磁盘进程

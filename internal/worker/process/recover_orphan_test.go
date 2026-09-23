@@ -35,30 +35,33 @@ func writeOrphanPIDRecord(t *testing.T, dir, uuid string) string {
 	return pidPath
 }
 
+// FR-325/FR-455 启动期接管扫描的行为，经 FR-471 修订为**非破坏**：
+//
+//   - wrapper 存活但 reconnect 拨不通 → 有界重试（期间保留 PID 文件）；耗尽后按 ADR-093 只告警不杀；
+//   - wrapper 已死、Java 仍活 → **不再强杀**（真机事故 2026-09-23：一条陈旧 PID 记录一次打断 54 台在跑农场）；
+//     改为只观测 + 保留 PID 文件，落审计 `orphan.startup_detected_not_reaped`，
+//     交由周期孤儿扫描（默认 warn）与 FR-471 漂移/接管流程处置。
+//
+// 本用例集据此只断言「重试次数、PID 文件保留、是否登记、审计」——**断言不再出现杀树**。
 func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 	tests := []struct {
 		name string
 		// succeedOnDial 第 N 次拨号成功；0 = 永不成功（触发兜底）。
 		succeedOnDial int
-		killErr       error
-		// wrapperDiesDuringRetry 模拟「进入 reconnect 时 wrapper 存活、重试期间才死亡」：
-		// 此时接管重试耗尽后应退化为「wrapper 死/Java 活」真孤儿，仅处置 Java。
+		// wrapperDiesDuringRetry 模拟「进入 reconnect 时 wrapper 存活、重试期间才死亡」。
 		wrapperDiesDuringRetry bool
-		// killMakesDead 杀树桩是否把目标 PID 置为已死（模拟杀树生效 / 权限不足杀不死）。
-		killMakesDead  bool
-		wantRecovered  int
-		wantDials      int
-		wantKilled     []int
-		wantPIDFile    bool
-		wantRegistered bool
-		wantBlocked    bool
+		wantRecovered          int
+		wantDials              int
+		wantPIDFile            bool
+		wantRegistered         bool
+		wantBlocked            bool
+		wantStartupObserve     bool
 	}{
 		{
 			name:           "reconnect 失败→重试→成功恢复",
 			succeedOnDial:  3,
 			wantRecovered:  1,
 			wantDials:      3,
-			wantKilled:     nil,
 			wantPIDFile:    true,
 			wantRegistered: true,
 		},
@@ -67,33 +70,19 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			succeedOnDial:  0,
 			wantRecovered:  0,
 			wantDials:      1 + len(recoverRetryBackoff),
-			wantKilled:     nil,
 			wantPIDFile:    true,
 			wantRegistered: false,
 			wantBlocked:    true,
 		},
 		{
-			name:                   "重试期间 wrapper 已死→退化为 Java 真孤儿处置→杀树清理",
+			name:                   "重试期间 wrapper 已死→只观测不强杀（FR-471 非破坏）",
 			succeedOnDial:          0,
 			wrapperDiesDuringRetry: true,
-			killMakesDead:          true,
 			wantRecovered:          0,
 			wantDials:              1 + len(recoverRetryBackoff),
-			wantKilled:             []int{testJavaPID},
-			wantPIDFile:            false,
-			wantRegistered:         false,
-		},
-		{
-			name:                   "wrapper 已死但 Java 杀不死→保留 PID 文件",
-			succeedOnDial:          0,
-			wrapperDiesDuringRetry: true,
-			killErr:                errors.New("access denied"),
-			killMakesDead:          false,
-			wantRecovered:          0,
-			wantDials:              1 + len(recoverRetryBackoff),
-			wantKilled:             []int{testJavaPID},
 			wantPIDFile:            true,
 			wantRegistered:         false,
+			wantStartupObserve:     true,
 		},
 	}
 
@@ -125,15 +114,11 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			m.recoverSleep = func(d time.Duration) { sleeps = append(sleeps, d) }
 			m.recoverKillTree = func(pid int) error {
 				killed = append(killed, pid)
-				if tt.killMakesDead {
-					dead[pid] = true
-				}
-				return tt.killErr
+				dead[pid] = true
+				return nil
 			}
 			m.onOrphanAudit = func(action, targetID, detail string, success bool, errMsg string) {
-				if !success {
-					audits = append(audits, action)
-				}
+				audits = append(audits, action)
 			}
 			m.recoverDial = func(_ *daemonStrategy, _ string) error {
 				dials++
@@ -150,10 +135,14 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantRecovered, recovered)
 			assert.Equal(t, tt.wantDials, dials, "拨号次数 = 初拨 + 有界重试")
-			assert.Equal(t, tt.wantKilled, killed, "wrapper 已死时只补杀 Java 树；wrapper 存活时不杀")
+			assert.Empty(t, killed, "FR-471：启动恢复路径任何分支都不得强杀")
 			if tt.wantBlocked {
 				assert.Contains(t, audits, "orphan.dispose_blocked",
 					"wrapper 仍存活（瞬时不可达）时应落 dispose_blocked 审计")
+			}
+			if tt.wantStartupObserve {
+				assert.Contains(t, audits, "orphan.startup_detected_not_reaped",
+					"wrapper 已死时只观测并落 non-reap 审计")
 			}
 
 			// 重试间隔递增：失败几次就应等待 recoverRetryBackoff 的对应前缀
@@ -164,11 +153,8 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			require.GreaterOrEqual(t, len(sleeps), retrySleeps)
 			assert.Equal(t, recoverRetryBackoff[:retrySleeps], sleeps[:retrySleeps], "重试间隔应按递增序列")
 
-			if tt.wantPIDFile {
-				assert.FileExists(t, pidPath, "PID 文件应保留")
-			} else {
-				assert.NoFileExists(t, pidPath, "死透后应清理 PID 文件")
-			}
+			// FR-471：启动路径不删 PID 文件（交由周期扫描/接管），故恒保留。
+			assert.FileExists(t, pidPath, "启动恢复路径应保留 PID 文件")
 
 			st, stErr := m.GetState(uuid)
 			if tt.wantRegistered {
@@ -181,111 +167,102 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 	}
 }
 
-// TestRecoverDaemonInstances_KillVerifyWaitsAsyncExit 强杀返回成功但进程延迟退出
-// （Windows taskkill /T /F 异步终止）时，存活复核应有界等待到退出后再清理。
-func TestRecoverDaemonInstances_KillVerifyWaitsAsyncExit(t *testing.T) {
+// TestRecoverDaemonInstances_StartupNeverKills FR-471 核心不变量：**启动恢复路径任何分支都不强杀**。
+//
+// 真机事故（2026-09-23）：换二进制重启 Worker 时，一条陈旧 PID 记录触发对在跑农场的强杀（一次 54 台）。
+// 因此本用例穷举启动路径的各种「wrapper 已死」形态，断言杀树桩**永不被调用**、PID 文件恒保留。
+//
+// 强杀能力仍存在于**显式 auto 策略**的周期孤儿扫描（见 orphan_scan_test 的「auto 档强杀 Java 并清理」），
+// 由运维显式开启；启动路径不再有任何静默破坏。
+func TestRecoverDaemonInstances_StartupNeverKills(t *testing.T) {
+	t.Run("wrapper 已死 / Java 活 / 复核通过", func(t *testing.T) {
+		dir := t.TempDir()
+		uuid := "startup-nokill-1"
+		pidPath := writeOrphanPIDRecord(t, dir, uuid)
+
+		m := NewManager(dir)
+		var killed []int
+		m.recoverSleep = func(time.Duration) {}
+		m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
+		m.recoverPIDAlive = func(pid int) bool { return pid != testWrapperPID }
+		m.recoverKillTree = func(pid int) error { killed = append(killed, pid); return nil }
+		m.recoverDial = func(_ *daemonStrategy, _ string) error { return errors.New("dial refused") }
+
+		recovered, err := m.RecoverDaemonInstances()
+		require.NoError(t, err)
+		assert.Equal(t, 0, recovered)
+		assert.Empty(t, killed, "启动路径不得强杀（FR-471）")
+		assert.FileExists(t, pidPath)
+	})
+
+	t.Run("wrapper 已死 / Java 活 / 复核不通过（PID 疑被复用）", func(t *testing.T) {
+		dir := t.TempDir()
+		uuid := "startup-nokill-2"
+		pidPath := writeOrphanPIDRecord(t, dir, uuid)
+
+		m := NewManager(dir)
+		var killed []int
+		var audits []string
+		m.recoverSleep = func(time.Duration) {}
+		m.recoverVerifyOwner = func(int, string, string, bool) bool { return false }
+		m.recoverPIDAlive = func(pid int) bool { return pid != testWrapperPID }
+		m.recoverKillTree = func(pid int) error { killed = append(killed, pid); return nil }
+		m.recoverDial = func(_ *daemonStrategy, _ string) error { return errors.New("dial refused") }
+		m.onOrphanAudit = func(action, targetID, detail string, success bool, errMsg string) {
+			audits = append(audits, action)
+		}
+
+		recovered, err := m.RecoverDaemonInstances()
+		require.NoError(t, err)
+		assert.Equal(t, 0, recovered)
+		assert.Empty(t, killed, "启动路径不得强杀（FR-471）")
+		assert.FileExists(t, pidPath, "PID 文件应保留供周期扫描/接管处置")
+		// 复核不通过这一态在新语义下不再单独分支（启动一律观测），审计只要求「已发现未处置」不静默。
+		assert.Contains(t, audits, "orphan.startup_detected_not_reaped")
+	})
+}
+
+// TestRecoverDaemonInstances_WrapperGoneJavaAlive 覆盖「wrapper 已死、Java 仍活」的场景。
+//
+// 旧行为（FR-325/FR-455）：按 PID 记录强杀 Java 树，死透才清理 PID 文件。
+// **FR-471 修订为非破坏**：真机事故（2026-09-23）证明该强杀会直接打断正在服务的服务器
+// （换二进制重启 Worker 时，一条陈旧 PID 记录一次打断 54 台在跑农场）。而它原本要解决的
+// 「面板 STOPPED 却占着端口、实例再也起不来」已由 FR-471 的启动冲突预检（防双开）与
+// 漂移观测 + 接管入口非破坏地覆盖。
+//
+// 新行为：**不杀任何进程、保留 PID 文件**、落 `orphan.startup_detected_not_reaped` 审计，
+// 交由周期孤儿扫描（按 policy，默认 warn）与接管流程处置。
+func TestRecoverDaemonInstances_WrapperGoneJavaAlive(t *testing.T) {
 	dir := t.TempDir()
-	uuid := "orphan-async-exit"
+	uuid := "orphan-wrapper-gone"
 	pidPath := writeOrphanPIDRecord(t, dir, uuid)
 
 	m := NewManager(dir)
-	aliveChecksAfterKill := 0
-	killIssued := false
-	m.recoverSleep = func(time.Duration) {}
+	dead := map[int]bool{testWrapperPID: true} // wrapper 已死，Java 仍活
+	var killed []int
+	var audits []string
+	dials := 0
+
 	m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
-	m.recoverDial = func(_ *daemonStrategy, _ string) error { return errors.New("dial refused") }
-	m.recoverKillTree = func(int) error { killIssued = true; return nil }
-	m.recoverPIDAlive = func(pid int) bool {
-		if pid == testWrapperPID {
-			return false // wrapper 已死：走「wrapper 死/Java 活」真孤儿处置路径（强杀 Java）
-		}
-		if !killIssued {
-			return true
-		}
-		// 杀树后前两次复核仍报存活（模拟异步终止窗口），之后死透
-		aliveChecksAfterKill++
-		return aliveChecksAfterKill <= 2
+	m.recoverPIDAlive = func(pid int) bool { return !dead[pid] }
+	m.recoverSleep = func(time.Duration) {}
+	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); dead[pid] = true; return nil }
+	m.onOrphanAudit = func(action, targetID, detail string, success bool, errMsg string) {
+		audits = append(audits, action)
 	}
+	m.recoverDial = func(_ *daemonStrategy, _ string) error { dials++; return nil }
 
 	recovered, err := m.RecoverDaemonInstances()
 	require.NoError(t, err)
 	assert.Equal(t, 0, recovered)
-	assert.NoFileExists(t, pidPath, "异步退出窗口结束后应完成清理")
-}
+	assert.Equal(t, 0, dials, "wrapper 已死时不应尝试 reconnect")
+	assert.Empty(t, killed, "FR-471：启动期发现 wrapper 已死 / Java 仍活时不得强杀")
+	assert.FileExists(t, pidPath, "FR-471：应保留 PID 文件供周期扫描与接管流程使用")
+	assert.Contains(t, audits, "orphan.startup_detected_not_reaped",
+		"应落「已发现但未处置」审计，不静默")
 
-// TestRecoverDaemonInstances_WrapperGoneJavaAlive 覆盖「wrapper 已死、Java 仍活」的接管场景。
-//
-// 真机事故：Worker 重启后 wrapper 因故消失，而它托管的 Java 仍活着（父进程变为 init）。
-// 旧逻辑只检查 wrapper，见到 wrapper 死就直接删 PID 文件——活着的 Java 从此不可发现，
-// 继续占着服务端口与 Paper session.lock，面板却显示 STOPPED，实例再也起不来。
-// 正确行为：按 PID 记录强杀 Java 树；死透才清理，杀不死则保留 PID 文件待下次兜底。
-func TestRecoverDaemonInstances_WrapperGoneJavaAlive(t *testing.T) {
-	tests := []struct {
-		name           string
-		killMakesDead  bool
-		wantKilled     []int
-		wantPIDFile    bool
-		wantRegistered bool
-	}{
-		{
-			name:          "Java 孤儿被杀→清理 PID 文件",
-			killMakesDead: true,
-			// 只杀 Java：wrapper 已不存在，对其杀树会刷无意义告警且 PGID 可能已被复用
-			wantKilled:     []int{testJavaPID},
-			wantPIDFile:    false,
-			wantRegistered: false,
-		},
-		{
-			name:           "Java 杀不死（权限不足）→保留 PID 文件待下次兜底",
-			killMakesDead:  false,
-			wantKilled:     []int{testJavaPID},
-			wantPIDFile:    true,
-			wantRegistered: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			uuid := "orphan-wrapper-gone"
-			pidPath := writeOrphanPIDRecord(t, dir, uuid)
-
-			m := NewManager(dir)
-			dead := map[int]bool{testWrapperPID: true} // wrapper 已死，Java 仍活
-			var killed []int
-			dials := 0
-
-			m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
-			m.recoverPIDAlive = func(pid int) bool { return !dead[pid] }
-			m.recoverSleep = func(time.Duration) {}
-			m.recoverKillTree = func(pid int) error {
-				killed = append(killed, pid)
-				if tt.killMakesDead {
-					dead[pid] = true
-				}
-				return nil
-			}
-			m.recoverDial = func(_ *daemonStrategy, _ string) error {
-				dials++
-				return nil
-			}
-
-			recovered, err := m.RecoverDaemonInstances()
-			require.NoError(t, err)
-			assert.Equal(t, 0, recovered)
-			assert.Equal(t, 0, dials, "wrapper 已死时不应尝试 reconnect")
-			assert.Equal(t, tt.wantKilled, killed, "只强杀 Java 孤儿，不碰已消失的 wrapper")
-
-			if tt.wantPIDFile {
-				assert.FileExists(t, pidPath, "Java 未死透时应保留 PID 文件供下次兜底")
-			} else {
-				assert.NoFileExists(t, pidPath, "Java 死透后应清理 PID 文件")
-			}
-
-			_, stErr := m.GetState(uuid)
-			assert.Error(t, stErr, "兜底处置后不应登记实例")
-		})
-	}
+	_, stErr := m.GetState(uuid)
+	assert.Error(t, stErr, "只观测不处置，不应登记实例")
 }
 
 // TestRecoverDaemonInstances_WrapperAndJavaBothGone 回归保护：wrapper 与 Java 都已死时，
@@ -309,16 +286,16 @@ func TestRecoverDaemonInstances_WrapperAndJavaBothGone(t *testing.T) {
 	assert.NoFileExists(t, pidPath, "两者都已死时应清理 PID 文件")
 }
 
-// TestRecoverDaemonInstances_OwnershipVerifyBlocksKill 覆盖 FR-455① 的误杀拦截：
-// 处置前置存活复核不通过（PID 可能已被 OS 复用给无关进程）时，不得强杀任何进程，
-// 且要保留 PID 文件等下一轮/人工介入，并落审计（不静默）。
+// TestRecoverDaemonInstances_OwnershipVerifyBlocksKill FR-455① 的误杀拦截在 FR-471 后收敛为
+// 「启动路径一律不杀」——本用例断言即便归属复核**通过**（最危险的情形：目录被外部进程占用），
+// 启动期也不得强杀，只观测 + 保留 PID 文件 + 落审计（不静默）。
 func TestRecoverDaemonInstances_OwnershipVerifyBlocksKill(t *testing.T) {
 	dir := t.TempDir()
 	uuid := "orphan-verify-block"
 	pidPath := writeOrphanPIDRecord(t, dir, uuid)
 
 	m := NewManager(dir)
-	dead := map[int]bool{testWrapperPID: true} // wrapper 已死：只剩 Java 孤儿，进入逐 PID 处置前的复核
+	dead := map[int]bool{testWrapperPID: true} // wrapper 已死：只剩 Java
 	var killed []int
 	type auditRec struct {
 		action   string
@@ -331,8 +308,8 @@ func TestRecoverDaemonInstances_OwnershipVerifyBlocksKill(t *testing.T) {
 	m.recoverPIDAlive = func(pid int) bool { return !dead[pid] }
 	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); dead[pid] = true; return nil }
 	m.recoverDial = func(_ *daemonStrategy, _ string) error { return errors.New("dial refused") }
-	// 复核对所有 PID 均不通过：模拟 PID 被复用为无关进程，无法确认归属。
-	m.recoverVerifyOwner = func(int, string, string, bool) bool { return false }
+	// 复核**通过**：这正是旧实现在 in-place 导入实例上误杀在跑农场的情形（目录归属相符）。
+	m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
 	m.onOrphanAudit = func(action, targetID, detail string, success bool, errMsg string) {
 		audits = append(audits, auditRec{action: action, targetID: targetID, success: success})
 	}
@@ -340,13 +317,16 @@ func TestRecoverDaemonInstances_OwnershipVerifyBlocksKill(t *testing.T) {
 	recovered, err := m.RecoverDaemonInstances()
 	require.NoError(t, err)
 	assert.Equal(t, 0, recovered)
-	assert.Empty(t, killed, "复核不通过时不得强杀任何进程")
-	assert.FileExists(t, pidPath, "复核不通过应保留 PID 文件待下一轮/人工介入")
+	assert.Empty(t, killed, "FR-471：启动路径即便复核通过也不得强杀")
+	assert.FileExists(t, pidPath, "应保留 PID 文件待周期扫描/接管处置")
 
-	require.Len(t, audits, 1, "仅剩 Java 孤儿时对其落一条拦截审计")
+	require.NotEmpty(t, audits, "应落审计，不静默")
+	seen := false
 	for _, a := range audits {
-		assert.Equal(t, "orphan.dispose_blocked", a.action)
-		assert.Equal(t, uuid, a.targetID)
-		assert.False(t, a.success, "拦截审计应为未处置")
+		if a.action == "orphan.startup_detected_not_reaped" {
+			seen = true
+			assert.Equal(t, uuid, a.targetID)
+		}
 	}
+	assert.True(t, seen, "应落「已发现未处置」审计")
 }

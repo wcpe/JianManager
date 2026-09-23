@@ -1173,13 +1173,20 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 
 		// wrapper 不存活：先看 Java 是否还在。
 		if rec.WrapperPID <= 0 || !m.pidAlive(rec.WrapperPID) {
-			// wrapper 已死但 Java 仍活：wrapper 是 Java 的唯一被托管入口，wrapper 一走
-			// 就再没人能 stop 它（socket 随之消失、reconnect 无从谈起）。此时删 PID 文件
-			// 会把活着的 Java 变成永久孤儿——继续占着服务端口与 Paper session.lock，
-			// 面板却因实例已从注册表消失而显示 STOPPED，实例再也起不来。
-			// 故与 FR-325 同源处置：按 PID 记录强杀 Java 树，死透才清理 PID 文件。
+			// wrapper 已死但 Java 仍活：**启动期不再强杀**（FR-471 语义修订）。
+			//
+			// 旧行为（FR-325/FR-455）按 PID 记录强杀 Java 树，理由是「wrapper 一走就再没人能
+			// stop 它，活着的 Java 会占着服务端口与 Paper session.lock，面板显示 STOPPED 却
+			// 再也起不来」。真机事故（2026-09-23）证明该强杀会直接打断正在服务的服务器：换二进制
+			// 重启 Worker 时，一条陈旧 PID 记录即触发对在跑农场的强杀（一次 54 台）。
+			// 而它原本要解决的问题已有非破坏出口：FR-471 的启动冲突预检（work_dir_busy / port_free）
+			// 拦住双开，漂移观测 + 接管入口把它纳入管理。
+			//
+			// 故与 FR-456 的 `warn` 默认策略同口径：**只观测、保留 PID 文件**，交由周期孤儿扫描
+			// （按 policy 处置，默认 warn 仅告警）与 FR-471 的接管流程处理；显式 `auto` 策略仍由
+			// 周期扫描负责强杀，启动路径不再有任何静默破坏。
 			if rec.JavaPID > 0 && rec.JavaPID != rec.WrapperPID && m.pidAlive(rec.JavaPID) {
-				m.reapOrphanWrapper(instanceUUID, pidPath, rec, errOrphanedWrapperGone)
+				m.observeOrphanAtStartup(instanceUUID, rec, "startup_wrapper_gone_java_alive")
 				continue
 			}
 			slog.Info("daemon wrapper 已不存活，清理残留", "instanceId", rec.InstanceUUID, "wrapperPid", rec.WrapperPID)
@@ -1194,11 +1201,21 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 		// WorkDir 从 PID 记录恢复，否则文件/配置操作会因空工作目录失败（open :）。
 		strategy := newDaemonStrategy(m, CommandSpec{UUID: instanceUUID, WorkDir: rec.WorkDir, ProcessType: ProcessTypeDaemon, ProbePort: rec.ProbePort})
 		if err := m.reconnectWithRetry(strategy, rec.SocketAddr, instanceUUID); err != nil {
-			// FR-325 / ADR-093：重试耗尽仍拨不通。此前一律按 PID 记录强杀 wrapper + Java，
-			// 会把「wrapper 与 Java 都健康、仅 socket 瞬时不可达」的运行中服务器误杀。
-			// 现改由 reapOrphanWrapper 自行判定：wrapper 仍存活 → 只告警、保留 PID 文件、不杀
-			//（确属本实例但仅瞬时不可达，等下一轮扫描/人工介入）；仅当 wrapper 已死亡（真孤儿）才处置。
-			m.reapOrphanWrapper(instanceUUID, pidPath, rec, err)
+			// FR-325 / ADR-093：重试耗尽仍拨不通。
+			//   - wrapper 仍存活：属「确属本实例、仅 socket 瞬时不可达」，按 ADR-093 只告警 + 落审计、
+			//     保留 PID 文件，不杀（强杀会误杀一个 wrapper 与 Java 都健康、只是暂时拨不通的服务器）。
+			//   - wrapper 已在重试期间死亡：旧行为按 PID 记录强杀 Java 树；FR-471 起改为**只观测不强杀**
+			//     （启动路径不再有任何静默破坏），交由周期扫描按 policy 与 FR-471 接管流程处置。
+			if rec.WrapperPID > 0 && m.pidAlive(rec.WrapperPID) {
+				detail := fmt.Sprintf(`{"instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"reason":"alive_unreachable"}`,
+					instanceUUID, rec.WrapperPID, rec.JavaPID)
+				m.auditOrphan("orphan.dispose_blocked", instanceUUID, detail, false,
+					"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），按 ADR-093 只告警不杀")
+				slog.Warn("接管重试耗尽但 wrapper 仍存活，按 ADR-093 只告警不杀，保留 PID 文件等下一轮/人工介入",
+					"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "error", err)
+				continue
+			}
+			m.observeOrphanAtStartup(instanceUUID, rec, "startup_reconnect_failed")
 			continue
 		}
 		strategy.SetWrapperPID(rec.WrapperPID)

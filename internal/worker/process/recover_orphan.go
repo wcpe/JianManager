@@ -88,9 +88,35 @@ func (m *Manager) reconnectWithRetry(strategy *daemonStrategy, addr, instanceUUI
 	return err
 }
 
+// observeOrphanAtStartup 在 Worker 启动恢复路径上「只观测、不处置」一条孤儿（FR-471）。
+//
+// 为什么启动路径必须非破坏：换二进制/重启 Worker 是高频运维动作，而 PID 目录里可能残留
+// 陈旧记录（wrapper 已死、Java PID 已被复用或本就属他人）。旧行为在此按记录强杀 Java 树，
+// 真机事故（2026-09-23）一次打断 54 台在跑农场。既然 FR-471 已提供启动冲突预检（防双开）与
+// 漂移呈现 + 接管入口，启动路径就不再需要任何静默破坏：
+//
+//   - 只记审计（`orphan.startup_detected_not_reaped`，success=true 表示「观测成功」而非「已处置」）
+//     并打 WARN，**保留 PID 文件**；
+//   - 交周期孤儿扫描按 `orphan.dispose_policy` 处置（默认 warn 只告警；显式 auto 才强杀）；
+//   - FR-471 的漂移观测与 `adopt-runtime` 接管是人工/受控的解决出口。
+//
+// reason 用于审计定位触发分支（startup_wrapper_gone_java_alive / startup_reconnect_failed）。
+func (m *Manager) observeOrphanAtStartup(instanceUUID string, rec *daemon.PIDRecord, reason string) {
+	if rec == nil {
+		return
+	}
+	detail := fmt.Sprintf(`{"instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"kind":%q,"policy":"observe","workDir":%q}`,
+		instanceUUID, rec.WrapperPID, rec.JavaPID, reason, rec.WorkDir)
+	m.auditOrphan("orphan.startup_detected_not_reaped", instanceUUID, detail, true, "")
+	slog.Warn("启动期发现 daemon 孤儿：按 FR-471 非破坏策略只观测不强杀（保留 PID 文件，交由周期扫描与接管流程处置）",
+		"instanceId", instanceUUID, "reason", reason,
+		"wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "workDir", rec.WorkDir)
+}
+
 // reapOrphanWrapper 处置孤儿进程树（FR-325 及同源的 wrapper 已死场景）。
 //
-// 两种入口：
+// 仅由**显式 auto 策略**的周期孤儿扫描调用（FR-471 起，启动恢复路径不再调用本函数）。
+// // 两种入口：
 //   - reconnectErr == errOrphanedWrapperGone：wrapper 已经不在，只剩 Java 孤儿（**真孤儿**）。
 //     只清 Java，跳过对已消失 wrapper 的杀树与存活复核。
 //   - 其余（reconnect 重试耗尽）：先判定 wrapper 是否仍存活——
