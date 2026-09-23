@@ -1,10 +1,12 @@
 # 代码扫描（CodeQL）：静态发现安全漏洞与代码质量缺陷，结果进仓库 Security → Code scanning。
 #
 # 触发：
-#   - push 到主干 master        → 扫描主干
-#   - pull_request 指向 master  → 扫描 PR 变更（合并前发现）
-#   - 每周一 02:30 定时         → 扫描默认分支（捕获新规则与新披露的漏洞模式）
-#   - workflow_dispatch         → 手工触发
+#   - push 到主干 master  → 每次合入主干即扫描
+#   - 每周一 02:30 定时   → 扫描默认分支（捕获新规则与新披露的漏洞模式）
+#   - workflow_dispatch   → 手工触发
+#
+# 刻意**不**挂 pull_request：ci.yml 已监听 PR，两个工作流同时监听会让同一个 PR 每次推送
+#   各起一个 run（Actions 列表重复、附带消耗）。安全扫描改在合入主干后立即跑 + 每周补扫。
 #
 # 语言矩阵：
 #   go                    → autobuild（本仓 `go build ./...` 已验证可直接跑通；embed 目录有占位 .gitignore）
@@ -17,8 +19,6 @@ name: CodeQL
 
 on:
   push:
-    branches: [master]
-  pull_request:
     branches: [master]
   schedule:
     - cron: '30 2 * * 1'
