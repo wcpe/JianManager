@@ -21,7 +21,7 @@
 | [decision-alignment.md](decision-alignment.md) | 代码必须和 ADR 决策一致 |
 | [doc-sync.md](doc-sync.md) | 代码变更时文档必须同步更新 |
 | [doc-evolution.md](doc-evolution.md) | 文档演进方式（增量/原地/追加） |
-| [git-commit.md](git-commit.md) | Git commit message 规范 |
+| [git-commit.md](git-commit.md) | Git 提交 / 分支 / 合并规范（单主干 master，禁直推，rebase+ff 优先） |
 | [scope-discipline.md](scope-discipline.md) | 范围纪律，不做 spec 之外的事 |
 | [static-analysis.md](static-analysis.md) | 静态分析和 lint 规范 |
 | [testing-and-quality.md](testing-and-quality.md) | 测试和质量要求 |

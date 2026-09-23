@@ -8,6 +8,19 @@
 
 > 本段为下一开发窗口归档区；正式发版时整理为新版本段。
 
+### 变更
+- **协作工作流统一为单主干 GitHub Flow（分支 / 合并 / 发布 / Issue·PR 整合规范）**：此前仓库事实上是双分支（`dev` 日常开发 + `master` 发布），但这条规则从未写进文档，`dev` 已积压 40 个未合提交、`version.go` 停在已发布的裸 `0.22.0` 形成漂移，而「禁直推主干」只停留在文字、没有分支保护兜底。现统一为**单主干**：主干唯一 `master`、始终可发布；一切变更（含发版提交）必须经 PR 合入，不允许直推；短分支命名收敛为 `feature/*`、`fix/*`、`refactor/*`、`hotfix/*`（从发布 tag 切出）、`docs/*`、`chore/*`；合并优先 rebase + fast-forward，禁止 squash 多意图 PR、禁止「整版本一个大提交」、合后删分支；回滚用 `git revert`，严禁 force push 主干 / `--no-verify` / amend 已 push 提交。
+  - **发布渠道收窄为「仅打 tag」**：唯一发布动作是推送 `vX.Y.Z` tag。`master` push 与新增的手工触发只做构建校验，不再产出发布物。
+  - **Release 说明改为自动生成**：由 `gh release create --generate-notes` 生成，只统计相邻两 tag 之间合并的 PR——直推主干的提交不会进说明，这正是强制走 PR 的直接动因；因此顺序必须是「先合 PR 到主干，再打 tag」，反了会掉出统计区间。**迁移**：说明来源由 `CHANGELOG.md` 版本段落（`scripts/changelog-extract.mjs`）改为自动生成，读法随之改变；`CHANGELOG.md` 本身仍按 `doc-evolution.md` 维护，不再作为 Release 正文。
+  - **移除 `latest` 滚动预发布渠道**：原先 `master` 的每次 push 都会覆盖固定 tag `latest` 的预发布，现整条渠道取消，`master` push 只验证可构建。**迁移**：依赖 `latest` 预发布产物的下游须改用正式 `vX.Y.Z` tag 发布物。
+  - **版本号单一真源不变**：仍为 `internal/version/version.go`（ADR-065），**未**引入根 `VERSION` / `gradle.properties` 造成双源。
+  - **新增 `dependabot.yml`**：覆盖 gomod（根）、npm（pnpm workspace 根）、npm（`apps/bot-worker`，npm 自管见 ADR-064）、gradle（`client-updater`）、github-actions 五处，weekly、每周上限 5 个 PR、提交前缀统一 `build(deps)`；`org.junit.jupiter:junit-jupiter` 的 major 更新先 ignore（客户端更新器以 `--release 8` 构 Java8 字节码，受兼容矩阵约束）。
+  - **新增 `codeql.yml` 代码扫描**：Go（autobuild，`go build ./...` 已验证可直接跑通）+ JavaScript/TypeScript（`build-mode: none`，纯源码抽取）双语言矩阵，结果进仓库 Security → Code scanning；触发为「主干 push + 指向主干的 PR + 每周一 02:30 定时 + 手工」。**注意**：私有仓库使用 CodeQL 需已启用 GitHub Advanced Security（code scanning），公开仓库免费。
+  - **CI runner 固定为 `ubuntu-24.04`**：原先 CI / 发布全用 `ubuntu-latest`，会命中「`ubuntu-latest` 将于 2026-10-19 起迁移到 Ubuntu 26」的迁移通知并带来非预期环境漂移；现全部改为显式 `ubuntu-24.04`。发布流程的 `softprops/action-gh-release` 已换成 `gh release create`，消除其 Node.js 20 弃用告警。Windows runner 沿用 `windows-latest`（本次通知未涉及）。
+  - **CI 触发收窄**：`ci.yml` 由「所有分支 push + PR + tag」收窄为「PR + 主干 `master` push + `v*` tag」——短分支的门禁由 PR 承担，不再对任意分支重复跑门禁。`release.yml` **刻意不挂 `pull_request`**：PR 的 ref 为 `refs/pull/N/merge`，`release-metadata.mjs` 无法解析出合法版本（裸版本分支要求同 SHA 存在 `vX.Y.Z` tag），挂上会让每个 PR 门禁无故失败。
+  - **文档与规则同步**：`docs/CONTRIBUTING.md` §2 改写为单主干，新增 §8「分支保护（新建仓即开启）」与 §9「标签」；`.claude/rules/git-commit.md` 新增 §7 分支模型、§8 合并/回滚/禁止事项；`gate-merge.md` 的 `main` 校正为 `master` 并在发版检查中补「经 PR 合并、未直推主干」；`versioning.md` 开发态分支措辞改为主干；`.claude/rules/README.md` 索引同步；Issue / PR 模板补 `Closes #N` 与「分支合规」自检项。
+  - **待人工在仓库设置中完成（提交无法自动生效）**：①为 `master` 开启分支保护——必须经 PR、必须 `web-quality` 与 `agent-gate` 通过、管理员同样受限、禁 force push、禁删除主干、建议要求线性历史；②仓库合并选项禁用 `Squash and merge`，保留 `Rebase and merge`。
+
 ## 0.22.0（2026-09-20）
 
 > 本版交付：控制台六域导航 IA + 可配置权限树（FR-431/432）、实例界面布局与控制台日志/沉浸工作台重做（FR-412~424）、客户端分发 IA 合并与运维观测增强（FR-425~430）、设置面板 GitHub API 令牌、以及探针端口自愈 / 发布链路 / slog 日志级别等一批修复。远程 CI 在 `9d5a0eba` 全绿（web-quality、web-static、bot-quality、agent-gate、Web E2E×4）。已知残余：实例布局与控制台在大数据量/多浏览器下的部分真机视觉仍待 FR-277 主机复验；本地 Windows 全量 `go test` 在资源紧张时可能出现环境性超时，以远程 CI 为准。

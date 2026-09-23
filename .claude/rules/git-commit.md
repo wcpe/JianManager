@@ -132,3 +132,25 @@ refactor(worker): 提取 IProcessCommand 接口
 ❌ feat(worker): WIP 实现实例状态机，还差测试
    → 完成后再提交，或者拆出已可编译的部分单独提交
 ```
+
+## 7. 分支模型
+
+本仓采用单主干 GitHub Flow：主干唯一为 `master`，始终可发布。
+
+- **禁止直推主干**：任何变更（含发版提交）都必须经 PR 合入。
+- **短分支命名**：`feature/*`（新功能）、`fix/*`（修 bug）、`refactor/*`（重构）、`hotfix/*`（线上紧急修复，从发布 tag 切出）、`docs/*`、`chore/*`。
+- 分支从最新 `master` 切出，**合入后立即删除源分支**。
+- `hotfix/*` 必须从发布 tag 切出，修复后回流主干。
+
+## 8. 合并、回滚与禁止事项
+
+本节约束分支 / 合并 / 回滚类流程，与 §5 的提交信息禁令互补，不重复。
+
+- **优先 rebase + fast-forward** 合入，保持主干线性历史。
+- **禁止 squash 多意图 PR**（一个 PR 混多种目的）。
+- **禁止「整版本一个大提交」**。
+- 回滚优先 `git revert` 反向提交。
+- **严禁 force push `master` / `main`**。
+- **严禁 `--no-verify`**。
+- **严禁 amend 已 push 的提交**。
+- PR 前清理 WIP / `fixup!` 提交。

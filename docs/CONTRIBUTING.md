@@ -21,7 +21,12 @@ task dist       # 前端 + Bot Worker + 全部内嵌资产 + 四个发布二进�
 
 ## 2. 分支与流程
 
-- **`dev`**：日常开发分支；**`master`**：发布分支（PR 目标）。功能 / 修复走 `feature/*`、`fix/*` 短生命周期分支。
+本仓采用**单主干 GitHub Flow**：主干唯一为 `master`，始终可发布。
+
+- **禁止直推主干**：任何变更（含单人开发期、含发版提交）都必须经 PR 合入，`master` 不接受直接 push。
+- **短分支命名**：`feature/*`（新功能）、`fix/*`（修 bug）、`refactor/*`（重构）、`hotfix/*`（线上紧急修复，从发布 tag 切出）、`docs/*`、`chore/*`；分支从最新 `master` 切出，生命周期尽量短，合入后立即删除。
+- **合并要求**：PR 提交前清理 WIP / `fixup!` 提交；一个 commit 只做一件事，不混合 `feat` / `fix` / `refactor`；优先 rebase + fast-forward 合入；禁止 squash 多意图 PR；禁止「整版本一个大提交」；合并后删除源分支。
+- **回滚**：用 `git revert` 反向提交，不做历史改写；**严禁 force push 主干**；严禁 `--no-verify`；严禁 amend 已 push 的提交。
 - PR 必须通过 CI 双门禁：`web-quality` 跑 lint + vitest + 构建 + E2E；`bot-quality` 跑 Bot Worker 生产依赖审计 + 类型检查 + lint + 构建。
 - 发布 workflow 另有完整门禁：metadata 版本/ref/tag 校验 → 全部内嵌资产（含 Bot Worker）→ Go 与前端测试 → 四产物构建 → Linux/Windows 原生 `--version` smoke → Release。任一步失败都不得发布。
 - 发版：先按 §6 把源码切为裸 `X.Y.Z`，在同一提交打 `vX.Y.Z` tag；Git tag / Release 保留 `v`，二进制版本不带 `v`。紧急修复从发布 tag 切 `hotfix/*` 后回流。
@@ -77,3 +82,26 @@ node --test scripts/release-metadata.test.mjs
 | 决策为什么这么定 | [docs/adr/](adr/README.md) |
 | 编码 / 命名 / 配置规范 | [CONVENTIONS.md](CONVENTIONS.md) |
 | 部署与运维 | [DEPLOY.md](DEPLOY.md) |
+
+## 8. 分支保护（新建仓即开启）
+
+- 主干 `master` 受保护，**新建仓库时即开启**，不依赖事后补配。
+- **必须经 PR 合并**，不允许直推主干。
+- **必须 CI 检查通过才可合并**：至少通过 `web-quality`、`agent-gate`；发布另受 release 门禁约束。
+- **管理员同样受约束**，任何角色都不得绕过上述要求直接推主干。
+- **禁止 force push、禁止删除主干**。
+- **建议要求线性历史**（对应 rebase + fast-forward 合入）。
+
+## 9. 标签（精简 10 个）
+
+GitHub 没有「标签即代码」的原生文件，标签在仓库设置里维护（Settings → Labels），按下面这张表建一次即可：
+
+| 标签 | 用途 |
+|---|---|
+| `bug` / `enhancement` / `docs` / `refactor` | Issue / PR 模板自动打，标识类型 |
+| `hotfix` | 线上紧急，优先处理 |
+| `P0` / `P1` / `P2` | 紧急 / 重要 / 一般，新 Issue 由负责人 triage 时打 |
+| `待验证` | 已合入主干，等待提单人回测验证 |
+| `破坏性变更` | 含迁移成本，发版前必须确认迁移说明 |
+
+- `hotfix` + `P0` + `破坏性变更` 同时出现时，发版前必须确认迁移说明已写入 CHANGELOG 与 PR。

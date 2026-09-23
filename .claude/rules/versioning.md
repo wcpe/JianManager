@@ -11,7 +11,7 @@
 | 形态 | 格式 | 何时 | 谁写 |
 |---|---|---|---|
 | **正式发布版** | 裸 `X.Y.Z`（无后缀） | 仅存在于打了 tag `vX.Y.Z` 的那个提交上，与 tag 一一对应 | `sdd-release-version` |
-| **开发版（快照）** | `X.Y.Z-dev` | 两个正式 tag 之间的**所有开发态提交**（`dev` 分支常态） | `sdd-release-version` 在上个 tag 后立即置入 |
+| **开发版（快照）** | `X.Y.Z-dev` | 两个正式 tag 之间的**所有开发态提交**（主干 master 常态） | `sdd-release-version` 在上个 tag 后立即置入 |
 | **候选版**（可选） | `X.Y.Z-rc.N` | 临近发布做发布候选时，`N` 从 1 单调递增 | 发版流程 |
 
 - `X.Y.Z-dev` 里的 `X.Y.Z` = **下一个计划发布的目标版本号**，按 SemVer 依据「自上个 tag 以来累积的提交类型」推断：有 `feat`→MINOR、仅 `fix`/`perf`/`refactor`→PATCH、有破坏性变更→MAJOR。
