@@ -8,6 +8,7 @@ import {
   isProvisioningInstance,
   type InstanceInfo,
 } from '@/api/instances'
+import { runtimeDriftOf } from '@/lib/runtime-drift'
 import { useInstanceMetrics } from '@/api/metrics'
 import { resolveCapabilities } from '@/lib/capabilities'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
@@ -90,6 +91,8 @@ export function InstanceWorktableCard({
   const playersLabel = !running ? '--' : playersAvailable ? String(metrics!.onlinePlayers) : unavailable
   const tpsAvailable = running && (metrics?.probeAvailable ?? false)
   const tpsLabel = !running ? '--' : tpsAvailable ? metrics!.tps.toFixed(1) : unavailable
+  // 运行态漂移（FR-471）：目录下有未纳管活进程时，卡片只说清事实（接管入口在「⋯」菜单）。
+  const drift = runtimeDriftOf(inst)
 
   return (
     <div
@@ -134,6 +137,15 @@ export function InstanceWorktableCard({
           {provisioning && (
             <p className="mt-0.5 line-clamp-2 text-[11px] text-status-warning" title={inst.statusReason}>
               {inst.statusReason}
+            </p>
+          )}
+          {/* 运行态漂移（FR-471）：目录下有未纳管活进程——卡片只说清事实，接管入口在「⋯」菜单。 */}
+          {drift && (
+            <p
+              className="mt-0.5 line-clamp-2 text-[11px] text-status-warning"
+              title={drift.cmdline}
+            >
+              {t('serverConsole.runtimeDriftDesc', { pid: drift.pid })}
             </p>
           )}
         </div>

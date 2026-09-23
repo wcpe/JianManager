@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { ArrowUpDown, ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal } from 'lucide-react'
+import { ArrowUpDown, ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Wrench } from 'lucide-react'
 import {
   useInfiniteInstanceSearch,
   useInstanceAggregate,
@@ -10,6 +10,7 @@ import {
   useRestartInstance,
   useDeleteInstance,
   useKillInstance,
+  useAdoptInstanceRuntime,
   isProvisioningInstance,
   type InstanceListParams,
   type InstanceSearchParams,
@@ -34,6 +35,7 @@ import EditInstanceConfigDialog from '@/components/EditInstanceConfigDialog'
 import { hasCapability, resolveCapabilities } from '@/lib/capabilities'
 import { InstanceWorktableCard } from '@/components/console/InstanceWorktableCard'
 import { InstanceGroupManager } from '@/components/console/InstanceGroupManager'
+import { RuntimeDriftBadge } from '@/components/console/RuntimeDriftNotice'
 import {
   buildGroupTreeSource,
   buildKeyMap,
@@ -49,6 +51,7 @@ import {
   type InstanceGroup,
 } from '@/components/console/instance-grouping'
 import { memberHealth, type MemberHealth } from '@/lib/topology'
+import { runtimeDriftOf } from '@/lib/runtime-drift'
 import { summarizeInstances, summaryFilterStatus, type SummaryFilterKey } from '@/lib/instance-summary'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
@@ -226,6 +229,8 @@ export default function InstancesPage() {
   } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; inPlace?: boolean; running?: boolean } | null>(null)
   const [killTarget, setKillTarget] = useState<{ id: number; name: string } | null>(null)
+  // 接管运行态漂移（FR-471）：先把目标置入待确认，DangerConfirm 确认后才发请求（与强杀同款纪律）。
+  const [adoptTarget, setAdoptTarget] = useState<{ id: number; name: string; pid: number } | null>(null)
   // 批量操作选中的实例 ID 集合（FR-058）。
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   // 工作台卡 ⇄ 列表视图（FR-136，§4.5）；运行实体默认卡片。
@@ -335,6 +340,7 @@ export default function InstancesPage() {
   const stop = useStopInstance()
   const restart = useRestartInstance()
   const kill = useKillInstance()
+  const adopt = useAdoptInstanceRuntime()
   const del = useDeleteInstance()
 
   // 批量选择（FR-058）：select-all 作用于当前筛选后的可见集合。
@@ -568,30 +574,38 @@ export default function InstancesPage() {
     [treeRows],
   )
 
-  const buildMenu = (inst: InstanceInfo) => (
-    <InstanceRowMenu
-      inst={inst}
-      onTags={() => setTagsTarget({ id: inst.id, name: inst.name, tags: parseTags(inst.tags) })}
-      onEditConfig={() => setEditConfigTarget(inst)}
-      onLimits={() => setLimitsTarget({
-        id: inst.id,
-        name: inst.name,
-        processType: inst.processType,
-        cpuLimit: inst.cpuLimit ?? 0,
-        memLimitMb: inst.memLimitMb ?? 0,
-        diskLimitMb: inst.diskLimitMb ?? 0,
-      })}
-      onProxy={() => setManageProxy({ id: inst.id, name: inst.name })}
-      onClone={() => setCloneTarget({ id: inst.id, name: inst.name })}
-      onDelete={() => setDeleteTarget({
-        id: inst.id,
-        name: inst.name,
-        inPlace: !!inst.workDirInPlace,
-        // FR-310：非停止态删除由后端编排「先停止（超时强杀）再删除」，确认框据此提示。
-        running: inst.status !== 'STOPPED' && inst.status !== 'CRASHED',
-      })}
-    />
-  )
+  const buildMenu = (inst: InstanceInfo) => {
+    // 运行态漂移（FR-471）：无漂移为 undefined，据此决定是否给出「接管」菜单项。
+    const drift = runtimeDriftOf(inst)
+    return (
+      <InstanceRowMenu
+        inst={inst}
+        onTags={() => setTagsTarget({ id: inst.id, name: inst.name, tags: parseTags(inst.tags) })}
+        onEditConfig={() => setEditConfigTarget(inst)}
+        onLimits={() => setLimitsTarget({
+          id: inst.id,
+          name: inst.name,
+          processType: inst.processType,
+          cpuLimit: inst.cpuLimit ?? 0,
+          memLimitMb: inst.memLimitMb ?? 0,
+          diskLimitMb: inst.diskLimitMb ?? 0,
+        })}
+        onProxy={() => setManageProxy({ id: inst.id, name: inst.name })}
+        onClone={() => setCloneTarget({ id: inst.id, name: inst.name })}
+        // 接管运行态漂移（FR-471）：仅当目录下确有未纳管活进程时给出入口。
+        onAdoptRuntime={
+          drift ? () => setAdoptTarget({ id: inst.id, name: inst.name, pid: drift.pid }) : undefined
+        }
+        onDelete={() => setDeleteTarget({
+          id: inst.id,
+          name: inst.name,
+          inPlace: !!inst.workDirInPlace,
+          // FR-310：非停止态删除由后端编排「先停止（超时强杀）再删除」，确认框据此提示。
+          running: inst.status !== 'STOPPED' && inst.status !== 'CRASHED',
+        })}
+      />
+    )
+  }
 
   const toggleProxy = (id: number) =>
     setExpandedProxies((prev) => {
@@ -608,6 +622,8 @@ export default function InstancesPage() {
     // 代理的分组展开行由画像 `bcTopology` 能力判定（FR-445），取代写死的 role === 'proxy'。
     const isProxy = resolveCapabilities(inst).capabilities.includes('bcTopology')
     const proxyExpanded = expandedProxies.has(inst.id)
+    // 运行态漂移（FR-471）：无漂移为 undefined，行内据此决定是否出标记。
+    const rowDrift = runtimeDriftOf(inst)
     return (
       <Fragment key={inst.id}>
         <TableRow data-state={selectedIds.includes(inst.id) ? 'selected' : undefined}>
@@ -643,6 +659,9 @@ export default function InstancesPage() {
                   {t('importServer.inPlaceBadge')}
                 </Badge>
               )}
+              {/* 运行态漂移标记（FR-471）：目录下有未纳管活进程，面板状态可能不准（行内只做标记，
+                  接管入口收在「⋯」菜单，避免每行多插一个破坏密度的按钮）。 */}
+              {rowDrift && <RuntimeDriftBadge pid={rowDrift.pid} cmdline={rowDrift.cmdline} />}
             </div>
           </TableCell>
           <TableCell className="text-muted-foreground">{inst.type}</TableCell>
@@ -1085,6 +1104,17 @@ export default function InstancesPage() {
         scope="group"
         onConfirm={() => { if (killTarget) kill.mutate(killTarget.id); setKillTarget(null) }}
         onCancel={() => setKillTarget(null)}
+      />
+
+      {/* 接管运行态二次确认（FR-471）：会给该服造成一次真实重启，故与强杀同款二次确认。 */}
+      <DangerConfirm
+        open={adoptTarget !== null}
+        title={t('serverConsole.runtimeDriftAdoptTitle', { name: adoptTarget?.name ?? '' })}
+        description={t('serverConsole.runtimeDriftAdoptDesc', { pid: adoptTarget?.pid ?? 0 })}
+        confirmLabel={t('serverConsole.runtimeDriftAdopt')}
+        scope="group"
+        onConfirm={() => { if (adoptTarget) adopt.mutate(adoptTarget.id); setAdoptTarget(null) }}
+        onCancel={() => setAdoptTarget(null)}
       />
     </div>
   )
@@ -1932,6 +1962,7 @@ export function InstanceRowMenu({
   onLimits,
   onProxy,
   onClone,
+  onAdoptRuntime,
   onDelete,
 }: {
   inst: InstanceInfo
@@ -1940,6 +1971,8 @@ export function InstanceRowMenu({
   onLimits: () => void
   onProxy: () => void
   onClone: () => void
+  /** 接管运行态漂移（FR-471）：仅在实例存在漂移时由调用方传入。 */
+  onAdoptRuntime?: () => void
   onDelete: () => void
 }) {
   const { t } = useTranslation()
@@ -1962,6 +1995,14 @@ export function InstanceRowMenu({
         )}
         {resolveCapabilities(inst).capabilities.includes('bcTopology') && (
           <DropdownMenuItem onSelect={onProxy}>{t('proxy.manageBackends')}</DropdownMenuItem>
+        )}
+        {/* 接管运行态漂移（FR-471）：工作目录下有未纳管活进程时出现；点击只开确认框，
+            真正下发由页面级 DangerConfirm 完成（与强杀同款：菜单不直接发写请求）。 */}
+        {onAdoptRuntime && (
+          <DropdownMenuItem onSelect={onAdoptRuntime} data-testid="instance-menu-adopt-runtime">
+            <Wrench className="size-3.5" />
+            {t('serverConsole.runtimeDriftAdopt')}
+          </DropdownMenuItem>
         )}
         {/* 「可克隆」由能力画像 `clone` 承担（仅后端子服类实例声明），不复用 `role === 'backend'`
             硬编码，也不拿 `mcSemantics` 当门控（那是 MC 世界语义，proxy 无世界语义 ≠ 不可克隆）。 */}

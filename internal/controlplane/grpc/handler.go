@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -436,6 +438,10 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		// Worker 重启未恢复某实例时，DB 会永远卡在 RUNNING 致所有生命周期操作 422）。
 		h.syncInstanceStates(req.NodeUuid, req.Instances)
 
+		// 运行态漂移（FR-471）：消费 Worker 上报的「实例工作目录下有外来活进程」，写/清 instances.runtime_drift_*。
+		// 与 FR-326 反向对账（无主运行时）方向不同：此处只针对**已存在实例**记录观测，命中 0 行忽略。
+		h.applyRuntimeDrift(req.Instances)
+
 		// FR-455②：心跳作为重推的自然兜底触发源（低频；由 ResyncDeduper 按节点节流吸收）。
 		h.triggerResync(req.NodeUuid)
 
@@ -673,6 +679,90 @@ func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*work
 		return
 	}
 	h.reconcileMissingInstances(node, reported)
+}
+
+// runtimeDriftCmdlineMax 是写入 instances.runtime_drift_cmdline 的命令行字节上限，
+// 与 model.Instance.RuntimeDriftCmdline 的 varchar(512) 列宽对齐（FR-471）。
+const runtimeDriftCmdlineMax = 512
+
+// applyRuntimeDrift 消费心跳上报的外来运行时漂移（FR-471）。
+//
+// 需求背景：农场由 tmux 在平台之外启动，DB 记 STOPPED 而磁盘在跑。Worker 在孤儿扫描中把
+// 「已注册实例工作目录下存在活进程、但实例未被认作运行」这一观测经心跳的 foreign_pid/foreign_cmdline
+// 上报，CP 据此落库，供前端提示「运行态漂移」并给出接管入口。
+//
+// 语义边界：
+//   - 仅对**已存在实例**更新（按 uuid 匹配）；命中 0 行直接忽略，绝不越界到 FR-326 的孤儿语义
+//     （无主运行时的跟踪/宽限/自动处置由 OrphanRuntimeTracker 独立负责）。
+//   - 上报状态属运行类（RUNNING/STARTING/STOPPING）时，进程归受管生命周期所有，不算漂移；
+//     本拍若无外来进程或已回归受管，则把漂移清零（要求库中原值非 0，避免每拍对全量实例产生无谓写）。
+//   - 本函数只观测落库，不触发任何处置动作（接管须运维显式发起）。
+func (h *ControlPlaneHandler) applyRuntimeDrift(states []*workerpb.InstanceState) {
+	now := time.Now()
+	for _, s := range states {
+		if s == nil || s.InstanceUuid == "" {
+			continue
+		}
+
+		if s.ForeignPid > 0 && !reportedRunningState(s.State) {
+			err := h.db.Model(&model.Instance{}).
+				Where("uuid = ?", s.InstanceUuid).
+				Updates(map[string]any{
+					"runtime_drift_pid":     int64(s.ForeignPid),
+					"runtime_drift_cmdline": truncateCmdline(s.ForeignCmdline, runtimeDriftCmdlineMax),
+					"runtime_drift_at":      now,
+				}).Error
+			if err != nil {
+				slog.Warn("写入实例运行态漂移失败", "instanceUUID", s.InstanceUuid, "error", err)
+			}
+			continue
+		}
+
+		// 漂移消失：本拍无外来进程（ForeignPid==0）或实例已被受管拉起。仅在原值非 0 时清零，
+		// 使稳态下每条心跳一个实例最多产生一次有效写。
+		err := h.db.Model(&model.Instance{}).
+			Where("uuid = ? AND runtime_drift_pid <> 0", s.InstanceUuid).
+			Updates(map[string]any{
+				"runtime_drift_pid":     int64(0),
+				"runtime_drift_cmdline": "",
+				"runtime_drift_at":      nil,
+			}).Error
+		if err != nil {
+			slog.Warn("清除实例运行态漂移失败", "instanceUUID", s.InstanceUuid, "error", err)
+		}
+	}
+}
+
+// reportedRunningState 判断心跳上报状态是否属「运行类」（RUNNING/STARTING/STOPPING）。
+func reportedRunningState(state string) bool {
+	switch state {
+	case string(model.InstanceStatusRunning), string(model.InstanceStatusStarting), string(model.InstanceStatusStopping):
+		return true
+	}
+	return false
+}
+
+// truncateCmdline 按 UTF-8 边界把命令行截断到至多 maxBytes 字节；超长时以省略号结尾，
+// 保证截断后的总长度仍不超过 maxBytes（varchar(512) 落库安全，不强依赖 MySQL 宽松模式）。
+// 未超长时原样返回，不误伤正常路径。
+func truncateCmdline(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	const ellipsis = "…" // 3 字节
+	budget := maxBytes - len(ellipsis)
+	if budget < 0 {
+		budget = 0
+	}
+	var b strings.Builder
+	b.Grow(budget)
+	for _, r := range s {
+		if b.Len()+utf8.RuneLen(r) > budget {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String() + ellipsis
 }
 
 // runningStatuses DB 侧「运行类」状态集合。

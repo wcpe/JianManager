@@ -185,11 +185,19 @@ func TestOrphanScan_DirectOrphan_StoppedInstanceDirStillScanned(t *testing.T) {
 	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); return nil }
 
 	findings := s.ScanOnce()
-	require.Len(t, findings, 1, "STOPPED 实例目录下的残留进程仍应被识别为 direct 孤儿")
-	assert.Equal(t, OrphanKindDirect, findings[0].Kind)
-	assert.Equal(t, managedDir, findings[0].WorkDir)
+	// FR-471：该目录同时属「已注册 STOPPED 实例目录下存在活进程」，第 4 相会另落一条
+	// foreign_runtime 观测 finding（只观测不杀）。此处只校验既有 FR-456 direct 判决未回归。
+	var direct *OrphanFinding
+	for i := range findings {
+		if findings[i].Kind == OrphanKindDirect {
+			direct = &findings[i]
+		}
+	}
+	require.NotNil(t, direct, "STOPPED 实例目录下的残留进程仍应被识别为 direct 孤儿")
+	assert.Equal(t, managedDir, direct.WorkDir)
 	assert.Equal(t, []int{9101}, killed)
 	require.NotEmpty(t, *audits)
+	// direct 相先于 FR-471 相执行，故处置审计仍是第一条。
 	assert.Equal(t, "orphan.scan_disposed", (*audits)[0].action)
 }
 

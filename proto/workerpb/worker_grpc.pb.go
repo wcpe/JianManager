@@ -33,6 +33,7 @@ const (
 	WorkerService_InspectManagedProcess_FullMethodName       = "/worker.WorkerService/InspectManagedProcess"
 	WorkerService_TerminateManagedProcess_FullMethodName     = "/worker.WorkerService/TerminateManagedProcess"
 	WorkerService_PreflightStartInstance_FullMethodName      = "/worker.WorkerService/PreflightStartInstance"
+	WorkerService_AdoptForeignRuntime_FullMethodName         = "/worker.WorkerService/AdoptForeignRuntime"
 	WorkerService_SendCommand_FullMethodName                 = "/worker.WorkerService/SendCommand"
 	WorkerService_GetInstanceStatus_FullMethodName           = "/worker.WorkerService/GetInstanceStatus"
 	WorkerService_ListInstances_FullMethodName               = "/worker.WorkerService/ListInstances"
@@ -164,6 +165,8 @@ type WorkerServiceClient interface {
 	TerminateManagedProcess(ctx context.Context, in *ManagedProcessActionRequest, opts ...grpc.CallOption) (*ManagedProcessActionResponse, error)
 	// 启动前同步预检（FR-314）：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
 	PreflightStartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
+	// AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程（FR-471）：登记 PID 并纳入受管生命周期。
+	AdoptForeignRuntime(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
 	// SendCommand 向实例发送命令。
 	SendCommand(ctx context.Context, in *SendCommandRequest, opts ...grpc.CallOption) (*SendCommandResponse, error)
 	// GetInstanceStatus 获取实例状态。
@@ -519,6 +522,16 @@ func (c *workerServiceClient) PreflightStartInstance(ctx context.Context, in *In
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InstanceActionResponse)
 	err := c.cc.Invoke(ctx, WorkerService_PreflightStartInstance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) AdoptForeignRuntime(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstanceActionResponse)
+	err := c.cc.Invoke(ctx, WorkerService_AdoptForeignRuntime_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1479,6 +1492,8 @@ type WorkerServiceServer interface {
 	TerminateManagedProcess(context.Context, *ManagedProcessActionRequest) (*ManagedProcessActionResponse, error)
 	// 启动前同步预检（FR-314）：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
 	PreflightStartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
+	// AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程（FR-471）：登记 PID 并纳入受管生命周期。
+	AdoptForeignRuntime(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
 	// SendCommand 向实例发送命令。
 	SendCommand(context.Context, *SendCommandRequest) (*SendCommandResponse, error)
 	// GetInstanceStatus 获取实例状态。
@@ -1738,6 +1753,9 @@ func (UnimplementedWorkerServiceServer) TerminateManagedProcess(context.Context,
 }
 func (UnimplementedWorkerServiceServer) PreflightStartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PreflightStartInstance not implemented")
+}
+func (UnimplementedWorkerServiceServer) AdoptForeignRuntime(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdoptForeignRuntime not implemented")
 }
 func (UnimplementedWorkerServiceServer) SendCommand(context.Context, *SendCommandRequest) (*SendCommandResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SendCommand not implemented")
@@ -2249,6 +2267,24 @@ func _WorkerService_PreflightStartInstance_Handler(srv interface{}, ctx context.
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).PreflightStartInstance(ctx, req.(*InstanceActionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_AdoptForeignRuntime_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstanceActionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).AdoptForeignRuntime(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_AdoptForeignRuntime_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).AdoptForeignRuntime(ctx, req.(*InstanceActionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3752,6 +3788,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PreflightStartInstance",
 			Handler:    _WorkerService_PreflightStartInstance_Handler,
+		},
+		{
+			MethodName: "AdoptForeignRuntime",
+			Handler:    _WorkerService_AdoptForeignRuntime_Handler,
 		},
 		{
 			MethodName: "SendCommand",

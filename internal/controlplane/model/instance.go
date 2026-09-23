@@ -182,8 +182,17 @@ type Instance struct {
 	// ProbePort 是 ServerProbe 监控探针 /metrics 端口（系统分配，FR-010）。0 表示未部署探针。
 	ProbePort int `gorm:"default:0" json:"probePort"`
 	// ProbeVersionID 是实例显式选择的 ServerProbe 版本；0 表示继承所属 Worker 或全局默认（FR-409）。
-	ProbeVersionID uint           `gorm:"default:0;index" json:"probeVersionId"`
-	PID            int            `gorm:"default:0" json:"pid"`
+	ProbeVersionID uint `gorm:"default:0;index" json:"probeVersionId"`
+	PID            int  `gorm:"default:0" json:"pid"`
+	// RuntimeDriftPID 是「实例工作目录下存在活进程、但平台未认作运行」时该外来进程的 PID（FR-471）。
+	// 由心跳携带 Worker 观测结果写入；0 表示无漂移（已对齐或已被接管）。仅观测不自动处置。
+	// 显式固定列名 runtime_drift_pid：gorm 默认命名会把 PID 转成 p_id（见既有 PID 字段），
+	// 而本列仅由本 FR 的 SQL/前端/文档按 runtime_drift_pid 引用，值得钉死以免歧义。
+	RuntimeDriftPID int64 `gorm:"column:runtime_drift_pid;default:0" json:"runtimeDriftPid"`
+	// RuntimeDriftCmdline 上述漂移进程的命令行摘要（落库前已截断至 512 字节，与列宽对齐）。
+	RuntimeDriftCmdline string `gorm:"type:varchar(512)" json:"runtimeDriftCmdline"`
+	// RuntimeDriftAt 最近一次观测到漂移的时刻；漂移消失时置 NULL（json 省略）。
+	RuntimeDriftAt *time.Time     `json:"runtimeDriftAt,omitempty"`
 	StartedAt      *time.Time     `json:"startedAt"`
 	CrashCount     int            `gorm:"default:0" json:"crashCount"`
 	Tags           string         `gorm:"type:text" json:"tags"` // JSON

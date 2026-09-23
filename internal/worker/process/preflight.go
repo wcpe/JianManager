@@ -2,6 +2,8 @@ package process
 
 import (
 	"fmt"
+	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,6 +100,13 @@ func parseJavaMajor(out string) (int, bool) {
 	return first, true
 }
 
+// preflightListProcesses 是启动预检枚举本机进程的入口（测试可替换）。
+// 与孤儿扫描共用 defaultListProcesses 的枚举实现（cmdline/cwd 快照）。
+var preflightListProcesses = defaultListProcesses
+
+// preflightPortFree 是端口占用探测入口（测试可替换）。
+var preflightPortFree = checkPortFree
+
 // PreflightCheckResult 单项启动预检结果（FR-314）。
 type PreflightCheckResult struct {
 	Name    string
@@ -109,6 +118,13 @@ type PreflightCheckResult struct {
 // 供 CP 在转 STARTING 前同步拦截配置错误，终结「配置错误也要启动中→崩溃兜一圈」。
 // docker 实例整体放行（本地 JDK/文件语义不适用）。实例未注册返回 error。
 // 与 Start 内嵌的 preflightJavaVersion 同源复用、并存不冲突（纵深防御，防 CP 绕过与竞态窗口）。
+//
+// FR-471 在既有三项后补两项**现场占用**检查（docker 仍整体放行）：
+//   - work_dir_busy：工作目录下已有活进程（可能为未纳管进程或残留）；
+//   - port_free：实例 server-port 已被本机监听。
+//
+// 真机背景：外部启动的服务器在磁盘上跑、平台记 STOPPED，此时从面板点「启动」就会双开——
+// 撞 world/session.lock、抢端口、两个进程写同一批文件。这两项把双开拦在转 STARTING 之前。
 func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
 	m.mu.RLock()
 	inst, ok := m.instances[uuid]
@@ -121,6 +137,7 @@ func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
 	workDir := inst.WorkDir
 	jdkPath := inst.JDKPath
 	jdkBinPath := inst.JDKBinPath
+	serverPort := inst.ServerPort
 	ptype := inst.processType
 	m.mu.RUnlock()
 
@@ -136,7 +153,56 @@ func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
 		})),
 		toPreflightCheck("work_dir", checkWorkDir(workDir)),
 		toPreflightCheck("launch_target", checkLaunchTarget(startCmd, workDir)),
+		toPreflightCheck("work_dir_busy", checkWorkDirBusy(workDir)),
+		toPreflightCheck("port_free", preflightPortFree(serverPort)),
 	}, nil
+}
+
+// checkWorkDirBusy 报告工作目录下是否已有活进程（FR-471 防双开）。
+//
+// 判据与孤儿扫描同源（procInWorkDir）：进程 cwd 落在该目录之下，或其命令行引用了该目录。
+// 命中即失败，message 含占用 PID 与处置指引（接管或清理）。
+//
+// 枚举失败时**不拦启动**（只告警）：本项是「尽力而为的现场探测」，基础设施读取失败（/proc 权限等）
+// 不应把正常启动挡在门外；真正的双开仍有端口检查与游戏服自身的 world 锁兜底。
+func checkWorkDirBusy(workDir string) error {
+	if workDir == "" {
+		return nil // 空工作目录由 work_dir 项负责报错
+	}
+	procs, err := preflightListProcesses()
+	if err != nil {
+		slog.Warn("启动预检：进程枚举失败，跳过工作目录占用检查", "workDir", workDir, "error", err)
+		return nil
+	}
+	clean := filepath.Clean(workDir)
+	// 排除本进程：若实例工作目录恰是 Worker 数据根/其父目录，Worker 自己会被自己的 cwd 误判为占用。
+	self := os.Getpid()
+	for _, proc := range procs {
+		if proc.PID <= 0 || proc.PID == self {
+			continue
+		}
+		if !procInWorkDir(proc, clean) {
+			continue
+		}
+		return fmt.Errorf("工作目录下已有活进程（pid=%d：%s），可能为未纳管进程或残留，请先接管或清理：%s",
+			proc.PID, truncateCmdline(proc.Cmdline), clean)
+	}
+	return nil
+}
+
+// checkPortFree 探测端口在本机是否可监听（FR-471 防双开抢端口）。
+// 用 net.Listen("tcp", ":<port>") 试绑：成功即空闲（立即 Close 释放，无副作用），失败即视为被占用。
+// port<=0（未配置/未知端口）不检查——由 CP 侧的端口分配负责。
+func checkPortFree(port int) error {
+	if port <= 0 {
+		return nil
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return fmt.Errorf("端口 %d 在本节点已被监听（可能为未纳管进程或残留实例），请先接管或释放该端口后再启动", port)
+	}
+	_ = ln.Close()
+	return nil
 }
 
 // toPreflightCheck 把 err 归一为预检项结果：nil→通过，否则失败并带面向用户的原因。
