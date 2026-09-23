@@ -957,8 +957,8 @@ export const handlers = [
   domainRoute('get', '/observability/overview', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    const nodes = db<ObsNode>('nodes').filter((n) => !n.deletedAt)
-    const insts = db<ObsInstance>('instances')
+    const nodes = db<ObsNode>('nodes').list((n) => !n.deletedAt)
+    const insts = db<ObsInstance>('instances').list()
     const online = nodes.filter((n) => n.status === 1).length
     return HttpResponse.json({
       sampledAt: new Date().toISOString(),
@@ -1002,8 +1002,8 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     const sort = new URL(info.request.url).searchParams.get('sort') ?? 'level'
-    const nodes = db<ObsNode>('nodes').filter((n) => !n.deletedAt)
-    const insts = db<ObsInstance>('instances')
+    const nodes = db<ObsNode>('nodes').list((n) => !n.deletedAt)
+    const insts = db<ObsInstance>('instances').list()
     const nodes4: HealthWallNodeInfo[] = nodes.map((n) => {
       const mine = insts.filter((i) => i.nodeId === n.id)
       const crashed = mine.filter((i) => i.status === 'CRASHED').length
