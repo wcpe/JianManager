@@ -140,13 +140,20 @@ func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
 	jdkBinPath := inst.JDKBinPath
 	serverPort := inst.ServerPort
 	ptype := inst.processType
+	state := inst.State
+	// 本实例自己的根进程 PID（daemon=wrapper、direct/docker=子进程）。重启时该进程仍在，
+	// work_dir_busy 必须把它及其后代排除，否则会挡住 RUNNING 实例的重启（FR-471 回归修复）。
+	ownRootPID := 0
+	if inst.strategy != nil {
+		ownRootPID = inst.strategy.GetPID()
+	}
 	m.mu.RUnlock()
 
 	if ptype == ProcessTypeDocker {
 		return []PreflightCheckResult{{Name: "docker", OK: true, Message: "docker 实例跳过本地启动预检"}}, nil
 	}
 
-	return []PreflightCheckResult{
+	checks := []PreflightCheckResult{
 		toPreflightCheck("java_runtime", preflightJavaVersion(CommandSpec{
 			StartCommand: startCmd,
 			JavaHome:     jdkPath,
@@ -154,9 +161,21 @@ func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
 		})),
 		toPreflightCheck("work_dir", checkWorkDir(workDir)),
 		toPreflightCheck("launch_target", checkLaunchTarget(startCmd, workDir)),
-		toPreflightCheck("work_dir_busy", checkWorkDirBusy(workDir)),
-		toPreflightCheck("port_free", preflightPortFree(serverPort)),
-	}, nil
+	}
+	// FR-471 的「现场占用」两项只在实例**当前不在运行类状态**时执行。
+	//
+	// 理由：这两项要防的是「面板记 STOPPED 而磁盘/端口仍被占」（外部启动或残留进程导致的双开）。
+	// 而实例处于 RUNNING/STARTING/STOPPING 时，其工作目录与端口**本就被自己的进程正当占用**——
+	// 重启 = 先停后启，CP 在**停止之前**调用本预检，此时若照常检查，任何 RUNNING 实例的「重启」
+	// 都会被自己挡下（真机复现：r3-z1-g2 重启先被 work_dir_busy 拒、修掉后又因 port_free 拒）。
+	// 运行类状态下无「双开」风险：后续 startLocked 会先等旧进程退净。
+	if !mayOwnLiveProcess(state) {
+		checks = append(checks,
+			toPreflightCheck("work_dir_busy", checkWorkDirBusy(workDir, ownRootPID)),
+			toPreflightCheck("port_free", preflightPortFree(serverPort)),
+		)
+	}
+	return checks, nil
 }
 
 // checkWorkDirBusy 报告工作目录下是否已有活进程（FR-471 防双开）。
@@ -164,9 +183,15 @@ func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
 // 判据与孤儿扫描同源（procInWorkDir）：进程 cwd 落在该目录之下，或其命令行引用了该目录。
 // 命中即失败，message 含占用 PID 与处置指引（接管或清理）。
 //
+// **必须排除本实例自己的进程树**（ownRootPID 及其全部后代）：重启 = 先停后启，CP 在**停止之前**
+// 就调用本预检，此刻实例自己的 wrapper/java 仍占着工作目录——若不排除，任何 RUNNING 实例的
+// 「重启」都会被自己挡下（真机复现：r3-z1-g2 重启失败，占用 PID 正是它自己的 java）。
+// 排除自身后判据才回到本意：**外部/残留**进程占用工作目录才是危险信号
+// （面板 STOPPED 而磁盘在跑），而这类进程不是实例自己的后代。
+//
 // 枚举失败时**不拦启动**（只告警）：本项是「尽力而为的现场探测」，基础设施读取失败（/proc 权限等）
 // 不应把正常启动挡在门外；真正的双开仍有端口检查与游戏服自身的 world 锁兜底。
-func checkWorkDirBusy(workDir string) error {
+func checkWorkDirBusy(workDir string, ownRootPID int) error {
 	if workDir == "" {
 		return nil // 空工作目录由 work_dir 项负责报错
 	}
@@ -178,9 +203,14 @@ func checkWorkDirBusy(workDir string) error {
 	clean := filepath.Clean(workDir)
 	// 排除本进程：若实例工作目录恰是 Worker 数据根/其父目录，Worker 自己会被自己的 cwd 误判为占用。
 	self := os.Getpid()
+	// 计算本实例自己的进程树（根 + 全部后代），这些 PID 一律不算「外来占用」。
+	own := ownProcessTree(procs, ownRootPID)
 	for _, proc := range procs {
 		if proc.PID <= 0 || proc.PID == self {
 			continue
+		}
+		if _, isOwn := own[proc.PID]; isOwn {
+			continue // 本实例自己的进程（wrapper/java）：重启场景下属预期
 		}
 		if !procInWorkDir(proc, clean) {
 			continue
@@ -189,6 +219,36 @@ func checkWorkDirBusy(workDir string) error {
 			proc.PID, truncateCmdline(proc.Cmdline), clean)
 	}
 	return nil
+}
+
+// ownProcessTree 返回以 rootPID 为根、在给定进程快照里的全部后代 PID（含 root 自身）。
+// rootPID<=0 或无匹配时返回空集合。用「父指针逐级上溯」实现：对每个进程沿 ppid 链上溯，
+// 命中 root 即计入——无需依赖进程表的拓扑顺序。
+func ownProcessTree(procs []ScannedProcess, rootPID int) map[int]struct{} {
+	own := make(map[int]struct{})
+	if rootPID <= 0 {
+		return own
+	}
+	parent := make(map[int]int, len(procs))
+	for _, p := range procs {
+		parent[p.PID] = p.PPID
+	}
+	own[rootPID] = struct{}{}
+	for _, p := range procs {
+		cur := p.PID
+		for depth := 0; depth < 64; depth++ { // 深度上限防御异常 ppid 环
+			if cur == rootPID {
+				own[p.PID] = struct{}{}
+				break
+			}
+			next, ok := parent[cur]
+			if !ok || next <= 0 || next == cur {
+				break
+			}
+			cur = next
+		}
+	}
+	return own
 }
 
 // checkPortFree 探测端口在本机是否可监听（FR-471 防双开抢端口）。
