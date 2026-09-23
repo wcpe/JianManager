@@ -34,6 +34,7 @@ import {
   triggerUsesKeyword,
   triggerUsesEventMatch,
   targetTypeForTrigger,
+  triggerAllowsTargetSwitch,
   isValidHHMM,
   parseChannelIds,
 } from './alert-helpers'
@@ -193,6 +194,26 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
 
           {!isEdit ? (
             <div>
+              {triggerAllowsTargetSwitch(form.triggerType) && (
+                <div className="mb-2">
+                  <FieldLabel>{t('alerts.targetDimension')}</FieldLabel>
+                  <div className="flex gap-2 mt-1">
+                    {(['node', 'instance'] as const).map((tt) => (
+                      <button
+                        key={tt}
+                        type="button"
+                        className={`px-3 py-1 border rounded text-sm ${
+                          form.targetType === tt ? 'bg-primary text-primary-foreground' : ''
+                        }`}
+                        onClick={() => setForm({ ...form, targetType: tt, targetId: null })}
+                      >
+                        {t(tt === 'node' ? 'alerts.dimensionNode' : 'alerts.dimensionInstance')}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{t('alerts.targetDimensionHint')}</p>
+                </div>
+              )}
               <FieldLabel>{t('alerts.targetScope')}</FieldLabel>
               <select
                 className="w-full mt-1 p-2 border rounded text-sm"

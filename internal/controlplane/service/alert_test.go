@@ -107,7 +107,9 @@ func TestAlertService_CreateRule_Validation(t *testing.T) {
 		mut  func(*CreateRuleRequest)
 	}{
 		{"非法目标类型", func(r *CreateRuleRequest) { r.TargetType = "cluster" }},
-		{"指标规则必须绑定节点目标", func(r *CreateRuleRequest) { r.TargetType = "instance" }},
+		// 注：「指标规则必须绑定节点目标」的旧断言已移除——FR-462 补齐了实例级
+		// `evaluateInstanceMetricRule`，metric 在 node/instance 两个维度都合法。
+		// 正向覆盖见 alert_metric_target_test.go（instance 可建 + node 不回归）。
 		{"节点离线规则必须绑定节点目标", func(r *CreateRuleRequest) { r.TriggerType = model.AlertTriggerNodeOffline; r.TargetType = "instance" }},
 		{"实例崩溃规则必须绑定实例目标", func(r *CreateRuleRequest) { r.TriggerType = model.AlertTriggerInstanceCrash; r.TargetType = "node" }},
 		{"去抖窗口不能为负", func(r *CreateRuleRequest) { r.DedupWindowSec = -1 }},

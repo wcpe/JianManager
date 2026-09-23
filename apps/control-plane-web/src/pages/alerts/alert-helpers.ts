@@ -72,9 +72,20 @@ export function triggerUsesEventMatch(triggerType: string): boolean {
   return triggerType === 'player_event'
 }
 
-/** 触发类型对应的目标类型。 */
+/** 触发类型对应的默认目标类型（多维度触发取「节点」为默认，用户可在对话框切换）。 */
 export function targetTypeForTrigger(triggerType: string): 'node' | 'instance' {
   return triggerType === 'metric' || triggerType === 'node_offline' ? 'node' : 'instance'
+}
+
+/**
+ * 该触发类型是否允许用户切换目标维度（node ↔ instance）。
+ *
+ * `metric` 在 node 与 instance 两个维度都有评估器（`evaluateNodeMetricRule` /
+ * `evaluateInstanceMetricRule`），故两种目标都合法、可切换；`node_offline` 的判定
+ * 只在节点维度（心跳来自 Worker），仍锁定 node，不提供切换。
+ */
+export function triggerAllowsTargetSwitch(triggerType: string): boolean {
+  return triggerType === 'metric'
 }
 
 /** 通道类型需要「URL」配置字段（webhook 及各 IM 群机器人）。 */

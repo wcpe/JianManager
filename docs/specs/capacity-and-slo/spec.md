@@ -79,6 +79,7 @@ type ForecastResult struct {
   - 与 `attribution.go` 的 m2 修复（按 series 身份择一 + 跨 world 求和）**同口径**：都要消除「哪条序列存活取决于查询返回顺序」的不确定性。
   - 实例级序列收敛为一条后，多序列合计**不**相加（这些指标是同一台实例的同一测量，换节点不会让堆内存翻倍）；world 级分区指标不走本路径（`world != ""` 跳过，保持既有过滤）。
 - **告警接入**：`Confidence != insufficient` 且 `ExhaustLowDays < 阈值`（默认 7d，规则可配）→ 经 `AlertRule.TriggerType=metric` 同构路径发一条趋势告警（`DedupKey` 键含 targetId+metricKey）。趋势告警是**瞬时型**（`Resolvable=false`：每次查询独立重算，没有「条件恢复」这一事件可观测），落库即视为已解决；重复抑制由重发间隔保证（默认 6h，规则配了 `DedupWindowSec` 时以它为准）——故「首次触发 → 条件恢复 → 再次恶化」时第二次仍能告警，而 60s 轮询不会每天堆出上千条事件。
+  - **目标维度（真机缺陷修复，2026-09-23）**：告警按 `scope` 查 `target_type` 匹配的规则（node 维度查 `target_type="node"`，instance 维度查 `target_type="instance"`）。而 `CreateRule` 的 `expectedTargetTypeForTrigger` 曾把 `metric` 触发**硬编码为必须 `node` 目标**，导致**实例级 metric 规则根本建不出来** → 实例维度容量预测即使算出 `ExhaustLowDays`，`Notify` 的规则查询也恒为空、**静默不告警**（节点维度路径正常，故缺陷不易察觉）。修复：`metric` 触发改为 node/instance 两种目标都合法（与 `alert_evaluator.go` 早已具备的 `evaluateInstanceMetricRule` 对齐，后者由 FR-462 补齐时漏改了创建校验）；前端 `RuleDialog` 为 metric 补**目标维度切换**控件。`node_offline` 仍强制 node 目标（离线判定只在节点维度）。回归覆盖：`alert_metric_target_test.go`（实例级可建 + 节点级不回归 + 端到端 Fire）、`RuleDialog.dom.test.tsx`（维度切换提交 + 离线规则无切换）。
 - **降噪（决策）**：预测按需计算（查询触发），不做后台常驻扫描；趋势告警仅对「窗口内点 ≥ 100 且 β 显著」的目标评估。
 
 ### 2.3 API 与前端
