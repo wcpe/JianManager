@@ -60,7 +60,7 @@ ADR-036 确立了 GitHub Releases 的产物命名、校验与渠道契约，但�
 - `control-plane-windows-amd64.exe`
 - `worker-windows-amd64.exe`
 
-随后独立 `smoke` job 使用四项矩阵，在 `ubuntu-latest` 原生执行两个 Linux 产物、在 `windows-latest` 原生执行两个 Windows 产物。每项执行 `<binary> --version` 并强制验证：
+随后独立 `smoke` job 使用四项矩阵，在 `ubuntu-24.04` 原生执行两个 Linux 产物、在 `windows-latest` 原生执行两个 Windows 产物。每项执行 `<binary> --version` 并强制验证：
 
 - 退出码为 0；
 - stdout 去除首尾空白后与 `metadata.version` 完全相等；

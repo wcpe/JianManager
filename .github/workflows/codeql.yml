@@ -1,0 +1,83 @@
+# 代码扫描（CodeQL）：静态发现安全漏洞与代码质量缺陷，结果进仓库 Security → Code scanning。
+#
+# 触发：
+#   - push 到主干 master  → 每次合入主干即扫描
+#   - 每周一 02:30 定时   → 扫描默认分支（捕获新规则与新披露的漏洞模式）
+#   - workflow_dispatch   → 手工触发
+#
+# 刻意**不**挂 pull_request：ci.yml 已监听 PR，两个工作流同时监听会让同一个 PR 每次推送
+#   各起一个 run（Actions 列表重复、附带消耗）。安全扫描改在合入主干后立即跑 + 每周补扫。
+#
+# 语言矩阵：
+#   go                    → autobuild（本仓 `go build ./...` 已验证可直接跑通；embed 目录有占位 .gitignore）
+#   javascript-typescript → build-mode none（纯源码抽取，无需 pnpm install / 前端构建）
+#
+# 权限：security-events: write 为上传 SARIF 所必需；本工作流不产出 Actions 制品。
+# 注意：私有仓库使用 CodeQL 需仓库已启用 GitHub Advanced Security（code scanning）；公开仓库免费。
+
+name: CodeQL
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '30 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: 分析 ${{ matrix.language }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      security-events: write # 上传 SARIF 结果
+      actions: read          # 读取本工作流运行元数据
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            mode: autobuild
+          - language: javascript-typescript
+            mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: Setup Node
+        if: matrix.language == 'javascript-typescript'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: 初始化 CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.mode }}
+
+      - name: 自动构建（仅 Go）
+        if: matrix.mode == 'autobuild'
+        uses: github/codeql-action/autobuild@v4
+
+      - name: 执行分析并上传 SARIF
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

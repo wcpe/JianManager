@@ -137,7 +137,8 @@ describe('发布工作流契约', () => {
   it('发布前在原生 runner 校验四个二进制的版本输出', () => {
     const smoke = release.slice(release.indexOf('  smoke:'), release.indexOf('\n  release:'))
 
-    expect(smoke).toContain('ubuntu-latest')
+    // runner 显式锁定版本，避免 ubuntu-latest 的镜像迁移（2026-10-19 起迁 Ubuntu 26）造成环境漂移
+    expect(smoke).toContain('ubuntu-24.04')
     expect(smoke).toContain('windows-latest')
     expect(smoke).toContain('control-plane-linux-amd64')
     expect(smoke).toContain('worker-linux-amd64')

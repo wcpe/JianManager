@@ -1,38 +1,42 @@
-# 发布管线（FR-173，见 ADR-036）。
+# 发布管线（通用骨架 + 本仓构建命令，见 ADR-036）。
+#
+# 分支模型：单主干 GitHub Flow，主干唯一 master，一切变更经 PR 合入。
 #
 # 触发：
-#   - push 到 master              → 滚动预发布：覆盖固定 tag `latest`（prerelease，FR-182），说明取 CHANGELOG [Unreleased]。
-#   - push tag `v*`（如 v0.11.0）  → 正式发布：建 release `vX.Y.Z`（非 prerelease），说明取该版本段。
+#   - push 到 master              → 仅构建校验（master 始终可发布），不发布。
+#   - push tag `v*`（如 v0.22.0） → 唯一发布动作：构建 + 建 GitHub Release。
+#   - workflow_dispatch           → 手工触发构建校验（沿用当前 ref 解析版本），不发布。
+#
+# 刻意**不**挂 pull_request：PR 的 ref 是 refs/pull/N/merge，metadata job 无法解析出
+#   合法版本（裸版本分支要求同 SHA 存在 vX.Y.Z tag，见 scripts/release-metadata.mjs），
+#   加了会让每个 PR 门禁无故失败。PR 门禁由 ci.yml（web-quality / bot-quality / agent-gate）承担。
 # 硬门禁：正式 tag 对应提交必须已在 origin/master 历史上（release-metadata.mjs 校验）。
-#   禁止从 feature/release/* 等非主干 tip 直接打 tag 出正式版。
+#   禁止从 feature/* 等非主干 tip 直接打 tag 出正式版；顺序必须"先合 PR 到主干，后打 tag"，
+#   否则该提交掉出 --generate-notes 的统计区间（只统计两 tag 间合并的 PR）。
+#
+# 版本号单一真源：internal/version/version.go（ADR-065）。metadata job 解析并校验 Git ref/tag，
+#   正式 tag `vX.Y.Z` 注入裸 `X.Y.Z`，开发构建注入 `X.Y.Z-dev+g<7位sha>`；
+#   后续 job 只消费同一份 metadata output，禁止各自拼版本。
 #
 # 产物：
 #   - control-plane（full，内嵌双平台 Worker）/ control-plane-slim（不内嵌 Worker）
 #   - worker × linux/amd64 + windows/amd64
-#   共 6 个二进制 + checksums.txt；命名 `<component>[-slim]-<os>-<arch>[.exe]`（ADR-036 §1 扩展 slim 档）。
+#   共 6 个二进制 + checksums.txt；命名 `<component>[-slim]-<os>-<arch>[.exe]`（ADR-036 §1）。
 #
 # 内嵌：发布二进制内嵌全部可选资产——CP 内嵌前端 + Bot Worker + 客户端更新器两件套，
-# Worker 内嵌 CFR 反编译器（ADR-036 §5）。go:embed 缺目录即编译失败，故 prepare-embeds 必须
-# 产出所有 embed 目录内容、任一步失败即 fail-fast。
-#
-# 版本注入：metadata job 读取 internal/version.Version 并校验 Git ref/tag；正式 tag `vX.Y.Z` 注入裸 `X.Y.Z`，
-# 开发构建沿用源码 `X.Y.Z-dev` 并附加 `+g<shortsha>`。后续 job 只消费同一份 metadata output。
+#   Worker 内嵌 CFR 反编译器（ADR-036 §5）。go:embed 缺目录即编译失败，故 prepare-embeds 必须
+#   产出所有 embed 目录内容、任一步失败即 fail-fast。
 
-name: release
+name: Release
 
 on:
   push:
     branches: [master]
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
-  actions: read # 查询同提交 CI 结果，避免发布工作流重复跑前端测试
-  contents: write # 发 release / 管 tag 需写权限（ADR-036 后果）
-
-concurrency:
-  # latest（master）滚动覆盖：同组取消在途，避免并发覆盖打架。tag 发布各自独立成组。
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
+  contents: read
 
 env:
   GO_VERSION: '1.26.2'
@@ -42,7 +46,7 @@ env:
 jobs:
   # ───────────────────────── metadata：统一解析源码版本、Git ref 与发布目标 ─────────────────────────
   metadata:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.meta.outputs.version }}
       is_release: ${{ steps.meta.outputs.is_release }}
@@ -74,8 +78,11 @@ jobs:
   verify-ci:
     needs: metadata
     if: needs.metadata.outputs.publish_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
+    permissions:
+      actions: read  # 查询同提交 CI 运行结果（gh run list / view）
+      contents: read
     steps:
       - name: 等待同提交 CI 通过
         shell: bash
@@ -128,7 +135,7 @@ jobs:
   prepare-embeds:
     needs: [metadata, verify-ci]
     if: needs.metadata.outputs.publish_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -245,7 +252,7 @@ jobs:
   # 前端与 Bot 门禁复用同提交 CI；此处只验证依赖完整 embed 的 Go 代码。
   go-test:
     needs: prepare-embeds
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout（不需子模块源，只需下载的 embed 产物）
         uses: actions/checkout@v7
@@ -281,7 +288,7 @@ jobs:
   # ───────────────────────── build：交叉编译 4 个二进制（matrix） ─────────────────────────
   build:
     needs: [metadata, prepare-embeds, go-test]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -360,7 +367,7 @@ jobs:
             -o "dist/control-plane-slim-${GOOS}-${GOARCH}${{ matrix.ext }}" ./apps/control-plane
           ls -l dist/
 
-      - name: 上传二进制产物
+      - name: 上传二进制产物（供 smoke 校验，retention 1 天）
         uses: actions/upload-artifact@v7
         with:
           name: binaries-${{ matrix.os }}-${{ matrix.arch }}
@@ -370,13 +377,14 @@ jobs:
   # ───────────────────────── smoke：原生执行四个发布二进制并核对版本 ─────────────────────────
   smoke:
     needs: [metadata, build]
+    if: needs.metadata.outputs.publish_release == 'true'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-latest, artifact: binaries-linux-amd64, binary: control-plane-linux-amd64 }
-          - { runner: ubuntu-latest, artifact: binaries-linux-amd64, binary: control-plane-slim-linux-amd64 }
-          - { runner: ubuntu-latest, artifact: binaries-linux-amd64, binary: worker-linux-amd64 }
+          - { runner: ubuntu-24.04, artifact: binaries-linux-amd64, binary: control-plane-linux-amd64 }
+          - { runner: ubuntu-24.04, artifact: binaries-linux-amd64, binary: control-plane-slim-linux-amd64 }
+          - { runner: ubuntu-24.04, artifact: binaries-linux-amd64, binary: worker-linux-amd64 }
           - { runner: windows-latest, artifact: binaries-windows-amd64, binary: control-plane-windows-amd64.exe }
           - { runner: windows-latest, artifact: binaries-windows-amd64, binary: control-plane-slim-windows-amd64.exe }
           - { runner: windows-latest, artifact: binaries-windows-amd64, binary: worker-windows-amd64.exe }
@@ -413,22 +421,16 @@ jobs:
           if ((Get-Item version-stderr.txt).Length -ne 0) { throw "二进制向 stderr 输出了内容" }
           if ($actual -ne $env:EXPECTED_VERSION) { throw "版本不一致：实际 $actual，期望 $env:EXPECTED_VERSION" }
 
-  # ───────────────────────── release：汇总 + checksums + 发布 ─────────────────────────
+  # ───────────────────────── release：汇总 + checksums + 发布（唯一发布动作） ─────────────────────────
+  # 说明用 gh release create --generate-notes 自动生成，只统计两 tag 之间合并的 PR——
+  # 直推主干的提交不进说明，这正是本仓强制一切变更走 PR 的直接原因。
   release:
     needs: [metadata, build, smoke]
-    if: needs.metadata.outputs.publish_release == 'true'
-    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - name: Checkout（取 CHANGELOG + 提取脚本）
-        uses: actions/checkout@v7
-        with:
-          submodules: false
-
-      - name: Setup Node（跑 changelog-extract）
-        uses: actions/setup-node@v7
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
       - name: 下载全部二进制产物到 dist/
         uses: actions/download-artifact@v8
         with:
@@ -445,48 +447,18 @@ jobs:
           sha256sum * > checksums.txt
           cat checksums.txt
 
-      - name: 提取发布说明（CHANGELOG 段落）
-        id: notes
+      - name: 创建或覆盖 GitHub Release（generate-notes）
         shell: bash
         env:
-          IS_RELEASE: ${{ needs.metadata.outputs.is_release }}
-          VERSION: ${{ needs.metadata.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.metadata.outputs.release_tag }}
         run: |
           set -euo pipefail
-          if [[ "${IS_RELEASE}" == "true" ]]; then
-            node scripts/changelog-extract.mjs --version "${VERSION}" > release-notes.md
+          if gh release view "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            gh release upload "${TAG_NAME}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
           else
-            node scripts/changelog-extract.mjs --unreleased > release-notes.md
+            gh release create "${TAG_NAME}" dist/* \
+              --title "${TAG_NAME}" \
+              --generate-notes \
+              --repo "${GITHUB_REPOSITORY}"
           fi
-          echo "提取的发布说明："
-          cat release-notes.md
-
-      - name: 清空既有 latest 资产（仅预发布，确保只保留本次产物）
-        if: needs.metadata.outputs.is_release == 'false'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # 删除既有 latest release（容忍不存在），随后由发布步骤以本次产物重建，杜绝旧资产残留（FR-182：tag 由 nightly 改名 latest）。
-          gh release delete latest --cleanup-tag --yes 2>/dev/null || echo "无既有 latest release，跳过删除"
-
-      - name: 发布正式 release（tag vX.Y.Z）
-        if: needs.metadata.outputs.is_release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.metadata.outputs.release_tag }}
-          name: ${{ needs.metadata.outputs.release_tag }}
-          body_path: release-notes.md
-          prerelease: false
-          files: dist/*
-
-      - name: 发布滚动预发布（latest）
-        if: needs.metadata.outputs.is_release == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: latest
-          body_path: release-notes.md
-          prerelease: true
-          files: dist/*

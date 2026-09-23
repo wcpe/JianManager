@@ -118,8 +118,8 @@ Node.js 22 是发布构建工具链；受管节点执行 Bot Worker 的运行时
 
 | Runner | 产物 |
 |---|---|
-| `ubuntu-latest` | `control-plane-linux-amd64` |
-| `ubuntu-latest` | `worker-linux-amd64` |
+| `ubuntu-24.04` | `control-plane-linux-amd64` |
+| `ubuntu-24.04` | `worker-linux-amd64` |
 | `windows-latest` | `control-plane-windows-amd64.exe` |
 | `windows-latest` | `worker-windows-amd64.exe` |
 
@@ -151,7 +151,7 @@ node --test scripts/release-metadata.test.mjs
 task dist
 ```
 
-本地验证不能替代远端 GitHub Actions；尤其是 `ubuntu-latest` / `windows-latest` runner、artifact 上传下载、`GITHUB_TOKEN` 权限与 Release 创建必须推送后实跑。
+本地验证不能替代远端 GitHub Actions；尤其是 `ubuntu-24.04` / `windows-latest` runner、artifact 上传下载、`GITHUB_TOKEN` 权限与 Release 创建必须推送后实跑。
 
 ## 8. 验收状态
 

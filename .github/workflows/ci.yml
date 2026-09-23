@@ -1,6 +1,8 @@
 # 前端与 bot-worker 质量门禁（见 ADR-047 决策 8 / spec §9）。
 #
-# 触发：pull_request + 所有分支 push + 正式 v* tag。
+# 触发：pull_request + 主干 master push + 正式 v* tag。
+#   单主干模型下不再对任意分支 push 跑门禁——短分支（feature/fix/refactor/hotfix/docs/chore）
+#   的门禁由 pull_request 承担，master 上的门禁用于确认主干始终可发布。
 #   正式 tag 产生与发布提交相同 SHA 的 CI，release.yml 复用其结果，不重复执行前端质量门禁。
 #
 # 闸：前端 workspace 的 lint（tsc + eslint）+ vitest（全 workspace，含 devmock 包自检）+ build，
@@ -21,7 +23,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: ['**']
+    branches: [master]
     tags: ['v*']
 
 permissions:
@@ -36,7 +38,7 @@ env:
 
 jobs:
   web-static:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout（不需子模块，纯前端门禁）
         uses: actions/checkout@v7
@@ -82,7 +84,7 @@ jobs:
 
   web-e2e:
     name: Web E2E / Shard ${{ matrix.shard }} of 4
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -133,7 +135,7 @@ jobs:
   web-quality:
     if: always()
     needs: [web-static, web-e2e]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: 汇总前端质量门禁
         shell: bash
@@ -146,7 +148,7 @@ jobs:
           [[ "${E2E_RESULT}" == "success" ]]
 
   bot-quality:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: apps/bot-worker
@@ -185,7 +187,7 @@ jobs:
   # 不替代全量 go test ./...（release 仍跑）；本 job 在 PR/分支 push 快速拦截 agent 策略回归。
   # FR-392 已退役 mcp-bridge，改为 CP 内嵌 MCP（FR-389）。
   agent-gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
