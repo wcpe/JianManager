@@ -1,0 +1,78 @@
+# Dependabot 依赖更新（私有仓库通用规则）。
+#
+# 规则：
+#   - Dependabot PR 照常走 PR 流程（分支保护 + CI 门禁），合并即进下次 Release 说明。
+#   - 提交信息统一 `build(deps)` 前缀（type=build，scope 由 include: scope 补上），
+#     与 .claude/rules/git-commit.md 的 Conventional Commits 口径一致。
+#   - 每周上限 5 个 PR 防刷屏；大版本、私有源、受兼容矩阵约束的依赖先 ignore，人工评估后升级。
+#
+# 生态与本仓布局的对应：
+#   gomod(/)              → Go 模块（control-plane / worker / jmagent 等）
+#   npm(/)                → pnpm workspace 根（package.json + pnpm-lock.yaml）
+#   npm(/apps/bot-worker) → Bot Worker（npm 自管，不入 pnpm workspace，见 ADR-064）
+#   gradle(/client-updater) → 客户端更新器楔子 / updater-core
+#   github-actions(/)     → .github/workflows 内的 action 版本
+
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      pnpm-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directory: "/apps/bot-worker"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      bot-worker-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: gradle
+    directory: "/client-updater"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+    ignore:
+      # 客户端更新器以 --release 8 构 Java8 字节码，JUnit 大版本会抬升最低运行/编译基线，
+      # 受兼容矩阵约束，须人工评估后升级。
+      - dependency-name: "org.junit.jupiter:junit-jupiter"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
