@@ -2340,6 +2340,7 @@
   ```
 - **字段**:
   - `triggerType`: `metric` | `instance_crash` | `node_offline` | `log_keyword` | `player_event` | `backup_failed` | `baseline` | `saturation`（缺省 `metric`）。`metric` 现同时评估 node 与 instance 目标（FR-462 补齐实例级评估缺口）。
+  - `targetType`: `metric` 触发支持 `node` 与 `instance` 两种目标（2026-09-23 修复：此前创建校验硬编码为 `node`，与评估能力及本文档不符，导致实例级 metric 规则建不出来、FR-464 实例维度容量趋势告警静默失效）。`node_offline` 仅支持 `node`；`instance_crash`/`log_keyword`/`player_event`/`backup_failed` 仅支持 `instance`；`baseline`/`saturation` 两种均可（维度由 `scope` 决定）。
   - `level`: `info` | `warn` | `critical`（缺省 `warn`）
   - `targetType`/`targetId`: `metric`、`node_offline` 使用 `node`；`instance_crash`、`log_keyword`、`player_event`、`backup_failed` 使用 `instance`；`baseline`、`saturation` 可用 `node` 或 `instance`（维度由 `scope` 决定）；`targetId=null` 表示该目标类型全局匹配
   - FR-462 动态基线/饱和度字段：`baselineMethod`（`ewma`(缺省) | `roc` 突升突降 | `mom` 环比 | `yoy` 同比）、`baselineWindowSec`（默认 3600）、`sensitivity`（ewma/roc 为 k 倍标准差，mom/yoy 为偏离比，默认 3）、`minDelta`（最小绝对增量，默认 0）、`direction`（`up` | `down` | `both`(缺省)）、`scope`（`node` | `instance`，缺省按 `targetType` 推导）。`saturation` 用 `metric`（如 `disk`/`memory`/`heap`）+ `threshold`（饱和度百分比）判定 used/max 逼近上限。

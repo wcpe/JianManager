@@ -189,4 +189,47 @@ describe('RuleDialog（mock 假后端）', () => {
       process.off('unhandledRejection', onRejection)
     }
   })
+
+  it('④ 指标规则可切换目标维度，并以实例维度提交（FR-464 实例级容量告警前置）', async () => {
+    // 真机缺陷：metric 触发原先被硬编码为「必须 node 目标」，导致实例级 metric 规则
+    // 建不出来 → CapacityTrendAlerter 按 target_type="instance" 查规则恒为空 →
+    // 实例维度容量趋势告警静默失效。本用例锁定「可切到实例维度并成功提交」。
+    loginMockUser()
+    const onClose = vi.fn()
+    renderWithProviders(<RuleDialog rule={null} channels={seedChannels} onClose={onClose} />)
+
+    const panel = panelByTitle('创建规则')
+    await userEvent.type(within(panel).getAllByRole('textbox')[0], '实例容量告警')
+
+    // metric 触发下应出现维度切换按钮；默认 node 高亮。
+    const nodeBtn = within(panel).getByRole('button', { name: '节点' })
+    const instBtn = within(panel).getByRole('button', { name: '实例' })
+    expect(nodeBtn).toBeInTheDocument()
+
+    // 切到实例维度：维度提示与目标下拉应随之变为实例语义。
+    await userEvent.click(instBtn)
+    await waitFor(() => {
+      expect(within(panel).getByText(/默认覆盖全部实例/)).toBeInTheDocument()
+    })
+
+    await userEvent.click(within(panel).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  it('⑤ 节点离线规则不提供维度切换（物理上只在节点维度）', async () => {
+    loginMockUser()
+    renderWithProviders(<RuleDialog rule={null} channels={seedChannels} onClose={vi.fn()} />)
+
+    const panel = panelByTitle('创建规则')
+    // 默认 metric → 有维度切换按钮。
+    expect(within(panel).getByRole('button', { name: '节点' })).toBeInTheDocument()
+
+    // 换成 node_offline（Select 是按钮式组合控件，需先点开再选）。
+    await userEvent.click(within(panel).getAllByRole('combobox')[0])
+    await userEvent.click(await screen.findByRole('option', { name: /节点离线|离线/ }))
+
+    await waitFor(() => {
+      expect(within(panel).queryByRole('button', { name: '实例' })).not.toBeInTheDocument()
+    })
+  })
 })

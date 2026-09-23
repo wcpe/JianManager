@@ -113,8 +113,15 @@ func normalizeRuleTypeAndLevel(triggerType, level string) (string, string, error
 // （baseline/saturation 的维度由 Scope 决定，node/instance 都合法）。
 func expectedTargetTypeForTrigger(triggerType string) string {
 	switch triggerType {
-	case model.AlertTriggerMetric, model.AlertTriggerNodeOffline:
+	case model.AlertTriggerNodeOffline:
+		// 离线判定只在节点维度（心跳来自 Worker），故强制 node。
 		return "node"
+	case model.AlertTriggerMetric:
+		// metric 触发在 node 与 instance 两个维度都有评估器
+		// （evaluateNodeMetricRule / evaluateInstanceMetricRule，后者由 FR-462 补齐），
+		// 故两种目标都合法——此前只放行 node，导致实例级 metric 规则建不出来，
+		// 连带 FR-464 的实例维度容量趋势告警不可达（Notify 按 target_type="instance" 查规则）。
+		return ""
 	case model.AlertTriggerBaseline, model.AlertTriggerSaturation, model.AlertTriggerQuotaExceeded:
 		return ""
 	default:

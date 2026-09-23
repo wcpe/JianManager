@@ -15,6 +15,7 @@ import {
   parseChannelIds,
   summarizeRules,
   targetTypeForTrigger,
+  triggerAllowsTargetSwitch,
 } from './alert-helpers'
 
 describe('levelBadgeClass', () => {
@@ -67,6 +68,15 @@ describe('trigger field visibility', () => {
     expect(targetTypeForTrigger('log_keyword')).toBe('instance')
     expect(targetTypeForTrigger('player_event')).toBe('instance')
     expect(targetTypeForTrigger('backup_failed')).toBe('instance')
+  })
+
+  it('只有 metric 允许切换目标维度', () => {
+    // metric 在 node/instance 两个维度都有评估器，故两种目标都合法、可切换。
+    expect(triggerAllowsTargetSwitch('metric')).toBe(true)
+    // node_offline 的判定只在节点维度，锁定 node 不提供切换。
+    expect(triggerAllowsTargetSwitch('node_offline')).toBe(false)
+    expect(triggerAllowsTargetSwitch('instance_crash')).toBe(false)
+    expect(triggerAllowsTargetSwitch('baseline')).toBe(false)
   })
 })
 
