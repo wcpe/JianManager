@@ -21,9 +21,10 @@
 
 ### 2.1 触发与渠道
 
-- push 到 `master`：覆盖固定 tag `latest` 的滚动预发布，`prerelease=true`，发布说明取 `CHANGELOG.md` 的 `[Unreleased]` 段。
-- push tag `vX.Y.Z`：先触发同一提交 SHA 的 CI；CI 通过后创建正式 Release，`prerelease=false`，发布说明取 CHANGELOG 对应 `X.Y.Z` 版本段。
-- 普通分支源码若已是裸 `X.Y.Z` 且当前提交存在精确 tag `vX.Y.Z`，只执行构建验证，不重复覆盖 `latest`。
+- push tag `vX.Y.Z`：**唯一发布动作**。先触发同一提交 SHA 的 CI；CI 通过后创建正式 Release，`prerelease=false`，发布说明由 `gh release create --generate-notes` 生成（只统计相邻两 tag 间合并的 PR，故必须「先合 PR 到主干、后打 tag」）。
+- `workflow_dispatch`：在正式 tag ref 上手工重跑发布构建。
+- **不监听主干 push，也不监听 `pull_request`**：`metadata` job 用 `scripts/release-metadata.mjs` 解析版本，该脚本要求「裸 `X.Y.Z` 版本必须存在同 SHA 的 `vX.Y.Z` tag」；主干/开发分支上的源码是裸版本或 `X.Y.Z-dev`，均不满足会直接失败，PR 的 `refs/pull/N/merge` 同样解析不出合法版本。主干与 PR 的构建校验统一由 `ci.yml` 承担。
+- `latest` 滚动预发布渠道已移除。
 
 ### 2.2 产物
 
@@ -165,7 +166,7 @@ task dist
 | Go 1.26.2 / Node.js 22 工具链 | 工作区已实现 |
 | 四个最终二进制在 Linux/Windows 原生 runner smoke | 工作区已实现 |
 | release 仅在 smoke 全绿后执行 | 工作区已实现 |
-| push `master` 实际覆盖 `latest` 预发布 | **远端 Actions 待验（本次不 push）** |
+| 主干 push 不触发发布流水线（只触发 `ci.yml`） | 工作区已实现 |
 | push `vX.Y.Z` 实际创建正式 Release | **远端 Actions 待验（本次不 push）** |
 
 ## 9. 不在本规格范围

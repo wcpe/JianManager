@@ -18,6 +18,17 @@ test('master 推送与正式 tag 必须触发 CI', () => {
   assert.doesNotMatch(releaseWorkflow, /third_party\/ServerProbe|submodules:\s*true/)
 })
 
+test('release.yml 只在正式 tag 触发，避免主干 push 上解析裸版本失败', () => {
+  const releaseWorkflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
+  // push 只保留 tags：断言 tags 紧邻 push 之下，若有人加回 branches 会立刻不匹配。
+  assert.match(releaseWorkflow, /^  push:\r?\n    tags:\s*\['v\*'\]\s*$/m)
+  // 不得监听分支 push：主干/开发分支上的源码是裸 X.Y.Z 或 X.Y.Z-dev，
+  // metadata 解析不出合法版本会直接失败（实测主干 push 的 metadata job 0s 报错）。
+  assert.doesNotMatch(releaseWorkflow, /^  push:\r?\n(?:    .*\r?\n)*?    branches:/m)
+  // 不得监听 pull_request：PR 的 ref 为 refs/pull/N/merge，同样解析不出合法版本。
+  assert.doesNotMatch(releaseWorkflow, /^  pull_request:/m)
+})
+
 test('从 Go 源码读取版本真值', () => {
   assert.equal(extractSourceVersion('package version\nvar Version = "0.18.0-dev"\n'), '0.18.0-dev')
   assert.throws(() => extractSourceVersion('package version\n'), /读取 Version/)
