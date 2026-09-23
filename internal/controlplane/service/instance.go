@@ -1017,6 +1017,10 @@ func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 		tx.Where("instance_id = ?", id).Delete(&model.NetworkMember{})
 		// 级联清理崩溃快照（FR-313）。
 		tx.Where("instance_id = ?", id).Delete(&model.InstanceCrashSnapshot{})
+		// 级联清理二进制版本绑定（FR-468）：绑定以 instance_id 为外键语义、无 DB 级 FK，
+		// 不显式清会残留成孤儿行——实例 UUID 重建（同名新建）时可能被误认作既有绑定，
+		// 使「当前版本」显示上一次实例的制品（真机发现：删实例后 instance_binary_bindings 仍留痕）。
+		tx.Where("instance_id = ?", id).Delete(&model.InstanceBinaryBinding{})
 		// N-6：级联清理实例快照与其**快照专属**底链（origin=snapshot）。
 		//
 		// 缺陷现场：原先这里只清上面四张表，快照行与其底链全部滞留。而 B-1 让

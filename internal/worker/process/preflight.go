@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // minUnboundJavaMajor 是未绑定 JDK 的 MC 实例所需的最低 Java 大版本。
@@ -193,16 +194,50 @@ func checkWorkDirBusy(workDir string) error {
 // checkPortFree 探测端口在本机是否可监听（FR-471 防双开抢端口）。
 // 用 net.Listen("tcp", ":<port>") 试绑：成功即空闲（立即 Close 释放，无副作用），失败即视为被占用。
 // port<=0（未配置/未知端口）不检查——由 CP 侧的端口分配负责。
+// checkPortFree 探测端口在本机是否真的已被监听（FR-471 防双开抢端口）。
+//
+// 为什么要「以监听为准 + 有界重试」而非单纯试绑：早先实现只用 `net.Listen("tcp", ":port")`
+// 试绑、失败即判占用，真机出现**偶发误报**（同一实例重试启动即成功）——试绑会被本进程自身
+// 瞬时状态（并发预检各自短暂的监听 socket、刚 Close 尚未完全释放）误伤，把一次正常启动挡在门外。
+//
+// 现判据分两步，任一确证「有人在听」才算占用：
+//  1. **连接探测**（决定性证据）：能连上 `127.0.0.1`/`[::1]` 的该端口即说明确有监听者；
+//  2. **试绑兜底**（覆盖只绑在特定网卡地址、回环连不上的监听者）：试绑失败时**有界重试一次**
+//     （间隔 100ms），两次都失败才判占用——用重试吸收上述瞬时自碰撞。
+//
+// 端口空闲时两步都不会误报：连不上 + 试绑成功。
 func checkPortFree(port int) error {
 	if port <= 0 {
 		return nil
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
+	if portListening(port) {
 		return fmt.Errorf("端口 %d 在本节点已被监听（可能为未纳管进程或残留实例），请先接管或释放该端口后再启动", port)
 	}
-	_ = ln.Close()
-	return nil
+	// 试绑兜底：失败重试一次，吸收本进程自身的瞬时占用（并发预检 / 刚释放未完全）。
+	for attempt := 0; attempt < 2; attempt++ {
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err == nil {
+			_ = ln.Close()
+			return nil
+		}
+		if attempt == 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("端口 %d 在本节点已被监听（可能为未纳管进程或残留实例），请先接管或释放该端口后再启动", port)
+}
+
+// portListening 报告本机是否有进程在该端口上接受连接（v4/v6 各试一次回环）。
+// 连接被拒即「无人监听」；任何其它错误（超时等）也按「无确证」处理，交由试绑兜底判定。
+func portListening(port int) bool {
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 300*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return true
+		}
+	}
+	return false
 }
 
 // toPreflightCheck 把 err 归一为预检项结果：nil→通过，否则失败并带面向用户的原因。

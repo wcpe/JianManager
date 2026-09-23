@@ -106,6 +106,8 @@ type Manager struct {
 	onStateChange func(instanceUUID string, oldState, newState InstanceState)
 	// onCrash 进程非正常退出回调（FR-313），用于组装崩溃快照上报 CP。
 	onCrash func(instanceID string, info CrashInfo)
+	// onInstanceStart 「新一轮运行开始」回调（FR-471 缺陷修复）；用于按本次运行重置跨运行共享状态。
+	onInstanceStart func(instanceID string)
 	// memGuard 启动内存闸配置；readMem 系统内存读数器（nil=真读数，测试注入，FR-317）。
 	memGuard MemGuardConfig
 	readMem  readSysMem
@@ -254,8 +256,17 @@ func (m *Manager) SetStateChangeHandler(handler func(instanceUUID string, oldSta
 	m.onStateChange = handler
 }
 
-// SetCrashHandler 设置进程非正常退出回调（FR-313）。
-// 各策略在崩溃判定路径（direct/docker waitLoop、daemon 经 wrapper 退出事件）捕获现场后
+// SetInstanceStartHandler 设置「实例开始新一轮运行」回调（FR-471 缺陷修复）。
+//
+// 与 SetStateChangeHandler 的区别：后者是通用状态流转通知（含 STOPPING/CRASHED 等），
+// 本回调只在**一次新的运行真正开始**时触发一次（startLocked 置 STARTING 之后），语义等同
+// 「新纪元开始」。用于让终端环形缓冲等「跨运行共享」的状态按本次运行重置——否则上一轮输出
+// 会残留并污染本轮崩溃快照的根因归类。
+func (m *Manager) SetInstanceStartHandler(handler func(instanceID string)) {
+	m.onInstanceStart = handler
+}
+
+// SetCrashHandler 设置进程非正常退出回调（FR-313）。// 各策略在崩溃判定路径（direct/docker waitLoop、daemon 经 wrapper 退出事件）捕获现场后
 // 经此扇出；回调须快速返回（上报本身应异步），不得阻塞策略的崩溃处理。
 func (m *Manager) SetCrashHandler(handler func(instanceID string, info CrashInfo)) {
 	m.onCrash = handler
@@ -721,6 +732,13 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 	// FR-459：启动即开启新的健康纪元——上一代的假死/崩溃故障标识不再适用，先清空，
 	// 避免重启后在启动宽限期内继续对外暴露陈旧原因（宽限期内巡检不动故障标识）。
 	m.clearHealthFault(uuid)
+
+	// FR-471 缺陷修复：同属「新纪元」的还有终端环形缓冲——它跨运行共享，不清空会把上一轮的
+	// 输出（含崩溃文本）带进本轮崩溃快照，使根因归类指向上一轮的原因而非本次。与健康纪元同理，
+	// 此处一并重置（回调由装配层接至 ws.TerminalServer.ResetBuffer）。
+	if m.onInstanceStart != nil {
+		m.onInstanceStart(uuid)
+	}
 
 	m.emitStateChange(uuid, oldState, StateStarting)
 

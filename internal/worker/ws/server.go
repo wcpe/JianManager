@@ -342,6 +342,25 @@ func (s *TerminalServer) BufferedOutput(instanceID string) []byte {
 	return buf.ReadAll()
 }
 
+// ResetBuffer 清空实例的终端环形缓冲区（实例每次启动时调用，FR-471 缺陷修复）。
+//
+// 为什么必须在启动时清空：缓冲区对整个实例生命周期共享、不随重启轮转，于是上一轮运行的输出会
+// 残留到下一轮。崩溃快照（FR-313）截取的是「缓冲区尾部」，若不清空就会把**上一轮**的崩溃文本
+// 一并带上——分类器按优先级取词，会把本次崩溃误判成上一轮的原因（真机实测：注入端口占用，
+// 因残留的 OutOfMemoryError 行仍在外加优先级更高，被误判为 oom）。
+//
+// 语义与「跳到本次启动」的终端回放一致：新一次运行即新纪元。只清已有缓冲、不创建
+// （无缓冲时无需清，首次输出会自然建新的空缓冲）。
+func (s *TerminalServer) ResetBuffer(instanceID string) {
+	s.mu.RLock()
+	buf, ok := s.buffers[instanceID]
+	s.mu.RUnlock()
+	if !ok {
+		return
+	}
+	buf.Reset()
+}
+
 // GetSessionCount 获取指定实例的终端会话数。
 func (s *TerminalServer) GetSessionCount(instanceID string) int {
 	s.mu.RLock()
