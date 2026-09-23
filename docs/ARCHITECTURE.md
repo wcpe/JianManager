@@ -1263,8 +1263,8 @@ proxy:
 - **prepare-embeds**：一次性构建平台无关资产并作为 artifact 复用。发布链路对前端、Bot Worker、客户端更新器与 CFR 执行各自构建；其中 `apps/bot-worker` 执行 `npm ci`、生产依赖审计、类型检查、lint、build，再以 metadata 版本打确定性归档内嵌 CP。发布版 CP 自带前端 + Bot Worker + 客户端更新器，Worker 自带 CFR；ServerProbe 改由运行时制品版本库缓存和分发。Bot 构建使用 Node.js 22，节点执行时仍要求 Node.js `>=22.13.0`（ADR-072）。任一必需 embed 缺失即 fail-fast；客户端 `wedge.jar` 与 `updater-core.jar` 复制后另做非空硬校验，缺失或 0 字节均以中文错误终止发布。
 - **test**：还原同一批 embed 资产后运行 `go build ./...`、`go vet ./...`、`go test ./...`，以及前端 lint、vitest、生产构建和 Playwright E2E；门禁失败则不进入制品构建。
 - **build**：matrix 交叉编译 `linux/amd64` 与 `windows/amd64` 的 Control Plane / Worker 共 4 个最终二进制；构建 CP 前还注入同版本的两平台 Worker 与 manifest。全部二进制、Bot 归档和 Worker manifest 只消费 metadata 的同一 `version`。
-- **smoke**：四项矩阵逐一验证最终产物——两个 Linux 二进制在 `ubuntu-latest` 原生执行，两个 Windows `.exe` 在 `windows-latest` 原生执行；`--version` 必须退出码 0、stdout 严格等于 metadata 版本且 stderr 为空。`release` 直接依赖全部 smoke 成功。
-- **release**：汇总 4 个二进制并生成 `checksums.txt`（ADR-036 命名 / sha256 契约），按 CHANGELOG 提取说明；push tag `vX.Y.Z` 创建正式 Release，push `master` 删旧重建固定 `latest` 预发布。`publish_release=false` 时跳过发布。
+- **smoke**：四项矩阵逐一验证最终产物——两个 Linux 二进制在 `ubuntu-24.04` 原生执行，两个 Windows `.exe` 在 `windows-latest` 原生执行；`--version` 必须退出码 0、stdout 严格等于 metadata 版本且 stderr 为空。`release` 直接依赖全部 smoke 成功。全部 runner 显式锁定版本，不用 `-latest` 浮动标签。
+- **release**：汇总 4 个二进制并生成 `checksums.txt`（ADR-036 命名 / sha256 契约），说明由 `gh release create --generate-notes` 自动生成（只统计相邻两 tag 间合并的 PR，故必须「先合 PR 到主干、后打 tag」）。唯一发布动作是 push tag `vX.Y.Z`；push `master` 只做构建校验，不再产出发布物，`latest` 滚动预发布渠道已移除。
 
 ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布前 smoke，不重写其历史；ADR-036 的产物命名、校验和 stable/prerelease 渠道契约继续生效。当前实现尚未按用户选择推送远端，GitHub-hosted runner、artifact 传递、权限与实际 Release 创建仍为 **Actions 待验**。
 
