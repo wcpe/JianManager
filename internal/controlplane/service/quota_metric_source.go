@@ -56,26 +56,34 @@ func quotaDiskContext(ctx context.Context) (context.Context, context.CancelFunc)
 //
 // 「同拍」判定用最大 sampled_at：心跳上报的多个进程样本共享同一拍，按最大时间聚合
 // 才能得到「这一刻整棵树」的用量，而不是把不同时刻的样本加在一起。
+//
+// 取最新一拍**扫进模型**而非 `Select("MAX(sampled_at)").Scan(&裸time.Time)`：
+// SQLite 驱动对 datetime 列返回 string，裸 `*time.Time` 扫不进（真机 2026-09-23 实测
+// `unsupported Scan, storing driver.Value type string into type *time.Time`），
+// 会使本函数**恒报错** → 节点离线时的「心跳兜底」这条降级路径完全不可用，
+// 还会把「窗口内无样本」误报成「采样失败」。范式与 crash_correlation.go 一致：
+// `Order(...).First(&模型)` 走 GORM 的时间字段解析。
 func (s *MetricQuotaSource) LatestProcessSample(instanceUUID string, since time.Time) (*quotaSample, error) {
 	if instanceUUID == "" {
 		return nil, gorm.ErrRecordNotFound
 	}
-	var latest time.Time
-	if err := s.db.Model(&model.ProcessMetricSnapshot{}).
+	var latest model.ProcessMetricSnapshot
+	err := s.db.Select("sampled_at").
 		Where("instance_uuid = ? AND sampled_at >= ?", instanceUUID, since.UTC()).
-		Select("MAX(sampled_at)").Scan(&latest).Error; err != nil {
-		return nil, err
-	}
-	if latest.IsZero() {
+		Order("sampled_at DESC").First(&latest).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		// 窗口内无样本：返回零值样本（不报错），使「无数据」不参与连续计数。
 		return &quotaSample{}, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	var agg struct {
 		CPU float64
 		RSS uint64
 	}
 	if err := s.db.Model(&model.ProcessMetricSnapshot{}).
-		Where("instance_uuid = ? AND sampled_at = ?", instanceUUID, latest).
+		Where("instance_uuid = ? AND sampled_at = ?", instanceUUID, latest.SampledAt).
 		Select("COALESCE(SUM(cpu_percent), 0) as cpu, COALESCE(SUM(rss_bytes), 0) as rss").
 		Scan(&agg).Error; err != nil {
 		return nil, err

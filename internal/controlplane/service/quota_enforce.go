@@ -154,11 +154,18 @@ func (e *QuotaEnforcer) SetSettingsReader(r SettingsReader) { e.settings = r }
 func (e *QuotaEnforcer) SetNotificationService(n *NotificationService) { e.notifier = n }
 
 // interval 取巡检周期（平台设置 quota.enforce_interval，Go duration 文本）。
+//
+// 用 parseDurationDefault 而**不是** parseDurationOr：后者专为 MC 直探超时设计，末尾会
+// `directprobe.NormalizeTimeout` 把值钳到 MaxTimeout(10s)——那是直探单轮预算的上界，
+// 与巡检周期无关。先前误用导致任何 >10s 的周期被静默钳成 10s（默认 60s 也不例外，
+// 启动日志因此恒打印 "interval":"10s"），使 spec §2.3「64 服应为 120s」根本无法配置、
+// 且 K×interval 判定窗口被压缩。同 package 的 health_policy.go 用同一范式处理
+// 巡检周期/熔断窗口，其注释已点明该区别（真机验收 2026-09-23 发现并修复）。
 func (e *QuotaEnforcer) interval() time.Duration {
 	if e.settings == nil {
 		return quotaDefaultInterval
 	}
-	return parseDurationOr(e.settings.EffectiveValue(SettingKeyQuotaEnforceInterval), quotaDefaultInterval)
+	return parseDurationDefault(e.settings.EffectiveValue(SettingKeyQuotaEnforceInterval), quotaDefaultInterval)
 }
 
 // streakThreshold 取连续超限次数阈值（平台设置 quota.enforce_streak）。
