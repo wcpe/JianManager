@@ -43,11 +43,18 @@ var orphanAuditAllowedActions = map[string]struct{}{
 	"orphan.scan_dispose_blocked": {},
 	"orphan.dispose_blocked":      {},
 	"orphan.dispose_reaped":       {},
-	"health.dead_detected":        {},
-	"health.selfheal_restart":     {},
-	"health.selfheal_exhausted":   {},
-	"health.circuit_broken":       {},
-	"health.circuit_released":     {},
+	// orphan.startup_detected_not_reaped：启动恢复路径发现孤儿但按 FR-471 非破坏策略**只观测不处置**。
+	// 必须入库：它是「重启没杀人」的唯一留痕（否则该次观测静默丢失，事故复盘无据）。
+	"orphan.startup_detected_not_reaped": {},
+	// orphan.foreign_runtime_adopt_blocked / _adopted：FR-471 外来运行时接管的失败/成功审计。
+	"orphan.foreign_runtime_adopt_blocked": {},
+	"orphan.foreign_runtime_adopted":       {},
+	"orphan.foreign_runtime_detected":      {},
+	"health.dead_detected":                 {},
+	"health.selfheal_restart":              {},
+	"health.selfheal_exhausted":            {},
+	"health.circuit_broken":                {},
+	"health.circuit_released":              {},
 }
 
 // auditTargetTypeFor 按 action 归正审计 targetType（FR-459 复审项 11）：

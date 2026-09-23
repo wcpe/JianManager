@@ -109,6 +109,11 @@ func TestReportOrphanAudit_AllowedActions(t *testing.T) {
 		"orphan.scan_dispose_blocked",
 		"orphan.dispose_blocked",
 		"orphan.dispose_reaped",
+		// FR-471：启动期发现孤儿但按非破坏策略只观测（重启未杀人的唯一留痕），以及外来运行时接管的成功/失败。
+		"orphan.startup_detected_not_reaped",
+		"orphan.foreign_runtime_detected",
+		"orphan.foreign_runtime_adopt_blocked",
+		"orphan.foreign_runtime_adopted",
 		// FR-459 健康巡检动作。
 		"health.dead_detected",
 		"health.selfheal_restart",
