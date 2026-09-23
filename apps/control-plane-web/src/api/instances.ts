@@ -1,7 +1,9 @@
 import { keepPreviousData, queryOptions, useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import api from '@/api/client'
 import { removeServer } from '@/components/console/server-selection'
+import { apiErrorMessage } from '@/lib/api-error'
 import type { InstanceCapabilityProfile } from '@/lib/capabilities'
 
 /**
@@ -55,6 +57,16 @@ export interface InstanceInfo {
    * 缺失时前端按 (type, role) 本地兜底（`lib/capabilities.ts`），故为可选。
    */
   capabilities?: InstanceCapabilityProfile | null
+  /**
+   * 运行态漂移 PID（FR-471）：>0 表示该实例工作目录下存在**未被平台纳管的活进程**——
+   * 面板可能显示 STOPPED 而磁盘实际在跑（如 tmux/脚本手工启动）。0/缺省=无漂移。
+   * 判定一律经 `@/lib/runtime-drift` 的 `hasRuntimeDrift()`，勿直接读该字段做真值判断（0 与缺省同义）。
+   */
+  runtimeDriftPid?: number
+  /** 漂移进程的命令行摘要（已截断，FR-471）；无漂移为空串。 */
+  runtimeDriftCmdline?: string
+  /** 漂移最近观测时间（FR-471）；无漂移为 null。 */
+  runtimeDriftAt?: string | null
   createdAt: string
 }
 
@@ -266,6 +278,38 @@ export function useKillInstance() {
     },
     onError: (err: Error & { response?: { data?: { message?: string } } }) => {
       toast.error(err.response?.data?.message || '终止失败')
+    },
+  })
+}
+
+/**
+ * 接管运行态漂移（FR-471）：把实例工作目录下未被平台纳管的活进程接管进平台生命周期。
+ * 后端语义为「先停止该外在进程，再以受管方式重新拉起」——成功后实例真正进入平台管理，
+ * 面板状态与磁盘进程一一对应（此前可能显示 STOPPED 而磁盘在跑）。
+ * 失败信息由后端定向给出（如进程无法停止），原样透传给后端 message。
+ */
+export async function adoptInstanceRuntime(id: number): Promise<{ message?: string }> {
+  const { data } = await api.post<{ message?: string }>(`/instances/${id}/adopt-runtime`)
+  return data
+}
+
+/**
+ * 接管运行态漂移的写操作 hook：成功后 toast 并失效实例列表/详情缓存，
+ * 失败把后端定向 message（如「节点未连接」）原样透出。
+ */
+export function useAdoptInstanceRuntime() {
+  const qc = useQueryClient()
+  const { t } = useTranslation()
+  return useMutation({
+    mutationFn: (id: number) => adoptInstanceRuntime(id),
+    onSuccess: (_data, id) => {
+      toast.success(t('serverConsole.runtimeDriftAdoptDone'))
+      // 接管会改状态与漂移字段：列表与详情缓存一并失效（详情 key 为 ['instances', id]）。
+      void qc.invalidateQueries({ queryKey: ['instances'] })
+      void qc.invalidateQueries({ queryKey: ['instances', id] })
+    },
+    onError: (err: unknown) => {
+      toast.error(apiErrorMessage(err, t('serverConsole.runtimeDriftAdoptFailed')))
     },
   })
 }

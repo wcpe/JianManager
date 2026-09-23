@@ -6,6 +6,7 @@ import { Activity as ActivityIcon, AlertTriangle, Bot, ChevronDown, ChevronUp, C
 
 import { useInstance, useKillInstance, useRebuildInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
 import { usePermissionsStore } from '@/stores/permissions'
+import { runtimeDriftOf } from '@/lib/runtime-drift'
 import DangerConfirm from '@/components/DangerConfirm'
 import { useInstanceMetrics, useMetricSeries } from '@/api/metrics'
 import { useLogs } from '@/api/logs'
@@ -32,6 +33,7 @@ import QuotaPanel from './QuotaPanel'
 import SnapshotPanel from './SnapshotPanel'
 import GenericConfigSegment from './GenericConfigSegment'
 import { HealthPanel } from './HealthPanel'
+import { RuntimeDriftBanner } from './RuntimeDriftNotice'
 import { MetricSourceChips } from './MetricSourceChips'
 import WorkspaceCardBody from './WorkspaceCardBody'
 import { recordRecentServer } from './server-selection'
@@ -255,6 +257,8 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   // 横幅纯受查询数据驱动消失，不留本地状态。
   // 搭建中的 statusReason 是进行时状态而非失败（FR-331）：不落红色失败横幅，走下方琥珀状态横幅。
   const startFailReason = provisioning || rebuilding ? undefined : instance.statusReason?.trim()
+  // 运行态漂移（FR-471）：>0 即存在未纳管活进程；无漂移时为 undefined（不渲染任何标记）。
+  const runtimeDrift = runtimeDriftOf(instance)
   // <md 主操作（可用性增强）：按状态给唯一带文字的主按钮，其余收进「更多」菜单。
   const primaryAction = canStart
     ? { label: t('instances.start'), icon: Play, disabled: provisioning || !canOperate, title: !canOperate ? t('permissions.operateDenied') : provisioning ? t('instances.provisioningBlocked') : undefined, onClick: () => start.mutate(instance.id) }
@@ -328,6 +332,18 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
               </Link>
             </div>
           </div>
+        )}
+        {/* 运行态漂移告警（FR-471）：工作目录下存在未纳管的活进程——面板可能显示已停止而磁盘在跑，
+            直接「启动」会双开（后端预检拦，但用户要先看到才有机会接管）。漂移字段由心跳写入，
+            接管成功后后端清零 → 本条随查询刷新自动消失，不留本地状态。 */}
+        {runtimeDrift && (
+          <RuntimeDriftBanner
+            instanceId={instance.id}
+            instanceName={instance.name}
+            pid={runtimeDrift.pid}
+            cmdline={runtimeDrift.cmdline}
+            canOperate={canOperate}
+          />
         )}
         {/* 瘦身顶栏（FR-412）：标题只留实例名（原「服务器控制台 /」前缀与无信息副标题已删），
             节点/端口/运行时长压成一行内联元信息，指标从 7 格 MetaCell 网格改为可收起的 pill 条。 */}

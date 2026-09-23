@@ -45,6 +45,12 @@ export interface MockInstance {
   autoRestart: boolean
   /** JSON 字符串列（保真返回字符串，勿返数组）。 */
   tags: string
+  /** 运行态漂移 PID（FR-471）：>0=工作目录下有未纳管活进程；缺省/0=无漂移。 */
+  runtimeDriftPid?: number
+  /** 漂移进程命令行摘要（FR-471）。 */
+  runtimeDriftCmdline?: string
+  /** 漂移最近观测时间（FR-471）；无漂移为 null。 */
+  runtimeDriftAt?: string | null
   createdAt: string
 }
 
@@ -311,6 +317,10 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     autoStart: false,
     autoRestart: true,
     tags: '["env:test","creative","plot","region:r2","zone:z2"]',
+    // 运行态漂移样本（FR-471）：磁盘由 tmux 手工启着、平台记为 STOPPED，用于演示/联调接管入口。
+    runtimeDriftPid: 41237,
+    runtimeDriftCmdline: 'java -Xmx2G -jar paper.jar nogui',
+    runtimeDriftAt: '2026-02-01T03:20:00Z',
     createdAt: '2026-01-21T00:00:00Z',
   },
   {
@@ -393,13 +403,27 @@ function capabilitiesFor(inst: MockInstance): MockCapabilityProfile {
 }
 
 /**
+ * 运行态漂移字段默认值补齐（FR-471）：对齐真 CP 模型——`runtimeDriftPid`/`runtimeDriftCmdline`
+ * 恒返回（无漂移为 0 / ""），观测时间为 null。种子大多数行未声明这三列，这里统一兜住，
+ * 免得前端拿到 `undefined` 还得各自判空。
+ */
+function withDriftDefaults(inst: MockInstance): MockInstance {
+  return {
+    ...inst,
+    runtimeDriftPid: inst.runtimeDriftPid ?? 0,
+    runtimeDriftCmdline: inst.runtimeDriftCmdline ?? '',
+    runtimeDriftAt: inst.runtimeDriftAt ?? null,
+  }
+}
+
+/**
  * 列表响应逐行补能力画像（FR-445 §2.4）：列表也优先用后端下发的画像，
  * 前端仅在画像缺失时才走本地兜底表。与详情响应保持同一真源。
  */
 function withCapabilities(
   rows: MockInstance[],
 ): Array<MockInstance & { capabilities: MockCapabilityProfile }> {
-  return rows.map((i) => ({ ...i, capabilities: capabilitiesFor(i) }))
+  return rows.map((i) => ({ ...withDriftDefaults(i), capabilities: capabilitiesFor(i) }))
 }
 
 const instanceGroups = db<MockInstanceGroup>('instanceGroups', () => [
@@ -1086,7 +1110,7 @@ export const handlers = [
     const inst = instances.get(Number(info.params.id))
     if (!inst) return HttpResponse.json({ error: 'NOT_FOUND', message: '实例不存在' }, { status: 404 })
     // 详情响应下发能力画像（FR-445），列表不计（前端列表走 lib/capabilities 本地兜底）。
-    return HttpResponse.json({ ...inst, capabilities: capabilitiesFor(inst) })
+    return HttpResponse.json({ ...withDriftDefaults(inst), capabilities: capabilitiesFor(inst) })
   }),
 
   domainRoute('put', '/instances/:id', async (info) => {
@@ -1135,6 +1159,16 @@ export const handlers = [
   domainRoute('post', '/instances/:id/start', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
+    const inst = instances.get(Number(info.params.id))
+    if (!inst) return HttpResponse.json({ error: 'NOT_FOUND', message: '实例不存在' }, { status: 404 })
+    // 启动预检（FR-471）：工作目录下仍有未纳管活进程时拒绝启动（对齐真机 Worker 预检，
+    // 避免「面板 STOPPED + 磁盘在跑」被直接双开）。前端据此把错误消息透出给用户。
+    if ((inst.runtimeDriftPid ?? 0) > 0) {
+      return HttpResponse.json(
+        { error: 'PREFLIGHT_FAILED', message: `工作目录下存在未纳管进程（PID ${inst.runtimeDriftPid}），请先接管或清理后再启动` },
+        { status: 409 },
+      )
+    }
     // 对齐真 CP：启动 transition 清空 statusReason（FR-312 失败原因横幅随查询刷新消失）。
     instances.update(Number(info.params.id), { status: 'RUNNING', statusReason: undefined })
     return HttpResponse.json({ message: '已启动' })
@@ -1160,6 +1194,23 @@ export const handlers = [
     if (denied) return denied
     instances.update(Number(info.params.id), { status: 'STOPPED' })
     return HttpResponse.json({ message: '已终止' })
+  }),
+
+  // 接管运行态漂移（FR-471）：对齐真 CP 语义——停掉未纳管进程后以受管方式重新拉起
+  // （假后端简化为「清漂移 + 置 RUNNING」），成功后前端刷新列表/详情即看到状态与磁盘一致。
+  domainRoute('post', '/instances/:id/adopt-runtime', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const inst = instances.get(Number(info.params.id))
+    if (!inst) return HttpResponse.json({ error: 'NOT_FOUND', message: '实例不存在' }, { status: 404 })
+    instances.update(inst.id, {
+      status: 'RUNNING',
+      statusReason: undefined,
+      runtimeDriftPid: 0,
+      runtimeDriftCmdline: '',
+      runtimeDriftAt: null,
+    })
+    return HttpResponse.json({ message: '已接管运行态' })
   }),
 
   domainRoute('post', '/instances/:id/command', async (info) => {

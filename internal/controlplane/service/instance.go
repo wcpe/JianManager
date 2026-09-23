@@ -1514,6 +1514,67 @@ func (s *InstanceService) killInternal(id, expectedNodeID uint) error {
 	return nil
 }
 
+// adoptRuntimeTimeout 是「接管外来运行时」（FR-471）CP 侧 RPC 截止时间。
+// Worker 侧需先优雅停止外来进程（等待退出，超时升级 SIGKILL 进程树）再以受管方式重新拉起，
+// 故预算须覆盖「一次优雅停止 + 一次启动」，取较宽裕的 60s。
+const adoptRuntimeTimeout = 60 * time.Second
+
+// AdoptForeignRuntime 接管实例工作目录下的外来活进程（FR-471）：委托 Worker 先停外来进程再以受管方式拉起。
+//
+// 与 Start/Kill 同源：取实例 → 取节点 → 取 pool client → 下发 RPC → 失败写 status_reason。
+// 差异在反馈方式——接管需要立刻告知结果是「已接管」还是「失败原因」，故走**同步**委托（与
+// SendCommand/InspectManagedProcess 一致），不在后台异步回写；失败即把原因落 status_reason 并返回错误。
+// 成功后 Worker 已持有受管进程，CP 同步清漂移标记 + 置 RUNNING，使面板无需等待下一拍心跳即见结果。
+func (s *InstanceService) AdoptForeignRuntime(id uint) error {
+	// 与其它生命周期操作共用同一把单实例锁：接管内含「停进程 + 拉起进程」，不得与删除/启停并发穿叉。
+	releaseOperation := s.acquireInstanceOperation(id)
+	defer releaseOperation()
+
+	instance, _, client, err := s.managedProcessClient(id)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), adoptRuntimeTimeout)
+	defer cancel()
+
+	// 随附生效限额（N-3 口径）：Worker 接管内部复用启动逻辑，docker 实例的 cgroup 限额须在此送达，
+	// 不依赖「启动前的幂等重注册一定成功」。
+	resp, err := client.Worker.AdoptForeignRuntime(ctx, &workerpb.InstanceActionRequest{
+		InstanceUuid: instance.UUID,
+		WithLimits:   true,
+		CpuLimit:     effectiveCPULimit(instance),
+		MemLimitMb:   effectiveMemLimitMB(instance),
+	})
+	if err != nil {
+		reason := "接管外来运行时失败: " + err.Error()
+		s.updateStatusReasonOnly(instance.ID, reason)
+		return errors.New(reason)
+	}
+	if resp != nil && !resp.Success {
+		reason := "接管外来运行时失败: " + resp.Error
+		s.updateStatusReasonOnly(instance.ID, reason)
+		return errors.New(reason)
+	}
+
+	// 接管成功：Worker 已停外来进程并以受管方式拉起。清漂移标记 + 置 RUNNING、清崩溃原因。
+	// 直接置态（不经状态机）：接管是「把平台外的运行态收编回平台」的逃生式对齐，与 Kill 同类，
+	// 不受 validTransitions 约束；下一拍心跳会以 Worker 上报再次正向对齐，此处即时回写只为面板即时可见。
+	if err := s.db.Model(&model.Instance{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"status":                model.InstanceStatusRunning,
+			"status_reason":         "",
+			"runtime_drift_pid":     int64(0),
+			"runtime_drift_cmdline": "",
+			"runtime_drift_at":      nil,
+		}).Error; err != nil {
+		return fmt.Errorf("接管成功但回写状态失败: %w", err)
+	}
+
+	slog.Info("已接管实例外来运行时", "instanceId", instance.UUID)
+	return nil
+}
+
 // SendCommand 向运行中的实例下发一行控制台命令（复用既有 SendCommand RPC，FR-005）。
 // 仅 RUNNING 实例可下发（其它状态进程 stdin 不存在，返回 ErrInstanceNotRunning）；命令不改变实例状态。
 // 与 Start/Stop 的异步委托不同：命令需即时反馈成功/失败，故走同步委托（与 GetMetrics 一致），

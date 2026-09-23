@@ -119,6 +119,9 @@ type Manager struct {
 	// recoverVerifyOwner 是「处置前置存活复核」（FR-455①）的可注入桩：nil=真实现
 	// （DefaultVerifyProcessOwnership，读 cmdline/cwd）。返回 false=无法确认 PID 确属目标实例 → 不杀。
 	recoverVerifyOwner func(pid int, instanceUUID, workDir string, expectWrapper bool) bool
+	// recoverTermTree 是「向外来进程树发 SIGTERM」的可注入桩（FR-471 接管动作）：
+	// nil=真实现（signalPIDTree），测试注入以免真向无关进程发信号。
+	recoverTermTree func(pid int) error
 	// onOrphanAudit 是孤儿处置/误杀拦截的审计回调（FR-455/456）：由 worker main 注入落结构化审计。
 	// nil 时回退 slog（仍保证「不静默」）。FR-459 的健康/自愈审计复用同一通道（action 前缀 health.*）。
 	onOrphanAudit func(action, targetID, detail string, success bool, errMsg string)
@@ -126,6 +129,10 @@ type Manager struct {
 	health *healthState
 	// healthOnce 惰性初始化 health（零值 Manager / 直接结构体构造时的防御）。
 	healthOnce sync.Once
+	// foreignRuntimes 是「已注册实例工作目录下存在外来活进程」的观测缓存（FR-471）：
+	// 由孤儿扫描每轮经 SetForeignRuntimes 写入（60s 一拍），心跳每拍经 GetAllInstanceStates 读取
+	// 填充快照（避免心跳自己每拍全机枚举进程）。key=实例 UUID；空/nil 表示无漂移。由 mu 保护。
+	foreignRuntimes map[string]ForeignRuntime
 }
 
 // healthState 返回健康记账，必要时惰性初始化（对非 NewManager 构造的 Manager 亦安全）。
@@ -173,6 +180,56 @@ func (m *Manager) auditOrphan(action, targetID, detail string, success bool, err
 		return
 	}
 	slog.Warn("孤儿处置审计", "action", action, "target", targetID, "detail", detail, "success", success, "error", errMsg)
+}
+
+// ForeignRuntime 一条「已注册实例工作目录下的外来活进程」观测（FR-471）。
+//
+// 背景：服务器可能被运维在平台之外启动（真机场景：/home/<user>/server 下 60 台农场由 tmux 拉起），
+// 平台 DB 记 STOPPED 而磁盘进程在跑。扫描观测到这种「记账与磁盘不一致」后写入本缓存，
+// 经心跳上报 CP 供面板标红与人工「接管」，本身**不处置**任何进程。
+type ForeignRuntime struct {
+	// PID 该外来活进程的 PID。
+	PID int
+	// Cmdline 该进程命令行摘要（已截断，供运维识别来源）。
+	Cmdline string
+}
+
+// SetForeignRuntimes 由孤儿扫描每轮写入「实例目录下外来活进程」观测（key=实例 UUID）。
+// 传 nil/空表示本轮无漂移。扫描是该缓存的唯一写入方，故整体替换而非增量合并——
+// 已被接管/自然退出而消失的漂移必须随本轮快照一起清掉。
+func (m *Manager) SetForeignRuntimes(byUUID map[string]ForeignRuntime) {
+	if m == nil {
+		return
+	}
+	if len(byUUID) == 0 {
+		m.mu.Lock()
+		m.foreignRuntimes = nil
+		m.mu.Unlock()
+		return
+	}
+	cp := make(map[string]ForeignRuntime, len(byUUID))
+	for uuid, fr := range byUUID {
+		cp[uuid] = fr
+	}
+	m.mu.Lock()
+	m.foreignRuntimes = cp
+	m.mu.Unlock()
+}
+
+// foreignRuntime 返回某实例当前观测到的外来活进程（未观测到则零值，PID=0）。
+func (m *Manager) foreignRuntime(uuid string) ForeignRuntime {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.foreignRuntimes[uuid]
+}
+
+// clearForeignRuntime 清除某实例的漂移观测（接管完成后调用；其余实例的观测不受影响）。
+func (m *Manager) clearForeignRuntime(uuid string) {
+	m.mu.Lock()
+	if m.foreignRuntimes != nil {
+		delete(m.foreignRuntimes, uuid)
+	}
+	m.mu.Unlock()
 }
 
 // NewManager 创建进程管理器。
@@ -266,6 +323,11 @@ type InstanceSnapshot struct {
 	Health string
 	// StatusReason 是健康巡检给出的原因说明（假死/熔断等，FR-459）；空=正常。
 	StatusReason string
+	// ForeignPID 是「已注册实例工作目录下存在活进程、但本实例未认作运行」时该进程 PID（0=无漂移，FR-471）。
+	// 由孤儿扫描第 4 相观测、经 SetForeignRuntimes 缓存供本快照读取；仅观测，不表示平台已处置。
+	ForeignPID int
+	// ForeignCmdline 上述漂移进程的命令行摘要（已截断）。
+	ForeignCmdline string
 }
 
 // GetAllInstanceStates 返回所有实例的状态快照（用于心跳上报）。
@@ -286,15 +348,19 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 			pid = inst.strategy.GetPID()
 		}
 		fault, reason := m.healthFault(uuid)
+		// FR-471 漂移观测：识别由扫描每轮写入本缓存，此处只做搬运（缓存无该 UUID 即零值 0/空）。
+		foreign := m.foreignRuntimes[uuid]
 		states = append(states, InstanceSnapshot{
-			UUID:         uuid,
-			State:        string(state),
-			ProbePort:    inst.ProbePort,
-			ServerPort:   inst.ServerPort,
-			QueryPort:    inst.QueryPort,
-			PID:          pid,
-			Health:       fault,
-			StatusReason: reason,
+			UUID:           uuid,
+			State:          string(state),
+			ProbePort:      inst.ProbePort,
+			ServerPort:     inst.ServerPort,
+			QueryPort:      inst.QueryPort,
+			PID:            pid,
+			Health:         fault,
+			StatusReason:   reason,
+			ForeignPID:     foreign.PID,
+			ForeignCmdline: foreign.Cmdline,
 		})
 	}
 	return states
@@ -838,6 +904,111 @@ func (m *Manager) killLocked(uuid string, inst *Instance) error {
 	m.clearRestartWindow(uuid)
 	m.emitStateChange(uuid, oldState, StateStopped)
 	return nil
+}
+
+// FR-471 接管：SIGTERM 之后等待进程退出的有界轮询（约 30s）。
+// Paper 的 shutdown hook 需保存世界、释放 world/session.lock，秒级到十几秒属正常；
+// 超时即升级强杀（进程已不响应，继续等只会拖住 CP 的同步调用）。
+const (
+	adoptTermWaitAttempts = 30
+	adoptTermWaitInterval = time.Second
+)
+
+// AdoptForeignRuntime 接管实例工作目录下的外来活进程（FR-471）。
+//
+// 语义 = 「先让外来进程优雅退场，再以受管方式拉起」：对外来进程树发 SIGTERM（Paper 走 shutdown hook
+// 保存世界后正常退出），有界等待其退出，超时升级 SIGKILL 强杀整棵进程树，随后按正常路径 Start，
+// 使平台记账与磁盘事实对齐、此后由本平台掌管该实例生命周期。
+//
+// 与孤儿扫描（FR-456）的分工：那里处置的是**无主**进程（Worker 内存表已丢失该实例），默认只观测；
+// 这里处置的是**已注册实例**目录下的进程，是人工确认后的显式接管动作，故允许停止进程。
+//
+// 返回被停止的外来进程 PID（0=接管前本无漂移，等价于一次正常启动）。
+// 实例未注册返回 error；外来进程未能退出时不启动（避免双开），并落审计。
+func (m *Manager) AdoptForeignRuntime(uuid string) (int, error) {
+	inst, exists := m.lockInstanceOperation(uuid)
+	if !exists {
+		return 0, fmt.Errorf("实例 %s 不存在", uuid)
+	}
+	defer inst.operationMu.Unlock()
+
+	fr := m.foreignRuntime(uuid)
+	if fr.PID <= 0 {
+		// 无漂移：直接走正常启动路径（幂等；已 RUNNING 时由 startLocked 的状态守卫拒绝并给出明确错误）。
+		if err := m.startLocked(uuid, inst); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	m.mu.RLock()
+	workDir := inst.WorkDir
+	m.mu.RUnlock()
+
+	if err := m.terminateForeignProcessTree(uuid, workDir, fr); err != nil {
+		m.auditOrphan("orphan.foreign_runtime_adopt_blocked", uuid,
+			m.foreignDriftDetail(uuid, fr, "terminate_failed"), false, err.Error())
+		return fr.PID, fmt.Errorf("接管实例 %s 失败：工作目录下的外来进程 pid=%d 未能退出: %w", uuid, fr.PID, err)
+	}
+	// 漂移进程已退场：先清该实例的观测，避免下一次心跳仍报旧 PID（扫描下一轮也会自然收敛）。
+	m.clearForeignRuntime(uuid)
+
+	if err := m.startLocked(uuid, inst); err != nil {
+		return fr.PID, fmt.Errorf("外来进程 pid=%d 已退出，但以受管方式启动实例 %s 失败: %w", fr.PID, uuid, err)
+	}
+	m.auditOrphan("orphan.foreign_runtime_adopted", uuid,
+		m.foreignDriftDetail(uuid, fr, "adopted"), true, "")
+	slog.Info("已接管实例目录下的外来运行时", "instanceId", uuid, "stoppedPid", fr.PID)
+	return fr.PID, nil
+}
+
+// foreignDriftDetail 组装漂移/接管审计的 detail JSON（FR-471）。
+func (m *Manager) foreignDriftDetail(uuid string, fr ForeignRuntime, phase string) string {
+	return fmt.Sprintf(`{"instanceUuid":%q,"pid":%d,"cmdline":%q,"phase":%q,"policy":"adopt"}`,
+		uuid, fr.PID, fr.Cmdline, phase)
+}
+
+// terminateForeignProcessTree 先对外来进程树发 SIGTERM 等其优雅退出，超时升级 SIGKILL 强杀整树（FR-471）。
+// 返回 nil 表示该 PID（连同其进程组）已退出。
+//
+// 处置前置归属复核（与 FR-455① 同一纪律）：漂移观测与人工点击之间可能间隔数十秒（扫描 60s 一拍），
+// 期间该 PID 可能已被 OS 回收给无关进程。发信号前先用 cmdline/cwd 复核它仍属该实例目录；复核不通过
+// 即拒绝处置并返回错误（宁可不接管，也不误杀无关进程）。
+func (m *Manager) terminateForeignProcessTree(uuid, workDir string, fr ForeignRuntime) error {
+	pid := fr.PID
+	if pid <= 0 || !m.pidAlive(pid) {
+		return nil // 已自行退出：无需处置，直接进入受管启动
+	}
+	if !m.verifyProcessOwnership(pid, uuid, workDir, false) {
+		return fmt.Errorf("无法确认 pid=%d 仍属实例 %s 的目录（%s），拒绝处置（PID 可能已被回收）", pid, uuid, workDir)
+	}
+	if err := m.signalTree(pid); err != nil {
+		// 发信号失败不立即判死：进程可能恰好已退出，交由下面的存活轮询与强杀兜底。
+		slog.Warn("接管：向外来进程树发送 SIGTERM 失败，继续等待其退出", "pid", pid, "error", err)
+	} else {
+		slog.Info("接管：已向外来进程树发送 SIGTERM，等待其优雅退出", "pid", pid)
+	}
+	for attempt := 0; attempt < adoptTermWaitAttempts; attempt++ {
+		if !m.pidAlive(pid) {
+			return nil
+		}
+		m.retrySleep(adoptTermWaitInterval)
+	}
+	slog.Warn("接管：外来进程优雅退出超时，升级强杀进程树", "pid", pid)
+	if err := m.killTree(pid); err != nil {
+		slog.Warn("接管：强杀外来进程树报错（以存活复核为准）", "pid", pid, "error", err)
+	}
+	if m.waitPIDsGone([]int{pid}) {
+		return nil
+	}
+	return fmt.Errorf("进程 pid=%d 在强杀后仍未退出", pid)
+}
+
+// signalTree 向外来进程树发送 SIGTERM；测试经 recoverTermTree 注入假信号器。
+func (m *Manager) signalTree(pid int) error {
+	if m.recoverTermTree != nil {
+		return m.recoverTermTree(pid)
+	}
+	return signalPIDTree(pid)
 }
 
 // GetState 获取实例状态。

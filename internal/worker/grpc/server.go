@@ -403,6 +403,21 @@ func (s *Server) PreflightStartInstance(ctx context.Context, req *workerpb.Insta
 	return &workerpb.InstanceActionResponse{Success: false, Error: strings.Join(failed, "；")}, nil
 }
 
+// AdoptForeignRuntime 接管实例工作目录下的外来活进程（FR-471）：委托进程管理器先优雅停止该进程树
+// （Paper 走 shutdown hook 保存世界），再以受管方式启动实例，使平台记账与磁盘事实对齐。
+// 失败时返回 Success=false + Error，由 CP 回写 statusReason；错误范式与 StopInstance 一致
+// （鉴权由 gRPC 拦截器统一完成，不在本方法内重复）。
+func (s *Server) AdoptForeignRuntime(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
+	stoppedPID, err := s.manager.AdoptForeignRuntime(req.InstanceUuid)
+	if err != nil {
+		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
+	}
+	if stoppedPID > 0 {
+		slog.Info("已接管实例目录下的外来运行时并重新纳入受管", "instanceId", req.InstanceUuid, "stoppedPid", stoppedPID)
+	}
+	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
+
 // StopInstance 停止实例。
 func (s *Server) StopInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
 	if err := s.manager.Stop(req.InstanceUuid); err != nil {

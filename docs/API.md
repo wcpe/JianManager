@@ -538,6 +538,14 @@
 - **关联 FR**: FR-005
 - **权限**: `instance.operate`
 
+### POST /api/v1/instances/:id/adopt-runtime
+- **描述**: 接管实例工作目录下未被平台纳管的活进程（FR-471）——先做归属复核，再 SIGTERM 进程树等其优雅退出（超时升级 SIGKILL），随后以受管方式拉起，使面板状态与磁盘进程一一对应。用于「外部启动（tmux/脚本）的服务器在跑、平台却记 STOPPED」的脱节场景。**接管伴随一次重启**（无 wrapper 时无法经控制台通道优雅停服，这是能力边界）。无漂移时等价于一次正常启动（幂等）。漂移标记见实例对象的 `runtimeDriftPid`/`runtimeDriftCmdline`/`runtimeDriftAt`
+- **关联 FR**: FR-471
+- **权限**: `instance.operate`（资源级按可访问实例隔离）
+- **请求**: 无 body
+- **响应**: `200 { "message": "..." }`
+- **错误**: 404 `NOT_FOUND`（实例不存在/无权访问）；422（实例未注册 / 外来进程无法退出 / 启动失败，带具体原因）
+
 ### POST /api/v1/instances/:id/rebuild
 - **描述**: 重建损毁（DAMAGED）实例（FR-342）——复用已存搭建参数（`ProvisionSpec`）重跑搭建到既有工作目录，无需重填。仅 `status=DAMAGED` 且有搭建参数的实例可重建；起后台任务返回 `{taskId}`，进度见任务中心；成功→STOPPED、失败→仍 DAMAGED。端点按实例 role 分派：代理（proxy）走代理重建（复用 `forwarding_secret`），后端/通用走 server 重建。损毁实例的 `start` 被拦（`PREFLIGHT_FAILED`「已损毁，请先重建」）
 - **关联 FR**: FR-342

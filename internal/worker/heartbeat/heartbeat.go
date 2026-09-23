@@ -300,6 +300,10 @@ func (h *Heartbeat) buildHeartbeatRequest() (*workerpb.HeartbeatRequest, []strin
 				Pid:          int32(s.PID),
 				Health:       s.Health,
 				StatusReason: s.StatusReason,
+				// foreign_pid/foreign_cmdline（FR-471）：孤儿扫描观测到的「实例目录下外来活进程」，
+				// 供 CP 写 instances.runtime_drift_* 并在面板提示接管。0=无漂移（零值兼容老 CP）。
+				ForeignPid:     int32(s.ForeignPID),
+				ForeignCmdline: s.ForeignCmdline,
 			})
 		}
 		req.InstanceMetrics = collectInstanceMetrics(states)

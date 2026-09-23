@@ -511,6 +511,38 @@ func (h *InstanceHandler) Kill(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已终止"})
 }
 
+// AdoptRuntime 接管实例工作目录下的外来活进程（FR-471）。
+// 权限对齐同文件 Start/Stop：requireNodes 校验实例写权限 + canAccessInstance 校验实例可见性。
+func (h *InstanceHandler) AdoptRuntime(c *gin.Context) {
+	if !requireNodes(c, "instance.operate") {
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
+	if err := h.instanceSvc.AdoptForeignRuntime(id); err != nil {
+		switch {
+		case errors.Is(err, service.ErrNodeOffline):
+			// 节点未连接：无法下发接管，409 供前端提示节点离线（与 Start 同口径）。
+			c.JSON(http.StatusConflict, gin.H{"error": "NODE_OFFLINE", "message": err.Error()})
+		case errors.Is(err, service.ErrInstanceNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": err.Error()})
+		default:
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "ADOPT_FAILED", "message": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "已接管"})
+}
+
 // ProcessDetail 探查受管实例进程树内的单个 PID。
 func (h *InstanceHandler) ProcessDetail(c *gin.Context) {
 	id, err := parseID(c)
@@ -699,6 +731,7 @@ func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		instances.POST("/:id/stop", h.Stop)
 		instances.POST("/:id/restart", h.Restart)
 		instances.POST("/:id/kill", h.Kill)
+		instances.POST("/:id/adopt-runtime", h.AdoptRuntime)
 		instances.GET("/:id/processes/:pid", h.ProcessDetail)
 		instances.POST("/:id/processes/:pid/actions", h.ProcessAction)
 		instances.POST("/:id/command", h.Command)

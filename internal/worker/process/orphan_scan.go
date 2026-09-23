@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,9 @@ import (
 //  1. wrapper 死 / Java 活（daemon 模式：wrapper 自身死亡，Java 仍占端口与 Paper session.lock）；
 //  2. direct 孤儿（Worker 硬崩后 Java 未 setsid、reparent 到 init，内存表已无该实例）；
 //  3. docker 残留（Worker 重启后容器仍在跑，但内存表未认作 RUNNING）。
+//
+// FR-471 增加第四相（只观测不处置）：已注册实例的工作目录下存在外来活进程（平台记账 STOPPED、磁盘
+// 却在跑），聚合后写 Manager 缓存供心跳上报 CP，处置由人工「接管」动作触发。
 //
 // 与启动期 RecoverDaemonInstances 复用同一 `daemon.KillPIDTree` 基座与 FR-455① 的处置前置复核。
 
@@ -51,6 +55,10 @@ const (
 	OrphanKindDirect OrphanKind = "direct_orphan"
 	// OrphanKindDockerLeftover docker 容器残留（内存表未认作 RUNNING 却容器在跑/已退出）。
 	OrphanKindDockerLeftover OrphanKind = "docker_leftover"
+	// OrphanKindForeignRuntime 已注册实例的工作目录下存在外来活进程（FR-471）。
+	// 与前三类不同，它不是孤儿（实例仍在内存表中），而是「平台记账 STOPPED、磁盘却在跑」的对齐线索：
+	// 本相只观测并上报，处置须由人工确认后经 AdoptForeignRuntime 接管。
+	OrphanKindForeignRuntime OrphanKind = "foreign_runtime"
 )
 
 // OrphanFinding 一次扫描发现的一条孤儿。
@@ -148,17 +156,27 @@ func (s *OrphanScanner) Start(ctx context.Context) {
 	}()
 }
 
-// ScanOnce 执行一轮三态孤儿扫描并落审计。返回本轮发现（供单测/观测）。
+// ScanOnce 执行一轮孤儿扫描并落审计。返回本轮发现（供单测/观测）。
 // 本轮耗时超过 maxScanRoundDuration 时告警（FR-456 F14：扫描成本可观测）。
+//
+// FR-471：第四相 scanForeignInRegisteredWorkdirs 与前三相共用同一轮进程枚举快照
+// （procs 只枚举一次），观测「已注册实例目录下的外来活进程」并写入 Manager 缓存供心跳上报。
 func (s *OrphanScanner) ScanOnce() []OrphanFinding {
 	if s == nil || s.mgr == nil {
 		return nil
 	}
 	started := time.Now()
 	findings := make([]OrphanFinding, 0)
+	// 本机进程只枚举一次，供第二相（无主进程）与第四相（在册实例目录下的漂移）共用；
+	// 枚举失败仅告警降级，此时第四相也一并跳过（宁漏勿误）。
+	procs, procErr := s.listProcesses()
+	if procErr != nil {
+		slog.Warn("运行期孤儿扫描：进程枚举失败，第二/四相跳过本轮", "error", procErr)
+	}
 	findings = append(findings, s.scanWrapperGone()...)
-	findings = append(findings, s.scanDirectOrphans()...)
+	findings = append(findings, s.scanDirectOrphans(procs)...)
 	findings = append(findings, s.scanDockerLeftovers(context.Background())...)
+	findings = append(findings, s.scanForeignInRegisteredWorkdirs(procs, procErr == nil)...)
 	if elapsed := time.Since(started); elapsed > maxScanRoundDuration {
 		slog.Warn("运行期孤儿扫描单轮耗时偏长", "elapsed", elapsed, "findings", len(findings))
 	}
@@ -217,12 +235,10 @@ func (s *OrphanScanner) handleWrapperGone(pidPath string, rec *daemon.PIDRecord,
 		true, "")
 }
 
-// scanDirectOrphans 枚举本机进程，识别工作目录落在受管服务器根下、却无对应受管实例的无主进程。
-// 枚举失败仅告警降级（spec §5：全机进程枚举成本/权限风险）。
-func (s *OrphanScanner) scanDirectOrphans() []OrphanFinding {
-	procs, err := s.listProcesses()
-	if err != nil {
-		slog.Warn("direct 孤儿扫描：进程枚举失败，跳过本轮", "error", err)
+// scanDirectOrphans 枚举本机进程（procs 由 ScanOnce 统一枚举一次后传入），识别工作目录落在受管
+// 服务器根下、却无对应受管实例的无主进程。枚举失败仅告警降级（spec §5：全机进程枚举成本/权限风险）。
+func (s *OrphanScanner) scanDirectOrphans(procs []ScannedProcess) []OrphanFinding {
+	if len(procs) == 0 {
 		return nil
 	}
 	serversDir := filepath.Clean(s.mgr.serversDir)
@@ -392,8 +408,124 @@ func (s *OrphanScanner) handleDockerLeftover(ctx context.Context, finding *Orpha
 		true, "")
 }
 
-// managedInstanceRuntime 返回本节点「内存表中已知实例」的根 PID 集合与工作目录集合。
+// scanForeignInRegisteredWorkdirs 是运行期扫描的第四相（FR-471）：识别「已注册实例的工作目录下存在
+// 活进程、但该实例并未认作在跑」的运行态漂移（真机场景：/home/<user>/server 下的农场由 tmux 外部拉起，
+// 平台 DB 记 STOPPED 而磁盘进程仍在跑）。**本相只观测、不杀任何进程**，处置由人工「接管」动作触发
+// （Manager.AdoptForeignRuntime）。
 //
+// 与 scanDirectOrphans 的三点关键区别：
+//   - 判据是「**实例目录**下有活进程」，且工作目录限**任意路径**（不限 serversDir）——外来启动的
+//     服务器目录常落在受管服务器根之外；direct 相只管「无主进程」，方向不同。
+//   - 对象是**已注册实例**（内存表有该 UUID），而非内存表已丢失的孤儿。
+//   - 只写观测缓存 + 落审计，不处置。
+//
+// 状态判据复用 mayOwnLiveProcess 的取反：RUNNING/STARTING/STOPPING 的实例本就有受管活进程，不属漂移；
+// STOPPED/CRASHED 的实例目录下若仍有活进程，即「记账与磁盘不一致」。
+//
+// 结果整体写入 Manager 缓存（含「本轮无漂移」时的清空），供心跳上报 CP 写 runtime_drift_*；
+// 审计只在漂移集**变化**时落（每 60s 一轮，同一漂移不重复刷审计）。
+//
+// listOK=false 表示本轮进程枚举失败：此时无权断言「无漂移」，保留上一轮观测，
+// 宁让面板暂时显示陈旧漂移，也不把真实漂移误清成「已消解」。
+func (s *OrphanScanner) scanForeignInRegisteredWorkdirs(procs []ScannedProcess, listOK bool) []OrphanFinding {
+	if !listOK {
+		return nil
+	}
+	m := s.mgr
+
+	// 待查实例：已注册、有工作目录、且当前状态不属「可能仍有活进程」三态。
+	type registeredDir struct {
+		uuid    string
+		workDir string
+	}
+	m.mu.RLock()
+	targets := make([]registeredDir, 0, len(m.instances))
+	for uuid, inst := range m.instances {
+		if inst.WorkDir == "" || mayOwnLiveProcess(inst.State) {
+			continue
+		}
+		targets = append(targets, registeredDir{uuid: uuid, workDir: filepath.Clean(inst.WorkDir)})
+	}
+	// 上一轮观测（用于审计去重，避免同一漂移每轮刷一条）。
+	prev := make(map[string]ForeignRuntime, len(m.foreignRuntimes))
+	for uuid, fr := range m.foreignRuntimes {
+		prev[uuid] = fr
+	}
+	m.mu.RUnlock()
+	// 遍历顺序固定为 UUID 序，保证 findings 顺序可复现（单测与观测日志友好）。
+	sort.Slice(targets, func(i, j int) bool { return targets[i].uuid < targets[j].uuid })
+
+	managedPIDs, _ := m.managedInstanceRuntime()
+	// 本进程（Worker 自身）排除：若某实例的工作目录恰是 Worker 数据根或其在磁盘上的父目录，
+	// Worker 自己会被自己的 cwd 判为「目录下的活进程」——那是自指噪声，且会让接管动作去杀自己。
+	self := os.Getpid()
+
+	observed := make(map[string]ForeignRuntime, len(targets))
+	findings := make([]OrphanFinding, 0)
+	for _, tgt := range targets {
+		// 取最小 PID 作为该实例的稳定代表：同目录多进程时避免每轮代表抖动。
+		hitPID := 0
+		hitCmdline := ""
+		for _, proc := range procs {
+			if proc.PID <= 0 || proc.PID == self {
+				continue
+			}
+			if _, ok := managedPIDs[proc.PID]; ok {
+				continue // 受管进程（本实例或其它实例的）：非漂移
+			}
+			if !procInWorkDir(proc, tgt.workDir) {
+				continue
+			}
+			if hitPID == 0 || proc.PID < hitPID {
+				hitPID = proc.PID
+				hitCmdline = truncateCmdline(proc.Cmdline)
+			}
+		}
+		if hitPID == 0 {
+			continue
+		}
+		observed[tgt.uuid] = ForeignRuntime{PID: hitPID, Cmdline: hitCmdline}
+		findings = append(findings, OrphanFinding{
+			Kind:         OrphanKindForeignRuntime,
+			InstanceUUID: tgt.uuid,
+			WorkDir:      tgt.workDir,
+			PIDs:         []int{hitPID},
+			Detail:       fmt.Sprintf("实例工作目录下存在未纳管活进程（pid=%d）：%s", hitPID, hitCmdline),
+		})
+	}
+
+	// 整体替换观测缓存：本轮无漂移即清空（心跳据此把已消解的漂移清零）。
+	m.SetForeignRuntimes(observed)
+
+	for _, f := range findings {
+		fr := observed[f.InstanceUUID]
+		if old, ok := prev[f.InstanceUUID]; ok && old.PID == fr.PID {
+			continue // 与上一轮同一 PID：漂移未变化，不重复落审计
+		}
+		m.auditOrphan("orphan.foreign_runtime_detected", f.InstanceUUID,
+			fmt.Sprintf(`{"kind":"foreign_runtime","instanceUuid":%q,"workDir":%q,"pid":%d,"cmdline":%q,"policy":"observe"}`,
+				f.InstanceUUID, f.WorkDir, fr.PID, fr.Cmdline),
+			true, "")
+		slog.Warn("运行期扫描发现实例目录下的外来活进程（只观测不杀，待人工接管）",
+			"instanceId", f.InstanceUUID, "pid", fr.PID, "workDir", f.WorkDir)
+	}
+	return findings
+}
+
+// procInWorkDir 报告进程是否「落在」给定工作目录下：cwd 位于该目录之下，或其命令行引用了该目录。
+// 判据与 directOrphanWorkDir 同源（cmdline/cwd），但**不限定 serversDir**——FR-471 要求覆盖任意路径
+// 的实例工作目录（真机农场目录在 /home/<user>/server 下，不在受管服务器根内）。
+func procInWorkDir(proc ScannedProcess, workDir string) bool {
+	if workDir == "" || workDir == "." {
+		return false
+	}
+	if proc.Cwd != "" && pathUnder(proc.Cwd, workDir) {
+		return true
+	}
+	return strings.Contains(proc.Cmdline, workDir)
+}
+
+// managedInstanceRuntime 返回本节点「内存表中已知实例」的根 PID 集合与工作目录集合。
 // FR-456（F2 + 回归修复）：两集合的判据刻意不对称——
 //
 //   - 工作目录集合只收「可能仍有活进程」的状态（RUNNING/STARTING/STOPPING，见 mayOwnLiveProcess）。

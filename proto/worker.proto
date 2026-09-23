@@ -45,6 +45,8 @@ service WorkerService {
   rpc TerminateManagedProcess(ManagedProcessActionRequest) returns (ManagedProcessActionResponse);
   // 启动前同步预检（FR-314）：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
   rpc PreflightStartInstance(InstanceActionRequest) returns (InstanceActionResponse);
+  // AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程（FR-471）：登记 PID 并纳入受管生命周期。
+  rpc AdoptForeignRuntime(InstanceActionRequest) returns (InstanceActionResponse);
   // SendCommand 向实例发送命令。
   rpc SendCommand(SendCommandRequest) returns (SendCommandResponse);
   // GetInstanceStatus 获取实例状态。
@@ -417,6 +419,12 @@ message InstanceState {
   string health = 4;
   // status_reason 是健康巡检给出的原因说明（假死/熔断等，FR-459）；空=正常。CP 据此写 instances.status_reason。
   string status_reason = 5;
+  // foreign_pid 是「已注册实例的工作目录下存在活进程、但 Worker 未认作运行」时该进程的 PID（0=无此类漂移）。
+  // FR-471：用于发现「面板 STOPPED 而磁盘在跑」的运行态脱节（就地导入等外部启动的服务器）。
+  // 老 CP 忽略本字段；老 Worker 不上报（零值）。不改变 FR-326 反向对账语义。
+  int32 foreign_pid = 6;
+  // foreign_cmdline 是上述漂移进程的命令行摘要（已截断，供运维识别来源）；仅 foreign_pid>0 时有意义。
+  string foreign_cmdline = 7;
 }
 
 // DisposeOrphanRuntimeRequest CP 请求 Worker 清理无主运行时（FR-326）。
