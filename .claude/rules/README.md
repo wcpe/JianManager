@@ -9,7 +9,7 @@
 | [gate-prd.md](gate-prd.md) | PRD → SDD 阶段门禁 |
 | [gate-sdd.md](gate-sdd.md) | SDD → Feature 开发门禁 |
 | [gate-api.md](gate-api.md) | API Spec → 编码门禁 |
-| [gate-merge.md](gate-merge.md) | 合并/发版门禁 |
+| [gate-merge.md](gate-merge.md) | 合并/发版门禁（含红线：基线 CI 未全绿禁止创建发版 commit 与 tag） |
 
 ## 持续规则
 
