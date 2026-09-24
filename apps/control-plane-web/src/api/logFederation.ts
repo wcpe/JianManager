@@ -367,10 +367,22 @@ export function mapFederationEnvelope(envelope: LogsFederationEnvelope): {
 }
 
 /**
- * 404 降级信封：经典 `/logs` 表格继续工作，coverage 标 LEGACY 不完整。
+ * 降级信封：经典 `/logs` 表格继续工作，coverage 标 LEGACY 不完整。
  * UI 侧 classicExportAllowed=true，保留既有导出入口；横幅说明联邦 API 不可用。
+ *
+ * `notReady` 区分两种降级来源，**诊断信息必须保留**：
+ * - false：联邦路径不可达（404/未部署/连接失败），问题在联邦接口本身；
+ * - true：联邦接口正常响应但「日志查询引擎未就绪」（受管 VL 未配置/未启动），
+ *   问题在引擎未启用，用户需要去节点页开启——若此时仍标 LEGACY，横幅会退化成
+ *   「含切换前的历史数据」，把可操作的启用指引换成无动作的说明。
  */
-export function legacyDegradeEnvelope(): LogsFederationEnvelope {
+export function legacyDegradeEnvelope(notReady = false): LogsFederationEnvelope {
+  const notes = notReady
+    ? [
+        FEDERATED_NOT_READY_MESSAGE,
+        'degraded to legacy logs view (engine not ready)',
+      ]
+    : ['logs federation API unavailable (404); degraded to legacy logs view']
   return {
     sourceTag: 'legacy',
     sourceTags: ['legacy'],
@@ -378,19 +390,22 @@ export function legacyDegradeEnvelope(): LogsFederationEnvelope {
     coverage: {
       sourceTag: 'legacy',
       complete: false,
-      partialReasons: [PARTIAL_REASONS.LEGACY],
+      partialReasons: [
+        notReady ? PARTIAL_REASONS.ENGINE_NOT_READY : PARTIAL_REASONS.LEGACY,
+      ],
       targets: [
         {
           targetId: 'legacy-cp-logs',
           name: 'Legacy CP logs',
-          status: 'LEGACY',
+          status: notReady ? 'NOT_READY' : 'LEGACY',
           included: true,
-          reason: PARTIAL_REASONS.LEGACY,
+          reason: notReady ? PARTIAL_REASONS.ENGINE_NOT_READY : PARTIAL_REASONS.LEGACY,
         },
       ],
-      notes: ['logs federation API unavailable (404); degraded to legacy logs view'],
+      notes,
     },
-    notes: ['logs federation API unavailable (404); degraded to legacy logs view'],
+    notes,
+    ...(notReady ? { federatedReady: false } : {}),
   }
 }
 
@@ -460,7 +475,7 @@ export function useLogsFederation(
         // 日志平台时日志中心整体不可用（含平台日志本身）。这里复用同一判定（它已覆盖
         // notes / errorCode / federatedReady=false / duplicate 未决）来决定降级。
         if (mapFederationEnvelope(envelope).federatedNotReady) {
-          return buildFederationResult(legacyDegradeEnvelope(), { degraded: true })
+          return buildFederationResult(legacyDegradeEnvelope(true), { degraded: true })
         }
         return buildFederationResult(envelope, { degraded: false })
       } catch (error) {

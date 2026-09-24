@@ -42,8 +42,10 @@ describe('NodeLogRuntimePanel', () => {
     expect(screen.queryByText('可查询')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '下发资产' }))
     await waitFor(() => expect(installs).toBe(1))
-    fireEvent.change(screen.getByLabelText('迁移 UTC 日期'), { target: { value: '2026-09-23' } })
-    await user.click(screen.getByRole('button', { name: '迁移到 COLD' }))
+    // aria-label 更新为「迁移日期（该日分区）」，与新增的问号解释文案一致。
+    fireEvent.change(screen.getByLabelText('迁移日期（该日分区）'), { target: { value: '2026-09-23' } })
+    // HOT→COLD 目标改由相邻问号解释，按钮文案统一为「迁移分区」。
+    await user.click(screen.getByRole('button', { name: '迁移分区' }))
     await waitFor(() => expect(migrations).toBe(1))
     await user.click(screen.getByRole('button', { name: '核销已覆盖缺口' }))
     await waitFor(() => expect(resolutions).toBe(1))

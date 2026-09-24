@@ -116,9 +116,12 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
             onError: (error) => toast.error(errorMessage(error)),
           })} disabled={busy || !online || !approved?.cached}>
             {install.isPending ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <Download className="mr-1 size-4" />}
-            <span title={t('logsRuntime.asset.dispatchHelp')}><CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.asset.dispatchHelp')} /></span>
             {t('logsRuntime.asset.dispatch')}
           </Button>
+          {/* 问号放在按钮外侧：放进按钮会并入其可访问名（读屏与测试都读不到「下发资产」）。 */}
+          <span title={t('logsRuntime.asset.dispatchHelp')} className="inline-flex items-center">
+            <CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.asset.dispatchHelp')} />
+          </span>
         </div>
       </div>
 
@@ -168,9 +171,12 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
 		<Button type="button" size="sm" variant="outline" disabled={busy || !online}
 		  onClick={() => resolveGaps.mutate(undefined, { onSuccess: () => toast.success('已核销 projection 覆盖的缺口'), onError: (error) => toast.error(errorMessage(error)) })}>
 		  {resolveGaps.isPending ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <CheckCheck className="mr-1 size-4" />}
-		  <span title={t('logsRuntime.gaps.help')}><CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.gaps.help')} /></span>
 		  {t('logsRuntime.gaps.resolve')}
 		</Button>
+		{/* 问号放在按钮外侧：放进按钮会并入其可访问名（读屏与测试都读不到「核销已覆盖缺口」）。 */}
+		<span title={t('logsRuntime.gaps.help')} className="inline-flex items-center">
+		  <CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.gaps.help')} />
+		</span>
 		<span className="inline-flex items-center gap-1">
 		  <input type="date" aria-label={t('logsRuntime.date.label')} title={t('logsRuntime.date.help')} value={migrationDay} onChange={(event) => setMigrationDay(event.target.value)}
 			className="h-8 rounded-md border bg-background px-2 text-sm" />

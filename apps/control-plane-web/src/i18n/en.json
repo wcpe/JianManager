@@ -3507,11 +3507,14 @@
       "federated": "Federated"
     },
     "degraded": "Log query service is not enabled; switched to platform and historical logs",
+    "degradedUnavailable": "Live log query service is unavailable; switched to platform and historical logs",
     "federatedNotReady": "Log query service is not enabled; switched to platform and historical logs",
     "emptyNotSuccess": "Coverage incomplete or query failed — this is not an empty result",
     "degradedHint": "Platform and historical logs remain available. To query per-server live logs, enable the log platform under Nodes → node → Log runtime panel.",
     "federatedNotReadyHint": "Platform and historical logs remain available. To query per-server live logs, enable the log platform under Nodes → node → Log runtime panel.",
-    "degradedTitleShort": "Log query service off · using platform & historical logs"
+    "degradedTitleShort": "Log query service off · using platform & historical logs",
+    "degradedUnavailableHint": "Platform and historical logs remain available. The live log query service is currently unreachable; retry later or contact an administrator.",
+    "degradedUnavailableTitleShort": "Live log query service unavailable · using platform & historical logs"
   },
   "users": {
     "title": "User Management",

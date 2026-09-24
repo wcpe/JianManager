@@ -209,6 +209,8 @@ export default function LogsPage() {
 		0,
 	)
 	const levelFacets = federationFacets.data?.dimensions?.find((dimension) => dimension.dimension === 'level')?.values ?? []
+	// 洞察栏是否有真实内容（决定是否挂 testid；占位容器本身始终渲染以稳定高度）。
+	const insightsVisible = federationActive && (statsCount !== undefined || levelFacets.length > 0)
   const federationItems = federationActive
     ? mapFederationItems(federation.response.items)
     : null
@@ -247,8 +249,12 @@ export default function LogsPage() {
 	const hasData = legacyMode ? !!legacyQuery.data : !!data
 
   // 空结果语义：失败/partial 不得呈「暂无日志」空成功（FR-481）。
+  // 引擎未就绪的降级是例外中的例外：经典路径可能确实没有行，但引擎侧数据从未被查询，
+  // 此时宣称「暂无日志」是假成功，必须保留非成功空态。
   const emptySuccessAllowed =
-    !federation || federation.degraded || federation.classified.emptySuccessAllowed
+    !federation ||
+    (federation.degraded && !federation.federatedNotReady) ||
+    federation.classified.emptySuccessAllowed
 
   const handleExport = async (scope: LogExportScope) => {
     if (exportDisabled) return
@@ -308,22 +314,34 @@ export default function LogsPage() {
         <div className="flex min-w-0 items-center gap-2">
           <h1 className="jm-page-title">{t('logs.title')}</h1>
           {/* 状态与提示固定在标题区：不占用列表空间，也不因状态变化推动下方布局。 */}
-          <span data-testid="logs-source-tag" className="inline-flex shrink-0">
-            {federation?.sourceTag && (
+          {/* 徽标仅在确有来源标记时渲染：标题行是 flex，空占位只会让测试与读屏
+              多拿到一个空节点，而它本身不承载高度，去掉不影响布局稳定。 */}
+          {federation?.sourceTag && (
+            <span data-testid="logs-source-tag" className="inline-flex shrink-0">
               <StatusBadge
                 level={federation.sourceTag === 'legacy' ? 'warning' : 'info'}
                 label={t(`logsFederation.sourceTag.${federation.sourceTag}`)}
               />
-            )}
-          </span>
+            </span>
+          )}
           {(federationDegraded || federationNotReady) && (
             <span
               data-testid="logs-not-ready-hint"
               className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
-              title={t('logsFederation.degradedHint')}
+              // 与横幅同源区分：只有引擎未启用才给「去启用」指引；接口不可达时
+              // 让用户去开启是无效指令，只说可查范围与后续办法。
+              title={
+                federationNotReady
+                  ? t('logsFederation.degradedHint')
+                  : t('logsFederation.degradedUnavailableHint')
+              }
             >
               <Info className="size-3.5 shrink-0" />
-              <span className="truncate">{t('logsFederation.degradedTitleShort')}</span>
+              <span className="truncate">
+                {federationNotReady
+                  ? t('logsFederation.degradedTitleShort')
+                  : t('logsFederation.degradedUnavailableTitleShort')}
+              </span>
             </span>
           )}
         </div>
@@ -543,9 +561,14 @@ export default function LogsPage() {
 
 	  {/* 洞察栏固定占位（高度恒为 min-h-8）：此前仅在联邦活跃且有数据时整条插入，
 	      进入页面后会「弹」出一条并把日志列表往下推。现改为始终渲染容器，内容为空时
-	      仅占位不显示任何文字，列表位置保持稳定。 */}
+	      仅占位不显示任何文字，列表位置保持稳定。
+	      占位容器不挂 testid —— 否则「等洞察栏出现」会立刻命中空容器，读到的
+	      是尚未填充的空文本；挂 testid 的仍是有内容的那一份。 */}
 	  {!follow && (
-		<div data-testid="logs-federation-insights" className="flex min-h-8 flex-wrap items-center gap-2 border-y px-1 py-1 text-xs text-muted-foreground">
+		<div
+		  {...(insightsVisible ? { 'data-testid': 'logs-federation-insights' } : {})}
+		  className="flex min-h-8 flex-wrap items-center gap-2 border-y px-1 py-1 text-xs text-muted-foreground"
+		>
 		  {federationActive && statsCount !== undefined && (
 			<span>{t('logs.statsEvents', { count: statsCount })}</span>
 		  )}
@@ -636,9 +659,15 @@ function CoverageBanner({
     (key) => key !== LOGS_FEDERATION_KEYS.actionRetry,
   )
 
+  // 降级有两种来源，文案必须区分：
+  // - federatedNotReady：联邦接口正常响应但引擎未启用 → 可给出启用指引；
+  // - 纯 degraded：联邦接口本身不可达（404/未部署/连接失败）→ 不说「未启用」，
+  //   否则会把「接口没部署」误导成「功能没开」，用户去开启也无效。
   const tone = degraded ? 'info' : federatedNotReady ? 'warning' : props.tone
   const title = degraded
-    ? t('logsFederation.degraded')
+    ? federatedNotReady
+      ? t('logsFederation.federatedNotReady')
+      : t('logsFederation.degradedUnavailable')
     : federatedNotReady
       ? t('logsFederation.federatedNotReady')
       : t(props.titleKey)

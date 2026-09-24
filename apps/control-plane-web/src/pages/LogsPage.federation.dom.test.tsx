@@ -88,7 +88,7 @@ describe('LogsPage × logs-federation（FR-481）', () => {
     expect(banner.dataset.tone).toBe('warning')
     expect(banner.dataset.state).toBe('offline')
     expect(banner.dataset.exportAllowed).toBe('false')
-    expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent('部分节点离线')
+    expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent('部分节点当前不可达')
 
     // 失败/partial ≠ 空成功。
     await waitFor(() =>
@@ -154,7 +154,8 @@ describe('LogsPage × logs-federation（FR-481）', () => {
     const banner = await screen.findByTestId('logs-coverage-banner')
     expect(banner.dataset.state).toBe('legacy')
     expect(screen.getAllByTestId('logs-source-tag-banner').length).toBeGreaterThan(0)
-    expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent(/Legacy/i)
+    // 横幅标题改为面向用户的说法（不再出现 Legacy 这类内部术语）。
+    expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent('含切换前的历史数据')
   })
 
   it('④ 联邦 API 404 → 降级 legacy 视图 + 横幅，经典表格仍渲染', async () => {
@@ -170,8 +171,9 @@ describe('LogsPage × logs-federation（FR-481）', () => {
     expect(await screen.findByText(/federation-seed-log-line/)).toBeInTheDocument()
     const banner = await screen.findByTestId('logs-coverage-banner')
     expect(banner.dataset.degraded).toBe('true')
+    // 404 属「接口不可达」而非「功能未启用」，文案不得误导用户去开启。
     expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent(
-      /联邦日志 API 不可用|回退 Legacy/,
+      /实时日志查询服务暂不可用|回退平台与历史日志/,
     )
     expect(await screen.findByTestId('logs-source-tag')).toHaveTextContent('Legacy')
     // 降级路径保留经典导出（非联邦下载门禁）。
@@ -193,9 +195,11 @@ describe('LogsPage × logs-federation（FR-481）', () => {
 	)
 	const user = userEvent.setup()
 	renderWithProviders(<LogsPage />)
-	await user.click(await screen.findByRole('tab', { name: 'Legacy 只读' }))
+	// Legacy 只读入口已收纳到右侧「更多」菜单（不再与主视图并列的页签）。
+	await user.click(await screen.findByTestId('logs-more-trigger'))
+	await user.click(await screen.findByTestId('logs-view-legacy'))
 	expect(await screen.findByText('legacy-explicit-row')).toBeInTheDocument()
-	expect(screen.getByTestId('logs-source-tag')).toHaveTextContent(/Legacy/i)
+	expect(await screen.findByTestId('logs-source-tag')).toHaveTextContent(/Legacy/i)
 	expect(screen.getByTestId('logs-export-trigger')).toBeDisabled()
 	expect(screen.getByRole('button', { name: '实时跟随' })).toBeDisabled()
 	expect(screen.queryByText('federation-seed-log-line')).not.toBeInTheDocument()
@@ -271,9 +275,11 @@ describe('LogsPage × logs-federation（FR-481）', () => {
 
     renderWithProviders(<LogsPage />)
     const banner = await screen.findByTestId('logs-coverage-banner')
+    // 引擎未就绪 → 横幅保留该诊断（不得退化成「含切换前的历史数据」），
+    // 且说明服务未启用、已回退平台与历史日志。
     expect(banner.dataset.state).toBe('engine_not_ready')
     expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent(
-      /联邦日志查询路径尚未就绪|引擎未就绪/,
+      /日志查询服务未启用|已自动切换到平台与历史日志/,
     )
     await waitFor(() =>
       expect(screen.getByTestId('logs-empty-state')).toHaveAttribute(
@@ -416,7 +422,7 @@ describe('LogsPage × logs-federation（FR-481）', () => {
 		renderWithProviders(<LogsPage />)
 		const banner = await screen.findByTestId('logs-coverage-banner')
 		expect(banner.dataset.state).toBe('gap')
-		expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent('存在数据缺口')
+		expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent('该时间段内有日志缺失')
 		expect(await screen.findByTestId('logs-next-cursor-hint')).toBeInTheDocument()
 	})
 
@@ -432,7 +438,7 @@ describe('LogsPage × logs-federation（FR-481）', () => {
 		renderWithProviders(<LogsPage />)
 		const banner = await screen.findByTestId('logs-coverage-banner')
 		expect(banner.dataset.state).toBe('backlog')
-		expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent('采集积压')
+		expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent('正在写入最新日志')
 	})
 
 	it('⑨ rehydrate_failed → 「发起回灌」引导可点击并跳转节点页', async () => {
