@@ -1,5 +1,7 @@
 import { useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { CircleHelp } from 'lucide-react'
 import { Archive, CheckCheck, Download, LoaderCircle, Play, RotateCw, Square, Upload } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -19,6 +21,29 @@ function errorMessage(error: unknown): string {
   return response?.data?.message || response?.data?.error || '操作失败'
 }
 
+/**
+ * 后端错误的本地化呈现。
+ *
+ * 后端 `LogError.message` 是面向日志的英文诊断文本（如
+ * "managed VictoriaLogs supervisor is not configured"），不适合直接展示给用户。
+ * 这里按结构化 `code` 映射为可读中文；未知码才回退到原始 message。
+ */
+function localizedLogError(
+  err: { code?: string; message?: string } | null | undefined,
+  t: (k: string) => string,
+): string | null {
+  if (!err) return null
+  const code = (err.code ?? '').toString()
+  const known: Record<string, string> = {
+    LOG_UNSUPPORTED: t('logsRuntime.error.unsupported'),
+    LOG_NOT_READY: t('logsRuntime.error.notReady'),
+    LOG_UNAUTHORIZED: t('logsRuntime.error.unauthorized'),
+    LOG_BUDGET_EXCEEDED: t('logsRuntime.error.budget'),
+    LOG_ARCHIVE_MISSING: t('logsRuntime.error.archiveMissing'),
+  }
+  return known[code] ?? err.message ?? null
+}
+
 const namespaceNames: Record<LogRuntimeInstance['namespace'], string> = {
   hot: 'HOT',
   cold: 'COLD',
@@ -31,6 +56,7 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
   arch: string
   online: boolean
 }) {
+  const { t } = useTranslation()
   const fileInput = useRef<HTMLInputElement>(null)
   const runtime = useLogRuntime(nodeId, true)
   const assets = useApprovedLogAssets(true)
@@ -90,14 +116,19 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
             onError: (error) => toast.error(errorMessage(error)),
           })} disabled={busy || !online || !approved?.cached}>
             {install.isPending ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <Download className="mr-1 size-4" />}
-            下发资产
+            <CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.asset.dispatchHelp')} title={t('logsRuntime.asset.dispatchHelp')} />
+            {t('logsRuntime.asset.dispatch')}
           </Button>
         </div>
       </div>
 
       {runtime.isError && <p role="alert" className="mb-2 text-xs text-destructive">{errorMessage(runtime.error)}</p>}
       {assets.isError && <p role="alert" className="mb-2 text-xs text-destructive">{errorMessage(assets.error)}</p>}
-      {runtime.data?.error && <p role="alert" className="mb-2 text-xs text-destructive">{runtime.data.error.message}</p>}
+      {runtime.data?.error && (
+        <p role="alert" className="mb-2 text-xs text-destructive">
+          {localizedLogError(runtime.data.error, t)}
+        </p>
+      )}
       <div className="divide-y border-y">
         {(['hot', 'cold', 'rehydrate'] as const).map((namespace) => {
           const instance = runtime.data?.instances?.find((item) => item.namespace === namespace)
@@ -106,8 +137,15 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
             <div key={namespace} className="flex min-h-14 flex-wrap items-center justify-between gap-2 py-2 text-sm">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium">{namespaceNames[namespace]}</span>
-                  <Badge variant="outline">{instance?.state ?? (online ? '未就绪' : '离线')}</Badge>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="font-medium">{namespaceNames[namespace]}</span>
+                    <CircleHelp
+                      className="size-3.5 text-muted-foreground"
+                      aria-label={t('logsRuntime.namespace.help')}
+                      title={t('logsRuntime.namespace.help')}
+                    />
+                  </span>
+                  <Badge variant="outline">{instance?.state ?? (online ? t('logsRuntime.namespace.notReady') : t('logsRuntime.namespace.offline'))}</Badge>
                   {instance?.health_ok && <span className="text-xs text-status-success">进程健康</span>}
                   {instance?.query_ready && <span className="text-xs text-status-success">可查询</span>}
                 </div>
@@ -132,17 +170,21 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
 		<Button type="button" size="sm" variant="outline" disabled={busy || !online}
 		  onClick={() => resolveGaps.mutate(undefined, { onSuccess: () => toast.success('已核销 projection 覆盖的缺口'), onError: (error) => toast.error(errorMessage(error)) })}>
 		  {resolveGaps.isPending ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <CheckCheck className="mr-1 size-4" />}
-		  核销已覆盖缺口
+		  <CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.gaps.help')} title={t('logsRuntime.gaps.help')} />
+		  {t('logsRuntime.gaps.resolve')}
 		</Button>
-		<input type="date" aria-label="迁移 UTC 日期" value={migrationDay} onChange={(event) => setMigrationDay(event.target.value)}
-		  className="h-8 rounded-md border bg-background px-2 text-sm" />
+		<span className="inline-flex items-center gap-1">
+		  <input type="date" aria-label={t('logsRuntime.date.label')} title={t('logsRuntime.date.help')} value={migrationDay} onChange={(event) => setMigrationDay(event.target.value)}
+			className="h-8 rounded-md border bg-background px-2 text-sm" />
+		  <CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.date.help')} title={t('logsRuntime.date.help')} />
+		</span>
 		<Button type="button" size="sm" variant="outline" disabled={busy || !online || !migrationDay}
 		  onClick={() => migrate.mutate({ storageNamespace: `node:${nodeId}`, utcDay: migrationDay }, {
 			onSuccess: () => toast.success('分区已迁移到 COLD'),
 			onError: (error) => toast.error(errorMessage(error)),
 		  })}>
 		  {migrate.isPending ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <Archive className="mr-1 size-4" />}
-		  迁移到 COLD
+		  {t('logsRuntime.namespace.migrate')}
 		</Button>
 	  </div>
     </section>

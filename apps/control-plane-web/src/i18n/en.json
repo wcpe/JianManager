@@ -3438,7 +3438,8 @@
     "range_7d": "Last 7 days",
     "exportScope_currentPage": "Export current page",
     "exportScope_allMatched": "Export all matches",
-    "exportScope_range": "Export selected range"
+    "exportScope_range": "Export selected range",
+    "more": "More"
   },
   "logsFederation": {
     "coverage": {
@@ -3509,7 +3510,8 @@
     "federatedNotReady": "Log query service is not enabled; switched to platform and historical logs",
     "emptyNotSuccess": "Coverage incomplete or query failed — this is not an empty result",
     "degradedHint": "Platform and historical logs remain available. To query per-server live logs, enable the log platform under Nodes → node → Log runtime panel.",
-    "federatedNotReadyHint": "Platform and historical logs remain available. To query per-server live logs, enable the log platform under Nodes → node → Log runtime panel."
+    "federatedNotReadyHint": "Platform and historical logs remain available. To query per-server live logs, enable the log platform under Nodes → node → Log runtime panel.",
+    "degradedTitleShort": "Log query service off · using platform & historical logs"
   },
   "users": {
     "title": "User Management",
@@ -5327,5 +5329,45 @@
     "loading": "Loading…",
     "error": "Failed to load player trend",
     "tzFallback": "Timezone unavailable, fell back to UTC"
+  },
+  "logsRuntime": {
+    "title": "Log platform runtime",
+    "error": {
+      "unsupported": "Log platform is not enabled on this node (install the VictoriaLogs asset first)",
+      "notReady": "Log platform is starting, please retry shortly",
+      "unauthorized": "Log platform authentication failed; check node credentials",
+      "budget": "Node resource budget too low; log platform degraded",
+      "archiveMissing": "Historical logs have not been retrieved yet"
+    },
+    "asset": {
+      "label": "Server asset",
+      "help": "The log platform needs a VictoriaLogs binary (approved and verified by the platform). This shows the approved version, target platform and local cache state; dispatch the asset first if not cached.",
+      "notCached": "package not cached",
+      "cached": "cached",
+      "chooseFile": "no file selected",
+      "dispatch": "Dispatch asset",
+      "dispatchHelp": "Push the approved VictoriaLogs asset to this node with hash verification; the runtime can start once it succeeds."
+    },
+    "namespace": {
+      "hot": "HOT",
+      "cold": "COLD",
+      "rehydrate": "Rehydrate",
+      "help": "Logs are stored in three tiers: HOT = recent data (fastest queries); COLD = migrated historical data (slower but queryable); Rehydrate = a temporary queryable copy rebuilt from archive. Tiers are enabled per config; disabled ones show \"not ready\".",
+      "notReady": "not ready",
+      "offline": "offline",
+      "start": "Start",
+      "stop": "Stop",
+      "restart": "Restart",
+      "migrate": "Migrate partition",
+      "migrateHelp": "Move a partition from HOT to COLD to free hot storage; the partition is briefly unqueryable during migration."
+    },
+    "gaps": {
+      "resolve": "Resolve covered gaps",
+      "help": "Collection or delivery interruptions leave \"gaps\". Once a complete projection proves that window is intact, the gap can be resolved so it stops counting as a risk."
+    },
+    "date": {
+      "label": "Migration date (that day partition)",
+      "help": "The UTC day of the partition to migrate. Partitions are stored per UTC day, and both migration and queries operate on that unit."
+    }
   }
 }

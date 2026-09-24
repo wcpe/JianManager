@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { AlertTriangle, Download, Info, Radio } from 'lucide-react'
+import { AlertTriangle, Download, Info, MoreHorizontal, Radio } from 'lucide-react'
 import { useLegacyLogs, useLogs, exportLogs, type LogQueryParams } from '@/api/logs'
 import {
 	buildFederationResult,
@@ -183,6 +183,9 @@ export default function LogsPage() {
   // F-003：联邦可用（非降级）时列表以 federation.items 为主数据源；
   // 404 降级才回退 useLogs 的 Legacy 表。禁止「联邦横幅 + Legacy 内容」错配。
   const federationActive = !!federation && !federation.degraded && federation.available
+  // 供标题区状态提示使用（与横幅同源，避免两处判定漂移）。
+  const federationDegraded = federation?.degraded === true
+  const federationNotReady = federation?.federatedNotReady === true
 	const aggregateParams: Record<string, unknown> = {
 		...timeParams,
 		...(view === 'all' && source ? { source } : {}),
@@ -302,14 +305,25 @@ export default function LogsPage() {
   return (
     <div data-page="logs" className="jm-page-stack flex h-full min-h-0 flex-col gap-4">
       <div className="jm-page-header">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <h1 className="jm-page-title">{t('logs.title')}</h1>
-          {federation?.sourceTag && (
-            <span data-testid="logs-source-tag" className="inline-flex">
+          {/* 状态与提示固定在标题区：不占用列表空间，也不因状态变化推动下方布局。 */}
+          <span data-testid="logs-source-tag" className="inline-flex shrink-0">
+            {federation?.sourceTag && (
               <StatusBadge
                 level={federation.sourceTag === 'legacy' ? 'warning' : 'info'}
                 label={t(`logsFederation.sourceTag.${federation.sourceTag}`)}
               />
+            )}
+          </span>
+          {(federationDegraded || federationNotReady) && (
+            <span
+              data-testid="logs-not-ready-hint"
+              className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
+              title={t('logsFederation.degradedHint')}
+            >
+              <Info className="size-3.5 shrink-0" />
+              <span className="truncate">{t('logsFederation.degradedTitleShort')}</span>
             </span>
           )}
         </div>
@@ -351,7 +365,12 @@ export default function LogsPage() {
         role="tablist"
         aria-label={t('logs.viewLabel')}
       >
-        {LOG_VIEWS.filter((candidate) => isPlatformAdmin || candidate === 'node_instance').map(
+        {LOG_VIEWS.filter(
+          // legacy 是「切换前存量日志」的只读入口，不是平级主视图：收纳到右侧「更多」，
+          // 避免与平台/节点视图并列造成误解，也减少工具栏元素数量。
+          (candidate) =>
+            candidate !== 'legacy' && (isPlatformAdmin || candidate === 'node_instance'),
+        ).map(
           (candidate) => (
             <Button
               key={candidate}
@@ -370,6 +389,36 @@ export default function LogsPage() {
             </Button>
           ),
         )}
+        {/* 右侧收纳：非常用入口（Legacy 只读）进「更多」，保持主视图区稳定。 */}
+        <div className="ml-auto flex items-center">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                data-testid="logs-more-trigger"
+                aria-label={t('logs.more')}
+              >
+                <MoreHorizontal className="size-4" />
+                {t('logs.more')}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                data-testid="logs-view-legacy"
+                disabled={!isPlatformAdmin}
+                onSelect={() => {
+                  setView('legacy')
+                  setPage(1)
+                  setFederationCursors({ 1: '' })
+                  setFollow(false)
+                }}
+              >
+                {t('logs.view_legacy')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {/* 强筛选工具栏 */}
@@ -430,8 +479,9 @@ export default function LogsPage() {
             </SelectContent>
           </Select>
         )}
-        {view !== 'platform' && (
-          <Select
+        {/* 节点/实例选择器始终占位（platform 视图下禁用），避免切换视图时工具栏元素增减导致布局位移。 */}
+        <Select
+            disabled={view === 'platform'}
             value={nodeId === null ? SENTINEL_ALL : String(nodeId)}
             onValueChange={(v: string) =>
               resetTo(setNodeId)(v === SENTINEL_ALL ? null : Number(v))
@@ -449,9 +499,8 @@ export default function LogsPage() {
               ))}
             </SelectContent>
           </Select>
-        )}
-        {view !== 'platform' && (
-          <Select
+        <Select
+            disabled={view === 'platform'}
             value={instanceId === null ? SENTINEL_ALL : String(instanceId)}
             onValueChange={(v: string) =>
               resetTo(setInstanceId)(v === SENTINEL_ALL ? null : Number(v))
@@ -469,7 +518,6 @@ export default function LogsPage() {
               ))}
             </SelectContent>
           </Select>
-        )}
 
         {/* 实时跟随开关 pill，靠右 */}
         <button
@@ -493,9 +541,14 @@ export default function LogsPage() {
         </button>
       </div>
 
-	  {federationActive && !follow && (statsCount !== undefined || levelFacets.length > 0) && (
+	  {/* 洞察栏固定占位（高度恒为 min-h-8）：此前仅在联邦活跃且有数据时整条插入，
+	      进入页面后会「弹」出一条并把日志列表往下推。现改为始终渲染容器，内容为空时
+	      仅占位不显示任何文字，列表位置保持稳定。 */}
+	  {!follow && (
 		<div data-testid="logs-federation-insights" className="flex min-h-8 flex-wrap items-center gap-2 border-y px-1 py-1 text-xs text-muted-foreground">
-		  {statsCount !== undefined && <span>{t('logs.statsEvents', { count: statsCount })}</span>}
+		  {federationActive && statsCount !== undefined && (
+			<span>{t('logs.statsEvents', { count: statsCount })}</span>
+		  )}
 		  {levelFacets.map((facet) => (
 			<StatusBadge
 			  key={facet.value}
@@ -626,11 +679,6 @@ function CoverageBanner({
           </span>
         )}
       </div>
-      {(degraded || federatedNotReady) && (
-        <p data-testid="logs-not-ready-hint" className="text-xs opacity-90">
-          {t('logsFederation.degradedHint')}
-        </p>
-      )}
       {(props.reasonKeys.length > 0 || classified.primaryReason) && (
         <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs opacity-90">
           {props.reasonKeys.map((key) => (

@@ -3417,7 +3417,8 @@
     "range_7d": "最近 7 天",
     "exportScope_currentPage": "导出当前页",
     "exportScope_allMatched": "导出全部匹配",
-    "exportScope_range": "导出所选时间段"
+    "exportScope_range": "导出所选时间段",
+    "more": "更多"
   },
   "logsFederation": {
     "coverage": {
@@ -3488,7 +3489,8 @@
     "federatedNotReady": "日志查询服务未启用，已自动切换到平台与历史日志（可直接查看）",
     "emptyNotSuccess": "覆盖不完整或查询失败，不能视作「无日志」",
     "degradedHint": "平台日志与切换前的历史日志可正常查看。如需查询各服务器实时日志，请到「节点」页 → 对应节点 → 日志运行时面板启用日志平台。",
-    "federatedNotReadyHint": "平台日志与切换前的历史日志可正常查看。如需查询各服务器实时日志，请到「节点」页 → 对应节点 → 日志运行时面板启用日志平台。"
+    "federatedNotReadyHint": "平台日志与切换前的历史日志可正常查看。如需查询各服务器实时日志，请到「节点」页 → 对应节点 → 日志运行时面板启用日志平台。",
+    "degradedTitleShort": "日志查询服务未启用 · 已回退平台与历史日志"
   },
   "users": {
     "title": "用户管理",
@@ -5327,5 +5329,45 @@
     "loading": "加载中…",
     "error": "加载在线趋势失败",
     "tzFallback": "时区不可用，已回退 UTC"
+  },
+  "logsRuntime": {
+    "title": "日志平台运行时",
+    "error": {
+      "unsupported": "本节点尚未启用日志平台（需先下发 VictoriaLogs 资产并配置）",
+      "notReady": "日志平台正在启动，请稍后重试",
+      "unauthorized": "日志平台鉴权失败，请检查节点凭据",
+      "budget": "节点资源预算不足，日志平台已降级",
+      "archiveMissing": "历史日志尚未取回"
+    },
+    "asset": {
+      "label": "服务端资产",
+      "help": "日志平台需要一份 VictoriaLogs 可执行程序（由平台统一审批与校验）。此处显示审批版本、目标平台与本地缓存状态；未缓存时需先「下发资产」。",
+      "notCached": "审批包未缓存",
+      "cached": "已缓存",
+      "chooseFile": "未选择文件",
+      "dispatch": "下发资产",
+      "dispatchHelp": "把审批过的 VictoriaLogs 资产下发到该节点并校验哈希；成功后即可启动运行时。"
+    },
+    "namespace": {
+      "hot": "HOT",
+      "cold": "COLD",
+      "rehydrate": "Rehydrate",
+      "help": "日志平台按三层存储：HOT=近期热数据（查询最快）；COLD=迁出的历史数据（查询稍慢，仍可查）；Rehydrate=把归档回灌成可查副本的临时层。三层按配置启用，未启用显示「未就绪」。",
+      "notReady": "未就绪",
+      "offline": "离线",
+      "start": "启动",
+      "stop": "停止",
+      "restart": "重启",
+      "migrate": "迁移分区",
+      "migrateHelp": "把某个分区从 HOT 迁到 COLD，释放热存储；迁移期间该分区暂不可查。"
+    },
+    "gaps": {
+      "resolve": "核销已覆盖缺口",
+      "help": "采集或投递中断会留下「缺口」记录。当缺口所覆盖的时间段已有完整投影可证明数据完整时，可核销该缺口，避免它一直被计为风险。"
+    },
+    "date": {
+      "label": "迁移日期（该日分区）",
+      "help": "要迁移的分区归属日（UTC）。日志按 UTC 日期分区存储，迁移与查询都以该分区为单位。"
+    }
   }
 }
