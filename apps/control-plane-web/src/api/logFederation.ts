@@ -111,7 +111,10 @@ export interface LogsFederationResult {
 export function isFederationUnavailable(error: unknown): boolean {
   const status = (error as { response?: { status?: number } } | null)?.response?.status
   if (typeof status === 'number') {
-    return status === 404 || status === 401 || status === 403
+    // 502/503/504：dev server 代理无法连接后端时由代理返回（CI 无 CP 即此情形）；
+    // 500 亦可能是代理层错误，与「后端已就绪但查询失败」不同。
+    if (status === 404 || status === 401 || status === 403) return true
+    return status >= 500
   }
   // 无响应：连接被拒/超时/DNS 失败视为不可用。
   return true
