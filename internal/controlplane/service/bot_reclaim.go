@@ -48,6 +48,13 @@ const (
 	botReclaimListLimitMax = 500
 	// botReclaimDetectLimit 单拍判定候选上限（nit：避免无界扫描）。
 	botReclaimDetectLimit = 2000
+
+	// botZombieSessionIdleThreshold 僵尸会话停滞阈值（FR-472，spec §2.4.1）：
+	// 会话在线 Bot 数为 0 且持续无进展超过该时长即判为僵尸并收敛为 stopped。
+	// 取 Bot 宽限期（2m）的 5 倍，容忍 Worker 短暂重启与世代迁移窗口，不误杀正常会话。
+	botZombieSessionIdleThreshold = 10 * time.Minute
+	// botReclaimSessionReapedAction 僵尸会话收敛的审计动作（FR-472）。
+	botReclaimSessionReapedAction = "bot_reclaim.session_reaped"
 )
 
 // 失效判据命中说明（§2.1 条件 3）。
@@ -520,10 +527,121 @@ func (s *BotReclaimService) Sweep(ctx context.Context) error {
 	if err := s.disposeConfirmed(ctx); err != nil {
 		slog.Warn("失效 Bot 自动回收失败", "error", err)
 	}
+	// FR-472：先收敛僵尸会话，再补足——僵尸会话从根上不该进入补足扫描（spec §2.4.1）。
+	if err := s.reapZombieSessions(ctx, now); err != nil {
+		slog.Warn("僵尸压测会话收敛失败", "error", err)
+	}
 	if err := s.refillRunningSessions(ctx); err != nil {
 		slog.Warn("Bot 容量补足失败", "error", err)
 	}
 	return nil
+}
+
+// reapZombieSessions 收敛停滞的压测会话（FR-472，spec §2.4.1）。
+//
+// 会话终结原本依赖显式 Stop 调用；CP 重启或 bot-worker 死亡后该路径丢失，会话永久停留 running，
+// 于是每拍被 refillRunningSessions 当作补足目标反复重建期望行并失败（失败落在事务内 → 持续写盘）。
+// 进程内退避兜不住这一点（随进程清零，重启即全量重试），故此处按**数据库可见的事实**判定僵尸。
+//
+// 判定：status=running 且在线 Bot 数为 0 且 UpdatedAt 早于 now-阈值。
+// 仍持有在线 Bot 的会话永不被收敛（反向由 TestZombieSession_HealthySessionUntouched 守护）。
+func (s *BotReclaimService) reapZombieSessions(ctx context.Context, now time.Time) error {
+	candidates, err := s.findZombieSessions(ctx, now)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for i := range candidates {
+		if err := s.reapZombieSession(ctx, &candidates[i], now); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// findZombieSessions 查出候选僵尸会话：running 且在线 Bot 数为 0 且长时间无进展。
+func (s *BotReclaimService) findZombieSessions(ctx context.Context, now time.Time) ([]model.BotStressSession, error) {
+	var candidates []model.BotStressSession
+	// 先用「状态 + 停滞时长」做粗筛（走索引，代价有界），再逐个精确核对在线 Bot 数。
+	cutoff := now.Add(-s.zombieIdleThreshold())
+	if err := s.db.WithContext(ctx).
+		Where("status = ? AND deleted_at IS NULL AND updated_at < ?", model.BotStressSessionRunning, cutoff).
+		Limit(botReclaimDetectLimit).
+		Find(&candidates).Error; err != nil {
+		return nil, fmt.Errorf("查询僵尸压测会话失败: %w", err)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	zombies := make([]model.BotStressSession, 0, len(candidates))
+	for i := range candidates {
+		var online int64
+		if err := s.db.WithContext(ctx).Model(&model.Bot{}).
+			Where("stress_session_id = ? AND deleted_at IS NULL AND desired_state = ? AND status = ?",
+				candidates[i].ID, model.BotDesiredRunning, model.BotStatusConnected).
+			Count(&online).Error; err != nil {
+			return nil, fmt.Errorf("统计僵尸会话在线 Bot 数失败: %w", err)
+		}
+		// 仍持有在线 Bot 的会话是活的，绝不能收敛。
+		if online > 0 {
+			continue
+		}
+		zombies = append(zombies, candidates[i])
+	}
+	return zombies, nil
+}
+
+// reapZombieSession 把单个僵尸会话收敛为 stopped 并写审计。
+//
+// 不复用 Stop 路径：僵尸会话的 Worker 侧舰队早已不存在，走停机流程只会再失败一次。
+// 此处只做状态收敛——它足以把该会话移出补足扫描，这正是终止写放大的充分条件。
+func (s *BotReclaimService) reapZombieSession(ctx context.Context, session *model.BotStressSession, now time.Time) error {
+	if session == nil {
+		return nil
+	}
+	stalled := now.Sub(session.UpdatedAt).Round(time.Second)
+	reason := fmt.Sprintf("僵尸会话自动收敛：%s 内无进展且在线 Bot 数为 0（FR-472）", stalled)
+	updates := map[string]any{
+		"status":     model.BotStressSessionStopped,
+		"last_error": reason,
+		"ended_at":   now,
+	}
+	res := s.db.WithContext(ctx).Model(&model.BotStressSession{}).
+		Where("id = ? AND status = ?", session.ID, model.BotStressSessionRunning).
+		Updates(updates)
+	if res.Error != nil {
+		return fmt.Errorf("收敛僵尸会话失败: %w", res.Error)
+	}
+	// 条件更新：若该拍内已被其他路径终结（如运维手动 Stop），不重复审计。
+	if res.RowsAffected == 0 {
+		return nil
+	}
+	slog.Info("僵尸压测会话已收敛为终态",
+		"sessionId", session.ID, "sessionUuid", session.UUID,
+		"instanceId", session.InstanceID, "stalled", stalled.String())
+	if s.audit != nil {
+		detail := fmt.Sprintf(`{"sessionId":%d,"stalledSeconds":%d,"onlineBots":0}`,
+			session.ID, int64(stalled.Seconds()))
+		s.audit.RecordResultSafe(0, botReclaimSessionReapedAction, "bot_stress_session",
+			session.UUID, detail, "", true, "")
+	}
+	return nil
+}
+
+// zombieIdleThreshold 僵尸会话停滞阈值（可由设置项覆盖，缺省 10 分钟）。
+func (s *BotReclaimService) zombieIdleThreshold() time.Duration {
+	if s.settings == nil {
+		return botZombieSessionIdleThreshold
+	}
+	raw := s.settings.EffectiveValue(SettingKeyBotZombieSessionIdleThreshold)
+	if raw == "" {
+		return botZombieSessionIdleThreshold
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return botZombieSessionIdleThreshold
+	}
+	return d
 }
 
 // botReclaimScan 是单拍失效判定所需的执行节点世代 + Worker 实存视图。

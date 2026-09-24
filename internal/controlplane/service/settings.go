@@ -97,6 +97,9 @@ const (
 	SettingKeyBotReclaimGracePeriod = "bot_reclaim.grace_period"
 	// SettingKeyBotReclaimAuto 宽限后是否自动回收失效 Bot（true|false，FR-460）。默认 true，但仅对 Fleet 归属 Bot 生效；V1 手动 Bot 永不自动回收。
 	SettingKeyBotReclaimAuto = "bot_reclaim.auto_reclaim"
+	// SettingKeyBotZombieSessionIdleThreshold 僵尸压测会话停滞阈值（Go duration，FR-472）。
+	// 默认 10m——会话在线 Bot 数为 0 且停滞超过该时长即收敛为 stopped，终止对失联会话的无效补足与写放大。
+	SettingKeyBotZombieSessionIdleThreshold = "bot_reclaim.zombie_session_idle_threshold"
 	// SettingKeyPlatformPublicBaseURL 是平台生成绝对链接唯一允许使用的公共基址（FR-405）。
 	// 允许 HTTP 供无 TLS 的自托管内网使用；不允许由请求头推断。
 	SettingKeyPlatformPublicBaseURL = "platform.public_base_url"
