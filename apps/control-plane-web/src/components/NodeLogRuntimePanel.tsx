@@ -29,19 +29,19 @@ function errorMessage(error: unknown): string {
  * 这里按结构化 `code` 映射为可读中文；未知码才回退到原始 message。
  */
 function localizedLogError(
-  err: { code?: string; message?: string } | null | undefined,
+  err: { code?: number; message?: string } | null | undefined,
   t: (k: string) => string,
 ): string | null {
   if (!err) return null
-  const code = (err.code ?? '').toString()
-  const known: Record<string, string> = {
-    LOG_UNSUPPORTED: t('logsRuntime.error.unsupported'),
-    LOG_NOT_READY: t('logsRuntime.error.notReady'),
-    LOG_UNAUTHORIZED: t('logsRuntime.error.unauthorized'),
-    LOG_BUDGET_EXCEEDED: t('logsRuntime.error.budget'),
-    LOG_ARCHIVE_MISSING: t('logsRuntime.error.archiveMissing'),
+  // 与 proto LogErrorCode 数值对齐。
+  const known: Record<number, string> = {
+    3: t('logsRuntime.error.unauthorized'), // LOG_UNAUTHORIZED
+    4: t('logsRuntime.error.budget'), // LOG_BUDGET_EXCEEDED
+    5: t('logsRuntime.error.notReady'), // LOG_NOT_READY
+    6: t('logsRuntime.error.archiveMissing'), // LOG_ARCHIVE_MISSING
+    10: t('logsRuntime.error.unsupported'), // LOG_UNSUPPORTED
   }
-  return known[code] ?? err.message ?? null
+  return known[err.code ?? -1] ?? err.message ?? null
 }
 
 const namespaceNames: Record<LogRuntimeInstance['namespace'], string> = {
@@ -116,7 +116,7 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
             onError: (error) => toast.error(errorMessage(error)),
           })} disabled={busy || !online || !approved?.cached}>
             {install.isPending ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <Download className="mr-1 size-4" />}
-            <CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.asset.dispatchHelp')} title={t('logsRuntime.asset.dispatchHelp')} />
+            <span title={t('logsRuntime.asset.dispatchHelp')}><CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.asset.dispatchHelp')} /></span>
             {t('logsRuntime.asset.dispatch')}
           </Button>
         </div>
@@ -139,11 +139,9 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
                 <div className="flex items-center gap-2">
                   <span className="inline-flex items-center gap-1">
                     <span className="font-medium">{namespaceNames[namespace]}</span>
-                    <CircleHelp
-                      className="size-3.5 text-muted-foreground"
-                      aria-label={t('logsRuntime.namespace.help')}
-                      title={t('logsRuntime.namespace.help')}
-                    />
+                    <span title={t('logsRuntime.namespace.help')}>
+                      <CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.namespace.help')} />
+                    </span>
                   </span>
                   <Badge variant="outline">{instance?.state ?? (online ? t('logsRuntime.namespace.notReady') : t('logsRuntime.namespace.offline'))}</Badge>
                   {instance?.health_ok && <span className="text-xs text-status-success">进程健康</span>}
@@ -170,13 +168,13 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
 		<Button type="button" size="sm" variant="outline" disabled={busy || !online}
 		  onClick={() => resolveGaps.mutate(undefined, { onSuccess: () => toast.success('已核销 projection 覆盖的缺口'), onError: (error) => toast.error(errorMessage(error)) })}>
 		  {resolveGaps.isPending ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <CheckCheck className="mr-1 size-4" />}
-		  <CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.gaps.help')} title={t('logsRuntime.gaps.help')} />
+		  <span title={t('logsRuntime.gaps.help')}><CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.gaps.help')} /></span>
 		  {t('logsRuntime.gaps.resolve')}
 		</Button>
 		<span className="inline-flex items-center gap-1">
 		  <input type="date" aria-label={t('logsRuntime.date.label')} title={t('logsRuntime.date.help')} value={migrationDay} onChange={(event) => setMigrationDay(event.target.value)}
 			className="h-8 rounded-md border bg-background px-2 text-sm" />
-		  <CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.date.help')} title={t('logsRuntime.date.help')} />
+		  <span title={t('logsRuntime.date.help')}><CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.date.help')} /></span>
 		</span>
 		<Button type="button" size="sm" variant="outline" disabled={busy || !online || !migrationDay}
 		  onClick={() => migrate.mutate({ storageNamespace: `node:${nodeId}`, utcDay: migrationDay }, {
