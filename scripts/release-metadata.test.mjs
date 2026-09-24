@@ -114,15 +114,21 @@ test('开发分支沿用源码目标版本并追加构建元数据', () => {
   )
 })
 
-test('普通分支出现无同 SHA tag 的裸版本时拒绝构建', () => {
-  assert.throws(
-    () => resolveReleaseMetadata({
+test('普通分支无同 SHA tag 的裸版本：软跳过不阻塞（正式发布走 tag 流水线）', () => {
+  // 发版顺序常为「先推 master 再推 tag」；master release 若硬失败只制造噪音。
+  assert.deepEqual(
+    resolveReleaseMetadata({
       ref: 'refs/heads/master',
       sha: 'abcdef0123456789',
       sourceVersion: '0.18.0',
       exactTags: [],
     }),
-    /裸版本.*tag/,
+    {
+      version: '0.18.0',
+      releaseTag: 'latest',
+      isRelease: false,
+      publishRelease: false,
+    },
   )
 })
 
