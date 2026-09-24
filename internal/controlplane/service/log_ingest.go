@@ -81,6 +81,10 @@ func (s *LogService) IngestInstanceOutput(nodeUUID, instanceUUID, stream, messag
 	if !s.cfg.Enabled || message == "" {
 		return
 	}
+	// FR-480 cutover：instance 来源停止写入 CP logs 表（platform slog 持久化路径不变）。
+	if s.cutoverBlocked(model.LogSourceInstance) {
+		return
+	}
 	ref := s.resolveInstance(instanceUUID)
 	nodeID := ref.nodeID
 	if nodeID == 0 {

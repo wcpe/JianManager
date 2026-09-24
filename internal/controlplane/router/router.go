@@ -9,6 +9,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/JianManager/internal/controlplane/embed"
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/logcoord"
 	"github.com/wcpe/JianManager/internal/controlplane/mcp"
 	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
@@ -109,6 +111,11 @@ type Services struct {
 	Metric       *service.MetricService
 	// CapacityTrend 容量趋势告警器（FR-464）；nil 时容量预测仍可用，仅不发趋势告警。
 	CapacityTrend *service.CapacityTrendAlerter
+	// LogCoord FR-479 CP 跨 Worker 日志联邦协调器；nil（且无测试注入）时 federation 端点关闭。
+	LogCoord *logcoord.Coordinator
+	// LogRuntimePool 经反向隧道控制 Worker 受管 VictoriaLogs。
+	LogRuntimePool *cpgrpc.ClientPool
+	LogVLAssets    *service.ApprovedVLAssetStore
 	// PlatformObservability 是平台管理员首页的有界总览读模型（FR-402）。
 	PlatformObservability *service.PlatformObservabilityService
 	Settings              *service.SettingsService
@@ -170,9 +177,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		panic("配置 Gin 受信任代理失败: " + err.Error())
 	}
 	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		Skip: func(c *gin.Context) bool {
-			return strings.HasPrefix(c.Request.URL.Path, "/worker-assets/") || strings.HasPrefix(c.Request.URL.Path, "/probe-artifacts/")
-		},
+		Skip: skipSignedAssetAccessLog,
 	}))
 	r.Use(gin.Recovery())
 
@@ -449,6 +454,29 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		logHandler := NewLogHandler(svcs.Log, svcs.Authz)
 		logHandler.RegisterRoutes(permRead("log.read"))
 
+		// FR-479 跨 Worker 日志联邦查询：复用 log.read 权限；平台管理员或授权实例范围。
+		logCoord := svcs.LogCoord
+		if logCoord == nil {
+			logCoord = testLogCoord
+		}
+		if logCoord != nil {
+			NewLogFederationHandler(logCoord, svcs.Authz).RegisterRoutes(permRead("log.read"))
+		}
+		// FR-475 Worker 受管 VictoriaLogs 状态/启停：仅平台节点管理权限，经反向隧道。
+		if svcs.LogRuntimePool != nil && svcs.Node != nil {
+			NewLogRuntimeHandler(svcs.Node, svcs.LogRuntimePool).RegisterRoutes(permRead("node.manage"))
+		}
+		if svcs.LogVLAssets != nil && svcs.SelfUpdate != nil && svcs.Node != nil {
+			assets := NewLogVLAssetHandler(svcs.LogVLAssets, svcs.SelfUpdate, svcs.Node)
+			assets.SetDelivery(svcs.LogRuntimePool, svcs.EnrollInstall.ScriptBaseURL)
+			assets.RegisterAdminRoutes(permRead("system.update"))
+			assets.RegisterNodeRoutes(permRead("node.manage"))
+		}
+		// FR-480 日志入库切换与 Legacy 只读管理面：平台管理员专用（handler 再判 IsPlatformAdmin）。
+		if svcs.Log != nil {
+			NewLogCutoverHandler(svcs.Log, svcs.Audit, nodeWorkerUUIDLister{svcs}).RegisterRoutes(permRead("node.manage"))
+		}
+
 		// 时序监控历史曲线（FR-060）：node 维度对认证用户开放，instance 维度按 CanAccessInstance 收敛。
 		metricHandler := NewMetricHandler(svcs.Metric, svcs.Authz, svcs.CapacityTrend)
 		metricHandler.RegisterRoutes(permRead("monitor.read", "stats.read"))
@@ -680,6 +708,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	if svcs.SelfUpdate != nil {
 		NewSelfUpdateHandler(svcs.SelfUpdate, svcs.Audit).RegisterDownloadRoutes(r)
 	}
+	if svcs.LogVLAssets != nil && svcs.SelfUpdate != nil && svcs.Node != nil {
+		NewLogVLAssetHandler(svcs.LogVLAssets, svcs.SelfUpdate, svcs.Node).RegisterDownloadRoutes(r)
+	}
 	// ServerProbe 由 Worker 从 CP 本地 CAS 主动拉取；短 token 不经请求日志记录。
 	if svcs.ArtifactVersion != nil {
 		NewArtifactVersionHandler(svcs.ArtifactVersion).RegisterDownloadRoutes(r)
@@ -689,6 +720,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	embed.RegisterStaticRoutes(r)
 
 	return r
+}
+
+func skipSignedAssetAccessLog(c *gin.Context) bool {
+	path := c.Request.URL.Path
+	return strings.HasPrefix(path, "/worker-assets/") || strings.HasPrefix(path, "/probe-artifacts/") ||
+		strings.HasPrefix(path, "/log-vl-assets/")
 }
 
 func marshalAuditDetail(detail any) string {

@@ -25,6 +25,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/database"
 	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/logcoord"
 	"github.com/wcpe/JianManager/internal/controlplane/mcp"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/router"
@@ -298,6 +299,18 @@ func main() {
 	logSvc := service.NewLogService(db, root, cfg.LogStore)
 	logSvc.Start()
 	defer logSvc.Stop()
+	// FR-479 日志联邦协调器（T11 装配）：实例/节点目标解析 + ClientPool 隧道 Dialer。
+	// Readiness 以节点状态∩活跃隧道判定；onlineOnly 不扇出离线节点。
+	logHolderSvc := service.NewLogTargetHolderService(db)
+	instanceSvc.SetLogTargetHolderService(logHolderSvc)
+	if instances, instanceErr := instanceSvc.List(service.InstanceFilter{}); instanceErr != nil {
+		slog.Warn("日志 holder 实例对账读取失败", "error", instanceErr)
+	} else if nodes, nodeErr := nodeSvc.List(); nodeErr != nil {
+		slog.Warn("日志 holder 节点对账读取失败", "error", nodeErr)
+	} else if holderErr := logHolderSvc.ReconcileInstances(instances, nodes, time.Now().UTC()); holderErr != nil {
+		slog.Warn("日志 holder 启动对账失败", "error", holderErr)
+	}
+	logCoord := logcoord.Assemble(pool, nodeSvc, instanceSvc, logHolderSvc)
 	// 实例 stdout/stderr 经事件流采集落库。
 	eventSvc.SetLogSink(logSvc)
 	// 平台结构化日志在输出 stdout 之外同时落库（持久化开关由 log_store.persist_platform 控制）。
@@ -811,6 +824,9 @@ func main() {
 		Registration:            registrationSvc,
 		Network:                 networkSvc,
 		Log:                     logSvc,
+		LogCoord:                logCoord,
+		LogRuntimePool:          pool,
+		LogVLAssets:             service.NewApprovedVLAssetStore(root),
 		Metric:                  metricSvc,
 		CapacityTrend:           capacityTrendAlerter,
 		PlatformObservability:   platformObservabilitySvc,

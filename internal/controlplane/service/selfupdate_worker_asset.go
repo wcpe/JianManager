@@ -36,6 +36,8 @@ const (
 	WorkerAssetPurposeUpgrade = "upgrade"
 	// WorkerAssetPurposeInstall 表示 token 用于节点安装。
 	WorkerAssetPurposeInstall = "install"
+	// WorkerAssetPurposeLogVL binds a short-lived package URL to one Worker.
+	WorkerAssetPurposeLogVL = "log_vl"
 
 	workerAssetTokenTTL = 10 * time.Minute
 )
@@ -471,11 +473,11 @@ func normalizeWorkerAssetScope(scope *WorkerAssetTokenScope) error {
 	if scope.Purpose == "" {
 		return errors.New("Worker 资产 token purpose 不能为空")
 	}
-	if scope.Purpose != WorkerAssetPurposeUpgrade && scope.Purpose != WorkerAssetPurposeInstall {
+	if scope.Purpose != WorkerAssetPurposeUpgrade && scope.Purpose != WorkerAssetPurposeInstall && scope.Purpose != WorkerAssetPurposeLogVL {
 		return fmt.Errorf("Worker 资产 token purpose 无效: %s", scope.Purpose)
 	}
-	if scope.Purpose == WorkerAssetPurposeUpgrade && strings.TrimSpace(scope.NodeUUID) == "" {
-		return errors.New("Worker 升级 token 必须绑定节点 UUID")
+	if (scope.Purpose == WorkerAssetPurposeUpgrade || scope.Purpose == WorkerAssetPurposeLogVL) && strings.TrimSpace(scope.NodeUUID) == "" {
+		return errors.New("Worker 资产 token 必须绑定节点 UUID")
 	}
 	return nil
 }

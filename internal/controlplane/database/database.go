@@ -130,6 +130,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.AgentCallLog{},
 		&model.AgentTransferTicket{},
 		&model.Instance{},
+		&model.LogTargetHolder{},
+		&model.LogCutoverState{},
+		&model.LogCutoverWorker{},
 		&model.GroupInstance{},
 		// 实例组织分组树（FR-165，见 ADR-033）：自引用邻接表 + 实例 M:N，
 		// 与用户组 / 网络群组正交，仅供组织归类，不承载 RBAC / 部署语义。

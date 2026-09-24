@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
@@ -45,10 +47,32 @@ func (s *LogService) runRetentionOnce() {
 	} else if n > 0 {
 		slog.Info("按总量上限归档日志", "count", n, SkipPersist())
 	}
+	// FR-480：cutover 打开时 Legacy 走独立保留预算，与 platform 巡检解耦。
+	if s.cutover != nil && s.cutover.Enabled() && s.legacy != nil {
+		if n, err := s.legacy.RunRetention(); err != nil {
+			slog.Error("按 Legacy 预算归档日志失败", "err", err, SkipPersist())
+		} else if n > 0 {
+			slog.Info("按 Legacy 预算归档日志", "count", n, SkipPersist())
+		}
+	}
+}
+
+// platformPurgeExcludesLegacy 报告 platform 保留/容量巡检是否应排除 Legacy 来源。
+// cutover 打开时：未到期 Legacy 有独立预算，不得被 platform 容量淘汰挤出。
+func (s *LogService) platformPurgeExcludesLegacy() bool {
+	return s.cutover != nil && s.cutover.Enabled()
+}
+
+// scopePlatformRetention 把 platform 巡检查询限制在非 Legacy 来源（cutover 打开时）。
+func (s *LogService) scopePlatformRetention(q *gorm.DB) *gorm.DB {
+	if s.platformPurgeExcludesLegacy() {
+		q = q.Where("source NOT IN ?", legacyLogSources)
+	}
+	return q
 }
 
 // archiveBeforeRetention 把早于「保留天数」的日志滚动落盘并从表中删除，返回归档条数。
-// RetentionDays<=0 时跳过（不按时间清理）。
+// RetentionDays<=0 时跳过（不按时间清理）。cutover 打开时不触碰未到期 Legacy 来源。
 func (s *LogService) archiveBeforeRetention() (int, error) {
 	if s.cfg.RetentionDays <= 0 {
 		return 0, nil
@@ -57,7 +81,9 @@ func (s *LogService) archiveBeforeRetention() (int, error) {
 	total := 0
 	for {
 		var batch []model.LogEntry
-		if err := s.db.Where("time < ?", cutoff).
+		q := s.db.Where("time < ?", cutoff)
+		q = s.scopePlatformRetention(q)
+		if err := q.
 			Order("time ASC").Order("id ASC").
 			Limit(archiveBatch).Find(&batch).Error; err != nil {
 			return total, err
@@ -78,6 +104,7 @@ func (s *LogService) archiveBeforeRetention() (int, error) {
 
 // archiveOverCapacity 当表内日志条数超过总量上限折算的行数时，从最旧开始滚动落盘并删除，
 // 直到回落到阈值内。MaxTotalMB<=0 时跳过（不按总量清理）。
+// cutover 打开时：容量只统计/裁剪非 Legacy 来源，未到期 Legacy 不受 platform 容量淘汰挤出。
 func (s *LogService) archiveOverCapacity() (int, error) {
 	if s.cfg.MaxTotalMB <= 0 {
 		return 0, nil
@@ -88,7 +115,7 @@ func (s *LogService) archiveOverCapacity() (int, error) {
 	}
 
 	var count int64
-	if err := s.db.Model(&model.LogEntry{}).Count(&count).Error; err != nil {
+	if err := s.scopePlatformRetention(s.db.Model(&model.LogEntry{})).Count(&count).Error; err != nil {
 		return 0, err
 	}
 	if count <= maxRows {
@@ -103,7 +130,9 @@ func (s *LogService) archiveOverCapacity() (int, error) {
 			limit = int(toRemove)
 		}
 		var batch []model.LogEntry
-		if err := s.db.Order("time ASC").Order("id ASC").
+		q := s.db.Order("time ASC").Order("id ASC")
+		q = s.scopePlatformRetention(q)
+		if err := q.
 			Limit(limit).Find(&batch).Error; err != nil {
 			return total, err
 		}
