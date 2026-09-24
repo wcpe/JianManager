@@ -22,6 +22,8 @@
 
 ### E2E 测试（V1 可选）
 
+> **本地跑 Playwright 前必须清掉 `DISPLAY`**：SSH / X11 转发环境（`DISPLAY=localhost:N`）会让 Chromium 的 `requestAnimationFrame` 完全不触发，导致所有 `click()` 因「稳定性检查」永不满足而超时（报 `waiting for element to be visible, enabled and stable`），看起来却像登录失败或页面缺陷。命令用 `env -u DISPLAY <playwright 命令>`。CI runner 无 `DISPLAY` 故不受影响——**本地 E2E 红而 CI 绿时，优先按此自查**，不要误判为代码回归。详见 `docs/CONTRIBUTING.md` §1。
+
 | 场景 | 覆盖要求 |
 |---|---|
 | 实例完整生命周期 | 创建→启动→运行→停止→删除 |

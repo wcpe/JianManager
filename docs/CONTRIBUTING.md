@@ -19,6 +19,37 @@ task web:e2e    # Playwright 真浏览器整站 E2E
 task dist       # 前端 + Bot Worker + 全部内嵌资产 + 四个发布二进制
 ```
 
+### E2E 前置：清掉 `DISPLAY`（SSH / X11 转发环境）
+
+**经 SSH 进入、且 shell 带有 `DISPLAY`（如 `DISPLAY=localhost:11.0`，即 X11 转发）时，必须先取消它再跑 Playwright，否则每个 `click()` 都会超时。**
+
+```bash
+env -u DISPLAY pnpm --filter control-plane-web e2e   # 等价 task web:e2e
+```
+
+原因：此类 `DISPLAY` 会让 Chromium 的 `requestAnimationFrame` **完全不触发**（实测空白页 1.5s 内 0 次回调；`setTimeout` 正常）。Playwright 的点击前要做「稳定性」检查——要求元素连续两帧几何不变——rAF 停摆使该检查永不满足，于是所有点击都会以 `waiting for element to be visible, enabled and stable` 超时。症状具有强误导性：
+
+- 失败点几乎全部落在 `login()` 的第一步（登录按钮点击），看起来像认证或页面缺陷；
+- 元素实际**位置静止、可见、未被禁用、无遮挡、无动画**，`fill()` 也能正常工作——唯独 `click()` 失败；
+- 与产品代码无关，`git bisect` / 回滚版本都无效。
+
+判定与自查：
+
+```bash
+echo "${DISPLAY:-<未设置>}"     # 有值且形如 localhost:N → 需 unset
+```
+
+```js
+// 在任意页面执行：返回 0 即命中该陷阱
+await page.evaluate(() => new Promise((res) => {
+  let n = 0
+  requestAnimationFrame(() => { n++ })
+  setTimeout(() => res(n), 1000)
+}))
+```
+
+CI 的 runner 不带 `DISPLAY`，因此**该问题只在本地出现，CI 恒为绿**——本地红而 CI 绿时优先按此自查。
+
 ## 2. 分支与流程
 
 本仓采用**单主干 GitHub Flow**：主干唯一为 `master`，始终可发布。
