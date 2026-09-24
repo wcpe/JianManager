@@ -46,7 +46,7 @@ preview.html
 docs/**/preview.html
 docs/compose/
 .tmp/
-# 仅忽略仓库根运行时日志目录；internal/worker/logs/** 是 FR-433+ 源码包，必须入库。
+# 仅忽略仓库根运行时日志目录；internal/worker/logs/** 是 FR-473+ 源码包，必须入库。
 /logs/
 /data/logs/
 /evidence/logs/
