@@ -144,7 +144,7 @@ go install github.com/go-task/task/v3/cmd/task@latest
 task dist    # 前端 + Bot Worker + 全部内嵌资产 + Windows/Linux amd64 四个二进制 → dist/
 ```
 
-`task dist` 会把 Bot Worker 的生产构建归档内嵌进 Control Plane，并为所有 Go 产物注入同一版本。源码版本真值来自 `internal/version/version.go`；当前正式发布提交为 `0.22.0`（CHANGELOG 见 `## 0.22.0`；本地 tag `v0.22.0` 可在发版确认后补打）。进入下一开发窗口时再切换为下一目标版本的 `X.Y.Z-dev`。
+`task dist` 会把 Bot Worker 的生产构建归档内嵌进 Control Plane，并为所有 Go 产物注入同一版本。源码版本真值来自 `internal/version/version.go`；当前正式发布提交为 `0.23.0`（CHANGELOG 见 `## 0.23.0`；本地 tag `v0.23.0` 可在发版确认后补打）。进入下一开发窗口时再切换为下一目标版本的 `X.Y.Z-dev`。
 </details>
 
 ## 🏗 架构
