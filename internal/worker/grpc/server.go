@@ -55,6 +55,9 @@ type Server struct {
 	nodeUUID  string
 	collector *metrics.Collector
 	jdkMgr    *jdk.Manager
+	// logQuery FR-478 日志 RPC 装配点（T11）；nil 时 Log* 走 Unimplemented。
+	logQuery     interface{}
+	instanceLogs InstanceLogCollector
 	// root 是本节点数据根，用于把 CP 下发的相对工作目录解析为绝对路径。参见 ADR-010。
 	root *dataroot.Root
 	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。参见 ADR-006。
@@ -264,6 +267,9 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 			return false, fmt.Errorf("创建工作目录失败: %v", mkErr)
 		}
 	}
+	if err := s.registerInstanceLogs(req, workDir); err != nil {
+		return false, fmt.Errorf("登记实例日志采集失败: %w", err)
+	}
 	cerr := s.manager.Create(
 		req.InstanceUuid,
 		req.Name,
@@ -330,6 +336,9 @@ func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstan
 			s.manager.SetProbePort(spec.InstanceUuid, int(spec.ProbePort))
 			s.manager.SetServerPort(spec.InstanceUuid, int(spec.ServerPort))
 			s.manager.SetQueryPort(spec.InstanceUuid, int(spec.QueryPort))
+			if err := s.registerInstanceLogs(spec, spec.WorkDir); err != nil {
+				return nil, status.Errorf(codes.FailedPrecondition, "instance log binding failed: %v", err)
+			}
 			skipped++
 			continue
 		}

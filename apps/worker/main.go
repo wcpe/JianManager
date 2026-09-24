@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -29,6 +31,18 @@ import (
 	wgrpc "github.com/wcpe/JianManager/internal/worker/grpc"
 	"github.com/wcpe/JianManager/internal/worker/heartbeat"
 	jdks "github.com/wcpe/JianManager/internal/worker/jdk"
+	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
+	"github.com/wcpe/JianManager/internal/worker/logs/archive"
+	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
+	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
+	"github.com/wcpe/JianManager/internal/worker/logs/logassemble"
+	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
+	"github.com/wcpe/JianManager/internal/worker/logs/query"
+	"github.com/wcpe/JianManager/internal/worker/logs/query/grpcsvc"
+	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
+	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/orphanaudit"
 	"github.com/wcpe/JianManager/internal/worker/pkgmgr"
@@ -37,6 +51,7 @@ import (
 	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/internal/worker/setup"
+	workerstorage "github.com/wcpe/JianManager/internal/worker/storage"
 	"github.com/wcpe/JianManager/internal/worker/tunnel"
 	"github.com/wcpe/JianManager/internal/worker/ws"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -344,6 +359,335 @@ func runWorker() {
 	defer collector.Stop()
 
 	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr, root)
+	// T11：装配 Worker 日志查询栈（Catalog+Planner+grpcsvc）。
+	// 配置了健康的 localhost VL 时接入真实 RangeClient；否则保留显式 LOG_UNSUPPORTED。
+	var rangeClient query.RangeClient
+	var vlHTTPClient *vlsup.Client
+	var coldVLClient *vlsup.Client
+	var rehydrateVLClient *vlsup.Client
+	var vlSupervisor *vlsup.Supervisor
+	managedBinary, managedSHA := cfg.LogVL.BinaryPath, cfg.LogVL.AssetSHA256
+	var packageErr error
+	if strings.TrimSpace(cfg.LogVL.PackagePath) != "" {
+		managedBinary, packageErr = vlsup.InstallApprovedPackage(context.Background(), cfg.LogVL.PackagePath,
+			root.Abs("var/log/vl-assets"), runtime.GOOS, runtime.GOARCH)
+		if packageErr != nil {
+			slog.Error("VictoriaLogs 受管资产安装失败", "error", packageErr)
+		} else {
+			managedSHA = vlsup.CurrentApprovedExeSHA256()
+			slog.Info("VictoriaLogs 受管资产已校验安装", "tag", vlsup.AssetTag, "sha256", managedSHA)
+		}
+	}
+	if packageErr == nil && strings.TrimSpace(managedBinary) != "" {
+		dataRoot := cfg.LogVL.DataRoot
+		if dataRoot == "" {
+			dataRoot = root.Abs("var/log/vl")
+		}
+		vlSupervisor, err = vlsup.New(vlsup.Options{
+			BinaryPath: managedBinary, AssetSHA256: managedSHA,
+			DataRoot: dataRoot, RetentionPeriod: cfg.LogVL.RetentionPeriod,
+			AuthUsername: cfg.LogVL.Username, AuthPassword: cfg.LogVL.Password,
+			Ports: map[vlsup.Namespace]int{
+				vlsup.NamespaceHot:       cfg.LogVL.HotPort,
+				vlsup.NamespaceCold:      cfg.LogVL.ColdPort,
+				vlsup.NamespaceRehydrate: cfg.LogVL.RehydratePort,
+			},
+			MemoryAllowedBytes: map[vlsup.Namespace]int64{vlsup.NamespaceHot: cfg.LogVL.HotCacheBytes},
+			// 受管 VL 进程 Go 软内存上限（契约 §6.6 RSS 预算）。
+			MemoryLimitBytes: cfg.LogVL.MemoryLimitBytes,
+		})
+		if err != nil {
+			slog.Error("VictoriaLogs supervisor 创建失败", "error", err)
+		} else if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceHot); err != nil {
+			slog.Error("VictoriaLogs HOT 启动失败", "error", err)
+		} else {
+			if cfg.LogVL.StartCold {
+				if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceCold); err != nil {
+					slog.Error("VictoriaLogs COLD 启动失败", "error", err)
+				}
+			}
+			if cfg.LogVL.StartRehydrate {
+				if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceRehydrate); err != nil {
+					slog.Error("VictoriaLogs Rehydrate 启动失败", "error", err)
+				}
+			}
+		// FR-475 / 契约 §6.6：周期采样 VL RSS 与数据盘预算并暴露降级。
+		go sampleLogBudget(vlSupervisor)
+		// 受管 VL 启动是异步的：接线 ingest/查询前先等 HOT 就绪，避免启动期写连接被拒
+		// 导致采集运行时创建失败（重启时序 / Runbook C）。
+		hotReadyCtx, cancelHotReady := context.WithTimeout(context.Background(), 15*time.Second)
+		if waitErr := vlSupervisor.WaitHealthy(hotReadyCtx, vlsup.NamespaceHot, 15*time.Second); waitErr != nil {
+			slog.Warn("VictoriaLogs HOT 未在超时内就绪，采集/查询将保持降级", "error", waitErr)
+		}
+		cancelHotReady()
+		if vlClient, clientErr := vlSupervisor.ClientFor(vlsup.NamespaceHot); clientErr == nil {
+				vlHTTPClient = vlClient
+				hotRange, _ := vlrange.New(vlClient)
+				tiered := &vlrange.Tiered{Hot: hotRange}
+				for _, ns := range []vlsup.Namespace{vlsup.NamespaceCold, vlsup.NamespaceRehydrate} {
+					status, statusErr := vlSupervisor.Status(ns)
+					if statusErr != nil || status.State != vlsup.StateRunning {
+						continue
+					}
+					client, clientErr := vlSupervisor.ClientFor(ns)
+					if clientErr != nil {
+						continue
+					}
+					rangeClient, rangeErr := vlrange.New(client)
+					if rangeErr != nil {
+						continue
+					}
+					if ns == vlsup.NamespaceCold {
+						tiered.Cold = rangeClient
+						coldVLClient = client
+					} else {
+						tiered.Rehydrate = rangeClient
+						rehydrateVLClient = client
+					}
+				}
+				rangeClient = tiered
+				slog.Info("VictoriaLogs supervisor RangeClient 已接线", "baseURL", vlClient.BaseURL())
+			}
+		}
+	}
+	if rangeClient == nil && strings.TrimSpace(cfg.LogQuery.VLURL) != "" {
+		vlClient, vlErr := vlsup.NewClient(vlsup.ClientOptions{
+			BaseURL:  cfg.LogQuery.VLURL,
+			Username: cfg.LogQuery.Username,
+			Password: cfg.LogQuery.Password,
+		})
+		if vlErr != nil {
+			slog.Warn("VictoriaLogs 查询客户端配置无效，保持 LOG_UNSUPPORTED", "error", vlErr)
+		} else {
+			healthCtx, cancelHealth := context.WithTimeout(context.Background(), 3*time.Second)
+			healthErr := vlClient.Health(healthCtx)
+			cancelHealth()
+			if healthErr != nil {
+				slog.Warn("VictoriaLogs 未就绪，保持 LOG_UNSUPPORTED", "error", healthErr)
+			} else if client, clientErr := vlrange.New(vlClient); clientErr != nil {
+				slog.Warn("VictoriaLogs RangeClient 创建失败，保持 LOG_UNSUPPORTED", "error", clientErr)
+			} else {
+				rangeClient = client
+				vlHTTPClient = vlClient
+				slog.Info("VictoriaLogs RangeClient 已接线", "baseURL", vlClient.BaseURL())
+			}
+		}
+	}
+	var logJournal catalog.Journal
+	if store, journalErr := catalog.NewJSONLFileStore(root.Abs("var/log/catalog.journal.jsonl")); journalErr != nil {
+		slog.Error("日志 Catalog journal 打开失败，查询面保持无权威分区", "error", journalErr)
+	} else if journal, journalErr := catalog.NewJournalWithStore(store); journalErr != nil {
+		slog.Error("日志 Catalog journal 恢复失败，查询面保持无权威分区", "error", journalErr)
+	} else {
+		logJournal = journal
+		slog.Info("日志 Catalog journal 已恢复", "path", root.Abs("var/log/catalog.journal.jsonl"), "entries", journal.LastSeq())
+	}
+	logStack := logassemble.Build(logJournal, rangeClient, version.Version)
+	logStack.LogRPC.SetRuntimeCatalog(logStack.Catalog)
+	// FR-476：先完成 Catalog/journal 逻辑恢复，再开放 Log RPC；物理目录残留
+	// 不能替代 owner/generation 权威。不可查询范围保持 recovery-required，
+	// 不阻塞 Worker 其它实例服务。
+	for key, recovery := range logStack.Catalog.StartingRecover() {
+		if !recovery.Queryable {
+			slog.Warn("日志分区启动恢复未完成，查询范围降级", "partition", key.String(), "reasons", recovery.PartialReasons)
+		}
+	}
+	if vlHTTPClient != nil && coldVLClient != nil && vlSupervisor != nil {
+		hotCfg, hotErr := vlSupervisor.Config(vlsup.NamespaceHot)
+		coldCfg, coldErr := vlSupervisor.Config(vlsup.NamespaceCold)
+		if hotErr != nil || coldErr != nil {
+			slog.Error("日志 Lifecycle namespace 配置不可用", "hotError", hotErr, "coldError", coldErr)
+		} else if physical, lifecycleErr := lifecycle.NewVLPartitionOps(vlHTTPClient, coldVLClient,
+			hotCfg.StorageDataPath, coldCfg.StorageDataPath, logStack.Catalog); lifecycleErr != nil {
+			slog.Error("日志 Lifecycle 物理适配器创建失败", "error", lifecycleErr)
+		} else {
+			dayManager := lifecycle.NewDayManager(logStack.Catalog, physical.Ops(), physical)
+			resumedDays := make(map[string]bool)
+			for _, key := range logStack.Catalog.Keys() {
+				rec, ok := logStack.Catalog.Get(key)
+				if !ok || rec.MigrationState == "" || rec.MigrationState == catalog.StateCleaned ||
+					!rec.TargetOwner.Valid() || rec.TargetDirID == "" || rec.MigrationFromDirID == "" {
+					continue
+				}
+				if resumedDays[key.UTCDay] {
+					continue
+				}
+				resumedDays[key.UTCDay] = true
+				if resumeErr := dayManager.Resume(key.UTCDay); resumeErr != nil {
+					slog.Error("日志分区迁移启动恢复失败", "partition", key.String(), "error", resumeErr)
+				}
+			}
+			logStack.LogRPC.SetPartitionMigrator(grpcsvc.PartitionMigrateFunc(func(ctx context.Context, namespace, day, target string) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if target != "cold" {
+					return fmt.Errorf("unsupported lifecycle target %s", target)
+				}
+				key := catalog.PartitionKey{StorageNamespace: namespace, UTCDay: day}
+				rec, ok := logStack.Catalog.Get(key)
+				if !ok {
+					return fmt.Errorf("log partition %s is not in Catalog", key)
+				}
+				if rec.Owner == catalog.OwnerCold {
+					return nil
+				}
+				if rec.MigrationState != "" && rec.MigrationState != catalog.StateCleaned && rec.TargetOwner.Valid() {
+					return dayManager.Resume(day)
+				}
+				parsed, err := time.Parse("2006-01-02", day)
+				if err != nil {
+					return err
+				}
+				return dayManager.Start(day, catalog.OwnerCold, parsed.Format("20060102"))
+			}))
+		}
+	}
+	if vlSupervisor != nil {
+		logStack.LogRPC.SetRuntimeController(vlSupervisor)
+		if cpHost, _, splitErr := net.SplitHostPort(cfg.ControlPlane); splitErr == nil {
+			logStack.LogRPC.SetRuntimeInstaller(grpcsvc.RuntimeInstallFunc(func(ctx context.Context, packageURL, packageSHA string) error {
+				path, err := vlsup.InstallApprovedURL(ctx, packageURL, packageSHA, root.Abs("var/log/vl-assets"),
+					cpHost, runtime.GOOS, runtime.GOARCH)
+				if err != nil {
+					return err
+				}
+				return vlSupervisor.ReplaceBinary(ctx, path, vlsup.CurrentApprovedExeSHA256())
+			}))
+		} else {
+			slog.Error("日志资产 CP 主机无效，禁用远程安装", "error", splitErr)
+		}
+	}
+	workerServer.SetLogQueryService(logStack.LogRPC)
+	// FR-477：归档 Registry/Rehydrate 进入同一 Worker 查询面。凭据只来自
+	// 环境覆盖的配置对象，不写入日志或诊断响应。
+	var archiveRegistry *archive.Registry
+	var rehydrateManager *archive.RehydrateManager
+	if cfg.LogArchive.Enabled {
+		var provider archive.Provider
+		archiveCfg := cfg.LogArchive
+		archiveStorageCfg := workerstorage.Config{
+			Type:     workerstorage.TypeS3,
+			Endpoint: archiveCfg.Endpoint, Bucket: archiveCfg.Bucket, Region: archiveCfg.Region,
+			Prefix: archiveCfg.Prefix, AccessKey: archiveCfg.AccessKey, SecretKey: archiveCfg.SecretKey,
+		}
+		if os.Getenv("JIANMANAGER_LOG_ARCHIVE_PROBE") == "1" && strings.EqualFold(archiveCfg.Provider, "s3") {
+			if probeErr := workerstorage.Probe(context.Background(), archiveStorageCfg); probeErr != nil {
+				slog.Error("日志归档对象存储探测失败", "error", probeErr)
+			} else {
+				slog.Info("日志归档对象存储探测通过", "provider", archiveCfg.Provider)
+			}
+		}
+		switch strings.ToLower(strings.TrimSpace(archiveCfg.Provider)) {
+		case "s3", "minio":
+			remote, archiveErr := archive.NewRemoteS3Provider(archiveStorageCfg)
+			if archiveErr != nil {
+				slog.Error("日志归档 S3 Provider 初始化失败", "error", archiveErr)
+			} else {
+				provider = remote
+			}
+		default:
+			provider = archive.NewLocalArchive(root.Abs("var/log/archive"))
+		}
+		if provider != nil {
+			registry := archive.NewRegistry(provider)
+			// 归档 manifest 记录受管 VL 的真实构建标识（FR-475 资产审批），而非占位。
+			if vlsup.AssetBuildID != "" {
+				registry.SetEngineVersion("victorialogs/" + vlsup.AssetBuildID)
+			}
+			archiveRegistry = registry
+			rehydrate := archive.NewRehydrateManager(archive.RehydrateOptions{
+				DefaultTimeout: 5 * time.Minute, DefaultLeaseTTL: 5 * time.Minute,
+			})
+			rehydrateManager = rehydrate
+			backend := archive.NewQueryBackend(registry, rehydrate)
+			if rehydrateVLClient != nil {
+				backend.SetPublisher(&archive.VLRehydratePublisher{Catalog: logStack.Catalog, VL: rehydrateVLClient})
+			}
+			logStack.SetArchiveBackend(backend)
+			slog.Info("日志归档运行时已装配", "provider", provider.Kind())
+		}
+	}
+	// FR-473：将配置化 FileTailer/STDIO/ArchiveImporter 接入常驻 Worker。
+	// 未配置 source 时不猜测实例目录；实例生命周期可通过同一 Manager 动态登记。
+	var logIngest *ingest.Manager
+	registeredLogInstanceIDs := manager.ListInstances
+	if len(cfg.LogSources) > 0 || vlHTTPClient != nil {
+		sources := make([]ingest.SourceConfig, 0, len(cfg.LogSources))
+		for _, source := range cfg.LogSources {
+			sources = append(sources, ingest.SourceConfig{
+				LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration,
+				Path: source.Path, Mode: pipeline.AcquireMode(source.Mode), RotateTo: source.RotateTo, ArchiveGlob: source.ArchiveGlob,
+				Stream: source.Stream, SourceCategory: logtypes.Source(source.SourceCategory),
+				StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
+			})
+		}
+		manager, ingestErr := ingest.New(ingest.Options{
+			Root: root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
+			Journal: logStack.Catalog.Journal(), Archive: archiveRegistry, Sources: sources,
+			CapacityProvider: ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
+				MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
+				DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
+			}),
+			RecoveryHold: func(source ingest.SourceConfig, _ string) (bool, string) {
+				if rehydrateManager == nil {
+					return false, ""
+				}
+				generation := uint64(1)
+				if rec, ok := logStack.Catalog.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}); ok && rec.Generation > 0 {
+					generation = rec.Generation
+				}
+				key := archive.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay, Generation: generation}
+				if !rehydrateManager.CanCleanup(key) {
+					return true, "active archive rehydrate or query-view lease"
+				}
+				return false, ""
+			},
+			VLRoute: func(source ingest.SourceConfig) (*vlsup.Client, bool, error) {
+				target, ok := logStack.Catalog.RouteWrite(catalog.PartitionKey{
+					StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
+				}, source.UTCDay)
+				if !ok {
+					return vlHTTPClient, false, nil
+				}
+				switch target.Owner {
+				case catalog.OwnerHot:
+					return vlHTTPClient, target.Frozen, nil
+				case catalog.OwnerCold:
+					return coldVLClient, target.Frozen, nil
+				default:
+					return nil, target.Frozen, fmt.Errorf("ingest: Catalog write owner %s requires an explicit recovery path", target.Owner)
+				}
+			},
+		})
+		if ingestErr != nil {
+			slog.Error("日志采集运行时创建失败", "error", ingestErr)
+		} else {
+			logIngest = manager
+			workerServer.SetInstanceLogCollector(manager)
+			logStack.LogRPC.SetCutoverReadiness(grpcsvc.CutoverReadinessFunc(func() (bool, time.Time, []string) {
+				readiness := manager.PrepareCutoverReadiness()
+				for _, id := range manager.MissingInstanceBindings(registeredLogInstanceIDs()) {
+					readiness.LedgerReady = false
+					readiness.Reasons = append(readiness.Reasons, "instance:"+id+":acquisition_not_bound")
+				}
+				return readiness.LedgerReady, readiness.CutoffTime, readiness.Reasons
+			}))
+			logStack.LogRPC.SetIngestGapResolver(manager)
+			ingestCtx, cancelIngest := context.WithCancel(context.Background())
+			defer cancelIngest()
+			defer func() {
+				if stopErr := manager.Stop(); stopErr != nil {
+					slog.Error("日志采集运行时停止持久化失败", "error", stopErr)
+				}
+			}()
+			go manager.Start(ingestCtx)
+			slog.Info("日志采集运行时已启动", "sources", len(sources), "vlReady", vlHTTPClient != nil)
+		}
+	}
+	if rangeClient == nil {
+		slog.Info("Worker 日志查询面已装配", "buildId", version.Version, "rangeClient", "unimplemented-stub")
+	}
 	// Worker 升级二进制下载与服务端 jar 下载经进程级出站持有者（FR-174/FR-185）：
 	// CP 下发代理改动运行时即时生效。
 	workerServer.SetHTTPClientProvider(outboundProvider.Client)
@@ -462,6 +806,11 @@ func runWorker() {
 		text := string(data)
 		terminalServer.Broadcast(instanceID, stream, text)
 		workerServer.EmitOutput(instanceID, stream, text)
+		if logIngest != nil {
+			if err := logIngest.AppendInstanceOutput(instanceID, stream, data); err != nil {
+				slog.Error("实例日志受管 Raw 持久化失败", "instanceId", instanceID, "stream", stream, "error", err)
+			}
+		}
 	})
 
 	// FR-471 缺陷修复：实例每次开始新一轮运行即重置其终端环形缓冲，使崩溃快照（FR-313）截取的
@@ -577,6 +926,11 @@ func runWorker() {
 			if err := register.SaveIdentity(etcDir, fresh); err != nil {
 				// 持久化失败不致命（本次仍在线），但重启会因无身份且 token 已失效而首注册失败，需告警。
 				slog.Warn("持久化节点身份失败，重启可能需重新签发 enrollment token", "error", err)
+			}
+			if cfg.EnrollTokenFile != "" {
+				if err := os.Remove(cfg.EnrollTokenFile); err != nil && !os.IsNotExist(err) {
+					slog.Warn("删除已消费 enrollment token 文件失败", "error", err)
+				}
 			}
 			identityForPersist = fresh
 		} else {
@@ -698,4 +1052,29 @@ func runWorker() {
 // localWSAddr 返回仅供本机终端回环桥与本机探针使用的 WebSocket 监听地址。
 func localWSAddr(port int) string {
 	return fmt.Sprintf("127.0.0.1:%d", port)
+}
+
+// sampleLogBudget 周期性采样受管 VL 的 RSS 与数据盘预算并暴露降级（FR-475 / 契约 §6.6）。
+// 每次采样以 Debug 记录实际数值（供 Runbook C 取证）；状态变化时升为 Info/Warn。
+func sampleLogBudget(sup *vlsup.Supervisor) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	last := vlsup.BudgetOK
+	for range ticker.C {
+		verdict := sup.SampleBudget()
+		slog.Debug("日志资源预算采样",
+			"state", string(verdict.State),
+			"vlRssBytes", verdict.Sample.ProcessRSSBytes,
+			"diskUsagePercent", verdict.Sample.DiskUsagePercent,
+		)
+		if verdict.State == last {
+			continue
+		}
+		if verdict.State == vlsup.BudgetOK {
+			slog.Info("日志资源预算恢复正常", "state", string(verdict.State))
+		} else {
+			slog.Warn("日志资源预算降级", "state", string(verdict.State), "reasons", verdict.Reasons)
+		}
+		last = verdict.State
+	}
 }

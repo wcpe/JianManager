@@ -64,6 +64,29 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Equal(t, "localhost:9100", cfg.ControlPlane)
 	assert.Equal(t, 9102, cfg.WS.Port)
 	assert.Empty(t, cfg.EnrollToken, "enroll token 默认空，仅经 env/命令行注入")
+	assert.Equal(t, 80.0, cfg.LogCapacity.DegradedAtPercent)
+	assert.Equal(t, 90.0, cfg.LogCapacity.PauseAtPercent)
+}
+
+func TestLoad_LogCapacityRejectsInvertedThresholds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_capacity:\n  degraded_at_percent: 95\n  pause_at_percent: 90\n"), 0o600))
+	_, err := Load(path)
+	require.ErrorContains(t, err, "0 < degraded < pause <= 100")
+}
+
+func TestLoad_LogVLPorts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_vl:\n  hot_port: 19641\n  cold_port: 19642\n  rehydrate_port: 19643\n"), 0o600))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 19641, cfg.LogVL.HotPort)
+	assert.Equal(t, 19642, cfg.LogVL.ColdPort)
+	assert.Equal(t, 19643, cfg.LogVL.RehydratePort)
+
+	require.NoError(t, os.WriteFile(path, []byte("log_vl:\n  hot_port: 19641\n  cold_port: 19641\n"), 0o600))
+	_, err = Load(path)
+	require.ErrorContains(t, err, "ports must be distinct")
 }
 
 // TestLoad_EnrollTokenFromEnv enrollment token 经 JIANMANAGER_ENROLL_TOKEN 注入、不从 yaml 读取。
@@ -72,6 +95,27 @@ func TestLoad_EnrollTokenFromEnv(t *testing.T) {
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
 	require.NoError(t, err)
 	assert.Equal(t, "jmet_abc123", cfg.EnrollToken)
+}
+
+func TestLoad_EnrollTokenFromOneTimeFile(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "enroll.env")
+	require.NoError(t, os.WriteFile(tokenPath, []byte("JIANMANAGER_ENROLL_TOKEN=jmet_file_token\n"), 0o600))
+	configPath := filepath.Join(t.TempDir(), "worker.yml")
+	yamlPath := filepath.ToSlash(tokenPath)
+	require.NoError(t, os.WriteFile(configPath, []byte("enroll_token_file: \""+yamlPath+"\"\n"), 0o600))
+
+	cfg, err := Load(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, "jmet_file_token", cfg.EnrollToken)
+	assert.Equal(t, filepath.Clean(tokenPath), filepath.Clean(cfg.EnrollTokenFile))
+}
+
+func TestLoad_MissingConsumedEnrollTokenFileIsAllowed(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(configPath, []byte("enroll_token_file: missing.env\n"), 0o600))
+	cfg, err := Load(configPath)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.EnrollToken)
 }
 
 // TestLoad_EnvOverridesDefaults JIANMANAGER_ 前缀环境变量按路径覆盖配置（含历史别名）。
