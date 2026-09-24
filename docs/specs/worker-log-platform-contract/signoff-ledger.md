@@ -30,7 +30,7 @@
 | FR-478 | ✅ 可签 | 全查询 RPC 已接线；远程 Search/Stats/Facets/Export 通过；**CP 联邦真机查询通过** | — |
 | FR-479 | ✅ 可签 | logcoord+HTTP+生产 Assemble；**真机联邦查询与延迟取证**（串行 p95 28.5ms、8 并发 p95 15.2ms） | — |
 | FR-480 | ✅ 可签 | cutover+Legacy+DualPath 地基、HTTP 管理面已注册（默认关闭）、单测覆盖；**跨切换查询由 `/logs/legacy` + `/logs/federation` 两条真实路径承担**，其中 `/logs/federation` **已真机验收通过**（`coverage.complete=true`、返回真实事件、契约复合排序；见 `acceptance-record.md` §6） | 无。`DualPath` 的 federated 侧保持 `UnimplementedFederatedQuerier` 是**有意设计**（PRD 已记「由 `/logs/federation` 承担，保留 API 不加投机接线」），确认无生产调用方，非欠账 |
-| FR-481 | ✅ 可签 | **真浏览器验收通过**（真实联邦列表/Stats·Facets 一致、失败态引导；修了 Stats `agg.count` 读法缺陷）；失败态 DOM 矩阵 19 项 | — |
+| FR-481 | ✅ 可签 | **真浏览器验收通过**（真实联邦列表/Stats·Facets 一致、失败态引导；修了 Stats `agg.count` 读法缺陷）；失败态 DOM 矩阵 19 项。**本轮修复真实缺陷**：联邦非 404 失败（401/代理 5xx/无响应）时未降级 → `federationActive` 误判为 true → 以空联邦数据为准，**列表永久空白**而经典 `/logs` 数据已就绪（生产影响：Worker 隧道不可达时用户见空白页而非降级数据）。现 404/401/403/5xx/无响应一律降级，400/422/429 等业务错误不降级（保留真实错误语义）；真实浏览器复验 logs-virtual=true / data-total-count=12004 / 渲染 24 行，并补 `federation-availability.test.ts` 固化四类判定 | — |
 | FR-482 | ✅ 可签 | 受控文档已补：`asset-inventory.md`、`recovery-manual.md`、`acceptance-record.md`；已对账 ARCHITECTURE/API/CHANGELOG/PRD/规格状态 | 文档类 FR |
 | FR-483 | ✅ 可签 | **真机验收通过**（node-main + 真 VL v1.52.0）：64/128/150 源稳态 22.5/22.3/20.0MiB、峰值 56.0/62.0/61.8MiB；**342 源逐一核对 1 026 000 条事件零丢失零重复**；五个门禁回归 + 四条累积结构回归（均含变异验证）；受控证据 `worker-log-canonical-eventstore/acceptance-real.md` | — |
 
