@@ -112,7 +112,9 @@ export interface LegacyLogPage extends LogPage {
 }
 
 export function useLegacyLogs(params: LogQueryParams, enabled: boolean) {
-  const { view: _view, ...legacyParams } = params
+  // legacy 路径不接受 view 参数（视图维度由 federated 侧承担），构造参数时剔除。
+  const legacyParams = { ...params }
+  delete legacyParams.view
   return useQuery({
     queryKey: ['logsLegacy', legacyParams],
     queryFn: async () => (await api.get<LegacyLogPage>('/logs/legacy', { params: { ...legacyParams, source: 'legacy' } })).data,

@@ -233,7 +233,13 @@ export default function LogsPage() {
   const exportBlockedByFederation =
     !!federation && !classicExportAllowed && !federation.exportAffordance.showDownload
   const exportDisabled = legacyMode || exporting || total === 0 || exportBlockedByFederation
-	const isLoading = legacyMode ? legacyQuery.isLoading : classicLoading
+	// federated 探测（FR-481）未落地前，items 可能暂时为空——此时不得判为「空结果」，
+	// 否则会先闪 empty-state（且 404 降级期间显示非成功空态），把尚未就绪误报成失败。
+	// 故把「联邦探测未完成」并入 loading：只有探测结束、数据源确定后才允许判空。
+	const federationProbePending = !legacyMode && federationQuery.isLoading
+	const isLoading = legacyMode
+		? legacyQuery.isLoading
+		: classicLoading || federationProbePending
 	const isError = legacyMode ? legacyQuery.isError : classicError
 	const hasData = legacyMode ? !!legacyQuery.data : !!data
 
@@ -525,6 +531,7 @@ export default function LogsPage() {
             items={items}
             total={total}
             follow={follow}
+            loading={isLoading}
             emptySuccessAllowed={emptySuccessAllowed}
           />
           <LogFooter
@@ -716,11 +723,14 @@ function LogTimeline({
   items,
   total,
   follow,
+  loading = false,
   emptySuccessAllowed = true,
 }: {
   items: import('@/api/logs').LogEntry[]
   total: number
   follow: boolean
+  /** 查询尚未完成：此时不判空态，避免把「未就绪」误报为空结果。 */
+  loading?: boolean
   /** FR-481：false 时禁止把空列表呈成「无日志」成功空态。 */
   emptySuccessAllowed?: boolean
 }) {
@@ -745,7 +755,8 @@ function LogTimeline({
   })
   const visible = items.slice(win.startIndex, win.endIndex)
 
-  if (items.length === 0) {
+  // 查询尚未完成时不判空：交由上方 loading 分支呈现，避免把「未就绪」误报为空结果。
+  if (items.length === 0 && !loading) {
     return (
       <div
         data-testid="logs-empty-state"
