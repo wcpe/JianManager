@@ -65,7 +65,8 @@ type InstanceService struct {
 	pool     *cpgrpc.ClientPool
 	// settings 提供平台设置生效值（graceful_stop.timeout），随启动下发使优雅停止超时真生效；
 	// 为 nil 时不下发，Worker 回退本地 env/默认（FR-063）。
-	settings SettingsReader
+	settings   SettingsReader
+	logHolders *LogTargetHolderService
 
 	// bgCtx/bgCancel 管理后台 Worker 委托 goroutine 的生命周期；bgWG 用于优雅关闭时 join，
 	// bgMu 保护「取消」与「登记新委托」之间的竞态（避免 WaitGroup 的 Add-after-Wait）。
@@ -91,6 +92,10 @@ type InstanceService struct {
 	// 或未开启 beacon.push-enabled——此时全部触发点直接返回，实例创建/删除/改名照常成功。
 	// 由 main 装配阶段经 SetBeaconPush 注入，避免 service 层反向依赖装配顺序。
 	beaconPush *BeaconPushService
+}
+
+func (s *InstanceService) SetLogTargetHolderService(holders *LogTargetHolderService) {
+	s.logHolders = holders
 }
 
 // lockNodePortAlloc 获取节点级端口分配互斥；返回的释放函数必须且只能调用一次。
@@ -378,6 +383,13 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 
 		if err := tx.Create(instance).Error; err != nil {
 			return fmt.Errorf("创建实例失败: %w", err)
+		}
+		if s.logHolders != nil && target.UUID != "" {
+			generation := fmt.Sprintf("instance:%s@worker:%s", instance.UUID, target.UUID)
+			if err := s.logHolders.recordCurrentTx(tx, instance.ID, target.UUID, generation,
+				fmt.Sprintf("inst:%d", instance.ID), time.Now().UTC()); err != nil {
+				return fmt.Errorf("登记实例日志 holder 失败: %w", err)
+			}
 		}
 
 		// 分配给用户组
@@ -1759,8 +1771,19 @@ func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (
 		probePort = instance.ProbePort
 	}
 
+	logMode := "STDIO_PRIMARY"
+	if instance.Type == model.InstanceTypeMinecraftJava {
+		logMode = "FILE_PRIMARY"
+	}
+	var logNode model.Node
+	if err := s.db.Select("uuid").First(&logNode, instance.NodeID).Error; err != nil {
+		return nil, fmt.Errorf("解析日志 holder 身份失败: %w", err)
+	}
 	return &workerpb.CreateInstanceRequest{
 		InstanceUuid:               instance.UUID,
+		LogTargetId:                fmt.Sprintf("inst:%d", instance.ID),
+		LogAcquireMode:             logMode,
+		LogSourceGeneration:        fmt.Sprintf("instance:%s@worker:%s", instance.UUID, logNode.UUID),
 		Name:                       instance.Name,
 		ProcessType:                string(instance.ProcessType),
 		StartCommand:               instance.StartCommand,
