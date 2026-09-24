@@ -1,6 +1,6 @@
 package acquire
 
-// EventBoundaryHook 与 FR-474 normalize 协调的导出钩子。
+// EventBoundaryHook 与 FR-475 normalize 协调的导出钩子。
 // FileTailer 按物理行喂入；complete=true 时才允许推进 durable checkpoint。
 // incomplete 多行缓冲只推进 read_position。
 type EventBoundaryHook interface {
@@ -16,7 +16,7 @@ type EventBoundaryHook interface {
 	PendingStart() uint64
 }
 
-// LineHook 将每一物理行视为独立完整事件（默认钩子；非 FR-474 多行语义）。
+// LineHook 将每一物理行视为独立完整事件（默认钩子；非 FR-475 多行语义）。
 type LineHook struct {
 	lastStart uint64
 }
@@ -38,7 +38,7 @@ func (h *LineHook) FlushPartial() ([]byte, uint64, bool) { return nil, 0, false 
 // PendingStart 返回 0。
 func (h *LineHook) PendingStart() uint64 { return 0 }
 
-// MultilineBufferHook 供 FR-474 实现的参考骨架：
+// MultilineBufferHook 供 FR-475 实现的参考骨架：
 // 未调用完整边界前只暴露 PendingStart，不标记 complete。
 // 本包不实现 Java/Go 解析，仅保留接口形状与 incomplete 行为契约。
 type MultilineBufferHook struct {

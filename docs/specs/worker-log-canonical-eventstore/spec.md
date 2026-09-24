@@ -1,14 +1,14 @@
-# 功能规格：canonical 事件体落盘 compact（FR-483）
+# 功能规格：canonical 事件体落盘 compact（FR-484）
 
-> 状态：实现中（eventstore 追加段 + ingest 读写路径改造已完成；阶段 2/3/4 实测通过；ADR-095 与 PRD/ARCHITECTURE/CHANGELOG/契约 §6.6 已对账）　·　关联 PRD：FR-483　·　依赖：FR-472（Shared Contracts 已冻结）　·　分支：feature/fr-log-platform-foundation
+> 状态：实现中（eventstore 追加段 + ingest 读写路径改造已完成；阶段 2/3/4 实测通过；ADR-095 与 PRD/ARCHITECTURE/CHANGELOG/契约 §6.6 已对账）　·　关联 PRD：FR-484　·　依赖：FR-473（Shared Contracts 已冻结）　·　分支：feature/fr-log-platform-foundation
 
 ## 1. 背景与目标
 
-FR-472 契约 §4.3/§5.3 规定 `persistedSource.Events` 是 VL 数据根丢失后重建 projection 的权威集合，**不可按 reclaim 前缀裁剪**——试做内存裁剪被 `TestManagerRotationImportsOnlyUnreadTailBeforeReplacementFile`、`TestManagerAutoImportsHistoricalGzipBeforeCurrentFile`、`TestManagerPartitionsProjectionByCanonicalEventUTCDay` 三个回归测试否决（清空事件体会破坏归档导入/轮转/跨日重建的等价性）。
+FR-473 契约 §4.3/§5.3 规定 `persistedSource.Events` 是 VL 数据根丢失后重建 projection 的权威集合，**不可按 reclaim 前缀裁剪**——试做内存裁剪被 `TestManagerRotationImportsOnlyUnreadTailBeforeReplacementFile`、`TestManagerAutoImportsHistoricalGzipBeforeCurrentFile`、`TestManagerPartitionsProjectionByCanonicalEventUTCDay` 三个回归测试否决（清空事件体会破坏归档导入/轮转/跨日重建的等价性）。
 
-代价是该集合常驻内存并内联在 `ingest.state.json` 中，随单源留存事件数线性增长。FR-472 真机 H-scale64 实测：64 源 × 3000 事件下 Worker 稳态 RSS ≈674MiB、`state.json` ≈143–189MB，容量拟合 ≈2.8MB state / 24MiB RSS 每源，**1GiB 预算仅够 ≈40 源**，无法支撑「单 Worker 承载更多实例」的密度目标。
+代价是该集合常驻内存并内联在 `ingest.state.json` 中，随单源留存事件数线性增长。FR-473 真机 H-scale64 实测：64 源 × 3000 事件下 Worker 稳态 RSS ≈674MiB、`state.json` ≈143–189MB，容量拟合 ≈2.8MB state / 24MiB RSS 每源，**1GiB 预算仅够 ≈40 源**，无法支撑「单 Worker 承载更多实例」的密度目标。
 
-FR-483 把 canonical 事件体从「state.json 内联 + 内存常驻」改为「追加式磁盘段存储」，**保持集合语义与可重建能力不变**，只更换存储介质。
+FR-484 把 canonical 事件体从「state.json 内联 + 内存常驻」改为「追加式磁盘段存储」，**保持集合语义与可重建能力不变**，只更换存储介质。
 
 目标是：
 
@@ -31,7 +31,7 @@ FR-483 把 canonical 事件体从「state.json 内联 + 内存常驻」改为「
 - **不按 reclaim 前缀裁剪事件体**：裁剪会破坏重建等价性，已被现有测试否决；
 - 不改变事件身份、canonical 哈希、投影代次、覆盖水位或 Catalog 语义；
 - 不引入第二日志查询引擎、不改变 VL 侧数据布局；
-- 不改动 WAL 语义（reclaim/WAL 裁剪由 FR-473 的 `pruneReclaimed` 负责）。
+- 不改动 WAL 语义（reclaim/WAL 裁剪由 FR-474 的 `pruneReclaimed` 负责）。
 
 ### 2.3 术语
 
@@ -150,6 +150,6 @@ A/B 对照（同机同负载，HEAD 基线 vs 本改动）：`state.json` **77 8
 
 ## 6. 已知边界
 
-- **采集期峰值已收敛**（FR-483 阶段5）：三处跨轮累积结构加界后，峰值不再随源数线性增长
+- **采集期峰值已收敛**（FR-484 阶段5）：三处跨轮累积结构加界后，峰值不再随源数线性增长
   （64/150 源 = 73.5/77.0 MiB，改造前 541/1152 MiB）。剩余量级为 Go runtime 自身开销。
-- **events/ 磁盘占用**：150 源 × 3000 事件的段合计 ≈300 MiB（NDJSON 未压缩）。磁盘预算与保留策略由 FR-478/440 的生命周期负责，本 FR 不引入新压缩格式。
+- **events/ 磁盘占用**：150 源 × 3000 事件的段合计 ≈300 MiB（NDJSON 未压缩）。磁盘预算与保留策略由 FR-479/480 的生命周期负责，本 FR 不引入新压缩格式。

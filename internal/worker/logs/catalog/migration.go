@@ -2,7 +2,7 @@ package catalog
 
 import "fmt"
 
-// MigrationState 是 FR-476/FR-472 §5.2 的迁移状态。取值必须与契约完全一致。
+// MigrationState 是 FR-477/FR-473 §5.2 的迁移状态。取值必须与契约完全一致。
 type MigrationState string
 
 const (

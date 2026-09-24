@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 )
 
-// CapacityBudget Worker 日志资源预算切片（数值以 FR-472 契约为准，此处为可注入上限）。
+// CapacityBudget Worker 日志资源预算切片（数值以 FR-473 契约为准，此处为可注入上限）。
 type CapacityBudget struct {
 	// MaxWALBytes WAL 字节上限；0 表示不限制（测试默认）。
 	MaxWALBytes uint64

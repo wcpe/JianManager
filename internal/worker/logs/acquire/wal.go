@@ -1,5 +1,5 @@
-// Package acquire 实现 FR-473 采集通道：FileTailer / ArchiveImporter / WAL / 容量门禁。
-// 与 normalize 的边界通过 EventBoundaryHook 导出，本包不实现 FR-474 解析逻辑。
+// Package acquire 实现 FR-474 采集通道：FileTailer / ArchiveImporter / WAL / 容量门禁。
+// 与 normalize 的边界通过 EventBoundaryHook 导出，本包不实现 FR-475 解析逻辑。
 package acquire
 
 import (

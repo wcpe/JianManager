@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 )
 
-// FR-483 阶段5：归一化边界与 normalize 的跨轮累积必须**有界**。
+// FR-484 阶段5：归一化边界与 normalize 的跨轮累积必须**有界**。
 //
 // 背景：linePos（每行绝对位置表）与 Normalizer.events（已产出事件）原先只 append、
 // 从不释放，内存随**会话内总行数**线性增长——64 源 × 3000 行实测为其常驻堆的

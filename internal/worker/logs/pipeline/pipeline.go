@@ -74,7 +74,7 @@ type Pipeline struct {
 	// deliveredCount 累计已进入投递钩子的事件数（测试断言用）。
 	//
 	// 原先保留 []logtypes.Event 全量切片，会随会话内总事件数线性增长却无人读取内容
-	// （FR-483 阶段5：64 源实测 ≈36MB），故只保留计数。
+	// （FR-484 阶段5：64 源实测 ≈36MB），故只保留计数。
 	deliveredCount int
 	// lineMode false=normalize 多行；测试可切 LineHook 对照。
 	useNormalize bool
@@ -218,7 +218,7 @@ func (p *Pipeline) FileTailer() *acquire.FileTailer { return p.tailer }
 // DeliveredCount 返回累计已进入 DeliveryHook 的事件数（含成功记账）。
 //
 // 只保留计数而不保留事件内容：后者会随会话内总事件数线性增长却无人读取内容
-// （FR-483 阶段5 实测 64 源 ≈36MB）。若将来确有读取事件内容的需求，应先明确
+// （FR-484 阶段5 实测 64 源 ≈36MB）。若将来确有读取事件内容的需求，应先明确
 // 保留窗口与释放时机，不要恢复无界切片。
 func (p *Pipeline) DeliveredCount() int { return p.deliveredCount }
 

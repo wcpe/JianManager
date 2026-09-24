@@ -9,7 +9,7 @@ import (
 )
 
 // InstanceState supervisor 账面进程状态。
-// 注意：进程健康、分区恢复完成、查询完整可用是三个独立状态（契约 §5.3 / FR-475 §3.1）。
+// 注意：进程健康、分区恢复完成、查询完整可用是三个独立状态（契约 §5.3 / FR-476 §3.1）。
 type InstanceState string
 
 const (
@@ -451,7 +451,7 @@ func (s *Supervisor) Health(ctx context.Context, ns Namespace) error {
 // WaitHealthy 轮询 /health 直到实例就绪或超时。
 //
 // 用途：受管 VL 启动是异步的——Start 返回时进程可能尚未监听端口。若此时接线 ingest/查询并立即向
-// VL 写入，会因连接被拒失败，甚至导致采集运行时创建失败（FR-475 启动时序 / Runbook C）。
+// VL 写入，会因连接被拒失败，甚至导致采集运行时创建失败（FR-476 启动时序 / Runbook C）。
 // 故在接线前等待就绪；超时返回最后一次错误，调用方据此保持降级而不静默假成功。
 func (s *Supervisor) WaitHealthy(ctx context.Context, ns Namespace, timeout time.Duration) error {
 	if timeout <= 0 {
@@ -567,7 +567,7 @@ func (s *Supervisor) SetTotalLogBudget(totalBytes int64) error {
 	return nil
 }
 
-// SampleBudget 采样受管 VL 进程 RSS 与数据盘使用率并评估降级状态（FR-475 / 契约 §6.6）。
+// SampleBudget 采样受管 VL 进程 RSS 与数据盘使用率并评估降级状态（FR-476 / 契约 §6.6）。
 //
 // 仅纳入 RUNNING 实例；RSS 为各受管 VL 进程之和（Worker 日志数据面主要占用）。
 // 单维度采样失败（进程已退出、磁盘不可读）不阻断：跳过该维度，返回仍可用的 verdict。

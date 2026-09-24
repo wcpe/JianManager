@@ -177,7 +177,7 @@ func newProjectionVL(t *testing.T) (*vlsup.Client, *projectionVLFixture) {
 	return client, fixture
 }
 
-// durableEvents 返回某源的权威 canonical 事件集合（FR-483 后事件体在磁盘段，不在 state 内联）。
+// durableEvents 返回某源的权威 canonical 事件集合（FR-484 后事件体在磁盘段，不在 state 内联）。
 // 顺序与事件段一致（追加序），便于断言消息内容。
 func durableEvents(t *testing.T, m *Manager, key string) []logtypes.Event {
 	t.Helper()

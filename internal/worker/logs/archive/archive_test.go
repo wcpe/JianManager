@@ -656,7 +656,7 @@ func NewArchiveRegistryForTest(t *testing.T) *Registry {
 	return NewRegistry(NewLocalArchive(t.TempDir()))
 }
 
-// TestRegistryEngineVersionOverride manifest 记录受管 VL 真实 build_id（FR-475），而非占位。
+// TestRegistryEngineVersionOverride manifest 记录受管 VL 真实 build_id（FR-476），而非占位。
 func TestRegistryEngineVersionOverride(t *testing.T) {
 	ctx := context.Background()
 	reg := NewRegistry(NewLocalArchive(t.TempDir()))

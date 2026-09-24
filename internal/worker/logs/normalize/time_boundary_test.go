@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// FR-474 规格 §5：「跨午夜/无时间/损坏编码/超长堆栈可恢复；事件数和行数统计分别正确」。
+// FR-475 规格 §5：「跨午夜/无时间/损坏编码/超长堆栈可恢复；事件数和行数统计分别正确」。
 //
 // 本文件补齐此前**无任何测试覆盖**的两类边界：跨午夜与无时间。
 // （损坏编码见 pipeline/encoding_integrity_test.go；超长堆栈见 TestLimitExceededTruncated。）

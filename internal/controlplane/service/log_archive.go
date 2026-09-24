@@ -47,7 +47,7 @@ func (s *LogService) runRetentionOnce() {
 	} else if n > 0 {
 		slog.Info("按总量上限归档日志", "count", n, SkipPersist())
 	}
-	// FR-480：cutover 打开时 Legacy 走独立保留预算，与 platform 巡检解耦。
+	// FR-481：cutover 打开时 Legacy 走独立保留预算，与 platform 巡检解耦。
 	if s.cutover != nil && s.cutover.Enabled() && s.legacy != nil {
 		if n, err := s.legacy.RunRetention(); err != nil {
 			slog.Error("按 Legacy 预算归档日志失败", "err", err, SkipPersist())

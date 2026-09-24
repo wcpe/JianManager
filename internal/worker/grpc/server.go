@@ -55,7 +55,7 @@ type Server struct {
 	nodeUUID  string
 	collector *metrics.Collector
 	jdkMgr    *jdk.Manager
-	// logQuery FR-478 日志 RPC 装配点（T11）；nil 时 Log* 走 Unimplemented。
+	// logQuery FR-479 日志 RPC 装配点（T11）；nil 时 Log* 走 Unimplemented。
 	logQuery     interface{}
 	instanceLogs InstanceLogCollector
 	// root 是本节点数据根，用于把 CP 下发的相对工作目录解析为绝对路径。参见 ADR-010。

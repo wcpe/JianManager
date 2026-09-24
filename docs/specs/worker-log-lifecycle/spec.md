@@ -1,44 +1,44 @@
-# 功能规格：分区 Catalog 与冷热 Lifecycle（FR-476）
+# 功能规格：分区 Catalog 与冷热 Lifecycle（FR-477）
 
-> 状态：实现中（地基包 `internal/worker/logs/{catalog,lifecycle}` 已落地，单测绿；**Runbook B 真机迁移链已通过**——FROZEN→…→CLEANED 全链、数据物理迁移、HOT 空/COLD 持有、逐状态崩溃恢复视图，见 `../worker-log-platform-contract/acceptance-record.md` §2）　·　关联 PRD：FR-476　·　依赖：FR-472/436
+> 状态：实现中（地基包 `internal/worker/logs/{catalog,lifecycle}` 已落地，单测绿；**Runbook B 真机迁移链已通过**——FROZEN→…→CLEANED 全链、数据物理迁移、HOT 空/COLD 持有、逐状态崩溃恢复视图，见 `../worker-log-platform-contract/acceptance-record.md` §2）　·　关联 PRD：FR-477　·　依赖：FR-473/476
 
 ## 1. 背景与目标
 
 让迁移、迟到写入和重启恢复只有一个查询 owner。
 
-本规格不得重新定义 FR-472 Shared Contracts；字段、状态和覆盖语义以 `docs/specs/worker-log-platform-contract/spec.md` 为准。
+本规格不得重新定义 FR-473 Shared Contracts；字段、状态和覆盖语义以 `docs/specs/worker-log-platform-contract/spec.md` 为准。
 
 ## 2. 需求（要什么）
 
 - 契约继承：Catalog 发布必须携带 `PublishedProjection`；旧目录自动 attach 不得越过 Catalog，纯迁移不自动使仍可读的旧 view 失效。
 - 范围内：实现 Catalog/journal 状态机：冻结路由、排空、snapshot、staging 校验、attach 排除、原子切 owner、租约排空、detach、清理；启动先恢复 Catalog，再处理 VL 残留目录。
-- 继承 FR-472：租约包含 `lease_id/view_id/generation/expiry`；纯迁移不自动使仍可读的固定 view 失效，Catalog 冲突范围才进入 `VIEW_STALE`/`RECOVERY_REQUIRED`。
+- 继承 FR-473：租约包含 `lease_id/view_id/generation/expiry`；纯迁移不自动使仍可读的固定 view 失效，Catalog 冲突范围才进入 `VIEW_STALE`/`RECOVERY_REQUIRED`。
 - 范围外：新增日志告警引擎、第二日志查询引擎、浏览器直连 Worker/VL。
 
 ## 3. 设计（怎么做）
 
 实现 Catalog/journal 状态机：冻结路由、排空、snapshot、staging 校验、attach 排除、原子切 owner、租约排空、detach、清理；启动先恢复 Catalog，再处理 VL 残留目录。
 
-所有跨 Worker 调用经 CP 反向 gRPC 隧道；所有失败返回结构化状态与可观测原因。实现前必须完成依赖 FR-472 的冻结条件，不得用接口占位绕过状态算法。
+所有跨 Worker 调用经 CP 反向 gRPC 隧道；所有失败返回结构化状态与可观测原因。实现前必须完成依赖 FR-473 的冻结条件，不得用接口占位绕过状态算法。
 
 ## 4. 任务拆分
 
-- [ ] 将 FR-472 对应契约映射到本模块的状态、数据模型和 proto。
+- [ ] 将 FR-473 对应契约映射到本模块的状态、数据模型和 proto。
 - [ ] 实现正常路径与崩溃/重启/资源耗尽路径。
 - [ ] 编写单元、集成、真实 Worker/VL 或浏览器验收所需测试。
-- [ ] 更新 ARCHITECTURE/API/CHANGELOG 及 FR-482 文档对账。
+- [ ] 更新 ARCHITECTURE/API/CHANGELOG 及 FR-483 文档对账。
 
 ## 5. 验收标准
 
 - [ ] 每个崩溃点验证 owner/generation、物理目录、写入路由和查询范围；残留旧目录不被查询；retention 不删除最后有效副本。
 - [ ] 权限覆盖 Search/Stats/Fields/Facets/Tail/Rehydrate/Export；越权无字段或覆盖侧信道。
-- [ ] 性能阈值、RSS、磁盘和临时空间使用 FR-472 冻结的实际数值，不自行发明未登记阈值。
+- [ ] 性能阈值、RSS、磁盘和临时空间使用 FR-473 冻结的实际数值，不自行发明未登记阈值。
 - [ ] 真实环境验收证据与自动化测试分开记录；测试全绿不替代真 Worker/VL/浏览器验收。
 
 ## 6. 风险 / 待定
 
-- FR-472 已冻结；本规格仍须完成 Catalog 适配层崩溃恢复、re-attach 过滤。**Runbook B 真机验收已完成**（见状态行与验收记录 §2）；re-attach 过滤与迁移崩溃的具体覆盖度见 `signoff-ledger.md` 的 FR-476 行。
-- 具体 VL tag、资产哈希和兼容矩阵由 FR-475 资产审批冻结。
+- FR-473 已冻结；本规格仍须完成 Catalog 适配层崩溃恢复、re-attach 过滤。**Runbook B 真机验收已完成**（见状态行与验收记录 §2）；re-attach 过滤与迁移崩溃的具体覆盖度见 `signoff-ledger.md` 的 FR-477 行。
+- 具体 VL tag、资产哈希和兼容矩阵由 FR-476 资产审批冻结。
 
 ## 3.1 迁移不变量
 

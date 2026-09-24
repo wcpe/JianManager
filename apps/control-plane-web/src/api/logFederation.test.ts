@@ -1,5 +1,5 @@
 /**
- * api/logFederation 纯映射单测（FR-481）。
+ * api/logFederation 纯映射单测（FR-482）。
  * 覆盖 envelope→foundation 归一、ErrFederatedNotReady、404 降级、导出门禁结果。
  */
 import { describe, expect, it } from 'vitest'
@@ -15,7 +15,7 @@ import {
 } from './logFederation'
 import { PARTIAL_REASONS } from '@/lib/logs-federation'
 
-describe('logFederation client mapping（FR-481）', () => {
+describe('logFederation client mapping（FR-482）', () => {
   it('isHttp404 / isFederatedNotReady', () => {
     expect(isHttp404({ response: { status: 404 } })).toBe(true)
     expect(isHttp404({ response: { status: 500 } })).toBe(false)

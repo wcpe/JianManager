@@ -1,6 +1,6 @@
-# VictoriaLogs 发行资产清单（FR-475 资产审批）
+# VictoriaLogs 发行资产清单（FR-476 资产审批）
 
-> 受控文档：本清单是 FR-475 / FR-472 §6.6 实验所依据的 VL 资产基线。
+> 受控文档：本清单是 FR-476 / FR-473 §6.6 实验所依据的 VL 资产基线。
 > 任一字段与本地包不一致时**不得安装**（Worker `vlsup.VerifyAsset` 双重校验：包 SHA-256 + 解包后可执行 SHA-256）。
 > 代码真源：`internal/platform/logasset/approved.go`（`Approved(goos, goarch)`）。
 
@@ -37,11 +37,11 @@ sha256sum victoria-logs-prod
 
 ## 4. 分发与安装规则
 
-- **CP 只分发审批 tag、哈希和许可清单**（FR-475 §2）；CP 不内嵌归档正文。管理员将审批包上传到 CP 资产缓存
+- **CP 只分发审批 tag、哈希和许可清单**（FR-476 §2）；CP 不内嵌归档正文。管理员将审批包上传到 CP 资产缓存
   （`POST /api/v1/log-runtime/assets/:os/:arch`，落 `artifacts/log-vl/<sha2>/<sha>.ext`，按 SHA-256 校验），
   Worker 再经签名 token 下载并由 `vlsup.InstallApprovedURL` 安装。
 - Worker 安装前必须同时匹配**包 SHA-256**与**解包后可执行 SHA-256**；任一不匹配即拒绝安装并报结构化原因。
-- VL 仅监听 localhost，使用独立本地鉴权密钥与受管数据根；不向浏览器暴露（FR-472/ADR-094）。
+- VL 仅监听 localhost，使用独立本地鉴权密钥与受管数据根；不向浏览器暴露（FR-473/ADR-094）。
 
 ## 5. 变更控制
 

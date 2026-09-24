@@ -18,7 +18,7 @@ type lineSpan struct {
 //   - 未闭合多行：只暴露 PendingStart，FileTailer 只推进 read_position。
 //   - normalize 以行号为 record；本 hook 按绝对源位置重映射 event_id。
 //
-// 内存约定（FR-483 阶段5）：linePos 是**滑动窗口**而非全会话历史。
+// 内存约定（FR-484 阶段5）：linePos 是**滑动窗口**而非全会话历史。
 // normalize 的行号是会话内单调递增的，若把每行位置全部留住，内存会随会话总行数
 // 线性增长（192k 行 ≈130MB）。但 remap 只会引用「当前未闭合多行事件所覆盖的行」，
 // 因此 DrainEvents 之后可以把窗口收缩到该事件的首行；lineBase 记录窗口首行对应的

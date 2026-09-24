@@ -299,7 +299,7 @@ func main() {
 	logSvc := service.NewLogService(db, root, cfg.LogStore)
 	logSvc.Start()
 	defer logSvc.Stop()
-	// FR-479 日志联邦协调器（T11 装配）：实例/节点目标解析 + ClientPool 隧道 Dialer。
+	// FR-480 日志联邦协调器（T11 装配）：实例/节点目标解析 + ClientPool 隧道 Dialer。
 	// Readiness 以节点状态∩活跃隧道判定；onlineOnly 不扇出离线节点。
 	logHolderSvc := service.NewLogTargetHolderService(db)
 	instanceSvc.SetLogTargetHolderService(logHolderSvc)

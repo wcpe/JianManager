@@ -77,7 +77,7 @@ type Manager struct {
 	pipes               map[string]*pipeline.Pipeline
 	state               persistedState
 	statePath           string
-	// events 是 canonical 事件体的追加式磁盘段存储（FR-483）；权威副本，state 只存元数据。
+	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
 	events *eventstore.Store
 	verificationTimeout time.Duration
 	capacityProvider    func() (acquire.CapacityBudget, error)
@@ -277,7 +277,7 @@ func New(opts Options) (*Manager, error) {
 	if m.verificationTimeout <= 0 {
 		m.verificationTimeout = 30 * time.Second
 	}
-	// 事件体走追加式磁盘段（FR-483）：state 文件只留元数据，避免整份重写与常驻切片。
+	// 事件体走追加式磁盘段（FR-484）：state 文件只留元数据，避免整份重写与常驻切片。
 	store, err := eventstore.Open(filepath.Join(opts.Root, "var", "log", "events"))
 	if err != nil {
 		return nil, err
@@ -802,7 +802,7 @@ func (m *Manager) appendEvents(key string, events []logtypes.Event) error {
 	m.mu.Lock()
 	saved := m.state.Sources[key]
 	saved.EventsStored = true
-	// 已落段后不再保留内联副本，否则常驻切片会重新把 RSS 推高（FR-483 目标）。
+	// 已落段后不再保留内联副本，否则常驻切片会重新把 RSS 推高（FR-484 目标）。
 	saved.Events = nil
 	m.state.Sources[key] = saved
 	m.mu.Unlock()
@@ -1495,7 +1495,7 @@ func (m *Manager) persist() error {
 			PublicationPending: prev.PublicationPending, EventsStored: prev.EventsStored}
 		entry.WAL = append(entry.WAL, p.WAL().Snapshot()...)
 		// 事件体已在磁盘段时不写回内联切片——这正是原先 state 涨到 180MB、每次 persist
-		// 触发 130MB MarshalIndent 的根源（FR-483 阶段0 量测）。
+		// 触发 130MB MarshalIndent 的根源（FR-484 阶段0 量测）。
 		if !entry.EventsStored {
 			entry.Events = append(entry.Events, prev.Events...)
 		}

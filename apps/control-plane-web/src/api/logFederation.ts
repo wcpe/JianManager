@@ -1,8 +1,8 @@
 /**
- * FR-481 日志联邦可选 API 客户端。
+ * FR-482 日志联邦可选 API 客户端。
  *
  * 职责：
- * - 探测 `GET /logs/federation`（双路径门面，契约见 FR-480/433）；
+ * - 探测 `GET /logs/federation`（双路径门面，契约见 FR-473/481）；
  * - 把后端 envelope / LegacyCoverage 映射为 foundation 的 {@link LogFederationResponse}；
  * - API 404 时降级为 legacy logs 视图（页面继续消费既有 `/logs` 表格，横幅说明回退）；
  * - ErrFederatedNotReady 透传为结构化失败态，**不得**把空 items 当完整零结果。
@@ -33,7 +33,7 @@ export const FEDERATED_NOT_READY_MESSAGE = 'federated log query path not ready'
 /** 可选联邦查询路径：后端门面 GET /api/v1/logs/federation（Search + envelope）。 */
 export const LOGS_FEDERATION_PATH = '/logs/federation'
 
-/** 精确 Search 端点（FR-479 HTTP）；门面不可用时可降级探测。 */
+/** 精确 Search 端点（FR-480 HTTP）；门面不可用时可降级探测。 */
 export const LOGS_FEDERATION_SEARCH_PATH = '/logs/federation/search'
 export const LOGS_FEDERATION_TAIL_PATH = '/logs/federation/tail'
 
@@ -56,7 +56,7 @@ export interface FederationCoverageBody {
   notes?: string[]
 }
 
-/** 双路径查询 envelope（同时接受门面 envelope 与 FR-479 SearchResponse snake_case）。 */
+/** 双路径查询 envelope（同时接受门面 envelope 与 FR-480 SearchResponse snake_case）。 */
 export interface LogsFederationEnvelope {
   ok?: boolean
   sourceTag?: LogSourceTag
@@ -146,7 +146,7 @@ function normalizeReasons(raw: unknown): PartialReason[] {
   return raw.filter((r): r is PartialReason => typeof r === 'string' && r.length > 0)
 }
 
-/** TargetCoverage 宽松投影：兼容 FR-472 snake_case（target_id/state）与 UI camelCase。 */
+/** TargetCoverage 宽松投影：兼容 FR-473 snake_case（target_id/state）与 UI camelCase。 */
 function normalizeTargets(raw: unknown): TargetCoverage[] {
   if (!Array.isArray(raw)) return []
   return raw.map((t) => {
@@ -174,7 +174,7 @@ function normalizeTargets(raw: unknown): TargetCoverage[] {
 }
 
 /**
- * 把后端 coverage（可能是 LegacyCoverage 或 FR-472 Coverage）规范为 foundation Coverage。
+ * 把后端 coverage（可能是 LegacyCoverage 或 FR-473 Coverage）规范为 foundation Coverage。
  * Legacy 恒 complete=false；未知形状不返回 null-success。
  */
 export function normalizeFederationCoverage(
@@ -298,7 +298,7 @@ export function mapFederationEnvelope(envelope: LogsFederationEnvelope): {
   let errorCode = asString(envelope.errorCode)
   const items = Array.isArray(envelope.items) ? envelope.items : null
 
-  // FR-472 §4.5：duplicate 未决/冲突 → coverage 不完整，禁止空成功。
+  // FR-473 §4.5：duplicate 未决/冲突 → coverage 不完整，禁止空成功。
   if (dq === 'UNRESOLVED' || dq === 'CONFLICT') {
     const reason = PARTIAL_REASONS.DUPLICATE_UNRESOLVED
     if (!coverage || coverage.complete) {

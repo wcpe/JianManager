@@ -76,7 +76,7 @@ func (r *recordingOps) errIf(op string) error {
 	return nil
 }
 
-// FR-476 happy path：状态走完、owner 切换、staging 期间不可查询、迟到事件路由 COLD。
+// FR-477 happy path：状态走完、owner 切换、staging 期间不可查询、迟到事件路由 COLD。
 func TestLifecycle_HappyPathOwnerSwitch(t *testing.T) {
 	cat := catalog.New(nil)
 	rec := &recordingOps{}
@@ -210,7 +210,7 @@ func TestResumeMigrationCompletesEveryPersistedCrashState(t *testing.T) {
 	}
 }
 
-// FR-476：staging attach 成功也不得进入 QueryPlanner（显式夹具）。
+// FR-477：staging attach 成功也不得进入 QueryPlanner（显式夹具）。
 func TestLifecycle_StagingNotQueryable(t *testing.T) {
 	cat := catalog.New(nil)
 	m := New(cat, Ops{})
@@ -246,7 +246,7 @@ func mustRec(t *testing.T, m *Manager) *catalog.Record {
 	return rec
 }
 
-// FR-476 Runbook B：每个迁移状态崩溃后 Recover 必须给出期望的 owner/query 侧。
+// FR-477 Runbook B：每个迁移状态崩溃后 Recover 必须给出期望的 owner/query 侧。
 func TestLifecycle_SimulatedCrashRecoverEachState(t *testing.T) {
 	type expect struct {
 		queryable   bool

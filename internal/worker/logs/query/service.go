@@ -131,7 +131,7 @@ type ArchiveBackend interface {
 	ArchiveStatus(ctx context.Context, req QueryRequest, objectIDs []string) ArchiveStatusResponse
 }
 
-// Service 是 FR-478 查询面 foundation：消费 planner ranges + budget。
+// Service 是 FR-479 查询面 foundation：消费 planner ranges + budget。
 type Service struct {
 	planner *Planner
 	client  RangeClient

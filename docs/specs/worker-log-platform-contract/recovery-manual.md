@@ -1,7 +1,7 @@
-# 日志平台恢复与故障处置手册（FR-482）
+# 日志平台恢复与故障处置手册（FR-483）
 
-> 受控文档：面向运维的日志平台（FR-472～483）切换、恢复与故障处理手册。
-> 语义真源：`docs/specs/worker-log-platform-contract/spec.md`（FR-472 共享契约，已冻结）。
+> 受控文档：面向运维的日志平台（FR-473～484）切换、恢复与故障处理手册。
+> 语义真源：`docs/specs/worker-log-platform-contract/spec.md`（FR-473 共享契约，已冻结）。
 > 验收状态见 `runbook-checklist.md`；资产清单见 `../worker-victorialogs-runtime/asset-inventory.md`。
 
 ## 1. 适用范围与真源
@@ -97,5 +97,5 @@ Worker 侧配置键（`worker.yml`，零配置默认关闭）：`log_sources`、
 
 ## 7. 变更控制
 
-- 修改 FR-472 共享契约语义必须显式评审并同步依赖模块、兼容规则与测试。
+- 修改 FR-473 共享契约语义必须显式评审并同步依赖模块、兼容规则与测试。
 - VL 资产换版必须重跑受影响能力验证并更新 `asset-inventory.md` 与 `internal/platform/logasset/approved.go`。

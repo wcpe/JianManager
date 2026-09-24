@@ -14,7 +14,7 @@ import LogsPage from './LogsPage'
  * LogsPage 还消费 /nodes、/instances 填筛选下拉——非本域 endpoint，本测试用 server.use 就地
  * 提供空数组桩（不在 domains/ 重定义别域 handler），满足 onUnhandledRequest:'error' 覆盖闸。
  *
- * FR-481：页面会探测可选 `/logs/federation`。默认桩 404 → 降级 legacy 视图（表格仍走 /logs），
+ * FR-482：页面会探测可选 `/logs/federation`。默认桩 404 → 降级 legacy 视图（表格仍走 /logs），
  * 保证既有用例不因联邦 API 未部署而失败；联邦覆盖/导出门禁见 LogsPage.federation.dom.test.tsx。
  */
 beforeEach(() => {

@@ -1,4 +1,4 @@
-// Package logtypes 映射 FR-472 Shared Contracts 的共享身份与状态类型。
+// Package logtypes 映射 FR-473 Shared Contracts 的共享身份与状态类型。
 // 字段语义以 docs/specs/worker-log-platform-contract/spec.md 为准，本包不另立契约。
 package logtypes
 

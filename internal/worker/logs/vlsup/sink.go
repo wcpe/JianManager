@@ -7,7 +7,7 @@ import (
 )
 
 // ErrRecursiveVLSink 表示失败日志被拒绝写入 VL 日志管道。
-// FR-475 §3.1：VL 写失败日志必须走独立、限流且不回写 VL 的 sink，防止错误递归。
+// FR-476 §3.1：VL 写失败日志必须走独立、限流且不回写 VL 的 sink，防止错误递归。
 var ErrRecursiveVLSink = errors.New("vlsup: recursive write into VL log pipeline is forbidden")
 
 // Sink 是 supervisor 进程错误的独立落点。

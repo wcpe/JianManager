@@ -138,7 +138,7 @@ func TestPlayerEventSubtype(t *testing.T) {
 	assert.Equal(t, "", playerEventSubtype("connected"))
 }
 
-// TestTriggers_LogKeywordUnaffectedByCutover 锁定 FR-472 §9「现有日志关键字告警在切换后仍有效、未被新数据路径绕过」。
+// TestTriggers_LogKeywordUnaffectedByCutover 锁定 FR-473 §9「现有日志关键字告警在切换后仍有效、未被新数据路径绕过」。
 //
 // 关键事实（设计层不变量）：关键字告警消费的是实例事件流（`InstanceEvent` stdout/stderr，见
 // consumeInstanceEvents），与 CP `logs` 表的入库切换（LogCutover）是两条独立路径——切换停止的是

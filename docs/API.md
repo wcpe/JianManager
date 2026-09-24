@@ -3044,9 +3044,9 @@
 
 ---
 
-## Worker 日志平台（FR-472～483，地基 + 接线中）
+## Worker 日志平台（FR-473～484，地基 + 接线中）
 
-> **接线状态（FR-482 对账）**：Shared Contracts 已冻结。CP `main` 已装配 `logcoord.Assemble`，Worker `main` 已装配持久 Catalog、采集运行时、受管 VL supervisor、RangeClient、归档 Provider 和 Log RPC。配置受管 VL 时能力真实可用；未配置或不健康时仍明确返回 `LOG_UNSUPPORTED`。联邦、runtime status/control、归档状态/恢复管理面已注册；cutover **默认关闭**。Runbook A/B/C、失败态矩阵（DOM 19 项 + 真浏览器）与发布级性能（30 分钟压测 + 64 源容量曲线）均已真机验收通过；证据在 `.tmp/fr433-experiments/`。
+> **接线状态（FR-483 对账）**：Shared Contracts 已冻结。CP `main` 已装配 `logcoord.Assemble`，Worker `main` 已装配持久 Catalog、采集运行时、受管 VL supervisor、RangeClient、归档 Provider 和 Log RPC。配置受管 VL 时能力真实可用；未配置或不健康时仍明确返回 `LOG_UNSUPPORTED`。联邦、runtime status/control、归档状态/恢复管理面已注册；cutover **默认关闭**。Runbook A/B/C、失败态矩阵（DOM 19 项 + 真浏览器）与发布级性能（30 分钟压测 + 64 源容量曲线）均已真机验收通过；证据在 `.tmp/fr433-experiments/`。
 
 ### Worker Log RPC 摘要（gRPC，`proto/worker.proto`）
 
@@ -3060,39 +3060,39 @@
 | `LogFields` | `LogFieldsRequest` → `LogFieldsResponse` | 可查询字段 + coverage | 同上 |
 | `LogFacets` | `LogFacetsRequest` → `LogFacetsResponse` | 受控维度 Facets；高基数 `truncated` | 同上 |
 | `LogTail` | `LogTailRequest` → stream `LogEvent` | FOLLOW_LIVE / VIEW_BOUNDED | `VIEW_BOUNDED` 可走 VL；`FOLLOW_LIVE` 仍显式 unsupported |
-| `LogRehydrate` | `LogRehydrateRequest` → `LogTaskResponse` | Deep Archive 回灌（FR-477） | Worker Registry/Rehydrate 已接线；CP 节点归档管理面可触发 |
+| `LogRehydrate` | `LogRehydrateRequest` → `LogTaskResponse` | Deep Archive 回灌（FR-478） | Worker Registry/Rehydrate 已接线；CP 节点归档管理面可触发 |
 | `LogArchiveStatus` | `LogArchiveStatusRequest` → `LogArchiveStatusResponse` | 归档对象 available/missing + coverage | Worker 真实 manifest/provider 查询；CP 节点归档管理面可查询 |
 
 公共请求基座 `LogQueryRequestBase`：`request_id` / `protocol_version` / `time_range`（UTC 闭开）/ `authorized_targets`（CP 计算；`online_only` 仅显式选择）/ `budget`（limit/max_bytes/timeout_ms/max_fanout）/ `view`（view_id/cursor/order_version）/ `filter` / `permission_scope` / `cancellation_token`。响应统一携带 `LogCoverage`（complete/partial_reasons/targets/enumeration_state）与 `LogQuality`。
 
-实例注册消息 `CreateInstanceRequest` 另增可选字段 `log_target_id=19`、`log_acquire_mode=20`、`log_source_generation=21`，由 CP 统一创建/重连规格下发。Worker 将它们绑定到实例的受管日志采集面：Java 文件主源、通用进程 stdout/stderr 主源；缺字段保持旧 CP 兼容，不凭 UUID 猜测授权数字 ID。采集绑定失败时注册返回 `success=false`；已有实例 Resync 的绑定失败返回 `FailedPrecondition`。绑定持久化及无绑定实例禁止 cutover，见 FR-473 spec。
+实例注册消息 `CreateInstanceRequest` 另增可选字段 `log_target_id=19`、`log_acquire_mode=20`、`log_source_generation=21`，由 CP 统一创建/重连规格下发。Worker 将它们绑定到实例的受管日志采集面：Java 文件主源、通用进程 stdout/stderr 主源；缺字段保持旧 CP 兼容，不凭 UUID 猜测授权数字 ID。采集绑定失败时注册返回 `success=false`；已有实例 Resync 的绑定失败返回 `FailedPrecondition`。绑定持久化及无绑定实例禁止 cutover，见 FR-474 spec。
 
-### 日志联邦查询端点（FR-478/440/442，**HTTP 已注册**）
+### 日志联邦查询端点（FR-479/480/482，**HTTP 已注册**）
 
-- **`GET /api/v1/logs/federation`** — 前端门面（FR-481）：内部调用 Search，返回 `{ok,sourceTag,items,coverage,quality,view,notes,…}`；coverage/quality 为 FR-472 snake_case
-- **`GET /api/v1/logs/federation/search|stats|facets`** / **`POST /api/v1/logs/federation/export`** — FR-479 精确端点；导出 incomplete 时不返回 NDJSON 附件
+- **`GET /api/v1/logs/federation`** — 前端门面（FR-482）：内部调用 Search，返回 `{ok,sourceTag,items,coverage,quality,view,notes,…}`；coverage/quality 为 FR-473 snake_case
+- **`GET /api/v1/logs/federation/search|stats|facets`** / **`POST /api/v1/logs/federation/export`** — FR-480 精确端点；导出 incomplete 时不返回 NDJSON 附件
 - **状态**: CP `main` 已 `logcoord.Assemble` 并注册路由；受管 VL 可用时走真实 RangeClient，缺失能力时返回 `LOG_UNSUPPORTED`（非空成功）。LogsPage 探测门面，404 降级 legacy `/logs`。远程正常联邦和浏览器正常导出已通过，失败态矩阵仍待
 
-> 服务层真源：`internal/controlplane/logcoord` + `internal/worker/logs/query`。联邦侧经过 Worker-local View、Catalog、coverage 和权限校验；能力不可用时仍返回结构化 not-ready，禁止空成功。**CP 为浏览器唯一入口**；覆盖语义继承 FR-472。
+> 服务层真源：`internal/controlplane/logcoord` + `internal/worker/logs/query`。联邦侧经过 Worker-local View、Catalog、coverage 和权限校验；能力不可用时仍返回结构化 not-ready，禁止空成功。**CP 为浏览器唯一入口**；覆盖语义继承 FR-473。
 
-- **`GET /api/v1/logs/federation`** — 跨 Worker 联邦检索（FR-479）
-  - **关联 FR**: FR-478, FR-479, FR-481
+- **`GET /api/v1/logs/federation`** — 跨 Worker 联邦检索（FR-480）
+  - **关联 FR**: FR-479, FR-480, FR-482
   - **权限**: 认证用户；资源收敛到授权实例；平台/全量视图仅平台管理员
   - **Query**: `from`/`to`、`keyword`/`filter`、`level`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`limit`、`cursor`、`orderVersion`
   - **响应**: `{ view, coverage, quality, items[], nextCursor, exhausted }`
   - **状态**: logcoord + HTTP + **生产 Assemble（pool/node/instance）**；远程与真机联邦 Search/Stats/Facets/Export 通过，失败态矩阵（DOM 19 项 + 真浏览器）已验收
 
 - **`GET /api/v1/logs/federation/stats`** / **`GET /api/v1/logs/federation/facets`** / **`POST /api/v1/logs/federation/export`**
-  - Stats/Facets/Export 语义继承 FR-472/440；导出缺口/截断/超预算 **不交付成功附件**
+  - Stats/Facets/Export 语义继承 FR-473/480；导出缺口/截断/超预算 **不交付成功附件**
   - **状态**: 聚合与导出门禁已注册到 HTTP；真实 managed VL 结果路径与真机联邦已通过，跨 Tier/失败态矩阵已验收
 
-### 日志入库切换与 Legacy 端点（FR-480，**HTTP 已注册**）
+### 日志入库切换与 Legacy 端点（FR-481，**HTTP 已注册**）
 
 > 路由：`internal/controlplane/router/log_cutover.go`，在 `router.go` 经 `permRead("node.manage")` 挂载；handler 再判 **平台管理员**。PUT 写审计 `log.cutover.update`。**默认 `enabled=false`**。
 
 #### GET /api/v1/logs/cutover
 - **描述**: 读取全局切换开关、逐 Worker 水位与 Legacy 独立保留预算
-- **关联 FR**: FR-480
+- **关联 FR**: FR-481
 - **权限**: 平台管理员（非管理员 403）
 - **响应**:
 ```json
@@ -3116,7 +3116,7 @@
 
 #### PUT /api/v1/logs/cutover
 - **描述**: 设置全局开关与/或登记逐 Worker 水位
-- **关联 FR**: FR-480
+- **关联 FR**: FR-481
 - **权限**: 平台管理员
 - **请求体**:
 ```json
@@ -3142,7 +3142,7 @@
 
 #### GET /api/v1/logs/legacy
 - **描述**: Legacy 只读查询——切换水位前仍留在 CP `logs` 的 instance/worker 存量
-- **关联 FR**: FR-480
+- **关联 FR**: FR-481
 - **权限**: 平台管理员
 - **Query**: `source`（仅允许空或 `legacy`）、`level`、`keyword`、`instanceId`、`nodeId`、`from`/`to`（RFC3339）、`page`/`pageSize`
 - **响应**:

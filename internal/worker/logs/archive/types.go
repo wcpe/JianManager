@@ -14,7 +14,7 @@ import (
 const (
 	SchemaVersionV1      = "archive-manifest/v1"
 	DefaultParserVersion = "worker-log-parser/v1"
-	// DefaultEngineVersion 由 FR-475 资产审批注入真实 VL build_id；foundation 先登记占位语义。
+	// DefaultEngineVersion 由 FR-476 资产审批注入真实 VL build_id；foundation 先登记占位语义。
 	DefaultEngineVersion = "victorialogs/pending-asset-approval"
 
 	ManifestRelPath = "manifest.json"
@@ -158,7 +158,7 @@ type RawFile struct {
 	RegisteredAt     time.Time   `json:"registered_at,omitempty"`
 }
 
-// Manifest 受管归档清单。字段与 FR-477 §3.1 / FR-472 契约固定项一一对应。
+// Manifest 受管归档清单。字段与 FR-478 §3.1 / FR-473 契约固定项一一对应。
 type Manifest struct {
 	SchemaVersion    string    `json:"schema_version"`
 	ParserVersion    string    `json:"parser_version"`

@@ -189,9 +189,9 @@ type WorkerServiceClient interface {
 	ListInstances(ctx context.Context, in *ListInstancesRequest, opts ...grpc.CallOption) (*ListInstancesResponse, error)
 	// StreamInstanceEvents 订阅实例事件流。
 	StreamInstanceEvents(ctx context.Context, in *StreamInstanceEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[InstanceEvent], error)
-	// FR-472/439：日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
+	// FR-473/479：日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
 	GetLogCapabilities(ctx context.Context, in *GetLogCapabilitiesRequest, opts ...grpc.CallOption) (*GetLogCapabilitiesResponse, error)
-	// FR-472/439：按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
+	// FR-473/479：按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
 	LogCreateView(ctx context.Context, in *LogCreateViewRequest, opts ...grpc.CallOption) (*LogCreateViewResponse, error)
 	LogSearch(ctx context.Context, in *LogSearchRequest, opts ...grpc.CallOption) (*LogSearchResponse, error)
 	LogStats(ctx context.Context, in *LogStatsRequest, opts ...grpc.CallOption) (*LogStatsResponse, error)
@@ -201,7 +201,7 @@ type WorkerServiceClient interface {
 	LogTail(ctx context.Context, in *LogTailRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEvent], error)
 	LogRehydrate(ctx context.Context, in *LogRehydrateRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
 	LogArchiveStatus(ctx context.Context, in *LogArchiveStatusRequest, opts ...grpc.CallOption) (*LogArchiveStatusResponse, error)
-	// FR-475：CP 经反向隧道查看/控制 Worker 受管 VL namespace。
+	// FR-476：CP 经反向隧道查看/控制 Worker 受管 VL namespace。
 	LogRuntimeStatus(ctx context.Context, in *LogRuntimeStatusRequest, opts ...grpc.CallOption) (*LogRuntimeStatusResponse, error)
 	LogRuntimeControl(ctx context.Context, in *LogRuntimeControlRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
 	LogMigratePartition(ctx context.Context, in *LogMigratePartitionRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
@@ -1683,9 +1683,9 @@ type WorkerServiceServer interface {
 	ListInstances(context.Context, *ListInstancesRequest) (*ListInstancesResponse, error)
 	// StreamInstanceEvents 订阅实例事件流。
 	StreamInstanceEvents(*StreamInstanceEventsRequest, grpc.ServerStreamingServer[InstanceEvent]) error
-	// FR-472/439：日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
+	// FR-473/479：日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
 	GetLogCapabilities(context.Context, *GetLogCapabilitiesRequest) (*GetLogCapabilitiesResponse, error)
-	// FR-472/439：按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
+	// FR-473/479：按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
 	LogCreateView(context.Context, *LogCreateViewRequest) (*LogCreateViewResponse, error)
 	LogSearch(context.Context, *LogSearchRequest) (*LogSearchResponse, error)
 	LogStats(context.Context, *LogStatsRequest) (*LogStatsResponse, error)
@@ -1695,7 +1695,7 @@ type WorkerServiceServer interface {
 	LogTail(*LogTailRequest, grpc.ServerStreamingServer[LogEvent]) error
 	LogRehydrate(context.Context, *LogRehydrateRequest) (*LogTaskResponse, error)
 	LogArchiveStatus(context.Context, *LogArchiveStatusRequest) (*LogArchiveStatusResponse, error)
-	// FR-475：CP 经反向隧道查看/控制 Worker 受管 VL namespace。
+	// FR-476：CP 经反向隧道查看/控制 Worker 受管 VL namespace。
 	LogRuntimeStatus(context.Context, *LogRuntimeStatusRequest) (*LogRuntimeStatusResponse, error)
 	LogRuntimeControl(context.Context, *LogRuntimeControlRequest) (*LogTaskResponse, error)
 	LogMigratePartition(context.Context, *LogMigratePartitionRequest) (*LogTaskResponse, error)

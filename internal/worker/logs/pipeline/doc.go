@@ -1,4 +1,4 @@
-// Package pipeline 集成 FR-473/435 采集与归一化：tail/stdio/archive → normalize → WAL → DeliveryHook。
+// Package pipeline 集成 FR-474/475 采集与归一化：tail/stdio/archive → normalize → WAL → DeliveryHook。
 //
 // 边界：
 //   - 默认采集模式 FILE_PRIMARY（Paper）；STDIO_PRIMARY 为受管 Raw 通道。
@@ -7,6 +7,6 @@
 //   - reclaim 必须经 logtypes.CanReclaim 门禁（恢复分段责任已转移且无 hold）。
 //   - 缺口写入 ledger，禁止静默丢弃。
 //
-// 不重新定义 FR-472 Shared Contracts。本包只 import：
+// 不重新定义 FR-473 Shared Contracts。本包只 import：
 // logtypes / ledger / acquire / normalize（可选 catalog/vlsup 由 lifecycle 负责）。
 package pipeline

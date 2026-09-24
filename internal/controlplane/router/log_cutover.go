@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// logCutoverAuditAction FR-480 管理面变更审计动作。
+// logCutoverAuditAction FR-481 管理面变更审计动作。
 const logCutoverAuditAction = "log.cutover.update"
 
 // WorkerUUIDLister 列出 CP 注册的全部 Worker/节点身份（F-005 全集就绪校验）。
@@ -76,7 +76,7 @@ func (n nodeWorkerUUIDLister) CutoverReadinessAvailable() bool {
 	return n.svcs != nil && n.svcs.LogRuntimePool != nil
 }
 
-// LogCutoverHandler FR-480 日志入库切换与 Legacy 只读管理面。
+// LogCutoverHandler FR-481 日志入库切换与 Legacy 只读管理面。
 //
 // 全部路由平台管理员专用；PUT 写审计 action=log.cutover.update（audit 存在时）。
 type LogCutoverHandler struct {
@@ -152,7 +152,7 @@ func (h *LogCutoverHandler) validateCutoverEnable(req putLogCutoverRequest) erro
 	return nil
 }
 
-// RegisterRoutes 注册 FR-480 管理面路由。rg 应已挂平台级权限节点；handler 再判 IsPlatformAdmin。
+// RegisterRoutes 注册 FR-481 管理面路由。rg 应已挂平台级权限节点；handler 再判 IsPlatformAdmin。
 func (h *LogCutoverHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/logs/cutover", h.GetCutover)
 	rg.PUT("/logs/cutover", h.UpdateCutover)
@@ -338,7 +338,7 @@ func (h *LogCutoverHandler) UpdateCutover(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// buildLegacyFilter 复用日志查询过滤参数，但收敛到 Legacy 只读路径（FR-480）。
+// buildLegacyFilter 复用日志查询过滤参数，但收敛到 Legacy 只读路径（FR-481）。
 // source 仅允许空或 legacy；其他值拒绝，避免把 platform/federated 查询误接到 Legacy 集合。
 func (h *LogCutoverHandler) buildLegacyFilter(c *gin.Context) (service.LogFilter, bool) {
 	f := service.LogFilter{Keyword: c.Query("keyword")}

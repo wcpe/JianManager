@@ -698,7 +698,7 @@ func TestWALKeepsUnreclaimedEntries(t *testing.T) {
 	require.Len(t, wal.Snapshot(), 2, "reclaim 前缀之外的条目必须保留")
 }
 
-// TestArchiveUnreadableRecordsGap 锁定 FR-473 §5#1「权限可见」：不可读归档必须记缺口并标记失败，
+// TestArchiveUnreadableRecordsGap 锁定 FR-474 §5#1「权限可见」：不可读归档必须记缺口并标记失败，
 // 且不拖死后续源（不得静默跳过）。
 func TestArchiveUnreadableRecordsGap(t *testing.T) {
 	if os.Geteuid() == 0 {
@@ -731,7 +731,7 @@ func TestArchiveUnreadableRecordsGap(t *testing.T) {
 	require.EqualValues(t, 1, res2.ImportedCount)
 }
 
-// TestArchiveTruncatedGzipRecordsGap 锁定 FR-473 §5#1「截断可见」：截断 gz 必须产生可见缺口，
+// TestArchiveTruncatedGzipRecordsGap 锁定 FR-474 §5#1「截断可见」：截断 gz 必须产生可见缺口，
 // 且已成功读出的完整行仍被计入（不得整包丢弃）。
 func TestArchiveTruncatedGzipRecordsGap(t *testing.T) {
 	dir := t.TempDir()

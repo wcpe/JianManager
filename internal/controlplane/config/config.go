@@ -238,7 +238,7 @@ type LogConfig struct {
 	Format string `mapstructure:"format"`
 }
 
-// FR-480 日志入库切换与 Legacy 独立保留预算的配置默认值。
+// FR-481 日志入库切换与 Legacy 独立保留预算的配置默认值。
 // 默认关闭切换：旧行为不变，platform（control_plane）入库不受影响。
 const (
 	// DefaultLogCutoverEnabled 全局切换开关默认关闭。
@@ -249,7 +249,7 @@ const (
 	DefaultLegacyMaxTotalMB = 0
 )
 
-// LogCutoverStoreConfig FR-480 日志入库切换与 Legacy 独立保留预算配置。
+// LogCutoverStoreConfig FR-481 日志入库切换与 Legacy 独立保留预算配置。
 // 嵌在 LogStoreConfig 下：与 platform 保留字段解耦，零值走 Default* 常量。
 type LogCutoverStoreConfig struct {
 	// Enabled 全局切换开关。true 时 instance/worker 来源停止新入 CP logs；platform 持久化不受影响。默认 false。
@@ -273,7 +273,7 @@ type LogStoreConfig struct {
 	MaxTotalMB int `mapstructure:"max_total_mb"`
 	// ArchiveIntervalMinutes 后台归档/保留巡检周期（分钟）。默认 30。
 	ArchiveIntervalMinutes int `mapstructure:"archive_interval_minutes"`
-	// Cutover FR-480 切换开关与 Legacy 独立保留预算。零值 = 切换关闭 + Legacy 默认预算。
+	// Cutover FR-481 切换开关与 Legacy 独立保留预算。零值 = 切换关闭 + Legacy 默认预算。
 	Cutover LogCutoverStoreConfig `mapstructure:"cutover"`
 }
 
@@ -308,7 +308,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_store.retention_days", 14)
 	v.SetDefault("log_store.max_total_mb", 512)
 	v.SetDefault("log_store.archive_interval_minutes", 30)
-	// FR-480：切换默认关闭；Legacy 独立预算默认 30 天 / 不限总量。
+	// FR-481：切换默认关闭；Legacy 独立预算默认 30 天 / 不限总量。
 	v.SetDefault("log_store.cutover.enabled", DefaultLogCutoverEnabled)
 	v.SetDefault("log_store.cutover.legacy_retention_days", DefaultLegacyRetentionDays)
 	v.SetDefault("log_store.cutover.legacy_max_total_mb", DefaultLegacyMaxTotalMB)

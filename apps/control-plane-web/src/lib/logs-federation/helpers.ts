@@ -1,5 +1,5 @@
 /**
- * 日志联邦覆盖 / 失败态纯函数（FR-481 foundation）。
+ * 日志联邦覆盖 / 失败态纯函数（FR-482 foundation）。
  *
  * 硬约束（spec §3.1 / 验收）：
  * - **失败不得显示为空成功**：formatCoverageSummary / classifyLogViewState 在
@@ -476,7 +476,7 @@ export function classifyLogViewState(
 /**
  * 导出下载 affordance：覆盖不完整 / 失败 / 未校验 → 不展示下载入口。
  *
- * FR-481：「导出只有校验后可下载且下载前复核权限」；「覆盖不完整时不得下载成功附件」。
+ * FR-482：「导出只有校验后可下载且下载前复核权限」；「覆盖不完整时不得下载成功附件」。
  * 允许下载时仍提示服务端会在下载前复核权限。
  */
 export function resolveExportDownloadAffordance(

@@ -1,4 +1,4 @@
-// Package catalog 实现 FR-476 Partition Catalog 与迁移状态机基础（纯逻辑 + 内存 journal）。
+// Package catalog 实现 FR-477 Partition Catalog 与迁移状态机基础（纯逻辑 + 内存 journal）。
 //
 // 契约来源：
 //   - docs/specs/worker-log-platform-contract/spec.md §5 Catalog / PublishedProjection / 迁移状态

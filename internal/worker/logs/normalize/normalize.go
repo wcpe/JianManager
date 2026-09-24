@@ -1,10 +1,10 @@
-// Package normalize 实现 FR-474 Worker 日志 Multiline 与归一化。
+// Package normalize 实现 FR-475 Worker 日志 Multiline 与归一化。
 //
 // 将行级来源转换为可追溯的 logtypes.Event：Java/MC 多行堆栈与 Caused by 归并为一条事件，
 // Go slog level= 结构化行按显式级别解析；解析失败保留原文 + parse_status，绝不发明 level。
-// 事件身份（event_id / parser_version / record_start|end）继承 FR-472 Shared Contracts。
+// 事件身份（event_id / parser_version / record_start|end）继承 FR-473 Shared Contracts。
 //
-// 本包不重新定义 FR-472；字段语义以 docs/specs/worker-log-platform-contract/spec.md 为准。
+// 本包不重新定义 FR-473；字段语义以 docs/specs/worker-log-platform-contract/spec.md 为准。
 // 不触碰 ledger/acquire/vlsup/catalog。
 package normalize
 
@@ -74,7 +74,7 @@ type Options struct {
 	// RetainEvents 是否在会话内保留全部已产出事件供 Result/Events 读取。
 	//
 	// 长驻流式归一化（NormalizeBoundary）**不得**开启：它从不读历史事件，而保留会让
-	// 内存随会话内总行数线性增长（FR-483 阶段5 实测 192k 行 ≈141MB）。一次性批量入口
+	// 内存随会话内总行数线性增长（FR-484 阶段5 实测 192k 行 ≈141MB）。一次性批量入口
 	// （ProcessLines）与需要检查全部产出的测试才开启。
 	RetainEvents bool
 }
@@ -438,7 +438,7 @@ func (n *Normalizer) buildEvent(
 	//
 	// 原因：事件正文进入 canonical_content_hash，但投递走 JSON 编码；JSON 会把非法字节
 	// 替换为 U+FFFD，导致「hash 承诺的正文」与「VL 实际存储的正文」不是同一份
-	// （FR-474 规格 §5 要求损坏编码可恢复、解析失败保留原文）。
+	// （FR-475 规格 §5 要求损坏编码可恢复、解析失败保留原文）。
 	// 在此按已知替换规则净化后，hash 与落库正文一致，且净化事实可审计。
 	message := sanitizeUTF8(joinLines(lines))
 	eventTimeUTC := ""

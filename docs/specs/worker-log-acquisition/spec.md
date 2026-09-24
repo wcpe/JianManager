@@ -1,44 +1,44 @@
-# 功能规格：Worker 日志采集与持久化通道（FR-473）
+# 功能规格：Worker 日志采集与持久化通道（FR-474）
 
-> 状态：实现中（Worker 配置化 FileTailer → WAL → VL → PublishedProjection 运行时已接线；远程强杀、ACK UNKNOWN→REPLAY_REQUIRED、projection-backed reclaim 已通过，磁盘满/人工恢复矩阵仍待验）　·　关联 PRD：FR-473　·　依赖：FR-472
+> 状态：实现中（Worker 配置化 FileTailer → WAL → VL → PublishedProjection 运行时已接线；远程强杀、ACK UNKNOWN→REPLAY_REQUIRED、projection-backed reclaim 已通过，磁盘满/人工恢复矩阵仍待验）　·　关联 PRD：FR-474　·　依赖：FR-473
 
 ## 1. 背景与目标
 
 采集账本、源分段、WAL 四水位和至少一次投递。
 
-本规格不得重新定义 FR-472 Shared Contracts；字段、状态和覆盖语义以 `docs/specs/worker-log-platform-contract/spec.md` 为准。
+本规格不得重新定义 FR-473 Shared Contracts；字段、状态和覆盖语义以 `docs/specs/worker-log-platform-contract/spec.md` 为准。
 
 ## 2. 需求（要什么）
 
-- 契约继承：采集失败后的 UNKNOWN/恢复责任由 FR-472 §4.2～§4.4 定义；WAL 合法回收后必须从登记的恢复分段恢复。
-- 范围内：FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转通过 source_generation 关联；坏记录进入隔离队列；WAL 先 durable 再 delivery，按 FR-472 reclaim 证明回收。
-- 继承 FR-472：未知投递结果不进入坏记录隔离；受管恢复分段承担 WAL 回收后的恢复责任，恢复来源未解除前不得普通到期清理。
+- 契约继承：采集失败后的 UNKNOWN/恢复责任由 FR-473 §4.2～§4.4 定义；WAL 合法回收后必须从登记的恢复分段恢复。
+- 范围内：FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转通过 source_generation 关联；坏记录进入隔离队列；WAL 先 durable 再 delivery，按 FR-473 reclaim 证明回收。
+- 继承 FR-473：未知投递结果不进入坏记录隔离；受管恢复分段承担 WAL 回收后的恢复责任，恢复来源未解除前不得普通到期清理。
 - 范围外：新增日志告警引擎、第二日志查询引擎、浏览器直连 Worker/VL。
 
 ## 3. 设计（怎么做）
 
-FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转通过 source_generation 关联；坏记录进入隔离队列；WAL 先 durable 再 delivery，按 FR-472 reclaim 证明回收。
+FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转通过 source_generation 关联；坏记录进入隔离队列；WAL 先 durable 再 delivery，按 FR-473 reclaim 证明回收。
 
-所有跨 Worker 调用经 CP 反向 gRPC 隧道；所有失败返回结构化状态与可观测原因。实现前必须完成依赖 FR-472 的冻结条件，不得用接口占位绕过状态算法。
+所有跨 Worker 调用经 CP 反向 gRPC 隧道；所有失败返回结构化状态与可观测原因。实现前必须完成依赖 FR-473 的冻结条件，不得用接口占位绕过状态算法。
 
 ## 4. 任务拆分
 
-- [ ] 将 FR-472 对应契约映射到本模块的状态、数据模型和 proto。
+- [ ] 将 FR-473 对应契约映射到本模块的状态、数据模型和 proto。
 - [ ] 实现正常路径与崩溃/重启/资源耗尽路径。
 - [ ] 编写单元、集成、真实 Worker/VL 或浏览器验收所需测试。
-- [ ] 更新 ARCHITECTURE/API/CHANGELOG 及 FR-482 文档对账。
+- [ ] 更新 ARCHITECTURE/API/CHANGELOG 及 FR-483 文档对账。
 
 ## 5. 验收标准
 
 - [ ] 轮转压缩不重复；损坏 gz/编码/权限/截断可见；HTTP 2xx 不直接回收；容量满暂停并报告缺口。
 - [ ] 权限覆盖 Search/Stats/Fields/Facets/Tail/Rehydrate/Export；越权无字段或覆盖侧信道。
-- [ ] 性能阈值、RSS、磁盘和临时空间使用 FR-472 冻结的实际数值，不自行发明未登记阈值。
+- [ ] 性能阈值、RSS、磁盘和临时空间使用 FR-473 冻结的实际数值，不自行发明未登记阈值。
 - [ ] 真实环境验收证据与自动化测试分开记录；测试全绿不替代真 Worker/VL/浏览器验收。
 
 ## 6. 风险 / 待定
 
-- FR-472 已冻结；本规格仍须完成 Worker WAL、恢复责任和 Runbook A 真机验收，未完成前保持开发中。
-- 具体 VL tag、资产哈希和兼容矩阵由 FR-475 资产审批冻结。
+- FR-473 已冻结；本规格仍须完成 Worker WAL、恢复责任和 Runbook A 真机验收，未完成前保持开发中。
+- 具体 VL tag、资产哈希和兼容矩阵由 FR-476 资产审批冻结。
 
 ## 3.1 采集账本与投递边界
 

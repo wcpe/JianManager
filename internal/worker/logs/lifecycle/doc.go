@@ -1,4 +1,4 @@
-// Package lifecycle 实现 FR-476 Worker 日志分区 Catalog 与冷热 Lifecycle 编排。
+// Package lifecycle 实现 FR-477 Worker 日志分区 Catalog 与冷热 Lifecycle 编排。
 //
 // 边界：
 //   - LogLifecycleManager 驱动 catalog 状态机：冻结路由→排空→snapshot→staging→
@@ -9,5 +9,5 @@
 //   - Recover 在启动时调用 catalog.StartingRecover。
 //   - retention 协同：last-copy 保护，下一层未确认接收前不得 detach/删除最后有效副本。
 //
-// 不重新定义 FR-472。本包 import：catalog / vlsup / logtypes。
+// 不重新定义 FR-473。本包 import：catalog / vlsup / logtypes。
 package lifecycle

@@ -1,12 +1,12 @@
-# 功能规格：Worker 日志平台 Shared Contracts（FR-472）
+# 功能规格：Worker 日志平台 Shared Contracts（FR-473）
 
-> 状态：已冻结（Shared Contracts 基线）　·　关联 PRD：FR-472　·　分支：feature/fr-log-platform-foundation
+> 状态：已冻结（Shared Contracts 基线）　·　关联 PRD：FR-473　·　分支：feature/fr-log-platform-foundation
 >
-> 本规格是 FR-472～483 的开发前闸门。它定义正式版契约基线；后续发现问题允许通过显式评审修订，但必须同步依赖模块、兼容规则和测试。未通过本规格的验收，不得按模块全面开发 Lifecycle、Archive 或 CP 联邦。
+> 本规格是 FR-473～484 的开发前闸门。它定义正式版契约基线；后续发现问题允许通过显式评审修订，但必须同步依赖模块、兼容规则和测试。未通过本规格的验收，不得按模块全面开发 Lifecycle、Archive 或 CP 联邦。
 
 ## 1. 背景与目标
 
-现有日志查询以 CP `logs` 表为中心，无法提供 Worker 本地持久化、分层生命周期、跨 Worker 覆盖状态和可解释失败语义。FR-472 定义所有后续 FR 共用的身份、投递、查询、权限、资源和生命周期边界。
+现有日志查询以 CP `logs` 表为中心，无法提供 Worker 本地持久化、分层生命周期、跨 Worker 覆盖状态和可解释失败语义。FR-473 定义所有后续 FR 共用的身份、投递、查询、权限、资源和生命周期边界。
 
 目标是得到可实现、可恢复、可测试的正式版契约，尤其保证：
 
@@ -31,7 +31,7 @@
 - 新增或重构日志关键字告警引擎；现有告警行为必须继续有效；
 - ClickHouse、Loki、RemoteStore、外部采集器或浏览器直连 Worker/VL；
 - CP 长期保存新 Worker/Node 查询日志；允许有预算、期限、权限控制的临时导出产物，但它不是日志查询库或新的保留层；
-- 本规格不承担最终发行资产打包审批，但必须登记契约能力验证所依据的具体 VL tag/构建标识、实验结果和不支持项；FR-475 负责发行资产、哈希、许可、分发和运行时兼容审批。FR-475 使用其他版本时，必须重新完成受影响的能力验证。
+- 本规格不承担最终发行资产打包审批，但必须登记契约能力验证所依据的具体 VL tag/构建标识、实验结果和不支持项；FR-476 负责发行资产、哈希、许可、分发和运行时兼容审批。FR-476 使用其他版本时，必须重新完成受影响的能力验证。
 
 ## 3. 共享数据模型
 
@@ -235,8 +235,8 @@ Export 是 CP Coordinator 的业务操作，不新增 Worker Export RPC：CP 使
 - 资源：单 Worker 日志数据面 RSS ≤ 1GiB（不含文件系统 page cache）；WAL+staging+临时 Export 预留不得超过总日志预算的 25%；磁盘使用达到 80% 进入降级，达到 90% 必须暂停不可恢复写入。
   - **口径（2026-09-24 实测确定）**：「日志数据面」= **Worker 进程日志部分（进程 RSS − 非日志基线）+ 受管 VL 进程 RSS 之和**。实测基线：Worker 非日志基线 ≈200MiB。
   - 实测（每源 3000 事件）：Worker ≈24MiB/源、VL ≈80–95MiB；64 源稳态 Worker ≈674MiB、VL ≈76MiB（**合计 ≈750MiB < 1GiB，达标**）；30 分钟 8 并发压测 Worker 峰值 857MiB（含查询堆高水位，GC 后回落）。按此口径 **1GiB ≈ 40 源**。
-  - **修订（2026-09-24，FR-483）**：上述 674MiB/24MiB-per-源 是「canonical 事件体常驻内存 + 内联于 state」时的数字。FR-483 把事件体改为**落盘 compact**（语义不变，见 ADR-095）并加界三处跨轮无界累积结构后，稳态 Worker 降至 **64/128/150 源 = 22.5/22.3/20.0MiB**，采集期峰值 **56.0/62.0/61.8MiB**（真机 + 真 VL v1.52.0），二者都**几乎不随源数增长**（常驻量与源数量而非事件总量相关）；`state.json` 由 77 803KiB 降至 139.5KiB 并与事件数解耦。故当前密度上限**不再由 24MiB/源 线性模型决定**，`1GiB ≈ 40 源` 的结论已作废。
-  - **容量量测口径（硬约束）**：结论必须 (1) **全局保活被测对象**（存入包级变量；`runtime.KeepAlive` 是编译期屏障，放在读数之后无效）；(2) 取稳态（强制 GC 后）读数；(3) 对存活堆剖析归因，排除量测脚手架自身内存。FR-483 期间两次读错都因违反该口径（一次因未保活把稳态低估约 12 倍，一次因脚手架保留把稳态高估）。
+  - **修订（2026-09-24，FR-484）**：上述 674MiB/24MiB-per-源 是「canonical 事件体常驻内存 + 内联于 state」时的数字。FR-484 把事件体改为**落盘 compact**（语义不变，见 ADR-095）并加界三处跨轮无界累积结构后，稳态 Worker 降至 **64/128/150 源 = 22.5/22.3/20.0MiB**，采集期峰值 **56.0/62.0/61.8MiB**（真机 + 真 VL v1.52.0），二者都**几乎不随源数增长**（常驻量与源数量而非事件总量相关）；`state.json` 由 77 803KiB 降至 139.5KiB 并与事件数解耦。故当前密度上限**不再由 24MiB/源 线性模型决定**，`1GiB ≈ 40 源` 的结论已作废。
+  - **容量量测口径（硬约束）**：结论必须 (1) **全局保活被测对象**（存入包级变量；`runtime.KeepAlive` 是编译期屏障，放在读数之后无效）；(2) 取稳态（强制 GC 后）读数；(3) 对存活堆剖析归因，排除量测脚手架自身内存。FR-484 期间两次读错都因违反该口径（一次因未保活把稳态低估约 12 倍，一次因脚手架保留把稳态高估）。
   - 25% 预留门禁由 `vlsup.EnforceReserveRatio`/`Supervisor.SetSubBudget` 实现并可判定（总预算未配置时不做判定，不猜过）。
 - 失败判定：出现未报告缺口、越过 closed_visible_seq 空洞、旧 owner 进入查询、导出与同 view 集合不一致、权限侧信道或阈值连续 3 个采样窗口超限即 FAIL。
 
@@ -256,11 +256,11 @@ Export 是 CP Coordinator 的业务操作，不新增 Worker Export RPC：CP 使
 - [x] `proto/worker.proto` 已落地 QueryView、Coverage、Cursor、Stats/Facets/Tail/Export 语义和老 Worker 能力协商规则；`protoc` 通过。
 - [ ] 实现事件身份、账本和四水位纯逻辑模型；覆盖 4.3/4.4 的状态转换测试。
 - [ ] 实现 Catalog/journal 恢复模型；覆盖每个迁移崩溃点的期望 owner、物理目录、可查询范围和恢复动作。
-- [x] 登记 VL tag/构建标识、双平台 hash、许可证清单、实验结果和不支持项；force_flush、进程重启、磁盘满等 Worker 级验收下沉 FR-473/436/437。
+- [x] 登记 VL tag/构建标识、双平台 hash、许可证清单、实验结果和不支持项；force_flush、进程重启、磁盘满等 Worker 级验收下沉 FR-474/476/477。
 - [ ] 实现 canonical projection 与冲突状态，证明 Search/Stats/Facets/Export 消费同一投影版本。
 - [ ] 为 Query View 实现 `ingest_seq`/`closed_visible_seq`/generation/租约约束；覆盖空洞、回灌、重放、迁移、清理、Rehydrate 完成、重启和权限撤销。
 - [ ] 将已确认公共规则分别落入 `worker-log-acquisition`、`worker-log-normalizer`、`worker-log-lifecycle`、`cp-log-query-coordinator`、`log-ingest-cutover`、`logs-center-tiered-ui`，并在各 spec 引用本规格：Legacy 保留边界、Export 共用 view、历史/实时来源分界。
-- [ ] 文档同步：PRD、ARCHITECTURE、API、CHANGELOG 与 FR-482。
+- [ ] 文档同步：PRD、ARCHITECTURE、API、CHANGELOG 与 FR-483。
 
 ## 9. 验收标准
 
@@ -287,4 +287,4 @@ Shared Contracts 冻结完成；以下项目属于冻结后的显式评审/下�
 
 当前验证进度：冻结前证据已登记 VL v1.52.0 JSON stream 依赖行为 PASS、g1 响应不确定隔离→g2 重建→PublishedProjection 发布及真实 Search/Stats/Facets/Export 逻辑集合一致性 PASS；v1.52.0 双平台资产审批已完成。Worker 级恢复分段/ACK-loss、真实 Catalog 崩溃矩阵、失败态和发布级性能阈值仍属于下游 FR 验收。
 
-FR-472 已达到“契约已冻结”门槛。后续 A/B/C Worker 生产组件实验分别归入 FR-473/436/437；若改变 Shared Contracts，必须重新评审并同步依赖模块、兼容规则和测试。
+FR-473 已达到“契约已冻结”门槛。后续 A/B/C Worker 生产组件实验分别归入 FR-474/476/477；若改变 Shared Contracts，必须重新评审并同步依赖模块、兼容规则和测试。

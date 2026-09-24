@@ -1,4 +1,4 @@
-// Package archive 实现 FR-477 Deep Archive 与 Rehydrate 基础包（纯逻辑 + Provider 抽象）。
+// Package archive 实现 FR-478 Deep Archive 与 Rehydrate 基础包（纯逻辑 + Provider 抽象）。
 //
 // 契约来源：
 //   - docs/specs/worker-log-deep-archive/spec.md §3.1 Archive 与 Rehydrate 契约

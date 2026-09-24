@@ -37,7 +37,7 @@ func NewRegistry(p Provider) *Registry {
 	}
 }
 
-// SetEngineVersion 设置写入新 manifest 的引擎标识（FR-475 已审批的 VL build_id）。
+// SetEngineVersion 设置写入新 manifest 的引擎标识（FR-476 已审批的 VL build_id）。
 // 空值保持 DefaultEngineVersion 占位；已存在的 manifest 不受影响。
 func (r *Registry) SetEngineVersion(v string) {
 	r.mu.Lock()

@@ -4,7 +4,7 @@ import "sort"
 
 // ControlledFacetDimensions 受控（可精确合并）维度白名单。
 //
-// 与 FR-472 stream_fields 精神一致：低基数路由/分类字段。
+// 与 FR-473 stream_fields 精神一致：低基数路由/分类字段。
 // 不得包含 event_id、message、_time 或任意用户高基数字段。
 var ControlledFacetDimensions = map[string]bool{
 	"level":             true,
@@ -24,7 +24,7 @@ func IsControlledFacet(dimension string) bool {
 
 // MergeFacets 合并多 Worker Facet 结果。
 //
-// 规则（FR-479）：
+// 规则（FR-480）：
 //   - 受控维度：按 value 精确合并 count；
 //   - 高基数维度：合并后仍可按 limit 裁剪，必须保留 Truncated + TruncatedCount；
 //   - 任一 Worker 侧 Truncated 传染到合并结果（不得把截断结果标成 exact 完整）。

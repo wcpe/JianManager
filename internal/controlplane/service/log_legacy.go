@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// LogQuerySourceTag 标记查询结果来自哪条路径，供 UI 显式打标（FR-480 / FR-472）。
+// LogQuerySourceTag 标记查询结果来自哪条路径，供 UI 显式打标（FR-481 / FR-473）。
 // 不得把 Federated 与 Legacy 的行/事件统计拼成无标记的精确总量。
 type LogQuerySourceTag string
 
@@ -22,7 +22,7 @@ const (
 	LogQuerySourceLegacy LogQuerySourceTag = "legacy"
 )
 
-// ErrFederatedNotReady 新联邦查询路径尚未就绪（依赖 FR-478/440）。
+// ErrFederatedNotReady 新联邦查询路径尚未就绪（依赖 FR-479/480）。
 var ErrFederatedNotReady = errors.New("federated log query path not ready")
 
 // LegacyCoverage 描述 Legacy 可查集合的覆盖边界。
@@ -54,7 +54,7 @@ type LegacyPage struct {
 	Coverage  LegacyCoverage    `json:"coverage"`
 }
 
-// LegacyLogReader 只读访问切换水位之前仍留在 CP logs 表中的实例/Worker/Node 存量（FR-480）。
+// LegacyLogReader 只读访问切换水位之前仍留在 CP logs 表中的实例/Worker/Node 存量（FR-481）。
 //
 // 保留预算独立于 platform LogStoreConfig：未到期 Legacy 不受 platform 容量淘汰挤出。
 // 已转 NDJSON 的历史明确不纳入本批可查集合，只通过 Coverage 返回覆盖边界。
@@ -314,7 +314,7 @@ type LogQueryResult struct {
 }
 
 // FederatedLogQuerier 新路径（Worker/VL）查询入口。
-// FR-478/440 落地前由 UnimplementedFederatedQuerier 占位，不得把空结果当完整。
+// FR-479/480 落地前由 UnimplementedFederatedQuerier 占位，不得把空结果当完整。
 type FederatedLogQuerier interface {
 	Query(ctx context.Context, filter LogFilter) (*LogQueryResult, error)
 }

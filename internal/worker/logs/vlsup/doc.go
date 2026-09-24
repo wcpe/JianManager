@@ -1,4 +1,4 @@
-// Package vlsup 实现 VictoriaLogs Worker 运行时 supervisor 基础（FR-475）。
+// Package vlsup 实现 VictoriaLogs Worker 运行时 supervisor 基础（FR-476）。
 //
 // 范围（本轮 foundation）：
 //   - 按 namespace（hot|cold|rehydrate）管理 VL 实例：start / stop / health / status；

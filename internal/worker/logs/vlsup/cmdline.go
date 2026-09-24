@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Namespace 标识受管 VL 实例类别（FR-475：Worker supervisor 分别管理 HOT/COLD/Rehydrate）。
+// Namespace 标识受管 VL 实例类别（FR-476：Worker supervisor 分别管理 HOT/COLD/Rehydrate）。
 type Namespace string
 
 const (
@@ -27,7 +27,7 @@ func ValidNamespace(ns Namespace) bool {
 	}
 }
 
-// 默认监听端口（与 FR-472 C 组 supervisor-equivalent smoke 一致，可在 Options 覆盖）。
+// 默认监听端口（与 FR-473 C 组 supervisor-equivalent smoke 一致，可在 Options 覆盖）。
 const (
 	DefaultPortHot       = 19441
 	DefaultPortCold      = 19442
@@ -35,7 +35,7 @@ const (
 )
 
 // DefaultHotCacheBytes 是 HOT 实例 -memory.allowedBytes 默认模板（512MiB）。
-// 依据 FR-472 §6.5/§7 与 FR-475 §3.1：512MiB 只代表 HOT cache 模板，不等于 RSS 上限，
+// 依据 FR-473 §6.5/§7 与 FR-476 §3.1：512MiB 只代表 HOT cache 模板，不等于 RSS 上限，
 // 也不是 Worker 日志总预算。
 const DefaultHotCacheBytes int64 = 512 * 1024 * 1024
 

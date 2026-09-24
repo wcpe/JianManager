@@ -2,7 +2,7 @@
 
 - **日期**: 2026-09-20
 - **状态**: accepted
-- **关联**: FR-472～483 · ADR-005 · ADR-013 · ADR-066 · ADR-081
+- **关联**: FR-473～484 · ADR-005 · ADR-013 · ADR-066 · ADR-081
 
 ## 背景
 
@@ -14,7 +14,7 @@
 2. 允许 Worker 在受管数据根持久化 Worker-owned 日志数据面：VL HOT/COLD/Rehydrate 数据、WAL、规范事件恢复分段、Partition Catalog、采集账本、projection manifest/checkpoint、冲突和租约元数据。Worker 本地 SQLite 仅保存这些元数据，不是第二个全文检索引擎。
 3. CP 是唯一浏览器入口和联邦协调器；Worker/VL 只监听 localhost，CP→Worker 只经 Worker 主动建立的反向隧道，浏览器不得直连。
 4. CP 不把新 Worker/Node 查询日志全量写入 `logs` 表；CP 允许按预算、期限、权限控制生成临时导出产物，但临时产物不是日志查询库或新的长期保留层。
-5. Search/Stats/Fields/Facets/Tail/Rehydrate/Export 均使用 FR-472 Query View、Catalog owner、coverage 和 scope 契约；Worker 不接受浏览器自定义查询绕过 CP 授权。
+5. Search/Stats/Fields/Facets/Tail/Rehydrate/Export 均使用 FR-473 Query View、Catalog owner、coverage 和 scope 契约；Worker 不接受浏览器自定义查询绕过 CP 授权。
 
 ## 理由
 
@@ -24,15 +24,15 @@
 
 ## 后果
 
-- `.claude/rules/architecture-invariants.md`、`decision-alignment.md` 和 `docs/ARCHITECTURE.md` 必须明确此受控例外；在本 ADR 被接受、FR-472 冻结前不得开始全面实现。
-- FR-475 仍独立负责 VL 发行资产的 tag、包/解包校验、许可和双平台兼容审批；本 ADR 不批准任何具体 VL 版本。
+- `.claude/rules/architecture-invariants.md`、`decision-alignment.md` 和 `docs/ARCHITECTURE.md` 必须明确此受控例外；在本 ADR 被接受、FR-473 冻结前不得开始全面实现。
+- FR-476 仍独立负责 VL 发行资产的 tag、包/解包校验、许可和双平台兼容审批；本 ADR 不批准任何具体 VL 版本。
 - ADR-013 的 CP 指标时序所有权不变；日志数据面与指标数据面不能互相替代。
 
 ## 历史评审关注点
 
 - 本地日志数据根的权限、空间配额和清理边界是否满足部署环境。
 - Worker 本地 SQLite 元数据 schema 是否与 Catalog/journal 恢复模型一致。
-- FR-472 的 g1→g2、PublishedProjection、恢复责任释放和性能实验是否通过。
+- FR-473 的 g1→g2、PublishedProjection、恢复责任释放和性能实验是否通过。
 
 ## 取代关系
 

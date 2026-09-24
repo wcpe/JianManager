@@ -63,7 +63,7 @@ func TestBuildCreateInstanceRequest(t *testing.T) {
 	assert.Equal(t, 1.5, spec.CpuLimit)
 	assert.Equal(t, int64(2048), spec.MemLimitMb)
 	assert.Equal(t, int64(10240), spec.DiskLimitMb)
-	// 日志采集绑定（FR-473）：Minecraft Java 走文件主源，holder 身份含实例 UUID 与节点 UUID。
+	// 日志采集绑定（FR-474）：Minecraft Java 走文件主源，holder 身份含实例 UUID 与节点 UUID。
 	assert.Equal(t, fmt.Sprintf("inst:%d", inst.ID), spec.LogTargetId)
 	assert.Equal(t, "FILE_PRIMARY", spec.LogAcquireMode)
 	assert.Equal(t, fmt.Sprintf("instance:%s@worker:%s", inst.UUID, node.UUID), spec.LogSourceGeneration)

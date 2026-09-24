@@ -1,6 +1,6 @@
 // Package eventstore 提供 Worker 日志 canonical 事件体的**追加式磁盘段存储**。
 //
-// 背景（FR-483）：事件体原先作为 `persistedSource.Events` 常驻内存并随 ingest.state.json 整份
+// 背景（FR-484）：事件体原先作为 `persistedSource.Events` 常驻内存并随 ingest.state.json 整份
 // 重写。真机 64 源实测 state 文件 180MB，且单次 persist 的 MarshalIndent 瞬时分配把 Go 堆高水位
 // 顶到 ≈656MiB heapInuse 且 sys 不归还 OS（见 .tmp/fr444-experiments/phase0/attribution.txt）。
 //

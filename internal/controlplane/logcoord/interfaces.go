@@ -89,7 +89,7 @@ type WorkerFacetsResponse struct {
 	Error       string                 `json:"error,omitempty"`
 }
 
-// WorkerClient 单 Worker 日志查询面（FR-478 契约的协调器侧投影）。
+// WorkerClient 单 Worker 日志查询面（FR-479 契约的协调器侧投影）。
 // 本包不实现隧道传输；测试注入 fake。
 type WorkerClient interface {
 	OpenView(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error)

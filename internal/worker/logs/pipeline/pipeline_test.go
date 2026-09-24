@@ -47,7 +47,7 @@ func newFilePipeline(t *testing.T, path, id, gen string, hook DeliveryHook) *Pip
 	return p
 }
 
-// FR-473/435：Paper 风格多行堆栈文件 → pipeline 产出 ONE event（不是按行切）。
+// FR-474/475：Paper 风格多行堆栈文件 → pipeline 产出 ONE event（不是按行切）。
 func TestPipeline_PaperMultilineOneEvent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "latest.log")
@@ -105,7 +105,7 @@ func mustPos(t *testing.T, p *Pipeline) logtypes.Positions {
 	return pos
 }
 
-// FR-473：轮转压缩后同一逻辑源不重复计数；ArchiveImporter 跳过已关联整包。
+// FR-474：轮转压缩后同一逻辑源不重复计数；ArchiveImporter 跳过已关联整包。
 func TestPipeline_RotationNoDoubleCount(t *testing.T) {
 	dir := t.TempDir()
 	latest := filepath.Join(dir, "latest.log")
@@ -161,7 +161,7 @@ func TestPipeline_RotationNoDoubleCount(t *testing.T) {
 	require.Empty(t, p.Gaps(), "rotation must not create gaps")
 }
 
-// FR-472/434：恢复分段责任转移后 CanReclaim 才放行；hold 仍拒绝。
+// FR-473/474：恢复分段责任转移后 CanReclaim 才放行；hold 仍拒绝。
 func TestPipeline_CanReclaimGateAfterResponsibilityTransfer(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "latest.log")
@@ -199,7 +199,7 @@ func TestPipeline_CanReclaimGateAfterResponsibilityTransfer(t *testing.T) {
 	require.Error(t, err)
 }
 
-// FR-473：容量暂停必须记缺口，禁止静默丢弃。
+// FR-474：容量暂停必须记缺口，禁止静默丢弃。
 func TestPipeline_CapacityPauseRecordsGap(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "latest.log")

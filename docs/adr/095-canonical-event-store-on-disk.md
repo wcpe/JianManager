@@ -2,11 +2,11 @@
 
 - **日期**: 2026-09-24
 - **状态**: accepted
-- **关联**: FR-483 · FR-472 · ADR-094
+- **关联**: FR-484 · FR-473 · ADR-094
 
 ## 背景
 
-FR-472 Shared Contracts §4.3/§5.3 规定 `persistedSource.Events` 是 VL 数据根丢失后重建 projection 的**权威集合**。该集合不可按 reclaim 前缀裁剪——裁剪（或在发布后清空事件体）会破坏归档导入、逻辑轮转与跨日分区重建的等价性，已被三个既有回归测试否决。
+FR-473 Shared Contracts §4.3/§5.3 规定 `persistedSource.Events` 是 VL 数据根丢失后重建 projection 的**权威集合**。该集合不可按 reclaim 前缀裁剪——裁剪（或在发布后清空事件体）会破坏归档导入、逻辑轮转与跨日分区重建的等价性，已被三个既有回归测试否决。
 
 代价是它同时常驻内存并内联在 `ingest.state.json` 里，随单源留存事件数线性增长。真机 H-scale64 实测：64 源 × 3000 事件下 Worker 稳态 RSS ≈674MiB、`state.json` ≈143–189MB；量测归因显示主因**不是**事件体常驻（仅 +95MiB），而是 `persist()` 每轮对整份 state 做 `MarshalIndent` 的**瞬时分配**——单次即把 RSS 从 99MiB 推到 720MiB，且 Go 在 GC 后不把 `sys` 归还 OS。
 
@@ -39,7 +39,7 @@ FR-472 Shared Contracts §4.3/§5.3 规定 `persistedSource.Events` 是 VL 数�
   而是三处**跨轮无界累积**结构——`Normalizer.events`、`NormalizeBoundary.linePos`、`Pipeline.delivered`，
   它们都随**会话内总行数**线性增长，与单轮读取量无关（故「限制单轮批量」的方案不对症，未采用）。
   现分别以 `Options.RetainEvents` 开关、`linePos` 滑动窗口 + `lineBase` 基准、`deliveredCount` 计数加界。
-- 事件体占用转移到磁盘（150 源 × 3000 事件 ≈300MiB NDJSON，未压缩）。磁盘预算与保留策略仍由 FR-478/440 生命周期负责，本 ADR 不引入新压缩格式。
+- 事件体占用转移到磁盘（150 源 × 3000 事件 ≈300MiB NDJSON，未压缩）。磁盘预算与保留策略仍由 FR-479/480 生命周期负责，本 ADR 不引入新压缩格式。
 - **量测口径成为验收要求（两条硬约束）**：容量结论必须 (1) **全局保活被测对象**——把 `Manager`
   存入包级变量，`runtime.KeepAlive` 是编译期屏障、放在读数之后无效；(2) 取**稳态**（强制 GC 后）读数并对存活堆剖析归因。
   本 ADR 的早期版本曾因未保活而把稳态低估约 12 倍（发布过 25.9MiB，真实为 303.9MiB），
@@ -56,4 +56,4 @@ FR-472 Shared Contracts §4.3/§5.3 规定 `persistedSource.Events` 是 VL 数�
 
 ## 取代关系
 
-本 ADR 不取代 ADR-094（Worker 日志数据面边界）或 FR-472 契约；它细化 §4.3/§5.3 中权威集合的**存储介质**，不改变其内容、语义或裁剪禁则。
+本 ADR 不取代 ADR-094（Worker 日志数据面边界）或 FR-473 契约；它细化 §4.3/§5.3 中权威集合的**存储介质**，不改变其内容、语义或裁剪禁则。

@@ -19,7 +19,7 @@ type Runtime interface {
 }
 
 // VLSupRuntime 以 vlsup.Supervisor 为后端的 Runtime 适配。
-// Attach/Detach 在 foundation 层做账面登记；真实 VL storage 接线属 FR-475 Runbook C。
+// Attach/Detach 在 foundation 层做账面登记；真实 VL storage 接线属 FR-476 Runbook C。
 type VLSupRuntime struct {
 	Sup *vlsup.Supervisor
 	// attached dirID → storage path（测试/账面）。

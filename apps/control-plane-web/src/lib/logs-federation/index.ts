@@ -1,6 +1,6 @@
 /**
- * 日志联邦 coverage / 失败态 foundation（FR-481）。
- * 契约继承 FR-472；详见 `docs/specs/logs-center-tiered-ui/spec.md`。
+ * 日志联邦 coverage / 失败态 foundation（FR-482）。
+ * 契约继承 FR-473；详见 `docs/specs/logs-center-tiered-ui/spec.md`。
  */
 export * from './types'
 export * from './helpers'

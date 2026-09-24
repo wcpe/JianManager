@@ -1,4 +1,4 @@
-# FR-475 Windows 平台资产验收记录（受控）
+# FR-476 Windows 平台资产验收记录（受控）
 
 日期：2026-09-24
 主机：node-main（生产主机，IP 已脱敏，linux-amd64）

@@ -1,5 +1,5 @@
 /**
- * 日志联邦 coverage / quality 类型（FR-481 foundation，契约继承 FR-472）。
+ * 日志联邦 coverage / quality 类型（FR-482 foundation，契约继承 FR-473）。
  *
  * 字段语义以 `docs/specs/worker-log-platform-contract/spec.md` 为准：
  * - `complete` / `partial_reasons` / `targets` / `enumeration_state` 是正交维度；
@@ -10,14 +10,14 @@
  * 已知 reason 进入 {@link PARTIAL_REASONS} 常量，未知 reason 原样透传（不得静默丢弃）。
  */
 
-/** FR-472 Coverage.enumeration_state。 */
+/** FR-473 Coverage.enumeration_state。 */
 export type EnumerationState = 'OPEN' | 'EXHAUSTED' | 'STALE' | 'CANCELLED'
 
-/** FR-472 Quality.duplicate_quality / stats_quality 的已登记取值。 */
+/** FR-473 Quality.duplicate_quality / stats_quality 的已登记取值。 */
 export type QualityLevel = 'EXACT' | 'APPROXIMATE' | 'UNRESOLVED' | 'UNKNOWN'
 
 /**
- * 已登记的 partial_reasons / 失败原因码（FR-481 §3.1 + FR-472 §6.3）。
+ * 已登记的 partial_reasons / 失败原因码（FR-482 §3.1 + FR-473 §6.3）。
  * 后端未冻结枚举时仍可能出现其它字符串；分类逻辑对未知码走 generic partial。
  */
 export const PARTIAL_REASONS = {
@@ -74,7 +74,7 @@ export type TargetQueryStatus =
 /** 存储层级（HOT/COLD/DEEP/RAW）。 */
 export type StorageTier = 'HOT' | 'COLD' | 'DEEP' | 'RAW' | (string & {})
 
-/** FR-472 TargetCoverage 的前端投影。 */
+/** FR-473 TargetCoverage 的前端投影。 */
 export interface TargetCoverage {
   /** 节点 / 实例 / 日志源标识。 */
   targetId: string
@@ -90,13 +90,13 @@ export interface TargetCoverage {
   reason?: PartialReason
   /** closed_visible_seq 摘要（可选，仅用于展示）。 */
   closedVisibleSeq?: string
-  /** Legacy 数据时间覆盖（FR-481：Legacy 必须有来源标识和时间覆盖）。 */
+  /** Legacy 数据时间覆盖（FR-482：Legacy 必须有来源标识和时间覆盖）。 */
   legacyRange?: { from?: string; to?: string }
   /** 可观测缺口数（可选）。 */
   gapCount?: number
 }
 
-/** FR-472 Coverage。 */
+/** FR-473 Coverage。 */
 export interface Coverage {
   /** true = 本次结果集在声明的授权目标与时间窗内完整。 */
   complete: boolean
@@ -108,13 +108,13 @@ export interface Coverage {
   enumerationState?: EnumerationState
 }
 
-/** FR-472 Quality（duplicate / stats 正交维度）。 */
+/** FR-473 Quality（duplicate / stats 正交维度）。 */
 export interface Quality {
   duplicateQuality: QualityLevel | (string & {})
   statsQuality: QualityLevel | (string & {})
 }
 
-/** EngineNotReady 明细（FR-481 用户可见失败态之一）。 */
+/** EngineNotReady 明细（FR-482 用户可见失败态之一）。 */
 export interface EngineNotReadyDetail {
   kind: 'engine_not_ready'
   reason: PartialReason
@@ -183,7 +183,7 @@ export interface LogFederationResponse {
   errorMessage?: string
   /** 导出作业状态；仅导出路径有意义。 */
   exportStatus?: ExportStatus
-  /** 导出是否已通过完整性校验（FR-481：只有校验后可下载）。 */
+  /** 导出是否已通过完整性校验（FR-482：只有校验后可下载）。 */
   exportVerified?: boolean
 }
 

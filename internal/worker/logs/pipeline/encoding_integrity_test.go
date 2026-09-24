@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 )
 
-// FR-474 规格 §5 要求「损坏编码可恢复」「解析失败保留原文」。
+// FR-475 规格 §5 要求「损坏编码可恢复」「解析失败保留原文」。
 //
 // 本文件固化损坏编码（非法 UTF-8）的不变量：
 //  1. 正文在归一化阶段即净化，使 canonical_content_hash 与投递 JSON 往返后的正文**一致**

@@ -1,4 +1,4 @@
-# FR-472～483 日志平台真机验收记录（受控）
+# FR-473～484 日志平台真机验收记录（受控）
 
 > 本文件是**持久**验收记录：`runbook-checklist.md` 的证据指针与 `.tmp/fr433-experiments/**` 产物均被 `.gitignore` 排除（第 45/59 行），清理临时目录即丢失。此处固化「跑了什么、看到什么、结论如何」，使发布决策不依赖临时文件。
 >
@@ -82,13 +82,13 @@
 - **修复**：①采集错误按源去重上报；②`canonicalEventTime`/`eventUTCDay` 在语义时间缺失时回退 ingest 时间再回退源 `utc_day`（与既有 `normalizeCanonicalEvent` 同契约）；③新增 `WAL.pruneReclaimed`。
 - **复测**：reclaim **64/64**、内存 WAL **257B**、Worker RSS **≈674MiB**（< 1GiB）。
 - **容量拟合**：RSS ≈ **24 MiB/源**、state ≈ 2.8 MB/源（每源 3000 事件）→ **1 GiB ≈ 40 源**。
-  - **⚠ 已作废（2026-09-24，FR-483）**：该拟合是「canonical 事件体常驻内存 + 内联 state」时的结论。事件体改为落盘 compact 并加界三处跨轮累积结构后（ADR-095，**真机验收**见 `../worker-log-canonical-eventstore/acceptance-real.md`），稳态 Worker 降至 64/128/150 源 = **22.5/22.3/20.0MiB**、峰值 **56.0/62.0/61.8MiB**，`state.json` 77 803KiB → 139.5KiB 并与事件数解耦；本节表格与拟合保留为**改造前基线**，不再是当前密度依据。现行约束项见契约 §6.6 修订与 FR-483 规格 §5.3。
+  - **⚠ 已作废（2026-09-24，FR-484）**：该拟合是「canonical 事件体常驻内存 + 内联 state」时的结论。事件体改为落盘 compact 并加界三处跨轮累积结构后（ADR-095，**真机验收**见 `../worker-log-canonical-eventstore/acceptance-real.md`），稳态 Worker 降至 64/128/150 源 = **22.5/22.3/20.0MiB**、峰值 **56.0/62.0/61.8MiB**，`state.json` 77 803KiB → 139.5KiB 并与事件数解耦；本节表格与拟合保留为**改造前基线**，不再是当前密度依据。现行约束项见契约 §6.6 修订与 FR-484 规格 §5.3。
 - **口径**：§6.6「日志数据面 RSS」= Worker 进程日志部分 + 受管 VL 之和（已写入契约）。
 
 ## 9. 审计与遗留
 
 - 验收审计（`sdd-accept-phase`）：`.tmp/acceptance-changes-HEAD-20260924.md`，10 项发现全部处置（含 1 项误判纠正）。
 - 非阻塞遗留：Windows VL 运行证据、临时产物不持久（**本文件即为缓解**）。
-  - 原列的「canonical 事件体落盘/compact」**已由 FR-483 完成**（见 §8 密度小节与 ADR-095），不再是遗留。
-  - **FR-480 联邦查询侧仍为占位**（`service.UnimplementedFederatedQuerier`，`log_legacy.go:359`）：占位本身返回结构化 not-ready 是正确的，但 cutover 后的 federated 路径未接真实实现，属该 FR 的已知缺口。
+  - 原列的「canonical 事件体落盘/compact」**已由 FR-484 完成**（见 §8 密度小节与 ADR-095），不再是遗留。
+  - **FR-481 联邦查询侧仍为占位**（`service.UnimplementedFederatedQuerier`，`log_legacy.go:359`）：占位本身返回结构化 not-ready 是正确的，但 cutover 后的 federated 路径未接真实实现，属该 FR 的已知缺口。
 - **交付确认（Gate-4）**：按 `gate-merge.md`，FR 验收须由用户签字，Agent 不得自行标记已交付。

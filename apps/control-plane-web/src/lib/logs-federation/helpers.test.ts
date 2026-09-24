@@ -1,5 +1,5 @@
 /**
- * logs-federation foundation 单测（FR-481）。
+ * logs-federation foundation 单测（FR-482）。
  * 覆盖 partial / offline / zero-vs-failure / nextCursor 语义 / 导出下载阻断。
  */
 import { describe, expect, it } from 'vitest'
@@ -28,7 +28,7 @@ function coverage(partial: Partial<Coverage> = {}): Coverage {
   }
 }
 
-describe('formatCoverageSummary（FR-481 foundation）', () => {
+describe('formatCoverageSummary（FR-482 foundation）', () => {
   it('complete=true 且无 partial → complete，允许成功空态', () => {
     const s = formatCoverageSummary(coverage())
     expect(s.status).toBe('complete')
@@ -136,7 +136,7 @@ describe('formatCoverageSummary（FR-481 foundation）', () => {
   })
 })
 
-describe('classifyLogViewState（FR-481 foundation）', () => {
+describe('classifyLogViewState（FR-482 foundation）', () => {
   it('传输失败 ok=false → query_failed，非空成功', () => {
     const res: LogFederationResponse = {
       ok: false,
@@ -328,7 +328,7 @@ describe('classifyLogViewState（FR-481 foundation）', () => {
   })
 })
 
-describe('resolveExportDownloadAffordance（FR-481）', () => {
+describe('resolveExportDownloadAffordance（FR-482）', () => {
   it('覆盖完整 + 校验通过 → showDownload=true，并提示下载前复核权限', () => {
     const res: LogFederationResponse = {
       ok: true,

@@ -97,7 +97,7 @@ const (
 	TierArchive Tier = "archive"
 )
 
-// Coverage partial / not-ready 可观测原因（契约 §6.3 / FR-478 §3.1）。
+// Coverage partial / not-ready 可观测原因（契约 §6.3 / FR-479 §3.1）。
 const (
 	ReasonColdMissing          = "COLD_MISSING"
 	ReasonArchiveNotRestored   = "ARCHIVE_NOT_RESTORED"

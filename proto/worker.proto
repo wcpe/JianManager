@@ -55,9 +55,9 @@ service WorkerService {
   rpc ListInstances(ListInstancesRequest) returns (ListInstancesResponse);
   // StreamInstanceEvents 订阅实例事件流。
   rpc StreamInstanceEvents(StreamInstanceEventsRequest) returns (stream InstanceEvent);
-  // FR-472/439：日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
+  // FR-473/479：日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
   rpc GetLogCapabilities(GetLogCapabilitiesRequest) returns (GetLogCapabilitiesResponse);
-  // FR-472/439：按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
+  // FR-473/479：按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
   rpc LogCreateView(LogCreateViewRequest) returns (LogCreateViewResponse);
   rpc LogSearch(LogSearchRequest) returns (LogSearchResponse);
   rpc LogStats(LogStatsRequest) returns (LogStatsResponse);
@@ -67,7 +67,7 @@ service WorkerService {
   rpc LogTail(LogTailRequest) returns (stream LogEvent);
   rpc LogRehydrate(LogRehydrateRequest) returns (LogTaskResponse);
   rpc LogArchiveStatus(LogArchiveStatusRequest) returns (LogArchiveStatusResponse);
-  // FR-475：CP 经反向隧道查看/控制 Worker 受管 VL namespace。
+  // FR-476：CP 经反向隧道查看/控制 Worker 受管 VL namespace。
   rpc LogRuntimeStatus(LogRuntimeStatusRequest) returns (LogRuntimeStatusResponse);
   rpc LogRuntimeControl(LogRuntimeControlRequest) returns (LogTaskResponse);
   rpc LogMigratePartition(LogMigratePartitionRequest) returns (LogTaskResponse);
@@ -2325,7 +2325,7 @@ message ProbeInstanceEvidenceResponse {
   repeated InstanceEvidence evidence = 1;
 }
 
-// ---------------- FR-472 Worker 日志 Shared Contracts 草案 ----------------
+// ---------------- FR-473 Worker 日志 Shared Contracts 草案 ----------------
 
 enum LogErrorCode {
   LOG_ERROR_UNSPECIFIED = 0;

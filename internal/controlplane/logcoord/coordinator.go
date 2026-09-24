@@ -587,7 +587,7 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 		cov.PartialReasons = appendUniqueReason(cov.PartialReasons, "BUDGET_EXCEEDED")
 		cov.Complete = false
 	}
-	// FR-479：Search 完成后把 coverage 上的 closed_visible_seq 向量固化到 View，
+	// FR-480：Search 完成后把 coverage 上的 closed_visible_seq 向量固化到 View，
 	// Export 与后续 view 复用必须看到同一向量。
 	c.persistClosedVisibleSeq(&view, cov)
 

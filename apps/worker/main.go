@@ -411,7 +411,7 @@ func runWorker() {
 					slog.Error("VictoriaLogs Rehydrate 启动失败", "error", err)
 				}
 			}
-		// FR-475 / 契约 §6.6：周期采样 VL RSS 与数据盘预算并暴露降级。
+		// FR-476 / 契约 §6.6：周期采样 VL RSS 与数据盘预算并暴露降级。
 		go sampleLogBudget(vlSupervisor)
 		// 受管 VL 启动是异步的：接线 ingest/查询前先等 HOT 就绪，避免启动期写连接被拒
 		// 导致采集运行时创建失败（重启时序 / Runbook C）。
@@ -484,7 +484,7 @@ func runWorker() {
 	}
 	logStack := logassemble.Build(logJournal, rangeClient, version.Version)
 	logStack.LogRPC.SetRuntimeCatalog(logStack.Catalog)
-	// FR-476：先完成 Catalog/journal 逻辑恢复，再开放 Log RPC；物理目录残留
+	// FR-477：先完成 Catalog/journal 逻辑恢复，再开放 Log RPC；物理目录残留
 	// 不能替代 owner/generation 权威。不可查询范围保持 recovery-required，
 	// 不阻塞 Worker 其它实例服务。
 	for key, recovery := range logStack.Catalog.StartingRecover() {
@@ -559,7 +559,7 @@ func runWorker() {
 		}
 	}
 	workerServer.SetLogQueryService(logStack.LogRPC)
-	// FR-477：归档 Registry/Rehydrate 进入同一 Worker 查询面。凭据只来自
+	// FR-478：归档 Registry/Rehydrate 进入同一 Worker 查询面。凭据只来自
 	// 环境覆盖的配置对象，不写入日志或诊断响应。
 	var archiveRegistry *archive.Registry
 	var rehydrateManager *archive.RehydrateManager
@@ -591,7 +591,7 @@ func runWorker() {
 		}
 		if provider != nil {
 			registry := archive.NewRegistry(provider)
-			// 归档 manifest 记录受管 VL 的真实构建标识（FR-475 资产审批），而非占位。
+			// 归档 manifest 记录受管 VL 的真实构建标识（FR-476 资产审批），而非占位。
 			if vlsup.AssetBuildID != "" {
 				registry.SetEngineVersion("victorialogs/" + vlsup.AssetBuildID)
 			}
@@ -608,7 +608,7 @@ func runWorker() {
 			slog.Info("日志归档运行时已装配", "provider", provider.Kind())
 		}
 	}
-	// FR-473：将配置化 FileTailer/STDIO/ArchiveImporter 接入常驻 Worker。
+	// FR-474：将配置化 FileTailer/STDIO/ArchiveImporter 接入常驻 Worker。
 	// 未配置 source 时不猜测实例目录；实例生命周期可通过同一 Manager 动态登记。
 	var logIngest *ingest.Manager
 	registeredLogInstanceIDs := manager.ListInstances
@@ -1054,7 +1054,7 @@ func localWSAddr(port int) string {
 	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
-// sampleLogBudget 周期性采样受管 VL 的 RSS 与数据盘预算并暴露降级（FR-475 / 契约 §6.6）。
+// sampleLogBudget 周期性采样受管 VL 的 RSS 与数据盘预算并暴露降级（FR-476 / 契约 §6.6）。
 // 每次采样以 Debug 记录实际数值（供 Runbook C 取证）；状态变化时升为 Info/Warn。
 func sampleLogBudget(sup *vlsup.Supervisor) {
 	ticker := time.NewTicker(time.Minute)

@@ -7,7 +7,7 @@ import (
 
 // ResolvedTargets 目标解析结果。
 //
-// 规则（FR-479）：
+// 规则（FR-480）：
 //   - All：CP 全部授权目标（含历史持有者）；
 //   - Queried：本次扇出集合。默认 = All；仅当 OnlineOnly 显式为 true 时收缩为在线目标；
 //   - Excluded：因显式 online_only 而未扇出的目标，必须进入 coverage，禁止静默丢弃。

@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// LogProtocolVersion Worker Log RPC 协议版本（与 FR-472 契约对齐）。
+// LogProtocolVersion Worker Log RPC 协议版本（与 FR-473 契约对齐）。
 const LogProtocolVersion = "fr433/v1"
 
 // WorkerClientFactory 按 WorkerID 取得 workerpb 日志查询客户端。

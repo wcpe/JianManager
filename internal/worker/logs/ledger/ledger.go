@@ -1,4 +1,4 @@
-// Package ledger 实现 FR-473 采集账本：按 (log_source_id, source_generation)
+// Package ledger 实现 FR-474 采集账本：按 (log_source_id, source_generation)
 // 保存四水位、投递状态、恢复分段引用、缺口与轮转关联。
 // 字段与状态语义以 docs/specs/worker-log-platform-contract/spec.md 为准。
 package ledger

@@ -290,36 +290,36 @@ internal/worker/
 
 ### 6.1 gRPC（Control Plane ↔ Worker Node）
 
-#### Worker 日志平台数据面（FR-472～483）
+#### Worker 日志平台数据面（FR-473～484）
 
-**状态**：Shared Contracts **已冻结**（FR-472，ADR-094 accepted）。**生产装配已落地**：CP `main` 构造 `logcoord.Assemble` 并经反向隧道联邦；Worker `main` 装配持久 Catalog、采集运行时、受管 VL supervisor、RangeClient、归档 Provider 和 Log RPC。联邦 HTTP（含 `/logs/federation` 门面）、runtime status/control、cutover/Legacy HTTP 已注册。**真机验收已完成**：Runbook A/B/C、CP 资产分发闭环、Deep Archive/Rehydrate（RustFS S3）、Legacy/cutover、真浏览器 UI 与 §6.6 30 分钟压测（含 64 源容量曲线）均通过并归档证据于 `.tmp/fr433-experiments/`（临时证据，不入库）。当前受管 VL 资产基线为 v1.52.0；cutover 默认关闭。
+**状态**：Shared Contracts **已冻结**（FR-473，ADR-094 accepted）。**生产装配已落地**：CP `main` 构造 `logcoord.Assemble` 并经反向隧道联邦；Worker `main` 装配持久 Catalog、采集运行时、受管 VL supervisor、RangeClient、归档 Provider 和 Log RPC。联邦 HTTP（含 `/logs/federation` 门面）、runtime status/control、cutover/Legacy HTTP 已注册。**真机验收已完成**：Runbook A/B/C、CP 资产分发闭环、Deep Archive/Rehydrate（RustFS S3）、Legacy/cutover、真浏览器 UI 与 §6.6 30 分钟压测（含 64 源容量曲线）均通过并归档证据于 `.tmp/fr433-experiments/`（临时证据，不入库）。当前受管 VL 资产基线为 v1.52.0；cutover 默认关闭。
 
 目标架构采用 Worker 本地日志数据面 + CP 联邦查询：Worker 可在受管数据根保存 VL HOT/COLD/Rehydrate 数据、WAL、采集账本、Partition Catalog、canonical projection manifest/checkpoint、冲突和受管 Raw；这些数据属于 Worker-owned 日志数据，不是 CP 业务数据库。Worker 本地 SQLite 仅保存日志元数据，不能成为第二个全文检索引擎。
 
-Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器；CP 业务 SQLite/MySQL、权限数据和 ADR-013 指标时序仍只由 CP 读写。CP→Worker 日志 RPC 只经 Worker 主动建立的 ADR-081 反向隧道，Worker/VL 只监听 localhost。Search/Stats/Fields/Facets/Tail/Rehydrate/Export 使用 FR-472 Query View、Catalog owner、PublishedProjection 和 coverage；浏览器不得直连 Worker/VL。该边界对应已 accepted 的 ADR-094；Worker 生产组件级 Runbook A/B/C 分别归属 FR-473/436/437 开发验收，不是契约冻结前置。
+Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器；CP 业务 SQLite/MySQL、权限数据和 ADR-013 指标时序仍只由 CP 读写。CP→Worker 日志 RPC 只经 Worker 主动建立的 ADR-081 反向隧道，Worker/VL 只监听 localhost。Search/Stats/Fields/Facets/Tail/Rehydrate/Export 使用 FR-473 Query View、Catalog owner、PublishedProjection 和 coverage；浏览器不得直连 Worker/VL。该边界对应已 accepted 的 ADR-094；Worker 生产组件级 Runbook A/B/C 分别归属 FR-474/476/477 开发验收，不是契约冻结前置。
 
 **当前落地包（地基 + 接线进度，2026-09-21 工作区）**：
 
 | 层 | 包 / 资产 | 对应 FR | 状态 |
 |---|---|---|---|
-| 共享类型与账本 | `internal/worker/logs/{logtypes,ledger}` | FR-472/434 | 地基已落地，单测绿 |
-| 事件体存储 | `internal/worker/logs/eventstore`（按源**追加式 NDJSON 段** + MANIFEST 原子替换 + 流式读；只容忍尾段截断，中间段损坏硬失败） | FR-483 | **实测通过**：150 源稳态 RSS 25.6MiB、峰值 77.0MiB（判据稳态 ≤300MiB）、`state.json` 与事件数解耦；长驻会话的辅助结构（位置表/事件历史/投递记录）均有明确释放时机；ADR-095 |
-| 采集通道 | `internal/worker/logs/acquire` + `pipeline` + `ingest`（tail/stdio/archive→normalize→WAL→VL→projection/Catalog） | FR-473/435 | 生产采集/投影/恢复已接线；ACK-loss/磁盘满 Runbook A 待验 |
-| 归一化 | `internal/worker/logs/normalize` | FR-474 | 地基已落地，单测绿 |
-| VL 运行时 | `internal/worker/logs/vlsup`（资产校验/localhost/auth/防递归/预算采样） | FR-475 | 受管三实例、CP runtime status/control、远程 Runbook C 基础已通过；资产下载闭环与真机预算证据待验（`EvaluateBudget` RSS/磁盘降级已落地） |
-| Partition Catalog + Lifecycle | `internal/worker/logs/catalog` + `lifecycle`（状态机编排/Ops 注入） | FR-476 | Catalog 启动恢复/唯一 owner 已接线；迁移崩溃/旧 owner re-attach Runbook B 待验 |
-| Deep Archive | `internal/worker/logs/archive`（Provider/registry/Rehydrate 任务/manifest） | FR-477 | Remote S3 Provider、**真机 RustFS S3 验收通过**（登记/幂等/manifest/往返/Rehydrate 任务）、manifest engine 记录真实 VL build_id；发布 generation 清理矩阵待验 |
-| Worker 查询 | `internal/worker/logs/query` + `grpcmap` + `grpcsvc`（Log* RPC 映射层） | FR-478 | Worker 主进程已接管真实 RangeClient；Search/Stats/Fields/Facets/Tail/Archive RPC 已接线，跨 Tier 完整验收待 |
-| CP 联邦协调 | `internal/controlplane/logcoord`（授权目标/K-way merge/聚合/导出门禁）+ `worker_adapter`（TunnelDialer/协议版本 fr433/v1） | FR-479 | **生产 Assemble 已接线**（pool+node+instance）；`*`/历史持有者目录与真机联邦待验收 |
-| 入库切换 | `log_cutover.go` + `log_legacy.go` + DualPath 门面 + **HTTP 管理面** | FR-480 | **HTTP 已注册**（见 API.md）；默认关闭；联邦侧仍 `Unimplemented` 占位 |
-| 前端助手 | `apps/control-plane-web/src/lib/logs-federation/` + `api/logFederation.ts` + LogsPage | FR-481 | helpers/门面客户端/LogsPage 覆盖横幅已接线；依赖 LogCoord 装配后的联邦 API |
-| proto | `proto/worker.proto` Log* + `proto/workerpb` 已重生成 | FR-472 | 消息契约已冻结 |
+| 共享类型与账本 | `internal/worker/logs/{logtypes,ledger}` | FR-473/474 | 地基已落地，单测绿 |
+| 事件体存储 | `internal/worker/logs/eventstore`（按源**追加式 NDJSON 段** + MANIFEST 原子替换 + 流式读；只容忍尾段截断，中间段损坏硬失败） | FR-484 | **实测通过**：150 源稳态 RSS 25.6MiB、峰值 77.0MiB（判据稳态 ≤300MiB）、`state.json` 与事件数解耦；长驻会话的辅助结构（位置表/事件历史/投递记录）均有明确释放时机；ADR-095 |
+| 采集通道 | `internal/worker/logs/acquire` + `pipeline` + `ingest`（tail/stdio/archive→normalize→WAL→VL→projection/Catalog） | FR-474/475 | 生产采集/投影/恢复已接线；ACK-loss/磁盘满 Runbook A 待验 |
+| 归一化 | `internal/worker/logs/normalize` | FR-475 | 地基已落地，单测绿 |
+| VL 运行时 | `internal/worker/logs/vlsup`（资产校验/localhost/auth/防递归/预算采样） | FR-476 | 受管三实例、CP runtime status/control、远程 Runbook C 基础已通过；资产下载闭环与真机预算证据待验（`EvaluateBudget` RSS/磁盘降级已落地） |
+| Partition Catalog + Lifecycle | `internal/worker/logs/catalog` + `lifecycle`（状态机编排/Ops 注入） | FR-477 | Catalog 启动恢复/唯一 owner 已接线；迁移崩溃/旧 owner re-attach Runbook B 待验 |
+| Deep Archive | `internal/worker/logs/archive`（Provider/registry/Rehydrate 任务/manifest） | FR-478 | Remote S3 Provider、**真机 RustFS S3 验收通过**（登记/幂等/manifest/往返/Rehydrate 任务）、manifest engine 记录真实 VL build_id；发布 generation 清理矩阵待验 |
+| Worker 查询 | `internal/worker/logs/query` + `grpcmap` + `grpcsvc`（Log* RPC 映射层） | FR-479 | Worker 主进程已接管真实 RangeClient；Search/Stats/Fields/Facets/Tail/Archive RPC 已接线，跨 Tier 完整验收待 |
+| CP 联邦协调 | `internal/controlplane/logcoord`（授权目标/K-way merge/聚合/导出门禁）+ `worker_adapter`（TunnelDialer/协议版本 fr433/v1） | FR-480 | **生产 Assemble 已接线**（pool+node+instance）；`*`/历史持有者目录与真机联邦待验收 |
+| 入库切换 | `log_cutover.go` + `log_legacy.go` + DualPath 门面 + **HTTP 管理面** | FR-481 | **HTTP 已注册**（见 API.md）；默认关闭；联邦侧仍 `Unimplemented` 占位 |
+| 前端助手 | `apps/control-plane-web/src/lib/logs-federation/` + `api/logFederation.ts` + LogsPage | FR-482 | helpers/门面客户端/LogsPage 覆盖横幅已接线；依赖 LogCoord 装配后的联邦 API |
+| proto | `proto/worker.proto` Log* + `proto/workerpb` 已重生成 | FR-473 | 消息契约已冻结 |
 
 **数据面边界不变**：CP 业务库仍只保留 platform/audit + （切换后）Legacy 只读存量；切换打开前 instance/worker 来源仍写入 CP `logs` 表。禁止把测试全绿当作真 Worker/VL/浏览器验收。
 
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
-- **Worker 日志平台 Log RPC（FR-472～483，消息已冻结 / 生产装配已落地）**：`GetLogCapabilities`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`。受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。详见 API.md「Worker 日志平台」。
+- **Worker 日志平台 Log RPC（FR-473～484，消息已冻结 / 生产装配已落地）**：`GetLogCapabilities`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`。受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。详见 API.md「Worker 日志平台」。
 - 生命周期：Register, Heartbeat (双向 stream), FetchBotWorkerArchive
   - `Register` 的身份匹配经 gRPC metadata 携带 `node-uuid`/`node-secret`（重注册必须同时出示）或 `enroll-token`（新节点准入），均不改 proto；Host 和名称不再作为身份凭据（ADR-081）。
   - `RegisterResponse` 携带 `ws_token_secret`（FR-275，见 ADR-061）：CP↔Worker 专用 **WS 令牌密钥**（只签终端/插件桥令牌，与签用户会话的 `jwt.secret` 隔离，Worker 永不持有后者）。首注册与重注册均下发；Worker 持久化到 `etc/node-identity.json` 并热应用到 WS 校验。CP 侧密钥三轨：显式 `jwt.ws_secret` > 生产 autogen 持久化 `<dataRoot>/etc/ws-token-secret.key`（0600）> dev 回退 `dev-secret-change-me`；若既无本地持久化值也未收到响应值，Worker 拒绝启动 WS 服务。

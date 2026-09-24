@@ -261,7 +261,7 @@ func (f publisherFunc) Publish(ctx context.Context, key PartitionKey, events []A
 	return f(ctx, key, events, taskID)
 }
 
-// TestArchiveBackendRejectsEmptyAuthorizedTargets 锁定 FR-472 §9「越权 Rehydrate/ArchiveStatus 被拒绝且不泄露」：
+// TestArchiveBackendRejectsEmptyAuthorizedTargets 锁定 FR-473 §9「越权 Rehydrate/ArchiveStatus 被拒绝且不泄露」：
 // 无授权目标时必须在 Worker 层结构化拒绝，不得默认落到 default 分区。
 func TestArchiveBackendRejectsEmptyAuthorizedTargets(t *testing.T) {
 	ctx := context.Background()

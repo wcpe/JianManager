@@ -1,5 +1,5 @@
 /**
- * logsFederation.* i18n 键与 zh/en 文案占位（FR-481 foundation）。
+ * logsFederation.* i18n 键与 zh/en 文案占位（FR-482 foundation）。
  *
  * 正式接入 i18n 资源包时，把 {@link LOGS_FEDERATION_LOCALES} 合并进
  * `src/i18n/zh.json` / `en.json` 的顶层 `logsFederation` 段即可；

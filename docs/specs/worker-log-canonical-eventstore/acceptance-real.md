@@ -1,4 +1,4 @@
-# FR-483 真机验收记录（受控）
+# FR-484 真机验收记录（受控）
 
 日期：2026-09-24
 主机：node-main（生产主机，地址与主机名已脱敏，与生产 CP/Worker 同机，使用隔离栈与独立 VL 数据目录）
@@ -88,6 +88,6 @@ state 22.1 KiB、卡住源消失，证实为**快照时机**问题而非投递�
 
 - **Windows 平台**未测（本机为 linux-amd64）。
 - 本轮测的是「采集 + 真 VL 写入 + 投影校验」链路；**未**在真机覆盖 cutover 后的
-  federated 查询路径（该路径仍为 `UnimplementedFederatedQuerier` 占位，属 FR-480 缺口）。
+  federated 查询路径（该路径仍为 `UnimplementedFederatedQuerier` 占位，属 FR-481 缺口）。
 - 受管 VL 由本脚本以独立数据目录在 `127.0.0.1:19461` 启动，**未经 `vlsup.Supervisor`**；
   supervisor 自身的真机行为由既有 Runbook C 覆盖。

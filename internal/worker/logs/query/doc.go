@@ -1,4 +1,4 @@
-// Package query implements FR-478 Worker Log QueryPlanner foundation.
+// Package query implements FR-479 Worker Log QueryPlanner foundation.
 //
 // 契约来源（不得在本包另立契约）：
 //   - docs/specs/worker-log-platform-contract/spec.md §5 Catalog / §6 Query View / RPC

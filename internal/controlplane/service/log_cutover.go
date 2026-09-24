@@ -22,7 +22,7 @@ func isLegacyLogSource(src model.LogSource) bool {
 	return src == model.LogSourceInstance || src == model.LogSourceWorker
 }
 
-// LogCutoverWatermark 是单个 Worker 的切换水位（FR-480）。
+// LogCutoverWatermark 是单个 Worker 的切换水位（FR-481）。
 //
 // 能力确认与采集账本就绪是切换前置条件；未满足时不得原子路由切换，
 // 旧路径必须继续写入 CP，避免静默丢历史。
@@ -45,7 +45,7 @@ func (w LogCutoverWatermark) Ready() bool {
 	return w.CapabilityConfirmed && w.LedgerReady
 }
 
-// LogCutover 是日志入库切换开关与逐 Worker 水位登记（FR-480）。
+// LogCutover 是日志入库切换开关与逐 Worker 水位登记（FR-481）。
 //
 // 开关与水位分离：全局 enabled 控制 CP 侧 instance/worker 入库是否继续；
 // 逐 Worker watermark 用于查询覆盖标注与失败时保持旧路径的可观测状态。
@@ -282,7 +282,7 @@ func (s *LogService) Cutover() *LogCutover {
 	return s.cutover
 }
 
-// cutoverBlocked 报告该来源是否因 FR-480 切换应停止写入 CP logs。
+// cutoverBlocked 报告该来源是否因 FR-481 切换应停止写入 CP logs。
 func (s *LogService) cutoverBlocked(src model.LogSource) bool {
 	if s == nil || s.cutover == nil {
 		return false
@@ -309,7 +309,7 @@ type LogCutoverStatus struct {
 	PlatformPurgeExcludesLegacy bool `json:"platformPurgeExcludesLegacy"`
 }
 
-// CutoverStatus 聚合切换状态、水位与 Legacy 预算（FR-480 管理面）。
+// CutoverStatus 聚合切换状态、水位与 Legacy 预算（FR-481 管理面）。
 func (s *LogService) CutoverStatus() LogCutoverStatus {
 	st := LogCutoverStatus{
 		Watermarks: []LogCutoverWatermark{},
@@ -332,7 +332,7 @@ func (s *LogService) CutoverStatus() LogCutoverStatus {
 	return st
 }
 
-// ApplyAdminWatermark 管理面写入逐 Worker 水位（FR-480）。
+// ApplyAdminWatermark 管理面写入逐 Worker 水位（FR-481）。
 //
 // wantApply=true 表示尝试登记切换水位：请求侧 mark 必须已带 CapabilityConfirmed 与 LedgerReady，
 // 否则返回错误且不修改该 Worker 状态——与服务侧 ApplyCutover 前置条件一致，禁止静默绕过。

@@ -111,7 +111,7 @@ type Services struct {
 	Metric       *service.MetricService
 	// CapacityTrend 容量趋势告警器（FR-464）；nil 时容量预测仍可用，仅不发趋势告警。
 	CapacityTrend *service.CapacityTrendAlerter
-	// LogCoord FR-479 CP 跨 Worker 日志联邦协调器；nil（且无测试注入）时 federation 端点关闭。
+	// LogCoord FR-480 CP 跨 Worker 日志联邦协调器；nil（且无测试注入）时 federation 端点关闭。
 	LogCoord *logcoord.Coordinator
 	// LogRuntimePool 经反向隧道控制 Worker 受管 VictoriaLogs。
 	LogRuntimePool *cpgrpc.ClientPool
@@ -454,7 +454,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		logHandler := NewLogHandler(svcs.Log, svcs.Authz)
 		logHandler.RegisterRoutes(permRead("log.read"))
 
-		// FR-479 跨 Worker 日志联邦查询：复用 log.read 权限；平台管理员或授权实例范围。
+		// FR-480 跨 Worker 日志联邦查询：复用 log.read 权限；平台管理员或授权实例范围。
 		logCoord := svcs.LogCoord
 		if logCoord == nil {
 			logCoord = testLogCoord
@@ -462,7 +462,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if logCoord != nil {
 			NewLogFederationHandler(logCoord, svcs.Authz).RegisterRoutes(permRead("log.read"))
 		}
-		// FR-475 Worker 受管 VictoriaLogs 状态/启停：仅平台节点管理权限，经反向隧道。
+		// FR-476 Worker 受管 VictoriaLogs 状态/启停：仅平台节点管理权限，经反向隧道。
 		if svcs.LogRuntimePool != nil && svcs.Node != nil {
 			NewLogRuntimeHandler(svcs.Node, svcs.LogRuntimePool).RegisterRoutes(permRead("node.manage"))
 		}
@@ -472,7 +472,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			assets.RegisterAdminRoutes(permRead("system.update"))
 			assets.RegisterNodeRoutes(permRead("node.manage"))
 		}
-		// FR-480 日志入库切换与 Legacy 只读管理面：平台管理员专用（handler 再判 IsPlatformAdmin）。
+		// FR-481 日志入库切换与 Legacy 只读管理面：平台管理员专用（handler 再判 IsPlatformAdmin）。
 		if svcs.Log != nil {
 			NewLogCutoverHandler(svcs.Log, svcs.Audit, nodeWorkerUUIDLister{svcs}).RegisterRoutes(permRead("node.manage"))
 		}
