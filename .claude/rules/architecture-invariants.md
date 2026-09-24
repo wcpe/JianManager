@@ -11,7 +11,7 @@
 ## 进程边界
 
 - Control Plane 不得直接操作游戏服进程，必须通过 gRPC 委托给 Worker Node
-- Worker Node 不得直接访问数据库，所有持久化通过 Control Plane API 或 gRPC
+- Worker Node 不得访问 Control Plane 业务数据库、权限真源或指标时序存储，业务持久化通过 Control Plane API 或 gRPC。FR-472/ADR-094 规定的 Worker-owned 日志数据面（VL 数据、WAL、采集账本、Partition Catalog、projection 元数据、受管 Raw）可在本地受管数据根持久化；本地 SQLite 仅存这些日志元数据，不得成为第二个业务库或全文检索引擎。该例外已经由 ADR-094 accepted 记录；FR-472 仍需完成契约冻结检查单后才能进入全面实现。
 - Bot Worker 不得直接访问数据库或 gRPC，仅通过 stdin/stdout IPC 和 Worker Node 通信
 
 ## 通信协议
@@ -27,7 +27,7 @@
 
 ## 数据所有权
 
-- 数据库（SQLite/MySQL）仅 Control Plane 可读写
+- CP 业务数据库（SQLite/MySQL）仅 Control Plane 可读写；Worker 本地日志数据面是 FR-472/ADR-094 规定的受控例外，不得存放 CP 业务数据、权限真源或指标时序。
 - 本地实例配置文件仅 Worker Node 可读写
 - Bot 配置仅 Bot Worker 可读写
 
