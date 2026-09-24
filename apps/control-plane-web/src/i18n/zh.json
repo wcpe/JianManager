@@ -3380,6 +3380,7 @@
     "view_platform": "平台日志",
     "view_node_instance": "节点/实例日志",
     "view_all": "全部日志",
+    "view_legacy": "Legacy 只读",
     "time": "时间",
     "level": "级别",
     "source": "来源",
@@ -3403,6 +3404,7 @@
     "empty": "暂无日志",
     "loadError": "加载日志失败",
     "totalCount": "共 {{count}} 条",
+	"statsEvents": "当前视图 {{count}} 个事件",
     "prevPage": "上一页",
     "nextPage": "下一页",
     "pageInfo": "第 {{page}} / {{totalPages}} 页",
@@ -3416,6 +3418,75 @@
     "exportScope_currentPage": "导出当前页",
     "exportScope_allMatched": "导出全部匹配",
     "exportScope_range": "导出所选时间段"
+  },
+  "logsFederation": {
+    "coverage": {
+      "complete": "覆盖完整",
+      "partial": "覆盖不完整（部分结果）",
+      "failed": "查询失败（非空结果）",
+      "unknown": "覆盖状态未知"
+    },
+    "viewState": {
+      "ready_complete": "结果完整",
+      "ready_complete_empty": "所选范围内无日志（覆盖完整）",
+      "partial": "部分结果：覆盖不完整",
+      "offline": "部分节点离线，结果不完整",
+      "engine_not_ready": "日志查询引擎未就绪",
+      "rehydrate_failed": "归档回灌失败，历史层结果不完整",
+      "backlog": "采集积压，最新日志可能尚未入库",
+      "truncated": "结果已截断",
+      "legacy": "含 Legacy 数据源（不在联邦视图内）",
+      "gap": "存在数据缺口",
+      "archive_missing": "归档层缺失",
+      "view_stale": "查询视图已失效，请重新查询",
+      "query_failed": "查询失败，请重试",
+      "unknown": "无法解析覆盖状态"
+    },
+    "reasons": {
+      "engineNotReady": "查询引擎未就绪",
+      "logUnsupported": "节点日志能力未启用",
+      "legacy": "Legacy 数据源",
+      "rehydrateFailed": "回灌失败",
+      "backlog": "采集积压",
+      "truncated": "结果截断",
+      "offline": "节点离线",
+      "archiveMissing": "归档缺失",
+      "gap": "数据缺口",
+      "viewStale": "视图已失效",
+      "duplicateUnresolved": "重复事件未对账",
+      "permissionRevoked": "权限已撤销",
+      "cancelled": "查询已取消",
+      "budgetExceeded": "资源预算不足",
+      "exportIncomplete": "导出不完整",
+      "recoveryRequired": "启动恢复中",
+      "unknown": "未知原因"
+    },
+    "action": {
+      "retry": "重试",
+      "openNodes": "查看节点状态",
+      "startRehydrate": "发起回灌",
+      "requestOnline": "仅查在线节点",
+      "reopenView": "重新打开视图",
+      "contactAdmin": "联系管理员"
+    },
+    "export": {
+      "allowed": "覆盖完整且校验通过，可下载",
+      "blockedIncomplete": "覆盖不完整，不可下载导出附件",
+      "blockedFailed": "查询失败，不可下载导出附件",
+      "blockedViewStale": "视图已失效，请重新查询后再导出",
+      "blockedUnresolved": "重复事件未对账，导出不发布成功附件",
+      "blockedNotReady": "导出尚未就绪或校验未通过",
+      "blockedPermission": "权限不足或已撤销，无法下载",
+      "permissionRecheckHint": "下载前将再次复核权限",
+      "nextCursorHint": "游标结束仅表示当前视图枚举完毕，不代表全部历史完整。"
+    },
+    "sourceTag": {
+      "legacy": "Legacy",
+      "federated": "联邦"
+    },
+    "degraded": "联邦日志 API 不可用，已回退 Legacy 日志视图",
+    "federatedNotReady": "联邦日志查询路径尚未就绪（ErrFederatedNotReady），结果可能不完整，不得视作无日志",
+    "emptyNotSuccess": "覆盖不完整或查询失败，不能视作「无日志」"
   },
   "users": {
     "title": "用户管理",

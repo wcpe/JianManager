@@ -7,7 +7,7 @@ import type { StatusLevel } from '@jianmanager/ui'
 import type { LogQueryParams } from '@/api/logs'
 
 /** 日志中心固定主视图，顺序与管理员可见的切换控件一致。 */
-export const LOG_VIEWS = ['platform', 'node_instance', 'all'] as const
+export const LOG_VIEWS = ['platform', 'node_instance', 'all', 'legacy'] as const
 
 /**
  * 日志级别 → 状态等级（FR-150）。

@@ -3401,6 +3401,7 @@
     "view_platform": "Platform Logs",
     "view_node_instance": "Node / Instance Logs",
     "view_all": "All Logs",
+    "view_legacy": "Legacy Read-only",
     "time": "Time",
     "level": "Level",
     "source": "Source",
@@ -3423,6 +3424,7 @@
     "exportFailed": "Log export failed",
     "empty": "No logs",
     "loadError": "Failed to load logs",
+	"statsEvents": "{{count}} events in this view",
     "totalCount": "{{count}} total",
     "prevPage": "Previous",
     "nextPage": "Next",
@@ -3437,6 +3439,77 @@
     "exportScope_currentPage": "Export current page",
     "exportScope_allMatched": "Export all matches",
     "exportScope_range": "Export selected range"
+  },
+  "logsFederation": {
+    "coverage": {
+      "complete": "Coverage complete",
+      "partial": "Coverage incomplete (partial results)",
+      "failed": "Query failed (not an empty result)",
+      "unknown": "Coverage status unknown"
+    },
+    "viewState": {
+      "ready_complete": "Complete results",
+      "ready_complete_empty": "No logs in selected range (coverage complete)",
+      "partial": "Partial results: coverage incomplete",
+      "offline": "Some nodes offline; results incomplete",
+      "engine_not_ready": "Log query engine not ready",
+      "rehydrate_failed": "Rehydrate failed; archive layer incomplete",
+      "backlog": "Ingest backlog; newest logs may be missing",
+      "truncated": "Results truncated",
+      "legacy": "Includes legacy sources (outside federation view)",
+      "gap": "Data gap detected",
+      "archive_missing": "Archive layer missing",
+      "view_stale": "Query view is stale; re-run the query",
+      "query_failed": "Query failed; retry",
+      "unknown": "Unable to parse coverage status"
+    },
+    "reasons": {
+      "engineNotReady": "Query engine not ready",
+      "logUnsupported": "Node log platform not enabled",
+      "legacy": "Legacy data source",
+      "rehydrateFailed": "Rehydrate failed",
+      "backlog": "Ingest backlog",
+      "truncated": "Results truncated",
+      "offline": "Node offline",
+      "archiveMissing": "Archive missing",
+      "gap": "Data gap",
+      "viewStale": "View stale",
+      "duplicateUnresolved": "Duplicates unresolved",
+      "permissionRevoked": "Permission revoked",
+      "cancelled": "Query cancelled",
+      "budgetExceeded": "Resource budget exceeded",
+      "exportIncomplete": "Export incomplete",
+      "recoveryRequired": "Startup recovery in progress",
+      "unknown": "Unknown reason"
+    },
+    "action": {
+      "retry": "Retry",
+      "openNodes": "View node status",
+      "startRehydrate": "Start rehydrate",
+      "requestOnline": "Query online nodes only",
+      "reopenView": "Reopen view",
+      "contactAdmin": "Contact administrator"
+    },
+    "export": {
+      "allowed": "Coverage complete and verified; download available",
+      "blockedIncomplete": "Coverage incomplete; export download is not available",
+      "blockedFailed": "Query failed; export download is not available",
+      "blockedViewStale": "View is stale; re-query before exporting",
+      "blockedUnresolved": "Duplicates unresolved; export will not publish a success artifact",
+      "blockedNotReady": "Export not ready or not verified",
+      "blockedPermission": "Insufficient or revoked permission; cannot download",
+      "permissionRecheckHint": "Permission is rechecked before download",
+      "nextCursorHint":
+        "A null cursor only ends enumeration of the current view; it does not mean full history is complete."
+    },
+    "sourceTag": {
+      "legacy": "Legacy",
+      "federated": "Federated"
+    },
+    "degraded": "Log federation API unavailable; degraded to legacy logs view",
+    "federatedNotReady":
+      "Federated log query path is not ready (ErrFederatedNotReady); results may be incomplete and must not be treated as empty",
+    "emptyNotSuccess": "Coverage incomplete or query failed — this is not an empty result"
   },
   "users": {
     "title": "User Management",

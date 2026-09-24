@@ -21,7 +21,7 @@ export interface LogEntry {
 /** 日志查询筛选条件（DB 侧过滤 + 分页，FR-049/FR-050）。 */
 export interface LogQueryParams {
   /** 主视图：平台仅 CP；节点/实例聚合 Worker 与实例；all 仅平台管理员。 */
-  view?: 'platform' | 'node_instance' | 'all'
+  view?: 'platform' | 'node_instance' | 'all' | 'legacy'
   source?: string
   level?: string
   instanceId?: number
@@ -84,6 +84,7 @@ export interface UseLogsOptions {
    * 传 false 或省略则不轮询，仅在 params 变化时取数。
    */
   refetchInterval?: number | false
+  enabled?: boolean
 }
 
 /**
@@ -101,6 +102,22 @@ export function useLogs(params: LogQueryParams, options: UseLogsOptions = {}) {
     },
     placeholderData: (prev) => prev,
     refetchInterval: options.refetchInterval ?? false,
+    enabled: options.enabled ?? true,
+  })
+}
+
+export interface LegacyLogPage extends LogPage {
+  sourceTag: 'legacy'
+  coverage?: Record<string, unknown>
+}
+
+export function useLegacyLogs(params: LogQueryParams, enabled: boolean) {
+  const { view: _view, ...legacyParams } = params
+  return useQuery({
+    queryKey: ['logsLegacy', legacyParams],
+    queryFn: async () => (await api.get<LegacyLogPage>('/logs/legacy', { params: { ...legacyParams, source: 'legacy' } })).data,
+    enabled,
+    placeholderData: (prev) => prev,
   })
 }
 
