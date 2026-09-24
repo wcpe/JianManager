@@ -61,6 +61,7 @@ task dist       # 前端 + Bot Worker + 全部内嵌资产 + 四个发布二进�
 
 - **开发构建**：源码 `X.Y.Z-dev`，二进制 / Bot 归档 / 内嵌 Worker manifest 注入 `X.Y.Z-dev+g<7位sha>`；SHA 只存在于构建元数据，不写回源码。
 - **正式发布**：先由发版流程把源码改为裸 `X.Y.Z`，在同一提交创建 tag `vX.Y.Z`；Git tag / GitHub Release 使用 `vX.Y.Z`，二进制内部使用裸 `X.Y.Z`。
+- **发版前置红线**：创建发版 commit 与 tag **必须在基线提交（当前主干 tip）的远程 CI 全绿之后**。CI 未绿（含 flake 导致的红）时禁止改动 `version.go`、禁止归档 CHANGELOG、禁止打 tag；本地测试全绿不能替代 CI 结论。详见 [`.claude/rules/gate-merge.md`](../.claude/rules/gate-merge.md) §发版红线。
 - **强校验**：正式 tag 与源码裸版本不一致直接失败；普通分支出现无同 SHA 正式 tag 的裸版本也直接失败。普通分支位于已经打 tag 的裸版本提交时不重复发布 `latest`。
 - **单点消费**：发布 workflow 的 Bot Worker 内嵌、CP 内嵌 Worker、四个最终二进制、smoke 与 Release 全部使用 metadata job 的同一份输出，禁止各 job 自行拼版本。
 
