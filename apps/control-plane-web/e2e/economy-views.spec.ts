@@ -60,8 +60,9 @@ async function openEconomyCard(page: Page): Promise<void> {
   await login(page)
   await page.goto('/super')
 
-  // 画布初始为空。
-  await expect(page.getByText('画布为空').first()).toBeVisible()
+  // 画布初始为空。SuperWorkbenchPage 是路由级懒加载 chunk，CI 首次进入需现编译该 chunk，
+  // 期间渲染的是 Suspense fallback（「加载中...」），故首屏断言必须放宽超时（默认 5s 会假失败）。
+  await expect(page.getByText('画布为空').first()).toBeVisible({ timeout: 15_000 })
 
   // 实例库懒加载 1200 实例，等首行出现（含选择复选框）。首行 = 某实例。
   const firstRow = page.locator('li:has(input[type="checkbox"])').first()
