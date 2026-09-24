@@ -86,13 +86,37 @@ type FleetBotReclaim struct {
 
 ### 2.4 容量自动补足（target reconciler）
 
-对每个 `status = running` 的 `BotStressSession`：
+对每个**存活**的 `status = running` 的 `BotStressSession`（存活判定见 §2.4.1）：
 
 1. 目标 `target = Σ BotLoadBatch.planned_count`；实际 `actual = count(bots where desired_state=running AND status=connected AND deleted_at IS NULL)`；
 2. 若 `actual < target`，按缺失的稳定 ordinal（复用 `bot_load_execution.go:stableBotLoadOrdinals` / `botLoadOrdinalFromUUID`）重建缺失 Bot（`materializeBotLoadBots`）、经既有 `dispatchAllocation`/`ApplyBotBatch` 补发（复用 `rebuildRunningAssignment` 生成 assignment）；
 3. **不重复派发**：仅对 Worker 快照中确实不存在的 ordinal 补发，避免与 `ReconcileBotFleetSnapshot` 打架。
 
 触发：①回收事务提交后立即触发一次；②周期兜底（`botReclaimSweepInterval = 60s`，与 `evalInterval` 同量级）。
+
+#### 2.4.1 僵尸会话收敛（FR-472）
+
+**问题**：会话的生命周期终结依赖显式 `Stop` 调用。CP 重启或 bot-worker 死亡后该路径丢失，会话永久停留 `status = running`。原 §2.4 无条件捞取全部 running 会话补足，于是对早已失联的会话每拍重建期望行并失败——失败落在事务内，产生持续写盘。
+
+进程内退避（`refillAttempts map`）**无法兜住**：它随 CP 进程结束而清零，重启即触发一轮全量重试。因此僵尸判定必须落在**数据库可见的事实**上。
+
+**判定谓词**：一个 `status = running` 的会话是僵尸，当且仅当同时满足：
+
+1. 该会话在 `botZombieSessionIdleThreshold`（默认 **10 分钟**）内**无任何进展**；
+2. 其在线 Bot 数（`desired_state=running AND status=connected AND deleted_at IS NULL`）为 **0**；
+3. 该会话**不属于本拍已判定为待补足的活跃集合**（避免与正常补足竞态）。
+
+**进展**的定义（满足任一即视为有进展，重置计时）：会话 `updated_at` 被推进、或在窗口内曾出现过在线 Bot。取 `max(updated_at, 最近一次在线时刻)` 作为进展锚点。
+
+> **阈值依据**：Bot 宽限期为 2 分钟（§2.2，容忍一次世代迁移窗口）。僵尸阈值取 10 分钟，即宽限期的 5 倍，确保「Worker 短暂重启 / 世代迁移」不会误判；同时远短于现场观察到的 3 天量级残留。
+
+**动作**（`reapZombieSessions`，在 `refillRunningSessions` **之前**执行）：
+
+1. 将会话置为 `model.BotStressSessionStopped`，写 `ended_at` 与 `last_error`（注明「僵尸会话自动收敛」及判定依据）；
+2. 写一条强审计 `bot_reclaim.session_reaped`（含 sessionId / instanceId / 在线 Bot 数 0 / 停滞时长）；
+3. 该会话随后**不再进入补足扫描**（状态已非 running），从根上终止写放大。
+
+**不变量**：仍持有在线 Bot 的会话**永不**被收敛（反向由 `TestZombieSession_HealthySessionUntouched` 守护）。
 
 ### 2.5 巡检装配与 OSS
 
