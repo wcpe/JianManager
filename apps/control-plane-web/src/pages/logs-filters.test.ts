@@ -28,8 +28,9 @@ describe('logLevelStatus', () => {
 })
 
 describe('LOG_VIEWS', () => {
-  it('defines the two primary views and the administrator-only full search', () => {
-    expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all'])
+  it('defines the primary views plus the administrator-only full search and legacy view', () => {
+    // legacy 由 FR-481 引入：切换后存量日志走 Legacy 只读路径，需与 federated 视图分列。
+    expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all', 'legacy'])
   })
 })
 
