@@ -101,6 +101,22 @@ export interface LogsFederationResult {
 }
 
 /** axios / fetch 风格 404 判定。 */
+/**
+ * 联邦路径是否「不可用」（应降级到经典 /logs）。
+ *
+ * 覆盖：404（端点未部署）、401/403（未授权或认证不通过）、以及无响应的连接类失败
+ * （ECONNREFUSED / 超时 / DNS）。这些情形下联邦拿不到数据，但经典表格仍可用。
+ * 与「联邦可用但结果不完整」区分：后者带 coverage 语义，不降级、也不当空成功。
+ */
+export function isFederationUnavailable(error: unknown): boolean {
+  const status = (error as { response?: { status?: number } } | null)?.response?.status
+  if (typeof status === 'number') {
+    return status === 404 || status === 401 || status === 403
+  }
+  // 无响应：连接被拒/超时/DNS 失败视为不可用。
+  return true
+}
+
 export function isHttp404(error: unknown): boolean {
   const status = (error as { response?: { status?: number } } | null)?.response?.status
   return status === 404
@@ -436,7 +452,12 @@ export function useLogsFederation(
           degraded: false,
         })
       } catch (error) {
-        if (isHttp404(error)) {
+        // 「联邦不可用」一律降级为 legacy：404（未部署）、401（认证/未授权）、
+        // 连接失败（ECONNREFUSED/超时）都表示该路径当前拿不到数据。
+        // 此时经典 `/logs` 表格仍可用，必须回退而非让列表停留在空态
+        // （此前仅 404 降级，其他失败走 transportFailureEnvelope 且 degraded=false，
+        //   使 federationActive 误判为 true 并以空的 federationItems 为准 → 列表永久空白）。
+        if (isFederationUnavailable(error)) {
           return buildFederationResult(legacyDegradeEnvelope(), { degraded: true })
         }
         return buildFederationResult(
