@@ -626,6 +626,11 @@ function CoverageBanner({
           </span>
         )}
       </div>
+      {(degraded || federatedNotReady) && (
+        <p data-testid="logs-not-ready-hint" className="text-xs opacity-90">
+          {t('logsFederation.degradedHint')}
+        </p>
+      )}
       {(props.reasonKeys.length > 0 || classified.primaryReason) && (
         <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs opacity-90">
           {props.reasonKeys.map((key) => (

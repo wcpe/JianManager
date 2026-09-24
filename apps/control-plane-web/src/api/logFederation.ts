@@ -451,9 +451,18 @@ export function useLogsFederation(
 		if (tailMode) requestParams.mode = tailMode
 		const path = tailMode ? LOGS_FEDERATION_TAIL_PATH : LOGS_FEDERATION_PATH
         const { data } = await api.get<LogsFederationEnvelope>(path, { params: requestParams })
-        return buildFederationResult(data && typeof data === 'object' ? data : {}, {
-          degraded: false,
-        })
+        const envelope = data && typeof data === 'object' ? data : {}
+        // 日志查询引擎未就绪（受管 VL 未配置/未启动）时降级到经典 `/logs` 路径：
+        // 平台日志与切换前的实例日志本就能从 CP 库直接读，不应因为新引擎没开就让
+        // 用户连这些日志都看不到。
+        //
+        // 此前 federatedNotReady 只用于「显示」未就绪横幅，从未触发降级，导致未启用
+        // 日志平台时日志中心整体不可用（含平台日志本身）。这里复用同一判定（它已覆盖
+        // notes / errorCode / federatedReady=false / duplicate 未决）来决定降级。
+        if (mapFederationEnvelope(envelope).federatedNotReady) {
+          return buildFederationResult(legacyDegradeEnvelope(), { degraded: true })
+        }
+        return buildFederationResult(envelope, { degraded: false })
       } catch (error) {
         // 「联邦不可用」一律降级为 legacy：404（未部署）、401（认证/未授权）、
         // 连接失败（ECONNREFUSED/超时）都表示该路径当前拿不到数据。

@@ -3424,7 +3424,7 @@
     "exportFailed": "Log export failed",
     "empty": "No logs",
     "loadError": "Failed to load logs",
-	"statsEvents": "{{count}} events in this view",
+    "statsEvents": "{{count}} events in this view",
     "totalCount": "{{count}} total",
     "prevPage": "Previous",
     "nextPage": "Next",
@@ -3484,7 +3484,7 @@
     },
     "action": {
       "retry": "Retry",
-      "openNodes": "View node status",
+      "openNodes": "Enable log platform on Nodes page",
       "startRehydrate": "Start rehydrate",
       "requestOnline": "Query online nodes only",
       "reopenView": "Reopen view",
@@ -3499,17 +3499,17 @@
       "blockedNotReady": "Export not ready or not verified",
       "blockedPermission": "Insufficient or revoked permission; cannot download",
       "permissionRecheckHint": "Permission is rechecked before download",
-      "nextCursorHint":
-        "A null cursor only ends enumeration of the current view; it does not mean full history is complete."
+      "nextCursorHint": "A null cursor only ends enumeration of the current view; it does not mean full history is complete."
     },
     "sourceTag": {
       "legacy": "Legacy",
       "federated": "Federated"
     },
-    "degraded": "Log federation API unavailable; degraded to legacy logs view",
-    "federatedNotReady":
-      "Federated log query path is not ready (ErrFederatedNotReady); results may be incomplete and must not be treated as empty",
-    "emptyNotSuccess": "Coverage incomplete or query failed — this is not an empty result"
+    "degraded": "Log query service is not enabled; switched to platform and historical logs",
+    "federatedNotReady": "Log query service is not enabled; switched to platform and historical logs",
+    "emptyNotSuccess": "Coverage incomplete or query failed — this is not an empty result",
+    "degradedHint": "Platform and historical logs remain available. To query per-server live logs, enable the log platform under Nodes → node → Log runtime panel.",
+    "federatedNotReadyHint": "Platform and historical logs remain available. To query per-server live logs, enable the log platform under Nodes → node → Log runtime panel."
   },
   "users": {
     "title": "User Management",
