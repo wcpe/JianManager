@@ -37,7 +37,7 @@
 
 ### 新增
 - **Worker 日志平台地基与部分接线（FR-473~484，ADR-094；契约 FR-473 已冻结）**：在 `feature/fr-log-platform-foundation` 落地实现波次，**未宣称整期已交付**。Worker 侧：`internal/worker/logs/{logtypes,ledger,acquire,normalize,vlsup,catalog,query,pipeline,lifecycle,archive}` + `query/{grpcmap,grpcsvc}`。Control Plane 侧：`logcoord` + **联邦 HTTP 已注册**（`GET /api/v1/logs/federation` 门面 + `search/stats/facets/export`）；`LogCutover`/`LegacyLogReader`（**默认关闭**）+ 切换管理面 HTTP。前端：`logs-federation` + LogsPage 覆盖横幅/导出门禁，探测门面、404 降级 legacy。`proto/worker.proto` Log RPC 已重生成 `workerpb`。此后已补齐并真机验收（见本段「新增/修复」）：Worker 主进程 gRPC Log 装配、生产 TunnelDialer/ClientPool 工厂、CP main 构造 LogCoord、真实 S3/MinIO 客户端、Runbook A/B/C 真机。**不交付成功附件 / 不空成功** 约束已写入服务与 UI。
-- **日志平台文档对账（FR-483，本波）**：ARCHITECTURE 补 Worker 日志数据面「契约已冻结 + 地基/接线中」状态表与包清单；API 补 Worker Log RPC 摘要、联邦端点规划面（标明 HTTP 未注册）与已注册 cutover/Legacy 端点契约；PRD FR-478~483 状态对齐工作区进度；相关 worker-log / 联邦 / 切换规格状态改为实现中。
+- **日志平台文档对账（FR-483，本波）**：ARCHITECTURE 补 Worker 日志数据面「契约已冻结 + 地基/接线中」状态表与包清单；API 补 Worker Log RPC 摘要、联邦端点规划面（**当时标明 HTTP 未注册；该状态随后已被注册取代，见上一条**）与已注册 cutover/Legacy 端点契约；PRD FR-478~483 状态对齐工作区进度；相关 worker-log / 联邦 / 切换规格状态改为实现中。
 - **日志平台受控文档补齐（FR-483）**：新增 `docs/specs/worker-victorialogs-runtime/asset-inventory.md`（VL v1.52.0 资产清单：tag/build_id/release commit、双平台包与解包可执行 SHA-256、Apache-2.0 许可、构建日期、复现校验与安装/变更规则；并修正 FR-476 规格原指向已 gitignore 的 `.tmp` 审批文件的悬空引用）与 `docs/specs/worker-log-platform-contract/recovery-manual.md`（切换、数据损失边界、资源预算与 80/90 磁盘阈值、合法部署组合、WAL/Catalog/VL/磁盘满/Deep 归档/Rehydrate/cutover 故障处置流程与管理入口）。
 
 ### 已知问题（发布前待处置）
