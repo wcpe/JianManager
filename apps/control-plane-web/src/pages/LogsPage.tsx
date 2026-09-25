@@ -46,6 +46,22 @@ import {
   type LogExportScope,
 } from './logs-filters'
 
+/**
+ * 把事件的原始来源标识归一为下拉取值域（instance/control_plane/worker）。
+ *
+ * 事件结构（SourceIdentity）只带 log_source_id、不含类别字段，其取值形如
+ * `inst:<实例ID>/<流>`（实例进程日志）或 `node:<节点ID>/<流>`（Worker/Node 自身日志），
+ * 与下拉取值域不同构——直接渲染会查不到 i18n 键而显示原始 ID。
+ * 前端与 CP 侧 federationSourcePrefix 使用同一套前缀约定，两侧须同步修改。
+ */
+function normalizeSource(raw: string): string {
+  if (raw.startsWith('inst:') || raw.startsWith('instance:')) return 'instance'
+  if (raw.startsWith('node:') || raw.startsWith('worker:')) return 'worker'
+  if (raw.startsWith('control_plane:') || raw.startsWith('cp:')) return 'control_plane'
+  // 已是取值域内的裸类别（含旧数据）原样返回；其余保持原值由 i18n 兜底显示。
+  return raw
+}
+
 /** 联邦事件 → LogEntry 行（F-003：列表主数据源）。 */
 function mapFederationItems(items: unknown[] | null | undefined): LogEntry[] {
   if (!Array.isArray(items)) return []
@@ -64,7 +80,13 @@ function mapFederationItems(items: unknown[] | null | undefined): LogEntry[] {
     const nodeRaw = o.node_id ?? o.nodeId
     return {
       id: typeof o.id === 'number' ? o.id : -(index + 1),
-      source: typeof o.source === 'string' ? o.source : typeof o.log_source_id === 'string' ? o.log_source_id : 'instance',
+      source: normalizeSource(
+        typeof o.source === 'string'
+          ? o.source
+          : typeof o.log_source_id === 'string'
+            ? o.log_source_id
+            : 'instance',
+      ),
       level,
       instanceId: typeof instRaw === 'number' ? instRaw : 0,
       instanceUuid: typeof o.instance_uuid === 'string' ? o.instance_uuid : '',
@@ -484,7 +506,7 @@ export default function LogsPage() {
             value={source === '' ? SENTINEL_ALL : source}
             onValueChange={(v: string) => resetTo(setSource)(v === SENTINEL_ALL ? '' : v)}
           >
-            <SelectTrigger size="sm" className="w-32">
+            <SelectTrigger size="sm" className="w-32" data-testid="logs-source-select">
               <SelectValue placeholder={t('logs.allSources')} />
             </SelectTrigger>
             <SelectContent>

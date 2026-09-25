@@ -7,7 +7,7 @@
  * - sourceTag=legacy → Legacy 徽标；404 → 降级 legacy 视图 + 横幅；
  * - ErrFederatedNotReady → 联邦未就绪说明，空结果不当成功。
  */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -519,6 +519,62 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 		await user.click(screen.getByRole('button', { name: '仅查在线节点' }))
 		await waitFor(() =>
 			expect(seen.some((u) => new URL(u).searchParams.get('onlineOnly') === 'true')).toBe(true),
+		)
+	})
+
+	it('⑭ 来源为原始 log_source_id 时归一显示为可读标签', async () => {
+		loginMockUser()
+		server.use(
+			http.get(API('/logs/federation'), () => HttpResponse.json({
+				sourceTag: 'federated',
+				items: [
+					// 事件结构只有 log_source_id，取值形如 inst:<实例ID>/<流>
+					{ id: 1, log_source_id: 'inst:144/file', level: 'info', instanceId: 144, nodeId: 1, message: 'instance-src-line', time: '2026-07-18T12:00:00Z' },
+					{ id: 2, log_source_id: 'node:1/worker', level: 'info', instanceId: 0, nodeId: 1, message: 'worker-src-line', time: '2026-07-18T12:00:01Z' },
+				],
+				coverage: { complete: true, partial_reasons: [], targets: [] },
+				quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+			})),
+		)
+		renderWithProviders(<LogsPage />)
+		// 归一后应显示 i18n 标签（实例/节点），而非原始 inst:144/file
+		await screen.findByText('instance-src-line')
+		expect(screen.queryByText('inst:144/file')).toBeNull()
+		expect(screen.getAllByText('实例').length).toBeGreaterThan(0)
+		expect(screen.getByText('worker-src-line')).toBeInTheDocument()
+		expect(screen.getAllByText('节点').length).toBeGreaterThan(0)
+	})
+
+	it('⑮ 选择来源后 source 参数下发到联邦请求', async () => {
+		// 来源下拉仅在「全部日志」视图渲染，该视图仅平台管理员可见（与既有用例同一 token 构造）
+		const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
+		loginMockUser(`mock.${payload}.sig`)
+		const seen: string[] = []
+		server.use(
+			http.get(API('/logs/federation'), ({ request }) => {
+				seen.push(request.url)
+				return HttpResponse.json({
+					sourceTag: 'federated', items: seedLogsPage.items,
+					coverage: { complete: true, partial_reasons: [], targets: [] },
+					quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+				})
+			}),
+		)
+		renderWithProviders(<LogsPage />)
+		await screen.findByText('federation-seed-log-line')
+		const user = userEvent.setup()
+		// 来源下拉仅在「全部日志」视图渲染，须先切换视图
+		await user.click(screen.getByRole('tab', { name: '全部日志' }))
+		const trigger = await screen.findByTestId('logs-source-select')
+		// jsdom 未实现 scrollIntoView，Radix Select 展开时会调用它；仅本用例需要该垫片。
+		Element.prototype.scrollIntoView = vi.fn()
+		// Radix Select 用键盘激活：聚焦后回车展开，再选「实例」项
+		trigger.focus()
+		await user.keyboard('{Enter}')
+		const option = await screen.findByRole('option', { name: '实例' })
+		await user.click(option)
+		await waitFor(() =>
+			expect(seen.some((u) => new URL(u).searchParams.get('source') === 'instance')).toBe(true),
 		)
 	})
 

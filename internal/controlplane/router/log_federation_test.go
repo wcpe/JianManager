@@ -565,3 +565,83 @@ func TestLogFederation_LevelFilterRejectsNonWhitelist(t *testing.T) {
 		})
 	}
 }
+
+// TestLogFederation_SourceFilterReachesWorker 验证来源筛选按前缀推导下发到 Worker。
+//
+// 事件结构只有 log_source_id（形如 inst:<实例ID>/<流>），前端下拉取值域为
+// instance/control_plane/worker；此前联邦路由完全不读 source 参数，用户选择无任何反应。
+func TestLogFederation_SourceFilterReachesWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		source   string
+		wantTerm string
+	}{
+		{name: "实例类", source: "instance", wantTerm: `log_source_id:"inst:"`},
+		{name: "节点类", source: "worker", wantTerm: `log_source_id:"node:"`},
+		{name: "平台类在联邦面无源", source: "control_plane", wantTerm: `log_source_id:"control_plane:"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w1 := &fedWorker{
+				items:   []logcoord.Event{fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "INFO", "hi")},
+				targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+			}
+			resolver := &fedResolver{targets: []logcoord.TargetInfo{
+				{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+			}}
+			coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+			r, _ := setupFederationRouter(t, coord)
+			token := getAdminToken(t, r)
+
+			w := makeRequest(r, "GET", "/api/v1/logs/federation/search?limit=100&source="+tc.source, nil, token)
+			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+			assert.Contains(t, w1.lastFilter, tc.wantTerm, "来源须推导为 log_source_id 前缀下发")
+		})
+	}
+}
+
+// TestLogFederation_SourceAndLevelCombined 验证来源与级别同时存在时二者都进表达式，
+// 且含 OR 的关键词被括号包裹（AND 优先级高于 OR，否则约束会被绕过）。
+func TestLogFederation_SourceAndLevelCombined(t *testing.T) {
+	w1 := &fedWorker{
+		items:   []logcoord.Event{fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "ERROR", "boom")},
+		targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+	}
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+	}}
+	coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+	r, _ := setupFederationRouter(t, coord)
+	token := getAdminToken(t, r)
+
+	w := makeRequest(r, "GET",
+		"/api/v1/logs/federation/search?limit=100&source=instance&level=error&keyword="+url.QueryEscape("a OR b"),
+		nil, token)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	f := w1.lastFilter
+	assert.Contains(t, f, `log_source_id:"inst:"`, "来源须进表达式")
+	assert.Contains(t, f, "level:ERROR", "级别须进表达式")
+	assert.Contains(t, f, "(a OR b)", "含 OR 的关键词须加括号，否则 AND 约束被绕过")
+}
+
+// TestLogFederation_SourceFilterRejectsNonWhitelist 验证非法来源值不进入表达式（防注入）。
+func TestLogFederation_SourceFilterRejectsNonWhitelist(t *testing.T) {
+	for _, bad := range []string{"inst:1", "*", `instance" OR "1"="1`, "instance;DROP", "unKNOWN"} {
+		t.Run(bad, func(t *testing.T) {
+			w1 := &fedWorker{
+				items:   []logcoord.Event{fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "INFO", "hi")},
+				targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+			}
+			resolver := &fedResolver{targets: []logcoord.TargetInfo{
+				{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+			}}
+			coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+			r, _ := setupFederationRouter(t, coord)
+			token := getAdminToken(t, r)
+
+			w := makeRequest(r, "GET", "/api/v1/logs/federation/search?limit=100&source="+url.QueryEscape(bad), nil, token)
+			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+			assert.NotContains(t, w1.lastFilter, "log_source_id:", "非法 source 不得进入表达式")
+			assert.NotContains(t, w1.lastFilter, "DROP", "非法 source 不得进入表达式")
+		})
+	}
+}

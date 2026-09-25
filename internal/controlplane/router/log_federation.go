@@ -134,29 +134,37 @@ func federationPermissionScope(access *service.UserAccess, targets []string) str
 // federationFilter 把结构化筛选参数组合为 LogsQL 过滤表达式。
 //
 // 背景：wire 契约（LogQueryRequestBase）只有单一 filter 表达式字段，没有结构化的
-// level 等参数。经典 /logs 路径支持按级别筛选（log.go 的 buildFilter），联邦路径
-// 若不在此组合，用户在联邦视图点「错误」不会有任何反应——同一界面两条路径行为不一致。
+// level / source 等参数。经典 /logs 路径支持按级别与来源筛选（log.go 的 buildFilter），
+// 联邦路径若不在此组合，用户在联邦视图点「错误」或选「来源」不会有任何反应——
+// 同一界面两条路径行为不一致。
 //
 // 组合时必须给 keyword 加括号：LogsQL 中 AND 优先级高于 OR，`a OR b AND level:X`
 // 会被解析为 `a OR (b AND level:X)`，使级别筛选对含 OR 的关键词失效。实测
 // `LIVE-TEST OR Notch AND level:INFO` 命中 4 条，而 `(LIVE-TEST OR Notch) AND level:INFO`
-// 命中 2 条——故 level 存在时把 keyword 包成 `(keyword) AND level:X`。
+// 命中 2 条——故存在结构化约束时把 keyword 包成 `(keyword) AND ...`。
 //
-// level 走白名单：它来自用户输入，直接拼进表达式会引入注入面。
+// level 与 source 均走白名单：它们来自用户输入，直接拼进表达式会引入注入面。
 func federationFilter(c *gin.Context) string {
 	keyword := strings.TrimSpace(c.Query("keyword"))
-	level := strings.ToLower(strings.TrimSpace(c.Query("level")))
 
-	if !isFederationLevel(level) {
-		// 无合法 level：保持既有行为，keyword 原样下发（其内部布尔结构由用户自负）。
+	terms := make([]string, 0, 2)
+	if level := strings.ToLower(strings.TrimSpace(c.Query("level"))); isFederationLevel(level) {
+		// VL 中级别以大写存储（ERROR/INFO/WARN）；LogsQL 大小写敏感，故统一转大写。
+		terms = append(terms, "level:"+strings.ToUpper(level))
+	}
+	if prefix, ok := federationSourcePrefix(strings.ToLower(strings.TrimSpace(c.Query("source")))); ok {
+		terms = append(terms, `log_source_id:"`+prefix+`"`)
+	}
+
+	if len(terms) == 0 {
+		// 无结构化约束：保持既有行为，keyword 原样下发（其内部布尔结构由用户自负）。
 		return keyword
 	}
-	// VL 中级别以大写存储（ERROR/INFO/WARN）；LogsQL 大小写敏感，故统一转大写。
-	levelTerm := "level:" + strings.ToUpper(level)
+	joined := strings.Join(terms, " AND ")
 	if keyword == "" {
-		return levelTerm
+		return joined
 	}
-	return "(" + keyword + ") AND " + levelTerm
+	return "(" + keyword + ") AND " + joined
 }
 
 // isFederationLevel 白名单校验：仅接受契约登记的四个级别。
@@ -166,6 +174,33 @@ func isFederationLevel(v string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// federationSourcePrefix 把前端来源类别映射为 log_source_id 前缀。
+//
+// 事件结构（SourceIdentity）只有 log_source_id、不含类别字段；前端下拉取值域为
+// model.LogSource 的 instance/control_plane/worker，与事件实际取值不同构，故按前缀
+// 推导对齐。生产实证取值形如 `inst:<实例ID>/<流>`（构造点 worker/logs/ingest/instances.go）。
+// VL 的字段匹配即前缀语义：实测 `log_source_id:"inst:"` 与 `"node:"` 分别命中
+// 354797 / 0 条（生产仅实例类），故不带通配符即可完成前缀过滤。
+//
+// 取值走白名单：来自用户输入，须防注入。
+func federationSourcePrefix(v string) (string, bool) {
+	switch v {
+	case "instance":
+		// 实例进程 stdout/stderr 日志，采集侧以 inst:<实例ID> 登记。
+		return "inst:", true
+	case "worker":
+		// Worker/Node 自身日志，采集侧以 node:<节点ID> 登记（见 configs/worker.yml 示例）。
+		return "node:", true
+	case "control_plane":
+		// CP 自身结构化日志只落 CP 库、不进联邦数据面，该类别在联邦视图无匹配源。
+		// 显式给一个不可能存在的前缀，使联邦视图诚实地返回零结果，
+		// 而非当作「无约束」放行全量。
+		return "control_plane:", true
+	default:
+		return "", false
 	}
 }
 
