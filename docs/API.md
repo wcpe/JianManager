@@ -3086,6 +3086,22 @@
   - Stats/Facets/Export 语义继承 FR-473/480；导出缺口/截断/超预算 **不交付成功附件**
   - **状态**: 聚合与导出门禁已注册到 HTTP；真实 managed VL 结果路径与真机联邦已通过，跨 Tier/失败态矩阵已验收
 
+- **`GET /api/v1/logs/federation/tail`** — 实时跟随（FR-482）
+  - **关联 FR**: FR-479, FR-480, FR-482
+  - **权限**: 认证用户；与 Search 同一套资源收敛（授权实例、平台/全量视图仅平台管理员）
+  - **Query**: 继承 Search 的筛选参数，另加 `mode`
+    - `mode=FOLLOW_LIVE`（默认）— 有界动态窗口，随水位前移返回新事件；LogsPage「实时跟随」即用此档
+    - `mode=VIEW_BOUNDED` — 在既有 view 边界内取尾（不随水位扩展）
+  - **响应**: 同 Search `{ view, coverage, quality, items[], nextCursor, exhausted }`；`coverage.enumerationState=OPEN` 表示窗口仍在推进
+  - **状态**: 已注册并有路由层测试（`log_federation_test.go` 覆盖 `mode=FOLLOW_LIVE`）；前端 `LOGS_FEDERATION_TAIL_PATH` 按 `follow` 态轮询
+
+- **`GET /api/v1/logs/federation/fields`** — 可用字段发现（FR-479）
+  - **关联 FR**: FR-479, FR-480
+  - **权限**: 同 Search
+  - **Query**: 继承 Search 的筛选参数（`from`/`to`、`keyword`、`level`、`nodeId`/`instanceId` 等）
+  - **响应**: `{ view, coverage, fields: string[] }`
+  - **状态**: 已注册并有路由层测试；用于在授权范围内列出可检索字段，能力不可用时同样返回结构化 not-ready（不空成功）
+
 ### 日志入库切换与 Legacy 端点（FR-481，**HTTP 已注册**）
 
 > 路由：`internal/controlplane/router/log_cutover.go`，在 `router.go` 经 `permRead("node.manage")` 挂载；handler 再判 **平台管理员**。PUT 写审计 `log.cutover.update`。**默认 `enabled=false`**。
