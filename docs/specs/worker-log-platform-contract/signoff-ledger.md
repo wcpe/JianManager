@@ -17,7 +17,7 @@
 
 | FR | 判定 | 已有证据 | 缺口 / 待你决定 |
 |---|---|---|---|
-| FR-473 | ✅ 可签 | Shared Contracts 冻结、ADR-094 accepted、proto 契约冻结 | 契约类 FR，交付物即契约本身；PRD 自述「不等于已交付」指其下游实现 |
+| FR-473 | ✅ 可签 | Shared Contracts 冻结、ADR-094 accepted、proto 契约冻结。**冻结退出条件逐项核实（2026-09-26）**：① ADR-094 `accepted`；② proto 冻结——`worker.proto` 含 10 个日志 RPC（能力协商 `GetLogCapabilities` + `LogCreateView/LogSearch/LogStats/LogFields/LogFacets`）；③ VL 发行资产正式审批——`asset-inventory.md` §1「审批基线」v1.52.0；④ 性能判据入契约——`spec.md` 含 8 处 p95/RSS 判据。四项均满足 | 契约类 FR，交付物即契约本身；PRD 自述「不等于已交付」指其下游实现（分别归 FR-474~484 各自验收） |
 | FR-474 | ✅ 可签 | 生产采集/投影/ACK 恢复/reclaim 通过；**Runbook A 真机 `kill -9` 重启通过**；磁盘容量**真实填盘验收通过**（容器内受限 tmpfs `--tmpfs /data:size=48m`：真实越过 80%→`DEGRADED_STORAGE`、91.67%→`PAUSED` 必记缺口；经真实 `Pipeline.Ingest` 落账本 `AcquirePaused`+缺口+未投递；**真实 ENOSPC** 填至 100% 观测 `no space left on device`）。证据 `worker-log-acquisition/acceptance-real.md` | 无 |
 | FR-475 | ✅ 可签 | **真机验收通过**（真 VL v1.52.0）：Multiline 5 行归并为 1 事件且保留 `Caused by`、跨午夜回拨正确（未猜成未来）、半条事件被 Flush 闭合、账本 ready；**修复损坏编码致 hash 与 VL 正文不一致的缺陷**（净化 + `encoding_sanitized` 审计标记，VL 侧重算 hash 一致）；7 条新回归 + 2 项变异验证。证据 `worker-log-normalizer/acceptance-real.md` | 无（规格 §5 四类边界已全部覆盖） |
 | FR-476 | ✅ 可签 | v1.52.0 资产审批、supervisor/CP runtime 面、远程三实例、预算采样与 80/90 降级、**CP 资产上传→签名下载→Worker 安装真机闭环**、GOMEMLIMIT 调优；**Windows 包校验与解包已补真机证据**（真实包经 asset API 下载：双层哈希与审批值一致、`InstallApprovedPackage` 真实 zip 解包 PASS、CP `Cache`/`Open` 校验通过并拒绝篡改）。证据 `worker-victorialogs-runtime/acceptance-windows.md` | **未覆盖的仅是「Windows 主机实机部署验证」**。经差异面盘点：`vlsup` 的 Windows 特有分支**仅 1 处**（zip 格式选择，已验证），其余（优雅停机编排/预算/重启/无 VL 降级）为平台无关逻辑且有 25 例测试覆盖，进程停止信号亦已按平台差异处理（`exec.go` Interrupt + grace + Kill 兜底）→ 不是逻辑未覆盖，而是实机执行未做（本机无 Wine/qemu，容器共享宿主内核）。**用户已裁决接受为已知边界**（2026-09-25）|
