@@ -3046,7 +3046,7 @@
 
 ## Worker 日志平台（FR-473～484，地基 + 接线中）
 
-> **接线状态（FR-483 对账）**：Shared Contracts 已冻结。CP `main` 已装配 `logcoord.Assemble`，Worker `main` 已装配持久 Catalog、采集运行时、受管 VL supervisor、RangeClient、归档 Provider 和 Log RPC。配置受管 VL 时能力真实可用；未配置或不健康时仍明确返回 `LOG_UNSUPPORTED`。联邦、runtime status/control、归档状态/恢复管理面已注册；cutover **默认关闭**。Runbook A/B/C、失败态矩阵（DOM 19 项 + 真浏览器）与发布级性能（30 分钟压测 + 64 源容量曲线）均已真机验收通过；证据在 `.tmp/fr433-experiments/`。
+> **接线状态（FR-483 对账）**：Shared Contracts 已冻结。CP `main` 已装配 `logcoord.Assemble`，Worker `main` 已装配持久 Catalog、采集运行时、受管 VL（VictoriaLogs，选型见 ADR-094）supervisor、RangeClient、归档 Provider 和 Log RPC。配置受管 VL 时能力真实可用；未配置或不健康时仍明确返回 `LOG_UNSUPPORTED`。联邦、runtime status/control、归档状态/恢复管理面已注册；cutover **默认关闭**。Runbook A/B/C、失败态矩阵（DOM 19 项 + 真浏览器）与发布级性能（30 分钟压测 + 64 源容量曲线）均已真机验收通过；证据在 `.tmp/fr433-experiments/`。
 
 ### Worker Log RPC 摘要（gRPC，`proto/worker.proto`）
 

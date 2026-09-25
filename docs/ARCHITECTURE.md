@@ -294,7 +294,7 @@ internal/worker/
 
 **状态**：Shared Contracts **已冻结**（FR-473，ADR-094 accepted）。**生产装配已落地**：CP `main` 构造 `logcoord.Assemble` 并经反向隧道联邦；Worker `main` 装配持久 Catalog、采集运行时、受管 VL supervisor、RangeClient、归档 Provider 和 Log RPC。联邦 HTTP（含 `/logs/federation` 门面）、runtime status/control、cutover/Legacy HTTP 已注册。**真机验收已完成**：Runbook A/B/C、CP 资产分发闭环、Deep Archive/Rehydrate（RustFS S3）、Legacy/cutover、真浏览器 UI 与 §6.6 30 分钟压测（含 64 源容量曲线）均通过并归档证据于 `.tmp/fr433-experiments/`（临时证据，不入库）。当前受管 VL 资产基线为 v1.52.0；cutover 默认关闭。
 
-目标架构采用 Worker 本地日志数据面 + CP 联邦查询：Worker 可在受管数据根保存 VL HOT/COLD/Rehydrate 数据、WAL、采集账本、Partition Catalog、canonical projection manifest/checkpoint、冲突和受管 Raw；这些数据属于 Worker-owned 日志数据，不是 CP 业务数据库。Worker 本地 SQLite 仅保存日志元数据，不能成为第二个全文检索引擎。
+目标架构采用 Worker 本地日志数据面（受管 VictoriaLogs，下文简称 VL，选型见 ADR-094；发行资产审批见 FR-476） + CP 联邦查询：Worker 可在受管数据根保存 VL HOT/COLD/Rehydrate 数据、WAL、采集账本、Partition Catalog、canonical projection manifest/checkpoint、冲突和受管 Raw；这些数据属于 Worker-owned 日志数据，不是 CP 业务数据库。Worker 本地 SQLite 仅保存日志元数据，不能成为第二个全文检索引擎。
 
 Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器；CP 业务 SQLite/MySQL、权限数据和 ADR-013 指标时序仍只由 CP 读写。CP→Worker 日志 RPC 只经 Worker 主动建立的 ADR-081 反向隧道，Worker/VL 只监听 localhost。Search/Stats/Fields/Facets/Tail/Rehydrate/Export 使用 FR-473 Query View、Catalog owner、PublishedProjection 和 coverage；浏览器不得直连 Worker/VL。该边界对应已 accepted 的 ADR-094；Worker 生产组件级 Runbook A/B/C 分别归属 FR-474/476/477 开发验收，不是契约冻结前置。
 
