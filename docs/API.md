@@ -3078,7 +3078,8 @@
 - **`GET /api/v1/logs/federation`** — 跨 Worker 联邦检索（FR-480）
   - **关联 FR**: FR-479, FR-480, FR-482
   - **权限**: 认证用户；资源收敛到授权实例；平台/全量视图仅平台管理员
-  - **Query**: `from`/`to`、`keyword`/`filter`、`level`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`limit`、`cursor`、`orderVersion`
+  - **Query**: `from`/`to`、`keyword`/`filter`、`level`、`source`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`limit`、`cursor`、`orderVersion`
+  - **筛选语义**: `level` 与 `source` 在 CP 侧组合进单一 `filter` 表达式（wire 契约只有该字段），取值走白名单防注入。`source` 取 `instance`/`worker`/`control_plane`，按事件 `log_source_id` 前缀（`inst:`/`node:`）推导——事件结构不含类别字段，前端来源下拉与其不同构，故两侧用同一套前缀约定对齐。`control_plane` 类日志只落 CP 库、不进联邦数据面，该值会诚实返回零结果而非放行全量。
   - **响应**: `{ view, coverage, quality, items[], nextCursor, exhausted }`
   - **状态**: logcoord + HTTP + **生产 Assemble（pool/node/instance）**；远程与真机联邦 Search/Stats/Facets/Export 通过，失败态矩阵（DOM 19 项 + 真浏览器）已验收
 
