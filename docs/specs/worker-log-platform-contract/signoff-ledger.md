@@ -20,7 +20,7 @@
 | FR-473 | ✅ 可签 | Shared Contracts 冻结、ADR-094 accepted、proto 契约冻结 | 契约类 FR，交付物即契约本身；PRD 自述「不等于已交付」指其下游实现 |
 | FR-474 | ✅ 可签 | 生产采集/投影/ACK 恢复/reclaim 通过；**Runbook A 真机 `kill -9` 重启通过**；磁盘容量**真实填盘验收通过**（容器内受限 tmpfs `--tmpfs /data:size=48m`：真实越过 80%→`DEGRADED_STORAGE`、91.67%→`PAUSED` 必记缺口；经真实 `Pipeline.Ingest` 落账本 `AcquirePaused`+缺口+未投递；**真实 ENOSPC** 填至 100% 观测 `no space left on device`）。证据 `worker-log-acquisition/acceptance-real.md` | 无 |
 | FR-475 | ✅ 可签 | **真机验收通过**（真 VL v1.52.0）：Multiline 5 行归并为 1 事件且保留 `Caused by`、跨午夜回拨正确（未猜成未来）、半条事件被 Flush 闭合、账本 ready；**修复损坏编码致 hash 与 VL 正文不一致的缺陷**（净化 + `encoding_sanitized` 审计标记，VL 侧重算 hash 一致）；7 条新回归 + 2 项变异验证。证据 `worker-log-normalizer/acceptance-real.md` | 无（规格 §5 四类边界已全部覆盖） |
-| FR-476 | ⚠ 一条待裁决 | v1.52.0 资产审批、supervisor/CP runtime 面、远程三实例、预算采样与 80/90 降级、**CP 资产上传→签名下载→Worker 安装真机闭环**、GOMEMLIMIT 调优；**Windows 包校验与解包已补真机证据**（真实包经 asset API 下载：双层哈希与审批值一致、`InstallApprovedPackage` 真实 zip 解包 PASS、CP `Cache`/`Open` 校验通过并拒绝篡改）。证据 `worker-victorialogs-runtime/acceptance-windows.md` | **未覆盖的仅是「Windows 主机实机部署验证」**。经差异面盘点：`vlsup` 的 Windows 特有分支**仅 1 处**（zip 格式选择，已验证），其余（优雅停机编排/预算/重启/无 VL 降级）为平台无关逻辑且有 25 例测试覆盖，进程停止信号亦已按平台差异处理（`exec.go` Interrupt + grace + Kill 兜底）→ 不是逻辑未覆盖，而是实机执行未做（本机无 Wine/qemu，容器共享宿主内核）|
+| FR-476 | ✅ 可签 | v1.52.0 资产审批、supervisor/CP runtime 面、远程三实例、预算采样与 80/90 降级、**CP 资产上传→签名下载→Worker 安装真机闭环**、GOMEMLIMIT 调优；**Windows 包校验与解包已补真机证据**（真实包经 asset API 下载：双层哈希与审批值一致、`InstallApprovedPackage` 真实 zip 解包 PASS、CP `Cache`/`Open` 校验通过并拒绝篡改）。证据 `worker-victorialogs-runtime/acceptance-windows.md` | **未覆盖的仅是「Windows 主机实机部署验证」**。经差异面盘点：`vlsup` 的 Windows 特有分支**仅 1 处**（zip 格式选择，已验证），其余（优雅停机编排/预算/重启/无 VL 降级）为平台无关逻辑且有 25 例测试覆盖，进程停止信号亦已按平台差异处理（`exec.go` Interrupt + grace + Kill 兜底）→ 不是逻辑未覆盖，而是实机执行未做（本机无 Wine/qemu，容器共享宿主内核）。**用户已裁决接受为已知边界**（2026-09-25）|
 
 > **勘误（2026-09-24）**：本台账曾把 FR-476 登记为「外部阻塞·本机网络不可达 GitHub」，**该判断有误**。
 > 我只测了 `github.com` 的 releases 下载端点（超时）就下了结论；实际 `api.github.com` 可达，
@@ -37,8 +37,8 @@
 
 ## 汇总
 
-- **可签（11 条）**：FR-473、FR-474、FR-475、FR-477、FR-478、FR-479、FR-480、FR-481、FR-482、FR-483、FR-484
-- **一条待裁决（1 条）**：**FR-476**——资产审批、supervisor/CP runtime 面、预算采样与降级、CP→Worker 真机闭环、Windows 包双层哈希与解包均已有真机证据；**仅余「Windows 主机上的运行时行为」未做实机执行**（本机 linux-amd64，无 Wine/qemu）。经差异面盘点，`vlsup` 的 Windows 特有分支仅 1 处（zip 格式选择，已验证），其余为平台无关逻辑且有 25 例测试覆盖 → 属「实机执行未做」而非「逻辑未覆盖」。请裁决：接受为已知边界，或提供 Windows 机器补齐。
+- **可签（12 条，全部）**：FR-473、FR-474、FR-475、FR-476、FR-477、FR-478、FR-479、FR-480、FR-481、FR-482、FR-483、FR-484
+- **FR-476 用户裁决（2026-09-25）**：**接受「Windows 主机运行时行为」为已知边界**。依据：资产审批、supervisor/CP runtime 面、预算采样与降级、CP→Worker 真机闭环、Windows 包双层哈希与 zip 解包均已有真机证据（真实 6 127 882 字节包经生产代码路径验证）；差异面盘点为 `vlsup` 的 Windows 特有分支仅 1 处（zip 格式选择，已由 `TestInstallPackageVerifiesBothHashesAndPublishesVersionDirectory/windows` 子测试覆盖），其余为平台无关逻辑且有 25 例测试覆盖（`supervisor_test.go` 18 + `budget_test.go` 7），进程停止信号亦按平台差异处理（`exec.go` Interrupt + grace + Kill）。本机无 Wine/qemu，属「实机执行未做」而非「逻辑未覆盖」。
 
 > 编号提示：本批 FR 经两次让路重编号（FR-433～444 → FR-472～483 → **FR-473～484**）。
 > 若你此前记录的是 FR-472～483，请按 **+1** 对应（例如此前的 FR-481 = 现在的 FR-482）。
