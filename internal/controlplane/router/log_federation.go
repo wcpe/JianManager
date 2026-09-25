@@ -131,6 +131,38 @@ func federationPermissionScope(access *service.UserAccess, targets []string) str
 		kind, access.RoleKey, access.AuthVersion, nsum[:6], tsum[:6])
 }
 
+// federationFilter 把结构化筛选参数组合为 LogsQL 过滤表达式。
+//
+// 背景：wire 契约（LogQueryRequestBase）只有单一 filter 表达式字段，没有结构化的
+// level 等参数。经典 /logs 路径支持按级别筛选（log.go 的 buildFilter），联邦路径
+// 若不在此组合，用户在联邦视图点「错误」不会有任何反应——同一界面两条路径行为不一致。
+//
+// level 走白名单：它来自用户输入，直接拼进表达式会引入注入面。
+func federationFilter(c *gin.Context) string {
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	level := strings.ToLower(strings.TrimSpace(c.Query("level")))
+
+	var parts []string
+	if keyword != "" {
+		parts = append(parts, keyword)
+	}
+	if isFederationLevel(level) {
+		// VL 中级别以大写存储（ERROR/INFO/WARN）；LogsQL 大小写敏感，故统一转大写。
+		parts = append(parts, "level:"+strings.ToUpper(level))
+	}
+	return strings.Join(parts, " AND ")
+}
+
+// isFederationLevel 白名单校验：仅接受契约登记的四个级别。
+func isFederationLevel(v string) bool {
+	switch v {
+	case "debug", "info", "warn", "error":
+		return true
+	default:
+		return false
+	}
+}
+
 // buildQuery 从查询参数构造 logcoord.Query，并完成授权目标收敛。
 // 返回 (query, ok)；ok=false 表示已写出错误响应。
 func (h *LogFederationHandler) buildQuery(c *gin.Context) (logcoord.Query, bool) {
@@ -155,7 +187,7 @@ func (h *LogFederationHandler) buildQuery(c *gin.Context) (logcoord.Query, bool)
 		// F-008：稳定 PermissionScope 摘要（权限节点/角色/授权版本/目标），供 View 复用校验。
 		PermissionScope: federationPermissionScope(access, targets),
 		OnlineOnly:      parseBoolParam(c.Query("onlineOnly")),
-		Filter:          c.Query("keyword"),
+		Filter:          federationFilter(c),
 		ViewID:          c.Query("viewId"),
 		Cursor:          c.Query("cursor"),
 	}

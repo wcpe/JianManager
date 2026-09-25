@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -119,6 +120,8 @@ type fedWorker struct {
 	unsup   bool
 	fail    string
 	searchN int
+	// lastFilter 记录最近一次 Search 收到的过滤表达式，供断言结构化筛选是否已组合下发。
+	lastFilter string
 }
 
 func (w *fedWorker) OpenView(ctx context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerSearchResponse, error) {
@@ -131,6 +134,7 @@ func (w *fedWorker) OpenView(ctx context.Context, req logcoord.WorkerSearchReque
 
 func (w *fedWorker) Search(_ context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerSearchResponse, error) {
 	w.searchN++
+	w.lastFilter = req.Filter
 	return &logcoord.WorkerSearchResponse{
 		ViewID:      req.ViewID,
 		Items:       append([]logcoord.Event(nil), w.items...),
@@ -482,4 +486,71 @@ func TestLogFederation_Export_CompleteSuccessAttachment(t *testing.T) {
 	assert.Contains(t, w.Header().Get("Content-Type"), "application/x-ndjson")
 	assert.Contains(t, w.Header().Get("Content-Disposition"), "attachment")
 	assert.Contains(t, w.Body.String(), `"e1"`)
+}
+
+// TestLogFederation_LevelFilterReachesWorker 守护「按级别筛选」这一既有能力。
+//
+// 背景：经典 /logs 路径支持 level 筛选（log.go 的 buildFilter），而联邦路径成为默认
+// 数据源后，若不在 CP 侧把它组合进 filter 表达式，用户在联邦视图点「错误」不会有任何
+// 反应——同一界面两条路径行为不一致。wire 契约只有单一 filter 字段，故结构化 level
+// 必须在 CP 侧组合下发。
+func TestLogFederation_LevelFilterReachesWorker(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		level  string
+		expect string
+	}{
+		{"小写转大写", "error", "level:ERROR"},
+		{"已是大小写混写", "Warn", "level:WARN"},
+		{"与关键字组合", "info", "level:INFO"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w1 := &fedWorker{
+				items:   []logcoord.Event{fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "ERROR", "boom")},
+				targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+			}
+			resolver := &fedResolver{targets: []logcoord.TargetInfo{
+				{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+			}}
+			coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+			r, _ := setupFederationRouter(t, coord)
+			token := getAdminToken(t, r)
+
+			url := "/api/v1/logs/federation/search?limit=100&level=" + tc.level
+			if tc.name == "与关键字组合" {
+				url += "&keyword=needle"
+			}
+			w := makeRequest(r, "GET", url, nil, token)
+			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+			assert.Contains(t, w1.lastFilter, tc.expect,
+				"结构化 level 必须组合进 filter 表达式并下发到 Worker")
+			if tc.name == "与关键字组合" {
+				assert.Contains(t, w1.lastFilter, "needle", "关键字与级别应同时保留")
+			}
+		})
+	}
+}
+
+// TestLogFederation_LevelFilterRejectsNonWhitelist 守护注入面：level 来自用户输入，
+// 只允许契约登记的四个级别，非法值一律忽略而不得进入查询表达式。
+func TestLogFederation_LevelFilterRejectsNonWhitelist(t *testing.T) {
+	for _, bad := range []string{"error' OR '1'='1", "*", "ERROR;DROP TABLE", "trace"} {
+		t.Run(bad, func(t *testing.T) {
+			w1 := &fedWorker{
+				items:   []logcoord.Event{fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "INFO", "hi")},
+				targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+			}
+			resolver := &fedResolver{targets: []logcoord.TargetInfo{
+				{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+			}}
+			coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+			r, _ := setupFederationRouter(t, coord)
+			token := getAdminToken(t, r)
+
+			w := makeRequest(r, "GET", "/api/v1/logs/federation/search?limit=100&level="+url.QueryEscape(bad), nil, token)
+			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+			assert.NotContains(t, w1.lastFilter, "level:", "非法 level 不得进入表达式")
+			assert.NotContains(t, w1.lastFilter, "DROP", "非法 level 不得进入表达式")
+		})
+	}
 }
