@@ -145,3 +145,24 @@
 | FR-474~484 | 597~607 | `🔨 开发中·…`（共 11 条） | 机械替换前缀为 `✅ 已交付@v0.24.0·`，其后验收描述**原样保留** |
 
 **执行约束**：① 该更新须**在用户逐条签字之后**进行（`gate-merge.md`：Agent 不得自行标记 done）；② 三方须同指 `v0.24.0`（`version.go` 已为 `0.24.0-dev`、CHANGELOG 段首已注明 `v0.24.0`，由 PR #22 承载——故 PR #22 应先于本更新合入或同时合入）；③ 改后须复核无裸 `✅ 已交付`（`versioning.md` 禁止）。
+
+## 验收标准与证据的对应性核查（2026-09-26 签字前）
+
+为避免「台账写可签、但 PRD 的验收标准其实无对应证据」，对 12 条逐条比对 PRD 描述列的验收要求与台账证据列：
+
+| FR | PRD 点名的验收入口 | 台账证据要点 | 对应 |
+|---|---|---|---|
+| FR-473 | `worker-log-platform-contract/spec.md` | ADR-094 accepted；proto 10 个日志 RPC；资产审批；性能判据入契约 | ✓ |
+| FR-474 | `worker-log-acquisition/spec.md`（**Runbook A**） | 生产采集/投影/ACK 恢复/reclaim；**Runbook A 真机 `kill -9` 重启通过** | ✓ |
+| FR-475 | `worker-log-normalizer/spec.md` | 真 VL v1.52.0：Multiline 5 行归并、跨午夜、半条恢复 | ✓ |
+| FR-476 | `worker-victorialogs-runtime/spec.md`（**Runbook C**） | 资产审批、supervisor/CP runtime、预算采样与 80/90 降级、老 Worker Unimplemented | ✓ |
+| FR-477 | `worker-log-lifecycle/spec.md`（**Runbook B**） | 真机迁移链 FROZEN→…→CLEANED、物理迁移、旧 owner 过滤 | ✓ |
+| FR-478 | `worker-log-deep-archive/spec.md` | 真机 RustFS S3：登记/幂等/manifest/对象往返/Rehydrate 租约 | ✓ |
+| FR-479 | `worker-log-query-federation/spec.md` | 全查询 RPC 接线、远程 Search/Stats/Facets/Export、CP 联邦真机 | ✓ |
+| FR-480 | `cp-log-query-coordinator/spec.md` | 生产 Assemble、真机联邦与延迟取证（p95 28.5ms / 8 并发 15.2ms） | ✓ |
+| FR-481 | `log-ingest-cutover/spec.md` | cutover+Legacy+DualPath、跨切换查询经两条真实路径 | ✓ |
+| FR-482 | `logs-center-tiered-ui/spec.md` | 真浏览器验收 + 逐项点击实测（含本轮 source 修复与生产复验） | ✓ |
+| FR-483 | 本文档（受控文档） | `recovery-manual.md`、`acceptance-record.md`、`asset-inventory.md` 齐备 | ✓ |
+| FR-484 | `worker-log-canonical-eventstore/spec.md` | 真机 v1.52.0：稳态/峰值 RSS、342 源零丢失零重复 | ✓ |
+
+**结论**：12 条均有对应证据，无「标准无证据」的空档。另核实 PRD 12 条描述点名的 **11 个 spec 文件全部真实存在**（逐一 `os.path.exists` 验证）。
