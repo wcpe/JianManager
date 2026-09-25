@@ -60,14 +60,18 @@ log:
 
 # Optional persistent Worker/Node or offline FILE_PRIMARY sources. Instance
 # sources are registered automatically by CP instance lifecycle RPCs.
+#
+# log_source_id / storage_namespace 必须用 **node:<节点数字ID>**，不能写字面 node:self——
+# CP 一律按 node:<n.ID> 派生联邦查询目标（见 logcoord/assemble.go），写成 node:self 会使
+# 查询返回 target_missing_in_worker_response、日志中心空白。节点 ID 见面板「节点」页 URL 或 `GET /api/v1/nodes`。
 # log_sources:
-#   - log_source_id: node:self
+#   - log_source_id: node:1
 #     source_generation: node-self-v1
 #     path: /home/jianmanager/logs/worker.log
 #     mode: FILE_PRIMARY
 #     archive_glob: /home/jianmanager/logs/worker-*.log.gz
 #     source_category: worker
-#     storage_namespace: node:self
+#     storage_namespace: node:1
 
 # 出站网络代理（FR-174，见 ADR-037；可视化配置 + CP 下发见 FR-185 / ADR-043）。本节点所有出站
 # 下载（自更新二进制、JDK 归档、CFR 反编译器、服务端 jar）经此代理。url 留空=直连（仍尊重
