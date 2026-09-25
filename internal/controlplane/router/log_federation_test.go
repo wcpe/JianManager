@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -503,6 +504,7 @@ func TestLogFederation_LevelFilterReachesWorker(t *testing.T) {
 		{"小写转大写", "error", "level:ERROR"},
 		{"已是大小写混写", "Warn", "level:WARN"},
 		{"与关键字组合", "info", "level:INFO"},
+		{"含 OR 的关键词须加括号", "error", "level:ERROR"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w1 := &fedWorker{
@@ -516,16 +518,25 @@ func TestLogFederation_LevelFilterReachesWorker(t *testing.T) {
 			r, _ := setupFederationRouter(t, coord)
 			token := getAdminToken(t, r)
 
-			url := "/api/v1/logs/federation/search?limit=100&level=" + tc.level
+			reqURL := "/api/v1/logs/federation/search?limit=100&level=" + tc.level
 			if tc.name == "与关键字组合" {
-				url += "&keyword=needle"
+				reqURL += "&keyword=needle"
 			}
-			w := makeRequest(r, "GET", url, nil, token)
+			// 含 OR 的关键词：LogsQL 中 AND 优先级高于 OR，必须给 keyword 加括号，
+			// 否则 keyword 的 OR 分支会绕过级别约束（实测 4 条 vs 期望 2 条）。
+			if tc.name == "含 OR 的关键词须加括号" {
+				reqURL += "&keyword=" + url.QueryEscape("a OR b")
+			}
+			w := makeRequest(r, "GET", reqURL, nil, token)
 			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 			assert.Contains(t, w1.lastFilter, tc.expect,
 				"结构化 level 必须组合进 filter 表达式并下发到 Worker")
 			if tc.name == "与关键字组合" {
 				assert.Contains(t, w1.lastFilter, "needle", "关键字与级别应同时保留")
+			}
+			if tc.name == "含 OR 的关键词须加括号" {
+				assert.Equal(t, "(a OR b) AND level:"+strings.ToUpper(tc.level), w1.lastFilter,
+					"keyword 必须被括号包裹，否则 OR 分支会绕过级别约束")
 			}
 		})
 	}

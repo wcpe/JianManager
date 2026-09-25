@@ -137,20 +137,26 @@ func federationPermissionScope(access *service.UserAccess, targets []string) str
 // level 等参数。经典 /logs 路径支持按级别筛选（log.go 的 buildFilter），联邦路径
 // 若不在此组合，用户在联邦视图点「错误」不会有任何反应——同一界面两条路径行为不一致。
 //
+// 组合时必须给 keyword 加括号：LogsQL 中 AND 优先级高于 OR，`a OR b AND level:X`
+// 会被解析为 `a OR (b AND level:X)`，使级别筛选对含 OR 的关键词失效。实测
+// `LIVE-TEST OR Notch AND level:INFO` 命中 4 条，而 `(LIVE-TEST OR Notch) AND level:INFO`
+// 命中 2 条——故 level 存在时把 keyword 包成 `(keyword) AND level:X`。
+//
 // level 走白名单：它来自用户输入，直接拼进表达式会引入注入面。
 func federationFilter(c *gin.Context) string {
 	keyword := strings.TrimSpace(c.Query("keyword"))
 	level := strings.ToLower(strings.TrimSpace(c.Query("level")))
 
-	var parts []string
-	if keyword != "" {
-		parts = append(parts, keyword)
+	if !isFederationLevel(level) {
+		// 无合法 level：保持既有行为，keyword 原样下发（其内部布尔结构由用户自负）。
+		return keyword
 	}
-	if isFederationLevel(level) {
-		// VL 中级别以大写存储（ERROR/INFO/WARN）；LogsQL 大小写敏感，故统一转大写。
-		parts = append(parts, "level:"+strings.ToUpper(level))
+	// VL 中级别以大写存储（ERROR/INFO/WARN）；LogsQL 大小写敏感，故统一转大写。
+	levelTerm := "level:" + strings.ToUpper(level)
+	if keyword == "" {
+		return levelTerm
 	}
-	return strings.Join(parts, " AND ")
+	return "(" + keyword + ") AND " + levelTerm
 }
 
 // isFederationLevel 白名单校验：仅接受契约登记的四个级别。
