@@ -61,7 +61,7 @@
 ## 4. 采用的补充验收方式（真实采样驱动，不伪造指标）
 
 容量阈值本就是**可配项**（`log_capacity.degraded_at_percent` / `pause_at_percent`，
-校验规则 `0 < degraded < pause <= 100`，见 `internal/worker/config.go:301`）。
+校验规则 `0 < degraded < pause <= 100`，见 `internal/worker/config.go:472-474`）。
 因此用**真实 `DiskCapacityProvider`（真实采样当前文件系统）+ 真实阈值比较**，
 把阈值设到真实使用率附近来触发各档判定——全程走生产代码路径。
 
