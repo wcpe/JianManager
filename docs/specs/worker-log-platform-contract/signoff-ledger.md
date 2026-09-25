@@ -84,7 +84,7 @@
 
 ## 生产替换完成与浏览器逐项点击验证（2026-09-25 22:52）
 
-**替换**：生产 CP 已替换为含 `source` 修复的构建（符号检测确认 `router.federationFilter` 2 处 + `router.federationSourcePrefix` 1 处），版本号仍为 0.23.0（无漂移）。替换后复核：CP `HTTP 200`、gRPC 19100 就绪、**11 个受管游戏实例 PID 与替换前基线逐一一致**、Worker 存活、VL 采集连续（354797 条无中断）。替换前备份保留于 `bin/jianmanager-cp.bak-20260925-225053`。
+**替换**：生产 CP 已替换为含 `source` 修复的构建（符号检测确认 `router.federationFilter` 2 处 + `router.federationSourcePrefix` 1 处），替换未改变版本号（当时 `version.go` 为 `0.23.0`；该值自身属版本漂移，已另开 PR #22 于 master 上修复为 `0.24.0-dev`，与本 PR 无关）。替换后复核：CP `HTTP 200`、gRPC 19100 就绪、**11 个受管游戏实例 PID 与替换前基线逐一一致**、Worker 存活、VL 采集连续（354797 条无中断）。替换前备份保留于 `bin/jianmanager-cp.bak-20260925-225053`。
 
 **浏览器逐项点击验证**（生产 19000，真实登录 admin，只读操作，12 项）：
 
