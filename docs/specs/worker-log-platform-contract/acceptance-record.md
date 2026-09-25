@@ -90,5 +90,5 @@
 - 验收审计（`sdd-accept-phase`）：`.tmp/acceptance-changes-HEAD-20260924.md`，10 项发现全部处置（含 1 项误判纠正）。
 - 非阻塞遗留：Windows VL 运行证据、临时产物不持久（**本文件即为缓解**）。
   - 原列的「canonical 事件体落盘/compact」**已由 FR-484 完成**（见 §8 密度小节与 ADR-095），不再是遗留。
-  - **FR-481 联邦查询侧仍为占位**（`service.UnimplementedFederatedQuerier`，`log_legacy.go:359`）：占位本身返回结构化 not-ready 是正确的，但 cutover 后的 federated 路径未接真实实现，属该 FR 的已知缺口。
+  - **FR-481 联邦查询侧占位为有意设计，非缺口**（勘误 2026-09-25）：原把 `service.UnimplementedFederatedQuerier`（`log_legacy.go:359`）登记为本 FR 的「已知缺口」，**该判断有误**。实测复核：`LogDualPath` 触及 federated 侧的三处（`QueryFederated`、`QueryBoth`、`CombinedStats`）在生产代码中**均无调用方**——唯一经 HTTP 暴露的 `GET /logs/legacy`（`log_cutover.go:159` 注册 → `:417` 只调 `QueryLegacy`）；跨切换查询由 `/logs/legacy` + `/logs/federation` 两条真实路径承担，后者已真机验收（§6）。故占位不可达、无生产影响，PRD 亦已记「保留 API 不加投机接线」。误判源于把「某接口的一侧是占位」直接等同于「功能未交付」，未先核实该路径是否可达。
 - **交付确认（Gate-4）**：按 `gate-merge.md`，FR 验收须由用户签字，Agent 不得自行标记已交付。
