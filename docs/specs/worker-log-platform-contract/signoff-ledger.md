@@ -2,7 +2,8 @@
 
 > 用途：本文件把每个 FR 的**验收证据**与**未覆盖缺口**并列，供用户逐条签字或打回。
 > 按 `.claude/rules/gate-merge.md`，FR 验收须由用户确认，**Agent 不得自行标记 done**。
-> 编制日期：2026-09-24　·　分支：`feature/fr-log-platform-foundation`（HEAD `e3a37f76`，工作区干净，CI 9/9 全绿）
+> 编制日期：2026-09-24　·　分支：`feature/fr-log-platform-foundation`（工作区干净，CI 9/9 全绿）。
+> **签署基线以 PR #16 的最新 head 为准**（本台账会随修订产生新提交，故不在此钉死 commit hash）。
 
 ## 判定图例
 
