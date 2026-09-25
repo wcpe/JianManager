@@ -13,7 +13,7 @@
 | 受管 VL | v1.52.0，`build_id=20260716-022147-tags-v1.52.0-0-g46a54c9`，包 SHA `d14f5851…`、解包可执行 SHA `26941a2f…`（见 `asset-inventory.md`） |
 | 隔离 CP | `runbook CP`（http 8080 / grpc 8081，SQLite）或 `env-a`（30100/30101） |
 | Worker | 本仓库 HEAD 构建（`go build -o … ./apps/worker`） |
-| 对象存储 | RustFS S3 自建端点（已脱敏），bucket `dev`，ak/sk 已脱敏 |
+| 对象存储 | 自建 S3 兼容端点（地址与凭据已脱敏），bucket `dev` |
 
 ## 1. Runbook A — WAL / 恢复责任（`.tmp/fr433-experiments/A-wal/`）
 
