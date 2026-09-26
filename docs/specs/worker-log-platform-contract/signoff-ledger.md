@@ -222,3 +222,25 @@
 **未受影响**：HOT 采集正常——真正服务 19461 的是 PID `891327`（运行逾 1 天）；游戏服 12/12 完好；已入库日志数据未受影响。
 
 **当前处置**：仅取证与留痕，**未修改代码、未清理僵尸**——修复属新缺陷修复（是否并入 PR #23 会改变其范围）、清理僵尸需重启 Worker（短暂中断采集），均待用户裁决。
+
+## VL 启动测试与生产事故记录（2026-09-26 21:00-21:25）
+
+### 测试发现的三处真实缺陷（测试价值所在）
+
+1. **启动报假成功**：`POST .../log-runtime/rehydrate/start` 返回 `HTTP 202 {"state":2}`，状态查询报 `RUNNING`，但实测 PID 为 `Z <defunct>` 僵尸、端口 19463 未监听。根因：`vlsup/supervisor.go` 在 `factory.Start` 返回后即置 `StateRunning`，不校验进程存活。
+2. **启动不创建 namespace 数据目录**：`vl/` 下仅有 `hot`/`cold`，缺 `rehydrate`；`StoragePathUnder` 只拼路径，`Start` 不 `MkdirAll`，故首次启动某 namespace 必然失败。
+3. **Worker 退出不回收受管 VL**：Worker 停止时只 `manager.StopAll()` 停游戏实例，不停 VL；VL 成为 `PPID=1` 孤儿并继续占用 hot/cold 端口，导致下次启动的新 VL 因端口被占立即退出、日志中心长期降级。
+
+三项均已修复（4 个提交于 `chore/stability-hardening-clean`），每项均带单测与**变异验证**（跳过校验/移建目录/禁用校正/跳过 Stop 均使测试转红）。
+
+### 我造成的中断（如实记录）
+
+验证「Worker 退出回收 VL」时，我**反复误判进程身份**：`setsid nohup ./start-worker.sh &` 会先生成 bash 包装进程，我多次向包装 PID 而非 Worker 本体发信号，导致修复路径从未被触发，我因此连续做了多轮无效尝试。**后果：生产 Worker 中断约 5 分钟，期间日志中心不可用**（`reasons: OFFLINE`）。
+
+**未受影响**：12 个游戏服全程完好（daemon wrapper 独立运行）；VL 数据零丢失（事故前后 82 万 → 214 万条持续增长）；CP 未中断。
+
+**恢复**：清理孤儿 VL 释放端口 → 启动 Worker → 21:21:51 注册成功 → 服务恢复（HOT/COLD 均 RUNNING 且 health=true，联邦查询返回真实事件）。
+
+### 尚未验证的一项
+
+「Worker 退出回收 VL」的修复**未能在生产验证**——因上述 PID 误判，我未能正确触发优雅关闭路径。该修复仅有单测+变异证据，生产验证建议在操作机上的隔离测试实例（独立 systemd 服务与独立安装目录）进行，不再于生产做实验性重启。
