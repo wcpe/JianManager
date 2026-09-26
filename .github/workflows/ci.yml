@@ -18,6 +18,9 @@
 #   npm ci 后依次执行生产依赖审计、类型检查、lint 与构建；
 #   npm 缓存以 apps/bot-worker/package-lock.json 为 key。
 #
+# go-quality：Go 编译与静态检查门禁，并固定执行日志联邦回归测试；
+#   使用 Go 1.26.2 与模块缓存，避免后端质量回归只在发布工作流暴露。
+#
 # workflow-contract：发布工作流契约闸（脚本 release-metadata.test.mjs）。
 #   断言 ci.yml / release.yml 的触发条件、runner 与版本来源；原先只在 release.yml 里跑，
 #   而 release.yml 不挂 PR，故契约被改坏时 PR 全绿、合入主干才红。前移到 PR 门禁堵住该缺口。
@@ -186,6 +189,34 @@ jobs:
           npm run typecheck
           npm run lint
           npm run build
+
+  go-quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout（不需子模块，Go 质量门禁）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: Go 编译与静态检查
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build ./...
+          go vet ./...
+
+      - name: 日志联邦回归测试（覆盖 LogFederation、错误映射与权限摘要）
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./internal/controlplane/router -run 'LogFederation|WriteFederationError|FederationPermissionScopeDigest' -count=1
 
   # Agent 可证安全闸（FR-388）：策略契约 + 运维面 HTTP 矩阵 + jmagent 单测。
   # 不替代全量 go test ./...（release 仍跑）；本 job 在 PR/分支 push 快速拦截 agent 策略回归。

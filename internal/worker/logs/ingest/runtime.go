@@ -50,7 +50,7 @@ type persistedSource struct {
 	PublicationPending   bool               `json:"publication_pending,omitempty"`
 	Ledger               []ledger.Entry     `json:"ledger"`
 	WAL                  []acquire.WALEntry `json:"wal"`
-	ProjectionGeneration string `json:"projection_generation"`
+	ProjectionGeneration string             `json:"projection_generation"`
 	// EventsStored 表示该源的 canonical 事件体已落在磁盘段（events/ 目录），不在本文件。
 	EventsStored bool `json:"events_stored,omitempty"`
 	// Events 仅在旧格式或段写入失败时使用；正常情况为空（权威副本在 eventstore）。
@@ -63,22 +63,27 @@ type persistedState struct {
 	Instances     map[string]InstanceBinding `json:"instances,omitempty"`
 }
 
+// pendingSpoolRoot 是未绑定实例输出的持久化暂存目录。
+const pendingSpoolRoot = "pending"
+
 // Manager owns configured source pipelines and their durable state.
 type Manager struct {
-	mu                  sync.Mutex
-	cycleMu             sync.Mutex
-	root                string
-	vl                  *vlsup.Client
-	vlRoute             func(SourceConfig) (*vlsup.Client, bool, error)
-	cat                 *catalog.Catalog
-	journal             catalog.Journal
-	archive             *archive.Registry
-	sources             map[string]SourceConfig
-	pipes               map[string]*pipeline.Pipeline
-	state               persistedState
-	statePath           string
+	mu      sync.Mutex
+	cycleMu sync.Mutex
+	// pendingMu 串行化暂存写入与注册接管，避免绑定切换时发生乱序或重复回放。
+	pendingMu sync.Mutex
+	root      string
+	vl        *vlsup.Client
+	vlRoute   func(SourceConfig) (*vlsup.Client, bool, error)
+	cat       *catalog.Catalog
+	journal   catalog.Journal
+	archive   *archive.Registry
+	sources   map[string]SourceConfig
+	pipes     map[string]*pipeline.Pipeline
+	state     persistedState
+	statePath string
 	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
-	events *eventstore.Store
+	events              *eventstore.Store
 	verificationTimeout time.Duration
 	capacityProvider    func() (acquire.CapacityBudget, error)
 	recoveryHold        func(SourceConfig, string) (bool, string)
@@ -131,6 +136,17 @@ func (m *Manager) CutoverReadiness() CutoverReadiness {
 	if m == nil {
 		return CutoverReadiness{Reasons: []string{"ingest_manager_unavailable"}}
 	}
+	pending, pendingErr := m.pendingSpoolState()
+	if pendingErr != nil {
+		result.LedgerReady = false
+		result.Reasons = append(result.Reasons, "pending_spool_unreadable")
+	}
+	if len(pending) > 0 {
+		result.LedgerReady = false
+		for _, key := range pending {
+			result.Reasons = append(result.Reasons, "pending_spool:"+key)
+		}
+	}
 	m.mu.Lock()
 	keys := make([]string, 0, len(m.pipes))
 	for key := range m.pipes {
@@ -145,7 +161,12 @@ func (m *Manager) CutoverReadiness() CutoverReadiness {
 	}
 	m.mu.Unlock()
 	if len(keys) == 0 {
-		return CutoverReadiness{Reasons: []string{"no_managed_log_sources"}}
+		if len(pending) == 0 && pendingErr == nil {
+			return CutoverReadiness{Reasons: []string{"no_managed_log_sources"}}
+		}
+		result.LedgerReady = false
+		result.Reasons = append(result.Reasons, "no_managed_log_sources")
+		return result
 	}
 	for _, key := range keys {
 		entry := pipes[key].Ledger().Get(pipes[key].Key())
@@ -342,7 +363,60 @@ func New(opts Options) (*Manager, error) {
 			}
 		}
 	}
+	if err := m.recoverPendingSpools(); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	return m, nil
+}
+
+func (m *Manager) recoverPendingSpools() error {
+	m.mu.Lock()
+	bindings := make([]InstanceBinding, 0, len(m.state.Instances))
+	for _, binding := range m.state.Instances {
+		bindings = append(bindings, binding)
+	}
+	m.mu.Unlock()
+	for _, binding := range bindings {
+		m.pendingMu.Lock()
+		err := m.flushPendingForBinding(binding)
+		m.pendingMu.Unlock()
+		if err != nil {
+			m.recordRawWriteFailure(binding, pendingFlushStream(err), 0)
+			return fmt.Errorf("ingest: recover pending instance output: %w", err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) pendingSpoolState() ([]string, error) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	root := filepath.Join(m.root, "var", "log", pendingSpoolRoot)
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var pending []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		files, readErr := os.ReadDir(filepath.Join(root, entry.Name()))
+		if readErr != nil {
+			return nil, readErr
+		}
+		for _, file := range files {
+			if !file.IsDir() && strings.HasSuffix(file.Name(), ".spool") {
+				pending = append(pending, entry.Name()+"/"+strings.TrimSuffix(file.Name(), ".spool"))
+			}
+		}
+	}
+	sort.Strings(pending)
+	return pending, nil
 }
 
 func DiskCapacityProvider(root string, configured acquire.CapacityBudget) func() (acquire.CapacityBudget, error) {
@@ -1482,6 +1556,9 @@ func (m *Manager) load() error {
 	}
 	if m.state.Sources == nil {
 		m.state.Sources = make(map[string]persistedSource)
+	}
+	if m.state.Instances == nil {
+		m.state.Instances = make(map[string]InstanceBinding)
 	}
 	return nil
 }
