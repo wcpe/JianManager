@@ -24,6 +24,7 @@
 | ADR-074 | Bot 目标与执行节点解耦 | Control Plane 是跨 Worker 调度与 desired-state 真源；Bot Worker 仍由 Worker spawn，默认单 Worker 50 Bot，不得新增第四类进程 |
 | ADR-007 | MC 群组服 M:N 建模 + 系统分配工作目录 | proxy↔backend 用 server_registrations(M:N)；群组为非独占软标签；工作目录系统分配，不由用户输入 |
 | ADR-008 | MC 结构化启动 + 托管多 JDK | MC 实例由 jdk+jvm参数+jar 派生启动命令；按节点托管多 JDK 并绑定 |
+| ADR-094 | Worker 日志本地数据面与 CP 联邦查询 | Worker 可持久化 Worker-owned 日志数据面；CP 业务库、权限真源、指标时序仍仅 CP 可写。Log RPC 只经 ADR-081 反向隧道，浏览器不得直连 Worker/VL |
 
 ## 检查时机
 

@@ -3380,6 +3380,7 @@
     "view_platform": "平台日志",
     "view_node_instance": "节点/实例日志",
     "view_all": "全部日志",
+    "view_legacy": "Legacy 只读",
     "time": "时间",
     "level": "级别",
     "source": "来源",
@@ -3403,6 +3404,7 @@
     "empty": "暂无日志",
     "loadError": "加载日志失败",
     "totalCount": "共 {{count}} 条",
+    "statsEvents": "当前视图 {{count}} 个事件",
     "prevPage": "上一页",
     "nextPage": "下一页",
     "pageInfo": "第 {{page}} / {{totalPages}} 页",
@@ -3415,7 +3417,83 @@
     "range_7d": "最近 7 天",
     "exportScope_currentPage": "导出当前页",
     "exportScope_allMatched": "导出全部匹配",
-    "exportScope_range": "导出所选时间段"
+    "exportScope_range": "导出所选时间段",
+    "more": "更多"
+  },
+  "logsFederation": {
+    "coverage": {
+      "complete": "覆盖完整",
+      "partial": "结果不完整",
+      "failed": "查询失败，结果不可用",
+      "unknown": "无法确定结果是否完整"
+    },
+    "viewState": {
+      "ready_complete": "结果完整",
+      "ready_complete_empty": "所选范围内无日志（覆盖完整）",
+      "partial": "部分日志暂时无法查询，以下为已取到的结果",
+      "offline": "部分节点当前不可达，结果可能缺少这些节点的日志",
+      "engine_not_ready": "日志查询服务未启用，暂时只能查看平台与历史日志",
+      "rehydrate_failed": "历史日志取回失败，结果不完整",
+      "backlog": "正在写入最新日志，稍后可能才会出现",
+      "truncated": "结果过多已截断，请缩小时间范围",
+      "legacy": "含切换前的历史数据",
+      "gap": "该时间段内有日志缺失（服务重启或采集中断期间）",
+      "archive_missing": "部分历史日志已归档但尚未取回",
+      "view_stale": "查询结果已过期，请重新查询",
+      "query_failed": "查询失败，请重试或联系管理员",
+      "unknown": "无法确定结果是否完整"
+    },
+    "reasons": {
+      "engineNotReady": "日志查询服务未启用",
+      "logUnsupported": "该节点未开启日志采集",
+      "legacy": "切换前的历史数据",
+      "rehydrateFailed": "历史日志取回失败",
+      "backlog": "最新日志正在写入",
+      "truncated": "结果过多已截断",
+      "offline": "节点不可达",
+      "archiveMissing": "历史日志尚未取回",
+      "gap": "日志缺失",
+      "viewStale": "结果已过期",
+      "duplicateUnresolved": "有重复日志待确认",
+      "permissionRevoked": "权限已被撤销",
+      "cancelled": "查询已取消",
+      "budgetExceeded": "资源不足",
+      "exportIncomplete": "导出内容不完整",
+      "recoveryRequired": "服务正在恢复中",
+      "unknown": "原因未知"
+    },
+    "action": {
+      "retry": "重试",
+      "openNodes": "前往节点页启用日志平台",
+      "startRehydrate": "发起回灌",
+      "requestOnline": "仅查在线节点",
+      "reopenView": "重新打开视图",
+      "contactAdmin": "联系管理员"
+    },
+    "export": {
+      "allowed": "覆盖完整且校验通过，可下载",
+      "blockedIncomplete": "结果不完整，暂不可导出（请缩小范围或稍后重试）",
+      "blockedFailed": "查询失败，暂不可导出",
+      "blockedViewStale": "结果已过期，请重新查询后再导出",
+      "blockedUnresolved": "有重复日志待确认，暂不可导出",
+      "blockedNotReady": "导出服务尚未就绪，请稍后重试",
+      "blockedPermission": "权限不足，无法导出",
+      "permissionRecheckHint": "下载前将再次复核权限",
+      "nextCursorHint": "已加载到当前查询范围的末尾；如需更早的日志，请调整时间范围。"
+    },
+    "sourceTag": {
+      "legacy": "Legacy",
+      "federated": "联邦"
+    },
+    "degraded": "日志查询服务未启用，已自动切换到平台与历史日志（可直接查看）",
+    "degradedUnavailable": "实时日志查询服务暂不可用，已自动切换到平台与历史日志（可直接查看）",
+    "federatedNotReady": "日志查询服务未启用，已自动切换到平台与历史日志（可直接查看）",
+    "emptyNotSuccess": "覆盖不完整或查询失败，不能视作「无日志」",
+    "degradedHint": "平台日志与切换前的历史日志可正常查看。如需查询各服务器实时日志，请到「节点」页 → 对应节点 → 日志运行时面板启用日志平台。",
+    "federatedNotReadyHint": "平台日志与切换前的历史日志可正常查看。如需查询各服务器实时日志，请到「节点」页 → 对应节点 → 日志运行时面板启用日志平台。",
+    "degradedTitleShort": "日志查询服务未启用 · 已回退平台与历史日志",
+    "degradedUnavailableHint": "平台日志与切换前的历史日志可正常查看。实时日志查询服务当前不可达，请稍后重试或联系管理员。",
+    "degradedUnavailableTitleShort": "实时日志查询服务暂不可用 · 已回退平台与历史日志"
   },
   "users": {
     "title": "用户管理",
@@ -5254,5 +5332,45 @@
     "loading": "加载中…",
     "error": "加载在线趋势失败",
     "tzFallback": "时区不可用，已回退 UTC"
+  },
+  "logsRuntime": {
+    "title": "日志平台运行时",
+    "error": {
+      "unsupported": "本节点尚未启用日志平台（需先下发 VictoriaLogs 资产并配置）",
+      "notReady": "日志平台正在启动，请稍后重试",
+      "unauthorized": "日志平台鉴权失败，请检查节点凭据",
+      "budget": "节点资源预算不足，日志平台已降级",
+      "archiveMissing": "历史日志尚未取回"
+    },
+    "asset": {
+      "label": "服务端资产",
+      "help": "日志平台需要一份 VictoriaLogs 可执行程序（由平台统一审批与校验）。此处显示审批版本、目标平台与本地缓存状态；未缓存时需先「下发资产」。",
+      "notCached": "审批包未缓存",
+      "cached": "已缓存",
+      "chooseFile": "未选择文件",
+      "dispatch": "下发资产",
+      "dispatchHelp": "把审批过的 VictoriaLogs 资产下发到该节点并校验哈希；成功后即可启动运行时。"
+    },
+    "namespace": {
+      "hot": "HOT",
+      "cold": "COLD",
+      "rehydrate": "Rehydrate",
+      "help": "日志平台按三层存储：HOT=近期热数据（查询最快）；COLD=迁出的历史数据（查询稍慢，仍可查）；Rehydrate=把归档回灌成可查副本的临时层。三层按配置启用，未启用显示「未就绪」。",
+      "notReady": "未就绪",
+      "offline": "离线",
+      "start": "启动",
+      "stop": "停止",
+      "restart": "重启",
+      "migrate": "迁移分区",
+      "migrateHelp": "把某个分区从 HOT 迁到 COLD，释放热存储；迁移期间该分区暂不可查。"
+    },
+    "gaps": {
+      "resolve": "核销已覆盖缺口",
+      "help": "采集或投递中断会留下「缺口」记录。当缺口所覆盖的时间段已有完整投影可证明数据完整时，可核销该缺口，避免它一直被计为风险。"
+    },
+    "date": {
+      "label": "迁移日期（该日分区）",
+      "help": "要迁移的分区归属日（UTC）。日志按 UTC 日期分区存储，迁移与查询都以该分区为单位。"
+    }
   }
 }

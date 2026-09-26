@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -31,6 +32,11 @@ func TestBuildCreateInstanceRequest(t *testing.T) {
 	jdk := &model.NodeJDK{NodeID: 1, MajorVersion: 21, Path: "/opt/jdks/temurin-21"}
 	require.NoError(t, db.Create(jdk).Error)
 
+	// 日志 holder 身份解析需要节点存在（buildCreateInstanceRequest 按 NodeID 取节点 UUID 生成 source_generation）。
+	node := &model.Node{UUID: "worker-test", Name: "n", Host: "127.0.0.1", OS: "linux", Arch: "amd64"}
+	require.NoError(t, db.Create(node).Error)
+	require.EqualValues(t, 1, node.ID, "实例显式使用 NodeID=1，节点须为 ID=1")
+
 	env := map[string]string{"FOO": "bar"}
 	raw, _ := json.Marshal(env)
 	inst := &model.Instance{
@@ -57,6 +63,10 @@ func TestBuildCreateInstanceRequest(t *testing.T) {
 	assert.Equal(t, 1.5, spec.CpuLimit)
 	assert.Equal(t, int64(2048), spec.MemLimitMb)
 	assert.Equal(t, int64(10240), spec.DiskLimitMb)
+	// 日志采集绑定（FR-474）：Minecraft Java 走文件主源，holder 身份含实例 UUID 与节点 UUID。
+	assert.Equal(t, fmt.Sprintf("inst:%d", inst.ID), spec.LogTargetId)
+	assert.Equal(t, "FILE_PRIMARY", spec.LogAcquireMode)
+	assert.Equal(t, fmt.Sprintf("instance:%s@worker:%s", inst.UUID, node.UUID), spec.LogSourceGeneration)
 }
 
 // TestResyncNode_GracefulPreflight 验证 ResyncNode 的前置容错（无 panic、无副作用）：

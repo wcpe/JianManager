@@ -22,6 +22,9 @@
 - [ADR-090](090-binary-provision-and-beacon-sync.md) 通用二进制搭建与 Beacon 可选协同（FR-441~444）
 - [ADR-089](089-configurable-permission-tree-and-six-domain-nav.md) 可配置权限树与六域导航 IA（FR-431/432）
 - [ADR-088](088-client-dist-ia-merge-ops-page.md) 客户端分发信息架构合并（FR-430）
+- [ADR-095](095-canonical-event-store-on-disk.md) canonical 事件体的落盘 compact 存储（FR-484，细化 ADR-094/FR-473 §4.3/§5.3 的存储介质）
+- [ADR-094](094-worker-log-local-data-plane.md) Worker 日志本地数据面与 Control Plane 联邦查询（FR-473～484，**accepted**）
+
 - [ADR-087](087-console-immersive-visible-controls.md) 沉浸控制台采用可见控制优先的工作台（取代未入库的 tmux 前缀键提案）
 - [ADR-085](085-local-serverprobe-upload-source.md) ServerProbe 本地上传来源（FR-411，修订 ADR-083 来源范围）
 - [ADR-078](078-explorer-cross-window-clipboard-dnd.md) 资源管理器跨窗剪贴板与拖放总线（FR-377）

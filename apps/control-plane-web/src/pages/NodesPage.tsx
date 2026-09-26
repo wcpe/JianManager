@@ -65,6 +65,7 @@ import {
   ScrollableDialogBody,
 } from '@jianmanager/ui/components/scrollable-dialog'
 import NodeJDKPanel from '@/components/NodeJDKPanel'
+import NodeLogRuntimePanel from '@/components/NodeLogRuntimePanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
 import NodeArtifactCachePanel from '@/components/NodeArtifactCachePanel'
 import NodeProxyPanel from '@/components/NodeProxyPanel'
@@ -1186,7 +1187,12 @@ function NodeDetailPane({
       <div>
         {tab === 'overview' && <NodeOverviewSection node={node} />}
         {tab === 'instances' && <NodeInstanceCompare node={node} range="24h" />}
-        {tab === 'runtime' && <NodeJDKPanel nodeId={node.id} active />}
+        {tab === 'runtime' && (
+          <div className="space-y-4">
+            <NodeJDKPanel nodeId={node.id} active />
+            <NodeLogRuntimePanel nodeId={node.id} os={node.os} arch={node.arch} online={online} />
+          </div>
+        )}
         {tab === 'cache' && <NodeArtifactCachePanel nodeId={node.id} active />}
         {tab === 'ports' && (
           <Panel title={t('ports.title')}>

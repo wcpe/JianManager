@@ -137,3 +137,29 @@ func TestPlayerEventSubtype(t *testing.T) {
 	assert.Equal(t, "", playerEventSubtype("heartbeat"))
 	assert.Equal(t, "", playerEventSubtype("connected"))
 }
+
+// TestTriggers_LogKeywordUnaffectedByCutover 锁定 FR-473 §9「现有日志关键字告警在切换后仍有效、未被新数据路径绕过」。
+//
+// 关键事实（设计层不变量）：关键字告警消费的是实例事件流（`InstanceEvent` stdout/stderr，见
+// consumeInstanceEvents），与 CP `logs` 表的入库切换（LogCutover）是两条独立路径——切换停止的是
+// 表内入库，不触及事件流。本测试把该不变量固化：无论 cutover 开关如何，关键字告警都必须照常触发。
+func TestTriggers_LogKeywordUnaffectedByCutover(t *testing.T) {
+	db := newTriggersTestDB(t)
+	tr := NewAlertEventTriggers(db, NewAlertDispatcher(db), nil, nil)
+	require.NoError(t, db.Create(&model.Instance{Name: "smp", UUID: "uuid-1"}).Error)
+	require.NoError(t, db.Create(&model.AlertRule{
+		Name: "oom", Enabled: true, TriggerType: model.AlertTriggerLogKeyword, Keyword: "OutOfMemoryError",
+	}).Error)
+
+	cutover := NewPersistentLogCutover(db)
+	for _, enabled := range []bool{false, true} {
+		cutover.SetEnabled(enabled)
+		require.NoError(t, db.Exec("DELETE FROM alert_events").Error)
+
+		tr.handleLogLine(InstanceEvent{InstanceUUID: "uuid-1", Type: "stderr", Data: "java.lang.OutOfMemoryError: Java heap space"})
+
+		var count int64
+		db.Model(&model.AlertEvent{}).Count(&count)
+		require.EqualValues(t, 1, count, "cutover=%v 时关键字告警必须仍然触发（切换只停 CP logs 入库）", enabled)
+	}
+}

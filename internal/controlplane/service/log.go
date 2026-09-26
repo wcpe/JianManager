@@ -57,28 +57,54 @@ type LogService struct {
 	wg     sync.WaitGroup
 	// cache 缓存采集侧 UUID→ID 解析，避免每条实例日志反查数据库。
 	cache *resolveCache
+	// cutover FR-481 日志入库切换开关与逐 Worker 水位。恒非 nil；默认关闭（旧行为不变）。
+	cutover *LogCutover
+	// legacy FR-481 Legacy 只读访问器与独立保留预算。
+	legacy *LegacyLogReader
+	// dual FR-481 Federated vs Legacy 双路径查询门面。
+	dual *LogDualPath
 }
 
 // NewLogService 创建日志服务。root 用于解析归档目录 var/log，可为 nil（此时归档落盘跳过，仅做表内保留删除）。
+//
+// FR-481：cfg.Cutover 接线切换开关与 Legacy 独立保留预算。零值嵌套结构走 Default*：
+// 切换默认关闭；Legacy 时间预算默认 30 天。打开切换不会停 platform 持久化路径。
 func NewLogService(db *gorm.DB, root *dataroot.Root, cfg config.LogStoreConfig) *LogService {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &LogService{
-		db:     db,
-		root:   root,
-		cfg:    cfg,
-		ingest: make(chan IngestEntry, logIngestBuffer),
-		ctx:    ctx,
-		cancel: cancel,
-		cache:  newResolveCache(),
+	svc := &LogService{
+		db:      db,
+		root:    root,
+		cfg:     cfg,
+		ingest:  make(chan IngestEntry, logIngestBuffer),
+		ctx:     ctx,
+		cancel:  cancel,
+		cache:   newResolveCache(),
+		cutover: NewPersistentLogCutover(db),
 	}
+	if cfg.Cutover.Enabled {
+		svc.cutover.SetEnabled(true)
+	}
+	// Legacy 预算与 platform cfg 解耦：配置显式给值优先；两字段皆零时回落 DefaultLegacyRetentionDays。
+	legacyDays := cfg.Cutover.LegacyRetentionDays
+	legacyMB := cfg.Cutover.LegacyMaxTotalMB
+	if legacyDays == 0 && legacyMB == 0 {
+		legacyDays = config.DefaultLegacyRetentionDays
+	}
+	svc.legacy = NewLegacyLogReader(svc, legacyDays, legacyMB)
+	svc.dual = NewLogDualPath(svc.legacy, nil)
+	return svc
 }
 
 // Enabled 报告日志入库是否启用。
 func (s *LogService) Enabled() bool { return s.cfg.Enabled }
 
 // Ingest 投递一条日志到异步入库通道。通道满时丢弃并返回 false（不阻塞采集侧）。
+// FR-481：cutover 打开时 instance/worker 来源不再写入 CP logs；platform 来源不受影响。
 func (s *LogService) Ingest(e IngestEntry) bool {
 	if !s.cfg.Enabled {
+		return false
+	}
+	if s.cutoverBlocked(e.Source) {
 		return false
 	}
 	if e.Time.IsZero() {

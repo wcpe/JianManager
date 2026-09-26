@@ -38,9 +38,17 @@ type Config struct {
 	// EnrollToken 一次性 enrollment token 明文（FR-080，见 ADR-020）。
 	// 仅经环境变量/命令行传入、绝不写入 worker.yml（一次性凭据不留盘）；
 	// 首次注册（无本地身份文件）时携带，注册成功后即作废。
-	EnrollToken string           `mapstructure:"enroll_token"`
-	Log         LogConfig        `mapstructure:"log"`
-	Decompiler  DecompilerConfig `mapstructure:"decompiler"`
+	EnrollToken string `mapstructure:"enroll_token"`
+	// EnrollTokenFile 是一次性凭据文件路径。适用于 systemd credentials 和
+	// Windows 服务；Worker 注册成功后删除文件，明文不进入 YAML/命令行/日志。
+	EnrollTokenFile string            `mapstructure:"enroll_token_file"`
+	Log             LogConfig         `mapstructure:"log"`
+	LogQuery        LogQueryConfig    `mapstructure:"log_query"`
+	LogVL           LogVLConfig       `mapstructure:"log_vl"`
+	LogCapacity     LogCapacityConfig `mapstructure:"log_capacity"`
+	LogSources      []LogSourceConfig `mapstructure:"log_sources"`
+	LogArchive      LogArchiveConfig  `mapstructure:"log_archive"`
+	Decompiler      DecompilerConfig  `mapstructure:"decompiler"`
 	// Search 全文搜索索引配置（FR-074，见 ADR-017）。
 	Search SearchConfig `mapstructure:"search"`
 	// ArtifactCache 节点本地制品缓存配置（FR-178）：按 sha256 缓存下载过的核心 jar，建实例命中即秒拷。
@@ -256,6 +264,69 @@ type LogConfig struct {
 	Format string `mapstructure:"format"`
 }
 
+// LogQueryConfig configures the optional localhost VictoriaLogs query client.
+// Empty VLURL deliberately keeps the explicit LOG_UNSUPPORTED compatibility path.
+type LogQueryConfig struct {
+	VLURL    string `mapstructure:"vl_url"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+}
+
+// LogVLConfig enables the managed HOT/COLD/Rehydrate supervisor. Empty BinaryPath
+// keeps externally managed localhost VL compatibility mode.
+type LogVLConfig struct {
+	BinaryPath      string `mapstructure:"binary_path"`
+	PackagePath     string `mapstructure:"package_path"`
+	AssetSHA256     string `mapstructure:"asset_sha256"`
+	Username        string `mapstructure:"username"`
+	Password        string `mapstructure:"password"`
+	DataRoot        string `mapstructure:"data_root"`
+	RetentionPeriod string `mapstructure:"retention_period"`
+	HotCacheBytes   int64  `mapstructure:"hot_cache_bytes"`
+	// MemoryLimitBytes 受管 VL 进程 Go 软内存上限（GOMEMLIMIT，字节）；0 用默认 512MiB，负值不注入。
+	MemoryLimitBytes int64 `mapstructure:"memory_limit_bytes"`
+	HotPort         int    `mapstructure:"hot_port"`
+	ColdPort        int    `mapstructure:"cold_port"`
+	RehydratePort   int    `mapstructure:"rehydrate_port"`
+	StartCold       bool   `mapstructure:"start_cold"`
+	StartRehydrate  bool   `mapstructure:"start_rehydrate"`
+}
+
+type LogCapacityConfig struct {
+	MaxWALBytes       uint64  `mapstructure:"max_wal_bytes"`
+	MaxGaps           int     `mapstructure:"max_gaps"`
+	DegradedAtPercent float64 `mapstructure:"degraded_at_percent"`
+	PauseAtPercent    float64 `mapstructure:"pause_at_percent"`
+}
+
+// LogSourceConfig 配置一个由 Worker 常驻采集的日志源。
+// 实例生命周期可以在创建/迁移时动态登记同一模型；配置源用于 Worker/Node 日志和离线部署。
+type LogSourceConfig struct {
+	LogSourceID      string `mapstructure:"log_source_id"`
+	SourceGeneration string `mapstructure:"source_generation"`
+	Path             string `mapstructure:"path"`
+	Mode             string `mapstructure:"mode"`
+	RotateTo         string `mapstructure:"rotate_to"`
+	ArchiveGlob      string `mapstructure:"archive_glob"`
+	Stream           string `mapstructure:"stream"`
+	SourceCategory   string `mapstructure:"source_category"`
+	StorageNamespace string `mapstructure:"storage_namespace"`
+	UTCDay           string `mapstructure:"utc_day"`
+}
+
+// LogArchiveConfig 是 Worker Deep Archive 的受管对象存储配置。
+// SecretKey 只允许由环境变量注入，禁止写入 worker.yml 或诊断快照。
+type LogArchiveConfig struct {
+	Enabled   bool   `mapstructure:"enabled"`
+	Provider  string `mapstructure:"provider"`
+	Endpoint  string `mapstructure:"endpoint"`
+	Bucket    string `mapstructure:"bucket"`
+	Region    string `mapstructure:"region"`
+	Prefix    string `mapstructure:"prefix"`
+	AccessKey string `mapstructure:"access_key"`
+	SecretKey string `mapstructure:"secret_key"`
+}
+
 // Load 从配置文件和环境变量加载 Worker 配置（FR-080，见 ADR-020）。
 //
 // path 为空时在工作目录与 configs/ 下查找 worker.yml（均可选），找不到回退 worker.yaml（FR-224 兼容）。
@@ -274,8 +345,38 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("host", "")
 	v.SetDefault("jwt_secret", "dev-secret-change-me")
 	v.SetDefault("enroll_token", "")
+	v.SetDefault("enroll_token_file", "")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")
+	v.SetDefault("log_query.vl_url", "")
+	v.SetDefault("log_query.username", "")
+	v.SetDefault("log_query.password", "")
+	v.SetDefault("log_vl.binary_path", "")
+	v.SetDefault("log_vl.package_path", "")
+	v.SetDefault("log_vl.asset_sha256", "")
+	v.SetDefault("log_vl.username", "")
+	v.SetDefault("log_vl.password", "")
+	v.SetDefault("log_vl.data_root", "")
+	v.SetDefault("log_vl.retention_period", "30d")
+	v.SetDefault("log_vl.hot_cache_bytes", int64(512*1024*1024))
+	v.SetDefault("log_vl.hot_port", 0)
+	v.SetDefault("log_vl.cold_port", 0)
+	v.SetDefault("log_vl.rehydrate_port", 0)
+	v.SetDefault("log_vl.start_cold", false)
+	v.SetDefault("log_vl.start_rehydrate", false)
+	v.SetDefault("log_capacity.max_wal_bytes", uint64(0))
+	v.SetDefault("log_capacity.max_gaps", 0)
+	v.SetDefault("log_capacity.degraded_at_percent", 80.0)
+	v.SetDefault("log_capacity.pause_at_percent", 90.0)
+	v.SetDefault("log_sources", []LogSourceConfig{})
+	v.SetDefault("log_archive.enabled", false)
+	v.SetDefault("log_archive.provider", "local")
+	v.SetDefault("log_archive.endpoint", "")
+	v.SetDefault("log_archive.bucket", "")
+	v.SetDefault("log_archive.region", "us-east-1")
+	v.SetDefault("log_archive.prefix", "logs")
+	v.SetDefault("log_archive.access_key", "")
+	v.SetDefault("log_archive.secret_key", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
 	v.SetDefault("artifact_cache.max_bytes", int64(0))
@@ -347,6 +448,44 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, err
+	}
+	if cfg.EnrollToken == "" && strings.TrimSpace(cfg.EnrollTokenFile) != "" {
+		data, readErr := os.ReadFile(cfg.EnrollTokenFile)
+		if readErr != nil {
+			if !os.IsNotExist(readErr) {
+				return nil, fmt.Errorf("读取 enrollment token 文件失败: %w", readErr)
+			}
+			data = nil
+		}
+		if data != nil {
+			token := strings.TrimSpace(string(data))
+			const envPrefix = "JIANMANAGER_ENROLL_TOKEN="
+			if strings.HasPrefix(token, envPrefix) {
+				token = strings.TrimSpace(strings.TrimPrefix(token, envPrefix))
+			}
+			if token == "" {
+				return nil, fmt.Errorf("enrollment token 文件为空")
+			}
+			cfg.EnrollToken = token
+		}
+	}
+	if cfg.LogCapacity.DegradedAtPercent <= 0 || cfg.LogCapacity.DegradedAtPercent >= 100 ||
+		cfg.LogCapacity.PauseAtPercent <= cfg.LogCapacity.DegradedAtPercent || cfg.LogCapacity.PauseAtPercent > 100 {
+		return nil, fmt.Errorf("log_capacity thresholds must satisfy 0 < degraded < pause <= 100")
+	}
+	configuredPorts := []int{cfg.LogVL.HotPort, cfg.LogVL.ColdPort, cfg.LogVL.RehydratePort}
+	seenPorts := make(map[int]bool)
+	for _, port := range configuredPorts {
+		if port == 0 {
+			continue
+		}
+		if port < 1 || port > 65535 {
+			return nil, fmt.Errorf("log_vl ports must be within 1..65535")
+		}
+		if seenPorts[port] {
+			return nil, fmt.Errorf("log_vl ports must be distinct")
+		}
+		seenPorts[port] = true
 	}
 	return &cfg, nil
 }

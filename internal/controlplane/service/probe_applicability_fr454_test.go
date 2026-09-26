@@ -17,6 +17,10 @@ func TestBuildCreateInstanceRequest_ProbePortByApplicability(t *testing.T) {
 	db := newResyncTestDB(t)
 	svc := NewInstanceService(db, nil, nil)
 	t.Cleanup(svc.Shutdown)
+	// buildCreateInstanceRequest 会解析实例所属节点的 UUID 作为日志 holder 身份
+	// （log_source_generation 含 worker uuid）；生产路径上游必然已有该节点，故此处补建夹具。
+	node := &model.Node{Name: "fr454-probe-node", Host: "127.0.0.1", GRPCPort: 9100, WSPort: 9101, Secret: "s", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(node).Error)
 
 	cases := []struct {
 		name      string
@@ -26,7 +30,7 @@ func TestBuildCreateInstanceRequest_ProbePortByApplicability(t *testing.T) {
 		{
 			name: "MC 后端保留探针端口",
 			inst: &model.Instance{
-				NodeID: 1, Name: "backend", Type: model.InstanceTypeMinecraftJava,
+				NodeID: node.ID, Name: "backend", Type: model.InstanceTypeMinecraftJava,
 				Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDaemon,
 				StartCommand: "x", ProbePort: 29940, Status: model.InstanceStatusStopped,
 			},
@@ -35,7 +39,7 @@ func TestBuildCreateInstanceRequest_ProbePortByApplicability(t *testing.T) {
 		{
 			name: "通用二进制归零",
 			inst: &model.Instance{
-				NodeID: 1, Name: "bin", Type: model.InstanceTypeGeneric,
+				NodeID: node.ID, Name: "bin", Type: model.InstanceTypeGeneric,
 				Role: model.InstanceRoleUniversal, ProcessType: model.ProcessTypeDaemon,
 				StartCommand: "x", ProbePort: 29941, Status: model.InstanceStatusStopped,
 			},
@@ -44,7 +48,7 @@ func TestBuildCreateInstanceRequest_ProbePortByApplicability(t *testing.T) {
 		{
 			name: "Beacon 归零",
 			inst: &model.Instance{
-				NodeID: 1, Name: "beacon", Type: model.InstanceTypeGeneric,
+				NodeID: node.ID, Name: "beacon", Type: model.InstanceTypeGeneric,
 				Role: model.InstanceRoleBeacon, ProcessType: model.ProcessTypeDaemon,
 				StartCommand: "x", ProbePort: 29942, Status: model.InstanceStatusStopped,
 			},
@@ -53,7 +57,7 @@ func TestBuildCreateInstanceRequest_ProbePortByApplicability(t *testing.T) {
 		{
 			name: "历史误配 Beacon（type=minecraft_java）仍归零",
 			inst: &model.Instance{
-				NodeID: 1, Name: "legacy-beacon", Type: model.InstanceTypeMinecraftJava,
+				NodeID: node.ID, Name: "legacy-beacon", Type: model.InstanceTypeMinecraftJava,
 				Role: model.InstanceRoleBeacon, ProcessType: model.ProcessTypeDaemon,
 				StartCommand: "x", ProbePort: 29943, Status: model.InstanceStatusStopped,
 			},
@@ -62,7 +66,7 @@ func TestBuildCreateInstanceRequest_ProbePortByApplicability(t *testing.T) {
 		{
 			name: "代理归零",
 			inst: &model.Instance{
-				NodeID: 1, Name: "gate", Type: model.InstanceTypeMinecraftJava,
+				NodeID: node.ID, Name: "gate", Type: model.InstanceTypeMinecraftJava,
 				Role: model.InstanceRoleProxy, ProcessType: model.ProcessTypeDaemon,
 				StartCommand: "x", ProbePort: 29944, Status: model.InstanceStatusStopped,
 			},

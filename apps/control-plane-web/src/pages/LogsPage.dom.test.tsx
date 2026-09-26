@@ -13,11 +13,17 @@ import LogsPage from './LogsPage'
  * LogsPage 强断言（FR-208）：验种子日志行渲染、关键字/级别筛选联动、错误注入显错误态。
  * LogsPage 还消费 /nodes、/instances 填筛选下拉——非本域 endpoint，本测试用 server.use 就地
  * 提供空数组桩（不在 domains/ 重定义别域 handler），满足 onUnhandledRequest:'error' 覆盖闸。
+ *
+ * FR-482：页面会探测可选 `/logs/federation`。默认桩 404 → 降级 legacy 视图（表格仍走 /logs），
+ * 保证既有用例不因联邦 API 未部署而失败；联邦覆盖/导出门禁见 LogsPage.federation.dom.test.tsx。
  */
 beforeEach(() => {
   server.use(
     http.get(API('/nodes'), () => HttpResponse.json([])),
     http.get(API('/instances'), () => HttpResponse.json([])),
+    http.get(API('/logs/federation'), () =>
+      HttpResponse.json({ message: 'federation not deployed' }, { status: 404 }),
+    ),
   )
 })
 
@@ -87,6 +93,10 @@ describe('LogsPage（mock 假后端）', () => {
         exportedUrl = new URL(request.url)
         return new HttpResponse('{"message":"deep-linked-log"}\n', { headers: { 'Content-Type': 'application/x-ndjson' } })
       }),
+      // 最后注册优先：显式联邦 404，避免被 /logs 桩误匹配导致导出门禁。
+      http.get(API('/logs/federation'), () =>
+        HttpResponse.json({ message: 'federation not deployed' }, { status: 404 }),
+      ),
     )
 
     renderWithProviders(<LogsPage />, { route: '/logs?instanceId=2' })

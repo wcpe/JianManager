@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,88 @@ import (
 	"strings"
 	"time"
 )
+
+// S3ObjectStore exposes the standard-library SigV4 backend to other Worker
+// data-plane packages (logs archive uses the same path-style implementation).
+type S3ObjectStore struct{ backend *s3Backend }
+
+// NewS3ObjectStore creates a real S3-compatible client. It does not perform a
+// network call until an operation is invoked.
+func NewS3ObjectStore(cfg Config) (*S3ObjectStore, error) {
+	b, err := newS3Backend(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &S3ObjectStore{backend: b.(*s3Backend)}, nil
+}
+
+func (s *S3ObjectStore) Upload(ctx context.Context, key string, r io.Reader, size int64) error {
+	return s.backend.Upload(ctx, key, r, size)
+}
+
+func (s *S3ObjectStore) Download(ctx context.Context, key string) (io.ReadCloser, error) {
+	return s.backend.Download(ctx, key)
+}
+
+func (s *S3ObjectStore) Delete(ctx context.Context, key string) error {
+	return s.backend.Delete(ctx, key)
+}
+
+// Exists performs a signed HEAD without consuming object data.
+func (s *S3ObjectStore) Exists(ctx context.Context, key string) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, s.backend.objURL(key), nil)
+	if err != nil {
+		return false, err
+	}
+	if err := s.backend.sign(req, emptyPayloadHash); err != nil {
+		return false, err
+	}
+	resp, err := s.backend.client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer drainClose(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode/100 != 2 {
+		return false, fmt.Errorf("S3 HEAD 失败: HTTP %d", resp.StatusCode)
+	}
+	return true, nil
+}
+
+// List returns keys below a path-style S3 prefix using ListObjectsV2.
+func (s *S3ObjectStore) List(ctx context.Context, prefix string) ([]string, error) {
+	u := fmt.Sprintf("%s://%s/%s?list-type=2&prefix=%s", s.backend.scheme, s.backend.endpoint, s.backend.bucket, awsURIEncode(prefix))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.backend.sign(req, emptyPayloadHash); err != nil {
+		return nil, err
+	}
+	resp, err := s.backend.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("S3 LIST 失败: HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		Contents []struct {
+			Key string `xml:"Key"`
+		} `xml:"Contents"`
+	}
+	if err := xml.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(result.Contents))
+	for _, item := range result.Contents {
+		keys = append(keys, item.Key)
+	}
+	return keys, nil
+}
 
 // s3Backend 通过 AWS Signature V4 对接 S3 兼容对象存储（AWS S3 / MinIO / 阿里 OSS 等）。
 // 仅依赖标准库实现签名与 path-style 寻址，不引入 SDK，便于在受限网络下构建。

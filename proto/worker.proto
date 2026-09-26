@@ -55,6 +55,24 @@ service WorkerService {
   rpc ListInstances(ListInstancesRequest) returns (ListInstancesResponse);
   // StreamInstanceEvents 订阅实例事件流。
   rpc StreamInstanceEvents(StreamInstanceEventsRequest) returns (stream InstanceEvent);
+  // FR-473/479：日志能力协商。老 Worker 返回 Unimplemented，CP 不得把缺失能力伪装成完整结果。
+  rpc GetLogCapabilities(GetLogCapabilitiesRequest) returns (GetLogCapabilitiesResponse);
+  // FR-473/479：按 Catalog/PublishedProjection 创建或复用固定 Query View 的日志查询。
+  rpc LogCreateView(LogCreateViewRequest) returns (LogCreateViewResponse);
+  rpc LogSearch(LogSearchRequest) returns (LogSearchResponse);
+  rpc LogStats(LogStatsRequest) returns (LogStatsResponse);
+  rpc LogFields(LogFieldsRequest) returns (LogFieldsResponse);
+  rpc LogFacets(LogFacetsRequest) returns (LogFacetsResponse);
+  // Tail 的 FOLLOW_LIVE 与 VIEW_BOUNDED 语义必须由 mode 明确区分。
+  rpc LogTail(LogTailRequest) returns (stream LogEvent);
+  rpc LogRehydrate(LogRehydrateRequest) returns (LogTaskResponse);
+  rpc LogArchiveStatus(LogArchiveStatusRequest) returns (LogArchiveStatusResponse);
+  // FR-476：CP 经反向隧道查看/控制 Worker 受管 VL namespace。
+  rpc LogRuntimeStatus(LogRuntimeStatusRequest) returns (LogRuntimeStatusResponse);
+  rpc LogRuntimeControl(LogRuntimeControlRequest) returns (LogTaskResponse);
+  rpc LogMigratePartition(LogMigratePartitionRequest) returns (LogTaskResponse);
+  rpc LogCutoverReadiness(LogCutoverReadinessRequest) returns (LogCutoverReadinessResponse);
+  rpc LogResolveIngestGaps(LogResolveIngestGapsRequest) returns (LogTaskResponse);
   // IssueTerminalToken 签发一次性终端连接 token。
   rpc IssueTerminalToken(IssueTerminalTokenRequest) returns (IssueTerminalTokenResponse);
   // ListFiles 列出实例工作目录下的文件。
@@ -601,6 +619,11 @@ message CreateInstanceRequest {
   // query_port 是实例 query.port（Query/GameSpy4 端口），Worker 据此做 Query 直探（FR-446）。
   // 0=未开启 Query，心跳不直探 Query。
   int32 query_port = 20;
+  // CP-authorized log namespace. Empty means an older CP has not negotiated
+  // managed instance acquisition; never infer a numeric CP ID from the UUID.
+  string log_target_id = 22;
+  string log_acquire_mode = 23; // FILE_PRIMARY | STDIO_PRIMARY
+  string log_source_generation = 24; // stable across reconnects on this holder
 }
 
 // PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。
@@ -2300,4 +2323,328 @@ message InstanceEvidence {
 
 message ProbeInstanceEvidenceResponse {
   repeated InstanceEvidence evidence = 1;
+}
+
+// ---------------- FR-473 Worker 日志 Shared Contracts 草案 ----------------
+
+enum LogErrorCode {
+  LOG_ERROR_UNSPECIFIED = 0;
+  LOG_VIEW_STALE = 1;
+  LOG_PARTIAL = 2;
+  LOG_UNAUTHORIZED = 3;
+  LOG_BUDGET_EXCEEDED = 4;
+  LOG_NOT_READY = 5;
+  LOG_ARCHIVE_MISSING = 6;
+  LOG_ERR_DUPLICATE_UNRESOLVED = 7;
+  LOG_RECOVERY_REQUIRED = 8;
+  LOG_CANCELLED = 9;
+  LOG_UNSUPPORTED = 10;
+}
+
+enum LogTailMode {
+  LOG_TAIL_FOLLOW_LIVE = 0;
+  LOG_TAIL_VIEW_BOUNDED = 1;
+}
+
+enum LogCoverageState {
+  LOG_COVERAGE_STATE_UNSPECIFIED = 0;
+  LOG_COVERAGE_SUCCESS = 1;
+  LOG_COVERAGE_OFFLINE = 2;
+  LOG_COVERAGE_NOT_READY = 3;
+  LOG_COVERAGE_ARCHIVE_MISSING = 4;
+  LOG_COVERAGE_PARTIAL = 5;
+  LOG_COVERAGE_STALE = 6;
+}
+
+enum LogEnumerationState {
+  LOG_ENUMERATION_OPEN = 0;
+  LOG_ENUMERATION_EXHAUSTED = 1;
+  LOG_ENUMERATION_STALE = 2;
+  LOG_ENUMERATION_CANCELLED = 3;
+}
+
+enum LogDuplicateQuality {
+  LOG_QUALITY_DUPLICATE_UNSPECIFIED = 0;
+  LOG_QUALITY_DUPLICATE_EXACT = 1;
+  LOG_QUALITY_DUPLICATE_UNRESOLVED = 2;
+  LOG_QUALITY_DUPLICATE_CONFLICT = 3;
+}
+
+enum LogStatsQuality {
+  LOG_QUALITY_STATS_UNSPECIFIED = 0;
+  LOG_QUALITY_STATS_EXACT = 1;
+  LOG_QUALITY_STATS_PARTIAL = 2;
+  LOG_QUALITY_STATS_UNAVAILABLE = 3;
+}
+
+enum LogTaskState {
+  LOG_TASK_QUEUED = 0;
+  LOG_TASK_RUNNING = 1;
+  LOG_TASK_SUCCEEDED = 2;
+  LOG_TASK_FAILED = 3;
+  LOG_TASK_CANCELLED = 4;
+  LOG_TASK_STALE = 5;
+}
+
+message LogTimeRange {
+  string from_utc = 1; // RFC3339 UTC，闭开区间 [from,to)
+  string to_utc = 2;
+}
+
+message LogAuthorizedTargets {
+  repeated string target_ids = 1; // CP 计算后的授权集合
+  bool online_only = 2; // true 仅在调用方显式选择“仅在线”时设置
+}
+
+message LogQueryBudget {
+  uint32 limit = 1;
+  uint64 max_bytes = 2;
+  uint32 timeout_ms = 3;
+  uint32 max_fanout = 4;
+}
+
+message LogQueryViewRef {
+  string view_id = 1;
+  string cursor = 2;
+  string order_version = 3;
+}
+
+message LogCoverageTarget {
+  string target_id = 1;
+  LogCoverageState state = 2;
+  repeated string reasons = 3;
+  string closed_visible_seq = 4;
+  string catalog_generation = 5;
+}
+
+message LogCoverage {
+  bool complete = 1;
+  repeated string partial_reasons = 2;
+  repeated LogCoverageTarget targets = 3;
+  LogEnumerationState enumeration_state = 4;
+}
+
+message LogQuality {
+  LogDuplicateQuality duplicate_quality = 1;
+  LogStatsQuality stats_quality = 2;
+}
+
+message LogError {
+  LogErrorCode code = 1;
+  string message = 2;
+  bool retryable = 3;
+  uint32 retry_after_ms = 4;
+}
+
+message LogEvent {
+  string event_id = 1;
+  string log_source_id = 2;
+  string source_generation = 3;
+  string record_start = 4;
+  string record_end = 5;
+  string event_time_utc = 6;
+  string ingest_time_utc = 7;
+  string level = 8;
+  string stream = 9;
+  string message = 10;
+  string canonical_content_hash = 11;
+}
+
+message LogQueryRequestBase {
+  string request_id = 1;
+  string protocol_version = 2;
+  LogTimeRange time_range = 3;
+  LogAuthorizedTargets authorized_targets = 4;
+  LogQueryBudget budget = 5;
+  LogQueryViewRef view = 6;
+  string filter = 7;
+  string permission_scope = 8;
+  string cancellation_token = 9;
+}
+
+message GetLogCapabilitiesRequest {
+  string protocol_version = 1;
+  string request_id = 2;
+}
+
+message GetLogCapabilitiesResponse {
+  bool supported = 1;
+  string protocol_version = 2;
+  repeated string capabilities = 3; // query_view|coverage|quality|tail|rehydrate|archive_status
+  uint32 max_limit = 4;
+  uint64 max_request_bytes = 5;
+  bool cancellation = 6;
+  string build_id = 7;
+  repeated LogError unsupported_reasons = 8;
+}
+
+message LogSearchRequest { LogQueryRequestBase query = 1; }
+
+message LogSearchResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  LogQuality quality = 4;
+  repeated LogEvent items = 5;
+  string next_cursor = 6;
+  bool exhausted = 7;
+  LogError error = 8;
+}
+
+message LogStatsRequest {
+  LogQueryRequestBase query = 1;
+  repeated string group_by = 2;
+  string time_bucket = 3;
+}
+
+message LogStatsPoint {
+  map<string, string> dimensions = 1;
+  uint64 count = 2;
+  double sum = 3;
+  double min = 4;
+  double max = 5;
+  double avg = 6;
+}
+
+message LogStatsResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  LogQuality quality = 4;
+  repeated LogStatsPoint points = 5;
+  LogError error = 6;
+}
+
+message LogFieldsRequest { LogQueryRequestBase query = 1; }
+message LogFieldsResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  repeated string fields = 4;
+  LogError error = 5;
+}
+
+message LogFacetsRequest {
+  LogQueryRequestBase query = 1;
+  repeated string dimensions = 2;
+  uint32 dimension_limit = 3;
+}
+
+message LogFacetValue { string dimension = 1; string value = 2; uint64 count = 3; }
+
+message LogFacetsResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  repeated LogFacetValue values = 4;
+  bool truncated = 5;
+  LogError error = 6;
+}
+
+message LogTailRequest {
+  LogQueryRequestBase query = 1;
+  LogTailMode mode = 2;
+}
+
+message LogRehydrateRequest {
+  LogQueryRequestBase query = 1;
+  repeated string archive_object_ids = 2;
+}
+
+message LogTaskResponse {
+  string task_id = 1;
+  LogTaskState state = 2;
+  LogError error = 3;
+}
+
+message LogArchiveStatusRequest {
+  LogQueryRequestBase query = 1;
+  repeated string archive_object_ids = 2;
+}
+
+message LogArchiveStatusResponse {
+  string request_id = 1;
+  LogCoverage coverage = 2;
+  repeated string available_archive_object_ids = 3;
+  repeated string missing_archive_object_ids = 4;
+  LogError error = 5;
+}
+
+message LogRuntimeStatusRequest {
+  string request_id = 1;
+  string protocol_version = 2;
+}
+
+message LogRuntimeInstance {
+  string namespace = 1;
+  string state = 2;
+  int32 port = 3;
+  string listen_addr = 4;
+  string storage_data_path = 5;
+  int32 pid = 6;
+  string asset_tag = 7;
+  string asset_build_id = 8;
+  string asset_sha256 = 9;
+  string last_error = 10;
+  bool health_ok = 11;
+  bool partition_recovery_complete = 12;
+  bool query_ready = 13;
+}
+
+message LogRuntimeStatusResponse {
+  string request_id = 1;
+  bool supported = 2;
+  repeated LogRuntimeInstance instances = 3;
+  LogError error = 4;
+}
+
+message LogRuntimeControlRequest {
+  string request_id = 1;
+  string protocol_version = 2;
+  string namespace = 3;
+  // start | stop | restart | install
+  string action = 4;
+  // install only: CP-issued short-lived, node-scoped archive URL and its
+  // approved package SHA-256. Worker verifies both package and executable.
+  string package_url = 5;
+  string package_sha256 = 6;
+}
+
+// LogCreateView is declared after the existing messages to keep generated
+// descriptor indexes stable for older fields and clients.
+message LogCreateViewRequest { LogQueryRequestBase query = 1; }
+message LogCreateViewResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  LogQuality quality = 4;
+  LogError error = 5;
+}
+
+message LogMigratePartitionRequest {
+  string request_id = 1;
+  string protocol_version = 2;
+  string storage_namespace = 3;
+  string utc_day = 4;
+  // The first release permits only cold.
+  string target_tier = 5;
+}
+
+message LogCutoverReadinessRequest {
+  string request_id = 1;
+  string protocol_version = 2;
+}
+
+message LogCutoverReadinessResponse {
+  string request_id = 1;
+  bool capability_confirmed = 2;
+  bool ledger_ready = 3;
+  string cutoff_time_utc = 4;
+  repeated string reasons = 5;
+  LogError error = 6;
+}
+
+message LogResolveIngestGapsRequest {
+  string request_id = 1;
+  string protocol_version = 2;
 }
