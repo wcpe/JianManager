@@ -1051,6 +1051,11 @@ func runWorker() {
 		slog.Warn("WS 服务关闭超时", "error", err)
 	}
 	manager.StopAll()
+	// 受管 VL 必须随 Worker 一起回收：否则它们会成为孤儿并继续占用 hot/cold/rehydrate
+	// 端口，导致下次启动的新 VL 因端口被占而立即退出（真机事故），采集面长期降级。
+	if vlSupervisor != nil {
+		vlSupervisor.StopAll(shutdownCtx)
+	}
 	slog.Info("Worker Node 已停止")
 }
 
