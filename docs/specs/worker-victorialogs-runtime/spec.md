@@ -43,7 +43,9 @@ CP 只分发审批 tag、哈希和许可清单；Worker supervisor 按 namespace
 
 - FR-476 资产清单必须登记审批 tag、下载包 SHA-256、解包后可执行文件 SHA-256、Apache-2.0 许可、linux-amd64/windows-amd64 兼容测试和构建日期；任一校验不匹配不得安装。
 - Worker supervisor 分别管理 HOT、COLD、Rehydrate 实例；VL 进程 health、分区恢复完成和查询完整可用是不同状态。
-- 受管 VL 启动是异步的：接线 ingest/查询前必须等待实例就绪（`vlsup.Supervisor.WaitHealthy`），否则启动期 VL 写连接被拒会令采集运行时创建失败（FR-476 启动时序，见 CHANGELOG 修复）。
+  - 受管 VL 启动是异步的：接线 ingest/查询前必须等待实例就绪（`vlsup.Supervisor.WaitHealthy`），否则启动期 VL 写连接被拒会令采集运行时创建失败（FR-476 启动时序，见 CHANGELOG 修复）。
+  - **启动结果必须如实上报（落实 §2「所有失败返回结构化状态与可观测原因」）**：`Start` 在子进程立即退出时（缺数据目录、端口被占、二进制不兼容等）必须返回错误并标记 `FAILED`，不得在 `factory.Start` 成功后就置 `RUNNING`；`Status`/`StatusAll` 以进程句柄实况校正，避免「启动窗口内尚存活、稍后才退出」的实例长期误报 `RUNNING`。`Start` 另须在启动前创建 namespace 数据根（VL 不自建）。
+  - **受管 VL 生命周期与 Worker 绑定**：Worker 退出时须回收全部受管 namespace（`Supervisor.StopAll`），否则 VL 会成为孤儿继续占用 hot/cold/rehydrate 端口，导致下次启动的新实例因端口被占立即退出、日志中心长期降级。
 - VL 仅监听 localhost，使用独立本地鉴权密钥和受管数据根；CP/Worker 对 Search、Stats、Fields、Facets、Tail、Rehydrate、Export 均执行 scope 校验。
 - HOT cache 预算不等于 RSS 上限；supervisor 必须执行 Worker 级日志总预算和各子预算，超过预算进入降级。
 - 受管 VL 进程注入 `GOMEMLIMIT`（默认 512MiB，`log_vl.memory_limit_bytes` 可覆盖，负值不注入）：`-memory.allowedBytes` 只约束 cache，不约束 Go heap；真机复测该上限把 VL RSS 由 ≈1.1GiB 压到 ≈131MiB（契约 §6.6 RSS ≤ 1GiB 达标）。
