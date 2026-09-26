@@ -228,7 +228,14 @@ func (c *Client) params(rng query.AuthoritativeRange, q query.RangeQuery) (url.V
 		return nil, true, nil
 	}
 	// VL v1.52.0 treats the HTTP end parameter as exclusive, matching [start,end).
-	return url.Values{"start": {start.UTC().Format(time.RFC3339Nano)}, "end": {end.UTC().Format(time.RFC3339Nano)}}, false, nil
+	params := url.Values{"start": {start.UTC().Format(time.RFC3339Nano)}, "end": {end.UTC().Format(time.RFC3339Nano)}}
+	// 用户过滤走 extra_filters，由 VL 独立解析后与 query 内的作用域约束 AND。
+	// 不得把用户过滤拼进 query：否则 (scope) AND (filter) 会被 OR/管道逃逸（实测
+	// `(ZZZ) OR (*) | stream_context after 5` 可越界读到其它实例的日志）。
+	if f := strings.TrimSpace(q.Filter); f != "" {
+		params.Set("extra_filters", f)
+	}
+	return params, false, nil
 }
 
 func searchQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
@@ -283,9 +290,10 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	if len(parts) > 0 {
 		base = strings.Join(parts, " AND ")
 	}
-	if strings.TrimSpace(q.Filter) != "" {
-		base += " AND (" + q.Filter + ")"
-	}
+	// 注意：用户过滤（q.Filter）不在此拼接。作用域约束必须独占 query 参数，
+	// 否则用户语法可与作用域条件发生运算符优先级交互（`scope AND (f) OR (*)`
+	// 会被解析为 `(scope AND f) OR (*)`），或借管道重扫越界。用户过滤统一由
+	// params() 放进 extra_filters，由 VL 独立解析后与本 query AND 组合。
 	return base
 }
 
