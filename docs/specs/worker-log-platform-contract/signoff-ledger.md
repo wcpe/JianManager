@@ -202,3 +202,23 @@
 **回滚**：`bin/jianmanager-worker.bak-stability-20260926-202929`（33760216 bytes，`0.23.0`）。
 
 **注**：生产 CP 未替换——本 PR 对 CP 仅脚本/CI/测试配置改动，无运行时逻辑变化。
+
+## 生产 VictoriaLogs 启动测试发现真实缺陷（2026-09-26）
+
+**测试方法**：经生产 CP 控制面 `POST /api/v1/nodes/1/log-runtime/rehydrate/start`（选 rehydrate 因其配置 `start_rehydrate: false`，启停不影响正在采集的 HOT）。
+
+**缺陷 1（严重）：启动未校验存活，API 报成功但进程已是僵尸**
+- API 返回 `HTTP 202 {"state":2}`（成功），状态查询报 `RUNNING, pid=2121879`；
+- 但实测该 PID 为 **`Z <defunct>`（僵尸）**、**端口 19463 未监听**；
+- 根因：`internal/worker/logs/vlsup/supervisor.go:286` 在 `factory.Start` 返回后**立即置 `StateRunning`**，不做存活/端口校验；VL 因数据目录缺失即刻退出，状态却停留在 RUNNING。
+- 危害：运维据控制面判断「VL 已启动」，实际早已死亡——属**误导性成功上报**。
+
+**缺陷 2：启动前不创建 namespace 数据目录**
+- `vl/` 下仅有 `hot`/`cold`，**缺 `rehydrate`**；`StoragePathUnder` 只拼路径，`Start` 不 `MkdirAll`（仅 `install.go` 建特定 root）。首次启动某 namespace 时必然失败。
+
+**缺陷 3：孤儿僵尸残留**
+- 观察到 3 个僵尸 VL 进程（`2102020`/`2102027`/`744632` 等），其中两个父进程为**新部署的 Worker（2101999）**，即新 Worker 启动时曾拉起 VL 失败并留下僵尸。
+
+**未受影响**：HOT 采集正常——真正服务 19461 的是 PID `891327`（运行逾 1 天）；游戏服 12/12 完好；已入库日志数据未受影响。
+
+**当前处置**：仅取证与留痕，**未修改代码、未清理僵尸**——修复属新缺陷修复（是否并入 PR #23 会改变其范围）、清理僵尸需重启 Worker（短暂中断采集），均待用户裁决。
