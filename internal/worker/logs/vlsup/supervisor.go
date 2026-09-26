@@ -407,6 +407,27 @@ func (s *Supervisor) Stop(ctx context.Context, ns Namespace) error {
 	return nil
 }
 
+// StopAll 停止全部受管 namespace，供 Worker 退出时回收受管子进程。
+//
+// 必要性（真机事故）：Worker 退出若不停受管 VL，VL 会成为 PPID=1 的孤儿并继续占用
+// hot/cold/rehydrate 端口；下次启动时新 VL 因端口被占而立即退出，采集面长期降级。
+// 各 namespace 独立停止，单个失败不阻断其余回收。
+func (s *Supervisor) StopAll(ctx context.Context) {
+	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+		s.mu.Lock()
+		inst, ok := s.instances[ns]
+		running := ok && (inst.state == StateRunning || inst.proc != nil)
+		s.mu.Unlock()
+		if !running {
+			continue
+		}
+		if err := s.Stop(ctx, ns); err != nil {
+			// 单个 namespace 回收失败不应阻断其余，交由上层日志记录。
+			continue
+		}
+	}
+}
+
 // ReplaceBinary switches managed namespaces to an already verified versioned
 // executable. Failure to start the new asset restores the previous binary and
 // attempts to restart every namespace that was running before the change.

@@ -641,3 +641,39 @@ func TestStatusReconcilesProcessThatExitsLater(t *testing.T) {
 		t.Fatal("StatusAll 应包含 hot")
 	}
 }
+
+// TestStopAllReclaimsEveryNamespace 锁定真机事故修复：
+// Worker 退出若不停受管 VL，VL 会成为孤儿继续占用端口，下次启动的新 VL 因端口被占
+// 而立即退出，采集面长期降级。StopAll 必须回收全部运行中的 namespace。
+func TestStopAllReclaimsEveryNamespace(t *testing.T) {
+	f := &fakeFactory{}
+	s := newTestSupervisor(t, f, &RecordingSink{}, false)
+	ctx := context.Background()
+	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+		if err := s.Start(ctx, ns); err != nil {
+			t.Fatalf("start %s: %v", ns, err)
+		}
+	}
+
+	s.StopAll(ctx)
+
+	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+		st, err := s.Status(ns)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.State == StateRunning {
+			t.Fatalf("%s 仍报 RUNNING，StopAll 未回收", ns)
+		}
+		if st.PID != 0 {
+			t.Fatalf("%s 的 PID 未清零: %+v", ns, st)
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, p := range f.procs {
+		if !p.Stopped() {
+			t.Fatal("StopAll 必须停止每个已启动进程")
+		}
+	}
+}
