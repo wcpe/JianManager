@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -808,7 +809,11 @@ func runWorker() {
 		workerServer.EmitOutput(instanceID, stream, text)
 		if logIngest != nil {
 			if err := logIngest.AppendInstanceOutput(instanceID, stream, data); err != nil {
-				slog.Error("实例日志受管 Raw 持久化失败", "instanceId", instanceID, "stream", stream, "error", err)
+				if errors.Is(err, ingest.ErrInstanceBindingPending) {
+					slog.Debug("实例日志绑定尚未完成，输出已写入 pending spool", "instanceId", instanceID, "stream", stream)
+				} else {
+					slog.Error("实例日志受管 Raw 持久化失败", "instanceId", instanceID, "stream", stream, "error", err)
+				}
 			}
 		}
 	})

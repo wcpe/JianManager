@@ -2,7 +2,9 @@ package ingest
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +22,17 @@ type InstanceBinding struct {
 	Mode       pipeline.AcquireMode `json:"mode"`
 	WorkDir    string               `json:"work_dir"`
 }
+
+// ErrInstanceBindingPending 表示输出已安全写入暂存区，但实例日志绑定尚未到达。
+var ErrInstanceBindingPending = errors.New("ingest: instance log binding pending")
+
+type pendingFlushError struct {
+	stream string
+	err    error
+}
+
+func (e *pendingFlushError) Error() string { return fmt.Sprintf("%s: %v", e.stream, e.err) }
+func (e *pendingFlushError) Unwrap() error { return e.err }
 
 func (m *Manager) MissingInstanceBindings(instanceIDs []string) []string {
 	m.mu.Lock()
@@ -49,12 +62,29 @@ func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir str
 	m.mu.Lock()
 	existing, exists := m.state.Instances[uuid]
 	m.mu.Unlock()
+	if exists && existing != binding {
+		return fmt.Errorf("ingest: instance log binding changed without a source transition")
+	}
+
+	// 暂存接管与绑定变更必须共用同一把锁，保证注册期间的输出不会插入回放中间。
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
 	if exists {
-		if existing != binding {
-			return fmt.Errorf("ingest: instance log binding changed without a source transition")
+		if err := m.flushPendingForBinding(binding); err != nil {
+			m.recordRawWriteFailure(binding, pendingFlushStream(err), 0)
+			return fmt.Errorf("ingest: adopt pending instance output: %w", err)
+		}
+		if binding.Mode == pipeline.ModeStdioPrimary {
+			for _, stream := range []string{"stdout", "stderr"} {
+				if err := m.ensureRawFile(m.rawInstancePath(binding, stream)); err != nil {
+					m.recordRawWriteFailure(binding, stream, 0)
+					return err
+				}
+			}
 		}
 		return nil
 	}
+
 	streams := []string{"stdout"}
 	if binding.Mode == pipeline.ModeStdioPrimary {
 		streams = append(streams, "stderr")
@@ -65,16 +95,6 @@ func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir str
 		if binding.Mode == pipeline.ModeStdioPrimary {
 			path = m.rawInstancePath(binding, stream)
 			sourceID = binding.TargetID + "/" + stream
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-				return err
-			}
-			f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-			if err != nil {
-				return err
-			}
-			if err := f.Close(); err != nil {
-				return err
-			}
 		}
 		if err := m.Register(SourceConfig{LogSourceID: sourceID, SourceGeneration: generation,
 			Mode: binding.Mode, Path: path, Stream: stream, SourceCategory: logtypes.SourceInstance,
@@ -94,6 +114,18 @@ func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir str
 		m.mu.Unlock()
 		return err
 	}
+	if err := m.flushPendingForBinding(binding); err != nil {
+		m.recordRawWriteFailure(binding, pendingFlushStream(err), 0)
+		return fmt.Errorf("ingest: adopt pending instance output: %w", err)
+	}
+	if binding.Mode == pipeline.ModeStdioPrimary {
+		for _, stream := range []string{"stdout", "stderr"} {
+			if err := m.ensureRawFile(m.rawInstancePath(binding, stream)); err != nil {
+				m.recordRawWriteFailure(binding, stream, 0)
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -109,39 +141,132 @@ func (m *Manager) rawInstancePath(binding InstanceBinding, stream string) string
 	return filepath.Join(m.root, "var", "log", "raw", fmt.Sprintf("%x", identity), stream+".log")
 }
 
-// AppendInstanceOutput persists the original bytes before the acquisition loop
-// consumes them. FILE_PRIMARY stdout remains console-only to avoid double ingestion.
-func (m *Manager) AppendInstanceOutput(uuid, stream string, data []byte) (writeErr error) {
-	if len(data) == 0 {
-		return nil
+func (m *Manager) pendingInstancePath(uuid, stream string) string {
+	identity := sha256.Sum256([]byte(uuid))
+	return filepath.Join(m.root, "var", "log", pendingSpoolRoot, fmt.Sprintf("%x", identity), stream+".spool")
+}
+
+func (m *Manager) ensureRawFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
 	}
-	if stream != "stdout" && stream != "stderr" {
-		return fmt.Errorf("ingest: unknown output stream")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
 	}
-	m.mu.Lock()
-	binding, ok := m.state.Instances[uuid]
-	defer func() {
-		if writeErr != nil && ok && binding.Mode == pipeline.ModeStdioPrimary {
-			key := binding.TargetID + "/" + stream + "/" + binding.Generation
-			if pipe := m.pipes[key]; pipe != nil {
-				entry := pipe.Ledger().Get(pipe.Key())
-				if entry != nil {
-					_ = pipe.Ledger().RecordGap(pipe.Key(), entry.Positions.Read, entry.Positions.Read, "STDIO_RAW_WRITE_FAILED", fmt.Sprintf("%d bytes require operator verification", len(data)))
-					_ = pipe.Ledger().PauseAcquire(pipe.Key(), "managed Raw write failed; manual recovery required")
-				}
+	return f.Close()
+}
+
+func (m *Manager) appendPendingInstanceOutput(uuid, stream string, data []byte) error {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	return m.appendPendingInstanceOutputLocked(uuid, stream, data)
+}
+
+func (m *Manager) appendPendingInstanceOutputLocked(uuid, stream string, data []byte) error {
+	path := m.pendingInstancePath(uuid, stream)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("ingest: pending spool directory: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("ingest: pending spool open: %w", err)
+	}
+	n, writeErr := f.Write(data)
+	if writeErr == nil && n != len(data) {
+		writeErr = io.ErrShortWrite
+	}
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
+	if closeErr := f.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		return fmt.Errorf("ingest: pending spool write: %w", writeErr)
+	}
+	return nil
+}
+
+func (m *Manager) flushPendingForBinding(binding InstanceBinding) error {
+	for _, stream := range []string{"stdout", "stderr"} {
+		fail := func(err error) error { return &pendingFlushError{stream: stream, err: err} }
+		spoolPath := m.pendingInstancePath(binding.UUID, stream)
+		if _, err := os.Stat(spoolPath); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return fail(fmt.Errorf("ingest: pending spool stat: %w", err))
+		}
+		rawPath := m.rawInstancePath(binding, stream)
+		if _, err := os.Stat(rawPath); os.IsNotExist(err) {
+			if err := os.MkdirAll(filepath.Dir(rawPath), 0o700); err != nil {
+				return fail(err)
 			}
+			if err := os.Rename(spoolPath, rawPath); err != nil {
+				return fail(fmt.Errorf("ingest: adopt pending spool: %w", err))
+			}
+			continue
+		} else if err != nil {
+			return fail(fmt.Errorf("ingest: raw stat: %w", err))
 		}
-		m.mu.Unlock()
-		if writeErr != nil && ok {
-			_ = m.persist()
+		spool, err := os.Open(spoolPath)
+		if err != nil {
+			return fail(fmt.Errorf("ingest: pending spool open: %w", err))
 		}
-	}()
-	if !ok {
-		return fmt.Errorf("ingest: instance output has no durable source binding")
+		raw, err := os.OpenFile(rawPath, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			_ = spool.Close()
+			return fail(fmt.Errorf("ingest: raw open: %w", err))
+		}
+		_, copyErr := io.Copy(raw, spool)
+		if copyErr == nil {
+			copyErr = raw.Sync()
+		}
+		if closeErr := raw.Close(); copyErr == nil {
+			copyErr = closeErr
+		}
+		if closeErr := spool.Close(); copyErr == nil {
+			copyErr = closeErr
+		}
+		if copyErr != nil {
+			return fail(fmt.Errorf("ingest: pending spool flush: %w", copyErr))
+		}
+		if err := os.Remove(spoolPath); err != nil {
+			return fail(fmt.Errorf("ingest: pending spool cleanup: %w", err))
+		}
 	}
-	if binding.Mode == pipeline.ModeFilePrimary {
-		return nil
+	return nil
+}
+
+func pendingFlushStream(err error) string {
+	var flushErr *pendingFlushError
+	if errors.As(err, &flushErr) && flushErr.stream != "" {
+		return flushErr.stream
 	}
+	return "stdout"
+}
+
+func (m *Manager) recordRawWriteFailure(binding InstanceBinding, stream string, size int) {
+	if binding.Mode != pipeline.ModeStdioPrimary {
+		return
+	}
+	key := binding.TargetID + "/" + stream + "/" + binding.Generation
+	m.mu.Lock()
+	pipe := m.pipes[key]
+	m.mu.Unlock()
+	if pipe == nil {
+		return
+	}
+	entry := pipe.Ledger().Get(pipe.Key())
+	if entry == nil {
+		return
+	}
+	_ = pipe.Ledger().RecordGap(pipe.Key(), entry.Positions.Read, entry.Positions.Read, "STDIO_RAW_WRITE_FAILED", fmt.Sprintf("%d bytes require operator verification", size))
+	_ = pipe.Ledger().PauseAcquire(pipe.Key(), "managed Raw write failed; manual recovery required")
+	_ = m.persist()
+}
+
+func (m *Manager) appendRawInstanceOutputLocked(binding InstanceBinding, stream string, data []byte) error {
 	if m.capacityProvider != nil {
 		budget, err := m.capacityProvider()
 		if err != nil {
@@ -159,7 +284,10 @@ func (m *Manager) AppendInstanceOutput(uuid, stream string, data []byte) (writeE
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(data)
+	n, err := f.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
 	if err == nil {
 		err = f.Sync()
 	}
@@ -167,4 +295,45 @@ func (m *Manager) AppendInstanceOutput(uuid, stream string, data []byte) (writeE
 		err = closeErr
 	}
 	return err
+}
+
+// AppendInstanceOutput 先持久化原始字节，再交给常驻采集循环消费。
+// FILE_PRIMARY 的 stdout/stderr 仍只用于控制台，避免重复采集。
+func (m *Manager) AppendInstanceOutput(uuid, stream string, data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	if stream != "stdout" && stream != "stderr" {
+		return fmt.Errorf("ingest: unknown output stream")
+	}
+	m.mu.Lock()
+	binding, ok := m.state.Instances[uuid]
+	m.mu.Unlock()
+
+	m.pendingMu.Lock()
+	if !ok {
+		// 注册可能在首次检查后完成，必须在暂存锁内重新读取绑定，避免把新输出留在
+		// 已经完成回放的 spool 中。
+		m.mu.Lock()
+		binding, ok = m.state.Instances[uuid]
+		m.mu.Unlock()
+	}
+	if !ok {
+		writeErr := m.appendPendingInstanceOutputLocked(uuid, stream, data)
+		m.pendingMu.Unlock()
+		if writeErr != nil {
+			return writeErr
+		}
+		return fmt.Errorf("%w: instance %s", ErrInstanceBindingPending, uuid)
+	}
+	if binding.Mode == pipeline.ModeFilePrimary {
+		m.pendingMu.Unlock()
+		return nil
+	}
+	writeErr := m.appendRawInstanceOutputLocked(binding, stream, data)
+	m.pendingMu.Unlock()
+	if writeErr != nil {
+		m.recordRawWriteFailure(binding, stream, len(data))
+	}
+	return writeErr
 }
