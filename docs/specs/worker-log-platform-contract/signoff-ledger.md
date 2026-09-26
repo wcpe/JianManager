@@ -188,3 +188,17 @@
 **处理状态（用户裁决）**：用户选择 **暂缓 FR-475**，保持其 PRD 状态为 `🔨 开发中`，待补齐 Windows 验收后再标记；不将现有 spec/acceptance-real 的明确缺口自行改写为已知边界。
 
 其余 **11 条 FR** 已按预案把 PRD 状态更新为 `✅ 已交付@v0.24.0`；FR-475 的签字记录保留，但其交付状态单独挂起，不影响已交付的 11 条。
+
+## 生产 Worker 部署稳定性加固（2026-09-26）
+
+**部署内容**：PR #23（`chore/stability-hardening-clean`）的 Worker 侧运行时修复——日志绑定启动竞态的持久 pending spool 机制。该 PR **尚未合并到 master**，故生产 Worker 现含未合并代码。
+
+**部署方式与一个关键处置**：首次 `cp` 替换失败（`Text file busy`）——根因是 **12 个 `daemon` wrapper 进程持有该二进制**（它们即游戏服守护进程，运行逾 1 天）。未杀这些进程，改用**原子 rename 替换**（新 inode 就位后 `mv`，不影响已打开的旧 inode），12 个游戏服全程未受影响。
+
+**部署结果**：Worker `0.23.0` → `0.24.0-dev`；`daemon` 实例恢复 **12/12**；游戏服 wrapper **12/12 完好**；CP `HTTP 200`；实例状态统计与部署前逐项一致（RUNNING 12 / STOPPED 136 / CRASHED 5）。
+
+**修复效果验证（本次部署目的）**：本次启动窗口 `no durable source binding` = **0 次**、`受管 Raw 持久化失败` = **0 次**——而旧版同一场景产生 164 条该 ERROR。修复生效。
+
+**回滚**：`bin/jianmanager-worker.bak-stability-20260926-202929`（33760216 bytes，`0.23.0`）。
+
+**注**：生产 CP 未替换——本 PR 对 CP 仅脚本/CI/测试配置改动，无运行时逻辑变化。
