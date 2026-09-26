@@ -592,3 +592,52 @@ func TestStartCreatesNamespaceDataDir(t *testing.T) {
 		t.Fatalf("namespace 数据目录须在启动前创建: err=%v", statErr)
 	}
 }
+
+// TestStatusReconcilesProcessThatExitsLater 锁定真机缺口：
+// 进程可能在启动观察窗口内尚存活、稍后才退出（实测 rehydrate 缺目录即如此）。
+// 此时账面若停留 RUNNING，控制面会长期误导运维，故读取状态时须以进程实况校正为 FAILED。
+func TestStatusReconcilesProcessThatExitsLater(t *testing.T) {
+	f := &fakeFactory{}
+	s := newTestSupervisor(t, f, &RecordingSink{}, false)
+	if err := s.Start(context.Background(), NamespaceHot); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	st, err := s.Status(NamespaceHot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.State != StateRunning {
+		t.Fatalf("存活进程应报 RUNNING: %+v", st)
+	}
+
+	// 模拟「稍后退出」：绕过启动窗口，直接令进程句柄报告已退出。
+	f.mu.Lock()
+	proc := f.procs[len(f.procs)-1]
+	f.mu.Unlock()
+	proc.exitImmediately()
+
+	st, err = s.Status(NamespaceHot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.State != StateFailed {
+		t.Fatalf("进程已退出，状态须校正为 FAILED: %+v", st)
+	}
+	if st.LastError == "" {
+		t.Fatal("校正为 FAILED 时须带可诊断原因")
+	}
+
+	all := s.StatusAll()
+	found := false
+	for _, item := range all {
+		if item.Namespace == NamespaceHot {
+			found = true
+			if item.State != StateFailed {
+				t.Fatalf("StatusAll 同样须校正: %+v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("StatusAll 应包含 hot")
+	}
+}

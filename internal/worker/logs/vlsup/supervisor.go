@@ -549,8 +549,33 @@ func (s *Supervisor) Status(ns Namespace) (InstanceStatus, error) {
 	if !ok {
 		return InstanceStatus{}, fmt.Errorf("vlsup: unknown namespace %q", ns)
 	}
+	s.reconcileExitedLocked(inst)
 	return inst.status, nil
 }
+
+// reconcileExitedLocked 让账面状态跟随进程实况：进程已退出却仍记 RUNNING 时改为 FAILED。
+//
+// 必要性（真机实测）：启动后的存活观察窗口无法覆盖「先初始化数百毫秒、随后才退出」的失败
+// （rehydrate 缺目录即如此——窗口内进程尚存，稍后才死）。只靠启动时的检查会让控制面长期
+// 报 RUNNING 而实际端口无监听；故在任何状态读取点都以进程句柄为准校正，避免误导性成功上报。
+// 调用方须持有 s.mu。
+func (s *Supervisor) reconcileExitedLocked(inst *instance) {
+	if inst == nil || inst.proc == nil || inst.state != StateRunning {
+		return
+	}
+	if !inst.proc.Exited() {
+		return
+	}
+	inst.state = StateFailed
+	inst.status.State = StateFailed
+	inst.status.HealthOK = false
+	inst.status.QueryReady = false
+	if inst.status.LastError == "" {
+		inst.status.LastError = "managed VictoriaLogs process exited unexpectedly"
+	}
+}
+
+
 
 // StatusAll 返回全部受管 namespace 的状态。
 func (s *Supervisor) StatusAll() []InstanceStatus {
@@ -559,6 +584,8 @@ func (s *Supervisor) StatusAll() []InstanceStatus {
 	out := make([]InstanceStatus, 0, len(s.instances))
 	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
 		if inst, ok := s.instances[ns]; ok {
+			// 与 Status 一致：以进程实况校正，避免已退出实例仍报 RUNNING。
+			s.reconcileExitedLocked(inst)
 			out = append(out, inst.status)
 		}
 	}
