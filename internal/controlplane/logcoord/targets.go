@@ -87,7 +87,14 @@ func CoverageFromReadiness(t TargetInfo, reasons []string) TargetCoverage {
 		rs = append(rs, "not_ready")
 	}
 	for _, r := range rs {
-		if r == "log_rpc_unsupported" || r == "online_only_excluded" || r == "missing_coverage" {
+		// worker_view_failed：该 Worker 的本地 Query View 未建立（未启用日志查询服务、
+		// 混版 Unimplemented、绑定缺失等）。其语义是「该 Worker 的数据整体不可查询」，
+		// 而非「查到了但有缺口」，故归 NotReady 而非 Partial。
+		// 若不在此列出，原因既不改 state、又无法被 normalizeCoverageReason 识别，
+		// 目标会停留 success 并使 BuildCoverage 误判 complete=true；导出据此放行，
+		// 用户会拿到「成功」附件却静默缺失整个 Worker 的日志（B-1）。
+		if r == "log_rpc_unsupported" || r == "online_only_excluded" || r == "missing_coverage" ||
+			r == "worker_view_failed" {
 			if state == CoverageSuccess {
 				state = CoverageNotReady
 			}
@@ -200,7 +207,8 @@ func normalizeCoverageReason(reason string) string {
 		return "ARCHIVE_MISSING"
 	case "LOG_RPC_UNSUPPORTED":
 		return "LOG_UNSUPPORTED"
-	case "NOT_READY", "MISSING_COVERAGE", "TARGET_MISSING_IN_WORKER_RESPONSE", "EMPTY_WORKER_RESPONSE":
+	case "NOT_READY", "MISSING_COVERAGE", "TARGET_MISSING_IN_WORKER_RESPONSE", "EMPTY_WORKER_RESPONSE",
+		"WORKER_VIEW_FAILED":
 		return "ENGINE_NOT_READY"
 	case "ROW_OR_BYTE_BUDGET_CUT", "FACET_TRUNCATED", "FANOUT_BUDGET_EXCEEDED", "WORKER_TRUNCATED":
 		return "TRUNCATED"

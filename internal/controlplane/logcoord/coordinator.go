@@ -424,7 +424,13 @@ func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget 
 	workerView, viewErr, viewOK := workerViewID(view, workerID)
 	if !viewOK {
 		for _, target := range targets {
-			coverage[target.ID] = CoverageFromReadiness(target, []string{"worker_view_failed", viewErr})
+			// 显式补 NotReady：不依赖 CoverageFromReadiness 的原因白名单单点生效，
+			// 与 dial_failed/search_failed 的既有写法一致（B-1 双保险）。
+			tc := CoverageFromReadiness(target, []string{"worker_view_failed", viewErr})
+			if tc.State == CoverageSuccess {
+				tc.State = CoverageNotReady
+			}
+			coverage[target.ID] = tc
 		}
 		return
 	}
@@ -777,7 +783,11 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 		workerView, viewErr, viewOK := workerViewID(view, workerID)
 		if !viewOK {
 			for _, t := range targets {
-				covBy[t.ID] = CoverageFromReadiness(t, []string{"worker_view_failed", viewErr})
+				tc := CoverageFromReadiness(t, []string{"worker_view_failed", viewErr})
+				if tc.State == CoverageSuccess {
+					tc.State = CoverageNotReady
+				}
+				covBy[t.ID] = tc
 			}
 			quality.StatsQuality = StatsQPartial
 			continue
@@ -793,12 +803,19 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 			MetricField:  q.MetricField,
 		}, q.GroupBy, q.TimeBucket)
 		if callErr != nil || resp == nil {
-			msg := "stats_failed"
+			// 稳定字面量必须保留：它是 CoverageFromReadiness 白名单与 normalize 的识别锚点。
+			// 若用 callErr.Error() 覆盖它，原因既不入白名单、也无法归一，目标会停留 success
+			// 并使 complete 误判为 true（与 B-1 同源的假 complete）。错误文本改为附加原因。
+			reasons := []string{"stats_failed"}
 			if callErr != nil {
-				msg = callErr.Error()
+				reasons = append(reasons, callErr.Error())
 			}
 			for _, t := range targets {
-				covBy[t.ID] = CoverageFromReadiness(t, []string{msg})
+				tc := CoverageFromReadiness(t, reasons)
+				if tc.State == CoverageSuccess {
+					tc.State = CoveragePartial
+				}
+				covBy[t.ID] = tc
 			}
 			quality.StatsQuality = StatsQPartial
 			continue
@@ -907,7 +924,11 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 		workerView, viewErr, viewOK := workerViewID(view, workerID)
 		if !viewOK {
 			for _, t := range targets {
-				covBy[t.ID] = CoverageFromReadiness(t, []string{"worker_view_failed", viewErr})
+				tc := CoverageFromReadiness(t, []string{"worker_view_failed", viewErr})
+				if tc.State == CoverageSuccess {
+					tc.State = CoverageNotReady
+				}
+				covBy[t.ID] = tc
 			}
 			continue
 		}
@@ -921,12 +942,19 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 			OrderVersion: view.OrderVersion,
 		}, q.Dimensions, q.DimensionLimit)
 		if callErr != nil || resp == nil {
-			msg := "facets_failed"
+			// 同 Stats：稳定字面量是白名单识别锚点，错误文本只作附加原因，不得覆盖它。
+			// Facets 无独立质量标记，若此处失败被误判为 success，用户会静默失去整个
+			// Worker 的 facet 面板且无从察觉，故必须显式降为 partial。
+			reasons := []string{"facets_failed"}
 			if callErr != nil {
-				msg = callErr.Error()
+				reasons = append(reasons, callErr.Error())
 			}
 			for _, t := range targets {
-				covBy[t.ID] = CoverageFromReadiness(t, []string{msg})
+				tc := CoverageFromReadiness(t, reasons)
+				if tc.State == CoverageSuccess {
+					tc.State = CoveragePartial
+				}
+				covBy[t.ID] = tc
 			}
 			continue
 		}

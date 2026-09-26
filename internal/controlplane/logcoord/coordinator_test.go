@@ -81,6 +81,96 @@ func TestCoverageFromReadiness_ExecutionFailureIsNotSuccess(t *testing.T) {
 	}
 }
 
+// TestCoverageFromReadiness_WorkerViewFailedIsNotReady 锁定 B-1：
+// 本地 Query View 建立失败属于「该 Worker 的数据整体不可查询」，归 NotReady
+// 而非 Partial。该原因还必须能被 normalizeCoverageReason 识别，否则它会同时
+// 绕过「状态降级」与「原因兜底」两条路径，使目标停留 success、coverage 误判
+// complete=true，导出据此放行，用户拿到「成功」附件却静默缺整个 Worker 的日志。
+func TestCoverageFromReadiness_WorkerViewFailedIsNotReady(t *testing.T) {
+	target := TargetInfo{ID: "node:1", WorkerID: "worker-1", Readiness: ReadyOnline}
+	got := CoverageFromReadiness(target, []string{"worker_view_failed", "log query service disabled on this worker"})
+	assert.Equal(t, CoverageNotReady, got.State, "view 失败必须降级，不得停留 success")
+	assert.NotEqual(t, CoverageSuccess, got.State)
+	// 原因必须被归一为契约枚举，不能落进 default 分支被静默丢弃。
+	assert.Equal(t, "ENGINE_NOT_READY", normalizeCoverageReason("worker_view_failed"))
+
+	cov := BuildCoverage([]TargetInfo{target}, map[string]TargetCoverage{target.ID: got}, false, nil, EnumExhausted)
+	assert.False(t, cov.Complete, "view 失败时 coverage 绝不允许 complete=true")
+	assert.Contains(t, cov.PartialReasons, "ENGINE_NOT_READY")
+}
+
+// TestSearchWorkerViewFailureNotSilentComplete 锁定 B-1 的端到端后果：
+// 一个 Worker 正常、另一个 Worker 的 view 建立失败时，响应不得宣称 complete。
+func TestSearchWorkerViewFailureNotSilentComplete(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: ReadyOnline},
+		{ID: "inst:2", WorkerID: "w2", Readiness: ReadyOnline},
+	}}
+	w1 := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "inst:1/stdout", "g1", 1, "2026-09-20T12:00:00Z", "INFO", "ok")},
+		searchTarget: []WorkerTargetResult{successTarget("inst:1", "w1", "1", "1")}}
+	w2 := &fakeWorker{workerID: "w2",
+		searchTarget: []WorkerTargetResult{successTarget("inst:2", "w2", "1", "1")},
+		openViewFail: "log query service disabled on this worker"}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	dialer.clients["w2"] = w2
+	coord := New(resolver, dialer)
+
+	res, err := coord.Search(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"inst:1", "inst:2"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.False(t, res.Coverage.Complete, "存在 view 失败的 Worker 时不得宣称 complete")
+	assert.NotEmpty(t, res.Coverage.PartialReasons)
+	// 失败 Worker 的目标必须显式标记，不得静默丢弃。
+	var found bool
+	for _, tc := range res.Coverage.Targets {
+		if tc.TargetID == "inst:2" {
+			found = true
+			assert.NotEqual(t, CoverageSuccess, tc.State, "view 失败的目标不得为 success")
+			assert.Contains(t, tc.Reasons, "worker_view_failed")
+		}
+	}
+	assert.True(t, found, "失败 Worker 的目标必须出现在 coverage 中")
+	// 仅正常 Worker 的事件可返回。
+	for _, item := range res.Items {
+		assert.Equal(t, "inst:1", item.TargetID)
+	}
+}
+
+// TestExportBlocksWhenWorkerViewFailed 直接编码用户可见后果：view 失败时
+// 不得下发「成功」附件（否则用户会拿到静默缺整个 Worker 的导出）。
+func TestExportBlocksWhenWorkerViewFailed(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: ReadyOnline},
+		{ID: "inst:2", WorkerID: "w2", Readiness: ReadyOnline},
+	}}
+	w1 := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "inst:1/stdout", "g1", 1, "2026-09-20T12:00:00Z", "INFO", "ok")},
+		searchTarget: []WorkerTargetResult{successTarget("inst:1", "w1", "1", "1")}}
+	w2 := &fakeWorker{workerID: "w2",
+		searchTarget: []WorkerTargetResult{successTarget("inst:2", "w2", "1", "1")},
+		openViewFail: "log query service disabled on this worker"}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	dialer.clients["w2"] = w2
+	coord := New(resolver, dialer)
+
+	res, err := coord.Export(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"inst:1", "inst:2"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+	assert.True(t, res.ExportIncomplete, "view 失败必须使导出判定为不完整")
+	assert.Nil(t, res.Artifact, "覆盖不完整时不得下发成功附件")
+	assert.Contains(t, res.IncompleteReasons, "coverage_incomplete")
+}
+
 func TestSortKeyCompareOrder(t *testing.T) {
 	newer := SortKey{EventTimeUTC: time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC), LogSourceID: "a", EventID: "1"}
 	older := SortKey{EventTimeUTC: time.Date(2026, 9, 20, 11, 0, 0, 0, time.UTC), LogSourceID: "z", EventID: "9"}
