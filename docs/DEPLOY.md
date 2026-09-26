@@ -187,6 +187,35 @@ JM_SSH_HOST=<worker-host> JM_SSH_USER=<user> JM_INSTALL_DIR=/home/<user>/jianman
 
 新版本健康检查失败时脚本会恢复先前 `current`；但数据库 schema、CP 制品数据和 Worker 身份不会随回滚倒退。版本化模型仅覆盖 `user` scope；`system` scope 仍是旧的直接二进制加 `.bak` 更新方式。
 
+### 9.2 CP 直接启停的受控 POSIX 模板
+
+仓库当前没有受控的 `start.sh` / `stop.sh`。需要在非 systemd 场景下直接管理 CP 时，使用仓库中的单入口模板 `scripts/cp-lifecycle.sh`，通过 `start` / `stop` 子命令避免两份启停逻辑漂移：
+
+```bash
+JM_CP_INSTALL_DIR=/opt/jianmanager-cp \
+JM_CP_BINARY=/opt/jianmanager-cp/current/jianmanager-cp \
+JM_CP_CONFIG=/opt/jianmanager-cp/control-plane.yml \
+  sh scripts/cp-lifecycle.sh start
+
+JM_CP_INSTALL_DIR=/opt/jianmanager-cp \
+JM_CP_BINARY=/opt/jianmanager-cp/current/jianmanager-cp \
+JM_CP_CONFIG=/opt/jianmanager-cp/control-plane.yml \
+  sh scripts/cp-lifecycle.sh stop
+```
+
+模板要求 Linux `/proc`、`awk`、`readlink` 以及 `ss` 或 `netstat`。它会校验配置中的 `server.port` / `grpc.port`、PID 为正整数，并把 PID、进程 starttime、`/proc/<pid>/exe`、cwd、命令行关联的二进制和配置路径写入 0600 PID 文件；启停前后都校验端口归属。发现 stale PID 只清理 PID 文件，发现 PID reuse、身份变化或外部端口占用则拒绝发送信号。TERM 等待超时后，必须再次通过完整身份与端口校验才允许向同一 PID 发送 KILL；脚本不使用按命令行模糊匹配的批量杀进程命令。
+
+目标机若没有该模板，不应直接修改生产目录或手工拼接启停脚本。应先在操作机审查版本与摘要，再按以下步骤由具备权限的运维人员同步到目标机的受控脚本目录（示例路径不等于生产路径）：
+
+```bash
+sha256sum scripts/cp-lifecycle.sh
+scp scripts/cp-lifecycle.sh <用户>@<目标机>:/tmp/cp-lifecycle.sh.new
+ssh <用户>@<目标机> 'install -m 0755 /tmp/cp-lifecycle.sh.new <受控脚本目录>/cp-lifecycle.sh'
+ssh <用户>@<目标机> 'sh -n <受控脚本目录>/cp-lifecycle.sh'
+```
+
+同步前后应由运维确认安装根、二进制、配置、PID 文件和日志路径，并确保没有 systemd unit 或其他 supervisor 同时管理同一 CP。`scripts/cp-lifecycle.test.sh` 只使用临时目录和伪造 `ss`，不会连接或修改任何目标机。
+
 ## 10. 多节点
 
 Control Plane 一台，Worker 多台：各 Worker 设相同 `JIANMANAGER_CONTROL_PLANE_GRPC`（指向同一 CP）、不同 `JIANMANAGER_NODE_NAME`；WS 令牌密钥经注册/心跳自动下发（FR-275），无需在各 Worker 同步 `JIANMANAGER_JWT_SECRET`。注册后在「节点」页统一可见、可分别调度实例。

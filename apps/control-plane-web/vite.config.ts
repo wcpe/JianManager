@@ -65,6 +65,7 @@ export default defineConfig({
           environment: 'node',
           include: ['src/**/*.test.{ts,tsx}'],
           exclude: ['src/**/*.dom.test.tsx'],
+          sequence: { groupOrder: 0 },
         },
       },
       {
@@ -75,6 +76,8 @@ export default defineConfig({
           include: ['src/**/*.dom.test.tsx'],
           setupFiles: ['./src/test/setup.ts'],
           testTimeout: 10_000,
+          maxWorkers: 8,
+          sequence: { groupOrder: 1 },
         },
       },
     ],

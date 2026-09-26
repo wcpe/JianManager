@@ -58,7 +58,7 @@ CI 的 runner 不带 `DISPLAY`，因此**该问题只在本地出现，CI 恒为
 - **短分支命名**：`feature/*`（新功能）、`fix/*`（修 bug）、`refactor/*`（重构）、`hotfix/*`（线上紧急修复，从发布 tag 切出）、`docs/*`、`chore/*`；分支从最新 `master` 切出，生命周期尽量短，合入后立即删除。
 - **合并要求**：PR 提交前清理 WIP / `fixup!` 提交；一个 commit 只做一件事，不混合 `feat` / `fix` / `refactor`；优先 rebase + fast-forward 合入；禁止 squash 多意图 PR；禁止「整版本一个大提交」；合并后删除源分支。
 - **回滚**：用 `git revert` 反向提交，不做历史改写；**严禁 force push 主干**；严禁 `--no-verify`；严禁 amend 已 push 的提交。
-- PR 必须通过 CI 双门禁：`web-quality` 跑 lint + vitest + 构建 + E2E；`bot-quality` 跑 Bot Worker 生产依赖审计 + 类型检查 + lint + 构建。
+- PR 必须通过 CI 质量门禁：`web-quality` 跑 lint + vitest + 构建 + E2E；`bot-quality` 跑 Bot Worker 生产依赖审计 + 类型检查 + lint + 构建；`go-quality` 跑 Go 编译、静态检查与日志联邦回归测试。
 - 发布 workflow 另有完整门禁：metadata 版本/ref/tag 校验 → 全部内嵌资产（含 Bot Worker）→ Go 与前端测试 → 四产物构建 → Linux/Windows 原生 `--version` smoke → Release。任一步失败都不得发布。
 - 发版：先按 §6 把源码切为裸 `X.Y.Z`，在同一提交打 `vX.Y.Z` tag；Git tag / Release 保留 `v`，二进制版本不带 `v`。紧急修复从发布 tag 切 `hotfix/*` 后回流。
 - GitHub-hosted runner 与实际 Release 创建只有 push 后才能验证；当前工作区按用户选择暂不 push，因此远端 Actions 仍待验。
@@ -119,7 +119,7 @@ node --test scripts/release-metadata.test.mjs
 
 - 主干 `master` 受保护，**新建仓库时即开启**，不依赖事后补配。
 - **必须经 PR 合并**，不允许直推主干。
-- **必须 CI 检查通过才可合并**：至少通过 `web-quality`、`agent-gate`；发布另受 release 门禁约束。
+- **必须 CI 检查通过才可合并**：至少通过 `web-quality`、`bot-quality`、`go-quality`、`agent-gate`；发布另受 release 门禁约束。
 - **管理员同样受约束**，任何角色都不得绕过上述要求直接推主干。
 - **禁止 force push、禁止删除主干**。
 - **建议要求线性历史**（对应 rebase + fast-forward 合入）。

@@ -18,6 +18,24 @@ test('master 推送与正式 tag 必须触发 CI', () => {
   assert.doesNotMatch(releaseWorkflow, /third_party\/ServerProbe|submodules:\s*true/)
 })
 
+test('ci.yml 包含独立 Go 质量门禁与日志联邦回归命令', () => {
+  const ciWorkflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8')
+  const goQualityStart = ciWorkflow.indexOf('\n  go-quality:')
+  const goQualityEnd = ciWorkflow.indexOf('\n  agent-gate:', goQualityStart)
+  assert.ok(goQualityStart >= 0, 'ci.yml 必须包含 go-quality job')
+  assert.ok(goQualityEnd > goQualityStart, 'go-quality job 必须位于 agent-gate 之前并有完整边界')
+  const goQuality = ciWorkflow.slice(goQualityStart, goQualityEnd)
+
+  assert.match(goQuality, /actions\/checkout@v7/)
+  assert.match(goQuality, /submodules:\s*false/)
+  assert.match(goQuality, /actions\/setup-go@v7/)
+  assert.match(goQuality, /go-version:\s*['"]1\.26\.2['"]/)
+  assert.match(goQuality, /cache:\s*true/)
+  assert.match(goQuality, /go build \.\/\.\.\./)
+  assert.match(goQuality, /go vet \.\/\.\.\./)
+  assert.match(goQuality, /go test \.\/internal\/controlplane\/router -run ['"]LogFederation\|WriteFederationError\|FederationPermissionScopeDigest['"] -count=1/)
+})
+
 test('release.yml 只在正式 tag 触发，避免主干 push 上解析裸版本失败', () => {
   const releaseWorkflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
   // push 只保留 tags：断言 tags 紧邻 push 之下，若有人加回 branches 会立刻不匹配。
