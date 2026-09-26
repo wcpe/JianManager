@@ -6,7 +6,7 @@
 
 ## [Unreleased]
 
-> 本段为下一开发窗口归档区；正式发版时整理为新版本段。
+> 本段为 `v0.24.0` 开发版归档区；正式发版时整理为新版本段。
 
 ### 修复
 - **僵尸压测会话导致 CP 补足死循环与持续写放大（FR-472，真机发现）**：压测会话的生命周期终结依赖显式 `Stop` 调用，CP 重启或 bot-worker 死亡后该路径丢失，会话永久停留 `status=running`。`refillRunningSessions` 无条件捞取**全部** running 会话做容量补足，于是对早已失联的会话每拍重建期望行并失败——失败落在事务内，产生持续写盘。**进程内退避结构上兜不住**：`refillAttempts` 是进程内 map，随 CP 结束而清零，重启即触发一轮全量重试，因此该缺陷在「频繁重启」的运维场景下必然复现。**真机现场（2026-09-24）**：生产 CP 残留 132 个历史会话（61 running + 32 pending）与 1132 条全数失联的 Bot 记录，CP 持续写库 **3.5 MB/s**、`cp.out` 涨至 **962 MB**，日志每 60s 刷一条「Bot 容量补足失败」。现按**数据库可见的事实**判定僵尸——`status=running` 且在线 Bot 数为 0 且 `updated_at` 停滞超过 `botZombieSessionIdleThreshold`（默认 **10 分钟**，取 Bot 宽限期 2m 的 5 倍以容忍 Worker 重启与世代迁移窗口）即收敛为 `stopped`，写 `ended_at`/`last_error` 与强审计 `bot_reclaim.session_reaped`；收敛在 `refillRunningSessions` **之前**执行，使僵尸从根上不进入补足扫描。**不变量**：仍持有在线 Bot 的会话永不被收敛。**验收**：单测 3 条（僵尸必收敛、收敛必留痕、健康会话不被误伤）红→绿；真机上 93 个僵尸会话收敛后 CP 写 IO 由 3.5 MB/s 降至 0.3 MB/s，补足失败日志停止。
