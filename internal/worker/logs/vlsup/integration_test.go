@@ -167,3 +167,68 @@ func processAlive(pid int) bool {
 	_, err := os.Stat(filepath.Join("/proc", strconv.Itoa(pid)))
 	return err == nil
 }
+
+// TestIntegrationPortConflictReportedAsFailure 用真实 VL 二进制锁定本会话确诊的失败模式：
+// 目标端口被占用时 VL 报 "bind: address already in use" 并以退出码 255 秒退。
+// 修复前控制面会在 fork/exec 成功后即置 RUNNING，使这类失败被上报为「启动成功」；
+// 本用例断言 Start 必须返回错误并标记 FAILED，确保该误导性成功不会回归。
+func TestIntegrationPortConflictReportedAsFailure(t *testing.T) {
+	bin := os.Getenv("JM_VL_BIN")
+	if bin == "" {
+		t.Skip("JM_VL_BIN not set; skip optional VictoriaLogs integration")
+	}
+	if _, err := os.Stat(bin); err != nil {
+		t.Skipf("JM_VL_BIN not readable: %v", err)
+	}
+	sha, err := FileSHA256(bin)
+	if err != nil {
+		t.Fatalf("hash binary: %v", err)
+	}
+
+	newSup := func(root string, port int) *Supervisor {
+		t.Helper()
+		s, newErr := New(Options{
+			BinaryPath:   bin,
+			AssetSHA256:  sha,
+			DataRoot:     root,
+			AuthUsername: "jm",
+			AuthPassword: "local-only",
+			Ports:        map[Namespace]int{NamespaceHot: port},
+			Factory:      RealFactory{},
+			Sink:         IndependentLoggerSink{},
+		})
+		if newErr != nil {
+			t.Fatal(newErr)
+		}
+		return s
+	}
+
+	const port = 19446
+	holder := newSup(t.TempDir(), port)
+	if err := holder.Start(context.Background(), NamespaceHot); err != nil {
+		t.Fatalf("占位实例应能启动: %v", err)
+	}
+	t.Cleanup(func() { holder.StopAll(context.Background()) })
+
+	// 第二个实例绑同一端口：VL 必然秒退，Start 必须如实报错。
+	conflict := newSup(t.TempDir(), port)
+	err = conflict.Start(context.Background(), NamespaceHot)
+	if err == nil {
+		t.Fatal("端口冲突时 Start 必须返回错误，不得上报为启动成功")
+	}
+	st, statusErr := conflict.Status(NamespaceHot)
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if st.State != StateFailed {
+		t.Fatalf("端口冲突后状态须为 FAILED，实际 %s（LastError=%q）", st.State, st.LastError)
+	}
+	if st.LastError == "" {
+		t.Fatal("FAILED 须带可诊断原因")
+	}
+
+	// 占位实例不受影响，仍应健康。
+	if hErr := holder.Health(context.Background(), NamespaceHot); hErr != nil {
+		t.Fatalf("占位实例不应受冲突实例影响: %v", hErr)
+	}
+}
