@@ -76,7 +76,7 @@ export default defineConfig({
           include: ['src/**/*.dom.test.tsx'],
           setupFiles: ['./src/test/setup.ts'],
           testTimeout: 10_000,
-          maxWorkers: 8,
+          maxWorkers: 4,
           sequence: { groupOrder: 1 },
         },
       },
