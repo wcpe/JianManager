@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -14,6 +15,12 @@ type Process interface {
 	PID() int
 	// Stop 优雅停止：先尝试中断，超过 grace 后强制结束。可幂等调用。
 	Stop(grace time.Duration) error
+	// Exited 非阻塞报告进程是否已退出（含启动后立即失败的情形）。
+	//
+	// 必要性：进程可能在 Start 成功后立刻退出（真机实测：数据目录缺失时 VL 立即退出、
+	// 变成僵尸），若只依据 Start 无错就置 RUNNING，控制面会报「启动成功」而实际已死。
+	// 同时其 wait goroutine 负责回收子进程，避免僵尸堆积。
+	Exited() bool
 }
 
 // CmdFactory 构造并启动进程。生产使用 RealFactory；单元测试注入 fake，不依赖真实 VL 二进制。
@@ -53,13 +60,25 @@ func (f RealFactory) Start(ctx context.Context, bin string, args []string) (Proc
 	if grace <= 0 {
 		grace = DefaultStopGrace
 	}
-	return &realProcess{cmd: cmd, grace: grace}, nil
+	p := &realProcess{cmd: cmd, grace: grace, done: make(chan struct{})}
+	// 单一 Wait 回收者：子进程无论被 Stop 还是自行退出都由它回收，避免僵尸堆积。
+	go func() {
+		_ = cmd.Wait()
+		p.mu.Lock()
+		p.exited = true
+		p.mu.Unlock()
+		close(p.done)
+	}()
+	return p, nil
 }
 
 type realProcess struct {
 	cmd     *exec.Cmd
 	grace   time.Duration
+	mu      sync.Mutex
+	exited  bool
 	stopped bool
+	done    chan struct{}
 }
 
 func (p *realProcess) PID() int {
@@ -69,27 +88,42 @@ func (p *realProcess) PID() int {
 	return p.cmd.Process.Pid
 }
 
+// Exited 报告子进程是否已退出。
+func (p *realProcess) Exited() bool {
+	if p == nil {
+		return true
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.exited
+}
+
 func (p *realProcess) Stop(grace time.Duration) error {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
 		return nil
 	}
+	p.mu.Lock()
 	if p.stopped {
+		p.mu.Unlock()
 		return nil
 	}
 	p.stopped = true
 	if grace <= 0 {
 		grace = p.grace
 	}
+	exited := p.exited
+	p.mu.Unlock()
+	if exited {
+		return nil
+	}
 	// 先尝试中断（Unix SIGINT / Windows 上可能等价于 Kill）。
 	_ = p.cmd.Process.Signal(os.Interrupt)
-	done := make(chan error, 1)
-	go func() { done <- p.cmd.Wait() }()
 	select {
-	case <-done:
+	case <-p.done:
 		return nil
 	case <-time.After(grace):
 		_ = p.cmd.Process.Kill()
-		<-done
+		<-p.done
 		return nil
 	}
 }
