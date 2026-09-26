@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"sync"
 	"time"
 )
@@ -275,6 +276,13 @@ func (s *Supervisor) Start(ctx context.Context, ns Namespace) error {
 	if err := VerifyAsset(s.binPath, s.assetSHA); err != nil {
 		return fail(err)
 	}
+	// 启动前确保 namespace 数据目录存在：VL 不会自建数据根，缺失时进程立即退出
+	// （真机实测：控制面 start rehydrate 报成功但进程变僵尸、端口未监听）。
+	if cfg.StorageDataPath != "" {
+		if err := os.MkdirAll(cfg.StorageDataPath, 0o700); err != nil {
+			return fail(fmt.Errorf("vlsup: prepare %s data dir: %w", ns, err))
+		}
+	}
 	args, err := BuildArgs(cfg)
 	if err != nil {
 		return fail(err)
@@ -282,6 +290,13 @@ func (s *Supervisor) Start(ctx context.Context, ns Namespace) error {
 	proc, err := s.factory.Start(ctx, s.binPath, args)
 	if err != nil {
 		return fail(fmt.Errorf("vlsup: start %s: %w", ns, err))
+	}
+	// 启动后必须确认进程真存活：Start 成功只代表 fork/exec 成功，二进制仍可能立即退出
+	// （真机实测：数据目录缺失时 VL 秒退，控制面却报「启动成功」）。此处给一个极短窗口
+	// 让失败进程暴露，并把已退出的进程句柄立即回收，避免僵尸堆积。
+	if exited, waitErr := waitStartupLiveness(ctx, proc, startLivenessWindow); exited {
+		_ = proc.Stop(DefaultStopGrace)
+		return fail(fmt.Errorf("vlsup: %s exited immediately after start%s", ns, detailSuffix(waitErr)))
 	}
 
 	s.mu.Lock()
@@ -298,6 +313,45 @@ func (s *Supervisor) Start(ctx context.Context, ns Namespace) error {
 	inst.status.LastError = ""
 	s.mu.Unlock()
 	return nil
+}
+
+// startLivenessWindow 是启动后判定「进程是否立即退出」的观察窗口。
+//
+// 取值权衡：真实 VL 存活进程不会在数百毫秒内退出，而缺目录、端口被占、二进制不兼容等
+// 立即可见的失败都会在该窗口内暴露；窗口过长会拖慢控制面的启动响应，故取 750ms。
+const startLivenessWindow = 750 * time.Millisecond
+
+// waitStartupLiveness 在 startLivenessWindow 内观察进程是否退出。
+//
+// 返回 (true, nil) 表示进程已退出（调用方须按启动失败处理）；返回 (false, nil) 表示
+// 窗口内仍存活。ctx 取消时提前返回，避免阻塞控制面请求。
+func waitStartupLiveness(ctx context.Context, proc Process, window time.Duration) (bool, error) {
+	if proc == nil {
+		return true, fmt.Errorf("no process handle")
+	}
+	timer := time.NewTimer(window)
+	defer timer.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if proc.Exited() {
+			return true, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-timer.C:
+			return proc.Exited(), nil
+		case <-tick.C:
+		}
+	}
+}
+
+func detailSuffix(err error) string {
+	if err == nil {
+		return ""
+	}
+	return ": " + err.Error()
 }
 
 // Stop 停止指定 namespace 实例。

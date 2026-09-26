@@ -25,7 +25,15 @@ type fakeProc struct {
 	args    []string
 	mu      sync.Mutex
 	stopped bool
+	exited  bool
 	waitCh  chan struct{}
+}
+
+// exitImmediately 让该 fake 表现为「启动后立刻退出」，用于锁定启动存活校验。
+func (p *fakeProc) exitImmediately() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.exited = true
 }
 
 func (p *fakeProc) PID() int { return p.pid }
@@ -47,10 +55,23 @@ func (p *fakeProc) Stopped() bool {
 	return p.stopped
 }
 
+// Exited 报告测试进程是否已退出：默认长期存活，便于既有用例继续验证「启动即 RUNNING」；
+// 需要模拟「启动后立即退出」的用例可用 exitImmediately 打开。
+func (p *fakeProc) Exited() bool {
+	if p == nil {
+		return true
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.exited
+}
+
 // fakeFactory 记录 Start 调用，可注入失败；不 exec 真实二进制。
 type fakeFactory struct {
 	mu       sync.Mutex
 	failNext error
+	// exitNext 让下一个创建的进程表现为「启动后立即退出」。
+	exitNext bool
 	bins     []string
 	starts   [][]string
 	procs    []*fakeProc
@@ -70,8 +91,10 @@ func (f *fakeFactory) Start(ctx context.Context, bin string, args []string) (Pro
 		pid:    f.nextPID,
 		bin:    bin,
 		args:   append([]string(nil), args...),
+		exited: f.exitNext,
 		waitCh: make(chan struct{}),
 	}
+	f.exitNext = false
 	f.bins = append(f.bins, bin)
 	f.starts = append(f.starts, p.args)
 	f.procs = append(f.procs, p)
@@ -521,5 +544,51 @@ func TestSetSubBudgetEnforcesReserveRatio(t *testing.T) {
 	}
 	if err := s2.SetSubBudget("wal", -1); err == nil {
 		t.Fatal("negative sub-budget must fail")
+	}
+}
+
+// TestStartReportsFailureWhenProcessExitsImmediately 锁定真机缺陷修复：
+// 进程在 Start 成功后立即退出时（如数据目录缺失致 VL 秒退），不得上报 RUNNING，
+// 否则控制面会给出「启动成功」的误导结论（实测 rehydrate 即为此现象）。
+func TestStartReportsFailureWhenProcessExitsImmediately(t *testing.T) {
+	f := &fakeFactory{exitNext: true}
+	s := newTestSupervisor(t, f, &RecordingSink{}, false)
+
+	err := s.Start(context.Background(), NamespaceRehydrate)
+	if err == nil {
+		t.Fatal("立即退出的进程必须让 Start 返回错误，不得静默置为 RUNNING")
+	}
+	st, statusErr := s.Status(NamespaceRehydrate)
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if st.State == StateRunning {
+		t.Fatalf("进程已退出，状态不得为 RUNNING: %+v", st)
+	}
+	if st.State != StateFailed {
+		t.Fatalf("进程已退出，应标记 FAILED: %+v", st)
+	}
+	if st.LastError == "" {
+		t.Fatal("失败必须带可诊断原因")
+	}
+}
+
+// TestStartCreatesNamespaceDataDir 锁定缺陷 2：VL 不自建数据根，缺失时秒退，
+// 故 Start 必须先行创建 namespace 数据目录。
+func TestStartCreatesNamespaceDataDir(t *testing.T) {
+	f := &fakeFactory{}
+	s := newTestSupervisor(t, f, &RecordingSink{}, false)
+	cfg, err := s.Config(NamespaceRehydrate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(cfg.StorageDataPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(context.Background(), NamespaceRehydrate); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if info, statErr := os.Stat(cfg.StorageDataPath); statErr != nil || !info.IsDir() {
+		t.Fatalf("namespace 数据目录须在启动前创建: err=%v", statErr)
 	}
 }
