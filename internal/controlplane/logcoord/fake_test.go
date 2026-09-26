@@ -47,6 +47,11 @@ type fakeWorker struct {
 	facetTargets  []WorkerTargetResult
 	facetCalls    int
 	openViewCalls int
+
+	// openViewFail 模拟本地 Query View 建立失败（未启用日志查询服务、混版
+	// Unimplemented、绑定缺失等）。置为非空时 OpenView 返回其文本作为错误，
+	// 使 bindWorkerViews 写入 WorkerViewErrors，从而构造 worker_view_failed 场景。
+	openViewFail string
 }
 
 func (w *fakeWorker) OpenView(_ context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error) {
@@ -55,6 +60,9 @@ func (w *fakeWorker) OpenView(_ context.Context, req WorkerSearchRequest) (*Work
 	w.openViewCalls++
 	w.lastOpenViewView = req.ViewID
 	w.lastOpenTargets = append([]string(nil), req.TargetIDs...)
+	if w.openViewFail != "" {
+		return &WorkerSearchResponse{Error: w.openViewFail}, nil
+	}
 	return &WorkerSearchResponse{ViewID: "worker-view-" + w.workerID, Targets: append([]WorkerTargetResult(nil), w.searchTarget...)}, nil
 }
 
