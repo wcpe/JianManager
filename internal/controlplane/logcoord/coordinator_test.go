@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1015,4 +1016,72 @@ func TestCoordinatorViewStoreIsBounded(t *testing.T) {
 	if !hasNewest {
 		t.Fatal("newest CP view must be retained")
 	}
+}
+
+// M-2 回归：Export 的累计字节必须跨页累加，且判定语义与逐页重算一致。
+//
+// 缺陷形态：原实现每页都对已收集的全部 items 从头重算 ApproxBytes，页数 p、总行数 n
+// 时总量约 O(n²)。修复改为只对当前页增量累加；本用例锁定「累计值正确」这一不变量——
+// 若增量累加漏页或在重置时机上出错，字节预算判定会偏离。
+func TestExportAccumulatesBytesAcrossPages(t *testing.T) {
+	// 每页上限由 DefaultPageLimit（200）决定；用数百行逼出多页。
+	const rows = 500
+	// 消息放大到千字节级：这样每页/跨页的字节量由消息长度主导，阈值可以取在
+	// 「超过一页、不足两页」处，从而区分「跨页累加」与「每页重置」两种实现。
+	const msgBytes = 1024
+	big := strings.Repeat("x", msgBytes)
+	items := make([]Event, 0, rows)
+	for i := 0; i < rows; i++ {
+		items = append(items, mkEvent(
+			fmt.Sprintf("e%04d", i), "node:1", "g1", uint64(i+1),
+			time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC).Add(time.Duration(i)*time.Minute).Format(time.RFC3339),
+			"I", fmt.Sprintf("m%d-%s", i, big)))
+	}
+	resolver := &fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = &cursorWorker{id: "w1", target: "node:1", items: items}
+	coord := New(resolver, dialer)
+
+	t.Run("budget_sufficient_exports_all", func(t *testing.T) {
+		res, err := coord.Export(context.Background(), Query{
+			AuthorizedTargetIDs: []string{"node:1"},
+			PrincipalKey:        "principal",
+			Budget:              QueryBudget{Limit: rows + 10},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		require.False(t, res.ExportIncomplete, "预算充足时不应判为不完整")
+		require.NotNil(t, res.Artifact, "完整导出应产生附件")
+		require.Len(t, res.Items, rows, "跨页应取满全部行")
+	})
+
+	t.Run("stops_fetching_once_cumulative_bytes_exceed_budget", func(t *testing.T) {
+		// 阈值取「超过一页、不足两页」的区间（实测：单页≈220600 字节，两页累计≈441200）。
+		// 只有把各页字节**累计**起来才会在第二页越界并立即停止取页；若累计被重置为
+		// 单页量，则第二页仍不越界、会继续取第三页——此时取到的行数更多，本断言即失败。
+		// 这也是原实现的既有语义（原先每页重算累计，同样在第二页越界）。
+		res, err := coord.Export(context.Background(), Query{
+			AuthorizedTargetIDs: []string{"node:1"},
+			PrincipalKey:        "principal",
+			Budget:              QueryBudget{Limit: rows + 10, MaxBytes: 300_000},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		require.True(t, res.ExportIncomplete, "跨页累计超预算必须判为不完整")
+		require.Equal(t, 2*DefaultPageLimit, len(res.Items),
+			"累计超预算后应立即停止取页，而不是继续取满全部页")
+		require.Nil(t, res.Artifact, "不完整时不得下发附件")
+	})
+
+	t.Run("tiny_byte_budget_is_incomplete", func(t *testing.T) {
+		res, err := coord.Export(context.Background(), Query{
+			AuthorizedTargetIDs: []string{"node:1"},
+			PrincipalKey:        "principal",
+			Budget:              QueryBudget{Limit: rows + 10, MaxBytes: 1},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		require.True(t, res.ExportIncomplete, "超过字节预算必须判为不完整")
+		require.Nil(t, res.Artifact, "不完整时不得下发附件")
+	})
 }
