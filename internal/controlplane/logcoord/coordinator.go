@@ -360,6 +360,7 @@ func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *Res
 		coverage map[string]TargetCoverage
 		cut      bool
 		open     bool
+		quality  Quality
 		err      error
 	}
 	results := make(chan fanoutResult, len(order))
@@ -374,8 +375,8 @@ func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *Res
 		}
 		launched++
 		go func(workerID string, targets []TargetInfo) {
-			workerStreams, workerCoverage, cut, open, callErr := c.fanoutOne(ctx, view, q, budget, workerID, targets, tailMode)
-			results <- fanoutResult{streams: workerStreams, coverage: workerCoverage, cut: cut, open: open, err: callErr}
+			workerStreams, workerCoverage, cut, open, workerQuality, callErr := c.fanoutOne(ctx, view, q, budget, workerID, targets, tailMode)
+			results <- fanoutResult{streams: workerStreams, coverage: workerCoverage, cut: cut, open: open, quality: workerQuality, err: callErr}
 		}(workerID, append([]TargetInfo(nil), targets...))
 	}
 	for i := 0; i < launched; i++ {
@@ -387,6 +388,8 @@ func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *Res
 		for targetID, coverage := range result.coverage {
 			covByTarget[targetID] = coverage
 		}
+		// 按最差值聚合：任一 Worker 报冲突/未决即整体降级，不能被其它 Worker 的 exact 掩盖。
+		quality.DuplicateQuality = worstDuplicateQuality(quality.DuplicateQuality, result.quality.DuplicateQuality)
 		workerCut = workerCut || result.cut
 		workerOpen = workerOpen || result.open
 	}
@@ -402,8 +405,52 @@ func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *Res
 	return streams, covByTarget, quality, workerCut, workerOpen, nil
 }
 
+// worstDuplicateQuality 按「越差越优先」合并两个 Worker 上报的重复质量。
+//
+// 为什么需要：Export 的质量闸门只拦截 unresolved/conflict，故聚合必须是保守的——
+// 任一 Worker 报冲突或未决，整体就不能宣称 exact，否则不完整来源会被放行（M-3）。
+// 未知取值按与 unspecified 同级处理，不参与升级判定。
+func worstDuplicateQuality(a, b DuplicateQuality) DuplicateQuality {
+	rank := func(q DuplicateQuality) int {
+		switch strings.ToLower(string(q)) {
+		case string(DupConflict):
+			return 3
+		case string(DupUnresolved):
+			return 2
+		case string(DupExact):
+			return 1
+		default:
+			return 0
+		}
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
+}
+
+// worstStatsQuality 同上，用于统计质量（unavailable > partial > exact）。
+func worstStatsQuality(a, b StatsQuality) StatsQuality {
+	rank := func(q StatsQuality) int {
+		switch strings.ToLower(string(q)) {
+		case string(StatsQUnavailable):
+			return 3
+		case string(StatsQPartial):
+			return 2
+		case string(StatsQExact):
+			return 1
+		default:
+			return 0
+		}
+	}
+	if rank(b) > rank(a) {
+		return b
+	}
+	return a
+}
+
 func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget QueryBudget, workerID string, targets []TargetInfo, tailMode string) (
-	streams []EventStream, coverage map[string]TargetCoverage, cut bool, open bool, err error,
+	streams []EventStream, coverage map[string]TargetCoverage, cut bool, open bool, workerQuality Quality, err error,
 ) {
 	coverage = make(map[string]TargetCoverage, len(targets))
 	targetIDs := make([]string, 0, len(targets))
@@ -471,6 +518,9 @@ func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget 
 	if err = ensureWorkerViewBinding(view, workerID, targets, resp.ViewID, resp.Targets); err != nil {
 		return
 	}
+	// Worker 上报的查询质量必须带回聚合：它可能与 coverage 不同步（例如 projection 冲突时
+	// coverage 仍 complete），丢弃会让 CP 把该结果当成 exact 并放行导出（M-3）。
+	workerQuality = resp.Quality
 	cut, open = resp.Truncated, !resp.Exhausted
 	if len(resp.Items) > 0 {
 		items := append([]Event(nil), resp.Items...)
@@ -837,6 +887,10 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 			quality.StatsQuality = StatsQPartial
 			continue
 		}
+		// Worker 上报的统计质量按最差值并入（M-3）：它在 coverage 仍 complete 时也可能
+		// 为 partial/unavailable，丢弃会让 CP 把不完整统计当成 exact 并放行导出。
+		quality.StatsQuality = worstStatsQuality(quality.StatsQuality, resp.Quality.StatsQuality)
+		quality.DuplicateQuality = worstDuplicateQuality(quality.DuplicateQuality, resp.Quality.DuplicateQuality)
 		if resp.Truncated {
 			anyTrunc = true
 		}

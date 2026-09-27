@@ -241,3 +241,57 @@ func TestLogCoord_SearchPersistsClosedVisibleSeqOnView(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "src-a/g1:100", stored.ClosedVisibleSeq[t1])
 }
+
+// M-3 回归：Worker 上报的质量必须透传到 CP，并按最差值聚合。
+//
+// 缺陷形态：proto 与 Worker 都携带 Quality，但 CP 的响应结构没有该字段、adapter 也不读
+// 它，CP 只按 coverage 推导质量。于是当 Worker 在 coverage 仍为 complete 时上报
+// conflict/partial（例如 projection 冲突），CP 会把它当 exact——而 Export 的质量闸门
+// 只拦截 unresolved/conflict/partial/unavailable，不完整来源因此被放行。
+func TestWorkerQualityReachesCPAndBlocksExport(t *testing.T) {
+	adapter := NewWorkerClientAdapter(&fakePBClient{
+		searchResp: &workerpb.LogSearchResponse{
+			RequestId: "q1",
+			View:      &workerpb.LogQueryViewRef{ViewId: "cv_1", OrderVersion: OrderVersion},
+			Coverage: &workerpb.LogCoverage{
+				// coverage 仍为 complete：质量必须独立表达问题。
+				Complete: true,
+				Targets: []*workerpb.LogCoverageTarget{{
+					TargetId: "inst:1",
+					State:    workerpb.LogCoverageState_LOG_COVERAGE_SUCCESS,
+				}},
+			},
+			Quality: &workerpb.LogQuality{
+				DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_CONFLICT,
+				StatsQuality:     workerpb.LogStatsQuality_LOG_QUALITY_STATS_PARTIAL,
+			},
+			Exhausted: true,
+		},
+	})
+
+	t.Run("quality_mapped_from_proto", func(t *testing.T) {
+		resp, err := adapter.Search(context.Background(), WorkerSearchRequest{TargetIDs: []string{"inst:1"}})
+		require.NoError(t, err)
+		assert.Equal(t, DupConflict, resp.Quality.DuplicateQuality, "Worker 报的冲突不得在适配层丢失")
+		assert.Equal(t, StatsQPartial, resp.Quality.StatsQuality)
+	})
+
+	t.Run("worst_value_wins_across_workers", func(t *testing.T) {
+		// 一个 exact 的 Worker 不得掩盖另一个 Worker 的冲突。
+		assert.Equal(t, DupConflict, worstDuplicateQuality(DupExact, DupConflict))
+		assert.Equal(t, DupConflict, worstDuplicateQuality(DupConflict, DupExact))
+		assert.Equal(t, DupUnresolved, worstDuplicateQuality(DupExact, DupUnresolved))
+		assert.Equal(t, DupExact, worstDuplicateQuality(DupExact, DupExact))
+		assert.Equal(t, StatsQUnavailable, worstStatsQuality(StatsQPartial, StatsQUnavailable))
+		assert.Equal(t, StatsQPartial, worstStatsQuality(StatsQExact, StatsQPartial))
+	})
+
+	t.Run("conflict_blocks_export", func(t *testing.T) {
+		res := BuildExport(View{ViewID: "cv_1"}, Coverage{
+			Complete: true,
+			Targets:  []TargetCoverage{{TargetID: "inst:1", State: CoverageSuccess}},
+		}, Quality{DuplicateQuality: DupConflict, StatsQuality: StatsQPartial}, nil, false, false)
+		assert.True(t, res.ExportIncomplete, "质量非 exact 时不得下发成功附件")
+		assert.Nil(t, res.Artifact)
+	})
+}
