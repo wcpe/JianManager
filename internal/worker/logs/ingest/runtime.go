@@ -89,6 +89,21 @@ type Manager struct {
 	recoveryHold        func(SourceConfig, string) (bool, string)
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
 	sourceErrs map[string]string
+	// pendingMaxStream/pendingMaxTotal 是 pending 暂存上限（M-6）；0 表示用默认常量。
+	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
+	pendingMaxStream int64
+	pendingMaxTotal  int64
+}
+
+// SetPendingSpoolLimits 覆盖 pending 暂存上限（测试用）。
+func (m *Manager) SetPendingSpoolLimits(perStream, total int64) {
+	if m == nil {
+		return
+	}
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	m.pendingMaxStream = perStream
+	m.pendingMaxTotal = total
 }
 
 // noteSourceError 记录并报告该源是否应再次上报该错误（同一文本只报一次）。

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 )
 
@@ -155,4 +156,67 @@ func TestInstanceOutputBindingRacePreservesAllBytes(t *testing.T) {
 	data, err := os.ReadFile(m.rawInstancePath(binding, "stdout"))
 	require.NoError(t, err)
 	require.Len(t, data, count*len(chunk))
+}
+
+// M-6 回归：pending 暂存必须受容量门禁约束。
+//
+// 缺陷形态：未绑定实例的输出在绑定到达前无 pipeline/ledger 兜底，而暂存追加路径既
+// 无单流/总量上限、也不做磁盘阈值检查（托管 Raw 写入有该检查，暂存没有）。持续
+// stdout/stderr 因此可耗尽 Worker 数据盘，进而拖垮 ingest.state.json、事件段、WAL
+// 与 VL 运行时；且未绑定时没有 ledger，写失败不会进入 gap/pause 语义。
+func TestPendingSpoolEnforcesCapacityLimits(t *testing.T) {
+	newManager := func(t *testing.T, budget *acquire.CapacityBudget) *Manager {
+		t.Helper()
+		vl, _ := newProjectionVL(t)
+		cat := catalog.New(nil)
+		opts := Options{Root: t.TempDir(), VL: vl, Catalog: cat, Journal: cat.Journal()}
+		if budget != nil {
+			opts.CapacityProvider = func() (acquire.CapacityBudget, error) { return *budget, nil }
+		}
+		m, err := New(opts)
+		require.NoError(t, err)
+		return m
+	}
+
+	t.Run("per_stream_limit", func(t *testing.T) {
+		m := newManager(t, nil)
+		m.SetPendingSpoolLimits(16, 1<<20)
+		// 未注册绑定 → 输出落 pending 暂存；成功写入也返回 Pending 哨兵（既有契约）。
+		require.ErrorIs(t, m.AppendInstanceOutput("uuid-limit", "stdout", []byte("12345678")), ErrInstanceBindingPending)
+		require.ErrorIs(t, m.AppendInstanceOutput("uuid-limit", "stdout", []byte("12345678")), ErrInstanceBindingPending)
+		err := m.AppendInstanceOutput("uuid-limit", "stdout", []byte("x"))
+		require.Error(t, err, "超过单流上限必须拒绝写入")
+		require.NotErrorIs(t, err, ErrInstanceBindingPending, "应为额度错误而非 Pending 哨兵")
+		require.Contains(t, err.Error(), "per-stream limit")
+		// 另一条流有独立额度，不应被前一条流的上限牵连。
+		require.ErrorIs(t, m.AppendInstanceOutput("uuid-limit", "stderr", []byte("ok")), ErrInstanceBindingPending)
+	})
+
+	t.Run("total_limit", func(t *testing.T) {
+		m := newManager(t, nil)
+		m.SetPendingSpoolLimits(1<<20, 20)
+		require.ErrorIs(t, m.AppendInstanceOutput("uuid-a", "stdout", []byte("12345678")), ErrInstanceBindingPending)
+		require.ErrorIs(t, m.AppendInstanceOutput("uuid-b", "stdout", []byte("12345678")), ErrInstanceBindingPending)
+		err := m.AppendInstanceOutput("uuid-c", "stdout", []byte("12345678"))
+		require.Error(t, err, "超过总量上限必须拒绝写入")
+		require.NotErrorIs(t, err, ErrInstanceBindingPending)
+		require.Contains(t, err.Error(), "total limit")
+	})
+
+	t.Run("disk_pause_threshold", func(t *testing.T) {
+		budget := acquire.DefaultCapacityBudget()
+		budget.DiskUsagePercent = 95
+		m := newManager(t, &budget)
+		err := m.AppendInstanceOutput("uuid-disk", "stdout", []byte("data"))
+		require.Error(t, err, "达到磁盘暂停阈值时暂存也不得继续写")
+		require.Contains(t, err.Error(), "pause threshold")
+		require.NoFileExists(t, m.pendingInstancePath("uuid-disk", "stdout"), "被拒绝的写入不得落盘")
+	})
+
+	t.Run("under_limit_succeeds", func(t *testing.T) {
+		m := newManager(t, nil)
+		m.SetPendingSpoolLimits(1<<20, 1<<20)
+		require.ErrorIs(t, m.AppendInstanceOutput("uuid-ok", "stdout", []byte("within limits")), ErrInstanceBindingPending)
+		require.FileExists(t, m.pendingInstancePath("uuid-ok", "stdout"))
+	})
 }
