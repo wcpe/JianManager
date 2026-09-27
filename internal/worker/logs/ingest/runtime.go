@@ -868,6 +868,12 @@ func (m *Manager) appendEvents(key string, events []logtypes.Event) error {
 	if err != nil {
 		return err
 	}
+	if stored > len(events) {
+		// 段内已落段事件多于权威集合：说明段内容与清单不一致（例如密封段被外部改写、
+		// 或恢复集合构造有漏）。此时继续执行会静默“承认”一段谁也无法解释的前缀，
+		// 并让缺失事件永久消失，故必须硬失败而非跳过追加。
+		return fmt.Errorf("ingest: eventstore ahead of authoritative set for %s: stored=%d authoritative=%d", key, stored, len(events))
+	}
 	if stored < len(events) {
 		if err := m.events.Append(key, events[stored:]); err != nil {
 			return err

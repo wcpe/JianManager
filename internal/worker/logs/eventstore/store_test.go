@@ -131,6 +131,53 @@ func TestTailTruncationRecoversCompleteLinesOnly(t *testing.T) {
 	}
 }
 
+// M-8 回归：清单计数高于尾段实际完整行数时，Count 不得虚高，后续追加不得跳过事件。
+//
+// 缺陷形态：`Count` 直接累加清单的 `SegmentMeta.Count`，而该计数在写入时递增、随同一次
+// fsync 落盘，因此崩溃后可能声称比物理完整行更多的条目。调用方（appendEvents）用该计数
+// 作已落段前缀长度，于是按错误下标截取权威集合，静默跳过缺失事件。
+func TestCountReflectsCompleteLinesAfterTailTruncation(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	require.NoError(t, err)
+	for i := 0; i < 10; i++ {
+		require.NoError(t, s.Append("inst:1/g1", []logtypes.Event{ev(i)}))
+	}
+	// 制造半行：清单仍声称 10 条。
+	segs := s.Segments("inst:1/g1")
+	last := filepath.Join(dir, sectionDirName("inst:1/g1"), segs[len(segs)-1].Name)
+	st, err := os.Stat(last)
+	require.NoError(t, err)
+	require.NoError(t, os.Truncate(last, st.Size()-7))
+	require.NoError(t, s.Close())
+
+	s2, err := Open(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s2.Close() })
+
+	n, err := s2.Count("inst:1/g1")
+	require.NoError(t, err)
+	require.Equal(t, 9, n, "Count 必须反映物理完整行数，而非清单声称的 10")
+
+	// 续写必须紧接最后一条完整行，不能被残留半行粘成坏行。
+	require.NoError(t, s2.Append("inst:1/g1", []logtypes.Event{ev(9)}))
+
+	s3, err := Open(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s3.Close() })
+	got := collect(t, s3, "inst:1/g1")
+	require.Len(t, got, 10, "补齐缺失事件后应完整")
+	for i, e := range got {
+		require.Equal(t, fmt.Sprintf("line-%d", i), e.Message)
+	}
+	// 校准后的清单计数必须与实际一致，避免再次虚高。
+	total := 0
+	for _, m := range s3.Segments("inst:1/g1") {
+		total += m.Count
+	}
+	require.Equal(t, 10, total)
+}
+
 // 崩溃注入 B：**中间段**损坏 → 必须硬失败，不能静默返回残缺集合。
 func TestMiddleSegmentCorruptionFailsHard(t *testing.T) {
 	dir := t.TempDir()
