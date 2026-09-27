@@ -13,6 +13,7 @@ package eventstore
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,6 +74,9 @@ type section struct {
 	// active 是正在追加的段文件句柄；封段后置 nil。
 	active     *os.File
 	activeMeta *SegmentMeta
+	// verified 表示本进程已校准过该源末段（清单计数与物理完整行一致）。
+	// 校准只做一次：此后段由本进程单写入者维护，计数随写入递增而保持准确。
+	verified bool
 }
 
 // Open 打开（必要时创建）事件体根目录并载入各源清单。
@@ -145,6 +149,105 @@ func loadManifest(dir string) (Manifest, error) {
 	return mf, nil
 }
 
+// calibrateLocked 校准末段：清单计数必须与物理完整行一致。
+//
+// 崩溃（进程被杀/断电）可能在末段留下**没有换行的半行**，而清单计数在写入时递增、
+// 随同一次 fsync 落盘，故清单可能声称比物理完整行更多的条目。若不校准：
+//   - 后续 `Append` 会紧接半行继续写，把半行与新行粘成坏行；
+//   - `Count` 虚高，调用方会按错误的前缀长度截取权威集合，静默跳过缺失事件（M-8）。
+//
+// 校准把末段截到最后一条完整行并按实际内容回填元数据；被截掉的事件若仍在 durable WAL
+// 中，会在 `canonicalRecoveryEvents` 里重新进入集合，因此不丢数据。反向偏差（清单偏低、
+// 文件已有多行完整行）同样在此修正，使计数与物理内容一致。
+//
+// 只处理最后一段：密封段在封段前已逐次 fsync 且不再写入，不可能残留半行。
+func (sec *section) calibrateLocked() error {
+	if sec.verified {
+		return nil
+	}
+	if len(sec.manifest.Segments) == 0 {
+		sec.verified = true
+		return nil
+	}
+	last := &sec.manifest.Segments[len(sec.manifest.Segments)-1]
+	if last.Sealed {
+		sec.verified = true
+		return nil
+	}
+	path := filepath.Join(sec.dir, last.Name)
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("%w: open last segment %s: %v", ErrCorrupt, path, err)
+	}
+	br := bufio.NewReaderSize(f, 256<<10)
+	var (
+		count   int
+		offset  int64
+		firstID string
+		lastID  string
+		minEnd  uint64
+		maxEnd  uint64
+	)
+	for {
+		line, readErr := br.ReadBytes('\n')
+		if len(line) > 0 && line[len(line)-1] == '\n' {
+			if body := bytes.TrimSpace(line); len(body) > 0 {
+				var ev logtypes.Event
+				if err := json.Unmarshal(body, &ev); err != nil {
+					// 带换行的完整行却解析失败：属中间段级损坏，必须硬失败而不是猜测。
+					f.Close()
+					return fmt.Errorf("%w: bad line in %s: %v", ErrCorrupt, path, err)
+				}
+				count++
+				if firstID == "" {
+					firstID = ev.EventID
+				}
+				lastID = ev.EventID
+				if minEnd == 0 || ev.Record.End < minEnd {
+					minEnd = ev.Record.End
+				}
+				if ev.Record.End > maxEnd {
+					maxEnd = ev.Record.End
+				}
+			}
+			offset += int64(len(line))
+		}
+		if readErr != nil {
+			// io.EOF：尾部无换行的半行到此为止，其后字节不构成完整事件。
+			break
+		}
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("eventstore: close last segment after calibration: %w", err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("eventstore: stat last segment %s: %v", path, err)
+	}
+	truncate := offset < st.Size()
+	metaChanged := last.Count != count || last.Bytes != offset ||
+		last.FirstID != firstID || last.LastID != lastID ||
+		last.MinEnd != minEnd || last.MaxEnd != maxEnd
+	if truncate {
+		if err := os.Truncate(path, offset); err != nil {
+			return fmt.Errorf("eventstore: truncate partial line in %s: %w", path, err)
+		}
+	}
+	if metaChanged || truncate {
+		last.Count = count
+		last.Bytes = offset
+		last.FirstID = firstID
+		last.LastID = lastID
+		last.MinEnd = minEnd
+		last.MaxEnd = maxEnd
+		if err := sec.writeManifestLocked(); err != nil {
+			return err
+		}
+	}
+	sec.verified = true
+	return nil
+}
+
 func (s *Store) section(key string, create bool) (*section, error) {
 	sec, ok := s.byKey[key]
 	if ok {
@@ -172,6 +275,10 @@ func (s *Store) Append(key string, events []logtypes.Event) error {
 	defer s.mu.Unlock()
 	sec, err := s.section(key, true)
 	if err != nil {
+		return err
+	}
+	// 追加前必须校准：否则会紧接崩溃残留的半行继续写，把半行与新行粘成坏行。
+	if err := sec.calibrateLocked(); err != nil {
 		return err
 	}
 	if err := sec.openActive(s.maxSeg); err != nil {
@@ -240,13 +347,19 @@ func (s *Store) Iterate(key string, fn func(logtypes.Event) error) error {
 	return nil
 }
 
-// Count 返回该源已存事件总数（来自清单，不读段）。
+// Count 返回该源已存的**完整**事件数。
+//
+// 不能直接累加清单计数：末段可能因崩溃残留半行，使清单计数高于物理完整行数，
+// 调用方若按该值截取权威集合会静默跳过缺失事件（M-8）。故先校准末段再计数。
 func (s *Store) Count(key string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sec, ok := s.byKey[key]
 	if !ok {
 		return 0, nil
+	}
+	if err := sec.calibrateLocked(); err != nil {
+		return 0, err
 	}
 	n := 0
 	for _, m := range sec.manifest.Segments {
