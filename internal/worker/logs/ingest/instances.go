@@ -163,8 +163,91 @@ func (m *Manager) appendPendingInstanceOutput(uuid, stream string, data []byte) 
 	return m.appendPendingInstanceOutputLocked(uuid, stream, data)
 }
 
+// Pending 暂存上限（M-6）。未绑定实例的输出在绑定到达前无 pipeline/ledger 兜底，
+// 若不加界，持续 stdout/stderr 可耗尽 Worker 数据盘，进而拖垮 ingest.state.json、
+// 事件段、WAL 与 VL 运行时。上限取值需容纳正常的重启接管窗口（CP 不可达时可能持续
+// 数分钟），同时远低于单盘容量。
+const (
+	// pendingMaxStreamBytes 单实例单流上限。
+	pendingMaxStreamBytes = 64 << 20
+	// pendingMaxTotalBytes 全部 pending 暂存总量上限。
+	pendingMaxTotalBytes = 512 << 20
+)
+
+// pendingSpoolUsage 统计 pending 暂存目录的总字节数与每个文件的大小。
+//
+// 不缓存结果：spool 会在绑定时被 rename 或删除（见 flushPendingForBinding），
+// 缓存会让限额在接管后残留并误伤正常采集。
+func (m *Manager) pendingSpoolUsage() (total int64, perFile map[string]int64, err error) {
+	root := filepath.Join(m.root, "var", "log", pendingSpoolRoot)
+	perFile = map[string]int64{}
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return 0, perFile, nil
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		files, readErr := os.ReadDir(filepath.Join(root, entry.Name()))
+		if readErr != nil {
+			return 0, nil, readErr
+		}
+		for _, file := range files {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), ".spool") {
+				continue
+			}
+			info, statErr := file.Info()
+			if statErr != nil {
+				return 0, nil, statErr
+			}
+			size := info.Size()
+			perFile[entry.Name()+"/"+file.Name()] = size
+			total += size
+		}
+	}
+	return total, perFile, nil
+}
+
 func (m *Manager) appendPendingInstanceOutputLocked(uuid, stream string, data []byte) error {
+	// 与托管 Raw 写入同源的门禁：pending 也必须受磁盘阈值约束，否则它成为绕过
+	// 暂停阈值的写放大路径（M-6）。
+	if m.capacityProvider != nil {
+		budget, err := m.capacityProvider()
+		if err != nil {
+			return err
+		}
+		pause := budget.PauseAtPercent
+		if pause <= 0 {
+			pause = 90
+		}
+		if budget.DiskUsagePercent >= pause {
+			return fmt.Errorf("ingest: pending spool disk usage reached pause threshold")
+		}
+	}
 	path := m.pendingInstancePath(uuid, stream)
+	rel := filepath.Base(filepath.Dir(path)) + "/" + filepath.Base(path)
+	maxStream := m.pendingMaxStream
+	if maxStream <= 0 {
+		maxStream = pendingMaxStreamBytes
+	}
+	maxTotal := m.pendingMaxTotal
+	if maxTotal <= 0 {
+		maxTotal = pendingMaxTotalBytes
+	}
+	total, perFile, err := m.pendingSpoolUsage()
+	if err != nil {
+		return fmt.Errorf("ingest: pending spool usage: %w", err)
+	}
+	if perFile[rel]+int64(len(data)) > maxStream {
+		return fmt.Errorf("ingest: pending spool exceeds per-stream limit for %s/%s", uuid, stream)
+	}
+	if total+int64(len(data)) > maxTotal {
+		return fmt.Errorf("ingest: pending spool exceeds total limit")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("ingest: pending spool directory: %w", err)
 	}
