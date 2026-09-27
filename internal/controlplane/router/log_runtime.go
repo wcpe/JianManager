@@ -18,12 +18,14 @@ import (
 // LogRuntimeHandler exposes Worker-managed VictoriaLogs control through CP.
 // The handler never connects to VL directly; all calls use the reverse tunnel.
 type LogRuntimeHandler struct {
-	nodes *service.NodeService
-	pool  *cpgrpc.ClientPool
+	nodes     *service.NodeService
+	pool      *cpgrpc.ClientPool
+	authz     *service.AuthzService
+	instances *service.InstanceService
 }
 
-func NewLogRuntimeHandler(nodes *service.NodeService, pool *cpgrpc.ClientPool) *LogRuntimeHandler {
-	return &LogRuntimeHandler{nodes: nodes, pool: pool}
+func NewLogRuntimeHandler(nodes *service.NodeService, pool *cpgrpc.ClientPool, authz *service.AuthzService, instances *service.InstanceService) *LogRuntimeHandler {
+	return &LogRuntimeHandler{nodes: nodes, pool: pool, authz: authz, instances: instances}
 }
 
 func (h *LogRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
@@ -196,7 +198,99 @@ func archiveObjectIDs(c *gin.Context) []string {
 	return out
 }
 
+// authorizeArchiveTarget 校验归档查询/恢复的目标是否在调用方授权范围内（M-4B）。
+//
+// 缺陷形态：这两个端点只挂 `node.manage`，且把请求体/查询参数里的 `target` 原样下发给
+// Worker，Worker 侧再由首个 target 生成归档分区键。默认角色下 `node.manage` 仅属平台
+// 管理员（本就有全局权限，不新增越权），但权限树允许自定义角色——一旦非平台用户获得
+// 该权限，即可提交任意 target，绕过实例组/目标校验探测归档对象存在性，甚至对不属于
+// 该路由节点的 namespace 触发 rehydrate（读取、校验并发布归档事件，造成跨目标资源
+// 消耗与数据面污染）。
+//
+// 规则：
+//   - 空 target 表示「本节点自身」（既有语义，见 archiveQueryBase），放行；
+//   - `inst:<id>` 须通过 CanAccessInstance，且该实例须归属路由指定的 Worker 节点；
+//   - `node:<id>` 只允许指向路由节点自身，防止借本节点通道读取其它节点数据；
+//   - 其它格式一律拒绝，避免把无法识别的目标交给 Worker 自行解释。
+func (h *LogRuntimeHandler) authorizeArchiveTarget(c *gin.Context, target string) bool {
+	routeNodeID := c.Param("id")
+	if h.authz == nil {
+		// 未接线授权服务时拒绝而非放行：归档涉及跨目标读取与恢复，不能默认信任。
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "日志归档授权未就绪"})
+		return false
+	}
+	access := getAccess(c)
+	if access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return false
+	}
+	trimmed := strings.TrimSpace(target)
+	if trimmed == "" {
+		return true
+	}
+	switch {
+	case strings.HasPrefix(trimmed, "inst:"):
+		raw := strings.TrimPrefix(trimmed, "inst:")
+		id, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "target 无效"})
+			return false
+		}
+		ok, err := h.authz.CanAccessInstance(access, uint(id))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "授权校验失败"})
+			return false
+		}
+		if !ok {
+			// 不区分「不存在」与「无权限」，避免实例存在性枚举。
+			c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权访问该实例归档"})
+			return false
+		}
+		node, err := h.nodes.GetByID(uint(parseUintOrZero(routeNodeID)))
+		if err != nil || node == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
+			return false
+		}
+		if h.instances == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "授权校验失败"})
+			return false
+		}
+		inst, err := h.instances.GetByID(uint(id))
+		if err != nil || inst == nil {
+			// 实例不存在按无权限处理：避免用该端点枚举实例存在性。
+			c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权访问该实例归档"})
+			return false
+		}
+		if inst.NodeID != node.ID {
+			// 目标实例不属于该路由节点：拒绝跨节点读取。
+			c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "目标实例不属于该节点"})
+			return false
+		}
+		return true
+	case strings.HasPrefix(trimmed, "node:"):
+		if strings.TrimPrefix(trimmed, "node:") != routeNodeID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "仅允许访问本节点归档"})
+			return false
+		}
+		return true
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "target 仅支持 inst:<id> 或 node:<id>"})
+		return false
+	}
+}
+
+func parseUintOrZero(v string) uint64 {
+	id, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
+}
+
 func (h *LogRuntimeHandler) ArchiveStatus(c *gin.Context) {
+	if !h.authorizeArchiveTarget(c, c.Query("target")) {
+		return
+	}
 	client, ok := h.client(c)
 	if !ok {
 		return
@@ -223,13 +317,17 @@ type logRehydrateRequest struct {
 }
 
 func (h *LogRuntimeHandler) Rehydrate(c *gin.Context) {
-	client, ok := h.client(c)
-	if !ok {
-		return
-	}
 	var body logRehydrateRequest
 	if err := c.ShouldBindJSON(&body); err != nil || len(body.ArchiveObjectIDs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "archiveObjectIds required"})
+		return
+	}
+	// 授权校验必须在取 client 之前：否则未授权请求也会触发与 Worker 的连接。
+	if !h.authorizeArchiveTarget(c, body.Target) {
+		return
+	}
+	client, ok := h.client(c)
+	if !ok {
 		return
 	}
 	base := archiveQueryBase(c, body.Target)
