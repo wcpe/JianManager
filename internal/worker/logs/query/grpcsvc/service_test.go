@@ -251,6 +251,44 @@ func TestLogSearch_DisabledService_LOGUnsupported(t *testing.T) {
 	require.False(t, resp.GetCoverage().GetComplete())
 }
 
+// M-9 回归：Worker 边界必须拒绝「空授权 + 无 View」的请求。
+//
+// planner 把空 TargetIDs 解释为「本 Worker 全部 Catalog 分区」，故该组合等于一次全量
+// 读取原语：任何能直接调用 Worker query 服务的组件都能借此越过目标收敛。CP 正常路径
+// 会先 fail-closed（logcoord.ValidateQuery），但 Worker 自身不应依赖调用方守规矩。
+func TestLogQuery_EmptyAuthorizationWithoutViewIsRejected(t *testing.T) {
+	fq := &fakeQuery{}
+	svc := New(fq, nil)
+
+	t.Run("search", func(t *testing.T) {
+		resp, err := svc.LogSearch(context.Background(), &workerpb.LogSearchRequest{
+			Query: &workerpb.LogQueryRequestBase{RequestId: "noauth-1", ProtocolVersion: query.DefaultProtocolVersion},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, resp.GetError(), "空授权且无 View 必须拒绝，不得全量读取")
+		require.Equal(t, workerpb.LogErrorCode_LOG_UNAUTHORIZED, resp.GetError().GetCode())
+		require.False(t, resp.GetCoverage().GetComplete())
+	})
+
+	t.Run("stats", func(t *testing.T) {
+		resp, err := svc.LogStats(context.Background(), &workerpb.LogStatsRequest{
+			Query: &workerpb.LogQueryRequestBase{RequestId: "noauth-2", ProtocolVersion: query.DefaultProtocolVersion},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, resp.GetError())
+		require.Equal(t, workerpb.LogErrorCode_LOG_UNAUTHORIZED, resp.GetError().GetCode())
+	})
+
+	t.Run("create_view", func(t *testing.T) {
+		resp, err := svc.LogCreateView(context.Background(), &workerpb.LogCreateViewRequest{
+			Query: &workerpb.LogQueryRequestBase{RequestId: "noauth-3", ProtocolVersion: query.DefaultProtocolVersion},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, resp.GetError(), "建 View 即确定读取范围，空授权不得放行")
+		require.Equal(t, workerpb.LogErrorCode_LOG_UNAUTHORIZED, resp.GetError().GetCode())
+	})
+}
+
 func TestLogStats_MapsPointsAndClosedVisibleSeq(t *testing.T) {
 	viewID := "view-stats"
 	views := &fakeViews{views: map[string]*query.QueryView{
@@ -284,7 +322,11 @@ func TestLogStats_MapsPointsAndClosedVisibleSeq(t *testing.T) {
 	svc := New(fq, views)
 
 	resp, err := svc.LogStats(context.Background(), &workerpb.LogStatsRequest{
-		Query:   &workerpb.LogQueryRequestBase{RequestId: "st1", ProtocolVersion: query.DefaultProtocolVersion},
+		Query: &workerpb.LogQueryRequestBase{
+			RequestId: "st1", ProtocolVersion: query.DefaultProtocolVersion,
+			// 显式授权目标：Worker 边界已要求非空（无 View 时空授权=全量读取原语，M-9）。
+			AuthorizedTargets: &workerpb.LogAuthorizedTargets{TargetIds: []string{"ns/game-1/2026-09-20"}},
+		},
 		GroupBy: []string{"level"},
 	})
 	require.NoError(t, err)
@@ -312,7 +354,11 @@ func TestLogStats_Unimplemented_LOGUnsupported(t *testing.T) {
 	}}
 	svc := New(fq, nil)
 	resp, err := svc.LogStats(context.Background(), &workerpb.LogStatsRequest{
-		Query: &workerpb.LogQueryRequestBase{RequestId: "u2"},
+		Query: &workerpb.LogQueryRequestBase{
+			RequestId: "u2",
+			// 显式授权目标：本用例测的是 Unimplemented 路径，需先通过边界授权校验。
+			AuthorizedTargets: &workerpb.LogAuthorizedTargets{TargetIds: []string{"ns/game-1/2026-09-20"}},
+		},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp.GetError())
@@ -572,6 +618,8 @@ func TestLogSearch_RealQueryService_ClosedVisibleSeqFromPlannerView(t *testing.T
 			RequestId:       "real-1",
 			ProtocolVersion: query.DefaultProtocolVersion,
 			Budget:          &workerpb.LogQueryBudget{Limit: 10},
+			// 显式授权目标：Worker 边界已要求非空（无 View 时空授权=全量读取原语，M-9）。
+			AuthorizedTargets: &workerpb.LogAuthorizedTargets{TargetIds: []string{key.String()}},
 		},
 	})
 	require.NoError(t, err)
@@ -599,6 +647,8 @@ func TestLogSearch_RealQueryService_UnimplementedClient(t *testing.T) {
 			RequestId:       "old-1",
 			ProtocolVersion: query.DefaultProtocolVersion,
 			Budget:          &workerpb.LogQueryBudget{Limit: 10},
+			// 显式授权目标：本用例测的是 Unimplemented 路径，需先通过边界授权校验。
+			AuthorizedTargets: &workerpb.LogAuthorizedTargets{TargetIds: []string{key.String()}},
 		},
 	})
 	require.NoError(t, err)
