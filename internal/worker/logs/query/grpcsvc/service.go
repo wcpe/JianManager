@@ -158,6 +158,34 @@ func (s *Service) GetLogCapabilities(_ context.Context, req *workerpb.GetLogCapa
 	return grpcmap.CapabilitiesResponseToProto(caps), nil
 }
 
+// authorizeScope 在 Worker 边界强制授权作用域，作为 CP 之外的纵深防御。
+//
+// 规则与 CP 的 `logcoord.ValidateQuery` 一致：**无 View 时授权目标不得为空**。
+// 理由：planner 把「空 TargetIDs」解释为「本 Worker 全部 Catalog 分区」（见 planner
+// 的 PlanRequest 注释），故空授权 + 无 View 等于一次全量读取原语——任何能直接调用
+// Worker query 服务的组件（被攻陷的 CP、未来的直连入口、其它内部调用方）都能借此
+// 越过目标收敛读到该 Worker 上全部源的日志（M-9）。
+//
+// 携带 View 时放行：那样读取范围由 View 创建时的目标决定，不再取决于本次请求的授权
+// 列表，故不构成「空即全量」；CP 侧另有当前授权对 View 目标的覆盖校验。
+//
+// 返回非 nil 表示应拒绝本次请求。
+func authorizeScope(targets []string, viewID string) error {
+	if len(targets) == 0 && strings.TrimSpace(viewID) == "" {
+		return fmt.Errorf("%s: authorized target set is empty", query.ErrCodeUnauthorized)
+	}
+	return nil
+}
+
+// unauthorizedSearch 构造授权拒绝响应（复用既有 error 字段，不返回空成功）。
+func unauthorizedSearch(req *workerpb.LogSearchRequest, err error) *workerpb.LogSearchResponse {
+	return &workerpb.LogSearchResponse{
+		RequestId: requestIDOfQuery(req.GetQuery()),
+		View:      grpcmap.ViewRefToProto(grpcmap.ViewRefFromProto(req.GetQuery().GetView())),
+		Error:     &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_UNAUTHORIZED, Message: err.Error()},
+	}
+}
+
 // LogCreateView creates the Worker-local view used by subsequent federated calls.
 func (s *Service) LogCreateView(ctx context.Context, req *workerpb.LogCreateViewRequest) (*workerpb.LogCreateViewResponse, error) {
 	_ = ctx
@@ -168,6 +196,13 @@ func (s *Service) LogCreateView(ctx context.Context, req *workerpb.LogCreateView
 		}, nil
 	}
 	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	// 建 View 即确定后续读取范围，故授权目标不得为空（否则该 View 覆盖全量分区）。
+	if err := authorizeScope(qreq.AuthorizedTargets, ""); err != nil {
+		return &workerpb.LogCreateViewResponse{
+			RequestId: qreq.RequestID,
+			Error:     &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_UNAUTHORIZED, Message: err.Error()},
+		}, nil
+	}
 	resp := s.query.OpenView(qreq)
 	s.fillClosedVisibleSeq(&resp.Coverage, viewIDOf(resp.View, qreq.View))
 	return &workerpb.LogCreateViewResponse{
@@ -185,6 +220,9 @@ func (s *Service) LogSearch(ctx context.Context, req *workerpb.LogSearchRequest)
 		return s.disabledSearch(req), nil
 	}
 	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	if err := authorizeScope(qreq.AuthorizedTargets, viewIDOf(qreq.View, qreq.View)); err != nil {
+		return unauthorizedSearch(req, err), nil
+	}
 	resp := s.query.Search(ctx, qreq)
 	s.fillClosedVisibleSeq(&resp.Coverage, viewIDOf(resp.View, qreq.View))
 	out := grpcmap.SearchResponseToProto(resp)
@@ -199,6 +237,13 @@ func (s *Service) LogStats(ctx context.Context, req *workerpb.LogStatsRequest) (
 		return s.disabledStats(req), nil
 	}
 	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	if err := authorizeScope(qreq.AuthorizedTargets, viewIDOf(qreq.View, qreq.View)); err != nil {
+		return &workerpb.LogStatsResponse{
+			RequestId: qreq.RequestID,
+			View:      grpcmap.ViewRefToProto(grpcmap.ViewRefFromProto(req.GetQuery().GetView())),
+			Error:     &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_UNAUTHORIZED, Message: err.Error()},
+		}, nil
+	}
 	qreq.GroupBy = append([]string(nil), req.GetGroupBy()...)
 	qreq.TimeBucket = req.GetTimeBucket()
 	resp := s.query.Stats(ctx, qreq, req.GetGroupBy())

@@ -438,9 +438,13 @@ func (p *Planner) planRangesForView(req PlanRequest, view *QueryView, res *PlanR
 		if !ok {
 			continue
 		}
-		if !matchTarget(key, req.TargetIDs) && len(req.TargetIDs) > 0 {
-			// 视图目标已在创建时授权；后续请求授权收窄仍必须拒绝侧信道。
-			// 此处允许视图内目标继续读取（权限撤销由调用方在 service 层拦截）。
+		if req.TargetIDs != nil && !matchTarget(key, req.TargetIDs) {
+			// 视图目标已在创建时授权，但本次请求的授权集合不再覆盖它——必须显式降级，
+			// 不能继续读取。否则「先建宽 View、再以窄授权复用」会绕过调用方的授权收窄，
+			// 使权限撤销在该 Worker 上不生效（M-9）。
+			res.Coverage.AddTarget(TargetCoverage{TargetID: targetID, State: CoverageNotReady,
+				Reasons: []string{ReasonUnauthorizedTarget}})
+			continue
 		}
 		wantGen := view.Generations[targetID]
 		wantDir := view.DirIDs[targetID]
