@@ -46,12 +46,40 @@ func (m *Manager) MissingInstanceBindings(instanceIDs []string) []string {
 	return missing
 }
 
+// validateWorkDir 校验实例工作目录可用于日志采集（M-7）。
+//
+// 信任模型：workDir 来自 CP 下发，而数据根之外的绝对路径是**既有契约**
+// （`dataroot.Root.Abs` 明确保留绝对输入，生产亦存在如外来接管实例这样的合法根外目录），
+// 故此处不能强制收窄到 `var/servers`，否则会直接打断那些实例的采集。
+//
+// 能堵住的是「路径在解析后逃出它自身声明的位置」这一类：`..` 穿越与符号链接。
+// 两者都会让采集器读到（或写到）与实例约定目录无关的位置——FILE_PRIMARY 会按此
+// workDir 拼 `logs/latest.log` 与 `*.gz` 并直接打开，且打开动作会跟随符号链接。
+func validateWorkDir(workDir string) error {
+	cleaned := filepath.Clean(workDir)
+	if cleaned == "." || cleaned == string(filepath.Separator) {
+		return fmt.Errorf("ingest: refusing to collect logs from %q", workDir)
+	}
+	// 已存在的路径：解析符号链接后不得偏离原路径，否则说明中间某级是指向别处的链接。
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return nil // 尚未创建：无链接可跟随，交由后续采集按需创建。
+	}
+	if resolved != cleaned {
+		return fmt.Errorf("ingest: refusing symlinked log work dir %q (resolves to %q)", cleaned, resolved)
+	}
+	return nil
+}
+
 func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir string) error {
 	if m == nil {
 		return fmt.Errorf("ingest: instance acquisition unavailable")
 	}
 	if uuid == "" || !strings.HasPrefix(targetID, "inst:") || generation == "" || workDir == "" {
 		return fmt.Errorf("ingest: incomplete instance log binding")
+	}
+	if err := validateWorkDir(workDir); err != nil {
+		return err
 	}
 	binding := InstanceBinding{UUID: uuid, TargetID: targetID, Generation: generation, Mode: pipeline.AcquireMode(mode), WorkDir: filepath.Clean(workDir)}
 	if !binding.Mode.Valid() {
