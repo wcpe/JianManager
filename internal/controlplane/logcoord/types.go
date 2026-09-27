@@ -1,6 +1,8 @@
 package logcoord
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -439,10 +441,18 @@ func FormatClosedVisibleSeq(vec map[string]string) string {
 	return b.String()
 }
 
-// NewViewID 生成视图 ID（基础实现；生产可替换）。
+// NewViewID 生成视图 ID。
+//
+// 必须是**不可预测**的不透明标识：View 绑定调用方主体与授权范围，虽然复用还要经过
+// PrincipalKey/权限范围/目标覆盖校验（故可预测性本身不构成直接越权），但基于时间的
+// 可枚举 ID 会暴露「某 View 是否存在」的侧信道（跨主体复用返回 403、未知 View 返回
+// 400，两者可区分）。故改用 128 位加密随机数；失败时退回时间戳以保证仍能生成 ID。
 func NewViewID() string {
-	return "cv_" + strconv.FormatInt(time.Now().UTC().UnixNano(), 36) +
-		"_" + strconv.FormatInt(int64(time.Now().UnixNano()%1e6), 36)
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "cv_" + strconv.FormatInt(time.Now().UTC().UnixNano(), 36)
+	}
+	return "cv_" + hex.EncodeToString(buf[:])
 }
 
 // MustParseRFC3339 解析 RFC3339，失败返回零时间。

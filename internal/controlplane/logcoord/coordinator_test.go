@@ -1085,3 +1085,32 @@ func TestExportAccumulatesBytesAcrossPages(t *testing.T) {
 		require.Nil(t, res.Artifact, "不完整时不得下发附件")
 	})
 }
+
+// M-4A 回归：视图 ID 必须是不可预测的不透明标识。
+//
+// 缺陷形态：CP 与 Worker 都用「时间纳秒 + 低位时间/自增序号」生成 View ID，可被枚举。
+// 视图复用依赖创建时的目标集合作为读取范围，猜中 ID 就能以更窄的当前授权复用更宽的
+// 视图；且跨主体复用与未知 View 的响应可区分，构成存在性枚举侧信道。
+func TestNewViewIDIsOpaqueAndUnique(t *testing.T) {
+	const n = 200
+	seen := make(map[string]struct{}, n)
+	prev := ""
+	for i := 0; i < n; i++ {
+		id := NewViewID()
+		_, dup := seen[id]
+		require.False(t, dup, "视图 ID 不得重复")
+		seen[id] = struct{}{}
+		require.True(t, strings.HasPrefix(id, "cv_"), "应保留可读前缀")
+		// 128 位随机数编码为 32 个 hex 字符。
+		require.Len(t, strings.TrimPrefix(id, "cv_"), 32, "应为 128 位随机的 hex 表示")
+		// 相邻生成的两个 ID 不得呈现共同的递增前缀（时间戳实现的典型特征）。
+		if prev != "" && len(prev) == len(id) {
+			common := 0
+			for common < len(id) && prev[common] == id[common] {
+				common++
+			}
+			require.Less(t, common, 8, "相邻 ID 不应共享长前缀（暗示可推导）")
+		}
+		prev = id
+	}
+}
