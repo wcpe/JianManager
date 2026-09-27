@@ -220,3 +220,46 @@ func TestPendingSpoolEnforcesCapacityLimits(t *testing.T) {
 		require.FileExists(t, m.pendingInstancePath("uuid-ok", "stdout"))
 	})
 }
+
+// M-7 回归：拒绝符号链接工作目录，但不误伤合法路径。
+//
+// 缺陷形态：RegisterInstance 只对 workDir 做 filepath.Clean，既不校验符号链接也不
+// 收敛受管根。FILE_PRIMARY 会按该路径拼 logs/latest.log 与 *.gz 并直接打开，而打开
+// 动作跟随符号链接——于是指向别处的链接会让采集器读到约定目录之外的文件。
+//
+// 注意：数据根之外的绝对路径是既有契约（dataroot.Root.Abs 保留绝对输入，生产存在
+// 合法的根外实例目录），故本修复只拒绝「解析后偏离原路径」的链接，不收窄绝对路径。
+func TestRegisterInstanceRejectsSymlinkedWorkDir(t *testing.T) {
+	vl, _ := newProjectionVL(t)
+	cat := catalog.New(nil)
+	m, err := New(Options{Root: t.TempDir(), VL: vl, Catalog: cat, Journal: cat.Journal()})
+	require.NoError(t, err)
+
+	base := t.TempDir()
+	real := filepath.Join(base, "real-instance")
+	require.NoError(t, os.MkdirAll(filepath.Join(real, "logs"), 0o700))
+
+	t.Run("symlinked_workdir_rejected", func(t *testing.T) {
+		link := filepath.Join(base, "linked-instance")
+		require.NoError(t, os.Symlink(real, link))
+		err := m.RegisterInstance("uuid-link", "inst:1", "g1", "FILE_PRIMARY", link)
+		require.Error(t, err, "指向别处的工作目录不得用于采集")
+		require.Contains(t, err.Error(), "symlinked log work dir")
+	})
+
+	t.Run("real_directory_accepted", func(t *testing.T) {
+		require.NoError(t, m.RegisterInstance("uuid-real", "inst:2", "g1", "FILE_PRIMARY", real))
+	})
+
+	t.Run("outside_root_absolute_still_accepted", func(t *testing.T) {
+		// 根外绝对目录是既有契约（外来接管实例），修复不得打断它。
+		outside := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(outside, "logs"), 0o700))
+		require.NoError(t, m.RegisterInstance("uuid-outside", "inst:3", "g1", "FILE_PRIMARY", outside))
+	})
+
+	t.Run("filesystem_root_rejected", func(t *testing.T) {
+		err := m.RegisterInstance("uuid-root", "inst:4", "g1", "FILE_PRIMARY", "/")
+		require.Error(t, err, "不得以文件系统根作为采集目录")
+	})
+}
