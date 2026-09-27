@@ -1,8 +1,11 @@
 package query
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -600,12 +603,22 @@ func assertDisjoint(ranges []AuthoritativeRange) {
 	}
 }
 
+// newViewID 生成不可预测的 Worker 本地视图 ID。
+//
+// 原实现用 UnixNano + 自增序号，可被枚举：视图复用路径的授权校验（`planRangesForView`）
+// 依赖「视图创建时的目标」作为读取范围，猜中 ID 就能以更窄的当前授权复用更宽的视图
+// （M-4A/M-9）。改用 128 位加密随机数；失败时退回原方案以保证仍能生成唯一 ID
+// （viewSeq 单调，不依赖时钟粒度）。
 func (p *Planner) newViewID() string {
 	p.mu.Lock()
 	p.viewSeq++
 	seq := p.viewSeq
 	p.mu.Unlock()
-	return fmt.Sprintf("view-%d-%d", p.now().UnixNano(), seq)
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return fmt.Sprintf("view-%d-%d", p.now().UnixNano(), seq)
+	}
+	return "view-" + strconv.FormatUint(seq, 36) + "-" + hex.EncodeToString(buf[:])
 }
 
 func appendUniqueStr(list []string, v string) []string {
