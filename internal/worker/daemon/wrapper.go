@@ -168,24 +168,7 @@ func (w *Wrapper) run(ready chan<- struct{}) error {
 
 	// 持续接受 Worker 连接：Worker 重启后可 reconnect。
 	// 每次接受后替换旧连接并启动读循环处理控制帧。
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				slog.Info("wrapper Accept 退出", "instanceId", w.cfg.InstanceUUID, "error", err)
-				return
-			}
-			w.mu.Lock()
-			// 关闭旧连接（若存在），避免并发写
-			if w.workerConn != nil {
-				_ = w.workerConn.Close()
-			}
-			w.workerConn = conn
-			w.mu.Unlock()
-			slog.Info("wrapper 接受 Worker 连接", "instanceId", w.cfg.InstanceUUID)
-			go w.readLoop(conn)
-		}
-	}()
+	go w.acceptLoop(ln)
 
 	// 启动 Java
 	if err := w.startJava(); err != nil {
@@ -205,6 +188,47 @@ func (w *Wrapper) isClosed() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.closed
+}
+
+// acceptRetryInterval 是 Accept 出错后的重试间隔。
+const acceptRetryInterval = 100 * time.Millisecond
+
+// acceptLoop 持续接受 Worker 连接，直到 wrapper 关闭。
+//
+// 关键不变量：**接受循环不得因瞬时错误永久退出**。循环一旦退出，本实例就再也无法被
+// Worker 连接（wrapper 只在进程重启时重建监听），运维侧表现为「命令全部失败且无法自愈」。
+// Accept 出错并不都意味着监听已关闭：Windows 命名管道在客户端连接后立刻断开等情形会返回
+// 错误（npipe 仅对 ERROR_NO_DATA 内部重试，其它错误直接上抛），此时客户端侧 WaitNamedPipe
+// 会以 ERROR_SEM_TIMEOUT 表现为「管道一直不可用」——与「控制长连接失联」事故同属一类失效态。
+// 故此处区分「关闭导致的退出」与「瞬时错误」：前者由 ln.Close() 触发（w.closed/w.closing 给出
+// 判据），后者记日志并重试。
+func (w *Wrapper) acceptLoop(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if w.isClosed() {
+				slog.Info("wrapper Accept 退出（关闭中）", "instanceId", w.cfg.InstanceUUID)
+				return
+			}
+			slog.Warn("wrapper Accept 出错，稍后重试（接受循环不得终止）",
+				"instanceId", w.cfg.InstanceUUID, "error", err, "retryIn", acceptRetryInterval)
+			select {
+			case <-time.After(acceptRetryInterval):
+			case <-w.closing:
+				return
+			}
+			continue
+		}
+		w.mu.Lock()
+		// 关闭旧连接（若存在），避免并发写
+		if w.workerConn != nil {
+			_ = w.workerConn.Close()
+		}
+		w.workerConn = conn
+		w.mu.Unlock()
+		slog.Info("wrapper 接受 Worker 连接", "instanceId", w.cfg.InstanceUUID)
+		go w.readLoop(conn)
+	}
 }
 
 // errAutoRestartSuppressed 表示 startJava 在临界区内发现「wrapper 已关闭 / 自动重启已被熔断禁用」，
