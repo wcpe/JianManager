@@ -307,3 +307,22 @@
 **回滚**：`worker/bin/jianmanager-worker.bak-connharden-20260927-134904`（即 11:44 构建）。
 
 **影响面**：本构建同时带上 M-7（拒绝符号链接与 `..` 逃逸的采集工作目录）与 M-4A（视图 ID 改为 128 位随机）；M-7 对既有 12 实例已按上表核验放行。CP 侧未随本次变动（仅 Worker 替换）。
+
+## FR-475 Windows 就绪探针发现并修复 CRLF 缺陷（2026-09-27）
+
+**动机**：FR-475 唯一剩余开口是 Windows 真机证据。本机无 Windows 执行路径（Wine/QEMU/libvirt/VBox 均未安装；Docker 为 Linux 容器无法执行 Windows PE），故先做**可在 Linux 完成的 Windows 就绪取证**，以判断该缺口是否空洞。
+
+**发现（确定性复现）**：采集侧按 `\n` 拆行、只剥 `\n`（`acquire/tailer.go` 的 `ReadString('\n')` 与 `acquire/archive.go` 的 `TrimRight(line, "\n")`），全管线无 `\r` 处理；而 Windows 上 Java 经 log4j2 `%n` 写出 CRLF。字节级探针（`.tmp/crlf-probe`，不入库）实测修复前：
+
+| 输入 | 事件正文 | canonical |
+| --- | --- | --- |
+| LF | `[13:51:37] … players online:` | `dc14d9c0…` |
+| CRLF | `… players online:\r` | `b0be9d67…` |
+
+即**行终止符进入正文**（多行堆栈每行行尾都带），且同一逻辑内容跨平台产出**不同 canonical**；级别/时间解析与续行归并未受影响。
+
+**修复**：在归一化收口 `normalize.FeedAt` 剥除单个行尾 `\r`——一处覆盖 `FileTailer`、归档回放与批量 `ProcessLines` 全部入口；record 偏移由采集侧 `lineSpan` 决定，不受正文字节数影响，故采集层改动为零。对现网（Linux，日志无 `\r`）为**惰性修复**。
+
+**回归（5 条，逐条变异验证）**：`normalize/crlf_test.go`（CRLF 与 LF 正文/canonical 一致、多行归并一致、混行尾）与 `pipeline/crlf_line_ending_test.go`（**record 位置字节精确**：CRLF 第 2 事件起点比 LF 多 1 字节、末事件覆盖到文件尾；追加一行后新事件起点等于追加前文件长度、游标不错位）。变异验证：撤销修复后 **5 条全红**，恢复后转绿。全仓 `go test ./internal/... ./apps/...` 与 `go build`/`go vet` 干净。
+
+**边界（如实记录）**：本修复只覆盖**行终止符语义**这一项可在 Linux 覆盖的 Windows 面。Windows 真机行为（文件锁与改名语义、路径分隔符、服务与编码环境）**仍未验证**，故 FR-475 保持「开发中」，PRD 状态不变。

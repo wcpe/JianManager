@@ -69,6 +69,6 @@ VL 回读字段：`_msg="[00:00:03] [Server thread/WARN]: corrupted � bytes"`�
 
 ## 5. 未覆盖项
 
-- **Windows 平台**未测（本机 linux-amd64）。
+- **Windows 平台**未测（本机 linux-amd64）。其中**行终止符（CRLF）语义**已用字节级夹具在 Linux 覆盖（CRLF 与 LF 产出相同 `message`/`canonical`、多行归并一致、record 位置仍字节精确），但文件锁与改名、路径分隔符等平台语义仍须真机验证。
 - 本轮用真 VL + 真实文件采集，但**未经 `vlsup.Supervisor`** 管理 VL 进程（supervisor 行为由 Runbook C 覆盖）。
 - 损坏编码的**多行事件内部**（跨行含非法字节）未单独构造用例；本轮覆盖的是单行情形。

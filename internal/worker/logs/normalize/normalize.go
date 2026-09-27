@@ -169,7 +169,13 @@ func (n *Normalizer) Feed(line string) []logtypes.Event {
 }
 
 // FeedAt 处理一行，并用 at 作为超时时钟（零值表示不提供墙钟）。
+//
+// 行终止符归一：调用方按 '\n' 拆行（FileTailer/归档读取只剥 '\n'），故 Windows 日志
+// （Java 经 log4j2 `%n` 输出 CRLF）的行尾会残留 '\r'。它属于行终止符而非正文，保留会
+// 污染事件正文，并使同一逻辑内容在 CRLF 与 LF 下产出不同的 canonical。故在此收口处剥除
+// 单个行尾 '\r'：偏移由调用方的 lineSpan 决定（不受正文长度影响），LF 日志不受影响。
 func (n *Normalizer) FeedAt(line string, at time.Time) []logtypes.Event {
+	line = strings.TrimSuffix(line, "\r")
 	n.stats.LineCount++
 	lineNo := n.lineIdx
 	n.lineIdx++
