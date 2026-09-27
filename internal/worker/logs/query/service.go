@@ -672,8 +672,14 @@ func remapCoverageTargets(cov *Coverage, authorized []string) {
 		out = append(out, target)
 	}
 	cov.Targets = out
-	cov.Complete = true
-	cov.PartialReasons = nil
+	// plan 级完整性必须保留：预算截断、fanout 上限、底层 RangeClient 的 CoverageReasons
+	// 只调用 MarkIncomplete 记在 plan 级，不一定把某个目标降级为非 success。若此处无条件
+	// 重置为 complete，这些原因会被整体抹掉，截断结果被上报为完整（M-5）。
+	planComplete := cov.Complete
+	planReasons := append([]string(nil), cov.PartialReasons...)
+
+	cov.Complete = planComplete
+	cov.PartialReasons = planReasons
 	for _, target := range out {
 		if target.State != CoverageSuccess {
 			cov.Complete = false
