@@ -202,6 +202,46 @@ func toProtoQueryBase(req WorkerSearchRequest) *workerpb.LogQueryRequestBase {
 	}
 }
 
+// qualityFromProto 把 Worker 上报的 proto 质量映射为 CP 侧取值。
+//
+// 映射保留 Worker 的判定语义（不在此降级或猜测）：未知枚举映射为 unspecified，
+// 由聚合与导出闸门按「非 exact 即不放行」处理，避免把未识别质量当成良好（M-3）。
+func qualityFromProto(q *workerpb.LogQuality) Quality {
+	if q == nil {
+		return Quality{}
+	}
+	return Quality{
+		DuplicateQuality: duplicateQualityFromProto(q.GetDuplicateQuality()),
+		StatsQuality:     statsQualityFromProto(q.GetStatsQuality()),
+	}
+}
+
+func duplicateQualityFromProto(v workerpb.LogDuplicateQuality) DuplicateQuality {
+	switch v {
+	case workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_EXACT:
+		return DupExact
+	case workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_UNRESOLVED:
+		return DupUnresolved
+	case workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_CONFLICT:
+		return DupConflict
+	default:
+		return DupUnspecified
+	}
+}
+
+func statsQualityFromProto(v workerpb.LogStatsQuality) StatsQuality {
+	switch v {
+	case workerpb.LogStatsQuality_LOG_QUALITY_STATS_EXACT:
+		return StatsQExact
+	case workerpb.LogStatsQuality_LOG_QUALITY_STATS_PARTIAL:
+		return StatsQPartial
+	case workerpb.LogStatsQuality_LOG_QUALITY_STATS_UNAVAILABLE:
+		return StatsQUnavailable
+	default:
+		return StatsQUnspecified
+	}
+}
+
 func mapSearchResponse(resp *workerpb.LogSearchResponse, err error) (*WorkerSearchResponse, error) {
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
@@ -228,6 +268,7 @@ func mapSearchResponse(resp *workerpb.LogSearchResponse, err error) (*WorkerSear
 		NextCursor: resp.GetNextCursor(),
 		Exhausted:  resp.GetExhausted(),
 		Targets:    mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Quality:    qualityFromProto(resp.GetQuality()),
 	}
 	// !exhausted + next_cursor 是正常分页，不是资源截断。资源截断由 coverage
 	// 原因显式表达，不能把页大小误报为不完整结果。
@@ -254,7 +295,10 @@ func mapCreateViewResponse(resp *workerpb.LogCreateViewResponse, err error) (*Wo
 	if resp == nil {
 		return &WorkerSearchResponse{Error: "empty_worker_response"}, nil
 	}
-	out := &WorkerSearchResponse{Targets: mapCoverageTargets(resp.GetCoverage().GetTargets())}
+	out := &WorkerSearchResponse{
+		Targets: mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Quality: qualityFromProto(resp.GetQuality()),
+	}
 	if resp.GetView() != nil {
 		out.ViewID = resp.GetView().GetViewId()
 	}
@@ -286,6 +330,7 @@ func mapStatsResponse(resp *workerpb.LogStatsResponse, err error) (*WorkerStatsR
 	out := &WorkerStatsResponse{
 		ViewID:  resp.GetView().GetViewId(),
 		Targets: mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Quality: qualityFromProto(resp.GetQuality()),
 	}
 	for _, p := range resp.GetPoints() {
 		agg := StatsAggregate{

@@ -52,6 +52,10 @@ type WorkerSearchResponse struct {
 	Truncated   bool   `json:"truncated"`
 	Unsupported bool   `json:"unsupported"`
 	Error       string `json:"error,omitempty"`
+	// Quality 是 Worker 上报的查询质量（与 coverage 正交）。不能只从 coverage 推导：
+	// Worker 可在 coverage 仍为 complete 时上报 conflict/partial（例如 projection 冲突），
+	// 若 CP 丢弃它就会把该结果当成 exact，进而错误放行导出附件（M-3）。
+	Quality Quality `json:"quality"`
 }
 
 // WorkerStatsPoint 单 Worker 统计点（已按维度/时间桶预聚合）。
@@ -70,6 +74,8 @@ type WorkerStatsResponse struct {
 	Truncated   bool   `json:"truncated"`
 	Unsupported bool   `json:"unsupported"`
 	Error       string `json:"error,omitempty"`
+	// Quality 见 WorkerSearchResponse.Quality（M-3）。
+	Quality Quality `json:"quality"`
 }
 
 // WorkerFacetDimension 单 Worker 维度 Facet。
