@@ -1108,6 +1108,9 @@ func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error
 	searchQ.Budget.MaxBytes = 0
 	var items []Event
 	var last *SearchResponse
+	// 累计字节必须跨页累加：原先每页都对 items 从头重算，页数为 p、总行数为 n 时
+	// 总量约 O(n²)（M-2）。此处只对当前页增量累加，判定语义不变。
+	var used uint64
 	for {
 		resp, err := c.Search(ctx, searchQ)
 		if err != nil {
@@ -1115,8 +1118,7 @@ func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error
 		}
 		last = resp
 		items = append(items, resp.Items...)
-		var used uint64
-		for _, event := range items {
+		for _, event := range resp.Items {
 			used += event.ApproxBytes()
 		}
 		if len(items) > totalRows || used > totalBytes {
