@@ -588,3 +588,41 @@ func TestPlannerViewStoreIsBounded(t *testing.T) {
 		t.Fatal("newest view must be retained")
 	}
 }
+
+// M-5 回归：plan 级 partial 不得被目标重映射抹掉。
+//
+// 缺陷形态：remapCoverageTargets 先按授权目标重映射物理分区 ID，随后无条件把
+// coverage 重置为 complete 并清空 PartialReasons，再仅依目标状态重建。但预算截断、
+// fanout 上限、底层 RangeClient 的 CoverageReasons 只调用 MarkIncomplete 记在 plan
+// 级，不一定把某个目标降级为非 success，于是这些原因被整体抹掉，截断结果被上报为
+// 完整——CP 侧据此可能对不完整结果放行导出附件。
+func TestRemapCoverageTargetsPreservesPlanLevelPartial(t *testing.T) {
+	// 目标状态仍为 success，partial 只存在于 plan 级。
+	cov := Coverage{
+		Complete:       false,
+		PartialReasons: []string{ReasonBudgetExceeded},
+		Targets: []TargetCoverage{{
+			TargetID: "ns/game-1/2026-09-20",
+			State:    CoverageSuccess,
+		}},
+	}
+	remapCoverageTargets(&cov, []string{"ns/game-1"})
+
+	require.False(t, cov.Complete, "plan 级 partial 存在时不得被抹成 complete")
+	require.Contains(t, cov.PartialReasons, ReasonBudgetExceeded,
+		"plan 级原因必须保留，否则截断被伪装成完整")
+}
+
+// M-5 反向对照：plan 与目标都完整时仍应判定 complete（修复不得把完整性一律降级）。
+func TestRemapCoverageTargetsKeepsCompleteWhenAllHealthy(t *testing.T) {
+	cov := Coverage{
+		Complete: true,
+		Targets: []TargetCoverage{{
+			TargetID: "ns/game-1/2026-09-20",
+			State:    CoverageSuccess,
+		}},
+	}
+	remapCoverageTargets(&cov, []string{"ns/game-1"})
+	require.True(t, cov.Complete)
+	require.Empty(t, cov.PartialReasons)
+}
