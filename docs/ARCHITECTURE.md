@@ -1399,9 +1399,9 @@ ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布�
 
 **已知限制**：`go test -race ./...` 在 `internal/controlplane/router` 包上**必然超时**，不能作为可执行的单条门禁命令。
 
-- **实测**：非 race 全包 `ok 316s`；race 插桩约**放大 10 倍**（同一子集非 race 3.5s / race 35s）→ 约 53 分钟，远超 `go test` 默认 10m 上限；把时限提到 25m 仍失败。
+- **实测**：非 race 全包 `ok 316s`；race 插桩约**放大 10 倍**（同一子集非 race 3.5s / race 35s）→ 约 53 分钟，远超 `go test` 默认 10m 上限；把时限提到 25m 仍失败。**Windows 真机（2026-09-28）**：该包单独跑 `ok 480.099s / 519.245s`（两轮），与其它重包并行时**包级超时**（`panic: test timed out after 10m0s`，非用例失败）——即非 race 侧的默认时限同样处在临界。
 - **成本源头（既有规模，非某次改动引入）**：该包有 **837** 处 `setupTestRouter*`/`setupTestDB` 调用点，每次 `setupTestDB` 都跑一遍 `database.AutoMigrate`（**115** 个模型）。
 - **影响**：race 检测在**权限与实例端点所在的这个最大包**上长期实际未被执行——正是最需要它发现竞态的地方。
-- **当前做法**：门禁经 `scripts/go-test-race.sh` 分两组执行——`core`（除 router 外的全部包，默认 10m 时限）与 `router`（单独放宽时限，`RACE_TIMEOUT` 默认 60m）；`make test` / `make test-cover` / `task go:race` 均指向该脚本。
+- **当前做法**：门禁经 `scripts/go-test-race.sh` 分两组执行——`core`（除 router 外的全部包，默认 10m 时限）与 `router`（单独放宽时限，`RACE_TIMEOUT` 默认 60m）；`make test` / `make test-cover` / `task go:race` 均指向该脚本。**非 race 侧同口径**：`scripts/go-test.sh` 分同样的两组（`ROUTER_TIMEOUT` 默认 25m），`make test-plain` 指向它——release 门禁的 `go test ./...` 无显式时限，在慢机/满载机器上会被上述包级超时掩盖真实结论。
 - **后续收敛方向**（按收益排序）：① 给该包做**共享迁移**——`TestMain` 建一个模板 DB 文件，`setupTestDB` 改为文件拷贝（比逐用例 `AutoMigrate` 快两个数量级），这是最大杠杆；② 把 router 包的 race 拆为 CI 独立 job 并放宽超时。二者都属独立的重构/CI 改动，不在单次修复范围内。
 

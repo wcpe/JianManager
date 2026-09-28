@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
+.PHONY: build build-cp build-worker build-jmctl build-jmagent build-web build-bot dev-cp dev-web lint vet test test-plain e2e clean proto embed-web embed-install-scripts embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -171,6 +171,15 @@ lint:
 # （RACE_TIMEOUT，默认 60m）。直接 `go test -race ./...` 会在该包上失败。
 test:
 	scripts/go-test-race.sh all
+
+# Go 测试（非 race 全量）
+#
+# release 门禁用的 `go test ./...` 没有显式时限；实测 `internal/controlplane/router` 在 Windows
+# 真机**单独**跑 480–520s，已逼近 go test 默认 10m 上限，与其它重包并行时直接包级超时
+# （`panic: test timed out after 10m0s`——超时会把该包里真正的用例失败一并掩盖）。
+# 故此处与 race 门禁同口径分组：core 用默认时限、router 单独放宽（ROUTER_TIMEOUT，默认 25m）。
+test-plain:
+	scripts/go-test.sh all
 
 # E2E 端到端测试（需启动真实 CP + Worker 进程）
 # 全链路用例（FR-043）会 spawn 真实 bot-worker(Node) 并让真实 Bot 进服，
