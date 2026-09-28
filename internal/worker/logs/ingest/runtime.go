@@ -1378,9 +1378,23 @@ func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup
 		}
 		want[event.EventID] = event
 	}
+	// 选择器以**事件自身的** source 标识为准，而不是源配置：2026-09-28 生产实测——
+	// 配置里的 SourceGeneration 与事件里的 Source.SourceGeneration 指向了不同实例
+	// （login-01 的事件被按 beacon-main 的代号查询）→ 查询恒 0 条 → 判「不可见」→
+	// 运行时创建失败。校验对象就是「刚写下去的这些事件」，故以它们为准；
+	// 配置仅作为事件未携带标识时的兜底。
+	sourceID, sourceGeneration := source.LogSourceID, source.SourceGeneration
+	if len(events) > 0 {
+		if v := events[0].Source.LogSourceID; v != "" {
+			sourceID = v
+		}
+		if v := events[0].Source.SourceGeneration; v != "" {
+			sourceGeneration = v
+		}
+	}
 	selector := "projection_generation:=" + strconv.Quote(generation) +
-		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
-		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
+		" AND log_source_id:=" + strconv.Quote(sourceID) +
+		" AND source_generation:=" + strconv.Quote(sourceGeneration)
 	params := url.Values{
 		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
 		"limit": {strconv.Itoa(len(events) + 1)},
@@ -1456,9 +1470,23 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 		}
 		want[event.EventID] = event
 	}
+	// 选择器以**事件自身的** source 标识为准，而不是源配置：2026-09-28 生产实测——
+	// 配置里的 SourceGeneration 与事件里的 Source.SourceGeneration 指向了不同实例
+	// （login-01 的事件被按 beacon-main 的代号查询）→ 查询恒 0 条 → 判「不可见」→
+	// 运行时创建失败。校验对象就是「刚写下去的这些事件」，故以它们为准；
+	// 配置仅作为事件未携带标识时的兜底。
+	sourceID, sourceGeneration := source.LogSourceID, source.SourceGeneration
+	if len(events) > 0 {
+		if v := events[0].Source.LogSourceID; v != "" {
+			sourceID = v
+		}
+		if v := events[0].Source.SourceGeneration; v != "" {
+			sourceGeneration = v
+		}
+	}
 	selector := "projection_generation:=" + strconv.Quote(generation) +
-		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
-		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
+		" AND log_source_id:=" + strconv.Quote(sourceID) +
+		" AND source_generation:=" + strconv.Quote(sourceGeneration)
 	params := url.Values{
 		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
 		"limit": {strconv.Itoa(len(events) + 1)},
