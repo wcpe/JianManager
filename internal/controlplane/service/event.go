@@ -58,14 +58,22 @@ func (es *EventService) Subscribe() (<-chan InstanceEvent, func()) {
 
 	unsub := func() {
 		es.mu.Lock()
+		// 只有「本次真的从 subs 里摘除了」才 close：unsub 可能被多次调用（例如 Stop 与
+		// defer 双路径），而对已关闭 channel 再次 close 会 panic —— 2026-09-28 生产实测
+		// 每次 CP 停止都 panic: close of closed channel（event.go:68 → alert_triggers.go:52
+		// → main.main），导致优雅关闭的后续步骤被跳过。
+		found := false
 		for i, sub := range es.subs {
 			if sub == ch {
 				es.subs = append(es.subs[:i], es.subs[i+1:]...)
+				found = true
 				break
 			}
 		}
 		es.mu.Unlock()
-		close(ch)
+		if found {
+			close(ch)
+		}
 	}
 
 	return ch, unsub
