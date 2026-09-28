@@ -15,6 +15,15 @@ import (
 
 // FileTailer 从源文件 tail 采集：cursor resume + 轮转检测。
 // Multiline 未完成事件只推进 read_position，不推进 durable。
+// defaultMaxLinesPerPoll 是单次 Poll 的读取行数上限（B1b **准入限流**）。
+//
+// 为什么必须有：一次 pass 读取无界会把整份文件攒成**一个超大批判**交给上层，而 WAL 积压上限
+// 是在**追加之后**检查的——单批即穿透上限，暂停只对后续批次生效。生产事故（2026-09-28）正是
+// 该形态：单源 10 万行一次性入库，状态文件被撑到 1.2 GB、每次持久化全量重写。
+// 取 2000（约为默认积压上限 5000 条的 40%），使单批无法穿透上限；到额度即停在**行边界**，
+// 游标停在已处理位置，剩余部分留待下轮续读，不丢数据。
+const defaultMaxLinesPerPoll = 2000
+
 type FileTailer struct {
 	led    *ledger.Ledger
 	key    ledger.SourceKey
@@ -44,7 +53,13 @@ type FileTailer struct {
 	eventsEmitted int
 	// sourceCategory instance|worker|node；source=worker 同管道。
 	sourceCategory logtypes.Source
+	// maxLinesPerPoll 单次 Poll 的读取行数上限（B1b 准入限流）；0 表示用默认常量。
+	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
+	maxLinesPerPoll int
 }
+
+// SetMaxLinesPerPoll 覆盖单次 Poll 的读取行数上限（0 表示沿用默认）。供测试与后续配置化使用。
+func (t *FileTailer) SetMaxLinesPerPoll(n int) { t.maxLinesPerPoll = n }
 
 // NewFileTailer 创建 tailer。hook 为 nil 时使用逐行 LineHook。
 func NewFileTailer(led *ledger.Ledger, key ledger.SourceKey, path string, wal *WAL, hook EventBoundaryHook) *FileTailer {
@@ -223,11 +238,20 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 	var events []logtypes.Event
 	lineStart := t.logicalPos
 
+	// 准入限流（B1b）：本轮最多处理 maxLines 行，到额度即停在**行边界**——余下部分留在文件里、
+	// 游标停在已处理位置，下轮续读。否则一次 pass 会把整份文件攒成超大批，单批穿透 WAL 上限。
+	maxLines := t.maxLinesPerPoll
+	if maxLines <= 0 {
+		maxLines = defaultMaxLinesPerPoll
+	}
+	linesRead := 0
+
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) == 0 && err != nil {
 			break
 		}
+		linesRead++
 		hasNL := len(line) > 0 && line[len(line)-1] == '\n'
 		raw := line
 		if hasNL {
@@ -265,6 +289,9 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 			if err == io.EOF {
 				break
 			}
+			if linesRead >= maxLines {
+				break // 准入限流（B1b）：余下部分留待下轮
+			}
 			continue
 		}
 
@@ -296,6 +323,9 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 		}
 		if err == io.EOF {
 			break
+		}
+		if linesRead >= maxLines {
+			break // 准入限流（B1b）：余下部分留待下轮续读，游标已停在行边界
 		}
 	}
 

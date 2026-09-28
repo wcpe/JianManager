@@ -47,10 +47,18 @@ type SourceConfig struct {
 }
 
 type persistedSource struct {
-	PublicationPending   bool               `json:"publication_pending,omitempty"`
-	Ledger               []ledger.Entry     `json:"ledger"`
-	WAL                  []acquire.WALEntry `json:"wal"`
-	ProjectionGeneration string             `json:"projection_generation"`
+	PublicationPending bool               `json:"publication_pending,omitempty"`
+	Ledger             []ledger.Entry     `json:"ledger"`
+	WAL                []acquire.WALEntry `json:"wal"`
+	// WALRefs 是 WAL 条目的引用形式（B1a）：正文已在事件段存储中的条目只写引用，加载时
+	// 按 EventID 水合。与 WAL **并存**（按条切分），二者互不覆盖、可分别存在。
+	WALRefs []acquire.WALRef `json:"wal_refs,omitempty"`
+	// EventsStoredThrough 是事件段存储已覆盖的最大 record_end（B1a 的**按条**判据来源）：
+	// record_end <= 该值的 WAL 条目，其正文已 durable 在段存储中，持久化时只需引用。
+	// 为什么不能按源级 EventsStored 一刀切：事件体是在投递路径（appendEvents）才写入段存储，
+	// 未投递条目的正文尚未入库——按源切分会丢正文（曾由既有测试抓到，见方案文件）。
+	EventsStoredThrough  uint64 `json:"events_stored_through,omitempty"`
+	ProjectionGeneration string `json:"projection_generation"`
 	// EventsStored 表示该源的 canonical 事件体已落在磁盘段（events/ 目录），不在本文件。
 	EventsStored bool `json:"events_stored,omitempty"`
 	// Events 仅在旧格式或段写入失败时使用；正常情况为空（权威副本在 eventstore）。
@@ -85,8 +93,11 @@ type Manager struct {
 	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
 	events              *eventstore.Store
 	verificationTimeout time.Duration
-	capacityProvider    func() (acquire.CapacityBudget, error)
-	recoveryHold        func(SourceConfig, string) (bool, string)
+	// verifyBackoffMin/verifyBackoffMax 是投影校验重试的退避区间（B1c）；0 用默认常量。
+	verifyBackoffMin time.Duration
+	verifyBackoffMax time.Duration
+	capacityProvider func() (acquire.CapacityBudget, error)
+	recoveryHold     func(SourceConfig, string) (bool, string)
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
 	sourceErrs map[string]string
 	// pendingMaxStream/pendingMaxTotal 是 pending 暂存上限（M-6）；0 表示用默认常量。
@@ -313,6 +324,13 @@ func New(opts Options) (*Manager, error) {
 	if m.verificationTimeout <= 0 {
 		m.verificationTimeout = 30 * time.Second
 	}
+	// 投影校验的退避参数（B1c）：默认 200ms 起、封顶 2s。字段化以便测试用短窗口驱动。
+	if m.verifyBackoffMin <= 0 {
+		m.verifyBackoffMin = defaultVerifyBackoffMin
+	}
+	if m.verifyBackoffMax <= 0 {
+		m.verifyBackoffMax = defaultVerifyBackoffMax
+	}
 	// 事件体走追加式磁盘段（FR-484）：state 文件只留元数据，避免整份重写与常驻切片。
 	store, err := eventstore.Open(filepath.Join(opts.Root, "var", "log", "events"))
 	if err != nil {
@@ -484,7 +502,30 @@ func (m *Manager) Register(source SourceConfig) error {
 		if err := led.Restore(saved.Ledger); err != nil {
 			return err
 		}
-		if err := wal.Restore(saved.WAL); err != nil {
+		if len(saved.WALRefs) > 0 {
+			// 引用形式（B1a）：内联条目直接恢复，引用条目按 EventID 从事件段存储水合。
+			missing := wal.RestoreMixed(saved.WAL, saved.WALRefs, m.eventBodyLookup(key))
+			if len(missing) > 0 {
+				// 取不到正文的条目不得静默丢：记可见缺口并告警（与 FR-474 §5#1 同口径）。
+				var from, to uint64 = ^uint64(0), 0
+				for _, r := range missing {
+					if r.RecordStart < from {
+						from = r.RecordStart
+					}
+					if r.RecordEnd > to {
+						to = r.RecordEnd
+					}
+				}
+				if from == ^uint64(0) {
+					from = 0
+				}
+				_ = led.RecordGap(ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration},
+					from, to, "WAL_BODY_MISSING",
+					fmt.Sprintf("%d 条 WAL 引用在事件段存储中找不到正文（B1a 引用恢复）", len(missing)))
+				slog.Warn("WAL 引用恢复：部分条目正文缺失，已记可见缺口",
+					"logSourceID", source.LogSourceID, "missing", len(missing))
+			}
+		} else if err := wal.Restore(saved.WAL); err != nil {
 			return err
 		}
 	}
@@ -897,6 +938,17 @@ func (m *Manager) appendEvents(key string, events []logtypes.Event) error {
 	m.mu.Lock()
 	saved := m.state.Sources[key]
 	saved.EventsStored = true
+	// B1a：记录段存储已覆盖到的最大 record_end。`events` 是权威集合（按记录位置有序），
+	// 其最大 record_end 即段存储已保证覆盖的范围；WAL 持久化据此按条决定「引用 or 内联」。
+	var covered uint64
+	for _, ev := range events {
+		if ev.Record.End > covered {
+			covered = ev.Record.End
+		}
+	}
+	if covered > saved.EventsStoredThrough {
+		saved.EventsStoredThrough = covered
+	}
 	// 已落段后不再保留内联副本，否则常驻切片会重新把 RSS 推高（FR-484 目标）。
 	saved.Events = nil
 	m.state.Sources[key] = saved
@@ -1167,11 +1219,35 @@ func (m *Manager) clientForSource(source SourceConfig) (*vlsup.Client, bool, err
 	return m.vl, false, nil
 }
 
+// 投影校验的退避默认值（B1c）。
+const (
+	defaultVerifyBackoffMin = 200 * time.Millisecond
+	defaultVerifyBackoffMax = 2 * time.Second
+)
+
+// nextVerifyBackoff 返回下一次退避时长：指数增长并封顶（B1c）。
+func nextVerifyBackoff(cur, max time.Duration) time.Duration {
+	if cur <= 0 {
+		return defaultVerifyBackoffMin
+	}
+	if max <= 0 {
+		max = defaultVerifyBackoffMax
+	}
+	next := cur * 2
+	if next > max {
+		next = max
+	}
+	return next
+}
+
 func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), m.verificationTimeout)
 	defer cancel()
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
+	// 退避重试（B1c）：原实现以固定 200ms 轮询直至超时（默认 30 秒 ≈ 最多约 150 次校验
+	// 查询/源）。高负载时每次查询更慢、重试互相叠加，会把 VL 与磁盘一起压垮——2026-09-28
+	// 生产事故的成因之一正是校验查询被如此重试（含 `cannot execute query [...]` 这类 4xx）。
+	// 现改为指数退避封顶，并让「重试无意义」的错误（认证失败 / 4xx 语义错误）立即失败。
+	backoff := m.verifyBackoffMin
 	var lastErr error
 	for {
 		complete, err := m.verifyProjectionOnceWithClient(ctx, client, source, generation, events)
@@ -1179,6 +1255,9 @@ func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, ge
 			return nil
 		}
 		if err != nil {
+			if vlsup.IsPermanent(err) {
+				return fmt.Errorf("ingest: projection %s verification failed permanently: %w", generation, err)
+			}
 			lastErr = err
 		}
 		select {
@@ -1187,8 +1266,9 @@ func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, ge
 				return fmt.Errorf("ingest: projection %s verification failed: %w", generation, lastErr)
 			}
 			return fmt.Errorf("ingest: projection %s not fully visible before deadline: %w", generation, ctx.Err())
-		case <-ticker.C:
+		case <-time.After(backoff):
 		}
+		backoff = nextVerifyBackoff(backoff, m.verifyBackoffMax)
 	}
 }
 
@@ -1371,6 +1451,28 @@ func nextProjectionGeneration(current string) string {
 		return fmt.Sprintf("projection-%d", n+1)
 	}
 	return current + "-rebuild"
+}
+
+// eventBodyLookup 返回「按 EventID 取回 canonical 事件体」的查询函数（B1a 引用水合）。
+//
+// 单次遍历该源的事件段存储建索引。存储不可用或遍历失败时返回恒 false 的查询函数——
+// 调用方据此走「取不到正文 → 记可见缺口」的路径，而不是静默丢弃。
+func (m *Manager) eventBodyLookup(key string) func(eventID string) (logtypes.Event, bool) {
+	if m.events == nil {
+		return func(string) (logtypes.Event, bool) { return logtypes.Event{}, false }
+	}
+	index := make(map[string]logtypes.Event)
+	if err := m.events.Iterate(key, func(ev logtypes.Event) error {
+		index[ev.EventID] = ev
+		return nil
+	}); err != nil {
+		slog.Warn("WAL 引用恢复：遍历事件段存储失败，将按缺失记账", "key", key, "error", err)
+		return func(string) (logtypes.Event, bool) { return logtypes.Event{}, false }
+	}
+	return func(eventID string) (logtypes.Event, bool) {
+		ev, ok := index[eventID]
+		return ev, ok
+	}
 }
 
 // canonicalRecoveryEvents 返回该源完整的 canonical 事件集合（VL 数据根丢失后重建 projection 的权威输入）。
@@ -1590,8 +1692,16 @@ func (m *Manager) persist() error {
 	for key, p := range m.pipes {
 		prev := m.state.Sources[key]
 		entry := persistedSource{Ledger: p.Ledger().Snapshot(), ProjectionGeneration: prev.ProjectionGeneration,
-			PublicationPending: prev.PublicationPending, EventsStored: prev.EventsStored}
-		entry.WAL = append(entry.WAL, p.WAL().Snapshot()...)
+			PublicationPending: prev.PublicationPending, EventsStored: prev.EventsStored,
+			EventsStoredThrough: prev.EventsStoredThrough}
+		// B1a：按条切分——段存储已覆盖（record_end <= EventsStoredThrough）的条目只写引用；
+		// 其余（尚未投递、正文未入库，或段存储不可用）必须内联保存，绝不丢正文。
+		through := prev.EventsStoredThrough
+		refs, inline := p.WAL().SnapshotSplit(func(ev logtypes.Event) bool {
+			return entry.EventsStored && through > 0 && ev.Record.End <= through
+		})
+		entry.WALRefs = refs
+		entry.WAL = append(entry.WAL, inline...)
 		// 事件体已在磁盘段时不写回内联切片——这正是原先 state 涨到 180MB、每次 persist
 		// 触发 130MB MarshalIndent 的根源（FR-484 阶段0 量测）。
 		if !entry.EventsStored {
