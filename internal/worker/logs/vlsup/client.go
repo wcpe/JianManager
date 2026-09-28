@@ -20,6 +20,39 @@ var ErrUnauthorized = errors.New("vlsup: unauthorized")
 // ErrNotLoopback 表示客户端 base URL 非 localhost（生产强制 localhost 查询）。
 var ErrNotLoopback = errors.New("vlsup: client base URL must be loopback")
 
+// StatusError 表示 VL 返回非 2xx（且非认证类）响应；保留状态码供调用方判断
+// 「重试是否有意义」（见 IsPermanent）。Error() 文案与既有实现逐字一致，避免影响断言。
+type StatusError struct {
+	Path string
+	Code int
+	Body string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("vlsup: %s status %d: %s", e.Path, e.Code, e.Body)
+}
+
+// IsPermanent 判定「重试无意义」的 VL 错误：认证失败，以及 4xx 语义错误
+// （查询被 VL 拒绝，例如参数或时间范围不合法——重试多少次都不会变）。
+//
+// 用途（B1c）：采集侧的投影校验原先对任何错误都以固定 200ms 间隔重试到超时（默认 30 秒，
+// 即最多约 150 次查询/源），在负载高时把 VL 与磁盘一起压垮（2026-09-28 生产事故的成因之一：
+// 出现 `cannot execute query [...]` 这类 4xx 后仍被重试到超时）。传输类与 5xx 错误不在
+// 此列——它们可能瞬时恢复，应继续退避重试。
+func IsPermanent(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrUnauthorized) {
+		return true
+	}
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.Code >= 400 && se.Code < 500
+	}
+	return false
+}
+
 // Client 是面向 127.0.0.1 VictoriaLogs 实例的 Basic-auth HTTP 查询助手。
 type Client struct {
 	baseURL  string
@@ -122,7 +155,7 @@ func (c *Client) Get(ctx context.Context, path string, query url.Values) ([]byte
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return nil, fmt.Errorf("%w: %s status %d", ErrUnauthorized, path, resp.StatusCode)
 	case resp.StatusCode < 200 || resp.StatusCode >= 300:
-		return nil, fmt.Errorf("vlsup: %s status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, &StatusError{Path: path, Code: resp.StatusCode, Body: strings.TrimSpace(string(body))}
 	}
 	return body, nil
 }
@@ -163,7 +196,7 @@ func (c *Client) Stream(ctx context.Context, path string, query url.Values, cons
 		case http.StatusUnauthorized, http.StatusForbidden:
 			return fmt.Errorf("%w: %s status %d", ErrUnauthorized, path, resp.StatusCode)
 		default:
-			return fmt.Errorf("vlsup: %s status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+			return &StatusError{Path: path, Code: resp.StatusCode, Body: strings.TrimSpace(string(body))}
 		}
 	}
 	return consume(resp.Body)

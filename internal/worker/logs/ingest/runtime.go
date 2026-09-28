@@ -85,8 +85,11 @@ type Manager struct {
 	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
 	events              *eventstore.Store
 	verificationTimeout time.Duration
-	capacityProvider    func() (acquire.CapacityBudget, error)
-	recoveryHold        func(SourceConfig, string) (bool, string)
+	// verifyBackoffMin/verifyBackoffMax 是投影校验重试的退避区间（B1c）；0 用默认常量。
+	verifyBackoffMin time.Duration
+	verifyBackoffMax time.Duration
+	capacityProvider func() (acquire.CapacityBudget, error)
+	recoveryHold     func(SourceConfig, string) (bool, string)
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
 	sourceErrs map[string]string
 	// pendingMaxStream/pendingMaxTotal 是 pending 暂存上限（M-6）；0 表示用默认常量。
@@ -312,6 +315,13 @@ func New(opts Options) (*Manager, error) {
 	}
 	if m.verificationTimeout <= 0 {
 		m.verificationTimeout = 30 * time.Second
+	}
+	// 投影校验的退避参数（B1c）：默认 200ms 起、封顶 2s。字段化以便测试用短窗口驱动。
+	if m.verifyBackoffMin <= 0 {
+		m.verifyBackoffMin = defaultVerifyBackoffMin
+	}
+	if m.verifyBackoffMax <= 0 {
+		m.verifyBackoffMax = defaultVerifyBackoffMax
 	}
 	// 事件体走追加式磁盘段（FR-484）：state 文件只留元数据，避免整份重写与常驻切片。
 	store, err := eventstore.Open(filepath.Join(opts.Root, "var", "log", "events"))
@@ -1167,11 +1177,35 @@ func (m *Manager) clientForSource(source SourceConfig) (*vlsup.Client, bool, err
 	return m.vl, false, nil
 }
 
+// 投影校验的退避默认值（B1c）。
+const (
+	defaultVerifyBackoffMin = 200 * time.Millisecond
+	defaultVerifyBackoffMax = 2 * time.Second
+)
+
+// nextVerifyBackoff 返回下一次退避时长：指数增长并封顶（B1c）。
+func nextVerifyBackoff(cur, max time.Duration) time.Duration {
+	if cur <= 0 {
+		return defaultVerifyBackoffMin
+	}
+	if max <= 0 {
+		max = defaultVerifyBackoffMax
+	}
+	next := cur * 2
+	if next > max {
+		next = max
+	}
+	return next
+}
+
 func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), m.verificationTimeout)
 	defer cancel()
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
+	// 退避重试（B1c）：原实现以固定 200ms 轮询直至超时（默认 30 秒 ≈ 最多约 150 次校验
+	// 查询/源）。高负载时每次查询更慢、重试互相叠加，会把 VL 与磁盘一起压垮——2026-09-28
+	// 生产事故的成因之一正是校验查询被如此重试（含 `cannot execute query [...]` 这类 4xx）。
+	// 现改为指数退避封顶，并让「重试无意义」的错误（认证失败 / 4xx 语义错误）立即失败。
+	backoff := m.verifyBackoffMin
 	var lastErr error
 	for {
 		complete, err := m.verifyProjectionOnceWithClient(ctx, client, source, generation, events)
@@ -1179,6 +1213,9 @@ func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, ge
 			return nil
 		}
 		if err != nil {
+			if vlsup.IsPermanent(err) {
+				return fmt.Errorf("ingest: projection %s verification failed permanently: %w", generation, err)
+			}
 			lastErr = err
 		}
 		select {
@@ -1187,8 +1224,9 @@ func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, ge
 				return fmt.Errorf("ingest: projection %s verification failed: %w", generation, lastErr)
 			}
 			return fmt.Errorf("ingest: projection %s not fully visible before deadline: %w", generation, ctx.Err())
-		case <-ticker.C:
+		case <-time.After(backoff):
 		}
+		backoff = nextVerifyBackoff(backoff, m.verifyBackoffMax)
 	}
 }
 
