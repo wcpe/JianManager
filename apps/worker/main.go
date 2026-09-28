@@ -267,6 +267,11 @@ func runWorker() {
 	}
 
 	slog.Info("Worker Node 启动", "name", nodeName, "wsPort", wsPort, "dataDir", root.Base(), "serversDir", serversDir)
+	// 维护自身 PID 记录（与 CP 的 cp-lifecycle.sh 同口径）：生产曾遗留停在多日前的 worker.pid，
+	// 按它识别进程会认错；此处启动即原子覆盖，写失败仅告警、不影响启动。
+	if err := writeWorkerPIDRecord(root.Base(), wsPort, cfgPath); err != nil {
+		slog.Warn("写 worker.pid 记录失败（不影响运行）", "error", err)
+	}
 	// 初始化进程管理器
 	manager := process.NewManager(serversDir)
 	// 启动内存闸（FR-317）：可用内存塞不下待启实例即拒绝启动，防节点 OOM 失联。
@@ -412,16 +417,16 @@ func runWorker() {
 					slog.Error("VictoriaLogs Rehydrate 启动失败", "error", err)
 				}
 			}
-		// FR-476 / 契约 §6.6：周期采样 VL RSS 与数据盘预算并暴露降级。
-		go sampleLogBudget(vlSupervisor)
-		// 受管 VL 启动是异步的：接线 ingest/查询前先等 HOT 就绪，避免启动期写连接被拒
-		// 导致采集运行时创建失败（重启时序 / Runbook C）。
-		hotReadyCtx, cancelHotReady := context.WithTimeout(context.Background(), 15*time.Second)
-		if waitErr := vlSupervisor.WaitHealthy(hotReadyCtx, vlsup.NamespaceHot, 15*time.Second); waitErr != nil {
-			slog.Warn("VictoriaLogs HOT 未在超时内就绪，采集/查询将保持降级", "error", waitErr)
-		}
-		cancelHotReady()
-		if vlClient, clientErr := vlSupervisor.ClientFor(vlsup.NamespaceHot); clientErr == nil {
+			// FR-476 / 契约 §6.6：周期采样 VL RSS 与数据盘预算并暴露降级。
+			go sampleLogBudget(vlSupervisor)
+			// 受管 VL 启动是异步的：接线 ingest/查询前先等 HOT 就绪，避免启动期写连接被拒
+			// 导致采集运行时创建失败（重启时序 / Runbook C）。
+			hotReadyCtx, cancelHotReady := context.WithTimeout(context.Background(), 15*time.Second)
+			if waitErr := vlSupervisor.WaitHealthy(hotReadyCtx, vlsup.NamespaceHot, 15*time.Second); waitErr != nil {
+				slog.Warn("VictoriaLogs HOT 未在超时内就绪，采集/查询将保持降级", "error", waitErr)
+			}
+			cancelHotReady()
+			if vlClient, clientErr := vlSupervisor.ClientFor(vlsup.NamespaceHot); clientErr == nil {
 				vlHTTPClient = vlClient
 				hotRange, _ := vlrange.New(vlClient)
 				tiered := &vlrange.Tiered{Hot: hotRange}

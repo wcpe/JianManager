@@ -322,7 +322,12 @@ func New(opts Options) (*Manager, error) {
 		recoveryHold:        opts.RecoveryHold,
 	}
 	if m.verificationTimeout <= 0 {
-		m.verificationTimeout = 30 * time.Second
+		// 5 分钟（原 30 秒）。依据 2026-09-28 生产实测：VL 的 /insert/jsonline 是「接收即
+		// 返回 200、索引异步」，恢复期单批 5746 条的可见性延迟**超过 30 秒**——写入 200 成功、
+		// 30 秒后校验仍报 `not fully visible before deadline`，而稍后查询该代号确有 5746 条。
+		// 校验本就有指数退避重试，数据一旦可见即立刻通过，故放宽窗口只影响「最坏等待」，
+		// 不影响成功路径的耗时。可用 Options.VerificationTimeout 覆盖。
+		m.verificationTimeout = 5 * time.Minute
 	}
 	// 投影校验的退避参数（B1c）：默认 200ms 起、封顶 2s。字段化以便测试用短窗口驱动。
 	if m.verifyBackoffMin <= 0 {
@@ -1007,15 +1012,28 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		replace = true
 		writeEvents = events
 	}
-	payload, err := projectionPayload(writeEvents, generation)
-	if err != nil {
-		return pipeline.DeliveryResult{}, err
-	}
 	client, frozen, err := m.clientForSource(source)
 	if err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
-	status, err := client.InsertJSONLines(context.Background(), payload)
+	// 诊断日志（2026-09-28 恢复期「批次未落地」排查）：VL 侧核对时，需要能对上
+	// 「哪一批、多少条、什么时间范围、每片写入返回什么」。生产实测曾出现
+	// 「校验等待 09-27/28 窗口的数据，而 VL 里只有该源 09-20 的数据」——需要本日志
+	// 才能判定是「没写」还是「写了没落地」。
+	batchFirst, batchLast := "", ""
+	if len(writeEvents) > 0 {
+		batchFirst = writeEvents[0].EventTimeUTC
+		batchLast = writeEvents[len(writeEvents)-1].EventTimeUTC
+	}
+	slog.Info("投影写入开始",
+		"generation", generation, "source", source.LogSourceID,
+		"events", len(writeEvents), "archiveEvents", len(archiveEvents),
+		"firstEventTime", batchFirst, "lastEventTime", batchLast,
+		)
+	status, err := m.insertInBatches(client, writeEvents, generation)
+	slog.Info("投影写入结束",
+		"generation", generation, "source", source.LogSourceID,
+		"events", len(writeEvents), "status", status, "err", err)
 	if err != nil {
 		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
@@ -1045,6 +1063,37 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
 	return pipeline.DeliveryResult{HTTPStatus: status}, nil
+}
+
+// insertBatchMaxEvents 是单次 VL 插入的批量上限。
+//
+// 背景（2026-09-28 生产事故）：vlsup 客户端是 http.Client{Timeout: 5 * time.Second}，
+// 而恢复期会把积压一次性拼成一个大 payload 投递；当状态文件达 1.2 GB 时，
+// 单请求远超 5s → `vlsup: insert request: ... context deadline exceeded`
+// → writeProjectionDay 失败 → 「日志采集运行时创建失败」→ 采集静默停摆（无重试、无告警）。
+// 分批后每批体量可控，单请求远低于该超时。
+const insertBatchMaxEvents = 500
+
+// insertInBatches 按条数上限把事件分批投递到 VL，返回最后一批的 HTTP 状态。
+// 任一批失败即中断，并原样返回该批状态与错误（调用方据此判定投递结果）。
+func (m *Manager) insertInBatches(client *vlsup.Client, events []logtypes.Event, generation string) (int, error) {
+	status := 0
+	for start := 0; start < len(events); start += insertBatchMaxEvents {
+		end := start + insertBatchMaxEvents
+		if end > len(events) {
+			end = len(events)
+		}
+		payload, err := projectionPayload(events[start:end], generation)
+		if err != nil {
+			return status, err
+		}
+		st, err := client.InsertJSONLines(context.Background(), payload)
+		status = st
+		if err != nil {
+			return status, err
+		}
+	}
+	return status, nil
 }
 
 func projectionPayload(events []logtypes.Event, generation string) ([]byte, error) {
@@ -1240,7 +1289,32 @@ func nextVerifyBackoff(cur, max time.Duration) time.Duration {
 	return next
 }
 
+// verifyProjection 分批校验投影可见性。
+//
+// 分批是必须的：VL 对单次查询有内存上限，而恢复期的事件数是整批积压（实测 747,822 条会让 VL
+// 返回 400 `cannot calculate [sort by (_time) desc limit ...]`）。但**分批必须让期望集覆盖整批**：
+// 各分片的时间范围会重叠（真实事件常共享时间戳），第 N 片的查询会返回其他分片的事件；
+// 若只以本片为期望集，这些记录会被误判为 unexpected（2026-09-28 生产实测）。
 func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
+	allowed := make(map[string]logtypes.Event, len(events))
+	for _, event := range events {
+		allowed[event.EventID] = event
+	}
+	for start := 0; start < len(events); start += insertBatchMaxEvents {
+		end := start + insertBatchMaxEvents
+		if end > len(events) {
+			end = len(events)
+		}
+		if err := m.verifyProjectionChunk(client, source, generation, events[start:end], allowed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// verifyProjectionChunk 校验单批事件在 VL 中完全可见（退避重试 + 永久错误立即失败）。
+// allowed 是「可接受集合」（整批积压的全部事件）：本批之外的记录只要属于该集合且内容一致即接受。
+func (m *Manager) verifyProjectionChunk(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), m.verificationTimeout)
 	defer cancel()
 	// 退避重试（B1c）：原实现以固定 200ms 轮询直至超时（默认 30 秒 ≈ 最多约 150 次校验
@@ -1250,7 +1324,7 @@ func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, ge
 	backoff := m.verifyBackoffMin
 	var lastErr error
 	for {
-		complete, err := m.verifyProjectionOnceWithClient(ctx, client, source, generation, events)
+		complete, err := m.verifyProjectionOnceAllowed(ctx, client, source, generation, events, allowed)
 		if complete && err == nil {
 			return nil
 		}
@@ -1273,7 +1347,115 @@ func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, ge
 }
 
 func (m *Manager) verifyProjectionOnce(ctx context.Context, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {
-	return m.verifyProjectionOnceWithClient(ctx, m.vl, source, generation, events)
+	return m.verifyProjectionOnceAllowed(ctx, m.vl, source, generation, events, nil)
+}
+
+// verifyProjectionOnceAllowed 执行一次校验查询。
+//
+// 与 verifyProjectionOnceWithClient 的唯一差别是 allowed：分批校验时，各片的时间范围重叠，
+// 查询会返回**同批其他分片**的记录。这些记录必须被接受（否则误判 unexpected），
+// 但仍要求内容逐字段一致、且不得重复出现；完整性只要求本片 events 全部可见。
+// allowed 为 nil 时退化为「本片即全部」的原语义。
+func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) (bool, error) {
+	if client == nil {
+		return false, fmt.Errorf("ingest: VictoriaLogs verification client is unavailable")
+	}
+	want := make(map[string]logtypes.Event, len(events))
+	var first, last time.Time
+	for _, event := range events {
+		if _, exists := want[event.EventID]; exists {
+			return false, fmt.Errorf("duplicate canonical event_id %s", event.EventID)
+		}
+		when, err := canonicalEventTime(event)
+		if err != nil {
+			return false, fmt.Errorf("invalid canonical event time for %s: %w", event.EventID, err)
+		}
+		if first.IsZero() || when.Before(first) {
+			first = when
+		}
+		if last.IsZero() || when.After(last) {
+			last = when
+		}
+		want[event.EventID] = event
+	}
+	// 选择器以**事件自身的** source 标识为准，而不是源配置：2026-09-28 生产实测——
+	// 配置里的 SourceGeneration 与事件里的 Source.SourceGeneration 指向了不同实例
+	// （login-01 的事件被按 beacon-main 的代号查询）→ 查询恒 0 条 → 判「不可见」→
+	// 运行时创建失败。校验对象就是「刚写下去的这些事件」，故以它们为准；
+	// 配置仅作为事件未携带标识时的兜底。
+	sourceID, sourceGeneration := source.LogSourceID, source.SourceGeneration
+	if len(events) > 0 {
+		if v := events[0].Source.LogSourceID; v != "" {
+			sourceID = v
+		}
+		if v := events[0].Source.SourceGeneration; v != "" {
+			sourceGeneration = v
+		}
+	}
+	selector := "projection_generation:=" + strconv.Quote(generation) +
+		" AND log_source_id:=" + strconv.Quote(sourceID) +
+		" AND source_generation:=" + strconv.Quote(sourceGeneration)
+	params := url.Values{
+		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
+		// 不设 limit：VL 按时间返回窗口内的记录，而分片是按**索引**切的，其时间跨度可能很宽
+		// （2026-09-28 生产：500 条事件跨约 10 小时），窗口内除本片外还会有其他分片的记录。
+		// 原先 `limit = len(events)+1` 会截断返回，导致本片记录凑不齐 → 误判「不可见」→
+		// 运行时创建失败 → 采集静默停摆（多轮盲改后才由参数日志定位）。
+		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
+		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
+	}
+	// 诊断（2026-09-28 生产）：校验恒「不可见」而数据确实在 VL 里时，必须能拿到
+	// 平台**实际发出的**查询参数，与手工复刻查询逐字段对照。此前多轮修复都因缺少
+	// 这一条日志而在盲改。
+	slog.Info("投影校验查询",
+		"generation", generation, "events", len(events),
+		"query", params.Get("query"), "start", params.Get("start"),
+		"end", params.Get("end"), "limit", params.Get("limit"))
+	seen := make(map[string]bool, len(events))
+	seenOther := make(map[string]bool)
+	err := client.Stream(ctx, "/select/logsql/query", params, func(body io.Reader) error {
+		scanner := bufio.NewScanner(io.LimitReader(body, 32<<20+1))
+		scanner.Buffer(make([]byte, 64*1024), 4<<20)
+		for scanner.Scan() {
+			var row struct {
+				EventID       string `json:"event_id"`
+				CanonicalHash string `json:"canonical_content_hash"`
+				EventTimeUTC  string `json:"_time"`
+				Message       string `json:"_msg"`
+				Level         string `json:"level"`
+				Stream        string `json:"stream"`
+			}
+			if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
+				return err
+			}
+			event, inBatch := want[row.EventID]
+			if !inBatch {
+				other, ok := allowed[row.EventID]
+				if !ok || seenOther[row.EventID] {
+					return fmt.Errorf("unexpected or duplicate projection event_id %s", row.EventID)
+				}
+				if row.CanonicalHash != other.CanonicalHash || row.EventTimeUTC != other.EventTimeUTC ||
+					row.Message != other.Message || row.Level != other.Level || row.Stream != other.Stream {
+					return fmt.Errorf("projection content mismatch for event_id %s", row.EventID)
+				}
+				seenOther[row.EventID] = true
+				continue
+			}
+			if seen[row.EventID] {
+				return fmt.Errorf("unexpected or duplicate projection event_id %s", row.EventID)
+			}
+			if row.CanonicalHash != event.CanonicalHash || row.EventTimeUTC != event.EventTimeUTC ||
+				row.Message != event.Message || row.Level != event.Level || row.Stream != event.Stream {
+				return fmt.Errorf("projection content mismatch for event_id %s", row.EventID)
+			}
+			seen[row.EventID] = true
+		}
+		return scanner.Err()
+	})
+	if err != nil {
+		return false, err
+	}
+	return len(seen) == len(want), nil
 }
 
 func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {
@@ -1298,15 +1480,39 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 		}
 		want[event.EventID] = event
 	}
+	// 选择器以**事件自身的** source 标识为准，而不是源配置：2026-09-28 生产实测——
+	// 配置里的 SourceGeneration 与事件里的 Source.SourceGeneration 指向了不同实例
+	// （login-01 的事件被按 beacon-main 的代号查询）→ 查询恒 0 条 → 判「不可见」→
+	// 运行时创建失败。校验对象就是「刚写下去的这些事件」，故以它们为准；
+	// 配置仅作为事件未携带标识时的兜底。
+	sourceID, sourceGeneration := source.LogSourceID, source.SourceGeneration
+	if len(events) > 0 {
+		if v := events[0].Source.LogSourceID; v != "" {
+			sourceID = v
+		}
+		if v := events[0].Source.SourceGeneration; v != "" {
+			sourceGeneration = v
+		}
+	}
 	selector := "projection_generation:=" + strconv.Quote(generation) +
-		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
-		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
+		" AND log_source_id:=" + strconv.Quote(sourceID) +
+		" AND source_generation:=" + strconv.Quote(sourceGeneration)
 	params := url.Values{
 		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
-		"limit": {strconv.Itoa(len(events) + 1)},
+		// 不设 limit：VL 按时间返回窗口内的记录，而分片是按**索引**切的，其时间跨度可能很宽
+		// （2026-09-28 生产：500 条事件跨约 10 小时），窗口内除本片外还会有其他分片的记录。
+		// 原先 `limit = len(events)+1` 会截断返回，导致本片记录凑不齐 → 误判「不可见」→
+		// 运行时创建失败 → 采集静默停摆（多轮盲改后才由参数日志定位）。
 		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
 		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
 	}
+	// 诊断（2026-09-28 生产）：校验恒「不可见」而数据确实在 VL 里时，必须能拿到
+	// 平台**实际发出的**查询参数，与手工复刻查询逐字段对照。此前多轮修复都因缺少
+	// 这一条日志而在盲改。
+	slog.Info("投影校验查询",
+		"generation", generation, "events", len(events),
+		"query", params.Get("query"), "start", params.Get("start"),
+		"end", params.Get("end"), "limit", params.Get("limit"))
 	seen := make(map[string]bool, len(events))
 	err := client.Stream(ctx, "/select/logsql/query", params, func(body io.Reader) error {
 		scanner := bufio.NewScanner(io.LimitReader(body, 32<<20+1))
