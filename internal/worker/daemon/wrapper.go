@@ -103,6 +103,43 @@ type Wrapper struct {
 	// javaStarting 标记「startJava 已发起、javaCmd 尚未登记」的窗口。
 	// 熔断禁用帧据此判断是否有 Java 启动在飞，避免把正在启动的 Java 变成无人托管的孤儿。
 	javaStarting bool
+	// stopDeferred / stopDeferredForce：启动窗口内到达的 stop/kill 暂存于此。
+	//
+	// 同样是为了「不留孤儿 Java」：stopJava 在该窗口看到 javaCmd 为 nil，若照「空闲即收摊」
+	// 处理就会 signalClose，startJava 随后拉起的 Java 无人托管（真机实测：stop 后 wrapper
+	// 退出、Java 仍在跑并占着实例工作目录，Worker 侧却显示已停止）。force 位取「或」，
+	// 保证 stop 之后再收到 kill 仍是强杀语义。
+	stopDeferred      bool
+	stopDeferredForce bool
+
+	// connMu 序列化对 workerConn 的**帧编码与关闭**。
+	//
+	// 为什么必须（Windows 真机验收发现，比客户端侧 writeMu 更深一层）：
+	//  1. 帧写入不互斥 → 坏帧：Frame.Encode 分 5 次 Write，workerConn 由多个 goroutine 共享
+	//     （stdout/stderr 两条 io.Copy、心跳 pong、退出事件），两次 Encode 交错即坏帧，
+	//     Worker 解码失败关闭连接——与 process 侧 daemonStrategy.writeMu 同一不变量。
+	//  2. Close 与在飞重叠 I/O 竞态 → Go runtime fatal：npipe 的每次 Write/Read 各带独立
+	//     overlapped 事件，由等待 goroutine WaitForSingleObject 收尾；此时对同一连接
+	//     CloseHandle 会令等待方拿到已失效/被复用的句柄（wait_failed errno=6、
+	//     preemptM duplicatehandle failed 等 fatal 已实测）。故所有关闭路径也必须持
+	//     connMu：锁释放在飞 Encode 必然已返回，Close 不再击中在飞 I/O。
+	//  3. 双重 Close 同一连接：acceptLoop 替换旧连接与 readLoop 退出兜底两条路径都会关
+	//     同一连接——句柄值可能已被 OS 复用，二次 CloseHandle 会关错对象。由 managedConn
+	//     的 closeOnce 保证每个连接恰好关闭一次。
+	connMu sync.Mutex
+}
+
+// managedConn 包装 worker 连接：Close 恰好执行一次。
+// 参见 Wrapper.connMu 注释第 3 点（双重 CloseHandle 的句柄复用危害）。
+type managedConn struct {
+	netConn
+	closeOnce sync.Once
+}
+
+func (m *managedConn) Close() error {
+	var err error
+	m.closeOnce.Do(func() { err = m.netConn.Close() })
+	return err
 }
 
 // netConn 别名避免直接依赖 net（便于测试替换）。
@@ -168,24 +205,7 @@ func (w *Wrapper) run(ready chan<- struct{}) error {
 
 	// 持续接受 Worker 连接：Worker 重启后可 reconnect。
 	// 每次接受后替换旧连接并启动读循环处理控制帧。
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				slog.Info("wrapper Accept 退出", "instanceId", w.cfg.InstanceUUID, "error", err)
-				return
-			}
-			w.mu.Lock()
-			// 关闭旧连接（若存在），避免并发写
-			if w.workerConn != nil {
-				_ = w.workerConn.Close()
-			}
-			w.workerConn = conn
-			w.mu.Unlock()
-			slog.Info("wrapper 接受 Worker 连接", "instanceId", w.cfg.InstanceUUID)
-			go w.readLoop(conn)
-		}
-	}()
+	go w.acceptLoop(ln)
 
 	// 启动 Java
 	if err := w.startJava(); err != nil {
@@ -201,10 +221,64 @@ func (w *Wrapper) run(ready chan<- struct{}) error {
 	return nil
 }
 
+// acceptRetryInterval 是 Accept 出错后的重试间隔。
+const acceptRetryInterval = 100 * time.Millisecond
+
+// isClosed 报告 wrapper 是否已关闭。
 func (w *Wrapper) isClosed() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.closed
+}
+
+// writeFrameTo 在持 connMu 互斥下对指定连接整体编码一帧。
+// 所有对 workerConn 的帧写入都必须经此路径（不变量见 Wrapper.connMu 注释）。
+func (w *Wrapper) writeFrameTo(conn netConn, f *Frame) error {
+	w.connMu.Lock()
+	defer w.connMu.Unlock()
+	return f.Encode(conn)
+}
+
+// closeWorkerConn 关闭指定连接，持 connMu 保证不与在飞的 Encode（重叠 I/O）竞态；
+// managedConn.closeOnce 保证每个连接恰好 CloseHandle 一次（无论从哪条路径调用）。
+func (w *Wrapper) closeWorkerConn(conn netConn) {
+	w.connMu.Lock()
+	defer w.connMu.Unlock()
+	_ = conn.Close()
+}
+
+func (w *Wrapper) acceptLoop(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if w.isClosed() {
+				slog.Info("wrapper Accept 退出（关闭中）", "instanceId", w.cfg.InstanceUUID)
+				return
+			}
+			slog.Warn("wrapper Accept 出错，稍后重试（接受循环不得终止）",
+				"instanceId", w.cfg.InstanceUUID, "error", err, "retryIn", acceptRetryInterval)
+			select {
+			case <-time.After(acceptRetryInterval):
+			case <-w.closing:
+				return
+			}
+			continue
+		}
+		// 包装为 managedConn：readLoop 兜底与替换路径都会尝试关闭，
+		// closeOnce 保证恰好 CloseHandle 一次（见 Wrapper.connMu 注释第 3 点）。
+		mc := &managedConn{netConn: conn}
+		w.mu.Lock()
+		old := w.workerConn
+		w.workerConn = mc
+		w.mu.Unlock()
+		// 旧连接的关闭必须在登记新连接之后、持 connMu 执行：等待在飞的
+		// Encode 返回后再 CloseHandle，避免关掉重叠 I/O 正在使用的句柄。
+		if old != nil {
+			w.closeWorkerConn(old)
+		}
+		slog.Info("wrapper 接受 Worker 连接", "instanceId", w.cfg.InstanceUUID)
+		go w.readLoop(mc)
+	}
 }
 
 // errAutoRestartSuppressed 表示 startJava 在临界区内发现「wrapper 已关闭 / 自动重启已被熔断禁用」，
@@ -271,6 +345,10 @@ func (w *Wrapper) startJava() error {
 		slog.Warn("更新 PID 文件 java pid 失败", "error", err)
 	}
 	slog.Info("Java 已启动", "instanceId", w.cfg.InstanceUUID, "javaPid", javaPID)
+
+	// 启动窗口内到达的 stop/kill 在此补发（见 stopJava 注释）。必须先于 javaWait 启动：
+	// 补发会把 state 置为 StateStopping，javaWait 据此判「主动停止」而不误判崩溃重启。
+	w.applyDeferredStop()
 
 	// 记录启动时刻并等待 Java 退出（用于快速崩溃判定）
 	w.mu.Lock()
@@ -427,7 +505,7 @@ func (w *Wrapper) emitExitEvent(ps *os.ProcessState, uptime time.Duration) {
 		slog.Debug("Worker 未连接，退出事件丢弃", "instanceId", w.cfg.InstanceUUID, "exitCode", exitCode)
 		return
 	}
-	if err := fr.Encode(conn); err != nil {
+	if err := w.writeFrameTo(conn, fr); err != nil {
 		slog.Warn("发送退出事件失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 	}
 }
@@ -451,10 +529,10 @@ func (w *Wrapper) signalClose() {
 
 // readLoop 处理 Worker 下发的帧：stdin 数据 / 控制命令。
 func (w *Wrapper) readLoop(conn netConn) {
-	// 连接断开后释放 server 侧句柄：Windows 上残留句柄会阻碍同名管道重建
-	// （Access denied）。兜底路径：readLoop 退出即关（此处）、Accept 替换旧连接时
-	// 关旧连接、wrapper 进程退出后由 OS 回收剩余句柄。
-	defer func() { _ = conn.Close() }()
+	// 连接断开后释放引用：Windows 上残留句柄会阻碍同名管道重建（Access denied）。
+	// 关闭经 closeWorkerConn：持 connMu 等在飞 Encode 返回后再关，且由 managedConn 的
+	// closeOnce 保证同一句柄只 CloseHandle 一次（acceptLoop 替换路径可能已关过）。
+	defer w.closeWorkerConn(conn)
 	for {
 		fr, err := Decode(conn)
 		if err != nil {
@@ -488,13 +566,13 @@ func (w *Wrapper) handleControl(cmd string) {
 		slog.Info("wrapper 收到 kill", "instanceId", w.cfg.InstanceUUID)
 		w.stopJava(true)
 	case CtrlPing:
-		// 心跳：回写控制响应
+		// 心跳：回写控制响应（经 writeFrameTo 与其他帧写入互斥）
 		w.mu.Lock()
 		conn := w.workerConn
 		w.mu.Unlock()
 		if conn != nil {
 			resp := &Frame{Header: Header{Channel: ChannelControl, Type: TypeResponse}, Payload: []byte("pong")}
-			if err := resp.Encode(conn); err != nil {
+			if err := w.writeFrameTo(conn, resp); err != nil {
 				slog.Debug("回写 wrapper 心跳响应失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 			}
 		}
@@ -513,16 +591,27 @@ func (w *Wrapper) handleControl(cmd string) {
 // 让其保存世界并输出完整停止日志；Java 自行退出后由 javaWait 善后 signalClose。
 // 这样终端能看到「Stopping the server / Saving worlds」等停止日志，而非被瞬间杀掉。
 // 超时仍未退出则强杀兜底，避免 wrapper 永不退出。
+//
+// 启动窗口（javaStarting=true、javaCmd 尚未登记）内的 stop/kill **不得**立即收摊退出：
+// startJava 随后拉起的 Java 会无人托管（孤儿进程占端口与工作目录，Worker 侧却显示已停止）。
+// 该请求暂存为 stopDeferred，由 startJava 在 javaCmd 登记后补发本方法（见 applyDeferredStop）。
 func (w *Wrapper) stopJava(force bool) {
 	w.mu.Lock()
 	cmd := w.javaCmd
 	stdin := w.javaStdin
 	w.state = StateStopping
-	w.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
+		if w.javaStarting {
+			w.stopDeferred = true
+			w.stopDeferredForce = w.stopDeferredForce || force
+			w.mu.Unlock()
+			return
+		}
+		w.mu.Unlock()
 		w.signalClose()
 		return
 	}
+	w.mu.Unlock()
 
 	if force {
 		w.forceKill(cmd)
@@ -567,6 +656,23 @@ func (w *Wrapper) stopJava(force bool) {
 	}()
 }
 
+// applyDeferredStop 补发启动窗口内到达的 stop/kill（见 stopJava 注释）。
+// javaCmd 登记完成即调用一次；无暂存请求时为空操作。
+func (w *Wrapper) applyDeferredStop() {
+	w.mu.Lock()
+	deferred := w.stopDeferred
+	deferredForce := w.stopDeferredForce
+	w.stopDeferred = false
+	w.stopDeferredForce = false
+	w.mu.Unlock()
+	if !deferred {
+		return
+	}
+	slog.Info("启动窗口内收到停止请求，Java 拉起后立即执行停止（不留孤儿进程）",
+		"instanceId", w.cfg.InstanceUUID, "force", deferredForce)
+	w.stopJava(deferredForce)
+}
+
 // forceKill 强制终止被托管进程整棵进程树，委托平台实现 killProcessTree
 // （Linux 杀进程组 kill -pgid、Windows taskkill /T）——杜绝 sh -c / cmd.exe 派生的
 // 孙进程残留持有 stdout 管道致 cmd.Wait 永久阻塞、wrapper 在 stop 后不退出。
@@ -593,7 +699,10 @@ func (o *wrapperOutput) Write(p []byte) (int, error) {
 	o.w.mu.Unlock()
 	if conn != nil {
 		f := &Frame{Header: Header{Channel: o.stream, Type: TypeData}, Payload: append([]byte(nil), p...)}
-		if err := f.Encode(conn); err != nil {
+		// 必须经 writeFrameTo：stdout/stderr 两条 io.Copy 并发转发，且与心跳/退出事件
+		// 共享连接——不加互斥时两次 Encode 的分段 Write 会交错成坏帧，并可与连接关闭竞态
+		// （Windows 重叠 I/O 句柄失效，runtime fatal）。
+		if err := o.w.writeFrameTo(conn, f); err != nil {
 			slog.Debug("转发 Java 输出到 Worker 失败", "instanceId", o.w.cfg.InstanceUUID, "error", err)
 		}
 	}

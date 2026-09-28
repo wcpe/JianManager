@@ -9,7 +9,7 @@
 
 | 项 | 值 |
 |---|---|
-| 主机 | node-main（生产主机，IP 已脱敏），与生产 CP/Worker 同机但**使用独立隔离栈**，不触碰 prod |
+| 主机 | host-1（生产主机，IP 与主机名已脱敏），与生产 CP/Worker 同机但**使用独立隔离栈**，不触碰 prod |
 | 受管 VL | v1.52.0，`build_id=20260716-022147-tags-v1.52.0-0-g46a54c9`，包 SHA `d14f5851…`、解包可执行 SHA `26941a2f…`（见 `asset-inventory.md`） |
 | 隔离 CP | `runbook CP`（http 8080 / grpc 8081，SQLite）或 `env-a`（30100/30101） |
 | Worker | 本仓库 HEAD 构建（`go build -o … ./apps/worker`） |

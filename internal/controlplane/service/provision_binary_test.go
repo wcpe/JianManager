@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -85,6 +87,19 @@ func TestResolveBinarySource_FilenameIsSecurityBoundary(t *testing.T) {
 	}
 }
 
+// absTestPath 生成宿主平台语义下的绝对路径样本（POSIX: /opt/binaries；Windows: C:\opt\binaries）。
+//
+// 放行根判定建立在 filepath（宿主语义）之上：POSIX 样本 "/opt/binaries" 在 Windows 上缺少盘符，
+// filepath.IsAbs 返回 false，用例会先撞上「必须是绝对路径」分支而测不到放行根判定本身。
+func absTestPath(elems ...string) string {
+	root := string(filepath.Separator)
+	if runtime.GOOS == "windows" {
+		// 样本只要求满足 Windows 的绝对路径定义（盘符 + 分隔符），不要求该路径真实存在。
+		root = `C:\`
+	}
+	return filepath.Join(append([]string{root}, elems...)...)
+}
+
 // TestResolveBinarySource_NodeFileRootsGuard 路径越界必须被拒（spec §3.2 安全约束、验收项 3 负例）。
 // 默认放行根为空集＝该来源关闭；显式放行后只允许根内路径。
 func TestResolveBinarySource_NodeFileRootsGuard(t *testing.T) {
@@ -93,34 +108,36 @@ func TestResolveBinarySource_NodeFileRootsGuard(t *testing.T) {
 	t.Run("默认未配置放行根：一律拒绝", func(t *testing.T) {
 		svc := &ProvisionService{}
 		_, _, err := svc.resolveBinarySource(BinarySource{
-			Kind: BinarySourceNodeFile, NodePath: "/opt/binaries/beacon", Filename: "beacon",
+			Kind: BinarySourceNodeFile, NodePath: absTestPath("opt", "binaries", "beacon"), Filename: "beacon",
 		}, "")
 		require.Error(t, err, "未配置放行根时 node_file 来源应被拒")
 		require.Contains(t, err.Error(), "受控放行目录之外")
 	})
 
 	t.Run("配置放行根：根内通过、根外拒绝", func(t *testing.T) {
-		svc := &ProvisionService{binaryRoots: func() []string { return []string{"/opt/binaries"} }}
+		root := absTestPath("opt", "binaries")
+		sep := string(filepath.Separator)
+		svc := &ProvisionService{binaryRoots: func() []string { return []string{root} }}
 
 		plan, _, err := svc.resolveBinarySource(BinarySource{
-			Kind: BinarySourceNodeFile, NodePath: "/opt/binaries/beacon", Filename: "beacon", SHA256: sha,
+			Kind: BinarySourceNodeFile, NodePath: root + sep + "beacon", Filename: "beacon", SHA256: sha,
 		}, "")
 		require.NoError(t, err, "根内路径应通过")
 		require.Equal(t, "node_file", plan.SourceKind)
-		require.Equal(t, "/opt/binaries/beacon", plan.NodePath)
+		require.Equal(t, root+sep+"beacon", plan.NodePath)
 		require.Equal(t, sha, plan.SHA256)
 
 		// 根本身也放行（明确声明的目录本身即是受控区）。
 		_, _, err = svc.resolveBinarySource(BinarySource{
-			Kind: BinarySourceNodeFile, NodePath: "/opt/binaries", Filename: "beacon",
+			Kind: BinarySourceNodeFile, NodePath: root, Filename: "beacon",
 		}, "")
 		require.NoError(t, err, "放行根自身应通过")
 
 		for _, bad := range []string{
-			"/etc/shadow",                   // 完全越界
-			"/opt/binaries-evil/beacon",     // 前缀相似但不是同一目录（Rel 判定挡住）
-			"/opt/binaries/../secrets/rust", // 穿越出根
-			"/opt/binaries/sub/../../etc/passwd",
+			absTestPath("etc", "shadow"),                       // 完全越界
+			absTestPath("opt", "binaries-evil", "beacon"),      // 前缀相似但不是同一目录（Rel 判定挡住）
+			root + sep + ".." + sep + "secrets" + sep + "rust", // 穿越出根
+			root + sep + "sub" + sep + ".." + sep + ".." + sep + "etc" + sep + "passwd",
 		} {
 			_, _, err := svc.resolveBinarySource(BinarySource{
 				Kind: BinarySourceNodeFile, NodePath: bad, Filename: "beacon",
@@ -130,7 +147,7 @@ func TestResolveBinarySource_NodeFileRootsGuard(t *testing.T) {
 	})
 
 	t.Run("相对路径拒绝", func(t *testing.T) {
-		svc := &ProvisionService{binaryRoots: func() []string { return []string{"/opt/binaries"} }}
+		svc := &ProvisionService{binaryRoots: func() []string { return []string{absTestPath("opt", "binaries")} }}
 		_, _, err := svc.resolveBinarySource(BinarySource{
 			Kind: BinarySourceNodeFile, NodePath: "opt/binaries/beacon", Filename: "beacon",
 		}, "")
@@ -417,7 +434,7 @@ func TestBinaryProvisionAsync_InvalidSourceFailsSynchronously(t *testing.T) {
 		{
 			name: "node_file 越界拒绝",
 			req: ProvisionServerRequest{NodeID: node.ID, Name: "b2", CoreType: "binary",
-				BinarySource: &BinarySource{Kind: BinarySourceNodeFile, NodePath: "/etc/passwd", Filename: "b"}},
+				BinarySource: &BinarySource{Kind: BinarySourceNodeFile, NodePath: absTestPath("etc", "passwd"), Filename: "b"}},
 			want: "受控放行目录之外",
 		},
 		{

@@ -118,7 +118,7 @@ FR-484 把 canonical 事件体从「state.json 内联 + 内存常驻」改为「
 | 稳态 RSS | 150 源 ≤300MiB |
 | 采集期峰值 | **不随源数线性增长**（单 tick 留存不得与会话总行数挂钩） |
 
-实测结果（**真机 node-main + 真 VictoriaLogs v1.52.0**，全局保活 + 强制 GC；详见 [`acceptance-real.md`](acceptance-real.md)）：
+实测结果（**真机 host-1 + 真 VictoriaLogs v1.52.0**，全局保活 + 强制 GC；详见 [`acceptance-real.md`](acceptance-real.md)）：
 
 | 源数 | 采集期峰值 RSS | 稳态 RSS | `state.json` | events/ 落盘 |
 |---|---|---|---|---|

@@ -26,6 +26,16 @@ type daemonStrategy struct {
 	mgr    *Manager
 	pidDir string
 
+	// dialMu 串行化「重连 wrapper 并登记」这一段（见 reconnectAndSend）：
+	// wrapper 只保留最新连接，并发拨号会互相替换并丢失命令。
+	dialMu sync.Mutex
+
+	// writeMu 串行化对控制连接的帧写入。Frame.Encode 分 5 次 Write（4 个头部字段 +
+	// 载荷），而这条连接由多个调用方共享（console 命令、Kill/Stop、自动重启、并发重连）：
+	// 不串行化时两次 Encode 会交错成坏帧，wrapper 解码失败即关闭该连接——表现为
+	// 「命令看似下发成功，连接却随即失效」，正是本缺陷要根治的失联形态。
+	writeMu sync.Mutex
+
 	wrapperCmd *exec.Cmd
 	conn       net.Conn
 	state      InstanceState
@@ -132,11 +142,19 @@ func (d *daemonStrategy) connectLoop(addr string) {
 		}
 		conn, err := daemon.Dial(addr)
 		if err == nil {
+			// closed 复核与 readWg.Add 必须同临界区，且注册前先判 closed：
+			// 「启动后立即停止」时 Close() 会置 closed 并开始 Wait，若此处仍登记连接并 Add，
+			// 就是 Add 与 Wait 并发（sync.WaitGroup 误用，可 panic 崩掉整个 Worker）。
 			d.mu.Lock()
+			if d.closed {
+				d.mu.Unlock()
+				_ = conn.Close()
+				return
+			}
 			d.conn = conn
+			d.readWg.Add(1)
 			d.mu.Unlock()
 			slog.Info("已连接 wrapper socket", "instanceId", d.spec.UUID, "addr", addr)
-			d.readWg.Add(1)
 			go d.readLoop(conn)
 			return
 		}
@@ -154,6 +172,17 @@ func (d *daemonStrategy) stopConnectCh() <-chan struct{} { return nil }
 // readLoop 从 wrapper 读取帧：stdout/stderr 转发到 onOutput，control 响应忽略。
 func (d *daemonStrategy) readLoop(conn net.Conn) {
 	defer d.readWg.Done()
+	// 连接断开时收回引用（仅在它仍是当前连接时）：否则 controlConnected 会长期误判
+	// 「仍持有长连接」，从而抑制证据采集在缺乏进程证据时的 socket 兜底探活——那会让
+	// FR-455 的存活判定退化（进程其实在跑，却因探活被抑制而报不在跑）。
+	// 身份比对不可省：换连后旧 readLoop 也会走到这里，不能把新连接一并清掉。
+	defer func() {
+		d.mu.Lock()
+		if d.conn == conn {
+			d.conn = nil
+		}
+		d.mu.Unlock()
+	}()
 	for {
 		fr, err := daemon.Decode(conn)
 		if err != nil {
@@ -357,17 +386,106 @@ func (d *daemonStrategy) Kill() error {
 }
 
 func (d *daemonStrategy) SendCommand(command string) error {
+	if err := d.sendFrame(&daemon.Frame{
+		Header:  daemon.Header{Channel: daemon.ChannelStdin, Type: daemon.TypeData},
+		Payload: []byte(command + "\n"),
+	}); err != nil {
+		return fmt.Errorf("实例 %s 下发命令失败: %w", d.spec.UUID, err)
+	}
+	return nil
+}
+
+// writeFrame 串行化对控制连接的帧写入（见 writeMu 字段说明）。
+//
+// 为什么必须：Frame.Encode 分多次 Write，跨 goroutine 交错会写出坏帧，wrapper 侧
+// 解码失败随即关闭该连接——命令方各自看到「写入成功」，通道却已死。控制连接是共享
+// 资源，写入必须整体互斥。
+func (d *daemonStrategy) writeFrame(conn net.Conn, f *daemon.Frame) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	return f.Encode(conn)
+}
+
+// sendFrame 经控制长连接下发一帧；连接缺失或已失效时即时重连 wrapper 后重发一次。
+//
+// 必要性（生产事故 2026-09-27）：控制长连接可能被**外部原因**替换或关闭（本机 jmctl 应急客户端
+// 拨号即会替换长连接；探针/巡检的一次性拨号同理），于是 SendCommand 会一直往死 socket 写，
+// 恒返回 broken pipe 且**永不自愈**——实测 12 个实例全部失联，只有重启整个 Worker 才能恢复。
+// 此处让「控制通道失效」可自愈：重连成功后 wrapper 的 Accept 会以本连接为当前长连接，命令随即可达。
+func (d *daemonStrategy) sendFrame(f *daemon.Frame) error {
+	// 与 sendControl/Kill/Stop 同一加锁纪律：d.conn 由多 goroutine 读写，
+	// 不加锁读会与 reconnectAndSend/readLoop 的写入构成数据竞争。
 	d.mu.Lock()
 	conn := d.conn
 	d.mu.Unlock()
 	if conn == nil {
-		return fmt.Errorf("实例 %s 未连接 wrapper", d.spec.UUID)
+		return d.reconnectAndSend(f)
 	}
-	f := &daemon.Frame{
-		Header:  daemon.Header{Channel: daemon.ChannelStdin, Type: daemon.TypeData},
-		Payload: []byte(command + "\n"),
+	if err := d.writeFrame(conn, f); err != nil {
+		slog.Info("控制连接下发失败，重连 wrapper 后重试", "instanceId", d.spec.UUID, "error", err)
+		return d.reconnectAndSend(f)
 	}
-	return f.Encode(conn)
+	return nil
+}
+
+// reconnectAndSend 重新拨号 wrapper 并下发一帧；成功后把新连接登记为当前控制长连接。
+// 失败返回错误，调用方据此如实上报（不回退成静默成功）。
+func (d *daemonStrategy) reconnectAndSend(f *daemon.Frame) error {
+	// 串行化重连：wrapper 的 Accept「接受新连接即关闭旧连接」，若多个调用方并发拨号，
+	// 后拨者会把先拨者刚登记的长连接立刻踢掉——轻则命令丢失，重则各自反复重连。
+	// 同一时刻只允许一个重连在途。
+	d.dialMu.Lock()
+	defer d.dialMu.Unlock()
+
+	// 双重检查：等锁期间可能已有调用方重连成功，直接复用其连接重发，无需再拨号。
+	d.mu.Lock()
+	if conn := d.conn; conn != nil {
+		d.mu.Unlock()
+		if err := d.writeFrame(conn, f); err == nil {
+			return nil
+		}
+	} else {
+		d.mu.Unlock()
+	}
+
+	addr := daemon.SocketAddr(d.pidDir, d.spec.UUID)
+	conn, err := daemon.Dial(addr)
+	if err != nil {
+		return fmt.Errorf("重连 wrapper 失败: %w", err)
+	}
+	// 先发帧再登记：拨号成功即意味着 wrapper 已 Accept 本连接，写它总是安全的。
+	// 同样经 writeFrame：该连接即将成为共享的长连接，写入需与其他调用方互斥。
+	if err := d.writeFrame(conn, f); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("经重连连接下发帧失败: %w", err)
+	}
+
+	// closed 复核与 readWg.Add 必须在同一临界区内完成：Close() 在持锁时置 closed 后才 Wait，
+	// 同锁即可保证「Add 要么先于 Wait、要么被 closed 拦下」，不会触发 WaitGroup 复用告警。
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		_ = conn.Close()
+		return fmt.Errorf("实例 %s 的控制连接已关闭", d.spec.UUID)
+	}
+	old := d.conn
+	d.conn = conn
+	d.readWg.Add(1)
+	d.mu.Unlock()
+
+	if old != nil {
+		// 旧连接已被 wrapper 替换/关闭；显式关闭确保资源释放（重复关闭返回错误，忽略）。
+		_ = old.Close()
+	}
+	go d.readLoop(conn)
+	return nil
+}
+
+// controlConnected 报告当前是否持有 wrapper 控制长连接（证据采集据此免于拨号替换长连接）。
+func (d *daemonStrategy) controlConnected() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.conn != nil
 }
 
 func (d *daemonStrategy) State() InstanceState {
@@ -416,7 +534,7 @@ func (d *daemonStrategy) sendControl(cmd string) error {
 		Header:  daemon.Header{Channel: daemon.ChannelControl, Type: daemon.TypeCommand},
 		Payload: []byte(cmd),
 	}
-	return f.Encode(conn)
+	return d.writeFrame(conn, f)
 }
 
 // Reconnect 在 Worker 重启后重新连接已存活的 wrapper。

@@ -86,7 +86,17 @@ func (m *Manager) probeOneEvidence(uuid string) InstanceEvidence {
 				base = daemonEv
 			}
 		}
-		base.SocketReachable = probeSocketReachable(daemon.SocketAddr(pidDir, uuid), evidenceSocketProbeTimeout)
+		// 仅当进程存活证据不足时才拨号探活 socket 兜底。
+		//
+		// 生产事故（2026-09-27）：wrapper 的 Accept 循环「接受新连接即关闭旧 workerConn」，
+		// 而本探针是一次性拨号即关。巡检每轮（含 CP 心跳缺失时的证据复核）都调用本函数，
+		// 于是在进程已确认存活时仍探活，等于每轮都把 Worker 的控制长连接踢掉——readLoop
+		// 退出后 d.conn 仍指向已关闭的 socket，后续 instance_send_command 恒返回
+		// "write ...: broken pipe"，实测 12 个实例全部中招，只能靠重启 Worker 短暂恢复
+		// （重启后下一轮巡检又将其踢掉）。证据采集是只读操作，不得有这类副作用。
+		if !base.ProcessAlive {
+			base.SocketReachable = probeSocketReachable(daemon.SocketAddr(pidDir, uuid), evidenceSocketProbeTimeout)
+		}
 		base.Running = base.ProcessAlive || base.SocketReachable
 		base.Detail = evidenceDetail(base)
 		return base
@@ -129,10 +139,35 @@ func (m *Manager) probeDaemonEvidence(uuid, pidDir string) (InstanceEvidence, bo
 		ev.ProcessAlive = true
 		ev.RootPID = rec.JavaPID
 	}
-	ev.SocketReachable = probeSocketReachable(daemon.SocketAddr(pidDir, uuid), evidenceSocketProbeTimeout)
+	// 进程存活（wrapper 或 Java PID）已足够判定「仍在运行」；仅在缺乏进程证据、且本 Worker
+	// 尚未持有该实例的控制长连接时才拨号探 socket（拨号会替换长连接，见 probeOneEvidence 说明）。
+	if !ev.ProcessAlive && !m.controlConnected(uuid) {
+		ev.SocketReachable = probeSocketReachable(daemon.SocketAddr(pidDir, uuid), evidenceSocketProbeTimeout)
+	}
 	ev.Running = ev.ProcessAlive || ev.SocketReachable
 	ev.Detail = evidenceDetail(ev)
 	return ev, true
+}
+
+// controlConnected 报告 Worker 是否已持有该实例的 wrapper 控制长连接。
+//
+// 用途：wrapper 的 Accept 循环「接受新连接即关闭旧 workerConn」（见 wrapper.go），因此**只要本
+// Worker 手上还有长连接，任何一次性拨号探活都会把它踢掉**——readLoop 退出后 d.conn 仍指向已关闭
+// 的 socket，随后 console 命令（instance_send_command）恒报 broken pipe。证据采集必须无副作用，
+// 故有此长连接时一律不拨号。
+func (m *Manager) controlConnected(uuid string) bool {
+	m.mu.RLock()
+	inst, ok := m.instances[uuid]
+	var strategy IProcessCommand
+	if ok {
+		strategy = inst.strategy
+	}
+	m.mu.RUnlock()
+	if strategy == nil {
+		return false
+	}
+	d, ok := strategy.(*daemonStrategy)
+	return ok && d.controlConnected()
 }
 
 func evidenceDetail(ev InstanceEvidence) string {

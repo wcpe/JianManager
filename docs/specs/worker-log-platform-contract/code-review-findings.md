@@ -86,6 +86,7 @@
 - 实证：**确认存在**。FILE_PRIMARY 路径由该 workDir 拼接，`os.Stat`/`os.Open`/gzip/`HashFile` 均会跟随符号链接。可读受管目录外的 `latest.log` 与归档；注册阶段可在根外建目录；direct/daemon 实例以外部 WorkDir 作为 cwd。Raw 文件创建/追加同样无防 symlink（若目标路径被替换为 symlink 可写到外部）。
 - 建议：Worker 侧把 WorkDir 限制为受管 `ServersDir()` 的严格子目录，拒绝绝对外部路径与 `..`，对已有路径做 `EvalSymlinks` 确认仍在根内，文件读取用 `Lstat`/`O_NOFOLLOW` 或目录 fd 相对打开以避免 TOCTOU；理想做法是由 Worker 依实例 UUID/slug 自行生成目录，不信任 CP 下发的任意路径。
 - **状态：已修复**（commit `d6635c0b`）。拒绝符号链接与退化目录，同时保留根外绝对路径的既有契约（生产存在合法的外来接管目录）；新增四条回归测试含「根外合法目录放行」对照，变异验证通过。
+- **Windows 补强（2026-09-28 真机全量测试发现）**：`EvalSymlinks` 在 Windows 上**不解析 junction**（目录联接的 `os.Lstat` 报 `ModeIrregular` 而非 `ModeSymlink`），故「junction 指向受管根之外」的工作目录可绕过上述符号链接判据——M-7 在 Windows 上留有守卫缺口（Linux 无此形态，CI 全绿因此不能代表 Windows）。现于 `validateWorkDir` 补 `firstReparseLink` 判据（`internal/worker/logs/ingest/instances.go`）：按路径逐级分量检 `FILE_ATTRIBUTE_REPARSE_POINT`，符号链接与 junction 一并在注册期拒绝；回归 `TestRegisterInstanceRejectsSymlinkedWorkDir` 四个子用例（Windows 真机全绿，含「合法实体目录放行」「根外绝对路径仍放行（既有契约）」「文件系统根拒绝」对照）。
 
 ### M-8 eventstore.Count 与尾段实际完整行数不一致
 

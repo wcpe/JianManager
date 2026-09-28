@@ -75,8 +75,8 @@
 
 ## 5. 验收标准
 
-- FR-298：真机（node-2）植入 JDK 与 Node 假安装目录 → 扫描列出候选 → 勾选入库 → 列表可见；重复扫描标 already_registered；未知类型拒绝。
-- FR-299：真机 node-2 经出站代理装 Node LTS → `bin/node --version` 对版；停滞/残骸/删除语义单测齐平 FR-290~292。
+- FR-298：真机（host-2）植入 JDK 与 Node 假安装目录 → 扫描列出候选 → 勾选入库 → 列表可见；重复扫描标 already_registered；未知类型拒绝。
+- FR-299：真机 host-2 经出站代理装 Node LTS → `bin/node --version` 对版；停滞/残骸/删除语义单测齐平 FR-290~292。
 - FR-300：真机把节点 PATH 无 node 场景（或以库内 node 优先证据）拉起 bot 成功，启动日志标来源。
 - FR-301：真机运行时资产页矩阵显全节点 JDK+Node；手动刷新即时；断一个 worker 刷新容忍显旧。
 - 各真机项需用户确认通过；单测全绿不替代。

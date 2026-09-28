@@ -186,6 +186,13 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) == 0 && err != nil {
+			// 本次读取未拿到任何字节：若是非 EOF 错误（截断 gzip 的典型收尾形态——
+			// 已成功读出行之后，下一次读取以 unexpected EOF 结束），必须留下可见缺口。
+			// 修复前此处直接 break，缺口只在 `err != nil && len(line) > 0` 时才记录，
+			// 导致「截断归档静默丢尾且不可见」，违反 FR-474 §5#1「截断可见」契约。
+			if err != io.EOF {
+				_ = a.led.RecordGap(a.key, pos, pos, "ARCHIVE_READ_ERROR", err.Error())
+			}
 			break
 		}
 		raw := strings.TrimRight(line, "\n")

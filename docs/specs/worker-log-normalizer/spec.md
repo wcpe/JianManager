@@ -37,7 +37,9 @@
 
 ## 6. 风险 / 待定
 
-- FR-473 已冻结。**Multiline 真实采集与恢复验收已完成**（见状态行与 [`acceptance-real.md`](acceptance-real.md)）；剩余 Windows 平台证据缺失。
+- FR-473 已冻结。**Multiline 真实采集与恢复验收已完成**（见状态行与 [`acceptance-real.md`](acceptance-real.md)）；**Windows 真机证据仍缺**。
+  - Windows 就绪的部分语义已按字节级夹具覆盖（Windows 日志经 log4j2 `%n` 输出 **CRLF**）：**行终止符归一**——`\r` 视为行终止符而非正文，`normalize.FeedAt` 收口剥除单个行尾 `\r`，故 CRLF 与 LF 的同一逻辑内容产出相同 `message` 与 `canonical`，多行归并一致；回归见 `internal/worker/logs/normalize/crlf_test.go` 与 `internal/worker/logs/pipeline/crlf_line_ending_test.go`（含 record 位置**字节精确**与追加后游标对齐）。修复前 `\r` 会进入正文并改变 canonical（见 CHANGELOG [Unreleased]）。
+  - **仍未覆盖**：Windows 上的真机采集/恢复行为（文件锁与改名语义、路径分隔符、服务与编码环境），须在 Windows 主机执行，本机 linux-amd64 无法替代。复验入口已入库：`go run ./scripts/acceptance-normalizer/`（Windows 用 `ACCEPT_LINE_ENDING=crlf` 指定 CRLF 夹具）。
 - 具体 VL tag、资产哈希和兼容矩阵由 FR-476 资产审批冻结。
 
 ## 3.1 事件边界与统计口径

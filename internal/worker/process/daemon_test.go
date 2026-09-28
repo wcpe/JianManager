@@ -29,6 +29,26 @@ func keepAliveCmd() string {
 	return "sleep 30"
 }
 
+// stdinConsumingCmd 返回一个「保持存活且持续消费 stdin」的替身命令。
+//
+// 为什么必须与 keepAliveCmd 区分：Windows 命名管道（以及任何 OS 管道）的缓冲是有限的
+// （匿名管道约 4KiB）。真实 Minecraft 服务端是常驻读 stdin 的进程，控制台命令写入后即被
+// 取走；而 ping/sleep 替身从不读 stdin——并发下发用例一次写入 128 条 1KiB 命令时，第 4 条
+// 即塞满 wrapper→替身 的 stdin 管道缓冲，后续写入被阻塞长达替身的剩余寿命（ping -n 30
+// 场景下实测 28.9s），替身退出瞬间缓冲数据随之丢失，与测试收尾竞态——这是夹具造成的
+// 物理假象，不是产品缺陷（Linux 上 unix socket 缓冲约 208KiB 可整体吸收 128KiB 载荷，
+// 表现为「静默堆积」，掩盖了同一夹具问题，故 CI 长期为绿）。
+//
+// more（Windows）/ cat（unix）逐字节读 stdin 到 EOF 才退出，与真实服务端的消费语义一致；
+// EOF 由 wrapper 在 stop/kill 路径关闭 stdin 管道触发，替身随即退出，不产生孤儿。
+func stdinConsumingCmd() string {
+	if runtime.GOOS == "windows" {
+		// more 逐块回显 stdin 到 EOF；输出由 wrapper 的 wrapperOutput 吞掉（stdout 无断言依赖）。
+		return "more"
+	}
+	return "cat"
+}
+
 // 注：daemonStrategy.Start 通过 os.Executable() spawn worker 二进制的 daemon 子命令。
 // 单元测试环境下 os.Executable() 指向测试二进制、无 daemon 子命令分支，
 // 因此真实 spawn 路径留给真机/集成验证（由主控执行）。此处覆盖：

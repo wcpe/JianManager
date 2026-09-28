@@ -46,19 +46,18 @@ func (m *Manager) MissingInstanceBindings(instanceIDs []string) []string {
 	return missing
 }
 
-// validateWorkDir 校验实例工作目录可用于日志采集（M-7）。
-//
-// 信任模型：workDir 来自 CP 下发，而数据根之外的绝对路径是**既有契约**
-// （`dataroot.Root.Abs` 明确保留绝对输入，生产亦存在如外来接管实例这样的合法根外目录），
-// 故此处不能强制收窄到 `var/servers`，否则会直接打断那些实例的采集。
-//
-// 能堵住的是「路径在解析后逃出它自身声明的位置」这一类：`..` 穿越与符号链接。
-// 两者都会让采集器读到（或写到）与实例约定目录无关的位置——FILE_PRIMARY 会按此
-// workDir 拼 `logs/latest.log` 与 `*.gz` 并直接打开，且打开动作会跟随符号链接。
 func validateWorkDir(workDir string) error {
 	cleaned := filepath.Clean(workDir)
 	if cleaned == "." || cleaned == string(filepath.Separator) {
 		return fmt.Errorf("ingest: refusing to collect logs from %q", workDir)
+	}
+	// 链接探测必须先于 EvalSymlinks：Windows 上 junction 不被 EvalSymlinks 解析——
+	// 它在路径中会被原样返回（「解析后偏离原路径」判据假阴性），而含 junction 的更深
+	// 路径会让 EvalSymlinks 直接报错、被误判为「尚未创建」而放行。junction 是 Windows 上
+	// **无需特权**即可创建的链接形式（符号链接需 SeCreateSymbolicLinkPrivilege），
+	// 打开动作同样会跟随它读到约定位置之外的文件，属同一判据面。
+	if link, target, ok := firstReparseLink(cleaned); ok {
+		return fmt.Errorf("ingest: refusing symlinked log work dir %q (link %q resolves to %q)", cleaned, link, target)
 	}
 	// 已存在的路径：解析符号链接后不得偏离原路径，否则说明中间某级是指向别处的链接。
 	resolved, err := filepath.EvalSymlinks(cleaned)
@@ -69,6 +68,33 @@ func validateWorkDir(workDir string) error {
 		return fmt.Errorf("ingest: refusing symlinked log work dir %q (resolves to %q)", cleaned, resolved)
 	}
 	return nil
+}
+
+// firstReparseLink 返回 path 中第一个链接级（Unix 符号链接 / Windows 符号链接或 junction）
+// 及其目标；无链接时 ok=false。
+//
+// 为什么不能只用 filepath.EvalSymlinks：Windows 上 junction 的 Lstat 报 ModeIrregular
+// 而非 ModeSymlink，EvalSymlinks 因此既不解析它、也无法穿过它（见 validateWorkDir 注释）。
+// os.Readlink 对 Unix 符号链接与 Windows 两种链接（含 junction）都返回目标，故用它统一探测。
+func firstReparseLink(path string) (link, target string, ok bool) {
+	volume := filepath.VolumeName(path)
+	rest := path[len(volume):]
+	current := volume
+	if strings.HasPrefix(rest, string(filepath.Separator)) {
+		current += string(filepath.Separator)
+		rest = rest[len(string(filepath.Separator)):]
+	}
+	for _, part := range strings.Split(rest, string(filepath.Separator)) {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		// 非链接（普通文件/目录）与不存在的级：os.Readlink 均返回错误。
+		if t, err := os.Readlink(current); err == nil {
+			return current, t, true
+		}
+	}
+	return "", "", false
 }
 
 func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir string) error {
