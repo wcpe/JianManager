@@ -4,7 +4,7 @@
 
 ## 1. 背景与目标
 
-装机节点（install-worker.sh / deploy-worker.sh）上没有 bot-worker：Go worker spawn 假设 `bot-worker/dist/index.js` 相对 cwd 存在且其 426MB `node_modules` 就位——真机复现：node-2 只铺 dist 时 bot spawn `ERR_MODULE_NOT_FOUND: mineflayer`。目标：bot-worker **源码(dist)自动下发** + 依赖走**节点受控包根**模型（UI/API 仍称全局包，表示节点共享；包管理器不再用真全局模式），bot spawn 经 ESM 可见的 `node_modules` 链接消费依赖——装个 mineflayer 插件后 bot 立即能用。
+装机节点（install-worker.sh / deploy-worker.sh）上没有 bot-worker：Go worker spawn 假设 `bot-worker/dist/index.js` 相对 cwd 存在且其 426MB `node_modules` 就位——真机复现：host-2 只铺 dist 时 bot spawn `ERR_MODULE_NOT_FOUND: mineflayer`。目标：bot-worker **源码(dist)自动下发** + 依赖走**节点受控包根**模型（UI/API 仍称全局包，表示节点共享；包管理器不再用真全局模式），bot spawn 经 ESM 可见的 `node_modules` 链接消费依赖——装个 mineflayer 插件后 bot 立即能用。
 
 ## 2. 需求与范围
 
@@ -48,12 +48,12 @@
 - [x] ADR-072 落稿并取代 ADR-070
 - [x] 测试：自愈全路径单测（fake client）、链接功能性验证、预检/NODE_PATH 单测、CP RPC 鉴权与嵌入态双分支单测
 - [x] 文档同步：ARCHITECTURE（分发模型+目录+RPC）、PRD 状态、CHANGELOG 尾行（无新增 HTTP 端点，API.md 不涉）
-- [x] 真机（2026-07-13）：node-2 自愈拉 dist（CP journal「下发 bot-worker 归档 25267B」+ worker「dist 已更新 211fb4fd6c45」，重启复验指纹省流零重拉；win-node junction 同验）→ 面板全局包装 mineflayer-pathfinder 2.4.5（任务 19 succeeded）→ UI 一键搭建 Paper 1.21.8（bot-arena2 @25566）→ UI 建 bot → **MC 日志 `fr308bot joined the game`**、bot status=connected、`nodeSource=managed-scan`，无 ERR_MODULE_NOT_FOUND
+- [x] 真机（2026-07-13）：host-2 自愈拉 dist（CP journal「下发 bot-worker 归档 25267B」+ worker「dist 已更新 211fb4fd6c45」，重启复验指纹省流零重拉；host-3 junction 同验）→ 面板全局包装 mineflayer-pathfinder 2.4.5（任务 19 succeeded）→ UI 一键搭建 Paper 1.21.8（bot-arena2 @25566）→ UI 建 bot → **MC 日志 `fr308bot joined the game`**、bot status=connected、`nodeSource=managed-scan`，无 ERR_MODULE_NOT_FOUND
 
 ## 5. 验收标准
 
 - 单测：自愈下发（无 dist→拉取；指纹符→跳过；CP 不可达→用旧/报错）、Node 三来源真实探测与最低版本、完整版本排序/成功缓存、spawn 前新旧根链接刷新、NODE_PATH 注入、ESM 可见路径预检。
-- **真机（node-2，联合 FR-307 整合后）**：装机节点无 bot-worker → worker 自愈拉 dist → 面板全局包页装 mineflayer+mineflayer-pathfinder（FR-307 功能）→ 建 bot → **bot 真入 MC 服**（日志 `nodeSource=managed-scan` + 不再 ERR_MODULE_NOT_FOUND）。
+- **真机（host-2，联合 FR-307 整合后）**：装机节点无 bot-worker → worker 自愈拉 dist → 面板全局包页装 mineflayer+mineflayer-pathfinder（FR-307 功能）→ 建 bot → **bot 真入 MC 服**（日志 `nodeSource=managed-scan` + 不再 ERR_MODULE_NOT_FOUND）。
 - 真机项需用户确认；单测全绿不替代。
 
 ## 6. 风险 / 待定

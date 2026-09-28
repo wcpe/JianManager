@@ -1692,7 +1692,7 @@
       {
         "nodeId": 2,
         "nodeUuid": "uuid",
-        "nodeName": "load-node-2",
+        "nodeName": "load-node-a",
         "online": true,
         "tunnelConnected": true,
         "botWorkerReady": true,
@@ -2015,7 +2015,7 @@
         "ordinal": 1,
         "executorNodeId": 2,
         "executorNodeUuid": "uuid",
-        "executorNodeName": "load-node-2",
+        "executorNodeName": "load-node-a",
         "plannedCount": 50,
         "connectStartAt": "datetime",
         "connectIntervalMs": 200,

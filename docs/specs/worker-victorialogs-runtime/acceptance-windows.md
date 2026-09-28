@@ -1,7 +1,7 @@
 # FR-476 Windows 平台资产验收记录（受控）
 
 日期：2026-09-24
-主机：node-main（生产主机，IP 已脱敏，linux-amd64）
+主机：host-1（生产主机，IP 与主机名已脱敏，linux-amd64）
 受验包：`victoria-logs-windows-amd64-v1.52.0.zip`（6 127 882 字节）
 脚本：`.tmp/fr436-windows/main.go`（不入库）
 

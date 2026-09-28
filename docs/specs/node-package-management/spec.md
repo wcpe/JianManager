@@ -73,7 +73,7 @@ token 入库存明文（节点级配置，与 proxy.url 同密级），**API 出
 
 ## 5. 验收标准（FR-306）
 
-- 真机（node-2，已装 Node 22）：设 pm=pnpm → `corepack enable` 成功、`pnpm --version` 可用；设 registry=npmmirror → 托管 `.npmrc` 含 `registry=https://registry.npmmirror.com`；GET 回显 registry token 脱敏。
+- 真机（host-2，已装 Node 22）：设 pm=pnpm → `corepack enable` 成功、`pnpm --version` 可用；设 registry=npmmirror → 托管 `.npmrc` 含 `registry=https://registry.npmmirror.com`；GET 回显 registry token 脱敏。
 - 掩码保存语义：回传掩码 token 不清空源 token（单测锁）。
 - 各真机项需用户确认；单测全绿不替代。
 
