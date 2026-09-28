@@ -322,7 +322,12 @@ func New(opts Options) (*Manager, error) {
 		recoveryHold:        opts.RecoveryHold,
 	}
 	if m.verificationTimeout <= 0 {
-		m.verificationTimeout = 30 * time.Second
+		// 5 分钟（原 30 秒）。依据 2026-09-28 生产实测：VL 的 /insert/jsonline 是「接收即
+		// 返回 200、索引异步」，恢复期单批 5746 条的可见性延迟**超过 30 秒**——写入 200 成功、
+		// 30 秒后校验仍报 `not fully visible before deadline`，而稍后查询该代号确有 5746 条。
+		// 校验本就有指数退避重试，数据一旦可见即立刻通过，故放宽窗口只影响「最坏等待」，
+		// 不影响成功路径的耗时。可用 Options.VerificationTimeout 覆盖。
+		m.verificationTimeout = 5 * time.Minute
 	}
 	// 投影校验的退避参数（B1c）：默认 200ms 起、封顶 2s。字段化以便测试用短窗口驱动。
 	if m.verifyBackoffMin <= 0 {
