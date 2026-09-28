@@ -530,8 +530,8 @@ func (w *Wrapper) signalClose() {
 // readLoop 处理 Worker 下发的帧：stdin 数据 / 控制命令。
 func (w *Wrapper) readLoop(conn netConn) {
 	// 连接断开后释放引用：Windows 上残留句柄会阻碍同名管道重建（Access denied）。
-	// 关闭经 closeWorkerConn：仅当仍是当前连接、且持 connMu（等在飞 Encode 返回），
-	// 不再对同一句柄二次 CloseHandle（acceptLoop 替换路径可能已关过）。
+	// 关闭经 closeWorkerConn：持 connMu 等在飞 Encode 返回后再关，且由 managedConn 的
+	// closeOnce 保证同一句柄只 CloseHandle 一次（acceptLoop 替换路径可能已关过）。
 	defer w.closeWorkerConn(conn)
 	for {
 		fr, err := Decode(conn)
