@@ -54,6 +54,13 @@ describe('breadcrumbTrail（FR-431 六域）', () => {
     ])
   })
 
+  it('Agent 接入：MCP 活动归 agentAccess（ADR-096 由会话页改名）', () => {
+    expect(breadcrumbTrail('/mcp-activity')).toEqual([
+      { labelKey: 'nav.agentAccess' },
+      { labelKey: 'nav.mcpActivity' },
+    ])
+  })
+
   it('观测域含通知中心', () => {
     expect(breadcrumbTrail('/notifications')).toEqual([
       { labelKey: 'nav.observability' },

@@ -39,7 +39,7 @@ const ClientPublishPage = lazy(() => import('@/pages/ClientPublishPage'))
 const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
 const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
 const AgentTokensPage = lazy(() => import('@/pages/AgentTokensPage'))
-const McpSessionsPage = lazy(() => import('@/pages/McpSessionsPage'))
+const McpActivityPage = lazy(() => import('@/pages/McpActivityPage'))
 const AgentCallLogsPage = lazy(() => import('@/pages/AgentCallLogsPage'))
 const LicensesPage = lazy(() => import('@/pages/LicensesPage'))
 const TasksPage = lazy(() => import('@/pages/TasksPage'))
@@ -164,7 +164,9 @@ export default function Workspace() {
             <Route path="database" element={<RequirePlatformAdmin><DatabasePage /></RequirePlatformAdmin>} />
             <Route path="system-update" element={<RequirePlatformAdmin><SystemUpdatePage /></RequirePlatformAdmin>} />
             <Route path="agent-tokens" element={<RequirePlatformAdmin><AgentTokensPage /></RequirePlatformAdmin>} />
-            <Route path="mcp-sessions" element={<RequirePlatformAdmin><McpSessionsPage /></RequirePlatformAdmin>} />
+            <Route path="mcp-activity" element={<RequirePlatformAdmin><McpActivityPage /></RequirePlatformAdmin>} />
+            {/* 端点无状态化（ADR-096）后会话维度视图已无数据源，旧链接重定向到按 Token 聚合的活动视图。 */}
+            <Route path="mcp-sessions" element={<Navigate to="/mcp-activity" replace />} />
             <Route path="agent-call-logs" element={<RequirePlatformAdmin><AgentCallLogsPage /></RequirePlatformAdmin>} />
             <Route path="licenses" element={<RequirePlatformAdmin><LicensesPage /></RequirePlatformAdmin>} />
             <Route path="*" element={<WorkspaceEmpty />} />

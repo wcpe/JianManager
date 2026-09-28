@@ -162,7 +162,7 @@ export const NAV_GROUPS: NavGroup[] = [
         labelKey: 'nav.agentAccess',
         children: [
           { to: '/agent-tokens', labelKey: 'nav.agentTokens', icon: KeyRound, perm: 'agent.token.read' },
-          { to: '/mcp-sessions', labelKey: 'nav.mcpSessions', icon: Cable, perm: 'agent.mcp.read' },
+          { to: '/mcp-activity', labelKey: 'nav.mcpActivity', icon: Cable, perm: 'agent.mcp.read' },
           { to: '/agent-call-logs', labelKey: 'nav.agentCallLogs', icon: ScrollText, perm: 'agent.calllog.read' },
         ],
       },
