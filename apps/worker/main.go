@@ -628,46 +628,68 @@ func runWorker() {
 				StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
 			})
 		}
-		manager, ingestErr := ingest.New(ingest.Options{
-			Root: root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
-			Journal: logStack.Catalog.Journal(), Archive: archiveRegistry, Sources: sources,
-			CapacityProvider: ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
-				MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
-				DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
-			}),
-			RecoveryHold: func(source ingest.SourceConfig, _ string) (bool, string) {
-				if rehydrateManager == nil {
+		newIngest := func() (*ingest.Manager, error) {
+			return ingest.New(ingest.Options{
+				Root: root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
+				Journal: logStack.Catalog.Journal(), Archive: archiveRegistry, Sources: sources,
+				CapacityProvider: ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
+					MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
+					DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
+				}),
+				RecoveryHold: func(source ingest.SourceConfig, _ string) (bool, string) {
+					if rehydrateManager == nil {
+						return false, ""
+					}
+					generation := uint64(1)
+					if rec, ok := logStack.Catalog.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}); ok && rec.Generation > 0 {
+						generation = rec.Generation
+					}
+					key := archive.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay, Generation: generation}
+					if !rehydrateManager.CanCleanup(key) {
+						return true, "active archive rehydrate or query-view lease"
+					}
 					return false, ""
-				}
-				generation := uint64(1)
-				if rec, ok := logStack.Catalog.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}); ok && rec.Generation > 0 {
-					generation = rec.Generation
-				}
-				key := archive.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay, Generation: generation}
-				if !rehydrateManager.CanCleanup(key) {
-					return true, "active archive rehydrate or query-view lease"
-				}
-				return false, ""
-			},
-			VLRoute: func(source ingest.SourceConfig) (*vlsup.Client, bool, error) {
-				target, ok := logStack.Catalog.RouteWrite(catalog.PartitionKey{
-					StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
-				}, source.UTCDay)
-				if !ok {
-					return vlHTTPClient, false, nil
-				}
-				switch target.Owner {
-				case catalog.OwnerHot:
-					return vlHTTPClient, target.Frozen, nil
-				case catalog.OwnerCold:
-					return coldVLClient, target.Frozen, nil
-				default:
-					return nil, target.Frozen, fmt.Errorf("ingest: Catalog write owner %s requires an explicit recovery path", target.Owner)
-				}
-			},
-		})
+				},
+				VLRoute: func(source ingest.SourceConfig) (*vlsup.Client, bool, error) {
+					target, ok := logStack.Catalog.RouteWrite(catalog.PartitionKey{
+						StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
+					}, source.UTCDay)
+					if !ok {
+						return vlHTTPClient, false, nil
+					}
+					switch target.Owner {
+					case catalog.OwnerHot:
+						return vlHTTPClient, target.Frozen, nil
+					case catalog.OwnerCold:
+						return coldVLClient, target.Frozen, nil
+					default:
+						return nil, target.Frozen, fmt.Errorf("ingest: Catalog write owner %s requires an explicit recovery path", target.Owner)
+					}
+				},
+			})
+		}
+		// 采集运行时创建失败不再一次性放弃（2026-09-28 生产教训：一次瞬时失败即让整个采集
+		// 静默停摆——无重试、无告警，实例在跑而日志不再入库）。带退避重试，使 VL 就绪延迟或
+		// 瞬时故障恢复后能自愈；仍失败则打出显式 ERROR（供日志告警规则捕获）。
+		const (
+			ingestCreateAttempts   = 6
+			ingestCreateRetryDelay = 20 * time.Second
+		)
+		var manager *ingest.Manager
+		var ingestErr error
+		for attempt := 1; attempt <= ingestCreateAttempts; attempt++ {
+			manager, ingestErr = newIngest()
+			if ingestErr == nil {
+				break
+			}
+			slog.Error("日志采集运行时创建失败（将重试）",
+				"attempt", attempt, "maxAttempts", ingestCreateAttempts, "error", ingestErr)
+			if attempt < ingestCreateAttempts {
+				time.Sleep(time.Duration(attempt) * ingestCreateRetryDelay)
+			}
+		}
 		if ingestErr != nil {
-			slog.Error("日志采集运行时创建失败", "error", ingestErr)
+			slog.Error("日志采集运行时创建失败：已达重试上限，本次启动不再采集（需告警介入）", "error", ingestErr)
 		} else {
 			logIngest = manager
 			workerServer.SetInstanceLogCollector(manager)
