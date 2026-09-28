@@ -1,0 +1,129 @@
+name: PR Hygiene
+
+# 提交与 PR 纪律的自动闸门（见 .claude/rules/git-privacy-and-merge.md）。
+# 检查三处：变更内容、提交信息、PR 标题与正文。
+# 命中真实 IP / 凭据 / 敏感文件 / AI 签名即失败，禁止合并。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 计算变更范围
+        id: range
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}" || true
+          BASE="origin/${{ github.base_ref }}"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "merge_base=$(git merge-base "$BASE" HEAD)" >> "$GITHUB_OUTPUT"
+
+      # 允许的回环 / 通配 / 文档保留段；其余 IPv4 一律视为泄漏。
+      - name: 扫描变更内容（真实 IP / 凭据 / 敏感文件）
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+        run: |
+          set -eu
+          ALLOW='127\.0\.0\.1|0\.0\.0\.0|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|10\.0\.0\.'
+          fail=0
+
+          echo "::group::变更中的 IPv4"
+          if git diff "$BASE"...HEAD | grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | grep -vE "$ALLOW"; then
+            echo "::error::变更内容含真实 IP 地址，请改用保留段（192.0.2.x / 198.51.100.x / 203.0.113.x）或环境变量注入"
+            fail=1
+          else
+            echo "无"
+          fi
+          echo "::endgroup::"
+
+          echo "::group::变更中的凭据特征"
+          if git diff "$BASE"...HEAD | grep -nEi '(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=.-]{12,}'; then
+            echo "::error::变更内容疑似含硬编码凭据"
+            fail=1
+          else
+            echo "无"
+          fi
+          echo "::endgroup::"
+
+          echo "::group::敏感文件"
+          if git diff --name-only "$BASE"...HEAD | grep -iE '\.env$|\.env\.|secret|credential|\.pem$|\.key$|password|id_rsa'; then
+            echo "::error::变更包含敏感文件"
+            fail=1
+          else
+            echo "无"
+          fi
+          echo "::endgroup::"
+
+          exit "$fail"
+
+      - name: 扫描绝对路径（本机用户名 / 目录结构泄漏）
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+        run: |
+          set -eu
+          # 允许的占位用户名与常见 CI/容器路径；其余 /home|/Users/<名>/ 与 C:\Users\ 一律视为泄漏。
+          ALLOW='(/home/(user|example|runner|app|node|ubuntu)/)|(/Users/(user|example|runner|shared)/)|(/opt/(app|jm|jianmanager)/)|(/tmp/)|(/var/(log|lib|run)/)|(/usr/)|(/etc/)|(C:\\Users\\(user|example|runner)\\)'
+          fail=0
+          echo "::group::变更中的绝对路径"
+          if git diff "$BASE"...HEAD | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\' | grep -vE "$ALLOW"; then
+            echo "::error::变更含真实绝对路径（泄漏用户名/目录结构），请改用相对路径、临时目录或配置注入"
+            fail=1
+          else
+            echo "无"
+          fi
+          echo "::endgroup::"
+          exit "$fail"
+
+      - name: 扫描提交信息（IP / AI 签名）
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+        run: |
+          set -eu
+          ALLOW='127\.0\.0\.1|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
+          MSGS=$(git log "$BASE"..HEAD --format='%s%n%b')
+          fail=0
+
+          if printf '%s\n' "$MSGS" | grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | grep -vE "$ALLOW"; then
+            echo "::error::提交信息含真实 IP 地址"
+            fail=1
+          fi
+
+          if printf '%s\n' "$MSGS" | grep -nEi '(co-authored-by:[[:space:]]*(claude|codex|gpt|copilot))|(generated (by|with)[[:space:]]+(claude|codex|gpt|copilot))|(^|[[:space:]])(claude|codex)[[:space:]]+code|🤖'; then
+            echo "::error::提交信息含 AI 签名或尾注（AGENTS.md 禁止）"
+            fail=1
+          fi
+
+          exit "$fail"
+
+      - name: 扫描 PR 标题与正文
+        env:
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          set -eu
+          ALLOW='127\.0\.0\.1|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
+          TITLE=$(jq -r '.pull_request.title // ""' "$EVENT_PATH")
+          BODY=$(jq -r '.pull_request.body // ""' "$EVENT_PATH")
+          TEXT="$TITLE
+          $BODY"
+          fail=0
+
+          if printf '%s\n' "$TEXT" | grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | grep -vE "$ALLOW"; then
+            echo "::error::PR 标题或正文含真实 IP 地址"
+            fail=1
+          fi
+
+          if printf '%s\n' "$TEXT" | grep -nEi '(password|passwd|secret|api[_-]?key|bearer)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=.-]{12,}'; then
+            echo "::error::PR 标题或正文疑似含凭据"
+            fail=1
+          fi
+
+          exit "$fail"
