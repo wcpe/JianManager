@@ -28,26 +28,30 @@ jobs:
           echo "merge_base=$(git merge-base "$BASE" HEAD)" >> "$GITHUB_OUTPUT"
 
       # 允许的回环 / 通配 / 文档保留段；其余 IPv4 一律视为泄漏。
+      # 三个内容类检查都只看**新增行**：删除行是在移除内容，不构成新的泄漏——否则任何删除
+      # 含 IP/凭据行的 PR（例如下线一块旧模块）都会被误拦，闸门会因假阳性而失去可信度。
       - name: 扫描变更内容（真实 IP / 凭据 / 敏感文件）
         env:
           BASE: ${{ steps.range.outputs.base }}
         run: |
           set -eu
-          ALLOW='127\.0\.0\.1|0\.0\.0\.0|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|10\.0\.0\.'
+          # 127\. 覆盖整个回环网段（仓库既有测试普遍用 127.0.0.2 作夹具）。
+          ALLOW='127\.|0\.0\.0\.0|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|10\.0\.0\.'
+          ADDED=$(git diff "$BASE"...HEAD --unified=0 | grep -E '^\+' | grep -vE '^\+\+\+' || true)
           fail=0
 
-          echo "::group::变更中的 IPv4"
-          if git diff "$BASE"...HEAD | grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | grep -vE "$ALLOW"; then
-            echo "::error::变更内容含真实 IP 地址，请改用保留段（192.0.2.x / 198.51.100.x / 203.0.113.x）或环境变量注入"
+          echo "::group::新增行中的 IPv4"
+          if printf '%s\n' "$ADDED" | grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | grep -vE "$ALLOW"; then
+            echo "::error::新增内容含真实 IP 地址，请改用保留段（192.0.2.x / 198.51.100.x / 203.0.113.x）或环境变量注入"
             fail=1
           else
             echo "无"
           fi
           echo "::endgroup::"
 
-          echo "::group::变更中的凭据特征"
-          if git diff "$BASE"...HEAD | grep -nEi '(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=.-]{12,}'; then
-            echo "::error::变更内容疑似含硬编码凭据"
+          echo "::group::新增行中的凭据特征"
+          if printf '%s\n' "$ADDED" | grep -nEi '(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=.-]{12,}'; then
+            echo "::error::新增内容疑似含硬编码凭据"
             fail=1
           else
             echo "无"
@@ -55,7 +59,8 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::敏感文件"
-          if git diff --name-only "$BASE"...HEAD | grep -iE '\.env$|\.env\.|secret|credential|\.pem$|\.key$|password|id_rsa'; then
+          # --diff-filter=d 排除删除：删掉敏感文件属清理，应当放行；新增/改名才拦。
+          if git diff --name-only --diff-filter=d "$BASE"...HEAD | grep -iE '\.env$|\.env\.|secret|credential|\.pem$|\.key$|password|id_rsa'; then
             echo "::error::变更包含敏感文件"
             fail=1
           else
@@ -71,10 +76,12 @@ jobs:
         run: |
           set -eu
           # 允许的占位用户名与常见 CI/容器路径；其余 /home|/Users/<名>/ 与 C:\Users\ 一律视为泄漏。
+          # 同样只看新增行：删除行不构成新的泄漏。
           ALLOW='(/home/(user|example|runner|app|node|ubuntu)/)|(/Users/(user|example|runner|shared)/)|(/opt/(app|jm|jianmanager)/)|(/tmp/)|(/var/(log|lib|run)/)|(/usr/)|(/etc/)|(C:\\Users\\(user|example|runner)\\)'
+          ADDED=$(git diff "$BASE"...HEAD --unified=0 | grep -E '^\+' | grep -vE '^\+\+\+' || true)
           fail=0
-          echo "::group::变更中的绝对路径"
-          if git diff "$BASE"...HEAD | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\' | grep -vE "$ALLOW"; then
+          echo "::group::新增行中的绝对路径"
+          if printf '%s\n' "$ADDED" | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\' | grep -vE "$ALLOW"; then
             echo "::error::变更含真实绝对路径（泄漏用户名/目录结构），请改用相对路径、临时目录或配置注入"
             fail=1
           else
@@ -88,7 +95,7 @@ jobs:
           BASE: ${{ steps.range.outputs.base }}
         run: |
           set -eu
-          ALLOW='127\.0\.0\.1|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
+          ALLOW='127\.|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
           MSGS=$(git log "$BASE"..HEAD --format='%s%n%b')
           fail=0
 
@@ -109,7 +116,7 @@ jobs:
           EVENT_PATH: ${{ github.event_path }}
         run: |
           set -eu
-          ALLOW='127\.0\.0\.1|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
+          ALLOW='127\.|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
           TITLE=$(jq -r '.pull_request.title // ""' "$EVENT_PATH")
           BODY=$(jq -r '.pull_request.body // ""' "$EVENT_PATH")
           TEXT="$TITLE

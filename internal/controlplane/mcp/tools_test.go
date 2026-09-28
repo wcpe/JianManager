@@ -186,11 +186,11 @@ func TestCallTool_MissingID(t *testing.T) {
 	assert.Contains(t, res.Content[0].Text, "id")
 }
 
-func TestCallTool_SessionClosed(t *testing.T) {
+func TestCallTool_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	p := &service.AgentPrincipal{TokenID: 1, Name: "x"}
 	res := CallTool(ctx, ToolDeps{}, p, "agent_whoami", nil)
 	assert.True(t, res.IsError)
-	assert.Contains(t, res.Content[0].Text, "会话已关闭")
+	assert.Contains(t, res.Content[0].Text, "已取消")
 }

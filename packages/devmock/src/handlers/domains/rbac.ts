@@ -162,7 +162,7 @@ const CATALOG = [
     nodes: [
       { id: 'agent.token.read', label: 'Token 读取' },
       { id: 'agent.token.manage', label: 'Token 管理' },
-      { id: 'agent.mcp.read', label: 'MCP 会话' },
+      { id: 'agent.mcp.read', label: 'MCP 活动' },
       { id: 'agent.calllog.read', label: '调用流水' },
     ],
   },

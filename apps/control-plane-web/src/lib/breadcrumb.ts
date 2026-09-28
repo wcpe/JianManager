@@ -50,7 +50,7 @@ const SEGMENT_DOMAIN: Record<string, string> = {
   settings: 'nav.auditSettings',
   licenses: 'nav.auditSettings',
   'agent-tokens': 'nav.agentAccess',
-  'mcp-sessions': 'nav.agentAccess',
+  'mcp-activity': 'nav.agentAccess',
   'agent-call-logs': 'nav.agentAccess',
   'artifact-versions': 'nav.systemMaintenance',
   database: 'nav.systemMaintenance',
@@ -93,7 +93,7 @@ const SEGMENT_PAGE: Record<string, string> = {
   audit: 'nav.audit',
   licenses: 'licenses.title',
   'agent-tokens': 'nav.agentTokens',
-  'mcp-sessions': 'nav.mcpSessions',
+  'mcp-activity': 'nav.mcpActivity',
   'agent-call-logs': 'nav.agentCallLogs',
 }
 

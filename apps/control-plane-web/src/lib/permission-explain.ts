@@ -56,7 +56,7 @@ export const PERM_EXPLAIN_ZH: Record<string, string> = {
 
   'agent.token.read': '能查看 Agent Token 列表。',
   'agent.token.manage': '能创建/吊销 Agent Token。',
-  'agent.mcp.read': '能查看 MCP 会话。',
+  'agent.mcp.read': '能查看 MCP 活动（按 Token 聚合的调用与失败统计）。',
   'agent.calllog.read': '能查看 Agent 调用流水。',
 
   'network.read': '能查看群组网络与拓扑。',

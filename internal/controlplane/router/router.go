@@ -152,7 +152,8 @@ type Services struct {
 	// AgentTransfer 流式传输票据（FR-397）：MCP 不承载大文件字节，改由票据换取一次性数据面。
 	// nil 时 /api/v1/agent-transfer 关闭（未配置服务端主密钥）。
 	AgentTransfer *service.AgentTransferTicketService
-	// MCP 内嵌 MCP 网关（FR-389，见 ADR-077）；nil 时 /api/v1/mcp 与会话管理关闭。
+	// MCP 内嵌 MCP 网关（FR-389，见 ADR-077；无状态化见 ADR-096）；
+	// nil 时 /api/v1/mcp 与 Token 活动视图关闭。
 	MCP *mcp.Handler
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
 	EnrollInstall EnrollInstallConfig
@@ -653,7 +654,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			NewAgentTokenHandler(svcs.AgentToken, svcs.Audit, svcs.AgentCallLog).RegisterAdminRoutes(permRead("agent.token.read", "agent.token.manage"))
 		}
 		if svcs.MCP != nil {
-			svcs.MCP.RegisterAdminRoutes(permRead("agent.mcp.read", "agent.token.manage"))
+			svcs.MCP.RegisterActivityRoutes(permRead("agent.mcp.read", "agent.token.manage"))
 		}
 		// 数据库资源管理器（FR-084）。
 		if svcs.DBBrowse != nil {

@@ -1,29 +1,27 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** MCP 会话快照（FR-389 管理端）。 */
-export interface McpSessionInfo {
-  sessionId: string
+/**
+ * 某 Agent Token 在统计窗口内的 MCP 活动聚合（FR-391 管理端）。
+ * 端点已去会话化（ADR-096），视图不再有「会话」实体，只能按 Token 聚合。
+ */
+export interface McpActivityItem {
   tokenId: number
   tokenName: string
   tokenPrefix: string
-  clientIP: string
-  transport: string
-  connectedAt: string
   lastActivityAt: string
-  lastTool?: string
-  idleTimeout?: string
-  absoluteTimeout?: string
+  lastAction: string
+  callCount: number
+  failureCount: number
+  clientIPs: string[]
+  /** 客户端标识 → 该窗口内调用次数。 */
+  clients: Record<string, number>
 }
 
-export interface McpSessionsResponse {
-  sessions: McpSessionInfo[]
-  config?: {
-    idleTimeout?: string
-    absoluteTimeout?: string
-    maxGlobalSessions?: number
-    maxSessionsPerToken?: number
-  }
+export interface McpActivityResponse {
+  window: string
+  generatedAt: string
+  items: McpActivityItem[]
 }
 
 /** Agent 调用流水行（FR-390）。 */
@@ -61,28 +59,29 @@ export interface AgentCallLogFilter {
   pageSize?: number
 }
 
-/** 列出 MCP 会话（平台管理员）。 */
-export function useMcpSessions(options?: { enabled?: boolean; refetchInterval?: number }) {
+/**
+ * 按 Token 聚合列出 MCP 活动（平台管理员）。
+ * 轮询间隔默认 10s：活动视图无「连接/断开」事件可订阅，只能靠轮询逼近实时。
+ * @param windowValue Go duration 字符串（`1h`~`168h`），越界由后端回 400。
+ */
+export function useMcpActivity(
+  windowValue: string,
+  options?: { enabled?: boolean; refetchInterval?: number },
+) {
   return useQuery({
-    queryKey: ['mcpSessions'],
+    queryKey: ['mcpActivity', windowValue],
     queryFn: async () => {
-      const { data } = await api.get<McpSessionsResponse>('/agent/mcp/sessions')
+      const { data } = await api.get<McpActivityResponse>('/agent/mcp/activity', {
+        params: { window: windowValue },
+      })
       return {
-        sessions: data?.sessions ?? [],
-        config: data?.config,
-      }
+        window: data?.window ?? windowValue,
+        generatedAt: data?.generatedAt ?? '',
+        items: data?.items ?? [],
+      } satisfies McpActivityResponse
     },
     enabled: options?.enabled ?? true,
     refetchInterval: options?.refetchInterval ?? 10_000,
-  })
-}
-
-/** 踢线 MCP 会话。 */
-export function useKickMcpSession() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (sessionId: string) => api.delete(`/agent/mcp/sessions/${encodeURIComponent(sessionId)}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['mcpSessions'] }),
   })
 }
 

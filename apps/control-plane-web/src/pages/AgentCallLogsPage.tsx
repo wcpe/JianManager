@@ -75,7 +75,7 @@ export default function AgentCallLogsPage() {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" asChild>
-            <Link to="/mcp-sessions">{t('agentCallLogs.openSessions')}</Link>
+            <Link to="/mcp-activity">{t('agentCallLogs.openSessions')}</Link>
           </Button>
           <Button variant="outline" size="sm" asChild>
             <Link to="/agent-tokens">{t('agentCallLogs.openTokens')}</Link>
