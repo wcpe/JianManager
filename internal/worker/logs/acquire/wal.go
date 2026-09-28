@@ -5,12 +5,79 @@ package acquire
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
+
+// WALRef 是 WAL 条目的**引用形式**：只保存身份与位置，正文以 canonical 事件段存储
+// （events/，FR-484 的权威副本）为准（B1a）。
+//
+// 为什么需要：WALEntry 内联 logtypes.Event（含正文），而整份 WAL 会随 ingest.state.json
+// 持久化——单源积压曾因此把状态文件撑到 1.2 GB（2026-09-28 生产事故）。
+//
+// 关键约束（第一次实现曾在此出错并被既有测试抓到）：段存储里**未必**有 WAL 的全部事件——
+// 事件体是在投递路径（writeProjection → appendEvents）才写入段存储，故尚未投递的条目
+// 只能内联保存。判据必须**按条**给出（见 SnapshotSplit 的 covered 谓词），不得按源一刀切。
+type WALRef struct {
+	Seq         uint64 `json:"seq"`
+	Appended    bool   `json:"appended"`
+	Durable     bool   `json:"durable"`
+	EventID     string `json:"event_id"`
+	RecordStart uint64 `json:"record_start"`
+	RecordEnd   uint64 `json:"record_end"`
+}
+
+// SnapshotSplit 按 covered 谓词把 WAL 快照切分为两部分（B1a）：
+//   - refs：covered(ev) 为 true——该事件体已 durable 在段存储中，持久化只需引用；
+//   - inline：其余条目——正文尚未入库（未投递）或存储不可用，必须内联保存，绝不能丢。
+//
+// covered 传 nil 时全部内联（等价于旧的 Snapshot）。
+func (w *WAL) SnapshotSplit(covered func(logtypes.Event) bool) (refs []WALRef, inline []WALEntry) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, e := range w.entries {
+		if covered != nil && covered(e.Event) {
+			refs = append(refs, WALRef{
+				Seq: e.Seq, Appended: e.Appended, Durable: e.Durable,
+				EventID: e.Event.EventID, RecordStart: e.Event.Record.Start, RecordEnd: e.Event.Record.End,
+			})
+			continue
+		}
+		inline = append(inline, e)
+	}
+	return refs, inline
+}
+
+// RestoreMixed 恢复内存 WAL：inline 为内联正文条目，refs 为引用条目（正文经 hydrate 取回）。
+//
+// 合并后按 Seq 升序排列，保持投递顺序。取不到正文的引用**不得静默丢弃**：以 missing 原样
+// 返回，由调用方记可见缺口并告警（与 FR-474 §5#1「截断可见」同口径）。
+func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventID string) (logtypes.Event, bool)) []WALRef {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	entries := append([]WALEntry(nil), inline...)
+	var missing []WALRef
+	for _, r := range refs {
+		ev, ok := hydrate(r.EventID)
+		if !ok {
+			missing = append(missing, r)
+			continue
+		}
+		entries = append(entries, WALEntry{Seq: r.Seq, Event: ev, Appended: r.Appended, Durable: r.Durable})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Seq < entries[j].Seq })
+	w.entries = entries
+	for _, entry := range entries {
+		if entry.Durable && entry.Event.Record.End > w.lastDurableEnd {
+			w.lastDurableEnd = entry.Event.Record.End
+		}
+	}
+	return missing
+}
 
 // WAL 积压上限（B1b，由 2026-09-28 生产事故驱动）。
 //
