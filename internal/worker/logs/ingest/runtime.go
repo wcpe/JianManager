@@ -1397,7 +1397,10 @@ func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup
 		" AND source_generation:=" + strconv.Quote(sourceGeneration)
 	params := url.Values{
 		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
-		"limit": {strconv.Itoa(len(events) + 1)},
+		// 不设 limit：VL 按时间返回窗口内的记录，而分片是按**索引**切的，其时间跨度可能很宽
+		// （2026-09-28 生产：500 条事件跨约 10 小时），窗口内除本片外还会有其他分片的记录。
+		// 原先 `limit = len(events)+1` 会截断返回，导致本片记录凑不齐 → 误判「不可见」→
+		// 运行时创建失败 → 采集静默停摆（多轮盲改后才由参数日志定位）。
 		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
 		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
 	}
@@ -1496,7 +1499,10 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 		" AND source_generation:=" + strconv.Quote(sourceGeneration)
 	params := url.Values{
 		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
-		"limit": {strconv.Itoa(len(events) + 1)},
+		// 不设 limit：VL 按时间返回窗口内的记录，而分片是按**索引**切的，其时间跨度可能很宽
+		// （2026-09-28 生产：500 条事件跨约 10 小时），窗口内除本片外还会有其他分片的记录。
+		// 原先 `limit = len(events)+1` 会截断返回，导致本片记录凑不齐 → 误判「不可见」→
+		// 运行时创建失败 → 采集静默停摆（多轮盲改后才由参数日志定位）。
 		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
 		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
 	}
