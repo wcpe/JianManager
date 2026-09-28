@@ -62,7 +62,7 @@ V2 支持以下固定能力标识；签发时出现未知标识返回 `400 BAD_R
    - 既有只读 action 与显式实例/节点 scope 行为保持不变；
    - 不启用节点 scope 继承实例；
    - 不获得 FR-395 后新增到任何 V2 能力组的 action。
-5. Token 不提供在线编辑能力；能力或 scope 调整继续通过吊销并重新签发完成，因此既有 MCP 会话中的 principal 快照不会出现策略热更新漂移。
+5. Token 不提供在线编辑能力；能力或 scope 调整继续通过吊销并重新签发完成。策略热更新一致性不再需要「快照不漂移」的论证——MCP 端点已无状态化（FR-489 / ADR-096），每个请求都重新解析 principal，故不存在快照窗口：Token 吊销、scope 或能力下调在**下一个请求**即生效。
 
 管理 API、Token 列表、HTTP `whoami` 与 MCP `agent_whoami` 新增返回：
 
@@ -138,7 +138,7 @@ MCP 保留协议层 `ToolSpec` 目录：工具名称、描述、JSON Schema、�
 - V2：记录 action 目录中对应能力，例如 `instance.life`。
 - V1 写操作：记录 `legacy.instance.life` 或 `legacy.node.maintenance`。
 - V1 只读：记录 `legacy.read`。
-- 会话建立/关闭等无业务能力事件留空。
+- 无业务能力对应的事件留空（原会话建立/关闭类事件已随 MCP 无状态化移除，FR-489 / ADR-096）。
 
 既有 `action`、`targetType`、`targetId`、成功/失败、错误与耗时保持不变。历史记录 capability 为空属于合法兼容状态。
 
