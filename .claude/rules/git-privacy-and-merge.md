@@ -43,13 +43,17 @@ CI 由 `pr-hygiene` 的「绝对路径」检查强制（`/home|/Users/<非占位
 ## 3. 合并前的隐私自检（必做）
 
 ```sh
-# 1) 变更内容
-git diff origin/master...HEAD | grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' \
-  | grep -vE '127\.0\.0\.1|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
+# 1) 新增行中的真实 IP
+#    只看新增行（`^+`）：删除行是在移除内容，不构成新的泄漏——否则任何删除含 IP 行的 PR 都会被误拦。
+#    `127\.` 覆盖整个回环网段（本仓既有测试普遍用 127.0.0.2 作夹具）。
+git diff origin/master...HEAD --unified=0 | grep '^+' | grep -v '^+++' \
+  | grep -nE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' \
+  | grep -vE '127\.|0\.0\.0\.0|255\.255\.255\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|10\.0\.0\.'
 # 2) 提交信息
-git log origin/master..HEAD --format='%s%n%b' | grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}'
-# 3) 敏感文件
-git diff --name-only origin/master...HEAD | grep -iE '\.env|secret|credential|\.pem|\.key|password'
+git log origin/master..HEAD --format='%s%n%b' | grep -nE '([0-9]{1,3}\.){3}[0-9]{1,3}' \
+  | grep -vE '127\.|0\.0\.0\.0|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.'
+# 3) 敏感文件（--diff-filter=d 排除删除：删掉敏感文件属清理，应当放行）
+git diff --name-only --diff-filter=d origin/master...HEAD | grep -iE '\.env|secret|credential|\.pem|\.key|password'
 ```
 
 三处都必须无输出。CI 侧另有 `pr-hygiene` 工作流自动执行同等检查（见 `.github/workflows/pr-hygiene.yml`）。
