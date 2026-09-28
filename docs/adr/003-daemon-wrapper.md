@@ -27,3 +27,7 @@
   - Worker 重启恢复：`Manager.RecoverDaemonInstances` 扫描 PID 文件，存活则 `Reconnect` socket，恢复管理，否则清理。
   - 优雅退出：daemon 模式 `Manager.StopAll` 只断开与 wrapper 连接，不杀游戏服（区别于 direct 模式终止进程））。
   - 进程管理策略：`IProcessCommand` 接口（`internal/worker/process/command.go`）按 `ProcessType` 路由 direct/daemon/docker（docker/rcon 返回 `ErrNotImplemented`）。
+
+- **实现细化（2026-09-28，wrapper 停止语义）**: **停止请求在 Java 启动窗口内到达时不得先收摊退出**。`startJava` 已发起（`javaStarting=true`）而 `javaCmd` 尚未登记的窗口内，`stopJava` 若按「无 Java 在跑＝空闲」处理直接 `signalClose`，`run()` 会在 `startJava` 返回后立即退出，而 `startJava` 刚拉起的 Java 无人托管——真机表现为 wrapper 已退出、Java 仍在跑并占着实例工作目录与端口，Worker 侧却显示已停止（与 ADR-093 的孤儿治理同一危害面，属 wrapper 内部路径）。
+  - 现约定：该窗口内的 stop/kill 暂存为 `stopDeferred`（`stopDeferredForce` 按「或」累积，保证 stop 之后再收 kill 仍是强杀语义），由 `startJava` 在 `javaCmd`/`javaStdin` 登记完成后经 `applyDeferredStop` 补发；补发点置于 `go w.javaWait(cmd)` 之前，使 `state=StateStopping` 先落位，避免 `javaWait` 把「刚拉起即被停止」误判为崩溃而触发自动重启。
+  - 该窗口实测可达且不窄：真机日志中「收到 stop」到「`Java 已启动`」相隔 7s（02:15:02 → 02:15:09，期间 `cmd.Start()` 尚未返回），即满载机器上窗口可达数秒。回归 `TestWrapper_StopDuringJavaStartDoesNotOrphanJava`（旧实现下「启动窗口内 stop 即 `isClosed()`」首条断言直接转红）。

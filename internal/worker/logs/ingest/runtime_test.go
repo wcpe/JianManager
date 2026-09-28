@@ -37,7 +37,7 @@ func TestIdlePollDoesNotRewriteDurableHistory(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")
 	require.NoError(t, os.WriteFile(path, nil, 0o600))
-	m, err := New(Options{Root: root, Catalog: catalog.New(nil), Sources: []SourceConfig{{LogSourceID: "idle", SourceGeneration: "g1", Path: path}}})
+	m, err := newTestManager(t, Options{Root: root, Catalog: catalog.New(nil), Sources: []SourceConfig{{LogSourceID: "idle", SourceGeneration: "g1", Path: path}}})
 	require.NoError(t, err)
 	require.NoError(t, m.persist())
 	stamp := time.Unix(1700000000, 0)
@@ -167,6 +167,21 @@ func TestManagerPartitionsProjectionByCanonicalEventUTCDay(t *testing.T) {
 	require.Equal(t, uint64(20), closed)
 }
 
+// newTestManager 与 New 同签名，额外登记测试清理：关闭事件段写入句柄。
+//
+// 为什么必须（Windows 真机验收暴露）：Manager 会持有 seg-*.ndjson 的追加句柄直到
+// Stop() 被调用；而 t.TempDir() 的清理在 Windows 上无法删除仍被打开的文件
+// （unlinkat: being used by another process），于是"忘记 Stop"的用例只在 Windows 转红。
+// Linux 允许 unlink 打开中的文件，长期掩盖了该测试卫生问题。
+func newTestManager(t *testing.T, opts Options) (*Manager, error) {
+	t.Helper()
+	m, err := New(opts)
+	if err == nil {
+		t.Cleanup(func() { _ = m.Stop() })
+	}
+	return m, err
+}
+
 func newProjectionVL(t *testing.T) (*vlsup.Client, *projectionVLFixture) {
 	t.Helper()
 	fixture := &projectionVLFixture{}
@@ -204,7 +219,7 @@ func TestManagerPollPublishesCatalogAndRestoresState(t *testing.T) {
 	logPath := filepath.Join(root, "latest.log")
 	require.NoError(t, os.WriteFile(logPath, []byte("[12:00:01] [Server thread/INFO]: hello\n[12:00:02] [Server thread/INFO]: next\n"), 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
-	m, err := New(Options{
+	m, err := newTestManager(t, Options{
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(),
 		Sources: []SourceConfig{{
 			LogSourceID: "node:1", SourceGeneration: "g1", Path: logPath,
@@ -235,7 +250,7 @@ func TestManagerPollPublishesCatalogAndRestoresState(t *testing.T) {
 
 	// 新 Manager 从状态文件恢复同一 source，在新 projection generation 中重建事件。
 	cat2 := catalog.New(cat.Journal())
-	m2, err := New(Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(), Sources: []SourceConfig{{
+	m2, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(), Sources: []SourceConfig{{
 		LogSourceID: "node:1", SourceGeneration: "g1", Path: logPath,
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay(),
 	}}})
@@ -255,7 +270,7 @@ func TestManagerAckLossDefersReclaimUntilProjectionReplay(t *testing.T) {
 	source := SourceConfig{LogSourceID: "ack:1", SourceGeneration: "g1", Path: logPath, Mode: pipeline.ModeFilePrimary, StorageNamespace: "ack:1", UTCDay: runtimeTestUTCDay()}
 	t.Setenv("JIANMANAGER_LOG_INJECT_ACK_LOSS", "1")
 	cat := catalog.New(catalog.NewMemJournal())
-	m, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source}})
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source}})
 	require.NoError(t, err)
 	m.pollOnce()
 	entry := m.pipes["ack:1/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "ack:1", SourceGeneration: "g1"})
@@ -264,7 +279,7 @@ func TestManagerAckLossDefersReclaimUntilProjectionReplay(t *testing.T) {
 
 	os.Unsetenv("JIANMANAGER_LOG_INJECT_ACK_LOSS")
 	cat2 := catalog.New(cat.Journal())
-	m2, err := New(Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(), Sources: []SourceConfig{source}})
+	m2, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(), Sources: []SourceConfig{source}})
 	require.NoError(t, err)
 	entry2 := m2.pipes["ack:1/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "ack:1", SourceGeneration: "g1"})
 	require.Equal(t, logtypes.DeliveryReplayRequired, entry2.DeliveryState)
@@ -301,7 +316,7 @@ func TestMicroGenerationLostResponseIsExcludedAndRestartCompacts(t *testing.T) {
 	cat := catalog.New(journal)
 	source := SourceConfig{LogSourceID: "node:lost", SourceGeneration: "g1", Path: path,
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:lost", UTCDay: time.Now().UTC().Format("2006-01-02")}
-	manager, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: journal, Sources: []SourceConfig{source}})
+	manager, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: journal, Sources: []SourceConfig{source}})
 	require.NoError(t, err)
 	manager.pollOnce()
 	key := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
@@ -333,7 +348,7 @@ func TestMicroGenerationLostResponseIsExcludedAndRestartCompacts(t *testing.T) {
 	require.Contains(t, lastPayload, "uncertain", "must recover prior durable events before advancing their closed prefix")
 
 	recoveredCatalog := catalog.New(journal)
-	recovered, err := New(Options{Root: root, VL: client, Catalog: recoveredCatalog, Journal: journal, Sources: []SourceConfig{source}})
+	recovered, err := newTestManager(t, Options{Root: root, VL: client, Catalog: recoveredCatalog, Journal: journal, Sources: []SourceConfig{source}})
 	require.NoError(t, err)
 	require.Equal(t, "projection-4", recovered.state.Sources[source.LogSourceID+"/"+source.SourceGeneration].ProjectionGeneration)
 	rec, ok := recoveredCatalog.Get(key)
@@ -349,7 +364,7 @@ func TestManagerDoesNotExposeProjectionWhenJournalAppendFails(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o600))
 	journal := appendFailJournal{catalog.NewMemJournal()}
 	cat := catalog.New(journal)
-	m, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: journal, Sources: []SourceConfig{{
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: journal, Sources: []SourceConfig{{
 		LogSourceID: "node:1", SourceGeneration: "g1", Path: path, Mode: pipeline.ModeFilePrimary,
 		StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay(),
 	}}})
@@ -362,7 +377,7 @@ func TestManagerDoesNotExposeProjectionWhenJournalAppendFails(t *testing.T) {
 
 	recoveredJournal := catalog.NewMemJournal()
 	recoveredCatalog := catalog.New(recoveredJournal)
-	recovered, err := New(Options{Root: root, VL: client, Catalog: recoveredCatalog, Journal: recoveredJournal, Sources: []SourceConfig{{
+	recovered, err := newTestManager(t, Options{Root: root, VL: client, Catalog: recoveredCatalog, Journal: recoveredJournal, Sources: []SourceConfig{{
 		LogSourceID: "node:1", SourceGeneration: "g1", Path: path, Mode: pipeline.ModeFilePrimary,
 		StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay(),
 	}}})
@@ -391,7 +406,7 @@ func TestOwnerChangeDuringVerificationCannotPublishToNewOwner(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "source.log")
 	require.NoError(t, os.WriteFile(path, []byte("[12:00:01] [Server thread/INFO]: race\n[12:00:02] [Server thread/INFO]: boundary\n"), 0o600))
-	m, err := New(Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{LogSourceID: "node:race", SourceGeneration: "g1", StorageNamespace: "node:race", Path: path}}})
+	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{LogSourceID: "node:race", SourceGeneration: "g1", StorageNamespace: "node:race", Path: path}}})
 	require.NoError(t, err)
 	m.pollOnce()
 	rec, _ := cat.Get(key)
@@ -433,7 +448,7 @@ func TestManagerPersistsDurableWALBeforeInsertRequest(t *testing.T) {
 	path := filepath.Join(root, "latest.log")
 	require.NoError(t, os.WriteFile(path, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o600))
 	cat := catalog.New(catalog.NewMemJournal())
-	m, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
 		LogSourceID: "node:1", SourceGeneration: "g1", Path: path, Mode: pipeline.ModeFilePrimary,
 		StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay(),
 	}}})
@@ -454,7 +469,7 @@ func TestManagerDoesNotPublishWhenProjectionRowsAreNotVisible(t *testing.T) {
 	path := filepath.Join(root, "latest.log")
 	require.NoError(t, os.WriteFile(path, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o600))
 	cat := catalog.New(catalog.NewMemJournal())
-	m, err := New(Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal(), VerificationTimeout: 50 * time.Millisecond,
+	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal(), VerificationTimeout: 50 * time.Millisecond,
 		Sources: []SourceConfig{{LogSourceID: "node:1", SourceGeneration: "g1", Path: path,
 			Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()}}})
 	require.NoError(t, err)
@@ -472,7 +487,7 @@ func TestManagerNewBatchPublishesIsolatedView(t *testing.T) {
 	source := SourceConfig{LogSourceID: "node:1", SourceGeneration: "g1", Path: path,
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()}
 	cat := catalog.New(catalog.NewMemJournal())
-	m, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source}})
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source}})
 	require.NoError(t, err)
 	m.pollOnce()
 	partition := catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()}
@@ -545,7 +560,7 @@ func TestManagerCapacityPausePersistsGapBeforeVLDelivery(t *testing.T) {
 	path := filepath.Join(root, "latest.log")
 	require.NoError(t, os.WriteFile(path, []byte("[12:00:01] [Server thread/INFO]: disk full\n[12:00:02] [Server thread/INFO]: boundary\n"), 0o600))
 	cat := catalog.New(catalog.NewMemJournal())
-	m, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(),
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(),
 		CapacityProvider: func() (acquire.CapacityBudget, error) {
 			budget := acquire.DefaultCapacityBudget()
 			budget.DiskUsagePercent = 95
@@ -580,7 +595,7 @@ func TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears(t *t
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:hold", UTCDay: "2026-09-23"}
 	journal := catalog.NewMemJournal()
 	cat := catalog.New(journal)
-	held, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: journal, Sources: []SourceConfig{source},
+	held, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: journal, Sources: []SourceConfig{source},
 		RecoveryHold: func(SourceConfig, string) (bool, string) { return true, "active query lease" }})
 	require.NoError(t, err)
 	held.pollOnce()
@@ -594,7 +609,7 @@ func TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears(t *t
 	require.Equal(t, "projection:projection-1", entry.RecoveryRefs[0].ResponsibilityReceiver)
 
 	var resumedGeneration string
-	recovered, err := New(Options{Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+	recovered, err := newTestManager(t, Options{Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
 		Sources: []SourceConfig{source}, RecoveryHold: func(_ SourceConfig, generation string) (bool, string) {
 			resumedGeneration = generation
 			return false, ""
@@ -641,7 +656,7 @@ func TestManagerRoutesStableColdOwnerAndKeepsFrozenStagingUnpublished(t *testing
 			} else {
 				require.NoError(t, cat.Put(catalog.NewStableRecord(key, catalog.OwnerCold, 2, "cold-g2")))
 			}
-			manager, err := New(Options{Root: root, VL: hot, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
+			manager, err := newTestManager(t, Options{Root: root, VL: hot, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
 				LogSourceID: "node:routed", SourceGeneration: "g1", Path: path, Mode: pipeline.ModeFilePrimary,
 				StorageNamespace: key.StorageNamespace, UTCDay: key.UTCDay,
 			}}, VLRoute: func(source SourceConfig) (*vlsup.Client, bool, error) {
@@ -675,7 +690,7 @@ func TestPrepareCutoverFlushesPendingEventBeforeReportingReady(t *testing.T) {
 	payload := []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: pending\n")
 	require.NoError(t, os.WriteFile(path, payload, 0o600))
 	cat := catalog.New(catalog.NewMemJournal())
-	manager, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
+	manager, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
 		LogSourceID: "node:cutover", SourceGeneration: "g1", Path: path, Mode: pipeline.ModeFilePrimary,
 		StorageNamespace: "node:cutover", UTCDay: "2026-09-23",
 	}}})
@@ -705,7 +720,7 @@ func TestManagerAutoImportsHistoricalGzipBeforeCurrentFile(t *testing.T) {
 		"[10:00:02] [Server thread/INFO]: current one\n"+
 			"[10:00:03] [Server thread/INFO]: current boundary\n"), 0o600))
 	cat := catalog.New(catalog.NewMemJournal())
-	m, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
 		LogSourceID: "inst:archive/file", SourceGeneration: "holder-g1", Path: livePath,
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:archive", UTCDay: runtimeTestUTCDay(),
 	}}})
@@ -733,7 +748,7 @@ func TestManagerAutoImportsHistoricalGzipBeforeCurrentFile(t *testing.T) {
 	require.Len(t, durableEvents(t, m, "inst:archive/file/holder-g1"), before+1,
 		"graceful stop closes the one pending live event")
 	restartedCatalog := catalog.New(cat.Journal())
-	restarted, err := New(Options{Root: root, VL: client, Catalog: restartedCatalog, Journal: restartedCatalog.Journal()})
+	restarted, err := newTestManager(t, Options{Root: root, VL: client, Catalog: restartedCatalog, Journal: restartedCatalog.Journal()})
 	require.NoError(t, err)
 	restarted.pollOnce()
 	require.Len(t, durableEvents(t, restarted, "inst:archive/file/holder-g1"), before+1,
@@ -754,7 +769,7 @@ func TestManagerRotationImportsOnlyUnreadTailBeforeReplacementFile(t *testing.T)
 	pending := "[11:00:01] [Server thread/INFO]: closed by rotation\n"
 	require.NoError(t, os.WriteFile(livePath, []byte(first+pending), 0o600))
 	cat := catalog.New(catalog.NewMemJournal())
-	m, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
 		LogSourceID: "inst:rotate/file", SourceGeneration: "holder-g1", Path: livePath,
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:rotate", UTCDay: runtimeTestUTCDay(),
 	}}})
@@ -792,13 +807,13 @@ func TestManagerRepeatedPollKeepsStoredEventSetStable(t *testing.T) {
 			"[12:00:02] [Server thread/INFO]: second\n"+
 			"[12:00:03] [Server thread/INFO]: boundary\n"), 0o600))
 	cat := catalog.New(catalog.NewMemJournal())
-	m, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
 		LogSourceID: "node:idem", SourceGeneration: "g1", Path: path, Mode: pipeline.ModeFilePrimary,
 		StorageNamespace: "node:idem", UTCDay: runtimeTestUTCDay(),
 	}}})
 	require.NoError(t, err)
 	m.pollOnce()
-	settled, err := New(Options{Root: root, VL: client, Catalog: catalog.New(cat.Journal()), Journal: cat.Journal()})
+	settled, err := newTestManager(t, Options{Root: root, VL: client, Catalog: catalog.New(cat.Journal()), Journal: cat.Journal()})
 	require.NoError(t, err)
 	baseline := durableEvents(t, settled, "node:idem/g1")
 	require.NotEmpty(t, baseline)
@@ -829,7 +844,7 @@ func TestManagerQuarantinesUnchangedCorruptGzipWithoutRepeatingGap(t *testing.T)
 		"[12:00:00] [Server thread/INFO]: live\n"+
 			"[12:00:01] [Server thread/INFO]: boundary\n"), 0o600))
 	cat := catalog.New(catalog.NewMemJournal())
-	m, err := New(Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
 		LogSourceID: "inst:bad/file", SourceGeneration: "holder-g1", Path: livePath,
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:bad", UTCDay: runtimeTestUTCDay(),
 	}}})

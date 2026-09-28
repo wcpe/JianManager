@@ -30,7 +30,7 @@ func TestDaemonStrategy_SendCommandRecoversFromLostControlConnection(t *testing.
 	uuid := "daemon-sendcmd-recover-" + filepath.Base(pidDir)
 	cfg := daemon.WrapperConfig{
 		InstanceUUID: uuid,
-		StartCommand: keepAliveCmd(),
+		StartCommand: stdinConsumingCmd(),
 		WorkDir:      pidDir,
 		AutoRestart:  false,
 		PIDDir:       pidDir,
@@ -87,6 +87,13 @@ func TestDaemonStrategy_SendCommandRecoversFromLostControlConnection(t *testing.
 // wrapper 只保留最新连接，若并发拨号不被串行化，后拨者会踢掉先拨者刚登记的连接，
 // 造成命令丢失或反复重连。本用例要求并发下发全部成功，且在 -race 下无数据竞争
 // （sendFrame 读 d.conn 与 reconnectAndSend/readLoop 写 d.conn 必须遵循同一加锁纪律）。
+//
+// 夹具必须用 stdinConsumingCmd（消费 stdin 的替身）而非 keepAliveCmd（ping/sleep）：
+// 本用例并发写入 16×8=128 条 1KiB 命令，替身若不读 stdin，第 4 条即塞满 stdin 管道缓冲
+// （约 4KiB），此后写入阻塞至替身寿命结束（ping -n 30 场景 ≈28.9s），退出瞬间缓冲丢失，
+// 与测试收尾竞态——Windows 真机复验中该夹具假象稳定复现（128 条写入耗时 28.9s / 589µs
+// 两组对照，见 .tmp/acceptance/r2_stdin_probe.log）。真实服务端常驻读 stdin，more/cat 与
+// 其消费语义一致。
 func TestDaemonStrategy_ConcurrentSendCommandAfterConnectionLoss(t *testing.T) {
 	t.Setenv("JIANMANAGER_GRACEFUL_STOP_TIMEOUT", "1s")
 	t.Setenv("JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT", "1s")
@@ -95,7 +102,7 @@ func TestDaemonStrategy_ConcurrentSendCommandAfterConnectionLoss(t *testing.T) {
 	uuid := "daemon-concurrent-send-" + filepath.Base(pidDir)
 	cfg := daemon.WrapperConfig{
 		InstanceUUID: uuid,
-		StartCommand: keepAliveCmd(),
+		StartCommand: stdinConsumingCmd(),
 		WorkDir:      pidDir,
 		AutoRestart:  false,
 		PIDDir:       pidDir,

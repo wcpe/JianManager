@@ -2,7 +2,9 @@ package ingest
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -15,7 +17,7 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	vl, _ := newProjectionVL(t)
 	root := t.TempDir()
 	cat := catalog.New(nil)
-	m, err := New(Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
+	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
 	require.NoError(t, err)
 	require.NoError(t, m.RegisterInstance("uuid-1", "inst:1", "holder-g1", "STDIO_PRIMARY", t.TempDir()))
 	require.NoError(t, m.AppendInstanceOutput("uuid-1", "stdout", []byte("stdout raw\n")))
@@ -28,7 +30,7 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	rec, ok := cat.Get(catalog.PartitionKey{StorageNamespace: "inst:1", UTCDay: runtimeTestUTCDay()})
 	require.True(t, ok)
 	require.Len(t, rec.PublishedProjection.SourceProjections, 2)
-	restarted, err := New(Options{Root: root, VL: vl, Catalog: catalog.New(cat.Journal()), Journal: cat.Journal()})
+	restarted, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(cat.Journal()), Journal: cat.Journal()})
 	require.NoError(t, err)
 	require.Len(t, restarted.pipes, 2, "sources restore without CP or config replay")
 	require.NoError(t, restarted.AppendInstanceOutput("uuid-1", "stdout", []byte("after restart\n")))
@@ -47,7 +49,7 @@ func TestInstanceFilePrimaryDoesNotDoubleCollectConsoleOutput(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(work, "logs"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(work, "logs", "latest.log"), []byte("file canonical\n"), 0o600))
 	cat := catalog.New(nil)
-	m, err := New(Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
+	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
 	require.NoError(t, err)
 	require.NoError(t, m.RegisterInstance("uuid-1", "inst:1", "holder-g1", "FILE_PRIMARY", work))
 	require.Equal(t, []string{"unbound"}, m.MissingInstanceBindings([]string{"uuid-1", "unbound"}))
@@ -63,7 +65,7 @@ func TestInstanceFilePrimaryDoesNotDoubleCollectConsoleOutput(t *testing.T) {
 func TestInstanceOutputSpoolsBeforeBindingAndFlushesInOrder(t *testing.T) {
 	vl, _ := newProjectionVL(t)
 	root, work := t.TempDir(), t.TempDir()
-	m, err := New(Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
+	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
 	require.NoError(t, err)
 
 	err = m.AppendInstanceOutput("uuid-spool", "stdout", []byte("before-1\n"))
@@ -92,12 +94,12 @@ func TestInstanceOutputSpoolsBeforeBindingAndFlushesInOrder(t *testing.T) {
 func TestInstanceOutputPendingSpoolSurvivesRestart(t *testing.T) {
 	vl, _ := newProjectionVL(t)
 	root, work := t.TempDir(), t.TempDir()
-	first, err := New(Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
+	first, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
 	require.NoError(t, err)
 	require.ErrorIs(t, first.AppendInstanceOutput("uuid-restart", "stdout", []byte("survives restart\n")), ErrInstanceBindingPending)
 	require.NoError(t, first.Stop())
 
-	restarted, err := New(Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
+	restarted, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
 	require.NoError(t, err)
 	require.NoError(t, restarted.RegisterInstance("uuid-restart", "inst:restart", "holder-g1", "STDIO_PRIMARY", work))
 	binding := restarted.state.Instances["uuid-restart"]
@@ -109,7 +111,7 @@ func TestInstanceOutputPendingSpoolSurvivesRestart(t *testing.T) {
 func TestInstanceOutputPendingFlushFailureKeepsGapAndPause(t *testing.T) {
 	vl, _ := newProjectionVL(t)
 	root, work := t.TempDir(), t.TempDir()
-	m, err := New(Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
+	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
 	require.NoError(t, err)
 	require.ErrorIs(t, m.AppendInstanceOutput("uuid-fail", "stdout", []byte("must-not-disappear\n")), ErrInstanceBindingPending)
 	binding := InstanceBinding{UUID: "uuid-fail", Generation: "holder-g1"}
@@ -132,7 +134,7 @@ func TestInstanceOutputPendingFlushFailureKeepsGapAndPause(t *testing.T) {
 func TestInstanceOutputBindingRacePreservesAllBytes(t *testing.T) {
 	vl, _ := newProjectionVL(t)
 	root, work := t.TempDir(), t.TempDir()
-	m, err := New(Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
+	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
 	require.NoError(t, err)
 	const count = 32
 	chunk := []byte("concurrent-output\n")
@@ -173,7 +175,7 @@ func TestPendingSpoolEnforcesCapacityLimits(t *testing.T) {
 		if budget != nil {
 			opts.CapacityProvider = func() (acquire.CapacityBudget, error) { return *budget, nil }
 		}
-		m, err := New(opts)
+		m, err := newTestManager(t, opts)
 		require.NoError(t, err)
 		return m
 	}
@@ -221,6 +223,26 @@ func TestPendingSpoolEnforcesCapacityLimits(t *testing.T) {
 	})
 }
 
+// createDirLink 创建一个指向 target 的目录链接（链接级）。
+//
+// 为什么不用单纯的 os.Symlink：Windows 上创建符号链接需要 SeCreateSymbolicLinkPrivilege
+// （普通账户报 "A required privilege is not held by the client"），而目录 junction
+// （mklink /J）无需任何特权且同样是「打开动作会跟随的重解析点」——对被验判据完全等价。
+// 故先试符号链接（Unix 与已开启开发者模式的 Windows），失败则回退 junction；两者都不可用时
+// 才跳过（环境无法构造该场景，不伪造成通过）。
+func createDirLink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err == nil {
+		return
+	} else if runtime.GOOS != "windows" {
+		t.Fatalf("创建符号链接失败: %v", err)
+	}
+	out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
+	if err != nil {
+		t.Skipf("环境无法创建符号链接与 junction（普通账户且未开启开发者模式）: %v, output=%s", err, out)
+	}
+}
+
 // M-7 回归：拒绝符号链接工作目录，但不误伤合法路径。
 //
 // 缺陷形态：RegisterInstance 只对 workDir 做 filepath.Clean，既不校验符号链接也不
@@ -232,7 +254,7 @@ func TestPendingSpoolEnforcesCapacityLimits(t *testing.T) {
 func TestRegisterInstanceRejectsSymlinkedWorkDir(t *testing.T) {
 	vl, _ := newProjectionVL(t)
 	cat := catalog.New(nil)
-	m, err := New(Options{Root: t.TempDir(), VL: vl, Catalog: cat, Journal: cat.Journal()})
+	m, err := newTestManager(t, Options{Root: t.TempDir(), VL: vl, Catalog: cat, Journal: cat.Journal()})
 	require.NoError(t, err)
 
 	base := t.TempDir()
@@ -241,7 +263,7 @@ func TestRegisterInstanceRejectsSymlinkedWorkDir(t *testing.T) {
 
 	t.Run("symlinked_workdir_rejected", func(t *testing.T) {
 		link := filepath.Join(base, "linked-instance")
-		require.NoError(t, os.Symlink(real, link))
+		createDirLink(t, real, link)
 		err := m.RegisterInstance("uuid-link", "inst:1", "g1", "FILE_PRIMARY", link)
 		require.Error(t, err, "指向别处的工作目录不得用于采集")
 		require.Contains(t, err.Error(), "symlinked log work dir")

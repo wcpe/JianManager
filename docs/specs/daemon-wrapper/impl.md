@@ -56,4 +56,5 @@
 - [x] 二进制帧协议通信（Unix Socket / Named Pipe）
 - [x] 平台重启后恢复守护进程连接（PID 文件 + reconnect）
 - [x] 崩溃自动重启 + PID 文件恢复
+- [x] **启动窗口内的 stop/kill 不得留孤儿 Java**（2026-09-28 Windows 真机全量测试发现并修复）：`startJava` 已发起、`javaCmd` 尚未登记的窗口内，旧实现把停止当「空闲」直接 `signalClose` 收摊退出，`startJava` 随后拉起的 Java 无人托管——真机表现为 wrapper 已退出、Java 仍在跑并占住实例工作目录，Worker 侧却显示已停止（同批用例的 `t.TempDir` 清理亦因此撞上该进程的 CWD 句柄）。现暂存为 `stopDeferred`（force 位取或）、由 `startJava` 在 `javaCmd` 登记后补发停止，补发先于 `javaWait` 启动以保证 `state=StateStopping` 先落位。回归 `TestWrapper_StopDuringJavaStartDoesNotOrphanJava`；`internal/worker/daemon` 包真机全绿（8.328s）。详见 ADR-003 实现细化（2026-09-28）。
 - [ ] 真机验证「Worker 退出后游戏服存活」由主控执行（本批提供代码路径 + 单元测试）

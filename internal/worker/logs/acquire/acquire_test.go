@@ -701,14 +701,12 @@ func TestWALKeepsUnreclaimedEntries(t *testing.T) {
 // TestArchiveUnreadableRecordsGap 锁定 FR-474 §5#1「权限可见」：不可读归档必须记缺口并标记失败，
 // 且不拖死后续源（不得静默跳过）。
 func TestArchiveUnreadableRecordsGap(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("以 root 运行时权限位不生效，跳过权限路径")
-	}
 	dir := t.TempDir()
 	unreadable := filepath.Join(dir, "locked.gz")
 	writeGzip(t, unreadable, []string{"secret"})
-	require.NoError(t, os.Chmod(unreadable, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o600) })
+	// 「不可读」按平台等价构造：Unix 清权限位、Windows 独占句柄（见 makeUnreadable）。
+	// 还原先于 t.TempDir 清理执行（t.Cleanup 后进先出），否则目录删不掉。
+	t.Cleanup(makeUnreadable(t, unreadable))
 
 	key := testKey("src-perm", "g1")
 	led := ledger.New()

@@ -33,7 +33,7 @@
 | FR-481 | ✅ 可签 | cutover+Legacy+DualPath 地基、HTTP 管理面已注册（默认关闭）、单测覆盖；**跨切换查询由 `/logs/legacy` + `/logs/federation` 两条真实路径承担**，其中 `/logs/federation` **已真机验收通过**（`coverage.complete=true`、返回真实事件、契约复合排序；见 `acceptance-record.md` §6） | 无。`DualPath` 的 federated 侧保持 `UnimplementedFederatedQuerier` 是**有意设计**（PRD 已记「由 `/logs/federation` 承担，保留 API 不加投机接线」），确认无生产调用方，非欠账 |
 | FR-482 | ✅ 可签 | **真浏览器验收通过**（真实联邦列表/Stats·Facets 一致、失败态引导；修了 Stats `agg.count` 读法缺陷）；失败态 DOM 矩阵 19 项。**本轮修复真实缺陷**：联邦非 404 失败（401/代理 5xx/无响应）时未降级 → `federationActive` 误判为 true → 以空联邦数据为准，**列表永久空白**而经典 `/logs` 数据已就绪（生产影响：Worker 隧道不可达时用户见空白页而非降级数据）。现 404/401/403/5xx/无响应一律降级，400/422/429 等业务错误不降级（保留真实错误语义）；真实浏览器复验 logs-virtual=true / data-total-count=12004 / 渲染 24 行，并补 `federation-availability.test.ts` 固化四类判定。**逐项点击实测又修一处回归**：联邦路径成为默认数据源后未解析 `level`，用户在日志中心点「错误」筛选**无任何反应**（经典路径本支持该参数，属切数据源时漏接）；已改为在 CP 侧把 level 组合进 filter 表达式（wire 契约只有单一 filter 字段，不改冻结契约），level 走白名单防注入，并修正了与含 OR 关键词组合时的布尔优先级。真机实测：error→3 条、info→11、warn→2，合计 16=全量；注入尝试 4 例全拒。**生产部署复核（2026-09-25 21:00）**：修复已随生产 CP 替换上线并**经产物与数据双重验证**——提交 19:00 < 替换 20:35 < 进程启动 20:36；生产二进制含 `router.federationFilter` 符号；生产 VL 实测 `level:ERROR`=565、`level:WARN`=122528、`level:INFO`=231704，三者合计 354797 = `*` 全量，**完全吻合**，证明 `level:` 表达式在真机 VL v1.52.0 上语义正确。生产栈稳定性：CP/Worker 单次启动无重启（启动 1 次/停止 0 次），VL 内存 349 MiB（较早前 387 MiB 下降，无泄漏迹象），采集持续 ~459 条/秒，DB `integrity_check`=ok（59 用户/153 实例，与替换前备份一致）。**回滚预案已验证可用**：DB 备份 2.0G 自检 `ok`、CP 二进制 57M 与配置齐备（生产 CP 目录下 `{data/jianmanager.db,bin/jianmanager-cp,control-plane.yml}.bak-20260925-203245`，另 Worker 配置 `worker.yml.bak-20260925-204556`），升级路径为 GORM `AutoMigrate`（`database.go:133-135`）天然幂等；11 个受管游戏实例 PID 与替换前基线逐一一致，未受影响。**`source` 缺口已按用户裁决修复（2026-09-25，方案 B 前缀推导）**：原记为「事件结构无类别，信息在采集侧即丢失」**不准确，据生产 VL 实证更正**——`log_source_id` 形如 `inst:<实例ID>/<流>`（生产 10 个源全为 `inst:` 前缀，如 `inst:147/file`；构造点 `ingest/instances.go:64`），类别与 ID 均在，故**无需改已冻结的 wire 契约**即可由前缀推导。真实缺口为两处：① 联邦路由**完全未读取 `source` 查询参数**（`log_federation.go` 原无该参数处理），故下拉选择无任何效果；② 前端下拉取值域为 `instance/control_plane/worker`（`LogsPage.tsx`），与事件实际取值 `inst:<id>/file` 不同构，致 `t(\`logs.source_${log.source}\`)` 查不到 i18n 键而回退显示原始 ID。**已实施**：CP 侧新增 `federationSourcePrefix` 把类别映射为 `log_source_id` 前缀并组合进 filter 表达式（`inst:`/`node:`/`control_plane:`），取值走白名单防注入——`control_plane` 类只落 CP 库、不进联邦数据面，显式给不可能存在的前缀使其诚实返回零结果，而非当作无约束放行全量；前端新增 `normalizeSource` 把原始标识归一为取值域，来源列改显示 i18n 标签（实例/节点/平台）。**实证**：VL 的字段匹配即前缀语义，实测 `log_source_id:"inst:"` 与 `"node:"` 在生产 VL 上分别命中 354797 / 0 条（生产仅实例类源），故无需通配符。**验证**：Go 新增 3 组测试（含 10 子用例）、前端新增 2 个 DOM 用例；两处修复均做**变异验证**（禁用 source 组合、移除 keyword 括号、归一函数直通，三种变异均被测试捕获）；CP 将下发的表达式经生产 VL 实测语义正确。**真浏览器端到端复验**（隔离演示栈，重建含修复的前后端后）：来源列显示可读标签（实例/节点/平台）**不再出现原始 `inst:`/`node:` ID**；选「实例」下发 `source=instance`、选「节点」下发 `source=worker`（各 3 次请求实测）；行数与数据一致——演示栈 VL 仅有 `node:1`/`node:self` 两类源，故选「实例」返回 0 行、选「节点」返回 16 行，**证明筛选真实生效而非无约束放行** | — |
 | FR-483 | ✅ 可签 | 受控文档已补：本规格包内 `recovery-manual.md`、`acceptance-record.md`，以及相邻规格包 `worker-victorialogs-runtime/asset-inventory.md`（资产清单按 VL 运行时归属，故不在本包内）；已对账 ARCHITECTURE/API/CHANGELOG/PRD/规格状态 | 文档类 FR |
-| FR-484 | ✅ 可签 | **真机验收通过**（node-main + 真 VL v1.52.0）：64/128/150 源稳态 22.5/22.3/20.0MiB、峰值 56.0/62.0/61.8MiB；**342 源逐一核对 1 026 000 条事件零丢失零重复**；五个门禁回归 + 四条累积结构回归（均含变异验证）；受控证据 `worker-log-canonical-eventstore/acceptance-real.md` | — |
+| FR-484 | ✅ 可签 | **真机验收通过**（host-1 + 真 VL v1.52.0）：64/128/150 源稳态 22.5/22.3/20.0MiB、峰值 56.0/62.0/61.8MiB；**342 源逐一核对 1 026 000 条事件零丢失零重复**；五个门禁回归 + 四条累积结构回归（均含变异验证）；受控证据 `worker-log-canonical-eventstore/acceptance-real.md` | — |
 
 ## 汇总
 
@@ -326,3 +326,40 @@
 **回归（5 条，逐条变异验证）**：`normalize/crlf_test.go`（CRLF 与 LF 正文/canonical 一致、多行归并一致、混行尾）与 `pipeline/crlf_line_ending_test.go`（**record 位置字节精确**：CRLF 第 2 事件起点比 LF 多 1 字节、末事件覆盖到文件尾；追加一行后新事件起点等于追加前文件长度、游标不错位）。变异验证：撤销修复后 **5 条全红**，恢复后转绿。全仓 `go test ./internal/... ./apps/...` 与 `go build`/`go vet` 干净。
 
 **边界（如实记录）**：本修复只覆盖**行终止符语义**这一项可在 Linux 覆盖的 Windows 面。Windows 真机行为（文件锁与改名语义、路径分隔符、服务与编码环境）**仍未验证**，故 FR-475 保持「开发中」，PRD 状态不变。
+
+
+## Windows 真机全量测试：19 例归因与 7 项修复（2026-09-28）
+
+**动机**：Windows 真机行为是 FR-475/FR-474 等项的最后开口。本轮在 Windows 11 本机跑**全仓 Go 测试**与 FR-475 验收 runner，逐例归因 19 个失败，并复查真机暴露的产品缺陷。
+
+**测试口径（与 Linux CI 的差异必须先讲清）**：分两组跑——`internal/controlplane/router` 单独 `go test -timeout 25m`（该包真机 480–520s，逼近 `go test` 默认 10m 上限；与其它重包并行时实测 600s 超时 panic），其余包按 `go test` 默认时限；工作区为 CRLF 检出（`core.autocrlf=true`）。
+
+**19 例归因（全部消除，均为测试侧/环境侧，不改产品契约）**：
+
+| 归因 | 例数 | 修法 |
+| --- | --- | --- |
+| 采集测试句柄未释放：`Manager` 未 `Stop()`，`seg-*.ndjson` 句柄长持 → Windows 无法删目录/文件 | 10（`logs/ingest`） | 新增 `newTestManager`（`t.Cleanup` 内 `Stop`），替换 35 处裸构造（`instances_test.go` 10 + `runtime_test.go` 25） |
+| Windows 无 POSIX 权限位：`os.Chmod(0o000)` 后文件仍可读，「不可读归档」构造失效 | 1（`logs/acquire`） | 平台等价构造 `makeUnreadable`（Unix 权限位 / Windows 独占句柄 `dwShareMode=0`），并以探针给出两种构造的真实语义（占住后 `os.Open` 失败；`chmod 000` 后仍可读） |
+| POSIX 绝对路径样本：`/opt/…`、`/etc/…` 在 Windows 无盘符 → `filepath.IsAbs=false`，用例撞在「必须是绝对路径」而非放行根判定 | 6（`controlplane/service`、`controlplane/router`） | 新增 `absTestPath` 平台样本（Windows `C:\…`），断言口径不变 |
+| 契约样本 CRLF：仓库 blob 为 LF、autocrlf 检出为 CRLF → 后端字节比较判为漂移 | 1（`capability_profile_contract_test`） | 仓库级声明 `.gitattributes: contracts/*.json text eol=lf` + 工作区重检出为 LF（字节复核：blob 0 CR/120 LF；工作区现状 0 CR/120 LF） |
+
+**真机新发现的产品缺陷（3 项，均已修复并带回归）**：
+
+1. **截断 gzip 静默丢尾（FR-474 §5#1「截断可见」契约未落地）**：`archive.go` 主循环在「零字节 + 非 EOF 错误」分支直接 `break`，缺口只在「读到字节且带错误」时记录——已读出行之后的截断尾部凭空消失且不可见。现补 `ARCHIVE_READ_ERROR` 缺口，已读完整行仍计入；回归 `TestArchiveTruncatedGzipRecordsGap`。
+2. **M-7 守卫在 Windows 漏判 junction**：`EvalSymlinks` 不解析目录联接（`os.Lstat` 报 `ModeIrregular`），指向受管根之外的 junction 工作目录可绕过符号链接判据，故 Linux CI 全绿不代表 Windows 有效。现补 `firstReparseLink` 逐级分量判据；回归 `TestRegisterInstanceRejectsSymlinkedWorkDir` 四子用例全绿。详见 `code-review-findings.md` M-7 补强条目。
+3. **stop/kill 落在 Java 启动窗口内 → 孤儿 Java（FR-006 wrapper）**：`stopJava` 在 `javaStarting` 窗口见 `javaCmd==nil` 即 `signalClose` 收摊，`startJava` 随后拉起的 Java 无人托管。真机日志时间线可证：`收到 stop` 02:15:02 → `Java 已启动 javaPid=41008` 02:15:09 → wrapper 退出，而该 Java 从未被终止；其 CWD 句柄占住实例工作目录（探针：子进程存活时目录删不掉，`taskkill /T /F` 返回后 865µs 释放；失败现场遗留目录只剩空的 `001/`）。现暂存停止请求（force 位取或）并在 `javaCmd` 登记后补发、补发点先于 `javaWait`；回归 `TestWrapper_StopDuringJavaStartDoesNotOrphanJava`。详见 ADR-003 实现细化（2026-09-28）。
+
+**复验（最终代码）**：
+
+| 组 | 命令口径 | 结果 |
+| --- | --- | --- |
+| core 组（除 router 外全部包） | `go test -count=1 <68 包去掉 router>` | 63 ok + 5 无测试文件，**0 FAIL**，exit 0 |
+| router 单独 | `go test -count=1 -timeout 25m ./internal/controlplane/router/` | `ok 519.245s`，exit 0 |
+| FR-475 runner（真 VL 127.0.0.1:19471） | `ACCEPT_LINE_ENDING=crlf go run ./scripts/acceptance-normalizer/` | **6/6 通过**，exit 0（损坏编码 hash 仍为 `c311b30a6bf7fc77…`） |
+| 同上（LF 对照） | `go run ./scripts/acceptance-normalizer/` | **5/5 通过**，exit 0 |
+
+原始输出（均不入库）：`.tmp/acceptance/r6_core_all.log`、`r6_router_solo.log`、`r6_step3_{crlf,lf}.log`、`r5_cwddir_probe2.log`、`r5_lock_probe.log`。
+
+**保留风险（如实记录，未随手改）**：`internal/controlplane/router` 真机 480–520s，接近 `go test` 默认 10m 上限，与其它重包并行时实测超时（`panic: test timed out after 10m0s`）。仓库已有 `scripts/go-test-race.sh` 对该包单独放宽（race 60m）；非 race 侧同理需要分组时限（本轮已补 `scripts/go-test.sh`）。
+
+**受影响受控文档**：`CHANGELOG.md`（[Unreleased] 修复段）、`docs/specs/worker-log-acquisition/spec.md`（FR-474 截断语义与回归项）、`docs/specs/daemon-wrapper/impl.md`（FR-006 验收行）、`docs/specs/worker-log-platform-contract/code-review-findings.md`（M-7 Windows 补强）、`docs/adr/003-daemon-wrapper.md`（实现细化 2026-09-28）。
