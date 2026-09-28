@@ -287,10 +287,10 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 	if args == nil {
 		args = map[string]any{}
 	}
-	// 会话已踢线时 ctx 取消
+	// 调用方已断开（请求 ctx 取消）时不再执行工具
 	select {
 	case <-ctx.Done():
-		return toolErr("MCP 会话已关闭")
+		return toolErr("MCP 调用已取消")
 	default:
 	}
 

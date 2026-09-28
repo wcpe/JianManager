@@ -263,21 +263,15 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 	if tickets, err := service.NewAgentTransferTicketService(transferSecret, svcs.AgentToken, nil); err == nil {
 		svcs.AgentTransfer = tickets
 	}
-	// CP 内嵌 MCP（FR-389）：测试挂载会话管理器（小并发便于超限用例）。
+	// CP 内嵌 MCP（FR-389，无状态化见 ADR-096）：只需 SSE 传输连接登记。
 	agentTok := svcs.AgentToken
 	logSvc := svcs.Log
-	sess := mcp.NewSessionManager(mcp.Config{
-		IdleTimeout:         time.Hour,
-		AbsoluteTimeout:     24 * time.Hour,
-		MaxGlobalSessions:   32,
-		MaxSessionsPerToken: 4,
-	})
-	svcs.MCP = mcp.NewHandler(sess, agentTok, mcp.ToolDeps{
+	svcs.MCP = mcp.NewHandler(mcp.NewSSEConnRegistry(), agentTok, mcp.ToolDeps{
 		Instance: instanceSvc,
 		Node:     nodeSvc,
 		Log:      logSvc,
 		Agent:    agentTok,
-	}, svcs.Audit, svcs.AgentCallLog)
+	}, svcs.AgentCallLog)
 	return Setup(svcs, jwtCfg.Secret)
 }
 

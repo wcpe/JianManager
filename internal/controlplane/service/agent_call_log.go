@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -206,6 +207,170 @@ func (s *AgentCallLogService) Count24hMap(tokenIDs []uint) (map[uint]int64, erro
 	for _, r := range rows {
 		out[r.TokenID] = r.Cnt
 	}
+	return out, nil
+}
+
+// TokenActivity 是某 Agent Token 在窗口内的 MCP 活动聚合（ADR-096 决策 6）。
+type TokenActivity struct {
+	TokenID        uint
+	TokenName      string
+	TokenPrefix    string
+	LastActivityAt time.Time
+	LastAction     string
+	CallCount      int64
+	FailureCount   int64
+	ClientIPs      []string
+	Clients        map[string]int64
+}
+
+// ActivityByToken 按 Token 聚合窗口内的调用流水，按最近活动倒序。
+//
+// 全部使用跨 SQLite/MySQL 通用 SQL，无方言分支、不依赖 GROUP_CONCAT 或窗口函数：
+//   - 计数与失败数走 `COUNT(*)` + `SUM(CASE WHEN success = 0 ...)` + `GROUP BY token_id`
+//     （与 client_dist_security.go 的聚合同范式），命中 idx_agent_call_token_created；
+//   - 「每个 Token 最近一行」用「子查询取 MAX(created_at) 再自联接回该行」的写法
+//     （与 metric.go 的 latest 自联接同范式）——**不**把 MAX(created_at) 扫进 time.Time：
+//     SQLite 驱动对 datetime 列返回 string，裸扫描会报 unsupported Scan
+//     （同类修复见 quota_metric_source.go）；
+//   - 来源分布与去重 IP 由 `GROUP BY token_id, client, ip` 的结果在 Go 侧合并，避免方言相关函数。
+//
+// TokenName 优先取 agent_tokens 当前值（流水里的 name 是签发时快照），TokenPrefix 只存在于该表。
+func (s *AgentCallLogService) ActivityByToken(window time.Duration) ([]TokenActivity, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("agent call log service 未初始化")
+	}
+	if window <= 0 {
+		return nil, fmt.Errorf("活动窗口必须为正: %s", window)
+	}
+	since := time.Now().Add(-window)
+
+	type aggRow struct {
+		TokenID   uint  `gorm:"column:token_id"`
+		Cnt       int64 `gorm:"column:cnt"`
+		FailCount int64 `gorm:"column:fail_cnt"`
+	}
+	var aggs []aggRow
+	// success 为布尔列（SQLite/MySQL 均落 0/1），故失败判定用字面量 0。
+	err := s.db.Model(&model.AgentCallLog{}).
+		Select("token_id, COUNT(*) AS cnt, COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0) AS fail_cnt").
+		Where("created_at >= ?", since).
+		Group("token_id").
+		Scan(&aggs).Error
+	if err != nil {
+		return nil, fmt.Errorf("按 Token 聚合 agent 调用流水失败: %w", err)
+	}
+	out := make([]TokenActivity, 0, len(aggs))
+	if len(aggs) == 0 {
+		return out, nil
+	}
+
+	latestQuery := s.db.Model(&model.AgentCallLog{}).
+		Select("token_id, MAX(created_at) AS created_at").
+		Where("created_at >= ?", since).
+		Group("token_id")
+	var latest []model.AgentCallLog
+	err = s.db.Table("agent_call_logs AS l").
+		Select("l.*").
+		Joins("JOIN (?) AS latest ON l.token_id = latest.token_id AND l.created_at = latest.created_at", latestQuery).
+		Order("l.created_at DESC, l.id DESC").
+		Scan(&latest).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询各 Token 最近活动失败: %w", err)
+	}
+
+	type distRow struct {
+		TokenID uint   `gorm:"column:token_id"`
+		Client  string `gorm:"column:client"`
+		IP      string `gorm:"column:ip"`
+		Cnt     int64  `gorm:"column:cnt"`
+	}
+	var dists []distRow
+	err = s.db.Model(&model.AgentCallLog{}).
+		Select("token_id, client, ip, COUNT(*) AS cnt").
+		Where("created_at >= ?", since).
+		Group("token_id, client, ip").
+		Scan(&dists).Error
+	if err != nil {
+		return nil, fmt.Errorf("聚合 agent 调用来源失败: %w", err)
+	}
+
+	byToken := make(map[uint]*TokenActivity, len(aggs))
+	for _, a := range aggs {
+		byToken[a.TokenID] = &TokenActivity{
+			TokenID:      a.TokenID,
+			CallCount:    a.Cnt,
+			FailureCount: a.FailCount,
+			Clients:      map[string]int64{},
+		}
+	}
+	for _, row := range latest {
+		it, ok := byToken[row.TokenID]
+		if !ok {
+			continue
+		}
+		// 自联接按 MAX(created_at) 命中：同一 Token 可能有多行时间戳相同，而排序是
+		// created_at DESC + id DESC——**首次**命中的才是最新那行。故只写一次，
+		// 避免被同刻的旧行（更小 id）覆盖成较旧的 action。
+		if it.LastAction != "" {
+			continue
+		}
+		it.LastActivityAt = row.CreatedAt
+		it.LastAction = row.Action
+		// 兜底：Token 行已被硬删时，仍能显示签发时的名称快照。
+		it.TokenName = row.TokenName
+	}
+	seenIP := make(map[uint]map[string]struct{}, len(aggs))
+	for _, d := range dists {
+		it, ok := byToken[d.TokenID]
+		if !ok {
+			continue
+		}
+		it.Clients[d.Client] += d.Cnt
+		if d.IP == "" {
+			continue
+		}
+		set := seenIP[d.TokenID]
+		if set == nil {
+			set = map[string]struct{}{}
+			seenIP[d.TokenID] = set
+		}
+		if _, dup := set[d.IP]; dup {
+			continue
+		}
+		set[d.IP] = struct{}{}
+		it.ClientIPs = append(it.ClientIPs, d.IP)
+	}
+
+	ids := make([]uint, 0, len(byToken))
+	for id := range byToken {
+		ids = append(ids, id)
+	}
+	var tokens []model.AgentToken
+	err = s.db.Model(&model.AgentToken{}).
+		Select("id, name, token_prefix").
+		Where("id IN ?", ids).
+		Find(&tokens).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询 agent token 失败: %w", err)
+	}
+	for _, tok := range tokens {
+		if it, ok := byToken[tok.ID]; ok {
+			it.TokenName = tok.Name
+			it.TokenPrefix = tok.TokenPrefix
+		}
+	}
+
+	for _, it := range byToken {
+		sort.Strings(it.ClientIPs)
+		out = append(out, *it)
+	}
+	// 最近活动倒序；同一时刻以 TokenID 降序兜底，保证输出稳定（前端与测试可断言）。
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].LastActivityAt.Equal(out[j].LastActivityAt) {
+			return out[i].TokenID > out[j].TokenID
+		}
+		return out[i].LastActivityAt.After(out[j].LastActivityAt)
+	})
 	return out, nil
 }
 

@@ -62,8 +62,6 @@ type Config struct {
 	ClientDist  ClientDistConfig  `mapstructure:"client_dist"`
 	Enroll      EnrollConfig      `mapstructure:"enroll"`
 	Update      UpdateConfig      `mapstructure:"update"`
-	// MCP 内嵌 MCP 网关会话限制（FR-389，见 ADR-077）。
-	MCP MCPConfig `mapstructure:"mcp"`
 	// Proxy CP 出站代理配置（FR-174，见 ADR-037）：自更新 feed/二进制、服务端 jar 等
 	// 出站下载经此代理。url 留空=直连（沿用环境变量代理）。与各 Worker 各自独立配置。
 	Proxy httpclient.Config `mapstructure:"proxy"`
@@ -104,19 +102,6 @@ type BeaconConfig struct {
 	// PullEnabled 是否允许从 Beacon 拉取拓扑（FR-444）。默认 false。
 	// 注意：即便为 true，拉取也**只由手动触发**（ADR-090：不自动建树）。
 	PullEnabled bool `mapstructure:"pull-enabled"`
-}
-
-// MCPConfig 内嵌 MCP 会话与并发（FR-389）。
-type MCPConfig struct {
-	// IdleTimeout 空闲超时（默认 30m）。
-	IdleTimeout time.Duration `mapstructure:"idle_timeout"`
-	// AbsoluteTimeout 绝对超时（默认 24h）。
-	AbsoluteTimeout time.Duration `mapstructure:"absolute_timeout"`
-	// MaxGlobalSessions 全局并发会话上限；0（默认）= 不限制。
-	// 会话生命周期由空闲/绝对超时兜底，并发上限仅在需要限流时显式设正值。
-	MaxGlobalSessions int `mapstructure:"max_global_sessions"`
-	// MaxSessionsPerToken 每 Token 并发上限；0（默认）= 不限制。
-	MaxSessionsPerToken int `mapstructure:"max_sessions_per_token"`
 }
 
 // UpdateConfig 面板自更新（CP/Worker 二进制在线升级）配置（FR-081，GitHub 源见 FR-175/ADR-036 §7）。
@@ -334,13 +319,6 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("update.feed_url", "")
 	v.SetDefault("update.binary_base_url", "")
 	v.SetDefault("update.allow_insecure", false)
-	// 内嵌 MCP 网关（FR-389）：空闲 30m、绝对 24h、并发不限制（0）。
-	// 并发不限制是刻意的：会话由超时兜底，而上限在「客户端重连不关旧会话」时会被耗尽，
-	// 导致连 initialize 都建不了新会话（只能靠重启控制面清空内存会话恢复）。
-	v.SetDefault("mcp.idle_timeout", "30m")
-	v.SetDefault("mcp.absolute_timeout", "24h")
-	v.SetDefault("mcp.max_global_sessions", 0)
-	v.SetDefault("mcp.max_sessions_per_token", 0)
 	// 出站代理（FR-174，见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
 	v.SetDefault("proxy.url", "")
 	v.SetDefault("proxy.no_proxy", "")
