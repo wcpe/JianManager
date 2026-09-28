@@ -156,7 +156,7 @@ func TestCachedCheck_RefreshesStaleLocalVersion(t *testing.T) {
 		},
 		Nodes: []ComponentStatus{
 			{
-				NodeID: 1, Name: "node-main", Online: true,
+				NodeID: 1, Name: "host-1", Online: true,
 				CurrentVersion: "0.17.0-dev", OS: "linux", Arch: "amd64",
 				UpdateAvailable: true, ArtifactAvailable: true,
 			},

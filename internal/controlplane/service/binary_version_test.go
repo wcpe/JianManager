@@ -141,7 +141,7 @@ func TestRebuildBinaryInstance_ExplicitSourceWins(t *testing.T) {
 	// 直接调重建内核：显式指定 node_file 来源（绕过放行根 → 走校验失败即可证明「以请求为准」）。
 	_, err := svc.rebuildBinaryInstance(context.Background(), inst, ProvisionServerRequest{
 		NodeID: node.ID, Name: inst.Name, CoreType: "binary",
-		BinarySource: &BinarySource{Kind: BinarySourceNodeFile, NodePath: "/etc/passwd", Filename: "b"},
+		BinarySource: &BinarySource{Kind: BinarySourceNodeFile, NodePath: absTestPath("etc", "passwd"), Filename: "b"},
 	}, 1, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "受控放行目录之外", "显式来源应覆盖绑定并被校验")

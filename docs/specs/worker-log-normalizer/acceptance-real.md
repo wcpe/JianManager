@@ -1,7 +1,7 @@
 # FR-475 真机验收记录：Multiline 采集与损坏编码完整性（受控）
 
 日期：2026-09-24
-主机：node-main（生产主机，IP 已脱敏）
+主机：host-1（生产主机，IP 与主机名已脱敏）
 受管 VL：**真 VictoriaLogs v1.52.0**（`build_id=20260716-022147-tags-v1.52.0-0-g46a54c976f`），独立数据目录，`127.0.0.1:19471`
 脚本：`.tmp/fr435-acceptance/main.go`（不入库；环境与判据见下，可重建）
 
@@ -69,6 +69,7 @@ VL 回读字段：`_msg="[00:00:03] [Server thread/WARN]: corrupted � bytes"`�
 
 ## 5. 未覆盖项
 
-- **Windows 平台**未测（本机 linux-amd64）。
+- **Windows 平台**未测（本机 linux-amd64）。其中**行终止符（CRLF）语义**已用字节级夹具在 Linux 覆盖（CRLF 与 LF 产出相同 `message`/`canonical`、多行归并一致、record 位置仍字节精确），但文件锁与改名、路径分隔符等平台语义仍须真机验证。
+  - 复验入口（已入库，跨平台）：`ACCEPT_LINE_ENDING=crlf go run ./scripts/acceptance-normalizer/`——以真 VL 核对四类边界，并对 CRLF 额外断言事件正文不含 `0x0D`；省略该环境变量即 LF 模式（对照）。任一项失败退出码为 1。
 - 本轮用真 VL + 真实文件采集，但**未经 `vlsup.Supervisor`** 管理 VL 进程（supervisor 行为由 Runbook C 覆盖）。
 - 损坏编码的**多行事件内部**（跨行含非法字节）未单独构造用例；本轮覆盖的是单行情形。

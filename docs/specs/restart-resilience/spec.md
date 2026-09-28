@@ -45,6 +45,7 @@
 ### 2.3 状态真源收敛（FR-455③）
 
 - 新增 Worker RPC `ProbeInstanceEvidence`（`proto/` + `internal/worker/grpc/server.go`），对一批实例返回进程侧证据：wrapper/Java PID 是否存活、daemon socket 是否可达、docker 容器是否在跑。
+- **探活必须无副作用**（2026-09-27 真机事故后收紧）：wrapper 的 Accept 循环「接受新连接即关闭旧 `workerConn`」，故对该 socket 的**任何一次性拨号都会替换 Worker 的控制长连接**；连接丢失后 `SendCommand` 不再自愈即表现为 console 命令永久 `broken pipe`（生产曾 12/12 实例中招）。因此：①仅在**缺乏进程存活证据、且本 Worker 尚未持有该实例控制长连接**时才拨号探活，否则 `SocketReachable` 保持 false（进程存活足以判定「仍在运行」，不因此降级）；②控制通道自身可自愈——下发命令时连接缺失/写入失败即重连 wrapper 后重发一次；断开时按身份收回 `d.conn`（否则 `controlConnected` 长期误判持有状态、反而抑制①的兜底探活），重连需串行化（wrapper 只保留最新连接，并发重连会互相替换致命令丢失），且 `d.conn` 的读写与既有控制方法遵循同一加锁纪律；**帧写入必须整体互斥**（`Frame.Encode` 分多次 Write，共享控制连接上的并发写入会交错成坏帧，wrapper 解码失败即关闭连接——命令方看到「写入成功」而通道已失效）。采集与下发都不得改变对方的连接状态。
 - `syncInstanceStates`（`internal/controlplane/grpc/handler.go`）改逻辑：当某实例 DB 为 RUNNING/STARTING/STOPPING 但心跳清单未上报时，**不再直接翻 STOPPED**；先向该 Worker 拉进程侧证据，**证据也认为已不在跑**（PID 无、socket 不可达）才落 STOPPED；证据显示仍在跑则保持当前态并标 `statusReason`（消除通道抖动误判）。
 - 为防对账长时间卡在非终态，证据拉取失败/超时设宽限（连续 N 拍不一致才落 STOPPED）。
 
@@ -115,7 +116,7 @@
 | `maxScannedProcesses` | `8192` | `orphan_scan.go` | 单轮 direct 扫描进程枚举上限（超限降级告警） |
 | `maxScannedContainers` | `2048` | `orphan_scan.go` | 单轮 docker 残留扫描容器枚举上限 |
 | `maxScanRoundDuration` | `30s` | `orphan_scan.go` | 单轮扫描耗时告警阈值 |
-| `evidenceSocketProbeTimeout` | `500ms` | `evidence.go` | 单次 daemon socket 探活超时 |
+| `evidenceSocketProbeTimeout` | `500ms` | `evidence.go` | 单次 daemon socket 探活超时（仅在无进程证据且未持有控制长连接时才发起） |
 | `evidenceReconcileGraceBeats` | `3` | `evidence.go` | 证据不可得时的连续宽限拍数 |
 | `evidenceProbeTimeout` | `8s` | `evidence.go` | CP→Worker 证据拉取超时（现经派发器异步，不再阻塞心跳） |
 | `ResyncDeduper` cooldown | `60s` | `apps/control-plane/main.go`（`NewResyncDeduper`） | 重推按节点冷却窗口 |

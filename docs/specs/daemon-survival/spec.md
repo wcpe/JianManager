@@ -46,7 +46,7 @@ wrapper 进程（`worker daemon` 子命令）启动即 `signal.Ignore(syscall.SI
 - **FR-310**：删除**运行中** daemon 实例仍走 `ReapDaemonForDelete` 强杀 wrapper+java 两棵进程树再清目录（删除 = 用户显式要求终止，与「重启存活」正交）。
 - **StopAll 语义**：daemon 实例走「`strategy.Close()` 断开、不杀游戏服」；direct/docker 实例仍真停。本次不改。
 
-## 4. 验收标准（真机，FR-277 主机 node-2）
+## 4. 验收标准（真机，FR-277 主机 host-2）
 
 - [ ] AC1：provision+start 一个 daemon 实例到 `RUNNING`，记录 java PID → `systemctl restart jianmanager-worker` → java PID **不变**（进程存活）。
 - [ ] AC2：重启后 Worker 日志出现「已连接 wrapper socket」（takeover reconnect），实例状态经 CP 查询回 `RUNNING`；终端可交互、可停止。

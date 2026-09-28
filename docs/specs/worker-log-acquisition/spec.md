@@ -54,7 +54,7 @@ FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转
 - FileTailer、STDIO_PRIMARY、ArchiveImporter 共享同一 `(log_source_id, source_generation)` 账本；`latest.log → 轮转 → .gz` 是同一逻辑源的连续分段，`.gz` 接管前必须登记前段结束位置，禁止按压缩包 hash 重新导入整段。
 - `source=worker` 的 Worker/Node 自身日志也进入同一采集面；采集失败不能递归写回自身 VL 失败日志。
 - FILE_PRIMARY 常驻循环自动发现同目录 `.gz`（可用 `archive_glob` 收窄），以文件名 UTC 日锚定归一化时间。账本持久保存当前 live 分段的逻辑基址与稳定前缀摘要：同路径替换必须先关闭旧分段 EOF，再由 ArchiveImporter 跳过已经 durable 的物理前缀、补齐未读尾部，最后才给新 `latest.log` 分配后续位置。历史 gzip、live 文件、WAL 和投影继续使用同一 source generation；压缩包 hash 只作 provenance。
-- gzip 只有在事件已由 durable WAL 覆盖后才标记 `imported`。损坏或不可读对象登记可见缺口及观测 size/mtime，未变化前保持隔离、不在每轮轮询重复制造缺口；对象变化后才允许受控重试。自动回归：`TestManagerAutoImportsHistoricalGzipBeforeCurrentFile`、`TestManagerRotationImportsOnlyUnreadTailBeforeReplacementFile`、`TestManagerQuarantinesUnchangedCorruptGzipWithoutRepeatingGap`。
+- gzip 只有在事件已由 durable WAL 覆盖后才标记 `imported`。损坏或不可读对象登记可见缺口及观测 size/mtime，未变化前保持隔离、不在每轮轮询重复制造缺口；对象变化后才允许受控重试。**截断对象**（已读出行之后，下一次读取以零字节 + `unexpected EOF` 收尾）同样必须留 `ARCHIVE_READ_ERROR` 缺口，已读出的完整行仍计入——不得以静默 `break` 丢尾（2026-09-28 Windows 真机全量测试发现旧实现只在「读到字节且带错误」时记缺口，零字节错误分支直接跳出，尾部凭空消失且不可见）。自动回归：`TestManagerAutoImportsHistoricalGzipBeforeCurrentFile`、`TestManagerRotationImportsOnlyUnreadTailBeforeReplacementFile`、`TestManagerQuarantinesUnchangedCorruptGzipWithoutRepeatingGap`、`TestArchiveTruncatedGzipRecordsGap`。
 - HTTP 2xx 只写入 `REQUEST_DONE`，不能推进 `reclaim_position`；响应丢失进入 `UNKNOWN`，按 event_id/位置核验或从受管恢复分段重放。
 - Multiline 缓冲未形成完整事件时只能推进 `read_position`，不得推进 durable checkpoint；崩溃后从首行位置恢复拼接。
 - WAL、隔离队列或受管恢复分段达到预算时暂停低优先级采集，返回缺口、暂停原因和恢复动作；不得用丢弃计数伪装完整。
@@ -67,5 +67,5 @@ FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转
 |---|---|
 | latest.log 轮转后 ArchiveImporter 介入 | 同一逻辑源不重复计数，账本连续 |
 | VL 写入成功但 ACK 丢失 | UNKNOWN/核验/重放可审计，未确认数据仍有恢复来源 |
-| 损坏 gz、编码错误、权限不足 | 隔离记录、缺口可见、后续源不被拖死 |
+| 损坏 gz（含中途截断）、编码错误、权限不足 | 隔离记录、缺口可见、后续源不被拖死 |
 | WAL/临时盘满 | 暂停或降级，实例管理继续可用，恢复后可继续推进 |

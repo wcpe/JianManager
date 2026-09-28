@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -112,6 +114,19 @@ func TestFR441BinaryRequiresTaskService(t *testing.T) {
 	require.Contains(t, parseJSON(t, resp)["message"], "强制异步")
 }
 
+// absTestPath 生成宿主平台语义下的绝对路径样本（POSIX: /etc/shadow；Windows: C:\etc\shadow）。
+//
+// node_file 的放行根判定建立在 filepath（宿主语义）之上：POSIX 样本在 Windows 上缺少盘符，
+// filepath.IsAbs 返回 false，请求会先被「必须是绝对路径」拦下，测不到越界判定本身。
+func absTestPath(elems ...string) string {
+	root := string(filepath.Separator)
+	if runtime.GOOS == "windows" {
+		// 样本只要求满足 Windows 的绝对路径定义（盘符 + 分隔符），不要求该路径真实存在。
+		root = `C:\`
+	}
+	return filepath.Join(append([]string{root}, elems...)...)
+}
+
 // TestFR441ProvisionRequestValidation 参数校验与 MC 路径回归保护。
 func TestFR441ProvisionRequestValidation(t *testing.T) {
 	db := setupTestDB(t)
@@ -162,7 +177,7 @@ func TestFR441ProvisionRequestValidation(t *testing.T) {
 		resp := makeRequest(r, http.MethodPost, "/api/v1/instances/provision/server", map[string]any{
 			"nodeId": node.ID, "name": "bin-escape", "coreType": "binary",
 			"binarySource": map[string]any{
-				"kind": "node_file", "nodePath": "/etc/shadow", "filename": "shadow",
+				"kind": "node_file", "nodePath": absTestPath("etc", "shadow"), "filename": "shadow",
 			},
 		}, adminToken)
 		require.Equal(t, http.StatusUnprocessableEntity, resp.Code, resp.Body.String())
@@ -236,7 +251,7 @@ func TestFR441BinaryNodeFileDefaultClosed(t *testing.T) {
 
 	resp := makeRequest(r, http.MethodPost, "/api/v1/instances/provision/server", map[string]any{
 		"nodeId": node.ID, "name": "nf-default", "coreType": "binary",
-		"binarySource": map[string]any{"kind": "node_file", "nodePath": "/opt/binaries/beacon", "filename": "beacon"},
+		"binarySource": map[string]any{"kind": "node_file", "nodePath": absTestPath("opt", "binaries", "beacon"), "filename": "beacon"},
 	}, adminToken)
 	require.Equal(t, http.StatusUnprocessableEntity, resp.Code, resp.Body.String())
 	require.Contains(t, parseJSON(t, resp)["message"], "受控放行目录之外")

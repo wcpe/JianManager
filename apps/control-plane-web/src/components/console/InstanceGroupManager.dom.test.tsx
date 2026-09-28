@@ -35,7 +35,7 @@ describe('InstanceGroupManager', () => {
         ]),
       ),
       http.get(API('/nodes'), () =>
-        HttpResponse.json([{ id: 1, name: 'node-main' }]),
+        HttpResponse.json([{ id: 1, name: 'host-1' }]),
       ),
       http.get(API('/instance-groups'), () =>
         HttpResponse.json([

@@ -1,7 +1,7 @@
 # FR-484 真机验收记录（受控）
 
 日期：2026-09-24
-主机：node-main（生产主机，地址与主机名已脱敏，与生产 CP/Worker 同机，使用隔离栈与独立 VL 数据目录）
+主机：host-1（生产主机，地址与主机名已脱敏，与生产 CP/Worker 同机，使用隔离栈与独立 VL 数据目录）
 受管 VL：**真 VictoriaLogs v1.52.0**，`build_id=20260716-022147-tags-v1.52.0-0-g46a54c976f`
 （二进制 `/home/operator/jm/scratch/vl/victoria-logs-prod`，与 `asset-inventory.md` 登记的 build_id 一致）
 验证脚本：`.tmp/fr444-acceptance/main.go`（不入库，但下文记录环境与判据以便重建）
