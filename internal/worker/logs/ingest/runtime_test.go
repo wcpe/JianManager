@@ -174,6 +174,12 @@ func TestManagerPartitionsProjectionByCanonicalEventUTCDay(t *testing.T) {
 // （unlinkat: being used by another process），于是"忘记 Stop"的用例只在 Windows 转红。
 // Linux 允许 unlink 打开中的文件，长期掩盖了该测试卫生问题。
 func newTestManager(t *testing.T, opts Options) (*Manager, error) {
+	if opts.VerificationTimeout <= 0 {
+		// 生产默认校验窗口是 5 分钟（PR #38：VL 插入「接收即 200、索引异步」，实测可见性延迟
+		// 超过 30 秒）。测试若沿用该默认，「校验永不成功」类用例要等满 5 分钟而超时挂死 ——
+		// 故测试一律注入短窗口；要看真实窗口请显式传 VerificationTimeout。
+		opts.VerificationTimeout = 200 * time.Millisecond
+	}
 	t.Helper()
 	m, err := New(opts)
 	if err == nil {
