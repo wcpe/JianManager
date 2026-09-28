@@ -355,15 +355,10 @@ func main() {
 	} else if n > 0 {
 		log.Printf("[INFO] 已清理过期 agent 调用流水 %d 条", n)
 	}
-	// CP 内嵌 MCP 网关（FR-389，见 ADR-077）：Streamable HTTP + SSE，会话内存可运维。
-	mcpSessions := mcp.NewSessionManager(mcp.Config{
-		IdleTimeout:         cfg.MCP.IdleTimeout,
-		AbsoluteTimeout:     cfg.MCP.AbsoluteTimeout,
-		MaxGlobalSessions:   cfg.MCP.MaxGlobalSessions,
-		MaxSessionsPerToken: cfg.MCP.MaxSessionsPerToken,
-	})
-	mcpSessions.Start()
-	defer mcpSessions.Stop()
+	// CP 内嵌 MCP 网关（FR-389，见 ADR-077）：Streamable HTTP 无状态（ADR-096），
+	// SSE 兼容路径的连接态收敛为传输连接登记（仅回推需要，无超时/并发上限）。
+	mcpConns := mcp.NewSSEConnRegistry()
+	defer mcpConns.Stop()
 	// mcpHandler 延后到 FR-396/397/398 依赖服务就绪后构造（ToolDeps 按值传递）。
 	// 平台存储资源管理器（FR-083）：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
 	storageSvc := service.NewStorageService(db, root)
@@ -620,7 +615,7 @@ func main() {
 	snapshotSvc.SetTaskService(taskSvc)
 	snapshotSvc.SetAudit(auditSvc)
 	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等 FR-396/397/398 依赖服务全部就绪。
-	mcpHandler := mcp.NewHandler(mcpSessions, agentTokenSvc, mcp.ToolDeps{
+	mcpHandler := mcp.NewHandler(mcpConns, agentTokenSvc, mcp.ToolDeps{
 		Instance:  instanceSvc,
 		Node:      nodeSvc,
 		Log:       logSvc,
@@ -661,7 +656,7 @@ func main() {
 		Report:        botLoadReportSvc,
 		Capacity:      botLoadSvcs.capacity,
 		Metrics:       botLoadMetricSampler,
-	}, auditSvc, agentCallLogSvc)
+	}, agentCallLogSvc)
 	// 制品存量迁移（FR-348）：渠道间搬运后台任务（先改记录再删源，幂等续跑）。
 	// RecoverOrphans 清扫 CP 重启滞留的非终态迁移任务，保证在途判定即真相。
 	artifactMigrationSvc := service.NewArtifactMigrationService(db, root, artifactStorageSvc, taskSvc)

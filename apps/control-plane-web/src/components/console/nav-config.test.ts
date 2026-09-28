@@ -87,7 +87,7 @@ describe('console nav config（FR-431 六域 IA）', () => {
         '/system-update',
         '/artifact-versions',
         '/agent-tokens',
-        '/mcp-sessions',
+        '/mcp-activity',
         '/agent-call-logs',
         '/permissions',
       ]),

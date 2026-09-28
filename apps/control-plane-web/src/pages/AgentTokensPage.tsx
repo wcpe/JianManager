@@ -188,7 +188,7 @@ export default function AgentTokensPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" asChild>
-            <Link to="/mcp-sessions">{t('agentTokens.openSessions')}</Link>
+            <Link to="/mcp-activity">{t('agentTokens.openSessions')}</Link>
           </Button>
           <Button variant="outline" size="sm" asChild>
             <Link to="/agent-call-logs">{t('agentTokens.openLogs')}</Link>

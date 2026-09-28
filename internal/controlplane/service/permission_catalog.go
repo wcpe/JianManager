@@ -89,7 +89,7 @@ var PermissionCatalog = []PermissionDomain{
 		Nodes: []PermNodeDef{
 			{ID: "agent.token.read", Label: "Token 读取"},
 			{ID: "agent.token.manage", Label: "Token 管理"},
-			{ID: "agent.mcp.read", Label: "MCP 会话"},
+			{ID: "agent.mcp.read", Label: "MCP 活动"},
 			{ID: "agent.calllog.read", Label: "调用流水"},
 		},
 	},

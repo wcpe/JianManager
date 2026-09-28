@@ -17,8 +17,8 @@
 - 表 `agent_call_logs`（名称可微调，GORM 模型固定）：
   - `id`、`created_at`
   - `token_id`、`token_name`（冗余快照，吊销后仍可读）
-  - `action`（与 `service.AgentAction*` 或 MCP session 事件对齐，如 `agent.whoami`、`agent.instance_start`、`mcp.session.open`）
-  - `capability`（可空，FR-395）：本次授权实际使用的能力标签。V2 记 action 对应 capability（如 `instance.life`）；V1 写记 `legacy.instance.life` / `legacy.node.maintenance`，读记 `legacy.read`；会话事件可空；历史空值合法
+  - `action`（与 `service.AgentAction*` 对齐，如 `agent.whoami`、`agent.instance_start`）
+  - `capability`（可空，FR-395）：本次授权实际使用的能力标签。V2 记 action 对应 capability（如 `instance.life`）；V1 写记 `legacy.instance.life` / `legacy.node.maintenance`，读记 `legacy.read`；历史空值合法（含已移除的会话类 action 遗留行）
   - `client`：`mcp` | `jmagent` | `curl` | `unknown`（优先 `X-JM-Agent-Client`，缺省 unknown；MCP 传输路径强制 `mcp`）
   - `transport`：可选 `streamable_http` | `sse` | `http` | 空
   - `target_type`、`target_id`（可空）
@@ -28,12 +28,14 @@
   - 索引：`(token_id, created_at)`、`(created_at)`、`(action, created_at)` 视查询需要
 - **写入点**：
   1. 所有 `/api/v1/agent/*` Ops（含 whoami/list/get/metrics/logs/start/stop/restart/maintenance）——成功与策略拒绝（403）均记；鉴权失败（401）可不记或记 `token_id=0`（推荐：**仅成功鉴权后**记，避免爆破刷库）
-  2. MCP tool call（FR-389）：每 tool 一条，`client=mcp`
-  3. MCP 会话 open/close/kick（可选但推荐）
+  2. MCP tool call（FR-389）：每 tool 一条，`client=mcp`——MCP 端点无状态化后（FR-489 / ADR-096）**不再产生**会话类 action（`mcp.session.open/close/kick` 已随协议会话移除）
 - **不**把流水当通用人类审计替代；写操作可**同时**保留现有 `audit` 记录（detail 含 actorKind=agent），流水专注 agent 调用分析
 - 查询 API（平台管理员 JWT）：
   - `GET /api/v1/agent/call-logs?tokenId=&action=&client=&success=&from=&to=&page=&pageSize=`
   - 响应分页 + 稳定排序 `created_at DESC`
+- 活动视图聚合 API（FR-489，见 [../mcp-stateless-endpoint/api.md](../mcp-stateless-endpoint/api.md)）：
+  - `GET /api/v1/agent/mcp/activity?window=`（默认 `24h`，允许 `1h`~`168h`）
+  - 窗口内按 `token_id` 聚合 Token 级活动（最近活动 / 最近 action / 调用数 / 失败数 / 来源 IP / 客户端分布），按 `lastActivityAt` 降序；取代原「MCP 会话列表 / 踢线」端点——它是本 FR 流水数据在 MCP 运维面的消费方，不改表定义
 - Token 活跃：
   - 继续在 `Authenticate` bump `last_used_at`（已有）
   - `GET /api/v1/agent/tokens` 列表项增加：
@@ -45,7 +47,7 @@
 ### 不做
 
 - 不存 tool 入参/出参全文（可另期抽样）
-- 不做图表大盘聚合 API（24h count 仅 Token 级）
+- 不做图表大盘聚合 API（24h count 仅 Token 级）；FR-489 的活动视图（`GET /api/v1/agent/mcp/activity`）是同一口径的**窗口内 Token 级聚合**，仍不做图表 / 时序大盘
 - 不改人类用户审计主键模型为大重构（可选后续加 `actor_kind` 列；本期流水表独立即可）
 - 不在 FR-390 删除 mcp-bridge（FR-392）
 
@@ -54,7 +56,7 @@
 ### 3.1 模块
 
 - `model.AgentCallLog`
-- `service.AgentCallLogService`：`Record(...)`、`List(filter)`、`Count24h(tokenID)`、`PurgeExpired`
+- `service.AgentCallLogService`：`Record(...)`、`List(filter)`、`ActivityByToken(window)`（窗口内按 token 聚合，供 `GET /api/v1/agent/mcp/activity`）、`Count24h(tokenID)`、`PurgeExpired`
 - 中间件或 Ops/MCP handler 统一 `defer` 记流水（避免每个 handler 复制）
 - 解析 client：`middleware` 读 header，写入 `gin.Context`，Record 时取出
 
@@ -93,7 +95,8 @@
 5. Token 列表含 `lastUsedAt`、`callCount24h`  
 6. 过期清理单测或集成测证明超期可删  
 7. V1/V2 调用分别记录 `legacy.*` 与 capability 标签；历史空 capability 可正常查询  
-8. **真机**：现有远程 CP 或本机验收栈上产生 ≥2 条可区分 client 的记录（若仅 390 先合：curl + jmagent 即可）
+8. FR-489 活动视图：`GET /api/v1/agent/mcp/activity` 的窗口内 Token 级聚合正确（多 Token、窗口边界 400、失败计数、无数据空数组、`lastActivityAt` 降序）  
+9. **真机**：现有远程 CP 或本机验收栈上产生 ≥2 条可区分 client 的记录（若仅 390 先合：curl + jmagent 即可）
 
 ## 6. 风险 / 待定
 

@@ -14,7 +14,7 @@
 Control Plane (Go 单二进制)
     ├── 跨 Worker Bot 调度与 desired-state 真源（FR-351/ADR-074）
     ├── Agent 策略真源（FR-384~388 / FR-395 / ADR-076/080）：jmat_* Token + V1 写白名单 / V2 能力分组 + scope + 永久禁区
-    ├── 内嵌 MCP 网关（FR-389 / FR-395 / ADR-077/080）：Streamable HTTP + SSE，`/api/v1/mcp`，会话内存可运维，tools/list 按能力动态裁剪
+    ├── 内嵌 MCP 网关（FR-389 / FR-395 / FR-489 / ADR-077/080/096）：Streamable HTTP（**无状态**，不下发/不要求 `Mcp-Session-Id`）+ SSE 兼容（仅传输连接登记），`/api/v1/mcp`，每请求重建 principal 授权，tools/list 按能力动态裁剪
     │ gRPC —— 指令仅经 Worker 主动建立的「反向隧道」下发（Worker 零入站，ADR-081）
     ▲
     │ HTTPS + Bearer jmat_*（与人类 JWT 物理同端口、语义分离）
@@ -47,7 +47,7 @@ Worker Node (Go) × 20~100
 | 客户端 | 语言 | 职责 |
 |---|---|---|
 | jmagent（别名 `jm`） | Go 独立二进制 | 经 CP Agent API 的脚本/CI 入口（FR-385） |
-| IDE / MCP 客户端 | 任意 | 经 CP 内嵌 MCP（`/api/v1/mcp`，FR-389 / ADR-077）持 jmat_ 长连 |
+| IDE / MCP 客户端 | 任意 | 经 CP 内嵌 MCP（`/api/v1/mcp`，FR-389/489，ADR-077/096）持 jmat_ 调用：Streamable HTTP 无状态逐请求；SSE 兼容路径为长连 |
 | ~~mcp-bridge~~ | ~~Go 独立二进制~~ | ~~旧 stdio 适配（FR-386，已退役@FR-392）~~ |
 | jmctl | Go 独立二进制 | 本机紧急直连 daemon（FR-184 / ADR-041）；**不是** Agent 日常面 |
 
@@ -98,7 +98,7 @@ internal/controlplane/
   database/                      # GORM 初始化、迁移与数据根解析
   middleware/                    # JWT、Agent Token、访问上下文、审计、限流、分发防护
   model/                         # 用户/组/节点/实例、agent_tokens、指标、任务、通知、客户端分发、业务事件等模型
-  mcp/                           # 内嵌 MCP 网关（FR-389）：会话管理、JSON-RPC、Streamable HTTP/SSE、tools 映射
+  mcp/                           # 内嵌 MCP 网关（FR-389/489）：JSON-RPC、无状态 Streamable HTTP、SSE 传输连接登记、tools 映射
   router/                        # REST API：实例/节点/终端/文件/Bot/监控/客户端分发/业务域/agent/mcp 等
   service/                       # 领域服务；含 agent_token 策略引擎、terminal_proxy、business_events、client_*、metric/log/task/notification/selfupdate
   grpc/{pool,handler}.go         # Worker 连接池、注册/心跳/流式事件控制面
@@ -171,7 +171,7 @@ Agent（IDE / 脚本 / CI）**不复用人类 JWT**，使用专用 Token（明�
 ```
 平台管理员 JWT
     │ POST /api/v1/agent/tokens 签发（明文仅一次）
-    │ GET/DELETE /api/v1/agent/mcp/sessions 会话运维
+    │ GET /api/v1/agent/mcp/activity 活动视图（按 Token 聚合，取代会话列表/踢线）
     ▼
 agent_tokens 表
   · V1：scope 实例/节点 + write_allowlist + 过期/吊销
@@ -184,8 +184,8 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
     ├── jmagent（CLI）                   │ ToolSpec → 同一 action 目录 / service
     ├── curl / 任意 HTTP 客户端          │ tools/list 按能力与潜在 scope 动态裁剪
     └── ~~（已退役 FR-392）mcp-bridge~~  │ tools/call 可信目标最终授权
-                                         │ 会话：内存 SessionManager（空闲/绝对超时、并发上限）
-                                         │ 传输：Streamable HTTP 主 + SSE 兼容
+                                         │ 会话：无（无状态，每请求重建 principal）
+                                         │ 传输：Streamable HTTP 主 + SSE 兼容（传输连接登记）
 ```
 
 **策略（CP 唯一真源，入口不得本地发明）**：
@@ -197,12 +197,12 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
 | 资源 scope | 实例 ID 显式白名单 ∪（仅 V2）节点 ID 下当前实例；越界 403；实例 scope 不反向授权节点 |
 | 发现 / 执行 | `CanDiscover` 驱动 MCP `tools/list` 与契约枚举；`Authorize` 在可信目标解析后执行最终授权；生命周期写操作派发前锁内重验归属 |
 | 永久禁区 | 用户/组/RBAC、Agent Token 管理、密钥/准入凭据明文、数据库浏览、自更新、平台设置永不进入 action 目录；实例删除/强杀/节点删除等须后续 FR 以 destructive 能力显式登记 |
-| 调用流水 | `agent_call_logs.capability`：V2 记 action 对应能力，V1 记 `legacy.*`；会话事件可空 |
+| 调用流水 | `agent_call_logs.capability`：V2 记 action 对应能力，V1 记 `legacy.*` |
 | 错误 | 401 无效/吊销/过期；403 策略拒绝（非 5xx 静默）；MCP tool 策略拒绝 → HTTP 200 + `isError=true` + 中文 |
 
 **MCP 节点与实例全生命周期（FR-396）**：在 FR-395 能力策略闸内，把节点详情/指标/Docker/排空/归档清理与实例搜索/创建搭建/导入克隆/重建/配置/命令/批量/强杀/删除开放为强类型 MCP 工具；直接复用 CP service，不经本机 HTTP 回环。破坏性操作（kill/delete/purge）要求独立 destructive 能力 + 服务端精确确认参数（confirmInstanceName/confirmNodeName 与当前名称精确比对）。写操作派发前锁内重验实例归属（expected-node）。工具按域拆分 `tools_node.go` / `tools_instance.go` / `tools_provision.go`，`toolSpec.Exec` 注册表分发，骨架预留 `RequiresConfirm` 供后续 FR 复用。
 
-**内嵌 MCP（FR-389 / FR-395 / ADR-077/080）**：模块 `internal/controlplane/mcp/`；配置 `mcp.idle_timeout`（默认 30m）、`absolute_timeout`（24h）、`max_global_sessions`（32）、`max_sessions_per_token`（4）。CP 重启会话全丢（可接受）。人类 JWT 不能充当 MCP 会话凭证。`tools/list` 按 Token 能力与可用 scope 动态裁剪；`tools/call` 仍最终授权。
+**内嵌 MCP（FR-389 / FR-395 / FR-489 / ADR-077/080/096）**：模块 `internal/controlplane/mcp/`。Streamable HTTP 路径（`POST /api/v1/mcp`）**无状态**——不下发也不要求 `Mcp-Session-Id`，携带旧 session id 被忽略而非拒绝；每请求独立鉴权并取**每请求重建的 principal** 授权（Token 吊销/降权在下一个请求即生效，不存在快照窗口）。`GET /api/v1/mcp` 返回 **405**（无会话可保活），`DELETE` 不再注册。**SSE 兼容路径保留**（`GET /api/v1/mcp/sse` + `POST /api/v1/mcp/message`），其连接态仅为**传输连接登记**——不是协议会话，不承载超时/并发上限/能力快照。原会话空闲与绝对超时、全局与每 Token 并发上限、会话列表/踢线、`SESSION_GONE` 与超限 429、`mcp.session.open/close/kick` 流水**已随无状态化移除**，配置项 `mcp.idle_timeout`/`absolute_timeout`/`max_global_sessions`/`max_sessions_per_token` 一并移除（配置结构、示例配置与 `docker-compose.yml` 同步）。运维视图随之从「会话维度」改为「Token 维度」：`GET /api/v1/agent/mcp/activity`，数据源为 `agent_call_logs`（跨 CP 重启连续）。人类 JWT 不能充当 MCP 凭据。`tools/list` 按 Token 能力与可用 scope 动态裁剪；`tools/call` 仍最终授权。
 
 **Agent 流式传输票据（FR-397）**：MCP 不承载大文件字节。Agent 经 `file_issue_transfer_ticket` 换取票据，再走 `PUT/GET /api/v1/agent-transfer/{upload,download}` 数据面（复用 FR-304 流式链路，CP 内存 O(chunk)，Worker 原子落盘）。票据为 HMAC-SHA256 签名（密钥自服务端主密钥域分离派生，与 Bot 计划令牌互不通用）、5 分钟 TTL、一次性消费，正文绑定 tokenId/instanceId/direction/path；消费时实时重验 Token 未吊销与实例归属。端点挂公开组（票据即凭据）且**不接受任何路径/实例参数**——授权上下文全部取自票据 claims，故无参数注入面；失效的所有形态归一为同一句 403 中文，不泄露内部状态。
 

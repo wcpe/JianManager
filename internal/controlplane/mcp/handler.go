@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,63 +13,58 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// Handler MCP 传输适配（Streamable HTTP + SSE）与 JSON-RPC 分发。
+// Handler MCP 传输适配（Streamable HTTP + SSE 兼容）与 JSON-RPC 分发。
+//
+// 协议会话已随 ADR-096 移除：Streamable HTTP 路径完全无状态——不读也不写
+// Mcp-Session-Id，每请求独立处理，授权一律取 middleware.AgentAuth 当次重建的
+// principal（无初始化快照，Token 吊销/降权即时生效）。
 type Handler struct {
-	sessions *SessionManager
-	agent    *service.AgentTokenService
-	deps     ToolDeps
-	// audit 可选；踢线写审计。
-	audit *service.AuditService
-	// callLog 可选；tools/call 与会话 open/close/kick 记 FR-390 流水。
+	// conns SSE 兼容路径的传输连接登记；Streamable HTTP 不使用。
+	conns *SSEConnRegistry
+	agent *service.AgentTokenService
+	deps  ToolDeps
+	// callLog 可选；tools/call 记 FR-390 流水。
 	callLog *service.AgentCallLogService
 }
 
 // NewHandler 创建 MCP 处理器。callLog 可为 nil（不记流水）。
-func NewHandler(sessions *SessionManager, agent *service.AgentTokenService, deps ToolDeps, audit *service.AuditService, callLog *service.AgentCallLogService) *Handler {
-	return &Handler{sessions: sessions, agent: agent, deps: deps, audit: audit, callLog: callLog}
-}
-
-// Sessions 返回会话管理器（管理员 API 用）。
-func (h *Handler) Sessions() *SessionManager {
-	return h.sessions
+func NewHandler(conns *SSEConnRegistry, agent *service.AgentTokenService, deps ToolDeps, callLog *service.AgentCallLogService) *Handler {
+	return &Handler{conns: conns, agent: agent, deps: deps, callLog: callLog}
 }
 
 // RegisterMCPRoutes 挂载 MCP 传输路由（须已通过 AgentAuth 并注入 principal）。
-// 路径相对 rg：POST/GET "" 、GET /sse 、POST /message。
+// 路径相对 rg：POST ""（Streamable HTTP，无状态）、GET ""（405）、GET /sse 、POST /message。
 func (h *Handler) RegisterMCPRoutes(rg *gin.RouterGroup) {
 	rg.POST("", h.HandleStreamablePOST)
 	rg.GET("", h.HandleStreamableGET)
-	rg.DELETE("", h.HandleSessionDELETE)
 	rg.GET("/sse", h.HandleSSE)
 	rg.POST("/message", h.HandleSSEMessage)
 }
 
-// RegisterAdminRoutes 管理员会话列表/踢线（JWT + 平台管理员组）。
-func (h *Handler) RegisterAdminRoutes(rg *gin.RouterGroup) {
-	g := rg.Group("/agent/mcp/sessions")
-	g.GET("", h.AdminListSessions)
-	g.DELETE("/:id", h.AdminKickSession)
+// RegisterActivityRoutes 挂载 Token 维度活动视图（JWT + agent.mcp.read）。
+func (h *Handler) RegisterActivityRoutes(rg *gin.RouterGroup) {
+	rg.GET("/agent/mcp/activity", h.ListActivity)
 }
 
-// writeSessionGone 回应「客户端持有的会话已不存在」。
+// writeConnGone 回应「客户端持有的 SSE 连接已不存在」。
 //
-// 必须是 404 —— MCP Streamable HTTP 规范（2025-06-18, Session Management）规定：
-// 服务器终止会话后，对携带该会话 ID 的请求 MUST 回 404；客户端收到 404 后 MUST
-// 重新发 InitializeRequest 开新会话。
-//
-// 注意：曾试过改为 401 以「提示客户端重新鉴权」，但这是错的——401 在本协议里
-// 属鉴权层面，会让符合规范的客户端去走 OAuth 重认证而非重新 initialize；
-// 且实测对不发 initialize 的客户端两种码都无效。故保持规范要求的 404。
-func writeSessionGone(c *gin.Context) {
+// SSE 兼容路径的连接是**传输连接**（ADR-096 决策 5），不是协议会话：id 无效即
+// 404（MCP SSE 传输要求无法识别的 session id 回 404），客户端须重新连 `/sse`
+// 取新 endpoint。Streamable HTTP 路径不再有此类响应（无状态）。
+func writeConnGone(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{
-		"error":   "SESSION_GONE",
-		"message": "MCP 会话不存在或已关闭，请重新 initialize 建立新会话",
+		"error":   "CONN_GONE",
+		"message": "MCP SSE 连接不存在或已关闭，请重新建立 /mcp/sse 连接",
 	})
 }
 
-// ---- Streamable HTTP ----
+// ---- Streamable HTTP（无状态）----
 
-// HandleStreamablePOST POST /api/v1/mcp — initialize 或带 session 的 JSON-RPC。
+// HandleStreamablePOST POST /api/v1/mcp — 每个 JSON-RPC 请求独立处理。
+//
+// 无状态语义（ADR-096）：`initialize` 只回 initializeResult()，不建会话也不下发
+// Mcp-Session-Id；携带陈旧/陌生 session 头一律忽略（不拒绝）。此后每次调用都用
+// 本请求重建的 principal 授权。
 func (h *Handler) HandleStreamablePOST(c *gin.Context) {
 	p := getPrincipal(c)
 	if p == nil {
@@ -89,158 +83,59 @@ func (h *Handler) HandleStreamablePOST(c *gin.Context) {
 		return
 	}
 
-	sessionID := c.GetHeader(HeaderSessionID)
-	if sessionID == "" {
-		sessionID = c.GetHeader("mcp-session-id")
-	}
-
-	// initialize：创建会话
 	if req.Method == "initialize" {
-		if sessionID != "" {
-			// 已有会话时重复 initialize：刷新活动即可
-			if s, err := h.sessions.Get(sessionID); err == nil {
-				if s.TokenID != p.TokenID {
-					c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "会话不属于当前 Token"})
-					return
-				}
-				h.touchSession(s, "")
-				c.Header(HeaderSessionID, s.ID)
-				writeRPC(c, newResult(req.ID, initializeResult()))
-				return
-			}
-		}
-		s, err := h.sessions.Create(CreateParams{
-			Principal: p,
-			ClientIP:  c.ClientIP(),
-			Transport: TransportStreamableHTTP,
-		})
-		if err != nil {
-			h.writeSessionLimit(c, err)
+		if req.IsNotification() {
+			c.Status(http.StatusAccepted)
 			return
 		}
-		h.recordSessionEvent(s, "mcp.session.open", c.ClientIP(), true, "")
-		c.Header(HeaderSessionID, s.ID)
-		if !req.IsNotification() {
-			writeRPC(c, newResult(req.ID, initializeResult()))
-		} else {
-			c.Status(http.StatusAccepted)
-		}
+		writeRPC(c, newResult(req.ID, initializeResult()))
 		return
 	}
-
-	// 后续方法需要会话
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "缺少 Mcp-Session-Id；请先 initialize"})
-		return
-	}
-	s, err := h.sessions.Get(sessionID)
-	if err != nil {
-		writeSessionGone(c)
-		return
-	}
-	// 会话须归属当前 Token
-	if s.TokenID != p.TokenID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "会话不属于当前 Token"})
-		return
-	}
-	h.touchSession(s, "")
 
 	if req.IsNotification() {
 		// 通知：处理但不返回 body（accepted）
-		h.dispatch(c, s, req, true)
+		h.dispatch(c, p, TransportStreamableHTTP, req, true)
 		c.Status(http.StatusAccepted)
 		return
 	}
-	resp := h.dispatch(c, s, req, false)
-	c.Header(HeaderSessionID, s.ID)
-	writeRPC(c, resp)
+	writeRPC(c, h.dispatch(c, p, TransportStreamableHTTP, req, false))
 }
 
-// HandleStreamableGET GET /api/v1/mcp — 可选 SSE 流（会话保活）；无会话则 405。
+// HandleStreamableGET GET /api/v1/mcp — 405：无状态端点没有可保活/可回推的会话流。
+//
+// 需要服务端推送的客户端应改走 SSE 兼容路径 GET /api/v1/mcp/sse。
 func (h *Handler) HandleStreamableGET(c *gin.Context) {
-	sessionID := c.GetHeader(HeaderSessionID)
-	if sessionID == "" {
-		sessionID = c.GetHeader("mcp-session-id")
-	}
-	if sessionID == "" {
-		c.JSON(http.StatusMethodNotAllowed, gin.H{"error": "METHOD_NOT_ALLOWED", "message": "Streamable HTTP GET 需要 Mcp-Session-Id；新建会话请 POST initialize"})
-		return
-	}
-	s, err := h.sessions.Get(sessionID)
-	if err != nil {
-		writeSessionGone(c)
-		return
-	}
-	p := getPrincipal(c)
-	if p == nil || s.TokenID != p.TokenID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "会话不属于当前 Token"})
-		return
-	}
-	// 简单保活：返回 JSON 会话元数据（完整 SSE 多路复用留给兼容端点）
-	h.touchSession(s, "")
-	c.Header(HeaderSessionID, s.ID)
-	c.JSON(http.StatusOK, gin.H{"session": s.Snapshot(), "ok": true})
-}
-
-// HandleSessionDELETE DELETE /api/v1/mcp — 客户端主动结束会话。
-func (h *Handler) HandleSessionDELETE(c *gin.Context) {
-	sessionID := c.GetHeader(HeaderSessionID)
-	if sessionID == "" {
-		sessionID = c.GetHeader("mcp-session-id")
-	}
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "缺少 Mcp-Session-Id"})
-		return
-	}
-	s, err := h.sessions.Get(sessionID)
-	if err != nil {
-		writeSessionGone(c)
-		return
-	}
-	p := getPrincipal(c)
-	if p == nil || s.TokenID != p.TokenID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "会话不属于当前 Token"})
-		return
-	}
-	h.kickSession(sessionID, "客户端关闭")
-	h.recordSessionEvent(s, "mcp.session.close", c.ClientIP(), true, "客户端关闭")
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	c.Header("Allow", "POST")
+	c.JSON(http.StatusMethodNotAllowed, gin.H{
+		"error":   "METHOD_NOT_ALLOWED",
+		"message": "MCP Streamable HTTP 为无状态端点，仅支持 POST；服务端推送请改用 /api/v1/mcp/sse",
+	})
 }
 
 // ---- SSE 兼容 ----
 
-// HandleSSE GET /api/v1/mcp/sse — 建立 SSE 会话并推送 endpoint 事件。
+// HandleSSE GET /api/v1/mcp/sse — 建立 SSE 传输连接并推送 endpoint 事件。
 func (h *Handler) HandleSSE(c *gin.Context) {
 	p := getPrincipal(c)
 	if p == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "UNAUTHORIZED", "message": "需要有效的 Agent Token（jmat_ 前缀）"})
 		return
 	}
-	s, err := h.sessions.Create(CreateParams{
-		Principal: p,
-		ClientIP:  c.ClientIP(),
-		Transport: TransportSSE,
-	})
-	if err != nil {
-		h.writeSessionLimit(c, err)
-		return
-	}
-	h.recordSessionEvent(s, "mcp.session.open", c.ClientIP(), true, "")
+	conn := h.conns.Register(p, c.ClientIP())
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	c.Header(HeaderSessionID, s.ID)
 	c.Status(http.StatusOK)
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		h.kickSession(s.ID, "不支持流式响应")
+		h.conns.Unregister(conn.ID)
 		return
 	}
 
 	// endpoint 事件：客户端据此 POST 消息
-	endpoint := "/api/v1/mcp/message?sessionId=" + s.ID
-	if !h.writeSSE(c, s, []byte("event: endpoint\ndata: "+endpoint+"\n\n")) {
+	endpoint := "/api/v1/mcp/message?sessionId=" + conn.ID
+	if !h.writeSSE(c, conn, []byte("event: endpoint\ndata: "+endpoint+"\n\n")) {
 		return
 	}
 	flusher.Flush()
@@ -248,18 +143,18 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 	// 保活 + 读出站消息
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
-	ch := s.SSEChannel()
+	ch := conn.SSEChannel()
 	clientGone := c.Request.Context().Done()
-	sessionDone := s.Context().Done()
+	connDone := conn.Context().Done()
 
 	for {
 		select {
 		case <-clientGone:
-			h.kickSession(s.ID, "客户端断开")
+			h.conns.Unregister(conn.ID)
 			return
-		case <-sessionDone:
-			// 踢线/超时：发 comment 后结束
-			if !h.writeSSE(c, s, []byte(": session closed\n\n")) {
+		case <-connDone:
+			// 服务关闭/连接注销：发 comment 后结束
+			if !h.writeSSE(c, conn, []byte(": connection closed\n\n")) {
 				return
 			}
 			flusher.Flush()
@@ -268,15 +163,14 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 			if !open {
 				return
 			}
-			if !h.writeSSE(c, s, []byte("event: message\ndata: ")) ||
-				!h.writeSSE(c, s, data) ||
-				!h.writeSSE(c, s, []byte("\n\n")) {
+			if !h.writeSSE(c, conn, []byte("event: message\ndata: ")) ||
+				!h.writeSSE(c, conn, data) ||
+				!h.writeSSE(c, conn, []byte("\n\n")) {
 				return
 			}
 			flusher.Flush()
 		case <-ticker.C:
-			h.touchSession(s, "")
-			if !h.writeSSE(c, s, []byte(": ping\n\n")) {
+			if !h.writeSSE(c, conn, []byte(": ping\n\n")) {
 				return
 			}
 			flusher.Flush()
@@ -285,6 +179,9 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 }
 
 // HandleSSEMessage POST /api/v1/mcp/message?sessionId=
+//
+// 行为与无状态化前一致（仅会话→连接登记改名）：查连接 → 校验归属 →
+// dispatch → SendSSE 回推，HTTP 一律 202（结果经 SSE 流返回）。
 func (h *Handler) HandleSSEMessage(c *gin.Context) {
 	p := getPrincipal(c)
 	if p == nil {
@@ -299,13 +196,13 @@ func (h *Handler) HandleSSEMessage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "缺少 sessionId"})
 		return
 	}
-	s, err := h.sessions.Get(sessionID)
-	if err != nil {
-		writeSessionGone(c)
+	conn, ok := h.conns.Get(sessionID)
+	if !ok {
+		writeConnGone(c)
 		return
 	}
-	if s.TokenID != p.TokenID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "会话不属于当前 Token"})
+	if conn.Principal == nil || conn.Principal.TokenID != p.TokenID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "SSE 连接不属于当前 Token"})
 		return
 	}
 
@@ -317,82 +214,111 @@ func (h *Handler) HandleSSEMessage(c *gin.Context) {
 	var req RPCRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		c.JSON(http.StatusAccepted, gin.H{})
-		if sendErr := s.SendSSE(mustJSON(newError(nil, -32700, "Parse error"))); sendErr != nil {
-			slog.Warn("MCP SSE 发送解析错误失败", "sessionId", s.ID, "error", sendErr)
+		if sendErr := conn.SendSSE(mustJSON(newError(nil, -32700, "Parse error"))); sendErr != nil {
+			slog.Warn("MCP SSE 发送解析错误失败", "connId", conn.ID, "error", sendErr)
 		}
 		return
 	}
-	h.touchSession(s, "")
 
 	if req.IsNotification() {
-		h.dispatch(c, s, req, true)
+		h.dispatch(c, p, TransportSSE, req, true)
 		c.Status(http.StatusAccepted)
 		return
 	}
-	resp := h.dispatch(c, s, req, false)
-	if err := s.SendSSE(mustJSON(resp)); err != nil {
-		slog.Warn("MCP SSE 推送失败", "sessionId", s.ID, "error", err)
+	resp := h.dispatch(c, p, TransportSSE, req, false)
+	if err := conn.SendSSE(mustJSON(resp)); err != nil {
+		slog.Warn("MCP SSE 推送失败", "connId", conn.ID, "error", err)
 	}
 	c.Status(http.StatusAccepted)
 }
 
-// ---- 管理员 ----
+// ---- 管理面：Token 维度活动视图 ----
 
-// AdminListSessions GET /api/v1/agent/mcp/sessions
-func (h *Handler) AdminListSessions(c *gin.Context) {
-	list := h.sessions.List()
-	if list == nil {
-		list = []Snapshot{}
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"sessions": list,
-		"config": gin.H{
-			"idleTimeout":         h.sessions.Config().IdleTimeout.String(),
-			"absoluteTimeout":     h.sessions.Config().AbsoluteTimeout.String(),
-			"maxGlobalSessions":   h.sessions.Config().MaxGlobalSessions,
-			"maxSessionsPerToken": h.sessions.Config().MaxSessionsPerToken,
-		},
-	})
+// mcpActivityItem 活动视图单行（GET /api/v1/agent/mcp/activity）。
+type mcpActivityItem struct {
+	TokenID        uint             `json:"tokenId"`
+	TokenName      string           `json:"tokenName"`
+	TokenPrefix    string           `json:"tokenPrefix"`
+	LastActivityAt time.Time        `json:"lastActivityAt"`
+	LastAction     string           `json:"lastAction"`
+	CallCount      int64            `json:"callCount"`
+	FailureCount   int64            `json:"failureCount"`
+	ClientIPs      []string         `json:"clientIPs"`
+	Clients        map[string]int64 `json:"clients"`
 }
 
-// AdminKickSession DELETE /api/v1/agent/mcp/sessions/:id
-func (h *Handler) AdminKickSession(c *gin.Context) {
-	id := c.Param("id")
-	if id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "id 无效"})
+// 活动窗口允许区间：越界回 400，避免无界扫描 agent_call_logs。
+const (
+	minActivityWindow = time.Hour
+	maxActivityWindow = 7 * 24 * time.Hour
+)
+
+// ListActivity GET /api/v1/agent/mcp/activity?window=24h
+//
+// 按 Token 聚合窗口内的 MCP 活动（ADR-096 决策 6）：进程内会话列表在 CP 重启后
+// 即为空，只反映「当前连着谁」；调用流水聚合反映实际行为历史，跨重启连续。
+func (h *Handler) ListActivity(c *gin.Context) {
+	if h.callLog == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "调用流水未启用"})
 		return
 	}
-	// 踢线前取快照用于流水（Kick 后会话不可再 Get）
-	var snap *Session
-	if s, err := h.sessions.Get(id); err == nil {
-		snap = s
-	}
-	if err := h.sessions.Kick(id, "管理员踢线"); err != nil {
-		if errors.Is(err, ErrSessionNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "MCP 会话不存在"})
+	window := 24 * time.Hour
+	if v := c.Query("window"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "window 须为时长字符串（如 24h）"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "踢线失败"})
+		if d < minActivityWindow || d > maxActivityWindow {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "window 允许区间 1h~168h"})
+			return
+		}
+		window = d
+	}
+	items, err := h.callLog.ActivityByToken(window)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询 MCP 活动失败"})
 		return
 	}
-	if h.audit != nil {
-		// 与 JWT 中间件 CtxUserID 键一致（"userId"）
-		uid, _ := c.Get("userId")
-		userID, _ := uid.(uint)
-		h.audit.RecordResultSafe(userID, "mcp.session.kick", "mcp_session", id, "", c.ClientIP(), true, "")
+	out := make([]mcpActivityItem, 0, len(items))
+	for _, it := range items {
+		ips := it.ClientIPs
+		if ips == nil {
+			ips = []string{}
+		}
+		clients := it.Clients
+		if clients == nil {
+			clients = map[string]int64{}
+		}
+		out = append(out, mcpActivityItem{
+			TokenID:        it.TokenID,
+			TokenName:      it.TokenName,
+			TokenPrefix:    it.TokenPrefix,
+			LastActivityAt: it.LastActivityAt,
+			LastAction:     it.LastAction,
+			CallCount:      it.CallCount,
+			FailureCount:   it.FailureCount,
+			ClientIPs:      ips,
+			Clients:        clients,
+		})
 	}
-	if snap != nil {
-		h.recordSessionEvent(snap, "mcp.session.kick", c.ClientIP(), true, "管理员踢线")
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	c.JSON(http.StatusOK, gin.H{
+		"window":      window.String(),
+		"generatedAt": time.Now().UTC(),
+		"items":       out,
+	})
 }
 
 // ---- 内部 ----
 
-func (h *Handler) dispatch(c *gin.Context, s *Session, req RPCRequest, notification bool) RPCResponse {
-	_ = c
+// dispatch 处理一条 JSON-RPC 请求。
+//
+// transport 仅用于流水标注（streamable_http 无状态请求 / sse 回推请求）；
+// 授权取入参 p（每请求重建的 principal，见 ADR-096 决策 2）。
+func (h *Handler) dispatch(c *gin.Context, p *service.AgentPrincipal, transport string, req RPCRequest, notification bool) RPCResponse {
 	switch req.Method {
 	case "initialize":
+		// SSE 兼容路径的 /message 也会走到这里：无状态化后没有任何会话要建。
 		return newResult(req.ID, initializeResult())
 	case "notifications/initialized", "initialized":
 		return RPCResponse{} // 通知
@@ -405,17 +331,17 @@ func (h *Handler) dispatch(c *gin.Context, s *Session, req RPCRequest, notificat
 		if notification {
 			return RPCResponse{}
 		}
-		return newResult(req.ID, map[string]any{"tools": ToolsForPrincipal(s.Principal)})
+		return newResult(req.ID, map[string]any{"tools": ToolsForPrincipal(p)})
 	case "tools/call":
 		if notification {
 			return RPCResponse{}
 		}
-		return h.handleToolsCall(s, req)
+		return h.handleToolsCall(c, p, transport, req)
 	case "shutdown":
 		if notification {
 			return RPCResponse{}
 		}
-		h.kickSession(s.ID, "客户端 shutdown")
+		// 无会话可终止（ADR-096）：仅确认收到。
 		return newResult(req.ID, map[string]any{})
 	default:
 		if notification {
@@ -425,7 +351,7 @@ func (h *Handler) dispatch(c *gin.Context, s *Session, req RPCRequest, notificat
 	}
 }
 
-func (h *Handler) handleToolsCall(s *Session, req RPCRequest) RPCResponse {
+func (h *Handler) handleToolsCall(c *gin.Context, p *service.AgentPrincipal, transport string, req RPCRequest) RPCResponse {
 	var params struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -441,15 +367,14 @@ func (h *Handler) handleToolsCall(s *Session, req RPCRequest) RPCResponse {
 	if params.Arguments == nil {
 		params.Arguments = map[string]any{}
 	}
-	h.touchSession(s, params.Name)
 	start := time.Now()
-	result := CallTool(s.Context(), h.deps, s.Principal, params.Name, params.Arguments)
-	h.recordToolCall(s, params.Name, params.Arguments, result, time.Since(start))
+	result := CallTool(c.Request.Context(), h.deps, p, params.Name, params.Arguments)
+	h.recordToolCall(p, c.ClientIP(), transport, params.Name, params.Arguments, result, time.Since(start))
 	return newResult(req.ID, result)
 }
 
-func (h *Handler) recordToolCall(s *Session, toolName string, args map[string]any, result ToolResult, d time.Duration) {
-	if h == nil || h.callLog == nil || s == nil || s.Principal == nil {
+func (h *Handler) recordToolCall(p *service.AgentPrincipal, clientIP, transport, toolName string, args map[string]any, result ToolResult, d time.Duration) {
+	if h == nil || h.callLog == nil || p == nil {
 		return
 	}
 	action, ok := toolActionByName(toolName)
@@ -457,7 +382,7 @@ func (h *Handler) recordToolCall(s *Session, toolName string, args map[string]an
 		action = "mcp.tool." + toolName
 	}
 	targetType, targetID := toolTargetByName(toolName, args)
-	capability := service.CapabilityForCallLog(s.Principal, action)
+	capability := service.CapabilityForCallLog(p, action)
 	errMsg := ""
 	if result.IsError {
 		if len(result.Content) > 0 {
@@ -471,78 +396,25 @@ func (h *Handler) recordToolCall(s *Session, toolName string, args map[string]an
 		ms = 0
 	}
 	h.callLog.RecordSafe(service.AgentCallRecord{
-		TokenID:    s.Principal.TokenID,
-		TokenName:  s.Principal.Name,
+		TokenID:    p.TokenID,
+		TokenName:  p.Name,
 		Action:     action,
 		Capability: capability,
 		Client:     service.AgentClientMCP,
-		Transport:  s.Transport,
+		Transport:  transport,
 		TargetType: targetType,
 		TargetID:   targetID,
 		Success:    !result.IsError,
 		Error:      errMsg,
 		LatencyMs:  uint(ms),
-		IP:         s.ClientIP,
+		IP:         clientIP,
 	})
 }
 
-func (h *Handler) recordSessionEvent(s *Session, action, ip string, success bool, errMsg string) {
-	if h == nil || h.callLog == nil || s == nil {
-		return
-	}
-	tokenID := s.TokenID
-	tokenName := s.TokenName
-	if s.Principal != nil {
-		tokenID = s.Principal.TokenID
-		tokenName = s.Principal.Name
-	}
-	if ip == "" {
-		ip = s.ClientIP
-	}
-	h.callLog.RecordSafe(service.AgentCallRecord{
-		TokenID:    tokenID,
-		TokenName:  tokenName,
-		Action:     action,
-		Client:     service.AgentClientMCP,
-		Transport:  s.Transport,
-		TargetType: "mcp_session",
-		TargetID:   s.ID,
-		Success:    success,
-		Error:      errMsg,
-		IP:         ip,
-	})
-}
-
-func (h *Handler) writeSessionLimit(c *gin.Context, err error) {
-	msg := err.Error()
-	code := "SESSION_LIMIT"
-	switch {
-	case errors.Is(err, ErrSessionLimitGlobal):
-		msg = "MCP 全局并发会话已达上限，请稍后重试或联系管理员"
-	case errors.Is(err, ErrSessionLimitToken):
-		msg = "该 Token 的 MCP 并发会话已达上限，请关闭空闲会话后重试"
-	default:
-		code = "BAD_REQUEST"
-	}
-	c.JSON(http.StatusTooManyRequests, gin.H{"error": code, "message": msg})
-}
-
-func (h *Handler) touchSession(s *Session, lastTool string) {
-	if err := h.sessions.Touch(s.ID, lastTool); err != nil {
-		slog.Debug("MCP 会话保活失败", "sessionId", s.ID, "error", err)
-	}
-}
-
-func (h *Handler) kickSession(sessionID, reason string) {
-	if err := h.sessions.Kick(sessionID, reason); err != nil && !errors.Is(err, ErrSessionNotFound) {
-		slog.Warn("关闭 MCP 会话失败", "sessionId", sessionID, "reason", reason, "error", err)
-	}
-}
-
-func (h *Handler) writeSSE(c *gin.Context, s *Session, data []byte) bool {
+func (h *Handler) writeSSE(c *gin.Context, conn *SSEConn, data []byte) bool {
 	if _, err := c.Writer.Write(data); err != nil {
-		slog.Debug("MCP SSE 写入失败", "sessionId", s.ID, "error", err)
-		h.kickSession(s.ID, "客户端连接写入失败")
+		slog.Debug("MCP SSE 写入失败", "connId", conn.ID, "error", err)
+		h.conns.Unregister(conn.ID)
 		return false
 	}
 	return true

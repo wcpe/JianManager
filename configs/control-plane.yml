@@ -70,14 +70,6 @@ client_dist:
   # 生产经 ${JIANMANAGER_CLIENT_KEY_ENC_SECRET} 注入 32 字节 base64 密钥，勿硬编码。生成示例：openssl rand -base64 32
   key_enc_secret: ""  # base64(32 字节)；生产经 ${JIANMANAGER_CLIENT_KEY_ENC_SECRET} 注入
 
-# CP 内嵌 MCP 网关（FR-389，见 ADR-077）。Streamable HTTP：POST/GET /api/v1/mcp；SSE：GET /api/v1/mcp/sse。
-# 鉴权仅 Agent Token（jmat_）；会话内存、CP 重启全丢。均可省略（用下列默认）。
-mcp:
-  idle_timeout: 30m            # 空闲超时
-  absolute_timeout: 24h        # 绝对超时
-  max_global_sessions: 0       # 全局并发会话上限；0=不限制（默认）
-  max_sessions_per_token: 0    # 每 Token 并发上限；0=不限制（默认）
-
 # 通用二进制运行时搭建（FR-441，见 ADR-090）。coreType=binary 让非 Minecraft 的预编译二进制
 # （Go/Rust 等配套服务）也能纳入平台的搭建/任务追踪/制品管理，不适用 server.properties/EULA/版本构建号。
 # node_file_roots 是 kind=node_file 来源的受控放行根（节点上的绝对路径）：

@@ -4068,20 +4068,20 @@ MCP 只承载小文本，大文件与二进制经票据换取的流式端点传�
 - **消费时重验**：签名 → 未过期 → 未被消费 → Token 未吊销 → 实例归属仍在授权范围 → 方向与端点匹配。
 - **错误**：上述任一不符 → **403** + 统一中文 `票据无效或已失效`（不区分具体原因，避免泄露内部状态）。未配置服务端主密钥时端点关闭（**503**）。
 
-## CP 内嵌 MCP（FR-389 / FR-395 / ADR-077/080）
+## CP 内嵌 MCP（FR-389 / FR-395 / FR-489 / ADR-077/080/096）
 
 Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP SDK）。**路径写死**：
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
-| `/api/v1/mcp` | POST | Streamable HTTP 主路径：`initialize` 创建会话；后续带 `Mcp-Session-Id` 发 JSON-RPC（`tools/list`、`tools/call`、`ping` 等） |
-| `/api/v1/mcp` | GET | 需 `Mcp-Session-Id`：返回会话元数据（保活） |
-| `/api/v1/mcp` | DELETE | 客户端结束会话（需 `Mcp-Session-Id`） |
-| `/api/v1/mcp/sse` | GET | SSE 兼容：建立 SSE 会话，推送 `endpoint` 事件 |
-| `/api/v1/mcp/message` | POST | SSE 配套消息口：`?sessionId=` 或 `Mcp-Session-Id`；响应经 SSE 推送 |
+| `/api/v1/mcp` | POST | Streamable HTTP 主路径，**无状态**：`initialize` 直接返回结果；每个请求独立鉴权与处理，**不读也不写** `Mcp-Session-Id`（请求携带旧值被忽略而非拒绝） |
+| `/api/v1/mcp` | GET | **405** + `Allow: POST`（无会话可保活） |
+| `/api/v1/mcp/sse` | GET | SSE 兼容：建立 SSE 响应流，推送 `endpoint` 事件 |
+| `/api/v1/mcp/message` | POST | SSE 配套消息口：`?sessionId=` 或 `Mcp-Session-Id` 头指定 **SSE 传输连接标识**（缺参 400；连接不存在 404 `CONN_GONE`；连接不属于当前 Token 403）；响应经 SSE 推送 |
 
-- **鉴权**：仅 Agent Token（`Authorization: Bearer jmat_...`）。人类 JWT **不能**建立 MCP 会话（401）。
-- **会话响应头**：`Mcp-Session-Id: mcps_<hex>`
+- **鉴权**：仅 Agent Token（`Authorization: Bearer jmat_...`）。人类 JWT **不能**充当 MCP 凭据（401）。
+- **授权**：一律取**每请求重建的 principal**（`middleware.AgentAuth` → `Authenticate`），不再有会话内的 principal 快照——Token 吊销、scope 或能力调整在**下一个请求**即生效。
+- **SSE 连接态**：仅**传输连接登记**（`/message` 必须把工具结果回推到 `/sse` 已建立的响应流），连接 id 沿用 `mcps_<hex>` 形态，连接断开即注销；它不是协议会话，不承载超时、并发上限或能力快照（ADR-096）。`/message` 对该 id 的校验只保证「连接存在且属于当前 Token」——不存在回 404 `CONN_GONE`（须重新连 `/sse`），不属于当前 Token 回 403。
 - **工具目录**（全量注册，永久禁区不注册）：
   - 基础（FR-389/395）：`agent_whoami`、`agent_list_nodes`、`agent_list_instances`、`agent_get_instance`、`agent_get_instance_metrics`、`agent_get_instance_logs`、`instance_start`、`instance_stop`、`instance_restart`、`node_maintenance_enter`、`node_maintenance_leave`
   - 节点/实例扩展（FR-396）：`node_get`/`node_get_metrics`/`node_check_docker`/`node_drain`/`node_list_archived`/`node_purge_archived`；`instance_search`/`instance_get_env`/`instance_list_crash_snapshots`/`instance_create`/`instance_provision_server`/`instance_import_inspect`/`instance_import`/`instance_clone`/`instance_rebuild`/`instance_update_config`/`task_get`/`instance_send_command`/`instance_batch`/`instance_kill`/`instance_delete`
@@ -4107,48 +4107,42 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 - **FR-470 工具约定**：`instance_crash_trend` 返回按 (天 × 根因) 聚合的趋势 + 同类聚合，来源是**独立汇总表**（`InstanceCrashStat`，不随 K=5 快照裁剪而丢失历史）；可选 `days` 默认 30、上限 365。`V1Allowed=false`、`HTTPInContract=false`（HTTP 侧另有 `/crash-trend`）。
 - **tools/list**：按当前 Token 的能力与潜在可用 scope **动态裁剪**（V1 兼容解释器；V2 capability）。空能力 V2 仅见 `agent_whoami`。
 - **tools/call**：无论是否出现在 list，均做最终授权；可信目标由 CP 解析；生命周期写操作使用 expected-node 派发。策略拒绝 → HTTP **200** + MCP `result.isError=true` + 中文 message（**不得 5xx**）。
-- **并发/超时**（配置 `mcp.*`，默认空闲 30m / 绝对 24h / 全局 32 / 每 Token 4）：超限 HTTP **429**，中文 `message`
-- **会话生命周期**：CP 重启全丢（内存）；空闲/绝对超时或管理员踢线后 context 取消
-- **流水**：tool call 记对应 Agent action 与 `capability`；会话 open/close/kick capability 可空
+- **错误语义**：`404 SESSION_GONE` 与超限 **429** 已随无状态化移除（无会话可失效、无并发配额可超）；无凭据 / Token 无效、吊销或过期仍 **401**，策略拒绝语义不变（见上条 `tools/call`）。
+- **配置**：会话类配置项 `mcp.idle_timeout` / `mcp.absolute_timeout` / `mcp.max_global_sessions` / `mcp.max_sessions_per_token` **已随无状态化移除**（Streamable HTTP 无会话可超时或计数），配置结构、示例配置与 `docker-compose.yml` 已同步删除。
+- **流水**：tool call 记对应 Agent action 与 `capability`；`mcp.session.open/close/kick` 不再产生。
 
-### GET /api/v1/agent/mcp/sessions
-- **描述**: 列出当前内存中的 MCP 会话
-- **关联 FR**: FR-389
-- **权限**: 平台管理员 JWT
+### GET /api/v1/agent/mcp/activity
+- **描述**: 按 **Agent Token** 聚合窗口内的 MCP 活动（谁在用 MCP、最近何时用、用了什么、失败多少）。取代原「列出内存中的 MCP 会话」与「踢线」两个端点；数据源为 `agent_call_logs`（FR-390），不依赖进程内状态，故 CP 重启后视图连续。
+- **关联 FR**: FR-489（数据源 FR-390）
+- **权限**: 平台管理员 JWT（权限节点 `agent.mcp.read`；不再接受 `agent.token.manage` 作为替代门）
+- **查询参数**:
+  | 参数 | 类型 | 说明 |
+  |---|---|---|
+  | window | string | Go duration 字符串，默认 `24h`；允许区间 **1h ~ 168h**，不可解析或越界回 400 |
 - **响应** (200):
   ```json
   {
-    "sessions": [
+    "window": "24h0m0s",
+    "generatedAt": "2026-09-28T12:00:00Z",
+    "items": [
       {
-        "sessionId": "mcps_...",
-        "tokenId": 1,
-        "tokenName": "ci",
+        "tokenId": 7,
+        "tokenName": "运维自动化",
         "tokenPrefix": "jmat_ab12",
-        "clientIP": "1.2.3.4",
-        "transport": "streamable_http",
-        "connectedAt": "...",
-        "lastActivityAt": "...",
-        "lastTool": "agent_whoami",
-        "idleTimeout": "30m0s",
-        "absoluteTimeout": "24h0m0s"
+        "lastActivityAt": "2026-09-28T11:59:00Z",
+        "lastAction": "agent.whoami",
+        "callCount": 128,
+        "failureCount": 3,
+        "clientIPs": ["10.0.0.5"],
+        "clients": { "claude-code": 120, "curl": 8 }
       }
-    ],
-    "config": {
-      "idleTimeout": "30m0s",
-      "absoluteTimeout": "24h0m0s",
-      "maxGlobalSessions": 32,
-      "maxSessionsPerToken": 4
-    }
+    ]
   }
   ```
-
-### DELETE /api/v1/agent/mcp/sessions/:id
-- **描述**: 强制踢线指定 MCP 会话（取消 context，进行中 tool call 失败）
-- **关联 FR**: FR-389
-- **权限**: 平台管理员 JWT
-- **响应** (200): `{ "ok": true }`
-- **错误**: 404 会话不存在
-- **审计**: `mcp.session.kick`
+  - `items[]`：`tokenId`（uint）、`tokenName`（优先取 `agent_tokens` 当前值，Token 行被硬删时回退为流水里签发时的名称快照）、`tokenPrefix`（如 `jmat_ab12`，取自 `agent_tokens`）、`lastActivityAt`（窗口内最近一次调用）、`lastAction`（最近 action）、`callCount`（窗口内调用总数，含失败）、`failureCount`（`success=false` 条数）、`clientIPs`（来源 IP 去重升序）、`clients`（客户端标识 → 调用次数，键为 `X-JM-Agent-Client` 归一后的取值 `mcp`/`jmagent`/`curl`/`unknown`）。
+- **排序**: `lastActivityAt` 降序（同一时刻以 `tokenId` 降序兜底）；窗口内无调用时 `items`、`clientIPs`、`clients` 均为空形态而非 `null`
+- **错误**: 400 `window` 非时长字符串或超出 1h~168h | 401 未认证 | 403 无权限 | 404 调用流水未启用 | 500 聚合查询失败
+- **管理员干预**：无会话可踢——需要立即阻断某凭据时**吊销该 Token**，下一个请求即失效。
 
 ## 错误码
 
