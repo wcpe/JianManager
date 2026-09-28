@@ -690,8 +690,10 @@ func runWorker() {
 		}
 		if ingestErr != nil {
 			slog.Error("日志采集运行时创建失败：已达重试上限，本次启动不再采集（需告警介入）", "error", ingestErr)
+			register.SetLogIngestHealth(false, ingestErr.Error())
 		} else {
 			logIngest = manager
+			register.SetLogIngestHealth(true, "")
 			workerServer.SetInstanceLogCollector(manager)
 			logStack.LogRPC.SetCutoverReadiness(grpcsvc.CutoverReadinessFunc(func() (bool, time.Time, []string) {
 				readiness := manager.PrepareCutoverReadiness()

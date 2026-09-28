@@ -412,6 +412,10 @@ message HeartbeatRequest {
   repeated TaskSnapshot tasks = 12;  // 运行中长任务进度快照（FR-183 任务中心，见 ADR-040）
   repeated ProcessMetricSample process_metrics = 13; // 受管实例进程 TOPN 快照（FR-170）
   ManagedRuntimeSnapshot managed_runtime = 14; // Worker 与共享 Bot Worker 当前受管运行时快照（FR-400）
+  // 日志采集健康（FR-485）：false = 采集运行时未运行（创建失败或已停止）。
+  // 2026-09-28 事故教训：采集静默停摆 40+ 分钟无人知晓——该信号让「采集健康」进入告警。
+  bool log_ingest_healthy = 15;
+  string log_ingest_detail = 16;  // 不健康原因（可空）
 }
 
 // TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照（FR-183，见 ADR-040）。

@@ -270,6 +270,7 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 		nodeSample(model.MetricNodeCPUPct, "pct", ptr(float64(req.CpuUsage)*100)),
 		nodeSample(model.MetricNodeMemUsed, "bytes", ptr(float64(req.MemoryUsedMb)*1024*1024)),
 		nodeSample(model.MetricNodeDiskUsed, "bytes", ptr(float64(req.DiskUsedMb)*1024*1024)),
+		nodeSample(model.MetricLogIngestHealthy, "bool", ptr(boolToFloat(req.LogIngestHealthy))),
 	)
 	// load average：取不到为 0（Windows 预热/不支持），此时不落点，曲线优雅留空（FR-062）。
 	if req.LoadAvg1 > 0 {
@@ -1125,4 +1126,12 @@ func (s *MetricService) Stop() {
 	close(s.stopCh)
 	s.running = false
 	slog.Info("时序指标卷积器已停止")
+}
+
+// boolToFloat 把布尔指标转成 0/1 浮点值（FR-485：采集健康指标）。
+func boolToFloat(v bool) float64 {
+	if v {
+		return 1
+	}
+	return 0
 }

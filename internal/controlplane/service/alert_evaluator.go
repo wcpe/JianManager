@@ -501,6 +501,11 @@ func getNodeMetric(node *model.Node, metric string) float64 {
 		return float64(node.MemoryUsage)
 	case "disk", "disk_usage":
 		return float64(node.DiskUsage)
+	case "log_ingest_healthy": // FR-485：采集健康（1=健康，0=停摆）
+		if node.LogIngestHealthy {
+			return 1
+		}
+		return 0
 	default:
 		return -1
 	}
