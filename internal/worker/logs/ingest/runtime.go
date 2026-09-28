@@ -1708,7 +1708,22 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 		events = append(events, event)
 		return nil
 	}
-	if saved.EventsStored && m.events != nil {
+	// 段的权威性**不依赖 state 里的 EventsStored 标记**：该标记随 state 一起持久化，而
+	// state 可能被重置或丢失（运维处置/损坏恢复），此时段本身仍完好在盘上；若因标记为假而
+	// 改用（已空的）内联集合，就会得到比段更短的权威集，进而触发 appendEvents 的
+	// 「eventstore ahead of authoritative set」硬失败——2026-09-29 生产实测：重置 state 后
+	// 采集再也起不来（每轮创建都失败），而事件本体其实一直都在段里。
+	// 因此判据改为「段存储里确实有该源的事件」：有就以段为准（与设计意图一致：先段内容、
+	// 后 durable WAL）。
+	storedCount := 0
+	if m.events != nil {
+		n, err := m.events.Count(key)
+		if err != nil {
+			return nil, err
+		}
+		storedCount = n
+	}
+	if storedCount > 0 {
 		if err := m.events.Iterate(key, add); err != nil {
 			return nil, err
 		}
