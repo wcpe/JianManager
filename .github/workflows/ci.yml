@@ -242,7 +242,7 @@ jobs:
         with:
           go-version: '1.26.2'
 
-      - name: Agent 策略与入口闸（FR-388 断言下限 ≥30 + MCP 无状态化契约）
+      - name: Agent 策略与入口闸（断言下限 ≥30 + MCP 无状态化契约）
         shell: bash
         run: |
           set -euo pipefail
