@@ -65,6 +65,24 @@ jobs:
 
           exit "$fail"
 
+      - name: 扫描绝对路径（本机用户名 / 目录结构泄漏）
+        env:
+          BASE: ${{ steps.range.outputs.base }}
+        run: |
+          set -eu
+          # 允许的占位用户名与常见 CI/容器路径；其余 /home|/Users/<名>/ 与 C:\Users\ 一律视为泄漏。
+          ALLOW='(/home/(user|example|runner|app|node|ubuntu)/)|(/Users/(user|example|runner|shared)/)|(/opt/(app|jm|jianmanager)/)|(/tmp/)|(/var/(log|lib|run)/)|(/usr/)|(/etc/)|(C:\\Users\\(user|example|runner)\\)'
+          fail=0
+          echo "::group::变更中的绝对路径"
+          if git diff "$BASE"...HEAD | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\' | grep -vE "$ALLOW"; then
+            echo "::error::变更含真实绝对路径（泄漏用户名/目录结构），请改用相对路径、临时目录或配置注入"
+            fail=1
+          else
+            echo "无"
+          fi
+          echo "::endgroup::"
+          exit "$fail"
+
       - name: 扫描提交信息（IP / AI 签名）
         env:
           BASE: ${{ steps.range.outputs.base }}
