@@ -1401,6 +1401,13 @@ func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup
 		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
 		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
 	}
+	// 诊断（2026-09-28 生产）：校验恒「不可见」而数据确实在 VL 里时，必须能拿到
+	// 平台**实际发出的**查询参数，与手工复刻查询逐字段对照。此前多轮修复都因缺少
+	// 这一条日志而在盲改。
+	slog.Info("投影校验查询",
+		"generation", generation, "events", len(events),
+		"query", params.Get("query"), "start", params.Get("start"),
+		"end", params.Get("end"), "limit", params.Get("limit"))
 	seen := make(map[string]bool, len(events))
 	seenOther := make(map[string]bool)
 	err := client.Stream(ctx, "/select/logsql/query", params, func(body io.Reader) error {
@@ -1493,6 +1500,13 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
 		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
 	}
+	// 诊断（2026-09-28 生产）：校验恒「不可见」而数据确实在 VL 里时，必须能拿到
+	// 平台**实际发出的**查询参数，与手工复刻查询逐字段对照。此前多轮修复都因缺少
+	// 这一条日志而在盲改。
+	slog.Info("投影校验查询",
+		"generation", generation, "events", len(events),
+		"query", params.Get("query"), "start", params.Get("start"),
+		"end", params.Get("end"), "limit", params.Get("limit"))
 	seen := make(map[string]bool, len(events))
 	err := client.Stream(ctx, "/select/logsql/query", params, func(body io.Reader) error {
 		scanner := bufio.NewScanner(io.LimitReader(body, 32<<20+1))
