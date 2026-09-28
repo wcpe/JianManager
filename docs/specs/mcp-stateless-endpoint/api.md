@@ -13,7 +13,7 @@
 
 - **描述**: 按 **Agent Token** 聚合窗口内的 MCP 活动（谁在用 MCP、最近何时用、用了什么、失败多少）。替代原「列出当前内存中的 MCP 会话」——数据源为 `agent_call_logs`（FR-390），不依赖任何进程内状态，故 CP 重启后视图连续。
 - **关联 FR**: FR-489（数据源 FR-390）
-- **权限**: 平台管理员 JWT；权限节点 **`agent.mcp.read`**（不再接受 `agent.token.manage` 作为替代门，与 ADR-096 的「复用既有 `agent.mcp.read`」一致）
+- **权限**: 平台管理员 JWT；权限节点 **`agent.mcp.read`**，或 `agent.token.manage` —— 二者任一即放行（沿用原会话端点的权限门，本 FR 未改动）
 - **Query 参数**:
 
   | 参数 | 类型 | 必填 | 说明 |
@@ -35,7 +35,7 @@
         "callCount": 128,
         "failureCount": 3,
         "clientIPs": ["10.0.0.5"],
-        "clients": { "claude-code": 120, "curl": 8 }
+        "clients": { "mcp": 120, "curl": 8 }
       }
     ]
   }
@@ -55,7 +55,7 @@
   | `items[].callCount` | int64 | 窗口内调用总数（含失败） |
   | `items[].failureCount` | int64 | 窗口内 `success=false` 的条数（策略拒绝记 `success=false`，故一并计入） |
   | `items[].clientIPs` | string[] | 窗口内出现过的来源 IP（去重、升序） |
-  | `items[].clients` | object | 客户端标识 → 调用次数；键为 `X-JM-Agent-Client` 归一后的取值（`mcp` / `jmagent` / `curl` / `unknown`） |
+  | `items[].clients` | object | 客户端标识 → 调用次数；键为 `X-JM-Agent-Client` 归一后的取值（`mcp` / `jmagent` / `curl` / `unknown`）；客户端自报名不在白名单时计为 `unknown`，故 `claude-code` 一类自报名不会作为键出现 |
 
 - **排序**: `items` 按 `lastActivityAt` 降序；同一时刻以 `tokenId` 降序兜底（输出稳定，便于前端与测试断言）
 - **无数据**: 窗口内无任何调用时返回 `items: []`（空数组，非 `null`）；`clientIPs` 与 `clients` 同理不返回 `null`
@@ -91,7 +91,7 @@
 |---|---|---|
 | POST | `/api/v1/mcp` | 去会话：不读也不写 `Mcp-Session-Id`；`initialize` 直接返回结果；每请求独立鉴权与授权 |
 | GET | `/api/v1/mcp` | 由「会话保活」改为 **405** + `Allow: POST` |
-| DELETE | `/api/v1/mcp` | **不再注册** |
+| DELETE | `/api/v1/mcp` | 由「不注册 → 通用 404」改为 **405** + `Allow: POST`（无会话可终止；遵循 Streamable HTTP 规范对「不支持客户端终止会话」的建议，避免客户端误判为路径写错） |
 | GET | `/api/v1/mcp/sse` | 不变（SSE 传输连接登记） |
 | POST | `/api/v1/mcp/message` | 不变（`?sessionId=` 或 `Mcp-Session-Id` 头为 SSE 传输连接标识；缺参 400、连接不存在 404 `CONN_GONE`、不属于当前 Token 403） |
 

@@ -23,6 +23,12 @@ const (
 	DefaultAgentCallLogRetentionDays = 14
 	// agentCallErrorMaxLen 失败信息截断上限（与 audit 对齐）。
 	agentCallErrorMaxLen = 512
+	// agentCallActionMaxLen 动作标识截断上限（与 agent_call_logs.action varchar(64) 对齐）。
+	// Action 并非服务端常量：MCP 路径对未知工具名会拼 "mcp.tool." + toolName，而 toolName 由
+	// 客户端请求体提供（可达 4MB）。不截断则 MySQL 严格模式插入报 data too long，RecordSafe 只打
+	// WARN 便放行——该次调用流水整行消失，等于给调用方留下抹掉审计痕迹的口子；SQLite 不校验长度，
+	// 超长值会落库并被活动视图回显。故与 Error 同样在写入口兜底。
+	agentCallActionMaxLen = 64
 	// agentClientHeaderMaxLen X-JM-Agent-Client 原始值长度上限，防注入/刷库。
 	agentClientHeaderMaxLen = 32
 )
@@ -92,11 +98,17 @@ func (s *AgentCallLogService) Record(r AgentCallRecord) error {
 	if strings.Contains(errMsg, "jmat_") {
 		errMsg = "[已脱敏：含 token 形态字符串]"
 	}
+	// Action 同样截断（按字节，与上面的 error 同口径）：宁可丢尾部字符，也不能让整行流水
+	// 因列长超限而写不进去——流水缺失比流水不完整更难发现、也更不利于追责。
+	action := r.Action
+	if len(action) > agentCallActionMaxLen {
+		action = action[:agentCallActionMaxLen]
+	}
 	client := NormalizeAgentClient(r.Client)
 	row := &model.AgentCallLog{
 		TokenID:    r.TokenID,
 		TokenName:  r.TokenName,
-		Action:     r.Action,
+		Action:     action,
 		Capability: r.Capability,
 		Client:     client,
 		Transport:  r.Transport,
@@ -226,8 +238,15 @@ type TokenActivity struct {
 // ActivityByToken 按 Token 聚合窗口内的调用流水，按最近活动倒序。
 //
 // 全部使用跨 SQLite/MySQL 通用 SQL，无方言分支、不依赖 GROUP_CONCAT 或窗口函数：
-//   - 计数与失败数走 `COUNT(*)` + `SUM(CASE WHEN success = 0 ...)` + `GROUP BY token_id`
-//     （与 client_dist_security.go 的聚合同范式），命中 idx_agent_call_token_created；
+//   - 计数与失败数走 `COUNT(*)` + `SUM(CASE WHEN success = 0 OR success IS NULL ...)` + `GROUP BY token_id`
+//     （与 client_dist_security.go 的聚合同范式）；NULL 计入失败的理由见下方调用处注释。
+//   - 索引（原注释称「命中 idx_agent_call_token_created」，不准确，已按实测修正）：本查询**无法**
+//     用该复合索引做范围定位——其前导列是 token_id，而三个聚合的谓词只有 created_at >= ?。
+//     SQLite 实测（5000 行）计划为 `SCAN agent_call_logs USING INDEX idx_agent_call_token_created`，
+//     属整索引扫描：收益仅是按 (token_id, created_at) 的顺序扫描顺带省掉 GROUP BY 的临时 B 树，
+//     并非按时间窗 seek；created_at 的单列 idx_agent_call_logs_created_at 反倒没被优化器选中
+//     （显式 DROP 后计划不变，已实测）。仍可接受的理由：窗口上界由调用方约束、流水按 14 天保留
+//     清理，扫描量有界；不为单条查询改索引定义（索引改动会波及全部写路径）。
 //   - 「每个 Token 最近一行」用「子查询取 MAX(created_at) 再自联接回该行」的写法
 //     （与 metric.go 的 latest 自联接同范式）——**不**把 MAX(created_at) 扫进 time.Time：
 //     SQLite 驱动对 datetime 列返回 string，裸扫描会报 unsupported Scan
@@ -250,9 +269,14 @@ func (s *AgentCallLogService) ActivityByToken(window time.Duration) ([]TokenActi
 		FailCount int64 `gorm:"column:fail_cnt"`
 	}
 	var aggs []aggRow
-	// success 为布尔列（SQLite/MySQL 均落 0/1），故失败判定用字面量 0。
+	// 失败判定：success 为布尔列（SQLite/MySQL 均落 0/1），字面量 0 即失败；
+	// NULL 必须**显式**计入失败——`CASE WHEN success = 0` 对 NULL 求值为 NULL，会落进 ELSE
+	// 分支被当成成功，失败数偏小（审计面「全绿」）。三值逻辑下 NULL 既非成功也非失败，
+	// 按审计口径从宽取「未确认为成功即失败」，宁多勿漏。
+	// 前提：success 列仍是可空列（模型刻意不加 not null，理由见 model.AgentCallLog.Success），
+	// 故这里不假设「非 0 即 1」；写法跨 SQLite/MySQL 通用，不依赖 IS NOT 0 等方言细节。
 	err := s.db.Model(&model.AgentCallLog{}).
-		Select("token_id, COUNT(*) AS cnt, COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0) AS fail_cnt").
+		Select("token_id, COUNT(*) AS cnt, COALESCE(SUM(CASE WHEN success = 0 OR success IS NULL THEN 1 ELSE 0 END), 0) AS fail_cnt").
 		Where("created_at >= ?", since).
 		Group("token_id").
 		Scan(&aggs).Error
@@ -303,17 +327,23 @@ func (s *AgentCallLogService) ActivityByToken(window time.Duration) ([]TokenActi
 			Clients:      map[string]int64{},
 		}
 	}
+	// 自联接按 MAX(created_at) 命中：同一 Token 可能有多行时间戳相同，而排序是
+	// created_at DESC + id DESC——**首次**命中的才是最新那行。故每个 Token 只写一次，
+	// 避免被同刻的旧行（更小 id）覆盖成较旧的 action。
+	//
+	// 「已写入」用显式标记判定，不能拿 LastAction != "" 当哨兵：action 列虽 not null 但**不禁止空串**，
+	// 最新那行 action 恰为空串时哨兵永不置位，同刻更小 id 的旧行会继续写入，把
+	// LastActivityAt / LastAction / TokenName 一并覆盖成更旧那行的值（时间与操作自相矛盾）。
+	seenLatest := make(map[uint]bool, len(aggs))
 	for _, row := range latest {
 		it, ok := byToken[row.TokenID]
 		if !ok {
 			continue
 		}
-		// 自联接按 MAX(created_at) 命中：同一 Token 可能有多行时间戳相同，而排序是
-		// created_at DESC + id DESC——**首次**命中的才是最新那行。故只写一次，
-		// 避免被同刻的旧行（更小 id）覆盖成较旧的 action。
-		if it.LastAction != "" {
+		if seenLatest[row.TokenID] {
 			continue
 		}
+		seenLatest[row.TokenID] = true
 		it.LastActivityAt = row.CreatedAt
 		it.LastAction = row.Action
 		// 兜底：Token 行已被硬删时，仍能显示签发时的名称快照。

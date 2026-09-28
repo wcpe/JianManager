@@ -43,7 +43,12 @@ type SSEConn struct {
 	// ConnectedAt 建连时间。
 	ConnectedAt time.Time
 
-	// ctx/cancel 连接关闭时取消（SSE 路径进行中的 tool call 随之结束）。
+	// ctx/cancel 连接关闭（Close/Unregister/Stop）时取消。
+	//
+	// 它是 SSE 路径进行中 tool call 的生命周期上界：HandleSSEMessage 用
+	// context.AfterFunc 把它并入工具调用的 ctx，连接被踢/关闭时工具随之中止——
+	// 结果要回推到这条流上，连接没了继续跑只是空转，还可能留下半完成的写操作。
+	// Streamable HTTP 路径无连接，工具调用只受请求 ctx 约束。
 	ctx    context.Context
 	cancel context.CancelFunc
 

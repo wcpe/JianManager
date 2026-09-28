@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -135,6 +136,122 @@ func TestActivityByToken_NoData(t *testing.T) {
 	items, err := svc.ActivityByToken(24 * time.Hour)
 	require.NoError(t, err, "无流水不是错误（前端空态依赖此语义）")
 	assert.Empty(t, items)
+}
+
+// TestAgentCallLog_RecordTruncatesAction 超长 Action 落库前截断到列宽上限。
+//
+// 真实触发路径：MCP 对未知工具名拼 "mcp.tool." + toolName，而 toolName 由客户端请求体提供
+// （上限 4MB）。不截断则 MySQL 严格模式插入报 data too long，RecordSafe 只打 WARN → 该次调用
+// 流水整行消失（等于可被用来抹掉审计痕迹）。故断言截断而非报错。
+func TestAgentCallLog_RecordTruncatesAction(t *testing.T) {
+	db := setupAgentCallLogDB(t)
+	svc := NewAgentCallLogService(db)
+	// 常量必须与 agent_call_logs.action varchar(64) 对齐，否则截断长度形同虚设。
+	assert.Equal(t, 64, agentCallActionMaxLen)
+
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 1, TokenName: "t", Action: "mcp.tool." + strings.Repeat("x", 4000),
+		Client: AgentClientMCP, Success: false,
+	}))
+	var row model.AgentCallLog
+	require.NoError(t, db.First(&row).Error)
+	assert.Len(t, row.Action, agentCallActionMaxLen, "超长 Action 必须截断落库")
+	assert.Equal(t, "mcp.tool.", row.Action[:len("mcp.tool.")], "保留前部，便于溯源到工具调用前缀")
+
+	// 边界：恰好等于上限时不截断（保证正常长度不受影响）。
+	exact := strings.Repeat("a", agentCallActionMaxLen)
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 1, TokenName: "t", Action: exact, Client: AgentClientMCP, Success: true,
+	}))
+	var row2 model.AgentCallLog
+	require.NoError(t, db.Where("action = ?", exact).First(&row2).Error)
+	assert.Equal(t, exact, row2.Action)
+}
+
+// TestActivityByToken_SameTimestampTakesLargerID 同一 Token、同一 created_at 的两行取 id 更大者。
+//
+// 自联接按 MAX(created_at) 命中的是**所有**同刻行，靠 ORDER BY created_at DESC, id DESC 让最新那行
+// 先出现；「已写入」判定必须与此一致（FR-489 review 修复 2）。
+func TestActivityByToken_SameTimestampTakesLargerID(t *testing.T) {
+	db := setupActivityDB(t)
+	svc := NewAgentCallLogService(db)
+	now := time.Now().Truncate(time.Second)
+
+	seedActivityToken(t, db, 5, "ci", "jmat_ab12")
+	// 两行 created_at 完全一致，仅写入顺序（id）不同：后写的才是「最近操作」。
+	seedActivityLog(t, db, model.AgentCallLog{
+		TokenID: 5, TokenName: "ci", Action: AgentActionWhoami, Client: AgentClientMCP,
+		Success: true, IP: "10.0.0.1", CreatedAt: now,
+	})
+	seedActivityLog(t, db, model.AgentCallLog{
+		TokenID: 5, TokenName: "ci", Action: AgentActionListInstances, Client: AgentClientMCP,
+		Success: true, IP: "10.0.0.1", CreatedAt: now,
+	})
+
+	items, err := svc.ActivityByToken(time.Hour)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, AgentActionListInstances, items[0].LastAction, "同刻并列时取 id 更大（更晚写入）那行")
+	assert.Equal(t, int64(2), items[0].CallCount, "同刻两行都计入窗口内计数")
+}
+
+// TestActivityByToken_LatestEmptyActionNotOverwritten 最新一行 action 为空串时，不得被同刻旧行覆盖。
+//
+// action 列 not null 但不禁止空串，故不能用 LastAction != "" 当「已写入」哨兵；否则空串行会被
+// 同刻更小 id 的旧行反复覆盖，LastActivityAt 与 LastAction 变成较旧那行的值（时间与操作自相矛盾）。
+func TestActivityByToken_LatestEmptyActionNotOverwritten(t *testing.T) {
+	db := setupActivityDB(t)
+	svc := NewAgentCallLogService(db)
+	now := time.Now().Truncate(time.Second)
+
+	// 故意不 seed agent_token：让 TokenName 退回流水行快照，从而能观察是哪一行写进去的。
+	seedActivityLog(t, db, model.AgentCallLog{
+		TokenID: 3, TokenName: "旧行快照", Action: AgentActionWhoami, Client: AgentClientMCP,
+		Success: true, IP: "10.0.0.1", CreatedAt: now,
+	})
+	seedActivityLog(t, db, model.AgentCallLog{
+		TokenID: 3, TokenName: "最新行快照", Action: "", Client: AgentClientMCP,
+		Success: true, IP: "10.0.0.1", CreatedAt: now,
+	})
+
+	items, err := svc.ActivityByToken(time.Hour)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Empty(t, items[0].LastAction, "最新行 action 为空串，不能被同刻旧行的 action 覆盖成 whoami")
+	assert.Equal(t, "最新行快照", items[0].TokenName, "名称快照同样应取最新那行")
+	assert.WithinDuration(t, now, items[0].LastActivityAt, time.Second)
+}
+
+// TestActivityByToken_NullSuccessCountsAsFailure success 列可空时 NULL 不得被算成成功。
+//
+// 模型刻意不加 not null（理由见 model.AgentCallLog.Success：既有库会被整表重建，且库中一旦存在
+// success IS NULL 的行，AutoMigrate 会直接失败并阻断 CP 启动），故「NULL 计失败」这一审计不变量
+// 由聚合 SQL 承担——本用例锁定该语义。
+func TestActivityByToken_NullSuccessCountsAsFailure(t *testing.T) {
+	db := setupActivityDB(t)
+	svc := NewAgentCallLogService(db)
+
+	seedActivityToken(t, db, 11, "ci", "jmat_ab12")
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 11, TokenName: "ci", Action: AgentActionWhoami,
+		Client: AgentClientMCP, Success: true, IP: "10.0.0.1",
+	}))
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 11, TokenName: "ci", Action: AgentActionWhoami,
+		Client: AgentClientMCP, Success: false, Error: "forbidden", IP: "10.0.0.1",
+	}))
+	// 写路径不会产生 NULL（GORM Create/Select 均显式落 0/1），这里是模拟历史脏数据 / 人工 SQL 遗留。
+	require.NoError(t, db.Exec(`INSERT INTO agent_call_logs
+		(token_id, token_name, action, client, success, latency_ms, ip, created_at)
+		VALUES (?,?,?,?,NULL,0,?,?)`,
+		11, "ci", AgentActionWhoami, AgentClientMCP, "10.0.0.1", time.Now().Truncate(time.Second)).Error)
+
+	items, err := svc.ActivityByToken(time.Hour)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, int64(3), items[0].CallCount)
+	assert.Equal(t, int64(2), items[0].FailureCount,
+		"NULL 不得落进「非失败」分支被算作成功（否则失败数偏小、审计面全绿）")
 }
 
 // TestActivityByToken_TokenRowRemovedFallsBackToLogSnapshot Token 行被硬删时退回流水里的名称快照。

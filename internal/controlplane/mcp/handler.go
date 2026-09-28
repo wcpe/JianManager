@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
@@ -21,22 +23,26 @@ import (
 type Handler struct {
 	// conns SSE 兼容路径的传输连接登记；Streamable HTTP 不使用。
 	conns *SSEConnRegistry
-	agent *service.AgentTokenService
 	deps  ToolDeps
 	// callLog 可选；tools/call 记 FR-390 流水。
 	callLog *service.AgentCallLogService
 }
 
 // NewHandler 创建 MCP 处理器。callLog 可为 nil（不记流水）。
-func NewHandler(conns *SSEConnRegistry, agent *service.AgentTokenService, deps ToolDeps, callLog *service.AgentCallLogService) *Handler {
-	return &Handler{conns: conns, agent: agent, deps: deps, callLog: callLog}
+//
+// 不持有 AgentTokenService：授权全部由 middleware.AgentAuth 在路由前置完成，
+// 处理器只消费当次请求注入的 principal，避免出现第二份鉴权真源。
+func NewHandler(conns *SSEConnRegistry, deps ToolDeps, callLog *service.AgentCallLogService) *Handler {
+	return &Handler{conns: conns, deps: deps, callLog: callLog}
 }
 
 // RegisterMCPRoutes 挂载 MCP 传输路由（须已通过 AgentAuth 并注入 principal）。
-// 路径相对 rg：POST ""（Streamable HTTP，无状态）、GET ""（405）、GET /sse 、POST /message。
+// 路径相对 rg：POST ""（Streamable HTTP，无状态）、GET ""/DELETE ""（405）、
+// GET /sse 、POST /message。
 func (h *Handler) RegisterMCPRoutes(rg *gin.RouterGroup) {
 	rg.POST("", h.HandleStreamablePOST)
 	rg.GET("", h.HandleStreamableGET)
+	rg.DELETE("", h.HandleStreamableDELETE)
 	rg.GET("/sse", h.HandleSSE)
 	rg.POST("/message", h.HandleSSEMessage)
 }
@@ -94,11 +100,11 @@ func (h *Handler) HandleStreamablePOST(c *gin.Context) {
 
 	if req.IsNotification() {
 		// 通知：处理但不返回 body（accepted）
-		h.dispatch(c, p, TransportStreamableHTTP, req, true)
+		h.dispatch(c, c.Request.Context(), p, TransportStreamableHTTP, req, true)
 		c.Status(http.StatusAccepted)
 		return
 	}
-	writeRPC(c, h.dispatch(c, p, TransportStreamableHTTP, req, false))
+	writeRPC(c, h.dispatch(c, c.Request.Context(), p, TransportStreamableHTTP, req, false))
 }
 
 // HandleStreamableGET GET /api/v1/mcp — 405：无状态端点没有可保活/可回推的会话流。
@@ -109,6 +115,19 @@ func (h *Handler) HandleStreamableGET(c *gin.Context) {
 	c.JSON(http.StatusMethodNotAllowed, gin.H{
 		"error":   "METHOD_NOT_ALLOWED",
 		"message": "MCP Streamable HTTP 为无状态端点，仅支持 POST；服务端推送请改用 /api/v1/mcp/sse",
+	})
+}
+
+// HandleStreamableDELETE DELETE /api/v1/mcp — 405：无状态端点无会话可终止。
+//
+// Streamable HTTP 规范允许客户端用 DELETE 主动结束会话；本端点在 ADR-096 后
+// 每次请求独立处理，没有会话可供终止，故按规范建议回 405（而非落到 NoRoute
+// 的通用 404——那会让客户端误判为「路径写错了」而反复重试）。
+func (h *Handler) HandleStreamableDELETE(c *gin.Context) {
+	c.Header("Allow", "POST")
+	c.JSON(http.StatusMethodNotAllowed, gin.H{
+		"error":   "METHOD_NOT_ALLOWED",
+		"message": "MCP Streamable HTTP 为无状态端点，无会话可终止",
 	})
 }
 
@@ -153,7 +172,12 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 			h.conns.Unregister(conn.ID)
 			return
 		case <-connDone:
-			// 服务关闭/连接注销：发 comment 后结束
+			// 服务关闭/连接注销：发 comment 后结束。
+			// 这里仍显式注销一次：Stop() 是「先 cancel 父 ctx、再逐个注销」，若本
+			// 连接的 Register 落在 Stop 的快照之后，它就永远不会被那次遍历碰到。
+			// Unregister 幂等，重复调用无副作用，代价只是让「connDone ⇒ 已注销」
+			// 成为不变量，不给 map 留永久滞留项。
+			h.conns.Unregister(conn.ID)
 			if !h.writeSSE(c, conn, []byte(": connection closed\n\n")) {
 				return
 			}
@@ -206,6 +230,16 @@ func (h *Handler) HandleSSEMessage(c *gin.Context) {
 		return
 	}
 
+	// 进行中的 tool call 必须绑定在这条 SSE 连接上：结果要回推到 /sse 那条流，
+	// 连接被踢/关闭后继续跑只是空转（旧实现用会话 ctx，无状态化时误改成请求 ctx）。
+	// 两个来源任一结束都中止：请求 ctx（客户端主动断开这次 POST）与
+	// conn.Context()（连接注销、服务关闭）。defer 顺序为 stop 先于 cancel——
+	// stop 撤销未触发的回调，cancel 兜底释放，二者不会互相泄漏。
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	defer cancel()
+	stop := context.AfterFunc(conn.Context(), cancel)
+	defer stop()
+
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 4<<20))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "读取请求体失败"})
@@ -221,11 +255,11 @@ func (h *Handler) HandleSSEMessage(c *gin.Context) {
 	}
 
 	if req.IsNotification() {
-		h.dispatch(c, p, TransportSSE, req, true)
+		h.dispatch(c, ctx, p, TransportSSE, req, true)
 		c.Status(http.StatusAccepted)
 		return
 	}
-	resp := h.dispatch(c, p, TransportSSE, req, false)
+	resp := h.dispatch(c, ctx, p, TransportSSE, req, false)
 	if err := conn.SendSSE(mustJSON(resp)); err != nil {
 		slog.Warn("MCP SSE 推送失败", "connId", conn.ID, "error", err)
 	}
@@ -315,7 +349,9 @@ func (h *Handler) ListActivity(c *gin.Context) {
 //
 // transport 仅用于流水标注（streamable_http 无状态请求 / sse 回推请求）；
 // 授权取入参 p（每请求重建的 principal，见 ADR-096 决策 2）。
-func (h *Handler) dispatch(c *gin.Context, p *service.AgentPrincipal, transport string, req RPCRequest, notification bool) RPCResponse {
+// ctx 由传输层传入并透传给工具执行：Streamable HTTP 用请求 ctx，SSE 用
+// 「请求 ctx ∪ 连接 ctx」（见 HandleSSEMessage）。
+func (h *Handler) dispatch(c *gin.Context, ctx context.Context, p *service.AgentPrincipal, transport string, req RPCRequest, notification bool) RPCResponse {
 	switch req.Method {
 	case "initialize":
 		// SSE 兼容路径的 /message 也会走到这里：无状态化后没有任何会话要建。
@@ -336,7 +372,7 @@ func (h *Handler) dispatch(c *gin.Context, p *service.AgentPrincipal, transport 
 		if notification {
 			return RPCResponse{}
 		}
-		return h.handleToolsCall(c, p, transport, req)
+		return h.handleToolsCall(c, ctx, p, transport, req)
 	case "shutdown":
 		if notification {
 			return RPCResponse{}
@@ -351,7 +387,7 @@ func (h *Handler) dispatch(c *gin.Context, p *service.AgentPrincipal, transport 
 	}
 }
 
-func (h *Handler) handleToolsCall(c *gin.Context, p *service.AgentPrincipal, transport string, req RPCRequest) RPCResponse {
+func (h *Handler) handleToolsCall(c *gin.Context, ctx context.Context, p *service.AgentPrincipal, transport string, req RPCRequest) RPCResponse {
 	var params struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -368,12 +404,19 @@ func (h *Handler) handleToolsCall(c *gin.Context, p *service.AgentPrincipal, tra
 		params.Arguments = map[string]any{}
 	}
 	start := time.Now()
-	result := CallTool(c.Request.Context(), h.deps, p, params.Name, params.Arguments)
-	h.recordToolCall(p, c.ClientIP(), transport, params.Name, params.Arguments, result, time.Since(start))
+	result := CallTool(ctx, h.deps, p, params.Name, params.Arguments)
+	h.recordToolCall(c, p, transport, params.Name, params.Arguments, result, time.Since(start))
 	return newResult(req.ID, result)
 }
 
-func (h *Handler) recordToolCall(p *service.AgentPrincipal, clientIP, transport, toolName string, args map[string]any, result ToolResult, d time.Duration) {
+// recordToolCall 记 FR-390 调用流水。
+//
+// Client 取本次请求经 AgentAuth 归一后的 X-JM-Agent-Client：运维要靠它区分调用来自
+// MCP 代理还是 curl/脚本，硬编码成 mcp 会把客户端分布抹平成一根柱子。
+//
+// 归一化结论如实落库：缺省、超长、含非法字符或不在白名单都是 unknown，不再按
+// 「MCP 路径」改写成 mcp（理由见 agentClientOf）。
+func (h *Handler) recordToolCall(c *gin.Context, p *service.AgentPrincipal, transport, toolName string, args map[string]any, result ToolResult, d time.Duration) {
 	if h == nil || h.callLog == nil || p == nil {
 		return
 	}
@@ -400,15 +443,27 @@ func (h *Handler) recordToolCall(p *service.AgentPrincipal, clientIP, transport,
 		TokenName:  p.Name,
 		Action:     action,
 		Capability: capability,
-		Client:     service.AgentClientMCP,
+		Client:     agentClientOf(c),
 		Transport:  transport,
 		TargetType: targetType,
 		TargetID:   targetID,
 		Success:    !result.IsError,
 		Error:      errMsg,
 		LatencyMs:  uint(ms),
-		IP:         clientIP,
+		IP:         c.ClientIP(),
 	})
+}
+
+// agentClientOf 取本次请求归一化后的客户端标识（FR-390）。
+//
+// 值由 middleware.AgentAuth 归一后写入上下文：自报 X-JM-Agent-Client 且在白名单内取其值，
+// 缺省、超长、含非法字符或不在白名单一律为 unknown——与 Ops HTTP 面同一口径。
+//
+// 此处**不**按「MCP 路径」兜底为 mcp：本端点聚合的是该 Token 的全部调用流水（未按
+// transport 过滤，同一 Token 在 MCP 与 Ops 两条路径都可用），兜底为 mcp 会把 Ops 侧
+// 未自报的调用一并算作 MCP 客户端，掩盖真实来源。
+func agentClientOf(c *gin.Context) string {
+	return middleware.GetAgentClient(c)
 }
 
 func (h *Handler) writeSSE(c *gin.Context, conn *SSEConn, data []byte) bool {
@@ -421,13 +476,9 @@ func (h *Handler) writeSSE(c *gin.Context, conn *SSEConn, data []byte) bool {
 }
 
 func getPrincipal(c *gin.Context) *service.AgentPrincipal {
-	// 与 middleware 解耦：用 key 字符串避免循环依赖时由 router 注入
-	v, ok := c.Get("agentPrincipal")
-	if !ok {
-		return nil
-	}
-	p, _ := v.(*service.AgentPrincipal)
-	return p
+	// 经 middleware 的 ctx 契约取值（mcp → middleware → service，无环）：键名只此一处定义，
+	// 避免两边各写一份字面量后静默漂移。鉴权本身仍由 AgentAuth 前置完成，本包不碰 Token。
+	return middleware.GetAgentPrincipal(c)
 }
 
 func writeRPC(c *gin.Context, resp RPCResponse) {

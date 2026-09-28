@@ -21,7 +21,7 @@ CP 内嵌 MCP 网关（ADR-077）把「会话」做成了协议一等公民：`i
 1. **Streamable HTTP 路径（`POST /api/v1/mcp`）去会话**：不再下发也不要求 `Mcp-Session-Id`；每个请求独立鉴权、独立处理；`initialize` 直接返回 `initializeResult()`。
 2. **授权一律取每请求重建的 principal**，不再有 principal 快照。鉴权链不变（仍只认 Agent Token `jmat_`；人类 JWT 不得充当 MCP 凭据），策略仍唯一落在 CP（ADR-076）。
 3. **移除协议会话的全部运维语义**：空闲/绝对超时、超时巡检、全局与每 Token 并发上限、会话列表与踢线、`SESSION_GONE` 与超限 429 响应，以及 `mcp.session.open/close/kick` 流水。
-4. **`GET /api/v1/mcp` 改为 405**（无会话可保活）；`DELETE` 不再注册（无会话可终止）。
+4. **`GET /api/v1/mcp` 与 `DELETE /api/v1/mcp` 均改为 405 + `Allow: POST`**（前者无会话可保活，后者无会话可终止）。DELETE 由「不注册 → 通用 404」改为显式 405，是遵循 Streamable HTTP 规范对「服务端不支持客户端终止会话」的建议——回通用 404 会让客户端误判为路径写错而反复重试。
 5. **保留 SSE 兼容路径**（`GET /api/v1/mcp/sse` + `POST /api/v1/mcp/message`）。它的连接态是**传输固有**而非协议会话——`/message` 必须把工具结果回推到 `/sse` 那条已建立的 HTTP 响应流上，这需要一个连接登记与回推通道。故该状态收敛为 **SSE 传输连接登记**（连接 id / principal / IP / 回推通道 / 取消），不承载超时、并发上限、能力快照等协议会话语义，连接断开即注销。
 6. **运维视图随之从「会话维度」改为「Token 维度」**：`agent_call_logs` 已是每 Token 每次调用的权威流水（FR-390），按 Token 聚合即可回答「谁在用 MCP、最近何时用、用了什么、失败多少」，且**不依赖任何进程内状态**。原管理员会话端点（列表/踢线）由活动视图端点取代。
 
@@ -35,13 +35,13 @@ CP 内嵌 MCP 网关（ADR-077）把「会话」做成了协议一等公民：`i
 
 ## 后果
 
-- **配置项废弃**：`mcp.idle_timeout`、`mcp.absolute_timeout`、`mcp.max_global_sessions`、`mcp.max_sessions_per_token` 失去意义，随之移除；配置结构、示例配置与 `docker-compose.yml` 需同步，且不得留下「配置里有但代码不读」的项。
+- **配置项废弃**：`mcp.idle_timeout`、`mcp.absolute_timeout`、`mcp.max_global_sessions`、`mcp.max_sessions_per_token` 失去意义，随之移除；配置结构、示例配置 `configs/control-plane.yml` 需同步移除，且不得留下「配置里有但代码不读」的项（`docker-compose.yml` 本就未配置这些键，无需改动；全仓已无这四项残留）。
 - **错误语义变化**：`404 SESSION_GONE` 与超限 429 不再出现；无凭据仍 401；策略拒绝仍是 HTTP 200 + `result.isError=true`（不变）。
 - **流水变化**：`mcp.session.open/close/kick` 不再产生，`agent_call_logs` 只剩调用类 action。
 - **客户端兼容**：符合 MCP Streamable HTTP 的客户端无需改造即可受益；**携带旧 `mcp-session-id` 的调用会被忽略而非拒绝**，故存量客户端在会话失效后不再卡死，而是自动恢复正常。
 - **管理员面变化**：`GET/DELETE /api/v1/agent/mcp/sessions` 由活动视图端点取代；前端「MCP 会话」页改为按 Token 聚合的活动视图（页面与路由随之改名，旧路径保留重定向）。
 - **不再需要「会话随重启丢失」的说明**（ADR-077 的该条后果作废）。
-- **文档同步面**：`ARCHITECTURE.md`（§1 全景 / §4.1 / CP 目录结构）、`API.md` MCP 章节、`docs/specs/cp-mcp-server/spec.md`、`docs/specs/agent-call-log/spec.md`、`docs/specs/agent-capability-policy-v2/spec.md`、PRD FR-389/391/439，以及 P1 批次摘要行。
+- **文档同步面**：`ARCHITECTURE.md`（§1 全景 / §4.1 / CP 目录结构）、`API.md` MCP 章节、`docs/specs/cp-mcp-server/spec.md`、`docs/specs/agent-call-log/spec.md`、`docs/specs/agent-capability-policy-v2/spec.md`、PRD FR-388/389/391/439，以及 P1 批次摘要行。
 
 ## 备选（未采纳）
 
