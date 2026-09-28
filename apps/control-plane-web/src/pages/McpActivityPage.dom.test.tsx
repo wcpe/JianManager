@@ -83,14 +83,14 @@ describe('McpActivityPage（DOM）', () => {
 
   it('切换窗口后按新窗口重新请求', async () => {
     login(10)
-    mockedApi.get.mockResolvedValue({ data: { window: '7d', generatedAt: '', items: [] } })
+    mockedApi.get.mockResolvedValue({ data: { window: '168h', generatedAt: '', items: [] } })
 
     const user = userEvent.setup()
     renderWithProviders(<McpActivityPage />)
     await user.click(screen.getByRole('button', { name: '7 天' }))
 
     await waitFor(() => {
-      expect(mockedApi.get).toHaveBeenCalledWith(ACTIVITY_URL, { params: { window: '7d' } })
+      expect(mockedApi.get).toHaveBeenCalledWith(ACTIVITY_URL, { params: { window: '168h' } })
     })
     expect(screen.getByRole('button', { name: '7 天' })).toHaveAttribute('aria-pressed', 'true')
   })

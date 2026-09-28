@@ -3238,7 +3238,7 @@
     "endpointHint": "Remote clients use Streamable HTTP: POST this URL with Authorization: Bearer jmat_… on every request — each request is authenticated independently, with no session id.",
     "window": "Window",
     "window_24h": "24 hours",
-    "window_7d": "7 days",
+    "window_168h": "7 days",
     "generatedAt": "Generated at {{time}}",
     "empty": "No MCP activity in this window",
     "loadFailed": "Failed to load MCP activity",

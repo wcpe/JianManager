@@ -3217,7 +3217,7 @@
     "endpointHint": "IDE / 远程客户端使用 Streamable HTTP：向此 URL 发送 POST，每个请求自带 Authorization: Bearer jmat_… 独立鉴权，无需（也不会有）会话 ID。",
     "window": "统计窗口",
     "window_24h": "24 小时",
-    "window_7d": "7 天",
+    "window_168h": "7 天",
     "generatedAt": "数据生成于 {{time}}",
     "empty": "当前窗口内无 MCP 活动",
     "loadFailed": "加载 MCP 活动失败",
