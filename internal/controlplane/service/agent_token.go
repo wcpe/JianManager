@@ -451,7 +451,14 @@ func (s *AgentTokenService) Authenticate(plaintext string) (*AgentPrincipal, err
 	}
 	// 异步更新 last_used 可后续优化；MVP 同步轻量更新
 	now := time.Now()
-	_ = s.db.Model(&tok).Update("last_used_at", &now).Error
+	// 写放大防护（2026-09-28 生产实测）：MCP 代理每秒轮询 /api/v1/mcp，每次都会走到这里，
+	// 对 SQLite 造成每秒一次写（观测到 250ms 级慢 SQL）。改为**降频落库**：距上次记录
+	// 超过阈值才写；token 校验仍逐次进行，只有「最近使用时间」这一统计字段被降频。
+	const lastUsedAtRefresh = time.Minute
+	if tok.LastUsedAt == nil || now.Sub(*tok.LastUsedAt) >= lastUsedAtRefresh {
+		_ = s.db.Model(&tok).Update("last_used_at", &now).Error
+		tok.LastUsedAt = &now
+	}
 	return p, nil
 }
 
