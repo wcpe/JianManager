@@ -1269,18 +1269,21 @@ func nextVerifyBackoff(cur, max time.Duration) time.Duration {
 
 // verifyProjection 分批校验投影可见性。
 //
-// 与写入同理：VL 对单次查询有内存上限，而恢复期的事件数是整批积压。实测（2026-09-28 生产）
-// 一次性查询 747,822 条会让 VL 返回 400
-// `cannot calculate [sort by (_time) desc limit 747822], since it requires more than 51MB of memory`，
-// 校验因此「永久失败」并连带「日志采集运行时创建失败」——采集静默停摆。
-// 分批后每次查询规模可控，语义不变（逐批要求完全可见）。
+// 分批是必须的：VL 对单次查询有内存上限，而恢复期的事件数是整批积压（实测 747,822 条会让 VL
+// 返回 400 `cannot calculate [sort by (_time) desc limit ...]`）。但**分批必须让期望集覆盖整批**：
+// 各分片的时间范围会重叠（真实事件常共享时间戳），第 N 片的查询会返回其他分片的事件；
+// 若只以本片为期望集，这些记录会被误判为 unexpected（2026-09-28 生产实测）。
 func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
+	allowed := make(map[string]logtypes.Event, len(events))
+	for _, event := range events {
+		allowed[event.EventID] = event
+	}
 	for start := 0; start < len(events); start += insertBatchMaxEvents {
 		end := start + insertBatchMaxEvents
 		if end > len(events) {
 			end = len(events)
 		}
-		if err := m.verifyProjectionChunk(client, source, generation, events[start:end]); err != nil {
+		if err := m.verifyProjectionChunk(client, source, generation, events[start:end], allowed); err != nil {
 			return err
 		}
 	}
@@ -1288,7 +1291,8 @@ func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, ge
 }
 
 // verifyProjectionChunk 校验单批事件在 VL 中完全可见（退避重试 + 永久错误立即失败）。
-func (m *Manager) verifyProjectionChunk(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
+// allowed 是「可接受集合」（整批积压的全部事件）：本批之外的记录只要属于该集合且内容一致即接受。
+func (m *Manager) verifyProjectionChunk(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), m.verificationTimeout)
 	defer cancel()
 	// 退避重试（B1c）：原实现以固定 200ms 轮询直至超时（默认 30 秒 ≈ 最多约 150 次校验
@@ -1298,7 +1302,7 @@ func (m *Manager) verifyProjectionChunk(client *vlsup.Client, source SourceConfi
 	backoff := m.verifyBackoffMin
 	var lastErr error
 	for {
-		complete, err := m.verifyProjectionOnceWithClient(ctx, client, source, generation, events)
+		complete, err := m.verifyProjectionOnceAllowed(ctx, client, source, generation, events, allowed)
 		if complete && err == nil {
 			return nil
 		}
@@ -1321,7 +1325,91 @@ func (m *Manager) verifyProjectionChunk(client *vlsup.Client, source SourceConfi
 }
 
 func (m *Manager) verifyProjectionOnce(ctx context.Context, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {
-	return m.verifyProjectionOnceWithClient(ctx, m.vl, source, generation, events)
+	return m.verifyProjectionOnceAllowed(ctx, m.vl, source, generation, events, nil)
+}
+
+// verifyProjectionOnceAllowed 执行一次校验查询。
+//
+// 与 verifyProjectionOnceWithClient 的唯一差别是 allowed：分批校验时，各片的时间范围重叠，
+// 查询会返回**同批其他分片**的记录。这些记录必须被接受（否则误判 unexpected），
+// 但仍要求内容逐字段一致、且不得重复出现；完整性只要求本片 events 全部可见。
+// allowed 为 nil 时退化为「本片即全部」的原语义。
+func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) (bool, error) {
+	if client == nil {
+		return false, fmt.Errorf("ingest: VictoriaLogs verification client is unavailable")
+	}
+	want := make(map[string]logtypes.Event, len(events))
+	var first, last time.Time
+	for _, event := range events {
+		if _, exists := want[event.EventID]; exists {
+			return false, fmt.Errorf("duplicate canonical event_id %s", event.EventID)
+		}
+		when, err := canonicalEventTime(event)
+		if err != nil {
+			return false, fmt.Errorf("invalid canonical event time for %s: %w", event.EventID, err)
+		}
+		if first.IsZero() || when.Before(first) {
+			first = when
+		}
+		if last.IsZero() || when.After(last) {
+			last = when
+		}
+		want[event.EventID] = event
+	}
+	selector := "projection_generation:=" + strconv.Quote(generation) +
+		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
+		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
+	params := url.Values{
+		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
+		"limit": {strconv.Itoa(len(events) + 1)},
+		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
+		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
+	}
+	seen := make(map[string]bool, len(events))
+	seenOther := make(map[string]bool)
+	err := client.Stream(ctx, "/select/logsql/query", params, func(body io.Reader) error {
+		scanner := bufio.NewScanner(io.LimitReader(body, 32<<20+1))
+		scanner.Buffer(make([]byte, 64*1024), 4<<20)
+		for scanner.Scan() {
+			var row struct {
+				EventID       string `json:"event_id"`
+				CanonicalHash string `json:"canonical_content_hash"`
+				EventTimeUTC  string `json:"_time"`
+				Message       string `json:"_msg"`
+				Level         string `json:"level"`
+				Stream        string `json:"stream"`
+			}
+			if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
+				return err
+			}
+			event, inBatch := want[row.EventID]
+			if !inBatch {
+				other, ok := allowed[row.EventID]
+				if !ok || seenOther[row.EventID] {
+					return fmt.Errorf("unexpected or duplicate projection event_id %s", row.EventID)
+				}
+				if row.CanonicalHash != other.CanonicalHash || row.EventTimeUTC != other.EventTimeUTC ||
+					row.Message != other.Message || row.Level != other.Level || row.Stream != other.Stream {
+					return fmt.Errorf("projection content mismatch for event_id %s", row.EventID)
+				}
+				seenOther[row.EventID] = true
+				continue
+			}
+			if seen[row.EventID] {
+				return fmt.Errorf("unexpected or duplicate projection event_id %s", row.EventID)
+			}
+			if row.CanonicalHash != event.CanonicalHash || row.EventTimeUTC != event.EventTimeUTC ||
+				row.Message != event.Message || row.Level != event.Level || row.Stream != event.Stream {
+				return fmt.Errorf("projection content mismatch for event_id %s", row.EventID)
+			}
+			seen[row.EventID] = true
+		}
+		return scanner.Err()
+	})
+	if err != nil {
+		return false, err
+	}
+	return len(seen) == len(want), nil
 }
 
 func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {
