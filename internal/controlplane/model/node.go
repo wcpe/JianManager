@@ -47,6 +47,8 @@ type Node struct {
 	NetworkBytesRecv int64 `gorm:"default:0" json:"networkBytesRecv"`
 	// LoadAvg1 节点 1 分钟 load average（FR-062，心跳驱动）。
 	LoadAvg1 float64 `gorm:"default:0" json:"loadAvg1"`
+	// LogIngestHealthy 日志采集运行时是否健康（FR-485，心跳驱动；false=采集未运行）。
+	LogIngestHealthy bool `gorm:"default:false" json:"logIngestHealthy"`
 	// ManagedRuntimeObservedAt 是 Worker 随已认证 Heartbeat 上报受管运行时快照的实际观测时间。
 	// 运行时不可用或旧 Worker 未上报时，相关字段必须清空，避免陈旧值被当成当前资源。
 	ManagedRuntimeObservedAt     *time.Time `json:"managedRuntimeObservedAt"`

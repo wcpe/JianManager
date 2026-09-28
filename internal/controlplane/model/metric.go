@@ -35,6 +35,8 @@ const (
 	MetricNodeNetRxRate = "node_net_rx_rate"
 	MetricNodeNetTxRate = "node_net_tx_rate"
 	MetricNodeLoad      = "node_load" // 1 分钟 load average（FR-062）
+	// MetricLogIngestHealthy 日志采集健康（FR-485）：1=采集运行时在运行，0=未运行/创建失败。
+	MetricLogIngestHealthy = "log_ingest_healthy"
 
 	// FR-401：由 FR-400 已认证 Heartbeat 当前快照沉淀的共享 Bot Worker 运行时指标。
 	// 它们属于节点维度，不代表任一 Bot 或压测会话独占的资源。

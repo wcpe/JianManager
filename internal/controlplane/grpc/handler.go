@@ -416,6 +416,7 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		// 更新节点指标和心跳时间
 		updates := map[string]interface{}{
 			"cpu_usage":          req.CpuUsage,
+			"log_ingest_healthy": req.LogIngestHealthy,
 			"memory_usage":       req.MemoryUsage,
 			"disk_usage":         req.DiskUsage,
 			"memory_used_mb":     req.MemoryUsedMb,

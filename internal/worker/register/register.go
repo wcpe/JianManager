@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"runtime"
+	"sync"
 	"time"
 
 	"context"
@@ -200,11 +201,33 @@ func WaitForControlPlane(addr string, timeout time.Duration) error {
 	return fmt.Errorf("等待 Control Plane 超时: %s", addr)
 }
 
+// 日志采集健康（FR-485）：由 main 在采集运行时创建成功/失败后写入，随每次心跳上报。
+// 2026-09-28 事故教训：采集静默停摆 40+ 分钟无人知晓——该信号让「采集健康」能被告警规则命中。
+var (
+	logIngestMu      sync.RWMutex
+	logIngestHealthy bool
+	logIngestDetail  string
+)
+
+// SetLogIngestHealth 记录日志采集运行时健康状态（healthy=false 时应给出原因）。
+func SetLogIngestHealth(healthy bool, detail string) {
+	logIngestMu.Lock()
+	logIngestHealthy, logIngestDetail = healthy, detail
+	logIngestMu.Unlock()
+}
+
+func logIngestHealth() (bool, string) {
+	logIngestMu.RLock()
+	defer logIngestMu.RUnlock()
+	return logIngestHealthy, logIngestDetail
+}
+
 // CollectHeartbeatData 采集心跳数据。
 func CollectHeartbeatData(nodeUUID string) *workerpb.HeartbeatRequest {
 	req := &workerpb.HeartbeatRequest{
 		NodeUuid: nodeUUID,
 	}
+	req.LogIngestHealthy, req.LogIngestDetail = logIngestHealth()
 
 	if vmem, err := mem.VirtualMemory(); err == nil {
 		req.MemoryUsage = float32(vmem.UsedPercent / 100.0)
