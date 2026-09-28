@@ -1007,15 +1007,11 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		replace = true
 		writeEvents = events
 	}
-	payload, err := projectionPayload(writeEvents, generation)
-	if err != nil {
-		return pipeline.DeliveryResult{}, err
-	}
 	client, frozen, err := m.clientForSource(source)
 	if err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
-	status, err := client.InsertJSONLines(context.Background(), payload)
+	status, err := m.insertInBatches(client, writeEvents, generation)
 	if err != nil {
 		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
@@ -1045,6 +1041,37 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
 	return pipeline.DeliveryResult{HTTPStatus: status}, nil
+}
+
+// insertBatchMaxEvents 是单次 VL 插入的批量上限。
+//
+// 背景（2026-09-28 生产事故）：vlsup 客户端是 http.Client{Timeout: 5 * time.Second}，
+// 而恢复期会把积压一次性拼成一个大 payload 投递；当状态文件达 1.2 GB 时，
+// 单请求远超 5s → `vlsup: insert request: ... context deadline exceeded`
+// → writeProjectionDay 失败 → 「日志采集运行时创建失败」→ 采集静默停摆（无重试、无告警）。
+// 分批后每批体量可控，单请求远低于该超时。
+const insertBatchMaxEvents = 500
+
+// insertInBatches 按条数上限把事件分批投递到 VL，返回最后一批的 HTTP 状态。
+// 任一批失败即中断，并原样返回该批状态与错误（调用方据此判定投递结果）。
+func (m *Manager) insertInBatches(client *vlsup.Client, events []logtypes.Event, generation string) (int, error) {
+	status := 0
+	for start := 0; start < len(events); start += insertBatchMaxEvents {
+		end := start + insertBatchMaxEvents
+		if end > len(events) {
+			end = len(events)
+		}
+		payload, err := projectionPayload(events[start:end], generation)
+		if err != nil {
+			return status, err
+		}
+		st, err := client.InsertJSONLines(context.Background(), payload)
+		status = st
+		if err != nil {
+			return status, err
+		}
+	}
+	return status, nil
 }
 
 func projectionPayload(events []logtypes.Event, generation string) ([]byte, error) {
