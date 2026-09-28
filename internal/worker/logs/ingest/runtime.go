@@ -1011,7 +1011,24 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 	if err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
+	// 诊断日志（2026-09-28 恢复期「批次未落地」排查）：VL 侧核对时，需要能对上
+	// 「哪一批、多少条、什么时间范围、每片写入返回什么」。生产实测曾出现
+	// 「校验等待 09-27/28 窗口的数据，而 VL 里只有该源 09-20 的数据」——需要本日志
+	// 才能判定是「没写」还是「写了没落地」。
+	batchFirst, batchLast := "", ""
+	if len(writeEvents) > 0 {
+		batchFirst = writeEvents[0].EventTimeUTC
+		batchLast = writeEvents[len(writeEvents)-1].EventTimeUTC
+	}
+	slog.Info("投影写入开始",
+		"generation", generation, "source", source.LogSourceID,
+		"events", len(writeEvents), "archiveEvents", len(archiveEvents),
+		"firstEventTime", batchFirst, "lastEventTime", batchLast,
+		)
 	status, err := m.insertInBatches(client, writeEvents, generation)
+	slog.Info("投影写入结束",
+		"generation", generation, "source", source.LogSourceID,
+		"events", len(writeEvents), "status", status, "err", err)
 	if err != nil {
 		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
