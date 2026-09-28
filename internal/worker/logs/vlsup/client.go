@@ -59,6 +59,7 @@ type Client struct {
 	username string
 	password string
 	hc       *http.Client
+	hq       *http.Client
 }
 
 // ClientOptions 构造 Client。
@@ -69,6 +70,11 @@ type ClientOptions struct {
 	Password string
 	// HTTPClient 可注入；nil 时使用默认超时客户端。
 	HTTPClient *http.Client
+	// QueryTimeout 是查询类请求（Get/Stream）的客户端超时；0 用默认值。
+	// 写入类请求（InsertJSONLines/Post）仍用短超时：写入已按批切分，单请求很小；
+	// 而查询耗时随事件时间跨度增长（projection 过滤无索引，可能扫全天），
+	// 共用 5s 会误杀——实测（2026-09-28 生产）校验查询反复 Client.Timeout exceeded。
+	QueryTimeout time.Duration
 	// AllowNonLoopback 仅测试使用：跳过 loopback 校验。生产必须保持 false。
 	AllowNonLoopback bool
 }
@@ -94,11 +100,21 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 5 * time.Second}
 	}
+	// 查询客户端：与写入分离，避免「扫全天的校验查询」被 5s 写入超时误杀。
+	hq := opts.HTTPClient
+	if hq == nil {
+		qt := opts.QueryTimeout
+		if qt <= 0 {
+			qt = 60 * time.Second
+		}
+		hq = &http.Client{Timeout: qt}
+	}
 	return &Client{
 		baseURL:  strings.TrimRight(raw, "/"),
 		username: opts.Username,
 		password: opts.Password,
 		hc:       hc,
+		hq:       hq,
 	}, nil
 }
 
@@ -145,7 +161,7 @@ func (c *Client) Get(ctx context.Context, path string, query url.Values) ([]byte
 		token := base64.StdEncoding.EncodeToString([]byte(c.username + ":" + c.password))
 		req.Header.Set("Authorization", "Basic "+token)
 	}
-	resp, err := c.hc.Do(req)
+	resp, err := c.hq.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("vlsup: request %s: %w", path, err)
 	}
@@ -185,7 +201,7 @@ func (c *Client) Stream(ctx context.Context, path string, query url.Values, cons
 		token := base64.StdEncoding.EncodeToString([]byte(c.username + ":" + c.password))
 		req.Header.Set("Authorization", "Basic "+token)
 	}
-	resp, err := c.hc.Do(req)
+	resp, err := c.hq.Do(req)
 	if err != nil {
 		return fmt.Errorf("vlsup: request %s: %w", path, err)
 	}
