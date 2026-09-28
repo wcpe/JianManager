@@ -1267,7 +1267,28 @@ func nextVerifyBackoff(cur, max time.Duration) time.Duration {
 	return next
 }
 
+// verifyProjection 分批校验投影可见性。
+//
+// 与写入同理：VL 对单次查询有内存上限，而恢复期的事件数是整批积压。实测（2026-09-28 生产）
+// 一次性查询 747,822 条会让 VL 返回 400
+// `cannot calculate [sort by (_time) desc limit 747822], since it requires more than 51MB of memory`，
+// 校验因此「永久失败」并连带「日志采集运行时创建失败」——采集静默停摆。
+// 分批后每次查询规模可控，语义不变（逐批要求完全可见）。
 func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
+	for start := 0; start < len(events); start += insertBatchMaxEvents {
+		end := start + insertBatchMaxEvents
+		if end > len(events) {
+			end = len(events)
+		}
+		if err := m.verifyProjectionChunk(client, source, generation, events[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// verifyProjectionChunk 校验单批事件在 VL 中完全可见（退避重试 + 永久错误立即失败）。
+func (m *Manager) verifyProjectionChunk(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), m.verificationTimeout)
 	defer cancel()
 	// 退避重试（B1c）：原实现以固定 200ms 轮询直至超时（默认 30 秒 ≈ 最多约 150 次校验
