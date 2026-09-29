@@ -19,8 +19,10 @@ import {
 
 const ROLE_PLATFORM_ADMIN = 10
 
-/** 统计窗口预设：与后端允许区间（1h~168h）对齐，只暴露两个常用档位。 */
-const WINDOWS = ['24h', '7d'] as const
+/** 统计窗口预设：与后端允许区间（1h~168h）对齐，只暴露两个常用档位。
+ *  取值必须是后端可解析的 Go duration——**不能写 `7d`**（Go duration 不支持天），
+ *  否则每次切到该档位都会被后端以 400 拒绝。 */
+const WINDOWS = ['24h', '168h'] as const
 type WindowPreset = (typeof WINDOWS)[number]
 const DEFAULT_WINDOW: WindowPreset = '24h'
 
