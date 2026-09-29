@@ -14,6 +14,9 @@ type AgentCallLog struct {
 	// TokenName 冗余快照（吊销后仍可读）。
 	TokenName string `gorm:"type:varchar(128);not null" json:"tokenName"`
 	// Action 与 service.AgentAction* 或 MCP 事件对齐（如 agent.whoami）。
+	// varchar(64) 计**字符**：MCP 路径对未知工具名会拼出客户端可控的 "mcp.tool."+toolName，
+	// 写入口按 rune 边界截到 64 字符（service.truncateRunes），不得改成按字节——按字节会把多字节
+	// 字符切成非法 UTF-8，MySQL 严格模式仍整行拒收，流水静默丢失。
 	Action string `gorm:"type:varchar(64);not null;index:idx_agent_call_action_created,priority:1" json:"action"`
 	// Capability 本次授权实际使用的能力标签（V2 capability 或 V1 legacy.*）；会话事件可空。
 	Capability string `gorm:"type:varchar(64)" json:"capability,omitempty"`

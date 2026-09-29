@@ -24,7 +24,8 @@ import (
 //
 // 覆盖：不读也不写 Mcp-Session-Id、无会话可用、陈旧/陌生 session 头被忽略而非拒绝、
 // GET/DELETE 改 405、无凭据仍 401；SSE 兼容路径（/message）的连接语义保持不变；
-// 以及传输层的生命周期归属——进行中的 tool call 挂在「请求 ctx ∪ 连接 ctx」上，
+// 以及传输层的生命周期归属——进行中的 tool call 在 SSE 路径上挂在**连接 ctx**上
+// （POST 的请求 ctx 不参与）、在无状态路径上挂在请求 ctx 上；
 // 调用流水的 client 取自 X-JM-Agent-Client（FR-390）。
 
 func newStatelessHandler() (*Handler, *SSEConnRegistry) {
@@ -336,11 +337,16 @@ func waitToolStarted(t *testing.T, started chan struct{}) {
 	}
 }
 
-// TestSSEMessage_ConnUnregisterCancelsInFlightToolCall SSE 连接注销时中止进行中的 tool call。
+// TestSSEMessage_ConnUnregisterCancelsInFlightToolCall SSE 连接注销时取消进行中的 tool call。
 //
-// 旧实现用会话 ctx，无状态化时误改成 /message 的请求 ctx——请求 ctx 在客户端
-// 正常等结果时永不取消，于是「连接被踢掉后工具仍在跑」的行为回退了。这里锁住
-// 恢复后的语义：连接注销（客户端断开、Stop 收尾）必须让工具随之中止。
+// 旧实现用会话 ctx，无状态化时被改成 /message 的请求 ctx——请求 ctx 在「发完 POST 就断开、
+// 只从 /sse 读结果」这类 SSE 常规用法下会提前结束，于是连接还在、结果却推不回去（行为回退）。
+// 这里锁住恢复后的语义：取消源是连接 ctx，连接注销（客户端断开、Stop 收尾）必须把取消传下去。
+//
+// 断言的是**取消已传播**，不是「工具必然立刻停手」：本用例的假工具显式消费 ctx，故取消可见；
+// 真工具多数不读 ctx（tools.go 只在入口做 select 检查，各家 tool 实现基本 `_ = ctx`），
+// 已进入执行的调用可能照旧跑到结束。连接注销能保证的是：ctx 已 done，尚未进入 CallTool
+// 的调用会被入口直接拦下，且结果不再可能推到已关闭的流上。
 func TestSSEMessage_ConnUnregisterCancelsInFlightToolCall(t *testing.T) {
 	const toolName = "zz_test_blocking_conn_cancel"
 	gin.SetMode(gin.TestMode)
@@ -371,10 +377,58 @@ func TestSSEMessage_ConnUnregisterCancelsInFlightToolCall(t *testing.T) {
 	<-httpDone
 }
 
+// TestSSEMessage_RequestCancelDoesNotCancelInFlightToolCall SSE 路径的取消只绑连接，不绑 POST 请求。
+//
+// 与上一条互补的另一半：把请求 ctx 并进工具 ctx 会让「发完 POST 就断开、只从 /sse 读结果」的
+// 常规 SSE 客户端（以及 POST 因长耗时工具而超时的情形）中途取消一个本可继续完成、结果本可
+// 推到流上的调用。故这里断言取消**没有**传播；收尾时再注销连接，确认真正的边界（连接）
+// 依然能把取消传下去——两条用例一起把「取消源只有连接 ctx」钉死。
+func TestSSEMessage_RequestCancelDoesNotCancelInFlightToolCall(t *testing.T) {
+	const toolName = "zz_test_blocking_sse_request_cancel_ignored"
+	gin.SetMode(gin.TestMode)
+	reg := NewSSEConnRegistry()
+	h := NewHandler(reg, ToolDeps{}, nil)
+	started, done := registerBlockingTestTool(t, toolName)
+
+	conn := reg.Register(testPrincipal(1, "owner"), "127.0.0.1")
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	defer cancelReq()
+	c, _ := newMCPContext(http.MethodPost, "/api/v1/mcp/message?sessionId="+conn.ID,
+		toolCallBody(toolName), "", testPrincipal(1, "owner"))
+	c.Request = c.Request.WithContext(reqCtx)
+
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		h.HandleSSEMessage(c)
+	}()
+
+	waitToolStarted(t, started)
+	cancelReq()
+
+	// 窗口取 300ms：并上请求 ctx 的实现会在毫秒级就把取消传过去（必然落在窗口内），
+	// 而只绑连接的实现要等 5s 兜底超时才会结束——两侧余量都足够，不是靠运气取胜。
+	select {
+	case err := <-done:
+		t.Fatalf("POST 请求 ctx 取消不得中止在途 tool call（结果仍要回推到 SSE 流上），实际取消原因: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// 收尾并验证真正的取消源：注销连接后取消必须传下去（否则本用例会以 `done` 从未就绪而失败）。
+	reg.Unregister(conn.ID)
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled, "连接注销仍应把取消传给在途调用")
+	case <-time.After(2 * time.Second):
+		t.Fatal("连接注销后进行中的 tool call 未被取消")
+	}
+	<-httpDone
+}
+
 // TestStreamablePOST_RequestCancelCancelsInFlightToolCall 无状态路径仍只受请求 ctx 约束。
 //
-// 与上一条互补：Streamable HTTP 没有连接，客户端断开（请求 ctx 取消）必须同样
-// 中止工具调用，不能因为合并 ctx 的改造把这条路径的取消源弄丢。
+// 与上两条互补：Streamable HTTP 没有连接可绑，客户端断开（请求 ctx 取消）必须照旧中止
+// 工具调用——SSE 路径改绑连接 ctx 不能顺手把这条路径的取消源也弄丢。
 func TestStreamablePOST_RequestCancelCancelsInFlightToolCall(t *testing.T) {
 	const toolName = "zz_test_blocking_request_cancel"
 	gin.SetMode(gin.TestMode)
@@ -475,7 +529,7 @@ func TestToolsCall_RecordsClientFromAgentClientHeader(t *testing.T) {
 	assert.True(t, curl.Success)
 
 	// 白名单外的取值由 AgentAuth 归一为 unknown，handler 必须原样落库：
-	// 「已被归一为 unknown」与「上下文里根本没有 client」是两回事，后者才回退 mcp。
+	// 无论「已被归一为 unknown」还是「上下文里根本没有 client」，都不回退 mcp（理由见 agentClientOf）。
 	garbage := call("not-in-allowlist")
 	assert.Equal(t, service.AgentClientUnknown, garbage.Client,
 		"中间件已归一为 unknown，handler 不得再改写成 mcp")
@@ -484,8 +538,8 @@ func TestToolsCall_RecordsClientFromAgentClientHeader(t *testing.T) {
 // TestToolsCall_ClientUnreportedIsUnknown 未经 AgentAuth 注入 client 时归 unknown。
 //
 // 与 Ops HTTP 面同一口径（FR-390）：缺省、不在白名单一律归 unknown。handler 不按
-// 「MCP 路径」兜底为 mcp——本端点聚合的是该 Token 的全部调用流水（MCP 与 Ops 共用
-// 同一 Token），兜底会把 Ops 侧未自报的调用也算成 MCP 客户端。
+// 「MCP 路径」兜底为 mcp——本端点同样接受 curl/脚本直连，硬编码会把这类未自报的调用
+// 记成 MCP 客户端，抹平活动视图的客户端分布（理由详见 agentClientOf）。
 func TestToolsCall_ClientUnreportedIsUnknown(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := newStatelessTestDB(t)

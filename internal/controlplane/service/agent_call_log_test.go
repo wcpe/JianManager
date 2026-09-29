@@ -1,8 +1,10 @@
 package service
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -126,6 +128,25 @@ func TestAgentCallLog_RecordTruncatesErrorAndStripsToken(t *testing.T) {
 	require.NoError(t, db.Where("action = ?", "b").First(&row2).Error)
 	assert.NotContains(t, row2.Error, "jmat_abcsecret")
 	assert.Contains(t, row2.Error, "脱敏")
+}
+
+// TestAgentCallLog_RecordTruncatesMultibyteError 超长中文错误文案按字符边界截断。
+//
+// 与 Action 同源：按字节切会把多字节字符切成两半得到非法 UTF-8，MySQL 严格模式整行
+// 拒收，截断这个兜底自己就失效了（错误文案多为中文，512 字节边界极易落在字符中间）。
+func TestAgentCallLog_RecordTruncatesMultibyteError(t *testing.T) {
+	db := setupAgentCallLogDB(t)
+	svc := NewAgentCallLogService(db)
+
+	// 600 个汉字 = 1800 字节 / 600 字符，必然越过 512 这条边界。
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 1, TokenName: "t", Action: "a", Success: false,
+		Error: strings.Repeat("错", 600),
+	}))
+	var row model.AgentCallLog
+	require.NoError(t, db.First(&row).Error)
+	assert.True(t, utf8.ValidString(row.Error), "截断不得切出非法 UTF-8")
+	assert.Equal(t, agentCallErrorMaxLen, utf8.RuneCountInString(row.Error), "应截到字符上限")
 }
 
 func TestAgentCallLog_RecordCapability(t *testing.T) {

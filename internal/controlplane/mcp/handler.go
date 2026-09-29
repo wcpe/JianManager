@@ -185,6 +185,15 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 			return
 		case data, open := <-ch:
 			if !open {
+				// 通道关闭即连接已 Close（Unregister→Close，或 Stop 的批量收尾）。这里也显式
+				// 注销一次：与 connDone 分支同理，让「连接已关 ⇒ 已从 map 摘除」成为不变量。
+				//
+				// 两个分支由同一次 Close 触发、条件同时成立，选中哪个取决于 select 的随机化
+				// 以及 goroutine 当时是否已停在某个 case 上——实测（见 PR 评审用例）：Close 是
+				// 「先 cancel、后 close(ch)」，停在 select 上的循环总被 ctx 取消先唤醒而走
+				// connDone，本分支很难被选中；但「很难」不等于「不会」，一旦选中而这里不注销，
+				// 连接就会永久滞留在登记表里。Unregister 幂等，重复调用无副作用。
+				h.conns.Unregister(conn.ID)
 				return
 			}
 			if !h.writeSSE(c, conn, []byte("event: message\ndata: ")) ||
@@ -230,15 +239,16 @@ func (h *Handler) HandleSSEMessage(c *gin.Context) {
 		return
 	}
 
-	// 进行中的 tool call 必须绑定在这条 SSE 连接上：结果要回推到 /sse 那条流，
-	// 连接被踢/关闭后继续跑只是空转（旧实现用会话 ctx，无状态化时误改成请求 ctx）。
-	// 两个来源任一结束都中止：请求 ctx（客户端主动断开这次 POST）与
-	// conn.Context()（连接注销、服务关闭）。defer 顺序为 stop 先于 cancel——
-	// stop 撤销未触发的回调，cancel 兜底释放，二者不会互相泄漏。
-	ctx, cancel := context.WithCancel(c.Request.Context())
-	defer cancel()
-	stop := context.AfterFunc(conn.Context(), cancel)
-	defer stop()
+	// 进行中的 tool call 只绑定这条 SSE 连接：结果要回推到 /sse 那条流，**连接的存续才是这次
+	// 执行的意义边界**——连接注销后结果无处可推，继续跑只是空转。无状态化前这里是
+	// CallTool(s.Context(), ...)，请求 ctx 从未参与，故此处也不再并上请求 ctx。
+	//
+	// 不并请求 ctx 的理由是它并非「客户端还要不要这个结果」的信号：SSE 传输的常规用法是发完
+	// POST 即断开、只从 /sse 读结果，长耗时工具还常让 POST 先超时——这两种情况下调用都该继续，
+	// 结果本可照常推到流上；并上请求 ctx 就会把它们中途取消（无状态化引入的行为回退）。
+	// 取消的实际效力是**入口检查**：连接注销后 ctx 已 done，尚未进入执行的调用会被 CallTool
+	// 入口直接拦下；已经在执行中的调用是否立即停手，取决于该工具是否消费 ctx（多数工具不消费）。
+	ctx := conn.Context()
 
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 4<<20))
 	if err != nil {
@@ -349,8 +359,9 @@ func (h *Handler) ListActivity(c *gin.Context) {
 //
 // transport 仅用于流水标注（streamable_http 无状态请求 / sse 回推请求）；
 // 授权取入参 p（每请求重建的 principal，见 ADR-096 决策 2）。
-// ctx 由传输层传入并透传给工具执行：Streamable HTTP 用请求 ctx，SSE 用
-// 「请求 ctx ∪ 连接 ctx」（见 HandleSSEMessage）。
+// ctx 由传输层传入并透传给工具执行，两条路径的取消源不同：
+// Streamable HTTP 用请求 ctx（无连接可绑，请求一断就没有结果接收方）；
+// SSE 用连接 ctx（结果要回推到 /sse 那条流上，连接才是边界，见 HandleSSEMessage）。
 func (h *Handler) dispatch(c *gin.Context, ctx context.Context, p *service.AgentPrincipal, transport string, req RPCRequest, notification bool) RPCResponse {
 	switch req.Method {
 	case "initialize":
@@ -459,9 +470,9 @@ func (h *Handler) recordToolCall(c *gin.Context, p *service.AgentPrincipal, tran
 // 值由 middleware.AgentAuth 归一后写入上下文：自报 X-JM-Agent-Client 且在白名单内取其值，
 // 缺省、超长、含非法字符或不在白名单一律为 unknown——与 Ops HTTP 面同一口径。
 //
-// 此处**不**按「MCP 路径」兜底为 mcp：本端点聚合的是该 Token 的全部调用流水（未按
-// transport 过滤，同一 Token 在 MCP 与 Ops 两条路径都可用），兜底为 mcp 会把 Ops 侧
-// 未自报的调用一并算作 MCP 客户端，掩盖真实来源。
+// 此处**不**按「MCP 路径」兜底为 mcp：本端点（/api/v1/mcp）同样接受 curl/脚本直接调用，
+// 这类调用一般不自己声明 X-JM-Agent-Client；硬编码 mcp 会把它们一并记成 MCP 客户端，
+// 使活动视图的客户端分布被抹平——运维正是靠这一列区分「MCP 代理」与「裸脚本」。
 func agentClientOf(c *gin.Context) string {
 	return middleware.GetAgentClient(c)
 }

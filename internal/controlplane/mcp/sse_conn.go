@@ -45,9 +45,12 @@ type SSEConn struct {
 
 	// ctx/cancel 连接关闭（Close/Unregister/Stop）时取消。
 	//
-	// 它是 SSE 路径进行中 tool call 的生命周期上界：HandleSSEMessage 用
-	// context.AfterFunc 把它并入工具调用的 ctx，连接被踢/关闭时工具随之中止——
-	// 结果要回推到这条流上，连接没了继续跑只是空转，还可能留下半完成的写操作。
+	// 它是 SSE 路径进行中 tool call 的生命周期上界：HandleSSEMessage 直接把本 ctx 交给
+	// 工具执行（不再并上 POST 的请求 ctx——结果要回推到这条流上，连接才是意义的边界）。
+	// 取消的效力是**可证到此为止**的：连接注销后 ctx 即 done，尚未进入 CallTool 的调用会被
+	// 入口检查拦下；已经在执行中的调用是否立即停手，取决于该工具是否消费 ctx——tools.go 只在
+	// 入口做 select 检查，多数工具实现（如 callLifecycle、instance_create）并不读 ctx，
+	// 它们会照旧跑到结束，只是结果再也推不出去。
 	// Streamable HTTP 路径无连接，工具调用只受请求 ctx 约束。
 	ctx    context.Context
 	cancel context.CancelFunc

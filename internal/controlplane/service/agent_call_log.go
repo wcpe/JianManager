@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 
@@ -23,7 +24,8 @@ const (
 	DefaultAgentCallLogRetentionDays = 14
 	// agentCallErrorMaxLen 失败信息截断上限（与 audit 对齐）。
 	agentCallErrorMaxLen = 512
-	// agentCallActionMaxLen 动作标识截断上限（与 agent_call_logs.action varchar(64) 对齐）。
+	// agentCallActionMaxLen 动作标识截断上限，单位是**字符**（与 agent_call_logs.action
+	// varchar(64) 对齐：MySQL 的 varchar 长度语义即字符数，一个汉字算 1）。
 	// Action 并非服务端常量：MCP 路径对未知工具名会拼 "mcp.tool." + toolName，而 toolName 由
 	// 客户端请求体提供（可达 4MB）。不截断则 MySQL 严格模式插入报 data too long，RecordSafe 只打
 	// WARN 便放行——该次调用流水整行消失，等于给调用方留下抹掉审计痕迹的口子；SQLite 不校验长度，
@@ -90,20 +92,23 @@ func (s *AgentCallLogService) Record(r AgentCallRecord) error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-	errMsg := r.Error
-	if len(errMsg) > agentCallErrorMaxLen {
-		errMsg = errMsg[:agentCallErrorMaxLen]
-	}
+	// Error 与 Action 同理按**字符**边界截断：按字节会把多字节字符切成两半得到非法
+	// UTF-8，MySQL 严格模式照样整行拒收，截断这个兜底自己就失效了。错误文案多为中文，
+	// 512 字节的边界很容易恰好落在字符中间。varchar(512) 计的也是字符数。
+	errMsg := truncateRunes(r.Error, agentCallErrorMaxLen)
 	// 禁止把疑似 token 明文写入 error（jmat_ 前缀粗滤）。
 	if strings.Contains(errMsg, "jmat_") {
 		errMsg = "[已脱敏：含 token 形态字符串]"
 	}
-	// Action 同样截断（按字节，与上面的 error 同口径）：宁可丢尾部字符，也不能让整行流水
-	// 因列长超限而写不进去——流水缺失比流水不完整更难发现、也更不利于追责。
-	action := r.Action
-	if len(action) > agentCallActionMaxLen {
-		action = action[:agentCallActionMaxLen]
-	}
+	// Action 同样截断，但**必须按 rune（字符）边界**，不能按字节：
+	//   - 按字节切会把一个多字节字符切成两半，得到非法 UTF-8 序列；MySQL（utf8mb4 严格模式）
+	//     对非法字节序列同样报 1366 Incorrect string value 整行拒收，于是「截断」这个兜底
+	//     自己失效，该次调用流水照样静默丢失——正是它要堵的缺口。攻击/事故路径真实存在：
+	//     MCP 对未知工具名拼 "mcp.tool." + toolName，而 toolName 来自请求体（不受白名单约束）。
+	//   - varchar(64) 计的是字符数，30 个汉字（90 字节）本可完整入库；按字节判定会把它无谓截掉。
+	// 既有意图不变：宁可丢尾部字符，也不能让整行流水因列长超限而写不进去——流水缺失比流水
+	// 不完整更难发现、也更不利于追责。
+	action := truncateRunes(r.Action, agentCallActionMaxLen)
 	client := NormalizeAgentClient(r.Client)
 	row := &model.AgentCallLog{
 		TokenID:    r.TokenID,
@@ -135,6 +140,28 @@ func (s *AgentCallLogService) RecordSafe(r AgentCallRecord) {
 	if err := s.Record(r); err != nil {
 		log.Printf("[WARN] agent 调用流水写入失败: %v", err)
 	}
+}
+
+// truncateRunes 按 rune 边界把 s 截断到至多 max 个**字符**（max<=0 视为不截断）。
+//
+// 与 internal/controlplane/grpc/orphan_audit.go 的 truncateUTF8 是同一套做法（那处同样逐 rune
+// 递进，避免在多字节字符中间切断）：两包不能互相 import——service 已 import grpc（见
+// bot_fleet_runtime.go），反向引用会成环——故包内保留一份等价实现。差别只有上限单位：
+// 本函数是字符数（对齐 varchar(64) 的语义），orphan 那处是字节数；改动任一处的思路时请同步另一处。
+func truncateRunes(s string, max int) string {
+	if max <= 0 || utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	n := 0
+	// range 字符串迭代出的下标是每个 rune 的起始字节位置，故 s[:i] 必然落在字符边界上，
+	// 截断结果一定是合法 UTF-8（按字节截断做不到这一点，见 Record 内注释）。
+	for i := range s {
+		if n == max {
+			return s[:i]
+		}
+		n++
+	}
+	return s
 }
 
 // AgentCallLogFilter 查询过滤条件。

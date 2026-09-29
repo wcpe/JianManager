@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -166,6 +167,45 @@ func TestAgentCallLog_RecordTruncatesAction(t *testing.T) {
 	var row2 model.AgentCallLog
 	require.NoError(t, db.Where("action = ?", exact).First(&row2).Error)
 	assert.Equal(t, exact, row2.Action)
+}
+
+// TestAgentCallLog_RecordTruncatesActionOnRuneBoundary 多字节 Action 按**字符数**截断，且不得切碎字符。
+//
+// 上面那条用例只用了 ASCII（strings.Repeat("x", 4000)），覆盖不到真正的缺陷：按**字节**截断会把一个
+// 多字节字符切成两半，产出非法 UTF-8；MySQL（utf8mb4 严格模式）对非法字节序列同样报 1366 Incorrect
+// string value 整行拒收，于是「截断」这个兜底自己失效，该次调用流水照样静默丢失——正是它要堵的缺口。
+// 触发路径真实存在：MCP 对未知工具名拼 "mcp.tool." + toolName，toolName 由请求体提供（不受白名单约束）。
+// 另一半是语义错误：varchar(64) 在 MySQL 计**字符**，30 个汉字（90 字节）本可完整入库，按字节判定
+// 会把它们无谓截断。
+func TestAgentCallLog_RecordTruncatesActionOnRuneBoundary(t *testing.T) {
+	db := setupAgentCallLogDB(t)
+	svc := NewAgentCallLogService(db)
+
+	const prefix = "mcp.tool."
+	// 超长：9 个 ASCII + 200 个汉字（609 字节）。按字节截到 64 必然落在汉字中间。
+	action := prefix + strings.Repeat("测", 200)
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 1, TokenName: "t", Action: action, Client: AgentClientMCP, Success: false,
+	}))
+
+	var row model.AgentCallLog
+	require.NoError(t, db.First(&row).Error)
+	assert.True(t, utf8.ValidString(row.Action),
+		"截断结果必须是合法 UTF-8，否则 MySQL 仍会整行拒收，流水静默丢失（等于截断没做）")
+	assert.Equal(t, agentCallActionMaxLen, utf8.RuneCountInString(row.Action),
+		"按字符数截到列宽上限（varchar(64) 计字符，不是字节）")
+	assert.Equal(t, prefix, row.Action[:len(prefix)], "保留前部，便于溯源到工具调用前缀")
+
+	// 边界：30 个汉字 = 30 字符（90 字节）本可完整入库，不得因按字节判定而被无谓截断。
+	short := strings.Repeat("测", 30)
+	require.Equal(t, 30, utf8.RuneCountInString(short))
+	require.Greater(t, len(short), agentCallActionMaxLen, "该样例的字节数需超过上限，才能暴露按字节判定的问题")
+	require.NoError(t, svc.Record(AgentCallRecord{
+		TokenID: 1, TokenName: "t", Action: short, Client: AgentClientMCP, Success: true,
+	}))
+	var row2 model.AgentCallLog
+	require.NoError(t, db.Where("action = ?", short).First(&row2).Error)
+	assert.Equal(t, short, row2.Action, "字符数在限内即不得截断（30 个汉字本可完整入库）")
 }
 
 // TestActivityByToken_SameTimestampTakesLargerID 同一 Token、同一 created_at 的两行取 id 更大者。
