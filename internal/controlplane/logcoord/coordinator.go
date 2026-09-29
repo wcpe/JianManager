@@ -538,8 +538,8 @@ func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget 
 	for _, target := range targets {
 		result, ok := got[workerTargetID(target)]
 		if !ok {
-			tc := CoverageFromReadiness(target, []string{"target_missing_in_worker_response"})
-			if tc.State == CoverageSuccess {
+			tc := CoverageFromReadiness(target, absentTargetReasons(resp.Targets))
+			if len(absentTargetReasons(resp.Targets)) > 0 && tc.State == CoverageSuccess {
 				tc.State = CoverageNotReady
 			}
 			coverage[target.ID] = tc
@@ -743,7 +743,7 @@ func (c *Coordinator) Fields(ctx context.Context, q Query) (*FieldsResponse, err
 		for _, target := range targets {
 			result, ok := got[workerTargetID(target)]
 			if !ok {
-				covBy[target.ID] = CoverageFromReadiness(target, []string{"target_missing_in_worker_response"})
+				covBy[target.ID] = CoverageFromReadiness(target, absentTargetReasons(resp.Targets))
 				continue
 			}
 			covBy[target.ID] = TargetCoverage{TargetID: target.ID, State: result.State,
@@ -901,8 +901,8 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 		for _, t := range targets {
 			tr, ok := got[workerTargetID(t)]
 			if !ok {
-				tc := CoverageFromReadiness(t, []string{"target_missing_in_worker_response"})
-				if tc.State == CoverageSuccess {
+				tc := CoverageFromReadiness(t, absentTargetReasons(resp.Targets))
+				if len(absentTargetReasons(resp.Targets)) > 0 && tc.State == CoverageSuccess {
 					tc.State = CoverageNotReady
 				}
 				covBy[t.ID] = tc
@@ -1034,8 +1034,8 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 		for _, t := range targets {
 			tr, ok := got[workerTargetID(t)]
 			if !ok {
-				tc := CoverageFromReadiness(t, []string{"target_missing_in_worker_response"})
-				if tc.State == CoverageSuccess {
+				tc := CoverageFromReadiness(t, absentTargetReasons(resp.Targets))
+				if len(absentTargetReasons(resp.Targets)) > 0 && tc.State == CoverageSuccess {
 					tc.State = CoverageNotReady
 				}
 				covBy[t.ID] = tc
