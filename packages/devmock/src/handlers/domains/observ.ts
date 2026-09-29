@@ -80,6 +80,21 @@ interface AlertChannel {
   createdAt: string
 }
 
+/** QQ 已发现群（FR-495：对齐 web/src/api/alerts.ts QQDiscoveredGroup，camelCase JSON）。 */
+interface QQDiscoveredGroup {
+  id: number
+  groupOpenid: string
+  opMemberOpenid: string
+  firstSeenAt: string
+  lastSeenAt: string
+  sourceAppId: string
+}
+
+/** QQ 扫码绑定任务（FR-494）：内存态，polls 记录被轮询次数以模拟「先 pending 后 completed」。 */
+interface QQBindTask {
+  id: number
+  polls: number
+}
 /** 站内信（对齐 api/notifications.ts Notification）。 */
 interface Notification {
   id: number
@@ -203,6 +218,38 @@ const alertChannels = db<AlertChannel>('alertChannels', () => [
     createdAt: iso(-259200000),
   },
 ])
+
+/** QQ 已发现群集合（FR-495：两条假群，支撑表单下拉与接入视图 DOM 回归）。 */
+const qqDiscoveredGroups = db<QQDiscoveredGroup>('qqDiscoveredGroups', () => [
+  {
+    id: 1,
+    groupOpenid: 'GROUP_OPENID_DEMO_1',
+    opMemberOpenid: 'OP_MEMBER_DEMO_1',
+    firstSeenAt: iso(-172800000),
+    lastSeenAt: iso(-3600000),
+    sourceAppId: '102000001',
+  },
+  {
+    id: 2,
+    groupOpenid: 'GROUP_OPENID_DEMO_2',
+    opMemberOpenid: 'OP_MEMBER_DEMO_2',
+    firstSeenAt: iso(-86400000),
+    lastSeenAt: iso(-600000),
+    sourceAppId: '102000001',
+  },
+])
+
+/** 扫码绑定任务的假 appId / 目标 openid / 密钥引用名（DEMO 值，绝不用真实标识）。 */
+const QQ_DEMO_APP_ID = '102000001'
+const QQ_DEMO_USER_OPENID = 'USER_OPENID_DEMO_1'
+/** 与后端 `secretEnv` 同形状：`${QQ-<appId>}`（连字符是后端放宽字符集的原因）。 */
+const QQ_DEMO_SECRET_ENV = '${QQ-102000001}'
+/** 同一 taskId 前 N 次轮询返回 pending，第 N+1 次起返回 completed。 */
+const QQ_BIND_PENDING_POLLS = 1
+/** taskId 形状：由集合自增 id 派生（resetDb 后首个任务恒为 1，测试可复现）。 */
+const qqBindTaskId = (id: number) => `qq-bind-demo-${id}`
+/** 扫码绑定任务集合（空种子：每次测试从零开始，taskId 由自增 id 派生，可复现）。 */
+const qqBindTasks = db<QQBindTask>('qqBindTasks', () => [])
 
 const notifications = db<Notification>('notifications', seedNotifications)
 const tasks = db<Task>('tasks', seedTasks)
@@ -1697,6 +1744,76 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     return HttpResponse.json({ ok: true, message: '测试通知已发送' })
+  }),
+
+  // ===== QQ 扫码接入与已发现群（FR-495） =====
+  // 响应均不含 appSecret；三端点与通道 CRUD 一致挂 protected 分组（requireAuth 首行）。
+  // 响应形状必须是分页信封 {items,total}（照后端 QQGroups / docs/API.md）：返回纯数组会让
+  // 前端的双兼容归一化只走到数组分支，信封分支失去覆盖（真实后端契约回归测不出来）。
+  domainRoute('get', '/alerts/qq/groups', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const items = qqDiscoveredGroups.list()
+    return HttpResponse.json({ items, total: items.length })
+  }),
+
+  domainRoute('post', '/alerts/qq/share-link', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({
+      url: 'https://qun.qq.com/qunpro/robot/qunshare?robot_appid=102000001&callback_data=jm%3Ademo',
+    })
+  }),
+
+  // ===== QQ 扫码绑定任务（FR-494 接入体验改造） =====
+  // 契约（internal/controlplane/router/alert.go）：
+  //   POST /alerts/qq/bind-task         → {taskId, qrUrl}
+  //   GET  /alerts/qq/bind-task/:taskId → {status}；仅 completed 追加 {appId, userOpenid, secretEnv}
+  // 响应**绝不含 appSecret 明文**（与后端一致的密钥安全验收）；前端只把 secretEnv 填进表单。
+  // 轮询节奏：同一 taskId 首次返回 pending、之后返回 completed——让 DOM 回归能覆盖
+  // 「等待扫码 → 自动回填」的完整过渡，而不是一上来就完成（那样轮询分支等于没测）。
+  domainRoute('post', '/alerts/qq/bind-task', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const row = qqBindTasks.insert({ polls: 0 })
+    const taskId = qqBindTaskId(row.id)
+    return HttpResponse.json({
+      taskId,
+      qrUrl: `https://q.qq.com/qqbot/openclaw/connect.html?task_id=${taskId}&source=JianManager&_wv=2`,
+    })
+  }),
+
+  domainRoute('get', '/alerts/qq/bind-task/:taskId', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const taskId = String(info.params.taskId)
+    const row = qqBindTasks.find((t) => qqBindTaskId(t.id) === taskId)
+    // 未知 taskId = 本地密钥已过期（后端 404 BIND_TASK_EXPIRED 语义），前端据此重新申请。
+    if (!row) {
+      return HttpResponse.json(
+        { error: 'BIND_TASK_EXPIRED', message: '绑定任务已过期，请重新扫码' },
+        { status: 404 },
+      )
+    }
+    row.polls += 1
+    if (row.polls <= QQ_BIND_PENDING_POLLS) return HttpResponse.json({ status: 'pending' })
+    return HttpResponse.json({
+      status: 'completed',
+      appId: QQ_DEMO_APP_ID,
+      userOpenid: QQ_DEMO_USER_OPENID,
+      secretEnv: QQ_DEMO_SECRET_ENV,
+    })
+  }),
+
+  domainRoute('get', '/alerts/qq/gateway/status', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({
+      appId: '102000001',
+      status: 'connected',
+      lastEventAt: new Date().toISOString(),
+      lastError: '',
+    })
   }),
 
   // ===== notifications 站内信（FR-183） =====

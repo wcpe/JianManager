@@ -255,6 +255,20 @@ func main() {
 	botLoadReportSvc := service.NewBotLoadReportService(db)
 	alertSvc := service.NewAlertService(db)
 	alertChannelSvc := service.NewAlertChannelService(db)
+	// QQ 群发现服务（FR-495）：分享链接 + 网关长连接 + 事件落库；Start 非阻塞，
+	// 网关不可达时后台退避重试，不阻塞 CP 启动；断开不影响 ChannelNotifier.Send（纯 HTTP）。
+	qqDiscoverySvc := service.NewQQDiscoveryService(db, nil)
+	qqDiscoverySvc.Start()
+	defer qqDiscoverySvc.Stop()
+	// QQ 机器人扫码绑定（FR-495）：二维码建任务 + 轮询取凭据，取得的 appSecret 落盘到
+	// <dataRoot>/etc/qq-<appId>.key（0600），配置里只引用 ${QQ-<appId>}。
+	// 同时把 etc 目录注册为凭证密钥文件的回落查找位置（resolveEnvRef 用），
+	// 让「扫码绑定 → 通道配置引用」无需任何环境变量手工介入。
+	// 传数据根而非目录：兜底目录由服务派生为 <root>/etc/qq，调用方无法把它指到 etc/ 本身，
+	// 否则 ${WS-TOKEN-SECRET} 这类引用会命中 CP 主密钥文件（详见 service.QQSecretSubdir）。
+	service.SetCredentialDataRoot(root.Base())
+	qqBindSvc := service.NewQQBindService(nil)
+	qqBindSvc.SetDataRoot(root)
 	scheduleSvc := service.NewScheduleService(db)
 	backupSvc := service.NewBackupService(db, pool)
 	// 备份远程存储后端（FR-057/FR-152）：注入备份服务与 Worker 池，凭证经 ${ENV_VAR} 解析后下发 Worker。
@@ -801,6 +815,8 @@ func main() {
 		BotLoadProjection:       botLoadProjectionSvc,
 		Alert:                   alertSvc,
 		AlertChannel:            alertChannelSvc,
+		QQDiscovery:             qqDiscoverySvc,
+		QQBind:                  qqBindSvc,
 		Schedule:                scheduleSvc,
 		Backup:                  backupSvc,
 		BackupStorage:           backupStorageSvc,

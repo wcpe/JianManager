@@ -2414,11 +2414,12 @@
     "config": { "url": "${JM_DINGTALK_WEBHOOK}" }
   }
   ```
-- **`type`**: `webhook` | `email` | `dingtalk` | `wecom` | `feishu` | `discord` | `telegram` | `inapp`
+- **`type`**: `webhook` | `email` | `dingtalk` | `wecom` | `feishu` | `discord` | `telegram` | `qq` | `inapp`
 - **`config`（按类型）**:
   - webhook/dingtalk/wecom/feishu/discord: `{ "url": "${ENV}" }`
   - telegram: `{ "token": "${ENV}", "chatId": "..." }`
   - email: `{ "host", "port", "username", "password": "${ENV}", "from", "to" }`
+  - qq（FR-494）: `{ "appId", "appSecret": "${ENV}", "targetType": "group"|"c2c", "targetId", "baseUrl" 可选 }`——经 QQ 开放平台主动推送；`targetId` 为 `group_openid`（群）或 `user_openid`（单聊），须手工填入；`baseUrl` 留空取 `https://api.bot.qq.com`；注意群消息禁含 URL（开放平台返回 `40054010`）
   - inapp: `{}`
 - **错误**: `400 INVALID_REQUEST`（凭证非 `${ENV}` 引用 / 必填缺失 / 非法类型）
 
@@ -2435,6 +2436,61 @@
 - **描述**: 向通道发送一条测试通知（验证配置与连通性）
 - **关联 FR**: FR-085
 - **错误**: `502 TEST_SEND_FAILED`（投递失败，message 含原因）
+
+### QQ 扫码接入（FR-494 / FR-495）
+
+> **扫码绑定**：控制台出二维码 → 手机 QQ 扫码 → CP 拿到 `appId` / `appSecret` / `user_openid`
+> → 密钥落盘 `<dataRoot>/etc/qq/qq-<appId>.key`（0600）→ 前端表单只填引用名 `${QQ-<appId>}`。
+> **密钥不入库、不经前端明文传递**；`appSecret` 永不作为响应字段返回。
+>
+> 引用名 `${QQ-<appId>}` 的解析：`resolveEnvRef` 先查环境变量，未命中再回落查
+> `<dataRoot>/etc/qq/<变量名小写>.key`。回落目录**固定**为该子目录（不提供「直接指定目录」的接口），
+> 以免 `etc/` 下的 CP 主密钥文件被同名引用命中。
+>
+> 权限与通道 CRUD 一致（`alert.manage`）。群聊路径（`targetType=group`）因平台拒绝群主动消息
+> （`40034105`）已从前端下线；下方 `share-link` / `groups` 端点保留供平台开放后复用。
+
+#### POST /api/v1/alerts/qq/bind-task
+- **描述**: 创建扫码绑定任务，返回二维码 URL（前端渲染为二维码）
+- **关联 FR**: FR-494
+- **权限**: `alert.manage`
+- **响应 200**: `{ "taskId": "8eff9ed0-...", "qrUrl": "https://q.qq.com/qqbot/openclaw/connect.html?task_id=...&source=JianManager&_wv=2" }`
+- **错误**: `502 BIND_TASK_FAILED`（上游创建失败，message 含上游原因）
+- **说明**: 二维码约 3 分钟过期，前端需轮询并在过期后重新申请
+
+#### GET /api/v1/alerts/qq/bind-task/:taskId
+- **描述**: 查询扫码绑定结果
+- **关联 FR**: FR-494
+- **权限**: `alert.manage`
+- **响应 200**: `{ "status": "none|pending|completed|expired" }`；**仅 `completed`** 追加
+  `{ "appId": "...", "userOpenid": "...", "secretEnv": "${QQ-1020001}" }`
+- **错误**: `404 BIND_TASK_EXPIRED`（本地任务态已过期，需重扫）、`502`（上游协议异常）
+- **说明**: 轮询幂等，可重复调用；**响应绝不含 `appSecret` 明文**——前端只把 `secretEnv` 填进表单
+
+#### POST /api/v1/alerts/qq/share-link
+- **描述**: 生成机器人分享链接（前端渲染为二维码；刷新即重新生成）
+- **关联 FR**: FR-495
+- **权限**: `alert.manage`
+- **请求**（body 可空，空 = 默认机器人即首个启用 `qq` 通道的 `appId`）:
+  ```json
+  { "appId": "1020001" }
+  ```
+- **响应 200**: `{ "url": "https://qun.qq.com/qunpro/robot/qunshare?..." }`
+- **错误**: `502 SHARE_LINK_FAILED`（未配置 qq 通道 / 取 token 失败 / 开放平台返回非 0 code，message 含原因）
+
+#### GET /api/v1/alerts/qq/groups
+- **描述**: 已发现群列表（`GROUP_ADD_ROBOT` 事件落库，按 `group_openid` 去重）
+- **关联 FR**: FR-495
+- **权限**: `alert.manage`
+- **Query**: `?page=1&pageSize=20`（`pageSize` 上限 100，越界回退 20）
+- **响应 200**: `{ "items": [{ "id", "groupOpenid", "opMemberOpenid", "firstSeenAt", "lastSeenAt", "sourceAppId" }], "total": 5 }`
+
+#### GET /api/v1/alerts/qq/gateway/status
+- **描述**: QQ 网关连接状态（`connected` | `connecting` | `disconnected` | `error`；`error` 为人工介入态，停止重连）
+- **关联 FR**: FR-495
+- **权限**: `alert.manage`
+- **响应 200**: `{ "appId": "1020001", "status": "connected", "lastEventAt": "2026-09-29T00:00:00Z", "lastError": "" }`
+- **说明**: 无 `1<<25`（`GROUP_AND_C2C_EVENT`）权限时 status 为 `error`，`lastError` 明确指向 intent 权限；网关断开不影响 `qq` 通道投递（投递只走 HTTP）
 
 ---
 

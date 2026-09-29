@@ -472,6 +472,46 @@ serverprobe_world_{loaded_chunks,entities,tile_entities}{world=}  → 按世界�
 
 > 地基阶段（FR-065）打通通道层（会话/握手/心跳/connected·disconnected 冒泡 + proto 一次铺齐）；实时玩家事件采集（FR-066）已落地（见上）；治理执行与 RCON 退役（FR-067）已落地，在线更新（FR-068）复用本通道、不再改 proto。
 
+### 6.2.3 QQ 网关出站 WebSocket（CP ↔ 开放平台，FR-495）
+
+FR-494 的 `qq` 通道是纯出站 HTTP 投递（`ChannelNotifier.Send`，token 按 `appId` 缓存）；FR-495
+另起一条 CP 直连开放平台的**出站** WSS 长连接，只为接收 `GROUP_ADD_ROBOT` 入群事件、
+终结手抄 `group_openid`。保持 CP 纯出站——不监听端口、不做被动回复、不读群聊内容。
+
+- 建连：`GET {baseUrl}/gateway`（`QQBot {token}` 鉴权）拿 `wss://…` → 拨 WSS →
+  收 Op10 Hello 取 `heartbeat_interval` → 发 Op2 Identify
+  （`token: "QQBot {AccessToken}"`、`intents: 33554432`（`1<<25 GROUP_AND_C2C_EVENT`）、`shard: [0,1]`）→
+  收 READY 存 `session_id`（内存持有用于 Resume；落库仅作状态审计——进程重启不读回，重启后必然走 Identify）。
+- 心跳：按 `heartbeat_interval` 发 Op1（`d` = 最新 `s` 或 null），收 Op11 ACK；
+  ACK 超时立即断开连接（否则读循环仍阻塞在 `ReadMessage`，状态会假报 connected）。
+  重连指数退避（初值 1s、上限 5min、加抖动），连接成功（READY / RESUMED）即复位退避档位；
+  短时断线发 Op6 Resume（`token` + `session_id` + `seq`），收 RESUMED 继续。
+- 会话失效自愈：收到 Op9 Invalid Session（`d=false`）、关闭码 4006/4007、或 Resume 后未收到
+  RESUMED 时，清空 `session_id` 与 `seq`，下一轮改走 Op2 Identify——否则会拿陈旧会话无限 Resume，
+  外部表现为「连接看似正常、状态黄灯，但永不再收到入群事件」。
+- 致命关闭（停止重连并置 `error`，人工介入信号）：4014（intent 无权限，
+  错误信息明确指向 `1<<25` 权限申请）、4914（下架）、4915（封禁）。
+- 可重试失败的可见性：凭证错误、`/gateway` 获取失败、拨号失败、Hello 异常、
+  Resume/Identify 发送失败，都把原因写入 `last_error` 并保持 `connecting`——
+  退避前**不清空**该字段。否则「机器人不存在 / 密钥错误」这类最常见的配置错误
+  在控制台只表现为永远「连接中」，运维只能翻服务器日志。
+- 事件：只处理 `GROUP_ADD_ROBOT`（`group_openid` / `op_member_openid` / `timestamp`，
+  按 `group_openid` upsert 入 `qq_discovered_groups`）；其余事件收下即丢（debug 日志）。
+- 已知限制：事件落库在 WS 读循环内**同步**执行。若 DB 慢查询持续超过 `heartbeat_interval`，
+  会推迟 ACK 消费并被判为心跳超时，触发一次多余重连（Resume 补发事件，不丢数据）。
+  入群事件频率极低（日均个位数），故当前不做队列化；事件量上升时应改为异步入队。
+  无群列表接口补偿——CP 离线窗口的入群永久丢失；网关断开不影响 `qq` 通道投递。
+- 密钥：默认机器人 = 首个启用的 `qq` 通道，`appSecret` 从其 `${ENV}` 引用服务端解析；
+  分享/群列表/状态三端点响应永不含 `appSecret`。
+- 生命周期：`QQDiscoveryService.Start/Stop`（stopCh 模式，与 `AlertEvaluator` 同类），
+  随 CP 启停但不阻塞启动（网关不可达时后台重试）；WSS 库复用 `gorilla/websocket v1.5.3`，零新增依赖。
+
+```
+运维点分享二维码 → 手机 QQ 扫码 → 机器人被拉进群
+开放平台 →(WSS Dispatch GROUP_ADD_ROBOT) CP QQDiscoveryService → upsert qq_discovered_groups
+前端通道表单 → 扫码绑定（q.qq.com 绑定页）→ 自动填充 appId / ${QQ-<appId>} / user_openid → ChannelNotifier.Send 经 HTTP 投递（单聊；群聊路径已下线：平台拒绝群主动消息 40034105）
+```
+
 ### 6.3 守护进程二进制帧协议
 
 Worker Node 与 daemon wrapper 子进程之间通过二进制帧协议通信。
@@ -648,6 +688,7 @@ Task ──N:1──▶ User (created_by, 归属/收件人)    # V2 FR-183
 Notification ──N:1──▶ User (user_id, 收件人)    # V2 FR-183（站内信, ADR-040）
 AlertRule ──1:N──▶ AlertEvent
 AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON 软引用, FR-085 通知路由)
+QQGatewayConnection ──1:N──▶ QQDiscoveredGroup  # FR-495（逻辑归属 source_app_id → app_id，无硬外键；通道存 openid 字符串副本，删群不级联）
 ```
 
 ### 核心表
@@ -678,7 +719,9 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | schedule_execution_logs | schedule_id(FK), action, status, error, started_at, finished_at |
 | alert_rules | uuid, name, trigger_type(V2: metric/instance_crash/node_offline/log_keyword/player_event/backup_failed), level(V2: info/warn/critical), target_type, target_id, metric, operator, threshold, duration_sec, keyword(V2 日志关键字), event_match(V2 玩家事件子类型), channel_ids(V2 JSON 路由通道), dedup_window_sec(V2 去抖), silence_start/silence_end(V2 静默窗口 HH:MM), notify_recover(V2), notify_type, notify_target（FR-011 兼容但仅 `${ENV_VAR}` 引用，API 不回显）, enabled |
 | alert_events | rule_id, target_id, level(V2), trigger_type(V2), dedup_key(V2 去抖键), value, message, count(V2 聚合计数), resolved, fired_at, last_fired_at(V2), resolved_at, acknowledged/acknowledged_by/acknowledged_at(V2 确认), read(V2 站内已读) |
-| alert_channels (V2) | uuid, name, type(webhook/email/dingtalk/wecom/feishu/discord/telegram/inapp), enabled, config(JSON, 凭证子字段 ${ENV_VAR} 引用, FR-085) |
+| alert_channels (V2) | uuid, name, type(webhook/email/dingtalk/wecom/feishu/discord/telegram/qq/inapp), enabled, config(JSON, 凭证子字段 ${ENV_VAR} 引用, FR-085) |
+| qq_discovered_groups (FR-495) | group_openid(UNIQUE, 通道 targetId 抄此值), op_member_openid(拉群操作人), first_seen_at, last_seen_at(重复进群刷新), source_app_id(发现该群的机器人, 逻辑归属无硬外键) |
+| qq_gateway_connections (FR-495) | app_id(UNIQUE, 按机器人单连接), status(connected/connecting/disconnected/error), last_event_at, last_error(4014 时明确指向 1<<25 intent 权限), session_id(READY 后保存, Resume 用, API 不回显) |
 | metric_series (V2) | node_uuid, instance_id, scope(node/instance/world), metric_key, world, unit, last_seen_at; UNIQUE(node_uuid,instance_id,scope,metric_key,world)（时序序列维度，FR-060/ADR-013） |
 | metric_sample_raw (V2) | series_id(FK), ts, value(NULL=缺测)；留 ~48h |
 | metric_rollup_5m (V2) | series_id(FK), bucket_ts, avg/min/max/last/count；留 ~30d |
@@ -876,7 +919,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 
 #### 告警管理 `/alerts`
 
-`AlertsPage` 保留规则 / 事件 / 通道三 Tab：规则按 `triggerType` 动态展示指标、关键字、玩家事件匹配与节点 / 实例目标选择；事件列表支持级别、触发类型、规则、通道类型、确认 / 恢复、关键字、时间范围与分页筛选；通道页管理 webhook、邮件、钉钉、企业微信、飞书、Discord、Telegram、站内等通道。告警事件仍按 ADR-048 作为认证用户全局可见的运维事件进入统一通知流，确认或全部已读后同时刷新 `/alerts` 与 `/notifications` 读侧缓存。
+`AlertsPage` 保留规则 / 事件 / 通道三 Tab：规则按 `triggerType` 动态展示指标、关键字、玩家事件匹配与节点 / 实例目标选择；事件列表支持级别、触发类型、规则、通道类型、确认 / 恢复、关键字、时间范围与分页筛选；通道页管理 webhook、邮件、钉钉、企业微信、飞书、Discord、Telegram、QQ 机器人、站内等通道。告警事件仍按 ADR-048 作为认证用户全局可见的运维事件进入统一通知流，确认或全部已读后同时刷新 `/alerts` 与 `/notifications` 读侧缓存。
 
 #### 节点列表 `/nodes`
 

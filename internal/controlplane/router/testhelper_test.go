@@ -35,6 +35,10 @@ import (
 // 对账执行需注入假 BlobStore（SetStoreFactory），路由测试串行执行下按引用注入安全。
 var testArtifactReconcile *service.ArtifactReconcileService
 
+// testQQBind 最近一次 setupTestRouter 构造的 QQ 扫码绑定服务（FR-495）——绑定端点测试
+// 需把上游域名指向假服务端（SetBaseURL），路由测试串行执行下按引用注入安全。
+var testQQBind *service.QQBindService
+
 // setupTestDB 创建临时 SQLite 数据库（磁盘文件，每测试独立目录）并运行自动迁移。
 // 目录用 `t.TempDir()`：testing 框架把落点定为 `os.MkdirTemp(os.Getenv("GOTMPDIR"), ...)`，
 // 而 `GOTMPDIR` 为空时 `os.MkdirTemp("", ...)` 会走 `os.TempDir()`——后者**每次调用都读**
@@ -158,6 +162,10 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 	assetSvc := service.NewAssetService(db, root)
 	backupStorageSvc := service.NewBackupStorageService(db, pool)
 	backupStorageSvc.SetDataRoot(root)
+	// QQ 扫码绑定（FR-495）：密钥落盘目录同样用临时数据根，避免测试写到真实 data/etc。
+	qqBindSvc := service.NewQQBindService(nil)
+	qqBindSvc.SetDataRoot(root)
+	testQQBind = qqBindSvc
 	// 制品存储渠道（FR-347）：dev 加密器 + 内置本机存储 seed，令渠道端点可测。
 	artifactStorageSvc := service.NewArtifactStorageChannelService(db, root)
 	if enc, _, err := service.ResolveKeyEncryptor("", true, ""); err == nil {
@@ -223,6 +231,8 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 		BotLoadProjection:     service.NewBotLoadProjectionService(db),
 		Alert:                 service.NewAlertService(db),
 		AlertChannel:          service.NewAlertChannelService(db),
+		QQDiscovery:           service.NewQQDiscoveryService(db, nil),
+		QQBind:                qqBindSvc,
 		Schedule:              service.NewScheduleService(db),
 		Backup:                service.NewBackupService(db, pool),
 		BackupStorage:         backupStorageSvc,

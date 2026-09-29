@@ -62,6 +62,16 @@ export interface ChannelConfig {
   password?: string
   from?: string
   to?: string
+  /** QQ 机器人 AppID（FR-494，明文）。 */
+  appId?: string
+  /** QQ 机器人密钥（FR-494，须 ${ENV_VAR} 引用）。 */
+  appSecret?: string
+  /** QQ 投递目标类型：仅 c2c=单聊（FR-494；group 已被平台拒绝，前端不再暴露）。 */
+  targetType?: string
+  /** QQ 目标 user_openid（单聊）（FR-494，明文）；扫码绑定时自动填入。 */
+  targetId?: string
+  /** QQ 开放平台 API 根地址（FR-494，可选，留空取后端默认值）。 */
+  baseUrl?: string
 }
 
 /** 通知通道（FR-085）。 */
@@ -298,4 +308,150 @@ export function useTestAlertChannel() {
     onError: (err: { response?: { data?: { message?: string } } }) =>
       toast.error(err.response?.data?.message || '测试发送失败'),
   })
+}
+
+// ── QQ 扫码接入与已发现群（FR-495） ──
+// 字段名与后端 QQDiscoveredGroup / QQGatewayConnection 的 JSON tag 对齐（camelCase，
+// 与 AlertChannelInfo 等既有接口风格一致）；响应均不含 appSecret（密钥安全验收）。
+
+/** 已发现群（后端 QQDiscoveredGroup 落库 GROUP_ADD_ROBOT 事件）。 */
+export interface QQDiscoveredGroup {
+  id: number
+  groupOpenid: string
+  opMemberOpenid: string
+  firstSeenAt: string
+  lastSeenAt: string
+  sourceAppId: string
+}
+
+/**
+ * 已发现群列表响应：真实后端为分页信封 `{items,total}`（internal/controlplane/router/alert.go
+ * QQGroups，devmock 同形状）；仍兼容纯数组，因为故障注入 / 历史 mock 可能给 `[]`
+ * （见 normalizeQQDiscoveredGroups）。两种形状都有单测钉住（alerts.test.ts）。
+ */
+export type QQDiscoveredGroupList = QQDiscoveredGroup[] | { items: QQDiscoveredGroup[]; total: number }
+
+/**
+ * 归一化群列表响应为数组（信封取 items，数组原样返回，空/半截响应退化为 `[]`）。
+ * 用 `?? []` 是为了半截信封（后端漏 items 字段）不退化成 undefined 而崩在下游 `.map`。
+ */
+export function normalizeQQDiscoveredGroups(
+  data: QQDiscoveredGroupList | undefined | null,
+): QQDiscoveredGroup[] {
+  if (!data) return []
+  return Array.isArray(data) ? data : (data.items ?? [])
+}
+
+/**
+ * 已发现群列表（enabled=false 时不请求）。
+ *
+ * 群聊路径已从前端下线（QQ 平台拒绝群主动消息 40034105），故当前无 UI 调用点；保留是因为
+ * 后端端点与 `qq_discovered_groups` 表同样保留（平台开放后可即时启用），且响应形状被
+ * devmock 契约测试钉住——删掉会让「平台开放时」重新接回失去现成的对齐实现。
+ */
+export function useQQDiscoveredGroups(enabled = true, refetchInterval: number | false = false) {
+  return useQuery({
+    queryKey: ['qqDiscoveredGroups'],
+    queryFn: async () => {
+      const { data } = await api.get<QQDiscoveredGroupList>('/alerts/qq/groups')
+      return normalizeQQDiscoveredGroups(data)
+    },
+    enabled,
+    refetchInterval,
+  })
+}
+
+/** QQ 网关连接状态（后端 QQGatewayConnection：connected/connecting/disconnected/error）。 */
+export interface QQGatewayStatusInfo {
+  appId: string
+  status: string
+  lastEventAt?: string | null
+  lastError: string
+}
+
+/** 网关连接状态（轮询供接入视图实时展示；失败不抛 toast，由视图内联错误态）。 */
+export function useQQGatewayStatus(refetchInterval: number | false = false) {
+  return useQuery({
+    queryKey: ['qqGatewayStatus'],
+    queryFn: async () => {
+      const { data } = await api.get<QQGatewayStatusInfo>('/alerts/qq/gateway/status')
+      return data
+    },
+    refetchInterval,
+  })
+}
+
+/**
+ * 生成 QQ 机器人分享链接（appId 为空 = 默认机器人；请求不带密钥、响应只有 url）。
+ * 用 mutation 而不用 query：每次调用都重新生成，窗口聚焦等自动 refetch 不得静默触发。
+ */
+export function useCreateQQShareLink() {
+  return useMutation({
+    mutationFn: async (appId?: string) => {
+      const { data } = await api.post<{ url: string }>('/alerts/qq/share-link', {
+        appId: appId?.trim() || undefined,
+      })
+      return data
+    },
+  })
+}
+
+// ── QQ 扫码绑定（FR-494 接入体验改造） ──
+// 契约（internal/controlplane/router/alert.go）：
+//   POST /alerts/qq/bind-task         → {taskId, qrUrl}；平台侧失败 502 BIND_TASK_FAILED
+//   GET  /alerts/qq/bind-task/:taskId → {status}；仅 completed 追加 {appId, userOpenid, secretEnv}
+// 响应**绝不含 appSecret 明文**——前端只把 secretEnv（形如 ${QQ-1020001}）填进表单。
+
+/** 绑定任务创建响应：qrUrl 供渲染二维码，打开后跳 QQ 官方连接页。 */
+export interface QQBindTaskInfo {
+  taskId: string
+  qrUrl: string
+}
+
+/** 绑定任务状态：none=未开始 / pending=等待扫码 / completed=已授权 / expired=二维码过期。 */
+export type QQBindStatus = 'none' | 'pending' | 'completed' | 'expired'
+
+/** 绑定任务轮询结果；appId/userOpenid/secretEnv 只在 completed 时出现。 */
+export interface QQBindResult {
+  status: QQBindStatus
+  appId?: string
+  userOpenid?: string
+  /** 形如 ${QQ-1020001} 的引用名（密钥已由 CP 落盘，前端只填引用名，不接触明文）。 */
+  secretEnv?: string
+}
+
+/**
+ * 轮询节拍：2s。
+ *
+ * 上限约束来自平台频率限制（实测分享链接类接口约 9 次即被限流），故节拍不宜更密；
+ * 对话框关闭（观察者销毁）后 react-query 会清掉定时器，不会继续打接口。
+ */
+export const QQ_BIND_POLL_MS = 2000
+
+/** 创建扫码绑定任务（mutation：每次点击都重新申请，不参与缓存与自动重取）。 */
+export function useCreateQQBindTask() {
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<QQBindTaskInfo>('/alerts/qq/bind-task')
+      return data
+    },
+  })
+}
+
+/** 绑定任务本地密钥已过期（后端 404 BIND_TASK_EXPIRED）——提示重扫即可，无需报错。 */
+export function isBindTaskExpiredError(err: unknown): boolean {
+  const status = (err as { response?: { status?: number } })?.response?.status
+  return status === 404
+}
+
+/**
+ * 查询绑定任务结果（供对话框的轮询循环按 {@link QQ_BIND_POLL_MS} 节流调用）。
+ *
+ * 不用 react-query 轮询：这轮轮询的判活条件带「过期即重新申请」的副作用，且要暴露
+ * 「清定时器」给卸载路径，交给一个显式循环比塞进 refetchInterval 更好读。接口形状与
+ * 取消语义（组件卸载后不再请求）仍在组件侧保证。
+ */
+export async function fetchQQBindResult(taskId: string): Promise<QQBindResult> {
+  const { data } = await api.get<QQBindResult>(`/alerts/qq/bind-task/${taskId}`)
+  return data
 }

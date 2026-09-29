@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Bell } from 'lucide-react'
+import { AlertTriangle, Bell, Inbox, Plus } from 'lucide-react'
 import {
   useAlertRules,
   useAlertEvents,
@@ -17,9 +17,20 @@ import {
   type EventQuery,
 } from '@/api/alerts'
 import DangerConfirm from '@/components/DangerConfirm'
+import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@jianmanager/ui/components/select'
 import {
   Table,
   TableBody,
@@ -46,6 +57,8 @@ import {
 
 type Tab = 'rules' | 'events' | 'channels'
 const ALERT_TRIGGER_TYPES = ['metric', 'instance_crash', 'node_offline', 'log_keyword', 'player_event', 'backup_failed', 'saturation', 'baseline', 'quota_exceeded'] as const
+/** Radix Select 不接受空字符串选项值，用哨兵值表达筛选栏的「全部」。 */
+const FILTER_ALL = 'all'
 
 export default function AlertsPage() {
   const { t } = useTranslation()
@@ -58,41 +71,31 @@ export default function AlertsPage() {
         <h1 className="text-2xl font-bold">{t('alerts.title')}</h1>
       </div>
 
-      <div className="flex gap-1 border-b">
-        <TabButton active={tab === 'rules'} onClick={() => setTab('rules')}>
-          {t('alerts.tabRules')}
-        </TabButton>
-        <TabButton active={tab === 'events'} onClick={() => setTab('events')}>
-          {t('alerts.tabEvents')}
-          {!!unread && unread > 0 && (
-            <span className="ml-1 inline-flex items-center justify-center rounded-full bg-destructive px-1.5 text-xs text-destructive-foreground">
-              {unread}
-            </span>
-          )}
-        </TabButton>
-        <TabButton active={tab === 'channels'} onClick={() => setTab('channels')}>
-          {t('alerts.tabChannels')}
-        </TabButton>
-      </div>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="w-full">
+        <TabsList className="mb-4">
+          <TabsTrigger value="rules">{t('alerts.tabRules')}</TabsTrigger>
+          <TabsTrigger value="events">
+            {t('alerts.tabEvents')}
+            {!!unread && unread > 0 && (
+              <span className="ml-1 inline-flex items-center justify-center rounded-full bg-destructive px-1.5 text-xs text-destructive-foreground">
+                {unread}
+              </span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="channels">{t('alerts.tabChannels')}</TabsTrigger>
+        </TabsList>
 
-      {tab === 'rules' && <RulesTab />}
-      {tab === 'events' && <EventsTab />}
-      {tab === 'channels' && <ChannelsTab />}
+        <TabsContent value="rules">
+          <RulesTab />
+        </TabsContent>
+        <TabsContent value="events">
+          <EventsTab />
+        </TabsContent>
+        <TabsContent value="channels">
+          <ChannelsTab />
+        </TabsContent>
+      </Tabs>
     </div>
-  )
-}
-
-/** 选项卡按钮。 */
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-        active ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'
-      }`}
-      onClick={onClick}
-    >
-      {children}
-    </button>
   )
 }
 
@@ -106,7 +109,7 @@ function LevelBadge({ level }: { level: string }) {
 
 function RulesTab() {
   const { t } = useTranslation()
-  const { data: rules } = useAlertRules()
+  const { data: rules, isLoading: rulesLoading } = useAlertRules()
   const { data: channels } = useAlertChannels()
   const deleteRule = useDeleteAlertRule()
   const updateRule = useUpdateAlertRule()
@@ -135,7 +138,7 @@ function RulesTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="jm-toolbar-surface flex flex-wrap items-center gap-3 p-2">
         <ConfigSummaryChips
           chips={[
             { label: t('alerts.summaryAll'), value: summary.total, active: filter === null, onClick: () => setFilter(null) },
@@ -157,13 +160,21 @@ function RulesTab() {
         />
         <div className="ml-auto flex items-center gap-2">
           <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
-          <Button onClick={() => setShowCreate(true)}>+ {t('alerts.createRule')}</Button>
+          <Button onClick={() => setShowCreate(true)}>
+            <Plus className="size-4" /> {t('alerts.createRule')}
+          </Button>
         </div>
       </div>
 
-      {visible.length === 0 ? (
+      {rulesLoading ? (
+        <div className="space-y-2.5">
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-16 w-full rounded-lg" />
+          ))}
+        </div>
+      ) : visible.length === 0 ? (
         <Panel>
-          <p className="py-6 text-center text-sm text-muted-foreground">{t('alerts.emptyRules')}</p>
+          <EmptyState icon={<AlertTriangle />} title={t('alerts.emptyRules')} />
         </Panel>
       ) : view === 'card' ? (
         <div className="flex flex-col gap-2.5">
@@ -317,74 +328,94 @@ function EventsTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          className="p-2 border rounded text-sm"
+      <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
+        <Input
+          className="h-9 w-56"
           placeholder={t('alerts.keywordPlaceholder')}
           value={filter.keyword ?? ''}
           onChange={(e) => patchFilter({ keyword: e.target.value || undefined })}
         />
-        <select
-          className="p-2 border rounded text-sm"
-          value={filter.level ?? ''}
-          onChange={(e) => patchFilter({ level: e.target.value || undefined })}
+        <Select
+          value={filter.level ?? FILTER_ALL}
+          onValueChange={(v) => patchFilter({ level: v === FILTER_ALL ? undefined : v })}
         >
-          <option value="">{t('alerts.allLevels')}</option>
-          <option value="info">{t('alerts.level_info')}</option>
-          <option value="warn">{t('alerts.level_warn')}</option>
-          <option value="critical">{t('alerts.level_critical')}</option>
-        </select>
-        <select
-          className="p-2 border rounded text-sm"
-          value={filter.triggerType ?? ''}
-          onChange={(e) => patchFilter({ triggerType: e.target.value || undefined })}
+          <SelectTrigger size="sm" className="w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={FILTER_ALL}>{t('alerts.allLevels')}</SelectItem>
+            <SelectItem value="info">{t('alerts.level_info')}</SelectItem>
+            <SelectItem value="warn">{t('alerts.level_warn')}</SelectItem>
+            <SelectItem value="critical">{t('alerts.level_critical')}</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={filter.triggerType ?? FILTER_ALL}
+          onValueChange={(v) => patchFilter({ triggerType: v === FILTER_ALL ? undefined : v })}
         >
-          <option value="">{t('alerts.allTriggerTypes')}</option>
-          {ALERT_TRIGGER_TYPES.map((tt) => (
-            <option key={tt} value={tt}>{t(`alerts.trigger_${tt}`, tt)}</option>
-          ))}
-        </select>
-        <select
-          className="p-2 border rounded text-sm"
-          value={filter.resolved === undefined ? '' : String(filter.resolved)}
-          onChange={(e) => patchFilter({ resolved: e.target.value === '' ? undefined : e.target.value === 'true' })}
+          <SelectTrigger size="sm" className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={FILTER_ALL}>{t('alerts.allTriggerTypes')}</SelectItem>
+            {ALERT_TRIGGER_TYPES.map((tt) => (
+              <SelectItem key={tt} value={tt}>{t(`alerts.trigger_${tt}`, tt)}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={filter.resolved === undefined ? FILTER_ALL : String(filter.resolved)}
+          onValueChange={(v) => patchFilter({ resolved: v === FILTER_ALL ? undefined : v === 'true' })}
         >
-          <option value="">{t('alerts.allStatus')}</option>
-          <option value="false">{t('alerts.unresolved')}</option>
-          <option value="true">{t('alerts.resolved')}</option>
-        </select>
-        <select
-          className="p-2 border rounded text-sm"
-          value={filter.acknowledged === undefined ? '' : String(filter.acknowledged)}
-          onChange={(e) => patchFilter({ acknowledged: e.target.value === '' ? undefined : e.target.value === 'true' })}
+          <SelectTrigger size="sm" className="w-32">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={FILTER_ALL}>{t('alerts.allStatus')}</SelectItem>
+            <SelectItem value="false">{t('alerts.unresolved')}</SelectItem>
+            <SelectItem value="true">{t('alerts.resolved')}</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={filter.acknowledged === undefined ? FILTER_ALL : String(filter.acknowledged)}
+          onValueChange={(v) => patchFilter({ acknowledged: v === FILTER_ALL ? undefined : v === 'true' })}
         >
-          <option value="">{t('alerts.allAck')}</option>
-          <option value="false">{t('alerts.unacknowledged')}</option>
-          <option value="true">{t('alerts.acknowledged')}</option>
-        </select>
-        <select
-          className="p-2 border rounded text-sm"
-          value={filter.ruleId ?? ''}
-          onChange={(e) => patchFilter({ ruleId: e.target.value ? Number(e.target.value) : undefined })}
+          <SelectTrigger size="sm" className="w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={FILTER_ALL}>{t('alerts.allAck')}</SelectItem>
+            <SelectItem value="false">{t('alerts.unacknowledged')}</SelectItem>
+            <SelectItem value="true">{t('alerts.acknowledged')}</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={filter.ruleId === undefined ? FILTER_ALL : String(filter.ruleId)}
+          onValueChange={(v) => patchFilter({ ruleId: v === FILTER_ALL ? undefined : Number(v) })}
         >
-          <option value="">{t('alerts.allRules')}</option>
-          {(rules ?? []).map((r) => (
-            <option key={r.id} value={r.id}>{r.name}</option>
-          ))}
-        </select>
+          <SelectTrigger size="sm" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={FILTER_ALL}>{t('alerts.allRules')}</SelectItem>
+            {(rules ?? []).map((r) => (
+              <SelectItem key={r.id} value={String(r.id)}>{r.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <label className="flex items-center gap-1 text-xs text-muted-foreground">
           {t('alerts.timeFrom')}
-          <input
+          <Input
             type="datetime-local"
-            className="p-1.5 border rounded text-sm"
+            className="h-8 w-44"
             onChange={(e) => patchFilter({ from: toIso(e.target.value) })}
           />
         </label>
         <label className="flex items-center gap-1 text-xs text-muted-foreground">
           {t('alerts.timeTo')}
-          <input
+          <Input
             type="datetime-local"
-            className="p-1.5 border rounded text-sm"
+            className="h-8 w-44"
             onChange={(e) => patchFilter({ to: toIso(e.target.value) })}
           />
         </label>
@@ -437,8 +468,8 @@ function EventsTab() {
             ))}
             {items.length === 0 && (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground">
-                  {t('alerts.emptyEvents')}
+                <TableCell colSpan={8} className="p-0">
+                  <EmptyState icon={<Inbox />} title={t('alerts.emptyEvents')} />
                 </TableCell>
               </TableRow>
             )}
@@ -476,7 +507,7 @@ function EventsTab() {
 
 function ChannelsTab() {
   const { t } = useTranslation()
-  const { data: channels } = useAlertChannels()
+  const { data: channels, isLoading: channelsLoading } = useAlertChannels()
   const deleteChannel = useDeleteAlertChannel()
   const testChannel = useTestAlertChannel()
   const [editing, setEditing] = useState<AlertChannelInfo | null>(null)
@@ -486,12 +517,20 @@ function ChannelsTab() {
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <Button onClick={() => setShowCreate(true)}>+ {t('alerts.createChannel')}</Button>
+        <Button onClick={() => setShowCreate(true)}>
+          <Plus className="size-4" /> {t('alerts.createChannel')}
+        </Button>
       </div>
 
-      {(channels ?? []).length === 0 ? (
+      {channelsLoading ? (
+        <div className="space-y-2.5">
+          {[0, 1].map((i) => (
+            <Skeleton key={i} className="h-16 w-full rounded-lg" />
+          ))}
+        </div>
+      ) : (channels ?? []).length === 0 ? (
         <Panel>
-          <p className="py-6 text-center text-sm text-muted-foreground">{t('alerts.emptyChannels')}</p>
+          <EmptyState icon={<Bell />} title={t('alerts.emptyChannels')} />
         </Panel>
       ) : (
         <div className="flex flex-col gap-2.5">
@@ -550,6 +589,7 @@ function ChannelsTab() {
         }}
         onCancel={() => setDeleteTarget(null)}
       />
+
     </div>
   )
 }

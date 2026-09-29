@@ -170,6 +170,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.AlertRule{},
 		&model.AlertEvent{},
 		&model.AlertChannel{},
+		// QQ 已发现群 + 网关连接状态（FR-495）：网关事件落库与连接状态持久化。
+		&model.QQDiscoveredGroup{},
+		&model.QQGatewayConnection{},
 		&model.Schedule{},
 		&model.ScheduleExecutionLog{},
 		&model.Backup{},

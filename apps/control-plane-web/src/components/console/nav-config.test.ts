@@ -15,7 +15,7 @@ function pathsFromGroups(groups: NavGroup[]): string[] {
 }
 
 describe('console nav config（FR-431 六域 IA）', () => {
-  it('顶层六域 + 平台首页，URL 不变且无 /alerts', () => {
+  it('顶层六域 + 平台首页，URL 不变', () => {
     const keys = NAV_GROUPS.map((g) => g.key)
     expect(keys).toEqual([
       'platformHome',
@@ -44,7 +44,29 @@ describe('console nav config（FR-431 六域 IA）', () => {
     expect(all).toContain('/client-dist-ops')
     expect(all).toContain('/permissions')
     expect(all).toContain('/templates')
-    expect(all).not.toContain('/alerts')
+  })
+
+  it('告警入口落在观测域，perm 为 alert.read / alert.manage 任一（FR-085）', () => {
+    const observability = NAV_GROUPS.find((g) => g.key === 'observability')
+    expect(observability?.children?.map((c) => c.to)).toEqual([
+      '/monitor',
+      '/logs',
+      '/statistics',
+      '/alerts',
+      '/notifications',
+    ])
+
+    const alerts = observability?.children?.find((c) => c.to === '/alerts')
+    expect(alerts?.labelKey).toBe('nav.alerts')
+    expect(alerts?.perm).toEqual(['alert.read', 'alert.manage'])
+
+    // any-of 语义：只读（alert.read）只见告警；仅写（alert.manage）也应可见；两者皆无则不可见。
+    const readOnly = flatNavItems(new Set(['alert.read']), false).map((i) => i.to)
+    expect(readOnly).toContain('/alerts')
+    const manageOnly = flatNavItems(new Set(['alert.manage']), false).map((i) => i.to)
+    expect(manageOnly).toContain('/alerts')
+    const neither = flatNavItems(new Set(['log.read']), false).map((i) => i.to)
+    expect(neither).not.toContain('/alerts')
   })
 
   it('工作台独立域；templates 在平台设置而非客户端分发', () => {

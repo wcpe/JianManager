@@ -54,12 +54,13 @@ describe('ConsoleSidebar 六域控制台 IA（FR-431）', () => {
     expect(screen.getByRole('button', { name: '平台设置' })).toBeInTheDocument()
   })
 
-  it('观测域含通知中心，无告警、无 templates', () => {
+  it('观测域含告警与通知中心，无 templates', () => {
     renderWithProviders(<ConsoleSidebar />)
     const obsGroup = screen.getByRole('button', { name: '观测' }).parentElement as HTMLElement
     expect(screen.getByRole('link', { name: '监控总览' })).toHaveAttribute('href', '/monitor')
+    // 告警入口归观测域（FR-085）：此前 /alerts 无侧栏入口，用户找不到页面。
+    expect(within(obsGroup).getByRole('link', { name: '告警' })).toHaveAttribute('href', '/alerts')
     expect(within(obsGroup).getByRole('link', { name: '通知中心' })).toHaveAttribute('href', '/notifications')
-    expect(within(obsGroup).queryByRole('link', { name: '告警' })).toBeNull()
     expect(within(obsGroup).queryByRole('link', { name: '模板' })).toBeNull()
   })
 

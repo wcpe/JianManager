@@ -17,7 +17,8 @@ test('FR-149 规则内联 Switch + 事件多维筛选', async ({ page }) => {
   await expect(page.getByRole('switch', { name: '启用' }).first()).toBeVisible()
 
   // 事件 tab：关键字搜索 + 规则筛选 + 时间范围
-  await page.getByRole('button', { name: /^事件/ }).click()
+  // tab 已统一到组件库 Tabs（Radix），role 为 tab 而非 button。
+  await page.getByRole('tab', { name: /^事件/ }).click()
   await expect(page.getByPlaceholder('搜索消息')).toBeVisible()
   await expect(page.getByRole('combobox').filter({ hasText: '全部规则' })).toBeVisible()
   // 时间范围：datetime-local 输入（原生选择器）

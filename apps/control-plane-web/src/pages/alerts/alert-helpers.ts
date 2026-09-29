@@ -26,7 +26,17 @@ export type ChannelType =
   | 'feishu'
   | 'discord'
   | 'telegram'
+  | 'qq'
   | 'inapp'
+
+/**
+ * QQ 通道投递目标类型：仅单聊（FR-494）。
+ *
+ * 群聊（group）路径**保留在后端但不对用户暴露**：QQ 平台侧拒绝群主动消息（40034105，
+ * 官方维护者定性「群内主动消息平台侧不支持」），前端因此彻底收敛到单聊——既不给选项，
+ * 也不承认存量 group 值（见 {@link isQQTargetType}），避免配出一条永远收不到告警的通道。
+ */
+export type QQTargetType = 'c2c'
 
 /** 级别对应的 Tailwind 着色类（徽章背景 + 文字）。 */
 export function levelBadgeClass(level: string): string {
@@ -109,14 +119,36 @@ export function channelIsEmail(channelType: string): boolean {
   return channelType === 'email'
 }
 
+/** 通道类型为 QQ 机器人（需 appId/appSecret/targetType/targetId，FR-494）。 */
+export function channelIsQQ(channelType: string): boolean {
+  return channelType === 'qq'
+}
+
+/**
+ * 校验 QQ 目标类型字面量：**只认** `c2c`（单聊）。
+ *
+ * 群聊已被平台拒绝（40034105），后端虽保留 group 分支，但前端不承认——存量通道里的
+ * `group` 脏值会在这里被判非法，从而在保存前被必填校验拦下（用户必须改成单聊）。
+ */
+export function isQQTargetType(value: string): value is QQTargetType {
+  return value === 'c2c'
+}
+
 /** 通道类型为站内（无外部配置）。 */
 export function channelIsInApp(channelType: string): boolean {
   return channelType === 'inapp'
 }
 
-/** 校验形如 ${ENV_VAR} 的环境变量引用（凭证字段强制）。 */
+/**
+ * 校验形如 ${ENV_VAR} 的环境变量引用（凭证字段强制）。
+ *
+ * 字符集与后端 `resolveEnvRef` 完全对齐：`${` + 首字符为字母/下划线 + 其后为
+ * 字母/数字/下划线/**连字符** + `}`。连字符是必需的——QQ 扫码绑定返回的引用名形如
+ * `${QQ-1020001}`（由 appId 直接拼出），旧正则不含 `-` 会把后端给的合法引用判为非法，
+ * 导致扫码成功后表单永远保存不了。
+ */
 export function isEnvRef(value: string): boolean {
-  return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim())
+  return /^\$\{[A-Za-z_][A-Za-z0-9_-]*\}$/.test(value.trim())
 }
 
 /**

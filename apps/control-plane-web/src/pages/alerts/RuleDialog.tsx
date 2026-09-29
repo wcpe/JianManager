@@ -21,6 +21,7 @@ import {
   scrollableDialogContentClass,
 } from '@jianmanager/ui/components/scrollable-dialog'
 import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Select,
@@ -49,6 +50,8 @@ interface RuleDialogProps {
 const TRIGGER_TYPES = ['metric', 'instance_crash', 'node_offline', 'log_keyword', 'player_event', 'backup_failed', 'saturation', 'baseline', 'quota_exceeded'] as const
 const LEVELS = ['info', 'warn', 'critical'] as const
 const PLAYER_EVENTS = ['join', 'quit', 'chat', 'cross_server'] as const
+/** Radix Select 不接受空字符串选项值，用哨兵值表达「全部（不指定目标）」。 */
+const TARGET_ALL = 'all'
 
 /** 告警规则创建/编辑对话框（FR-085）。按触发类型动态展示字段。 */
 export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
@@ -145,8 +148,8 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
         <ScrollableDialogBody className="space-y-3">
           <div>
             <FieldLabel required>{t('alerts.ruleName')}</FieldLabel>
-            <input
-              className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive"
+            <Input
+              className="mt-1"
               value={form.name}
               disabled={isEdit}
               aria-invalid={!!nameError}
@@ -199,32 +202,35 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
                   <FieldLabel>{t('alerts.targetDimension')}</FieldLabel>
                   <div className="flex gap-2 mt-1">
                     {(['node', 'instance'] as const).map((tt) => (
-                      <button
+                      <Button
                         key={tt}
                         type="button"
-                        className={`px-3 py-1 border rounded text-sm ${
-                          form.targetType === tt ? 'bg-primary text-primary-foreground' : ''
-                        }`}
+                        size="sm"
+                        variant={form.targetType === tt ? 'default' : 'outline'}
                         onClick={() => setForm({ ...form, targetType: tt, targetId: null })}
                       >
                         {t(tt === 'node' ? 'alerts.dimensionNode' : 'alerts.dimensionInstance')}
-                      </button>
+                      </Button>
                     ))}
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">{t('alerts.targetDimensionHint')}</p>
                 </div>
               )}
               <FieldLabel>{t('alerts.targetScope')}</FieldLabel>
-              <select
-                className="w-full mt-1 p-2 border rounded text-sm"
-                value={form.targetId ?? ''}
-                onChange={(e) => setForm({ ...form, targetId: e.target.value ? Number(e.target.value) : null })}
+              <Select
+                value={form.targetId === null ? TARGET_ALL : String(form.targetId)}
+                onValueChange={(v) => setForm({ ...form, targetId: v === TARGET_ALL ? null : Number(v) })}
               >
-                <option value="">{targetAllLabel}</option>
-                {targetOptions.map((target) => (
-                  <option key={target.id} value={target.id}>{target.label}</option>
-                ))}
-              </select>
+                <SelectTrigger className="w-full mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={TARGET_ALL}>{targetAllLabel}</SelectItem>
+                  {targetOptions.map((target) => (
+                    <SelectItem key={target.id} value={String(target.id)}>{target.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <p className="mt-1 text-xs text-muted-foreground">
                 {t(form.targetType === 'node' ? 'alerts.targetNodeHint' : 'alerts.targetInstanceHint')}
               </p>
@@ -266,11 +272,11 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
               </div>
               <div>
                 <FieldLabel>{t('alerts.threshold')}</FieldLabel>
-                <input type="number" className="w-full mt-1 p-2 border rounded" value={form.threshold} onChange={(e) => setForm({ ...form, threshold: Number(e.target.value) })} />
+                <Input type="number" className="mt-1" value={form.threshold} onChange={(e) => setForm({ ...form, threshold: Number(e.target.value) })} />
               </div>
               <div>
                 <FieldLabel>{t('alerts.durationSec')}</FieldLabel>
-                <input type="number" className="w-full mt-1 p-2 border rounded" value={form.durationSec} onChange={(e) => setForm({ ...form, durationSec: Number(e.target.value) })} />
+                <Input type="number" className="mt-1" value={form.durationSec} onChange={(e) => setForm({ ...form, durationSec: Number(e.target.value) })} />
               </div>
             </div>
           )}
@@ -278,8 +284,8 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
           {triggerUsesKeyword(form.triggerType) && (
             <div>
               <FieldLabel required>{t('alerts.keyword')}</FieldLabel>
-              <input
-                className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive"
+              <Input
+                className="mt-1"
                 placeholder="OutOfMemoryError"
                 value={form.keyword}
                 aria-invalid={!!keywordError}
@@ -328,15 +334,15 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
           <div className="grid grid-cols-3 gap-2">
             <div>
               <FieldLabel>{t('alerts.dedupWindowSec')}</FieldLabel>
-              <input type="number" className="w-full mt-1 p-2 border rounded" value={form.dedupWindowSec} onChange={(e) => setForm({ ...form, dedupWindowSec: Number(e.target.value) })} />
+              <Input type="number" className="mt-1" value={form.dedupWindowSec} onChange={(e) => setForm({ ...form, dedupWindowSec: Number(e.target.value) })} />
             </div>
             <div>
               <FieldLabel>{t('alerts.silenceStart')}</FieldLabel>
-              <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" placeholder="23:00" value={form.silenceStart} aria-invalid={!!silenceError} onChange={(e) => setForm({ ...form, silenceStart: e.target.value })} />
+              <Input className="mt-1" placeholder="23:00" value={form.silenceStart} aria-invalid={!!silenceError} onChange={(e) => setForm({ ...form, silenceStart: e.target.value })} />
             </div>
             <div>
               <FieldLabel>{t('alerts.silenceEnd')}</FieldLabel>
-              <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" placeholder="07:00" value={form.silenceEnd} aria-invalid={!!silenceError} onChange={(e) => setForm({ ...form, silenceEnd: e.target.value })} />
+              <Input className="mt-1" placeholder="07:00" value={form.silenceEnd} aria-invalid={!!silenceError} onChange={(e) => setForm({ ...form, silenceEnd: e.target.value })} />
             </div>
           </div>
           <FieldError error={silenceError} />
