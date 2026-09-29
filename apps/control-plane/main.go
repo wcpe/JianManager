@@ -615,7 +615,9 @@ func main() {
 	snapshotSvc.SetTaskService(taskSvc)
 	snapshotSvc.SetAudit(auditSvc)
 	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等 FR-396/397/398 依赖服务全部就绪。
-	mcpHandler := mcp.NewHandler(mcpConns, agentTokenSvc, mcp.ToolDeps{
+	// Handler 不再持有 AgentTokenService（授权由 middleware.AgentAuth 前置完成），
+	// Agent 依赖只经 ToolDeps 供工具解析可信目标。
+	mcpHandler := mcp.NewHandler(mcpConns, mcp.ToolDeps{
 		Instance:  instanceSvc,
 		Node:      nodeSvc,
 		Log:       logSvc,

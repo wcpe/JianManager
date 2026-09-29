@@ -266,7 +266,7 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 	// CP 内嵌 MCP（FR-389，无状态化见 ADR-096）：只需 SSE 传输连接登记。
 	agentTok := svcs.AgentToken
 	logSvc := svcs.Log
-	svcs.MCP = mcp.NewHandler(mcp.NewSSEConnRegistry(), agentTok, mcp.ToolDeps{
+	svcs.MCP = mcp.NewHandler(mcp.NewSSEConnRegistry(), mcp.ToolDeps{
 		Instance: instanceSvc,
 		Node:     nodeSvc,
 		Log:      logSvc,

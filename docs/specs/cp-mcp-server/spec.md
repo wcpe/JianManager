@@ -44,7 +44,7 @@
 - **无状态协议语义（FR-489 / ADR-096 取代原会话运维模型）**：
   - Streamable HTTP（`POST /api/v1/mcp`）不下发也不要求 `Mcp-Session-Id`；`initialize` 直接返回结果，后续请求独立鉴权、独立处理；请求携带旧 session id 被**忽略而非拒绝**
   - 授权一律取**每请求重建的 principal**，不再有会话内的 principal 快照——Token 吊销、scope 或能力调整在下一个请求即生效
-  - `GET /api/v1/mcp` 返回 **405**；`DELETE /api/v1/mcp` 不再注册
+  - `GET /api/v1/mcp` 与 `DELETE /api/v1/mcp` 均返回 **405** + `Allow: POST`（无会话可保活 / 无会话可终止；DELETE 由「不注册 → 通用 404」改为显式 405）
   - 原会话字段（sessionId/tokenId/tokenPrefix/clientIP/transport/connectedAt/lastActivityAt/lastTool/idleTimeout/absoluteTimeout）、空闲与绝对超时、全局与每 Token 并发上限、会话列表与踢线、`SESSION_GONE` 与超限 429 **全部移除**；配置项 `mcp.idle_timeout`/`absolute_timeout`/`max_global_sessions`/`max_sessions_per_token` 一并移除
   - SSE 兼容路径保留，连接态为**传输连接登记**（连接 id / principal / IP / 回推通道 / 取消），不承载超时、并发上限或能力快照，断开即注销
 - 管理员 API（JWT + 平台管理员）：
@@ -119,8 +119,8 @@ SSE 路径：连接在 `GET /sse` 建立、在 `/message` 回推结果、断开�
 - ~~MCP Go SDK 选型与依赖审批~~（已闭：采用最小 JSON-RPC over HTTP 自实现，无第三方 MCP SDK）
 - Gin 与长连接/流式响应的缓冲与超时中间件是否截断 SSE——实现时验证（SSE 路径保留后仍须成立）
 - SSE 的 `sessionId` 易被误读为协议会话：它现在只是传输连接标识（参数名保留是为不破 `/message` 既有形态），文档与文案须明确区别（FR-489）
-- 失去「踢线」这一即时手段：正在进行的 tool call 无法被中途切断，只能吊销 Token 让后续请求失效；长耗时调用的现场处置能力弱于改造前
-- 与 FR-390 的 action 命名对齐：**tool 内部仍记 Agent action 名**，另加 `client=mcp`（见 FR-390）
+- 失去「踢线」这一即时手段：管理员侧不再有主动中止在途调用的操作，只能吊销 Token 让后续请求失效；连接注销（客户端断连 / CP 停止）会取消 SSE 在途调用的 ctx，但只有**尚未开始执行**的调用由 `CallTool` 入口确定拦下——已在执行的调用是否立即停止取决于该工具是否消费 ctx（多数纯本地工具不消费），故不保证中途切断；长耗时调用的现场处置能力弱于改造前
+- 与 FR-390 的 action 命名对齐：**tool 内部仍记 Agent action 名**，`client` 取本次请求归一化后的 `X-JM-Agent-Client`（缺省或不在白名单时归 `unknown`）（见 FR-390）
 
 ## 7. UI 契约摘录（FR-391；**已随 FR-489 改为 Token 活动视图**）
 

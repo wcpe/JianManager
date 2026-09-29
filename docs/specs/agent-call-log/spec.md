@@ -1,6 +1,6 @@
 # 功能规格：Agent 调用流水与 Token 活跃
 
-> 状态：开发中（spec 已审，实现中）　·　关联 PRD：FR-390　·　依赖：FR-384　·　关联 ADR：076　·　关联：FR-389（client=mcp）、FR-385（client=jmagent）
+> 状态：开发中（spec 已审，实现中）　·　关联 PRD：FR-390　·　依赖：FR-384　·　关联 ADR：076　·　关联：FR-389（MCP 调用流水）、FR-385（client=jmagent）
 
 ## 1. 背景与目标
 
@@ -19,7 +19,7 @@
   - `token_id`、`token_name`（冗余快照，吊销后仍可读）
   - `action`（与 `service.AgentAction*` 对齐，如 `agent.whoami`、`agent.instance_start`）
   - `capability`（可空，FR-395）：本次授权实际使用的能力标签。V2 记 action 对应 capability（如 `instance.life`）；V1 写记 `legacy.instance.life` / `legacy.node.maintenance`，读记 `legacy.read`；历史空值合法（含已移除的会话类 action 遗留行）
-  - `client`：`mcp` | `jmagent` | `curl` | `unknown`（优先 `X-JM-Agent-Client`，缺省 unknown；MCP 传输路径强制 `mcp`）
+  - `client`：`mcp` | `jmagent` | `curl` | `unknown`（取值来自 `X-JM-Agent-Client` 归一化；MCP 传输路径取**本次请求**归一化后的值，缺省、超长、含非法字符或不在白名单时一律归 `unknown`，与 Ops 面同一口径）
   - `transport`：可选 `streamable_http` | `sse` | `http` | 空
   - `target_type`、`target_id`（可空）
   - `success`（bool）、`error`（截断短文，禁 Token 明文）
@@ -28,7 +28,7 @@
   - 索引：`(token_id, created_at)`、`(created_at)`、`(action, created_at)` 视查询需要
 - **写入点**：
   1. 所有 `/api/v1/agent/*` Ops（含 whoami/list/get/metrics/logs/start/stop/restart/maintenance）——成功与策略拒绝（403）均记；鉴权失败（401）可不记或记 `token_id=0`（推荐：**仅成功鉴权后**记，避免爆破刷库）
-  2. MCP tool call（FR-389）：每 tool 一条，`client=mcp`——MCP 端点无状态化后（FR-489 / ADR-096）**不再产生**会话类 action（`mcp.session.open/close/kick` 已随协议会话移除）
+  2. MCP tool call（FR-389）：每 tool 一条，`client` 取本次请求归一化后的 `X-JM-Agent-Client`（缺省或不在白名单时归 `unknown`）——MCP 端点无状态化后（FR-489 / ADR-096）**不再产生**会话类 action（`mcp.session.open/close/kick` 已随协议会话移除）
 - **不**把流水当通用人类审计替代；写操作可**同时**保留现有 `audit` 记录（detail 含 actorKind=agent），流水专注 agent 调用分析
 - 查询 API（平台管理员 JWT）：
   - `GET /api/v1/agent/call-logs?tokenId=&action=&client=&success=&from=&to=&page=&pageSize=`

@@ -4076,6 +4076,7 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 |---|---|---|
 | `/api/v1/mcp` | POST | Streamable HTTP 主路径，**无状态**：`initialize` 直接返回结果；每个请求独立鉴权与处理，**不读也不写** `Mcp-Session-Id`（请求携带旧值被忽略而非拒绝） |
 | `/api/v1/mcp` | GET | **405** + `Allow: POST`（无会话可保活） |
+| `/api/v1/mcp` | DELETE | **405** + `Allow: POST`（无状态端点无会话可终止；按 Streamable HTTP 规范建议回 405 而非落到通用 404） |
 | `/api/v1/mcp/sse` | GET | SSE 兼容：建立 SSE 响应流，推送 `endpoint` 事件 |
 | `/api/v1/mcp/message` | POST | SSE 配套消息口：`?sessionId=` 或 `Mcp-Session-Id` 头指定 **SSE 传输连接标识**（缺参 400；连接不存在 404 `CONN_GONE`；连接不属于当前 Token 403）；响应经 SSE 推送 |
 
@@ -4108,13 +4109,13 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 - **tools/list**：按当前 Token 的能力与潜在可用 scope **动态裁剪**（V1 兼容解释器；V2 capability）。空能力 V2 仅见 `agent_whoami`。
 - **tools/call**：无论是否出现在 list，均做最终授权；可信目标由 CP 解析；生命周期写操作使用 expected-node 派发。策略拒绝 → HTTP **200** + MCP `result.isError=true` + 中文 message（**不得 5xx**）。
 - **错误语义**：`404 SESSION_GONE` 与超限 **429** 已随无状态化移除（无会话可失效、无并发配额可超）；无凭据 / Token 无效、吊销或过期仍 **401**，策略拒绝语义不变（见上条 `tools/call`）。
-- **配置**：会话类配置项 `mcp.idle_timeout` / `mcp.absolute_timeout` / `mcp.max_global_sessions` / `mcp.max_sessions_per_token` **已随无状态化移除**（Streamable HTTP 无会话可超时或计数），配置结构、示例配置与 `docker-compose.yml` 已同步删除。
+- **配置**：会话类配置项 `mcp.idle_timeout` / `mcp.absolute_timeout` / `mcp.max_global_sessions` / `mcp.max_sessions_per_token` **已随无状态化移除**（Streamable HTTP 无会话可超时或计数），配置结构、示例配置 `configs/control-plane.yml` 已同步移除，全仓已无这四项残留（`docker-compose.yml` 本就未配置这些键）。
 - **流水**：tool call 记对应 Agent action 与 `capability`；`mcp.session.open/close/kick` 不再产生。
 
 ### GET /api/v1/agent/mcp/activity
 - **描述**: 按 **Agent Token** 聚合窗口内的 MCP 活动（谁在用 MCP、最近何时用、用了什么、失败多少）。取代原「列出内存中的 MCP 会话」与「踢线」两个端点；数据源为 `agent_call_logs`（FR-390），不依赖进程内状态，故 CP 重启后视图连续。
 - **关联 FR**: FR-489（数据源 FR-390）
-- **权限**: 平台管理员 JWT（权限节点 `agent.mcp.read`；不再接受 `agent.token.manage` 作为替代门）
+- **权限**: 平台管理员 JWT（权限节点 `agent.mcp.read`，或 `agent.token.manage` —— 二者任一即放行，沿用原会话端点的权限门，本 FR 未改动）
 - **查询参数**:
   | 参数 | 类型 | 说明 |
   |---|---|---|
@@ -4134,12 +4135,12 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
         "callCount": 128,
         "failureCount": 3,
         "clientIPs": ["10.0.0.5"],
-        "clients": { "claude-code": 120, "curl": 8 }
+        "clients": { "mcp": 120, "curl": 8 }
       }
     ]
   }
   ```
-  - `items[]`：`tokenId`（uint）、`tokenName`（优先取 `agent_tokens` 当前值，Token 行被硬删时回退为流水里签发时的名称快照）、`tokenPrefix`（如 `jmat_ab12`，取自 `agent_tokens`）、`lastActivityAt`（窗口内最近一次调用）、`lastAction`（最近 action）、`callCount`（窗口内调用总数，含失败）、`failureCount`（`success=false` 条数）、`clientIPs`（来源 IP 去重升序）、`clients`（客户端标识 → 调用次数，键为 `X-JM-Agent-Client` 归一后的取值 `mcp`/`jmagent`/`curl`/`unknown`）。
+  - `items[]`：`tokenId`（uint）、`tokenName`（优先取 `agent_tokens` 当前值，Token 行被硬删时回退为流水里签发时的名称快照）、`tokenPrefix`（如 `jmat_ab12`，取自 `agent_tokens`）、`lastActivityAt`（窗口内最近一次调用）、`lastAction`（最近 action）、`callCount`（窗口内调用总数，含失败）、`failureCount`（`success=false` 条数）、`clientIPs`（来源 IP 去重升序）、`clients`（客户端标识 → 调用次数，键为 `X-JM-Agent-Client` 归一后的取值 `mcp`/`jmagent`/`curl`/`unknown`；客户端自报名不在白名单时计为 `unknown`，故 `claude-code` 一类自报名不会作为键出现）。
 - **排序**: `lastActivityAt` 降序（同一时刻以 `tokenId` 降序兜底）；窗口内无调用时 `items`、`clientIPs`、`clients` 均为空形态而非 `null`
 - **错误**: 400 `window` 非时长字符串或超出 1h~168h | 401 未认证 | 403 无权限 | 404 调用流水未启用 | 500 聚合查询失败
 - **管理员干预**：无会话可踢——需要立即阻断某凭据时**吊销该 Token**，下一个请求即失效。

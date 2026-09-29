@@ -218,11 +218,20 @@ jobs:
           set -euo pipefail
           go test ./internal/controlplane/router -run 'LogFederation|WriteFederationError|FederationPermissionScopeDigest' -count=1
 
-  # Agent 可证安全闸（FR-388）：策略契约 + 运维面 HTTP 矩阵 + jmagent 单测。
+  # Agent 可证安全闸（FR-388）：策略契约 + 运维面 HTTP 矩阵 + MCP 无状态化契约 + jmagent 单测。
   # 不替代全量 go test ./...（release 仍跑）；本 job 在 PR/分支 push 快速拦截 agent 策略回归。
   # FR-392 已退役 mcp-bridge，改为 CP 内嵌 MCP（FR-389）。
+  # FR-489 去会话化后补齐 MCP 覆盖：原先 service 过滤 'AgentToken|AgentGate' 匹配不到
+  #   TestActivityByToken_* 与 TestAgentCallLog_*，router 过滤 'AgentGate' 匹配不到 TestMCP_*
+  #   （PR #42 时各漏 4 / 14 例），框架层无状态契约与流水截断回归只在 release.yml 的
+  #   go test ./... 才执行，PR 阶段无断言保护。
+  #   router 侧用 'AgentGate|MCP' 而非 'AgentGate|TestMCP_'：当前两者匹配集合相同，
+  #   但前者不依赖 TestMCP_ 命名前缀，避免后续 MCP 用例换个前缀就被静默漏跑。
+  # 仅 mcp 包加 -race：SSE 连接注册表是多协程并发读写的共享状态；实测 -race 增量约
+  #   +13s（热缓存）/ +43s（含 race 插桩重建），在 job 预算内，故不拆 job 也不全量加 -race。
   agent-gate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -234,12 +243,13 @@ jobs:
         with:
           go-version: '1.26.2'
 
-      - name: Agent 策略与入口闸（≥30 断言规模）
+      - name: Agent 策略与入口闸（断言下限 ≥30 + MCP 无状态化契约）
         shell: bash
         run: |
           set -euo pipefail
-          go test ./internal/controlplane/service/ -run 'AgentToken|AgentGate' -count=1
-          go test ./internal/controlplane/router/ -run AgentGate -count=1
+          go test ./internal/controlplane/service/ -run 'AgentToken|AgentGate|ActivityByToken|AgentCallLog' -count=1
+          go test ./internal/controlplane/router/ -run 'AgentGate|MCP' -count=1
+          go test -race ./internal/controlplane/mcp/... -count=1
           go test ./apps/jmagent/... -count=1
 
   # 工作流契约闸：校验 ci.yml / release.yml 的触发条件、runner 与版本来源不被静默改坏。

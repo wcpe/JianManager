@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/mcp"
+	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
@@ -36,6 +37,12 @@ func setupMCP(t *testing.T) (db *gorm.DB, r *gin.Engine, adminJWT string, agentP
 // mcpPOST 调 MCP Streamable HTTP 端点；sessionID 非空时额外携带会话头（用于验证被忽略）。
 func mcpPOST(t *testing.T, r *gin.Engine, path, token, sessionID string, body any) *httptest.ResponseRecorder {
 	t.Helper()
+	return mcpPOSTWithHeaders(t, r, path, token, sessionID, nil, body)
+}
+
+// mcpPOSTWithHeaders 同上，并额外设置自定义请求头（如 X-JM-Agent-Client）。
+func mcpPOSTWithHeaders(t *testing.T, r *gin.Engine, path, token, sessionID string, headers map[string]string, body any) *httptest.ResponseRecorder {
+	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
 		require.NoError(t, json.NewEncoder(&buf).Encode(body))
@@ -48,9 +55,35 @@ func mcpPOST(t *testing.T, r *gin.Engine, path, token, sessionID string, body an
 	if sessionID != "" {
 		req.Header.Set(mcp.HeaderSessionID, sessionID)
 	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	return w
+}
+
+// mcpToolsList 发起 tools/list 并返回工具名集合（端点级断言复用）。
+func mcpToolsList(t *testing.T, r *gin.Engine, token string) (int, map[string]bool) {
+	t.Helper()
+	w := mcpPOST(t, r, "/api/v1/mcp", token, "", map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "tools/list",
+	})
+	var listResp struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	names := map[string]bool{}
+	if w.Code == http.StatusOK {
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listResp))
+		for _, tl := range listResp.Result.Tools {
+			names[tl.Name] = true
+		}
+	}
+	return w.Code, names
 }
 
 func TestMCP_AuthFailure_NoToken(t *testing.T) {
@@ -137,12 +170,122 @@ func TestMCP_GETReturns405(t *testing.T) {
 	assert.Equal(t, "POST", w.Header().Get("Allow"))
 }
 
-func TestMCP_ToolsCall_Whoami(t *testing.T) {
-	db, r, adminJWT, plain, _ := setupMCP(t)
-	w := mcpPOST(t, r, "/api/v1/mcp", plain, "", map[string]any{
-		"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+// TestMCP_DELETE_Returns405 DELETE /api/v1/mcp 与 GET 对称：405 + Allow: POST。
+//
+// 防回归：DELETE 曾落到通用未注册分支回 404，客户端据此误判「端点不存在/版本不匹配」，
+// 而真实语义是「端点存在但不接受该方法」——405 才能让客户端正确退化为只发 POST。
+func TestMCP_DELETE_Returns405(t *testing.T) {
+	_, r, _, plain, _ := setupMCP(t)
+	w := makeRequest(r, http.MethodDelete, "/api/v1/mcp", nil, plain)
+	require.Equal(t, http.StatusMethodNotAllowed, w.Code, w.Body.String())
+	assert.Contains(t, w.Header().Get("Allow"), http.MethodPost)
+}
+
+// ---- 无状态化核心承诺：策略变更在下一个请求即生效（ADR-096）----
+//
+// 以下两条是 PR #42「不再有会话内 principal 快照窗口」的端点级证据。会话式实现下，
+// initialize 时快照的 principal 会存活到会话结束，吊销/降权在会话内不生效；若日后有人
+// 重新引入进程内 principal 缓存，这些用例必须先失败。
+
+// TestMCP_RevokedToken_NextRequestRejected 吊销后**同一明文**的下一个请求即 401。
+func TestMCP_RevokedToken_NextRequestRejected(t *testing.T) {
+	_, r, adminJWT, node, inst := setupAgentGate(t)
+
+	id, plain := issueAgentPlaintext(t, r, adminJWT, map[string]any{
+		"name":              "mcp-revoke",
+		"scopedInstanceIds": []uint{inst.ID},
+		"scopedNodeIds":     []uint{node.ID},
+		"writeAllowlist":    []string{service.AgentWriteInstanceLife},
+		"ttlDays":           30,
+	})
+
+	// 吊销前：端点正常（这一步同时「预热」任何可能的进程内缓存）。
+	code, names := mcpToolsList(t, r, plain)
+	require.Equal(t, http.StatusOK, code)
+	require.True(t, names["agent_whoami"])
+
+	// 走真实用户吊销路径：管理员 DELETE /api/v1/agent/tokens/:id。
+	w := makeRequest(r, http.MethodDelete, "/api/v1/agent/tokens/"+itoa(id), nil, adminJWT)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	// 同一明文的下一次请求必须 401——不得等会话结束、不得等缓存过期。
+	w = mcpPOST(t, r, "/api/v1/mcp", plain, "", map[string]any{
+		"jsonrpc": "2.0", "id": 3, "method": "tools/list",
+	})
+	assert.Equal(t, http.StatusUnauthorized, w.Code, "吊销后下一请求应 401: %s", w.Body.String())
+
+	// tools/call 同样 401（不能只挡 tools/list）。
+	w = mcpPOST(t, r, "/api/v1/mcp", plain, "", map[string]any{
+		"jsonrpc": "2.0", "id": 4, "method": "tools/call",
 		"params": map[string]any{"name": "agent_whoami", "arguments": map[string]any{}},
 	})
+	assert.Equal(t, http.StatusUnauthorized, w.Code, "吊销后 tools/call 应 401: %s", w.Body.String())
+
+	// initialize 也不能借「起始请求」绕过。
+	w = mcpPOST(t, r, "/api/v1/mcp", plain, "", map[string]any{
+		"jsonrpc": "2.0", "id": 5, "method": "initialize",
+		"params": map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "t", "version": "0"}},
+	})
+	assert.Equal(t, http.StatusUnauthorized, w.Code, "吊销后 initialize 应 401: %s", w.Body.String())
+}
+
+// TestMCP_V2_CapabilityDowngrade_NextRequestEffective V2 能力下调后下一请求即裁剪工具集。
+//
+// 没有改 capabilities 的 HTTP 接口（只有签发/列表/吊销），故按该目录既有做法直接改库
+// 模拟策略下调——这正是生产改策略时 DB 的真实变化。
+func TestMCP_V2_CapabilityDowngrade_NextRequestEffective(t *testing.T) {
+	db, r, adminJWT, _, inst := setupAgentGate(t)
+
+	_, plain := issueAgentPlaintext(t, r, adminJWT, map[string]any{
+		"name":              "mcp-scope-shrink",
+		"policyVersion":     2,
+		"capabilities":      []string{service.AgentCapabilityObservabilityRead, service.AgentCapabilityInstanceLife},
+		"scopedInstanceIds": []uint{inst.ID},
+	})
+
+	// 下调前：观测与生命周期工具都可见。
+	code, names := mcpToolsList(t, r, plain)
+	require.Equal(t, http.StatusOK, code)
+	require.True(t, names["agent_get_instance_metrics"], "observability.read 应可见指标工具")
+	require.True(t, names["instance_start"], "instance.life 应可见生命周期工具")
+
+	// 下调：去掉 instance.life（保留 observability.read）。
+	downgraded, err := json.Marshal([]string{service.AgentCapabilityObservabilityRead})
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&model.AgentToken{}).
+		Where("name = ?", "mcp-scope-shrink").
+		Update("capabilities", string(downgraded)).Error)
+
+	// 同一明文的下一次 tools/list 必须已是裁剪后的集合。
+	code, names = mcpToolsList(t, r, plain)
+	require.Equal(t, http.StatusOK, code)
+	assert.True(t, names["agent_get_instance_metrics"], "保留下来的能力仍应可见")
+	assert.False(t, names["instance_start"], "已下调的能力不得再出现在 tools/list")
+
+	// tools/call 直调被降权工具同样必须被拒（不能只信 tools/list）。
+	w := mcpPOST(t, r, "/api/v1/mcp", plain, "", map[string]any{
+		"jsonrpc": "2.0", "id": 6, "method": "tools/call",
+		"params": map[string]any{"name": "instance_start", "arguments": map[string]any{"id": float64(inst.ID)}},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var callResp struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &callResp))
+	assert.True(t, callResp.Result.IsError, "降权后直接调用该工具仍须被拒")
+}
+
+func TestMCP_ToolsCall_Whoami(t *testing.T) {
+	db, r, adminJWT, plain, _ := setupMCP(t)
+	// 模拟真实 MCP 代理：自报 X-JM-Agent-Client=mcp（流水按该头记，见 recordToolCall）。
+	w := mcpPOSTWithHeaders(t, r, "/api/v1/mcp", plain, "",
+		map[string]string{middleware.HeaderAgentClient: service.AgentClientMCP},
+		map[string]any{
+			"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+			"params": map[string]any{"name": "agent_whoami", "arguments": map[string]any{}},
+		})
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var resp struct {
 		Result struct {
@@ -192,11 +335,15 @@ type mcpActivityResp struct {
 func TestMCP_ActivityAggregatesByToken(t *testing.T) {
 	_, r, adminJWT, plain, _ := setupMCP(t)
 
+	// 显式带 X-JM-Agent-Client：防回归「MCP 路径把 client 硬编码成 mcp」——
+	// 客户端标识丢失会让运维在活动视图里分不清调用来自 MCP 代理还是 curl/脚本。
 	for i := 0; i < 2; i++ {
-		w := mcpPOST(t, r, "/api/v1/mcp", plain, "", map[string]any{
-			"jsonrpc": "2.0", "id": i + 1, "method": "tools/call",
-			"params": map[string]any{"name": "agent_whoami", "arguments": map[string]any{}},
-		})
+		w := mcpPOSTWithHeaders(t, r, "/api/v1/mcp", plain, "",
+			map[string]string{middleware.HeaderAgentClient: service.AgentClientCurl},
+			map[string]any{
+				"jsonrpc": "2.0", "id": i + 1, "method": "tools/call",
+				"params": map[string]any{"name": "agent_whoami", "arguments": map[string]any{}},
+			})
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	}
 
@@ -217,7 +364,11 @@ func TestMCP_ActivityAggregatesByToken(t *testing.T) {
 	assert.Equal(t, int64(0), item.FailureCount)
 	assert.NotEmpty(t, item.LastActivityAt)
 	assert.NotEmpty(t, item.ClientIPs, "来源 IP 应取自调用流水")
-	assert.Equal(t, int64(2), item.Clients["mcp"], "客户端分布应含 mcp")
+	// 请求带了 X-JM-Agent-Client: curl，流水必须记 curl 而不是硬编码的 mcp。
+	assert.Equal(t, int64(2), item.Clients[service.AgentClientCurl],
+		"客户端分布应反映请求头 X-JM-Agent-Client，实际: %v", item.Clients)
+	assert.NotContains(t, item.Clients, service.AgentClientMCP,
+		"带 curl 头时不得再记成硬编码的 mcp，实际: %v", item.Clients)
 
 	// 未显式给 window 时默认 24h。
 	w = makeRequest(r, http.MethodGet, "/api/v1/agent/mcp/activity", nil, adminJWT)
@@ -225,6 +376,41 @@ func TestMCP_ActivityAggregatesByToken(t *testing.T) {
 	var def mcpActivityResp
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &def))
 	assert.Equal(t, "24h0m0s", def.Window)
+}
+
+// TestMCP_ClientHeader_AbsentOrUnlistedIsUnknown 未自报或自报非法标识一律记 unknown。
+//
+// 防回归：客户端标识必须经 NormalizeAgentClient 白名单归一（与 Ops HTTP 面同口径），
+// 不得让调用方自报的任意字符串污染流水与活动视图，也不得把「没自报」粉饰成 mcp——
+// 那样活动视图会把无法归因的调用算到 MCP 代理头上。
+func TestMCP_ClientHeader_AbsentOrUnlistedIsUnknown(t *testing.T) {
+	_, r, adminJWT, plain, _ := setupMCP(t)
+
+	// 1) 完全不带 X-JM-Agent-Client。
+	w := mcpPOST(t, r, "/api/v1/mcp", plain, "", map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": "agent_whoami", "arguments": map[string]any{}},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	// 2) 带一个白名单外的自报值。
+	w = mcpPOSTWithHeaders(t, r, "/api/v1/mcp", plain, "",
+		map[string]string{middleware.HeaderAgentClient: "not-in-allowlist"},
+		map[string]any{
+			"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+			"params": map[string]any{"name": "agent_whoami", "arguments": map[string]any{}},
+		})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	w = makeRequest(r, http.MethodGet, "/api/v1/agent/mcp/activity?window=24h", nil, adminJWT)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp mcpActivityResp
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Items, 1)
+	assert.Equal(t, int64(2), resp.Items[0].Clients[service.AgentClientUnknown],
+		"未自报/白名单外应归一为 unknown，实际: %v", resp.Items[0].Clients)
+	assert.NotContains(t, resp.Items[0].Clients, service.AgentClientMCP,
+		"不得把未自报的调用记成 mcp，实际: %v", resp.Items[0].Clients)
 }
 
 // TestMCP_Activity_WindowValidation 窗口越界/非法回 400。

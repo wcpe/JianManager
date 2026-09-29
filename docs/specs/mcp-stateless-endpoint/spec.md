@@ -22,10 +22,10 @@ CP 内嵌 MCP 网关（FR-389 / ADR-077）把「会话」做成了协议一等�
 - `POST /api/v1/mcp` 去会话：不读也不写 `Mcp-Session-Id`；`initialize` 直接返回 `initializeResult()`；每个请求独立鉴权、独立处理。
 - **授权一律取每请求重建的 principal**，不再有 principal 快照；鉴权链不变（仍只认 Agent Token `jmat_`），策略仍唯一落在 CP（ADR-076）。
 - 移除协议会话的全部运维语义：空闲/绝对超时、超时巡检、全局与每 Token 并发上限、会话列表与踢线、`SESSION_GONE` 与超限 429，以及 `mcp.session.open/close/kick` 流水。
-- `GET /api/v1/mcp` 改为 **405** + `Allow: POST`；`DELETE /api/v1/mcp` 不再注册。
+- `GET /api/v1/mcp` 改为 **405** + `Allow: POST`；`DELETE /api/v1/mcp` 同样返回 **405** + `Allow: POST`（无会话可终止；按 Streamable HTTP 规范建议显式回 405，而非落到通用 404）。
 - **保留 SSE 兼容路径**（`GET /api/v1/mcp/sse` + `POST /api/v1/mcp/message`），连接态收敛为 SSE 传输连接登记（连接 id / principal / IP / 回推通道 / 取消），不承载超时、并发上限、能力快照等协议会话语义，连接断开即注销。
 - 移除 `GET/DELETE /api/v1/agent/mcp/sessions`，新增 `GET /api/v1/agent/mcp/activity?window=`（按 Token 聚合的活动视图，契约见 [api.md](api.md)）。
-- 移除配置项 `mcp.idle_timeout`、`mcp.absolute_timeout`、`mcp.max_global_sessions`、`mcp.max_sessions_per_token`，同步配置结构、示例配置与 `docker-compose.yml`。
+- 移除配置项 `mcp.idle_timeout`、`mcp.absolute_timeout`、`mcp.max_global_sessions`、`mcp.max_sessions_per_token`，同步配置结构与示例配置 `configs/control-plane.yml`（全仓已无这四项残留；`docker-compose.yml` 本就未配置这些键，无需改动）。
 - 前端「MCP 会话」页改为按 Token 聚合的活动视图：页面/组件 `McpActivityPage`、路由 `/mcp-activity`，旧路径 `/mcp-sessions` 保留重定向。
 
 ### 不做
@@ -44,6 +44,7 @@ CP 内嵌 MCP 网关（FR-389 / ADR-077）把「会话」做成了协议一等�
 |---|---|---|
 | POST | `/api/v1/mcp` | Streamable HTTP，**无状态**：不读也不写 `Mcp-Session-Id`；每请求独立鉴权 |
 | GET | `/api/v1/mcp` | **405** + `Allow: POST`（无会话可保活） |
+| DELETE | `/api/v1/mcp` | **405** + `Allow: POST`（无会话可终止） |
 | GET | `/api/v1/mcp/sse` | SSE 兼容路径，**保留**（传输层连接态） |
 | POST | `/api/v1/mcp/message?sessionId=` | SSE 兼容路径，**保留** |
 | GET | `/api/v1/agent/mcp/activity?window=24h` | **新增**活动视图（按 Token 聚合） |
@@ -61,7 +62,7 @@ CP 内嵌 MCP 网关（FR-389 / ADR-077）把「会话」做成了协议一等�
 
 **Streamable HTTP 路径：无会话生命周期。** 每个请求独立开始与结束——到达时鉴权 → 重建 principal → 处理 JSON-RPC → 返回。没有「服务端记得客户端」的状态，因此不存在会话失效、超时、并发配额或踢线；CP 重启与长时间空闲都不再能中断通道。
 
-**SSE 路径：传输连接登记。** 连接在 `GET /sse` 建立、在 `/message` 回推结果、在断开时注销；不再有超时巡检 goroutine、不再有 `LastTool` / `Count` / `List` 等会话视角字段。
+**SSE 路径：传输连接登记。** 连接在 `GET /sse` 建立、在 `/message` 回推结果、在断开时注销；**进行中的 tool call 绑定在该 SSE 连接的 ctx 上（不并本次 `/message` 的请求 ctx——发完 POST 即断开、或长耗时调用让 POST 先超时，都是该传输的常规用法，不该因此取消调用）**，连接被关闭/注销即取消该 ctx——`CallTool` 入口的 `ctx.Done()` 检查随即拦下**尚未开始执行**的调用；而**已在执行的调用能否中途停止，取决于该工具是否消费 ctx：多数纯本地工具不消费（显式 `_ = ctx`），故不保证中途切断，只是结果再也推不出去**。不再有超时巡检 goroutine、不再有 `LastTool` / `Count` / `List` 等会话视角字段。
 
 **移除的语义**（连同其代码一并消失，不留空壳）：空闲/绝对超时、超时巡检、全局与每 Token 并发上限、会话列表与踢线、`SESSION_GONE` 与超限 429、`mcp.session.open/close/kick` 流水，以及四个 `mcp.*` 配置项。
 
@@ -93,7 +94,7 @@ CP 内嵌 MCP 网关（FR-389 / ADR-077）把「会话」做成了协议一等�
 1. 无 `Mcp-Session-Id` 时可连续调用 `initialize` / `tools/list` / `tools/call`，且响应不含该头。
 2. 携带陈旧或伪造的 session id **被忽略而非拒绝**（仍正常服务）。
 3. **重启 CP 后同一客户端无需重新 `initialize` 即可继续调用**（旧行为必失败）。
-4. `GET /api/v1/mcp` 返回 **405** 且带 `Allow: POST`；`DELETE /api/v1/mcp` 不再注册。
+4. `GET /api/v1/mcp` 与 `DELETE /api/v1/mcp` 均返回 **405** 且带 `Allow: POST`。
 5. SSE 兼容路径 `/sse` + `/message` 行为不变，连接断开即注销。
 6. `GET /api/v1/agent/mcp/activity` 按 Token 正确聚合：多 Token、窗口边界（`window` 越界 400）、失败计数、无数据时返回空数组、`lastActivityAt` 降序。
 7. Token 吊销或 scope 下调在**下一个请求**即生效（不再有快照窗口）。
@@ -105,7 +106,7 @@ CP 内嵌 MCP 网关（FR-389 / ADR-077）把「会话」做成了协议一等�
 ## 8. 风险 / 待定
 
 - **SSE 的 `sessionId` 易被误读为协议会话**：它现在只是传输连接标识（同名参数保留是为不破 `/message` 的既有形态）。文档与页面文案需明确这一区别，避免后续被当成协议会话重新引入超时/配额语义。
-- **失去「踢线」这一即时手段**：正在进行的 tool call 无法被管理员中途切断，只能吊销 Token 让后续请求失效。对绝大多数场景足够（调用都很短），但长耗时调用的现场处置能力弱于改造前。
+- **失去「踢线」这一即时手段**：管理员侧不再有能主动中止某凭据在途调用的操作——SSE 连接注销虽会取消在途调用的 ctx，但触发源只有客户端自身断连或 CP 停止，管理员无法触发；且即便如此，也只有**尚未开始执行**的调用被入口确定拦下，已在执行的调用是否立即停止取决于该工具是否消费 ctx（多数纯本地工具不消费）。故只能吊销 Token 让后续请求失效。对绝大多数场景足够（调用都很短），但长耗时调用的现场处置能力弱于改造前。
 - **活动视图依赖流水保留期**：窗口上限 168h 落在默认保留期（14 天）内，故聚合不落空；若某部署把保留期调到 7 天以下，需同步收紧窗口上限或接受窗口内数据不完整。
 - **存量客户端行为差异面**：符合 Streamable HTTP 的客户端无需改造即可受益；把 `Mcp-Session-Id` 当作必带凭据的自研脚本，其 header 会被忽略而非报错，异常时排障线索比 404 少。
 - **Gin 与长连接/流式响应的缓冲与超时中间件是否截断 SSE**：改造前遗留的验证点，SSE 路径保留后仍须成立。
