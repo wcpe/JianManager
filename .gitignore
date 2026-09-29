@@ -85,3 +85,7 @@ blob-report/
 
 # 本地工具目录（原先只写在本机 .git/info/exclude，换机器克隆会漏成未跟踪噪声）
 /.narrafork/
+
+# 运行时 PID 记录（本机手动起服务落在仓库根的副产物，每次起停都会刷新成未跟踪噪声）。
+# 生产部署的 pid 在安装目录的 run/ 与 logs/ 下（前者由 cp-lifecycle.sh 管理，后者随 /logs/ 忽略），不受本规则影响。
+*.pid
