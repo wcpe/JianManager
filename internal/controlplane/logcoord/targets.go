@@ -195,6 +195,20 @@ func BuildCoverage(all []TargetInfo, byID map[string]TargetCoverage, onlineOnly 
 	return cov
 }
 
+// absentTargetReasons 决定「期望目标未出现在 Worker 响应中」时记什么原因。
+//
+// 语义修正（2026-09-30）：Worker 只为「自己有 Catalog 分区的目标」返回 coverage，故
+// 「该目标没有任何日志数据」会表现为**响应中缺该目标**——旧逻辑把它判成引擎未就绪
+// （target_missing_in_worker_response → ENGINE_NOT_READY，并派生 GAP），使平台整体
+// 拒绝启用。正确语义：**响应非空**时，缺失即「空」（合法状态，不降级覆盖度）；
+// 只有**响应本身为空**（Worker 完全没在工作）才保留缺失判定，以维持对 Worker 失能的检出。
+func absentTargetReasons(respTargets []WorkerTargetResult) []string {
+	if len(respTargets) == 0 {
+		return []string{"target_missing_in_worker_response"}
+	}
+	return nil
+}
+
 func normalizeCoverageReason(reason string) string {
 	upper := strings.ToUpper(strings.TrimSpace(reason))
 	switch upper {
