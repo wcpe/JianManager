@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -45,8 +46,11 @@ var (
 
 const backupStorageProbeTimeout = 2 * time.Second
 
-// envRefPattern 匹配整串恰为一个 ${VAR} 引用（VAR 为字母/数字/下划线）。
-var envRefPattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
+// envRefPattern 匹配整串恰为一个 ${VAR} 引用（VAR 为字母/数字/下划线/连字符）。
+//
+// 允许连字符是为了 QQ 扫码绑定（FR-495）：凭据文件名约定为 etc/qq-<appId>.key，
+// 变量名取小写化后的同名形态（QQ-<appId>），否则「变量名 → 密钥文件」不再是单射。
+var envRefPattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_-]*)\}$`)
 
 // BackupStorageService 备份远程存储后端服务（FR-057）。
 // 负责后端 CRUD 与「把存储配置 + 从 ${ENV_VAR} 解析的明文凭证」组装为下发 Worker 的传输参数。
@@ -505,7 +509,12 @@ func validateCredentialRefs(st *model.BackupStorage) error {
 }
 
 // resolveEnvRef 解析 ${ENV_VAR} 引用为环境变量值。空引用返回空串（如匿名 WebDAV）。
-// 非 ${...} 形式或变量未设置则报错，杜绝明文与静默空凭证。
+// 非 ${...} 形式则报错（杜绝明文）。
+//
+// 取值顺序：环境变量 > 数据根 etc/<VAR_NAME>.key 密钥文件。文件回落是为 QQ 扫码绑定
+// （FR-495）服务的——绑定拿到的 appSecret 落盘为密钥文件，配置里只引用 ${ENV} 名，
+// 无需运维把密钥抄进环境变量。文件不存在时行为与纯环境变量版本完全一致（仍报
+// ErrCredentialEnvMissing），既有备份/Webhook 凭证配置不受影响。
 func resolveEnvRef(ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -515,11 +524,77 @@ func resolveEnvRef(ref string) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("%w: %q", ErrCredentialNotEnvRef, ref)
 	}
-	val, ok := os.LookupEnv(m[1])
-	if !ok {
-		return "", fmt.Errorf("%w: %s", ErrCredentialEnvMissing, m[1])
+	if val, ok := os.LookupEnv(m[1]); ok {
+		return val, nil
 	}
-	return val, nil
+	if val, ok := readCredentialKeyFile(m[1]); ok {
+		return val, nil
+	}
+	return "", fmt.Errorf("%w: %s", ErrCredentialEnvMissing, m[1])
+}
+
+// credentialDataRootOverride 数据根的进程级覆盖（空 = 按 JIANMANAGER_DATA_DIR 解析）。
+// 密钥目录由它派生为 <root>/etc/qq，不接受直接指定目录（见 SetCredentialDataRoot）。
+// 只在启动时写一次；用 atomic.Value 是为了让并发的凭证解析无锁读取。
+var credentialDataRootOverride atomic.Value
+
+// QQSecretSubdir QQ 扫码绑定密钥在数据根 `etc/` 下的子目录名。
+//
+// **必须与 CP 主密钥隔离**：凭证回落查找用的是「变量名小写 + .key」这一通用映射，
+// 若回落目录直接指向 `etc/`，则 `${WS-TOKEN-SECRET}` / `${CLIENT-KEY-ENC}` 这类
+// 引用会精确命中 CP 主密钥文件（`ws-token-secret.key` / `client-key-enc.key`），
+// 而任何持 `alert.manage` 的用户都能建一条 webhook 通道、把地址填成该引用，
+// 再借「测试发送」的错误回显把它读出来——构成跨权限边界的密钥泄露。
+// 因此回落只看 `etc/qq/`，从根上与主密钥不相交（隔离而非黑名单）。
+const QQSecretSubdir = "qq"
+
+// SetCredentialDataRoot 注册数据根（CP 启动时注入）。
+//
+// 刻意只接受「数据根」而非「密钥目录」：兜底目录固定派生为 `<dataRoot>/etc/qq`，
+// 调用方无法把它指到 `etc/` 本身。若开放成「直接指定目录」，一旦误配成 `etc/`，
+// `${WS-TOKEN-SECRET}` 这类引用就会命中 CP 主密钥文件（详见 QQSecretSubdir 注释）——
+// 把这种可能从接口上消除，比事后校验更可靠。传空串恢复「按数据根解析」的默认行为。
+func SetCredentialDataRoot(dataRoot string) {
+	credentialDataRootOverride.Store(strings.TrimSpace(dataRoot))
+}
+
+// credentialKeyDir 返回密钥文件查找目录：显式注入的数据根优先，否则按数据根解析。
+// 恒为 `<dataRoot>/etc/qq`；数据根解析失败返回空串（等同「没有回落目录」）。
+func credentialKeyDir() string {
+	if v, ok := credentialDataRootOverride.Load().(string); ok && v != "" {
+		return filepath.Join(v, "etc", QQSecretSubdir)
+	}
+	root, err := dataroot.Resolve("")
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(root.EtcDir(), QQSecretSubdir)
+}
+
+// credentialKeyFileName 凭证变量名 → 密钥文件名：小写化 + ".key"。
+// 例：QQ-1020001 → qq-1020001.key。变量名已由 envRefPattern 限定字符集，
+// 不含路径分隔符，故拼接后不可能越出 etc/ 目录。
+func credentialKeyFileName(varName string) string {
+	return strings.ToLower(strings.TrimSpace(varName)) + ".key"
+}
+
+// readCredentialKeyFile 读取 etc/<VAR_NAME>.key；文件不存在、不可读或内容为空时返回 ok=false
+// （交给调用方报「环境变量未设置」，不在这里报错，以免掩盖真正的原因）。
+// 内容做首尾空白裁剪：密钥文件常以换行结尾，行尾字符不属于密钥本身。
+func readCredentialKeyFile(varName string) (string, bool) {
+	dir := credentialKeyDir()
+	if dir == "" {
+		return "", false
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, credentialKeyFileName(varName)))
+	if err != nil {
+		return "", false
+	}
+	val := strings.TrimSpace(string(raw))
+	if val == "" {
+		return "", false
+	}
+	return val, true
 }
 
 func probeBackupStorage(st model.BackupStorage, accessKey, secretKey string) error {

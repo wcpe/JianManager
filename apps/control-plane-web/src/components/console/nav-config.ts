@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   Archive,
   BarChart3,
   Bell,
@@ -60,7 +61,7 @@ export interface NavSection {
 /**
  * 高密度控制台六域导航 IA（FR-431）：
  * 平台首页 / 服务器 / 群组网络 / 工作台 / 观测 / 客户端分发 / 平台设置（分节）。
- * 侧栏可见性与 API 共用权限节点；`/alerts` 维持无导航入口；`/templates` 归平台设置。
+ * 侧栏可见性与 API 共用权限节点；`/alerts` 归观测域（告警通道是观测的一部分）；`/templates` 归平台设置。
  */
 export const NAV_GROUPS: NavGroup[] = [
   { key: 'platformHome', labelKey: 'nav.platformHome', icon: LayoutDashboard, to: '/' },
@@ -102,6 +103,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/monitor', labelKey: 'nav.monitoring', icon: Activity, perm: 'monitor.read' },
       { to: '/logs', labelKey: 'nav.logs', icon: ScrollText, perm: 'log.read' },
       { to: '/statistics', labelKey: 'nav.statistics', icon: BarChart3, perm: 'stats.read' },
+      // 告警（FR-085）：读或管任一权限即可见——只读用户也能查事件/规则，无写权限时页内入口自动收敛。
+      { to: '/alerts', labelKey: 'nav.alerts', icon: AlertTriangle, perm: ['alert.read', 'alert.manage'] },
       { to: '/notifications', labelKey: 'nav.notifications', icon: Bell, perm: 'notification.read' },
     ],
   },

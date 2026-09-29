@@ -64,13 +64,21 @@ function panelByTitle(title: string): HTMLElement {
   return heading.closest('[role="dialog"]') as HTMLElement
 }
 
+/**
+ * 打开组件库 Select（Radix 组合控件）并选中指定选项——原生 <select> 的 selectOptions 不适用。
+ * 选项按文本定位而非 getByRole('option')：role 查询要为整棵 DOM 逐个算可访问名，本对话框有
+ * 6 个 Select、单次查询开销可达秒级；定位后仍断言它挂在真正的 Radix 选项（role=option）上。
+ */
 async function pickSelectOption(trigger: HTMLElement, optionName: string) {
   HTMLElement.prototype.hasPointerCapture ??= () => false
   HTMLElement.prototype.setPointerCapture ??= () => {}
   HTMLElement.prototype.releasePointerCapture ??= () => {}
   HTMLElement.prototype.scrollIntoView ??= () => {}
   await userEvent.click(trigger.closest('button') ?? trigger)
-  await userEvent.click(await screen.findByRole('option', { name: optionName }))
+  const option = (await screen.findByText(optionName)).closest('[role="option"]')
+  expect(option).not.toBeNull()
+  // Radix 选项在「非鼠标指针类型」分支下由 click 提交选中，fireEvent 足以覆盖。
+  fireEvent.click(option as HTMLElement)
 }
 
 describe('RuleDialog（mock 假后端）', () => {
@@ -115,6 +123,8 @@ describe('RuleDialog（mock 假后端）', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 
+  // 本对话框含 6 个 Radix Select，jsdom 下一次「展开 + 选中」约 2s；本用例两次交互（切触发类型 +
+  // 选目标实例）叠加，默认 10s 上限在并行满载时会擦边，故显式放宽（同 CloneInstanceDialog.dom.test）。
   it('② 切到日志关键字：目标自动改为实例并提交 targetId/keyword', async () => {
     loginMockUser()
     const postSpy = vi.spyOn(api, 'post')
@@ -125,8 +135,8 @@ describe('RuleDialog（mock 假后端）', () => {
     fireEvent.change(within(panel).getAllByRole('textbox')[0], { target: { value: '日志异常告警' } })
     await pickSelectOption(within(panel).getByText('指标阈值'), '日志关键字')
 
-    const targetSelect = await within(panel).findByDisplayValue('全部实例')
-    fireEvent.change(targetSelect, { target: { value: '1' } })
+    // 切到日志关键字后目标维度自动落到实例：下拉当前显示「全部实例」，改选种子实例 survival-1（id=1）。
+    await pickSelectOption(await within(panel).findByText('全部实例'), 'survival-1')
     fireEvent.change(within(panel).getByPlaceholderText('OutOfMemoryError'), { target: { value: 'OutOfMemoryError' } })
     fireEvent.click(within(panel).getByRole('button', { name: '保存' }))
 
@@ -138,7 +148,7 @@ describe('RuleDialog（mock 假后端）', () => {
       keyword: 'OutOfMemoryError',
     }))
     postSpy.mockRestore()
-  })
+  }, 30_000)
 
   it('② 编辑提交 → PUT /alerts/rules/:id 成功，onClose 被调', async () => {
     loginMockUser()

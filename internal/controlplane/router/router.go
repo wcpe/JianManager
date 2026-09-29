@@ -79,9 +79,13 @@ type Services struct {
 	BotLoadProjection *service.BotLoadProjectionService
 	Alert             *service.AlertService
 	AlertChannel      *service.AlertChannelService
-	Schedule          *service.ScheduleService
-	Backup            *service.BackupService
-	BackupStorage     *service.BackupStorageService
+	// QQDiscovery QQ 群发现服务（FR-495）；nil 时三端点返回 503（等价「未部署该能力」）。
+	QQDiscovery *service.QQDiscoveryService
+	// QQBind QQ 机器人扫码绑定服务（FR-495）；nil 时两个绑定端点返回 503。
+	QQBind        *service.QQBindService
+	Schedule      *service.ScheduleService
+	Backup        *service.BackupService
+	BackupStorage *service.BackupStorageService
 	// ArtifactStorage 制品存储渠道（FR-347，见 ADR-073）：client-file 外置对象存储配置；
 	// nil 时渠道端点关闭（上传恒本地）。
 	ArtifactStorage *service.ArtifactStorageChannelService
@@ -429,6 +433,8 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		groupHandler.RegisterRoutes(permRead("group.read"))
 
 		alertHandler := NewAlertHandler(svcs.Alert, svcs.AlertChannel)
+		alertHandler.SetQQDiscovery(svcs.QQDiscovery)
+		alertHandler.SetQQBind(svcs.QQBind)
 		alertHandler.RegisterRoutes(permRead("alert.read", "alert.manage"))
 
 		scheduleHandler := NewScheduleHandler(svcs.Schedule)

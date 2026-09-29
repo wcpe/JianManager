@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
@@ -223,6 +224,73 @@ func TestResolveSpec_MissingEnv(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.ResolveSpec(st.ID)
 	require.ErrorIs(t, err, ErrCredentialEnvMissing)
+}
+
+// TestResolveEnvRef_回落密钥文件与向后兼容（FR-495）：
+// 环境变量未命中时回落 etc/<VAR_NAME>.key（QQ 扫码绑定的落盘密钥）；
+// 文件不存在时行为必须与纯环境变量版本完全一致（仍报 ErrCredentialEnvMissing）。
+func TestResolveEnvRef_回落密钥文件与向后兼容(t *testing.T) {
+	dir := t.TempDir()
+	SetCredentialDataRoot(dir)
+	t.Cleanup(func() { SetCredentialDataRoot("") })
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "etc", QQSecretSubdir), 0o755))
+
+	// 1) 文件存在 → 取到密钥（变量名小写化 + .key）。
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "etc", QQSecretSubdir, "qq-1020001.key"), []byte("file-secret\n"), 0o600))
+	got, err := resolveEnvRef("${QQ-1020001}")
+	require.NoError(t, err, "环境变量未命中时应回落到密钥文件")
+	assert.Equal(t, "file-secret", got, "行尾换行不属于密钥本身")
+
+	// 2) 环境变量优先于文件（既有部署方式不受影响）。
+	t.Setenv("QQ-1020001", "env-secret")
+	got, err = resolveEnvRef("${QQ-1020001}")
+	require.NoError(t, err)
+	assert.Equal(t, "env-secret", got)
+
+	// 3) 兼容无连字符的普通变量名（备份/Webhook 等既有用法）。
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "etc", QQSecretSubdir, "jm_backup_ak.key"), []byte("ak-from-file"), 0o600))
+	got, err = resolveEnvRef("${JM_BACKUP_AK}")
+	require.NoError(t, err)
+	assert.Equal(t, "ak-from-file", got)
+
+	// 4) 向后兼容硬要求：文件不存在时仍报 ErrCredentialEnvMissing。
+	_, err = resolveEnvRef("${JM_TEST_DEFINITELY_MISSING_VAR}")
+	require.ErrorIs(t, err, ErrCredentialEnvMissing)
+
+	// 5) 空文件视为未设置（不把空串当凭证）。
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "etc", QQSecretSubdir, "jm_empty.key"), []byte("\n"), 0o600))
+	_, err = resolveEnvRef("${JM_EMPTY}")
+	require.ErrorIs(t, err, ErrCredentialEnvMissing)
+
+	// 6) 目录不存在（未注入数据根且数据根未初始化）同样报未设置，不 panic。
+	SetCredentialDataRoot(filepath.Join(dir, "not-exist"))
+	_, err = resolveEnvRef("${JM_TEST_DEFINITELY_MISSING_VAR}")
+	require.ErrorIs(t, err, ErrCredentialEnvMissing)
+
+	// 7) 非 ${...} 形式仍报 ErrCredentialNotEnvRef（明文不被文件回落放过）。
+	SetCredentialDataRoot(dir)
+	_, err = resolveEnvRef("PLAINTEXT-SECRET")
+	require.ErrorIs(t, err, ErrCredentialNotEnvRef)
+
+	// 8) 空引用保持返回空串（匿名 WebDAV 等）。
+	got, err = resolveEnvRef("  ")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// TestResolveEnvRef_默认目录随数据根 未注入数据根时按默认解析，密钥目录固定为 <root>/etc/qq。
+func TestResolveEnvRef_默认目录随数据根(t *testing.T) {
+	root, err := dataroot.Init(t.TempDir())
+	require.NoError(t, err)
+	t.Setenv(dataroot.EnvVar, root.Base())
+	SetCredentialDataRoot("")
+	t.Cleanup(func() { SetCredentialDataRoot("") })
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root.EtcDir(), QQSecretSubdir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root.EtcDir(), QQSecretSubdir, "qq-1020009.key"), []byte("root-secret"), 0o600))
+	got, err := resolveEnvRef("${QQ-1020009}")
+	require.NoError(t, err)
+	assert.Equal(t, "root-secret", got)
 }
 
 // TestListWithStats_AggregatesCompletedBackups 列表聚合已完成备份份数与容量。
@@ -526,4 +594,33 @@ func testHostKey(t *testing.T) *rsa.PrivateKey {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 	return key
+}
+
+// TestResolveEnvRef_不得命中CP主密钥 守门用例（安全回归）。
+//
+// 凭证回落目录固定为 <dataRoot>/etc/qq，与 etc/ 下的 CP 主密钥文件
+// （ws-token-secret.key、client-key-enc.key）不相交。
+//
+// 若有人把回落目录改回 etc/（或给 SetCredentialDataRoot 传入 etc/），
+// 通用映射「变量名小写 + .key」会让 ${WS-TOKEN-SECRET} 精确命中主密钥——
+// 而任何持 alert.manage 的用户都能建一条 webhook 通道、把地址填成该引用，
+// 再借「测试发送」的错误回显把它读出来。本用例必须失败，以此拦截回归。
+func TestResolveEnvRef_不得命中CP主密钥(t *testing.T) {
+	root, err := dataroot.Init(t.TempDir())
+	require.NoError(t, err)
+	t.Setenv(dataroot.EnvVar, root.Base())
+	SetCredentialDataRoot("")
+	t.Cleanup(func() { SetCredentialDataRoot("") })
+
+	// 按真实布局把「主密钥」放在 etc/ 根下（而非 etc/qq/）。
+	require.NoError(t, os.MkdirAll(root.EtcDir(), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root.EtcDir(), "ws-token-secret.key"), []byte("CP-MASTER-KEY"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root.EtcDir(), "client-key-enc.key"), []byte("CP-MASTER-KEY-2"), 0o600))
+
+	for _, ref := range []string{"${WS-TOKEN-SECRET}", "${ws-token-secret}", "${CLIENT-KEY-ENC}"} {
+		got, err := resolveEnvRef(ref)
+		require.ErrorIsf(t, err, ErrCredentialEnvMissing,
+			"%s 不得从回落目录读到 etc/ 下的 CP 主密钥（读到=越权泄露）", ref)
+		assert.Empty(t, got)
+	}
 }

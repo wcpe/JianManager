@@ -62,6 +62,8 @@ const (
 	ChannelTypeDiscord  = "discord"
 	ChannelTypeTelegram = "telegram"
 	ChannelTypeInApp    = "inapp"
+	// ChannelTypeQQ QQ 开放平台机器人（FR-494）：appId + appSecret 换 AccessToken 后主动推送到群聊 / 单聊。
+	ChannelTypeQQ = "qq"
 )
 
 // AlertChannel 通知通道（FR-085）。一个通道是一个可复用的通知出口，
@@ -76,6 +78,7 @@ type AlertChannel struct {
 	// Config 通道连接配置的 JSON 串。各类型字段不同（见 service/channel_notifier.go ChannelConfig）：
 	//   webhook/dingtalk/wecom/feishu/discord: {"url":"${ENV}"}（URL 含 access_token/secret，强制 ${ENV} 引用）
 	//   telegram: {"token":"${ENV}","chatId":"..."}
+	//   qq:       {"appId","appSecret":"${ENV}","targetType":"group|c2c","targetId","baseUrl"}
 	//   email:    {"host","port","username","password":"${ENV}","from","to"}
 	//   inapp:    {}（无外部配置）
 	// 凭证子字段（URL/token/password）强制经 ${ENV_VAR} 引用，CreateChannel/UpdateChannel 时校验、发送时解析。

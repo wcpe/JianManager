@@ -9,6 +9,8 @@ import {
   channelIsTelegram,
   channelIsEmail,
   channelIsInApp,
+  channelIsQQ,
+  isQQTargetType,
   isEnvRef,
   formatSilenceWindow,
   isValidHHMM,
@@ -87,6 +89,8 @@ describe('channel field visibility', () => {
     }
     expect(channelUsesURL('telegram')).toBe(false)
     expect(channelUsesURL('email')).toBe(false)
+    // QQ 的 baseUrl 是可选 API 根地址，不是凭证，故不得走 ${ENV} 强约束的 URL 字段。
+    expect(channelUsesURL('qq')).toBe(false)
   })
   it('telegram / email / inapp', () => {
     expect(channelIsTelegram('telegram')).toBe(true)
@@ -94,16 +98,44 @@ describe('channel field visibility', () => {
     expect(channelIsInApp('inapp')).toBe(true)
     expect(channelIsInApp('webhook')).toBe(false)
   })
+  it('qq only for qq', () => {
+    expect(channelIsQQ('qq')).toBe(true)
+    expect(channelIsQQ('telegram')).toBe(false)
+    expect(channelIsQQ('webhook')).toBe(false)
+    expect(channelIsQQ('inapp')).toBe(false)
+  })
+  it('qq target type 只认 c2c（group 已随群聊路径下线）', () => {
+    expect(isQQTargetType('c2c')).toBe(true)
+    // 群主动消息被平台拒绝（40034105），存量 group 值不再被承认——它会在保存前被必填校验拦下。
+    expect(isQQTargetType('group')).toBe(false)
+    expect(isQQTargetType('')).toBe(false)
+    expect(isQQTargetType('GROUP')).toBe(false)
+    expect(isQQTargetType('channel')).toBe(false)
+  })
 })
 
 describe('isEnvRef', () => {
-  it('accepts ${VAR}', () => {
+  it('接受 ${VAR}', () => {
     expect(isEnvRef('${JM_WEBHOOK}')).toBe(true)
     expect(isEnvRef('  ${A_B_1}  ')).toBe(true)
   })
-  it('rejects plain / malformed', () => {
-    expect(isEnvRef('https://x.com')).toBe(false)
+  it('接受连字符（扫码绑定返回的 ${QQ-102000001} 必须能通过）', () => {
+    // 后端把 ${ENV} 的合法字符集放宽为允许连字符，引用名由 appId 直接拼出；
+    // 旧正则不含 `-` 会把这个合法引用判为非法，导致扫码成功后表单永远存不了。
+    expect(isEnvRef('${QQ-102000001}')).toBe(true)
+    expect(isEnvRef('  ${QQ-102000001}  ')).toBe(true)
+    expect(isEnvRef('${A-B_C-D1}')).toBe(true)
+  })
+  it('拒绝真正的非法值（放宽字符集不等于放开一切）', () => {
+    expect(isEnvRef('invalid')).toBe(false)
+    expect(isEnvRef('${}')).toBe(false)
     expect(isEnvRef('${1bad}')).toBe(false)
+    expect(isEnvRef('${-lead}')).toBe(false)
+    expect(isEnvRef('${QQ-102000001')).toBe(false)
+    expect(isEnvRef('QQ-102000001}')).toBe(false)
+    expect(isEnvRef('${QQ-102 000001}')).toBe(false)
+    expect(isEnvRef('${QQ-102000001}extra')).toBe(false)
+    expect(isEnvRef('https://x.com')).toBe(false)
     expect(isEnvRef('$VAR')).toBe(false)
     expect(isEnvRef('')).toBe(false)
   })
