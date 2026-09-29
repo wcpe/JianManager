@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/api/client'
+import zh from '@/i18n/zh.json'
+import en from '@/i18n/en.json'
 import McpActivityPage, { WINDOW_PRESETS } from './McpActivityPage'
 
 vi.mock('@/api/client', () => ({
@@ -26,6 +28,13 @@ function login(role: number) {
 
 const ACTIVITY_URL = '/agent/mcp/activity'
 
+// mock 响应里的 window 字段按真后端回显形态填：后端用 Go duration 的 String() 回显
+// （入参 '24h' → 响应 '24h0m0s'、'168h' → '168h0m0s'；真后端单测 mcp_test.go 与
+// docs/specs/mcp-stateless-endpoint/api.md 都是这个口径），并非入参原样。
+// 该字段当前页面不渲染，但 mock 不能比真契约宽松：否则将来一旦把它渲染出来，
+// 测试仍会绿而线上显示的是 '168h0m0s'。
+// 注意：请求侧断言（params.window）仍是入参原样 '24h' / '168h'，不要跟着改成 duration 形态。
+
 /** 统计窗口档位按钮所在分组（分组名取自 i18n 的 mcpActivity.window）。 */
 const windowGroup = () => screen.getByRole('group', { name: /统计窗口|Window/ })
 
@@ -45,6 +54,23 @@ function parseGoDurationSeconds(value: string): number {
   }
   return seconds
 }
+
+/** 把语言包扁平化成「点分 key → 叶子值」，口径同 src/i18n/missing-keys.test.ts 的 flattenKeys。 */
+function flattenLeaves(
+  obj: Record<string, unknown>,
+  prefix = '',
+  out = new Map<string, unknown>(),
+): Map<string, unknown> {
+  for (const [k, v] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${k}` : k
+    if (v && typeof v === 'object') flattenLeaves(v as Record<string, unknown>, path, out)
+    else out.set(path, v)
+  }
+  return out
+}
+
+const ZH_LEAVES = flattenLeaves(zh)
+const EN_LEAVES = flattenLeaves(en)
 
 describe('McpActivityPage（DOM）', () => {
   beforeEach(() => {
@@ -66,7 +92,7 @@ describe('McpActivityPage（DOM）', () => {
       if (url === ACTIVITY_URL) {
         return {
           data: {
-            window: '24h',
+            window: '24h0m0s',
             generatedAt: '2026-07-25T06:05:00Z',
             items: [
               {
@@ -103,7 +129,7 @@ describe('McpActivityPage（DOM）', () => {
 
   it('切换窗口后按新窗口重新请求', async () => {
     login(10)
-    mockedApi.get.mockResolvedValue({ data: { window: '168h', generatedAt: '', items: [] } })
+    mockedApi.get.mockResolvedValue({ data: { window: '168h0m0s', generatedAt: '', items: [] } })
 
     const user = userEvent.setup()
     renderWithProviders(<McpActivityPage />)
@@ -142,9 +168,35 @@ describe('McpActivityPage（DOM）', () => {
     })
   })
 
+  // 页面用 t(`mcpActivity.window_${w}`) 取档位文案，是动态拼接键；src/i18n/missing-keys.test.ts
+  // 只扫静态调用的首参字符串字面量，对动态键零覆盖——档位值改名后漏补语言包不会有任何测试变红，
+  // 第二档按钮会直接渲染出裸键。这里按 WINDOW_PRESETS 逐项守住语言包（直接读 JSON，不经过 i18next，
+  // 免得它的 fallback 把缺键兜成看起来正常的中文）。
+  // 注释里刻意不写带引号的调用示例：上面那个扫描器按正则扒源码、连注释一起扫，
+  // 写了引号会让它误判出一个不存在的 key（本次已踩过一次）。
+  describe('窗口档位文案的动态 i18n 键', () => {
+    it('每个档位值的 mcpActivity.window_<档位值> 在 zh/en 中都存在且非空', () => {
+      const bundles: ReadonlyArray<readonly [string, Map<string, unknown>]> = [
+        ['zh.json', ZH_LEAVES],
+        ['en.json', EN_LEAVES],
+      ]
+      const missing: string[] = []
+      for (const preset of WINDOW_PRESETS) {
+        const key = `mcpActivity.window_${preset}`
+        for (const [file, leaves] of bundles) {
+          const text = leaves.get(key)
+          if (typeof text !== 'string' || text.trim() === '') {
+            missing.push(`档位值 ${preset} 的 ${key} 在 ${file} 中缺失或为空`)
+          }
+        }
+      }
+      expect(missing, '动态 i18n 键缺失（档位值 + 语言文件）').toEqual([])
+    })
+  })
+
   it('空态显示提示', async () => {
     login(10)
-    mockedApi.get.mockResolvedValue({ data: { window: '24h', generatedAt: '', items: [] } })
+    mockedApi.get.mockResolvedValue({ data: { window: '24h0m0s', generatedAt: '', items: [] } })
 
     renderWithProviders(<McpActivityPage />)
     expect(await screen.findByText(/当前窗口内无 MCP 活动|No MCP activity/i)).toBeInTheDocument()
@@ -152,7 +204,7 @@ describe('McpActivityPage（DOM）', () => {
 
   it('吊销 Token 入口指向 Agent Token 页（无会话可踢）', async () => {
     login(10)
-    mockedApi.get.mockResolvedValue({ data: { window: '24h', generatedAt: '', items: [] } })
+    mockedApi.get.mockResolvedValue({ data: { window: '24h0m0s', generatedAt: '', items: [] } })
 
     renderWithProviders(<McpActivityPage />)
     expect(await screen.findByRole('link', { name: /吊销 Token|Revoke Token/i })).toHaveAttribute(
