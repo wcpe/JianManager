@@ -19,11 +19,16 @@ import {
 
 const ROLE_PLATFORM_ADMIN = 10
 
-/** 统计窗口预设：与后端允许区间（1h~168h）对齐，只暴露两个常用档位。
- *  取值必须是后端可解析的 Go duration——**不能写 `7d`**（Go duration 不支持天），
- *  否则每次切到该档位都会被后端以 400 拒绝。 */
-const WINDOWS = ['24h', '168h'] as const
-type WindowPreset = (typeof WINDOWS)[number]
+/**
+ * 统计窗口档位：取值会原样作为 `window` 查询参数发给后端，因此必须能被
+ * `internal/controlplane/mcp/handler.go` 的 `ListActivity` 按 Go duration 解析，
+ * 并落在闭区间 1h~168h（同文件的 minActivityWindow / maxActivityWindow），否则该请求被 400 拒绝。
+ * Go duration 没有「天」单位，所以「7 天」只能写 `168h`——写成 `7d` 会被后端判为非法。
+ * 档位与后端可解析性的契约由 McpActivityPage.dom.test.tsx 的形态/区间守卫测试兜底。
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- 档位需被单测逐项枚举，导出为本次改动的必要部分
+export const WINDOW_PRESETS = ['24h', '168h'] as const
+type WindowPreset = (typeof WINDOW_PRESETS)[number]
 const DEFAULT_WINDOW: WindowPreset = '24h'
 
 /** 客户端标识 → 调用次数 映射转成「客户端 ×次数」列表，按次数降序。 */
@@ -79,7 +84,7 @@ export default function McpActivityPage() {
             role="group"
             aria-label={t('mcpActivity.window')}
           >
-            {WINDOWS.map((w) => (
+            {WINDOW_PRESETS.map((w) => (
               <Button
                 key={w}
                 variant={windowValue === w ? 'secondary' : 'ghost'}
