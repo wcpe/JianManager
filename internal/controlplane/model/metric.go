@@ -35,6 +35,9 @@ const (
 	MetricNodeNetRxRate = "node_net_rx_rate"
 	MetricNodeNetTxRate = "node_net_tx_rate"
 	MetricNodeLoad      = "node_load" // 1 分钟 load average（FR-062）
+	// MetricNodeIOWait 是 CPU 等 IO 的占比（pct，FR-485）。
+	// 与 cpu_pct 同为 0..100 的百分比量纲，可直接参与百分比触发。
+	MetricNodeIOWait = "node_iowait"
 	// MetricLogIngestHealthy 日志采集健康（FR-485）：1=采集运行时在运行，0=未运行/创建失败。
 	MetricLogIngestHealthy = "log_ingest_healthy"
 

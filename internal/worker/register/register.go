@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -234,6 +235,11 @@ func CollectHeartbeatData(nodeUUID string) *workerpb.HeartbeatRequest {
 		req.MemoryUsedMb = int64(vmem.Used / 1024 / 1024)
 	}
 
+	// IO 等待占比（FR-485）：与 metrics 采集器共用同一归一公式（metrics.IOWaitRatio），
+	// 放在 cpu.Percent 判断之外——CPU 百分比采集失败时 iowait 不应跟着丢。
+	if times, err := cpu.Times(false); err == nil && len(times) > 0 {
+		req.Iowait = metrics.IOWaitRatio(times[0])
+	}
 	if percents, err := cpu.Percent(time.Second, false); err == nil && len(percents) > 0 {
 		req.CpuUsage = float32(percents[0] / 100.0)
 	}

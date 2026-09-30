@@ -400,6 +400,9 @@ message FetchBotWorkerArchiveResponse {
 message HeartbeatRequest {
   string node_uuid = 1;
   float cpu_usage = 2;
+    // iowait 是 CPU 等 IO 的时间占比（0..1，FR-485）。只看 cpu_usage 会把 IO 瓶颈
+    // 看成「CPU 不满」；本机事故中 iowait 曾达 90%。老 CP 忽略该字段，不改变既有语义。
+    float iowait = 17;
   float memory_usage = 3;
   float disk_usage = 4;
   int64 memory_used_mb = 5;
@@ -1068,6 +1071,7 @@ message GetNodeMetricsResponse {
   float cpu_usage = 1;
   float memory_usage = 2;
   float disk_usage = 3;
+    float iowait = 8;  // IO 等待占比（0..1，FR-485）
   int64 memory_used_mb = 4;
   int64 memory_total_mb = 5;
   int64 disk_used_mb = 6;
@@ -2651,4 +2655,6 @@ message LogCutoverReadinessResponse {
 message LogResolveIngestGapsRequest {
   string request_id = 1;
   string protocol_version = 2;
+  // 可选：仅解该存储命名空间（源）的缺口。空=整节点（既有行为，逐字不变）。
+  string storage_namespace = 3;
 }
