@@ -106,43 +106,74 @@ func (c *Coordinator) CreateView(ctx context.Context, q Query) (*View, error) {
 
 // bindWorkerViews creates one immutable local view per Worker. The CP view ID
 // is never sent to Worker Planner as if it were a Worker-local view ID.
+// 逐 worker 并发建视图：各 worker 之间相互独立，故并发取数；
+// 结果按 order 顺序合并，落盘顺序与串行版本逐一对应（保持语义不变）。
 func (c *Coordinator) bindWorkerViews(ctx context.Context, view *View, resolved *ResolvedTargets) {
 	if c == nil || c.dialer == nil || view == nil || resolved == nil {
 		return
 	}
 	order, byWorker := resolved.ByWorker()
-	for _, workerID := range order {
-		targets := byWorker[workerID]
-		targetIDs := make([]string, 0, len(targets))
-		for _, t := range targets {
-			targetIDs = append(targetIDs, workerTargetID(t))
-		}
-		client, err := c.dialer.Dial(ctx, workerID)
-		if err != nil {
-			view.WorkerViewErrors[workerID] = err.Error()
-			continue
-		}
-		resp, err := client.OpenView(ctx, WorkerSearchRequest{
-			TargetIDs:    targetIDs,
-			FromUTC:      view.FromUTC,
-			ToUTC:        view.ToUTC,
-			Filter:       view.Filter,
-			Budget:       view.Budget,
-			OrderVersion: view.OrderVersion,
-		})
-		if err != nil {
-			view.WorkerViewErrors[workerID] = err.Error()
-			continue
-		}
-		if resp == nil || resp.Unsupported || resp.Error != "" || resp.ViewID == "" {
-			if resp != nil && resp.Error != "" {
-				view.WorkerViewErrors[workerID] = resp.Error
-			} else {
-				view.WorkerViewErrors[workerID] = "worker view creation failed"
+
+	type bindResult struct {
+		workerID string
+		viewID   string
+		errMsg   string
+	}
+	results := make([]bindResult, len(order))
+
+	// 并发上限：worker 较多时避免一次性压满所有节点。
+	const maxParallel = 8
+	sem := make(chan struct{}, maxParallel)
+	var wg sync.WaitGroup
+	for i, workerID := range order {
+		wg.Add(1)
+		go func(idx int, id string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			targets := byWorker[id]
+			targetIDs := make([]string, 0, len(targets))
+			for _, t := range targets {
+				targetIDs = append(targetIDs, workerTargetID(t))
 			}
+			client, err := c.dialer.Dial(ctx, id)
+			if err != nil {
+				results[idx] = bindResult{workerID: id, errMsg: err.Error()}
+				return
+			}
+			resp, err := client.OpenView(ctx, WorkerSearchRequest{
+				TargetIDs:    targetIDs,
+				FromUTC:      view.FromUTC,
+				ToUTC:        view.ToUTC,
+				Filter:       view.Filter,
+				Budget:       view.Budget,
+				OrderVersion: view.OrderVersion,
+			})
+			if err != nil {
+				results[idx] = bindResult{workerID: id, errMsg: err.Error()}
+				return
+			}
+			if resp == nil || resp.Unsupported || resp.Error != "" || resp.ViewID == "" {
+				msg := "worker view creation failed"
+				if resp != nil && resp.Error != "" {
+					msg = resp.Error
+				}
+				results[idx] = bindResult{workerID: id, errMsg: msg}
+				return
+			}
+			results[idx] = bindResult{workerID: id, viewID: resp.ViewID}
+		}(i, workerID)
+	}
+	wg.Wait()
+
+	// 顺序合并：与串行版本一致的写入次序，避免落盘次序不确定。
+	for _, r := range results {
+		if r.errMsg != "" {
+			view.WorkerViewErrors[r.workerID] = r.errMsg
 			continue
 		}
-		view.WorkerViewIDs[workerID] = resp.ViewID
+		view.WorkerViewIDs[r.workerID] = r.viewID
 	}
 }
 

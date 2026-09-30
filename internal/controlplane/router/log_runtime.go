@@ -45,8 +45,22 @@ func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 可选 body：{"storageNamespace":"inst:153/stderr"}。
+	// 传了：只解该源（显式人工确认，见 Worker 侧 ResolveCoveredGapsForSource——
+	// 用于解开「唯一未就绪目标正是持有缺口者」的自我指涉死锁）；
+	// 不传：与既有整节点行为逐字一致（向后兼容）。
+	var body struct {
+		StorageNamespace string `json:"storageNamespace"`
+	}
+	if c.Request.ContentLength > 0 {
+		if bindErr := c.ShouldBindJSON(&body); bindErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+			return
+		}
+	}
 	resp, err := client.Worker.LogResolveIngestGaps(c.Request.Context(), &workerpb.LogResolveIngestGapsRequest{
 		RequestId: c.GetHeader("X-Request-ID"), ProtocolVersion: "log-query/1",
+		StorageNamespace: strings.TrimSpace(body.StorageNamespace),
 	})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "WORKER_RPC_FAILED"})
@@ -54,10 +68,14 @@ func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
 	}
 	if resp == nil || resp.GetError() != nil || resp.GetState() != workerpb.LogTaskState_LOG_TASK_SUCCEEDED {
 		code := "LOG_NOT_READY"
+		// 转述 Worker 的具体原因：只回裸 code 会让运维无从判断是「源不存在」「账本不一致」
+		// 还是「缺口未覆盖」，实测会把排查拖成盲猜。
+		message := ""
 		if resp != nil && resp.GetError() != nil {
 			code = resp.GetError().GetCode().String()
+			message = resp.GetError().GetMessage()
 		}
-		c.JSON(http.StatusConflict, gin.H{"error": "GAP_RESOLUTION_FAILED", "code": code})
+		c.JSON(http.StatusConflict, gin.H{"error": "GAP_RESOLUTION_FAILED", "code": code, "message": message})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"state": "resolved"})
