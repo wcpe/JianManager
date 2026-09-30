@@ -7,6 +7,7 @@ package ingest
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -244,4 +245,118 @@ func TestPersistKeepsIndexUsableAfterFloodBound(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, comparisonState(&m.state), comparisonState(loaded),
 		"增量写入后索引必须与内存状态逐字段一致")
+}
+
+// FR-496 加固（F2）：**重启后**的首次 persist（无任何采集活动）必须零写入。
+//
+// 转红说明 ①（指纹缺陷）：encodeValue 的 bool 分支若改回自成一类，重启后 position/gap/
+// projection 会被整表重写，RowsWritten ≈ 全量行数 → 本用例红。
+// 转红说明 ②（增量回归）：把 persist 退回「每次都全量 stateToIndexState + Apply」，
+// 或把 ApplyScoped 的 owners 传错为 nil，无变更轮次也会写几百行（根表全量比对+每源一行），
+// 断言 `零写入` 即红——这正是「只写变更行」在 manager 层的直接回归。
+func TestPersistIsIdempotentAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	m, err := New(Options{Root: root, Catalog: catalog.New(catalog.NewMemJournal())})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = m.Stop() })
+	// 首轮写入（空库）：建立镜像 + 持久化基线。
+	require.NoError(t, m.persist())
+	before := len(m.PersistSamples())
+	require.NoError(t, m.persist())
+	samples := m.PersistSamples()
+	require.Greater(t, len(samples), before)
+	last := samples[len(samples)-1]
+	if last.RowsWritten != 0 || last.RowsDeleted != 0 {
+		t.Fatalf("无变更轮次必须零写入，实测写 %d 删 %d", last.RowsWritten, last.RowsDeleted)
+	}
+}
+
+// FR-496 加固（F3）：Stop 关闭索引句柄后，-wal 必须被归并（不再残留）。
+//
+// 转红说明：删掉 Stop 里的 CloseIndex（旧行为只关事件段），本用例即红——索引库仍开着，
+// 退出后 -wal 不会归并（重启后用 sqlite 打开仍能看到残留物）。
+func TestStopCheckpointsIndex(t *testing.T) {
+	root := t.TempDir()
+	m, err := New(Options{Root: root, Catalog: catalog.New(catalog.NewMemJournal())})
+	require.NoError(t, err)
+	require.NoError(t, m.persist())
+	require.NoError(t, m.Stop())
+	indexPath := filepath.Join(root, "var", "log", "ingest.index.db")
+	if _, err := os.Stat(indexPath + "-wal"); err == nil {
+		t.Fatalf("Stop 后 -wal 必须被归并删除")
+	}
+	// Stop 之后 Manager 不得再 persist（索引句柄已关闭）；此时再 persist 应重新打开。
+	require.NoError(t, m.persist(), "Stop 后重新打开索引仍可持久化")
+	require.NoError(t, m.Stop())
+}
+
+// FR-496 加固（F2 的稳态口径）：**真实 pipeline** 下的稳态持久化必须只随「本批次变更的源」
+// 增长，不随索引总量增长。
+//
+// 与 TestPersistWritesOnlyChangedRowsAtScale 的区别：那个用例直接构造 Manager 状态
+// （无 pipeline），只能验证「索引层的差异比对」；本用例用真实 pipeline 驱动账本，
+// 验证的是 **Manager 层的变更源判定**（ledger 修订号 + 段覆盖签名）——这才是生产
+// 「每 250ms 一轮轮询」的真实路径。
+//
+// 判据用 RowsPlanned（参与规划的行数）而不是 RowsWritten：稳态真正的成本是「规划了多少行」
+// （mirrorKey + fingerprint），**即使一行都不写**，全量规划 74.7 万行也要 1.5s（生产实测）。
+// 只看 RowsWritten 会让「每轮全量规划、但因为指纹一致而零写入」的实现漏过去。
+//
+// 转红说明：去掉 persist 里「跳过未变更源」的判定（每轮把全部源当变更源重建），
+// 大夹具的 RowsPlanned 会随源数线性增长，`相等` 断言即红。
+func TestPersistSteadyStatePlansOnlyChangedSources(t *testing.T) {
+	measure := func(sources int) (dataPlanned, planned, written int) {
+		root := t.TempDir()
+		logPath := filepath.Join(root, "latest.log")
+		require.NoError(t, os.WriteFile(logPath, []byte("hello\n"), 0o600))
+		configs := make([]SourceConfig, 0, sources)
+		for i := 0; i < sources; i++ {
+			configs = append(configs, SourceConfig{
+				LogSourceID: fmt.Sprintf("node:%03d", i), SourceGeneration: "g1", Path: logPath,
+				Mode: pipeline.ModeFilePrimary, StorageNamespace: fmt.Sprintf("node:%03d", i), UTCDay: runtimeTestUTCDay(),
+			})
+		}
+		m, err := New(Options{Root: root, Catalog: catalog.New(catalog.NewMemJournal()), Sources: configs})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = crashClose(m) })
+		// 让**每个源**都带上数据行（缺口），否则「按归属收敛」与「全量重写」在小夹具上
+		// 观测不出差别（每个源的行数一样时两者都只规划同样多的行）。
+		for i := 0; i < sources; i++ {
+			key := fmt.Sprintf("node:%03d/g1", i)
+			pipe := m.pipes[key]
+			require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), uint64(i), uint64(i)+1, "SEED", "index fixture"))
+		}
+		// 首轮：全量落库（不计入稳态口径）。
+		require.NoError(t, m.persist())
+		// 稳态：只有**一个**源的账本再发生变化（其余源逐字节不变）。
+		key := "node:000/g1"
+		require.NoError(t, m.pipes[key].Ledger().RecordGap(m.pipes[key].Key(), 100, 101, "STEADY", "state probe"))
+		before := len(m.PersistSamples())
+		require.NoError(t, m.persist())
+		samples := m.PersistSamples()
+		require.Greater(t, len(samples), before)
+		last := samples[len(samples)-1]
+		data := last.Planned["gap"] + last.Planned["source_wal"] + last.Planned["delivery_batch"]
+		return data, last.RowsPlanned, last.RowsWritten
+	}
+
+	smallData, _, smallWritten := measure(8)
+	largeData, largePlanned, largeWritten := measure(64)
+	// 单源变更只允许触及该源的行（source/position/projection/aux + gap + 可能的 batch）。
+	require.LessOrEqual(t, largeWritten, 8,
+		"稳态持久化只应写变更源的少量行，实测 %d 行", largeWritten)
+	require.Equal(t, smallWritten, largeWritten,
+		"8 源与 64 源的稳态写入行数必须相同（与索引总量解耦），实测 %d vs %d", smallWritten, largeWritten)
+	// 关键判据：**数据表**（gap/source_wal/delivery_batch，行数随数据量增长的那三张）
+	// 的规划量与索引总量解耦——这才是「O(全量) → O(变更行)」的落点。
+	require.Greater(t, largeData, 0, "稳态必须至少规划变更源的数据行")
+	require.Equal(t, smallData, largeData,
+		"8 源与 64 源的数据表规划行数必须相同（规划成本不得随索引总量增长），实测 %d vs %d",
+		smallData, largeData)
+	require.LessOrEqual(t, largeData, 4,
+		"数据表规划行数应只覆盖变更源，实测 %d 行", largeData)
+	// 根表的规划量按设计随源数增长（几百行量级，代价可忽略），但要能看出它占比很小：
+	// 64 源时根表规划量应是 O(源数) 量级，而不是 O(索引总量)。
+	require.LessOrEqual(t, largePlanned, 64*6,
+		"总规划行数应是 O(源数) 量级，实测 %d 行", largePlanned)
 }

@@ -2,15 +2,26 @@ package stateindex
 
 import "fmt"
 
-// planState 把索引的期望状态拆成各表的行计划（行顺序与 specs 一致，父表在前）。
+// planState 把索引的期望状态拆成各表的行计划，并按「归属键」分组。
+//
+// 归属键 = 表主键的第一列（缺口/WAL/批次/游标等都以日志源为归属，实例绑定表没有归属，用 ""）。
+// 分组是「只写变更行」从 O(总量) 降到 O(变更源) 的前提：持久化只对本批次变更的源做行规划，
+// 未变更源的行根本不会被构造、不会被指纹、不会与镜像比对。
 //
 // 只有「内容列」参与指纹：updated_at 之类的写入时刻列不参与，否则每次持久化都会让所有行
 // 「看起来变了」，把增量写入退化成整本重写。
-func planState(st State, nowUnixMilli int64) ([tableCount][]rowData, error) {
-	var plans [tableCount][]rowData
+func planState(st State, nowUnixMilli int64) ([tableCount]map[string][]rowData, error) {
+	var plans [tableCount]map[string][]rowData
+	appendRow := func(table int, owner string, row rowData) {
+		if plans[table] == nil {
+			plans[table] = make(map[string][]rowData)
+		}
+		row.owner = owner
+		plans[table][owner] = append(plans[table][owner], row)
+	}
 	for _, row := range st.Sources {
 		row := row
-		plans[tblSource] = append(plans[tblSource], rowData{
+		appendRow(tblSource, row.Key, rowData{
 			key: mirrorKey(row.Key),
 			fp:  fingerprint(row.LogSourceID, row.SourceGeneration, row.StorageNamespace),
 			values: func() ([]any, error) {
@@ -24,7 +35,7 @@ func planState(st State, nowUnixMilli int64) ([tableCount][]rowData, error) {
 	}
 	for _, row := range st.Positions {
 		row := row
-		plans[tblPosition] = append(plans[tblPosition], rowData{
+		appendRow(tblPosition, row.Key, rowData{
 			key: mirrorKey(row.Key),
 			fp: fingerprint(row.ReadPos, row.DurablePos, row.ReclaimPos, row.AcquirePaused,
 				nullableText(row.PauseReason)),
@@ -36,7 +47,7 @@ func planState(st State, nowUnixMilli int64) ([tableCount][]rowData, error) {
 	}
 	for _, row := range st.Gaps {
 		row := row
-		plans[tblGap] = append(plans[tblGap], rowData{
+		appendRow(tblGap, row.Key, rowData{
 			key: mirrorKey(row.Key, row.ID),
 			fp: fingerprint(row.StartPos, row.EndPos, row.Reason, nullableText(row.Detail), row.Resolved,
 				nullableText(row.Resolution)),
@@ -48,7 +59,7 @@ func planState(st State, nowUnixMilli int64) ([tableCount][]rowData, error) {
 	}
 	for _, row := range st.Projections {
 		row := row
-		plans[tblProjection] = append(plans[tblProjection], rowData{
+		appendRow(tblProjection, row.Key, rowData{
 			key: mirrorKey(row.Key),
 			fp:  fingerprint(row.Generation, row.EventsStoredThrough, row.Pending),
 			values: func() ([]any, error) {
@@ -62,7 +73,10 @@ func planState(st State, nowUnixMilli int64) ([tableCount][]rowData, error) {
 	}
 	for _, row := range st.Instances {
 		row := row
-		plans[tblInstanceBinding] = append(plans[tblInstanceBinding], rowData{
+		// 归属取主键首列（uuid），与镜像载入侧的 mirrorOwner 同口径——两侧不一致会把同一行
+		// 归到不同组，重启后该表出现「旧的被删、新的被写」（实测 instance_binding 一写一删）。
+		// 该表不参与按归属增量（不在 scopedTables），归属值本身不承载语义，只要求两侧一致。
+		appendRow(tblInstanceBinding, row.UUID, rowData{
 			key: mirrorKey(row.UUID),
 			fp:  fingerprint(row.Namespace, row.Generation, row.Mode, row.WorkDir),
 			values: func() ([]any, error) {
@@ -73,7 +87,7 @@ func planState(st State, nowUnixMilli int64) ([tableCount][]rowData, error) {
 	for _, row := range st.Aux {
 		row := row
 		fp := fingerprint(row.Config, row.Payload)
-		plans[tblSourceAux] = append(plans[tblSourceAux], rowData{
+		appendRow(tblSourceAux, row.Key, rowData{
 			key: mirrorKey(row.Key),
 			fp:  fp,
 			values: func() ([]any, error) {
@@ -84,7 +98,7 @@ func planState(st State, nowUnixMilli int64) ([tableCount][]rowData, error) {
 	for _, row := range st.WAL {
 		row := row
 		fp := WALFingerprint(row)
-		plans[tblSourceWAL] = append(plans[tblSourceWAL], rowData{
+		appendRow(tblSourceWAL, row.Key, rowData{
 			key: mirrorKey(row.Key, row.Seq, row.EventID, row.RecordStart, row.RecordEnd),
 			fp:  fp,
 			values: func() ([]any, error) {
@@ -96,7 +110,7 @@ func planState(st State, nowUnixMilli int64) ([tableCount][]rowData, error) {
 	}
 	for _, row := range st.Batches {
 		row := row
-		plans[tblDeliveryBatch] = append(plans[tblDeliveryBatch], rowData{
+		appendRow(tblDeliveryBatch, row.Key, rowData{
 			key: mirrorKey(row.Key, row.Ordinal),
 			fp:  fingerprint(row.StartPos, row.EndPos, row.State),
 			values: func() ([]any, error) {

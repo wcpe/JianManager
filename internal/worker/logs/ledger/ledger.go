@@ -153,14 +153,48 @@ type Ledger struct {
 	entries map[SourceKey]*Entry
 	// nowUnix 可注入时钟，便于测试。
 	nowUnix func() int64
+	// revisions 记录每个源的**修订号**：任何一次改变该源账本内容的操作都让它 +1。
+	//
+	// 为什么需要它：上层（采集索引）必须知道「自上次持久化以来哪些源变了」，才能把持久化
+	// 成本从 O(全部源) 降到 O(变更源)。判据必须由账本自己在**每个写路径**上推进——若改成
+	// 「上层比较快照内容」，上层就得先把全部源的账本深拷贝一遍（含每个源的缺口切片），
+	// 生产实测 74.7 万条缺口仅深拷贝就要数十毫秒起，等于把要消除的成本换个地方付；
+	// 若改成「约定上层记得标记」，迟早会有写路径漏标 → 静默丢更新。
+	// 这里让推进点与锁一起落在写路径内，漏标不可能发生（新增写方法时编译器不会提醒，
+	// 但 TestLedgerRevisionAdvancesOnEveryMutation 会）。
+	//
+	// 读方法（Get/Snapshot/UnresolvedGapCount 等）**不**推进修订号。
+	revisions map[SourceKey]uint64
 }
 
 // New 创建空账本。
 func New() *Ledger {
 	return &Ledger{
-		entries: make(map[SourceKey]*Entry),
-		nowUnix: func() int64 { return 0 },
+		entries:   make(map[SourceKey]*Entry),
+		revisions: make(map[SourceKey]uint64),
+		nowUnix:   func() int64 { return 0 },
 	}
+}
+
+// Revision 返回该源当前的修订号；源未注册时为 0。
+//
+// 调用方（采集索引）用它做「只持久化变更源」的判据：两次修订号相同即该源账本内容未变。
+// 修订号只在进程内有效，不落库、不跨重启可比（持久化只关心「与上次写库相比是否变化」）。
+func (l *Ledger) Revision(key SourceKey) uint64 {
+	if l == nil {
+		return 0
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.revisions[key]
+}
+
+// touch 推进该源的修订号。必须在持有写锁的写路径内调用（见 Ledger.revisions 的注释）。
+func (l *Ledger) touch(key SourceKey) {
+	if l.revisions == nil {
+		l.revisions = make(map[SourceKey]uint64)
+	}
+	l.revisions[key]++
 }
 
 // Snapshot 返回全部账本条目副本，供 Worker 持久化和崩溃恢复使用。
@@ -632,6 +666,11 @@ func (l *Ledger) require(key SourceKey) (*Entry, error) {
 	if !ok {
 		return nil, fmt.Errorf("ledger: source %s not registered", key)
 	}
+	// 修订号在此推进（而不是逐个写方法里写 `l.touch(key)`）：require 是所有**写路径**
+	// 的统一入口（读路径用 RLock 直取 entries），因此推进点与锁一起落在唯一的必经之地，
+	// 新增写方法时不可能漏标。只有「确实改变了内容」的调用方才需要留意不误报——
+	// 误报只会多写几行（正确性无损），漏报会静默丢更新，故宁可保守。
+	l.touch(key)
 	return e, nil
 }
 

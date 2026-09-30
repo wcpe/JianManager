@@ -62,6 +62,15 @@ CREATE TABLE IF NOT EXISTS position (
 -- 复合主键 (key, id)」。原因：全局 AUTOINCREMENT 的行身份无法在重启后稳定复现（同一缺口在
 -- 不同进程里会拿到不同 id），而「只写变更行」要求行身份可稳定推导；复合主键仍满足 spec 的
 -- 目的（逐条可查、可人工解算），且缺口顺序按 id 保持。其余列与 spec 逐字一致。
+-- 与 spec §2.2 的第二处差异：补 WITHOUT ROWID，并**不再**另建 idx_gap_key_resolved。
+--
+-- 为什么：gap 的主键 (key, id) 里的 key 是形如
+-- inst:147/file/instance:<uuid>@worker:<uuid> 的长文本（实测 85 B）。rowid 表会把整条主键
+-- 在「主键索引 + 二级索引」里各存一份（=2 份），WITHOUT ROWID 只保留主键聚簇一份；
+-- 而 idx_gap_key_resolved 的前缀（key）与主键前缀完全重复，去掉它不损失任何查询面
+-- （按 key 查缺口仍走主键，resolved 过滤在已定位的行上做）。生产 307MB 副本实测：
+-- 746,884 条缺口由 db 450.9 MB / WAL 峰值 452.8 MB 降到 276.7 MB / 278.4 MB。
+-- 仍满足 spec 的目的（逐条可查、可人工解算），且缺口顺序按 id 保持。
 CREATE TABLE IF NOT EXISTS gap (
   id         INTEGER NOT NULL,   -- 该源内缺口序号（从 0 起，保持缺口顺序）
   key        TEXT NOT NULL REFERENCES source(key),
@@ -72,8 +81,9 @@ CREATE TABLE IF NOT EXISTS gap (
   resolved   INTEGER NOT NULL DEFAULT 0,
   resolution TEXT,
   PRIMARY KEY (key, id)
-);
-CREATE INDEX IF NOT EXISTS idx_gap_key_resolved ON gap(key, resolved);
+) WITHOUT ROWID;
+-- 兼容已被旧版本建过表的库：老库会残留这个冗余索引，显式删除（幂等，不存在时无操作）。
+DROP INDEX IF EXISTS idx_gap_key_resolved;
 -- 投影发布状态（重启增量对账的记账面）
 CREATE TABLE IF NOT EXISTS projection (
   key        TEXT PRIMARY KEY REFERENCES source(key),
@@ -269,6 +279,9 @@ var loadColumns = [tableCount][]string{
 // values 惰性求值：未变更的行不会调用它，因此不会为未变更的 WAL 正文重复做 JSON 编码——
 // 这是「只写变更行」在 CPU 侧也不会退化到 O(全量) 的关键。
 type rowData struct {
+	// owner 是该行的归属键（表主键首列；无归属表为 ownerNone）。镜像按它分组，
+	// 增量写入据此只处理变更源的行。
+	owner  string
 	key    string
 	fp     uint64
 	values func() ([]any, error)
@@ -282,9 +295,19 @@ type tableSpec struct {
 	// mirrorSQL 读取 (主键列..., fp)；fpSelf 为 true 时 fp 取自表内 fp 列。
 	mirrorSQL string
 	fpSelf    bool
-	// upsert/deleteStmt 是写入与删除语句。
+	// upsert/deleteStmt 是写入与删除语句（单行形态）。
 	upsert     string
 	deleteStmt string
+	// upsertBatch 是多值批量 UPSERT 的语句模板，`%s` 处填 n 组行元组与 onConflict 子句。
+	//
+	// 为什么要批量：逐行 ExecContext 每一行都要重新解析并规划一次语句；迁移要写 74 万行时
+	// 这部分（而非磁盘）是主导成本——生产 307MB 副本实测逐行 UPSERT 43.0s、每语句 32 行 14.8s。
+	// 空模板表示该表退回逐行写入（恒为小体量的表无需批量）。
+	upsertBatch string
+	// columns 是表上的全部列名（批量写入时用于拼占位符）。
+	columns []string
+	// onConflict 是 upsertBatch 模板里 `%s` 的第二项（冲突时的更新子句）。
+	onConflict string
 	// orderBy 是加载时的排序（保持行序语义）。
 	orderBy string
 }
@@ -324,6 +347,11 @@ var specs = [tableCount]tableSpec{
 			ON CONFLICT(key, id) DO UPDATE SET start_pos=excluded.start_pos, end_pos=excluded.end_pos,
 				reason=excluded.reason, detail=excluded.detail, resolved=excluded.resolved,
 				resolution=excluded.resolution`,
+		upsertBatch: "INSERT INTO gap (%s) VALUES %s",
+		columns:     []string{"key", "id", "start_pos", "end_pos", "reason", "detail", "resolved", "resolution"},
+		onConflict: `ON CONFLICT(key, id) DO UPDATE SET start_pos=excluded.start_pos, end_pos=excluded.end_pos,
+			reason=excluded.reason, detail=excluded.detail, resolved=excluded.resolved,
+			resolution=excluded.resolution`,
 		deleteStmt: "DELETE FROM gap WHERE key = ? AND id = ?",
 		orderBy:    "key, id",
 	},
@@ -369,6 +397,11 @@ var specs = [tableCount]tableSpec{
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(key, seq, event_id, record_start, record_end) DO UPDATE SET
 				appended=excluded.appended, durable=excluded.durable, body=excluded.body, fp=excluded.fp`,
+		upsertBatch: "INSERT INTO source_wal (%s) VALUES %s",
+		columns: []string{"key", "seq", "event_id", "record_start", "record_end", "appended", "durable",
+			"body", "fp"},
+		onConflict: `ON CONFLICT(key, seq, event_id, record_start, record_end) DO UPDATE SET
+			appended=excluded.appended, durable=excluded.durable, body=excluded.body, fp=excluded.fp`,
 		deleteStmt: "DELETE FROM source_wal WHERE key = ? AND seq = ? AND event_id = ? AND record_start = ? AND record_end = ?",
 		orderBy:    "seq, event_id, record_start, record_end",
 	},
@@ -379,6 +412,10 @@ var specs = [tableCount]tableSpec{
 		upsert: `INSERT INTO delivery_batch (key, ordinal, start_pos, end_pos, state) VALUES (?, ?, ?, ?, ?)
 			ON CONFLICT(key, ordinal) DO UPDATE SET start_pos=excluded.start_pos, end_pos=excluded.end_pos,
 				state=excluded.state`,
+		upsertBatch: "INSERT INTO delivery_batch (%s) VALUES %s",
+		columns:     []string{"key", "ordinal", "start_pos", "end_pos", "state"},
+		onConflict: `ON CONFLICT(key, ordinal) DO UPDATE SET start_pos=excluded.start_pos,
+			end_pos=excluded.end_pos, state=excluded.state`,
 		deleteStmt: "DELETE FROM delivery_batch WHERE key = ? AND ordinal = ?",
 		orderBy:    "key, ordinal",
 	},
@@ -386,8 +423,16 @@ var specs = [tableCount]tableSpec{
 
 // fingerprint 计算一组列值的变更判据。
 //
-// 类型先归一化（bool→0/1、有符号整数→int64、无符号整数→int64），使「写入侧传入的 Go 值」与
-// 「SQLite 读回的值」在同一逻辑内容下得到同一结果——镜像与写入两侧因此可以共用同一函数。
+// 归一化必须让「写入侧传入的 Go 值」与「SQLite 读回的值」在同一逻辑内容下得到同一结果，
+// 否则镜像（读回值算）与写入（Go 值算）两侧会给出不同指纹，每一次重启后的首次写入都会把
+// 该表**全部行**误判为「已变更」而整表重写。归一化因此**必须逐类型覆盖**库会读回的所有形态：
+//   - bool → 0/1：写入侧是 Go bool，读回是 INTEGER(int64)，两边必须同编；
+//   - int / uint64 / int64 → int64：驱动对 INTEGER 一律给 int64；
+//   - string / []byte → 同编：驱动对 TEXT 给 string、对 BLOB 给 []byte。
+//
+// 生产 307MB 副本实测教训：这里曾漏掉 bool，结果 position/gap/projection 三张表共 746,884 行
+// 在每次重启后被判定为全变更 → 单次持久化 47s（整表重写），Stop 因此稳定耗时 3s+。
+// TestFingerprintMatchesBetweenWriteAndRead 用「读回值」与「写入值」两路比对守住这条。
 func fingerprint(values ...any) uint64 {
 	h := fnv.New64a()
 	for _, value := range values {
@@ -397,16 +442,19 @@ func fingerprint(values ...any) uint64 {
 }
 
 // encodeValue 把单个值按「带类型标记 + 长度前缀」写入哈希，避免不同列拼接歧义
-// （例如 ("ab","c") 与 ("a","bc") 必须得到不同结果）。
+// （例如 ("ab","c") 与 ("a","bc") 必须得到不同结果），并把同逻辑内容的多种 Go 类型
+// 归一到同一编码（bool/0/1、int/int64/uint64、string/[]byte）。
 func encodeValue(h interface{ Write([]byte) (int, error) }, value any) {
 	switch v := value.(type) {
 	case nil:
 		_, _ = h.Write([]byte{0})
 	case bool:
+		// 与 INTEGER 读回值同编：SQLite 没有布尔类型，写入 1/0、读回 int64。
+		_, _ = h.Write([]byte{2})
 		if v {
-			_, _ = h.Write([]byte{1, 1})
+			encodeInt(h, 1)
 		} else {
-			_, _ = h.Write([]byte{1, 0})
+			encodeInt(h, 0)
 		}
 	case int64:
 		_, _ = h.Write([]byte{2})
@@ -421,7 +469,9 @@ func encodeValue(h interface{ Write([]byte) (int, error) }, value any) {
 		_, _ = h.Write([]byte{3})
 		encodeBytes(h, []byte(v))
 	case []byte:
-		_, _ = h.Write([]byte{4})
+		// 与 TEXT 读回值同编：驱动对 TEXT 给 string、对 BLOB 给 []byte，二者逻辑内容相同时
+		// 必须同指纹（nullableBytes 写入的 []byte 会以 TEXT 形态读回）。
+		_, _ = h.Write([]byte{3})
 		encodeBytes(h, v)
 	default:
 		// 其余类型（不应出现）按字符串处理，保证不会静默当成相同内容。

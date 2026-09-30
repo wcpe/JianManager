@@ -663,3 +663,126 @@ func TestLoadingPreservesGapOrder(t *testing.T) {
 		t.Fatalf("缺口解算结果不正确: %+v", loaded.Gaps)
 	}
 }
+
+// FR-496 加固：指纹归一化必须让「写入侧 Go 值」与「读回值」得到同一指纹——否则每次重启后
+// 首次写入都会把整张表误判为「全部变更」而整表重写（生产 307MB 副本实测：74.7 万行缺口
+// 及 position/projection 全表，单次持久化 47s / Stop 3s+，根因是 bool 字段的镜像与写入两侧
+// 编码不同）。
+//
+// 转红说明：把 encodeValue 的 bool 分支改回「自成一类」（镜像侧读回 int64、写入侧 bool），
+// 或让 []byte 与 string 不同编，本用例即红。
+func TestFingerprintMatchesBetweenWriteAndRead(t *testing.T) {
+	// 每种「写入侧形态」都给出其「读回形态」，两者必须同指纹。
+	cases := [][2][]any{
+		{[]any{true}, []any{int64(1)}},   // bool 落库读回 INTEGER
+		{[]any{false}, []any{int64(0)}},  // bool 落库读回 INTEGER
+		{[]any{int(7)}, []any{int64(7)}}, // int 落库读回 INTEGER
+		{[]any{uint64(9)}, []any{int64(9)}},
+		{[]any{int64(9)}, []any{int64(9)}},
+		{[]any{"abc"}, []any{[]byte("abc")}}, // TEXT 驱动读回 string；BLOB 读回 []byte
+		{[]any{nil}, []any{nil}},
+	}
+	for index, row := range cases {
+		write, read := row[0], row[1]
+		if fingerprint(write...) != fingerprint(read...) {
+			t.Fatalf("用例 %d：写入侧 %v 与读回侧 %v 指纹不一致——重启后的首次写入会把该行误判为变更而整表重写",
+				index, write, read)
+		}
+	}
+	// 不同内容仍必须不同指纹（防把归一化做成「全一样」）。
+	if fingerprint(true) == fingerprint(false) {
+		t.Fatal("true/false 指纹不得相同")
+	}
+	if fingerprint(int64(1)) == fingerprint(int64(2)) {
+		t.Fatal("1/2 指纹不得相同")
+	}
+}
+
+// FR-496 加固：**重启后**幂等 Apply 必须零写入（指纹口径两侧一致的直接回归）。
+//
+// 转红说明：把 encodeValue 的 bool 分支改回自成一类，本用例在「首次打开→读镜像→Apply」
+// 时就会把带 bool 字段的表（position/projection/gap）全部重写一遍，RowsWritten 远大于 0。
+func TestStoreApplyAfterReopenIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.db")
+	st := fixtureState(4)
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("打开失败: %v", err)
+	}
+	if _, err := store.Apply(st); err != nil {
+		t.Fatalf("写入失败: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("关闭失败: %v", err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("重开失败: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	// 重读出的状态与期望一致（含 bool 字段）。
+	loaded, err := reopened.Load()
+	if err != nil {
+		t.Fatalf("读取失败: %v", err)
+	}
+	assertSameState(t, st, loaded)
+	stats, err := reopened.Apply(st)
+	if err != nil {
+		t.Fatalf("重写失败: %v", err)
+	}
+	if stats.RowsWritten != 0 || stats.RowsDeleted != 0 {
+		t.Fatalf("重启后首次 Apply 必须零写入（指纹两侧一致），实测写 %d 删 %d",
+			stats.RowsWritten, stats.RowsDeleted)
+	}
+}
+
+// FR-496 加固（F3）：关闭索引句柄后 `-wal` 必须被归并截断，不得残留巨量 WAL。
+//
+// 转红说明：把 Store.Close 改回「只关连接不显式 checkpoint」（旧实现），本用例即红——
+// sql.DB 的连接池关闭不保证以干净方式收尾，大事务后 `-wal` 会留在盘上数百 MB。
+func TestStoreCloseCheckpointsWALAway(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("打开失败: %v", err)
+	}
+	// 写入足够多的行，让 WAL 明显大于零。
+	st := fixtureState(64)
+	if _, err := store.Apply(st); err != nil {
+		t.Fatalf("写入失败: %v", err)
+	}
+	if store.WALBytes() <= 0 {
+		t.Fatalf("大事务后 WAL 应非零（实测 %d）", store.WALBytes())
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("关闭失败: %v", err)
+	}
+	if info, err := os.Stat(path + "-wal"); err == nil {
+		t.Fatalf("关闭后 -wal 应被归并删除，实测仍存在（%d 字节）", info.Size())
+	}
+	if info, err := os.Stat(path + "-shm"); err == nil {
+		t.Fatalf("关闭后 -shm 应被清理，实测仍存在（%d 字节）", info.Size())
+	}
+	// 关闭后库仍可正常打开。
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("重开失败: %v", err)
+	}
+	if err := reopened.IntegrityCheck(); err != nil {
+		t.Fatalf("关闭+重开后 integrity_check 未通过: %v", err)
+	}
+	_ = reopened.Close()
+}
+
+// FR-496 加固：批量写入语句必须与表定义逐列对齐——列数不符时整批语句作废，绝不串位写入。
+func TestBuildBatchUpsertRejectsColumnMismatch(t *testing.T) {
+	spec := specs[tblGap]
+	rows := []pendingRow{{row: rowData{values: func() ([]any, error) {
+		return []any{"k", int64(0)}, nil // 只有 2 列，与 gap 的 8 列不符
+	}}}}
+	if _, _, _, err := buildBatchUpsert(spec, rows); err == nil {
+		t.Fatal("列数不符时必须报错（否则批量语句会把列串位，静默写错数据）")
+	}
+}

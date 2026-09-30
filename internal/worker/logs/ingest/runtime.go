@@ -95,6 +95,22 @@ type Manager struct {
 	// 启动时自动迁移旧 ingest.state.json（校验失败拒绝启动）。nil 表示尚未打开（
 	// 测试直接构造 Manager 的场景在首次 persist 时按需打开）。
 	index *stateindex.Store
+	// persistedRev 记录「上次持久化时」各源账本的修订号（见 ledger.Ledger.Revision）。
+	// persist 据此只处理变更源，把每次持久化的成本从 O(全部源的行数) 降到 O(变更源的行数)。
+	//
+	// 基线在 Register（恢复完账本、建好 pipeline）的**最后**一步写入，因此「刚启动」天然是
+	// 干净的：内存状态与库内容一致，无需任何写入即达成一致。
+	persistedRev map[string]uint64
+	// persistedCover 记录「上次持久化时」各源的段存储覆盖水位。
+	//
+	// 为什么修订号之外还需要它：WAL 行是「内联正文」还是「只存引用」由
+	// (EventsStored, EventsStoredThrough) 决定（B1a 的按条判据），而这两个字段由投递路径
+	// 直接改 state——账本修订号看不见它。若不单独跟踪，段存储覆盖推进后旧的内联行不会被
+	// 改写成引用行（或反之），源会在重启后按错误的形态恢复。
+	//
+	// 这里用「现值与上次记录值比较」而不是「在上层每个改动点显式标记」：前者不需要任何人
+	// 记得标记（漏标记即静默丢更新），且比较只是两个标量，代价可忽略。
+	persistedCover map[string]coverSignature
 	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
 	events              *eventstore.Store
 	verificationTimeout time.Duration
@@ -644,6 +660,19 @@ func (m *Manager) Register(source SourceConfig) error {
 		m.state.SourceConfigs = make(map[string]SourceConfig)
 	}
 	m.state.SourceConfigs[key] = source
+	// 持久化基线：账本刚由 Restore/WAL.Restore 填好，内存状态与索引内容一致，
+	// 因此这里直接取当前修订号与段覆盖签名作为「已落库」的起点——否则启动后的首轮
+	// persist 会把每个源都当成变更源重写一遍（对 13 源现场就是几 MB 的无效写入）。
+	if p.Ledger() != nil {
+		if m.persistedRev == nil {
+			m.persistedRev = make(map[string]uint64)
+		}
+		if m.persistedCover == nil {
+			m.persistedCover = make(map[string]coverSignature)
+		}
+		m.persistedRev[key] = p.Ledger().Revision(p.Key())
+		m.persistedCover[key] = coverSignatureOf(m.state.Sources[key])
+	}
 	return nil
 }
 
@@ -684,9 +713,40 @@ func (m *Manager) Stop() error {
 	if err := m.persist(); err != nil {
 		return err
 	}
+	// 关闭索引句柄：显式把 WAL 归并回主库（见 stateindex.Store.Close）。
+	//
+	// 为什么必须在 Stop 里做（而不是留给进程退出）：演练实测不归并时 `-wal` 会残留到
+	// 数百 MB——迁移的一次性大事务写完即有 453.6 MB，事后进程被 kill 就永久留在盘上。
+	// 这里只有索引句柄关掉了，Manager 之后**不能再 persist**（这是 Stop 的语义）。
 	// 事件段句柄在持久化之后关闭：先让 state 元数据落定，再释放段写入端。
+	if err := m.CloseIndex(); err != nil {
+		return err
+	}
 	if m.events != nil {
 		return m.events.Close()
+	}
+	return nil
+}
+
+// CloseIndex 关闭采集索引句柄并归并 WAL。幂等：已关闭时是空操作。
+//
+// 单独暴露是为了让「只关索引、不动事件段」的场景（Stop 的分步、测试的崩溃现场模拟）
+// 不必调用完整的 Stop；调用后 Manager 不能再 persist，直到重新打开索引。
+func (m *Manager) CloseIndex() error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	store := m.index
+	m.index = nil
+	m.persistedRev = nil
+	m.persistedCover = nil
+	m.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	if err := store.Close(); err != nil {
+		return fmt.Errorf("ingest: 关闭采集索引失败: %w", err)
 	}
 	return nil
 }
@@ -2043,29 +2103,21 @@ func (m *Manager) load() error {
 
 // persist 把内存状态增量写入采集索引（FR-496 spec §2.3）：只写本批次变更的行（UPSERT），
 // 事务提交即持久；未变更行不产生任何写语句（空闲轮询不重写历史）。
+//
+// 成本按「变更源」收敛（这是「60 源下单次持久化 ≤50ms」的关键）：
+//   - 只有账本修订号变化、或段覆盖签名变化的源，才重建 WAL 行与账本派生行
+//     （gap/source_wal/delivery_batch，占行数绝对多数）；
+//   - 根表（source/position/projection/source_aux/instance_binding）行数为 O(源数)，
+//     每轮由索引层全量比对（几百行量级），因此「投影代次 / 发布待定 / 实例绑定」这类由
+//     Manager 直接改 state 的字段无须任何显式标记即天然正确——但前提是**每轮都必须跑
+//     apply**：跳过整次写入等于连根表也不比对了，投影代次等元数据变更会静默丢失
+//     （曾以 instances 重启用例转红抓到：发布后的 generation 未落库，重启后重复投影）。
+//
+// 生产 307MB 副本实测：修复前每次持久化对全部 746,884 行做规划+比对（≈3.0s），
+// 且因指纹口径缺陷每次都整表重写（47s）；修复后无变更轮次只比对几百行根表（毫秒级）。
 func (m *Manager) persist() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for key, p := range m.pipes {
-		prev := m.state.Sources[key]
-		entry := persistedSource{Ledger: p.Ledger().Snapshot(), ProjectionGeneration: prev.ProjectionGeneration,
-			PublicationPending: prev.PublicationPending, EventsStored: prev.EventsStored,
-			EventsStoredThrough: prev.EventsStoredThrough}
-		// B1a：按条切分——段存储已覆盖（record_end <= EventsStoredThrough）的条目只写引用；
-		// 其余（尚未投递、正文未入库，或段存储不可用）必须内联保存，绝不丢正文。
-		through := prev.EventsStoredThrough
-		refs, inline := p.WAL().SnapshotSplit(func(ev logtypes.Event) bool {
-			return entry.EventsStored && through > 0 && ev.Record.End <= through
-		})
-		entry.WALRefs = refs
-		entry.WAL = append(entry.WAL, inline...)
-		// 事件体已在磁盘段时不写回内联切片——这正是原先 state 涨到 180MB、每次 persist
-		// 触发 130MB MarshalIndent 的根源（FR-484 阶段0 量测）。
-		if !entry.EventsStored {
-			entry.Events = append(entry.Events, prev.Events...)
-		}
-		m.state.Sources[key] = entry
-	}
 	if m.index == nil {
 		// 直接构造 Manager 的测试路径：按需打开索引（不触发迁移）。
 		store, err := stateindex.Open(m.indexPath())
@@ -2074,14 +2126,85 @@ func (m *Manager) persist() error {
 		}
 		m.index = store
 	}
-	desired, err := m.stateToIndexState(&m.state)
+	if m.persistedRev == nil {
+		m.persistedRev = make(map[string]uint64)
+	}
+	if m.persistedCover == nil {
+		m.persistedCover = make(map[string]coverSignature)
+	}
+	changed := make([]string, 0, len(m.pipes))
+	// 源集合 = 管道（生产全部源都有管道）∪ 内存状态（测试可能直接构造只有状态的管理器）。
+	// 只有状态的源没有账本修订号可查（管道才是权威），按「每轮都变更」处理，
+	// 与旧的全量写入行为等价——这是测试路径的正确性底线，生产路径不经过这里。
+	keys := make(map[string]struct{}, len(m.pipes)+len(m.state.Sources))
+	for key := range m.pipes {
+		keys[key] = struct{}{}
+	}
+	for key := range m.state.Sources {
+		keys[key] = struct{}{}
+	}
+	for key := range keys {
+		p := m.pipes[key]
+		if p == nil {
+			// 无管道：没有修订号可依据，按变更处理（重建该源的账本派生行）。
+			changed = append(changed, key)
+			continue
+		}
+		rev := p.Ledger().Revision(p.Key())
+		cover := coverSignatureOf(m.state.Sources[key])
+		if m.persistedRev[key] == rev && m.persistedCover[key] == cover {
+			continue // 账本与段覆盖都未变：该源本轮不参与行规划（只写变更行的前提）
+		}
+		m.rebuildSource(key, p)
+		m.persistedRev[key] = rev
+		m.persistedCover[key] = coverSignatureOf(m.state.Sources[key])
+		changed = append(changed, key)
+	}
+	// 增量状态：账本派生行只按变更源构建，根行恒为全量（行数为 O(源数)，便宜且兜住
+	// 元数据变更）；配合 ApplyScoped 让未变更源的账本派生行根本不参与规划。
+	desired, err := m.stateToIndexStateScoped(&m.state, changed)
 	if err != nil {
 		return err
 	}
-	if _, err := m.index.Apply(desired); err != nil {
+	if _, err := m.index.ApplyScoped(desired, changed); err != nil {
 		return fmt.Errorf("ingest: 持久化采集索引失败: %w", err)
 	}
 	return nil
+}
+
+// coverSignature 是「WAL 以何种形态落库」的判据（B1a 按条切分的内联/引用决策输入）。
+type coverSignature struct {
+	eventsStored bool
+	through      uint64
+}
+
+func coverSignatureOf(saved persistedSource) coverSignature {
+	return coverSignature{eventsStored: saved.EventsStored, through: saved.EventsStoredThrough}
+}
+
+// rebuildSource 用该源 pipeline 的当前账本/WAL 快照重建 state 条目。
+//
+// 它只重建**内容会随采集推进而变化**的部分（账本、WAL、事件覆盖水位）；投影代次、发布待定、
+// 内联事件等由 Manager 自己维护的字段原样保留（这些字段的变更由索引层的根表全量比对兜住）。
+func (m *Manager) rebuildSource(key string, p *pipeline.Pipeline) {
+	prev := m.state.Sources[key]
+	entry := persistedSource{Ledger: p.Ledger().Snapshot(), ProjectionGeneration: prev.ProjectionGeneration,
+		PublicationPending: prev.PublicationPending, EventsStored: prev.EventsStored,
+		EventsStoredThrough: prev.EventsStoredThrough}
+	// B1a：按条切分——段存储已覆盖（record_end <= EventsStoredThrough）的条目只写引用；
+	// 其余（尚未投递、正文未入库，或段存储不可用）必须内联保存，绝不丢正文。
+	through := prev.EventsStoredThrough
+	refs, inline := p.WAL().SnapshotSplit(func(ev logtypes.Event) bool {
+		return entry.EventsStored && through > 0 && ev.Record.End <= through
+	})
+	entry.WALRefs = refs
+	entry.WAL = append(entry.WAL, inline...)
+	// 事件体已在磁盘段时不写回内联切片——这正是原先 state 涨到 180MB、每次 persist
+	// 触发 130MB MarshalIndent 的根源（FR-484 阶段0 量测）。
+	if !entry.EventsStored {
+		entry.Events = append(entry.Events, prev.Events...)
+	}
+	m.state.Sources[key] = entry
 }
 
 func newWAL(led *ledger.Ledger, key ledger.SourceKey) *acquire.WAL {

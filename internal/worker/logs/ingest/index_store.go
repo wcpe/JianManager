@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -95,6 +96,12 @@ func (m *Manager) migrateLegacyState(legacy *persistedState) error {
 	}
 	if _, err := m.index.Apply(desired); err != nil {
 		return fmt.Errorf("ingest: 迁移写入索引失败（拒绝启动采集）: %w", err)
+	}
+	// 迁移是一次性大事务：写完立刻把 WAL 归并回主库，避免带着 GB 级 WAL 进入稳态
+	// （生产演练实测：不归并时 -wal 残留 453.6 MB）。归并失败不改变迁移结果——
+	// 数据仍在 WAL 中且可见，降级为「下次打开时自动归并」，故只告警不失败。
+	if err := m.index.Checkpoint(); err != nil {
+		slog.Warn("采集索引迁移后 WAL 归并未完成（数据仍可见，将延后归并）", "error", err)
 	}
 	if err := m.index.IntegrityCheck(); err != nil {
 		return fmt.Errorf("ingest: 迁移后索引完整性校验失败（拒绝启动采集）: %w", err)
@@ -284,6 +291,37 @@ func ledgerCoreOf(entry *ledger.Entry) *indexLedgerCore {
 		DeliveryState: entry.DeliveryState, Segments: entry.Segments, Rotations: entry.Rotations,
 		RecoveryRefs: entry.RecoveryRefs, ErrorCount: entry.ErrorCount, IngestSeq: entry.IngestSeq,
 	}
+}
+
+// stateToIndexStateScoped 是 stateToIndexState 的增量形态：账本派生行（gap/source_wal/
+// delivery_batch）只按 changed 里的源构建，根行（source/position/projection/source_aux/
+// instance_binding）恒为全量。
+//
+// 为什么根行恒全量：它们的行数是 O(源数)（几百行级别），全量构建+索引层全量比对每轮只花
+// 毫秒级；而它们承载投影代次/发布待定/实例绑定等由 Manager 直接改 state 的字段，
+// 全量比对让这些字段的变更无需任何显式标记即正确落库。
+func (m *Manager) stateToIndexStateScoped(st *persistedState, changed []string) (stateindex.State, error) {
+	// 先按 changed 构建账本派生行（该函数只遍历给定源）。
+	scoped := &persistedState{Sources: make(map[string]persistedSource, len(changed))}
+	for _, key := range changed {
+		if saved, ok := st.Sources[key]; ok {
+			scoped.Sources[key] = saved
+		}
+	}
+	partial, err := m.stateToIndexState(scoped)
+	if err != nil {
+		return stateindex.State{}, err
+	}
+	// 再补上全部根行：先全量构建再覆盖派生行（source_aux 也是根，直接全量）。
+	full, err := m.stateToIndexState(st)
+	if err != nil {
+		return stateindex.State{}, err
+	}
+	full.Gaps = partial.Gaps
+	full.WAL = partial.WAL
+	full.Batches = partial.Batches
+	// source/position/projection/source_aux/instances 都在 full 里。
+	return full, nil
 }
 
 // ledgerRowsOf 把「首个账本条目」拆成 position/gap/delivery_batch 行（spec §2.2 各表只存一处）。
@@ -628,11 +666,42 @@ func (m *Manager) PersistSamples() []stateindex.Sample {
 }
 
 // PersistLatency 返回持久化耗时采样环上的分位（真机验收「单次持久化 ≤50ms」的读数，spec §3.3）。
+//
+// 注意：采样环随索引句柄存在，Stop/CloseIndex 之后即被清空——需在停止**之前**读数。
 func (m *Manager) PersistLatency() stateindex.Latency {
 	if m == nil || m.index == nil {
 		return stateindex.Latency{}
 	}
 	return m.index.Latency()
+}
+
+// PersistNow 立即执行一次持久化并把本次写入统计返回给调用方。
+//
+// 用途：真机/演练取「单次持久化」的现场读数——验收判据是「60 源下单次持久化 ≤50ms」，
+// 需要能主动驱动一次并直接读到本次的行数/字节/耗时，而不是只能等轮询恰好触发。
+// 语义与轮询路径完全一致（同一 persist），因此读到的就是生产口径。
+func (m *Manager) PersistNow() (stateindex.Stats, error) {
+	if m == nil {
+		return stateindex.Stats{}, nil
+	}
+	if err := m.persist(); err != nil {
+		return stateindex.Stats{}, err
+	}
+	m.mu.Lock()
+	index := m.index
+	m.mu.Unlock()
+	if index == nil {
+		return stateindex.Stats{}, nil
+	}
+	samples := index.Samples()
+	if len(samples) == 0 {
+		return stateindex.Stats{}, nil
+	}
+	last := samples[len(samples)-1]
+	return stateindex.Stats{
+		RowsWritten: last.RowsWritten, RowsDeleted: last.RowsDeleted,
+		RowsPlanned: last.RowsPlanned, BytesWritten: last.BytesWritten, Duration: last.Duration,
+	}, nil
 }
 
 // ExportIndexJSON 只读导出索引内容为旧 ingest.state.json 同等结构的 JSON（排障与回滚参考）。
