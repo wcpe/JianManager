@@ -119,6 +119,10 @@ type Manager struct {
 	verifyBackoffMax time.Duration
 	capacityProvider func() (acquire.CapacityBudget, error)
 	recoveryHold     func(SourceConfig, string) (bool, string)
+	// reconcile 是启动增量对账（FR-497）的生效配置（已归一化）。
+	reconcile ReconcileConfig
+	// reconcileReports 保留最近一次启动对账的逐源结论（只读观测面）。
+	reconcileReports []ReconcileReport
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
 	sourceErrs map[string]string
 	// pendingMaxStream/pendingMaxTotal 是 pending 暂存上限（M-6）；0 表示用默认常量。
@@ -170,6 +174,9 @@ type Options struct {
 	// VLRoute returns the Catalog-selected client and whether publication is
 	// frozen. Nil preserves initial HOT behavior.
 	VLRoute func(SourceConfig) (*vlsup.Client, bool, error)
+	// Reconcile 是启动增量对账（FR-497）的配置面；nil 表示用默认（启用，
+	// 并发 4、单源超时 30s、单查询超时 10s）。配置键登记见 spec §5。
+	Reconcile *ReconcileConfig
 }
 
 type CutoverReadiness struct {
@@ -420,6 +427,7 @@ func New(opts Options) (*Manager, error) {
 		verificationTimeout: opts.VerificationTimeout,
 		capacityProvider:    opts.CapacityProvider,
 		recoveryHold:        opts.RecoveryHold,
+		reconcile:           reconcileConfigOf(opts.Reconcile),
 	}
 	if m.verificationTimeout <= 0 {
 		// 5 分钟（原 30 秒）。依据 2026-09-28 生产实测：VL 的 /insert/jsonline 是「接收即
@@ -468,6 +476,14 @@ func New(opts Options) (*Manager, error) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	// 启动恢复分三阶段（FR-497）：
+	//   ① 登记全部源并重建权威集合（顺序与旧实现一致）；
+	//   ② 并发对账「源 × UTC 天」的条数（只读 VL，双超时）；
+	//   ③ 按源重发：只补缺失天 / 零重发 / 回退整窗（对账不可信时）。
+	//
+	// 为什么要拆开：对账是网络查询，必须能并发且失败只影响单源；而登记与重发仍要保持
+	// 既有的确定性顺序（catalog 发布、段存储、回收责任推进都不接受乱序）。
+	recovery := make([]startupSource, 0, len(keys))
 	for _, sourceKey := range keys {
 		source := restoredSources[sourceKey]
 		if err := m.Register(source); err != nil {
@@ -481,27 +497,20 @@ func New(opts Options) (*Manager, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(recoveryEvents) > 0 && m.vl != nil {
-			// A new VL data root or a lost projection response must never rely on
-			// the old physical generation. Rebuild a new isolated projection and
-			// publish its manifest/watermark atomically.
-			generation := nextProjectionGeneration(saved.ProjectionGeneration)
-			m.mu.Lock()
-			saved.ProjectionGeneration = generation
-			m.state.Sources[key] = saved
-			m.mu.Unlock()
-			if _, err := m.writeProjection(source, recoveryEvents, generation, recoveryEvents, nil, true); err != nil {
-				return nil, err
-			}
-			m.mu.Lock()
-			p := m.pipes[key]
-			m.mu.Unlock()
-			if p != nil && p.DeliveryState() == logtypes.DeliveryUnknown {
-				if err := p.ResolveUnknownThroughProjection(recoveryEvents); err != nil {
-					return nil, err
-				}
-			}
-			if err := m.releaseRecovery(source, recoveryEvents); err != nil {
+		if len(recoveryEvents) == 0 {
+			continue
+		}
+		if m.vl == nil && m.vlRoute == nil {
+			// 无 VL 客户端：没有可对账、也没有可重发的目标（与旧行为一致）。
+			continue
+		}
+		recovery = append(recovery, startupSource{source: source, key: key, events: recoveryEvents})
+	}
+	if len(recovery) > 0 {
+		reports := m.reconcileStartup(context.Background(), recovery)
+		m.recordReconcileReports(reports)
+		for index, item := range recovery {
+			if err := m.applyStartupRecovery(item, reports[index]); err != nil {
 				return nil, err
 			}
 		}
@@ -1013,7 +1022,34 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	return result, nil
 }
 
+// projectionWritePlan 描述一次投影写入的「写入面」与「发布语义」（FR-497 spec §2.2）。
+//
+// 为什么要拆开：重启恢复原先只有「整窗重发」一种形态——Replace=true 时把写入面**扩为
+// 权威全量**。启动增量对账需要「只写缺失天，但发布语义仍是取代」（新代包含该天全量 →
+// 取代安全），于是写入面与发布语义必须能分别指定。
+type projectionWritePlan struct {
+	// Write 是本次实际写入 VL 的事件集合。
+	Write []logtypes.Event
+	// Archive 是同时落归档的权威事件集合（现状恢复路径为 nil）。
+	Archive []logtypes.Event
+	// Replace 为 true 表示发布语义是「新代取代旧代白名单」（该天）；false 表示累积微代次。
+	Replace bool
+	// Days 非空表示**限定写入面**为这些 UTC 天（增量补天）：此时 Replace 不再把写入面扩为
+	// 权威全量，且 Days 必须与 Write 的天集合完全一致——错位会「标记为已发布却没写数据」，
+	// 故按硬失败处理（宁可启动失败，不接受静默丢数据）。
+	Days []string
+}
+
 func (m *Manager) writeProjection(source SourceConfig, events []logtypes.Event, generation string, writeEvents, archiveEvents []logtypes.Event, replace bool) (pipeline.DeliveryResult, error) {
+	return m.writeProjectionPlan(source, events, generation, projectionWritePlan{
+		Write: writeEvents, Archive: archiveEvents, Replace: replace,
+	})
+}
+
+// writeProjectionPlan 是 writeProjection 的完整形态：按计划写入 VL、校验、发布、落段。
+//
+// events 恒为权威全量（用于段存储补齐与 persist）；实际写入面由 plan 决定。
+func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Event, generation string, plan projectionWritePlan) (pipeline.DeliveryResult, error) {
 	if len(events) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: http.StatusNoContent}, nil
 	}
@@ -1038,15 +1074,23 @@ func (m *Manager) writeProjection(source SourceConfig, events []logtypes.Event, 
 	if err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
-	archiveGrouped, _, err := groupEventsByUTCDay(source, archiveEvents)
+	archiveGrouped, _, err := groupEventsByUTCDay(source, plan.Archive)
 	if err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
-	writeGrouped, writeDays, err := groupEventsByUTCDay(source, writeEvents)
+	writeGrouped, writeDays, err := groupEventsByUTCDay(source, plan.Write)
 	if err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
-	if replace {
+	switch {
+	case len(plan.Days) > 0:
+		// 增量补天：写入面已由调用方按天过滤；这里只校验二者一致并固定顺序。
+		if err := sameUTCDays(writeDays, plan.Days); err != nil {
+			return pipeline.DeliveryResult{}, err
+		}
+		writeDays = sortUTCDays(plan.Days)
+	case plan.Replace:
+		// 整窗重发（现状语义）：写入面扩为权威全量。
 		writeDays = days
 		writeGrouped = grouped
 	}
@@ -1054,7 +1098,7 @@ func (m *Manager) writeProjection(source SourceConfig, events []logtypes.Event, 
 	for _, day := range writeDays {
 		daySource := source
 		daySource.UTCDay = day
-		dayResult, writeErr := m.writeProjectionDay(daySource, grouped[day], writeGrouped[day], generation, archiveGrouped[day], replace)
+		dayResult, writeErr := m.writeProjectionDay(daySource, grouped[day], writeGrouped[day], generation, archiveGrouped[day], plan.Replace)
 		if dayResult.HTTPStatus != 0 {
 			result.HTTPStatus = dayResult.HTTPStatus
 		}
