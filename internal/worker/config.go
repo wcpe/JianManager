@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
@@ -47,8 +48,10 @@ type Config struct {
 	LogVL           LogVLConfig       `mapstructure:"log_vl"`
 	LogCapacity     LogCapacityConfig `mapstructure:"log_capacity"`
 	LogSources      []LogSourceConfig `mapstructure:"log_sources"`
-	LogArchive      LogArchiveConfig  `mapstructure:"log_archive"`
-	Decompiler      DecompilerConfig  `mapstructure:"decompiler"`
+	// LogReconcile 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天，对账不可信则回退整窗重发。
+	LogReconcile LogReconcileConfig `mapstructure:"log_reconcile"`
+	LogArchive   LogArchiveConfig   `mapstructure:"log_archive"`
+	Decompiler   DecompilerConfig   `mapstructure:"decompiler"`
 	// Search 全文搜索索引配置（FR-074，见 ADR-017）。
 	Search SearchConfig `mapstructure:"search"`
 	// ArtifactCache 节点本地制品缓存配置（FR-178）：按 sha256 缓存下载过的核心 jar，建实例命中即秒拷。
@@ -185,6 +188,42 @@ func (c OrphanScanConfig) ScanInterval() time.Duration {
 // 注意：本类型的零值 AutoAdopt=false 无法与「显式关闭」区分，故装配点须用本方法而非直接读字段。
 func (c OrphanScanConfig) AutoAdoptEnabled() bool {
 	return c.AutoAdopt
+}
+
+// LogReconcileConfig 启动增量对账（FR-497）配置面，键为 `log_reconcile.*`。
+//
+// 默认口径的单一真源在 ingest 包（ingest.DefaultReconcileConfig：默认启用，并发 4、单源总超时
+// 30s、单次 count 查询 10s）；本类型只做 YAML → ingest.Options 的搬运，非法/非正值一律回退该
+// 默认——配置误写不得让对账退化为无超时或高并发，关闭只能走显式 `log_reconcile.enabled: false`
+// （该源回退整窗重发）。见 docs/specs/log-startup-reconcile/spec.md §5。
+type LogReconcileConfig struct {
+	// Enabled 启动增量对账开关（默认 true）。false = 放弃增量裁剪、该源回退整窗重发（应急逃生口）。
+	Enabled bool `mapstructure:"enabled"`
+	// Concurrency 并发对账的源数上限（默认 4）；非正回退默认，超上限时由 ingest 收敛到 32。
+	Concurrency int `mapstructure:"concurrency"`
+	// Timeout 单源对账总超时（duration 字符串，默认 30s）；非法/非正回退默认。
+	Timeout string `mapstructure:"timeout"`
+	// QueryTimeout 单天 count 查询超时（duration 字符串，默认 10s）；非法/非正回退默认。
+	QueryTimeout string `mapstructure:"query_timeout"`
+}
+
+// ReconcileConfig 把本地配置面收敛为 ingest 的对账配置（非法/非正一律回退归一化默认）。
+//
+// 零值语义：Enabled=false 的零值无法与「显式关闭」区分，故 Load 经 viper SetDefault 写入默认
+// true（与 orphan_scan.auto_adopt 同口径）；手工构造 Config{} 的调用方须自行置位。
+func (c LogReconcileConfig) ReconcileConfig() ingest.ReconcileConfig {
+	out := ingest.DefaultReconcileConfig()
+	out.Enabled = c.Enabled
+	if c.Concurrency > 0 {
+		out.Concurrency = c.Concurrency
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.Timeout)); err == nil && d > 0 {
+		out.Timeout = d
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.QueryTimeout)); err == nil && d > 0 {
+		out.QueryTimeout = d
+	}
+	return out
 }
 
 // RecoverConfig 接管恢复（Worker 重启后接管存活 wrapper）配置（FR-455①）。
@@ -417,6 +456,12 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_capacity.degraded_at_percent", 80.0)
 	v.SetDefault("log_capacity.pause_at_percent", 90.0)
 	v.SetDefault("log_sources", []LogSourceConfig{})
+	// 启动增量对账（FR-497）：默认值直接取自 ingest 的单一真源，不在本地重复字面量。
+	reconcileDefaults := ingest.DefaultReconcileConfig()
+	v.SetDefault("log_reconcile.enabled", reconcileDefaults.Enabled)
+	v.SetDefault("log_reconcile.concurrency", reconcileDefaults.Concurrency)
+	v.SetDefault("log_reconcile.timeout", reconcileDefaults.Timeout.String())
+	v.SetDefault("log_reconcile.query_timeout", reconcileDefaults.QueryTimeout.String())
 	v.SetDefault("log_archive.enabled", false)
 	v.SetDefault("log_archive.provider", "local")
 	v.SetDefault("log_archive.endpoint", "")

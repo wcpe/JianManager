@@ -368,6 +368,9 @@ message ReportOrphanAuditRequest {
   string node_secret = 2;
   string action = 3;      // 审计动作名：orphan.scan_detected / orphan.scan_disposed /
                           // orphan.scan_dispose_blocked / orphan.dispose_blocked / orphan.dispose_reaped /
+                          // orphan.auto_adopted / orphan.adopt_blocked / orphan.adopt_failed（FR-497 全自动收养
+                          // 三态：复核通过且拨号成功纳管 / 复核不过只告警不收养 / 拨号失败保留 PID 待下轮，
+                          // 与 docs/specs/auto-adopt-orphans/spec.md §6 一致）/
                           // health.dead_detected / health.selfheal_restart / health.selfheal_exhausted /
                           // health.circuit_broken / health.circuit_released（FR-459，detail 内标 operator=auto）
   string target_id = 4;   // 目标标识（实例 UUID 或 direct 孤儿工作目录）

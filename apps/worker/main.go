@@ -682,6 +682,9 @@ func runWorker() {
 				StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
 			})
 		}
+		// 启动增量对账（FR-497）：配置键 log_reconcile.*，非法/越界值经 ReconcileConfig()
+		// 收敛为 ingest 的归一化默认（默认启用）。
+		reconcileCfg := cfg.LogReconcile.ReconcileConfig()
 		newIngest := func() (*ingest.Manager, error) {
 			return ingest.New(ingest.Options{
 				Root: root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
@@ -690,6 +693,8 @@ func runWorker() {
 					MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
 					DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
 				}),
+				// 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天。
+				Reconcile: &reconcileCfg,
 				RecoveryHold: func(source ingest.SourceConfig, _ string) (bool, string) {
 					if rehydrateManager == nil {
 						return false, ""
@@ -1154,9 +1159,11 @@ func localWSAddr(port int) string {
 // sampleLogIndexPersistLatency 周期性打印采集索引（FR-496，本地 SQLite）的单次持久化耗时
 // P50/P95/Max 与本窗口的写入行数/字节数。
 //
-// 为什么以 Debug 打印：真机验收口径是「60 源规模下单次持久化 ≤50ms」，需要可与旧格式
-// （整本重写 JSON）直接对比的现场读数；写入行数是最直接的判据——回到整本重写时该值会
-// 逼近索引总行数，而增量实现只随本批次变更增长。采样环由 stateindex 维护（最近 512 次）。
+// 为什么以 Info 打印：真机验收口径是「60 源规模下单次持久化 ≤50ms」，而现场默认日志级别是
+// Info——Debug 打点在真机上默认不落盘，验收人只能临时改级别才能读数，读数口径随人而变。
+// 升为 Info 后现场按默认配置即可取值，且节拍（1 分钟）与字段原样不变，仍可与旧格式
+// （整本重写 JSON）直接对比：写入行数是最直接的判据——回到整本重写时该值会逼近索引总行数，
+// 而增量实现只随本批次变更增长。采样环由 stateindex 维护（最近 512 次）。
 func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -1177,7 +1184,7 @@ func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) 
 				deleted += int64(sample.RowsDeleted)
 				bytes += sample.BytesWritten
 			}
-			slog.Debug("采集索引持久化耗时采样",
+			slog.Info("采集索引持久化耗时采样",
 				"samples", latency.Count,
 				"p50ms", latency.P50.Milliseconds(),
 				"p95ms", latency.P95.Milliseconds(),
