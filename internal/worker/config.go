@@ -64,6 +64,8 @@ type Config struct {
 	BotWorker BotWorkerConfig `mapstructure:"bot_worker"`
 	// OrphanScan 运行期周期孤儿扫描（FR-456）：把孤儿清理从「仅启动时」升级为「运行期持续兜底」。
 	OrphanScan OrphanScanConfig `mapstructure:"orphan_scan"`
+	// Recover 接管恢复参数（FR-455①）：Worker 重启后对存活 wrapper 的 reconnect 重试窗口。
+	Recover RecoverConfig `mapstructure:"recover"`
 	// HealthScan 运行期实例健康巡检与自愈（FR-459）：识别假死、受控自愈、崩溃熔断。
 	HealthScan HealthScanConfig `mapstructure:"health_scan"`
 }
@@ -167,6 +169,36 @@ func (c OrphanScanConfig) ScanInterval() time.Duration {
 		return 60 * time.Second
 	}
 	return d
+}
+
+// RecoverConfig 接管恢复（Worker 重启后接管存活 wrapper）配置（FR-455①）。
+type RecoverConfig struct {
+	// RetryBackoff 接管 reconnect 有界重试的间隔序列（逗号分隔的 duration 字符串，
+	// 默认 "1s,2s,4s,8s,16s,32s,64s"≈127s）。交接窗口的 socket 未就绪/资源紧张常是瞬时的，
+	// 多等一轮即可接管；序列越短越早进入处置判定，误杀面越大（测试用小值）。
+	// 留空/全部非法回退默认序列。
+	RetryBackoff string `mapstructure:"retry_backoff"`
+}
+
+// RetryBackoffSequence 解析重试间隔序列：留空/全部非法回退 process.DefaultRecoverRetryBackoff
+// （默认口径的单一真源在进程包，本地不重复定义字面量）；逐项过滤非正项。
+func (c RecoverConfig) RetryBackoffSequence() []time.Duration {
+	raw := strings.TrimSpace(c.RetryBackoff)
+	if raw == "" {
+		return process.DefaultRecoverRetryBackoff
+	}
+	seq := make([]time.Duration, 0, 8)
+	for _, part := range strings.Split(raw, ",") {
+		d, err := time.ParseDuration(strings.TrimSpace(part))
+		if err != nil || d <= 0 {
+			continue
+		}
+		seq = append(seq, d)
+	}
+	if len(seq) == 0 {
+		return process.DefaultRecoverRetryBackoff
+	}
+	return seq
 }
 
 // BotWorkerConfig bot-worker 子进程调参；零值即用内置默认（总容量 50、单进程）。
@@ -285,11 +317,11 @@ type LogVLConfig struct {
 	HotCacheBytes   int64  `mapstructure:"hot_cache_bytes"`
 	// MemoryLimitBytes 受管 VL 进程 Go 软内存上限（GOMEMLIMIT，字节）；0 用默认 512MiB，负值不注入。
 	MemoryLimitBytes int64 `mapstructure:"memory_limit_bytes"`
-	HotPort         int    `mapstructure:"hot_port"`
-	ColdPort        int    `mapstructure:"cold_port"`
-	RehydratePort   int    `mapstructure:"rehydrate_port"`
-	StartCold       bool   `mapstructure:"start_cold"`
-	StartRehydrate  bool   `mapstructure:"start_rehydrate"`
+	HotPort          int   `mapstructure:"hot_port"`
+	ColdPort         int   `mapstructure:"cold_port"`
+	RehydratePort    int   `mapstructure:"rehydrate_port"`
+	StartCold        bool  `mapstructure:"start_cold"`
+	StartRehydrate   bool  `mapstructure:"start_rehydrate"`
 }
 
 type LogCapacityConfig struct {
@@ -390,6 +422,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("orphan_scan.disabled", false)
 	v.SetDefault("orphan_scan.interval", "60s")
 	v.SetDefault("orphan_scan.dispose_policy", "warn")
+	// 接管恢复（FR-455①）：接管存活 wrapper 的 reconnect 重试窗口默认 1s→...→64s（≈127s），
+	// 覆盖分钟级瞬时故障（socket 未就绪/资源紧张），避免「拨不通即处置」的误杀。
+	v.SetDefault("recover.retry_backoff", "1s,2s,4s,8s,16s,32s,64s")
 	// 运行期实例健康巡检与自愈（FR-459）：默认启用、周期 30s、只告警（可配 restart 自愈）。
 	v.SetDefault("health_scan.disabled", false)
 	v.SetDefault("health_scan.interval", "30s")

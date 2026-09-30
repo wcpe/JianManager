@@ -85,7 +85,56 @@ func main() {
 		runDaemonWrapper()
 		return
 	}
+	// 采集索引只读导出（FR-496 spec §2.3）：`worker log-index-export [--data-dir DIR] [--out FILE]`。
+	// 用于排障与回滚前的快照，不改动索引库或任何状态。
+	if len(os.Args) > 1 && os.Args[1] == "log-index-export" {
+		runLogIndexExport(os.Args[2:])
+		return
+	}
 	runWorker()
+}
+
+// runLogIndexExport 把采集索引（SQLite）导出为旧 ingest.state.json 结构的 JSON。
+//
+// 只读：库不存在或不可读时报错退出（退出码 1），不创建、不修改任何文件。
+func runLogIndexExport(args []string) {
+	override := ""
+	for _, value := range parseDataDirArg(args) {
+		override = value
+	}
+	dataRoot, err := dataroot.Resolve(override)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "解析数据目录失败: %v\n", err)
+		os.Exit(1)
+	}
+	root := dataRoot.Base()
+	out := os.Stdout
+	for i := 0; i < len(args); i++ {
+		value := ""
+		switch {
+		case args[i] == "--out" && i+1 < len(args):
+			value = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--out="):
+			value = strings.TrimPrefix(args[i], "--out=")
+		default:
+			continue
+		}
+		file, err := os.OpenFile(value, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "打开导出文件失败: %v\n", err)
+			os.Exit(1)
+		}
+		defer func() { _ = file.Close() }()
+		out = file
+	}
+	if err := ingest.ExportIndexJSON(root, out); err != nil {
+		fmt.Fprintf(os.Stderr, "导出采集索引失败: %v\n", err)
+		os.Exit(1)
+	}
+	if out != os.Stdout {
+		fmt.Fprintln(os.Stderr, "采集索引已导出")
+	}
 }
 
 // runDaemonWrapper 以 wrapper 子进程模式运行。
@@ -274,6 +323,9 @@ func runWorker() {
 	}
 	// 初始化进程管理器
 	manager := process.NewManager(serversDir)
+	// 接管重试窗口（FR-455①）：Worker 重启后对存活 wrapper 的 reconnect 重试序列（默认 ≈127s），
+	// 覆盖分钟级瞬时故障；必须在下方 RecoverDaemonInstances 之前装配，否则该轮接管仍用默认序列。
+	manager.SetRecoverRetryBackoff(cfg.Recover.RetryBackoffSequence())
 	// 启动内存闸（FR-317）：可用内存塞不下待启实例即拒绝启动，防节点 OOM 失联。
 	manager.SetMemGuard(process.MemGuardConfig{
 		ReserveMB: cfg.MemoryGuard.ReserveMB,
@@ -712,6 +764,10 @@ func runWorker() {
 				}
 			}()
 			go manager.Start(ingestCtx)
+			// 采集索引持久化耗时采样（FR-496 spec §3.3）：每分钟以 Debug 打印 P50/P95/Max 与
+			// 本窗口写入行数/字节数，供真机「60 源单次持久化 ≤50ms」验收直接取证
+			// （整本重写会让写入行数逼近索引总行数，读数一眼可辨）。
+			go sampleLogIndexPersistLatency(ingestCtx, manager)
 			slog.Info("日志采集运行时已启动", "sources", len(sources), "vlReady", vlHTTPClient != nil)
 		}
 	}
@@ -1091,6 +1147,46 @@ func runWorker() {
 // localWSAddr 返回仅供本机终端回环桥与本机探针使用的 WebSocket 监听地址。
 func localWSAddr(port int) string {
 	return fmt.Sprintf("127.0.0.1:%d", port)
+}
+
+// sampleLogIndexPersistLatency 周期性打印采集索引（FR-496，本地 SQLite）的单次持久化耗时
+// P50/P95/Max 与本窗口的写入行数/字节数。
+//
+// 为什么以 Debug 打印：真机验收口径是「60 源规模下单次持久化 ≤50ms」，需要可与旧格式
+// （整本重写 JSON）直接对比的现场读数；写入行数是最直接的判据——回到整本重写时该值会
+// 逼近索引总行数，而增量实现只随本批次变更增长。采样环由 stateindex 维护（最近 512 次）。
+func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	var lastWritten, lastBytes int64
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			latency := manager.PersistLatency()
+			if latency.Count == 0 {
+				continue
+			}
+			samples := manager.PersistSamples()
+			var written, deleted, bytes int64
+			for _, sample := range samples {
+				written += int64(sample.RowsWritten)
+				deleted += int64(sample.RowsDeleted)
+				bytes += sample.BytesWritten
+			}
+			slog.Debug("采集索引持久化耗时采样",
+				"samples", latency.Count,
+				"p50ms", latency.P50.Milliseconds(),
+				"p95ms", latency.P95.Milliseconds(),
+				"maxMs", latency.Max.Milliseconds(),
+				"rowsWrittenDelta", written-lastWritten,
+				"rowsDeletedDelta", deleted,
+				"bytesWrittenDelta", bytes-lastBytes,
+			)
+			lastWritten, lastBytes = written, bytes
+		}
+	}
 }
 
 // sampleLogBudget 周期性采样受管 VL 的 RSS 与数据盘预算并暴露降级（FR-476 / 契约 §6.6）。

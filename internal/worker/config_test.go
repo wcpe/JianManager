@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
 // TestLoad_OrphanScanDefaults 运行期孤儿扫描默认启用、周期 60s、策略 warn（FR-456）。
@@ -37,6 +38,44 @@ func TestOrphanScanConfig_ScanIntervalParsing(t *testing.T) {
 	assert.Equal(t, 60*time.Second, OrphanScanConfig{Interval: "bogus"}.ScanInterval())
 	assert.Equal(t, 60*time.Second, OrphanScanConfig{Interval: "-5s"}.ScanInterval())
 	assert.Equal(t, 90*time.Second, OrphanScanConfig{Interval: "90s"}.ScanInterval())
+}
+
+// TestLoad_RecoverRetryBackoffDefaults 接管重试序列默认覆盖分钟级（FR-455①）：
+// Worker 重启后接管存活 wrapper 的重试窗口默认 1s→…→64s ≈127s（spec §6）。
+//
+// 转红方式：把默认改回旧 {1s,2s,4s}（≈7s）或删掉该键——序列值与总窗口断言失败。
+func TestLoad_RecoverRetryBackoffDefaults(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "1s,2s,4s,8s,16s,32s,64s", cfg.Recover.RetryBackoff)
+
+	seq := cfg.Recover.RetryBackoffSequence()
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, seq, "配置默认口径应与进程包默认序列同源")
+	total := time.Duration(0)
+	for _, d := range seq {
+		total += d
+	}
+	assert.Equal(t, 127*time.Second, total, "默认重试窗口 ≈127s")
+}
+
+// TestLoad_RecoverRetryBackoffEnvOverride 接管重试序列可经环境变量/配置文件覆盖（FR-455① 测试用小值）。
+func TestLoad_RecoverRetryBackoffEnvOverride(t *testing.T) {
+	t.Setenv("JIANMANAGER_RECOVER_RETRY_BACKOFF", "10ms,20ms")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}, cfg.Recover.RetryBackoffSequence())
+}
+
+// TestRecoverConfig_RetryBackoffSequenceParsing 留空/全非法回退默认序列；逐项过滤非法与非正项。
+func TestRecoverConfig_RetryBackoffSequenceParsing(t *testing.T) {
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{}.RetryBackoffSequence())
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{RetryBackoff: "  "}.RetryBackoffSequence())
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{RetryBackoff: "bogus"}.RetryBackoffSequence())
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{RetryBackoff: "-1s,-2s"}.RetryBackoffSequence())
+	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second},
+		RecoverConfig{RetryBackoff: "1s, 2s"}.RetryBackoffSequence())
+	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second},
+		RecoverConfig{RetryBackoff: "1s, bogus, 2s, 0s"}.RetryBackoffSequence(), "非法项应跳过")
 }
 
 // TestHealthScanConfig 巡检周期/熔断窗口解析回退默认 30s/10m；策略组装对齐本地配置（FR-459）。

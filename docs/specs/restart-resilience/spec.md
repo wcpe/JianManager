@@ -99,13 +99,14 @@
 
 下表把实现中的关键常量、配置键与审计 action 名统一登记，供 reviewer 与文档核对（实现为准，文档随实现更新）。
 
-**配置键**（`internal/worker/config.go`，`worker.yml` 下 `orphan_scan.*`，Viper `SetDefault`）：
+**配置键**（`internal/worker/config.go`，`worker.yml` 下 `orphan_scan.*` / `recover.*`，Viper `SetDefault`）：
 
 | 键 | 默认 | 语义 |
 |---|---|---|
 | `orphan_scan.disabled` | `false` | `true` = 关闭周期扫描（应急逃生口）。注意：本文早前误写为 `worker.orphan_scan_enabled`（默认开），**以实现为准**——语义等价（都表示「默认启用」）。 |
 | `orphan_scan.interval` | `60s` | 扫描周期；非法/空回退 60s。 |
 | `orphan_scan.dispose_policy` | `warn` | `warn` 只告警 + 落审计 / `auto` 自动清理。 |
+| `recover.retry_backoff` | `1s,2s,4s,8s,16s,32s,64s` | 启动接管存活 wrapper 的重试退避序列（逗号分隔 duration，总窗口 ≈127s）。缺省与进程包 `DefaultRecoverRetryBackoff` 同源；越界/空值回退默认。**注入须在 `RecoverDaemonInstances` 之前装配**（见 `apps/worker/main.go`），否则该轮接管用不到配置。 |
 
 **关键常量**：
 

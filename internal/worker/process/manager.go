@@ -118,6 +118,11 @@ type Manager struct {
 	recoverKillTree func(pid int) error
 	recoverPIDAlive func(pid int) bool
 	recoverSleep    func(d time.Duration)
+	// recoverBackoff 是接管 reconnect 的有界重试间隔序列（FR-455①）的注入点：
+	// 空/nil=默认 DefaultRecoverRetryBackoff（≈127s，覆盖分钟级瞬时故障）；
+	// 由 worker main 按配置 recover.retry_backoff 经 SetRecoverRetryBackoff 装配（测试注入小值）。
+	// 由 mu 保护（装配期写入、运行期重试路径读取）。
+	recoverBackoff []time.Duration
 	// recoverVerifyOwner 是「处置前置存活复核」（FR-455①）的可注入桩：nil=真实现
 	// （DefaultVerifyProcessOwnership，读 cmdline/cwd）。返回 false=无法确认 PID 确属目标实例 → 不杀。
 	recoverVerifyOwner func(pid int, instanceUUID, workDir string, expectWrapper bool) bool
