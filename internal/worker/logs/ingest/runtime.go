@@ -5,6 +5,7 @@ package ingest
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -993,7 +994,9 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	if err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
-	generation := nextProjectionGeneration(saved.ProjectionGeneration)
+	// 代次名必须是 VL 中尚未出现过的名字：状态回滚/重置后计数器会回退，直接进位会重名
+	// （见 nextFreeProjectionGeneration 的事故说明）。
+	generation := m.nextFreeProjectionGeneration(source, saved.ProjectionGeneration)
 	writeEvents := toWrite
 	if saved.PublicationPending {
 		writeEvents = expected
@@ -1904,6 +1907,111 @@ func nextProjectionGeneration(current string) string {
 		return fmt.Sprintf("projection-%d", n+1)
 	}
 	return current + "-rebuild"
+}
+
+// 物理代次名的「不可复用」保证（2026-10-01 生产事故修复）。
+//
+// 背景：投影的隔离完全落在物理代次名上——写入按名字打标、校验按名字过滤、查询侧白名单也按
+// 名字列举。而名字来自本机状态的单调计数器（nextProjectionGeneration）。状态一旦重生
+// （旧 JSON→SQLite 迁移、scripts/rollback-log-index.sh 把归档 JSON 改回、state 被重置），
+// 计数器就从头开始，新名字与 VL 里**上一轮生命周期**留下的行重名。VL 只追加不删除
+// （「取代」只改查询侧白名单，物理行保留到 retention 到期），于是校验查询把旧行读成本次写入
+// 的内容 → `unexpected or duplicate projection event_id` → 校验永不通过 → 运行时创建失败、
+// 采集停摆；重试若仍从同一状态出发，还会反复写同一个名字，把 VL 越写越脏。
+// 生产实测（2026-10-01 05:20）：projection-88 撞上当天 03:22 那一轮同名整窗重发，三次重试
+// 全写 88，27 分钟无进展，最终只能空库重建恢复。
+//
+// 修复：选代次名前先问 VL「这个名字在该源上是否已有行」，已有就按 1/2/4/8… 递增跳到未占用的
+// 名字。探测失败不阻断投递（写入自身失败由既有语义处理），只告警后沿用旧行为；探测覆盖本次
+// 写入路由所在的 VL 目标（跨 VL 目标的极端情形仍按旧行为，不会比修复前更差）。
+const (
+	// maxProjectionGenerationProbes 是单次选名的探测上限。按 2 的幂递增，16 次可越过约 65535 个
+	// 已占名字（真实事故只越过 7 个：88→94），同时保证极端情形下不会无限探测。
+	maxProjectionGenerationProbes = 16
+	// projectionProbeTimeout 是单次占用探测的超时。探测只是「避免重名」的保障，不允许把投递卡在
+	// 网络上，故用远小于校验窗口（默认 5 分钟）的短超时。
+	projectionProbeTimeout = 5 * time.Second
+)
+
+// nextFreeProjectionGeneration 返回该源在 VL 中尚未出现过的物理代次名。
+//
+// VL 客户端不可用时退回既有行为（只进位一次，不做占用探测）——探测是保障而非前置条件。
+func (m *Manager) nextFreeProjectionGeneration(source SourceConfig, current string) string {
+	client, _, err := m.clientForSource(source)
+	if err != nil {
+		return nextProjectionGeneration(current)
+	}
+	return m.nextFreeProjectionGenerationWithClient(client, source, current)
+}
+
+// nextFreeProjectionGenerationWithClient 是探测的实现（显式收客户端，便于按天路由与用例注入）。
+func (m *Manager) nextFreeProjectionGenerationWithClient(client *vlsup.Client, source SourceConfig, current string) string {
+	candidate := nextProjectionGeneration(current)
+	first := candidate
+	step := 1
+	for probe := 0; probe < maxProjectionGenerationProbes; probe++ {
+		ctx, cancel := context.WithTimeout(context.Background(), projectionProbeTimeout)
+		used, err := m.projectionGenerationUsed(ctx, client, source, candidate)
+		cancel()
+		if err != nil {
+			slog.Warn("投影代次占用探测失败，按未占用继续", "source", source.LogSourceID, "generation", candidate, "error", err)
+			return candidate
+		}
+		if !used {
+			if candidate != first {
+				slog.Info("投影代次与历史投影重名，已进位到新代次",
+					"source", source.LogSourceID, "generation", candidate, "from", current)
+			}
+			return candidate
+		}
+		advanced, ok := bumpProjectionGeneration(candidate, step)
+		if !ok {
+			// 名字不是 `projection-<n>` 形态：不猜测语义，保持既有行为。
+			break
+		}
+		candidate, step = advanced, step*2
+	}
+	return candidate
+}
+
+// projectionGenerationUsed 报告 VL 中该源是否已有该物理代次的行（limit 1，命中即返回）。
+func (m *Manager) projectionGenerationUsed(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string) (bool, error) {
+	if client == nil {
+		return false, nil
+	}
+	// 选择器与写入/校验同口径（源 + 来源代次），但不带时间窗：同一名字在任何一天的旧行都会
+	// 让「整窗重发」的校验失败，故占用判定必须覆盖该源的全部数据。
+	selector := "projection_generation:=" + strconv.Quote(generation) +
+		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
+		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
+	params := url.Values{"query": {selector + " | fields _time | limit 1"}}
+	used := false
+	err := client.Stream(ctx, "/select/logsql/query", params, func(body io.Reader) error {
+		scanner := bufio.NewScanner(io.LimitReader(body, 1<<20))
+		scanner.Buffer(make([]byte, 64*1024), 1<<20)
+		for scanner.Scan() {
+			if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+				continue
+			}
+			used = true
+			return nil
+		}
+		return scanner.Err()
+	})
+	if err != nil {
+		return false, err
+	}
+	return used, nil
+}
+
+// bumpProjectionGeneration 把 `projection-<n>` 形态的代次名按 delta 进位；格式不符时返回 false
+// （调用方保持既有行为，不再探测）。
+func bumpProjectionGeneration(current string, delta int) (string, bool) {
+	var n int
+	if _, err := fmt.Sscanf(current, "projection-%d", &n); err != nil || n <= 0 {
+		return "", false
+	}
+	return fmt.Sprintf("projection-%d", n+delta), true
 }
 
 // eventBodyLookup 返回「按 EventID 取回 canonical 事件体」的查询函数（B1a 引用水合）。

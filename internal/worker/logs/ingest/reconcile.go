@@ -503,9 +503,15 @@ func (m *Manager) applyStartupRecovery(item startupSource, report ReconcileRepor
 	// A new VL data root or a lost projection response must never rely on
 	// the old physical generation. Rebuild a new isolated projection and
 	// publish its manifest/watermark atomically.
+	// 译注（2026-10-01 生产事故）：这句话此前只是意图——状态回滚/重置后计数器回退，新名字会与
+	// VL 里旧一轮生命周期的行重名，而校验按名字过滤，必然把旧行读成本次写入而永不通过。
+	// 因此在取名字前先排除 VL 中已存在的名字（探测不持锁，避免网络 I/O 落在临界区内）。
 	m.mu.Lock()
 	saved := m.state.Sources[item.key]
-	generation := nextProjectionGeneration(saved.ProjectionGeneration)
+	m.mu.Unlock()
+	generation := m.nextFreeProjectionGeneration(item.source, saved.ProjectionGeneration)
+	m.mu.Lock()
+	saved = m.state.Sources[item.key]
 	saved.ProjectionGeneration = generation
 	m.state.Sources[item.key] = saved
 	m.mu.Unlock()

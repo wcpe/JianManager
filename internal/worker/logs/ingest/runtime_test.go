@@ -405,7 +405,9 @@ func TestOwnerChangeDuringVerificationCannotPublishToNewOwner(t *testing.T) {
 	fixture := &projectionVLFixture{}
 	switched := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/select/logsql/query" && !switched {
+		// 注入「验证期间换主」的时点必须锚定在**校验查询**上：代次占用探测（见
+		// nextFreeProjectionGeneration）走的是同一个端点但没有时间窗，它不是验证。
+		if r.URL.Path == "/select/logsql/query" && r.URL.Query().Get("start") != "" && !switched {
 			switched = true
 			rec := catalog.NewStableRecord(key, catalog.OwnerCold, 2, "cold-after-switch")
 			require.NoError(t, cat.AppendJournal(catalog.JournalEntry{Key: key, Record: rec, AuthorityCommit: true}))
