@@ -59,6 +59,10 @@ const (
 	// 与前三类不同，它不是孤儿（实例仍在内存表中），而是「平台记账 STOPPED、磁盘却在跑」的对齐线索：
 	// 本相只观测并上报，处置须由人工确认后经 AdoptForeignRuntime 接管。
 	OrphanKindForeignRuntime OrphanKind = "foreign_runtime"
+	// OrphanKindUnmanagedLiveRuntime PID 目录中未纳管的活进程对（wrapper 与 Java 均活、PID 文件有效，
+	// 但本 Worker 尚未纳管；FR-497③）。它不是孤儿——平台自有 wrapper 仍在托管服务器，只是控制连接
+	// 缺失；处置是**非破坏**的：归属复核通过即自动重连并登记 RUNNING（见 adopt_orphan.go）。
+	OrphanKindUnmanagedLiveRuntime OrphanKind = "unmanaged_live_runtime"
 )
 
 // OrphanFinding 一次扫描发现的一条孤儿。
@@ -80,6 +84,9 @@ type OrphanFinding struct {
 	LabelInstanceUUID string
 	// Disposed 是否已按 auto 策略实际处置。
 	Disposed bool
+	// Adopted 是否已被自动收养为 RUNNING（仅 OrphanKindUnmanagedLiveRuntime；FR-497③）。
+	// 与 Disposed 语义正交：收养是**非破坏**动作（只重连，不杀不重启进程）。
+	Adopted bool
 	// Detail 供审计的补充说明。
 	Detail string
 }
@@ -109,6 +116,9 @@ type OrphanScanner struct {
 	mgr      *Manager
 	interval time.Duration
 	policy   OrphanDisposePolicy
+	// autoAdopt 未纳管活进程自动收养开关（FR-497③，默认 DefaultOrphanAutoAdopt=true）。
+	// 只影响 ScanOnce 第 0 相；三态孤儿的 warn/auto 处置策略不受其影响。装配期写入、运行期读取。
+	autoAdopt bool
 
 	// 以下为可注入桩：nil=真实现，测试注入以免真枚举进程/真连 Docker。
 	listProcesses   func() ([]ScannedProcess, error)
@@ -118,6 +128,7 @@ type OrphanScanner struct {
 }
 
 // NewOrphanScanner 构造运行期孤儿扫描器。interval<=0 时取默认 60s；policy 空取 warn。
+// 未纳管活进程自动收养默认启用（FR-497③，见 DefaultOrphanAutoAdopt）；可用 SetAutoAdopt(false) 关闭。
 func NewOrphanScanner(mgr *Manager, interval time.Duration, policy OrphanDisposePolicy) *OrphanScanner {
 	if interval <= 0 {
 		interval = 60 * time.Second
@@ -129,6 +140,7 @@ func NewOrphanScanner(mgr *Manager, interval time.Duration, policy OrphanDispose
 		mgr:             mgr,
 		interval:        interval,
 		policy:          policy,
+		autoAdopt:       DefaultOrphanAutoAdopt,
 		listProcesses:   defaultListProcesses,
 		listContainers:  listManagedContainers,
 		removeContainer: removeManagedContainer,
@@ -136,15 +148,29 @@ func NewOrphanScanner(mgr *Manager, interval time.Duration, policy OrphanDispose
 	}
 }
 
+// SetAutoAdopt 设置未纳管活进程自动收养开关（FR-497③）：false = 只告警不收养（应急逃生口）。
+func (s *OrphanScanner) SetAutoAdopt(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.autoAdopt = enabled
+}
+
 // Start 启动周期扫描 goroutine（随 ctx 取消而退出）。interval<=0 或 mgr 为空时不启动。
+//
+// 启动后**立即执行一轮**再进入 ticker（FR-497③）：「Worker 启动」窗口与新产生的未纳管活进程
+// 不能等到第一个周期才发现——main 在 RecoverDaemonInstances 之后启动本扫描器，故这一轮正好接在
+// 启动接管之后，既不与它重复拨号，又能在接管只告警（socket 瞬时不可达）后第一时间补齐收养。
 func (s *OrphanScanner) Start(ctx context.Context) {
 	if s == nil || s.mgr == nil || s.interval <= 0 {
 		return
 	}
 	go func() {
+		slog.Info("运行期孤儿扫描已启用", "interval", s.interval, "policy", string(s.policy),
+			"autoAdopt", s.autoAdopt)
+		s.ScanOnce()
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
-		slog.Info("运行期孤儿扫描已启用", "interval", s.interval, "policy", string(s.policy))
 		for {
 			select {
 			case <-ctx.Done():
@@ -160,6 +186,10 @@ func (s *OrphanScanner) Start(ctx context.Context) {
 // ScanOnce 执行一轮孤儿扫描并落审计。返回本轮发现（供单测/观测）。
 // 本轮耗时超过 maxScanRoundDuration 时告警（FR-456 F14：扫描成本可观测）。
 //
+// 相位顺序（FR-497③）：第 0 相 autoAdoptUnmanaged 先跑——把本轮可收养的未纳管活进程纳入管理，
+// 使同一轮后续相位的「受管 PID / 工作目录」集合立刻包含它们，避免刚收养实例的 Java 在同轮被
+// direct 相误判为无主进程。
+//
 // FR-471：第四相 scanForeignInRegisteredWorkdirs 与前三相共用同一轮进程枚举快照
 // （procs 只枚举一次），观测「已注册实例目录下的外来活进程」并写入 Manager 缓存供心跳上报。
 func (s *OrphanScanner) ScanOnce() []OrphanFinding {
@@ -168,6 +198,7 @@ func (s *OrphanScanner) ScanOnce() []OrphanFinding {
 	}
 	started := time.Now()
 	findings := make([]OrphanFinding, 0)
+	findings = append(findings, s.autoAdoptUnmanaged()...)
 	// 本机进程只枚举一次，供第二相（无主进程）与第四相（在册实例目录下的漂移）共用；
 	// 枚举失败仅告警降级，此时第四相也一并跳过（宁漏勿误）。
 	procs, procErr := s.listProcesses()
@@ -180,6 +211,19 @@ func (s *OrphanScanner) ScanOnce() []OrphanFinding {
 	findings = append(findings, s.scanForeignInRegisteredWorkdirs(procs, procErr == nil)...)
 	if elapsed := time.Since(started); elapsed > maxScanRoundDuration {
 		slog.Warn("运行期孤儿扫描单轮耗时偏长", "elapsed", elapsed, "findings", len(findings))
+	}
+	return findings
+}
+
+// autoAdoptUnmanaged 是扫描的第 0 相（FR-497③）：把 PID 目录中未纳管的活进程对自动收养为 RUNNING。
+// 开关关闭（autoAdopt=false）时不做任何事——不拨号、不登记、不落审计。
+func (s *OrphanScanner) autoAdoptUnmanaged() []OrphanFinding {
+	if !s.autoAdopt {
+		return nil
+	}
+	adopted, findings := s.mgr.AdoptUnmanagedDaemonInstances()
+	if adopted > 0 {
+		slog.Info("运行期扫描已自动收养未纳管的活进程", "adopted", adopted)
 	}
 	return findings
 }

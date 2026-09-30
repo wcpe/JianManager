@@ -390,6 +390,8 @@ func runWorker() {
 	if !cfg.OrphanScan.Disabled {
 		policy := process.NormalizeOrphanDisposePolicy(cfg.OrphanScan.DisposePolicy)
 		orphanScanner := process.NewOrphanScanner(manager, cfg.OrphanScan.ScanInterval(), policy)
+		// FR-497：未纳管活进程的自动收养开关（默认开；此处接线使 orphan_scan.auto_adopt 生效）。
+		orphanScanner.SetAutoAdopt(cfg.OrphanScan.AutoAdoptEnabled())
 		scannerCtx, cancelScanner := context.WithCancel(context.Background())
 		defer cancelScanner()
 		orphanScanner.Start(scannerCtx)

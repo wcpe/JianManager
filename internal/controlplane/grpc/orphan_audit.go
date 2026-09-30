@@ -43,6 +43,11 @@ var orphanAuditAllowedActions = map[string]struct{}{
 	"orphan.scan_dispose_blocked": {},
 	"orphan.dispose_blocked":      {},
 	"orphan.dispose_reaped":       {},
+	// orphan.auto_adopted / adopt_blocked / adopt_failed：FR-497 全自动收养三态
+	//（纳管成功 / 归属复核不过只告警 / 拨号失败），与 docs/specs/auto-adopt-orphans/spec.md §6 对齐。
+	"orphan.auto_adopted":  {},
+	"orphan.adopt_blocked": {},
+	"orphan.adopt_failed":  {},
 	// orphan.startup_detected_not_reaped：启动恢复路径发现孤儿但按 FR-471 非破坏策略**只观测不处置**。
 	// 必须入库：它是「重启没杀人」的唯一留痕（否则该次观测静默丢失，事故复盘无据）。
 	"orphan.startup_detected_not_reaped": {},

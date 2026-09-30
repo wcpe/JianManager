@@ -160,6 +160,13 @@ type OrphanScanConfig struct {
 	Interval string `mapstructure:"interval"`
 	// DisposePolicy 处置策略：warn（默认，只告警 + 落审计）/ auto（自动清理）。
 	DisposePolicy string `mapstructure:"dispose_policy"`
+	// AutoAdopt 未纳管活进程全自动收养（FR-497③，默认 true=启用）。
+	//
+	// 扫描发现「PID 目录中 wrapper 与 Java 均活、但本 Worker 未纳管」的实例时，经归属复核
+	// （verifyProcessOwnership）通过即自动重连并登记为 RUNNING——**不重启也不杀进程**；复核不通过
+	// 只告警。显式 false 只关收养，其余三态孤儿扫描与告警不变；见
+	// docs/specs/auto-adopt-orphans/spec.md。默认口径的单一真源为 process.DefaultOrphanAutoAdopt。
+	AutoAdopt bool `mapstructure:"auto_adopt"`
 }
 
 // ScanInterval 解析扫描周期：非法/空回退 60s。
@@ -169,6 +176,15 @@ func (c OrphanScanConfig) ScanInterval() time.Duration {
 		return 60 * time.Second
 	}
 	return d
+}
+
+// AutoAdoptEnabled 返回未纳管活进程自动收养开关（FR-497③）。
+//
+// 与 RetryBackoffSequence 同口径：本类型的零值（测试/手工构造）按默认口径解释——config.Load 经
+// viper SetDefault 写入 process.DefaultOrphanAutoAdopt，故只有显式配置 false 才会关闭。
+// 注意：本类型的零值 AutoAdopt=false 无法与「显式关闭」区分，故装配点须用本方法而非直接读字段。
+func (c OrphanScanConfig) AutoAdoptEnabled() bool {
+	return c.AutoAdopt
 }
 
 // RecoverConfig 接管恢复（Worker 重启后接管存活 wrapper）配置（FR-455①）。
@@ -422,6 +438,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("orphan_scan.disabled", false)
 	v.SetDefault("orphan_scan.interval", "60s")
 	v.SetDefault("orphan_scan.dispose_policy", "warn")
+	// 未纳管活进程自动收养（FR-497③）：默认启用（只重连、不杀不重启），显式 false 关闭收养。
+	v.SetDefault("orphan_scan.auto_adopt", process.DefaultOrphanAutoAdopt)
 	// 接管恢复（FR-455①）：接管存活 wrapper 的 reconnect 重试窗口默认 1s→...→64s（≈127s），
 	// 覆盖分钟级瞬时故障（socket 未就绪/资源紧张），避免「拨不通即处置」的误杀。
 	v.SetDefault("recover.retry_backoff", "1s,2s,4s,8s,16s,32s,64s")
