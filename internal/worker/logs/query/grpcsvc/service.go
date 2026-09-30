@@ -67,7 +67,11 @@ type CutoverReadinessProvider interface {
 	Readiness() (ledgerReady bool, cutoff time.Time, reasons []string)
 }
 
-type IngestGapResolver interface{ ResolveCoveredGaps() error }
+type IngestGapResolver interface {
+	ResolveCoveredGaps() error
+	// ResolveCoveredGapsForSource 是显式人工确认路径：只解指名源的缺口。
+	ResolveCoveredGapsForSource(storageNamespace string) error
+}
 
 type CutoverReadinessFunc func() (bool, time.Time, []string)
 
@@ -510,12 +514,20 @@ func (s *Service) LogCutoverReadiness(_ context.Context, req *workerpb.LogCutove
 	return resp, nil
 }
 
-func (s *Service) LogResolveIngestGaps(_ context.Context, _ *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
+func (s *Service) LogResolveIngestGaps(_ context.Context, req *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
 	if s.gapResolver == nil {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
 			Error: unsupportedErr("ingest gap resolution is not configured")}, nil
 	}
-	if err := s.gapResolver.ResolveCoveredGaps(); err != nil {
+	var err error
+	if ns := strings.TrimSpace(req.GetStorageNamespace()); ns != "" {
+		// 显式人工确认：只解指名源（含自动路径拒绝的 Raw 写失败缺口，理由见 Manager 注释）。
+		err = s.gapResolver.ResolveCoveredGapsForSource(ns)
+	} else {
+		// 不传命名空间：与既有行为逐字一致（整节点自动解）。
+		err = s.gapResolver.ResolveCoveredGaps()
+	}
+	if err != nil {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
 			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: err.Error()}}, nil
 	}
