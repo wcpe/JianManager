@@ -300,6 +300,16 @@ func (l *Ledger) ResolveDeliveryThroughRecovery(key SourceKey, start, end uint64
 
 // contiguousDeliveryEnd 计算已知请求结果覆盖的连续前缀末端。
 // 乱序响应不得用最大位置越过未解决空洞。
+// ContiguousDeliveryEnd 暴露派生口径：delivery_position 是「所有字节均有请求结果的连续前缀末端」
+// （由投递批次与 reclaim 下界推得），不是可独立设定的真值。
+//
+// 导出原因：Restore 会按本函数重算 delivery_position，故索引迁移校验在逐字段比对前必须对
+// 两侧统一按同一规则重算，否则「派生值」会被误判成不一致（真机现场：归档 JSON 里是写回前的
+// 旧值，索引里是重算后的值，二者语义相同）。
+func ContiguousDeliveryEnd(batches []DeliveryBatch, floor uint64) uint64 {
+	return contiguousDeliveryEnd(batches, floor)
+}
+
 func contiguousDeliveryEnd(batches []DeliveryBatch, floor uint64) uint64 {
 	if len(batches) == 0 {
 		return floor

@@ -26,6 +26,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/eventstore"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
@@ -90,6 +91,10 @@ type Manager struct {
 	pipes     map[string]*pipeline.Pipeline
 	state     persistedState
 	statePath string
+	// index 是采集索引的嵌入式 SQLite 存储（FR-496，spec §2.1）：persist 只写变更行，
+	// 启动时自动迁移旧 ingest.state.json（校验失败拒绝启动）。nil 表示尚未打开（
+	// 测试直接构造 Manager 的场景在首次 persist 时按需打开）。
+	index *stateindex.Store
 	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
 	events              *eventstore.Store
 	verificationTimeout time.Duration
@@ -415,7 +420,12 @@ func New(opts Options) (*Manager, error) {
 	if m.verifyBackoffMax <= 0 {
 		m.verifyBackoffMax = defaultVerifyBackoffMax
 	}
-	// 事件体走追加式磁盘段（FR-484）：state 文件只留元数据，避免整份重写与常驻切片。
+	// 采集索引（FR-496）：打开 SQLite 索引，必要时一次性迁移旧 ingest.state.json；
+	// 迁移/校验失败 → 拒绝启动采集（不静默降级），保留旧文件供人工处置。
+	if err := m.openIndex(); err != nil {
+		return nil, err
+	}
+	// 事件体走追加式磁盘段（FR-484）：state 只留元数据，避免整份重写与常驻切片。
 	store, err := eventstore.Open(filepath.Join(opts.Root, "var", "log", "events"))
 	if err != nil {
 		return nil, err
@@ -2018,28 +2028,21 @@ func appendUniqueGeneration(generations []string, generation string) []string {
 }
 
 func (m *Manager) load() error {
-	b, err := os.ReadFile(m.statePath)
-	if os.IsNotExist(err) {
+	// FR-496：状态从嵌入式 SQLite 索引读入（旧 JSON 迁移已在 openIndex 完成）。
+	if m.index == nil {
+		// 兼容直接构造 Manager 的测试：没有索引可用，只能保持空状态。
 		return nil
 	}
+	loaded, err := m.loadStateFromIndex()
 	if err != nil {
-		return fmt.Errorf("ingest: read state: %w", err)
+		return err
 	}
-	if len(b) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(b, &m.state); err != nil {
-		return fmt.Errorf("ingest: decode state: %w", err)
-	}
-	if m.state.Sources == nil {
-		m.state.Sources = make(map[string]persistedSource)
-	}
-	if m.state.Instances == nil {
-		m.state.Instances = make(map[string]InstanceBinding)
-	}
+	m.state = *loaded
 	return nil
 }
 
+// persist 把内存状态增量写入采集索引（FR-496 spec §2.3）：只写本批次变更的行（UPSERT），
+// 事务提交即持久；未变更行不产生任何写语句（空闲轮询不重写历史）。
 func (m *Manager) persist() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -2063,27 +2066,22 @@ func (m *Manager) persist() error {
 		}
 		m.state.Sources[key] = entry
 	}
-	// 元数据量小，用流式编码直接写文件，避免 “先 Marshal 出整份 []byte 再写” 的双份峰值。
-	if err := os.MkdirAll(filepath.Dir(m.statePath), 0o755); err != nil {
-		return err
+	if m.index == nil {
+		// 直接构造 Manager 的测试路径：按需打开索引（不触发迁移）。
+		store, err := stateindex.Open(m.indexPath())
+		if err != nil {
+			return fmt.Errorf("ingest: 打开采集索引失败: %w", err)
+		}
+		m.index = store
 	}
-	tmp := m.statePath + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	desired, err := m.stateToIndexState(&m.state)
 	if err != nil {
 		return err
 	}
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err = enc.Encode(&m.state); err == nil {
-		err = f.Sync()
+	if _, err := m.index.Apply(desired); err != nil {
+		return fmt.Errorf("ingest: 持久化采集索引失败: %w", err)
 	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(tmp, m.statePath)
+	return nil
 }
 
 func newWAL(led *ledger.Ledger, key ledger.SourceKey) *acquire.WAL {

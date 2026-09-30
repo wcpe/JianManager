@@ -20,6 +20,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
@@ -40,12 +41,17 @@ func TestIdlePollDoesNotRewriteDurableHistory(t *testing.T) {
 	m, err := newTestManager(t, Options{Root: root, Catalog: catalog.New(nil), Sources: []SourceConfig{{LogSourceID: "idle", SourceGeneration: "g1", Path: path}}})
 	require.NoError(t, err)
 	require.NoError(t, m.persist())
+	samplesBefore := len(m.PersistSamples())
+	// 冻结索引的时间戳：空闲轮询后必须原样（旧实现会整本重写并 fsync，mtime 必变）。
+	indexPath := m.indexPath()
 	stamp := time.Unix(1700000000, 0)
-	require.NoError(t, os.Chtimes(m.statePath, stamp, stamp))
+	require.NoError(t, os.Chtimes(indexPath, stamp, stamp))
 	m.pollOnce()
-	stat, err := os.Stat(m.statePath)
+	// 空闲轮询不得重写历史（FR-496 spec §2.3）：源无任何变化时不得触发落库写。
+	require.Equal(t, samplesBefore, len(m.PersistSamples()), "idle polling must not trigger a persist at all")
+	stat, err := os.Stat(indexPath)
 	require.NoError(t, err)
-	require.Equal(t, stamp.Unix(), stat.ModTime().Unix(), "idle polling must not rewrite and fsync the complete history")
+	require.Equal(t, stamp.Unix(), stat.ModTime().Unix(), "idle polling must not rewrite and fsync the durable index")
 }
 
 func TestAppendMicroProjectionPreservesLegacyPublishedGeneration(t *testing.T) {
@@ -251,10 +257,10 @@ func TestManagerPollPublishesCatalogAndRestoresState(t *testing.T) {
 	require.NotNil(t, rec.PublishedProjection)
 	require.True(t, rec.PublishedProjection.CoverageComplete)
 	require.NotEmpty(t, rec.PublishedProjection.ProjectionGeneration)
-	_, err = os.Stat(filepath.Join(root, "var", "log", "ingest.state.json"))
+	_, err = os.Stat(filepath.Join(root, "var", "log", "ingest.index.db"))
 	require.NoError(t, err)
 
-	// 新 Manager 从状态文件恢复同一 source，在新 projection generation 中重建事件。
+	// 新 Manager 从索引库恢复同一 source，在新 projection generation 中重建事件。
 	cat2 := catalog.New(cat.Journal())
 	m2, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(), Sources: []SourceConfig{{
 		LogSourceID: "node:1", SourceGeneration: "g1", Path: logPath,
@@ -423,24 +429,31 @@ func TestOwnerChangeDuringVerificationCannotPublishToNewOwner(t *testing.T) {
 
 func TestManagerPersistsDurableWALBeforeInsertRequest(t *testing.T) {
 	root := t.TempDir()
-	statePath := filepath.Join(root, "var", "log", "ingest.state.json")
+	indexPath := filepath.Join(root, "var", "log", "ingest.index.db")
 	fixture := &projectionVLFixture{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			data, err := os.ReadFile(statePath)
+			// 只读直查索引库：WAL 条目必须已 durable 落库，才允许发 VL 插入请求。
+			store, err := stateindex.OpenReadOnly(indexPath)
 			if err != nil {
 				t.Errorf("WAL snapshot missing before VL insert: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			var state persistedState
-			if err := json.Unmarshal(data, &state); err != nil {
+			rows, err := store.Load()
+			_ = store.Close()
+			if err != nil {
 				t.Errorf("WAL snapshot corrupt before VL insert: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			wal := state.Sources["node:1/g1"].WAL
-			if len(wal) == 0 || !wal[0].Durable {
+			var durable int
+			for _, row := range rows.WAL {
+				if row.Key == "node:1/g1" && row.Durable {
+					durable++
+				}
+			}
+			if durable == 0 {
 				t.Error("WAL event must be durable on disk before VL insert")
 				w.WriteHeader(http.StatusInternalServerError)
 				return
@@ -584,9 +597,20 @@ func TestManagerCapacityPausePersistsGapBeforeVLDelivery(t *testing.T) {
 	require.NotEmpty(t, entry.Gaps)
 	require.Equal(t, "PAUSED", entry.Gaps[0].Reason)
 	require.Contains(t, entry.Gaps[0].Detail, "95.0%")
-	state, err := os.ReadFile(filepath.Join(root, "var", "log", "ingest.state.json"))
+	// 缺口与暂停必须可从索引库直接查到（spec §3.5「sqlite3 直接查询缺口/暂停源」的等价断言）。
+	store, err := stateindex.OpenReadOnly(filepath.Join(root, "var", "log", "ingest.index.db"))
 	require.NoError(t, err)
-	require.Contains(t, string(state), "PAUSED")
+	rows, err := store.Load()
+	require.NoError(t, err)
+	_ = store.Close()
+	require.NotEmpty(t, rows.Gaps)
+	foundPaused := false
+	for _, gap := range rows.Gaps {
+		if gap.Reason == "PAUSED" && gap.Key == "node:disk/g1" {
+			foundPaused = true
+		}
+	}
+	require.True(t, foundPaused, "索引库中必须能查到 PAUSED 缺口")
 	readiness := m.CutoverReadiness()
 	require.False(t, readiness.LedgerReady)
 	require.Contains(t, readiness.Reasons, "node:disk/g1:acquire_paused")
