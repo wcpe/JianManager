@@ -41,6 +41,22 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	require.Error(t, restarted.AppendInstanceOutput("uuid-1", "stdout", []byte("not captured\n")))
 	require.False(t, restarted.CutoverReadiness().LedgerReady)
 	require.ErrorContains(t, restarted.ResolveCoveredGaps(), "projection alone cannot resolve")
+
+	// 显式人工确认路径（FR-485 后续）：自动路径对 Raw 写失败一律拒绝，
+	// 而**指名源**的解法应成功——这正是「自动拒绝 vs 管理员显式确认」的分工。
+	// 旧调用（不传参=整节点）行为未改动，由上一条断言守住。
+	var stdoutKey string
+	for key := range restarted.pipes {
+		if strings.Contains(key, "stdout") {
+			stdoutKey = key
+		}
+	}
+	require.NotEmpty(t, stdoutKey, "夹具应含 stdout 源")
+	require.NoError(t, restarted.ResolveCoveredGapsForSource(stdoutKey),
+		"显式人工确认应能解开 Raw 写失败缺口")
+	// 未知名与空名都要被明确拒绝，不能静默成功。
+	require.ErrorContains(t, restarted.ResolveCoveredGapsForSource("inst:9/stderr"), "not found")
+	require.ErrorContains(t, restarted.ResolveCoveredGapsForSource(""), "required")
 }
 
 func TestInstanceFilePrimaryDoesNotDoubleCollectConsoleOutput(t *testing.T) {

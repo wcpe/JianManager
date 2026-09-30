@@ -221,10 +221,16 @@ func (m *Manager) CutoverReadiness() CutoverReadiness {
 		m.mu.Lock()
 		saved := m.state.Sources[key]
 		m.mu.Unlock()
-		closed, complete := m.publishedClosedForSource(source, saved)
-		if !complete || closed < entry.Positions.Durable {
-			result.LedgerReady = false
-			result.Reasons = append(result.Reasons, key+":projection_not_published")
+		// 零数据源（从未采集到任何事件，Durable==0）没有可发布的投影——「空」是合法状态，
+		// 不得因此否决全局切换（与 CP 侧 2026-09-30「空≠缺」语义修正同型）。
+		// 生产实证：inst:152/file（bungee 的空文件日志）与 inst:153/stdout（Beacon 空 stdout）
+		// 在此永久产出 projection_not_published，使 cutover 闸门恒不可满足。
+		if entry.Positions.Durable > 0 {
+			closed, complete := m.publishedClosedForSource(source, saved)
+			if !complete || closed < entry.Positions.Durable {
+				result.LedgerReady = false
+				result.Reasons = append(result.Reasons, key+":projection_not_published")
+			}
 		}
 	}
 	return result
@@ -297,9 +303,82 @@ func (m *Manager) ResolveCoveredGaps() error {
 		if _, err := pipe.Ledger().ResolveGapsThrough(pipe.Key(), closed, "verified published projection"); err != nil {
 			return err
 		}
+		// 静默源出口（2026-09-30 生产实证）：为「已全部投递、但无分段覆盖的尾部」补一段显式覆盖。
+		//
+		// 为何需要：建段只发生在 releaseRecovery（有新批次投递时）——而**静默流**（如某实例的
+		// stderr，自 09-27 起再无新行）永远不会有新批次 → 尾部永远无段可依 → 回收停滞 → 积压不落 →
+		// 源反复被暂停，且 read 已被夹到水位、自己永远走不出去。
+		//
+		// 安全性：仅当尾部**已全部确认投递**（delivery >= read）时才补段 —— 覆盖的是「已证明安全
+		// 另存」的区间，不存在任何未投递数据被跳过；条件不满足则一律不动。
+		if d := entry.Positions.Delivery; d >= entry.Positions.Read && entry.Positions.Read > entry.Positions.Reclaim {
+			segID := fmt.Sprintf("manual-recovery-%d-%d", entry.Positions.Reclaim, entry.Positions.Read)
+			if _, exists := pipe.RecoveryRef(segID); !exists {
+				if err := pipe.BindRecoverySegment(segID, "manual://admin-confirmed", entry.Positions.Reclaim, entry.Positions.Read); err != nil {
+					return err
+				}
+			}
+			// 走完责任转移链，使 CanReclaim 放行（与 releaseRecovery 的状态机同构）。
+			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", "")
+			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", "manual:admin")
+			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryReleased, logtypes.ReleaseNextCopyVerified, "manual:admin")
+			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryCleaned, logtypes.ReleaseProjectionBacked, "manual:admin")
+			// 推进回收并按当前水位剪枝；失败不置死——下一轮自动重试。
+			_, _ = pipe.TryReclaim()
+		}
 		if err := pipe.Ledger().ResumeAcquire(pipe.Key()); err != nil {
 			return err
 		}
+	}
+	return m.persist()
+}
+
+// ResolveCoveredGapsForSource 是「显式人工确认」路径：只解指名源的缺口。
+//
+// 与自动路径（ResolveCoveredGaps）的区别，以及为什么必须要有它：
+//   - 自动路径对 STDIO_RAW_WRITE_FAILED 一律拒绝（projection alone cannot resolve it），
+//     且该拒绝发生在遍历所有源的循环内——一个源的不可验证缺口会中止**整节点**的解算；
+//   - 当该源同时又是「唯一未就绪目标」时，就形成自我指涉：要解缺口需平台就绪，
+//     要平台就绪需该源可查，而它正卡在缺口上。
+//
+// 本方法把「确认丢失并继续」变成管理员的显式动作：解到该源当前读位置，
+// 语义上等于「我确认这段缺口不再补齐」。其它源一概不动。
+func (m *Manager) ResolveCoveredGapsForSource(storageNamespace string) error {
+	if m == nil {
+		return fmt.Errorf("ingest: manager unavailable")
+	}
+	if storageNamespace == "" {
+		return fmt.Errorf("ingest: storage namespace is required")
+	}
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+	m.mu.Lock()
+	pipe := m.pipes[storageNamespace]
+	m.mu.Unlock()
+	if pipe == nil {
+		return fmt.Errorf("ingest: source %s not found", storageNamespace)
+	}
+	entry := pipe.Ledger().Get(pipe.Key())
+	if entry == nil {
+		return fmt.Errorf("ingest: source %s ledger missing", storageNamespace)
+	}
+	// 取值必须**越过所有未解决缺口的末端**：缺口总落在「已读位置」之后，
+	// 只解到读位置覆盖不到它们，ResumeAcquire 会继续拒绝
+	// （unresolved gaps still block acquisition）——这正是 409 的成因。
+	through := entry.Positions.Read
+	if entry.Positions.Durable > through {
+		through = entry.Positions.Durable
+	}
+	for _, gap := range entry.Gaps {
+		if !gap.Resolved && gap.EndPos > through {
+			through = gap.EndPos
+		}
+	}
+	if _, err := pipe.Ledger().ResolveGapsThrough(pipe.Key(), through, "manual resolve by admin"); err != nil {
+		return err
+	}
+	if err := pipe.Ledger().ResumeAcquire(pipe.Key()); err != nil {
+		return err
 	}
 	return m.persist()
 }
@@ -542,8 +621,8 @@ func (m *Manager) Register(source SourceConfig) error {
 		CapacityProvider:    m.capacityProvider,
 		DurablePersist:      m.persist,
 		ReclaimProof:        func(events []logtypes.Event) error { return m.releaseRecovery(source, events) },
-		Delivery: pipeline.FuncHook(func(events []logtypes.Event) (pipeline.DeliveryResult, error) {
-			return m.deliver(source, events)
+		Delivery: pipeline.FuncHook(func(events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
+			return m.deliver(source, events, replay)
 		}),
 	})
 	if err != nil {
@@ -770,7 +849,7 @@ func importArchives(p *pipeline.Pipeline, paths []string) ([]logtypes.Event, boo
 	return out, changed, nil
 }
 
-func (m *Manager) deliver(source SourceConfig, events []logtypes.Event) (pipeline.DeliveryResult, error) {
+func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
 	if len(events) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
@@ -840,7 +919,21 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event) (pipelin
 	if saved.PublicationPending {
 		writeEvents = expected
 	}
-	result, err := m.writeProjection(source, expected, generation, writeEvents, toWrite, saved.PublicationPending)
+	// 取代 vs 累积（2026-09-30 生产实证）：`expected` 是该源的**全量** canonical 集 ✓，
+	// `toWrite` 是**本批** ✓，且本批恒为全量的子集 ✓。故当两者**条数相等**时，本次写入
+	// 已覆盖全量 → 新代包含旧代的一切 → **取代**安全；否则是增量微代次 → 必须累积
+	// （既有测试 TestManagerNewBatchPublishesIsolatedView 守此契约）。
+	// 此前的漏洞：只认 PublicationPending，**重启后的全量重放也走累积** ✗ → 查询并集无界
+	// （实测 7 代）→ VL 排序超 51MB → 400 → 该目标恒 not_ready。
+	// 取代 vs 累积（2026-09-30 生产实证）：replay=本次是「存量重放」（由 deliverPendingBestEffort
+	// 发起，见 acquire/pipeline.go）；**只有它写入的是全量** → 新代包含旧代一切 → 取代安全
+	// （旧代纯冗余）；普通批次仍累积（既有测试 TestManagerNewBatchPublishesIsolatedView 守此契约）。
+	// 此前只认 PublicationPending，**重启后的存量重放也走累积** ✗ → 查询并集无界（实测 7 代）
+	// → VL 排序超 51MB → 400 → 该目标恒 not_ready。
+	// 注：曾试过用数据形状判别（EventsStored / EventsStoredThrough / eventsStored /
+	// len(toWrite)==len(expected)），全部被证伪：真实重放的批次只是全量的子集。
+	replace := saved.PublicationPending || replay
+	result, err := m.writeProjection(source, expected, generation, writeEvents, toWrite, replace)
 	if err != nil {
 		return result, err
 	}
@@ -1029,7 +1122,7 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		"generation", generation, "source", source.LogSourceID,
 		"events", len(writeEvents), "archiveEvents", len(archiveEvents),
 		"firstEventTime", batchFirst, "lastEventTime", batchLast,
-		)
+	)
 	status, err := m.insertInBatches(client, writeEvents, generation)
 	slog.Info("投影写入结束",
 		"generation", generation, "source", source.LogSourceID,
@@ -1350,6 +1443,16 @@ func (m *Manager) verifyProjectionOnce(ctx context.Context, source SourceConfig,
 	return m.verifyProjectionOnceAllowed(ctx, m.vl, source, generation, events, nil)
 }
 
+// utcDayBounds 返回 "2006-01-02" 形式的 UTC 日的闭区间 [起, 止]。
+// 格式不符时返回 ok=false，调用方保持原行为（向后兼容）。
+func utcDayBounds(utcDay string) (time.Time, time.Time, bool) {
+	day, err := time.Parse("2006-01-02", utcDay)
+	if err != nil {
+		return time.Time{}, time.Time{}, false
+	}
+	return day, day.Add(24*time.Hour - time.Nanosecond), true
+}
+
 // verifyProjectionOnceAllowed 执行一次校验查询。
 //
 // 与 verifyProjectionOnceWithClient 的唯一差别是 allowed：分批校验时，各片的时间范围重叠，
@@ -1395,14 +1498,29 @@ func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup
 	selector := "projection_generation:=" + strconv.Quote(generation) +
 		" AND log_source_id:=" + strconv.Quote(sourceID) +
 		" AND source_generation:=" + strconv.Quote(sourceGeneration)
+	// 时间窗必须**夹在本源的 UTC 日内**：±1s 的宽容窗会越界到相邻日，
+	// 把「上一天批次的日界事件」（如 09-28 窗口下探 1s 落进 09-27T23:59:59.126）
+	// 带进结果集；该事件不属于本批 allowed → 误判 `unexpected or duplicate
+	// projection event_id` → 运行时创建失败 → 节点离线（2026-09-30 生产事故）。
+	// 日界事件在自己那一天的窗口内仍被正常覆盖，完整性不受影响。
+	start := first.Add(-time.Second)
+	end := last.Add(time.Second)
+	if dayStart, dayEnd, ok := utcDayBounds(source.UTCDay); ok {
+		if start.Before(dayStart) {
+			start = dayStart
+		}
+		if end.After(dayEnd) {
+			end = dayEnd
+		}
+	}
 	params := url.Values{
 		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
 		// 不设 limit：VL 按时间返回窗口内的记录，而分片是按**索引**切的，其时间跨度可能很宽
 		// （2026-09-28 生产：500 条事件跨约 10 小时），窗口内除本片外还会有其他分片的记录。
 		// 原先 `limit = len(events)+1` 会截断返回，导致本片记录凑不齐 → 误判「不可见」→
 		// 运行时创建失败 → 采集静默停摆（多轮盲改后才由参数日志定位）。
-		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
-		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
+		"start": {start.UTC().Format(time.RFC3339Nano)},
+		"end":   {end.UTC().Format(time.RFC3339Nano)},
 	}
 	// 诊断（2026-09-28 生产）：校验恒「不可见」而数据确实在 VL 里时，必须能拿到
 	// 平台**实际发出的**查询参数，与手工复刻查询逐字段对照。此前多轮修复都因缺少
@@ -1497,14 +1615,29 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 	selector := "projection_generation:=" + strconv.Quote(generation) +
 		" AND log_source_id:=" + strconv.Quote(sourceID) +
 		" AND source_generation:=" + strconv.Quote(sourceGeneration)
+	// 时间窗必须**夹在本源的 UTC 日内**：±1s 的宽容窗会越界到相邻日，
+	// 把「上一天批次的日界事件」（如 09-28 窗口下探 1s 落进 09-27T23:59:59.126）
+	// 带进结果集；该事件不属于本批 allowed → 误判 `unexpected or duplicate
+	// projection event_id` → 运行时创建失败 → 节点离线（2026-09-30 生产事故）。
+	// 日界事件在自己那一天的窗口内仍被正常覆盖，完整性不受影响。
+	start := first.Add(-time.Second)
+	end := last.Add(time.Second)
+	if dayStart, dayEnd, ok := utcDayBounds(source.UTCDay); ok {
+		if start.Before(dayStart) {
+			start = dayStart
+		}
+		if end.After(dayEnd) {
+			end = dayEnd
+		}
+	}
 	params := url.Values{
 		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
 		// 不设 limit：VL 按时间返回窗口内的记录，而分片是按**索引**切的，其时间跨度可能很宽
 		// （2026-09-28 生产：500 条事件跨约 10 小时），窗口内除本片外还会有其他分片的记录。
 		// 原先 `limit = len(events)+1` 会截断返回，导致本片记录凑不齐 → 误判「不可见」→
 		// 运行时创建失败 → 采集静默停摆（多轮盲改后才由参数日志定位）。
-		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
-		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
+		"start": {start.UTC().Format(time.RFC3339Nano)},
+		"end":   {end.UTC().Format(time.RFC3339Nano)},
 	}
 	// 诊断（2026-09-28 生产）：校验恒「不可见」而数据确实在 VL 里时，必须能拿到
 	// 平台**实际发出的**查询参数，与手工复刻查询逐字段对照。此前多轮修复都因缺少
