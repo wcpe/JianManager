@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
@@ -433,6 +434,11 @@ func DefaultPartitionStatus(key catalog.PartitionKey, rec *catalog.Record, ref c
 			st.NotReadyReasons = append(st.NotReadyReasons, ReasonRecoveryRequired)
 		}
 		if len(st.NotReadyReasons) == 0 {
+			// 观测日志（2026-09-30）：这里是「有记录但判定不可查」的兜底；
+			// 打出原因与位置，就能终止“到底走的哪条分支”的猜测。
+			slog.Info("DefaultPartitionStatus：记录不可查，归因 RANGE_UNAVAILABLE",
+				"reasons", rv.PartialReasons, "owner", rec.Owner, "dir", rec.OwnerDirID,
+				"state", string(rec.MigrationState), "recoveryRequired", rec.RecoveryRequired)
 			st.NotReadyReasons = append(st.NotReadyReasons, ReasonRangeUnavailable)
 		}
 	}

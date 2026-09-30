@@ -341,6 +341,45 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		target.Reasons = append([]string(nil), target.Reasons...)
 		view.TargetCoverage[target.TargetID] = target
 	}
+
+	// 查询窗内无分区的目标：按「空」而非「坏」纳入覆盖（与 #60 的 CP 侧同口径；
+	// 2026-09-30 生产实证：静默源 inst:153 因此令平台 complete 恒 false）。
+	//
+	// 背景：res.Coverage 与 ranges 都按**分区**构造，窗口内没有分区的目标两边都不出现 →
+	// planRangesForView 判 not_ready/RANGE_UNAVAILABLE → 一个没数据的源把整个平台判成未就绪。
+	// 处置：只要它的记录在 Catalog 中确实可查（OwnerForQuery 给得出权威），就为它补一条
+	// **空成功覆盖**。注意**不**标为可查——否则会为它追加一个指向不存在分区的 range，
+	// 反而制造 range-unavailable；不标则可走非可查分支，直接采用这条空覆盖并 continue。
+	for _, targetID := range view.TargetIDs {
+		if _, exists := view.TargetCoverage[targetID]; exists {
+			continue
+		}
+		key, ok := parseTargetKey(targetID)
+		if !ok {
+			continue
+		}
+		// 注意：不能用 p.cat.Get(key)——key 里是**查询窗内那一天**，而静默源的最后分区
+		// 早于窗口（生产实证：inst:153 止于 09-27，窗口是今天）→ Get 必然落空 →
+		// 本修复会一路 continue 而毫无作用。故改为按**命名空间**找它任意一个分区：
+		// 只要该源确实有可查记录，就说明「窗口内无数据」而非「不可用」。
+		var rec *catalog.Record
+		for _, candidate := range p.cat.Keys() {
+			if candidate.StorageNamespace != key.StorageNamespace {
+				continue
+			}
+			if r, ok := p.cat.Get(candidate); ok && r != nil {
+				rec = r
+				break
+			}
+		}
+		if rec == nil {
+			continue
+		}
+		if ref := catalog.OwnerForQuery(rec); !ref.OK {
+			continue
+		}
+		view.TargetCoverage[targetID] = TargetCoverage{TargetID: targetID, State: CoverageSuccess}
+	}
 	if !req.Transient {
 		p.mu.Lock()
 		p.pruneViewsLocked()
@@ -485,8 +524,18 @@ func (p *Planner) planRangesForView(req PlanRequest, view *QueryView, res *PlanR
 		if original, ok := view.TargetCoverage[targetID]; ok {
 			res.Coverage.AddTarget(original)
 		} else {
+			// 视图未为该 target 建覆盖：记录可查，但**查询窗内没有任何分区**（典型：静默源，
+			// 其数据全部早于窗口）。这与 #60 在 CP 侧「无数据 ≠ 故障」同口径：按**空结果**
+			// 计入成功，而不是伪造成 not_ready/RANGE_UNAVAILABLE —— 否则一个没有数据的源
+			// 会永久把整个平台判成未就绪（2026-09-30 生产实证：inst:153 令 complete 恒 false）。
+			// 注意 continue：不为它产出 range，故查询结果中它贡献 0 行，正是「空」的语义。
 			res.Coverage.AddTarget(TargetCoverage{
-				TargetID: targetID, State: CoverageNotReady, Reasons: []string{ReasonRangeUnavailable},
+				TargetID:          targetID,
+				State:             CoverageSuccess,
+				ClosedVisibleSeq:  cvs,
+				CatalogGeneration: wantGen,
+				Owner:             ownerStr,
+				DirID:             wantDir,
 			})
 			continue
 		}
