@@ -611,7 +611,7 @@ func (m *Manager) Register(source SourceConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pipes[key]; ok {
-		if m.sources[key] != source {
+		if !sameSourceConfig(m.sources[key], source) {
 			return fmt.Errorf("ingest: source identity already bound to another configuration")
 		}
 		return nil
@@ -1568,6 +1568,18 @@ func utcDayBounds(utcDay string) (time.Time, time.Time, bool) {
 		return time.Time{}, time.Time{}, false
 	}
 	return day, day.Add(24*time.Hour - time.Nanosecond), true
+}
+
+// sameSourceConfig 判定两次登记是否属于同一份源配置。
+//
+// UTCDay 是**登记日的派生默认值**（空值填「今天」，见 RegisterSource 归一化），
+// 不构成源身份：跨天后同一源的再登记会因它不同而被误判为
+// 「another configuration」→ 实例日志采集登记被拒 → 实例起不来
+// （2026-10-01 生产实证：午夜后全部重登记被拒，11 台实例无法启动）。
+// 故比较前把它归零，其余字段仍严格逐字段比较。
+func sameSourceConfig(a, b SourceConfig) bool {
+	a.UTCDay, b.UTCDay = "", ""
+	return a == b
 }
 
 // verifyProjectionOnceAllowed 执行一次校验查询。
