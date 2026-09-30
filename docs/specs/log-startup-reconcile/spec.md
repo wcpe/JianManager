@@ -28,7 +28,7 @@
 - 不改投递/发布语义（新代仍 `replace` 取代、写入后仍逐条内容校验）、不改运行期 `pollOnce` 投递路径；
 - **不做内容级（逐条）对账**——条数相同而内容缺失/被替换**无法**由本 FR 检出，见 §2.4 口径与检出方式；
 - 不改 FR-496 的索引表结构（复用 `projection` 记账面：`generation` / `events_stored_through` / `pending`，**不新增表、不改 DDL**）；
-- 不改 `apps/worker/main.go` 与 `internal/worker/config.go`（本次改动面限制）→ `log_reconcile.*` 的 YAML 接线未完成，见 §5「接线状态」。
+- 不改 `apps/worker/main.go` 与 `internal/worker/config.go`（本次改动面限制）→ `log_reconcile.*` 的 YAML 接线已于 2026-10-01 完成，见 §5「接线状态」。
 
 ## 2. 设计
 
