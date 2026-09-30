@@ -44,17 +44,21 @@ CREATE TABLE position (
   pause_reason   TEXT
 );
 -- 未解缺口（逐条可查、可人工解算）
+-- 实现要点（2026-10-01 加固）：WITHOUT ROWID + 复合主键 (key,id)（id 为源内序号，
+-- 保证重启后行身份可稳定推导，支撑「只写变更行」）；不设冗余二级索引——实测
+-- rowid 表 + idx_gap_key_resolved 会把 85B 源键存 3 份，db 达 450.9MB（原 JSON 306.5MB）；
+-- 改造后 276.7MB。
 CREATE TABLE gap (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  key        TEXT NOT NULL REFERENCES source(key),
+  id         INTEGER NOT NULL,
+  key        TEXT NOT NULL,
   start_pos  INTEGER NOT NULL,
   end_pos    INTEGER NOT NULL,
   reason     TEXT NOT NULL,
   detail     TEXT,
   resolved   INTEGER NOT NULL DEFAULT 0,
-  resolution TEXT
-);
-CREATE INDEX idx_gap_key_resolved ON gap(key, resolved);
+  resolution TEXT,
+  PRIMARY KEY (key, id)
+) WITHOUT ROWID;
 -- 投影发布状态（重启增量对账的记账面）
 CREATE TABLE projection (
   key        TEXT PRIMARY KEY REFERENCES source(key),
