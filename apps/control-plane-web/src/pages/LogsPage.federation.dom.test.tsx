@@ -398,13 +398,24 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 			http.get(API('/logs/federation/tail'), ({ request }) => {
 				expect(new URL(request.url).searchParams.get('mode')).toBe('FOLLOW_LIVE')
 				return HttpResponse.json({
-					items: [{ event_id: 'live-1', log_source_id: 'node:1', message: 'federation-live-tail', event_time_utc: '2026-09-23T00:00:00Z' }],
+					// 默认时间范围为有界窗口（最近 24h）：夹具事件时间必须落在窗口内，
+					// 否则会被（正确地）过滤掉而看不到实时事件——这正是有界窗口的预期行为。
+					items: [{ event_id: 'live-1', log_source_id: 'node:1', message: 'federation-live-tail', event_time_utc: new Date().toISOString() }],
 					coverage: { complete: true, targets: [], enumeration_state: 'OPEN' }, exhausted: false,
 				})
 			}),
 		)
 		const user = userEvent.setup()
 		renderWithProviders(<LogsPage />)
+		// 默认时间窗为 24h（2026-09-30 性能依据）；固定选择「全部时间」，
+		// 让本用例只验证「实时跟随」机制本身，不随默认窗口漂移。
+		// 时间范围是 Select（combobox），不是按钮。
+		HTMLElement.prototype.hasPointerCapture ??= () => false
+		HTMLElement.prototype.setPointerCapture ??= () => {}
+		HTMLElement.prototype.releasePointerCapture ??= () => {}
+		HTMLElement.prototype.scrollIntoView ??= () => {}
+		await user.click(screen.getAllByRole('combobox')[0])
+		await user.click(await screen.findByRole('option', { name: '全部时间' }))
 		await user.click(await screen.findByRole('button', { name: '实时跟随' }))
 		expect(await screen.findByText('federation-live-tail')).toBeInTheDocument()
 	})

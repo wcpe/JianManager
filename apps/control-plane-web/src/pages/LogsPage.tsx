@@ -144,7 +144,10 @@ export default function LogsPage() {
     return Number.isFinite(n) && n > 0 ? n : null
   })
   const [keyword, setKeyword] = useState('')
-  const [range, setRange] = useState<TimeRangePreset>('all')
+    // 默认 24h（2026-09-30 实测依据）：默认「全部时间」会让每个目标的全部分区参与查询——
+    // 实测单次联邦请求扫描 105 个日分区、约 2.6s；带 24h 窗口的同规模查询仅 ~108ms（约 24×）。
+    // 「全部时间」仍可从时间范围筛选器显式选择。
+    const [range, setRange] = useState<TimeRangePreset>('24h')
   const [page, setPage] = useState(1)
 	const [federationCursors, setFederationCursors] = useState<Record<number, string>>({ 1: '' })
   // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（FR-480 online_only）。
@@ -269,6 +272,21 @@ export default function LogsPage() {
 		: classicLoading || federationProbePending
 	const isError = legacyMode ? legacyQuery.isError : classicError
 	const hasData = legacyMode ? !!legacyQuery.data : !!data
+	// 慢查询提示：长耗时查询不能只留一个转圈——让用户知道「还在跑、等了多久」，
+	// 并提示缩小时间范围（无界范围是最慢路径）。纯前端计时，不改任何查询语义。
+	const [waitedSeconds, setWaitedSeconds] = useState(0)
+	useEffect(() => {
+		if (!isLoading) {
+			setWaitedSeconds(0)
+			return
+		}
+		const startedAt = Date.now()
+		const timer = window.setInterval(() => {
+			setWaitedSeconds(Math.floor((Date.now() - startedAt) / 1000))
+		}, 1000)
+		return () => window.clearInterval(timer)
+	}, [isLoading])
+	const slowQueryHint = isLoading && waitedSeconds >= 3
 
   // 空结果语义：失败/partial 不得呈「暂无日志」空成功（FR-482）。
   // 引擎未就绪的降级是例外中的例外：经典路径可能确实没有行，但引擎侧数据从未被查询，
@@ -617,7 +635,14 @@ export default function LogsPage() {
       )}
 
       {isLoading && !hasData ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
+        <div className="flex flex-col gap-1">
+          <p className="text-muted-foreground">{t('common.loading')}</p>
+          {slowQueryHint && (
+            <p className="text-xs text-muted-foreground">
+              {t('logs.slowQueryHint', { seconds: waitedSeconds })}
+            </p>
+          )}
+        </div>
       ) : isError ? (
         <p className="text-destructive">{t('logs.loadError')}</p>
       ) : (
