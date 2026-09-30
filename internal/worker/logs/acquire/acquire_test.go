@@ -506,7 +506,7 @@ func TestWorkerSourceSamePipelineNoRecursiveVL(t *testing.T) {
 	pipe := NewPipeline(led, key, wal)
 	pipe.SetSourceWorker(true)
 	deliverCalls := 0
-	pipe.SetDeliver(func(events []logtypes.Event) (int, bool, error) {
+	pipe.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
 		deliverCalls++
 		return 0, false, os.ErrPermission
 	})

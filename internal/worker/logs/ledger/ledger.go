@@ -235,7 +235,11 @@ func (l *Ledger) Get(key SourceKey) *Entry {
 	return e.clone()
 }
 
-// AdvanceRead 推进运行时读指针。崩溃后允许回退重建。
+// AdvanceRead 推进运行时读指针。崩溃后允许回退重建——
+// **但不得退到回收水位之下**：≤ reclaim 的事件已被证明「安全另存」（这正是 reclaim 的语义），
+// 重读它们既浪费，又会让 releaseRecovery 的 from(=reclaim) >= to 恒成立、静默不再建段，
+// 最终把回收永久卡死（2026-09-30 生产实证：read=2.24M < reclaim=13.4M → 源反复暂停、
+// 积压 7998 永不回落）。故此处把下界夹到 reclaim：只上移，不越过任何未证安全的位置。
 func (l *Ledger) AdvanceRead(key SourceKey, pos uint64) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -243,7 +247,9 @@ func (l *Ledger) AdvanceRead(key SourceKey, pos uint64) error {
 	if err != nil {
 		return err
 	}
-	// read_position 可回退：仅记录本次指针，不强制单调。
+	if pos < e.Positions.Reclaim {
+		pos = e.Positions.Reclaim
+	}
 	e.Positions.Read = pos
 	return nil
 }

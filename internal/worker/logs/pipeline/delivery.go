@@ -13,22 +13,22 @@ type DeliveryResult struct {
 type DeliveryHook interface {
 	// Deliver 投递一批完整事件。
 	// 成功时返回 HTTP 状态码；ackLost=true 表示请求可能已成功但 ACK 丢失。
-	Deliver(events []logtypes.Event) (DeliveryResult, error)
+	Deliver(events []logtypes.Event, replay bool) (DeliveryResult, error)
 }
 
 // FuncHook 将函数适配为 DeliveryHook。
-type FuncHook func(events []logtypes.Event) (DeliveryResult, error)
+type FuncHook func(events []logtypes.Event, replay bool) (DeliveryResult, error)
 
 // Deliver 实现 DeliveryHook。
-func (f FuncHook) Deliver(events []logtypes.Event) (DeliveryResult, error) {
-	return f(events)
+func (f FuncHook) Deliver(events []logtypes.Event, replay bool) (DeliveryResult, error) {
+	return f(events, replay)
 }
 
 // NopHook 只记账不投递（测试/降级）。
 type NopHook struct{}
 
 // Deliver 返回 0 状态与 nil 错误；调用方应视为未投递。
-func (NopHook) Deliver(events []logtypes.Event) (DeliveryResult, error) {
+func (NopHook) Deliver(events []logtypes.Event, replay bool) (DeliveryResult, error) {
 	_ = events
 	return DeliveryResult{HTTPStatus: 0}, nil
 }

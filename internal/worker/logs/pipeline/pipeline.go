@@ -156,8 +156,8 @@ func New(opts Options) (*Pipeline, error) {
 	p.imp = acquire.NewArchiveImporter(led, key)
 
 	if opts.Delivery != nil {
-		inner.SetDeliver(func(events []logtypes.Event) (int, bool, error) {
-			res, err := p.hook.Deliver(events)
+		inner.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
+			res, err := p.hook.Deliver(events, replay)
 			if err != nil {
 				return 0, res.AckLost, err
 			}
@@ -447,11 +447,11 @@ func archiveUTCDay(path string) (time.Time, error) {
 // SetDelivery 运行时替换投递钩子。
 func (p *Pipeline) SetDelivery(h DeliveryHook) {
 	p.hook = h
-	p.inner.SetDeliver(func(events []logtypes.Event) (int, bool, error) {
+	p.inner.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
 		if h == nil {
 			return 0, false, nil
 		}
-		res, err := h.Deliver(events)
+		res, err := h.Deliver(events, replay)
 		if err != nil {
 			return 0, res.AckLost, err
 		}

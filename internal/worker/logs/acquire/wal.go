@@ -361,6 +361,14 @@ func (w *WAL) RecoverySegmentID() string {
 func (w *WAL) TryReclaim() (uint64, error) {
 	pos, err := w.led.TryReclaim(w.key)
 	if err != nil {
+		// 账本拒绝**推进**（典型：回收位置恰好触到恢复分段边界，CoversTo > Reclaim 不成立）时，
+		// 仍按**账本当前**的回收位置剪枝：该前缀已被 CanReclaim 判过安全，保留它们只会让积压
+		// 永不回落 → 滞回（≤上限一半）永不满足 → 源永久停在 paused。
+		// 2026-09-30 生产实证：这里一错即返，prune 便永不执行，7998 条卡死数小时、
+		// 积压数字一个字节不动。剪枝上界仍是账本自己的水位，不越过任何未裁定安全的位置。
+		if cur := w.led.Get(w.key); cur != nil {
+			w.pruneReclaimed(cur.Positions.Reclaim)
+		}
 		return pos, err
 	}
 	w.pruneReclaimed(pos)

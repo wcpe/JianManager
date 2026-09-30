@@ -24,7 +24,7 @@ Caused by: java.lang.IllegalStateException: nested
 `
 
 func okDelivery(p *[]logtypes.Event) DeliveryHook {
-	return FuncHook(func(events []logtypes.Event) (DeliveryResult, error) {
+	return FuncHook(func(events []logtypes.Event, replay bool) (DeliveryResult, error) {
 		*p = append(*p, events...)
 		return DeliveryResult{HTTPStatus: 200}, nil
 	})
@@ -258,7 +258,7 @@ func TestPipeline_AckLostYieldsUnknown(t *testing.T) {
 		LogSourceID:      "src-ack",
 		SourceGeneration: "g1",
 		Path:             path,
-		Delivery: FuncHook(func(events []logtypes.Event) (DeliveryResult, error) {
+		Delivery: FuncHook(func(events []logtypes.Event, replay bool) (DeliveryResult, error) {
 			return DeliveryResult{HTTPStatus: 200, AckLost: true}, nil
 		}),
 		BaseTime: time.Date(2026, 9, 20, 12, 0, 1, 0, time.UTC),

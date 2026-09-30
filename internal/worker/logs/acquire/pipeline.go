@@ -15,7 +15,7 @@ type Pipeline struct {
 	wal *WAL
 	// deliver 模拟 VL JSON stream 请求级投递。
 	// 返回 httpStatus 与 ackLost。
-	deliver func(events []logtypes.Event) (httpStatus int, ackLost bool, err error)
+	deliver func(events []logtypes.Event, replay bool) (httpStatus int, ackLost bool, err error)
 	// durablePersist 将已提交的 WAL/账本持久化；失败时禁止对下游发请求。
 	durablePersist func() error
 	// suppressRecursiveVL source=worker 时抑制采集失败写回 VL。
@@ -40,7 +40,7 @@ func NewPipeline(led *ledger.Ledger, key ledger.SourceKey, wal *WAL) *Pipeline {
 }
 
 // SetDeliver 注入投递函数（HTTP 2xx / ACK 丢失模拟）。
-func (p *Pipeline) SetDeliver(fn func(events []logtypes.Event) (int, bool, error)) {
+func (p *Pipeline) SetDeliver(fn func(events []logtypes.Event, replay bool) (int, bool, error)) {
 	p.deliver = fn
 }
 
@@ -102,8 +102,21 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 		return fmt.Errorf("acquire: capacity paused: %s", dec.Reason)
 	}
 
+	// 采集循环每轮都会经过此处：追加前先尝试回收，使「积压回落 → 低水位放行 → 自动恢复」
+	// 这条链路对**已暂停**的源同样成立。不能放进 WAL.Append：那里持锁，而 TryReclaim
+	// 要拿同一把锁（不可重入）。
+	//
+	// 2026-09-30 生产实证：缺了本调用，已投递条目的回收永不推进 → 积压停在 5999 一动不动 →
+	// 滞回阈值（上限一半 = 2500）永远打不开 → 源可在 paused 上一停数小时且毫无自愈迹象。
+	if _, err := p.wal.TryReclaim(); err != nil {
+		p.noteSelfFailure(err.Error())
+	}
 	if err := p.wal.Append(events...); err != nil {
 		// append 失败（含已暂停）：补 gap，禁止静默。
+		// 被暂停（含积压上限）时，仍把 WAL 里**已 durable、未确认投递**的条目发出去：
+		// 投递不能挂在摄取上，否则暂停即断流 → 已读未投的积压永不外发 →
+		// 回收位置不动 → 段无从覆盖 → 滞回永不满足（2026-09-30 生产实证：残留 7998 条卡死数小时）。
+		p.deliverPendingBestEffort()
 		_ = p.led.RecordGap(p.key, gapStart, gapEnd, "APPEND_REJECTED", err.Error())
 		p.noteSelfFailure(err.Error())
 		return err
@@ -128,7 +141,7 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 	if p.deliver == nil {
 		return nil
 	}
-	status, ackLost, err := p.deliver(events)
+	status, ackLost, err := p.deliver(events, false)
 	if err != nil && p.suppressRecursiveVL {
 		// worker 自源：失败只计本地，不递归写 VL。
 		p.noteSelfFailure(err.Error())
@@ -140,15 +153,69 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 		return err
 	}
 	// HTTP 2xx → REQUEST_DONE only；AckLost → UNKNOWN（恢复责任保留）。
-	return p.wal.RecordHTTPResult(DeliveryResult{
+	res := p.wal.RecordHTTPResult(DeliveryResult{
 		StartPos:   gapStart,
 		EndPos:     gapEnd,
 		HTTPStatus: status,
 		AckLost:    ackLost,
 	})
+	if res != nil {
+		return res
+	}
+	// 投递结果落账后**顺手推进回收**：这是正常投递路径里应有的回收点。
+	//
+	// 缺了它会怎样（2026-09-30 生产实证）：积压计数＝已投递但未回收的条目，
+	// 只在「恢复分段完成」流程里才被推进 → 数字只增不减 → WAL 滞回
+	// （须回落到上限一半以下才自动恢复）永远打不开 → 源永久停在 paused，
+	// 表现为「一个字节都不动」的死滞。TryReclaim 自带账本 CanReclaim 门禁，
+	// 不会提前回收未投递数据；失败只记录、不返回，避免把「回收没成功」
+	// 误报成「投递失败」。
+	if _, err := p.wal.TryReclaim(); err != nil {
+		p.noteSelfFailure(err.Error())
+	}
+	return nil
 }
 
 // noteSelfFailure 本地可观测失败；source=worker 禁止递归 VL。
+// deliverPendingBestEffort 尽力投递「已 durable 但尚未确认」的条目。
+//
+// 只在摄取被拒（暂停）时调用：此时没有新批次可投，但 WAL 里的存量仍需外发，
+// 否则积压只增不减、回收滞回永远打不开。语义上等价于「暂停只停摄取，不停排空」。
+// 只读 WAL 快照、只发已落盘条目；重复投递由 WAL 位置账本自防（RecordHTTPResult 幂等推进）。
+func (p *Pipeline) deliverPendingBestEffort() {
+	if p.deliver == nil {
+		return
+	}
+	entries := p.wal.Snapshot()
+	pending := make([]logtypes.Event, 0, len(entries))
+	for _, e := range entries {
+		if !e.Durable {
+			continue
+		}
+		pending = append(pending, e.Event)
+	}
+	if len(pending) == 0 {
+		return
+	}
+	status, ackLost, err := p.deliver(pending, true)
+	if err != nil {
+		// 失败不改状态、不记 gap：源本就处于暂停，重试留给下一轮。
+		p.noteSelfFailure(err.Error())
+		return
+	}
+	if res := p.wal.RecordHTTPResult(DeliveryResult{
+		StartPos:   pending[0].Record.Start,
+		EndPos:     pending[len(pending)-1].Record.End,
+		HTTPStatus: status,
+		AckLost:    ackLost,
+	}); res != nil {
+		p.noteSelfFailure(res.Error())
+		return
+	}
+	if _, err := p.wal.TryReclaim(); err != nil {
+		p.noteSelfFailure(err.Error())
+	}
+}
 func (p *Pipeline) noteSelfFailure(reason string) {
 	p.workerSelfFailures++
 	_ = reason
