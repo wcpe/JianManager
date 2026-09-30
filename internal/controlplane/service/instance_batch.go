@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"gorm.io/gorm"
 
@@ -277,7 +276,13 @@ func (s *InstanceBatchService) delegateBatchOne(req InstanceBatchRequest, inst *
 		return fmt.Errorf("Worker %s 未连接", inst.Node.UUID)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 与单实例 delegateToWorker 同源：restart 走「优雅停止 + 等待上一代进程退出 + 启动」的
+	// 同步串行链，须按生效的优雅停止超时放大预算，否则长关服实例会被本项目判超时而误报失败。
+	var gracefulStopSeconds int32
+	if s.instance != nil {
+		gracefulStopSeconds = s.instance.gracefulStopTimeoutSeconds()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), delegateRPCTimeout(string(req.Action), gracefulStopSeconds))
 	defer cancel()
 
 	if req.Action == InstanceBatchCommand {

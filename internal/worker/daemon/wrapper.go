@@ -405,6 +405,16 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 		return
 	}
 
+	// 双开防线：自动重启前确认自己仍是该实例的当前 wrapper。PID 记录已被新 wrapper 接管，
+	// 说明本进程已脱离平台控制（socket 被抢，从此收不到任何控制帧），此时再拉起 Java 只会
+	// 造出一个平台无法寻址的第二个进程——真机现象：手动 stop 之后 daemon 又把进程自动拉起过
+	// 一次（短暂启动后退出）。放弃重启并收摊，把实例让给新 wrapper。
+	if !w.ownsPIDRecord() {
+		slog.Warn("PID 记录已由新的 wrapper 接管，放弃自动重启并退出", "instanceId", w.cfg.InstanceUUID)
+		w.signalClose()
+		return
+	}
+
 	if !w.cfg.AutoRestart || w.isAutoRestartOff() || w.isClosed() {
 		w.signalClose()
 		return
@@ -680,11 +690,34 @@ func (w *Wrapper) forceKill(cmd *exec.Cmd) {
 	killProcessTree(cmd)
 }
 
+// cleanupPIDFile 退出清理：仅当 PID 记录仍指向本 wrapper 时才删除 PID 文件与 socket 文件。
+//
+// 归属校验不可省：wrapper 与实例不是一对一（快速 stop→start 会换新 wrapper，旧 wrapper 可能
+// 晚于新 wrapper 才退出）。旧 wrapper 若无条件清理，会把新 wrapper 刚写入的 PID 记录与它正在
+// 监听的 socket 一并抹掉——新实例从此既无法被 PID 文件发现（WaitForPriorExit 误判「上一代已
+// 清理」直接放行），也无法按路径拨通，控制通道形同失联。
 func (w *Wrapper) cleanupPIDFile() {
+	if rec, err := w.pidFile.ReadRecord(); err == nil && rec.WrapperPID > 0 && rec.WrapperPID != os.Getpid() {
+		slog.Warn("PID 记录已属于新的 wrapper，跳过清理以免破坏其 PID 文件与 socket",
+			"instanceId", w.cfg.InstanceUUID, "recordWrapperPid", rec.WrapperPID, "selfPid", os.Getpid())
+		return
+	}
 	if err := w.pidFile.Remove(); err != nil {
 		slog.Warn("删除 PID 文件失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 	}
 	RemoveSocket(w.addr)
+}
+
+// ownsPIDRecord 报告本 wrapper 是否仍是该实例 PID 记录的主人。
+//
+// 记录缺失/不可读、或记录里没有 wrapper pid 时一律按「是」处理：归属校验只用于识别
+// 「已被新 wrapper 明确接管」这一确定情形，不改变既有的自动重启行为。
+func (w *Wrapper) ownsPIDRecord() bool {
+	rec, err := w.pidFile.ReadRecord()
+	if err != nil {
+		return true
+	}
+	return rec.WrapperPID == 0 || rec.WrapperPID == os.Getpid()
 }
 
 // wrapperOutput 把 Java 的 stdout/stderr 作为帧转发给已连接的 Worker。
@@ -817,15 +850,23 @@ func resolveStopCommand(cfg string) string {
 	return defaultStopCommand
 }
 
-// resolveGracefulStopTimeout 返回优雅停止超时，按优先级解析：
+// resolveGracefulStopTimeout 返回本 wrapper 实例的优雅停止超时（见包级同名函数说明）。
+//
+// config 值在实例启动时定型，故设置变更只对其后「新启动」的实例生效，已运行实例保留启动时的值。
+func (w *Wrapper) resolveGracefulStopTimeout() time.Duration {
+	return resolveGracefulStopTimeout(w.cfg.GracefulStopTimeoutSeconds)
+}
+
+// resolveGracefulStopTimeout 按优先级解析优雅停止超时：
 //  1. 启动时下发的 config 值（CP 从平台设置 graceful_stop.timeout 取生效值，FR-063）；
 //  2. 环境变量（供测试/集成缩短）；
 //  3. 默认值。
 //
-// config 值在实例启动时定型，故设置变更只对其后「新启动」的实例生效，已运行实例保留启动时的值。
-func (w *Wrapper) resolveGracefulStopTimeout() time.Duration {
-	if w.cfg.GracefulStopTimeoutSeconds > 0 {
-		return time.Duration(w.cfg.GracefulStopTimeoutSeconds) * time.Second
+// 同时供 prior_exit.go 推导「等待上一代进程退出」的预算（PriorExitBudget）：预算必须覆盖
+// 这里的强杀兜底，否则旧进程正在正常关服就会被误判超时并被拒绝启动（假失败）。
+func resolveGracefulStopTimeout(cfgSeconds int) time.Duration {
+	if cfgSeconds > 0 {
+		return time.Duration(cfgSeconds) * time.Second
 	}
 	if v := os.Getenv(envGracefulStopTimeout); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
