@@ -239,7 +239,19 @@ func (c *Client) params(rng query.AuthoritativeRange, q query.RangeQuery) (url.V
 }
 
 func searchQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
-	return selectorQuery(rng, q) + " | sort by (_time desc, log_source_id, source_generation, record_start desc, record_end desc, event_id) | fields _time, _msg, event_id, log_source_id, source_generation, parser_version, record_start, record_end, ingest_time_utc, level, stream, instance_id, canonical_content_hash"
+	// 管道顺序是性能关键（2026-09-30 生产事故，VL 直接 400）：
+	//   ① `| fields` 必须先于 `| sort`：否则 VL 对**全宽行**（含 _msg 等）做全量排序物化；
+	//   ② `| sort` 后必须**紧跟** `| limit`：相邻时 VL 才走 top-K（内存只保留 limit 行）。
+	// 排序键只用 `_time desc`（2026-09-30 实测修正）：多键排序（log_source_id/record_* 等）
+	// 会让 VL 无法沿**时间有序**的存储做块合并，必须整块物化再排序——实测单次联邦调用
+	// 扫描 77M 行 / 169MB（~2.9s），而仅时间排序的同一批数据只要 ~40ms（差 ~70×）。
+	// 全局次序由服务端已有的客户端全键排序（SortEvents）与游标过滤承接；游标按全键
+	// 严格「大于」过滤，跨页重复被吸收；残余风险仅为**同一时间戳并列超出每 range 上限**
+	// 时的漏（毫秒级时间戳下极罕见），已记入测试注释。
+	return selectorQuery(rng, q) +
+		" | fields _time, _msg, event_id, log_source_id, source_generation, parser_version, record_start, record_end, ingest_time_utc, level, stream, instance_id, canonical_content_hash" +
+		" | sort by (_time desc)" +
+		" | limit " + strconv.FormatUint(uint64(q.Budget.EffectiveLimit())+1, 10)
 }
 
 func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
