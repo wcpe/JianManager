@@ -272,22 +272,6 @@ export default function LogsPage() {
 		: classicLoading || federationProbePending
 	const isError = legacyMode ? legacyQuery.isError : classicError
 	const hasData = legacyMode ? !!legacyQuery.data : !!data
-	// 慢查询提示：长耗时查询不能只留一个转圈——让用户知道「还在跑、等了多久」，
-	// 并提示缩小时间范围（无界范围是最慢路径）。纯前端计时，不改任何查询语义。
-	const [waitedSeconds, setWaitedSeconds] = useState(0)
-	useEffect(() => {
-		if (!isLoading) {
-			setWaitedSeconds(0)
-			return
-		}
-		const startedAt = Date.now()
-		const timer = window.setInterval(() => {
-			setWaitedSeconds(Math.floor((Date.now() - startedAt) / 1000))
-		}, 1000)
-		return () => window.clearInterval(timer)
-	}, [isLoading])
-	const slowQueryHint = isLoading && waitedSeconds >= 3
-
   // 空结果语义：失败/partial 不得呈「暂无日志」空成功（FR-482）。
   // 引擎未就绪的降级是例外中的例外：经典路径可能确实没有行，但引擎侧数据从未被查询，
   // 此时宣称「暂无日志」是假成功，必须保留非成功空态。
@@ -637,11 +621,7 @@ export default function LogsPage() {
       {isLoading && !hasData ? (
         <div className="flex flex-col gap-1">
           <p className="text-muted-foreground">{t('common.loading')}</p>
-          {slowQueryHint && (
-            <p className="text-xs text-muted-foreground">
-              {t('logs.slowQueryHint', { seconds: waitedSeconds })}
-            </p>
-          )}
+          <SlowQueryHint />
         </div>
       ) : isError ? (
         <p className="text-destructive">{t('logs.loadError')}</p>
@@ -805,6 +785,35 @@ function CoverageBanner({
 }
 
 /** 级别快速筛选 pill：选中态主色淡染，非选中态弱色；带级别时前导状态色点。 */
+/** 慢查询提示出现的等待阈值（秒）：3 秒内的加载属正常往返，不必打扰用户。 */
+const SLOW_QUERY_HINT_SECONDS = 3
+
+/**
+ * 慢查询提示：长耗时查询不能只留一个转圈——让用户知道「还在跑、等了多久」，
+ * 并提示缩小时间范围（无界范围是最慢路径）。纯前端计时，不改任何查询语义。
+ *
+ * 计时的归零交给组件生命周期：本组件只在「加载中且尚无数据」时挂载，加载结束即卸载，
+ * 秒数随之丢弃。不在 effect 体内同步 setState(0) —— 那会触发级联渲染
+ * （react-hooks/set-state-in-effect），且在严格模式下被双调用放大。
+ */
+function SlowQueryHint() {
+  const { t } = useTranslation()
+  const [waitedSeconds, setWaitedSeconds] = useState(0)
+  useEffect(() => {
+    const startedAt = Date.now()
+    const timer = window.setInterval(() => {
+      setWaitedSeconds(Math.floor((Date.now() - startedAt) / 1000))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  if (waitedSeconds < SLOW_QUERY_HINT_SECONDS) return null
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="logs-slow-query-hint">
+      {t('logs.slowQueryHint', { seconds: waitedSeconds })}
+    </p>
+  )
+}
+
 function LevelPill({
   level,
   active,

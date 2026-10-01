@@ -88,11 +88,29 @@
 - 换算与跨午夜回拨沿用既有 `applyClock`（相对基准 ±12h 回拨），只是现在按**源时区**进行。
 - 非 UTC 源的事件写入 `event_time_zone` 字段（仅非 UTC 时）；UTC 源字段集合零变化。
 
+**节点级默认的配置面**（`log_ingest.time_zone`，2026-10-02 补）：源级 `TimeZone` 只有实例登记
+（CP 下发）一条路径，节点级默认 `Options.DefaultTimeZone` 此前**没有任何配置面**——生产要让时区
+生效必须改代码。现在：
+
+```yaml
+log_ingest:
+  time_zone: local        # 留空 = UTC（零配置零行为变化）；local = 跟随节点进程时区；
+                          # 其余按 IANA 名解析（如 Asia/Hong_Kong）
+```
+
+`worker.yml` 读取 → `config.Load` 校验（**非法值启动即拒**，与源级同一取舍：时区配错会让整源
+时间轴静默偏移，不能用回退掩盖）→ `Config.IngestDefaultTimeZone()` → `apps/worker/main.go`
+装配进 `ingest.Options.DefaultTimeZone`。环境变量 `JIANMANAGER_LOG_INGEST_TIME_ZONE` 同路径覆盖。
+实例源未显式配置时区时继承本默认（节点与 JVM 同机部署，`local` 即对齐本地日志时间）。
+
 自动回归（转红实测见 CHANGELOG [Unreleased]）：
 `normalize.TestSourceTimeZoneConvertsLocalClockToUTC`（现场同型：HKT `[23:54:02]` 必须落 `15:54:02Z`）、
 `normalize.TestSourceTimeZoneCrossMidnightBoundary`、`normalize.TestDefaultTimeZoneStaysUTC`、
 `ingest.TestSourceTimeZoneReachesStoredEvent`、`ingest.TestDefaultTimeZoneAppliesWhenSourceDoesNotConfigure`、
-`ingest.TestUnknownTimeZoneIsRejectedAtRegistration`。
+`ingest.TestDefaultTimeZoneLocalFollowsProcessTZ`（`local` 走进程 TZ，与 IANA 名不是同一条路径）、
+`ingest.TestUnknownTimeZoneIsRejectedAtRegistration`；
+配置面：`config.TestLoad_LogIngestTimeZone`（默认 UTC、`local`/IANA 名、非法值启动即拒）、
+`config.TestLoad_LogIngestTimeZoneEnvOverride`。
 
 **历史数据影响与修复路径**（加固前落库的事件 `event_time_utc` 带整段源时区偏移，且**没有**
 `event_time_zone` 字段，可据此定位）：

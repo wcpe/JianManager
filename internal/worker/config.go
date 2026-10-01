@@ -55,6 +55,8 @@ type Config struct {
 	// LogIndex 采集索引（FR-496）的配置面：历史投递批次裁剪（§6）与持久化提交单元预算（§3.4）。
 	LogIndex   LogIndexConfig   `mapstructure:"log_index"`
 	LogArchive LogArchiveConfig `mapstructure:"log_archive"`
+	// LogIngest 采集归一化的节点级默认（缺陷 C 时区配置面）：源未显式配置时生效。
+	LogIngest  LogIngestConfig  `mapstructure:"log_ingest"`
 	Decompiler DecompilerConfig `mapstructure:"decompiler"`
 	// Search 全文搜索索引配置（FR-074，见 ADR-017）。
 	Search SearchConfig `mapstructure:"search"`
@@ -470,6 +472,34 @@ type LogSourceConfig struct {
 	UTCDay           string `mapstructure:"utc_day"`
 }
 
+// LogIngestConfig 采集归一化的节点级默认配置面，键为 `log_ingest.*`。
+//
+// 缺陷 C（时间戳偏移）的配置面：`[HH:MM:SS]` 行内时间按哪个时区解释。换算逻辑早已在归一化层
+// （normalize.applyClock 按 Location 解释并做跨午夜回拨），缺的是把节点默认时区接进来——
+// 此前 Location 恒为 UTC，中文 locale 的 JVM 按本地时区写的日志会被整体偏移（现场 +8 小时）。
+//
+// 默认零行为变化：留空 = UTC。节点与 JVM 同机部署时配 `local` 即可对齐。
+// 合法性在 Load 阶段校验（非法值启动即拒）——时区配错会让整源时间轴静默偏移，
+// 不能让运维在查询结果里发现；与登记阶段拒绝非法源级时区是同一取舍。
+// 见 docs/specs/worker-log-normalizer/spec.md §3.4。
+type LogIngestConfig struct {
+	// TimeZone 解释日志行内 [HH:MM:SS] 所用的节点级默认时区：空串 = UTC（既有行为）；
+	// "local" = 跟随节点进程本地时区（TZ）；其余按 IANA 名解析（如 Asia/Hong_Kong）。
+	// 源可用 SourceConfig.TimeZone 覆盖本默认。
+	TimeZone string `mapstructure:"time_zone"`
+}
+
+// IngestDefaultTimeZone 返回装配给 ingest.Options.DefaultTimeZone 的节点级默认时区名。
+//
+// 独立成方法而非在装配点内联读字段：装配值需要被测试直接盯住（配置 → 采集归一化这条接线
+// 一旦断掉，日志时间轴会静默偏移，且没有任何编译错误提示）。空串 = UTC。
+func (c *Config) IngestDefaultTimeZone() string {
+	if c == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.LogIngest.TimeZone)
+}
+
 // LogArchiveConfig 是 Worker Deep Archive 的受管对象存储配置。
 // SecretKey 只允许由环境变量注入，禁止写入 worker.yml 或诊断快照。
 type LogArchiveConfig struct {
@@ -547,6 +577,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_archive.prefix", "logs")
 	v.SetDefault("log_archive.access_key", "")
 	v.SetDefault("log_archive.secret_key", "")
+	// 采集归一化的节点级默认时区（缺陷 C）：留空 = UTC，未配置时零行为变化。
+	// 中文 locale 的 JVM 与 Worker 同机部署时配 `local` 即可对齐本地时间。
+	v.SetDefault("log_ingest.time_zone", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
 	v.SetDefault("artifact_cache.max_bytes", int64(0))
@@ -643,6 +676,11 @@ func Load(path string) (*Config, error) {
 			}
 			cfg.EnrollToken = token
 		}
+	}
+	// 采集时区（缺陷 C）：非法值必须在启动即拒——时区配错会让整源时间轴静默偏移，
+	// 等查询结果对不上账才发现（与登记阶段拒绝非法源级时区同一取舍）。
+	if tz := cfg.IngestDefaultTimeZone(); tz != "" && !ingest.IsValidTimeZone(tz) {
+		return nil, fmt.Errorf("log_ingest.time_zone 非法: %q（支持 UTC/local 或 IANA 名，如 Asia/Hong_Kong）", cfg.LogIngest.TimeZone)
 	}
 	if cfg.LogCapacity.DegradedAtPercent <= 0 || cfg.LogCapacity.DegradedAtPercent >= 100 ||
 		cfg.LogCapacity.PauseAtPercent <= cfg.LogCapacity.DegradedAtPercent || cfg.LogCapacity.PauseAtPercent > 100 {

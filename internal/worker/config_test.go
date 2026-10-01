@@ -230,6 +230,43 @@ func TestWorkerConfigExists_FindsConfigBesideExecutable(t *testing.T) {
 	assert.True(t, WorkerConfigExists(), "exe 目录有 worker.yml → 应判已配置（FIX-3）")
 }
 
+// TestLoad_LogIngestTimeZone 采集时区配置面（缺陷 C）：默认 UTC 不变、显式值可配、非法值启动即拒。
+//
+// 转红：改动前没有 log_ingest.time_zone 这条配置面 —— 生产只能改代码才能让源时区生效；
+// 且时区配错必须显式失败，静默回退会让整源时间轴偏移而无人察觉。
+func TestLoad_LogIngestTimeZone(t *testing.T) {
+	// 零配置：留空 = UTC（既有行为零变化，未配置的节点时间轴不漂移）。
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.IngestDefaultTimeZone(), "未配置时区时必须保持 UTC（空串）语义")
+
+	// 现场口径：节点 JVM 与 Worker 同机，配 local 即跟随节点时区（生产 HKT 建议值）。
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: local\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "local", cfg.IngestDefaultTimeZone())
+
+	// 也可显式写 IANA 名（不依赖节点 TZ，跨机迁移时时间轴不随部署环境漂移）。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: Asia/Hong_Kong\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "Asia/Hong_Kong", cfg.IngestDefaultTimeZone())
+
+	// 非法值必须启动即拒（与登记阶段拒绝非法源级时区同一取舍）。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: HKT+8\n"), 0o600))
+	_, err = Load(path)
+	require.ErrorContains(t, err, "log_ingest.time_zone 非法")
+}
+
+// TestLoad_LogIngestTimeZoneEnvOverride 环境变量按路径覆盖配置（JIANMANAGER_LOG_INGEST_TIME_ZONE）。
+func TestLoad_LogIngestTimeZoneEnvOverride(t *testing.T) {
+	t.Setenv("JIANMANAGER_LOG_INGEST_TIME_ZONE", "Asia/Hong_Kong")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "Asia/Hong_Kong", cfg.IngestDefaultTimeZone())
+}
+
 // TestWorkerConfigExists 工作目录有/无 worker 配置文件时正确报告（FR-222 未配置自检的一半）。
 func TestWorkerConfigExists(t *testing.T) {
 	dir := t.TempDir()

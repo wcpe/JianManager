@@ -73,6 +73,14 @@ log:
 #     source_category: worker
 #     storage_namespace: node:1
 
+# 采集归一化的节点级默认时区（缺陷 C）：解释日志行内 [HH:MM:SS] 所用的时区。
+# 留空 = UTC（既有行为零变化，未配置的节点时间轴不漂移）；local = 跟随节点进程时区
+# （节点 JVM 与 Worker 同机部署时用它对齐本地日志时间）；其余按 IANA 名解析（如 Asia/Hong_Kong）。
+# 实例源未显式配置时区时继承本默认；非法值**启动即拒**（时区配错会让整源时间轴静默偏移，
+# 不能用回退掩盖）。环境变量覆盖：JIANMANAGER_LOG_INGEST_TIME_ZONE。
+# log_ingest:
+#   time_zone: local
+
 # 出站网络代理（FR-174，见 ADR-037；可视化配置 + CP 下发见 FR-185 / ADR-043）。本节点所有出站
 # 下载（自更新二进制、JDK 归档、CFR 反编译器、服务端 jar）经此代理。url 留空=直连（仍尊重
 # HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），不破坏现状；非空时优先于环境变量。

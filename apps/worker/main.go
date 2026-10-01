@@ -695,6 +695,10 @@ func runWorker() {
 			return ingest.New(ingest.Options{
 				Root: root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
 				Journal: logStack.Catalog.Journal(), Archive: archiveRegistry, Sources: sources,
+				// 采集归一化的节点级默认时区（缺陷 C，键 log_ingest.time_zone）：源未显式配置时
+				// 生效，空串 = UTC（零配置零行为变化）。中文 locale 的 JVM 与 Worker 同机部署时
+				// 配 local 即可对齐本地时间；非法值已在 config.Load 阶段启动即拒。
+				DefaultTimeZone: cfg.IngestDefaultTimeZone(),
 				CapacityProvider: ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
 					MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
 					DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,

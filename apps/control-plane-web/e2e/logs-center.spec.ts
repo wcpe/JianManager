@@ -17,6 +17,13 @@ test('FR-150 日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 
   await expect(page.getByRole('button', { name: '导出' })).toBeVisible()
   await expect(page.getByRole('button', { name: '错误', exact: true })).toBeVisible()
   await expect(page.getByPlaceholder('搜索日志内容…')).toBeVisible()
+  // 时间范围为 Radix Select（combobox），默认「最近 24 小时」（2026-09-30 性能依据：无界范围
+  // 会让全部分区参与查询）。夹具显式化：先断言默认值，再手动切到「全部时间」验证筛选器可用，
+  // 不依赖默认值漂移。
+  const rangeSelect = page.getByRole('combobox').filter({ hasText: '最近 24 小时' })
+  await expect(rangeSelect).toBeVisible()
+  await rangeSelect.click()
+  await page.getByRole('option', { name: '全部时间' }).click()
   await expect(page.getByRole('combobox').filter({ hasText: '全部时间' })).toBeVisible()
   await expect(page.getByRole('button', { name: '下一页' })).toBeVisible()
 

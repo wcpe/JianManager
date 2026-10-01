@@ -98,3 +98,39 @@ func TestUnknownTimeZoneIsRejectedAtRegistration(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "时区")
 }
+
+// TestDefaultTimeZoneLocalFollowsProcessTZ 覆盖生产建议的 `local`：节点 JVM 与 Worker 同机部署，
+// 进程 TZ 就是日志的本地时区（生产现场 HKT）。
+//
+// 与 IANA 名用例的区别：local 走 time.Local 分支，正确性取决于进程 TZ 是否被真正读取——
+// 只断言 IsValidTimeZone("local") 为真抓不到这一层。转红：local 分支未接 time.Local 时
+// 事件时间恒为 23:54:02Z（现场缺陷）。
+func TestDefaultTimeZoneLocalFollowsProcessTZ(t *testing.T) {
+	// Go ≥1.22 在 TZ 变更后重载 time.Local（未显式赋值 time.Local 时）。
+	t.Setenv("TZ", "Asia/Hong_Kong")
+
+	client, _ := newFlakyVL(t)
+	root := t.TempDir()
+	logPath := filepath.Join(root, "latest.log")
+	require.NoError(t, os.WriteFile(logPath,
+		[]byte("[23:54:02] [Server thread/INFO]: local 时区\n[23:54:03] [Server thread/INFO]: 结束\n"), 0o644))
+
+	cat := catalog.New(catalog.NewMemJournal())
+	source := SourceConfig{
+		LogSourceID: "inst:tz-local/file", SourceGeneration: "g1", Path: logPath,
+		Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:tz-local", UTCDay: runtimeTestUTCDay(),
+	}
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(),
+		Sources: []SourceConfig{source}, DefaultTimeZone: "local",
+	})
+	require.NoError(t, err)
+	m.pollOnce()
+
+	events := durableEvents(t, m, source.LogSourceID+"/"+source.SourceGeneration)
+	require.NotEmpty(t, events)
+	require.True(t, strings.HasSuffix(events[0].EventTimeUTC, "T15:54:02Z"),
+		"local 时区（进程 TZ=HKT）下 23:54:02 必须落库为 15:54:02Z，实得 %s", events[0].EventTimeUTC)
+	// 审计字段记录解析后的位置名：time.Local 的 String() 恒为 "Local"。
+	require.Equal(t, "Local", events[0].Fields[normalize.FieldEventTimeZone])
+}
