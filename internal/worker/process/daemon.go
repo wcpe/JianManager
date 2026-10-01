@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -69,7 +70,13 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 	// 跑满兜底时长，而 Manager.Restart 早已返回成功（实例 153 / beacon-main 实证的静默假成功）。
 	// 此处显式失败，由 startLocked 置 CRASHED 并透出原因：宁可保留仍在服务的旧进程并报失败，
 	// 也不新旧并存。
-	if err := daemon.WaitForPriorExit(d.pidDir, d.spec.UUID, daemon.PriorExitBudget(d.spec.GracefulStopTimeoutSeconds)); err != nil {
+	//
+	// ctx 必须传下去（复审 P1-5）：等待预算可达分钟级，而调用方可能提前取消/超时。取消时返回
+	// 可重试错误（daemon.ErrStartWaitCanceled）且**保持原状态**——「还没来得及判定」不是崩溃。
+	if err := daemon.WaitForPriorExitContext(ctx, d.pidDir, d.spec.UUID, daemon.PriorExitBudget(d.spec.GracefulStopTimeoutSeconds)); err != nil {
+		if errors.Is(err, daemon.ErrStartWaitCanceled) {
+			return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, err)
+		}
 		d.mu.Lock()
 		d.state = StateCrashed
 		d.mu.Unlock()
@@ -79,7 +86,12 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 	// 纵深防御：上面的等待只信 PID 文件，而记录可能缺失/损坏（旧 wrapper 被强杀未及清理、
 	// 记录被误删），此时等待会误判「上一代已清理」直接放行。socket 是实例级唯一地址，
 	// 能拨通就说明确有 wrapper 在托管——拒绝启动，宁可本次失败也不新旧并存。
-	if daemon.SocketServed(d.pidDir, d.spec.UUID) {
+	served, probeErr := daemon.SocketServedContext(ctx, d.pidDir, d.spec.UUID)
+	if probeErr != nil {
+		// 取消 ⇒ 服务状态未知：绝不能按「无人监听」放行（那正好退化成双开）。
+		return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, probeErr)
+	}
+	if served {
 		d.mu.Lock()
 		d.state = StateCrashed
 		d.mu.Unlock()

@@ -75,6 +75,14 @@ type persistedSource struct {
 	EventsStored bool `json:"events_stored,omitempty"`
 	// Events 仅在旧格式或段写入失败时使用；正常情况为空（权威副本在 eventstore）。
 	Events []logtypes.Event `json:"events,omitempty"`
+	// VerifiedRuns 是该源**写 VL 后逐字段可见性校验通过**的源位置连续区间（P1-2 的区间级凭据）。
+	//
+	// 为什么必须持久化：WAL 条目一旦被回收，就不可能再通过重投生成覆盖证据；此时「已发布投影」
+	// 只能给出一个封闭水位（末端语义），无法证明缺口区间本身被逐字段校验覆盖过。区间级凭据
+	// 让「已发布投影证据」自动消解出口有据可依，而不是按末端水位把中间的空洞一并宣称已落库。
+	//
+	// 有界性：只保留最近的 maxVerifiedRunsPerSource 段（相邻写入会就地合并，稳态下通常只有 1 段）。
+	VerifiedRuns []ledger.PositionRange `json:"verified_runs,omitempty"`
 }
 
 type persistedState struct {
@@ -174,9 +182,12 @@ type Manager struct {
 	// 自愈要投递存量并按天聚合事件区间，故按源限频（见 gapAutoResolveInterval）。
 	gapAutoResolveAt map[string]time.Time
 	// selfHealInterval 是自愈的最小重试间隔；0 表示用默认常量。
-	// 作为字段而不是裸常量：回归要用真实路径驱动「限频到期后自动恢复」，
-	// 不能靠 sleep 10 秒（也不该把生产默认值改小）。
 	selfHealInterval time.Duration
+	// generationProbeCache 是「该源该代次已确认未占用」的进程内缓存（复审 P2-11，
+	// 见 projectionGenerationKnownFree / recordProjectionGenerationAttempt）。不持久化：
+	// 重启后重新实探，正是保守方向。
+	generationProbeCache map[string]map[string]bool
+
 	// pollConcurrency 是单轮采集的跨源并发度；0/负值取 defaultPollConcurrency，1 为串行。
 	// 作为字段以便用真实限额路径做对照实验与回归，而非只断言常量本身。
 	pollConcurrency int
@@ -269,8 +280,9 @@ type Options struct {
 	// reclaim 水位）。判据与证明见 ledger/delivery_batch_prune.go。
 	IndexPrune *ledger.DeliveryBatchPruneConfig
 	// IndexCommit 是索引持久化「提交单元预算」的配置面（FR-498 P0，键 log_index.persist.*，
-	// spec §3.4）；nil 表示用默认（stateindex.DefaultCommitBudget：每事务 1024 行、目标 40ms、
-	// 下限 64 行）。单次持久化按行数 + 耗时双上界切成多个提交单元，见 stateindex.CommitBudget。
+	// spec §3.4）；nil 表示用默认（stateindex.DefaultCommitBudget：每提交单元 512 行、目标 40ms、
+	// 下限 64 行——真源是 stateindex 的 DefaultCommitMaxRows/DefaultCommitMinRows/DefaultCommitTarget）。
+	// 单次持久化按行数 + 耗时双上界切成多个提交单元，见 stateindex.CommitBudget。
 	IndexCommit *stateindex.CommitBudget
 }
 
@@ -434,18 +446,28 @@ func (m *Manager) ResolveCoveredGaps() error {
 		//
 		// 安全性：仅当尾部**已全部确认投递**（delivery >= read）时才补段 —— 覆盖的是「已证明安全
 		// 另存」的区间，不存在任何未投递数据被跳过；条件不满足则一律不动。
+		//
+		// 「无副本」标记（复审 P2-13）：这一段**没有任何物理副本**（路径不是文件、也不是
+		// project://<代次>），此前却写 `manual://admin-confirmed` 并登记 `NEXT_COPY_VERIFIED`——
+		// 前者看着像「管理员确认过某个已验证副本」，后者字面就是「下一份副本已验证」，
+		// 于是状态链把「无副本」包装成了「已验证副本」，事后审计分不清这段到底有没有副本。
+		// 现在如实标注：路径带 no-copy 标记，释放依据用 PROJECTION_BACKED（本段成立的前提正是
+		// 「整段已投递并被逐字段校验」→ 已发布投影就是它的凭据），接收者显式说明无副本。
 		if d := entry.Positions.Delivery; d >= entry.Positions.Read && entry.Positions.Read > entry.Positions.Reclaim {
 			segID := fmt.Sprintf("manual-recovery-%d-%d", entry.Positions.Reclaim, entry.Positions.Read)
 			if _, exists := pipe.RecoveryRef(segID); !exists {
-				if err := pipe.BindRecoverySegment(segID, "manual://admin-confirmed", entry.Positions.Reclaim, entry.Positions.Read); err != nil {
+				if err := pipe.BindRecoverySegment(segID, silentExitNoCopyPath, entry.Positions.Reclaim, entry.Positions.Read); err != nil {
 					return err
 				}
 			}
 			// 走完责任转移链，使 CanReclaim 放行（与 releaseRecovery 的状态机同构）。
 			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", "")
-			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", "manual:admin")
-			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryReleased, logtypes.ReleaseNextCopyVerified, "manual:admin")
-			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryCleaned, logtypes.ReleaseProjectionBacked, "manual:admin")
+			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", silentExitNoCopyReceiver)
+			// 释放依据必须与事实一致：没有第二份副本，凭据是「已发布投影 + 逐字段校验」。
+			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryReleased, logtypes.ReleaseProjectionBacked, silentExitNoCopyReceiver)
+			// CLEANED 不登记新依据（账本契约：清理沿用已登记证明）；此处**不要**再传一次 reason，
+			// 否则会把 RELEASED 阶段的依据覆盖成调用点写的值，「这段到底凭什么被释放」当场失真。
+			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryCleaned, "", "")
 			// 推进回收并按当前水位剪枝；失败不置死——下一轮自动重试。
 			_, _ = pipe.TryReclaim()
 		}
@@ -694,6 +716,25 @@ func DiskCapacityProvider(root string, configured acquire.CapacityBudget) func()
 		return budget, nil
 	}
 }
+
+// IsValidCharset 报告节点级默认字符集取值是否合法（供配置层在启动阶段显式拒绝非法值）。
+//
+// 为什么由本包再导出一层：字符集的判定与解码口径都在 normalize（唯一真源），而配置层
+// （internal/worker/config.go）只依赖 ingest 这一层——多导出一个名字，避免配置层为了校验
+// 而绕到 normalize 上去，也避免两侧各自维护一份字符集白名单（那才是真正的漂移源）。
+// 取值：auto / utf-8 / gbk / gb18030（空串表示未配置，按 auto 处理）。
+func IsValidCharset(raw string) bool {
+	return normalize.IsValidCharset(raw)
+}
+
+// 静默源出口的「无副本」标注（复审 P2-13）：这一段的凭据是「整段已投递并被逐字段校验」，
+// 而不是任何物理副本。路径与责任接收者都带上显式标记，使事后审计一眼能看出「这段没有副本」。
+const (
+	// silentExitNoCopyPath 是静默源出口补出的恢复分段路径（**不是**文件路径，也不是 project://代次）。
+	silentExitNoCopyPath = "manual://delivered-no-copy"
+	// silentExitNoCopyReceiver 是该分段的责任接收者标记。
+	silentExitNoCopyReceiver = "manual:admin(delivered-no-copy)"
+)
 
 // Register adds one source; registration is idempotent by logical source key.
 func (m *Manager) Register(source SourceConfig) error {
@@ -1270,6 +1311,10 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 		}
 	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
+	// 该代次名从此刻起可能出现在 VL 中（写入可能只完成一部分就失败）——因此**先**把它记入
+	// 探测水位（复审 P2-11）：水位必须是「本进程为该源写过/尝试写过的最大序号」，否则一个
+	// 半途失败的写入之后，同名候选会被缓存判成「未写过 ⇒ 未占用」，把重名风险重新引进来。
+	m.recordProjectionGenerationAttempt(key, generation)
 	m.mu.Lock()
 	saved := m.state.Sources[key]
 	saved.ProjectionGeneration = generation
@@ -1862,13 +1907,18 @@ func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, ge
 				}
 				mu.Unlock()
 				if err != nil {
-					// 只有携带「明确根因」的失败才取消其余簇（永久失败 / 判定类错误——内容不一致、
-					// 多余或重复、事件集非法）：此时收敛是安全的，根因已经拿到。
+					// 只有携带「明确根因」的失败才取消其余簇（永久失败 / 内容不一致、多余或重复、
+					// 事件集非法这类**确定性**判定）：此时收敛是安全的，根因已经拿到。
 					//
 					// 超时类失败**不取消**：它往往只说明"本批数据尚不可见"，而其余簇此刻可能正读到
 					// 真正的根因（例如某一行内容不一致）；取消会把那个结论一并抹掉，让现场只剩
 					// 取消噪音（2026-10-01 在 `-race` 下实测到该形态：注入的"写错一行"被
 					// `verification failed: context deadline exceeded` 覆盖）。
+					//
+					// 该策略此前**没有真正生效**：本簇到期唯一的错误文案
+					// `not fully visible before deadline` 曾被 verifyErrorIsSemantic 判为判定类，
+					// 于是任一簇到期都会走 cancel()（2026-10-02 复审 P1-3 修正，回归见
+					// verify_cancel_classification_test.go）。
 					if vlsup.IsPermanent(err) || verifyErrorIsSemantic(err) {
 						cancel()
 					}
@@ -1916,13 +1966,21 @@ func verifyErrorIsTimeoutLike(err error) bool {
 	return strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "context canceled")
 }
 
-// verifyErrorIsSemantic 判定错误是否属于「校验自身的判定结论」——内容不一致 / 多余或重复 /
-// 到期仍不可见 / 永久失败 / 事件集非法——而不是「同批其他簇失败后取消」引发的传输类噪音。
+// verifyErrorIsSemantic 判定错误是否属于「校验自身的**确定性**判定结论」——内容不一致 /
+// 多余或重复 / 永久失败 / 事件集非法——而不是「同批其他簇失败后取消」引发的传输类噪音，
+// 也不是「本簇窗口到期仍不可见」这类**尚未定型**的结论。
 //
 // 为什么需要区分（2026-10-01 实测）：同批多簇并发执行时，首个失败会取消其余查询；被取消的
 // 请求可能报出 `context canceled`，或把被截断的响应体报成 `unexpected end of JSON input`。
 // 若让「最先观察到者胜出」，现场看到的就可能是被取消查询的噪音，真正根因（例如内容不一致）
 // 被掩盖。故判定类错误优先返回（串行实现下本来也只会返回判定类错误，语义一致）。
+//
+// 为什么**不含**「not fully visible before deadline」（2026-10-02 复审 P1-3）：
+// 那是本簇自己的窗口到期产生的**非确定性**结论（数据可能只是可见性延迟，退避重试本就是为它
+// 准备的），而它恰恰是 chunk 超时时**唯一**的错误文案。一旦把它算作判定类，任一簇到期就会
+// `cancel()` 其余簇——另一簇即将读到的真根因（例如内容不一致）被
+// `aborted by batch cancellation` 覆盖，现场只剩「不可见 + 取消」的噪音。
+// 因此取消只允许由 vlsup.IsPermanent 与真正的判定类错误触发（见 verifyProjection 的取消策略）。
 func verifyErrorIsSemantic(err error) bool {
 	if err == nil {
 		return false
@@ -1931,7 +1989,6 @@ func verifyErrorIsSemantic(err error) bool {
 	for _, marker := range []string{
 		"projection content mismatch",
 		"unexpected or duplicate projection event_id",
-		"not fully visible before deadline",
 		"verification failed permanently",
 		"duplicate canonical event_id",
 		"invalid canonical event time",
@@ -2364,9 +2421,16 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event) 
 		ref, _ = p.RecoveryRef(segID)
 	}
 	if ref.State == logtypes.RecoveryWALResponsibilityXfer {
-		reason := logtypes.ReleaseProjectionBacked
-		if ref.Path != "projection://"+generation {
-			reason = logtypes.ReleaseNextCopyVerified
+		// 释放依据必须与「这段到底有没有副本」一致（复审 P2-13）：
+		//   - project://<代次>：本段的凭据就是该代次的已发布投影 → PROJECTION_BACKED；
+		//   - manual://delivered-no-copy：静默源出口补出的**无副本**段，凭据同样是「整段已投递并
+		//     被逐字段校验」（见 ResolveCoveredGaps 的说明）→ 仍是 PROJECTION_BACKED，
+		//     绝不能登记成「下一份副本已验证」；
+		//   - 其余路径：按既有语义视为「另有已验证副本」。
+		reason := logtypes.ReleaseNextCopyVerified
+		switch ref.Path {
+		case "projection://" + generation, silentExitNoCopyPath:
+			reason = logtypes.ReleaseProjectionBacked
 		}
 		if err := p.TransitionRecovery(segID, logtypes.RecoveryReleased, reason, receiver); err != nil {
 			return err
@@ -2435,10 +2499,21 @@ func (m *Manager) nextFreeProjectionGeneration(source SourceConfig, current stri
 
 // nextFreeProjectionGenerationWithClient 是探测的实现（显式收客户端，便于按天路由与用例注入）。
 func (m *Manager) nextFreeProjectionGenerationWithClient(client *vlsup.Client, source SourceConfig, current string) string {
+	key := source.LogSourceID + "/" + source.SourceGeneration
 	candidate := nextProjectionGeneration(current)
 	first := candidate
 	step := 1
 	for probe := 0; probe < maxProjectionGenerationProbes; probe++ {
+		if m.projectionGenerationKnownFree(key, candidate) {
+			// 缓存命中（复审 P2-11）：本进程已为该源写过更大的代次名，而该源的代次名只有本
+			// Worker 会写，故这个名字不可能已在 VL 中存在——省掉一次「无时间窗 + limit 1」
+			// 的探测查询（60 源每轮一次，量级可观）。
+			if candidate != first {
+				slog.Info("投影代次与历史投影重名，已进位到新代次",
+					"source", source.LogSourceID, "generation", candidate, "from", current)
+			}
+			return candidate
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), projectionProbeTimeout)
 		used, err := m.projectionGenerationUsed(ctx, client, source, candidate)
 		cancel()
@@ -2447,6 +2522,9 @@ func (m *Manager) nextFreeProjectionGenerationWithClient(client *vlsup.Client, s
 			return candidate
 		}
 		if !used {
+			// 实探确认未占用 → 记入缓存，同一 (源, 代次) 不重复探测（复审 P2-11）。
+			// 该条目会在真正写入该名字时立即失效（见 recordProjectionGenerationAttempt）。
+			m.rememberProjectionGenerationFree(key, candidate)
 			if candidate != first {
 				slog.Info("投影代次与历史投影重名，已进位到新代次",
 					"source", source.LogSourceID, "generation", candidate, "from", current)
@@ -2462,6 +2540,74 @@ func (m *Manager) nextFreeProjectionGenerationWithClient(client *vlsup.Client, s
 	}
 	return candidate
 }
+
+// projectionGenerationKnownFree 报告「本进程已确认该 (源, 代次) 未占用，无需再探测」。
+//
+// 缓存内容（复审 P2-11）：每源一组**已实探确认 VL 中不存在**的代次名。写入该名字时立即失效
+// （见 recordProjectionGenerationAttempt），因为那一刻起 VL 里可能已经有它的行——失效是安全
+// 方向的关键：半途失败的写入同样可能留下行，缓存不能把失败的尝试当成「依然未占用」。
+//
+// 边界（为什么不能更进一步）：稳态下候选名每批前进一名，因此「同一 (源, 代次) 被重复探测」
+// 主要出现在「同一状态被重复推进」的场景（探测进位循环、未落写的重试窗口）。**不能**改成
+// 「本进程写过 projection-N 就跳过 projection-N+1 的探测」：名字是否被占用只由 VL 决定，
+// 而状态回滚/重置（2026-10-01 生产事故）会让 VL 里存在计数更大的同名旧行——那正是这道探测
+// 存在的理由，去掉它等于把「同名旧行被读成本次写入 → 校验永不通过 → 采集停摆」重新引进来。
+func (m *Manager) projectionGenerationKnownFree(key, generation string) bool {
+	if generation == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	probed := m.generationProbeCache[key]
+	if probed == nil {
+		return false
+	}
+	return probed[generation]
+}
+
+// rememberProjectionGenerationFree 记录「该 (源, 代次) 已实探确认未占用」。
+//
+// 缓存按源有界（maxGenerationProbeCachePerSource）：条目在写入时失效，正常路径下每源同时
+// 至多一两条；上限只是防止异常路径（同一状态被反复推进）把内存拖大。
+func (m *Manager) rememberProjectionGenerationFree(key, generation string) {
+	if generation == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.generationProbeCache == nil {
+		m.generationProbeCache = map[string]map[string]bool{}
+	}
+	probed := m.generationProbeCache[key]
+	if probed == nil || len(probed) >= maxGenerationProbeCachePerSource {
+		probed = map[string]bool{}
+		m.generationProbeCache[key] = probed
+	}
+	probed[generation] = true
+}
+
+// recordProjectionGenerationAttempt 使该 (源, 代次) 的「未占用」缓存失效。
+//
+// 时机是**写入尝试之前**：写入可能只完成一部分就失败，此后 VL 里可能已有该名字的行，
+// 缓存必须立刻失效，否则重试会跳过探测、直接往同名旧行上写（同名冲突正是停摆的成因）。
+func (m *Manager) recordProjectionGenerationAttempt(key, generation string) {
+	if generation == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	probed := m.generationProbeCache[key]
+	if probed == nil {
+		return
+	}
+	delete(probed, generation)
+}
+
+// maxGenerationProbeCachePerSource 是单源「已确认未占用」代次名的缓存上限。
+//
+// 正常路径下每源的条目在写入时即失效（同时至多一两条），上限只防异常路径（同一状态被反复
+// 推进）把内存拖大；越界即整组重建，退化为「重新实探」——保守方向。
+const maxGenerationProbeCachePerSource = 64
 
 // projectionGenerationUsed 报告 VL 中该源是否已有该物理代次的行（limit 1，命中即返回）。
 func (m *Manager) projectionGenerationUsed(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string) (bool, error) {
@@ -2957,7 +3103,11 @@ func (m *Manager) rebuildSource(key string, p *pipeline.Pipeline) {
 	prev := m.state.Sources[key]
 	entry := persistedSource{Ledger: p.Ledger().Snapshot(), ProjectionGeneration: prev.ProjectionGeneration,
 		PublicationPending: prev.PublicationPending, EventsStored: prev.EventsStored,
-		EventsStoredThrough: prev.EventsStoredThrough}
+		EventsStoredThrough: prev.EventsStoredThrough,
+		// VerifiedRuns 是 Manager 自己维护的字段（投递路径写入，见 recordVerifiedRuns）：
+		// 重建时必须原样保留，否则每次 persist 都会把刚登记的区间级凭据清空
+		// （此前漏掉它会使 autoResolveGapsFromPublished 永远拿不到凭据而静默失效）。
+		VerifiedRuns: prev.VerifiedRuns}
 	// B1a：按条切分——段存储已覆盖（record_end <= EventsStoredThrough）的条目只写引用；
 	// 其余（尚未投递、正文未入库，或段存储不可用）必须内联保存，绝不丢正文。
 	through := prev.EventsStoredThrough

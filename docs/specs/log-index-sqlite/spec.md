@@ -338,7 +338,7 @@ p50 ≈ 12.5 ms / p95 ≈ 40.6 ms；1024 行时 p95 已达 47 ms（独立探针�
 
 | 键 | 默认 | 语义 | 生效路径 |
 |---|---|---|---|
-| `log_index.persist.max_tx_rows` | `1024` | 单个提交单元（一次 IMMEDIATE 事务）的行数上界 | `LogIndexConfig.CommitBudget()` → `ingest.Options.IndexCommit` → `stateindex.OpenWithBudget` |
+| `log_index.persist.max_tx_rows` | `512` | 单个提交单元（一次 IMMEDIATE 事务）的行数上界 | `LogIndexConfig.CommitBudget()` → `ingest.Options.IndexCommit` → `stateindex.OpenWithBudget` |
 | `log_index.persist.min_tx_rows` | `64` | 自适应收缩下限（再慢也不退化成逐行）；大于上界时夹到上界 | 同上 |
 | `log_index.persist.tx_duration_target` | `40ms` | 单个提交单元的耗时目标；自适应按它收缩/扩张，事务内**耗时硬上界固定为目标的 5/4**（默认 50 ms = 验收线本身） | 同上 |
 

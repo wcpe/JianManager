@@ -96,6 +96,8 @@ func TestPublishPreservesOtherSourcesInSharedNamespace(t *testing.T) {
 type projectionVLFixture struct {
 	mu     sync.Mutex
 	writes [][]byte
+	// probes 记录「代次占用探测」查询原文（`| fields _time | limit 1`，复审 P2-11 回归的读数）。
+	probes []string
 }
 
 func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +110,11 @@ func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusOK)
 	case "/select/logsql/query":
 		selector := r.URL.Query().Get("query")
+		if strings.Contains(selector, "| fields _time | limit 1") {
+			f.mu.Lock()
+			f.probes = append(f.probes, selector)
+			f.mu.Unlock()
+		}
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 		from, _ := time.Parse(time.RFC3339Nano, r.URL.Query().Get("start"))
 		to, _ := time.Parse(time.RFC3339Nano, r.URL.Query().Get("end"))

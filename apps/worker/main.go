@@ -688,7 +688,7 @@ func runWorker() {
 		reconcileCfg := cfg.LogReconcile.ReconcileConfig()
 		// 采集索引（FR-496）：历史投递批次裁剪（log_index.batch_prune.*）与持久化提交单元
 		// 预算（log_index.persist.*）分别经 LogIndexConfig 的映射收敛为归一化默认（裁剪默认
-		// 开启；切分默认每事务 1024 行、目标 40ms）。
+		// 开启；切分默认每提交单元 512 行、目标 40ms——真源是 stateindex.DefaultCommitBudget）。
 		indexPruneCfg := cfg.LogIndex.IndexPrune()
 		indexCommitCfg := cfg.LogIndex.CommitBudget()
 		newIngest := func() (*ingest.Manager, error) {
@@ -699,6 +699,10 @@ func runWorker() {
 				// 生效，空串 = UTC（零配置零行为变化）。中文 locale 的 JVM 与 Worker 同机部署时
 				// 配 local 即可对齐本地时间；非法值已在 config.Load 阶段启动即拒。
 				DefaultTimeZone: cfg.IngestDefaultTimeZone(),
+				// 采集归一化的节点级默认字符集（复审 P2-3，键 log_ingest.charset）：源未显式配置时
+				// 生效，空串 = auto（零配置零行为变化）。GBK 日志源配 gbk 可免去自动判定的启发式
+				// 不确定性；非法值已在 config.Load 阶段启动即拒。
+				DefaultCharset: cfg.IngestDefaultCharset(),
 				CapacityProvider: ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
 					MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
 					DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
@@ -1177,7 +1181,7 @@ func localWSAddr(port int) string {
 // Info——Debug 打点在真机上默认不落盘，验收人只能临时改级别才能读数，读数口径随人而变。
 // 升为 Info 后现场按默认配置即可取值，且节拍（1 分钟）与字段原样不变，仍可与旧格式
 // （整本重写 JSON）直接对比：写入行数是最直接的判据——回到整本重写时该值会逼近索引总行数，
-// 而增量实现只随本批次变更增长。采样环由 stateindex 维护（最近 512 次）。
+// 而增量实现只随本批次变更增长。采样环由 stateindex 维护（最近 4096 次，见 stateindex.sampleRing）。
 //
 // 三个 Delta 的窗口口径见 logIndexPersistWindow 的注释：它们与 P50/P95/Max 取自同一个窗口，
 // 都是「本窗口新增」。
@@ -1205,7 +1209,7 @@ func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) 
 
 // logIndexPersistWindow 把 stateindex 采样环换算成「本窗口的增量」。
 //
-// 为什么不能拿「环和」相减当增量：采样环只保留最近 512 次持久化，而采集循环每 250 ms 就可能触发
+// 为什么不能拿「环和」相减当增量：采样环只保留最近 4096 次（提交单元）持久化，而采集循环每 250 ms 就可能触发
 // 一次 persist，真机 60 源实测约 2.5 次/s（环覆盖 ≈205 s），环在启动几分钟后就会写满。写满后
 // 「环和」是滑动窗口和，相邻两次读数相减得到的是「本窗口新增 − 同期被挤出的旧样本」——稳态下
 // 两者近似相等，差值趋近 0，会把整整一分钟的写入量抹掉；环未满时「环和」又等于自启动累计值，

@@ -59,8 +59,12 @@
 受管 Raw / stdio 四条输入路径共享同一解码判定，保证同一份字节在任何路径上产出同一事件。
 
 - **配置面**：`SourceConfig.Charset`（`auto`/`utf-8`/`gbk`/`gb18030`；`gb2312`/`cp936` 归一为 `gbk`）。
-  空串表示跟随节点默认（`ingest.Options.DefaultCharset`），默认 `auto`。未知取值在登记阶段
-  （`ingest.Register`）与 `pipeline.New` 直接失败——按源声明错字符集会静默产出乱码，必须暴露。
+  空串表示跟随节点默认（`ingest.Options.DefaultCharset` ← 配置键 **`log_ingest.charset`**，2026-10-02
+  复审 P2-3 接线；环境变量 `JIANMANAGER_LOG_INGEST_CHARSET` 同路径覆盖），默认 `auto`。未知取值在
+  登记阶段（`ingest.Register`）与 `pipeline.New` 直接失败，`log_ingest.charset` 非法值在
+  `Config.Load` **启动即拒**——按源声明错字符集会静默产出乱码（GBK 中文被当作非法 UTF-8 净化成
+  替换字符），必须暴露。回归：`ingest.TestDefaultCharsetAppliesWhenSourceDoesNotConfigure`、
+  `config.TestLoad_LogIngestCharset`。
 - **判定（auto）**：合法 UTF-8 一律原样返回，绝不进入 GB 系分支；非法 UTF-8 先按 GB18030 解码，
   **解码结果含 U+FFFD 即判为不可信**并放弃解码（实测：随机损坏字节 `0xff 0xfe`、孤立截断字节 `0xc4`
   解码后都出现 U+FFFD，而真实 GBK 中文不会）。判定按源粘滞（同源的纯 ASCII 行沿用同一口径）；

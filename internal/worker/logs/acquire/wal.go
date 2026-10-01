@@ -224,7 +224,7 @@ func (w *WAL) maybeResumeBacklogLocked(ent *ledger.Entry) {
 		"logSourceID", w.key.LogSourceID, "entries", entries, "approxBytes", bytes)
 }
 
-// EvaluateResume 尝试一次「推进回收 + 按滞回条件评估恢复」，返回是否已恢复采集。
+// EvaluateResume 尝试一次「推进回收 + 按滞回条件评估恢复」，返回**账本当前是否不在暂停态**。
 //
 // 用在「缺口刚被消解、源仍处于暂停」的时刻：恢复的唯一检查点挂在回收路径上，而回收路径
 // 又要求「有可剪条目」或「有新批次」——暂停期间两者都不会出现，缺了本入口，
@@ -232,7 +232,15 @@ func (w *WAL) maybeResumeBacklogLocked(ent *ledger.Entry) {
 //
 // 先 TryReclaim 再评估：缺口消解后 CanReclaim 往往才放行（回收门禁要求责任已转移），
 // 不推进回收就永远看不到「积压回落至低水位」这个恢复条件。
-// 只处理本包造成的暂停（原因前缀匹配）：容量门禁等其它路径设置的暂停不在此处清除。
+//
+// 返回值口径（与实现严格对齐，勿按名字误读）：它只回答「账本此刻有没有处于暂停」，
+// **不做原因过滤**。具体地：
+//   - 本包造成的积压暂停（原因前缀 walBacklogPauseReason）会由 maybeResumeBacklogLocked
+//     在积压回落至上限一半以下时清除，清掉后本方法返回 true；
+//   - 容量门禁等**其它路径**设置的暂停不会被本方法清除（那是越权），但只要它已被别处解除，
+//     本方法同样会返回 true；反之若仍处于暂停，则返回 false。
+//
+// 因此调用方可以用它判断「恢复是否已发生」，但不得把它当成「本次调用清除了暂停」的证据。
 func (w *WAL) EvaluateResume() bool {
 	// TryReclaim 的失败是常态而非异常（无恢复分段 / 责任未转移时 CanReclaim 本就不放行），
 	// 而它无论成败都会按**当前**水位剪枝并在剪枝后做一次滞回恢复评估；这里忽略返回值，
@@ -402,6 +410,11 @@ func (w *WAL) TryReclaim() (uint64, error) {
 // 该分支只多一次 O(条目数) 的积压统计，而它本就被本方法的调用路径（每轮采集一次）覆盖。
 func (w *WAL) pruneReclaimed(pos uint64) {
 	if pos == 0 {
+		// 该分支不剪条目，但仍要按同一临界区访问、并与 maybeResumeBacklogLocked 的
+		// 「调用方需持 w.mu」契约保持一致：否则它与 Append/backlogLocked 并发时
+		// 会读到撕裂的积压状态（且 Go 竞态检测会直接报数据竞争）。
+		w.mu.Lock()
+		defer w.mu.Unlock()
 		w.maybeResumeBacklogLocked(w.led.Get(w.key))
 		return
 	}

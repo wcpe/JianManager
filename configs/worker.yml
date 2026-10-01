@@ -81,6 +81,26 @@ log:
 # log_ingest:
 #   time_zone: local
 
+# 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天；回退方向永远是「多写一次」而不是「少写一次」。
+# 默认启用、并发 4、单源总超时 30s、单次 count 查询 10s、**整批总预算 60s**（复审 P2-10：对账在
+# ingest.New 里同步执行，预算到期即取消在途查询，未完成的源回退整窗重发）。
+# 需要「启动时一律整窗重发」时把它显式关掉（应急逃生口）。
+# log_reconcile:
+#   enabled: true
+#   concurrency: 4
+#   timeout: 30s
+#   query_timeout: 10s
+#   budget: 60s
+
+# 采集归一化的节点级默认字符集（复审 P2-3）：源未显式配置 Charset 时继承本默认。
+# 留空 = auto（合法 UTF-8 原样返回；非法 UTF-8 才按 GB18030 解码并做「含替换字符即放弃」的
+# 可靠性判定）；utf-8 / gbk / gb18030 则强制按该字符集解码。
+# 中文 locale 的 JVM 与 Worker 同机部署、日志为 GBK 时配 gbk 最稳（显式声明优于启发式判定）。
+# 非法值**启动即拒**（回退 auto 会让中文被当作非法 UTF-8 净化成替换字符，正文静默损坏）。
+# 环境变量覆盖：JIANMANAGER_LOG_INGEST_CHARSET。
+# log_ingest:
+#   charset: gbk
+
 # 出站网络代理（FR-174，见 ADR-037；可视化配置 + CP 下发见 FR-185 / ADR-043）。本节点所有出站
 # 下载（自更新二进制、JDK 归档、CFR 反编译器、服务端 jar）经此代理。url 留空=直连（仍尊重
 # HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），不破坏现状；非空时优先于环境变量。

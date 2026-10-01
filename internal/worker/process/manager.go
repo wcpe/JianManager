@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -633,17 +634,38 @@ func (m *Manager) lockInstanceOperation(uuid string) (*Instance, bool) {
 }
 
 // Start 启动实例。按实例的 ProcessType 选择策略；首次启动时惰性构造策略。
+//
+// 无 ctx 形态：等价于 StartContext(context.Background(), uuid)（既有调用方沿用）。
 func (m *Manager) Start(uuid string) error {
+	return m.StartContext(context.Background(), uuid)
+}
+
+// StartContext 是可取消的启动形态：ctx 被取消时启动等待立即收手，
+// 返回可重试错误（daemon.ErrStartWaitCanceled）且**不把实例记为崩溃**。
+//
+// 为什么要区分（复审 P1-5）：daemon 策略启动前要等上一代进程退出（预算可达分钟级）。
+// 若把「调用方取消」也当作「启动失败」置 CRASHED，一次取消就会污染实例状态，
+// 让运维以为是实例崩溃而非请求被取消。
+//
+// 说明：当前 gRPC 入口（internal/worker/grpc）仍传 context.Background()，把 RPC ctx 接进来
+// 属于该入口的改动（不在本次修复面内）；本方法先把可取消语义与状态语义准备就绪。
+func (m *Manager) StartContext(ctx context.Context, uuid string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	inst, exists := m.lockInstanceOperation(uuid)
 	if !exists {
 		return fmt.Errorf("实例 %s 不存在", uuid)
 	}
 	defer inst.operationMu.Unlock()
-	return m.startLocked(uuid, inst)
+	return m.startLocked(ctx, uuid, inst)
 }
 
 // startLocked 在已持有实例生命周期锁时启动实例。
-func (m *Manager) startLocked(uuid string, inst *Instance) error {
+func (m *Manager) startLocked(ctx context.Context, uuid string, inst *Instance) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	m.mu.Lock()
 	current, exists := m.instances[uuid]
 	if !exists || current != inst {
@@ -751,7 +773,17 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 
 	m.emitStateChange(uuid, oldState, StateStarting)
 
-	if err := strategy.Start(context.Background()); err != nil {
+	if err := strategy.Start(ctx); err != nil {
+		if errors.Is(err, daemon.ErrStartWaitCanceled) {
+			// 调用方取消 ⇒ 本次既未启动、也未判定失败（可重试）：**不是崩溃**，保持原状态。
+			// 置 CRASHED 会把「请求被取消」污染成「实例崩溃」，运维据此排查会南辕北辙。
+			m.mu.Lock()
+			prevState := inst.State
+			inst.State = oldState
+			m.mu.Unlock()
+			m.emitStateChange(uuid, prevState, oldState)
+			return fmt.Errorf("启动实例 %s 被取消（可重试）: %w", uuid, err)
+		}
 		m.mu.Lock()
 		prevState := inst.State
 		inst.State = StateCrashed
@@ -863,7 +895,7 @@ func (m *Manager) restartLocked(uuid string, inst *Instance) error {
 			return err
 		}
 	}
-	return m.startLocked(uuid, inst)
+	return m.startLocked(context.Background(), uuid, inst)
 }
 
 // RestartIfRunning 是 FR-459 假死自愈的受锁入口：与 Restart 相同地优雅重启，但**仅当**实例在
@@ -962,7 +994,7 @@ func (m *Manager) AdoptForeignRuntime(uuid string) (int, error) {
 	fr := m.foreignRuntime(uuid)
 	if fr.PID <= 0 {
 		// 无漂移：直接走正常启动路径（幂等；已 RUNNING 时由 startLocked 的状态守卫拒绝并给出明确错误）。
-		if err := m.startLocked(uuid, inst); err != nil {
+		if err := m.startLocked(context.Background(), uuid, inst); err != nil {
 			return 0, err
 		}
 		return 0, nil
@@ -979,7 +1011,7 @@ func (m *Manager) AdoptForeignRuntime(uuid string) (int, error) {
 	// 漂移进程已退场：先清该实例的观测，避免下一次心跳仍报旧 PID（扫描下一轮也会自然收敛）。
 	m.clearForeignRuntime(uuid)
 
-	if err := m.startLocked(uuid, inst); err != nil {
+	if err := m.startLocked(context.Background(), uuid, inst); err != nil {
 		return fr.PID, fmt.Errorf("外来进程 pid=%d 已退出，但以受管方式启动实例 %s 失败: %w", fr.PID, uuid, err)
 	}
 	m.auditOrphan("orphan.foreign_runtime_adopted", uuid,

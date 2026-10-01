@@ -96,7 +96,8 @@ log_source_id:="<id>" AND source_generation:="<gen>"
 
 - 对账按**源**并发（`log_reconcile.concurrency`，默认 4，上限 32）；源内按天串行（每天一次 count 查询，天数量通常 1–3）。
 - 单源对账总超时 `log_reconcile.timeout`（默认 30s）；单次 count 查询超时 `log_reconcile.query_timeout`（默认 10s，经 `context.WithTimeout` 注入，不受 vlsup 查询客户端 60s 默认超时支配）。
-- 任一源对账失败只影响该源（回退整窗重发），**不阻塞**其它源与启动主流程；整体有界 ≈ `ceil(源数/并发) × timeout`。
+- **整批总预算 `log_reconcile.budget`（默认 60s，2026-10-02 复审 P2-10）**：对账在 `ingest.New` 里**同步**执行，只有「单源 timeout + 并发」两道约束时，最坏情况（60 源全部卡在网络查询上）≈ `ceil(60/4)×30s = 7.5 分钟`，启动恢复被拖成分钟级。预算到期即取消 ctx（在途查询立刻收手），**未完成判定的源按最保守方向回退整窗重发**（`FallbackReason=reconcile_budget_exhausted`）——预算只影响「重发多少」，绝不影响「要不要重发」。回归：`ingest.TestStartupReconcileHonorsTotalBudget`（去掉预算即红：实测 4.0s vs 200ms）、`ingest.TestCloseReconcileBudgetNeverSkipsReplay`。
+- 任一源对账失败只影响该源（回退整窗重发），**不阻塞**其它源与启动主流程；整体上界 = 总预算。
 - 对账结论逐源落 `slog`，并保留在 `Manager.LastReconcileReports()`（只读，供运维与回归取证）。
 
 ### 2.4 条数级口径的边界（内容缺失不可检出）
@@ -164,6 +165,7 @@ log_source_id:="<id>" AND source_generation:="<gen>"
 | `log_reconcile.concurrency` | `4` | 并发对账的源数上限；越界/非正 → 回退 4（上限 32） | 同上（`Options.Reconcile.Concurrency`） |
 | `log_reconcile.timeout` | `30s` | 单源对账总超时；≤0 → 回退 30s | 同上 |
 | `log_reconcile.query_timeout` | `10s` | 单天 count 查询超时；≤0 → 回退 10s | 同上 |
+| `log_reconcile.budget` | `60s` | **整批**总预算（2026-10-02 复审 P2-10）；≤0 → 回退 60s。到期取消在途查询，未完成判定的源回退整窗重发 | 同上 |
 
 **关键常量**：
 
@@ -171,6 +173,8 @@ log_source_id:="<id>" AND source_generation:="<gen>"
 |---|---|---|---|
 | `reconcileMaxConcurrency` | `32` | `reconcile.go` | 并发上限（防误配打爆 VL 查询面） |
 | `reconcileBasisCountOnly` | `count_only` | `reconcile.go` | 判定依据标记（显式表达未做内容级校验） |
+| `reconcileDefaultBudget` | `60s` | `reconcile.go` | 整批对账总预算默认值 |
+| `reconcileBudgetExhausted` | `reconcile_budget_exhausted` | `reconcile.go` | 预算耗尽的回退原因标记 |
 | VL 端点 | `/select/logsql/stats_query` | `reconcile.go` | 只读 stats 查询（`\| stats count()`） |
 | 时间窗 | `utcDayBounds` 闭区间 | `runtime.go` | 与既有校验路径同日界口径 |
 

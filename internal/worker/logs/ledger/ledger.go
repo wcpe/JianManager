@@ -128,20 +128,99 @@ func (l *Ledger) ResolveGapsThroughExcept(key SourceKey, position uint64, resolu
 	return resolved, nil
 }
 
-// ResolveGapsCoveredByRange 只消解**完全落在 [from,to] 内**的未解决缺口。
+// PositionRange 是源位置的闭区间 [From, To]（含首含尾）。
+type PositionRange struct {
+	From uint64 `json:"from"`
+	To   uint64 `json:"to"`
+}
+
+// MergePositionRanges 把一组位置区间合并为若干**连续覆盖**的区间（升序、互不相接）。
+//
+// 相邻判定与缺口合并同一口径（rangesTouch：相隔 1 个字节仍视为连续）：相邻规范事件之间
+// 只有一个行分隔字节，而事件区间不含分隔符，故「隔一个分隔符」必须算连续，否则一次连续
+// 写入会被拆成逐事件碎片。
+func MergePositionRanges(ranges []PositionRange) []PositionRange {
+	out := make([]PositionRange, 0, len(ranges))
+	for _, r := range ranges {
+		if r.To < r.From {
+			continue
+		}
+		out = append(out, r)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].From != out[j].From {
+			return out[i].From < out[j].From
+		}
+		return out[i].To < out[j].To
+	})
+	merged := make([]PositionRange, 0, len(out))
+	current := out[0]
+	for _, r := range out[1:] {
+		// 重叠或仅隔 1 个字节（分隔符）→ 并入当前区间（区间只扩大不缩小）。
+		if r.From <= current.To+1 {
+			if r.To > current.To {
+				current.To = r.To
+			}
+			continue
+		}
+		merged = append(merged, current)
+		current = r
+	}
+	return append(merged, current)
+}
+
+// CoveredByPositionRanges 报告 [from,to] 是否被 ranges 中**某一段连续区间**完全包含。
+//
+// 为什么不是「落在 min..max 凸包内」：凸包会把两段证据之间的真实空洞也算成已覆盖，
+// 而空洞恰恰是「从未进入 WAL/段」的批次（append 被拒、容量门禁暂停）留下的位置——
+// 它们不可能出现在任何证据区间里，却会被凸包一并宣称「已确认落库」。
+//
+// 起点容差 1 字节（与缺口合并的 rangesTouch 同一口径）：规范事件区间不含行分隔符，而登记缺口
+// 时会把起点**回退到该分隔符之前**（见 acquire.Pipeline.Ingest 的 gapStart 回退），故缺口起点
+// 比证据区间早 1 字节（那 1 字节就是分隔符本身）仍视为落在同一段连续覆盖内。容差只作用于
+// 区间起点：终点不做放宽——缺口的末端与证据区间的末端同源（同一个事件的 Record.End）。
+// 容差不能跨两段证据之间的空洞（那需要单段区间本身包含空洞，不可能）。
+func CoveredByPositionRanges(ranges []PositionRange, from, to uint64) bool {
+	if to < from {
+		return false
+	}
+	for _, r := range ranges {
+		start := r.From
+		if start > 0 {
+			start--
+		}
+		if from >= start && to <= r.To {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveGapsCoveredByRanges 只消解**完全落在 ranges 之一内部**、且原因在 allowedReasons 内的未解决缺口。
 //
 // 与 ResolveGapsThroughExcept 的差别（为什么两者都要）：
-//   - Through 的判据是「缺口末端 ≤ position」，适合「整份历史都已发布」这类全局证据；
-//   - 本方法的判据是「缺口区间被某一次成功落库的写入范围完全包含」，适合「重投成功」这类
-//     局部证据——若只用末端判据，一次更靠后的成功批次会把夹在中间、从未被重投的旧缺口
-//     一并解掉，等于凭空宣称「没落库的数据已落库」（违反缺口语义红线）。
+//   - Through 的判据是「缺口末端 ≤ position」，适合人工显式确认放弃这类整体裁决；
+//   - 本方法的判据是「缺口区间被某一次**逐字段校验通过**的写入范围完全包含」，适合
+//     「重投成功 / 已发布投影」这类局部证据——若只用末端判据，一次更靠后的成功批次会把
+//     夹在中间、从未被重投的旧缺口一并解掉，等于凭空宣称「没落库的数据已落库」
+//     （违反缺口语义红线）。
+//
+// 原因判据是**允许名单**而不是排除名单：排除名单是默认放行，任何新增原因都会在无人注意时
+// 被自动消解；允许名单默认拒绝，未知原因必须显式登记才可能被自动消解。allowedReasons 为空
+// 时直接报错（装配错误必须响亮，不能静默变成「什么都不做」）。
 //
 // 区间只做包含判定，不做相交判定：部分重叠意味着还有一段没有任何证据，必须保持未解决。
-func (l *Ledger) ResolveGapsCoveredByRange(key SourceKey, from, to uint64, resolution string, excludedReasons ...string) (int, error) {
+func (l *Ledger) ResolveGapsCoveredByRanges(key SourceKey, ranges []PositionRange, resolution string, allowedReasons ...string) (int, error) {
 	if resolution == "" {
 		return 0, fmt.Errorf("ledger: gap resolution is required")
 	}
-	if to < from {
+	if len(allowedReasons) == 0 {
+		return 0, fmt.Errorf("ledger: gap resolution requires a non-empty reason allowlist")
+	}
+	if len(ranges) == 0 {
 		return 0, nil
 	}
 	l.mu.Lock()
@@ -153,17 +232,17 @@ func (l *Ledger) ResolveGapsCoveredByRange(key SourceKey, from, to uint64, resol
 	if len(entry.Gaps) == 0 {
 		return 0, nil
 	}
-	excluded := make(map[string]bool, len(excludedReasons))
-	for _, reason := range excludedReasons {
-		excluded[reason] = true
+	allowed := make(map[string]bool, len(allowedReasons))
+	for _, reason := range allowedReasons {
+		allowed[reason] = true
 	}
 	resolved := 0
 	for index := range entry.Gaps {
 		gap := &entry.Gaps[index]
-		if gap.Resolved || excluded[gap.Reason] {
+		if gap.Resolved || !allowed[gap.Reason] {
 			continue
 		}
-		if gap.StartPos < from || gap.EndPos > to {
+		if !CoveredByPositionRanges(ranges, gap.StartPos, gap.EndPos) {
 			continue
 		}
 		gap.Resolved = true

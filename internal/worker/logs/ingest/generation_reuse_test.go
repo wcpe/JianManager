@@ -107,3 +107,70 @@ func maxProjectionGenerationOf(t *testing.T, payloads [][]byte) int {
 	}
 	return maximum
 }
+
+// 复审 P2-11 回归：代次占用探测结果必须被缓存，且**写入尝试后立即失效**。
+//
+// 现场：每次投递都会先问 VL「候选代次名在该源上是否已有行」（无时间窗 + limit 1）；
+// 同一 (源, 代次) 的重复询问（探测进位循环、未落写的重试窗口）纯属浪费——而 60 源量级下
+// 这类查询每轮每源一次。
+//
+// 本用例守住两条：
+//  1. 同一 (源, 代次) 第二次询问不再发探测查询（缓存命中）——去掉缓存即红；
+//  2. 一旦**尝试写入**该代次名，缓存必须立即失效（半途失败的写入同样可能已留下行）——
+//     去掉失效即红（那会把「同名旧行被读成本次写入」的停摆风险重新引进来）。
+func TestProjectionGenerationProbeIsCachedAndInvalidatedOnWrite(t *testing.T) {
+	client, fixture := newProjectionVL(t)
+	cat := catalog.New(catalog.NewMemJournal())
+	root := t.TempDir()
+	logPath := filepath.Join(root, "latest.log")
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
+	source := SourceConfig{
+		LogSourceID: "node:probe-cache", SourceGeneration: "g1", Path: logPath,
+		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:probe-cache", UTCDay: runtimeTestUTCDay(),
+	}
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
+	})
+	require.NoError(t, err)
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	probesOf := func(name string) int { return fixture.probeCount(name) }
+
+	// 同一状态连续询问两次：第二次必须命中缓存（不产生新的探测查询）。
+	first := m.nextFreeProjectionGenerationWithClient(client, source, "projection-7")
+	require.Equal(t, "projection-8", first)
+	require.Equal(t, 1, probesOf("projection-8"), "首次必须实探")
+	again := m.nextFreeProjectionGenerationWithClient(client, source, "projection-7")
+	require.Equal(t, first, again, "同一状态下重复询问必须得到同一结论")
+	require.Equal(t, 1, probesOf("projection-8"),
+		"同一 (源, 代次) 的第二次询问必须命中缓存，不得再发探测查询")
+
+	// 写入尝试后：该名字的缓存必须失效（写入可能只完成一部分）。
+	m.recordProjectionGenerationAttempt(key, first)
+	third := m.nextFreeProjectionGenerationWithClient(client, source, "projection-7")
+	require.Equal(t, first, third)
+	require.Equal(t, 2, probesOf("projection-8"),
+		"写入尝试后必须重新实探：半途失败的写入同样可能已在 VL 留下同名行")
+
+	// 接线（端到端）：一次**真实投递**写下的代次名，其缓存必须已被「写前失效」清掉——
+	// 否则重试会跳过探测，直接往同名旧行上写（同名冲突正是 2026-10-01 停摆的成因）。
+	require.NoError(t, os.WriteFile(logPath,
+		[]byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
+	m.pollOnce()
+	written := savedSource(t, m, key).ProjectionGeneration
+	require.NotEmpty(t, written, "投递必须产生投影代次")
+	require.False(t, m.projectionGenerationKnownFree(key, written),
+		"写入尝试必须让该代次的「未占用」缓存立即失效（写入可能只完成一部分）")
+}
+
+// probeCount 统计发往假 VL 的「代次占用探测」查询次数（该查询的特征是 `| fields _time | limit 1`）。
+func (f *projectionVLFixture) probeCount(generation string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	count := 0
+	for _, raw := range f.probes {
+		if strings.Contains(raw, "projection_generation:="+strconv.Quote(generation)) {
+			count++
+		}
+	}
+	return count
+}

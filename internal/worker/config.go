@@ -211,6 +211,12 @@ type LogReconcileConfig struct {
 	Timeout string `mapstructure:"timeout"`
 	// QueryTimeout 单天 count 查询超时（duration 字符串，默认 10s）；非法/非正回退默认。
 	QueryTimeout string `mapstructure:"query_timeout"`
+	// Budget 整批对账的总预算（duration 字符串，默认 60s）；非法/非正回退默认。
+	//
+	// 为什么需要它（复审 P2-10）：对账在 ingest.New 里**同步**执行，而单源超时 30s × 60 源 /
+	// 并发 4 ≈ 7.5 分钟的最坏情况会把启动拖成分钟级。预算到期即取消在途查询，未完成的源
+	// 回退整窗重发（只影响「重发多少」，不影响「要不要重发」）。
+	Budget string `mapstructure:"budget"`
 }
 
 // ReconcileConfig 把本地配置面收敛为 ingest 的对账配置（非法/非正一律回退归一化默认）。
@@ -229,13 +235,16 @@ func (c LogReconcileConfig) ReconcileConfig() ingest.ReconcileConfig {
 	if d, err := time.ParseDuration(strings.TrimSpace(c.QueryTimeout)); err == nil && d > 0 {
 		out.QueryTimeout = d
 	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.Budget)); err == nil && d > 0 {
+		out.Budget = d
+	}
 	return out
 }
 
 // LogIndexConfig 采集索引（FR-496）的配置面，键为 `log_index.*`。
 //
 // 默认口径的单一真源在两个实现包里：ledger.DefaultDeliveryBatchPruneConfig（默认开启裁剪）
-// 与 stateindex.DefaultCommitBudget（每事务 1024 行、目标 40ms）。本类型只做 YAML →
+// 与 stateindex.DefaultCommitBudget（每提交单元 512 行、目标 40ms）。本类型只做 YAML →
 // ingest.Options 的搬运，非法值一律回退默认——配置误写不得让裁剪失效或让切分消失
 // （那会把「单次持久化 ≤50ms」的达标线交还给配置运气）。见
 // docs/specs/log-index-sqlite/spec.md §3.4（切分）与 §6（配置键登记）。
@@ -265,7 +274,8 @@ func (c LogIndexBatchPruneConfig) DeliveryBatchPruneConfig() ledger.DeliveryBatc
 
 // LogIndexPersistConfig 是索引持久化提交单元预算的配置面（键 `log_index.persist.*`）。
 type LogIndexPersistConfig struct {
-	// MaxTxRows 单个提交单元（一次 IMMEDIATE 事务）的行数上限；非正回退默认 1024。
+	// MaxTxRows 单个提交单元（一次 IMMEDIATE 事务）的行数上限；非正回退默认 512
+	// （真源是 stateindex.DefaultCommitMaxRows）。
 	MaxTxRows int `mapstructure:"max_tx_rows"`
 	// MinTxRows 自适应收缩的下限（再慢也不退化成逐行）；非正/大于上限时回退默认 64。
 	MinTxRows int `mapstructure:"min_tx_rows"`
@@ -487,6 +497,16 @@ type LogIngestConfig struct {
 	// "local" = 跟随节点进程本地时区（TZ）；其余按 IANA 名解析（如 Asia/Hong_Kong）。
 	// 源可用 SourceConfig.TimeZone 覆盖本默认。
 	TimeZone string `mapstructure:"time_zone"`
+	// Charset 是节点级默认日志字符集：空串 = auto（合法 UTF-8 原样返回，非法 UTF-8 才按
+	// GB18030 解码并做「含 U+FFFD 即放弃」的可靠性判定，见 normalize 的字符集收口）；
+	// "utf-8" / "gbk" / "gb18030" 则强制按该字符集解码。
+	//
+	// 为什么需要它（复审 P2-3）：字符集判定与转码逻辑早已在 normalize 落地，节点级默认也已有
+	// ingest.Options.DefaultCharset 接线点，但**没有任何配置面**——生产要让「中文 locale 的
+	// JVM 写出 GBK 日志」稳定按 GBK 解释，只能改代码。自动判定在纯 ASCII 行与中文行混排时
+	// 依赖粘滞启发式，运维显式声明才是确定性方案。
+	// 源可用 SourceConfig.Charset 覆盖本默认；非法值在 Load 阶段启动即拒。
+	Charset string `mapstructure:"charset"`
 }
 
 // IngestDefaultTimeZone 返回装配给 ingest.Options.DefaultTimeZone 的节点级默认时区名。
@@ -498,6 +518,17 @@ func (c *Config) IngestDefaultTimeZone() string {
 		return ""
 	}
 	return strings.TrimSpace(c.LogIngest.TimeZone)
+}
+
+// IngestDefaultCharset 返回装配给 ingest.Options.DefaultCharset 的节点级默认字符集。
+//
+// 独立成方法的原因同 IngestDefaultTimeZone：这条接线一旦断掉，中文日志会被静默按 UTF-8 净化
+// （正文里出现替换字符）而没有任何编译错误提示。空串 = auto（既有行为，零配置零变化）。
+func (c *Config) IngestDefaultCharset() string {
+	if c == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.LogIngest.Charset)
 }
 
 // LogArchiveConfig 是 Worker Deep Archive 的受管对象存储配置。
@@ -561,6 +592,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_reconcile.concurrency", reconcileDefaults.Concurrency)
 	v.SetDefault("log_reconcile.timeout", reconcileDefaults.Timeout.String())
 	v.SetDefault("log_reconcile.query_timeout", reconcileDefaults.QueryTimeout.String())
+	v.SetDefault("log_reconcile.budget", reconcileDefaults.Budget.String())
 	// 采集索引（FR-496）：历史投递批次裁剪 + 持久化提交单元预算。默认值同样取自实现包的单一真源。
 	indexPruneDefaults := ledger.DefaultDeliveryBatchPruneConfig()
 	indexCommitDefaults := stateindex.DefaultCommitBudget()
@@ -580,6 +612,9 @@ func Load(path string) (*Config, error) {
 	// 采集归一化的节点级默认时区（缺陷 C）：留空 = UTC，未配置时零行为变化。
 	// 中文 locale 的 JVM 与 Worker 同机部署时配 `local` 即可对齐本地时间。
 	v.SetDefault("log_ingest.time_zone", "")
+	// 采集归一化的节点级默认字符集（复审 P2-3）：留空 = auto。中文 locale 的 JVM 与 Worker
+	// 同机部署且日志为 GBK 时配 gbk 即可（显式声明优于自动判定）。
+	v.SetDefault("log_ingest.charset", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
 	v.SetDefault("artifact_cache.max_bytes", int64(0))
@@ -681,6 +716,12 @@ func Load(path string) (*Config, error) {
 	// 等查询结果对不上账才发现（与登记阶段拒绝非法源级时区同一取舍）。
 	if tz := cfg.IngestDefaultTimeZone(); tz != "" && !ingest.IsValidTimeZone(tz) {
 		return nil, fmt.Errorf("log_ingest.time_zone 非法: %q（支持 UTC/local 或 IANA 名，如 Asia/Hong_Kong）", cfg.LogIngest.TimeZone)
+	}
+	// 采集字符集（复审 P2-3）：非法取值必须在启动即拒——按未知字符集「回退 auto」会让
+	// GBK 中文被当作非法 UTF-8 净化成替换字符，正文静默损坏，等运维在日志里发现已经晚了
+	// （与源级登记拒绝非法字符集同一取舍）。
+	if cs := cfg.IngestDefaultCharset(); cs != "" && !ingest.IsValidCharset(cs) {
+		return nil, fmt.Errorf("log_ingest.charset 非法: %q（支持 auto/utf-8/gbk/gb18030）", cfg.LogIngest.Charset)
 	}
 	if cfg.LogCapacity.DegradedAtPercent <= 0 || cfg.LogCapacity.DegradedAtPercent >= 100 ||
 		cfg.LogCapacity.PauseAtPercent <= cfg.LogCapacity.DegradedAtPercent || cfg.LogCapacity.PauseAtPercent > 100 {

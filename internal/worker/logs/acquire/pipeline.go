@@ -117,7 +117,7 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 		// 投递不能挂在摄取上，否则暂停即断流 → 已读未投的积压永不外发 →
 		// 回收位置不动 → 段无从覆盖 → 滞回永不满足（2026-09-30 生产实证：残留 7998 条卡死数小时）。
 		_, _ = p.deliverPendingBestEffort()
-		_ = p.led.RecordGap(p.key, gapStart, gapEnd, "APPEND_REJECTED", err.Error())
+		_ = p.led.RecordGap(p.key, gapStart, gapEnd, ledger.GapReasonAppendRejected, err.Error())
 		p.noteSelfFailure(err.Error())
 		return err
 	}
@@ -127,7 +127,7 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 
 	// durable：fsync/equivalent commit。
 	if err := p.wal.Commit(); err != nil {
-		_ = p.led.RecordGap(p.key, gapStart, gapEnd, "WAL_COMMIT_FAILED", err.Error())
+		_ = p.led.RecordGap(p.key, gapStart, gapEnd, ledger.GapReasonWALCommitFailed, err.Error())
 		p.noteSelfFailure(err.Error())
 		return err
 	}
@@ -145,11 +145,11 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 	if err != nil && p.suppressRecursiveVL {
 		// worker 自源：失败只计本地，不递归写 VL。
 		p.noteSelfFailure(err.Error())
-		_ = p.led.RecordGap(p.key, gapStart, gapEnd, "DELIVER_ERROR_WORKER_SOURCE", err.Error())
+		_ = p.led.RecordGap(p.key, gapStart, gapEnd, ledger.GapReasonDeliverErrorWorkerSource, err.Error())
 		return nil
 	}
 	if err != nil {
-		_ = p.led.RecordGap(p.key, gapStart, gapEnd, "DELIVER_ERROR", err.Error())
+		_ = p.led.RecordGap(p.key, gapStart, gapEnd, ledger.GapReasonDeliverError, err.Error())
 		return err
 	}
 	// HTTP 2xx → REQUEST_DONE only；AckLost → UNKNOWN（恢复责任保留）。

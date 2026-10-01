@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"io"
 	"os"
 	"testing"
@@ -44,7 +45,7 @@ func reapedPID(t *testing.T) int {
 func TestWaitForPriorExit(t *testing.T) {
 	t.Run("无 PID 文件立即返回", func(t *testing.T) {
 		start := time.Now()
-		require.NoError(t, waitForPriorExit(t.TempDir(), "absent", 5*time.Second),
+		require.NoError(t, waitForPriorExit(context.Background(), t.TempDir(), "absent", 5*time.Second),
 			"无 PID 文件说明上一代已退出，不得报错")
 		assert.Less(t, time.Since(start), time.Second, "无 PID 文件不应等待")
 	})
@@ -54,7 +55,7 @@ func TestWaitForPriorExit(t *testing.T) {
 		dead := reapedPID(t)
 		writePIDRecord(t, pidDir, "dead", PIDRecord{WrapperPID: dead, JavaPID: dead, InstanceUUID: "dead"})
 		start := time.Now()
-		require.NoError(t, waitForPriorExit(pidDir, "dead", 5*time.Second),
+		require.NoError(t, waitForPriorExit(context.Background(), pidDir, "dead", 5*time.Second),
 			"上一代进程已死，不得报错")
 		assert.Less(t, time.Since(start), 3*time.Second, "进程已死不应等满超时")
 	})
@@ -65,7 +66,7 @@ func TestWaitForPriorExit(t *testing.T) {
 		writePIDRecord(t, pidDir, "alive", PIDRecord{WrapperPID: os.Getpid(), InstanceUUID: "alive"})
 		const timeout = 300 * time.Millisecond
 		start := time.Now()
-		err := waitForPriorExit(pidDir, "alive", timeout)
+		err := waitForPriorExit(context.Background(), pidDir, "alive", timeout)
 		elapsed := time.Since(start)
 		require.ErrorIs(t, err, ErrPriorExitTimeout,
 			"上一代进程仍存活时必须报错拒绝启动，不得静默继续（否则新旧进程并存）")

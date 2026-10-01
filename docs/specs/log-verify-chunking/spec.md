@@ -104,6 +104,12 @@ VL 侧安全边界是「单查询结果集内存」——实测 2.7 万行 / 9.3
 - **取消只在「明确根因」到手时发生**：仅当某簇返回**永久失败**或**判定类错误**（内容不一致 /
   多余或重复 / 事件集非法）时才取消其余簇；**超时类失败不取消**——它往往只说明「本批数据尚不可见」，
   而其余簇此刻可能正读到真正的根因（例如某一行内容不一致），取消会把那个结论一并抹掉。
+  **2026-10-02 复审 P1-3 更正**：该策略此前并未真正生效——本簇到期唯一的错误文案
+  `not fully visible before deadline` 曾被 `verifyErrorIsSemantic` 判成判定类，于是任一簇到期都会
+  取消其余簇、把即将读到的真根因覆盖成 `aborted by batch cancellation`。现已把该文案移出判定名单
+  （取消只由 `vlsup.IsPermanent` 与真正的判定类错误触发），回归
+  `ingest.TestVerifyProjectionTimeoutChunkDoesNotMaskContentMismatch`（超时簇 + 内容不一致簇 →
+  verdict 必须是内容不一致；把文案放回名单即红）。
   这一条是 `-race` 实测逼出来的：注入「写错一行」后，若超时也触发取消，最终错误会退化成
   `verification failed: context deadline exceeded`，根因不可见。
 - **判定类错误优先**：由「同批其他簇失败后取消」引发的传输噪音（`context canceled`、

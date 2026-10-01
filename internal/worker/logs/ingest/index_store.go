@@ -150,6 +150,9 @@ type indexAux struct {
 	EventsStored       bool `json:"events_stored,omitempty"`
 	// Events 仅旧格式或事件段存储不可用时非空（与 FR-484 语义一致）。
 	Events []logtypes.Event `json:"events,omitempty"`
+	// VerifiedRuns 是该源逐字段校验通过的源位置连续区间（见 persistedSource.VerifiedRuns）。
+	// 直接随本 payload 的 JSON 落盘：payload 列的指纹覆盖其全部字节，故变更必然被索引层发现。
+	VerifiedRuns []ledger.PositionRange `json:"verified_runs,omitempty"`
 
 	// LedgerCore 承载「首个账本条目」中未被 position/gap/delivery_batch 表覆盖的字段；
 	// 为 nil 表示原 Ledger 切片为空。ExtraLedger 承载首个条目之外的条目（现实中每源恰好一条，
@@ -247,6 +250,7 @@ func (m *Manager) stateToIndexState(st *persistedState) (stateindex.State, error
 			aux.PublicationPending = saved.PublicationPending
 			aux.EventsStored = saved.EventsStored
 			aux.Events = saved.Events
+			aux.VerifiedRuns = saved.VerifiedRuns
 			aux.LedgerCore = core
 			if len(saved.Ledger) > 1 {
 				// 防御：首个条目之外的账本条目原样保留（现实中每源恰好一条）。
@@ -546,6 +550,7 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 			ProjectionGeneration: projection.Generation,
 			EventsStored:         aux.EventsStored,
 			Events:               aux.Events,
+			VerifiedRuns:         aux.VerifiedRuns,
 		}
 	}
 
@@ -693,7 +698,8 @@ func indexPruneConfigOf(configured *ledger.DeliveryBatchPruneConfig) ledger.Deli
 	return configured.Normalized()
 }
 
-// indexCommitBudgetOf 归一化「提交单元预算」：nil 表示用默认（每事务 1024 行、目标 40ms）。
+// indexCommitBudgetOf 归一化「提交单元预算」：nil 表示用默认（每提交单元 512 行、目标 40ms；
+// 真源是 stateindex.DefaultCommitMaxRows / DefaultCommitTarget，此处不再复写具体数字以免再次漂移）。
 // 非法值（非正行数/耗时）在 stateindex.Normalized 里回退默认——配置误写不得让切分失效。
 func indexCommitBudgetOf(configured *stateindex.CommitBudget) stateindex.CommitBudget {
 	if configured == nil {

@@ -267,6 +267,44 @@ func TestLoad_LogIngestTimeZoneEnvOverride(t *testing.T) {
 	assert.Equal(t, "Asia/Hong_Kong", cfg.IngestDefaultTimeZone())
 }
 
+// TestLoad_LogIngestCharset 采集字符集配置面（复审 P2-3）：默认 auto 不变、显式值可配、非法值启动即拒。
+//
+// 转红：改动前没有 log_ingest.charset 这条配置面（config.go 无键、main.go 不传）——
+// 节点级默认字符集只能改代码才能生效；且非法字符集必须显式失败，静默回退 auto 会让
+// GBK 日志被当作非法 UTF-8 净化成替换字符而无人察觉。
+func TestLoad_LogIngestCharset(t *testing.T) {
+	// 零配置：留空 = auto（既有行为零变化，合法 UTF-8 源逐字节不变）。
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.IngestDefaultCharset(), "未配置字符集时必须保持 auto（空串）语义")
+
+	// 显式声明（中文 locale 的 JVM 输出 GBK 日志时的确定性方案）。
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  charset: gbk\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "gbk", cfg.IngestDefaultCharset())
+
+	// 也接受 auto/utf-8/gb18030。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  charset: gb18030\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "gb18030", cfg.IngestDefaultCharset())
+
+	// 非法值必须启动即拒（与源级登记拒绝非法字符集同一取舍）。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  charset: big5\n"), 0o600))
+	_, err = Load(path)
+	require.ErrorContains(t, err, "log_ingest.charset 非法")
+}
+
+// TestLoad_LogIngestCharsetEnvOverride 环境变量按路径覆盖配置（JIANMANAGER_LOG_INGEST_CHARSET）。
+func TestLoad_LogIngestCharsetEnvOverride(t *testing.T) {
+	t.Setenv("JIANMANAGER_LOG_INGEST_CHARSET", "gb18030")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "gb18030", cfg.IngestDefaultCharset())
+}
+
 // TestWorkerConfigExists 工作目录有/无 worker 配置文件时正确报告（FR-222 未配置自检的一半）。
 func TestWorkerConfigExists(t *testing.T) {
 	dir := t.TempDir()

@@ -31,15 +31,13 @@ func TestVerifyProjectionChunksBoundQuerySize(t *testing.T) {
 	const chunkEvents = 500
 
 	var mu sync.Mutex
-	maxLimit, queries := 0, 0
+	queries, withLimit := 0, 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 校验查询是 GET /select/logsql/query?query=…（FR-498 起不再传 limit：截断会让本簇
 		// 记录凑不齐而被误判「不可见」，见 verify_no_limit_test.go）。
-		if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil {
+		if r.URL.Query().Get("limit") != "" {
 			mu.Lock()
-			if n > maxLimit {
-				maxLimit = n
-			}
+			withLimit++
 			mu.Unlock()
 		}
 		mu.Lock()
@@ -85,5 +83,8 @@ func TestVerifyProjectionChunksBoundQuerySize(t *testing.T) {
 	defer mu.Unlock()
 	// 断言用字面量（而非常量本身），否则「把上限调大 = 取消分簇」的变异不会被发现。
 	require.GreaterOrEqual(t, queries, 3, "1200 条按每簇 500 条应至少发起 3 次校验查询")
-	require.LessOrEqual(t, maxLimit, 501, "校验查询不得用 limit 截断（截断会误判「不可见」）")
+	// 原断言是 `maxLimit <= 501`（maxLimit 只在 limit 可解析为正整数时更新）——没有 limit 时
+	// 它恒为 0，断言恒真、没有任何判别力（复审 P2-6）。改为直接断言「查询里根本不存在 limit 参数」：
+	// 截断会让本簇记录凑不齐而被误判「不可见」（2026-09-28 生产事故形态）。
+	require.Zero(t, withLimit, "校验查询不得携带 limit 参数（截断会误判「不可见」）")
 }

@@ -112,7 +112,8 @@ func TestResolveGapsCoveredByRangeRequiresFullCoverage(t *testing.T) {
 	require.NoError(t, led.RecordGap(key, 900, 1000, "DELIVER_ERROR", "partially overlapping"))
 
 	// 成功重投的区间是 [100,900)：第一条完全落在内，第二条只重叠一部分（越过 900）。
-	resolved, err := led.ResolveGapsCoveredByRange(key, 100, 900, "delivery confirmed for this range")
+	resolved, err := led.ResolveGapsCoveredByRanges(key, []PositionRange{{From: 100, To: 900}},
+		"delivery confirmed for this range", GapReasonDeliverError)
 	require.NoError(t, err)
 	require.Equal(t, 1, resolved)
 	require.Equal(t, 1, led.UnresolvedGapCount(key))
@@ -121,34 +122,80 @@ func TestResolveGapsCoveredByRangeRequiresFullCoverage(t *testing.T) {
 	require.False(t, entry.Gaps[1].Resolved, "部分重叠不构成“已落库”证据")
 
 	// 完整的第二次重投覆盖 [900,1000)：第二条随之消解。
-	resolved, err = led.ResolveGapsCoveredByRange(key, 900, 1000, "delivery confirmed for this range")
+	resolved, err = led.ResolveGapsCoveredByRanges(key, []PositionRange{{From: 900, To: 1000}},
+		"delivery confirmed for this range", GapReasonDeliverError)
 	require.NoError(t, err)
 	require.Equal(t, 1, resolved)
 	require.Zero(t, led.UnresolvedGapCount(key))
 	// 边界：起点早于证据区间的缺口同样不构成覆盖（只做包含判定）。
 	require.NoError(t, led.RecordGap(key, 50, 60, "DELIVER_ERROR", "before evidence range"))
-	resolved, err = led.ResolveGapsCoveredByRange(key, 55, 60, "delivery confirmed for this range")
+	resolved, err = led.ResolveGapsCoveredByRanges(key, []PositionRange{{From: 55, To: 60}},
+		"delivery confirmed for this range", GapReasonDeliverError)
 	require.NoError(t, err)
 	require.Zero(t, resolved, "起点不在证据区间内不得消解")
 	require.Equal(t, 1, led.UnresolvedGapCount(key))
 }
 
-// TestResolveGapsCoveredByRangeSkipsUnexpressibleReasons 守住「原因级排除」：
-// 自动消解路径必须能排除无法由投影证明的原因。
-func TestResolveGapsCoveredByRangeSkipsUnexpressibleReasons(t *testing.T) {
+// TestResolveGapsCoveredByRangesRejectsConvexHull 守住「连续覆盖 ≠ 凸包」（复审 P1-1）：
+// 落在两段已确认区间**之间空洞**里的缺口绝不能被消解。
+//
+// 现场形态：一次 replay=true 的整窗重放把 evidence 扩为全量 canonical 集，
+// [min(Start), max(End)] 凸包覆盖整段历史——落在凸包内部、却从未进入 WAL 的批次
+// （APPEND_REJECTED / 容量门禁暂停）会被标成「delivery confirmed for this range」，
+// 空洞被永久掩盖并放行 ResumeAcquire。
+//
+// 转红：把判据退回「缺口落在 min..max 凸包内」（或退回单区间 from/to 写法）即红——
+// 空洞中的缺口会被误判为已覆盖。
+func TestResolveGapsCoveredByRangesRejectsConvexHull(t *testing.T) {
 	led := New()
-	key := keyOf("exclude", "g1")
-	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "exclude", SourceGeneration: "g1"})
-	require.NoError(t, led.RecordGap(key, 0, 100, "DELIVER_ERROR", "recoverable"))
-	require.NoError(t, led.RecordGap(key, 0, 100, GapReasonStdioRawWriteFailed, "raw bytes may be lost"))
+	key := keyOf("hull", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "hull", SourceGeneration: "g1"})
+	// 空洞（从未进 WAL 的批次）落在两段已确认区间 [0,100] 与 [200,300] 之间。
+	require.NoError(t, led.RecordGap(key, 120, 180, GapReasonAppendRejected, "append rejected while paused"))
 
-	resolved, err := led.ResolveGapsCoveredByRange(key, 0, 100,
-		"delivery confirmed for this range", GapReasonStdioRawWriteFailed)
+	resolved, err := led.ResolveGapsCoveredByRanges(key,
+		[]PositionRange{{From: 0, To: 100}, {From: 200, To: 300}},
+		"delivery confirmed for this range", GapReasonDeliverError, GapReasonAppendRejected)
+	require.NoError(t, err)
+	require.Zero(t, resolved, "缺口落在两段证据之间的空洞里，不得被消解")
+	require.Equal(t, 1, led.UnresolvedGapCount(key))
+
+	// 反向对照：同一区间被一整段连续证据覆盖时必须消解（证明上面不是因为「什么都不消解」而通过）。
+	resolved, err = led.ResolveGapsCoveredByRanges(key, []PositionRange{{From: 0, To: 300}},
+		"delivery confirmed for this range", GapReasonDeliverError, GapReasonAppendRejected)
+	require.NoError(t, err)
+	require.Equal(t, 1, resolved)
+	require.Zero(t, led.UnresolvedGapCount(key))
+}
+
+// TestResolveGapsCoveredByRangesIsAllowlist 守住「原因判据是允许名单（默认拒绝）」：
+// 未登记的原因一律不自动消解；空名单是装配错误，必须响亮报错而不是静默什么都不做。
+func TestResolveGapsCoveredByRangesIsAllowlist(t *testing.T) {
+	led := New()
+	key := keyOf("allowlist", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "allowlist", SourceGeneration: "g1"})
+	require.NoError(t, led.RecordGap(key, 0, 100, GapReasonStdioRawWriteFailed, "raw bytes may be lost"))
+	require.NoError(t, led.RecordGap(key, 0, 100, GapReasonAppendRejected, "append rejected while paused"))
+
+	// 未登记的原因（哪怕区间完全被证据覆盖）不得被消解。
+	resolved, err := led.ResolveGapsCoveredByRanges(key, []PositionRange{{From: 0, To: 100}},
+		"verified published projection", GapReasonDeliverError)
+	require.NoError(t, err)
+	require.Zero(t, resolved, "允许名单之外的原因不得被自动消解")
+	require.Equal(t, 2, led.UnresolvedGapCount(key))
+
+	// 空允许名单 = 装配错误：必须报错（否则「名单写空」会表现成「永远解不开」的无声失效）。
+	_, err = led.ResolveGapsCoveredByRanges(key, []PositionRange{{From: 0, To: 100}}, "delivery confirmed for this range")
+	require.Error(t, err, "空允许名单必须报错，不得静默什么都不做")
+
+	// 登记进名单的原因在同一区间上可以消解（证明上面不是因为判据整体失效）。
+	resolved, err = led.ResolveGapsCoveredByRanges(key, []PositionRange{{From: 0, To: 100}},
+		"verified published projection", GapReasonAppendRejected)
 	require.NoError(t, err)
 	require.Equal(t, 1, resolved)
 	entry := led.Get(key)
-	require.True(t, entry.Gaps[0].Resolved)
-	require.False(t, entry.Gaps[1].Resolved, "不可证明的原因必须保持未解决，等待人工确认")
+	require.False(t, entry.Gaps[0].Resolved, "未登记的原因（原始字节写入失败）必须保持未解决，等待人工确认")
+	require.True(t, entry.Gaps[1].Resolved)
 	// 自动路径之外，人工解算接口（ResolveGapsThrough，即 ResolveCoveredGapsForSource 的内核）
 	// 语义不变：它仍按末端消解，可显式确认放弃不可证明的原因。
 	require.Error(t, led.ResumeAcquire(key), "存在未解决缺口时仍必须拒绝恢复采集")
@@ -156,6 +203,19 @@ func TestResolveGapsCoveredByRangeSkipsUnexpressibleReasons(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, resolved)
 	require.NoError(t, led.ResumeAcquire(key))
+}
+
+// TestMergePositionRangesBridgesSingleSeparator 守住区间合并的口径：相邻区间之间只隔一个
+// 分隔字节（规范事件区间不含行分隔符）时必须合并为一段连续覆盖。
+func TestMergePositionRangesBridgesSingleSeparator(t *testing.T) {
+	merged := MergePositionRanges([]PositionRange{
+		{From: 10, To: 20}, {From: 21, To: 30}, {From: 40, To: 50},
+	})
+	require.Len(t, merged, 2, "隔 1 个字节（分隔符）必须合并，隔 10 个字节（真实空洞）必须保留")
+	require.Equal(t, PositionRange{From: 10, To: 30}, merged[0])
+	require.Equal(t, PositionRange{From: 40, To: 50}, merged[1])
+	require.True(t, CoveredByPositionRanges(merged, 12, 29))
+	require.False(t, CoveredByPositionRanges(merged, 25, 45), "跨空洞的区间不得判为已覆盖")
 }
 
 // TestResolvedGapsAreTrimmedButAuditTailKept 守住「已解决缺口有界」：

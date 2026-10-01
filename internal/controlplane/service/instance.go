@@ -2092,9 +2092,10 @@ func (s *InstanceService) Shutdown() {
 const (
 	// delegateRPCTimeoutDefault 是实例生命周期动作委托给 Worker 的默认 RPC 超时。
 	delegateRPCTimeoutDefault = 30 * time.Second
-	// restartRPCTimeoutMargin 是重启委托超时在「优雅停止超时」之外的余量：覆盖 Worker 侧
-	// 等待上一代进程退出之后的进程启动与状态检查开销（见 worker daemon.PriorExitBudget）。
-	restartRPCTimeoutMargin = 60 * time.Second
+	// lifecycleWaitRPCTimeoutMargin 是**需要等上一代进程退出**的动作（start/restart）在
+	// 「生效优雅停止超时」之外的余量：覆盖 Worker 侧等待预算之后的进程启动与状态检查开销
+	// （见 worker daemon.PriorExitBudget = 优雅停止超时 + 收尾余量 10s）。
+	lifecycleWaitRPCTimeoutMargin = 60 * time.Second
 	// gracefulStopTimeoutDefaultSeconds 是平台设置 graceful_stop.timeout 的基线默认值（秒），
 	// 与 settings.go 的 defaultValue 保持一致；CP 未装配 settings 时按此兜底。
 	gracefulStopTimeoutDefaultSeconds = 30
@@ -2102,19 +2103,25 @@ const (
 
 // delegateRPCTimeout 返回把生命周期动作委托给 Worker 的 RPC 超时。
 //
-// restart 在 Worker 侧是一条同步串行链：「优雅停止 → 等待上一代进程退出（预算 = 优雅停止
-// 超时 + 收尾余量）→ 启动」。若与其它动作共用 30s，长关服实例（例如非 MC 二进制只能等强杀
-// 兜底）会在链路中途被 CP 判超时并把实例误标 CRASHED，而 Worker 实际仍在正常重启——即
-// 「假失败」，与静默假成功同源的状态不一致。故 restart 按生效的优雅停止超时放大超时预算，
-// 其余动作仍需 30s 足够。
+// start 与 restart 在 Worker 侧都要**等上一代进程退出**：daemon 策略的 Start 会先执行
+// WaitForPriorExit（预算 = 生效优雅停止超时 + 收尾余量，平台设 120s 时 = 130s），超预算即
+// **拒绝启动**（宁可保留仍在服务的旧进程，也不新旧并存）。因此两者必须同口径放大：
+//   - 若 start 仍用 30s，慢关服实例点「启动」会先被 CP 判超时——实例被误标 CRASHED 且原因写成
+//     RPC 超时（假失败），随后 Worker 的等待到点又返回「上一代未在预算内退出」（第二次失败）：
+//     运维看到两个都不是真因的错误，且「点一次启动就崩」的观感与实际原因完全脱节。
+//   - 放大后 CP 的等待必然覆盖 Worker 的判定，返回的永远是 Worker 的结论（真正的根因）。
+//
+// stop/kill 不等待进程退出（只下发停止帧），仍用 30s。
 func delegateRPCTimeout(action string, gracefulStopSeconds int32) time.Duration {
-	if action != "restart" {
+	switch action {
+	case "start", "restart":
+	default:
 		return delegateRPCTimeoutDefault
 	}
 	if gracefulStopSeconds <= 0 {
 		gracefulStopSeconds = gracefulStopTimeoutDefaultSeconds
 	}
-	return time.Duration(gracefulStopSeconds)*time.Second + restartRPCTimeoutMargin
+	return time.Duration(gracefulStopSeconds)*time.Second + lifecycleWaitRPCTimeoutMargin
 }
 
 // delegateToWorker 委托实例操作给 Worker Node。
@@ -2135,8 +2142,8 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 		return
 	}
 
-	// 超时按动作取：restart 须覆盖 Worker 侧「优雅停止 + 等待上一代进程退出 + 启动」全链路
-	// （见 delegateRPCTimeout），与其它动作共用 30s 会把仍在正常重启的实例误标 CRASHED。
+	// 超时按动作取：start/restart 须覆盖 Worker 侧「优雅停止 + 等待上一代进程退出 + 启动」全链路
+	// （见 delegateRPCTimeout），与其它动作共用 30s 会把仍在正常启动/重启的实例误标 CRASHED。
 	ctx, cancel := context.WithTimeout(context.Background(), delegateRPCTimeout(action, s.gracefulStopTimeoutSeconds()))
 	defer cancel()
 

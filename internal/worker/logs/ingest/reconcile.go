@@ -41,6 +41,16 @@ const (
 	reconcileMaxConcurrency      = 32
 	reconcileDefaultTimeout      = 30 * time.Second
 	reconcileDefaultQueryTimeout = 10 * time.Second
+	// reconcileDefaultBudget 是**整批**启动对账的总预算。
+	//
+	// 为什么要总预算（复审 P2-10）：单源超时 30s、并发 4，最坏情况（60 源全部卡在网络查询上）
+	// ≈ ceil(60/4)×30s = 7.5 分钟——而这段对账是**同步**发生在 ingest.New 里的，
+	// 启动恢复因此被拖到分钟级，实例在此期间不可用。
+	// 取值 60s：正常节点（几十源、VL 本机可达）实测对账总耗时在秒级，60s 只是「异常时的上界」，
+	// 触发后按最保守方向收口（未完成的源 → 整窗重发）。
+	reconcileDefaultBudget = 60 * time.Second
+	// reconcileBudgetExhausted 是「总预算耗尽」的回退原因标记（观测与回归取证用）。
+	reconcileBudgetExhausted = "reconcile_budget_exhausted"
 )
 
 // ReconcileConfig 是启动增量对账的配置面。
@@ -57,6 +67,11 @@ type ReconcileConfig struct {
 	Timeout time.Duration
 	// QueryTimeout 是单次 count 查询超时。
 	QueryTimeout time.Duration
+	// Budget 是**整批**对账的总预算（上限，0/负值回退 reconcileDefaultBudget）。
+	//
+	// 语义：预算到期即取消所有在途查询；尚未完成判定的源一律按「查询不可信」的最保守方向
+	// 收口（回退整窗重发），绝不因为「没来得及对账」而少发数据。
+	Budget time.Duration
 }
 
 // DefaultReconcileConfig 返回默认对账配置（默认启用）。
@@ -66,6 +81,7 @@ func DefaultReconcileConfig() ReconcileConfig {
 		Concurrency:  reconcileDefaultConcurrency,
 		Timeout:      reconcileDefaultTimeout,
 		QueryTimeout: reconcileDefaultQueryTimeout,
+		Budget:       reconcileDefaultBudget,
 	}
 }
 
@@ -83,6 +99,9 @@ func (c ReconcileConfig) normalized() ReconcileConfig {
 	}
 	if out.QueryTimeout <= 0 {
 		out.QueryTimeout = reconcileDefaultQueryTimeout
+	}
+	if out.Budget <= 0 {
+		out.Budget = reconcileDefaultBudget
 	}
 	return out
 }
@@ -130,14 +149,24 @@ type startupSource struct {
 // reconcileStartup 并发对账一批源，返回与输入等长的报告（顺序一一对应）。
 //
 // 并发只按「源」切分；源内按 UTC 天串行查询（天数量通常 1–3）。
+//
+// 总预算（复审 P2-10）：本方法在**启动路径上同步执行**（ingest.New），因此必须有整批上界——
+// 单源超时 30s × 60 源 / 并发 4 ≈ 7.5 分钟的最坏情况会把启动拖成分钟级。预算到期即取消
+// ctx（在途查询立刻收手），未完成判定的源按**最保守方向**收口：回退整窗重发。
+// 注意方向性：预算只影响「重发多少」，绝不影响「要不要重发」——不确定即重发。
 func (m *Manager) reconcileStartup(ctx context.Context, items []startupSource) []ReconcileReport {
 	cfg := m.reconcile
 	reports := make([]ReconcileReport, len(items))
+	if cfg.Budget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, cfg.Budget)
+		defer cancel()
+	}
 	if cfg.Concurrency <= 1 {
 		for i, item := range items {
 			reports[i] = m.reconcileSource(ctx, item, cfg)
 		}
-		return reports
+		return m.closeReconcileBudget(items, reports)
 	}
 	sem := make(chan struct{}, cfg.Concurrency)
 	var wg sync.WaitGroup
@@ -151,6 +180,28 @@ func (m *Manager) reconcileStartup(ctx context.Context, items []startupSource) [
 		}(i)
 	}
 	wg.Wait()
+	return m.closeReconcileBudget(items, reports)
+}
+
+// closeReconcileBudget 给「预算内没来得及出结论」的源补一份保守报告（回退整窗重发）。
+//
+// 判别：reconcileSource 一定会在入口写入 Basis，因此 Basis 为空只可能是「该源从未跑到过」
+// （预算已耗尽且并发槽位一直被占用）。这种情况绝不能按零值报告（那等于「无缺失天 → 零重发」），
+// 必须显式回退整窗重发——「绝不丢、允许极少重复，一切不确定都朝多写一次收敛」。
+func (m *Manager) closeReconcileBudget(items []startupSource, reports []ReconcileReport) []ReconcileReport {
+	for i := range reports {
+		if reports[i].Basis != "" {
+			continue
+		}
+		reports[i] = ReconcileReport{
+			Source:         items[i].key,
+			Basis:          reconcileBasisCountOnly,
+			Fallback:       true,
+			FallbackReason: reconcileBudgetExhausted,
+		}
+		slog.Warn("启动增量对账总预算耗尽，该源回退整窗重发",
+			"source", items[i].key, "budget", m.reconcile.normalized().Budget)
+	}
 	return reports
 }
 

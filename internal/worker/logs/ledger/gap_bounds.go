@@ -22,12 +22,33 @@ import (
 //
 // 消解（把缺口标记为 resolved）**不在此文件**：它必须建立在外部证据（已发布投影）之上，
 // 见 ResolveGapsThrough / ResolveGapsThroughExcept 的调用方。
-// 缺口原因常量：跨包共享的「不可由投影自动消解」原因。
+// 缺口原因常量：跨包共享的「可否由自动消解出口处置」的判据来源。
+//
+// 为什么集中在这里：自动消解是**允许名单**语义（见 ResolveGapsCoveredByRanges 的说明），
+// 而名单里的名字必须与登记点写入的名字**逐字相同**；散落的字符串字面量一旦有一处拼错，
+// 表现就是「该原因永远不被自动消解」这种无声失效（源会一直停在暂停上）。故登记点
+// （acquire 包）与判定点（ingest 包）共用这里的常量。
 const (
 	// GapReasonStdioRawWriteFailed 表示受管 Raw 暂存写入失败：原始字节可能根本没落盘，
 	// 「可能没落库」无法由任何投影/重投证据证明，故自动消解路径必须显式排除它
 	// （既有语义见 ingest.ResolveCoveredGaps；人工接口 ResolveCoveredGapsForSource 仍可显式确认放弃）。
 	GapReasonStdioRawWriteFailed = "STDIO_RAW_WRITE_FAILED"
+
+	// GapReasonDeliverError 表示 VL 投递失败：该批的 WAL append 与 fsync 提交**都已成功**，
+	// 只有投递这一步失败。事件在 WAL 中 durable，必然出现在后续写入面（重投/重放）里，
+	// 因此「投递成功 + 区间被逐字段校验覆盖」可以为其作证。
+	GapReasonDeliverError = "DELIVER_ERROR"
+	// GapReasonDeliverErrorWorkerSource 同 GapReasonDeliverError，只用于 source=worker 的自源
+	// （只计本地、不递归写回 VL）。事件同样已在 WAL 中 durable。
+	GapReasonDeliverErrorWorkerSource = "DELIVER_ERROR_WORKER_SOURCE"
+	// GapReasonWALCommitFailed 表示 WAL append 成功、fsync 提交失败：事件已进 WAL（read 已推进）
+	// 但 durable 未推进。是否可由投递证据消解取决于这些事件后来是否真的 durable 并进入写入面，
+	// 故登记为**可判**原因，由「区间连续覆盖」这一独立判据逐次裁定（覆盖不到就不消解）。
+	GapReasonWALCommitFailed = "WAL_COMMIT_FAILED"
+	// GapReasonAppendRejected 表示 WAL append 被拒（采集已暂停 / 容量门禁）：该批**从未进入 WAL**，
+	// 因此不可能出现在任何写入面里。登记为显式常量是为了让自动消解出口能明确拒绝它
+	// （需要重读补投或人工确认，绝不能靠一次「别处成功」的投递证明它已落库）。
+	GapReasonAppendRejected = "APPEND_REJECTED"
 )
 
 const (

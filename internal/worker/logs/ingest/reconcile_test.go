@@ -601,3 +601,66 @@ func TestReconcileConfigNormalization(t *testing.T) {
 	off := reconcileConfigOf(&ReconcileConfig{Enabled: false})
 	require.False(t, off.Enabled)
 }
+
+// 复审 P2-10 回归：启动对账必须有**整批总预算**，且预算到期时在途查询要立刻收手。
+//
+// 现场（修复前）：对账在 ingest.New 里同步执行，只有「单源 30s + 并发 4」两道约束——
+// 60 源最坏 ≈ ceil(60/4)×30s = 7.5 分钟，启动恢复被拖成分钟级，实例在此期间不可用。
+//
+// 转红：把 Budget 的 ctx 派生去掉（直接用传入 ctx）即红——本用例的 elapsed 断言会落在
+// QueryTimeout（4s）上而不是预算（200ms）。
+func TestStartupReconcileHonorsTotalBudget(t *testing.T) {
+	client, fixture, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := reconcileTestSource(t, root)
+	seedProjection(t, client, root, journal, catalog.New(journal), source, reconcileTestEvents())
+	// 对账查询挂起：只有预算/超时能把它收回来。
+	fixture.setStallStats(true)
+	insertsBefore := fixture.insertCount()
+
+	started := time.Now()
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal, Sources: []SourceConfig{source},
+		Reconcile: &ReconcileConfig{
+			Enabled: true, Concurrency: 1,
+			Timeout:      4 * time.Second, // 单源超时远大于预算：判别值必须来自预算本身
+			QueryTimeout: 4 * time.Second, // 单次查询超时同样远大于预算
+			Budget:       200 * time.Millisecond,
+		},
+	})
+	elapsed := time.Since(started)
+	require.NoError(t, err, "回退整窗重发必须成功：预算只影响「重发多少」，不影响「要不要重发」")
+	require.Less(t, elapsed, 1500*time.Millisecond,
+		"总预算必须把整批对账收回（实测 %s；预算 200ms，单源/单查询超时都是 4s）", elapsed)
+	require.Equal(t, 2, len(fixture.payloadsSince(insertsBefore)),
+		"预算耗尽的源必须回退整窗重发（两天各一次），绝不因「没来得及对账」而少发")
+
+	reports := m.LastReconcileReports()
+	require.Len(t, reports, 1)
+	require.True(t, reports[0].Fallback, "预算到期 ⇒ 该源按最保守方向回退")
+	require.NotEmpty(t, reports[0].FallbackReason)
+	require.Empty(t, reports[0].MissingDays, "回退路径不按天裁剪")
+}
+
+// TestCloseReconcileBudgetNeverSkipsReplay 守住安全网：预算内**没来得及出结论**的源
+// （Basis 为空，即 reconcileSource 从未跑到过）必须显式回退整窗重发，
+// 绝不能按零值报告处理——那等于「零缺失天 → 零重发」，会把没对账的数据静默漏掉。
+func TestCloseReconcileBudgetNeverSkipsReplay(t *testing.T) {
+	m := &Manager{reconcile: DefaultReconcileConfig()}
+	items := []startupSource{
+		{key: "node:a/g1"}, // 未完成：Basis 为空
+		{key: "node:b/g1"}, // 已完成：不带重发
+	}
+	reports := []ReconcileReport{
+		{},
+		{Source: "node:b/g1", Basis: reconcileBasisCountOnly},
+	}
+	closed := m.closeReconcileBudget(items, reports)
+	require.True(t, closed[0].Fallback, "未完成的源必须回退整窗重发")
+	require.Equal(t, reconcileBudgetExhausted, closed[0].FallbackReason)
+	require.Equal(t, "node:a/g1", closed[0].Source)
+	require.True(t, closed[0].needsReplay(), "回退必须真的触发重发")
+	require.False(t, closed[1].Fallback, "已完成判定的源不得被改写")
+	require.Equal(t, reconcileBasisCountOnly, closed[1].Basis)
+}
