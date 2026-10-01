@@ -180,6 +180,7 @@ type Manager struct {
 5. **采集不受影响**：并发登记之后追加日志行仍能被采集并投递（用例断言 VL 插入计数增长）。
 6. **一致性测试全绿**：`go test ./internal/worker/logs/... -count=1`（含既有全部账本/索引一致性用例）。
 7. **门禁**：`go build ./...`、`CGO_ENABLED=0 go build ./apps/worker`、`gofmt -l`（改动面）、`go vet ./internal/worker/logs/...` 全绿。
+8. **长临界区纪律（本次事故换来，评审必查）**：按 `.claude/rules/gate-merge.md`「长临界区审计」执行——长流程不得持共享锁跨越 `Poll` / 投递 / 持久化，锁获取点须标注锁序与最坏持有量，跨进程调用（gRPC/HTTP）不得在持锁区内，短路径与长流程分锁；本次改动后新增/修改的任何锁同样适用。
 
 ## 6. 风险 / 待定
 

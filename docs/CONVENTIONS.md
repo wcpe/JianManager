@@ -39,6 +39,13 @@ proto/                  # Protobuf 定义
 - 不要在 service 层直接写 SQL，通过 repository 封装
 - Migration 使用 GORM AutoMigrate
 
+### 并发与锁
+- 共享锁的临界区不得跨越慢操作：`Poll` / 投递（VL 写）/ 持久化（索引、DB 事务）/ `Flush` / `Close` / 跨进程调用（gRPC、HTTP、子进程 IO）一律在锁外
+- 新增或修改锁时，在获取点注释**锁序**（完整链路，如 `cycleMu → registerMu → pendingMu → mu`）与**最坏持有时长**及量化口径；量化持续有排队者的锁不得用 `TryLock`（Go `sync.Mutex` 饥饿模式下锁空闲也返回 false）
+- 有固定 RPC 截止时间的短路径（控制面入口、运维动作）与长流程**分锁**，不让短路径排队等长流程跑完
+
+> 依据 2026-10-01 两次生产事故：FR-499（登记被整轮采集独占的 `cycleMu` 拖死，CP 四次下发规格全超时、11 台实例无法启动）、FR-496（状态重生后投影代次名复用，首启过、二启卡死）。写法口径见本节，评审清单见 `.claude/rules/gate-merge.md`「长临界区审计」「部署后复验」。
+
 ### 测试
 - 文件名：`xxx_test.go`
 - 使用 `testing` + `testify/assert`
