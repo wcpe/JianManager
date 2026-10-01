@@ -54,9 +54,10 @@ func (c *Client) Search(ctx context.Context, rng query.AuthoritativeRange, q que
 		return query.RangeResult{Exhausted: true, DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}, nil
 	}
 	params.Set("query", searchQuery(rng, q))
-	if q.CursorSortKey == nil {
-		params.Set("limit", strconv.FormatUint(uint64(q.Budget.EffectiveLimit())+1, 10))
-	}
+	// 每页请求 N+1 条前瞻（多出的 1 条用于判定「是否还有下一页」）；游标页为 N+2：
+	// 收窄后的窗口必然包含游标行本身（_time == 游标时刻），而它会被客户端全键过滤丢弃，
+	// 只留 N+1 会让每页恰好只剩 N 条 → 服务端误判 exhausted、next 为空 → 第 3 页起仍不可达。
+	params.Set("limit", strconv.FormatUint(lookaheadRows(q), 10))
 	var out query.RangeResult
 	bytesRead, truncated, err := c.stream(ctx, params, scanLimit(q.Budget), func(line []byte) error {
 		ev, err := eventFromJSON(line)
@@ -224,7 +225,31 @@ func (c *Client) params(rng query.AuthoritativeRange, q query.RangeQuery) (url.V
 			end = to
 		}
 	}
+	// 游标页窗口收窄（P0-1，2026-10-02 独立评审）：
+	// searchQuery 恒带 `| sort by (_time desc) | limit (N+1)`，若游标页与第一页共用同一窗口，
+	// VL 会返回**同一批 top-(N+1) 行**；客户端 filterAfterCursor 过滤掉已返回过的行后只剩
+	// ≤1 行 → 服务端判 exhausted 且 next_cursor 为空 → 第一页之后的日志全部不可达
+	// （用户表现为「日志查不到」）。
+	//
+	// 收窄到「不晚于游标时刻」并**保留**服务端 top-K 截断（游标页预算 = N+2，见 lookaheadRows）：
+	// 这样窗口内前 N+2 行必然覆盖「本页应返回的 N 行 + 1 条前瞻」，其中多出的 1 行正是
+	// 窗口首行——游标行本身，它会被客户端全键过滤丢弃。
+	// HTTP end 为开区间 [start,end)，故取 游标时刻+1ns 等价于 `_time <= 游标时刻`；
+	// **不能**直接取游标时刻（开区间会整组排除同一时间戳的并列行 → 漏行）。
+	// 并列行之间的先后由客户端全键比较 + filterAfterCursor 承接（残余风险：同一时间戳并列行
+	// 若被 top-K 截断在组内仍可能漏，见 searchQuery 注释，毫秒级时间戳下极罕见）。
+	if q.CursorSortKey != nil {
+		cursorTime, err := time.Parse(time.RFC3339Nano, q.CursorSortKey.EventTimeUTC)
+		if err != nil {
+			return nil, false, fmt.Errorf("vlrange: invalid cursor sort key time %q: %w", q.CursorSortKey.EventTimeUTC, err)
+		}
+		if limit := cursorTime.Add(time.Nanosecond); limit.Before(end) {
+			end = limit
+		}
+	}
 	if !start.Before(end) {
+		// 游标时刻早于窗口下界：窗口内不可能存在「排在游标之后」的行（更旧的行在窗内、
+		// 更新的行已在前页返回），返回空页等价于该页确实为空。
 		return nil, true, nil
 	}
 	// VL v1.52.0 treats the HTTP end parameter as exclusive, matching [start,end).
@@ -238,6 +263,16 @@ func (c *Client) params(rng query.AuthoritativeRange, q query.RangeQuery) (url.V
 	return params, false, nil
 }
 
+// lookaheadRows 返回服务端单页需要返回的行数：N 条页内 + 1 条前瞻；游标页再 +1，
+// 用于抵消「收窄后的窗口必含游标行本身、而它会被客户端全键过滤丢弃」这一固定损耗。
+func lookaheadRows(q query.RangeQuery) uint64 {
+	rows := uint64(q.Budget.EffectiveLimit()) + 1
+	if q.CursorSortKey != nil {
+		rows++
+	}
+	return rows
+}
+
 func searchQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	// 管道顺序是性能关键（2026-09-30 生产事故，VL 直接 400）：
 	//   ① `| fields` 必须先于 `| sort`：否则 VL 对**全宽行**（含 _msg 等）做全量排序物化；
@@ -246,12 +281,15 @@ func searchQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	// 会让 VL 无法沿**时间有序**的存储做块合并，必须整块物化再排序——实测单次联邦调用
 	// 扫描 77M 行 / 169MB（~2.9s），而仅时间排序的同一批数据只要 ~40ms（差 ~70×）。
 	// 全局次序由服务端已有的客户端全键排序（SortEvents）与游标过滤承接；游标按全键
-	// 严格「大于」过滤，跨页重复被吸收；残余风险仅为**同一时间戳并列超出每 range 上限**
-	// 时的漏（毫秒级时间戳下极罕见），已记入测试注释。
+	// 严格「大于」过滤，跨页重复被吸收。
+	// 游标页的窗口由 params() 收窄到 `_time <= 游标时刻`（P0-1）：不放宽则此处 top-K 会
+	// 返回与第一页相同的一批行，游标过滤后只剩 ≤1 行，第二页起全部不可达。
+	// 残余风险：同一时间戳的并列行若被 top-K 截断在**组内**，客户端全键次序无法补回未取回
+	// 的并列行（毫秒级时间戳下极罕见）；并列组完整取回时由全键过滤正确拆分。
 	return selectorQuery(rng, q) +
 		" | fields _time, _msg, event_id, log_source_id, source_generation, parser_version, record_start, record_end, ingest_time_utc, level, stream, instance_id, canonical_content_hash" +
 		" | sort by (_time desc)" +
-		" | limit " + strconv.FormatUint(uint64(q.Budget.EffectiveLimit())+1, 10)
+		" | limit " + strconv.FormatUint(lookaheadRows(q), 10)
 }
 
 func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {

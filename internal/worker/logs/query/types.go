@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
@@ -255,15 +256,36 @@ func compareUTCDESC(a, b string) int {
 }
 
 // SortEvents 按冻结排序键就地排序（结果序列序：最新在前）。
+//
+// 复杂度是可用性约束（P2-7）：排序责任已完全落在这里（VL 侧只按 `_time desc` 出块，
+// 全键次序由本函数与游标承接），而单次合并规模可达 10^5 行。旧实现的插入排序是 O(n²)：
+// 实测 n=20000 的逆序输入耗时 23.4s（约 1.2µs/次全键比较），10^5 行量级足以把查询线程
+// 拖死。改用 sort.SliceStable 后同规模约 10ms（接近 O(n log n)）。
+//
+// 必须用 SliceStable，不能用 Slice：全键相同的事件（同 source/record、仅 message 不同）
+// 必须保持输入相对次序——分页游标取 items[limit-1]，不稳定序会让同一键的行在两次调用间
+// 换位，进而重复或漏返。稳定序也是旧插入排序的既有语义，不得静默改变。
 func SortEvents(items []logtypes.Event) {
-	// 插入排序足够覆盖 foundation stub 规模；生产由 VL 侧排序。
-	for i := 1; i < len(items); i++ {
-		j := i
-		for j > 0 && LessSortKey(SortKeyOf(items[j]), SortKeyOf(items[j-1])) {
-			items[j], items[j-1] = items[j-1], items[j]
-			j--
-		}
+	// 预先解出全键，避免每次比较都重建 SortKey（旧实现对每对比较都调用 SortKeyOf，
+	// 是 O(n²) 之外的第二层放大）。
+	keys := make([]SortKey, len(items))
+	for i := range items {
+		keys[i] = SortKeyOf(items[i])
 	}
+	// 排序索引置换、再按置换重排事件：键与事件必须同步移动——直接在 items 上排序会
+	// 让 keys 与 items 错位（比较的键与被交换的元素不再对应），次序随即失真。
+	perm := make([]int, len(items))
+	for i := range perm {
+		perm[i] = i
+	}
+	sort.SliceStable(perm, func(a, b int) bool {
+		return LessSortKey(keys[perm[a]], keys[perm[b]])
+	})
+	sorted := make([]logtypes.Event, len(items))
+	for i, p := range perm {
+		sorted[i] = items[p]
+	}
+	copy(items, sorted)
 }
 
 // Cursor 是逻辑分页引用：只携带 view_id + sort key + page_limit。

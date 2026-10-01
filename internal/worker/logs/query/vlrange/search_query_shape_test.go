@@ -36,3 +36,21 @@ func TestSearchQueryFieldsBeforeSortAndLimitAfter(t *testing.T) {
 	require.Contains(t, got, "| sort by (_time desc) | limit ",
 		"VL 侧只按 _time desc 排序；全键次序由客户端 SortEvents 与游标承接")
 }
+
+// 回归（P0-1）：游标页的 top-K 预算必须比首页多 1 行。
+//
+// 游标页窗口被收窄到 `_time <= 游标时刻`（见 params），窗口内第一条恒为游标行本身，
+// 而它必然被客户端全键过滤丢弃；若仍只请求 N+1，页内只剩 N 条 → 服务端判 exhausted、
+// next 为空 → 第 3 页起不可达。去掉这里的 +1 即转红（跨页无漏、页内取满两条判据）。
+func TestSearchQueryCursorPageAsksOneExtraRow(t *testing.T) {
+	rng := query.AuthoritativeRange{
+		Key: catalog.PartitionKey{StorageNamespace: "inst:9", UTCDay: "2026-09-27"},
+	}
+	first := searchQuery(rng, query.RangeQuery{Budget: query.Budget{Limit: 99}})
+	require.True(t, strings.HasSuffix(first, "| limit 100"), "首页：N+1 前瞻，实际: %s", first)
+
+	cursor := query.SortKey{EventTimeUTC: "2026-09-27T10:00:00Z", LogSourceID: "inst:9", EventID: "e1"}
+	next := searchQuery(rng, query.RangeQuery{Budget: query.Budget{Limit: 99}, CursorSortKey: &cursor})
+	require.True(t, strings.HasSuffix(next, "| limit 101"),
+		"游标页：N+2（1 条被全键过滤丢弃的游标行 + 1 条前瞻），实际: %s", next)
+}

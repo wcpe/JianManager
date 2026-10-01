@@ -47,6 +47,27 @@ import {
 } from './logs-filters'
 
 /**
+ * 时间窗参数（P2-9）：跟随态**只下发下界 `from`，不下发上界 `to`**。
+ *
+ * 根因：跟随态旧实现把 `to` 钉在浏览器 `now`，任何时钟偏移都会让「正在写入」的事件落在
+ * 窗外——Worker/实例时钟略快，或落盘时区未校正（+8h）产生的「未来时间戳」，都被 `to=now`
+ * 排除，于是实时跟随轮询永远为空（用户观感「不实时」）。
+ * 加固定宽限（now+5m）只能吸收固定量级的偏移，覆盖不了整时区偏移；而跟随视图的语义本就是
+ * 「窗口内的最新事件」，没有「截至某时刻」的含义，故 FOLLOW_LIVE 直接不下发上界：
+ * 下界仍由 `from` 界定（默认最近 24h），扫描上界仍受分区日 / VL 窗口约束，不会无界查询。
+ */
+function timeParamsFor(
+  preset: TimeRangePreset,
+  anchor: Date,
+  follow: boolean,
+): Pick<LogQueryParams, 'from' | 'to'> {
+  const bounds = timeRangeToParams(preset, anchor)
+  if (!follow) return bounds
+  // `all` 预设本就无边界；相对预设保留 from、丢掉 to。
+  return bounds.from ? { from: bounds.from } : {}
+}
+
+/**
  * 把事件的原始来源标识归一为下拉取值域（instance/control_plane/worker）。
  *
  * 事件结构（SourceIdentity）只带 log_source_id、不含类别字段，其取值形如
@@ -167,10 +188,13 @@ export default function LogsPage() {
   }, [range, follow])
 
   // 跟随态钉在第 1 页（最新）；锚点 now 在每次构建参数时取，配合轮询滚动时间窗。
-  const timeParams = timeRangeToParams(
-    range,
-    follow ? new Date() : new Date(rangeAnchor),
-  )
+  // 锚点按轮询间隔对齐（P2-9 同类缺陷）：`from` 逐毫秒变化会让 queryKey 每次渲染都变，
+  // react-query 视为新查询 → data 恒为 undefined（federation 侧没有 keepPreviousData），
+  // 列表回落到经典 /logs → 实时行永远渲染不出来。对齐到 FOLLOW_INTERVAL 桶后同一桶内
+  // queryKey 稳定、响应能落地；窗口仍每 ≤3s 滚动一次，与轮询同频。
+  // 跟随态不下发 `to`（见 timeParamsFor）：时钟偏移下的未来时间戳事件仍可见。
+  const followAnchor = new Date(Math.floor(new Date().getTime() / FOLLOW_INTERVAL) * FOLLOW_INTERVAL)
+  const timeParams = timeParamsFor(range, follow ? followAnchor : new Date(rangeAnchor), follow)
   const params: LogQueryParams = {
     view,
     page: follow ? 1 : page,
