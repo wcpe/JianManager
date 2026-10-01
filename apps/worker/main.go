@@ -44,6 +44,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/grpcsvc"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
+	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/orphanaudit"
@@ -263,6 +264,33 @@ func runWorker() {
 		}
 		cfg = loaded
 	}
+
+	// 日志等级/格式装配（此前**完全没有装配点**：Worker 从不调用 slog.SetDefault，
+	// 于是 log.level / log.format 两个配置项形同不存在——写 debug 不产生任何 DEBUG 输出，
+	// 写 error 也压不住 INFO。现场表现是「改了配置但日志没变」，极难归因。
+	//
+	// 用 LevelVar 而不是固定等级：G10 要求「运行期可动态调等级」（平时压到 info 降开销、
+	// 排障时临时开 debug），而 LevelVar 正是该能力的接线点。
+	logLevelVar := new(slog.LevelVar)
+	logLevel, logLevelErr := cfg.LogLevel()
+	if logLevelErr != nil {
+		slog.Error("日志等级配置非法，拒绝启动", "error", logLevelErr)
+		os.Exit(1)
+	}
+	logLevelVar.Set(logLevel)
+	logFormat, logFormatErr := cfg.LogFormat()
+	if logFormatErr != nil {
+		slog.Error("日志格式配置非法，拒绝启动", "error", logFormatErr)
+		os.Exit(1)
+	}
+	logOpts := &slog.HandlerOptions{Level: logLevelVar}
+	if logFormat == "json" {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, logOpts)))
+	} else {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, logOpts)))
+	}
+	slog.Info("Worker 日志已按配置装配", "level", logLevel.String(), "format", logFormat,
+		"note", "等级可经 logLevelVar 运行期调整（G10）")
 
 	// 启动自证（2026-10-02 真机复验）：把「实际读到的配置文件」与关键采集口径一次打清楚。
 	// 现场教训：`log_ingest.time_zone: local` 配上仍按 UTC 解释日志——可能是读的不是你改的文件，
@@ -548,6 +576,19 @@ func runWorker() {
 		}
 	}
 	var logJournal catalog.Journal
+	// 日志容量读数（磁盘使用率 / WAL 上限）的**唯一**构造点：采集侧容量门禁与
+	// 保留策略的磁盘触发共用同一份提供者。两者各采一次磁盘迟早会给出不同结论，
+	// 而现场只会表现成「有时降级有时不降级」，极难归因。
+	if notice := cfg.WALBudgetNotice(); notice != "" {
+		slog.Warn(notice)
+	}
+	logCapacityProvider := ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
+		MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
+		DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
+	})
+	// 保留策略驱动器（G6）。声明在这里（而非 lifecycle 块内）是因为它要在采集运行时
+	// 启动之后才有意义：搬运的是已经落库的分区，采集还没起来时搬没有意义。
+	var logRetentionDriver *retention.Driver
 	if store, journalErr := catalog.NewJSONLFileStore(root.Abs("var/log/catalog.journal.jsonl")); journalErr != nil {
 		slog.Error("日志 Catalog journal 打开失败，查询面保持无权威分区", "error", journalErr)
 	} else if journal, journalErr := catalog.NewJournalWithStore(store); journalErr != nil {
@@ -576,6 +617,17 @@ func runWorker() {
 			slog.Error("日志 Lifecycle 物理适配器创建失败", "error", lifecycleErr)
 		} else {
 			dayManager := lifecycle.NewDayManager(logStack.Catalog, physical.Ops(), physical)
+			// 保留策略驱动器（G6）：把 catalog 的日分区按「年龄 + 磁盘水位取先到」搬到冷层。
+			// 没有它，HOT 永不自动转 COLD——plan/executor/Mover 都对，但没人周期性把它们串起来。
+			if retentionPolicy, policyErr := cfg.RetentionPolicy(); policyErr != nil {
+				slog.Error("日志保留策略非法，冷热分层驱动未启用", "error", policyErr)
+			} else if retentionPolicy.Enabled {
+				logRetentionDriver = retention.NewDriver(retentionPolicy,
+					newCatalogPartitionLister(logStack.Catalog),
+					newDayManagerMover(dayManager, logStack.Catalog),
+					newDiskPercentReader(logCapacityProvider))
+				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)
+			}
 			resumedDays := make(map[string]bool)
 			for _, key := range logStack.Catalog.Keys() {
 				rec, ok := logStack.Catalog.Get(key)
@@ -715,11 +767,8 @@ func runWorker() {
 				// 采集归一化的节点级默认字符集（复审 P2-3，键 log_ingest.charset）：源未显式配置时
 				// 生效，空串 = auto（零配置零行为变化）。GBK 日志源配 gbk 可免去自动判定的启发式
 				// 不确定性；非法值已在 config.Load 阶段启动即拒。
-				DefaultCharset: cfg.IngestDefaultCharset(),
-				CapacityProvider: ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
-					MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
-					DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
-				}),
+				DefaultCharset:   cfg.IngestDefaultCharset(),
+				CapacityProvider: logCapacityProvider,
 				// 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天。
 				Reconcile: &reconcileCfg,
 				// 索引有界化（FR-496 §2.4）：历史投递批次按 reclaim 水位裁剪，默认开启。
@@ -806,6 +855,12 @@ func runWorker() {
 			// 本窗口写入行数/字节数，供真机「60 源单次持久化 ≤50ms」验收直接取证
 			// （整本重写会让写入行数逼近索引总行数，读数一眼可辨）。
 			go sampleLogIndexPersistLatency(ingestCtx, manager)
+			// 保留策略驱动器：首轮立即执行（启动时正是「停机期间攒下的过期分区」最需要处理的时刻），
+			// 之后按 log_retention.sweep.interval 周期跑。与采集运行时共用同一 ctx 生命周期。
+			if logRetentionDriver != nil {
+				go logRetentionDriver.Run(ingestCtx)
+				slog.Info("日志冷热分层驱动器已启动", "interval", logRetentionDriver.Interval().String())
+			}
 			slog.Info("日志采集运行时已启动", "sources", len(sources), "vlReady", vlHTTPClient != nil)
 		}
 	}

@@ -127,6 +127,8 @@ type Policy struct {
 	Discard bool `mapstructure:"discard"`
 	// HotRetention 热层保留窗口；<=0 时按级别 TTL 取最长档推导（见 MaxHotRetention）。
 	HotRetention time.Duration `mapstructure:"hot_retention"`
+	// Trigger 搬运触发口径：年龄 + 磁盘水位**取先到**（用户决策 D3）。
+	Trigger Trigger `mapstructure:"trigger"`
 }
 
 // DefaultPolicy 返回 D1 推荐的保留策略。

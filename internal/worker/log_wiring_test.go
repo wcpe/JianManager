@@ -1,0 +1,125 @@
+package config
+
+import (
+	"log/slog"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// 本文件守住两处**此前完全没有装配点**的配置：`log.level` / `log.format`，
+// 以及 `log_capacity.max_wal_bytes` 的有限默认值。
+//
+// 共同形态是「配置项存在、文档写着、但没有任何代码读它」——现场表现为
+// 「改了配置没反应」，而这类缺陷不会产生任何报错，只能靠接线回归钉住。
+
+func loadTestConfig(t *testing.T) *Config {
+	t.Helper()
+	cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent-worker.yml"))
+	if err != nil {
+		t.Fatalf("加载默认配置失败：%v", err)
+	}
+	return cfg
+}
+
+// TestLogLevelIsParsedAndRejectsGarbage 钉住 `log.level` 有装配点且非法值启动即拒。
+//
+// 该键此前零装配：Worker 从不调用 slog.SetDefault，因此写 debug 不产生任何 DEBUG 输出、
+// 写 error 也压不住 INFO。
+func TestLogLevelIsParsedAndRejectsGarbage(t *testing.T) {
+	cases := []struct {
+		in   string
+		want slog.Level
+	}{
+		{"", slog.LevelInfo},
+		{"info", slog.LevelInfo},
+		{"INFO", slog.LevelInfo},
+		{"debug", slog.LevelDebug},
+		{" Debug ", slog.LevelDebug},
+		{"warn", slog.LevelWarn},
+		{"warning", slog.LevelWarn},
+		{"error", slog.LevelError},
+	}
+	for _, c := range cases {
+		cfg := loadTestConfig(t)
+		cfg.Log.Level = c.in
+		got, err := cfg.LogLevel()
+		if err != nil {
+			t.Errorf("log.level=%q 应被接受，得到 %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("log.level=%q 应解析为 %v，得到 %v", c.in, c.want, got)
+		}
+	}
+	// 写错等级会让排障所依赖的输出静默消失，必须启动即拒而不是回退。
+	for _, bad := range []string{"verbose", "trace", "1", "infox"} {
+		cfg := loadTestConfig(t)
+		cfg.Log.Level = bad
+		if _, err := cfg.LogLevel(); err == nil {
+			t.Errorf("log.level=%q 非法必须被拒（回退会静默改变排障可见性）", bad)
+		}
+	}
+}
+
+func TestLogFormatIsParsedAndRejectsGarbage(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"", "text"}, {"text", "text"}, {"TEXT", "text"}, {"json", "json"}, {" Json ", "json"},
+	} {
+		cfg := loadTestConfig(t)
+		cfg.Log.Format = c.in
+		got, err := cfg.LogFormat()
+		if err != nil || got != c.want {
+			t.Errorf("log.format=%q 应解析为 %q，得到 %q（err=%v）", c.in, c.want, got, err)
+		}
+	}
+	for _, bad := range []string{"yaml", "logfmt", "1"} {
+		cfg := loadTestConfig(t)
+		cfg.Log.Format = bad
+		if _, err := cfg.LogFormat(); err == nil {
+			t.Errorf("log.format=%q 非法必须被拒", bad)
+		}
+	}
+}
+
+// TestMaxWALBytesHasFiniteDefault 钉住「WAL 有字节上界」。
+//
+// 此前默认 0 = 不限，唯一的上界形同不存在（压测实测单 Worker WAL 涨到 1.9GB
+// 而门禁的 PASSIVE 分支从不触发）。
+func TestMaxWALBytesHasFiniteDefault(t *testing.T) {
+	cfg := loadTestConfig(t)
+	if cfg.LogCapacity.MaxWALBytes == 0 {
+		t.Fatal("max_wal_bytes 默认必须是有限值——「不限」不是「很宽」，是「没有上界」")
+	}
+	if cfg.LogCapacity.MaxWALBytes != DefaultMaxWALBytes {
+		t.Fatalf("默认应为 %d，得到 %d", DefaultMaxWALBytes, cfg.LogCapacity.MaxWALBytes)
+	}
+	// 默认值必须远高于任何正常态，否则会在稳态误触发 PAUSED 把采集停掉。
+	// 真机稳态：reclaim 正常推进时 WAL 是 KB 量级（107MB → 256B）。
+	const normalSteadyState = 64 << 20
+	if cfg.LogCapacity.MaxWALBytes < normalSteadyState {
+		t.Fatalf("默认值 %d 低于正常稳态量级 %d，会在稳态误暂停采集",
+			cfg.LogCapacity.MaxWALBytes, normalSteadyState)
+	}
+	if notice := cfg.WALBudgetNotice(); notice != "" {
+		t.Fatalf("默认不是「不限」，不应产生提醒，得到 %q", notice)
+	}
+}
+
+// TestWALBudgetNoticeNamesTheUnlimitedCase：「显式不限」必须被点名。
+//
+// 因为 viper 默认值与显式写 0 落到同一个值上，现场光看配置值分不清
+// 「我没配」与「我配成不限」——两者都该被提醒，而默认有限之后前者不再出现。
+func TestWALBudgetNoticeNamesTheUnlimitedCase(t *testing.T) {
+	cfg := loadTestConfig(t)
+	cfg.LogCapacity.MaxWALBytes = 0
+	notice := cfg.WALBudgetNotice()
+	if notice == "" {
+		t.Fatal("显式不限必须提醒（否则「没有上界」这一状态在现场不可见）")
+	}
+	for _, want := range []string{"max_wal_bytes=0", "不限", "上界"} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("提醒应包含 %q：%s", want, notice)
+		}
+	}
+}

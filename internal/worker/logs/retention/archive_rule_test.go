@@ -189,7 +189,7 @@ func TestArchiveRule3b_NoPathMeansBlockedNotDelete(t *testing.T) {
 		if o.Target.Action != ActionBlocked {
 			t.Errorf("无搬运路径时应标 blocked，得到 %s", o.Target.Action)
 		}
-		if !o.Target.Due(hv) {
+		if !o.Target.Due {
 			if o.Result != ArchiveNotDue {
 				t.Errorf("未到点的分区应记 not_due，得到 %s", o.Result)
 			}

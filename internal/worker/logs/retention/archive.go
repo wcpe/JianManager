@@ -52,6 +52,14 @@ type Mover interface {
 	MoveToCold(ctx context.Context, storageNamespace, utcDay string) (string, error)
 }
 
+// MoverFunc 函数适配（生产用它把既有 lifecycle 状态机接进来）。
+type MoverFunc func(ctx context.Context, storageNamespace, utcDay string) (string, error)
+
+// MoveToCold 实现 Mover。
+func (f MoverFunc) MoveToCold(ctx context.Context, storageNamespace, utcDay string) (string, error) {
+	return f(ctx, storageNamespace, utcDay)
+}
+
 // ArchivePlanTarget 是一个待归档的日分区。
 type ArchivePlanTarget struct {
 	StorageNamespace string
@@ -60,16 +68,47 @@ type ArchivePlanTarget struct {
 	Action string
 	// HotRetention 该分区在热层的有效保留期（= 其中保留期最长的级别那一档）。
 	HotRetention time.Duration
-	// EligibleAt 该分区最早可以离开热层的时刻。
+	// EligibleAt 按**年龄**最早可以离开热层的时刻。
 	EligibleAt time.Time
 	// Reason 为 ActionBlocked 时说明为什么不能动手。
 	Reason string
+	// Due 本轮是否应当动手。
+	//
+	// 它是**计划阶段定下的结论**而不是现场重算：触发口径有两路（年龄 + 磁盘水位取先到），
+	// 让执行阶段再去重算一遍，等于把「为什么现在搬」的判断分散到两处，
+	// 现场就再也说不清「这一轮到底是因为到点还是因为盘紧」。
+	Due bool
+	// TriggerReason 触发原因（TriggerAge / TriggerDisk；未到点为空）。
+	TriggerReason string
+	// DiskPressure 报告本轮是在磁盘吃紧下放宽了口径。
+	DiskPressure bool
 }
+
+// OwnerColdName 是「已在冷层」的 owner 取值。
+//
+// 由调用方把 catalog 的 owner 映射成本值（见 apps/worker 的适配器），
+// 本包不 import catalog：保留策略只该认「这个分区在哪一层」这一个事实，
+// 不该依赖分区 Catalog 的内部类型。
+const OwnerColdName = "cold"
 
 // String 返回可读描述（日志与观测面用）。
 func (t ArchivePlanTarget) String() string {
-	return fmt.Sprintf("ns=%s day=%s action=%s hot=%s eligibleAt=%s",
-		t.StorageNamespace, t.UTCDay, t.Action, humanTTL(t.HotRetention), t.EligibleAt.UTC().Format(time.RFC3339))
+	trigger := t.TriggerReason
+	if trigger == "" {
+		trigger = "none"
+	}
+	return fmt.Sprintf("ns=%s day=%s action=%s hot=%s eligibleAt=%s trigger=%s due=%v",
+		t.StorageNamespace, t.UTCDay, t.Action, humanTTL(t.HotRetention),
+		t.EligibleAt.UTC().Format(time.RFC3339), trigger, t.Due)
+}
+
+// ageAt 返回该分区**自当天结束起算**的年龄。
+func (t ArchivePlanTarget) ageAt(now time.Time) (time.Duration, bool) {
+	end := t.EligibleAt.Add(-t.HotRetention)
+	if end.After(now) {
+		return 0, true
+	}
+	return now.Sub(end), true
 }
 
 // MaxHotRetention 返回各级别保留期的最大值。
@@ -136,6 +175,10 @@ func (p Policy) PlanArchive(now time.Time, partitions []PartitionRef, moverAvail
 			t.Action = ActionBlocked
 			t.Reason = "未配置冷层搬运路径且未显式允许直接删除；按「删前归档」保留原物"
 		}
+		// 纯年龄口径：到点即动手。
+		if t.Due = !now.Before(eligibleAt); t.Due {
+			t.TriggerReason = TriggerAge
+		}
 		out = append(out, t)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -155,29 +198,8 @@ func (p Policy) HotWindow() time.Duration {
 	return p.MaxHotRetention()
 }
 
-// PartitionRef 是一个候选日分区（由调用方从 catalog 读出，不在此重复建模）。
-type PartitionRef struct {
-	StorageNamespace string
-	// UTCDay 形如 20060102。
-	UTCDay string
-	// Owner 当前拥有者（hot/cold/…）。仅用于观测，不参与判定。
-	Owner string
-}
-
-// eligibleAt 返回该分区最早可离开热层的时刻。
-//
-// 语义：分区覆盖的是**一整天**，故以当天结束（次日 00:00 UTC）为起点加保留期——
-// 用当天开始会让最后几小时的数据少留一天。
-func (part PartitionRef) eligibleAt(hot time.Duration) (time.Time, bool) {
-	day, err := time.ParseInLocation("20060102", part.UTCDay, time.UTC)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return day.Add(24 * time.Hour).Add(hot), true
-}
-
-// Due 报告该目标是否已经到点。
-func (t ArchivePlanTarget) Due(now time.Time) bool {
+// DueByAge 返回按**纯年龄**口径是否已到点。触发口径的最终结论在 Due 字段里。
+func (t ArchivePlanTarget) DueByAge(now time.Time) bool {
 	return !now.Before(t.EligibleAt)
 }
 
@@ -257,21 +279,32 @@ func (e *ArchiveExecutor) Stats() ArchiveStats {
 	return e.stats
 }
 
-// Execute 执行一轮归档。
+// Execute 执行一轮归档：自己算计划（纯年龄口径）再执行。
 //
-// 错误隔离同 Sweeper：单个分区失败不影响其余分区，失败只记录并保留原物。
+// 触发口径更丰富的场景（年龄 + 磁盘水位取先到）用 ExecutePlanned，
+// 由调用方先算好计划——判定与执行分离，使「为什么现在搬」只有一个来源。
 func (e *ArchiveExecutor) Execute(ctx context.Context, now time.Time, partitions []PartitionRef) []ArchiveOutcome {
 	if e == nil || !e.policy.Enabled {
 		return nil
 	}
 	plan := e.policy.PlanArchive(now, partitions, e.mover != nil)
+	return e.ExecutePlanned(ctx, now, plan)
+}
+
+// ExecutePlanned 执行一份**已算好的**计划。
+//
+// 错误隔离同 Sweeper：单个分区失败不影响其余分区，失败只记录并保留原物。
+func (e *ArchiveExecutor) ExecutePlanned(ctx context.Context, now time.Time, plan []ArchivePlanTarget) []ArchiveOutcome {
+	if e == nil || !e.policy.Enabled {
+		return nil
+	}
 	e.stats.Planned += int64(len(plan))
 	e.stats.LastRunAt = now
 
 	out := make([]ArchiveOutcome, 0, len(plan))
 	for _, t := range plan {
 		outcome := ArchiveOutcome{Target: t, At: now}
-		if !t.Due(now) {
+		if !t.Due {
 			outcome.Result = ArchiveNotDue
 			e.stats.NotDue++
 			out = append(out, outcome)

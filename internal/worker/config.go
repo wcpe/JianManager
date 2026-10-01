@@ -8,6 +8,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -471,6 +472,18 @@ type LogVLConfig struct {
 	StartRehydrate   bool  `mapstructure:"start_rehydrate"`
 }
 
+// DefaultMaxWALBytes 是单源 WAL 字节预算的**有限默认值**。
+//
+// 此前默认是 0 = 不限，于是唯一的体积防护形同不存在：压测实测单 Worker WAL 涨到 1.9GB
+// 而容量门禁的 PASSIVE 分支从不触发（「不限」不是「很宽」，是「没有上界」）。
+//
+// 取 512MiB 的依据：稳态 WAL 在 reclaim 正常推进后是 KB 量级（真机实测 107MB → 256B），
+// 只有 reclaim 停滞时才会累积到百 MB 级。故 512MiB 远高于任何正常态，
+// 只在真的失控时才触发——触发后的动作是 PAUSED + 登记缺口（不静默丢），正合「宁停不丢」。
+//
+// 0 仍可作为显式逃生阀（真的需要不限时写 0），但会在启动日志里被点名提醒。
+const DefaultMaxWALBytes uint64 = 512 << 20
+
 type LogCapacityConfig struct {
 	MaxWALBytes       uint64  `mapstructure:"max_wal_bytes"`
 	MaxGaps           int     `mapstructure:"max_gaps"`
@@ -692,6 +705,63 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	return p, nil
 }
 
+// WALBudgetNotice 返回「WAL 预算被显式关掉」的提醒（无限时返回空串）。
+//
+// 为什么不直接拒绝：0 = 不限是合法配置（例如受管环境由外部配额兜底），
+// 但它是**唯一没有上界的形态**，必须在启动日志里被点名，否则「没配」与「配成不限」
+// 在现场看起来完全一样——两者都由 viper 默认值与显式 0 落到同一个值上。
+func (c *Config) WALBudgetNotice() string {
+	if c == nil || c.LogCapacity.MaxWALBytes != 0 {
+		return ""
+	}
+	return "log_capacity.max_wal_bytes=0（不限）：WAL 将没有任何字节上界，reclaim 停滞后会一路涨到下盘满，请确认这是有意为之"
+}
+
+// LogLevel 解析 `log.level` 为 slog 等级。
+//
+// 为什么需要它：`log.level` 此前**没有任何装配点**——Worker 从不调用 slog.SetDefault，
+// 于是配置项形同不存在（写 debug 不产生任何 DEBUG 输出，写 error 也压不住 INFO）。
+// 现场表现是「配置改了但日志没变」，排查时极难归因（与 log_ingest 系列接线断掉的形态同类）。
+//
+// 非法值**启动即拒**：日志等级写错会让排障所依赖的输出静默消失，
+// 与 timezone/charset 是同一类「配错就静默」的危险项，不能用回退掩盖。
+func (c *Config) LogLevel() (slog.Level, error) {
+	raw := ""
+	if c != nil {
+		raw = strings.TrimSpace(c.Log.Level)
+	}
+	switch strings.ToLower(raw) {
+	case "", "info":
+		return slog.LevelInfo, nil
+	case "debug":
+		return slog.LevelDebug, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("log.level 非法: %q（支持 debug/info/warn/error）", raw)
+	}
+}
+
+// LogFormat 解析 `log.format`（text/json）。
+//
+// 同样此前没有装配点。非法值启动即拒，理由同 LogLevel。
+func (c *Config) LogFormat() (string, error) {
+	raw := ""
+	if c != nil {
+		raw = strings.TrimSpace(c.Log.Format)
+	}
+	switch strings.ToLower(raw) {
+	case "", "text":
+		return "text", nil
+	case "json":
+		return "json", nil
+	default:
+		return "", fmt.Errorf("log.format 非法: %q（支持 text/json）", raw)
+	}
+}
+
 // ConfigPath 返回本次实际读取并应用的配置文件绝对路径；空串表示本次启动没有任何配置文件生效
 // （键值全部来自内置默认与 JIANMANAGER_ 环境变量，包含「指定了不存在的路径」）。
 func (c *Config) ConfigPath() string {
@@ -773,7 +843,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_vl.rehydrate_port", 0)
 	v.SetDefault("log_vl.start_cold", false)
 	v.SetDefault("log_vl.start_rehydrate", false)
-	v.SetDefault("log_capacity.max_wal_bytes", uint64(0))
+	v.SetDefault("log_capacity.max_wal_bytes", DefaultMaxWALBytes)
 	v.SetDefault("log_capacity.max_gaps", 0)
 	v.SetDefault("log_capacity.degraded_at_percent", 80.0)
 	v.SetDefault("log_capacity.pause_at_percent", 90.0)

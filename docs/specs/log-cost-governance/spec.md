@@ -206,9 +206,29 @@ const (
 - `TestSweeperDryRunNeverDeletes`、`TestSweeperSubmitsCorrectFilterAndCutoff`、`TestSweeperThrottlesRepeatedFilters`、`TestSweeperIsolatesPerTargetFailures`、`TestSweeperDisabledPolicyIsNoop`
 - `TestClientDeleterBuildsRequest`、`TestClientDeleterRejectsMissingTaskID`、`TestClientDeleterRejectsMalformedBody`、`TestClientDeleterSurfacesHTTPError`、`TestClientDeleterWithoutClientFails`、`TestSweeperToRealHTTPEndToEnd`
 
+## 6.7 `logs/retention`（G6 冷层搬运驱动器）
+
+- `TestDriverMovesDuePartitions` — **到点必搬**（驱动器的存在理由）
+- `TestDriverKeepsOriginalOnMoveFailure` — **搬运失败留存 + 告警**，零删除
+- `TestDriverSkipsColdAndInFlight` — 已在冷层 / 在途迁移不得重复驱动
+- `TestDriverDiskWatermarkTriggersEarlyMove` — 磁盘水位触发（年龄 + 水位取先到）
+- `TestDriverDiskTriggerRespectsMinAge` — 盘再满也不搬刚写进来的分区
+- `TestDriverDiskReadFailureFallsBackToAgeOnly` — 读数拿不到就退回纯年龄，不猜「盘满了」
+- `TestDriverNoopWhenDisabledOrEmpty` — 未启用 / 无分区时彻底空操作
+- `TestDriverListFailureSurfaces` — 列举失败如实报错（区分「没有分区」与「读不出来」）
+- `TestDriverWithoutMoverBlocksInsteadOfDeleting` — 无搬运路径 ⇒ blocked + 保留原物
+- `TestDriverRunStopsOnContextCancel` — 周期循环随 ctx 退出且**首轮立即执行**
+
+## 6.8 配置接线（`internal/worker`）
+
+- `TestLogLevelIsParsedAndRejectsGarbage` — `log.level` **有装配点**且非法值启动即拒
+- `TestLogFormatIsParsedAndRejectsGarbage` — `log.format` 同上
+- `TestMaxWALBytesHasFiniteDefault` — WAL 字节上界默认有限，且高于正常稳态量级
+- `TestWALBudgetNoticeNamesTheUnlimitedCase` — 显式不限必须被点名
+
 ### 6.6 变异实验（`go test -overlay`，原文件零改动）
 - `logs/sampling`：**11/11 全部以断言转红**（`.tmp/sampling-mutation/REPORT.txt`）
-- `logs/retention`：**16/16 全部以断言转红**（`.tmp/retention-mutation/REPORT.txt`）
+- `logs/retention`：**21/21 全部以断言转红**（`.tmp/retention-mutation/REPORT.txt`）
 
 其中两条变异直接暴露了实现缺陷并据此修复：**M10**（校验读 `Normalize()` 之后 ⇒ 成死代码）、
 **N13**（`discard` 判在搬运之前 ⇒ 默认动作被永久改成删除）。
@@ -219,14 +239,14 @@ const (
 
 | 项 | 状态 | 说明 |
 |---|---|---|
-| 冷层搬运**驱动器** | 未接线 | `PlanArchive` + `ArchiveExecutor` + `Mover` 接口已实现并自测；把 `catalog` 读出的分区喂给它、并挂周期循环（年龄 + 磁盘水位**取先到**、两者可配）尚未做。搬运本身复用既有 `lifecycle.StartMigration`，其真机链路验收见 `worker-log-lifecycle/spec.md` 与 `worker-log-platform-contract/acceptance-record.md` §2 |
+| 冷层搬运**驱动器** | **已接线** | `retention.Driver`（`Step` 可单测 + `Run` 周期调度，首轮立即执行）；生产适配层 `apps/worker/log_retention.go` 把 `catalog` 分区与 `lifecycle.DayManager` 接成 `PartitionLister`/`Mover`，在采集运行时之后随同一 ctx 启动。触发口径 = 年龄 + 磁盘水位**取先到**（`log_retention.trigger.*`，默认只按年龄）；磁盘读数复用采集侧**同一份** `ingest.DiskCapacityProvider`。磁盘触发带 `min_age` 下限（默认 7d）：盘再满也不搬正在写的日分区 |
 | `ActionArchiveCopy`（导出独立副本） | 仅留接口 | `retention` 已定义动作与结果语义，执行分支未实现 |
-| eventstore 段/归档对象的回收 | 未做 | `logs/eventstore` 目前无可避免的 `Prune`/`Trim`/`Reclaim`；段是「权威事件集合」的承载体，加保留必须带**下界**（有界保留），不能只加 TTL |
-| COLD/Rehydrate 的 VL 启动参数 | 未做 | `-delete.enable`、`-retention.maxDiskSpaceUsageBytes`、按 namespace 差异化 `-retentionPeriod` 尚未接入 `vlsup` 启动参数 |
-| G10 观测面对外暴露点 | 部分 | `ArchiveStats`/`SweepStats`/`sampling.Stats` 已具备读数；**日志行与指标未接线**。运行期动态日志等级亦未接线（且既有 `log.level: debug` 未接到 slog handler，属独立缺陷） |
+| eventstore 段/归档对象的回收 | 未做 | `logs/eventstore` 目前无 `Prune`/`Trim`/`Reclaim`；段是「权威事件集合」的承载体，加保留必须带**下界**（有界保留）且**不得破坏** `deliverTailPlan` 的水位语义（段只换介质不裁剪） |
+| COLD/Rehydrate 的 VL 启动参数 | 未做 | `-delete.enable`、`-retention.maxDiskSpaceUsageBytes`、按 namespace 差异化 `-retentionPeriod` 尚未接入 `vlsup` 启动参数（按指示**默认不开**） |
+| G10 观测面对外暴露点 | **部分** | `ArchiveStats`/`SweepStats`/`DriverResult`/`sampling.Stats` 已具备读数，驱动器每轮打印 listed/skipped/due/moved/keptOriginal/notDue；**指标端点未接线**。`log.level` 已接线并暴露 `LevelVar`（运行期可调，见 §6.8） |
 | 分级验证（info/debug 只存不验） | 未做 | 需落在 `ingest/runtime.go` 的 `verifyProjection` 调用点（该文件由并行工作流持有） |
 | 按级别独立热层保留 | 未做（可选路径） | 需把级别分流到不同存储命名空间（见 §4 已知边界），属数据面重构 |
-| `log_capacity.max_wal_bytes` 有限默认值 + 截断告警 | 未做 | 体积防护的另一半，属独立小项 |
+| `log_capacity.max_wal_bytes` 有限默认 + 告警 | **已做** | 默认由 `0`（不限）改为 `DefaultMaxWALBytes`（512MiB，远高于正常稳态的 KB 量级，只在真失控时触发 PAUSED + 登记缺口）；显式写 0 时启动日志点名提醒（`WALBudgetNotice`），使「没配」与「配成不限」不再不可区分 |
 | 真机部署复验 | 未做 | 本项**不含部署动作**，未触碰生产与用户实例 |
 
 ---
