@@ -16,6 +16,8 @@
 
 ## 索引（最近新增）
 
+- [ADR-099](099-log-cost-governance-and-invariant-r.md) 日志成本治理与不变量 R（采样折叠/默认不丢/单位成本结论；FR-498 配套）
+- [ADR-098](098-log-retention-tiering-and-archive.md) 日志保留、分层与归档（热 90 天分级/冷 730 天统一/删前归档；FR-477/478 配套）
 - [ADR-096](096-mcp-stateless-endpoint.md) MCP 端点在 Streamable HTTP 路径上无状态化（FR-489，部分取代 ADR-077 的会话运维模型、修订 ADR-080 决策 6 的论证）
 - [ADR-093](093-process-lifecycle-resilience.md) 进程生命周期韧性与孤儿治理（FR-455/456/459：防误杀、孤儿周期兜底、状态真源收敛、重推多源化）
 - [ADR-092](092-config-surface-and-direct-probe.md) 实例配置源明面化与 MC 直探能力（FR-446/447/451：SLP+Query 直探、配置项内联/文件引用二态）

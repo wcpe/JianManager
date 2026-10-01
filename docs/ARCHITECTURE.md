@@ -294,6 +294,8 @@ internal/worker/
 
 **状态**：Shared Contracts **已冻结**（FR-473，ADR-094 accepted）。**生产装配已落地**：CP `main` 构造 `logcoord.Assemble` 并经反向隧道联邦；Worker `main` 装配持久 Catalog、采集运行时、受管 VL supervisor、RangeClient、归档 Provider 和 Log RPC。联邦 HTTP（含 `/logs/federation` 门面）、runtime status/control、cutover/Legacy HTTP 已注册。**真机验收已完成**：Runbook A/B/C、CP 资产分发闭环、Deep Archive/Rehydrate（RustFS S3）、Legacy/cutover、真浏览器 UI 与 §6.6 30 分钟压测（含 64 源容量曲线）均通过并归档证据于 `.tmp/fr433-experiments/`（临时证据，不入库）。当前受管 VL 资产基线为 v1.52.0；cutover 默认关闭。
 
+**2026-10-02 成本治理与生命周期轮（ADR-098/099）**：采集侧新增 `sampling`（等级过滤/同源同消息高频抑制/每源预算/风暴自动降级，全部默认关且抑制以「汇总事件」承接、不变量 R 区间守恒）；保留侧新增 `retention`（分级档位 + 源级覆盖 + 白名单过滤器 + VL 删除执行器）与**冷层搬运驱动器**（`apps/worker/log_retention.go` 生产适配层，周期调度、首轮立即执行、年龄+磁盘水位取先到）；投递路径消除每批 3 次 O(段总行数) 全量遍历（尾段快路径，同规格夹具批耗时 −82%、吞吐 +68%、达成率 0.555→0.93）；`log_capacity.max_wal_bytes` 由 0（不限）改为有限默认 512MiB（显式 0 仍合法但启动点名）；`log.level`/`log.format` 补上装配点。规则与口径见 ADR-098/099。
+
 目标架构采用 Worker 本地日志数据面（受管 VictoriaLogs，下文简称 VL，选型见 ADR-094；发行资产审批见 FR-476） + CP 联邦查询：Worker 可在受管数据根保存 VL HOT/COLD/Rehydrate 数据、WAL、采集账本、Partition Catalog、canonical projection manifest/checkpoint、冲突和受管 Raw；这些数据属于 Worker-owned 日志数据，不是 CP 业务数据库。Worker 本地 SQLite 仅保存日志元数据，不能成为第二个全文检索引擎。
 
 Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器；CP 业务 SQLite/MySQL、权限数据和 ADR-013 指标时序仍只由 CP 读写。CP→Worker 日志 RPC 只经 Worker 主动建立的 ADR-081 反向隧道，Worker/VL 只监听 localhost。Search/Stats/Fields/Facets/Tail/Rehydrate/Export 使用 FR-473 Query View、Catalog owner、PublishedProjection 和 coverage；浏览器不得直连 Worker/VL。该边界对应已 accepted 的 ADR-094；Worker 生产组件级 Runbook A/B/C 分别归属 FR-474/476/477 开发验收，不是契约冻结前置。
@@ -306,6 +308,8 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | 事件体存储 | `internal/worker/logs/eventstore`（按源**追加式 NDJSON 段** + MANIFEST 原子替换 + 流式读；只容忍尾段截断，中间段损坏硬失败） | FR-484 | **实测通过**：150 源稳态 RSS 25.6MiB、峰值 77.0MiB（判据稳态 ≤300MiB）、`state.json` 与事件数解耦；长驻会话的辅助结构（位置表/事件历史/投递记录）均有明确释放时机；ADR-095 |
 | 采集通道 | `internal/worker/logs/acquire` + `pipeline` + `ingest`（tail/stdio/archive→normalize→WAL→VL→projection/Catalog） | FR-474/475 | 生产采集/投影/恢复已接线；ACK-loss/磁盘满 Runbook A 待验 |
 | 归一化 | `internal/worker/logs/normalize` | FR-475 | 地基已落地，单测绿 |
+| 采集侧成本策略 | `internal/worker/logs/sampling`（等级过滤/同源同消息高频抑制/每源预算/风暴自动降级） | FR-498 配套 | **已落地**（提交 `692e714b`）：不变量 R 区间守恒（`MergePositionRanges(Process(in)) == MergePositionRanges(in)`）为门禁，R2 缺口消解回归 + R2b 朴素丢弃反证；策略**默认全关**、抑制折叠为汇总事件；11/11 变异以断言转红 |
+| 保留与分层策略 | `internal/worker/logs/retention`（分级档位/源级覆盖/白名单过滤器/VL 删除执行器/**冷层搬运驱动器**）+ `apps/worker/log_retention.go`（生产适配层） | FR-477 配套、ADR-098 | **部分落地**（提交 `692e714b`/`282c60af`）：默认动作=搬运 COLD、删除需 `vl_sweep`+`discard` 双闸 + VL `-delete.enable`、默认全关；驱动器年龄+磁盘水位取先到（磁盘触发带 min_age=7d）；32/32 变异转红。`cold_retention` / `trigger.*` 配置面与 VL 按 namespace retention 已在工作区接线（未提交）；**待实现**：gz 文件吸存、搬运/删除的指标暴露 |
 | VL 运行时 | `internal/worker/logs/vlsup`（资产校验/localhost/auth/防递归/预算采样） | FR-476 | 受管三实例、CP runtime status/control、远程 Runbook C 基础已通过；资产下载闭环与真机预算证据待验（`EvaluateBudget` RSS/磁盘降级已落地） |
 | Partition Catalog + Lifecycle | `internal/worker/logs/catalog` + `lifecycle`（状态机编排/Ops 注入） | FR-477 | Catalog 启动恢复/唯一 owner 已接线；迁移崩溃/旧 owner re-attach Runbook B 待验 |
 | Deep Archive | `internal/worker/logs/archive`（Provider/registry/Rehydrate 任务/manifest） | FR-478 | Remote S3 Provider、**真机 RustFS S3 验收通过**（登记/幂等/manifest/往返/Rehydrate 任务）、manifest engine 记录真实 VL build_id；发布 generation 清理矩阵待验 |
@@ -316,6 +320,23 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | proto | `proto/worker.proto` Log* + `proto/workerpb` 已重生成 | FR-473 | 消息契约已冻结 |
 
 **数据面边界不变**：CP 业务库仍只保留 platform/audit + （切换后）Legacy 只读存量；切换打开前 instance/worker 来源仍写入 CP `logs` 表。禁止把测试全绿当作真 Worker/VL/浏览器验收。
+
+**日志保留、分层与成本治理（现状 → 目标形态，ADR-098/099）**
+
+| 维度 | 现状（截至 2026-10-02） | 目标形态（已决策） |
+|---|---|---|
+| 热层保留 | 受管 VL `-retentionPeriod` 单值（默认 30d，HOT/COLD/Rehydrate 同值）；产品侧 `hot_retention` 配置面存在 | **90 天**：VL + SSD，其中按级别分级停留 `debug 3d / info 7d / warn 30d / error 90d`（设置中可配置，含源级覆盖） |
+| 冷层保留 | `retention.Policy.ColdRetention` 默认 730d（声明与校验）；`log_retention.cold_retention` 与受管 VL 的**按 namespace retention** 已在工作区接线（未提交） | **730 天（2 年）**：VL + 大容量盘，**所有级别统一**；由受管 COLD 的 `-retentionPeriod` 执行 |
+| 到期动作 | 默认动作=搬运 COLD（复用 `ROUTING_FROZEN→…→CLEANED`），搬运失败=保留原物+告警、零删除；删除需 `discard` + `sweep.vl_sweep` 双闸且受管 VL 需 `-delete.enable`，**默认全关** | 不变（该语义即目标形态）；补齐"谁、何时、多少、去哪"的对外暴露（指标 + 日志行） |
+| 分层驱动 | `retention.Driver` 周期调度 + 首轮立即执行；触发口径年龄 + 磁盘水位**取先到**（磁盘触发 min_age=7d）；`log_retention.trigger.*` 配置面已在工作区接线（未提交） | 不变（接线完成后即目标形态） |
+| 实例本地 gz | 无吸存能力；平台不删实例本地任何 `.gz`（轮转尾部由 ArchiveImporter 解析，仅用于接管） | 以**文件身份、压缩态**吸存到冷层：只归档文件、不解析、不入事件流；幂等去重由系统负责；**本地 gz 一律不动** |
+| 对象存储 | FR-478 已有 S3 Provider / Rehydrate 能力（真机 RustFS 验收通过），当前未作为必需组件 | **第一阶段不上**；作为第 3 档（异地/超长期/合规）能力位与后续评估位 |
+| 采集侧成本 | `sampling` 四类策略齐备、**默认全关**；抑制以汇总事件承接（不变量 R） | 不变（默认关即目标姿态） |
+| 单位成本 | 投递路径 O(段总行数) 遍历已消除（`87af507f`：−82% 批耗时 / +68% 吞吐 / 达成率 0.555→0.93）；新鲜度换成本的分段批拉经实测收益为零、**不做** | 成本可见性平台化（每源 GB/天、ms/行），供预算化运营 |
+| 平台配额 | 机制侧有"每源预算"（默认关）；`GroupQuota` 无日志量维度 | **先可见性、后强制**：用量报表先落地，强制档位（复用 `EnforceMode` 三档）后置 |
+| 观测与关联 | 日志侧仅 `log_ingest_healthy` 一个告警指标；`log.level`/`log.format` 已装配、`LevelVar` 支持运行期调级；无 trace/correlation 字段 | FR-485 其余观测项补齐（state 尺寸与增速、persist 写字节/秒、单源积压与暂停时长、投递失败率分类、退避次数、慢 SQL、节点 iowait、比率触发）；**轻量 correlation id** 贯通 CP→Worker→事件字段（不引入 OTel collector；correlation 不得进 `stream_fields`） |
+
+**已知边界**：日分区 `(namespace, utcDay)` 内混着所有级别，而搬运的最小粒度是"一天"，因此**按级别的 TTL 无法在热层独立生效**（`HotWindow()` 取显式热层窗口）；真正的独立分级需要把级别分流到不同存储命名空间，属后续评估项（与"低价值等级路由独立流"同类改动）。**未决策项**：分级验证（低价值级别"只存不验"）会削弱逐字段校验的证据链，需单独评估，ADR-099 不承诺。
 
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
