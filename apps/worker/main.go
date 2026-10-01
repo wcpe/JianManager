@@ -36,6 +36,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/logassemble"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -1157,17 +1158,22 @@ func localWSAddr(port int) string {
 }
 
 // sampleLogIndexPersistLatency 周期性打印采集索引（FR-496，本地 SQLite）的单次持久化耗时
-// P50/P95/Max 与本窗口的写入行数/字节数。
+// P50/P95/Max 与本窗口的写入行数/删除行数/字节数。
 //
 // 为什么以 Info 打印：真机验收口径是「60 源规模下单次持久化 ≤50ms」，而现场默认日志级别是
 // Info——Debug 打点在真机上默认不落盘，验收人只能临时改级别才能读数，读数口径随人而变。
 // 升为 Info 后现场按默认配置即可取值，且节拍（1 分钟）与字段原样不变，仍可与旧格式
 // （整本重写 JSON）直接对比：写入行数是最直接的判据——回到整本重写时该值会逼近索引总行数，
 // 而增量实现只随本批次变更增长。采样环由 stateindex 维护（最近 512 次）。
+//
+// 三个 Delta 的窗口口径见 logIndexPersistWindow 的注释：它们与 P50/P95/Max 取自同一个窗口，
+// 都是「本窗口新增」。
 func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	var lastWritten, lastBytes int64
+	// 首个窗口的基准取采样器启动时刻（它与采集循环同时启动，见 main 里的 `go manager.Start`）：
+	// 早于这一刻的持久化不属于任何一个窗口，不会被计入首条日志。
+	window := &logIndexPersistWindow{cursor: time.Now()}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1175,27 +1181,80 @@ func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) 
 		case <-ticker.C:
 			latency := manager.PersistLatency()
 			if latency.Count == 0 {
+				// 本窗口一次都没持久化（空闲），环里没有新增样本可结账——保持基准不动，
+				// 下一个窗口把这段时间的持久化一并结清。
 				continue
 			}
-			samples := manager.PersistSamples()
-			var written, deleted, bytes int64
-			for _, sample := range samples {
-				written += int64(sample.RowsWritten)
-				deleted += int64(sample.RowsDeleted)
-				bytes += sample.BytesWritten
-			}
-			slog.Info("采集索引持久化耗时采样",
-				"samples", latency.Count,
-				"p50ms", latency.P50.Milliseconds(),
-				"p95ms", latency.P95.Milliseconds(),
-				"maxMs", latency.Max.Milliseconds(),
-				"rowsWrittenDelta", written-lastWritten,
-				"rowsDeletedDelta", deleted,
-				"bytesWrittenDelta", bytes-lastBytes,
-			)
-			lastWritten, lastBytes = written, bytes
+			logIndexPersistSample(window, latency, manager.PersistSamples())
 		}
 	}
+}
+
+// logIndexPersistWindow 把 stateindex 采样环换算成「本窗口的增量」。
+//
+// 为什么不能拿「环和」相减当增量：采样环只保留最近 512 次持久化，而采集循环每 250 ms 就可能触发
+// 一次 persist，真机 60 源实测约 2.5 次/s（环覆盖 ≈205 s），环在启动几分钟后就会写满。写满后
+// 「环和」是滑动窗口和，相邻两次读数相减得到的是「本窗口新增 − 同期被挤出的旧样本」——稳态下
+// 两者近似相等，差值趋近 0，会把整整一分钟的写入量抹掉；环未满时「环和」又等于自启动累计值，
+// 直接当成窗口量上报，就是把「开服至今的写入」当成「一分钟的写入」（FR-498 实测：删除因此被读成
+// 写入的 9 倍，而同口径真值约为删除 ≈ 0.5 × 写入）。两种形态都不是窗口增量。
+//
+// 所以这里按「样本身份」做差：窗口基准是一个时间游标，即上一次读数时环内最新样本的 StartedAt，
+// 每次只累计 StartedAt 严格晚于游标的样本。不管环满没满、有没有挤出旧样本，累计到的都恰好是
+// 「两次读数之间新增的那几次持久化」——这才叫窗口增量。
+//
+// 前提：单个窗口内新增的样本数少于环容量（512，见 stateindex.sampleRing）。否则最早的那几次
+// 新增样本已被挤出环外，读数只能是下界。生产上采集循环节拍 250 ms、采样节拍 1 分钟，单窗口最多
+// 约 240 次持久化，恒小于环容量，不会触发该前提。
+type logIndexPersistWindow struct {
+	// cursor 是上一次读数时环内最新样本的 StartedAt。采样时间戳由 recordSample 在每次 Apply
+	// 开始时用 time.Now() 记录（带单调读数），同一进程内严格递增，可当环内样本的身份游标用。
+	cursor time.Time
+}
+
+// logIndexPersistDelta 是一个窗口内的写入增量，与同一条日志里的 P50/P95/Max 同窗口。
+type logIndexPersistDelta struct {
+	RowsWritten  int64
+	RowsDeleted  int64
+	BytesWritten int64
+}
+
+// advance 推进一个窗口并返回本窗口增量：只累计游标之后的样本，因此环未满（环和 = 自启动累计）
+// 与环已满（环和 = 滑动和）两种形态下都成立。
+func (w *logIndexPersistWindow) advance(samples []stateindex.Sample) logIndexPersistDelta {
+	var delta logIndexPersistDelta
+	var newest time.Time
+	for _, sample := range samples {
+		if sample.StartedAt.After(newest) {
+			newest = sample.StartedAt
+		}
+		if !sample.StartedAt.After(w.cursor) {
+			continue
+		}
+		delta.RowsWritten += int64(sample.RowsWritten)
+		delta.RowsDeleted += int64(sample.RowsDeleted)
+		delta.BytesWritten += sample.BytesWritten
+	}
+	// 游标只前进不后退：时钟回拨时若直接覆写，已结账的样本会被重复计入下一个窗口。
+	if newest.After(w.cursor) {
+		w.cursor = newest
+	}
+	return delta
+}
+
+// logIndexPersistSample 把一个窗口的读数落成一条采样日志：分位取整环（口径不变），三个 Delta
+// 取本窗口增量（见 logIndexPersistWindow）。
+func logIndexPersistSample(window *logIndexPersistWindow, latency stateindex.Latency, samples []stateindex.Sample) {
+	delta := window.advance(samples)
+	slog.Info("采集索引持久化耗时采样",
+		"samples", latency.Count,
+		"p50ms", latency.P50.Milliseconds(),
+		"p95ms", latency.P95.Milliseconds(),
+		"maxMs", latency.Max.Milliseconds(),
+		"rowsWrittenDelta", delta.RowsWritten,
+		"rowsDeletedDelta", delta.RowsDeleted,
+		"bytesWrittenDelta", delta.BytesWritten,
+	)
 }
 
 // sampleLogBudget 周期性采样受管 VL 的 RSS 与数据盘预算并暴露降级（FR-476 / 契约 §6.6）。
