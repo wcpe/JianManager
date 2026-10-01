@@ -17,6 +17,8 @@ import (
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
@@ -50,8 +52,10 @@ type Config struct {
 	LogSources      []LogSourceConfig `mapstructure:"log_sources"`
 	// LogReconcile 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天，对账不可信则回退整窗重发。
 	LogReconcile LogReconcileConfig `mapstructure:"log_reconcile"`
-	LogArchive   LogArchiveConfig   `mapstructure:"log_archive"`
-	Decompiler   DecompilerConfig   `mapstructure:"decompiler"`
+	// LogIndex 采集索引（FR-496）的配置面：历史投递批次裁剪（§6）与持久化提交单元预算（§3.4）。
+	LogIndex   LogIndexConfig   `mapstructure:"log_index"`
+	LogArchive LogArchiveConfig `mapstructure:"log_archive"`
+	Decompiler DecompilerConfig `mapstructure:"decompiler"`
 	// Search 全文搜索索引配置（FR-074，见 ADR-017）。
 	Search SearchConfig `mapstructure:"search"`
 	// ArtifactCache 节点本地制品缓存配置（FR-178）：按 sha256 缓存下载过的核心 jar，建实例命中即秒拷。
@@ -225,6 +229,71 @@ func (c LogReconcileConfig) ReconcileConfig() ingest.ReconcileConfig {
 	}
 	return out
 }
+
+// LogIndexConfig 采集索引（FR-496）的配置面，键为 `log_index.*`。
+//
+// 默认口径的单一真源在两个实现包里：ledger.DefaultDeliveryBatchPruneConfig（默认开启裁剪）
+// 与 stateindex.DefaultCommitBudget（每事务 1024 行、目标 40ms）。本类型只做 YAML →
+// ingest.Options 的搬运，非法值一律回退默认——配置误写不得让裁剪失效或让切分消失
+// （那会把「单次持久化 ≤50ms」的达标线交还给配置运气）。见
+// docs/specs/log-index-sqlite/spec.md §3.4（切分）与 §6（配置键登记）。
+type LogIndexConfig struct {
+	// BatchPrune 历史投递批次（delivery_batch）裁剪：索引有界化的唯一裁剪路径。
+	BatchPrune LogIndexBatchPruneConfig `mapstructure:"batch_prune"`
+	// Persist 持久化提交单元预算：单次持久化按行数 + 耗时双上界切成多个提交单元。
+	Persist LogIndexPersistConfig `mapstructure:"persist"`
+}
+
+// LogIndexBatchPruneConfig 是历史投递批次裁剪的配置面（键 `log_index.batch_prune.*`）。
+//
+// 零值语义：Enabled=false 的零值无法与「显式关闭」区分（与 log_reconcile.enabled、
+// orphan_scan.auto_adopt 同口径），故 Load 经 viper SetDefault 写入默认 true；
+// 手工构造 Config{} 的调用方须自行置位。
+type LogIndexBatchPruneConfig struct {
+	// Enabled 为 false 时完全不裁（应急逃生口：怀疑裁剪影响判定时先关它）。
+	Enabled bool `mapstructure:"enabled"`
+	// KeepRecent 是无条件保留的最近批次条数（审计尾窗），只多留不少留；负数为误写 → 回退默认。
+	KeepRecent int `mapstructure:"keep_recent"`
+}
+
+// DeliveryBatchPruneConfig 把本地配置面收敛为 ledger 的裁剪配置（负尾窗回退默认 0）。
+func (c LogIndexBatchPruneConfig) DeliveryBatchPruneConfig() ledger.DeliveryBatchPruneConfig {
+	return ledger.DeliveryBatchPruneConfig{Enabled: c.Enabled, KeepRecent: c.KeepRecent}.Normalized()
+}
+
+// LogIndexPersistConfig 是索引持久化提交单元预算的配置面（键 `log_index.persist.*`）。
+type LogIndexPersistConfig struct {
+	// MaxTxRows 单个提交单元（一次 IMMEDIATE 事务）的行数上限；非正回退默认 1024。
+	MaxTxRows int `mapstructure:"max_tx_rows"`
+	// MinTxRows 自适应收缩的下限（再慢也不退化成逐行）；非正/大于上限时回退默认 64。
+	MinTxRows int `mapstructure:"min_tx_rows"`
+	// TxDurationTarget 单个提交单元的耗时目标（duration 字符串，默认 40ms）；非法/非正回退默认。
+	// 执行中的耗时硬上界取它的 5/4（默认 50ms = 验收线「单次持久化 ≤50ms」本身）。
+	TxDurationTarget string `mapstructure:"tx_duration_target"`
+}
+
+// CommitBudget 把本地配置面收敛为 stateindex 的提交单元预算（非法值一律回退归一化默认）。
+func (c LogIndexPersistConfig) CommitBudget() stateindex.CommitBudget {
+	out := stateindex.DefaultCommitBudget()
+	if c.MaxTxRows > 0 {
+		out.MaxRows = c.MaxTxRows
+	}
+	if c.MinTxRows > 0 {
+		out.MinRows = c.MinTxRows
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.TxDurationTarget)); err == nil && d > 0 {
+		out.Target = d
+	}
+	return out.Normalized()
+}
+
+// IndexPrune 返回可直接交给 ingest.Options.IndexPrune 的裁剪配置。
+func (c LogIndexConfig) IndexPrune() ledger.DeliveryBatchPruneConfig {
+	return c.BatchPrune.DeliveryBatchPruneConfig()
+}
+
+// CommitBudget 返回可直接交给 ingest.Options.IndexCommit 的提交单元预算。
+func (c LogIndexConfig) CommitBudget() stateindex.CommitBudget { return c.Persist.CommitBudget() }
 
 // RecoverConfig 接管恢复（Worker 重启后接管存活 wrapper）配置（FR-455①）。
 type RecoverConfig struct {
@@ -462,6 +531,14 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_reconcile.concurrency", reconcileDefaults.Concurrency)
 	v.SetDefault("log_reconcile.timeout", reconcileDefaults.Timeout.String())
 	v.SetDefault("log_reconcile.query_timeout", reconcileDefaults.QueryTimeout.String())
+	// 采集索引（FR-496）：历史投递批次裁剪 + 持久化提交单元预算。默认值同样取自实现包的单一真源。
+	indexPruneDefaults := ledger.DefaultDeliveryBatchPruneConfig()
+	indexCommitDefaults := stateindex.DefaultCommitBudget()
+	v.SetDefault("log_index.batch_prune.enabled", indexPruneDefaults.Enabled)
+	v.SetDefault("log_index.batch_prune.keep_recent", indexPruneDefaults.KeepRecent)
+	v.SetDefault("log_index.persist.max_tx_rows", indexCommitDefaults.MaxRows)
+	v.SetDefault("log_index.persist.min_tx_rows", indexCommitDefaults.MinRows)
+	v.SetDefault("log_index.persist.tx_duration_target", indexCommitDefaults.Target.String())
 	v.SetDefault("log_archive.enabled", false)
 	v.SetDefault("log_archive.provider", "local")
 	v.SetDefault("log_archive.endpoint", "")

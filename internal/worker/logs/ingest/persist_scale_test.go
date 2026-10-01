@@ -93,8 +93,16 @@ func scaleManager(t *testing.T, state *persistedState) *Manager {
 
 // TestPersistWritesOnlyChangedRowsAtScale 是规模断言回归：
 // 全量写入一次后，只改动**一个**源，单次 persist 的写入行数与字节数必须与源总数无关。
+//
+// 计时口径（本轮改为「多轮取最小值」，理由如实记录）：原实现只测**一次**增量持久化，单次采样
+// 被调度噪声主导——`-race` 下偶发越界（同一次提交里 8 源与 64 源的偶发唤醒延迟量级相当，
+// 一次抖动就能把比值推到阈值之上）。改为同一形态重复 incrementRounds 轮、取最小耗时：
+// 最小值是「无干扰成本」的稳健估计（噪声只会让某轮变慢，不会让某轮变快），因此
+// 「整本重写随源数成倍上升」照样会被抓到，而偶发抖动不再误判。
 func TestPersistWritesOnlyChangedRowsAtScale(t *testing.T) {
 	const small, large = 8, 64
+	// incrementRounds 是增量持久化的重复轮数（取最小耗时作为判据）。
+	const incrementRounds = 5
 
 	measure := func(sources int) (first, incremental int64, rows int) {
 		state := scaleFixtureState(sources)
@@ -103,25 +111,32 @@ func TestPersistWritesOnlyChangedRowsAtScale(t *testing.T) {
 		startFirst := time.Now()
 		require.NoError(t, m.persist())
 		first = time.Since(startFirst).Nanoseconds()
-		// 只改动一个源（推进游标 + 追加一条 WAL），其余源逐字节不变。
 		key := "node:000/g1"
-		saved := m.state.Sources[key]
-		saved.Ledger = append([]ledger.Entry(nil), saved.Ledger...)
-		saved.Ledger[0].Positions.Read += 4096
-		saved.WAL = append(append([]acquire.WALEntry(nil), saved.WAL...), acquire.WALEntry{
-			Seq: 25,
-			Event: logtypes.BuildEvent(saved.Ledger[0].Identity, logtypes.RecordRange{Start: 250, End: 259},
-				"2026-09-30T00:00:00Z", "2026-09-30T00:00:01Z", "INFO", "stdout", "brand new line"),
-			Appended: true, Durable: true,
-		})
-		m.state.Sources[key] = saved
+		incremental = int64(time.Hour)
+		for round := 0; round < incrementRounds; round++ {
+			// 只改动一个源（推进游标 + 追加一条 WAL），其余源逐字节不变。
+			saved := m.state.Sources[key]
+			saved.Ledger = append([]ledger.Entry(nil), saved.Ledger...)
+			saved.Ledger[0].Positions.Read += 4096
+			saved.WAL = append(append([]acquire.WALEntry(nil), saved.WAL...), acquire.WALEntry{
+				Seq: uint64(25 + round),
+				Event: logtypes.BuildEvent(saved.Ledger[0].Identity, logtypes.RecordRange{Start: uint64(250 + round), End: uint64(259 + round)},
+					"2026-09-30T00:00:00Z", "2026-09-30T00:00:01Z", "INFO", "stdout", "brand new line"),
+				Appended: true, Durable: true,
+			})
+			m.state.Sources[key] = saved
 
-		before := len(m.PersistSamples())
-		require.NoError(t, m.persist())
-		samples := m.PersistSamples()
-		require.Greater(t, len(samples), before, "增量写入必须产生一次采样")
-		last := samples[len(samples)-1]
-		return first, last.Duration.Nanoseconds(), last.RowsWritten
+			before := len(m.PersistSamples())
+			require.NoError(t, m.persist())
+			samples := m.PersistSamples()
+			require.Greater(t, len(samples), before, "增量写入必须产生一次采样")
+			last := samples[len(samples)-1]
+			if last.Duration.Nanoseconds() < incremental {
+				incremental = last.Duration.Nanoseconds()
+			}
+			rows = last.RowsWritten
+		}
+		return first, incremental, rows
 	}
 
 	_, smallNs, smallRows := measure(small)

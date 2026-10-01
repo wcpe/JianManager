@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,7 +22,14 @@ import (
 const SchemaVersion = "1"
 
 // sampleRing 是持久化耗时的采样环容量（真机 P50/P95 验证用，见 spec §3.3）。
-const sampleRing = 512
+//
+// 为什么从 512 提到 4096（FR-498 切分改造的连带项）：采样环的消费者（apps/worker 的
+// 分钟打点）按「样本身份游标」累计窗口增量，前提是「单窗口新增样本数 < 环容量」。
+// 512 是按「一周期一采样」估的（60 源实测约 2.5 周期/s ⇒ 窗口 150 样本）；切分后一次周期
+// 会产生多个提交单元采样（60 源 × 60 行/s 实测约 2 单元/周期 ⇒ 约 400 样本/分钟），
+// 高负载档位会顶到 512，届时窗口增量只能是下界。4096 给窗口留出 10 倍余量，
+// 每个 Sample 约 300 B，整环约 1.2 MiB（相对 Worker 的 GiB 级 RSS 可忽略）。
+const sampleRing = 4096
 
 // batchUpsertRows 是一条多值 UPSERT 语句合并的行数上限。
 //
@@ -30,6 +38,89 @@ const sampleRing = 512
 // 本身变重），故取 32；同时它把单条语句的实参控制在 32×9=288 个以内，远离 SQLite 的参数上限。
 const batchUpsertRows = 32
 
+// batchDeleteRows 是一条多值 DELETE 语句合并的行数上限。
+//
+// 与 UPSERT 同源的理由（逐行 ExecContext 的语句解析/规划是主导成本）：实测删除单位成本
+// 29.1 µs/行（写入 26.5 µs/行），而原实现是逐行一条 DELETE——600 源量级下每周期上千次
+// 语句解析全花在删除上。合并行数取同一个 32：单条语句的实参最多 32×5=160 个（主键最长 5 列），
+// 远离 SQLite 的参数上限，且与 UPSERT 的批量节奏一致，便于用同一条读数口径对比。
+const batchDeleteRows = batchUpsertRows
+
+// walCheckpointPages / sqlitePageSize 决定显式 WAL 归并的触发阈值（页数 × 页大小 ≈ 4 MiB），
+// 与 SQLite 默认的 wal_autocheckpoint（1000 页）同量级——但**归并时机由我们自己决定**
+// （见 Open 里关闭 wal_autocheckpoint 的理由与 checkpointPassiveIfNeeded 的说明）。
+const (
+	walCheckpointPages = 1000
+	sqlitePageSize     = 4096
+)
+
+// DefaultCommitMaxRows / DefaultCommitMinRows / DefaultCommitTarget 是提交单元预算的默认值。
+//
+// 取值依据（FR-498 实测，60 源 × 60 行/s，真进程夹具 + 独立复刻探针）：
+//   - 行成本近似线性且可测——写入 26.5 µs/行、删除 29.1 µs/行（批量前口径；批量化后单提交单元
+//     p50 降到 ≈13 µs/行）；
+//   - **MaxRows=512**：同夹具实测单提交单元 p50 ≈ 12.5 ms、p95 ≈ 40.6 ms；1024 行进制的 p95
+//     已达 47 ms（探针）/ 58–64 ms（60 源真机档），贴着 50 ms 验收线没有余量。512 让 p95 留出
+//     ≈20 % 余量，代价只有「提交次数翻倍」——60 源实测写入 ≈ 3.7 k 行/s ⇒ 约 7 次提交/秒，
+//     每次 BEGIN+COMMIT 开销 ≈0.1 ms，合计 ≈1 ms/s，对吞吐无可测影响。
+//   - MinRows=64：保证再慢的机器也不退化成逐行（逐行会让语句解析重新成为主导成本）。
+//   - Target=40 ms：自适应控制器的收敛点，验收线 50 ms 留 25 % 余量吸收抖动（硬上界 = 目标 × 5/4）。
+const (
+	DefaultCommitMaxRows = 512
+	DefaultCommitMinRows = 64
+	DefaultCommitTarget  = 40 * time.Millisecond
+)
+
+// CommitBudget 是**单个提交单元**（一次 IMMEDIATE 事务）的资源预算：行数上界 + 耗时上界。
+//
+// 为什么需要（FR-498 实测，60 源）：跨源并发（8）把最多 8 个源的批次合并成一次 ApplyScoped，
+// 于是同一个 SQLite 事务要写上万行，单次持久化 p95 随负载线性恶化：
+// 66–73 ms @1.8k 行/s → 198–228 ms @3.6k → 348–366 ms @5.4k，是 60 源下**唯一越过**
+// 「单次持久化 ≤50 ms」验收线的指标。既然行成本近似线性，把**事务规模**限住即可把耗时限住。
+//
+// 三个旋钮：
+//   - MaxRows：单提交单元行数上限（计划切分的依据，配置上界）；
+//   - MinRows：自适应收缩下限（再慢也不退化成逐行）；
+//   - Target：单提交单元耗时目标——控制器按「实测行数 × Target ÷ 实测耗时」反推下一单元的行数
+//     预算，实测偏慢即收缩、偏快且用满预算即扩张，夹在 [MinRows, MaxRows] 之间。
+//
+// 执行中另有**耗时硬上界**（Target × 5/4，默认 50 ms = 验收线本身）：事务内每开始一条语句前
+// 检查已耗时，越界即把剩余行留给下一个提交单元。目标值负责收敛，硬上界负责兜住抖动尖峰。
+type CommitBudget struct {
+	MaxRows int
+	MinRows int
+	Target  time.Duration
+}
+
+// DefaultCommitBudget 返回默认提交单元预算。
+func DefaultCommitBudget() CommitBudget {
+	return CommitBudget{MaxRows: DefaultCommitMaxRows, MinRows: DefaultCommitMinRows, Target: DefaultCommitTarget}
+}
+
+// Normalized 把非法配置收敛到默认：非正的行数/耗时都是误写（0 行预算无法表达任何合法语义），
+// 一律回退默认；MinRows > MaxRows 时夹到 MaxRows。配置误写不得让切分失效。
+func (b CommitBudget) Normalized() CommitBudget {
+	out := b
+	if out.MaxRows <= 0 {
+		out.MaxRows = DefaultCommitMaxRows
+	}
+	if out.MinRows <= 0 {
+		out.MinRows = DefaultCommitMinRows
+	}
+	if out.MinRows > out.MaxRows {
+		out.MinRows = out.MaxRows
+	}
+	if out.Target <= 0 {
+		out.Target = DefaultCommitTarget
+	}
+	return out
+}
+
+// hardLimit 返回单提交单元的执行中耗时硬上界：目标 × 5/4（默认 40 ms → 50 ms，即验收线本身）。
+func (b CommitBudget) hardLimit() time.Duration {
+	return b.Target * 5 / 4
+}
+
 // pendingRow 是一条待写入/待删除的行：表下标 + 行数据（删除时只用 owner/key，
 // values 不参与；owner 用于提交后定位镜像分组）。
 type pendingRow struct {
@@ -37,7 +128,11 @@ type pendingRow struct {
 	row   rowData
 }
 
-// Sample 是一次 Apply 的耗时采样。
+// Sample 是**一个提交单元**（一次 IMMEDIATE 事务）的耗时采样。
+//
+// 口径（FR-498 切分改造）：一次 ApplyScoped 可能被切成多个提交单元，每个单元一条采样。
+// 口径改变的理由见 ApplyScoped 的注释：提交单元 = 原子单元 = 持写锁单元，验收线
+// 「单次持久化 ≤50 ms」约束的就是这个单元。
 type Sample struct {
 	StartedAt    time.Time
 	Duration     time.Duration
@@ -47,14 +142,27 @@ type Sample struct {
 	BytesWritten int64
 	// Planned 是规划行数的按表明细（见 Stats.Planned）。
 	Planned map[string]int
+	// CycleID 是本采样所属持久化周期的单调序号（一个周期可切成多个提交单元）。
+	CycleID uint64
+	// ChunkIndex / Chunks 是本单元在周期内的下标与周期内的单元总数。
+	ChunkIndex int
+	Chunks     int
 }
 
+// Rows 是本提交单元写入 + 删除的行数（「每事务行数有界」的直接观测量）。
+func (s Sample) Rows() int { return s.RowsWritten + s.RowsDeleted }
+
 // Latency 是采样环上的耗时分位（真机验收「单次持久化 ≤50ms」的读数口径）。
+//
+// P50/P95/Max 是**提交单元**口径；MaxRows 是环内单个提交单元的最大行数（每事务行数有界的
+// 观测量），Cycles 是环内覆盖的持久化周期数（用于判断「一周期被切成了几个单元」）。
 type Latency struct {
-	Count int
-	P50   time.Duration
-	P95   time.Duration
-	Max   time.Duration
+	Count   int
+	P50     time.Duration
+	P95     time.Duration
+	Max     time.Duration
+	MaxRows int
+	Cycles  int
 }
 
 // Stats 是一次 Apply 的写入统计。RowsWritten/BytesWritten 是「只写变更行」的直接观测量：
@@ -78,6 +186,16 @@ type Stats struct {
 	// Written/Deleted 按表给出明细（表名 → 行数），便于排障与断言。
 	Written map[string]int
 	Deleted map[string]int
+	// Chunks 是本周期切分出的提交单元数（≥1；无变更的空转周期也是 1）。
+	Chunks int
+	// MaxChunkRows 是本周期内单个提交单元的最大行数（写 + 删）。
+	MaxChunkRows int
+	// Statements 是本周期实际发出的 SQL 语句数（写 + 删）。
+	//
+	// 为什么要观测它：批量化的收益全在「一条语句处理几行」上——退回逐行时这个值会等于行数
+	// （实测：删除逐行 29.1 µs/行，批量后每 32 行一条语句）。行数看不出批量是否还在生效，
+	// 语句数一眼就能看出。删除批量化的回归断言正是用它（TestBatchDeleteRemovesExactlyTheMirroredRows）。
+	Statements int
 }
 
 // Store 是索引库的句柄。单写者单连接（spec §2.1）：所有写入都经 SetMaxOpenConns(1) 的连接，
@@ -99,6 +217,12 @@ type Store struct {
 
 	samples []Sample
 
+	// budget 是提交单元的配置预算（配置面下发，见 CommitBudget）；rowBudget 是自适应后的
+	// 当前行数预算（在 [MinRows, MaxRows] 之间随实测耗时收缩/扩张），cycle 是周期序号。
+	budget    CommitBudget
+	rowBudget int
+	cycle     uint64
+
 	// testCrashHook 仅供测试注入：在一次写入事务**提交之前**、写完全部变更行之后被调用，
 	// 用于在子进程中模拟进程异常中断（os.Exit 或 SIGKILL），验证未提交批次不会残留。
 	// 生产恒为 nil。
@@ -107,6 +231,12 @@ type Store struct {
 
 // Open 打开（必要时创建）索引库：建表、设置 WAL/单写者、并把现有行的指纹读入镜像。
 func Open(path string) (*Store, error) {
+	return OpenWithBudget(path, DefaultCommitBudget())
+}
+
+// OpenWithBudget 与 Open 相同，但由调用方指定提交单元预算（FR-498：配置键 log_index.persist.*）。
+// 非法值经 Normalized 收敛，绝不因为配置误写而让切分失效（退化成单事务写全部）。
+func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("stateindex: 库路径不能为空")
 	}
@@ -120,7 +250,8 @@ func Open(path string) (*Store, error) {
 	// 单写者单连接：连接池上限 1，避免同进程内出现并发写事务。
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	s := &Store{path: path, db: db, mirror: newMirror()}
+	budget = budget.Normalized()
+	s := &Store{path: path, db: db, mirror: newMirror(), budget: budget, rowBudget: budget.MaxRows}
 	ctx := context.Background()
 	// journal_mode=WAL + synchronous=NORMAL（spec §2.1）：提交即持久、崩溃可恢复；
 	// busy_timeout 用于同进程内只读连接短暂持锁时等待，而非立即报错。
@@ -136,6 +267,12 @@ func Open(path string) (*Store, error) {
 		// 默认 2 MiB 缓存会让迁移/对账期的写入不断回落到读页；128 MiB 在 Worker 的
 		// 内存预算内（真机 RSS 上限 2 GiB 量级），且实测对本仓库最大的表有稳定收益。
 		"PRAGMA cache_size=-131072",
+		// 关闭 SQLite 的自动 WAL checkpoint（默认 wal_autocheckpoint=1000 页）：
+		// 它会在**某个 COMMIT 内部**同步做「WAL 页回写主库 +（synchronous=NORMAL 下）随后的
+		// fsync」，于是那一次提交的耗时被维护成本污染（同一夹具实测：开启时单提交单元 Max 225 ms、
+		// 关闭时 56 ms）。归并本身不可省，但**时机可以自己定**——改由 checkpointPassiveIfNeeded
+		// 在每个持久化周期末尾显式执行（阈值与默认一致 ≈4 MiB），成本仍完整计入周期总耗时。
+		"PRAGMA wal_autocheckpoint=0",
 	} {
 		if _, err := db.ExecContext(ctx, pragma); err != nil {
 			_ = db.Close()
@@ -182,7 +319,8 @@ func OpenReadOnly(path string) (*Store, error) {
 		return nil, fmt.Errorf("stateindex: 只读打开索引库失败: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{path: path, db: db, readOnly: true, mirror: newMirror()}
+	s := &Store{path: path, db: db, readOnly: true, mirror: newMirror(), budget: DefaultCommitBudget()}
+	s.rowBudget = s.budget.MaxRows
 	if _, err := db.ExecContext(context.Background(), "PRAGMA query_only=ON"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("stateindex: 设置只读模式失败: %w", err)
@@ -249,6 +387,37 @@ func (s *Store) WALBytes() int64 {
 		return 0
 	}
 	return info.Size()
+}
+
+// checkpointPassiveIfNeeded 在持久化周期末尾按阈值做一次**被动** WAL 归并。
+//
+// 为什么必须由我们自己驱动（而不是留着 SQLite 的 wal_autocheckpoint）：
+// 自动 checkpoint 在某个 COMMIT 内部同步完成「WAL 页回写主库 + fsync」，那次提交因此被维护
+// 成本拖长——60 源档位 WAL 增长约 3.7 MB/s，阈值 4 MiB ⇒ 每秒命中一次，约 5% 的提交被拖长，
+// 直接把单提交单元 p95 顶到 58–64 ms。同夹具实测（关/开自动 checkpoint）：单提交单元
+// Max 56 ms → 225 ms、p95 47 ms → 49 ms。归并的工作量不可省（WAL 必须回收），但**时机**完全
+// 可以自己定：挪到周期末尾后，它不再延长任何一次提交，也不在持写锁期间做页拷贝；
+// 成本仍完整计入周期总耗时（Stats.Duration）——口径诚实，没有把成本藏起来。
+//
+// PASSIVE 语义：不等待读者、不阻塞写者，能拷多少拷多少（有读者持旧快照时可能拷不完，WAL 继续
+// 增长，下个周期再试）。失败只告警不阻断：数据始终在 WAL 里且可见，最坏情况是 WAL 偏大，
+// 绝不让「归并没做完」变成「采集出错」。
+func (s *Store) checkpointPassiveIfNeeded(ctx context.Context) {
+	if s == nil || s.db == nil || s.readOnly {
+		return
+	}
+	if s.WALBytes() < int64(walCheckpointPages)*sqlitePageSize {
+		return
+	}
+	var busy, logPages, movedPages int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &logPages, &movedPages); err != nil {
+		slog.Warn("索引 WAL 被动归并未执行（数据仍在 WAL 中且可见，下个周期再试）", "error", err)
+		return
+	}
+	if busy != 0 {
+		slog.Debug("索引 WAL 被动归并未拷完（有读者持旧快照），下个周期再试",
+			"log", logPages, "moved", movedPages)
+	}
 }
 
 // IsEmpty 报告索引是否不含任何数据行。迁移判据之一：空库 + 存在旧 JSON ⇒ 需要迁移。
@@ -472,6 +641,33 @@ func (s *Store) Apply(desired State) (Stats, error) {
 // owners 的语义是**并集**：`[]string{}`（非 nil 空集）表示「没有任何归属变更」，
 // 因此 scopedTables 中的所有行都不参与本轮；nil 才是全量。二者必须区分，
 // 否则「空变更批次」会被误当成全量重写。
+//
+// # 提交单元切分（FR-498 P0：单次持久化 ≤50 ms）
+//
+// 一次 ApplyScoped = 一个持久化周期，周期内**不再只开一个事务**：差异算好之后，
+// 变更行按「行数预算 + 耗时硬上界」切成若干**提交单元**，每个单元一个 IMMEDIATE 事务
+// （见 commitChunks 与 CommitBudget）。原因（实测）：跨源并发把最多 8 个源的批次合并成
+// 一次 ApplyScoped，单事务上万行，p95 从 66–73 ms（1.8k 行/s）涨到 348–366 ms（5.4k 行/s）；
+// 行成本近似线性（写 26.5 µs/行、删 29.1 µs/行），限住事务规模即可限住耗时的上界。
+//
+// 口径随之明确：验收线「单次持久化 ≤50 ms」约束的是**单个提交单元**——提交单元 = 原子单元
+// = 持写锁单元，三者在实现里是同一件事。周期总耗时仍由 Stats.Duration 给出（诚实读数，
+// 总量不变：该写的字节一个不少，只是不再攒在一个事务里）。采样环每条样本对应一个提交单元
+// （Sample.Cycles/ChunkIndex 可还原周期结构）。
+//
+// # 崩后语义（切分引入的唯一语义变化，逐条论证）
+//
+// 事务边界变多，崩后可留下「已提交的前缀」。回退幅度**不变**（仍 ≤ 一个周期：最坏情况是
+// 第一个单元都没提交），但中间态的合法性必须自证。为此写入阶段按 writeOrderRank 排序：
+// **水位表 position 永远最后**（父表 source 仍最先，外键不受影响）。于是任何前缀都满足
+//
+//	「WAL 行/缺口/投递批次已落库」 ⊇ 「position 里记的水位」
+//
+// 方向是安全的：position 偏旧 ⇒ 重启后 tailer 从更早的 durable/read 位置续读（
+// acquire/tailer.go 的 cursor resume），已落库的 WAL 行与重读的区间重叠 ⇒ 至多产生**重复**
+// 投递（与 FR-497「允许重复」同口径，且这正是崩后既有行为）；反方向（水位先进、WAL 行没进）
+// 才会丢事件，而 position 最后落库恰好排除了它。删除按表倒序（子表在前）不受影响，
+// 单元边界只会落在排序序列中间，故「删父表前先删子表」的顺序全局保持。
 func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -480,12 +676,6 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 	}
 	started := time.Now()
 	stats := Stats{Written: map[string]int{}, Deleted: map[string]int{}, Planned: map[string]int{}}
-	// finish 统一记录耗时与采样后返回（避免用 defer 改返回值副本的陷阱）。
-	finish := func() Stats {
-		stats.Duration = time.Since(started)
-		s.recordSample(started, stats)
-		return stats
-	}
 	ctx := context.Background()
 	scoped := owners != nil
 	owned := make(map[string]struct{}, len(owners))
@@ -559,19 +749,183 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 	}
 	if len(writes) == 0 && len(deletes) == 0 {
 		// 幂等空转：不开事务、不写任何字节（空闲轮询不得重写历史）。
-		return finish(), nil
+		stats.Duration = time.Since(started)
+		stats.Chunks = 1
+		s.cycle++
+		s.recordSample(Sample{
+			StartedAt: started, Duration: stats.Duration, CycleID: s.cycle, Chunks: 1,
+			RowsPlanned: stats.RowsPlanned, Planned: stats.Planned,
+		})
+		return stats, nil
 	}
-	// 删除按表倒序（子表在前），满足外键约束；写入按表正序（父表在前）。
+	// 删除按表倒序（子表在前），满足外键约束；写入按 writeOrderRank 排序（父表在前、
+	// 水位表 position 最后——为什么 position 必须最后见 ApplyScoped 的崩后语义论证）。
 	sort.SliceStable(deletes, func(i, j int) bool { return deletes[i].table > deletes[j].table })
+	sort.SliceStable(writes, func(i, j int) bool { return writeOrderRank[writes[i].table] < writeOrderRank[writes[j].table] })
 
+	s.cycle++
+	samples, err := s.commitChunks(ctx, writes, deletes, s.cycle, &stats)
+	if err != nil {
+		return Stats{}, err
+	}
+	// 采样逐单元记录，但周期结构（本单元是第几个、一个周期共几个）与周期口径的规划明细
+	// 只有全部跑完才知道，故在最后统一补上；打点侧据此还原「一周期被切成了几个单元」。
+	for index := range samples {
+		samples[index].ChunkIndex = index
+		samples[index].Chunks = len(samples)
+		samples[index].RowsPlanned = stats.RowsPlanned
+		samples[index].Planned = stats.Planned
+		s.recordSample(samples[index])
+	}
+	// WAL 归并在周期末尾显式执行：它**不属于任何提交单元**（因此不会拖长任何一次提交的耗时，
+	// 也不在持写锁期间做页拷贝），但成本完整计入下面这一行算出的周期总耗时。
+	s.checkpointPassiveIfNeeded(ctx)
+	stats.Duration = time.Since(started)
+	return stats, nil
+}
+
+// writeOrderRank 给出写入阶段的表序：父表在前（外键），**水位表 position 永远最后**。
+//
+// 为什么 position 必须最后（见 ApplyScoped 的崩后语义论证）：切分让「已提交的前缀」成为
+// 崩溃可留下的中间态，而 read/durable 水位一旦先落库、对应 WAL 行没落库，重启后 tailer 会从
+// 新水位续读，那些事件就再也读不回来（真丢数据）。把水位排到最后，任何前缀都只会让水位
+// 偏旧 ⇒ 至多重复投递（允许），不会丢。
+//
+// 其余表之间的次序只要求父表在子表之前：source 是全部七张表的父行，故它排在最前。
+var writeOrderRank = func() [tableCount]int {
+	order := []int{tblSource, tblGap, tblProjection, tblInstanceBinding, tblSourceAux, tblSourceWAL, tblDeliveryBatch, tblPosition}
+	var rank [tableCount]int
+	for index, table := range order {
+		rank[table] = index
+	}
+	return rank
+}()
+
+// commitChunks 把本次变更按「行数预算 + 耗时硬上界」切成若干提交单元，逐单元提交。
+//
+// 每单元：BEGIN IMMEDIATE → 写本单元的变更行（同表连续行合并成多值 UPSERT）→ 删本单元的
+// 陈旧行（同表连续行合并成多值 DELETE）→ 崩溃注入点 → COMMIT → 更新镜像 → 记录采样 →
+// 用实测行数/耗时反推下一单元的预算。
+//
+// 单元边界只影响「哪些行同事务」，不影响行序与行内容：整个序列是 writes（按 writeOrderRank）
+// 后接 deletes（按表倒序），单元是它的连续切片，因此外键顺序与「只写变更行」判据逐字不变。
+//
+// 返回本周期各单元的采样（**不**登记进采样环）：周期结构与周期口径的规划明细要等全部单元
+// 跑完才知道，由 ApplyScoped 统一补齐后登记。
+func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, cycle uint64, stats *Stats) ([]Sample, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
-		return Stats{}, fmt.Errorf("stateindex: 获取写连接失败: %w", err)
+		return nil, fmt.Errorf("stateindex: 获取写连接失败: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+
+	limit := s.budget.hardLimit()
+	wi, di := 0, 0
+	var samples []Sample
+	for wi < len(writes) || di < len(deletes) {
+		chunkStarted := time.Now()
+		writtenFrom, deletedFrom := wi, di
+		budget := s.rowBudget
+		if budget < 1 {
+			budget = 1
+		}
+		rows := 0
+		// 单元内的行数与字数据单独累计：采样是**单元**口径（打点按样本增量结账），
+		// 周期的合计在提交成功后并入 stats。
+		chunkStats := Stats{Written: map[string]int{}, Deleted: map[string]int{}}
+		// 整个单元（写 + 删 + 提交）都在同一个 IMMEDIATE 事务内：BEGIN 在写入之前，
+		// 否则语句会各自 autocommit——那正是「崩溃不丢」回归要抓的形态。
+		if err := s.runUnit(ctx, conn, func() error {
+			// 单元内先写后删：与不分单元时的顺序一致（写入建立/更新父行，删除随后收尾）。
+			//
+			// 每轮迭代只放「一条批量语句的行数」（batchUpsertRows/batchDeleteRows），因此耗时
+			// 硬上界的检查粒度就是一条语句（约 1 ms），而不是一整段同表行（那可能是几十毫秒）；
+			// rows 跨迭代累计，行数预算照常约束整个单元。rows > 0 的短路保证至少推进一行，
+			// 绝不出现「开了事务却什么都不做」。
+			for wi < len(writes) && rows < budget {
+				if limit > 0 && rows > 0 && time.Since(chunkStarted) >= limit {
+					break // 耗时硬上界：剩余行留给下一个提交单元
+				}
+				table := writes[wi].table
+				maxRun := budget - rows
+				if maxRun > batchUpsertRows {
+					maxRun = batchUpsertRows
+				}
+				end := wi
+				for end < len(writes) && writes[end].table == table && end-wi < maxRun {
+					end++
+				}
+				if err := s.applyTableWrites(ctx, conn, specs[table], writes[wi:end], &chunkStats); err != nil {
+					return err
+				}
+				rows += end - wi
+				wi = end
+			}
+			for di < len(deletes) && rows < budget {
+				if limit > 0 && rows > 0 && time.Since(chunkStarted) >= limit {
+					break
+				}
+				table := deletes[di].table
+				maxRun := budget - rows
+				if maxRun > batchDeleteRows {
+					maxRun = batchDeleteRows
+				}
+				end := di
+				for end < len(deletes) && deletes[end].table == table && end-di < maxRun {
+					end++
+				}
+				if err := s.applyTableDeletes(ctx, conn, specs[table], deletes[di:end], &chunkStats); err != nil {
+					return err
+				}
+				rows += end - di
+				di = end
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		// 提交成功后才更新镜像与周期合计：未提交的单元不碰镜像（镜像与库内容因此始终一致）。
+		for _, pending := range writes[writtenFrom:wi] {
+			s.setMirror(specs[pending.table].name, pending.row.owner, pending.row.key, pending.row.fp)
+		}
+		for _, pending := range deletes[deletedFrom:di] {
+			s.deleteMirror(specs[pending.table].name, pending.row.owner, pending.row.key)
+		}
+		stats.RowsWritten += chunkStats.RowsWritten
+		stats.RowsDeleted += chunkStats.RowsDeleted
+		stats.BytesWritten += chunkStats.BytesWritten
+		stats.Statements += chunkStats.Statements
+		for name, count := range chunkStats.Written {
+			stats.Written[name] += count
+		}
+		for name, count := range chunkStats.Deleted {
+			stats.Deleted[name] += count
+		}
+		stats.Chunks++
+		if rows > stats.MaxChunkRows {
+			stats.MaxChunkRows = rows
+		}
+		elapsed := time.Since(chunkStarted)
+		samples = append(samples, Sample{
+			StartedAt: chunkStarted, Duration: elapsed, CycleID: cycle, Chunks: 1,
+			RowsWritten: chunkStats.RowsWritten, RowsDeleted: chunkStats.RowsDeleted,
+			BytesWritten: chunkStats.BytesWritten,
+		})
+		s.adaptBudget(rows, elapsed)
+	}
+	return samples, nil
+}
+
+// runUnit 执行一个提交单元：BEGIN IMMEDIATE → body（写本单元的变更行、删本单元的陈旧行）
+// → 崩溃注入点 → COMMIT。body 返回错误或 COMMIT 失败即回滚本单元，已提交的单元不受影响
+// （回退幅度 ≤ 一个周期，见 ApplyScoped 的崩后语义论证）。
+//
+// BEGIN 必须在 body 之前：SQLite 默认 autocommit，若先写后 BEGIN，每条语句都会各自成事务，
+// 崩溃就会留下半截批次（这正是 TestStoreCrashDiscardsUncommittedBatch 要抓的形态）。
+func (s *Store) runUnit(ctx context.Context, conn *sql.Conn, body func() error) error {
 	// BEGIN IMMEDIATE：一开始就取写锁，避免 WAL 下锁升级失败造成 SQLITE_BUSY。
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return Stats{}, fmt.Errorf("stateindex: 开启事务失败: %w", err)
+		return fmt.Errorf("stateindex: 开启事务失败: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -579,38 +933,56 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 			_, _ = conn.ExecContext(ctx, "ROLLBACK")
 		}
 	}()
-
-	if err := s.applyWrites(ctx, conn, writes, &stats); err != nil {
-		return Stats{}, err
-	}
-	for _, pending := range deletes {
-		spec := specs[pending.table]
-		keyValues, err := decodeMirrorKey(spec, pending.row.key)
-		if err != nil {
-			return Stats{}, err
-		}
-		if _, err := conn.ExecContext(ctx, spec.deleteStmt, keyValues...); err != nil {
-			return Stats{}, fmt.Errorf("stateindex: 删除 %s 旧行失败: %w", spec.name, err)
-		}
-		stats.RowsDeleted++
-		stats.Deleted[spec.name]++
+	if err := body(); err != nil {
+		return err
 	}
 	if s.testCrashHook != nil {
 		// 提交前的注入点：模拟进程被强杀（未提交事务必须整体丢弃）。
 		s.testCrashHook()
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
-		return Stats{}, fmt.Errorf("stateindex: 提交事务失败: %w", err)
+		return fmt.Errorf("stateindex: 提交事务失败: %w", err)
 	}
 	committed = true
-	// 提交成功后才更新镜像：镜像与库内容因此始终一致。
-	for _, pending := range writes {
-		s.setMirror(specs[pending.table].name, pending.row.owner, pending.row.key, pending.row.fp)
+	return nil
+}
+
+// adaptBudget 用刚完成的提交单元的实测值反推下一个单元的行数预算（比例控制 + 单步限幅）。
+//
+// 规则（只在不达标或确实富余时动作，落在目标带内保持不动，避免抖动）：
+//   - 实测耗时 > 目标：按「行数 × 目标 ÷ 实测」收缩（最少减半，下限 MinRows）；
+//   - 实测耗时 < 目标/2 且本单元用满了预算：温和扩张 25%（上限 MaxRows）；
+//   - 其余（含未用满预算的短单元）：不动——短单元的行数/耗时比被每单元的固定开销污染，
+//     用它推预算会把「小周期」误读成「每行很慢」。
+func (s *Store) adaptBudget(rows int, elapsed time.Duration) {
+	target := s.budget.Target
+	if rows <= 0 || elapsed <= 0 || target <= 0 {
+		return
 	}
-	for _, pending := range deletes {
-		s.deleteMirror(specs[pending.table].name, pending.row.owner, pending.row.key)
+	next := s.rowBudget
+	switch {
+	case elapsed > target:
+		next = int(float64(rows) * float64(target) / float64(elapsed))
+		if next > s.rowBudget/2 {
+			next = s.rowBudget / 2
+		}
+	case elapsed < target/2 && rows >= s.rowBudget:
+		next = s.rowBudget + s.rowBudget/4
 	}
-	return finish(), nil
+	if next < s.budget.MinRows {
+		next = s.budget.MinRows
+	}
+	if next > s.budget.MaxRows {
+		next = s.budget.MaxRows
+	}
+	s.rowBudget = next
+}
+
+// CommitBudget 返回本库当前的提交单元配置预算（观测用；自适应后的实时预算见 Latency）。
+func (s *Store) CommitBudget() CommitBudget {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.budget
 }
 
 // setMirror 更新镜像中的一行指纹。
@@ -676,27 +1048,76 @@ func scopeState(st State, owned map[string]struct{}) State {
 	return out
 }
 
-// applyWrites 在事务内写入全部变更行。同一张表连续的行尽量合并成多值 UPSERT —— 逐行
-// ExecContext 的语句解析/规划开销是迁移 74 万行时的主导成本（实测 43.0s → 14.8s）。
-// 合并只改变「一条语句写几行」，不改变写哪些行，也不改变任何行的取值。
-func (s *Store) applyWrites(ctx context.Context, conn *sql.Conn, writes []pendingRow, stats *Stats) error {
-	// writes 已按表下标分组（specs 顺序），这里按表切片后逐表写出。
-	for start := 0; start < len(writes); {
-		table := writes[start].table
-		end := start
-		for end < len(writes) && writes[end].table == table {
-			end++
+// applyTableDeletes 删除一张表的一段陈旧行：同表连续的主键合并成一条多值 DELETE。
+//
+// 为什么要批量（FR-498 实测）：原实现是「逐行一条 DELETE + 一次 ExecContext」，真机删除单位
+// 成本 29.1 µs/行，而删除量在稳态与写入量同量级（60 源实测删除/写入 ≈ 0.97）——每周期上千次
+// 语句解析/规划全花在这里。合并只改变「一条语句删几行」，不改变删哪些行。
+//
+// 它仍然完全由镜像差异驱动（deletes 来自 ApplyScoped 的比对结果），不新增任何绕过镜像的
+// 删除路径：镜像里的行在、期望状态里没有的行，才进入这个函数。
+func (s *Store) applyTableDeletes(ctx context.Context, conn *sql.Conn, spec tableSpec, rows []pendingRow, stats *Stats) error {
+	for start := 0; start < len(rows); {
+		size := batchDeleteRows
+		if remaining := len(rows) - start; size > remaining {
+			size = remaining
 		}
-		spec := specs[table]
-		if err := s.applyTableWrites(ctx, conn, spec, writes[start:end], stats); err != nil {
+		statement, args, err := buildBatchDelete(spec, rows[start:start+size])
+		if err != nil {
 			return err
 		}
-		start = end
+		if _, err := conn.ExecContext(ctx, statement, args...); err != nil {
+			return fmt.Errorf("stateindex: 批量删除 %s 旧行失败: %w", spec.name, err)
+		}
+		stats.Statements++
+		stats.RowsDeleted += size
+		stats.Deleted[spec.name] += size
+		start += size
 	}
 	return nil
 }
 
+// buildBatchDelete 把若干行合并成一条多值 DELETE，返回语句与实参。
+//
+// 形态按主键列数二选一（两种都被 SQLite 支持，已由 TestBuildBatchDeleteRunsOnSQLite 实跑守住）：
+//
+//	单列主键：DELETE FROM t WHERE k IN (?, ?, ...)
+//	多列主键：DELETE FROM t WHERE (k1, k2, ...) IN (VALUES (?, ?, ...), (?, ?, ...))
+//
+// 实参个数 = 行数 × 主键列数（每语句最多 32×5 = 160 个），远离 SQLite 的参数上限。
+func buildBatchDelete(spec tableSpec, rows []pendingRow) (string, []any, error) {
+	if len(spec.keyCols) == 0 {
+		return "", nil, fmt.Errorf("stateindex: %s 没有主键列，无法批量删除", spec.name)
+	}
+	unit := "(" + strings.TrimSuffix(strings.Repeat("?, ", len(spec.keyCols)), ", ") + ")"
+	groups := make([]string, 0, len(rows))
+	args := make([]any, 0, len(rows)*len(spec.keyCols))
+	for _, pending := range rows {
+		keyValues, err := decodeMirrorKey(spec, pending.row.key)
+		if err != nil {
+			return "", nil, err
+		}
+		if len(keyValues) != len(spec.keyCols) {
+			// 主键列数与表定义必须逐列对齐，否则批量语句会把值串位（静默删错行）。
+			return "", nil, fmt.Errorf("stateindex: %s 的主键有 %d 列，表定义 %d 列",
+				spec.name, len(keyValues), len(spec.keyCols))
+		}
+		groups = append(groups, unit)
+		args = append(args, keyValues...)
+	}
+	if len(spec.keyCols) == 1 {
+		return fmt.Sprintf("DELETE FROM %s WHERE %s IN (%s)",
+			spec.name, spec.keyCols[0], strings.Join(groups, ", ")), args, nil
+	}
+	return fmt.Sprintf("DELETE FROM %s WHERE (%s) IN (VALUES %s)",
+		spec.name, strings.Join(spec.keyCols, ", "), strings.Join(groups, ", ")), args, nil
+}
+
 // applyTableWrites 写一张表的一段变更行：支持批量的表按 batchUpsertRows 行合并，其余逐行写。
+//
+// 为什么要批量：逐行 ExecContext 每一行都要重新解析并规划一次语句；迁移要写 74 万行时
+// 这部分（而非磁盘）是主导成本——生产 307MB 副本实测逐行 UPSERT 43.0s、每语句 32 行 14.8s。
+// 合并只改变「一条语句写几行」，不改变写哪些行，也不改变任何行的取值。
 func (s *Store) applyTableWrites(ctx context.Context, conn *sql.Conn, spec tableSpec, rows []pendingRow, stats *Stats) error {
 	batchSize := 0
 	if spec.upsertBatch != "" {
@@ -713,6 +1134,7 @@ func (s *Store) applyTableWrites(ctx context.Context, conn *sql.Conn, spec table
 			if _, err := conn.ExecContext(ctx, spec.upsert, values...); err != nil {
 				return fmt.Errorf("stateindex: 写入 %s 失败: %w", spec.name, err)
 			}
+			stats.Statements++
 			stats.RowsWritten++
 			stats.Written[spec.name]++
 			stats.BytesWritten += valuesSize(values)
@@ -729,6 +1151,7 @@ func (s *Store) applyTableWrites(ctx context.Context, conn *sql.Conn, spec table
 		if _, err := conn.ExecContext(ctx, statement, args...); err != nil {
 			return fmt.Errorf("stateindex: 批量写入 %s 失败: %w", spec.name, err)
 		}
+		stats.Statements++
 		stats.RowsWritten += size
 		stats.Written[spec.name] += size
 		stats.BytesWritten += written
@@ -947,27 +1370,23 @@ func appendRow(st *State, spec tableSpec, values []any) error {
 	return nil
 }
 
-// recordSample 记录一次耗时采样。
-func (s *Store) recordSample(started time.Time, stats Stats) {
-	s.samples = append(s.samples, Sample{
-		StartedAt: started, Duration: stats.Duration,
-		RowsWritten: stats.RowsWritten, RowsDeleted: stats.RowsDeleted,
-		RowsPlanned: stats.RowsPlanned, BytesWritten: stats.BytesWritten,
-		Planned: stats.Planned,
-	})
+// recordSample 记录一个提交单元的采样。
+func (s *Store) recordSample(sample Sample) {
+	s.samples = append(s.samples, sample)
 	if len(s.samples) > sampleRing {
 		s.samples = append([]Sample(nil), s.samples[len(s.samples)-sampleRing:]...)
 	}
 }
 
 // Samples 返回采样环副本（真机验证据此打印 P50/P95，见 spec §3.3）。
+// 每条样本对应一个**提交单元**（一个周期可切成多个），CycleID + ChunkIndex 可还原周期结构。
 func (s *Store) Samples() []Sample {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Sample(nil), s.samples...)
 }
 
-// Latency 返回采样环上的 P50/P95/Max 耗时。
+// Latency 返回采样环上的 P50/P95/Max 耗时（提交单元口径）与单单元最大行数。
 func (s *Store) Latency() Latency {
 	s.mu.Lock()
 	samples := append([]Sample(nil), s.samples...)
@@ -977,19 +1396,25 @@ func (s *Store) Latency() Latency {
 	}
 	durations := make([]time.Duration, 0, len(samples))
 	var max time.Duration
+	cycles := make(map[uint64]struct{}, len(samples))
+	result := Latency{}
 	for _, sample := range samples {
 		durations = append(durations, sample.Duration)
 		if sample.Duration > max {
 			max = sample.Duration
 		}
+		if rows := sample.Rows(); rows > result.MaxRows {
+			result.MaxRows = rows
+		}
+		cycles[sample.CycleID] = struct{}{}
 	}
 	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-	return Latency{
-		Count: len(samples),
-		P50:   percentile(durations, 0.50),
-		P95:   percentile(durations, 0.95),
-		Max:   max,
-	}
+	result.Count = len(samples)
+	result.Cycles = len(cycles)
+	result.P50 = percentile(durations, 0.50)
+	result.P95 = percentile(durations, 0.95)
+	result.Max = max
+	return result
 }
 
 func percentile(sorted []time.Duration, fraction float64) time.Duration {

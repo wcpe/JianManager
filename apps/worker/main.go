@@ -686,6 +686,11 @@ func runWorker() {
 		// 启动增量对账（FR-497）：配置键 log_reconcile.*，非法/越界值经 ReconcileConfig()
 		// 收敛为 ingest 的归一化默认（默认启用）。
 		reconcileCfg := cfg.LogReconcile.ReconcileConfig()
+		// 采集索引（FR-496）：历史投递批次裁剪（log_index.batch_prune.*）与持久化提交单元
+		// 预算（log_index.persist.*）分别经 LogIndexConfig 的映射收敛为归一化默认（裁剪默认
+		// 开启；切分默认每事务 1024 行、目标 40ms）。
+		indexPruneCfg := cfg.LogIndex.IndexPrune()
+		indexCommitCfg := cfg.LogIndex.CommitBudget()
 		newIngest := func() (*ingest.Manager, error) {
 			return ingest.New(ingest.Options{
 				Root: root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
@@ -696,6 +701,10 @@ func runWorker() {
 				}),
 				// 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天。
 				Reconcile: &reconcileCfg,
+				// 索引有界化（FR-496 §2.4）：历史投递批次按 reclaim 水位裁剪，默认开启。
+				IndexPrune: &indexPruneCfg,
+				// 索引持久化切分（FR-498 P0）：按行数 + 耗时双上界切成多个提交单元。
+				IndexCommit: &indexCommitCfg,
 				RecoveryHold: func(source ingest.SourceConfig, _ string) (bool, string) {
 					if rehydrateManager == nil {
 						return false, ""
@@ -1203,9 +1212,10 @@ func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) 
 // 每次只累计 StartedAt 严格晚于游标的样本。不管环满没满、有没有挤出旧样本，累计到的都恰好是
 // 「两次读数之间新增的那几次持久化」——这才叫窗口增量。
 //
-// 前提：单个窗口内新增的样本数少于环容量（512，见 stateindex.sampleRing）。否则最早的那几次
+// 前提：单个窗口内新增的样本数少于环容量（4096，见 stateindex.sampleRing）。否则最早的那几次
 // 新增样本已被挤出环外，读数只能是下界。生产上采集循环节拍 250 ms、采样节拍 1 分钟，单窗口最多
-// 约 240 次持久化，恒小于环容量，不会触发该前提。
+// 约 240 次持久化周期；切分（FR-498 P0）后一次周期会产生多个**提交单元**采样，60 源 × 60 行/s
+// 实测约 2 单元/周期 ⇒ 单窗口约 400 个样本，仍远小于 4096（环容量正是为此从 512 提到 4096）。
 type logIndexPersistWindow struct {
 	// cursor 是上一次读数时环内最新样本的 StartedAt。采样时间戳由 recordSample 在每次 Apply
 	// 开始时用 time.Now() 记录（带单调读数），同一进程内严格递增，可当环内样本的身份游标用。
@@ -1244,13 +1254,20 @@ func (w *logIndexPersistWindow) advance(samples []stateindex.Sample) logIndexPer
 
 // logIndexPersistSample 把一个窗口的读数落成一条采样日志：分位取整环（口径不变），三个 Delta
 // 取本窗口增量（见 logIndexPersistWindow）。
+//
+// 口径（FR-498 切分改造）：P50/P95/Max 是**单个提交单元**（一次 IMMEDIATE 事务）的耗时——
+// 验收线「单次持久化 ≤50ms」约束的就是它，一个周期按行数 + 耗时双上界切成若干个单元
+// （见 stateindex.CommitBudget）。`cycles` 是环内周期数、`samples` 是单元数，两者之比即
+// 「一周期切了几个单元」；`maxRows` 是环内单个单元的最大写+删行数（每事务行数有界的直读值）。
 func logIndexPersistSample(window *logIndexPersistWindow, latency stateindex.Latency, samples []stateindex.Sample) {
 	delta := window.advance(samples)
 	slog.Info("采集索引持久化耗时采样",
 		"samples", latency.Count,
+		"cycles", latency.Cycles,
 		"p50ms", latency.P50.Milliseconds(),
 		"p95ms", latency.P95.Milliseconds(),
 		"maxMs", latency.Max.Milliseconds(),
+		"maxRows", latency.MaxRows,
 		"rowsWrittenDelta", delta.RowsWritten,
 		"rowsDeletedDelta", delta.RowsDeleted,
 		"bytesWrittenDelta", delta.BytesWritten,

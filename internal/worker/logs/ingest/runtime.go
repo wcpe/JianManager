@@ -150,6 +150,10 @@ type Manager struct {
 	// （ledger.SetDeliveryBatchPrune）。裁剪发生在账本写路径内，因此配置必须落在账本上，
 	// 而不是落库前再过滤一遍——后者只能让库变小，内存仍会随总量线性增长。
 	indexPrune ledger.DeliveryBatchPruneConfig
+	// indexCommit 是索引持久化「提交单元预算」的生效配置（已归一化）：单次持久化按
+	// 行数 + 耗时双上界切成多个提交单元（FR-498 P0，见 stateindex.CommitBudget）。
+	// 打开索引库时下发（stateindex.OpenWithBudget）。
+	indexCommit stateindex.CommitBudget
 	// reconcileReports 保留最近一次启动对账的逐源结论（只读观测面）。
 	reconcileReports []ReconcileReport
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
@@ -229,6 +233,10 @@ type Options struct {
 	// spec §6）；nil 表示用默认（ledger.DefaultDeliveryBatchPruneConfig：**开启**、严格按
 	// reclaim 水位）。判据与证明见 ledger/delivery_batch_prune.go。
 	IndexPrune *ledger.DeliveryBatchPruneConfig
+	// IndexCommit 是索引持久化「提交单元预算」的配置面（FR-498 P0，键 log_index.persist.*，
+	// spec §3.4）；nil 表示用默认（stateindex.DefaultCommitBudget：每事务 1024 行、目标 40ms、
+	// 下限 64 行）。单次持久化按行数 + 耗时双上界切成多个提交单元，见 stateindex.CommitBudget。
+	IndexCommit *stateindex.CommitBudget
 }
 
 type CutoverReadiness struct {
@@ -481,6 +489,7 @@ func New(opts Options) (*Manager, error) {
 		recoveryHold:        opts.RecoveryHold,
 		reconcile:           reconcileConfigOf(opts.Reconcile),
 		indexPrune:          indexPruneConfigOf(opts.IndexPrune),
+		indexCommit:         indexCommitBudgetOf(opts.IndexCommit),
 	}
 	if m.verificationTimeout <= 0 {
 		// 5 分钟（原 30 秒）。依据 2026-09-28 生产实测：VL 的 /insert/jsonline 是「接收即
@@ -2803,7 +2812,7 @@ func (m *Manager) persistSnapshot() error {
 	store := m.index
 	if store == nil {
 		// 直接构造 Manager 的测试路径：按需打开索引（不触发迁移）。
-		opened, err := stateindex.Open(m.indexPath())
+		opened, err := stateindex.OpenWithBudget(m.indexPath(), m.indexCommit)
 		if err != nil {
 			m.mu.Unlock()
 			return fmt.Errorf("ingest: 打开采集索引失败: %w", err)

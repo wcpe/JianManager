@@ -35,7 +35,7 @@ func (m *Manager) indexPath() string {
 // 任何失败都返回带「拒绝启动采集」字样的错误——由 New() 向上传递，调用方（apps/worker）
 // 现网路径会重试后显式 ERROR，绝不静默降级为「不记账继续采集」。
 func (m *Manager) openIndex() error {
-	store, err := stateindex.Open(m.indexPath())
+	store, err := stateindex.OpenWithBudget(m.indexPath(), m.indexCommit)
 	if err != nil {
 		return fmt.Errorf("ingest: 打开采集索引失败（拒绝启动采集合规）: %w", err)
 	}
@@ -693,6 +693,15 @@ func indexPruneConfigOf(configured *ledger.DeliveryBatchPruneConfig) ledger.Deli
 	return configured.Normalized()
 }
 
+// indexCommitBudgetOf 归一化「提交单元预算」：nil 表示用默认（每事务 1024 行、目标 40ms）。
+// 非法值（非正行数/耗时）在 stateindex.Normalized 里回退默认——配置误写不得让切分失效。
+func indexCommitBudgetOf(configured *stateindex.CommitBudget) stateindex.CommitBudget {
+	if configured == nil {
+		return stateindex.DefaultCommitBudget()
+	}
+	return configured.Normalized()
+}
+
 // PersistSamples 返回最近一次持久化的采样（供测试与真机观测「空闲不重写历史」与 P50/P95）。
 func (m *Manager) PersistSamples() []stateindex.Sample {
 	if m == nil || m.index == nil {
@@ -711,11 +720,15 @@ func (m *Manager) PersistLatency() stateindex.Latency {
 	return m.index.Latency()
 }
 
-// PersistNow 立即执行一次持久化并把本次写入统计返回给调用方。
+// PersistNow 立即执行一次持久化并把本次周期的写入统计返回给调用方。
 //
 // 用途：真机/演练取「单次持久化」的现场读数——验收判据是「60 源下单次持久化 ≤50ms」，
 // 需要能主动驱动一次并直接读到本次的行数/字节/耗时，而不是只能等轮询恰好触发。
 // 语义与轮询路径完全一致（同一 persist），因此读到的就是生产口径。
+//
+// 口径：返回的是**整个周期**的合计（Chunks 是周期内切出的提交单元数，MaxChunkRows 是其中
+// 最大单元的写+删行数）；验收线约束的**单提交单元**耗时请读 PersistLatency().P95/Max——
+// 一次周期可能被切成多个单元（FR-498 切分），二者不可混用。
 func (m *Manager) PersistNow() (stateindex.Stats, error) {
 	if m == nil {
 		return stateindex.Stats{}, nil
@@ -733,11 +746,36 @@ func (m *Manager) PersistNow() (stateindex.Stats, error) {
 	if len(samples) == 0 {
 		return stateindex.Stats{}, nil
 	}
-	last := samples[len(samples)-1]
-	return stateindex.Stats{
-		RowsWritten: last.RowsWritten, RowsDeleted: last.RowsDeleted,
-		RowsPlanned: last.RowsPlanned, BytesWritten: last.BytesWritten, Duration: last.Duration,
-	}, nil
+	// 采样环尾部连续同 CycleID 的样本即本次周期切出的全部提交单元，按单元汇总成周期合计。
+	lastCycle := samples[len(samples)-1].CycleID
+	stats := stateindex.Stats{
+		Written: map[string]int{}, Deleted: map[string]int{}, Planned: map[string]int{},
+	}
+	var started, ended time.Time
+	for _, sample := range samples {
+		if sample.CycleID != lastCycle {
+			continue
+		}
+		stats.RowsWritten += sample.RowsWritten
+		stats.RowsDeleted += sample.RowsDeleted
+		stats.BytesWritten += sample.BytesWritten
+		stats.RowsPlanned += sample.RowsPlanned
+		for name, count := range sample.Planned {
+			stats.Planned[name] += count
+		}
+		stats.Chunks++
+		if rows := sample.Rows(); rows > stats.MaxChunkRows {
+			stats.MaxChunkRows = rows
+		}
+		if started.IsZero() || sample.StartedAt.Before(started) {
+			started = sample.StartedAt
+		}
+		if finish := sample.StartedAt.Add(sample.Duration); finish.After(ended) {
+			ended = finish
+		}
+	}
+	stats.Duration = ended.Sub(started)
+	return stats, nil
 }
 
 // ExportIndexJSON 只读导出索引内容为旧 ingest.state.json 同等结构的 JSON（排障与回滚参考）。
