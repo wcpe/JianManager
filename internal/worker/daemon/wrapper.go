@@ -175,6 +175,21 @@ const (
 )
 
 func (w *Wrapper) run(ready chan<- struct{}) error {
+	// 先把自身迁出 Worker 的 systemd 单元 cgroup（见 cgroup.go：2026-10-01「每次重启拖倒全部实例」
+	// 事故的根因是 KillMode=control-group 对整个单元 cgroup 发 SIGTERM，setsid 逃不出 cgroup）。
+	//
+	// 位置是硬约束：必须在 startJava 之前——子进程 fork 时继承父进程当时的 cgroup，先迁后生才能让
+	// java（及 sh -c 包裹）一并落在隔离目录内，一起免疫单元级 SIGTERM。迁移失败只告警、保持原状。
+	if dir, err := EscapeWorkerUnitCgroup(w.cfg.InstanceUUID); err != nil {
+		slog.Warn("daemon 子树迁出 Worker 单元 cgroup 失败，保持原有 cgroup（重启系统单元时会被连坐）",
+			"instanceId", w.cfg.InstanceUUID, "error", err)
+	} else if dir != "" {
+		slog.Info("daemon 子树已迁出 Worker 单元 cgroup（重启单元不再连坐）",
+			"instanceId", w.cfg.InstanceUUID, "cgroup", dir)
+		// 正常退出时回收自己的隔离目录；被强杀（kill -9）时留空壳，由 Worker 启动清扫兜底。
+		defer RemoveDaemonCgroupDir(w.cfg.InstanceUUID)
+	}
+
 	ln, err := Listen(w.addr)
 	if err != nil {
 		return fmt.Errorf("wrapper 监听失败 %s: %w", w.addr, err)

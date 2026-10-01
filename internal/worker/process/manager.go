@@ -241,6 +241,10 @@ func (m *Manager) clearForeignRuntime(uuid string) {
 
 // NewManager 创建进程管理器。
 func NewManager(serversDir string) *Manager {
+	// 启动清扫：回收被强杀（kill -9）的 wrapper 留下的**空**隔离 cgroup 目录
+	// （见 internal/worker/daemon/cgroup.go「daemon 子树脱离 Worker 单元 cgroup」）。
+	// 只删空目录、失败静默，对非 systemd 环境与测试环境均为无副作用的空操作。
+	daemon.SweepEmptyDaemonCgroupDirs()
 	return &Manager{
 		instances:  make(map[string]*Instance),
 		serversDir: serversDir,
@@ -1242,6 +1246,10 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 			continue
 		}
 		strategy.SetWrapperPID(rec.WrapperPID)
+		// 接管侧的 cgroup 隔离（见 daemon/cgroup.go）：已运行的 wrapper 由**旧二进制** spawn，仍在 Worker
+		// 单元 cgroup 内。若不在此刻迁移，本次部署后的第一个 `systemctl restart` 依旧会连坐杀掉全部实例
+		// ——那正是本缺陷的验收场景本身。迁移只改 cgroup 归属、不发任何信号，失败仅告警、保持原状。
+		m.isolateAdoptedWrapper(instanceUUID, rec)
 
 		// FR-459 终验 Low #3：若 Worker 重启前该实例已熔断，从状态文件恢复熔断态——否则 Worker
 		// 会「忘掉」熔断（以为可自动重启）而 wrapper 粘性 autoRestartOff 仍在拒绝重启，形成反向 desync。
@@ -1267,4 +1275,30 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 		slog.Info("已恢复 daemon 实例", "instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "circuitRestored", restored)
 	}
 	return recovered, nil
+}
+
+// isolateAdoptedWrapper 把接管到的 wrapper 及其 java 子树迁出 Worker 的 systemd 单元 cgroup
+// （机制与理由见 internal/worker/daemon/cgroup.go）。
+//
+// 为什么接管路径必须做这件事：迁移前 spawn 的 wrapper 一律留在 Worker 单元 cgroup 内，systemd
+// 重启该单元时按 KillMode=control-group 向其 cgroup 内全部进程发 SIGTERM，wrapper 与 java 一起毙命。
+// 新代码 spawn 的 wrapper 会自迁（wrapper.run 开头），但**已在运行**的那些只能由接管方迁移——否则
+// 「部署新版本 → 重启 Worker」这一步（本缺陷的验收场景）依旧全灭。
+//
+// 语义边界：只改 cgroup 归属，不发任何信号、不改 PID 记录与 socket；失败仅告警保持原状，
+// 因此与 FR-455① 接管、FR-497 自动收养、orphan_scan 孤儿治理都不冲突。
+func (m *Manager) isolateAdoptedWrapper(instanceUUID string, rec *daemon.PIDRecord) {
+	if rec.WrapperPID <= 0 {
+		return
+	}
+	moved, err := daemon.MigratePIDTreeToCgroup(rec.WrapperPID, instanceUUID)
+	if err != nil {
+		slog.Warn("接管实例的 daemon 子树迁出 Worker 单元 cgroup 失败，保持原状",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "error", err)
+		return
+	}
+	if moved > 0 {
+		slog.Info("已把接管的 daemon 子树迁出 Worker 单元 cgroup（单元重启不再连坐）",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "moved", moved)
+	}
 }

@@ -137,3 +137,15 @@
 **Worker→CP 上报通道**：`ReportOrphanAudit`（`proto/worker.proto`；CP 实现 `internal/controlplane/grpc/orphan_audit.go`；Worker 侧 `internal/worker/orphanaudit`）——与 `ReportCrashSnapshot` 同源的出站信道 + 节点身份鉴权，落 `RecordResultSafe`。
 
 **主要装配入口**：`Manager.SetOrphanAuditHandler`（Worker 审计回调）、`ControlPlaneHandler.SetOrphanAuditRecorder`、`ControlPlaneHandler.SetReconcileDispatcher`、`TunnelRegistry.SetOnConnected` / `SetOnFirstConnected`。
+
+## 7. Worker 关闭路径契约与 cgroup 边界（FR-500）
+
+> 完整设计、证据与验收见 `docs/specs/daemon-cgroup-isolation/spec.md`（2026-10-01 生产事故根因修复）。
+
+**契约（三条，正式表述）**：
+
+1. **只断连**：Worker 因信号 / 重启进入关闭序列时，对 daemon 实例**只关闭与 wrapper 的连接**（`daemonStrategy.Close()`），不下发停止帧、不发信号、不杀进程树；游离 wrapper 与其 java 子树必须存活，并可被下一次启动接管（`RecoverDaemonInstances`）。
+2. **显式例外**：用户显式「停止 / 删除 / 重启实例」照旧终止进程（停止=控制帧优雅关服 + 超时强杀兜底；删除=按 PID/进程组强杀两棵树）。二者正交，本契约不得改变其语义。
+3. **cgroup 边界**：daemon 子树必须位于 Worker 的 **systemd 单元 cgroup 之外**（`…/app.slice/jianmanager-daemons/<实例 UUID>`）。理由：`setsid` 只逃脱**进程组**，而 `systemctl restart` 按 `KillMode=control-group`（默认，`KillSignal=15`）对该单元 cgroup 内**全部**进程发 SIGTERM——2026-10-01 的 11 台实例即由此全灭（Worker 关闭路径当时已正确只断连，逐行日志见上引 spec §1）。
+
+**读者须知（易误判点）**：`KillMode=process`（`scripts/install-worker.sh:333`）只是**部署期**对策，单元漂移即失效；本契约要求运行期自身成立（wrapper 启动时自迁 + 接管已运行 wrapper 时迁移），不依赖 unit 配置。
