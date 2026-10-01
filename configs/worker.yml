@@ -140,9 +140,19 @@ log:
 #
 # 保留期写法支持 3d/7d/30d/90d（Go 原生语法不认 d/w，这里已补齐）。未列出的级别按
 # 推荐值补齐（漏配一档不会退化成永久保留）。级别无法归类的日志按最保守处理：永久保留。
+# 热 90 天 / 冷 730 天是**默认口径**（2026-10-02 定稿）：分级档位（debug 3d/info 7d/warn 30d/error 90d）
+# 表达的是「**在热层停留多久**」，冷层**所有级别统一**（730d）——即「热的几个月、冷的两年」。
+# 触发口径 = 年龄 + 磁盘水位**取先到**（trigger.disk_percent）；搬运失败 = 保留原物 + 告警。
+#
+# ⚠ log_vl.retention_period 必须**不短于** hot_retention：VL 的 retention 到期是**直接删**，
+# 它绕过「删前归档」——若热层实例 retention 比 hot_retention 短，VL 会在搬运之前先删掉数据。
 # log_retention:
 #   enabled: true
-#   hot_retention: 30d                 # 热层窗口：超期即搬运到冷层（默认 30d，与 -retentionPeriod 对齐）
+#   hot_retention: 90d                 # 热层窗口：超期即搬运到冷层（默认 90d）
+#   cold_retention: 730d               # 冷层保留期（所有级别统一；由 COLD 实例的 -retentionPeriod 执行）
+#   trigger:
+#     disk_percent: 0                  # >0 时启用磁盘水位提前搬运（与 log_capacity 同口径读数）
+#     min_age: 7d                      # 磁盘触发的最小分区年龄（盘再满也不搬正在写的日分区）
 #   discard: false                     # 意图闸：显式允许直接删（默认 false；即使打开，能搬仍优先搬）
 #   by_level:                          # 推荐档位（D1）
 #     debug: 3d

@@ -462,7 +462,13 @@ type LogVLConfig struct {
 	Password        string `mapstructure:"password"`
 	DataRoot        string `mapstructure:"data_root"`
 	RetentionPeriod string `mapstructure:"retention_period"`
-	HotCacheBytes   int64  `mapstructure:"hot_cache_bytes"`
+	// ColdRetentionPeriod 冷层（COLD namespace）的 VL runtime retention。
+	//
+	// 为什么要独立于 RetentionPeriod：VL 的 retention 到期是**直接删**，绕过平台侧
+	// 「删前归档」。热层 retention 必须不短于保留策略的热层窗口（默认同为 90d，留出搬运余量），
+	// 冷层则是「冷留存多久」的唯一执行者（用户口径：冷 730 天，所有级别统一）。
+	ColdRetentionPeriod string `mapstructure:"cold_retention_period"`
+	HotCacheBytes       int64  `mapstructure:"hot_cache_bytes"`
 	// MemoryLimitBytes 受管 VL 进程 Go 软内存上限（GOMEMLIMIT，字节）；0 用默认 512MiB，负值不注入。
 	MemoryLimitBytes int64 `mapstructure:"memory_limit_bytes"`
 	HotPort          int   `mapstructure:"hot_port"`
@@ -624,9 +630,25 @@ type LogRetentionConfig struct {
 	// 默认动作是把日分区搬运到冷层；本项的作用是解除「没有归档路径时的阻塞」，
 	// 即使显式打开，只要冷层路径可用，动作**仍然**是搬运（见 retention.PlanArchive 的次序）。
 	Discard bool `mapstructure:"discard"`
-	// HotRetention 热层保留窗口（超期即搬运到冷层）。0 = 用默认 30d（与受管 VL 的
-	// -retentionPeriod 对齐，热层保持现状、长留靠冷层）。
-	HotRetention time.Duration `mapstructure:"hot_retention"`
+	// HotRetention 热层保留窗口（超期即搬运到冷层）；空 = 用默认 90d。
+	//
+	// 为什么是**字符串**而不是 time.Duration：Go 的 time.ParseDuration 不认 `d`/`w`，
+	// 而保留期天然按天写（用户口径就是「热 90 天 / 冷 730 天」）。同 by_level 的处理方式，
+	// 统一经 retention.ParseTTL 解析。若用 time.Duration，viper 解码 `90d` 会直接失败——
+	// 那会让**整个 Load 失败**，而不只是这一个键无效（曾经真的发生过）。
+	HotRetention string `mapstructure:"hot_retention"`
+	// ColdRetention 冷层保留期（所有级别统一）；空 = 用默认 730d。
+	ColdRetention string `mapstructure:"cold_retention"`
+	// Trigger 搬运触发口径（年龄 + 磁盘水位取先到）。
+	Trigger LogRetentionTriggerConfig `mapstructure:"trigger"`
+}
+
+// LogRetentionTriggerConfig 搬运触发口径（键 `log_retention.trigger.*`）。
+type LogRetentionTriggerConfig struct {
+	// DiskPercent 磁盘水位阈值；0 = 只按年龄（默认）。读数复用容量门禁同一真源。
+	DiskPercent float64 `mapstructure:"disk_percent"`
+	// MinAge 磁盘触发时的最小分区年龄（字符串，支持 7d）；空 = 用默认 7d。
+	MinAge string `mapstructure:"min_age"`
 }
 
 // LogRetentionSource 某个来源的保留期覆盖。
@@ -658,14 +680,37 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	}
 	cfg := c.LogRetention
 	p := retention.Policy{
-		Enabled:      cfg.Enabled,
-		Discard:      cfg.Discard,
-		HotRetention: cfg.HotRetention,
+		Enabled: cfg.Enabled,
+		Discard: cfg.Discard,
+		Trigger: retention.Trigger{
+			DiskPercent: cfg.Trigger.DiskPercent,
+		},
 		Sweep: retention.Sweep{
 			VLSweep:  cfg.Sweep.VLSweep,
 			Interval: cfg.Sweep.Interval,
 			Timeout:  cfg.Sweep.Timeout,
 		},
+	}
+	if strings.TrimSpace(cfg.HotRetention) != "" {
+		d, err := retention.ParseTTL(cfg.HotRetention)
+		if err != nil {
+			return retention.Policy{}, fmt.Errorf("log_retention.hot_retention: %w", err)
+		}
+		p.HotRetention = d
+	}
+	if strings.TrimSpace(cfg.ColdRetention) != "" {
+		d, err := retention.ParseTTL(cfg.ColdRetention)
+		if err != nil {
+			return retention.Policy{}, fmt.Errorf("log_retention.cold_retention: %w", err)
+		}
+		p.ColdRetention = d
+	}
+	if strings.TrimSpace(cfg.Trigger.MinAge) != "" {
+		d, err := retention.ParseTTL(cfg.Trigger.MinAge)
+		if err != nil {
+			return retention.Policy{}, fmt.Errorf("log_retention.trigger.min_age: %w", err)
+		}
+		p.Trigger.MinAge = d
 	}
 	if len(cfg.ByLevel) > 0 {
 		p.ByLevel = make(map[string]time.Duration, len(cfg.ByLevel))
@@ -836,7 +881,10 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_vl.username", "")
 	v.SetDefault("log_vl.password", "")
 	v.SetDefault("log_vl.data_root", "")
-	v.SetDefault("log_vl.retention_period", "30d")
+	v.SetDefault("log_vl.retention_period", "90d")
+	v.SetDefault("log_vl.cold_retention_period", "730d")
+	v.SetDefault("log_retention.hot_retention", "90d")
+	v.SetDefault("log_retention.cold_retention", "730d")
 	v.SetDefault("log_vl.hot_cache_bytes", int64(512*1024*1024))
 	v.SetDefault("log_vl.hot_port", 0)
 	v.SetDefault("log_vl.cold_port", 0)

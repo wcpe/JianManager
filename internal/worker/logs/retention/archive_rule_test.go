@@ -42,7 +42,7 @@ func (m *fakeMover) MoveToCold(_ context.Context, ns, day string) (string, error
 //	2026-06-01 → 远早于窗口 ⇒ 早已到点
 func archiveFixture() []PartitionRef {
 	return []PartitionRef{
-		{StorageNamespace: "inst:147", UTCDay: "20260901", Owner: "hot"}, // 恰好到点
+		{StorageNamespace: "inst:147", UTCDay: "20260703", Owner: "hot"}, // 恰好到点
 		{StorageNamespace: "inst:147", UTCDay: "20260930", Owner: "hot"}, // 未到点
 		{StorageNamespace: "node:1", UTCDay: "20260601", Owner: "hot"},   // 早已到点
 	}
@@ -236,7 +236,7 @@ func TestArchiveRule4_MoveYieldsAuditableTargetAndLeavesUndueData(t *testing.T) 
 		byPart[o.Target.StorageNamespace+"/"+o.Target.UTCDay] = o
 	}
 
-	moved := byPart["inst:147/20260901"]
+	moved := byPart["inst:147/20260703"]
 	if moved.Result != ArchiveMoved {
 		t.Fatalf("已过期的分区应搬运成功，得到 %s（%v）", moved.Result, moved.Err)
 	}
@@ -276,7 +276,7 @@ func TestArchiveSkipsUnparseableDay(t *testing.T) {
 
 	out := ex.Execute(context.Background(), hv, []PartitionRef{
 		{StorageNamespace: "inst:147", UTCDay: "not-a-day"},
-		{StorageNamespace: "", UTCDay: "20260901"},
+		{StorageNamespace: "", UTCDay: "20260703"},
 	})
 	if len(out) != 0 {
 		t.Fatalf("无法解析的分区不得产出计划，得到 %d 条", len(out))

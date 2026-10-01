@@ -22,14 +22,14 @@ var driverNow = time.Date(2026, 10, 2, 3, 0, 0, 0, time.UTC)
 
 // driverFixture 以热层窗口 30d、基准日 2026-10-02 为口径：
 //
-//	2026-08-01 → 次日 +30d = 2026-09-01 ⇒ 已到点（年龄 31d）
-//	2026-09-30 → 次日 +30d = 2026-10-31 ⇒ 未到点（年龄 2d）
-//	2026-09-24 → 次日 +30d = 2026-10-25 ⇒ 未到点，但年龄恰好 7d（磁盘触发可提前搬）
+//	2026-01-01 → 次日 +90d = 2026-04-02 ⇒ 已到点（年龄 184d）
+//	2026-09-01 → 次日 +90d = 2026-12-01 ⇒ 未到点，年龄 30d（磁盘触发可提前搬）
+//	2026-09-30 → 次日 +90d = 2026-12-30 ⇒ 未到点，年龄 1d（磁盘触发也不搬）
 func driverFixture() []PartitionRef {
 	return []PartitionRef{
-		{StorageNamespace: "inst:147", UTCDay: "20260801", Owner: "hot"},
+		{StorageNamespace: "inst:147", UTCDay: "20260101", Owner: "hot"},
+		{StorageNamespace: "inst:147", UTCDay: "20260901", Owner: "hot"},
 		{StorageNamespace: "inst:147", UTCDay: "20260930", Owner: "hot"},
-		{StorageNamespace: "inst:147", UTCDay: "20260924", Owner: "hot"},
 	}
 }
 
@@ -54,7 +54,7 @@ func TestDriverMovesDuePartitions(t *testing.T) {
 	if res.Moved != 1 {
 		t.Fatalf("恰好 1 个分区已到点，应搬运 1 个，得到 %d（分区结果 %+v）", res.Moved, res.Outcomes)
 	}
-	if len(mv.calls) != 1 || mv.calls[0] != "inst:147/20260801" {
+	if len(mv.calls) != 1 || mv.calls[0] != "inst:147/20260101" {
 		t.Fatalf("搬错了分区：%v", mv.calls)
 	}
 	if res.NotDue != 2 {
@@ -62,10 +62,10 @@ func TestDriverMovesDuePartitions(t *testing.T) {
 	}
 	// 到点的那个必须带年龄触发标记，未到点的不带。
 	for _, o := range res.Outcomes {
-		if o.Target.UTCDay == "20260801" && o.Target.TriggerReason != TriggerAge {
+		if o.Target.UTCDay == "20260101" && o.Target.TriggerReason != TriggerAge {
 			t.Errorf("到点分区应记年龄触发，得到 %q", o.Target.TriggerReason)
 		}
-		if o.Target.UTCDay != "20260801" && o.Target.TriggerReason != "" {
+		if o.Target.UTCDay != "20260101" && o.Target.TriggerReason != "" {
 			t.Errorf("未到点分区不应有触发原因，得到 %q", o.Target.TriggerReason)
 		}
 	}
@@ -105,9 +105,9 @@ func TestDriverKeepsOriginalOnMoveFailure(t *testing.T) {
 func TestDriverSkipsColdAndInFlight(t *testing.T) {
 	mv := &fakeMover{}
 	d := newTestDriver(t, mv, nil, []PartitionRef{
-		{StorageNamespace: "inst:147", UTCDay: "20260801", Owner: OwnerColdName},
-		{StorageNamespace: "inst:147", UTCDay: "20260801", Owner: "hot", InFlight: true},
-		{StorageNamespace: "inst:147", UTCDay: "20260802", Owner: "hot"},
+		{StorageNamespace: "inst:147", UTCDay: "20260101", Owner: OwnerColdName},
+		{StorageNamespace: "inst:147", UTCDay: "20260101", Owner: "hot", InFlight: true},
+		{StorageNamespace: "inst:147", UTCDay: "20260102", Owner: "hot"},
 	})
 
 	res, err := d.Step(context.Background(), driverNow)
@@ -121,7 +121,7 @@ func TestDriverSkipsColdAndInFlight(t *testing.T) {
 		t.Fatalf("只剩 1 个可搬，得到 %d", res.Moved)
 	}
 	for _, call := range mv.calls {
-		if call != "inst:147/20260802" {
+		if call != "inst:147/20260102" {
 			t.Fatalf("不得驱动已在冷层/在途的分区，却搬了 %s", call)
 		}
 	}
@@ -130,7 +130,6 @@ func TestDriverSkipsColdAndInFlight(t *testing.T) {
 // 回归④：磁盘水位触发 —— 「年龄 + 磁盘水位取先到」。
 func TestDriverDiskWatermarkTriggersEarlyMove(t *testing.T) {
 	p := enabledPolicy()
-	p.HotRetention = 30 * 24 * time.Hour
 	p.Trigger = Trigger{DiskPercent: 80, MinAge: 7 * 24 * time.Hour}
 
 	cases := []struct {
@@ -140,7 +139,7 @@ func TestDriverDiskWatermarkTriggersEarlyMove(t *testing.T) {
 		why         string
 	}{
 		{"盘不吃紧：只按年龄", 50, 1, "未达水位不得放宽口径"},
-		{"盘吃紧：提前搬过下限的分区", 85, 2, "20260925 年龄 7d，可提前搬；20260930 只 2d，仍不搬"},
+		{"盘吃紧：提前搬过下限的分区", 85, 2, "20260901 年龄 30d，可提前搬；20260930 只 1d，仍不搬"},
 	}
 	for _, c := range cases {
 		mv := &fakeMover{}
@@ -159,7 +158,6 @@ func TestDriverDiskWatermarkTriggersEarlyMove(t *testing.T) {
 // 回归④b：磁盘触发**必须**有最小年龄下限——盘再满也不搬刚写进来的分区。
 func TestDriverDiskTriggerRespectsMinAge(t *testing.T) {
 	p := enabledPolicy()
-	p.HotRetention = 30 * 24 * time.Hour
 	p.Trigger = Trigger{DiskPercent: 80, MinAge: 7 * 24 * time.Hour}
 
 	mv := &fakeMover{}

@@ -1024,3 +1024,7 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 ### 新增
 - **日志成本治理（分层/采样，FR-499）**：新增 sampling（等级过滤/同源同消息高频抑制/每源预算/风暴自动降级）与 retention（D1 分级档位 3d/7d/30d/90d、源级覆盖、白名单过滤器）两包；固化不变量 R（区间恰等守恒，R2 缺口消解回归 + R2b 反证）；**硬规则「删前归档」**：默认动作=搬运 COLD，删除需 `vl_sweep`+`discard` 双闸 + VL `-delete.enable`，搬运失败=保留+告警零删除；VL 删除执行器实测可用（per-level 真删，未开开关 400）。
 - 首版**安全姿态**：`log_retention.enabled` 与两个执行闸默认全关（推荐值已填，启用即得 D1 档位）——"现在就开始删"留待运维显式开启。
+
+### 变更
+- **保留默认定稿（用户决策）**：热层 90d、冷层 730d（`log_retention.hot_retention`/`cold_retention` 可配）；冷层不按级别分档，"分级=热层停留时长"（debug 3d/info 7d/warn 30d/error 90d 不变）。
+- **修掉静默架空硬规则的风险**：VL 自身 `-retentionPeriod` 默认 30d（短于热层 90d）会在搬运驱动器之前直接删数据 → 默认改 90d 对齐并注明约束；vlsup 新增按 namespace retention（COLD 传 `log_vl.cold_retention_period`，默认 730d）。

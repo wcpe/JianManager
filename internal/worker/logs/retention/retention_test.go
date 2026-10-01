@@ -63,6 +63,15 @@ func TestDefaultPolicyMatchesRecommendedTTLs(t *testing.T) {
 			t.Errorf("推荐保留期 %s 应为 %s，得到 %s", lvl, ttl, n.ByLevel[lvl])
 		}
 	}
+	if n.HotRetention != 90*24*time.Hour {
+		t.Errorf("热层窗口默认应为 90d（用户最终口径），得到 %s", n.HotRetention)
+	}
+	if n.ColdRetention != 730*24*time.Hour {
+		t.Errorf("冷层保留期默认应为 730d（用户最终口径），得到 %s", n.ColdRetention)
+	}
+	if n.ByLevel["DEBUG"] == n.ColdRetention {
+		t.Error("冷层不得按级别分档（所有级别统一）——分级只是「在热层停留多久」")
+	}
 	if d.Enabled {
 		t.Error("策略默认必须是未启用（零行为变化）；推荐值填好不等于替运维决定现在就开始删")
 	}

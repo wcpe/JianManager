@@ -25,7 +25,19 @@ const (
 // 那会让热层实际保留 90 天，比现状**多**留两个月——与「省热层空间」的目标相反。
 // 级别 TTL 表达的是「各级别希望被留多久」，而热层窗口是「多快搬到冷层」，
 // 两者是不同的量，故各自有独立默认：热层 30d 搬走，冷层 365d 长留。
-const DefaultHotRetention = 30 * 24 * time.Hour
+// DefaultHotRetention 是热层保留窗口的默认值（用户最终口径：**热 90 天**）。
+//
+// 语义定稿：D1 的分级档位（debug 3d / info 7d / warn 30d / error 90d）表达的是
+// **「在热层停留多久」**；冷层则**所有级别统一**（见 DefaultColdRetention）——
+// 即「热的几个月、冷的两年」。到期动作不变：**搬**（不裸删，双闸默认关）。
+const DefaultHotRetention = 90 * 24 * time.Hour
+
+// DefaultColdRetention 是冷层保留期的默认值（用户最终口径：**冷 730 天**）。
+//
+// 冷层**不按级别分档**：热层按级别是为了「快查最近的高价值级别 + 尽快腾出热层空间」，
+// 而冷层的目的只有一个——**长期留存**。对冷层再做一套级别档位，
+// 只会让「同一条日志在两层的保留期不一致」变成常态，而那种不一致没有运维价值。
+const DefaultColdRetention = 730 * 24 * time.Hour
 
 // 执行器默认值。
 const (
@@ -129,6 +141,12 @@ type Policy struct {
 	HotRetention time.Duration `mapstructure:"hot_retention"`
 	// Trigger 搬运触发口径：年龄 + 磁盘水位**取先到**（用户决策 D3）。
 	Trigger Trigger `mapstructure:"trigger"`
+	// ColdRetention 冷层保留期（所有级别统一）。<=0 取 DefaultColdRetention。
+	//
+	// 本字段承担**声明与校验**：真正的冷层保留由受管 COLD 实例的 `-retentionPeriod`
+	// 执行（见 vlsup 的按 namespace retention）。放在策略里是为了让「热多久 / 冷多久」
+	// 在同一处可读、可校验，而不是散在两个配置段里各说各话。
+	ColdRetention time.Duration `mapstructure:"cold_retention"`
 }
 
 // DefaultPolicy 返回 D1 推荐的保留策略。
@@ -145,8 +163,9 @@ func DefaultPolicy() Policy {
 			"WARN":  DefaultTTLWarn,
 			"ERROR": DefaultTTLError,
 		},
-		Sweep:        Sweep{Interval: DefaultSweepInterval, Timeout: DefaultSweepTimeout},
-		HotRetention: DefaultHotRetention,
+		Sweep:         Sweep{Interval: DefaultSweepInterval, Timeout: DefaultSweepTimeout},
+		HotRetention:  DefaultHotRetention,
+		ColdRetention: DefaultColdRetention,
 	}
 }
 
@@ -171,6 +190,12 @@ func (p Policy) Normalize() Policy {
 	}
 	if out.Sweep.Timeout <= 0 {
 		out.Sweep.Timeout = DefaultSweepTimeout
+	}
+	if out.HotRetention <= 0 {
+		out.HotRetention = DefaultHotRetention
+	}
+	if out.ColdRetention <= 0 {
+		out.ColdRetention = DefaultColdRetention
 	}
 	return out
 }

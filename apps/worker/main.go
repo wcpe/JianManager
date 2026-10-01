@@ -488,6 +488,10 @@ func runWorker() {
 		vlSupervisor, err = vlsup.New(vlsup.Options{
 			BinaryPath: managedBinary, AssetSHA256: managedSHA,
 			DataRoot: dataRoot, RetentionPeriod: cfg.LogVL.RetentionPeriod,
+			RetentionByNamespace: map[vlsup.Namespace]string{
+				// 冷层 retention 是「冷留存多久」的唯一执行者（用户口径：730d，所有级别统一）。
+				vlsup.NamespaceCold: cfg.LogVL.ColdRetentionPeriod,
+			},
 			AuthUsername: cfg.LogVL.Username, AuthPassword: cfg.LogVL.Password,
 			Ports: map[vlsup.Namespace]int{
 				vlsup.NamespaceHot:       cfg.LogVL.HotPort,

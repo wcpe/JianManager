@@ -58,7 +58,9 @@
 | `log_ingest.sampling.budget_max_events_per_window` / `budget_window` / `budget_keep_every` | `0` / `1s` / `10` | 每源预算（quota → 采样比） |
 | `log_ingest.sampling.degrade_enabled` / `degrade_target_level` / `degrade_disk_percent` / `degrade_hold` | `false` / `ERROR` / `80` / `30s` | 风暴自动降级 |
 | `log_retention.enabled` | `false` | 保留策略总开关 |
-| `log_retention.hot_retention` | `30d` | 热层窗口：超期即搬运到冷层 |
+| `log_retention.hot_retention` | `90d` | 热层窗口：超期即搬运到冷层（用户最终口径） |
+| `log_retention.cold_retention` | `730d` | 冷层保留期（**所有级别统一**；由 COLD 实例 `-retentionPeriod` 执行） |
+| `log_retention.trigger.disk_percent` / `min_age` | `0` / `7d` | 磁盘水位提前搬运（取先到）；`0` = 只按年龄 |
 | `log_retention.discard` | `false` | **意图闸**：显式允许直接删 |
 | `log_retention.by_level.*` | D1 档位 | 按级别 TTL（`3d`/`7d`/`30d`/`90d`，支持 `d`/`w`） |
 | `log_retention.sources[].match` / `by_level` | — | 来源级覆盖（`*` 后缀为前缀匹配） |
@@ -75,6 +77,17 @@
 ---
 
 ## 3. 决策记录
+
+### D0 默认口径定稿（2026-10-02）：热 90d / 冷 730d — 已采纳
+`hot_retention` 默认 `90d`、`cold_retention` 默认 `730d`。**语义定稿**：D1 的分级档位表达的是
+「**在热层停留多久**」；**冷层所有级别统一**（730d），不做级别档位——冷层的目的只有长期留存，
+再分档只会让「同一条日志在两层的保留期不一致」变成常态。到期动作不变：**搬**（不裸删，双闸默认关）。
+
+**连带修掉的一致性风险**：VL 自身的 `-retentionPeriod` 到期是**直接删**，它**绕过**「删前归档」——
+若热层实例 retention（原默认 30d）短于 `hot_retention`（现 90d），VL 会在搬运驱动器之前先删掉数据，
+硬规则被静默架空。故：`log_vl.retention_period` 默认改为 `90d`（与热层窗口对齐，留出搬运余量），
+新增 `log_vl.cold_retention_period` 默认 `730d`，并让 `vlsup` 支持**按 namespace 的 retention**
+（`RetentionByNamespace`，未指定时回退）。回归见 §6.9。
 
 ### D1 热层分级（保留期档位）— 已采纳
 `debug 3d / info 7d / warn 30d / error 90d`。原为「分级删除」，随 D4 改为**分级搬运/归档**：
@@ -225,6 +238,12 @@ const (
 - `TestLogFormatIsParsedAndRejectsGarbage` — `log.format` 同上
 - `TestMaxWALBytesHasFiniteDefault` — WAL 字节上界默认有限，且高于正常稳态量级
 - `TestWALBudgetNoticeNamesTheUnlimitedCase` — 显式不限必须被点名
+
+## 6.9 热/冷默认口径与按 namespace retention
+
+- `TestSupervisorRetentionPerNamespace` — VL retention **可按 namespace 分开**（热 90d / 冷 730d），
+  未指定的 namespace 回退，**空白值不得被当成有效覆盖**
+- `TestDefaultPolicyMatchesRecommendedTTLs` — 热 90d / 冷 730d 默认，且冷层不得按级别分档
 
 ### 6.6 变异实验（`go test -overlay`，原文件零改动）
 - `logs/sampling`：**11/11 全部以断言转红**（`.tmp/sampling-mutation/REPORT.txt`）
