@@ -640,21 +640,57 @@ func lessWALRef(a, b acquire.WALRef) bool {
 
 // comparisonState 返回「比对口径」下的状态：在 normalizePersistedState 之上，把派生字段
 // Positions.Delivery 按 ledger 的口径重算（ledger.Restore 本就重算它，见
-// ledger.ContiguousDeliveryEnd）。
+// ledger.ContiguousDeliveryEnd），并按**同一判据**裁掉水位之下的历史投递批次。
 //
 // 为什么只在比对时重算：索引落库保留原值，便于断言字段确实被搬运；而比对必须忽略派生值噪声
 // ——真机现场是「归档 JSON 里是写回前的旧值、索引里是重算后的值」，二者语义相同，按原值比对
 // 会把一次正常启动误判为校验失败并拒绝采集。
+//
+// 为什么还要在比对里裁剪：裁剪只发生在**写路径**上（ledger 的写方法），而归档 JSON 与索引库的
+// 裁剪进度可以不同——真机可达的形态是「迁移已在库中提交、归档尚未完成」（migrateLegacyState
+// 的那条分支），此时旧 JSON 仍是完整历史、索引里已被裁过。按原样 DeepEqual 会把一次正常启动
+// 误判为「索引与旧状态不一致」而拒绝启动采集。裁剪是恒等元变换（判据与证明见
+// ledger.PruneDeliveryBatches），归一后两侧仍逐字段可比，真正的搬运错误照样会被抓出来。
+//
+// 口径固定为「严格按水位」（keepRecent=0）：两侧同口径即可，开关只影响落库行数、不影响语义。
 func comparisonState(st *persistedState) *persistedState {
 	normalizePersistedState(st)
 	for key, saved := range st.Sources {
 		for index := range saved.Ledger {
 			entry := &saved.Ledger[index]
+			entry.DeliveryBatches = prunedBatchesForComparison(entry)
 			entry.Positions.Delivery = ledger.ContiguousDeliveryEnd(entry.DeliveryBatches, entry.Positions.Reclaim)
 		}
 		st.Sources[key] = saved
 	}
 	return st
+}
+
+// prunedBatchesForComparison 把条目的投递批次按水位归一（失败即保留原列表，不新增失败面）。
+//
+// 它同时保证了「裁空」与「本来为空」在同一形态下可比：PruneDeliveryBatches 在裁空时返回
+// 非 nil 的空切片（与 normalizePersistedState 的归一形态一致）。
+func prunedBatchesForComparison(entry *ledger.Entry) []ledger.DeliveryBatch {
+	kept, dropped, err := ledger.PruneDeliveryBatches(entry.DeliveryBatches, entry.Positions.Reclaim, 0)
+	if err != nil {
+		slog.Warn("迁移校验前的投递批次归一被守卫拦下，按完整历史比对（不影响采集正确性）",
+			"logSourceID", entry.Key.LogSourceID, "generation", entry.Key.SourceGeneration,
+			"reclaim", entry.Positions.Reclaim, "batches", len(entry.DeliveryBatches), "error", err)
+		return entry.DeliveryBatches
+	}
+	if dropped == 0 {
+		return entry.DeliveryBatches
+	}
+	return kept
+}
+
+// indexPruneConfigOf 归一化「历史投递批次裁剪」配置：nil 表示用默认（开启、严格按水位）。
+// 非法值（负数尾窗）在 ledger.Normalized 里回退默认——配置误写不得放宽判据。
+func indexPruneConfigOf(configured *ledger.DeliveryBatchPruneConfig) ledger.DeliveryBatchPruneConfig {
+	if configured == nil {
+		return ledger.DefaultDeliveryBatchPruneConfig()
+	}
+	return configured.Normalized()
 }
 
 // PersistSamples 返回最近一次持久化的采样（供测试与真机观测「空闲不重写历史」与 P50/P95）。

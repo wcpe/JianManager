@@ -145,6 +145,15 @@ type Entry struct {
 	// AcquirePaused 容量/预算耗尽时置位；暂停期间不得静默丢数据。
 	AcquirePaused bool   `json:"acquire_paused"`
 	PauseReason   string `json:"pause_reason,omitempty"`
+
+	// deliveryPrunedThrough 是该源批次最后一次被裁时的水位（进程内状态：不落库、不参与
+	// JSON 序列化与索引映射，重启后归零等于强制再裁一次——裁剪幂等，重复裁无害）。
+	//
+	// 为什么需要它：水位是**唯一**能让既有条目变得可裁的事件（新登记的批次末位在当前读指针附近，
+	// 只可能在水位之上），故「水位没变就不必再扫列表」——它把 RecordDelivery（每次投递）与
+	// TryReclaim（每轮采集，250ms/源）的裁剪开销从 O(列表长度) 降到 O(1)；否则一个「水位被门禁
+	// 长期挡住」的源会每轮扫描整张保留列表（积压场景下可达十万级），把空间优化变成 CPU 负担。
+	deliveryPrunedThrough uint64
 }
 
 // Ledger 线程安全采集账本。
@@ -165,14 +174,19 @@ type Ledger struct {
 	//
 	// 读方法（Get/Snapshot/UnresolvedGapCount 等）**不**推进修订号。
 	revisions map[SourceKey]uint64
+	// batchPrune 是历史投递批次（delivery_batch）的裁剪配置，默认开启（见
+	// DefaultDeliveryBatchPruneConfig 与 delivery_batch_prune.go 的判据与证明）。
+	// 它是内存与索引两侧同时有界的唯一开关：账本自己持批次列表，故裁剪点必须在这里。
+	batchPrune DeliveryBatchPruneConfig
 }
 
 // New 创建空账本。
 func New() *Ledger {
 	return &Ledger{
-		entries:   make(map[SourceKey]*Entry),
-		revisions: make(map[SourceKey]uint64),
-		nowUnix:   func() int64 { return 0 },
+		entries:    make(map[SourceKey]*Entry),
+		revisions:  make(map[SourceKey]uint64),
+		nowUnix:    func() int64 { return 0 },
+		batchPrune: DefaultDeliveryBatchPruneConfig(),
 	}
 }
 
@@ -306,6 +320,9 @@ func (l *Ledger) AdvanceDurable(key SourceKey, pos uint64) error {
 // RecordDelivery 登记批次请求级结果。
 // HTTP 2xx → REQUEST_DONE；响应丢失 → UNKNOWN（保留恢复责任，不推进 reclaim）。
 // delivery_position 取“所有字节均有请求结果”的连续前缀末端，乱序响应不得越过未解决空洞。
+//
+// 登记后按当前水位裁掉「确定不会再被需要」的历史条目（判据与证明见 delivery_batch_prune.go）：
+// 水位之下的条目对该派生值恒等，裁剪不改变本函数算出的 delivery_position。
 func (l *Ledger) RecordDelivery(key SourceKey, start, end uint64, state logtypes.DeliveryState) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -321,6 +338,7 @@ func (l *Ledger) RecordDelivery(key SourceKey, start, end uint64, state logtypes
 	}
 	e.DeliveryBatches = append(e.DeliveryBatches, DeliveryBatch{Start: start, End: end, State: state})
 	e.DeliveryState = state
+	l.pruneDeliveryBatchesLocked(e)
 	e.Positions.Delivery = contiguousDeliveryEnd(e.DeliveryBatches, e.Positions.Reclaim)
 	return nil
 }
@@ -611,6 +629,9 @@ func (l *Ledger) SetRecoveryHold(key SourceKey, segmentID string, hasHold bool) 
 
 // TryReclaim 按 logtypes.CanReclaim 门禁推进 reclaim_position。
 // HTTP 2xx / REQUEST_DONE 单独不构成回收依据。
+//
+// 无论回收是否放行，都用**最终**水位裁一次历史投递批次（水位是本方法唯一的输入、裁剪幂等）；
+// 因此「回收被门禁挡住」的源同样会被裁剪，不会因为挡着就长期保留无用历史。
 func (l *Ledger) TryReclaim(key SourceKey) (uint64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -618,6 +639,13 @@ func (l *Ledger) TryReclaim(key SourceKey) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	pos, err := l.tryReclaimLocked(e)
+	l.pruneDeliveryBatchesLocked(e)
+	return pos, err
+}
+
+// tryReclaimLocked 是 TryReclaim 的门禁主体。调用方必须已持写锁。
+func (l *Ledger) tryReclaimLocked(e *Entry) (uint64, error) {
 	// 选取覆盖当前 reclaim 前缀的恢复分段。
 	var ref *RecoveryRef
 	for i := range e.RecoveryRefs {

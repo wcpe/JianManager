@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -136,10 +137,19 @@ type Manager struct {
 	// verifyBackoffMin/verifyBackoffMax 是投影校验重试的退避区间（B1c）；0 用默认常量。
 	verifyBackoffMin time.Duration
 	verifyBackoffMax time.Duration
-	capacityProvider func() (acquire.CapacityBudget, error)
-	recoveryHold     func(SourceConfig, string) (bool, string)
+	// verifyChunkEvents 是单次校验查询覆盖的事件上限（分簇粒度，FR-498 P0）；0 用默认常量。
+	// 作为字段而非裸常量：不同 VL 部署的返回体承载能力不同，且回归要用真实限额路径驱动。
+	verifyChunkEvents int
+	// verifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取默认，1 为串行。
+	verifyChunkConcurrency int
+	capacityProvider       func() (acquire.CapacityBudget, error)
+	recoveryHold           func(SourceConfig, string) (bool, string)
 	// reconcile 是启动增量对账（FR-497）的生效配置（已归一化）。
 	reconcile ReconcileConfig
+	// indexPrune 是历史投递批次裁剪的生效配置（已归一化，默认开启）：建每个源的账本时下发
+	// （ledger.SetDeliveryBatchPrune）。裁剪发生在账本写路径内，因此配置必须落在账本上，
+	// 而不是落库前再过滤一遍——后者只能让库变小，内存仍会随总量线性增长。
+	indexPrune ledger.DeliveryBatchPruneConfig
 	// reconcileReports 保留最近一次启动对账的逐源结论（只读观测面）。
 	reconcileReports []ReconcileReport
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
@@ -215,6 +225,10 @@ type Options struct {
 	// Reconcile 是启动增量对账（FR-497）的配置面；nil 表示用默认（启用，
 	// 并发 4、单源超时 30s、单查询超时 10s）。配置键登记见 spec §5。
 	Reconcile *ReconcileConfig
+	// IndexPrune 是采集索引「历史投递批次（delivery_batch）裁剪」的配置面（FR-496 索引有界化，
+	// spec §6）；nil 表示用默认（ledger.DefaultDeliveryBatchPruneConfig：**开启**、严格按
+	// reclaim 水位）。判据与证明见 ledger/delivery_batch_prune.go。
+	IndexPrune *ledger.DeliveryBatchPruneConfig
 }
 
 type CutoverReadiness struct {
@@ -466,6 +480,7 @@ func New(opts Options) (*Manager, error) {
 		capacityProvider:    opts.CapacityProvider,
 		recoveryHold:        opts.RecoveryHold,
 		reconcile:           reconcileConfigOf(opts.Reconcile),
+		indexPrune:          indexPruneConfigOf(opts.IndexPrune),
 	}
 	if m.verificationTimeout <= 0 {
 		// 5 分钟（原 30 秒）。依据 2026-09-28 生产实测：VL 的 /insert/jsonline 是「接收即
@@ -481,6 +496,13 @@ func New(opts Options) (*Manager, error) {
 	}
 	if m.verifyBackoffMax <= 0 {
 		m.verifyBackoffMax = defaultVerifyBackoffMax
+	}
+	// 投影校验的分簇与并发（FR-498 P0）：默认 2000 事件/簇、同批内 4 路并发。
+	if m.verifyChunkEvents <= 0 {
+		m.verifyChunkEvents = defaultVerifyChunkEvents
+	}
+	if m.verifyChunkConcurrency <= 0 {
+		m.verifyChunkConcurrency = defaultVerifyChunkConcurrency
 	}
 	// 采集索引（FR-496）：打开 SQLite 索引，必要时一次性迁移旧 ingest.state.json；
 	// 迁移/校验失败 → 拒绝启动采集（不静默降级），保留旧文件供人工处置。
@@ -654,6 +676,8 @@ func (m *Manager) Register(source SourceConfig) error {
 		return nil
 	}
 	led := ledger.New()
+	// 历史投递批次裁剪（FR-496 索引有界化）：配置默认开启，非法值已在 indexPruneConfigOf 回退。
+	led.SetDeliveryBatchPrune(m.indexPrune)
 	wal := newWAL(led, ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration})
 	if saved, ok := m.state.Sources[key]; ok {
 		if err := led.Restore(saved.Ledger); err != nil {
@@ -1597,9 +1621,20 @@ func (m *Manager) clientForSource(source SourceConfig) (*vlsup.Client, bool, err
 }
 
 // 投影校验的退避默认值（B1c）。
+//
+// 上限由 2s 收紧到 500ms 的依据（2026-10-01 实测，探针见 docs/specs/log-verify-chunking/spec.md §6）：
+// VL 的「写入 → 可查询」延迟**恒定**在 1011–1029 ms（20/20 次，见可见延迟探针），
+// 而退避序列 200/400/800/封顶 2s 的探测点是 0 / 0.2 / 0.6 / **1.4** s —— 恰好在 1.0 s 附近
+// 没有探测点，每次批级校验都白等约 0.4 s（真进程夹具批级 verify p50 = 1411 ms）。
+// 封顶 500ms 后探测点变为 0 / 0.2 / 0.6 / 1.1 s，数据一可见就命中并返回。
+//
+// 为什么不是「固定 200ms 轮询」：2026-09-28 生产事故正是固定间隔轮询到 30 秒超时
+// （单源最多约 150 次查询，把 VL 与磁盘一起压垮）。本改动保持**指数退避**语义，
+// 只把封顶从 2s 收到 500ms——等待更久时（数据长期不可见）2 秒窗口内的查询次数是 5 次，
+// 仍远低于事故时的量级；查询成本本身也已被分簇压到「每批 1 次」（见 verifyChunkEvents）。
 const (
 	defaultVerifyBackoffMin = 200 * time.Millisecond
-	defaultVerifyBackoffMax = 2 * time.Second
+	defaultVerifyBackoffMax = 500 * time.Millisecond
 )
 
 // nextVerifyBackoff 返回下一次退避时长：指数增长并封顶（B1c）。
@@ -1617,33 +1652,225 @@ func nextVerifyBackoff(cur, max time.Duration) time.Duration {
 	return next
 }
 
-// verifyProjection 分批校验投影可见性。
+// 投影校验的分簇与并发参数（FR-498 P0 优化，2026-10-01）。
+const (
+	// defaultVerifyChunkEvents 是单次校验查询覆盖的事件上限。
+	//
+	// 与写入批上限（insertBatchMaxEvents=500）**解耦**：写入批上限保护的是单次插入请求的体积，
+	// 而校验查询的成本由「查询窗口内返回的行数」决定，与「本次要求可见的事件数」几乎无关——
+	// 分片越细，越多的查询会重复读回同一批行。实测（本地饱和夹具 60 源 ×30 行/s，详见
+	// docs/specs/log-verify-chunking/spec.md）：旧实现按 500 条索引切片、各片时间窗相互重叠，
+	// 读回量被放大到 k×n（k=片数）；单次校验查询 141ms 里 VL 首字节仅 3.5ms，
+	// 其余全是返回体的传输与逐行 JSON 解析。2000 与「单源单次 poll 的典型满批」一致：
+	// 常见情形下一批只需 1 次查询。
+	defaultVerifyChunkEvents = 2000
+	// defaultVerifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取该默认，1 为串行。
+	// 校验查询的成本几乎全在「返回体传输 + 客户端逐行 JSON 解析」，属可并行部分；
+	// 跨源并发（pollConcurrency）只重叠了源与源之间的等待，源内部的等待仍逐个叠加。
+	defaultVerifyChunkConcurrency = 4
+	// verifySlowQueryThreshold 是单次校验查询的慢查询告警阈值。旧实现只打「查询开始」，
+	// 慢查询在现场不可见（FR-498 定位耗时构成的主要困难之一）。
+	verifySlowQueryThreshold = 500 * time.Millisecond
+)
+
+// verifyQueryStats 累计一次投影校验的读回量（观测面与回归读数）。
+type verifyQueryStats struct {
+	Queries int
+	Rows    int64
+	Bytes   int64
+}
+
+// verifyEventTimeKey 返回事件用于分簇排序的时间键；不可解析的时间按零值处理
+// （排在最前，彼此相等，保证排序的严格弱序）。
+func verifyEventTimeKey(event logtypes.Event) time.Time {
+	if when, err := canonicalEventTime(event); err == nil {
+		return when
+	}
+	return time.Time{}
+}
+
+// planVerifyChunks 把整批事件按**事件时间**排序后，每 max 条切成一簇。
+//
+// 为什么按时间切（FR-498 P0）：旧实现按**索引**每 500 条切一片，每片用「本片事件的
+// [min-1s, max+1s]」查询。批内事件的时间与索引顺序并不一致（多条流混合、时间戳跳变、
+// 跨日批次），各片时间窗因而相互重叠，**同一批的每一行都会被重复读回 k 次**（k=片数）。
+// 按时间切簇后，各簇窗口只覆盖自己的时间范围（相邻簇最多在 ±1s 容差处相接），
+// 读回总量从 k×n 降到 ≈n：簇内跨度是 min/max 决定的，排序本身就让相邻簇的窗口不再互相包含。
+//
+// 语义不变：每个事件仍必须在其所属簇的窗口内可见且内容逐字段一致；allowed（整批）的接受规则、
+// 重复/多余检测、退避与超时语义全部保持原样（见 verifyProjectionQuery）。
+func planVerifyChunks(events []logtypes.Event, max int) [][]logtypes.Event {
+	if len(events) == 0 {
+		return nil
+	}
+	if max <= 0 {
+		max = defaultVerifyChunkEvents
+	}
+	ordered := make([]logtypes.Event, len(events))
+	copy(ordered, events)
+	// 稳定排序：同一时间戳的事件保持原索引顺序，不改变可观察的判定顺序。
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return verifyEventTimeKey(ordered[i]).Before(verifyEventTimeKey(ordered[j]))
+	})
+	chunks := make([][]logtypes.Event, 0, (len(ordered)+max-1)/max)
+	for start := 0; start < len(ordered); start += max {
+		end := start + max
+		if end > len(ordered) {
+			end = len(ordered)
+		}
+		chunks = append(chunks, ordered[start:end])
+	}
+	return chunks
+}
+
+// verifyProjection 校验整批事件的投影可见性。
 //
 // 分批是必须的：VL 对单次查询有内存上限，而恢复期的事件数是整批积压（实测 747,822 条会让 VL
 // 返回 400 `cannot calculate [sort by (_time) desc limit ...]`）。但**分批必须让期望集覆盖整批**：
 // 各分片的时间范围会重叠（真实事件常共享时间戳），第 N 片的查询会返回其他分片的事件；
 // 若只以本片为期望集，这些记录会被误判为 unexpected（2026-09-28 生产实测）。
+//
+// 分簇按**事件时间**而非索引（见 planVerifyChunks），簇内并发执行（见 verifyChunkConcurrency）。
+// 错误语义与串行实现一致：任一簇失败即整体失败，返回**最先观察到**的那个错误，并取消其余簇。
 func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
+	if len(events) == 0 {
+		return nil
+	}
 	allowed := make(map[string]logtypes.Event, len(events))
 	for _, event := range events {
 		allowed[event.EventID] = event
 	}
-	for start := 0; start < len(events); start += insertBatchMaxEvents {
-		end := start + insertBatchMaxEvents
-		if end > len(events) {
-			end = len(events)
+	chunks := planVerifyChunks(events, m.verifyChunkEvents)
+	concurrency := m.verifyChunkConcurrency
+	if concurrency <= 0 {
+		concurrency = defaultVerifyChunkConcurrency
+	}
+	if concurrency > len(chunks) {
+		concurrency = len(chunks)
+	}
+	started := time.Now()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		mu          sync.Mutex
+		stats       verifyQueryStats
+		semanticErr error
+		otherErr    error
+	)
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range next {
+				chunkStats, err := m.verifyProjectionChunk(ctx, client, source, generation, chunks[idx], allowed)
+				mu.Lock()
+				stats.Queries += chunkStats.Queries
+				stats.Rows += chunkStats.Rows
+				stats.Bytes += chunkStats.Bytes
+				if err != nil {
+					// 判定类错误优先于「被取消的查询」产生的传输类噪音（见 verifyErrorIsSemantic）：
+					// 否则首个失败取消其余簇后，现场看到的会是被取消查询的 context canceled /
+					// 半行 JSON 解析错误，而真正的根因被掩盖。
+					if verifyErrorIsSemantic(err) {
+						if semanticErr == nil {
+							semanticErr = err
+						}
+					} else if otherErr == nil {
+						otherErr = err
+					}
+				}
+				mu.Unlock()
+				if err != nil {
+					// 只有携带「明确根因」的失败才取消其余簇（永久失败 / 判定类错误——内容不一致、
+					// 多余或重复、事件集非法）：此时收敛是安全的，根因已经拿到。
+					//
+					// 超时类失败**不取消**：它往往只说明"本批数据尚不可见"，而其余簇此刻可能正读到
+					// 真正的根因（例如某一行内容不一致）；取消会把那个结论一并抹掉，让现场只剩
+					// 取消噪音（2026-10-01 在 `-race` 下实测到该形态：注入的"写错一行"被
+					// `verification failed: context deadline exceeded` 覆盖）。
+					if vlsup.IsPermanent(err) || verifyErrorIsSemantic(err) {
+						cancel()
+					}
+				}
+			}
+		}()
+	}
+	for i := range chunks {
+		if ctx.Err() != nil {
+			break // 已有簇失败：不再派发后续簇（与串行实现「失败即返回」一致）
 		}
-		if err := m.verifyProjectionChunk(client, source, generation, events[start:end], allowed); err != nil {
-			return err
+		select {
+		case next <- i:
+		case <-ctx.Done():
 		}
 	}
-	return nil
+	close(next)
+	wg.Wait()
+
+	elapsed := time.Since(started)
+	mu.Lock()
+	finalStats, verdict := stats, semanticErr
+	if verdict == nil {
+		verdict = otherErr
+	}
+	mu.Unlock()
+	slog.Info("投影校验完成",
+		"generation", generation, "source", source.LogSourceID,
+		"events", len(events), "chunks", len(chunks), "concurrency", concurrency,
+		"queries", finalStats.Queries, "rows", finalStats.Rows, "bytes", finalStats.Bytes,
+		"elapsedMs", elapsed.Milliseconds(), "err", errText(verdict))
+	return verdict
 }
 
-// verifyProjectionChunk 校验单批事件在 VL 中完全可见（退避重试 + 永久错误立即失败）。
-// allowed 是「可接受集合」（整批积压的全部事件）：本批之外的记录只要属于该集合且内容一致即接受。
-func (m *Manager) verifyProjectionChunk(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) error {
-	ctx, cancel := context.WithTimeout(context.Background(), m.verificationTimeout)
+// verifyErrorIsTimeoutLike 判定错误是否只是「本簇自己的校验窗口到期」的产物
+// （客户端取消/超时引发的传输类错误），而不是 VL 给出的语义结论。
+func verifyErrorIsTimeoutLike(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "context canceled")
+}
+
+// verifyErrorIsSemantic 判定错误是否属于「校验自身的判定结论」——内容不一致 / 多余或重复 /
+// 到期仍不可见 / 永久失败 / 事件集非法——而不是「同批其他簇失败后取消」引发的传输类噪音。
+//
+// 为什么需要区分（2026-10-01 实测）：同批多簇并发执行时，首个失败会取消其余查询；被取消的
+// 请求可能报出 `context canceled`，或把被截断的响应体报成 `unexpected end of JSON input`。
+// 若让「最先观察到者胜出」，现场看到的就可能是被取消查询的噪音，真正根因（例如内容不一致）
+// 被掩盖。故判定类错误优先返回（串行实现下本来也只会返回判定类错误，语义一致）。
+func verifyErrorIsSemantic(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, marker := range []string{
+		"projection content mismatch",
+		"unexpected or duplicate projection event_id",
+		"not fully visible before deadline",
+		"verification failed permanently",
+		"duplicate canonical event_id",
+		"invalid canonical event time",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// verifyProjectionChunk 校验单个簇的事件在 VL 中完全可见（退避重试 + 永久错误立即失败）。
+// allowed 是「可接受集合」（整批积压的全部事件）：本簇之外的记录只要属于该集合且内容一致即接受。
+// parent 是整批的 ctx：同批其他簇失败/超时会取消它——此时本簇不得把取消噪音（context canceled、
+// 被截断响应体的 JSON 解析错误）当成自己的校验结论，否则现场看到的会是噪音而非真正根因。
+func (m *Manager) verifyProjectionChunk(parent context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) (verifyQueryStats, error) {
+	ctx, cancel := context.WithTimeout(parent, m.verificationTimeout)
 	defer cancel()
 	// 退避重试（B1c）：原实现以固定 200ms 轮询直至超时（默认 30 秒 ≈ 最多约 150 次校验
 	// 查询/源）。高负载时每次查询更慢、重试互相叠加，会把 VL 与磁盘一起压垮——2026-09-28
@@ -1651,31 +1878,74 @@ func (m *Manager) verifyProjectionChunk(client *vlsup.Client, source SourceConfi
 	// 现改为指数退避封顶，并让「重试无意义」的错误（认证失败 / 4xx 语义错误）立即失败。
 	backoff := m.verifyBackoffMin
 	var lastErr error
+	var stats verifyQueryStats
 	for {
-		complete, err := m.verifyProjectionOnceAllowed(ctx, client, source, generation, events, allowed)
+		queryStarted := time.Now()
+		complete, queryStats, err := m.verifyProjectionQuery(ctx, client, source, generation, events, allowed)
+		elapsed := time.Since(queryStarted)
+		stats.Queries++
+		stats.Rows += queryStats.Rows
+		stats.Bytes += queryStats.Bytes
+		if elapsed >= verifySlowQueryThreshold {
+			// 慢查询单独留痕：读回量（rows/bytes）是判定「窗口内行数过多」还是「VL 慢」的关键。
+			slog.Warn("投影校验慢查询",
+				"generation", generation, "source", source.LogSourceID,
+				"events", len(events), "rows", queryStats.Rows, "bytes", queryStats.Bytes,
+				"elapsedMs", elapsed.Milliseconds())
+		}
+		// 父 ctx 已取消（同批其他簇已拿到明确根因）：本簇的"尚未可见"结论已无意义，立即收手。
+		// 注意顺序——先处理本次查询自身的结论，再看取消：判定类错误是本簇的真实结论，
+		// 不能被"别的簇先失败"抹掉（见 verifyProjection 的取消策略）。
 		if complete && err == nil {
-			return nil
+			return stats, nil
 		}
 		if err != nil {
 			if vlsup.IsPermanent(err) {
-				return fmt.Errorf("ingest: projection %s verification failed permanently: %w", generation, err)
+				return stats, fmt.Errorf("ingest: projection %s verification failed permanently: %w", generation, err)
 			}
-			lastErr = err
+			// 判定类错误（内容不一致 / 多余或重复 / 事件集非法）是**确定性结论**：VL 里的行内容
+			// 已经定型，退避重试不会改变它。旧实现会把它当普通失败继续重试到窗口结束
+			// （默认 5 分钟）才报出同一结论——纯浪费，且让现场多等一个窗口。
+			// 错误前缀与「重试到窗口结束」路径保持逐字一致，调用方的断言与判读不受影响。
+			if verifyErrorIsSemantic(err) {
+				return stats, fmt.Errorf("ingest: projection %s verification failed: %w", generation, err)
+			}
+			if parent.Err() == nil {
+				lastErr = err
+			} else {
+				return stats, fmt.Errorf("ingest: projection %s verification aborted by batch cancellation: %w", generation, parent.Err())
+			}
+		}
+		if parentErr := parent.Err(); parentErr != nil {
+			return stats, fmt.Errorf("ingest: projection %s verification aborted by batch cancellation: %w", generation, parentErr)
 		}
 		select {
 		case <-ctx.Done():
-			if lastErr != nil {
-				return fmt.Errorf("ingest: projection %s verification failed: %w", generation, lastErr)
+			// 本簇窗口到期：根因就是「到期仍不可见」。lastErr 若只是本簇自己的超时引发的传输类
+			// 错误（context deadline exceeded / canceled），不改变这一结论——否则现场会把
+			// 「数据没可见」误读成「查询失败」（2026-10-01 在 `-race` 下实测到该形态：
+			// 注入「少写一行」后错误被改写成 verification failed: context deadline exceeded）。
+			if lastErr != nil && !verifyErrorIsTimeoutLike(lastErr) {
+				return stats, fmt.Errorf("ingest: projection %s verification failed: %w", generation, lastErr)
 			}
-			return fmt.Errorf("ingest: projection %s not fully visible before deadline: %w", generation, ctx.Err())
+			return stats, fmt.Errorf("ingest: projection %s not fully visible before deadline: %w", generation, ctx.Err())
 		case <-time.After(backoff):
 		}
 		backoff = nextVerifyBackoff(backoff, m.verifyBackoffMax)
 	}
 }
 
+// errText 把可空错误渲染为日志字段（nil → 空串，避免日志里出现 "<nil>"）。
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func (m *Manager) verifyProjectionOnce(ctx context.Context, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {
-	return m.verifyProjectionOnceAllowed(ctx, m.vl, source, generation, events, nil)
+	complete, _, err := m.verifyProjectionQuery(ctx, m.vl, source, generation, events, nil)
+	return complete, err
 }
 
 // utcDayBounds 返回 "2006-01-02" 形式的 UTC 日的闭区间 [起, 止]。
@@ -1700,25 +1970,29 @@ func sameSourceConfig(a, b SourceConfig) bool {
 	return a == b
 }
 
-// verifyProjectionOnceAllowed 执行一次校验查询。
+// verifyProjectionQuery 执行一次校验查询，并返回本次的读回量（行数/字节数）。
 //
-// 与 verifyProjectionOnceWithClient 的唯一差别是 allowed：分批校验时，各片的时间范围重叠，
-// 查询会返回**同批其他分片**的记录。这些记录必须被接受（否则误判 unexpected），
-// 但仍要求内容逐字段一致、且不得重复出现；完整性只要求本片 events 全部可见。
-// allowed 为 nil 时退化为「本片即全部」的原语义。
-func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) (bool, error) {
+// 与 verifyProjectionOnceWithClient 的唯一差别是 allowed：分批校验时，各簇的时间范围可能相接，
+// 查询会返回**同批其他簇**的记录。这些记录必须被接受（否则误判 unexpected），
+// 但仍要求内容逐字段一致、且不得重复出现；完整性只要求本簇 events 全部可见。
+// allowed 为 nil 时退化为「本簇即全部」的原语义。
+//
+// 判定规则与旧实现逐字一致（相同的 selector、时间窗、日夹取、逐字段比对与三类错误文案）；
+// 新增的 verifyQueryStats 只用于观测与回归读数，不参与任何判定。
+func (m *Manager) verifyProjectionQuery(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) (bool, verifyQueryStats, error) {
+	var stats verifyQueryStats
 	if client == nil {
-		return false, fmt.Errorf("ingest: VictoriaLogs verification client is unavailable")
+		return false, stats, fmt.Errorf("ingest: VictoriaLogs verification client is unavailable")
 	}
 	want := make(map[string]logtypes.Event, len(events))
 	var first, last time.Time
 	for _, event := range events {
 		if _, exists := want[event.EventID]; exists {
-			return false, fmt.Errorf("duplicate canonical event_id %s", event.EventID)
+			return false, stats, fmt.Errorf("duplicate canonical event_id %s", event.EventID)
 		}
 		when, err := canonicalEventTime(event)
 		if err != nil {
-			return false, fmt.Errorf("invalid canonical event time for %s: %w", event.EventID, err)
+			return false, stats, fmt.Errorf("invalid canonical event time for %s: %w", event.EventID, err)
 		}
 		if first.IsZero() || when.Before(first) {
 			first = when
@@ -1782,6 +2056,13 @@ func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup
 		scanner := bufio.NewScanner(io.LimitReader(body, 32<<20+1))
 		scanner.Buffer(make([]byte, 64*1024), 4<<20)
 		for scanner.Scan() {
+			// 取消（同批其他簇已失败）时立即收手：否则会把被截断的响应体报成
+			// `unexpected end of JSON input`，掩盖真正的根因。
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			stats.Rows++
+			stats.Bytes += int64(len(scanner.Bytes())) + 1 // +1：NDJSON 行尾换行
 			var row struct {
 				EventID       string `json:"event_id"`
 				CanonicalHash string `json:"canonical_content_hash"`
@@ -1818,9 +2099,9 @@ func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup
 		return scanner.Err()
 	})
 	if err != nil {
-		return false, err
+		return false, stats, err
 	}
-	return len(seen) == len(want), nil
+	return len(seen) == len(want), stats, nil
 }
 
 func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {
