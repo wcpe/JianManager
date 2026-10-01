@@ -162,8 +162,22 @@ type Manager struct {
 	verifyChunkEvents int
 	// verifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取默认，1 为串行。
 	verifyChunkConcurrency int
-	capacityProvider       func() (acquire.CapacityBudget, error)
-	recoveryHold           func(SourceConfig, string) (bool, string)
+	// sourceMaxEnd 缓存每源「权威集合的最大 record_end」（封闭可见水位）。
+	//
+	// 为什么需要（FR-498 单位行成本 8.3× 的修复之一）：publish 原先把 maxEnd 算成
+	// 「传入 events 的最大 record_end」，而 events 是**权威全量**——为拿这一个标量，每批
+	// 都要遍历该源全部历史事件（生产实测单源段 18GB/63 源，单次遍历 8.7 µs/行）。
+	// 该水位是**单调不减**的（段只追加、投递只前进），因此可以按源缓存、每批只与「本批最大值」
+	// 取大。字段缺失时由 authoritativeMaxEnd 用 state 的 EventsStoredThrough 初始化。
+	sourceMaxEnd map[string]uint64
+	// eventsStoredRows 缓存每源「段存储已落行数」，避免 appendEvents 每批 Count（其内部要
+	// 校准末段 = O(末段行数) 的整段读取）。本进程是段的唯一写者，追加成功后按增量推进即可。
+	eventsStoredRows map[string]int
+	// stageSink 是阶段计时的测试观测口（生产为 nil，零开销）：让回归能断言「快路径确实生效」，
+	// 而不必依赖耗时阈值或日志解析。
+	stageSink        func(string)
+	capacityProvider func() (acquire.CapacityBudget, error)
+	recoveryHold     func(SourceConfig, string) (bool, string)
 	// reconcile 是启动增量对账（FR-497）的生效配置（已归一化）。
 	reconcile ReconcileConfig
 	// indexPrune 是历史投递批次裁剪的生效配置（已归一化，默认开启）：建每个源的账本时下发
@@ -1202,6 +1216,225 @@ func importArchives(p *pipeline.Pipeline, paths []string) ([]logtypes.Event, boo
 	return out, changed, nil
 }
 
+// deliveryTiming 记录一次投递内各阶段的耗时（**纯观测**，不改任何逻辑）。
+//
+// 为什么要有它：投递路径的单批耗时构成在现场不可见——`投影写入开始/结束` 只有秒级精度，
+// verify 有自己的一条打点，而「进 deliver 到出 deliver」之间的其余阶段（身份集合重建、
+// 权威集合构建、代次探测、缺口消解）此前没有任何读数。单位行成本 8.3× 的定位缺的就是它。
+// 输出为 debug 级：生产默认 info 不受影响，压测/夹具把 log.level 调成 debug 即可。
+type deliveryTiming struct {
+	key    string
+	events int
+	start  time.Time
+	last   time.Time
+	marks  []string
+	// sink 非 nil 时把阶段串交给测试观测口（见 Manager.stageSink）。
+	sink func(string)
+}
+
+func newDeliveryTiming(key string, events int, sink func(string)) *deliveryTiming {
+	now := time.Now()
+	return &deliveryTiming{key: key, events: events, start: now, last: now, sink: sink}
+}
+
+// mark 记录自上一个 mark 起（或函数入口起）的耗时。
+func (t *deliveryTiming) mark(stage string) {
+	if t == nil {
+		return
+	}
+	now := time.Now()
+	t.marks = append(t.marks, fmt.Sprintf("%s=%dms", stage, now.Sub(t.last).Milliseconds()))
+	t.last = now
+}
+
+// report 输出一批的阶段计时。
+//
+// 为什么用环境变量而不是日志级别门控：Worker 的 `log.level` 配置目前没有接到 slog 的
+// handler 级别上（`log.level: debug` 不产生任何 DEBUG 输出，实测），因此 debug 级打点
+// 在现场与夹具里都取不到。这里用显式开关：生产默认关闭（不刷屏），
+// `JIANMANAGER_STAGE_TIMING=1` 打开（压测/夹具/定位现场）。
+func (t *deliveryTiming) report() {
+	if t == nil {
+		return
+	}
+	if t.sink != nil {
+		t.sink(strings.Join(t.marks, " "))
+	}
+	if !stageTimingEnabled() {
+		return
+	}
+	slog.Info("采集批次阶段耗时",
+		"source", t.key, "events", t.events,
+		"stages", strings.Join(t.marks, " "), "totalMs", time.Since(t.start).Milliseconds())
+}
+
+var (
+	stageTimingOnce sync.Once
+	stageTimingOn   bool
+)
+
+func stageTimingEnabled() bool {
+	stageTimingOnce.Do(func() { stageTimingOn = os.Getenv("JIANMANAGER_STAGE_TIMING") == "1" })
+	return stageTimingOn
+}
+
+// deliveryTailPlan 描述「本批能否作为权威集合的增量尾部直接处理」。
+//
+// 背景（FR-498 单位行成本 8.3×，2026-10-02 实测定位）：
+// 投递路径原先每批要做三次 O(段总行数) 的操作——身份集合重建（deliver）、权威全量构建
+// （canonicalRecoveryEvents）、段行数校准（appendEvents 的 Count）。段**只增不减**且没有裁剪
+// 路径（契约 §4.3/§5.3 要求它作为 VL 数据根丢失后的权威集合），于是单源段在生产上已达数十万行
+// （全库 18 GB / 63 源），微基准实测单次遍历 8.7 µs/行 ⇒ 每批数秒，且成本随运行时长线性增长。
+// 实验室（段从零开始）没有这个成本——这正是 0.36 → 2.95 ms/行（8.3×）的主因，
+// 也解释了「资源全闲但达成率 0.79」：时间花在单线程的磁盘遍历上，不是算力。
+type deliveryTailPlan struct {
+	// Fast 为真时：本批区间整体在「段已覆盖水位」与「已投递水位」之后，且没有重放/待发布语义
+	// ⇒ 三段 O(段) 操作全部可省。
+	Fast bool
+	// StoredRows 是段存储已落行数（快路径下由缓存给出，避免每批 Count 校准末段）。
+	StoredRows int
+	// MaxEnd 是权威集合的最大 record_end（缓存水位与本批取大，单调不减）。
+	MaxEnd uint64
+	// Events 是本批要追加进段存储的事件（快路径下即权威集合的增量尾部）。
+	Events []logtypes.Event
+}
+
+// planDeliveryTail 判定本批是否可以走「增量尾部」快速路径，并给出段追加与发布水位所需的读数。
+//
+// 判据（三条全部成立才快，任一不成立即回退到原全量路径）：
+//  1. **语义上不需要权威全量**：不是重放、没有待发布语义（「代次预算耗尽」已在 deliver 里并入
+//     replace 判定，故这里只认 replay/PublicationPending）；
+//  2. **事件体已在段存储**：否则权威集合在内联切片里，重建本来便宜，无需快路径；
+//  3. **本批区间整体在水位之后**：最小 record_start >= 段已覆盖水位（不与段内容重叠 ⇒ 无重复可去）
+//     且 >= 已投递水位（该区间从未投递过 ⇒ 身份集合里不可能命中）。
+//
+// 安全论证（为什么跳过身份重建不削弱保证）：
+//   - 身份集合的唯一用途是「跳过已写入的同 ID 事件」与「检出同 ID 不同哈希」。重复只可能来自
+//     「该区间曾经投递过」——判据 3 的第二条把它排除。
+//   - 偶发的 IDENTITY_CONFLICT（同 ID 不同哈希）不会被静默放过：两行都会写入 VL，
+//     随后**逐字段可见性校验**会以 duplicate / content mismatch 失败（fail loud，不是 fail silent）。
+//   - tailer 回退/重读同一区间：第一次投递成功会推进已投递水位，第二次因 minStart < 水位
+//     自动回退慢路径，仍走全量去重；第一次失败（水位未推进）时的重投本就是必须的重试。
+func (m *Manager) planDeliveryTail(key string, saved persistedSource, events []logtypes.Event, replay bool) deliveryTailPlan {
+	plan := deliveryTailPlan{}
+	if replay || saved.PublicationPending || m.events == nil || len(events) == 0 {
+		return plan
+	}
+	// 权威集合仍在**内联切片**里时必须走全量路径：那时重建本来就便宜，而且去重是必需的。
+	// 注意判据不是 EventsStored：该标记是 state 的字段，段已存在但 state 新建/重置时它为假
+	// （夹具与「换机重挂数据根」都命中这一形态），此时权威集合其实已经在段里。
+	if len(saved.Events) > 0 {
+		return plan
+	}
+	p, ok := m.pipeFor(key)
+	if !ok {
+		return plan
+	}
+	positions, ok := p.Positions()
+	if !ok {
+		return plan
+	}
+	minStart, maxEnd := events[0].Record.Start, events[0].Record.End
+	for _, e := range events[1:] {
+		if e.Record.Start < minStart {
+			minStart = e.Record.Start
+		}
+		if e.Record.End > maxEnd {
+			maxEnd = e.Record.End
+		}
+	}
+	if minStart < saved.EventsStoredThrough || minStart < positions.Delivery {
+		return plan
+	}
+	stored, ok := m.cachedStoredRows(key)
+	if !ok {
+		return plan
+	}
+	plan.Fast = true
+	plan.StoredRows = stored
+	plan.MaxEnd = m.advanceSourceMaxEnd(key, maxEnd)
+	return plan
+}
+
+// pipeFor 返回该源的采集管道（快照语义；调用方只读 Positions）。
+func (m *Manager) pipeFor(key string) (*pipeline.Pipeline, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.pipes[key]
+	return p, ok
+}
+
+// cachedStoredRows 返回段存储已落行数：首次用 Count 建立基线（含末段校准），此后按追加增量推进。
+// 本进程是段的唯一写者，且段没有任何裁剪/改写路径（契约要求的「只换介质不裁剪」），
+// 故缓存在进程生命周期内有效。
+func (m *Manager) cachedStoredRows(key string) (int, bool) {
+	if m.events == nil {
+		return 0, false
+	}
+	m.mu.Lock()
+	n, ok := m.eventsStoredRows[key]
+	m.mu.Unlock()
+	if ok {
+		return n, true
+	}
+	n, err := m.events.Count(key)
+	if err != nil {
+		return 0, false
+	}
+	m.mu.Lock()
+	if m.eventsStoredRows == nil {
+		m.eventsStoredRows = map[string]int{}
+	}
+	m.eventsStoredRows[key] = n
+	m.mu.Unlock()
+	return n, true
+}
+
+// advanceSourceMaxEnd 推进并返回该源「权威集合的最大 record_end」（单调不减的水位缓存）。
+//
+// 为什么不直接遍历权威全量：那正是 8.3× 的成本来源之一（快路径下 events 只含本批，
+// 而全量遍历要读该源全部历史事件）。水位的三个来源都单调不减：
+//   - state 的 EventsStoredThrough（段已覆盖的最大 record_end，持久化字段）；
+//   - 采集管道的 Durable 水位（WAL 已持久化到的 record_end，覆盖「已落 WAL 但未落段」的部分）；
+//   - 本次 events 的最大 record_end。
+//
+// 三者取大即权威全量的 max：权威集合 = 段内容 + durable WAL（见 canonicalRecoveryEvents），
+// 而两部分的右端分别由前两个水位给出。
+func (m *Manager) advanceSourceMaxEnd(key string, batchMax uint64) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sourceMaxEnd == nil {
+		m.sourceMaxEnd = map[string]uint64{}
+	}
+	cur := m.sourceMaxEnd[key]
+	if saved, ok := m.state.Sources[key]; ok && saved.EventsStoredThrough > cur {
+		cur = saved.EventsStoredThrough
+	}
+	if p, ok := m.pipes[key]; ok && p != nil {
+		if pos, ok := p.Positions(); ok && pos.Durable > cur {
+			cur = pos.Durable
+		}
+	}
+	if batchMax > cur {
+		cur = batchMax
+	}
+	m.sourceMaxEnd[key] = cur
+	return cur
+}
+
+// projectionGenerationsExhausted 报告该源已发布的投影代次是否已达上限（需要整窗重发刷新）。
+func (m *Manager) projectionGenerationsExhausted(source SourceConfig) bool {
+	if m.cat == nil {
+		return false
+	}
+	catKey := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
+	current, ok := m.cat.Get(catKey)
+	if !ok {
+		return false
+	}
+	return len(publishedSourceProjectionGenerations(current.PublishedProjection, source)) >= maxPublishedProjectionGenerations
+}
+
 func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
 	if len(events) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
@@ -1209,32 +1442,48 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	if m.vl == nil && m.vlRoute == nil {
 		return pipeline.DeliveryResult{HTTPStatus: 0}, fmt.Errorf("ingest: VictoriaLogs client is not ready")
 	}
+	// 阶段计时（纯观测）：投递路径的单批耗时构成在现场不可见，8.3× 单位成本定位缺的就是它。
+	timing := newDeliveryTiming(source.LogSourceID+"/"+source.SourceGeneration, len(events), m.stageSink)
+	defer timing.report()
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	m.mu.Lock()
 	saved := m.state.Sources[key]
-	seen := make(map[string]string, len(saved.Events))
-	for _, event := range saved.Events {
-		event, err := normalizeCanonicalEvent(event)
-		if err != nil {
-			m.mu.Unlock()
-			return pipeline.DeliveryResult{}, err
-		}
-		seen[event.EventID] = event.CanonicalHash
-	}
-	eventsStored := saved.EventsStored && m.events != nil
 	m.mu.Unlock()
-	// 事件体已落段时，身份集合从段流式重建（不持全量切片）；旧格式仍走内联切片。
-	if eventsStored {
-		if err := m.events.Iterate(key, func(event logtypes.Event) error {
-			normalized, err := normalizeCanonicalEvent(event)
+	// 增量尾部快速路径（判据与安全论证见 planDeliveryTail）：满足时跳过「遍历该源全部历史事件」
+	// 重建身份集合——这是单位行成本里最贵的一项（生产单源段实测可达 70 万行，微基准
+	// 单次遍历 8.7 µs/行 ≈ 6 秒/批，而段只增不减，成本随运行时长线性增长）。
+	tail := m.planDeliveryTail(key, saved, events, replay)
+	var seen map[string]string
+	if tail.Fast {
+		seen = make(map[string]string, len(events))
+		timing.mark("seen-skipped")
+	} else {
+		seen = make(map[string]string, len(saved.Events))
+		m.mu.Lock()
+		for _, event := range saved.Events {
+			event, err := normalizeCanonicalEvent(event)
 			if err != nil {
-				return err
+				m.mu.Unlock()
+				return pipeline.DeliveryResult{}, err
 			}
-			seen[normalized.EventID] = normalized.CanonicalHash
-			return nil
-		}); err != nil {
-			return pipeline.DeliveryResult{}, err
+			seen[event.EventID] = event.CanonicalHash
 		}
+		eventsStored := saved.EventsStored && m.events != nil
+		m.mu.Unlock()
+		// 事件体已落段时，身份集合从段流式重建（不持全量切片）；旧格式仍走内联切片。
+		if eventsStored {
+			if err := m.events.Iterate(key, func(event logtypes.Event) error {
+				normalized, err := normalizeCanonicalEvent(event)
+				if err != nil {
+					return err
+				}
+				seen[normalized.EventID] = normalized.CanonicalHash
+				return nil
+			}); err != nil {
+				return pipeline.DeliveryResult{}, err
+			}
+		}
+		timing.mark("seen")
 	}
 	m.mu.Lock()
 	toWrite := make([]logtypes.Event, 0, len(events))
@@ -1260,19 +1509,40 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 		seen[event.EventID] = event.CanonicalHash
 	}
 	m.mu.Unlock()
+	timing.mark("toWrite")
 	if len(toWrite) == 0 {
 		// 本批事件此前已写入且逐字段一致（seen 命中同 ID 同哈希）：同样是「该区间已落库」的证据，
 		// 故与写成功路径一样自动消解被它覆盖的缺口。
 		m.resolveGapsLandedByDelivery(source, events)
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
-	expected, err := m.canonicalRecoveryEvents(key, saved)
-	if err != nil {
-		return pipeline.DeliveryResult{}, err
+	// 权威全量的构建是 O(段行数)（生产单源实测可达 70 万行 ≈ 6 秒）；只有「整窗重发」语义
+	// （重放 / 待发布 / 代次数达上限）才需要它作为写入面与证据面。快路径下本批就是权威集合的
+	// 增量尾部，写入面 / 证据面 / 段追加 / 发布水位全部可由「本批 + 缓存水位」给出，
+	// 故跳过全量重建（判据见 planDeliveryTail）。
+	replace := saved.PublicationPending || replay
+	if !replace && m.projectionGenerationsExhausted(source) {
+		// 与 writeProjectionDay 内同一判据等价：它只取决于**本源自己**已发布的代次数，
+		// 而同源的投递是串行的，所以提前到这里判定不会与后续判定不一致；
+		// 提前的目的是在构建权威全量**之前**就知道它是否被需要。
+		replace = true
+	}
+	var expected []logtypes.Event
+	if tail.Fast && !replace {
+		expected = toWrite
+		timing.mark("recovery-skipped")
+	} else {
+		var err error
+		expected, err = m.canonicalRecoveryEvents(key, saved)
+		if err != nil {
+			return pipeline.DeliveryResult{}, err
+		}
+		timing.mark("recovery")
 	}
 	// 代次名必须是 VL 中尚未出现过的名字：状态回滚/重置后计数器会回退，直接进位会重名
 	// （见 nextFreeProjectionGeneration 的事故说明）。
 	generation := m.nextFreeProjectionGeneration(source, saved.ProjectionGeneration)
+	timing.mark("probe")
 	writeEvents := toWrite
 	if saved.PublicationPending {
 		writeEvents = expected
@@ -1290,7 +1560,7 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	// → VL 排序超 51MB → 400 → 该目标恒 not_ready。
 	// 注：曾试过用数据形状判别（EventsStored / EventsStoredThrough / eventsStored /
 	// len(toWrite)==len(expected)），全部被证伪：真实重放的批次只是全量的子集。
-	replace := saved.PublicationPending || replay
+	replace = replace || saved.PublicationPending || replay
 	// 本次**实际写入面**（校验逐字段覆盖的就是它）：
 	// replace 为真时 writeProjectionPlan 会把写入面扩为权威全量（整窗重发），否则就是本批。
 	// 自动消解必须按实际写入面取证据，否则重放会「写了却没消解」，缺口又只能等人工。
@@ -1298,13 +1568,21 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	if replace {
 		evidence = expected
 	}
-	result, err := m.writeProjection(source, expected, generation, writeEvents, toWrite, replace)
+	plan := projectionWritePlan{Write: writeEvents, Archive: toWrite, Replace: replace}
+	if tail.Fast && !replace {
+		// 增量尾部：段追加走 O(本批) 路径、发布水位走缓存（见 projectionWritePlan.Tail）。
+		tail.Events = toWrite
+		plan.Tail = &tail
+	}
+	result, err := m.writeProjectionPlan(source, expected, generation, plan)
 	if err != nil {
 		return result, err
 	}
+	timing.mark("write")
 	// 投递成功（写 VL + 逐字段可见性校验 + catalog 发布）= 该写入面已确认落库 → 自动消解
 	// 被它完全覆盖的缺口。这是缺陷 A 的「成功后自动消解」出口：重投成功即清零，不再依赖人工。
 	m.resolveGapsLandedByDelivery(source, evidence)
+	timing.mark("resolve")
 	if os.Getenv("JIANMANAGER_LOG_INJECT_ACK_LOSS") == "1" {
 		result.AckLost = true
 	}
@@ -1327,6 +1605,9 @@ type projectionWritePlan struct {
 	// 权威全量，且 Days 必须与 Write 的天集合完全一致——错位会「标记为已发布却没写数据」，
 	// 故按硬失败处理（宁可启动失败，不接受静默丢数据）。
 	Days []string
+	// Tail 非 nil 表示本次是「权威集合的增量尾部」：段存储按增量追加、发布水位走缓存，
+	// 不需要（也没有）权威全量（判据与安全论证见 deliveryTailPlan）。
+	Tail *deliveryTailPlan
 }
 
 func (m *Manager) writeProjection(source SourceConfig, events []logtypes.Event, generation string, writeEvents, archiveEvents []logtypes.Event, replace bool) (pipeline.DeliveryResult, error) {
@@ -1391,7 +1672,7 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 	for _, day := range writeDays {
 		daySource := source
 		daySource.UTCDay = day
-		dayResult, writeErr := m.writeProjectionDay(daySource, grouped[day], writeGrouped[day], generation, archiveGrouped[day], plan.Replace)
+		dayResult, writeErr := m.writeProjectionDay(daySource, grouped[day], writeGrouped[day], generation, archiveGrouped[day], plan.Replace, plan.Tail != nil)
 		if dayResult.HTTPStatus != 0 {
 			result.HTTPStatus = dayResult.HTTPStatus
 		}
@@ -1407,7 +1688,14 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 	m.mu.Unlock()
 	// 事件体写入磁盘段（先内容、后引用）：写入成功并 fsync 后，再让 state 元数据引用它。
 	// 契约 §4.3/§5.3 要求这是 VL 数据根丢失后重建 projection 的权威集合，故不裁剪只换介质。
-	if err := m.appendEvents(key, events); err != nil {
+	//
+	// 快路径（plan.Tail）下 events 就是「权威集合的增量尾部」，直接追加即可：
+	// 省掉 appendEvents 的 Count（末段校准 = O(末段行数)）与全量比对。
+	if plan.Tail != nil {
+		if err := m.appendEventTail(key, *plan.Tail); err != nil {
+			return result, err
+		}
+	} else if err := m.appendEvents(key, events); err != nil {
 		return result, err
 	}
 	// 这里**不再**单独落库一次：本批次引发的 state 变更（投影代次 / 发布待定 / 段覆盖水位）
@@ -1473,6 +1761,43 @@ func (m *Manager) appendEvents(key string, events []logtypes.Event) error {
 	return nil
 }
 
+// appendEventTail 把「增量尾部」事件追加进段存储（投递快路径专用）。
+//
+// 与 appendEvents 的差别：后者的入参是**权威全量**，需要 Count 校准末段、与 len(events) 比对后
+// 追加差额；快路径已由 planDeliveryTail 保证「本批区间整体在段已覆盖水位之后」，
+// 因此可以直接追加，行数走缓存（StoredRows），不再每批做 O(末段) 的 Count。
+//
+// 状态推进与 appendEvents 逐字一致：段写成功后才把 state 标记为「已落段」并推进
+// EventsStoredThrough（B1a 的按条引用判据），并清掉内联副本（避免常驻切片把 RSS 推高）。
+func (m *Manager) appendEventTail(key string, tail deliveryTailPlan) error {
+	if m.events == nil || len(tail.Events) == 0 {
+		return nil
+	}
+	if err := m.events.Append(key, tail.Events); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	if m.eventsStoredRows == nil {
+		m.eventsStoredRows = map[string]int{}
+	}
+	m.eventsStoredRows[key] = tail.StoredRows + len(tail.Events)
+	saved := m.state.Sources[key]
+	saved.EventsStored = true
+	var covered uint64
+	for _, ev := range tail.Events {
+		if ev.Record.End > covered {
+			covered = ev.Record.End
+		}
+	}
+	if covered > saved.EventsStoredThrough {
+		saved.EventsStoredThrough = covered
+	}
+	saved.Events = nil
+	m.state.Sources[key] = saved
+	m.mu.Unlock()
+	return nil
+}
+
 // migrateInlineEvents 把旧格式（state 内联 events）搬到段存储并重写 state。
 // 任一步失败即保留旧格式继续运行（不丢数据、不半途改格式）。
 func (m *Manager) migrateInlineEvents() error {
@@ -1516,10 +1841,13 @@ func (m *Manager) migrateInlineEvents() error {
 
 const maxPublishedProjectionGenerations = 64
 
-func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []logtypes.Event, generation string, archiveEvents []logtypes.Event, replace bool) (pipeline.DeliveryResult, error) {
+func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []logtypes.Event, generation string, archiveEvents []logtypes.Event, replace bool, tailPlanned bool) (pipeline.DeliveryResult, error) {
 	catKey := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
 	expectedAuthority, _ := m.cat.Get(catKey)
-	if current, ok := m.cat.Get(catKey); ok && !replace &&
+	// tailPlanned 表示本次是「增量尾部」快路径：代次预算的判定已在 deliver 里做过
+	// （同一判据、同源串行，见 projectionGenerationsExhausted），此处不得再改写 replace——
+	// 快路径下 events 只是本批，没有可供整窗重发的权威全量。
+	if current, ok := m.cat.Get(catKey); ok && !replace && !tailPlanned &&
 		len(publishedSourceProjectionGenerations(current.PublishedProjection, source)) >= maxPublishedProjectionGenerations {
 		replace = true
 		writeEvents = events
@@ -2786,12 +3114,16 @@ func normalizeCanonicalEvent(event logtypes.Event) (logtypes.Event, error) {
 
 func (m *Manager) publish(source SourceConfig, projectionGeneration string, events []logtypes.Event, replace bool, observed ...*catalog.Record) error {
 	key := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
-	maxEnd := uint64(0)
+	// 权威集合的最大 record_end（封闭可见水位）：按源缓存 + 本次 events 取大，避免为这一个标量
+	// 遍历全部历史事件（见 advanceSourceMaxEnd）。快路径下 events 只含本批，
+	// 全量历史由缓存（段覆盖水位 + Durable 水位）给出，两者等价。
+	batchMax := uint64(0)
 	for _, event := range events {
-		if event.Record.End > maxEnd {
-			maxEnd = event.Record.End
+		if event.Record.End > batchMax {
+			batchMax = event.Record.End
 		}
 	}
+	maxEnd := m.advanceSourceMaxEnd(source.LogSourceID+"/"+source.SourceGeneration, batchMax)
 	if maxEnd == 0 {
 		return nil
 	}
