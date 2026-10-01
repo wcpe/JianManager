@@ -80,6 +80,23 @@ const pendingSpoolRoot = "pending"
 type Manager struct {
 	mu      sync.Mutex
 	cycleMu sync.Mutex
+	// registerMu 串行化「实例登记 / 采集绑定」自身，使这条路径**永不等待采集轮的长临界区**。
+	//
+	// 为什么要与 cycleMu 分离（2026-10-01 生产事故根因）：cycleMu 的持有者是「整轮采集」
+	// （pollOnce：逐源 Poll → WAL → persist → VL 投递 → 投影校验，单轮在饱和期可达分钟级）
+	// 与「预备切换 / 停止」（全管道 Flush + persist）。登记路径此前也取 cycleMu，于是
+	// 「CP 启动实例 → Worker CreateInstance → 登记实例日志采集」这一步被整轮采集挡住，
+	// 在 CP 的 10 秒 RPC 截止时间内必然 DeadlineExceeded（07:39/07:46/07:49/08:44 四次全中）。
+	//
+	// 登记为什么不需要 cycleMu 的互斥：登记只做三件事——读/写 m.state.Instances、按源键
+	// 幂等登记管道（m.mu 内建表）、persist（m.mu 内整段临界区）。三者都在 m.mu 保护下，
+	// 而 pollOnce 对本轮管道集合的取用是「m.mu 下快照、快照外轮询」，新增管道最多延到
+	// 下一轮参与采集（首轮无数据，无正确性损失）。故两者之间不需要额外互斥。
+	//
+	// 锁序（任何路径都不得逆序）：cycleMu → registerMu → pendingMu → mu。
+	// registerMu 永远不等待 cycleMu（否则本锁失去意义），Stop 则以 cycleMu → registerMu
+	// 的顺序把「关闭采集索引」与登记串行开，避免登记在 Stop 之后重新打开索引句柄。
+	registerMu sync.Mutex
 	// pendingMu 串行化暂存写入与注册接管，避免绑定切换时发生乱序或重复回放。
 	pendingMu sync.Mutex
 	root      string
@@ -711,6 +728,10 @@ func (m *Manager) Stop() error {
 	}
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
+	// 与登记串行（锁序 cycleMu → registerMu，见 registerMu 注释）：Stop 之后不能再有登记
+	// 进来 persist——那会在索引句柄关闭后把它重新打开，留下无人关闭的连接与 WAL 残留。
+	m.registerMu.Lock()
+	defer m.registerMu.Unlock()
 	m.mu.Lock()
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
 	for _, p := range m.pipes {
