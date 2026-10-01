@@ -24,7 +24,14 @@ import (
 
 // Config Worker Node 配置。
 type Config struct {
-	Name         string   `mapstructure:"name"`
+	Name string `mapstructure:"name"`
+	// configPath 是本次**真的读到并应用**的配置文件路径（空串 = 未读到任何配置文件，
+	// 全部取值来自内置默认与 JIANMANAGER_ 环境变量；包含「显式指定了路径但文件不存在」这一形态）。
+	//
+	// 为什么要记录并暴露它（2026-10-02 真机复验）：现场「改了 worker.yml 重启却没生效」的第一嫌疑
+	// 永远是「进程读的不是你改的那个文件」（cwd / exe 旁 / configs 三处都在搜索路径里，服务形态下
+	// cwd 还可能是 System32）。启动日志里打出实际读到的路径与生效的采集口径，一眼可判。
+	configPath   string
 	ControlPlane string   `mapstructure:"control_plane"`
 	NodeSecret   string   `mapstructure:"node_secret"`
 	WS           WSConfig `mapstructure:"ws"`
@@ -509,6 +516,15 @@ type LogIngestConfig struct {
 	Charset string `mapstructure:"charset"`
 }
 
+// ConfigPath 返回本次实际读取并应用的配置文件绝对路径；空串表示本次启动没有任何配置文件生效
+// （键值全部来自内置默认与 JIANMANAGER_ 环境变量，包含「指定了不存在的路径」）。
+func (c *Config) ConfigPath() string {
+	if c == nil {
+		return ""
+	}
+	return c.configPath
+}
+
 // IngestDefaultTimeZone 返回装配给 ingest.Options.DefaultTimeZone 的节点级默认时区名。
 //
 // 独立成方法而非在装配点内联读字段：装配值需要被测试直接盯住（配置 → 采集归一化这条接线
@@ -681,16 +697,28 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("绑定注册令牌环境变量失败: %w", err)
 	}
 
-	if err := v.ReadInConfig(); err != nil {
+	readErr := v.ReadInConfig()
+	if readErr != nil {
 		var notFound viper.ConfigFileNotFoundError
-		if !errors.As(err, &notFound) && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("读取 Worker 配置失败: %w", err)
+		if !errors.As(readErr, &notFound) && !os.IsNotExist(readErr) {
+			return nil, fmt.Errorf("读取 Worker 配置失败: %w", readErr)
 		}
 	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, err
+	}
+	// 只有**真的读到并应用**了文件才记录路径：显式指定了不存在的路径（或自动查找落空）时留空，
+	// 让启动日志一眼看出「本次启动没有任何配置文件生效」（那正是「改了 yml 却没生效」的现场）。
+	if readErr == nil {
+		if used := v.ConfigFileUsed(); used != "" {
+			if abs, absErr := filepath.Abs(used); absErr == nil {
+				cfg.configPath = abs
+			} else {
+				cfg.configPath = used
+			}
+		}
 	}
 	if cfg.EnrollToken == "" && strings.TrimSpace(cfg.EnrollTokenFile) != "" {
 		data, readErr := os.ReadFile(cfg.EnrollTokenFile)

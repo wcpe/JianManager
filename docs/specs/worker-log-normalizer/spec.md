@@ -74,6 +74,32 @@
   原地重写会伪造 `canonical_content_hash`/`event_id`，故历史重写必须走新 generation 重放。
 - **零行为变化**：合法 UTF-8 源的正文、`canonical_content_hash` 与字段集合与加固前逐字节一致。
 
+### 3.5 节点级默认的运行期自证与「继承 vs 显式」（2026-10-02 真机复验）
+
+现场：`log_ingest.time_zone: local` 配上并重启后，新入库条目**仍是 +8h**；逐层核对（接线、索引
+恢复路径、归一化链路）全都正确——因为 `local` 解析的是 **Worker 进程**的本地时区：容器
+（alpine 基础镜像无 `TZ`、无 `/etc/localtime`）与部分 systemd 单元（`Environment=TZ=` 空串）里
+它恰好等于 UTC，于是「配了 local」＝「什么都没配」，而**没有任何日志能看出这一点**。
+
+- **取值口径**（不变）：空 = UTC、`local`/`node`/`host` = 进程本地时区、其余为 IANA 名；非法值启动即拒。
+- **运行期自证**（新增）：`ingest.New` 打一条 `采集归一化节点默认时区已生效`（config / resolved /
+  offsetSeconds），并在 `local` 解析为 UTC 时额外打 WARN，提示里含判定依据（`TZ=` 与
+  `/etc/localtime` 是否存在）与可执行替代（显式 IANA 名）；每个源在登记时打一条
+  `日志源归一化口径已生效`（source / timeZone(+是否继承) / resolved / offset / charset）。
+  回归：`ingest.TestDefaultTimeZoneHintFlagsLocalResolvingToUTC`、`...StaysSilentForExplicitConfig`、
+  `ingest.TestParseTimeZoneAliases`。
+- **Worker 启动自证**：`apps/worker` 启动打印 `Worker 配置已加载 configPath=... logIngestTimeZone=...
+  logIngestCharset=...`（`Config.ConfigPath()` = **真的读到并应用**的配置文件绝对路径；空串说明本次
+  启动没有任何配置文件生效，例如路径写错或自动查找落空）。回归：`config.TestLoad_ConfigPathIsReported`。
+- **继承 vs 显式的语义**（本轮明确，含一处行为收紧）：索引里只记**显式**口径（`Charset`/`TimeZone`
+  为空即「跟随节点默认」，不再把继承来的值写回索引），因此
+  ① 未显式配置的源**每次重启都跟随当前节点默认**（改 yml 重启即生效，不再被「上一次继承了什么」锁死）；
+  ② 显式配置过的源**永不被节点默认覆盖**。
+  回归：`ingest.TestNodeDefaultsFollowRestartAndExplicitValuesWin`、
+  `TestDefaultTimeZoneAppliesToRestoredSource`、`TestDefaultCharsetAppliesToRestoredSource`。
+- **生产建议**：显式写 IANA 名（如 `Asia/Hong_Kong`），跨裸机/容器/systemd 都稳定；`local` 只在
+  「Worker 进程与节点 JVM 同机同 TZ」时才等价。
+
 自动回归（转红实测见 CHANGELOG [Unreleased]）：
 `normalize.TestGBKLineDecodesToCorrectUTF8`（现场同型文本 `[Lodestone] 已解析 BC 实例`）、
 `normalize.TestUTF8SourceIsNeverMisdetected`、`normalize.TestCorruptBytesAreNotDecodedIntoChinese`、

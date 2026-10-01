@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -58,4 +59,47 @@ func ParseTimeZone(raw string) (*time.Location, error) {
 func IsValidTimeZone(raw string) bool {
 	_, err := ParseTimeZone(raw)
 	return err == nil
+}
+
+// DefaultTimeZoneHint 返回「节点级默认时区」配置的诊断提示；无异常时返回空串。
+//
+// 为什么必须有它（2026-10-02 真机复验）：现场把 `log_ingest.time_zone: local` 配上并重启后，
+// 新入库条目**仍是 +8h**——而接线、恢复路径、归一化链路逐段核对都是对的，因为 `local` 解析的是
+// **Worker 进程**的本地时区：容器（`alpine` 基础镜像无 `/etc/localtime`、无 `TZ`）与部分 systemd
+// 单元（`Environment=TZ=` 空串）里 `local` 恰好等于 UTC，于是「配了 local」= 「什么都没配」。
+// 这个坑不可能靠读代码或单测发现，只能靠**运行期自证**：把配置值、解析结果与解析依据打出来。
+//
+// 参数 loc 为已解析出的位置（由调用方用 ParseTimeZone 得到），便于本函数保持纯函数、可直测。
+func DefaultTimeZoneHint(raw string, loc *time.Location) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case TimeZoneLocal, "node", "host":
+	default:
+		return ""
+	}
+	if loc == nil {
+		return ""
+	}
+	if _, offset := time.Now().In(loc).Zone(); offset == 0 {
+		return "log_ingest.time_zone=local 在 Worker 进程内解析为 UTC+00:00（" +
+			describeProcessLocalTimeZone() + "）：这与「跟随节点本地时区」的意图不符，" +
+			"日志时间轴会按 UTC 解释。生产建议显式写 IANA 名（如 Asia/Hong_Kong）"
+	}
+	return ""
+}
+
+// describeProcessLocalTimeZone 描述进程本地时区的来源（TZ 环境变量与 /etc/localtime），
+// 供上面的告警定位「为什么 local 成了 UTC」。
+func describeProcessLocalTimeZone() string {
+	tz, set := os.LookupEnv("TZ")
+	switch {
+	case !set:
+		tz = "<未设置>"
+	case strings.TrimSpace(tz) == "":
+		tz = `""（空串：Go 按 UTC 处理）`
+	}
+	localtime := "缺失"
+	if _, err := os.Stat("/etc/localtime"); err == nil {
+		localtime = "存在"
+	}
+	return "TZ=" + tz + ", /etc/localtime=" + localtime
 }

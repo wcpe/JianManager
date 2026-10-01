@@ -146,9 +146,11 @@ func TestDefaultCharsetAppliesWhenSourceDoesNotConfigure(t *testing.T) {
 	m.pollOnce()
 
 	key := source.LogSourceID + "/" + source.SourceGeneration
-	// 接线证据一：登记后的源配置带上节点默认（而不是留空）。
-	require.Equal(t, "gbk", m.state.SourceConfigs[key].Charset,
-		"源未显式配置时，节点级默认字符集必须被登记进源配置")
+	// 接线证据一：生效配置带上节点默认（而不是留空），而索引里保持「未显式配置」（空）。
+	require.Equal(t, "gbk", effectiveConfigOf(t, m, key).Charset,
+		"源未显式配置时，节点级默认字符集必须进入生效配置")
+	require.Equal(t, "", savedConfigOf(t, m, key).Charset,
+		"索引只记显式口径：继承值不得写回，否则改节点默认对已登记源永不生效")
 	events := durableEvents(t, m, key)
 	require.NotEmpty(t, events)
 	require.Equal(t, "[23:54:02] [Server thread/INFO]: 节点默认字符集", events[0].Message,

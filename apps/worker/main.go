@@ -264,6 +264,19 @@ func runWorker() {
 		cfg = loaded
 	}
 
+	// 启动自证（2026-10-02 真机复验）：把「实际读到的配置文件」与关键采集口径一次打清楚。
+	// 现场教训：`log_ingest.time_zone: local` 配上仍按 UTC 解释日志——可能是读的不是你改的文件，
+	// 也可能是 local 在 Worker 进程内恰好解析成 UTC（容器/systemd 常见）。这一行让两者当场可分。
+	configSource := cfg.ConfigPath()
+	if configSource == "" && setupResult != nil {
+		// setup 刚写出 worker.yml 并在内存里构造配置，不重读文件：此处不能显示成「无配置文件」。
+		configSource = "<setup 本次写出并在内存中构造>"
+	}
+	slog.Info("Worker 配置已加载",
+		"configPath", configSource,
+		"logIngestTimeZone", cfg.IngestDefaultTimeZone(),
+		"logIngestCharset", cfg.IngestDefaultCharset())
+
 	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
 	// 经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。非法代理 URL 启动即 fail-fast。
 	// 持有者可运行时重建：CP 经心跳下发节点期望代理后即时生效（custom→节点值 / inherit→全局默认，FR-185）。

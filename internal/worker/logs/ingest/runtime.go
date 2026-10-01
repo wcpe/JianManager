@@ -550,6 +550,22 @@ func New(opts Options) (*Manager, error) {
 	}
 	m.defaultCharset = opts.DefaultCharset
 	m.defaultTimeZone = opts.DefaultTimeZone
+	// 节点级默认时区必须**运行期自证**（2026-10-02 真机复验：配了 local 却仍是 +8h，因为
+	// 容器/systemd 里 local 恰好解析成 UTC）。这段日志与告警把「配置值 → 解析结果 → 解析依据」
+	// 一次说清，避免下一次又去怀疑接线与恢复路径。
+	if loc, err := ParseTimeZone(m.defaultTimeZone); err == nil {
+		_, offset := time.Now().In(loc).Zone()
+		if offset != 0 || strings.TrimSpace(m.defaultTimeZone) != "" {
+			slog.Info("采集归一化节点默认时区已生效",
+				"config", m.defaultTimeZone, "resolved", loc.String(), "offsetSeconds", offset)
+		}
+		if hint := DefaultTimeZoneHint(m.defaultTimeZone, loc); hint != "" {
+			slog.Warn("节点默认时区配置未达到预期效果", "hint", hint)
+		}
+	}
+	if strings.TrimSpace(m.defaultCharset) != "" {
+		slog.Info("采集归一化节点默认字符集已生效", "config", m.defaultCharset)
+	}
 	if m.verificationTimeout <= 0 {
 		// 5 分钟（原 30 秒）。依据 2026-09-28 生产实测：VL 的 /insert/jsonline 是「接收即
 		// 返回 200、索引异步」，恢复期单批 5746 条的可见性延迟**超过 30 秒**——写入 200 成功、
@@ -738,6 +754,9 @@ const (
 
 // Register adds one source; registration is idempotent by logical source key.
 func (m *Manager) Register(source SourceConfig) error {
+	// explicit 是调用方（登记路径 / 索引恢复路径）给的**显式**配置：后面会被节点默认填充，
+	// 故这里先留一份原件，用于「索引只记显式口径」与逐源自证日志。
+	explicit := source
 	if source.LogSourceID == "" || source.SourceGeneration == "" {
 		return fmt.Errorf("ingest: source identity is required")
 	}
@@ -765,6 +784,17 @@ func (m *Manager) Register(source SourceConfig) error {
 	location, err := ParseTimeZone(source.TimeZone)
 	if err != nil {
 		return fmt.Errorf("ingest: 源 %s 的时区配置无效: %w", source.LogSourceID, err)
+	}
+	// 逐源自证「生效归类口径」（2026-10-02 真机复验的教训）：一次运行里每个源只登记一次，
+	// 这条日志把「源 → 生效时区/字符集 → 解析出的偏移」钉死。现场排查时只要 grep 它，
+	// 就能立刻分辨「默认没落到该源」与「默认本身就是 UTC 语义」——不必再逐层读代码猜。
+	{
+		_, offset := time.Now().In(location).Zone()
+		slog.Info("日志源归一化口径已生效",
+			"source", source.LogSourceID, "generation", source.SourceGeneration,
+			"timeZone", source.TimeZone, "timeZoneInherited", explicit.TimeZone == "",
+			"resolved", location.String(), "offsetSeconds", offset,
+			"charset", source.Charset, "charsetInherited", explicit.Charset == "")
 	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	m.mu.Lock()
@@ -831,7 +861,14 @@ func (m *Manager) Register(source SourceConfig) error {
 	if m.state.SourceConfigs == nil {
 		m.state.SourceConfigs = make(map[string]SourceConfig)
 	}
-	m.state.SourceConfigs[key] = source
+	// 索引里只记**显式**口径（2026-10-02 真机复验的连带修复）：Charset / TimeZone 为空表示
+	// 「跟随节点默认」，绝不把继承来的值写回索引——否则「本次运行继承了什么」会被固化成
+	// 「该源的显式值」，之后改 `log_ingest.time_zone`／`log_ingest.charset` 重启对已登记源**永不生效**
+	// （现场表现与「默认没接线」一模一样，极难分辨）。其余字段（Mode/来源类别/命名空间/日分区）
+	// 是结构默认、也是索引行与 catalog 键的输入，仍按生效值落库。
+	persisted := source
+	persisted.Charset, persisted.TimeZone = explicit.Charset, explicit.TimeZone
+	m.state.SourceConfigs[key] = persisted
 	// 持久化基线：账本刚由 Restore/WAL.Restore 填好，内存状态与索引内容一致，
 	// 因此这里直接取当前修订号与段覆盖签名作为「已落库」的起点——否则启动后的首轮
 	// persist 会把每个源都当成变更源重写一遍（对 13 源现场就是几 MB 的无效写入）。

@@ -78,6 +78,13 @@ log:
 # （节点 JVM 与 Worker 同机部署时用它对齐本地日志时间）；其余按 IANA 名解析（如 Asia/Hong_Kong）。
 # 实例源未显式配置时区时继承本默认；非法值**启动即拒**（时区配错会让整源时间轴静默偏移，
 # 不能用回退掩盖）。环境变量覆盖：JIANMANAGER_LOG_INGEST_TIME_ZONE。
+#
+# ⚠ local 解析的是 **Worker 进程**的本地时区，不是「节点 JVM 的时区」：
+#   - 容器（alpine 基础镜像无 /etc/localtime、无 TZ）与部分 systemd 单元（Environment=TZ=）
+#     里它会解析成 UTC —— 此时「配了 local」等于什么都没配，表现为新入库条目仍是 +8h；
+#   - Worker 启动日志会打印 `采集归一化节点默认时区已生效 config=local resolved=... offsetSeconds=...`，
+#     若 local 解析成 UTC 会额外打一条 WARN 提示（含 TZ/ /etc/localtime 的判定依据）。
+#   - 生产建议**显式写 IANA 名**（如 Asia/Hong_Kong），跨部署形态都稳定。
 # log_ingest:
 #   time_zone: local
 

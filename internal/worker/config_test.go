@@ -318,3 +318,24 @@ func TestWorkerConfigExists(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.yml"), []byte("name: x\n"), 0o644))
 	assert.True(t, WorkerConfigExists(), "有 worker.yml 即已配置")
 }
+
+// TestLoad_ConfigPathIsReported 守住「生效配置文件可自证」（2026-10-02 真机复验的连带交付）：
+// 「改了 worker.yml 重启却没生效」的第一嫌疑是「进程读的不是你改的那个文件」——cwd / exe 旁 /
+// configs 三处都在搜索路径里（服务形态下 cwd 还可能是系统目录）。
+//
+// 转红：不记录 `v.ConfigFileUsed()`（ConfigPath 恒为空）→ 本用例必红。
+func TestLoad_ConfigPathIsReported(t *testing.T) {
+	// 未找到任何配置文件：空串（明确表达「全部取自默认值/环境变量」）。
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.ConfigPath(), "没有配置文件时必须明确报告空路径")
+
+	// 显式路径：必须回报该文件的绝对路径（供启动日志自证）。
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: Asia/Hong_Kong\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	abs, err := filepath.Abs(path)
+	require.NoError(t, err)
+	assert.Equal(t, abs, cfg.ConfigPath(), "必须回报实际读到的配置文件绝对路径")
+}
