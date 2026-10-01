@@ -221,7 +221,12 @@ func TestRegisterInstanceNotBlockedBySaturatedPollRound(t *testing.T) {
 	// 测试取 1s：既远小于真实 10s（留出 CI 抖动余量），又必须远小于忙期单轮时长，
 	// 否则该用例无法区分「被长临界区挡住」与「正常登记开销」。
 	const registerDeadline = time.Second
-	const insertDelay = 200 * time.Millisecond
+	// insertDelay 是单次 VL 插入的注入延迟。取值从 200ms 提到 800ms（FR-498 并发采集轮之后）：
+	// 轮内采集已跨源并发重叠，单轮时长不再等于「各源之和」而是「最慢源的路径」，200ms × 2 批
+	// 在 6 源并发下只能造出 ≈0.9s 的忙期 → 触发下方「夹具未制造出长于登记截止时间的忙期」的
+	// 前置断言而失去判别力（实测 921ms < 1s）。提高单源延迟即可在并发轮下重新造出 >1s 的忙期，
+	// 断言本身（登记 < 1s、且在整轮结束前返回）保持不变。
+	const insertDelay = 800 * time.Millisecond
 	const busySources = 6
 	const linesPerSource = 600
 

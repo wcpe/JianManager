@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/disk"
@@ -143,6 +144,25 @@ type Manager struct {
 	reconcileReports []ReconcileReport
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
 	sourceErrs map[string]string
+	// pollConcurrency 是单轮采集的跨源并发度；0/负值取 defaultPollConcurrency，1 为串行。
+	// 作为字段以便用真实限额路径做对照实验与回归，而非只断言常量本身。
+	pollConcurrency int
+	// publishMu 串行化「读当前权威 → 应用本源的投影 → CAS 写回」整段（见 publish）。
+	//
+	// 为什么必须有（FR-498 并发采集轮的前提）：同一 namespace 会有**多个源**（同一实例的
+	// stdout/stderr、多文件源），而 publish 是读-改-写：并发轮下两个源各自读到同一份旧记录，
+	// 后写者会把先写者的 SourceProjections 覆盖掉（丢失更新）。实测：两个 stdio 源并发投递后
+	// 记录里只剩 1 条源投影（原串行实现为 2 条）。锁内重新读取当前记录即恢复串行语义。
+	//
+	// 锁序：它是叶子锁（cat 的回调不进入 Manager），可在 cycleMu 内、m.mu 之外获取。
+	publishMu sync.Mutex
+	// persistGate 让「构建 + 落库」同一时刻只有一次在跑（串行），并让短变更调用者只等
+	// **一个周期**而不是排到队尾（见 persist 的合并说明）。
+	persistGate persistGate
+	// persistJoin / persistCovered 是合并算法的两个水位：调用方按到达顺序声明序号；
+	// 每次落库声明它覆盖到的序号。声明号 ≤ 覆盖水位的调用方直接返回（它的变更已被落库）。
+	persistJoin    atomic.Int64
+	persistCovered atomic.Int64
 	// pendingMaxStream/pendingMaxTotal 是 pending 暂存上限（M-6）；0 表示用默认常量。
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
 	pendingMaxStream int64
@@ -767,6 +787,14 @@ func (m *Manager) CloseIndex() error {
 	if m == nil {
 		return nil
 	}
+	// 与 persist 串行（锁序 persistGate → m.mu）：persist 的落库已在 m.mu 之外，若这里只取
+	// m.mu 就关闭句柄，可能与正在进行的 ApplyScoped 撞上（关闭一个正在被写入的库）。
+	m.persistGateEnsure()
+	m.persistGate.mu.Lock()
+	for m.persistGate.running {
+		m.persistGate.cond.Wait()
+	}
+	m.persistGate.mu.Unlock()
 	m.mu.Lock()
 	store := m.index
 	m.index = nil
@@ -782,6 +810,31 @@ func (m *Manager) CloseIndex() error {
 	return nil
 }
 
+// persistGate 是持久化的「单执行者 + 广播」门：一次只有一个 goroutine 在构建与落库，
+// 其余调用方等待当前周期结束（而不是排到队尾各自再执行一遍）。
+type persistGate struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	running bool
+	// err 是最近一个已完成周期的结果，供等待者返回（不吞错误）。
+	err error
+}
+
+// defaultPollConcurrency 是单轮采集的跨源并发度默认值（0 或负值取它，1 表示回到串行）。
+//
+// 为什么需要并发（FR-498 实测根因，2026-10-01）：单源单轮的时间几乎全部是**等待**而非算力——
+// 60 源基线实测单轮 99.6s 里 pollSource=99.6s、其中 deliver=90.8s、而 deliver 中
+// verify（VL 的 LogsQL 校验查询，含重试退避）=85.3s（占整轮 85.6%）；同期 Worker CPU 仅
+// 17–45%、VL CPU 仅 7–23%，两边都没打满。而采集轮是**逐源串行**的，等于把 60 份网络/磁盘
+// 等待直接叠加成轮周期（实测 ≈1.65s/源 → ≈99s/轮）→ 采集上限被钉在
+// ≈60 源 × 2000 行/轮 ÷ 99s ≈ 1.2k 行/s，不足 30 行/s × 60 源 生成速率的 70%。
+//
+// 语义边界：并发只发生在**源之间**（每源一个工作项），**同源仍然串行**——同一源的
+// poll → WAL 追加 → durable 持久化 → 投递 → 投影校验顺序一个字节都不变，因此暂停/回收/
+// 滞回与「不丢数据」的语义不受影响；跨源本来就没有顺序契约（本轮之前它们只是被同一个
+// 250ms ticker 依次驱动）。
+const defaultPollConcurrency = 8
+
 func (m *Manager) pollOnce() {
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
@@ -794,27 +847,59 @@ func (m *Manager) pollOnce() {
 	for key, p := range m.pipes {
 		pipes = append(pipes, sourcePipe{source: m.sources[key], pipe: p})
 	}
+	workers := m.pollConcurrency
 	m.mu.Unlock()
-	dirty := false
-	for _, item := range pipes {
-		p := item.pipe
-		before, beforeOK := p.Positions()
-		events, metadataChanged, err := m.pollSource(item.source, p)
-		after, afterOK := p.Positions()
-		if before != after || beforeOK != afterOK || len(events) > 0 || metadataChanged || err != nil {
-			dirty = true
-		}
-		if err != nil {
-			// The pipeline records the gap; the Worker process remains available.
-			// 但静默吞掉错误会掩盖 reclaim/projection 持续失败（真机 64 源实测曾整轮 reclaim=0
-			// 却无任何日志）。按源限流暴露一次，便于运维定位。
-			if m.noteSourceError(item.source.LogSourceID, err.Error()) {
-				slog.Warn("日志采集循环错误", "source", item.source.LogSourceID, "error", err)
+	if workers <= 0 {
+		workers = defaultPollConcurrency
+	}
+	if workers > len(pipes) {
+		workers = len(pipes)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	dirty := make([]bool, len(pipes))
+	work := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				item := pipes[i]
+				p := item.pipe
+				before, beforeOK := p.Positions()
+				events, metadataChanged, err := m.pollSource(item.source, p)
+				after, afterOK := p.Positions()
+				if before != after || beforeOK != afterOK || len(events) > 0 || metadataChanged || err != nil {
+					dirty[i] = true
+				}
+				if err != nil {
+					// The pipeline records the gap; the Worker process remains available.
+					// 但静默吞掉错误会掩盖 reclaim/projection 持续失败（真机 64 源实测曾整轮 reclaim=0
+					// 却无任何日志）。按源限流暴露一次，便于运维定位。
+					if m.noteSourceError(item.source.LogSourceID, err.Error()) {
+						slog.Warn("日志采集循环错误", "source", item.source.LogSourceID, "error", err)
+					}
+				}
 			}
-			continue
+		}()
+	}
+	for i := range pipes {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
+
+	anyDirty := false
+	for i := range dirty {
+		if dirty[i] {
+			anyDirty = true
+			break
 		}
 	}
-	if dirty {
+	if anyDirty {
 		_ = m.persist()
 	}
 }
@@ -1141,7 +1226,19 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 	if err := m.appendEvents(key, events); err != nil {
 		return result, err
 	}
-	return result, m.persist()
+	// 这里**不再**单独落库一次：本批次引发的 state 变更（投影代次 / 发布待定 / 段覆盖水位）
+	// 会被随后任意一次 persist 覆盖，而 persist 是「按变更源重建 + 全量根表比对」的增量落库——
+	// 后一次落库总是把前一次的遗漏补齐。紧随其后的落库点有两个：同源下一批的 DurablePersist
+	// （VL 插入前的契约落库）与轮末的统一 persist（pollOnce 的 dirty 分支）。
+	//
+	// 为什么必须去掉（FR-498 并发采集轮的连带修复）：每源每批两次落库时，并发轮里 8 个 worker
+	// 会在全局串行的持久化上排长队，把「短变更」调用者（实例登记）挤到队尾。去掉后单源每批
+	// 只落库一次（VL 插入前那次，契约不变），持久化总量与排队长度减半。
+	//
+	// 崩溃语义没有变弱：投影状态最多晚一次落库到达索引（≤1 轮），而恢复路径本来就不依赖
+	// state 里的投影标记——事件段存储是权威集合（见 canonicalRecoveryEvents），代次重名由
+	// VL 侧占用探测兜底（见 nextFreeProjectionGeneration）。
+	return result, nil
 }
 
 // appendEvents 把该源的 canonical 事件集合同步到磁盘段，并把该源标记为“事件体已落段”。
@@ -2156,10 +2253,22 @@ func (m *Manager) publish(source SourceConfig, projectionGeneration string, even
 	if maxEnd == 0 {
 		return nil
 	}
+	// 串行化「读当前 → 应用本源投影 → CAS 写回」整段：共享 namespace 的多个源在并发采集轮下
+	// 会互相覆盖（见 publishMu 的说明）。
+	m.publishMu.Lock()
+	defer m.publishMu.Unlock()
 	rec, ok := m.cat.Get(key)
 	expected := rec.Clone()
 	if len(observed) > 0 {
-		expected = observed[0]
+		// 保留「校验期间权威变更」的拒绝语义：owner / 代数 / 写路由 / 恢复要求被换掉时，
+		// 不得把本次投影发布到新权威上（TestOwnerChangeDuringVerificationCannotPublishToNewOwner）。
+		//
+		// 为什么不再比较投影清单（manifest）与日志序号：并发轮里其他源发布自己的投影是**正常**
+		// 变更，若按原口径视为冲突，同一 namespace 的多源就会每轮互相打断（本轮实测：两个 stdio
+		// 源只剩 1 条发布）。authority 之外的并发变更一律以「锁内读到的当前记录」为基础合并。
+		if !sameCatalogAuthority(observed[0], rec) {
+			return fmt.Errorf("%w: Catalog authority changed during projection verification", catalog.ErrInvalidState)
+		}
 	}
 	if !ok {
 		rec = catalog.NewStableRecord(key, catalog.OwnerHot, 1, "hot-"+projectionGeneration)
@@ -2238,6 +2347,43 @@ func (m *Manager) publish(source SourceConfig, projectionGeneration string, even
 	return m.cat.PublishProjection(expected, rec)
 }
 
+// sameCatalogAuthority 判定两份 Catalog 记录是否指向同一权威（owner / 代数 / 目录 / 写路由 /
+// 恢复要求）。
+//
+// 为什么不比较投影清单（manifest）与 journal 序号：并发采集轮里**其他源**发布自己的投影会
+// 推进这两者，但那是正常的多源合并，不是权威变更；若按原口径视为冲突，共享 namespace 的源
+// 每轮互相打断（本轮实测：两个 stdio 源最终只剩 1 条投影）。两份都为 nil（记录尚不存在）时
+// 视为同一权威（都被视为「无权威」）。
+func sameCatalogAuthority(a, b *catalog.Record) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		// 一侧缺失：只有在另一侧是「本次发布可安全合并的初始 HOT 权威」时才算同一权威。
+		// 为什么不能一律判否：并发轮里同一 namespace 的另一个源可能刚建立记录（HOT/第 1 代/
+		// 未冻结/无需恢复），那是正常的多源首写，而不是权威切换；一律判否会让共享 namespace
+		// 的源每轮互相打断（本轮实测：两个 stdio 源只剩 1 条投影）。
+		other := a
+		if other == nil {
+			other = b
+		}
+		return isInitialHotAuthority(other)
+	}
+	return a.Owner == b.Owner && a.Generation == b.Generation && a.OwnerDirID == b.OwnerDirID &&
+		a.WriteRoute == b.WriteRoute && a.RecoveryRequired == b.RecoveryRequired
+}
+
+// isInitialHotAuthority 判定记录是否是「HOT 首写」形态的权威（NewStableRecord(OwnerHot,1,...)）：
+// 这种记录可以由并发源的投影发布安全合并，不需要按权威切换拒绝。
+func isInitialHotAuthority(rec *catalog.Record) bool {
+	if rec == nil {
+		return false
+	}
+	return rec.Owner == catalog.OwnerHot && rec.Generation == 1 && !rec.RecoveryRequired &&
+		rec.WriteRoute.Owner == catalog.OwnerHot && rec.WriteRoute.Generation == 1 &&
+		rec.WriteRoute.DirID == rec.OwnerDirID && !rec.WriteRoute.Frozen
+}
+
 func publishedProjectionGenerations(projection *catalog.PublishedProjection) []string {
 	if projection == nil {
 		return nil
@@ -2300,15 +2446,88 @@ func (m *Manager) load() error {
 //
 // 生产 307MB 副本实测：修复前每次持久化对全部 746,884 行做规划+比对（≈3.0s），
 // 且因指纹口径缺陷每次都整表重写（47s）；修复后无变更轮次只比对几百行根表（毫秒级）。
+//
+// 并发与排队（FR-498 并发采集轮的连带修复）：
+//   - 单执行者：构建 + 落库同一时刻只有一次在跑，因此「构建顺序 = 落库顺序」，不可能出现
+//     旧快照后写（那会让 persistedRev 已推进但索引回到旧值 → 变更永久丢失）；
+//   - 落库在 m.mu 之外：SQLite 事务（批量源下几十毫秒级）不再阻塞登记的 m.mu 短临界区；
+//   - 合并（coalescing）：等待者只等「一个周期」，且一个周期可被多个调用方共享——短变更的
+//     调用者（实例登记，RPC 截止 10s）不会被采集轮里多个源的持久化挤到队尾
+//     （race 实测：不合并时登记 ≥1s 截止，TestRegisterInstanceNotBlockedBySaturatedPollRound 转红）。
+//
+// 锁序：cycleMu → registerMu → pendingMu → persistGate → m.mu。
 func (m *Manager) persist() error {
+	m.persistGateEnsure()
+	// 合并（coalescing）：本调用按到达顺序声明一个序号；任何「构建发生在声明之后」的落库都会
+	// 覆盖它（见下方 covered 的读取位置），因此一个周期可被任意多个调用方共享，短变更调用者
+	// （实例登记）不必排到队尾各自再执行一遍。
+	//
+	// 为什么必须有（FR-498 并发采集轮的连带问题）：并发后多个源同时调用 persist，登记这类
+	// 「短变更」调用者排在 8 个 worker 之后（race 实测：单次持久化执行 ≈0.5s、排队累计 ≈1.7s，
+	// 登记耗时 ≥1s 截止，使 TestRegisterInstanceNotBlockedBySaturatedPollRound 转红）。
+	seq := m.persistJoin.Add(1)
+	if m.persistCovered.Load() >= seq {
+		return nil
+	}
+	g := &m.persistGate
+	for {
+		g.mu.Lock()
+		if g.running {
+			// 有周期在跑：等它结束。若它的构建发生在本声明之后，本变更已被它覆盖；否则继续
+			// 等/接管下一个周期。等待的是「一个周期」，而不是排在队尾。
+			g.cond.Wait()
+			if m.persistCovered.Load() >= seq {
+				err := g.err
+				g.mu.Unlock()
+				return err
+			}
+			g.mu.Unlock()
+			continue
+		}
+		g.running = true
+		g.mu.Unlock()
+
+		// 覆盖水位必须在**构建之前**读取：在此之后声明的请求，其变更（声明前已写入 state）
+		// 必然被本次构建看到，因此可以安全声明「已覆盖到该序号」。反过来（先构建后读）会把
+		// 构建看不到的请求也算作已落库，那是静默丢更新。
+		covered := m.persistJoin.Load()
+		err := m.persistSnapshot()
+		if err == nil {
+			m.persistCovered.Store(covered)
+		}
+
+		g.mu.Lock()
+		g.running = false
+		g.err = err
+		g.cond.Broadcast()
+		g.mu.Unlock()
+		return err
+	}
+}
+
+// persistGateEnsure 惰性初始化持久化门（兼容直接构造 Manager 的测试路径）。
+func (m *Manager) persistGateEnsure() {
+	g := &m.persistGate
+	g.mu.Lock()
+	if g.cond == nil {
+		g.cond = sync.NewCond(&g.mu)
+	}
+	g.mu.Unlock()
+}
+
+// persistSnapshot 在**持持久化门（本轮唯一执行者）**的前提下执行一次完整持久化：m.mu 下
+// 构建期望状态，释放 m.mu 后再落库（SQLite 事务不再阻塞登记的短临界区；顺序由门保证，见 persist）。
+func (m *Manager) persistSnapshot() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.index == nil {
+	store := m.index
+	if store == nil {
 		// 直接构造 Manager 的测试路径：按需打开索引（不触发迁移）。
-		store, err := stateindex.Open(m.indexPath())
+		opened, err := stateindex.Open(m.indexPath())
 		if err != nil {
+			m.mu.Unlock()
 			return fmt.Errorf("ingest: 打开采集索引失败: %w", err)
 		}
+		store = opened
 		m.index = store
 	}
 	if m.persistedRev == nil {
@@ -2349,9 +2568,13 @@ func (m *Manager) persist() error {
 	// 元数据变更）；配合 ApplyScoped 让未变更源的账本派生行根本不参与规划。
 	desired, err := m.stateToIndexStateScoped(&m.state, changed)
 	if err != nil {
+		m.mu.Unlock()
 		return err
 	}
-	if _, err := m.index.ApplyScoped(desired, changed); err != nil {
+	// 快照已经构建完成：释放 m.mu（登记路径等的短临界区锁）后再落库。落库顺序由持久化门
+	// 保证与构建顺序一致，因此「旧快照后写」不可能发生。
+	m.mu.Unlock()
+	if _, err := store.ApplyScoped(desired, changed); err != nil {
 		return fmt.Errorf("ingest: 持久化采集索引失败: %w", err)
 	}
 	return nil
