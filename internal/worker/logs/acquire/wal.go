@@ -224,6 +224,24 @@ func (w *WAL) maybeResumeBacklogLocked(ent *ledger.Entry) {
 		"logSourceID", w.key.LogSourceID, "entries", entries, "approxBytes", bytes)
 }
 
+// EvaluateResume 尝试一次「推进回收 + 按滞回条件评估恢复」，返回是否已恢复采集。
+//
+// 用在「缺口刚被消解、源仍处于暂停」的时刻：恢复的唯一检查点挂在回收路径上，而回收路径
+// 又要求「有可剪条目」或「有新批次」——暂停期间两者都不会出现，缺了本入口，
+// 消解缺口之后源仍会一直停在暂停上。
+//
+// 先 TryReclaim 再评估：缺口消解后 CanReclaim 往往才放行（回收门禁要求责任已转移），
+// 不推进回收就永远看不到「积压回落至低水位」这个恢复条件。
+// 只处理本包造成的暂停（原因前缀匹配）：容量门禁等其它路径设置的暂停不在此处清除。
+func (w *WAL) EvaluateResume() bool {
+	// TryReclaim 的失败是常态而非异常（无恢复分段 / 责任未转移时 CanReclaim 本就不放行），
+	// 而它无论成败都会按**当前**水位剪枝并在剪枝后做一次滞回恢复评估；这里忽略返回值，
+	// 只按最终状态回答「是否已恢复」。
+	_, _ = w.TryReclaim()
+	entry := w.led.Get(w.key)
+	return entry != nil && !entry.AcquirePaused
+}
+
 // NewWAL 创建绑定账本条目的 WAL。
 func NewWAL(led *ledger.Ledger, key ledger.SourceKey) *WAL {
 	led.Ensure(key, logtypes.SourceIdentity{
@@ -377,8 +395,14 @@ func (w *WAL) TryReclaim() (uint64, error) {
 
 // pruneReclaimed 丢弃 Event.Record.End <= pos 的 WAL 条目：该前缀的恢复责任已由受管恢复分段/
 // 投影承担（CanReclaim 门禁已放行），保留它们只占用内存。未耐久或超出 reclaim 前缀的事件一律保留。
+//
+// pos == 0 时没有可剪的条目，但**仍要评估一次恢复**（缺陷 A 自愈链的一环）：暂停源在缺口被
+// 消解后唯一会经过的恢复检查点就是这里，若因「没有可剪条目」直接返回，源就再没有机会
+// 走出暂停——现场表现正是「积压已回落但暂不能恢复采集」之后永远停住。
+// 该分支只多一次 O(条目数) 的积压统计，而它本就被本方法的调用路径（每轮采集一次）覆盖。
 func (w *WAL) pruneReclaimed(pos uint64) {
 	if pos == 0 {
+		w.maybeResumeBacklogLocked(w.led.Get(w.key))
 		return
 	}
 	w.mu.Lock()

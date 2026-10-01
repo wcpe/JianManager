@@ -46,6 +46,14 @@ const (
 	// FieldEncodingSanitized 标记正文含非法 UTF-8，已被替换为 U+FFFD。
 	// 置位意味着**正文与源文件原始字节不一致**，调用方不得当作原文一致。
 	FieldEncodingSanitized = "encoding_sanitized"
+	// FieldSourceCharset 标记本事件的正文是由非 UTF-8 字符集（GBK/GB18030）解码而来。
+	// 只在确实发生转码时写入：既能证明「这行不是 UTF-8 原文」，也让历史数据的重写范围
+	// 可以直接按该字段筛出来（见 docs/specs/worker-log-normalizer/spec.md 的字符集一节）。
+	FieldSourceCharset = "source_charset"
+	// FieldEventTimeZone 记录解释 [HH:MM:SS] 所用的时区名（缺陷 C）。
+	// 只在生效时区不是 UTC 时写入：既有 UTC 源的事件零变化，而按源时区换算过的事件
+	// 自带可审计依据（排查历史时间轴偏移时可据此判断某段数据用的哪个时区）。
+	FieldEventTimeZone = "event_time_zone"
 )
 
 // Limits 多行缓冲上限。零值表示不限制。
@@ -65,6 +73,9 @@ type Options struct {
 	IngestTimeUTC string
 	// Location 解释 [HH:MM:SS] 的时区；默认 UTC。
 	Location *time.Location
+	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串为 auto。
+	// 判定与回退规则见 charset.go；非法取值应在登记阶段被拒（此处兜底为 auto）。
+	Charset string
 	// BaseTime 无日期时刻的锚点（跨午夜用）；零值在解析时取 now。
 	BaseTime time.Time
 	// Limits 多行上限。
@@ -109,6 +120,8 @@ type pending struct {
 	startClock time.Time
 	hasClock   bool
 	sawHeader  bool // 是否解析到事件头（时间/level）
+	// charset 事件头所在行的生效字符集（非 UTF-8 时写入 source_charset 字段）。
+	charset Charset
 }
 
 type Normalizer struct {
@@ -117,6 +130,8 @@ type Normalizer struct {
 	loc    *time.Location
 	ingest string
 	base   time.Time
+	// charset 按源字符集解码状态机（缺陷 B）；nil 安全，等价于 auto。
+	charset *charsetDecoder
 
 	cur      *pending
 	events   []logtypes.Event
@@ -142,11 +157,12 @@ func New(opts Options) *Normalizer {
 	}
 	base := opts.BaseTime
 	return &Normalizer{
-		opts:   opts,
-		src:    src,
-		loc:    loc,
-		ingest: ingest,
-		base:   base,
+		opts:    opts,
+		src:     src,
+		loc:     loc,
+		ingest:  ingest,
+		base:    base,
+		charset: newCharsetDecoder(opts.Charset),
 	}
 }
 
@@ -176,6 +192,9 @@ func (n *Normalizer) Feed(line string) []logtypes.Event {
 // 单个行尾 '\r'：偏移由调用方的 lineSpan 决定（不受正文长度影响），LF 日志不受影响。
 func (n *Normalizer) FeedAt(line string, at time.Time) []logtypes.Event {
 	line = strings.TrimSuffix(line, "\r")
+	// 字符集收口（缺陷 B）：所有输入路径（tailer / gzip 归档 / 受管 Raw / stdio）都经过这里，
+	// 在解析事件头之前完成解码，使时间戳与 level 的解析同样作用于解码后的文本。
+	line, lineCharset := n.charset.decode(line)
 	n.stats.LineCount++
 	lineNo := n.lineIdx
 	n.lineIdx++
@@ -209,11 +228,11 @@ func (n *Normalizer) FeedAt(line string, at time.Time) []logtypes.Event {
 			out = append(out, n.emit(n.cur, n.closeStatus(n.cur)))
 			n.cur = nil
 		}
-		n.cur = n.openFrom(line, lineNo, pl, at)
+		n.cur = n.openFrom(line, lineNo, pl, at, lineCharset)
 	case pl.kind == kindContinuation:
 		// 堆栈 / Caused by / 异常 FQCN / 缩进行并入当前事件。
 		if n.cur == nil {
-			n.cur = n.openFrom(line, lineNo, pl, at)
+			n.cur = n.openFrom(line, lineNo, pl, at, lineCharset)
 			n.cur.sawHeader = false
 		} else {
 			n.appendToCur(line, lineNo, pl)
@@ -233,6 +252,7 @@ func (n *Normalizer) FeedAt(line string, at time.Time) []logtypes.Event {
 			time.Time{},
 			false,
 			StatusRaw,
+			lineCharset,
 		)
 		if n.opts.RetainEvents {
 			n.events = append(n.events, raw)
@@ -293,7 +313,7 @@ func (n *Normalizer) exceedsLimit(line string) bool {
 	return false
 }
 
-func (n *Normalizer) openFrom(line string, lineNo int, pl parsedLine, at time.Time) *pending {
+func (n *Normalizer) openFrom(line string, lineNo int, pl parsedLine, at time.Time, charset Charset) *pending {
 	p := &pending{
 		startLine: lineNo,
 		endLine:   lineNo,
@@ -304,6 +324,7 @@ func (n *Normalizer) openFrom(line string, lineNo int, pl parsedLine, at time.Ti
 		eventTime: pl.eventTime,
 		hasTime:   pl.hasTime,
 		sawHeader: pl.kind == kindEventStart || pl.hasTime || pl.level != "",
+		charset:   charset,
 	}
 	switch {
 	case pl.hasTime:
@@ -414,7 +435,7 @@ func (n *Normalizer) Events() []logtypes.Event {
 }
 
 func (n *Normalizer) emit(p *pending, st ParseStatus) logtypes.Event {
-	ev := n.buildEvent(p.lines, p.startLine, p.endLine, p.level, p.thread, p.eventTime, p.hasTime, st)
+	ev := n.buildEvent(p.lines, p.startLine, p.endLine, p.level, p.thread, p.eventTime, p.hasTime, st, p.charset)
 	if n.opts.RetainEvents {
 		n.events = append(n.events, ev)
 	}
@@ -439,6 +460,7 @@ func (n *Normalizer) buildEvent(
 	eventTime time.Time,
 	hasTime bool,
 	st ParseStatus,
+	charset Charset,
 ) logtypes.Event {
 	// 损坏编码（非法 UTF-8）必须在此处净化，而不是留给投递序列化。
 	//
@@ -468,6 +490,15 @@ func (n *Normalizer) buildEvent(
 	// 编码被净化时留下可审计标记（正文已改变，不得当作原文一致）。
 	if message != joinLines(lines) {
 		ev.Fields[FieldEncodingSanitized] = "true"
+	}
+	// 由 GBK/GB18030 解码而来的事件留下可审计标记：既证明正文不是 UTF-8 原文，
+	// 也让「历史数据重写」可以直接按该字段定位受影响的事件。
+	if charset != "" && charset != CharsetUTF8 {
+		ev.Fields[FieldSourceCharset] = string(charset)
+	}
+	// 时区换算依据（缺陷 C）：只在非 UTC 时写入，保证未配置时区的源字节级零变化。
+	if hasTime && n.loc != nil && n.loc != time.UTC {
+		ev.Fields[FieldEventTimeZone] = n.loc.String()
 	}
 	if thread != "" {
 		ev.Fields[FieldThread] = thread

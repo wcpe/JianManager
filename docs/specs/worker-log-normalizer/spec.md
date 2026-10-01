@@ -52,3 +52,55 @@
 
 - 异常头、堆栈和 Caused by 跨 WAL/批次边界强杀后，恢复出的事件保留完整首尾源位置和原文。
 - 超过 multiline 上限或超时的半条事件进入显式 `TRUNCATED`/`TIMEOUT` 状态，不静默拼接下一事件。
+
+## 3.3 字符集（2026-10-02 缺陷 B 加固）
+
+源正文的字符集按源声明，并在归一化入口**单点收口**（`Normalizer.FeedAt`）：FileTailer / gzip 归档 /
+受管 Raw / stdio 四条输入路径共享同一解码判定，保证同一份字节在任何路径上产出同一事件。
+
+- **配置面**：`SourceConfig.Charset`（`auto`/`utf-8`/`gbk`/`gb18030`；`gb2312`/`cp936` 归一为 `gbk`）。
+  空串表示跟随节点默认（`ingest.Options.DefaultCharset`），默认 `auto`。未知取值在登记阶段
+  （`ingest.Register`）与 `pipeline.New` 直接失败——按源声明错字符集会静默产出乱码，必须暴露。
+- **判定（auto）**：合法 UTF-8 一律原样返回，绝不进入 GB 系分支；非法 UTF-8 先按 GB18030 解码，
+  **解码结果含 U+FFFD 即判为不可信**并放弃解码（实测：随机损坏字节 `0xff 0xfe`、孤立截断字节 `0xc4`
+  解码后都出现 U+FFFD，而真实 GBK 中文不会）。判定按源粘滞（同源的纯 ASCII 行沿用同一口径）；
+  遇到「合法 UTF-8 且含非 ASCII」的行解除粘滞——真 UTF-8 源里的偶发损坏行不会把整源锁进 GB 系。
+- **审计与历史数据**：成功转码的事件写入 `source_charset`（**仅非 UTF-8 时**），无法判定的字节保持
+  原样并走既有净化路径（`encoding_sanitized`）。历史数据可按 `source_charset` 整源筛选；
+  原地重写会伪造 `canonical_content_hash`/`event_id`，故历史重写必须走新 generation 重放。
+- **零行为变化**：合法 UTF-8 源的正文、`canonical_content_hash` 与字段集合与加固前逐字节一致。
+
+自动回归（转红实测见 CHANGELOG [Unreleased]）：
+`normalize.TestGBKLineDecodesToCorrectUTF8`（现场同型文本 `[Lodestone] 已解析 BC 实例`）、
+`normalize.TestUTF8SourceIsNeverMisdetected`、`normalize.TestCorruptBytesAreNotDecodedIntoChinese`、
+`normalize.TestConfiguredCharsetOverridesDetection`、`normalize.TestStickyDetectionSurvivesAsciiAndRecoversOnUTF8`、
+`normalize.TestParseCharsetRejectsUnknownValues`、`ingest.TestGBKSourceIsDecodedBeforeDelivery`、
+`ingest.TestGBKSourceAutoDetectedWithoutExplicitConfig`、`ingest.TestUTF8SourceUnaffectedByCharsetDetection`。
+
+## 3.4 时区（2026-10-02 缺陷 C 加固）
+
+`[HH:MM:SS]` 的解释时区按源配置：`SourceConfig.TimeZone`（空串 = UTC，保持既有行为；`local` = 跟随
+节点本地时区；其余按 IANA 名解析），可被节点级默认 `ingest.Options.DefaultTimeZone` 兜底，
+**不硬编码任何时区**。包内嵌 `time/tzdata`：官方镜像（alpine）与部分裸机不带 zoneinfo 时，
+合法 IANA 名同样可解析；非法名在登记阶段被显式拒绝（时区配错会让整源时间轴静默偏移，
+不能用回退掩盖）。
+
+- 换算与跨午夜回拨沿用既有 `applyClock`（相对基准 ±12h 回拨），只是现在按**源时区**进行。
+- 非 UTC 源的事件写入 `event_time_zone` 字段（仅非 UTC 时）；UTC 源字段集合零变化。
+
+自动回归（转红实测见 CHANGELOG [Unreleased]）：
+`normalize.TestSourceTimeZoneConvertsLocalClockToUTC`（现场同型：HKT `[23:54:02]` 必须落 `15:54:02Z`）、
+`normalize.TestSourceTimeZoneCrossMidnightBoundary`、`normalize.TestDefaultTimeZoneStaysUTC`、
+`ingest.TestSourceTimeZoneReachesStoredEvent`、`ingest.TestDefaultTimeZoneAppliesWhenSourceDoesNotConfigure`、
+`ingest.TestUnknownTimeZoneIsRejectedAtRegistration`。
+
+**历史数据影响与修复路径**（加固前落库的事件 `event_time_utc` 带整段源时区偏移，且**没有**
+`event_time_zone` 字段，可据此定位）：
+
+1. **查询层修正**（推荐，零数据改动）：查询/告警/看板按已知偏移平移时间窗后再查；
+2. **重放重建**：源文件仍在（或 deep archive 有副本）时，用正确时区配置重跑同一份字节到**新的
+   generation**，新投影发布后旧代次退出默认查询集合，人工核对条数与时间范围；
+3. 无法重放的旧数据显式标注「时区未校正」，只在明确知道偏移的场景下使用。
+
+不采用「原地改写 `event_time_utc`」：`canonical_content_hash` 与 `event_id` 都绑定该字段，
+原地改写等于伪造事件身份，且会破坏与 VL 已存内容的 hash 校验。

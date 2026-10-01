@@ -68,20 +68,36 @@ type Gap struct {
 }
 
 func (l *Ledger) UnresolvedGapCount(key SourceKey) int {
-	entry := l.Get(key)
+	return UnresolvedGapCountOf(l.Get(key))
+}
+
+// UnresolvedGapCountOf 统计一份**已取到的**条目副本里的未解决缺口数。
+//
+// 为什么需要它：Get 会深拷贝整条缺口列表，而缺口数量在故障期可达万级——调用方若已经
+// 持有条目副本（或本就为读其它字段而取过一次），再调 UnresolvedGapCount(key) 等于为
+// 同一个判断付两次深拷贝。热路径（每批投递、每轮采集）一律用本函数。
+func UnresolvedGapCountOf(entry *Entry) int {
 	if entry == nil {
 		return 0
 	}
-	count := 0
-	for _, gap := range entry.Gaps {
-		if !gap.Resolved {
-			count++
-		}
-	}
-	return count
+	return countUnresolved(entry.Gaps)
 }
 
+// ResolveGapsThrough 消解结束位置不超过 position 的未解决缺口。
+//
+// 语义红线（不变）：消解只表示「这段缺口已由 resolution 指名的证据证明落库/已确认放弃」，
+// 调用方必须在确有证据时才调用；本方法不校验证据，只执行标记（证据由调用点负责）。
 func (l *Ledger) ResolveGapsThrough(key SourceKey, position uint64, resolution string) (int, error) {
+	return l.ResolveGapsThroughExcept(key, position, resolution)
+}
+
+// ResolveGapsThroughExcept 与 ResolveGapsThrough 同语义，但跳过 excludedReasons 中的原因。
+//
+// 为什么需要按原因排除：部分缺口原因（例：STDIO_RAW_WRITE_FAILED——原始字节写入失败）
+// 的「可能没落库」无法由投影覆盖证明，既有自动路径明确拒绝消解它们
+// （见 ingest.ResolveCoveredGaps）。自动消解必须保持同一拒绝语义，否则会把
+// 「未经确认的写失败」静默当成已确认。
+func (l *Ledger) ResolveGapsThroughExcept(key SourceKey, position uint64, resolution string, excludedReasons ...string) (int, error) {
 	if resolution == "" {
 		return 0, fmt.Errorf("ledger: gap resolution is required")
 	}
@@ -91,13 +107,71 @@ func (l *Ledger) ResolveGapsThrough(key SourceKey, position uint64, resolution s
 	if err != nil {
 		return 0, err
 	}
+	excluded := make(map[string]bool, len(excludedReasons))
+	for _, reason := range excludedReasons {
+		excluded[reason] = true
+	}
 	resolved := 0
 	for index := range entry.Gaps {
-		if !entry.Gaps[index].Resolved && entry.Gaps[index].EndPos <= position {
-			entry.Gaps[index].Resolved = true
-			entry.Gaps[index].Resolution = resolution
-			resolved++
+		gap := &entry.Gaps[index]
+		if gap.Resolved || gap.EndPos > position || excluded[gap.Reason] {
+			continue
 		}
+		gap.Resolved = true
+		gap.Resolution = resolution
+		resolved++
+	}
+	if resolved > 0 {
+		// 已解决缺口只保留审计尾部，避免「每次成功重投留一条永久记录」再次无界增长。
+		l.trimResolvedGapsLocked(entry)
+	}
+	return resolved, nil
+}
+
+// ResolveGapsCoveredByRange 只消解**完全落在 [from,to] 内**的未解决缺口。
+//
+// 与 ResolveGapsThroughExcept 的差别（为什么两者都要）：
+//   - Through 的判据是「缺口末端 ≤ position」，适合「整份历史都已发布」这类全局证据；
+//   - 本方法的判据是「缺口区间被某一次成功落库的写入范围完全包含」，适合「重投成功」这类
+//     局部证据——若只用末端判据，一次更靠后的成功批次会把夹在中间、从未被重投的旧缺口
+//     一并解掉，等于凭空宣称「没落库的数据已落库」（违反缺口语义红线）。
+//
+// 区间只做包含判定，不做相交判定：部分重叠意味着还有一段没有任何证据，必须保持未解决。
+func (l *Ledger) ResolveGapsCoveredByRange(key SourceKey, from, to uint64, resolution string, excludedReasons ...string) (int, error) {
+	if resolution == "" {
+		return 0, fmt.Errorf("ledger: gap resolution is required")
+	}
+	if to < from {
+		return 0, nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, err := l.require(key)
+	if err != nil {
+		return 0, err
+	}
+	if len(entry.Gaps) == 0 {
+		return 0, nil
+	}
+	excluded := make(map[string]bool, len(excludedReasons))
+	for _, reason := range excludedReasons {
+		excluded[reason] = true
+	}
+	resolved := 0
+	for index := range entry.Gaps {
+		gap := &entry.Gaps[index]
+		if gap.Resolved || excluded[gap.Reason] {
+			continue
+		}
+		if gap.StartPos < from || gap.EndPos > to {
+			continue
+		}
+		gap.Resolved = true
+		gap.Resolution = resolution
+		resolved++
+	}
+	if resolved > 0 {
+		l.trimResolvedGapsLocked(entry)
 	}
 	return resolved, nil
 }
@@ -154,6 +228,13 @@ type Entry struct {
 	// TryReclaim（每轮采集，250ms/源）的裁剪开销从 O(列表长度) 降到 O(1)；否则一个「水位被门禁
 	// 长期挡住」的源会每轮扫描整张保留列表（积压场景下可达十万级），把空间优化变成 CPU 负担。
 	deliveryPrunedThrough uint64
+
+	// gapMergedTotal / gapFoldedTotal 是缺口定界的进程内计数（观测用，同 deliveryPrunedThrough：
+	// 小写字段不落库、不参与索引映射与 JSON 快照，重启归零）。
+	// 它们的意义：「缺口条数」不再等于「失败次数」，运维需要知道有多少次上报被合并/折叠掉了，
+	// 才能从条数读出真实的故障规模（见 gap_bounds.go 的缺陷 A 说明）。
+	gapMergedTotal uint64
+	gapFoldedTotal uint64
 }
 
 // Ledger 线程安全采集账本。
@@ -470,6 +551,10 @@ func (l *Ledger) RotationLinked(key SourceKey, path string) (RotationLink, bool)
 }
 
 // RecordGap 登记缺口。容量暂停/坏记录不得静默丢弃。
+//
+// 登记不再是无条件 append：同因、相邻/重叠的失败会并入既有区间，条数越界时按原因折叠，
+// 使「一次长故障」在账本上恒为常数条（判据与边界见 gap_bounds.go）。
+// 语义不变：登记只表示「这段可能没落库、需要补」，区间只扩大不缩小。
 func (l *Ledger) RecordGap(key SourceKey, start, end uint64, reason, detail string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -477,8 +562,9 @@ func (l *Ledger) RecordGap(key SourceKey, start, end uint64, reason, detail stri
 	if err != nil {
 		return err
 	}
-	e.Gaps = append(e.Gaps, Gap{StartPos: start, EndPos: end, Reason: reason, Detail: detail})
 	e.ErrorCount++
+	l.recordGapLocked(e, start, end, reason, detail)
+	l.enforceGapBoundsLocked(e)
 	return nil
 }
 

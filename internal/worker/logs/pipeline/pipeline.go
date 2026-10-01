@@ -38,6 +38,9 @@ type Options struct {
 	Location      *time.Location
 	BaseTime      time.Time
 	IngestTimeUTC string
+	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串为 auto。
+	// 未知取值在 New 处直接失败——按源声明错字符集会静默产出乱码，属于必须暴露的配置错误。
+	Charset string
 	// Limits 多行上限。
 	Limits normalize.Limits
 	// Capacity 可选容量预算；零值用 acquire.DefaultCapacityBudget。
@@ -119,11 +122,15 @@ func New(opts Options) (*Pipeline, error) {
 		cat = logtypes.SourceInstance
 	}
 
+	if !normalize.IsValidCharset(opts.Charset) {
+		return nil, fmt.Errorf("pipeline: 未知日志字符集 %q（支持 auto/utf-8/gbk/gb18030）", opts.Charset)
+	}
 	nopts := normalize.Options{
 		Source:        src,
 		Stream:        stream,
 		IngestTimeUTC: opts.IngestTimeUTC,
 		Location:      opts.Location,
+		Charset:       opts.Charset,
 		BaseTime:      opts.BaseTime,
 		Limits:        opts.Limits,
 	}
@@ -208,6 +215,37 @@ func (p *Pipeline) Ledger() *ledger.Ledger { return p.led }
 
 // WAL 返回本地 WAL。
 func (p *Pipeline) WAL() *acquire.WAL { return p.wal }
+
+// DeliverPending 对已暂停的源执行一次「只投递、不读取」的自愈尝试（缺陷 A）：
+// 投递已 durable 存量 → 登记投递结果 → 推进回收 → 按滞回条件评估恢复采集。
+//
+// 为什么需要它：暂停期间 FileTailer 不再读取，采集轮便不再产生新批次；而投递、回收与
+// 恢复评估都挂在「有新批次」的路径上——不自愈就永远停摆（生产实证停 13+ 小时）。
+func (p *Pipeline) DeliverPending() (bool, error) {
+	if p == nil || p.inner == nil {
+		return false, nil
+	}
+	events, err := p.inner.DeliverPending()
+	if err != nil || len(events) == 0 {
+		return false, err
+	}
+	// 与正常投递路径同构（见 ingest）：投递成功后登记恢复责任证明，否则回收门禁不会放行，
+	// 「积压回落 → 低水位 → 恢复采集」这一链在暂停源上永远打不开。
+	if p.DeliveryState() != logtypes.DeliveryUnknown && p.reclaimProof != nil {
+		if proofErr := p.reclaimProof(events); proofErr != nil {
+			return true, proofErr
+		}
+	}
+	return true, nil
+}
+
+// EvaluateResume 在不产生投递的前提下，按滞回条件评估一次采集恢复（返回是否已恢复）。
+func (p *Pipeline) EvaluateResume() bool {
+	if p == nil || p.wal == nil {
+		return false
+	}
+	return p.wal.EvaluateResume()
+}
 
 // Boundary 返回 normalize 边界钩子。
 func (p *Pipeline) Boundary() *NormalizeBoundary { return p.bound }

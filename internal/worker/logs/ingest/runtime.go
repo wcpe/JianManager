@@ -32,6 +32,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
@@ -48,6 +49,13 @@ type SourceConfig struct {
 	SourceCategory   logtypes.Source      `json:"source_category,omitempty" mapstructure:"source_category"`
 	StorageNamespace string               `json:"storage_namespace,omitempty" mapstructure:"storage_namespace"`
 	UTCDay           string               `json:"utc_day,omitempty" mapstructure:"utc_day"`
+	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串表示跟随节点默认或 auto。
+	// 中文 locale 的 JVM 会把 Java 日志写成 GBK，必须按源声明，不能靠猜（缺陷 B）。
+	Charset string `json:"charset,omitempty" mapstructure:"charset"`
+	// TimeZone 解释日志行内 [HH:MM:SS] 所用的时区（缺陷 C）：空串 = UTC（保持既有行为），
+	// "local" = 跟随节点本地时区，其余按 IANA 名解析（如 Asia/Hong_Kong）。
+	// 中文 locale 的 JVM 按本地时区写日志，若按 UTC 解释会整体偏移（现场实测 +8 小时）。
+	TimeZone string `json:"time_zone,omitempty" mapstructure:"time_zone"`
 }
 
 type persistedSource struct {
@@ -80,8 +88,12 @@ const pendingSpoolRoot = "pending"
 
 // Manager owns configured source pipelines and their durable state.
 type Manager struct {
-	mu      sync.Mutex
-	cycleMu sync.Mutex
+	// defaultCharset 是节点级默认字符集（源未显式配置时生效）；空串等价于 auto。
+	defaultCharset string
+	// defaultTimeZone 是节点级默认时区名（源未显式配置时生效）；空串等价于 UTC。
+	defaultTimeZone string
+	mu              sync.Mutex
+	cycleMu         sync.Mutex
 	// registerMu 串行化「实例登记 / 采集绑定」自身，使这条路径**永不等待采集轮的长临界区**。
 	//
 	// 为什么要与 cycleMu 分离（2026-10-01 生产事故根因）：cycleMu 的持有者是「整轮采集」
@@ -158,6 +170,13 @@ type Manager struct {
 	reconcileReports []ReconcileReport
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
 	sourceErrs map[string]string
+	// gapAutoResolveAt 记录每源最近一次自愈尝试的时刻（缺陷 A）。
+	// 自愈要投递存量并按天聚合事件区间，故按源限频（见 gapAutoResolveInterval）。
+	gapAutoResolveAt map[string]time.Time
+	// selfHealInterval 是自愈的最小重试间隔；0 表示用默认常量。
+	// 作为字段而不是裸常量：回归要用真实路径驱动「限频到期后自动恢复」，
+	// 不能靠 sleep 10 秒（也不该把生产默认值改小）。
+	selfHealInterval time.Duration
 	// pollConcurrency 是单轮采集的跨源并发度；0/负值取 defaultPollConcurrency，1 为串行。
 	// 作为字段以便用真实限额路径做对照实验与回归，而非只断言常量本身。
 	pollConcurrency int
@@ -181,6 +200,16 @@ type Manager struct {
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
 	pendingMaxStream int64
 	pendingMaxTotal  int64
+}
+
+// SetSelfHealInterval 覆盖自愈最小重试间隔（测试用；<=0 表示沿用默认）。
+func (m *Manager) SetSelfHealInterval(interval time.Duration) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.selfHealInterval = interval
 }
 
 // SetPendingSpoolLimits 覆盖 pending 暂存上限（测试用）。
@@ -214,9 +243,15 @@ func (m *Manager) noteSourceError(sourceID, msg string) bool {
 // Options constructs a production ingestion manager. A nil VL client leaves
 // sources durable but explicitly not delivered, preserving visible gaps.
 type Options struct {
-	Root                string
-	VL                  *vlsup.Client
-	Catalog             *catalog.Catalog
+	Root    string
+	VL      *vlsup.Client
+	Catalog *catalog.Catalog
+	// DefaultCharset 是节点级默认字符集（auto/utf-8/gbk/gb18030）；空串等价于 auto。
+	// 源可用 SourceConfig.Charset 覆盖。
+	DefaultCharset string
+	// DefaultTimeZone 是节点级默认时区名（UTC/local/IANA 名）；空串等价于 UTC（既有行为）。
+	// 源可用 SourceConfig.TimeZone 覆盖。节点的 JVM 与 Worker 同机部署时，配 local 即可对齐。
+	DefaultTimeZone     string
 	Journal             catalog.Journal
 	Archive             *archive.Registry
 	Sources             []SourceConfig
@@ -491,6 +526,8 @@ func New(opts Options) (*Manager, error) {
 		indexPrune:          indexPruneConfigOf(opts.IndexPrune),
 		indexCommit:         indexCommitBudgetOf(opts.IndexCommit),
 	}
+	m.defaultCharset = opts.DefaultCharset
+	m.defaultTimeZone = opts.DefaultTimeZone
 	if m.verificationTimeout <= 0 {
 		// 5 分钟（原 30 秒）。依据 2026-09-28 生产实测：VL 的 /insert/jsonline 是「接收即
 		// 返回 200、索引异步」，恢复期单批 5746 条的可见性延迟**超过 30 秒**——写入 200 成功、
@@ -675,6 +712,19 @@ func (m *Manager) Register(source SourceConfig) error {
 	if source.UTCDay == "" {
 		source.UTCDay = time.Now().UTC().Format("2006-01-02")
 	}
+	if source.Charset == "" {
+		source.Charset = m.defaultCharset
+	}
+	if !normalize.IsValidCharset(source.Charset) {
+		return fmt.Errorf("ingest: 未知日志字符集 %q（source=%s）", source.Charset, source.LogSourceID)
+	}
+	if source.TimeZone == "" {
+		source.TimeZone = m.defaultTimeZone
+	}
+	location, err := ParseTimeZone(source.TimeZone)
+	if err != nil {
+		return fmt.Errorf("ingest: 源 %s 的时区配置无效: %w", source.LogSourceID, err)
+	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -721,7 +771,8 @@ func (m *Manager) Register(source SourceConfig) error {
 	}
 	p, err := pipeline.New(pipeline.Options{
 		Mode: source.Mode, LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration,
-		Path: source.Path, RotateTo: source.RotateTo, Stream: source.Stream,
+		Path: source.Path, RotateTo: source.RotateTo, Stream: source.Stream, Charset: source.Charset,
+		Location:       location,
 		SourceCategory: source.SourceCategory, Ledger: led, WAL: wal,
 		SuppressRecursiveVL: source.SourceCategory == logtypes.SourceWorker || source.SourceCategory == logtypes.SourceNode,
 		CapacityProvider:    m.capacityProvider,
@@ -906,6 +957,11 @@ func (m *Manager) pollOnce() {
 				events, metadataChanged, err := m.pollSource(item.source, p)
 				after, afterOK := p.Positions()
 				if before != after || beforeOK != afterOK || len(events) > 0 || metadataChanged || err != nil {
+					dirty[i] = true
+				}
+				// 缺陷 A 自愈：暂停源不再读取新数据，投递/回收/恢复评估整条链失去触发点；
+				// 这里对「已暂停或仍持有未解决缺口」的源做一次限频自愈（见 selfHealPausedSource）。
+				if m.selfHealPausedSource(item.source, p) {
 					dirty[i] = true
 				}
 				if err != nil {
@@ -1127,6 +1183,9 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	}
 	m.mu.Unlock()
 	if len(toWrite) == 0 {
+		// 本批事件此前已写入且逐字段一致（seen 命中同 ID 同哈希）：同样是「该区间已落库」的证据，
+		// 故与写成功路径一样自动消解被它覆盖的缺口。
+		m.resolveGapsLandedByDelivery(source, events)
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
 	expected, err := m.canonicalRecoveryEvents(key, saved)
@@ -1154,10 +1213,20 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	// 注：曾试过用数据形状判别（EventsStored / EventsStoredThrough / eventsStored /
 	// len(toWrite)==len(expected)），全部被证伪：真实重放的批次只是全量的子集。
 	replace := saved.PublicationPending || replay
+	// 本次**实际写入面**（校验逐字段覆盖的就是它）：
+	// replace 为真时 writeProjectionPlan 会把写入面扩为权威全量（整窗重发），否则就是本批。
+	// 自动消解必须按实际写入面取证据，否则重放会「写了却没消解」，缺口又只能等人工。
+	evidence := writeEvents
+	if replace {
+		evidence = expected
+	}
 	result, err := m.writeProjection(source, expected, generation, writeEvents, toWrite, replace)
 	if err != nil {
 		return result, err
 	}
+	// 投递成功（写 VL + 逐字段可见性校验 + catalog 发布）= 该写入面已确认落库 → 自动消解
+	// 被它完全覆盖的缺口。这是缺陷 A 的「成功后自动消解」出口：重投成功即清零，不再依赖人工。
+	m.resolveGapsLandedByDelivery(source, evidence)
 	if os.Getenv("JIANMANAGER_LOG_INJECT_ACK_LOSS") == "1" {
 		result.AckLost = true
 	}

@@ -116,7 +116,7 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 		// 被暂停（含积压上限）时，仍把 WAL 里**已 durable、未确认投递**的条目发出去：
 		// 投递不能挂在摄取上，否则暂停即断流 → 已读未投的积压永不外发 →
 		// 回收位置不动 → 段无从覆盖 → 滞回永不满足（2026-09-30 生产实证：残留 7998 条卡死数小时）。
-		p.deliverPendingBestEffort()
+		_, _ = p.deliverPendingBestEffort()
 		_ = p.led.RecordGap(p.key, gapStart, gapEnd, "APPEND_REJECTED", err.Error())
 		p.noteSelfFailure(err.Error())
 		return err
@@ -176,15 +176,43 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 	return nil
 }
 
+// DeliverPending 是 deliverPendingBestEffort 的导出版：对**已暂停**的源执行一次自愈尝试。
+//
+// 为什么必须由外部触发（缺陷 A）：采集暂停期间 FileTailer 直接拒绝读取（见 tailer.go 的
+// AcquirePaused 判定），于是「读 → 投递 → 回收 → 恢复评估」这条链整条停摆——存量永远发不出去、
+// 积压永远不会回落、缺口也永远不会因为一次成功重投而被消解。生产实证：源停在 paused 上
+// 持续 13+ 小时零新数据。本方法让采集轮可以**只投递、不读取**地推动存量外发。
+//
+// 返回本次真正外发的事件集合（nil 表示无可投递条目或投递失败）与错误。
+// 返回事件集合而不是布尔值：投递成功是「已确认落库」的证据，上层要用它的区间消解缺口、
+// 并据此登记恢复责任证明（与正常投递路径同构）。
+func (p *Pipeline) DeliverPending() ([]logtypes.Event, error) {
+	if p == nil || p.deliver == nil {
+		return nil, nil
+	}
+	pending, err := p.deliverPendingBestEffort()
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) == 0 {
+		return nil, nil
+	}
+	// 投递后顺手推进回收：回收点同样只在采集轮里出现，而暂停时采集轮不再产生新批次。
+	if _, reclaimErr := p.wal.TryReclaim(); reclaimErr != nil {
+		p.noteSelfFailure(reclaimErr.Error())
+	}
+	return pending, nil
+}
+
 // noteSelfFailure 本地可观测失败；source=worker 禁止递归 VL。
 // deliverPendingBestEffort 尽力投递「已 durable 但尚未确认」的条目。
 //
 // 只在摄取被拒（暂停）时调用：此时没有新批次可投，但 WAL 里的存量仍需外发，
 // 否则积压只增不减、回收滞回永远打不开。语义上等价于「暂停只停摄取，不停排空」。
 // 只读 WAL 快照、只发已落盘条目；重复投递由 WAL 位置账本自防（RecordHTTPResult 幂等推进）。
-func (p *Pipeline) deliverPendingBestEffort() {
+func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 	if p.deliver == nil {
-		return
+		return nil, nil
 	}
 	entries := p.wal.Snapshot()
 	pending := make([]logtypes.Event, 0, len(entries))
@@ -195,13 +223,13 @@ func (p *Pipeline) deliverPendingBestEffort() {
 		pending = append(pending, e.Event)
 	}
 	if len(pending) == 0 {
-		return
+		return nil, nil
 	}
 	status, ackLost, err := p.deliver(pending, true)
 	if err != nil {
 		// 失败不改状态、不记 gap：源本就处于暂停，重试留给下一轮。
 		p.noteSelfFailure(err.Error())
-		return
+		return nil, err
 	}
 	if res := p.wal.RecordHTTPResult(DeliveryResult{
 		StartPos:   pending[0].Record.Start,
@@ -210,11 +238,9 @@ func (p *Pipeline) deliverPendingBestEffort() {
 		AckLost:    ackLost,
 	}); res != nil {
 		p.noteSelfFailure(res.Error())
-		return
+		return nil, res
 	}
-	if _, err := p.wal.TryReclaim(); err != nil {
-		p.noteSelfFailure(err.Error())
-	}
+	return pending, nil
 }
 func (p *Pipeline) noteSelfFailure(reason string) {
 	p.workerSelfFailures++
