@@ -108,6 +108,56 @@ log:
 # log_ingest:
 #   charset: gbk
 
+# 采集侧采样与降级（成本治理）。默认**全关**：本项一旦启用就会改变「哪些日志被存下来」，
+# 必须由运维显式开启。取值口径：0 = 没填走默认，负数 = 写错启动即拒。
+#
+# 抑制**不丢弃**：被压掉的行由一条**汇总事件**承接其区间（正文含条数/级别/首条样例，
+# 字段 sampling_rule/采样计数），因此「丢了多少、丢了什么」在查询面可见，
+# 且既有的缺口自动消解判据（要求连续覆盖）不受影响。
+# log_ingest:
+#   sampling:
+#     enabled: true
+#     min_level: info                  # 等级过滤：低于它的折叠为汇总事件（无法归类的级别一律放行）
+#     burst_window: 1s                 # 同源同消息高频抑制窗口（0 = 不启用）
+#     burst_threshold: 20              # 窗口内前 N 条放行原文，其余合并
+#     max_signatures: 4096             # 模式表上限（有界，采样自身不得成为无界增长点）
+#     budget_max_events_per_window: 0  # 每源预算：窗口内允许原文落库条数（0 = 不启用）
+#     budget_window: 1s
+#     budget_keep_every: 10            # 预算用尽后每 N 条保留 1 条原文，其余折叠
+#     max_aggregate_events: 4096       # 单条汇总承接的原文条数上限
+#     degrade_enabled: false           # 风暴自动降级（触发源复用容量门禁的磁盘读数）
+#     degrade_target_level: ERROR      # 降级期间压到 error-only
+#     degrade_disk_percent: 80         # 与 log_capacity 的降级阈值同口径
+#     degrade_hold: 30s                # 触发消失后连续保持多久才恢复
+
+# 保留策略（成本治理）。**默认不启用**，且默认动作是「搬运到冷层」而**不是删除**。
+#
+# 硬规则「删前归档」：保留期到期的数据绝不裸删——优先搬运到 COLD（复用既有
+# ROUTING_FROZEN→…→CLEANED 状态机，搬运成功且校验通过后才允许 HOT 侧回收）；
+# 搬运失败 = **保留原物 + 告警**（宁占盘不丢数据）；无搬运路径且未显式 discard 时
+# 同样保留原物并计入 blocked。直接删除需要**两道闸同时打开**（sweep.vl_sweep + discard），
+# 且受管 VL 进程还需带 -delete.enable（VL 自身默认关）。
+#
+# 保留期写法支持 3d/7d/30d/90d（Go 原生语法不认 d/w，这里已补齐）。未列出的级别按
+# 推荐值补齐（漏配一档不会退化成永久保留）。级别无法归类的日志按最保守处理：永久保留。
+# log_retention:
+#   enabled: true
+#   hot_retention: 30d                 # 热层窗口：超期即搬运到冷层（默认 30d，与 -retentionPeriod 对齐）
+#   discard: false                     # 意图闸：显式允许直接删（默认 false；即使打开，能搬仍优先搬）
+#   by_level:                          # 推荐档位（D1）
+#     debug: 3d
+#     info: 7d
+#     warn: 30d
+#     error: 90d
+#   sources:                           # 来源级覆盖（* 结尾为前缀匹配；显式 0 = 该级别永久保留）
+#     - match: "inst:147"
+#       by_level:
+#         debug: 1d
+#   sweep:
+#     vl_sweep: false                  # 执行闸（默认 false = 只计算并暴露，不动手）
+#     interval: 1h
+#     timeout: 30s
+
 # 出站网络代理（FR-174，见 ADR-037；可视化配置 + CP 下发见 FR-185 / ADR-043）。本节点所有出站
 # 下载（自更新二进制、JDK 归档、CFR 反编译器、服务端 jar）经此代理。url 留空=直连（仍尊重
 # HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），不破坏现状；非空时优先于环境变量。

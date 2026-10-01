@@ -13,6 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
+	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
 )
 
 // Options 构造端到端管道。
@@ -55,6 +56,10 @@ type Options struct {
 	// Ledger/WAL 可由 Worker 生产运行时注入持久恢复实例；为空时创建内存实例。
 	Ledger *ledger.Ledger
 	WAL    *acquire.WAL
+	// Sampling 采集侧采样与降级策略。零值 = 未启用 = 恒等（零行为变化）。
+	// 启用后所有事件入口统一经 emit 收口，保证「进 WAL 的事件」与「deliver 面看到的事件」
+	// 是同一批——两者分叉是最危险的一类不一致。
+	Sampling sampling.Policy
 }
 
 // Pipeline 端到端：tail/stdio → normalize → WAL → DeliveryHook → CanReclaim 门禁。
@@ -81,6 +86,14 @@ type Pipeline struct {
 	deliveredCount int
 	// lineMode false=normalize 多行；测试可切 LineHook 对照。
 	useNormalize bool
+	// sampler 采集侧采样器（每源一个，跨批保留窗口状态）。nil = 未启用。
+	sampler *sampling.Sampler
+	// capacityProvider 风暴降级用的读数来源。与容量门禁**同一真源**（V1 的
+	// Options.CapacityProvider / Capacity），不自己再采一遍磁盘——重复采数只会制造分叉。
+	capacityProvider func() (acquire.CapacityBudget, error)
+	// lastDegradeSample 是上一次读取降级读数的时刻（节流用）。
+	// 磁盘读数是一次 statfs，每批都读会与容量门禁叠加成双倍开销。
+	lastDegradeSample time.Time
 }
 
 // New 创建管道。Mode 默认 FILE_PRIMARY。
@@ -159,6 +172,15 @@ func New(opts Options) (*Pipeline, error) {
 		normalizeOpts: nopts,
 		reader:        opts.Reader,
 		useNormalize:  true,
+	}
+	if opts.Sampling.Enabled {
+		p.sampler = sampling.New(opts.Sampling)
+	}
+	if opts.CapacityProvider != nil {
+		p.capacityProvider = opts.CapacityProvider
+	} else if opts.Capacity != nil {
+		budget := *opts.Capacity
+		p.capacityProvider = func() (acquire.CapacityBudget, error) { return budget, nil }
 	}
 	p.imp = acquire.NewArchiveImporter(led, key)
 
@@ -300,10 +322,10 @@ func (p *Pipeline) FlushClosedSegment() ([]logtypes.Event, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
-	if err := p.ingest(events); err != nil {
-		return events, err
-	}
-	return events, nil
+	// 这里同样必须过采样收口：闭合的跨行事件是**成功路径**（活文件轮转时闭合半条事件），
+	// 它的返回值会被采集轮直接投递。若绕过采样，这一批就成了「未采样却进投递」的例外，
+	// 现场表现为「大部分时候压得住、偶尔冒出一大批原文」。
+	return p.emit(events)
 }
 
 func (p *Pipeline) ConfirmRotationCoverage() error {
@@ -338,7 +360,7 @@ func (p *Pipeline) pollFile() ([]logtypes.Event, error) {
 		// 仍尝试冲刷已完整事件。
 		evs := p.bound.DrainEvents()
 		if len(evs) > 0 {
-			_ = p.ingest(evs)
+			evs, _ = p.emit(evs)
 		}
 		return evs, err
 	}
@@ -346,10 +368,7 @@ func (p *Pipeline) pollFile() ([]logtypes.Event, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
-	if err := p.ingest(events); err != nil {
-		return events, err
-	}
-	return events, nil
+	return p.emit(events)
 }
 
 func (p *Pipeline) pollStdio() ([]logtypes.Event, error) {
@@ -374,10 +393,7 @@ func (p *Pipeline) pollStdio() ([]logtypes.Event, error) {
 	if len(batch) == 0 {
 		return nil, nil
 	}
-	if err := p.ingest(batch); err != nil {
-		return batch, err
-	}
-	return batch, nil
+	return p.emit(batch)
 }
 
 // Flush 冲刷多行半条事件（崩溃/轮转前）。显式 PARTIAL/OK 状态，不静默丢。
@@ -392,10 +408,7 @@ func (p *Pipeline) Flush() ([]logtypes.Event, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
-	if err := p.ingest(events); err != nil {
-		return events, err
-	}
-	return events, nil
+	return p.emit(events)
 }
 
 // Drain Poll + Flush，一次取完当前可见完整事件。
@@ -407,6 +420,60 @@ func (p *Pipeline) Drain() ([]logtypes.Event, error) {
 		return out, err
 	}
 	return out, ferr
+}
+
+// Sampler 返回采集侧采样器（未启用时为 nil）。观测面与降级信号注入用。
+func (p *Pipeline) Sampler() *sampling.Sampler { return p.sampler }
+
+// degradeSampleInterval 是降级读数的节流间隔。
+const degradeSampleInterval = time.Second
+
+// RefreshDegrade 按当前容量读数推进风暴降级状态机，返回状态是否发生变化。
+//
+// 触发源刻意复用容量门禁**同一份** CapacityBudget（V1 的 Options.Capacity/CapacityProvider），
+// 不另起一套「背压读数」：两个真源迟早会给出两个结论，而现场只会看到「有时候降级有时候不降级」。
+// 读数按 degradeSampleInterval 节流——磁盘使用率是一次 statfs，每批都读会与容量门禁叠加。
+func (p *Pipeline) RefreshDegrade(now time.Time) bool {
+	if p.sampler == nil || p.capacityProvider == nil {
+		return false
+	}
+	if !p.lastDegradeSample.IsZero() && now.Sub(p.lastDegradeSample) < degradeSampleInterval {
+		return false
+	}
+	p.lastDegradeSample = now
+	budget, err := p.capacityProvider()
+	if err != nil {
+		// 读数拿不到就不降级：降级是「已知资源吃紧」时的自保动作，
+		// 不是「读数失败」时的猜测。拿不到读数时误降级会白白压掉日志。
+		return false
+	}
+	sig := sampling.Signal{DiskPercent: budget.DiskUsagePercent}
+	if budget.MaxWALBytes > 0 {
+		sig.BacklogBytes = 0 // WAL 字节数未从 acquire 暴露；见 spec 的「未做」栏
+	}
+	changed, _ := p.sampler.UpdateSignal(sig, now)
+	return changed
+}
+
+// emit 是全部事件入口的**唯一收口**：采样 → WAL/账本 → 返回实际落库的那批事件。
+//
+// 为什么必须同时替换「进账本的事件」与「返回给调用方的事件」：
+// p.ingest 只负责 WAL/账本，而调用方（采集轮）拿返回值去 deliver + 投影校验。
+// 若只改前者，账本按采样集推进、deliver 面按未采样集校验，两边都自认正确——
+// 这是最危险的一类不一致（现场表现是校验永远失败或缺口永远挂着）。
+//
+// 采样未启用时 sampler 为 nil，本方法逐指令等价于直接调用 p.ingest。
+func (p *Pipeline) emit(events []logtypes.Event) ([]logtypes.Event, error) {
+	if p.sampler != nil {
+		events = p.sampler.Process(events)
+	}
+	if len(events) == 0 {
+		return nil, nil
+	}
+	if err := p.ingest(events); err != nil {
+		return events, err
+	}
+	return events, nil
 }
 
 // ingest WAL append → Commit → DeliveryHook。容量/缺口由 acquire.Pipeline 处理。
@@ -458,7 +525,14 @@ func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
 	}
 	result.Events = events
 	result.ImportedCount = len(events)
-	ingestErr := p.ingest(events)
+	ingestErr := func() error {
+		// 归档导入同样经采样收口。注意 ImportedCount 保持**采样前**的条数：
+		// 它回答的是「这次从归档里导入了多少」，而 Events 才是「实际落库的那批」。
+		// 两者口径不同不能混用，否则现场无法判断归档本身是否完整。
+		sampled, err := p.emit(events)
+		result.Events = sampled
+		return err
+	}()
 	pos, ok := p.Positions()
 	if ok && len(events) > 0 && pos.Durable >= events[len(events)-1].Record.End {
 		markErr := p.imp.MarkImported(path, result.ArchiveObjectID,

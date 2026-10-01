@@ -19,6 +19,8 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
+	"github.com/wcpe/JianManager/internal/worker/logs/retention"
+	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
 	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
@@ -63,8 +65,10 @@ type Config struct {
 	LogIndex   LogIndexConfig   `mapstructure:"log_index"`
 	LogArchive LogArchiveConfig `mapstructure:"log_archive"`
 	// LogIngest 采集归一化的节点级默认（缺陷 C 时区配置面）：源未显式配置时生效。
-	LogIngest  LogIngestConfig  `mapstructure:"log_ingest"`
-	Decompiler DecompilerConfig `mapstructure:"decompiler"`
+	LogIngest LogIngestConfig `mapstructure:"log_ingest"`
+	// LogRetention 保留策略（按级别/来源设保留期）与执行器。
+	LogRetention LogRetentionConfig `mapstructure:"log_retention"`
+	Decompiler   DecompilerConfig   `mapstructure:"decompiler"`
 	// Search 全文搜索索引配置（FR-074，见 ADR-017）。
 	Search SearchConfig `mapstructure:"search"`
 	// ArtifactCache 节点本地制品缓存配置（FR-178）：按 sha256 缓存下载过的核心 jar，建实例命中即秒拷。
@@ -514,6 +518,178 @@ type LogIngestConfig struct {
 	// 依赖粘滞启发式，运维显式声明才是确定性方案。
 	// 源可用 SourceConfig.Charset 覆盖本默认；非法值在 Load 阶段启动即拒。
 	Charset string `mapstructure:"charset"`
+	// Sampling 采集侧采样与降级策略（键 log_ingest.sampling.*）。
+	//
+	// 挂在 log_ingest 下而不是顶层：它与时区/字符集同属「采集归一化」的节点级默认，
+	// 作用域与装配点完全一致（都在构造 ingest.Options 时接线）。
+	Sampling LogSamplingConfig `mapstructure:"sampling"`
+}
+
+// LogSamplingConfig 采集侧采样与降级策略的配置面（键 `log_ingest.sampling.*`）。
+//
+// 默认**全关**：本项一旦启用就会改变「哪些日志被存下来」，属于必须由运维显式开启的能力。
+// 取值口径与 retention 一致（0 = 没填走默认，负数 = 写错启动即拒）——
+// 采样配错的后果是日志静默少存，现场只会表现为「查不到」，不会表现为报错。
+type LogSamplingConfig struct {
+	// Enabled 总开关。
+	Enabled bool `mapstructure:"enabled"`
+	// MinLevel 等级过滤：低于该级别的原文折叠为汇总事件。空串 = 不启用。
+	// 无法归类的级别一律放行。
+	MinLevel string `mapstructure:"min_level"`
+	// BurstWindow / BurstThreshold 同源同消息高频抑制：窗口内前 N 条放行原文，
+	// 其余合并为汇总事件（含条数与样例）。BurstWindow 为 0 = 不启用。
+	BurstWindow    time.Duration `mapstructure:"burst_window"`
+	BurstThreshold int           `mapstructure:"burst_threshold"`
+	// MaxSignatures 模式表上限（有界：采样自身不得成为无界增长点）。
+	MaxSignatures int `mapstructure:"max_signatures"`
+	// BudgetMaxEventsPerWindow / BudgetWindow / BudgetKeepEvery 每源预算：
+	// 窗口内允许原文落库 N 条，超出后每 KeepEvery 条保留 1 条原文，其余折叠。
+	BudgetMaxEventsPerWindow int           `mapstructure:"budget_max_events_per_window"`
+	BudgetWindow             time.Duration `mapstructure:"budget_window"`
+	BudgetKeepEvery          int           `mapstructure:"budget_keep_every"`
+	// MaxAggregateEvents 单条汇总事件承接的原文条数上限。
+	MaxAggregateEvents int `mapstructure:"max_aggregate_events"`
+	// DegradeEnabled 风暴自动降级开关；触发源复用容量门禁的磁盘读数（同一真源）。
+	DegradeEnabled     bool          `mapstructure:"degrade_enabled"`
+	DegradeTargetLevel string        `mapstructure:"degrade_target_level"`
+	DegradeDiskPercent float64       `mapstructure:"degrade_disk_percent"`
+	DegradeHold        time.Duration `mapstructure:"degrade_hold"`
+}
+
+// SamplingPolicy 装配为 pipeline.Options.Sampling / ingest.Options.Sampling。
+//
+// 独立成方法而不是在装配点内联读字段：这条接线一旦断掉，运维会以为「已经开了采样」，
+// 而实际上一条都没压，成本问题会以「配了没用」的形态长期挂着——
+// 与 IngestDefaultTimeZone/Charset 同一条理由（配置 → 实现之间没有任何编译期约束）。
+func (c *Config) SamplingPolicy() sampling.Policy {
+	if c == nil {
+		return sampling.Policy{}
+	}
+	s := c.LogIngest.Sampling
+	return sampling.Policy{
+		Enabled: s.Enabled,
+		Level:   sampling.LevelFilter{MinLevel: s.MinLevel},
+		Burst: sampling.Burst{
+			Window:        s.BurstWindow,
+			Threshold:     s.BurstThreshold,
+			MaxSignatures: s.MaxSignatures,
+		},
+		Budget: sampling.Budget{
+			MaxEventsPerWindow: s.BudgetMaxEventsPerWindow,
+			Window:             s.BudgetWindow,
+			KeepEvery:          s.BudgetKeepEvery,
+		},
+		Degrade: sampling.Degrade{
+			Enabled:     s.DegradeEnabled,
+			TargetLevel: s.DegradeTargetLevel,
+			DiskPercent: s.DegradeDiskPercent,
+			Hold:        s.DegradeHold,
+		},
+		MaxAggregateEvents: s.MaxAggregateEvents,
+	}
+}
+
+// LogRetentionConfig 保留策略的配置面（键 `log_retention.*`）。
+//
+// 保留期写成**字符串**（`3d` / `7d` / `30d` / `90d`）：Go 的 time.ParseDuration 不认 d/w，
+// 而保留期天然按天表达，故经 retention.ParseTTL 解析（见该函数的说明）。
+//
+// 两道闸分开的原因：删除**不可逆**，与采样折叠（有汇总事件承接区间，可查可证）不是
+// 同一量级的风险。`enabled` 决定「保留多久」（策略），`sweep.vl_sweep` 决定「真的删」
+// （执行），后者默认关；且 VL 侧还需运维在受管进程上加 `-delete.enable`（VL 自身默认关）。
+type LogRetentionConfig struct {
+	Enabled bool `mapstructure:"enabled"`
+	// ByLevel 级别 → 保留期字符串；"0" 或空串 = 该级别永久保留。
+	// 未列出的级别按 D1 推荐值补齐（漏配一档不得退化成永久保留）。
+	ByLevel map[string]string `mapstructure:"by_level"`
+	// Sources 来源级覆盖。
+	Sources []LogRetentionSource `mapstructure:"sources"`
+	Sweep   LogRetentionSweep    `mapstructure:"sweep"`
+	// Discard 是否允许**直接删除**到期数据（裸删）。默认 false。
+	//
+	// 这是**意图闸**，与 sweep.vl_sweep（执行闸）相互独立，两者同时成立才可达删除。
+	// 默认动作是把日分区搬运到冷层；本项的作用是解除「没有归档路径时的阻塞」，
+	// 即使显式打开，只要冷层路径可用，动作**仍然**是搬运（见 retention.PlanArchive 的次序）。
+	Discard bool `mapstructure:"discard"`
+	// HotRetention 热层保留窗口（超期即搬运到冷层）。0 = 用默认 30d（与受管 VL 的
+	// -retentionPeriod 对齐，热层保持现状、长留靠冷层）。
+	HotRetention time.Duration `mapstructure:"hot_retention"`
+}
+
+// LogRetentionSource 某个来源的保留期覆盖。
+type LogRetentionSource struct {
+	// Match 源标识；以 * 结尾表示前缀匹配（如 `inst:`）。
+	Match string `mapstructure:"match"`
+	// ByLevel 级别 → 保留期字符串；"0" = 该级别永久保留。
+	ByLevel map[string]string `mapstructure:"by_level"`
+}
+
+// LogRetentionSweep 保留策略执行器配置。
+type LogRetentionSweep struct {
+	// VLSweep 是否允许调用 VL 删除接口（默认 false）。
+	//
+	// 两道闸之一：本项是**执行闸**，还需要 `discard: true`（意图闸）同时成立才会真的删。
+	// 两个独立开关而非一个，是因为这条路径的后果不可逆，一处误开与两处同时误开的
+	// 概率差得很远；默认路径永远是把日分区搬运到冷层（数据仍在、仍可查）。
+	VLSweep bool `mapstructure:"vl_sweep"`
+	// Interval 扫描间隔；0 用默认 1h。
+	Interval time.Duration `mapstructure:"interval"`
+	// Timeout 单次删除请求超时；0 用默认 30s。
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
+// RetentionPolicy 装配为 retention 包策略。解析失败时返回错误（由 Load 启动即拒）。
+func (c *Config) RetentionPolicy() (retention.Policy, error) {
+	if c == nil {
+		return retention.Policy{}, nil
+	}
+	cfg := c.LogRetention
+	p := retention.Policy{
+		Enabled:      cfg.Enabled,
+		Discard:      cfg.Discard,
+		HotRetention: cfg.HotRetention,
+		Sweep: retention.Sweep{
+			VLSweep:  cfg.Sweep.VLSweep,
+			Interval: cfg.Sweep.Interval,
+			Timeout:  cfg.Sweep.Timeout,
+		},
+	}
+	if len(cfg.ByLevel) > 0 {
+		p.ByLevel = make(map[string]time.Duration, len(cfg.ByLevel))
+		for rawLevel, rawTTL := range cfg.ByLevel {
+			level := retention.LevelKeyOf(rawLevel)
+			if level == "" {
+				return retention.Policy{}, fmt.Errorf("log_retention.by_level 含未知级别 %q（支持 TRACE/DEBUG/INFO/WARN/ERROR）", rawLevel)
+			}
+			ttl, err := retention.ParseTTL(rawTTL)
+			if err != nil {
+				return retention.Policy{}, fmt.Errorf("log_retention.by_level.%s: %w", rawLevel, err)
+			}
+			p.ByLevel[level] = ttl
+		}
+	}
+	for i, src := range cfg.Sources {
+		override := retention.SourceOverride{Match: strings.TrimSpace(src.Match)}
+		if len(src.ByLevel) > 0 {
+			override.ByLevel = make(map[string]time.Duration, len(src.ByLevel))
+			for rawLevel, rawTTL := range src.ByLevel {
+				level := retention.LevelKeyOf(rawLevel)
+				if level == "" {
+					return retention.Policy{}, fmt.Errorf("log_retention.sources[%d].by_level 含未知级别 %q", i, rawLevel)
+				}
+				ttl, err := retention.ParseTTL(rawTTL)
+				if err != nil {
+					return retention.Policy{}, fmt.Errorf("log_retention.sources[%d].by_level.%s: %w", i, rawLevel, err)
+				}
+				override.ByLevel[level] = ttl
+			}
+		}
+		p.Sources = append(p.Sources, override)
+	}
+	if err := p.Validate(); err != nil {
+		return retention.Policy{}, err
+	}
+	return p, nil
 }
 
 // ConfigPath 返回本次实际读取并应用的配置文件绝对路径；空串表示本次启动没有任何配置文件生效
