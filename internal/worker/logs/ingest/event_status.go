@@ -15,6 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
 // 本文件实现**事件级状态可见性**（后续项③）——一份**派生态**诊断视图。
@@ -76,6 +77,10 @@ type EventStatusFacts struct {
 	VerifiedRuns []ledger.PositionRange
 	// Abandonments 是人工裁定永久丢失的区间凭据。
 	Abandonments []ledger.GapAbandonment
+	// DeliveryPos 是**读侧给出**的投递水位（用户 2026-10-05 批准 ✓）：取账本已算好的值 ✓，
+	// **不落库、不落 aux、不另算一套** ✗ —— 现场据此离线核 `AboveDelivery` ✓（离线复算须用
+	// 同一函数口径 `contiguousDeliveryEnd(batches, reclaim)` ✓）。
+	DeliveryPos uint64
 	// Gaps 是已登记缺口（用于给 UNSENT 段标注**原因**，不改变态判定）。
 	Gaps []ledger.Gap
 }
@@ -364,6 +369,7 @@ func (m *Manager) SourceEventStatus(query EventStatusQuery) (EventStatusReport, 
 		return EventStatusReport{}, fmt.Errorf("ingest: 源 %s 未登记采集管道", key)
 	}
 	facts := EventStatusFacts{VerifiedRuns: append([]ledger.PositionRange(nil), saved.VerifiedRuns...)}
+	facts.DeliveryPos = readSideDeliveryPos(p)
 	if entry := p.Ledger().Get(p.Key()); entry != nil {
 		facts.Positions = entry.Positions
 		facts.Batches = append([]ledger.DeliveryBatch(nil), entry.DeliveryBatches...)
@@ -567,6 +573,7 @@ func ExportEventStatus(root string, args []string, out io.Writer) error {
 // eventStatusFactsOfPersisted 从持久化状态取派生事实（只读）。
 func eventStatusFactsOfPersisted(saved persistedSource) EventStatusFacts {
 	facts := EventStatusFacts{VerifiedRuns: append([]ledger.PositionRange(nil), saved.VerifiedRuns...)}
+	facts.DeliveryPos = readSideDeliveryPosFromSaved(saved)
 	for index, entry := range saved.Ledger {
 		if index == 0 {
 			facts.Positions = entry.Positions
@@ -641,4 +648,27 @@ func selectEventStatusKeys(state *persistedState, keys []string, selector string
 		return nil, fmt.Errorf("ingest: 源 %s 有多个代次（%s），请用 <id>/<generation> 精确指定",
 			selector, strings.Join(matches, ", "))
 	}
+}
+
+// readSideDeliveryPos 读侧投递水位（**两处 facts 构造共用同一口径** ✓，用户 2026-10-05 ✓）。
+//
+// 为什么"读侧算、不落库"：`Delivery` 是由 `contiguousDeliveryEnd(delivery_batch 行, reclaim)`
+// **派生**的值（Restore 每次重算 ✓）⇒ 落库/落 aux 会造出**第二真值** ✗（本次会话反复踩的"两本账"）。
+// 两个入口（在线管道 / 落库快照）都只做一件事：**取账本已算好的值** ✓ —— 绝不在这里另算一套 ✗。
+func readSideDeliveryPos(pipe *pipeline.Pipeline) uint64 {
+	if pipe == nil || pipe.Ledger() == nil {
+		return 0
+	}
+	if e := pipe.Ledger().Get(pipe.Key()); e != nil {
+		return e.Positions.Delivery
+	}
+	return 0
+}
+
+// readSideDeliveryPosFromSaved 同上，但取自**落库快照**（该源的账本快照 ✓）。
+func readSideDeliveryPosFromSaved(saved persistedSource) uint64 {
+	if len(saved.Ledger) == 0 {
+		return 0
+	}
+	return saved.Ledger[0].Positions.Delivery // 快照是**该源**的账本 ⇒ 首条即其条目 ✓
 }
