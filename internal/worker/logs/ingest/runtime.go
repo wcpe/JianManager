@@ -5135,6 +5135,109 @@ func (m *Manager) recoveryInProgress() bool {
 	return m != nil && m.StartupRecoveryStatus().InProgress
 }
 
+// SourceResumeDiagnostic 是**逐源**暂停/复活判据的可观测快照（现场排障用 ✓）。
+//
+// 为什么需要它（2026-10-04 现场：`gap_open` 在降而 `paused` 平 ✗）：`gap_open` 是**全局计数**，
+// 而单源解除暂停要求**它自己**的缺口全部清零 ✓ ⇒ 必须按**源**看才知道"清零却仍暂停"是 bug ✗
+// 还是"仍有残余缺口/暂停原因不在本类"的正确行为 ✓。本快照把这条判据的每个输入都摊开 ✓。
+type SourceResumeDiagnostic struct {
+	LogSourceID   string
+	AcquirePaused bool
+	PauseReason   string
+	// BacklogPause 表示暂停原因是否属本包积压/容量类（只有 true 才走滞回自愈 ✓）。
+	BacklogPause bool
+	// Unresolved 是该源未消解缺口数；UnresolvedByReason 按原因细分。
+	Unresolved         int
+	UnresolvedByReason map[string]int
+	// Blocking 是"仍会挡住 ResumeAcquire"的条数（= 未消解且不在分类白名单里的 ✓）。
+	Blocking int
+	// BacklogEntries / Limits 是当前积压与生效上限（含恢复期拓宽 ✓）。
+	BacklogEntries int64
+	MaxEntries     int64
+	// DeliveryPos / DurablePos 是账本水位（靶②判据：缺口是否在**已投递水位之上** ⇒ 需恢复链重投
+	// 而非水位覆盖 ✓）。
+	DeliveryPos uint64
+	DurablePos  uint64
+	// UnresolvedGaps 摊开每条未消解缺口的区间与原因（现场用它与上面的水位对齐 ✓）。
+	UnresolvedGaps []UnresolvedGapView
+}
+
+// UnresolvedGapView 是单条未消解缺口的最小可读视图（区间 + 原因 + 是否可分类消解 ✓）。
+type UnresolvedGapView struct {
+	Start      uint64
+	End        uint64
+	Reason     string
+	Classiable bool
+	// AboveDelivery 表示该缺口**整体位于已投递水位之上**（⇒ 水位覆盖判据不可能消解它 ✓，
+	// 只能靠恢复链重投后由投递成功证据消解 ✓）——靶②的核心判据 ✓。
+	AboveDelivery bool
+}
+
+// ResumeDiagnostics 返回所有源的暂停/复活判据快照（按 LogSourceID 升序，稳定可 diff ✓）。
+func (m *Manager) ResumeDiagnostics() []SourceResumeDiagnostic {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+	out := make([]SourceResumeDiagnostic, 0, len(pipes))
+	for _, p := range pipes {
+		wal := p.WAL()
+		led := p.Ledger()
+		if wal == nil || led == nil {
+			continue
+		}
+		entry := led.Get(p.Key())
+		if entry == nil {
+			continue
+		}
+		d := SourceResumeDiagnostic{
+			LogSourceID:        p.Key().LogSourceID,
+			AcquirePaused:      entry.AcquirePaused,
+			PauseReason:        entry.PauseReason,
+			BacklogPause:       acquire.IsBacklogPauseReason(entry.PauseReason),
+			UnresolvedByReason: map[string]int{},
+		}
+		d.DeliveryPos = entry.Positions.Delivery
+		d.DurablePos = entry.Positions.Durable
+		for _, g := range entry.Gaps {
+			if g.Resolved {
+				continue
+			}
+			d.Unresolved++
+			d.UnresolvedByReason[g.Reason]++
+			classiable := gapReasonClassifiableOnResume(g.Reason)
+			if !classiable {
+				d.Blocking++
+			}
+			d.UnresolvedGaps = append(d.UnresolvedGaps, UnresolvedGapView{
+				Start: g.StartPos, End: g.EndPos, Reason: g.Reason,
+				Classiable: classiable, AboveDelivery: g.StartPos > entry.Positions.Delivery,
+			})
+		}
+		d.BacklogEntries, d.MaxEntries = wal.BacklogAndLimits()
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LogSourceID < out[j].LogSourceID })
+	return out
+}
+
+// gapReasonClassifiableOnResume 报告某原因是否属于"恢复后回读可愈合"的白名单（与 acquire 侧一致 ✓）。
+func gapReasonClassifiableOnResume(reason string) bool {
+	switch reason {
+	case ledger.GapReasonAppendRejected, ledger.GapReasonDeliverError, ledger.GapReasonDeliverErrorWorkerSource:
+		return true
+	default:
+		return false
+	}
+}
+
 // RecoveryQuotaStats 暴露恢复期配额的当前口径（可观测 ✓）：生效系数、宽限截止、是否恢复中。
 func (m *Manager) RecoveryQuotaStats() (factor float64, graceUntil time.Time, recovering bool) {
 	if m == nil {

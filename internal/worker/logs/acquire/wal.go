@@ -402,6 +402,18 @@ func (w *WAL) resolveReReadHealableGapsLocked(ent *ledger.Entry) int {
 	return total
 }
 
+// BacklogAndLimits 返回当前积压（条目）与生效上限（含恢复期拓宽 ✓），供诊断面使用。
+func (w *WAL) BacklogAndLimits() (entries int64, maxEntries int64) {
+	if w == nil {
+		return 0, 0
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	e, _ := w.backlogLocked()
+	mx, _ := w.limitsLocked()
+	return e, mx
+}
+
 // EvaluateResume 尝试一次「推进回收 + 按滞回条件评估恢复」，返回**账本当前是否不在暂停态**。
 //
 // 用在「缺口刚被消解、源仍处于暂停」的时刻：恢复的唯一检查点挂在回收路径上，而回收路径
