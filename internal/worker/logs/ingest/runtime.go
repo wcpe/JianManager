@@ -252,6 +252,11 @@ type Manager struct {
 	// goroutine 内未捕获的 panic 会**静默杀死整个兜底环** ✗ ⇒ recover 连栈一起留证 ✓。
 	sweepTicks  atomic.Int64
 	sweepPanics atomic.Int64
+	// sweepCursor / sweepEligibleNow：**轮转窗口的游标**与**合格暂停源总数（gauge）** ✓
+	// （用户 2026-10-05 ②：只取前 N 且不轮转 ⇒ 长暂停源永不被覆盖 ✗✗；合格数单列 ⇒
+	// 现场一眼看出"合格 38 vs 本轮处理 2" ✓）。
+	sweepCursor      atomic.Uint64
+	sweepEligibleNow atomic.Int64
 	// **兜底环每轮的跳过原因分类计数**（2026-10-05 现场：41 家三项前置全满足却不复活 ✗ ⇒
 	// 必须能直接读出"是哪一条把它挡了" ✓）。
 	risingStreak     atomic.Int64
@@ -5367,6 +5372,8 @@ type ResumeSweepStats struct {
 	// SweepTicks / SweepPanics：**心跳与崩溃计数**（现场据此判"环活着吗" ✓）。
 	SweepTicks  int64
 	SweepPanics int64
+	// EligibleNow 是**合格暂停源总数（gauge，不是累计 ✓）**；与 Candidates（累计）并读即知覆盖进度 ✓。
+	EligibleNow int64
 }
 
 func (m *Manager) ResumeSweepStats() ResumeSweepStats {
@@ -5383,6 +5390,7 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		RisingStreak:     m.risingStreak.Load(),
 		SweepTicks:       m.sweepTicks.Load(),
 		SweepPanics:      m.sweepPanics.Load(),
+		EligibleNow:      m.sweepEligibleNow.Load(),
 	}
 }
 
@@ -5518,14 +5526,37 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		}
 	}
 	m.mu.Unlock()
-	// **本轮容量**（见 defaultResumeBatchPerRound）：处理够 N 个就收工，把剩下的留给下一轮 ✓
-	// （低频兜底，30s 一轮 ⇒ 60 源最多 8 轮收敛 ✓，而不是被每个慢源串行拖成"每轮一个" ✗）。
+	// **稳定序**：轮转窗口只有在稳定序下才有意义 ✓（map 迭代序随机会让"轮转"退化成随机 ✓）。
+	sort.Slice(pipes, func(i, j int) bool {
+		return pipes[i].Key().LogSourceID+pipes[i].Key().SourceGeneration <
+			pipes[j].Key().LogSourceID+pipes[j].Key().SourceGeneration
+	})
+	// **全量资格扫描（gauge）**：合格暂停源总数 = 下一轮窗口该覆盖的总量 ✓。
+	// 为什么单列：现场"`candidates` 恒定 2 而应复活 38" ✗ ⇒ 必须能一眼看出"**合格者有多少 vs 本轮处理了多少**" ✓。
+	eligible := 0
+	for _, p := range pipes {
+		led := p.Ledger()
+		if led == nil {
+			continue
+		}
+		if e := led.Get(p.Key()); e != nil && e.AcquirePaused && acquire.IsBacklogPauseReason(e.PauseReason) {
+			eligible++
+		}
+	}
+	m.sweepEligibleNow.Store(int64(eligible))
+
+	// **轮转窗口**（用户 2026-10-05 ②：只取前 N 且不轮转 ⇒ 长暂停源**永不被覆盖** ✗✗）：
+	// 从上一轮停下的位置继续、绕回开头 ✓ ⇒ 任意合格源在 ⌈E/batch⌉ 轮内必被处理 ✓。
 	handled := 0
 	batch := m.resumeBatchOf()
-	for _, p := range pipes {
-		if handled >= batch {
-			break
-		}
+	start := 0
+	if len(pipes) > 0 {
+		start = int(m.sweepCursor.Load() % uint64(len(pipes)))
+	}
+	scanned := 0
+	for scanned < len(pipes) && handled < batch {
+		p := pipes[(start+scanned)%len(pipes)]
+		scanned++
 		led := p.Ledger()
 		if led == nil {
 			continue
@@ -5570,7 +5601,10 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 			m.sweepRevived.Add(1)
 		}
 	}
-
+	// 下一轮从**新的位置**继续 ✓（轮转的核心一行 ✓；scanned 含被跳过的项 ⇒ 游标必然前进 ✓）。
+	if len(pipes) > 0 {
+		m.sweepCursor.Store(uint64((start + scanned) % len(pipes)))
+	}
 	return candidates, revived
 }
 
