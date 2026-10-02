@@ -236,6 +236,14 @@ type Manager struct {
 	scanBudget time.Duration
 	// scanBudgetExceeded 统计"超预算截断"次数（排障观测口）。
 	scanBudgetExceeded atomic.Int64
+	// readingsConsumed* 是**可达面被消费的调用计数**（用户 2026-10-05 的更稳写法 ✓）：
+	// 分钟打点（`sampleResumeDiagnostics`）按名调用这三个方法 ✓ ⇒ 计数随分钟递增即为
+	// "**可达面确实被消费**"的直接证据 ✓✓（不读外部源码、不依赖测试工作目录深度 ✗）。
+	// 现场读法：打点行里的 `consumed_*` 逐分钟增长 ⇒ 接线活着 ✓（恒 0 ⇒ 接线断了 ✗）。
+	readingsConsumedDiagnostics atomic.Int64
+	readingsConsumedStats       atomic.Int64
+	readingsConsumedInvariants  atomic.Int64
+
 	// backpressureSkips 统计因"上一轮净涨"而跳过的兜底轮数（可观测 ✓）。
 	backpressureSkips atomic.Int64
 	// **兜底环每轮的跳过原因分类计数**（2026-10-05 现场：41 家三项前置全满足却不复活 ✗ ⇒
@@ -5272,6 +5280,7 @@ func (m *Manager) ResumeDiagnostics() []SourceResumeDiagnostic {
 // 本函数供**每分钟打点**（与采集索引持久化耗时采样同一 sampler ✓）与 CLI 使用；只打非零项，
 // 避免 60 源刷屏 ✓。`BacklogEntries>0` 属正常态，**不打**（噪声 ✗）。
 func (m *Manager) ResumeDiagnosticLines() []string {
+	m.readingsConsumedDiagnostics.Add(1) // 消费计数（见字段注释 ✓）
 	diags := m.ResumeDiagnostics()
 	lines := make([]string, 0, len(diags))
 	for _, d := range diags {
@@ -5283,7 +5292,8 @@ func (m *Manager) ResumeDiagnosticLines() []string {
 			d.LogSourceID, d.AcquirePaused, d.PauseReason, d.BacklogPause,
 			d.BacklogEntries, d.MaxEntries, d.BacklogTotalEntries, d.ReplayEntries,
 			d.Unresolved, d.Blocking, d.DeliveryPos)+
-			fmt.Sprintf(" read_pos=%d reclaim_pos=%d invariant_ok=%v paused_exempt=%v",
+			fmt.Sprintf(" consumed_diag=%d consumed_stats=%d consumed_inv=%d read_pos=%d reclaim_pos=%d invariant_ok=%v paused_exempt=%v",
+				m.readingsConsumedDiagnostics.Load(), m.readingsConsumedStats.Load(), m.readingsConsumedInvariants.Load(),
 				d.ReadPos, d.ReclaimPos,
 				d.ReclaimPos <= d.ReadPos || d.AcquirePaused, // 暂停源豁免 ✓（见 ledger 侧同口径注释）
 				d.AcquirePaused && d.ReclaimPos > d.ReadPos))
@@ -5321,6 +5331,7 @@ func (m *Manager) PositionInvariantViolations() []string {
 	if m == nil {
 		return nil
 	}
+	m.readingsConsumedInvariants.Add(1) // 消费计数（见字段注释 ✓）
 	m.mu.Lock()
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
 	for _, p := range m.pipes {
@@ -5353,6 +5364,7 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 	if m == nil {
 		return ResumeSweepStats{}
 	}
+	m.readingsConsumedStats.Add(1) // 消费计数（见字段注释 ✓）
 	return ResumeSweepStats{
 		Candidates:       m.sweepCandidates.Load(),
 		Revived:          m.sweepRevived.Load(),
