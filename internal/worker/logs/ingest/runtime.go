@@ -206,6 +206,14 @@ type Manager struct {
 	resumeInterval time.Duration
 	// resumeBatchPerRound 是兜底环每轮处理上限（见 defaultResumeBatchPerRound）。
 	resumeBatchPerRound int
+	// recoveryQuotaFactor / recoveryDrainGrace / recoveryGraceUntil：**恢复期独立配额**的接线
+	// （用户定调方案② ✓）。factor 默认 4（同倍拓宽，仍有界 ✓）；grace 默认 30m（现场排空动辄
+	// 小时级 ⇒ 10m 有"刚回归即再锁"的风险 ✓）；graceUntil 是可观测的宽限截止 ✓。
+	recoveryQuotaFactor float64
+	recoveryDrainGrace  time.Duration
+	recoveryGraceUntil  time.Time
+	// recoveryProbe 是"恢复是否进行中"的测试注入点（生产 nil ⇒ 用 StartupRecoveryStatus() ✓）。
+	recoveryProbe func() bool
 	// resumeProbe 是兜底扫描的测试观测口（生产 nil）：每个"积压/容量类暂停"的源被扫到时回调。
 	resumeProbe func(logSourceID string)
 	// scanYield / scanSliceRows / scanYieldNotify：**段读聚合路径的让路**（见
@@ -468,6 +476,11 @@ type Options struct {
 	Scan *ScanTuning
 	// ScanBudget 是单源单轮段读聚合的时间预算（0 ⇒ 默认 2s）。
 	ScanBudget time.Duration
+	// RecoveryQuotaFactor / RecoveryDrainGrace 是**恢复期独立配额**（0 ⇒ 默认 4 / 30m）。
+	RecoveryQuotaFactor float64
+	RecoveryDrainGrace  time.Duration
+	// RecoveryProbe 是"恢复是否进行中"的注入点（生产 nil ⇒ 用 StartupRecoveryStatus()）。
+	RecoveryProbe func() bool
 	// ResumeBatchPerRound 是兜底环每轮最多处理的可解源数（0 ⇒ 默认 8）。
 	ResumeBatchPerRound int
 	// ResumeInterval 是**容量自愈兜底**周期（0 ⇒ 默认 30s）：低频重试「排空存量 → 推进回收 →
@@ -1201,6 +1214,9 @@ func New(opts Options) (*Manager, error) {
 		reconcileYieldNotify:     opts.ReconcileYieldNotify,
 		resumeInterval:           opts.ResumeInterval,
 		resumeBatchPerRound:      opts.ResumeBatchPerRound,
+		recoveryQuotaFactor:      opts.RecoveryQuotaFactor,
+		recoveryDrainGrace:       opts.RecoveryDrainGrace,
+		recoveryProbe:            opts.RecoveryProbe,
 		scanYield:                scanValueOf(opts.ScanYield, opts.Scan, func(t *ScanTuning) time.Duration { return t.Yield }),
 		scanSliceRows:            scanSliceRowsOf(opts.ScanSliceRows, opts.Scan),
 		scanYieldNotify:          opts.ScanYieldNotify,
@@ -1944,6 +1960,7 @@ func (m *Manager) Start(ctx context.Context) {
 	go m.RunReconcileLoop(ctx)
 	// 容量自愈兜底：不依赖采集轮产生新批次（2026-10-03 现场：暂停后无人再评估 ⇒ 成批源停死）。
 	go m.RunCapacityResumeLoop(ctx)
+	m.syncRecoveryQuota() // 启动即同步一次（恢复期独立配额 ✓）
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -5086,6 +5103,93 @@ func (m *Manager) scanSliceOf() int {
 	return m.scanSliceRows
 }
 
+// defaultRecoveryQuotaFactor / defaultRecoveryDrainGrace 是**恢复期独立配额**的默认值。
+//
+// 依据（2026-10-04 现场 + 用户定调 ✓）：恢复期的回放/补账是设计行为（gz 归档补账写回原代次
+// backlog ✓），必然把源推过常规闸 ⇒ 常规闸在恢复期注定自锁 ✗；而恢复完成后若仍按拓宽判，就是
+// 削弱常规期语义 ✗（红线）。宽限取 30m：现场排空动辄小时级 ⇒ 更短的窗有"刚回归即再锁"风险 ✓。
+const (
+	defaultRecoveryQuotaFactor = 4.0
+	defaultRecoveryDrainGrace  = 30 * time.Minute
+)
+
+func (m *Manager) recoveryQuotaFactorOf() float64 {
+	if m == nil || m.recoveryQuotaFactor < 1 {
+		return defaultRecoveryQuotaFactor
+	}
+	return m.recoveryQuotaFactor
+}
+
+func (m *Manager) recoveryDrainGraceOf() time.Duration {
+	if m == nil || m.recoveryDrainGrace <= 0 {
+		return defaultRecoveryDrainGrace
+	}
+	return m.recoveryDrainGrace
+}
+
+// recoveryInProgress 返回"恢复是否进行中"（既有可检状态 ✓；测试可注入 ✓）。
+func (m *Manager) recoveryInProgress() bool {
+	if m != nil && m.recoveryProbe != nil {
+		return m.recoveryProbe()
+	}
+	return m != nil && m.StartupRecoveryStatus().InProgress
+}
+
+// RecoveryQuotaStats 暴露恢复期配额的当前口径（可观测 ✓）：生效系数、宽限截止、是否恢复中。
+func (m *Manager) RecoveryQuotaStats() (factor float64, graceUntil time.Time, recovering bool) {
+	if m == nil {
+		return 1, time.Time{}, false
+	}
+	m.mu.Lock()
+	until := m.recoveryGraceUntil
+	m.mu.Unlock()
+	recovering = m.recoveryInProgress()
+	if recovering || (!until.IsZero() && time.Now().Before(until)) {
+		return m.recoveryQuotaFactorOf(), until, recovering
+	}
+	return 1, until, false
+}
+
+// syncRecoveryQuota 把"恢复期独立配额"同步到全部管道（每轮 tick + Start 各调一次 ✓）。
+//
+// 规则（用户定调 ✓）：恢复中 ⇒ 设 factor ✓；恢复刚结束 ⇒ 记宽限截止，期间继续拓宽 ✓；
+// 宽限过期 ⇒ 回归常规闸 ✓（届时超常规闸的源按**常规语义**暂停 = 正确行为 ✓，红线不削弱 ✗）。
+func (m *Manager) syncRecoveryQuota() {
+	if m == nil {
+		return
+	}
+	recovering := m.recoveryInProgress()
+	m.mu.Lock()
+	if recovering {
+		m.recoveryGraceUntil = time.Time{}
+	} else if m.recoveryGraceUntil.IsZero() {
+		m.recoveryGraceUntil = time.Now().Add(m.recoveryDrainGraceOf())
+		slog.Info("启动恢复已结束：进入排空宽限窗（期间仍按恢复期独立配额判）",
+			"graceUntil", m.recoveryGraceUntil.Format(time.RFC3339),
+			"grace", m.recoveryDrainGraceOf().String(), "factor", m.recoveryQuotaFactorOf())
+	}
+	until := m.recoveryGraceUntil
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+
+	factor := 1.0
+	if recovering || time.Now().Before(until) {
+		factor = m.recoveryQuotaFactorOf()
+	}
+	for _, p := range pipes {
+		wal := p.WAL()
+		if wal == nil {
+			continue
+		}
+		wal.SetRecoveryWiden(factor)
+	}
+}
+
 // defaultResumeInterval 是容量自愈兜底的默认周期。
 //
 // 依据（2026-10-03 现场）：暂停的唯一恢复评估点挂在采集轮上（Append 前/投递后 TryReclaim），
@@ -5197,6 +5301,7 @@ func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			m.syncRecoveryQuota() // 先同步配额口径（恢复中/宽限/回归 ✓），再扫暂停源 ✓
 			m.maybeResumePausedSources()
 		}
 	}

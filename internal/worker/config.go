@@ -598,12 +598,19 @@ const DefaultMaxWALEntries int64 = 20000
 const DefaultMaxReplayEventsPerDrain int = 500
 
 type LogCapacityConfig struct {
-	MaxWALBytes       uint64  `mapstructure:"max_wal_bytes"`
-	MaxWALEntries     int64   `mapstructure:"max_wal_entries"`
-	MaxReplayEvents   int     `mapstructure:"max_replay_events_per_drain"`
-	MaxGaps           int     `mapstructure:"max_gaps"`
-	DegradedAtPercent float64 `mapstructure:"degraded_at_percent"`
-	PauseAtPercent    float64 `mapstructure:"pause_at_percent"`
+	MaxWALBytes uint64 `mapstructure:"max_wal_bytes"`
+	// RecoveryQuotaFactor / RecoveryDrainGrace：**恢复期独立配额**（方案②，2026-10-04 用户定调）。
+	//
+	// 恢复期的回放/补账是设计行为 ⇒ 必然把源推过常规闸 ⇒ 常规闸在恢复期注定自锁 ✗。
+	// factor 默认 4（同倍拓宽，仍有界 ✓）；grace 默认 30m（现场排空动辄小时级 ⇒ 更短的窗有
+	// "刚回归即再锁"风险 ✓）；宽限过期即回归常规闸 ✓（常规期语义不削弱 ✗ = 红线）。
+	RecoveryQuotaFactor float64 `mapstructure:"recovery_quota_factor"`
+	RecoveryDrainGrace  string  `mapstructure:"recovery_drain_grace"`
+	MaxWALEntries       int64   `mapstructure:"max_wal_entries"`
+	MaxReplayEvents     int     `mapstructure:"max_replay_events_per_drain"`
+	MaxGaps             int     `mapstructure:"max_gaps"`
+	DegradedAtPercent   float64 `mapstructure:"degraded_at_percent"`
+	PauseAtPercent      float64 `mapstructure:"pause_at_percent"`
 }
 
 // LogSourceConfig 配置一个由 Worker 常驻采集的日志源。
@@ -896,6 +903,24 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 // 而现在 0 表示「字节维度不设上限」，条目维度的 log_capacity.max_wal_entries
 // （默认 5000）仍然生效，恢复状态不会无界。这不直接拒绝配置：受管环境可能确实由外部
 // 配额兜底，但必须在启动日志里被点名，否则「没配」与「配成不限」在现场看起来完全一样。
+// RecoveryQuotaTuning 把 `log_capacity.recovery_*` 收敛为 ingest 的恢复期配额旋钮。
+//
+// 口径：factor <1 或 grace 非法/非正 ⇒ 各自回退默认（4 / 30m ✓）——回退默认永远是安全方向：
+// 拓宽多一点只是更宽的有界界 ✓，宽限长一点只是更晚回归 ✓，都不会破坏"有界"与红线 ✓。
+func (c *Config) RecoveryQuotaTuning() (factor float64, grace time.Duration) {
+	factor, grace = 4, 30*time.Minute
+	if c == nil {
+		return factor, grace
+	}
+	if c.LogCapacity.RecoveryQuotaFactor >= 1 {
+		factor = c.LogCapacity.RecoveryQuotaFactor
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogCapacity.RecoveryDrainGrace)); err == nil && d > 0 {
+		grace = d
+	}
+	return factor, grace
+}
+
 // EffectiveMaxWALBytes 返回**交给 acquire.WAL 的字节上限**：配置 0 表示"不限" ⇒ 返回 -1 哨兵
 // （acquire 侧负值 = 不设上限）；>0 原样返回。
 //
@@ -1210,6 +1235,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_vl.start_cold", false)
 	v.SetDefault("log_vl.start_rehydrate", false)
 	v.SetDefault("log_capacity.max_wal_bytes", DefaultMaxWALBytes)
+	v.SetDefault("log_capacity.recovery_quota_factor", 4)
+	v.SetDefault("log_capacity.recovery_drain_grace", "30m")
 	v.SetDefault("log_capacity.max_wal_entries", DefaultMaxWALEntries)
 	v.SetDefault("log_capacity.max_replay_events_per_drain", DefaultMaxReplayEventsPerDrain)
 	v.SetDefault("log_capacity.max_gaps", 0)

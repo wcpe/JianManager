@@ -378,3 +378,28 @@ func TestScanTuningDefaultsAndOverride(t *testing.T) {
 	assert.Zero(t, zt.Yield)
 	assert.Zero(t, zt.Budget)
 }
+
+// TestRecoveryQuotaTuningDefaultsAndOverride（方案② 的绑定回归）：默认必须是 4× / 30m ✓，
+// 且可经 log_capacity.recovery_* 覆盖 ✓；非法/非正一律回退默认（安全方向 ✓）。
+func TestRecoveryQuotaTuningDefaultsAndOverride(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	f, g := cfg.RecoveryQuotaTuning()
+	assert.Equal(t, 4.0, f, "默认恢复期配额 = 4× 常规闸")
+	assert.Equal(t, 30*time.Minute, g, "默认排空宽限 = 30m（现场排空动辄小时级 ✓）")
+
+	t.Setenv("JIANMANAGER_LOG_CAPACITY_RECOVERY_QUOTA_FACTOR", "8")
+	t.Setenv("JIANMANAGER_LOG_CAPACITY_RECOVERY_DRAIN_GRACE", "45m")
+	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	f2, g2 := cfg2.RecoveryQuotaTuning()
+	assert.Equal(t, 8.0, f2)
+	assert.Equal(t, 45*time.Minute, g2)
+
+	bad := &Config{}
+	bad.LogCapacity.RecoveryQuotaFactor = 0 // <1 ⇒ 回退默认 ✓
+	bad.LogCapacity.RecoveryDrainGrace = "not-a-duration"
+	f3, g3 := bad.RecoveryQuotaTuning()
+	assert.Equal(t, 4.0, f3)
+	assert.Equal(t, 30*time.Minute, g3)
+}

@@ -1093,3 +1093,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 变更
 - **排除表提变量（行为不变、使变异可达）**：`gapResolutionExcludedReasons` 从内联字面量提为包级变量（同一份四原因、未列出者一律不放行 ✓）—— 使"删一项"的 fail-closed 变异从不可达变为可实测 ✓；稳定性偶发红判定为**夹具负载敏感**（无负载 12 连绿 ✓），`TestCapacityResumeLoopHealsPausedSource` 的 Eventually 上限 3s→12s（并发全仓时 3s 偏紧 ✓）。
+
+### 新增
+- **恢复期独立配额全链接线（新账②方案②）**：`syncRecoveryQuota()` 每轮 tick+Start 按 `StartupRecoveryStatus()` 判定——恢复中设 factor（默认 4×、有限界）；恢复刚结束记宽限截止（默认 30m）并继续拓宽；宽限过期 `SetRecoveryWiden(1)` 回归常规闸（超常规闸者按常规语义暂停=正确 ✓）。可观测量 `RecoveryQuotaStats()(factor,graceUntil,recovering)` + 进入宽限日志；旋钮 `log_capacity.recovery_quota_factor`/`recovery_drain_grace` + 绑定回归；端到端红证两条（恢复期不得暂停 / 宽限过期后照常暂停，含"回归后生效系数=1"断言 ✓）。

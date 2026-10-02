@@ -834,6 +834,11 @@ func runWorker() {
 				// 单源 WAL **真实积压**上限（键 log_capacity.max_wal_entries / max_wal_bytes）：
 				// 直接下发到 WAL.SetLimits。此前 SetLimits 无任何调用点（现场只剩硬编码
 				// 16MiB/5000），而配置里的 max_wal_bytes 被接到了只增不减的累计量上。
+				// 恢复期独立配额（方案②）：恢复中/排空宽限内按 factor 倍判（仍有界 ✓），
+				// 宽限过期回归常规闸 ✓。旋钮键 log_capacity.recovery_quota_factor /
+				// recovery_drain_grace（默认 4 / 30m ✓）。
+				RecoveryQuotaFactor: func() float64 { f, _ := cfg.RecoveryQuotaTuning(); return f }(),
+				RecoveryDrainGrace:  func() time.Duration { _, g := cfg.RecoveryQuotaTuning(); return g }(),
 				WALLimits: &acquire.WALLimits{
 					MaxEntries: cfg.LogCapacity.MaxWALEntries,
 					// 配置 0 = 字节维度**不限**（见 Config.WALBudgetNotice）⇒ 传负值哨兵，
