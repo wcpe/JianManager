@@ -147,12 +147,37 @@ type WAL struct {
 	maxBytes   int64
 }
 
-// SetLimits 覆盖单源积压上限（0 表示沿用默认）。供测试与后续配置化使用。
+// SetLimits 覆盖单源积压上限（0 表示沿用默认）。供测试与配置化使用。
 func (w *WAL) SetLimits(maxEntries, maxBytes int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.maxEntries = maxEntries
 	w.maxBytes = maxBytes
+}
+
+// ApplyLimits 按结构体形式应用积压上限（配置接线用；零值字段沿用本包默认）。
+func (w *WAL) ApplyLimits(l WALLimits) { w.SetLimits(l.MaxEntries, l.MaxBytes) }
+
+// WALLimits 是单源 WAL **真实积压**上限（条目数 + 近似字节），用于配置接线。
+//
+// 与「累计追加量」严格区分：上限只约束**当前待投递积压**（backlog），因为只有它会随 reclaim
+// 推进回落，超限后的暂停才有可能被滞回自动清除。累计量只增不减，拿它当门禁会把源永久钉在
+// 暂停上（形态与现场后果见 acquire/pipeline.go 的 walAppendedBytesTotal 注释）。
+type WALLimits struct {
+	// MaxEntries 单源积压条目数上限（0 沿用包内默认 defaultWALMaxEntries）。
+	MaxEntries int64
+	// MaxBytes 单源积压近似字节上限（0 沿用包内默认 defaultWALMaxBytes）。
+	MaxBytes int64
+}
+
+// Backlog 返回**当前**积压读数（条目数, 近似字节）。
+//
+// 这是唯一可用于容量门禁的 WAL 口径：它随 reclaim 推进而回落，因此在积压回落后
+// 由滞回解除暂停是可能的；累计追加量不具此性质。
+func (w *WAL) Backlog() (int64, int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.backlogLocked()
 }
 
 // limitsLocked 返回生效的上限（调用方需持 w.mu）。

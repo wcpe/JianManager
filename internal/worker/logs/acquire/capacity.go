@@ -8,7 +8,8 @@ import (
 
 // CapacityBudget Worker 日志资源预算切片（数值以 FR-473 契约为准，此处为可注入上限）。
 type CapacityBudget struct {
-	// MaxWALBytes WAL 字节上限；0 表示不限制（测试默认）。
+	// MaxWALBytes WAL **当前积压**高水位（0 表示不判）；超水位只降级，暂停由 WAL 自身的
+	// 积压上限负责（见 EvaluateCapacity 的字节口径说明）。
 	MaxWALBytes uint64
 	// MaxGaps 未解决缺口数量软上限。
 	MaxGaps int
@@ -50,7 +51,15 @@ type CapacityDecision struct {
 
 // EvaluateCapacity 评估是否允许继续采集/写入。
 // 达到暂停阈值时返回 PAUSED，调用方必须 PauseAcquire + RecordGap。
-func EvaluateCapacity(budget CapacityBudget, walBytes uint64, gapCount int) CapacityDecision {
+//
+// walBacklogBytes 必须是**当前积压字节**（WAL.Backlog），不得传累计追加量：
+// 累计量只增不减，一旦越过上限就再也不会回落，源会被永久钉在暂停上。
+//
+// 字节口径在本函数里**只降级、不暂停**——WAL 真实积压上限由 WAL 自己执行（wal.go
+// enforceBacklogLimitLocked），那条路径带滞回、可自动恢复；两处同时判暂停会出现
+// 「一个能自愈的阈值被一个不能自愈的阈值抢先」的形态。此处保留的字节读数只用于
+// 高水位可见性（DEGRADED 不记缺口、不暂停，纯观测）。
+func EvaluateCapacity(budget CapacityBudget, walBacklogBytes uint64, gapCount int) CapacityDecision {
 	deg := budget.DegradedAtPercent
 	if deg == 0 {
 		deg = 80
@@ -63,13 +72,6 @@ func EvaluateCapacity(budget CapacityBudget, walBytes uint64, gapCount int) Capa
 		return CapacityDecision{
 			Action:        CapacityPaused,
 			Reason:        fmt.Sprintf("disk usage %.1f%% >= %.1f%%; pause irreversible writes", budget.DiskUsagePercent, pause),
-			MustRecordGap: true,
-		}
-	}
-	if budget.MaxWALBytes > 0 && walBytes >= budget.MaxWALBytes {
-		return CapacityDecision{
-			Action:        CapacityPaused,
-			Reason:        fmt.Sprintf("WAL budget exhausted (%d >= %d)", walBytes, budget.MaxWALBytes),
 			MustRecordGap: true,
 		}
 	}
@@ -86,10 +88,17 @@ func EvaluateCapacity(budget CapacityBudget, walBytes uint64, gapCount int) Capa
 			Reason: fmt.Sprintf("disk usage %.1f%% >= %.1f%%; degraded", budget.DiskUsagePercent, deg),
 		}
 	}
-	if budget.MaxWALBytes > 0 && walBytes*100 >= budget.MaxWALBytes*80 {
+	if budget.MaxWALBytes > 0 && walBacklogBytes >= budget.MaxWALBytes {
 		return CapacityDecision{
 			Action: CapacityDegraded,
-			Reason: fmt.Sprintf("WAL at %.0f%% of budget", float64(walBytes)*100/float64(budget.MaxWALBytes)),
+			Reason: fmt.Sprintf("WAL backlog %d >= budget %d; pause (if any) is owned by the WAL backlog limit and clears on drain",
+				walBacklogBytes, budget.MaxWALBytes),
+		}
+	}
+	if budget.MaxWALBytes > 0 && walBacklogBytes*100 >= budget.MaxWALBytes*80 {
+		return CapacityDecision{
+			Action: CapacityDegraded,
+			Reason: fmt.Sprintf("WAL at %.0f%% of budget", float64(walBacklogBytes)*100/float64(budget.MaxWALBytes)),
 		}
 	}
 	return CapacityDecision{Action: CapacityOK}

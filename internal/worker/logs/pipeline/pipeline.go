@@ -60,6 +60,11 @@ type Options struct {
 	// 启用后所有事件入口统一经 emit 收口，保证「进 WAL 的事件」与「deliver 面看到的事件」
 	// 是同一批——两者分叉是最危险的一类不一致。
 	Sampling sampling.Policy
+	// WALLimits 是单源 WAL 真实积压上限（日志容量配置接线）；nil 表示沿用 acquire 包默认。
+	// 注意它约束的是**当前积压**，不是累计追加量。
+	WALLimits *acquire.WALLimits
+	// MaxReplayEventsPerDrain 是暂停/恢复期单轮外发事件数上限（回放限速）；0 表示沿用默认。
+	MaxReplayEventsPerDrain int
 }
 
 // Pipeline 端到端：tail/stdio → normalize → WAL → DeliveryHook → CanReclaim 门禁。
@@ -155,6 +160,14 @@ func New(opts Options) (*Pipeline, error) {
 		inner.SetCapacityBudget(*opts.Capacity)
 	}
 	inner.SetCapacityProvider(opts.CapacityProvider)
+	// 单源积压上限与回放限速：配置接线（此前 SetLimits 无任何调用点，现场只剩硬编码
+	// 16MiB/5000 条，而配置里的 max_wal_bytes 被接到了只增不减的累计量上）。
+	if opts.WALLimits != nil {
+		wal.ApplyLimits(*opts.WALLimits)
+	}
+	if opts.MaxReplayEventsPerDrain > 0 {
+		inner.SetMaxReplayEventsPerDrain(opts.MaxReplayEventsPerDrain)
+	}
 	if opts.SuppressRecursiveVL || cat == logtypes.SourceWorker {
 		inner.SetSourceWorker(true)
 	}
@@ -311,13 +324,19 @@ func (p *Pipeline) RebaseCurrentSegment(pos uint64) error {
 }
 
 // FlushClosedSegment closes the pending multiline event when a live file was
-// physically rotated. Unlike Stop/Flush, the old segment has a real EOF and may
-// be published as complete before ArchiveImporter skips its covered prefix.
+// physically rotated.
+//
+// 段有真实 EOF，但**事件未必完整**：一条堆栈完全可能被打断在两段文件之间。所以这里走
+// FlushUnclosed（显式 `multiline_unclosed=rotation` 标记 + PARTIAL），不走 FlushComplete
+// ——后者的 closeStatus 只要事件头带时间戳就返回 OK，会让切分点从数据里消失。
+// 为什么仍必须在此闭合（而不是把缓冲区留到新文件）：轮转后的恢复责任靠 ConfirmRotationCoverage
+// 把 covered 推到 Durable，gz 导入按 `startFrom - segmentStart` 跳过已读前缀；未闭合的 pending
+// 行不在 Durable 里，留着它会让 gz 重导入**重喂同一批行**，把堆栈行重复拼进事件。
 func (p *Pipeline) FlushClosedSegment() ([]logtypes.Event, error) {
 	if p == nil || p.bound == nil {
 		return nil, nil
 	}
-	p.bound.FlushComplete()
+	p.bound.FlushUnclosed(normalize.UnclosedReasonCrossRotation)
 	events := p.bound.DrainEvents()
 	if len(events) == 0 {
 		return nil, nil
@@ -333,6 +352,26 @@ func (p *Pipeline) ConfirmRotationCoverage() error {
 		return fmt.Errorf("pipeline: file tailer not configured")
 	}
 	return p.tailer.ConfirmRotationCoverage()
+}
+
+// FlushStaleMultiline 在未闭合多行缓冲已持续超过 timeout 时强制闭合它（显式未闭合标记）。
+//
+// 为什么必须有这条出路（缺陷 B，2026-10-02）：未闭合缓冲平时只由「下一行到达」推进。
+// 源一旦长时间静默（MC 服务器空闲、实例挂起），缓冲既不产出事件也不推进 durable——
+// 而轮转恢复要靠 durable 覆盖已读前缀（ConfirmRotationCoverage + gz 的 skipBytes），
+// 于是这段悬挂区间既没被覆盖、也没有事件，链路卡在「轮转分段不可读」。
+// 超时强制闭合把它落成一条显式 PARTIAL 事件并推进 durable，链路重新可推进。
+//
+// 返回本批产出的事件（已过采样收口与 WAL/账本），可直接投递；无可冲刷时返回 nil。
+func (p *Pipeline) FlushStaleMultiline(now time.Time, timeout time.Duration) ([]logtypes.Event, error) {
+	if p == nil || p.bound == nil || timeout <= 0 {
+		return nil, nil
+	}
+	events, ok := p.bound.FlushStaleUnclosed(now, timeout, normalize.UnclosedReasonIdle)
+	if !ok || len(events) == 0 {
+		return nil, nil
+	}
+	return p.emit(events)
 }
 
 // Poll 读取增量：FILE_PRIMARY tail / STDIO 行流 → normalize 事件 → WAL → delivery。

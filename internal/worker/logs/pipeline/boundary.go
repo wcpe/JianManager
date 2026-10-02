@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"time"
+
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 )
@@ -35,6 +37,12 @@ type NormalizeBoundary struct {
 	lastStats normalize.Stats
 	// seq 会话内事件序（诊断）。
 	seq int
+	// lastPendingAt 是未闭合缓冲**最后一次吃到行**的墙钟时刻；零值表示当前无缓冲。
+	//
+	// 为什么用墙钟而不是复用 normalize 的语义时间：语义时间来自日志行里的时间戳，
+	// 只在「下一行到达」时才能比较；而超时要回答的是「**已经没有新行**多久了」——
+	// 只有墙钟能给出答案（见 FlushStaleUnclosed）。
+	lastPendingAt time.Time
 }
 
 // NewNormalizeBoundary 创建边界钩子。opts.Source.ParserVersion 为空时使用 normalize.ParserVersion。
@@ -45,11 +53,60 @@ func NewNormalizeBoundary(opts normalize.Options) *NormalizeBoundary {
 	return &NormalizeBoundary{n: normalize.New(opts)}
 }
 
+// notePendingIdle 维护「未闭合缓冲最后一次吃到行」的墙钟时刻。
+//
+// 语义刻意取**闲置超时**（每喂一行就刷新），而不是「首次变为未闭合起算」：
+//   - 前者只会在「已经没有新行」时触发，绝不会把一条正在被连续写入的堆栈从中间切开；
+//   - 后者会给「写入耗时超过阈值的长堆栈」制造人为截断，而它能多覆盖的场景（持续有行
+//     但永不闭合）本就由 next-line 边界与 MaxLines/MaxBytes 上限兜住。
+func (b *NormalizeBoundary) notePendingIdle() {
+	if b.n.Result().Stats.PendingLines > 0 {
+		b.lastPendingAt = time.Now()
+		return
+	}
+	b.lastPendingAt = time.Time{}
+}
+
+// PendingIdle 返回未闭合缓冲已闲置的时长（距最后一次吃到行）；无缓冲时 ok=false。
+// now 为零值时用 time.Now()。
+func (b *NormalizeBoundary) PendingIdle(now time.Time) (time.Duration, bool) {
+	if b == nil || b.lastPendingAt.IsZero() {
+		return 0, false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return now.Sub(b.lastPendingAt), true
+}
+
+// FlushStaleUnclosed 在未闭合缓冲已闲置超过 timeout 时，以显式未闭合标记强制闭合它。
+//
+// 这是「源静默」下唯一的出路（缺陷 B）：未闭合缓冲平时只由「下一行到达」推进，
+// 源一旦长时间不再输出，缓冲既不产出事件、也不推进 durable——而轮转恢复要靠 durable
+// 覆盖已读前缀（ConfirmRotationCoverage + gz 的 skipBytes），于是这段悬挂区间既没被
+// 覆盖、也没有事件，链路会卡在「轮转分段不可读」上。
+// 返回本次强制闭合产出的事件（已由 boundary 持有，调用方用 DrainEvents 取走）。
+func (b *NormalizeBoundary) FlushStaleUnclosed(now time.Time, timeout time.Duration, reason string) ([]logtypes.Event, bool) {
+	if b == nil || timeout <= 0 {
+		return nil, false
+	}
+	idle, ok := b.PendingIdle(now)
+	if !ok || idle < timeout {
+		return nil, false
+	}
+	// 必须走**本类型**的 FlushUnclosed（它负责 remap 并把事件放进 b.completed），
+	// 不能直接调 b.n.FlushUnclosed——后者只归还事件对象，DrainEvents 拿不到任何东西。
+	b.FlushUnclosed(reason)
+	b.lastPendingAt = time.Time{}
+	return b.DrainEvents(), true
+}
+
 // Feed 实现 acquire.EventBoundaryHook。
 func (b *NormalizeBoundary) Feed(line []byte, absPos, recordEnd uint64) (eventEnd uint64, complete bool, emit bool) {
 	span := lineSpan{start: absPos, end: recordEnd}
 	out := b.n.Feed(string(line))
 	b.linePos = append(b.linePos, span)
+	b.notePendingIdle()
 
 	if len(out) == 0 {
 		// 未形成完整事件：只推进 read。
@@ -78,6 +135,7 @@ func (b *NormalizeBoundary) FlushPartial() ([]byte, uint64, bool) {
 	remapped := b.remap(ev)
 	b.completed = append(b.completed, remapped)
 	b.seq++
+	b.notePendingIdle()
 	_ = b.n.Result()
 	return []byte(remapped.Message), remapped.Record.End, true
 }
@@ -92,6 +150,25 @@ func (b *NormalizeBoundary) FlushComplete() ([]byte, uint64, bool) {
 	remapped := b.remap(ev)
 	b.completed = append(b.completed, remapped)
 	b.seq++
+	b.notePendingIdle()
+	_ = b.n.Result()
+	return []byte(remapped.Message), remapped.Record.End, true
+}
+
+// FlushUnclosed closes the pending multiline event at a non-boundary (live-file
+// rotation) and preserves normalize's explicit `multiline_unclosed` marker.
+//
+// 与 FlushComplete 的分工：sealed archive 的 EOF 是真边界（用 Complete），活文件轮转不是
+// （用本方法）——后者可能把一条堆栈切在新旧文件之间。
+func (b *NormalizeBoundary) FlushUnclosed(reason string) ([]byte, uint64, bool) {
+	ev, ok := b.n.FlushUnclosed(reason)
+	if !ok {
+		return nil, 0, false
+	}
+	remapped := b.remap(ev)
+	b.completed = append(b.completed, remapped)
+	b.seq++
+	b.notePendingIdle()
 	_ = b.n.Result()
 	return []byte(remapped.Message), remapped.Record.End, true
 }

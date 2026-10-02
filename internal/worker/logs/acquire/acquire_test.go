@@ -451,17 +451,131 @@ func TestEvaluateCapacityDiskThresholds(t *testing.T) {
 	}
 }
 
-// TestCapacityPauseRecordsGap 覆盖 WAL 预算耗尽路径。
+// TestRotationDetectedWhenReplacementSharesPrefixAndGrows 钉住 inode 判据（用户质疑 1）。
+//
+// 形态（真机常见）：MC 服务端重启后新建的 latest.log **内容更大**，且开头是与旧文件
+// 逐字节相同的固定段（版本 banner / 启动参数 / EULA 那几行）。此时两条旧判据全部失效：
+//   - `size < cursor` 不成立（新文件更大）；
+//   - 前 512 字节哈希相同（前缀一致）⇒ replaced=false。
+//
+// ⇒ 判定「未轮转」⇒ 采集器继续用旧 segmentStart/cursor 去读**新文件**：新文件开头的
+// cursor 个字节被当成已读跳过（静默丢内容），旧文件的未读尾部永远不会被接管。
+//
+// 旧判据下本用例必然红：RotationCount 保持 0，且事件里能同时看到「新文件被从中间截读」。
+//
+// 转红方式（实测）：把 PrepareRotation 里的 `inodeReplaced` 从判据里去掉，本用例立即红。
+func TestRotationDetectedWhenReplacementSharesPrefixAndGrows(t *testing.T) {
+	dir := t.TempDir()
+	latest := filepath.Join(dir, "latest.log")
+	rotated := filepath.Join(dir, "latest.log.1")
+	// 固定 banner 前缀：必须 ≥ 512 字节，否则身份前缀（上限 512）会覆盖到正文，
+	// 哈希判据仍能识破替换——那样就测不到 inode 判据了。
+	banner := "Paper 1.21.1 build 42 | Starting minecraft server version 1.21.1\n" +
+		strings.Repeat("  [banner] fixed startup log line, identical in every latest.log\n", 12)
+	require.Greater(t, len(banner), 512, "夹具前提：共享前缀必须超过身份前缀上限 512")
+	oldBody := "old-1\nold-2\nold-3\n"
+	if err := os.WriteFile(latest, []byte(banner+oldBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	key := testKey("src-inode", "g1")
+	led := ledger.New()
+	wal := NewWAL(led, key)
+	tailer := NewFileTailer(led, key, latest, wal, NewLineHook())
+	tailer.SetRotateTarget(rotated)
+
+	evs, err := tailer.Poll()
+	if err != nil {
+		t.Fatalf("poll1: %v", err)
+	}
+	require.Len(t, evs, strings.Count(banner, "\n")+3, "首轮应读出 banner 各行 + 3 行正文")
+	require.Equal(t, 0, tailer.RotationCount())
+	beforeCursor := tailer.LogicalPos()
+	require.Greater(t, beforeCursor, uint64(0))
+
+	// 轮转：旧文件移到 .1；同名路径换上**更大**且**开头逐字节相同**的新文件。
+	require.NoError(t, os.Rename(latest, rotated))
+	newBody := banner + "new-a\nnew-b\nnew-c\nnew-d\nnew-e\n"
+	require.NoError(t, os.WriteFile(latest, []byte(newBody), 0o644))
+	fi, err := os.Stat(latest)
+	require.NoError(t, err)
+	require.Greater(t, uint64(fi.Size()), beforeCursor,
+		"夹具前提：替换文件必须比旧游标长，否则尺寸判据就足以识破")
+
+	rotatedFlag, err := tailer.PrepareRotation()
+	require.NoError(t, err)
+	require.True(t, rotatedFlag,
+		"替换文件更大且开头相同（banner）时必须靠 inode 判据识破轮转，否则新文件前段被静默跳过")
+	require.Equal(t, 1, tailer.RotationCount())
+
+	evs2, err := tailer.Poll()
+	require.NoError(t, err)
+	var msgs []string
+	for _, ev := range evs2 {
+		msgs = append(msgs, ev.Message)
+	}
+	joined := strings.Join(msgs, "\n")
+	require.Contains(t, joined, "new-a", "新文件必须从**头部**重新读起，不得跳过前 cursor 字节")
+	require.Contains(t, joined, "new-e")
+	// 新文件的首个 banner 行必须**完整**读出（若被跳过前 cursor 字节，这里就只剩后半截）。
+	require.Contains(t, joined, banner[:len(banner)-1], "新文件的 banner 行应完整读出")
+}
+
+// TestRotationDetectionSurvivesSameSizeReplacement 钉住「同尺寸替换」也走 inode 判据。
+//
+// 尺寸判据（size < cursor）与「尺寸相等」在旧实现里是盲区：若替换文件与旧文件长度恰好
+// 相同、且开头前缀一致，旧判据同样判为「未轮转」。inode 判据与长度无关。
+//
+// 注意夹具必须真的换 inode：`os.WriteFile` 是对同路径 O_TRUNC，**不换** inode，
+// 因此必须先写临时文件再 rename 覆盖（这才对应生产上「新文件替换同名文件」的形态）。
+func TestRotationDetectionSurvivesSameSizeReplacement(t *testing.T) {
+	dir := t.TempDir()
+	latest := filepath.Join(dir, "latest.log")
+	body := "common-prefix-line-a\ncommon-prefix-line-b\n"
+	require.NoError(t, os.WriteFile(latest, []byte(body), 0o644))
+	key := testKey("src-inode-same", "g1")
+	led := ledger.New()
+	wal := NewWAL(led, key)
+	tailer := NewFileTailer(led, key, latest, wal, NewLineHook())
+	tailer.SetRotateTarget(filepath.Join(dir, "latest.log.1"))
+
+	require.Len(t, mustPoll(t, tailer), 2)
+	beforeCursor := tailer.LogicalPos()
+
+	// 同名替换：内容长度与旧文件**完全相同**、开头也相同，但换了一个新 inode。
+	replacement := filepath.Join(dir, "replacement.tmp")
+	require.NoError(t, os.WriteFile(replacement, []byte(body), 0o644))
+	require.NoError(t, os.Rename(replacement, latest))
+	require.Equal(t, beforeCursor, uint64(len(body)))
+
+	rotatedFlag, err := tailer.PrepareRotation()
+	require.NoError(t, err)
+	require.True(t, rotatedFlag, "同尺寸同名替换必须靠 inode 识破（尺寸与哈希判据都会漏）")
+	require.Equal(t, 1, tailer.RotationCount())
+}
+
+func mustPoll(t *testing.T, tailer *FileTailer) []logtypes.Event {
+	t.Helper()
+	evs, err := tailer.Poll()
+	require.NoError(t, err)
+	return evs
+}
+
+// TestCapacityPauseRecordsGap 覆盖容量门禁的暂停路径（磁盘水位 ≥ 暂停阈值）。
+//
+// 2026-10-02 改动：原夹具用 `MaxWALBytes: 1` 触发暂停，即「字节预算耗尽 → 暂停」。
+// 该路径已**刻意移除**——字节口径改由 WAL 自身的积压上限执行（带滞回、可自愈），
+// 门禁里的字节读数只降级不暂停，理由见 capacity.go EvaluateCapacity 的注释。
+// 本测试守的不变量未变：**容量耗尽 ⇒ 暂停 + 必记缺口（禁止静默丢）**，
+// 只是触发源改为门禁里唯一还能永久暂停的维度（磁盘）。
 func TestCapacityPauseRecordsGap(t *testing.T) {
 	key := testKey("src-cap", "g1")
 	led := ledger.New()
 	wal := NewWAL(led, key)
 	pipe := NewPipeline(led, key, wal)
 	pipe.SetCapacityBudget(CapacityBudget{
-		MaxWALBytes:       1,
 		DegradedAtPercent: 80,
 		PauseAtPercent:    90,
-		DiskUsagePercent:  0,
+		DiskUsagePercent:  95, // ≥90 → PAUSED
 	})
 	ev := logtypes.BuildEvent(
 		logtypes.SourceIdentity{LogSourceID: "src-cap", SourceGeneration: "g1", ParserVersion: "acquire-v1"},
@@ -469,14 +583,6 @@ func TestCapacityPauseRecordsGap(t *testing.T) {
 		"t0", "t1", "INFO", "stdout", "xxxx",
 	)
 	err := pipe.Ingest([]logtypes.Event{ev})
-	// 首次可能因 walBytes=0 通过 budget 评估；第二次因超限暂停。
-	if err == nil {
-		// 再 ingest 以触发字节超限。
-		ev2 := ev
-		ev2.Record = logtypes.RecordRange{Start: 5, End: 15}
-		ev2.Message = "yyyyyyyy"
-		err = pipe.Ingest([]logtypes.Event{ev2})
-	}
 	if err == nil {
 		t.Fatal("expected capacity pause error")
 	}
@@ -495,6 +601,228 @@ func TestCapacityPauseRecordsGap(t *testing.T) {
 	}
 	if len(led.Get(key).Gaps) == 0 {
 		t.Fatal("rejected append must leave gap record")
+	}
+}
+
+// TestCapacityGateReadsBacklogNotLifetimeTotal 钉住 P0：门禁必须读**当前积压**。
+//
+// 形态（2026-10-02 定位）：门禁曾读采集管道里一个只增不减的累计追加量（`p.walBytes`），
+// 而容量 PAUSE 不被积压滞回清除（wal.go maybeResumeBacklogLocked 按原因前缀过滤）。
+// 于是「单源累计追加满 max_wal_bytes」那一刻会**永久停采**该源——即使真实积压早已被
+// reclaim 清空。现场形态是「配置的 512MiB 上限一到，这个源的日志一个字节都不再采」。
+//
+// 转红方式（实测）：把 Ingest 里的 `p.wal.Backlog()` 换回累计量计数器，本用例立即红
+// ——积压为 0 但累计量已越界，却仍被判 PAUSED。
+func TestCapacityGateReadsBacklogNotLifetimeTotal(t *testing.T) {
+	key := testKey("src-backlog", "g1")
+	led := ledger.New()
+	wal := NewWAL(led, key)
+	// 真实积压上限放到很大的值，确保本用例只考察「门禁读哪个数」。
+	wal.SetLimits(0, 1<<20)
+	pipe := NewPipeline(led, key, wal)
+	pipe.SetCapacityBudget(CapacityBudget{
+		MaxWALBytes:       1024, // 门禁高水位：当前积压远低于它
+		DegradedAtPercent: 80,
+		PauseAtPercent:    90,
+		DiskUsagePercent:  0,
+	})
+	delivered := 0
+	pipe.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
+		delivered++
+		return 204, false, nil
+	})
+	build := func(start, end uint64, msg string) logtypes.Event {
+		return logtypes.BuildEvent(
+			logtypes.SourceIdentity{LogSourceID: "src-backlog", SourceGeneration: "g1", ParserVersion: "acquire-v1"},
+			logtypes.RecordRange{Start: start, End: end},
+			"t0", "t1", "INFO", "stdout", msg)
+	}
+
+	// 累计追加量远超 MaxWALBytes，但每批都被投递 + 回收 ⇒ **当前积压始终为 0**。
+	var pos uint64
+	for i := 0; i < 40; i++ {
+		ev := build(pos, pos+256, strings.Repeat("x", 256))
+		pos += 256
+		if err := pipe.Ingest([]logtypes.Event{ev}); err != nil {
+			t.Fatalf("第 %d 批被拒：累计量不得作为门禁（当前积压为 0）: %v", i, err)
+		}
+		// 清空积压：本夹具不起账本恢复分段（真机由恢复分段流程承担），故按已投递前缀
+		// 直接剪枝——这正是 reclaim 推进后的**结果**，而本用例考察的是「门禁读哪个数」。
+		wal.pruneReclaimed(pos)
+		if entries, bytes := wal.Backlog(); entries != 0 || bytes != 0 {
+			t.Fatalf("夹具前提不成立：剪枝后积压应为 0，实测 entries=%d bytes=%d", entries, bytes)
+		}
+	}
+	if got := pipe.WALAppendedBytesTotal(); got <= 1024 {
+		t.Fatalf("夹具前提不成立：累计追加量 %d 未越过门禁水位 1024", got)
+	}
+	ent := led.Get(key)
+	if ent.AcquirePaused {
+		t.Fatalf("累计追加量越过水位不得暂停采集（真实积压为 0）: %+v", ent.PauseReason)
+	}
+	if len(ent.Gaps) != 0 {
+		t.Fatalf("不得因为累计量越过水位而记缺口: %+v", ent.Gaps)
+	}
+	if delivered == 0 {
+		t.Fatal("投递路径应当照常工作")
+	}
+}
+
+// TestCapacityGateNeverPausesOnByteReading 钉住字节口径的**唯一**动作是降级（可见性），不是暂停。
+//
+// 为什么必须分开钉：暂停与自愈必须成对。WAL 真实积压上限（wal.go）带滞回、会自己解暂停，
+// 而容量门禁的 PAUSE 不被积压滞回清除（maybeResumeBacklogLocked 按原因前缀过滤）。
+// 所以只要门禁在字节维度上暂停，就得到一个**不能自愈**的暂停——这正是 P0 的成因。
+// 字节读数保留下来只为了高水位可见（DEGRADED 不记缺口、不暂停）。
+//
+// 转红方式（实测）：把本函数里的 DEGRADED 改回 PAUSED（旧行为），第一条断言立即红。
+func TestCapacityGateNeverPausesOnByteReading(t *testing.T) {
+	budget := CapacityBudget{MaxWALBytes: 1024, DegradedAtPercent: 80, PauseAtPercent: 90, DiskUsagePercent: 0}
+	// 越界：必须仍为 DEGRADED（可见），绝不 PAUSED。
+	dec := EvaluateCapacity(budget, 4096, 0)
+	if dec.Action == CapacityPaused {
+		t.Fatalf("字节口径越界不得暂停（该暂停无法自愈）: %+v", dec)
+	}
+	if dec.Action != CapacityDegraded {
+		t.Fatalf("字节口径越界必须给出可见降级信号，实测 %q", dec.Action)
+	}
+	if dec.MustRecordGap {
+		t.Fatal("字节口径降级不得记缺口（降级不是数据缺失）")
+	}
+	// 高水位（80%）同样只降级。
+	if dec := EvaluateCapacity(budget, 900, 0); dec.Action != CapacityDegraded {
+		t.Fatalf("WAL 高水位应降级，实测 %q", dec.Action)
+	}
+	// 未到高水位：放行。
+	if dec := EvaluateCapacity(budget, 1024*79/100, 0); dec.Action != CapacityOK {
+		t.Fatalf("WAL 未到高水位应放行，实测 %q", dec.Action)
+	}
+	// 对照：磁盘口径**必须**仍然暂停（门禁里唯一还能永久暂停的维度）。
+	if dec := EvaluateCapacity(CapacityBudget{DiskUsagePercent: 95}, 0, 0); dec.Action != CapacityPaused {
+		t.Fatalf("磁盘 ≥90%% 必须暂停，实测 %q", dec.Action)
+	}
+}
+
+// TestWALBacklogLimitPausesAndClearsOnDrain 钉住：真实积压越界必须暂停，且**该暂停能被清除**。
+//
+// 两条都要：① 越界即停（背压生效，读端不得无限快于消费端）；
+// ② 积压回落到上限一半以下必须自动恢复——否则源会永久停在暂停上，正是 P0 的形态。
+//
+// 转红方式（实测）：把 SetLimits 的字节上限改成「永不触发」的大值，① 立即红；
+// 把 maybeResumeBacklogLocked 的滞回条件从 `> max/2` 改成恒 false，② 立即红。
+func TestWALBacklogLimitPausesAndClearsOnDrain(t *testing.T) {
+	key := testKey("src-bp", "g1")
+	led := ledger.New()
+	wal := NewWAL(led, key)
+	// 条目上限 2、字节上限给足：由条目维度触发，便于构造。
+	wal.SetLimits(2, 1<<20)
+	pipe := NewPipeline(led, key, wal)
+	pipe.SetCapacityBudget(CapacityBudget{DegradedAtPercent: 80, PauseAtPercent: 90})
+	pipe.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
+		return 204, false, nil
+	})
+	build := func(start, end uint64) logtypes.Event {
+		return logtypes.BuildEvent(
+			logtypes.SourceIdentity{LogSourceID: "src-bp", SourceGeneration: "g1", ParserVersion: "acquire-v1"},
+			logtypes.RecordRange{Start: start, End: end},
+			"t0", "t1", "INFO", "stdout", "line")
+	}
+
+	// ① 越界即暂停：一批塞 3 条。
+	if err := pipe.Ingest([]logtypes.Event{build(0, 4), build(5, 9), build(10, 14)}); err != nil {
+		t.Fatalf("首批本身应当成功（越界在追加后判定）: %v", err)
+	}
+	ent := led.Get(key)
+	if !ent.AcquirePaused {
+		t.Fatalf("积压 3 条越过上限 2 条必须暂停采集: %+v", ent)
+	}
+	if !strings.HasPrefix(ent.PauseReason, walBacklogPauseReason) {
+		t.Fatalf("暂停原因应为本包的积压原因前缀，实测 %q", ent.PauseReason)
+	}
+	// 「暂停期间摄取被拒」由既有的 TestWALBacklogLimitPausesAcquisitionWithoutDroppingEntries 覆盖；
+	// 本用例刻意**不**制造被拒批次：被拒会补一条未解决缺口，而 ResumeAcquire 要求零缺口，
+	// 那会让「② 能否恢复」这条断言变成在考缺口，而不是在考滞回。
+
+	// ② 消化后必须能恢复：投递 + 回收 → 积压回落到上限一半以下。
+	if _, err := pipe.DeliverPending(); err != nil {
+		t.Fatalf("暂停期排空存量失败: %v", err)
+	}
+	// 本夹具不起账本恢复分段，故按已投递前缀直接剪枝模拟「回收推进」；
+	// 剪枝路径内会做一次滞回恢复评估——这正是生产上唯一会经过的恢复检查点。
+	wal.pruneReclaimed(20)
+	entries, bytes := wal.Backlog()
+	if entries > 1 || bytes > (1<<20)/2 {
+		t.Fatalf("夹具前提不成立：积压未回落到低水位 entries=%d bytes=%d", entries, bytes)
+	}
+	if !wal.EvaluateResume() {
+		t.Fatal("积压回落至低水位后必须能解暂停（否则源永久停在暂停上 = P0 形态）")
+	}
+	if led.Get(key).AcquirePaused {
+		t.Fatalf("暂停应已被清除: %+v", led.Get(key).PauseReason)
+	}
+}
+
+// TestReplayDrainIsRateLimited 钉住回放限速：单轮外发有界，且余量不丢、下一轮接着发。
+//
+// 为什么要限速：VL 变慢/刚恢复时存量可能数千条，一次全塞进去会把恢复瞬间变成一次
+// 自我制造的流量尖峰（恢复 → 打爆 → 再暂停 的振荡）。
+// 转红方式（实测）：把 deliverPendingBestEffort 的上限判断去掉，第一条断言立即红。
+func TestReplayDrainIsRateLimited(t *testing.T) {
+	key := testKey("src-replay", "g1")
+	led := ledger.New()
+	wal := NewWAL(led, key)
+	wal.SetLimits(0, 1<<20) // 上限给足，本用例只考察回放限速
+	pipe := NewPipeline(led, key, wal)
+	pipe.SetMaxReplayEventsPerDrain(2)
+	var batches []int
+	pipe.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
+		batches = append(batches, len(events))
+		return 204, false, nil
+	})
+	build := func(start, end uint64, msg string) logtypes.Event {
+		return logtypes.BuildEvent(
+			logtypes.SourceIdentity{LogSourceID: "src-replay", SourceGeneration: "g1", ParserVersion: "acquire-v1"},
+			logtypes.RecordRange{Start: start, End: end},
+			"t0", "t1", "INFO", "stdout", msg)
+	}
+	// 塞入 6 条已 durable 的存量（走正常 Ingest → Commit）。
+	for i := 0; i < 6; i++ {
+		start := uint64(i * 10)
+		ev := build(start, start+4, "payload-"+string(rune('a'+i)))
+		if err := wal.Append(ev); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	if err := wal.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	entries, _ := wal.Backlog()
+	if entries != 6 {
+		t.Fatalf("夹具前提不成立：期望 6 条存量，实测 %d", entries)
+	}
+
+	batchStart := len(batches)
+	var deliveredTotal int
+	for round := 0; round < 3; round++ {
+		pending, err := pipe.DeliverPending()
+		if err != nil {
+			t.Fatalf("第 %d 轮排空失败: %v", round, err)
+		}
+		if len(pending) > 2 {
+			t.Fatalf("第 %d 轮外发 %d 条，超过限速 2 条", round, len(pending))
+		}
+		deliveredTotal += len(pending)
+	}
+	if len(batches) == batchStart {
+		t.Fatal("限速不得等于不外发：存量必须被排空")
+	}
+	for i, n := range batches[batchStart:] {
+		if n > 2 {
+			t.Fatalf("第 %d 次投递外发 %d 条，超过限速 2 条", i, n)
+		}
+	}
+	if deliveredTotal != 6 {
+		t.Fatalf("限速只应摊平节奏、不得丢数据：3 轮共外发 %d 条，期望 6 条", deliveredTotal)
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
@@ -192,6 +193,16 @@ func newTestManager(t *testing.T, opts Options) (*Manager, error) {
 		// 超过 30 秒）。测试若沿用该默认，「校验永不成功」类用例要等满 5 分钟而超时挂死 ——
 		// 故测试一律注入短窗口；要看真实窗口请显式传 VerificationTimeout。
 		opts.VerificationTimeout = 200 * time.Millisecond
+	}
+	if opts.MultilineUnclosedTimeout == 0 {
+		// 未闭合多行缓冲的**闲置超时**在生产默认 5s（键 log_ingest.multiline_unclosed_timeout）。
+		// 测试一律钉成足够大的值，理由与上面的校验窗口同构但方向相反：
+		//   夹具按构造总会留下**一条未闭合事件**（每行都开启新事件，最后一行永远在等下一个边界），
+		//   于是任何跑得比 5s 久的用例都会在轮次之间触发一次强制冲刷，凭空多出「事件 + 投递 +
+		//   校验查询」——那会把「采集轮并发结构」「登记不被采集轮阻塞」这类**时序/结构**断言
+		//   变成对新增冲刷路径的测量，与被测行为无关。
+		// 要测冲刷本身请显式传一个小值（见 TestManagerFlushesStaleMultilineOnIdleSource）。
+		opts.MultilineUnclosedTimeout = time.Hour
 	}
 	t.Helper()
 	m, err := New(opts)
@@ -796,6 +807,225 @@ func TestManagerAutoImportsHistoricalGzipBeforeCurrentFile(t *testing.T) {
 	require.True(t, ready.LedgerReady, "%v", ready.Reasons)
 	require.Len(t, durableEvents(t, restarted, "inst:archive/file/holder-g1"), before+1,
 		"the closed live boundary and imported gzip must not replay")
+}
+
+// 跨轮转的「堆栈打一半」必须在数据里留下显式未闭合痕迹（2026-10-02 补）。
+//
+// 形态：一条堆栈的前半段写在旧 latest.log、后半段随轮转落进归档，新 latest.log 换上新内容。
+// 轮转处必须闭合 pending（否则 gz 的 skipBytes 对不上已读前缀，重导入会重复喂行），
+// 但闭合**不能静默标成 OK**——否则事后无法从数据里看出这条事件被切过。
+//
+// 转红方式（实测）：把 FlushClosedSegment 改回 FlushComplete（旧行为），
+// 第一条断言立即红（标记消失、parse_status 变回 OK）。
+func TestManagerRotationMarksCrossRotationUnclosedMultiline(t *testing.T) {
+	client, _ := newProjectionVL(t)
+	root := t.TempDir()
+	logDir := filepath.Join(root, "server", "logs")
+	require.NoError(t, os.MkdirAll(logDir, 0o700))
+	livePath := filepath.Join(logDir, "latest.log")
+
+	readLine := "[11:00:00] [Server thread/INFO]: already read\n"
+	// 堆栈前半段：事件头 + 一条续行（尚未闭合）。
+	stackHead := "[11:00:01] [Server thread/ERROR]: boom\n"
+	stackCont := "\tat com.example.Foo(Foo.java:1)\n"
+	require.NoError(t, os.WriteFile(livePath, []byte(readLine+stackHead+stackCont), 0o600))
+
+	cat := catalog.New(catalog.NewMemJournal())
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
+		LogSourceID: "inst:rotate-stack/file", SourceGeneration: "holder-g1", Path: livePath,
+		Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:rotate-stack", UTCDay: runtimeTestUTCDay(),
+	}}})
+	require.NoError(t, err)
+	m.pollOnce()
+	// 前半段仍在缓冲：只落了「already read」这一条完整事件。
+	require.Len(t, durableEvents(t, m, "inst:rotate-stack/file/holder-g1"), 1,
+		"未闭合堆栈不得在闭合前落库")
+
+	// 轮转：归档里是完整前半段 + 堆栈余下续行；新 latest.log 是替换文件。
+	archivePath := filepath.Join(logDir, "2026-09-23-1.log.gz")
+	writeRuntimeGzip(t, archivePath, readLine+stackHead+stackCont+
+		"\tat com.example.Bar(Bar.java:2)\n")
+	require.NoError(t, os.WriteFile(livePath, []byte(
+		"[11:00:03] [Server thread/INFO]: replacement current\n"), 0o600))
+	m.pollOnce()
+
+	saved := durableEvents(t, m, "inst:rotate-stack/file/holder-g1")
+	var stackEvents []logtypes.Event
+	for _, ev := range saved {
+		if strings.Contains(ev.Message, "boom") {
+			stackEvents = append(stackEvents, ev)
+		}
+	}
+	require.Len(t, stackEvents, 1, "堆栈前半段应恰好落一条事件，实测 %d 条", len(stackEvents))
+	got := stackEvents[0]
+	require.Equal(t, normalize.UnclosedReasonCrossRotation, got.Fields[normalize.FieldMultilineUnclosed],
+		"跨轮转闭合必须留下显式未闭合原因（否则切分点在数据里不可见）")
+	require.Equal(t, string(normalize.StatusPartial), got.Fields[normalize.FieldParseStatus],
+		"跨轮转闭合的悬挂记录不得伪装成完整事件")
+
+	// 对面：同一批里自然闭合的完整记录不得被误标（避免每次轮转全体误报）。
+	for _, ev := range saved {
+		if strings.Contains(ev.Message, "already read") {
+			_, marked := ev.Fields[normalize.FieldMultilineUnclosed]
+			require.False(t, marked, "自然闭合的完整记录不得带未闭合标记")
+		}
+	}
+	// 既有不变量：轮转不得产生重复事件身份。
+	ids := make(map[string]bool)
+	for _, ev := range saved {
+		require.False(t, ids[ev.EventID], "轮转不得重复事件身份")
+		ids[ev.EventID] = true
+	}
+}
+
+// 静默源：未闭合缓冲闲置超时后必须被强制闭合并推进 durable（缺陷 B，2026-10-02 补）。
+//
+// 形态：源长时间不再输出（MC 空闲/实例挂起），尾部堆栈永远等不到下一行。缓冲既不产出事件、
+// 也不推进 durable——而轮转恢复要靠 durable 覆盖已读前缀，于是链路卡在「轮转分段不可读」。
+// 超时强制闭合把它落成一条显式 PARTIAL 事件，链路重新可推进。
+//
+// 转红方式（实测）：把 pollSource 里的 FlushStaleMultiline 调用去掉，
+// 「超时后应当落库」的断言立即红。
+func TestManagerFlushesStaleMultilineOnIdleSource(t *testing.T) {
+	stack := "[12:00:00] [Server thread/ERROR]: hung\n\tat a.A(A.java:1)\n"
+
+	// ① 未到期：一轮采集不得冲刷（缓冲还在等续行）。
+	// 注意 newTestManager 默认把超时钉成 1h（见该辅助函数的说明），故这里测的是
+	// 「不早冲」这一半；「到期必冲」由 ② 显式传小值覆盖。
+	{
+		client, _ := newProjectionVL(t)
+		root := t.TempDir()
+		livePath := filepath.Join(root, "latest.log")
+		require.NoError(t, os.WriteFile(livePath, []byte(stack), 0o600))
+		cat := catalog.New(catalog.NewMemJournal())
+		m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
+			LogSourceID: "inst:idle-default/file", SourceGeneration: "holder-g1", Path: livePath,
+			Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:idle-default", UTCDay: runtimeTestUTCDay(),
+		}}})
+		require.NoError(t, err)
+		m.pollOnce()
+		require.Empty(t, durableEvents(t, m, "inst:idle-default/file/holder-g1"),
+			"默认 5s 超时下，一轮采集不得把仍在等续行的缓冲冲掉")
+	}
+
+	// ② 超时设为 1ns（等价「立即到期」）：同一内容必须被冲刷为显式未闭合事件。
+	{
+		client, _ := newProjectionVL(t)
+		root := t.TempDir()
+		livePath := filepath.Join(root, "latest.log")
+		require.NoError(t, os.WriteFile(livePath, []byte(stack), 0o600))
+		cat := catalog.New(catalog.NewMemJournal())
+		m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(),
+			MultilineUnclosedTimeout: time.Nanosecond,
+			Sources: []SourceConfig{{
+				LogSourceID: "inst:idle-flush/file", SourceGeneration: "holder-g1", Path: livePath,
+				Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:idle-flush", UTCDay: runtimeTestUTCDay(),
+			}}})
+		require.NoError(t, err)
+		m.pollOnce()
+		saved := durableEvents(t, m, "inst:idle-flush/file/holder-g1")
+		require.Len(t, saved, 1, "闲置超时后悬挂记录必须落库（否则它会一直挡住 durable）")
+		require.Equal(t, normalize.UnclosedReasonIdle, saved[0].Fields[normalize.FieldMultilineUnclosed])
+		require.Equal(t, string(normalize.StatusPartial), saved[0].Fields[normalize.FieldParseStatus])
+		// durable 必须被推进到该悬挂记录之后：否则轮转恢复仍覆盖不到这段已读前缀。
+		pipe, ok := m.pipeFor("inst:idle-flush/file/holder-g1")
+		require.True(t, ok)
+		entry := pipe.Ledger().Get(pipe.Key())
+		require.NotNil(t, entry)
+		require.Greater(t, entry.Positions.Durable, uint64(0),
+			"强制闭合必须把 durable 推过悬挂区间，否则轮转恢复仍会卡住")
+	}
+}
+
+// 部分持久化残留的「悬挂源」必须被检出并在下一轮重试，而不是被静默当成已全量落库（用户质疑 2）。
+//
+// 形态：一次 apply 失败（磁盘满 / 库被换成只读 / 进程在 apply 前被杀）之后，若「已持久化水位」
+// 在构建期就被推进，这些源会被下一轮当作**未变更**跳过——其陈旧行再也不会被重试，索引与内存
+// 就此静默分叉。后果不是「多写一次」而是「无人认账」：该源的行停在旧水位，重启后按陈旧水位
+// 重读（重复投递）或整行缺失被当成新源（先前已投递的数据失去对账依据）。
+//
+// 转红方式（实测）：把 persistSnapshot 里的 `advanced` 收集改回构建期直接写
+// `m.persistedRev[key] = rev`，最后一条断言立即红（索引停在 p1，而内存已到 p2）。
+func TestPersistFailureKeepsSourcePendingForRetry(t *testing.T) {
+	client, _ := newProjectionVL(t)
+	root := t.TempDir()
+	livePath := filepath.Join(root, "latest.log")
+	// 两行起步：多行归一化下**最后一条事件永远是未闭合的**（要等下一个事件边界才落库），
+	// 只写一行会同轮无任何事件产出，durable 停在 0，夹具前提不成立。
+	require.NoError(t, os.WriteFile(livePath,
+		[]byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o600))
+	cat := catalog.New(catalog.NewMemJournal())
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{
+		LogSourceID: "inst:persist/file", SourceGeneration: "holder-g1", Path: livePath,
+		Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:persist", UTCDay: runtimeTestUTCDay(),
+	}}})
+	require.NoError(t, err)
+	m.pollOnce()
+
+	const stateKey = "inst:persist/file/holder-g1"
+	// 从索引**读回**该源的 durable 水位（走生产同一条还原路径），用于判断落库是否真的发生。
+	indexDurable := func() uint64 {
+		store, openErr := stateindex.OpenReadOnly(m.indexPath())
+		require.NoError(t, openErr)
+		defer func() { _ = store.Close() }()
+		rows, loadErr := store.Load()
+		require.NoError(t, loadErr)
+		state, convErr := indexStateToState(rows)
+		require.NoError(t, convErr)
+		entry, ok := state.Sources[stateKey]
+		require.True(t, ok, "索引里应已有该源")
+		require.NotEmpty(t, entry.Ledger, "索引里应已有该源的账本行")
+		return entry.Ledger[0].Positions.Durable
+	}
+	p1 := indexDurable()
+	require.Positive(t, p1, "首轮成功落库后索引里的 durable 应已推进")
+	// 判别性断言的水位基线：一次成功落库后「已持久化修订号」应当就是当时的账本修订号。
+	revAfterSuccess := func() uint64 {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.persistedRev[stateKey]
+	}()
+	require.Positive(t, revAfterSuccess, "成功落库后应记录已持久化修订号")
+
+	// 让本次落库失败：把索引换成同一个库文件的**只读**句柄。
+	writable := m.index
+	require.NotNil(t, writable)
+	ro, err := stateindex.OpenReadOnly(m.indexPath())
+	require.NoError(t, err)
+	defer func() { _ = ro.Close() }()
+	m.mu.Lock()
+	m.index = ro
+	m.mu.Unlock()
+
+	// 追加新数据并再采一轮：内存水位前进，但索引落不下去。
+	appendPollTestLines(t, livePath, "[12:00:03] [Server thread/INFO]: third\n")
+	m.pollOnce()
+
+	pipe, ok := m.pipeFor(stateKey)
+	require.True(t, ok)
+	entry := pipe.Ledger().Get(pipe.Key())
+	require.NotNil(t, entry)
+	p2 := entry.Positions.Durable
+	require.Greater(t, p2, p1, "夹具前提：本轮内存水位必须前进")
+	require.Equal(t, p1, indexDurable(), "夹具前提：本次落库失败，索引应停在旧水位")
+	// **判别性断言**：落库失败后「已持久化水位」不得推进。
+	// 这是本用例真正钉住的行为——水位一旦在构建期就被推进，该源会被下一轮当成「未变更」跳过，
+	// 陈旧行永远不会被重试（静默滞留）。端到端那条断言（下方）在本夹具里即使退回旧实现也会
+	// 通过：失败之后的自愈链（DeliverPending → RecordDelivery）会再次改动账本、顺带把修订号
+	// 顶高，于是下一轮「碰巧」重试到。故不能只靠端到端那一条来守这个不变量。
+	require.Equal(t, revAfterSuccess, func() uint64 {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.persistedRev[stateKey]
+	}(), "落库失败不得推进已持久化水位（否则悬挂源会被当成已落库而永不重试）")
+
+	// 恢复可写并触发下一轮持久化：悬挂源必须被重试，而不是被当成「已落库」跳过。
+	m.mu.Lock()
+	m.index = writable
+	m.mu.Unlock()
+	require.NoError(t, m.persist())
+	require.Equal(t, p2, indexDurable(),
+		"落库失败过的源必须在下一轮被重试；否则悬挂源静默滞留、重启后按陈旧水位重读")
 }
 
 func TestManagerRotationImportsOnlyUnreadTailBeforeReplacementFile(t *testing.T) {

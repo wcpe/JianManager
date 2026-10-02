@@ -7,6 +7,13 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
+// defaultReplayEventsPerDrain 是「暂停/恢复期排空存量」单轮的默认事件数上限。
+//
+// 取值 500 的取舍：与投递侧的单次 VL 插入批量上限（ingest 的 insertBatchMaxEvents=500）
+// 对齐——一轮排空正好一批 HTTP 请求，恢复期不会一次攒出多个批次；而重建 5000 条积压
+// 只需 10 轮，采集轮本身是秒级频率，恢复时长仍在秒级，不会因为限速而变慢到不可接受。
+const defaultReplayEventsPerDrain = 500
+
 // Pipeline 将 FileTailer / ArchiveImporter / STDIO 统一写入事件管道。
 // source=worker 使用同一管道；采集失败不得递归写回自身 VL 失败日志。
 type Pipeline struct {
@@ -25,8 +32,16 @@ type Pipeline struct {
 	// budget 容量预算。
 	budget         CapacityBudget
 	budgetProvider func() (CapacityBudget, error)
-	// walBytes 当前 WAL 估算字节。
-	walBytes uint64
+	// walAppendedBytesTotal 是本进程累计追加的估算字节（**仅观测**）。
+	//
+	// 严禁用它做门禁：它只增不减，而 reclaim 推进后积压会回落到 0。拿累计量去比
+	// MaxWALBytes，等于在「本进程累计追加量越过上限」那一刻永久暂停该源——而容量 PAUSE
+	// 不由积压滞回清除（见 wal.go maybeResumeBacklogLocked 的原因前缀过滤），现场形态是
+	// 该源此后一个字节都不再采集。真实门禁一律读 WAL.Backlog()（见 Ingest）。
+	walAppendedBytesTotal uint64
+	// maxReplayEventsPerDrain 是「暂停/恢复期排空存量」单轮最多外发的事件数（0 表示用默认）。
+	// 见 deliverPendingBestEffort 的限速说明。
+	maxReplayEventsPerDrain int
 }
 
 // NewPipeline 创建管道。deliver 为 nil 时不投递（仅 WAL）。
@@ -49,6 +64,13 @@ func (p *Pipeline) SetDurablePersist(fn func() error) { p.durablePersist = fn }
 
 // SetCapacityBudget 设置资源预算。
 func (p *Pipeline) SetCapacityBudget(b CapacityBudget) { p.budget = b }
+
+// SetMaxReplayEventsPerDrain 覆盖「单轮排空存量」的事件数上限（0 表示沿用默认）。
+// 供配置接线与测试使用。
+func (p *Pipeline) SetMaxReplayEventsPerDrain(n int) { p.maxReplayEventsPerDrain = n }
+
+// WALAppendedBytesTotal 返回本进程累计追加的估算字节（观测口径，不作门禁）。
+func (p *Pipeline) WALAppendedBytesTotal() uint64 { return p.walAppendedBytesTotal }
 
 func (p *Pipeline) SetCapacityProvider(fn func() (CapacityBudget, error)) { p.budgetProvider = fn }
 
@@ -80,7 +102,16 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 			}
 		}
 	}
-	dec := EvaluateCapacity(p.budget, p.walBytes, gapCount)
+	// 门禁读**当前积压**（WAL 真实水位），绝不读累计追加量：
+	// 累计量只增不减，用它判定会在越过上限那一刻把源永久钉在暂停上，而真实积压可能
+	// 早已被 reclaim 清空。积压口径还有个必要性质——它随回收回落，暂停才有自愈的前提
+	// （字节口径高水位本身由 WAL 自身的积压上限负责，那条路径带滞回，见 wal.go）。
+	_, backlogBytes := p.wal.Backlog()
+	backlog := uint64(0)
+	if backlogBytes > 0 {
+		backlog = uint64(backlogBytes)
+	}
+	dec := EvaluateCapacity(p.budget, backlog, gapCount)
 	var gapStart, gapEnd uint64
 	if len(events) > 0 {
 		gapStart = events[0].Record.Start
@@ -122,7 +153,7 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 		return err
 	}
 	for _, ev := range events {
-		p.walBytes += uint64(len(ev.Message) + len(ev.EventID) + 64)
+		p.walAppendedBytesTotal += uint64(len(ev.Message) + len(ev.EventID) + 64)
 	}
 
 	// durable：fsync/equivalent commit。
@@ -210,17 +241,27 @@ func (p *Pipeline) DeliverPending() ([]logtypes.Event, error) {
 // 只在摄取被拒（暂停）时调用：此时没有新批次可投，但 WAL 里的存量仍需外发，
 // 否则积压只增不减、回收滞回永远打不开。语义上等价于「暂停只停摄取，不停排空」。
 // 只读 WAL 快照、只发已落盘条目；重复投递由 WAL 位置账本自防（RecordHTTPResult 幂等推进）。
+//
+// **限速（本轮补）**：单轮最多外发 maxReplayEventsPerDrain 条（默认 defaultReplayEventsPerDrain）。
+// 为什么必须限速：VL 变慢/刚恢复时存量可能有数千条，一次全塞进去会把恢复瞬间变成一次
+// 自我制造的流量尖峰——VL 刚缓过来就被打回慢状态，形成「恢复 → 打爆 → 再暂停」的振荡。
+// 限速的口径是「每采集轮一批」：采集轮持续在跑，故这只是把一次尖峰摊成若干轮，
+// **不丢数据**（未发的条目留在 WAL、位置账本不变，下一轮接着发）。
 func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 	if p.deliver == nil {
 		return nil, nil
 	}
 	entries := p.wal.Snapshot()
+	cap0 := p.replayDrainLimit()
 	pending := make([]logtypes.Event, 0, len(entries))
 	for _, e := range entries {
 		if !e.Durable {
 			continue
 		}
 		pending = append(pending, e.Event)
+		if len(pending) >= cap0 {
+			break // 限速：余下条目下一轮再发，账本位置不动，不丢。
+		}
 	}
 	if len(pending) == 0 {
 		return nil, nil
@@ -245,6 +286,14 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 func (p *Pipeline) noteSelfFailure(reason string) {
 	p.workerSelfFailures++
 	_ = reason
+}
+
+// replayDrainLimit 返回生效的单轮排空上限。
+func (p *Pipeline) replayDrainLimit() int {
+	if p.maxReplayEventsPerDrain > 0 {
+		return p.maxReplayEventsPerDrain
+	}
+	return defaultReplayEventsPerDrain
 }
 
 // Ledger 返回账本。

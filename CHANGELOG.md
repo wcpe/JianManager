@@ -1028,3 +1028,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 ### 变更
 - **保留默认定稿（用户决策）**：热层 90d、冷层 730d（`log_retention.hot_retention`/`cold_retention` 可配）；冷层不按级别分档，"分级=热层停留时长"（debug 3d/info 7d/warn 30d/error 90d 不变）。
 - **修掉静默架空硬规则的风险**：VL 自身 `-retentionPeriod` 默认 30d（短于热层 90d）会在搬运驱动器之前直接删数据 → 默认改 90d 对齐并注明约束；vlsup 新增按 namespace retention（COLD 传 `log_vl.cold_retention_period`，默认 730d）。
+
+### 修复
+- **日志链路执行层加固（用户 8 条外部审查闭环）**：①轮转新增 inode(dev+ino)判据（补"替换文件更大且前缀相同"盲区）；②WAL 门禁从累计量改当前积压（P0：原实现单源按累计 512MiB 约 1.1–6.5h 即永久停采）+ 积压上限/回放限速配置化（max_wal_entries/max_replay_events_per_drain）；③多行三态标记 multiline_unclosed（cross_rotation/unclosed，仅截断记录打标）+ 5s 闲置超时强制冲刷；④悬挂源水位改"落库成功才推进"（原构建期推进致 apply 失败后永不重试）；⑤字节口径只降级不暂停（暂停统一由可自愈的积压上限执行）。10 项变异实测转红后还原。

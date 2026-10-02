@@ -54,7 +54,35 @@ const (
 	// 只在生效时区不是 UTC 时写入：既有 UTC 源的事件零变化，而按源时区换算过的事件
 	// 自带可审计依据（排查历史时间轴偏移时可据此判断某段数据用的哪个时区）。
 	FieldEventTimeZone = "event_time_zone"
+	// FieldMultilineUnclosed 标记该多行事件是在**非自然边界**上被强制闭合的
+	// （当前唯一取值是跨 live 文件轮转），其堆栈/续行可能被截在另一段文件里。
+	//
+	// 为什么必须显式留下：轮转闭合原先走 closeStatus，而只要事件头带时间戳或 level 就返回
+	// OK——「打一半的堆栈」因此被静默标成完整事件，切分点从数据里彻底不可见。
+	// 置位意味着**本事件正文可能不完整，且其续行在紧随其后的事件里**。
+	FieldMultilineUnclosed = "multiline_unclosed"
 )
+
+// UnclosedReasonCrossRotation 是 FieldMultilineUnclosed 的取值：事件在 live 文件轮转处被强制闭合。
+// 轮转后新文件里的续行（若有）会形成紧随其后的一条独立事件。
+const UnclosedReasonCrossRotation = "cross_rotation"
+
+// UnclosedReasonIdle 是 FieldMultilineUnclosed 的取值：事件在**缓冲区闲置超时**时被强制闭合
+// （见 DefaultUnclosedTimeout）。
+//
+// 为什么必须有一条超时出路（2026-10-02 补，缺陷 B）：未闭合缓冲只在「下一行到达」或「轮转/停止」
+// 时才被推进。而真实日志源会长时间静默——一条尾部堆栈若始终等不到下一行，durable 就永远停在
+// 它之前（read 已越过去）。此时若文件发生轮转，恢复责任靠 durable 推进来覆盖已读前缀，
+// 这段区间便既没被 cover、也没有事件，轮转恢复会卡在「分段不可读」上。
+// 超时强制闭合把这段悬挂记录**显式**落成一条 PARTIAL 事件并推进 durable，链路重新可推进。
+const UnclosedReasonIdle = "unclosed"
+
+// DefaultUnclosedTimeout 是未闭合多行缓冲的默认强制闭合时限。
+//
+// 取 5s 的依据：MC 日志的多行堆栈是**连续写出**的（同一 tick 内），行间间隔远小于秒级；
+// 而「源静默」在生产上通常是数十秒到数小时。5s 因此远大于任何真实的续行间隔（不会把
+// 正常堆栈切开），又远小于静默时长（不会让悬挂记录长期挡住 durable）。可用配置覆盖。
+const DefaultUnclosedTimeout = 5 * time.Second
 
 // Limits 多行缓冲上限。零值表示不限制。
 type Limits struct {
@@ -401,6 +429,33 @@ func (n *Normalizer) FlushComplete() (logtypes.Event, bool) {
 		return logtypes.Event{}, false
 	}
 	ev := n.emit(n.cur, n.closeStatus(n.cur))
+	n.cur = nil
+	return ev, true
+}
+
+// FlushUnclosed closes the pending multiline event at a boundary that is **not** a real
+// event boundary (today: live-file rotation), marking that explicitly and audibly.
+//
+// 为什么不能复用 FlushComplete：sealed gzip 的 EOF 是**真**事件边界（末条事件确实完整），
+// 而 live 文件轮转不是——堆栈可能正好被打断在两段文件之间，后一半落在新文件里并被记成
+// 一条独立事件。用 closeStatus 会让这种半条事件拿到 parse_status=OK，切分点不可见。
+//
+// 判据 len(p.lines) > 1：只有已经吃进续行（\tat / Caused by / 缩进）的缓冲才可能被截断；
+// 单行、以换行结束的记录本身就是完整的（轮转只是恰好发生在两条记录之间），标记它只会
+// 在**每次**轮转上制造误报，把真正被切开的堆栈淹掉。
+func (n *Normalizer) FlushUnclosed(reason string) (logtypes.Event, bool) {
+	if n.cur == nil {
+		return logtypes.Event{}, false
+	}
+	p := n.cur
+	// flushStatus 而非 closeStatus：多行未闭合时显式给出 PARTIAL，不静默伪装完整。
+	ev := n.emit(p, n.flushStatus(p))
+	if len(p.lines) > 1 {
+		if ev.Fields == nil {
+			ev.Fields = map[string]string{}
+		}
+		ev.Fields[FieldMultilineUnclosed] = reason
+	}
 	n.cur = nil
 	return ev, true
 }

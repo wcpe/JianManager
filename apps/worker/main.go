@@ -586,6 +586,13 @@ func runWorker() {
 	if notice := cfg.WALBudgetNotice(); notice != "" {
 		slog.Warn(notice)
 	}
+	// 静默源的未闭合缓冲超时（缺陷 B）：非法值在 config.Load 阶段已被拒，
+	// 此处是防御性兜底——退回默认而不是中断装配（这一层没有可返回的错误通道）。
+	unclosedTimeout, unclosedErr := cfg.IngestMultilineUnclosedTimeout()
+	if unclosedErr != nil {
+		slog.Warn("log_ingest.multiline_unclosed_timeout 无法解析，退回默认", "error", unclosedErr)
+		unclosedTimeout = ingest.DefaultMultilineUnclosedTimeout()
+	}
 	logCapacityProvider := ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
 		MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
 		DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
@@ -779,6 +786,19 @@ func runWorker() {
 				IndexPrune: &indexPruneCfg,
 				// 索引持久化切分（FR-498 P0）：按行数 + 耗时双上界切成多个提交单元。
 				IndexCommit: &indexCommitCfg,
+				// 单源 WAL **真实积压**上限（键 log_capacity.max_wal_entries / max_wal_bytes）：
+				// 直接下发到 WAL.SetLimits。此前 SetLimits 无任何调用点（现场只剩硬编码
+				// 16MiB/5000），而配置里的 max_wal_bytes 被接到了只增不减的累计量上。
+				WALLimits: &acquire.WALLimits{
+					MaxEntries: cfg.LogCapacity.MaxWALEntries,
+					MaxBytes:   int64(cfg.LogCapacity.MaxWALBytes),
+				},
+				// 回放限速（键 log_capacity.max_replay_events_per_drain）：恢复期单轮外发上限，
+				// 把「恢复瞬间」从一次流量尖峰摊成若干轮，不丢数据。
+				MaxReplayEventsPerDrain: cfg.LogCapacity.MaxReplayEvents,
+				// 静默源的未闭合缓冲超时（键 log_ingest.multiline_unclosed_timeout，默认 5s）：
+				// 到期未闭合即以显式标记强制闭合并推进 durable，否则悬挂区间会挡住轮转恢复。
+				MultilineUnclosedTimeout: unclosedTimeout,
 				RecoveryHold: func(source ingest.SourceConfig, _ string) (bool, string) {
 					if rehydrateManager == nil {
 						return false, ""

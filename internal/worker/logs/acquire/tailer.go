@@ -45,6 +45,11 @@ type FileTailer struct {
 	// identity 固定取首次观察到的前缀，追加写不会改变；同路径替换时用于检测轮转。
 	identityBytes  int64
 	identitySHA256 string
+	// identityDev/identityIno 是首次观察到的文件**物理身份**（同名替换时必然改变）。
+	// identityOK 为 false 表示本平台拿不到身份，此时只靠「尺寸 + 前缀哈希」判据。
+	identityDev uint64
+	identityIno uint64
+	identityOK  bool
 	// rotateTo 轮转目标路径模板（可选）；检测到截断时登记关联。
 	rotateTo string
 	// rotationCount 轮转次数（测试断言）。
@@ -172,8 +177,20 @@ func (t *FileTailer) PrepareRotation() (bool, error) {
 		if err != nil {
 			return false, err
 		}
+		// 同一时刻记下物理身份；本平台拿不到时 identityOK=false，判据自动退回尺寸+哈希。
+		t.identityDev, t.identityIno, t.identityOK = fileIdentity(fi)
 		if err := t.registerLiveSegment(); err != nil {
 			return false, err
+		}
+	}
+	// 物理身份判据（用户质疑 1）：同名替换必然换 inode，这是唯一能无条件识破
+	// 「替换文件更大、且开头与旧文件逐字节相同」的信号——尺寸判据与前缀哈希判据
+	// 在那种形态下都会判为「未轮转」，导致新文件前 cursor 字节被静默跳过。
+	// 只在已消费过字节（cursor > 0）时判定：cursor == 0 时没有需要接管的已读前缀。
+	inodeReplaced := false
+	if t.cursor > 0 && t.identityOK {
+		if dev, ino, ok := fileIdentity(fi); ok && (dev != t.identityDev || ino != t.identityIno) {
+			inodeReplaced = true
 		}
 	}
 	replaced := false
@@ -184,7 +201,7 @@ func (t *FileTailer) PrepareRotation() (bool, error) {
 		}
 		replaced = current != t.identitySHA256
 	}
-	if t.cursor > 0 && (fi.Size() < t.cursor || replaced) {
+	if t.cursor > 0 && (fi.Size() < t.cursor || replaced || inodeReplaced) {
 		t.detectRotationLocked()
 		return true, nil
 	}
@@ -370,6 +387,9 @@ func (t *FileTailer) detectRotationLocked() {
 	t.active = false
 	t.identityBytes = 0
 	t.identitySHA256 = ""
+	// 物理身份一并作废：新文件要重新观察，否则下一轮会把「刚捕获的新身份」与
+	// 「旧身份」比较，产生一次虚假轮转。
+	t.identityDev, t.identityIno, t.identityOK = 0, 0, false
 	_ = t.registerLiveSegment()
 	// 逻辑位置继续累计，不归零（同一 generation 连续分段）。
 }

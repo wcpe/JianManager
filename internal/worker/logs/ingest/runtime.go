@@ -188,6 +188,16 @@ type Manager struct {
 	// 行数 + 耗时双上界切成多个提交单元（FR-498 P0，见 stateindex.CommitBudget）。
 	// 打开索引库时下发（stateindex.OpenWithBudget）。
 	indexCommit stateindex.CommitBudget
+	// walLimits 是单源 WAL **真实积压**上限的配置面（键 log_capacity.max_wal_entries /
+	// max_wal_bytes）；建管道时下发到 acquire.WAL.SetLimits。nil 表示沿用 acquire 包默认。
+	//
+	// 为什么要经 Manager 转发而不是在 acquire 里读配置：WAL 由本包创建（newWAL），
+	// 配置也只到本层；acquire 不得反向依赖 worker 配置。
+	walLimits *acquire.WALLimits
+	// maxReplayEventsPerDrain 是暂停/恢复期单轮外发事件数上限（回放限速）；0 表示用默认。
+	maxReplayEventsPerDrain int
+	// multilineUnclosedTimeout 是未闭合多行缓冲的闲置超时（缺陷 B）；≤0 表示关闭强制冲刷。
+	multilineUnclosedTimeout time.Duration
 	// reconcileReports 保留最近一次启动对账的逐源结论（只读观测面）。
 	reconcileReports []ReconcileReport
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
@@ -298,6 +308,16 @@ type Options struct {
 	// 下限 64 行——真源是 stateindex 的 DefaultCommitMaxRows/DefaultCommitMinRows/DefaultCommitTarget）。
 	// 单次持久化按行数 + 耗时双上界切成多个提交单元，见 stateindex.CommitBudget。
 	IndexCommit *stateindex.CommitBudget
+	// WALLimits 是单源 WAL **真实积压**上限（条目数 + 字节）的配置面（键 log_capacity.*）；
+	// nil 表示沿用 acquire 包默认。接线到 acquire.WAL.SetLimits。
+	WALLimits *acquire.WALLimits
+	// MaxReplayEventsPerDrain 是暂停/恢复期单轮外发事件数上限（回放限速，键
+	// log_capacity.max_replay_events_per_drain）；0 表示用默认。
+	MaxReplayEventsPerDrain int
+	// MultilineUnclosedTimeout 是未闭合多行缓冲的闲置超时（键
+	// log_ingest.multiline_unclosed_timeout）；0 表示用默认（normalize.DefaultUnclosedTimeout），
+	// 负值表示关闭强制冲刷。见 Pipeline.FlushStaleMultiline。
+	MultilineUnclosedTimeout time.Duration
 }
 
 type CutoverReadiness struct {
@@ -553,14 +573,17 @@ func New(opts Options) (*Manager, error) {
 	m := &Manager{
 		root: opts.Root, vl: opts.VL, vlRoute: opts.VLRoute, cat: opts.Catalog, journal: opts.Journal, archive: opts.Archive,
 		sources: make(map[string]SourceConfig), pipes: make(map[string]*pipeline.Pipeline),
-		state:               persistedState{Sources: make(map[string]persistedSource)},
-		statePath:           filepath.Join(opts.Root, "var", "log", "ingest.state.json"),
-		verificationTimeout: opts.VerificationTimeout,
-		capacityProvider:    opts.CapacityProvider,
-		recoveryHold:        opts.RecoveryHold,
-		reconcile:           reconcileConfigOf(opts.Reconcile),
-		indexPrune:          indexPruneConfigOf(opts.IndexPrune),
-		indexCommit:         indexCommitBudgetOf(opts.IndexCommit),
+		state:                    persistedState{Sources: make(map[string]persistedSource)},
+		statePath:                filepath.Join(opts.Root, "var", "log", "ingest.state.json"),
+		verificationTimeout:      opts.VerificationTimeout,
+		capacityProvider:         opts.CapacityProvider,
+		recoveryHold:             opts.RecoveryHold,
+		reconcile:                reconcileConfigOf(opts.Reconcile),
+		indexPrune:               indexPruneConfigOf(opts.IndexPrune),
+		indexCommit:              indexCommitBudgetOf(opts.IndexCommit),
+		walLimits:                opts.WALLimits,
+		maxReplayEventsPerDrain:  opts.MaxReplayEventsPerDrain,
+		multilineUnclosedTimeout: multilineUnclosedTimeoutOf(opts.MultilineUnclosedTimeout),
 	}
 	m.defaultCharset = opts.DefaultCharset
 	m.defaultTimeZone = opts.DefaultTimeZone
@@ -757,6 +780,14 @@ func IsValidCharset(raw string) bool {
 	return normalize.IsValidCharset(raw)
 }
 
+// DefaultMultilineUnclosedTimeout 返回未闭合多行缓冲的默认强制闭合时限（真源在 normalize）。
+//
+// 同上：配置层只依赖 ingest，故在此再导出一层，避免配置层为取一个默认值而再引入
+// normalize 依赖、也避免默认值在两侧各写一遍（那会在调参时漂移）。
+func DefaultMultilineUnclosedTimeout() time.Duration {
+	return normalize.DefaultUnclosedTimeout
+}
+
 // 静默源出口的「无副本」标注（复审 P2-13）：这一段的凭据是「整段已投递并被逐字段校验」，
 // 而不是任何物理副本。路径与责任接收者都带上显式标记，使事后审计一眼能看出「这段没有副本」。
 const (
@@ -859,10 +890,12 @@ func (m *Manager) Register(source SourceConfig) error {
 		Path: source.Path, RotateTo: source.RotateTo, Stream: source.Stream, Charset: source.Charset,
 		Location:       location,
 		SourceCategory: source.SourceCategory, Ledger: led, WAL: wal,
-		SuppressRecursiveVL: source.SourceCategory == logtypes.SourceWorker || source.SourceCategory == logtypes.SourceNode,
-		CapacityProvider:    m.capacityProvider,
-		DurablePersist:      m.persist,
-		ReclaimProof:        func(events []logtypes.Event) error { return m.releaseRecovery(source, events) },
+		SuppressRecursiveVL:     source.SourceCategory == logtypes.SourceWorker || source.SourceCategory == logtypes.SourceNode,
+		CapacityProvider:        m.capacityProvider,
+		DurablePersist:          m.persist,
+		WALLimits:               m.walLimits,
+		MaxReplayEventsPerDrain: m.maxReplayEventsPerDrain,
+		ReclaimProof:            func(events []logtypes.Event) error { return m.releaseRecovery(source, events) },
 		Delivery: pipeline.FuncHook(func(events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
 			return m.deliver(source, events, replay)
 		}),
@@ -1152,6 +1185,19 @@ func (m *Manager) pollSource(source SourceConfig, p *pipeline.Pipeline) ([]logty
 
 	polled, pollErr := p.Poll()
 	all = append(all, polled...)
+	// 缺陷 B：源静默时的唯一出路。未闭合缓冲平时只由「下一行到达」推进，源一旦长时间
+	// 不再输出，缓冲既不产出事件也不推进 durable——而轮转恢复要靠 durable 覆盖已读前缀，
+	// 于是这段悬挂区间既没被覆盖、也没有事件，链路卡在「轮转分段不可读」。
+	// 放在 Poll 之后：轮转已在上面按 cross_rotation 语义闭合过，这里只处理「没有轮转、
+	// 也没有新行」的静默形态（两者互斥，不会双发同一条悬挂记录）。
+	if m.multilineUnclosedTimeout > 0 {
+		if stale, staleErr := p.FlushStaleMultiline(time.Now(), m.multilineUnclosedTimeout); staleErr != nil {
+			m.noteSourceError(source.LogSourceID, staleErr.Error())
+		} else if len(stale) > 0 {
+			all = append(all, stale...)
+			metadataChanged = true
+		}
+	}
 	return all, metadataChanged, pollErr
 }
 
@@ -3421,6 +3467,19 @@ func (m *Manager) persistSnapshot() error {
 	for key := range m.state.Sources {
 		keys[key] = struct{}{}
 	}
+	// advanced 记录「本轮构建过的源」及其构建时的修订号/覆盖签名，**只在落库成功后才推进**。
+	//
+	// 为什么不能在构建期就推进（用户质疑 2，2026-10-02 复核）：一次落库失败（磁盘满 / 库被
+	// 换成只读 / 进程在 apply 之前被杀）会把这些源永久标记成「已持久化」——下一轮不再重建，
+	// 其陈旧行再也不会被重试，索引与内存就此静默分叉。现场形态正是「部分持久化残留的悬挂源
+	// 被当成已全量落库」：重启后该源按陈旧水位重读（重复投递），或整行缺失被当成新源
+	// （先前已投递的数据无人认账）。失败必须让水位**留在原处**，下一轮自动重试同一批源。
+	type persistAdvance struct {
+		key   string
+		rev   uint64
+		cover coverSignature
+	}
+	advanced := make([]persistAdvance, 0, len(keys))
 	for key := range keys {
 		p := m.pipes[key]
 		if p == nil {
@@ -3434,8 +3493,9 @@ func (m *Manager) persistSnapshot() error {
 			continue // 账本与段覆盖都未变：该源本轮不参与行规划（只写变更行的前提）
 		}
 		m.rebuildSource(key, p)
-		m.persistedRev[key] = rev
-		m.persistedCover[key] = coverSignatureOf(m.state.Sources[key])
+		advanced = append(advanced, persistAdvance{
+			key: key, rev: rev, cover: coverSignatureOf(m.state.Sources[key]),
+		})
 		changed = append(changed, key)
 	}
 	// 增量状态：账本派生行只按变更源构建，根行恒为全量（行数为 O(源数)，便宜且兜住
@@ -3449,8 +3509,17 @@ func (m *Manager) persistSnapshot() error {
 	// 保证与构建顺序一致，因此「旧快照后写」不可能发生。
 	m.mu.Unlock()
 	if _, err := store.ApplyScoped(desired, changed); err != nil {
-		return fmt.Errorf("ingest: 持久化采集索引失败: %w", err)
+		// 不推进水位：本轮构建的源在下一轮会被重新构建并重试落库，悬挂源不会静默滞留。
+		return fmt.Errorf("ingest: 持久化采集索引失败（水位未推进，下一轮自动重试）: %w", err)
 	}
+	// 落库成功后才推进水位。需要重新取锁：构建期已释放 m.mu，期间可能有新的变更被声明；
+	// 即便账本在这段时间里又前进，这里记下的是**更旧**的修订号，下一轮会因不等而重建（安全方向）。
+	m.mu.Lock()
+	for _, a := range advanced {
+		m.persistedRev[a.key] = a.rev
+		m.persistedCover[a.key] = a.cover
+	}
+	m.mu.Unlock()
 	return nil
 }
 
@@ -3495,4 +3564,20 @@ func (m *Manager) rebuildSource(key string, p *pipeline.Pipeline) {
 
 func newWAL(led *ledger.Ledger, key ledger.SourceKey) *acquire.WAL {
 	return acquire.NewWAL(led, key)
+}
+
+// multilineUnclosedTimeoutOf 归一化未闭合超时配置。
+//
+// 口径：0 ⇒ 默认（normalize.DefaultUnclosedTimeout，5s，零配置零行为变化）；
+// 负值 ⇒ 关闭（返回 0，调用方据此跳过强制冲刷）。为什么不把 0 也当成「关闭」：
+// 0 是 Go 的零值，无法与「未配置」区分，而「未配置」必须是安全默认（会冲刷）。
+// 要关闭请显式写一个负值（配置侧 0 与负值都映射为关闭，见 Config.IngestMultilineUnclosedTimeout）。
+func multilineUnclosedTimeoutOf(v time.Duration) time.Duration {
+	if v < 0 {
+		return 0
+	}
+	if v == 0 {
+		return normalize.DefaultUnclosedTimeout
+	}
+	return v
 }

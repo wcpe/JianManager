@@ -478,20 +478,40 @@ type LogVLConfig struct {
 	StartRehydrate   bool  `mapstructure:"start_rehydrate"`
 }
 
-// DefaultMaxWALBytes 是单源 WAL 字节预算的**有限默认值**。
+// DefaultMaxWALBytes 是单源 WAL **当前积压**的字节上限默认值。
 //
 // 此前默认是 0 = 不限，于是唯一的体积防护形同不存在：压测实测单 Worker WAL 涨到 1.9GB
 // 而容量门禁的 PASSIVE 分支从不触发（「不限」不是「很宽」，是「没有上界」）。
 //
 // 取 512MiB 的依据：稳态 WAL 在 reclaim 正常推进后是 KB 量级（真机实测 107MB → 256B），
 // 只有 reclaim 停滞时才会累积到百 MB 级。故 512MiB 远高于任何正常态，
-// 只在真的失控时才触发——触发后的动作是 PAUSED + 登记缺口（不静默丢），正合「宁停不丢」。
+// 只在真的失控时才触发——触发后的动作是暂停采集 + 登记缺口（不静默丢），正合「宁停不丢」。
 //
-// 0 仍可作为显式逃生阀（真的需要不限时写 0），但会在启动日志里被点名提醒。
+// 接线（2026-10-02 修正）：本值现在是 **WAL.SetLimits 的字节上限**（真实积压，见
+// acquire.WALLimits），也是容量门禁的高水位读数阈值。此前它被接到采集管道的累计追加量上，
+// 而该累计量只增不减 → 单源累计追加满 512MiB 即被永久暂停（容量 PAUSE 不由积压滞回清除）。
+// 0 表示字节维度不设上限（此时条目维度仍由 MaxWALEntries 兜住）。
 const DefaultMaxWALBytes uint64 = 512 << 20
+
+// DefaultMaxWALEntries 是单源 WAL **当前积压**的条目数上限默认值。
+//
+// 为什么条目维度必须独立兜底（不能只靠字节）：WAL 条目会内联进 ingest.state.json 持久化，
+// 2026-09-28 生产事故正是「单源积压无界 → 状态文件 1.2GB → 每次持久化全量重写 →
+// 持续 117MB/s、Worker CPU 138%」。5000 条把每源对状态的贡献限定在十几 MB 级，
+// 与字节上限同时生效、**先到者触发**。
+const DefaultMaxWALEntries int64 = 5000
+
+// DefaultMaxReplayEventsPerDrain 是暂停/恢复期单轮外发事件数的默认上限（回放限速）。
+//
+// 为什么需要：VL 变慢或刚恢复时 WAL 存量可能有数千条，一次全塞进去会把恢复瞬间变成
+// 一次自我制造的流量尖峰。限速只把尖峰摊成若干轮（采集轮持续在跑），未发的条目留在
+// WAL 与位置账本里，**不丢数据**。
+const DefaultMaxReplayEventsPerDrain int = 500
 
 type LogCapacityConfig struct {
 	MaxWALBytes       uint64  `mapstructure:"max_wal_bytes"`
+	MaxWALEntries     int64   `mapstructure:"max_wal_entries"`
+	MaxReplayEvents   int     `mapstructure:"max_replay_events_per_drain"`
 	MaxGaps           int     `mapstructure:"max_gaps"`
 	DegradedAtPercent float64 `mapstructure:"degraded_at_percent"`
 	PauseAtPercent    float64 `mapstructure:"pause_at_percent"`
@@ -542,6 +562,15 @@ type LogIngestConfig struct {
 	// 挂在 log_ingest 下而不是顶层：它与时区/字符集同属「采集归一化」的节点级默认，
 	// 作用域与装配点完全一致（都在构造 ingest.Options 时接线）。
 	Sampling LogSamplingConfig `mapstructure:"sampling"`
+	// MultilineUnclosedTimeout 是未闭合多行缓冲的闲置超时（键
+	// log_ingest.multiline_unclosed_timeout）：超过它仍无新行，就以显式 `multiline_unclosed`
+	// 标记强制闭合该缓冲并推进 durable。空串表示用默认（normalize.DefaultUnclosedTimeout = 5s）。
+	//
+	// 为什么必须有这条出路（缺陷 B）：未闭合缓冲平时只由「下一行到达」推进。源一旦长时间
+	// 静默，缓冲既不产出事件也不推进 durable——而轮转恢复要靠 durable 覆盖已读前缀，
+	// 于是这段悬挂区间既没被覆盖、也没有事件，链路卡在「轮转分段不可读」。
+	// 非正数（含 "0"）表示**关闭**强制冲刷，此时悬挂记录会一直挂着（仅排障用）。
+	MultilineUnclosedTimeout string `mapstructure:"multiline_unclosed_timeout"`
 }
 
 // LogSamplingConfig 采集侧采样与降级策略的配置面（键 `log_ingest.sampling.*`）。
@@ -750,16 +779,18 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	return p, nil
 }
 
-// WALBudgetNotice 返回「WAL 预算被显式关掉」的提醒（无限时返回空串）。
+// WALBudgetNotice 返回「WAL 积压上限被显式关掉」的提醒（未关掉时返回空串）。
 //
-// 为什么不直接拒绝：0 = 不限是合法配置（例如受管环境由外部配额兜底），
-// 但它是**唯一没有上界的形态**，必须在启动日志里被点名，否则「没配」与「配成不限」
-// 在现场看起来完全一样——两者都由 viper 默认值与显式 0 落到同一个值上。
+// 语义（2026-10-02 复核后收紧）：本值现在是**真实积压上限**（直接接 WAL.SetLimits），
+// 过去它被接到一个只增不减的累计量上，因此 0 在当时确实等于「字节上没有上界」——
+// 而现在 0 表示「字节维度不设上限」，条目维度的 log_capacity.max_wal_entries
+// （默认 5000）仍然生效，恢复状态不会无界。这不直接拒绝配置：受管环境可能确实由外部
+// 配额兜底，但必须在启动日志里被点名，否则「没配」与「配成不限」在现场看起来完全一样。
 func (c *Config) WALBudgetNotice() string {
 	if c == nil || c.LogCapacity.MaxWALBytes != 0 {
 		return ""
 	}
-	return "log_capacity.max_wal_bytes=0（不限）：WAL 将没有任何字节上界，reclaim 停滞后会一路涨到下盘满，请确认这是有意为之"
+	return "log_capacity.max_wal_bytes=0（字节维度不限）：暂停仍由 log_capacity.max_wal_entries 兜住，但单条超大事件（如整段堆栈）不再有字节上界，请确认这是有意为之"
 }
 
 // LogLevel 解析 `log.level` 为 slog 等级。
@@ -838,6 +869,27 @@ func (c *Config) IngestDefaultCharset() string {
 	return strings.TrimSpace(c.LogIngest.Charset)
 }
 
+// IngestMultilineUnclosedTimeout 解析 `log_ingest.multiline_unclosed_timeout`。
+//
+// 口径：空串 ⇒ 默认（normalize.DefaultUnclosedTimeout，5s，零配置零行为变化）；
+// 非空必须是合法 duration；<0 表示**关闭**强制冲刷（仅排障用，悬挂记录会一直挂着）；
+// 0 同样视为关闭（显式写 0 的人意图就是「不要自动冲刷」）。
+// 非法值启动即拒：静默回退默认会让「我明明关了它」变成隐性行为，难以归因。
+func (c *Config) IngestMultilineUnclosedTimeout() (time.Duration, error) {
+	if c == nil {
+		return ingest.DefaultMultilineUnclosedTimeout(), nil
+	}
+	raw := strings.TrimSpace(c.LogIngest.MultilineUnclosedTimeout)
+	if raw == "" {
+		return ingest.DefaultMultilineUnclosedTimeout(), nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("log_ingest.multiline_unclosed_timeout 非法: %q（应为时长如 5s/30s；0 或负值表示关闭强制冲刷）", raw)
+	}
+	return d, nil
+}
+
 // LogArchiveConfig 是 Worker Deep Archive 的受管对象存储配置。
 // SecretKey 只允许由环境变量注入，禁止写入 worker.yml 或诊断快照。
 type LogArchiveConfig struct {
@@ -892,6 +944,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_vl.start_cold", false)
 	v.SetDefault("log_vl.start_rehydrate", false)
 	v.SetDefault("log_capacity.max_wal_bytes", DefaultMaxWALBytes)
+	v.SetDefault("log_capacity.max_wal_entries", DefaultMaxWALEntries)
+	v.SetDefault("log_capacity.max_replay_events_per_drain", DefaultMaxReplayEventsPerDrain)
 	v.SetDefault("log_capacity.max_gaps", 0)
 	v.SetDefault("log_capacity.degraded_at_percent", 80.0)
 	v.SetDefault("log_capacity.pause_at_percent", 90.0)
@@ -925,6 +979,7 @@ func Load(path string) (*Config, error) {
 	// 采集归一化的节点级默认字符集（复审 P2-3）：留空 = auto。中文 locale 的 JVM 与 Worker
 	// 同机部署且日志为 GBK 时配 gbk 即可（显式声明优于自动判定）。
 	v.SetDefault("log_ingest.charset", "")
+	v.SetDefault("log_ingest.multiline_unclosed_timeout", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
 	v.SetDefault("artifact_cache.max_bytes", int64(0))
@@ -1044,6 +1099,12 @@ func Load(path string) (*Config, error) {
 	// （与源级登记拒绝非法字符集同一取舍）。
 	if cs := cfg.IngestDefaultCharset(); cs != "" && !ingest.IsValidCharset(cs) {
 		return nil, fmt.Errorf("log_ingest.charset 非法: %q（支持 auto/utf-8/gbk/gb18030）", cfg.LogIngest.Charset)
+	}
+	// 静默源未闭合缓冲超时（缺陷 B）：非法值启动即拒。
+	// 静默回退默认会让「我明明配了 30s」变成 5s，而这件事只在「轮转恢复卡住」时才暴露，
+	// 排查方向会被完全带偏——与 timezone/charset 同属「配错就静默」的危险项。
+	if _, err := cfg.IngestMultilineUnclosedTimeout(); err != nil {
+		return nil, err
 	}
 	if cfg.LogCapacity.DegradedAtPercent <= 0 || cfg.LogCapacity.DegradedAtPercent >= 100 ||
 		cfg.LogCapacity.PauseAtPercent <= cfg.LogCapacity.DegradedAtPercent || cfg.LogCapacity.PauseAtPercent > 100 {
