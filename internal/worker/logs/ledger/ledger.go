@@ -620,6 +620,16 @@ func (l *Ledger) Restore(entries []Entry) error {
 		// Recompute the derived delivery prefix after replay. A single-byte
 		// source line delimiter between adjacent event spans is known coverage,
 		// while larger holes remain unresolved and block the prefix.
+		// **落库态归一 + 告警**（用户 2026-10-05 明确 ✓）：不静默修 ✗（否则"越界怎么来的"永远查不出 ✓）、
+		// 也不崩溃 ✗（会把恢复期直接打死 ✓）；带上源与两值**原样** ✓。
+		// 注（A 案）：这是 **Restore 侧**的归一 ✓，与"回收侧夹取"（B 案，暂不装 ✗）分开 ——
+		// 前者只作用于**落库态**、不改变运行期契约 ✓。
+		if copy.Positions.Reclaim > copy.Positions.Read {
+			slog.Warn("落库态违反不变量：回收水位越过读水位，已归一（原因见两值原样）",
+				"key", copy.Key.LogSourceID, "generation", copy.Key.SourceGeneration,
+				"reclaim", copy.Positions.Reclaim, "read", copy.Positions.Read)
+			copy.Positions.Reclaim = copy.Positions.Read
+		}
 		copy.Positions.Delivery = contiguousDeliveryEnd(copy.DeliveryBatches, copy.Positions.Reclaim)
 		l.entries[entry.Key] = copy
 	}
@@ -1122,4 +1132,24 @@ func (e *Entry) clone() *Entry {
 	cp.Abandonments = append([]GapAbandonment(nil), e.Abandonments...)
 	cp.RecoveryRefs = append([]RecoveryRef(nil), e.RecoveryRefs...)
 	return &cp
+}
+
+// PositionInvariantViolations 返回**违反"回收 ≤ 读"不变量**的源（**只读观测面 ✓**，零行为改动 ✓）。
+//
+// 定位（用户 2026-10-05 裁决走 A ✓）：先把这条不变量做成**可读数**，用它判断现场 `inst:196`
+// 的越界（reclaim 166,480,682 > read 99,776,039 ✗）是**持续存在**还是**恢复期瞬时窗口** ✓。
+// 夹取（B 案）暂不装 ✗ —— 它会改变 ledger 既有契约（5 条既有用例以"`Reclaim > Read` 可达"为前提 ✓），
+// 必须先由读数证明"持续越界"、并同批更新那些前提 ✓。
+func (l *Ledger) PositionInvariantViolations() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for key, e := range l.entries {
+		if e.Positions.Reclaim > e.Positions.Read {
+			out = append(out, fmt.Sprintf("%s/%s reclaim=%d read=%d",
+				key.LogSourceID, key.SourceGeneration, e.Positions.Reclaim, e.Positions.Read))
+		}
+	}
+	sort.Strings(out)
+	return out
 }
