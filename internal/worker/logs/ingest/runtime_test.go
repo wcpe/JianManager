@@ -103,6 +103,9 @@ type projectionVLFixture struct {
 
 func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/health":
+		// VL 真实服务提供 /health；夹具此前没有它——于是「VL 未就绪」这条路径从没被任何用例走过。
+		w.WriteHeader(http.StatusOK)
 	case "/insert/jsonline":
 		payload, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
@@ -203,6 +206,11 @@ func newTestManager(t *testing.T, opts Options) (*Manager, error) {
 		//   变成对新增冲刷路径的测量，与被测行为无关。
 		// 要测冲刷本身请显式传一个小值（见 TestManagerFlushesStaleMultilineOnIdleSource）。
 		opts.MultilineUnclosedTimeout = time.Hour
+	}
+	// 测试一律把「等待 VL 就绪」的窗口压到 2s：用例要断言的是「有界等待 + 如实报原因」，
+	// 不该真等生产默认的 90s（那会让整包测试多出分钟级的空等）。
+	if opts.VLReadyWait == 0 {
+		opts.VLReadyWait = 2 * time.Second
 	}
 	t.Helper()
 	m, err := New(opts)

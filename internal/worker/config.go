@@ -229,6 +229,14 @@ type LogReconcileConfig struct {
 	// 并发 4 ≈ 7.5 分钟的最坏情况会把启动拖成分钟级。预算到期即取消在途查询，未完成的源
 	// 回退整窗重发（只影响「重发多少」，不影响「要不要重发」）。
 	Budget string `mapstructure:"budget"`
+	// VLReadyTimeout 对账/重发前的 VL 就绪探针超时（duration 字符串，默认 2s）；非法/非正回退默认。
+	VLReadyTimeout string `mapstructure:"vl_ready_timeout"`
+	// VLReadyWait 启动恢复**等待** VL 就绪的上界（duration 字符串，默认 90s）；非法/非正回退默认。
+	// 超出即记原因并交给运行期常驻对账重试（不把外部条件当成「源恢复失败」）。
+	VLReadyWait string `mapstructure:"vl_ready_wait"`
+	// ReplayMaxDays / ReplayMaxDuration：整窗重发的切片预算（默认 1 天 / 90s）；非正回退默认。
+	ReplayMaxDays     int    `mapstructure:"replay_max_days"`
+	ReplayMaxDuration string `mapstructure:"replay_max_duration"`
 }
 
 // ReconcileConfig 把本地配置面收敛为 ingest 的对账配置（非法/非正一律回退归一化默认）。
@@ -978,6 +986,36 @@ func (c *Config) IngestResolveGapsBudget() (*ingest.ResolveGapsBudget, error) {
 	return budget, nil
 }
 
+// ReconcileReplayTuning 把 `log_reconcile.*` 下「重发的外部条件与切片」旋钮收敛为 ingest 的配置面。
+//
+// 四个键：
+//   - vl_ready_timeout：对账/重发前的 VL ready 探针超时（默认 2s）——现场触发因就是「worker 与 VL
+//     同步重启、对账抢跑」，探针把「必然失败的整窗重发」变成「等下一轮」；
+//   - vl_ready_wait：启动恢复等待 VL 就绪的上界（默认 90s）；超出即交给运行期常驻对账重试；
+//   - replay_max_days / replay_max_duration：整窗重发的切片预算（默认 1 天 / 90s）。
+//
+// 口径：未配置/非法一律回退默认（这几个旋钮回退默认永远是安全方向：等一等、少发一点，都不会丢
+// 数据）；配成 0 或负数同样视为「用默认」。
+func (c *Config) ReconcileReplayTuning() ingest.ReplayTuning {
+	tuning := ingest.ReplayTuning{}
+	if c == nil {
+		return tuning
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.VLReadyTimeout)); err == nil && d > 0 {
+		tuning.VLReadyProbeTimeout = d
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.VLReadyWait)); err == nil && d > 0 {
+		tuning.VLReadyWait = d
+	}
+	if c.LogReconcile.ReplayMaxDays > 0 {
+		tuning.Budget.MaxDays = c.LogReconcile.ReplayMaxDays
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.ReplayMaxDuration)); err == nil && d > 0 {
+		tuning.Budget.MaxDuration = d
+	}
+	return tuning
+}
+
 // LogArchiveConfig 是 Worker Deep Archive 的受管对象存储配置。
 // SecretKey 只允许由环境变量注入，禁止写入 worker.yml 或诊断快照。
 type LogArchiveConfig struct {
@@ -1070,6 +1108,11 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_ingest.multiline_unclosed_timeout", "")
 	v.SetDefault("log_ingest.archive_scan_interval", "")
 	// 整节点解算预算（2026-10-02 缺陷修复）：0/空 = 用 ingest 包默认（256 源 / 2m）。
+	// 重发的外部条件与切片（2026-10-03 现场）：探针超时/等待上界/切片预算；空或 0 = 用 ingest 默认。
+	v.SetDefault("log_reconcile.vl_ready_timeout", "")
+	v.SetDefault("log_reconcile.vl_ready_wait", "")
+	v.SetDefault("log_reconcile.replay_max_days", 0)
+	v.SetDefault("log_reconcile.replay_max_duration", "")
 	v.SetDefault("log_ingest.resolve_gaps_max_sources", 0)
 	// 每周期总预算（2026-10-02 事故修复）：单次落库调用做多少；0/空 = 用 stateindex 默认。
 	v.SetDefault("log_index.persist.cycle_max_rows", 0)

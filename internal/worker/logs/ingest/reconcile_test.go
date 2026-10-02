@@ -58,6 +58,9 @@ type reconcileVLFixture struct {
 
 func (f *reconcileVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
+	case "/health":
+		// VL 真实服务提供 /health；夹具此前没有它——于是「VL 未就绪」这条路径从没被任何用例走过。
+		w.WriteHeader(http.StatusOK)
 	case "/insert/jsonline":
 		payload, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
@@ -466,15 +469,24 @@ func TestStartupReconcileFallsBackToFullReplayWhenVLUnreliable(t *testing.T) {
 		insertsBefore := fixture.insertCount()
 
 		started := time.Now()
-		_, err := newTestManager(t, Options{
+		restarted, err := newTestManager(t, Options{
 			Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal, Sources: []SourceConfig{source},
 			Reconcile: &ReconcileConfig{Enabled: true, Concurrency: 1, Timeout: time.Second, QueryTimeout: 150 * time.Millisecond},
+			// 等待窗口压到 1s：本用例断言的是「有界等待 + 如实报原因」，不必真等 90s。
+			VLReadyWait: time.Second,
 		})
 		elapsed := time.Since(started)
-		require.Error(t, err, "VL 不可达时整窗重发也会失败（与现状一致），但必须是有界的快速失败")
-		require.Less(t, elapsed, 3*time.Second, "不得卡死")
-		require.Contains(t, err.Error(), "insert", "失败必须来自投递路径（证明走的是整窗重发而不是卡在对账）")
-		require.Equal(t, insertsBefore, fixture.insertCount(), "不可达时不会产生成功插入")
+		// D12-c 收紧后的契约（2026-10-03 现场）：VL 不可达时**不重发**，记错误等下一轮——
+		// 而不是把几十万事件打在未就绪的 VL 上长时间重试。因此启动本身不再失败，
+		// 但就绪面必须**明确**报出「恢复未完成 + 原因」。
+		require.NoError(t, err, "VL 不可达只应让恢复延后（门禁挡下发），不应让采集运行时创建失败")
+		require.Less(t, elapsed, 15*time.Second, "不得卡死（有界等待 + 交给运行期常驻对账重试）")
+		require.Equal(t, insertsBefore, fixture.insertCount(), "不可达时不会产生任何插入（门禁在重发之前拦下）")
+		readiness := restarted.CutoverReadiness()
+		require.False(t, readiness.LedgerReady, "恢复没做完 ⇒ 必须报 not-ready")
+		require.Contains(t, readiness.Reasons, "startup_recovery_failed", "原因必须点名恢复失败")
+		joined := strings.Join(readiness.Reasons, " | ")
+		require.Contains(t, joined, "VL 未就绪", "原因必须说清是 VL 未就绪（可执行：等 VL 起来后下一轮自动重试）")
 	})
 }
 
@@ -631,7 +643,11 @@ func TestStartupReconcileHonorsTotalBudget(t *testing.T) {
 	})
 	elapsed := time.Since(started)
 	require.NoError(t, err, "回退整窗重发必须成功：预算只影响「重发多少」，不影响「要不要重发」")
-	require.Less(t, elapsed, 1500*time.Millisecond,
+	// 上界口径：预算 200ms、单源/单查询超时都是 4s；elapsed 里还含「回退整窗重发」本身
+	// （两天：写入 + 逐字段校验；校验查询被夹具挂起，由测试注入的 200ms 校验窗口收回）。
+	// D12-b 之后每天多一次 VL ready 探针与一次落库调用，故上界从 1.5s 放到 3s——
+	// 判别力不变：若预算失效，elapsed 会退到 4s（超时）量级而不是 2s。
+	require.Less(t, elapsed, 3*time.Second,
 		"总预算必须把整批对账收回（实测 %s；预算 200ms，单源/单查询超时都是 4s）", elapsed)
 	require.Equal(t, 2, len(fixture.payloadsSince(insertsBefore)),
 		"预算耗尽的源必须回退整窗重发（两天各一次），绝不因「没来得及对账」而少发")

@@ -201,6 +201,15 @@ func (w *WAL) backlogLocked() (int64, int64) {
 	return int64(len(w.entries)), bytes
 }
 
+// IsBacklogPauseReason 报告某条暂停原因是否由本包的**积压上限**造成（B1b 条目/字节闸）。
+//
+// 为什么要导出（2026-10-03 现场 D4）：积压暂停带**滞回**（积压回落到上限一半以下才自动恢复），
+// 因此任何「越权 ResumeAcquire」都会让条目闸失效——现场实测积压涨到 113.9 万条（名义上限 5000）。
+// 调用方（解缺口、放弃裁定等收尾路径）据此避免清除不属于它的暂停。
+func IsBacklogPauseReason(reason string) bool {
+	return strings.HasPrefix(reason, walBacklogPauseReason)
+}
+
 // enforceBacklogLimitLocked 在追加后检查积压是否越界；越界即暂停该源采集（B1b）。
 //
 // 刻意不在这里丢弃任何条目、也不返回错误：本批事件已入 WAL 且已推进 read_position，
@@ -486,6 +495,9 @@ func (w *WAL) Restore(entries []WALEntry) error {
 			w.lastDurableEnd = entry.Event.Record.End
 		}
 	}
+	// 恢复完立刻判一次闸：索引里的**持久积压**可能已经越界，此时必须当场暂停，而不是等下一次
+	// Append（现场形态：内存积压早已越界、暂停却滞后到下一次追加才发生）。
+	w.enforceBacklogLimitLocked(w.led.Get(w.key))
 	return nil
 }
 

@@ -181,16 +181,23 @@ type Manager struct {
 	// lastPersistStats 是最近一次落库的读数（观测面）：生产排障据此确认
 	// 「①水位化差异删除是否真的启用」（RangePrunes > 0）、分步是否触发（Incomplete）。
 	lastPersistStats stateindex.Stats
-	root             string
-	vl               *vlsup.Client
-	vlRoute          func(SourceConfig) (*vlsup.Client, bool, error)
-	cat              *catalog.Catalog
-	journal          catalog.Journal
-	archive          *archive.Registry
-	sources          map[string]SourceConfig
-	pipes            map[string]*pipeline.Pipeline
-	state            persistedState
-	statePath        string
+	// replayBudget 是整窗重发的切片预算（见 ReplayBudget）。
+	replayBudget ReplayBudget
+	// vlProbeTimeout / vlNotReady 是 VL ready 门禁的读数：probe 超时与「哪些源当前被判未就绪」。
+	// vlNotReady 只用于**状态变化时才打日志**（否则每轮每源刷屏，现场日志会被淹掉）。
+	vlProbeTimeout time.Duration
+	vlReadyWait    time.Duration
+	vlNotReady     map[string]string
+	root           string
+	vl             *vlsup.Client
+	vlRoute        func(SourceConfig) (*vlsup.Client, bool, error)
+	cat            *catalog.Catalog
+	journal        catalog.Journal
+	archive        *archive.Registry
+	sources        map[string]SourceConfig
+	pipes          map[string]*pipeline.Pipeline
+	state          persistedState
+	statePath      string
 	// index 是采集索引的嵌入式 SQLite 存储（FR-496，spec §2.1）：persist 只写变更行，
 	// 启动时自动迁移旧 ingest.state.json（校验失败拒绝启动）。nil 表示尚未打开（
 	// 测试直接构造 Manager 的场景在首次 persist 时按需打开）。
@@ -406,7 +413,56 @@ type Options struct {
 	// （runStartupRecovery），差别只在「在哪个 goroutine 里跑」——不存在「测试路径与生产路径
 	// 是两份实现」的问题。
 	StartupRecoveryBackground bool
+	// VLReadyProbeTimeout 是对账/重发之前探测 VL 写入端就绪的超时（键
+	// log_reconcile.vl_ready_timeout）；≤0 用默认（defaultVLReadyProbeTimeout）。
+	//
+	// 为什么必须有这道门（2026-10-02/03 现场）：worker 与 VL 同步重启时，启动对账会**抢跑**在
+	// VL ready 之前 ⇒ 计数查询必然 `count_query_failed` ⇒ 保守回退整窗重发 ⇒ 几十万事件的插入
+	// 打在未就绪的 VL 上，长时间失败重试（现场 18+ 分钟零成功写入、CPU 空烧）。门禁把「必然失败
+	// 的竞态」变成「等下一轮」（与常驻对账「不可信查询不重发」的既有取舍一致）。
+	VLReadyProbeTimeout time.Duration
+	// VLReadyWait 是启动恢复**等待** VL 就绪的上界（键 log_reconcile.vl_ready_wait）；≤0 用默认。
+	// 超出即记失败原因并交给运行期（常驻对账会重新发现缺失天并重发），不再占着启动恢复。
+	VLReadyWait time.Duration
+	// ReplayBudget 是**整窗重发**的切片预算（键 log_reconcile.replay_max_days /
+	// replay_max_duration）；零值用默认（defaultReplayMaxDaysPerRound / defaultReplayMaxDuration）。
+	//
+	// 为什么要切片：整窗重发此前对**单个大源**就是「一次写完整个权威集合」（现场 330MB），
+	// 既不切片也无预算 ⇒ 与采集轮抢共享持久化门、并把 VL 打满（其余源零成功写入）。
+	ReplayBudget ReplayBudget
+	// ReplayTuning 是上面三枚旋钮的合并形态（配置层一次下发；零值字段各自回退默认）。
+	// 非零字段优先于上面的单独字段。
+	ReplayTuning *ReplayTuning
 }
+
+// ReplayTuning 把「重发的外部条件与切片」三枚旋钮收在一起，供配置层一次下发
+// （键 log_reconcile.vl_ready_timeout / vl_ready_wait / replay_max_days / replay_max_duration）。
+type ReplayTuning struct {
+	VLReadyProbeTimeout time.Duration
+	VLReadyWait         time.Duration
+	Budget              ReplayBudget
+}
+
+// ReplayBudget 是整窗重发的切片预算：一轮最多重发几天 / 最多跑多久。
+//
+// 未完成时**不发布剩余天、不推进回收责任、不推进水位**（见复用的既有发布语义）；下一轮从剩余
+// 天续跑（同一天的重发按 event_id 身份 + 逐字段校验幂等，重复只生成新代次并取代旧代次）。
+type ReplayBudget struct {
+	MaxDays     int
+	MaxDuration time.Duration
+}
+
+const (
+	// defaultReplayMaxDaysPerRound 默认一轮重发 1 个 UTC 天：单个天已是「一次插入循环」的有界单位，
+	// 且能让采集轮在其间完整跑若干轮（现场 330MB 源按天切开后每段可独立完成与发布）。
+	defaultReplayMaxDaysPerRound = 1
+	// defaultReplayMaxDuration 是一轮重发的墙钟预算（检查点在「天与天之间」）。
+	defaultReplayMaxDuration = 90 * time.Second
+	// defaultVLReadyProbeTimeout 是 VL ready 探针的超时。
+	defaultVLReadyProbeTimeout = 2 * time.Second
+	// defaultVLReadyWait 是启动恢复等待 VL ready 的上界（超过即记错误、留给下一轮）。
+	defaultVLReadyWait = 90 * time.Second
+)
 
 type CutoverReadiness struct {
 	LedgerReady bool
@@ -690,6 +746,23 @@ func (m *Manager) ResolveCoveredGaps(ctx context.Context) error {
 	return m.persist()
 }
 
+// resumeAcquireRespectingGates 恢复采集，但**不越权清除积压/容量闸的暂停**。
+//
+// 为什么（D4，2026-10-03 现场）：解算与放弃裁定的收尾此前无条件 `ResumeAcquire`，而积压闸带滞回
+// （积压回落到上限一半以下才自动恢复）——于是「解一次缺口 / 做一次运维解阻」就把条目闸解除一次，
+// 积压实测涨到 113.9 万条（名义上限 5000）。这里只放行「非积压闸造成」的暂停：积压闸的恢复
+// 交给它自己的滞回路径（`WAL.pruneReclaimed` → `maybeResumeBacklogLocked`）。
+func resumeAcquireRespectingGates(pipe *pipeline.Pipeline) error {
+	if pipe == nil {
+		return nil
+	}
+	if entry := pipe.Ledger().Get(pipe.Key()); entry != nil && entry.AcquirePaused &&
+		acquire.IsBacklogPauseReason(entry.PauseReason) {
+		return nil
+	}
+	return pipe.Ledger().ResumeAcquire(pipe.Key())
+}
+
 // unverifiedRawWriteFailure 是两阶段共用的**逐字**判据：未解决的 Raw 写失败缺口一律拒绝
 // （projection alone cannot resolve it）——原始正文没有落盘、投影里也没有，任何「已发布投影」
 // 都不能证明它存在过。措辞与改动前一致（既有回归按该措辞断言）。
@@ -814,7 +887,7 @@ func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pi
 		// 推进回收并按当前水位剪枝；失败不置死——下一轮自动重试。
 		_, _ = pipe.TryReclaim()
 	}
-	if err := pipe.Ledger().ResumeAcquire(pipe.Key()); err != nil {
+	if err := resumeAcquireRespectingGates(pipe); err != nil {
 		return err
 	}
 	return nil
@@ -896,7 +969,7 @@ func (m *Manager) ResolveCoveredGapsForSource(ctx context.Context, storageNamesp
 	}); err != nil {
 		return err
 	}
-	if err := pipe.Ledger().ResumeAcquire(pipe.Key()); err != nil {
+	if err := resumeAcquireRespectingGates(pipe); err != nil {
 		return err
 	}
 	return m.persist()
@@ -929,6 +1002,27 @@ func New(opts Options) (*Manager, error) {
 	}
 	// 生命周期 ctx：持久化的可取消面（Stop 取消）。只在 New 中赋值、之后不再改写 ⇒ 读不加锁。
 	m.lifecycleCtx, m.lifecycleCancel = context.WithCancel(context.Background())
+	m.replayBudget = replayBudgetOf(opts.ReplayBudget)
+	m.vlProbeTimeout = opts.VLReadyProbeTimeout
+	m.vlReadyWait = opts.VLReadyWait
+	if tuning := opts.ReplayTuning; tuning != nil {
+		if tuning.VLReadyProbeTimeout > 0 {
+			m.vlProbeTimeout = tuning.VLReadyProbeTimeout
+		}
+		if tuning.VLReadyWait > 0 {
+			m.vlReadyWait = tuning.VLReadyWait
+		}
+		if tuning.Budget.MaxDays > 0 || tuning.Budget.MaxDuration > 0 {
+			m.replayBudget = replayBudgetOf(tuning.Budget)
+		}
+	}
+	if m.vlProbeTimeout <= 0 {
+		m.vlProbeTimeout = defaultVLReadyProbeTimeout
+	}
+	if m.vlReadyWait <= 0 {
+		m.vlReadyWait = defaultVLReadyWait
+	}
+	m.vlNotReady = make(map[string]string)
 	m.defaultCharset = opts.DefaultCharset
 	m.defaultTimeZone = opts.DefaultTimeZone
 	// 节点级默认时区必须**运行期自证**（2026-10-02 真机复验：配了 local 却仍是 +8h，因为
@@ -1080,6 +1174,67 @@ func (m *Manager) startStartupRecovery(items []startupSource, background bool) e
 	return err
 }
 
+// replayBudgetOf 归一化重发预算（零值 → 默认）。
+func replayBudgetOf(budget ReplayBudget) ReplayBudget {
+	if budget.MaxDays <= 0 {
+		budget.MaxDays = defaultReplayMaxDaysPerRound
+	}
+	if budget.MaxDuration <= 0 {
+		budget.MaxDuration = defaultReplayMaxDuration
+	}
+	return budget
+}
+
+// ensureVLReady 在对账/重发之前探测该源的 VL 写入端是否就绪；不就绪即返回错误（调用方**不得**
+// 发起对账与重发，只能记错误等下一轮）。
+//
+// 日志策略：**只在状态变化时打一条**（就绪 → 未就绪、未就绪 → 就绪），否则每轮每源一条会把现场
+// 日志淹掉，而这类「反复未就绪」恰恰是排障时最需要看清的信号。
+func (m *Manager) ensureVLReady(ctx context.Context, source SourceConfig) error {
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	client, frozen, err := m.clientForSource(source)
+	if err != nil {
+		m.noteVLNotReady(key, err)
+		return err
+	}
+	if frozen {
+		err := fmt.Errorf("ingest: VL 写入端已冻结（cutover 进行中），不发起对账/重发")
+		m.noteVLNotReady(key, err)
+		return err
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, m.vlProbeTimeout)
+	defer cancel()
+	if err := client.Health(probeCtx); err != nil {
+		wrapped := fmt.Errorf("ingest: VL 未就绪（%s）: %w", err.Error(), err)
+		m.noteVLNotReady(key, wrapped)
+		return wrapped
+	}
+	m.noteVLReady(key)
+	return nil
+}
+
+func (m *Manager) noteVLNotReady(key string, err error) {
+	message := err.Error()
+	m.mu.Lock()
+	_, existed := m.vlNotReady[key]
+	m.vlNotReady[key] = message
+	m.mu.Unlock()
+	if !existed {
+		slog.Warn("VL 未就绪：本轮不发起对账/重发（等下一轮，避免必然失败的整窗重发）",
+			"source", key, "error", message)
+	}
+}
+
+func (m *Manager) noteVLReady(key string) {
+	m.mu.Lock()
+	_, existed := m.vlNotReady[key]
+	delete(m.vlNotReady, key)
+	m.mu.Unlock()
+	if existed {
+		slog.Info("VL 已就绪：恢复对账/重发", "source", key)
+	}
+}
+
 // StartupRecoveryStatus 返回启动恢复的后台进度（观测面；CP 的运维接口与排障据此判断
 // 「平台为什么还没就绪」）。
 func (m *Manager) StartupRecoveryStatus() startupRecoveryState {
@@ -1167,22 +1322,103 @@ func (m *Manager) runStartupRecovery(ctx context.Context, items []startupSource,
 		allReports = append(allReports, reports...)
 		// 增量可见：排障中途也能看到「对账已经跑了哪些源」。
 		m.recordReconcileReports(allReports)
+		// 重发按**天**切片推进（见 replayWindow）：一轮没做完的源留在这里，下一趟继续——
+		// 采集轮与其它的落库在趟与趟之间照常插进（每趟本身已有界且让路）。
+		type pendingReplay struct {
+			item   startupSource
+			report ReconcileReport
+			window *replayWindow
+			// vlWaitSince 记录「因 VL 未就绪而等待」的起点，用于给等待设上界。
+			vlWaitSince time.Time
+			// lastErr 是最近一次真实失败原因（用于「趟数/等待用尽」时如实报出原因，而不是一句
+			// 「趟数用尽」——现场排障靠的就是这句话）。
+			lastErr error
+		}
+		pending := make([]pendingReplay, 0, len(loaded))
 		for index, item := range loaded {
+			pending = append(pending, pendingReplay{item: item, report: reports[index]})
+		}
+		// 趟数与等待上界分开计：只有「本趟有进展」才消耗趟数预算；纯等待（VL 未就绪）按固定间隔
+		// 轮询，并受 defaultVLReadyWait 的墙钟上界约束——否则「等 VL 起来」会被趟数上限提前掐断，
+		// 而且记录下来的原因会退化成一句没用的「趟数用尽」✗。
+		passes := 0
+		waitStarted := time.Now()
+		for len(pending) > 0 {
 			if err := ctx.Err(); err != nil {
 				m.finishStartupRecovery()
 				return err
 			}
-			if err := m.applyStartupRecovery(item, reports[index]); err != nil {
-				if failFast {
-					m.finishStartupRecovery()
-					return fmt.Errorf("ingest: 启动恢复重发失败（源 %s）: %w", item.key, err)
+			if passes > maxStartupReplayPasses || time.Since(waitStarted) > m.vlReadyWait+time.Minute {
+				for _, entry := range pending {
+					cause := entry.lastErr
+					if cause == nil {
+						cause = fmt.Errorf("重发在 %d 趟内未完成", maxStartupReplayPasses)
+					}
+					m.noteStartupRecoveryFailure(entry.item.key,
+						fmt.Errorf("重发未完成（剩余天 %v）: %w", entry.window.days, cause))
 				}
-				m.noteStartupRecoveryFailure(item.key, err)
+				break
+			}
+			progressed := false
+			next := make([]pendingReplay, 0, len(pending))
+			for _, entry := range pending {
+				if err := ctx.Err(); err != nil {
+					m.finishStartupRecovery()
+					return err
+				}
+				daysBefore := 0
+				if entry.window != nil {
+					daysBefore = len(entry.window.days)
+				}
+				done, window, err := m.applyStartupRecovery(ctx, entry.item, entry.report, entry.window)
+				entry.window = window
+				if window != nil && len(window.days) < daysBefore {
+					progressed = true // 本趟至少完成了一天（真进展）
+				}
+				if err != nil {
+					entry.lastErr = err
+					// VL 未就绪不是「源恢复失败」：它是可等待的外部条件（现场触发因就是它），
+					// 在有界窗口内保留在 pending 里下趟再试；超出窗口才记失败。
+					if m.vlNotReadyFor(entry.item.key) {
+						if entry.vlWaitSince.IsZero() {
+							entry.vlWaitSince = time.Now()
+						}
+						if time.Since(entry.vlWaitSince) < m.vlReadyWait {
+							next = append(next, entry)
+							continue
+						}
+						// 等待窗口用尽：**仍不致命**（两种模式一致）——VL 未就绪是外部条件，
+						// 该源的缺失天会被运行期常驻对账重新发现并重发（见 reconcile_loop）；
+						// 就绪面 meanwhile 如实报 not-ready。把外部条件当「源恢复失败」去中断
+						// 整个启动恢复，正是 2026-10-02 现场把 worker 拖死的形态。
+						m.noteStartupRecoveryFailure(entry.item.key, err)
+						continue
+					}
+					if failFast {
+						m.finishStartupRecovery()
+						return fmt.Errorf("ingest: 启动恢复重发失败（源 %s）: %w", entry.item.key, err)
+					}
+					m.noteStartupRecoveryFailure(entry.item.key, err)
+					continue
+				}
+				entry.vlWaitSince = time.Time{}
+				if !done {
+					// 预算内没做完：已发布的天已完成，剩余天下一趟续跑（不推进回收责任）。
+					entry.lastErr = nil
+					next = append(next, entry)
+					continue
+				}
+				m.noteStartupRecoveryCompleted()
+			}
+			pending = next
+			if progressed {
+				passes++
+				// 让路：本趟已让出持久化门，这里再给采集轮一个完整的调度机会。
+				time.Sleep(persistStepYield)
 				continue
 			}
-			m.noteStartupRecoveryCompleted()
-			// 让路：恢复不追求独占，采集轮/登记的持久化在步间照常插进（每步本身已有界）。
-			time.Sleep(persistStepYield)
+			// 本趟零进展（典型：VL 未就绪）：按固定间隔轮询，把 CPU 让给采集轮，避免空转烧核。
+			time.Sleep(vlReadyRetryInterval)
 		}
 	}
 	m.finishStartupRecovery()
@@ -1213,6 +1449,26 @@ func (m *Manager) finishStartupRecovery() {
 
 // maxStartupRecoveryReasons 是有界原因条数（避免逐源刷屏；总量由 Failed 计数表达）。
 const maxStartupRecoveryReasons = 8
+
+// vlReadyRetryInterval 是「等 VL 就绪」时的轮询间隔（零进展的趟之间）。
+//
+// 为什么需要它：等待期间若只做 5ms 让路，等待窗口（defaultVLReadyWait）内的趟数会把 CPU 空烧
+// 掉（现场 2.67 核的形态之一）；固定 2s 间隔既让 CPU 让给采集轮，又能在 VL 起来后 2s 内接上。
+const vlReadyRetryInterval = 2 * time.Second
+
+// maxStartupReplayPasses 是单个源重发的最大推进趟数（每趟受 ReplayBudget 约束）。
+//
+// 它是有界性的最后一层保险：预算保证「每趟有限」，本常量保证「趟数有限」——否则一个永远做不完的
+// 超大源会把启动恢复的循环一直占着（而它每一趟都只是在等外部条件）。
+const maxStartupReplayPasses = 64
+
+// vlNotReadyFor 报告该源当前是否被判为「VL 未就绪」（由 ensureVLReady 维护，状态变化才打日志）。
+func (m *Manager) vlNotReadyFor(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, notReady := m.vlNotReady[key]
+	return notReady
+}
 
 func (m *Manager) recoverPendingSpools() error {
 	m.mu.Lock()

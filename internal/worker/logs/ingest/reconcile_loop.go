@@ -16,8 +16,11 @@ import (
 // 直接暴露它——只有把账本的「应有条数」与 VL 的「实有条数」再比一次才能发现。
 //
 // 设计约束（逐条对应验收）：
-//   - **不打扰投递主路径**：只读对账阶段不持投递相关锁；重发阶段持 cycleMu（与 pollOnce
-//     串行）——同一时刻只有一条路径在写 VL、推进水位与发布代次。
+//   - **不打扰投递主路径**：只读对账阶段不持投递相关锁；**重发阶段同样不持 cycleMu**
+//     （2026-10-03 收紧，见 replayMissingDays 的并发纪律）——它只在自己的短临界区（m.mu /
+//     publishMu / 账本锁）里推进代次与水位，VL 写入一律离锁，且全程受切片预算约束。
+//     此处曾写「重发阶段持 cycleMu」，但实现从未取过它（声明与实现分叉）；真按字面实现会把
+//     整节点采集串行在重发之后（现场 54 个未暂停源停摆 18+ 分钟）。
 //   - **复用既有重发机制**：判定逻辑与启动版同源（reconcileWithExpectation）；重发走
 //     eventsForDays + writeProjectionPlan（与 applyStartupRecovery 的缺失天分支同形），
 //     完成后走 resolveGapsLandedByDelivery（与投递成功路径同一出口，协同缺口自愈与
@@ -219,6 +222,12 @@ func (m *Manager) ReconcileRoundNow(ctx context.Context) ReconcileRoundResult {
 			result.Errors = appendReconcileError(result.Errors, "round_budget_exhausted")
 			break
 		}
+		// VL 未就绪：本轮不判、更不重发——「不可信查询不重发」的既有取舍同样适用于「端点不可用」，
+		// 而且把必然失败的重发挡在门外（2026-10-03 现场：worker 与 VL 同步重启时对账抢跑）。
+		if err := m.ensureVLReady(roundCtx, candidate.source); err != nil {
+			result.Errors = appendReconcileError(result.Errors, "vl_not_ready:"+candidate.key+":"+err.Error())
+			continue
+		}
 		expectation, err := m.canonicalDayCounts(candidate.key, candidate.source)
 		if err != nil {
 			result.Errors = appendReconcileError(result.Errors, "canonical_counts:"+err.Error())
@@ -379,8 +388,16 @@ func (m *Manager) canonicalDayCounts(key string, source SourceConfig) (reconcile
 //	→ resolveGapsLandedByDelivery（重发成功即消解被它覆盖的缺口，并登记 VerifiedRuns 区间凭据）
 //	→ releaseRecovery（把 WAL 回收责任推进到已发布投影；与投递成功路径同一出口）。
 //
-// **调用约束（红线）**：调用方必须持 cycleMu——本路径会写 VL、推进发布代次与段水位，
-// 必须与采集轮（pollOnce）串行。这也是「不打扰投递主路径」的实现方式：互斥而非并发。
+// **并发纪律（2026-10-03 收紧，取代此前那条「调用方必须持 cycleMu」的声明）**：
+// 此前这里写着「调用方必须持 cycleMu」，但 `ReconcileRoundNow` 从未取过它——声明与实现分叉，
+// 谁也拿不到它声称的互斥，而**真按字面实现会把整节点采集堵在重发之后**（现场：54 个未暂停源
+// 被串行在 330MB 重发之后）。现在的纪律是 E1 那条：**快照 → 离锁 → 短临界区**——
+//   - 重放的读取与 VL 写入（`canonicalRecoveryEvents` / `writeProjectionPlan` 的插入与校验）
+//     一律**不持** cycleMu（它们本来就不持：这条纪律只是把它写实）；
+//   - 只有代次推进、发布、账本/水位变更走各自既有的短临界区（`m.mu` / `publishMu` / 账本锁）；
+//   - 全程受**切片预算**约束（ReplayBudget）并可被 ctx 取消，故「与采集轮并发」是有界且让路的。
+//
+// 采集轮因此**不再被重发串行在身后**——这也是回归 `TestReplayDoesNotStallCollection` 钉住的性质。
 //
 // **与 deliveryTailPlan 三条约束的兼容性**：本路径不调用 deliver/planDeliveryTail，
 // 构造的 projectionWritePlan 恒有 Replace=true 且 Days 非空（plan.Tail 恒为 nil），
@@ -419,13 +436,41 @@ func (m *Manager) replayMissingDays(source SourceConfig, missingDays []string) e
 	saved.ProjectionGeneration = generation
 	m.state.Sources[key] = saved
 	m.mu.Unlock()
-	plan := projectionWritePlan{
-		Write:   writeEvents,
-		Replace: true,
-		Days:    sortUTCDays(missingDays),
+	// 按**天**切片推进（预算可配）：每天写完即发布该天；预算用尽的剩余天留给下一轮——下一轮
+	// 的对账会重新发现它们仍是缺失天（已发布的天条数已够，不会再被判缺失），因此**无需游标状态**，
+	// 天然可续且不重不漏。整窗完成前**不推进回收责任**（releaseRecovery 要求全窗口内容级保证）。
+	budget := m.replayBudget
+	startedAt := time.Now()
+	published := make([]string, 0, len(missingDays))
+	remaining := sortUTCDays(missingDays)
+	for len(remaining) > 0 {
+		if sent := len(published); sent >= budget.MaxDays || time.Since(startedAt) >= budget.MaxDuration {
+			slog.Info("常驻对账重发受切片预算约束提前收束（剩余天下一轮续跑）",
+				"source", key, "publishedDays", published, "remainingDays", remaining)
+			return nil
+		}
+		day := remaining[0]
+		if err := m.ensureVLReady(context.Background(), source); err != nil {
+			return fmt.Errorf("ingest: 常驻对账重发前 VL 未就绪（本轮不重发）: %w", err)
+		}
+		dayEvents, err := eventsForDays(source, events, []string{day})
+		if err != nil {
+			return err
+		}
+		if len(dayEvents) == 0 {
+			remaining = remaining[1:]
+			continue
+		}
+		plan := projectionWritePlan{Write: dayEvents, Replace: true, Days: []string{day}}
+		if _, err := m.writeProjectionPlan(source, events, generation, plan); err != nil {
+			return fmt.Errorf("ingest: 常驻对账重发失败: %w", err)
+		}
+		published = append(published, day)
+		remaining = remaining[1:]
 	}
-	if _, err := m.writeProjectionPlan(source, events, generation, plan); err != nil {
-		return fmt.Errorf("ingest: 常驻对账重发失败: %w", err)
+	if len(remaining) > 0 {
+		// 切片没做完：数据面已发布完成的天是确定的；回收责任留到整窗完成之后再推进。
+		return nil
 	}
 	m.resolveGapsLandedByDelivery(source, writeEvents)
 	if err := m.releaseRecovery(source, events); err != nil {
@@ -433,7 +478,7 @@ func (m *Manager) replayMissingDays(source SourceConfig, missingDays []string) e
 		slog.Warn("常驻对账重发后推进回收责任失败（下轮重试）", "source", key, "error", err)
 	}
 	slog.Info("常驻增量对账已重发缺失天",
-		"source", key, "days", sortUTCDays(missingDays), "events", len(writeEvents), "generation", generation)
+		"source", key, "days", published, "events", len(writeEvents), "generation", generation)
 	return nil
 }
 

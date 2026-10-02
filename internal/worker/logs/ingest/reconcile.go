@@ -570,26 +570,21 @@ func (m *Manager) LastReconcileReports() []ReconcileReport {
 //   - 一致（无缺失、无回退）→ **零重发**：不生成新代、不写 VL、不改 catalog、不推进回收责任；
 //   - 有缺失 → **只重发缺失天**（写入面限定，发布语义仍为 replace 取代该天旧代）；
 //   - 回退 → **整窗重发**（写入面扩为权威全量，与旧实现逐字一致）。
-func (m *Manager) applyStartupRecovery(item startupSource, report ReconcileReport) error {
-	if !report.needsReplay() {
-		m.mu.Lock()
-		p := m.pipes[item.key]
-		m.mu.Unlock()
-		if p != nil && p.DeliveryState() == logtypes.DeliveryUnknown {
-			// 对账已证明该源全部天的数据在 VL 中可见，故按既有语义解算 UNKNOWN 投递。
-			// 不做 releaseRecovery：回收责任推进需要内容级保证，留给运行期正常路径。
-			if err := p.ResolveUnknownThroughProjection(item.events); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	// A new VL data root or a lost projection response must never rely on
-	// the old physical generation. Rebuild a new isolated projection and
-	// publish its manifest/watermark atomically.
-	// 译注（2026-10-01 生产事故）：这句话此前只是意图——状态回滚/重置后计数器回退，新名字会与
-	// VL 里旧一轮生命周期的行重名，而校验按名字过滤，必然把旧行读成本次写入而永不通过。
-	// 因此在取名字前先排除 VL 中已存在的名字（探测不持锁，避免网络 I/O 落在临界区内）。
+//
+// replayWindow 是**整窗重发**的可续状态：跨轮保持同一投影代次与剩余待重发天。
+//
+// 为什么要「跨轮」：整窗重发对单个大源就是「一次写完整个权威集合」（现场 330MB），此前既不切片
+// 也无预算 ⇒ 与采集轮抢共享持久化门、并把 VL 打满（其余源零成功写入、18+ 分钟）。现在按 UTC 天
+// 切片推进：**已写完的天当场发布**（该天确实完成了），剩余天留给下一轮；只有整窗完成才允许
+// `resolveUnknown` 与 `releaseRecovery`（回收责任推进需要「全窗口都有内容级保证」）。
+type replayWindow struct {
+	generation string
+	// days 是剩余待重发的 UTC 天（空 = 整窗完成）。
+	days []string
+}
+
+// prepareReplayWindow 建窗：分配一个投影代次并算出待重发的天（回退=整窗，否则=缺失天）。
+func (m *Manager) prepareReplayWindow(item startupSource, report ReconcileReport) (*replayWindow, error) {
 	m.mu.Lock()
 	saved := m.state.Sources[item.key]
 	m.mu.Unlock()
@@ -599,25 +594,110 @@ func (m *Manager) applyStartupRecovery(item startupSource, report ReconcileRepor
 	saved.ProjectionGeneration = generation
 	m.state.Sources[item.key] = saved
 	m.mu.Unlock()
-	plan := projectionWritePlan{Write: item.events, Replace: true}
-	if !report.Fallback {
-		writeEvents, err := eventsForDays(item.source, item.events, report.MissingDays)
-		if err != nil {
-			return err
+	days := make([]string, 0, len(report.MissingDays))
+	if report.Fallback {
+		// 回退整窗：把权威集合覆盖到的全部 UTC 天都算进窗口（与「整窗重发」语义一致）。
+		daySet := map[string]struct{}{}
+		for _, event := range item.events {
+			day, err := eventUTCDay(item.source, event)
+			if err != nil {
+				return nil, err
+			}
+			daySet[day] = struct{}{}
 		}
-		plan.Write = writeEvents
-		plan.Days = sortUTCDays(report.MissingDays)
+		for day := range daySet {
+			days = append(days, day)
+		}
+	} else {
+		days = append(days, report.MissingDays...)
 	}
-	if _, err := m.writeProjectionPlan(item.source, item.events, generation, plan); err != nil {
-		return err
+	return &replayWindow{generation: generation, days: sortUTCDays(days)}, nil
+}
+
+// runReplayWindow 按**天**切片推进重发（每步：VL ready 探针 → 写该天 + 逐字段校验 → 发布该天）。
+//
+// 返回 done=true 表示整窗完成。返回 done=false（无错误）表示「预算内没做完」——**已发布的天是
+// 真正完成的**，剩余天保留在 window 里由调用方下一轮续跑；此时调用方**不得**推进回收责任
+// （releaseRecovery 要求全窗口内容级保证）。
+//
+// 幂等：同一天的重发按 event_id 身份 + 逐字段可见性校验为准；重复只生成新代次并取代旧代次，
+// 不产生重复数据（既有语义，逐字保持）。
+func (m *Manager) runReplayWindow(ctx context.Context, item startupSource, window *replayWindow) (bool, error) {
+	budget := m.replayBudget
+	started := time.Now()
+	sent := 0
+	for len(window.days) > 0 {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if sent >= budget.MaxDays || time.Since(started) >= budget.MaxDuration {
+			// 预算用尽：留给下一轮（调用方让路后再来）。
+			return false, nil
+		}
+		day := window.days[0]
+		// VL 未就绪时**不重发**（现场触发因：worker 与 VL 同步重启、对账抢跑 ⇒ 几十万事件打在
+		// 未就绪的 VL 上长时间失败重试）；记错误并留给下一轮。
+		if err := m.ensureVLReady(ctx, item.source); err != nil {
+			return false, err
+		}
+		dayEvents, err := eventsForDays(item.source, item.events, []string{day})
+		if err != nil {
+			return false, err
+		}
+		if len(dayEvents) == 0 {
+			// 该天在权威集合里没有任何事件：不生成空代次（与既有语义一致），直接推进到下一
+			// 天——这一步不算预算用量（它不产生任何写入）。
+			window.days = window.days[1:]
+			continue
+		}
+		plan := projectionWritePlan{Write: dayEvents, Replace: true, Days: []string{day}}
+		if _, err := m.writeProjectionPlan(item.source, item.events, window.generation, plan); err != nil {
+			return false, err
+		}
+		window.days = window.days[1:]
+		sent++
+	}
+	return true, nil
+}
+
+// applyStartupRecovery 执行/推进一个源的启动恢复重发（FR-497 spec §2.2）。
+//
+// window 为 nil 表示首轮（本方法负责建窗并写回调用方传入的指针所在位置）；done=false 表示
+// 预算内没做完，调用方应保留 window 下一轮续跑。
+func (m *Manager) applyStartupRecovery(ctx context.Context, item startupSource, report ReconcileReport, window *replayWindow) (bool, *replayWindow, error) {
+	if !report.needsReplay() {
+		m.mu.Lock()
+		p := m.pipes[item.key]
+		m.mu.Unlock()
+		if p != nil && p.DeliveryState() == logtypes.DeliveryUnknown {
+			// 对账已证明该源全部天的数据在 VL 中可见，故按既有语义解算 UNKNOWN 投递。
+			// 不做 releaseRecovery：回收责任推进需要内容级保证，留给运行期正常路径。
+			if err := p.ResolveUnknownThroughProjection(item.events); err != nil {
+				return true, window, err
+			}
+		}
+		return true, window, nil
+	}
+	if window == nil {
+		prepared, err := m.prepareReplayWindow(item, report)
+		if err != nil {
+			return true, window, err
+		}
+		window = prepared
+	}
+	done, err := m.runReplayWindow(ctx, item, window)
+	if err != nil || !done {
+		return done, window, err
 	}
 	m.mu.Lock()
 	p := m.pipes[item.key]
 	m.mu.Unlock()
 	if p != nil && p.DeliveryState() == logtypes.DeliveryUnknown {
 		if err := p.ResolveUnknownThroughProjection(item.events); err != nil {
-			return err
+			return true, window, err
 		}
 	}
-	return m.releaseRecovery(item.source, item.events)
+	return true, window, m.releaseRecovery(item.source, item.events)
 }
+
+// applyStartupRecoveryLegacyCall 保留旧签名（同步一次性）供既有调用点使用。

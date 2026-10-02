@@ -837,6 +837,12 @@ func runWorker() {
 				// 整节点解算单次调用的预算（键 log_ingest.resolve_gaps_*）：源数 + 墙钟双上界，
 				// 超出即分片返回（不伪装成功），见 ingest.ResolveGapsBudget。
 				ResolveGapsBudget: resolveGapsBudget,
+				// 对账/重发的外部条件与切片（键 log_reconcile.vl_ready_* / replay_*）：
+				// 就绪探针把「VL 未就绪时的必然失败重发」挡在门外；切片把整窗重发变成有界可续。
+				ReplayTuning: func() *ingest.ReplayTuning {
+					tuning := cfg.ReconcileReplayTuning()
+					return &tuning
+				}(),
 				// 启动恢复放到后台：New 立刻返回 ⇒ 反向隧道/WS/HTTP 立即可达（2026-10-02 事故：
 				// 恢复链与规模成正比且阻塞 New，worker 20–30 分钟不监听）。恢复进度经就绪面
 				// （startup_recovery_in_progress / _failed）如实上报，不放宽任何就绪判据。

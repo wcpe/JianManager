@@ -1057,3 +1057,8 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 修复
 - **E3（启动路径与规模成正比，压测现场：60 分钟不监听）**：启动恢复改后台驱动（`StartupRecoveryBackground`，生产开启 ⇒ `New` 只登记+恢复账本/段即返回、隧道立即可达）；落库引入**每周期总预算**（行数+耗时，步间让路、ctx 可取消、未完成不推进 persistedRev/Cover 防静默少行、天然续跑不重不漏）；**剪枝水位化**：10.6 万条逐行 DELETE → 每源一条谓词范围删除（既有索引、不新增），配等价性守门（期望集仍有匹配行即退回逐行）与镜像按归属刷新；就绪面诚实化（恢复了未完成/失败 → `startup_recovery_in_progress/_failed` + 逐源原因，不放宽任何判据）；`ApplyScopedCtx` ctx 贯穿。6 条变异转红；另修两个自伤点（周期预算须同时封顶单元行数、范围剪枝须计入提交循环条件）。
+
+### 修复
+- **D12（重发无界 + 无 VL 门禁）**：整窗重发改按天切片可续（`ReplayBudget{MaxDays=1,MaxDuration=90s}` 可配；整窗完成前不 releaseRecovery 不推水位；常驻对账重发现剩余天无需游标）；新增 `ensureVLReady` 门禁（探针带超时、状态变化才打日志、等待上界 90s 且不致命、2s 轮询不再烧核）接在启动恢复与常驻对账之前，未就绪记 `vl_not_ready` 等下一轮。
+- **D4（条目闸失效双因）**：`acquire.IsBacklogPauseReason` + `resumeAcquireRespectingGates` —— 解算/放弃裁定收尾不再越权清除积压闸（现场 113.9 万条直接成因）；`WAL.Restore` 后当场判闸（不再滞后到下次 Append）。
+- **纪律修正**：reconcile_loop 的"调用方必须持 cycleMu"未实现红线改写为真实纪律（快照→离锁 VL 写/校验→短临界区推进；**不引入 cycleMu**）。4 条变异转红；「重发期间采集不停」红证未达成、已在用例注释显式标注不得当作证据（如实）。

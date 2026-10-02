@@ -50,3 +50,40 @@ func TestTryReclaim_StillPrunesWhenLedgerDeclinesAdvance(t *testing.T) {
 	require.Empty(t, wal.Snapshot(),
 		"账本拒绝推进时仍须剪掉水位之下的条目：否则积压永不回落、源永久停在 paused")
 }
+
+// TestWALRestoreFiresBacklogGate（D4，2026-10-03 现场）：**恢复**持久积压之后必须当场按条目闸
+// 判定——索引里的持久积压可能早已越界，此时若只在 Append 里判，暂停会滞后到「下一次追加」才发生
+// （现场形态：内存积压早已越界，条目闸却迟迟不生效，实测到 113.9 万条才暂停）。
+//
+// 转红方式（实测）：去掉 WAL.Restore 里的 enforceBacklogLimitLocked 调用——恢复后源不会被暂停，
+// 本用例立刻变红。
+func TestWALRestoreFiresBacklogGate(t *testing.T) {
+	key := ledger.SourceKey{LogSourceID: "restore-gate", SourceGeneration: "g1"}
+	led := ledger.New()
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration, ParserVersion: "v1"})
+	wal := NewWAL(led, key)
+	wal.SetLimits(3, 0)
+
+	entries := make([]WALEntry, 0, 5)
+	for i := 0; i < 5; i++ {
+		end := uint64(10 + i*10)
+		entries = append(entries, WALEntry{
+			Seq: uint64(i + 1),
+			Event: logtypes.BuildEvent(
+				logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration, ParserVersion: "v1"},
+				logtypes.RecordRange{Start: end - 9, End: end},
+				"2026-09-22T01:00:00Z", "2026-09-22T01:00:01Z", "INFO", "stdout", "restored"),
+			Appended: true, Durable: true,
+		})
+	}
+	if err := wal.Restore(entries); err != nil {
+		t.Fatalf("恢复失败: %v", err)
+	}
+	entry := led.Get(key)
+	if entry == nil || !entry.AcquirePaused {
+		t.Fatalf("恢复越界积压后必须立即暂停该源（条目闸 %d 条，实测积压 %d）", 3, len(entries))
+	}
+	if !IsBacklogPauseReason(entry.PauseReason) {
+		t.Fatalf("暂停原因必须点名条目闸（供运维与调用方辨别，避免被越权清除）: %q", entry.PauseReason)
+	}
+}
