@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,7 +41,7 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	require.NoError(t, os.Remove(restarted.rawInstancePath(restarted.state.Instances["uuid-1"], "stdout")))
 	require.Error(t, restarted.AppendInstanceOutput("uuid-1", "stdout", []byte("not captured\n")))
 	require.False(t, restarted.CutoverReadiness().LedgerReady)
-	require.ErrorContains(t, restarted.ResolveCoveredGaps(), "projection alone cannot resolve")
+	require.ErrorContains(t, restarted.ResolveCoveredGaps(context.Background()), "projection alone cannot resolve")
 
 	// 显式人工确认路径（FR-485 后续）：自动路径对 Raw 写失败一律拒绝，
 	// 而**指名源**的解法应成功——这正是「自动拒绝 vs 管理员显式确认」的分工。
@@ -52,13 +53,13 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 		}
 	}
 	require.NotEmpty(t, stdoutKey, "夹具应含 stdout 源")
-	require.NoError(t, restarted.ResolveCoveredGapsForSource(stdoutKey, "test-operator"),
+	require.NoError(t, restarted.ResolveCoveredGapsForSource(context.Background(), stdoutKey, "test-operator"),
 		"显式人工确认应能解开 Raw 写失败缺口")
 	// 未知名与空名都要被明确拒绝，不能静默成功。
-	require.ErrorContains(t, restarted.ResolveCoveredGapsForSource("inst:9/stderr", "test-operator"), "not found")
-	require.ErrorContains(t, restarted.ResolveCoveredGapsForSource("", "test-operator"), "required")
+	require.ErrorContains(t, restarted.ResolveCoveredGapsForSource(context.Background(), "inst:9/stderr", "test-operator"), "not found")
+	require.ErrorContains(t, restarted.ResolveCoveredGapsForSource(context.Background(), "", "test-operator"), "required")
 	// 无操作人的放弃必须被拒绝：放弃不可无痕（否则等于给静默丢日志开后门）。
-	require.ErrorContains(t, restarted.ResolveCoveredGapsForSource(stdoutKey, ""), "操作人")
+	require.ErrorContains(t, restarted.ResolveCoveredGapsForSource(context.Background(), stdoutKey, ""), "操作人")
 }
 
 func TestInstanceFilePrimaryDoesNotDoubleCollectConsoleOutput(t *testing.T) {

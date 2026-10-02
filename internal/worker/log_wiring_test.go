@@ -160,3 +160,42 @@ func TestArchiveScanIntervalDefaultsOff(t *testing.T) {
 		t.Fatal("非法时长必须报错（静默回退会让「开了」变成隐性关闭）")
 	}
 }
+
+// TestResolveGapsBudgetWiringAndRejectsGarbage 钉住整节点解算预算（2026-10-02 缺陷修复）的配置面：
+// 默认零配置零行为变化（零值 → ingest 包默认 256 源 / 2m），合法值原样下发，
+// 非法值**启动即拒**（把「有界」配成 0/负数会让解算恒不可用，而现场只表现为「解缺口不生效」）。
+func TestResolveGapsBudgetWiringAndRejectsGarbage(t *testing.T) {
+	cfg := loadTestConfig(t)
+
+	budget, err := cfg.IngestResolveGapsBudget()
+	if err != nil {
+		t.Fatalf("默认值不应报错: %v", err)
+	}
+	if budget == nil || budget.MaxSources != 0 || budget.MaxDuration != 0 {
+		t.Fatalf("默认必须是零值（由 ingest 兜默认，零配置零行为变化），实测 %+v", budget)
+	}
+
+	cfg.LogIngest.ResolveGapsMaxSources = 8
+	cfg.LogIngest.ResolveGapsMaxDuration = "30s"
+	budget, err = cfg.IngestResolveGapsBudget()
+	if err != nil {
+		t.Fatalf("合法配置不应报错: %v", err)
+	}
+	if budget.MaxSources != 8 || budget.MaxDuration != 30*time.Second {
+		t.Fatalf("合法值必须原样下发，实测 %+v", budget)
+	}
+
+	cfg.LogIngest.ResolveGapsMaxSources = -1
+	if _, err := cfg.IngestResolveGapsBudget(); err == nil {
+		t.Fatal("负数源数预算必须启动即拒（静默回退会让「有界」变成隐性失效）")
+	}
+	cfg.LogIngest.ResolveGapsMaxSources = 0
+	cfg.LogIngest.ResolveGapsMaxDuration = "0s"
+	if _, err := cfg.IngestResolveGapsBudget(); err == nil {
+		t.Fatal("零时长必须启动即拒（那会让解算恒不可用）")
+	}
+	cfg.LogIngest.ResolveGapsMaxDuration = "两分钟"
+	if _, err := cfg.IngestResolveGapsBudget(); err == nil {
+		t.Fatal("非法时长必须报错（不得静默回退默认）")
+	}
+}

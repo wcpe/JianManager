@@ -265,7 +265,7 @@ func TestManagerPollPublishesCatalogAndRestoresState(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "operator review"))
 	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, positions.Reclaim, "TEST", "covered"))
-	require.NoError(t, m.ResolveCoveredGaps())
+	require.NoError(t, m.ResolveCoveredGaps(context.Background()))
 	resolvedEntry := pipe.Ledger().Get(pipe.Key())
 	require.False(t, resolvedEntry.AcquirePaused)
 	require.True(t, resolvedEntry.Gaps[0].Resolved)

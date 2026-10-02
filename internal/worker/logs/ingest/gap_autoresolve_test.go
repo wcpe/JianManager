@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -525,7 +526,7 @@ func TestSilentSourceExitIsMarkedAsNoCopy(t *testing.T) {
 	require.LessOrEqual(t, entry.Positions.Reclaim, entry.Positions.Durable)
 
 	// ③ 静默源出口：为「已全部投递、但无分段覆盖的尾部」补段并推进回收。
-	require.NoError(t, m.ResolveCoveredGaps())
+	require.NoError(t, m.ResolveCoveredGaps(context.Background()))
 	entry = pipe.Ledger().Get(pipe.Key())
 	require.Greater(t, entry.Positions.Reclaim, uint64(0))
 
