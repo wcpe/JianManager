@@ -1048,3 +1048,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 - **常驻增量对账 + 事件级状态（后续项③）**：`reconcile_loop`（周期 15m/单轮预算 45s/8 源每轮，可配可关；只读阶段不持锁、重发持 cycleMu 与采集串行；运行期不重发不可信查询=防风暴，启动版保持整窗重发；统计入 G10 面）；`event_status` 五态派生态视图（ABANDONED>VERIFIED>ACKED>SENT_UNACKED>UNSENT）+ 运行期接口与 **CLI `worker log-event-status`** 双出口（真二进制实跑非空 ✓）。
 - **放弃凭据持久化（授权修复）**：`Entry.Abandonments` 落 indexAux JSON（不动 schema），重启后查询标记与回收放行凭据不再丢失。
 - **proto 生成链口径（后续项②结案）**：真 protoc 29.3 对比实测"3 行注释偏差"不存在（仅 1 行生成器元信息差异），rawDesc md5 两侧一致、离线链产物逐字节相同；口径写入 scripts/proto-gen.sh。
+
+### 修复
+- **E1（整节点解算停摆，压测现场复现）**：`ResolveCoveredGaps` 改两阶段——快照（持 mu）→ **投影查询移出 cycleMu** → 短临界区以新鲜 entry 复核后才落变更（陈旧投影只会保守拒绝 ✓）；ctx 贯通至逐行可中止（超时/断开真停 ✓）；预算+轮转游标（默认 256 源/2m，可配，耗尽报明确错误不静默 ✓）；persist 移出临界区、新增 stopped 守卫（与 Stop 的新交错面 ✓）。3 条红证含"复刻旧形态整段持锁→采集停摆"用例 ✓。

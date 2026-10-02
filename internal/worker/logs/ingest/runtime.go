@@ -121,16 +121,39 @@ type Manager struct {
 	registerMu sync.Mutex
 	// pendingMu 串行化暂存写入与注册接管，避免绑定切换时发生乱序或重复回放。
 	pendingMu sync.Mutex
-	root      string
-	vl        *vlsup.Client
-	vlRoute   func(SourceConfig) (*vlsup.Client, bool, error)
-	cat       *catalog.Catalog
-	journal   catalog.Journal
-	archive   *archive.Registry
-	sources   map[string]SourceConfig
-	pipes     map[string]*pipeline.Pipeline
-	state     persistedState
-	statePath string
+	// resolveGapsBudget 是整节点解算（ResolveCoveredGaps）单次调用的预算（源数 + 墙钟）。
+	//
+	// 为什么需要（2026-10-02 压测现场实证）：解算此前对**全部源**做投影查询与账本变更且全程
+	// 持 cycleMu，一次调用就让整节点采集停摆（read_pos 冻结 30 分钟、source_wal 卡 560 万行、
+	// 索引 WAL 涨到 10.2 GB，HTTP 300s 超时后服务端仍继续持锁跑完）。锁纪律修正后剩下的风险
+	// 是「单次调用无界」——源数 × 单源投影查询（段扫描随源数据量增长，生产单源可达秒级）
+	// 没有任何上界。故遍历带上界，并把「没跑完」如实返回（不伪装成成功）。
+	resolveGapsBudget ResolveGapsBudget
+	// resolveGapsCursor 是下一次整节点解算的起始源下标（轮转）。
+	//
+	// 为什么需要游标而不是「每轮都从第一个源开始」：预算用尽后的重复调用必须能**继续**，
+	// 否则永远停在同一个前缀、后面的源再也不会被解算（等于把「有界」变成「永远解不完整」）。
+	// 游标只在**处理成功**一个源后前移，失败时停在出错的源上，便于修复后原地重试。
+	resolveGapsCursor int
+	// stopped 表示 Stop 已开始（索引句柄即将/已经关闭）。
+	//
+	// 为什么解算需要它：解算的变更段不再整段持有 cycleMu（见 resolveOneSourceGaps），于是
+	// 它可能在两个源之间与 Stop 交错——此时再 persist 会把已关闭的索引句柄重新打开且无人关闭
+	// （registerMu 注释里点名的同型形态）。停止后一律拒绝，而不是留下无人关闭的连接与 WAL 残留。
+	stopped bool
+	// resolveGapsStage 是解算的测试观测口（生产为 nil，零开销）：在**离锁**阶段按源回调，
+	// 让回归能把「解算进行中」钉在确定位置，从而断言采集轮照常推进（与既有的 stageSink 同型）。
+	resolveGapsStage func(string)
+	root             string
+	vl               *vlsup.Client
+	vlRoute          func(SourceConfig) (*vlsup.Client, bool, error)
+	cat              *catalog.Catalog
+	journal          catalog.Journal
+	archive          *archive.Registry
+	sources          map[string]SourceConfig
+	pipes            map[string]*pipeline.Pipeline
+	state            persistedState
+	statePath        string
 	// index 是采集索引的嵌入式 SQLite 存储（FR-496，spec §2.1）：persist 只写变更行，
 	// 启动时自动迁移旧 ingest.state.json（校验失败拒绝启动）。nil 表示尚未打开（
 	// 测试直接构造 Manager 的场景在首次 persist 时按需打开）。
@@ -331,6 +354,11 @@ type Options struct {
 	// log_ingest.multiline_unclosed_timeout）；0 表示用默认（normalize.DefaultUnclosedTimeout），
 	// 负值表示关闭强制冲刷。见 Pipeline.FlushStaleMultiline。
 	MultilineUnclosedTimeout time.Duration
+	// ResolveGapsBudget 是整节点解算（ResolveCoveredGaps）单次调用的预算（源数 + 墙钟），
+	// 键 log_ingest.resolve_gaps_max_sources / log_ingest.resolve_gaps_max_duration；
+	// nil 表示用默认（defaultResolveGapsMaxSources / defaultResolveGapsMaxDuration）。
+	// 见 ResolveGapsBudget 的缺陷说明。
+	ResolveGapsBudget *ResolveGapsBudget
 }
 
 type CutoverReadiness struct {
@@ -447,82 +475,285 @@ func (m *Manager) PrepareCutoverReadiness() CutoverReadiness {
 	return result
 }
 
-func (m *Manager) ResolveCoveredGaps() error {
+// ResolveGapsBudget 是整节点解算（ResolveCoveredGaps）单次调用的预算。
+//
+// 为什么必须有（2026-10-02 压测现场实证）：整节点路径不传 storageNamespace，会对**全部源**
+// 做投影查询与账本变更；此前它整段持 cycleMu（与采集轮同一把锁），于是一次调用即让整节点采集
+// 停摆（read_pos 冻结 30 分钟、source_wal 卡 560 万行、索引 WAL 涨到 10.2 GB），且 HTTP 300s
+// 超时后服务端仍继续持锁跑完（取消无效）。锁纪律修正（见 ResolveCoveredGaps）之后，剩下的
+// 风险是「单次调用无界」：源数 × 单源投影查询（段级扫描随源数据量增长，生产单源可达秒级）
+// 本身没有上界。故遍历带上界，并把「没跑完」如实返回——不伪装成功，也不静默继续。
+type ResolveGapsBudget struct {
+	// MaxSources 是单次调用最多处理的源数；≤0 用 defaultResolveGapsMaxSources。
+	MaxSources int
+	// MaxDuration 是单次调用的墙钟预算；≤0 用 defaultResolveGapsMaxDuration。
+	//
+	// 检查发生在**源与源之间**：单源内部不可中断（其可中断性由 ctx 承担，见
+	// publishedClosedForSourceCtx），故实际耗时可上浮「一个源」的时长。
+	MaxDuration time.Duration
+}
+
+const (
+	// defaultResolveGapsMaxSources 覆盖单节点常见规模（生产实测 60–75 源）且仍是硬上界：
+	// 超出即分片（见 resolveGapsCursor），而不是让一次调用跑到天荒地老。
+	defaultResolveGapsMaxSources = 256
+	// defaultResolveGapsMaxDuration 是兜底预算：主要服务于**没有 deadline 的调用方**
+	// （RPC 侧自有截止时间，ctx 会先到点）。取值远大于「256 源 × 单源投影查询」的期望耗时。
+	defaultResolveGapsMaxDuration = 2 * time.Minute
+)
+
+// DefaultResolveGapsMaxSources 返回默认的解算源数预算。
+//
+// 导出是为了让配置层（internal/worker/config.go 的错误消息与默认值）引用**同一个真源**，
+// 而不是各写一份数字——两份数字迟早不一致，且不一致时没有任何编译错误提示。
+func DefaultResolveGapsMaxSources() int { return defaultResolveGapsMaxSources }
+
+// DefaultResolveGapsMaxDuration 返回默认的解算墙钟预算（同上，唯一真源）。
+func DefaultResolveGapsMaxDuration() time.Duration { return defaultResolveGapsMaxDuration }
+
+// ErrResolveGapsBudgetExhausted 是「本次调用在预算内没跑完」的哨兵错误。
+//
+// 为什么用错误而不是「部分成功」：解算是运维显式动作，调用方必须能区分「全部解完」与
+// 「只解了前 N 个源，剩下的还没碰」。返回错误并把续跑方式写进消息，方可执行。
+var ErrResolveGapsBudgetExhausted = errors.New("ingest: 全源解算预算用尽")
+
+// ResolveGapsBudgetExhaustedError 说明预算用尽时的进度与续跑方式。
+type ResolveGapsBudgetExhaustedError struct {
+	Processed   int
+	Total       int
+	MaxSources  int
+	MaxDuration time.Duration
+	// Cursor 是下一次调用将从此下标（排序后的源键序）继续的位置。
+	Cursor int
+}
+
+func (e *ResolveGapsBudgetExhaustedError) Error() string {
+	return fmt.Sprintf("ingest: 全源解算预算用尽（本轮处理 %d/%d 源，预算 %d 源 / %s，下一次将从第 %d 个源继续）；再次调用同一接口即可续跑",
+		e.Processed, e.Total, e.MaxSources, e.MaxDuration, e.Cursor)
+}
+
+// Unwrap 让调用方可用 errors.Is(err, ErrResolveGapsBudgetExhausted) 判定（如「稍后再调」重试）。
+func (e *ResolveGapsBudgetExhaustedError) Unwrap() error { return ErrResolveGapsBudgetExhausted }
+
+// resolveGapsBudgetOfOpts 归一化 Options 传入的预算指针（nil → 零值，由 resolveGapsBudgetOf 兜默认）。
+//
+// 复制而非共享指针：配置对象在装配层可能被复用，Manager 不得持有外部可变状态。
+func resolveGapsBudgetOfOpts(opt *ResolveGapsBudget) ResolveGapsBudget {
+	if opt == nil {
+		return ResolveGapsBudget{}
+	}
+	return *opt
+}
+
+// resolveGapsBudgetOf 返回归一化后的解算预算（零值 → 默认）。
+func (m *Manager) resolveGapsBudgetOf() ResolveGapsBudget {
+	budget := m.resolveGapsBudget
+	if budget.MaxSources <= 0 {
+		budget.MaxSources = defaultResolveGapsMaxSources
+	}
+	if budget.MaxDuration <= 0 {
+		budget.MaxDuration = defaultResolveGapsMaxDuration
+	}
+	return budget
+}
+
+// ResolveCoveredGaps 解算全部源的「已覆盖缺口」（整节点自动路径）。
+//
+// 并发纪律（2026-10-02 生产缺陷修复，与 FR-499「登记路径与长临界区解耦」同款）：
+//
+//	此前：cycleMu 全程持有 → 逐源投影查询（段级扫描）压在锁上 → 一次调用 = 整节点采集停摆，
+//	      且调用方超时/断开后服务端无从得知，继续持锁跑完（取消无效）。
+//	现在：①m.mu 下快照源集合（短）；②逐源在**离锁**状态下做投影查询（成本的大头）；
+//	      ③仅对「必须与采集轮串行」的账本变更取 cycleMu（每源一段短临界区，源与源之间
+//	      允许采集轮推进）。判据一字未改，见 resolveOneSourceGaps 的两阶段说明。
+//
+// ctx 贯穿遍历与投影查询：调用方（HTTP/RPC）超时或断开 → 服务端工作即时停止并返回明确错误，
+// 绝不静默继续。全源遍历带预算（源数 + 墙钟，可配：Options.ResolveGapsBudget），
+// 超出预算返回 ResolveGapsBudgetExhaustedError（含续跑游标），单次调用不会无界跑。
+func (m *Manager) ResolveCoveredGaps(ctx context.Context) error {
 	if m == nil {
 		return fmt.Errorf("ingest: manager unavailable")
 	}
-	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	m.mu.Lock()
+	keys := make([]string, 0, len(m.pipes))
 	pipes := make(map[string]*pipeline.Pipeline, len(m.pipes))
-	sources := make(map[string]SourceConfig, len(m.sources))
+	sources := make(map[string]SourceConfig, len(m.pipes))
 	for key, pipe := range m.pipes {
+		keys = append(keys, key)
 		pipes[key] = pipe
 		sources[key] = m.sources[key]
 	}
+	start := m.resolveGapsCursor
+	stopped := m.stopped
 	m.mu.Unlock()
-	for key, pipe := range pipes {
-		entry := pipe.Ledger().Get(pipe.Key())
-		if entry == nil {
-			return fmt.Errorf("ingest: source %s ledger missing", key)
+	if stopped {
+		return fmt.Errorf("ingest: manager 已停止，拒绝解算（停止后不得再写账本或重开索引句柄）")
+	}
+	// 源键排序 + 轮转游标：遍历顺序确定（原实现按 map 随机序），且预算用尽后的重复调用
+	// 从断点继续，而不是每轮都停在同一个前缀（否则「有界」会退化成「永远解不完整」）。
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return m.persist()
+	}
+	if start < 0 || start >= len(keys) {
+		start = 0
+	}
+	budget := m.resolveGapsBudgetOf()
+	deadline := time.Now().Add(budget.MaxDuration)
+	processed := 0
+	for i := 0; i < len(keys); i++ {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("ingest: 全源解算被取消（本轮已处理 %d/%d 源）: %w", processed, len(keys), err)
 		}
-		for _, gap := range entry.Gaps {
-			if !gap.Resolved && gap.Reason == "STDIO_RAW_WRITE_FAILED" {
-				return fmt.Errorf("ingest: source %s has an unverified Raw write failure; projection alone cannot resolve it", key)
+		if processed >= budget.MaxSources || time.Now().After(deadline) {
+			return &ResolveGapsBudgetExhaustedError{
+				Processed: processed, Total: len(keys), MaxSources: budget.MaxSources,
+				MaxDuration: budget.MaxDuration, Cursor: (start + i) % len(keys),
 			}
 		}
-		source := sources[key]
+		key := keys[(start+i)%len(keys)]
+		if err := m.resolveOneSourceGaps(ctx, key, pipes[key], sources[key]); err != nil {
+			return err
+		}
+		processed++
 		m.mu.Lock()
-		saved := m.state.Sources[key]
+		m.resolveGapsCursor = (start + i + 1) % len(keys)
 		m.mu.Unlock()
-		closed, complete := m.publishedClosedForSource(source, saved)
-		if !complete {
-			return fmt.Errorf("ingest: source %s has no complete published projection", key)
-		}
-		if closed < entry.Positions.Durable || entry.Positions.Reclaim < entry.Positions.Durable {
-			return fmt.Errorf("ingest: source %s recovery coverage is behind durable position", key)
-		}
-		if _, err := pipe.Ledger().ResolveGapsThrough(pipe.Key(), closed, "verified published projection"); err != nil {
-			return err
-		}
-		// 静默源出口（2026-09-30 生产实证）：为「已全部投递、但无分段覆盖的尾部」补一段显式覆盖。
-		//
-		// 为何需要：建段只发生在 releaseRecovery（有新批次投递时）——而**静默流**（如某实例的
-		// stderr，自 09-27 起再无新行）永远不会有新批次 → 尾部永远无段可依 → 回收停滞 → 积压不落 →
-		// 源反复被暂停，且 read 已被夹到水位、自己永远走不出去。
-		//
-		// 安全性：仅当尾部**已全部确认投递**（delivery >= read）时才补段 —— 覆盖的是「已证明安全
-		// 另存」的区间，不存在任何未投递数据被跳过；条件不满足则一律不动。
-		//
-		// 「无副本」标记（复审 P2-13）：这一段**没有任何物理副本**（路径不是文件、也不是
-		// project://<代次>），此前却写 `manual://admin-confirmed` 并登记 `NEXT_COPY_VERIFIED`——
-		// 前者看着像「管理员确认过某个已验证副本」，后者字面就是「下一份副本已验证」，
-		// 于是状态链把「无副本」包装成了「已验证副本」，事后审计分不清这段到底有没有副本。
-		// 现在如实标注：路径带 no-copy 标记，释放依据用 PROJECTION_BACKED（本段成立的前提正是
-		// 「整段已投递并被逐字段校验」→ 已发布投影就是它的凭据），接收者显式说明无副本。
-		if d := entry.Positions.Delivery; d >= entry.Positions.Read && entry.Positions.Read > entry.Positions.Reclaim {
-			segID := fmt.Sprintf("manual-recovery-%d-%d", entry.Positions.Reclaim, entry.Positions.Read)
-			if _, exists := pipe.RecoveryRef(segID); !exists {
-				if err := pipe.BindRecoverySegment(segID, silentExitNoCopyPath, entry.Positions.Reclaim, entry.Positions.Read); err != nil {
-					return err
-				}
-			}
-			// 走完责任转移链，使 CanReclaim 放行（与 releaseRecovery 的状态机同构）。
-			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", "")
-			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", silentExitNoCopyReceiver)
-			// 释放依据必须与事实一致：没有第二份副本，凭据是「已发布投影 + 逐字段校验」。
-			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryReleased, logtypes.ReleaseProjectionBacked, silentExitNoCopyReceiver)
-			// CLEANED 不登记新依据（账本契约：清理沿用已登记证明）；此处**不要**再传一次 reason，
-			// 否则会把 RELEASED 阶段的依据覆盖成调用点写的值，「这段到底凭什么被释放」当场失真。
-			_ = pipe.TransitionRecovery(segID, logtypes.RecoveryCleaned, "", "")
-			// 推进回收并按当前水位剪枝；失败不置死——下一轮自动重试。
-			_, _ = pipe.TryReclaim()
-		}
-		if err := pipe.Ledger().ResumeAcquire(pipe.Key()); err != nil {
-			return err
-		}
 	}
 	return m.persist()
+}
+
+// unverifiedRawWriteFailure 是两阶段共用的**逐字**判据：未解决的 Raw 写失败缺口一律拒绝
+// （projection alone cannot resolve it）——原始正文没有落盘、投影里也没有，任何「已发布投影」
+// 都不能证明它存在过。措辞与改动前一致（既有回归按该措辞断言）。
+func unverifiedRawWriteFailure(key string, entry *ledger.Entry) error {
+	for _, gap := range entry.Gaps {
+		if !gap.Resolved && gap.Reason == "STDIO_RAW_WRITE_FAILED" {
+			return fmt.Errorf("ingest: source %s has an unverified Raw write failure; projection alone cannot resolve it", key)
+		}
+	}
+	return nil
+}
+
+// resolveOneSourceGaps 解指名源的缺口，分两阶段：
+//
+//   - 阶段 A（**不持** cycleMu）：测试观测口 → 账本快照 → 判据（Raw 写失败原因、投影完整性、
+//     覆盖水位）→ 已发布投影查询（publishedClosedForSourceCtx，成本大头，ctx 可中断）。
+//     该读路径在锁外执行**不是新引入的并发形态**：CutoverReadiness（CP 侧预备切换的就绪探测）
+//     一直在不持 cycleMu 的情况下走同一条 publishedClosedForSource（账本快照 + 投影读），
+//     本方法的阶段 A 与它同类，只是多了一步「随后在短临界区内复核」。
+//   - 阶段 B（cycleMu **短临界区**）：用新鲜账本**逐字复核同一判据**后落变更
+//     （ResolveGapsThrough / 静默源补段 / ResumeAcquire），随即释放锁。
+//
+// 为什么阶段 B 必须复核：A 与 B 之间采集轮可能推进真值（Durable 前移、新缺口出现）。复核只可能
+// 让「投影已不足覆盖」的源**保守拒绝**（返回与旧实现同款的错误，运维重试即可），绝不会拿陈旧
+// 证据去解一个已经不该解的缺口。反之，`closed` 取自 A 的已发布水位是**单调**证据：B 中它只会
+// 显得更保守（ResolveGapsThrough(closed) 至多覆盖到该水位，不会越过）。
+func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pipeline.Pipeline, source SourceConfig) error {
+	if pipe == nil {
+		return fmt.Errorf("ingest: source %s pipeline missing", key)
+	}
+	if m.resolveGapsStage != nil {
+		// 测试观测口（生产 nil，零开销）：回调发生在离锁阶段的最前，回归据此把「解算进行中」
+		// 钉在确定位置，进而断言采集轮照常推进。
+		m.resolveGapsStage(key)
+	}
+	// 阶段 A：离锁的判据 + 投影查询。
+	entry := pipe.Ledger().Get(pipe.Key())
+	if entry == nil {
+		return fmt.Errorf("ingest: source %s ledger missing", key)
+	}
+	if err := unverifiedRawWriteFailure(key, entry); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	saved := m.state.Sources[key]
+	m.mu.Unlock()
+	closed, complete, err := m.publishedClosedForSourceCtx(ctx, source, saved)
+	if err != nil {
+		// ctx 取消/超时或投影读取失败：明确失败（不得静默继续，也不得用半份证据解缺口）。
+		return err
+	}
+	if !complete {
+		return fmt.Errorf("ingest: source %s has no complete published projection", key)
+	}
+	if closed < entry.Positions.Durable || entry.Positions.Reclaim < entry.Positions.Durable {
+		return fmt.Errorf("ingest: source %s recovery coverage is behind durable position", key)
+	}
+
+	// 阶段 B：与采集轮串行的最小窗口。
+	//
+	// 锁序：cycleMu → mu（见 cycleMu 注释的完整锁序）。
+	// 最坏持有量：**单源变更段**——账本判据复核 + ResolveGapsThrough + 静默源补段（内存状态机）
+	// + ResumeAcquire，不含任何投影查询、网络往返或持久化（persist 在调用方、锁外执行）。
+	// 量化口径与 FR-499 一致：直接测「被它挡住的那件事」的时长，不用 TryLock 探锁（饥饿模式下
+	// 锁空闲也返回 false）。回归 TestResolveCoveredGapsLockHoldIsBoundedPerSource 实测：
+	// 解算总时长 372ms 的同一时段内，采集轮最坏单轮仅 1.37ms ⇒ 争用上界为毫秒级，
+	// 与解算总时长（源数 × 单源投影查询）彻底解耦。
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("ingest: 全源解算被取消: %w", err)
+	}
+	m.mu.Lock()
+	stopped := m.stopped
+	m.mu.Unlock()
+	if stopped {
+		return fmt.Errorf("ingest: manager 已停止，拒绝解算（停止后不得再写账本或重开索引句柄）")
+	}
+	entry = pipe.Ledger().Get(pipe.Key())
+	if entry == nil {
+		return fmt.Errorf("ingest: source %s ledger missing", key)
+	}
+	if err := unverifiedRawWriteFailure(key, entry); err != nil {
+		return err
+	}
+	if closed < entry.Positions.Durable || entry.Positions.Reclaim < entry.Positions.Durable {
+		return fmt.Errorf("ingest: source %s recovery coverage is behind durable position", key)
+	}
+	if _, err := pipe.Ledger().ResolveGapsThrough(pipe.Key(), closed, "verified published projection"); err != nil {
+		return err
+	}
+	// 静默源出口（2026-09-30 生产实证）：为「已全部投递、但无分段覆盖的尾部」补一段显式覆盖。
+	//
+	// 为何需要：建段只发生在 releaseRecovery（有新批次投递时）——而**静默流**（如某实例的
+	// stderr，自 09-27 起再无新行）永远不会有新批次 → 尾部永远无段可依 → 回收停滞 → 积压不落 →
+	// 源反复被暂停，且 read 已被夹到水位、自己永远走不出去。
+	//
+	// 安全性：仅当尾部**已全部确认投递**（delivery >= read）时才补段 —— 覆盖的是「已证明安全
+	// 另存」的区间，不存在任何未投递数据被跳过；条件不满足则一律不动。
+	//
+	// 「无副本」标记（复审 P2-13）：这一段**没有任何物理副本**（路径不是文件、也不是
+	// project://<代次>），此前却写 `manual://admin-confirmed` 并登记 `NEXT_COPY_VERIFIED`——
+	// 前者看着像「管理员确认过某个已验证副本」，后者字面就是「下一份副本已验证」，
+	// 于是状态链把「无副本」包装成了「已验证副本」，事后审计分不清这段到底有没有副本。
+	// 现在如实标注：路径带 no-copy 标记，释放依据用 PROJECTION_BACKED（本段成立的前提正是
+	// 「整段已投递并被逐字段校验」→ 已发布投影就是它的凭据），接收者显式说明无副本。
+	if d := entry.Positions.Delivery; d >= entry.Positions.Read && entry.Positions.Read > entry.Positions.Reclaim {
+		segID := fmt.Sprintf("manual-recovery-%d-%d", entry.Positions.Reclaim, entry.Positions.Read)
+		if _, exists := pipe.RecoveryRef(segID); !exists {
+			if err := pipe.BindRecoverySegment(segID, silentExitNoCopyPath, entry.Positions.Reclaim, entry.Positions.Read); err != nil {
+				return err
+			}
+		}
+		// 走完责任转移链，使 CanReclaim 放行（与 releaseRecovery 的状态机同构）。
+		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", "")
+		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", silentExitNoCopyReceiver)
+		// 释放依据必须与事实一致：没有第二份副本，凭据是「已发布投影 + 逐字段校验」。
+		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryReleased, logtypes.ReleaseProjectionBacked, silentExitNoCopyReceiver)
+		// CLEANED 不登记新依据（账本契约：清理沿用已登记证明）；此处**不要**再传一次 reason，
+		// 否则会把 RELEASED 阶段的依据覆盖成调用点写的值，「这段到底凭什么被释放」当场失真。
+		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryCleaned, "", "")
+		// 推进回收并按当前水位剪枝；失败不置死——下一轮自动重试。
+		_, _ = pipe.TryReclaim()
+	}
+	if err := pipe.Ledger().ResumeAcquire(pipe.Key()); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ResolveCoveredGapsForSource 是「显式人工确认」路径：只解指名源的缺口。
@@ -540,9 +771,16 @@ func (m *Manager) ResolveCoveredGaps() error {
 //   - **操作人为空一律拒绝**（放弃不可无痕）。操作人由调用方（gRPC 层）从认证上下文取。
 //
 // 其它源一概不动。default-deny 判据不受影响：自动路径仍按原因排除，本方法只影响指名源。
-func (m *Manager) ResolveCoveredGapsForSource(storageNamespace, operator string) error {
+//
+// ctx 语义（2026-10-02 与整节点路径同批修正）：调用方（HTTP/RPC）超时或断开时**不得**把放弃
+// 裁定落盘——放弃是唯一允许回收链跨过永久空洞的动作，必须来自一次完整、未被取消的显式请求。
+// 故入口与临界区内各校验一次，取消即返回明确错误（不写账本、不恢复采集）。
+func (m *Manager) ResolveCoveredGapsForSource(ctx context.Context, storageNamespace, operator string) error {
 	if m == nil {
 		return fmt.Errorf("ingest: manager unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if storageNamespace == "" {
 		return fmt.Errorf("ingest: storage namespace is required")
@@ -552,11 +790,22 @@ func (m *Manager) ResolveCoveredGapsForSource(storageNamespace, operator string)
 		// 无痕放弃等于给静默丢日志开后门。
 		return fmt.Errorf("ingest: 放弃缺口必须携带操作人（认证主体为空时拒绝执行）")
 	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("ingest: 放弃裁定被取消（未写入任何变更）: %w", err)
+	}
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
 	m.mu.Lock()
+	stopped := m.stopped
 	pipe := m.pipes[storageNamespace]
 	m.mu.Unlock()
+	if stopped {
+		return fmt.Errorf("ingest: manager 已停止，拒绝放弃裁定（停止后不得再写账本或重开索引句柄）")
+	}
+	// 临界区内再校验一次：等锁期间调用方可能已取消——此时不得留下「无人认领的放弃」。
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("ingest: 放弃裁定被取消（未写入任何变更）: %w", err)
+	}
 	if pipe == nil {
 		return fmt.Errorf("ingest: source %s not found", storageNamespace)
 	}
@@ -605,6 +854,7 @@ func New(opts Options) (*Manager, error) {
 		verificationTimeout:      opts.VerificationTimeout,
 		capacityProvider:         opts.CapacityProvider,
 		recoveryHold:             opts.RecoveryHold,
+		resolveGapsBudget:        resolveGapsBudgetOfOpts(opts.ResolveGapsBudget),
 		reconcile:                reconcileConfigOf(opts.Reconcile),
 		reconcileLoop:            reconcileLoopConfigOf(opts.ReconcileLoop),
 		indexPrune:               indexPruneConfigOf(opts.IndexPrune),
@@ -1001,6 +1251,10 @@ func (m *Manager) Stop() error {
 	m.registerMu.Lock()
 	defer m.registerMu.Unlock()
 	m.mu.Lock()
+	// 停止标记：解算的变更段是**每源一段短临界区**（见 resolveOneSourceGaps），因此它可能在
+	// 两个源之间与 Stop 交错——若放任其在 CloseIndex 之后 persist，会把已关闭的索引句柄重新
+	// 打开且无人关闭（留下 WAL 残留），与 registerMu 注释里点名的形态同型。停止后一律拒绝。
+	m.stopped = true
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
 	for _, p := range m.pipes {
 		pipes = append(pipes, p)
@@ -2432,27 +2686,54 @@ func groupEventsByUTCDay(source SourceConfig, events []logtypes.Event) (map[stri
 //
 // 事件体在磁盘段时按日聚合最大末端位置（流式，不载入全量事件）；旧格式仍用内联切片。
 func (m *Manager) publishedClosedForSource(source SourceConfig, saved persistedSource) (uint64, bool) {
+	// ctx 形态是**唯一实现**（见 publishedClosedForSourceCtx）：此处传 Background，保持既有签名
+	// 与语义（既有调用点逐字不变）。投影读取失败在无 ctx 语义下仍表现为「不完整」。
+	closed, complete, _ := m.publishedClosedForSourceCtx(context.Background(), source, saved)
+	return closed, complete
+}
+
+// publishedClosedForSourceCtx 是可取消形态：ctx 在源内聚合的逐行回调处生效（Iterate 逐行回调，
+// 故取消能即时中止段扫描，不必等整源读完），并在内联事件路径的每条事件前校验。
+//
+// 为什么必须可取消（2026-10-02 压测现场）：单源投影查询要扫该源的全部磁盘事件段（生产单源段
+// 达数十万行、全库 18GB），一次整节点解算 = 75 次这样的扫描。此前它压在 cycleMu 上且不可取消；
+// 现在它离锁执行，但**仍必须能被打断**——否则 HTTP 300s 超时之后，服务端还会继续为一份没人
+// 再等的响应扫下去。
+func (m *Manager) publishedClosedForSourceCtx(ctx context.Context, source SourceConfig, saved persistedSource) (uint64, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	dayMaxEnd := map[string]uint64{}
 	if saved.EventsStored && m.events != nil {
 		key := source.LogSourceID + "/" + source.SourceGeneration
-		agg, err := m.events.DayMaxEnd(key, func(ev logtypes.Event) (string, error) {
+		agg, err := m.events.DayMaxEndCtx(ctx, key, func(ev logtypes.Event) (string, error) {
 			return eventUTCDay(source, ev)
 		})
 		if err != nil {
-			return 0, false
+			return 0, false, err
 		}
 		dayMaxEnd = agg
 	} else {
 		for _, event := range saved.Events {
+			if err := ctx.Err(); err != nil {
+				return 0, false, err
+			}
 			day, err := eventUTCDay(source, event)
 			if err != nil {
-				return 0, false
+				return 0, false, err
 			}
 			if event.Record.End > dayMaxEnd[day] {
 				dayMaxEnd[day] = event.Record.End
 			}
 		}
 	}
+	closed, complete := m.publishedClosedFromDayMax(source, dayMaxEnd)
+	return closed, complete, nil
+}
+
+// publishedClosedFromDayMax 是「按日最大末端 + 已发布投影」推导保守封闭前缀的纯计算部分
+// （与改动前的实现逐字相同，只是从 publishedClosedForSource 中抽出以便 ctx 形态复用）。
+func (m *Manager) publishedClosedFromDayMax(source SourceConfig, dayMaxEnd map[string]uint64) (uint64, bool) {
 	days := make([]string, 0, len(dayMaxEnd))
 	for day := range dayMaxEnd {
 		days = append(days, day)

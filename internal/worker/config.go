@@ -579,6 +579,19 @@ type LogIngestConfig struct {
 	// 一份周期性目录扫描与账本写入——收益不明显而成本确定，故由配置显式打开。
 	// 手动入口不受本开关影响（gRPC LogImportArchives 始终可用）。
 	ArchiveScanInterval string `mapstructure:"archive_scan_interval"`
+	// ResolveGapsMaxSources 是整节点解算（POST /nodes/:id/log-runtime/ingest/resolve-gaps
+	// 不传 storageNamespace 的路径）单次调用最多处理的源数（键 log_ingest.resolve_gaps_max_sources）。
+	// 0 或空表示用默认（ingest.defaultResolveGapsMaxSources = 256）。
+	//
+	// 为什么需要它（2026-10-02 压测现场）：该路径此前对全部源做投影查询且**整段持采集轮锁**，
+	// 一次调用即让整节点采集停摆 30 分钟（read_pos 冻结、索引 WAL 涨到 10.2 GB），且调用方
+	// 超时后服务端仍继续跑。锁纪律已修（解算不再跨投影查询持锁、ctx 可取消），本条配置是
+	// 「有界」那一半：遍历必须有上界，超出即分片并由调用方续跑（见 ResolveGapsBudget）。
+	ResolveGapsMaxSources int `mapstructure:"resolve_gaps_max_sources"`
+	// ResolveGapsMaxDuration 是同一次调用的墙钟预算（键 log_ingest.resolve_gaps_max_duration，
+	// 如 "2m"）。空串表示用默认（ingest.defaultResolveGapsMaxDuration）。
+	// 它服务于**没有 deadline 的调用方**（RPC/HTTP 侧自有截止时间，ctx 会先到点）。
+	ResolveGapsMaxDuration string `mapstructure:"resolve_gaps_max_duration"`
 }
 
 // LogSamplingConfig 采集侧采样与降级策略的配置面（键 `log_ingest.sampling.*`）。
@@ -921,6 +934,33 @@ func (c *Config) IngestMultilineUnclosedTimeout() (time.Duration, error) {
 	return d, nil
 }
 
+// IngestResolveGapsBudget 把 `log_ingest.resolve_gaps_*` 收敛为 ingest 的预算配置面。
+//
+// 口径：源数 ≤0 或 duration 空串 ⇒ 用默认（零配置零行为变化）；duration 非空必须是合法
+// duration 且 >0（配 0/负值是「我不想让它跑」的错误表达方式——那会让解算恒不可用，
+// 而接口上没有任何线索说明原因，故启动即拒并把合法写法写进错误消息）。
+func (c *Config) IngestResolveGapsBudget() (*ingest.ResolveGapsBudget, error) {
+	if c == nil {
+		return nil, nil
+	}
+	budget := &ingest.ResolveGapsBudget{MaxSources: c.LogIngest.ResolveGapsMaxSources}
+	if budget.MaxSources < 0 {
+		return nil, fmt.Errorf("log_ingest.resolve_gaps_max_sources 非法: %d（应为正整数，或 0/空表示用默认 %d）",
+			budget.MaxSources, ingest.DefaultResolveGapsMaxSources())
+	}
+	raw := strings.TrimSpace(c.LogIngest.ResolveGapsMaxDuration)
+	if raw == "" {
+		return budget, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return nil, fmt.Errorf("log_ingest.resolve_gaps_max_duration 非法: %q（应为正时长如 30s/2m；空表示用默认 %s）",
+			raw, ingest.DefaultResolveGapsMaxDuration())
+	}
+	budget.MaxDuration = d
+	return budget, nil
+}
+
 // LogArchiveConfig 是 Worker Deep Archive 的受管对象存储配置。
 // SecretKey 只允许由环境变量注入，禁止写入 worker.yml 或诊断快照。
 type LogArchiveConfig struct {
@@ -1012,6 +1052,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_ingest.charset", "")
 	v.SetDefault("log_ingest.multiline_unclosed_timeout", "")
 	v.SetDefault("log_ingest.archive_scan_interval", "")
+	// 整节点解算预算（2026-10-02 缺陷修复）：0/空 = 用 ingest 包默认（256 源 / 2m）。
+	v.SetDefault("log_ingest.resolve_gaps_max_sources", 0)
+	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
 	v.SetDefault("artifact_cache.max_bytes", int64(0))
@@ -1140,6 +1183,11 @@ func Load(path string) (*Config, error) {
 	}
 	// 定时归档导入扫描（④）：非法值启动即拒（同上：静默回退会把"开了"变成隐性关闭）。
 	if _, err := cfg.IngestArchiveScanInterval(); err != nil {
+		return nil, err
+	}
+	// 整节点解算预算（2026-10-02 缺陷修复）：非法值启动即拒——把「有界」配成 0 会让解算恒不可用，
+	// 而现场只会看到「解缺口不生效」，无从归因。
+	if _, err := cfg.IngestResolveGapsBudget(); err != nil {
 		return nil, err
 	}
 	if cfg.LogCapacity.DegradedAtPercent <= 0 || cfg.LogCapacity.DegradedAtPercent >= 100 ||

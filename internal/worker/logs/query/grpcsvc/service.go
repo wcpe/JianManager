@@ -70,10 +70,14 @@ type CutoverReadinessProvider interface {
 }
 
 type IngestGapResolver interface {
-	ResolveCoveredGaps() error
+	// ResolveCoveredGaps 是整节点自动路径。ctx 是调用方（HTTP/RPC）的请求上下文：超时/断开
+	// 必须让服务端**真正停止**工作并返回明确错误——解算会扫全源投影（生产实测可跑 30 分钟），
+	// 不可取消就等于「调用方早已放弃、服务端还在为没人要的响应扫盘」。
+	ResolveCoveredGaps(ctx context.Context) error
 	// ResolveCoveredGapsForSource 是显式人工确认（**放弃裁定**）路径：只解指名源的缺口。
 	// operator 是做出裁定的认证主体，为空一律拒绝（放弃不可无痕）。
-	ResolveCoveredGapsForSource(storageNamespace, operator string) error
+	// ctx 语义同上：取消即不得落盘（放弃裁定必须来自一次完成的显式请求）。
+	ResolveCoveredGapsForSource(ctx context.Context, storageNamespace, operator string) error
 }
 
 // IngestPositionGap 是「已放弃位置」查询面 DTO（与 logcoord 的 coverage 语义无关）。
@@ -663,10 +667,11 @@ func (s *Service) LogResolveIngestGaps(ctx context.Context, req *workerpb.LogRes
 				Error: unsupportedErr(fmt.Sprintf(
 					"放弃缺口需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))}, nil
 		}
-		err = s.gapResolver.ResolveCoveredGapsForSource(ns, operator)
+		err = s.gapResolver.ResolveCoveredGapsForSource(ctx, ns, operator)
 	} else {
-		// 不传命名空间：与既有行为逐字一致（整节点自动解）。
-		err = s.gapResolver.ResolveCoveredGaps()
+		// 不传命名空间：整节点自动解。除「解算判据」逐字未改外，2026-10-02 缺陷修复了它的两条
+		// 服务端纪律：**不跨投影查询持有采集轮锁**、且把 RPC ctx 贯穿下去（超时/断连 → 真正停止）。
+		err = s.gapResolver.ResolveCoveredGaps(ctx)
 	}
 	if err != nil {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,

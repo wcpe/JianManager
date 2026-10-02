@@ -618,6 +618,16 @@ func runWorker() {
 		slog.Warn("log_ingest.multiline_unclosed_timeout 无法解析，退回默认", "error", unclosedErr)
 		unclosedTimeout = ingest.DefaultMultilineUnclosedTimeout()
 	}
+	// 整节点解算（POST /nodes/:id/log-runtime/ingest/resolve-gaps 无 storageNamespace 路径）的
+	// 单次调用预算（键 log_ingest.resolve_gaps_max_sources / resolve_gaps_max_duration）。
+	// 2026-10-02 压测现场：该路径此前整段持采集轮锁且无上界，一次调用让整节点采集停摆 30 分钟。
+	// 锁纪律已在 ingest 侧修正；这条接线补上「有界」。非法值在 config.Load 阶段已被拒，
+	// 此处同 unclosedTimeout 做防御性兜底（本层没有可返回的错误通道）。
+	resolveGapsBudget, resolveGapsErr := cfg.IngestResolveGapsBudget()
+	if resolveGapsErr != nil {
+		slog.Warn("log_ingest.resolve_gaps_* 无法解析，退回默认预算", "error", resolveGapsErr)
+		resolveGapsBudget = nil
+	}
 	logCapacityProvider := ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
 		MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
 		DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
@@ -824,6 +834,9 @@ func runWorker() {
 				// 静默源的未闭合缓冲超时（键 log_ingest.multiline_unclosed_timeout，默认 5s）：
 				// 到期未闭合即以显式标记强制闭合并推进 durable，否则悬挂区间会挡住轮转恢复。
 				MultilineUnclosedTimeout: unclosedTimeout,
+				// 整节点解算单次调用的预算（键 log_ingest.resolve_gaps_*）：源数 + 墙钟双上界，
+				// 超出即分片返回（不伪装成功），见 ingest.ResolveGapsBudget。
+				ResolveGapsBudget: resolveGapsBudget,
 				RecoveryHold: func(source ingest.SourceConfig, _ string) (bool, string) {
 					if rehydrateManager == nil {
 						return false, ""
