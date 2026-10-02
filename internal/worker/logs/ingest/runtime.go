@@ -520,14 +520,24 @@ func (m *Manager) ResolveCoveredGaps() error {
 //   - 当该源同时又是「唯一未就绪目标」时，就形成自我指涉：要解缺口需平台就绪，
 //     要平台就绪需该源可查，而它正卡在缺口上。
 //
-// 本方法把「确认丢失并继续」变成管理员的显式动作：解到该源当前读位置，
-// 语义上等于「我确认这段缺口不再补齐」。其它源一概不动。
-func (m *Manager) ResolveCoveredGapsForSource(storageNamespace string) error {
+// 语义（2026-10-02 收紧）：本路径是**放弃裁定**，不再是「把缺口标成已解决」——
+// 解到该源当前读位置，等于「我确认这段缺口永久丢失、不再补齐」。因此：
+//   - 走 Ledger.AbandonGapsThrough，留下结构化的原因码/时间/操作人 + 独立凭据，
+//     使「补齐了」与「被放弃了」在数据上可区分；
+//   - **操作人为空一律拒绝**（放弃不可无痕）。操作人由调用方（gRPC 层）从认证上下文取。
+//
+// 其它源一概不动。default-deny 判据不受影响：自动路径仍按原因排除，本方法只影响指名源。
+func (m *Manager) ResolveCoveredGapsForSource(storageNamespace, operator string) error {
 	if m == nil {
 		return fmt.Errorf("ingest: manager unavailable")
 	}
 	if storageNamespace == "" {
 		return fmt.Errorf("ingest: storage namespace is required")
+	}
+	if strings.TrimSpace(operator) == "" {
+		// 拒绝而不是「用个占位名兜过去」：放弃是唯一允许回收链跨过永久空洞的动作，
+		// 无痕放弃等于给静默丢日志开后门。
+		return fmt.Errorf("ingest: 放弃缺口必须携带操作人（认证主体为空时拒绝执行）")
 	}
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
@@ -553,7 +563,11 @@ func (m *Manager) ResolveCoveredGapsForSource(storageNamespace string) error {
 			through = gap.EndPos
 		}
 	}
-	if _, err := pipe.Ledger().ResolveGapsThrough(pipe.Key(), through, "manual resolve by admin"); err != nil {
+	if _, err := pipe.Ledger().AbandonGapsThrough(pipe.Key(), through, ledger.GapAbandonment{
+		ReasonCode: ledger.GapReasonPermanentlyLost,
+		Operator:   operator,
+		Detail:     "manual abandonment via ResolveCoveredGapsForSource",
+	}); err != nil {
 		return err
 	}
 	if err := pipe.Ledger().ResumeAcquire(pipe.Key()); err != nil {

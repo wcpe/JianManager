@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
@@ -69,8 +70,37 @@ type CutoverReadinessProvider interface {
 
 type IngestGapResolver interface {
 	ResolveCoveredGaps() error
-	// ResolveCoveredGapsForSource 是显式人工确认路径：只解指名源的缺口。
-	ResolveCoveredGapsForSource(storageNamespace string) error
+	// ResolveCoveredGapsForSource 是显式人工确认（**放弃裁定**）路径：只解指名源的缺口。
+	// operator 是做出裁定的认证主体，为空一律拒绝（放弃不可无痕）。
+	ResolveCoveredGapsForSource(storageNamespace, operator string) error
+}
+
+// OperatorMetadataKey 是承载「操作人认证主体」的 incoming gRPC metadata 键。
+//
+// 为什么用 metadata 而不是给 proto 加字段：本路径的操作人来自**调用方的认证上下文**，
+// 而不是请求体（请求体可被任意伪造，PUT 一个字段就把责任推给别人）。用 metadata 让
+// 「谁在调用」由传输层携带，且**无需 proto 变更与代码生成**，CP 侧只要在发起该 RPC 时
+// 带上这个头即可生效；未携带时本层**拒绝**执行（见 LogResolveIngestGaps）。
+//
+// 契约点（CP 侧需配合）：发起 LogResolveIngestGaps 且带 storage_namespace 时，
+// 必须设置本头为可审计的操作人标识（如控制台登录名 / API 密钥主体）。
+const OperatorMetadataKey = "x-jm-operator"
+
+// operatorFromContext 取出调用方认证主体；取不到返回空串（由调用方负责拒绝）。
+func operatorFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	for _, v := range md.Get(OperatorMetadataKey) {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 type CutoverReadinessFunc func() (bool, time.Time, []string)
@@ -514,15 +544,23 @@ func (s *Service) LogCutoverReadiness(_ context.Context, req *workerpb.LogCutove
 	return resp, nil
 }
 
-func (s *Service) LogResolveIngestGaps(_ context.Context, req *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
+func (s *Service) LogResolveIngestGaps(ctx context.Context, req *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
 	if s.gapResolver == nil {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
 			Error: unsupportedErr("ingest gap resolution is not configured")}, nil
 	}
 	var err error
 	if ns := strings.TrimSpace(req.GetStorageNamespace()); ns != "" {
-		// 显式人工确认：只解指名源（含自动路径拒绝的 Raw 写失败缺口，理由见 Manager 注释）。
-		err = s.gapResolver.ResolveCoveredGapsForSource(ns)
+		// 显式人工确认（**放弃裁定**）：只解指名源（含自动路径拒绝的 Raw 写失败缺口，理由见 Manager 注释）。
+		// 操作人必须来自认证上下文：取不到就拒绝——放弃是唯一允许回收链跨过永久空洞的动作，
+		// 无痕放弃等于给静默丢日志开后门。
+		operator := operatorFromContext(ctx)
+		if operator == "" {
+			return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
+				Error: unsupportedErr(fmt.Sprintf(
+					"放弃缺口需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))}, nil
+		}
+		err = s.gapResolver.ResolveCoveredGapsForSource(ns, operator)
 	} else {
 		// 不传命名空间：与既有行为逐字一致（整节点自动解）。
 		err = s.gapResolver.ResolveCoveredGaps()

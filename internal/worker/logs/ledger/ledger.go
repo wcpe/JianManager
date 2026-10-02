@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
@@ -65,6 +66,17 @@ type Gap struct {
 	Detail     string `json:"detail,omitempty"`
 	Resolved   bool   `json:"resolved,omitempty"`
 	Resolution string `json:"resolution,omitempty"`
+	// ReasonCode 是**放弃**（人工确认永久丢失）时的结构化原因码，与自动消解路径无关。
+	//
+	// 与 Reason/Resolution 的分工：Reason 是「当初为什么产生这个缺口」（产生侧，如 APPEND_REJECTED），
+	// Resolution 是自由文本。放弃是一种**裁定**，必须能与自动消解区分开——否则事后审计无法回答
+	// 「这一段是补齐了，还是被人为放弃了」。取值见 GapReasonPermanentlyLost。
+	ReasonCode string `json:"reason_code,omitempty"`
+	// ResolvedAtUTC 是放弃裁定的时间（RFC3339）。只对放弃路径写入。
+	ResolvedAtUTC string `json:"resolved_at_utc,omitempty"`
+	// ResolvedBy 是放弃裁定的操作人（来自调用方认证主体）。**必须非空**——放弃不可无痕，
+	// 见 Ledger.AbandonGapsThrough 的拒绝语义。
+	ResolvedBy string `json:"resolved_by,omitempty"`
 }
 
 func (l *Ledger) UnresolvedGapCount(key SourceKey) int {
@@ -128,10 +140,178 @@ func (l *Ledger) ResolveGapsThroughExcept(key SourceKey, position uint64, resolu
 	return resolved, nil
 }
 
+// GapReasonPermanentlyLost 是**人工裁定**「该位置的数据永久丢失、不再补齐」的原因码。
+//
+// 为什么需要独立原因码：放弃是唯一允许「回收链跨过一个永远补不上的空洞」的凭据，
+// 而它必须与自动消解（投影已覆盖）在数据上**可区分**——否则审计无法回答「这段是补齐了
+// 还是被放弃了」。自动路径**永不**写这个码（自动放弃 = 静默丢日志，明令禁止）。
+const GapReasonPermanentlyLost = "PERMANENTLY_LOST"
+
+// GapAbandonment 是一次「放弃空洞」裁定的结构化凭据。
+//
+// 为什么独立于 Gap 存一份（而不是只写在 Gap 上）：已解决缺口会被 trimResolvedGapsLocked
+// 按数量裁剪（只留审计尾部），若把裁定只挂在 Gap 上，「回收链凭什么跨过它」的凭据会随
+// 缺口一并被裁掉。裁定的生命周期必须长于缺口记录本身——它要一直支撑 CanReclaim 的放行判定。
+type GapAbandonment struct {
+	// From/To 是被放弃的源位置闭区间（取裁定当时被解算的缺口区间）。
+	From uint64 `json:"from"`
+	To   uint64 `json:"to"`
+	// ReasonCode 固定为 GapReasonPermanentlyLost；留字段是为了将来自查与扩展。
+	ReasonCode string `json:"reason_code"`
+	// Reason/Detail 保留被放弃缺口当初的产生原因与细节（便于事后归因）。
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	// Operator 是做出裁定的操作人；空值一律拒绝（放弃不可无痕）。
+	Operator string `json:"operator"`
+	// AtUTC 是裁定时间（RFC3339）。
+	AtUTC string `json:"at_utc"`
+	// Through 是这次裁定解算到的源位置（「我确认该位置之前的缺口都不再补齐」）。
+	Through uint64 `json:"through"`
+}
+
+// DefaultMaxAbandonmentsPerSource 是单源放弃裁定凭据的保留条数上限（相邻/重叠裁定会就地合并）。
+//
+// 与 DefaultMaxResolvedGapsPerSource 同理：裁定凭据不得随故障规模无界增长。取 64 的依据是
+// 「放弃是人工动作，正常运维一年也不会做几十次」；触顶时按 From 从旧到新裁剪，
+// 且裁剪**只丢弃最旧的凭据**，不影响回收链对较新空洞的放行。
+const DefaultMaxAbandonmentsPerSource = 64
+
 // PositionRange 是源位置的闭区间 [From, To]（含首含尾）。
 type PositionRange struct {
 	From uint64 `json:"from"`
 	To   uint64 `json:"to"`
+}
+
+// AbandonGapsThrough 是**人工裁定**路径：把结束位置不超过 position 的未解决缺口标记为
+// 「永久丢失」，并留下结构化凭据（原因码 / 时间 / 操作人 / 区间）+ 一条独立的放弃记录。
+//
+// 与 ResolveGapsThroughExcept 的分工（刻意不共用实现，见下方说明）：
+//   - ResolveGapsThroughExcept 是**自动消解 + 人工解算**共用的「把缺口标成已解决」通道，
+//     其 `Resolution` 是自由文本、`Resolved=true` 不区分「补齐了」与「放弃了」；
+//   - 本方法专供放弃：它额外写 ReasonCode/ResolvedAtUTC/ResolvedBy，并在 Entry.Abandonments
+//     留下一条**比缺口记录活得更久**的凭据（缺口会被裁剪，凭据要一直支撑回收链的放行判定）。
+//
+// 为什么 reject 空操作人：放弃是唯一允许「回收链跨过一个永远补不上的空洞」的动作，
+// 无痕放弃等于给静默丢日志开了后门。
+//
+// 为什么不与 ResolveGapsThroughExcept 共用遍历：后者是缺口 default-deny 判据的载体
+// （按原因排除的语义必须逐字保持），共用会把两条语义的演化耦合在一起。这里的重复是
+// **刻意**的：放弃路径的每一条断言都必须能被独立读出来。
+func (l *Ledger) AbandonGapsThrough(key SourceKey, position uint64, ab GapAbandonment) (int, error) {
+	if strings.TrimSpace(ab.Operator) == "" {
+		return 0, fmt.Errorf("ledger: gap abandonment requires an operator (refusing to abandon without a trace)")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, err := l.require(key)
+	if err != nil {
+		return 0, err
+	}
+	at := ab.AtUTC
+	if at == "" {
+		at = time.Now().UTC().Format(time.RFC3339)
+	}
+	reasonCode := ab.ReasonCode
+	if reasonCode == "" {
+		reasonCode = GapReasonPermanentlyLost
+	}
+	resolved := 0
+	var from, to uint64
+	first := true
+	for index := range entry.Gaps {
+		gap := &entry.Gaps[index]
+		if gap.Resolved || gap.EndPos > position {
+			continue
+		}
+		gap.Resolved = true
+		gap.Resolution = fmt.Sprintf("%s by %s at %s", reasonCode, ab.Operator, at)
+		gap.ReasonCode = reasonCode
+		gap.ResolvedAtUTC = at
+		gap.ResolvedBy = ab.Operator
+		if first || gap.StartPos < from {
+			from = gap.StartPos
+		}
+		if gap.EndPos > to {
+			to = gap.EndPos
+		}
+		first = false
+		resolved++
+	}
+	if resolved == 0 {
+		// 没有可放弃的缺口：不写凭据（避免留下「什么都没放弃」的空裁定）。
+		return 0, nil
+	}
+	l.trimResolvedGapsLocked(entry)
+	// 凭据区间取「本次实际被放弃的缺口并集」，而不是调用方传入的 through——
+	// 后者可能远大于实际空洞（它要越过读位置才能覆盖缺口），把非缺口区间写进凭据
+	// 会让「回收链凭什么跨过这里」的审计答案变宽。
+	entry.Abandonments = append(entry.Abandonments, GapAbandonment{
+		From: from, To: to, ReasonCode: reasonCode,
+		Reason: ab.Reason, Detail: ab.Detail,
+		Operator: ab.Operator, AtUTC: at, Through: position,
+	})
+	l.mergeAndTrimAbandonmentsLocked(entry)
+	return resolved, nil
+}
+
+// mergeAndTrimAbandonmentsLocked 合并相接/重叠的放弃区间并按条数上限裁剪凭据。
+//
+// 为什么要合并：同一次故障可能被反复裁定（每次都只覆盖新解出的那一小段），
+// 不合并会让凭据条数随裁定次数增长，而它们表达的是同一段空洞。
+// 为什么裁剪按 From 从旧到新：最新的裁定才是回收链当前需要放行的那一个。
+func (l *Ledger) mergeAndTrimAbandonmentsLocked(e *Entry) {
+	if len(e.Abandonments) == 0 {
+		return
+	}
+	sort.Slice(e.Abandonments, func(i, j int) bool {
+		if e.Abandonments[i].From == e.Abandonments[j].From {
+			return e.Abandonments[i].To < e.Abandonments[j].To
+		}
+		return e.Abandonments[i].From < e.Abandonments[j].From
+	})
+	merged := make([]GapAbandonment, 0, len(e.Abandonments))
+	for _, ab := range e.Abandonments {
+		if len(merged) == 0 {
+			merged = append(merged, ab)
+			continue
+		}
+		last := &merged[len(merged)-1]
+		// 相接判定与缺口/投递区间同一口径（相隔 1 字节仍算连续，见 rangesTouch）。
+		if ab.From <= last.To+1 {
+			if ab.To > last.To {
+				last.To = ab.To
+			}
+			if ab.Through > last.Through {
+				last.Through = ab.Through
+			}
+			continue
+		}
+		merged = append(merged, ab)
+	}
+	if excess := len(merged) - DefaultMaxAbandonmentsPerSource; excess > 0 {
+		merged = merged[excess:]
+	}
+	e.Abandonments = merged
+}
+
+// AbandonmentsCovering 报告位置 pos 是否落在某条放弃凭据覆盖的区间内。
+//
+// 语义（务必按名字读准）：它只回答「该位置被人工裁定为永久丢失」，
+// **不回答**「回收可以推进」——那是 CanReclaim 与恢复分段状态机的事。
+// 本函数是那个判定的**输入凭据**，不是判定本身。
+func (l *Ledger) AbandonmentsCovering(key SourceKey, pos uint64) (GapAbandonment, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	entry := l.entries[key]
+	if entry == nil {
+		return GapAbandonment{}, false
+	}
+	for _, ab := range entry.Abandonments {
+		if pos >= ab.From && pos <= ab.To {
+			return ab, true
+		}
+	}
+	return GapAbandonment{}, false
 }
 
 // MergePositionRanges 把一组位置区间合并为若干**连续覆盖**的区间（升序、互不相接）。
@@ -289,12 +469,15 @@ type Entry struct {
 	// DeliveryBatches 批次结果；delivery_position 只反映连续前缀。
 	DeliveryBatches []DeliveryBatch `json:"delivery_batches"`
 
-	Segments     []Segment      `json:"segments"`
-	Rotations    []RotationLink `json:"rotations"`
-	Gaps         []Gap          `json:"gaps"`
-	RecoveryRefs []RecoveryRef  `json:"recovery_refs"`
-	ErrorCount   int            `json:"error_count"`
-	IngestSeq    uint64         `json:"ingest_seq"`
+	Segments  []Segment      `json:"segments"`
+	Rotations []RotationLink `json:"rotations"`
+	Gaps      []Gap          `json:"gaps"`
+	// Abandonments 是「人工确认永久丢失」裁定的凭据列表（有界，见 DefaultMaxAbandonmentsPerSource）。
+	// 它比 Gap 记录活得更久：缺口会被裁剪，而「回收链凭什么跨过那个空洞」的凭据必须留存。
+	Abandonments []GapAbandonment `json:"abandonments,omitempty"`
+	RecoveryRefs []RecoveryRef    `json:"recovery_refs"`
+	ErrorCount   int              `json:"error_count"`
+	IngestSeq    uint64           `json:"ingest_seq"`
 	// AcquirePaused 容量/预算耗尽时置位；暂停期间不得静默丢数据。
 	AcquirePaused bool   `json:"acquire_paused"`
 	PauseReason   string `json:"pause_reason,omitempty"`
@@ -876,6 +1059,7 @@ func (e *Entry) clone() *Entry {
 	cp.Segments = append([]Segment(nil), e.Segments...)
 	cp.Rotations = append([]RotationLink(nil), e.Rotations...)
 	cp.Gaps = append([]Gap(nil), e.Gaps...)
+	cp.Abandonments = append([]GapAbandonment(nil), e.Abandonments...)
 	cp.RecoveryRefs = append([]RecoveryRef(nil), e.RecoveryRefs...)
 	return &cp
 }

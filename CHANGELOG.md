@@ -1031,3 +1031,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 修复
 - **日志链路执行层加固（用户 8 条外部审查闭环）**：①轮转新增 inode(dev+ino)判据（补"替换文件更大且前缀相同"盲区）；②WAL 门禁从累计量改当前积压（P0：原实现单源按累计 512MiB 约 1.1–6.5h 即永久停采）+ 积压上限/回放限速配置化（max_wal_entries/max_replay_events_per_drain）；③多行三态标记 multiline_unclosed（cross_rotation/unclosed，仅截断记录打标）+ 5s 闲置超时强制冲刷；④悬挂源水位改"落库成功才推进"（原构建期推进致 apply 失败后永不重试）；⑤字节口径只降级不暂停（暂停统一由可自愈的积压上限执行）。10 项变异实测转红后还原。
+
+### 新增
+- **空洞放弃协议（Hole Abandonment，B 批 1）**：`AbandonGapsThrough` 独立成环（default-deny 载体 `ResolveGapsThroughExcept` 逐字未动），空操作人拒绝；`Gap` 补结构化字段（ReasonCode/ResolvedAtUTC/ResolvedBy）；独立凭据 `Entry.Abandonments`（区间=实际被放弃缺口并集，可长出缺口记录被裁的窗口，条数有界 64 并注明取舍）；gRPC 操作人经 `x-jm-operator` 下传、取不到即拒（附可执行补救）；自动路径永不写 PERMANENTLY_LOST（守卫用例）。
