@@ -74,3 +74,31 @@ func TestBackpressureWindowDoesNotBlockOnSingleRoundJitter(t *testing.T) {
 	require.GreaterOrEqual(t, m.ResumeSweepStats().Candidates, int64(1),
 		"抖动轮之后必须**照常扫描候选**（把猜测变读数：候选计数可读 ✓）")
 }
+
+// TestBackpressureSingleRoundRuleWouldSkipOnJitter（**常驻判别**，替代一次性变异 ✓）：
+// 把阈值置 **1**（= 改动前的单轮判定行为 ✗）⇒ 同一抖动序列**必须**触发跳过 ✓。
+//
+// 意义：这不是"跑一次就丢"的临时变异，而是**常驻对照** ✓ —— 它把"窗口化才是 41 家的解"钉在
+// 用例里 ✓：若有人把窗口化改回单轮（或把默认阈值改成 1）⇒ 这条立刻红 ✓✓。
+func TestBackpressureSingleRoundRuleWouldSkipOnJitter(t *testing.T) {
+	m, _ := newGateFixture(t, 50, 16)
+	m.sweepBackpressureStreak = 1 // = 改动前行为（单轮判定 ✗）
+	seq := []int64{100, 200, 50, 50, 50, 50, 50, 50}
+	i := 0
+	m.sweepBacklogOf = func() int64 {
+		v := seq[i]
+		if i < len(seq)-1 {
+			i++
+		}
+		return v
+	}
+	m.resumeInterval = 10 * time.Millisecond
+	m.recoveryProbe = func() bool { return false }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	m.RunCapacityResumeLoop(ctx)
+
+	require.GreaterOrEqual(t, m.ResumeSweepStats().SkipBackpressure, int64(1),
+		"单轮判定（阈值=1）下，抖动轮必须触发跳过 ✓（这正是 41 家被永久挡住的原因 ✗）")
+}

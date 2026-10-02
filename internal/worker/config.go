@@ -288,6 +288,12 @@ type LogIndexConfig struct {
 	// 为什么要有键（2026-10-04 现场澄清 ✓）：该容量此前只在 ingest.Options（默认 8 ✓）⇒ 现场无法
 	// 关闭，也无法退回应激行为 ✗。置 **1** = "每轮只处理一个"= 最小冲击 ✓；非正 ⇒ 默认 8 ✓。
 	ResumeBatchPerRound int `mapstructure:"resume_batch_per_round"`
+	// ResumeBackpressureStreak 是**窗口化背压**阈值：连续 N 轮闸视图积压净涨才跳过本轮
+	// （键 `log_index.resume_backpressure_streak`；默认 3 ✓；非正 ⇒ 默认）。
+	//
+	// 为什么需要（2026-10-05 现场 41 家 ✗✓）：原实现**单轮比较即跳过** ⇒ WAL 一有噪声抖动就
+	// 永久挡住复活 ✗（"三项前置全满足却不复活"的形态 ✓）。置 **1** = 退回单轮判定（现场应急用 ✓）。
+	ResumeBackpressureStreak int `mapstructure:"resume_backpressure_streak"`
 	// Scan 段读聚合（publishedClosedForSourceCtx→readSegment）的让路与轮内预算：
 	// 现场点名它是每轮重活的 I/O 大头 ✗，且**既不让路也无上界** ⇒ `pollOnce` 的 WaitGroup 等分钟级。
 	Scan LogIndexScanConfig `mapstructure:"scan"`
@@ -1173,6 +1179,14 @@ func (c *Config) ResumeBatchTuning() int {
 	return c.LogIndex.ResumeBatchPerRound
 }
 
+// ResumeBackpressureStreakTuning 返回窗口化背压阈值（默认 3 ✓；置 1 = 单轮判定=应急退回 ✓）。
+func (c *Config) ResumeBackpressureStreakTuning() int {
+	if c == nil || c.LogIndex.ResumeBackpressureStreak <= 0 {
+		return 3
+	}
+	return c.LogIndex.ResumeBackpressureStreak
+}
+
 // ScanTuning 把 `log_index.scan.*` 收敛为 ingest 的段读让路/预算旋钮（零值 ⇒ ingest 侧默认 ✓）。
 //
 // 口径：非法 duration / 非正数一律回退默认（这类旋钮回退默认永远安全：让路多一点、扫描短一点
@@ -1302,6 +1316,7 @@ func Load(path string) (*Config, error) {
 	// 持久化门的让路窗口与老化阈值（2026-10-03 门闩饿死采集轮）：空/0 = 用 ingest 默认。
 	v.SetDefault("log_index.persist.cycle_yield", "")
 	v.SetDefault("log_index.resume_batch_per_round", 8)
+	v.SetDefault("log_index.resume_backpressure_streak", 3)
 	v.SetDefault("log_index.scan.slice_rows", 8192)
 	v.SetDefault("log_index.scan.yield", "1ms")
 	v.SetDefault("log_index.scan.budget", "2s")

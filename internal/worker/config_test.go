@@ -419,3 +419,19 @@ func TestResumeBatchTuningDefaultsAndOverride(t *testing.T) {
 	bad := &Config{}
 	assert.Equal(t, 8, bad.ResumeBatchTuning(), "非正 ⇒ 回退默认（安全方向 ✓）")
 }
+
+// TestResumeBackpressureStreakTuningDefaultsAndOverride（窗口化背压阈值的绑定回归）：
+// 默认 3 ✓（连续 3 轮净涨才跳过）；可配 ✓；置 1 = 退回单轮判定（现场应急 ✓）；非正 ⇒ 回退默认 ✓。
+func TestResumeBackpressureStreakTuningDefaultsAndOverride(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, 3, cfg.ResumeBackpressureStreakTuning(), "默认连续 3 轮净涨才跳过")
+
+	t.Setenv("JIANMANAGER_LOG_INDEX_RESUME_BACKPRESSURE_STREAK", "1")
+	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, 1, cfg2.ResumeBackpressureStreakTuning(), "置 1 = 单轮判定（改动前行为，应急用 ✓）")
+
+	bad := &Config{}
+	assert.Equal(t, 3, bad.ResumeBackpressureStreakTuning(), "非正 ⇒ 回退默认（安全方向 ✓）")
+}
