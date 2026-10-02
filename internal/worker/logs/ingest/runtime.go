@@ -5592,35 +5592,41 @@ func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// **窗口化净涨背压**（2026-10-05 现场修正 ✗✓）：单轮比较太敏感 —— 现场 41 家
-			// "paused + backlog_pause + blocking=0 + backlog < 半闸"三项前置全满足却无一复活 ✗，
-			// 头号嫌疑就是**任何一轮抖动都被判净涨 ⇒ 永久跳过** ✗。
-			// 改为：只有**连续 N 轮净涨**（默认 3，可配 ✓）才跳过；读的仍是**闸视图**积压 ✓。
-			now := m.sweepBacklogTotal()
-			if m.lastSweepKnown && now > m.lastSweepBacklog {
-				m.risingStreak.Add(1)
-			} else {
-				m.risingStreak.Store(0)
-			}
-			streak := m.risingStreak.Load()
-			m.lastSweepBacklog, m.lastSweepKnown = now, true
-			if streak >= int64(m.sweepBackpressureStreakOf()) {
-				m.skipBackpressure.Add(1)
-				slog.Warn("兜底环背压：连续多轮积压净涨，本轮不放宽也不复活",
-					"streak", streak, "threshold", m.sweepBackpressureStreakOf(), "backlog", now)
-				continue
-			}
-			m.syncRecoveryQuota()                          // 先同步配额口径（恢复中/宽限/回归 ✓），再扫暂停源 ✓
-			cands, revived := m.maybeResumePausedSources() // 计数由函数内累加 ✓（避免双计 ✗）
-			// **每轮为何无复活**（把猜测变读数 ✓）：有候选却零复活时打一条汇总 ✓，否则静默 ✓。
-			if cands > 0 && revived == 0 {
-				slog.Warn("兜底环本轮无复活（可观测：候选/复活/各类跳过计数）",
-					"candidates", cands, "revived", revived,
-					"skip_backpressure", m.skipBackpressure.Load(),
-					"skip_hysteresis", m.skipHysteresis.Load(),
-					"skip_enum", m.skipEnumeration.Load())
-			}
+			m.sweepOnce() // 一轮全部动作见 sweepOnce（抽出仅为给心跳/recover 留出包裹点 ✓）
 		}
+	}
+}
+
+// sweepOnce 是兜底环的**一轮全部动作**（自 RunCapacityResumeLoop 原样抽出：只搬家，
+// `continue→return` 与缩进由**精确文本替换**完成 ✓，逻辑逐字不变 ✓）。
+func (m *Manager) sweepOnce() {
+	// **窗口化净涨背压**（2026-10-05 现场修正 ✗✓）：单轮比较太敏感 —— 现场 41 家
+	// "paused + backlog_pause + blocking=0 + backlog < 半闸"三项前置全满足却无一复活 ✗，
+	// 头号嫌疑就是**任何一轮抖动都被判净涨 ⇒ 永久跳过** ✗。
+	// 改为：只有**连续 N 轮净涨**（默认 3，可配 ✓）才跳过；读的仍是**闸视图**积压 ✓。
+	now := m.sweepBacklogTotal()
+	if m.lastSweepKnown && now > m.lastSweepBacklog {
+		m.risingStreak.Add(1)
+	} else {
+		m.risingStreak.Store(0)
+	}
+	streak := m.risingStreak.Load()
+	m.lastSweepBacklog, m.lastSweepKnown = now, true
+	if streak >= int64(m.sweepBackpressureStreakOf()) {
+		m.skipBackpressure.Add(1)
+		slog.Warn("兜底环背压：连续多轮积压净涨，本轮不放宽也不复活",
+			"streak", streak, "threshold", m.sweepBackpressureStreakOf(), "backlog", now)
+		return // 原 `continue` ⇒ 抽出后同一语义：结束本轮 ✓
+	}
+	m.syncRecoveryQuota()                          // 先同步配额口径（恢复中/宽限/回归 ✓），再扫暂停源 ✓
+	cands, revived := m.maybeResumePausedSources() // 计数由函数内累加 ✓（避免双计 ✗）
+	// **每轮为何无复活**（把猜测变读数 ✓）：有候选却零复活时打一条汇总 ✓，否则静默 ✓。
+	if cands > 0 && revived == 0 {
+		slog.Warn("兜底环本轮无复活（可观测：候选/复活/各类跳过计数）",
+			"candidates", cands, "revived", revived,
+			"skip_backpressure", m.skipBackpressure.Load(),
+			"skip_hysteresis", m.skipHysteresis.Load(),
+			"skip_enum", m.skipEnumeration.Load())
 	}
 }
 
