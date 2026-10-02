@@ -204,6 +204,10 @@ func TestPersistGateFairFIFO(t *testing.T) {
 	m, _ := newGateFixture(t, 2000, 16)
 	var mu sync.Mutex
 	var served []int64
+	// **被提交覆盖**的等待者数（用户 2026-10-05 ③ 更正版 ✓）：`persistCtx` 有合并短路
+	// （`persistCovered >= seq ⇒ 直接返回` ✓）⇒ 被某次提交覆盖的等待者**不发 acquire 事件** ✗
+	// ⇒ 只数 acquire 会把"被合并服务"误判成"被饿死" ✗✗（这正是本用例此前偶发红的真机制 ✓）。
+	servedByCover := 0
 	// 等待者用带标记的 ctx 区分（长链也走同一条落库入口，靠 seq 区分不了——它每次调用都会拿新序号）。
 	type waiterMark struct{}
 	marker := waiterMark{}
@@ -241,7 +245,14 @@ func TestPersistGateFairFIFO(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// seqBefore 在**调用前**取 ✓：调用后若 `covered` 已越过它 ⇒ 本次请求已被某次提交覆盖 ✓。
+			seqBefore := m.persistJoin.Load()
 			_ = m.persistCtx(context.WithValue(context.Background(), marker, true), persistNormalOneStep)
+			if m.persistCovered.Load() > seqBefore {
+				mu.Lock()
+				servedByCover++
+				mu.Unlock()
+			}
 		}()
 		time.Sleep(2 * time.Millisecond) // 依次到达
 	}
@@ -251,8 +262,12 @@ func TestPersistGateFairFIFO(t *testing.T) {
 
 	mu.Lock()
 	got := append([]int64(nil), served...)
+	covered := servedByCover
 	mu.Unlock()
-	require.Len(t, got, 5, "5 个等待者都必须被服务（不得被长链饿死）")
+	// **判据更正**（③ ✓）：被服务 = 授予门（记进 got ✓）**或** 被某次提交覆盖（covered ✓）；
+	// 二者皆无才是饿死 ✗。序断言只对**实际拿到门的子集**保留严格 FIFO ✓（被合并者本就没排队 ✓）。
+	require.Equal(t, 5, len(got)+covered,
+		"5 个等待者都必须被服务（授予门 或 被提交覆盖；二者皆无=被长链饿死 ✗）：acquire=%v covered=%d", got, covered)
 	for i := 1; i < len(got); i++ {
 		require.Less(t, got[i-1], got[i], "服务顺序必须严格按到达顺序（显式 FIFO），实测 %v", got)
 	}
