@@ -2,6 +2,7 @@ package config
 
 import (
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -223,5 +224,57 @@ func TestCycleBudgetDefaultsAndIsConfigurable(t *testing.T) {
 	budget = cfg.LogIndex.CommitBudget()
 	if budget.CycleMaxRows != stateindex.DefaultCycleMaxRows || budget.CycleMaxDuration != stateindex.DefaultCycleMaxDuration {
 		t.Fatalf("非法值必须回退默认（否则「有界」会静默变成「无界」），实测 %+v", budget)
+	}
+}
+
+// TestVerifyAndHotBudgetKeysBindFromYAML 钉住两枚新键的**绑定**（⑰ 小件 + 校验闸）：
+// 用真实 yml 载入（而不是直接写结构体字段）——否则 `mapstructure` 标签缺失时用例会假绿 ✗。
+//
+// 转红方式（实测）：删掉 `log_index.persist.hot_budget`（或 `log_index.verify.max_per_second`）
+// 的 mapstructure 标签/字段——对应断言立即变红（yml 值读不进来）。
+func TestVerifyAndHotBudgetKeysBindFromYAML(t *testing.T) {
+	root := t.TempDir()
+	yml := filepath.Join(root, "worker.yml")
+	if err := os.WriteFile(yml, []byte(strings.Join([]string{
+		"log_index:",
+		"  persist:",
+		"    hot_budget: 77ms",
+		"    cycle_yield: 33ms",
+		"    priority_streak: 3",
+		"  verify:",
+		"    max_per_second: 7",
+		"    max_in_flight: 2",
+		"    max_queries_per_chunk: 5",
+	}, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("写测试 yml 失败: %v", err)
+	}
+	cfg, err := Load(yml)
+	if err != nil {
+		t.Fatalf("载入测试 yml 失败: %v", err)
+	}
+	persistYield, hotBudget, streak := cfg.PersistGateTuning()
+	if persistYield != 33*time.Millisecond {
+		t.Fatalf("log_index.persist.cycle_yield 未绑定：%v", persistYield)
+	}
+	if hotBudget != 77*time.Millisecond {
+		t.Fatalf("log_index.persist.hot_budget 未绑定：%v（这是热路径有界等待的上界）", hotBudget)
+	}
+	if streak != 3 {
+		t.Fatalf("log_index.persist.priority_streak 未绑定：%d", streak)
+	}
+	budget, maxPerChunk := cfg.VerifyQueryTuning()
+	if budget.MaxPerSecond != 7 || budget.MaxInFlight != 2 || maxPerChunk != 5 {
+		t.Fatalf("log_index.verify.* 未绑定：%+v maxQueriesPerChunk=%d", budget, maxPerChunk)
+	}
+	// 非法值回退默认（天花板不得因为误写而消失）。
+	cfg.LogIndex.Persist.HotBudget = "不是时长"
+	cfg.LogIndex.Verify.MaxPerSecond = -1
+	_, hotBad, _ := cfg.PersistGateTuning()
+	badBudget, _ := cfg.VerifyQueryTuning()
+	if hotBad != 0 {
+		t.Fatalf("非法 hot_budget 应当回退默认（返回 0 由 ingest 兜默认），实测 %v", hotBad)
+	}
+	if badBudget.MaxPerSecond != -1 {
+		t.Fatalf("非法值应原样交由 ingest 归一化（非正 → 默认），实测 %d", badBudget.MaxPerSecond)
 	}
 }

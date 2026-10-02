@@ -238,6 +238,10 @@ type Manager struct {
 	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
 	events              *eventstore.Store
 	verificationTimeout time.Duration
+	// verifyMaxQueriesPerChunk 是单簇单次校验的尝试次数上限（0 用默认）。
+	verifyMaxQueriesPerChunk int
+	// verifyLimiter 是校验/对账查询的全局天花板（速率 + 在飞）。
+	verifyLimiter *verifyLimiter
 	// verifyBackoffMin/verifyBackoffMax 是投影校验重试的退避区间（B1c）；0 用默认常量。
 	verifyBackoffMin time.Duration
 	verifyBackoffMax time.Duration
@@ -430,6 +434,12 @@ type Options struct {
 	// （runStartupRecovery），差别只在「在哪个 goroutine 里跑」——不存在「测试路径与生产路径
 	// 是两份实现」的问题。
 	StartupRecoveryBackground bool
+	// VerifyBudget 是校验/对账查询的全局天花板（键 log_index.verify.max_per_second /
+	// max_in_flight）；零值用默认（30/s、6 在飞）。天花板语义：正常路径零等待 ✓。
+	VerifyBudget VerifyBudget
+	// VerifyMaxQueriesPerChunk 是单簇单次校验的尝试次数上限（键
+	// log_index.verify.max_queries_per_chunk）；≤0 用默认（12）。
+	VerifyMaxQueriesPerChunk int
 	// PersistHotBudget 是热路径（采集/投递）在持久化门上的等待上界（键
 	// log_index.persist.hot_budget）；≤0 用默认（30ms）。超时即交给后台持久化通道，采集不受阻。
 	PersistHotBudget time.Duration
@@ -475,6 +485,98 @@ type ReplayTuning struct {
 type ReplayBudget struct {
 	MaxDays     int
 	MaxDuration time.Duration
+}
+
+// VerifyBudget 是**投影校验/对账查询**的全局上限（**天花板，不是节拍器**）。
+//
+// 为什么需要（2026-10-03 现场：近 5 分钟 `投影校验查询 ×410` 占满算力、未暂停源 readΔ=0）：
+// 校验按簇退避重试到窗口耗尽，而并发上界只有「单批内 4」✗——多源同时校验时没有任何**全局**
+// 速率/在飞上限，于是少量失败簇的重试就能把节点算力与 VL 容量吃光 ✗。
+//
+// 天花板语义（务必与"限速节拍"区分）：
+//   - 令牌桶容量 = MaxPerSecond ⇒ 正常路径（几簇、1–2 次查询）**立即通过、零等待** ✗；
+//   - 只有超过上限的**风暴**才被削峰 ✓；
+//   - 采集侧的读/写**不经过本闸** ⇒ 算力与 VL 容量天然优先给采集 ✓。
+type VerifyBudget struct {
+	// MaxPerSecond 是校验/对账查询的每秒上限；≤0 用默认（30）。
+	MaxPerSecond int
+	// MaxInFlight 是同时在飞的校验/对账查询数上限；≤0 用默认（6）。
+	MaxInFlight int
+}
+
+// verifyLimiter 是校验/对账查询的**全局**天花板（令牌桶 + 在飞信号量）。
+type verifyLimiter struct {
+	mu          sync.Mutex
+	cond        *sync.Cond
+	rate        int
+	capacity    int
+	tokens      float64
+	last        time.Time
+	inFlight    int
+	maxInFlight int
+}
+
+// newVerifyLimiter 按预算构造（零值 → 默认）。上限 ≤0 时按各自默认补齐。
+func newVerifyLimiter(budget VerifyBudget) *verifyLimiter {
+	rate := budget.MaxPerSecond
+	if rate <= 0 {
+		rate = defaultVerifyMaxPerSecond
+	}
+	inFlight := budget.MaxInFlight
+	if inFlight <= 0 {
+		inFlight = defaultVerifyMaxInFlight
+	}
+	l := &verifyLimiter{rate: rate, capacity: rate, tokens: float64(rate), maxInFlight: inFlight, last: time.Now()}
+	l.cond = sync.NewCond(&l.mu)
+	return l
+}
+
+// Acquire 取得一次查询许可（速率 + 在飞双闸）；ctx 取消即返回 error。
+func (l *verifyLimiter) Acquire(ctx context.Context) error {
+	if l == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		now := time.Now()
+		l.tokens += now.Sub(l.last).Seconds() * float64(l.rate)
+		l.last = now
+		if l.tokens > float64(l.capacity) {
+			l.tokens = float64(l.capacity)
+		}
+		if l.tokens >= 1 && l.inFlight < l.maxInFlight {
+			l.tokens--
+			l.inFlight++
+			return nil
+		}
+		// 天花板语义：等待由速率/在飞决定（1/rate 量级），不是固定节拍。
+		l.mu.Unlock()
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Millisecond):
+		}
+		l.mu.Lock()
+	}
+}
+
+// Release 归还一次查询许可。
+func (l *verifyLimiter) Release() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	if l.inFlight > 0 {
+		l.inFlight--
+	}
+	l.cond.Broadcast()
+	l.mu.Unlock()
 }
 
 const (
@@ -1096,6 +1198,11 @@ func New(opts Options) (*Manager, error) {
 	if m.verifyChunkConcurrency <= 0 {
 		m.verifyChunkConcurrency = defaultVerifyChunkConcurrency
 	}
+	m.verifyMaxQueriesPerChunk = opts.VerifyMaxQueriesPerChunk
+	if m.verifyMaxQueriesPerChunk <= 0 {
+		m.verifyMaxQueriesPerChunk = defaultVerifyMaxQueriesPerChunk
+	}
+	m.verifyLimiter = newVerifyLimiter(opts.VerifyBudget)
 	// 采集索引（FR-496）：打开 SQLite 索引，必要时一次性迁移旧 ingest.state.json；
 	// 迁移/校验失败 → 拒绝启动采集（不静默降级），保留旧文件供人工处置。
 	if err := m.openIndex(); err != nil {
@@ -1799,7 +1906,7 @@ func (m *Manager) Stop() error {
 		_, _ = p.Flush()
 	}
 	// 关停落库必须做完（不能用已被取消的生命周期 ctx）：它承担「停服即已落库」的语义。
-	if err := m.persistCtx(context.Background(), persistCritical); err != nil {
+	if err := m.persistCtx(context.Background(), persistPriority); err != nil {
 		return err
 	}
 	// 关闭索引句柄：显式把 WAL 归并回主库（见 stateindex.Store.Close）。
@@ -1866,12 +1973,8 @@ type persistGate struct {
 }
 
 // enqueueLocked 把序号加入对应队列（调用方需持 g.mu）。
-func (g *persistGate) enqueueLocked(seq int64, mode persistMode) {
-	if mode.priority {
-		if mode.critical {
-			g.priorityQueue = append([]int64{seq}, g.priorityQueue...)
-			return
-		}
+func (g *persistGate) enqueueLocked(seq int64, priority bool) {
+	if priority {
 		g.priorityQueue = append(g.priorityQueue, seq)
 		return
 	}
@@ -1899,15 +2002,10 @@ func removePersistSeq(queue []int64, seq int64) []int64 {
 // 注意：让路窗口**不在这里判**——若在这里判，刚交门的调用者会落进 `Cond.Wait`，而窗口到期时
 // 没有任何人 Broadcast（无人唤醒 ⇒ 永久睡眠 ✗，2026-10-03 自伤实测：整包测试挂死 600s）。
 // 让路由调用方**显式 sleep** 实现（见 persistCtx 的 not-oneStep 分支）。调用方需持 g.mu。
-func (g *persistGate) grantableLocked(seq int64, mode persistMode, streakMax int) bool {
+func (g *persistGate) grantableLocked(seq int64, priority bool, streakMax int) bool {
 	if g.running {
 		return false
 	}
-	if mode.critical {
-		// 插队档：门一空就授予（它代表短作业，且调用者有硬截止）。
-		return true
-	}
-	priority := mode.priority
 	if priority {
 		// 优先：队首即可（恢复链让位）。但连续授予达上限且普通队列有人等时，强制让普通队首先走。
 		if len(g.priorityQueue) == 0 || g.priorityQueue[0] != seq {
@@ -3449,7 +3547,16 @@ const (
 	// 读回量被放大到 k×n（k=片数）；单次校验查询 141ms 里 VL 首字节仅 3.5ms，
 	// 其余全是返回体的传输与逐行 JSON 解析。2000 与「单源单次 poll 的典型满批」一致：
 	// 常见情形下一批只需 1 次查询。
-	defaultVerifyChunkEvents = 2000
+	// defaultVerifyMaxPerSecond / defaultVerifyMaxInFlight 是校验/对账查询的**全局天花板**默认值
+	// （天花板语义：令牌桶容量 = 速率 ⇒ 正常路径的少量查询一次性放行、零等待 ✓）。
+	defaultVerifyMaxPerSecond = 30
+	defaultVerifyMaxInFlight  = 6
+	// defaultVerifyMaxQueriesPerChunk 是**单簇**一次校验的尝试次数上限（从源头降量）。
+	//
+	// 退避重试原本会一直重试到校验窗口耗尽（生产 5 分钟 ⇒ 单簇 150+ 次查询 ✗）；窗口仍决定
+	// "等多久"，本预算决定"最多问几次"，两者取先到者。
+	defaultVerifyMaxQueriesPerChunk = 12
+	defaultVerifyChunkEvents        = 2000
 	// defaultVerifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取该默认，1 为串行。
 	// 校验查询的成本几乎全在「返回体传输 + 客户端逐行 JSON 解析」，属可并行部分；
 	// 跨源并发（pollConcurrency）只重叠了源与源之间的等待，源内部的等待仍逐个叠加。
@@ -3677,7 +3784,19 @@ func (m *Manager) verifyProjectionChunk(parent context.Context, client *vlsup.Cl
 	backoff := m.verifyBackoffMin
 	var lastErr error
 	var stats verifyQueryStats
+	maxQueries := m.verifyMaxQueriesPerChunk
+	if maxQueries <= 0 {
+		maxQueries = defaultVerifyMaxQueriesPerChunk
+	}
 	for {
+		if stats.Queries >= maxQueries {
+			// 尝试预算用尽：结论必须与「窗口到期仍不可见」**逐字一致** ✗——绝不返回 nil
+			// （那会被当成"校验通过"，是比慢更坏的错 ✗）。措辞沿用下面窗口到期那条。
+			if lastErr != nil {
+				return stats, fmt.Errorf("ingest: projection %s verification failed: %w", generation, lastErr)
+			}
+			return stats, fmt.Errorf("ingest: projection %s not fully visible before deadline: %w", generation, context.DeadlineExceeded)
+		}
 		queryStarted := time.Now()
 		complete, queryStats, err := m.verifyProjectionQuery(ctx, client, source, generation, events, allowed)
 		elapsed := time.Since(queryStarted)
@@ -3779,6 +3898,14 @@ func sameSourceConfig(a, b SourceConfig) bool {
 // 新增的 verifyQueryStats 只用于观测与回归读数，不参与任何判定。
 func (m *Manager) verifyProjectionQuery(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) (bool, verifyQueryStats, error) {
 	var stats verifyQueryStats
+	if m.verifyLimiter != nil {
+		// 全局天花板（速率 + 在飞）：**正常路径零等待**（桶容量 = 速率 ⇒ 少量查询一次性放行 ✓），
+		// 只有风暴被削峰 ✓。采集侧的读/写不走这里 ⇒ 其算力与 VL 容量天然优先 ✓。
+		if err := m.verifyLimiter.Acquire(ctx); err != nil {
+			return false, stats, err
+		}
+		defer m.verifyLimiter.Release()
+	}
 	if client == nil {
 		return false, stats, fmt.Errorf("ingest: VictoriaLogs verification client is unavailable")
 	}
@@ -4632,7 +4759,7 @@ func (m *Manager) load() error {
 // persist 保持既有契约：**返回即「当前已声明的变更全部落库」**（FR-499 的「登记返回即落库」
 // 保证不变），且走**优先队列**（用户面：采集轮/登记/解算/关停的延迟优先于恢复链吞吐）。
 func (m *Manager) persist() error {
-	return m.persistCtx(context.Background(), persistCritical)
+	return m.persistCtx(context.Background(), persistPriority)
 }
 
 // persistRecoveryStep 是**恢复/重放链**的落库入口：只做**一步**有界落库（受每周期总预算约束）
@@ -4673,13 +4800,6 @@ type persistMode struct {
 	// priority=true 走**优先队列**（用户面路径：采集轮的落库、实例登记、解算、归档导入、关停）：
 	// 普通队列里的恢复/重放链必须为它让位（用户面延迟 > 恢复链吞吐）。
 	priority bool
-	// critical=true 是**插队档**：登记（RPC 截止 10s）与 Stop 这类调用者不能被采集轮的
-	// 高频落库挡在队尾（它们每次落库都短，但**数量多**——2026-10-03 `-race` 实测：登记延迟
-	// 预算回归 1.0–1.4s 转红）。critical 等待者一旦到门即被授予（不看队列位置），并入队到队首。
-	critical bool
-	// rows>0 时把**本次调用的行数上界**压到该值（背景链用小步长：让有硬截止的调用者最多等一个
-	// 小步就能拿到门——2026-10-03 `-race` 实测：单单元 ~1s 会把登记的 1s 预算顶穿）。
-	rows int
 	// maxWait>0 时是**热路径**：在门上最多等这么久，超时即交给后台通道并返回（不阻塞采集 ✗），
 	// 且最多执行一步（不做"循环到做完"✗）。
 	maxWait time.Duration
@@ -4688,15 +4808,8 @@ type persistMode struct {
 	oneStep bool
 }
 
-// persistBackgroundRows 是背景链（恢复/重放/交办）单步的行数上界。
-//
-// 取值依据：单单元实测 ≈13 µs/行（-race 下 ~10–20×）⇒ 64 行 ≈ 1ms（-race ≈ 10–20ms），远小于
-// 登记 RPC 的 1s 等待预算；而背景链的总吞吐由「反复小步」保证（每步之间让路，不牺牲总量）。
-const persistBackgroundRows = 64
-
 var (
 	persistPriority      = persistMode{priority: true}
-	persistCritical      = persistMode{priority: true, critical: true}
 	persistNormalOneStep = persistMode{oneStep: true}
 )
 
@@ -4739,10 +4852,7 @@ func (m *Manager) persistLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-m.persistRequests:
-			// 后台通道走**普通档**：它代表恢复/投递链的吞吐，不该与「采集轮/登记/Stop」抢优先档
-			// （否则登记这类 RPC 截止只有 10s 的调用者会被它挡住 ✗ —— 2026-10-03 `-race` 实测：
-			// 登记延迟预算回归转红）。
-			if err := m.persistCtx(context.Background(), persistMode{}); err != nil {
+			if err := m.persist(); err != nil {
 				slog.Warn("后台持久化失败（下一轮重试）", "error", err)
 			}
 		}
@@ -4773,7 +4883,7 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	waitStarted := time.Now()
-	g.enqueueLocked(seq, mode)
+	g.enqueueLocked(seq, mode.priority)
 	// 出队同样要 Broadcast：**排队结构的变化会改变「谁是队首」**——一个等待者返回（出队）后，
 	// 新的队首可能因此变得可授予，而它此刻正睡在 cond.Wait 上。少了这一次唤醒就是全体沉睡
 	// （2026-10-03 实测：12 个 persistCtx 全在 Cond.Wait、门是空的）。
@@ -4790,7 +4900,7 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 			m.requestPersist()
 			return nil
 		}
-		if !g.running && g.grantableLocked(seq, mode, m.persistPriorityStreakMax()) {
+		if !g.running && g.grantableLocked(seq, mode.priority, m.persistPriorityStreakMax()) {
 			g.running = true
 			g.dequeueLocked(seq)
 			if m.persistGateStage != nil {
@@ -4805,7 +4915,7 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 			if m.persistStepHold != nil {
 				m.persistStepHold()
 			}
-			incomplete, err := m.persistSnapshotStepRows(ctx, mode.rows)
+			incomplete, err := m.persistSnapshotStep(ctx)
 			if err == nil && !incomplete {
 				// 只有**完整落库**才推进覆盖水位：部分完成就宣称覆盖会静默丢更新。
 				m.persistCovered.Store(covered)
@@ -4843,7 +4953,7 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 			}
 			// 本步有界但差异未完：重新排队（回到队尾）+ **显式让路**——睡满一个调度量级的窗口，
 			// 让排队者（含采集轮）在窗口内把门拿走；本调用随后按队列顺序再取门。
-			g.enqueueLocked(seq, mode)
+			g.enqueueLocked(seq, mode.priority)
 			yield := m.persistYieldOf()
 			g.mu.Unlock()
 			if yield > 0 {
@@ -4913,11 +5023,6 @@ func (m *Manager) persistGateEnsure() {
 // （受每周期总预算约束）。返回 incomplete=true 表示差异尚未做完（镜像已按提交单元更新，
 // 下一步重算即续跑）。
 func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
-	return m.persistSnapshotStepRows(ctx, 0)
-}
-
-// persistSnapshotStepRows 是 persistSnapshotStep 的「本次调用行数上限」形态（rows>0 时生效）。
-func (m *Manager) persistSnapshotStepRows(ctx context.Context, rows int) (bool, error) {
 	m.mu.Lock()
 	store := m.index
 	if store == nil {
@@ -5009,7 +5114,7 @@ func (m *Manager) persistSnapshotStepRows(ctx context.Context, rows int) (bool, 
 	// 快照已经构建完成：释放 m.mu（登记路径等的短临界区锁）后再落库。落库顺序由持久化门
 	// 保证与构建顺序一致，因此「旧快照后写」不可能发生。
 	m.mu.Unlock()
-	stats, err := store.ApplyScopedCtxRows(ctx, desired, changed, prunes, rows)
+	stats, err := store.ApplyScopedCtx(ctx, desired, changed, prunes)
 	if err == nil {
 		// 观测面：记录本次读数（含分步未完成标志与范围删除条数），供排障与回归取证。
 		m.mu.Lock()

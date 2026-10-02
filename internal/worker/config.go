@@ -273,6 +273,25 @@ type LogIndexConfig struct {
 	BatchPrune LogIndexBatchPruneConfig `mapstructure:"batch_prune"`
 	// Persist 持久化提交单元预算：单次持久化按行数 + 耗时双上界切成多个提交单元。
 	Persist LogIndexPersistConfig `mapstructure:"persist"`
+	// Verify 校验/对账查询的全局天花板（键 log_index.verify.*）：天花板语义（正常路径零等待）。
+	Verify LogIndexVerifyConfig `mapstructure:"verify"`
+}
+
+// LogIndexVerifyConfig 是**校验/对账查询**的全局上限配置面（键 `log_index.verify.*`）。
+//
+// 为什么需要（2026-10-03 现场：近 5 分钟 `投影校验查询 ×410` 占满算力、未暂停源 readΔ=0）：
+// 校验按簇退避重试到窗口耗尽，而并发上界只有"单批内 4"✗——多源同时校验时没有全局上限，
+// 少量失败簇的重试就能吃光算力与 VL 容量。本配置给它们一个**天花板**。
+//
+// 天花板语义（务必与"限速节拍"区分）：令牌桶容量 = 速率 ⇒ 正常路径（几簇、1–2 次查询）
+// 一次性放行、**零等待** ✓；只有超过上限的风暴被削峰 ✓；采集侧的读/写不经过该闸 ✓。
+type LogIndexVerifyConfig struct {
+	// MaxPerSecond 是校验/对账查询的每秒上限；非正回退默认（30）。
+	MaxPerSecond int `mapstructure:"max_per_second"`
+	// MaxInFlight 是同时在飞的校验/对账查询数上限；非正回退默认（6）。
+	MaxInFlight int `mapstructure:"max_in_flight"`
+	// MaxQueriesPerChunk 是单簇单次校验的尝试次数上限；非正回退默认（12）。
+	MaxQueriesPerChunk int `mapstructure:"max_queries_per_chunk"`
 }
 
 // LogIndexBatchPruneConfig 是历史投递批次裁剪的配置面（键 `log_index.batch_prune.*`）。
@@ -320,6 +339,10 @@ type LogIndexPersistConfig struct {
 	// 为什么可配（2026-10-03 现场：门闩饿死采集轮）：默认值按「一次完整调度量级」估，
 	// 但不同部署的核数与负载差异大；上线后可据此调「恢复链吞吐 ↔ 采集轮延迟」的取舍。
 	CycleYield string `mapstructure:"cycle_yield"`
+	// HotBudget 是热路径（采集/投递侧）在持久化门上的等待上界（duration 字符串；键
+	// log_index.persist.hot_budget）；空/非正回退默认 30ms。热路径**绝不为落库阻塞**：超时即把
+	// 落库交给后台通道（现场"投递侧等门 ⇒ VL 零写入"的根治点）。
+	HotBudget string `mapstructure:"hot_budget"`
 	// PriorityStreak 是**老化阈值**（键 log_index.persist.priority_streak）：连续授予优先档
 	// （采集轮/登记/解算）多少次后必须放行一次普通档（恢复/重放链），防止反方向饿死。0/空 = 默认 8。
 	PriorityStreak int `mapstructure:"priority_streak"`
@@ -969,20 +992,36 @@ func (c *Config) IngestMultilineUnclosedTimeout() (time.Duration, error) {
 	return d, nil
 }
 
+// VerifyQueryTuning 把 `log_index.verify.*` 收敛为 ingest 的校验查询预算（非正一律回退默认）。
+//
+// 天花板语义：正常路径（少量查询）零等待，只有超过上限的风暴被削峰 ✓；采集侧不经此闸 ✓。
+func (c *Config) VerifyQueryTuning() (budget ingest.VerifyBudget, maxQueriesPerChunk int) {
+	if c == nil {
+		return ingest.VerifyBudget{}, 0
+	}
+	return ingest.VerifyBudget{
+		MaxPerSecond: c.LogIndex.Verify.MaxPerSecond,
+		MaxInFlight:  c.LogIndex.Verify.MaxInFlight,
+	}, c.LogIndex.Verify.MaxQueriesPerChunk
+}
+
 // PersistGateTuning 把 `log_index.persist.*` 下**持久化门公平性**的两枚旋钮收敛为 ingest 配置面。
 //
 //   - cycle_yield：让路窗口（空/非正 = 用 ingest 默认 max(20ms, GOMAXPROCS×5ms)）；
 //   - priority_streak：老化阈值（0 = 默认 8；负值 = 关闭老化，仅排障用）。
 //
 // 口径：非法值一律回退默认（回退默认永远是安全方向：窗口够大、老化够宽松都不会丢数据）。
-func (c *Config) PersistGateTuning() (persistYield time.Duration, priorityStreak int) {
+func (c *Config) PersistGateTuning() (persistYield, hotBudget time.Duration, priorityStreak int) {
 	if c == nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Persist.CycleYield)); err == nil && d > 0 {
 		persistYield = d
 	}
-	return persistYield, c.LogIndex.Persist.PriorityStreak
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Persist.HotBudget)); err == nil && d > 0 {
+		hotBudget = d
+	}
+	return persistYield, hotBudget, c.LogIndex.Persist.PriorityStreak
 }
 
 // IngestResolveGapsBudget 把 `log_ingest.resolve_gaps_*` 收敛为 ingest 的预算配置面。
@@ -1146,6 +1185,11 @@ func Load(path string) (*Config, error) {
 	// 持久化门的让路窗口与老化阈值（2026-10-03 门闩饿死采集轮）：空/0 = 用 ingest 默认。
 	v.SetDefault("log_index.persist.cycle_yield", "")
 	v.SetDefault("log_index.persist.priority_streak", 0)
+	v.SetDefault("log_index.persist.hot_budget", "")
+	// 校验查询的全局天花板（2026-10-03 现场 ×410 重试风暴）：0 = 用 ingest 默认（30/s、6 在飞、单簇 12 次）。
+	v.SetDefault("log_index.verify.max_per_second", 0)
+	v.SetDefault("log_index.verify.max_in_flight", 0)
+	v.SetDefault("log_index.verify.max_queries_per_chunk", 0)
 	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
