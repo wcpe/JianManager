@@ -1087,3 +1087,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 ### 修复
 - **暂停自愈的第二个环死（APPEND_REJECTED 自锁）**：`ResumeAcquire` 对任何未消解缺口一律拒绝，而 `APPEND_REJECTED` 语义 = "该批从未进 WAL"⇒ 只能靠回读愈合 ⇐ 回读在暂停期被 tailer 拒 ⇒「暂停⇒缺口不清⇒不许恢复⇒不回读」闭环；修法：在积压恢复路径对 `APPEND_REJECTED` 做分类消解（resolution="re-read on resume"、与操作员放弃严格区分；其余四因显式排除、新原因默认排除=fail-closed ✓）；红证前提待现场 Gaps/Holes 形状确认（草稿留存未删 ✓）。
 - **扫描三旋钮接 yml**：`log_index.scan.slice_rows/yield/budget`（默认 8192/1ms/2s）经 Config.ScanTuning() 装配 + 回归（默认/覆盖/非法回退，0 不得意为"关闭"✗）。
+
+### 修复
+- **自锁红证钉成（显式钉前提法）**：`RecordGap(APPEND_REJECTED)` 确实阻塞 `ResumeAcquire`（不变量实测 ✓）⇒ 变异=恢复原状即红（"暂停造成的 APPEND_REJECTED 缺口不得把源永久锁死在暂停"✓）；并证实积压暂停唯一复活通路 = `pruneReclaimed → maybeResumeBacklogLocked`（解算收尾的 `resumeAcquireRespectingGates` 故意不放行积压类 ✓）；端到端触发态查明（段读仅解算路径调用，草稿"让路 0 次"非 bug ✓）。fail-closed 红线暂只有断言无变异证据（如实登记 ✓）。
