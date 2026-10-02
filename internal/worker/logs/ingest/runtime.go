@@ -204,6 +204,8 @@ type Manager struct {
 	reconcileYieldNotify func()
 	// resumeInterval 是**容量自愈兜底**的低频周期（键 log_capacity.resume_interval）。
 	resumeInterval time.Duration
+	// resumeBatchPerRound 是兜底环每轮处理上限（见 defaultResumeBatchPerRound）。
+	resumeBatchPerRound int
 	// resumeProbe 是兜底扫描的测试观测口（生产 nil）：每个"积压/容量类暂停"的源被扫到时回调。
 	resumeProbe func(logSourceID string)
 	// scanYield / scanSliceRows / scanYieldNotify：**段读聚合路径的让路**（见
@@ -466,6 +468,8 @@ type Options struct {
 	Scan *ScanTuning
 	// ScanBudget 是单源单轮段读聚合的时间预算（0 ⇒ 默认 2s）。
 	ScanBudget time.Duration
+	// ResumeBatchPerRound 是兜底环每轮最多处理的可解源数（0 ⇒ 默认 8）。
+	ResumeBatchPerRound int
 	// ResumeInterval 是**容量自愈兜底**周期（0 ⇒ 默认 30s）：低频重试「排空存量 → 推进回收 →
 	// 按滞回解除积压/容量类暂停」，不依赖采集轮产生新批次 ✗。
 	ResumeInterval time.Duration
@@ -1196,6 +1200,7 @@ func New(opts Options) (*Manager, error) {
 		reconcileSliceEvents:     reconcileSliceFromOpts(opts),
 		reconcileYieldNotify:     opts.ReconcileYieldNotify,
 		resumeInterval:           opts.ResumeInterval,
+		resumeBatchPerRound:      opts.ResumeBatchPerRound,
 		scanYield:                scanValueOf(opts.ScanYield, opts.Scan, func(t *ScanTuning) time.Duration { return t.Yield }),
 		scanSliceRows:            scanSliceRowsOf(opts.ScanSliceRows, opts.Scan),
 		scanYieldNotify:          opts.ScanYieldNotify,
@@ -5100,6 +5105,21 @@ func (m *Manager) resumeIntervalOf() time.Duration {
 //
 // 红线（用户指令）：绝不越权清其它类暂停（容量门禁等）——原因前缀不属于本包积压类的源一律跳过 ✓；
 // 对符合的源做「尽力排空存量 → 推进回收 → 滞回评估」，积压回落到滞回线即自动解除 ✓。
+// defaultResumeBatchPerRound 是兜底环**每轮最多处理多少个可解源**。
+//
+// 为什么需要显式容量（2026-10-04 现场：15 分钟只解 1 个 ✗）：兜底环虽然遍历全部暂停源 ✓，
+// 但每源的"补证据→消解缺口→评估恢复"是一整串动作，慢源会把一轮拖长 ⇒ 观察上就是"每轮只放行
+// 一个" ✗。这里给出**有界但多源**的每轮容量（N 可配 ✓，默认 8），并记录本轮实际放行数 ✓，
+// 使"每轮容量"成为可观测、可调的显式量 ✓，而不是由最慢源隐式决定 ✗。
+const defaultResumeBatchPerRound = 8
+
+func (m *Manager) resumeBatchOf() int {
+	if m == nil || m.resumeBatchPerRound <= 0 {
+		return defaultResumeBatchPerRound
+	}
+	return m.resumeBatchPerRound
+}
+
 func (m *Manager) maybeResumePausedSources() {
 	m.mu.Lock()
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
@@ -5109,7 +5129,14 @@ func (m *Manager) maybeResumePausedSources() {
 		}
 	}
 	m.mu.Unlock()
+	// **本轮容量**（见 defaultResumeBatchPerRound）：处理够 N 个就收工，把剩下的留给下一轮 ✓
+	// （低频兜底，30s 一轮 ⇒ 60 源最多 8 轮收敛 ✓，而不是被每个慢源串行拖成"每轮一个" ✗）。
+	handled := 0
+	batch := m.resumeBatchOf()
 	for _, p := range pipes {
+		if handled >= batch {
+			break
+		}
 		led := p.Ledger()
 		if led == nil {
 			continue
@@ -5121,6 +5148,7 @@ func (m *Manager) maybeResumePausedSources() {
 		if !acquire.IsBacklogPauseReason(entry.PauseReason) {
 			continue // 越权红线：非积压/容量类暂停绝不动 ✓
 		}
+		handled++ // 计入本轮容量：**处理**（无论最终是否放行）都占额度 ✓，避免慢源无限拖延一轮 ✗
 		if m.resumeProbe != nil {
 			m.resumeProbe(p.Key().LogSourceID)
 		}
