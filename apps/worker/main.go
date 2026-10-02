@@ -800,6 +800,7 @@ func runWorker() {
 		// 采集索引（FR-496）：历史投递批次裁剪（log_index.batch_prune.*）与持久化提交单元
 		// 预算（log_index.persist.*）分别经 LogIndexConfig 的映射收敛为归一化默认（裁剪默认
 		// 开启；切分默认每提交单元 512 行、目标 40ms——真源是 stateindex.DefaultCommitBudget）。
+		persistYieldCfg, persistPriorityStreak := cfg.PersistGateTuning()
 		indexPruneCfg := cfg.LogIndex.IndexPrune()
 		indexCommitCfg := cfg.LogIndex.CommitBudget()
 		newIngest := func() (*ingest.Manager, error) {
@@ -821,6 +822,10 @@ func runWorker() {
 				IndexPrune: &indexPruneCfg,
 				// 索引持久化切分（FR-498 P0）：按行数 + 耗时双上界切成多个提交单元。
 				IndexCommit: &indexCommitCfg,
+				// 持久化门公平性（键 log_index.persist.cycle_yield / priority_streak）：
+				// 让路窗口决定「恢复链 ↔ 采集轮」的权衡，老化阈值决定优先权的反饿保护。
+				PersistYield:          persistYieldCfg,
+				PersistPriorityStreak: persistPriorityStreak,
 				// 单源 WAL **真实积压**上限（键 log_capacity.max_wal_entries / max_wal_bytes）：
 				// 直接下发到 WAL.SetLimits。此前 SetLimits 无任何调用点（现场只剩硬编码
 				// 16MiB/5000），而配置里的 max_wal_bytes 被接到了只增不减的累计量上。

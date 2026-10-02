@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -181,6 +182,13 @@ type Manager struct {
 	// lastPersistStats 是最近一次落库的读数（观测面）：生产排障据此确认
 	// 「①水位化差异删除是否真的启用」（RangePrunes > 0）、分步是否触发（Incomplete）。
 	lastPersistStats stateindex.Stats
+	// persistYield 是持久化「让路窗口」（见 persistStepYield 的说明）；0 用默认。
+	persistYield time.Duration
+	// persistPriorityStreak 是老化阈值（连续优先授予上限）；≤0 用默认（见 persistPriorityStreakMax）。
+	persistPriorityStreak int
+	// persistGateStage 是持久化门的测试观测口（生产 nil，零开销）：在「授予」与「交门」两个
+	// 事件点回调，让回归按**事件序**断言公平性（而不是靠耗时阈值猜）。
+	persistGateStage func(ctx context.Context, event string, seq int64, priority bool)
 	// replayBudget 是整窗重发的切片预算（见 ReplayBudget）。
 	replayBudget ReplayBudget
 	// vlProbeTimeout / vlNotReady 是 VL ready 门禁的读数：probe 超时与「哪些源当前被判未就绪」。
@@ -413,6 +421,11 @@ type Options struct {
 	// （runStartupRecovery），差别只在「在哪个 goroutine 里跑」——不存在「测试路径与生产路径
 	// 是两份实现」的问题。
 	StartupRecoveryBackground bool
+	// PersistYield 是持久化「让路窗口」（键 log_index.persist.cycle_yield）；≤0 用默认。
+	// PersistPriorityStreak 是老化阈值（键 log_index.persist.priority_streak）；≤0 用默认 8。
+	PersistPriorityStreak int
+	// PersistYield 是持久化「让路窗口」（键 log_index.persist.cycle_yield）；≤0 用默认。
+	PersistYield time.Duration
 	// VLReadyProbeTimeout 是对账/重发之前探测 VL 写入端就绪的超时（键
 	// log_reconcile.vl_ready_timeout）；≤0 用默认（defaultVLReadyProbeTimeout）。
 	//
@@ -1002,6 +1015,8 @@ func New(opts Options) (*Manager, error) {
 	}
 	// 生命周期 ctx：持久化的可取消面（Stop 取消）。只在 New 中赋值、之后不再改写 ⇒ 读不加锁。
 	m.lifecycleCtx, m.lifecycleCancel = context.WithCancel(context.Background())
+	m.persistYield = opts.PersistYield
+	m.persistPriorityStreak = opts.PersistPriorityStreak
 	m.replayBudget = replayBudgetOf(opts.ReplayBudget)
 	m.vlProbeTimeout = opts.VLReadyProbeTimeout
 	m.vlReadyWait = opts.VLReadyWait
@@ -1761,7 +1776,7 @@ func (m *Manager) Stop() error {
 		_, _ = p.Flush()
 	}
 	// 关停落库必须做完（不能用已被取消的生命周期 ctx）：它承担「停服即已落库」的语义。
-	if err := m.persistCtx(context.Background()); err != nil {
+	if err := m.persistCtx(context.Background(), persistPriority); err != nil {
 		return err
 	}
 	// 关闭索引句柄：显式把 WAL 归并回主库（见 stateindex.Store.Close）。
@@ -1810,14 +1825,68 @@ func (m *Manager) CloseIndex() error {
 	return nil
 }
 
-// persistGate 是持久化的「单执行者 + 广播」门：一次只有一个 goroutine 在构建与落库，
-// 其余调用方等待当前周期结束（而不是排到队尾各自再执行一遍）。
+// persistGate 是持久化的「单执行者 + 显式 FIFO 队列」门：一次只有一个 goroutine 在构建与落库，
+// 其余调用方**按到达顺序排队**（而不是各自再执行一遍；也不是裸 Broadcast + 抢锁）。
 type persistGate struct {
 	mu      sync.Mutex
 	cond    *sync.Cond
 	running bool
 	// err 是最近一个已完成周期的结果，供等待者返回（不吞错误）。
 	err error
+	// priorityQueue / normalQueue 是显式 FIFO 等待队列（存的是 persistJoin 序号）。
+	// 授予规则：优先队列非空 ⇒ 只授予其队首（恢复/重放链让位给用户面）；否则授予普通队首。
+	priorityQueue []int64
+	normalQueue   []int64
+	// priorityStreak 是「连续授予优先队列」的计数，用于**老化**：达上限即强制让一个普通队首通过
+	// （否则采集轮持续到达时，恢复/重放链会被无限压制 ✗ 反方向同样致命）。
+	priorityStreak int
+}
+
+// enqueueLocked 把序号加入对应队列（调用方需持 g.mu）。
+func (g *persistGate) enqueueLocked(seq int64, priority bool) {
+	if priority {
+		g.priorityQueue = append(g.priorityQueue, seq)
+		return
+	}
+	g.normalQueue = append(g.normalQueue, seq)
+}
+
+// dequeueLocked 把序号从两条队列里摘除（幂等；调用方需持 g.mu）。
+func (g *persistGate) dequeueLocked(seq int64) {
+	g.priorityQueue = removePersistSeq(g.priorityQueue, seq)
+	g.normalQueue = removePersistSeq(g.normalQueue, seq)
+}
+
+func removePersistSeq(queue []int64, seq int64) []int64 {
+	for index, value := range queue {
+		if value == seq {
+			return append(queue[:index], queue[index+1:]...)
+		}
+	}
+	return queue
+}
+
+// grantableLocked 判断该序号此刻能否取门：门空闲、自己是**队首**，且优先队列的「连胜」未到上限
+// （老化：见 persistPriorityStreakMax —— 否则持续到达的采集轮会把恢复链饿死 ✗ 反方向也不行）。
+//
+// 注意：让路窗口**不在这里判**——若在这里判，刚交门的调用者会落进 `Cond.Wait`，而窗口到期时
+// 没有任何人 Broadcast（无人唤醒 ⇒ 永久睡眠 ✗，2026-10-03 自伤实测：整包测试挂死 600s）。
+// 让路由调用方**显式 sleep** 实现（见 persistCtx 的 not-oneStep 分支）。调用方需持 g.mu。
+func (g *persistGate) grantableLocked(seq int64, priority bool, streakMax int) bool {
+	if g.running {
+		return false
+	}
+	if priority {
+		// 优先：队首即可（恢复链让位）。但连续授予达上限且普通队列有人等时，强制让普通队首先走。
+		if len(g.priorityQueue) == 0 || g.priorityQueue[0] != seq {
+			return false
+		}
+		return !(streakMax > 0 && g.priorityStreak >= streakMax && len(g.normalQueue) > 0)
+	}
+	if len(g.priorityQueue) > 0 && !(streakMax > 0 && g.priorityStreak >= streakMax) {
+		return false
+	}
+	return len(g.normalQueue) > 0 && g.normalQueue[0] == seq
 }
 
 // defaultPollConcurrency 是单轮采集的跨源并发度默认值（0 或负值取它，1 表示回到串行）。
@@ -3967,7 +4036,8 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event) 
 			if err := p.SetRecoveryHold(segID, true); err != nil {
 				return err
 			}
-			if err := m.persist(); err != nil {
+			// 恢复链：**一步一让**（不在这里把整段差异吃完，见 persistRecoveryStep 的说明）。
+			if err := m.persistRecoveryStep(context.Background()); err != nil {
 				return err
 			}
 			return fmt.Errorf("ingest: recovery segment %s retained by hold for %s: %s", segID, day, reason)
@@ -4005,7 +4075,7 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event) 
 	if err := p.TransitionRecovery(segID, logtypes.RecoveryCleaned, logtypes.ReleaseProjectionBacked, receiver); err != nil {
 		return err
 	}
-	return m.persist()
+	return m.persistRecoveryStep(context.Background())
 }
 
 func nextProjectionGeneration(current string) string {
@@ -4523,26 +4593,60 @@ func (m *Manager) load() error {
 //
 // 锁序：cycleMu → registerMu → pendingMu → persistGate → m.mu。
 // persist 保持既有契约：**返回即「当前已声明的变更全部落库」**（FR-499 的「登记返回即落库」
-// 保证不变）。内部按每周期总预算分步执行，步与步之间释放持久化门并让路——因此一段异常大的差异
-// （如启动恢复一次剪掉整个积压前缀）不再独占持久化门，采集轮/登记可在步间插进自己的周期。
+// 保证不变），且走**优先队列**（用户面：采集轮/登记/解算/关停的延迟优先于恢复链吞吐）。
 func (m *Manager) persist() error {
-	return m.persistCtx(context.Background())
+	return m.persistCtx(context.Background(), persistPriority)
 }
 
-// persistStepYield 是分步持久化「让路」的时长。
+// persistRecoveryStep 是**恢复/重放链**的落库入口：只做**一步**有界落库（受每周期总预算约束）
+// 后立即交门，不在这里循环把整段差异吃完。
+//
+// 为什么（2026-10-03 现场：persistGate 门闩饿死采集轮，SIGQUIT 8 个 goroutine 等 2+ 分钟）：
+// `releaseRecovery` 尾部此前调用 persist()——它"循环到做完"的契约在 4.5M 行差异下意味着 ~35 个
+// 周期（默认 131k 行/周期）一口气吃完，全程反复夺门；等待者（含采集轮）被压在门外 ⇒ read_pos
+// 冻结 + VL 零写入。现在恢复链一步一让，完整性由**驱动链的趟循环**保证（启动恢复的 pass 循环、
+// 常驻对账的轮次），且 `persistCovered` 只在整批完成时推进 ⇒ 不会谎报已覆盖。
+func (m *Manager) persistRecoveryStep(ctx context.Context) error {
+	return m.persistCtx(ctx, persistNormalOneStep)
+}
+
+// persistStepYield 是分步持久化「让路」的**下限**（真实窗口见 Manager.persistYieldOf）。
 //
 // 为什么需要它（2026-10-02 事故）：一次调用若把整批差异做完，就会独占持久化门；采集轮与登记
-// 的持久化都被挡在门外，表现为「采集停摆、登记超时」。让路让它们每步都有机会插进来。
-// 取值只需覆盖一次调度（毫秒级），相对单步（默认 3s / 131k 行）可忽略。
-const persistStepYield = 5 * time.Millisecond
-
-// persistCtx 是 persist 的**可取消 + 分步**实现：每步受每周期总预算约束（ApplyScopedCtx），
-// 步间释放门、让路后继续，直到差异做完或 ctx 取消。
+// 的持久化都被挡在门外，表现为「采集停摆、登记超时」。
 //
-// 续跑为什么天然不重复、不遗漏：ApplyScoped 的镜像**按提交单元增量更新**，与库内容逐单元一致；
-// 因此下一步重算差异时看到的只剩尚未处理的行。ctx 取消时已提交单元保留（状态一致），
-// 未提交部分在下一次调用继续。
-func (m *Manager) persistCtx(ctx context.Context) error {
+// 为什么 5ms 不够（2026-10-03 现场）：持门者每 5ms 回来抢一次 `g.mu`，等待者在 Mutex 上被持续
+// 压制（SIGQUIT 等 2+ 分钟）。让路窗口必须覆盖**一次完整调度量级**（默认 GOMAXPROCS×5ms、
+// 下限 20ms，键 log_index.persist.cycle_yield 可配），且让路只约束「刚交门的那个调用者」。
+const persistStepYield = 20 * time.Millisecond
+
+// defaultPersistPriorityStreakMax 是老化阈值默认值（见 persistPriorityStreakMax）。
+const defaultPersistPriorityStreakMax = 8
+
+// persistMode 决定一次持久化调用的排队档位与推进步数。
+type persistMode struct {
+	// priority=true 走**优先队列**（用户面路径：采集轮的落库、实例登记、解算、归档导入、关停）：
+	// 普通队列里的恢复/重放链必须为它让位（用户面延迟 > 恢复链吞吐）。
+	priority bool
+	// oneStep=true 只做一步就交门（恢复/重放链）；false = 循环到「此后再无差异」才返回
+	// （同步语义：登记返回即已落库、Stop 关停前落完）。
+	oneStep bool
+}
+
+var (
+	persistPriority      = persistMode{priority: true}
+	persistNormalOneStep = persistMode{oneStep: true}
+)
+
+// persistCtx 是 persist 的**可取消 + 分步 + 显式公平**实现。
+//
+// 公平性（2026-10-03 现场：门闩饿死采集轮）：等待者**显式入队**（优先/普通两条 FIFO），只有队首
+// 能被授予门；持门者做完一步后必须**重新排到队尾**，并受「让路窗口」约束（刚交门的调用者在窗口内
+// 不得再取门）——公平性不再交给 `sync.Mutex` 的抢锁与裸 Broadcast ✗。
+//
+// 续跑为什么不重不漏：`ApplyScoped` 的镜像**按提交单元增量更新**，与库内容逐单元一致；因此下一步
+// 重算差异时看到的只剩尚未处理的行。ctx 取消时已提交单元保留（状态一致），未提交部分下次继续。
+func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -4550,60 +4654,115 @@ func (m *Manager) persistCtx(ctx context.Context) error {
 	// 合并（coalescing）：本调用按到达顺序声明一个序号；任何「构建发生在声明之后」的落库都会
 	// 覆盖它（见下方 covered 的读取位置），因此一个周期可被任意多个调用方共享，短变更调用者
 	// （实例登记）不必排到队尾各自再执行一遍。
-	//
-	// 为什么必须有（FR-498 并发采集轮的连带问题）：并发后多个源同时调用 persist，登记这类
-	// 「短变更」调用者排在 8 个 worker 之后（race 实测：单次持久化执行 ≈0.5s、排队累计 ≈1.7s，
-	// 登记耗时 ≥1s 截止，使 TestRegisterInstanceNotBlockedBySaturatedPollRound 转红）。
 	seq := m.persistJoin.Add(1)
 	if m.persistCovered.Load() >= seq {
 		return nil
 	}
 	g := &m.persistGate
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.enqueueLocked(seq, mode.priority)
+	// 出队同样要 Broadcast：**排队结构的变化会改变「谁是队首」**——一个等待者返回（出队）后，
+	// 新的队首可能因此变得可授予，而它此刻正睡在 cond.Wait 上。少了这一次唤醒就是全体沉睡
+	// （2026-10-03 实测：12 个 persistCtx 全在 Cond.Wait、门是空的）。
+	defer func() {
+		g.dequeueLocked(seq)
+		g.cond.Broadcast()
+	}()
 	for {
-		g.mu.Lock()
-		if g.running {
-			// 有周期在跑：等它结束。若它的构建发生在本声明之后，本变更已被它覆盖；否则继续
-			// 等/接管下一个周期。等待的是「一个周期」，而不是排在队尾。
-			g.cond.Wait()
-			if m.persistCovered.Load() >= seq {
-				err := g.err
-				g.mu.Unlock()
-				return err
+		if m.persistCovered.Load() >= seq {
+			return g.err
+		}
+		if !g.running && g.grantableLocked(seq, mode.priority, m.persistPriorityStreakMax()) {
+			g.running = true
+			g.dequeueLocked(seq)
+			if m.persistGateStage != nil {
+				m.persistGateStage(ctx, "acquire", seq, mode.priority)
 			}
 			g.mu.Unlock()
+
+			// 覆盖水位必须在**构建之前**读取：在此之后声明的请求，其变更（声明前已写入 state）
+			// 必然被本次构建看到，因此可以安全声明「已覆盖到该序号」。反过来（先构建后读）会把
+			// 构建看不到的请求也算作已落库，那是静默丢更新。
+			covered := m.persistJoin.Load()
+			incomplete, err := m.persistSnapshotStep(ctx)
+			if err == nil && !incomplete {
+				// 只有**完整落库**才推进覆盖水位：部分完成就宣称覆盖会静默丢更新。
+				m.persistCovered.Store(covered)
+			}
+
+			g.mu.Lock()
+			g.running = false
+			g.err = err
+			if mode.priority {
+				g.priorityStreak++
+			} else {
+				g.priorityStreak = 0
+			}
+			g.cond.Broadcast()
+			if m.persistGateStage != nil {
+				m.persistGateStage(ctx, "release", seq, mode.priority)
+			}
+			if err != nil {
+				return err
+			}
+			if !incomplete {
+				return nil
+			}
+			if mode.oneStep {
+				// 恢复/重放链：一步一让——剩余差异交给驱动链的下一趟（它们本来就让路）。
+				return nil
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			// 本步有界但差异未完：重新排队（回到队尾）+ **显式让路**——睡满一个调度量级的窗口，
+			// 让排队者（含采集轮）在窗口内把门拿走；本调用随后按队列顺序再取门。
+			g.enqueueLocked(seq, mode.priority)
+			yield := m.persistYieldOf()
+			g.mu.Unlock()
+			if yield > 0 {
+				time.Sleep(yield)
+			}
+			g.mu.Lock()
 			continue
 		}
-		g.running = true
-		g.mu.Unlock()
-
-		// 覆盖水位必须在**构建之前**读取：在此之后声明的请求，其变更（声明前已写入 state）
-		// 必然被本次构建看到，因此可以安全声明「已覆盖到该序号」。反过来（先构建后读）会把
-		// 构建看不到的请求也算作已落库，那是静默丢更新。
-		covered := m.persistJoin.Load()
-		incomplete, err := m.persistSnapshotStep(ctx)
-		if err == nil && !incomplete {
-			// 只有**完整落库**才推进覆盖水位：部分完成就宣称覆盖会静默丢更新
-			// （未写入的行再也没人重试）。
-			m.persistCovered.Store(covered)
-		}
-
-		g.mu.Lock()
-		g.running = false
-		g.err = err
-		g.cond.Broadcast()
-		g.mu.Unlock()
-		if err != nil {
-			return err
-		}
-		if !incomplete {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		// 本步有界但差异未完：让路（门已释放，采集轮/登记可插进自己的周期）后继续做剩余差异。
-		time.Sleep(persistStepYield)
+		g.cond.Wait()
 	}
+}
+
+// persistPriorityStreakMax 是「连续授予优先队列」的上限（老化阈值）：达上限后强制让一个普通队首
+// 通过一次，避免持续到达的采集轮把恢复/重放链饿死（反方向饥饿）。
+//
+// 默认 8：按「采集轮 250ms 一轮、恢复链每步 ≤3s」估算，8 次优先授予 ≈ 数秒内必然放行一次普通等待者，
+// 恢复链仍能收敛；配 0 或负值表示**关闭老化**（仅用于回归里复刻「无反饿保护」的形态）。
+func (m *Manager) persistPriorityStreakMax() int {
+	if m == nil {
+		return defaultPersistPriorityStreakMax
+	}
+	if m.persistPriorityStreak < 0 {
+		// 负值 = **关闭老化**（仅用于回归复刻「无反饿保护」的形态；生产不这样配）。
+		return 0
+	}
+	if m.persistPriorityStreak == 0 {
+		return defaultPersistPriorityStreakMax
+	}
+	return m.persistPriorityStreak
+}
+
+// persistYieldOf 返回生效的让路窗口：默认 max(persistStepYield, GOMAXPROCS × 5ms)。
+//
+// 为什么与 GOMAXPROCS 挂钩：「一次完整调度」的量级取决于并行度——核越多，被唤醒的等待者越多，
+// 单个持门者越容易靠"回来得快"压制它们（现场 8 个等待者等 2+ 分钟）。
+func (m *Manager) persistYieldOf() time.Duration {
+	if m != nil && m.persistYield > 0 {
+		return m.persistYield
+	}
+	window := time.Duration(runtime.GOMAXPROCS(0)) * 5 * time.Millisecond
+	if window < persistStepYield {
+		window = persistStepYield
+	}
+	return window
 }
 
 // persistGateEnsure 惰性初始化持久化门（兼容直接构造 Manager 的测试路径）。

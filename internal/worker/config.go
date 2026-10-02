@@ -313,6 +313,16 @@ type LogIndexPersistConfig struct {
 	// CycleMaxDuration 是单次落库调用的墙钟预算（duration 字符串；键
 	// log_index.persist.cycle_max_duration）；非法/非正回退默认。检查落在提交单元之间。
 	CycleMaxDuration string `mapstructure:"cycle_max_duration"`
+	// CycleYield 是持久化门的**让路窗口**（duration 字符串；键 log_index.persist.cycle_yield）：
+	// 长链做完一步后必须让出这么久的门，让排队者（含采集轮）拿走。空/非正回退默认
+	// （max(20ms, GOMAXPROCS×5ms)）。
+	//
+	// 为什么可配（2026-10-03 现场：门闩饿死采集轮）：默认值按「一次完整调度量级」估，
+	// 但不同部署的核数与负载差异大；上线后可据此调「恢复链吞吐 ↔ 采集轮延迟」的取舍。
+	CycleYield string `mapstructure:"cycle_yield"`
+	// PriorityStreak 是**老化阈值**（键 log_index.persist.priority_streak）：连续授予优先档
+	// （采集轮/登记/解算）多少次后必须放行一次普通档（恢复/重放链），防止反方向饿死。0/空 = 默认 8。
+	PriorityStreak int `mapstructure:"priority_streak"`
 }
 
 // CommitBudget 把本地配置面收敛为 stateindex 的提交单元预算（非法值一律回退归一化默认）。
@@ -959,6 +969,22 @@ func (c *Config) IngestMultilineUnclosedTimeout() (time.Duration, error) {
 	return d, nil
 }
 
+// PersistGateTuning 把 `log_index.persist.*` 下**持久化门公平性**的两枚旋钮收敛为 ingest 配置面。
+//
+//   - cycle_yield：让路窗口（空/非正 = 用 ingest 默认 max(20ms, GOMAXPROCS×5ms)）；
+//   - priority_streak：老化阈值（0 = 默认 8；负值 = 关闭老化，仅排障用）。
+//
+// 口径：非法值一律回退默认（回退默认永远是安全方向：窗口够大、老化够宽松都不会丢数据）。
+func (c *Config) PersistGateTuning() (persistYield time.Duration, priorityStreak int) {
+	if c == nil {
+		return 0, 0
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Persist.CycleYield)); err == nil && d > 0 {
+		persistYield = d
+	}
+	return persistYield, c.LogIndex.Persist.PriorityStreak
+}
+
 // IngestResolveGapsBudget 把 `log_ingest.resolve_gaps_*` 收敛为 ingest 的预算配置面。
 //
 // 口径：源数 ≤0 或 duration 空串 ⇒ 用默认（零配置零行为变化）；duration 非空必须是合法
@@ -1117,6 +1143,9 @@ func Load(path string) (*Config, error) {
 	// 每周期总预算（2026-10-02 事故修复）：单次落库调用做多少；0/空 = 用 stateindex 默认。
 	v.SetDefault("log_index.persist.cycle_max_rows", 0)
 	v.SetDefault("log_index.persist.cycle_max_duration", "")
+	// 持久化门的让路窗口与老化阈值（2026-10-03 门闩饿死采集轮）：空/0 = 用 ingest 默认。
+	v.SetDefault("log_index.persist.cycle_yield", "")
+	v.SetDefault("log_index.persist.priority_streak", 0)
 	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。

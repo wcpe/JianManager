@@ -1062,3 +1062,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 - **D12（重发无界 + 无 VL 门禁）**：整窗重发改按天切片可续（`ReplayBudget{MaxDays=1,MaxDuration=90s}` 可配；整窗完成前不 releaseRecovery 不推水位；常驻对账重发现剩余天无需游标）；新增 `ensureVLReady` 门禁（探针带超时、状态变化才打日志、等待上界 90s 且不致命、2s 轮询不再烧核）接在启动恢复与常驻对账之前，未就绪记 `vl_not_ready` 等下一轮。
 - **D4（条目闸失效双因）**：`acquire.IsBacklogPauseReason` + `resumeAcquireRespectingGates` —— 解算/放弃裁定收尾不再越权清除积压闸（现场 113.9 万条直接成因）；`WAL.Restore` 后当场判闸（不再滞后到下次 Append）。
 - **纪律修正**：reconcile_loop 的"调用方必须持 cycleMu"未实现红线改写为真实纪律（快照→离锁 VL 写/校验→短临界区推进；**不引入 cycleMu**）。4 条变异转红；「重发期间采集不停」红证未达成、已在用例注释显式标注不得当作证据（如实）。
+
+### 修复
+- **persistGate 饿死采集轮（现场 SIGQUIT 实证根因）**：门闩重写为显式双队列 FIFO（优先=采集落库/登记/解算/导入/Stop；普通=恢复/重放链；只有队首可被授予，持门者每步后排队尾并显式睡满让路窗口 `max(20ms, GOMAXPROCS×5ms)`，键 `log_index.persist.cycle_yield` 可配）；恢复链改正 `persistRecoveryStep`（一步一让，完整性交驱动链趟循环，persistCovered 只在整批完成后推进）；新增老化反饿（优先连续授予达 `log_index.persist.priority_streak`（默认 8）即强制放行一次普通队首）。**自伤两处已修**（让路窗口误入 grantableLocked 致持门者等永不到来的 Broadcast；出队未 Broadcast 致全体沉睡）。4 条红证按事件序/结构口径（判别力关键=单 P + 紧循环长链，消掉多核运气）；-race ingest 333.6s 零竞争。
