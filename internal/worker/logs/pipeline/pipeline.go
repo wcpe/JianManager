@@ -551,6 +551,14 @@ func (p *Pipeline) SetArchiveOwnerRegistry(fn func(logSourceID, cleanPath, objec
 	p.imp.SetOwnerRegistry(fn)
 }
 
+// SetArchiveBackfill 注入「按原代次补账」通道（命中其它代次且其账本可寻址时使用）。
+func (p *Pipeline) SetArchiveBackfill(fn func(ownerGeneration, archivePath, objectID string) error) {
+	if p == nil || p.imp == nil {
+		return
+	}
+	p.imp.SetBackfill(fn)
+}
+
 // ImportArchive 导入 gzip 归档；已关联轮转时跳过整包，禁止双计。
 func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
 	result, err := p.imp.ImportGzip(path)

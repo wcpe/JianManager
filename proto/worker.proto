@@ -73,6 +73,13 @@ service WorkerService {
   rpc LogMigratePartition(LogMigratePartitionRequest) returns (LogTaskResponse);
   rpc LogCutoverReadiness(LogCutoverReadinessRequest) returns (LogCutoverReadinessResponse);
   rpc LogResolveIngestGaps(LogResolveIngestGapsRequest) returns (LogTaskResponse);
+  // LogImportArchives 手动触发归档（.gz）导入扫描：把"已经躺在源目录里、但还没被导入"的
+  // 归档立刻走一次与自动路径**完全相同**的导入管道（同清洗、同归属闸、同幂等）。
+  //
+  // 为什么需要它：自动发现只在采集轮里跑，而采集轮在源被暂停（容量/积压/人工）时不再读取——
+  // 此时目录里的历史归档既不会被自动导入，运维也没有别的入口，只能干等。
+  // 本 RPC 提供那条入口，并强制携带操作人（可审计）。
+  rpc LogImportArchives(LogImportArchivesRequest) returns (LogTaskResponse);
   // IssueTerminalToken 签发一次性终端连接 token。
   rpc IssueTerminalToken(IssueTerminalTokenRequest) returns (IssueTerminalTokenResponse);
   // ListFiles 列出实例工作目录下的文件。
@@ -2682,5 +2689,12 @@ message LogResolveIngestGapsRequest {
   string request_id = 1;
   string protocol_version = 2;
   // 可选：仅解该存储命名空间（源）的缺口。空=整节点（既有行为，逐字不变）。
+  string storage_namespace = 3;
+}
+
+message LogImportArchivesRequest {
+  string request_id = 1;
+  string protocol_version = 2;
+  // 可选：仅扫描该存储命名空间（源）；空 = 本 Worker 全部可导入源。
   string storage_namespace = 3;
 }

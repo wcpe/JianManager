@@ -1,6 +1,7 @@
 package acquire
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,6 +89,78 @@ func TestForeignGenerationRefusalLeavesVisibleGap(t *testing.T) {
 	require.Contains(t, seg.ImportError, "ARCHIVE_FOREIGN_GENERATION")
 	if info, statErr := os.Stat(gzPath); statErr == nil {
 		require.Equal(t, info.Size(), seg.ObservedSize)
+	}
+}
+
+// 补账不可行时必须**退回拒绝 + 记缺口**（不丢不重），绝不得静默改走当前代次。
+//
+// 这条在 Manager 层不可直接构造"注册表命中但不可寻址"——因为两者读的是同一份 m.state
+// （命中本身就是可寻址的证据）。故用"补账回调返回错误"来驱动这条回退路径，
+// 这也是生产上补账失败的唯一形态（段存/persist/恢复失败）。
+//
+// 转红方式（实测）：把补账失败分支改成直接放行（去掉后退回拒绝的那条路），
+// 本用例的缺口断言立即红。
+func TestImportGzipFallsBackToRefusalWhenBackfillFails(t *testing.T) {
+	dir := t.TempDir()
+	gzPath := filepath.Join(dir, "2026-01-01-1.log.gz")
+	writeGzip(t, gzPath, []string{"[12:00:00] [Server thread/INFO]: foreign"})
+
+	key := testKey("src-bf-fail", "g2")
+	led := ledger.New()
+	imp := NewArchiveImporter(led, key)
+	imp.SetOwnerRegistry(func(string, string, string) (string, bool) { return "g1", true })
+	imp.SetBackfill(func(string, string, string) error { return errors.New("段存不可写") })
+
+	res, err := imp.ImportGzip(gzPath)
+	require.NoError(t, err)
+	require.True(t, res.Skipped)
+	require.Zero(t, res.ImportedCount, "补账失败时不得把数据导入当前代次")
+	require.Zero(t, imp.Backfilled())
+	require.Equal(t, 1, imp.RefusedForeign(), "补账失败必须计入拒绝")
+
+	ent := led.Get(key)
+	var found bool
+	for _, gap := range ent.Gaps {
+		if gap.Reason == "ARCHIVE_FOREIGN_GENERATION" {
+			found = true
+		}
+	}
+	require.True(t, found, "补账失败必须留可见缺口（否则这份数据悄无声息地消失）")
+}
+
+// 补账成功时：不导入当前代次、不计拒绝、不记缺口、不登记分段，且计入 backfilled。
+//
+// 转红方式（实测）：把补账成功分支里的 return 去掉（即补账后继续导入当前代次），
+// 本用例的「当前代次无缺口/无事件」断言立即红。
+func TestImportGzipBackfillsInsteadOfImportingToCurrentGeneration(t *testing.T) {
+	dir := t.TempDir()
+	gzPath := filepath.Join(dir, "2026-01-01-1.log.gz")
+	writeGzip(t, gzPath, []string{"[12:00:00] [Server thread/INFO]: foreign"})
+
+	key := testKey("src-bf-ok", "g2")
+	led := ledger.New()
+	imp := NewArchiveImporter(led, key)
+	imp.SetOwnerRegistry(func(string, string, string) (string, bool) { return "g1", true })
+	gotOwner, gotPath, gotObj := "", "", ""
+	imp.SetBackfill(func(owner, path, objectID string) error {
+		gotOwner, gotPath, gotObj = owner, path, objectID
+		return nil
+	})
+
+	res, err := imp.ImportGzip(gzPath)
+	require.NoError(t, err)
+	require.True(t, res.Skipped, "补账成功不应再导入当前代次")
+	require.Contains(t, res.Reason, "backfilled")
+	require.Equal(t, 1, imp.Backfilled())
+	require.Zero(t, imp.RefusedForeign(), "补账成功不得计入拒绝")
+	require.Equal(t, "g1", gotOwner)
+	require.Equal(t, gzPath, gotPath)
+	require.Equal(t, res.ArchiveObjectID, gotObj, "补账必须带上 archive_object_id（注册表键分量）")
+
+	ent := led.Get(key)
+	require.Empty(t, ent.Gaps, "补账成功不得在当前代次记缺口")
+	for _, seg := range ent.Segments {
+		require.False(t, seg.Imported, "补账成功不得在当前代次登记已导入分段")
 	}
 }
 

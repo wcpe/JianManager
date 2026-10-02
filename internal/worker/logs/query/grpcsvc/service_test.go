@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -275,6 +276,54 @@ func TestLogSearch_IngestPositionGapsAnnotatedSeparately(t *testing.T) {
 		"放弃标记不得改写分区的可查询性状态")
 	require.Empty(t, resp2.GetCoverage().GetPartialReasons(),
 		"放弃标记不得写进 logcoord 的 partial_reasons（两者语义必须分开标注）")
+}
+
+// 手动归档导入入口：必须要求操作人（无痕触发 = "谁灌了数据"留空白），且把范围原样下传。
+//
+// 转红方式（实测）：把 LogImportArchives 里的 operatorFromContext 空值判定去掉，①立即红。
+func TestLogImportArchives_RequiresOperatorAndPassesScope(t *testing.T) {
+	svc := New(&fakeQuery{}, &fakeViews{})
+
+	// 未接线：必须明确失败，不得空成功（否则运维会以为"扫过了、没东西"）。
+	resp, err := svc.LogImportArchives(context.Background(), &workerpb.LogImportArchivesRequest{})
+	require.NoError(t, err)
+	require.Equal(t, workerpb.LogTaskState_LOG_TASK_FAILED, resp.GetState())
+
+	fake := &fakeArchiveImporter{}
+	svc.SetIngestArchiveImporter(fake)
+
+	// ① 无操作人：拒绝，且**不得**调用导入器。
+	resp, err = svc.LogImportArchives(context.Background(), &workerpb.LogImportArchivesRequest{
+		StorageNamespace: "ns:game",
+	})
+	require.NoError(t, err)
+	require.Equal(t, workerpb.LogTaskState_LOG_TASK_FAILED, resp.GetState())
+	require.Contains(t, resp.GetError().GetMessage(), OperatorMetadataKey)
+	require.Zero(t, fake.calls, "无操作人时不得执行导入（不可无痕）")
+
+	// ② 带操作人：执行，范围原样下传。
+	ctx := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs(OperatorMetadataKey, "ops@example"))
+	resp, err = svc.LogImportArchives(ctx, &workerpb.LogImportArchivesRequest{
+		StorageNamespace: " ns:game ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, workerpb.LogTaskState_LOG_TASK_SUCCEEDED, resp.GetState())
+	require.Equal(t, 1, fake.calls)
+	require.Equal(t, "ns:game", fake.namespace, "命名空间应 trim 后下传")
+	require.Equal(t, "ops@example", fake.operator)
+}
+
+type fakeArchiveImporter struct {
+	calls     int
+	namespace string
+	operator  string
+}
+
+func (f *fakeArchiveImporter) ImportArchivesNow(ns, operator string) (int, int, error) {
+	f.calls++
+	f.namespace, f.operator = ns, operator
+	return 1, 1, nil
 }
 
 func TestLogSearch_UnimplementedRangeClient_LOGUnsupported(t *testing.T) {

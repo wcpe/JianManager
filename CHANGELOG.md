@@ -1041,3 +1041,10 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 新增
 - **查询面「位置缺失」标记（ADR-B 批 2 收尾）**：新增独立 proto 字段 `repeated IngestPositionGap ingest_position_gaps`（含 storage_namespace/from/to/reason_code/operator/at_utc，与 coverage 的语义分界写死），服务层经 IngestAbandonmentProvider 适配接入（目标匹配用前缀、空目标=本 Worker 全部）；离线 proto 生成（模块缓存纯 Go 链路，rawDesc md5 与既有生成物逐字节等价后放行）——仅 3 行注释附着偏差，下次真 protoc 会自然还原。
+
+### 新增
+- **gz 手动/定时导入入口（后续项④）**：新增 `LogImportArchives` RPC（操作人经 x-jm-operator，取不到即拒；复用既有 importArchives——同管道/同归属闸/同幂等）；`log_ingest.archive_scan_interval` 定时扫描（默认关，interval≤0 不起协程）；5 项变异转红。
+- **账本侧代次补账（后续项①）**：跨代次命中 → 用原代次构造事件写入原代次账本（Ledger.Restore 寻址）+ 事件体入原代次段存 + 登记分段已导入，成为原代次 backlog（其再次活跃时自然外发）；失败仍拒绝+告警+记缺口；不碰 deliver/ReclaimProof；2 项变异转红。
+- **常驻增量对账 + 事件级状态（后续项③）**：`reconcile_loop`（周期 15m/单轮预算 45s/8 源每轮，可配可关；只读阶段不持锁、重发持 cycleMu 与采集串行；运行期不重发不可信查询=防风暴，启动版保持整窗重发；统计入 G10 面）；`event_status` 五态派生态视图（ABANDONED>VERIFIED>ACKED>SENT_UNACKED>UNSENT）+ 运行期接口与 **CLI `worker log-event-status`** 双出口（真二进制实跑非空 ✓）。
+- **放弃凭据持久化（授权修复）**：`Entry.Abandonments` 落 indexAux JSON（不动 schema），重启后查询标记与回收放行凭据不再丢失。
+- **proto 生成链口径（后续项②结案）**：真 protoc 29.3 对比实测"3 行注释偏差"不存在（仅 1 行生成器元信息差异），rawDesc md5 两侧一致、离线链产物逐字节相同；口径写入 scripts/proto-gen.sh。

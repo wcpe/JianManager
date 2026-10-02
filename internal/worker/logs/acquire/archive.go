@@ -35,10 +35,19 @@ type ArchiveImporter struct {
 	// **假设当前代次**——而那正是"静默重复"的入口（同一份字节以不同 event_id 再进一次 VL，
 	// 且新代次的 VerifiedRuns 认不了旧账）。
 	lookupOwner func(logSourceID, cleanPath, objectID string) (string, bool)
+	// backfill 是「按原代次补账」通道：命中其它代次且该代次账本可寻址时，由上层把归档
+	// 记入**原代次**的账（补账），而不是导入到当前代次。
+	//
+	// 为什么放在回调里而不是本包实现：补账需要"跨代次的账本 + 段存 + 待投递账目"，
+	// 这些都在上层（ingest Manager）手里；本包只有**当前代次**的账本。
+	// 返回 nil 表示补账成功（本次不再导入到当前代次）；返回错误则退回"拒绝 + 记缺口"。
+	backfill func(ownerGeneration, archivePath, objectID string) error
 	// skippedAlreadyLinked 测试断言：已关联时跳过次数。
 	skippedAlreadyLinked int
 	// refusedForeign 测试断言：因归属不可追溯而被拒的次数。
 	refusedForeign int
+	// backfilled 测试断言：按原代次补账的次数。
+	backfilled int
 	// importedEvents 累计导入事件数。
 	importedEvents int
 }
@@ -59,6 +68,14 @@ func NewArchiveImporter(led *ledger.Ledger, key ledger.SourceKey) *ArchiveImport
 func (a *ArchiveImporter) SetOwnerRegistry(fn func(logSourceID, cleanPath, objectID string) (string, bool)) {
 	a.lookupOwner = fn
 }
+
+// SetBackfill 注入「按原代次补账」通道（见 ArchiveImporter.backfill）。
+func (a *ArchiveImporter) SetBackfill(fn func(ownerGeneration, archivePath, objectID string) error) {
+	a.backfill = fn
+}
+
+// Backfilled 返回按原代次补账的次数（观测/测试用）。
+func (a *ArchiveImporter) Backfilled() int { return a.backfilled }
 
 // RefusedForeign 返回因归属不可追溯而被拒的归档数（观测/测试用）。
 func (a *ArchiveImporter) RefusedForeign() int { return a.refusedForeign }
@@ -175,6 +192,28 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 	if a.lookupOwner != nil {
 		cleanPath := filepath.Clean(archivePath)
 		if owner, found := a.lookupOwner(a.key.LogSourceID, cleanPath, objID); found && owner != a.key.SourceGeneration {
+			// 命中其它代次：优先走**按原代次补账**（把这份数据记回它自己的账上），
+			// 而不是导入到当前代次。补账成功即返回（本次不产生当前代次事件）。
+			//
+			// 补账失败（原代次账本不可寻址 / 段存或持久化失败）一律退回下面的
+			// "拒绝 + 记缺口 + 告警"——宁可让人工看见，也绝不静默按当前代次导入。
+			if a.backfill != nil {
+				if bfErr := a.backfill(owner, archivePath, objID); bfErr == nil {
+					a.backfilled++
+					slog.Info("已按原代次补账（不归当前代次）",
+						"logSourceID", a.key.LogSourceID, "generation", a.key.SourceGeneration,
+						"ownerGeneration", owner, "archive", cleanPath)
+					return &ImportResult{
+						Skipped:         true,
+						Reason:          "backfilled under original generation " + owner,
+						ArchiveObjectID: objID,
+					}, nil
+				} else {
+					slog.Warn("按原代次补账失败，退回拒绝并记缺口",
+						"logSourceID", a.key.LogSourceID, "ownerGeneration", owner,
+						"archive", cleanPath, "error", bfErr)
+				}
+			}
 			reason := fmt.Sprintf(
 				"归档 %s 已由代次 %q 导入，本代次 %q 不得重复归账（event_id 含代次，重复导入即静默重复）",
 				cleanPath, owner, a.key.SourceGeneration)

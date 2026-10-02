@@ -52,6 +52,7 @@ const (
 	WorkerService_LogMigratePartition_FullMethodName         = "/worker.WorkerService/LogMigratePartition"
 	WorkerService_LogCutoverReadiness_FullMethodName         = "/worker.WorkerService/LogCutoverReadiness"
 	WorkerService_LogResolveIngestGaps_FullMethodName        = "/worker.WorkerService/LogResolveIngestGaps"
+	WorkerService_LogImportArchives_FullMethodName           = "/worker.WorkerService/LogImportArchives"
 	WorkerService_IssueTerminalToken_FullMethodName          = "/worker.WorkerService/IssueTerminalToken"
 	WorkerService_ListFiles_FullMethodName                   = "/worker.WorkerService/ListFiles"
 	WorkerService_ReadFile_FullMethodName                    = "/worker.WorkerService/ReadFile"
@@ -207,6 +208,13 @@ type WorkerServiceClient interface {
 	LogMigratePartition(ctx context.Context, in *LogMigratePartitionRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
 	LogCutoverReadiness(ctx context.Context, in *LogCutoverReadinessRequest, opts ...grpc.CallOption) (*LogCutoverReadinessResponse, error)
 	LogResolveIngestGaps(ctx context.Context, in *LogResolveIngestGapsRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
+	// LogImportArchives 手动触发归档（.gz）导入扫描：把"已经躺在源目录里、但还没被导入"的
+	// 归档立刻走一次与自动路径**完全相同**的导入管道（同清洗、同归属闸、同幂等）。
+	//
+	// 为什么需要它：自动发现只在采集轮里跑，而采集轮在源被暂停（容量/积压/人工）时不再读取——
+	// 此时目录里的历史归档既不会被自动导入，运维也没有别的入口，只能干等。
+	// 本 RPC 提供那条入口，并强制携带操作人（可审计）。
+	LogImportArchives(ctx context.Context, in *LogImportArchivesRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
 	// IssueTerminalToken 签发一次性终端连接 token。
 	IssueTerminalToken(ctx context.Context, in *IssueTerminalTokenRequest, opts ...grpc.CallOption) (*IssueTerminalTokenResponse, error)
 	// ListFiles 列出实例工作目录下的文件。
@@ -762,6 +770,16 @@ func (c *workerServiceClient) LogResolveIngestGaps(ctx context.Context, in *LogR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LogTaskResponse)
 	err := c.cc.Invoke(ctx, WorkerService_LogResolveIngestGaps_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) LogImportArchives(ctx context.Context, in *LogImportArchivesRequest, opts ...grpc.CallOption) (*LogTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LogTaskResponse)
+	err := c.cc.Invoke(ctx, WorkerService_LogImportArchives_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1701,6 +1719,13 @@ type WorkerServiceServer interface {
 	LogMigratePartition(context.Context, *LogMigratePartitionRequest) (*LogTaskResponse, error)
 	LogCutoverReadiness(context.Context, *LogCutoverReadinessRequest) (*LogCutoverReadinessResponse, error)
 	LogResolveIngestGaps(context.Context, *LogResolveIngestGapsRequest) (*LogTaskResponse, error)
+	// LogImportArchives 手动触发归档（.gz）导入扫描：把"已经躺在源目录里、但还没被导入"的
+	// 归档立刻走一次与自动路径**完全相同**的导入管道（同清洗、同归属闸、同幂等）。
+	//
+	// 为什么需要它：自动发现只在采集轮里跑，而采集轮在源被暂停（容量/积压/人工）时不再读取——
+	// 此时目录里的历史归档既不会被自动导入，运维也没有别的入口，只能干等。
+	// 本 RPC 提供那条入口，并强制携带操作人（可审计）。
+	LogImportArchives(context.Context, *LogImportArchivesRequest) (*LogTaskResponse, error)
 	// IssueTerminalToken 签发一次性终端连接 token。
 	IssueTerminalToken(context.Context, *IssueTerminalTokenRequest) (*IssueTerminalTokenResponse, error)
 	// ListFiles 列出实例工作目录下的文件。
@@ -2009,6 +2034,9 @@ func (UnimplementedWorkerServiceServer) LogCutoverReadiness(context.Context, *Lo
 }
 func (UnimplementedWorkerServiceServer) LogResolveIngestGaps(context.Context, *LogResolveIngestGapsRequest) (*LogTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LogResolveIngestGaps not implemented")
+}
+func (UnimplementedWorkerServiceServer) LogImportArchives(context.Context, *LogImportArchivesRequest) (*LogTaskResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LogImportArchives not implemented")
 }
 func (UnimplementedWorkerServiceServer) IssueTerminalToken(context.Context, *IssueTerminalTokenRequest) (*IssueTerminalTokenResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method IssueTerminalToken not implemented")
@@ -2836,6 +2864,24 @@ func _WorkerService_LogResolveIngestGaps_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).LogResolveIngestGaps(ctx, req.(*LogResolveIngestGapsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_LogImportArchives_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LogImportArchivesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).LogImportArchives(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_LogImportArchives_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).LogImportArchives(ctx, req.(*LogImportArchivesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4342,6 +4388,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LogResolveIngestGaps",
 			Handler:    _WorkerService_LogResolveIngestGaps_Handler,
+		},
+		{
+			MethodName: "LogImportArchives",
+			Handler:    _WorkerService_LogImportArchives_Handler,
 		},
 		{
 			MethodName: "IssueTerminalToken",

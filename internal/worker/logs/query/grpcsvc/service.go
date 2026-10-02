@@ -3,6 +3,7 @@ package grpcsvc
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -106,6 +107,12 @@ func (f IngestAbandonmentFunc) AbandonedRanges(targetIDs []string) []IngestPosit
 	return f(targetIDs)
 }
 
+// IngestArchiveImporter 是「手动触发归档导入」的提供者（由 ingest.Manager 满足）。
+type IngestArchiveImporter interface {
+	// ImportArchivesNow 扫描并导入待导入归档，返回 (扫描数, 导入数)。operator 为空必须拒绝。
+	ImportArchivesNow(storageNamespace, operator string) (int, int, error)
+}
+
 // OperatorMetadataKey 是承载「操作人认证主体」的 incoming gRPC metadata 键。//
 // 为什么用 metadata 而不是给 proto 加字段：本路径的操作人来自**调用方的认证上下文**，
 // 而不是请求体（请求体可被任意伪造，PUT 一个字段就把责任推给别人）。用 metadata 让
@@ -165,6 +172,8 @@ type Service struct {
 	gapResolver IngestGapResolver
 	// abandonments 提供「已放弃位置」标记（可空：未接线时不返回该标记，而不是编造空成功）。
 	abandonments IngestAbandonmentProvider
+	// archiveImporter 提供手动归档导入入口（可空 = 未接线，返回明确不支持）。
+	archiveImporter IngestArchiveImporter
 }
 
 // New 构造已启用的日志 RPC 服务层。
@@ -193,6 +202,32 @@ func (s *Service) SetCutoverReadiness(provider CutoverReadinessProvider) { s.cut
 func (s *Service) SetIngestGapResolver(resolver IngestGapResolver)       { s.gapResolver = resolver }
 func (s *Service) SetIngestAbandonmentProvider(p IngestAbandonmentProvider) {
 	s.abandonments = p
+}
+
+// SetIngestArchiveImporter 注入手动归档导入入口。
+func (s *Service) SetIngestArchiveImporter(i IngestArchiveImporter) { s.archiveImporter = i }
+
+// LogImportArchives 手动触发归档导入扫描（操作人必需，审计留痕）。
+func (s *Service) LogImportArchives(ctx context.Context, req *workerpb.LogImportArchivesRequest) (*workerpb.LogTaskResponse, error) {
+	if s.archiveImporter == nil {
+		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
+			Error: unsupportedErr("ingest archive import is not configured")}, nil
+	}
+	// 与放弃裁定同一口径：状态改变类动作必须带操作人，取不到即拒绝（不可无痕）。
+	operator := operatorFromContext(ctx)
+	if operator == "" {
+		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
+			Error: unsupportedErr(fmt.Sprintf(
+				"手动导入归档需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))}, nil
+	}
+	scanned, imported, err := s.archiveImporter.ImportArchivesNow(strings.TrimSpace(req.GetStorageNamespace()), operator)
+	if err != nil {
+		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
+			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_ERROR_UNSPECIFIED, Message: err.Error()}}, nil
+	}
+	slog.Info("已执行手动归档导入", "operator", operator,
+		"storageNamespace", req.GetStorageNamespace(), "scanned", scanned, "imported", imported)
+	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
 }
 
 // Enabled 报告服务是否启用。
