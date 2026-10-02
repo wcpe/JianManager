@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,6 +30,47 @@ func TestBackpressureSkipsRevivalWhileBacklogRises(t *testing.T) {
 	defer cancel()
 	m.RunCapacityResumeLoop(ctx)
 
-	require.GreaterOrEqual(t, m.BackpressureSkips(), int64(1),
-		"持续净涨时必须出现背压跳过（实测 %d 次）", m.BackpressureSkips())
+	require.GreaterOrEqual(t, m.ResumeSweepStats().SkipBackpressure, int64(1),
+		"持续净涨时必须出现背压跳过（实测 %d 次；窗口阈值=3 ✓）", m.ResumeSweepStats().SkipBackpressure)
+}
+
+// TestBackpressureWindowDoesNotBlockOnSingleRoundJitter（现场 41 家之谜的第二条红证）：
+// **单轮抖动上涨不得永久挡住复活** ✓ —— 窗口化背压要求"**连续 N 轮**净涨"才跳过 ✓。
+//
+// 现场依据：41 家 `paused + backlog_pause + blocking=0 + backlog<半闸`（三项前置全满足 ✗）
+// 却无一复活 ✓ ⇒ 头号嫌疑是"单轮比较即跳过"使**任何噪声都永久挡复活** ✗。
+//
+// 转红方式（实测）：把背压改回单轮判定（阈值 1）⇒ 第 2 轮抖动即跳过 ⇒ 本用例在
+// 「抖动轮必须仍被处理」处红 ✓。
+func TestBackpressureWindowDoesNotBlockOnSingleRoundJitter(t *testing.T) {
+	m, _ := newGateFixture(t, 50, 16)
+	seq := []int64{100, 200 /* 抖动上涨一轮 */, 50, 50, 50, 50}
+	i := 0
+	m.mu.Lock()
+	var fb *pipeline.Pipeline
+	for _, p := range m.pipes {
+		fb = p
+	}
+	m.mu.Unlock()
+	require.NotNil(t, fb)
+	require.NoError(t, fb.Ledger().PauseAcquire(fb.Key(), "wal backlog limit exceeded (entries=5/4)"))
+	m.sweepBacklogOf = func() int64 {
+		v := seq[i]
+		if i < len(seq)-1 {
+			i++
+		}
+		return v
+	}
+	m.resumeInterval = 10 * time.Millisecond
+	m.recoveryProbe = func() bool { return false }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	m.RunCapacityResumeLoop(ctx)
+
+	require.Equal(t, int64(0), m.ResumeSweepStats().SkipBackpressure,
+		"单轮抖动（1 轮上涨后回落）不得触发背压跳过（窗口阈值=3 ✓）；实测跳过 %d 次",
+		m.ResumeSweepStats().SkipBackpressure)
+	require.GreaterOrEqual(t, m.ResumeSweepStats().Candidates, int64(1),
+		"抖动轮之后必须**照常扫描候选**（把猜测变读数：候选计数可读 ✓）")
 }

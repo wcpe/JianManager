@@ -48,7 +48,7 @@ func TestResumeSweepHandlesMultipleSolvableSourcesPerRound(t *testing.T) {
 		require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, 100, "APPEND_REJECTED", "append rejected while paused"))
 	}
 
-	m.maybeResumePausedSources() // **一次**兜底扫描
+	_, _ = m.maybeResumePausedSources() // **一次**兜底扫描
 	revived := 0
 	for _, cfg := range cfgs {
 		entry := m.pipes[cfg.LogSourceID+"/"+cfg.SourceGeneration].Ledger().Get(m.pipes[cfg.LogSourceID+"/"+cfg.SourceGeneration].Key())

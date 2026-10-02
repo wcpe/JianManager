@@ -238,6 +238,16 @@ type Manager struct {
 	scanBudgetExceeded atomic.Int64
 	// backpressureSkips 统计因"上一轮净涨"而跳过的兜底轮数（可观测 ✓）。
 	backpressureSkips atomic.Int64
+	// **兜底环每轮的跳过原因分类计数**（2026-10-05 现场：41 家三项前置全满足却不复活 ✗ ⇒
+	// 必须能直接读出"是哪一条把它挡了" ✓）。
+	risingStreak     atomic.Int64
+	skipBackpressure atomic.Int64
+	skipHysteresis   atomic.Int64
+	skipEnumeration  atomic.Int64
+	sweepCandidates  atomic.Int64
+	sweepRevived     atomic.Int64
+	// sweepBackpressureStreak 是窗口化背压的阈值（连续 N 轮净涨才跳过 ✓；0 ⇒ 默认 3）。
+	sweepBackpressureStreak int
 	// persistRequests/persistWorkerDone 是**后台持久化通道**：热路径超时后把「请落库」交给它，
 	// 由独立 goroutine 完成（它才是允许阻塞的那一方）。cap=1：已有待办请求即无需重复入队。
 	persistRequests   chan struct{}
@@ -490,6 +500,9 @@ type Options struct {
 	RecoveryDrainGrace  time.Duration
 	// RecoveryProbe 是"恢复是否进行中"的注入点（生产 nil ⇒ 用 StartupRecoveryStatus()）。
 	RecoveryProbe func() bool
+	// SweepBackpressureStreak 是窗口化背压阈值：**连续 N 轮**闸视图积压净涨才跳过本轮
+	// （0 ⇒ 默认 3 ✓；单轮抖动不再永久挡复活 ✗）。
+	SweepBackpressureStreak int
 	// ResumeBatchPerRound 是兜底环每轮最多处理的可解源数（0 ⇒ 默认 8）。
 	ResumeBatchPerRound int
 	// ResumeInterval 是**容量自愈兜底**周期（0 ⇒ 默认 30s）：低频重试「排空存量 → 推进回收 →
@@ -1223,6 +1236,7 @@ func New(opts Options) (*Manager, error) {
 		reconcileYieldNotify:     opts.ReconcileYieldNotify,
 		resumeInterval:           opts.ResumeInterval,
 		resumeBatchPerRound:      opts.ResumeBatchPerRound,
+		sweepBackpressureStreak:  opts.SweepBackpressureStreak,
 		recoveryQuotaFactor:      opts.RecoveryQuotaFactor,
 		recoveryDrainGrace:       opts.RecoveryDrainGrace,
 		recoveryProbe:            opts.RecoveryProbe,
@@ -5285,6 +5299,40 @@ func gapReasonClassifiableOnResume(reason string) bool {
 	}
 }
 
+// defaultSweepBackpressureStreak 是窗口化背压的默认阈值（连续 3 轮净涨才跳过 ✓）。
+const defaultSweepBackpressureStreak = 3
+
+func (m *Manager) sweepBackpressureStreakOf() int {
+	if m == nil || m.sweepBackpressureStreak <= 0 {
+		return defaultSweepBackpressureStreak
+	}
+	return m.sweepBackpressureStreak
+}
+
+// ResumeSweepStats 返回兜底环的**跳过原因分类读数**（现场"41 家为何不动"的直接答案 ✓）。
+type ResumeSweepStats struct {
+	Candidates       int64 // 进入本轮容量内的候选源数
+	Revived          int64 // 本轮真正复活的源数
+	SkipBackpressure int64
+	SkipHysteresis   int64
+	SkipEnumeration  int64
+	RisingStreak     int64
+}
+
+func (m *Manager) ResumeSweepStats() ResumeSweepStats {
+	if m == nil {
+		return ResumeSweepStats{}
+	}
+	return ResumeSweepStats{
+		Candidates:       m.sweepCandidates.Load(),
+		Revived:          m.sweepRevived.Load(),
+		SkipBackpressure: m.skipBackpressure.Load(),
+		SkipHysteresis:   m.skipHysteresis.Load(),
+		SkipEnumeration:  m.skipEnumeration.Load(),
+		RisingStreak:     m.risingStreak.Load(),
+	}
+}
+
 // sweepBacklogTotal 返回**闸视图**总积压（全部源的条目数之和 ✓）：背压判据的输入 ✓。
 func (m *Manager) sweepBacklogTotal() int64 {
 	if m != nil && m.sweepBacklogOf != nil {
@@ -5408,7 +5456,7 @@ func (m *Manager) resumeBatchOf() int {
 	return m.resumeBatchPerRound
 }
 
-func (m *Manager) maybeResumePausedSources() {
+func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 	m.mu.Lock()
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
 	for _, p := range m.pipes {
@@ -5434,9 +5482,12 @@ func (m *Manager) maybeResumePausedSources() {
 			continue
 		}
 		if !acquire.IsBacklogPauseReason(entry.PauseReason) {
-			continue // 越权红线：非积压/容量类暂停绝不动 ✓
+			m.skipEnumeration.Add(1) // 枚举类跳过（原因非积压类 ✓）——红线不变 ✓，但要可读 ✓
+			continue
 		}
+		// **枚举类跳过**（不在管道/原因非积压类）：分类计数 ✓，让"41 家为何不动"可直接读出来 ✓。
 		handled++ // 计入本轮容量：**处理**（无论最终是否放行）都占额度 ✓，避免慢源无限拖延一轮 ✗
+		candidates++
 		if m.resumeProbe != nil {
 			m.resumeProbe(p.Key().LogSourceID)
 		}
@@ -5452,8 +5503,20 @@ func (m *Manager) maybeResumePausedSources() {
 		// 排空侧：先把已 durable 未确认的存量发出去（投递成功才会推进回收）✓
 		_, _ = p.DeliverPending()
 		// 回收侧再评估：TryReclaim（按当前水位剪枝）+ 滞回恢复 ✓
+		before := led.Get(p.Key())
+		wasPaused := before != nil && before.AcquirePaused
 		_ = p.EvaluateResume()
+		after := led.Get(p.Key())
+		if wasPaused && after != nil && after.AcquirePaused {
+			// **滞回/其它跳过**：评估过但未解除 ⇒ 分类计数 ✓（现场 41 家若全落这里 ⇒ 判据问题 ✓）。
+			m.skipHysteresis.Add(1)
+		}
+		if wasPaused && after != nil && !after.AcquirePaused {
+			revived++
+		}
 	}
+
+	return candidates, revived
 }
 
 // sourceConfigFor 取某条管道对应的源配置（键形态与 autoResolveGapsFromPublished 内部一致 ✓）。
@@ -5485,19 +5548,36 @@ func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// **净涨背压**（现场 +463k 的形态 ✗）：上一轮总积压在涨 ⇒ 本轮不放宽、不复活 ✓
-			// （恶化期加码只会让"复活→re-append→再越闸"震荡 ✓）。回升 = 下降或持平才继续 ✓。
+			// **窗口化净涨背压**（2026-10-05 现场修正 ✗✓）：单轮比较太敏感 —— 现场 41 家
+			// "paused + backlog_pause + blocking=0 + backlog < 半闸"三项前置全满足却无一复活 ✗，
+			// 头号嫌疑就是**任何一轮抖动都被判净涨 ⇒ 永久跳过** ✗。
+			// 改为：只有**连续 N 轮净涨**（默认 3，可配 ✓）才跳过；读的仍是**闸视图**积压 ✓。
 			now := m.sweepBacklogTotal()
-			rising := m.lastSweepKnown && now > m.lastSweepBacklog
+			if m.lastSweepKnown && now > m.lastSweepBacklog {
+				m.risingStreak.Add(1)
+			} else {
+				m.risingStreak.Store(0)
+			}
+			streak := m.risingStreak.Load()
 			m.lastSweepBacklog, m.lastSweepKnown = now, true
-			if rising {
-				m.backpressureSkips.Add(1)
-				slog.Info("兜底环背压：上一轮积压净涨，本轮不放宽也不复活",
-					"backlog", now, "prev", m.lastSweepBacklog)
+			if streak >= int64(m.sweepBackpressureStreakOf()) {
+				m.skipBackpressure.Add(1)
+				slog.Warn("兜底环背压：连续多轮积压净涨，本轮不放宽也不复活",
+					"streak", streak, "threshold", m.sweepBackpressureStreakOf(), "backlog", now)
 				continue
 			}
 			m.syncRecoveryQuota() // 先同步配额口径（恢复中/宽限/回归 ✓），再扫暂停源 ✓
-			m.maybeResumePausedSources()
+			cands, revived := m.maybeResumePausedSources()
+			m.sweepCandidates.Add(int64(cands))
+			m.sweepRevived.Add(int64(revived))
+			// **每轮为何无复活**（把猜测变读数 ✓）：有候选却零复活时打一条汇总 ✓，否则静默 ✓。
+			if cands > 0 && revived == 0 {
+				slog.Warn("兜底环本轮无复活（可观测：候选/复活/各类跳过计数）",
+					"candidates", cands, "revived", revived,
+					"skip_backpressure", m.skipBackpressure.Load(),
+					"skip_hysteresis", m.skipHysteresis.Load(),
+					"skip_enum", m.skipEnumeration.Load())
+			}
 		}
 	}
 }
