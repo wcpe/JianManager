@@ -180,6 +180,15 @@ type Manager struct {
 	recoveryHold     func(SourceConfig, string) (bool, string)
 	// reconcile 是启动增量对账（FR-497）的生效配置（已归一化）。
 	reconcile ReconcileConfig
+	// reconcileLoop 是常驻增量对账（后续项③）的生效配置（已归一化）：周期驱动、单轮预算与
+	// 源数有界，默认温和（15m / 45s / 8 源轮转）。**关闭即完全不跑**（不打 VL 查询、
+	// 不推进任何状态）；启动对账（reconcile）不受它影响。
+	reconcileLoop ReconcileLoopConfig
+	// reconcileLoopStats / reconcileLoopCursor / reconcileDayCounts 是常驻对账的观测读数、
+	// 全源轮转游标与「按 UTC 天权威条数」缓存（见 reconcile_loop.go 的说明）。
+	reconcileLoopStats  ReconcileLoopStats
+	reconcileLoopCursor int
+	reconcileDayCounts  map[string]reconcileDayCountsCache
 	// indexPrune 是历史投递批次裁剪的生效配置（已归一化，默认开启）：建每个源的账本时下发
 	// （ledger.SetDeliveryBatchPrune）。裁剪发生在账本写路径内，因此配置必须落在账本上，
 	// 而不是落库前再过滤一遍——后者只能让库变小，内存仍会随总量线性增长。
@@ -299,6 +308,10 @@ type Options struct {
 	// Reconcile 是启动增量对账（FR-497）的配置面；nil 表示用默认（启用，
 	// 并发 4、单源超时 30s、单查询超时 10s）。配置键登记见 spec §5。
 	Reconcile *ReconcileConfig
+	// ReconcileLoop 是常驻增量对账（后续项③）的配置面；nil 表示用默认（启用、15 分钟周期、
+	// 单轮预算 45s、单轮 8 源轮转）。配置键登记为 `log_reconcile_loop.*`；与 Reconcile 同样，
+	// 当前生效路径是 Options + Set（YAML → Options 接线需改 internal/worker/config.go）。
+	ReconcileLoop *ReconcileLoopConfig
 	// IndexPrune 是采集索引「历史投递批次（delivery_batch）裁剪」的配置面（FR-496 索引有界化，
 	// spec §6）；nil 表示用默认（ledger.DefaultDeliveryBatchPruneConfig：**开启**、严格按
 	// reclaim 水位）。判据与证明见 ledger/delivery_batch_prune.go。
@@ -593,6 +606,7 @@ func New(opts Options) (*Manager, error) {
 		capacityProvider:         opts.CapacityProvider,
 		recoveryHold:             opts.RecoveryHold,
 		reconcile:                reconcileConfigOf(opts.Reconcile),
+		reconcileLoop:            reconcileLoopConfigOf(opts.ReconcileLoop),
 		indexPrune:               indexPruneConfigOf(opts.IndexPrune),
 		indexCommit:              indexCommitBudgetOf(opts.IndexCommit),
 		walLimits:                opts.WALLimits,
@@ -922,6 +936,11 @@ func (m *Manager) Register(source SourceConfig) error {
 	// 归档归属闸（2026-10-02）：把「跨代次归属注册表」接到本源的导入器上。
 	// 缺了它，归档导入只能假设"属于当前代次"——那是静默重复的入口。
 	p.SetArchiveOwnerRegistry(m.archiveOwnerLookup())
+	// 命中其它代次时的**补账**通道：记回原代次的待投递账目（不投递 VL，见 backfillArchiveUnderOwner）。
+	// 补账不可行时导入器会退回"拒绝 + 记缺口"，绝不静默归当前代次。
+	p.SetArchiveBackfill(func(ownerGeneration, archivePath, objectID string) error {
+		return m.backfillArchiveUnderOwner(source, ownerGeneration, archivePath, objectID)
+	})
 	if m.state.SourceConfigs == nil {
 		m.state.SourceConfigs = make(map[string]SourceConfig)
 	}
@@ -954,6 +973,9 @@ func (m *Manager) Start(ctx context.Context) {
 	if m == nil {
 		return
 	}
+	// 常驻增量对账（后续项③）：与采集轮共用同一 ctx 生命周期。它只读对账不持锁，
+	// 重发阶段持 cycleMu 与采集轮串行（见 reconcile_loop.go 的隔离说明）。
+	go m.RunReconcileLoop(ctx)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1133,6 +1155,221 @@ func (m *Manager) pollOnce() {
 	if anyDirty {
 		_ = m.persist()
 	}
+}
+
+// ImportArchivesNow 手动/定时触发归档导入扫描：对指定源（storageNamespace 为空 = 全部源）
+// 立刻走一次与采集轮**完全相同**的导入管道。
+//
+// 为什么复用 importArchives 而不是另写一条：自动路径上的三件事都必须逐字成立——
+// ① 同一条清洗管道（normalize 全套 + 采样收口）；② 归属闸（跨代次拒绝，见 acquire.ArchiveImporter）；
+// ③ 幂等（已导入的分段由 `seg.Imported` 跳过，重复触发零新增）。另写一条必然在这三点上漂移。
+//
+// 为什么必须带操作人：本入口会推进源位置与账本，属于改变状态的动作；无痕触发等于给
+// "谁在什么时候灌了数据"留下空白。定时扫描由系统身份传入（见 archiveScanOperator），
+// 同样留痕。
+//
+// 返回 (扫描到的待导入归档数, 实际导入的归档数)。
+func (m *Manager) ImportArchivesNow(storageNamespace, operator string) (int, int, error) {
+	if m == nil {
+		return 0, 0, fmt.Errorf("ingest: manager unavailable")
+	}
+	if strings.TrimSpace(operator) == "" {
+		return 0, 0, fmt.Errorf("ingest: 手动导入归档必须携带操作人（认证主体为空时拒绝执行）")
+	}
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+	m.mu.Lock()
+	type target struct {
+		source SourceConfig
+		pipe   *pipeline.Pipeline
+	}
+	targets := make([]target, 0, len(m.pipes))
+	for key, p := range m.pipes {
+		src, ok := m.sources[key]
+		if !ok {
+			continue
+		}
+		if ns := strings.TrimSpace(storageNamespace); ns != "" && src.StorageNamespace != ns {
+			continue
+		}
+		if src.Mode != pipeline.ModeFilePrimary || src.Path == "" {
+			continue // 无文件源就没有归档可扫
+		}
+		targets = append(targets, target{source: src, pipe: p})
+	}
+	m.mu.Unlock()
+
+	scanned, imported := 0, 0
+	var firstErr error
+	for _, tg := range targets {
+		archives, err := discoverSourceArchives(tg.source)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		pending := pendingArchives(tg.pipe, archives)
+		scanned += len(pending)
+		if len(pending) == 0 {
+			continue
+		}
+		events, _, err := importArchives(tg.pipe, pending)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		// 只有真正产出事件的归档才算"导入"（被归属闸拒绝的不计，它们只记缺口）。
+		if len(events) > 0 {
+			imported += len(pending)
+		}
+		slog.Info("手动导入归档扫描完成",
+			"source", tg.source.LogSourceID, "generation", tg.source.SourceGeneration,
+			"operator", operator, "pending", len(pending), "events", len(events))
+	}
+	if err := m.persist(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return scanned, imported, firstErr
+}
+
+// archiveScanOperator 是定时扫描的系统身份（定时动作同样必须留痕，只是主体是调度器）。
+const archiveScanOperator = "scheduler:archive-scan"
+
+// RunArchiveScan 按 interval 周期触发归档导入扫描；interval <= 0 表示**关闭**（默认关）。
+//
+// 为什么默认关：常规源在每个采集轮里已经自动发现并导入归档，定时扫描的价值只在
+// "采集轮停了但归档还在攒"的场景（源被暂停/停止采集）。默认开会在每个部署上多出一份
+// 周期性的目录扫描与账本写入，收益不明显而成本确定，故由配置显式打开。
+//
+// 返回一个 stop 函数；interval <= 0 时返回 nil（调用方据此知道未启用）。
+func (m *Manager) RunArchiveScan(interval time.Duration) (stop func()) {
+	if m == nil || interval <= 0 {
+		return nil
+	}
+	done := make(chan struct{})
+	var once sync.Once
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if _, _, err := m.ImportArchivesNow("", archiveScanOperator); err != nil {
+					slog.Warn("定时归档导入扫描失败", "error", err)
+				}
+			}
+		}
+	}()
+	return func() { once.Do(func() { close(done) }) }
+}
+
+// backfillArchiveUnderOwner 把一份归档记回**它自己的代次**账上（账本侧补账，不投递 VL）。
+//
+// 为什么只做账本侧、不调 deliver（这是与"补账通道"最关键的边界，源自一次硬点论证）：
+// 投递路径的 ReclaimProof 钩子（releaseRecovery）按代次查 m.pipes 并要求存在活跃管道，
+// 而"非活跃代次不得假装活跃"是既定约束 ⇒ 用旧代次走 deliver 必然失败；三条绕开它的出路
+// （注册 headless 管道 / 跳过 ReclaimProof / 另造责任转移机制）分别违反既定约束或
+// 动到不变量 R 与 VerifiedRuns 的底座，故一条都不走。
+//
+// 补账写成**旧代次的"待投递"账目**：
+//   - 事件体入旧代次的段存（appendEvents）；
+//   - 事件按 Durable 追加进旧代次的持久化 WAL（这就是它的 backlog）；
+//   - 旧代次账本的位置推进到覆盖这批事件，并登记该归档为已导入；
+//   - 整条记录回索引（持久化）。
+//
+// ⇒ 旧代次将来**再次活跃**时，其既有的 backlog 投递路径会自然把它们发出去（不丢）；
+//
+//	以新代次 event_id 重复入 VL 的路径被封死（不重）；当前代次名下永无归属（不归）。
+//
+// 返回错误即"补账不可行"，调用方必须退回"拒绝 + 记缺口"（不得静默改走当前代次）。
+func (m *Manager) backfillArchiveUnderOwner(source SourceConfig, ownerGeneration, archivePath, objectID string) error {
+	if m == nil {
+		return fmt.Errorf("ingest: manager unavailable")
+	}
+	if strings.TrimSpace(ownerGeneration) == "" {
+		return fmt.Errorf("ingest: 原代次为空，无法补账")
+	}
+	ownerKey := source.LogSourceID + "/" + ownerGeneration
+	m.mu.Lock()
+	saved, ok := m.state.Sources[ownerKey]
+	m.mu.Unlock()
+	if !ok || len(saved.Ledger) == 0 {
+		// 寻址失败：该代次在原 Worker 的索引里没有账 —— 不可补，交给人工。
+		return fmt.Errorf("ingest: 原代次 %q 的账本不可寻址", ownerGeneration)
+	}
+
+	// 用**原代次**构造导入器与账本：位置从原代次的既有水位继续（这才是"记回它自己的账"）。
+	ownerSourceKey := ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: ownerGeneration}
+	ownerLedger := ledger.New()
+	if err := ownerLedger.Restore(saved.Ledger); err != nil {
+		return fmt.Errorf("ingest: 恢复原代次账本失败: %w", err)
+	}
+	// 刻意**不注入** lookupOwner/backfill：内层导入不再走归属闸（原代次就是它的家）。
+	imp := acquire.NewArchiveImporter(ownerLedger, ownerSourceKey)
+	res, err := imp.ImportGzip(archivePath)
+	if err != nil {
+		return fmt.Errorf("ingest: 原代次导入失败: %w", err)
+	}
+	if res == nil || len(res.Events) == 0 {
+		// 没有事件可补：可能是已导入或空归档。登记已导入以免每轮重扫，不算失败。
+		if res != nil {
+			_ = imp.MarkImported(archivePath, res.ArchiveObjectID, res.ResumedFrom, res.ResumedFrom)
+		}
+		return m.commitBackfill(ownerKey, ownerLedger, nil, archivePath, res)
+	}
+
+	end := res.Events[len(res.Events)-1].Record.End
+	if err := ownerLedger.AdvanceRead(ownerSourceKey, end); err != nil {
+		return err
+	}
+	if err := ownerLedger.AdvanceDurable(ownerSourceKey, end); err != nil {
+		return err
+	}
+	if err := imp.MarkImported(archivePath, res.ArchiveObjectID,
+		res.Events[0].Record.Start, end); err != nil {
+		return err
+	}
+	return m.commitBackfill(ownerKey, ownerLedger, res.Events, archivePath, res)
+}
+
+// commitBackfill 把补账结果写回内存状态并持久化（事件体入段存 + WAL 待投递账目 + 账本）。
+func (m *Manager) commitBackfill(ownerKey string, ownerLedger *ledger.Ledger,
+	events []logtypes.Event, archivePath string, res *acquire.ImportResult) error {
+	// 事件体入原代次的段存：否则 WAL 引用恢复时取不到正文（B1a 的按条判据）。
+	if len(events) > 0 {
+		if err := m.appendEvents(ownerKey, events); err != nil {
+			return fmt.Errorf("ingest: 补账事件入段存失败: %w", err)
+		}
+	}
+	m.mu.Lock()
+	cur := m.state.Sources[ownerKey]
+	cur.Ledger = ownerLedger.Snapshot()
+	// 追加为**已持久待投递**条目：旧代次再次活跃时由既有 backlog 路径外发。
+	seq := uint64(len(cur.WAL) + len(cur.WALRefs))
+	for _, ev := range events {
+		seq++
+		cur.WAL = append(cur.WAL, acquire.WALEntry{Seq: seq, Event: ev, Appended: true, Durable: true})
+	}
+	if len(events) > 0 {
+		cur.EventsStored = true
+		if through := events[len(events)-1].Record.End; through > cur.EventsStoredThrough {
+			cur.EventsStoredThrough = through
+		}
+	}
+	m.state.Sources[ownerKey] = cur
+	m.mu.Unlock()
+
+	if err := m.persist(); err != nil {
+		return fmt.Errorf("ingest: 补账持久化失败: %w", err)
+	}
+	slog.Info("归档补账完成（记入原代次的待投递账目）",
+		"ownerKey", ownerKey, "archive", archivePath, "events", len(events))
+	if res != nil {
+		_ = res
+	}
+	return nil
 }
 
 // AbandonedSourceRange 是一段被人工裁定为永久丢失的源位置区间（查询面数据）。

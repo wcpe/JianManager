@@ -1028,16 +1028,17 @@ func TestPersistFailureKeepsSourcePendingForRetry(t *testing.T) {
 		"落库失败过的源必须在下一轮被重试；否则悬挂源静默滞留、重启后按陈旧水位重读")
 }
 
-// 归属执行体端到端：同一份归档由代次 g1 导入后，代次 g2 **不得**再把它按自己的代次导入。
+// 归属执行体端到端（**补账语义**，2026-10-02 定案）：同一份归档由 g1 导入后，
+// g2 不得把它按自己的代次导入；而应**记回 g1 的待投递账目**（补账），且重复轮次幂等。
 //
-// 这是「代次一致必须有执行体」那条诉求的落地验证：注册表 = 既有持久化
-// （账本分段里的 (规范路径, archive_object_id) → 代次），执行体 = archiveOwnerLookup
-// 遍历同源各代次条目。缺了它，"这个归档属于谁"只能假设当前代次 ⇒ 同一份字节以
-// g2 的 event_id 再进一次 VL（静默重复），而 g2 的 VerifiedRuns 认不了 g1 的账。
+// 为什么是补账而不是简单拒绝：拒绝会让这份数据永远进不来（人工无法指定一个"原代次"的导入通道）；
+// 补账把它记回**它自己的账**上——旧代次将来再次活跃时，其既有 backlog 路径会自然外发（不丢）；
+// 以 g2 的 event_id 重复入 VL 的路径被封死（不重）；g2 名下永无归属（不归）。
 //
-// 转红方式（实测）：把 Register 里的 p.SetArchiveOwnerRegistry(...) 去掉（即不注入执行体），
-// 本用例「g2 必须拒绝」的断言立即红（g2 会照常导入并产出事件）。
-func TestManagerRefusesArchiveAlreadyOwnedByAnotherGeneration(t *testing.T) {
+// 转红方式（实测）：把 Register 里的 p.SetArchiveBackfill(...) 去掉，
+// 「g2 不得产出事件」会因退回旧的"拒绝"路径而仍然成立，但「g1 的账目必须增加」立即红
+// （证明补账真的发生了，而不是只把文件跳过）。
+func TestManagerBackfillsArchiveUnderOriginalGeneration(t *testing.T) {
 	client, _ := newProjectionVL(t)
 	root := t.TempDir()
 	logDir := filepath.Join(root, "server", "logs")
@@ -1048,7 +1049,7 @@ func TestManagerRefusesArchiveAlreadyOwnedByAnotherGeneration(t *testing.T) {
 	require.NoError(t, os.WriteFile(livePath, []byte(
 		"[10:00:02] [Server thread/INFO]: live one\n[10:00:03] [Server thread/INFO]: boundary\n"), 0o600))
 
-	// 代次 g1：首次见到该归档 ⇒ 导入并登记绑定（历史归档能力，不得被归属闸误杀）。
+	// 代次 g1：首次见到该归档 ⇒ 导入并登记绑定（历史归档能力）。
 	cat1 := catalog.New(catalog.NewMemJournal())
 	m1, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat1, Journal: cat1.Journal(),
 		Sources: []SourceConfig{{
@@ -1057,12 +1058,11 @@ func TestManagerRefusesArchiveAlreadyOwnedByAnotherGeneration(t *testing.T) {
 		}}})
 	require.NoError(t, err)
 	m1.pollOnce()
-	require.NotEmpty(t, durableEvents(t, m1, "inst:owner/file/g1"),
-		"g1 首次见到历史归档必须导入（否则历史归档能力被误杀）")
-	// 绑定已随 persist 落进 m1.state（= 注册表的持久化形态）。
-	require.NoError(t, m1.Stop(), "Stop 会落盘，确保绑定已持久化")
+	require.NotEmpty(t, durableEvents(t, m1, "inst:owner/file/g1"))
+	require.NoError(t, m1.Stop(), "Stop 会落盘，确保 g1 的账与绑定已持久化")
+	g1WAL := len(m1.state.Sources["inst:owner/file/g1"].WAL)
 
-	// 代次 g2：同一份归档。此时注册表应命中 g1 ⇒ 必须拒绝。
+	// 代次 g2：同一份归档必须走**补账**，不得按 g2 导入。
 	cat2 := catalog.New(catalog.NewMemJournal())
 	m2, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(),
 		Sources: []SourceConfig{{
@@ -1072,25 +1072,59 @@ func TestManagerRefusesArchiveAlreadyOwnedByAnotherGeneration(t *testing.T) {
 	require.NoError(t, err)
 	m2.pollOnce()
 
-	key2 := ledger.SourceKey{LogSourceID: "inst:owner/file", SourceGeneration: "g2"}
+	g2Key := ledger.SourceKey{LogSourceID: "inst:owner/file", SourceGeneration: "g2"}
 	pipe2, ok := m2.pipeFor("inst:owner/file/g2")
 	require.True(t, ok)
-	entry2 := pipe2.Ledger().Get(key2)
+	entry2 := pipe2.Ledger().Get(g2Key)
 	require.NotNil(t, entry2)
-	var refused bool
-	for _, gap := range entry2.Gaps {
-		if gap.Reason == "ARCHIVE_FOREIGN_GENERATION" {
-			refused = true
-		}
-	}
-	require.True(t, refused,
-		"归档已属于 g1，g2 必须拒绝导入并留可见缺口（否则同一份字节以 g2 的 event_id 静默重复）")
-	// g2 不得把该归档记成自己已导入。
+	// ① 不重：g2 名下不得有任何来源为该归档的事件，也不得把它登记为自己已导入。
 	for _, seg := range entry2.Segments {
 		if seg.Path == archivePath {
 			require.False(t, seg.Imported, "g2 不得把属于 g1 的归档登记为自己已导入")
 		}
 	}
+	for _, gap := range entry2.Gaps {
+		require.NotEqual(t, "ARCHIVE_FOREIGN_GENERATION", gap.Reason,
+			"补账成功时不应再记跨代次拒绝缺口（那条只在补账不可行时出现）")
+	}
+	// ② 不重：g2 名下的落库事件只能来自它自己的 live 文件，不得含归档那一条。
+	g2Events := durableEvents(t, m2, "inst:owner/file/g2")
+	for _, ev := range g2Events {
+		require.NotContainsf(t, ev.Message, "owned by g1",
+			"归档的数据必须以 g1 的身份存在，绝不得以 g2 的 event_id 再进一次（静默重复）")
+		require.Equal(t, "g2", ev.Source.SourceGeneration,
+			"g2 名下的事件必须带 g2 身份")
+	}
+
+	// ③ 不丢 + 幂等：原代次的账目不得被改动（该归档在 g1 那边**早已导入完成**，
+	// 补账因此是一条正确的 no-op），且重复轮次零新增。
+	//
+	// 为什么这里是"零新增"而不是"WAL 增加"：补账是否会搬动数据，取决于**原代次是否已经导入过**。
+	//   - 原代次已导入（本夹具）⇒ 数据早在它的账上、也早已投递 ⇒ 正确动作是幂等 no-op；
+	//   - 原代次尚未导入（换代恰好发生在归档入库之前）⇒ 内层导入会真的把事件写进原代次的
+	//     待投递账目，那条路径由 acquire 层的 TestImportGzipBackfillsInsteadOfImportingToCurrentGeneration
+	//     用注入的补账回调直接覆盖（断言回调被以正确的 owner/objectID 调用）。
+	m2.mu.Lock()
+	g1State := m2.state.Sources["inst:owner/file/g1"]
+	m2.mu.Unlock()
+	require.Equal(t, g1WAL, len(g1State.WAL),
+		"原代次已导入过的归档：补账必须是 no-op（重复把同一份数据记进旧账就是另一种重复）")
+	var g1Imported bool
+	for _, e := range g1State.Ledger {
+		for _, s := range e.Segments {
+			if s.Kind == ledger.SegmentGzip && s.Imported {
+				g1Imported = true
+			}
+		}
+	}
+	require.True(t, g1Imported, "该归档必须仍在 g1 账上登记为已导入（补账不得把它改坏）")
+
+	// ③ 幂等：再采一轮不得重复补账。
+	m2.pollOnce()
+	m2.mu.Lock()
+	g1After := len(m2.state.Sources["inst:owner/file/g1"].WAL)
+	m2.mu.Unlock()
+	require.Equal(t, len(g1State.WAL), g1After, "重复轮次不得重复补账（与旧账幂等零新增）")
 }
 
 func TestManagerRotationImportsOnlyUnreadTailBeforeReplacementFile(t *testing.T) {

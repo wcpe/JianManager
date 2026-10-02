@@ -93,7 +93,32 @@ func main() {
 		runLogIndexExport(os.Args[2:])
 		return
 	}
+	// 事件级状态派生态视图（后续项③）：`worker log-event-status [--data-dir DIR] [--source ID[/GEN]]
+	// [--from N --to M | --at RFC3339]`。只读索引库（+ 可选事件段），不改动任何状态。
+	if len(os.Args) > 1 && os.Args[1] == "log-event-status" {
+		runLogEventStatus(os.Args[2:])
+		return
+	}
 	runWorker()
+}
+
+// runLogEventStatus 输出“某源某区间/某时间点当前处于哪一态”的派生态视图（JSON 到 stdout）。
+//
+// 只读：索引库不存在或不可读时报错退出（退出码 1），不创建、不修改任何文件。
+func runLogEventStatus(args []string) {
+	override := ""
+	for _, value := range parseDataDirArg(args) {
+		override = value
+	}
+	dataRoot, err := dataroot.Resolve(override)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "解析数据目录失败: %v\n", err)
+		os.Exit(1)
+	}
+	if err := ingest.ExportEventStatus(dataRoot.Base(), args, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "导出事件级状态失败: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // runLogIndexExport 把采集索引（SQLite）导出为旧 ingest.state.json 结构的 JSON。
@@ -867,6 +892,9 @@ func runWorker() {
 				return readiness.LedgerReady, readiness.CutoffTime, readiness.Reasons
 			}))
 			logStack.LogRPC.SetIngestGapResolver(manager)
+			// 手动归档导入入口（④）：把「扫描并导入待导入 gz」接到 gRPC 上，
+			// 供采集轮停摆（源被暂停/停止）时由运维显式触发；操作人经 metadata 携带。
+			logStack.LogRPC.SetIngestArchiveImporter(manager)
 			// 「已放弃位置」查询面标记（缺口 B 批2）：把 ingest 的放弃凭据接到搜索响应上，
 			// 使下游能区分「本来就没有」与「已被确认永久丢失」——不再静默跳过。
 			// 跨包适配放在这里（apps 同时依赖 ingest 与 grpcsvc），服务层不反向依赖 ingest。
@@ -893,6 +921,15 @@ func runWorker() {
 				}
 			}()
 			go manager.Start(ingestCtx)
+			// 定时归档导入扫描（④，键 log_ingest.archive_scan_interval）：**默认关**。
+			// 打开后按周期把「躺在源目录里但还没被导入」的 gz 走一遍与自动路径完全相同的
+			// 导入管道；关闭时 RunArchiveScan 返回 nil（不启动任何 goroutine）。
+			if scanInterval, scanErr := cfg.IngestArchiveScanInterval(); scanErr != nil {
+				slog.Warn("log_ingest.archive_scan_interval 无法解析，定时扫描保持关闭", "error", scanErr)
+			} else if stopScan := manager.RunArchiveScan(scanInterval); stopScan != nil {
+				slog.Info("定时归档导入扫描已启用", "interval", scanInterval)
+				defer stopScan()
+			}
 			// 采集索引持久化耗时采样（FR-496 spec §3.3）：每分钟以 Debug 打印 P50/P95/Max 与
 			// 本窗口写入行数/字节数，供真机「60 源单次持久化 ≤50ms」验收直接取证
 			// （整本重写会让写入行数逼近索引总行数，读数一眼可辨）。

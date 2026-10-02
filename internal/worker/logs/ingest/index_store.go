@@ -153,6 +153,15 @@ type indexAux struct {
 	// VerifiedRuns 是该源逐字段校验通过的源位置连续区间（见 persistedSource.VerifiedRuns）。
 	// 直接随本 payload 的 JSON 落盘：payload 列的指纹覆盖其全部字节，故变更必然被索引层发现。
 	VerifiedRuns []ledger.PositionRange `json:"verified_runs,omitempty"`
+	// Abandonments 是「人工裁定永久丢失」的区间凭据（见 ledger.Entry.Abandonments）。
+	//
+	// 为什么必须落在本 payload 里（后续项③附带修复，2026-10-02）：ADR-101 要求该凭据
+	// **比缺口记录活得久**（已解决缺口会被 trimResolvedGapsLocked 裁掉，凭据要一直支撑
+	// 回收链的放行判定与查询面的"永久缺失"标记），但此前它既不在 spec 五表里、也不在本
+	// payload 里——重启后凭据全部丢失，`AbandonedRanges` 查询面标记与 `CanReclaim` 的
+	// 凭据放行会一并静默消失。放在本 payload（而不是新增表）是刻意的：JSON 字节即列指纹，
+	// 变更必然被索引层发现，无需迁移 DDL，与 VerifiedRuns 同一形态。
+	Abandonments []ledger.GapAbandonment `json:"abandonments,omitempty"`
 
 	// LedgerCore 承载「首个账本条目」中未被 position/gap/delivery_batch 表覆盖的字段；
 	// 为 nil 表示原 Ledger 切片为空。ExtraLedger 承载首个条目之外的条目（现实中每源恰好一条，
@@ -251,6 +260,11 @@ func (m *Manager) stateToIndexState(st *persistedState) (stateindex.State, error
 			aux.EventsStored = saved.EventsStored
 			aux.Events = saved.Events
 			aux.VerifiedRuns = saved.VerifiedRuns
+			// 放弃凭据（首个账本条目的残余字段，与 ledgerCoreOf 同源）：nil/空时被
+			// omitempty 省略，读回侧归一后两侧同形态可比（见 normalizePersistedState）。
+			if len(saved.Ledger) > 0 {
+				aux.Abandonments = saved.Ledger[0].Abandonments
+			}
 			aux.LedgerCore = core
 			if len(saved.Ledger) > 1 {
 				// 防御：首个条目之外的账本条目原样保留（现实中每源恰好一条）。
@@ -528,6 +542,7 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 				Segments:        core.Segments,
 				Rotations:       core.Rotations,
 				Gaps:            gaps[key],
+				Abandonments:    aux.Abandonments,
 				RecoveryRefs:    core.RecoveryRefs,
 				ErrorCount:      core.ErrorCount,
 				IngestSeq:       core.IngestSeq,
@@ -591,6 +606,11 @@ func normalizePersistedState(st *persistedState) {
 			}
 			if entry.DeliveryBatches == nil {
 				entry.DeliveryBatches = []ledger.DeliveryBatch{}
+			}
+			// 放弃凭据与 Gaps/Batches 同族归一：nil → 空切片，使「本来就没有」与
+			// 「读了但为空」在比对口径下同形态（见 comparisonState）。
+			if entry.Abandonments == nil {
+				entry.Abandonments = []ledger.GapAbandonment{}
 			}
 			if entry.Segments == nil {
 				entry.Segments = []ledger.Segment{}

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 本文件守住两处**此前完全没有装配点**的配置：`log.level` / `log.format`，
@@ -121,5 +122,41 @@ func TestWALBudgetNoticeNamesTheUnlimitedCase(t *testing.T) {
 		if !strings.Contains(notice, want) {
 			t.Errorf("提醒应包含 %q：%s", want, notice)
 		}
+	}
+}
+
+// TestArchiveScanIntervalDefaultsOff 钉住「定时归档导入扫描默认关」。
+//
+// 为什么默认必须关：常规源在每个采集轮里已经自动发现并导入归档，定时扫描的价值只在
+// 「采集轮停了、归档还在攒」的场景；默认开会在每个部署上多出一份周期性目录扫描与账本写入。
+// 这条同时守住 ④ 的「定时关闭时不触发」：interval=0 时 RunArchiveScan 不启动任何 goroutine。
+func TestArchiveScanIntervalDefaultsOff(t *testing.T) {
+	cfg := loadTestConfig(t)
+	got, err := cfg.IngestArchiveScanInterval()
+	if err != nil {
+		t.Fatalf("默认值不应报错: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("log_ingest.archive_scan_interval 默认必须为 0（关闭），实测 %v", got)
+	}
+
+	// 显式 "0" 与负值同样表示关闭。
+	cfg.LogIngest.ArchiveScanInterval = "0"
+	if got, err := cfg.IngestArchiveScanInterval(); err != nil || got != 0 {
+		t.Fatalf("显式 0 应表示关闭: got=%v err=%v", got, err)
+	}
+	cfg.LogIngest.ArchiveScanInterval = "-5s"
+	if got, err := cfg.IngestArchiveScanInterval(); err != nil || got != 0 {
+		t.Fatalf("负值应表示关闭: got=%v err=%v", got, err)
+	}
+	// 合法正值正常解析。
+	cfg.LogIngest.ArchiveScanInterval = "10m"
+	if got, err := cfg.IngestArchiveScanInterval(); err != nil || got != 10*time.Minute {
+		t.Fatalf("10m 应解析为 10 分钟: got=%v err=%v", got, err)
+	}
+	// 非法值必须报错（不得静默回退，否则「开了」会变成隐性关闭）。
+	cfg.LogIngest.ArchiveScanInterval = "十点"
+	if _, err := cfg.IngestArchiveScanInterval(); err == nil {
+		t.Fatal("非法时长必须报错（静默回退会让「开了」变成隐性关闭）")
 	}
 }

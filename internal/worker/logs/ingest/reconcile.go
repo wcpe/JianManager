@@ -205,12 +205,50 @@ func (m *Manager) closeReconcileBudget(items []startupSource, reports []Reconcil
 	return reports
 }
 
-// reconcileSource 对一个源做「源 × UTC 天」条数级对账。
+// reconcileExpectation 是一个源「按 UTC 天的应有条数」（对账判定的输入面）。
+//
+// 为什么要把它从权威集合里拆出来（后续项③）：启动对账一次性持有权威集合，直接按天分组即可；
+// 而常驻对账是周期任务，权威集合可能很大（生产单源段数十万行），必须能把「天的期望条数」
+// 缓存起来（见 canonicalDayCounts），不能每轮都重建全量集合。判定逻辑本身**逐字不变**。
+type reconcileExpectation struct {
+	Days   []string
+	Counts map[string]int
+}
+
+// reconcileSource 对一个源做「源 × UTC 天」条数级对账（启动恢复的入口）。
+//
+// 本函数只负责把权威集合折成「天的期望条数」，判定与回退口径全部在
+// reconcileWithExpectation（与常驻对账共用同一实现，见 reconcile_loop.go）。
+func (m *Manager) reconcileSource(ctx context.Context, item startupSource, cfg ReconcileConfig) (report ReconcileReport) {
+	started := time.Now()
+	defer func() { report.Duration = time.Since(started) }()
+	if !cfg.Enabled {
+		// 逃生口先行：关闭时连按天分组都不做（与既有行为逐字一致）。
+		return ReconcileReport{
+			Source: item.key, Basis: reconcileBasisCountOnly,
+			Fallback: true, FallbackReason: "reconcile_disabled",
+		}
+	}
+	grouped, days, err := groupEventsByUTCDay(item.source, item.events)
+	if err != nil {
+		return ReconcileReport{
+			Source: item.key, Basis: reconcileBasisCountOnly,
+			Fallback: true, FallbackReason: "day_grouping_failed",
+		}
+	}
+	expectation := reconcileExpectation{Days: days, Counts: make(map[string]int, len(days))}
+	for _, day := range days {
+		expectation.Counts[day] = len(grouped[day])
+	}
+	return m.reconcileWithExpectation(ctx, item.source, item.key, expectation, cfg)
+}
+
+// reconcileWithExpectation 是「源 × UTC 天」条数级对账的判定主体（启动版与常驻版共用）。
 //
 // 判定与回退口径见 spec §2.1：不可判定（无已发布 scope）→ 判缺失（保守重发该天）；
-// 查询不可信（失败/超时/不可解析）→ 回退整窗重发。
-func (m *Manager) reconcileSource(ctx context.Context, item startupSource, cfg ReconcileConfig) (report ReconcileReport) {
-	report = ReconcileReport{Source: item.key, Basis: reconcileBasisCountOnly}
+// 查询不可信（失败/超时/不可解析）→ 回退整窗重发（由调用方决定是否执行，见 reconcile_loop.go）。
+func (m *Manager) reconcileWithExpectation(ctx context.Context, source SourceConfig, key string, expectation reconcileExpectation, cfg ReconcileConfig) (report ReconcileReport) {
+	report = ReconcileReport{Source: key, Basis: reconcileBasisCountOnly}
 	started := time.Now()
 	defer func() { report.Duration = time.Since(started) }()
 	if !cfg.Enabled {
@@ -218,7 +256,7 @@ func (m *Manager) reconcileSource(ctx context.Context, item startupSource, cfg R
 		return report
 	}
 	m.mu.Lock()
-	pending := m.state.Sources[item.key].PublicationPending
+	pending := m.state.Sources[key].PublicationPending
 	m.mu.Unlock()
 	if pending {
 		// 上次发布未完成 → 发布状态不确定，不做增量裁剪（spec §2.5）。
@@ -229,24 +267,19 @@ func (m *Manager) reconcileSource(ctx context.Context, item startupSource, cfg R
 		report.Fallback, report.FallbackReason = true, "vl_client_unavailable"
 		return report
 	}
-	client, _, err := m.clientForSource(item.source)
+	client, _, err := m.clientForSource(source)
 	if err != nil || client == nil {
 		report.Fallback, report.FallbackReason = true, "vl_client_unavailable"
 		return report
 	}
-	grouped, days, err := groupEventsByUTCDay(item.source, item.events)
-	if err != nil {
-		report.Fallback, report.FallbackReason = true, "day_grouping_failed"
-		return report
-	}
 	sourceCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
-	for _, day := range days {
-		expected := len(grouped[day])
+	for _, day := range expectation.Days {
+		expected := expectation.Counts[day]
 		if expected == 0 {
 			continue
 		}
-		scope, scoped := m.publishedScope(item.source, day)
+		scope, scoped := m.publishedScope(source, day)
 		if !scoped {
 			// 无已发布投影（或该源 scope 未建立）→ 无法证明 VL 有数据 → 保守判缺失。
 			report.Days = append(report.Days, ReconcileDayResult{
@@ -256,14 +289,14 @@ func (m *Manager) reconcileSource(ctx context.Context, item startupSource, cfg R
 			report.MissingDays = append(report.MissingDays, day)
 			continue
 		}
-		observed, countErr := countVLDay(sourceCtx, client, item.source, day, scope, cfg.QueryTimeout)
+		observed, countErr := countVLDay(sourceCtx, client, source, day, scope, cfg.QueryTimeout)
 		report.Queries++
 		if countErr != nil {
 			// 对账不可信 → 回退整窗重发（绝不因对账失败而少发）。
 			report.Fallback, report.FallbackReason = true, "count_query_failed"
 			report.Days, report.MissingDays = nil, nil
 			slog.Warn("启动增量对账失败，回退整窗重发",
-				"source", item.key, "utcDay", day, "error", countErr)
+				"source", key, "utcDay", day, "error", countErr)
 			return report
 		}
 		dayResult := ReconcileDayResult{

@@ -571,6 +571,14 @@ type LogIngestConfig struct {
 	// 于是这段悬挂区间既没被覆盖、也没有事件，链路卡在「轮转分段不可读」。
 	// 非正数（含 "0"）表示**关闭**强制冲刷，此时悬挂记录会一直挂着（仅排障用）。
 	MultilineUnclosedTimeout string `mapstructure:"multiline_unclosed_timeout"`
+	// ArchiveScanInterval 是「定时归档导入扫描」的周期（键 log_ingest.archive_scan_interval）。
+	// 空串或 "0" 表示**关闭**（默认关）。
+	//
+	// 为什么默认关：常规源在每个采集轮里已经自动发现并导入归档，定时扫描的价值只在
+	// 「采集轮停了、归档还在攒」的场景（源被暂停/停止采集）。默认开会在每个部署上多出
+	// 一份周期性目录扫描与账本写入——收益不明显而成本确定，故由配置显式打开。
+	// 手动入口不受本开关影响（gRPC LogImportArchives 始终可用）。
+	ArchiveScanInterval string `mapstructure:"archive_scan_interval"`
 }
 
 // LogSamplingConfig 采集侧采样与降级策略的配置面（键 `log_ingest.sampling.*`）。
@@ -793,6 +801,29 @@ func (c *Config) WALBudgetNotice() string {
 	return "log_capacity.max_wal_bytes=0（字节维度不限）：暂停仍由 log_capacity.max_wal_entries 兜住，但单条超大事件（如整段堆栈）不再有字节上界，请确认这是有意为之"
 }
 
+// IngestArchiveScanInterval 解析 `log_ingest.archive_scan_interval`。
+//
+// 口径：空串 ⇒ 0（**关闭**，默认）；"0" 或负值 ⇒ 0（关闭）；其余必须是合法 duration。
+// 非法值启动即拒：静默回退会让「我明明开了定时扫描」变成隐性关闭，而这件事只在
+// 「源被暂停、归档攒着没人导」时才暴露——与 timezone/charset 同属「配错就静默」的危险项。
+func (c *Config) IngestArchiveScanInterval() (time.Duration, error) {
+	if c == nil {
+		return 0, nil
+	}
+	raw := strings.TrimSpace(c.LogIngest.ArchiveScanInterval)
+	if raw == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("log_ingest.archive_scan_interval 非法: %q（应为时长如 5m/1h；0 或空表示关闭）", raw)
+	}
+	if d < 0 {
+		return 0, nil
+	}
+	return d, nil
+}
+
 // LogLevel 解析 `log.level` 为 slog 等级。
 //
 // 为什么需要它：`log.level` 此前**没有任何装配点**——Worker 从不调用 slog.SetDefault，
@@ -980,6 +1011,7 @@ func Load(path string) (*Config, error) {
 	// 同机部署且日志为 GBK 时配 gbk 即可（显式声明优于自动判定）。
 	v.SetDefault("log_ingest.charset", "")
 	v.SetDefault("log_ingest.multiline_unclosed_timeout", "")
+	v.SetDefault("log_ingest.archive_scan_interval", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
 	v.SetDefault("artifact_cache.max_bytes", int64(0))
@@ -1104,6 +1136,10 @@ func Load(path string) (*Config, error) {
 	// 静默回退默认会让「我明明配了 30s」变成 5s，而这件事只在「轮转恢复卡住」时才暴露，
 	// 排查方向会被完全带偏——与 timezone/charset 同属「配错就静默」的危险项。
 	if _, err := cfg.IngestMultilineUnclosedTimeout(); err != nil {
+		return nil, err
+	}
+	// 定时归档导入扫描（④）：非法值启动即拒（同上：静默回退会把"开了"变成隐性关闭）。
+	if _, err := cfg.IngestArchiveScanInterval(); err != nil {
 		return nil, err
 	}
 	if cfg.LogCapacity.DegradedAtPercent <= 0 || cfg.LogCapacity.DegradedAtPercent >= 100 ||
