@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,6 +238,13 @@ type LogReconcileConfig struct {
 	// ReplayMaxDays / ReplayMaxDuration：整窗重发的切片预算（默认 1 天 / 90s）；非正回退默认。
 	ReplayMaxDays     int    `mapstructure:"replay_max_days"`
 	ReplayMaxDuration string `mapstructure:"replay_max_duration"`
+	// Yield / SliceEvents：**对账 CPU 让路**（每 slice_events 条事件 Sleep(yield) 交还 P）。
+	//
+	// 为什么需要（2026-10-03 现场）：canonicalDayCounts→groupEventsByUTCDay 对整源全量分组，
+	// 与采集轮**抢核** ⇒ 采集轮"无锁无等待却推不动" ✗。默认 5ms / 4096 条（可忽略的额外延迟，
+	// 但每个切片都交还调度器）；配 0 或负数回退默认 ✓。
+	Yield       string `mapstructure:"yield"`
+	SliceEvents int    `mapstructure:"slice_events"`
 }
 
 // ReconcileConfig 把本地配置面收敛为 ingest 的对账配置（非法/非正一律回退归一化默认）。
@@ -557,7 +565,13 @@ const DefaultMaxWALBytes uint64 = 512 << 20
 // 2026-09-28 生产事故正是「单源积压无界 → 状态文件 1.2GB → 每次持久化全量重写 →
 // 持续 117MB/s、Worker CPU 138%」。5000 条把每源对状态的贡献限定在十几 MB 级，
 // 与字节上限同时生效、**先到者触发**。
-const DefaultMaxWALEntries int64 = 5000
+// 5000 → 20000（2026-10-03，60 台规模复核）：现场 60 台/113 万条压力下**字节闸先咬**
+// （最小 32.6 MiB 即停 ⇒ 单条事件体量远大于典型值），条目闸 5000 会在正常积压时先把源钉死 ✗。
+// 上抬到 20000（≈ 20000 × 6.5KiB ≈ 130 MiB 典型占用）；字节闸仍是硬停（默认 512 MiB），
+// 单节点暂存上界 ≈ 源数 × 512 MiB ≈ 1.5–2.5 GiB ✓。两闸**同时有效**，谁先到谁停 ✓。
+// 依据（现场自证）：显式配了 max_wal_bytes 的源停在 512 MiB，未配（=0，本意"不限"）的源停在
+// 32.6 MiB ⇒ 说明"正常积压"的量级本就超过 16 MiB 与 5000 条目两个旧默认值 ✓✓。
+const DefaultMaxWALEntries int64 = 20000
 
 // DefaultMaxReplayEventsPerDrain 是暂停/恢复期单轮外发事件数的默认上限（回放限速）。
 //
@@ -865,6 +879,23 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 // 而现在 0 表示「字节维度不设上限」，条目维度的 log_capacity.max_wal_entries
 // （默认 5000）仍然生效，恢复状态不会无界。这不直接拒绝配置：受管环境可能确实由外部
 // 配额兜底，但必须在启动日志里被点名，否则「没配」与「配成不限」在现场看起来完全一样。
+// EffectiveMaxWALBytes 返回**交给 acquire.WAL 的字节上限**：配置 0 表示"不限" ⇒ 返回 -1 哨兵
+// （acquire 侧负值 = 不设上限）；>0 原样返回。
+//
+// 为什么必须显式转换（2026-10-03 现场 16 MiB 之谜）：配置 0 的语义是"字节维度不限"，而
+// acquire 把 0 当作"用包内默认"（16 MiB）✗ —— 两者相撞的现场表现就是"不设上限"静默变成 16 MiB，
+// 一批源停在 32.6 MiB（双闸同时起作用）而另一批停在 512 MiB（显式配了值）✓✓。
+func (c *Config) EffectiveMaxWALBytes() int64 {
+	if c == nil || c.LogCapacity.MaxWALBytes == 0 {
+		return -1 // 不限
+	}
+	if c.LogCapacity.MaxWALBytes > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(c.LogCapacity.MaxWALBytes)
+}
+
+// WALBudgetNotice 返回启动时必须点名的容量口径提示（空串表示无需提示）。
 func (c *Config) WALBudgetNotice() string {
 	if c == nil || c.LogCapacity.MaxWALBytes != 0 {
 		return ""
@@ -1078,6 +1109,12 @@ func (c *Config) ReconcileReplayTuning() ingest.ReplayTuning {
 	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.ReplayMaxDuration)); err == nil && d > 0 {
 		tuning.Budget.MaxDuration = d
 	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.Yield)); err == nil && d > 0 {
+		tuning.ReconcileYield = d
+	}
+	if c.LogReconcile.SliceEvents > 0 {
+		tuning.ReconcileSliceEvents = c.LogReconcile.SliceEvents
+	}
 	return tuning
 }
 
@@ -1148,6 +1185,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_reconcile.timeout", reconcileDefaults.Timeout.String())
 	v.SetDefault("log_reconcile.query_timeout", reconcileDefaults.QueryTimeout.String())
 	v.SetDefault("log_reconcile.budget", reconcileDefaults.Budget.String())
+	v.SetDefault("log_reconcile.yield", "5ms")
+	v.SetDefault("log_reconcile.slice_events", 4096)
 	// 采集索引（FR-496）：历史投递批次裁剪 + 持久化提交单元预算。默认值同样取自实现包的单一真源。
 	indexPruneDefaults := ledger.DefaultDeliveryBatchPruneConfig()
 	indexCommitDefaults := stateindex.DefaultCommitBudget()

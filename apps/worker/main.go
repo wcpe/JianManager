@@ -836,7 +836,9 @@ func runWorker() {
 				// 16MiB/5000），而配置里的 max_wal_bytes 被接到了只增不减的累计量上。
 				WALLimits: &acquire.WALLimits{
 					MaxEntries: cfg.LogCapacity.MaxWALEntries,
-					MaxBytes:   int64(cfg.LogCapacity.MaxWALBytes),
+					// 配置 0 = 字节维度**不限**（见 Config.WALBudgetNotice）⇒ 传负值哨兵，
+					// 绝不能让它退化成 acquire 包的硬编码 16 MiB（2026-10-03 现场 16 MiB 之谜 ✗）。
+					MaxBytes: cfg.EffectiveMaxWALBytes(),
 				},
 				// 回放限速（键 log_capacity.max_replay_events_per_drain）：恢复期单轮外发上限，
 				// 把「恢复瞬间」从一次流量尖峰摊成若干轮，不丢数据。

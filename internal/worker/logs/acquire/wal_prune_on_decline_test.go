@@ -87,3 +87,34 @@ func TestWALRestoreFiresBacklogGate(t *testing.T) {
 		t.Fatalf("暂停原因必须点名条目闸（供运维与调用方辨别，避免被越权清除）: %q", entry.PauseReason)
 	}
 }
+
+// TestWALBytesLimitZeroMeansUnlimited（2026-10-03 现场 16 MiB 之谜）：**负值哨兵 = 字节不限**。
+//
+// 现场形态：配置 `log_capacity.max_wal_bytes=0` 的语义是"字节维度不限"，而 acquire 在 0 时回退
+// 硬编码 16 MiB ⇒ "不设上限"被静默实现成 16 MiB，一批源停在 32.6 MiB（条目/字节双闸同时起作用），
+// 另一批停在 512 MiB（显式配了值）✗✗。
+//
+// 转红方式（实测）：把 limitsLocked 里 `bytes < 0 ⇒ MaxInt64` 的哨兵去掉（退回"0 ⇒ 默认 16 MiB"）
+// —— 本用例在「负值 = 不限」处变红。
+func TestWALBytesLimitZeroMeansUnlimited(t *testing.T) {
+	key := ledger.SourceKey{LogSourceID: "unlimited", SourceGeneration: "g1"}
+	led := ledger.New()
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration, ParserVersion: "v1"})
+	wal := NewWAL(led, key)
+	wal.SetLimits(1_000_000, -1) // -1 = 字节不限（由 config 的 0 语义映射而来）
+
+	// 造一条"超大"事件（32 MiB，超过默认 16 MiB）：不限时必须**不暂停**。
+	big := make([]byte, 32<<20)
+	wal.SetFsync(func() error { return nil })
+	if err := wal.Append(logtypes.BuildEvent(
+		logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration, ParserVersion: "v1"},
+		logtypes.RecordRange{Start: 1, End: 2},
+		"2026-09-22T01:00:00Z", "2026-09-22T01:00:01Z", "INFO", "stdout", string(big))); err != nil {
+		t.Fatalf("追加失败: %v", err)
+	}
+	entry := led.Get(key)
+	if entry == nil || entry.AcquirePaused {
+		t.Fatalf("字节维度不限时不得因 32MiB 事件暂停（16 MiB 之谜的形态）: paused=%v reason=%q",
+			entry != nil && entry.AcquirePaused, entry.PauseReason)
+	}
+}

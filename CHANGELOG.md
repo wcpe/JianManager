@@ -1071,3 +1071,9 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 修复
 - **校验重试风暴闸（×410 之源）**：新增 `VerifyBudget{MaxPerSecond=30,MaxInFlight=6}` 接在 `verifyProjectionQuery`（唯一咽喉点）——**天花板语义**（令牌桶容量=速率 ⇒ 正常路径零等待，只削风暴峰），**采集侧读写不经此闸**（算力与 VL 容量天然优先给采集）；单簇尝试预算（默认 12，"窗口决定等多久、预算决定最多问几次"）；键 `log_index.verify.max_per_second/max_in_flight/max_queries_per_chunk` + ⑰ 小件 `hot_budget` 的 mapstructure 绑定。实现中自查出"预算用尽 return nil 会被当成校验通过（假阳性）"的真错并修复（与窗口到期同族失败结论）。红证四条（削峰+采集推进 / 单簇有界 / 健康路径零等待（天花板非节拍器）/ yml 绑定生效）；-race ingest 357.2s 零竞争。
+
+### 修复
+- **事故终章五件套（现场 60 台压测引发）**：① 持门铁律「只做提交、不做规划」（planPersist 门外/commitPersist 门内 + 恢复步走 hot 模式）；② 对账 CPU 切片让路（`groupEventsByUTCDayYielding`，键 `log_reconcile.yield/slice_events`）；③ **暂停自愈**：`EvaluateResume` + 30s 低频容量自愈兜底环（先 DeliverPending 再重估、只碰容量类原因、不依赖采集轮产生新批次）——现场 27 源 entries=0 仍 paused 的铁证形态；④ 16 MiB 之谜：`max_wal_bytes=0` 被静默退化为硬编码 16 MiB ⇒ 负值哨兵 + `EffectiveMaxWALBytes` + main 接线（条目闸 5000→20000）；⑤ 轮级校验预算"每轮进展保底"（否则慢环境下同批源每轮被推迟、永不判定 ✗）。六条红证全部变异转红；全仓 67 包 0 FAIL、`-race` 三包全绿零竞争、干净树+10 连绿。
+
+### 修复
+- **补齐事故终章五件套的接线（前一枚提交遗漏）**：`main.go` 的 `EffectiveMaxWALBytes()` 接线（0=不限哨兵）、条目闸默认 20000、对账让路 `SliceEvents` 接线；一并确认 config 侧访问器完整。
