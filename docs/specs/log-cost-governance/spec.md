@@ -1,8 +1,11 @@
 # 功能规格：日志成本治理（分层 / 采样 / 保留）
 
 > 状态：**部分落地**（采样与保留两包及接线已实现并自证；冷层驱动器、观测面接线、分级验证见 §7「未做」）
+> 关联 PRD：**FR-501**　·　ADR：**ADR-098**（日志保留、分层与归档）/**ADR-099**（成本治理与不变量 R）
 > 关联：FR-498（采集侧成本）、FR-477（分区 Catalog 与冷热 Lifecycle）、FR-474（容量门禁）
 > 实测环境：本地 VictoriaLogs **v1.52.0**（真二进制，`.tmp/lr-probe/`，未触碰生产）
+
+> **编号对账记录（2026-10-02）**：本 spec 原在 CHANGELOG 中被标为「FR-499」，而 PRD 的 FR-499 已被**采集登记路径与长临界区解耦**（`docs/specs/log-ingest-register-lock/spec.md`）占用，属重号。经对账：FR-499 保留给登记锁解耦不动，本项（日志成本治理）取 **FR-501**（对账时 501–519 全仓无引用，为明确空号；FR-500 已由 daemon cgroup 隔离占用）。CHANGELOG 与 PRD 登记行已同步改号/补登；**此后引用本项一律用 FR-501**。
 
 本规格不得重新定义 FR-473 Shared Contracts；字段、状态与覆盖语义以
 `worker-log-platform-contract/spec.md` 为准。
