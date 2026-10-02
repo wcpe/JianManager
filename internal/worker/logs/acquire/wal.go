@@ -146,6 +146,8 @@ type WAL struct {
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
 	maxEntries int64
 	maxBytes   int64
+	// recoveryWiden 是**恢复期独立配额**的拓宽系数（≤1 = 常规闸；见 SetRecoveryWiden ✓）。
+	recoveryWiden float64
 }
 
 // SetLimits 覆盖单源积压上限（0 表示沿用默认）。供测试与配置化使用。
@@ -182,10 +184,47 @@ func (w *WAL) Backlog() (int64, int64) {
 }
 
 // limitsLocked 返回生效的上限（调用方需持 w.mu）。
+// SetRecoveryWiden 设置**恢复期独立配额**的拓宽系数（≤1 或 NaN ⇒ 关闭，回归常规闸 ✓）。
+//
+// 为什么需要（2026-10-04 现场，用户定调方案②）：恢复期的回放/补账是**设计行为**（gz 归档侧补账
+// 写回原代次 backlog 待投递 ✓），它必然把源推过常规闸 ⇒ 常规闸在恢复期**注定自锁**：
+// 「越闸暂停 ⇒ 更排不空 ⇒ 更回放不了」✗✓。因此恢复期按**独立预算**判（默认 4× 常规闸 ✓，可配 ✓），
+// 恢复完成后回归常规闸 ✓（回归由 ingest 侧的兜底环按恢复状态驱动 ✓）。
+//
+// **有界性红线**：拓宽依然是**有限值** ✓ ⇒ `source_wal` 的无界防护不破 ✗（4× 也只是一个更大的界 ✓）。
+func (w *WAL) SetRecoveryWiden(factor float64) {
+	if w == nil {
+		return
+	}
+	if factor < 1 || factor != factor { // <1 或 NaN ⇒ 关闭
+		factor = 1
+	}
+	w.mu.Lock()
+	w.recoveryWiden = factor
+	w.mu.Unlock()
+}
+
+// recoveryWidenLocked 返回生效的拓宽系数（默认 1 = 常规闸 ✓）。
+func (w *WAL) recoveryWidenLocked() float64 {
+	if w.recoveryWiden > 1 {
+		return w.recoveryWiden
+	}
+	return 1
+}
+
 func (w *WAL) limitsLocked() (int64, int64) {
 	entries, bytes := w.maxEntries, w.maxBytes
 	if entries <= 0 {
 		entries = defaultWALMaxEntries
+	}
+	if f := w.recoveryWidenLocked(); f > 1 {
+		// 恢复期独立配额：两维同倍拓宽（有界 ✓）。条目维至少加 1，避免小上限被取整成"没拓宽" ✗。
+		if entries > 0 {
+			entries = int64(float64(entries) * f)
+		}
+		if bytes > 0 {
+			bytes = int64(float64(bytes) * f)
+		}
 	}
 	switch {
 	case bytes < 0:
