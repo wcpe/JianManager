@@ -314,7 +314,8 @@ func TestSupervisorIndependentSinkReceivesFailures(t *testing.T) {
 	}
 }
 
-func TestSupervisorHealthIndependentOfPartitionState(t *testing.T) {	var requireAuthUser, requireAuthPass string
+func TestSupervisorHealthIndependentOfPartitionState(t *testing.T) {
+	var requireAuthUser, requireAuthPass string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
 		if !ok || user != requireAuthUser || pass != requireAuthPass {
@@ -475,7 +476,8 @@ func TestWaitHealthyTimesOutWhenNotRunning(t *testing.T) {
 }
 
 // TestWaitHealthySucceedsWhenReady 就绪后 WaitHealthy 立即返回 nil。
-func TestWaitHealthySucceedsWhenReady(t *testing.T) {	bin, sum := writeFakeBinary(t)
+func TestWaitHealthySucceedsWhenReady(t *testing.T) {
+	bin, sum := writeFakeBinary(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
