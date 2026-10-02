@@ -37,6 +37,7 @@ func TestCapacityResumeLoopHealsPausedSource(t *testing.T) {
 	var mu sync.Mutex
 	probed := 0
 	m.resumeProbe = func(string) { mu.Lock(); probed++; mu.Unlock() }
+	// 上限 12s（原 3s）：与后台全仓并发时 3s 偏紧 ⇒ 实测出现过一次负载敏感的偶发红 ✗（非实现缺陷 ✓）。
 	m.resumeInterval = 20 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -48,12 +49,12 @@ func TestCapacityResumeLoopHealsPausedSource(t *testing.T) {
 		n := probed
 		mu.Unlock()
 		return n > 0
-	}, 3*time.Second, 10*time.Millisecond, "兜底循环必须扫到积压类暂停的源（不得只在 Append 处重估 ✗）")
+	}, 12*time.Second, 10*time.Millisecond, "兜底循环必须扫到积压类暂停的源（不得只在 Append 处重估 ✗）")
 
 	require.Eventually(t, func() bool {
 		got := pipe.Ledger().Get(pipe.Key())
 		return got != nil && !got.AcquirePaused
-	}, 3*time.Second, 10*time.Millisecond, "零积压的源必须被兜底恢复到活 ✓")
+	}, 12*time.Second, 10*time.Millisecond, "零积压的源必须被兜底恢复到活 ✓")
 
 	// 红线：非积压/容量类暂停不得被清除 ✓。
 	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "disk usage 95.0% >= 90.0%"))

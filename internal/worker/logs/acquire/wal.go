@@ -287,6 +287,18 @@ func (w *WAL) maybeResumeBacklogLocked(ent *ledger.Entry) {
 // 恢复后回读必然重新产生该批 ✓，因此它不构成"已确认落库"，只是"将在恢复后重放" ✓。
 const gapResolutionReReadOnResume = "re-read on resume (append rejected while paused)"
 
+// gapResolutionExcludedReasons 是**绝不能被本条路径放行**的缺口原因（fail-closed 名单 ✓）。
+//
+// 抽成包级变量（而不是内联字面量）是为了让"放开一因 ⇒ 红"**可被变异触达** ✓：内联时该列表只会在
+// 处理 APPEND_REJECTED 时被读到 ⇒ 任何"删一项"的变异都不可达 ✗（实测：删项后用例仍绿 ✗✗），
+// 于是那条红线只有断言、没有证据 ✗。名单语义不变：**未列出者一律不放行** ✓（新增原因默认排除 ✓）。
+var gapResolutionExcludedReasons = []string{
+	ledger.GapReasonStdioRawWriteFailed,
+	ledger.GapReasonDeliverError,
+	ledger.GapReasonDeliverErrorWorkerSource,
+	ledger.GapReasonWALCommitFailed,
+}
+
 // resolveReReadHealableGapsLocked 只消解 REASON=APPEND_REJECTED 的未消解缺口（见调用点注释）。
 //
 // fail-closed（关键）：其余四种已知原因**显式排除** ⇒ 将来若新增原因，默认同样被排除 ✓
@@ -308,10 +320,7 @@ func (w *WAL) resolveReReadHealableGapsLocked(ent *ledger.Entry) int {
 		return 0
 	}
 	n, err := w.led.ResolveGapsThroughExcept(w.key, through, gapResolutionReReadOnResume,
-		ledger.GapReasonStdioRawWriteFailed,
-		ledger.GapReasonDeliverError,
-		ledger.GapReasonDeliverErrorWorkerSource,
-		ledger.GapReasonWALCommitFailed,
+		gapResolutionExcludedReasons...,
 	)
 	if err != nil {
 		return 0

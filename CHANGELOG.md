@@ -1090,3 +1090,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 修复
 - **自锁红证钉成（显式钉前提法）**：`RecordGap(APPEND_REJECTED)` 确实阻塞 `ResumeAcquire`（不变量实测 ✓）⇒ 变异=恢复原状即红（"暂停造成的 APPEND_REJECTED 缺口不得把源永久锁死在暂停"✓）；并证实积压暂停唯一复活通路 = `pruneReclaimed → maybeResumeBacklogLocked`（解算收尾的 `resumeAcquireRespectingGates` 故意不放行积压类 ✓）；端到端触发态查明（段读仅解算路径调用，草稿"让路 0 次"非 bug ✓）。fail-closed 红线暂只有断言无变异证据（如实登记 ✓）。
+
+### 变更
+- **排除表提变量（行为不变、使变异可达）**：`gapResolutionExcludedReasons` 从内联字面量提为包级变量（同一份四原因、未列出者一律不放行 ✓）—— 使"删一项"的 fail-closed 变异从不可达变为可实测 ✓；稳定性偶发红判定为**夹具负载敏感**（无负载 12 连绿 ✓），`TestCapacityResumeLoopHealsPausedSource` 的 Eventually 上限 3s→12s（并发全仓时 3s 偏紧 ✓）。
