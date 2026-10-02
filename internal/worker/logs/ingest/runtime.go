@@ -94,6 +94,26 @@ type persistedState struct {
 // pendingSpoolRoot 是未绑定实例输出的持久化暂存目录。
 const pendingSpoolRoot = "pending"
 
+// startupRecoveryBatch 是启动恢复「读回权威集合 + 对账」的批大小。
+//
+// 为什么要分批（而不是像改动前那样一次性把所有源的 canonical 事件读进内存）：单源事件集在
+// 生产可达数百 MB（全库 18GB），整批常驻会把启动的内存峰值推到 GB 级；分批后内存峰值 ≈
+// 批大小 × 单源事件集，而**对账的并发度不受影响**（批内并发，见 Reconcile.Concurrency）。
+const startupRecoveryBatch = 4
+
+// startupRecoveryState 是启动恢复的后台进度（观测 + 就绪判据）。
+type startupRecoveryState struct {
+	// InProgress 表示恢复尚未结束：此时就绪面必须报「未完成」，不得宣告平台可切换。
+	InProgress bool
+	Total      int
+	Completed  int
+	// Failed 是**单源**失败计数：单源失败不再使整个 Manager 创建失败（改动前会——那样连
+	// 采集与实例管理都起不来），而是记入 Reasons 并继续其余源。
+	Failed int
+	// Reasons 是逐源失败原因（有界：只保留前若干条，避免刷屏）。
+	Reasons []string
+}
+
 // Manager owns configured source pipelines and their durable state.
 type Manager struct {
 	// defaultCharset 是节点级默认字符集（源未显式配置时生效）；空串等价于 auto。
@@ -144,6 +164,23 @@ type Manager struct {
 	// resolveGapsStage 是解算的测试观测口（生产为 nil，零开销）：在**离锁**阶段按源回调，
 	// 让回归能把「解算进行中」钉在确定位置，从而断言采集轮照常推进（与既有的 stageSink 同型）。
 	resolveGapsStage func(string)
+	// lifecycleCtx/lifecycleCancel 是本 Manager 自身生命周期的 ctx：持久化的可取消面
+	// （Stop 即取消，长落库不再"服务端继续为没人要的结果删库"）。**只在 New 中赋值、之后不再
+	// 改写**（取消用 cancel 函数），故读取无需加锁，也不参与任何锁序。
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+	// startupRecovery 是启动恢复（对账 + 重发 + 解阻回收）的**后台进度**。
+	//
+	// 为什么移出 New（2026-10-02 生产事故）：该链在 New 内逐源串行执行，而它的一端是
+	// 「读回该源全部 canonical 事件」（生产 18GB）+「剪枝后逐行删索引」（一次 3.4M 行）；
+	// New 不返回 ⇒ main 起不到反向隧道 ⇒ worker 20–30 分钟完全不可达（SIGQUIT 取证）。
+	// 现在 New 只做「登记 + 账本/段恢复」，恢复在后台续做并在就绪面上如实标注未完成。
+	startupRecovery startupRecoveryState
+	// startupDone 在启动恢复结束（含提前取消）时关闭；WaitStartupRecovery 据此等待。
+	startupDone chan struct{}
+	// lastPersistStats 是最近一次落库的读数（观测面）：生产排障据此确认
+	// 「①水位化差异删除是否真的启用」（RangePrunes > 0）、分步是否触发（Incomplete）。
+	lastPersistStats stateindex.Stats
 	root             string
 	vl               *vlsup.Client
 	vlRoute          func(SourceConfig) (*vlsup.Client, bool, error)
@@ -359,6 +396,16 @@ type Options struct {
 	// nil 表示用默认（defaultResolveGapsMaxSources / defaultResolveGapsMaxDuration）。
 	// 见 ResolveGapsBudget 的缺陷说明。
 	ResolveGapsBudget *ResolveGapsBudget
+	// StartupRecoveryBackground 让启动恢复（对账 + 重发 + 解阻回收 + 落库）在**后台**执行：
+	// New 立刻返回，worker 随即可达 serving（反向隧道/WS/HTTP 不再等它），恢复进度经就绪面
+	// （CutoverReadiness 的 startup_recovery_in_progress / _failed）如实上报。
+	//
+	// 为什么是开关而不是无条件（2026-10-02 生产事故的工程取舍）：启动恢复是「启动后状态何时
+	// 落定」的语义边界，既有大量调用方/用例以「New 返回即恢复完成」为前置。开关让生产拿到
+	// 「必定可达 serving」，同时把其余调用方的边界保持**显式**。两条路径跑的是**同一个驱动**
+	// （runStartupRecovery），差别只在「在哪个 goroutine 里跑」——不存在「测试路径与生产路径
+	// 是两份实现」的问题。
+	StartupRecoveryBackground bool
 }
 
 type CutoverReadiness struct {
@@ -371,6 +418,23 @@ func (m *Manager) CutoverReadiness() CutoverReadiness {
 	result := CutoverReadiness{LedgerReady: true, CutoffTime: time.Now().UTC()}
 	if m == nil {
 		return CutoverReadiness{Reasons: []string{"ingest_manager_unavailable"}}
+	}
+	// 启动恢复未完成 ⇒ 平台不可宣告就绪。
+	//
+	// 为什么必须显式报告（2026-10-02 事故的语义侧）：改动前「恢复完成」是由 New 同步返回隐式
+	// 表达的——worker 能连上就说明恢复做完了。恢复移出 New 之后，这个隐式前提消失，必须换成
+	// 显式判据，否则 CP 会在账本/投影/回收责任尚未落定时就宣告可切换。
+	m.mu.Lock()
+	recovery := m.startupRecovery
+	reasons := append([]string(nil), recovery.Reasons...)
+	m.mu.Unlock()
+	if recovery.InProgress {
+		result.LedgerReady = false
+		result.Reasons = append(result.Reasons, "startup_recovery_in_progress")
+	} else if recovery.Failed > 0 {
+		result.LedgerReady = false
+		result.Reasons = append(result.Reasons, "startup_recovery_failed")
+		result.Reasons = append(result.Reasons, reasons...)
 	}
 	pending, pendingErr := m.pendingSpoolState()
 	if pendingErr != nil {
@@ -863,6 +927,8 @@ func New(opts Options) (*Manager, error) {
 		maxReplayEventsPerDrain:  opts.MaxReplayEventsPerDrain,
 		multilineUnclosedTimeout: multilineUnclosedTimeoutOf(opts.MultilineUnclosedTimeout),
 	}
+	// 生命周期 ctx：持久化的可取消面（Stop 取消）。只在 New 中赋值、之后不再改写 ⇒ 读不加锁。
+	m.lifecycleCtx, m.lifecycleCancel = context.WithCancel(context.Background())
 	m.defaultCharset = opts.DefaultCharset
 	m.defaultTimeZone = opts.DefaultTimeZone
 	// 节点级默认时区必须**运行期自证**（2026-10-02 真机复验：配了 local 却仍是 +8h，因为
@@ -943,43 +1009,210 @@ func New(opts Options) (*Manager, error) {
 	// 为什么要拆开：对账是网络查询，必须能并发且失败只影响单源；而登记与重发仍要保持
 	// 既有的确定性顺序（catalog 发布、段存储、回收责任推进都不接受乱序）。
 	recovery := make([]startupSource, 0, len(keys))
+	recoveryPossible := m.vl != nil || m.vlRoute != nil
 	for _, sourceKey := range keys {
 		source := restoredSources[sourceKey]
 		if err := m.Register(source); err != nil {
 			return nil, err
 		}
-		key := source.LogSourceID + "/" + source.SourceGeneration
-		m.mu.Lock()
-		saved := m.state.Sources[key]
-		m.mu.Unlock()
-		recoveryEvents, err := m.canonicalRecoveryEvents(key, saved)
-		if err != nil {
-			return nil, err
-		}
-		if len(recoveryEvents) == 0 {
-			continue
-		}
-		if m.vl == nil && m.vlRoute == nil {
+		if !recoveryPossible {
 			// 无 VL 客户端：没有可对账、也没有可重发的目标（与旧行为一致）。
 			continue
 		}
-		recovery = append(recovery, startupSource{source: source, key: key, events: recoveryEvents})
-	}
-	if len(recovery) > 0 {
-		reports := m.reconcileStartup(context.Background(), recovery)
-		m.recordReconcileReports(reports)
-		for index, item := range recovery {
-			if err := m.applyStartupRecovery(item, reports[index]); err != nil {
-				return nil, err
-			}
-		}
+		// 只登记「待恢复的源」——**读回权威事件集与对账/重发全部移到后台**（见 runStartupRecovery）。
+		// 改动前这里逐源把 canonical 事件全量读进内存再对账，于是 New 的耗时为
+		// O(全部源的事件总量)（生产 18GB，单线程），期间 worker 完全不可达（2026-10-02 事故）。
+		recovery = append(recovery, startupSource{source: source, key: source.LogSourceID + "/" + source.SourceGeneration})
 	}
 	if err := m.recoverPendingSpools(); err != nil {
 		_ = store.Close()
 		return nil, err
 	}
+	// StartupRecoveryBackground（生产）：恢复不阻塞 New——New 返回后 main 立即继续，
+	// 反向隧道/WS/HTTP 随即可达，恢复在后台按批续做并经就绪面如实上报。
+	// 其余调用方（默认）：就地执行同一驱动，保持「New 返回即恢复完成」的既有边界。
+	if err := m.startStartupRecovery(recovery, opts.StartupRecoveryBackground); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	return m, nil
 }
+
+// lifecycleContext 返回 Manager 生命周期 ctx（持久化的可取消面）。字段只在 New 中赋值，
+// 故读取不加锁、也不参与锁序。
+func (m *Manager) lifecycleContext() context.Context {
+	if m == nil || m.lifecycleCtx == nil {
+		return context.Background()
+	}
+	return m.lifecycleCtx
+}
+
+// startStartupRecovery 启动启动恢复驱动：background=true 时在后台 goroutine 里跑
+// （生产语义：New 不阻塞），否则就地跑完（保持既有调用方的边界）。
+// 错误语义按模式分工（同一条驱动，只有错误处置不同）：
+//   - 同步模式：**保持既有契约**——任一步失败即让 New 失败（调用方由此得知"启动投影/回收责任
+//     没落定"，走既有重试与告警面）；这正是既有回归守住的行为。
+//   - 后台模式（生产）：单源失败**不致命**——记入就绪原因并继续其余源，就绪面照实报 not-ready
+//     （`startup_recovery_failed` + 逐源原因）。理由：一个源的重发失败不该让整节点的实例管理、
+//     采集与其它源的采集都起不来；「未就绪」已由就绪面显式表达，不比让 New 失败更弱。
+func (m *Manager) startStartupRecovery(items []startupSource, background bool) error {
+	m.mu.Lock()
+	done := make(chan struct{})
+	m.startupDone = done
+	if len(items) == 0 {
+		m.startupRecovery = startupRecoveryState{}
+		m.mu.Unlock()
+		close(done)
+		return nil
+	}
+	m.startupRecovery = startupRecoveryState{InProgress: true, Total: len(items)}
+	m.mu.Unlock()
+	if background {
+		go func() {
+			defer close(done)
+			// 后台模式的错误不外抛（没有调用方在等）：失败已记入原因并经就绪面表达。
+			_ = m.runStartupRecovery(m.lifecycleContext(), items, false)
+		}()
+		return nil
+	}
+	err := m.runStartupRecovery(m.lifecycleContext(), items, true)
+	close(done)
+	return err
+}
+
+// StartupRecoveryStatus 返回启动恢复的后台进度（观测面；CP 的运维接口与排障据此判断
+// 「平台为什么还没就绪」）。
+func (m *Manager) StartupRecoveryStatus() startupRecoveryState {
+	if m == nil {
+		return startupRecoveryState{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	status := m.startupRecovery
+	status.Reasons = append([]string(nil), m.startupRecovery.Reasons...)
+	return status
+}
+
+// WaitStartupRecovery 等待启动恢复结束（含被取消）。ctx 取消即返回 ctx.Err()。
+//
+// 为什么需要它：恢复语义（「启动后多久，账本/投影/回收责任才落定」）此前由 New 的同步返回
+// 隐式表达；移到后台后必须有**显式的等待点**，否则测试与调用方无从确定边界。
+// 生产不需要等（这正是本修复的目的），故 main 不调用它。
+func (m *Manager) WaitStartupRecovery(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	done := m.startupDone
+	m.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// runStartupRecovery 是启动恢复的后台驱动（FR-497 的三阶段，顺序与语义不变）：
+// ① 按批读回权威集合（可取消、有界内存）；② 批内并发对账（网络）；③ 逐源重发 + 落库（有界分步）。
+//
+// 与改动前的两处行为差异，都是本次事故的直接对策：
+//   - **不阻塞启动**：整段脱离 New，worker 立即可达（本方法的失败只影响就绪面，不再让
+//     Manager 创建失败——改动前单源重发失败会导致整个采集运行时起不来）；
+//   - **单源失败不致命**：记入 Reasons 并继续其余源（改动前直接 return err）。
+func (m *Manager) runStartupRecovery(ctx context.Context, items []startupSource, failFast bool) error {
+	allReports := make([]ReconcileReport, 0, len(items))
+	for start := 0; start < len(items); start += startupRecoveryBatch {
+		if err := ctx.Err(); err != nil {
+			m.finishStartupRecovery()
+			return err
+		}
+		end := start + startupRecoveryBatch
+		if end > len(items) {
+			end = len(items)
+		}
+		loaded := make([]startupSource, 0, end-start)
+		for _, item := range items[start:end] {
+			if err := ctx.Err(); err != nil {
+				m.finishStartupRecovery()
+				return err
+			}
+			m.mu.Lock()
+			saved := m.state.Sources[item.key]
+			m.mu.Unlock()
+			events, err := m.canonicalRecoveryEvents(item.key, saved)
+			if err != nil {
+				if failFast {
+					m.finishStartupRecovery()
+					return err
+				}
+				m.noteStartupRecoveryFailure(item.key, err)
+				continue
+			}
+			if len(events) == 0 {
+				continue
+			}
+			loaded = append(loaded, startupSource{source: item.source, key: item.key, events: events})
+		}
+		if len(loaded) == 0 {
+			continue
+		}
+		reports := m.reconcileStartup(ctx, loaded)
+		allReports = append(allReports, reports...)
+		// 增量可见：排障中途也能看到「对账已经跑了哪些源」。
+		m.recordReconcileReports(allReports)
+		for index, item := range loaded {
+			if err := ctx.Err(); err != nil {
+				m.finishStartupRecovery()
+				return err
+			}
+			if err := m.applyStartupRecovery(item, reports[index]); err != nil {
+				if failFast {
+					m.finishStartupRecovery()
+					return fmt.Errorf("ingest: 启动恢复重发失败（源 %s）: %w", item.key, err)
+				}
+				m.noteStartupRecoveryFailure(item.key, err)
+				continue
+			}
+			m.noteStartupRecoveryCompleted()
+			// 让路：恢复不追求独占，采集轮/登记的持久化在步间照常插进（每步本身已有界）。
+			time.Sleep(persistStepYield)
+		}
+	}
+	m.finishStartupRecovery()
+	return nil
+}
+
+func (m *Manager) noteStartupRecoveryCompleted() {
+	m.mu.Lock()
+	m.startupRecovery.Completed++
+	m.mu.Unlock()
+}
+
+func (m *Manager) noteStartupRecoveryFailure(key string, err error) {
+	slog.Error("启动恢复：源恢复失败（其余源照常继续）", "source", key, "error", err)
+	m.mu.Lock()
+	m.startupRecovery.Failed++
+	if len(m.startupRecovery.Reasons) < maxStartupRecoveryReasons {
+		m.startupRecovery.Reasons = append(m.startupRecovery.Reasons, key+":"+err.Error())
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) finishStartupRecovery() {
+	m.mu.Lock()
+	m.startupRecovery.InProgress = false
+	m.mu.Unlock()
+}
+
+// maxStartupRecoveryReasons 是有界原因条数（避免逐源刷屏；总量由 Failed 计数表达）。
+const maxStartupRecoveryReasons = 8
 
 func (m *Manager) recoverPendingSpools() error {
 	m.mu.Lock()
@@ -1244,6 +1477,14 @@ func (m *Manager) Stop() error {
 	if m == nil {
 		return nil
 	}
+	// 先停启动恢复：它可能正在落库/写段，而本方法随后要 flush 并关索引句柄。
+	// 取消即生效（驱动在每次让路与每步之间校验 ctx），故这里等待是有界的。
+	if m.lifecycleCancel != nil {
+		m.lifecycleCancel()
+	}
+	if err := m.WaitStartupRecovery(context.Background()); err != nil {
+		return err
+	}
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
 	// 与登记串行（锁序 cycleMu → registerMu，见 registerMu 注释）：Stop 之后不能再有登记
@@ -1263,7 +1504,8 @@ func (m *Manager) Stop() error {
 	for _, p := range pipes {
 		_, _ = p.Flush()
 	}
-	if err := m.persist(); err != nil {
+	// 关停落库必须做完（不能用已被取消的生命周期 ctx）：它承担「停服即已落库」的语义。
+	if err := m.persistCtx(context.Background()); err != nil {
 		return err
 	}
 	// 关闭索引句柄：显式把 WAL 归并回主库（见 stateindex.Store.Close）。
@@ -4024,7 +4266,30 @@ func (m *Manager) load() error {
 //     （race 实测：不合并时登记 ≥1s 截止，TestRegisterInstanceNotBlockedBySaturatedPollRound 转红）。
 //
 // 锁序：cycleMu → registerMu → pendingMu → persistGate → m.mu。
+// persist 保持既有契约：**返回即「当前已声明的变更全部落库」**（FR-499 的「登记返回即落库」
+// 保证不变）。内部按每周期总预算分步执行，步与步之间释放持久化门并让路——因此一段异常大的差异
+// （如启动恢复一次剪掉整个积压前缀）不再独占持久化门，采集轮/登记可在步间插进自己的周期。
 func (m *Manager) persist() error {
+	return m.persistCtx(context.Background())
+}
+
+// persistStepYield 是分步持久化「让路」的时长。
+//
+// 为什么需要它（2026-10-02 事故）：一次调用若把整批差异做完，就会独占持久化门；采集轮与登记
+// 的持久化都被挡在门外，表现为「采集停摆、登记超时」。让路让它们每步都有机会插进来。
+// 取值只需覆盖一次调度（毫秒级），相对单步（默认 3s / 131k 行）可忽略。
+const persistStepYield = 5 * time.Millisecond
+
+// persistCtx 是 persist 的**可取消 + 分步**实现：每步受每周期总预算约束（ApplyScopedCtx），
+// 步间释放门、让路后继续，直到差异做完或 ctx 取消。
+//
+// 续跑为什么天然不重复、不遗漏：ApplyScoped 的镜像**按提交单元增量更新**，与库内容逐单元一致；
+// 因此下一步重算差异时看到的只剩尚未处理的行。ctx 取消时已提交单元保留（状态一致），
+// 未提交部分在下一次调用继续。
+func (m *Manager) persistCtx(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	m.persistGateEnsure()
 	// 合并（coalescing）：本调用按到达顺序声明一个序号；任何「构建发生在声明之后」的落库都会
 	// 覆盖它（见下方 covered 的读取位置），因此一个周期可被任意多个调用方共享，短变更调用者
@@ -4059,8 +4324,10 @@ func (m *Manager) persist() error {
 		// 必然被本次构建看到，因此可以安全声明「已覆盖到该序号」。反过来（先构建后读）会把
 		// 构建看不到的请求也算作已落库，那是静默丢更新。
 		covered := m.persistJoin.Load()
-		err := m.persistSnapshot()
-		if err == nil {
+		incomplete, err := m.persistSnapshotStep(ctx)
+		if err == nil && !incomplete {
+			// 只有**完整落库**才推进覆盖水位：部分完成就宣称覆盖会静默丢更新
+			// （未写入的行再也没人重试）。
 			m.persistCovered.Store(covered)
 		}
 
@@ -4069,7 +4336,17 @@ func (m *Manager) persist() error {
 		g.err = err
 		g.cond.Broadcast()
 		g.mu.Unlock()
-		return err
+		if err != nil {
+			return err
+		}
+		if !incomplete {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// 本步有界但差异未完：让路（门已释放，采集轮/登记可插进自己的周期）后继续做剩余差异。
+		time.Sleep(persistStepYield)
 	}
 }
 
@@ -4085,7 +4362,10 @@ func (m *Manager) persistGateEnsure() {
 
 // persistSnapshot 在**持持久化门（本轮唯一执行者）**的前提下执行一次完整持久化：m.mu 下
 // 构建期望状态，释放 m.mu 后再落库（SQLite 事务不再阻塞登记的短临界区；顺序由门保证，见 persist）。
-func (m *Manager) persistSnapshot() error {
+// persistSnapshotStep 执行**一步**持久化：构建期望状态（m.mu 下）→ 释放 m.mu → 一次有界落库
+// （受每周期总预算约束）。返回 incomplete=true 表示差异尚未做完（镜像已按提交单元更新，
+// 下一步重算即续跑）。
+func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
 	m.mu.Lock()
 	store := m.index
 	if store == nil {
@@ -4093,7 +4373,7 @@ func (m *Manager) persistSnapshot() error {
 		opened, err := stateindex.OpenWithBudget(m.indexPath(), m.indexCommit)
 		if err != nil {
 			m.mu.Unlock()
-			return fmt.Errorf("ingest: 打开采集索引失败: %w", err)
+			return false, fmt.Errorf("ingest: 打开采集索引失败: %w", err)
 		}
 		store = opened
 		m.index = store
@@ -4148,19 +4428,52 @@ func (m *Manager) persistSnapshot() error {
 	}
 	// 增量状态：账本派生行只按变更源构建，根行恒为全量（行数为 O(源数)，便宜且兜住
 	// 元数据变更）；配合 ApplyScoped 让未变更源的账本派生行根本不参与规划。
+	// ①水位化差异删除提示：把每个变更源的 **WAL 剪枝水位**（= 账本 reclaim 位置）下发给索引层。
+	//
+	// 为什么是 reclaim：采集侧的内存剪枝用的正是同一个位置（`WAL.pruneReclaimed(pos)`，判据
+	// `Durable && Record.End <= pos`，见 acquire/wal.go），因此索引层的谓词范围删除与内存剪枝
+	// **同源**；索引层还会再做一次等价性守门（期望集里不得存在满足谓词的行），不通过就退回逐行。
+	//
+	// 为什么必须下发（2026-10-02 事故）：启动恢复一次把整段积压判为可回收，索引侧于是要把这段
+	// 「镜像有、期望无」的行逐行删掉（生产 3.4M 行 ÷ 32 行/语句 ≈ 10.6 万条 DELETE，单线程在
+	// 19.5GB 库上 20–30 分钟零进展）。有了水位，这一段差异退化成**每源一条**谓词删除。
+	prunes := make([]stateindex.WALPrune, 0, len(changed))
+	for _, key := range changed {
+		pipe := m.pipes[key]
+		if pipe == nil || pipe.Ledger() == nil {
+			continue
+		}
+		entry := pipe.Ledger().Get(pipe.Key())
+		if entry == nil || entry.Positions.Reclaim == 0 {
+			continue
+		}
+		prunes = append(prunes, stateindex.WALPrune{Owner: key, EndThrough: entry.Positions.Reclaim})
+	}
 	desired, err := m.stateToIndexStateScoped(&m.state, changed)
 	if err != nil {
 		m.mu.Unlock()
-		return err
+		return false, err
 	}
 	// 快照已经构建完成：释放 m.mu（登记路径等的短临界区锁）后再落库。落库顺序由持久化门
 	// 保证与构建顺序一致，因此「旧快照后写」不可能发生。
 	m.mu.Unlock()
-	if _, err := store.ApplyScoped(desired, changed); err != nil {
-		// 不推进水位：本轮构建的源在下一轮会被重新构建并重试落库，悬挂源不会静默滞留。
-		return fmt.Errorf("ingest: 持久化采集索引失败（水位未推进，下一轮自动重试）: %w", err)
+	stats, err := store.ApplyScopedCtx(ctx, desired, changed, prunes)
+	if err == nil {
+		// 观测面：记录本次读数（含分步未完成标志与范围删除条数），供排障与回归取证。
+		m.mu.Lock()
+		m.lastPersistStats = stats
+		m.mu.Unlock()
 	}
-	// 落库成功后才推进水位。需要重新取锁：构建期已释放 m.mu，期间可能有新的变更被声明；
+	if err != nil {
+		// 不推进水位：本轮构建的源在下一轮会被重新构建并重试落库，悬挂源不会静默滞留。
+		return false, fmt.Errorf("ingest: 持久化采集索引失败（水位未推进，下一轮自动重试）: %w", err)
+	}
+	if stats.Incomplete {
+		// 本步受预算约束提前返回：**不推进水位**，下一步重建同一批源并续做剩余差异
+		// （镜像已按提交单元更新 ⇒ 重算结果只剩未处理的行）。
+		return true, nil
+	}
+	// 完整落库后才推进水位。需要重新取锁：构建期已释放 m.mu，期间可能有新的变更被声明；
 	// 即便账本在这段时间里又前进，这里记下的是**更旧**的修订号，下一轮会因不等而重建（安全方向）。
 	m.mu.Lock()
 	for _, a := range advanced {
@@ -4168,7 +4481,32 @@ func (m *Manager) persistSnapshot() error {
 		m.persistedCover[a.key] = a.cover
 	}
 	m.mu.Unlock()
-	return nil
+	return false, nil
+}
+
+// LastPersistStats 返回最近一次落库的读数（含谓词范围删除是否启用、是否分步未完成）。
+func (m *Manager) LastPersistStats() stateindex.Stats {
+	if m == nil {
+		return stateindex.Stats{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	stats := m.lastPersistStats
+	stats.Written = cloneCountMap(m.lastPersistStats.Written)
+	stats.Deleted = cloneCountMap(m.lastPersistStats.Deleted)
+	stats.Planned = cloneCountMap(m.lastPersistStats.Planned)
+	return stats
+}
+
+func cloneCountMap(in map[string]int) map[string]int {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 // coverSignature 是「WAL 以何种形态落库」的判据（B1a 按条切分的内联/引用决策输入）。

@@ -69,6 +69,16 @@ const (
 	DefaultCommitMaxRows = 512
 	DefaultCommitMinRows = 64
 	DefaultCommitTarget  = 40 * time.Millisecond
+	// DefaultCycleMaxRows 是单次 ApplyScoped 的行数预算默认值。
+	//
+	// 取值依据（2026-10-02 事故）：稳态一轮采集的变更量在数百~数千行（60 源 × 60 行/s，
+	// 250ms 一轮 ⇒ 单轮 ≈ 900 行），131 072 行给正常路径留出两个数量级余量——**正常负载下
+	// 永远不会触发**（它不是为了限流，而是为了给「异常大批差异」设一个有限上界）。
+	// 按单元实测 13 µs/行，131k 行 ≈ 1.7s（远小于 RPC/HTTP 的 10–300s 等待面），
+	// 且它在后台续做路径上会被反复让路，不会独占持久化门。
+	DefaultCycleMaxRows = 1 << 17
+	// DefaultCycleMaxDuration 是单次 ApplyScoped 的墙钟预算默认值（同上：正常负载不会触发）。
+	DefaultCycleMaxDuration = 3 * time.Second
 )
 
 // CommitBudget 是**单个提交单元**（一次 IMMEDIATE 事务）的资源预算：行数上界 + 耗时上界。
@@ -86,21 +96,43 @@ const (
 //
 // 执行中另有**耗时硬上界**（Target × 5/4，默认 50 ms = 验收线本身）：事务内每开始一条语句前
 // 检查已耗时，越界即把剩余行留给下一个提交单元。目标值负责收敛，硬上界负责兜住抖动尖峰。
+// 另有两枚**每周期总预算**旋钮（CycleMaxRows / CycleMaxDuration）：它们约束的不是「一个提交单元」，
+// 而是「一次 ApplyScoped 调用最多做多少」——超出即返回 `Stats.Incomplete=true`，剩余差异由调用方
+// 下一轮再调（镜像按提交单元增量更新 ⇒ 重算差异天然就是续跑，不重复、不遗漏）。
+//
+// 为什么必须有（2026-10-02 生产事故：启动路径单线程、与规模成正比的持久化）：
+// 单元预算只把工作**切碎**，循环体 `for wi < len(writes) || di < len(deletes)` 没有总数上界，
+// 于是「一次调用」的耗时仍与整批差异行数成正比。启动恢复一次剪掉整个积压前缀（生产 3.4M 行）
+// ⇒ 单次 ApplyScoped 要发 10 万条 DELETE，`ingest.New` 同步等它 ⇒ worker 20–30 分钟不监听。
 type CommitBudget struct {
 	MaxRows int
 	MinRows int
 	Target  time.Duration
+	// CycleMaxRows 是单次 ApplyScoped 最多处理的行数（写 + 删）；≤0 用默认。
+	CycleMaxRows int
+	// CycleMaxDuration 是单次 ApplyScoped 的墙钟预算；≤0 用默认。检查落在提交单元之间
+	// （单元内不可中断，其自身耗时由 hardLimit 兜住），故实际耗时可上浮「一个单元」。
+	CycleMaxDuration time.Duration
 }
 
 // DefaultCommitBudget 返回默认提交单元预算。
 func DefaultCommitBudget() CommitBudget {
-	return CommitBudget{MaxRows: DefaultCommitMaxRows, MinRows: DefaultCommitMinRows, Target: DefaultCommitTarget}
+	return CommitBudget{
+		MaxRows: DefaultCommitMaxRows, MinRows: DefaultCommitMinRows, Target: DefaultCommitTarget,
+		CycleMaxRows: DefaultCycleMaxRows, CycleMaxDuration: DefaultCycleMaxDuration,
+	}
 }
 
 // Normalized 把非法配置收敛到默认：非正的行数/耗时都是误写（0 行预算无法表达任何合法语义），
 // 一律回退默认；MinRows > MaxRows 时夹到 MaxRows。配置误写不得让切分失效。
 func (b CommitBudget) Normalized() CommitBudget {
 	out := b
+	if out.CycleMaxRows <= 0 {
+		out.CycleMaxRows = DefaultCycleMaxRows
+	}
+	if out.CycleMaxDuration <= 0 {
+		out.CycleMaxDuration = DefaultCycleMaxDuration
+	}
 	if out.MaxRows <= 0 {
 		out.MaxRows = DefaultCommitMaxRows
 	}
@@ -119,6 +151,26 @@ func (b CommitBudget) Normalized() CommitBudget {
 // hardLimit 返回单提交单元的执行中耗时硬上界：目标 × 5/4（默认 40 ms → 50 ms，即验收线本身）。
 func (b CommitBudget) hardLimit() time.Duration {
 	return b.Target * 5 / 4
+}
+
+// WALPrune 是「source_wal 按**谓词水位**丢弃整段旧行」的请求（①水位化差异删除）。
+//
+// 语义与判据：删除该归属中 `durable = 1 且 record_end <= EndThrough` 的全部行——与采集侧
+// 内存剪枝 `WAL.pruneReclaimed(pos)` 的判据**逐字同源**（那里也是 `Durable && Record.End <= pos`，
+// 见 internal/worker/logs/acquire/wal.go）。
+//
+// 为什么需要它（2026-10-02 生产事故：启动路径单线程、与规模成正比的持久化）：启动恢复一次把
+// 整段积压判为可回收（`releaseRecovery` → `TryReclaim`），内存里那段被剪掉，索引侧于是要把
+// 「镜像里有、期望里没有」的行逐行删掉——生产 3.4M 行 × 每语句 32 行 = 10.6 万条 DELETE，
+// 单线程在 19.5GB 库上跑 20–30 分钟且零进展。本类型把这段差异表达成**一条**谓词范围删除。
+//
+// 安全性由 ApplyScopedCtx 的等价性守门保证（见 walPrunePlan）：只有「期望集里不存在任何满足
+// 该谓词的行」时才启用范围删除，否则整段退回逐行路径。`durable = 1` 这一条不能省——期望集里
+// 未耐久（durable=0）的行即使 record_end ≤ 水位也必须留在库里（否则重启后 WAL 少条 ⇒ 未投递
+// 正文丢失）。
+type WALPrune struct {
+	Owner      string
+	EndThrough uint64
 }
 
 // pendingRow 是一条待写入/待删除的行：表下标 + 行数据（删除时只用 owner/key，
@@ -190,6 +242,22 @@ type Stats struct {
 	Chunks int
 	// MaxChunkRows 是本周期内单个提交单元的最大行数（写 + 删）。
 	MaxChunkRows int
+	// Incomplete 表示本次调用受**每周期总预算**约束而提前返回：差异尚未做完。
+	//
+	// 调用方语义：状态**已落库的部分一致且可用**（镜像按提交单元增量更新，与库内容逐单元一致），
+	// 未完成的行没有被写入也没有被宣称完成；再次调用同一入口即可续跑（重算差异。
+	// 因为镜像已反映已提交单元，重算的结果天然只剩剩余行 ⇒ 不重复、不遗漏）。
+	Incomplete bool
+	// RemainingRows 是预算耗尽时尚未处理的差异行数（写 + 删）下界，供调用方决定是否继续。
+	RemainingRows int
+	// RangePrunes 是本周期发出的**谓词范围删除语句数**（①水位化路径是否启用，一眼可见）。
+	//
+	// 为什么单独观测「发出了几条」而不是只看行数：稳态下这些语句常常影响 0 行（该段早已删净），
+	// 行数会让「路径有没有生效」完全不可见。生产排障要知道的正是前者。
+	RangePrunes int
+	// RangePruned 是经**谓词范围删除**丢弃的行数（①水位化路径；0 表示本周期没走该路径）。
+	// 与 RowsDeleted 分开观测：两者相加才是本周期实际删除的行数。
+	RangePruned int
 	// Statements 是本周期实际发出的 SQL 语句数（写 + 删）。
 	//
 	// 为什么要观测它：批量化的收益全在「一条语句处理几行」上——退回逐行时这个值会等于行数
@@ -217,6 +285,9 @@ type Store struct {
 
 	samples []Sample
 
+	// walPruneApplied 记录各归属**已应用**的 source_wal 剪枝水位：水位未前进即不再重复发
+	// 范围删除（幂等跳过）。进程重启后表为空 ⇒ 首次提示会重放一条谓词删除（幂等、一条语句）。
+	walPruneApplied map[string]uint64
 	// budget 是提交单元的配置预算（配置面下发，见 CommitBudget）；rowBudget 是自适应后的
 	// 当前行数预算（在 [MinRows, MaxRows] 之间随实测耗时收缩/扩张），cycle 是周期序号。
 	budget    CommitBudget
@@ -251,7 +322,8 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	budget = budget.Normalized()
-	s := &Store{path: path, db: db, mirror: newMirror(), budget: budget, rowBudget: budget.MaxRows}
+	s := &Store{path: path, db: db, mirror: newMirror(), budget: budget, rowBudget: budget.MaxRows,
+		walPruneApplied: make(map[string]uint64)}
 	ctx := context.Background()
 	// journal_mode=WAL + synchronous=NORMAL（spec §2.1）：提交即持久、崩溃可恢复；
 	// busy_timeout 用于同进程内只读连接短暂持锁时等待，而非立即报错。
@@ -669,6 +741,21 @@ func (s *Store) Apply(desired State) (Stats, error) {
 // 才会丢事件，而 position 最后落库恰好排除了它。删除按表倒序（子表在前）不受影响，
 // 单元边界只会落在排序序列中间，故「删父表前先删子表」的顺序全局保持。
 func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
+	return s.ApplyScopedCtx(context.Background(), desired, owners, nil)
+}
+
+// ApplyScopedCtx 是 ApplyScoped 的**可取消**形态：ctx 贯穿到每一条语句
+// （sql.Conn 的 ExecContext/QueryContext），且在每个提交单元之间校验——取消即停止并回滚当前
+// 未提交单元（已提交单元不受影响，镜像与库仍逐单元一致）。
+//
+// 为什么必须收调用方的 ctx（2026-10-02 事故）：此前这里硬编码 context.Background()，
+// 于是启动恢复这类长流程既不可超时也不可中断——调用方（HTTP/RPC/关停）早已放弃，服务端仍在
+// 为没人要的结果逐行删库。
+// prunes 是**谓词范围删除**提示（可为 nil）：见 WALPrune。
+func (s *Store) ApplyScopedCtx(ctx context.Context, desired State, owners []string, prunes []WALPrune) (Stats, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.readOnly {
@@ -676,7 +763,9 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 	}
 	started := time.Now()
 	stats := Stats{Written: map[string]int{}, Deleted: map[string]int{}, Planned: map[string]int{}}
-	ctx := context.Background()
+	if err := ctx.Err(); err != nil {
+		return Stats{}, err
+	}
 	scoped := owners != nil
 	owned := make(map[string]struct{}, len(owners))
 	for _, owner := range owners {
@@ -705,6 +794,10 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 	}
 
 	// 先算差异（不触库），再开事务，尽量缩短持锁时间。
+	//
+	// ①水位化差异删除的规划：先做**等价性守门**，通过者用一条谓词删除覆盖整段，未通过的归属
+	// 原样走逐行路径（安全方向：宁可慢，不可错删）。
+	prunePlans, pruneRows := s.planWALPrunes(desired, prunes)
 	var writes []pendingRow
 	var deletes []pendingRow
 	for index := range specs {
@@ -738,8 +831,14 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 			}
 			// 删除：只在本轮覆盖的归属内比对。未覆盖归属的镜像行必然仍在期望状态里
 			// （否则该归属就属于变更集合），若在此全表扫描会把它们误删。
+			walPrune := prunePlans[index][owner]
 			for key := range mirror {
 				if _, ok := seen[key]; ok {
+					continue
+				}
+				if walPrune != nil && walMirrorKeyAtOrBelow(specs[index], key, walPrune.EndThrough) {
+					// 该行落在谓词范围内：由一条范围删除覆盖，不再逐行发语句
+					// （这正是「与规模成正比的 DELETE 数」变成「每源一条」的地方）。
 					continue
 				}
 				// 归属原样带上：删除后更新镜像时要用它定位分组。
@@ -747,7 +846,7 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 			}
 		}
 	}
-	if len(writes) == 0 && len(deletes) == 0 {
+	if len(writes) == 0 && len(deletes) == 0 && len(pruneRows) == 0 {
 		// 幂等空转：不开事务、不写任何字节（空闲轮询不得重写历史）。
 		stats.Duration = time.Since(started)
 		stats.Chunks = 1
@@ -764,9 +863,15 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 	sort.SliceStable(writes, func(i, j int) bool { return writeOrderRank[writes[i].table] < writeOrderRank[writes[j].table] })
 
 	s.cycle++
-	samples, err := s.commitChunks(ctx, writes, deletes, s.cycle, &stats)
+	samples, progress, err := s.commitChunks(ctx, writes, deletes, pruneRows, s.cycle, &stats)
 	if err != nil {
 		return Stats{}, err
+	}
+	// 每周期总预算耗尽：如实报告未完成与剩余行数（**不**宣称完成）。剩余部分由调用方下一轮
+	// 再调本入口续做；因为镜像已按提交单元更新到与库一致，下一轮重算的差异天然只剩剩余行。
+	if progress.remaining() > 0 {
+		stats.Incomplete = true
+		stats.RemainingRows = progress.remaining()
 	}
 	// 采样逐单元记录，但周期结构（本单元是第几个、一个周期共几个）与周期口径的规划明细
 	// 只有全部跑完才知道，故在最后统一补上；打点侧据此还原「一周期被切成了几个单元」。
@@ -779,9 +884,174 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 	}
 	// WAL 归并在周期末尾显式执行：它**不属于任何提交单元**（因此不会拖长任何一次提交的耗时，
 	// 也不在持写锁期间做页拷贝），但成本完整计入下面这一行算出的周期总耗时。
-	s.checkpointPassiveIfNeeded(ctx)
+	//
+	// 预算耗尽（本周期未完）时不归并：那些页迟早要在收尾时归并一次，提前做只会把本已有限的
+	// 周期预算吃在页拷贝上，让「有限的一步」变成「不可预期的一步」。
+	if !stats.Incomplete {
+		s.checkpointPassiveIfNeeded(ctx)
+	}
 	stats.Duration = time.Since(started)
 	return stats, nil
+}
+
+// walPrunePlan 是一个**已通过等价性守门**的范围剪枝（按表下标 + 归属索引）。
+type walPrunePlan struct {
+	owner      string
+	EndThrough uint64
+}
+
+// planWALPrunes 规划本轮的 source_wal 范围剪枝，返回「表下标 → 归属 → 计划」与待执行清单。
+//
+// 等价性守门（**这是范围删除能安全替换逐行删除的全部依据**）：
+//   - 水位未前进（≤ 该归属已应用水位）⇒ 跳过：重放没有意义（幂等但白花一条语句）；
+//   - 期望集（内存 WAL，权威）里**不存在** `Durable && RecordEnd <= EndThrough` 的行 —— 否则
+//     范围删除会把一条仍然有效的行删掉（重启后 WAL 少条 ⇒ 未投递正文丢失）⇒ 该归属整段退回
+//     逐行路径。这条与采集侧的剪枝判据同源：`pruneReclaimed(pos)` 之后内存里不可能再有满足
+//     `Durable && Record.End <= pos` 的条目，故正常情况下守门必然通过；一旦不通过（例如状态被
+//     外部改动/版本错配），我们退化为慢但正确的那条路。
+func (s *Store) planWALPrunes(desired State, prunes []WALPrune) (map[int]map[string]*walPrunePlan, []walPrunePlan) {
+	if len(prunes) == 0 {
+		return nil, nil
+	}
+	// 期望集里各归属的「最小未耐久末端」：只关心满足谓词的行，故按 (durable, end) 判。
+	pending := make(map[string]bool, len(prunes))
+	for _, prune := range prunes {
+		pending[prune.Owner] = true
+	}
+	blocked := make(map[string]bool)
+	for _, row := range desired.WAL {
+		if !pending[row.Key] {
+			continue
+		}
+		if row.Durable && row.RecordEnd <= pruneWatermark(prunes, row.Key) {
+			blocked[row.Key] = true
+		}
+	}
+	plans := make(map[int]map[string]*walPrunePlan, 1)
+	var rows []walPrunePlan
+	for _, prune := range prunes {
+		if prune.Owner == "" || prune.EndThrough == 0 || blocked[prune.Owner] {
+			continue
+		}
+		if prune.EndThrough <= s.walPruneApplied[prune.Owner] {
+			continue
+		}
+		plan := &walPrunePlan{owner: prune.Owner, EndThrough: prune.EndThrough}
+		if plans[tblSourceWAL] == nil {
+			plans[tblSourceWAL] = make(map[string]*walPrunePlan, len(prunes))
+		}
+		plans[tblSourceWAL][prune.Owner] = plan
+		rows = append(rows, *plan)
+	}
+	return plans, rows
+}
+
+// pruneWatermark 取该归属的提示水位（同一归属只应有一条提示；多条时取最小，保守方向）。
+func pruneWatermark(prunes []WALPrune, owner string) uint64 {
+	best := uint64(0)
+	for _, prune := range prunes {
+		if prune.Owner != owner {
+			continue
+		}
+		if best == 0 || prune.EndThrough < best {
+			best = prune.EndThrough
+		}
+	}
+	return best
+}
+
+// walMirrorKeyAtOrBelow 判断一条 source_wal 镜像键的 record_end 是否 ≤ 水位。
+// 键的列序即 specs 的 keyCols（见 decodeMirrorKey），末尾即 record_end。
+func walMirrorKeyAtOrBelow(spec tableSpec, mirrorKey string, through uint64) bool {
+	values, err := decodeMirrorKey(spec, mirrorKey)
+	if err != nil || len(values) != len(spec.keyCols) {
+		return false // 解不开就按「不覆盖」处理，退回逐行删除（安全方向）
+	}
+	raw, ok := values[len(values)-1].(int64)
+	if !ok {
+		return false
+	}
+	if raw < 0 {
+		return false
+	}
+	return uint64(raw) <= through
+}
+
+// applyWALPrune 执行一条谓词范围删除：**一条语句**删掉该归属 `durable=1 && record_end <= 水位`
+// 的全部行。返回受影响行数。
+//
+// 为什么可以省掉 durable 判断之外的任何条件：谓词与内存剪枝同源，且守门已保证期望集里不存在
+// 满足谓词的行 ⇒ 被删的每一行都不在期望集里。
+func (s *Store) applyWALPrune(ctx context.Context, conn *sql.Conn, plan walPrunePlan, stats *Stats) (int, error) {
+	result, err := conn.ExecContext(ctx,
+		"DELETE FROM source_wal WHERE key = ? AND durable = 1 AND record_end <= ?", plan.owner, int64(plan.EndThrough))
+	if err != nil {
+		return 0, fmt.Errorf("stateindex: 范围剪枝 source_wal 失败（归属 %s）: %w", plan.owner, err)
+	}
+	stats.Statements++
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, nil // 行数不可读不是失败：语句已提交，观测值退化为 0
+	}
+	return int(affected), nil
+}
+
+// refreshWALMirrorWindow 在范围删除提交后刷新该归属「record_end ≤ 水位」那一段的镜像：先把该段
+// 现有镜像删掉，再按库内容重建。
+//
+// 为什么要刷新而不是直接套用范围删除**同一个谓词**：镜像的键里没有 durable（键 = key+seq+
+// event_id+record_start+record_end），直接按谓词删镜像会连**未耐久**的行一起从镜像里抹掉，
+// 而库里那些行还在 ⇒ 镜像与库分叉（下一步的差异比对会因此错过它们）。读回来重建是唯一不依赖
+// 额外状态的做法，且这一次读只覆盖该归属的一段（不是全表）。
+//
+// 必须走**调用方的连接**（而不是 s.db）：本包是单写者单连接（SetMaxOpenConns(1)），
+// 提交单元正占着那条连接，另开一条会把自己锁死。
+func (s *Store) refreshWALMirrorWindow(ctx context.Context, conn *sql.Conn, plan walPrunePlan) error {
+	spec := specs[tblSourceWAL]
+	rows, err := conn.QueryContext(ctx, spec.mirrorSQL+" WHERE key = ? AND record_end <= ?", plan.owner, int64(plan.EndThrough))
+	if err != nil {
+		return fmt.Errorf("stateindex: 刷新 source_wal 镜像失败（归属 %s）: %w", plan.owner, err)
+	}
+	defer func() { _ = rows.Close() }()
+	type mirrorEntry struct {
+		key string
+		fp  uint64
+	}
+	var rebuilt []mirrorEntry
+	for rows.Next() {
+		columns, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+		values, err := scanRow(rows, len(columns))
+		if err != nil {
+			return err
+		}
+		// 与 loadMirror 逐字同构：键取前 len(keyCols) 列，fpSelf 表直接读最后一列。
+		key := mirrorKey(values[:len(spec.keyCols)]...)
+		if values[len(values)-1] == nil {
+			return fmt.Errorf("stateindex: %s 指纹列为空", spec.name)
+		}
+		rebuilt = append(rebuilt, mirrorEntry{key: key, fp: mustFingerprint(values[len(values)-1])})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	table := s.mirrorTable(spec.name)
+	owned := table[plan.owner]
+	if owned == nil {
+		owned = make(map[string]uint64)
+		table[plan.owner] = owned
+	}
+	for key := range owned {
+		if walMirrorKeyAtOrBelow(spec, key, plan.EndThrough) {
+			delete(owned, key)
+		}
+	}
+	for _, entry := range rebuilt {
+		owned[entry.key] = entry.fp
+	}
+	return nil
 }
 
 // writeOrderRank 给出写入阶段的表序：父表在前（外键），**水位表 position 永远最后**。
@@ -812,27 +1082,54 @@ var writeOrderRank = func() [tableCount]int {
 //
 // 返回本周期各单元的采样（**不**登记进采样环）：周期结构与周期口径的规划明细要等全部单元
 // 跑完才知道，由 ApplyScoped 统一补齐后登记。
-func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, cycle uint64, stats *Stats) ([]Sample, error) {
+func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, prunes []walPrunePlan, cycle uint64, stats *Stats) ([]Sample, commitProgress, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("stateindex: 获取写连接失败: %w", err)
+		return nil, commitProgress{}, fmt.Errorf("stateindex: 获取写连接失败: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	limit := s.budget.hardLimit()
+	cycleStarted := time.Now()
+	cycleRows := 0
 	wi, di := 0, 0
+	prunesDone := 0
 	var samples []Sample
-	for wi < len(writes) || di < len(deletes) {
+	// 循环条件必须把范围剪枝算进去：当「差异只剩谓词剪枝」（写/删集为空）时，若漏掉它，
+	// 整段剪枝就永远不会被执行——而且是静默的（无错误、无提示）。
+	for wi < len(writes) || di < len(deletes) || len(prunes) > 0 {
+		// 每周期总预算：它约束的是「一次调用做多少」，与单元预算（约束「一个事务多大」）正交。
+		// 检查点在单元之间，故单次调用实际耗时可上浮「一个单元」（其自身由 hardLimit 兜住）。
+		//
+		// 至少有 completed > 0 才允许因预算停下（见下方 progress 语义）：否则极小预算会把调用
+		// 变成永不动作者（每次进来都立刻返回"未完成"），那是死循环而不是有界。
+		if (cycleRows >= s.budget.CycleMaxRows || time.Since(cycleStarted) >= s.budget.CycleMaxDuration) && (wi > 0 || di > 0 || prunesDone > 0) {
+			return samples, commitProgress{
+				writesDone: wi, deletesDone: di, writesTotal: len(writes), deletesTotal: len(deletes),
+				prunesDone: prunesDone, prunesTotal: prunesDone + len(prunes),
+			}, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, commitProgress{}, err
+		}
 		chunkStarted := time.Now()
 		writtenFrom, deletedFrom := wi, di
 		budget := s.rowBudget
 		if budget < 1 {
 			budget = 1
 		}
+		// 每周期总预算同时**封顶本单元的行数**：否则一个单元（默认 ≤512 行）就能越过整周期预算，
+		// 「一次调用做多少」立刻失真（配置 8 行/周期却一次写了 512 行）。耗时维度仍以单元为粒度，
+		// 故单次调用实际耗时可上浮「一个单元」（其自身由 hardLimit 兜住）。
+		if remaining := s.budget.CycleMaxRows - cycleRows; remaining > 0 && remaining < budget {
+			budget = remaining
+		}
 		rows := 0
 		// 单元内的行数与字数据单独累计：采样是**单元**口径（打点按样本增量结账），
 		// 周期的合计在提交成功后并入 stats。
 		chunkStats := Stats{Written: map[string]int{}, Deleted: map[string]int{}}
+		// 本单元内已执行的范围剪枝：提交后才刷新镜像与推进水位（镜像始终只在提交成功后更新）。
+		var prunesApplied []walPrunePlan
 		// 整个单元（写 + 删 + 提交）都在同一个 IMMEDIATE 事务内：BEGIN 在写入之前，
 		// 否则语句会各自 autocommit——那正是「崩溃不丢」回归要抓的形态。
 		if err := s.runUnit(ctx, conn, func() error {
@@ -861,6 +1158,25 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 				rows += end - wi
 				wi = end
 			}
+			// 谓词范围删除：一条语句删掉整段旧行（①水位化）。放在删除阶段最前——它删的是子表
+			// source_wal，与逐行删除集不相交（规划期已排除），故与逐行删除的先后无依赖。
+			for len(prunes) > 0 {
+				prune := prunes[0]
+				if limit > 0 && rows > 0 && time.Since(chunkStarted) >= limit {
+					return nil // 耗时硬上界：剩余（含范围删除）留给下一个提交单元
+				}
+				affected, err := s.applyWALPrune(ctx, conn, prune, &chunkStats)
+				if err != nil {
+					return err
+				}
+				chunkStats.RangePrunes++
+				chunkStats.RangePruned += affected
+				stats.RangePrunes++
+				stats.RangePruned += affected
+				prunes = prunes[1:]
+				prunesDone++
+				prunesApplied = append(prunesApplied, prune)
+			}
 			for di < len(deletes) && rows < budget {
 				if limit > 0 && rows > 0 && time.Since(chunkStarted) >= limit {
 					break
@@ -882,7 +1198,7 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 			}
 			return nil
 		}); err != nil {
-			return nil, err
+			return nil, commitProgress{}, err
 		}
 		// 提交成功后才更新镜像与周期合计：未提交的单元不碰镜像（镜像与库内容因此始终一致）。
 		for _, pending := range writes[writtenFrom:wi] {
@@ -890,6 +1206,15 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 		}
 		for _, pending := range deletes[deletedFrom:di] {
 			s.deleteMirror(specs[pending.table].name, pending.row.owner, pending.row.key)
+		}
+		for _, prune := range prunesApplied {
+			// 该段镜像按库内容重建（不能按谓词删：镜像键里没有 durable，会误抹未耐久行）。
+			if err := s.refreshWALMirrorWindow(ctx, conn, prune); err != nil {
+				// 刷新失败只可能让镜像**偏旧**（多留几行）——下一步的差异比对会把这些行的逐行
+				// 删除重算一遍（幂等，无害），而水位不推进则会重放一次范围删除（同样幂等）。
+				return nil, commitProgress{}, err
+			}
+			s.walPruneApplied[prune.owner] = prune.EndThrough
 		}
 		stats.RowsWritten += chunkStats.RowsWritten
 		stats.RowsDeleted += chunkStats.RowsDeleted
@@ -905,6 +1230,7 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 		if rows > stats.MaxChunkRows {
 			stats.MaxChunkRows = rows
 		}
+		cycleRows += rows
 		elapsed := time.Since(chunkStarted)
 		samples = append(samples, Sample{
 			StartedAt: chunkStarted, Duration: elapsed, CycleID: cycle, Chunks: 1,
@@ -913,7 +1239,25 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 		})
 		s.adaptBudget(rows, elapsed)
 	}
-	return samples, nil
+	return samples, commitProgress{
+		writesDone: wi, deletesDone: di, writesTotal: len(writes), deletesTotal: len(deletes),
+		prunesDone: prunesDone, prunesTotal: prunesDone,
+	}, nil
+}
+
+// commitProgress 是一次 ApplyScoped 的**进度**（而非「成功/失败」）：提交单元是连续切片，
+// 因此「已提交到哪」可用两个下标完全表达。remaining() 为 0 表示本周期差异已全部落库。
+type commitProgress struct {
+	writesDone   int
+	deletesDone  int
+	writesTotal  int
+	deletesTotal int
+	prunesDone   int
+	prunesTotal  int
+}
+
+func (p commitProgress) remaining() int {
+	return (p.writesTotal - p.writesDone) + (p.deletesTotal - p.deletesDone) + (p.prunesTotal - p.prunesDone)
 }
 
 // runUnit 执行一个提交单元：BEGIN IMMEDIATE → body（写本单元的变更行、删本单元的陈旧行）

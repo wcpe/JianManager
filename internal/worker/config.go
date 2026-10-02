@@ -294,6 +294,17 @@ type LogIndexPersistConfig struct {
 	// TxDurationTarget 单个提交单元的耗时目标（duration 字符串，默认 40ms）；非法/非正回退默认。
 	// 执行中的耗时硬上界取它的 5/4（默认 50ms = 验收线「单次持久化 ≤50ms」本身）。
 	TxDurationTarget string `mapstructure:"tx_duration_target"`
+	// CycleMaxRows 是**单次落库调用**最多处理的行数（写 + 删；键 log_index.persist.cycle_max_rows）。
+	// 非正回退默认（stateindex.DefaultCycleMaxRows）。
+	//
+	// 与 max_tx_rows 的区别（2026-10-02 生产事故的直接对策）：max_tx_rows 约束「一个事务多大」，
+	// 本键约束「一次调用做多少」。事故现场是启动恢复一次判出整段积压（3.4M 行）要删，单次调用
+	// 必须把 10.6 万条 DELETE 跑完才返回 ⇒ 启动链上跑 20–30 分钟、worker 不监听。有了本键，一次
+	// 调用有界返回（Incomplete），剩余差异由下一轮续做（镜像按提交单元更新 ⇒ 重算即续跑）。
+	CycleMaxRows int `mapstructure:"cycle_max_rows"`
+	// CycleMaxDuration 是单次落库调用的墙钟预算（duration 字符串；键
+	// log_index.persist.cycle_max_duration）；非法/非正回退默认。检查落在提交单元之间。
+	CycleMaxDuration string `mapstructure:"cycle_max_duration"`
 }
 
 // CommitBudget 把本地配置面收敛为 stateindex 的提交单元预算（非法值一律回退归一化默认）。
@@ -307,6 +318,12 @@ func (c LogIndexPersistConfig) CommitBudget() stateindex.CommitBudget {
 	}
 	if d, err := time.ParseDuration(strings.TrimSpace(c.TxDurationTarget)); err == nil && d > 0 {
 		out.Target = d
+	}
+	if c.CycleMaxRows > 0 {
+		out.CycleMaxRows = c.CycleMaxRows
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.CycleMaxDuration)); err == nil && d > 0 {
+		out.CycleMaxDuration = d
 	}
 	return out.Normalized()
 }
@@ -1054,6 +1071,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_ingest.archive_scan_interval", "")
 	// 整节点解算预算（2026-10-02 缺陷修复）：0/空 = 用 ingest 包默认（256 源 / 2m）。
 	v.SetDefault("log_ingest.resolve_gaps_max_sources", 0)
+	// 每周期总预算（2026-10-02 事故修复）：单次落库调用做多少；0/空 = 用 stateindex 默认。
+	v.SetDefault("log_index.persist.cycle_max_rows", 0)
+	v.SetDefault("log_index.persist.cycle_max_duration", "")
 	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 )
 
 // 本文件守住两处**此前完全没有装配点**的配置：`log.level` / `log.format`，
@@ -197,5 +199,29 @@ func TestResolveGapsBudgetWiringAndRejectsGarbage(t *testing.T) {
 	cfg.LogIngest.ResolveGapsMaxDuration = "两分钟"
 	if _, err := cfg.IngestResolveGapsBudget(); err == nil {
 		t.Fatal("非法时长必须报错（不得静默回退默认）")
+	}
+}
+
+// TestCycleBudgetDefaultsAndIsConfigurable 钉住②「有界」那一半的配置面：
+// 默认零配置零行为变化（走 stateindex 默认），显式配置原样下发，非法值回退默认（不得让切分失效）。
+func TestCycleBudgetDefaultsAndIsConfigurable(t *testing.T) {
+	cfg := loadTestConfig(t)
+	budget := cfg.LogIndex.CommitBudget()
+	if budget.CycleMaxRows != stateindex.DefaultCycleMaxRows || budget.CycleMaxDuration != stateindex.DefaultCycleMaxDuration {
+		t.Fatalf("默认应走 stateindex 默认（单次落库有界），实测 %+v", budget)
+	}
+
+	cfg.LogIndex.Persist.CycleMaxRows = 4096
+	cfg.LogIndex.Persist.CycleMaxDuration = "750ms"
+	budget = cfg.LogIndex.CommitBudget()
+	if budget.CycleMaxRows != 4096 || budget.CycleMaxDuration != 750*time.Millisecond {
+		t.Fatalf("显式配置必须原样下发，实测 %+v", budget)
+	}
+
+	cfg.LogIndex.Persist.CycleMaxRows = -1
+	cfg.LogIndex.Persist.CycleMaxDuration = "不是时长"
+	budget = cfg.LogIndex.CommitBudget()
+	if budget.CycleMaxRows != stateindex.DefaultCycleMaxRows || budget.CycleMaxDuration != stateindex.DefaultCycleMaxDuration {
+		t.Fatalf("非法值必须回退默认（否则「有界」会静默变成「无界」），实测 %+v", budget)
 	}
 }

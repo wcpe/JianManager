@@ -837,6 +837,10 @@ func runWorker() {
 				// 整节点解算单次调用的预算（键 log_ingest.resolve_gaps_*）：源数 + 墙钟双上界，
 				// 超出即分片返回（不伪装成功），见 ingest.ResolveGapsBudget。
 				ResolveGapsBudget: resolveGapsBudget,
+				// 启动恢复放到后台：New 立刻返回 ⇒ 反向隧道/WS/HTTP 立即可达（2026-10-02 事故：
+				// 恢复链与规模成正比且阻塞 New，worker 20–30 分钟不监听）。恢复进度经就绪面
+				// （startup_recovery_in_progress / _failed）如实上报，不放宽任何就绪判据。
+				StartupRecoveryBackground: true,
 				RecoveryHold: func(source ingest.SourceConfig, _ string) (bool, string) {
 					if rehydrateManager == nil {
 						return false, ""
