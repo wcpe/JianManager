@@ -1080,3 +1080,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 修复
 - **暂停自愈的根因补完（现场 44 源 27 清零不复活）**：兜底环评估恢复前先 `DeliverPending()`（补投递证据）再 `autoResolveGapsFromPublished()`（无证据不消解），随后按滞回 `EvaluateResume()` —— 真正挡路的是 `ResumeAcquire` 的未消解缺口闸（ledger.go:885）而非积压 ✓；红证直指现场形态（绕过被撑满的采集轮只调兜底 ⇒ 缺口清零+复活 ✓）。
+
+### 修复
+- **回放/恢复重活之二（段读聚合）**：`publishedClosedForSourceCtx` 段扫描按切片让路（`scan_slice_rows`=8192 行/`scan_yield`=1ms，10 万行仅 +12ms ✓）+ 单源轮内预算（`scan_budget`=2s；超时按"证据不完整"返回=不消解不推水位、下轮续扫，安全方向 ✓）+ `scanBudgetExceeded` 计数；两条机制级红证（让路 0 次/去掉 WithTimeout 均转红 ✓）；MUT1 独立红证补齐（零积压时缺口只能靠已发布投影证据消解 ✓ 变异决定性转红 ✓）。

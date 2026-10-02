@@ -206,6 +206,19 @@ type Manager struct {
 	resumeInterval time.Duration
 	// resumeProbe 是兜底扫描的测试观测口（生产 nil）：每个"积压/容量类暂停"的源被扫到时回调。
 	resumeProbe func(logSourceID string)
+	// scanYield / scanSliceRows / scanYieldNotify：**段读聚合路径的让路**（见
+	// publishedClosedForSourceCtx 的逐行回调）。现场 X 光片点名该路径（readSegment）是每轮重活的
+	// I/O 大头 ✗：它本就可被 ctx 取消（每行校验 ctx.Err ✓），但**从不让路** ⇒ 单源扫描可以把一个
+	// P 占满整轮 ✗。默认 1ms / 8192 行：10 万行源额外 ≈12ms（可忽略 ✓），却把 P 交还调度器 ✓。
+	scanYield       time.Duration
+	scanSliceRows   int
+	scanYieldNotify func()
+	// scanBudget 是**单源单轮段读聚合的时间预算**（键 log_index.scan_budget；0 ⇒ 默认 2s）。
+	// 现场 `pollOnce` 的 WaitGroup 等分钟级 ✗ ⇒ 单个大源的整段扫描必须被截断：超预算即返回
+	// "证据不完整"（= 不当作证据 ⇒ 不消解、不推进 ✓），下一轮续扫 ✓。
+	scanBudget time.Duration
+	// scanBudgetExceeded 统计"超预算截断"次数（排障观测口）。
+	scanBudgetExceeded atomic.Int64
 	// persistRequests/persistWorkerDone 是**后台持久化通道**：热路径超时后把「请落库」交给它，
 	// 由独立 goroutine 完成（它才是允许阻塞的那一方）。cap=1：已有待办请求即无需重复入队。
 	persistRequests   chan struct{}
@@ -444,6 +457,13 @@ type Options struct {
 	ReconcileSliceEvents int
 	// ReconcileYieldNotify 是让路次数的观测口（测试/排障用，生产 nil）。
 	ReconcileYieldNotify func()
+	// ScanYield / ScanSliceRows 是**段读聚合路径的让路**配置（键 log_index.scan_yield /
+	// scan_slice_rows；0 ⇒ 默认 1ms / 8192 行）。
+	ScanYield       time.Duration
+	ScanSliceRows   int
+	ScanYieldNotify func()
+	// ScanBudget 是单源单轮段读聚合的时间预算（0 ⇒ 默认 2s）。
+	ScanBudget time.Duration
 	// ResumeInterval 是**容量自愈兜底**周期（0 ⇒ 默认 30s）：低频重试「排空存量 → 推进回收 →
 	// 按滞回解除积压/容量类暂停」，不依赖采集轮产生新批次 ✗。
 	ResumeInterval time.Duration
@@ -1174,6 +1194,10 @@ func New(opts Options) (*Manager, error) {
 		reconcileSliceEvents:     reconcileSliceFromOpts(opts),
 		reconcileYieldNotify:     opts.ReconcileYieldNotify,
 		resumeInterval:           opts.ResumeInterval,
+		scanYield:                opts.ScanYield,
+		scanSliceRows:            opts.ScanSliceRows,
+		scanYieldNotify:          opts.ScanYieldNotify,
+		scanBudget:               opts.ScanBudget,
 		maxReplayEventsPerDrain:  opts.MaxReplayEventsPerDrain,
 		multilineUnclosedTimeout: multilineUnclosedTimeoutOf(opts.MultilineUnclosedTimeout),
 	}
@@ -3508,10 +3532,32 @@ func (m *Manager) publishedClosedForSourceCtx(ctx context.Context, source Source
 	dayMaxEnd := map[string]uint64{}
 	if saved.EventsStored && m.events != nil {
 		key := source.LogSourceID + "/" + source.SourceGeneration
-		agg, err := m.events.DayMaxEndCtx(ctx, key, func(ev logtypes.Event) (string, error) {
+		scanRows := 0
+		// **轮内预算**：单源扫描最多花 scanBudgetOf()（超时 ⇒ 证据不完整 ⇒ 不消解/不推进 ✓ 安全方向）。
+		scanCtx, scanCancel := context.WithTimeout(ctx, m.scanBudgetOf())
+		defer scanCancel()
+		agg, err := m.events.DayMaxEndCtx(scanCtx, key, func(ev logtypes.Event) (string, error) {
+			// **段读让路**（2026-10-03 现场 X 光片：readSegment 是每轮重活的 I/O 大头 ✗）：
+			// 每 slice 行交还一次 P ⇒ 与之并行的采集轮不再被单源整段扫描压满 ✓。开销可忽略
+			// （默认 1ms / 8192 行 ⇒ 10 万行源额外 ≈12ms ✓）；ctx 取消仍逐行生效 ✓（语义不变 ✓）。
+			scanRows++
+			if slice := m.scanSliceOf(); slice > 0 && scanRows%slice == 0 {
+				if m.scanYieldNotify != nil {
+					m.scanYieldNotify()
+				}
+				if y := m.scanYieldOf(); y > 0 {
+					time.Sleep(y)
+				}
+			}
 			return eventUTCDay(source, ev)
 		})
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				// 超预算：按"证据不完整"处理（**不是**错误 ⇒ 上层不消解缺口、不推进水位 ✓），
+				// 下一轮继续扫；这样单源大扫描不会把整轮撑成分钟级 ✗。
+				m.scanBudgetExceeded.Add(1) // 观测口：无条件的截断计数 ✓
+				return 0, false, nil
+			}
 			return 0, false, err
 		}
 		dayMaxEnd = agg
@@ -4970,6 +5016,36 @@ func reconcileSliceFromOpts(opts Options) int {
 		return opts.ReplayTuning.ReconcileSliceEvents
 	}
 	return 0
+}
+
+// defaultScanYield / defaultScanSliceRows 是段读聚合路径让路的默认值（见 scanYield 字段注释）。
+const (
+	defaultScanYield     = time.Millisecond
+	defaultScanSliceRows = 8192
+)
+
+func (m *Manager) scanYieldOf() time.Duration {
+	if m == nil || m.scanYield <= 0 {
+		return defaultScanYield
+	}
+	return m.scanYield
+}
+
+// defaultScanBudget 是单源单轮段读聚合的默认时间预算（见 scanBudget 字段注释）。
+const defaultScanBudget = 2 * time.Second
+
+func (m *Manager) scanBudgetOf() time.Duration {
+	if m == nil || m.scanBudget <= 0 {
+		return defaultScanBudget
+	}
+	return m.scanBudget
+}
+
+func (m *Manager) scanSliceOf() int {
+	if m == nil || m.scanSliceRows <= 0 {
+		return defaultScanSliceRows
+	}
+	return m.scanSliceRows
 }
 
 // defaultResumeInterval 是容量自愈兜底的默认周期。
