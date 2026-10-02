@@ -860,6 +860,8 @@ func runWorker() {
 					tuning := cfg.ReconcileReplayTuning()
 					return &tuning
 				}(),
+				// 兜底环每轮容量（键 log_index.resume_batch_per_round；1 = 每轮一个 = 退回应激行为 ✓）。
+				ResumeBatchPerRound: cfg.ResumeBatchTuning(),
 				// 段读聚合的让路与轮内预算（键 log_index.scan.*）：现场点名 readSegment 是每轮重活
 				// 的 I/O 大头且"既不让路也无上界" ✗ ⇒ 由配置面驱动（默认 8192 行 / 1ms / 2s ✓）。
 				Scan: func() *ingest.ScanTuning {
