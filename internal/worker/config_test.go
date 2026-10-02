@@ -403,3 +403,19 @@ func TestRecoveryQuotaTuningDefaultsAndOverride(t *testing.T) {
 	assert.Equal(t, 4.0, f3)
 	assert.Equal(t, 30*time.Minute, g3)
 }
+
+// TestResumeBatchTuningDefaultsAndOverride（兜底环每轮容量的绑定回归）：
+// 默认 8 ✓；可配 ✓；置 1 = 退回应激行为（每轮一个 ✓）；非正 ⇒ 回退默认 ✓。
+func TestResumeBatchTuningDefaultsAndOverride(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, 8, cfg.ResumeBatchTuning(), "默认每轮 8 个可解源")
+
+	t.Setenv("JIANMANAGER_LOG_INDEX_RESUME_BATCH_PER_ROUND", "1")
+	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, 1, cfg2.ResumeBatchTuning(), "置 1 = 每轮一个（退回应激行为 ✓）")
+
+	bad := &Config{}
+	assert.Equal(t, 8, bad.ResumeBatchTuning(), "非正 ⇒ 回退默认（安全方向 ✓）")
+}
