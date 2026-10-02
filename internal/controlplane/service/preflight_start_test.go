@@ -45,14 +45,14 @@ func (f *fakeWorkerClient) StartInstance(ctx context.Context, in *workerpb.Insta
 	return &workerpb.InstanceActionResponse{Success: true}, nil
 }
 
-// newPreflightFixture 建 db + 节点 + 服务（禁用异步委托）+ 一个可启动实例。
+// newPreflightFixture 建 db + 节点 + 服务（走委托旁路，无异步副作用）+ 一个可启动实例。
 func newPreflightFixture(t *testing.T) (*InstanceService, *cpgrpc.ClientPool, *model.Node, *model.Instance) {
 	t.Helper()
 	db := newNodeTestDB(t)
 	node := newTestNode(t, db, "n1")
 	pool := cpgrpc.NewClientPool()
 	svc := NewInstanceService(db, NewGroupService(db), pool)
-	svc.Shutdown()
+	svc.SetDelegateBypassForTest(true)
 
 	inst := &model.Instance{
 		NodeID:       node.ID,

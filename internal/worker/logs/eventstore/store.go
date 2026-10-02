@@ -14,6 +14,7 @@ package eventstore
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -387,8 +388,25 @@ func (s *Store) Segments(key string) []SegmentMeta {
 // 用途：`publishedClosedForSource` 需要「每个受影响分区都已封闭」的判定，只需要每日本身的
 // 最大末端位置，不需要事件正文——这正是能从磁盘段直接算出的量。
 func (s *Store) DayMaxEnd(key string, dayOf func(logtypes.Event) (string, error)) (map[string]uint64, error) {
+	// ctx 形态是唯一实现（见 DayMaxEndCtx）：此处传 Background，保持既有签名与语义。
+	return s.DayMaxEndCtx(context.Background(), key, dayOf)
+}
+
+// DayMaxEndCtx 是 DayMaxEnd 的**可取消**形态：ctx 在逐行回调处校验，取消即中止段扫描并返回
+// ctx 错误（不是「空结果」——那会被上层的「投影不完整」吞掉，把取消伪装成一次普通失败）。
+//
+// 为什么必须可取消：段扫描的成本随源数据量增长（生产单源段达数十万行、全库 18GB），而本函数的
+// 调用方（ingest 的整节点解算）是一个会被 HTTP/RPC 截止时间打断的显式运维动作。不可取消即意味着
+// 「调用方已经放弃等待，服务端还在为没人要的响应扫盘」——这正是 2026-10-02 现场 30 分钟停摆的形态。
+func (s *Store) DayMaxEndCtx(ctx context.Context, key string, dayOf func(logtypes.Event) (string, error)) (map[string]uint64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	out := map[string]uint64{}
 	err := s.Iterate(key, func(ev logtypes.Event) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		day, err := dayOf(ev)
 		if err != nil {
 			return err

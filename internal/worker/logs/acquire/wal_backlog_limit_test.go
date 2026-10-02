@@ -85,3 +85,41 @@ func TestWALBacklogLimitResumeRequiresLowWatermarkAndOwnPause(t *testing.T) {
 	require.True(t, led.Get(key).AcquirePaused, "不得清除其它路径设置的暂停")
 	require.Equal(t, "capacity budget exhausted", led.Get(key).PauseReason)
 }
+
+// TestZeroBacklogPausedSourceResumesWithoutAppend（2026-10-03 现场决定性证据）：
+// **积压清零的源必须在没有任何新 Append 的情况下自动恢复采集**。
+//
+// 现场：27 个源 acquire_paused=1 且 source_wal entries=0（积压全清）仍不复活 ✗ ⇒ 恢复判定没有
+// 绑定到"活着的积压读数"，唯一检查点挂在 Append 上：没人再 Append ⇒ 永远不再评估 ⇒ 成批停死 ✗✗。
+//
+// 转红方式（实测）：把恢复评估从外部入口（Pipeline.EvaluateResume）摘掉——只在 Append 处重估 ⇒
+// 本用例在「应已恢复」处变红（源停在 paused 上永不回活）。
+func TestZeroBacklogPausedSourceResumesWithoutAppend(t *testing.T) {
+	key := testKey("src-backlog-selfheal", "g1")
+	led := ledger.New()
+	wal := NewWAL(led, key)
+	wal.SetLimits(4, 0)
+	pipe := NewPipeline(led, key, wal)
+
+	require.NoError(t, pipe.Ingest(buildWALEvents("src-backlog-selfheal", "g1", 0, 5, "line")))
+	require.NoError(t, wal.Commit())
+	require.True(t, led.Get(key).AcquirePaused, "前置：应已暂停")
+
+	// 造出**现场形态**：积压清零（entries=0）但仍然处于积压类暂停。
+	wal.pruneReclaimed(500)
+	require.Empty(t, wal.Snapshot(), "前置：积压必须全清（对应现场 source_wal entries=0）")
+	require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason+" (entries=5/4)"))
+	require.True(t, led.Get(key).AcquirePaused)
+
+	// 关键：**不做任何 Append** ✗，只由外部低频兜底入口重估一次 ⇒ 必须恢复 ✓。
+	require.True(t, pipe.EvaluateResume(),
+		"积压为零的源必须能恢复（现场 27 源 entries=0 仍 paused 的停死形态 ✗）")
+	ent := led.Get(key)
+	require.False(t, ent.AcquirePaused, "零积压下不得停在暂停")
+	require.Empty(t, ent.PauseReason)
+
+	// 红线复核：非积压/容量类暂停绝不越权清除 ✓（与用户指令「只对积压/容量类原因」一致）。
+	require.NoError(t, led.PauseAcquire(key, "disk usage 95.0% >= 90.0%"))
+	require.False(t, pipe.EvaluateResume(), "非本包原因不得被容量兜底清除")
+	require.Equal(t, "disk usage 95.0% >= 90.0%", led.Get(key).PauseReason)
+}

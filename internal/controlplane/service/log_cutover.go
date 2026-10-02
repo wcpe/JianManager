@@ -38,6 +38,9 @@ type LogCutoverWatermark struct {
 	CutoffTime time.Time `json:"cutoffTime"`
 	// CutoverApplied 路由是否已原子切换。仅在 CapabilityConfirmed && LedgerReady 后可为 true。
 	CutoverApplied bool `json:"cutoverApplied"`
+	// Reasons Worker 侧未就绪的具体原因（逐条转述，不丢现场）。
+	// 2026-09-30 生产：闸门此前只回两个布尔，运维无法判断卡在哪个条件，被迫反复盲猜。
+	Reasons []string `json:"reasons,omitempty"`
 }
 
 // Ready 报告切换前置条件是否满足。

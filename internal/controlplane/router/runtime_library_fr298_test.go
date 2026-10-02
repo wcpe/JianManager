@@ -43,7 +43,7 @@ func setupFR298Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.E
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
-	instanceSvc.Shutdown()
+	instanceSvc.SetDelegateBypassForTest(true)
 	nodeSvc := service.NewNodeService(db)
 	nodeSvc.SetInstanceService(instanceSvc)
 	jdkSvc := service.NewJDKService(db, pool)

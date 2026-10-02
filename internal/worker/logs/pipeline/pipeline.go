@@ -13,6 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
+	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
 )
 
 // Options 构造端到端管道。
@@ -38,6 +39,9 @@ type Options struct {
 	Location      *time.Location
 	BaseTime      time.Time
 	IngestTimeUTC string
+	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串为 auto。
+	// 未知取值在 New 处直接失败——按源声明错字符集会静默产出乱码，属于必须暴露的配置错误。
+	Charset string
 	// Limits 多行上限。
 	Limits normalize.Limits
 	// Capacity 可选容量预算；零值用 acquire.DefaultCapacityBudget。
@@ -52,6 +56,15 @@ type Options struct {
 	// Ledger/WAL 可由 Worker 生产运行时注入持久恢复实例；为空时创建内存实例。
 	Ledger *ledger.Ledger
 	WAL    *acquire.WAL
+	// Sampling 采集侧采样与降级策略。零值 = 未启用 = 恒等（零行为变化）。
+	// 启用后所有事件入口统一经 emit 收口，保证「进 WAL 的事件」与「deliver 面看到的事件」
+	// 是同一批——两者分叉是最危险的一类不一致。
+	Sampling sampling.Policy
+	// WALLimits 是单源 WAL 真实积压上限（日志容量配置接线）；nil 表示沿用 acquire 包默认。
+	// 注意它约束的是**当前积压**，不是累计追加量。
+	WALLimits *acquire.WALLimits
+	// MaxReplayEventsPerDrain 是暂停/恢复期单轮外发事件数上限（回放限速）；0 表示沿用默认。
+	MaxReplayEventsPerDrain int
 }
 
 // Pipeline 端到端：tail/stdio → normalize → WAL → DeliveryHook → CanReclaim 门禁。
@@ -78,6 +91,14 @@ type Pipeline struct {
 	deliveredCount int
 	// lineMode false=normalize 多行；测试可切 LineHook 对照。
 	useNormalize bool
+	// sampler 采集侧采样器（每源一个，跨批保留窗口状态）。nil = 未启用。
+	sampler *sampling.Sampler
+	// capacityProvider 风暴降级用的读数来源。与容量门禁**同一真源**（V1 的
+	// Options.CapacityProvider / Capacity），不自己再采一遍磁盘——重复采数只会制造分叉。
+	capacityProvider func() (acquire.CapacityBudget, error)
+	// lastDegradeSample 是上一次读取降级读数的时刻（节流用）。
+	// 磁盘读数是一次 statfs，每批都读会与容量门禁叠加成双倍开销。
+	lastDegradeSample time.Time
 }
 
 // New 创建管道。Mode 默认 FILE_PRIMARY。
@@ -119,11 +140,15 @@ func New(opts Options) (*Pipeline, error) {
 		cat = logtypes.SourceInstance
 	}
 
+	if !normalize.IsValidCharset(opts.Charset) {
+		return nil, fmt.Errorf("pipeline: 未知日志字符集 %q（支持 auto/utf-8/gbk/gb18030）", opts.Charset)
+	}
 	nopts := normalize.Options{
 		Source:        src,
 		Stream:        stream,
 		IngestTimeUTC: opts.IngestTimeUTC,
 		Location:      opts.Location,
+		Charset:       opts.Charset,
 		BaseTime:      opts.BaseTime,
 		Limits:        opts.Limits,
 	}
@@ -135,6 +160,14 @@ func New(opts Options) (*Pipeline, error) {
 		inner.SetCapacityBudget(*opts.Capacity)
 	}
 	inner.SetCapacityProvider(opts.CapacityProvider)
+	// 单源积压上限与回放限速：配置接线（此前 SetLimits 无任何调用点，现场只剩硬编码
+	// 16MiB/5000 条，而配置里的 max_wal_bytes 被接到了只增不减的累计量上）。
+	if opts.WALLimits != nil {
+		wal.ApplyLimits(*opts.WALLimits)
+	}
+	if opts.MaxReplayEventsPerDrain > 0 {
+		inner.SetMaxReplayEventsPerDrain(opts.MaxReplayEventsPerDrain)
+	}
 	if opts.SuppressRecursiveVL || cat == logtypes.SourceWorker {
 		inner.SetSourceWorker(true)
 	}
@@ -153,11 +186,20 @@ func New(opts Options) (*Pipeline, error) {
 		reader:        opts.Reader,
 		useNormalize:  true,
 	}
+	if opts.Sampling.Enabled {
+		p.sampler = sampling.New(opts.Sampling)
+	}
+	if opts.CapacityProvider != nil {
+		p.capacityProvider = opts.CapacityProvider
+	} else if opts.Capacity != nil {
+		budget := *opts.Capacity
+		p.capacityProvider = func() (acquire.CapacityBudget, error) { return budget, nil }
+	}
 	p.imp = acquire.NewArchiveImporter(led, key)
 
 	if opts.Delivery != nil {
-		inner.SetDeliver(func(events []logtypes.Event) (int, bool, error) {
-			res, err := p.hook.Deliver(events)
+		inner.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
+			res, err := p.hook.Deliver(events, replay)
 			if err != nil {
 				return 0, res.AckLost, err
 			}
@@ -209,6 +251,37 @@ func (p *Pipeline) Ledger() *ledger.Ledger { return p.led }
 // WAL 返回本地 WAL。
 func (p *Pipeline) WAL() *acquire.WAL { return p.wal }
 
+// DeliverPending 对已暂停的源执行一次「只投递、不读取」的自愈尝试（缺陷 A）：
+// 投递已 durable 存量 → 登记投递结果 → 推进回收 → 按滞回条件评估恢复采集。
+//
+// 为什么需要它：暂停期间 FileTailer 不再读取，采集轮便不再产生新批次；而投递、回收与
+// 恢复评估都挂在「有新批次」的路径上——不自愈就永远停摆（生产实证停 13+ 小时）。
+func (p *Pipeline) DeliverPending() (bool, error) {
+	if p == nil || p.inner == nil {
+		return false, nil
+	}
+	events, err := p.inner.DeliverPending()
+	if err != nil || len(events) == 0 {
+		return false, err
+	}
+	// 与正常投递路径同构（见 ingest）：投递成功后登记恢复责任证明，否则回收门禁不会放行，
+	// 「积压回落 → 低水位 → 恢复采集」这一链在暂停源上永远打不开。
+	if p.DeliveryState() != logtypes.DeliveryUnknown && p.reclaimProof != nil {
+		if proofErr := p.reclaimProof(events); proofErr != nil {
+			return true, proofErr
+		}
+	}
+	return true, nil
+}
+
+// EvaluateResume 在不产生投递的前提下，按滞回条件评估一次采集恢复（返回是否已恢复）。
+func (p *Pipeline) EvaluateResume() bool {
+	if p == nil || p.wal == nil {
+		return false
+	}
+	return p.wal.EvaluateResume()
+}
+
 // Boundary 返回 normalize 边界钩子。
 func (p *Pipeline) Boundary() *NormalizeBoundary { return p.bound }
 
@@ -251,21 +324,27 @@ func (p *Pipeline) RebaseCurrentSegment(pos uint64) error {
 }
 
 // FlushClosedSegment closes the pending multiline event when a live file was
-// physically rotated. Unlike Stop/Flush, the old segment has a real EOF and may
-// be published as complete before ArchiveImporter skips its covered prefix.
+// physically rotated.
+//
+// 段有真实 EOF，但**事件未必完整**：一条堆栈完全可能被打断在两段文件之间。所以这里走
+// FlushUnclosed（显式 `multiline_unclosed=rotation` 标记 + PARTIAL），不走 FlushComplete
+// ——后者的 closeStatus 只要事件头带时间戳就返回 OK，会让切分点从数据里消失。
+// 为什么仍必须在此闭合（而不是把缓冲区留到新文件）：轮转后的恢复责任靠 ConfirmRotationCoverage
+// 把 covered 推到 Durable，gz 导入按 `startFrom - segmentStart` 跳过已读前缀；未闭合的 pending
+// 行不在 Durable 里，留着它会让 gz 重导入**重喂同一批行**，把堆栈行重复拼进事件。
 func (p *Pipeline) FlushClosedSegment() ([]logtypes.Event, error) {
 	if p == nil || p.bound == nil {
 		return nil, nil
 	}
-	p.bound.FlushComplete()
+	p.bound.FlushUnclosed(normalize.UnclosedReasonCrossRotation)
 	events := p.bound.DrainEvents()
 	if len(events) == 0 {
 		return nil, nil
 	}
-	if err := p.ingest(events); err != nil {
-		return events, err
-	}
-	return events, nil
+	// 这里同样必须过采样收口：闭合的跨行事件是**成功路径**（活文件轮转时闭合半条事件），
+	// 它的返回值会被采集轮直接投递。若绕过采样，这一批就成了「未采样却进投递」的例外，
+	// 现场表现为「大部分时候压得住、偶尔冒出一大批原文」。
+	return p.emit(events)
 }
 
 func (p *Pipeline) ConfirmRotationCoverage() error {
@@ -273,6 +352,26 @@ func (p *Pipeline) ConfirmRotationCoverage() error {
 		return fmt.Errorf("pipeline: file tailer not configured")
 	}
 	return p.tailer.ConfirmRotationCoverage()
+}
+
+// FlushStaleMultiline 在未闭合多行缓冲已持续超过 timeout 时强制闭合它（显式未闭合标记）。
+//
+// 为什么必须有这条出路（缺陷 B，2026-10-02）：未闭合缓冲平时只由「下一行到达」推进。
+// 源一旦长时间静默（MC 服务器空闲、实例挂起），缓冲既不产出事件也不推进 durable——
+// 而轮转恢复要靠 durable 覆盖已读前缀（ConfirmRotationCoverage + gz 的 skipBytes），
+// 于是这段悬挂区间既没被覆盖、也没有事件，链路卡在「轮转分段不可读」。
+// 超时强制闭合把它落成一条显式 PARTIAL 事件并推进 durable，链路重新可推进。
+//
+// 返回本批产出的事件（已过采样收口与 WAL/账本），可直接投递；无可冲刷时返回 nil。
+func (p *Pipeline) FlushStaleMultiline(now time.Time, timeout time.Duration) ([]logtypes.Event, error) {
+	if p == nil || p.bound == nil || timeout <= 0 {
+		return nil, nil
+	}
+	events, ok := p.bound.FlushStaleUnclosed(now, timeout, normalize.UnclosedReasonIdle)
+	if !ok || len(events) == 0 {
+		return nil, nil
+	}
+	return p.emit(events)
 }
 
 // Poll 读取增量：FILE_PRIMARY tail / STDIO 行流 → normalize 事件 → WAL → delivery。
@@ -300,7 +399,7 @@ func (p *Pipeline) pollFile() ([]logtypes.Event, error) {
 		// 仍尝试冲刷已完整事件。
 		evs := p.bound.DrainEvents()
 		if len(evs) > 0 {
-			_ = p.ingest(evs)
+			evs, _ = p.emit(evs)
 		}
 		return evs, err
 	}
@@ -308,10 +407,7 @@ func (p *Pipeline) pollFile() ([]logtypes.Event, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
-	if err := p.ingest(events); err != nil {
-		return events, err
-	}
-	return events, nil
+	return p.emit(events)
 }
 
 func (p *Pipeline) pollStdio() ([]logtypes.Event, error) {
@@ -336,10 +432,7 @@ func (p *Pipeline) pollStdio() ([]logtypes.Event, error) {
 	if len(batch) == 0 {
 		return nil, nil
 	}
-	if err := p.ingest(batch); err != nil {
-		return batch, err
-	}
-	return batch, nil
+	return p.emit(batch)
 }
 
 // Flush 冲刷多行半条事件（崩溃/轮转前）。显式 PARTIAL/OK 状态，不静默丢。
@@ -354,10 +447,7 @@ func (p *Pipeline) Flush() ([]logtypes.Event, error) {
 	if len(events) == 0 {
 		return nil, nil
 	}
-	if err := p.ingest(events); err != nil {
-		return events, err
-	}
-	return events, nil
+	return p.emit(events)
 }
 
 // Drain Poll + Flush，一次取完当前可见完整事件。
@@ -369,6 +459,60 @@ func (p *Pipeline) Drain() ([]logtypes.Event, error) {
 		return out, err
 	}
 	return out, ferr
+}
+
+// Sampler 返回采集侧采样器（未启用时为 nil）。观测面与降级信号注入用。
+func (p *Pipeline) Sampler() *sampling.Sampler { return p.sampler }
+
+// degradeSampleInterval 是降级读数的节流间隔。
+const degradeSampleInterval = time.Second
+
+// RefreshDegrade 按当前容量读数推进风暴降级状态机，返回状态是否发生变化。
+//
+// 触发源刻意复用容量门禁**同一份** CapacityBudget（V1 的 Options.Capacity/CapacityProvider），
+// 不另起一套「背压读数」：两个真源迟早会给出两个结论，而现场只会看到「有时候降级有时候不降级」。
+// 读数按 degradeSampleInterval 节流——磁盘使用率是一次 statfs，每批都读会与容量门禁叠加。
+func (p *Pipeline) RefreshDegrade(now time.Time) bool {
+	if p.sampler == nil || p.capacityProvider == nil {
+		return false
+	}
+	if !p.lastDegradeSample.IsZero() && now.Sub(p.lastDegradeSample) < degradeSampleInterval {
+		return false
+	}
+	p.lastDegradeSample = now
+	budget, err := p.capacityProvider()
+	if err != nil {
+		// 读数拿不到就不降级：降级是「已知资源吃紧」时的自保动作，
+		// 不是「读数失败」时的猜测。拿不到读数时误降级会白白压掉日志。
+		return false
+	}
+	sig := sampling.Signal{DiskPercent: budget.DiskUsagePercent}
+	if budget.MaxWALBytes > 0 {
+		sig.BacklogBytes = 0 // WAL 字节数未从 acquire 暴露；见 spec 的「未做」栏
+	}
+	changed, _ := p.sampler.UpdateSignal(sig, now)
+	return changed
+}
+
+// emit 是全部事件入口的**唯一收口**：采样 → WAL/账本 → 返回实际落库的那批事件。
+//
+// 为什么必须同时替换「进账本的事件」与「返回给调用方的事件」：
+// p.ingest 只负责 WAL/账本，而调用方（采集轮）拿返回值去 deliver + 投影校验。
+// 若只改前者，账本按采样集推进、deliver 面按未采样集校验，两边都自认正确——
+// 这是最危险的一类不一致（现场表现是校验永远失败或缺口永远挂着）。
+//
+// 采样未启用时 sampler 为 nil，本方法逐指令等价于直接调用 p.ingest。
+func (p *Pipeline) emit(events []logtypes.Event) ([]logtypes.Event, error) {
+	if p.sampler != nil {
+		events = p.sampler.Process(events)
+	}
+	if len(events) == 0 {
+		return nil, nil
+	}
+	if err := p.ingest(events); err != nil {
+		return events, err
+	}
+	return events, nil
 }
 
 // ingest WAL append → Commit → DeliveryHook。容量/缺口由 acquire.Pipeline 处理。
@@ -396,6 +540,25 @@ func (p *Pipeline) ResolveUnknownThroughProjection(events []logtypes.Event) erro
 	return p.led.ResolveDeliveryThroughRecovery(p.key, events[0].Record.Start, events[len(events)-1].Record.End)
 }
 
+// SetArchiveOwnerRegistry 注入归档归属注册表（跨代次查询「该归档属于哪个代次」）。
+//
+// 由上层（ingest Manager）在登记每个源时注入；未注入时导入器只认轮转关联这一条归属凭据，
+// 而**不会**回退成"假设当前代次"。
+func (p *Pipeline) SetArchiveOwnerRegistry(fn func(logSourceID, cleanPath, objectID string) (string, bool)) {
+	if p == nil || p.imp == nil {
+		return
+	}
+	p.imp.SetOwnerRegistry(fn)
+}
+
+// SetArchiveBackfill 注入「按原代次补账」通道（命中其它代次且其账本可寻址时使用）。
+func (p *Pipeline) SetArchiveBackfill(fn func(ownerGeneration, archivePath, objectID string) error) {
+	if p == nil || p.imp == nil {
+		return
+	}
+	p.imp.SetBackfill(fn)
+}
+
 // ImportArchive 导入 gzip 归档；已关联轮转时跳过整包，禁止双计。
 func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
 	result, err := p.imp.ImportGzip(path)
@@ -420,7 +583,14 @@ func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
 	}
 	result.Events = events
 	result.ImportedCount = len(events)
-	ingestErr := p.ingest(events)
+	ingestErr := func() error {
+		// 归档导入同样经采样收口。注意 ImportedCount 保持**采样前**的条数：
+		// 它回答的是「这次从归档里导入了多少」，而 Events 才是「实际落库的那批」。
+		// 两者口径不同不能混用，否则现场无法判断归档本身是否完整。
+		sampled, err := p.emit(events)
+		result.Events = sampled
+		return err
+	}()
 	pos, ok := p.Positions()
 	if ok && len(events) > 0 && pos.Durable >= events[len(events)-1].Record.End {
 		markErr := p.imp.MarkImported(path, result.ArchiveObjectID,
@@ -447,11 +617,11 @@ func archiveUTCDay(path string) (time.Time, error) {
 // SetDelivery 运行时替换投递钩子。
 func (p *Pipeline) SetDelivery(h DeliveryHook) {
 	p.hook = h
-	p.inner.SetDeliver(func(events []logtypes.Event) (int, bool, error) {
+	p.inner.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
 		if h == nil {
 			return 0, false, nil
 		}
-		res, err := h.Deliver(events)
+		res, err := h.Deliver(events, replay)
 		if err != nil {
 			return 0, res.AckLost, err
 		}

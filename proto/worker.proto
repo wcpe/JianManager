@@ -73,6 +73,13 @@ service WorkerService {
   rpc LogMigratePartition(LogMigratePartitionRequest) returns (LogTaskResponse);
   rpc LogCutoverReadiness(LogCutoverReadinessRequest) returns (LogCutoverReadinessResponse);
   rpc LogResolveIngestGaps(LogResolveIngestGapsRequest) returns (LogTaskResponse);
+  // LogImportArchives 手动触发归档（.gz）导入扫描：把"已经躺在源目录里、但还没被导入"的
+  // 归档立刻走一次与自动路径**完全相同**的导入管道（同清洗、同归属闸、同幂等）。
+  //
+  // 为什么需要它：自动发现只在采集轮里跑，而采集轮在源被暂停（容量/积压/人工）时不再读取——
+  // 此时目录里的历史归档既不会被自动导入，运维也没有别的入口，只能干等。
+  // 本 RPC 提供那条入口，并强制携带操作人（可审计）。
+  rpc LogImportArchives(LogImportArchivesRequest) returns (LogTaskResponse);
   // IssueTerminalToken 签发一次性终端连接 token。
   rpc IssueTerminalToken(IssueTerminalTokenRequest) returns (IssueTerminalTokenResponse);
   // ListFiles 列出实例工作目录下的文件。
@@ -368,6 +375,9 @@ message ReportOrphanAuditRequest {
   string node_secret = 2;
   string action = 3;      // 审计动作名：orphan.scan_detected / orphan.scan_disposed /
                           // orphan.scan_dispose_blocked / orphan.dispose_blocked / orphan.dispose_reaped /
+                          // orphan.auto_adopted / orphan.adopt_blocked / orphan.adopt_failed（FR-497 全自动收养
+                          // 三态：复核通过且拨号成功纳管 / 复核不过只告警不收养 / 拨号失败保留 PID 待下轮，
+                          // 与 docs/specs/auto-adopt-orphans/spec.md §6 一致）/
                           // health.dead_detected / health.selfheal_restart / health.selfheal_exhausted /
                           // health.circuit_broken / health.circuit_released（FR-459，detail 内标 operator=auto）
   string target_id = 4;   // 目标标识（实例 UUID 或 direct 孤儿工作目录）
@@ -400,6 +410,9 @@ message FetchBotWorkerArchiveResponse {
 message HeartbeatRequest {
   string node_uuid = 1;
   float cpu_usage = 2;
+    // iowait 是 CPU 等 IO 的时间占比（0..1，FR-485）。只看 cpu_usage 会把 IO 瓶颈
+    // 看成「CPU 不满」；本机事故中 iowait 曾达 90%。老 CP 忽略该字段，不改变既有语义。
+    float iowait = 17;
   float memory_usage = 3;
   float disk_usage = 4;
   int64 memory_used_mb = 5;
@@ -1068,6 +1081,7 @@ message GetNodeMetricsResponse {
   float cpu_usage = 1;
   float memory_usage = 2;
   float disk_usage = 3;
+    float iowait = 8;  // IO 等待占比（0..1，FR-485）
   int64 memory_used_mb = 4;
   int64 memory_total_mb = 5;
   int64 disk_used_mb = 6;
@@ -2493,6 +2507,29 @@ message LogSearchResponse {
   string next_cursor = 6;
   bool exhausted = 7;
   LogError error = 8;
+  // ingest_position_gaps 是本 Worker 已**人工裁定放弃**（PERMANENTLY_LOST）的源位置区间。
+  //
+  // 与 coverage 的语义**严格分开**（不可混用、不可合并）：
+  //   - coverage 回答「这个分区还能不能查」（logcoord 的分区可查询性，值域是枚举状态）；
+  //   - 本字段回答「这个分区**内部**有哪些位置的数据已被确认永久缺失」（逐区间，值域是位置）。
+  // 缺了它，下游只能看到"有数据"，而无法知道某个区间是**确实没有**、还是**永久丢了**——
+  // 那正是"静默跳过"：查询结果看起来完整，实际中间少了一段且无人告知。
+  repeated IngestPositionGap ingest_position_gaps = 9;
+}
+
+// IngestPositionGap 一段被人工裁定为永久丢失的源位置区间（可查、可告警）。
+message IngestPositionGap {
+  // storage_namespace 该区间所属的存储命名空间（= 源）。
+  string storage_namespace = 1;
+  // from/to 源位置闭区间 [from, to]。
+  uint64 from = 2;
+  uint64 to = 3;
+  // reason_code 固定为 PERMANENTLY_LOST；留字段以便将来自查与扩展。
+  string reason_code = 4;
+  // operator 做出放弃裁定的操作人（认证主体）。放弃不可无痕，故必然非空。
+  string operator = 5;
+  // at_utc 裁定时间（RFC3339）。
+  string at_utc = 6;
 }
 
 message LogStatsRequest {
@@ -2651,4 +2688,13 @@ message LogCutoverReadinessResponse {
 message LogResolveIngestGapsRequest {
   string request_id = 1;
   string protocol_version = 2;
+  // 可选：仅解该存储命名空间（源）的缺口。空=整节点（既有行为，逐字不变）。
+  string storage_namespace = 3;
+}
+
+message LogImportArchivesRequest {
+  string request_id = 1;
+  string protocol_version = 2;
+  // 可选：仅扫描该存储命名空间（源）；空 = 本 Worker 全部可导入源。
+  string storage_namespace = 3;
 }

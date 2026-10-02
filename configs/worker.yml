@@ -73,6 +73,101 @@ log:
 #     source_category: worker
 #     storage_namespace: node:1
 
+# 采集归一化的节点级默认时区（缺陷 C）：解释日志行内 [HH:MM:SS] 所用的时区。
+# 留空 = UTC（既有行为零变化，未配置的节点时间轴不漂移）；local = 跟随节点进程时区
+# （节点 JVM 与 Worker 同机部署时用它对齐本地日志时间）；其余按 IANA 名解析（如 Asia/Hong_Kong）。
+# 实例源未显式配置时区时继承本默认；非法值**启动即拒**（时区配错会让整源时间轴静默偏移，
+# 不能用回退掩盖）。环境变量覆盖：JIANMANAGER_LOG_INGEST_TIME_ZONE。
+#
+# ⚠ local 解析的是 **Worker 进程**的本地时区，不是「节点 JVM 的时区」：
+#   - 容器（alpine 基础镜像无 /etc/localtime、无 TZ）与部分 systemd 单元（Environment=TZ=）
+#     里它会解析成 UTC —— 此时「配了 local」等于什么都没配，表现为新入库条目仍是 +8h；
+#   - Worker 启动日志会打印 `采集归一化节点默认时区已生效 config=local resolved=... offsetSeconds=...`，
+#     若 local 解析成 UTC 会额外打一条 WARN 提示（含 TZ/ /etc/localtime 的判定依据）。
+#   - 生产建议**显式写 IANA 名**（如 Asia/Hong_Kong），跨部署形态都稳定。
+# log_ingest:
+#   time_zone: local
+
+# 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天；回退方向永远是「多写一次」而不是「少写一次」。
+# 默认启用、并发 4、单源总超时 30s、单次 count 查询 10s、**整批总预算 60s**（复审 P2-10：对账在
+# ingest.New 里同步执行，预算到期即取消在途查询，未完成的源回退整窗重发）。
+# 需要「启动时一律整窗重发」时把它显式关掉（应急逃生口）。
+# log_reconcile:
+#   enabled: true
+#   concurrency: 4
+#   timeout: 30s
+#   query_timeout: 10s
+#   budget: 60s
+
+# 采集归一化的节点级默认字符集（复审 P2-3）：源未显式配置 Charset 时继承本默认。
+# 留空 = auto（合法 UTF-8 原样返回；非法 UTF-8 才按 GB18030 解码并做「含替换字符即放弃」的
+# 可靠性判定）；utf-8 / gbk / gb18030 则强制按该字符集解码。
+# 中文 locale 的 JVM 与 Worker 同机部署、日志为 GBK 时配 gbk 最稳（显式声明优于启发式判定）。
+# 非法值**启动即拒**（回退 auto 会让中文被当作非法 UTF-8 净化成替换字符，正文静默损坏）。
+# 环境变量覆盖：JIANMANAGER_LOG_INGEST_CHARSET。
+# log_ingest:
+#   charset: gbk
+
+# 采集侧采样与降级（成本治理）。默认**全关**：本项一旦启用就会改变「哪些日志被存下来」，
+# 必须由运维显式开启。取值口径：0 = 没填走默认，负数 = 写错启动即拒。
+#
+# 抑制**不丢弃**：被压掉的行由一条**汇总事件**承接其区间（正文含条数/级别/首条样例，
+# 字段 sampling_rule/采样计数），因此「丢了多少、丢了什么」在查询面可见，
+# 且既有的缺口自动消解判据（要求连续覆盖）不受影响。
+# log_ingest:
+#   sampling:
+#     enabled: true
+#     min_level: info                  # 等级过滤：低于它的折叠为汇总事件（无法归类的级别一律放行）
+#     burst_window: 1s                 # 同源同消息高频抑制窗口（0 = 不启用）
+#     burst_threshold: 20              # 窗口内前 N 条放行原文，其余合并
+#     max_signatures: 4096             # 模式表上限（有界，采样自身不得成为无界增长点）
+#     budget_max_events_per_window: 0  # 每源预算：窗口内允许原文落库条数（0 = 不启用）
+#     budget_window: 1s
+#     budget_keep_every: 10            # 预算用尽后每 N 条保留 1 条原文，其余折叠
+#     max_aggregate_events: 4096       # 单条汇总承接的原文条数上限
+#     degrade_enabled: false           # 风暴自动降级（触发源复用容量门禁的磁盘读数）
+#     degrade_target_level: ERROR      # 降级期间压到 error-only
+#     degrade_disk_percent: 80         # 与 log_capacity 的降级阈值同口径
+#     degrade_hold: 30s                # 触发消失后连续保持多久才恢复
+
+# 保留策略（成本治理）。**默认不启用**，且默认动作是「搬运到冷层」而**不是删除**。
+#
+# 硬规则「删前归档」：保留期到期的数据绝不裸删——优先搬运到 COLD（复用既有
+# ROUTING_FROZEN→…→CLEANED 状态机，搬运成功且校验通过后才允许 HOT 侧回收）；
+# 搬运失败 = **保留原物 + 告警**（宁占盘不丢数据）；无搬运路径且未显式 discard 时
+# 同样保留原物并计入 blocked。直接删除需要**两道闸同时打开**（sweep.vl_sweep + discard），
+# 且受管 VL 进程还需带 -delete.enable（VL 自身默认关）。
+#
+# 保留期写法支持 3d/7d/30d/90d（Go 原生语法不认 d/w，这里已补齐）。未列出的级别按
+# 推荐值补齐（漏配一档不会退化成永久保留）。级别无法归类的日志按最保守处理：永久保留。
+# 热 90 天 / 冷 730 天是**默认口径**（2026-10-02 定稿）：分级档位（debug 3d/info 7d/warn 30d/error 90d）
+# 表达的是「**在热层停留多久**」，冷层**所有级别统一**（730d）——即「热的几个月、冷的两年」。
+# 触发口径 = 年龄 + 磁盘水位**取先到**（trigger.disk_percent）；搬运失败 = 保留原物 + 告警。
+#
+# ⚠ log_vl.retention_period 必须**不短于** hot_retention：VL 的 retention 到期是**直接删**，
+# 它绕过「删前归档」——若热层实例 retention 比 hot_retention 短，VL 会在搬运之前先删掉数据。
+# log_retention:
+#   enabled: true
+#   hot_retention: 90d                 # 热层窗口：超期即搬运到冷层（默认 90d）
+#   cold_retention: 730d               # 冷层保留期（所有级别统一；由 COLD 实例的 -retentionPeriod 执行）
+#   trigger:
+#     disk_percent: 0                  # >0 时启用磁盘水位提前搬运（与 log_capacity 同口径读数）
+#     min_age: 7d                      # 磁盘触发的最小分区年龄（盘再满也不搬正在写的日分区）
+#   discard: false                     # 意图闸：显式允许直接删（默认 false；即使打开，能搬仍优先搬）
+#   by_level:                          # 推荐档位（D1）
+#     debug: 3d
+#     info: 7d
+#     warn: 30d
+#     error: 90d
+#   sources:                           # 来源级覆盖（* 结尾为前缀匹配；显式 0 = 该级别永久保留）
+#     - match: "inst:147"
+#       by_level:
+#         debug: 1d
+#   sweep:
+#     vl_sweep: false                  # 执行闸（默认 false = 只计算并暴露，不动手）
+#     interval: 1h
+#     timeout: 30s
+
 # 出站网络代理（FR-174，见 ADR-037；可视化配置 + CP 下发见 FR-185 / ADR-043）。本节点所有出站
 # 下载（自更新二进制、JDK 归档、CFR 反编译器、服务端 jar）经此代理。url 留空=直连（仍尊重
 # HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），不破坏现状；非空时优先于环境变量。

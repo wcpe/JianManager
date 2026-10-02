@@ -294,6 +294,8 @@ internal/worker/
 
 **状态**：Shared Contracts **已冻结**（FR-473，ADR-094 accepted）。**生产装配已落地**：CP `main` 构造 `logcoord.Assemble` 并经反向隧道联邦；Worker `main` 装配持久 Catalog、采集运行时、受管 VL supervisor、RangeClient、归档 Provider 和 Log RPC。联邦 HTTP（含 `/logs/federation` 门面）、runtime status/control、cutover/Legacy HTTP 已注册。**真机验收已完成**：Runbook A/B/C、CP 资产分发闭环、Deep Archive/Rehydrate（RustFS S3）、Legacy/cutover、真浏览器 UI 与 §6.6 30 分钟压测（含 64 源容量曲线）均通过并归档证据于 `.tmp/fr433-experiments/`（临时证据，不入库）。当前受管 VL 资产基线为 v1.52.0；cutover 默认关闭。
 
+**2026-10-02 成本治理与生命周期轮（ADR-098/099）**：采集侧新增 `sampling`（等级过滤/同源同消息高频抑制/每源预算/风暴自动降级，全部默认关且抑制以「汇总事件」承接、不变量 R 区间守恒）；保留侧新增 `retention`（分级档位 + 源级覆盖 + 白名单过滤器 + VL 删除执行器）与**冷层搬运驱动器**（`apps/worker/log_retention.go` 生产适配层，周期调度、首轮立即执行、年龄+磁盘水位取先到）；投递路径消除每批 3 次 O(段总行数) 全量遍历（尾段快路径，同规格夹具批耗时 −82%、吞吐 +68%、达成率 0.555→0.93）；`log_capacity.max_wal_bytes` 由 0（不限）改为有限默认 512MiB（显式 0 仍合法但启动点名）；`log.level`/`log.format` 补上装配点。规则与口径见 ADR-098/099。
+
 目标架构采用 Worker 本地日志数据面（受管 VictoriaLogs，下文简称 VL，选型见 ADR-094；发行资产审批见 FR-476） + CP 联邦查询：Worker 可在受管数据根保存 VL HOT/COLD/Rehydrate 数据、WAL、采集账本、Partition Catalog、canonical projection manifest/checkpoint、冲突和受管 Raw；这些数据属于 Worker-owned 日志数据，不是 CP 业务数据库。Worker 本地 SQLite 仅保存日志元数据，不能成为第二个全文检索引擎。
 
 Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器；CP 业务 SQLite/MySQL、权限数据和 ADR-013 指标时序仍只由 CP 读写。CP→Worker 日志 RPC 只经 Worker 主动建立的 ADR-081 反向隧道，Worker/VL 只监听 localhost。Search/Stats/Fields/Facets/Tail/Rehydrate/Export 使用 FR-473 Query View、Catalog owner、PublishedProjection 和 coverage；浏览器不得直连 Worker/VL。该边界对应已 accepted 的 ADR-094；Worker 生产组件级 Runbook A/B/C 分别归属 FR-474/476/477 开发验收，不是契约冻结前置。
@@ -306,6 +308,8 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | 事件体存储 | `internal/worker/logs/eventstore`（按源**追加式 NDJSON 段** + MANIFEST 原子替换 + 流式读；只容忍尾段截断，中间段损坏硬失败） | FR-484 | **实测通过**：150 源稳态 RSS 25.6MiB、峰值 77.0MiB（判据稳态 ≤300MiB）、`state.json` 与事件数解耦；长驻会话的辅助结构（位置表/事件历史/投递记录）均有明确释放时机；ADR-095 |
 | 采集通道 | `internal/worker/logs/acquire` + `pipeline` + `ingest`（tail/stdio/archive→normalize→WAL→VL→projection/Catalog） | FR-474/475 | 生产采集/投影/恢复已接线；ACK-loss/磁盘满 Runbook A 待验 |
 | 归一化 | `internal/worker/logs/normalize` | FR-475 | 地基已落地，单测绿 |
+| 采集侧成本策略 | `internal/worker/logs/sampling`（等级过滤/同源同消息高频抑制/每源预算/风暴自动降级） | FR-498 配套 | **已落地**（提交 `692e714b`）：不变量 R 区间守恒（`MergePositionRanges(Process(in)) == MergePositionRanges(in)`）为门禁，R2 缺口消解回归 + R2b 朴素丢弃反证；策略**默认全关**、抑制折叠为汇总事件；11/11 变异以断言转红 |
+| 保留与分层策略 | `internal/worker/logs/retention`（分级档位/源级覆盖/白名单过滤器/VL 删除执行器/**冷层搬运驱动器**）+ `apps/worker/log_retention.go`（生产适配层） | FR-477 配套、ADR-098 | **部分落地**（提交 `692e714b`/`282c60af`）：默认动作=搬运 COLD、删除需 `vl_sweep`+`discard` 双闸 + VL `-delete.enable`、默认全关；驱动器年龄+磁盘水位取先到（磁盘触发带 min_age=7d）；32/32 变异转红。`cold_retention` / `trigger.*` 配置面与 VL 按 namespace retention 已在工作区接线（未提交）；**待实现**：gz 文件吸存、搬运/删除的指标暴露 |
 | VL 运行时 | `internal/worker/logs/vlsup`（资产校验/localhost/auth/防递归/预算采样） | FR-476 | 受管三实例、CP runtime status/control、远程 Runbook C 基础已通过；资产下载闭环与真机预算证据待验（`EvaluateBudget` RSS/磁盘降级已落地） |
 | Partition Catalog + Lifecycle | `internal/worker/logs/catalog` + `lifecycle`（状态机编排/Ops 注入） | FR-477 | Catalog 启动恢复/唯一 owner 已接线；迁移崩溃/旧 owner re-attach Runbook B 待验 |
 | Deep Archive | `internal/worker/logs/archive`（Provider/registry/Rehydrate 任务/manifest） | FR-478 | Remote S3 Provider、**真机 RustFS S3 验收通过**（登记/幂等/manifest/往返/Rehydrate 任务）、manifest engine 记录真实 VL build_id；发布 generation 清理矩阵待验 |
@@ -316,6 +320,23 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | proto | `proto/worker.proto` Log* + `proto/workerpb` 已重生成 | FR-473 | 消息契约已冻结 |
 
 **数据面边界不变**：CP 业务库仍只保留 platform/audit + （切换后）Legacy 只读存量；切换打开前 instance/worker 来源仍写入 CP `logs` 表。禁止把测试全绿当作真 Worker/VL/浏览器验收。
+
+**日志保留、分层与成本治理（现状 → 目标形态，ADR-098/099）**
+
+| 维度 | 现状（截至 2026-10-02） | 目标形态（已决策） |
+|---|---|---|
+| 热层保留 | 受管 VL `-retentionPeriod` 单值（默认 30d，HOT/COLD/Rehydrate 同值）；产品侧 `hot_retention` 配置面存在 | **90 天**：VL + SSD，其中按级别分级停留 `debug 3d / info 7d / warn 30d / error 90d`（设置中可配置，含源级覆盖） |
+| 冷层保留 | `retention.Policy.ColdRetention` 默认 730d（声明与校验）；`log_retention.cold_retention` 与受管 VL 的**按 namespace retention** 已在工作区接线（未提交） | **730 天（2 年）**：VL + 大容量盘，**所有级别统一**；由受管 COLD 的 `-retentionPeriod` 执行 |
+| 到期动作 | 默认动作=搬运 COLD（复用 `ROUTING_FROZEN→…→CLEANED`），搬运失败=保留原物+告警、零删除；删除需 `discard` + `sweep.vl_sweep` 双闸且受管 VL 需 `-delete.enable`，**默认全关** | 不变（该语义即目标形态）；补齐"谁、何时、多少、去哪"的对外暴露（指标 + 日志行） |
+| 分层驱动 | `retention.Driver` 周期调度 + 首轮立即执行；触发口径年龄 + 磁盘水位**取先到**（磁盘触发 min_age=7d）；`log_retention.trigger.*` 配置面已在工作区接线（未提交） | 不变（接线完成后即目标形态） |
+| 实例本地 gz | 无吸存能力；平台不删实例本地任何 `.gz`（轮转尾部由 ArchiveImporter 解析，仅用于接管） | 以**文件身份、压缩态**吸存到冷层：只归档文件、不解析、不入事件流；幂等去重由系统负责；**本地 gz 一律不动** |
+| 对象存储 | FR-478 已有 S3 Provider / Rehydrate 能力（真机 RustFS 验收通过），当前未作为必需组件 | **第一阶段不上**；作为第 3 档（异地/超长期/合规）能力位与后续评估位 |
+| 采集侧成本 | `sampling` 四类策略齐备、**默认全关**；抑制以汇总事件承接（不变量 R） | 不变（默认关即目标姿态） |
+| 单位成本 | 投递路径 O(段总行数) 遍历已消除（`87af507f`：−82% 批耗时 / +68% 吞吐 / 达成率 0.555→0.93）；新鲜度换成本的分段批拉经实测收益为零、**不做** | 成本可见性平台化（每源 GB/天、ms/行），供预算化运营 |
+| 平台配额 | 机制侧有"每源预算"（默认关）；`GroupQuota` 无日志量维度 | **先可见性、后强制**：用量报表先落地，强制档位（复用 `EnforceMode` 三档）后置 |
+| 观测与关联 | 日志侧仅 `log_ingest_healthy` 一个告警指标；`log.level`/`log.format` 已装配、`LevelVar` 支持运行期调级；无 trace/correlation 字段 | FR-485 其余观测项补齐（state 尺寸与增速、persist 写字节/秒、单源积压与暂停时长、投递失败率分类、退避次数、慢 SQL、节点 iowait、比率触发）；**轻量 correlation id** 贯通 CP→Worker→事件字段（不引入 OTel collector；correlation 不得进 `stream_fields`） |
+
+**已知边界**：日分区 `(namespace, utcDay)` 内混着所有级别，而搬运的最小粒度是"一天"，因此**按级别的 TTL 无法在热层独立生效**（`HotWindow()` 取显式热层窗口）；真正的独立分级需要把级别分流到不同存储命名空间，属后续评估项（与"低价值等级路由独立流"同类改动）。**未决策项**：分级验证（低价值级别"只存不验"）会削弱逐字段校验的证据链，需单独评估，ADR-099 不承诺。
 
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
@@ -538,12 +559,18 @@ Flags:   bit0=compressed(zlib)
 - **stdio 转发**：Java 的 stdout/stderr 由 wrapper 编码为 `ChannelStdout/Stderr` 帧发给 Worker，Worker 的 `daemonStrategy.readLoop` 解码后桥接到 `onOutput`（→ WebSocket 终端）；Worker 下发的 stdin/控制命令通过 `ChannelStdin/Control` 帧发给 wrapper。
 - **控制命令**（`ChannelControl` + payload 文本）：`stop`（优雅停止）、`kill`（强制）、`ping`（心跳，回 `pong`）。
 - **优雅停止命令按角色派生**：收到 `stop` 控制帧后，wrapper 向进程 stdin 写「关服命令」——MC 后端用 `stop`、代理（BungeeCord/Waterfall/Velocity）用 `end`（代理不认 `stop`，误发会挂到超时才强杀）。该命令由 CP 按实例角色派生、经 `CreateInstance` 的 `stop_command` 字段下发并烤进 `WrapperConfig`；为空时回退 `stop`。超时（`JIANMANAGER_GRACEFUL_STOP_TIMEOUT`，默认 30s）仍未退出则强杀兜底。
-- **重启前等待上一代退出**：daemon 策略 `Start` 前按 PID 文件等待上一代 wrapper/Java 完全退出（`WaitForPriorExit`，上限 `JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT`，默认 15s），避免快速 stop→start 时旧进程仍占监听端口/socket 导致新进程端口冲突崩溃（`exit status 1`）。
+- **重启前等待上一代退出（预算耗尽即拒绝启动）**：daemon 策略 `Start` 前按 PID 文件等待上一代 wrapper/Java 完全退出（`WaitForPriorExit`），避免快速 stop→start 时旧进程仍占监听端口/socket 导致新进程端口冲突崩溃（`exit status 1`）。等待预算 = 优雅停止超时（默认 30s，平台设置 `graceful_stop.timeout` 随启动下发的生效值，见上条）+ 收尾余量 10s，下限 15s；`JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT` 优先覆盖（供测试/集成缩短）。**预算耗尽而上一代仍存活时返回 `ErrPriorExitTimeout` 并拒绝启动**——`Stop` 只下发停止帧、不等进程退出，而强杀兜底（默认 30s）长于旧实现的固定上限 15s，此时"仍继续启动"会让第二个 wrapper/Java 与仍在关服的旧进程并存：新进程抢端口秒崩、旧进程继续用旧配置跑满兜底时长，而 `Manager.Restart` 已返回成功（实例 153 / `beacon-main` 真机实证：`等待上一代进程退出超时，仍继续启动 wrapperAlive=true javaAlive=true` 后 4 次 `exitCode=1`，旧 wrapper 30s 后才退出）。现在改为显式失败，由 `startLocked` 置 CRASHED 并透出原因——宁可保留仍在服务的旧进程并报失败，也不新旧并存。CP 侧配套：重启委托的 RPC 超时按生效优雅停止超时放大（≤30s 基线 + 60s 余量，单实例与批量路径同源），避免长关服实例在链路中途被判超时并误标 CRASHED。
+- **PID 文件与 socket 的归属清理**：wrapper 退出时只清理**仍指向自己**的 PID 记录与对应 socket 文件——wrapper 与实例不是一对一（快速 stop→start 会换新 wrapper，旧 wrapper 可能晚于新 wrapper 才退出），无条件清理会把新 wrapper 刚写入的记录与它正在监听的 socket 一并抹掉，使新实例既无法被 PID 文件发现（等待逻辑会误判「上一代已清理」）也无法按路径拨通。
+- **启动前的 socket 纵深防御**：上一段的等待只以 PID 文件为依据，而记录可能缺失/损坏（旧 wrapper 被强杀未及清理、记录被误删）；daemon 策略 spawn 新 wrapper 前再按 socket 实探一次（连续两次可拨通才判真，避开上一代收尾的瞬时窗口），能拨通即拒绝启动——宁可本次失败，也不允许两个 wrapper 并存抢同一实例。
+- **自动重启前的归属校验**：wrapper 在 Java 退出后决定是否自动重启前，先确认 PID 记录仍指向自己；已被新 wrapper 接管即放弃重启并收摊（脱离控制的旧 wrapper 再拉起 Java 只会造出平台无法寻址的第二个进程——真机现象：手动 stop 之后 daemon 又把进程自动拉起过一次）。
+- **停止先禁用自动重启**：`Stop` 在 stop 控制帧之前先下发 `disable_restart`。wrapper 的自动重启判定基于启动期快照的 `AutoRestart` 与粘性开关，若不禁用，Java 先于 stop 生效而退出时它仍会按策略把 Java 拉起来。禁用是粘性的、但只作用于当前 wrapper：下次启动会 spawn 全新 wrapper（`autoRestartOff` 默认 false），不污染后续运行。
+- **失败原因不被心跳抹平（`status_reason_source`）**：`instances.status_reason` 双语义混用——既是 CP 写入的生命周期失败原因（「重启前同步最新启动规格失败，已取消重启」等），又是健康巡检降级信号。心跳同步只可清空/覆盖**自己写的**原因：心跳写原因时标记来源为 `worker`、清空时附加同条件，CP 写原因时把来源复位为空串。健康墙的 degraded 统计按同一口径只计入来源为 `worker` 的行，避免「RUNNING + CP 失败原因」被算成假死降级。与之配套：`spawnDelegate` 在控制面进入关闭流程时返回 false，start/stop/restart/kill 据此**明确报错**（旧实现丢弃该返回值并 `return nil`，调用方拿到「成功」而 Worker 侧一步未执行、实例停在过渡态）。
 - **强制终止杀整树**：`daemonStrategy.Kill`（重启/强制终止路径）除发 `kill` 控制帧外，兜底用 `taskkill /T` 终止 wrapper→cmd→Java 整棵进程树；不可只杀 wrapper PID，否则 Windows 上 Java 孤儿化继续占监听端口，紧接的 `Start` 会因端口被占而 `BindException` 崩溃。
 - **PID 文件恢复**：wrapper 写 `<pidDir>/<uuid>.pid`（JSON：wrapper pid、java pid、socket 地址、instance uuid）。Worker 启动时 `Manager.RecoverDaemonInstances` 扫描 PID 文件，wrapper pid 存活则 reconnect socket 恢复管理。wrapper 存活但 reconnect 拨号失败时（FR-325 兜底）：有界重试（3 次、间隔 1s/2s/4s 递增，期间保留 PID 文件保证实例仍可发现）；耗尽后按 PID 记录先强杀 wrapper 进程树再补杀 Java 树（`daemon.KillPIDTree`：Windows `taskkill /T /F`、Unix 杀进程组，Java 在 Unix 上自成进程组故须补杀），存活复核确认死透才清 PID 文件与 socket；杀不死（权限等）保留 PID 文件待下次接管扫描再兜底——杜绝孤儿永久失联（真机事故：残留 java 占 Paper `session.lock`）。
 - **wrapper 已死而 Java 仍活时同样按孤儿处置（FR-436）**：wrapper 是 Java 的唯一受管入口，它一死就再没人能 stop 那个 Java（socket 随之消失、reconnect 无从谈起）。旧逻辑见到 wrapper 不存活便直接删 PID 文件——活着的 Java 从此不可发现：继续占服务端口与 Paper `session.lock`，面板却因实例已从注册表消失而显示 STOPPED，实例再也起不来（真机事故：控制面重启后 63 个实例集体失联，日志可见「daemon wrapper 已不存活，清理残留」却对应着仍在监听的 Java）。现先看 Java 是否还活，活则复用 FR-325 同源的强杀链路；wrapper 确已消失时跳过对它的杀树与存活复核——避免对已死 PID 刷无意义告警、且其 PGID 可能已被系统复用而误杀无关进程。
 - **优雅退出**：daemon 模式下 `Manager.StopAll` 只断开与 wrapper 的连接，不杀游戏服（direct 模式才终止进程）。
 - **Worker 重启后 wrapper 存活（FR-341，落地 ADR-003 承诺）**：daemon wrapper 须在 Worker 升级/崩溃/`systemctl restart` 后存活、由恢复的 Worker 经 socket 重连接管（即上条「PID 文件恢复」的 reconnect 分支，而非「清理残留」）。真机验证曾因三处叠加缺陷 wrapper 全被杀、只命中「清理残留」，已各个击破：① wrapper 的 stdout/stderr 是父 Worker 建立的 OS 管道，Worker 死后写 fd 1/2 触发 SIGPIPE、被 Go 运行时对标准流的默认动作终止——wrapper 启动即 `signal.Ignore(SIGPIPE)`（Unix，见 `daemon.IgnoreBrokenPipe`；Windows 无此语义为空操作），改为 EPIPE 丢弃不崩；② systemd worker 单元默认 `KillMode=control-group` 会连坐 SIGKILL cgroup 内经 setsid 脱离的 wrapper——单元改 `KillMode=process`（`install-worker.sh` + CP 内嵌副本，仅向主进程发信号，`install_scripts_test.go` 守护）；③ Worker 收到 SIGTERM 时先在 5 秒上限内关闭本地 WS 服务，再停止本地管理器；不再存在入站 gRPC server 的优雅停止等待。删除运行中实例仍强杀两棵进程树（上条 FR-310），与「重启存活」正交。
+- **运行期自持的 cgroup 边界（FR-500，ADR-097；补强 FR-341）**：上条②的 `KillMode=process` 只是**部署期**属性——2026-10-01 生产 unit 实测缺该项（生效 `KillMode=control-group` + `KillSignal=15`），`systemctl restart` 对单元 cgroup 内全员发 SIGTERM，11 台实例全灭；而 `setsid` 只逃脱**进程组**、逃不出 **cgroup**（Worker 与全部 wrapper 同处 `user.slice/…/app.slice/<单元>.service`），Worker 关闭路径当时已正确只断连（日志 `daemon 实例已断开连接（wrapper 继续运行）` 先于 `wrapper 进程退出 err="signal: terminated"`，且 11 个实例的 Java 自身日志同秒 `Stopping server` 证明 Java 被 cgroup 级 SIGTERM 直接打中）。现由代码在运行期自持该边界：wrapper 启动时**先自迁**到单元 cgroup 的同级目录 `…/app.slice/jianmanager-daemons/<实例 UUID>`（必须早于 `startJava`——子进程 fork 继承父进程当时的 cgroup），Worker 接管已在运行的 wrapper 时按 PPID 链连 java 后代一并迁移（覆盖「部署后第一个重启」）；同级而非更外层是内核要求（迁移者须对源与目标的共同祖先生效目录有写权限，`app.slice` 属用户可写），同级也保住用户会话语义（登出仍按 KillMode 回收）。仅在自身 cgroup 确为 `*.service` 单元时生效，失败只告警保持原状，`JM_DAEMON_CGROUP_ISOLATION=0` 可关；显式停止/删除照旧（按进程组与 PID 终止，与 cgroup 归属正交）。契约与验收见 `docs/specs/daemon-cgroup-isolation/spec.md`、`docs/specs/restart-resilience/spec.md` §7。
 
 #### docker 容器化实例生命周期（ADR-019，FR-078）
 

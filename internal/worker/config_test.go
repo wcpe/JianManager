@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
 // TestLoad_OrphanScanDefaults 运行期孤儿扫描默认启用、周期 60s、策略 warn（FR-456）。
@@ -37,6 +38,44 @@ func TestOrphanScanConfig_ScanIntervalParsing(t *testing.T) {
 	assert.Equal(t, 60*time.Second, OrphanScanConfig{Interval: "bogus"}.ScanInterval())
 	assert.Equal(t, 60*time.Second, OrphanScanConfig{Interval: "-5s"}.ScanInterval())
 	assert.Equal(t, 90*time.Second, OrphanScanConfig{Interval: "90s"}.ScanInterval())
+}
+
+// TestLoad_RecoverRetryBackoffDefaults 接管重试序列默认覆盖分钟级（FR-455①）：
+// Worker 重启后接管存活 wrapper 的重试窗口默认 1s→…→64s ≈127s（spec §6）。
+//
+// 转红方式：把默认改回旧 {1s,2s,4s}（≈7s）或删掉该键——序列值与总窗口断言失败。
+func TestLoad_RecoverRetryBackoffDefaults(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "1s,2s,4s,8s,16s,32s,64s", cfg.Recover.RetryBackoff)
+
+	seq := cfg.Recover.RetryBackoffSequence()
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, seq, "配置默认口径应与进程包默认序列同源")
+	total := time.Duration(0)
+	for _, d := range seq {
+		total += d
+	}
+	assert.Equal(t, 127*time.Second, total, "默认重试窗口 ≈127s")
+}
+
+// TestLoad_RecoverRetryBackoffEnvOverride 接管重试序列可经环境变量/配置文件覆盖（FR-455① 测试用小值）。
+func TestLoad_RecoverRetryBackoffEnvOverride(t *testing.T) {
+	t.Setenv("JIANMANAGER_RECOVER_RETRY_BACKOFF", "10ms,20ms")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}, cfg.Recover.RetryBackoffSequence())
+}
+
+// TestRecoverConfig_RetryBackoffSequenceParsing 留空/全非法回退默认序列；逐项过滤非法与非正项。
+func TestRecoverConfig_RetryBackoffSequenceParsing(t *testing.T) {
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{}.RetryBackoffSequence())
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{RetryBackoff: "  "}.RetryBackoffSequence())
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{RetryBackoff: "bogus"}.RetryBackoffSequence())
+	assert.Equal(t, process.DefaultRecoverRetryBackoff, RecoverConfig{RetryBackoff: "-1s,-2s"}.RetryBackoffSequence())
+	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second},
+		RecoverConfig{RetryBackoff: "1s, 2s"}.RetryBackoffSequence())
+	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second},
+		RecoverConfig{RetryBackoff: "1s, bogus, 2s, 0s"}.RetryBackoffSequence(), "非法项应跳过")
 }
 
 // TestHealthScanConfig 巡检周期/熔断窗口解析回退默认 30s/10m；策略组装对齐本地配置（FR-459）。
@@ -191,6 +230,81 @@ func TestWorkerConfigExists_FindsConfigBesideExecutable(t *testing.T) {
 	assert.True(t, WorkerConfigExists(), "exe 目录有 worker.yml → 应判已配置（FIX-3）")
 }
 
+// TestLoad_LogIngestTimeZone 采集时区配置面（缺陷 C）：默认 UTC 不变、显式值可配、非法值启动即拒。
+//
+// 转红：改动前没有 log_ingest.time_zone 这条配置面 —— 生产只能改代码才能让源时区生效；
+// 且时区配错必须显式失败，静默回退会让整源时间轴偏移而无人察觉。
+func TestLoad_LogIngestTimeZone(t *testing.T) {
+	// 零配置：留空 = UTC（既有行为零变化，未配置的节点时间轴不漂移）。
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.IngestDefaultTimeZone(), "未配置时区时必须保持 UTC（空串）语义")
+
+	// 现场口径：节点 JVM 与 Worker 同机，配 local 即跟随节点时区（生产 HKT 建议值）。
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: local\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "local", cfg.IngestDefaultTimeZone())
+
+	// 也可显式写 IANA 名（不依赖节点 TZ，跨机迁移时时间轴不随部署环境漂移）。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: Asia/Hong_Kong\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "Asia/Hong_Kong", cfg.IngestDefaultTimeZone())
+
+	// 非法值必须启动即拒（与登记阶段拒绝非法源级时区同一取舍）。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: HKT+8\n"), 0o600))
+	_, err = Load(path)
+	require.ErrorContains(t, err, "log_ingest.time_zone 非法")
+}
+
+// TestLoad_LogIngestTimeZoneEnvOverride 环境变量按路径覆盖配置（JIANMANAGER_LOG_INGEST_TIME_ZONE）。
+func TestLoad_LogIngestTimeZoneEnvOverride(t *testing.T) {
+	t.Setenv("JIANMANAGER_LOG_INGEST_TIME_ZONE", "Asia/Hong_Kong")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "Asia/Hong_Kong", cfg.IngestDefaultTimeZone())
+}
+
+// TestLoad_LogIngestCharset 采集字符集配置面（复审 P2-3）：默认 auto 不变、显式值可配、非法值启动即拒。
+//
+// 转红：改动前没有 log_ingest.charset 这条配置面（config.go 无键、main.go 不传）——
+// 节点级默认字符集只能改代码才能生效；且非法字符集必须显式失败，静默回退 auto 会让
+// GBK 日志被当作非法 UTF-8 净化成替换字符而无人察觉。
+func TestLoad_LogIngestCharset(t *testing.T) {
+	// 零配置：留空 = auto（既有行为零变化，合法 UTF-8 源逐字节不变）。
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.IngestDefaultCharset(), "未配置字符集时必须保持 auto（空串）语义")
+
+	// 显式声明（中文 locale 的 JVM 输出 GBK 日志时的确定性方案）。
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  charset: gbk\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "gbk", cfg.IngestDefaultCharset())
+
+	// 也接受 auto/utf-8/gb18030。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  charset: gb18030\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "gb18030", cfg.IngestDefaultCharset())
+
+	// 非法值必须启动即拒（与源级登记拒绝非法字符集同一取舍）。
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  charset: big5\n"), 0o600))
+	_, err = Load(path)
+	require.ErrorContains(t, err, "log_ingest.charset 非法")
+}
+
+// TestLoad_LogIngestCharsetEnvOverride 环境变量按路径覆盖配置（JIANMANAGER_LOG_INGEST_CHARSET）。
+func TestLoad_LogIngestCharsetEnvOverride(t *testing.T) {
+	t.Setenv("JIANMANAGER_LOG_INGEST_CHARSET", "gb18030")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "gb18030", cfg.IngestDefaultCharset())
+}
+
 // TestWorkerConfigExists 工作目录有/无 worker 配置文件时正确报告（FR-222 未配置自检的一半）。
 func TestWorkerConfigExists(t *testing.T) {
 	dir := t.TempDir()
@@ -203,4 +317,105 @@ func TestWorkerConfigExists(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.yml"), []byte("name: x\n"), 0o644))
 	assert.True(t, WorkerConfigExists(), "有 worker.yml 即已配置")
+}
+
+// TestLoad_ConfigPathIsReported 守住「生效配置文件可自证」（2026-10-02 真机复验的连带交付）：
+// 「改了 worker.yml 重启却没生效」的第一嫌疑是「进程读的不是你改的那个文件」——cwd / exe 旁 /
+// configs 三处都在搜索路径里（服务形态下 cwd 还可能是系统目录）。
+//
+// 转红：不记录 `v.ConfigFileUsed()`（ConfigPath 恒为空）→ 本用例必红。
+func TestLoad_ConfigPathIsReported(t *testing.T) {
+	// 未找到任何配置文件：空串（明确表达「全部取自默认值/环境变量」）。
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Empty(t, cfg.ConfigPath(), "没有配置文件时必须明确报告空路径")
+
+	// 显式路径：必须回报该文件的绝对路径（供启动日志自证）。
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	require.NoError(t, os.WriteFile(path, []byte("log_ingest:\n  time_zone: Asia/Hong_Kong\n"), 0o600))
+	cfg, err = Load(path)
+	require.NoError(t, err)
+	abs, err := filepath.Abs(path)
+	require.NoError(t, err)
+	assert.Equal(t, abs, cfg.ConfigPath(), "必须回报实际读到的配置文件绝对路径")
+}
+
+// TestScanTuningDefaultsAndOverride（现场终章 ③ 的绑定回归）：段读让路/轮内预算的默认值必须是
+// 8192 行 / 1ms / 2s（与 ingest 侧默认一致 ✓），且能经 worker.yml 键覆盖 ✓。
+//
+// 为什么必须有这条：这三个旋钮是"单源段读不再撑满整轮"的唯一上界来源 ✗，配置面若回退成 0
+// （= ingest 默认）表面无害，但**一旦有人配成 0 期望"关闭"**，语义会变成"用默认"——必须显式测到 ✓。
+func TestScanTuningDefaultsAndOverride(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, 8192, cfg.LogIndex.Scan.SliceRows, "默认切片行数")
+	assert.Equal(t, "1ms", cfg.LogIndex.Scan.Yield, "默认让路时长")
+	assert.Equal(t, "2s", cfg.LogIndex.Scan.Budget, "默认轮内预算")
+
+	tuning := cfg.ScanTuning()
+	assert.Equal(t, 8192, tuning.SliceRows)
+	assert.Equal(t, time.Millisecond, tuning.Yield)
+	assert.Equal(t, 2*time.Second, tuning.Budget)
+
+	// yml 覆盖（经环境变量等价路径验证绑定：viper 的键 → 结构字段 ✓）。
+	t.Setenv("JIANMANAGER_LOG_INDEX_SCAN_SLICE_ROWS", "1024")
+	t.Setenv("JIANMANAGER_LOG_INDEX_SCAN_YIELD", "500us")
+	t.Setenv("JIANMANAGER_LOG_INDEX_SCAN_BUDGET", "9s")
+	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	tuning2 := cfg2.ScanTuning()
+	assert.Equal(t, 1024, tuning2.SliceRows)
+	assert.Equal(t, 500*time.Microsecond, tuning2.Yield)
+	assert.Equal(t, 9*time.Second, tuning2.Budget)
+
+	// 非法值一律回退"用默认"（安全方向 ✓）：配成 0 不得变成"关闭让路/关闭预算" ✗。
+	zero := &Config{}
+	zero.LogIndex.Scan.SliceRows = 0
+	zero.LogIndex.Scan.Yield = "0"
+	zero.LogIndex.Scan.Budget = "not-a-duration"
+	zt := zero.ScanTuning()
+	assert.Zero(t, zt.SliceRows, "0 ⇒ 交由 ingest 侧默认（8192）✓")
+	assert.Zero(t, zt.Yield)
+	assert.Zero(t, zt.Budget)
+}
+
+// TestRecoveryQuotaTuningDefaultsAndOverride（方案② 的绑定回归）：默认必须是 4× / 30m ✓，
+// 且可经 log_capacity.recovery_* 覆盖 ✓；非法/非正一律回退默认（安全方向 ✓）。
+func TestRecoveryQuotaTuningDefaultsAndOverride(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	f, g := cfg.RecoveryQuotaTuning()
+	assert.Equal(t, 4.0, f, "默认恢复期配额 = 4× 常规闸")
+	assert.Equal(t, 30*time.Minute, g, "默认排空宽限 = 30m（现场排空动辄小时级 ✓）")
+
+	t.Setenv("JIANMANAGER_LOG_CAPACITY_RECOVERY_QUOTA_FACTOR", "8")
+	t.Setenv("JIANMANAGER_LOG_CAPACITY_RECOVERY_DRAIN_GRACE", "45m")
+	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	f2, g2 := cfg2.RecoveryQuotaTuning()
+	assert.Equal(t, 8.0, f2)
+	assert.Equal(t, 45*time.Minute, g2)
+
+	bad := &Config{}
+	bad.LogCapacity.RecoveryQuotaFactor = 0 // <1 ⇒ 回退默认 ✓
+	bad.LogCapacity.RecoveryDrainGrace = "not-a-duration"
+	f3, g3 := bad.RecoveryQuotaTuning()
+	assert.Equal(t, 4.0, f3)
+	assert.Equal(t, 30*time.Minute, g3)
+}
+
+// TestResumeBatchTuningDefaultsAndOverride（兜底环每轮容量的绑定回归）：
+// 默认 8 ✓；可配 ✓；置 1 = 退回应激行为（每轮一个 ✓）；非正 ⇒ 回退默认 ✓。
+func TestResumeBatchTuningDefaultsAndOverride(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, 8, cfg.ResumeBatchTuning(), "默认每轮 8 个可解源")
+
+	t.Setenv("JIANMANAGER_LOG_INDEX_RESUME_BATCH_PER_ROUND", "1")
+	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, 1, cfg2.ResumeBatchTuning(), "置 1 = 每轮一个（退回应激行为 ✓）")
+
+	bad := &Config{}
+	assert.Equal(t, 8, bad.ResumeBatchTuning(), "非正 ⇒ 回退默认（安全方向 ✓）")
 }

@@ -69,3 +69,57 @@ FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转
 | VL 写入成功但 ACK 丢失 | UNKNOWN/核验/重放可审计，未确认数据仍有恢复来源 |
 | 损坏 gz（含中途截断）、编码错误、权限不足 | 隔离记录、缺口可见、后续源不被拖死 |
 | WAL/临时盘满 | 暂停或降级，实例管理继续可用，恢复后可继续推进 |
+
+## 3.3 缺口定界与自动消解（2026-10-02 缺陷 A 加固）
+
+缺口（`Gap`）语义恒为「这段可能没落库、需要补」；本节只做**保守方向**的事——区间只扩大不缩小，
+绝不产生「已确认落库」的假象。消解（标记 `resolved`）必须由外部证据驱动，证据只有两类。
+
+- **登记合并**：同因、相邻/重叠（间隔 ≤1 字节的源分隔符）的缺口并成一条覆盖区间；单次登记在尾部
+  有限窗口内回溯，代价与缺口总量无关。连续失败因此在账本上恒为常数条（现场 5 万级缺口正是这样涨起来的）。
+- **数量级上限**：单源未解决缺口按**原因**分组，每组 ≤ `DefaultMaxUnresolvedGapsPerSource`（64）；
+  越界时把该原因最旧的一批折叠为一条覆盖区间——**原因之间绝不合并**，否则会丢掉按原因判定的语义
+  （例：`STDIO_RAW_WRITE_FAILED` 不可由投影自动消解）。已解决缺口滚动保留最近
+  `DefaultMaxResolvedGapsPerSource`（64）条。观测：`Ledger.GapObservability` 暴露
+  Unresolved/Resolved/MergedTotal/FoldedTotal，`Gap.Detail` 记录合并与折叠摘要。
+- **自动消解（两条出口，缺一不可）**：两条出口共用**同一判据**（`ledger.ResolveGapsCoveredByRanges`）：
+  **原因允许名单（默认拒绝）+ 区间连续覆盖**。
+  1. **投递成功覆盖**：一次投递成功（写 VL + 逐字段可见性校验 + catalog 发布）后，消解**完全落在**
+     本次实际写入面**某一段连续区间**内、且原因在允许名单里的未解决缺口。
+  2. **已发布投影覆盖**：对仍持有缺口的源，用 `publishedClosedForSource` 的发布证据 + 该源
+     **逐字段校验覆盖区间凭据**（`persistedSource.VerifiedRuns`：每次成功投递把校验通过的区间
+     合并持久化）消解，覆盖「WAL 条目已被回收、无法再重投」的尾部。该路径较贵（按天聚合事件区间），
+     按源限频（默认 10s，`Manager.SetSelfHealInterval` 可注入）。
+  **为什么不能用凸包/末端水位**（2026-10-02 复审 P1-1/P1-2）：`[min(Record.Start), max(Record.End)]`
+  凸包与「缺口末端 ≤ closed」都会把**从未落库**的区间算成已覆盖——`APPEND_REJECTED`（append 被拒，
+  该批从未进 WAL）、容量门禁暂停、`ARCHIVE_*` / `ROTATED_SEGMENT_NOT_READY` 之类的合成缺口
+  （位置为 `(0,0)`）都可能因此被标成「已确认落库」，空洞被永久掩盖并放行 `ResumeAcquire`；
+  `replay=true` 时证据被扩为全量 canonical 集，凸包覆盖整段历史，风险最大。
+  **允许名单**（事件确实在 WAL/段里、本次会被重写并逐字段校验）：`DELIVER_ERROR`、
+  `DELIVER_ERROR_WORKER_SOURCE`、`WAL_COMMIT_FAILED`；名单之外一律不自动消解（含
+  `STDIO_RAW_WRITE_FAILED` 与一切「从未进 WAL」的原因），交重读补投或人工核验。
+  人工接口 `ResolveGapsThrough` / `ResolveCoveredGapsForSource` 语义不变（仍按末端消解，
+  可显式确认放弃不可证明的原因）。
+- **暂停源自愈**：采集暂停期间 FileTailer 拒绝读取，「读 → 投递 → 回收 → 恢复评估」整条链没有触发点
+  （2026-10-01/02 现场：10 个源 `paused=1`、各带 50,863–50,864 条未解决缺口、持续 13+ 小时零新数据，
+  最终靠人工按源解算 13 个源才恢复）。采集轮现在对「已暂停或仍持有缺口」的源执行限频自愈：
+  `DeliverPending`（只投递、不读取）→ 登记投递结果 → 推进回收并按滞回条件评估恢复；
+  `ResumeAcquire` 仍要求「零未解决缺口」，门禁不放松。
+
+自动回归（转红实测见 CHANGELOG [Unreleased]）：
+`ledger.TestGapStormMergesAdjacentSameReasonFailures`（相邻合并）、
+`ledger.TestGapStormStaysBoundedAcrossScatteredFailures`（有界）、
+`ledger.TestGapFoldKeepsReasonsSeparate`（按原因折叠）、
+`ledger.TestResolveGapsCoveredByRangeRequiresFullCoverage`（区间包含判据）、
+`ledger.TestResolveGapsCoveredByRangesRejectsConvexHull`（连续覆盖 ≠ 凸包）、
+`ledger.TestResolveGapsCoveredByRangesIsAllowlist`（原因允许名单 / 空名单必须报错）、
+`ledger.TestMergePositionRangesBridgesSingleSeparator`、
+`ingest.TestAppendRejectedGapInsideDeliveryHullIsNeverAutoResolved`（凸包内部的未落库批次不得被消解）、
+`ingest.TestDeliveryEvidenceRequiresContiguousCoverage`、
+`ingest.TestPublishedProjectionGapResolutionNeedsVerifiedRuns`（末端水位 + 凭据前置）、
+`ledger.TestResolvedGapsAreTrimmedButAuditTailKept`、
+`acquire.TestPausedSourceSelfHealsAfterDeliveryRecovers`、
+`acquire.TestEvaluateResumeDoesNotClearForeignPause`、
+`ingest.TestDeliveryFailureGapsAutoResolveAfterDeliveryRecovers`、
+`ingest.TestPausedSourceSelfHealsEndToEnd`、
+`ingest.TestStdioRawWriteFailureGapIsNeverAutoResolved`。

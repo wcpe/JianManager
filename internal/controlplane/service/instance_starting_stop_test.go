@@ -16,7 +16,7 @@ func TestInstanceService_StopFromStarting(t *testing.T) {
 	db := newNodeTestDB(t)
 	node := newTestNode(t, db, "n1")
 	svc := NewInstanceService(db, NewGroupService(db), cpgrpc.NewClientPool())
-	svc.Shutdown() // 禁用异步委托，仅观测同步状态转换
+	svc.SetDelegateBypassForTest(true) // 委托旁路：仅观测同步状态转换，不产生异步副作用
 
 	inst := &model.Instance{
 		NodeID:       node.ID,

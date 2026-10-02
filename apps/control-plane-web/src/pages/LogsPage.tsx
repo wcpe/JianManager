@@ -47,6 +47,27 @@ import {
 } from './logs-filters'
 
 /**
+ * 时间窗参数（P2-9）：跟随态**只下发下界 `from`，不下发上界 `to`**。
+ *
+ * 根因：跟随态旧实现把 `to` 钉在浏览器 `now`，任何时钟偏移都会让「正在写入」的事件落在
+ * 窗外——Worker/实例时钟略快，或落盘时区未校正（+8h）产生的「未来时间戳」，都被 `to=now`
+ * 排除，于是实时跟随轮询永远为空（用户观感「不实时」）。
+ * 加固定宽限（now+5m）只能吸收固定量级的偏移，覆盖不了整时区偏移；而跟随视图的语义本就是
+ * 「窗口内的最新事件」，没有「截至某时刻」的含义，故 FOLLOW_LIVE 直接不下发上界：
+ * 下界仍由 `from` 界定（默认最近 24h），扫描上界仍受分区日 / VL 窗口约束，不会无界查询。
+ */
+function timeParamsFor(
+  preset: TimeRangePreset,
+  anchor: Date,
+  follow: boolean,
+): Pick<LogQueryParams, 'from' | 'to'> {
+  const bounds = timeRangeToParams(preset, anchor)
+  if (!follow) return bounds
+  // `all` 预设本就无边界；相对预设保留 from、丢掉 to。
+  return bounds.from ? { from: bounds.from } : {}
+}
+
+/**
  * 把事件的原始来源标识归一为下拉取值域（instance/control_plane/worker）。
  *
  * 事件结构（SourceIdentity）只带 log_source_id、不含类别字段，其取值形如
@@ -144,7 +165,10 @@ export default function LogsPage() {
     return Number.isFinite(n) && n > 0 ? n : null
   })
   const [keyword, setKeyword] = useState('')
-  const [range, setRange] = useState<TimeRangePreset>('all')
+    // 默认 24h（2026-09-30 实测依据）：默认「全部时间」会让每个目标的全部分区参与查询——
+    // 实测单次联邦请求扫描 105 个日分区、约 2.6s；带 24h 窗口的同规模查询仅 ~108ms（约 24×）。
+    // 「全部时间」仍可从时间范围筛选器显式选择。
+    const [range, setRange] = useState<TimeRangePreset>('24h')
   const [page, setPage] = useState(1)
 	const [federationCursors, setFederationCursors] = useState<Record<number, string>>({ 1: '' })
   // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（FR-480 online_only）。
@@ -164,10 +188,13 @@ export default function LogsPage() {
   }, [range, follow])
 
   // 跟随态钉在第 1 页（最新）；锚点 now 在每次构建参数时取，配合轮询滚动时间窗。
-  const timeParams = timeRangeToParams(
-    range,
-    follow ? new Date() : new Date(rangeAnchor),
-  )
+  // 锚点按轮询间隔对齐（P2-9 同类缺陷）：`from` 逐毫秒变化会让 queryKey 每次渲染都变，
+  // react-query 视为新查询 → data 恒为 undefined（federation 侧没有 keepPreviousData），
+  // 列表回落到经典 /logs → 实时行永远渲染不出来。对齐到 FOLLOW_INTERVAL 桶后同一桶内
+  // queryKey 稳定、响应能落地；窗口仍每 ≤3s 滚动一次，与轮询同频。
+  // 跟随态不下发 `to`（见 timeParamsFor）：时钟偏移下的未来时间戳事件仍可见。
+  const followAnchor = new Date(Math.floor(new Date().getTime() / FOLLOW_INTERVAL) * FOLLOW_INTERVAL)
+  const timeParams = timeParamsFor(range, follow ? followAnchor : new Date(rangeAnchor), follow)
   const params: LogQueryParams = {
     view,
     page: follow ? 1 : page,
@@ -269,7 +296,6 @@ export default function LogsPage() {
 		: classicLoading || federationProbePending
 	const isError = legacyMode ? legacyQuery.isError : classicError
 	const hasData = legacyMode ? !!legacyQuery.data : !!data
-
   // 空结果语义：失败/partial 不得呈「暂无日志」空成功（FR-482）。
   // 引擎未就绪的降级是例外中的例外：经典路径可能确实没有行，但引擎侧数据从未被查询，
   // 此时宣称「暂无日志」是假成功，必须保留非成功空态。
@@ -617,7 +643,10 @@ export default function LogsPage() {
       )}
 
       {isLoading && !hasData ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
+        <div className="flex flex-col gap-1">
+          <p className="text-muted-foreground">{t('common.loading')}</p>
+          <SlowQueryHint />
+        </div>
       ) : isError ? (
         <p className="text-destructive">{t('logs.loadError')}</p>
       ) : (
@@ -780,6 +809,35 @@ function CoverageBanner({
 }
 
 /** 级别快速筛选 pill：选中态主色淡染，非选中态弱色；带级别时前导状态色点。 */
+/** 慢查询提示出现的等待阈值（秒）：3 秒内的加载属正常往返，不必打扰用户。 */
+const SLOW_QUERY_HINT_SECONDS = 3
+
+/**
+ * 慢查询提示：长耗时查询不能只留一个转圈——让用户知道「还在跑、等了多久」，
+ * 并提示缩小时间范围（无界范围是最慢路径）。纯前端计时，不改任何查询语义。
+ *
+ * 计时的归零交给组件生命周期：本组件只在「加载中且尚无数据」时挂载，加载结束即卸载，
+ * 秒数随之丢弃。不在 effect 体内同步 setState(0) —— 那会触发级联渲染
+ * （react-hooks/set-state-in-effect），且在严格模式下被双调用放大。
+ */
+function SlowQueryHint() {
+  const { t } = useTranslation()
+  const [waitedSeconds, setWaitedSeconds] = useState(0)
+  useEffect(() => {
+    const startedAt = Date.now()
+    const timer = window.setInterval(() => {
+      setWaitedSeconds(Math.floor((Date.now() - startedAt) / 1000))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+  if (waitedSeconds < SLOW_QUERY_HINT_SECONDS) return null
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="logs-slow-query-hint">
+      {t('logs.slowQueryHint', { seconds: waitedSeconds })}
+    </p>
+  )
+}
+
 function LevelPill({
   level,
   active,

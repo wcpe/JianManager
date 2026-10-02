@@ -132,11 +132,18 @@ type Instance struct {
 	Status      InstanceStatus `gorm:"type:varchar(32);default:STOPPED;index" json:"status"`
 	// StatusReason 记录当前状态的原因，主要用于 CRASHED：异步委托（启动/停止）失败时写入具体错误
 	// （如「实例未绑定 JDK…」），供前端显示，不再让用户只见「崩溃」无因。正常状态推进时清空。
-	StatusReason     string `gorm:"type:varchar(512)" json:"statusReason"`
-	StartCommand     string `gorm:"type:varchar(1024);not null" json:"startCommand"`
-	JDKID            uint   `gorm:"index" json:"jdkId"`
-	JavaMajorVersion int    `gorm:"index" json:"javaMajorVersion"`
-	LaunchSpec       string `gorm:"type:text" json:"launchSpec"`
+	StatusReason string `gorm:"type:varchar(512)" json:"statusReason"`
+	// StatusReasonSource 是 StatusReason 的**来源标记**，用于区分该列的两种混用语义：
+	//   - "worker"：原因是 Worker 心跳携带的健康巡检结论（假死/嫌疑/熔断等），心跳可自行清空与覆盖；
+	//   - 其它值（含空串=历史行）：原因是 CP 写入的**生命周期失败**原因（如「重启前同步最新启动规格
+	//     失败，已取消重启: …」「Worker 操作失败: …」，FR-312），心跳不得抹平——否则下一拍
+	//     RUNNING+healthy 的心跳会把刚写下的失败原因清成空，用户只看得到「运行中」而无任何原因。
+	// 该标记仅服务端内部使用（健康墙 degraded 口径亦按它过滤），不外泄给前端，故 json 为 "-"。
+	StatusReasonSource string `gorm:"type:varchar(16);default:''" json:"-"`
+	StartCommand       string `gorm:"type:varchar(1024);not null" json:"startCommand"`
+	JDKID              uint   `gorm:"index" json:"jdkId"`
+	JavaMajorVersion   int    `gorm:"index" json:"javaMajorVersion"`
+	LaunchSpec         string `gorm:"type:text" json:"launchSpec"`
 	// ProvisionSpec 存一键搭建/代理搭建的原始请求（JSON），供损毁后「重建」复用参数重跑搭建（FR-342）。
 	// 仅经搭建入口创建的实例有值；手动/导入实例为空、不适用重建。
 	ProvisionSpec string `gorm:"type:text" json:"provisionSpec,omitempty"`

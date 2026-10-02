@@ -111,8 +111,11 @@ func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir str
 	if !binding.Mode.Valid() {
 		return fmt.Errorf("ingest: invalid instance acquisition mode")
 	}
-	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	// 登记只取 registerMu，**不取 cycleMu**：cycleMu 被整轮采集/预备切换/停止长持有
+	// （饱和期分钟级），取它会把「CP 启动实例」这一步拖过 RPC 截止时间。
+	// 详见 Manager.registerMu 的注释与 docs/specs/log-ingest-register-lock/spec.md 的锁审计表。
+	m.registerMu.Lock()
+	defer m.registerMu.Unlock()
 	m.mu.Lock()
 	existing, exists := m.state.Instances[uuid]
 	m.mu.Unlock()

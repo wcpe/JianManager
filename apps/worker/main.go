@@ -36,6 +36,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/logassemble"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -43,6 +44,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/grpcsvc"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
+	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/orphanaudit"
@@ -85,7 +87,81 @@ func main() {
 		runDaemonWrapper()
 		return
 	}
+	// 采集索引只读导出（FR-496 spec §2.3）：`worker log-index-export [--data-dir DIR] [--out FILE]`。
+	// 用于排障与回滚前的快照，不改动索引库或任何状态。
+	if len(os.Args) > 1 && os.Args[1] == "log-index-export" {
+		runLogIndexExport(os.Args[2:])
+		return
+	}
+	// 事件级状态派生态视图（后续项③）：`worker log-event-status [--data-dir DIR] [--source ID[/GEN]]
+	// [--from N --to M | --at RFC3339]`。只读索引库（+ 可选事件段），不改动任何状态。
+	if len(os.Args) > 1 && os.Args[1] == "log-event-status" {
+		runLogEventStatus(os.Args[2:])
+		return
+	}
 	runWorker()
+}
+
+// runLogEventStatus 输出“某源某区间/某时间点当前处于哪一态”的派生态视图（JSON 到 stdout）。
+//
+// 只读：索引库不存在或不可读时报错退出（退出码 1），不创建、不修改任何文件。
+func runLogEventStatus(args []string) {
+	override := ""
+	for _, value := range parseDataDirArg(args) {
+		override = value
+	}
+	dataRoot, err := dataroot.Resolve(override)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "解析数据目录失败: %v\n", err)
+		os.Exit(1)
+	}
+	if err := ingest.ExportEventStatus(dataRoot.Base(), args, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "导出事件级状态失败: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runLogIndexExport 把采集索引（SQLite）导出为旧 ingest.state.json 结构的 JSON。
+//
+// 只读：库不存在或不可读时报错退出（退出码 1），不创建、不修改任何文件。
+func runLogIndexExport(args []string) {
+	override := ""
+	for _, value := range parseDataDirArg(args) {
+		override = value
+	}
+	dataRoot, err := dataroot.Resolve(override)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "解析数据目录失败: %v\n", err)
+		os.Exit(1)
+	}
+	root := dataRoot.Base()
+	out := os.Stdout
+	for i := 0; i < len(args); i++ {
+		value := ""
+		switch {
+		case args[i] == "--out" && i+1 < len(args):
+			value = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--out="):
+			value = strings.TrimPrefix(args[i], "--out=")
+		default:
+			continue
+		}
+		file, err := os.OpenFile(value, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "打开导出文件失败: %v\n", err)
+			os.Exit(1)
+		}
+		defer func() { _ = file.Close() }()
+		out = file
+	}
+	if err := ingest.ExportIndexJSON(root, out); err != nil {
+		fmt.Fprintf(os.Stderr, "导出采集索引失败: %v\n", err)
+		os.Exit(1)
+	}
+	if out != os.Stdout {
+		fmt.Fprintln(os.Stderr, "采集索引已导出")
+	}
 }
 
 // runDaemonWrapper 以 wrapper 子进程模式运行。
@@ -214,6 +290,46 @@ func runWorker() {
 		cfg = loaded
 	}
 
+	// 日志等级/格式装配（此前**完全没有装配点**：Worker 从不调用 slog.SetDefault，
+	// 于是 log.level / log.format 两个配置项形同不存在——写 debug 不产生任何 DEBUG 输出，
+	// 写 error 也压不住 INFO。现场表现是「改了配置但日志没变」，极难归因。
+	//
+	// 用 LevelVar 而不是固定等级：G10 要求「运行期可动态调等级」（平时压到 info 降开销、
+	// 排障时临时开 debug），而 LevelVar 正是该能力的接线点。
+	logLevelVar := new(slog.LevelVar)
+	logLevel, logLevelErr := cfg.LogLevel()
+	if logLevelErr != nil {
+		slog.Error("日志等级配置非法，拒绝启动", "error", logLevelErr)
+		os.Exit(1)
+	}
+	logLevelVar.Set(logLevel)
+	logFormat, logFormatErr := cfg.LogFormat()
+	if logFormatErr != nil {
+		slog.Error("日志格式配置非法，拒绝启动", "error", logFormatErr)
+		os.Exit(1)
+	}
+	logOpts := &slog.HandlerOptions{Level: logLevelVar}
+	if logFormat == "json" {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, logOpts)))
+	} else {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, logOpts)))
+	}
+	slog.Info("Worker 日志已按配置装配", "level", logLevel.String(), "format", logFormat,
+		"note", "等级可经 logLevelVar 运行期调整（G10）")
+
+	// 启动自证（2026-10-02 真机复验）：把「实际读到的配置文件」与关键采集口径一次打清楚。
+	// 现场教训：`log_ingest.time_zone: local` 配上仍按 UTC 解释日志——可能是读的不是你改的文件，
+	// 也可能是 local 在 Worker 进程内恰好解析成 UTC（容器/systemd 常见）。这一行让两者当场可分。
+	configSource := cfg.ConfigPath()
+	if configSource == "" && setupResult != nil {
+		// setup 刚写出 worker.yml 并在内存里构造配置，不重读文件：此处不能显示成「无配置文件」。
+		configSource = "<setup 本次写出并在内存中构造>"
+	}
+	slog.Info("Worker 配置已加载",
+		"configPath", configSource,
+		"logIngestTimeZone", cfg.IngestDefaultTimeZone(),
+		"logIngestCharset", cfg.IngestDefaultCharset())
+
 	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
 	// 经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。非法代理 URL 启动即 fail-fast。
 	// 持有者可运行时重建：CP 经心跳下发节点期望代理后即时生效（custom→节点值 / inherit→全局默认，FR-185）。
@@ -274,6 +390,9 @@ func runWorker() {
 	}
 	// 初始化进程管理器
 	manager := process.NewManager(serversDir)
+	// 接管重试窗口（FR-455①）：Worker 重启后对存活 wrapper 的 reconnect 重试序列（默认 ≈127s），
+	// 覆盖分钟级瞬时故障；必须在下方 RecoverDaemonInstances 之前装配，否则该轮接管仍用默认序列。
+	manager.SetRecoverRetryBackoff(cfg.Recover.RetryBackoffSequence())
 	// 启动内存闸（FR-317）：可用内存塞不下待启实例即拒绝启动，防节点 OOM 失联。
 	manager.SetMemGuard(process.MemGuardConfig{
 		ReserveMB: cfg.MemoryGuard.ReserveMB,
@@ -338,6 +457,8 @@ func runWorker() {
 	if !cfg.OrphanScan.Disabled {
 		policy := process.NormalizeOrphanDisposePolicy(cfg.OrphanScan.DisposePolicy)
 		orphanScanner := process.NewOrphanScanner(manager, cfg.OrphanScan.ScanInterval(), policy)
+		// FR-497：未纳管活进程的自动收养开关（默认开；此处接线使 orphan_scan.auto_adopt 生效）。
+		orphanScanner.SetAutoAdopt(cfg.OrphanScan.AutoAdoptEnabled())
 		scannerCtx, cancelScanner := context.WithCancel(context.Background())
 		defer cancelScanner()
 		orphanScanner.Start(scannerCtx)
@@ -392,6 +513,10 @@ func runWorker() {
 		vlSupervisor, err = vlsup.New(vlsup.Options{
 			BinaryPath: managedBinary, AssetSHA256: managedSHA,
 			DataRoot: dataRoot, RetentionPeriod: cfg.LogVL.RetentionPeriod,
+			RetentionByNamespace: map[vlsup.Namespace]string{
+				// 冷层 retention 是「冷留存多久」的唯一执行者（用户口径：730d，所有级别统一）。
+				vlsup.NamespaceCold: cfg.LogVL.ColdRetentionPeriod,
+			},
 			AuthUsername: cfg.LogVL.Username, AuthPassword: cfg.LogVL.Password,
 			Ports: map[vlsup.Namespace]int{
 				vlsup.NamespaceHot:       cfg.LogVL.HotPort,
@@ -480,6 +605,36 @@ func runWorker() {
 		}
 	}
 	var logJournal catalog.Journal
+	// 日志容量读数（磁盘使用率 / WAL 上限）的**唯一**构造点：采集侧容量门禁与
+	// 保留策略的磁盘触发共用同一份提供者。两者各采一次磁盘迟早会给出不同结论，
+	// 而现场只会表现成「有时降级有时不降级」，极难归因。
+	if notice := cfg.WALBudgetNotice(); notice != "" {
+		slog.Warn(notice)
+	}
+	// 静默源的未闭合缓冲超时（缺陷 B）：非法值在 config.Load 阶段已被拒，
+	// 此处是防御性兜底——退回默认而不是中断装配（这一层没有可返回的错误通道）。
+	unclosedTimeout, unclosedErr := cfg.IngestMultilineUnclosedTimeout()
+	if unclosedErr != nil {
+		slog.Warn("log_ingest.multiline_unclosed_timeout 无法解析，退回默认", "error", unclosedErr)
+		unclosedTimeout = ingest.DefaultMultilineUnclosedTimeout()
+	}
+	// 整节点解算（POST /nodes/:id/log-runtime/ingest/resolve-gaps 无 storageNamespace 路径）的
+	// 单次调用预算（键 log_ingest.resolve_gaps_max_sources / resolve_gaps_max_duration）。
+	// 2026-10-02 压测现场：该路径此前整段持采集轮锁且无上界，一次调用让整节点采集停摆 30 分钟。
+	// 锁纪律已在 ingest 侧修正；这条接线补上「有界」。非法值在 config.Load 阶段已被拒，
+	// 此处同 unclosedTimeout 做防御性兜底（本层没有可返回的错误通道）。
+	resolveGapsBudget, resolveGapsErr := cfg.IngestResolveGapsBudget()
+	if resolveGapsErr != nil {
+		slog.Warn("log_ingest.resolve_gaps_* 无法解析，退回默认预算", "error", resolveGapsErr)
+		resolveGapsBudget = nil
+	}
+	logCapacityProvider := ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
+		MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
+		DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
+	})
+	// 保留策略驱动器（G6）。声明在这里（而非 lifecycle 块内）是因为它要在采集运行时
+	// 启动之后才有意义：搬运的是已经落库的分区，采集还没起来时搬没有意义。
+	var logRetentionDriver *retention.Driver
 	if store, journalErr := catalog.NewJSONLFileStore(root.Abs("var/log/catalog.journal.jsonl")); journalErr != nil {
 		slog.Error("日志 Catalog journal 打开失败，查询面保持无权威分区", "error", journalErr)
 	} else if journal, journalErr := catalog.NewJournalWithStore(store); journalErr != nil {
@@ -508,6 +663,17 @@ func runWorker() {
 			slog.Error("日志 Lifecycle 物理适配器创建失败", "error", lifecycleErr)
 		} else {
 			dayManager := lifecycle.NewDayManager(logStack.Catalog, physical.Ops(), physical)
+			// 保留策略驱动器（G6）：把 catalog 的日分区按「年龄 + 磁盘水位取先到」搬到冷层。
+			// 没有它，HOT 永不自动转 COLD——plan/executor/Mover 都对，但没人周期性把它们串起来。
+			if retentionPolicy, policyErr := cfg.RetentionPolicy(); policyErr != nil {
+				slog.Error("日志保留策略非法，冷热分层驱动未启用", "error", policyErr)
+			} else if retentionPolicy.Enabled {
+				logRetentionDriver = retention.NewDriver(retentionPolicy,
+					newCatalogPartitionLister(logStack.Catalog),
+					newDayManagerMover(dayManager, logStack.Catalog),
+					newDiskPercentReader(logCapacityProvider))
+				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)
+			}
 			resumedDays := make(map[string]bool)
 			for _, key := range logStack.Catalog.Keys() {
 				rec, ok := logStack.Catalog.Get(key)
@@ -628,14 +794,84 @@ func runWorker() {
 				StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
 			})
 		}
+		// 启动增量对账（FR-497）：配置键 log_reconcile.*，非法/越界值经 ReconcileConfig()
+		// 收敛为 ingest 的归一化默认（默认启用）。
+		reconcileCfg := cfg.LogReconcile.ReconcileConfig()
+		// 采集索引（FR-496）：历史投递批次裁剪（log_index.batch_prune.*）与持久化提交单元
+		// 预算（log_index.persist.*）分别经 LogIndexConfig 的映射收敛为归一化默认（裁剪默认
+		// 开启；切分默认每提交单元 512 行、目标 40ms——真源是 stateindex.DefaultCommitBudget）。
+		persistYieldCfg, persistHotBudgetCfg, persistPriorityStreak := cfg.PersistGateTuning()
+		verifyBudgetCfg, verifyMaxQueriesPerChunk := cfg.VerifyQueryTuning()
+		indexPruneCfg := cfg.LogIndex.IndexPrune()
+		indexCommitCfg := cfg.LogIndex.CommitBudget()
 		newIngest := func() (*ingest.Manager, error) {
 			return ingest.New(ingest.Options{
 				Root: root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
 				Journal: logStack.Catalog.Journal(), Archive: archiveRegistry, Sources: sources,
-				CapacityProvider: ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
-					MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
-					DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
-				}),
+				// 采集归一化的节点级默认时区（缺陷 C，键 log_ingest.time_zone）：源未显式配置时
+				// 生效，空串 = UTC（零配置零行为变化）。中文 locale 的 JVM 与 Worker 同机部署时
+				// 配 local 即可对齐本地时间；非法值已在 config.Load 阶段启动即拒。
+				DefaultTimeZone: cfg.IngestDefaultTimeZone(),
+				// 采集归一化的节点级默认字符集（复审 P2-3，键 log_ingest.charset）：源未显式配置时
+				// 生效，空串 = auto（零配置零行为变化）。GBK 日志源配 gbk 可免去自动判定的启发式
+				// 不确定性；非法值已在 config.Load 阶段启动即拒。
+				DefaultCharset:   cfg.IngestDefaultCharset(),
+				CapacityProvider: logCapacityProvider,
+				// 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天。
+				Reconcile: &reconcileCfg,
+				// 索引有界化（FR-496 §2.4）：历史投递批次按 reclaim 水位裁剪，默认开启。
+				IndexPrune: &indexPruneCfg,
+				// 索引持久化切分（FR-498 P0）：按行数 + 耗时双上界切成多个提交单元。
+				IndexCommit: &indexCommitCfg,
+				// 持久化门公平性（键 log_index.persist.cycle_yield / priority_streak）：
+				// 让路窗口决定「恢复链 ↔ 采集轮」的权衡，老化阈值决定优先权的反饿保护。
+				PersistYield:          persistYieldCfg,
+				PersistHotBudget:      persistHotBudgetCfg,
+				PersistPriorityStreak: persistPriorityStreak,
+				// 校验/对账查询的全局天花板（键 log_index.verify.*）：天花板语义，正常路径零等待。
+				VerifyBudget:             verifyBudgetCfg,
+				VerifyMaxQueriesPerChunk: verifyMaxQueriesPerChunk,
+				// 单源 WAL **真实积压**上限（键 log_capacity.max_wal_entries / max_wal_bytes）：
+				// 直接下发到 WAL.SetLimits。此前 SetLimits 无任何调用点（现场只剩硬编码
+				// 16MiB/5000），而配置里的 max_wal_bytes 被接到了只增不减的累计量上。
+				// 恢复期独立配额（方案②）：恢复中/排空宽限内按 factor 倍判（仍有界 ✓），
+				// 宽限过期回归常规闸 ✓。旋钮键 log_capacity.recovery_quota_factor /
+				// recovery_drain_grace（默认 4 / 30m ✓）。
+				RecoveryQuotaFactor: func() float64 { f, _ := cfg.RecoveryQuotaTuning(); return f }(),
+				RecoveryDrainGrace:  func() time.Duration { _, g := cfg.RecoveryQuotaTuning(); return g }(),
+				WALLimits: &acquire.WALLimits{
+					MaxEntries: cfg.LogCapacity.MaxWALEntries,
+					// 配置 0 = 字节维度**不限**（见 Config.WALBudgetNotice）⇒ 传负值哨兵，
+					// 绝不能让它退化成 acquire 包的硬编码 16 MiB（2026-10-03 现场 16 MiB 之谜 ✗）。
+					MaxBytes: cfg.EffectiveMaxWALBytes(),
+				},
+				// 回放限速（键 log_capacity.max_replay_events_per_drain）：恢复期单轮外发上限，
+				// 把「恢复瞬间」从一次流量尖峰摊成若干轮，不丢数据。
+				MaxReplayEventsPerDrain: cfg.LogCapacity.MaxReplayEvents,
+				// 静默源的未闭合缓冲超时（键 log_ingest.multiline_unclosed_timeout，默认 5s）：
+				// 到期未闭合即以显式标记强制闭合并推进 durable，否则悬挂区间会挡住轮转恢复。
+				MultilineUnclosedTimeout: unclosedTimeout,
+				// 整节点解算单次调用的预算（键 log_ingest.resolve_gaps_*）：源数 + 墙钟双上界，
+				// 超出即分片返回（不伪装成功），见 ingest.ResolveGapsBudget。
+				ResolveGapsBudget: resolveGapsBudget,
+				// 对账/重发的外部条件与切片（键 log_reconcile.vl_ready_* / replay_*）：
+				// 就绪探针把「VL 未就绪时的必然失败重发」挡在门外；切片把整窗重发变成有界可续。
+				ReplayTuning: func() *ingest.ReplayTuning {
+					tuning := cfg.ReconcileReplayTuning()
+					return &tuning
+				}(),
+				// 兜底环每轮容量（键 log_index.resume_batch_per_round；1 = 每轮一个 = 退回应激行为 ✓）。
+				ResumeBatchPerRound: cfg.ResumeBatchTuning(),
+				// 段读聚合的让路与轮内预算（键 log_index.scan.*）：现场点名 readSegment 是每轮重活
+				// 的 I/O 大头且"既不让路也无上界" ✗ ⇒ 由配置面驱动（默认 8192 行 / 1ms / 2s ✓）。
+				Scan: func() *ingest.ScanTuning {
+					tuning := cfg.ScanTuning()
+					return &tuning
+				}(),
+				// 启动恢复放到后台：New 立刻返回 ⇒ 反向隧道/WS/HTTP 立即可达（2026-10-02 事故：
+				// 恢复链与规模成正比且阻塞 New，worker 20–30 分钟不监听）。恢复进度经就绪面
+				// （startup_recovery_in_progress / _failed）如实上报，不放宽任何就绪判据。
+				StartupRecoveryBackground: true,
 				RecoveryHold: func(source ingest.SourceConfig, _ string) (bool, string) {
 					if rehydrateManager == nil {
 						return false, ""
@@ -704,6 +940,27 @@ func runWorker() {
 				return readiness.LedgerReady, readiness.CutoffTime, readiness.Reasons
 			}))
 			logStack.LogRPC.SetIngestGapResolver(manager)
+			// 手动归档导入入口（④）：把「扫描并导入待导入 gz」接到 gRPC 上，
+			// 供采集轮停摆（源被暂停/停止）时由运维显式触发；操作人经 metadata 携带。
+			logStack.LogRPC.SetIngestArchiveImporter(manager)
+			// 「已放弃位置」查询面标记（缺口 B 批2）：把 ingest 的放弃凭据接到搜索响应上，
+			// 使下游能区分「本来就没有」与「已被确认永久丢失」——不再静默跳过。
+			// 跨包适配放在这里（apps 同时依赖 ingest 与 grpcsvc），服务层不反向依赖 ingest。
+			logStack.LogRPC.SetIngestAbandonmentProvider(grpcsvc.IngestAbandonmentFunc(
+				func(targetIDs []string) []grpcsvc.IngestPositionGap {
+					ranges := manager.AbandonedRanges(targetIDs)
+					if len(ranges) == 0 {
+						return nil
+					}
+					out := make([]grpcsvc.IngestPositionGap, 0, len(ranges))
+					for _, r := range ranges {
+						out = append(out, grpcsvc.IngestPositionGap{
+							StorageNamespace: r.StorageNamespace, From: r.From, To: r.To,
+							ReasonCode: r.ReasonCode, Operator: r.Operator, AtUTC: r.AtUTC,
+						})
+					}
+					return out
+				}))
 			ingestCtx, cancelIngest := context.WithCancel(context.Background())
 			defer cancelIngest()
 			defer func() {
@@ -712,6 +969,25 @@ func runWorker() {
 				}
 			}()
 			go manager.Start(ingestCtx)
+			// 定时归档导入扫描（④，键 log_ingest.archive_scan_interval）：**默认关**。
+			// 打开后按周期把「躺在源目录里但还没被导入」的 gz 走一遍与自动路径完全相同的
+			// 导入管道；关闭时 RunArchiveScan 返回 nil（不启动任何 goroutine）。
+			if scanInterval, scanErr := cfg.IngestArchiveScanInterval(); scanErr != nil {
+				slog.Warn("log_ingest.archive_scan_interval 无法解析，定时扫描保持关闭", "error", scanErr)
+			} else if stopScan := manager.RunArchiveScan(scanInterval); stopScan != nil {
+				slog.Info("定时归档导入扫描已启用", "interval", scanInterval)
+				defer stopScan()
+			}
+			// 采集索引持久化耗时采样（FR-496 spec §3.3）：每分钟以 Debug 打印 P50/P95/Max 与
+			// 本窗口写入行数/字节数，供真机「60 源单次持久化 ≤50ms」验收直接取证
+			// （整本重写会让写入行数逼近索引总行数，读数一眼可辨）。
+			go sampleLogIndexPersistLatency(ingestCtx, manager)
+			// 保留策略驱动器：首轮立即执行（启动时正是「停机期间攒下的过期分区」最需要处理的时刻），
+			// 之后按 log_retention.sweep.interval 周期跑。与采集运行时共用同一 ctx 生命周期。
+			if logRetentionDriver != nil {
+				go logRetentionDriver.Run(ingestCtx)
+				slog.Info("日志冷热分层驱动器已启动", "interval", logRetentionDriver.Interval().String())
+			}
 			slog.Info("日志采集运行时已启动", "sources", len(sources), "vlReady", vlHTTPClient != nil)
 		}
 	}
@@ -1091,6 +1367,114 @@ func runWorker() {
 // localWSAddr 返回仅供本机终端回环桥与本机探针使用的 WebSocket 监听地址。
 func localWSAddr(port int) string {
 	return fmt.Sprintf("127.0.0.1:%d", port)
+}
+
+// sampleLogIndexPersistLatency 周期性打印采集索引（FR-496，本地 SQLite）的单次持久化耗时
+// P50/P95/Max 与本窗口的写入行数/删除行数/字节数。
+//
+// 为什么以 Info 打印：真机验收口径是「60 源规模下单次持久化 ≤50ms」，而现场默认日志级别是
+// Info——Debug 打点在真机上默认不落盘，验收人只能临时改级别才能读数，读数口径随人而变。
+// 升为 Info 后现场按默认配置即可取值，且节拍（1 分钟）与字段原样不变，仍可与旧格式
+// （整本重写 JSON）直接对比：写入行数是最直接的判据——回到整本重写时该值会逼近索引总行数，
+// 而增量实现只随本批次变更增长。采样环由 stateindex 维护（最近 4096 次，见 stateindex.sampleRing）。
+//
+// 三个 Delta 的窗口口径见 logIndexPersistWindow 的注释：它们与 P50/P95/Max 取自同一个窗口，
+// 都是「本窗口新增」。
+func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	// 首个窗口的基准取采样器启动时刻（它与采集循环同时启动，见 main 里的 `go manager.Start`）：
+	// 早于这一刻的持久化不属于任何一个窗口，不会被计入首条日志。
+	window := &logIndexPersistWindow{cursor: time.Now()}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			latency := manager.PersistLatency()
+			if latency.Count == 0 {
+				// 本窗口一次都没持久化（空闲），环里没有新增样本可结账——保持基准不动，
+				// 下一个窗口把这段时间的持久化一并结清。
+				continue
+			}
+			logIndexPersistSample(window, latency, manager.PersistSamples())
+		}
+	}
+}
+
+// logIndexPersistWindow 把 stateindex 采样环换算成「本窗口的增量」。
+//
+// 为什么不能拿「环和」相减当增量：采样环只保留最近 4096 次（提交单元）持久化，而采集循环每 250 ms 就可能触发
+// 一次 persist，真机 60 源实测约 2.5 次/s（环覆盖 ≈205 s），环在启动几分钟后就会写满。写满后
+// 「环和」是滑动窗口和，相邻两次读数相减得到的是「本窗口新增 − 同期被挤出的旧样本」——稳态下
+// 两者近似相等，差值趋近 0，会把整整一分钟的写入量抹掉；环未满时「环和」又等于自启动累计值，
+// 直接当成窗口量上报，就是把「开服至今的写入」当成「一分钟的写入」（FR-498 实测：删除因此被读成
+// 写入的 9 倍，而同口径真值约为删除 ≈ 0.5 × 写入）。两种形态都不是窗口增量。
+//
+// 所以这里按「样本身份」做差：窗口基准是一个时间游标，即上一次读数时环内最新样本的 StartedAt，
+// 每次只累计 StartedAt 严格晚于游标的样本。不管环满没满、有没有挤出旧样本，累计到的都恰好是
+// 「两次读数之间新增的那几次持久化」——这才叫窗口增量。
+//
+// 前提：单个窗口内新增的样本数少于环容量（4096，见 stateindex.sampleRing）。否则最早的那几次
+// 新增样本已被挤出环外，读数只能是下界。生产上采集循环节拍 250 ms、采样节拍 1 分钟，单窗口最多
+// 约 240 次持久化周期；切分（FR-498 P0）后一次周期会产生多个**提交单元**采样，60 源 × 60 行/s
+// 实测约 2 单元/周期 ⇒ 单窗口约 400 个样本，仍远小于 4096（环容量正是为此从 512 提到 4096）。
+type logIndexPersistWindow struct {
+	// cursor 是上一次读数时环内最新样本的 StartedAt。采样时间戳由 recordSample 在每次 Apply
+	// 开始时用 time.Now() 记录（带单调读数），同一进程内严格递增，可当环内样本的身份游标用。
+	cursor time.Time
+}
+
+// logIndexPersistDelta 是一个窗口内的写入增量，与同一条日志里的 P50/P95/Max 同窗口。
+type logIndexPersistDelta struct {
+	RowsWritten  int64
+	RowsDeleted  int64
+	BytesWritten int64
+}
+
+// advance 推进一个窗口并返回本窗口增量：只累计游标之后的样本，因此环未满（环和 = 自启动累计）
+// 与环已满（环和 = 滑动和）两种形态下都成立。
+func (w *logIndexPersistWindow) advance(samples []stateindex.Sample) logIndexPersistDelta {
+	var delta logIndexPersistDelta
+	var newest time.Time
+	for _, sample := range samples {
+		if sample.StartedAt.After(newest) {
+			newest = sample.StartedAt
+		}
+		if !sample.StartedAt.After(w.cursor) {
+			continue
+		}
+		delta.RowsWritten += int64(sample.RowsWritten)
+		delta.RowsDeleted += int64(sample.RowsDeleted)
+		delta.BytesWritten += sample.BytesWritten
+	}
+	// 游标只前进不后退：时钟回拨时若直接覆写，已结账的样本会被重复计入下一个窗口。
+	if newest.After(w.cursor) {
+		w.cursor = newest
+	}
+	return delta
+}
+
+// logIndexPersistSample 把一个窗口的读数落成一条采样日志：分位取整环（口径不变），三个 Delta
+// 取本窗口增量（见 logIndexPersistWindow）。
+//
+// 口径（FR-498 切分改造）：P50/P95/Max 是**单个提交单元**（一次 IMMEDIATE 事务）的耗时——
+// 验收线「单次持久化 ≤50ms」约束的就是它，一个周期按行数 + 耗时双上界切成若干个单元
+// （见 stateindex.CommitBudget）。`cycles` 是环内周期数、`samples` 是单元数，两者之比即
+// 「一周期切了几个单元」；`maxRows` 是环内单个单元的最大写+删行数（每事务行数有界的直读值）。
+func logIndexPersistSample(window *logIndexPersistWindow, latency stateindex.Latency, samples []stateindex.Sample) {
+	delta := window.advance(samples)
+	slog.Info("采集索引持久化耗时采样",
+		"samples", latency.Count,
+		"cycles", latency.Cycles,
+		"p50ms", latency.P50.Milliseconds(),
+		"p95ms", latency.P95.Milliseconds(),
+		"maxMs", latency.Max.Milliseconds(),
+		"maxRows", latency.MaxRows,
+		"rowsWrittenDelta", delta.RowsWritten,
+		"rowsDeletedDelta", delta.RowsDeleted,
+		"bytesWrittenDelta", delta.BytesWritten,
+	)
 }
 
 // sampleLogBudget 周期性采样受管 VL 的 RSS 与数据盘预算并暴露降级（FR-476 / 契约 §6.6）。

@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -62,7 +63,40 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 	// 重启前等待上一代 wrapper/Java 完全退出，避免快速 stop→start 时旧进程仍占监听端口/socket
 	// 导致新进程端口冲突崩溃。不持 d.mu，以免长时间阻塞 State()/SendCommand 等查询；
 	// pidDir/UUID 构造后不可变，无锁读取安全；并发启动已由 Manager 的 STARTING 状态串行化。
-	daemon.WaitForPriorExit(d.pidDir, d.spec.UUID)
+	//
+	// 预算耗尽即**拒绝启动**（旧实现是"仍继续启动"）：Stop 只下发停止帧、不等待进程退出，
+	// restartLocked 随即调用本函数；若此时旧进程仍在优雅关服（强杀兜底默认 30s，长于旧等待上限
+	// 15s），继续启动就会拉起第二个 wrapper 与第二个 Java——新进程抢端口秒崩、旧进程继续用旧配置
+	// 跑满兜底时长，而 Manager.Restart 早已返回成功（实例 153 / beacon-main 实证的静默假成功）。
+	// 此处显式失败，由 startLocked 置 CRASHED 并透出原因：宁可保留仍在服务的旧进程并报失败，
+	// 也不新旧并存。
+	//
+	// ctx 必须传下去（复审 P1-5）：等待预算可达分钟级，而调用方可能提前取消/超时。取消时返回
+	// 可重试错误（daemon.ErrStartWaitCanceled）且**保持原状态**——「还没来得及判定」不是崩溃。
+	if err := daemon.WaitForPriorExitContext(ctx, d.pidDir, d.spec.UUID, daemon.PriorExitBudget(d.spec.GracefulStopTimeoutSeconds)); err != nil {
+		if errors.Is(err, daemon.ErrStartWaitCanceled) {
+			return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, err)
+		}
+		d.mu.Lock()
+		d.state = StateCrashed
+		d.mu.Unlock()
+		return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, err)
+	}
+
+	// 纵深防御：上面的等待只信 PID 文件，而记录可能缺失/损坏（旧 wrapper 被强杀未及清理、
+	// 记录被误删），此时等待会误判「上一代已清理」直接放行。socket 是实例级唯一地址，
+	// 能拨通就说明确有 wrapper 在托管——拒绝启动，宁可本次失败也不新旧并存。
+	served, probeErr := daemon.SocketServedContext(ctx, d.pidDir, d.spec.UUID)
+	if probeErr != nil {
+		// 取消 ⇒ 服务状态未知：绝不能按「无人监听」放行（那正好退化成双开）。
+		return fmt.Errorf("实例 %s 启动中止: %w", d.spec.UUID, probeErr)
+	}
+	if served {
+		d.mu.Lock()
+		d.state = StateCrashed
+		d.mu.Unlock()
+		return fmt.Errorf("实例 %s 启动中止：检测到已有 wrapper 在托管该实例（socket 仍可拨通），拒绝新旧并存", d.spec.UUID)
+	}
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -257,6 +291,16 @@ func (d *daemonStrategy) Stop() error {
 	d.state = StateStopping
 	conn := d.conn
 	d.mu.Unlock()
+
+	// 停止是人工/正常的终结意图，必须先于 stop 帧下发「禁用自动重启」：wrapper 的自动重启判定
+	// 基于启动期快照的 cfg.AutoRestart 与粘性开关，若不禁用，Java 先于 stop 生效而退出时它仍会
+	// 按策略把 Java 拉起来——真机现象：手动 stop 之后 daemon 又把进程自动拉起过一次（短暂启动
+	// 后退出）。禁用是粘性的，但只作用于当前 wrapper；下次启动会 spawn 全新 wrapper
+	// （autoRestartOff 默认 false），不污染后续运行。
+	// 失败不阻断停止：禁用只是加固，stop 帧本身仍有既有的拨号兜底与强杀链路。
+	if err := d.DisableAutoRestart(); err != nil {
+		slog.Warn("下发禁用自动重启失败，继续执行停止", "instanceId", d.spec.UUID, "error", err)
+	}
 
 	// 常态：控制连接已就绪，下发 stop 控制帧让 wrapper 优雅关服（保存世界 + 输出停止日志）。
 	if conn != nil {

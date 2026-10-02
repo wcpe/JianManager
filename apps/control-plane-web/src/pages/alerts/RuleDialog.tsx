@@ -253,6 +253,7 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
                     <SelectItem value="cpu">{t('alerts.cpu')}</SelectItem>
                     <SelectItem value="memory">{t('alerts.memory')}</SelectItem>
                     <SelectItem value="disk">{t('alerts.disk')}</SelectItem>
+                    <SelectItem value="iowait">{t('alerts.iowait')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

@@ -14,7 +14,10 @@ import (
 
 // NodeMetrics 节点指标。
 type NodeMetrics struct {
-	CPUUsage         float32
+	CPUUsage float32
+	// IOWait 是 CPU 处于 IO 等待的占比（0..1，FR-485）。
+	// 只看 CPUUsage 会把 IO 瓶颈看成「CPU 不满」，本机事故中 iowait 曾达 90%。
+	IOWait           float32
 	MemoryUsage      float32
 	DiskUsage        float32
 	MemoryUsedMB     int64
@@ -40,6 +43,18 @@ func NewCollector(interval time.Duration) *Collector {
 	}
 }
 
+// IOWaitRatio 把 cpu.Times 各态归一为「IO 等待占比」（0..1）。
+//
+// 抽成纯函数以便单测：真实机器上 iowait 常在 0 附近，
+// 直接对 Collect 做「大于零」断言会假红，而对本函数可用构造输入精确验证。
+func IOWaitRatio(t cpu.TimesStat) float32 {
+	total := t.User + t.System + t.Idle + t.Nice + t.Iowait + t.Irq + t.Softirq + t.Steal
+	if total <= 0 {
+		return 0
+	}
+	return float32(t.Iowait / total)
+}
+
 // Collect 采集当前节点指标。
 func (c *Collector) Collect() NodeMetrics {
 	ctx := context.Background()
@@ -52,6 +67,17 @@ func (c *Collector) Collect() NodeMetrics {
 		metrics.CPUUsage = float32(percents[0] / 100.0)
 	}
 
+	// IO 等待占比（FR-485）：取自 cpu.Times 的 Iowait，按各态总量归一。
+	if times, err := cpu.TimesWithContext(ctx, false); err == nil && len(times) > 0 {
+		metrics.IOWait = IOWaitRatio(times[0])
+	}
+	if times, err := cpu.TimesWithContext(ctx, false); err == nil && len(times) > 0 {
+		t := times[0]
+		total := t.User + t.System + t.Idle + t.Nice + t.Iowait + t.Irq + t.Softirq + t.Steal
+		if total > 0 {
+			metrics.IOWait = float32(t.Iowait / total)
+		}
+	}
 	// 内存使用率
 	if vmem, err := mem.VirtualMemoryWithContext(ctx); err == nil {
 		metrics.MemoryUsage = float32(vmem.UsedPercent / 100.0)

@@ -398,15 +398,65 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 			http.get(API('/logs/federation/tail'), ({ request }) => {
 				expect(new URL(request.url).searchParams.get('mode')).toBe('FOLLOW_LIVE')
 				return HttpResponse.json({
-					items: [{ event_id: 'live-1', log_source_id: 'node:1', message: 'federation-live-tail', event_time_utc: '2026-09-23T00:00:00Z' }],
+					// 默认时间范围为有界窗口（最近 24h）：夹具事件时间必须落在窗口内，
+					// 否则会被（正确地）过滤掉而看不到实时事件——这正是有界窗口的预期行为。
+					items: [{ event_id: 'live-1', log_source_id: 'node:1', message: 'federation-live-tail', event_time_utc: new Date().toISOString() }],
 					coverage: { complete: true, targets: [], enumeration_state: 'OPEN' }, exhausted: false,
 				})
 			}),
 		)
 		const user = userEvent.setup()
 		renderWithProviders(<LogsPage />)
+		// 默认时间窗为 24h（2026-09-30 性能依据）；固定选择「全部时间」，
+		// 让本用例只验证「实时跟随」机制本身，不随默认窗口漂移。
+		// 时间范围是 Select（combobox），不是按钮。
+		HTMLElement.prototype.hasPointerCapture ??= () => false
+		HTMLElement.prototype.setPointerCapture ??= () => {}
+		HTMLElement.prototype.releasePointerCapture ??= () => {}
+		HTMLElement.prototype.scrollIntoView ??= () => {}
+		await user.click(screen.getAllByRole('combobox')[0])
+		await user.click(await screen.findByRole('option', { name: '全部时间' }))
 		await user.click(await screen.findByRole('button', { name: '实时跟随' }))
 		expect(await screen.findByText('federation-live-tail')).toBeInTheDocument()
+	})
+
+	// 回归（P2-9）：跟随态必须**不下发 `to` 上界**。
+	//
+	// 旧实现把 `to` 钉在浏览器 now：Worker/实例时钟略快、或落盘时区未校正（+8h）产生的
+	// 「未来时间戳」事件会被后端按 [from,to] 排掉 → 实时跟随永远空（用户观感「不实时」）。
+	// 本用例的事件时间戳 = now + 8h（未校正时区偏移的实测量级），并让假后端忠实复刻
+	// 「to 非空即按上界过滤」的窗口语义：改回 `to=now` 即转红。
+	it('实时跟随不下发 to 上界：时钟偏移的未来时间戳事件仍可见（P2-9）', async () => {
+		loginMockUser()
+		const skewedItem = {
+			event_id: 'live-skew',
+			log_source_id: 'node:1',
+			message: 'federation-skewed-live',
+			event_time_utc: new Date(Date.now() + 8 * 3600_000).toISOString(),
+		}
+		server.use(
+			http.get(API('/logs/federation'), () => HttpResponse.json({
+				sourceTag: 'federated', items: [], exhausted: true,
+				coverage: { complete: true, targets: [], enumeration_state: 'EXHAUSTED' },
+			})),
+			http.get(API('/logs/federation/tail'), ({ request }) => {
+				const params = new URL(request.url).searchParams
+				expect(params.get('mode')).toBe('FOLLOW_LIVE')
+				expect(params.get('from')).toBeTruthy()
+				const to = params.get('to')
+				// 后端窗口语义：[from, to]；上界存在时，晚于 to 的事件必须被排除。
+				const items = to && new Date(skewedItem.event_time_utc) > new Date(to) ? [] : [skewedItem]
+				return HttpResponse.json({
+					items,
+					coverage: { complete: true, targets: [], enumeration_state: 'OPEN' }, exhausted: false,
+				})
+			}),
+		)
+		const user = userEvent.setup()
+		renderWithProviders(<LogsPage />)
+		// 保持默认「最近 24 小时」窗口：本用例只验证跟随态的上界语义，不触碰时间范围选择器。
+		await user.click(await screen.findByRole('button', { name: '实时跟随' }))
+		expect(await screen.findByText('federation-skewed-live')).toBeInTheDocument()
 	})
 
 	it('⑦ gap + nextCursor=null → 缺口态横幅 + 游标结束提示（不等于历史完整）', async () => {

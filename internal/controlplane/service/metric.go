@@ -268,6 +268,8 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 	}
 	samples = append(samples,
 		nodeSample(model.MetricNodeCPUPct, "pct", ptr(float64(req.CpuUsage)*100)),
+		// iowait（FR-485）：与 cpu_pct 同量纲（0..100），老 Worker 不上报即为 0。
+		nodeSample(model.MetricNodeIOWait, "pct", ptr(float64(req.Iowait)*100)),
 		nodeSample(model.MetricNodeMemUsed, "bytes", ptr(float64(req.MemoryUsedMb)*1024*1024)),
 		nodeSample(model.MetricNodeDiskUsed, "bytes", ptr(float64(req.DiskUsedMb)*1024*1024)),
 		nodeSample(model.MetricLogIngestHealthy, "bool", ptr(boolToFloat(req.LogIngestHealthy))),

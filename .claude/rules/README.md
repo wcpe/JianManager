@@ -9,7 +9,7 @@
 | [gate-prd.md](gate-prd.md) | PRD → SDD 阶段门禁 |
 | [gate-sdd.md](gate-sdd.md) | SDD → Feature 开发门禁 |
 | [gate-api.md](gate-api.md) | API Spec → 编码门禁 |
-| [gate-merge.md](gate-merge.md) | 合并/发版门禁（含红线：基线 CI 未全绿禁止创建发版 commit 与 tag） |
+| [gate-merge.md](gate-merge.md) | 合并/发版门禁（含红线：基线 CI 未全绿禁止创建发版 commit 与 tag；长临界区审计清单；部署后复验） |
 
 ## 持续规则
 
@@ -24,6 +24,6 @@
 | [git-commit.md](git-commit.md) | Git 提交 / 分支 / 合并规范（单主干 master，禁直推，rebase+ff 优先） |
 | [scope-discipline.md](scope-discipline.md) | 范围纪律，不做 spec 之外的事 |
 | [static-analysis.md](static-analysis.md) | 静态分析和 lint 规范 |
-| [testing-and-quality.md](testing-and-quality.md) | 测试和质量要求 |
+| [testing-and-quality.md](testing-and-quality.md) | 测试和质量要求（含状态 / 迁移类变更必须验「迁移 → 首启 → 停 → 二启 → 三启」+ 脏环境） |
 | [ui-modals.md](ui-modals.md) | 模态框纪律：禁内联展开表单，强制内容自适应模态 |
 | [versioning.md](versioning.md) | 版本号规范：开发版 `X.Y.Z-dev` 指向下一目标版，禁漂移（见 ADR-065） |

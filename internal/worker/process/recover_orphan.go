@@ -14,13 +14,55 @@ import (
 // 旧行为只删 PID 文件，活着的 wrapper/Java 从此不可发现（孤儿永久化，真机事故：
 // 残留 java 占 Paper session.lock 致实例再也起不来）。现改为：
 // 有界重试（期间保留 PID 文件）→ 耗尽后按 PID 记录强杀孤儿进程树 → 死透才清理。
+//
+// FR-455①/ADR-093 修订：强杀只对**真孤儿**（wrapper 已确证死亡、仅剩 Java）生效；
+// 重试耗尽但 wrapper 仍存活（确属本实例、仅 socket 瞬时不可达）一律只告警 + 落审计、保留 PID 文件。
+// 且任何强杀前必须通过归属复核 verifyProcessOwnership，复核不过同样只告警不杀。
 
-// recoverRetryBackoff reconnect 失败的有界重试间隔（递增，覆盖分钟级瞬时故障，FR-455①）。
+// DefaultRecoverRetryBackoff reconnect 失败的有界重试间隔默认序列（递增，覆盖分钟级瞬时故障，FR-455①）。
 // 旧序列仅 {1s,2s,4s}≈7s：交接窗口的 socket 未就绪/资源紧张常是瞬时的，多等一轮即可接管，
 // 无需牺牲服务器。扩为 1s→2s→4s→8s→16s→32s→64s（≈127s），显著降低「拨不通即强杀」的误杀面。
-var recoverRetryBackoff = []time.Duration{
+//
+// 导出以便 worker 配置层（internal/worker/config.go）引用为默认口径的单一真源，
+// 并可经配置 recover.retry_backoff / Manager.SetRecoverRetryBackoff 注入（测试用小值）。
+var DefaultRecoverRetryBackoff = []time.Duration{
 	time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
 	16 * time.Second, 32 * time.Second, 64 * time.Second,
+}
+
+// SetRecoverRetryBackoff 注入接管 reconnect 的重试间隔序列（FR-455①，worker main 按配置装配）。
+//
+// 空/nil 表示回退默认序列；非正项被丢弃（它们只会造成无意义的重试），全部非法时同样回退默认。
+// 入口做防御性拷贝，避免调用方后续改写切片影响运行期重试节奏。
+func (m *Manager) SetRecoverRetryBackoff(seq []time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.recoverBackoff = normalizeRecoverBackoff(seq)
+}
+
+// recoverRetrySequence 返回当前生效的重试间隔序列（配置注入优先，缺省即默认序列）。
+func (m *Manager) recoverRetrySequence() []time.Duration {
+	m.mu.RLock()
+	seq := m.recoverBackoff
+	m.mu.RUnlock()
+	if len(seq) > 0 {
+		return seq
+	}
+	return DefaultRecoverRetryBackoff
+}
+
+// normalizeRecoverBackoff 过滤序列中的非正项并拷贝；无有效项返回 nil（调用方回退默认序列）。
+func normalizeRecoverBackoff(seq []time.Duration) []time.Duration {
+	out := make([]time.Duration, 0, len(seq))
+	for _, d := range seq {
+		if d > 0 {
+			out = append(out, d)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // errOrphanedWrapperGone 标记「wrapper 已死、仅剩 Java 孤儿」的接管场景：
@@ -68,16 +110,17 @@ func (m *Manager) retrySleep(d time.Duration) {
 }
 
 // reconnectWithRetry 对存活 wrapper 做有界重试的 reconnect 拨号（FR-325）。
-// 首拨失败后按 recoverRetryBackoff 递增间隔重试；期间不动 PID 文件
-// （保证实例在后续扫描中仍可发现）。全部失败返回最后一次错误。
+// 首拨失败后按当前生效的重试序列（配置注入优先，缺省 DefaultRecoverRetryBackoff）递增间隔重试；
+// 期间不动 PID 文件（保证实例在后续扫描中仍可发现）。全部失败返回最后一次错误。
 func (m *Manager) reconnectWithRetry(strategy *daemonStrategy, addr, instanceUUID string) error {
+	backoffs := m.recoverRetrySequence()
 	err := m.dialWrapper(strategy, addr)
 	if err == nil {
 		return nil
 	}
-	for i, backoff := range recoverRetryBackoff {
+	for i, backoff := range backoffs {
 		slog.Warn("reconnect wrapper 失败，保留 PID 文件稍后重试",
-			"instanceId", instanceUUID, "attempt", i+1, "maxRetries", len(recoverRetryBackoff),
+			"instanceId", instanceUUID, "attempt", i+1, "maxRetries", len(backoffs),
 			"backoff", backoff, "error", err)
 		m.retrySleep(backoff)
 		if err = m.dialWrapper(strategy, addr); err == nil {

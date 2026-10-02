@@ -46,7 +46,43 @@ const (
 	// FieldEncodingSanitized 标记正文含非法 UTF-8，已被替换为 U+FFFD。
 	// 置位意味着**正文与源文件原始字节不一致**，调用方不得当作原文一致。
 	FieldEncodingSanitized = "encoding_sanitized"
+	// FieldSourceCharset 标记本事件的正文是由非 UTF-8 字符集（GBK/GB18030）解码而来。
+	// 只在确实发生转码时写入：既能证明「这行不是 UTF-8 原文」，也让历史数据的重写范围
+	// 可以直接按该字段筛出来（见 docs/specs/worker-log-normalizer/spec.md 的字符集一节）。
+	FieldSourceCharset = "source_charset"
+	// FieldEventTimeZone 记录解释 [HH:MM:SS] 所用的时区名（缺陷 C）。
+	// 只在生效时区不是 UTC 时写入：既有 UTC 源的事件零变化，而按源时区换算过的事件
+	// 自带可审计依据（排查历史时间轴偏移时可据此判断某段数据用的哪个时区）。
+	FieldEventTimeZone = "event_time_zone"
+	// FieldMultilineUnclosed 标记该多行事件是在**非自然边界**上被强制闭合的
+	// （当前唯一取值是跨 live 文件轮转），其堆栈/续行可能被截在另一段文件里。
+	//
+	// 为什么必须显式留下：轮转闭合原先走 closeStatus，而只要事件头带时间戳或 level 就返回
+	// OK——「打一半的堆栈」因此被静默标成完整事件，切分点从数据里彻底不可见。
+	// 置位意味着**本事件正文可能不完整，且其续行在紧随其后的事件里**。
+	FieldMultilineUnclosed = "multiline_unclosed"
 )
+
+// UnclosedReasonCrossRotation 是 FieldMultilineUnclosed 的取值：事件在 live 文件轮转处被强制闭合。
+// 轮转后新文件里的续行（若有）会形成紧随其后的一条独立事件。
+const UnclosedReasonCrossRotation = "cross_rotation"
+
+// UnclosedReasonIdle 是 FieldMultilineUnclosed 的取值：事件在**缓冲区闲置超时**时被强制闭合
+// （见 DefaultUnclosedTimeout）。
+//
+// 为什么必须有一条超时出路（2026-10-02 补，缺陷 B）：未闭合缓冲只在「下一行到达」或「轮转/停止」
+// 时才被推进。而真实日志源会长时间静默——一条尾部堆栈若始终等不到下一行，durable 就永远停在
+// 它之前（read 已越过去）。此时若文件发生轮转，恢复责任靠 durable 推进来覆盖已读前缀，
+// 这段区间便既没被 cover、也没有事件，轮转恢复会卡在「分段不可读」上。
+// 超时强制闭合把这段悬挂记录**显式**落成一条 PARTIAL 事件并推进 durable，链路重新可推进。
+const UnclosedReasonIdle = "unclosed"
+
+// DefaultUnclosedTimeout 是未闭合多行缓冲的默认强制闭合时限。
+//
+// 取 5s 的依据：MC 日志的多行堆栈是**连续写出**的（同一 tick 内），行间间隔远小于秒级；
+// 而「源静默」在生产上通常是数十秒到数小时。5s 因此远大于任何真实的续行间隔（不会把
+// 正常堆栈切开），又远小于静默时长（不会让悬挂记录长期挡住 durable）。可用配置覆盖。
+const DefaultUnclosedTimeout = 5 * time.Second
 
 // Limits 多行缓冲上限。零值表示不限制。
 type Limits struct {
@@ -65,6 +101,9 @@ type Options struct {
 	IngestTimeUTC string
 	// Location 解释 [HH:MM:SS] 的时区；默认 UTC。
 	Location *time.Location
+	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串为 auto。
+	// 判定与回退规则见 charset.go；非法取值应在登记阶段被拒（此处兜底为 auto）。
+	Charset string
 	// BaseTime 无日期时刻的锚点（跨午夜用）；零值在解析时取 now。
 	BaseTime time.Time
 	// Limits 多行上限。
@@ -109,6 +148,8 @@ type pending struct {
 	startClock time.Time
 	hasClock   bool
 	sawHeader  bool // 是否解析到事件头（时间/level）
+	// charset 事件头所在行的生效字符集（非 UTF-8 时写入 source_charset 字段）。
+	charset Charset
 }
 
 type Normalizer struct {
@@ -117,6 +158,8 @@ type Normalizer struct {
 	loc    *time.Location
 	ingest string
 	base   time.Time
+	// charset 按源字符集解码状态机（缺陷 B）；nil 安全，等价于 auto。
+	charset *charsetDecoder
 
 	cur      *pending
 	events   []logtypes.Event
@@ -142,11 +185,12 @@ func New(opts Options) *Normalizer {
 	}
 	base := opts.BaseTime
 	return &Normalizer{
-		opts:   opts,
-		src:    src,
-		loc:    loc,
-		ingest: ingest,
-		base:   base,
+		opts:    opts,
+		src:     src,
+		loc:     loc,
+		ingest:  ingest,
+		base:    base,
+		charset: newCharsetDecoder(opts.Charset),
 	}
 }
 
@@ -176,6 +220,9 @@ func (n *Normalizer) Feed(line string) []logtypes.Event {
 // 单个行尾 '\r'：偏移由调用方的 lineSpan 决定（不受正文长度影响），LF 日志不受影响。
 func (n *Normalizer) FeedAt(line string, at time.Time) []logtypes.Event {
 	line = strings.TrimSuffix(line, "\r")
+	// 字符集收口（缺陷 B）：所有输入路径（tailer / gzip 归档 / 受管 Raw / stdio）都经过这里，
+	// 在解析事件头之前完成解码，使时间戳与 level 的解析同样作用于解码后的文本。
+	line, lineCharset := n.charset.decode(line)
 	n.stats.LineCount++
 	lineNo := n.lineIdx
 	n.lineIdx++
@@ -209,11 +256,11 @@ func (n *Normalizer) FeedAt(line string, at time.Time) []logtypes.Event {
 			out = append(out, n.emit(n.cur, n.closeStatus(n.cur)))
 			n.cur = nil
 		}
-		n.cur = n.openFrom(line, lineNo, pl, at)
+		n.cur = n.openFrom(line, lineNo, pl, at, lineCharset)
 	case pl.kind == kindContinuation:
 		// 堆栈 / Caused by / 异常 FQCN / 缩进行并入当前事件。
 		if n.cur == nil {
-			n.cur = n.openFrom(line, lineNo, pl, at)
+			n.cur = n.openFrom(line, lineNo, pl, at, lineCharset)
 			n.cur.sawHeader = false
 		} else {
 			n.appendToCur(line, lineNo, pl)
@@ -233,6 +280,7 @@ func (n *Normalizer) FeedAt(line string, at time.Time) []logtypes.Event {
 			time.Time{},
 			false,
 			StatusRaw,
+			lineCharset,
 		)
 		if n.opts.RetainEvents {
 			n.events = append(n.events, raw)
@@ -293,7 +341,7 @@ func (n *Normalizer) exceedsLimit(line string) bool {
 	return false
 }
 
-func (n *Normalizer) openFrom(line string, lineNo int, pl parsedLine, at time.Time) *pending {
+func (n *Normalizer) openFrom(line string, lineNo int, pl parsedLine, at time.Time, charset Charset) *pending {
 	p := &pending{
 		startLine: lineNo,
 		endLine:   lineNo,
@@ -304,6 +352,7 @@ func (n *Normalizer) openFrom(line string, lineNo int, pl parsedLine, at time.Ti
 		eventTime: pl.eventTime,
 		hasTime:   pl.hasTime,
 		sawHeader: pl.kind == kindEventStart || pl.hasTime || pl.level != "",
+		charset:   charset,
 	}
 	switch {
 	case pl.hasTime:
@@ -384,6 +433,33 @@ func (n *Normalizer) FlushComplete() (logtypes.Event, bool) {
 	return ev, true
 }
 
+// FlushUnclosed closes the pending multiline event at a boundary that is **not** a real
+// event boundary (today: live-file rotation), marking that explicitly and audibly.
+//
+// 为什么不能复用 FlushComplete：sealed gzip 的 EOF 是**真**事件边界（末条事件确实完整），
+// 而 live 文件轮转不是——堆栈可能正好被打断在两段文件之间，后一半落在新文件里并被记成
+// 一条独立事件。用 closeStatus 会让这种半条事件拿到 parse_status=OK，切分点不可见。
+//
+// 判据 len(p.lines) > 1：只有已经吃进续行（\tat / Caused by / 缩进）的缓冲才可能被截断；
+// 单行、以换行结束的记录本身就是完整的（轮转只是恰好发生在两条记录之间），标记它只会
+// 在**每次**轮转上制造误报，把真正被切开的堆栈淹掉。
+func (n *Normalizer) FlushUnclosed(reason string) (logtypes.Event, bool) {
+	if n.cur == nil {
+		return logtypes.Event{}, false
+	}
+	p := n.cur
+	// flushStatus 而非 closeStatus：多行未闭合时显式给出 PARTIAL，不静默伪装完整。
+	ev := n.emit(p, n.flushStatus(p))
+	if len(p.lines) > 1 {
+		if ev.Fields == nil {
+			ev.Fields = map[string]string{}
+		}
+		ev.Fields[FieldMultilineUnclosed] = reason
+	}
+	n.cur = nil
+	return ev, true
+}
+
 // DiscardPartial 丢弃缓冲中的半条事件（不产生事件）；返回丢弃的原始行数。
 // 行数仍计入 Stats.LineCount，事件数不增加。
 func (n *Normalizer) DiscardPartial() (int, bool) {
@@ -414,7 +490,7 @@ func (n *Normalizer) Events() []logtypes.Event {
 }
 
 func (n *Normalizer) emit(p *pending, st ParseStatus) logtypes.Event {
-	ev := n.buildEvent(p.lines, p.startLine, p.endLine, p.level, p.thread, p.eventTime, p.hasTime, st)
+	ev := n.buildEvent(p.lines, p.startLine, p.endLine, p.level, p.thread, p.eventTime, p.hasTime, st, p.charset)
 	if n.opts.RetainEvents {
 		n.events = append(n.events, ev)
 	}
@@ -439,6 +515,7 @@ func (n *Normalizer) buildEvent(
 	eventTime time.Time,
 	hasTime bool,
 	st ParseStatus,
+	charset Charset,
 ) logtypes.Event {
 	// 损坏编码（非法 UTF-8）必须在此处净化，而不是留给投递序列化。
 	//
@@ -468,6 +545,15 @@ func (n *Normalizer) buildEvent(
 	// 编码被净化时留下可审计标记（正文已改变，不得当作原文一致）。
 	if message != joinLines(lines) {
 		ev.Fields[FieldEncodingSanitized] = "true"
+	}
+	// 由 GBK/GB18030 解码而来的事件留下可审计标记：既证明正文不是 UTF-8 原文，
+	// 也让「历史数据重写」可以直接按该字段定位受影响的事件。
+	if charset != "" && charset != CharsetUTF8 {
+		ev.Fields[FieldSourceCharset] = string(charset)
+	}
+	// 时区换算依据（缺陷 C）：只在非 UTC 时写入，保证未配置时区的源字节级零变化。
+	if hasTime && n.loc != nil && n.loc != time.UTC {
+		ev.Fields[FieldEventTimeZone] = n.loc.String()
 	}
 	if thread != "" {
 		ev.Fields[FieldThread] = thread

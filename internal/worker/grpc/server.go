@@ -499,6 +499,7 @@ func (s *Server) GetNodeMetrics(ctx context.Context, req *workerpb.GetNodeMetric
 	m := s.collector.Collect()
 	return &workerpb.GetNodeMetricsResponse{
 		CpuUsage:      m.CPUUsage,
+		Iowait:        m.IOWait, // FR-485：IO 等待占比，与 cpu_usage 同量纲（0..1）
 		MemoryUsage:   m.MemoryUsage,
 		DiskUsage:     m.DiskUsage,
 		MemoryUsedMb:  m.MemoryUsedMB,

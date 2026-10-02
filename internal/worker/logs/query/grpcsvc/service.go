@@ -3,10 +3,12 @@ package grpcsvc
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
@@ -67,7 +69,80 @@ type CutoverReadinessProvider interface {
 	Readiness() (ledgerReady bool, cutoff time.Time, reasons []string)
 }
 
-type IngestGapResolver interface{ ResolveCoveredGaps() error }
+type IngestGapResolver interface {
+	// ResolveCoveredGaps 是整节点自动路径。ctx 是调用方（HTTP/RPC）的请求上下文：超时/断开
+	// 必须让服务端**真正停止**工作并返回明确错误——解算会扫全源投影（生产实测可跑 30 分钟），
+	// 不可取消就等于「调用方早已放弃、服务端还在为没人要的响应扫盘」。
+	ResolveCoveredGaps(ctx context.Context) error
+	// ResolveCoveredGapsForSource 是显式人工确认（**放弃裁定**）路径：只解指名源的缺口。
+	// operator 是做出裁定的认证主体，为空一律拒绝（放弃不可无痕）。
+	// ctx 语义同上：取消即不得落盘（放弃裁定必须来自一次完成的显式请求）。
+	ResolveCoveredGapsForSource(ctx context.Context, storageNamespace, operator string) error
+}
+
+// IngestPositionGap 是「已放弃位置」查询面 DTO（与 logcoord 的 coverage 语义无关）。
+type IngestPositionGap struct {
+	StorageNamespace string
+	From             uint64
+	To               uint64
+	ReasonCode       string
+	Operator         string
+	AtUTC            string
+}
+
+// IngestAbandonmentProvider 提供「已被人工裁定永久丢失」的源位置区间。
+//
+// 与 logcoord 的分区可查询性**分开**：本接口只回答「分区内部哪些位置永久缺失」，
+// 不参与、也不修改 coverage 的状态判定。缺了它，下游查询会把"永久丢失"当成"本来就没有"，
+// 即静默跳过。
+type IngestAbandonmentProvider interface {
+	AbandonedRanges(targetIDs []string) []IngestPositionGap
+}
+
+// IngestAbandonmentFunc 把普通函数适配成 IngestAbandonmentProvider
+// （与既有 CutoverReadinessFunc 同一模式：让 apps/worker 做跨包适配，服务层不反向依赖 ingest）。
+type IngestAbandonmentFunc func(targetIDs []string) []IngestPositionGap
+
+// AbandonedRanges 实现 IngestAbandonmentProvider。
+func (f IngestAbandonmentFunc) AbandonedRanges(targetIDs []string) []IngestPositionGap {
+	if f == nil {
+		return nil
+	}
+	return f(targetIDs)
+}
+
+// IngestArchiveImporter 是「手动触发归档导入」的提供者（由 ingest.Manager 满足）。
+type IngestArchiveImporter interface {
+	// ImportArchivesNow 扫描并导入待导入归档，返回 (扫描数, 导入数)。operator 为空必须拒绝。
+	ImportArchivesNow(storageNamespace, operator string) (int, int, error)
+}
+
+// OperatorMetadataKey 是承载「操作人认证主体」的 incoming gRPC metadata 键。//
+// 为什么用 metadata 而不是给 proto 加字段：本路径的操作人来自**调用方的认证上下文**，
+// 而不是请求体（请求体可被任意伪造，PUT 一个字段就把责任推给别人）。用 metadata 让
+// 「谁在调用」由传输层携带，且**无需 proto 变更与代码生成**，CP 侧只要在发起该 RPC 时
+// 带上这个头即可生效；未携带时本层**拒绝**执行（见 LogResolveIngestGaps）。
+//
+// 契约点（CP 侧需配合）：发起 LogResolveIngestGaps 且带 storage_namespace 时，
+// 必须设置本头为可审计的操作人标识（如控制台登录名 / API 密钥主体）。
+const OperatorMetadataKey = "x-jm-operator"
+
+// operatorFromContext 取出调用方认证主体；取不到返回空串（由调用方负责拒绝）。
+func operatorFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	for _, v := range md.Get(OperatorMetadataKey) {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
 
 type CutoverReadinessFunc func() (bool, time.Time, []string)
 
@@ -99,6 +174,10 @@ type Service struct {
 	migrator    PartitionMigrator
 	cutover     CutoverReadinessProvider
 	gapResolver IngestGapResolver
+	// abandonments 提供「已放弃位置」标记（可空：未接线时不返回该标记，而不是编造空成功）。
+	abandonments IngestAbandonmentProvider
+	// archiveImporter 提供手动归档导入入口（可空 = 未接线，返回明确不支持）。
+	archiveImporter IngestArchiveImporter
 }
 
 // New 构造已启用的日志 RPC 服务层。
@@ -125,6 +204,35 @@ func (s *Service) SetRuntimeCatalog(cat *catalog.Catalog)                { s.cat
 func (s *Service) SetPartitionMigrator(migrator PartitionMigrator)       { s.migrator = migrator }
 func (s *Service) SetCutoverReadiness(provider CutoverReadinessProvider) { s.cutover = provider }
 func (s *Service) SetIngestGapResolver(resolver IngestGapResolver)       { s.gapResolver = resolver }
+func (s *Service) SetIngestAbandonmentProvider(p IngestAbandonmentProvider) {
+	s.abandonments = p
+}
+
+// SetIngestArchiveImporter 注入手动归档导入入口。
+func (s *Service) SetIngestArchiveImporter(i IngestArchiveImporter) { s.archiveImporter = i }
+
+// LogImportArchives 手动触发归档导入扫描（操作人必需，审计留痕）。
+func (s *Service) LogImportArchives(ctx context.Context, req *workerpb.LogImportArchivesRequest) (*workerpb.LogTaskResponse, error) {
+	if s.archiveImporter == nil {
+		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
+			Error: unsupportedErr("ingest archive import is not configured")}, nil
+	}
+	// 与放弃裁定同一口径：状态改变类动作必须带操作人，取不到即拒绝（不可无痕）。
+	operator := operatorFromContext(ctx)
+	if operator == "" {
+		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
+			Error: unsupportedErr(fmt.Sprintf(
+				"手动导入归档需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))}, nil
+	}
+	scanned, imported, err := s.archiveImporter.ImportArchivesNow(strings.TrimSpace(req.GetStorageNamespace()), operator)
+	if err != nil {
+		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
+			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_ERROR_UNSPECIFIED, Message: err.Error()}}, nil
+	}
+	slog.Info("已执行手动归档导入", "operator", operator,
+		"storageNamespace", req.GetStorageNamespace(), "scanned", scanned, "imported", imported)
+	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
+}
 
 // Enabled 报告服务是否启用。
 func (s *Service) Enabled() bool { return s.enabled && s.query != nil }
@@ -228,7 +336,40 @@ func (s *Service) LogSearch(ctx context.Context, req *workerpb.LogSearchRequest)
 	out := grpcmap.SearchResponseToProto(resp)
 	// 二次回填：确保 proto 侧 targets 携带 planner view 的 closed_visible_seq。
 	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	s.fillIngestPositionGaps(out, qreq.AuthorizedTargets)
 	return out, nil
+}
+
+// fillIngestPositionGaps 回填「已放弃位置」标记：本响应涉及的命名空间里，哪些源位置区间
+// 已被人工裁定为永久丢失。
+//
+// 为什么必须单独回填而不是并进 coverage：两者语义不同（见 proto 注释），把"永久丢失"塞进
+// coverage 的枚举或在 partial_reasons 里混写，会让下游误以为那是"暂时查不到"，
+// 从而按重试处理一个永远不会恢复的区间——那正是要消灭的静默跳过。
+// 目标集取请求的授权目标（形如 storage_namespace 或 storage_namespace/YYYY-MM-DD）；
+// **空 = 本 Worker 全部**（与 planner「空 = 全部 Catalog 分区」同一口径），由提供者展开为全源。
+func (s *Service) fillIngestPositionGaps(out *workerpb.LogSearchResponse, targetIDs []string) {
+	// 注意：**不因 targetIDs 为空而提前返回**。空在 planner 语义下是「本 Worker 全部」
+	// （见 query.Planner 的 TargetIDs 说明），若此处提前返回，一次不带授权目标的查询就会
+	// 拿到"没有永久丢失"的空结果——那正是要消灭的静默跳过（标记看似实现了、实际永远为空）。
+	if s.abandonments == nil || out == nil {
+		return
+	}
+	gaps := s.abandonments.AbandonedRanges(targetIDs)
+	if len(gaps) == 0 {
+		return
+	}
+	out.IngestPositionGaps = make([]*workerpb.IngestPositionGap, 0, len(gaps))
+	for _, g := range gaps {
+		out.IngestPositionGaps = append(out.IngestPositionGaps, &workerpb.IngestPositionGap{
+			StorageNamespace: g.StorageNamespace,
+			From:             g.From,
+			To:               g.To,
+			ReasonCode:       g.ReasonCode,
+			Operator:         g.Operator,
+			AtUtc:            g.AtUTC,
+		})
+	}
 }
 
 // LogStats 聚合逻辑事件集合。
@@ -510,12 +651,29 @@ func (s *Service) LogCutoverReadiness(_ context.Context, req *workerpb.LogCutove
 	return resp, nil
 }
 
-func (s *Service) LogResolveIngestGaps(_ context.Context, _ *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
+func (s *Service) LogResolveIngestGaps(ctx context.Context, req *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
 	if s.gapResolver == nil {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
 			Error: unsupportedErr("ingest gap resolution is not configured")}, nil
 	}
-	if err := s.gapResolver.ResolveCoveredGaps(); err != nil {
+	var err error
+	if ns := strings.TrimSpace(req.GetStorageNamespace()); ns != "" {
+		// 显式人工确认（**放弃裁定**）：只解指名源（含自动路径拒绝的 Raw 写失败缺口，理由见 Manager 注释）。
+		// 操作人必须来自认证上下文：取不到就拒绝——放弃是唯一允许回收链跨过永久空洞的动作，
+		// 无痕放弃等于给静默丢日志开后门。
+		operator := operatorFromContext(ctx)
+		if operator == "" {
+			return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
+				Error: unsupportedErr(fmt.Sprintf(
+					"放弃缺口需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))}, nil
+		}
+		err = s.gapResolver.ResolveCoveredGapsForSource(ctx, ns, operator)
+	} else {
+		// 不传命名空间：整节点自动解。除「解算判据」逐字未改外，2026-10-02 缺陷修复了它的两条
+		// 服务端纪律：**不跨投影查询持有采集轮锁**、且把 RPC ctx 贯穿下去（超时/断连 → 真正停止）。
+		err = s.gapResolver.ResolveCoveredGaps(ctx)
+	}
+	if err != nil {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
 			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: err.Error()}}, nil
 	}

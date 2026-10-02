@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,9 +9,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -40,13 +43,69 @@ func (h *LogRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/nodes/:id/log-archive/rehydrate", h.Rehydrate)
 }
 
+// operatorMetadataKey 是 CP→Worker 承载「操作人认证主体」的 gRPC metadata 键。
+//
+// 与 Worker 侧 grpcsvc.OperatorMetadataKey 同源（ADR-101 登记为传输契约：操作人必须由传输层
+// 携带，请求体可被任意伪造）。这里刻意重复一个字面量而不 import Worker 的内部包：CP 依赖 Worker
+// 实现包会引入分层倒挂，而该键本身就是跨进程协议的一部分——改动它属于协议变更，须走 ADR。
+const operatorMetadataKey = "x-jm-operator"
+
+// operatorFromRequest 从**认证上下文**（而非请求体）取出可审计的操作人标识。
+//
+// 为什么必须由 CP 注入（2026-10-02 生产现场缺陷）：Worker 侧的「放弃裁定」要求 incoming
+// metadata 带 x-jm-operator，取不到一律拒绝（ADR-101：放弃是唯一允许回收链跨过永久空洞的动作，
+// 不可无痕）。而 CP 转发时不透传任何操作人 ⇒ 这条**唯一**能解开「DELIVER_ERROR 未决缺口永久
+// 阻塞该源恢复采集」的产品面路径实际不可达（现场 5 个源停在暂停态，运维只能绕过产品面直连
+// Worker）。取不到主体时必须在这里就拒绝：把请求下发给 Worker 只会换回一句「请设置
+// x-jm-operator」，那条提示对 CP 调用方不可执行。
+func (h *LogRuntimeHandler) operatorFromRequest(c *gin.Context) (string, bool) {
+	// 已认证主体优先用登录名/密钥名（审计与人可读性最好）：JWT 路径取 claims.Username，
+	// Agent（API 密钥）路径由 agent_auth 注入 "agent:<名称>"。
+	if name := strings.TrimSpace(c.GetString(middleware.CtxUsername)); name != "" {
+		return name, true
+	}
+	// 兜底：认证主体存在但用户名未注入（自定义认证通道）时用稳定可审计的用户标识，
+	// 而不是放弃留痕或编造一个「system」。
+	if access := getAccess(c); access != nil && access.UserID > 0 {
+		return fmt.Sprintf("user:%d", access.UserID), true
+	}
+	return "", false
+}
+
 func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
+	// 操作人必须在**任何 RPC 之前**解析：取不到就拒绝（不下发请求）。
+	operator, ok := h.operatorFromRequest(c)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "OPERATOR_UNKNOWN",
+			"message": "无法确定操作人：认证主体缺失（放弃裁定必须可审计）。" +
+				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
+		})
+		return
+	}
 	client, ok := h.client(c)
 	if !ok {
 		return
 	}
-	resp, err := client.Worker.LogResolveIngestGaps(c.Request.Context(), &workerpb.LogResolveIngestGapsRequest{
+	// 可选 body：{"storageNamespace":"inst:153/stderr"}。
+	// 传了：只解该源（显式人工确认，见 Worker 侧 ResolveCoveredGapsForSource——
+	// 用于解开「唯一未就绪目标正是持有缺口者」的自我指涉死锁）；
+	// 不传：与既有整节点行为逐字一致（向后兼容）。
+	var body struct {
+		StorageNamespace string `json:"storageNamespace"`
+	}
+	if c.Request.ContentLength > 0 {
+		if bindErr := c.ShouldBindJSON(&body); bindErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+			return
+		}
+	}
+	// 操作人经 outgoing metadata 下传（隧道会把它还原成 Worker 侧的 incoming metadata）：
+	// 不注入它，Worker 的放弃裁定分支必然拒绝——这正是产品面不可达的成因。
+	ctx := metadata.NewOutgoingContext(c.Request.Context(), metadata.Pairs(operatorMetadataKey, operator))
+	resp, err := client.Worker.LogResolveIngestGaps(ctx, &workerpb.LogResolveIngestGapsRequest{
 		RequestId: c.GetHeader("X-Request-ID"), ProtocolVersion: "log-query/1",
+		StorageNamespace: strings.TrimSpace(body.StorageNamespace),
 	})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "WORKER_RPC_FAILED"})
@@ -54,10 +113,14 @@ func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
 	}
 	if resp == nil || resp.GetError() != nil || resp.GetState() != workerpb.LogTaskState_LOG_TASK_SUCCEEDED {
 		code := "LOG_NOT_READY"
+		// 转述 Worker 的具体原因：只回裸 code 会让运维无从判断是「源不存在」「账本不一致」
+		// 还是「缺口未覆盖」，实测会把排查拖成盲猜。
+		message := ""
 		if resp != nil && resp.GetError() != nil {
 			code = resp.GetError().GetCode().String()
+			message = resp.GetError().GetMessage()
 		}
-		c.JSON(http.StatusConflict, gin.H{"error": "GAP_RESOLUTION_FAILED", "code": code})
+		c.JSON(http.StatusConflict, gin.H{"error": "GAP_RESOLUTION_FAILED", "code": code, "message": message})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"state": "resolved"})

@@ -5,6 +5,7 @@ package acquire
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -112,6 +113,15 @@ type WALEntry struct {
 	Event    logtypes.Event `json:"event"`
 	Appended bool           `json:"appended"`
 	Durable  bool           `json:"durable"`
+	// Replay 标记该条目来自**恢复期回放/补账**（gz 归档侧补账写回原代次 backlog ✓）。
+	//
+	// 为什么要标记（2026-10-04 现场，用户定调方案① ✓）：恢复期回放是**设计行为**，它必然把源
+	// 推过常规闸 ⇒ 用**抬高阈值**去容纳它（方案②，我此前的实现 ✗）会让闸的绝对上界一起抬高 ✗，
+	// 现场表现为 WAL +15,964 / +463k 的"复活→re-append→再越闸"震荡 ✗✗。
+	// 方案①：**阈值不动**，只把"回放可归因的字节"从**闸的计量**里剔除 ✓ —— 新数据（真正的洪流 ✗）
+	// 仍被同一把尺挡住 ✓，回放不再自锁 ✓。标记落在条目上（而不是计数器）：属精确归因，
+	// 且随剪枝自动守恒 ✓。
+	Replay bool `json:"replay,omitempty"`
 }
 
 // DeliveryResult 请求级投递结果模拟。
@@ -145,9 +155,13 @@ type WAL struct {
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
 	maxEntries int64
 	maxBytes   int64
+	// appendOriginReplay 由 AppendReplay 置位（见其注释 ✓）。
+	appendOriginReplay bool
+	// recoveryWiden 是**恢复期独立配额**的拓宽系数（≤1 = 常规闸；见 SetRecoveryWiden ✓）。
+	recoveryWiden float64
 }
 
-// SetLimits 覆盖单源积压上限（0 表示沿用默认）。供测试与后续配置化使用。
+// SetLimits 覆盖单源积压上限（0 表示沿用默认）。供测试与配置化使用。
 func (w *WAL) SetLimits(maxEntries, maxBytes int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -155,25 +169,155 @@ func (w *WAL) SetLimits(maxEntries, maxBytes int64) {
 	w.maxBytes = maxBytes
 }
 
+// ApplyLimits 按结构体形式应用积压上限（配置接线用；零值字段沿用本包默认）。
+func (w *WAL) ApplyLimits(l WALLimits) { w.SetLimits(l.MaxEntries, l.MaxBytes) }
+
+// WALLimits 是单源 WAL **真实积压**上限（条目数 + 近似字节），用于配置接线。
+//
+// 与「累计追加量」严格区分：上限只约束**当前待投递积压**（backlog），因为只有它会随 reclaim
+// 推进回落，超限后的暂停才有可能被滞回自动清除。累计量只增不减，拿它当门禁会把源永久钉在
+// 暂停上（形态与现场后果见 acquire/pipeline.go 的 walAppendedBytesTotal 注释）。
+type WALLimits struct {
+	// MaxEntries 单源积压条目数上限（0 沿用包内默认 defaultWALMaxEntries）。
+	MaxEntries int64
+	// MaxBytes 单源积压近似字节上限（0 沿用包内默认 defaultWALMaxBytes）。
+	MaxBytes int64
+}
+
+// Backlog 返回**当前**积压读数（条目数, 近似字节）。
+//
+// 这是唯一可用于容量门禁的 WAL 口径：它随 reclaim 推进而回落，因此在积压回落后
+// 由滞回解除暂停是可能的；累计追加量不具此性质。
+func (w *WAL) Backlog() (int64, int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.backlogLocked()
+}
+
 // limitsLocked 返回生效的上限（调用方需持 w.mu）。
+// SetRecoveryWiden 设置**恢复期独立配额**的拓宽系数（≤1 或 NaN ⇒ 关闭，回归常规闸 ✓）。
+//
+// 为什么需要（2026-10-04 现场，用户定调方案②）：恢复期的回放/补账是**设计行为**（gz 归档侧补账
+// 写回原代次 backlog 待投递 ✓），它必然把源推过常规闸 ⇒ 常规闸在恢复期**注定自锁**：
+// 「越闸暂停 ⇒ 更排不空 ⇒ 更回放不了」✗✓。因此恢复期按**独立预算**判（默认 4× 常规闸 ✓，可配 ✓），
+// 恢复完成后回归常规闸 ✓（回归由 ingest 侧的兜底环按恢复状态驱动 ✓）。
+//
+// **有界性红线**：拓宽依然是**有限值** ✓ ⇒ `source_wal` 的无界防护不破 ✗（4× 也只是一个更大的界 ✓）。
+func (w *WAL) SetRecoveryWiden(factor float64) {
+	if w == nil {
+		return
+	}
+	if factor < 1 || factor != factor { // <1 或 NaN ⇒ 关闭
+		factor = 1
+	}
+	w.mu.Lock()
+	w.recoveryWiden = factor
+	w.mu.Unlock()
+}
+
+// recoveryWidenLocked 返回生效的拓宽系数（默认 1 = 常规闸 ✓）。
+func (w *WAL) recoveryWidenLocked() float64 {
+	if w.recoveryWiden > 1 {
+		return w.recoveryWiden
+	}
+	return 1
+}
+
 func (w *WAL) limitsLocked() (int64, int64) {
 	entries, bytes := w.maxEntries, w.maxBytes
 	if entries <= 0 {
 		entries = defaultWALMaxEntries
 	}
-	if bytes <= 0 {
+	if f := w.recoveryWidenLocked(); f > 1 {
+		// 恢复期独立配额：两维同倍拓宽（有界 ✓）。条目维至少加 1，避免小上限被取整成"没拓宽" ✗。
+		if entries > 0 {
+			entries = int64(float64(entries) * f)
+		}
+		if bytes > 0 {
+			bytes = int64(float64(bytes) * f)
+		}
+	}
+	switch {
+	case bytes < 0:
+		// **负值 = 字节维度不设上限**（键 log_capacity.max_wal_bytes=0 的语义）。
+		//
+		// 为什么必须有这个哨兵（2026-10-03 现场 16 MiB 之谜）：配置侧 0 表示"字节维度不限"
+		// （见 Config.WALBudgetNotice 的语义说明），而本处在 0 时回退**硬编码 16 MiB** ✗——
+		// 于是「不设上限」被静默实现成「16 MiB」，现场表现为一批源停在 32.6 MiB（条目/字节双闸）
+		// 而另一批停在 512 MiB（显式配了值）✓✓。语义必须能被表达，而不是靠默认值顶替 ✗。
+		bytes = math.MaxInt64
+	case bytes == 0:
 		bytes = defaultWALMaxBytes
 	}
 	return entries, bytes
 }
 
 // backlogLocked 统计当前积压条目数与近似字节数（调用方需持 w.mu）。
+// backlogLocked 返回**闸视图**（用于越闸判定与滞回评估 ✓）：条目数与字节数**排除回放归因**
+// （`entry.Replay` ✓，见 WALEntry.Replay 的注释：方案① 阈值不动、只剔计量 ✓）。
 func (w *WAL) backlogLocked() (int64, int64) {
+	entries, bytes := w.backlogTotalLocked()
+	replayEntries, replayBytes := w.replayInFlightLocked()
+	entries -= replayEntries
+	if entries < 0 {
+		entries = 0
+	}
+	bytes -= replayBytes
+	if bytes < 0 {
+		bytes = 0
+	}
+	return entries, bytes
+}
+
+// backlogTotalLocked 返回**总量视图**（含回放 ✓）：观测与排障用（诊断面/日志 ✓）。
+func (w *WAL) backlogTotalLocked() (int64, int64) {
 	var bytes int64
 	for _, entry := range w.entries {
 		bytes += int64(len(entry.Event.Message)) + walEntryOverheadBytes
 	}
 	return int64(len(w.entries)), bytes
+}
+
+// replayInFlightLocked 返回"回放在飞"（条目数 + 近似字节）——单列观测 ✓（方案① 要求可观测 ✓）。
+func (w *WAL) replayInFlightLocked() (int64, int64) {
+	var entries, bytes int64
+	for _, entry := range w.entries {
+		if !entry.Replay {
+			continue
+		}
+		entries++
+		bytes += int64(len(entry.Event.Message)) + walEntryOverheadBytes
+	}
+	return entries, bytes
+}
+
+// ReplayInFlight 暴露"回放在飞"读数（条目数 + 近似字节 ✓）：诊断/观测用 ✓。
+func (w *WAL) ReplayInFlight() (entries int64, bytes int64) {
+	if w == nil {
+		return 0, 0
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.replayInFlightLocked()
+}
+
+// BacklogTotal 暴露**总量视图**（含回放 ✓）与闸视图的差额，供诊断面区分"真积压 vs 回放在飞" ✓。
+func (w *WAL) BacklogTotal() (entries int64, bytes int64) {
+	if w == nil {
+		return 0, 0
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.backlogTotalLocked()
+}
+
+// IsBacklogPauseReason 报告某条暂停原因是否由本包的**积压上限**造成（B1b 条目/字节闸）。
+//
+// 为什么要导出（2026-10-03 现场 D4）：积压暂停带**滞回**（积压回落到上限一半以下才自动恢复），
+// 因此任何「越权 ResumeAcquire」都会让条目闸失效——现场实测积压涨到 113.9 万条（名义上限 5000）。
+// 调用方（解缺口、放弃裁定等收尾路径）据此避免清除不属于它的暂停。
+func IsBacklogPauseReason(reason string) bool {
+	return strings.HasPrefix(reason, walBacklogPauseReason)
 }
 
 // enforceBacklogLimitLocked 在追加后检查积压是否越界；越界即暂停该源采集（B1b）。
@@ -217,11 +361,144 @@ func (w *WAL) maybeResumeBacklogLocked(ent *ledger.Entry) {
 		return
 	}
 	if err := w.led.ResumeAcquire(w.key); err != nil {
+		// **打破环死**（2026-10-04 现场：60 源零积压仍无一动 ✗）：`ResumeAcquire` 对任何未消解
+		// 缺口一律拒绝 ✗，而 `APPEND_REJECTED` 的定义是"该批从未进入 WAL（采集被暂停/容量门禁
+		// 拒了）"⇒ 它只能靠**回读**愈合 ⇐ 回读在暂停期间被 tailer 拒绝 ✗ ⇒
+		// 「暂停 ⇒ 缺口不清 ⇒ 不许恢复 ⇒ 不回读」自锁 ✓✓。
+		// 这里按**分类裁定**消解这一类（不是操作员放弃 ✗）：恢复后回读会重新产生并投递该批 ✓
+		// （不丢数据；重复按 event_id 幂等 ✓）。其余原因保持拦截 ✓。
+		if healed := w.resolveReReadHealableGapsLocked(ent); healed > 0 {
+			if err2 := w.led.ResumeAcquire(w.key); err2 == nil {
+				slog.Info("积压已回落：已按「恢复后回读重放」分类消解暂停期缺口并恢复采集",
+					"logSourceID", w.key.LogSourceID, "gaps", healed, "entries", entries, "approxBytes", bytes)
+				return
+			}
+		}
 		slog.Info("积压已回落但暂不能恢复采集", "logSourceID", w.key.LogSourceID, "error", err)
 		return
 	}
 	slog.Info("积压已回落至低水位，已恢复该源采集",
 		"logSourceID", w.key.LogSourceID, "entries", entries, "approxBytes", bytes)
+}
+
+// gapResolutionReReadOnResume 是本包对「暂停期从未进 WAL 的批」的**分类裁定**。
+//
+// 与"操作员放弃"（AbandonGaps）严格区分 ✓：放弃是人的裁定（FreeText），本标记是**机械推论**——
+// 恢复后回读必然重新产生该批 ✓，因此它不构成"已确认落库"，只是"将在恢复后重放" ✓。
+const gapResolutionReReadOnResume = "re-read on resume (append rejected while paused)"
+
+// gapResolutionReReadOnResumeDelivery 是投递失败类缺口的分类裁定文本（与上一条**明确分账** ✓）。
+//
+// 为什么这一类也进白名单（2026-10-04 现场，用户批准的红线修正 ✓）：`DELIVER_ERROR` 的语义是
+// "投递时 VL 不可达"（`connect: connection refused` ✓）⇒ 恢复后**回读会让恢复链重投那段
+// `UNSENT basis=gap` 区间**（现场 `inst:156` 覆盖 119.78MB ✓、紧贴水位 ✓）⇒ 它**恰恰是可愈合的** ✓✓。
+// 我上批假设"投递失败类回读治不了 ⇒ 必须永远挡住恢复" ✗ 被现场 67 条恒等不变**证否** ✓（那 67 条
+// 所属源已暂停 ⇒ 活投递事件结构性不可达 ⇒ 两种证据都拿不到 ⇒ 永久停死 ✗）。
+const gapResolutionReReadOnResumeDelivery = "re-read on resume (delivery error while paused)"
+
+// gapResolutionExcludedReasons 是**绝不能被本条路径放行**的缺口原因（fail-closed 名单 ✓）。
+//
+// 抽成包级变量（而不是内联字面量）是为了让"放开一因 ⇒ 红"**可被变异触达** ✓：内联时该列表只会在
+// 处理 APPEND_REJECTED 时被读到 ⇒ 任何"删一项"的变异都不可达 ✗（实测：删项后用例仍绿 ✗✗），
+// 于是那条红线只有断言、没有证据 ✗。名单语义不变：**未列出者一律不放行** ✓（新增原因默认排除 ✓）。
+var gapResolutionExcludedReasons = []string{
+	// STDIO_RAW_WRITE_FAILED：原始字节**从未落盘**（写原始文件就失败了）⇒ 重投无据 ⇒ 必须挡住 ✓
+	// （这是"源文件对应字节已不再可得"的等价形态 ✓ —— 语义断言见对应用例 ✓）。
+	ledger.GapReasonStdioRawWriteFailed,
+	// WAL_COMMIT_FAILED：提交阶段的失败没有"内容确实存在"的依据 ⇒ 同样挡住 ✓。
+	ledger.GapReasonWALCommitFailed,
+	// DELIVER_ERROR / DELIVER_ERROR_WORKER_SOURCE 已于 2026-10-04 移入**白名单**
+	// （见 gapResolutionReReadOnResumeDelivery ✓，用户批准的红线修正 ✓）。
+}
+
+// resolveReReadHealableGapsLocked 只消解 REASON=APPEND_REJECTED 的未消解缺口（见调用点注释）。
+//
+// fail-closed（关键）：其余四种已知原因**显式排除** ⇒ 将来若新增原因，默认同样被排除 ✓
+// （不会被这条路径悄悄放行 ✗）。返回消解条数。
+func (w *WAL) resolveReReadHealableGapsLocked(ent *ledger.Entry) int {
+	if ent == nil {
+		return 0
+	}
+	// 两类各自成批消解（文本分账 ✓），**其余原因一律默认排除** ✓（fail-closed：每条调用都显式
+	// 列出排除集 ✓，将来新增原因不会被任何一条悄悄放行 ✓）。
+	total := 0
+	through := uint64(0)
+	for _, g := range ent.Gaps {
+		if g.Resolved || g.Reason != ledger.GapReasonAppendRejected {
+			continue
+		}
+		if g.EndPos > through {
+			through = g.EndPos
+		}
+	}
+	if through > 0 {
+		n, err := w.led.ResolveGapsThroughExcept(w.key, through, gapResolutionReReadOnResume,
+			gapResolutionExcludedReasons...,
+		)
+		if err == nil {
+			total += n
+		}
+	}
+
+	deliverThrough := uint64(0)
+	for _, g := range ent.Gaps {
+		if g.Resolved {
+			continue
+		}
+		if g.Reason != ledger.GapReasonDeliverError && g.Reason != ledger.GapReasonDeliverErrorWorkerSource {
+			continue
+		}
+		if g.EndPos > deliverThrough {
+			deliverThrough = g.EndPos
+		}
+	}
+	if deliverThrough > 0 {
+		n, err := w.led.ResolveGapsThroughExcept(w.key, deliverThrough, gapResolutionReReadOnResumeDelivery,
+			gapResolutionExcludedReasons...,
+		)
+		if err == nil {
+			total += n
+		}
+	}
+	return total
+}
+
+// BacklogAndLimits 返回当前积压（条目）与生效上限（含恢复期拓宽 ✓），供诊断面使用。
+func (w *WAL) BacklogAndLimits() (entries int64, maxEntries int64) {
+	if w == nil {
+		return 0, 0
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	e, _ := w.backlogLocked()
+	mx, _ := w.limitsLocked()
+	return e, mx
+}
+
+// EvaluateResume 尝试一次「推进回收 + 按滞回条件评估恢复」，返回**账本当前是否不在暂停态**。
+//
+// 用在「缺口刚被消解、源仍处于暂停」的时刻：恢复的唯一检查点挂在回收路径上，而回收路径
+// 又要求「有可剪条目」或「有新批次」——暂停期间两者都不会出现，缺了本入口，
+// 消解缺口之后源仍会一直停在暂停上。
+//
+// 先 TryReclaim 再评估：缺口消解后 CanReclaim 往往才放行（回收门禁要求责任已转移），
+// 不推进回收就永远看不到「积压回落至低水位」这个恢复条件。
+//
+// 返回值口径（与实现严格对齐，勿按名字误读）：它只回答「账本此刻有没有处于暂停」，
+// **不做原因过滤**。具体地：
+//   - 本包造成的积压暂停（原因前缀 walBacklogPauseReason）会由 maybeResumeBacklogLocked
+//     在积压回落至上限一半以下时清除，清掉后本方法返回 true；
+//   - 容量门禁等**其它路径**设置的暂停不会被本方法清除（那是越权），但只要它已被别处解除，
+//     本方法同样会返回 true；反之若仍处于暂停，则返回 false。
+//
+// 因此调用方可以用它判断「恢复是否已发生」，但不得把它当成「本次调用清除了暂停」的证据。
+func (w *WAL) EvaluateResume() bool {
+	// TryReclaim 的失败是常态而非异常（无恢复分段 / 责任未转移时 CanReclaim 本就不放行），
+	// 而它无论成败都会按**当前**水位剪枝并在剪枝后做一次滞回恢复评估；这里忽略返回值，
+	// 只按最终状态回答「是否已恢复」。
+	_, _ = w.TryReclaim()
+	entry := w.led.Get(w.key)
+	return entry != nil && !entry.AcquirePaused
 }
 
 // NewWAL 创建绑定账本条目的 WAL。
@@ -247,6 +524,22 @@ func (w *WAL) SetFsync(fn func() error) {
 
 // Append 将事件写入 WAL（尚未 durable）。
 // 容量门禁：暂停时拒绝 append，由调用方记 gap；禁止静默丢弃。
+// AppendReplay 与 Append 同语义，但把条目标记为**恢复期回放/补账**（见 WALEntry.Replay ✓）：
+// 这些字节不再计入**闸视图**（方案① 阈值不动、只剔计量 ✓），但在总量视图与"回放在飞"里可观测 ✓。
+//
+// 调用方：恢复期回放/归档补账的写入路径（把原代次的存量写回 WAL 待投递 ✓）。常规采集**不得**
+// 走本入口 ✗（否则等于给洪流开了后门 ✗ —— 红线：新数据必须仍被同一把尺挡住 ✓）。
+func (w *WAL) AppendReplay(events ...logtypes.Event) error {
+	w.mu.Lock()
+	w.appendOriginReplay = true
+	w.mu.Unlock()
+	err := w.Append(events...)
+	w.mu.Lock()
+	w.appendOriginReplay = false
+	w.mu.Unlock()
+	return err
+}
+
 func (w *WAL) Append(events ...logtypes.Event) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -261,6 +554,7 @@ func (w *WAL) Append(events ...logtypes.Event) error {
 
 	for _, ev := range events {
 		w.entries = append(w.entries, WALEntry{
+			Replay:   w.appendOriginReplay,
 			Seq:      uint64(len(w.entries) + 1),
 			Event:    ev,
 			Appended: true,
@@ -361,6 +655,14 @@ func (w *WAL) RecoverySegmentID() string {
 func (w *WAL) TryReclaim() (uint64, error) {
 	pos, err := w.led.TryReclaim(w.key)
 	if err != nil {
+		// 账本拒绝**推进**（典型：回收位置恰好触到恢复分段边界，CoversTo > Reclaim 不成立）时，
+		// 仍按**账本当前**的回收位置剪枝：该前缀已被 CanReclaim 判过安全，保留它们只会让积压
+		// 永不回落 → 滞回（≤上限一半）永不满足 → 源永久停在 paused。
+		// 2026-09-30 生产实证：这里一错即返，prune 便永不执行，7998 条卡死数小时、
+		// 积压数字一个字节不动。剪枝上界仍是账本自己的水位，不越过任何未裁定安全的位置。
+		if cur := w.led.Get(w.key); cur != nil {
+			w.pruneReclaimed(cur.Positions.Reclaim)
+		}
 		return pos, err
 	}
 	w.pruneReclaimed(pos)
@@ -369,8 +671,19 @@ func (w *WAL) TryReclaim() (uint64, error) {
 
 // pruneReclaimed 丢弃 Event.Record.End <= pos 的 WAL 条目：该前缀的恢复责任已由受管恢复分段/
 // 投影承担（CanReclaim 门禁已放行），保留它们只占用内存。未耐久或超出 reclaim 前缀的事件一律保留。
+//
+// pos == 0 时没有可剪的条目，但**仍要评估一次恢复**（缺陷 A 自愈链的一环）：暂停源在缺口被
+// 消解后唯一会经过的恢复检查点就是这里，若因「没有可剪条目」直接返回，源就再没有机会
+// 走出暂停——现场表现正是「积压已回落但暂不能恢复采集」之后永远停住。
+// 该分支只多一次 O(条目数) 的积压统计，而它本就被本方法的调用路径（每轮采集一次）覆盖。
 func (w *WAL) pruneReclaimed(pos uint64) {
 	if pos == 0 {
+		// 该分支不剪条目，但仍要按同一临界区访问、并与 maybeResumeBacklogLocked 的
+		// 「调用方需持 w.mu」契约保持一致：否则它与 Append/backlogLocked 并发时
+		// 会读到撕裂的积压状态（且 Go 竞态检测会直接报数据竞争）。
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		w.maybeResumeBacklogLocked(w.led.Get(w.key))
 		return
 	}
 	w.mu.Lock()
@@ -416,6 +729,9 @@ func (w *WAL) Restore(entries []WALEntry) error {
 			w.lastDurableEnd = entry.Event.Record.End
 		}
 	}
+	// 恢复完立刻判一次闸：索引里的**持久积压**可能已经越界，此时必须当场暂停，而不是等下一次
+	// Append（现场形态：内存积压早已越界、暂停却滞后到下一次追加才发生）。
+	w.enforceBacklogLimitLocked(w.led.Get(w.key))
 	return nil
 }
 
