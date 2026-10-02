@@ -5015,11 +5015,37 @@ func (m *Manager) maybeResumePausedSources() {
 		if m.resumeProbe != nil {
 			m.resumeProbe(p.Key().LogSourceID)
 		}
+		// **缺口闸兜底**（2026-10-03 现场终章的决定性根因）：积压类暂停的恢复前置里有一条
+		// "账本无未解决 gap"——`ledger.ResumeAcquire` 在有缺口时**直接拒绝**
+		// （见 internal/worker/logs/ledger/ledger.go:876-885 `unresolved gaps still block acquisition`）。
+		// 现场形态正是"积压已清零（entries=0）仍无一复活" ✗✗——它们**不是**被积压挡住，而是被缺口挡住 ✓。
+		// 因此这里必须先把「已发布投影证据能覆盖的缺口」消解掉（缺口语义红线：无证据不得凭空消解 ✗，
+		// 由 autoResolveGapsFromPublished 自己把关 ✓），再评估恢复 ✓。
+		if src, ok := m.sourceConfigFor(p); ok {
+			m.autoResolveGapsFromPublished(src, p)
+		}
 		// 排空侧：先把已 durable 未确认的存量发出去（投递成功才会推进回收）✓
 		_, _ = p.DeliverPending()
 		// 回收侧再评估：TryReclaim（按当前水位剪枝）+ 滞回恢复 ✓
 		_ = p.EvaluateResume()
 	}
+}
+
+// sourceConfigFor 取某条管道对应的源配置（键形态与 autoResolveGapsFromPublished 内部一致 ✓）。
+func (m *Manager) sourceConfigFor(p *pipeline.Pipeline) (SourceConfig, bool) {
+	if m == nil || p == nil {
+		return SourceConfig{}, false
+	}
+	key := p.Key()
+	cfgKey := key.LogSourceID + "/" + key.SourceGeneration
+	m.mu.Lock()
+	src, ok := m.sources[cfgKey]
+	if !ok {
+		// 兼容：部分路径用存储命名空间作为键（见 runtime.go 里 m.pipes[storageNamespace] 的用法）。
+		src, ok = m.sources[key.LogSourceID]
+	}
+	m.mu.Unlock()
+	return src, ok
 }
 
 // RunCapacityResumeLoop 是容量自愈兜底循环（低频、只读账本、ctx 结束即退）。

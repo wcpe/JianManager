@@ -1077,3 +1077,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 修复
 - **补齐事故终章五件套的接线（前一枚提交遗漏）**：`main.go` 的 `EffectiveMaxWALBytes()` 接线（0=不限哨兵）、条目闸默认 20000、对账让路 `SliceEvents` 接线；一并确认 config 侧访问器完整。
+
+### 修复
+- **暂停自愈的根因补完（现场 44 源 27 清零不复活）**：兜底环评估恢复前先 `DeliverPending()`（补投递证据）再 `autoResolveGapsFromPublished()`（无证据不消解），随后按滞回 `EvaluateResume()` —— 真正挡路的是 `ResumeAcquire` 的未消解缺口闸（ledger.go:885）而非积压 ✓；红证直指现场形态（绕过被撑满的采集轮只调兜底 ⇒ 缺口清零+复活 ✓）。
