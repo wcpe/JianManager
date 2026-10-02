@@ -387,11 +387,18 @@ func MergePositionRanges(ranges []PositionRange) []PositionRange {
 // 而空洞恰恰是「从未进入 WAL/段」的批次（append 被拒、容量门禁暂停）留下的位置——
 // 它们不可能出现在任何证据区间里，却会被凸包一并宣称「已确认落库」。
 //
-// 起点容差 1 字节（与缺口合并的 rangesTouch 同一口径）：规范事件区间不含行分隔符，而登记缺口
-// 时会把起点**回退到该分隔符之前**（见 acquire.Pipeline.Ingest 的 gapStart 回退），故缺口起点
-// 比证据区间早 1 字节（那 1 字节就是分隔符本身）仍视为落在同一段连续覆盖内。容差只作用于
-// 区间起点：终点不做放宽——缺口的末端与证据区间的末端同源（同一个事件的 Record.End）。
-// 容差不能跨两段证据之间的空洞（那需要单段区间本身包含空洞，不可能）。
+// **两端各容差 1 字节**（与缺口合并的 rangesTouch 同一口径 ✓）：规范事件区间不含行分隔符，
+// 而登记缺口时起点会**回退到该分隔符之前**（见 acquire.Pipeline.Ingest 的 gapStart 回退），
+// 故缺口起点比证据区间早 1 字节（那 1 字节就是分隔符本身）仍视为同一段连续覆盖 ✓。
+//
+// **终点同样容差 1 字节**（2026-10-04 现场修正 ✗✓）：原实现只放宽起点，注释断言"缺口的末端与
+// 证据区间的末端同源"——现场数据证否了这条 ✗：`inst:156` 的未消解 DELIVER_ERROR 缺口
+// `[68,163,086 → 68,528,091]` 与 ACKED 段 `[68,163,087 → 68,528,090]` **两端各差 1 字节** ✗，
+// 全库 67 条同型（3.3× 于 APPEND_REJECTED ✗）⇒ 它们因**终点多 1 字节**永远无法被消解 ✓✓，
+// 这才是"60 源死锁"的主因（不是投递没发生，而是判据差一个字节 ✗）。
+//
+// **不破空洞判据** ✓：容差严格为 1 字节（分隔符），真正的空洞 ≥2 字节（见 rangesTouch 的同一约定 ✓）
+// ⇒ 单段区间内部有洞时仍然不通过 ✓；且容差只在**同一段**证据的端点外各放宽 1，不会跨到相邻段 ✓。
 func CoveredByPositionRanges(ranges []PositionRange, from, to uint64) bool {
 	if to < from {
 		return false
@@ -401,7 +408,11 @@ func CoveredByPositionRanges(ranges []PositionRange, from, to uint64) bool {
 		if start > 0 {
 			start--
 		}
-		if from >= start && to <= r.To {
+		end := r.To
+		if end != ^uint64(0) { // 溢出保护：To 已达上界时不再放宽 ✓
+			end++
+		}
+		if from >= start && to <= end {
 			return true
 		}
 	}
