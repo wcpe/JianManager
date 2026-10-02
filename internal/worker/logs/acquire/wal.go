@@ -113,6 +113,15 @@ type WALEntry struct {
 	Event    logtypes.Event `json:"event"`
 	Appended bool           `json:"appended"`
 	Durable  bool           `json:"durable"`
+	// Replay 标记该条目来自**恢复期回放/补账**（gz 归档侧补账写回原代次 backlog ✓）。
+	//
+	// 为什么要标记（2026-10-04 现场，用户定调方案① ✓）：恢复期回放是**设计行为**，它必然把源
+	// 推过常规闸 ⇒ 用**抬高阈值**去容纳它（方案②，我此前的实现 ✗）会让闸的绝对上界一起抬高 ✗，
+	// 现场表现为 WAL +15,964 / +463k 的"复活→re-append→再越闸"震荡 ✗✗。
+	// 方案①：**阈值不动**，只把"回放可归因的字节"从**闸的计量**里剔除 ✓ —— 新数据（真正的洪流 ✗）
+	// 仍被同一把尺挡住 ✓，回放不再自锁 ✓。标记落在条目上（而不是计数器）：属精确归因，
+	// 且随剪枝自动守恒 ✓。
+	Replay bool `json:"replay,omitempty"`
 }
 
 // DeliveryResult 请求级投递结果模拟。
@@ -146,6 +155,8 @@ type WAL struct {
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
 	maxEntries int64
 	maxBytes   int64
+	// appendOriginReplay 由 AppendReplay 置位（见其注释 ✓）。
+	appendOriginReplay bool
 	// recoveryWiden 是**恢复期独立配额**的拓宽系数（≤1 = 常规闸；见 SetRecoveryWiden ✓）。
 	recoveryWiden float64
 }
@@ -242,12 +253,62 @@ func (w *WAL) limitsLocked() (int64, int64) {
 }
 
 // backlogLocked 统计当前积压条目数与近似字节数（调用方需持 w.mu）。
+// backlogLocked 返回**闸视图**（用于越闸判定与滞回评估 ✓）：条目数与字节数**排除回放归因**
+// （`entry.Replay` ✓，见 WALEntry.Replay 的注释：方案① 阈值不动、只剔计量 ✓）。
 func (w *WAL) backlogLocked() (int64, int64) {
+	entries, bytes := w.backlogTotalLocked()
+	replayEntries, replayBytes := w.replayInFlightLocked()
+	entries -= replayEntries
+	if entries < 0 {
+		entries = 0
+	}
+	bytes -= replayBytes
+	if bytes < 0 {
+		bytes = 0
+	}
+	return entries, bytes
+}
+
+// backlogTotalLocked 返回**总量视图**（含回放 ✓）：观测与排障用（诊断面/日志 ✓）。
+func (w *WAL) backlogTotalLocked() (int64, int64) {
 	var bytes int64
 	for _, entry := range w.entries {
 		bytes += int64(len(entry.Event.Message)) + walEntryOverheadBytes
 	}
 	return int64(len(w.entries)), bytes
+}
+
+// replayInFlightLocked 返回"回放在飞"（条目数 + 近似字节）——单列观测 ✓（方案① 要求可观测 ✓）。
+func (w *WAL) replayInFlightLocked() (int64, int64) {
+	var entries, bytes int64
+	for _, entry := range w.entries {
+		if !entry.Replay {
+			continue
+		}
+		entries++
+		bytes += int64(len(entry.Event.Message)) + walEntryOverheadBytes
+	}
+	return entries, bytes
+}
+
+// ReplayInFlight 暴露"回放在飞"读数（条目数 + 近似字节 ✓）：诊断/观测用 ✓。
+func (w *WAL) ReplayInFlight() (entries int64, bytes int64) {
+	if w == nil {
+		return 0, 0
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.replayInFlightLocked()
+}
+
+// BacklogTotal 暴露**总量视图**（含回放 ✓）与闸视图的差额，供诊断面区分"真积压 vs 回放在飞" ✓。
+func (w *WAL) BacklogTotal() (entries int64, bytes int64) {
+	if w == nil {
+		return 0, 0
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.backlogTotalLocked()
 }
 
 // IsBacklogPauseReason 报告某条暂停原因是否由本包的**积压上限**造成（B1b 条目/字节闸）。
@@ -463,6 +524,22 @@ func (w *WAL) SetFsync(fn func() error) {
 
 // Append 将事件写入 WAL（尚未 durable）。
 // 容量门禁：暂停时拒绝 append，由调用方记 gap；禁止静默丢弃。
+// AppendReplay 与 Append 同语义，但把条目标记为**恢复期回放/补账**（见 WALEntry.Replay ✓）：
+// 这些字节不再计入**闸视图**（方案① 阈值不动、只剔计量 ✓），但在总量视图与"回放在飞"里可观测 ✓。
+//
+// 调用方：恢复期回放/归档补账的写入路径（把原代次的存量写回 WAL 待投递 ✓）。常规采集**不得**
+// 走本入口 ✗（否则等于给洪流开了后门 ✗ —— 红线：新数据必须仍被同一把尺挡住 ✓）。
+func (w *WAL) AppendReplay(events ...logtypes.Event) error {
+	w.mu.Lock()
+	w.appendOriginReplay = true
+	w.mu.Unlock()
+	err := w.Append(events...)
+	w.mu.Lock()
+	w.appendOriginReplay = false
+	w.mu.Unlock()
+	return err
+}
+
 func (w *WAL) Append(events ...logtypes.Event) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -477,6 +554,7 @@ func (w *WAL) Append(events ...logtypes.Event) error {
 
 	for _, ev := range events {
 		w.entries = append(w.entries, WALEntry{
+			Replay:   w.appendOriginReplay,
 			Seq:      uint64(len(w.entries) + 1),
 			Event:    ev,
 			Appended: true,
