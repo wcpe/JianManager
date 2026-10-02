@@ -5283,7 +5283,10 @@ func (m *Manager) ResumeDiagnosticLines() []string {
 			d.LogSourceID, d.AcquirePaused, d.PauseReason, d.BacklogPause,
 			d.BacklogEntries, d.MaxEntries, d.BacklogTotalEntries, d.ReplayEntries,
 			d.Unresolved, d.Blocking, d.DeliveryPos)+
-			fmt.Sprintf(" read_pos=%d reclaim_pos=%d invariant_ok=%v", d.ReadPos, d.ReclaimPos, d.ReclaimPos <= d.ReadPos))
+			fmt.Sprintf(" read_pos=%d reclaim_pos=%d invariant_ok=%v paused_exempt=%v",
+				d.ReadPos, d.ReclaimPos,
+				d.ReclaimPos <= d.ReadPos || d.AcquirePaused, // 暂停源豁免 ✓（见 ledger 侧同口径注释）
+				d.AcquirePaused && d.ReclaimPos > d.ReadPos))
 	}
 	sort.Strings(lines)
 	return lines

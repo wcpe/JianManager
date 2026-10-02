@@ -1145,6 +1145,15 @@ func (l *Ledger) PositionInvariantViolations() []string {
 	defer l.mu.Unlock()
 	var out []string
 	for key, e := range l.entries {
+		// **暂停源豁免**（用户 2026-10-05 澄清 ✓✓，代码已核 ✓）：
+		// 暂停源的设计语义是"**只投递不读取**" ⇒ tailer 拒绝读（[tailer.go:217] 的 AcquirePaused 判定 ✓）
+		// ⇒ **`Read` 被冻住** ✓；而恢复链/回收仍在其**分段覆盖**（`CoversFrom/CoversTo` ✓）上推进 ⇒
+		// `reclaim` 越过冻结的 `Read` 是**暂停设计的必然、且良性** ✓✓（覆盖的是**此前已读**的数据 ✓）。
+		// ⇒ 若按 `min(target, Read)` 夹取，会把回收卡在冻结游标上 ⇒ **自造永久暂停** ✗✗（故不夹取 ✓）。
+		// 只有**未暂停**源的越界才是真损坏 ✓（读游标本该随之推进 ⇒ 不推进即为异常 ✓）。
+		if e.AcquirePaused {
+			continue
+		}
 		if e.Positions.Reclaim > e.Positions.Read {
 			out = append(out, fmt.Sprintf("%s/%s reclaim=%d read=%d",
 				key.LogSourceID, key.SourceGeneration, e.Positions.Reclaim, e.Positions.Read))
