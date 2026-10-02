@@ -5309,6 +5309,33 @@ func (m *Manager) sweepBackpressureStreakOf() int {
 	return m.sweepBackpressureStreak
 }
 
+// PositionInvariantViolations 转发账本层的"回收 ≤ 读"越界清单（**给分钟打点/诊断面消费** ✓）。
+//
+// 用户 2026-10-05：这已是第三次"新工具没有消费面" ✗✗（ResumeDiagnostics → ResumeSweepStats →
+// PositionInvariantViolations）⇒ 本转发 + main 的分钟打点同时落地 ✓；流程纪律 = **任何新增导出
+// 必须同批带可达面与可达性红证** ✓。
+func (m *Manager) PositionInvariantViolations() []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+	var out []string
+	for _, p := range pipes {
+		if l := p.Ledger(); l != nil {
+			out = append(out, l.PositionInvariantViolations()...)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // ResumeSweepStats 返回兜底环的**跳过原因分类读数**（现场"41 家为何不动"的直接答案 ✓）。
 type ResumeSweepStats struct {
 	Candidates       int64 // 进入本轮容量内的候选源数

@@ -1429,6 +1429,21 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 			for _, line := range lines {
 				slog.Info("恢复判据快照", "detail", line)
 			}
+			// **兜底环读数与不变量读数一并落在这条分钟打点上**（用户 2026-10-05：第三次"无消费面" ✗✗
+			// ⇒ 从此**任何新增导出必须同批带可达面 + 可达性红证** ✓）。
+			// 只打**非零**项 ✓（避免刷屏 ✗）。
+			st := manager.ResumeSweepStats()
+			if st.SkipBackpressure > 0 || st.SkipHysteresis > 0 || st.SkipEnumeration > 0 || st.Revived > 0 {
+				slog.Info("兜底环读数",
+					"candidates", st.Candidates, "revived", st.Revived,
+					"skip_backpressure", st.SkipBackpressure,
+					"skip_hysteresis", st.SkipHysteresis,
+					"skip_enumeration", st.SkipEnumeration,
+					"rising_streak", st.RisingStreak)
+			}
+			if v := manager.PositionInvariantViolations(); len(v) > 0 {
+				slog.Warn("位置不变量越界（reclaim > read）：离线核这条即可定位", "count", len(v), "sources", v)
+			}
 		}
 	}
 }
