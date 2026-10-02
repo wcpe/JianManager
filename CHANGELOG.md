@@ -1038,3 +1038,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 ### 修复
 - **归档代次归属执行体（ADR-A）**：新增零迁移注册表（遍历同源各代次账本条目，key=(源ID,规范化路径,archive_object_id 含大小+内容哈希)）；ImportGzip 加拒绝闸（gzip 头校验之后）：**命中其它代次一律拒绝+告警+记缺口（ARCHIVE_FOREIGN_GENERATION）**，首次见到则导入并登记绑定、此后必被拒 —— 任何情况不归当前代次。3 项变异转红 + 3 条防误杀守卫。
 - **空洞放弃放行（ADR-B 批 2）**：CanReclaim 在本分段覆盖区间内存在放弃凭据时放行（无凭据仍拒=default-deny 未动；hold 优先于凭据；放行上界=该分段 CoversTo）；红证含"放弃前连续 3 轮必须失败、放弃后可推进+ResumeAcquire"两半。
+
+### 新增
+- **查询面「位置缺失」标记（ADR-B 批 2 收尾）**：新增独立 proto 字段 `repeated IngestPositionGap ingest_position_gaps`（含 storage_namespace/from/to/reason_code/operator/at_utc，与 coverage 的语义分界写死），服务层经 IngestAbandonmentProvider 适配接入（目标匹配用前缀、空目标=本 Worker 全部）；离线 proto 生成（模块缓存纯 Go 链路，rawDesc md5 与既有生成物逐字节等价后放行）——仅 3 行注释附着偏差，下次真 protoc 会自然还原。

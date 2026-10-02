@@ -210,6 +210,73 @@ func TestLogSearch_MapsResponseAndRequest(t *testing.T) {
 	require.Equal(t, query.SortVersion, fq.lastReq.View.OrderVersion)
 }
 
+// 「已放弃位置」标记必须**单独**回填在 ingest_position_gaps 上，且不得污染 coverage 语义。
+//
+// 为什么这条断言是核心：用户要的是「下游查询对已放弃区间显式返回位置缺失标记，不得静默跳过」。
+// 两件事必须同时成立——
+//
+//	① 有放弃记录时，响应里**带出**该区间（否则等于没有实现，下游仍无从得知）；
+//	② 它**不得**改写 coverage（coverage 回答"分区能不能查"，放弃回答"分区内哪些位置永久没了"；
+//	   把后者塞进前者会让下游把"永久丢失"误读成"暂时查不到"而一直重试）。
+//
+// 转红方式（实测）：把 LogSearch 里的 s.fillIngestPositionGaps(out, ...) 调用去掉，①立即红；
+// 把回填改成写进 out.Coverage，②立即红。
+func TestLogSearch_IngestPositionGapsAnnotatedSeparately(t *testing.T) {
+	fq := &fakeQuery{search: query.SearchResponse{
+		RequestID: "r-gap",
+		View:      &query.ViewRef{ViewID: "view-gap", OrderVersion: query.SortVersion},
+		Coverage: query.Coverage{
+			Complete: true,
+			Targets: []query.TargetCoverage{{
+				TargetID: "ns:game/2026-09-20",
+				State:    query.CoverageSuccess,
+			}},
+		},
+		Quality: query.Quality{DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact},
+	}}
+	svc := New(fq, &fakeViews{})
+
+	// 未接线提供者：不得编造标记（也不得报错）。
+	resp, err := svc.LogSearch(context.Background(), searchReq("r-gap"))
+	require.NoError(t, err)
+	require.Empty(t, resp.GetIngestPositionGaps(), "未接线时不得编造放弃标记")
+
+	// 接线提供者：必须带出区间，且 coverage 逐字不变。
+	var gotTargets []string
+	var called bool
+	svc.SetIngestAbandonmentProvider(IngestAbandonmentFunc(func(targetIDs []string) []IngestPositionGap {
+		called = true
+		gotTargets = append([]string(nil), targetIDs...)
+		return []IngestPositionGap{{
+			StorageNamespace: "ns:game", From: 100, To: 150,
+			ReasonCode: "PERMANENTLY_LOST", Operator: "ops@example", AtUTC: "2026-10-02T08:00:00Z",
+		}}
+	}))
+	resp2, err := svc.LogSearch(context.Background(), searchReq("r-gap"))
+	require.NoError(t, err)
+	require.True(t, called, "提供者必须被调用")
+	_ = gotTargets // 目标集来自请求授权范围（空 = 本 Worker 全部），本用例不绑定其内容。
+
+	require.Len(t, resp2.GetIngestPositionGaps(), 1, "有放弃记录时必须显式带出该区间（不得静默跳过）")
+	g := resp2.GetIngestPositionGaps()[0]
+	require.Equal(t, "ns:game", g.GetStorageNamespace())
+	require.EqualValues(t, 100, g.GetFrom())
+	require.EqualValues(t, 150, g.GetTo())
+	require.Equal(t, "PERMANENTLY_LOST", g.GetReasonCode())
+	require.Equal(t, "ops@example", g.GetOperator())
+	require.Equal(t, "2026-10-02T08:00:00Z", g.GetAtUtc())
+
+	// ② coverage 必须不受影响（语义分开）。
+	require.True(t, resp2.GetCoverage().GetComplete(), "放弃标记不得改写 coverage 的完整度")
+	require.Len(t, resp2.GetCoverage().GetTargets(), 1)
+	require.Equal(t, "ns:game/2026-09-20", resp2.GetCoverage().GetTargets()[0].GetTargetId())
+	require.Equal(t, workerpb.LogCoverageState_LOG_COVERAGE_SUCCESS,
+		resp2.GetCoverage().GetTargets()[0].GetState(),
+		"放弃标记不得改写分区的可查询性状态")
+	require.Empty(t, resp2.GetCoverage().GetPartialReasons(),
+		"放弃标记不得写进 logcoord 的 partial_reasons（两者语义必须分开标注）")
+}
+
 func TestLogSearch_UnimplementedRangeClient_LOGUnsupported(t *testing.T) {
 	// 缺失 RangeClient：query 面返回 LOG_UNSUPPORTED，grpcsvc 必须原样透传，不得空成功。
 	fq := &fakeQuery{search: query.SearchResponse{

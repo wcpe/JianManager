@@ -867,6 +867,24 @@ func runWorker() {
 				return readiness.LedgerReady, readiness.CutoffTime, readiness.Reasons
 			}))
 			logStack.LogRPC.SetIngestGapResolver(manager)
+			// 「已放弃位置」查询面标记（缺口 B 批2）：把 ingest 的放弃凭据接到搜索响应上，
+			// 使下游能区分「本来就没有」与「已被确认永久丢失」——不再静默跳过。
+			// 跨包适配放在这里（apps 同时依赖 ingest 与 grpcsvc），服务层不反向依赖 ingest。
+			logStack.LogRPC.SetIngestAbandonmentProvider(grpcsvc.IngestAbandonmentFunc(
+				func(targetIDs []string) []grpcsvc.IngestPositionGap {
+					ranges := manager.AbandonedRanges(targetIDs)
+					if len(ranges) == 0 {
+						return nil
+					}
+					out := make([]grpcsvc.IngestPositionGap, 0, len(ranges))
+					for _, r := range ranges {
+						out = append(out, grpcsvc.IngestPositionGap{
+							StorageNamespace: r.StorageNamespace, From: r.From, To: r.To,
+							ReasonCode: r.ReasonCode, Operator: r.Operator, AtUTC: r.AtUTC,
+						})
+					}
+					return out
+				}))
 			ingestCtx, cancelIngest := context.WithCancel(context.Background())
 			defer cancelIngest()
 			defer func() {

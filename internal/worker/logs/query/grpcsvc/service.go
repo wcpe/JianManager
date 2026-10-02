@@ -75,8 +75,38 @@ type IngestGapResolver interface {
 	ResolveCoveredGapsForSource(storageNamespace, operator string) error
 }
 
-// OperatorMetadataKey 是承载「操作人认证主体」的 incoming gRPC metadata 键。
+// IngestPositionGap 是「已放弃位置」查询面 DTO（与 logcoord 的 coverage 语义无关）。
+type IngestPositionGap struct {
+	StorageNamespace string
+	From             uint64
+	To               uint64
+	ReasonCode       string
+	Operator         string
+	AtUTC            string
+}
+
+// IngestAbandonmentProvider 提供「已被人工裁定永久丢失」的源位置区间。
 //
+// 与 logcoord 的分区可查询性**分开**：本接口只回答「分区内部哪些位置永久缺失」，
+// 不参与、也不修改 coverage 的状态判定。缺了它，下游查询会把"永久丢失"当成"本来就没有"，
+// 即静默跳过。
+type IngestAbandonmentProvider interface {
+	AbandonedRanges(targetIDs []string) []IngestPositionGap
+}
+
+// IngestAbandonmentFunc 把普通函数适配成 IngestAbandonmentProvider
+// （与既有 CutoverReadinessFunc 同一模式：让 apps/worker 做跨包适配，服务层不反向依赖 ingest）。
+type IngestAbandonmentFunc func(targetIDs []string) []IngestPositionGap
+
+// AbandonedRanges 实现 IngestAbandonmentProvider。
+func (f IngestAbandonmentFunc) AbandonedRanges(targetIDs []string) []IngestPositionGap {
+	if f == nil {
+		return nil
+	}
+	return f(targetIDs)
+}
+
+// OperatorMetadataKey 是承载「操作人认证主体」的 incoming gRPC metadata 键。//
 // 为什么用 metadata 而不是给 proto 加字段：本路径的操作人来自**调用方的认证上下文**，
 // 而不是请求体（请求体可被任意伪造，PUT 一个字段就把责任推给别人）。用 metadata 让
 // 「谁在调用」由传输层携带，且**无需 proto 变更与代码生成**，CP 侧只要在发起该 RPC 时
@@ -133,6 +163,8 @@ type Service struct {
 	migrator    PartitionMigrator
 	cutover     CutoverReadinessProvider
 	gapResolver IngestGapResolver
+	// abandonments 提供「已放弃位置」标记（可空：未接线时不返回该标记，而不是编造空成功）。
+	abandonments IngestAbandonmentProvider
 }
 
 // New 构造已启用的日志 RPC 服务层。
@@ -159,6 +191,9 @@ func (s *Service) SetRuntimeCatalog(cat *catalog.Catalog)                { s.cat
 func (s *Service) SetPartitionMigrator(migrator PartitionMigrator)       { s.migrator = migrator }
 func (s *Service) SetCutoverReadiness(provider CutoverReadinessProvider) { s.cutover = provider }
 func (s *Service) SetIngestGapResolver(resolver IngestGapResolver)       { s.gapResolver = resolver }
+func (s *Service) SetIngestAbandonmentProvider(p IngestAbandonmentProvider) {
+	s.abandonments = p
+}
 
 // Enabled 报告服务是否启用。
 func (s *Service) Enabled() bool { return s.enabled && s.query != nil }
@@ -262,7 +297,40 @@ func (s *Service) LogSearch(ctx context.Context, req *workerpb.LogSearchRequest)
 	out := grpcmap.SearchResponseToProto(resp)
 	// 二次回填：确保 proto 侧 targets 携带 planner view 的 closed_visible_seq。
 	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	s.fillIngestPositionGaps(out, qreq.AuthorizedTargets)
 	return out, nil
+}
+
+// fillIngestPositionGaps 回填「已放弃位置」标记：本响应涉及的命名空间里，哪些源位置区间
+// 已被人工裁定为永久丢失。
+//
+// 为什么必须单独回填而不是并进 coverage：两者语义不同（见 proto 注释），把"永久丢失"塞进
+// coverage 的枚举或在 partial_reasons 里混写，会让下游误以为那是"暂时查不到"，
+// 从而按重试处理一个永远不会恢复的区间——那正是要消灭的静默跳过。
+// 目标集取请求的授权目标（形如 storage_namespace 或 storage_namespace/YYYY-MM-DD）；
+// **空 = 本 Worker 全部**（与 planner「空 = 全部 Catalog 分区」同一口径），由提供者展开为全源。
+func (s *Service) fillIngestPositionGaps(out *workerpb.LogSearchResponse, targetIDs []string) {
+	// 注意：**不因 targetIDs 为空而提前返回**。空在 planner 语义下是「本 Worker 全部」
+	// （见 query.Planner 的 TargetIDs 说明），若此处提前返回，一次不带授权目标的查询就会
+	// 拿到"没有永久丢失"的空结果——那正是要消灭的静默跳过（标记看似实现了、实际永远为空）。
+	if s.abandonments == nil || out == nil {
+		return
+	}
+	gaps := s.abandonments.AbandonedRanges(targetIDs)
+	if len(gaps) == 0 {
+		return
+	}
+	out.IngestPositionGaps = make([]*workerpb.IngestPositionGap, 0, len(gaps))
+	for _, g := range gaps {
+		out.IngestPositionGaps = append(out.IngestPositionGaps, &workerpb.IngestPositionGap{
+			StorageNamespace: g.StorageNamespace,
+			From:             g.From,
+			To:               g.To,
+			ReasonCode:       g.ReasonCode,
+			Operator:         g.Operator,
+			AtUtc:            g.AtUTC,
+		})
+	}
 }
 
 // LogStats 聚合逻辑事件集合。

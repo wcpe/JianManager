@@ -1135,6 +1135,76 @@ func (m *Manager) pollOnce() {
 	}
 }
 
+// AbandonedSourceRange 是一段被人工裁定为永久丢失的源位置区间（查询面数据）。
+type AbandonedSourceRange struct {
+	StorageNamespace string
+	From             uint64
+	To               uint64
+	ReasonCode       string
+	Operator         string
+	AtUTC            string
+}
+
+// AbandonedRanges 返回与给定授权目标（形如 storage_namespace 或 storage_namespace/YYYY-MM-DD）
+// 相关的、已被人工裁定永久丢失的源位置区间。
+//
+// 目标匹配用**前缀**（"<ns>/"）：调用方给的是 catalog 分区键（ns/day，见
+// catalog.PartitionKey.String），而放弃凭据是按**源**（存储命名空间）存的。
+// 用前缀而不是解析"取斜杠前那段"，是为了不依赖日期格式——解析格式一旦变了，
+// 匹配会静默失配、标记静默消失（比不实现更坏）。
+//
+// 未接线/空的目标集表示「本 Worker 全部源」（与 planner「空 = 全部 Catalog 分区」同一口径）：
+// 此时不按命名空间过滤，返回全部源的放弃凭据——否则"没传目标"会表现成"没有永久丢失"，
+// 那正是静默跳过。
+func (m *Manager) AbandonedRanges(targetIDs []string) []AbandonedSourceRange {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	pipes := make(map[string]*pipeline.Pipeline, len(m.pipes))
+	namespaces := make(map[string]string, len(m.pipes)) // key -> storage namespace
+	for key, p := range m.pipes {
+		pipes[key] = p
+		if src, ok := m.sources[key]; ok {
+			namespaces[key] = src.StorageNamespace
+		}
+	}
+	m.mu.Unlock()
+
+	var out []AbandonedSourceRange
+	for key, p := range pipes {
+		ns := namespaces[key]
+		if ns == "" {
+			continue
+		}
+		if len(targetIDs) > 0 && !targetMatchesNamespace(targetIDs, ns) {
+			continue
+		}
+		entry := p.Ledger().Get(p.Key())
+		if entry == nil {
+			continue
+		}
+		for _, ab := range entry.Abandonments {
+			out = append(out, AbandonedSourceRange{
+				StorageNamespace: ns, From: ab.From, To: ab.To,
+				ReasonCode: ab.ReasonCode, Operator: ab.Operator, AtUTC: ab.AtUTC,
+			})
+		}
+	}
+	return out
+}
+
+// targetMatchesNamespace 报告授权目标里是否有指向该命名空间的分区键。
+func targetMatchesNamespace(targetIDs []string, ns string) bool {
+	prefix := ns + "/"
+	for _, t := range targetIDs {
+		if t == ns || strings.HasPrefix(t, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // archiveOwnerLookup 返回「归档归属代次」查询：在**既有持久化**里枚举同一 LogSourceID 的
 // 各个代次，回答某个归档对象已被哪个代次导入过。
 //

@@ -2500,6 +2500,29 @@ message LogSearchResponse {
   string next_cursor = 6;
   bool exhausted = 7;
   LogError error = 8;
+  // ingest_position_gaps 是本 Worker 已**人工裁定放弃**（PERMANENTLY_LOST）的源位置区间。
+  //
+  // 与 coverage 的语义**严格分开**（不可混用、不可合并）：
+  //   - coverage 回答「这个分区还能不能查」（logcoord 的分区可查询性，值域是枚举状态）；
+  //   - 本字段回答「这个分区**内部**有哪些位置的数据已被确认永久缺失」（逐区间，值域是位置）。
+  // 缺了它，下游只能看到"有数据"，而无法知道某个区间是**确实没有**、还是**永久丢了**——
+  // 那正是"静默跳过"：查询结果看起来完整，实际中间少了一段且无人告知。
+  repeated IngestPositionGap ingest_position_gaps = 9;
+}
+
+// IngestPositionGap 一段被人工裁定为永久丢失的源位置区间（可查、可告警）。
+message IngestPositionGap {
+  // storage_namespace 该区间所属的存储命名空间（= 源）。
+  string storage_namespace = 1;
+  // from/to 源位置闭区间 [from, to]。
+  uint64 from = 2;
+  uint64 to = 3;
+  // reason_code 固定为 PERMANENTLY_LOST；留字段以便将来自查与扩展。
+  string reason_code = 4;
+  // operator 做出放弃裁定的操作人（认证主体）。放弃不可无痕，故必然非空。
+  string operator = 5;
+  // at_utc 裁定时间（RFC3339）。
+  string at_utc = 6;
 }
 
 message LogStatsRequest {
