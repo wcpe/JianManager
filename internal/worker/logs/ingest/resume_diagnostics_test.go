@@ -55,6 +55,10 @@ func TestResumeDiagnosticsExposePerSourceGate(t *testing.T) {
 				"本例投递水位为 0 ⇒ 缺口整体在其之上（= 靶②形态：水位覆盖判据消解不了，需恢复链重投 ✓）")
 		}
 	}
+	// 闸视图 vs 总量视图（用户 2026-10-05 指定的分辨读数 ✓）：本例无回放归因 ⇒ 两者相等 ✓。
+	require.Equal(t, d.BacklogEntries, d.BacklogTotalEntries,
+		"无回放归因时两视图必须相等（相等 ⇒ WAL 增长属常规新数据 ⇒ 方案①不适用 ✓）")
+	require.Zero(t, d.ReplayEntries, "本例无回放写入 ⇒ 回放在飞必须为 0 ✓")
 	require.Equal(t, 1, d.Blocking,
 		"仍会挡住 ResumeAcquire 的只有不可分类那条（STDIO ✓）——这正是「清零却仍暂停」的判别输入 ✓")
 }

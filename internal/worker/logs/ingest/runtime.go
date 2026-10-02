@@ -5163,6 +5163,13 @@ type SourceResumeDiagnostic struct {
 	// BacklogEntries / Limits 是当前积压与生效上限（含恢复期拓宽 ✓）。
 	BacklogEntries int64
 	MaxEntries     int64
+	// BacklogTotalEntries / ReplayEntries 是**总量视图**与其中"回放归因"的条数 ✓。
+	//
+	// 判据（用户 2026-10-05 指定 ✓）：`BacklogTotalEntries == BacklogEntries` ⇒ **无回放归因**
+	// （WAL 增长 = 复活后的**常规新数据** ⇒ 方案① 不适用 ✓，靠背压/滞回压制 ✓）；
+	// `BacklogTotalEntries > BacklogEntries` ⇒ **存在回放归因** ⇒ 再去点名该走 `IngestReplay` 的调用点 ✓。
+	BacklogTotalEntries int64
+	ReplayEntries       int64
 	// DeliveryPos / DurablePos 是账本水位（靶②判据：缺口是否在**已投递水位之上** ⇒ 需恢复链重投
 	// 而非水位覆盖 ✓）。
 	DeliveryPos uint64
@@ -5231,6 +5238,8 @@ func (m *Manager) ResumeDiagnostics() []SourceResumeDiagnostic {
 			})
 		}
 		d.BacklogEntries, d.MaxEntries = wal.BacklogAndLimits()
+		d.BacklogTotalEntries, _ = wal.BacklogTotal()
+		d.ReplayEntries, _ = wal.ReplayInFlight()
 		out = append(out, d)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].LogSourceID < out[j].LogSourceID })
