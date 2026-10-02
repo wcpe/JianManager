@@ -5518,6 +5518,7 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		// **枚举类跳过**（不在管道/原因非积压类）：分类计数 ✓，让"41 家为何不动"可直接读出来 ✓。
 		handled++ // 计入本轮容量：**处理**（无论最终是否放行）都占额度 ✓，避免慢源无限拖延一轮 ✗
 		candidates++
+		m.sweepCandidates.Add(1) // 计数归属在**观测发生处** ✓（直接调用者也能看到读数 ✓）
 		if m.resumeProbe != nil {
 			m.resumeProbe(p.Key().LogSourceID)
 		}
@@ -5543,6 +5544,7 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		}
 		if wasPaused && after != nil && !after.AcquirePaused {
 			revived++
+			m.sweepRevived.Add(1)
 		}
 	}
 
@@ -5596,10 +5598,8 @@ func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
 					"streak", streak, "threshold", m.sweepBackpressureStreakOf(), "backlog", now)
 				continue
 			}
-			m.syncRecoveryQuota() // 先同步配额口径（恢复中/宽限/回归 ✓），再扫暂停源 ✓
-			cands, revived := m.maybeResumePausedSources()
-			m.sweepCandidates.Add(int64(cands))
-			m.sweepRevived.Add(int64(revived))
+			m.syncRecoveryQuota()                          // 先同步配额口径（恢复中/宽限/回归 ✓），再扫暂停源 ✓
+			cands, revived := m.maybeResumePausedSources() // 计数由函数内累加 ✓（避免双计 ✗）
 			// **每轮为何无复活**（把猜测变读数 ✓）：有候选却零复活时打一条汇总 ✓，否则静默 ✓。
 			if cands > 0 && revived == 0 {
 				slog.Warn("兜底环本轮无复活（可观测：候选/复活/各类跳过计数）",
