@@ -5246,6 +5246,29 @@ func (m *Manager) ResumeDiagnostics() []SourceResumeDiagnostic {
 	return out
 }
 
+// ResumeDiagnosticLines 把诊断面折成**只含异常项**的可日志行（暂停 / 有未消解缺口 / 有回放在飞 ✓）。
+//
+// 为什么必须"可达"（2026-10-05 用户点名的教训 ✗✓）：`ResumeDiagnostics` 此前只有定义与测试引用 ⇒
+// **没有生产可达面** ✓ —— 正是我们一路在抓的"实现存在但不可达"，这次中招的是自己的新工具 ✗。
+// 本函数供**每分钟打点**（与采集索引持久化耗时采样同一 sampler ✓）与 CLI 使用；只打非零项，
+// 避免 60 源刷屏 ✓。`BacklogEntries>0` 属正常态，**不打**（噪声 ✗）。
+func (m *Manager) ResumeDiagnosticLines() []string {
+	diags := m.ResumeDiagnostics()
+	lines := make([]string, 0, len(diags))
+	for _, d := range diags {
+		if !d.AcquirePaused && d.Unresolved == 0 && d.ReplayEntries == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf(
+			"source=%s paused=%v reason=%q backlog_pause=%v backlog=%d/%d total=%d replay=%d unresolved=%d blocking=%d delivery_pos=%d",
+			d.LogSourceID, d.AcquirePaused, d.PauseReason, d.BacklogPause,
+			d.BacklogEntries, d.MaxEntries, d.BacklogTotalEntries, d.ReplayEntries,
+			d.Unresolved, d.Blocking, d.DeliveryPos))
+	}
+	sort.Strings(lines)
+	return lines
+}
+
 // gapReasonClassifiableOnResume 报告某原因是否属于"恢复后回读可愈合"的白名单（与 acquire 侧一致 ✓）。
 func gapReasonClassifiableOnResume(reason string) bool {
 	switch reason {

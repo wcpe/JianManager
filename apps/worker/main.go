@@ -982,6 +982,9 @@ func runWorker() {
 			// 本窗口写入行数/字节数，供真机「60 源单次持久化 ≤50ms」验收直接取证
 			// （整本重写会让写入行数逼近索引总行数，读数一眼可辨）。
 			go sampleLogIndexPersistLatency(ingestCtx, manager)
+			// 恢复判据快照**接在同一分钟打点上**（2026-10-05：新工具必须有生产可达面 ✗✓）：
+			// 只打"暂停 / 有未消解缺口 / 有回放在飞"的源 ✓，正常源不打，避免刷屏 ✓。
+			go sampleResumeDiagnostics(ingestCtx, manager)
 			// 保留策略驱动器：首轮立即执行（启动时正是「停机期间攒下的过期分区」最需要处理的时刻），
 			// 之后按 log_retention.sweep.interval 周期跑。与采集运行时共用同一 ctx 生命周期。
 			if logRetentionDriver != nil {
@@ -1398,6 +1401,32 @@ func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) 
 				continue
 			}
 			logIndexPersistSample(window, latency, manager.PersistSamples())
+		}
+	}
+}
+
+// sampleResumeDiagnostics 每分钟打印一次"恢复判据快照"（只含异常项 ✓）。
+//
+// 为什么需要（2026-10-05 用户点名 ✗✓）：`ResumeDiagnostics` 一度**只有定义与测试引用** ⇒
+// 生产不可达 ⇒ 现场只能靠 SQL 反推"清零却仍暂停" ✗。接在同一条分钟打点上，读数即日志 ✓。
+func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
+	if manager == nil {
+		return
+	}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			lines := manager.ResumeDiagnosticLines()
+			if len(lines) == 0 {
+				continue
+			}
+			for _, line := range lines {
+				slog.Info("恢复判据快照", "detail", line)
+			}
 		}
 	}
 }
