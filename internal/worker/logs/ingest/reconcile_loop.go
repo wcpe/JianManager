@@ -351,7 +351,9 @@ func (m *Manager) canonicalDayCounts(key string, source SourceConfig) (reconcile
 	if err != nil {
 		return reconcileExpectation{}, err
 	}
-	grouped, days, err := groupEventsByUTCDay(source, events)
+	// CPU 密集对账**在轮内主动让路**（可配：log_reconcile.slice_events / yield）：
+	// 现场形态是对账分组与采集轮抢核，采集"没等锁也没等落库"却推进不动 ✗。
+	grouped, days, err := m.groupReconcileEvents(source, events)
 	if err != nil {
 		return reconcileExpectation{}, err
 	}

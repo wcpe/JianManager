@@ -194,6 +194,18 @@ type Manager struct {
 	// persistStepHold 是持久化步骤的测试观测口（生产 nil，零开销）：在**持门执行步骤期间**回调，
 	// 让回归能确定性地"把门按住"（阻断即持门），从而断言热路径的有界等待与交办行为。
 	persistStepHold func()
+	// persistPlanHold 是**门外规划**的测试观测口（生产 nil）：在 planPersist 开头回调，
+	// 用于证明"长规划不占门"（变异=把规划移回门内 ⇒ 采集/投递单元被卡 ⇒ 红 ✓）。
+	persistPlanHold func()
+	// reconcileYield/SliceEvents 是**对账 CPU 让路**的运行时配置（见 groupEventsByUTCDayYielding）。
+	reconcileYield       time.Duration
+	reconcileSliceEvents int
+	// reconcileYieldNotify 是让路次数观测口（生产 nil，零开销）。
+	reconcileYieldNotify func()
+	// resumeInterval 是**容量自愈兜底**的低频周期（键 log_capacity.resume_interval）。
+	resumeInterval time.Duration
+	// resumeProbe 是兜底扫描的测试观测口（生产 nil）：每个"积压/容量类暂停"的源被扫到时回调。
+	resumeProbe func(logSourceID string)
 	// persistRequests/persistWorkerDone 是**后台持久化通道**：热路径超时后把「请落库」交给它，
 	// 由独立 goroutine 完成（它才是允许阻塞的那一方）。cap=1：已有待办请求即无需重复入队。
 	persistRequests   chan struct{}
@@ -242,6 +254,23 @@ type Manager struct {
 	verifyMaxQueriesPerChunk int
 	// verifyLimiter 是校验/对账查询的全局天花板（速率 + 在飞）。
 	verifyLimiter *verifyLimiter
+	// verifyRoundProgress 记录**本轮已完成多少块校验**：轮级预算只允许在"本轮已有进展"之后
+	// 才把后续源推迟到下一轮 ✗——否则慢环境（-race 放大 / VL 变慢）下第一个源就会吃掉整轮预算，
+	// 之后每个源都被推迟 ⇒ 同一批源**每轮都被推迟**、永不判定 ✗✗（实测：race 下 12 源夹具停滞，
+	// 未就绪源数长期不降）。保证"每轮至少推进一个"是本修复的硬要求 ✓。
+	verifyRoundProgress atomic.Int64
+
+	// verifyRoundBudget 是**每源每轮的校验时间预算**（可配，默认 1.5s）。
+	//
+	// 为什么（2026-10-03 现场 Q4：未暂停源 readΔ 全 0）：采集轮是**全源屏障**——轮内固定 worker
+	// 逐源串行，少数源卡在"校验等待"就把 worker 占住，本轮其余源连 `Poll` 都轮不到 ✗。
+	// 有了本预算：单源本轮最多等这么久，超出即**本轮放弃**（结论与"窗口内未可见"同族 ✓），
+	// 交回下一轮 ⇒ 轮墙钟有界 ⇒ **每个源每轮都能跑到 Poll** ✓✓。
+	verifyRoundBudget time.Duration
+	// verifyRoundDeadline 是本轮的校验截止时刻（unix nanos；0 表示不限，用于非轮内调用路径）。
+	verifyRoundDeadline atomic.Int64
+	// verifyDeferred 是"因轮级预算而本轮放弃校验"的计数（可观测 ✓）。
+	verifyDeferred atomic.Int64
 	// verifyBackoffMin/verifyBackoffMax 是投影校验重试的退避区间（B1c）；0 用默认常量。
 	verifyBackoffMin time.Duration
 	verifyBackoffMax time.Duration
@@ -409,6 +438,16 @@ type Options struct {
 	// 下限 64 行——真源是 stateindex 的 DefaultCommitMaxRows/DefaultCommitMinRows/DefaultCommitTarget）。
 	// 单次持久化按行数 + 耗时双上界切成多个提交单元，见 stateindex.CommitBudget。
 	IndexCommit *stateindex.CommitBudget
+	// ReconcileYield / ReconcileSliceEvents 是**对账 CPU 让路**的配置面（键 log_reconcile.yield /
+	// slice_events）：每 slice 条事件 `Sleep(yield)` 交还 P，避免对账与采集抢核 ✗（0/0 ⇒ 关闭）。
+	ReconcileYield       time.Duration
+	ReconcileSliceEvents int
+	// ReconcileYieldNotify 是让路次数的观测口（测试/排障用，生产 nil）。
+	ReconcileYieldNotify func()
+	// ResumeInterval 是**容量自愈兜底**周期（0 ⇒ 默认 30s）：低频重试「排空存量 → 推进回收 →
+	// 按滞回解除积压/容量类暂停」，不依赖采集轮产生新批次 ✗。
+	ResumeInterval time.Duration
+
 	// WALLimits 是单源 WAL **真实积压**上限（条目数 + 字节）的配置面（键 log_capacity.*）；
 	// nil 表示沿用 acquire 包默认。接线到 acquire.WAL.SetLimits。
 	WALLimits *acquire.WALLimits
@@ -440,6 +479,9 @@ type Options struct {
 	// VerifyMaxQueriesPerChunk 是单簇单次校验的尝试次数上限（键
 	// log_index.verify.max_queries_per_chunk）；≤0 用默认（12）。
 	VerifyMaxQueriesPerChunk int
+	// VerifyRoundBudget 是每源每轮的校验时间预算（键 log_index.verify.round_budget）；
+	// ≤0 用默认（1.5s）。见 Manager.verifyRoundBudget 的说明。
+	VerifyRoundBudget time.Duration
 	// PersistHotBudget 是热路径（采集/投递）在持久化门上的等待上界（键
 	// log_index.persist.hot_budget）；≤0 用默认（30ms）。超时即交给后台持久化通道，采集不受阻。
 	PersistHotBudget time.Duration
@@ -476,6 +518,10 @@ type ReplayTuning struct {
 	VLReadyProbeTimeout time.Duration
 	VLReadyWait         time.Duration
 	Budget              ReplayBudget
+	// ReconcileYield / ReconcileSliceEvents：**对账 CPU 让路**（键 log_reconcile.yield /
+	// slice_events）。0 ⇒ 用 ingest 默认（5ms / 4096 条）。
+	ReconcileYield       time.Duration
+	ReconcileSliceEvents int
 }
 
 // ReplayBudget 是整窗重发的切片预算：一轮最多重发几天 / 最多跑多久。
@@ -1124,6 +1170,10 @@ func New(opts Options) (*Manager, error) {
 		indexPrune:               indexPruneConfigOf(opts.IndexPrune),
 		indexCommit:              indexCommitBudgetOf(opts.IndexCommit),
 		walLimits:                opts.WALLimits,
+		reconcileYield:           reconcileYieldFromOpts(opts),
+		reconcileSliceEvents:     reconcileSliceFromOpts(opts),
+		reconcileYieldNotify:     opts.ReconcileYieldNotify,
+		resumeInterval:           opts.ResumeInterval,
 		maxReplayEventsPerDrain:  opts.MaxReplayEventsPerDrain,
 		multilineUnclosedTimeout: multilineUnclosedTimeoutOf(opts.MultilineUnclosedTimeout),
 	}
@@ -1203,6 +1253,10 @@ func New(opts Options) (*Manager, error) {
 		m.verifyMaxQueriesPerChunk = defaultVerifyMaxQueriesPerChunk
 	}
 	m.verifyLimiter = newVerifyLimiter(opts.VerifyBudget)
+	m.verifyRoundBudget = opts.VerifyRoundBudget
+	if m.verifyRoundBudget <= 0 {
+		m.verifyRoundBudget = defaultVerifyRoundBudget
+	}
 	// 采集索引（FR-496）：打开 SQLite 索引，必要时一次性迁移旧 ingest.state.json；
 	// 迁移/校验失败 → 拒绝启动采集（不静默降级），保留旧文件供人工处置。
 	if err := m.openIndex(); err != nil {
@@ -1857,6 +1911,8 @@ func (m *Manager) Start(ctx context.Context) {
 	// 常驻增量对账（后续项③）：与采集轮共用同一 ctx 生命周期。它只读对账不持锁，
 	// 重发阶段持 cycleMu 与采集轮串行（见 reconcile_loop.go 的隔离说明）。
 	go m.RunReconcileLoop(ctx)
+	// 容量自愈兜底：不依赖采集轮产生新批次（2026-10-03 现场：暂停后无人再评估 ⇒ 成批源停死）。
+	go m.RunCapacityResumeLoop(ctx)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -2037,6 +2093,11 @@ const defaultPollConcurrency = 8
 func (m *Manager) pollOnce() {
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
+	// 轮级校验预算：本轮内单源校验最多等到这个时刻 ⇒ 轮墙钟不被少数源拖成分钟级 ✓
+	// （本轮跑完即清 0，非轮内路径（启动恢复/对账重发）不受影响，仍按各自窗口 ✓）。
+	m.verifyRoundDeadline.Store(time.Now().Add(m.verifyRoundBudgetOf()).UnixNano())
+	m.verifyRoundProgress.Store(0) // 本轮进展计数（见 verifyRoundProgress 注释）
+	defer m.verifyRoundDeadline.Store(0)
 	m.mu.Lock()
 	type sourcePipe struct {
 		source SourceConfig
@@ -2439,6 +2500,12 @@ func (m *Manager) archiveOwnerLookup() func(logSourceID, cleanPath, objectID str
 
 func (m *Manager) pollSource(source SourceConfig, p *pipeline.Pipeline) ([]logtypes.Event, bool, error) {
 	if source.Mode != pipeline.ModeFilePrimary || source.Path == "" {
+		if stageTimingEnabled() {
+			started := time.Now()
+			events, err := p.Poll()
+			m.recordRoundStage(source.LogSourceID, "poll", time.Since(started))
+			return events, false, err
+		}
 		events, err := p.Poll()
 		return events, false, err
 	}
@@ -2637,6 +2704,19 @@ var (
 	stageTimingOnce sync.Once
 	stageTimingOn   bool
 )
+
+// recordRoundStage 记一次采集轮内的阶段耗时（仅 JIANMANAGER_STAGE_TIMING=1 时生效）。
+//
+// 为什么（2026-10-03 现场 Q4：未暂停源 readΔ 全 0，而栈上已无锁阻塞）：采集轮是"全源屏障"——
+// 轮内固定 worker 逐源串行走「读 → WAL → 契约落库 → 投递 → 校验等待 → 发布 → 回收」，**少数源
+// 卡在哪个阶段**决定了整轮墙钟，也决定其余源何时才轮到自己读 ✗。阶段打点让现场直接读出
+// "时间去哪了"，不必再从 SIGQUIT 反推 ✓。
+func (m *Manager) recordRoundStage(source string, stage string, elapsed time.Duration) {
+	if m == nil || !stageTimingEnabled() {
+		return
+	}
+	slog.Info("采集阶段耗时", "source", source, "stage", stage, "elapsedMs", elapsed.Milliseconds())
+}
 
 func stageTimingEnabled() bool {
 	stageTimingOnce.Do(func() { stageTimingOn = os.Getenv("JIANMANAGER_STAGE_TIMING") == "1" })
@@ -3367,8 +3447,28 @@ func canonicalEventTime(event logtypes.Event) (time.Time, error) {
 }
 
 func groupEventsByUTCDay(source SourceConfig, events []logtypes.Event) (map[string][]logtypes.Event, []string, error) {
+	// 零让路包装：包外调用点逐字不变 ✓（让路只在常驻对账路径显式启用）。
+	return groupEventsByUTCDayYielding(source, events, 0, 0, nil)
+}
+
+// groupEventsByUTCDayYielding 是**会主动让路**的分组实现（CPU 密集对账的节流口）。
+//
+// 为什么必须让路（2026-10-03 现场 X 光片）：`canonicalDayCounts→groupEventsByUTCDay` 对整源事件
+// 做一次全量分组（单源可达数十万条），在 60 台/113 万条规模下与采集轮**抢核** ✗——采集轮
+// 表现为"明明没等锁、也没等落库，却推进不动"。让路 = 每 slice 条 `time.Sleep(yield)`：
+// 睡眠会把 P 交还调度器 ✓ 采集轮立即获得 CPU ✓；对账自身只多花 O(总条数/slice × yield) ✓
+// （默认 4096 条 / 5ms：10 万条源 ≈ 120ms 额外延迟，可忽略 ✓）。
+//
+// slice<=0 或 yield<=0 ⇒ 零让路（等价于纯函数，测试可关 ✓）。
+func groupEventsByUTCDayYielding(source SourceConfig, events []logtypes.Event, slice int, yield time.Duration, notify func()) (map[string][]logtypes.Event, []string, error) {
 	grouped := make(map[string][]logtypes.Event)
-	for _, event := range events {
+	for i, event := range events {
+		if yield > 0 && slice > 0 && i > 0 && i%slice == 0 {
+			if notify != nil {
+				notify()
+			}
+			time.Sleep(yield)
+		}
 		day, err := eventUTCDay(source, event)
 		if err != nil {
 			return nil, nil, err
@@ -3556,7 +3656,13 @@ const (
 	// 退避重试原本会一直重试到校验窗口耗尽（生产 5 分钟 ⇒ 单簇 150+ 次查询 ✗）；窗口仍决定
 	// "等多久"，本预算决定"最多问几次"，两者取先到者。
 	defaultVerifyMaxQueriesPerChunk = 12
-	defaultVerifyChunkEvents        = 2000
+	// defaultVerifyRoundBudget 是**每源每轮**的校验时间预算默认值（1.5s，键
+	// log_index.verify.round_budget 可配）。
+	//
+	// 取值依据：正常一轮里单源校验只需 1 次查询、毫秒级 ✓（预算远离它 ⇒ 健康路径零影响 ✗）；
+	// 而"退避等待到窗口耗尽"的源会被限在 1.5s 内 ⇒ 一轮的墙钟不再由少数源决定 ✓✓。
+	defaultVerifyRoundBudget = 1500 * time.Millisecond
+	defaultVerifyChunkEvents = 2000
 	// defaultVerifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取该默认，1 为串行。
 	// 校验查询的成本几乎全在「返回体传输 + 客户端逐行 JSON 解析」，属可并行部分；
 	// 跨源并发（pollConcurrency）只重叠了源与源之间的等待，源内部的等待仍逐个叠加。
@@ -3775,7 +3881,27 @@ func verifyErrorIsSemantic(err error) bool {
 // parent 是整批的 ctx：同批其他簇失败/超时会取消它——此时本簇不得把取消噪音（context canceled、
 // 被截断响应体的 JSON 解析错误）当成自己的校验结论，否则现场看到的会是噪音而非真正根因。
 func (m *Manager) verifyProjectionChunk(parent context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) (verifyQueryStats, error) {
-	ctx, cancel := context.WithTimeout(parent, m.verificationTimeout)
+	timeout := m.verificationTimeout
+	if deadlineNanos := m.verifyRoundDeadline.Load(); deadlineNanos > 0 {
+		if remaining := time.Until(time.Unix(0, deadlineNanos)); remaining < timeout {
+			// **保底放行**：本轮还没完成过任何一块校验 ⇒ 即使预算已用尽也放行本块 ✓。
+			// 少了这条，慢环境下（-race / VL 变慢）第一个源吃掉整轮预算后，每个源每轮都被推迟
+			// ⇒ 同一批源永不判定 ✗✗（实测停滞）。"每轮至少推进一个"是收敛性底线 ✓。
+			if m.verifyRoundProgress.Load() == 0 {
+				m.verifyRoundProgress.Add(1)
+			} else {
+				// 轮级预算已用尽/只剩一点：本轮到此为止（结论与"窗口内未可见"同族 ✓），
+				// 交回下一轮——**不改变"最终必判成/败"**：判定由驱动侧窗口与轮次共同收敛 ✓。
+				m.verifyDeferred.Add(1)
+				timeout = remaining
+				if timeout <= 0 {
+					return verifyQueryStats{}, fmt.Errorf("ingest: projection %s verification deferred to next round (round budget exhausted)", generation)
+				}
+			}
+			m.verifyRoundProgress.Add(1)
+		}
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	// 退避重试（B1c）：原实现以固定 200ms 轮询直至超时（默认 30 秒 ≈ 最多约 150 次校验
 	// 查询/源）。高负载时每次查询更慢、重试互相叠加，会把 VL 与磁盘一起压垮——2026-09-28
@@ -4411,6 +4537,15 @@ func (m *Manager) projectionGenerationUsed(ctx context.Context, client *vlsup.Cl
 		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
 		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
 	params := url.Values{"query": {selector + " | fields _time | limit 1"}}
+	// Q3（2026-10-03 现场 1364/min）：**代次占用探测也是投影查询** ✗ —— 它发生在每次取新代次时
+	// （重放的每一天、每个源各一次），此前**完全没走天花板闸** ✓。现在并入同一 limiter：
+	// 与校验查询共享速率/在飞上限（天花板语义 ⇒ 正常路径零等待 ✓）。
+	if m.verifyLimiter != nil {
+		if err := m.verifyLimiter.Acquire(ctx); err != nil {
+			return false, err
+		}
+		defer m.verifyLimiter.Release()
+	}
 	used := false
 	err := client.Stream(ctx, "/select/logsql/query", params, func(body io.Reader) error {
 		scanner := bufio.NewScanner(io.LimitReader(body, 1<<20))
@@ -4771,7 +4906,9 @@ func (m *Manager) persist() error {
 // 冻结 + VL 零写入。现在恢复链一步一让，完整性由**驱动链的趟循环**保证（启动恢复的 pass 循环、
 // 常驻对账的轮次），且 `persistCovered` 只在整批完成时推进 ⇒ 不会谎报已覆盖。
 func (m *Manager) persistRecoveryStep(ctx context.Context) error {
-	return m.persistCtx(ctx, persistNormalOneStep)
+	// 恢复链同样走**有界等待 → 交后台 → 立即返回**（2026-10-03 现场：恢复步整步占门，
+	// 6 个投递/采集单元卡 Cond.Wait）。语义不变：水位只在真落完时推进，未完成由驱动循环续做 ✓。
+	return m.persistCtx(ctx, persistMode{oneStep: true, maxWait: m.persistHotBudgetOf()})
 }
 
 // persistStepYield 是分步持久化「让路」的**下限**（真实窗口见 Manager.persistYieldOf）。
@@ -4812,6 +4949,129 @@ var (
 	persistPriority      = persistMode{priority: true}
 	persistNormalOneStep = persistMode{oneStep: true}
 )
+
+// reconcileYieldFromOpts / reconcileSliceFromOpts 解析对账让路配置：直连字段优先，
+// 其次走 ReplayTuning（= `log_reconcile.yield/slice_events` 的配置面），都没有则用默认 ✓。
+func reconcileYieldFromOpts(opts Options) time.Duration {
+	if opts.ReconcileYield > 0 {
+		return opts.ReconcileYield
+	}
+	if opts.ReplayTuning != nil && opts.ReplayTuning.ReconcileYield > 0 {
+		return opts.ReplayTuning.ReconcileYield
+	}
+	return 0
+}
+
+func reconcileSliceFromOpts(opts Options) int {
+	if opts.ReconcileSliceEvents > 0 {
+		return opts.ReconcileSliceEvents
+	}
+	if opts.ReplayTuning != nil && opts.ReplayTuning.ReconcileSliceEvents > 0 {
+		return opts.ReplayTuning.ReconcileSliceEvents
+	}
+	return 0
+}
+
+// defaultResumeInterval 是容量自愈兜底的默认周期。
+//
+// 依据（2026-10-03 现场）：暂停的唯一恢复评估点挂在采集轮上（Append 前/投递后 TryReclaim），
+// 而暂停期间采集轮只"只投递不读取"⇒ 一旦投递也停（或上游全堵），恢复评估再无人触发 ✗，
+// 表现为暂停不回落、成批源停死。30s 足够低频（开销 ≈ 每源一次 O(1) 账本读）又能把
+// "停死数小时"压缩到"最多 30s 后发现可恢复" ✓。
+const defaultResumeInterval = 30 * time.Second
+
+func (m *Manager) resumeIntervalOf() time.Duration {
+	if m == nil || m.resumeInterval <= 0 {
+		return defaultResumeInterval
+	}
+	return m.resumeInterval
+}
+
+// maybeResumePausedSources 是容量自愈兜底的一次执行：**只碰积压/容量类暂停** ✓。
+//
+// 红线（用户指令）：绝不越权清其它类暂停（容量门禁等）——原因前缀不属于本包积压类的源一律跳过 ✓；
+// 对符合的源做「尽力排空存量 → 推进回收 → 滞回评估」，积压回落到滞回线即自动解除 ✓。
+func (m *Manager) maybeResumePausedSources() {
+	m.mu.Lock()
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+	for _, p := range pipes {
+		led := p.Ledger()
+		if led == nil {
+			continue
+		}
+		entry := led.Get(p.Key())
+		if entry == nil || !entry.AcquirePaused {
+			continue
+		}
+		if !acquire.IsBacklogPauseReason(entry.PauseReason) {
+			continue // 越权红线：非积压/容量类暂停绝不动 ✓
+		}
+		if m.resumeProbe != nil {
+			m.resumeProbe(p.Key().LogSourceID)
+		}
+		// 排空侧：先把已 durable 未确认的存量发出去（投递成功才会推进回收）✓
+		_, _ = p.DeliverPending()
+		// 回收侧再评估：TryReclaim（按当前水位剪枝）+ 滞回恢复 ✓
+		_ = p.EvaluateResume()
+	}
+}
+
+// RunCapacityResumeLoop 是容量自愈兜底循环（低频、只读账本、ctx 结束即退）。
+func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticker := time.NewTicker(m.resumeIntervalOf())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.maybeResumePausedSources()
+		}
+	}
+}
+
+// groupReconcileEvents 是常驻对账的**唯一分组入口**：把让路旋钮（slice/yield）与观测口
+// 一次性接上，避免调用点各写各的（调用点漏接 = 让路静默失效 ✗）。
+func (m *Manager) groupReconcileEvents(source SourceConfig, events []logtypes.Event) (map[string][]logtypes.Event, []string, error) {
+	return groupEventsByUTCDayYielding(source, events, m.reconcileSliceOf(), m.reconcileYieldOf(), m.reconcileYieldNotify)
+}
+
+// defaultReconcileYield / defaultReconcileSliceEvents 是**对账 CPU 让路**的默认值。
+//
+// 依据（2026-10-03 现场）：60 台/113 万条规模下对账分组与采集抢核 ⇒ 采集轮"无锁无等待却推不动" ✗。
+// 默认 4096 条 / 5ms：10 万条源额外延迟 ≈ 24×5ms ≈ 120ms（可忽略 ✓），但每个切片都交还 P ✓。
+const (
+	defaultReconcileYield       = 5 * time.Millisecond
+	defaultReconcileSliceEvents = 4096
+)
+
+// reconcileYieldOf 归一化对账让路时长（<=0 ⇒ 默认；负值配置在启动期已被拒 ✗）。
+func (m *Manager) reconcileYieldOf() time.Duration {
+	if m == nil {
+		return defaultReconcileYield
+	}
+	if m.reconcileYield > 0 {
+		return m.reconcileYield
+	}
+	return defaultReconcileYield
+}
+
+// reconcileSliceOf 归一化让路切片大小（<=0 ⇒ 默认）。
+func (m *Manager) reconcileSliceOf() int {
+	if m == nil || m.reconcileSliceEvents <= 0 {
+		return defaultReconcileSliceEvents
+	}
+	return m.reconcileSliceEvents
+}
 
 // persistHot 是采集/投递侧的统一入口：绝不为落库阻塞（超时交给后台通道）。
 func (m *Manager) persistHot() error {
@@ -4879,6 +5139,16 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 	if m.persistCovered.Load() >= seq {
 		return nil
 	}
+	// **铁律：规划在门外**（2026-10-03 现场）：持门者只做提交、不做规划 ✗✗。
+	// covered 必须在**规划之前**读取（规划之后声明的请求，其变更未必被本次规划看到 ✗）；
+	// 若规划完成后已被更新的计划覆盖，commitPersist 会按源做新鲜度过滤 ✓。
+	covered := m.persistJoin.Load()
+	plan, planErr := m.planPersist(ctx)
+	if planErr != nil {
+		// 规划失败：不阻塞调用方（热路径语义），交给后台通道重试；错误照旧上报 ✓。
+		m.requestPersist()
+		return planErr
+	}
 	g := &m.persistGate
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -4908,14 +5178,11 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 			}
 			g.mu.Unlock()
 
-			// 覆盖水位必须在**构建之前**读取：在此之后声明的请求，其变更（声明前已写入 state）
-			// 必然被本次构建看到，因此可以安全声明「已覆盖到该序号」。反过来（先构建后读）会把
-			// 构建看不到的请求也算作已落库，那是静默丢更新。
-			covered := m.persistJoin.Load()
+			// 覆盖水位与计划都在**门外**取好（见入口处）：门内只提交 ✗规划。
 			if m.persistStepHold != nil {
 				m.persistStepHold()
 			}
-			incomplete, err := m.persistSnapshotStep(ctx)
+			incomplete, err := m.commitPersist(ctx, plan)
 			if err == nil && !incomplete {
 				// 只有**完整落库**才推进覆盖水位：部分完成就宣称覆盖会静默丢更新。
 				m.persistCovered.Store(covered)
@@ -4992,6 +5259,22 @@ func (m *Manager) persistPriorityStreakMax() int {
 	return m.persistPriorityStreak
 }
 
+// verifyRoundBudgetOf 返回生效的轮级校验预算。
+func (m *Manager) verifyRoundBudgetOf() time.Duration {
+	if m != nil && m.verifyRoundBudget > 0 {
+		return m.verifyRoundBudget
+	}
+	return defaultVerifyRoundBudget
+}
+
+// VerifyDeferredCount 返回"因轮级预算而本轮放弃校验"的累计次数（观测面 ✓）。
+func (m *Manager) VerifyDeferredCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.verifyDeferred.Load()
+}
+
 // persistYieldOf 返回生效的让路窗口：默认 max(persistStepYield, GOMAXPROCS × 5ms)。
 //
 // 为什么与 GOMAXPROCS 挂钩：「一次完整调度」的量级取决于并行度——核越多，被唤醒的等待者越多，
@@ -5022,7 +5305,40 @@ func (m *Manager) persistGateEnsure() {
 // persistSnapshotStep 执行**一步**持久化：构建期望状态（m.mu 下）→ 释放 m.mu → 一次有界落库
 // （受每周期总预算约束）。返回 incomplete=true 表示差异尚未做完（镜像已按提交单元更新，
 // 下一步重算即续跑）。
-func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
+// persistPlan 是**门外的规划结果**：门内只允许做提交（ApplyScopedCtx）与水位推进 ✗规划。
+//
+// 为什么必须拆开（2026-10-03 现场 X 光片）：持门者在做 CPU 密集规划
+// （persistSnapshotStep→planState→mirrorKey 复刻整源镜像行），于是 6 个投递/采集单元全部卡在
+// sync.Cond.Wait、pollOnce 的 chan send 卡 4 分钟 ✗✗。铁律：**持门者只做提交、不做规划** ✓。
+type persistPlan struct {
+	store    *stateindex.Store
+	desired  stateindex.State
+	changed  []string
+	prunes   []stateindex.WALPrune
+	advances []persistAdvance
+}
+
+// persistAdvance 记录「本轮构建过的源」及其构建时的修订号/覆盖签名，**只在落库成功后才推进**。
+//
+// 为什么不能在构建期就推进（用户质疑 2，2026-10-02 复核）：一次落库失败（磁盘满 / 库被
+// 换成只读 / 进程在 apply 之前被杀）会把这些源永久标记成「已持久化」——下一轮不再重建，
+// 其陈旧行再也不会被重试，索引与内存就此静默分叉。现场形态正是「部分持久化残留的悬挂源
+// 被当成已全量落库」：重启后该源按陈旧水位重读（重复投递），或整行缺失被当成新源
+// （先前已投递的数据无人认账）。失败必须让水位**留在原处**，下一轮自动重试同一批源。
+type persistAdvance struct {
+	key   string
+	rev   uint64
+	cover coverSignature
+}
+
+// planPersist 在**门外**构建期望态（CPU 密集：镜像行重建 + 状态→索引态转换）。
+//
+// 只持 m.mu（短临界区）取快照，绝不触碰持久化门 ✓；调用方持门后只做 commitPersist ✓。
+func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
+	if m.persistPlanHold != nil {
+		// 测试钩子：模拟"长规划"。它必须在**门外**睡眠——变异成门内规划则采集/投递单元被卡 ✓。
+		m.persistPlanHold()
+	}
 	m.mu.Lock()
 	store := m.index
 	if store == nil {
@@ -5030,7 +5346,7 @@ func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
 		opened, err := stateindex.OpenWithBudget(m.indexPath(), m.indexCommit)
 		if err != nil {
 			m.mu.Unlock()
-			return false, fmt.Errorf("ingest: 打开采集索引失败: %w", err)
+			return nil, fmt.Errorf("ingest: 打开采集索引失败: %w", err)
 		}
 		store = opened
 		m.index = store
@@ -5059,11 +5375,6 @@ func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
 	// 其陈旧行再也不会被重试，索引与内存就此静默分叉。现场形态正是「部分持久化残留的悬挂源
 	// 被当成已全量落库」：重启后该源按陈旧水位重读（重复投递），或整行缺失被当成新源
 	// （先前已投递的数据无人认账）。失败必须让水位**留在原处**，下一轮自动重试同一批源。
-	type persistAdvance struct {
-		key   string
-		rev   uint64
-		cover coverSignature
-	}
 	advanced := make([]persistAdvance, 0, len(keys))
 	for key := range keys {
 		p := m.pipes[key]
@@ -5109,12 +5420,45 @@ func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
 	desired, err := m.stateToIndexStateScoped(&m.state, changed)
 	if err != nil {
 		m.mu.Unlock()
-		return false, err
+		return nil, err
 	}
-	// 快照已经构建完成：释放 m.mu（登记路径等的短临界区锁）后再落库。落库顺序由持久化门
-	// 保证与构建顺序一致，因此「旧快照后写」不可能发生。
+	// 规划完成：释放 m.mu 并返回计划。**规划到此结束**（门外）✓；提交由持门者 commitPersist ✓。
 	m.mu.Unlock()
-	stats, err := store.ApplyScopedCtx(ctx, desired, changed, prunes)
+	return &persistPlan{store: store, desired: desired, changed: changed, prunes: prunes, advances: advanced}, nil
+}
+
+// commitPersist 在**门内**提交一份计划：只做提交与水位推进，不做任何规划 ✗。
+//
+// 新鲜度过滤（为什么必须有）：规划发生在门外 ⇒ 同一源可能已被**更新的计划**先提交 ✗。
+// 直接套用旧计划会写回陈旧行；更糟的是若把 persistedRev 往回写，陈旧行就**永远不会**被重建 ✗✗。
+// 因此提交前用 O(1) 的修订号/覆盖签名复读一遍：只提交**仍然新鲜**的源，其余丢弃（水位不推进
+// ⇒ 下一轮自然重建）✓。这是廉价一致性校验，不是规划 ✓（不含镜像重建/状态转换）。
+func (m *Manager) commitPersist(ctx context.Context, plan *persistPlan) (bool, error) {
+	if plan == nil || plan.store == nil {
+		return false, nil
+	}
+	byKey := make(map[string]persistAdvance, len(plan.advances))
+	for _, a := range plan.advances {
+		byKey[a.key] = a
+	}
+	// 提交**全部**构建过的源（不清空提交 ✗）：清空会在"状态持续变更"时让每次提交都被丢弃 ⇒ 饿死 ✗
+	// （实测：把过滤当成"提交条件"会同时打断 delivery_batch 剪枝与默认值恢复用例）。
+	// 只按新鲜度决定**是否推进水位**：不新鲜的源水位留在原处 ⇒ 下一轮必然重建并重写它
+	// （即使本轮写进了略旧的行，也会被下一轮覆盖）✓ —— 收敛性不依赖"本轮是否恰好赶上" ✓。
+	m.mu.Lock()
+	advances := make([]persistAdvance, 0, len(plan.advances))
+	for _, a := range plan.advances {
+		pp := m.pipes[a.key]
+		if pp == nil {
+			continue
+		}
+		if pp.Ledger().Revision(pp.Key()) != a.rev || coverSignatureOf(m.state.Sources[a.key]) != a.cover {
+			continue // 规划后被更新：写行但不推进水位 ⇒ 下一轮重建 ✓（绝不把陈旧行标成已落库 ✗）
+		}
+		advances = append(advances, a)
+	}
+	m.mu.Unlock()
+	stats, err := plan.store.ApplyScopedCtx(ctx, plan.desired, plan.changed, plan.prunes)
 	if err == nil {
 		// 观测面：记录本次读数（含分步未完成标志与范围删除条数），供排障与回归取证。
 		m.mu.Lock()
@@ -5130,15 +5474,26 @@ func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
 		// （镜像已按提交单元更新 ⇒ 重算结果只剩未处理的行）。
 		return true, nil
 	}
-	// 完整落库后才推进水位。需要重新取锁：构建期已释放 m.mu，期间可能有新的变更被声明；
+	// 完整落库后才推进水位。需要重新取锁：规划期已释放 m.mu，期间可能有新的变更被声明；
 	// 即便账本在这段时间里又前进，这里记下的是**更旧**的修订号，下一轮会因不等而重建（安全方向）。
 	m.mu.Lock()
-	for _, a := range advanced {
+	for _, a := range advances {
 		m.persistedRev[a.key] = a.rev
 		m.persistedCover[a.key] = a.cover
 	}
 	m.mu.Unlock()
 	return false, nil
+}
+
+// persistSnapshotStep 是「规划 + 提交」的兼容壳（供已在门外的调用方与测试使用）。
+//
+// 调用方若**持门**，必须改调 planPersist（门外）+ commitPersist（门内）✗ 否则违反铁律 ✗。
+func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
+	plan, err := m.planPersist(ctx)
+	if err != nil {
+		return false, err
+	}
+	return m.commitPersist(ctx, plan)
 }
 
 // LastPersistStats 返回最近一次落库的读数（含谓词范围删除是否启用、是否分步未完成）。

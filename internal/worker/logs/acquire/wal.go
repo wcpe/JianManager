@@ -5,6 +5,7 @@ package acquire
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -186,7 +187,16 @@ func (w *WAL) limitsLocked() (int64, int64) {
 	if entries <= 0 {
 		entries = defaultWALMaxEntries
 	}
-	if bytes <= 0 {
+	switch {
+	case bytes < 0:
+		// **负值 = 字节维度不设上限**（键 log_capacity.max_wal_bytes=0 的语义）。
+		//
+		// 为什么必须有这个哨兵（2026-10-03 现场 16 MiB 之谜）：配置侧 0 表示"字节维度不限"
+		// （见 Config.WALBudgetNotice 的语义说明），而本处在 0 时回退**硬编码 16 MiB** ✗——
+		// 于是「不设上限」被静默实现成「16 MiB」，现场表现为一批源停在 32.6 MiB（条目/字节双闸）
+		// 而另一批停在 512 MiB（显式配了值）✓✓。语义必须能被表达，而不是靠默认值顶替 ✗。
+		bytes = math.MaxInt64
+	case bytes == 0:
 		bytes = defaultWALMaxBytes
 	}
 	return entries, bytes

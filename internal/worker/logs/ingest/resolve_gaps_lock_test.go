@@ -118,7 +118,22 @@ func projectionCovered(m *Manager, key string) bool {
 // 未就绪的源会让它在遍历到该源时明确拒绝——那不是本文件要测的锁/取消/预算行为。
 func primeCompleteProjections(t *testing.T, m *Manager) {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	// **放宽夹具的覆盖前提**（不动任何被测时标/规模 ✗）：`-race` 下竞态检测器把索引落库与校验
+	// 往返放大 10–20×，轮级校验预算（默认 1.5s）会让夹具每一轮都只推进极小一块，12 源夹具因此
+	// 长时间发布不出完整投影（实测未就绪源停在 ~4 不降 ✗✗）。这是**夹具前置**而非被测性质 ✓，
+	// 故 race 构建下把夹具的轮预算放大到实际上不设限（生产默认值一概不动 ✗）。
+	if raceEnabled {
+		m.verifyRoundBudget = time.Hour
+	}
+	// `-race` 下放宽**夹具期限**（不动任何被测时标 ✗）：竞态检测器把索引落库/校验往返放大
+	// 10–20×，20s 会在夹具阶段就被截断（实测「夹具未能在时限内发布完整投影 ✗」，与用例性质无关）。
+	// 期限口径 = **停滞才失败**：`-race` 下检测器把索引落库/校验往返放大 10–20×（实测 12 源夹具
+	// 需 >5 分钟 ✗），固定期限会把"还在稳定前进"误判成"夹具卡住" ✗。因此 race 构建下只要
+	// **未就绪源数仍在下降**就把期限向前滚动（每次前进续一格），真正卡住（数目不再变化）才失败 ✓。
+	// 非 race 构建维持原有的绝对期限（20s，行为逐字不变 ✓）。
+	primeTimeout := 20 * time.Second
+	deadline := time.Now().Add(primeTimeout)
+	lastPending := -1
 	for {
 		m.pollOnce()
 		var pending []string
@@ -129,6 +144,12 @@ func primeCompleteProjections(t *testing.T, m *Manager) {
 		}
 		if len(pending) == 0 {
 			return
+		}
+		if raceEnabled {
+			if len(pending) < lastPending || lastPending < 0 {
+				deadline = time.Now().Add(primeTimeout) // 有进展：续期
+			}
+			lastPending = len(pending)
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("夹具未能在时限内发布完整投影：未就绪源 %v", pending)
@@ -279,6 +300,10 @@ func TestResolveCoveredGapsStopsOnContextCancel(t *testing.T) {
 // 转红方式（实测）：去掉预算判定——第一次调用即遍历全部 12 个源并返回 nil，本用例在
 // 「必须报预算用尽 / 处理数必须 ≤ 预算」处变红。
 func TestResolveCoveredGapsBudgetIsBoundedAndResumable(t *testing.T) {
+	// 注（2026-10-03）：曾尝试在 `-race` 下缩小夹具规模（12 源 → 3 源）以绕开"检测器放大导致夹具
+	// 无法发布完整投影 ✗"，但本用例的后续断言是**与源数绑定的数值**（如"处理数必须 ≤ 预算"的期望值），
+	// 缩尺会把这些数值断言打红 ✗ ⇒ 已回退（规模保持 12 ✓，不动被测时标 ✗）。该用例在 `-race` 下的
+	// 前置（发布完整投影）仍是已知的待办 ✗：正确做法是让夹具在 race 下放宽"覆盖"前提，而不是改规模 ✓。
 	fixture := newBusyIngestFixture(t, 12, 40, 0)
 	m := fixture.manager
 	primeCompleteProjections(t, m)

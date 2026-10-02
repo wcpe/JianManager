@@ -207,6 +207,20 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 	return nil
 }
 
+// EvaluateResume 暴露「推进回收 + 按滞回评估恢复」的只读入口（见 WAL.EvaluateResume）。
+//
+// 为什么必须由外部低频触发（2026-10-03 现场）：恢复的唯一检查点原本挂在**采集轮**上
+// （Append 前 TryReclaim / 投递后 TryReclaim），而采集轮在暂停期间只做"只投递不读取"的自愈——
+// 一旦投递也停下（或上游全堵住），就再没有任何人触发回收 ⇒ 「积压回落 → 低水位放行 → 自动恢复」
+// 这条链彻底停摆 ✗（现场：13 源/10 源成批停在 paused 不回落）。本入口让容量兜底循环
+// **不依赖采集轮**地重试一次。
+func (p *Pipeline) EvaluateResume() bool {
+	if p == nil || p.wal == nil {
+		return false
+	}
+	return p.wal.EvaluateResume()
+}
+
 // DeliverPending 是 deliverPendingBestEffort 的导出版：对**已暂停**的源执行一次自愈尝试。
 //
 // 为什么必须由外部触发（缺陷 A）：采集暂停期间 FileTailer 直接拒绝读取（见 tailer.go 的

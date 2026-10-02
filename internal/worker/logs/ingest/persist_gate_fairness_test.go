@@ -58,7 +58,12 @@ func (l *gateLog) snapshot() []string {
 func newGateFixture(t *testing.T, injected int, cycleRows int) (*Manager, string) {
 	t.Helper()
 	client, _ := newProjectionVL(t)
-	root := t.TempDir()
+	// **自管目录**（不用 t.TempDir）：实测偶发红**不是断言失败**，而是 `t.TempDir` 的 RemoveAll 与
+	// "后台持久化通道仍在写 var/log"竞争 ⇒ 清理报 `directory not empty` 直接把用例判红 ✗✗。
+	// 该竞争与"门公平性"毫无关系，故收尾改为自管目录：先 Stop（确定性停掉后台），再尽力删除
+	// （失败不判红 ✓）。用例只对**被测性质**负责，不为清理时序背锅 ✓。
+	root, rootErr := os.MkdirTemp("", "jm-gate-fixture-")
+	require.NoError(t, rootErr)
 	logPath := filepath.Join(root, "latest.log")
 	require.NoError(t, os.WriteFile(logPath, []byte(
 		"[12:00:01] [Server thread/INFO]: seed one\n[12:00:02] [Server thread/INFO]: seed two\n"), 0o600))
@@ -90,6 +95,13 @@ func newGateFixture(t *testing.T, injected int, cycleRows int) (*Manager, string
 	require.NoError(t, pipe.WAL().Restore(seed))
 	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "seed"))
 	require.NoError(t, pipe.Ledger().ResumeAcquire(pipe.Key()))
+	// **确定性收尾**（2026-10-03 实测的偶发红根因）：不 Stop 就交给 t.TempDir 清理 ⇒ 后台
+	// 持久化通道仍在写 var/log ⇒ 清理报 "directory not empty" ✗（实测 1/3 概率，且**不是断言失败**，
+	// 与"门公平性"毫无关系）。注册 Stop 后清理顺序确定 ✓。
+	t.Cleanup(func() {
+		_ = m.Stop()           // 确定性停掉后台（持久化通道/对账/容量兜底）
+		_ = os.RemoveAll(root) // 尽力删除；清理竞争不判红 ✓（见上方自管目录注释）
+	})
 	return m, key
 }
 
@@ -116,7 +128,7 @@ func TestWaitingCollectorCompletesUnderLongChain(t *testing.T) {
 	go func() {
 		defer close(chainDone)
 		for i := 0; i < chainSteps; i++ {
-			if err := m.persistRecoveryStep(context.Background()); err != nil {
+			if err := m.persistCtx(context.Background(), persistNormalOneStep); err != nil {
 				return
 			}
 		}
@@ -125,14 +137,21 @@ func TestWaitingCollectorCompletesUnderLongChain(t *testing.T) {
 	require.Eventually(t, func() bool { return len(log.snapshot()) >= 1 }, 5*time.Second, time.Millisecond,
 		"长链未开始（夹具未造出争用）")
 
+	collectorSeq := m.persistJoin.Load() // 覆盖判据的基准：本次请求的序号
+	// 夹具前提（结果语义，不依赖事件序里"恰好出现某个档位的 acquire" ✗）：长链必须先动起来。
+	require.Eventually(t, func() bool { return len(log.snapshot()) >= 1 }, 5*time.Second, time.Millisecond,
+		"夹具前提：长链必须先动起来（至少一步走完）")
+
 	collectorDone := make(chan error, 1)
+	started := time.Now()
 	go func() { collectorDone <- m.persist() }() // 采集轮落库 = 优先档
 	select {
 	case err := <-collectorDone:
 		require.NoError(t, err)
-	case <-time.After(20 * time.Second):
-		t.Fatal("采集轮落库在 20s 内没拿到门：优先档被长链饿死（复刻现场 2+ 分钟）")
+	case <-time.After(10 * time.Second):
+		t.Fatal("等待中的采集轮落库在 10s 内没完成：被长链饿死（复刻现场 2+ 分钟）")
 	}
+	elapsed := time.Since(started)
 
 	// 事件序断言：采集轮（优先档）必须**在长链后续步之间**被服务一次，而不是排在链尾。
 	events := log.snapshot()
@@ -151,11 +170,27 @@ func TestWaitingCollectorCompletesUnderLongChain(t *testing.T) {
 			}
 		}
 	}
-	require.GreaterOrEqual(t, normalAcquiredAfter, 1, "夹具前提：长链必须先动起来")
-	require.GreaterOrEqual(t, priorityAcquired, 0, "采集轮必须被服务过（事件序里有优先档 acquire）")
-	require.Less(t, priorityAcquired, len(events)-1,
-		"采集轮必须**在长链仍在跑的时候**被服务（而不是等长链全部结束）")
+	// **判据 = 结果语义**（用户指令）：等待中的采集轮落库"确实发生了"——两种见证任一即可 ✓：
+	//   ① 拿到门被服务（事件序里出现优先档 acquire，且在长链结束之前 ✓）；
+	//   ② 被某次提交**覆盖**（covered 越过它的序号 ⇒ 它的变更确实已落库 ✓，更快）。
+	// 规划移到门外后 ② 成为常态；坚持"必须出现优先档 acquire"是在测实现细节 ✗（实测会假红）。
+	servedByGate := priorityAcquired >= 0
+	servedByCover := m.persistCovered.Load() > collectorSeq
+	require.True(t, servedByGate || servedByCover,
+		"等待中的采集轮落库必须确实发生（授予门 或 被提交覆盖；二者皆无为饿死 ✗），事件序=%v", events)
+	require.Less(t, elapsed, 10*time.Second, "必须有界完成（实测 %s）", elapsed)
+	if servedByGate {
+		require.Less(t, priorityAcquired, len(events)-1,
+			"若走授予门路径，必须在长链仍在跑的时候被服务（而不是排在链尾）")
+	}
 	_ = chainDone
+	_ = normalAcquiredAfter
+
+	// 显式停一次（夹具注册的 Stop 也会跑；这里先停 + 等后台写盘彻底静默）：
+	// 精确定位过：偶发红其实**不是断言失败**，而是 t.TempDir 清理与"后台持久化通道仍在写 var/log"
+	// 竞争（RemoveAll 报 directory not empty ✗）。先 Stop 再让出一次调度，清理顺序即确定 ✓。
+	_ = m.Stop()
+	time.Sleep(20 * time.Millisecond)
 }
 
 // TestPersistGateFairFIFO（性质 2）：多个普通等待者必须**按到达顺序**被服务（显式 FIFO），
@@ -193,7 +228,7 @@ func TestPersistGateFairFIFO(t *testing.T) {
 				return
 			default:
 			}
-			if err := m.persistRecoveryStep(context.Background()); err != nil {
+			if err := m.persistCtx(context.Background(), persistNormalOneStep); err != nil {
 				return
 			}
 			time.Sleep(time.Millisecond)
@@ -206,7 +241,7 @@ func TestPersistGateFairFIFO(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = m.persistRecoveryStep(context.WithValue(context.Background(), marker, true))
+			_ = m.persistCtx(context.WithValue(context.Background(), marker, true), persistNormalOneStep)
 		}()
 		time.Sleep(2 * time.Millisecond) // 依次到达
 	}
@@ -262,7 +297,7 @@ func TestPersistGatePriorityFirst(t *testing.T) {
 				return
 			default:
 			}
-			if err := m.persistRecoveryStep(context.Background()); err != nil {
+			if err := m.persistCtx(context.Background(), persistNormalOneStep); err != nil {
 				return
 			}
 			time.Sleep(time.Millisecond)
@@ -276,7 +311,7 @@ func TestPersistGatePriorityFirst(t *testing.T) {
 		normalsWG.Add(1)
 		go func() {
 			defer normalsWG.Done()
-			_ = m.persistRecoveryStep(context.WithValue(context.Background(), marker, true))
+			_ = m.persistCtx(context.WithValue(context.Background(), marker, true), persistNormalOneStep)
 		}()
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -363,7 +398,7 @@ func TestPersistGateAgingPreventsReverseStarvation(t *testing.T) {
 	}, 5*time.Second, time.Millisecond, "优先档未开始（夹具未造出争用）")
 
 	normalDone := make(chan error, 1)
-	go func() { normalDone <- m.persistRecoveryStep(context.Background()) }()
+	go func() { normalDone <- m.persistCtx(context.Background(), persistNormalOneStep) }()
 
 	select {
 	case err := <-normalDone:
@@ -409,7 +444,7 @@ func TestCollectionHotPathIsNonBlockingUnderGatePressure(t *testing.T) {
 	holderDone := make(chan struct{})
 	go func() {
 		defer close(holderDone)
-		_ = m.persistRecoveryStep(context.Background()) // 普通档：拿门 → 被钩子按住
+		_ = m.persistCtx(context.Background(), persistNormalOneStep) // 持门者 = 同步一步落库（恢复步已改走热路径，不再整步占门） // 普通档：拿门 → 被钩子按住
 	}()
 	require.Eventually(t, func() bool {
 		select {
@@ -455,7 +490,7 @@ func TestAsyncHandoffDoesNotClaimCoverage(t *testing.T) {
 	holderDone := make(chan struct{})
 	go func() {
 		defer close(holderDone)
-		_ = m.persistRecoveryStep(context.Background())
+		_ = m.persistCtx(context.Background(), persistNormalOneStep) // 持门者 = 同步一步落库（恢复步已改走热路径，不再整步占门）
 	}()
 	time.Sleep(30 * time.Millisecond)
 
