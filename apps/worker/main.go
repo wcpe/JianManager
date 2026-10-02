@@ -855,6 +855,12 @@ func runWorker() {
 					tuning := cfg.ReconcileReplayTuning()
 					return &tuning
 				}(),
+				// 段读聚合的让路与轮内预算（键 log_index.scan.*）：现场点名 readSegment 是每轮重活
+				// 的 I/O 大头且"既不让路也无上界" ✗ ⇒ 由配置面驱动（默认 8192 行 / 1ms / 2s ✓）。
+				Scan: func() *ingest.ScanTuning {
+					tuning := cfg.ScanTuning()
+					return &tuning
+				}(),
 				// 启动恢复放到后台：New 立刻返回 ⇒ 反向隧道/WS/HTTP 立即可达（2026-10-02 事故：
 				// 恢复链与规模成正比且阻塞 New，worker 20–30 分钟不监听）。恢复进度经就绪面
 				// （startup_recovery_in_progress / _failed）如实上报，不放宽任何就绪判据。

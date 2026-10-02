@@ -339,3 +339,42 @@ func TestLoad_ConfigPathIsReported(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, abs, cfg.ConfigPath(), "必须回报实际读到的配置文件绝对路径")
 }
+
+// TestScanTuningDefaultsAndOverride（现场终章 ③ 的绑定回归）：段读让路/轮内预算的默认值必须是
+// 8192 行 / 1ms / 2s（与 ingest 侧默认一致 ✓），且能经 worker.yml 键覆盖 ✓。
+//
+// 为什么必须有这条：这三个旋钮是"单源段读不再撑满整轮"的唯一上界来源 ✗，配置面若回退成 0
+// （= ingest 默认）表面无害，但**一旦有人配成 0 期望"关闭"**，语义会变成"用默认"——必须显式测到 ✓。
+func TestScanTuningDefaultsAndOverride(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, 8192, cfg.LogIndex.Scan.SliceRows, "默认切片行数")
+	assert.Equal(t, "1ms", cfg.LogIndex.Scan.Yield, "默认让路时长")
+	assert.Equal(t, "2s", cfg.LogIndex.Scan.Budget, "默认轮内预算")
+
+	tuning := cfg.ScanTuning()
+	assert.Equal(t, 8192, tuning.SliceRows)
+	assert.Equal(t, time.Millisecond, tuning.Yield)
+	assert.Equal(t, 2*time.Second, tuning.Budget)
+
+	// yml 覆盖（经环境变量等价路径验证绑定：viper 的键 → 结构字段 ✓）。
+	t.Setenv("JIANMANAGER_LOG_INDEX_SCAN_SLICE_ROWS", "1024")
+	t.Setenv("JIANMANAGER_LOG_INDEX_SCAN_YIELD", "500us")
+	t.Setenv("JIANMANAGER_LOG_INDEX_SCAN_BUDGET", "9s")
+	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	tuning2 := cfg2.ScanTuning()
+	assert.Equal(t, 1024, tuning2.SliceRows)
+	assert.Equal(t, 500*time.Microsecond, tuning2.Yield)
+	assert.Equal(t, 9*time.Second, tuning2.Budget)
+
+	// 非法值一律回退"用默认"（安全方向 ✓）：配成 0 不得变成"关闭让路/关闭预算" ✗。
+	zero := &Config{}
+	zero.LogIndex.Scan.SliceRows = 0
+	zero.LogIndex.Scan.Yield = "0"
+	zero.LogIndex.Scan.Budget = "not-a-duration"
+	zt := zero.ScanTuning()
+	assert.Zero(t, zt.SliceRows, "0 ⇒ 交由 ingest 侧默认（8192）✓")
+	assert.Zero(t, zt.Yield)
+	assert.Zero(t, zt.Budget)
+}

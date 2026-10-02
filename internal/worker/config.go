@@ -283,6 +283,23 @@ type LogIndexConfig struct {
 	Persist LogIndexPersistConfig `mapstructure:"persist"`
 	// Verify 校验/对账查询的全局天花板（键 log_index.verify.*）：天花板语义（正常路径零等待）。
 	Verify LogIndexVerifyConfig `mapstructure:"verify"`
+	// Scan 段读聚合（publishedClosedForSourceCtx→readSegment）的让路与轮内预算：
+	// 现场点名它是每轮重活的 I/O 大头 ✗，且**既不让路也无上界** ⇒ `pollOnce` 的 WaitGroup 等分钟级。
+	Scan LogIndexScanConfig `mapstructure:"scan"`
+}
+
+// LogIndexScanConfig 是**段读聚合**的让路与轮内预算（键 `log_index.scan.*`）。
+//
+// 语义（与"限速"区分）：让路 = 每 slice 行把 P 交还调度器（不影响正确性 ✓）；
+// 预算 = 单源单轮扫描的墙钟上界，超预算按**"证据不完整"**返回（不消解缺口、不推进水位 ✓
+// 安全方向），下一轮续扫 ✓。
+type LogIndexScanConfig struct {
+	// SliceRows 每多少行让路一次；非正回退默认（8192）。
+	SliceRows int `mapstructure:"slice_rows"`
+	// Yield 每次让路的睡眠时长（duration 字符串）；非正/非法回退默认（1ms）。
+	Yield string `mapstructure:"yield"`
+	// Budget 单源单轮扫描的墙钟预算（duration 字符串）；非正/非法回退默认（2s）。
+	Budget string `mapstructure:"budget"`
 }
 
 // LogIndexVerifyConfig 是**校验/对账查询**的全局上限配置面（键 `log_index.verify.*`）。
@@ -1118,6 +1135,27 @@ func (c *Config) ReconcileReplayTuning() ingest.ReplayTuning {
 	return tuning
 }
 
+// ScanTuning 把 `log_index.scan.*` 收敛为 ingest 的段读让路/预算旋钮（零值 ⇒ ingest 侧默认 ✓）。
+//
+// 口径：非法 duration / 非正数一律回退默认（这类旋钮回退默认永远安全：让路多一点、扫描短一点
+// 都不会丢数据，最坏只是"下一轮续扫" ✓）。
+func (c *Config) ScanTuning() ingest.ScanTuning {
+	tuning := ingest.ScanTuning{}
+	if c == nil {
+		return tuning
+	}
+	if c.LogIndex.Scan.SliceRows > 0 {
+		tuning.SliceRows = c.LogIndex.Scan.SliceRows
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Scan.Yield)); err == nil && d > 0 {
+		tuning.Yield = d
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Scan.Budget)); err == nil && d > 0 {
+		tuning.Budget = d
+	}
+	return tuning
+}
+
 // LogArchiveConfig 是 Worker Deep Archive 的受管对象存储配置。
 // SecretKey 只允许由环境变量注入，禁止写入 worker.yml 或诊断快照。
 type LogArchiveConfig struct {
@@ -1223,6 +1261,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_index.persist.cycle_max_duration", "")
 	// 持久化门的让路窗口与老化阈值（2026-10-03 门闩饿死采集轮）：空/0 = 用 ingest 默认。
 	v.SetDefault("log_index.persist.cycle_yield", "")
+	v.SetDefault("log_index.scan.slice_rows", 8192)
+	v.SetDefault("log_index.scan.yield", "1ms")
+	v.SetDefault("log_index.scan.budget", "2s")
 	v.SetDefault("log_index.persist.priority_streak", 0)
 	v.SetDefault("log_index.persist.hot_budget", "")
 	// 校验查询的全局天花板（2026-10-03 现场 ×410 重试风暴）：0 = 用 ingest 默认（30/s、6 在飞、单簇 12 次）。

@@ -261,11 +261,62 @@ func (w *WAL) maybeResumeBacklogLocked(ent *ledger.Entry) {
 		return
 	}
 	if err := w.led.ResumeAcquire(w.key); err != nil {
+		// **打破环死**（2026-10-04 现场：60 源零积压仍无一动 ✗）：`ResumeAcquire` 对任何未消解
+		// 缺口一律拒绝 ✗，而 `APPEND_REJECTED` 的定义是"该批从未进入 WAL（采集被暂停/容量门禁
+		// 拒了）"⇒ 它只能靠**回读**愈合 ⇐ 回读在暂停期间被 tailer 拒绝 ✗ ⇒
+		// 「暂停 ⇒ 缺口不清 ⇒ 不许恢复 ⇒ 不回读」自锁 ✓✓。
+		// 这里按**分类裁定**消解这一类（不是操作员放弃 ✗）：恢复后回读会重新产生并投递该批 ✓
+		// （不丢数据；重复按 event_id 幂等 ✓）。其余原因保持拦截 ✓。
+		if healed := w.resolveReReadHealableGapsLocked(ent); healed > 0 {
+			if err2 := w.led.ResumeAcquire(w.key); err2 == nil {
+				slog.Info("积压已回落：已按「恢复后回读重放」分类消解暂停期缺口并恢复采集",
+					"logSourceID", w.key.LogSourceID, "gaps", healed, "entries", entries, "approxBytes", bytes)
+				return
+			}
+		}
 		slog.Info("积压已回落但暂不能恢复采集", "logSourceID", w.key.LogSourceID, "error", err)
 		return
 	}
 	slog.Info("积压已回落至低水位，已恢复该源采集",
 		"logSourceID", w.key.LogSourceID, "entries", entries, "approxBytes", bytes)
+}
+
+// gapResolutionReReadOnResume 是本包对「暂停期从未进 WAL 的批」的**分类裁定**。
+//
+// 与"操作员放弃"（AbandonGaps）严格区分 ✓：放弃是人的裁定（FreeText），本标记是**机械推论**——
+// 恢复后回读必然重新产生该批 ✓，因此它不构成"已确认落库"，只是"将在恢复后重放" ✓。
+const gapResolutionReReadOnResume = "re-read on resume (append rejected while paused)"
+
+// resolveReReadHealableGapsLocked 只消解 REASON=APPEND_REJECTED 的未消解缺口（见调用点注释）。
+//
+// fail-closed（关键）：其余四种已知原因**显式排除** ⇒ 将来若新增原因，默认同样被排除 ✓
+// （不会被这条路径悄悄放行 ✗）。返回消解条数。
+func (w *WAL) resolveReReadHealableGapsLocked(ent *ledger.Entry) int {
+	if ent == nil {
+		return 0
+	}
+	through := uint64(0)
+	for _, g := range ent.Gaps {
+		if g.Resolved || g.Reason != ledger.GapReasonAppendRejected {
+			continue
+		}
+		if g.EndPos > through {
+			through = g.EndPos
+		}
+	}
+	if through == 0 {
+		return 0
+	}
+	n, err := w.led.ResolveGapsThroughExcept(w.key, through, gapResolutionReReadOnResume,
+		ledger.GapReasonStdioRawWriteFailed,
+		ledger.GapReasonDeliverError,
+		ledger.GapReasonDeliverErrorWorkerSource,
+		ledger.GapReasonWALCommitFailed,
+	)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // EvaluateResume 尝试一次「推进回收 + 按滞回条件评估恢复」，返回**账本当前是否不在暂停态**。

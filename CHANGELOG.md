@@ -1083,3 +1083,7 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 修复
 - **回放/恢复重活之二（段读聚合）**：`publishedClosedForSourceCtx` 段扫描按切片让路（`scan_slice_rows`=8192 行/`scan_yield`=1ms，10 万行仅 +12ms ✓）+ 单源轮内预算（`scan_budget`=2s；超时按"证据不完整"返回=不消解不推水位、下轮续扫，安全方向 ✓）+ `scanBudgetExceeded` 计数；两条机制级红证（让路 0 次/去掉 WithTimeout 均转红 ✓）；MUT1 独立红证补齐（零积压时缺口只能靠已发布投影证据消解 ✓ 变异决定性转红 ✓）。
+
+### 修复
+- **暂停自愈的第二个环死（APPEND_REJECTED 自锁）**：`ResumeAcquire` 对任何未消解缺口一律拒绝，而 `APPEND_REJECTED` 语义 = "该批从未进 WAL"⇒ 只能靠回读愈合 ⇐ 回读在暂停期被 tailer 拒 ⇒「暂停⇒缺口不清⇒不许恢复⇒不回读」闭环；修法：在积压恢复路径对 `APPEND_REJECTED` 做分类消解（resolution="re-read on resume"、与操作员放弃严格区分；其余四因显式排除、新原因默认排除=fail-closed ✓）；红证前提待现场 Gaps/Holes 形状确认（草稿留存未删 ✓）。
+- **扫描三旋钮接 yml**：`log_index.scan.slice_rows/yield/budget`（默认 8192/1ms/2s）经 Config.ScanTuning() 装配 + 回归（默认/覆盖/非法回退，0 不得意为"关闭"✗）。

@@ -462,6 +462,8 @@ type Options struct {
 	ScanYield       time.Duration
 	ScanSliceRows   int
 	ScanYieldNotify func()
+	// Scan 是上面三个旋钮的合并形态（配置层一次下发；零值字段各自回退默认 ✓）。
+	Scan *ScanTuning
 	// ScanBudget 是单源单轮段读聚合的时间预算（0 ⇒ 默认 2s）。
 	ScanBudget time.Duration
 	// ResumeInterval 是**容量自愈兜底**周期（0 ⇒ 默认 30s）：低频重试「排空存量 → 推进回收 →
@@ -1194,10 +1196,10 @@ func New(opts Options) (*Manager, error) {
 		reconcileSliceEvents:     reconcileSliceFromOpts(opts),
 		reconcileYieldNotify:     opts.ReconcileYieldNotify,
 		resumeInterval:           opts.ResumeInterval,
-		scanYield:                opts.ScanYield,
-		scanSliceRows:            opts.ScanSliceRows,
+		scanYield:                scanValueOf(opts.ScanYield, opts.Scan, func(t *ScanTuning) time.Duration { return t.Yield }),
+		scanSliceRows:            scanSliceRowsOf(opts.ScanSliceRows, opts.Scan),
 		scanYieldNotify:          opts.ScanYieldNotify,
-		scanBudget:               opts.ScanBudget,
+		scanBudget:               scanValueOf(opts.ScanBudget, opts.Scan, func(t *ScanTuning) time.Duration { return t.Budget }),
 		maxReplayEventsPerDrain:  opts.MaxReplayEventsPerDrain,
 		multilineUnclosedTimeout: multilineUnclosedTimeoutOf(opts.MultilineUnclosedTimeout),
 	}
@@ -5018,6 +5020,13 @@ func reconcileSliceFromOpts(opts Options) int {
 	return 0
 }
 
+// ScanTuning 是**段读聚合**让路与轮内预算的配置面（键 log_index.scan.*；零值各自回退默认 ✓）。
+type ScanTuning struct {
+	SliceRows int
+	Yield     time.Duration
+	Budget    time.Duration
+}
+
 // defaultScanYield / defaultScanSliceRows 是段读聚合路径让路的默认值（见 scanYield 字段注释）。
 const (
 	defaultScanYield     = time.Millisecond
@@ -5039,6 +5048,30 @@ func (m *Manager) scanBudgetOf() time.Duration {
 		return defaultScanBudget
 	}
 	return m.scanBudget
+}
+
+// scanValueOf / scanSliceRowsOf 解析段读旋钮：直连字段优先，其次 ScanTuning（配置面 ✓），
+// 都没有则交给 accessor 的默认值 ✓（这两个 helper 只负责"取到显式配置"，0 即未配置 ✓）。
+func scanValueOf(direct time.Duration, tuning *ScanTuning, pick func(*ScanTuning) time.Duration) time.Duration {
+	if direct > 0 {
+		return direct
+	}
+	if tuning != nil {
+		if v := pick(tuning); v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func scanSliceRowsOf(direct int, tuning *ScanTuning) int {
+	if direct > 0 {
+		return direct
+	}
+	if tuning != nil && tuning.SliceRows > 0 {
+		return tuning.SliceRows
+	}
+	return 0
 }
 
 func (m *Manager) scanSliceOf() int {
