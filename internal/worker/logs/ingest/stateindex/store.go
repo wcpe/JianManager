@@ -753,6 +753,16 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 // 为没人要的结果逐行删库。
 // prunes 是**谓词范围删除**提示（可为 nil）：见 WALPrune。
 func (s *Store) ApplyScopedCtx(ctx context.Context, desired State, owners []string, prunes []WALPrune) (Stats, error) {
+	return s.ApplyScopedCtxRows(ctx, desired, owners, prunes, 0)
+}
+
+// ApplyScopedCtxRows 是 ApplyScopedCtx 的「本次调用行数上限」覆盖形态（cycleRows>0 时生效）。
+//
+// 为什么需要（2026-10-03 现场二度复现 + `-race` 实测）：持久化门是**单持有者**，一个提交单元
+// 的耗时就是其他调用者的等待上界。背景链（恢复/重放/交办的落库）应当用小步长，好让有硬截止的
+// 调用者（实例登记 RPC、Stop）在一个小步之内拿到门；而单次调用自身的总预算仍由 CycleMaxRows
+// 约束（两者是**与**关系）。
+func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []string, prunes []WALPrune, cycleRows int) (Stats, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -765,6 +775,11 @@ func (s *Store) ApplyScopedCtx(ctx context.Context, desired State, owners []stri
 	stats := Stats{Written: map[string]int{}, Deleted: map[string]int{}, Planned: map[string]int{}}
 	if err := ctx.Err(); err != nil {
 		return Stats{}, err
+	}
+	if cycleRows > 0 {
+		// 只覆盖「本次调用的行数上界」，不动配置面（配置面仍由 CommitBudget 表达）。
+		s.budget.CycleMaxRows = cycleRows
+		defer func(original int) { s.budget.CycleMaxRows = original }(s.budget.CycleMaxRows)
 	}
 	scoped := owners != nil
 	owned := make(map[string]struct{}, len(owners))

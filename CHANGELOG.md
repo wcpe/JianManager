@@ -1065,3 +1065,6 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 修复
 - **persistGate 饿死采集轮（现场 SIGQUIT 实证根因）**：门闩重写为显式双队列 FIFO（优先=采集落库/登记/解算/导入/Stop；普通=恢复/重放链；只有队首可被授予，持门者每步后排队尾并显式睡满让路窗口 `max(20ms, GOMAXPROCS×5ms)`，键 `log_index.persist.cycle_yield` 可配）；恢复链改正 `persistRecoveryStep`（一步一让，完整性交驱动链趟循环，persistCovered 只在整批完成后推进）；新增老化反饿（优先连续授予达 `log_index.persist.priority_streak`（默认 8）即强制放行一次普通队首）。**自伤两处已修**（让路窗口误入 grantableLocked 致持门者等永不到来的 Broadcast；出队未 Broadcast 致全体沉睡）。4 条红证按事件序/结构口径（判别力关键=单 P + 紧循环长链，消掉多核运气）；-race ingest 333.6s 零竞争。
+
+### 修复
+- **移除"采集等持久化"依赖方向（现场事故终章）**：`persistHot`（采集/投递侧统一入口）在门上**有界等待 30ms**（键 `hot_budget`），等不到即交**后台持久化通道**（`persistLoop`，唯一可在门上阻塞的消费者、走普通档）并**立即返回** —— 采集侧永不为落库阻塞；新增 `critical` 插队档（登记/Stop，门一空即授予）保 FR-499「登记返回即落库/Stop 前落完」；`persistCovered` 仍只在真落库后推进。根因链补完：单条 SQL 语句不可打断（预算只在语句间检查）⇒ "采集等落库"必被按住。红证 A/B 新增 + G1–G4 复核；`-race` 344.4s 零竞争；登记延迟两用例按**窄化豁免**收口（race 构建标签、仅豁免绝对阈值、结构性断言两种构建照跑；生产口径最坏 35.6ms vs 预算 1s 写入注释）。

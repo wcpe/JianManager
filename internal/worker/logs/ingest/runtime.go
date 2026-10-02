@@ -189,6 +189,15 @@ type Manager struct {
 	// persistGateStage 是持久化门的测试观测口（生产 nil，零开销）：在「授予」与「交门」两个
 	// 事件点回调，让回归按**事件序**断言公平性（而不是靠耗时阈值猜）。
 	persistGateStage func(ctx context.Context, event string, seq int64, priority bool)
+	// persistHotBudget 是热路径（采集/投递侧）在持久化门上的等待上界；超时即交给后台通道。
+	persistHotBudget time.Duration
+	// persistStepHold 是持久化步骤的测试观测口（生产 nil，零开销）：在**持门执行步骤期间**回调，
+	// 让回归能确定性地"把门按住"（阻断即持门），从而断言热路径的有界等待与交办行为。
+	persistStepHold func()
+	// persistRequests/persistWorkerDone 是**后台持久化通道**：热路径超时后把「请落库」交给它，
+	// 由独立 goroutine 完成（它才是允许阻塞的那一方）。cap=1：已有待办请求即无需重复入队。
+	persistRequests   chan struct{}
+	persistWorkerDone chan struct{}
 	// replayBudget 是整窗重发的切片预算（见 ReplayBudget）。
 	replayBudget ReplayBudget
 	// vlProbeTimeout / vlNotReady 是 VL ready 门禁的读数：probe 超时与「哪些源当前被判未就绪」。
@@ -421,6 +430,9 @@ type Options struct {
 	// （runStartupRecovery），差别只在「在哪个 goroutine 里跑」——不存在「测试路径与生产路径
 	// 是两份实现」的问题。
 	StartupRecoveryBackground bool
+	// PersistHotBudget 是热路径（采集/投递）在持久化门上的等待上界（键
+	// log_index.persist.hot_budget）；≤0 用默认（30ms）。超时即交给后台持久化通道，采集不受阻。
+	PersistHotBudget time.Duration
 	// PersistYield 是持久化「让路窗口」（键 log_index.persist.cycle_yield）；≤0 用默认。
 	// PersistPriorityStreak 是老化阈值（键 log_index.persist.priority_streak）；≤0 用默认 8。
 	PersistPriorityStreak int
@@ -1016,6 +1028,12 @@ func New(opts Options) (*Manager, error) {
 	// 生命周期 ctx：持久化的可取消面（Stop 取消）。只在 New 中赋值、之后不再改写 ⇒ 读不加锁。
 	m.lifecycleCtx, m.lifecycleCancel = context.WithCancel(context.Background())
 	m.persistYield = opts.PersistYield
+	m.persistHotBudget = opts.PersistHotBudget
+	if m.persistHotBudget <= 0 {
+		m.persistHotBudget = defaultPersistHotBudget
+	}
+	m.persistRequests = make(chan struct{}, 1)
+	m.persistWorkerDone = make(chan struct{})
 	m.persistPriorityStreak = opts.PersistPriorityStreak
 	m.replayBudget = replayBudgetOf(opts.ReplayBudget)
 	m.vlProbeTimeout = opts.VLReadyProbeTimeout
@@ -1140,6 +1158,7 @@ func New(opts Options) (*Manager, error) {
 	// StartupRecoveryBackground（生产）：恢复不阻塞 New——New 返回后 main 立即继续，
 	// 反向隧道/WS/HTTP 随即可达，恢复在后台按批续做并经就绪面如实上报。
 	// 其余调用方（默认）：就地执行同一驱动，保持「New 返回即恢复完成」的既有边界。
+	go m.persistLoop(m.lifecycleContext())
 	if err := m.startStartupRecovery(recovery, opts.StartupRecoveryBackground); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -1672,9 +1691,10 @@ func (m *Manager) Register(source SourceConfig) error {
 		Path: source.Path, RotateTo: source.RotateTo, Stream: source.Stream, Charset: source.Charset,
 		Location:       location,
 		SourceCategory: source.SourceCategory, Ledger: led, WAL: wal,
-		SuppressRecursiveVL:     source.SourceCategory == logtypes.SourceWorker || source.SourceCategory == logtypes.SourceNode,
-		CapacityProvider:        m.capacityProvider,
-		DurablePersist:          m.persist,
+		SuppressRecursiveVL: source.SourceCategory == logtypes.SourceWorker || source.SourceCategory == logtypes.SourceNode,
+		CapacityProvider:    m.capacityProvider,
+		// 采集/投递侧的落库前置：**有界等待 + 超时交办**（绝不为落库阻塞采集，见 persistHot）。
+		DurablePersist:          m.persistHot,
 		WALLimits:               m.walLimits,
 		MaxReplayEventsPerDrain: m.maxReplayEventsPerDrain,
 		ReclaimProof:            func(events []logtypes.Event) error { return m.releaseRecovery(source, events) },
@@ -1756,6 +1776,9 @@ func (m *Manager) Stop() error {
 	if err := m.WaitStartupRecovery(context.Background()); err != nil {
 		return err
 	}
+	if m.persistWorkerDone != nil {
+		<-m.persistWorkerDone
+	}
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
 	// 与登记串行（锁序 cycleMu → registerMu，见 registerMu 注释）：Stop 之后不能再有登记
@@ -1776,7 +1799,7 @@ func (m *Manager) Stop() error {
 		_, _ = p.Flush()
 	}
 	// 关停落库必须做完（不能用已被取消的生命周期 ctx）：它承担「停服即已落库」的语义。
-	if err := m.persistCtx(context.Background(), persistPriority); err != nil {
+	if err := m.persistCtx(context.Background(), persistCritical); err != nil {
 		return err
 	}
 	// 关闭索引句柄：显式把 WAL 归并回主库（见 stateindex.Store.Close）。
@@ -1843,8 +1866,12 @@ type persistGate struct {
 }
 
 // enqueueLocked 把序号加入对应队列（调用方需持 g.mu）。
-func (g *persistGate) enqueueLocked(seq int64, priority bool) {
-	if priority {
+func (g *persistGate) enqueueLocked(seq int64, mode persistMode) {
+	if mode.priority {
+		if mode.critical {
+			g.priorityQueue = append([]int64{seq}, g.priorityQueue...)
+			return
+		}
 		g.priorityQueue = append(g.priorityQueue, seq)
 		return
 	}
@@ -1872,10 +1899,15 @@ func removePersistSeq(queue []int64, seq int64) []int64 {
 // 注意：让路窗口**不在这里判**——若在这里判，刚交门的调用者会落进 `Cond.Wait`，而窗口到期时
 // 没有任何人 Broadcast（无人唤醒 ⇒ 永久睡眠 ✗，2026-10-03 自伤实测：整包测试挂死 600s）。
 // 让路由调用方**显式 sleep** 实现（见 persistCtx 的 not-oneStep 分支）。调用方需持 g.mu。
-func (g *persistGate) grantableLocked(seq int64, priority bool, streakMax int) bool {
+func (g *persistGate) grantableLocked(seq int64, mode persistMode, streakMax int) bool {
 	if g.running {
 		return false
 	}
+	if mode.critical {
+		// 插队档：门一空就授予（它代表短作业，且调用者有硬截止）。
+		return true
+	}
+	priority := mode.priority
 	if priority {
 		// 优先：队首即可（恢复链让位）。但连续授予达上限且普通队列有人等时，强制让普通队首先走。
 		if len(g.priorityQueue) == 0 || g.priorityQueue[0] != seq {
@@ -1974,7 +2006,8 @@ func (m *Manager) pollOnce() {
 		}
 	}
 	if anyDirty {
-		_ = m.persist()
+		// 采集轮**不为落库阻塞**：有界等待、超时交给后台持久化通道（见 persistHot 的说明）。
+		_ = m.persistHot()
 	}
 }
 
@@ -2875,7 +2908,11 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 	m.mu.Unlock()
 	// The attempted generation is durable before any VL write. A lost response
 	// or failed Catalog commit must rebuild into a different physical target.
-	if err := m.persist(); err != nil {
+	//
+	// 2026-10-03 起这里是**热路径**：有界等待 + 超时交办（persistHot ✗ 不再为落库阻塞投递）。
+	// 「代次不得重名」的保护不依赖这一次落库：取名前的 VL 占用探测（nextFreeProjectionGeneration）
+	// 才是主判据 ✓；最坏情况（进程在落库前崩溃）只会让该代次重取一次名 → 探测拦下 ✓ 不丢数据。
+	if err := m.persistHot(); err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
 	grouped, days, err := groupEventsByUTCDay(source, events)
@@ -4595,7 +4632,7 @@ func (m *Manager) load() error {
 // persist 保持既有契约：**返回即「当前已声明的变更全部落库」**（FR-499 的「登记返回即落库」
 // 保证不变），且走**优先队列**（用户面：采集轮/登记/解算/关停的延迟优先于恢复链吞吐）。
 func (m *Manager) persist() error {
-	return m.persistCtx(context.Background(), persistPriority)
+	return m.persistCtx(context.Background(), persistCritical)
 }
 
 // persistRecoveryStep 是**恢复/重放链**的落库入口：只做**一步**有界落库（受每周期总预算约束）
@@ -4623,20 +4660,94 @@ const persistStepYield = 20 * time.Millisecond
 // defaultPersistPriorityStreakMax 是老化阈值默认值（见 persistPriorityStreakMax）。
 const defaultPersistPriorityStreakMax = 8
 
+// defaultPersistHotBudget 是**热路径**（采集/投递侧）在持久化门上最多等多久。
+//
+// 为什么热路径必须"等不起"（2026-10-03 现场二度复现：SIGQUIT 20:48 采集轮仍在同一把 Cond 上等待）：
+// 一次落库的**单元**可以在**一条 SQL 语句**里跑很久（如范围剪枝一次删数百万行）——单元预算只在
+// 语句之间检查，语句本身不可打断 ✗。于是"分步/让路"再公平也没用：持门者不放门，采集侧就得等 ✗。
+// 因此热路径改成：**有界等待 + 超时即交给后台持久化通道**，绝不为落库阻塞采集 ✓。
+const defaultPersistHotBudget = 30 * time.Millisecond
+
 // persistMode 决定一次持久化调用的排队档位与推进步数。
 type persistMode struct {
 	// priority=true 走**优先队列**（用户面路径：采集轮的落库、实例登记、解算、归档导入、关停）：
 	// 普通队列里的恢复/重放链必须为它让位（用户面延迟 > 恢复链吞吐）。
 	priority bool
+	// critical=true 是**插队档**：登记（RPC 截止 10s）与 Stop 这类调用者不能被采集轮的
+	// 高频落库挡在队尾（它们每次落库都短，但**数量多**——2026-10-03 `-race` 实测：登记延迟
+	// 预算回归 1.0–1.4s 转红）。critical 等待者一旦到门即被授予（不看队列位置），并入队到队首。
+	critical bool
+	// rows>0 时把**本次调用的行数上界**压到该值（背景链用小步长：让有硬截止的调用者最多等一个
+	// 小步就能拿到门——2026-10-03 `-race` 实测：单单元 ~1s 会把登记的 1s 预算顶穿）。
+	rows int
+	// maxWait>0 时是**热路径**：在门上最多等这么久，超时即交给后台通道并返回（不阻塞采集 ✗），
+	// 且最多执行一步（不做"循环到做完"✗）。
+	maxWait time.Duration
 	// oneStep=true 只做一步就交门（恢复/重放链）；false = 循环到「此后再无差异」才返回
 	// （同步语义：登记返回即已落库、Stop 关停前落完）。
 	oneStep bool
 }
 
+// persistBackgroundRows 是背景链（恢复/重放/交办）单步的行数上界。
+//
+// 取值依据：单单元实测 ≈13 µs/行（-race 下 ~10–20×）⇒ 64 行 ≈ 1ms（-race ≈ 10–20ms），远小于
+// 登记 RPC 的 1s 等待预算；而背景链的总吞吐由「反复小步」保证（每步之间让路，不牺牲总量）。
+const persistBackgroundRows = 64
+
 var (
 	persistPriority      = persistMode{priority: true}
+	persistCritical      = persistMode{priority: true, critical: true}
 	persistNormalOneStep = persistMode{oneStep: true}
 )
+
+// persistHot 是采集/投递侧的统一入口：绝不为落库阻塞（超时交给后台通道）。
+func (m *Manager) persistHot() error {
+	return m.persistCtx(context.Background(), persistMode{priority: true, maxWait: m.persistHotBudgetOf()})
+}
+
+func (m *Manager) persistHotBudgetOf() time.Duration {
+	if m != nil && m.persistHotBudget > 0 {
+		return m.persistHotBudget
+	}
+	return defaultPersistHotBudget
+}
+
+// requestPersist 把「请落库」交给后台持久化通道（非阻塞；已有待办即跳过）。
+func (m *Manager) requestPersist() {
+	if m == nil || m.persistRequests == nil {
+		return
+	}
+	select {
+	case m.persistRequests <- struct{}{}:
+	default:
+	}
+}
+
+// persistLoop 是**唯一允许在持久化门上阻塞**的消费者：它把热路径交来的落库请求做完。
+//
+// 为什么必须有（2026-10-03 现场）：采集/投递侧的落库前置是"先落库再写 VL"的契约，而一次落库的
+// 单个单元可能停在一分钟级的 SQL 语句上——把采集侧挂在这条链上，就是现场"VL 零写入 + read_pos
+// 冻结"的形态。现在采集侧**有界等待**、超时交办，落库的**真实性**由本 goroutine 与
+// `persistCovered` 保证（只在整批真正落库后才推进 ✓ 不谎报）。
+func (m *Manager) persistLoop(ctx context.Context) {
+	defer close(m.persistWorkerDone)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.persistRequests:
+			// 后台通道走**普通档**：它代表恢复/投递链的吞吐，不该与「采集轮/登记/Stop」抢优先档
+			// （否则登记这类 RPC 截止只有 10s 的调用者会被它挡住 ✗ —— 2026-10-03 `-race` 实测：
+			// 登记延迟预算回归转红）。
+			if err := m.persistCtx(context.Background(), persistMode{}); err != nil {
+				slog.Warn("后台持久化失败（下一轮重试）", "error", err)
+			}
+		}
+	}
+}
 
 // persistCtx 是 persist 的**可取消 + 分步 + 显式公平**实现。
 //
@@ -4661,7 +4772,8 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 	g := &m.persistGate
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.enqueueLocked(seq, mode.priority)
+	waitStarted := time.Now()
+	g.enqueueLocked(seq, mode)
 	// 出队同样要 Broadcast：**排队结构的变化会改变「谁是队首」**——一个等待者返回（出队）后，
 	// 新的队首可能因此变得可授予，而它此刻正睡在 cond.Wait 上。少了这一次唤醒就是全体沉睡
 	// （2026-10-03 实测：12 个 persistCtx 全在 Cond.Wait、门是空的）。
@@ -4673,7 +4785,12 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 		if m.persistCovered.Load() >= seq {
 			return g.err
 		}
-		if !g.running && g.grantableLocked(seq, mode.priority, m.persistPriorityStreakMax()) {
+		if mode.maxWait > 0 && time.Since(waitStarted) >= mode.maxWait {
+			// 热路径等不到门：交给后台通道（保证"最终会落库"），本调用立即返回 ✓ 采集不受阻。
+			m.requestPersist()
+			return nil
+		}
+		if !g.running && g.grantableLocked(seq, mode, m.persistPriorityStreakMax()) {
 			g.running = true
 			g.dequeueLocked(seq)
 			if m.persistGateStage != nil {
@@ -4685,7 +4802,10 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 			// 必然被本次构建看到，因此可以安全声明「已覆盖到该序号」。反过来（先构建后读）会把
 			// 构建看不到的请求也算作已落库，那是静默丢更新。
 			covered := m.persistJoin.Load()
-			incomplete, err := m.persistSnapshotStep(ctx)
+			if m.persistStepHold != nil {
+				m.persistStepHold()
+			}
+			incomplete, err := m.persistSnapshotStepRows(ctx, mode.rows)
 			if err == nil && !incomplete {
 				// 只有**完整落库**才推进覆盖水位：部分完成就宣称覆盖会静默丢更新。
 				m.persistCovered.Store(covered)
@@ -4709,6 +4829,11 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 			if !incomplete {
 				return nil
 			}
+			if mode.maxWait > 0 {
+				// 热路径最多一步：剩余差异交给后台通道（它允许阻塞），采集继续 ✓。
+				m.requestPersist()
+				return nil
+			}
 			if mode.oneStep {
 				// 恢复/重放链：一步一让——剩余差异交给驱动链的下一趟（它们本来就让路）。
 				return nil
@@ -4718,12 +4843,19 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 			}
 			// 本步有界但差异未完：重新排队（回到队尾）+ **显式让路**——睡满一个调度量级的窗口，
 			// 让排队者（含采集轮）在窗口内把门拿走；本调用随后按队列顺序再取门。
-			g.enqueueLocked(seq, mode.priority)
+			g.enqueueLocked(seq, mode)
 			yield := m.persistYieldOf()
 			g.mu.Unlock()
 			if yield > 0 {
 				time.Sleep(yield)
 			}
+			g.mu.Lock()
+			continue
+		}
+		if mode.maxWait > 0 {
+			// 热路径：cond 不支持超时，用「短睡 + 重检」实现有界等待（上限 mode.maxWait ✓）。
+			g.mu.Unlock()
+			time.Sleep(time.Millisecond)
 			g.mu.Lock()
 			continue
 		}
@@ -4781,6 +4913,11 @@ func (m *Manager) persistGateEnsure() {
 // （受每周期总预算约束）。返回 incomplete=true 表示差异尚未做完（镜像已按提交单元更新，
 // 下一步重算即续跑）。
 func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
+	return m.persistSnapshotStepRows(ctx, 0)
+}
+
+// persistSnapshotStepRows 是 persistSnapshotStep 的「本次调用行数上限」形态（rows>0 时生效）。
+func (m *Manager) persistSnapshotStepRows(ctx context.Context, rows int) (bool, error) {
 	m.mu.Lock()
 	store := m.index
 	if store == nil {
@@ -4872,7 +5009,7 @@ func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
 	// 快照已经构建完成：释放 m.mu（登记路径等的短临界区锁）后再落库。落库顺序由持久化门
 	// 保证与构建顺序一致，因此「旧快照后写」不可能发生。
 	m.mu.Unlock()
-	stats, err := store.ApplyScopedCtx(ctx, desired, changed, prunes)
+	stats, err := store.ApplyScopedCtxRows(ctx, desired, changed, prunes, rows)
 	if err == nil {
 		// 观测面：记录本次读数（含分步未完成标志与范围删除条数），供排障与回归取证。
 		m.mu.Lock()

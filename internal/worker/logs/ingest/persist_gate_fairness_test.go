@@ -389,3 +389,86 @@ func TestPersistGateAgingPreventsReverseStarvation(t *testing.T) {
 	require.True(t, normalServed)
 	mu.Unlock()
 }
+
+// TestCollectionHotPathIsNonBlockingUnderGatePressure（架构级修复 ②）：**采集/投递侧不再等门**——
+// 即使持久化门被一段"按住不放"的步骤长期占着，热路径也必须在有界时间内返回（把落库交给后台通道）。
+//
+// 现场形态（2026-10-03 二度复现）：SIGQUIT 显示采集轮与投递侧共 8 个调用方停在同一把 Cond 上等
+// 1 分钟；根因是一次落库的**单个单元可以停在一分钟级的 SQL 语句上**（单元预算只在语句之间检查）
+// ⇒ 「让路/优先」都救不了，只能**移除"采集等持久化"的依赖方向** ✗。
+//
+// 转红方式（实测）：把热路径改回阻塞式（`persistHot` 内部调用 `persist()`）——本用例在
+// 「有界返回」处变红（它会一直等在门上）。
+func TestCollectionHotPathIsNonBlockingUnderGatePressure(t *testing.T) {
+	m, _ := newGateFixture(t, 500, 16)
+
+	// 用一个测试钩子把门**确定性地按住**（模拟"单元停在一分钟级 SQL 语句上"）。
+	hold := make(chan struct{})
+	m.persistStepHold = func() { <-hold }
+
+	holderDone := make(chan struct{})
+	go func() {
+		defer close(holderDone)
+		_ = m.persistRecoveryStep(context.Background()) // 普通档：拿门 → 被钩子按住
+	}()
+	require.Eventually(t, func() bool {
+		select {
+		case <-m.persistRequests:
+			return false
+		default:
+			return true
+		}
+	}, time.Second, time.Millisecond) // 让持门者先就位（它的 acquire 会走事件钩子，这里用极短等待即可）
+	time.Sleep(30 * time.Millisecond)
+
+	m.persistHotBudget = 50 * time.Millisecond
+	started := time.Now()
+	require.NoError(t, m.persistHot(), "热路径必须返回 nil（超时交给后台通道，而不是报错）")
+	elapsed := time.Since(started)
+	require.Less(t, elapsed, 2*time.Second,
+		"采集/投递侧在门被按住时必须**有界返回**（实测 %s；阻塞式实现会一直等）", elapsed)
+	require.Less(t, elapsed, 500*time.Millisecond,
+		"热路径等待上界应当只有几十毫秒量级（预算 50ms + 调度余量），实测 %s", elapsed)
+
+	// 交办后的落库由后台通道完成（最终一致）：见 TestAsyncHandoffDoesNotClaimCoverage 对
+	// 「真落库后才推进覆盖水位」的断言；这里只保住"热路径有界返回"这一条性质。
+	// （不再去消费 persistRequests 通道：后台 worker 也在消费它，直接读取会与它竞争 ⇒ 假红 ✗。）
+	select {
+	case <-holderDone:
+		t.Fatal("夹具前提不成立：持门者已结束，测不到「门被按住」的形态")
+	default:
+	}
+	close(hold)
+	<-holderDone
+}
+
+// TestAsyncHandoffDoesNotClaimCoverage（架构级修复 ③）：交办**不得谎报覆盖**——
+// 未真正落库前 `persistCovered` 不得推进；后台通道真正做完后才推进。
+//
+// 转红方式（实测）：在交办时直接推进 `persistCovered`（谎报"已覆盖"）——本用例在
+// 「交办后覆盖水位不得前进」处变红。
+func TestAsyncHandoffDoesNotClaimCoverage(t *testing.T) {
+	m, _ := newGateFixture(t, 500, 16)
+
+	hold := make(chan struct{})
+	m.persistStepHold = func() { <-hold }
+	holderDone := make(chan struct{})
+	go func() {
+		defer close(holderDone)
+		_ = m.persistRecoveryStep(context.Background())
+	}()
+	time.Sleep(30 * time.Millisecond)
+
+	m.persistHotBudget = 30 * time.Millisecond
+	coveredBefore := m.persistCovered.Load()
+	require.NoError(t, m.persistHot())
+	coveredAfter := m.persistCovered.Load()
+	require.Equal(t, coveredBefore, coveredAfter,
+		"交办不等于落库：未真正落库前覆盖水位不得推进（否则静默丢更新）")
+
+	// 放开门：后台通道与持门者都完成，覆盖水位最终推进 ✓（真落库才推进）。
+	close(hold)
+	require.Eventually(t, func() bool { return m.persistCovered.Load() > coveredBefore },
+		20*time.Second, 20*time.Millisecond, "后台通道真正落库后，覆盖水位必须推进")
+	<-holderDone
+}
