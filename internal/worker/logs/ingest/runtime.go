@@ -214,6 +214,13 @@ type Manager struct {
 	recoveryGraceUntil  time.Time
 	// recoveryProbe 是"恢复是否进行中"的测试注入点（生产 nil ⇒ 用 StartupRecoveryStatus() ✓）。
 	recoveryProbe func() bool
+	// lastSweepBacklog / lastSweepAt：兜底环**净涨背压**的两轮读数（上一轮的闸视图总积压 ✓）。
+	// 现场形态（+463k ✗）：复活让源开始读文件 ⇒ 常规新数据进入 WAL ⇒ 若与此同时继续复活更多源，
+	// 就是"越复活越涨" ✗✗ ⇒ 恶化期**不放宽、不复活** ✓（用户 Q18 批准的背压 ✓）。
+	lastSweepBacklog int64
+	lastSweepKnown   bool
+	// sweepBacklogOf 是闸视图总积压的取数口（测试可注入 ✓）。
+	sweepBacklogOf func() int64
 	// resumeProbe 是兜底扫描的测试观测口（生产 nil）：每个"积压/容量类暂停"的源被扫到时回调。
 	resumeProbe func(logSourceID string)
 	// scanYield / scanSliceRows / scanYieldNotify：**段读聚合路径的让路**（见
@@ -229,6 +236,8 @@ type Manager struct {
 	scanBudget time.Duration
 	// scanBudgetExceeded 统计"超预算截断"次数（排障观测口）。
 	scanBudgetExceeded atomic.Int64
+	// backpressureSkips 统计因"上一轮净涨"而跳过的兜底轮数（可观测 ✓）。
+	backpressureSkips atomic.Int64
 	// persistRequests/persistWorkerDone 是**后台持久化通道**：热路径超时后把「请落库」交给它，
 	// 由独立 goroutine 完成（它才是允许阻塞的那一方）。cap=1：已有待办请求即无需重复入队。
 	persistRequests   chan struct{}
@@ -5238,6 +5247,40 @@ func gapReasonClassifiableOnResume(reason string) bool {
 	}
 }
 
+// sweepBacklogTotal 返回**闸视图**总积压（全部源的条目数之和 ✓）：背压判据的输入 ✓。
+func (m *Manager) sweepBacklogTotal() int64 {
+	if m != nil && m.sweepBacklogOf != nil {
+		return m.sweepBacklogOf()
+	}
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+	var total int64
+	for _, p := range pipes {
+		if wal := p.WAL(); wal != nil {
+			entries, _ := wal.BacklogAndLimits()
+			total += entries
+		}
+	}
+	return total
+}
+
+// BackpressureSkips 返回因净涨背压而跳过的轮数（可观测 ✓）。
+func (m *Manager) BackpressureSkips() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.backpressureSkips.Load()
+}
+
 // RecoveryQuotaStats 暴露恢复期配额的当前口径（可观测 ✓）：生效系数、宽限截止、是否恢复中。
 func (m *Manager) RecoveryQuotaStats() (factor float64, graceUntil time.Time, recovering bool) {
 	if m == nil {
@@ -5404,6 +5447,17 @@ func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// **净涨背压**（现场 +463k 的形态 ✗）：上一轮总积压在涨 ⇒ 本轮不放宽、不复活 ✓
+			// （恶化期加码只会让"复活→re-append→再越闸"震荡 ✓）。回升 = 下降或持平才继续 ✓。
+			now := m.sweepBacklogTotal()
+			rising := m.lastSweepKnown && now > m.lastSweepBacklog
+			m.lastSweepBacklog, m.lastSweepKnown = now, true
+			if rising {
+				m.backpressureSkips.Add(1)
+				slog.Info("兜底环背压：上一轮积压净涨，本轮不放宽也不复活",
+					"backlog", now, "prev", m.lastSweepBacklog)
+				continue
+			}
 			m.syncRecoveryQuota() // 先同步配额口径（恢复中/宽限/回归 ✓），再扫暂停源 ✓
 			m.maybeResumePausedSources()
 		}

@@ -81,6 +81,25 @@ func (p *Pipeline) SetSourceWorker(v bool) { p.suppressRecursiveVL = v }
 func (p *Pipeline) WorkerSelfFailures() int { return p.workerSelfFailures }
 
 // Ingest 完整事件：容量门禁 → WAL append → fsync commit → delivery。
+// IngestReplay 与 Ingest 同语义，但把写入标记为**恢复期回放/补账**（见 WAL.AppendReplay 的注释 ✓）。
+//
+// 接缝意义（2026-10-04 用户指令）：所有 WAL 追加都经本包的 Ingest 入口 ✓ ⇒ 把"回放/补账"与
+// "常规采集"分成两个显式入口，调用方各取所需 ✓；**常规采集必须继续用 Ingest** ✗（否则等于给
+// 洪流开后门 ✗ —— 闸的绝对上界就废了 ✓）。
+func (p *Pipeline) IngestReplay(events []logtypes.Event) error {
+	if p == nil || p.wal == nil {
+		return fmt.Errorf("acquire: pipeline not initialized")
+	}
+	if _, err := p.wal.TryReclaim(); err != nil {
+		p.noteSelfFailure(err.Error())
+	}
+	if err := p.wal.AppendReplay(events...); err != nil {
+		_, _ = p.deliverPendingBestEffort()
+		return err
+	}
+	return nil
+}
+
 func (p *Pipeline) Ingest(events []logtypes.Event) error {
 	if len(events) == 0 {
 		return nil
