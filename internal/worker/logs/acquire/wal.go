@@ -326,16 +326,28 @@ func (w *WAL) maybeResumeBacklogLocked(ent *ledger.Entry) {
 // 恢复后回读必然重新产生该批 ✓，因此它不构成"已确认落库"，只是"将在恢复后重放" ✓。
 const gapResolutionReReadOnResume = "re-read on resume (append rejected while paused)"
 
+// gapResolutionReReadOnResumeDelivery 是投递失败类缺口的分类裁定文本（与上一条**明确分账** ✓）。
+//
+// 为什么这一类也进白名单（2026-10-04 现场，用户批准的红线修正 ✓）：`DELIVER_ERROR` 的语义是
+// "投递时 VL 不可达"（`connect: connection refused` ✓）⇒ 恢复后**回读会让恢复链重投那段
+// `UNSENT basis=gap` 区间**（现场 `inst:156` 覆盖 119.78MB ✓、紧贴水位 ✓）⇒ 它**恰恰是可愈合的** ✓✓。
+// 我上批假设"投递失败类回读治不了 ⇒ 必须永远挡住恢复" ✗ 被现场 67 条恒等不变**证否** ✓（那 67 条
+// 所属源已暂停 ⇒ 活投递事件结构性不可达 ⇒ 两种证据都拿不到 ⇒ 永久停死 ✗）。
+const gapResolutionReReadOnResumeDelivery = "re-read on resume (delivery error while paused)"
+
 // gapResolutionExcludedReasons 是**绝不能被本条路径放行**的缺口原因（fail-closed 名单 ✓）。
 //
 // 抽成包级变量（而不是内联字面量）是为了让"放开一因 ⇒ 红"**可被变异触达** ✓：内联时该列表只会在
 // 处理 APPEND_REJECTED 时被读到 ⇒ 任何"删一项"的变异都不可达 ✗（实测：删项后用例仍绿 ✗✗），
 // 于是那条红线只有断言、没有证据 ✗。名单语义不变：**未列出者一律不放行** ✓（新增原因默认排除 ✓）。
 var gapResolutionExcludedReasons = []string{
+	// STDIO_RAW_WRITE_FAILED：原始字节**从未落盘**（写原始文件就失败了）⇒ 重投无据 ⇒ 必须挡住 ✓
+	// （这是"源文件对应字节已不再可得"的等价形态 ✓ —— 语义断言见对应用例 ✓）。
 	ledger.GapReasonStdioRawWriteFailed,
-	ledger.GapReasonDeliverError,
-	ledger.GapReasonDeliverErrorWorkerSource,
+	// WAL_COMMIT_FAILED：提交阶段的失败没有"内容确实存在"的依据 ⇒ 同样挡住 ✓。
 	ledger.GapReasonWALCommitFailed,
+	// DELIVER_ERROR / DELIVER_ERROR_WORKER_SOURCE 已于 2026-10-04 移入**白名单**
+	// （见 gapResolutionReReadOnResumeDelivery ✓，用户批准的红线修正 ✓）。
 }
 
 // resolveReReadHealableGapsLocked 只消解 REASON=APPEND_REJECTED 的未消解缺口（见调用点注释）。
@@ -346,6 +358,9 @@ func (w *WAL) resolveReReadHealableGapsLocked(ent *ledger.Entry) int {
 	if ent == nil {
 		return 0
 	}
+	// 两类各自成批消解（文本分账 ✓），**其余原因一律默认排除** ✓（fail-closed：每条调用都显式
+	// 列出排除集 ✓，将来新增原因不会被任何一条悄悄放行 ✓）。
+	total := 0
 	through := uint64(0)
 	for _, g := range ent.Gaps {
 		if g.Resolved || g.Reason != ledger.GapReasonAppendRejected {
@@ -355,16 +370,36 @@ func (w *WAL) resolveReReadHealableGapsLocked(ent *ledger.Entry) int {
 			through = g.EndPos
 		}
 	}
-	if through == 0 {
-		return 0
+	if through > 0 {
+		n, err := w.led.ResolveGapsThroughExcept(w.key, through, gapResolutionReReadOnResume,
+			gapResolutionExcludedReasons...,
+		)
+		if err == nil {
+			total += n
+		}
 	}
-	n, err := w.led.ResolveGapsThroughExcept(w.key, through, gapResolutionReReadOnResume,
-		gapResolutionExcludedReasons...,
-	)
-	if err != nil {
-		return 0
+
+	deliverThrough := uint64(0)
+	for _, g := range ent.Gaps {
+		if g.Resolved {
+			continue
+		}
+		if g.Reason != ledger.GapReasonDeliverError && g.Reason != ledger.GapReasonDeliverErrorWorkerSource {
+			continue
+		}
+		if g.EndPos > deliverThrough {
+			deliverThrough = g.EndPos
+		}
 	}
-	return n
+	if deliverThrough > 0 {
+		n, err := w.led.ResolveGapsThroughExcept(w.key, deliverThrough, gapResolutionReReadOnResumeDelivery,
+			gapResolutionExcludedReasons...,
+		)
+		if err == nil {
+			total += n
+		}
+	}
+	return total
 }
 
 // EvaluateResume 尝试一次「推进回收 + 按滞回条件评估恢复」，返回**账本当前是否不在暂停态**。

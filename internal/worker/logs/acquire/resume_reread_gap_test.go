@@ -17,7 +17,8 @@ import (
 //
 // 转红方式（实测两条，各自独立红 ✓）：
 //   - 去掉本包的分类消解（恢复原状：任何缺口都拦截）⇒ 在「必须恢复」处红（环死 ✗）；
-//   - 把放行扩成"任何原因都消解"⇒ 在「投递失败必须继续拦截」处红（缺口语义红线 ✗）。
+//   - 把放行扩成"任何原因都消解"⇒ 在「STDIO_RAW_WRITE_FAILED 必须继续拦截」处红（红线 ✗）；
+//   - 2026-10-04 起 DELIVER_ERROR* 已按现场证据移入白名单（见 gapResolutionReReadOnResumeDelivery ✓）。
 func TestBacklogResumeBreaksAppendRejectedSelfLock(t *testing.T) {
 	key := testKey("inst:selflock", "g1")
 	led := ledger.New()
@@ -67,11 +68,11 @@ func TestBacklogResumeBreaksAppendRejectedSelfLock(t *testing.T) {
 	// **关键：投递失败缺口必须落在 `through` 之内**（through = 未消解 APPEND_REJECTED 的最大 EndPos ✓）。
 	// 上一版我把它放在 [6300,6400]（> 6200）⇒ 分类根本够不到它 ⇒ "删排除项"的变异仍绿 ✗✗，
 	// 那样得到的只是"不可达变异"，不算证据 ✓（实测教训 ✓）。
-	require.NoError(t, led.RecordGap(key, 5000, 5100, ledger.GapReasonDeliverError, "transport down"))
+	require.NoError(t, led.RecordGap(key, 5000, 5100, ledger.GapReasonStdioRawWriteFailed, "raw write failed"))
 	// **正确期望**：共存时源**不得恢复** ✓——排除表里的 DELIVER_ERROR 必须继续挡住恢复 ✓
 	// （这正是回归早期踩过的坑：我曾误写成"仍必须恢复"，那是与红线自相矛盾的期望 ✗）。
 	// 判别力在于：若把 GapReasonDeliverError 从排除表删掉 ⇒ 它会被一并消解 ⇒ 本断言变红 ✓✓。
-	require.False(t, wal.EvaluateResume(), "投递失败类缺口必须继续挡住恢复（红线 ✓）")
+	require.False(t, wal.EvaluateResume(), "STDIO_RAW_WRITE_FAILED 必须继续挡住恢复（红线 ✓）")
 	require.True(t, led.Get(key).AcquirePaused, "被挡住的形态：仍在暂停 ✓")
 	// **据实打印**（父指示）：分类调用后的真实 gap 列表（合并/trim 之后 ✓）。
 	for i, g := range led.Get(key).Gaps {
@@ -83,7 +84,7 @@ func TestBacklogResumeBreaksAppendRejectedSelfLock(t *testing.T) {
 			continue
 		}
 		switch g.Reason {
-		case ledger.GapReasonDeliverError:
+		case ledger.GapReasonStdioRawWriteFailed:
 			deliverUnresolved++
 		case ledger.GapReasonAppendRejected:
 			appendRejectedUnresolved++
@@ -91,7 +92,7 @@ func TestBacklogResumeBreaksAppendRejectedSelfLock(t *testing.T) {
 	}
 	require.Zero(t, appendRejectedUnresolved, "APPEND_REJECTED 应按「恢复后回读重放」分类消解 ✓")
 	require.Equal(t, 1, deliverUnresolved,
-		"**排除表必须挡住投递失败类**：放开一因（删 GapReasonDeliverError）即在此变红 ✓（前提：该缺口落在 through 之内 ✓）")
+		"**排除表必须挡住 STDIO_RAW_WRITE_FAILED**（原始字节从未落盘 ⇒ 重投无据 ✓）：放开一因即在此变红 ✓")
 
 	// 负向对照（缺口语义红线 ✗）：与读游标无关的缺口（投递失败）**必须继续拦截** ✓。
 	require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason+" (entries=5/4)"))
