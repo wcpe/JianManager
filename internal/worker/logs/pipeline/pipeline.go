@@ -540,6 +540,17 @@ func (p *Pipeline) ResolveUnknownThroughProjection(events []logtypes.Event) erro
 	return p.led.ResolveDeliveryThroughRecovery(p.key, events[0].Record.Start, events[len(events)-1].Record.End)
 }
 
+// SetArchiveOwnerRegistry 注入归档归属注册表（跨代次查询「该归档属于哪个代次」）。
+//
+// 由上层（ingest Manager）在登记每个源时注入；未注入时导入器只认轮转关联这一条归属凭据，
+// 而**不会**回退成"假设当前代次"。
+func (p *Pipeline) SetArchiveOwnerRegistry(fn func(logSourceID, cleanPath, objectID string) (string, bool)) {
+	if p == nil || p.imp == nil {
+		return
+	}
+	p.imp.SetOwnerRegistry(fn)
+}
+
 // ImportArchive 导入 gzip 归档；已关联轮转时跳过整包，禁止双计。
 func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
 	result, err := p.imp.ImportGzip(path)
