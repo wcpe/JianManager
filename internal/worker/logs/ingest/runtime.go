@@ -36,6 +36,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
+	"runtime/debug"
 )
 
 // SourceConfig describes one persistent Worker log source.
@@ -246,6 +247,11 @@ type Manager struct {
 
 	// backpressureSkips 统计因"上一轮净涨"而跳过的兜底轮数（可观测 ✓）。
 	backpressureSkips atomic.Int64
+	// sweepTicks / sweepPanics 是兜底环的**心跳与崩溃计数**（2026-10-05 现场：`candidates` 三次**恒定**
+	// ⇒ 累计计数不再增长 ⇒ 更像"**环本身停了**" ✗✓，与"被过滤"外部读数无法区分 ✓）。
+	// goroutine 内未捕获的 panic 会**静默杀死整个兜底环** ✗ ⇒ recover 连栈一起留证 ✓。
+	sweepTicks  atomic.Int64
+	sweepPanics atomic.Int64
 	// **兜底环每轮的跳过原因分类计数**（2026-10-05 现场：41 家三项前置全满足却不复活 ✗ ⇒
 	// 必须能直接读出"是哪一条把它挡了" ✓）。
 	risingStreak     atomic.Int64
@@ -5358,6 +5364,9 @@ type ResumeSweepStats struct {
 	SkipHysteresis   int64
 	SkipEnumeration  int64
 	RisingStreak     int64
+	// SweepTicks / SweepPanics：**心跳与崩溃计数**（现场据此判"环活着吗" ✓）。
+	SweepTicks  int64
+	SweepPanics int64
 }
 
 func (m *Manager) ResumeSweepStats() ResumeSweepStats {
@@ -5372,6 +5381,8 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		SkipHysteresis:   m.skipHysteresis.Load(),
 		SkipEnumeration:  m.skipEnumeration.Load(),
 		RisingStreak:     m.risingStreak.Load(),
+		SweepTicks:       m.sweepTicks.Load(),
+		SweepPanics:      m.sweepPanics.Load(),
 	}
 }
 
@@ -5592,7 +5603,19 @@ func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m.sweepOnce() // 一轮全部动作见 sweepOnce（抽出仅为给心跳/recover 留出包裹点 ✓）
+			m.sweepTicks.Add(1) // 心跳：环活着就有读数 ✓（停止 ⇒ 心跳不动 ⇒ 一眼可辨 ✓）
+			// **兜底 recover（连栈）**：一轮内的 panic 不许杀死整个兜底环 ✗（现场"计数恒定"的形态 ✓）；
+			// 栈一起打（用户 2026-10-05：只打 panic 原文往往不足以一次定位 ✓）。
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						m.sweepPanics.Add(1)
+						slog.Error("兜底环本轮 panic（已恢复，环继续）",
+							"panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+					}
+				}()
+				m.sweepOnce()
+			}()
 		}
 	}
 }

@@ -1435,6 +1435,7 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 			st := manager.ResumeSweepStats()
 			if st.SkipBackpressure > 0 || st.SkipHysteresis > 0 || st.SkipEnumeration > 0 || st.Revived > 0 {
 				slog.Info("兜底环读数",
+					"ticks", st.SweepTicks, "panics", st.SweepPanics, // 门哨兵：ticks 不涨 ⇒ 环停了 ✓
 					"candidates", st.Candidates, "revived", st.Revived,
 					"skip_backpressure", st.SkipBackpressure,
 					"skip_hysteresis", st.SkipHysteresis,
