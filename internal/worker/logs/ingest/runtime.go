@@ -5170,6 +5170,9 @@ type SourceResumeDiagnostic struct {
 	// `BacklogTotalEntries > BacklogEntries` ⇒ **存在回放归因** ⇒ 再去点名该走 `IngestReplay` 的调用点 ✓。
 	BacklogTotalEntries int64
 	ReplayEntries       int64
+	// ReadPos / ReclaimPos：三水位补齐（现场离线核 `reclaim ≤ read` 不变量 ✓）。
+	ReadPos    uint64
+	ReclaimPos uint64
 	// DeliveryPos / DurablePos 是账本水位（靶②判据：缺口是否在**已投递水位之上** ⇒ 需恢复链重投
 	// 而非水位覆盖 ✓）。
 	DeliveryPos uint64
@@ -5220,6 +5223,8 @@ func (m *Manager) ResumeDiagnostics() []SourceResumeDiagnostic {
 			BacklogPause:       acquire.IsBacklogPauseReason(entry.PauseReason),
 			UnresolvedByReason: map[string]int{},
 		}
+		d.ReadPos = entry.Positions.Read
+		d.ReclaimPos = entry.Positions.Reclaim
 		d.DeliveryPos = entry.Positions.Delivery
 		d.DurablePos = entry.Positions.Durable
 		for _, g := range entry.Gaps {
@@ -5263,7 +5268,8 @@ func (m *Manager) ResumeDiagnosticLines() []string {
 			"source=%s paused=%v reason=%q backlog_pause=%v backlog=%d/%d total=%d replay=%d unresolved=%d blocking=%d delivery_pos=%d",
 			d.LogSourceID, d.AcquirePaused, d.PauseReason, d.BacklogPause,
 			d.BacklogEntries, d.MaxEntries, d.BacklogTotalEntries, d.ReplayEntries,
-			d.Unresolved, d.Blocking, d.DeliveryPos))
+			d.Unresolved, d.Blocking, d.DeliveryPos)+
+			fmt.Sprintf(" read_pos=%d reclaim_pos=%d invariant_ok=%v", d.ReadPos, d.ReclaimPos, d.ReclaimPos <= d.ReadPos))
 	}
 	sort.Strings(lines)
 	return lines
