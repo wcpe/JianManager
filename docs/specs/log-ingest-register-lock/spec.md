@@ -58,10 +58,13 @@ pollOnce()  { cycleMu.Lock(); … for 每个源 { pollSource } … cycleMu.Unloc
 | 锁 | 保护对象 | 持有者 |
 |---|---|---|
 | `mu` | `sources` / `pipes` / `state`（含 `state.Instances`）/ `persistedRev` / `persistedCover` / `index` / 各报告字段 | 几乎所有方法（**每处都只做 map/字段读写**），例外见下表最后一行的 `persist` |
-| `cycleMu` | 「采集轮 / 预备切换 / 解缺口 / 停止」之间的互斥（**一次只允许一个长流程**） | `pollOnce`、`PrepareCutoverReadiness`、`ResolveCoveredGaps`、`ResolveCoveredGapsForSource`、`Stop`、**（改动前）`RegisterInstance`** |
+| `cycleMu` | 「采集轮 / 预备切换 / 解缺口 / 停止」之间的互斥（**同一时刻只允许一个长流程**） | `pollOnce`、`PrepareCutoverReadiness`、`ResolveCoveredGaps`、`ResolveCoveredGapsForSource`、`Stop`、**（改动前）`RegisterInstance`** |
 | `pendingMu` | 未绑定实例的暂存写入与「绑定接管」之间的互斥（保证回放期间没有输出插进中间） | `AppendInstanceOutput`、`RegisterInstance`、`recoverPendingSpools`、`pendingSpoolState`、（改动后）`SetPendingSpoolLimits` |
 
-### 2.2 持有跨越长操作的临界区（改动前）
+> **2026-10-02 修订（压测现场 E1，本表随之收窄）**：`ResolveCoveredGaps`（整节点解算）**不再整段持有 `cycleMu`**——它改为「离锁投影查询 + 每源一段短临界区」，故上表「一次只允许一个长流程」对解算路径已不成立：解算与采集轮只在**单源变更段**（毫秒级）互斥，采集轮在解算进行中照常推进。`ResolveCoveredGapsForSource`（放弃裁定）仍是单源短流程、整段持锁（无投影查询，代价与单源同阶）。判据（`STDIO_RAW_WRITE_FAILED` 拒绝、投影完整性、覆盖水位）与 `ResolveGapsThroughExcept` / `VerifiedRuns` 语义逐字未改。
+> 量化口径（合并门禁「长临界区审计」要求）与 FR-499 同：直接测「被它挡住的那件事」的时长，不用 `TryLock` 探锁。回归 `TestResolveCoveredGapsLockHoldIsBoundedPerSource`（`internal/worker/logs/ingest/resolve_gaps_lock_test.go`）实测：解算总时长 **372ms** 的同一时段内，采集轮**最坏单轮 0.89–1.37ms** ⇒ 争用上界毫秒级，与解算总时长彻底解耦；旧形态（变异复刻整段持锁）下同一断言实测转红（采集轮单轮 **364.8ms ≈ 解算总时长**）。同批另有「解算进行中采集不停」「ctx 取消即停且不落变更」「预算有界且可续跑」三条可转红回归。
+
+### 2.2 持有跨越长操作的临界区（改动前；解算两行的现状见 §2.1 修订注）
 
 行号为改动前的位置（改动后同一逻辑 +19 行，见 §3）。
 
