@@ -176,6 +176,105 @@ func TestAbandonMergesAdjacentEvidence(t *testing.T) {
 	require.Equal(t, uint64(300), entry.Abandonments[0].Through, "Through 取最新（更大）值")
 }
 
+// 永久空洞的出口：放弃前回收链必须**持续卡住**，放弃后必须能推进。
+//
+// 场景（用户原案）：区间 [0,200] 内位置 100–150 的 WAL 记录物理永久损坏/被删/校验永败。
+// 恢复分段因此永远到不了 WAL_RESPONSIBILITY_TRANSFERRED，`CanReclaim` 永不放行 →
+// reclaim 不动 → WAL 积压永不回落 → 滞回永不满足 → 源永久 PAUSED（"到天荒地老"）。
+//
+// 两条断言缺一不可：
+//
+//	① 放弃**之前**必须卡住（变体：能推进即红 —— 那说明 default-deny 门禁被放宽了）；
+//	② 放弃**之后**必须能推进（变体：仍卡住即红 —— 那说明出口没接上）。
+//
+// 转红方式（实测）：把 tryReclaimLocked 里的凭据放行段去掉，②立即红；
+// 把 `!allowed` 判定改成恒放行，①立即红。
+func TestAbandonedHoleReleasesReclaimGate(t *testing.T) {
+	led := New()
+	key := keyOf("hole-exit", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "hole-exit", SourceGeneration: "g1"})
+	require.NoError(t, led.AdvanceRead(key, 200))
+	require.NoError(t, led.AdvanceDurable(key, 200))
+	require.NoError(t, led.RecordDelivery(key, 0, 200, logtypes.DeliveryRequestDone))
+	// 恢复分段只到 STAGED：责任未转移 ⇒ CanReclaim 拒绝（这就是"永久卡住"的机器）。
+	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
+		SegmentID: "seg-hole", Path: "project://seg-hole", State: logtypes.RecoveryStaged,
+		CoversFrom: 0, CoversTo: 200,
+	}))
+	// 位置 100–150 永久丢失。
+	require.NoError(t, led.RecordGap(key, 100, 150, GapReasonAppendRejected, "WAL 段物理损坏"))
+
+	// ① 放弃前：回收必须持续失败（且不得静默推进）。
+	for i := 0; i < 3; i++ {
+		pos, err := led.TryReclaim(key)
+		require.Error(t, err, "放弃前回收链必须持续被门禁挡住")
+		require.Zero(t, pos, "被挡住时 reclaim 不得推进")
+	}
+	require.Error(t, led.ResumeAcquire(key), "存在未解决缺口时不得恢复采集")
+
+	// ② 人工裁定放弃（带操作人）。
+	resolved, err := led.AbandonGapsThrough(key, 200, GapAbandonment{Operator: "ops@example"})
+	require.NoError(t, err)
+	require.Equal(t, 1, resolved)
+
+	// 放弃后：回收链必须能跨过这个空洞。
+	pos, err := led.TryReclaim(key)
+	require.NoError(t, err, "带凭据的回收链必须能跨过已放弃的空洞")
+	require.Equal(t, uint64(200), pos, "应推进到该恢复分段覆盖的末端")
+	require.NoError(t, led.ResumeAcquire(key), "缺口已裁定放弃，恢复采集应放行")
+}
+
+// hold 优先于凭据：运维显式钉住的分段不得因"已放弃空洞"而被回收跨过。
+//
+// 为什么：hold 表达"这段先别动"，凭据表达"这段数据没了"。两者冲突时以"不许动"为准 ——
+// 凭据是**丢失**的裁定，不是**放行**的授权；把 hold 让位给凭据等于让放弃动作顺带解除钉住，
+// 那是运维没同意的副作用。
+//
+// 转红方式（实测）：把凭据放行段的条件 `!ref.HasHold` 去掉，本用例立即红。
+func TestAbandonedHoleDoesNotOverrideHold(t *testing.T) {
+	led := New()
+	key := keyOf("hole-hold", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "hole-hold", SourceGeneration: "g1"})
+	require.NoError(t, led.AdvanceRead(key, 200))
+	require.NoError(t, led.AdvanceDurable(key, 200))
+	require.NoError(t, led.RecordDelivery(key, 0, 200, logtypes.DeliveryRequestDone))
+	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
+		SegmentID: "seg-hold", Path: "project://seg-hold", State: logtypes.RecoveryWALResponsibilityXfer,
+		ReleaseReason: logtypes.ReleaseProjectionBacked, CoversFrom: 0, CoversTo: 200, HasHold: true,
+	}))
+	require.NoError(t, led.RecordGap(key, 100, 150, GapReasonAppendRejected, "damaged"))
+	_, err := led.AbandonGapsThrough(key, 200, GapAbandonment{Operator: "ops@example"})
+	require.NoError(t, err)
+
+	pos, err := led.TryReclaim(key)
+	require.Error(t, err, "有 hold 时即便存在放弃凭据也必须拒绝回收")
+	require.Zero(t, pos)
+}
+
+// 放弃凭据**不得**成为通用放行：凭据区间与本分段覆盖区间不相交时，门禁照旧拒绝。
+//
+// 这条守的是"凭据放行是定向的、不是全局开关"。
+func TestAbandonmentOutsideSegmentDoesNotReleaseReclaim(t *testing.T) {
+	led := New()
+	key := keyOf("hole-outside", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "hole-outside", SourceGeneration: "g1"})
+	require.NoError(t, led.AdvanceRead(key, 200))
+	require.NoError(t, led.AdvanceDurable(key, 200))
+	require.NoError(t, led.RecordDelivery(key, 0, 200, logtypes.DeliveryRequestDone))
+	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
+		SegmentID: "seg-out", Path: "project://seg-out", State: logtypes.RecoveryStaged,
+		CoversFrom: 0, CoversTo: 200,
+	}))
+	// 空洞在 50000–60000：远在本分段覆盖区间之外。
+	require.NoError(t, led.RecordGap(key, 50000, 60000, GapReasonAppendRejected, "elsewhere"))
+	_, err := led.AbandonGapsThrough(key, 60000, GapAbandonment{Operator: "ops@example"})
+	require.NoError(t, err)
+
+	pos, err := led.TryReclaim(key)
+	require.Error(t, err, "凭据与分段覆盖区间不相交时不得放行回收")
+	require.Zero(t, pos)
+}
+
 // 自动路径不得写出 PERMANENTLY_LOST：自动放弃 = 静默丢日志，明令禁止。
 func TestAutoResolveNeverMarksPermanentlyLost(t *testing.T) {
 	led := New()

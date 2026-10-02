@@ -5,6 +5,7 @@ package ledger
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -306,7 +307,35 @@ func (l *Ledger) AbandonmentsCovering(key SourceKey, pos uint64) (GapAbandonment
 	if entry == nil {
 		return GapAbandonment{}, false
 	}
-	for _, ab := range entry.Abandonments {
+	return findAbandonmentCovering(entry, pos)
+}
+
+// abandonmentIntersectingLocked 返回与闭区间 [from, to] 相交的第一条放弃凭据。
+//
+// 为什么回收门禁用「相交」而不是「覆盖 reclaim 位置」：被卡住的 reclaim 位置通常落在空洞**之前**
+// （门禁要求整段责任已转移，而整段里含空洞），所以按位置覆盖判定永远匹配不上——
+// 真正相关的是「这一段之所以无法完成校验，是否正因为其中有个已裁定的空洞」。
+// 判据取相交即表达这一点，而放行的**上界仍是该分段的 CoversTo**，不会越界。
+// 调用方必须已持锁（读或写）。
+func (l *Ledger) abandonmentIntersectingLocked(e *Entry, from, to uint64) (GapAbandonment, bool) {
+	if e == nil {
+		return GapAbandonment{}, false
+	}
+	for _, ab := range e.Abandonments {
+		if ab.To < from || ab.From > to {
+			continue
+		}
+		return ab, true
+	}
+	return GapAbandonment{}, false
+}
+
+// findAbandonmentCovering 是 AbandonmentsCovering 的加锁外实现。
+func findAbandonmentCovering(e *Entry, pos uint64) (GapAbandonment, bool) {
+	if e == nil {
+		return GapAbandonment{}, false
+	}
+	for _, ab := range e.Abandonments {
 		if pos >= ab.From && pos <= ab.To {
 			return ab, true
 		}
@@ -1009,7 +1038,27 @@ func (l *Ledger) tryReclaimLocked(e *Entry) (uint64, error) {
 		return e.Positions.Reclaim, fmt.Errorf("ledger: reclaim blocked: no recovery segment covers position %d", e.Positions.Reclaim)
 	}
 	// CanReclaim 是回收门禁：STAGED/DURABLE_VERIFIED/hold 一律拒绝。
-	if !logtypes.CanReclaim(e.Positions, ref.State, ref.ReleaseReason, ref.HasHold) {
+	allowed := logtypes.CanReclaim(e.Positions, ref.State, ref.ReleaseReason, ref.HasHold)
+	if !allowed && !ref.HasHold {
+		// 凭据放行（2026-10-02，用户质疑「永久空洞的出口」）：
+		// 当本分段覆盖的区间内已有人工裁定的**永久丢失**空洞（PERMANENTLY_LOST + 审计凭据）时，
+		// 恢复责任**不可能**再通过校验转移（数据物理没了），常规门禁会让回收链永久卡在空洞之前
+		// → WAL 积压永不回落 → 滞回永不满足 → 源永久 PAUSED。
+		//
+		// 这是**独立的有凭据的放行**，不是放宽门禁本身：没有凭据时依旧拒绝（default-deny 未动）。
+		// 放行范围严格限定在**本分段覆盖之上界**（target 仍是 ref.CoversTo），不会因为一个凭据
+		// 就把回收推到任意位置；hold 优先于凭据（hold 是运维显式钉住，凭据是裁定丢失，两者冲突时
+		// 以"不许动"为准）。
+		if ab, ok := l.abandonmentIntersectingLocked(e, e.Positions.Reclaim, ref.CoversTo); ok {
+			slog.Warn("回收链凭「永久丢失」凭据跨过空洞（该空洞由人工裁定且留有审计凭据）",
+				"logSourceID", e.Key.LogSourceID, "sourceGeneration", e.Key.SourceGeneration,
+				"reclaimFrom", e.Positions.Reclaim, "segmentCoversTo", ref.CoversTo,
+				"abandonedFrom", ab.From, "abandonedTo", ab.To,
+				"operator", ab.Operator, "at", ab.AtUTC, "through", ab.Through)
+			allowed = true
+		}
+	}
+	if !allowed {
 		return e.Positions.Reclaim, fmt.Errorf("ledger: reclaim blocked by CanReclaim: state=%s reason=%q hold=%v delivery=%d reclaim=%d",
 			ref.State, ref.ReleaseReason, ref.HasHold, e.Positions.Delivery, e.Positions.Reclaim)
 	}

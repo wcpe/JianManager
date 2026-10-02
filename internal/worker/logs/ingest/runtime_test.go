@@ -1028,6 +1028,71 @@ func TestPersistFailureKeepsSourcePendingForRetry(t *testing.T) {
 		"落库失败过的源必须在下一轮被重试；否则悬挂源静默滞留、重启后按陈旧水位重读")
 }
 
+// 归属执行体端到端：同一份归档由代次 g1 导入后，代次 g2 **不得**再把它按自己的代次导入。
+//
+// 这是「代次一致必须有执行体」那条诉求的落地验证：注册表 = 既有持久化
+// （账本分段里的 (规范路径, archive_object_id) → 代次），执行体 = archiveOwnerLookup
+// 遍历同源各代次条目。缺了它，"这个归档属于谁"只能假设当前代次 ⇒ 同一份字节以
+// g2 的 event_id 再进一次 VL（静默重复），而 g2 的 VerifiedRuns 认不了 g1 的账。
+//
+// 转红方式（实测）：把 Register 里的 p.SetArchiveOwnerRegistry(...) 去掉（即不注入执行体），
+// 本用例「g2 必须拒绝」的断言立即红（g2 会照常导入并产出事件）。
+func TestManagerRefusesArchiveAlreadyOwnedByAnotherGeneration(t *testing.T) {
+	client, _ := newProjectionVL(t)
+	root := t.TempDir()
+	logDir := filepath.Join(root, "server", "logs")
+	require.NoError(t, os.MkdirAll(logDir, 0o700))
+	archivePath := filepath.Join(logDir, "2026-09-22-1.log.gz")
+	writeRuntimeGzip(t, archivePath, "[10:00:00] [Server thread/INFO]: owned by g1\n")
+	livePath := filepath.Join(logDir, "latest.log")
+	require.NoError(t, os.WriteFile(livePath, []byte(
+		"[10:00:02] [Server thread/INFO]: live one\n[10:00:03] [Server thread/INFO]: boundary\n"), 0o600))
+
+	// 代次 g1：首次见到该归档 ⇒ 导入并登记绑定（历史归档能力，不得被归属闸误杀）。
+	cat1 := catalog.New(catalog.NewMemJournal())
+	m1, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat1, Journal: cat1.Journal(),
+		Sources: []SourceConfig{{
+			LogSourceID: "inst:owner/file", SourceGeneration: "g1", Path: livePath,
+			Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:owner", UTCDay: runtimeTestUTCDay(),
+		}}})
+	require.NoError(t, err)
+	m1.pollOnce()
+	require.NotEmpty(t, durableEvents(t, m1, "inst:owner/file/g1"),
+		"g1 首次见到历史归档必须导入（否则历史归档能力被误杀）")
+	// 绑定已随 persist 落进 m1.state（= 注册表的持久化形态）。
+	require.NoError(t, m1.Stop(), "Stop 会落盘，确保绑定已持久化")
+
+	// 代次 g2：同一份归档。此时注册表应命中 g1 ⇒ 必须拒绝。
+	cat2 := catalog.New(catalog.NewMemJournal())
+	m2, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(),
+		Sources: []SourceConfig{{
+			LogSourceID: "inst:owner/file", SourceGeneration: "g2", Path: livePath,
+			Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:owner", UTCDay: runtimeTestUTCDay(),
+		}}})
+	require.NoError(t, err)
+	m2.pollOnce()
+
+	key2 := ledger.SourceKey{LogSourceID: "inst:owner/file", SourceGeneration: "g2"}
+	pipe2, ok := m2.pipeFor("inst:owner/file/g2")
+	require.True(t, ok)
+	entry2 := pipe2.Ledger().Get(key2)
+	require.NotNil(t, entry2)
+	var refused bool
+	for _, gap := range entry2.Gaps {
+		if gap.Reason == "ARCHIVE_FOREIGN_GENERATION" {
+			refused = true
+		}
+	}
+	require.True(t, refused,
+		"归档已属于 g1，g2 必须拒绝导入并留可见缺口（否则同一份字节以 g2 的 event_id 静默重复）")
+	// g2 不得把该归档记成自己已导入。
+	for _, seg := range entry2.Segments {
+		if seg.Path == archivePath {
+			require.False(t, seg.Imported, "g2 不得把属于 g1 的归档登记为自己已导入")
+		}
+	}
+}
+
 func TestManagerRotationImportsOnlyUnreadTailBeforeReplacementFile(t *testing.T) {
 	client, _ := newProjectionVL(t)
 	root := t.TempDir()

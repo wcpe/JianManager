@@ -919,6 +919,9 @@ func (m *Manager) Register(source SourceConfig) error {
 	}
 	m.sources[key] = source
 	m.pipes[key] = p
+	// 归档归属闸（2026-10-02）：把「跨代次归属注册表」接到本源的导入器上。
+	// 缺了它，归档导入只能假设"属于当前代次"——那是静默重复的入口。
+	p.SetArchiveOwnerRegistry(m.archiveOwnerLookup())
 	if m.state.SourceConfigs == nil {
 		m.state.SourceConfigs = make(map[string]SourceConfig)
 	}
@@ -1129,6 +1132,49 @@ func (m *Manager) pollOnce() {
 	}
 	if anyDirty {
 		_ = m.persist()
+	}
+}
+
+// archiveOwnerLookup 返回「归档归属代次」查询：在**既有持久化**里枚举同一 LogSourceID 的
+// 各个代次，回答某个归档对象已被哪个代次导入过。
+//
+// 为什么用 m.state 而不是新建注册表（零迁移）：归档的逐件账本来就落在**账本分段**里
+// （Segment{Kind: SegmentGzip, Path, ArchiveObjectID}），而分段存在以 (LogSourceID, 代次) 为键的
+// 账本条目中、并随索引持久化。因此「同源各代次可枚举」这件事不需要新表——只需把已持久化的
+// 各代次条目翻一遍。新表 + 迁移的风险（迁移期不可用、双写不一致）远大于这一次线性扫描的收益：
+// 调用点是**每个待导入归档一次**，而不是每批事件一次。
+//
+// 判据口径与归档侧一致：规范化路径 + archive_object_id（后者已含大小与内容哈希，
+// 见 ArchiveObjectID）——即 (源ID, 规范化路径, 大小, 内容哈希)。
+//
+// 查不到就是查不到：返回 found=false，由调用方按「来源不可追溯」拒绝导入，
+// **绝不回退成「假设当前代次」**。
+func (m *Manager) archiveOwnerLookup() func(logSourceID, cleanPath, objectID string) (string, bool) {
+	return func(logSourceID, cleanPath, objectID string) (string, bool) {
+		if m == nil || logSourceID == "" || objectID == "" {
+			return "", false
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for _, saved := range m.state.Sources {
+			for i := range saved.Ledger {
+				entry := &saved.Ledger[i]
+				if entry.Key.LogSourceID != logSourceID {
+					continue
+				}
+				for j := range entry.Segments {
+					seg := &entry.Segments[j]
+					if seg.Kind != ledger.SegmentGzip || seg.ArchiveObjectID != objectID {
+						continue
+					}
+					if filepath.Clean(seg.Path) != cleanPath {
+						continue
+					}
+					return entry.Key.SourceGeneration, true
+				}
+			}
+		}
+		return "", false
 	}
 }
 

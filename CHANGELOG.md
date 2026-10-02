@@ -1034,3 +1034,7 @@ Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令
 
 ### 新增
 - **空洞放弃协议（Hole Abandonment，B 批 1）**：`AbandonGapsThrough` 独立成环（default-deny 载体 `ResolveGapsThroughExcept` 逐字未动），空操作人拒绝；`Gap` 补结构化字段（ReasonCode/ResolvedAtUTC/ResolvedBy）；独立凭据 `Entry.Abandonments`（区间=实际被放弃缺口并集，可长出缺口记录被裁的窗口，条数有界 64 并注明取舍）；gRPC 操作人经 `x-jm-operator` 下传、取不到即拒（附可执行补救）；自动路径永不写 PERMANENTLY_LOST（守卫用例）。
+
+### 修复
+- **归档代次归属执行体（ADR-A）**：新增零迁移注册表（遍历同源各代次账本条目，key=(源ID,规范化路径,archive_object_id 含大小+内容哈希)）；ImportGzip 加拒绝闸（gzip 头校验之后）：**命中其它代次一律拒绝+告警+记缺口（ARCHIVE_FOREIGN_GENERATION）**，首次见到则导入并登记绑定、此后必被拒 —— 任何情况不归当前代次。3 项变异转红 + 3 条防误杀守卫。
+- **空洞放弃放行（ADR-B 批 2）**：CanReclaim 在本分段覆盖区间内存在放弃凭据时放行（无凭据仍拒=default-deny 未动；hold 优先于凭据；放行上界=该分段 CoversTo）；红证含"放弃前连续 3 轮必须失败、放弃后可推进+ResumeAcquire"两半。
