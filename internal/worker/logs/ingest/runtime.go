@@ -1726,7 +1726,11 @@ func (m *Manager) noteStartupRecoveryCompleted() {
 }
 
 func (m *Manager) noteStartupRecoveryFailure(key string, err error) {
-	slog.Error("启动恢复：源恢复失败（其余源照常继续）", "source", key, "error", err)
+	// **延期不是失败**（用户 2026-10-05 现场铁证 ✓）：`ErrVerifyDeferred`（[runtime.go:4020] ✓）
+	// 是设计内的正常让路 ✓，却与本行**共用无条件 ERROR** ✗ ⇒ 现场 `inst:142/143` 在新二进制上仍持续
+	// 打 ERROR（08:22:49 ✓）。**只对延期降级、其余照旧 ERROR** ✗（一刀切会把真问题淹没 ✓）。
+	level, msg := startupRecoveryFailureLevel(err)
+	slog.Log(context.Background(), level, msg, "source", key, "error", err)
 	m.mu.Lock()
 	m.startupRecovery.Failed++
 	if len(m.startupRecovery.Reasons) < maxStartupRecoveryReasons {
@@ -6322,4 +6326,18 @@ func (m *Manager) runSweepStepBounded(budget time.Duration, fn func()) bool {
 	case <-time.After(budget):
 		return false
 	}
+}
+
+// startupRecoveryFailureLevel 决定"启动恢复：源恢复失败"这条日志的**级别**（用户 2026-10-05 ✓）。
+//
+// 为什么要抽成函数（可直接测 ✓）：延后是**设计内的正常让路**（`ErrVerifyDeferred` ✓），真失败不是 ✗；
+// 抽出来后用例可以断言两侧（延期 ⇒ WARN ✓ / 真失败 ⇒ ERROR ✓），而不再依赖"读源码 + 人眼判" ✓。
+//
+// **纪律第 8 条（推广版，用户 2026-10-05 ✓）**：凡新增导出/哨兵，必须**同批带【消费点 + 可达性红证】**
+// ✗ —— 本次的"哨兵造好没人用"正是它的反面教材 ✓（`ErrVerifyDeferred` 导出后，此处才是它的第一个消费点 ✓）。
+func startupRecoveryFailureLevel(err error) (slog.Level, string) {
+	if errors.Is(err, ErrVerifyDeferred) {
+		return slog.LevelWarn, "启动恢复：源校验延后（设计内让路，下轮重试）"
+	}
+	return slog.LevelError, "启动恢复：源恢复失败（其余源照常继续）"
 }
