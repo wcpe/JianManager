@@ -5596,7 +5596,11 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		// 因此这里必须先把「已发布投影证据能覆盖的缺口」消解掉（缺口语义红线：无证据不得凭空消解 ✗，
 		// 由 autoResolveGapsFromPublished 自己把关 ✓），再评估恢复 ✓。
 		if src, ok := m.sourceConfigFor(p); ok {
-			m.autoResolveGapsFromPublished(src, p)
+			// **有界**（同执行器 ✓）：本步要读该源的已发布投影并可能做整源扫描 ⇒ 慢源/被 m.mu 挡住时
+			// 会让整个维护环停摆 ✗（现场 ticks=1 冻结的同类）。跳过后**下一轮重试**、语义不变 ✓。
+			if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { m.autoResolveGapsFromPublished(src, p) }) {
+				m.skipBlocked.Add(1)
+			}
 		}
 		// 排空侧：先把已 durable 未确认的存量发出去（投递成功才会推进回收）✓
 		// **有界等待**（2026-10-05 现场 ✓）：`DeliverPending`→`deliver` 会拿 `m.mu`，而"长持 m.mu 的
@@ -5609,7 +5613,12 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		// 回收侧再评估：TryReclaim（按当前水位剪枝）+ 滞回恢复 ✓
 		before := led.Get(p.Key())
 		wasPaused := before != nil && before.AcquirePaused
-		_ = p.EvaluateResume()
+		// **有界**（同执行器 ✓）：`EvaluateResume` = `TryReclaim`（账本/分段门禁 ✓）+ 滞回评估 ⇒
+		// 在 m.mu 被长持有或分段扫描慢时会阻塞 ✗。跳过只表示"本轮不评"，**下一轮照评** ✓
+		// （滞回与分类消解都是幂等的 ✓，语义不变 ✓）。
+		if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { _ = p.EvaluateResume() }) {
+			m.skipBlocked.Add(1)
+		}
 		after := led.Get(p.Key())
 		if wasPaused && after != nil && after.AcquirePaused {
 			// **滞回/其它跳过**：评估过但未解除 ⇒ 分类计数 ✓（现场 41 家若全落这里 ⇒ 判据问题 ✓）。
