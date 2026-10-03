@@ -1445,6 +1445,10 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 					"ms_delivery", st.NsDelivery/1e6, "ms_resolve", st.NsResolve/1e6,
 					"ms_evaluate", st.NsEvaluate/1e6, "ms_round_total", st.NsRoundTotal/1e6,
 					"last_round_sources", st.LastRoundSources,
+					// **三步之外（"其它"）**（2026-10-05 分型结论 ✓）：现场单轮 395s 而三步合计仅 1.2s（0.31% ✗）
+					// ⇒ 99.7% 藏在**未计时的那部分**（每轮全量遍历：`sweepBacklogTotal` / 资格扫描+排序 /
+					// `syncRecoveryQuota` ✓）⇒ 这一项定性后即可对号入座 ✓。
+					"ms_round_other", (st.NsRoundTotal-st.NsDelivery-st.NsResolve-st.NsEvaluate)/1e6,
 					// 在飞定界（新账 2 ✓）：在飞数逼近上限 ⇒ 叠加压力大（应查被谁挡住 ✓）。
 					"inflight", st.InFlight, "skip_inflight_cap", st.SkipInflightCap,
 					"candidates", st.Candidates, "revived", st.Revived,
