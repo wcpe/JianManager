@@ -92,6 +92,9 @@ type Server struct {
 	eventMu   sync.Mutex
 	eventSubs []chan instanceEvent
 
+	// emitRecovered 记录 EmitOutput 兜底 recover 次数（P0 兜底 ✓）：**记日志 + 标降级，不静默** ✓。
+	emitRecovered int64
+
 	// 插件桥（ServerProbe 反向 WS，FR-065，见 ADR-016）。
 	// bridge 提供「实例 UUID→探针会话」表与下发能力；为 nil 表示本节点未启用插件桥。由 SetPluginBridge 注入。
 	bridge *ws.PluginBridgeServer
@@ -236,6 +239,18 @@ func (s *Server) EmitOutput(instanceUUID, stream, data string) {
 	if data == "" {
 		return
 	}
+	// 兜底（P0 ✓）：扇出绝不因单个订阅者生命周期问题让 **整个 Worker 退出** ✗；
+	// 记日志 + 标降级（计数 ✓），**不静默吞错** ✓。
+	defer func() {
+		if r := recover(); r != nil {
+			s.eventMu.Lock()
+			s.emitRecovered++
+			n := s.emitRecovered
+			s.eventMu.Unlock()
+			slog.Error("实例输出扇出兜底恢复（扇出失败已降级，不致命）", "instanceId", instanceUUID,
+				"stream", stream, "recovered", n, "panic", r)
+		}
+	}()
 	s.dispatch(instanceEvent{
 		Kind:      stream,
 		UUID:      instanceUUID,
@@ -885,7 +900,9 @@ func (s *Server) StreamInstanceEvents(req *workerpb.StreamInstanceEventsRequest,
 			}
 		}
 		s.eventMu.Unlock()
-		close(ch)
+		// **不 close(ch)**（P0 修复 ✓）：dispatch 是非阻塞丢弃语义（见 dispatch 注释 ✓）⇒ 无"唤醒读者"需求 ✗
+		// ⇒ 无人有资格 close（"谁停生产者谁才 close"在此处 = 无人 ✓）；通道交 GC；读者由下方
+		// `case <-stream.Context().Done():` 退出 ✓（丢弃事件不会卡死读者 ✓）。
 	}()
 
 	slog.Info("StreamInstanceEvents 订阅开始", "filter", req.InstanceUuid)
