@@ -257,6 +257,12 @@ type Manager struct {
 	// 现场一眼看出"合格 38 vs 本轮处理 2" ✓）。
 	sweepCursor      atomic.Uint64
 	sweepEligibleNow atomic.Int64
+	// sweepStepBudget 是兜底环**单源单步**的有界等待预算（0 ⇒ 默认 150ms ✓，见 sweepStepBudgetOf）。
+	sweepStepBudget time.Duration
+	// skipBlocked 统计"本轮因**有界等待超时**而跳过"的次数（2026-10-05 现场 ✓）：
+	// 兜底环是**维护环**，绝不该挂在重活上 ✗ —— 现场形态正是环第一轮卡在
+	// `DeliverPending→deliver`（等 `m.mu`：被"长持 m.mu 的规划者"挡住 ✓）⇒ ticks=1 冻结 ✓。
+	skipBlocked atomic.Int64
 	// **兜底环每轮的跳过原因分类计数**（2026-10-05 现场：41 家三项前置全满足却不复活 ✗ ⇒
 	// 必须能直接读出"是哪一条把它挡了" ✓）。
 	risingStreak     atomic.Int64
@@ -5586,7 +5592,13 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 			m.autoResolveGapsFromPublished(src, p)
 		}
 		// 排空侧：先把已 durable 未确认的存量发出去（投递成功才会推进回收）✓
-		_, _ = p.DeliverPending()
+		// **有界等待**（2026-10-05 现场 ✓）：`DeliverPending`→`deliver` 会拿 `m.mu`，而"长持 m.mu 的
+		// 规划者"（整源镜像重建那类 ✓）可以让它阻塞很久 ✗ ⇒ 维护环不许挂在这上面 ✗✗。
+		// 照 `persistHot` 同型：超预算就**跳过本轮该步**（计入 skipBlocked ✓，继续下一源 ✓），
+		// 被挡的那次调用会在后台自行完成 ✓（`m.mu` 释放后即返回 ✓，不丢工作 ✓）。
+		if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { _, _ = p.DeliverPending() }) {
+			m.skipBlocked.Add(1)
+		}
 		// 回收侧再评估：TryReclaim（按当前水位剪枝）+ 滞回恢复 ✓
 		before := led.Get(p.Key())
 		wasPaused := before != nil && before.AcquirePaused
@@ -6226,4 +6238,34 @@ func multilineUnclosedTimeoutOf(v time.Duration) time.Duration {
 		return normalize.DefaultUnclosedTimeout
 	}
 	return v
+}
+
+// defaultSweepStepBudget 是兜底环**单源单步**的有界等待预算（0 ⇒ 默认 150ms ✓）。
+//
+// 为什么必须有（2026-10-05 现场 X 光片 ✓）：环第一轮卡在 `DeliverPending→deliver` 的 `m.mu`
+// 上 ⇒ `ticks=1` 冻结、`candidates` 恒定 ⇒ 外部看起来像"没扫到"，其实是"**第一轮就挂住**" ✗✗。
+// 维护环的职责是**周期性巡检**，不是等待重活完成 ⇒ 单步必须能被放弃 ✓。
+const defaultSweepStepBudget = 150 * time.Millisecond
+
+func (m *Manager) sweepStepBudgetOf() time.Duration {
+	if m == nil || m.sweepStepBudget <= 0 {
+		return defaultSweepStepBudget
+	}
+	return m.sweepStepBudget
+}
+
+// runSweepStepBounded 执行一步；**超预算即返回 false**（不等它 ✓）。被放弃的那次调用会在后台自行
+// 完成（`m.mu` 释放后即返回 ✓）——因此"跳过"只表示"本轮不等它"，**不丢工作** ✓。
+func (m *Manager) runSweepStepBounded(budget time.Duration, fn func()) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(budget):
+		return false
+	}
 }
