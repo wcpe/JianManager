@@ -258,6 +258,20 @@ func (m *Manager) nextReconcileCandidatesFromView(limit int) ([]reconcileCandida
 //
 // 与采集轮共用同一 ctx 生命周期（见 Manager.Start 的启动点）；关闭配置时立即返回
 // （不打日志风暴、不查 VL、不推进任何状态）。
+// publishStartupReconcileSnapshots 在持锁状态下发布"配置 + 视图"快照（v2 修复，2026-10-04）。
+//
+// 为什么需要：配置快照的常规写点（SetReconcileLoopConfig）在生产从不被调用 ⇒ 快照恒空 ⇒
+// 对账首道"配置读"永久走 TryLock ⇒ 锁紧张时每轮 5s 超时。启动时补一次发布即根治。
+func (m *Manager) publishStartupReconcileSnapshots() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.reconcileLoopCfgSnapshot.Store(m.reconcileLoop)
+	m.publishReconcileViewLocked(true)
+	m.mu.Unlock()
+}
+
 func (m *Manager) RunReconcileLoop(ctx context.Context) {
 	if m == nil {
 		return
@@ -267,6 +281,11 @@ func (m *Manager) RunReconcileLoop(ctx context.Context) {
 		slog.Info("常驻增量对账未启用（关闭即不跑）")
 		return
 	}
+	// 启动即"一次性取锁"发布配置与视图快照（2026-10-04 v2 修复）：
+	// 配置快照的唯一常规写点 SetReconcileLoopConfig 在生产**从不被调用**（配置走默认值）
+	// ⇒ 快照恒空 ⇒ 对账轮首道"配置读"仍走 TryLock ⇒ 锁紧张即 5s 超时（#49 首轮实证）。
+	// 这里在循环启动时补一次发布：此后对账的配置读与取候选都零取 m.mu（pollOnce 持续刷新视图）。
+	m.publishStartupReconcileSnapshots()
 	slog.Info("常驻增量对账已启动",
 		"interval", cfg.Interval.String(), "roundBudget", cfg.RoundBudget.String(),
 		"maxSourcesPerRound", cfg.MaxSourcesPerRound)
