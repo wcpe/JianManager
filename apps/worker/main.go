@@ -1447,6 +1447,10 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 					"skip_enumeration", st.SkipEnumeration,
 					"rising_streak", st.RisingStreak)
 			}
+			// 自愈失败原因（有界、新→旧 ✓）：**与读数同批打**，别让它成为"值可读但没人看" ✗。
+			if rs := manager.SelfFailureReasons(); len(rs) > 0 {
+				slog.Warn("最近自愈失败原因（新→旧，最多 8 条）", "reasons", rs)
+			}
 			if v := manager.PositionInvariantViolations(); len(v) > 0 {
 				slog.Warn("位置不变量越界（reclaim > read）：离线核这条即可定位", "count", len(v), "sources", v)
 			}

@@ -5372,6 +5372,31 @@ func (m *Manager) PositionInvariantViolations() []string {
 	return out
 }
 
+// SelfFailureReasons 汇总各管道**最近的自愈失败原因**（新→旧、有界 ✓），供分钟打点消费 ✓。
+func (m *Manager) SelfFailureReasons() []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+	var out []string
+	for _, p := range pipes {
+		for _, r := range p.SelfFailureReasons() {
+			out = append(out, p.Key().LogSourceID+": "+r)
+			if len(out) >= 8 {
+				return out
+			}
+		}
+	}
+	return out
+}
+
 // ResumeSweepStats 返回兜底环的**跳过原因分类读数**（现场"41 家为何不动"的直接答案 ✓）。
 type ResumeSweepStats struct {
 	Candidates       int64 // 进入本轮容量内的候选源数

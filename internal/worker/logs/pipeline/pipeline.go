@@ -636,6 +636,17 @@ func (p *Pipeline) TryReclaim() (uint64, error) {
 	return p.wal.TryReclaim()
 }
 
+// SelfFailureReasons 转发**最近自愈失败原因**（新→旧、有界 ✓；见 acquire.noteSelfFailure ✓）。
+//
+// 为什么要有这层（2026-10-05 实测 ✓）：`ingest` 持有的是本包装类型 ⇒ 少了这层转发，读数依旧
+// **不可达** ✗（又一次"实现存在但不可达"✓）⇒ 每次加导出都要**顺着包装链一路接出去** ✓。
+func (p *Pipeline) SelfFailureReasons() []string {
+	if p == nil || p.inner == nil {
+		return nil
+	}
+	return p.inner.SelfFailureReasons()
+}
+
 // CanReclaimNow 按当前账本恢复分段状态评估是否允许回收。
 func (p *Pipeline) CanReclaimNow() bool {
 	ent := p.led.Get(p.key)
