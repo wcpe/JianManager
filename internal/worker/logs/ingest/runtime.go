@@ -4017,7 +4017,8 @@ func (m *Manager) verifyProjectionChunk(parent context.Context, client *vlsup.Cl
 				m.verifyDeferred.Add(1)
 				timeout = remaining
 				if timeout <= 0 {
-					return verifyQueryStats{}, fmt.Errorf("ingest: projection %s verification deferred to next round (round budget exhausted)", generation)
+					// %w 包装哨兵：**文本逐字不变** ✓（"… verification deferred to next round …"）但可被分类 ✓。
+					return verifyQueryStats{}, fmt.Errorf("ingest: projection %s %w (round budget exhausted)", generation, errVerifyDeferred)
 				}
 			}
 			m.verifyRoundProgress.Add(1)
@@ -6255,6 +6256,13 @@ func multilineUnclosedTimeoutOf(v time.Duration) time.Duration {
 	}
 	return v
 }
+
+// errVerifyDeferred 是"本轮预算用尽、校验延后到下一轮"的**可分类哨兵**（用户 2026-10-05 ④ ✓）。
+//
+// 为什么需要：它是**设计内的正常让路**（同源 INFO 往往显示投影已写入 status=200/err=nil ✓），
+// 但此前只以裸文本返回 ⇒ 调用方无从分类 ⇒ 被逐级打成 **ERROR** ✗（现场 `inst:142` 的分级误报 ✓）。
+// 有哨兵后，调用方 `errors.Is(err, errVerifyDeferred)` 即可降级为 WARN/INFO ✓ —— 语义零变化 ✓。
+var errVerifyDeferred = errors.New("verification deferred to next round")
 
 // defaultSweepStepBudget 是兜底环**单源单步**的有界等待预算（0 ⇒ 默认 150ms ✓）。
 //
