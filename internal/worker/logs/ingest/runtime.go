@@ -269,10 +269,15 @@ type Manager struct {
 	skipBlocked atomic.Int64
 	// **三步各自耗时（累计 ns）+ 每轮总耗时 + 上轮处理源数**（新账 1 ✓）：单轮 4–6 分钟而
 	// `skip_blocked` 只解释个位数秒 ⇒ 须能分辨"少数慢源"还是"每源均匀慢" ✓（平均每源 = 总耗时/源数 ✓）。
-	nsDelivery       atomic.Int64
-	nsResolve        atomic.Int64
-	nsEvaluate       atomic.Int64
-	nsRoundTotal     atomic.Int64
+	nsDelivery   atomic.Int64
+	nsResolve    atomic.Int64
+	nsEvaluate   atomic.Int64
+	nsRoundTotal atomic.Int64
+	// **在飞被放弃调用的定界**（用户 2026-10-05 新账 2 ✓）：有界执行器只放弃**等待** ✗，
+	// 被放弃的调用仍带着批次/事件载荷在后台等 `m.mu` ⇒ 多轮叠加会累积内存（现场 RSS 8–14GB/轮爬升 ✓，
+	// 后证非单调 ⇒ 暂态可接受 ✓，但极端负载下必须**可定界** ✓）。
+	sweepInflight    atomic.Int64 // 当前在飞（含被放弃）的步骤数 ✓
+	skipInflightCap  atomic.Int64 // 因"在飞已达上限"而拒绝发起的步数 ✓
 	lastRoundSources atomic.Int64
 	// **兜底环每轮的跳过原因分类计数**（2026-10-05 现场：41 家三项前置全满足却不复活 ✗ ⇒
 	// 必须能直接读出"是哪一条把它挡了" ✓）。
@@ -284,6 +289,8 @@ type Manager struct {
 	sweepRevived     atomic.Int64
 	// sweepBackpressureStreak 是窗口化背压的阈值（连续 N 轮净涨才跳过 ✓；0 ⇒ 默认 3）。
 	sweepBackpressureStreak int
+	// sweepInflightCap 是在飞并发上限（见 defaultSweepInflightCap ✓）。
+	sweepInflightCap int
 	// persistRequests/persistWorkerDone 是**后台持久化通道**：热路径超时后把「请落库」交给它，
 	// 由独立 goroutine 完成（它才是允许阻塞的那一方）。cap=1：已有待办请求即无需重复入队。
 	persistRequests   chan struct{}
@@ -539,6 +546,8 @@ type Options struct {
 	// SweepBackpressureStreak 是窗口化背压阈值：**连续 N 轮**闸视图积压净涨才跳过本轮
 	// （0 ⇒ 默认 3 ✓；单轮抖动不再永久挡复活 ✗）。
 	SweepBackpressureStreak int
+	// SweepInflightCap 是在飞被放弃调用的并发上限（0 ⇒ 默认 4 ✓）。
+	SweepInflightCap int
 	// ResumeBatchPerRound 是兜底环每轮最多处理的可解源数（0 ⇒ 默认 8）。
 	ResumeBatchPerRound int
 	// ResumeInterval 是**容量自愈兜底**周期（0 ⇒ 默认 30s）：低频重试「排空存量 → 推进回收 →
@@ -1273,6 +1282,7 @@ func New(opts Options) (*Manager, error) {
 		resumeInterval:           opts.ResumeInterval,
 		resumeBatchPerRound:      opts.ResumeBatchPerRound,
 		sweepBackpressureStreak:  opts.SweepBackpressureStreak,
+		sweepInflightCap:         opts.SweepInflightCap,
 		recoveryQuotaFactor:      opts.RecoveryQuotaFactor,
 		recoveryDrainGrace:       opts.RecoveryDrainGrace,
 		recoveryProbe:            opts.RecoveryProbe,
@@ -5429,6 +5439,9 @@ type ResumeSweepStats struct {
 	NsEvaluate       int64
 	NsRoundTotal     int64
 	LastRoundSources int64
+	// **在飞定界读数**（新账 2 ✓）：当前在飞（含被放弃）+ 因到上限而拒发的步数 ⇒ 现场一眼判叠加压力 ✓。
+	InFlight        int64
+	SkipInflightCap int64
 }
 
 func (m *Manager) ResumeSweepStats() ResumeSweepStats {
@@ -5452,6 +5465,8 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		NsEvaluate:       m.nsEvaluate.Load(),
 		NsRoundTotal:     m.nsRoundTotal.Load(),
 		LastRoundSources: m.lastRoundSources.Load(),
+		InFlight:         m.sweepInflight.Load(),
+		SkipInflightCap:  m.skipInflightCap.Load(),
 	}
 }
 
@@ -6333,6 +6348,20 @@ var ErrVerifyDeferred = errors.New("verification deferred to next round")
 // 维护环的职责是**周期性巡检**，不是等待重活完成 ⇒ 单步必须能被放弃 ✓。
 const defaultSweepStepBudget = 150 * time.Millisecond
 
+// defaultSweepInflightCap 是在飞被放弃调用的**并发上限**（0 ⇒ 默认 4 ✓）。
+//
+// 为什么需要上限（新账 2 ✓）：超时只放弃"等"、不放弃"做" ✗ ⇒ 每个被放弃的调用仍持有载荷在后台
+//
+//	等 `m.mu`。上限把"同时在飞的这类调用"钉住 ⇒ 内存不再随轮数叠加 ✓（超出即本轮不再发起新步 ✓）。
+const defaultSweepInflightCap = 4
+
+func (m *Manager) sweepInflightCapOf() int {
+	if m == nil || m.sweepInflightCap <= 0 {
+		return defaultSweepInflightCap
+	}
+	return m.sweepInflightCap
+}
+
 func (m *Manager) sweepStepBudgetOf() time.Duration {
 	if m == nil || m.sweepStepBudget <= 0 {
 		return defaultSweepStepBudget
@@ -6343,9 +6372,15 @@ func (m *Manager) sweepStepBudgetOf() time.Duration {
 // runSweepStepBounded 执行一步；**超预算即返回 false**（不等它 ✓）。被放弃的那次调用会在后台自行
 // 完成（`m.mu` 释放后即返回 ✓）——因此"跳过"只表示"本轮不等它"，**不丢工作** ✓。
 func (m *Manager) runSweepStepBounded(budget time.Duration, fn func()) bool {
+	// **在飞上限**（新账 2 ✓）：已到上限 ⇒ 本轮**不发起**新步 ✓（防极端负载把载荷叠加到不可控 ✗）。
+	if cap := m.sweepInflightCapOf(); cap > 0 && m.sweepInflight.Load() >= int64(cap) {
+		m.skipInflightCap.Add(1)
+		return false
+	}
+	m.sweepInflight.Add(1)
 	done := make(chan struct{})
 	go func() {
-		defer close(done)
+		defer func() { m.sweepInflight.Add(-1); close(done) }() // 在飞数随调用真正结束而减 ✓
 		// 注入点必须在**有界区之内**（2026-10-05 实测教训 ✗✓）：放在 goroutine 之外会把**调用者**
 		// 自己按住 ⇒ 预算再紧也救不了 ⇒ 红证会测出"钩子位置错"而不是"有界失效" ✓。
 		if m.sweepStepHold != nil {
@@ -6357,6 +6392,7 @@ func (m *Manager) runSweepStepBounded(budget time.Duration, fn func()) bool {
 	case <-done:
 		return true
 	case <-time.After(budget):
+		// 放弃**等待**，但调用**仍在飞** ⇒ 在飞计数要到它真正结束才回落 ✓（这是定界的关键 ✓）。
 		return false
 	}
 }

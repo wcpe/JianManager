@@ -1445,6 +1445,8 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 					"ms_delivery", st.NsDelivery/1e6, "ms_resolve", st.NsResolve/1e6,
 					"ms_evaluate", st.NsEvaluate/1e6, "ms_round_total", st.NsRoundTotal/1e6,
 					"last_round_sources", st.LastRoundSources,
+					// 在飞定界（新账 2 ✓）：在飞数逼近上限 ⇒ 叠加压力大（应查被谁挡住 ✓）。
+					"inflight", st.InFlight, "skip_inflight_cap", st.SkipInflightCap,
 					"candidates", st.Candidates, "revived", st.Revived,
 					"skip_backpressure", st.SkipBackpressure,
 					"skip_hysteresis", st.SkipHysteresis,
