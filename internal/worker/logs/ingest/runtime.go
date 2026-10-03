@@ -3936,6 +3936,12 @@ func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, ge
 	if len(events) == 0 {
 		return nil
 	}
+	// **预算起点后移（2026-10-04，父级裁定 b'）**：单源处理链（全量重写 47 万事件 + 等待）可远超
+	// 单源预算；起点停在"源处理开头"时，轮到校验时预算早已耗尽 ⇒ 237 簇只查得动 1 簇（现场
+	// queries=0/1 交替）⇒ 整批永不通过 ⇒ 不 publish ⇒ 下轮重写同一批——"events 恒定 × generation
+	// 递增"的自锁循环之因。在"即将校验"处重新计时 ⇒ 本批校验拥有完整的单源预算；
+	// 轮墙钟上界仍 = ⌈源数/并发⌉ × 预算（有界不破 ✓）。
+	m.setVerifySourceDeadline(source)
 	// 可见性错开（2026-10-03 回退修复 ②）：本函数紧跟在 insert 之后调用 —— VL 的
 	// 「写入→可查询」有 ~1.02s 硬地板（本仓实测 1011–1029ms，恒定）。立即探测必然全落在
 	// 地板内（0/0.2/0.6s 三次无效探测 + 查询开销全白做）。配了 floor 时先等到地板之后再探测
