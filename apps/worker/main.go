@@ -1449,6 +1449,12 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 					// ⇒ 99.7% 藏在**未计时的那部分**（每轮全量遍历：`sweepBacklogTotal` / 资格扫描+排序 /
 					// `syncRecoveryQuota` ✓）⇒ 这一项定性后即可对号入座 ✓。
 					"ms_round_other", (st.NsRoundTotal-st.NsDelivery-st.NsResolve-st.NsEvaluate)/1e6,
+					// 四相下探（2026-10-05 ✓）：三相各 ms + 派生"其余" ✓。
+					"ms_scan_elig", st.NsScanElig/1e6,
+					"ms_backlog_total", st.NsBacklogTotal/1e6,
+					"ms_sync_quota", st.NsSyncQuota/1e6,
+					"ms_other_rest", (st.NsRoundTotal-st.NsDelivery-st.NsResolve-st.NsEvaluate-
+						st.NsScanElig-st.NsBacklogTotal-st.NsSyncQuota)/1e6,
 					// 在飞定界（新账 2 ✓）：在飞数逼近上限 ⇒ 叠加压力大（应查被谁挡住 ✓）。
 					"inflight", st.InFlight, "skip_inflight_cap", st.SkipInflightCap,
 					"candidates", st.Candidates, "revived", st.Revived,

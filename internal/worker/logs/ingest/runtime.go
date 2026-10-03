@@ -279,6 +279,12 @@ type Manager struct {
 	sweepInflight    atomic.Int64 // 当前在飞（含被放弃）的步骤数 ✓
 	skipInflightCap  atomic.Int64 // 因"在飞已达上限"而拒绝发起的步数 ✓
 	lastRoundSources atomic.Int64
+	// **四相下探**（2026-10-05 分型结论 ✓）：99.7% 在"三步之外" ⇒ 拆成三相计时 + 派生"其余" ✓。
+	// 判读：某相**远超"逐源锁 × 59"合理量级** ⇒ 该相**被长持有者挡住**（与 m.mu 排队同源 ✓）；
+	// 各相都在合理量级 ⇒ 是**遍历本身** ⇒ 批量化（三遍并一遍 ✓）。
+	nsScanElig     atomic.Int64
+	nsBacklogTotal atomic.Int64
+	nsSyncQuota    atomic.Int64
 	// **兜底环每轮的跳过原因分类计数**（2026-10-05 现场：41 家三项前置全满足却不复活 ✗ ⇒
 	// 必须能直接读出"是哪一条把它挡了" ✓）。
 	risingStreak     atomic.Int64
@@ -5442,6 +5448,10 @@ type ResumeSweepStats struct {
 	// **在飞定界读数**（新账 2 ✓）：当前在飞（含被放弃）+ 因到上限而拒发的步数 ⇒ 现场一眼判叠加压力 ✓。
 	InFlight        int64
 	SkipInflightCap int64
+	// **四相读数**（见字段注释 ✓）。
+	NsScanElig     int64
+	NsBacklogTotal int64
+	NsSyncQuota    int64
 }
 
 func (m *Manager) ResumeSweepStats() ResumeSweepStats {
@@ -5467,6 +5477,9 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		LastRoundSources: m.lastRoundSources.Load(),
 		InFlight:         m.sweepInflight.Load(),
 		SkipInflightCap:  m.skipInflightCap.Load(),
+		NsScanElig:       m.nsScanElig.Load(),
+		NsBacklogTotal:   m.nsBacklogTotal.Load(),
+		NsSyncQuota:      m.nsSyncQuota.Load(),
 	}
 }
 
@@ -5603,6 +5616,8 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 	}
 	m.mu.Unlock()
 	// **稳定序**：轮转窗口只有在稳定序下才有意义 ✓（map 迭代序随机会让"轮转"退化成随机 ✓）。
+	tScan := time.Now()
+	defer func() { m.nsScanElig.Add(int64(time.Since(tScan))) }()
 	sort.Slice(pipes, func(i, j int) bool {
 		return pipes[i].Key().LogSourceID+pipes[i].Key().SourceGeneration <
 			pipes[j].Key().LogSourceID+pipes[j].Key().SourceGeneration
@@ -5767,7 +5782,9 @@ func (m *Manager) sweepOnce() {
 	// "paused + backlog_pause + blocking=0 + backlog < 半闸"三项前置全满足却无一复活 ✗，
 	// 头号嫌疑就是**任何一轮抖动都被判净涨 ⇒ 永久跳过** ✗。
 	// 改为：只有**连续 N 轮净涨**（默认 3，可配 ✓）才跳过；读的仍是**闸视图**积压 ✓。
+	tBacklog := time.Now()
 	now := m.sweepBacklogTotal()
+	m.nsBacklogTotal.Add(int64(time.Since(tBacklog)))
 	if m.lastSweepKnown && now > m.lastSweepBacklog {
 		m.risingStreak.Add(1)
 	} else {
@@ -5781,7 +5798,9 @@ func (m *Manager) sweepOnce() {
 			"streak", streak, "threshold", m.sweepBackpressureStreakOf(), "backlog", now)
 		return // 原 `continue` ⇒ 抽出后同一语义：结束本轮 ✓
 	}
-	m.syncRecoveryQuota()                          // 先同步配额口径（恢复中/宽限/回归 ✓），再扫暂停源 ✓
+	tQuota := time.Now()
+	m.syncRecoveryQuota()
+	m.nsSyncQuota.Add(int64(time.Since(tQuota)))   // 先同步配额口径（恢复中/宽限/回归 ✓），再扫暂停源 ✓
 	cands, revived := m.maybeResumePausedSources() // 计数由函数内累加 ✓（避免双计 ✗）
 	// **每轮为何无复活**（把猜测变读数 ✓）：有候选却零复活时打一条汇总 ✓，否则静默 ✓。
 	if cands > 0 && revived == 0 {
