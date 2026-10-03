@@ -2112,9 +2112,23 @@ func (m *Manager) Stop() error {
 	for _, p := range pipes {
 		_, _ = p.Flush()
 	}
-	// 关停落库必须做完（不能用已被取消的生命周期 ctx）：它承担「停服即已落库」的语义。
-	if err := m.persistCtx(context.Background(), persistPriority); err != nil {
+	// 关停落库：**有界尽力**（P0 复盘 2026-10-03 ✓）。
+	//
+	// 语义自检（改的是承诺的形状，不是数据安全 ✓）：
+	//   · 旧承诺「**停服即已落库**」在巨量脏账下等价于"关停可能无限等" ✗ —— 现场实测 SIGTERM
+	//     **200s / 30s 未退** ✗（编排/守护面只能强杀 ⇒ 反而更不干净 ✓）。
+	//   · 新承诺「**有界尽力**」：给足宽限（默认 ``stopGrace``，见下 ✓），到时仍未落完即
+	//     **降级退出**（WARN 不静默 ✓）；未落部分由**下次启动的恢复链 ＋ 常驻对账环**续做 ✓
+	//     （既有机制 ✓，不引入新路径 ✗）⇒ 数据不丢、耐久性最终一致 ✓。
+	//   · 仍未取消生命周期 ctx 的语义 ✓（这条注释原意保留 ✓）；只是把"无限"改成"有界" ✓。
+	stopStarted := time.Now()
+	if err := m.persistCtx(context.Background(), persistMode{priority: true, maxWait: stopGrace}); err != nil {
 		return err
+	}
+	if elapsed := time.Since(stopStarted); elapsed >= stopGrace {
+		// 不静默 ✓：超时即降级退出，且把"未落完"这件事显式告诉运维面 ✓。
+		slog.Warn("关停落库超过有界宽限，已降级退出（未落部分由下次启动的恢复链/对账环续做）",
+			"grace", stopGrace.String(), "elapsed", elapsed.String())
 	}
 	// 关闭索引句柄：显式把 WAL 归并回主库（见 stateindex.Store.Close）。
 	//
@@ -5114,6 +5128,11 @@ const defaultPersistPriorityStreakMax = 8
 // 语句之间检查，语句本身不可打断 ✗。于是"分步/让路"再公平也没用：持门者不放门，采集侧就得等 ✗。
 // 因此热路径改成：**有界等待 + 超时即交给后台持久化通道**，绝不为落库阻塞采集 ✓。
 const defaultPersistHotBudget = 30 * time.Millisecond
+
+// stopGrace 是**关停落库的有界宽限**（P0 复盘 ✓）：高于既有 5s 先例（那只是 WS Shutdown ✓）、
+// 远低于现场"200s/30s 未退" ✗；有界即可，宁可降级退出也不无限等（守护面强杀更不干净 ✓）。
+// 注：**声明为 var 以便测试临时缩短**（生产不写它 ✓；测试并行时须自持互斥 ✓）。
+var stopGrace = 45 * time.Second
 
 // persistMode 决定一次持久化调用的排队档位与推进步数。
 type persistMode struct {

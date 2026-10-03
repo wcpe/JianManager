@@ -384,6 +384,18 @@ func runWorker() {
 	}
 
 	slog.Info("Worker Node 启动", "name", nodeName, "wsPort", wsPort, "dataDir", root.Base(), "serversDir", serversDir)
+
+	// 启前回收本节点 vlsup 孤儿（P0 复盘 2026-10-03 ✓）：worker 被强杀后其 vlsup 子进程成孤儿、
+	// 继续占用 hot/cold 端口 ⇒ 新 worker 报 `hot exited immediately after start`（现场 ✓，只能靠
+	// RangeClient 接旧实例 ⇒ 采集面降级 ✗）。判据＝**本 data 根**（cmdline 含根 ＋ exe 在根下，两道都过 ✓）
+	// ⇒ 不误杀他进程 ✓；回收本身有界（每个孤儿 TERM→5s→KILL ✓）；非 Linux（无 /proc）仅 Debug 降级 ✓。
+	if reaped, err := vlsup.ReapOrphans(root.Base(), "startup", func(o vlsup.OrphanMatch) {
+		slog.Warn("已回收本节点 vlsup 孤儿（启前）", "pid", o.PID, "cmdline", o.Cmdline, "exe", o.Exe)
+	}); err != nil {
+		slog.Debug("vlsup 孤儿回收不可用（非致命）", "error", err)
+	} else if len(reaped) > 0 {
+		slog.Warn("启前 vlsup 孤儿回收完成", "count", len(reaped), "pids", reaped)
+	}
 	// 维护自身 PID 记录（与 CP 的 cp-lifecycle.sh 同口径）：生产曾遗留停在多日前的 worker.pid，
 	// 按它识别进程会认错；此处启动即原子覆盖，写失败仅告警、不影响启动。
 	if err := writeWorkerPIDRecord(root.Base(), wsPort, cfgPath); err != nil {
