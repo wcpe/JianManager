@@ -803,6 +803,10 @@ func runWorker() {
 		// 开启；切分默认每提交单元 512 行、目标 40ms——真源是 stateindex.DefaultCommitBudget）。
 		persistYieldCfg, persistHotBudgetCfg, persistPriorityStreak := cfg.PersistGateTuning()
 		verifyBudgetCfg, verifyMaxQueriesPerChunk := cfg.VerifyQueryTuning()
+		// 每源每轮校验预算与可见性错开（键 log_index.verify.round_budget / visibility_floor）：
+		// 回退修复 ② —— 该预算在 f237ae32 引入时只有注释没有接线，默认 1.5s 在
+		// "VL 可见性地板 ~1.02s"下整轮被用尽 ⇒ 其余源每轮 defer（2026-10-03 实测）。
+		verifyRoundBudgetCfg, verifyVisibilityFloorCfg := cfg.VerifyBudgetTuning()
 		indexPruneCfg := cfg.LogIndex.IndexPrune()
 		indexCommitCfg := cfg.LogIndex.CommitBudget()
 		newIngest := func() (*ingest.Manager, error) {
@@ -832,6 +836,9 @@ func runWorker() {
 				// 校验/对账查询的全局天花板（键 log_index.verify.*）：天花板语义，正常路径零等待。
 				VerifyBudget:             verifyBudgetCfg,
 				VerifyMaxQueriesPerChunk: verifyMaxQueriesPerChunk,
+				// 每源每轮校验预算与可见性错开（回退修复 ②，同上）。
+				VerifyRoundBudget:     verifyRoundBudgetCfg,
+				VerifyVisibilityFloor: verifyVisibilityFloorCfg,
 				// 单源 WAL **真实积压**上限（键 log_capacity.max_wal_entries / max_wal_bytes）：
 				// 直接下发到 WAL.SetLimits。此前 SetLimits 无任何调用点（现场只剩硬编码
 				// 16MiB/5000），而配置里的 max_wal_bytes 被接到了只增不减的累计量上。
@@ -1431,6 +1438,13 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// 回退修复 ① 的显式指标（2026-10-03）：规划次数/复用次数累计值（"每轮只规划一次"
+			// ⇒ plans 增速应 ≈ 轮频、reuses 占绝对多数）+ 校验延期累计（② 的效果面）。
+			// 独立于下方诊断行（后者为空会 continue，不能把读数挂在它后面）。
+			if builds, reuses := manager.PersistPlanStats(); builds > 0 || reuses > 0 {
+				slog.Info("持久化规划读数", "plans", builds, "reuses", reuses,
+					"verify_deferred", manager.VerifyDeferredCount())
+			}
 			lines := manager.ResumeDiagnosticLines()
 			if len(lines) == 0 {
 				continue

@@ -328,6 +328,15 @@ type LogIndexVerifyConfig struct {
 	MaxInFlight int `mapstructure:"max_in_flight"`
 	// MaxQueriesPerChunk 是单簇单次校验的尝试次数上限；非正回退默认（12）。
 	MaxQueriesPerChunk int `mapstructure:"max_queries_per_chunk"`
+	// RoundBudget 是**每源每轮**的校验时间预算（duration 字符串，键
+	// log_index.verify.round_budget）：空/非法/非正一律回退 ingest 默认。
+	// 背景：该键在 f237ae32 引入时**只有注释、没有接线**（无法调档），且默认 1.5s 在
+	// "VL 可见性地板 ~1.02s"环境下整轮预算被少数源用尽 ⇒ 其余源每轮 defer（2026-10-03 回退）。
+	RoundBudget string `mapstructure:"round_budget"`
+	// VisibilityFloor 是**可见性错开**等待（duration 字符串，键
+	// log_index.verify.visibility_floor）：>0 时首探前先等到"距批写入 ≥ floor"
+	// （对齐 VL 写入→可查询的硬地板，避免 0/0.2/0.6s 三次无效探测）。0/非正 = 关（默认关）。
+	VisibilityFloor string `mapstructure:"visibility_floor"`
 }
 
 // LogIndexBatchPruneConfig 是历史投递批次裁剪的配置面（键 `log_index.batch_prune.*`）。
@@ -1089,6 +1098,23 @@ func (c *Config) VerifyQueryTuning() (budget ingest.VerifyBudget, maxQueriesPerC
 	}, c.LogIndex.Verify.MaxQueriesPerChunk
 }
 
+// VerifyBudgetTuning 把 `log_index.verify.round_budget / visibility_floor` 收敛为 ingest 档位
+// （2026-10-03 回退修复：f237ae32 引入轮预算时键未接线，运维无法调档）。
+//
+// 口径：空/非法/非正一律返回 0 ⇒ 由 ingest 侧回退各自默认（安全方向：预算保留、错开关闭）。
+func (c *Config) VerifyBudgetTuning() (roundBudget, visibilityFloor time.Duration) {
+	if c == nil {
+		return 0, 0
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.RoundBudget)); err == nil && d > 0 {
+		roundBudget = d
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.VisibilityFloor)); err == nil && d > 0 {
+		visibilityFloor = d
+	}
+	return roundBudget, visibilityFloor
+}
+
 // PersistGateTuning 把 `log_index.persist.*` 下**持久化门公平性**的两枚旋钮收敛为 ingest 配置面。
 //
 //   - cycle_yield：让路窗口（空/非正 = 用 ingest 默认 max(20ms, GOMAXPROCS×5ms)）；
@@ -1326,6 +1352,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_index.verify.max_per_second", 0)
 	v.SetDefault("log_index.verify.max_in_flight", 0)
 	v.SetDefault("log_index.verify.max_queries_per_chunk", 0)
+	// 每源每轮校验预算与可见性错开（2026-10-03 回退修复）：空串 = 用 ingest 默认（预算 1.5s、错开关）。
+	v.SetDefault("log_index.verify.round_budget", "")
+	v.SetDefault("log_index.verify.visibility_floor", "")
 	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。

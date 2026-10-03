@@ -363,6 +363,11 @@ type Manager struct {
 	// 有了本预算：单源本轮最多等这么久，超出即**本轮放弃**（结论与"窗口内未可见"同族 ✓），
 	// 交回下一轮 ⇒ 轮墙钟有界 ⇒ **每个源每轮都能跑到 Poll** ✓✓。
 	verifyRoundBudget time.Duration
+	// verifyVisibilityFloor 是"可见性错开"等待（键 log_index.verify.visibility_floor）：
+	// >0 时整批首探前先等到"距批写入 ≥ floor"——VL 写入→可查询有 ~1.02s 硬地板，本函数紧跟
+	// insert 之后调用 ⇒ 立即探测必然全落在地板内（0/0.2/0.6s 三次白探）；等到地板后再探 ⇒
+	// 首探即命中。≤0 = 关（默认关）。
+	verifyVisibilityFloor time.Duration
 	// verifyRoundDeadline 是本轮的校验截止时刻（unix nanos；0 表示不限，用于非轮内调用路径）。
 	verifyRoundDeadline atomic.Int64
 	// verifyDeferred 是"因轮级预算而本轮放弃校验"的计数（可观测 ✓）。
@@ -453,6 +458,15 @@ type Manager struct {
 	// 每次落库声明它覆盖到的序号。声明号 ≤ 覆盖水位的调用方直接返回（它的变更已被落库）。
 	persistJoin    atomic.Int64
 	persistCovered atomic.Int64
+	// persistPlanMu/persistPlan/persistPlanAt 是**热路径规划复用**缓存（2026-10-03 回退修复）：
+	// 窗口内的多个调用者复用同一份门外计划，避免 N 倍冗余规划（每份都要持 m.mu 遍历全源 +
+	// 重建镜像，60 源并发下实测吞吐 3.3k→1.5k 行/s）。Builds/Reuses 是"每轮只规划一次"的
+	// 可观测指标（复验用：builds/轮 ≈1）。
+	persistPlanMu     sync.Mutex
+	persistPlan       *persistPlan
+	persistPlanAt     time.Time
+	persistPlanBuilds atomic.Int64
+	persistPlanReuses atomic.Int64
 	// pendingMaxStream/pendingMaxTotal 是 pending 暂存上限（M-6）；0 表示用默认常量。
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
 	pendingMaxStream int64
@@ -599,6 +613,10 @@ type Options struct {
 	// VerifyRoundBudget 是每源每轮的校验时间预算（键 log_index.verify.round_budget）；
 	// ≤0 用默认（1.5s）。见 Manager.verifyRoundBudget 的说明。
 	VerifyRoundBudget time.Duration
+	// VerifyVisibilityFloor 是"可见性错开"等待（键 log_index.verify.visibility_floor）：
+	// >0 时整批首探前先等到"距批写入 ≥ floor"（对齐 VL 写入→可查询的硬地板 ⇒ 首探即命中，
+	// 不再做 0/0.2/0.6s 三次无效探测）；≤0 = 关（默认关，行为零变化）。
+	VerifyVisibilityFloor time.Duration
 	// PersistHotBudget 是热路径（采集/投递）在持久化门上的等待上界（键
 	// log_index.persist.hot_budget）；≤0 用默认（30ms）。超时即交给后台持久化通道，采集不受阻。
 	PersistHotBudget time.Duration
@@ -1384,6 +1402,7 @@ func New(opts Options) (*Manager, error) {
 	if m.verifyRoundBudget <= 0 {
 		m.verifyRoundBudget = defaultVerifyRoundBudget
 	}
+	m.verifyVisibilityFloor = opts.VerifyVisibilityFloor
 	// 采集索引（FR-496）：打开 SQLite 索引，必要时一次性迁移旧 ingest.state.json；
 	// 迁移/校验失败 → 拒绝启动采集（不静默降级），保留旧文件供人工处置。
 	if err := m.openIndex(); err != nil {
@@ -3810,12 +3829,14 @@ const (
 	// 退避重试原本会一直重试到校验窗口耗尽（生产 5 分钟 ⇒ 单簇 150+ 次查询 ✗）；窗口仍决定
 	// "等多久"，本预算决定"最多问几次"，两者取先到者。
 	defaultVerifyMaxQueriesPerChunk = 12
-	// defaultVerifyRoundBudget 是**每源每轮**的校验时间预算默认值（1.5s，键
+	// defaultVerifyRoundBudget 是**每源每轮**的校验时间预算默认值（键
 	// log_index.verify.round_budget 可配）。
 	//
-	// 取值依据：正常一轮里单源校验只需 1 次查询、毫秒级 ✓（预算远离它 ⇒ 健康路径零影响 ✗）；
-	// 而"退避等待到窗口耗尽"的源会被限在 1.5s 内 ⇒ 一轮的墙钟不再由少数源决定 ✓✓。
-	defaultVerifyRoundBudget = 1500 * time.Millisecond
+	// 取值依据（2026-10-03 回退修复实测）：原默认 1.5s 时**整轮预算**被少数源用尽 ⇒ 其余源
+	// 每轮 defer（60 源 × 60 行/s 夹具实测 verify 停摆 98%）；调档到 30s 后同口径夹具
+	// verify 1108/1108 全成功、事件速率 3255/s（≈基线 3340）、defer=0。
+	// 30s 依轮墙钟估算（60 源 / 8 并发 × ~1.2s/源 ≈ 9s）留 ≥3 倍余量；防护仍在（轮墙钟有界）。
+	defaultVerifyRoundBudget = 30 * time.Second
 	defaultVerifyChunkEvents = 2000
 	// defaultVerifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取该默认，1 为串行。
 	// 校验查询的成本几乎全在「返回体传输 + 客户端逐行 JSON 解析」，属可并行部分；
@@ -3888,6 +3909,13 @@ func planVerifyChunks(events []logtypes.Event, max int) [][]logtypes.Event {
 func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
 	if len(events) == 0 {
 		return nil
+	}
+	// 可见性错开（2026-10-03 回退修复 ②）：本函数紧跟在 insert 之后调用 —— VL 的
+	// 「写入→可查询」有 ~1.02s 硬地板（本仓实测 1011–1029ms，恒定）。立即探测必然全落在
+	// 地板内（0/0.2/0.6s 三次无效探测 + 查询开销全白做）。配了 floor 时先等到地板之后再探测
+	// ⇒ 首探即命中。关闭（默认）时行为与本修复前逐字不变 ✓。
+	if floor := m.verifyVisibilityFloorOf(); floor > 0 {
+		time.Sleep(floor)
 	}
 	allowed := make(map[string]logtypes.Event, len(events))
 	for _, event := range events {
@@ -5098,6 +5126,12 @@ type persistMode struct {
 	// oneStep=true 只做一步就交门（恢复/重放链）；false = 循环到「此后再无差异」才返回
 	// （同步语义：登记返回即已落库、Stop 关停前落完）。
 	oneStep bool
+	// planReuse=true 允许复用门外的既有计划（**只给采集/投递热路径**，2026-10-03 回退修复 ①）：
+	// 热路径本就"超时交后台、最终一致"⇒ 复用窗口内的计划不改变可观测语义，却把"每个调用者
+	// 各自规划（持 m.mu 重建全源镜像）"降为"每窗口一次"。**强一致路径（登记/关停/恢复步）必须
+	// 保持 false**：它们要求"返回即落库"，复用会跳过本轮状态变更的落库（实测会破坏恢复/崩溃
+	// 回归用例）。
+	planReuse bool
 }
 
 var (
@@ -5900,7 +5934,7 @@ func (m *Manager) reconcileSliceOf() int {
 
 // persistHot 是采集/投递侧的统一入口：绝不为落库阻塞（超时交给后台通道）。
 func (m *Manager) persistHot() error {
-	return m.persistCtx(context.Background(), persistMode{priority: true, maxWait: m.persistHotBudgetOf()})
+	return m.persistCtx(context.Background(), persistMode{priority: true, maxWait: m.persistHotBudgetOf(), planReuse: true})
 }
 
 func (m *Manager) persistHotBudgetOf() time.Duration {
@@ -5965,10 +5999,20 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 		return nil
 	}
 	// **铁律：规划在门外**（2026-10-03 现场）：持门者只做提交、不做规划 ✗✗。
-	// covered 必须在**规划之前**读取（规划之后声明的请求，其变更未必被本次规划看到 ✗）；
-	// 若规划完成后已被更新的计划覆盖，commitPersist 会按源做新鲜度过滤 ✓。
-	covered := m.persistJoin.Load()
-	plan, planErr := m.planPersist(ctx)
+	// 规划合并（2026-10-03 回退修复 ①）：**只对热路径**（采集/投递，mode.planReuse）在窗口内
+	// 复用既有计划 —— 原实现让每个未 covered 的调用者各自跑 planPersist（持 m.mu 遍历全源 +
+	// 重建镜像），60 源并发下每轮 N 倍冗余规划 + 锁争抢，实测吞吐 3.3k→1.5k 行/s。
+	// 强一致路径（登记/关停/恢复/测试）保持"每次重新规划"⇒"返回即落库"语义零变化 ✓。
+	// 覆盖水位按**计划自带**的 plan.covered（构建前读到的 persistJoin 水位）推进，绝不越推 ✓。
+	var (
+		plan    *persistPlan
+		planErr error
+	)
+	if mode.planReuse {
+		plan, planErr = m.planPersistReuse(ctx, seq)
+	} else {
+		plan, planErr = m.planPersist(ctx)
+	}
 	if planErr != nil {
 		// 规划失败：不阻塞调用方（热路径语义），交给后台通道重试；错误照旧上报 ✓。
 		m.requestPersist()
@@ -6010,7 +6054,8 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 			incomplete, err := m.commitPersist(ctx, plan)
 			if err == nil && !incomplete {
 				// 只有**完整落库**才推进覆盖水位：部分完成就宣称覆盖会静默丢更新。
-				m.persistCovered.Store(covered)
+				// 推进值 = 计划自带水位（构建前读）：复用场景下它可能小于本次声明号 ⇒ 不越推 ✓。
+				m.persistCovered.Store(plan.covered)
 			}
 
 			g.mu.Lock()
@@ -6100,6 +6145,14 @@ func (m *Manager) VerifyDeferredCount() int64 {
 	return m.verifyDeferred.Load()
 }
 
+// verifyVisibilityFloorOf 返回生效的"可见性错开"等待（≤0 = 关）。
+func (m *Manager) verifyVisibilityFloorOf() time.Duration {
+	if m != nil && m.verifyVisibilityFloor > 0 {
+		return m.verifyVisibilityFloor
+	}
+	return 0
+}
+
 // persistYieldOf 返回生效的让路窗口：默认 max(persistStepYield, GOMAXPROCS × 5ms)。
 //
 // 为什么与 GOMAXPROCS 挂钩：「一次完整调度」的量级取决于并行度——核越多，被唤醒的等待者越多，
@@ -6141,6 +6194,9 @@ type persistPlan struct {
 	changed  []string
 	prunes   []stateindex.WALPrune
 	advances []persistAdvance
+	// covered 是**构建本计划前**读到的 persistJoin 水位：提交成功后覆盖水位最多推进到这里
+	// （计划只保证覆盖"构建前声明的变更"；复用场景下它可能小于调用者声明号 ⇒ 绝不越推 ✓）。
+	covered int64
 }
 
 // persistAdvance 记录「本轮构建过的源」及其构建时的修订号/覆盖签名，**只在落库成功后才推进**。
@@ -6160,6 +6216,9 @@ type persistAdvance struct {
 //
 // 只持 m.mu（短临界区）取快照，绝不触碰持久化门 ✓；调用方持门后只做 commitPersist ✓。
 func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
+	// covered 是**构建本计划前**读到的持久化声明水位：提交成功后覆盖水位最多推进到这里
+	// （计划只保证覆盖"构建前声明的变更"；复用路径下它可能小于调用者声明号 ⇒ 绝不越推 ✓）。
+	covered := m.persistJoin.Load()
 	if m.persistPlanHold != nil {
 		// 测试钩子：模拟"长规划"。它必须在**门外**睡眠——变异成门内规划则采集/投递单元被卡 ✓。
 		m.persistPlanHold()
@@ -6249,7 +6308,45 @@ func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
 	}
 	// 规划完成：释放 m.mu 并返回计划。**规划到此结束**（门外）✓；提交由持门者 commitPersist ✓。
 	m.mu.Unlock()
-	return &persistPlan{store: store, desired: desired, changed: changed, prunes: prunes, advances: advanced}, nil
+	return &persistPlan{store: store, desired: desired, changed: changed, prunes: prunes, advances: advanced, covered: covered}, nil
+}
+
+// planPersistReuse 是热路径的"规划合并"门面（**只供 persistMode.planReuse**，见其注释）。
+//
+// 背景（2026-10-03 回退定位）：f237ae32 把规划移出持久化门后，**每个未被 covered 短路的
+// 调用者都各自跑一遍 planPersist**（持 m.mu 遍历全源 + 重建变更源镜像）——60 源并发下
+// 每轮 N 倍冗余规划 + m.mu 争抢，实测吞吐 3.3k→1.5k 行/s、verify 98% 停摆。
+//
+// 合并判据（正确性）：**只复用"构建于本调用声明之后"的计划** —— 计划自带 plan.covered
+// （构建前读到的 persistJoin 水位），`plan.covered >= seq` 意味着规划发生在本次声明之后，
+// 而本次的状态变更完成于声明之前 ⇒ 该计划必然已包含本次变更 ✓（不漏写）。
+// 等待期间（persistPlanMu 上排队）由先到的调用者完成规划，其 covered 覆盖排队者的声明号
+// ⇒ 排队者醒来即复用 —— 与旧实现"持门者的规划覆盖排队者"同效，但规划仍在**门外** ✓。
+//
+// 本函数不改变门内提交的原子边界（门内仍一份计划/一次落盘）✓，不依赖任何调用侧串行 ✗。
+func (m *Manager) planPersistReuse(ctx context.Context, seq int64) (*persistPlan, error) {
+	m.persistPlanMu.Lock()
+	defer m.persistPlanMu.Unlock()
+	if m.persistPlan != nil && m.persistPlan.covered >= seq {
+		m.persistPlanReuses.Add(1)
+		return m.persistPlan, nil
+	}
+	plan, err := m.planPersist(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m.persistPlan = plan
+	m.persistPlanAt = time.Now()
+	m.persistPlanBuilds.Add(1)
+	return plan, nil
+}
+
+// PersistPlanStats 导出"规划次数/复用次数"（复验指标：builds/轮 ≈1；只增不减的累计值）。
+func (m *Manager) PersistPlanStats() (builds, reuses int64) {
+	if m == nil {
+		return 0, 0
+	}
+	return m.persistPlanBuilds.Load(), m.persistPlanReuses.Load()
 }
 
 // commitPersist 在**门内**提交一份计划：只做提交与水位推进，不做任何规划 ✗。
