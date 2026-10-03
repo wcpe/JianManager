@@ -1455,6 +1455,11 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 					"ms_sync_quota", st.NsSyncQuota/1e6,
 					"ms_other_rest", (st.NsRoundTotal-st.NsDelivery-st.NsResolve-st.NsEvaluate-
 						st.NsScanElig-st.NsBacklogTotal-st.NsSyncQuota)/1e6,
+					// 逐相"最长单次 m.mu 等待"ms（支 A 直接点名该相 ✓）。
+					"ms_wait_backlog_max", st.MuWaitBacklogMax/1e6,
+					"ms_wait_quota_max", st.MuWaitQuotaMax/1e6,
+					"ms_wait_sources_max", st.MuWaitSourcesMax/1e6,
+					"ms_wait_resume_max", st.MuWaitResumeMax/1e6,
 					// 在飞定界（新账 2 ✓）：在飞数逼近上限 ⇒ 叠加压力大（应查被谁挡住 ✓）。
 					"inflight", st.InFlight, "skip_inflight_cap", st.SkipInflightCap,
 					"candidates", st.Candidates, "revived", st.Revived,

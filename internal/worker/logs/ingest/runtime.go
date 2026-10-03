@@ -285,6 +285,11 @@ type Manager struct {
 	nsScanElig     atomic.Int64
 	nsBacklogTotal atomic.Int64
 	nsSyncQuota    atomic.Int64
+	// **逐相"最长单次 m.mu 等待"**（支 A/B 判据 ✓，见 noteMuWait 注释 ✓）。
+	muWaitBacklog atomic.Int64
+	muWaitQuota   atomic.Int64
+	muWaitSources atomic.Int64
+	muWaitResume  atomic.Int64
 	// **兜底环每轮的跳过原因分类计数**（2026-10-05 现场：41 家三项前置全满足却不复活 ✗ ⇒
 	// 必须能直接读出"是哪一条把它挡了" ✓）。
 	risingStreak     atomic.Int64
@@ -5452,6 +5457,11 @@ type ResumeSweepStats struct {
 	NsScanElig     int64
 	NsBacklogTotal int64
 	NsSyncQuota    int64
+	// 逐相"最长单次 m.mu 等待"（ns ✓；支 A 直接点名该相 ✓）。
+	MuWaitBacklogMax int64
+	MuWaitQuotaMax   int64
+	MuWaitSourcesMax int64
+	MuWaitResumeMax  int64
 }
 
 func (m *Manager) ResumeSweepStats() ResumeSweepStats {
@@ -5480,6 +5490,10 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		NsScanElig:       m.nsScanElig.Load(),
 		NsBacklogTotal:   m.nsBacklogTotal.Load(),
 		NsSyncQuota:      m.nsSyncQuota.Load(),
+		MuWaitBacklogMax: m.muWaitBacklog.Load(),
+		MuWaitQuotaMax:   m.muWaitQuota.Load(),
+		MuWaitSourcesMax: m.muWaitSources.Load(),
+		MuWaitResumeMax:  m.muWaitResume.Load(),
 	}
 }
 
@@ -5491,7 +5505,9 @@ func (m *Manager) sweepBacklogTotal() int64 {
 	if m == nil {
 		return 0
 	}
+	muT0 := time.Now()
 	m.mu.Lock()
+	m.noteMuWait("backlog", muT0)
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
 	for _, p := range m.pipes {
 		if p != nil {
@@ -5536,12 +5552,44 @@ func (m *Manager) RecoveryQuotaStats() (factor float64, graceUntil time.Time, re
 //
 // 规则（用户定调 ✓）：恢复中 ⇒ 设 factor ✓；恢复刚结束 ⇒ 记宽限截止，期间继续拓宽 ✓；
 // 宽限过期 ⇒ 回归常规闸 ✓（届时超常规闸的源按**常规语义**暂停 = 正确行为 ✓，红线不削弱 ✗）。
+// noteMuWait 记录一次 m.mu 获取的等待时长（按调用相 ∪ 取最大 ✓）。
+//
+// 用途（四相下探判据 ✓）：**单点极大** ⇒ 该相被长持有者挡住（支 A ⇒ 点名该相 ✓）；
+// **稳定小** ⇒ 该相耗在遍历本身（支 B ⇒ 三遍并一遍 ✓）。
+func (m *Manager) noteMuWait(label string, t0 time.Time) {
+	if m == nil {
+		return
+	}
+	v := time.Since(t0).Nanoseconds()
+	var a *atomic.Int64
+	switch label {
+	case "backlog":
+		a = &m.muWaitBacklog
+	case "quota":
+		a = &m.muWaitQuota
+	case "sources":
+		a = &m.muWaitSources
+	case "resume":
+		a = &m.muWaitResume
+	default:
+		return
+	}
+	for {
+		o := a.Load()
+		if v <= o || a.CompareAndSwap(o, v) {
+			return
+		}
+	}
+}
+
 func (m *Manager) syncRecoveryQuota() {
 	if m == nil {
 		return
 	}
 	recovering := m.recoveryInProgress()
+	muT0 := time.Now()
 	m.mu.Lock()
+	m.noteMuWait("quota", muT0)
 	if recovering {
 		m.recoveryGraceUntil = time.Time{}
 	} else if m.recoveryGraceUntil.IsZero() {
@@ -5607,7 +5655,9 @@ func (m *Manager) resumeBatchOf() int {
 }
 
 func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
+	muT0 := time.Now()
 	m.mu.Lock()
+	m.noteMuWait("resume", muT0)
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
 	for _, p := range m.pipes {
 		if p != nil {
@@ -5734,7 +5784,9 @@ func (m *Manager) sourceConfigFor(p *pipeline.Pipeline) (SourceConfig, bool) {
 	}
 	key := p.Key()
 	cfgKey := key.LogSourceID + "/" + key.SourceGeneration
+	muT0 := time.Now()
 	m.mu.Lock()
+	m.noteMuWait("sources", muT0)
 	src, ok := m.sources[cfgKey]
 	if !ok {
 		// 兼容：部分路径用存储命名空间作为键（见 runtime.go 里 m.pipes[storageNamespace] 的用法）。
