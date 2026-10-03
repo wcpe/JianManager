@@ -370,6 +370,12 @@ type Manager struct {
 	verifyVisibilityFloor time.Duration
 	// verifyRoundDeadline 是本轮的校验截止时刻（unix nanos；0 表示不限，用于非轮内调用路径）。
 	verifyRoundDeadline atomic.Int64
+	// verifySourceBudget 是**每源**的校验预算状态（key = "logSourceID/generation"）：
+	// 每源在轮内被处理前**各自**设置截止时刻（见 pollOnce → setVerifySourceDeadline）。
+	// 校验**优先**读本源状态（2026-10-03 回退修复 ③：消除"慢源吃掉整轮预算 ⇒ 轮内后段源
+	// 全部 defer"的**队头阻塞**——深积压下单轮墙钟 ≫ 预算即触发）；未设 per-source 的
+	// 路径（启动恢复/对账）回退轮级 verifyRoundDeadline（语义不变 ✓）。
+	verifySourceBudget sync.Map // map[string]*verifySourceBudgetState
 	// verifyDeferred 是"因轮级预算而本轮放弃校验"的计数（可观测 ✓）。
 	verifyDeferred atomic.Int64
 	// verifyBackoffMin/verifyBackoffMax 是投影校验重试的退避区间（B1c）；0 用默认常量。
@@ -2294,6 +2300,9 @@ func (m *Manager) pollOnce() {
 			for i := range work {
 				item := pipes[i]
 				p := item.pipe
+				// **每源独立校验预算**（per-source，2026-10-03 回退修复 ③）：本源处理期间其校验
+				// 只受**自身**截止约束 ⇒ 慢源耗尽自身预算不再连坐同轮其他源（消队头阻塞）✓。
+				m.setVerifySourceDeadline(item.source)
 				before, beforeOK := p.Positions()
 				events, metadataChanged, err := m.pollSource(item.source, p)
 				after, afterOK := p.Positions()
@@ -4072,31 +4081,92 @@ func verifyErrorIsSemantic(err error) bool {
 	return false
 }
 
+// verifySourceBudgetState 是单源校验预算的原子状态（per-source，见 Manager.verifySourceBudget）。
+type verifySourceBudgetState struct {
+	deadlineNanos atomic.Int64 // = now + verifyRoundBudget（unix nanos；0=不限）
+	progressed    atomic.Int64 // 本源已推进的校验块数（"每源至少推进一块"的保底判据）
+}
+
+// verifySourceState 返回（必要时创建）某源的预算状态。
+func (m *Manager) verifySourceState(source SourceConfig) *verifySourceBudgetState {
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	if v, ok := m.verifySourceBudget.Load(key); ok {
+		return v.(*verifySourceBudgetState)
+	}
+	actual, _ := m.verifySourceBudget.LoadOrStore(key, &verifySourceBudgetState{})
+	return actual.(*verifySourceBudgetState)
+}
+
+// setVerifySourceDeadline 在**每源处理前**为该源设置独立预算（轮内采集路径调用；
+// 每源相互独立 ⇒ 慢源耗尽自身预算不再拖累同轮其他源 ✓）。
+func (m *Manager) setVerifySourceDeadline(source SourceConfig) {
+	if m == nil {
+		return
+	}
+	st := m.verifySourceState(source)
+	st.deadlineNanos.Store(time.Now().Add(m.verifyRoundBudgetOf()).UnixNano())
+	st.progressed.Store(0)
+}
+
+// verifyBudgetFor 计算本簇可用的校验超时与"是否必须延期"（把原 verifyProjectionChunk 的
+// 内联预算判定抽出，**per-source 优先、轮级兜底**）。
+//
+// 语义（与 #41 的"轮级 1.5s→30s"衔接）：轮级预算在**深积压长轮**下仍会被轮内前段源吃光
+// ⇒ 后段源 queries=0 直接 defer（现场：新进程 verify 13 批 0 成功）。per-source 后，
+// **每源都有自己的截止**，互不拖累（消队头阻塞）；"每源至少推进一块"的保底判据同步 per-source 化。
+func (m *Manager) verifyBudgetFor(source SourceConfig, generation string) (time.Duration, error) {
+	timeout := m.verificationTimeout
+	if m == nil {
+		return timeout, nil
+	}
+	// 1) per-source（轮内采集路径优先）
+	if v, ok := m.verifySourceBudget.Load(source.LogSourceID + "/" + source.SourceGeneration); ok {
+		st := v.(*verifySourceBudgetState)
+		if deadlineNanos := st.deadlineNanos.Load(); deadlineNanos > 0 {
+			if remaining := time.Until(time.Unix(0, deadlineNanos)); remaining < timeout {
+				if st.progressed.Load() == 0 {
+					// 保底放行：本源还没完成过任何一块 ⇒ 即使预算已用尽也放行本块 ✓。
+					st.progressed.Add(1)
+				} else {
+					m.verifyDeferred.Add(1)
+					if remaining <= 0 {
+						return 0, fmt.Errorf("ingest: projection %s %w (round budget exhausted)", generation, ErrVerifyDeferred)
+					}
+					return remaining, nil
+				}
+				st.progressed.Add(1)
+			}
+			return timeout, nil
+		}
+	}
+	// 2) 轮级兜底（启动恢复/对账等非"每源"路径：语义与修复前逐字一致）
+	if deadlineNanos := m.verifyRoundDeadline.Load(); deadlineNanos > 0 {
+		if remaining := time.Until(time.Unix(0, deadlineNanos)); remaining < timeout {
+			if m.verifyRoundProgress.Load() == 0 {
+				m.verifyRoundProgress.Add(1)
+			} else {
+				m.verifyDeferred.Add(1)
+				if remaining <= 0 {
+					return 0, fmt.Errorf("ingest: projection %s %w (round budget exhausted)", generation, ErrVerifyDeferred)
+				}
+				return remaining, nil
+			}
+			m.verifyRoundProgress.Add(1)
+		}
+	}
+	return timeout, nil
+}
+
 // verifyProjectionChunk 校验单个簇的事件在 VL 中完全可见（退避重试 + 永久错误立即失败）。
 // allowed 是「可接受集合」（整批积压的全部事件）：本簇之外的记录只要属于该集合且内容一致即接受。
 // parent 是整批的 ctx：同批其他簇失败/超时会取消它——此时本簇不得把取消噪音（context canceled、
 // 被截断响应体的 JSON 解析错误）当成自己的校验结论，否则现场看到的会是噪音而非真正根因。
 func (m *Manager) verifyProjectionChunk(parent context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) (verifyQueryStats, error) {
-	timeout := m.verificationTimeout
-	if deadlineNanos := m.verifyRoundDeadline.Load(); deadlineNanos > 0 {
-		if remaining := time.Until(time.Unix(0, deadlineNanos)); remaining < timeout {
-			// **保底放行**：本轮还没完成过任何一块校验 ⇒ 即使预算已用尽也放行本块 ✓。
-			// 少了这条，慢环境下（-race / VL 变慢）第一个源吃掉整轮预算后，每个源每轮都被推迟
-			// ⇒ 同一批源永不判定 ✗✗（实测停滞）。"每轮至少推进一个"是收敛性底线 ✓。
-			if m.verifyRoundProgress.Load() == 0 {
-				m.verifyRoundProgress.Add(1)
-			} else {
-				// 轮级预算已用尽/只剩一点：本轮到此为止（结论与"窗口内未可见"同族 ✓），
-				// 交回下一轮——**不改变"最终必判成/败"**：判定由驱动侧窗口与轮次共同收敛 ✓。
-				m.verifyDeferred.Add(1)
-				timeout = remaining
-				if timeout <= 0 {
-					// %w 包装哨兵：**文本逐字不变** ✓（"… verification deferred to next round …"）但可被分类 ✓。
-					return verifyQueryStats{}, fmt.Errorf("ingest: projection %s %w (round budget exhausted)", generation, ErrVerifyDeferred)
-				}
-			}
-			m.verifyRoundProgress.Add(1)
-		}
+	// 校验预算：**per-source 优先**（消队头阻塞：慢源不再吃掉整轮预算 ⇒ 轮内后段源不再被连坐），
+	// 轮级兜底（启动恢复/对账等非"每源"路径语义与修复前逐字一致 ✓）。判定细则见 verifyBudgetFor。
+	timeout, budgetErr := m.verifyBudgetFor(source, generation)
+	if budgetErr != nil {
+		return verifyQueryStats{}, budgetErr
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
