@@ -29,6 +29,8 @@ type Pipeline struct {
 	suppressRecursiveVL bool
 	// workerSelfFailures 本地计数（可观测，不进入 VL）。
 	workerSelfFailures int
+	// selfFailureReasons 是最近自愈失败原因的**有界环形缓冲**（见 noteSelfFailure ✓）。
+	selfFailureReasons []string
 	// budget 容量预算。
 	budget         CapacityBudget
 	budgetProvider func() (CapacityBudget, error)
@@ -318,7 +320,35 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 }
 func (p *Pipeline) noteSelfFailure(reason string) {
 	p.workerSelfFailures++
-	_ = reason
+	// **原因必须可读**（2026-10-05 ✓）：此前是 `_ = reason` ⇒ 自愈失败只留一个计数、原因永远查不到 ✗
+	// —— 与"实现存在但不可达"同族，这次是"**值存在但被丢弃**" ✓。收进**有界环形缓冲**（沿用
+	// persist 采样环型 ✓：只留最近 selfFailureReasonCap 条 ⇒ 不随失败次数增长 ✓）。
+	if reason == "" {
+		return
+	}
+	if len(p.selfFailureReasons) >= selfFailureReasonCap {
+		copy(p.selfFailureReasons, p.selfFailureReasons[1:])
+		p.selfFailureReasons = p.selfFailureReasons[:len(p.selfFailureReasons)-1]
+	}
+	p.selfFailureReasons = append(p.selfFailureReasons, reason)
+}
+
+// selfFailureReasonCap 是"最近自愈失败原因"的保留条数（有界 ✓，防无界增长 ✗）。
+const selfFailureReasonCap = 8
+
+// SelfFailureReasons 返回**最近若干条**自愈失败原因（新→旧 ✓，有界 ✓）。
+//
+// 为什么导出（用户 2026-10-05 ✓）：现场只能看到一个 `workerSelfFailures` 计数 ✗ ⇒ 无法回答
+// "最近为什么自愈失败" ✓。与本会话主线一致：**把猜测变读数** ✓。
+func (p *Pipeline) SelfFailureReasons() []string {
+	if p == nil {
+		return nil
+	}
+	out := make([]string, 0, len(p.selfFailureReasons))
+	for i := len(p.selfFailureReasons) - 1; i >= 0; i-- {
+		out = append(out, p.selfFailureReasons[i])
+	}
+	return out
 }
 
 // replayDrainLimit 返回生效的单轮排空上限。
