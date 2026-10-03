@@ -165,7 +165,13 @@ func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir str
 	}
 	m.state.Instances[uuid] = binding
 	m.mu.Unlock()
-	if err := m.persist(); err != nil {
+	// 有界热路径（P0 复盘 2026-10-03 ✓）：**不得在持 registerMu 时无限等持久化门** ✗ ——
+	// 原 `m.persist()` = persistPriority（无 maxWait ⇒ 门上无限等 ✓）⇒ 注册风暴下"每个注册者
+	// 抱着 registerMu 无限等门"（SIGQUIT 成串 sema / 四把 wait_max 分钟级的机制本体 ✓✓）。
+	// 语义自检（不变量 ✓）：**"注册返回"改由"内存状态已在 m.mu 内提交（终将落库）"保证** ✓；
+	// 超时即交后台持久化通道（与采集轮同款热路径 ✓，失败由后台通道的错误面兜底 ✓），
+	// 不再承诺"返回即已落盘" ✗ —— 该承诺属用户面路径（persistPriority/同步模式 ✓），登记侧不需要 ✗。
+	if err := m.persistHot(); err != nil {
 		m.mu.Lock()
 		delete(m.state.Instances, uuid)
 		m.mu.Unlock()
