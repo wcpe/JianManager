@@ -175,10 +175,14 @@ type reconcileView struct {
 }
 
 const (
-	// reconcileViewTTL 是视图有效期（2×默认 interval=15min）：对账首轮超时也不致空窗——
-	// 采集链会持续刷新视图（见 pollOnce/源变更发布点）。
-	reconcileViewTTL = 30 * time.Minute
 	// reconcileViewMinInterval 是发布节流：高频持锁路径内距上次发布过近则跳过重建，控成本。
+	//
+	// **v3（2026-10-04）已取消视图 TTL**：原 TTL=30min 本意是"防陈旧"，但生产实证
+	// （#50 窗第二轮 07:46 `candidate_lock_timeout@cursor=inst:143`）：pollOnce 的刷新在
+	// "重发阶段持 cycleMu + m.mu 长持"时频率远低于设计（40min 仅 17 次校验完成）⇒ 视图
+	// **静默过期** ⇒ 对账回退 TryLock ⇒ 每 5s 超时。而快照本身是"keys+sources 同代"副本，
+	// 且**源集合变化走 force 发布即时更新**（RegisterInstance 处）——陈旧代价仅"晚发现新源"，
+	// 远小于"过期即等锁"。故视图发布后**永久可用**。
 	reconcileViewMinInterval = 5 * time.Second
 )
 
@@ -210,19 +214,13 @@ func (m *Manager) publishReconcileViewLocked(force bool) {
 	m.reconcileViewPublishedAt.Store(time.Now().UnixNano())
 }
 
-// currentReconcileView 返回当前视图（零锁 Load）；超过 TTL 视为不可用（回退持锁路径）。
+// currentReconcileView 返回当前视图（零锁 Load；v3 起**无 TTL**——发布后永久可用：
+// 源集合变化由 force 发布即时更新，陈旧代价仅"晚发现新源"，见 reconcileViewMinInterval 注释）。
 func (m *Manager) currentReconcileView() *reconcileView {
 	if m == nil {
 		return nil
 	}
 	v, _ := m.reconcileViewSnapshot.Load().(*reconcileView)
-	if v == nil {
-		return nil
-	}
-	at := m.reconcileViewPublishedAt.Load()
-	if at == 0 || time.Since(time.Unix(0, at)) > reconcileViewTTL {
-		return nil
-	}
 	return v
 }
 

@@ -90,3 +90,42 @@ func TestReconcileRoundZeroLockAfterStartupSnapshots(t *testing.T) {
 	require.NotContains(t, detail, "candidate_lock_timeout", "启动发布后取候选必须零锁")
 	require.Equal(t, 2, res.Candidates, "候选应来自启动发布的视图")
 }
+
+// TestReconcileViewSurvivesBeyondOldTTL 是 v3（2026-10-04）的红/绿：
+//
+// 现场（合并窗第二轮 07:46:10 实证）：视图 07:16:05 发布后，pollOnce 刷新在重负载下追不上
+// 设计频率（40min 仅 17 次校验完成）⇒ `publishedAt` 30min 未更新 ⇒ 命中原 TTL ⇒ 对账回退
+// TryLock ⇒ `candidate_lock_timeout@cursor=inst:143`。修法：取消视图 TTL（源集合变化走 force 发布，
+// 陈旧代价仅"晚发现新源"）。
+//
+// 绿（现状）：把发布时刻人为拨回 31 分钟前，锁被长持 ⇒ 仍零锁取候选（Candidates==2）；
+// 红（变异：恢复 TTL 过期判断）⇒ 出现 candidate_lock_timeout ⇒ 转红。
+func TestReconcileViewSurvivesBeyondOldTTL(t *testing.T) {
+	m := &Manager{
+		pipes: map[string]*pipeline.Pipeline{
+			"inst:a/file": nil, "inst:b/file": nil,
+		},
+		sources: map[string]SourceConfig{
+			"inst:a/file": {LogSourceID: "inst:a", SourceGeneration: "g1"},
+			"inst:b/file": {LogSourceID: "inst:b", SourceGeneration: "g1"},
+		},
+		vlNotReady: map[string]string{},
+	}
+	m.reconcileLoop = ReconcileLoopConfig{Enabled: true, RoundBudget: 30 * time.Second, MaxSourcesPerRound: 8}
+	m.reconcileLockBudget = 200 * time.Millisecond
+
+	m.publishStartupReconcileSnapshots()
+	// 模拟"pollOnce 刷新跟不上"：发布时刻拨回 31 分钟前（超过原 TTL 30min）
+	m.reconcileViewPublishedAt.Store(time.Now().Add(-31 * time.Minute).UnixNano())
+
+	m.mu.Lock()
+	go func() { time.Sleep(600 * time.Millisecond); m.mu.Unlock() }()
+	res := m.ReconcileRoundNow(context.Background())
+	detail := strings.Join(res.Errors, " | ")
+	require.NotContains(t, detail, "candidate_lock_timeout", "v3：视图不得因 TTL 过期而退化为等锁")
+	require.Equal(t, 2, res.Candidates, "31 分钟前的视图仍应可用（Candidates==2）")
+}
+
+// 变异记录（2026-10-04 实测，逐字还原）：
+//   - 变异：在 currentReconcileView 恢复 TTL 过期判断（>30min ⇒ return nil）⇒ 本用例
+//     `candidate_lock_timeout` 断言转红；还原后转绿。
