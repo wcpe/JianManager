@@ -250,10 +250,12 @@ func (m *Manager) recordVerifiedRuns(key string, runs []ledger.PositionRange) {
 	if m == nil || len(runs) == 0 {
 		return
 	}
+	w := m.watchMutexHold("recordVerifiedRuns.merge")
 	m.mu.Lock()
 	saved, ok := m.state.Sources[key]
 	if !ok {
 		m.mu.Unlock()
+		w.done()
 		return
 	}
 	merged := ledger.MergePositionRanges(append(append([]ledger.PositionRange{}, saved.VerifiedRuns...), runs...))
@@ -263,6 +265,7 @@ func (m *Manager) recordVerifiedRuns(key string, runs []ledger.PositionRange) {
 	saved.VerifiedRuns = merged
 	m.state.Sources[key] = saved
 	m.mu.Unlock()
+	w.done()
 }
 
 // verifiedRuns 返回该源已持久化的逐字段校验覆盖区间（副本）。

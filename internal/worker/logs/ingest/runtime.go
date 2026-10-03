@@ -421,6 +421,10 @@ type Manager struct {
 	// reconcileViewSnapshot 是"对账只读视图"（候选 1，2026-10-04）：keys+sources 同代快照，
 	// 持锁写侧重建、atomic 发布；对账读侧零取 m.mu（发布点：源变更 force + 采集链/对账节流）。
 	reconcileViewSnapshot atomic.Value // *reconcileView
+	// 候选 2（2026-10-04）：m.mu 慢持锁观测 —— 计数 + 节流告警（先测量、后收窄）。
+	mutexHoldSlowCount atomic.Int64
+	mutexHoldWarnAt    atomic.Int64 // UnixNano；告警节流窗口
+
 	// reconcileLoopCfgSnapshot 是常驻对账配置的快照（候选 1）：写点即时发布 ⇒ 配置读零锁。
 	reconcileLoopCfgSnapshot atomic.Value // ReconcileLoopConfig
 	reconcileViewPublishedAt atomic.Int64 // UnixNano
@@ -3068,6 +3072,53 @@ func (m *Manager) projectionGenerationsExhausted(source SourceConfig) bool {
 	return len(publishedSourceProjectionGenerations(current.PublishedProjection, source)) >= maxPublishedProjectionGenerations
 }
 
+// mutexHoldSlowThreshold 是"慢持锁"告警阈值（候选 2 测量，2026-10-04）：
+// 仅在关键临界区（投递规划/校验凭据/落段标记）上计时，超阈计数并按节流窗口告警。
+const mutexHoldSlowThreshold = 100 * time.Millisecond
+
+// mutexHoldWarnMinInterval 是慢持锁告警节流窗口（避免高频投递路径告警风暴；计数仍逐次累加）。
+const mutexHoldWarnMinInterval = 5 * time.Second
+
+// mutexHoldWatch 是一次持锁计时（候选 2）。与 done 成对使用；可在多个出口重复调用 done。
+type mutexHoldWatch struct {
+	m       *Manager
+	section string
+	at      time.Time
+}
+
+// watchMutexHold 开始一次持锁计时（零语义改动：不改变任何分支/返回值，仅观测）。
+func (m *Manager) watchMutexHold(section string) *mutexHoldWatch {
+	return &mutexHoldWatch{m: m, section: section, at: time.Now()}
+}
+
+// done 结束计时：超阈计数；距上次告警超过节流窗口时打一条 Warn（含累计数）。
+func (w *mutexHoldWatch) done() {
+	if w == nil || w.m == nil {
+		return
+	}
+	d := time.Since(w.at)
+	if d < mutexHoldSlowThreshold {
+		return
+	}
+	w.m.mutexHoldSlowCount.Add(1)
+	last := w.m.mutexHoldWarnAt.Load()
+	now := time.Now().UnixNano()
+	if last != 0 && time.Duration(now-last) < mutexHoldWarnMinInterval {
+		return
+	}
+	if w.m.mutexHoldWarnAt.CompareAndSwap(last, now) {
+		slog.Warn("m.mu 慢持锁", "section", w.section, "hold", d.String(), "slowTotal", w.m.mutexHoldSlowCount.Load())
+	}
+}
+
+// MutexHoldSlowCount 返回慢持锁累计次数（候选 2 观测读数；供测试与诊断）。
+func (m *Manager) MutexHoldSlowCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.mutexHoldSlowCount.Load()
+}
+
 func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
 	if len(events) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
@@ -3118,22 +3169,26 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 		}
 		timing.mark("seen")
 	}
+	w := m.watchMutexHold("deliver.plan")
 	m.mu.Lock()
 	toWrite := make([]logtypes.Event, 0, len(events))
 	for _, event := range events {
 		if event.Record.End <= event.Record.Start {
 			m.mu.Unlock()
+			w.done()
 			return pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity}, fmt.Errorf("ingest: zero-width event %s", event.EventID)
 		}
 		var err error
 		event, err = normalizeCanonicalEvent(event)
 		if err != nil {
 			m.mu.Unlock()
+			w.done()
 			return pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity}, err
 		}
 		if existing, exists := seen[event.EventID]; exists {
 			if existing != event.CanonicalHash {
 				m.mu.Unlock()
+				w.done()
 				return pipeline.DeliveryResult{}, fmt.Errorf("ingest: IDENTITY_CONFLICT for event_id %s", event.EventID)
 			}
 			continue
@@ -3142,6 +3197,7 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 		seen[event.EventID] = event.CanonicalHash
 	}
 	m.mu.Unlock()
+	w.done()
 	timing.mark("toWrite")
 	if len(toWrite) == 0 {
 		// 本批事件此前已写入且逐字段一致（seen 命中同 ID 同哈希）：同样是「该区间已落库」的证据，
@@ -3377,6 +3433,7 @@ func (m *Manager) appendEvents(key string, events []logtypes.Event) error {
 			return err
 		}
 	}
+	w := m.watchMutexHold("appendEvents.persist")
 	m.mu.Lock()
 	saved := m.state.Sources[key]
 	saved.EventsStored = true
@@ -3395,6 +3452,7 @@ func (m *Manager) appendEvents(key string, events []logtypes.Event) error {
 	saved.Events = nil
 	m.state.Sources[key] = saved
 	m.mu.Unlock()
+	w.done()
 	return nil
 }
 

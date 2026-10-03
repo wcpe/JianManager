@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -291,6 +292,18 @@ func runWorker() {
 		cfg = loaded
 	}
 
+	// 2026-10-04（候选 2 测量）：按需开启互斥锁争用采样 —— m.mu 是全局热锁（代码侧 61 个调用点、
+	// pprof 点名 14 个等待者），"谁持锁最久/谁被等最多"必须先有数据再谈收窄。
+	// 默认关闭（Go 默认 fraction=0）；仅当环境变量显式设置时开启。1=全采（诊断窗口用），
+	// 数值越大采样越稀（如 5=1/5），开销随之下降；0=关闭。
+	if v := os.Getenv("JM_MUTEX_PROFILE_FRACTION"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			runtime.SetMutexProfileFraction(n)
+			slog.Info("互斥锁争用采样已配置", "fraction", n)
+		} else {
+			slog.Warn("JM_MUTEX_PROFILE_FRACTION 非法，忽略", "value", v)
+		}
+	}
 	// 日志等级/格式装配（此前**完全没有装配点**：Worker 从不调用 slog.SetDefault，
 	// 于是 log.level / log.format 两个配置项形同不存在——写 debug 不产生任何 DEBUG 输出，
 	// 写 error 也压不住 INFO。现场表现是「改了配置但日志没变」，极难归因。
