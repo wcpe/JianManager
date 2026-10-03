@@ -267,6 +267,13 @@ type Manager struct {
 	// 兜底环是**维护环**，绝不该挂在重活上 ✗ —— 现场形态正是环第一轮卡在
 	// `DeliverPending→deliver`（等 `m.mu`：被"长持 m.mu 的规划者"挡住 ✓）⇒ ticks=1 冻结 ✓。
 	skipBlocked atomic.Int64
+	// **三步各自耗时（累计 ns）+ 每轮总耗时 + 上轮处理源数**（新账 1 ✓）：单轮 4–6 分钟而
+	// `skip_blocked` 只解释个位数秒 ⇒ 须能分辨"少数慢源"还是"每源均匀慢" ✓（平均每源 = 总耗时/源数 ✓）。
+	nsDelivery       atomic.Int64
+	nsResolve        atomic.Int64
+	nsEvaluate       atomic.Int64
+	nsRoundTotal     atomic.Int64
+	lastRoundSources atomic.Int64
 	// **兜底环每轮的跳过原因分类计数**（2026-10-05 现场：41 家三项前置全满足却不复活 ✗ ⇒
 	// 必须能直接读出"是哪一条把它挡了" ✓）。
 	risingStreak     atomic.Int64
@@ -5416,6 +5423,12 @@ type ResumeSweepStats struct {
 	EligibleNow int64
 	// SkipBlocked：因**有界等待超时**而跳过的步数（现场据此判"是否被 m.mu 之类的长持有挡住" ✓）。
 	SkipBlocked int64
+	// **耗时读数**：三步各自累计 + 每轮总耗时 + 上轮处理源数 ⇒ 平均每源一眼可算 ✓。
+	NsDelivery       int64
+	NsResolve        int64
+	NsEvaluate       int64
+	NsRoundTotal     int64
+	LastRoundSources int64
 }
 
 func (m *Manager) ResumeSweepStats() ResumeSweepStats {
@@ -5434,6 +5447,11 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		SweepPanics:      m.sweepPanics.Load(),
 		EligibleNow:      m.sweepEligibleNow.Load(),
 		SkipBlocked:      m.skipBlocked.Load(),
+		NsDelivery:       m.nsDelivery.Load(),
+		NsResolve:        m.nsResolve.Load(),
+		NsEvaluate:       m.nsEvaluate.Load(),
+		NsRoundTotal:     m.nsRoundTotal.Load(),
+		LastRoundSources: m.lastRoundSources.Load(),
 	}
 }
 
@@ -5582,6 +5600,11 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		if led == nil {
 			continue
 		}
+		// **eligible 的口径**（2026-10-05 小件 ✓，与"★应复活"剪刀差对齐）：**计入**所有积压/容量类暂停源
+		// （**含滞回未满足者** ✓）；**不计入**非积压类暂停与已解除者 ✓；已裁定放弃者的缺口被消解、但源可能
+		// 仍在暂停 ⇒ **照样计入**（它仍是"可解源" ✓）。
+		// ⇒ 与"★应复活"之差 = **滞回条件（backlog < 半闸）** ✓ ⇒ 现场"eligible 稳 46 而剪刀差在降"
+		// **不是矛盾**，是两把尺口径不同 ✓✓。
 		if e := led.Get(p.Key()); e != nil && e.AcquirePaused && acquire.IsBacklogPauseReason(e.PauseReason) {
 			eligible++
 		}
@@ -5628,27 +5651,33 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		if src, ok := m.sourceConfigFor(p); ok {
 			// **有界**（同执行器 ✓）：本步要读该源的已发布投影并可能做整源扫描 ⇒ 慢源/被 m.mu 挡住时
 			// 会让整个维护环停摆 ✗（现场 ticks=1 冻结的同类）。跳过后**下一轮重试**、语义不变 ✓。
+			tResolve := time.Now()
 			if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { m.autoResolveGapsFromPublished(src, p) }) {
 				m.skipBlocked.Add(1)
 			}
+			m.nsResolve.Add(int64(time.Since(tResolve)))
 		}
 		// 排空侧：先把已 durable 未确认的存量发出去（投递成功才会推进回收）✓
 		// **有界等待**（2026-10-05 现场 ✓）：`DeliverPending`→`deliver` 会拿 `m.mu`，而"长持 m.mu 的
 		// 规划者"（整源镜像重建那类 ✓）可以让它阻塞很久 ✗ ⇒ 维护环不许挂在这上面 ✗✗。
 		// 照 `persistHot` 同型：超预算就**跳过本轮该步**（计入 skipBlocked ✓，继续下一源 ✓），
 		// 被挡的那次调用会在后台自行完成 ✓（`m.mu` 释放后即返回 ✓，不丢工作 ✓）。
+		tDeliver := time.Now()
 		if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { _, _ = p.DeliverPending() }) {
 			m.skipBlocked.Add(1)
 		}
+		m.nsDelivery.Add(int64(time.Since(tDeliver)))
 		// 回收侧再评估：TryReclaim（按当前水位剪枝）+ 滞回恢复 ✓
 		before := led.Get(p.Key())
 		wasPaused := before != nil && before.AcquirePaused
 		// **有界**（同执行器 ✓）：`EvaluateResume` = `TryReclaim`（账本/分段门禁 ✓）+ 滞回评估 ⇒
 		// 在 m.mu 被长持有或分段扫描慢时会阻塞 ✗。跳过只表示"本轮不评"，**下一轮照评** ✓
 		// （滞回与分类消解都是幂等的 ✓，语义不变 ✓）。
+		tEvaluate := time.Now()
 		if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { _ = p.EvaluateResume() }) {
 			m.skipBlocked.Add(1)
 		}
+		m.nsEvaluate.Add(int64(time.Since(tEvaluate)))
 		after := led.Get(p.Key())
 		if wasPaused && after != nil && after.AcquirePaused {
 			// **滞回/其它跳过**：评估过但未解除 ⇒ 分类计数 ✓（现场 41 家若全落这里 ⇒ 判据问题 ✓）。
@@ -5663,6 +5692,8 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 	if len(pipes) > 0 {
 		m.sweepCursor.Store(uint64((start + scanned) % len(pipes)))
 	}
+	// 耗时读数的分母：**记在自己函数内** ✓（不碰调用方 ⇒ 少一个跨作用域锚点 ✓）。
+	m.lastRoundSources.Store(int64(candidates))
 	return candidates, revived
 }
 
@@ -5715,6 +5746,8 @@ func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
 // sweepOnce 是兜底环的**一轮全部动作**（自 RunCapacityResumeLoop 原样抽出：只搬家，
 // `continue→return` 与缩进由**精确文本替换**完成 ✓，逻辑逐字不变 ✓）。
 func (m *Manager) sweepOnce() {
+	roundStart := time.Now()
+	defer func() { m.nsRoundTotal.Add(int64(time.Since(roundStart))) }()
 	// **窗口化净涨背压**（2026-10-05 现场修正 ✗✓）：单轮比较太敏感 —— 现场 41 家
 	// "paused + backlog_pause + blocking=0 + backlog < 半闸"三项前置全满足却无一复活 ✗，
 	// 头号嫌疑就是**任何一轮抖动都被判净涨 ⇒ 永久跳过** ✗。

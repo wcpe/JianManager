@@ -1441,6 +1441,10 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 					"ticks", st.SweepTicks, "panics", st.SweepPanics, // 门哨兵：ticks 不涨 ⇒ 环停了 ✓
 					"eligible", st.EligibleNow, // gauge：合格暂停源总数 ⇒ 与累计 candidates 并读看出覆盖进度 ✓
 					"skip_blocked", st.SkipBlocked, // 有界等待超时次数 ⇒ 现场判"是否被 m.mu 挡住" ✓
+					// 耗时读数（新账 1 ✓）：三步各 ms + 每轮 ms + 上轮源数 ⇒ avg=round/sources 一眼可算 ✓。
+					"ms_delivery", st.NsDelivery/1e6, "ms_resolve", st.NsResolve/1e6,
+					"ms_evaluate", st.NsEvaluate/1e6, "ms_round_total", st.NsRoundTotal/1e6,
+					"last_round_sources", st.LastRoundSources,
 					"candidates", st.Candidates, "revived", st.Revived,
 					"skip_backpressure", st.SkipBackpressure,
 					"skip_hysteresis", st.SkipHysteresis,
