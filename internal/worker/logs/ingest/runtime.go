@@ -257,6 +257,10 @@ type Manager struct {
 	// 现场一眼看出"合格 38 vs 本轮处理 2" ✓）。
 	sweepCursor      atomic.Uint64
 	sweepEligibleNow atomic.Int64
+	// sweepStepHold 是"有界步骤"的测试注入点（生产 nil、零开销 ✓）：在 `runSweepStepBounded`
+	// 执行 `fn` **之前**回调。为什么注在**这一步内部**（2026-10-05 纪律⑥：注入点必须"准且稳" ✓）：
+	// 用全局锁（`m.mu`）注入会**既测错位置**（环入口就要拿它 ✗）**又偶发**（时紧时松 ✗）✓。
+	sweepStepHold func()
 	// sweepStepBudget 是兜底环**单源单步**的有界等待预算（0 ⇒ 默认 150ms ✓，见 sweepStepBudgetOf）。
 	sweepStepBudget time.Duration
 	// skipBlocked 统计"本轮因**有界等待超时**而跳过"的次数（2026-10-05 现场 ✓）：
@@ -6260,6 +6264,11 @@ func (m *Manager) runSweepStepBounded(budget time.Duration, fn func()) bool {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		// 注入点必须在**有界区之内**（2026-10-05 实测教训 ✗✓）：放在 goroutine 之外会把**调用者**
+		// 自己按住 ⇒ 预算再紧也救不了 ⇒ 红证会测出"钩子位置错"而不是"有界失效" ✓。
+		if m.sweepStepHold != nil {
+			m.sweepStepHold()
+		}
 		fn()
 	}()
 	select {
