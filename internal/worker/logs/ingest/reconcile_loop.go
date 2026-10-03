@@ -222,50 +222,60 @@ func (m *Manager) ReconcileRoundNow(ctx context.Context) ReconcileRoundResult {
 			result.Errors = appendReconcileError(result.Errors, "round_budget_exhausted")
 			break
 		}
-		// VL 未就绪：本轮不判、更不重发——「不可信查询不重发」的既有取舍同样适用于「端点不可用」，
-		// 而且把必然失败的重发挡在门外（2026-10-03 现场：worker 与 VL 同步重启时对账抢跑）。
-		if err := m.ensureVLReady(roundCtx, candidate.source); err != nil {
-			result.Errors = appendReconcileError(result.Errors, "vl_not_ready:"+candidate.key+":"+err.Error())
-			continue
-		}
-		expectation, err := m.canonicalDayCounts(candidate.key, candidate.source)
-		if err != nil {
-			result.Errors = appendReconcileError(result.Errors, "canonical_counts:"+err.Error())
-			continue
-		}
-		result.CheckedSources++
-		if len(expectation.Days) == 0 {
-			// 空源（无非空天）：没有可对账的面，既不计缺失也不重发。
-			result.Skipped++
-			continue
-		}
-		report := m.reconcileWithExpectation(roundCtx, candidate.source, candidate.key, expectation, queryCfg)
-		result.CheckedDays += len(report.Days)
-		switch {
-		case report.Fallback:
-			// 查询不可信：不重发（见文件头说明），记错误等下一轮重新判定。
-			result.Errors = appendReconcileError(result.Errors,
-				"reconcile_untrusted:"+candidate.key+":"+report.FallbackReason)
-		case len(report.MissingDays) == 0:
-			result.Skipped++
-		default:
-			for _, day := range report.MissingDays {
-				result.Missing = append(result.Missing, candidate.key+":"+day)
-			}
-			sort.Strings(result.Missing)
-			if err := m.replayMissingDays(candidate.source, report.MissingDays); err != nil {
-				result.Errors = appendReconcileError(result.Errors,
-					"replay_failed:"+candidate.key+":"+err.Error())
-				continue
-			}
-			result.ResentSources++
-			result.ResentDays += len(report.MissingDays)
-		}
+		// 逐源处理 + **逐源检查点**（2026-10-03 "取消即全失"修复）：每个源处理结束（无论成败）
+		// 即推进游标一格 ⇒ 轮预算取消时游标停在"第一个未处理源"——已完成的不重做、未完成的
+		// 下一轮从断点继续，跨轮累积覆盖（判读 stats.CheckedSources 累计值；单轮值受 45s 预算限制）。
+		m.reconcileOneCandidate(roundCtx, candidate, queryCfg, &result)
+		m.advanceReconcileCursor()
 	}
 	result.Duration = time.Since(started)
 	m.recordReconcileRound(result)
 	m.logReconcileRound(result)
 	return result
+}
+
+// reconcileOneCandidate 处理单个候选源（原 ReconcileRoundNow 循环体抽成方法，continue → return）：
+// 调用方在**每次调用后**推进游标（逐源检查点）⇒ 已完成源不重做、未完成源下轮从断点续做。
+func (m *Manager) reconcileOneCandidate(roundCtx context.Context, candidate reconcileCandidate, queryCfg ReconcileConfig, result *ReconcileRoundResult) {
+	// VL 未就绪：本轮不判、更不重发——「不可信查询不重发」的既有取舍同样适用于「端点不可用」，
+	// 而且把必然失败的重发挡在门外（2026-10-03 现场：worker 与 VL 同步重启时对账抢跑）。
+	if err := m.ensureVLReady(roundCtx, candidate.source); err != nil {
+		result.Errors = appendReconcileError(result.Errors, "vl_not_ready:"+candidate.key+":"+err.Error())
+		return
+	}
+	expectation, err := m.canonicalDayCounts(candidate.key, candidate.source)
+	if err != nil {
+		result.Errors = appendReconcileError(result.Errors, "canonical_counts:"+err.Error())
+		return
+	}
+	result.CheckedSources++
+	if len(expectation.Days) == 0 {
+		// 空源（无非空天）：没有可对账的面，既不计缺失也不重发。
+		result.Skipped++
+		return
+	}
+	report := m.reconcileWithExpectation(roundCtx, candidate.source, candidate.key, expectation, queryCfg)
+	result.CheckedDays += len(report.Days)
+	switch {
+	case report.Fallback:
+		// 查询不可信：不重发（见文件头说明），记错误等下一轮重新判定。
+		result.Errors = appendReconcileError(result.Errors,
+			"reconcile_untrusted:"+candidate.key+":"+report.FallbackReason)
+	case len(report.MissingDays) == 0:
+		result.Skipped++
+	default:
+		for _, day := range report.MissingDays {
+			result.Missing = append(result.Missing, candidate.key+":"+day)
+		}
+		sort.Strings(result.Missing)
+		if err := m.replayMissingDays(candidate.source, report.MissingDays); err != nil {
+			result.Errors = appendReconcileError(result.Errors,
+				"replay_failed:"+candidate.key+":"+err.Error())
+			return
+		}
+		result.ResentSources++
+		result.ResentDays += len(report.MissingDays)
+	}
 }
 
 // appendReconcileError 追加一条错误分类（有界，超出部分只累计计数）。
@@ -312,8 +322,29 @@ func (m *Manager) nextReconcileCandidates(limit int) []reconcileCandidate {
 		key := keys[(m.reconcileLoopCursor+i)%len(keys)]
 		out = append(out, reconcileCandidate{key: key, source: m.sources[key]})
 	}
-	m.reconcileLoopCursor = (m.reconcileLoopCursor + count) % len(keys)
+	// **取候选只读、不推进游标**（2026-10-03 检查点化修复）：原实现在"取走候选"时就前进 8，
+	// 而轮预算（45s，深积压下单源即可吃满）常常只完成 0–1 个源 ⇒ 未处理的 7–8 个源**被跳过**，
+	// 要等整圈（⌈源数/8⌉ 轮）才再被取到——"取消即失"的实质。现在游标改由
+	// advanceReconcileCursor 在**每个源处理结束后**逐源推进 ⇒ 取消时停在"第一个未处理源"，
+	// 已完成的不重做、未完成的下一轮继续（跨轮累积覆盖 ✓）。
 	return out
+}
+
+// advanceReconcileCursor 在**单个源处理结束后**推进游标一格（逐源检查点，替代"取即推进"）。
+func (m *Manager) advanceReconcileCursor() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	keys := make([]string, 0, len(m.pipes))
+	for key := range m.pipes {
+		if _, ok := m.sources[key]; !ok {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
+		return
+	}
+	m.reconcileLoopCursor = (m.reconcileLoopCursor + 1) % len(keys)
 }
 
 // reconcileDayCountsCache 是「该源按 UTC 天的权威条数」的进程内缓存。
