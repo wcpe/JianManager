@@ -540,6 +540,22 @@ func (d *daemonStrategy) State() InstanceState {
 
 // Close 断开与 wrapper 的连接，不杀游戏服（daemon 优雅退出语义）。
 // wrapper 进程继续托管 Java，Worker 重启后可 reconnect。
+// waitReadLoopsBounded 有界等待 readWg 归零：Wait 本身无 deadline ✓ ⇒ 旁路 goroutine + time.After ✓；
+// 超时返回 false 并由调用方强关连接（**不无界等待** ✗）；goroutine 随 Wait 返回自然结束 ✓。
+func waitReadLoopsBounded(wg *sync.WaitGroup, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 func (d *daemonStrategy) Close() error {
 	d.mu.Lock()
 	if d.closed {
@@ -587,6 +603,25 @@ func (d *daemonStrategy) Reconnect(addr string) error {
 	conn, err := daemon.Dial(addr)
 	if err != nil {
 		return fmt.Errorf("reconnect wrapper 失败: %w", err)
+	}
+	// ② **先停旧环**（P0 ✓）：Reconnect 过去只起新环、不停旧环 ⇒ 双环并行 ⇒ 旧环继续从失效 conn 读帧，
+	// 经 onOutput → EmitOutput → dispatch 扇出，与订阅者取消订阅竞争 ⇒ send on closed channel ✗。
+	// 顺序（**任何一步都不无界** ✓）：① 短锁取旧 conn 快照 ✓；② 关旧 conn（停止信号 ✓：读必失败 ⇒ 旧环退出 ✓）；
+	// ③ **不持 d.mu** 做有界 Wait（照 Close(543-559) 范式 ✓，Wait 无 deadline ⇒ 旁路 goroutine + time.After ✓）；
+	// ④ 才进临界区注册新环（closed=false + Add(1) 同临界区 ✓，正是既有 507-510 纪律 ✓）。
+	d.mu.Lock()
+	oldConn := d.conn
+	d.mu.Unlock()
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+	if !waitReadLoopsBounded(&d.readWg, 3*time.Second) {
+		// 超时 ⇒ 强关一次旧 conn 再短等（仍不无界 ✗）；此后照常起新环 ⇒ 旧环若仍在，输出可能重复 ✓
+		// ⇒ 由"无重复输出"验证项直接观测 ✓（不掩盖 ✗）。
+		if oldConn != nil {
+			_ = oldConn.Close()
+		}
+		_ = waitReadLoopsBounded(&d.readWg, time.Second)
 	}
 	d.mu.Lock()
 	d.conn = conn

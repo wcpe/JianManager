@@ -217,6 +217,10 @@ func (s *Server) SetArtifactCache(c *artifactcache.Cache) {
 	s.cache = c
 }
 
+// dispatchHook 是**测试专用**钩子：在"取快照之后、发送之前"被调用（默认 nil ⇒ 生产零开销 ✓），
+// 用于确定性复现"快照与取消订阅并发"这一竞争（CI 长期防回归 ✓）。
+var dispatchHook func()
+
 // dispatch 把一条内部事件非阻塞地扇出给所有 StreamInstanceEvents 订阅者。
 // 订阅者消费太慢则丢弃，绝不阻塞产生方（状态回调或进程输出回调）。
 func (s *Server) dispatch(evt instanceEvent) {
@@ -224,6 +228,9 @@ func (s *Server) dispatch(evt instanceEvent) {
 	subs := make([]chan instanceEvent, len(s.eventSubs))
 	copy(subs, s.eventSubs)
 	s.eventMu.Unlock()
+	if dispatchHook != nil {
+		dispatchHook() // 测试专用（nil 时零开销 ✓）：快照与发送之间的确定性注入点 ✓
+	}
 	for _, ch := range subs {
 		select {
 		case ch <- evt:
