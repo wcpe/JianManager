@@ -368,6 +368,9 @@ type Manager struct {
 	// insert 之后调用 ⇒ 立即探测必然全落在地板内（0/0.2/0.6s 三次白探）；等到地板后再探 ⇒
 	// 首探即命中。≤0 = 关（默认关）。
 	verifyVisibilityFloor time.Duration
+	// reconcileLockBudget 覆盖「取候选等 m.mu」的有界上限（0 用默认常量
+	// reconcileCandidateLockBudget；测试用小值走真实限额路径，与 SetReconcileLoopConfig 同风格）。
+	reconcileLockBudget time.Duration
 	// verifyRoundDeadline 是本轮的校验截止时刻（unix nanos；0 表示不限，用于非轮内调用路径）。
 	verifyRoundDeadline atomic.Int64
 	// verifySourceBudget 是**每源**的校验预算状态（key = "logSourceID/generation"）：
@@ -6232,6 +6235,14 @@ func (m *Manager) VerifyDeferredCount() int64 {
 		return 0
 	}
 	return m.verifyDeferred.Load()
+}
+
+// reconcileLockBudgetOf 返回生效的「取候选等 m.mu」有界上限（≤0 用默认常量）。
+func (m *Manager) reconcileLockBudgetOf() time.Duration {
+	if m != nil && m.reconcileLockBudget > 0 {
+		return m.reconcileLockBudget
+	}
+	return reconcileCandidateLockBudget
 }
 
 // verifyVisibilityFloorOf 返回生效的"可见性错开"等待（≤0 = 关）。

@@ -49,6 +49,9 @@ const (
 	// 为什么会超预算：单源对账要重建该源权威集合（O(段行数)，生产单源段可达数十万行）。
 	// 预算到期即停止本轮剩余源（其判定留给下一轮轮转），绝不因为「没来得及对账」而误判缺失。
 	reconcileLoopDefaultRoundBudget = 45 * time.Second
+	// reconcileCandidateLockBudget 是"取候选等 m.mu"的**有界上限**（2026-10-04 收敛加速器）：
+	// 超过即本轮放弃并留痕 `candidate_lock_timeout`（下一轮再来）——避免"等锁吃掉整轮预算"。
+	reconcileCandidateLockBudget = 5 * time.Second
 	// reconcileLoopDefaultMaxSources 是单轮对账的源数上限（轮转覆盖，逐步推进）。
 	//
 	// 为什么轮转而不是每轮全源：全源 × 全量的本地重建成本随源数与段长度线性增长，
@@ -199,7 +202,15 @@ func (m *Manager) ReconcileRoundNow(ctx context.Context) ReconcileRoundResult {
 	if m == nil {
 		return result
 	}
-	cfg := m.reconcileLoopConfig()
+	cfg, okCfg := m.reconcileLoopConfigBounded(m.reconcileLockBudgetOf())
+	if !okCfg {
+		// 锁紧张：本轮快速放弃（与候选同口径留痕）——预算与「轮」都不为等锁买单。
+		result.Errors = appendReconcileError(result.Errors, "config_lock_timeout")
+		result.Duration = time.Since(started)
+		m.recordReconcileRound(result)
+		m.logReconcileRound(result)
+		return result
+	}
 	if !cfg.Enabled {
 		// 关闭即不跑：连统计都不推进，保证「关闭」与「跑过但无结论」可区分。
 		return result
@@ -207,11 +218,20 @@ func (m *Manager) ReconcileRoundNow(ctx context.Context) ReconcileRoundResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// **先取候选（有界等待 m.mu；等锁不吃轮预算），再建立轮预算** —— 2026-10-04 收敛加速器：
+	// 原序在等锁**之前**建立 roundCtx ⇒ 深积压下等锁数分钟把整轮预算吃光、拿锁时已过期
+	// ⇒ 循环头立即 break（"轮从未开始"，checked=0）——总根源与 duration 波动之源均在此。
+	candidates, ok := m.nextReconcileCandidatesBounded(cfg.MaxSourcesPerRound, m.reconcileLockBudgetOf())
+	if !ok {
+		result.Errors = appendReconcileError(result.Errors, "candidate_lock_timeout")
+		result.Duration = time.Since(started)
+		m.recordReconcileRound(result)
+		m.logReconcileRound(result)
+		return result
+	}
+	result.Candidates = len(candidates)
 	roundCtx, cancel := context.WithTimeout(ctx, cfg.RoundBudget)
 	defer cancel()
-
-	candidates := m.nextReconcileCandidates(cfg.MaxSourcesPerRound)
-	result.Candidates = len(candidates)
 	// 单源超时/查询超时与启动版共用同一套读数；但**启用开关独立**——常驻对账的开关是
 	// ReconcileLoopConfig.Enabled（见 RunReconcileLoop 入口），不能让启动对账的关闭
 	// （应急逃生口 log_reconcile.enabled=false）连带把常驻对账的每轮都判成"未启用"。
@@ -296,9 +316,41 @@ type reconcileCandidate struct {
 //
 // 轮转游标存在 Manager 上（进程内状态）：每轮从上次结束处继续，保证「无论源多少、
 // 每轮成本有界」与「所有源都会被覆盖到」两条同时成立。
+// nextReconcileCandidates 取候选（加锁版；既有调用方与测试沿用）。
 func (m *Manager) nextReconcileCandidates(limit int) []reconcileCandidate {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.nextReconcileCandidatesLocked(limit)
+}
+
+// nextReconcileCandidatesBounded 有界获取候选：m.mu 上最多等 lockBudget（TryLock 轮询）。
+//
+// 为什么（2026-10-04 收敛加速器 ✓）：原 `nextReconcileCandidates` **无界等 m.mu**（深积压下实测
+// 4m38s——"长持 m.mu 的规划者"，与 runtime.go 同源诊断一致），而轮预算（`roundCtx`，45s）在
+// **取候选之前**建立 ⇒ 等锁时间把整轮预算吃光、拿到锁时 ctx 已过期 ⇒ 循环头立即 break
+// （checked=0、detail 仅 `round_budget_exhausted`）——**"轮从未开始"的总根源**、duration 波动的
+// 直接来源。现在：等锁**有界**且**不消耗轮预算**（roundCtx 移到取候选之后），锁长期紧张时本轮
+// 快速放弃并留痕 `candidate_lock_timeout`（下一轮再来），预算全数花在"处理源"上 ✓。
+func (m *Manager) nextReconcileCandidatesBounded(limit int, lockBudget time.Duration) ([]reconcileCandidate, bool) {
+	if lockBudget <= 0 {
+		return m.nextReconcileCandidates(limit), true
+	}
+	deadline := time.Now().Add(lockBudget)
+	for {
+		if m.mu.TryLock() {
+			out := m.nextReconcileCandidatesLocked(limit)
+			m.mu.Unlock()
+			return out, true
+		}
+		if !time.Now().Before(deadline) {
+			return nil, false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// nextReconcileCandidatesLocked 是持锁主体（调用方必须已持 m.mu）。
+func (m *Manager) nextReconcileCandidatesLocked(limit int) []reconcileCandidate {
 	keys := make([]string, 0, len(m.pipes))
 	for key := range m.pipes {
 		if _, ok := m.sources[key]; !ok {
@@ -516,6 +568,29 @@ func (m *Manager) replayMissingDays(source SourceConfig, missingDays []string) e
 }
 
 // reconcileLoopConfig 返回常驻对账配置快照（未启用时 Enabled=false，调用方据此完全不跑）。
+// reconcileLoopConfigBounded 有界读取常驻对账配置（锁紧张时 ≤lockBudget 返回 ok=false）。
+//
+// 为什么（2026-10-04 收敛加速器配套）：`reconcileLoopConfig` 取 m.mu 亦无界——深积压下"读配置"
+// 这一步就会吃掉数十秒到数分钟 ⇒ 即使"取候选"有界，轮整体仍无界。配置读取纳入同一有界预算后，
+// "轮被锁挡住"有了确定上界且留痕可观测（config_lock_timeout）。
+func (m *Manager) reconcileLoopConfigBounded(lockBudget time.Duration) (ReconcileLoopConfig, bool) {
+	if m == nil {
+		return ReconcileLoopConfig{}, true
+	}
+	deadline := time.Now().Add(lockBudget)
+	for {
+		if m.mu.TryLock() {
+			cfg := m.reconcileLoop
+			m.mu.Unlock()
+			return cfg, true
+		}
+		if !time.Now().Before(deadline) {
+			return ReconcileLoopConfig{}, false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (m *Manager) reconcileLoopConfig() ReconcileLoopConfig {
 	if m == nil {
 		return ReconcileLoopConfig{}
@@ -543,7 +618,12 @@ func (m *Manager) recordReconcileRound(result ReconcileRoundResult) {
 	if m == nil {
 		return
 	}
-	m.mu.Lock()
+	// **TryLock：拿不到即跳过本次统计更新**（2026-10-04 收敛加速器配套）——本方法在"锁紧张"的
+	// 快速放弃路径上被调用；若用无界 Lock，会把"有界返回"重新变成无界（实测 202ms → 1.0s ✗）。
+	// 代价：锁紧张时少记一次累计（观测面损失，可接受；轮打点仍在日志里 ✓）。
+	if !m.mu.TryLock() {
+		return
+	}
 	defer m.mu.Unlock()
 	stats := m.reconcileLoopStats
 	stats.Rounds++
