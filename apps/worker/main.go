@@ -1433,7 +1433,10 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 			// ⇒ 从此**任何新增导出必须同批带可达面 + 可达性红证** ✓）。
 			// 只打**非零**项 ✓（避免刷屏 ✗）。
 			st := manager.ResumeSweepStats()
-			if st.SkipBackpressure > 0 || st.SkipHysteresis > 0 || st.SkipEnumeration > 0 || st.Revived > 0 {
+			// **无条件打点**（用户 2026-10-05 现场第 5 次"不可达"变体 ✓）：原来有 `if …Revived>0` 之门 ✗
+			// ⇒ 环挂住/空闲时**整行都不打** ⇒ "没有行"与"环挂了"在外部**无法区分** ✗✗。
+			// 心跳的意义就是"**无需其它任何计数即可判读**" ✓ ⇒ 只要环跑过就每分钟打一行（ticks 不涨即环停 ✓）。
+			if st.SweepTicks > 0 {
 				slog.Info("兜底环读数",
 					"ticks", st.SweepTicks, "panics", st.SweepPanics, // 门哨兵：ticks 不涨 ⇒ 环停了 ✓
 					"eligible", st.EligibleNow, // gauge：合格暂停源总数 ⇒ 与累计 candidates 并读看出覆盖进度 ✓
