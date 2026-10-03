@@ -163,6 +163,97 @@ type ReconcileRoundResult struct {
 // maxReconcileRoundErrors 限制单轮错误列表长度（观测日志不得被错误风暴淹没）。
 const maxReconcileRoundErrors = 16
 
+// reconcileView 是"对账只读视图"（候选 1，2026-10-04 父级裁定）：keys（有效源键，已排序）与
+// sources（同一时刻副本）的**一致快照**，由持锁写侧重建、atomic 发布，读侧零取 m.mu。
+//
+// 为什么必须"同代"（本候选最关键约束，防误重发）：对账用 candidate.source 查询并对缺失重发；
+// 若 sources 陈旧（源已换代）而 keys 新鲜，会"用旧代次查 VL ⇒ 查不到 ⇒ 误判缺失 ⇒ 误重发"。
+// keys 与 sources 在同一持锁临界区内复制 ⇒ 二者必同代 ✓。
+type reconcileView struct {
+	keys    []string
+	sources map[string]SourceConfig
+}
+
+const (
+	// reconcileViewTTL 是视图有效期（2×默认 interval=15min）：对账首轮超时也不致空窗——
+	// 采集链会持续刷新视图（见 pollOnce/源变更发布点）。
+	reconcileViewTTL = 30 * time.Minute
+	// reconcileViewMinInterval 是发布节流：高频持锁路径内距上次发布过近则跳过重建，控成本。
+	reconcileViewMinInterval = 5 * time.Second
+)
+
+// publishReconcileViewLocked 在持锁状态下重建并发布视图（调用方必须已持 m.mu）。
+// force=true 用于"源集合变更"（必须立即反映）；否则按 reconcileViewMinInterval 节流。
+func (m *Manager) publishReconcileViewLocked(force bool) {
+	if m == nil {
+		return
+	}
+	if !force {
+		last := m.reconcileViewPublishedAt.Load()
+		if last != 0 && time.Since(time.Unix(0, last)) < reconcileViewMinInterval {
+			return
+		}
+	}
+	keys := make([]string, 0, len(m.pipes))
+	for key := range m.pipes {
+		if _, ok := m.sources[key]; !ok {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	sources := make(map[string]SourceConfig, len(keys))
+	for _, key := range keys {
+		sources[key] = m.sources[key]
+	}
+	m.reconcileViewSnapshot.Store(&reconcileView{keys: keys, sources: sources})
+	m.reconcileViewPublishedAt.Store(time.Now().UnixNano())
+}
+
+// currentReconcileView 返回当前视图（零锁 Load）；超过 TTL 视为不可用（回退持锁路径）。
+func (m *Manager) currentReconcileView() *reconcileView {
+	if m == nil {
+		return nil
+	}
+	v, _ := m.reconcileViewSnapshot.Load().(*reconcileView)
+	if v == nil {
+		return nil
+	}
+	at := m.reconcileViewPublishedAt.Load()
+	if at == 0 || time.Since(time.Unix(0, at)) > reconcileViewTTL {
+		return nil
+	}
+	return v
+}
+
+// nextReconcileCandidatesFromView 用只读视图构造候选（零取 m.mu；候选 1 主路径）。
+// 返回 ok=false 表示视图不可用（未发布/过期），调用方应回退到持锁路径。
+func (m *Manager) nextReconcileCandidatesFromView(limit int) ([]reconcileCandidate, bool) {
+	view := m.currentReconcileView()
+	if view == nil {
+		return nil, false
+	}
+	if len(view.keys) == 0 {
+		return nil, true
+	}
+	cur := int(m.reconcileLoopCursor.Load())
+	if cur >= len(view.keys) || cur < 0 {
+		cur = 0
+		m.reconcileLoopCursor.Store(0)
+	}
+	count := limit
+	if count <= 0 || count > len(view.keys) {
+		count = len(view.keys)
+	}
+	out := make([]reconcileCandidate, 0, count)
+	for i := 0; i < count; i++ {
+		key := view.keys[(cur+i)%len(view.keys)]
+		out = append(out, reconcileCandidate{key: key, source: view.sources[key]})
+	}
+	m.reconcileCursorKeySnapshot.Store(view.keys[cur])
+	return out, true
+}
+
 // RunReconcileLoop 常驻对账循环：按 interval 周期执行一轮对账，直到 ctx 结束。
 //
 // 与采集轮共用同一 ctx 生命周期（见 Manager.Start 的启动点）；关闭配置时立即返回
@@ -349,6 +440,11 @@ func (m *Manager) nextReconcileCandidates(limit int) []reconcileCandidate {
 // 直接来源。现在：等锁**有界**且**不消耗轮预算**（roundCtx 移到取候选之后），锁长期紧张时本轮
 // 快速放弃并留痕 `candidate_lock_timeout`（下一轮再来），预算全数花在"处理源"上 ✓。
 func (m *Manager) nextReconcileCandidatesBounded(limit int, lockBudget time.Duration) ([]reconcileCandidate, bool) {
+	// **候选 1 主路径（2026-10-04）**：只读视图零取锁 —— 锁被长持时对账仍能推进（视图由采集链
+	// 与源变更持续刷新）。视图不可用（未发布/过期）时才回退到下面的有界 TryLock 路径。
+	if out, ok := m.nextReconcileCandidatesFromView(limit); ok {
+		return out, true
+	}
 	if lockBudget <= 0 {
 		return m.nextReconcileCandidates(limit), true
 	}
@@ -356,6 +452,7 @@ func (m *Manager) nextReconcileCandidatesBounded(limit int, lockBudget time.Dura
 	for {
 		if m.mu.TryLock() {
 			out := m.nextReconcileCandidatesLocked(limit)
+			m.publishReconcileViewLocked(false) // 顺带刷新只读视图（节流）
 			m.mu.Unlock()
 			return out, true
 		}
@@ -379,8 +476,10 @@ func (m *Manager) nextReconcileCandidatesLocked(limit int) []reconcileCandidate 
 	if len(keys) == 0 {
 		return nil
 	}
-	if m.reconcileLoopCursor >= len(keys) || m.reconcileLoopCursor < 0 {
-		m.reconcileLoopCursor = 0
+	cur := int(m.reconcileLoopCursor.Load())
+	if cur >= len(keys) || cur < 0 {
+		cur = 0
+		m.reconcileLoopCursor.Store(0)
 	}
 	count := limit
 	if count <= 0 || count > len(keys) {
@@ -388,11 +487,11 @@ func (m *Manager) nextReconcileCandidatesLocked(limit int) []reconcileCandidate 
 	}
 	out := make([]reconcileCandidate, 0, count)
 	for i := 0; i < count; i++ {
-		key := keys[(m.reconcileLoopCursor+i)%len(keys)]
+		key := keys[(cur+i)%len(keys)]
 		out = append(out, reconcileCandidate{key: key, source: m.sources[key]})
 	}
 	// 无锁快照：游标当前所指源（供"锁超时"快速放弃路径带进度，见 reconcileCursorKeySnapshot）。
-	m.reconcileCursorKeySnapshot.Store(keys[m.reconcileLoopCursor])
+	m.reconcileCursorKeySnapshot.Store(keys[cur])
 	// **取候选只读、不推进游标**（2026-10-03 检查点化修复）：原实现在"取走候选"时就前进 8，
 	// 而轮预算（45s，深积压下单源即可吃满）常常只完成 0–1 个源 ⇒ 未处理的 7–8 个源**被跳过**，
 	// 要等整圈（⌈源数/8⌉ 轮）才再被取到——"取消即失"的实质。现在游标改由
@@ -403,6 +502,16 @@ func (m *Manager) nextReconcileCandidatesLocked(limit int) []reconcileCandidate 
 
 // advanceReconcileCursor 在**单个源处理结束后**推进游标一格（逐源检查点，替代"取即推进"）。
 func (m *Manager) advanceReconcileCursor() {
+	// 候选 1：优先用只读视图零锁推进；无视图时回退持锁（并顺带发布视图）。
+	if view := m.currentReconcileView(); view != nil {
+		if len(view.keys) == 0 {
+			return
+		}
+		next := (int(m.reconcileLoopCursor.Load()) + 1) % len(view.keys)
+		m.reconcileLoopCursor.Store(int64(next))
+		m.reconcileCursorKeySnapshot.Store(view.keys[next])
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	keys := make([]string, 0, len(m.pipes))
@@ -415,8 +524,10 @@ func (m *Manager) advanceReconcileCursor() {
 	if len(keys) == 0 {
 		return
 	}
-	m.reconcileLoopCursor = (m.reconcileLoopCursor + 1) % len(keys)
-	m.reconcileCursorKeySnapshot.Store(keys[m.reconcileLoopCursor])
+	next := (int(m.reconcileLoopCursor.Load()) + 1) % len(keys)
+	m.reconcileLoopCursor.Store(int64(next))
+	m.reconcileCursorKeySnapshot.Store(keys[next])
+	m.publishReconcileViewLocked(false)
 }
 
 // reconcileDayCountsCache 是「该源按 UTC 天的权威条数」的进程内缓存。
@@ -593,14 +704,36 @@ func (m *Manager) replayMissingDays(source SourceConfig, missingDays []string) e
 // 为什么（2026-10-04 收敛加速器配套）：`reconcileLoopConfig` 取 m.mu 亦无界——深积压下"读配置"
 // 这一步就会吃掉数十秒到数分钟 ⇒ 即使"取候选"有界，轮整体仍无界。配置读取纳入同一有界预算后，
 // "轮被锁挡住"有了确定上界且留痕可观测（config_lock_timeout）。
+// reconcileLoopConfigFromSnapshot 返回常驻对账配置快照（零锁）；未发布时 ok=false（回退持锁）。
+func (m *Manager) reconcileLoopConfigFromSnapshot() (ReconcileLoopConfig, bool) {
+	if m == nil {
+		return ReconcileLoopConfig{}, false
+	}
+	v := m.reconcileLoopCfgSnapshot.Load()
+	if v == nil {
+		return ReconcileLoopConfig{}, false
+	}
+	cfg, ok := v.(ReconcileLoopConfig)
+	if !ok {
+		return ReconcileLoopConfig{}, false
+	}
+	return cfg, true
+}
+
 func (m *Manager) reconcileLoopConfigBounded(lockBudget time.Duration) (ReconcileLoopConfig, bool) {
 	if m == nil {
 		return ReconcileLoopConfig{}, true
+	}
+	// **候选 1（2026-10-04）**：配置快照零锁直出 —— 配置只在启动/热更时写（写点即时发布），
+	// 锁紧张时"配置读"不再是对账轮的第一道坎（此前 config_lock_timeout 正是多轮停死的死因）。
+	if cfg, ok := m.reconcileLoopConfigFromSnapshot(); ok {
+		return cfg, true
 	}
 	deadline := time.Now().Add(lockBudget)
 	for {
 		if m.mu.TryLock() {
 			cfg := m.reconcileLoop
+			m.reconcileLoopCfgSnapshot.Store(cfg) // 首启兜底：读到即发布（此后零锁）
 			m.mu.Unlock()
 			return cfg, true
 		}
@@ -631,6 +764,7 @@ func (m *Manager) SetReconcileLoopConfig(cfg ReconcileLoopConfig) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reconcileLoop = cfg
+	m.reconcileLoopCfgSnapshot.Store(cfg) // 候选 1：变更即时发布（配置读从此零锁）
 }
 
 // recordReconcileRound 把单轮结论并入累计读数（G10 观测面的读数侧）。

@@ -417,8 +417,14 @@ type Manager struct {
 	// reconcileLoopStats / reconcileLoopCursor / reconcileDayCounts 是常驻对账的观测读数、
 	// 全源轮转游标与「按 UTC 天权威条数」缓存（见 reconcile_loop.go 的说明）。
 	reconcileLoopStats  ReconcileLoopStats
-	reconcileLoopCursor int
-	reconcileDayCounts  map[string]reconcileDayCountsCache
+	reconcileLoopCursor atomic.Int64 // 候选1：改为无锁游标（视图路径读写；对账单 goroutine 主导，丢失更新仅致幂等重做/跳过）
+	// reconcileViewSnapshot 是"对账只读视图"（候选 1，2026-10-04）：keys+sources 同代快照，
+	// 持锁写侧重建、atomic 发布；对账读侧零取 m.mu（发布点：源变更 force + 采集链/对账节流）。
+	reconcileViewSnapshot atomic.Value // *reconcileView
+	// reconcileLoopCfgSnapshot 是常驻对账配置的快照（候选 1）：写点即时发布 ⇒ 配置读零锁。
+	reconcileLoopCfgSnapshot atomic.Value // ReconcileLoopConfig
+	reconcileViewPublishedAt atomic.Int64 // UnixNano
+	reconcileDayCounts       map[string]reconcileDayCountsCache
 	// indexPrune 是历史投递批次裁剪的生效配置（已归一化，默认开启）：建每个源的账本时下发
 	// （ledger.SetDeliveryBatchPrune）。裁剪发生在账本写路径内，因此配置必须落在账本上，
 	// 而不是落库前再过滤一遍——后者只能让库变小，内存仍会随总量线性增长。
@@ -2030,6 +2036,7 @@ func (m *Manager) Register(source SourceConfig) error {
 	}
 	m.sources[key] = source
 	m.pipes[key] = p
+	m.publishReconcileViewLocked(true) // 源集合变更：立即发布对账只读视图（候选 1）
 	// 归档归属闸（2026-10-02）：把「跨代次归属注册表」接到本源的导入器上。
 	// 缺了它，归档导入只能假设"属于当前代次"——那是静默重复的入口。
 	p.SetArchiveOwnerRegistry(m.archiveOwnerLookup())
@@ -2285,6 +2292,7 @@ func (m *Manager) pollOnce() {
 		pipes = append(pipes, sourcePipe{source: m.sources[key], pipe: p})
 	}
 	workers := m.pollConcurrency
+	m.publishReconcileViewLocked(false) // 采集轮：持续刷新对账只读视图（候选 1，节流发布）
 	m.mu.Unlock()
 	if workers <= 0 {
 		workers = defaultPollConcurrency
