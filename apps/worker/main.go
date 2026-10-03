@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof" // 冻结取证/堆剖面（P0 复盘 ✓，仅本机 ✓）
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -1148,6 +1149,14 @@ func runWorker() {
 	workerServer.SetPluginBridge(pluginBridge)
 
 	wsMux := http.NewServeMux()
+	// 冻结取证（P0 复盘 2026-10-03 ✓）：pprof 挂在**同一个 127.0.0.1 绑定的 mux** 上 ⇒ **不新增暴露面** ✓。
+	// 用途：① 冻结瞬间取 goroutine 栈（谁持 m.mu、卡在哪行、是否在 GC ✓）；② 堆剖面（稳态/空闲内存增长取证 ✓）。
+	// 注意：该面**无令牌**（与终端 WS 不同 ✗）⇒ 仅本机回环可达 ✓；如需更强，后续加令牌门（改进项 ✓）。
+	wsMux.HandleFunc("/debug/pprof/", pprof.Index)
+	wsMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	wsMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	wsMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	wsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	wsMux.HandleFunc("/ws/terminal", terminalServer.Handler())
 	wsMux.HandleFunc("/ws/plugin-bridge", pluginBridge.Handler())
 
