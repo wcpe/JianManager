@@ -371,6 +371,9 @@ type Manager struct {
 	// reconcileLockBudget 覆盖「取候选等 m.mu」的有界上限（0 用默认常量
 	// reconcileCandidateLockBudget；测试用小值走真实限额路径，与 SetReconcileLoopConfig 同风格）。
 	reconcileLockBudget time.Duration
+	// reconcileCursorKeySnapshot 是"对账游标当前所指源 key"的**无锁快照**（2026-10-04）：
+	// 供"锁超时"快速放弃路径在不取 m.mu 的前提下带上"已推进到哪"，解除点名掩蔽（父级裁定 ①）。
+	reconcileCursorKeySnapshot atomic.Value // string
 	// verifyRoundDeadline 是本轮的校验截止时刻（unix nanos；0 表示不限，用于非轮内调用路径）。
 	verifyRoundDeadline atomic.Int64
 	// verifySourceBudget 是**每源**的校验预算状态（key = "logSourceID/generation"）：

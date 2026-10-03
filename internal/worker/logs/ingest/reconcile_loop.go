@@ -205,7 +205,7 @@ func (m *Manager) ReconcileRoundNow(ctx context.Context) ReconcileRoundResult {
 	cfg, okCfg := m.reconcileLoopConfigBounded(m.reconcileLockBudgetOf())
 	if !okCfg {
 		// 锁紧张：本轮快速放弃（与候选同口径留痕）——预算与「轮」都不为等锁买单。
-		result.Errors = appendReconcileError(result.Errors, "config_lock_timeout")
+		result.Errors = appendReconcileError(result.Errors, "config_lock_timeout@cursor="+m.reconcileCursorKeyOfSnapshot())
 		result.Duration = time.Since(started)
 		m.recordReconcileRound(result)
 		m.logReconcileRound(result)
@@ -223,7 +223,7 @@ func (m *Manager) ReconcileRoundNow(ctx context.Context) ReconcileRoundResult {
 	// ⇒ 循环头立即 break（"轮从未开始"，checked=0）——总根源与 duration 波动之源均在此。
 	candidates, ok := m.nextReconcileCandidatesBounded(cfg.MaxSourcesPerRound, m.reconcileLockBudgetOf())
 	if !ok {
-		result.Errors = appendReconcileError(result.Errors, "candidate_lock_timeout")
+		result.Errors = appendReconcileError(result.Errors, "candidate_lock_timeout@cursor="+m.reconcileCursorKeyOfSnapshot())
 		result.Duration = time.Since(started)
 		m.recordReconcileRound(result)
 		m.logReconcileRound(result)
@@ -317,6 +317,23 @@ type reconcileCandidate struct {
 // 轮转游标存在 Manager 上（进程内状态）：每轮从上次结束处继续，保证「无论源多少、
 // 每轮成本有界」与「所有源都会被覆盖到」两条同时成立。
 // nextReconcileCandidates 取候选（加锁版；既有调用方与测试沿用）。
+// reconcileCursorKeyOfSnapshot 返回"对账游标当前所指源"的**无锁快照**（未初始化时空串）。
+//
+// 为什么无锁（2026-10-04 父级裁定 ①）：`config_lock_timeout`/`candidate_lock_timeout` 的快速
+// 放弃路径**拿不到 m.mu**——若在这里读游标又会阻塞，观测面重新回到"只剩错误码、点名被掩蔽"。
+// 快照由持锁路径在"取候选/推进游标"时写入（atomic.Value），读侧零依赖、零阻塞 ✓。
+func (m *Manager) reconcileCursorKeyOfSnapshot() string {
+	if m == nil {
+		return ""
+	}
+	v := m.reconcileCursorKeySnapshot.Load()
+	if v == nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
 func (m *Manager) nextReconcileCandidates(limit int) []reconcileCandidate {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -374,6 +391,8 @@ func (m *Manager) nextReconcileCandidatesLocked(limit int) []reconcileCandidate 
 		key := keys[(m.reconcileLoopCursor+i)%len(keys)]
 		out = append(out, reconcileCandidate{key: key, source: m.sources[key]})
 	}
+	// 无锁快照：游标当前所指源（供"锁超时"快速放弃路径带进度，见 reconcileCursorKeySnapshot）。
+	m.reconcileCursorKeySnapshot.Store(keys[m.reconcileLoopCursor])
 	// **取候选只读、不推进游标**（2026-10-03 检查点化修复）：原实现在"取走候选"时就前进 8，
 	// 而轮预算（45s，深积压下单源即可吃满）常常只完成 0–1 个源 ⇒ 未处理的 7–8 个源**被跳过**，
 	// 要等整圈（⌈源数/8⌉ 轮）才再被取到——"取消即失"的实质。现在游标改由
@@ -397,6 +416,7 @@ func (m *Manager) advanceReconcileCursor() {
 		return
 	}
 	m.reconcileLoopCursor = (m.reconcileLoopCursor + 1) % len(keys)
+	m.reconcileCursorKeySnapshot.Store(keys[m.reconcileLoopCursor])
 }
 
 // reconcileDayCountsCache 是「该源按 UTC 天的权威条数」的进程内缓存。
