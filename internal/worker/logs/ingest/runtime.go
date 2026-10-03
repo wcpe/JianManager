@@ -5384,6 +5384,8 @@ type ResumeSweepStats struct {
 	SweepPanics int64
 	// EligibleNow 是**合格暂停源总数（gauge，不是累计 ✓）**；与 Candidates（累计）并读即知覆盖进度 ✓。
 	EligibleNow int64
+	// SkipBlocked：因**有界等待超时**而跳过的步数（现场据此判"是否被 m.mu 之类的长持有挡住" ✓）。
+	SkipBlocked int64
 }
 
 func (m *Manager) ResumeSweepStats() ResumeSweepStats {
@@ -5401,6 +5403,7 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		SweepTicks:       m.sweepTicks.Load(),
 		SweepPanics:      m.sweepPanics.Load(),
 		EligibleNow:      m.sweepEligibleNow.Load(),
+		SkipBlocked:      m.skipBlocked.Load(),
 	}
 }
 
