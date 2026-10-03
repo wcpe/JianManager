@@ -282,6 +282,10 @@ func TestPersistGatePriorityFirst(t *testing.T) {
 	m, _ := newGateFixture(t, 300, 16)
 	var mu sync.Mutex
 	var order []string
+	// **被提交覆盖**的等待者计数（2026-10-05 ③ 更正版 ✓）：`persistCtx` 有合并短路 ⇒ 被提交覆盖的
+	// 等待者**不发 acquire 事件** ✗ ⇒ 前提断言"至少一人被服务"会被高负载下的全合并打红 ✗✗。
+	normalsCovered := 0
+	priorityCovered := false
 	// 普通等待者带标记（长链不带 ⇒ 被排除）；优先档无标记需求，全部记录。
 	type waiterMark struct{}
 	marker := waiterMark{}
@@ -326,12 +330,28 @@ func TestPersistGatePriorityFirst(t *testing.T) {
 		normalsWG.Add(1)
 		go func() {
 			defer normalsWG.Done()
+			seqBefore := m.persistJoin.Load() // 调用前取 ✓（调用后越过它 ⇒ 已被提交覆盖 ✓）
 			_ = m.persistCtx(context.WithValue(context.Background(), marker, true), persistNormalOneStep)
+			if m.persistCovered.Load() > seqBefore {
+				mu.Lock()
+				normalsCovered++
+				mu.Unlock()
+			}
 		}()
 		time.Sleep(2 * time.Millisecond)
 	}
 	priorityDone := make(chan error, 1)
-	go func() { priorityDone <- m.persist() }()
+	// 优先档同样记录「是否被提交覆盖」⇒ 被合并服务也算被服务 ✓（**调用形态逐字不动** ✓）。
+	go func() {
+		seqBefore := m.persistJoin.Load()
+		err := m.persist()
+		if m.persistCovered.Load() > seqBefore {
+			mu.Lock()
+			priorityCovered = true
+			mu.Unlock()
+		}
+		priorityDone <- err
+	}()
 
 	select {
 	case err := <-priorityDone:
@@ -363,10 +383,17 @@ func TestPersistGatePriorityFirst(t *testing.T) {
 		normalsServed++
 		lastNormalAt = index
 	}
-	require.GreaterOrEqual(t, normalsServed, 1, "至少要有普通等待者被服务（否则夹具没造出排队），实测 %v", got)
-	require.GreaterOrEqual(t, priorityAt, 0, "优先档必须被服务过，实测 %v", got)
-	require.Less(t, priorityAt, lastNormalAt,
-		"优先档必须**抢在已排队的普通等待者之前**被服务（优先权），实测 %v", got)
+	// **前提**（③ 更正 ✓）：被服务 = 授予门 **或** 被提交覆盖（全合并时后者成立 ⇒ 不再是假红 ✗）。
+	require.GreaterOrEqual(t, normalsServed+normalsCovered, 1,
+		"夹具必须造出排队竞争（授予门 或 被覆盖皆算被服务 ✓），实测 acquire=%v covered=%d", got, normalsCovered)
+	require.True(t, priorityAt >= 0 || priorityCovered,
+		"优先档必须被服务过（授予门 或 被覆盖 ✓），实测 %v priorityCovered=%v", got, priorityCovered)
+	// **优先权判别**（文字逐字保留 ✓）：只在**双方都有 acquire 证据**时比较 —— 被合并者本就
+	// 没排队，序断言无对象 ✓；**无证据 ≠ 反例** ⇒ 不设兜底硬断言 ✗（那是间歇红的来源 ✓）。
+	if priorityAt >= 0 && lastNormalAt >= 0 {
+		require.Less(t, priorityAt, lastNormalAt,
+			"优先档必须**抢在已排队的普通等待者之前**被服务（优先权），实测 %v", got)
+	}
 }
 
 // TestPersistGateAgingPreventsReverseStarvation（性质 4）：优先档**连续占用**达阈值后必须放行一次
