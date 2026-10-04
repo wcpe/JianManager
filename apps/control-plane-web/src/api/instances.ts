@@ -97,6 +97,11 @@ export interface InstanceListParams {
 export interface InstanceSearchParams extends InstanceListParams {
   /** 名称子串搜索（FR-247）。 */
   q?: string
+  /**
+   * 按实例 uuid 精确查。用于把 URL 里的实例 uuid（下钻深链 `?instance=<uuid>`）解析成数字 id，
+   * 无需为此拉全量实例列表。
+   */
+  uuid?: string
   sort?: 'name' | 'status' | 'createdAt' | 'nodeId'
   order?: 'asc' | 'desc'
   page?: number
@@ -120,21 +125,48 @@ export interface InstanceAggregate {
   byStatus: Record<string, number>
   byNode: InstanceNodeCount[]
   byRole: Record<string, number>
+  /**
+   * 按进程类型（direct / daemon / docker / rcon）的计数，含全部枚举键零补。
+   * 有了它，统计页不必为一张「进程类型分布」图而拉全量实例列表。
+   */
+  byProcessType: Record<string, number>
 }
 
-/** 获取实例列表（有过过渡状态实例时自动轮询）。 */
-export function useInstances(params?: InstanceListParams) {
+/**
+ * 实例列表的兜底轮询间隔（FR-496 阶段 6 补丁）。
+ *
+ * 【为什么删掉了原先的「过渡态 2 秒轮询」】原实现是
+ * `some(STARTING || STOPPING) ? 2000 : false`，设计意图是「只在实例启停过程中加速刷新」。
+ * 它有两个致命问题：
+ *   1. **与 SSE 重复**。`api/events.ts` 的 `useInstanceEvents` 已经在推送 `state_change`
+ *      并 `invalidateQueries(['instances'])`，其注释写明定位就是「替代轮询方案」。
+ *      两套机制同时存在，等于每次状态变化都要走一遍推送 + 一遍轮询。
+ *   2. **条件可能永久为真**。真实环境里实例卡在 STARTING（启动超时、端口占用、OOM）
+ *      是常见故障，而非瞬时态；一旦如此，这些查询就退化为**永不停止的 2 秒轮询**。
+ *      实测（devmock 把 2/5 状态随机设为过渡态且不收敛）：静止无操作时 6 秒内仍产生
+ *      37 个请求、132 次 DOM 变更，每 2 秒触发约 440ms 的 React 渲染，页面持续发烫。
+ *
+ * 现在只留一个很长的兜底：SSE 是长连接，经代理/网关时仍可能被静默切断，
+ * 兜底保证「推送万一失效，状态最终仍会收敛」。30 秒一次的固定开销可忽略，
+ * 与原先动辄 2 秒一轮完全不是一个量级。
+ */
+const INSTANCE_FALLBACK_POLL_MS = 30_000
+
+/**
+ * 获取实例列表（状态变化由 SSE 推送，兜底见 INSTANCE_FALLBACK_POLL_MS）。
+ *
+ * `enabled` 用于抑制「只在特定视图下才需要」的调用：例如监控页仅在下钻到实例层时才需要
+ * 把 URL 里的实例 uuid 解析成 id，平台/节点层不该为这件事付千级全量列表的代价。
+ */
+export function useInstances(params?: InstanceListParams, enabled = true) {
   return useQuery({
     queryKey: ['instances', params],
+    enabled,
     queryFn: async () => {
       const { data } = await api.get<InstanceInfo[]>('/instances', { params })
       return data
     },
-    refetchInterval: (query) => {
-      const instances = query.state.data
-      if (instances?.some(i => i.status === 'STARTING' || i.status === 'STOPPING')) return 2000
-      return false
-    },
+    refetchInterval: INSTANCE_FALLBACK_POLL_MS,
   })
 }
 
@@ -147,11 +179,7 @@ export function useInstanceSearch(params: InstanceSearchParams = {}, enabled = t
       const { data } = await api.get<InstanceSearchResult>('/instances/search', { params })
       return data
     },
-    refetchInterval: (query) => {
-      const instances = query.state.data?.items
-      if (instances?.some(i => i.status === 'STARTING' || i.status === 'STOPPING')) return 2000
-      return false
-    },
+    refetchInterval: INSTANCE_FALLBACK_POLL_MS,
   })
 }
 
@@ -173,11 +201,7 @@ export function useInfiniteInstanceSearch(params: Omit<InstanceSearchParams, 'pa
       const loaded = lastPage.page * lastPage.pageSize
       return loaded < lastPage.total ? lastPage.page + 1 : undefined
     },
-    refetchInterval: (query) => {
-      const instances = query.state.data?.pages.flatMap((p) => p.items)
-      if (instances?.some(i => i.status === 'STARTING' || i.status === 'STOPPING')) return 2000
-      return false
-    },
+    refetchInterval: INSTANCE_FALLBACK_POLL_MS,
   })
 }
 
@@ -208,17 +232,17 @@ export function instanceQueryOptions(id: number) {
   })
 }
 
-/** 获取实例详情（过渡状态时自动轮询；FR-297 回切先呈现缓存后台刷新）。 */
+/**
+ * 获取实例详情（FR-297 回切先呈现缓存后台刷新）。
+ * 状态刷新同样走 SSE：`useInstanceEvents` 的 `invalidateQueries(['instances'])`
+ * 前缀匹配会命中本 query 的 `['instances', id]`，故这里也只留兜底间隔。
+ */
 export function useInstance(id: number) {
   return useQuery({
     ...instanceQueryOptions(id),
     enabled: !!id,
     placeholderData: keepPreviousData,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status
-      if (status === 'STARTING' || status === 'STOPPING') return 2000
-      return false
-    },
+    refetchInterval: INSTANCE_FALLBACK_POLL_MS,
   })
 }
 

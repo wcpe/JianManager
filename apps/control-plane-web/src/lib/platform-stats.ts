@@ -34,6 +34,22 @@ export function tallyBy<T>(
     .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
 }
 
+/**
+ * 把后端聚合返回的 `Record<string, number>`（如 byRole / byProcessType）转成分布桶。
+ *
+ * 与 `tallyBy` 的分工：后者从「明细列表」现算，前者直接消费后端已聚合好的计数。
+ * 需要展示实例维度的分布时优先用这个——不必为一张分布图拉全量实例列表
+ * （千级约 1MB/轮且带兜底轮询）。聚合对枚举键做了零补，故这里滤掉 0 值避免噪声。
+ */
+export function bucketsFromCounts(counts: Record<string, number> | undefined): DistBucket[] {
+  const entries = Object.entries(counts ?? {})
+  const total = entries.reduce((sum, [, n]) => sum + n, 0)
+  return entries
+    .filter(([, n]) => n > 0)
+    .map(([key, count]) => ({ key, count, pct: total > 0 ? count / total : 0 }))
+    .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
+}
+
 /** 探针连通汇总：可达/总数 + 比例（0~1；无后端时为 0）。 */
 export interface ProbeReachability {
   available: number

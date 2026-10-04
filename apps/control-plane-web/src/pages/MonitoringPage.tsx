@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router'
 import { AlertTriangle, GitBranch, Loader2, ShieldCheck } from 'lucide-react'
 import { useNodes } from '@/api/nodes'
-import { useInstances } from '@/api/instances'
+import { useInstanceSearch } from '@/api/instances'
 import { useBotRuntimeMetrics, useManagedProcessAction, useManagedProcessDetail, useMetricOverview, useMetricSeries, useProcessTop, type ManagedProcessAction, type ManagedProcessDetail, type ManagedProcessInfo, type ProcessTopItem } from '@/api/metrics'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -316,8 +316,18 @@ export default function MonitoringPage() {
   const { t } = useTranslation()
   const [searchParams] = useSearchParams()
   const { data: nodes } = useNodes()
-  const { data: instances } = useInstances()
   const [target, setTarget] = useState<DrillTarget>(() => targetFromSearch(searchParams))
+  /**
+   * 把 URL 里的实例 uuid 解析成数字 id（`useProcessTop` 要 id）。
+   *
+   * 用 `/instances/search?uuid=` 精确查一条，而不是拉全量实例再本地 find——后者在千级规模下
+   * 约 1MB/轮且带 30 秒兜底轮询，而这里每次只需要一个实例。
+   */
+  const resolvedInstanceUuid = target.kind === 'instance' ? target.uuid : ''
+  const { data: instancePage } = useInstanceSearch(
+    { uuid: resolvedInstanceUuid, page: 1, pageSize: 1 },
+    resolvedInstanceUuid !== '',
+  )
   // 页级范围 + 粒度（驱动概览/对比；主图网格各图另有独立范围，但共享该页级粒度）。
   const [range, setRange] = useState<MetricRange>('24h')
   const [resolution, setResolution] = useState<MetricResolution>('auto')
@@ -327,7 +337,7 @@ export default function MonitoringPage() {
   const [pendingAction, setPendingAction] = useState<ManagedProcessAction | null>(null)
 
   const tKey = targetKey(target)
-  const currentInstance = target.kind === 'instance' ? (instances ?? []).find((i) => i.uuid === target.uuid) : undefined
+  const currentInstance = instancePage?.items[0]
   const currentNode = target.kind === 'node' ? (nodes ?? []).find((node) => node.uuid === target.uuid) : undefined
   const currentNodeUUID = currentNode?.uuid
   const { data: processTop = [] } = useProcessTop({
@@ -405,7 +415,6 @@ export default function MonitoringPage() {
           target={target}
           onChange={onChangeTarget}
           nodes={nodes ?? []}
-          instances={instances ?? []}
           worlds={worlds}
         />
       </Panel>

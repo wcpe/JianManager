@@ -13,6 +13,11 @@ export interface BotInfo {
   id: number
   uuid: string
   instanceId: number
+  /**
+   * 实例展示名（后端已回填）。有了它，Bot 列表不必为了显示名字而拉全量实例列表。
+   * 实例被删时缺省，前端回退显示 #id。
+   */
+  instanceName?: string
   name: string
   status: string
   /** 最近一次委托 Worker 失败的原因（status=error 时非空，如 bot 依赖未装）。 */

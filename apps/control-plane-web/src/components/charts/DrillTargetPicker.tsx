@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- 与组件同文件导出类型/纯函数 targetKey，仅影响 Fast Refresh */
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { InstanceInfo } from '@/api/instances'
+import { InstancePicker } from '@/components/InstancePicker'
 import type { NodeInfo } from '@/api/nodes'
 
 /**
@@ -42,29 +43,33 @@ export function DrillTargetPicker({
   target,
   onChange,
   nodes,
-  instances,
   worlds,
 }: {
   target: DrillTarget
   onChange: (t: DrillTarget) => void
   nodes: NodeInfo[]
-  instances: InstanceInfo[]
   /** 当前实例的世界名列表（来自其分世界序列）；instance 层下钻到世界用。 */
   worlds: string[]
 }) {
   const { t } = useTranslation()
 
+  /**
+   * 实例名的本地缓存。
+   *
+   * 实例级下钻已改由 InstancePicker 走服务端搜索，不再由父级喂全量实例数组，因此面包屑里的
+   * 实例名只能来自「本次会话选中过的实例」。深链直接进入某实例（`?instance=<uuid>`）时缓存为空，
+   * 此时回退显示 uuid——不为此再拉一次全量实例列表。
+   */
+  const [instNames, setInstNames] = useState<Record<string, string>>({})
+
   const nodeOf = (uuid?: string) => nodes.find((n) => n.uuid === uuid)
-  const instOf = (uuid?: string) => instances.find((i) => i.uuid === uuid)
 
   // 面包屑各节点名。
   const curNodeUuid = target.kind === 'node' ? target.uuid : target.kind === 'instance' ? target.nodeUuid : undefined
   const curNode = nodeOf(curNodeUuid)
-  const curInst = target.kind === 'instance' ? instOf(target.uuid) : undefined
+  const curInstName = target.kind === 'instance' ? (instNames[target.uuid] ?? target.uuid) : ''
 
-  // node 层下钻到实例：仅列挂在该节点上的实例。
-  const nodeId = curNode?.id
-  const childInstances = instances.filter((i) => i.nodeId === nodeId)
+  // node 层的实例候选已交给 InstancePicker 按 nodeIdFilter 向服务端取，不再本地过滤全量数组。
 
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
@@ -85,15 +90,15 @@ export function DrillTargetPicker({
             />
           </>
         )}
-        {curInst && (
+        {target.kind === 'instance' && (
           <>
             <span className="text-muted-foreground/50">/</span>
             <Crumb
-              label={curInst.name}
-              active={target.kind === 'instance' && !target.world}
+              label={curInstName}
+              active={!target.world}
               onClick={
-                target.kind === 'instance' && target.world
-                  ? () => onChange({ kind: 'instance', uuid: curInst.uuid, nodeUuid: curNode?.uuid })
+                target.world
+                  ? () => onChange({ kind: 'instance', uuid: target.uuid, nodeUuid: curNode?.uuid })
                   : undefined
               }
             />
@@ -124,22 +129,19 @@ export function DrillTargetPicker({
         </select>
       )}
 
-      {target.kind === 'node' && childInstances.length > 0 && (
-        <select
-          aria-label={t('monitor.drill.toInstances')}
-          value=""
-          onChange={(e) =>
-            e.target.value && onChange({ kind: 'instance', uuid: e.target.value, nodeUuid: target.uuid })
-          }
-          className="h-7 rounded-md border bg-background px-2 text-xs"
-        >
-          <option value="">{t('monitor.drill.pickInstance')}</option>
-          {childInstances.map((i) => (
-            <option key={i.uuid} value={i.uuid}>
-              {i.name}
-            </option>
-          ))}
-        </select>
+      {target.kind === 'node' && (
+        <InstancePicker
+          uuidValue={null}
+          onUuidChange={(uuid, inst) => {
+            if (!uuid) return
+            if (inst) setInstNames((prev) => (prev[uuid] === inst.name ? prev : { ...prev, [uuid]: inst.name }))
+            onChange({ kind: 'instance', uuid, nodeUuid: target.uuid })
+          }}
+          nodeIdFilter={curNode?.id}
+          placeholder={t('monitor.drill.pickInstance')}
+          ariaLabel={t('monitor.drill.pickInstance')}
+          className="inline-block w-56"
+        />
       )}
 
       {target.kind === 'instance' && worlds.length > 0 && (
