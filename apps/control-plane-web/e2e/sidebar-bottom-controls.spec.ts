@@ -17,8 +17,10 @@ test('FR-132 底部主题/语言图标 + 三态直选主题 + 版本/开源许�
   // ① 底部主题：调色板入口 aria-label=「主题色」+ 明暗「切换主题」（色名在 dropdown 内，非常驻按钮）
   await expect(aside.getByRole('button', { name: '切换主题' })).toBeVisible()
   await expect(aside.getByRole('button', { name: '主题色' })).toBeVisible()
-  // 语言切换（图标 + 语言名，中文默认）
-  await expect(aside.getByRole('button', { name: '中文', exact: true })).toBeVisible()
+  // 语言切换已迁出侧栏底部：随「外观/语言归设置」并入 SettingsPage（见该页
+  // 「外观：主题模式 + 语言」的注释），侧栏底部只保留主题相关控件。
+  // 这里断言它**不再**出现在底部——否则后来者会以为控件丢了又搬回来。
+  await expect(aside.getByRole('button', { name: '中文', exact: true })).toHaveCount(0)
 
   // ③ 底部版本号（左下）+ 开源许可入口（右下），许可指向 /licenses
   // 注：侧栏另有一处「开源许可」导航项（jm-nav-link），底部页脚入口用非 nav-link 精确定位。

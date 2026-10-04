@@ -10,6 +10,9 @@ import { type Page, expect } from '@playwright/test'
  *
  * 外壳 `[data-slot="console-shell"]` 在鉴权通过后立即挂载，语义上它才是「已进入控制台」
  * 的标志；各用例真正关心的页面元素由它们自己断言，不该由公共 helper 代劳。
+ *
+ * 注：mock 调试面板曾钉在右下角挡住表格行按钮，现由 mount-mock-control-panel 在
+ * `navigator.webdriver` 下直接不挂载（见该文件注释），这里无需再做处理。
  */
 export async function login(page: Page, username = 'admin', password = 'admin123'): Promise<void> {
   await page.goto('/login')
