@@ -46,8 +46,19 @@ func (s *ScheduleService) Create(req CreateScheduleRequest) (*model.Schedule, er
 	return schedule, nil
 }
 
-// List 返回定时任务列表。
-func (s *ScheduleService) List(instanceID *uint) ([]model.Schedule, error) {
+// ScheduleView 定时任务列表项：在 model.Schedule 之上补一个实例名。
+//
+// 【可见性说明——有意为之的取舍，决策记录】本端点目前**没有 scope 收敛**（不区分调用者可访问的
+// 实例范围），加上 instanceName 等于把实例名交给每个能读调度列表的人。我们显式接受这一扩大：
+// 改造前前端为了在调度行里显示实例名，直接拉取**全量实例列表**（千级约 1MB + 30 秒兜底轮询），
+// 那对调用者暴露的实例清单更完整。若将来为本端点补上 scope 收敛，应同步复查此处。
+type ScheduleView struct {
+	model.Schedule
+	InstanceName string `json:"instanceName,omitempty"`
+}
+
+// List 返回定时任务列表（含实例名）。
+func (s *ScheduleService) List(instanceID *uint) ([]ScheduleView, error) {
 	var schedules []model.Schedule
 	q := s.db.Model(&model.Schedule{})
 	if instanceID != nil {
@@ -56,7 +67,36 @@ func (s *ScheduleService) List(instanceID *uint) ([]model.Schedule, error) {
 	if err := q.Find(&schedules).Error; err != nil {
 		return nil, err
 	}
-	return schedules, nil
+
+	views := make([]ScheduleView, len(schedules))
+	for i := range schedules {
+		views[i] = ScheduleView{Schedule: schedules[i]}
+	}
+
+	// 一次主键 IN 查询回填实例名，避免按行查（N+1）。实例是软删除：已删实例查不到名字，
+	// 此处留空、由前端回退显示 #id——刻意不用 Unscoped()，那会把已删实例的存在也暴露出去。
+	ids := make([]uint, 0, len(schedules))
+	seen := make(map[uint]struct{}, len(schedules))
+	for _, sc := range schedules {
+		if _, ok := seen[sc.InstanceID]; ok {
+			continue
+		}
+		seen[sc.InstanceID] = struct{}{}
+		ids = append(ids, sc.InstanceID)
+	}
+	if len(ids) > 0 {
+		var insts []model.Instance
+		s.db.Select("id", "name").Where("id IN ?", ids).Find(&insts)
+		nameByID := make(map[uint]string, len(insts))
+		for _, in := range insts {
+			nameByID[in.ID] = in.Name
+		}
+		for i := range views {
+			views[i].InstanceName = nameByID[views[i].InstanceID]
+		}
+	}
+
+	return views, nil
 }
 
 // Update 更新定时任务。
