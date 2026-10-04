@@ -2,7 +2,7 @@ import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from '
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 import { useNodes } from '@/api/nodes'
-import { useInstances } from '@/api/instances'
+import { useInfiniteInstanceSearch, useInstanceSearch } from '@/api/instances'
 import { useTasks, type TaskState } from '@/api/tasks'
 import { useAlertEvents } from '@/api/alerts'
 import { useMetricOverview, usePlatformObservabilityOverview, useResourceAttribution, type PlatformObservabilityOverviewResponse, type ResourceAttributionResponse } from '@/api/metrics'
@@ -247,7 +247,22 @@ export default function OverviewPage() {
   const hasPerm = usePermissionsStore((s) => s.hasPerm)
   const canSeePlatformObs = isPlatformAdmin || hasPerm('monitor.read') || hasPerm('node.read')
   const { data: nodes } = useNodes()
-  const instancesQuery = useInstances()
+  /**
+   * 实例数据分两路取，各自只拿需要的量：
+   *
+   * - 异常卡片只要 CRASHED 的前 5 条，交给服务端按状态过滤——原先是先拉全集再本地筛，
+   *   千级规模下等于为一张 5 行的卡片付约 1MB 的代价
+   * - 底部密集表保留「可看全部」的能力，但改为滚动按需分页：首屏只取一页，滚到底再取下一页，
+   *   不再一次性拉全量（`useInfiniteInstanceSearch` 就是为 1000+ 实例的滚动浏览设计的）
+   */
+  const exceptionQuery = useInstanceSearch({
+    status: 'CRASHED',
+    page: 1,
+    pageSize: 5,
+    sort: 'name',
+    order: 'asc',
+  })
+  const instancesQuery = useInfiniteInstanceSearch({ sort: 'name', order: 'asc' })
   const tasksQuery = useTasks({ limit: 5 })
   const alertsQuery = useAlertEvents({ resolved: false, pageSize: 5 })
   const { data: overview } = useMetricOverview(range)
@@ -261,13 +276,13 @@ export default function OverviewPage() {
   const deferredOverview = useDeferredValue(overview)
   const attribution = useResourceAttribution(activeGauge !== null, activeGauge === 'memory' ? 'memory' : 'cpu')
   const platformObservability = usePlatformObservabilityOverview(canSeePlatformObs)
-  const instanceRows = instancesQuery.data ?? []
-  const exceptionRows = instanceRows.filter((instance) => instance.status === 'CRASHED').slice(0, 5)
+  const instanceRows = instancesQuery.data?.pages.flatMap((p) => p.items) ?? []
+  const exceptionRows = exceptionQuery.data?.items ?? []
   const recentTasks = tasksQuery.data?.items.slice(0, 5) ?? []
   const activeAlerts = alertsQuery.data?.items.slice(0, 5) ?? []
   const {
     containerRef: instanceContainerRef,
-    onScroll: handleInstanceScroll,
+    onScroll: handleInstanceScrollBase,
     range: instanceRange,
   } = useVirtualRows({
     total: instanceRows.length,
@@ -275,6 +290,21 @@ export default function OverviewPage() {
     overscan: 8,
     fallbackViewportSize: 420,
   })
+
+  /**
+   * 滚动到底再取下一页。
+   *
+   * 虚拟化的 total 用「已加载条数」而非服务端 total：表格只渲染已到手的行，未加载的部分靠
+   * 滚动触发补齐——与 InstancesPage 的 onNeedMore 是同一套做法。
+   */
+  const handleInstanceScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    handleInstanceScrollBase(e)
+    const el = e.currentTarget
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 240
+    if (nearBottom && instancesQuery.hasNextPage && !instancesQuery.isFetchingNextPage) {
+      void instancesQuery.fetchNextPage()
+    }
+  }
   const visibleInstances = instanceRows.slice(instanceRange.start, instanceRange.end)
 
   const totals = deferredOverview?.totals
@@ -381,8 +411,8 @@ export default function OverviewPage() {
           testId="overview-exceptions"
           title="异常实例"
           to="/instances?status=CRASHED"
-          isLoading={instancesQuery.isLoading}
-          isError={instancesQuery.isError}
+          isLoading={exceptionQuery.isLoading}
+          isError={exceptionQuery.isError}
           isEmpty={exceptionRows.length === 0}
           emptyText="暂无异常实例"
           errorText="异常实例加载失败"
