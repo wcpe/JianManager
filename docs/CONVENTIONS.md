@@ -65,6 +65,28 @@ proto/                  # Protobuf 定义
 - 样式用 TailwindCSS，不用自定义 CSS，不用内联 style
 - 组件从 shadcn/ui 按需拷贝，不安装整个包
 
+### 组件文件头锚点（FR-496 阶段 3）
+`packages/ui` 的组件文件头带锚点注释，说明这个组件的**边界与联动面**——
+它回答的是「改这里时还要动哪些地方」，而不是复述实现：
+
+```tsx
+/**
+ * @file Button：全站按钮唯一出口。统一样式变体、焦点环、按压/悬停反馈与禁用态。
+ * @input  lib/focus-ring、lib/interaction-overlay、lib/utils 的 cn、Spinner
+ * @output Button、buttonVariants、ButtonProps
+ * @sync   改动行为时同步 button.test.tsx；导出变化时同步 index.ts
+ * @since  FR-496
+ */
+```
+
+- `@file` 一句话说明**它是什么、为什么存在**（而不是"导出了什么"）
+- `@input` 依赖的兄弟模块与外部库，便于判断改动影响面
+- `@output` 对外导出面，改名/删除时据此搜索调用点
+- `@sync` **最容易漏的一环**：与之联动、必须同改的文件（测试、barrel、规则文档）
+- `@since` 引入的 FR 编号
+
+细节的「为什么」写在具体实现处；锚点只给入口与联动关系，不重复。
+
 ### Bot Worker 约定
 - IPC 消息类型定义在 `ipc/types.ts`
 - 行为继承 `Behavior` 基类

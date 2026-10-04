@@ -1,4 +1,11 @@
 /* eslint-disable react-refresh/only-export-components -- shadcn 组件随组件导出 cva 变体，仅影响 Fast Refresh */
+/**
+ * @file Button：全站按钮唯一出口。统一样式变体、焦点环、按压/悬停反馈与禁用态。
+ * @input  lib/focus-ring（统一焦点环）、lib/interaction-overlay（交互层）、lib/utils 的 cn、Spinner
+ * @output Button、buttonVariants、ButtonProps
+ * @sync   改动行为时同步 button.test.tsx；导出变化时同步 index.ts
+ * @since  FR-496
+ */
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "radix-ui"

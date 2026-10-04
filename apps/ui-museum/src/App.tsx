@@ -1,4 +1,7 @@
 import { useMemo, useState } from 'react'
+
+import { ThemeMatrix } from './ThemeMatrix'
+import ShellPreview from './ShellPreview'
 import type { ReactNode } from 'react'
 import {
   Badge,
@@ -143,6 +146,15 @@ export default function App() {
               ))}
             </div>
           </Panel>
+        </Section>
+
+        {/* 阶段 7 的验证台：主题矩阵与外壳预览此前只有实现、没挂上来 */}
+        <Section title="主题矩阵">
+          <ThemeMatrix />
+        </Section>
+
+        <Section title="外壳预览">
+          <ShellPreview />
         </Section>
 
         <Section title="Actions">
