@@ -121,7 +121,25 @@ describe('OverviewPage（mock 假后端）', () => {
     expect(within(tooltip).queryByText('2.0G')).not.toBeInTheDocument()
   })
 
-  it('底部实例表渲染种子实例', async () => {
+  it('底部实例表渲染实例', async () => {
+    // 显式给一组小实例：底部表已改按需分页（首屏按名称升序取一页），用默认的千级种子时
+    // 这几个名字未必落在第一页，断言会变成依赖种子顺序。
+    const seedInstances = [
+      { id: 1, uuid: 'i-survival-1', nodeId: 1, name: 'survival-1', type: 'paper', role: 'backend', processType: 'direct', status: 'RUNNING' },
+      { id: 2, uuid: 'i-lobby-proxy', nodeId: 1, name: 'lobby-proxy', type: 'velocity', role: 'proxy', processType: 'direct', status: 'RUNNING' },
+      { id: 3, uuid: 'i-creative-1', nodeId: 2, name: 'creative-1', type: 'paper', role: 'backend', processType: 'direct', status: 'STOPPED' },
+    ]
+    server.use(
+      http.get(API('/instances/search'), ({ request }) => {
+        const pageSize = Number(new URL(request.url).searchParams.get('pageSize') ?? 50)
+        return HttpResponse.json({
+          items: seedInstances.slice(0, pageSize),
+          total: seedInstances.length,
+          page: 1,
+          pageSize,
+        })
+      }),
+    )
     const { container } = renderWithProviders(<OverviewPage />, { route: '/' })
     expect(container.firstElementChild).toHaveAttribute('data-page', 'overview')
     expect(container.firstElementChild).toHaveClass('jm-page-stack')
@@ -131,17 +149,23 @@ describe('OverviewPage（mock 假后端）', () => {
     expect(instanceTable.getByText('creative-1')).toBeInTheDocument()
   })
 
-  it('1000+ mock 实例下底部实例表只渲染可视窗口', async () => {
+  it('1000+ mock 实例下底部实例表按需分页，首屏只取一页且只渲染可视窗口', async () => {
     renderWithProviders(<OverviewPage />, { route: '/' })
 
     const surface = await screen.findByTestId('overview-instances-virtual')
-    await waitFor(() => expect(Number(surface.dataset.totalCount)).toBeGreaterThanOrEqual(1000))
-    expect(await screen.findByText('survival-1')).toBeInTheDocument()
-    expect(screen.queryAllByTestId('overview-instance-row').length).toBeLessThan(80)
+    // 改滚动按需分页后，data-total-count 表示「已加载条数」而非服务端总数：
+    // 首屏只取一页（devmock 默认 pageSize=50），滚到底才续取——不再一次性拉全量。
+    await waitFor(() => expect(Number(surface.dataset.totalCount)).toBeGreaterThan(0))
+    expect(Number(surface.dataset.totalCount)).toBeLessThan(1000)
+    // 不按具体实例名断言：首屏只取一页（按名称升序），具体名字是否落在前 50 条取决于种子，
+    // 而本用例要守的是「按需分页 + 窗口化渲染」这两个行为。
+    const rows = screen.queryAllByTestId('overview-instance-row')
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.length).toBeLessThan(80)
   })
 
   it('注入实例列表空态 → 表体显示「暂无实例」', async () => {
-    mockInject('get', '/instances', { kind: 'empty' })
+    mockInject('get', '/instances/search', { kind: 'empty' })
     renderWithProviders(<OverviewPage />, { route: '/' })
     expect(await screen.findByText('暂无实例')).toBeInTheDocument()
     expect(screen.queryByText('survival-1')).not.toBeInTheDocument()
@@ -204,7 +228,15 @@ describe('OverviewPage（mock 假后端）', () => {
       rule: { name: '资源告警' },
     }))
     server.use(
-      http.get(API('/instances'), () => HttpResponse.json(instances)),
+      // 实例改走 /instances/search：异常卡片带 status=CRASHED 过滤，密集表是分页信封。
+      // mock 需尊重 pageSize——服务端会截断，异常卡片正是靠 pageSize=5 只取前 5 条。
+      http.get(API('/instances/search'), ({ request }) => {
+        const url = new URL(request.url)
+        const status = url.searchParams.get('status')
+        const pageSize = Number(url.searchParams.get('pageSize') ?? 50)
+        const list = status ? instances.filter((i) => i.status === status) : instances
+        return HttpResponse.json({ items: list.slice(0, pageSize), total: list.length, page: 1, pageSize })
+      }),
       http.get(API('/tasks'), () => HttpResponse.json({ items: tasks, total: tasks.length, limit: 5, offset: 0 })),
       http.get(API('/alerts/events'), () => HttpResponse.json({ items: alerts, total: alerts.length })),
     )
@@ -235,7 +267,9 @@ describe('OverviewPage（mock 假后端）', () => {
 
   it('三个聚合各自显示独立空态', async () => {
     server.use(
-      http.get(API('/instances'), () => HttpResponse.json([])),
+      http.get(API('/instances/search'), () =>
+        HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 50 }),
+      ),
       http.get(API('/tasks'), () => HttpResponse.json({ items: [], total: 0, limit: 5, offset: 0 })),
       http.get(API('/alerts/events'), () => HttpResponse.json({ items: [], total: 0 })),
     )
@@ -253,10 +287,15 @@ describe('OverviewPage（mock 假后端）', () => {
     ['alerts', '活跃告警加载失败'],
   ])('%s 聚合失败时独立降级且其他聚合仍可用', async (failedDomain, errorText) => {
     server.use(
-      http.get(API('/instances'), () =>
+      http.get(API('/instances/search'), () =>
         failedDomain === 'instances'
           ? new HttpResponse(null, { status: 500 })
-          : HttpResponse.json([{ id: 1, uuid: 'inst-1', nodeId: 1, name: '仍可见异常实例', type: 'paper', role: 'backend', processType: 'direct', status: 'CRASHED', startCommand: '', workDir: '', serverPort: 25565, autoStart: false, autoRestart: false, tags: null, createdAt: '2026-01-01T00:00:00Z' }]),
+          : HttpResponse.json({
+              items: [{ id: 1, uuid: 'inst-1', nodeId: 1, name: '仍可见异常实例', type: 'paper', role: 'backend', processType: 'direct', status: 'CRASHED', startCommand: '', workDir: '', serverPort: 25565, autoStart: false, autoRestart: false, tags: null, createdAt: '2026-01-01T00:00:00Z' }],
+              total: 1,
+              page: 1,
+              pageSize: 50,
+            }),
       ),
       http.get(API('/tasks'), () =>
         failedDomain === 'tasks'
