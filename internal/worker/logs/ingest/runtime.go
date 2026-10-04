@@ -333,6 +333,12 @@ type Manager struct {
 	// 由独立 goroutine 完成（它才是允许阻塞的那一方）。cap=1：已有待办请求即无需重复入队。
 	persistRequests   chan struct{}
 	persistWorkerDone chan struct{}
+	// resolvePersistBudget 是**解算收尾落库**在持久化门上的有界等待预算（#59；0 ⇒ 默认 2s）。
+	// 现场（探针自栈两现）：handler 卡在 persistGate.Cond.Wait 达 45s —— 而该源的账本写
+	// （AbandonGapsThrough）早已落账 ⇒ 卡的是"索引落库排队"，属**可交办**的工作。
+	resolvePersistBudget time.Duration
+	// persistResolveHandoffs 是解算收尾"交办后台"的累计次数（#59 观测读数：0 ⇒ 全部同步落库完成）。
+	persistResolveHandoffs atomic.Int64
 	// replayBudget 是整窗重发的切片预算（见 ReplayBudget）。
 	replayBudget ReplayBudget
 	// vlProbeTimeout / vlNotReady 是 VL ready 门禁的读数：probe 超时与「哪些源当前被判未就绪」。
@@ -641,6 +647,9 @@ type Options struct {
 	SweepBackpressureStreak int
 	// SweepInflightCap 是在飞被放弃调用的并发上限（0 ⇒ 默认 4 ✓）。
 	SweepInflightCap int
+	// ResolvePersistBudget 是解算收尾落库在持久化门上的有界等待预算（#59；0 ⇒ 默认 2s）。
+	// 超预算即交办后台并返回（受理即返，最终一致），详见 persistResolveTail 的说明。
+	ResolvePersistBudget time.Duration
 	// CycleMuProfile 打开 cycleMu 持有者观测仪（#57；默认关，也可用 env JIANMANAGER_CYCLE_MU_PROFILE=1）。
 	// 打开后：慢持有 Warn + 当前持有者快照 + 取锁密度 + 有界等锁读数；关闭时零开销。
 	CycleMuProfile bool
@@ -1458,8 +1467,11 @@ func (m *Manager) ResolveCoveredGapsForSource(ctx context.Context, storageNamesp
 	}
 	m.cycleMu.Unlock()
 	wc.done()
-	// #58：落库（索引规划/Apply/fsync/WAL 剪枝，现场 1m26s 的主项）在 cycleMu **之外**。
-	return m.persist()
+	// #58：落库（索引规划/Apply/fsync/WAL 剪枝）在 cycleMu **之外**。
+	// #59：且**有界**——现场（探针自栈两现）handler 正是在这里无界等持久化门达 45s（账本写已落账，
+	// 卡的是索引落库排队）⇒ 超预算交后台（受理即返，最终一致；写不丢，见 persistResolveTail）。
+	_, err := m.persistResolveTail()
+	return err
 }
 
 // New restores source ledger/WAL/projection state and creates configured pipelines.
@@ -1533,6 +1545,7 @@ func New(opts Options) (*Manager, error) {
 	}
 	m.vlNotReady = make(map[string]string)
 	m.defaultCharset = opts.DefaultCharset
+	m.resolvePersistBudget = opts.ResolvePersistBudget
 	// #57：cycleMu 持有者观测仪（env 默认关；Options 可显式打开，供回归与现场按需取读数）。
 	m.cycleMuProfile = opts.CycleMuProfile || cycleMuProfileEnabled()
 	m.defaultTimeZone = opts.DefaultTimeZone
@@ -5794,6 +5807,10 @@ type persistMode struct {
 	// oneStep=true 只做一步就交门（恢复/重放链）；false = 循环到「此后再无差异」才返回
 	// （同步语义：登记返回即已落库、Stop 关停前落完）。
 	oneStep bool
+	// handoffObs 非 nil 时，在**发生交办**（等门超预算 / 一步后仍有差异）那一刻 +1（#59）。
+	// 用途：让调用方能**明确表述**"已交办后台（受理即返）"与"本次已真落库"——persistCtx 的
+	// 返回值（nil/error）本身区分不了这两者。其它调用点传 nil ⇒ 零开销。
+	handoffObs *atomic.Int64
 	// planReuse=true 允许复用门外的既有计划（**只给采集/投递热路径**，2026-10-03 回退修复 ①）：
 	// 热路径本就"超时交后台、最终一致"⇒ 复用窗口内的计划不改变可观测语义，却把"每个调用者
 	// 各自规划（持 m.mu 重建全源镜像）"降为"每窗口一次"。**强一致路径（登记/关停/恢复步）必须
@@ -6759,6 +6776,61 @@ func (m *Manager) persistHotBudgetOf() time.Duration {
 }
 
 // requestPersist 把「请落库」交给后台持久化通道（非阻塞；已有待办即跳过）。
+// defaultResolvePersistBudget 是解算收尾落库的默认有界等待预算（#59）。
+//
+// 取值 2s 的取舍：调用方（CS/CP RPC）总预算通常在 5–10s 量级，而该路径前面还有一次
+// 5s 的 cycleMu 有界获取（resolveGapsCycleMuWait）⇒ 两段相加仍有富余；同时远大于门上一次
+// 正常周期（几十–几百 ms）⇒ 正常负载下**绝大多数调用仍走同步落库**，只有真被长周期挡住时才交办。
+const defaultResolvePersistBudget = 2 * time.Second
+
+// resolvePersistBudgetOf 归一化解算收尾落库预算。
+func (m *Manager) resolvePersistBudgetOf() time.Duration {
+	if m != nil && m.resolvePersistBudget > 0 {
+		return m.resolvePersistBudget
+	}
+	return defaultResolvePersistBudget
+}
+
+// notePersistHandoff 记一次"交办后台"（#59；mode.handoffObs 为 nil ⇒ 零开销）。
+func (m *Manager) notePersistHandoff(mode persistMode) {
+	if mode.handoffObs != nil {
+		mode.handoffObs.Add(1)
+	}
+}
+
+// persistResolveTail 是**解算收尾的有界落库**（#59）：与强一致路径同档（priority=true、**不放宽**
+// 计划复用），唯一差别是门上最多等 resolvePersistBudget；超预算即交办后台并返回。
+//
+// 语义不变量：
+//
+//	① 写不丢：交办走既有 persistRequests 后台通道（保证最终完成；既有回归
+//	   TestAsyncHandoffDoesNotClaimCoverage 守住"交办不得谎报覆盖"）；
+//	② 表述明确：返回值 durable 区分"本次已真落库"与"已交办后台"，并累计到
+//	   ResolvePersistHandoffCount() 供探针同刻取；
+//	③ 覆盖水位只在**完整落库**后推进（既有实现不变 —— persistCovered.Store 在 !incomplete 分支）。
+func (m *Manager) persistResolveTail() (durable bool, err error) {
+	var handoffs atomic.Int64
+	mode := persistMode{priority: true, maxWait: m.resolvePersistBudgetOf(), handoffObs: &handoffs}
+	if err := m.persistCtx(context.Background(), mode); err != nil {
+		return false, err
+	}
+	if n := handoffs.Load(); n > 0 {
+		m.persistResolveHandoffs.Add(n)
+		slog.Info("解算收尾落库已交办后台（受理即返：账本变更已落账，索引落库由后台通道最终完成）",
+			"section", "resolveGapsForSource", "budget", m.resolvePersistBudgetOf().String())
+		return false, nil
+	}
+	return true, nil
+}
+
+// ResolvePersistHandoffCount 返回解算收尾"交办后台"的累计次数（#59 观测读数）。
+func (m *Manager) ResolvePersistHandoffCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.persistResolveHandoffs.Load()
+}
+
 func (m *Manager) requestPersist() {
 	if m == nil || m.persistRequests == nil {
 		return
@@ -6857,6 +6929,7 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 		}
 		if mode.maxWait > 0 && time.Since(waitStarted) >= mode.maxWait {
 			// 热路径等不到门：交给后台通道（保证"最终会落库"），本调用立即返回 ✓ 采集不受阻。
+			m.notePersistHandoff(mode)
 			m.requestPersist()
 			return nil
 		}
@@ -6899,6 +6972,7 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 			}
 			if mode.maxWait > 0 {
 				// 热路径最多一步：剩余差异交给后台通道（它允许阻塞），采集继续 ✓。
+				m.notePersistHandoff(mode)
 				m.requestPersist()
 				return nil
 			}
