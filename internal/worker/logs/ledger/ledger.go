@@ -4,6 +4,7 @@
 package ledger
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -594,6 +595,33 @@ func (l *Ledger) touch(key SourceKey) {
 	l.revisions[key]++
 }
 
+// HasRecoveryHold 报告该源是否有任一恢复分段处于 hold（运维显式钉住）。
+//
+// 为什么需要它（#61-Z-a）：补段的**新段不带 hold** —— 若放任补段，就会绕过已有 hold 把 reclaim
+// 推过被钉住的位置（实测 TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears 转红 ✗）；
+// 补段侧据此**一律让路**（hold 优先于任何自动补段 ✓，与 tryReclaimLocked 里 hold 优先于凭据同口径 ✓）。
+func (l *Ledger) HasRecoveryHold(key SourceKey) bool {
+	if l == nil {
+		return false
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	e, ok := l.entries[key]
+	if !ok || e == nil {
+		return false
+	}
+	for _, r := range e.RecoveryRefs {
+		if r.HasHold {
+			return true
+		}
+	}
+	return false
+}
+
+// ErrReclaimNoSegment 表示"回收被拒：没有任何恢复分段覆盖当前回收位置"（#61）。
+// 调用方（ingest 的投递确认点）据此判定存在**覆盖洞**并补段；其余拒绝（状态未转移 / hold）不带本哨兵 ✓。
+var ErrReclaimNoSegment = errors.New("ledger: reclaim blocked")
+
 // Positions 返回该源当前水位（读/耐久/投递/回收）—— **O(1) 只读**，不含 Entry 克隆。
 //
 // 为什么需要它（#60-Z1）：冗余整窗重投的抑制判据是「水位有没有前进」，而
@@ -1076,7 +1104,9 @@ func (l *Ledger) tryReclaimLocked(e *Entry) (uint64, error) {
 	if ref == nil {
 		// 无恢复分段时：仅当 CanReclaim 在“无 seg”语义下不放行。
 		// 契约要求受管恢复副本证明；没有分段不得回收。
-		return e.Positions.Reclaim, fmt.Errorf("ledger: reclaim blocked: no recovery segment covers position %d", e.Positions.Reclaim)
+		// 哨兵（#61-Z-a）："无段覆盖"是**可分类**的一类拒绝 —— 调用方据此判定"存在覆盖洞"并补段，
+		// 而不是靠匹配错误文本 ✗。消息文案逐字保留（既有回归与现场排障都按它定位 ✓）。
+		return e.Positions.Reclaim, fmt.Errorf("%w: no recovery segment covers position %d", ErrReclaimNoSegment, e.Positions.Reclaim)
 	}
 	// CanReclaim 是回收门禁：STAGED/DURABLE_VERIFIED/hold 一律拒绝。
 	allowed := logtypes.CanReclaim(e.Positions, ref.State, ref.ReleaseReason, ref.HasHold)
