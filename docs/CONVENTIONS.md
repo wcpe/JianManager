@@ -16,11 +16,14 @@
 
 ### 目录结构
 ```
-cmd/                    # 入口
+apps/                   # 可运行入口（monorepo 外壳，FR-285 自 cmd/ 迁入）
+  control-plane/        # Control Plane 二进制入口
+  worker/               # Worker Node 二进制入口
 internal/               # 内部包，不可被外部导入
   controlplane/         # Control Plane 模块
   worker/               # Worker Node 模块
-  shared/               # 跨进程共享
+  platform/             # 跨进程共享的平台能力（数据根、gRPC 消息、HTTP 客户端等）
+  version/              # 版本号单一真源（ADR-065）
 proto/                  # Protobuf 定义
 ```
 

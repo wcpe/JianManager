@@ -92,7 +92,7 @@ Worker Node (Go) × 20~100
 ### 目录结构
 
 ```
-cmd/control-plane/main.go
+apps/control-plane/main.go        # Control Plane 入口（原 cmd/control-plane，FR-285）
 internal/controlplane/
   config/                        # control-plane.yml 与环境变量覆盖
   database/                      # GORM 初始化、迁移与数据根解析
@@ -255,8 +255,8 @@ Control Plane 启动时会为当前已连接 Worker 恢复持久化活动批次�
 ### 目录结构
 
 ```
-cmd/worker/main.go           # 含 daemon 子命令分支（wrapper 模式）
-cmd/jmctl/                    # 紧急控制台 CLI（list/emergency/stop/kill），仅链 daemon 帧协议包（§6.7，FR-184/ADR-041）
+apps/worker/main.go          # 含 daemon 子命令分支（wrapper 模式）
+apps/jmctl/                  # 紧急控制台 CLI（list/emergency/stop/kill），仅链 daemon 帧协议包（§6.7，FR-184/ADR-041）
 internal/worker/
   config.go                                      # 加载 worker.yml + env 覆盖（FR-080）
   heartbeat/                                     # 心跳负载、任务快照与代理配置下发处理
@@ -862,9 +862,55 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
   - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 异常实例 / 近期任务 / 活跃告警三栏一屏速扫（各最多 5 条、独立加载/空态/错误降级，FR-271）+ 虚拟渲染密集实例表（mock 模式 1000+ 服务器时仅渲染可视窗口）；**节点页（`NodesPage`，FR-177 主从双栏重做，取代原卡片网格/列表 + 手搓 `fixed inset-0` 模态）** = 左**可收缩节点列表**（窄图标轨 ⇄ 展开，收缩态 `localStorage` 持久；顶集群汇总头复用 `summarizeNodes` + 搜索 + `AddNodeDialog`；行 = 状态点呼吸灯/名/host/mini 水位/实例数，选中高亮、离线置灰）+ 右**选中节点实时详情**（身份块 + 操作 kebab[维护/排空/下线，走 `DangerConfirm`] + `ResourceGauge` CPU/内存/磁盘/负载 + **分段 Tabs**：概览 `NodeOverviewSection` / 实例 `NodeInstanceCompare` / JDK `NodeJDKPanel` / 制品缓存 `NodeArtifactCachePanel`（FR-178 组件改挂分段，抽屉入口下线）/ 端口 `NodePortsPanel` / 监控历史曲线 / 坏节点修复 `NodeRepairPanel`[BUG-A：诊断 + 重 enroll + 清孤儿，接 `/nodes/repair/*`·`/nodes/:id/reenroll|orphans|purge-orphans`，破坏性走 `DangerConfirm`]）；未选节点右栏空态。列表筛选/选中态/收缩态持久抽纯函数 `lib/node-list.ts`（vitest 覆盖）。分段切换稳定工具条、布局不重组（FR-178 §5 抽屉 UX 约束）。**开源许可页（`LicensesPage`，`/licenses`，FR-135）** = 构建期 `scripts/gen-licenses.mjs` 扫描 control-plane-web(pnpm) + bot-worker(npm) + Go(go-licenses) + client-updater(Gradle runtimeClasspath) + ServerProbe(Gradle taboo 发行依赖) 五个发行来源，任一来源为空即失败，生成 `apps/control-plane-web/public/licenses.json`（静态资源、非 `/api`）；页面提供包名搜索 + 运行时/开发分区计数 + 表格 [包名·版本·许可证·作者] + 行内展开许可证全文。
   - **跨实例超级工作台（FR-167，`/super`，集群域独立入口，复用 ADR-034）**：把可组合画布的作用域从「限当前实例」扩展为**跨实例**——同一画布并存任意实例的卡（如 4 个不同实例终端拼监看墙）。两作用域在 `stores/workspace.ts` 清晰并存：单实例画布 `canvasByInstance[id]`（卡省略 instanceId，按实例 id 记忆）与超级工作台 `superCanvas`（**卡显式携带 `instanceId`**）。页面 `components/console/SuperWorkbenchPage` = 左侧可收起**实例库** `InstanceLibrary`（搜索实例 + 实例展开看 6+ 功能；**HTML5 原生 DnD 拖拽源**：拖实例=加该实例默认卡组、拖功能=加单卡、多选批量拖=一次拼监看墙；放置区 dragover 高亮 + 松手落位）+ 右侧跨实例画布（复用同一 `WorkspaceCard` 卡壳与网格、**惰性挂载**未上画布的卡不建 WS）。卡片所属实例名由 `WorkspaceCard` 按 `instanceId` 自解析（每卡可属不同实例）。**跨实例预设**与单实例共享同一份 `userPresets` localStorage（`lib/workspace-preset` 序列化扩为携 `instanceId`，**向后兼容**无 instanceId 的旧预设）。拖拽载荷的序列化/解析与「载荷→卡片」「跨实例卡去重（同实例同功能去重，多实例同功能并存）」抽为纯函数 `lib/instance-library.ts`（vitest 覆盖）。
   - **工作区导播台（FR-168，`/director`，集群域独立入口 / 超级工作台工具栏「导播台」按钮进，ADR-035）**：在多个**场景**（= FR-167 跨实例预设）间像 OBS **瞬切零延迟** + 缩略图条 + 定时轮播。页面 `components/console/DirectorConsolePage`：① **场景缩略图条** `DirectorSceneStrip`（一排场景，点击 / 数字键 1-9 / ←→ 瞬切；三态指示——active 主色脉动 / 预热绿点 / cold 灰点；右侧并发上限滑杆）；② **舞台**把所有**预热场景的画布同时挂载**（`DirectorCanvas`，只读网格复用 `WorkspaceCard` 卡壳），仅 active 可见。**核心 = ADR-035 预热并发模型**：要瞬切零延迟，目标场景的卡 WS 必须**已保活**；但多场景同时全速渲染会过载浏览器（WS 同域 ~6 连接 + 多 xterm/图表重绘吃满 CPU），故——**场景三态状态机**（纯逻辑 `lib/director.ts`，vitest 覆盖 LRU 驱逐 / 状态转移 / 轮播序列）：激活唯一 + **预热是受并发上限约束的集合**（默认保守 3，可配 1~6），新预热超限按 **LRU 驱逐**最久未激活的预热场景（降 cold，下次切换重连）；**非激活降频 / 暂停渲染**——非激活场景的 `DirectorCanvas` 用 `content-visibility:hidden`（浏览器跳过整棵子树布局/绘制）+ 终端经 `lib/director-render.ts` 的 `DirectorRenderProvider active=false` 让 xterm **暂停 render 但 WS 继续收数据进缓冲**（`Terminal.tsx` 加 paused 模式累积输出），切回一次性 flush。**cold 场景不挂载**（不建 WS）。导播台运行态（场景定义 + 状态机 + 轮播）由 `stores/director.ts`（Zustand，场景/上限/轮播间隔 localStorage 持久）承载，**纯前端**——只管理既有终端/监控 WS 的保活与渲染节流，不新增协议、不逾越进程边界（守架构不变量）。**真机多连接压测为硬验收维度**（单元只覆盖状态机逻辑）。
-- **设计系统（FR-061 + FR-163 视觉底座 + FR-267 A+C 收口 + FR-273 组件包）**：CSS 变量 token 驱动；默认亮色为 **A+C Jian 绿 `#158053`**，辅助钴蓝 `#2563EB`，结构色为背景 `#F5F6F8` / 面板 `#FFFFFF` / 边框 `#D7DCE3`，状态色系继续由 success/warning/danger/info 与阈值 helper（见 `@jianmanager/ui/lib/threshold`）驱动。**设计底座 token（`index.css`）**：`--primary: #158053`、`--brand-forest: #158053`、`--brand-cobalt: #2563EB`、`--radius: 0.375rem`、`--workspace-bg-image` 指向 A+C 背景素材；暗色模式按 B 高密度专业运维方向保留更深表面层级。**交互细节（FR-176/244/267）**：卡片/行/chip 原语 hover 只换阴影不位移；输入焦点环使用 `ring-2 + ring-ring/40`；全局 motion token（`--motion-duration-fast/normal/slow/route`、`--motion-easing-standard/emphasized`）在 app 与 `@jianmanager/ui` 两侧暴露，侧栏、顶栏、路由、移动导航面板、工具条与固定顶层进度条 `TopLoadingBar` 均引用同一时长/缓动；React Query 请求/变更忙碌时进度条进入循环加载态；`prefers-reduced-motion` 下保留切页/进度条状态反馈动画，仅关闭平滑滚动；全局主题化细滚动条随明暗 + 双主题自适配。**通用组件包**：`packages/ui`（FR-283 迁仓库根，见 ADR-064）以 `@jianmanager/ui` **pnpm workspace 真依赖**（源码 exports，消费方 Vite 直接转译；Tailwind 侧各 app 显式 `@source` 声明其源码为扫描源）暴露 Button / Panel / StatCard / StatusBadge / SummaryChips / Table / Form primitives、`RangePicker` / `TimeSeriesChart` / `MonitorChart` / `MetricsOverviewStrip` 等通用 chart，以及 `utils` / `threshold` / `brush` / `chart-hover` / `monitor-metrics` helper；旧 `web/src/components/ui`、第一版通用 chart 与 helper 入口保留兼容 re-export。**控件博物馆**：`apps/ui-museum`（原 `web/wiki`，FR-283 更名迁移）是独立 Vite workspace 应用，直接消费 `@jianmanager/ui` 展示 Foundation / Actions / Forms / Data / Overlay / Monitoring 控件矩阵。**弃 shadcn `Card` 松散用法**（`card.tsx` 标 `@deprecated`，eslint `no-restricted-imports` 阻断新引入，见 ADR-032）。**全局双主题（FR-164）**：组件层零硬编码品牌色，品牌色全经 CSS 变量（`--primary`/`--primary-foreground`/`--accent`/`--accent-foreground`/`--ring`/`--brand-shadow`/`--chart-1`）。第二主题青绿 `#14B8A6` 仅在 `index.css` 用 `[data-theme="teal"]` 与 `[data-theme="teal"].dark` 覆盖这组品牌变量（结构色/状态色不动）；Jian 绿为默认（无 `data-theme` 即承 `:root`/`.dark`，兼容旧 `colorTheme: indigo` 存储值）。**主题色（`colorTheme: indigo|teal`）与明暗（`light|dark|system`）正交、各自 `localStorage` 持久**；纯逻辑下沉 `lib/theme.ts`，`stores/theme.ts` 统管两轴。**主题/明暗初始化提到 app 入口**（`main.tsx` 在 React 挂载前 `initThemeFromStorage()` 套 `<html data-theme>` + `.dark`），登录/初始化页也套主题且首屏无闪。一处切（侧栏底部 `ThemeSwitcher`）全站 CSS 变量实时跟变（按钮/曲线/选中态/进度条随主色）。仍基于 shadcn/ui + Tailwind v4 + OKLCH，不引入新框架。
+- **设计系统（FR-061 + FR-163 视觉底座 + FR-267 A+C 收口 + FR-273 组件包）**：CSS 变量 token 驱动；默认亮色为 **A+C Jian 绿 `#158053`**，辅助钴蓝 `#2563EB`，结构色为背景 `#F5F6F8` / 面板 `#FFFFFF` / 边框 `#D7DCE3`，状态色系继续由 success/warning/danger/info 与阈值 helper（见 `@jianmanager/ui/lib/threshold`）驱动。**设计底座 token（FR-496 阶段 1 起单一真源 = `packages/ui/src/styles/`）**：`--primary: #158053`、`--brand-forest: #158053`、`--brand-cobalt: #2563EB`、`--radius: 0.375rem`、`--workspace-bg-image` 指向 A+C 背景素材；暗色模式按 B 高密度专业运维方向保留更深表面层级。**交互细节（FR-176/244/267）**：卡片/行/chip 原语 hover 只换阴影不位移；输入焦点环使用 `ring-2 + ring-ring/40`；全局 motion token（`--motion-duration-fast/normal/slow/route`、`--motion-easing-standard/emphasized`）在 app 与 `@jianmanager/ui` 两侧暴露，侧栏、顶栏、路由、移动导航面板、工具条与固定顶层进度条 `TopLoadingBar` 均引用同一时长/缓动；React Query 请求/变更忙碌时进度条进入循环加载态；`prefers-reduced-motion` 下保留切页/进度条状态反馈动画，仅关闭平滑滚动；全局主题化细滚动条随明暗 + 主题色自适配。**通用组件包**：`packages/ui`（FR-283 迁仓库根，见 ADR-064）以 `@jianmanager/ui` **pnpm workspace 真依赖**（源码 exports，消费方 Vite 直接转译；Tailwind 侧各 app 显式 `@source` 声明其源码为扫描源）暴露 Button / Panel / StatCard / StatusBadge / SummaryChips / Table / Form primitives、`RangePicker` / `TimeSeriesChart` / `MonitorChart` / `MetricsOverviewStrip` 等通用 chart，以及 `utils` / `threshold` / `brush` / `chart-hover` / `monitor-metrics` helper；旧 `apps/control-plane-web/src/components/ui`、第一版通用 chart 与 helper 入口保留兼容 re-export。**控件博物馆**：`apps/ui-museum`（原 `web/wiki`，FR-283 更名迁移）是独立 Vite workspace 应用，直接消费 `@jianmanager/ui` 展示 Foundation / Actions / Forms / Data / Overlay / Monitoring 控件矩阵。**弃 shadcn `Card` 松散用法**（`card.tsx` 标 `@deprecated`，eslint `no-restricted-imports` 阻断新引入，见 ADR-032）。**全局双主题（FR-164）**：组件层零硬编码品牌色，品牌色全经 CSS 变量（`--primary`/`--primary-foreground`/`--accent`/`--accent-foreground`/`--ring`/`--brand-shadow`/`--chart-1`）。五套主题色（indigo / teal / ocean / violet / sunset）的品牌变量与结构色成对覆盖在 `packages/ui/src/styles/themes.css`——亮色 `[data-theme="x"]`、暗色 `[data-theme="x"].dark`（`--status-*` 语义状态色与 `--chart-2..5` 不动）；Jian 绿为默认（无 `data-theme` 即承 `:root`/`.dark`，兼容旧 `colorTheme: indigo` 存储值）。**主题色（`colorTheme: indigo|teal|ocean|violet|sunset`）与明暗（`light|dark|system`）正交、各自 `localStorage` 持久**；纯逻辑下沉 `lib/theme.ts`，`stores/theme.ts` 统管两轴。**主题/明暗初始化提到 app 入口**（`main.tsx` 在 React 挂载前 `initThemeFromStorage()` 套 `<html data-theme>` + `.dark`），登录/初始化页也套主题且首屏无闪。一处切（侧栏底部 `ThemeSwitcher`）全站 CSS 变量实时跟变（按钮/曲线/选中态/进度条随主色）。仍基于 shadcn/ui + Tailwind v4 + OKLCH，不引入新框架。
 - 暗色/亮色主题与 i18n（zh/en）正常；选中实例/节点为客户端 UI 状态，不进 URL。
 - **响应式基线（FR-163）**：栅格断点沿用 Tailwind `sm/md/lg/xl`（如总览 KPI `grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6`），页面壳 `jm-page-stack` 全宽流式铺满工作区，页眉与工具条允许换行；卡片原语 `Panel`/`StatCard` 流式宽度自适应、不破栅格。移动端工作区底部预留导航安全区，避免底部导航遮挡主要操作。
+
+### 8.2.1 设计底座真源与 `dark:` 变体绑定（FR-496 阶段 1/2）
+
+组件库此前并不自包含：全站样式的主要产出方是 `packages/ui/src/components/*`，却依赖消费方提供 token；而 `packages/ui/src/styles.css` 里那份映射与主控台 `index.css` 的局部定义已经漂移（主控台独有 `--brand-*`、`--radius-2xl`、精工卡片派生令牌等）。现归一为**单一真源** `packages/ui/src/styles/`：
+
+| 文件 | 职责 |
+|---|---|
+| `index.css` | 汇总入口，按「映射 → 基线 → 覆盖 → 关键帧」顺序 `@import`（与语义依赖同序）；消费方 `@import "@jianmanager/ui/styles/index.css"` 一次即得完整设计底座 |
+| `theme-map.css` | token → Tailwind utility 映射（`@theme inline`：只登记生成 utility 所需的映射，不额外发射 CSS 声明，真实取值仍由 CSS 变量提供，故换肤时 utility 自动跟随、无需重新生成 CSS）；也是 `dark:` 变体绑定的声明处 |
+| `tokens.css` | 设计 token 原始值：`:root` 亮色基线 + `.dark` 暗色覆盖 + `color-scheme`（浏览器原生件随明暗） |
+| `themes.css` | 五套主题色的品牌 + 结构色覆盖组（`[data-theme]` × 明暗，与明暗基线正交） |
+| `motion.css` | 动效关键帧 |
+
+**单一真源的边界**：Tailwind 本体与 `@source` 内容扫描仍是应用级（扫描范围因应用而异），底座包不替消费方决定 Tailwind 版本与引入方式——`apps/control-plane-web/src/index.css` 与 `apps/ui-museum/src/styles.css` 各自 `@import "tailwindcss"` 并把 `packages/ui/src` 声明为扫描源。约束是「token 只定义一次」，不是「应用不碰 Tailwind」。旧 `packages/ui/src/styles.css`（漂移副本）已删除。
+
+**`dark:` 变体绑定**：`theme-map.css` 中 `@custom-variant dark (&:is(.dark *))` 把 `dark:` 绑定到应用内 `.dark` class（由 `apps/control-plane-web/src/lib/theme.ts` / `main.tsx` 在 React 挂载前写到 `<html>`），**不跟随系统偏好**；`mode=system` 时明暗 class 本身随系统切换，故「跟随系统」语义不丢。修复前全仓无该声明，Tailwind v4 默认把 `dark:` 解析为 `@media (prefers-color-scheme: dark)`，与 class 切主题策略不一致——组件内显式写的 `dark:` 样式在「系统亮色 + 应用暗色」下不生效（半失效）。效果经构建产物与真浏览器双向确认：主控台产物 `:is(.dark *)` 由 0 → 49 处、`prefers-color-scheme: dark` 由 1 → 0 处（体积 +0.56 kB）；控件博物馆真浏览器切 `html.dark` 后 outline / destructive 按钮计算样式命中 `dark:` 叠加色。
+
+**对比度门禁**：`packages/ui/src/lib/color-contrast.ts`（hex / rgb / oklch 解析 + WCAG 2.x 对比度 + CSS 作用域合并）配 `packages/ui/src/lib/color-contrast.test.ts`，对 10 组配色（5 主题 × 2 明暗）× 11 对「前景 / 背景」共 110 项逐项断言（正文类 ≥ 4.5:1，次要文字与状态徽章 ≥ 3:1），另有「选择器全部可识别、颜色写法全部可解析」的元断言——新增主题漏定义即失败。门禁上线即查出并修复 2 处真实缺陷（teal·亮色、sunset·亮色的按钮文字配对，改深色墨字后分别 7.18:1 与约 6:1，见 `themes.css` 注释）。
+
+### 8.2.2 组件库分层：布局规范层与导航外壳层（FR-496 阶段 3/4）
+
+| 层 | 位置 | 管的范围 |
+|---|---|---|
+| 布局规范层 | `packages/ui/src/components/layout/` | 「一页内部怎么摆」——页内骨架、留白与纵向节奏、滚动模型 |
+| 导航外壳层 | `packages/ui/src/components/shell/` | 「页与页之间共用的骨架」——顶栏 / 资源侧栏 / 页面区三件套 |
+
+**布局规范层**（阶段 3）：内容页布局的唯一出处——`PageShell` 三壳态（`default` 整页滚动 / `fixed` 固定视口、内部区域自行滚动，用于列表页与设置页，使工具栏与表头常驻 / `tool` 全占满、无外层留白，用于终端与文件等自带滚动的工具页）、`PageHeader`（规范第一条：内容页第一个子元素恒为它）、`ScopeBar`、`SummaryStrip`、`Toolbar`、`PlatformTabs`，以及 `TwoCol` / `ThreeCol` / `MetricGrid` / `CardsGrid` / `SettingsLayout` 网格原语，页面不再各自手写 `space-y-*` / `grid-cols-*` 骨架类名；`Panel` 增三段式 `footer` 槽（头 / 身 / 脚），使「工具条 + 数据区 + 页脚」成为标准形状（向后兼容的新增槽）。试点 = 审计页 `AuditPage`。
+
+**导航外壳层**（阶段 4）：把「顶栏 + 资源侧栏 + 页面区」三件套收敛为唯一出处——`AppShell`（骨架，顶栏高 53px）、`TopNav`（四工作区切换 + 品牌 / 检索 / 操作槽）、`SideNav`（展开 246px、折叠 54px；`SideNavHead` / `SideNavShortcuts` / `SideNavResource` / `SideNavBottom` 分区）、`ResourceTree`（资源树，限流展开与查询）、`CommandPalette`（⌘K 全局检索）、`ObjectPageHeader`（对象页头：面包屑 + 指标 + 工具）。两层边界写在各自 `index.ts` 注释里并互为引用，不可混用：页内布局不进外壳层，共用骨架不进页面。
+
+迁移策略：新层先落地，由控件博物馆的整合预览页（`apps/ui-museum` 的 `ShellPreview`，用原型同口径假数据）在真浏览器按四工作区验收；主控台页面按 FR-501 逐个迁移，迁移期间新旧并存、未迁移页不受影响。
+
+### 8.2.3 导航数据层：四工作区 × 组 × 页面（FR-496 阶段 5）
+
+`apps/control-plane-web/src/components/console/workspace-navigation.ts` 是新的导航登记真源，把原「六域扁平」IA 换成三层结构：**工作区**（顶栏切换，4 个 = 服务器运维 `ops` / 观测与自动化 `observability` / 运营与分发 `operation` / 平台管理 `platform`）× **组**（侧栏分组，组内复用既有 `NavGroup` 结构，不另造平行类型）× **页面**（导航目的地与深链条目，携带 `perm` / `labelKey` / `icon`）。
+
+登记口径按设计交付的《原路由-新入口对照》表（45 条 = 37 导航 + 5 子路由 + 3 认证页）：本文件登记 42 条（37 + 5）；3 个认证页（`/login` / `/setup` / `/invite`）不属于任何工作区，经 `AUTH_ROUTE_PATHS` 单独导出。深链模式集中在 `SUB_ROUTE_PATTERNS`。
+
+**与 `nav-config.ts` 的并存关系（新增而非改写，可回退）**：这一步牵动权限裁剪与深链，是整轮重构中最敏感的一步，故旧六域定义**原样保留**作对照物与回滚路径，两套数据并存：
+
+- 37 个导航目的地的 `perm` / `labelKey` / `icon` 与旧真源同路径项**逐条同值**（含 any-of 数组），由测试机械核对，防两套数据悄悄漂移；
+- 5 个子路由（`/instances/new`、`/instances/:id`、`/instances/:id/files`、`/client-channels/:id/publish`、`/bots/sessions/:id`）在旧真源无对应项，**继承其入口页 `perm`**（看不见列表页即看不见其深链）——属新增项，不是权限放宽；
+- 裁剪算法（`permOk` / `filterGroups`）在本层同形复刻，不 import 旧私有实现（那需要改 `nav-config.ts`，违背本阶段「不动旧真源」约束）；
+- 等价性由 `workspace-navigation.test.ts` 证明：旧导航 37 条零遗漏、新增恰 5 条、11 类权限场景（空权限 / 单权限 / 多权限 / any-of 单边 / 各域只读 / 全量节点 / 管理员短路）下新旧可见面无差异。
+
+**退役路径**：FR-501 把桌面侧栏 / 移动导航 / 命令面板三处消费方全部切到本文件后，再删 `nav-config.ts` 的六域定义；`Workspace.tsx` 的路由表承接原有 RouteRegistry 语义，**不得为缩短侧栏删登记项**。i18n 键沿用既有 `nav.*` 风格（能复用的一律复用），新增键在 `WORKSPACE_I18N_KEYS_TO_ADD` 登记在册，待 FR-501 补进 `src/i18n/{zh,en}.json`。
 
 ### 8.3 页面结构
 
@@ -1173,15 +1219,19 @@ Bot 页面 → 创建压测会话 → 选择目标实例 + bot 数量
 ### 8.6 目录结构
 
 ```
-web/
-  packages/ui/  # @jianmanager/ui 通用 UI/token/charts/helper 源码包（FR-273）
-  wiki/         # 控件博物馆 Vite 子项目，直接消费 @jianmanager/ui（FR-273）
+packages/ui/                      # @jianmanager/ui 通用 UI/token/charts/helper 源码包（FR-273，FR-283 迁仓库根）
+  src/styles/                     # 设计底座单一真源：theme-map / tokens / themes / motion + index 汇总（FR-496 阶段 1）
+  src/components/layout/          # 内容页布局规范层：PageShell / PageHeader / ScopeBar / SummaryStrip / Toolbar / PlatformTabs / 网格原语（FR-496 阶段 3）
+  src/components/shell/           # 导航骨架外壳层：AppShell / TopNav / SideNav / ResourceTree / CommandPalette / ObjectPageHeader（FR-496 阶段 4）
+  src/lib/color-contrast.ts       # 主题配色对比度计算与门禁（FR-496 阶段 2）
+apps/control-plane-web/           # 主控台（原 web/，FR-283 迁入）
   src/
     api/          # Axios client + per-module API (TanStack Query hooks)
     ws/           # WebSocket client, provider, hooks
     stores/       # Zustand (auth, theme, console[选中实例/节点])
     pages/        # 页面（懒加载）；DashboardPage = 运维控制台 Shell；V2 新增 NetworksPage(群组服拓扑) + 节点详情 JDK 标签
     components/   # 业务/页面组件；ui 与第一版通用 charts 为 @jianmanager/ui 兼容 re-export
+                  # console/workspace-navigation.ts：四工作区×组×页面导航登记真源（FR-496 阶段 5，与 nav-config.ts 并存）
                   # V2: config-editor(表单/原始/版本) · provision-wizard · jdk-manager · clone-dialog · registration-editor
                   # DangerConfirm: 统一危险操作二次确认（高危需输入名校验 + 角色门禁，FR-059）
     hooks/        # 自定义 hooks
@@ -1189,6 +1239,7 @@ web/
     lib/          # 应用工具函数；通用 helper 由 @jianmanager/ui 供给
   router.tsx
   route-permissions.ts
+apps/ui-museum/                   # 控件博物馆 Vite workspace 应用，直接消费 @jianmanager/ui（原 web/wiki，FR-273/283）
 ```
 
 ### 8.7 危险操作保护（FR-059）
