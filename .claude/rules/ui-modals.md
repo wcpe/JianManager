@@ -1,6 +1,6 @@
 # 模态框纪律
 
-> 适用于 `web/` 前端所有「创建 / 编辑 / 配置」类交互。违反即拒绝合并。
+> 适用于主控台（`apps/control-plane-web/`，原 `web/`）前端所有「创建 / 编辑 / 配置」类交互。违反即拒绝合并。
 
 ## 原则
 
@@ -25,7 +25,8 @@ function CreateChannelForm() {
 ## 必须：内容自适应模态框
 
 用 shadcn `<Dialog>` 承载，并套 `FR-072` 的高度自适应壳
-（`web/src/components/ui/scrollable-dialog.tsx`）：
+（实现 = `packages/ui/src/components/scrollable-dialog.tsx`，FR-283 后主控台经
+`apps/control-plane-web/src/components/ui/scrollable-dialog.tsx` 兼容 re-export 引入）：
 
 ```tsx
 // ✅ 正确：模态框 + 内容自适应（头/脚固定、正文超高内部滚动）
