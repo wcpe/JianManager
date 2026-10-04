@@ -14,26 +14,32 @@
   color-scheme: light;
 
   /* A+C 亮色控制台 token：冷灰工作区、白面板、Jian 绿主操作、钴蓝信息链接。 */
-  --background: #f5f6f8;
-  --foreground: #172033;
-  --card: #ffffff;
-  --card-foreground: #172033;
-  --popover: #ffffff;
-  --popover-foreground: #172033;
+  /* ── 主题种子优先，缺省回落基线值（FR-496 阶段 2）──
+     下面这些是「结构 + 品牌」的全部可换肤维度。themes.css 的每套主题只需声明相应种子
+     （`--seed-*`），未声明时用这里的基线字面量——于是：
+       · 既有主题可逐套迁移，尚未迁移的主题行为逐字节不变（零风险增量）
+       · 新增一套主题只写种子，不必再抄这一整段结构值
+     种子的语义与派生关系见 themes.css 顶部说明。 */
+  --background: var(--seed-surface, #f5f6f8);
+  --foreground: var(--seed-content, #172033);
+  --card: var(--seed-card, #ffffff);
+  --card-foreground: var(--seed-content, #172033);
+  --popover: var(--seed-popover, var(--seed-card, #ffffff));
+  --popover-foreground: var(--seed-content, #172033);
   --brand-forest: #158053;
   --brand-cobalt: #2563eb;
-  --primary: #158053;
-  --primary-foreground: #ffffff;
-  --secondary: #eef2f6;
-  --secondary-foreground: #263244;
-  --muted: #f8fafc;
-  --muted-foreground: #64748b;
-  --accent: #e7f5ed;
-  --accent-foreground: #11613f;
+  --primary: var(--seed-brand, #158053);
+  --primary-foreground: var(--seed-on-brand, #ffffff);
+  --secondary: var(--seed-surface-2, #eef2f6);
+  --secondary-foreground: var(--seed-content-2, #263244);
+  --muted: var(--seed-surface-3, #f8fafc);
+  --muted-foreground: var(--seed-content-3, #64748b);
+  --accent: var(--seed-brand-weak, #e7f5ed);
+  --accent-foreground: var(--seed-brand-ink, #11613f);
   --destructive: #dc2626;
-  --border: #d7dce3;
-  --input: #d7dce3;
-  --ring: #158053;
+  --border: var(--seed-line, #d7dce3);
+  --input: var(--seed-line, #d7dce3);
+  --ring: var(--seed-brand, #158053);
   --radius: 0.375rem;
   --workspace-bg-image: url('/brand/console-bg-light.png');
 
@@ -78,26 +84,29 @@
   color-scheme: dark;
 
   /* B 方案暗色控制台 token：低亮深底、冷灰面板、紫蓝主操作，保留 C 的拓扑标识语言。 */
-  --background: #0f141b;
-  --foreground: #e7edf6;
-  --card: #161c24;
-  --card-foreground: #e7edf6;
-  --popover: #171e27;
-  --popover-foreground: #e7edf6;
+  /* 同上：暗色也走种子回落。种子在 .dark 作用域内取值，与亮色互不干扰。
+     popover 单独给种子——暗色下它与 card 并非同值（#171e27 vs #161c24），
+     不能简单地跟随 card。 */
+  --background: var(--seed-surface, #0f141b);
+  --foreground: var(--seed-content, #e7edf6);
+  --card: var(--seed-card, #161c24);
+  --card-foreground: var(--seed-content, #e7edf6);
+  --popover: var(--seed-popover, var(--seed-card, #171e27));
+  --popover-foreground: var(--seed-content, #e7edf6);
   --brand-forest: #2fd184;
   --brand-cobalt: #7c86ff;
-  --primary: #7c86ff;
-  --primary-foreground: #101322;
-  --secondary: #202833;
-  --secondary-foreground: #e7edf6;
-  --muted: #1b222d;
-  --muted-foreground: #9aa6b6;
-  --accent: #252c43;
-  --accent-foreground: #e1e5ff;
+  --primary: var(--seed-brand, #7c86ff);
+  --primary-foreground: var(--seed-on-brand, #101322);
+  --secondary: var(--seed-surface-2, #202833);
+  --secondary-foreground: var(--seed-content-2, #e7edf6);
+  --muted: var(--seed-surface-3, #1b222d);
+  --muted-foreground: var(--seed-content-3, #9aa6b6);
+  --accent: var(--seed-brand-weak, #252c43);
+  --accent-foreground: var(--seed-brand-ink, #e1e5ff);
   --destructive: #f87171;
-  --border: #2a3442;
-  --input: #344052;
-  --ring: #7c86ff;
+  --border: var(--seed-line, #2a3442);
+  --input: var(--seed-line, #344052);
+  --ring: var(--seed-brand, #7c86ff);
 
   --shadow-color: 0 0 0;
   --brand-shadow: 124 134 255;
