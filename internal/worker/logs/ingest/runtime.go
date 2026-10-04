@@ -124,6 +124,24 @@ type Manager struct {
 	defaultTimeZone string
 	mu              sync.Mutex
 	cycleMu         sync.Mutex
+	// cycleMu 持有者观测仪（#57，env/Options 开启；默认关 ⇒ observeCycleMu 返回 nil，调用点只有一次判空）。
+	cycleMuProfile bool
+	// cycleMuMu 是观测仪的**叶子锁**：只保护下面几个普通字段（绝不在持它时调用外部代码，也不打日志）。
+	// 纪律（同 #55-A）：locked() 在**持 cycleMu 时**执行 ⇒ 锁内零 atomic、零日志，
+	// 把观测自身的开销排除在「持有时长」之外。
+	cycleMuMu          sync.Mutex
+	cycleMuHolder      cycleMuHolderInfo // 当前持有者（section + goroutine id + 起表时刻）
+	cycleMuHolderWatch *cycleMuWatch     // 该条记录属于谁（只有登记它的观测能清掉它）
+	cycleMuWindowStart time.Time         // 取锁密度滚动窗起点
+	cycleMuWindowAcqs  int               // 当前窗内取锁次数
+	cycleMuRatePerSec  float64           // 上一个已关窗的密度读数（次/秒）
+	// 慢持有 / 等锁读数（放锁后结算 ⇒ 可安全用 atomic）。
+	cycleMuSlowHoldCount atomic.Int64 // 慢持有累计（超 cycleMuSlowHoldThreshold）
+	cycleMuWarnAt        atomic.Int64 // UnixNano；慢持有告警独立节流窗
+	cycleMuWaitTotal     atomic.Int64 // 有界获取侧：等锁累计时长（ns）
+	cycleMuWaitMax       atomic.Int64 // 有界获取侧：最长单次等待（ns）
+	cycleMuWaitAttempts  atomic.Int64 // 有界获取侧的**调用次数**（每次调用记一条，与"探针 20/20 全忙"口径可比）
+	cycleMuWaitTimeouts  atomic.Int64 // 有界获取侧：超预算/被取消次数
 	// registerMu 串行化「实例登记 / 采集绑定」自身，使这条路径**永不等待采集轮的长临界区**。
 	//
 	// 为什么要与 cycleMu 分离（2026-10-01 生产事故根因）：cycleMu 的持有者是「整轮采集」
@@ -620,6 +638,9 @@ type Options struct {
 	SweepBackpressureStreak int
 	// SweepInflightCap 是在飞被放弃调用的并发上限（0 ⇒ 默认 4 ✓）。
 	SweepInflightCap int
+	// CycleMuProfile 打开 cycleMu 持有者观测仪（#57；默认关，也可用 env JIANMANAGER_CYCLE_MU_PROFILE=1）。
+	// 打开后：慢持有 Warn + 当前持有者快照 + 取锁密度 + 有界等锁读数；关闭时零开销。
+	CycleMuProfile bool
 	// ResumeBatchPerRound 是兜底环每轮最多处理的可解源数（0 ⇒ 默认 8）。
 	ResumeBatchPerRound int
 	// ResumeInterval 是**容量自愈兜底**周期（0 ⇒ 默认 30s）：低频重试「排空存量 → 推进回收 →
@@ -925,8 +946,13 @@ func (m *Manager) PrepareCutoverReadiness() CutoverReadiness {
 	if m == nil {
 		return CutoverReadiness{Reasons: []string{"ingest_manager_unavailable"}}
 	}
+	w := m.observeCycleMu("cutover")
 	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	w.locked()
+	defer func() {
+		m.cycleMu.Unlock()
+		w.done()
+	}()
 	m.mu.Lock()
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
 	for _, pipe := range m.pipes {
@@ -1185,8 +1211,14 @@ func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pi
 	// 锁空闲也返回 false）。回归 TestResolveCoveredGapsLockHoldIsBoundedPerSource 实测：
 	// 解算总时长 372ms 的同一时段内，采集轮最坏单轮仅 1.37ms ⇒ 争用上界为毫秒级，
 	// 与解算总时长（源数 × 单源投影查询）彻底解耦。
+	// #57：本处是"被 ResolveCoveredGaps 逐源调用"的实际持有者 ⇒ tag=resolveOne（现场 20/20 全忙的嫌疑面）。
+	w := m.observeCycleMu("resolveOne")
 	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	w.locked()
+	defer func() {
+		m.cycleMu.Unlock()
+		w.done()
+	}()
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("ingest: 全源解算被取消: %w", err)
 	}
@@ -1276,15 +1308,21 @@ const resolveGapsCycleMuWait = 5 * time.Second
 // acquireCycleMuBounded 在有界预算内获取 cycleMu（TryLock 轮询；ctx 取消立即放弃）。
 // 返回 false 表示超预算/被取消 —— 调用方必须**未做任何变更**地返回错误。
 func (m *Manager) acquireCycleMuBounded(ctx context.Context, budget time.Duration) bool {
-	deadline := time.Now().Add(budget)
+	// #57 等锁侧观测（探针"每次都吃满 5s 预算"的直接对照）：start 同时作为 deadline 基准
+	// ⇒ 与改前相比**不多一次** time.Now；观测关闭时 noteCycleMuWait 立即返回 ⇒ 零开销。
+	start := time.Now()
+	deadline := start.Add(budget)
 	for {
 		if m.cycleMu.TryLock() {
+			m.noteCycleMuWait(time.Since(start), true)
 			return true
 		}
 		if ctx != nil && ctx.Err() != nil {
+			m.noteCycleMuWait(time.Since(start), false)
 			return false
 		}
 		if !time.Now().Before(deadline) {
+			m.noteCycleMuWait(time.Since(start), false)
 			return false
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -1319,10 +1357,16 @@ func (m *Manager) ResolveCoveredGapsForSource(ctx context.Context, storageNamesp
 	// m.mu 的 33.8 万条 WAL 序列化上 ⇒ 本路径**无限等 cycleMu** ⇒ 舰队 33/53 调用
 	// 45-60s 全 TIMEOUT。放弃裁定"忙即快速失败"是安全的：它**未写入任何变更**，
 	// 返回明确错误让调用方重试，远优于"调用方超时但服务端仍在排队"。
+	// #57：持有观测（tag=resolveGapsForSource）—— 获取侧走 acquireBounded（等锁读数在那边记）。
+	w := m.observeCycleMu("resolveGapsForSource")
 	if !m.acquireCycleMuBounded(ctx, resolveGapsCycleMuWait) {
 		return fmt.Errorf("ingest: 采集轮忙（cycleMu 等待超 %s 预算），放弃裁定未写入任何变更，请稍后重试", resolveGapsCycleMuWait)
 	}
-	defer m.cycleMu.Unlock()
+	w.locked()
+	defer func() {
+		m.cycleMu.Unlock()
+		w.done()
+	}()
 	m.mu.Lock()
 	stopped := m.stopped
 	pipe := m.pipes[storageNamespace]
@@ -1437,6 +1481,8 @@ func New(opts Options) (*Manager, error) {
 	}
 	m.vlNotReady = make(map[string]string)
 	m.defaultCharset = opts.DefaultCharset
+	// #57：cycleMu 持有者观测仪（env 默认关；Options 可显式打开，供回归与现场按需取读数）。
+	m.cycleMuProfile = opts.CycleMuProfile || cycleMuProfileEnabled()
 	m.defaultTimeZone = opts.DefaultTimeZone
 	// 节点级默认时区必须**运行期自证**（2026-10-02 真机复验：配了 local 却仍是 +8h，因为
 	// 容器/systemd 里 local 恰好解析成 UTC）。这段日志与告警把「配置值 → 解析结果 → 解析依据」
@@ -2180,8 +2226,13 @@ func (m *Manager) Stop() error {
 	if m.persistWorkerDone != nil {
 		<-m.persistWorkerDone
 	}
+	w := m.observeCycleMu("stop")
 	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	w.locked()
+	defer func() {
+		m.cycleMu.Unlock()
+		w.done()
+	}()
 	// 与登记串行（锁序 cycleMu → registerMu，见 registerMu 注释）：Stop 之后不能再有登记
 	// 进来 persist——那会在索引句柄关闭后把它重新打开，留下无人关闭的连接与 WAL 残留。
 	m.registerMu.Lock()
@@ -2348,7 +2399,9 @@ func (m *Manager) pollOnce() {
 	// 序列化时，"work <- i / wg.Wait()"这段把 cycleMu 也占住 ⇒ 解算/登记/停止全挂。
 	// 语义自检（父级确认）：cycleMu 只需保证"本轮工作集（读到的源列表）"与"改 pipes 的路径"
 	// 不并发；worker 执行期放锁不改变本轮工作集（item 已定格），轮与轮间由 ticker 串行。
+	w := m.observeCycleMu("pollSnapshot")
 	m.cycleMu.Lock()
+	w.locked()
 	// 轮级校验预算：本轮内单源校验最多等到这个时刻 ⇒ 轮墙钟不被少数源拖成分钟级 ✓
 	// （本轮跑完即清 0，非轮内路径（启动恢复/对账重发）不受影响，仍按各自窗口 ✓）。
 	m.verifyRoundDeadline.Store(time.Now().Add(m.verifyRoundBudgetOf()).UnixNano())
@@ -2368,6 +2421,7 @@ func (m *Manager) pollOnce() {
 	m.mu.Unlock()
 	// D 修复：读快照完成即放 cycleMu —— 其后"归一 workers / 分发 work / wg.Wait / 汇总"都在锁外。
 	m.cycleMu.Unlock()
+	w.done()
 	// 仅测试观测点：断言进入分发段时 cycleMu 已释放（见 pollDispatchHook 注释）。
 	if hook, _ := m.pollDispatchHook.Load().(func()); hook != nil {
 		hook()
@@ -2455,8 +2509,13 @@ func (m *Manager) ImportArchivesNow(storageNamespace, operator string) (int, int
 	if strings.TrimSpace(operator) == "" {
 		return 0, 0, fmt.Errorf("ingest: 手动导入归档必须携带操作人（认证主体为空时拒绝执行）")
 	}
+	w := m.observeCycleMu("importArchives")
 	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	w.locked()
+	defer func() {
+		m.cycleMu.Unlock()
+		w.done()
+	}()
 	m.mu.Lock()
 	type target struct {
 		source SourceConfig
@@ -3144,6 +3203,211 @@ func (m *Manager) projectionGenerationsExhausted(source SourceConfig) bool {
 		return false
 	}
 	return len(publishedSourceProjectionGenerations(current.PublishedProjection, source)) >= maxPublishedProjectionGenerations
+}
+
+// ── #57：cycleMu 持有者观测仪（env 默认关；单变量观测件，零行为变更） ─────────────────────
+//
+// 动因（现场强证据）：resolve-gaps 探针 20/20 全忙、19/20 耗时 5.020–5.075s（±55ms）⇒ 每次都
+// 吃满 5s 预算 ⇒ cycleMu **近乎连续被持有**（不是稀疏竞争窗 ✗✗）。现场锚
+// `goroutine 3457 [sync.Mutex.Lock, 2 minutes]` 只能看见「有人在等」，上游持有者定不了名 ✗。
+// 本仪器把「谁持有 / 多久 / 在哪 / 多密」变成可直接读出的三个面：
+//  1. 慢持有 Warn 行（section + hold + slowTotal，独立节流窗）；
+//  2. 当前持有者快照（section + goroutine id + heldFor）—— 探针可与 5.02s 同刻取用 ✓；
+//  3. 取锁密度（滚动窗内每秒取锁次数）＋ 有界获取侧读数（等锁总时长/最长/尝试/超预算）。
+//
+// 零开销：默认关（env `JIANMANAGER_CYCLE_MU_PROFILE=1`，或 Options.CycleMuProfile）；
+// 关闭时 observeCycleMu 返回 nil，且 watch 的所有方法对 nil 接收者安全 ⇒ 调用点只有一次判空。
+const (
+	// cycleMuSlowHoldThreshold 是「慢持有」阈值（100ms 起步，与 #55-A 的 m.mu 口径一致）。
+	cycleMuSlowHoldThreshold = 100 * time.Millisecond
+	// cycleMuWarnMinInterval 是慢持有告警的**独立**节流窗（不与其他仪器共享 ⇒ 互不压制）。
+	cycleMuWarnMinInterval = 5 * time.Second
+	// cycleMuDensityWindow 是取锁密度的滚动窗（每秒取锁次数按该窗计算）。
+	cycleMuDensityWindow = 5 * time.Second
+)
+
+var (
+	cycleMuProfileOnce sync.Once
+	cycleMuProfileOn   bool
+)
+
+// cycleMuProfileEnabled 读观测仪开关（同 JIANMANAGER_STAGE_TIMING 家族：显式 env、默认关）。
+func cycleMuProfileEnabled() bool {
+	cycleMuProfileOnce.Do(func() { cycleMuProfileOn = os.Getenv("JIANMANAGER_CYCLE_MU_PROFILE") == "1" })
+	return cycleMuProfileOn
+}
+
+// goroutineID 返回当前 goroutine 的数字 id（**仅观测仪开启时调用** ⇒ 生产默认零开销）。
+//
+// Go 不公开 goroutine id：这里取 runtime.Stack 首行（goroutine 123 [running]:），与常见诊断工具
+// 同法。现场要的正是「这个字段能与 pprof 栈里的 goroutine 编号对上」。
+func goroutineID() uint64 {
+	var buf [64]byte
+	line := string(buf[:runtime.Stack(buf[:], false)])
+	const prefix = "goroutine "
+	if !strings.HasPrefix(line, prefix) {
+		return 0
+	}
+	line = line[len(prefix):]
+	space := strings.IndexByte(line, ' ')
+	if space < 0 {
+		return 0
+	}
+	id, err := strconv.ParseUint(line[:space], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
+}
+
+// cycleMuHolderInfo 是「当前持有者」快照（零值 = 未持有 / 观测未开）。
+type cycleMuHolderInfo struct {
+	section   string
+	goroutine uint64
+	at        time.Time
+	held      bool
+}
+
+// cycleMuWatch 是一次 cycleMu 持有观测：observeCycleMu 在**取锁前**创建，locked() 在**取到锁后**
+// 立即调用，done() 在**放锁后**调用（与 #55-A 的 watchMutexWait/acquired 同型）。
+type cycleMuWatch struct {
+	m       *Manager
+	section string
+	at      time.Time
+	waited  time.Duration
+}
+
+// observeCycleMu 创建一次观测（未启用 ⇒ nil；watch 的所有方法对 nil 接收者安全）。
+func (m *Manager) observeCycleMu(section string) *cycleMuWatch {
+	if m == nil || !m.cycleMuProfile {
+		return nil
+	}
+	return &cycleMuWatch{m: m, section: section, at: time.Now()}
+}
+
+// locked 在取到 cycleMu **之后**立即调用：登记当前持有者、累计取锁密度、起表。
+// 锁内只写普通字段（cycleMuMu 保护）—— 零 atomic、零日志 ✓。
+func (w *cycleMuWatch) locked() {
+	if w == nil {
+		return
+	}
+	w.waited = time.Since(w.at)
+	w.at = time.Now()
+	goid := goroutineID() // 先算（runtime.Stack 有成本）⇒ 叶子锁只包字段写入
+	w.m.cycleMuMu.Lock()
+	w.m.cycleMuHolder = cycleMuHolderInfo{section: w.section, goroutine: goid, at: w.at, held: true}
+	w.m.cycleMuHolderWatch = w
+	w.m.noteCycleMuDensityLocked(w.at)
+	w.m.cycleMuMu.Unlock()
+}
+
+// noteCycleMuDensityLocked 在滚动窗内累计「取锁次数」（**调用方必须持 cycleMuMu**）。
+// 判读：现场「cycleMu 近乎连续被持有」应表现为**每秒取锁次数很低**（每次持有很久）＋ 慢持有行密集。
+func (m *Manager) noteCycleMuDensityLocked(now time.Time) {
+	if m.cycleMuWindowStart.IsZero() {
+		m.cycleMuWindowStart = now
+	} else if elapsed := now.Sub(m.cycleMuWindowStart); elapsed >= cycleMuDensityWindow {
+		m.cycleMuRatePerSec = float64(m.cycleMuWindowAcqs) / elapsed.Seconds()
+		m.cycleMuWindowStart = now
+		m.cycleMuWindowAcqs = 0
+	}
+	m.cycleMuWindowAcqs++
+}
+
+// done 在**放锁之后**调用：结算持有、清空自己登记的持有者记录、慢持有上报（独立节流窗）。
+func (w *cycleMuWatch) done() {
+	if w == nil {
+		return
+	}
+	hold := time.Since(w.at)
+	w.m.cycleMuMu.Lock()
+	// 只清「自己登记的那条」：解锁与 done() 之间可能已有人取到锁并登记了新持有者（不可误清 ✗）。
+	if w.m.cycleMuHolderWatch == w {
+		w.m.cycleMuHolder = cycleMuHolderInfo{}
+		w.m.cycleMuHolderWatch = nil
+	}
+	w.m.cycleMuMu.Unlock()
+	if hold < cycleMuSlowHoldThreshold {
+		return
+	}
+	w.m.cycleMuSlowHoldCount.Add(1)
+	last := w.m.cycleMuWarnAt.Load()
+	now := time.Now().UnixNano()
+	if last != 0 && time.Duration(now-last) < cycleMuWarnMinInterval {
+		return
+	}
+	if w.m.cycleMuWarnAt.CompareAndSwap(last, now) {
+		slog.Warn("cycleMu 慢持有", "section", w.section, "hold", hold.String(), "slowTotal", w.m.cycleMuSlowHoldCount.Load())
+	}
+}
+
+// noteCycleMuWait 记一次有界获取的等锁时长（#57；关闭观测时立即返回 ⇒ 零开销）。
+// 现场对照：探针 19/20 次恰好 5.020–5.075s ⇒ 本读数应呈现「近似恒等于预算」的形态。
+func (m *Manager) noteCycleMuWait(d time.Duration, acquired bool) {
+	if m == nil || !m.cycleMuProfile {
+		return
+	}
+	m.cycleMuWaitTotal.Add(int64(d))
+	m.cycleMuWaitAttempts.Add(1)
+	if !acquired {
+		m.cycleMuWaitTimeouts.Add(1)
+	}
+	if int64(d) > m.cycleMuWaitMax.Load() {
+		m.cycleMuWaitMax.Store(int64(d))
+	}
+}
+
+// CycleMuProfileEnabled 报告 cycleMu 观测仪是否开启（探针同刻取用；未开 ⇒ 其余读数无意义）。
+func (m *Manager) CycleMuProfileEnabled() bool { return m != nil && m.cycleMuProfile }
+
+// CycleMuSlowHoldCount 返回慢持有累计次数（阈值 cycleMuSlowHoldThreshold）。
+func (m *Manager) CycleMuSlowHoldCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.cycleMuSlowHoldCount.Load()
+}
+
+// CycleMuHolderSnapshot 返回「当前持有者」快照：section、goroutine id、已持有时长、是否持有。
+// 探针可在每次 5s 超时**同刻**取一次 ⇒「谁持有」当场定点（现场锚 goroutine 3457 的答案面）。
+func (m *Manager) CycleMuHolderSnapshot() (string, uint64, time.Duration, bool) {
+	if m == nil {
+		return "", 0, 0, false
+	}
+	m.cycleMuMu.Lock()
+	defer m.cycleMuMu.Unlock()
+	h := m.cycleMuHolder
+	if !h.held {
+		return "", 0, 0, false
+	}
+	return h.section, h.goroutine, time.Since(h.at), true
+}
+
+// CycleMuDensityPerSec 返回滚动窗内「每秒取锁次数」（含当前未完窗口的即时值；未启用 ⇒ 0）。
+func (m *Manager) CycleMuDensityPerSec() float64 {
+	if m == nil {
+		return 0
+	}
+	m.cycleMuMu.Lock()
+	defer m.cycleMuMu.Unlock()
+	if m.cycleMuWindowStart.IsZero() {
+		return 0
+	}
+	if elapsed := time.Since(m.cycleMuWindowStart); elapsed >= cycleMuDensityWindow {
+		return m.cycleMuRatePerSec // 窗已满但尚无新取锁：用上一个已关窗读数
+	} else if elapsed > 0 {
+		return float64(m.cycleMuWindowAcqs) / elapsed.Seconds()
+	}
+	return 0
+}
+
+// CycleMuWaitStats 返回有界获取侧读数：等锁累计、最长单次等待、尝试次数、超预算/被取消次数。
+func (m *Manager) CycleMuWaitStats() (total, max time.Duration, attempts, timeouts int64) {
+	if m == nil {
+		return 0, 0, 0, 0
+	}
+	return time.Duration(m.cycleMuWaitTotal.Load()), time.Duration(m.cycleMuWaitMax.Load()),
+		m.cycleMuWaitAttempts.Load(), m.cycleMuWaitTimeouts.Load()
 }
 
 // mutexHoldSlowThreshold 是"慢持锁/慢等待"告警阈值（候选 2 测量，2026-10-04；#55-A 沿用）：
