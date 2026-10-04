@@ -20,11 +20,13 @@ describe('暗色模式设计表面', () => {
   it('暗色 token 使用 B 方案深色云运维台基调', () => {
     const css = uiStyle('tokens.css')
 
-    // 阶段 2 起 token 改为「种子优先、缺省回落基线」：色值现在写在 var() 的缺省位里。
-    // 本守卫的意图不变——仍是断言暗色基调为 B 方案那组色值，只是形态要跟上。
-    expect(css).toContain('--background: var(--seed-surface, #0f141b);')
-    expect(css).toContain('--card: var(--seed-card, #161c24);')
-    expect(css).toContain('--primary: var(--seed-brand, #7c86ff);')
+    // 阶段 2 起结构色由种子派生，暗色基调改由 .dark 的**种子**体现：
+    // 品牌 #7c86ff（B 方案的紫蓝主操作）与结构色相 257（冷墨蓝）。
+    // 派生式里仍能读到暗色的起手明度 0.189（背景）与 0.230（卡片）。
+    expect(css).toContain('--seed-brand: #7c86ff;')
+    expect(css).toContain('--seed-hue: 257;')
+    expect(css).toContain('oklch(0.189')
+    expect(css).toContain('oklch(0.230')
     expect(css).toContain('--brand-cobalt: #7c86ff;')
     expect(css).toContain('--workspace-bg-image: none;')
   })
