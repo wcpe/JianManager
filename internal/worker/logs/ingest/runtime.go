@@ -428,7 +428,10 @@ type Manager struct {
 	// walRowsBuildHook 是"锁外构建 WAL 行"前调用的**仅测试用**观测点（A-Step2 红/绿）：
 	// 断言该处未持 m.mu。
 	walRowsBuildHook atomic.Value // func()
-	mutexHoldWarnAt  atomic.Int64 // UnixNano；告警节流窗口
+	// deliverPlanHook 是"锁外投递规划（本批规范化 + 去重）"前调用的**仅测试用**观测点
+	// （#54 修复红/绿）：断言该处未持 m.mu。
+	deliverPlanHook atomic.Value // func()
+	mutexHoldWarnAt atomic.Int64 // UnixNano；告警节流窗口
 
 	// reconcileLoopCfgSnapshot 是常驻对账配置的快照（候选 1）：写点即时发布 ⇒ 配置读零锁。
 	reconcileLoopCfgSnapshot atomic.Value // ReconcileLoopConfig
@@ -3170,6 +3173,59 @@ func (m *Manager) MutexHoldSlowCount() int64 {
 	return m.mutexHoldSlowCount.Load()
 }
 
+// deliveryPlanFailure 是「本批规范化 + 去重」的唯一失败形态：零宽事件 / 规范化失败 /
+// 身份冲突。三者的 HTTPStatus 与错误文本必须与改前逐字一致（契约），故整包一起返回。
+type deliveryPlanFailure struct {
+	result pipeline.DeliveryResult
+	err    error
+}
+
+// planDeliveryBatchOutsideLock 在**锁外**完成本批的「零宽校验 + 规范化 + 去重」（#54 修复）。
+//
+// 现场（本分支 #54 专项）：这段 O(本批) 的工作原先整段持 m.mu —— 单批 47 万–173 万条 ⇒
+// 实测持锁 1m09.5s 且随批量线性增长 ✗。它**只触碰入参 events 与本调用私有的 seen**：
+// 既不读也不写任何共享状态，故外移不改变任何契约：
+//   - 追加序（FIFO）：toWrite 严格按 events 输入顺序 append；
+//   - 去重语义：seen 命中同 ID 同哈希 ⇒ 跳过；同 ID 不同哈希 ⇒ IDENTITY_CONFLICT 硬失败；
+//   - 失败形态：零宽 ⇒ 422、规范化失败 ⇒ 422、身份冲突 ⇒ status 0，错误文本逐字不变。
+//
+// 为什么"原来那把锁"本来也没有保护对象（外移的安全性论证）：seen 在进入临界区**之前**
+// 就已构建完毕（来自段 A 锁内取的 saved 快照），本段不读 m.state/m.pipes；而真正决定
+// "写不写、写什么"的后续步骤（canonicalRecoveryEvents / writeProjectionPlan）本来就在
+// 锁外 —— 即旧实现的锁既没有把「去重判定」与「写入」做成原子，也不提供任何跨源串行化
+// 保证（同源投递的串行化由采集轮"每源一个工作项"给出，见 defaultPollConcurrency 说明）。
+func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map[string]string) ([]logtypes.Event, *deliveryPlanFailure) {
+	if hook, _ := m.deliverPlanHook.Load().(func()); hook != nil {
+		hook()
+	}
+	toWrite := make([]logtypes.Event, 0, len(events))
+	for _, event := range events {
+		if event.Record.End <= event.Record.Start {
+			return nil, &deliveryPlanFailure{
+				result: pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity},
+				err:    fmt.Errorf("ingest: zero-width event %s", event.EventID),
+			}
+		}
+		var err error
+		event, err = normalizeCanonicalEvent(event)
+		if err != nil {
+			return nil, &deliveryPlanFailure{
+				result: pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity},
+				err:    err,
+			}
+		}
+		if existing, exists := seen[event.EventID]; exists {
+			if existing != event.CanonicalHash {
+				return nil, &deliveryPlanFailure{err: fmt.Errorf("ingest: IDENTITY_CONFLICT for event_id %s", event.EventID)}
+			}
+			continue
+		}
+		toWrite = append(toWrite, event)
+		seen[event.EventID] = event.CanonicalHash
+	}
+	return toWrite, nil
+}
+
 func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
 	if len(events) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
@@ -3181,9 +3237,23 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	timing := newDeliveryTiming(source.LogSourceID+"/"+source.SourceGeneration, len(events), m.stageSink)
 	defer timing.report()
 	key := source.LogSourceID + "/" + source.SourceGeneration
+	// #54 修复（deliver.plan 锁内 O(n) 专项，与 #53 的 A-Step2 同型）：锁内只做**值拷贝快照**。
+	// 修前这里有三段 m.mu 临界区，其中两段是 O(n) 重活：
+	//   - 段 B：遍历 saved.Events（内联集合，旧格式/段未落时非空）逐条规范化；
+	//   - 段 C：遍历**全批** events（零宽校验 + 规范化 + 去重），现场单批 47 万–173 万条，
+	//     实测持锁 1m09.5s（随批量线性）。
+	// 两段都**不读也不写任何共享状态**（只碰入参 events 与本调用私有的 seen/toWrite），
+	// 故整段外移、锁内只留快照 ⇒ 契约（追加序 / 去重语义 / 事件内容 / 持久化产物）逐位不变。
+	w := m.watchMutexHold("deliver.plan")
 	m.mu.Lock()
 	saved := m.state.Sources[key]
+	// 段 B 的值拷贝快照（同型 A-Step2 的 walSnapshot）。安全性：saved 本身已是锁内的值拷贝，
+	// 其 Events 只被**整体置 nil 或重建为新切片**，从不原地改写已有元素
+	//（appendEvents / appendEventTail / migrateInlineEvents / rebuildSource）⇒ 锁外只读遍历安全。
+	inlineEvents := saved.Events
+	eventsStored := saved.EventsStored && m.events != nil
 	m.mu.Unlock()
+	w.done()
 	// 增量尾部快速路径（判据与安全论证见 planDeliveryTail）：满足时跳过「遍历该源全部历史事件」
 	// 重建身份集合——这是单位行成本里最贵的一项（生产单源段实测可达 70 万行，微基准
 	// 单次遍历 8.7 µs/行 ≈ 6 秒/批，而段只增不减，成本随运行时长线性增长）。
@@ -3193,18 +3263,15 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 		seen = make(map[string]string, len(events))
 		timing.mark("seen-skipped")
 	} else {
-		seen = make(map[string]string, len(saved.Events))
-		m.mu.Lock()
-		for _, event := range saved.Events {
+		seen = make(map[string]string, len(inlineEvents))
+		// 段 B（#54 修复）：内联集合的规范化遍历（O(段行数)）**在锁外** —— 锁内只留上面的快照。
+		for _, event := range inlineEvents {
 			event, err := normalizeCanonicalEvent(event)
 			if err != nil {
-				m.mu.Unlock()
 				return pipeline.DeliveryResult{}, err
 			}
 			seen[event.EventID] = event.CanonicalHash
 		}
-		eventsStored := saved.EventsStored && m.events != nil
-		m.mu.Unlock()
 		// 事件体已落段时，身份集合从段流式重建（不持全量切片）；旧格式仍走内联切片。
 		if eventsStored {
 			if err := m.events.Iterate(key, func(event logtypes.Event) error {
@@ -3220,35 +3287,12 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 		}
 		timing.mark("seen")
 	}
-	w := m.watchMutexHold("deliver.plan")
-	m.mu.Lock()
-	toWrite := make([]logtypes.Event, 0, len(events))
-	for _, event := range events {
-		if event.Record.End <= event.Record.Start {
-			m.mu.Unlock()
-			w.done()
-			return pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity}, fmt.Errorf("ingest: zero-width event %s", event.EventID)
-		}
-		var err error
-		event, err = normalizeCanonicalEvent(event)
-		if err != nil {
-			m.mu.Unlock()
-			w.done()
-			return pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity}, err
-		}
-		if existing, exists := seen[event.EventID]; exists {
-			if existing != event.CanonicalHash {
-				m.mu.Unlock()
-				w.done()
-				return pipeline.DeliveryResult{}, fmt.Errorf("ingest: IDENTITY_CONFLICT for event_id %s", event.EventID)
-			}
-			continue
-		}
-		toWrite = append(toWrite, event)
-		seen[event.EventID] = event.CanonicalHash
+	// 段 C（#54 修复）：本批的「零宽校验 + 规范化 + 去重」（O(本批)）整段移到锁外。
+	// 该段不触碰 m.mu、也不触碰任何共享状态（详见 planDeliveryBatchOutsideLock 的说明）。
+	toWrite, fail := m.planDeliveryBatchOutsideLock(events, seen)
+	if fail != nil {
+		return fail.result, fail.err
 	}
-	m.mu.Unlock()
-	w.done()
 	timing.mark("toWrite")
 	if len(toWrite) == 0 {
 		// 本批事件此前已写入且逐字段一致（seen 命中同 ID 同哈希）：同样是「该区间已落库」的证据，
