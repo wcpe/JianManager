@@ -167,8 +167,55 @@ function mergeLayers(layers: Array<DeclarationMap | undefined>): DeclarationMap 
   return merged
 }
 
-/** 匹配一处 `var(--name)` 或 `var(--name, fallback)`；fallback 可含一层括号（如 color-mix）。 */
-const VAR_PATTERN = /var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*(?:\([^()]*\)[^()]*)*))?\)/
+/** 在顶层（括号外）找逗号的下标，用于把 `var(name, fallback)` 切成两段。 */
+function topLevelCommaIndex(input: string): number {
+  let depth = 0
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i]
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth -= 1
+    else if (ch === ',' && depth === 0) return i
+  }
+  return -1
+}
+
+/**
+ * 从文本里取出第一处 `var(...)`，按括号配平确定它的范围，并拆出名字与缺省值。
+ *
+ * 【为什么不用正则】缺省值可能含多层嵌套，例如
+ *   `var(--seed-content, oklch(0.245 calc(0.011 * 2.2) 258))`
+ * 里 oklch() 内还嵌着 calc()。正则要写成递归形态既难读又易错，配平扫描则天然支持任意深度。
+ */
+function findVarCall(
+  value: string,
+): { start: number; end: number; name: string; fallback?: string } | null {
+  const start = value.indexOf('var(')
+  if (start < 0) return null
+
+  let depth = 0
+  let end = -1
+  for (let i = start + 3; i < value.length; i += 1) {
+    const ch = value[i]
+    if (ch === '(') depth += 1
+    else if (ch === ')') {
+      depth -= 1
+      if (depth === 0) {
+        end = i + 1
+        break
+      }
+    }
+  }
+  if (end < 0) throw new Error(`var() 括号不配对：「${value}」`)
+
+  const inner = value.slice(start + 4, end - 1)
+  const comma = topLevelCommaIndex(inner)
+  const name = (comma < 0 ? inner : inner.slice(0, comma)).trim()
+  const fallback = comma < 0 ? undefined : inner.slice(comma + 1).trim()
+  if (!/^--[\w-]+$/.test(name)) {
+    throw new Error(`var() 的第一参数不是自定义属性名：「${inner}」`)
+  }
+  return { start, end, name, fallback }
+}
 
 /**
  * 把变量表里的 `var()` 引用展开成字面量。
@@ -183,20 +230,19 @@ const VAR_PATTERN = /var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*(?:\([^()]*\)[^()]*)*))?
  * 故采用「逐处替换、循环直到没有 var()」的迭代展开，并设上限防循环引用。
  */
 function expandVars(vars: DeclarationMap, where: string): DeclarationMap {
-  const MAX_DEPTH = 32
+  const MAX_DEPTH = 64
 
   const resolveValue = (value: string): string => {
     let current = value
     for (let depth = 0; depth < MAX_DEPTH; depth += 1) {
-      const match = VAR_PATTERN.exec(current)
-      if (!match) return current
-      const [token, name, fallback] = match
-      const defined = vars.get(name)
-      const replacement = defined ?? fallback?.trim()
+      const call = findVarCall(current)
+      if (!call) return current
+      const defined = vars.get(call.name)
+      const replacement = defined ?? call.fallback
       if (replacement === undefined) {
-        throw new Error(`${where} 的「${current}」引用了未定义的 ${name}，且未提供缺省值`)
+        throw new Error(`${where} 的「${current}」引用了未定义的 ${call.name}，且未提供缺省值`)
       }
-      current = current.slice(0, match.index) + replacement + current.slice(match.index + token.length)
+      current = current.slice(0, call.start) + replacement + current.slice(call.end)
     }
     throw new Error(`${where} 的「${value}」展开 var() 超过 ${MAX_DEPTH} 层，疑似循环引用`)
   }
@@ -430,7 +476,7 @@ const STRUCTURAL_TOKENS = [
   '--input',
 ]
 
-/** 品牌 7 变量：决定主操作与晕染色，同样必须逐主题声明。 */
+/** 品牌 7 变量：决定主操作与晕染色。主题块不再直接声明它们——由种子派生。 */
 const BRAND_TOKENS = [
   '--primary',
   '--primary-foreground',
@@ -440,6 +486,15 @@ const BRAND_TOKENS = [
   '--brand-shadow',
   '--chart-1',
 ]
+
+/**
+ * 每套主题需要声明的种子（阶段 2 起）。
+ *
+ * tokens.css 从这 5 个值派生出上面 STRUCTURAL_TOKENS + BRAND_TOKENS 共 19 个最终 token，
+ * 于是「新增一套主题」由手写 19 项 × 明暗两份，降为只写 5 项 × 2。
+ * `--seed-brand-rgb` 是品牌的裸三元组——CSS 无法从颜色变量里取出分量，而阴影晕色需要它。
+ */
+const THEME_SEEDS = ['--seed-brand', '--seed-on-brand', '--seed-brand-rgb', '--seed-hue', '--seed-chroma']
 
 describe('主题 token 覆盖（防新增主题漏定义）', () => {
   it('两套样式表里所有选择器都被解析器识别（没有静默丢弃的作用域）', () => {
@@ -453,19 +508,35 @@ describe('主题 token 覆盖（防新增主题漏定义）', () => {
     expect(THEMES.themeDark.has(DEFAULT_THEME)).toBe(false)
   })
 
-  it.each(THEME_NAMES.filter((theme) => theme !== DEFAULT_THEME))('%s 的亮色块声明了结构 12 项与品牌 7 项', (theme) => {
-    const block = THEMES.themeLight.get(theme)
-    expect(block, `${theme} 缺少 [data-theme="${theme}"] 亮色块`).toBeTruthy()
-    const missing = [...STRUCTURAL_TOKENS, ...BRAND_TOKENS].filter((name) => !block?.has(name))
-    expect(missing, `${theme} 亮色块漏定义：${missing.join(', ')}`).toEqual([])
-  })
+  it.each(THEME_NAMES.filter((theme) => theme !== DEFAULT_THEME))(
+    '%s 的亮色块只声明 5 个种子，结构色由 tokens.css 派生',
+    (theme) => {
+      const block = THEMES.themeLight.get(theme)
+      expect(block, `${theme} 缺少 [data-theme="${theme}"] 亮色块`).toBeTruthy()
 
-  it.each(THEME_NAMES.filter((theme) => theme !== DEFAULT_THEME))('%s 的暗色块声明了结构 12 项与品牌 7 项', (theme) => {
-    const block = THEMES.themeDark.get(theme)
-    expect(block, `${theme} 缺少 [data-theme="${theme}"].dark 暗色块`).toBeTruthy()
-    const missing = [...STRUCTURAL_TOKENS, ...BRAND_TOKENS].filter((name) => !block?.has(name))
-    expect(missing, `${theme} 暗色块漏定义：${missing.join(', ')}`).toEqual([])
-  })
+      const missing = THEME_SEEDS.filter((name) => !block?.has(name))
+      expect(missing, `${theme} 亮色块漏定义种子：${missing.join(', ')}`).toEqual([])
+
+      // 种子化的核心承诺：主题块只写种子，结构值一律由派生层提供。
+      // 这条比「≤5 项」更强——它顺带挡住「顺便抄一个结构值进来」的退化。
+      const extra = [...(block?.keys() ?? [])].filter((name) => !THEME_SEEDS.includes(name))
+      expect(extra, `${theme} 亮色块声明了种子之外的值（应由派生层提供）：${extra.join(', ')}`).toEqual([])
+    },
+  )
+
+  it.each(THEME_NAMES.filter((theme) => theme !== DEFAULT_THEME))(
+    '%s 的暗色块只声明 5 个种子，结构色由 tokens.css 派生',
+    (theme) => {
+      const block = THEMES.themeDark.get(theme)
+      expect(block, `${theme} 缺少 [data-theme="${theme}"].dark 暗色块`).toBeTruthy()
+
+      const missing = THEME_SEEDS.filter((name) => !block?.has(name))
+      expect(missing, `${theme} 暗色块漏定义种子：${missing.join(', ')}`).toEqual([])
+
+      const extra = [...(block?.keys() ?? [])].filter((name) => !THEME_SEEDS.includes(name))
+      expect(extra, `${theme} 暗色块声明了种子之外的值（应由派生层提供）：${extra.join(', ')}`).toEqual([])
+    },
+  )
 
   it('默认主题 indigo 依赖基线，:root 与 .dark 同样声明齐备', () => {
     const lightMissing = [...STRUCTURAL_TOKENS, ...BRAND_TOKENS].filter((name) => !TOKENS.light.has(name))
