@@ -196,14 +196,18 @@ func TestWaitingCollectorCompletesUnderLongChain(t *testing.T) {
 // TestPersistGateFairFIFO（性质 2）：多个普通等待者必须**按到达顺序**被服务（显式 FIFO），
 // 不被单个持门者压制。
 //
-// 到达顺序 == `persistJoin` 分配序号（本用例用 2ms 间隔让到达顺序确定 ⇒ 序号顺序即到达顺序）。
+// 契约基准（A 裁定 2026-10-05）：到达顺序以**门内真实入队序**为准（钩子 "enqueue" 事件，
+// 持 g.mu 触发 ✓）。旧版以 `persistJoin` 取号序为基准 —— A-Step2 拆掉"长 m.mu 段恰好串行化
+// 并发调用"的隐式耦合后，取号序与入队序可被调度错位（门自身仍严格队列 FIFO ✓）。
 //
-// 转红方式（实测）：把授予改成 LIFO（授予队尾、复刻「谁最后来谁先走」的反 FIFO 形态）——
-// 服务序会被逆转，本用例在「严格递增」处变红。
+// 转红方式（实测）：`enqueueLocked` 改为**插队首**（LIFO，复刻"谁最后来谁先走"的反 FIFO 形态）
+// ——服务序被逆转，本用例在"保序子序列"处变红。
 func TestPersistGateFairFIFO(t *testing.T) {
 	m, _ := newGateFixture(t, 2000, 16)
 	var mu sync.Mutex
 	var served []int64
+	// 门内真实**入队序**（A 裁定契约字面 ✓）：按事件到达序追加（钩子在持 g.mu 下触发 ⇒ 即真实入队序）。
+	var enqueueOrder []int64
 	// **被提交覆盖**的等待者数（用户 2026-10-05 ③ 更正版 ✓）：`persistCtx` 有合并短路
 	// （`persistCovered >= seq ⇒ 直接返回` ✓）⇒ 被某次提交覆盖的等待者**不发 acquire 事件** ✗
 	// ⇒ 只数 acquire 会把"被合并服务"误判成"被饿死" ✗✗（这正是本用例此前偶发红的真机制 ✓）。
@@ -212,11 +216,16 @@ func TestPersistGateFairFIFO(t *testing.T) {
 	type waiterMark struct{}
 	marker := waiterMark{}
 	m.persistGateStage = func(ctx context.Context, event string, seq int64, priority bool) {
-		if event != "acquire" || priority || ctx.Value(marker) == nil {
+		if priority || ctx.Value(marker) == nil {
 			return
 		}
 		mu.Lock()
-		served = append(served, seq)
+		switch event {
+		case "acquire":
+			served = append(served, seq)
+		case "enqueue":
+			enqueueOrder = append(enqueueOrder, seq)
+		}
 		mu.Unlock()
 	}
 
@@ -268,8 +277,24 @@ func TestPersistGateFairFIFO(t *testing.T) {
 	// 二者皆无才是饿死 ✗。序断言只对**实际拿到门的子集**保留严格 FIFO ✓（被合并者本就没排队 ✓）。
 	require.Equal(t, 5, len(got)+covered,
 		"5 个等待者都必须被服务（授予门 或 被提交覆盖；二者皆无=被长链饿死 ✗）：acquire=%v covered=%d", got, covered)
-	for i := 1; i < len(got); i++ {
-		require.Less(t, got[i-1], got[i], "服务顺序必须严格按到达顺序（显式 FIFO），实测 %v", got)
+	// **A 裁定（2026-10-05）契约字面**：门按其**队列顺序（入队序）**服务。旧断言"acquire 的 seq
+	// 严格递增"把"门外取号序"当契约 —— A-Step2 后取号与入队之间可被调度错位（门自身仍是严格
+	// 队列 FIFO ✓）。现断言：服务序必须是**入队序的保序子序列**（被 covered 合并者本就不在 got ✓）。
+	mu.Lock()
+	enq := append([]int64(nil), enqueueOrder...)
+	mu.Unlock()
+	pos := make(map[int64]int, len(enq))
+	for i, s := range enq {
+		if _, ok := pos[s]; !ok {
+			pos[s] = i
+		}
+	}
+	last := -1
+	for _, s := range got {
+		p, ok := pos[s]
+		require.True(t, ok, "被服务的请求必须出现在入队序中：served=%v enqueue=%v", got, enq)
+		require.Greater(t, p, last, "服务顺序必须是入队序的保序子序列（显式 FIFO 契约），服务序=%v 入队序=%v", got, enq)
+		last = p
 	}
 }
 

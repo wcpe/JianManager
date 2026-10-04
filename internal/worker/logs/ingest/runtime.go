@@ -423,7 +423,12 @@ type Manager struct {
 	reconcileViewSnapshot atomic.Value // *reconcileView
 	// 候选 2（2026-10-04）：m.mu 慢持锁观测 —— 计数 + 节流告警（先测量、后收窄）。
 	mutexHoldSlowCount atomic.Int64
-	mutexHoldWarnAt    atomic.Int64 // UnixNano；告警节流窗口
+	// pollDispatchHook 是"采集分发前"的**仅测试用**观测点（D 修复红/绿）：断言进入分发段时 cycleMu 已释放。
+	pollDispatchHook atomic.Value // func()
+	// walRowsBuildHook 是"锁外构建 WAL 行"前调用的**仅测试用**观测点（A-Step2 红/绿）：
+	// 断言该处未持 m.mu。
+	walRowsBuildHook atomic.Value // func()
+	mutexHoldWarnAt  atomic.Int64 // UnixNano；告警节流窗口
 
 	// reconcileLoopCfgSnapshot 是常驻对账配置的快照（候选 1）：写点即时发布 ⇒ 配置读零锁。
 	reconcileLoopCfgSnapshot atomic.Value // ReconcileLoopConfig
@@ -1242,6 +1247,30 @@ func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pi
 // ctx 语义（2026-10-02 与整节点路径同批修正）：调用方（HTTP/RPC）超时或断开时**不得**把放弃
 // 裁定落盘——放弃是唯一允许回收链跨过永久空洞的动作，必须来自一次完整、未被取消的显式请求。
 // 故入口与临界区内各校验一次，取消即返回明确错误（不写账本、不恢复采集）。
+// resolveGapsCycleMuWait 是"放弃裁定"等待采集轮锁（cycleMu）的墙钟预算（2026-10-04 C 修复）：
+// 现场 resolve-gaps 33/53 调用在 cycleMu 上排队 45-60s 全 TIMEOUT（持有者 pollOnce 被 work
+// 通道阻塞，见专项报告）。放弃裁定"等不到就明确失败"是安全的——它不写账本、不改状态，
+// 调用方可重试；而"无限等"只会把调用方超时与服务端排队叠加成双倍失败面。
+const resolveGapsCycleMuWait = 5 * time.Second
+
+// acquireCycleMuBounded 在有界预算内获取 cycleMu（TryLock 轮询；ctx 取消立即放弃）。
+// 返回 false 表示超预算/被取消 —— 调用方必须**未做任何变更**地返回错误。
+func (m *Manager) acquireCycleMuBounded(ctx context.Context, budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for {
+		if m.cycleMu.TryLock() {
+			return true
+		}
+		if ctx != nil && ctx.Err() != nil {
+			return false
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func (m *Manager) ResolveCoveredGapsForSource(ctx context.Context, storageNamespace, operator string) error {
 	if m == nil {
 		return fmt.Errorf("ingest: manager unavailable")
@@ -1260,7 +1289,19 @@ func (m *Manager) ResolveCoveredGapsForSource(ctx context.Context, storageNamesp
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("ingest: 放弃裁定被取消（未写入任何变更）: %w", err)
 	}
-	m.cycleMu.Lock()
+	// C 修复（2026-10-04，resolve-gaps 挂死专项）：cycleMu 的**有界获取**。
+	// 现场（pprof 铁证）：pollOnce 持 cycleMu 卡在 `work <- i`（2347）——worker 全堵在
+	// m.mu 的 33.8 万条 WAL 序列化上 ⇒ 本路径**无限等 cycleMu** ⇒ 舰队 33/53 调用
+	// 45-60s 全 TIMEOUT。放弃裁定"忙即快速失败"是安全的：它**未写入任何变更**，
+	// 返回明确错误让调用方重试，远优于"调用方超时但服务端仍在排队"。
+	// C 修复（2026-10-04，resolve-gaps 挂死专项）：cycleMu 的**有界获取**。
+	// 现场（pprof 铁证）：pollOnce 持 cycleMu 卡在 `work <- i`（2347）——worker 全堵在
+	// m.mu 的 33.8 万条 WAL 序列化上 ⇒ 本路径**无限等 cycleMu** ⇒ 舰队 33/53 调用
+	// 45-60s 全 TIMEOUT。放弃裁定"忙即快速失败"是安全的：它**未写入任何变更**，
+	// 返回明确错误让调用方重试，远优于"调用方超时但服务端仍在排队"。
+	if !m.acquireCycleMuBounded(ctx, resolveGapsCycleMuWait) {
+		return fmt.Errorf("ingest: 采集轮忙（cycleMu 等待超 %s 预算），放弃裁定未写入任何变更，请稍后重试", resolveGapsCycleMuWait)
+	}
 	defer m.cycleMu.Unlock()
 	m.mu.Lock()
 	stopped := m.stopped
@@ -2279,8 +2320,12 @@ func (g *persistGate) grantableLocked(seq int64, priority bool, streakMax int) b
 const defaultPollConcurrency = 8
 
 func (m *Manager) pollOnce() {
+	// D 修复（2026-10-04，resolve-gaps 挂死专项）：cycleMu 只覆盖"读快照"段。
+	// 现场（pprof 铁证）：原实现 cycleMu 覆盖整轮 ⇒ worker 们堵在 m.mu 的 33.8 万条 WAL
+	// 序列化时，"work <- i / wg.Wait()"这段把 cycleMu 也占住 ⇒ 解算/登记/停止全挂。
+	// 语义自检（父级确认）：cycleMu 只需保证"本轮工作集（读到的源列表）"与"改 pipes 的路径"
+	// 不并发；worker 执行期放锁不改变本轮工作集（item 已定格），轮与轮间由 ticker 串行。
 	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
 	// 轮级校验预算：本轮内单源校验最多等到这个时刻 ⇒ 轮墙钟不被少数源拖成分钟级 ✓
 	// （本轮跑完即清 0，非轮内路径（启动恢复/对账重发）不受影响，仍按各自窗口 ✓）。
 	m.verifyRoundDeadline.Store(time.Now().Add(m.verifyRoundBudgetOf()).UnixNano())
@@ -2298,6 +2343,12 @@ func (m *Manager) pollOnce() {
 	workers := m.pollConcurrency
 	m.publishReconcileViewLocked(false) // 采集轮：持续刷新对账只读视图（候选 1，节流发布）
 	m.mu.Unlock()
+	// D 修复：读快照完成即放 cycleMu —— 其后"归一 workers / 分发 work / wg.Wait / 汇总"都在锁外。
+	m.cycleMu.Unlock()
+	// 仅测试观测点：断言进入分发段时 cycleMu 已释放（见 pollDispatchHook 注释）。
+	if hook, _ := m.pollDispatchHook.Load().(func()); hook != nil {
+		hook()
+	}
 	if workers <= 0 {
 		workers = defaultPollConcurrency
 	}
@@ -6190,6 +6241,13 @@ func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
 	defer g.mu.Unlock()
 	waitStarted := time.Now()
 	g.enqueueLocked(seq, mode.priority)
+	// 入队序观测（契约字面，2026-10-05 A 裁定）：记录本条在门内的真实入队顺序。
+	// 契约 = "门按其队列顺序（入队序）服务"；seq 是门外取号，并发下可与入队序不同
+	// （旧行为里长 m.mu 段恰好串行化了并发调用 ⇒ 隐式维持"取号序==入队序"；A-Step2 拆掉
+	// 该隐式耦合后，观测面必须记录真实入队序，不得再拿取号序当契约 ✗）。
+	if m.persistGateStage != nil {
+		m.persistGateStage(ctx, "enqueue", seq, mode.priority)
+	}
 	// 出队同样要 Broadcast：**排队结构的变化会改变「谁是队首」**——一个等待者返回（出队）后，
 	// 新的队首可能因此变得可授予，而它此刻正睡在 cond.Wait 上。少了这一次唤醒就是全体沉睡
 	// （2026-10-03 实测：12 个 persistCtx 全在 Cond.Wait、门是空的）。
@@ -6390,6 +6448,30 @@ type persistAdvance struct {
 // planPersist 在**门外**构建期望态（CPU 密集：镜像行重建 + 状态→索引态转换）。
 //
 // 只持 m.mu（短临界区）取快照，绝不触碰持久化门 ✓；调用方持门后只做 commitPersist ✓。
+// walSnapshot 是 A-Step2 的"锁外 WAL 构建"输入：changed 源在锁内的**值拷贝**
+// （WAL/WALRefs 为 append-only 切片头 ⇒ 锁外只读安全；此后不再触碰 m.state/m.pipes）。
+type walSnapshot struct {
+	key   string
+	saved persistedSource
+}
+
+// buildWALRowsOutsideLock 在锁外按 changed 顺序逐源构建 WAL 行（A-Step2）：
+// 现场此处的逐条 json.Marshal 曾全压在 m.mu 内（栈证 338,521 条）⇒ 调用方必须已释放 m.mu。
+func (m *Manager) buildWALRowsOutsideLock(snaps []walSnapshot) ([]stateindex.WALRow, error) {
+	if hook, _ := m.walRowsBuildHook.Load().(func()); hook != nil {
+		hook()
+	}
+	out := make([]stateindex.WALRow, 0, len(snaps))
+	for _, sn := range snaps {
+		rows, err := m.walRowsOf(sn.key, sn.saved)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+	}
+	return out, nil
+}
+
 func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
 	// covered 是**构建本计划前**读到的持久化声明水位：提交成功后覆盖水位最多推进到这里
 	// （计划只保证覆盖"构建前声明的变更"；复用路径下它可能小于调用者声明号 ⇒ 绝不越推 ✓）。
@@ -6476,13 +6558,26 @@ func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
 		}
 		prunes = append(prunes, stateindex.WALPrune{Owner: key, EndThrough: entry.Positions.Reclaim})
 	}
-	desired, err := m.stateToIndexStateScoped(&m.state, changed)
+	// A-Step2（2026-10-04 resolve-gaps 挂死专项）：锁内只做"非 WAL 行"的规划（账本/根行/aux
+	// —— 便宜，且可变字段在此定格），**WAL 行的逐条 marshal（现场 338,521 条）移到锁外**，
+	// 用锁内取的**值拷贝快照**构建（WAL/WALRefs 是 append-only 切片：段只追加 ⇒ 锁外只读安全）。
+	desired, err := m.stateToIndexStateScopedOpt(&m.state, changed, true)
 	if err != nil {
 		m.mu.Unlock()
 		return nil, err
 	}
+	walSnaps := make([]walSnapshot, 0, len(changed))
+	for _, key := range changed {
+		walSnaps = append(walSnaps, walSnapshot{key: key, saved: m.state.Sources[key]})
+	}
 	// 规划完成：释放 m.mu 并返回计划。**规划到此结束**（门外）✓；提交由持门者 commitPersist ✓。
 	m.mu.Unlock()
+	// 锁外：WAL 行构建（贵：marshal 全在此；此后不再读 m.state/m.pipes）。
+	walRows, err := m.buildWALRowsOutsideLock(walSnaps)
+	if err != nil {
+		return nil, err
+	}
+	desired.WAL = append(desired.WAL, walRows...)
 	return &persistPlan{store: store, desired: desired, changed: changed, prunes: prunes, advances: advanced, covered: covered}, nil
 }
 

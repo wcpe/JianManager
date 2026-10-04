@@ -205,6 +205,14 @@ func stringsLastIndexByte(text string, b byte) int {
 
 // stateToIndexState 把内存状态映射为索引期望行（只包含非空键的行；行序无关，Apply 按指纹差异写入）。
 func (m *Manager) stateToIndexState(st *persistedState) (stateindex.State, error) {
+	return m.stateToIndexStateOpt(st, false)
+}
+
+// stateToIndexStateOpt 是 stateToIndexState 的选项版（A-min，2026-10-04 resolve-gaps 挂死专项）：
+// skipWAL=true 跳过 WAL 行构建 —— 供 stateToIndexStateScoped 的"全量根行"通道使用：
+// 那里 full.WAL 必定被 partial.WAL 覆盖，此前却对**全量源逐条 json.Marshal**
+// （现场 pprof 栈证 338,521 条）后整段丢弃 —— 纯浪费且全程压在 m.mu 内。
+func (m *Manager) stateToIndexStateOpt(st *persistedState, skipWAL bool) (stateindex.State, error) {
 	var out stateindex.State
 	keys := make(map[string]struct{}, len(st.Sources)+len(st.SourceConfigs))
 	for key := range st.Sources {
@@ -280,11 +288,13 @@ func (m *Manager) stateToIndexState(st *persistedState) (stateindex.State, error
 			}
 			out.Gaps = append(out.Gaps, gaps...)
 			out.Batches = append(out.Batches, batches...)
-			inline, err := m.walRowsOf(key, saved)
-			if err != nil {
-				return stateindex.State{}, err
+			if !skipWAL {
+				inline, err := m.walRowsOf(key, saved)
+				if err != nil {
+					return stateindex.State{}, err
+				}
+				out.WAL = append(out.WAL, inline...)
 			}
-			out.WAL = append(out.WAL, inline...)
 		}
 		auxConfig, err := json.Marshal(&aux)
 		if err != nil {
@@ -319,6 +329,14 @@ func ledgerCoreOf(entry *ledger.Entry) *indexLedgerCore {
 // 毫秒级；而它们承载投影代次/发布待定/实例绑定等由 Manager 直接改 state 的字段，
 // 全量比对让这些字段的变更无需任何显式标记即正确落库。
 func (m *Manager) stateToIndexStateScoped(st *persistedState, changed []string) (stateindex.State, error) {
+	return m.stateToIndexStateScopedOpt(st, changed, false)
+}
+
+// stateToIndexStateScopedOpt 是 Scoped 的选项版（A-Step2，2026-10-04 resolve-gaps 挂死专项）：
+// skipWAL=true 时**连 partial（changed 源）的 WAL 行也不构建** —— 供 planPersist 在 m.mu 内
+// "只定格非 WAL 规划"（账本/根行/aux），WAL 行的逐条 marshal 出锁后用值拷贝快照补建
+// （见 buildWALRowsOutsideLock；现场栈证 338,521 条 marshal 曾全压在 m.mu 内）。
+func (m *Manager) stateToIndexStateScopedOpt(st *persistedState, changed []string, skipWAL bool) (stateindex.State, error) {
 	// 先按 changed 构建账本派生行（该函数只遍历给定源）。
 	scoped := &persistedState{Sources: make(map[string]persistedSource, len(changed))}
 	for _, key := range changed {
@@ -326,12 +344,14 @@ func (m *Manager) stateToIndexStateScoped(st *persistedState, changed []string) 
 			scoped.Sources[key] = saved
 		}
 	}
-	partial, err := m.stateToIndexState(scoped)
+	partial, err := m.stateToIndexStateOpt(scoped, skipWAL)
 	if err != nil {
 		return stateindex.State{}, err
 	}
 	// 再补上全部根行：先全量构建再覆盖派生行（source_aux 也是根，直接全量）。
-	full, err := m.stateToIndexState(st)
+	// A-min（2026-10-04）：全量通道只为"根行"服务，WAL 行必被 partial 覆盖 ⇒ skipWAL 省掉
+	// 全量源的逐条 marshal（现场栈证 338,521 条，锁内发生且整段丢弃）。
+	full, err := m.stateToIndexStateOpt(st, true)
 	if err != nil {
 		return stateindex.State{}, err
 	}
