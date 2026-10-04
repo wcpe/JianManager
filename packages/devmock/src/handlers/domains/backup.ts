@@ -321,7 +321,10 @@ export const handlers = [
     const rows = instanceId
       ? schedules.list((s) => s.instanceId === Number(instanceId))
       : schedules.list()
-    return HttpResponse.json(rows)
+    // 回填实例名（对齐真后端 ScheduleView.instanceName）：一次建 Map，避免逐行 O(n) 查找。
+    const names = new Map<number, string>()
+    for (const inst of db<{ id: number; name: string }>('instances').list()) names.set(inst.id, inst.name)
+    return HttpResponse.json(rows.map((s) => ({ ...s, instanceName: names.get(s.instanceId) })))
   }),
 
   domainRoute('post', '/schedules', async (info) => {

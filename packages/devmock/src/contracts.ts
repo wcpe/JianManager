@@ -235,6 +235,11 @@ export interface ScheduleInfo {
   id: number
   uuid: string
   instanceId: number
+  /**
+   * 实例展示名（真后端 `/schedules` 已回填）。前端优先用它，不必为了显示名字而拉全量实例列表。
+   * 可选：实例被删时后端留空，前端回退显示 #id。
+   */
+  instanceName?: string
   name: string
   cronExpr: string
   /** 动作：start / stop / restart / command / backup。 */
