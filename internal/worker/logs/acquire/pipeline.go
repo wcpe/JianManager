@@ -2,6 +2,9 @@ package acquire
 
 import (
 	"fmt"
+	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -50,6 +53,147 @@ type Pipeline struct {
 	// **同步**尽力投递（独立使用本包与既有回归的语义逐字不变，见 pipeline_drain_test.go 的
 	// TestPausedIngestStillDrainsDurablePending）。
 	appendRejectedHook func()
+	// replayGate 是「冗余整窗重投」抑制闸（#60-Z1，见 replayGateState 的说明）。
+	// replayGuard 是**叶子锁**：只保护闸内状态的读改写（绝不在持它时调用投递 ✗）。
+	replayGuard sync.Mutex
+	replayGate  replayGateState
+	// replaySuppressBaseOverride 是退避首个间隔的测试/配置覆盖（0 ⇒ 用常量默认值）。
+	replaySuppressBaseOverride time.Duration
+}
+
+// replaySuppressBase / replaySuppressMax 是「冗余整窗重投」抑制的退避区间（#60-Z1，父级裁定）：
+// 同一水位下第 k 次重复 ⇒ 等 2^(k-1) × 5s，上限 60s；**水位一前进即放行** ✓。
+//
+// 现场（opt2 采）：门队列浅（1–9 帧）⇒ 不是排队问题；单次持久化 maxMs=159,934ms ✗✗ ⇒ 慢在「单次大 payload
+// 提交」；投递链上**相邻样本 79.7% 是新代次（+1）**⇒ 几乎每次写入都在整窗 replace；≥1M 批占 4.8%、峰值 126 条/h。
+// 环：排空（deliverPendingBestEffort）每次只发 ≤500 条，却以 replay=true 调用投递 ⇒ ingest 侧 replace=true ⇒
+// **重建权威全量 + 发新代次**（现场单次 159s）；滞留期的重复触发把同一段未推进的水位反复整窗重投 ✗✗。
+const (
+	replaySuppressBase = 5 * time.Second
+	replaySuppressMax  = 60 * time.Second
+)
+
+// replayGateState 是"冗余整窗重投"抑制闸的状态（零值 ⇒ 从未尝试）。
+//
+// 水位代理 = **该源账本修订号**（`Ledger.Revision` 是 O(1)，且 `touch` 挂在所有写路径的入口 `require()`
+// 内 ⇒ 任何账本写都会变）。判据 = "自上次排空尝试之后水位未推进"（含投递结果登记 / 回收推进 / 新追加）：
+// 未推进 ⇒ 本次整窗重投不会带来新信息 ⇒ 退避；推进 ⇒ 立即放行 ✓（合法 replay 不被饿死 ✓）。
+type replayGateState struct {
+	delivery     uint64    // 上次尝试**之后**的投递水位（下一次比较只反映外部变化，不含自身写入 ✓）
+	reclaim      uint64    // 上次尝试**之后**的回收水位
+	hasWatermark bool      // 是否已取过水位（false ⇒ 首次，直接放行）
+	attemptedAt  time.Time // 上次尝试时刻（零值 ⇒ 从未尝试）
+	streak       int       // 同一水位下连续尝试次数（退避级数 2^k）
+	suppressed   int64     // 被抑制的冗余次数（观测读数）
+	lastLogAt    time.Time // 抑制日志节流
+}
+
+// replayBackoffFor 返回同一水位下第 streak 次尝试之后的等待间隔（2^k × base，上限 cap）。
+func (p *Pipeline) replayBackoffFor(streak int) time.Duration {
+	base := replaySuppressBase
+	if p.replaySuppressBaseOverride > 0 {
+		base = p.replaySuppressBaseOverride
+	}
+	cap0 := replaySuppressMax
+	if base > cap0 {
+		cap0 = base
+	}
+	d := base
+	for i := 1; i < streak && d < cap0; i++ {
+		d *= 2
+	}
+	if d > cap0 {
+		d = cap0
+	}
+	return d
+}
+
+// replayDrainDecision 判定本次排空是否**冗余**（#60-Z1），并回报「自上次尝试以来水位是否推进」。
+//
+// 水位 = 该源账本的 (**投递**, **回收**) 两个位置 —— 用 `Ledger.Positions`（O(1) 只读）取，
+// 不能用 `Revision`（`TryReclaim` 无条件推进它 ⇒ 判据恒为真 ✗，见 ledger.Positions 的说明）。
+func (p *Pipeline) replayDrainDecision(now time.Time) (suppress bool, progressed bool) {
+	pos, ok := p.led.Positions(p.key)
+	p.replayGuard.Lock()
+	defer p.replayGuard.Unlock()
+	if !ok {
+		return false, false // 账本源不存在：不抑制（交给既有错误面）
+	}
+	if !p.replayGate.hasWatermark {
+		return false, false // 首次：放行（但**不宣称**"水位前进" —— 见 noteReplayDrain 的四场景）
+	}
+	progressed = pos.Delivery != p.replayGate.delivery || pos.Reclaim != p.replayGate.reclaim
+	if progressed {
+		return false, true // 水位真前进 ⇒ 立即放行 ✓（合法 replay 不被饿死）
+	}
+	if p.replayGate.streak <= 0 {
+		return false, false // 上次是失败（或刚水位前进）⇒ 无退避级数 ⇒ 放行（见 noteReplayDrain）
+	}
+	return now.Sub(p.replayGate.attemptedAt) < p.replayBackoffFor(p.replayGate.streak), false
+}
+
+// noteReplayDrain 记录一次排空尝试并更新退避级数（#60-Z1）：
+//
+//   - **水位前进** ⇒ 级数归 0（下次立即放行 —— 合法 replay 不被饿死 ✓）；
+//   - **失败** ⇒ 级数归 0（同上）。这条是**证据驱动的收窄**：把失败也计入退避后，端到端自愈用例
+//     TestPausedSourceSelfHealsEndToEnd 转红 ✗✗（首次投递失败 ⇒ 5s 内重试被抑制 ⇒ 缺口消解链被饿死）
+//     ⇒ 父级裁定"判据是水位未前进"在此按"**不饿死合法 replay**"的更高不变量收窄为
+//     "**成功但水位未推进**才算冗余" ✓；
+//   - **成功但水位未推进** ⇒ 级数 +1（这才是冗余整窗：现场 159s/次、代次 +1 的重复项 ✓）。
+func (p *Pipeline) noteReplayDrain(progressed bool, failed bool) {
+	p.replayGuard.Lock()
+	defer p.replayGuard.Unlock()
+	switch {
+	case failed:
+		// **失败必须立即可重试**（不饿死自愈链）：实测把失败计入退避后 TestPausedSourceSelfHealsEndToEnd 转红。
+		p.replayGate.streak = 0
+	case progressed:
+		// 水位真前进 ⇒ 新水位上的这次 replay 是合法的 ⇒ 下次立即放行 ✓。
+		p.replayGate.streak = 0
+	case !p.replayGate.hasWatermark:
+		// 首次尝试只建立基准（"水位有没有动"无从比较）⇒ 紧接的**同水位重复**即被抑制
+		//（父级红证口径：同一水位下 5 次触发只允许 1 次整窗 ✓）。
+		p.replayGate.streak = 1
+	default:
+		p.replayGate.streak++ // 成功但零推进 ⇒ 冗余整窗 ⇒ 退避加深（2^k × base，上限 60s）
+	}
+	if pos, ok := p.led.Positions(p.key); ok { // 基准取本次**之后**（含其自身写入）⇒ 下次比较只反映外部变化
+		p.replayGate.delivery, p.replayGate.reclaim = pos.Delivery, pos.Reclaim
+		p.replayGate.hasWatermark = true
+	}
+	p.replayGate.attemptedAt = time.Now()
+}
+
+// noteSuppressedReplayDrain 记账并（按节流）打一行 INFO —— 每个退避窗最多一条，避免刷屏。
+func (p *Pipeline) noteSuppressedReplayDrain(now time.Time) {
+	p.replayGuard.Lock()
+	p.replayGate.suppressed++
+	total := p.replayGate.suppressed
+	streak := p.replayGate.streak
+	quiet := now.Sub(p.replayGate.lastLogAt) < replaySuppressMax
+	if !quiet {
+		p.replayGate.lastLogAt = now
+	}
+	p.replayGuard.Unlock()
+	if quiet {
+		return
+	}
+	slog.Info("冗余整窗重投已抑制（水位未推进 ⇒ 退避后再试）",
+		"logSourceID", p.key.LogSourceID, "generation", p.key.SourceGeneration,
+		"streak", streak, "backoff", p.replayBackoffFor(streak).String(), "suppressedTotal", total)
+}
+
+// SetReplaySuppressBase 覆盖"冗余整窗重投"抑制的退避首间隔（供配置接线与测试使用；0 ⇒ 常量默认）。
+func (p *Pipeline) SetReplaySuppressBase(d time.Duration) { p.replaySuppressBaseOverride = d }
+
+// SuppressedReplayDrains 返回被抑制的"冗余整窗重投"累计次数（#60-Z1 观测读数）。
+func (p *Pipeline) SuppressedReplayDrains() int64 {
+	if p == nil {
+		return 0
+	}
+	p.replayGuard.Lock()
+	defer p.replayGuard.Unlock()
+	return p.replayGate.suppressed
 }
 
 // NewPipeline 创建管道。deliver 为 nil 时不投递（仅 WAL）。
@@ -332,9 +476,22 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 	if len(pending) == 0 {
 		return nil, nil
 	}
+	// #60-Z1：冗余整窗重投抑制（见 replayGateState 的说明）——排空是投递面**唯一**走 replay=true 的入口，
+	// 而 replay=true 在 ingest 侧 = 整窗 replace（重建权威全量 + 发新代次）⇒ 滞留期重复触发 = 反复重投同一段。
+	// 失败判定与投递结果同批记账（见 noteReplayDrain：失败 ⇒ 不退避 ⇒ 立即可重试）。
+	// 声明必须在 defer 之前（闭包捕获的是变量本身 ✓）。
+	outcomeFailed := false
+	now := time.Now()
+	if suppress, progressed := p.replayDrainDecision(now); suppress {
+		p.noteSuppressedReplayDrain(now)
+		return nil, nil
+	} else {
+		defer func() { p.noteReplayDrain(progressed, outcomeFailed) }()
+	}
 	status, ackLost, err := p.deliver(pending, true)
 	if err != nil {
-		// 失败不改状态、不记 gap：源本就处于暂停，重试留给下一轮。
+		// 失败不改状态、不记 gap：源本就处于暂停，重试留给下一轮（失败不进入退避 ⇒ 节奏不变 ✓）。
+		outcomeFailed = true
 		p.noteSelfFailure(err.Error())
 		return nil, err
 	}
@@ -344,6 +501,7 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 		HTTPStatus: status,
 		AckLost:    ackLost,
 	}); res != nil {
+		outcomeFailed = true // 结果登记失败同样属"未推进"：不得进退避
 		p.noteSelfFailure(res.Error())
 		return nil, res
 	}

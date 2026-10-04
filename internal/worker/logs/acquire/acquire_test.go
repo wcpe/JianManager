@@ -786,8 +786,12 @@ func TestReplayDrainIsRateLimited(t *testing.T) {
 			"t0", "t1", "INFO", "stdout", msg)
 	}
 	// 塞入 6 条已 durable 的存量（走正常 Ingest → Commit）。
+	//
+	// 区间**连续**（[0,5) → [5,10) → …）：投递水位是"从回收位置起的连续已确认区间末端"，
+	// 因此只有连续区间才能让每轮排空**真的推进水位**（这正是 #60-Z1 的放行判据 ✓），
+	// 而"每轮真推进"也是本用例"摊平节奏、不丢数据"这一意图成立的前提。
 	for i := 0; i < 6; i++ {
-		start := uint64(i * 10)
+		start := uint64(i * 5)
 		ev := build(start, start+4, "payload-"+string(rune('a'+i)))
 		if err := wal.Append(ev); err != nil {
 			t.Fatalf("append %d: %v", i, err)
@@ -801,9 +805,20 @@ func TestReplayDrainIsRateLimited(t *testing.T) {
 		t.Fatalf("夹具前提不成立：期望 6 条存量，实测 %d", entries)
 	}
 
+	// 责任转移随投递**逐段**推进（见循环内 RegisterRecovery）：此处不预置宽 ref ——
+	// 一条覆盖全量的 ref 会让首轮回收把存量**一次扫空** ⇒ 后两轮无米下锅 ✗。
 	batchStart := len(batches)
 	var deliveredTotal int
 	for round := 0; round < 3; round++ {
+		// 每轮前把**该轮覆盖的那一段**交给恢复责任（现场：责任转移随投递逐段推进）⇒
+		// 该轮排空后的 `TryReclaim` 才会真的推进回收水位、已确认前缀才会离开 WAL
+		// ⇒ 下一轮发的是**下一批**（而不是重发同一头）。
+		// #60-Z1 的抑制闸正是以「投递/回收水位有没有前进」为放行判据，故夹具必须真逐段推进 ✓。
+		require.NoError(t, led.RegisterRecovery(key, ledger.RecoveryRef{
+			SegmentID: "seg-replay-rate-" + string(rune('a'+round)), Path: "seg-replay-rate.log",
+			State:      logtypes.RecoveryWALResponsibilityXfer,
+			CoversFrom: uint64(round * 10), CoversTo: uint64(round*10 + 10),
+		}))
 		pending, err := pipe.DeliverPending()
 		if err != nil {
 			t.Fatalf("第 %d 轮排空失败: %v", round, err)

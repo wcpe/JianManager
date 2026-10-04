@@ -637,6 +637,9 @@ func (p *Pipeline) SetDelivery(h DeliveryHook) {
 	})
 }
 
+// SuppressedReplayDrains 转发 acquire 层的「冗余整窗重投抑制」读数（#60-Z1）。
+func (p *Pipeline) SuppressedReplayDrains() int64 { return p.inner.SuppressedReplayDrains() }
+
 // TryReclaim 经 logtypes.CanReclaim 门禁推进 reclaim_position。
 // HTTP 2xx / REQUEST_DONE 单独不得回收；需恢复分段责任已转移且无 hold。
 func (p *Pipeline) TryReclaim() (uint64, error) {

@@ -594,6 +594,26 @@ func (l *Ledger) touch(key SourceKey) {
 	l.revisions[key]++
 }
 
+// Positions 返回该源当前水位（读/耐久/投递/回收）—— **O(1) 只读**，不含 Entry 克隆。
+//
+// 为什么需要它（#60-Z1）：冗余整窗重投的抑制判据是「水位有没有前进」，而
+//   - `Get` 会克隆整条条目（O(缺口数 + 批次数)）✗ 太贵；
+//   - `Revision` **不能**当水位用：`TryReclaim` 在入口调 `require`（⇒ 无条件推进修订号）
+//     即便什么都没改 ⇒ 排空收尾的每轮 `TryReclaim` 都会让修订号变化 ⇒ 判据恒为「已前进」✗✗
+//     （2026-10-05 实测：用 Revision 做判据时 5/5 次冗余整窗全部放行）。
+func (l *Ledger) Positions(key SourceKey) (logtypes.Positions, bool) {
+	if l == nil {
+		return logtypes.Positions{}, false
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	e, ok := l.entries[key]
+	if !ok || e == nil {
+		return logtypes.Positions{}, false
+	}
+	return e.Positions, true
+}
+
 // Snapshot 返回全部账本条目副本，供 Worker 持久化和崩溃恢复使用。
 func (l *Ledger) Snapshot() []Entry {
 	l.mu.RLock()
