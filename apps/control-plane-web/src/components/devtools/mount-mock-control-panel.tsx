@@ -17,6 +17,21 @@ const HOST_ID = 'mock-control-root'
 
 export function mountMockControlPanel(): void {
   if (typeof document === 'undefined' || document.getElementById(HOST_ID)) return
+  /**
+   * 自动化（e2e）环境不挂面板。
+   *
+   * 面板 `fixed right-4 bottom-4 z-[45] w-80` 钉在右下角，会盖住表格行右侧的
+   * 「编辑 / 删除」等按钮。Playwright 点击时先报 `element is visible, enabled and stable`，
+   * 紧接着 `… mock-control-panel … intercepts pointer events`，随后一路重试到 30 秒超时——
+   * 最终失败信息只显示 `locator.click: Test timeout`，完全看不出是被什么挡住的，
+   * 极易误判成「按钮不存在」或「表格没渲染」。
+   *
+   * 判据用 `navigator.webdriver`：自动化驱动下为 true，人工开浏览器调试时为 false。
+   * 于是「人调试时面板照常、跑 e2e 时不挡路」，也不必在测试侧注入样式去对抗挂载时机
+   * （试过在 e2e helper 里 addStyleTag / addInitScript：前者被整页导航清掉，
+   * 后者与面板的异步挂载时序纠缠，都不如在源头这一行干脆）。
+   */
+  if (navigator.webdriver) return
   const host = document.createElement('div')
   host.id = HOST_ID
   document.body.append(host)
