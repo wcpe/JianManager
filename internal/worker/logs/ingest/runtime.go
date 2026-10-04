@@ -5121,6 +5121,37 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 // deliveryConfirmedSegPrefix 是「投递确认补段」的段名前缀（#61-Z-a）：账本里可一眼认出这类段的来历。
 const deliveryConfirmedSegPrefix = "delivery-confirmed-"
 
+// repairStalledReclaim 是"回收被『无段覆盖』拒 ⇒ 按已确认水位补段"的**共用收口助手**
+// （#61-Z-a ＋ #62）：两条面共用同一助手，避免"只有有投递的源才治得了洞"✗：
+//
+//	· **投递确认面**（releaseRecovery 顶部）—— 有新批次/排空/对账的源 ✓；
+//	· **恢复/自愈面**（selfHealPausedSource 步 0）—— **已停投的源**（#62 现场：四个落后源
+//	  `inst:160/202/203/179` 补段闸一次都没轮到它们，因为没人再投递 ⇒ 谁也走不到投递确认面 ✗✓）。
+//
+// 触发判据不变（#61 口径）：**先探一次回收**，只有被哨兵 `ErrReclaimNoSegment` 拒才补 ✓（绝不盲补 ✗）。
+// 覆盖上界仍是账本里的 **delivery 已确认水位**（单次大覆盖 [reclaim, delivery] 合法 ✓，与补段助手同源 ✓）；
+// hold 闸 / 幂等 / 绑定前后复读水位（变则弃）全部继承自 backfillDeliveryConfirmedCoverage ✓。
+func (m *Manager) repairStalledReclaim(p *pipeline.Pipeline, source SourceConfig) error {
+	if m == nil || p == nil || p.Ledger() == nil {
+		return nil
+	}
+	if _, err := p.TryReclaim(); !errors.Is(err, ledger.ErrReclaimNoSegment) {
+		return nil // 无洞（或洞以别的拒绝形态表现 ⇒ 不在本助手职责内 ✓）
+	}
+	positions, ok := p.Ledger().Positions(p.Key())
+	if !ok {
+		return nil
+	}
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	m.mu.Lock()
+	generation := m.state.Sources[key].ProjectionGeneration
+	m.mu.Unlock()
+	slog.Warn("回收被『无段覆盖』拒：按「已确认投递水位」补段（停在 R 的源由此走出去）",
+		"logSourceID", source.LogSourceID, "generation", source.SourceGeneration,
+		"reclaim", positions.Reclaim, "delivery", positions.Delivery)
+	return m.backfillDeliveryConfirmedCoverage(p, source, generation, positions)
+}
+
 // backfillDeliveryConfirmedCoverage 在**投递确认点**补注册覆盖段（#61-Z-a，父级裁刀）。
 //
 // 现场（今晚全部悬案同源）：`paused 42` 钉死 / 放血落账失败 / tier 达成率下滑，皆系一条链 ——
@@ -5244,13 +5275,11 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event) 
 	if !ok {
 		return fmt.Errorf("ingest: missing ledger positions for %s", key)
 	}
-	// #61-Z-a：投递确认点补段 —— **先探一次回收**：若被"无段覆盖"拒（哨兵）⇒ 说明存在覆盖洞 ⇒
-	// 按"已确认投递水位"补一段，把滞回链的根因当场解掉 ✓；再走下面原有的"本批区间"责任转移链
+	// #61-Z-a：投递确认点补段（共用助手，见 repairStalledReclaim）：先探一次回收，只有被"无段覆盖"
+	// 拒才按"已确认投递水位"补段 ⇒ 把滞回链的根因当场解掉 ✓；再走下面原有的"本批区间"责任转移链
 	//（补段后 reclaim 可能已前移 ⇒ 下面自然早退 ✓，两者可组合 ✓）。
-	if _, reclaimErr := p.TryReclaim(); errors.Is(reclaimErr, ledger.ErrReclaimNoSegment) {
-		if err := m.backfillDeliveryConfirmedCoverage(p, source, generation, positions); err != nil {
-			return err
-		}
+	if err := m.repairStalledReclaim(p, source); err != nil {
+		return err
 	}
 	from := positions.Reclaim
 	currentSegID := fmt.Sprintf("projection-recovery-%s-%d", generation, to)

@@ -141,6 +141,12 @@ func (m *Manager) selfHealPausedSource(source SourceConfig, p *pipeline.Pipeline
 		return false
 	}
 	changed := false
+	// 步 0（#62）：先把"回收被『无段覆盖』拒"的洞补上 —— **已停投的源**走不到投递确认面
+	//（现场四个落后源 inst:160/202/203/179 正是如此 ✗），此处是它们唯一的自动出口 ✓。
+	// 判据与投递确认面完全一致（先探回收，哨兵命中才补）⇒ 无洞时只有一次探测的代价 ✓。
+	if err := m.repairStalledReclaim(p, source); err != nil {
+		slog.Warn("自愈路径补段失败（下轮重试）", "logSourceID", source.LogSourceID, "error", err.Error())
+	}
 	if entry.AcquirePaused {
 		delivered, err := p.DeliverPending()
 		if delivered {
