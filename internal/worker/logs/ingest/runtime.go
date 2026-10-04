@@ -286,6 +286,20 @@ type Manager struct {
 	replayPending  map[string]struct{} // 待排空的源（同源多次被拒 ⇒ 合并成一条）
 	replayInflight map[string]struct{} // 正在排空的源（单飞：同源不并发整窗 replay）
 	replayWake     chan struct{}
+	// ── #63：重放回收（rolling drain）读数与上界 ───────────────────────────────────────────
+	// 现场靶数：344 位/s/源（1.14 亿需 3.7 天）⇒ 最低线 4,000/s/源、四源合计 13,500/s（8h 收官）；
+	// 及格语义 = **追平生成速率**（生产仍在灌料 ⇒ 循环必须可长期滚动），而非只清零存量 ✓。
+	reclaimRollRounds       atomic.Int64 // 滚动回收调用轮数
+	reclaimRollSteps        atomic.Int64 // 累计推进步数（每步 = 一次探测/补段/推进）
+	reclaimRollAdvanced     atomic.Int64 // 累计推进位数（位 = 账本 record 位置）
+	reclaimRollFirstAdvance atomic.Int64 // 累计"首步推进量"（= 陈旧覆盖段的上界缺口 ✓ 现场判据）
+	reclaimRollNanos        atomic.Int64 // 累计墙钟（ns）⇒ 位·s⁻¹ = Advanced/(Nanos/1e9)
+	reclaimRollLast         atomic.Value // ReclaimRollSnapshot：上一轮读数（reclaim/delivery/firstAdvance/steps/advanced）
+	// reclaimRollMaxSteps / reclaimRollBudget 是**单轮有界**（#63 裁定：≤8 步 / ≤200ms）；
+	// 现场与回归都可覆盖（0 ⇒ 默认 8 / 200ms ✓）。
+	reclaimRollMaxSteps int
+	reclaimRollBudget   time.Duration
+
 	// replayScheduledTotal 是「追加被拒 ⇒ 登记待办」的累计次数（观测面：证明调度确实发生）。
 	replayScheduledTotal atomic.Int64
 	// sweepStepBudget 是兜底环**单源单步**的有界等待预算（0 ⇒ 默认 150ms ✓，见 sweepStepBudgetOf）。
@@ -5120,6 +5134,122 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 
 // deliveryConfirmedSegPrefix 是「投递确认补段」的段名前缀（#61-Z-a）：账本里可一眼认出这类段的来历。
 const deliveryConfirmedSegPrefix = "delivery-confirmed-"
+
+// ── #63：重放回收（rolling drain） ────────────────────────────────────────────────────
+//
+// 现场：`reclaim` 动了但**速率 344 位/s/源**（1.14 亿需 3.7 天 ✗✗），且**复采差逐字相同** ⇒
+// "一次性微推后再度停住" ✓。机制（读码坐实）：`TryReclaim` 的单次上界 = **当前覆盖段的 `CoversTo`**
+// （ledger.tryReclaimLocked 的 `target := ref.CoversTo`）；而补段闸只在"**完全无覆盖**"（哨兵）时补 ⇒
+// 位置**被陈旧段覆盖**（`CoversTo ≪ delivery`）时谁都不补 ⇒ 每轮只能推一个排空批（≈3500 位 / 10s ✓）。
+//
+// 修法（Z3-a，父级裁定）：**探测驱动的有界小循环** —— 每轮反复「探测（必要时补段）→ 推进」，
+// 直到不再推进或触到单轮上界（≤8 步 / ≤200ms ✓）。典型形态只需 ~3 步：
+//
+//	① 推进到陈旧段末端 → ② 位置变"无覆盖" ⇒ 助手补 **`[reclaim, delivery]` 一整段** → ③ 推进到 delivery ✓
+//
+// ⇒ 一次调用吃完存量；生产仍灌料时每轮覆盖"自上次以来新增的已确认区间" ⇒ **追平生成速率** ✓。
+//
+// 不变量：上界仍是**已确认投递水位 `delivery`**（default-deny 不放宽 ✓，`reclaim ≥ delivery` 时零动作 ✓）；
+// 每段仍逐段入账本（`delivery-confirmed-<from>-<to>` ✓ 可审计）；hold 优先（每步复读 ✓）；单轮有界 ✓。
+func (m *Manager) rollingReclaimRepair(p *pipeline.Pipeline, source SourceConfig) {
+	if m == nil || p == nil || p.Ledger() == nil {
+		return
+	}
+	maxSteps := m.reclaimRollMaxSteps
+	if maxSteps <= 0 {
+		maxSteps = defaultReclaimRollMaxSteps
+	}
+	budget := m.reclaimRollBudget
+	if budget <= 0 {
+		budget = defaultReclaimRollBudget
+	}
+	start := time.Now()
+	before, ok := p.Ledger().Positions(p.Key())
+	if !ok {
+		return
+	}
+	steps := 0
+	var advanced, firstAdvance uint64
+	for ; steps < maxSteps; steps++ {
+		if err := m.repairStalledReclaim(p, source); err != nil {
+			slog.Warn("滚动回收：补段失败（下轮重试）", "logSourceID", source.LogSourceID, "error", err.Error())
+			break
+		}
+		// 助手内部的探测**本身就会推进**（有覆盖即跳到该段末端；无覆盖则先补段再推进）⇒ 此处只读结果 ✓。
+		cur, ok := p.Ledger().Positions(p.Key())
+		if !ok || cur.Reclaim <= before.Reclaim {
+			break // 不再推进：无料（reclaim ≥ delivery）/ hold / 状态未转移 ⇒ 退出（有界 ✓）
+		}
+		if advanced == 0 {
+			firstAdvance = cur.Reclaim - before.Reclaim // 首步 = 陈旧覆盖段的上界缺口 ✓（现场判据）
+		}
+		advanced += cur.Reclaim - before.Reclaim
+		before = cur
+		if time.Since(start) >= budget {
+			break // 单轮墙钟上界 ✓
+		}
+	}
+	if steps == 0 && advanced == 0 {
+		return // 无活可做：不打点（避免刷屏 ✗）
+	}
+	elapsed := time.Since(start)
+	m.reclaimRollRounds.Add(1)
+	m.reclaimRollSteps.Add(int64(steps))
+	m.reclaimRollAdvanced.Add(int64(advanced))
+	m.reclaimRollFirstAdvance.Add(int64(firstAdvance))
+	m.reclaimRollNanos.Add(int64(elapsed))
+	m.reclaimRollLast.Store(ReclaimRollSnapshot{
+		Reclaim: before.Reclaim, Delivery: before.Delivery,
+		FirstAdvance: firstAdvance, Steps: steps, Advanced: advanced, Elapsed: elapsed,
+	})
+	slog.Info("滚动回收：本轮链式推进",
+		"logSourceID", source.LogSourceID,
+		"reclaim", before.Reclaim, "delivery", before.Delivery,
+		"firstAdvance", firstAdvance, "advance", advanced,
+		"steps", steps, "elapsedMs", elapsed.Milliseconds())
+}
+
+const (
+	// defaultReclaimRollMaxSteps / defaultReclaimRollBudget 是单轮有界（#63 裁定：≤8 步 / ≤200ms ✓）。
+	defaultReclaimRollMaxSteps = 8
+	defaultReclaimRollBudget   = 200 * time.Millisecond
+)
+
+// ReclaimRollSnapshot 是「上一轮滚动回收」的读数（#63-Z3-c；现场读数与红/绿判据同一套数 ✓）。
+type ReclaimRollSnapshot struct {
+	Reclaim      uint64        // 本轮结束时的回收位置
+	Delivery     uint64        // 同刻的已确认投递水位（上界）
+	FirstAdvance uint64        // 首步推进量 = 陈旧覆盖段的上界缺口 ✓
+	Steps        int           // 本轮步数
+	Advanced     uint64        // 本轮总推进位数
+	Elapsed      time.Duration // 本轮墙钟
+}
+
+// ReclaimRollingStats 返回滚动回收读数（累计 + 上一轮）⇒ 位·s⁻¹ 可直接算 ✓。
+type ReclaimRollingStats struct {
+	Rounds       int64
+	Steps        int64
+	Advanced     uint64
+	FirstAdvance uint64
+	Elapsed      time.Duration
+	Last         ReclaimRollSnapshot
+}
+
+// ReclaimRollingStats 读取滚动回收读数（#63-Z3-c）。
+func (m *Manager) ReclaimRollingStats() ReclaimRollingStats {
+	if m == nil {
+		return ReclaimRollingStats{}
+	}
+	st := ReclaimRollingStats{
+		Rounds: m.reclaimRollRounds.Load(), Steps: m.reclaimRollSteps.Load(),
+		Advanced: uint64(m.reclaimRollAdvanced.Load()), FirstAdvance: uint64(m.reclaimRollFirstAdvance.Load()),
+		Elapsed: time.Duration(m.reclaimRollNanos.Load()),
+	}
+	if last, _ := m.reclaimRollLast.Load().(ReclaimRollSnapshot); last.Steps > 0 || last.Advanced > 0 {
+		st.Last = last
+	}
+	return st
+}
 
 // repairStalledReclaim 是"回收被『无段覆盖』拒 ⇒ 按已确认水位补段"的**共用收口助手**
 // （#61-Z-a ＋ #62）：两条面共用同一助手，避免"只有有投递的源才治得了洞"✗：
