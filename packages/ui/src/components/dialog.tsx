@@ -1,5 +1,12 @@
 "use client"
-
+/**
+ * @file Dialog：模态对话框基座。表单类弹窗须配合 scrollable-dialog 壳使用
+ *       （约束见 .claude/rules/ui-modals.md），本文件本身不实现滚动区。
+ * @input  lib/utils 的 cn、lib/focus-ring、Button、radix-ui 的 Dialog；关闭文案取 i18n 键 common.close
+ * @output Dialog 及其子组件（Trigger / Content / Header / Title / Footer 等）
+ * @sync   改动结构或关闭语义时同步 dialog.test.tsx；模态约束同步 .claude/rules/ui-modals.md
+ * @since  FR-496
+ */
 import * as React from "react"
 import { XIcon } from "lucide-react"
 import { useTranslation } from "react-i18next"
