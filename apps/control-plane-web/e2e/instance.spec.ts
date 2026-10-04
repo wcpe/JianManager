@@ -27,16 +27,19 @@ function cardStatus(card: Locator): Locator {
 }
 
 /**
- * 登录后经侧栏「全部服务器」链接 SPA 进入实例管理页（保留会话内状态联动）。
- * 「全部服务器」在可折叠的「服务器」域下，默认展开；若被折叠则先点组头展开再点链接。
- * FR-452 起默认视图是分组树表（`view=list`），本 spec 断言工作台卡，故进页后显式切到卡片视图。
+ * 登录后经侧栏「全部服务器」入口 SPA 进入实例管理页（保留会话内状态联动）。
+ *
+ * 导航重构后的两处变化：
+ * - 该入口现在带计数（「全部服务器 1,200」），计数是同一链接可访问名的一部分，
+ *   故不能再用 `exact: true`；
+ * - 入口已提升为一级快捷项，不再藏在「服务器」分组头之下，于是没有「先展开分组」这一步。
+ *   （`getByRole('button', { name: '服务器' })` 在顶栏会解析到 5 个元素——工作区切换、
+ *   搜索、刷新等都含该词——属 strict mode 冲突，不能再用。）
+ *
+ * FR-452 起默认视图是分组树表（view=list），本 spec 断言工作台卡，故进页后显式切到卡片视图。
  */
 async function gotoInstances(page: Page): Promise<void> {
-  const link = page.getByRole('link', { name: '全部服务器', exact: true })
-  if (!(await link.isVisible())) {
-    await page.getByRole('button', { name: '服务器' }).click()
-  }
-  await link.click()
+  await page.getByRole('link', { name: /^全部服务器/ }).click()
   await expect(page.locator('[data-page="instances"]')).toBeVisible()
   // 显式切卡片视图（ViewToggle aria-label = grouping.viewCard「卡片视图」）。
   // 卡片视图按分组维度分段渲染，页面上会有多个 instances-card-virtual 分段容器，

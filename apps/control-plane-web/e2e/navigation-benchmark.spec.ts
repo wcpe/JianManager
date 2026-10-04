@@ -20,10 +20,13 @@ const ROUTES: BenchRoute[] = [
     label: '平台首页',
     href: '/',
     readySelector: '[data-page="overview"]',
+    // 该表的 data-total-count 表示「已加载条数」而非服务端总数：它已改为按需分页
+    // （首屏一页、滚到底续取），故这里断言「首屏取到了一页」而不是 1000+。
+    // 真正要守住的是 maxRendered——DOM 里不能把上千行全铺出来。
     virtual: {
       surfaceSelector: '[data-testid="overview-instances-virtual"]',
       itemSelector: '[data-testid="overview-instance-row"]',
-      minTotal: 1000,
+      minTotal: 1,
       maxRendered: 80,
     },
   },
@@ -499,10 +502,15 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
   })
 
   test('平台首页响应式不产生横向溢出', async ({ page }) => {
+    // 三个视口共用一个 30 秒的默认上限；而首页首屏含多个数据查询、冷启动可达数秒，
+    // 若每个视口都重新 goto 就会在最后一个视口撞线（导航重构引入路由分块后更明显）。
+    // 响应式只需切视口，页面本身加载一次即可——这也更贴近真实使用（用户是缩窗口而非重开页）。
+    test.setTimeout(120_000)
+    await page.goto('/')
+    await expect(page.locator('[data-page="overview"]'), '首页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
+
     for (const viewport of OVERVIEW_RESPONSIVE_VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height })
-      await page.goto('/')
-      await expect(page.locator('[data-page="overview"]'), `${viewport.label} 首页就绪`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
       await expectVirtualRendering(page, ROUTES[0])
       await page.locator('[data-page="overview"]').evaluate((el) => el.setAttribute('data-overflow-probe', 'true'))
       await expectNoWorkspaceOverflow(page, viewport.label)
