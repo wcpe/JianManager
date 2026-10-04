@@ -250,8 +250,9 @@ func (m *Manager) recordVerifiedRuns(key string, runs []ledger.PositionRange) {
 	if m == nil || len(runs) == 0 {
 		return
 	}
-	w := m.watchMutexHold("recordVerifiedRuns.merge")
+	w := m.watchMutexWait("recordVerifiedRuns.merge")
 	m.mu.Lock()
+	w.acquired()
 	saved, ok := m.state.Sources[key]
 	if !ok {
 		m.mu.Unlock()

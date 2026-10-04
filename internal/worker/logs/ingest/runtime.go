@@ -423,6 +423,11 @@ type Manager struct {
 	reconcileViewSnapshot atomic.Value // *reconcileView
 	// 候选 2（2026-10-04）：m.mu 慢持锁观测 —— 计数 + 节流告警（先测量、后收窄）。
 	mutexHoldSlowCount atomic.Int64
+	// #55-A（2026-10-05）：把「等锁」从「持有」里拆出来单独计 —— 起表点原先在 Lock **之前**
+	// ⇒ 读数混入等待（现场 9–19s），无法区分"自身持有"与"被挡住" ✗。两套计数器 + 各自节流窗口
+	//（慢等待与慢持有各自一行告警），阈值同为 mutexHoldSlowThreshold。
+	mutexWaitSlowCount atomic.Int64
+	mutexWaitWarnAt    atomic.Int64 // UnixNano；慢等待告警节流窗口（独立于慢持有）
 	// pollDispatchHook 是"采集分发前"的**仅测试用**观测点（D 修复红/绿）：断言进入分发段时 cycleMu 已释放。
 	pollDispatchHook atomic.Value // func()
 	// walRowsBuildHook 是"锁外构建 WAL 行"前调用的**仅测试用**观测点（A-Step2 红/绿）：
@@ -431,7 +436,10 @@ type Manager struct {
 	// deliverPlanHook 是"锁外投递规划（本批规范化 + 去重）"前调用的**仅测试用**观测点
 	// （#54 修复红/绿）：断言该处未持 m.mu。
 	deliverPlanHook atomic.Value // func()
-	mutexHoldWarnAt atomic.Int64 // UnixNano；告警节流窗口
+	// rebuildSourceBuildHook 是"锁外构建源重建体"前调用的**仅测试用**观测点（#55-B 红/绿）：
+	// 断言该处未持 m.mu；同时供"锁外期间源又变了 ⇒ 第三段必须丢弃重建"的确定性用例注入变更。
+	rebuildSourceBuildHook atomic.Value // func()
+	mutexHoldWarnAt        atomic.Int64 // UnixNano；告警节流窗口
 
 	// reconcileLoopCfgSnapshot 是常驻对账配置的快照（候选 1）：写点即时发布 ⇒ 配置读零锁。
 	reconcileLoopCfgSnapshot atomic.Value // ReconcileLoopConfig
@@ -3126,18 +3134,31 @@ func (m *Manager) projectionGenerationsExhausted(source SourceConfig) bool {
 	return len(publishedSourceProjectionGenerations(current.PublishedProjection, source)) >= maxPublishedProjectionGenerations
 }
 
-// mutexHoldSlowThreshold 是"慢持锁"告警阈值（候选 2 测量，2026-10-04）：
+// mutexHoldSlowThreshold 是"慢持锁/慢等待"告警阈值（候选 2 测量，2026-10-04；#55-A 沿用）：
 // 仅在关键临界区（投递规划/校验凭据/落段标记）上计时，超阈计数并按节流窗口告警。
 const mutexHoldSlowThreshold = 100 * time.Millisecond
 
-// mutexHoldWarnMinInterval 是慢持锁告警节流窗口（避免高频投递路径告警风暴；计数仍逐次累加）。
+// mutexHoldWarnMinInterval 是慢持锁/慢等待告警节流窗口（避免高频投递路径告警风暴；计数仍逐次累加）。
 const mutexHoldWarnMinInterval = 5 * time.Second
 
-// mutexHoldWatch 是一次持锁计时（候选 2）。与 done 成对使用；可在多个出口重复调用 done。
+// mutexHoldWatch 是一次 m.mu 观测（候选 2；#55-A 起拆成「等锁」与「纯持有」两段）。
+//
+// 用法（两段式，热点处）：
+//
+//	w := m.watchMutexWait("X") // 起点：等锁
+//	m.mu.Lock()
+//	w.acquired()               // Lock 成功后：结算等待、重新起表（此后只计纯持有）
+//	...
+//	m.mu.Unlock()
+//	w.done()                   // Unlock 之后：结算纯持有（等待与持有各自计数/告警）
+//
+// 兼容：watchMutexHold(section) 等价于"没有等待段"（起表即持有），供不必拆分的调用点使用。
 type mutexHoldWatch struct {
 	m       *Manager
 	section string
-	at      time.Time
+	at      time.Time     // 持有起表时刻
+	waitAt  time.Time     // 等锁起表时刻（零值 ⇒ 本 watch 不计等待）
+	waited  time.Duration // 已结算的等锁时长
 }
 
 // watchMutexHold 开始一次持锁计时（零语义改动：不改变任何分支/返回值，仅观测）。
@@ -3145,32 +3166,87 @@ func (m *Manager) watchMutexHold(section string) *mutexHoldWatch {
 	return &mutexHoldWatch{m: m, section: section, at: time.Now()}
 }
 
-// done 结束计时：超阈计数；距上次告警超过节流窗口时打一条 Warn（含累计数）。
+// watchMutexWait 开始一次「等锁 + 持有」两段计时（#55-A，零语义改动）：调用方必须紧接
+// `m.mu.Lock()`，并在 Lock 成功后调用 acquired()、Unlock 之后调用 done()。
+//
+// 为什么必须拆（现场 2026-10-05）：起表在 Lock **之前** ⇒ 读数混入等待，9–19s 的慢段
+// 无法区分"本函数自己持锁 9–19s"与"被别的长持锁者挡在外面 9–19s"，收窄方向因此不唯一 ✗。
+func (m *Manager) watchMutexWait(section string) *mutexHoldWatch {
+	now := time.Now()
+	return &mutexHoldWatch{m: m, section: section, at: now, waitAt: now}
+}
+
+// acquired 在 `m.mu.Lock()` **成功之后**立即调用：结算等待时长并重新起表（此后只计纯持有）。
+//
+// 注意：它是在**持锁内**执行的 ⇒ 只写本结构体字段，不做任何 atomic 计数、不打日志
+// （避免把观测自身的开销算进持有）。
+func (w *mutexHoldWatch) acquired() {
+	if w == nil {
+		return
+	}
+	if !w.waitAt.IsZero() {
+		w.waited = time.Since(w.waitAt)
+		w.waitAt = time.Time{}
+	}
+	w.at = time.Now()
+}
+
+// done 结束计时：等待与持有**各自**判定超阈、各自计数、各自一行 Warn（含各自节流窗口）。
 func (w *mutexHoldWatch) done() {
 	if w == nil || w.m == nil {
 		return
 	}
-	d := time.Since(w.at)
-	if d < mutexHoldSlowThreshold {
+	// 等待（被挡住）：独立计数与告警行 —— 与"持有"混算正是 #55-A 要修的口径缺陷。
+	if w.waited >= mutexHoldSlowThreshold {
+		w.m.noteSlowSectionLock(messageSlowMutexWait, w.section, "wait", w.waited,
+			&w.m.mutexWaitSlowCount, &w.m.mutexWaitWarnAt)
+	}
+	// 纯持有（Lock 后 → Unlock 后）：语义与 #55-A 之前逐字一致（阈值/计数/告警字段名不变）。
+	hold := time.Since(w.at)
+	if hold < mutexHoldSlowThreshold {
 		return
 	}
-	w.m.mutexHoldSlowCount.Add(1)
-	last := w.m.mutexHoldWarnAt.Load()
+	w.m.noteSlowSectionLock(messageSlowMutexHold, w.section, "hold", hold,
+		&w.m.mutexHoldSlowCount, &w.m.mutexHoldWarnAt)
+}
+
+// 两条慢段告警的固定文案（各一行：慢等待 / 慢持锁）。
+const (
+	messageSlowMutexHold = "m.mu 慢持锁"
+	messageSlowMutexWait = "m.mu 慢等待"
+)
+
+// noteSlowSectionLock 记一次"超阈慢段"：计数 +1（逐次累加），距上次告警超过节流窗口时打一条
+// Warn（含累计数）。等待与持有各传自己的计数器与节流时间戳 ⇒ 一方告警不压另一方。
+//
+// 命名带 Lock 后缀提醒：调用方必须已在**锁外**（本函数会写日志，锁内打日志会放大持有时长）。
+func (m *Manager) noteSlowSectionLock(message, section, field string, d time.Duration, counter, warnAt *atomic.Int64) {
+	counter.Add(1)
+	last := warnAt.Load()
 	now := time.Now().UnixNano()
 	if last != 0 && time.Duration(now-last) < mutexHoldWarnMinInterval {
 		return
 	}
-	if w.m.mutexHoldWarnAt.CompareAndSwap(last, now) {
-		slog.Warn("m.mu 慢持锁", "section", w.section, "hold", d.String(), "slowTotal", w.m.mutexHoldSlowCount.Load())
+	if warnAt.CompareAndSwap(last, now) {
+		slog.Warn(message, "section", section, field, d.String(), "slowTotal", counter.Load())
 	}
 }
 
-// MutexHoldSlowCount 返回慢持锁累计次数（候选 2 观测读数；供测试与诊断）。
+// MutexHoldSlowCount 返回慢持锁（**纯持有**，#55-A 起不含等待）累计次数；供测试与诊断。
 func (m *Manager) MutexHoldSlowCount() int64 {
 	if m == nil {
 		return 0
 	}
 	return m.mutexHoldSlowCount.Load()
+}
+
+// MutexWaitSlowCount 返回慢等待（被挡在 m.mu 外面的时长超阈）累计次数（#55-A 新增读数）：
+// 与 MutexHoldSlowCount 一起把"自身持有"与"被挡住"分开，收窄方向才唯一。
+func (m *Manager) MutexWaitSlowCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.mutexWaitSlowCount.Load()
 }
 
 // deliveryPlanFailure 是「本批规范化 + 去重」的唯一失败形态：零宽事件 / 规范化失败 /
@@ -3244,8 +3320,9 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	//     实测持锁 1m09.5s（随批量线性）。
 	// 两段都**不读也不写任何共享状态**（只碰入参 events 与本调用私有的 seen/toWrite），
 	// 故整段外移、锁内只留快照 ⇒ 契约（追加序 / 去重语义 / 事件内容 / 持久化产物）逐位不变。
-	w := m.watchMutexHold("deliver.plan")
+	w := m.watchMutexWait("deliver.plan")
 	m.mu.Lock()
+	w.acquired()
 	saved := m.state.Sources[key]
 	// 段 B 的值拷贝快照（同型 A-Step2 的 walSnapshot）。安全性：saved 本身已是锁内的值拷贝，
 	// 其 Events 只被**整体置 nil 或重建为新切片**，从不原地改写已有元素
@@ -3528,8 +3605,9 @@ func (m *Manager) appendEvents(key string, events []logtypes.Event) error {
 			return err
 		}
 	}
-	w := m.watchMutexHold("appendEvents.persist")
+	w := m.watchMutexWait("appendEvents.persist")
 	m.mu.Lock()
+	w.acquired()
 	saved := m.state.Sources[key]
 	saved.EventsStored = true
 	// B1a：记录段存储已覆盖到的最大 record_end。`events` 是权威集合（按记录位置有序），
@@ -6561,6 +6639,9 @@ func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
 	// 被当成已全量落库」：重启后该源按陈旧水位重读（重复投递），或整行缺失被当成新源
 	// （先前已投递的数据无人认账）。失败必须让水位**留在原处**，下一轮自动重试同一批源。
 	advanced := make([]persistAdvance, 0, len(keys))
+	// #55-B（父级裁定，三段式）：第一段锁内只做**守卫判定 + O(1) 输入快照**；重建重活
+	//（Ledger 快照 / WAL 分片 / 内联正文拷贝）移到锁外；第三段锁内**复验守卫**后写回（防丢失更新）。
+	rebuilds := make([]rebuildTask, 0, len(keys))
 	for key := range keys {
 		p := m.pipes[key]
 		if p == nil {
@@ -6569,15 +6650,39 @@ func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
 			continue
 		}
 		rev := p.Ledger().Revision(p.Key())
-		cover := coverSignatureOf(m.state.Sources[key])
+		saved := m.state.Sources[key]
+		cover := coverSignatureOf(saved)
 		if m.persistedRev[key] == rev && m.persistedCover[key] == cover {
 			continue // 账本与段覆盖都未变：该源本轮不参与行规划（只写变更行的前提）
 		}
-		m.rebuildSource(key, p)
-		advanced = append(advanced, persistAdvance{
-			key: key, rev: rev, cover: coverSignatureOf(m.state.Sources[key]),
+		rebuilds = append(rebuilds, rebuildTask{
+			key: key, pipe: p, rev: rev, cover: cover,
+			eventsStored: saved.EventsStored, through: saved.EventsStoredThrough, inline: saved.Events,
 		})
+		// 覆盖签名只取决于 EventsStored / EventsStoredThrough，而重建**原样保留**这两个字段
+		//（见 commitRebuiltSource）⇒ 计划时读到与重建后读到逐字相同，故记账可与守卫同临界区。
+		advanced = append(advanced, persistAdvance{key: key, rev: rev, cover: cover})
 		changed = append(changed, key)
+	}
+	// 第二段（锁外）：逐源构建重建体。现场此处是 m.mu 内除逐条 marshal 之外最大的整块耗时之一
+	//（Ledger 快照逐条 clone + WAL 分片的内联正文拷贝，逐条镜像重建阶段达 260–632ms）。
+	m.mu.Unlock()
+	for i := range rebuilds {
+		rebuilds[i].rebuilt = m.buildRebuiltSourceOutsideLock(rebuilds[i])
+	}
+	m.mu.Lock()
+	// 第三段（锁内）：**复验守卫**后写回。锁外算重建体期间采集轮照常推进：账本修订号或段覆盖
+	// 若已变化，直接写回就会用**计划时的旧水位**覆盖新水位（丢失更新）⇒ 整件丢弃、留待下一轮
+	//（守卫在下轮必然重新命中；无需重试环）。丢弃不改变水位记账：advanced 记的是计划时的
+	// rev/cover，若它们已然陈旧 ⇒ 下轮守卫必命中 ⇒ 自愈 ✓。
+	for i := range rebuilds {
+		t := rebuilds[i]
+		p := m.pipes[t.key]
+		if p == nil || p != t.pipe || p.Ledger().Revision(p.Key()) != t.rev ||
+			coverSignatureOf(m.state.Sources[t.key]) != t.cover {
+			continue
+		}
+		m.commitRebuiltSource(t.key, t.rebuilt)
 	}
 	// 增量状态：账本派生行只按变更源构建，根行恒为全量（行数为 O(源数)，便宜且兜住
 	// 元数据变更）；配合 ApplyScoped 让未变更源的账本派生行根本不参与规划。
@@ -6767,33 +6872,76 @@ func coverSignatureOf(saved persistedSource) coverSignature {
 	return coverSignature{eventsStored: saved.EventsStored, through: saved.EventsStoredThrough}
 }
 
-// rebuildSource 用该源 pipeline 的当前账本/WAL 快照重建 state 条目。
+// rebuildTask 是一件「锁外重建」任务（#55-B）：
+//   - 锁内产出：O(1) 输入快照（账本修订号 / 覆盖签名 / 段覆盖水位 / 内联正文切片头）
+//     —— `inline` 是**切片头值拷贝**，其底层数组只被整体置 nil 或重建为新切片、
+//     从不原地改写元素（见 appendEvents / appendEventTail / migrateInlineEvents）⇒ 锁外只读安全；
+//   - 锁外产出：rebuilt（重建体）；
+//   - 第三段复验 rev/cover/pipe 身份后写回（复验不过 ⇒ 丢弃留待下轮）。
+type rebuildTask struct {
+	key   string
+	pipe  *pipeline.Pipeline
+	rev   uint64
+	cover coverSignature
+
+	eventsStored bool
+	through      uint64
+	inline       []logtypes.Event
+
+	rebuilt persistedSource
+}
+
+// buildRebuiltSourceOutsideLock 在**锁外**构建一个源的重建体（#55-B，从原 rebuildSource 拆出）。
 //
-// 它只重建**内容会随采集推进而变化**的部分（账本、WAL、事件覆盖水位）；投影代次、发布待定、
-// 内联事件等由 Manager 自己维护的字段原样保留（这些字段的变更由索引层的根表全量比对兜住）。
-func (m *Manager) rebuildSource(key string, p *pipeline.Pipeline) {
-	prev := m.state.Sources[key]
-	entry := persistedSource{Ledger: p.Ledger().Snapshot(), ProjectionGeneration: prev.ProjectionGeneration,
-		PublicationPending: prev.PublicationPending, EventsStored: prev.EventsStored,
-		EventsStoredThrough: prev.EventsStoredThrough,
-		// VerifiedRuns 是 Manager 自己维护的字段（投递路径写入，见 recordVerifiedRuns）：
-		// 重建时必须原样保留，否则每次 persist 都会把刚登记的区间级凭据清空
-		// （此前漏掉它会使 autoResolveGapsFromPublished 永远拿不到凭据而静默失效）。
-		VerifiedRuns: prev.VerifiedRuns}
+// 现场：这段是 m.mu 内除逐条 marshal 之外最大的整块耗时（Ledger().Snapshot() 逐条 clone +
+// WAL().SnapshotSplit 的内联正文拷贝，逐条镜像重建阶段达 260–632ms）⇒ 整段持锁时，
+// 投递/登记/停止/解算全部一起排队。
+//
+// 锁外安全性：Ledger.Snapshot / WAL.SnapshotSplit 各自持自己的锁（ledger.go:599 `l.mu.RLock`、
+// wal.go:41 `w.mu.Lock`）且产物都是**全新切片**；本函数不触碰 m.state / m.pipes。
+func (m *Manager) buildRebuiltSourceOutsideLock(t rebuildTask) persistedSource {
+	if hook, _ := m.rebuildSourceBuildHook.Load().(func()); hook != nil {
+		hook()
+	}
+	entry := persistedSource{
+		Ledger:              t.pipe.Ledger().Snapshot(),
+		EventsStored:        t.eventsStored,
+		EventsStoredThrough: t.through,
+	}
 	// B1a：按条切分——段存储已覆盖（record_end <= EventsStoredThrough）的条目只写引用；
 	// 其余（尚未投递、正文未入库，或段存储不可用）必须内联保存，绝不丢正文。
-	through := prev.EventsStoredThrough
-	refs, inline := p.WAL().SnapshotSplit(func(ev logtypes.Event) bool {
-		return entry.EventsStored && through > 0 && ev.Record.End <= through
+	refs, inline := t.pipe.WAL().SnapshotSplit(func(ev logtypes.Event) bool {
+		return entry.EventsStored && t.through > 0 && ev.Record.End <= t.through
 	})
 	entry.WALRefs = refs
 	entry.WAL = append(entry.WAL, inline...)
 	// 事件体已在磁盘段时不写回内联切片——这正是原先 state 涨到 180MB、每次 persist
 	// 触发 130MB MarshalIndent 的根源（FR-484 阶段0 量测）。
 	if !entry.EventsStored {
-		entry.Events = append(entry.Events, prev.Events...)
+		entry.Events = append(entry.Events, t.inline...)
 	}
-	m.state.Sources[key] = entry
+	return entry
+}
+
+// commitRebuiltSource 把锁外算好的重建体写回 state（**调用方必须持 m.mu**，且已复验守卫）。
+//
+// 保留字段（投影代次 / 待发布 / 逐字段凭据）取**提交时**的现值：它们由别的路径维护
+// （publish / recordVerifiedRuns），用提交时的读数比用计划时的读数**减少**丢失更新的窗口；
+// 重建体自身的字段（账本 / WAL / 覆盖水位）仍来自计划时的 O(1) 快照，与改前逐字段一致。
+//
+// VerifiedRuns 必须原样保留（既有事故）：它由投递路径写入（见 recordVerifiedRuns），
+// 重建时若清空，每次 persist 都会把刚登记的区间级凭据抹掉 —— 那会使
+// autoResolveGapsFromPublished 永远拿不到凭据而**静默失效**。
+func (m *Manager) commitRebuiltSource(key string, rebuilt persistedSource) {
+	cur := m.state.Sources[key]
+	cur.Ledger = rebuilt.Ledger
+	cur.WALRefs = rebuilt.WALRefs
+	cur.WAL = rebuilt.WAL
+	cur.EventsStored = rebuilt.EventsStored
+	cur.EventsStoredThrough = rebuilt.EventsStoredThrough
+	cur.Events = rebuilt.Events
+	// ProjectionGeneration / PublicationPending / VerifiedRuns 原样保留（cur 的现值）。
+	m.state.Sources[key] = cur
 }
 
 func newWAL(led *ledger.Ledger, key ledger.SourceKey) *acquire.WAL {
