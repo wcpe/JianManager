@@ -132,6 +132,9 @@ func parseInstanceSearchParams(c *gin.Context, isAdmin bool) service.InstanceSea
 	}
 	p.Env = c.Query("env")
 	p.Tag = c.Query("tag")
+	if v := c.Query("uuid"); v != "" {
+		p.UUID = &v
+	}
 	if v := c.Query("nodeId"); v != "" {
 		u := uint(parseUintDefault(v, 0))
 		p.NodeID = &u
