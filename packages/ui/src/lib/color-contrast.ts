@@ -51,22 +51,151 @@ const RATIO_EPSILON = 1e-6
 
 /** `#rgb` / `#rrggbb`（也接受 `#rgba` / `#rrggbbaa`，alpha 被忽略，理由见下）。 */
 const HEX_PATTERN = /^#([0-9a-f]{3,8})$/i
-/** `oklch(L C H)`，L 可为 0.704 或 70.4%，H 可带 deg/rad/grad/turn，尾部可带 `/ alpha`。 */
-const OKLCH_PATTERN = /^oklch\(\s*([^)]*?)\s*\)$/i
-/** `rgb(r g b)` / `rgb(r, g, b)` / `rgba(r, g, b, a)`，分量可为 0–255 数字或百分比。 */
-const RGB_PATTERN = /^rgba?\(\s*([^)]*?)\s*\)$/i
+/** `oklch(L C H)` 的函数名。 */
+const OKLCH_FN = 'oklch'
+/** `rgb(r g b)` / `rgba(r, g, b, a)` 的函数名。 */
+const RGB_FN = 'rgb'
+
+/**
+ * 判断文本是否「整串就是一个指定函数调用」，是则返回括号内的内容。
+ *
+ * 【为什么不用正则】阶段 2 起分量可能是 `calc(0.011 * 2.2)`，括号内因此含 `)`，
+ * 而 `oklch\(\s*([^)]*?)\s*\)` 这类写法会因不容许右括号而拒绝整条记录。
+ * 配平扫描天然支持任意深度，且能顺带校验「末尾的 ) 正好闭合开头的 (」——
+ * 否则 `oklch(0.2 0.1 30) extra` 这种拼接文本会被误收。
+ */
+function wholeFunctionBody(text: string, fnName: string): string | null {
+  const lower = text.toLowerCase()
+  const prefix = `${fnName}(`
+  if (!lower.startsWith(prefix)) return null
+  if (!text.endsWith(')')) return null
+
+  let depth = 0
+  for (let i = prefix.length - 1; i < text.length; i += 1) {
+    const ch = text[i]
+    if (ch === '(') depth += 1
+    else if (ch === ')') {
+      depth -= 1
+      if (depth === 0) {
+        // 只有闭合处恰是整串末尾，才说明「整串就是这个调用」
+        return i === text.length - 1 ? text.slice(prefix.length, i) : null
+      }
+    }
+  }
+  return null
+}
 /** 裸分量三元组 `20 184 166`——`--brand-shadow` / `--shadow-color` 的真实写法。 */
 const BARE_TRIPLET_PATTERN = /^(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})$/
 
 /**
+ * 按顶层空白/逗号切分分量，不切进括号内。
+ *
+ * 【为什么不能直接 split(/[\s,]+/)】阶段 2 起分量可能是 `calc(0.011 * 2.2)`，
+ * 其中的空格属于算式内部；朴素切分会把它拆成 4 段，导致 okLCH 三分量判定失败。
+ */
+function splitTopLevel(input: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let current = ''
+  for (const ch of input) {
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth -= 1
+    if (depth === 0 && (ch === ' ' || ch === ',' || ch === '\t')) {
+      if (current) parts.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  if (current) parts.push(current)
+  return parts
+}
+
+/**
+ * 极小算术求值器：只认数字与 `+ - * / ( )`。
+ *
+ * 【为什么要它】阶段 2 起 token 用 `calc(var(--seed-chroma) * 2.2)` 这类算式从种子派生
+ * 各角色的 chroma，于是分量位置上出现的是算式而非字面量。变量已在 var() 展开阶段
+ * 被替换成数字，剩下就是纯算术。
+ *
+ * 刻意不用 `new Function` / `eval`：本模块在浏览器与测试里跑同一份实现，
+ * 不能假设部署环境的 CSP 允许动态求值。递归下降解析二十来行就够，且失配时能报出位置。
+ */
+function evalArithmetic(expr: string): number {
+  let pos = 0
+
+  const skipSpace = () => {
+    while (pos < expr.length && /\s/.test(expr[pos] as string)) pos += 1
+  }
+
+  const parseExpr = (): number => {
+    let value = parseTerm()
+    for (;;) {
+      skipSpace()
+      const op = expr[pos]
+      if (op !== '+' && op !== '-') return value
+      pos += 1
+      const rhs = parseTerm()
+      value = op === '+' ? value + rhs : value - rhs
+    }
+  }
+
+  const parseTerm = (): number => {
+    let value = parseFactor()
+    for (;;) {
+      skipSpace()
+      const op = expr[pos]
+      if (op !== '*' && op !== '/') return value
+      pos += 1
+      const rhs = parseFactor()
+      value = op === '*' ? value * rhs : value / rhs
+    }
+  }
+
+  const parseFactor = (): number => {
+    skipSpace()
+    if (expr[pos] === '(') {
+      pos += 1
+      const inner = parseExpr()
+      skipSpace()
+      if (expr[pos] !== ')') throw new Error(`calc() 括号不配对：「${expr}」`)
+      pos += 1
+      return inner
+    }
+    if (expr[pos] === '-') {
+      pos += 1
+      return -parseFactor()
+    }
+    const start = pos
+    while (pos < expr.length && /[\d.]/.test(expr[pos] as string)) pos += 1
+    if (start === pos) {
+      throw new Error(`calc() 在位置 ${pos} 处遇到无法识别的记号：「${expr}」`)
+    }
+    const value = Number(expr.slice(start, pos))
+    if (!Number.isFinite(value)) throw new Error(`calc() 里的数字无法解析：「${expr}」`)
+    return value
+  }
+
+  const result = parseExpr()
+  skipSpace()
+  if (pos !== expr.length) throw new Error(`calc() 有未消费的内容：「${expr}」`)
+  return result
+}
+
+/**
  * 解析单个分量为数字。
- * @param token 分量文本，如 `0.704`、`70.4%`、`183deg`
+ * @param token 分量文本，如 `0.704`、`70.4%`、`183deg`、`calc(0.011 * 2.2)`
  * @param percentScale 百分比换算基准（rgb 分量按 255 折算，oklch 的 L 按 1 折算）
  */
 function parseComponent(token: string, percentScale: number): number | null {
   const text = token.trim().toLowerCase()
   // CSS Color 4 的 `none` 语义等价于 0，容错处理以免整条记录解析失败
   if (text === 'none') return 0
+  // 阶段 2 起的种子派生算式：先化简再按普通数字处理
+  if (/^calc\(/i.test(text) && text.endsWith(')')) {
+    const computed = evalArithmetic(text.slice(5, -1))
+    return Number.isFinite(computed) ? computed : null
+  }
   if (text.endsWith('%')) {
     const pct = Number(text.slice(0, -1))
     return Number.isFinite(pct) ? (pct / 100) * percentScale : null
@@ -102,15 +231,15 @@ function makeRgb(r: number, g: number, b: number): Rgb {
  * L 支持小数（0.704）与百分数（70.4%）；alpha 被忽略（见 parseColor 注释）。
  */
 export function parseOklch(value: string): Oklch | null {
-  const match = OKLCH_PATTERN.exec(value.trim())
-  if (!match) return null
+  const body = wholeFunctionBody(value.trim(), OKLCH_FN)
+  if (body === null) return null
 
   // 先剥离可选 alpha（`/ 0.5`），对比度校验只关心不透明色
-  const [colorPart, alphaPart, ...rest] = match[1].split('/')
+  const [colorPart, alphaPart, ...rest] = body.split('/')
   if (rest.length > 0) return null
   if (alphaPart !== undefined && parseComponent(alphaPart, 1) === null) return null
 
-  const parts = colorPart.trim().split(/[\s,]+/).filter(Boolean)
+  const parts = splitTopLevel(colorPart.trim())
   if (parts.length !== 3) return null
 
   const l = parseComponent(parts[0], 1)
@@ -158,17 +287,18 @@ export function parseColor(value: string): Rgb | null {
     return null
   }
 
-  if (OKLCH_PATTERN.test(text)) {
+  if (wholeFunctionBody(text, OKLCH_FN) !== null) {
     const oklch = parseOklch(text)
     return oklch ? oklchToSrgb(oklch) : null
   }
 
-  const rgbFn = RGB_PATTERN.exec(text)
-  if (rgbFn) {
-    const [colorPart, alphaPart, ...rest] = rgbFn[1].split('/')
+  // rgba() 不以 rgb( 开头，故两种函数名各试一次
+  const rgbBody = wholeFunctionBody(text, RGB_FN) ?? wholeFunctionBody(text, 'rgba')
+  if (rgbBody !== null) {
+    const [colorPart, alphaPart, ...rest] = rgbBody.split('/')
     if (rest.length > 0) return null
     if (alphaPart !== undefined && parseComponent(alphaPart, 1) === null) return null
-    const parts = colorPart.trim().split(/[\s,]+/).filter(Boolean)
+    const parts = splitTopLevel(colorPart.trim())
     // 传统逗号写法允许第 4 个分量是 alpha：`rgba(255, 0, 0, 0.5)`，与 `/ alpha` 等价
     if (parts.length === 4) {
       if (parseComponent(parts[3], 1) === null) return null
