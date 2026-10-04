@@ -72,6 +72,7 @@ func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventI
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Seq < entries[j].Seq })
 	w.entries = entries
+	w.recountLocked() // #66-②：整体替换 ⇒ 重算一次（O(条数)，一次性 ✓）
 	for _, entry := range entries {
 		if entry.Durable && entry.Event.Record.End > w.lastDurableEnd {
 			w.lastDurableEnd = entry.Event.Record.End
@@ -159,7 +160,21 @@ type WAL struct {
 	appendOriginReplay bool
 	// recoveryWiden 是**恢复期独立配额**的拓宽系数（≤1 = 常规闸；见 SetRecoveryWiden ✓）。
 	recoveryWiden float64
+	// pruneSinceSweep 是距离上一次"完整清扫"的 prune 次数（#66-①；持 w.mu 访问 ✓）。
+	pruneSinceSweep int
+	// #66-②：积压计数的**增量维护**（持 w.mu ✓）—— `backlogLocked` 每次 `Append`（enforce 判闸）与
+	// 每次 `Backlog()/BacklogTotal()` 读都会用它们，而旧实现是**两次 O(条数) 全表扫描** ✗✗ ⇒
+	// 对 10 万+ 条的 WAL 就是采集路径上的固定税（#65 归因第 4 项 ✓）。
+	totalBytes    int64 // Σ(len(Message) + walEntryOverheadBytes)：全部条目
+	replayEntries int64 // 其中"回放在飞"条数
+	replayBytes   int64 // 其中"回放在飞"近似字节
 }
+
+// pruneFullSweepEvery 是"完整清扫"的摊销节拍（#66-①）：头偏移窗每次只删**可回收前缀**
+// （摊销 O(1)/条 ✓），但**乱序条目**（归档补账/回放会追加更早的 record 范围 ⇒ 可回收条目可能
+// 落在头部之后）只有完整扫描才收得到 ⇒ 每 N 次 prune 做一次全扫，把"晚回收"界定在 N 次内
+// （纯内存回收节奏，语义无影响 ✓；N 取 64：对 250ms/源的采集轮即 ≤16s）。
+const pruneFullSweepEvery = 64
 
 // SetLimits 覆盖单源积压上限（0 表示沿用默认）。供测试与配置化使用。
 func (w *WAL) SetLimits(maxEntries, maxBytes int64) {
@@ -269,26 +284,49 @@ func (w *WAL) backlogLocked() (int64, int64) {
 	return entries, bytes
 }
 
-// backlogTotalLocked 返回**总量视图**（含回放 ✓）：观测与排障用（诊断面/日志 ✓）。
-func (w *WAL) backlogTotalLocked() (int64, int64) {
-	var bytes int64
-	for _, entry := range w.entries {
-		bytes += int64(len(entry.Event.Message)) + walEntryOverheadBytes
+// walEntryBytes 是单条条目的近似字节口径（与旧全表扫描逐字一致 ✓）。
+func walEntryBytes(entry WALEntry) int64 {
+	return int64(len(entry.Event.Message)) + walEntryOverheadBytes
+}
+
+// noteEntryAddedLocked / noteEntryDroppedLocked 维护 #66-② 的增量计数（调用方必须持 w.mu ✓）。
+func (w *WAL) noteEntryAddedLocked(entry WALEntry) {
+	b := walEntryBytes(entry)
+	w.totalBytes += b
+	if entry.Replay {
+		w.replayEntries++
+		w.replayBytes += b
 	}
-	return int64(len(w.entries)), bytes
+}
+
+func (w *WAL) noteEntryDroppedLocked(entry WALEntry) {
+	b := walEntryBytes(entry)
+	w.totalBytes -= b
+	if entry.Replay {
+		w.replayEntries--
+		w.replayBytes -= b
+	}
+}
+
+// recountLocked 从当前 entries 重算三个计数（整体替换/恢复后用一次 O(条数) 是合算的 ✓）。
+func (w *WAL) recountLocked() {
+	w.totalBytes, w.replayEntries, w.replayBytes = 0, 0, 0
+	for _, entry := range w.entries {
+		w.noteEntryAddedLocked(entry)
+	}
+}
+
+// backlogTotalLocked 返回**总量视图**（含回放 ✓）：观测与排障用（诊断面/日志 ✓）。
+//
+// #66-②：O(1)（旧实现是全表求和 ✗；该读数在每次 Append 的判闸与每次诊断读里都用 ✓）。
+func (w *WAL) backlogTotalLocked() (int64, int64) {
+	return int64(len(w.entries)), w.totalBytes
 }
 
 // replayInFlightLocked 返回"回放在飞"（条目数 + 近似字节）——单列观测 ✓（方案① 要求可观测 ✓）。
+// #66-②：O(1)（增量维护 ✓）。
 func (w *WAL) replayInFlightLocked() (int64, int64) {
-	var entries, bytes int64
-	for _, entry := range w.entries {
-		if !entry.Replay {
-			continue
-		}
-		entries++
-		bytes += int64(len(entry.Event.Message)) + walEntryOverheadBytes
-	}
-	return entries, bytes
+	return w.replayEntries, w.replayBytes
 }
 
 // ReplayInFlight 暴露"回放在飞"读数（条目数 + 近似字节 ✓）：诊断/观测用 ✓。
@@ -553,12 +591,14 @@ func (w *WAL) Append(events ...logtypes.Event) error {
 	}
 
 	for _, ev := range events {
-		w.entries = append(w.entries, WALEntry{
+		newEntry := WALEntry{
 			Replay:   w.appendOriginReplay,
 			Seq:      uint64(len(w.entries) + 1),
 			Event:    ev,
 			Appended: true,
-		})
+		}
+		w.entries = append(w.entries, newEntry)
+		w.noteEntryAddedLocked(newEntry) // #66-②：积压计数增量维护
 	}
 	// read_position 可先推进；durable 等 Commit。
 	end := lastRecordEnd(events, ent.Positions.Read)
@@ -688,15 +728,45 @@ func (w *WAL) pruneReclaimed(pos uint64) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	kept := w.entries[:0]
-	for _, entry := range w.entries {
-		if entry.Durable && entry.Event.Record.End <= pos {
-			continue
+	// #66-①：**增量** prune —— 只删"从头部起的连续可回收前缀"（条目按 seq 追加 ⇒ 正常情形下
+	// "可回收"就是一段前缀 ✓）⇒ 用**头偏移窗**，并把已删前缀**置零**（窗口仍指向同一底层数组，
+	// 不置零就等于继续持有已丢弃事件的正文 ✗ —— 原实现正是为此改用"新数组" ✗，但那会
+	// `append([]WALEntry(nil), kept...)` **复制剩余全部** ⇒ 单次 prune 与"剩余条数"成正比，
+	// 现场单跳 ~1s 的主项之一（#65 归因）✗✗。
+	// 复杂度：单次 prune = O(被删条数)（每条只被置零一次 ⇒ 全生命周期摊销 O(1)/条 ✓）。
+	cut := 0
+	for cut < len(w.entries) {
+		e := w.entries[cut]
+		if !(e.Durable && e.Event.Record.End <= pos) {
+			break
 		}
-		kept = append(kept, entry)
+		cut++
 	}
-	// 用新底层数组避免长期持有已被丢弃事件的引用。
-	w.entries = append([]WALEntry(nil), kept...)
+	if cut > 0 {
+		for i := 0; i < cut; i++ {
+			w.noteEntryDroppedLocked(w.entries[i]) // #66-②：先把计数减掉（置零前 ✓）
+			w.entries[i] = WALEntry{}              // 清引用：窗口后面的底层数组不得再持有已丢弃事件的正文
+		}
+		w.entries = w.entries[cut:]
+	}
+	// 乱序兜底（#66-①）：每 pruneFullSweepEvery 次做一次**完整清扫**（原地压缩 + 清尾部引用 ⇒
+	// 既不用复制剩余全部 ✓，也不持有已丢弃事件 ✓），把乱序条目的"晚回收"界定在 N 次内 ✓。
+	w.pruneSinceSweep++
+	if w.pruneSinceSweep >= pruneFullSweepEvery {
+		w.pruneSinceSweep = 0
+		kept := w.entries[:0]
+		for _, entry := range w.entries {
+			if entry.Durable && entry.Event.Record.End <= pos {
+				w.noteEntryDroppedLocked(entry) // #66-②：完整清扫的删除同样要记账
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		for i := len(kept); i < len(w.entries); i++ {
+			w.entries[i] = WALEntry{} // 原地压缩会复用底层数组 ⇒ 尾部槽位必须清引用
+		}
+		w.entries = w.entries[:len(kept)]
+	}
 	// 回收后按低水位恢复采集（B1b）：积压回落即自动解暂停。
 	w.maybeResumeBacklogLocked(w.led.Get(w.key))
 }
@@ -724,6 +794,7 @@ func (w *WAL) Restore(entries []WALEntry) error {
 		}
 	}
 	w.entries = append([]WALEntry(nil), entries...)
+	w.recountLocked() // #66-②：整体替换 ⇒ 重算一次（O(条数)，一次性 ✓）
 	for _, entry := range entries {
 		if entry.Durable && entry.Event.Record.End > w.lastDurableEnd {
 			w.lastDurableEnd = entry.Event.Record.End
