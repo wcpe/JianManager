@@ -17,7 +17,6 @@ import {
   type BotBatchAction,
   type BotListParams,
 } from '@/api/bots'
-import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useDebounced } from '@/lib/use-debounced'
 import { useTabParam } from '@/lib/use-tab-param'
@@ -61,7 +60,7 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
-import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { InstancePicker } from '@/components/InstancePicker'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/form-validation'
 import { useFieldGate } from '@/lib/use-field-gate'
@@ -409,7 +408,6 @@ function Toolbar({
 
 function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation()
-  const { data: instances } = useInstances()
   const createSession = useCreateBotStressSession()
   const [instanceId, setInstanceId] = useState('')
   const [count, setCount] = useState('20')
@@ -422,10 +420,10 @@ function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   const [error, setError] = useState('')
   const gate = useFieldGate()
 
-  const instanceOptions: ComboboxOption[] = (instances ?? []).map((inst) => ({
-    value: String(inst.id),
-    label: inst.name,
-  }))
+  // 千级实例只在弹窗打开时才展开：本组件是**常驻挂载**的（调用处写 `<XxxDialog open={...} />`
+  // 而非 `{open && ...}`），而 Radix 的 DialogContent 关闭时虽不挂 DOM，其 children 仍会在每次
+  // render 求值——不设门控时，每次渲染都会凭空创建 1200 个 ComboboxOption 对象。
+  // 实例候选改由 InstancePicker 走服务端搜索，不再本地拉全量再映射。
   const parsedCount = Number(count)
   const errors = validateFields(
     { instanceId, count, namePrefix, server, port },
@@ -492,19 +490,17 @@ function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
             {error && <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>}
             <div className="space-y-1">
               <FieldLabel required>{t('bots.instance')}</FieldLabel>
-              <Combobox
-                options={instanceOptions}
-                value={instanceId}
-                onChange={(v: string) => {
+              <InstancePicker
+                value={instanceId ? Number(instanceId) : null}
+                onChange={(id, inst) => {
                   gate.touch('instanceId')
-                  setInstanceId(v)
-                  const inst = instances?.find((i) => String(i.id) === v)
+                  setInstanceId(id === null ? '' : String(id))
                   if (inst) {
                     setServer('127.0.0.1')
                     setPort(String(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565))
                   }
                 }}
-                allowCustom={false}
+                enabled={open}
                 placeholder={t('bots.selectInstance')}
                 invalid={!!gate.show('instanceId', errors.instanceId)}
               />
@@ -1253,7 +1249,6 @@ interface CreateBotDialogProps {
 /** 新建 Bot 对话框（沿用 FR-009 既有表单，复用 useCreateBot）。 */
 function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
   const { t } = useTranslation()
-  const { data: instances } = useInstances()
   const create = useCreateBot()
 
   const [name, setName] = useState('')
@@ -1265,10 +1260,10 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
   const [error, setError] = useState('')
   const gate = useFieldGate()
 
-  const instanceOptions: ComboboxOption[] = (instances ?? []).map((inst) => ({
-    value: String(inst.id),
-    label: inst.name,
-  }))
+  // 千级实例只在弹窗打开时才展开：本组件是**常驻挂载**的（调用处写 `<XxxDialog open={...} />`
+  // 而非 `{open && ...}`），而 Radix 的 DialogContent 关闭时虽不挂 DOM，其 children 仍会在每次
+  // render 求值——不设门控时，每次渲染都会凭空创建 1200 个 ComboboxOption 对象。
+  // 实例候选改由 InstancePicker 走服务端搜索，不再本地拉全量再映射。
 
   const errors = validateFields(
     { name, instanceId, server, port },
@@ -1346,20 +1341,18 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
 
             <div className="space-y-1">
               <FieldLabel required>{t('bots.instance')}</FieldLabel>
-              <Combobox
-                options={instanceOptions}
-                value={instanceId}
-                onChange={(v: string) => {
+              <InstancePicker
+                value={instanceId ? Number(instanceId) : null}
+                onChange={(id, inst) => {
                   gate.touch('instanceId')
-                  setInstanceId(v)
+                  setInstanceId(id === null ? '' : String(id))
                   // 选实例即默认连到该实例（本机回环 + 实例实际端口），避免端口填错连不进
-                  const inst = instances?.find((i) => String(i.id) === v)
                   if (inst) {
                     setServer('127.0.0.1')
                     setPort(String(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565))
                   }
                 }}
-                allowCustom={false}
+                enabled={open}
                 placeholder={t('bots.selectInstance')}
                 invalid={!!gate.show('instanceId', errors.instanceId)}
               />

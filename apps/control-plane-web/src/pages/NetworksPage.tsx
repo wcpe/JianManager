@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -27,8 +27,22 @@ import { instanceStatusLevel, statusColorVar } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
 import { memberHealth, memberHealthFromStatus, type MemberHealth } from '@/lib/topology'
 import TopologyGraph from '@/components/console/TopologyGraph'
-import { useInstances } from '@/api/instances'
+import { useInstanceSearch } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
+import { useVirtualRows } from '@/lib/virtual-list'
+import { useDebounced } from '@/lib/use-debounced'
+
+/**
+ * 成员候选的默认窗口。靠键入下发服务端 q 缩小，与 GroupMembersDialog（FR-336）同款。
+ */
+const CANDIDATE_LIMIT = 50
+
+/**
+ * 成员候选行的固定行高（px）。行盒用 `h-9` 钉死，行内 `text-sm`（20px）与 Checkbox（16px）
+ * 都不超过它，未加任何行间距（间距已折进行高，理由见候选列表处的注释）。
+ * 虚拟化按 `index × 该值` 定位，必须与真实渲染高度严格一致，否则滚动会累积漂移。
+ */
+const CAND_ROW_HEIGHT = 36
 import {
   useNetworks,
   useNetwork,
@@ -373,7 +387,6 @@ function CreateNetworkModal({ onClose }: { onClose: () => void }) {
 function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose: () => void }) {
   const { t } = useTranslation()
   const { data: detail } = useNetwork(networkId)
-  const { data: instances } = useInstances()
   const { data: nodes } = useNodes()
   const addMembers = useAddNetworkMembers(networkId)
   const removeMember = useRemoveNetworkMember(networkId)
@@ -389,12 +402,43 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
   }, [nodes])
 
   const memberIds = useMemo(() => new Set(detail?.members.map((m) => m.instanceId)), [detail])
-  const candidates = useMemo(() => {
-    const q = candFilter.trim().toLowerCase()
-    return (instances ?? [])
-      .filter((i) => !memberIds.has(i.id))
-      .filter((i) => !q || i.name.toLowerCase().includes(q))
-  }, [instances, memberIds, candFilter])
+  /**
+   * 候选改走服务端搜索：实例数是千级（大档 1200），原先拉全量再本地过滤，约 1MB/轮且带 30 秒
+   * 兜底轮询。现在键入经防抖下发服务端 q，默认只取前 CANDIDATE_LIMIT 条。
+   * 「排除已入组成员」仍留在客户端——成员数远小于实例数，代价可忽略。
+   */
+  const candQ = useDebounced(candFilter, 300).trim()
+  const { data: candPage } = useInstanceSearch({
+    ...(candQ ? { q: candQ } : {}),
+    page: 1,
+    pageSize: CANDIDATE_LIMIT,
+    sort: 'name',
+    order: 'asc',
+  })
+  const candidates = useMemo(
+    () => (candPage?.items ?? []).filter((i) => !memberIds.has(i.id)),
+    [candPage, memberIds],
+  )
+  /** 服务端截断时提示引导继续键入缩小范围。 */
+  const candTruncated = candPage ? candPage.total > candPage.items.length : false
+
+  /**
+   * 候选列表虚拟化。实例数是千级（大档 1200），此前候选面板把整表铺进 DOM。
+   *
+   * 【为什么去掉原先的 space-y-1】它给相邻行加 4px 间距，而这 4px 不计入行高：
+   * 第 N 行的真实偏移是 N×行高 + 4×(N−1)。等距虚拟化按 index×itemSize 定位，
+   * 千行时累计偏差 4×999 ≈ 4000px，滚到底会明显漂移。故把间距折进行盒（h-9 = 36px）。
+   */
+  const { containerRef: candScrollRef, onScroll: onCandScroll, range: candRange, totalSize: candTotalSize } =
+    useVirtualRows({ total: candidates.length, itemSize: CAND_ROW_HEIGHT, overscan: 8 })
+
+  // 已选态改 Set：候选行按 selected.includes(id) 判断，1200 行 × O(已选数) 会随勾选累积成热点。
+  const selectedSet = useMemo(() => new Set(selected), [selected])
+
+  // 过滤收窄后回到顶部：候选骤短时，上一轮的 scrollOffset 会让窗口落在列表之外（空窗一帧）。
+  useEffect(() => {
+    if (candScrollRef.current) candScrollRef.current.scrollTop = 0
+  }, [candFilter, candScrollRef])
 
   const roleLabel = (role: string) => t(`networks.role_${role}`, { defaultValue: role })
   const statusLabel = (s: string) => (STATUS_LABEL[s] ? t(STATUS_LABEL[s]) : s)
@@ -537,38 +581,46 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
                 className="h-7 w-36 text-xs"
               />
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-2">
+            {candTruncated && (
+              <p className="shrink-0 px-4 pb-1 text-[11px] text-muted-foreground">
+                {t('common.searchTruncated', { shown: candidates.length, total: candPage?.total ?? 0 })}
+              </p>
+            )}
+            <div ref={candScrollRef} onScroll={onCandScroll} className="min-h-0 flex-1 overflow-y-auto px-2">
               {candidates.length === 0 ? (
                 <p className="px-2 py-6 text-center text-xs text-muted-foreground">{t('networks.noCandidates')}</p>
               ) : (
-                <ul className="space-y-1">
-                  {candidates.map((i) => {
-                    const on = selected.includes(i.id)
-                    return (
-                      <li key={i.id}>
-                        <label
-                          className={cn(
-                            'flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors',
-                            on ? 'bg-primary/10' : 'hover:bg-accent/60',
-                          )}
-                        >
-                          <Checkbox checked={on} onCheckedChange={(v) => toggleSel(i.id, v === true)} aria-label={i.name} />
-                          <span
-                            className="size-1.5 shrink-0 rounded-full"
-                            style={{ backgroundColor: statusColorVar(instanceStatusLevel(i.status)) }}
-                          />
-                          <span className="min-w-0 flex-1 truncate text-sm">{i.name}</span>
-                          <span className="shrink-0 text-[11px] text-muted-foreground">
-                            {roleLabel((i as { role?: string }).role || 'universal')}
-                            {' · '}
-                            {nodeName(i.nodeId)}
-                            {i.serverPort ? ` · :${i.serverPort}` : ''}
-                          </span>
-                        </label>
-                      </li>
-                    )
-                  })}
-                </ul>
+                // 虚拟化：外层撑起总高，内层按 range.before 平移，只渲染窗口内的行。
+                <div className="relative" style={{ height: candTotalSize }}>
+                  <ul style={{ transform: `translateY(${candRange.before}px)` }}>
+                    {candidates.slice(candRange.start, candRange.end).map((i) => {
+                      const on = selectedSet.has(i.id)
+                      return (
+                        <li key={i.id} className="h-9">
+                          <label
+                            className={cn(
+                              'flex h-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 transition-colors',
+                              on ? 'bg-primary/10' : 'hover:bg-accent/60',
+                            )}
+                          >
+                            <Checkbox checked={on} onCheckedChange={(v) => toggleSel(i.id, v === true)} aria-label={i.name} />
+                            <span
+                              className="size-1.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: statusColorVar(instanceStatusLevel(i.status)) }}
+                            />
+                            <span className="min-w-0 flex-1 truncate text-sm">{i.name}</span>
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
+                              {roleLabel((i as { role?: string }).role || 'universal')}
+                              {' · '}
+                              {nodeName(i.nodeId)}
+                              {i.serverPort ? ` · :${i.serverPort}` : ''}
+                            </span>
+                          </label>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
               )}
             </div>
             <div className="flex shrink-0 justify-end border-t p-3">

@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNodes } from '@/api/nodes'
-import { useInstances } from '@/api/instances'
+import { InstancePicker } from '@/components/InstancePicker'
 import {
   useCreateAlertRule,
   useUpdateAlertRule,
@@ -59,7 +59,6 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
   const create = useCreateAlertRule()
   const update = useUpdateAlertRule()
   const { data: nodes } = useNodes()
-  const { data: instances } = useInstances()
   const isEdit = !!rule
   const initialTrigger = rule?.triggerType ?? 'metric'
 
@@ -87,9 +86,26 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
   const silenceError =
     !isValidHHMM(form.silenceStart) || !isValidHHMM(form.silenceEnd) ? t('alerts.silenceFormatError') : ''
   const hasError = !!(nameError || keywordError || silenceError)
-  const targetOptions = form.targetType === 'node'
-    ? (nodes ?? []).map((n) => ({ id: n.id, label: n.name }))
-    : (instances ?? []).map((i) => ({ id: i.id, label: i.name }))
+  /**
+   * 目标选项只保留**节点**维度。
+   *
+   * 实例维度已改走 InstancePicker 的服务端搜索：实例数是千级（大档 1200），而 Radix Select
+   * 依赖全部 SelectItem mount 才能提供首字母跳转与方向键导航，无法只渲染前 N 项——只能整份
+   * 列举，正是要摆脱的形态。节点是个位/十位量级、无搜索需求，保留原生 Select 即可。
+   */
+  const targetOptions = useMemo(
+    () => (nodes ?? []).map((n) => ({ id: n.id, label: n.name })),
+    [nodes],
+  )
+  const targetItems = useMemo(
+    () =>
+      targetOptions.map((target) => (
+        <SelectItem key={target.id} value={String(target.id)}>
+          {target.label}
+        </SelectItem>
+      )),
+    [targetOptions],
+  )
   const targetAllLabel = form.targetType === 'node' ? t('alerts.allNodes') : t('alerts.allInstances')
 
   const toggleChannel = (id: number) => {
@@ -217,20 +233,28 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
                 </div>
               )}
               <FieldLabel>{t('alerts.targetScope')}</FieldLabel>
-              <Select
-                value={form.targetId === null ? TARGET_ALL : String(form.targetId)}
-                onValueChange={(v) => setForm({ ...form, targetId: v === TARGET_ALL ? null : Number(v) })}
-              >
-                <SelectTrigger className="w-full mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={TARGET_ALL}>{targetAllLabel}</SelectItem>
-                  {targetOptions.map((target) => (
-                    <SelectItem key={target.id} value={String(target.id)}>{target.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {form.targetType === 'node' ? (
+                <Select
+                  value={form.targetId === null ? TARGET_ALL : String(form.targetId)}
+                  onValueChange={(v) => setForm({ ...form, targetId: v === TARGET_ALL ? null : Number(v) })}
+                >
+                  <SelectTrigger className="w-full mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={TARGET_ALL}>{targetAllLabel}</SelectItem>
+                    {targetItems}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <InstancePicker
+                  value={form.targetId}
+                  onChange={(id) => setForm({ ...form, targetId: id })}
+                  allowAll
+                  allLabel={t('alerts.allInstances')}
+                  className="mt-1"
+                />
+              )}
               <p className="mt-1 text-xs text-muted-foreground">
                 {t(form.targetType === 'node' ? 'alerts.targetNodeHint' : 'alerts.targetInstanceHint')}
               </p>

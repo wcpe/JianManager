@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Server, Boxes, Users, Download, AlertTriangle } from 'lucide-react'
 import { useNodes } from '@/api/nodes'
-import { useInstances } from '@/api/instances'
+import { useInstanceAggregate } from '@/api/instances'
 import { useOnlinePlayers } from '@/api/players'
 import { useMetricOverview } from '@/api/metrics'
 import { useClientDistObservability } from '@/api/clientStats'
@@ -11,9 +11,8 @@ import { Panel } from '@jianmanager/ui/components/panel'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { RangePicker, type MetricRange } from '@jianmanager/ui'
-import { summarizeInstances } from '@/lib/instance-summary'
 import { summarizeNodes } from '@/lib/node-summary'
-import { tallyBy, summarizeProbeReachability, type DistBucket } from '@/lib/platform-stats'
+import { bucketsFromCounts, tallyBy, summarizeProbeReachability, type DistBucket } from '@/lib/platform-stats'
 import { SLOSection } from '@/components/metrics/SLOSection'
 import { PlayerTrendCard } from '@/components/metrics/PlayerTrendCard'
 
@@ -96,19 +95,30 @@ export default function StatisticsPage() {
 
   const { data: overview } = useMetricOverview(range)
   const { data: nodes } = useNodes()
-  const { data: instances } = useInstances()
+  /**
+   * 实例维度改走后端聚合（`/instances/aggregate`）。
+   *
+   * 此前为画「状态 / 角色 / 进程类型」三张分布图而拉全量实例列表（千级约 1MB/轮，且带 30 秒
+   * 兜底轮询、页面还持有全集）；现在一次聚合即可拿到三组计数与总数，前端不再持有全集。
+   */
+  const { data: instAgg } = useInstanceAggregate()
   const { data: players } = useOnlinePlayers()
   // 分发观测仅平台管理员可查；非管理员不发起请求（enabled=false），UI 整区降级。
   const distQuery = useClientDistObservability({ range: toObsRange(range), enabled: isPlatformAdmin })
 
   const totals = overview?.totals
   const nodeSum = summarizeNodes(nodes ?? [])
-  const instSum = summarizeInstances(instances ?? [])
+  // 实例计数与分布均来自后端聚合（见上），不再本地遍历列表。
+  const instSum = {
+    total: instAgg?.total ?? 0,
+    running: instAgg?.byStatus.RUNNING ?? 0,
+    stopped: instAgg?.byStatus.STOPPED ?? 0,
+    crashed: instAgg?.byStatus.CRASHED ?? 0,
+  }
   const probe = summarizeProbeReachability(players?.backends ?? [])
 
-  // 构成分布（前端从列表聚合）
-  const instByRole = tallyBy(instances ?? [], (i) => i.role)
-  const instByProcess = tallyBy(instances ?? [], (i) => i.processType)
+  const instByRole = bucketsFromCounts(instAgg?.byRole)
+  const instByProcess = bucketsFromCounts(instAgg?.byProcessType)
   const nodeByOs = tallyBy(nodes ?? [], (n) => n.os)
   const nodeByArch = tallyBy(nodes ?? [], (n) => n.arch)
 

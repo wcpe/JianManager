@@ -418,7 +418,11 @@ function CreateAgentTokenDialog({
     })
   }
 
-  const instList = instances ?? []
+  // 千级实例只在弹窗打开时才展开。本组件是**常驻挂载**的（调用处写 `<CreateAgentTokenDialog open={...} />`
+  // 而非 `{open && ...}`），而 Radix 的 DialogContent 关闭时虽不挂 DOM，**其 children 仍会在每次
+  // render 求值**——不设门控时，每次渲染都会凭空创建 1200 个实例 × 4 个元素（label/Checkbox/span/Badge）
+  // 的 React 元素对象（且 Checkbox 是带 Context 的复合控件，比普通元素更贵）。
+  const instList = useMemo(() => (open ? (instances ?? []) : []), [open, instances])
   const nodeList = nodes ?? []
 
   return (

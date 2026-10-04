@@ -79,6 +79,33 @@ beforeEach(() => {
         },
       ]),
     ),
+    // 实例级下钻改走 InstancePicker 的服务端搜索（分页信封）。
+    http.get(API('/instances/search'), () =>
+      HttpResponse.json({
+        items: [
+          {
+            id: 1,
+            uuid: 'inst-1-uuid',
+            nodeId: 1,
+            name: 'survival',
+            type: 'minecraft',
+            role: 'backend',
+            processType: 'daemon',
+            status: 'RUNNING',
+            startCommand: '',
+            workDir: '/srv/survival',
+            serverPort: 25565,
+            autoStart: false,
+            autoRestart: false,
+            tags: '',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 50,
+      }),
+    ),
   )
 })
 
@@ -141,10 +168,12 @@ describe('MonitoringPage（mock 假后端）', () => {
     loginMockUser()
     renderWithProviders(<MonitoringPage />)
 
+    // 节点级仍是原生 select；实例级已改为 InstancePicker（Popover 基座 + 普通 button 选项，
+    // 不再是 role=combobox 的 <select>，故 selectOptions 不适用）。
     const nodeDrill = (await screen.findByLabelText('下钻到实例')) as HTMLSelectElement
     await user.selectOptions(nodeDrill, 'node-1-uuid')
-    const instanceDrill = (await screen.findByRole('combobox', { name: '下钻到实例' })) as HTMLSelectElement
-    await user.selectOptions(instanceDrill, 'inst-1-uuid')
+    await user.click(await screen.findByLabelText('选择实例…'))
+    await user.click(await screen.findByRole('button', { name: 'survival' }))
 
     expect(await screen.findByText('进程 TOP10')).toBeInTheDocument()
     expect(screen.getByText('仅展示 JianManager 受管实例进程树，命令摘要已脱敏。')).toBeInTheDocument()
@@ -174,10 +203,12 @@ describe('MonitoringPage（mock 假后端）', () => {
     loginMockUser()
     renderWithProviders(<MonitoringPage />)
 
+    // 节点级仍是原生 select；实例级已改为 InstancePicker（Popover 基座 + 普通 button 选项，
+    // 不再是 role=combobox 的 <select>，故 selectOptions 不适用）。
     const nodeDrill = (await screen.findByLabelText('下钻到实例')) as HTMLSelectElement
     await user.selectOptions(nodeDrill, 'node-1-uuid')
-    const instanceDrill = (await screen.findByRole('combobox', { name: '下钻到实例' })) as HTMLSelectElement
-    await user.selectOptions(instanceDrill, 'inst-1-uuid')
+    await user.click(await screen.findByLabelText('选择实例…'))
+    await user.click(await screen.findByRole('button', { name: 'survival' }))
 
     const inspectButtons = await screen.findAllByRole('button', { name: '探查' })
     await user.click(inspectButtons[1])

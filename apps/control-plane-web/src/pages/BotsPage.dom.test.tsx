@@ -43,6 +43,19 @@ function stubCrossDomain() {
         { id: 1, uuid: 'n-1', name: '主节点', host: '127.0.0.1', grpcPort: 9100, wsPort: 9200, status: 1, maintenance: false, os: 'linux', arch: 'amd64', cpuCores: 4, memoryMb: 8192, diskTotalMb: 100000, cpuUsage: 0, memoryUsage: 0, diskUsage: 0, networkBytesSent: 0, networkBytesRecv: 0, loadAvg1: 0, lastHeartbeat: null, createdAt: '2026-06-28T00:00:00Z' },
       ]),
     ),
+    // InstancePicker 走服务端搜索（/instances/search），返回分页信封；
+    // /instances 也保留，供页面其它位置使用。
+    http.get(API('/instances/search'), () =>
+      HttpResponse.json({
+        items: [
+          { id: 1, uuid: 'i-1', nodeId: 1, name: '生存服', type: 'minecraft', role: 'universal', processType: 'direct', status: 'RUNNING', startCommand: '', workDir: '/srv/1', serverPort: 25565, autoStart: false, autoRestart: false, tags: '', createdAt: '2026-06-28T00:00:00Z' },
+          { id: 2, uuid: 'i-2', nodeId: 2, name: '空岛服', type: 'minecraft', role: 'universal', processType: 'direct', status: 'RUNNING', startCommand: '', workDir: '/srv/2', serverPort: 25566, autoStart: false, autoRestart: false, tags: '', createdAt: '2026-06-28T00:00:00Z' },
+        ],
+        total: 2,
+        page: 1,
+        pageSize: 50,
+      }),
+    ),
     http.get(API('/instances'), () =>
       HttpResponse.json([
         { id: 1, uuid: 'i-1', nodeId: 1, name: '生存服', type: 'minecraft', role: 'universal', processType: 'direct', status: 'RUNNING', startCommand: '', workDir: '/srv/1', serverPort: 25565, autoStart: false, autoRestart: false, tags: '', createdAt: '2026-06-28T00:00:00Z' },

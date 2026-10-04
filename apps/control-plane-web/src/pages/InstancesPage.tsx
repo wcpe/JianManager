@@ -55,6 +55,8 @@ import { runtimeDriftOf } from '@/lib/runtime-drift'
 import { summarizeInstances, summaryFilterStatus, type SummaryFilterKey } from '@/lib/instance-summary'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { DataPanelSkeleton } from '@jianmanager/ui/components/layout'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
 import { cn, instanceStatusLevel } from '@jianmanager/ui'
@@ -84,6 +86,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { useVirtualRows } from '@/lib/virtual-list'
+import { useCardColumns } from '@/lib/use-card-columns'
 
 /** Radix Select 不允许空字符串 value，用哨兵值表示「全部 / 不过滤」。 */
 const ALL = '__all__'
@@ -986,8 +989,17 @@ export default function InstancesPage() {
         />
       )}
 
+      {/* FR-496 阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与（吸附的）筛选条先渲染，
+          数据区用同壳骨架顶上：上面一条计数行占位、下面一张列表外壳 + 行占位，
+          与就绪态「计数行 + 列表」两段结构一致，数据到达原地替换而不整页跳。 */}
       {isLoading ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-8 w-24" />
+          </div>
+          <DataPanelSkeleton rows={12} />
+        </div>
       ) : (
         <div className="space-y-3">
           {selectedIds.length > 0 && (
@@ -1630,25 +1642,6 @@ function CardView({
 }
 
 const CARD_ROW_HEIGHT = 244
-
-function readCardColumns(): number {
-  if (typeof window === 'undefined') return 3
-  if (window.innerWidth >= 1280) return 3
-  if (window.innerWidth >= 640) return 2
-  return 1
-}
-
-function useCardColumns(): number {
-  const [columns, setColumns] = useState(readCardColumns)
-
-  useEffect(() => {
-    const update = () => setColumns(readCardColumns())
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [])
-
-  return columns
-}
 
 function VirtualizedCardGrid({
   instances,
