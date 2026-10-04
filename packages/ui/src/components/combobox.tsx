@@ -40,6 +40,8 @@ interface ComboboxProps {
   className?: string
   /** 触发器 id（配合 FieldLabel htmlFor）。 */
   id?: string
+  /** 触发器的可访问名。同一处出现多个 Combobox（例如下钻选择器的节点级与实例级）时用于区分。 */
+  ariaLabel?: string
   /**
    * 受控查询回调（FR-336）：内部搜索框输入变化与展开重置时回传当前查询串，
    * 供服务端搜索场景（如群组成员候选）驱动远端 q；不传则行为完全不变。
@@ -61,6 +63,7 @@ export function Combobox({
   invalid,
   className,
   id,
+  ariaLabel,
   onQueryChange,
 }: ComboboxProps) {
   const { t } = useTranslation()
@@ -118,6 +121,7 @@ export function Combobox({
           id={id}
           disabled={disabled}
           aria-invalid={invalid}
+          aria-label={ariaLabel}
           data-slot="combobox-trigger"
           className={cn(
             "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:ring-destructive/40",

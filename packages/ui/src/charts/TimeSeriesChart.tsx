@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { startTransition, useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   CartesianGrid,
@@ -60,7 +60,9 @@ export function TimeSeriesChart({
 }: {
   series: ChartSeries[]
   height?: number
-  valueFormatter?: (v: number) => string
+  /** 纵轴与 tooltip 的数值格式。第二参数是序列名，便于调用方按序列还原量纲
+   *  （如多序列归一化图：图上画百分比、tooltip 显示原始值）。 */
+  valueFormatter?: (v: number, seriesName?: string) => string
   emptyHint?: string
   /** Y 轴范围。默认 ['auto','auto'] 自适应数据，使 TPS/MSPT 等窄幅指标不被 0 基线压成直线（FR-148）；占比类指标可传 [0, 100]。 */
   yDomain?: [number | 'auto' | 'dataMin' | 'dataMax', number | 'auto' | 'dataMin' | 'dataMax']
@@ -89,14 +91,22 @@ export function TimeSeriesChart({
   // 不渲染图（切回分段/展开面板后自动恢复），>0 时以确切像素宽渲染，彻底无 -1 告警。
   const [width, setWidth] = useState(0)
   const observerRef = useRef<ResizeObserver | null>(null)
+  const debounceRef = useRef<number | undefined>(undefined)
   const containerRef = useCallback((el: HTMLDivElement | null) => {
     observerRef.current?.disconnect()
+    window.clearTimeout(debounceRef.current)
     if (!el) {
       observerRef.current = null
       return
     }
+    // 同 MonitorChart：宽度逐帧变化时若立即重绘，recharts 会占满整个侧栏过渡期。
+    // 防抖 + startTransition 让过渡期间不重绘、结束后的那一次也不阻塞动画帧。
     const observer = new ResizeObserver((entries) => {
-      setWidth(Math.floor(entries[0]?.contentRect.width ?? 0))
+      const next = Math.floor(entries[0]?.contentRect.width ?? 0)
+      window.clearTimeout(debounceRef.current)
+      debounceRef.current = window.setTimeout(() => {
+        startTransition(() => setWidth(next))
+      }, 2000)
     })
     observer.observe(el)
     observerRef.current = observer
@@ -148,7 +158,7 @@ export function TimeSeriesChart({
               labelFormatter={(ts) => new Date(String(ts)).toLocaleString()}
               formatter={(value, name) => {
                 const num = typeof value === 'number' ? value : Number(value)
-                return [Number.isFinite(num) ? fmt(num) : '—', name]
+                return [Number.isFinite(num) ? fmt(num, String(name)) : '—', name]
               }}
             />
             {series.length > 1 && (

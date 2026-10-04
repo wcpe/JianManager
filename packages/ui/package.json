@@ -3,10 +3,18 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:node": "vitest run --project node",
+    "test:dom": "vitest run --project dom"
+  },
   "exports": {
     ".": "./src/index.ts",
-    "./styles.css": "./src/styles.css",
+    "./styles.css": "./src/styles/index.css",
+    "./styles/*": "./src/styles/*",
     "./components/*": "./src/components/*.tsx",
+    "./components/layout": "./src/components/layout/index.ts",
+    "./components/shell": "./src/components/shell/index.ts",
     "./charts/*": "./src/charts/*.tsx",
     "./lib/*": "./src/lib/*.ts"
   },
@@ -25,8 +33,15 @@
     "react-i18next": "^17.0.8"
   },
   "devDependencies": {
+    "@jianmanager/tsconfig": "workspace:*",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "typescript": "~6.0.2"
+    "@vitejs/plugin-react": "^6.0.1",
+    "jsdom": "^29.1.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12",
+    "vitest": "^4.1.9"
   }
 }
