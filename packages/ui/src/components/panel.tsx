@@ -1,3 +1,10 @@
+/**
+ * @file Panel：分区面板原语（标题栏 + 内容区 + 底部区三段式），全站卡片基座。
+ * @input  lib/utils 的 cn、lib/tone、lib/interaction-overlay 的 shadowTransition
+ * @output Panel、PanelProps
+ * @sync   改动三段结构或 data-slot 钩子时同步 panel.test.tsx；页面外壳依赖其 bodyClassName 约定
+ * @since  FR-496
+ */
 import * as React from 'react'
 
 import { cn } from '../lib/utils'

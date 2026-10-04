@@ -1,3 +1,10 @@
+/**
+ * @file Input：文本输入框，薄封装原生 input（type / name / disabled / aria-* 一律透传）。
+ * @input  lib/utils 的 cn、lib/focus-ring、lib/interaction-overlay 的 disabledState
+ * @output Input
+ * @sync   改动交互或透传契约时同步 input.test.tsx
+ * @since  FR-496
+ */
 import * as React from "react"
 
 import { cn } from "../lib/utils"
