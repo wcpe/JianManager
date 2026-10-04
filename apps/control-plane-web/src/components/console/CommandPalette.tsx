@@ -13,6 +13,7 @@ import { cn } from '@jianmanager/ui'
 import { instanceStatusLevel } from '@jianmanager/ui'
 import { flatNavItems } from './nav-config'
 import { searchPalette, type PaletteEntry } from './command-palette'
+import { prefetchRoute } from '@/lib/route-prefetch'
 
 /** kind → 行首图标。 */
 const KIND_ICON = {
@@ -91,6 +92,15 @@ export default function CommandPalette() {
 
   // selected 在渲染期 clamp，避免结果变化后越界（不在 effect 里 setState）。
   const activeIndex = entries.length === 0 ? -1 : Math.min(selected, entries.length - 1)
+
+  // FR-496 阶段 6 补丁：键盘用户不会 hover，但面板里「当前选中项」是等价的导航意图
+  // （Enter 即跳转），故选中项是页面时同样预取目标 chunk。仅面板打开时生效；
+  // prefetchRoute 幂等，连续输入不会重复请求同一个路由。
+  useEffect(() => {
+    if (!open || activeIndex < 0) return
+    const target = entryRouteTarget(entries[activeIndex])
+    if (target) prefetchRoute(target)
+  }, [open, entries, activeIndex])
 
   // 全局 Ctrl/⌘+K 切换（始终挂载的监听；事件回调里 setState 合法，非 effect body）。
   useEffect(() => {
@@ -194,11 +204,17 @@ export default function CommandPalette() {
             entries.map((entry, i) => {
               const Icon = KIND_ICON[entry.kind]
               const active = i === activeIndex
+              // 页面类条目在悬停/聚焦时预取其 chunk（FR-496 阶段 6 补丁）：点下去时模块已在缓存。
+              const target = entryRouteTarget(entry)
+              const intentProps = target
+                ? { onMouseEnter: () => prefetchRoute(target), onFocus: () => prefetchRoute(target) }
+                : {}
               return (
                 <button
                   key={entry.key}
                   type="button"
                   data-palette-row={i}
+                  {...intentProps}
                   onMouseMove={() => setSelected(i)}
                   onClick={() => run(entry)}
                   className={cn(
@@ -237,6 +253,15 @@ export default function CommandPalette() {
 function statusColor(status?: string): string {
   const level = instanceStatusLevel(status ?? '')
   return level === 'neutral' ? 'info' : level
+}
+
+/**
+ * 条目对应的路由目标（FR-496 阶段 6 补丁）：只有页面类条目才是路由，
+ * 实例/节点/操作类的 key 是 id 或动作名，预取没有意义（它们各自的预取在别处）。
+ */
+function entryRouteTarget(entry: PaletteEntry | undefined): string | null {
+  if (!entry || entry.kind !== 'page') return null
+  return entry.key.slice(entry.kind.length + 1)
 }
 
 /** 把第 idx 行滚入可视区（键盘移动时）。越界/无元素则忽略。 */

@@ -35,6 +35,11 @@ function loginAsGroupAdmin() {
 
 /**
  * ConsoleSidebar 六域 IA（FR-431）。
+ *
+ * FR-496 阶段 6 现状：控制台外壳已切到 `WorkspaceSidebar`（工作区侧栏），本文件测的
+ * `ConsoleSidebar` 因此**不再被 `DashboardPage` 挂载**——它作为渐进替换的对照物与回退路径
+ * 保留在仓库里，六域 IA 也仍是 `workspace-navigation.test.ts` 的语义对照，故这些用例继续绿。
+ * 新侧栏的结构 / 权限 / 跳转契约见 `WorkspaceSidebar.dom.test.tsx`。
  */
 describe('ConsoleSidebar 六域控制台 IA（FR-431）', () => {
   beforeEach(() => {

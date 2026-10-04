@@ -2,31 +2,34 @@ import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
 /**
- * FR-134 统一页头与面包屑组件 · 单机（Playwright + mock 模式）验收。
- * 覆盖：顶栏统一面包屑组件（PageBreadcrumb）据当前路由渲染「域 › 页面」轨迹，
- * 跨多页导航时面包屑随当前位置变化，二级页可点面包屑回列表。
+ * FR-134 统一页头 · 单机（Playwright + mock 模式）验收。
+ *
+ * FR-496 阶段 6 补丁改写了本用例的契约：顶栏里的 `PageBreadcrumb` 整段移除——
+ * 同一页的页名此前在顶栏（面包屑末级）与内容页（`PageHeader` 大标题）各出现一次，
+ * 而原型《资源优先工作区》第 1 节明确「全局顶栏只做两件事（切工作区 + 全局工具），
+ * 这里没有页面大标题」。现在**页名只由内容页承担**：内容页顶部的大标题随路由变化，
+ * 顶栏不再输出任何页名/面包屑（对象详情页要的紧凑面包屑属阶段 7 的对象头）。
  * 证据落 .tmp/acceptance/FR-134/。
  */
 
-test('FR-134 面包屑随导航反映当前位置（域 › 页面）', async ({ page }) => {
+test('FR-134 页名由内容页承担，顶栏不再输出面包屑', async ({ page }) => {
   await login(page)
-  const crumb = page.getByRole('banner').getByRole('navigation', { name: 'breadcrumb' })
-  await expect(crumb).toBeVisible()
 
-  // 节点页 → 「服务器 › 节点」
+  // 顶栏（banner）里没有任何面包屑导航。
+  const banner = page.getByRole('banner')
+  await expect(banner.getByRole('navigation', { name: 'breadcrumb' })).toHaveCount(0)
+
+  // 节点页 → 内容页大标题「节点管理」
   await page.goto('/nodes')
-  await expect(crumb).toContainText('服务器')
-  await expect(crumb).toContainText('节点')
-  await page.screenshot({ path: '../.tmp/acceptance/FR-134/single-machine-breadcrumb-nodes.png', fullPage: false })
+  await expect(page.locator('[data-slot="console-main"] h1')).toHaveText('节点管理')
+  await page.screenshot({ path: '../.tmp/acceptance/FR-134/single-machine-page-title-nodes.png', fullPage: false })
 
-  // 观测/监控总览 → 「观测 › 监控总览」（切页后面包屑随之变化）
+  // 观测/监控总览 → 「监控」（切页后页名随之变化）
   await page.goto('/monitor')
-  await expect(crumb).toContainText('观测')
-  await expect(crumb).toContainText('监控总览')
+  await expect(page.locator('[data-slot="console-main"] h1')).toHaveText('监控')
 
-  // 开源许可页 → 「审计与设置 › 开源许可」（FR-431 六域：licenses 挂平台设置分节）
+  // 开源许可页 → 「开源许可」（FR-431 六域：licenses 挂平台设置分节）
   await page.goto('/licenses')
-  await expect(crumb).toContainText('审计与设置')
-  await expect(crumb).toContainText('开源许可')
-  await page.screenshot({ path: '../.tmp/acceptance/FR-134/single-machine-breadcrumb-licenses.png', fullPage: false })
+  await expect(page.locator('[data-slot="console-main"] h1')).toHaveText('开源许可')
+  await page.screenshot({ path: '../.tmp/acceptance/FR-134/single-machine-page-title-licenses.png', fullPage: false })
 })

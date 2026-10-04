@@ -345,7 +345,7 @@ function ColumnHead({
       aria-disabled={!sortable}
       className={cn(
         'select-none',
-        sortable ? 'cursor-pointer' : 'cursor-not-allowed opacity-70',
+        sortable ? 'cursor-pointer hover:text-foreground' : 'cursor-not-allowed opacity-70',
       )}
       onClick={sortable ? onClick : undefined}
     >

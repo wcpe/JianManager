@@ -74,7 +74,7 @@ export default function PlayersPage() {
             key={key}
             onClick={() => setTab(key)}
             className={`px-3 py-2 text-sm -mb-px border-b-2 ${
-              tab === key ? 'border-primary text-foreground font-medium' : 'border-transparent text-muted-foreground'
+              tab === key ? 'border-primary text-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}
           >
             {t(`players.tab_${key}`)}

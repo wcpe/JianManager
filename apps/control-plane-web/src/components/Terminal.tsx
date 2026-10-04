@@ -618,12 +618,14 @@ export default function TerminalComponent({
                 })
               : t('instanceDetail.terminalSearchReady', { defaultValue: '输入关键字搜索' })}
           </span>
+          {/* 禁用态用 pointer-events-none 屏蔽指针：只降透明度时 hover 仍会点亮，
+              变成「看起来能点、点了没反应」；指针事件既已屏蔽，cursor 声明必为死代码故不留。 */}
           <button
             type="button"
             onClick={() => moveSearchMatch(-1)}
             disabled={searchMatches.length === 0}
             aria-label={t('instanceDetail.terminalSearchPrevious', { defaultValue: '上一条匹配' })}
-            className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:pointer-events-none disabled:opacity-40"
           >
             ↑
           </button>
@@ -632,7 +634,7 @@ export default function TerminalComponent({
             onClick={() => moveSearchMatch(1)}
             disabled={searchMatches.length === 0}
             aria-label={t('instanceDetail.terminalSearchNext', { defaultValue: '下一条匹配' })}
-            className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:pointer-events-none disabled:opacity-40"
           >
             ↓
           </button>

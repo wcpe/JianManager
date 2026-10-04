@@ -210,6 +210,10 @@ async function readVisibleAnimationDurationProbe(page: Page, rootSelector: strin
 interface SidebarFrameStats {
   maxFrameMs: number
   framesOver24: number
+  /** 过渡中段（严格处于折叠/展开两端之间）采到的帧数：>0 才说明真的采到了过渡过程。 */
+  midFrames: number
+  /** 逐帧 |内容区左缘 − 侧栏右缘| 的最大值（px）：内容区应始终贴着侧栏右缘回流。 */
+  contentSidebarDriftMax: number
   sidebarTransition: string
   sidebarTransitionDurationMs: number
   drawerTransition: string
@@ -239,6 +243,16 @@ interface SidebarFrameProbe {
 
 async function sidebarFrameStats(page: Page): Promise<SidebarFrameProbe> {
   const shell = page.locator('[data-slot="console-shell"]')
+  // FR-496 阶段 6 补丁：无头 Chromium 的 rAF 帧间隔常达 100ms 以上，320ms 的真实过渡采不到中段帧。
+  // 把宽度过渡放慢到 1.2s 后逐帧采样才稳定覆盖过渡过程；同时这也放大了「JS 定时器 + CSS 过渡
+  // 两个时钟」的错位（旧实现会在 320ms 处落位跳变），因此本探针同时是那条回归的守卫。
+  await shell.evaluate((root) => {
+    const style = document.createElement('style')
+    style.dataset.jmProbeSlowMotion = 'true'
+    style.textContent = '.jm-console-shell { --sidebar-motion-duration: 1200ms !important; }'
+    document.head.append(style)
+    void root
+  })
   await shell.evaluate((root) => {
     interface FrameSample {
       sidebarW: number
@@ -315,7 +329,6 @@ async function sidebarFrameStats(page: Page): Promise<SidebarFrameProbe> {
       let sampling = false
 
       const finish = () => {
-        observer.disconnect()
         const finalSample = samples.at(-1) ?? sample()
         const drawerWidths = [drawerStartW, ...samples.map((item) => item.drawerW), finalSample.drawerW]
         const drawerMinW = Math.min(...drawerWidths)
@@ -330,6 +343,9 @@ async function sidebarFrameStats(page: Page): Promise<SidebarFrameProbe> {
         resolve({
           maxFrameMs: Math.round(Math.max(0, ...frames) * 10) / 10,
           framesOver24: frames.filter((value) => value > 24).length,
+          // 内容区左缘必须始终贴着侧栏右缘：逐帧最大偏差就是「整页位移 / 二次抖动」的量化指标。
+          midFrames: samples.filter((item) => item.sidebarW > 54.5 && item.sidebarW < 245.5).length,
+          contentSidebarDriftMax: Math.round(Math.max(0, ...samples.map((item) => Math.abs(item.contentX - item.sidebarW))) * 10) / 10,
           sidebarTransition: midSample.sidebarTransition,
           sidebarTransitionDurationMs: midSample.sidebarTransitionDurationMs,
           drawerTransition: midSample.drawerTransition,
@@ -358,7 +374,13 @@ async function sidebarFrameStats(page: Page): Promise<SidebarFrameProbe> {
         if (lastFrameAt !== null) frames.push(now - lastFrameAt)
         lastFrameAt = now
         samples.push(sample())
-        if (probeRoot.dataset.sidebarMotion === 'idle') {
+        // FR-496 阶段 6 补丁：宽度过渡改由侧栏自身承担，外壳不再有 `data-sidebar-motion` 钩子，
+        // 采样终点改为「侧栏宽度落到当前 data-state 的目标值」（折叠 54 / 展开 246）。
+        // 必须同时要求「已经离开起始宽度」：探针在点击前布防，此时宽度天然等于起始值，
+        // 少了这个条件会在点击前就判定「已到位」而提前收尾（中段帧为 0）。
+        const targetW = sidebar.dataset.state === 'collapsed' ? 54 : 246
+        const movedFromStart = samples.some((item) => Math.abs(item.sidebarW - sidebarStartW) > 1)
+        if (samples.length > 2 && movedFromStart && Math.abs(sidebar.getBoundingClientRect().width - targetW) < 0.5) {
           finish()
           return
         }
@@ -366,14 +388,13 @@ async function sidebarFrameStats(page: Page): Promise<SidebarFrameProbe> {
       }
 
       const startSampling = () => {
-        if (sampling || probeRoot.dataset.sidebarMotion === 'idle') return
+        if (sampling) return
         sampling = true
         samples.push(sample())
         requestAnimationFrame(tick)
       }
 
-      const observer = new MutationObserver(startSampling)
-      observer.observe(probeRoot, { attributes: true, attributeFilter: ['data-sidebar-motion'] })
+      // 采样由点击引发（点击前侧栏宽度不等于目标值），因此无需再观察属性变化。
       startSampling()
     })
   })
@@ -528,7 +549,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
     await expect(page.locator('[data-slot="mobile-nav-panel"]'), '收起动画后抽屉卸载').toHaveCount(0, { timeout: 3_000 })
   })
 
-  test('顶部进度条存在，数据页侧栏折叠/展开不逐帧重排主工作区', async ({ page }) => {
+  test('顶部进度条存在，数据页侧栏折叠/展开只有侧栏自身变宽、内容区平滑跟随', async ({ page }) => {
     test.setTimeout(60_000)
 
     for (const route of [ROUTES[0], ROUTES[1]]) {
@@ -569,50 +590,49 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       const collapseStats = await collapseProbe.read()
       await expect(sidebar, `${route.label} 侧栏折叠动画状态`).toHaveAttribute('data-state', 'collapsed')
       await expect
-        .poll(async () => sidebar.evaluate((el) => Math.round(el.getBoundingClientRect().width)), { message: `${route.label} 侧栏折叠后仍保留 56px 导航轨` })
-        .toBe(56)
-      expect(collapseStats.sidebarTransition, `${route.label} 收起时 aside 不做 width transition，避免主工作区逐帧重排`).not.toContain('width')
-      expect(collapseStats.sidebarMidW, `${route.label} 收起中段 aside 布局宽度保持展开宽度`).toBe(collapseStats.sidebarStartW)
-      expect(collapseStats.drawerTransition, `${route.label} 收起由 drawer 视觉宽度过渡驱动`).toContain('width')
-      expect(collapseStats.drawerTransitionDurationMs, `${route.label} 收起 drawer 过渡时长`).toBeGreaterThanOrEqual(250)
+        .poll(async () => sidebar.evaluate((el) => Math.round(el.getBoundingClientRect().width)), { message: `${route.label} 侧栏折叠后保留 54px 图标轨（原型 .sidebar.collapsed）` })
+        .toBe(54)
+      // FR-496 阶段 6 补丁反转了这里的三条契约：宽度过渡从 drawer 移到侧栏自身，
+      // 内容区不再做 transform/clip-path 位移补偿（原实现靠两个时钟对齐，落位瞬间会抖）。
+      expect(collapseStats.sidebarTransition, `${route.label} 收起由侧栏自身宽度过渡驱动`).toContain('width')
+      expect(collapseStats.sidebarTransitionDurationMs, `${route.label} 收起侧栏过渡时长`).toBeGreaterThanOrEqual(250)
+      expect(collapseStats.midFrames, `${route.label} 收起采样覆盖过渡中段`).toBeGreaterThan(0)
+      expect(collapseStats.sidebarStartW, `${route.label} 收起前侧栏为展开宽度`).toBe(246)
+      expect(collapseStats.sidebarFinalW, `${route.label} 收起后侧栏为折叠宽度`).toBe(54)
+      expect(collapseStats.drawerTransition, `${route.label} 抽屉只跟随侧栏宽度，不再自己过渡`).not.toContain('width')
       expect(collapseStats.drawerAnimationName, `${route.label} 收起不再使用 clip-path keyframes`).toBe('none')
-      expect(collapseStats.drawerMidW, `${route.label} 收起中段 drawer 宽度处于连续过渡中`).toBeGreaterThan(56)
-      expect(collapseStats.drawerMidW, `${route.label} 收起中段 drawer 宽度处于连续过渡中`).toBeLessThanOrEqual(240)
-      expect(collapseStats.contentTransition, `${route.label} 收起内容区只做 compositor transform`).toContain('transform')
-      expect(collapseStats.contentMidX, `${route.label} 收起中段内容区通过 transform 左移`).toBeLessThan(collapseStats.contentStartX)
-      expect(collapseStats.expandedModeTransition, `${route.label} 收起展开层做淡出和缩进动画`).toContain('opacity')
-      expect(collapseStats.expandedModeTransition, `${route.label} 收起展开层做淡出和缩进动画`).toContain('transform')
-      expect(collapseStats.collapsedModeTransition, `${route.label} 收起折叠图标层做淡入和缩进动画`).toContain('opacity')
-      expect(collapseStats.collapsedModeTransition, `${route.label} 收起折叠图标层做淡入和缩进动画`).toContain('transform')
-      expect(collapseStats.expandedIconTransition, `${route.label} 图标自身保留缩进过渡`).toContain('transform')
+      expect(collapseStats.contentTransition, `${route.label} 收起内容区不做位移过渡（只回流）`).not.toContain('transform')
+      expect(collapseStats.contentTransition, `${route.label} 收起内容区不做裁切过渡`).not.toContain('clip-path')
+      expect(collapseStats.contentClipPath, `${route.label} 收起内容区不裁切`).toBe('none')
+      // 核心契约：逐帧「内容区左缘 = 侧栏右缘」，既不平移也不二次抖动。
+      expect(collapseStats.contentSidebarDriftMax, `${route.label} 收起逐帧内容区跟随侧栏右缘`).toBeLessThanOrEqual(2)
+      // 旧侧栏的 `.jm-sidebar-mode` 双内容层交叉淡入（展开层/折叠图标层的 opacity+transform）
+      // 已随 FR-496 阶段 6 换成 `WorkspaceSidebar` 退场：新侧栏折叠态是同一棵子树按
+      // `renderCollapsed` 延迟切换图标轨，没有那两层。相关结构契约由 WorkspaceSidebar.dom.test.tsx 守。
       expect(collapseStats.contentFinalX, `${route.label} 收起结束内容区落到图标轨后`).toBeLessThanOrEqual(80)
 
+      // 展开入口在顶栏品牌区：新侧栏的折叠态是纯图标轨，没有旧侧栏那个 PanelLeftOpen 按钮。
       const headerExpandButton = page.locator('[data-slot="console-header"]').getByRole('button', { name: '展开侧栏' })
-      const railExpandButton = page.locator('[data-mode="collapsed"][aria-hidden="false"] button[aria-label="展开侧栏"]')
       await expect(headerExpandButton, `${route.label} 顶栏展开入口唯一`).toHaveCount(1)
-      await expect(railExpandButton, `${route.label} 图标轨展开入口唯一`).toHaveCount(1)
       const expandProbe = await sidebarFrameStats(page)
-      await railExpandButton.click()
+      await headerExpandButton.click()
       // 控制端延迟超过侧栏 320ms 动画，验证探针可在慢速 CI 中保留完整结果。
       await page.waitForTimeout(400)
       const expandStats = await expandProbe.read()
       await expect(sidebar, `${route.label} 侧栏展开动画状态`).toHaveAttribute('data-state', 'expanded')
-      expect(expandStats.sidebarTransition, `${route.label} 展开时 aside 不做 width transition，避免主工作区逐帧重排`).not.toContain('width')
-      expect(expandStats.sidebarMidW, `${route.label} 展开中段 aside 布局宽度保持折叠宽度`).toBe(expandStats.sidebarStartW)
-      expect(expandStats.drawerTransition, `${route.label} 展开由 drawer 视觉宽度过渡驱动`).toContain('width')
-      expect(expandStats.drawerTransitionDurationMs, `${route.label} 展开 drawer 过渡时长`).toBeGreaterThanOrEqual(250)
+      expect(expandStats.sidebarTransition, `${route.label} 展开由侧栏自身宽度过渡驱动`).toContain('width')
+      expect(expandStats.midFrames, `${route.label} 展开采样覆盖过渡中段`).toBeGreaterThan(0)
+      expect(expandStats.sidebarStartW, `${route.label} 展开前侧栏为折叠宽度`).toBe(54)
+      expect(expandStats.sidebarFinalW, `${route.label} 展开后侧栏为展开宽度`).toBe(246)
+      expect(expandStats.drawerTransition, `${route.label} 抽屉只跟随侧栏宽度，不再自己过渡`).not.toContain('width')
       expect(expandStats.drawerAnimationName, `${route.label} 展开不再使用 clip-path keyframes`).toBe('none')
-      expect(expandStats.drawerMidW, `${route.label} 展开中段 drawer 宽度处于连续过渡中`).toBeGreaterThan(56)
-      expect(expandStats.drawerMidW, `${route.label} 展开中段 drawer 宽度处于连续过渡中`).toBeLessThanOrEqual(240)
-      expect(expandStats.contentTransition, `${route.label} 展开内容区只做 compositor transform`).toContain('transform')
-      expect(expandStats.contentTransition, `${route.label} 展开内容区右边缘用裁切停在视口边界`).toContain('clip-path')
-      expect(expandStats.contentMidX, `${route.label} 展开中段内容区通过 transform 右移`).toBeGreaterThan(expandStats.contentStartX)
-      expect(Math.abs(expandStats.contentMidVisibleRight - expandStats.viewportWidth), `${route.label} 展开中段内容区右边缘停在视口边界`).toBeLessThanOrEqual(3)
-      expect(expandStats.expandedModeTransition, `${route.label} 展开展开层做淡入和归位动画`).toContain('opacity')
-      expect(expandStats.expandedModeTransition, `${route.label} 展开展开层做淡入和归位动画`).toContain('transform')
-      expect(expandStats.collapsedModeTransition, `${route.label} 展开折叠图标层做淡出和归位动画`).toContain('opacity')
-      expect(expandStats.collapsedModeTransition, `${route.label} 展开折叠图标层做淡出和归位动画`).toContain('transform')
-      expect(expandStats.expandedIconTransition, `${route.label} 图标自身保留缩进过渡`).toContain('transform')
+      expect(expandStats.contentTransition, `${route.label} 展开内容区不做位移过渡（只回流）`).not.toContain('transform')
+      expect(expandStats.contentTransition, `${route.label} 展开内容区不做裁切过渡`).not.toContain('clip-path')
+      expect(expandStats.contentClipPath, `${route.label} 展开内容区不裁切`).toBe('none')
+      expect(expandStats.contentSidebarDriftMax, `${route.label} 展开逐帧内容区跟随侧栏右缘`).toBeLessThanOrEqual(2)
+      // 旧侧栏的 `.jm-sidebar-mode` 双内容层交叉淡入（展开层/折叠图标层的 opacity+transform）
+      // 已随 FR-496 阶段 6 换成 `WorkspaceSidebar` 退场：新侧栏折叠态是同一棵子树按
+      // `renderCollapsed` 延迟切换图标轨，没有那两层。相关结构契约由 WorkspaceSidebar.dom.test.tsx 守。
       expect(expandStats.contentFinalX, `${route.label} 展开结束内容区落到展开侧栏后`).toBeGreaterThanOrEqual(220)
       results.push({ route: route.label, collapse: collapseStats, expand: expandStats })
     }

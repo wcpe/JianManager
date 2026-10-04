@@ -36,8 +36,15 @@ function read(rel: string): string {
   return readFileSync(resolveSourcePath(rel), 'utf8')
 }
 
+/**
+ * FR-496：组件包的设计底座已从单一 styles.css 拆分为 styles/ 目录下的多文件
+ * （theme-map / tokens / themes / motion），此处合并读取以保持既有断言成立。
+ */
 function readUiStyles(): string {
-  return readFileSync(path.join(rootDir, 'packages/ui/src/styles.css'), 'utf8')
+  const dir = path.join(rootDir, 'packages/ui/src/styles')
+  return ['theme-map.css', 'tokens.css', 'themes.css', 'motion.css']
+    .map((f) => readFileSync(path.join(dir, f), 'utf8'))
+    .join('\n')
 }
 
 /** 既参与 hover 抬升、又需在 FR-176 去位移的卡片/行原语。 */
@@ -122,8 +129,10 @@ describe('FR-244 全局动画 token 化', () => {
   const appCss = read('index.css')
   const uiCss = readUiStyles()
 
-  it('应用与组件包共同暴露 motion duration 与 easing token', () => {
-    for (const css of [appCss, uiCss]) {
+  it('组件包设计底座暴露 motion duration 与 easing token（应用经 @import 引入）', () => {
+    // FR-496：token 已归一到 packages/ui/src/styles/，应用不再重复定义
+    // （此前 app 与包各持一份副本、已发生漂移，本次合并为单一真源）。
+    for (const css of [uiCss]) {
       expect(css).toMatch(/--motion-duration-fast:\s*120ms/)
       expect(css).toMatch(/--motion-duration-normal:\s*180ms/)
       expect(css).toMatch(/--motion-duration-slow:\s*320ms/)
@@ -169,11 +178,23 @@ describe('FR-244 全局动画 token 化', () => {
       const src = read(file)
       expect(src).not.toMatch(/duration-200\b/)
       expect(src).not.toMatch(/duration-300\b/)
-      expect(src).toMatch(/duration-\[var\(--motion-duration-(?:normal|slow)\)\]/)
+      // FR-496：动效取值可以写在调用点（字面量），也可以抽到 packages/ui/src/lib 的共享常量。
+      // 后者更干净（取值单一真源），故两种写法都接受；但必须能追溯到 motion token ——
+      // 字面量在本文件可验，常量引用则由下一条断言在常量文件里验。
+      const literal = /duration-\[var\(--motion-duration-(?:normal|slow)\)\]/.test(src)
+      const viaConstant = /\b(?:shadowTransition|interactionTransition)\b/.test(src)
+      expect(literal || viaConstant, '既无 motion token 字面量，也未引用共享动效常量').toBe(true)
     })
   }
 
-  it('组件包 styles.css 也暴露收敛注释指向统一动画词汇表', () => {
+  it('共享动效常量本身绑定 motion-duration token（FR-496 收敛）', () => {
+    const lib = readFileSync(path.join(rootDir, 'packages/ui/src/lib/interaction-overlay.ts'), 'utf8')
+    expect(lib).toMatch(/duration-\[var\(--motion-duration-(?:fast|normal|slow)\)\]/)
+    expect(lib).not.toMatch(/duration-200\b/)
+    expect(lib).not.toMatch(/duration-300\b/)
+  })
+
+  it('组件包设计底座也暴露收敛注释指向统一动画词汇表', () => {
     expect(uiCss).toMatch(/FR-244/)
     expect(uiCss).toMatch(/--motion-duration-slow/)
   })

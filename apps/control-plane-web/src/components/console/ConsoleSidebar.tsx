@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from 'react-router'
 import {
@@ -50,7 +50,6 @@ const SECTION_ICON: Record<string, LucideIcon> = {
   'nav.accountAudit': ShieldCheck,
   'nav.admin': Wrench,
 }
-const SIDEBAR_CONTENT_SWAP_MS = 320
 
 /**
  * 运维控制台左侧栏（FR-268 / ADR-055）：常驻资源主轴侧栏。
@@ -70,13 +69,6 @@ export default function ConsoleSidebar() {
   }, [permLoaded, permNodes, permAdmin, role])
   const collapsed = useConsoleStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
-  const [renderCollapsed, setRenderCollapsed] = useState(collapsed)
-
-  useEffect(() => {
-    const delay = collapsed ? SIDEBAR_CONTENT_SWAP_MS : 0
-    const timer = window.setTimeout(() => setRenderCollapsed(collapsed), delay)
-    return () => window.clearTimeout(timer)
-  }, [collapsed])
 
   return (
     <aside
@@ -90,13 +82,13 @@ export default function ConsoleSidebar() {
         className="jm-sidebar-drawer flex h-full min-h-0 flex-col"
       >
         <SidebarContent
-          active={!renderCollapsed}
+          active={!collapsed}
           compact={false}
           groups={groups}
           toggleSidebar={toggleSidebar}
         />
         <SidebarContent
-          active={renderCollapsed}
+          active={collapsed}
           compact
           groups={groups}
           toggleSidebar={toggleSidebar}

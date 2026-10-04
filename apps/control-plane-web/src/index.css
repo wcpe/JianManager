@@ -1,515 +1,24 @@
 @import "tailwindcss";
-/* FR-283：@jianmanager/ui 改经 workspace symlink 解析后，Tailwind v4 自动内容检测
+/* FR-496 阶段 1：token 映射 / 变量基线 / 主题覆盖 / 动效关键帧已全部归位到
+   packages/ui/src/styles/，此处一次引入即得完整设计底座——组件库自此自包含，
+   不再要求消费方自备 token（此前 packages/ui/styles.css 与本地定义已发生漂移）。 */
+@import "@jianmanager/ui/styles/index.css";
+/* FR-283：@jianmanager/ui 经 workspace symlink 解析后，Tailwind v4 自动内容检测
    不扫 node_modules——显式声明 ui 包源码为扫描源，否则 ui 独有的 utility class
   （如 Sheet 的滑入 transform 组合）不会生成。 */
 @source "../../../packages/ui/src";
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-destructive: var(--destructive);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  /* 状态色系（FR-061）：资源/TPS/实例状态按阈值着色，独立于主色 */
-  --color-status-success: var(--status-success);
-  --color-status-success-foreground: var(--status-success-foreground);
-  --color-status-warning: var(--status-warning);
-  --color-status-warning-foreground: var(--status-warning-foreground);
-  --color-status-danger: var(--status-danger);
-  --color-status-danger-foreground: var(--status-danger-foreground);
-  --color-status-info: var(--status-info);
-  --color-status-info-foreground: var(--status-info-foreground);
-  --color-brand-forest: var(--brand-forest);
-  --color-brand-cobalt: var(--brand-cobalt);
-  /* 多序列历史曲线配色（FR-060 TimeSeriesChart） */
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --radius-sm: calc(var(--radius) - 3px);
-  --radius-md: calc(var(--radius) - 1px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
 
-  /* 设计底座（FR-163）：柔和弱阴影 + 主色晕染抬升 + 统一动效 token + 呼吸灯。
-     品牌相关取值（--brand-shadow）经变量路由，FR-164 第二主题仅覆盖变量即可换肤。 */
-  --shadow-soft: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 1px 3px -1px rgb(var(--shadow-color) / 0.05);
-  --shadow-lift: 0 6px 16px -5px rgb(var(--shadow-color) / 0.14), 0 2px 6px -3px rgb(var(--shadow-color) / 0.08);
-  /* ── 全局动效收敛（FR-244）：唯一的动画词汇表，任何交互动效都从这里取值，禁止再散落硬编码毫秒 ──
-       时长 token：--motion-duration-fast(120)｜normal(180)｜slow(320)｜route(360)｜progress-*(进度条专用)。
-       缓动 token：--motion-easing-standard（iOS 收敛缓动，别名 --ease-ios，Tailwind 用 ease-ios）｜--motion-easing-emphasized。
-       语义类（本文件下方定义）：
-         .jm-page-stack   — 页面内容进场（jm-page-in，页根统一套）；
-         .jm-route-transition — 路由级切页进场（jm-route-enter，Workspace 路由壳统一套）；
-         .jm-panel-up/.jm-panel-down（keyframes）— 浮层/面板升起·落下，[data-state] 驱动（如 .jm-mobile-nav-panel）；
-         .animate-breathing — 运行对象呼吸光环。
-       组件里做卡片/行/控件的 hover、浮层进出等一次性动效时：用 Tailwind 任意值绑 token
-       （如 `duration-[var(--motion-duration-slow)] ease-ios`），不要写 `duration-300` 这类脱离 token 的定值。 */
-  --motion-duration-fast: 120ms;
-  --motion-duration-normal: 180ms;
-  --motion-duration-slow: 320ms;
-  --motion-duration-route: 360ms;
-  --motion-duration-progress-route: 720ms;
-  --motion-duration-progress-busy: 1100ms;
-  --motion-duration-progress-done: 240ms;
-  --motion-delay-sidebar-mode: 80ms;
-  --motion-easing-standard: cubic-bezier(0.16, 1, 0.3, 1);
-  --motion-easing-emphasized: ease-out;
-  --ease-ios: var(--motion-easing-standard);
-  --animate-breathing: breathing 1.8s ease-in-out infinite;
-  --animate-top-progress: top-progress var(--motion-duration-progress-route) var(--motion-easing-emphasized) forwards;
-}
-
-:root {
-  /* color-scheme 让浏览器原生件（滚动条/表单控件/插入符）跟随明暗；
-     mode=system 时明暗 class 随系统切换，原生件无需额外规则即保持正确观感。 */
-  color-scheme: light;
-
-  /* A+C 亮色控制台 token：冷灰工作区、白面板、Jian 绿主操作、钴蓝信息链接。 */
-  --background: #f5f6f8;
-  --foreground: #172033;
-  --card: #ffffff;
-  --card-foreground: #172033;
-  --popover: #ffffff;
-  --popover-foreground: #172033;
-  --brand-forest: #158053;
-  --brand-cobalt: #2563eb;
-  --primary: #158053;
-  --primary-foreground: #ffffff;
-  --secondary: #eef2f6;
-  --secondary-foreground: #263244;
-  --muted: #f8fafc;
-  --muted-foreground: #64748b;
-  --accent: #e7f5ed;
-  --accent-foreground: #11613f;
-  --destructive: #dc2626;
-  --border: #d7dce3;
-  --input: #d7dce3;
-  --ring: #158053;
-  --radius: 0.375rem;
-  --workspace-bg-image: url('/brand/console-bg-light.png');
-
-  /* 阴影色源：中性阴影用墨蓝黑，抬升阴影用主色 RGB 晕染（FR-164 覆盖 --brand-shadow 换主题晕色） */
-  --shadow-color: 16 24 40;
-  --brand-shadow: 21 128 83;
-
-  --status-success: #16a34a;
-  --status-success-foreground: #ffffff;
-  --status-warning: #d97706;
-  --status-warning-foreground: #1f2937;
-  --status-danger: #dc2626;
-  --status-danger-foreground: #ffffff;
-  --status-info: #2563eb;
-  --status-info-foreground: #ffffff;
-
-  --chart-1: #158053;
-  --chart-2: #2563eb;
-  --chart-3: #d97706;
-  --chart-4: #7c3aed;
-  --chart-5: #dc2626;
-
-  /* ── 方案 A「精工卡片」派生令牌（表格视觉工艺）──
-     只服务 opt-in 的 Table appearance="refined"：发丝分隔线、次要前景、柔和实底状态 chip、
-     主色刻度线指针用的弱底/墨色。品牌相关值（--primary-weak/ink/line）用 color-mix 从 --primary
-     推导——因 html 根上叠加 [data-theme]/..dark 会同时改写 --primary，派生值随之自动换肤；
-     状态色（success/danger）语义固定，明暗各给一套。未在别处使用时不影响任何既有观感。 */
-  --hairline: #eef2f6;
-  --subtle-fg: #475569;
-  --primary-weak: color-mix(in srgb, var(--primary) 13%, var(--card));
-  --primary-ink: color-mix(in srgb, var(--primary) 74%, #04120b);
-  --primary-line: color-mix(in srgb, var(--primary) 30%, var(--card));
-  --success-weak: #e8f7ee;
-  --success-ink: #11613f;
-  --success-line: #cdebdb;
-  --danger-weak: #fef2f2;
-  --danger-ink: #b91c1c;
-  --danger-line: #f9d7d7;
-}
-
-.dark {
-  color-scheme: dark;
-
-  /* B 方案暗色控制台 token：低亮深底、冷灰面板、紫蓝主操作，保留 C 的拓扑标识语言。 */
-  --background: #0f141b;
-  --foreground: #e7edf6;
-  --card: #161c24;
-  --card-foreground: #e7edf6;
-  --popover: #171e27;
-  --popover-foreground: #e7edf6;
-  --brand-forest: #2fd184;
-  --brand-cobalt: #7c86ff;
-  --primary: #7c86ff;
-  --primary-foreground: #101322;
-  --secondary: #202833;
-  --secondary-foreground: #e7edf6;
-  --muted: #1b222d;
-  --muted-foreground: #9aa6b6;
-  --accent: #252c43;
-  --accent-foreground: #e1e5ff;
-  --destructive: #f87171;
-  --border: #2a3442;
-  --input: #344052;
-  --ring: #7c86ff;
-
-  --shadow-color: 0 0 0;
-  --brand-shadow: 124 134 255;
-
-  --status-success: #36d58a;
-  --status-success-foreground: #07150f;
-  --status-warning: #f2b84b;
-  --status-warning-foreground: #1a1205;
-  --status-danger: #f87171;
-  --status-danger-foreground: #1f0808;
-  --status-info: #74a8ff;
-  --status-info-foreground: #08111f;
-
-  --chart-1: #7c86ff;
-  --chart-2: #36d58a;
-  --chart-3: #f2b84b;
-  --chart-4: #d879ff;
-  --chart-5: #f87171;
-  --workspace-bg-image: none;
-
-  /* 方案 A 派生令牌的暗色覆盖：发丝线用边框色与卡片 mix，状态 chip 底/墨在深底上提亮。
-     --primary-weak/ink/line 仍由 :root 的 color-mix 自动跟随暗色 --primary，无需重复声明。 */
-  --hairline: color-mix(in srgb, var(--border) 62%, var(--card));
-  --subtle-fg: color-mix(in srgb, var(--foreground) 78%, var(--muted-foreground));
-  --success-weak: color-mix(in srgb, var(--status-success) 22%, var(--card));
-  --success-ink: color-mix(in srgb, var(--status-success) 82%, #ffffff);
-  --success-line: color-mix(in srgb, var(--status-success) 32%, var(--card));
-  --danger-weak: color-mix(in srgb, var(--status-danger) 18%, var(--card));
-  --danger-ink: color-mix(in srgb, var(--status-danger) 86%, #ffffff);
-  --danger-line: color-mix(in srgb, var(--status-danger) 36%, var(--card));
-}
-
-/* ── 主题色覆盖组（FR-164 扩展）：每套主题「品牌 + 结构」完整 token 组 ──
-   与明暗正交：亮色 [data-theme="x"]（特异性等于单类，书写在 :root/.dark 之后而胜出）；
-   暗色 [data-theme="x"].dark（特异性高于 .dark 单类，正交生效）。
-   除默认 indigo（承 :root/.dark 根变量，零回归）外，每套主题按自身色相调温：
-   结构色（背景/卡片/边框/次要面）带各主题的色温倾向，明暗两套都覆盖——
-   这是「切主题观感变化大」的关键；品牌 7 变量（primary/accent/ring/brand-shadow/chart-1 等）
-   决定主操作与晕染色。--status-* 语义状态色与 --chart-2..5 全局不动。
-   --workspace-bg-image：亮色组不声明即继承 :root 品牌图；暗色组不声明即继承 .dark 的 none（别给暗色加图）。
-   暗色下 .jm-console-shell 等结构覆写用 color-mix 基于 --card/--background/--primary 计算，自动跟主题。 */
-
-/* 第二主题 · 青绿 teal：微青灰结构色 + 青绿品牌色。品牌色相沿用原值；
-   亮色按钮文本由近白改为深青墨（近白对 oklch(0.704) 青绿仅 2.39:1，不达 4.5:1；
-   深青墨实测 7.18:1），暗色本就是深底思路不变。仅新增结构色。 */
-[data-theme="teal"] {
-  --primary: oklch(0.704 0.123 183);
-  --primary-foreground: oklch(0.2 0.04 183);
-  --accent: oklch(0.955 0.028 183);
-  --accent-foreground: oklch(0.62 0.11 183);
-  --ring: oklch(0.704 0.123 183);
-  --brand-shadow: 20 184 166;
-  --chart-1: oklch(0.704 0.123 183);
-
-  /* 结构色：白卡片承青灰底的冷青倾向 */
-  --background: #f2f6f5;
-  --foreground: #122b28;
-  --card: #ffffff;
-  --card-foreground: #122b28;
-  --popover: #ffffff;
-  --popover-foreground: #122b28;
-  --secondary: #e6efed;
-  --secondary-foreground: #1f3d39;
-  --muted: #f5fafa;
-  --muted-foreground: #5d7a75;
-  --border: #d5e3e0;
-  --input: #d5e3e0;
-}
-
-[data-theme="teal"].dark {
-  --primary: oklch(0.76 0.12 183);
-  --primary-foreground: oklch(0.2 0.04 183);
-  --accent: oklch(0.33 0.06 183);
-  --accent-foreground: oklch(0.85 0.09 183);
-  --ring: oklch(0.76 0.12 183);
-  --brand-shadow: 45 212 191;
-  --chart-1: oklch(0.76 0.12 183);
-
-  /* 结构色：低亮深底带青温，与暗色默认（冷墨蓝）区分 */
-  --background: #0c1514;
-  --foreground: #e2efec;
-  --card: #12211f;
-  --card-foreground: #e2efec;
-  --popover: #132320;
-  --popover-foreground: #e2efec;
-  --secondary: #1b2f2c;
-  --secondary-foreground: #e2efec;
-  --muted: #162522;
-  --muted-foreground: #93aca6;
-  --border: #243b36;
-  --input: #2f4c46;
-}
-
-/* 海洋蓝 ocean：冷蓝灰结构色 + 钴蓝主操作（#2563eb 系），运维台「冷静可靠」的观感。 */
-[data-theme="ocean"] {
-  --primary: #2563eb;
-  --primary-foreground: #ffffff;
-  --accent: #e3ecfb;
-  --accent-foreground: #1d4ed8;
-  --ring: #2563eb;
-  --brand-shadow: 37 99 235;
-  --chart-1: #2563eb;
-
-  /* 结构色：冷蓝灰底、纯蓝墨前景 */
-  --background: #f2f5f9;
-  --foreground: #14202e;
-  --card: #ffffff;
-  --card-foreground: #14202e;
-  --popover: #ffffff;
-  --popover-foreground: #14202e;
-  --secondary: #e5ecf4;
-  --secondary-foreground: #22354a;
-  --muted: #f6f9fc;
-  --muted-foreground: #5f7189;
-  --border: #d2dce8;
-  --input: #d2dce8;
-}
-
-[data-theme="ocean"].dark {
-  /* 暗色主色提亮保证按钮文本对比（深蓝墨文字 #0b1a33 vs #6d9cff） */
-  --primary: #6d9cff;
-  --primary-foreground: #0b1a33;
-  --accent: #1f3352;
-  --accent-foreground: #cfe0ff;
-  --ring: #6d9cff;
-  --brand-shadow: 109 156 255;
-  --chart-1: #6d9cff;
-
-  /* 结构色：蓝墨深底，比暗色默认更深一档的冷蓝温 */
-  --background: #0d1420;
-  --foreground: #e3ebf7;
-  --card: #141e2e;
-  --card-foreground: #e3ebf7;
-  --popover: #152031;
-  --popover-foreground: #e3ebf7;
-  --secondary: #1e2b3e;
-  --secondary-foreground: #e3ebf7;
-  --muted: #182334;
-  --muted-foreground: #93a5bd;
-  --border: #26364c;
-  --input: #31445d;
-}
-
-/* 紫罗兰 violet：冷紫灰结构色 + 紫罗兰主操作（#7c3aed 系）。 */
-[data-theme="violet"] {
-  --primary: #7c3aed;
-  --primary-foreground: #ffffff;
-  --accent: #efe7fd;
-  --accent-foreground: #6d28d9;
-  --ring: #7c3aed;
-  --brand-shadow: 124 58 237;
-  --chart-1: #7c3aed;
-
-  /* 结构色：冷紫灰底、紫墨前景 */
-  --background: #f4f3f8;
-  --foreground: #1d1830;
-  --card: #ffffff;
-  --card-foreground: #1d1830;
-  --popover: #ffffff;
-  --popover-foreground: #1d1830;
-  --secondary: #ebe8f4;
-  --secondary-foreground: #322a4a;
-  --muted: #f8f7fb;
-  --muted-foreground: #6b6580;
-  --border: #dcd8e8;
-  --input: #dcd8e8;
-}
-
-[data-theme="violet"].dark {
-  /* 暗色用较亮的紫蓝 #9b7bff，深紫墨文字保证对比 */
-  --primary: #9b7bff;
-  --primary-foreground: #17102e;
-  --accent: #322a52;
-  --accent-foreground: #ded4ff;
-  --ring: #9b7bff;
-  --brand-shadow: 155 123 255;
-  --chart-1: #9b7bff;
-
-  /* 结构色：紫墨深底，冷紫温 */
-  --background: #12101d;
-  --foreground: #e9e5f5;
-  --card: #1a1728;
-  --card-foreground: #e9e5f5;
-  --popover: #1b1829;
-  --popover-foreground: #e9e5f5;
-  --secondary: #262138;
-  --secondary-foreground: #e9e5f5;
-  --muted: #201c30;
-  --muted-foreground: #9d97b3;
-  --border: #2e2945;
-  --input: #3a3455;
-}
-
-/* 落日橙 sunset：暖灰结构色 + 落日橙主操作（#ea8a3a 系）。
-   橙色亮度较高，按钮文本用深琥珀墨（对 #ea8a3a 对比约 6:1），不走白字。 */
-[data-theme="sunset"] {
-  --primary: #ea8a3a;
-  --primary-foreground: #331c04;
-  --accent: #fdeedd;
-  --accent-foreground: #b45309;
-  --ring: #ea8a3a;
-  --brand-shadow: 234 138 58;
-  --chart-1: #ea8a3a;
-
-  /* 结构色：暖灰底、琥珀墨前景 */
-  --background: #f7f4f0;
-  --foreground: #2b2119;
-  --card: #ffffff;
-  --card-foreground: #2b2119;
-  --popover: #ffffff;
-  --popover-foreground: #2b2119;
-  --secondary: #f0e9e1;
-  --secondary-foreground: #453628;
-  --muted: #faf7f3;
-  --muted-foreground: #6f6459;
-  --border: #e4dcd2;
-  --input: #e4dcd2;
-}
-
-[data-theme="sunset"].dark {
-  /* 暗色主色提亮为 #f5a35c，深琥珀墨文字对比充足 */
-  --primary: #f5a35c;
-  --primary-foreground: #2b1601;
-  --accent: #45301c;
-  --accent-foreground: #ffd9ad;
-  --ring: #f5a35c;
-  --brand-shadow: 245 163 92;
-  --chart-1: #f5a35c;
-
-  /* 结构色：暖棕深底，暖温 */
-  --background: #16120e;
-  --foreground: #f2e9df;
-  --card: #201a14;
-  --card-foreground: #f2e9df;
-  --popover: #211b15;
-  --popover-foreground: #f2e9df;
-  --secondary: #2c241b;
-  --secondary-foreground: #f2e9df;
-  --muted: #241e17;
-  --muted-foreground: #ada094;
-  --border: #372e24;
-  --input: #463a2d;
-}
-
-/* 呼吸灯（FR-163）：运行对象脉动光环。环色取 currentColor，套用方设 text-* 即定色。 */
-@keyframes breathing {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent);
+@layer base {
+  /* 必须留在 @layer base 内。无层（unlayered）普通声明的优先级高于任何 @layer 内的声明，
+     此前这条写在层外，于是**永久压过** @layer utilities 里的全部 border-color 工具类：
+     `aria-invalid:border-destructive`（表单校验红框，33 处）、`border-transparent`
+     （表格图标按钮的无边框态，20 处）与 11 处 `hover:border-*` 全部静默失效，
+     且因为 fail-silent，从代码上完全看不出来。放进 base 后既仍在 preflight 之后
+     （覆盖其 currentColor 默认值），又让工具类按正常层序胜出。 */
+  * {
+    border-color: var(--border);
   }
-  70% {
-    box-shadow: 0 0 0 6px transparent;
-  }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
-  }
-}
-
-/* 页眉顶部加载进度条（FR-243）：切页时一次性 0→100% 后淡出。 */
-@keyframes top-progress {
-  0% {
-    transform: scaleX(0);
-    opacity: 1;
-  }
-  70% {
-    transform: scaleX(0.86);
-    opacity: 1;
-  }
-  100% {
-    transform: scaleX(1);
-    opacity: 0;
-  }
-}
-
-@keyframes top-progress-busy {
-  0% {
-    transform: translateX(-58%) scaleX(0.34);
-    opacity: 0.75;
-  }
-  50% {
-    transform: translateX(18%) scaleX(0.56);
-    opacity: 1;
-  }
-  100% {
-    transform: translateX(112%) scaleX(0.34);
-    opacity: 0.75;
-  }
-}
-
-@keyframes top-progress-done {
-  0% {
-    transform: scaleX(0.86);
-    opacity: 1;
-  }
-  100% {
-    transform: scaleX(1);
-    opacity: 0;
-  }
-}
-
-@keyframes jm-page-in {
-  0% {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes jm-route-enter {
-  0% {
-    opacity: 0;
-    transform: translateY(16px) scale(0.992);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes jm-panel-up {
-  0% {
-    opacity: 0;
-    transform: translateY(10px) scale(0.98);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes jm-panel-down {
-  0% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(10px) scale(0.98);
-  }
-}
-
-* {
-  border-color: var(--border);
 }
 
 /* 全局主题化细滚动条（FR-176）：细轨 + 圆角拇指，配色取中性主题变量（--muted-foreground/--border），
@@ -554,6 +63,8 @@ body {
   background-image: var(--workspace-bg-image);
   background-position: center;
   background-size: cover;
+  /* 相对视口而非元素盒子定位/缩放（见下方 .jm-workspace-bg 的说明）。 */
+  background-attachment: fixed;
   color: var(--foreground);
   /* 高密度档位（FR-061）：正文 13px，组件以紧凑间距套用 */
   font-family: system-ui, -apple-system, sans-serif;
@@ -573,11 +84,22 @@ body {
   min-width: 0;
 }
 
+/* 【为什么必须 background-attachment: fixed】这两个使用点（DashboardPage 的 <main>、
+   Workspace 的滚动容器）都是**宽度会随侧栏开合而变**的 flex 项。而 `background-size: cover`
+   是相对**元素自身盒子**求解的：元素多宽，图就重新缩放成多宽。于是每次折叠/展开侧栏，
+   320ms 过渡期间浏览器都在**逐帧重算一张 PNG 的缩放尺寸并重绘整屏**——它同时是
+   「背景图跟着侧栏缩放」和「页面卡」这两件事的**同一个根因**。
+   另外本类被嵌套使用了两次（<main> 一层、其内的滚动容器一层），两层宽度不同，
+   cover 各解各的，叠起来还会错位重影。
+   改成 attachment: fixed 后，背景相对**视口**定位与缩放：侧栏怎么动、页面滚不滚，
+   图都完全不动，两层也自动像素级对齐。祖先链（console-shell → console-body →
+   console-content → main）均无 transform/filter，不会让 fixed 退化成 scroll。 */
 .jm-workspace-bg {
   background-color: var(--background);
   background-image: var(--workspace-bg-image);
   background-position: center;
   background-size: cover;
+  background-attachment: fixed;
 }
 
 .jm-console-shell {
@@ -628,20 +150,19 @@ body {
 .jm-console-sidebar {
   contain: layout style;
   overflow: visible;
-  transform: translateZ(0);
-  transition: none;
+  /* 去掉 `transform: translateZ(0)` 与 `will-change: width`：width 不是可合成属性，
+     浏览器无法为它预先建层，写 will-change 只会让侧栏常驻一个合成层却不产生任何加速；
+     而宽度过渡本身必然触发布局，图层提升对布局阶段没有帮助。 */
+  /* FR-496 阶段 6 补丁：宽度过渡只由侧栏自己承担（原型 `.sidebar` 只改自身宽度）。
+     此前这里 `transition: none`、宽度瞬跳，真正过渡的是内层抽屉，再靠内容区
+     `clip-path` + `translate3d` 补偿把位移「补回来」——那要求 JS 定时器与 CSS 过渡
+     两个时钟严格同步，落位瞬间必然抖一下。现在只有一个时钟：本元素宽度过渡，
+     内容区是同一 flex 行的兄弟节点，自然回流。 */
+  transition: width var(--sidebar-motion-duration) var(--motion-easing-standard);
   width: var(--sidebar-expanded-width);
 }
 
 .jm-console-sidebar[data-state='collapsed'] {
-  width: var(--sidebar-collapsed-width);
-}
-
-.jm-console-shell[data-sidebar-motion='collapsing'] .jm-console-sidebar {
-  width: var(--sidebar-expanded-width);
-}
-
-.jm-console-shell[data-sidebar-motion='expanding'] .jm-console-sidebar {
   width: var(--sidebar-collapsed-width);
 }
 
@@ -657,12 +178,22 @@ body {
   position: relative;
   transform: translateZ(0);
   transform-origin: left center;
-  transition: width var(--sidebar-motion-duration) var(--motion-easing-standard);
-  width: var(--sidebar-expanded-width);
-  will-change: width;
+  /* 抽屉跟随外层宽度（不再自己过渡）：两个元素各持一份同长过渡时，任何一处
+     起止帧错开都会让侧栏表面与内容区错位，正是抖动来源之一。 */
+  transition: none;
+  width: 100%;
   z-index: 20;
 }
 
+/* FR-496 阶段 6 补丁 2：模式切换**只做透明度交叉淡化**，位移与缩放全部移除。
+   原先两份内容在淡入/淡出时各自带 `translateX(±0.45~0.7rem) scale(0.97~0.985)`
+   （缩放锚点 `transform-origin: left center`），于是点 logo 的一瞬间，
+   侧栏内容是「一边整体缩小一边平移」地换掉的。两条都是坏表现：
+   ① 宽度过渡本身已经在表达「展开/收起」，内容再缩放属于**同一语义的重复表达**，
+      两者叠加时用户读到的是「侧栏在抽动」而不是「侧栏在变宽」；
+   ② 缩放锚点在左缘、内容宽 15rem，`scale(0.97)` 会让右端内容位移近 7px，
+      在 320ms 慢时长下肉眼可见，这正是被反复报「点 logo 会缩放」的来源。
+   淡化用 normal(180ms) 而非 slow(320ms)：换的是「哪一份内容」，越快越不像动画出错。 */
 .jm-sidebar-mode {
   display: flex;
   flex-direction: column;
@@ -670,11 +201,7 @@ body {
   min-height: 0;
   opacity: 0;
   pointer-events: none;
-  transform: translateX(0) scale(1);
-  transform-origin: left center;
-  transition:
-    opacity var(--motion-duration-normal) var(--motion-easing-standard),
-    transform var(--sidebar-motion-duration) var(--motion-easing-standard);
+  transition: opacity var(--motion-duration-normal) var(--motion-easing-standard);
   width: 15rem;
 }
 
@@ -684,61 +211,35 @@ body {
 }
 
 .jm-sidebar-mode[data-mode='collapsed'] {
-  transform: translateX(-0.45rem) scale(0.97);
-  transition:
-    opacity var(--motion-duration-normal) var(--motion-easing-standard) var(--motion-delay-sidebar-mode),
-    transform var(--sidebar-motion-duration) var(--motion-easing-standard);
+  /* 折叠态内容等宽度先收窄一档再淡入，否则图标会在 15rem 的旧位置上闪现一下 */
+  transition: opacity var(--motion-duration-normal) var(--motion-easing-standard) var(--motion-delay-sidebar-mode);
   width: var(--sidebar-collapsed-width);
 }
 
 .jm-sidebar-drawer[data-state='collapsed'] .jm-sidebar-mode[data-mode='expanded'] {
   opacity: 0;
   pointer-events: none;
-  transform: translateX(-0.7rem) scale(0.985);
 }
 
 .jm-sidebar-drawer[data-state='collapsed'] .jm-sidebar-mode[data-mode='collapsed'] {
   opacity: 1;
   pointer-events: auto;
-  transform: translateX(0) scale(1);
 }
 
 .jm-sidebar-drawer[data-state='expanded'] .jm-sidebar-mode[data-mode='collapsed'] {
   opacity: 0;
   pointer-events: none;
-  transform: translateX(0.55rem) scale(0.98);
 }
 
-.jm-sidebar-drawer[data-state='collapsed'] .jm-sidebar-mode[data-mode='collapsed'] {
-  width: var(--sidebar-collapsed-width);
-}
+/* 折叠态不再给抽屉写死宽度（原 `.jm-sidebar-drawer[data-state='collapsed']{width:54px}` 已删）：
+   `data-state` 在点击瞬间就翻转，写死宽度会让侧栏表面立刻跳成 54px，而外层还在 320ms 里慢慢收，
+   中途出现「54px 表面 + 空白区」的撕裂。宽度只由外层过渡、抽屉恒为 100% 才是一个时钟。 */
 
-.jm-sidebar-drawer[data-state='collapsed'] {
-  width: var(--sidebar-collapsed-width);
-}
-
+/* FR-496 阶段 6 补丁：内容区不再做任何位移补偿（原 `clip-path` + `translate3d` 两段式动画已删）。
+   它只是「侧栏 + 内容」这一 flex 行里的兄弟节点，侧栏宽度过渡期间由浏览器逐帧回流，
+   平滑接管腾出的空间；整页位移 / 二次抖动因此从机制上不可能发生。 */
 .jm-console-content {
-  clip-path: inset(0 0 0 0);
   min-width: 0;
-  transform: translate3d(0, 0, 0);
-  transition: none;
-}
-
-.jm-console-shell[data-sidebar-motion='collapsing'] .jm-console-content {
-  pointer-events: none;
-  transform: translate3d(calc(var(--sidebar-collapsed-width) - var(--sidebar-expanded-width)), 0, 0);
-  transition: transform var(--sidebar-motion-duration) var(--motion-easing-standard);
-  will-change: transform;
-}
-
-.jm-console-shell[data-sidebar-motion='expanding'] .jm-console-content {
-  clip-path: inset(0 calc(var(--sidebar-expanded-width) - var(--sidebar-collapsed-width)) 0 0);
-  pointer-events: none;
-  transform: translate3d(calc(var(--sidebar-expanded-width) - var(--sidebar-collapsed-width)), 0, 0);
-  transition:
-    clip-path var(--sidebar-motion-duration) var(--motion-easing-standard),
-    transform var(--sidebar-motion-duration) var(--motion-easing-standard);
-  will-change: clip-path, transform;
 }
 
 .jm-sidebar-group-content {
@@ -775,13 +276,16 @@ body {
 
 .jm-nav-link {
   overflow: hidden;
-  transform: translateZ(0);
+  /* 原 `transform: translateZ(0)` 与 `will-change: background-color, color, transform` 已移除：
+     两者都挂在常驻元素上，等于给侧栏**每一条**导航行永久保留一个合成层与层叠上下文。
+     而所提示的属性里，background-color / color 属绘制级、根本无法参与合成，写进 will-change
+     不会加速、只会让浏览器提前建层；唯一可合成的 transform 也只在侧栏开合这一低频操作中变化。
+     常驻代价（GPU 内存 + 层叠上下文数量）远大于收益。 */
   transition:
     background-color var(--motion-duration-fast) var(--motion-easing-standard),
     color var(--motion-duration-fast) var(--motion-easing-standard),
     opacity var(--motion-duration-fast) var(--motion-easing-standard),
     transform var(--motion-duration-progress-done) var(--motion-easing-standard);
-  will-change: background-color, color, transform;
 }
 
 .jm-nav-link::before {
@@ -850,15 +354,71 @@ body {
   transition: background-color var(--motion-duration-normal) var(--motion-easing-standard), box-shadow var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
-/* 方案 C 品牌顶栏：品牌区宽度随侧栏同步收放，右缘描边与侧栏右缘连成一条竖线（ADR-071）。 */
-.jm-brand-segment {
-  width: var(--sidebar-expanded-width);
+/* 方案 C 品牌顶栏：品牌列宽度随侧栏同步收放，右缘描边与侧栏右缘连成一条竖线（ADR-071）。
+   FR-496 阶段 6 补丁后品牌列由 ui 包 `TopNav` 的品牌槽位渲染（顶栏是唯一一条、内含 `.space-nav`），
+   而 TopNav 的品牌槽位按原型写死 246px（原型折叠只改 `.sidebar`，`.brand` 不动）。这里在外壳侧
+   把它接回侧栏宽度变量：折叠时与侧栏同宽同轴，交界处才不会出现一条错位的竖线（ADR-071 的原意）。
+   选择器走 `data-slot`（ui 包的样式钩子约定），不改 `packages/ui` 一行代码。 */
+.jm-console-header [data-slot='top-nav-brand'] {
   border-right: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   transition: width var(--sidebar-motion-duration) var(--motion-easing-standard);
+  width: var(--sidebar-expanded-width);
 }
 
-.jm-console-shell[data-sidebar-target='collapsed'] .jm-brand-segment {
+/* 【为什么用 :has() 而不是外壳上的 data-sidebar-target】
+   原先外壳要带 `data-sidebar-target` 来表达折叠态，于是 DashboardPage——**整个页面树的根组件**——
+   不得不订阅 `sidebarCollapsed`。代价是点一次 logo 就要 reconcile 全部约 920 个元素，实测同步渲染
+   532ms（trace 佐证：click 的 EventDispatch 532.9ms 与单次 react-dom 调用 532.1ms 完全重合），
+   而真正变化的只有品牌列宽度这一个属性。
+   改为从侧栏自身的 `data-state` 派生：那个属性本来就在 WorkspaceSidebar 上，它本来就要订阅折叠态。
+   顶层因此不再需要知道侧栏开合，点击开销回到「只重渲染侧栏 + 品牌列」。
+   `:has()` 在 Chrome 105+ / Safari 15.4+ / Firefox 121+ 可用。 */
+.jm-console-shell:has([data-slot='console-sidebar'][data-state='collapsed']) .jm-console-header [data-slot='top-nav-brand'] {
   width: var(--sidebar-collapsed-width);
+  /* 折叠态 54px 放不下「16px 内边距 + 10px 间距 + 28px logo」，品牌列收敛为居中的纯 logo，
+     与侧栏折叠态的图标轨同宽同轴（ADR-071 的一条连续竖线由此成立）。 */
+  gap: 0;
+  justify-content: center;
+  padding-inline: 0;
+}
+
+/* 顶栏内容在窄视口放不下时按优先级让位，而不是把工具区挤出屏幕（实测：不处理会在
+   768~1023px 把铃铛/账户推出视口外，被外壳的 overflow-hidden 裁掉）：
+   ① 集群徽标（FR-294，纯信息密度型）在 <xl 收起——它最不关键，且有页面级等价入口；
+   ② 工作区切换（346px）在 <lg 整段收起：品牌列（246px）+ 工作区切换 + 工具区需要 ≥1067px，
+      原型在窄屏同样把平铺 `.space-nav` 换成下拉，由移动导航承担；
+   ③ 最后才压缩搜索入口（它自带 truncate，压缩后仍可点开命令面板）。
+   工具区（`top-nav-actions`）在 ui 包是 `shrink-0`：不覆盖它，顶栏一挤就把铃铛/账户推出视口。 */
+.jm-console-header [data-slot='top-nav-actions'] {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.jm-console-header [data-slot='console-header-search'] {
+  min-width: 0;
+}
+
+.jm-console-header [data-slot='console-header-badges'] {
+  display: none;
+}
+
+@media (min-width: 1280px) {
+  .jm-console-header [data-slot='console-header-badges'] {
+    display: flex;
+  }
+}
+
+@media (max-width: 1023px) {
+  .jm-console-header [data-slot='top-nav-workspaces'] {
+    display: none;
+  }
+}
+
+/* 窄屏（<sm）侧栏被 `MobileConsoleNav` 取代，品牌列随之隐藏，顶栏回落为「操作区」满宽。 */
+@media (max-width: 639px) {
+  .jm-console-header [data-slot='top-nav-brand'] {
+    display: none;
+  }
 }
 
 .jm-console-main {
@@ -875,7 +435,9 @@ body {
 .jm-route-transition {
   animation: jm-route-enter var(--motion-duration-route) var(--motion-easing-standard);
   transform-origin: top center;
-  will-change: opacity, transform;
+  /* 去掉常驻 `will-change: opacity, transform`：它挂在路由壳上，而路由壳是**整个页面子树**，
+     于是每次切页后都有一个大合成层被长期保留。进场动画只播 360ms，且浏览器对 `animation`
+     本身就会在播放期间自动提升图层——常驻提示在这里没有增量收益，只有常驻成本。 */
 }
 
 .jm-page-header {
@@ -950,7 +512,7 @@ body {
   box-shadow: 1px 0 0 color-mix(in srgb, var(--border) 86%, transparent), 16px 0 38px -32px rgb(var(--shadow-color) / 0.75);
 }
 
-.dark .jm-brand-segment {
+.dark .jm-console-header [data-slot='top-nav-brand'] {
   border-right-color: color-mix(in srgb, var(--border) 86%, transparent);
 }
 
@@ -1003,32 +565,52 @@ body {
 }
 
 /* FR-315 实例状态外圈光晕：按状态柔和渐变光晕，取色经 status 语义 token（双主题自适配）。
-   容器用标准强度、卡片用 --soft 弱化；过渡态琥珀呼吸。克制柔光，遵守 UI 风格偏好不过度。 */
-.jm-status-glow { transition: box-shadow 400ms ease; }
-.jm-status-glow-running {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-success) 35%, transparent),
-              0 0 20px -6px color-mix(in srgb, var(--color-status-success) 60%, transparent);
-}
-.jm-status-glow-transitioning {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-warning) 38%, transparent),
-              0 0 18px -6px color-mix(in srgb, var(--color-status-warning) 55%, transparent);
-  animation: jm-glow-breathe 1.9s ease-in-out infinite;
-}
-.jm-status-glow-crashed {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-danger) 45%, transparent),
-              0 0 20px -5px color-mix(in srgb, var(--color-status-danger) 60%, transparent);
-}
-.jm-status-glow--soft.jm-status-glow-running {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-success) 28%, transparent),
-              0 0 14px -7px color-mix(in srgb, var(--color-status-success) 50%, transparent);
-}
-.jm-status-glow--soft.jm-status-glow-transitioning {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-warning) 30%, transparent),
-              0 0 13px -7px color-mix(in srgb, var(--color-status-warning) 48%, transparent);
-}
-.jm-status-glow--soft.jm-status-glow-crashed {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-danger) 36%, transparent),
-              0 0 14px -7px color-mix(in srgb, var(--color-status-danger) 52%, transparent);
+   容器用标准强度、卡片用 --soft 弱化；过渡态琥珀呼吸。克制柔光，遵守 UI 风格偏好不过度。
+   【为什么画在 ::after 上】光晕与卡片的 `hover:shadow-lift` 争的是**同一个 box-shadow 属性**，
+   是零和竞争而非叠加：原先这组规则写在 @layer 之外，无层声明恒胜，于是运行中／启动中／
+   停止中／已崩溃的实例卡片悬停时**完全没有抬升反馈**（正是「hover 怎么没有了」在实例
+   工作台上的具体形态）；反过来若让 hover 胜出，悬停时状态色又会消失。改挂伪元素后
+   两者共存：元素自身 box-shadow 归悬停抬升，状态光晕由 ::after 独立绘制。
+   `border-radius: inherit` 让光晕跟随卡片圆角；`pointer-events: none` 保证不吃点击。
+   整体置于 @layer components，使其不再越层压制工具类。 */
+@layer components {
+  .jm-status-glow {
+    position: relative;
+  }
+  .jm-status-glow::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    transition: box-shadow var(--motion-duration-slow) var(--motion-easing-standard);
+  }
+  .jm-status-glow-running::after {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-success) 35%, transparent),
+                0 0 20px -6px color-mix(in srgb, var(--color-status-success) 60%, transparent);
+  }
+  .jm-status-glow-transitioning::after {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-warning) 38%, transparent),
+                0 0 18px -6px color-mix(in srgb, var(--color-status-warning) 55%, transparent);
+    animation: jm-glow-breathe 1.9s ease-in-out infinite;
+  }
+  .jm-status-glow-crashed::after {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-danger) 45%, transparent),
+                0 0 20px -5px color-mix(in srgb, var(--color-status-danger) 60%, transparent);
+  }
+  .jm-status-glow--soft.jm-status-glow-running::after {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-success) 28%, transparent),
+                0 0 14px -7px color-mix(in srgb, var(--color-status-success) 50%, transparent);
+  }
+  .jm-status-glow--soft.jm-status-glow-transitioning::after {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-warning) 30%, transparent),
+                0 0 13px -7px color-mix(in srgb, var(--color-status-warning) 48%, transparent);
+    animation: jm-glow-breathe 1.9s ease-in-out infinite;
+  }
+  .jm-status-glow--soft.jm-status-glow-crashed::after {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-danger) 36%, transparent),
+                0 0 14px -7px color-mix(in srgb, var(--color-status-danger) 52%, transparent);
+  }
 }
 @keyframes jm-glow-breathe {
   0%, 100% {

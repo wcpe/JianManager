@@ -89,7 +89,7 @@ function ManualInstallSection({ issued }: { issued: IssuedEnrollToken }) {
 
   return (
     <details className="rounded-md border bg-muted/20 p-2">
-      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+      <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
         {t('nodes.enroll.manualTitle', '手动安装步骤（分步兜底 / 先审脚本）')}
       </summary>
       <div className="space-y-3 pt-2">

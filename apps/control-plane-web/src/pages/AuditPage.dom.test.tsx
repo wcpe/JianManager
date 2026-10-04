@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
@@ -8,6 +8,16 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import AuditPage from './AuditPage'
+
+/**
+ * 滚到底部。jsdom 不做布局（scrollHeight 恒 0、没有真滚动条），但 scrollTop 是普通可读写属性
+ * （`Element.prototype.scrollTop` 被 jsdom 实现为取值/赋值，不参与布局），故直接设到远超内容高度的
+ * 偏移再派发 scroll —— 等价于浏览器里把列表拖到底：视口裁剪随之取末段行。
+ */
+function scrollToBottom(el: HTMLElement) {
+  el.scrollTop = 10_000_000
+  fireEvent.scroll(el)
+}
 
 /**
  * AuditPage 强断言（FR-199 身份访问域）。受 requireAuth 保护：渲染前 loginMockUser()。
@@ -106,23 +116,30 @@ describe('AuditPage（mock 假后端）', () => {
     expect(await screen.findByText('audit.row.1')).toBeInTheDocument()
     expect(requests[0].searchParams.get('page')).toBe('1')
     expect(requests[0].searchParams.get('pageSize')).toBe('100')
+    expect(screen.getByText('已加载 100 / 共 250 条')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '加载更多' }))
 
-    expect(await screen.findByText('audit.row.101')).toBeInTheDocument()
     expect(requests[1].searchParams.get('page')).toBe('2')
     expect(requests[1].searchParams.get('pageSize')).toBe('100')
+    // 页脚计数是「已加载量」的真源：第 2 页已并入浏览窗口；滚动位置仍在顶部，故首行仍在视口内。
+    expect(await screen.findByText('已加载 200 / 共 250 条')).toBeInTheDocument()
     expect(screen.getByText('audit.row.1')).toBeInTheDocument()
-    expect(screen.getByText('已加载 200 / 共 250 条')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '加载更多' }))
 
-    expect(await screen.findByText('audit.row.250')).toBeInTheDocument()
     expect(requests[2].searchParams.get('page')).toBe('3')
     expect(requests[2].searchParams.get('pageSize')).toBe('100')
-    expect(screen.getByText('audit.row.1')).toBeInTheDocument()
-    expect(screen.getByText('已加载 250 / 共 250 条')).toBeInTheDocument()
+    expect(await screen.findByText('已加载 250 / 共 250 条')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '加载更多' })).toBeDisabled()
+    // 视口裁剪（FR-496 阶段 6）：250 行已全部加载，但视口外的行不进 DOM（不再一次性铺满整页）。
+    expect(screen.queryByText('audit.row.250')).not.toBeInTheDocument()
+
+    // 滚到底 → 末页数据确实可浏览（原断言「第 N 行在 DOM」要证的就是这条路径）。
+    scrollToBottom(screen.getByTestId('audit-log-virtual'))
+    expect(await screen.findByText('audit.row.250')).toBeInTheDocument()
+    // 窗口已移到末段：首行随之移出 DOM，证明渲染量只与视口有关、与已加载总量无关。
+    expect(screen.queryByText('audit.row.1')).not.toBeInTheDocument()
   })
 
   it('导出使用相同筛选条件，但不携带分页参数', async () => {

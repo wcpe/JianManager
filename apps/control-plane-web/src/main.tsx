@@ -23,24 +23,34 @@ const queryClient = new QueryClient({
 /**
  * VITE_MOCK=1 时启 MSW Service Worker，整站打到内存假后端（FR-196，`npm run dev:mock`）。
  * 动态 import 确保 mock 代码不进生产包。否则直连真后端，行为不变。
+ *
+ * FR-496 阶段 6 补丁：
+ * - worker 起来之前先还原调试面板持久化的四个旋钮（延迟 / 数据量 / 轮询间隔 / 请求日志）：
+ *   `applyPersistedMockRuntime()` 内含「按档位重播种 + 补写登录会话」，替代原先散在这里的
+ *   `resetDb()` + 会话补写逻辑；worker 由 devmock 的 `startMockWorker()` 启动——它默认
+ *   `quiet`，不再把每个请求的 handler 与响应体打进控制台。
+ * - worker 起来之后再挂调试面板，并给 queryClient 装上全局轮询控制（默认 1s 覆盖全部
+ *   `refetchInterval`，见 components/devtools/mock-polling.ts）。
+ * 面板与轮询控制都是动态 import，生产构建里 `import.meta.env.VITE_MOCK` 为假、
+ * 这些分支会被静态消除，mock 相关代码不进产物。
  */
 async function enableMocking() {
   if (!import.meta.env.VITE_MOCK) return
-  const [{ worker }, dbModule] = await Promise.all([import('@jianmanager/devmock/browser'), import('@jianmanager/devmock/db')])
-  dbModule.resetDb()
-  // 内存假后端刷新即重置，但 localStorage 仍存 token——为其补一个会话，使 mock 模式刷新后保持登录
-  // （否则刷新→会话丢→首个 API 401→跳登录，整站不可持续点）。仅 VITE_MOCK 下运行，不入生产。
-  const token = localStorage.getItem('accessToken')
-  if (token) {
-    const { db } = dbModule
-    type Sess = { id: number; accessToken: string; refreshToken: string; userId: number }
-    db<Sess>('sessions').insert({
-      accessToken: token,
-      refreshToken: localStorage.getItem('refreshToken') ?? `mock-refresh-${token}`,
-      userId: 1,
-    })
-  }
-  await worker.start({ onUnhandledRequest: 'bypass' })
+  const [{ startMockWorker }, runtime] = await Promise.all([
+    import('@jianmanager/devmock/browser'),
+    import('@jianmanager/devmock/runtime-control'),
+  ])
+  // 内存假后端刷新即重置，但 localStorage 仍存 token / 各档位——还原档位时顺带补一个会话，
+  // 使 mock 模式刷新后保持登录（否则刷新→会话丢→首个 API 401→跳登录，整站不可持续点）。
+  runtime.applyPersistedMockRuntime()
+  await startMockWorker()
+  const [{ installMockPollingControl, loadPersistedPollingExclude }, { mountMockControlPanel }] = await Promise.all([
+    import('./components/devtools/mock-polling'),
+    import('./components/devtools/mount-mock-control-panel'),
+  ])
+  // 白名单留空 = 全部轮询查询都归面板管；黑名单是面板里点掉的那些（刷新后保持调试现场）
+  installMockPollingControl(queryClient, { exclude: loadPersistedPollingExclude() })
+  mountMockControlPanel()
 }
 
 void enableMocking().then(() => {

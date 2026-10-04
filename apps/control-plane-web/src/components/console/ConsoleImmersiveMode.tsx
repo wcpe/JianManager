@@ -571,7 +571,7 @@ function HeaderAction({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-35',
+        'inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-slate-300 transition-colors disabled:pointer-events-none disabled:opacity-35',
         variant === 'primary' && 'border border-transparent bg-slate-100 font-medium text-slate-900 hover:bg-white hover:text-slate-900',
         variant === 'ghost' && 'border border-white/10 bg-white/5 hover:bg-white/10 hover:text-white',
         variant === 'danger' && 'border border-white/10 bg-white/5 hover:border-red-400/40 hover:bg-red-500/10 hover:text-red-200',

@@ -1,11 +1,15 @@
-import { useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { ChevronRight, Download } from 'lucide-react'
 import { exportAuditLogs, useAuditLogs, type AuditLogInfo } from '@/api/audit'
 import { useUsers } from '@/api/users'
+import { useVirtualRows } from '@/lib/virtual-list'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { ListSkeleton, PageHeader, PageShell, ScopeBar } from '@jianmanager/ui/components/layout'
 import { cn } from '@jianmanager/ui'
 import {
   Select,
@@ -18,6 +22,29 @@ import { DEFAULT_AUDIT_FILTER, toAuditParams, formatAuditDetail, type AuditFilte
 
 // Radix Select 不允许空字符串值，用哨兵代表「全部用户」。
 const SENTINEL_ALL = '__all__'
+
+/**
+ * 行高估算（px，FR-496 阶段 6 视口裁剪用）。行高由行内单元格的行数唯一决定：
+ * `px-3 py-2`(16) + 最高单元格 + `border-b`(1)，实测（Chromium 1440×900，root 16px）：
+ * 单行 action 徽章 32.7 → 33；有翻译的 action 单元格叠两行（12px 标签 + 10px 原键角标）46.3 → 33+14。
+ * 估算只用于「尚未量测到的行」撑滚动高度；两档行共用同一基准，故基准的绝对误差只会整体平移
+ * 滚动区间，不会累积错位（错位只可能来自「两行/一行」判定错，故该判定与行渲染共用一处实现）。
+ */
+const ROW_BASE_PX = 33
+const ROW_EXTRA_LINE_PX = 14
+/** 展开行（详情正文长短不定）的估算高度：仅用于首帧与无布局环境，浏览器实测后以实测为准。 */
+const ROW_EXPANDED_PX = 180
+/** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
+const FALLBACK_VIEWPORT_PX = 640
+
+/**
+ * FR-303：action 键 → 展示标签。有中文翻译时行内叠「翻译 + 原始 mono 角标」两行，
+ * 无翻译时单行 `mono` 徽章。行渲染与行高估算共用此判定，避免两处判定漂移。
+ */
+function resolveActionLabel(t: TFunction, action: string): { label: string; showsRawKey: boolean } {
+  const label = t(`audit.actions.${action}`, { defaultValue: action })
+  return { label, showsRawKey: label !== action }
+}
 
 /**
  * 审计日志查询页（FR-015 + FR-158）。
@@ -36,8 +63,37 @@ export default function AuditPage() {
 
   const params = toAuditParams(filter)
   const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useAuditLogs(params)
-  const logs = data?.pages.flatMap((page) => page.items) ?? []
+  const logs = useMemo(() => data?.pages.flatMap((page) => page.items) ?? [], [data])
   const total = data?.pages[0]?.total ?? logs.length
+
+  // 视口裁剪（FR-496 阶段 6）：数百行一次性进 DOM 是本页的主开销，只渲染滚动窗口内的行。
+  // 展开行的详情正文长短不定（估算误差会让其后所有行偏移错位），故实测后回填。
+  const expandedRef = useRef<HTMLDivElement>(null)
+  const [expandedSize, setExpandedSize] = useState<{ id: number; px: number } | null>(null)
+  const expandedPx = expandedSize && expandedSize.id === expanded ? expandedSize.px : ROW_EXPANDED_PX
+  useLayoutEffect(() => {
+    // jsdom 无布局：offsetHeight 恒 0 → 保留估算，测试里窗口完全确定。
+    const px = expandedRef.current?.offsetHeight ?? 0
+    if (expanded !== null && px > 0 && px !== expandedPx) setExpandedSize({ id: expanded, px })
+  }, [expanded, expandedPx, logs])
+
+  /** 逐行高度：折叠行按「一行/两行」估算，展开行用实测值 → 偏移前缀和贴近真实布局。 */
+  const rowSizes = useMemo(
+    () =>
+      logs.map((log) =>
+        log.id === expanded
+          ? expandedPx
+          : ROW_BASE_PX + (resolveActionLabel(t, log.action).showsRawKey ? ROW_EXTRA_LINE_PX : 0),
+      ),
+    [expanded, expandedPx, logs, t],
+  )
+  const { containerRef, onScroll, range } = useVirtualRows({
+    total: logs.length,
+    itemSize: ROW_BASE_PX,
+    overscan: 6,
+    fallbackViewportSize: FALLBACK_VIEWPORT_PX,
+    sizes: rowSizes,
+  })
 
   const handleExport = async () => {
     if (logs.length === 0) return
@@ -51,27 +107,24 @@ export default function AuditPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">{t('audit.title')}</h1>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExport}
-            disabled={logs.length === 0}
-          >
-            <Download className="size-3.5" />
-            {t('audit.export')}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setFilter(DEFAULT_AUDIT_FILTER)}>
-            {t('audit.clear')}
-          </Button>
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        title={t('audit.title')}
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={handleExport} disabled={logs.length === 0}>
+              <Download className="size-3.5" />
+              {t('audit.export')}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setFilter(DEFAULT_AUDIT_FILTER)}>
+              {t('audit.clear')}
+            </Button>
+          </>
+        }
+      />
 
-      {/* 强筛选器 */}
-      <div className="flex flex-wrap items-center gap-2">
+      {/* 强筛选器：套作用域条（FR-496 阶段 3 布局规范） */}
+      <ScopeBar>
         <Select
           value={filter.userId === '' ? SENTINEL_ALL : filter.userId}
           onValueChange={(v: string) => patch({ userId: v === SENTINEL_ALL ? '' : v })}
@@ -114,74 +167,124 @@ export default function AuditPage() {
           aria-label={t('audit.to')}
           className="h-9 w-52"
         />
-      </div>
+      </ScopeBar>
 
+      {/* FR-496 阶段 6 补丁：数据未到时不再只显示一行「加载中」文字。页头与筛选条本来就先渲染，
+          数据区这里用**同壳骨架**（同一张 Panel + 同一条吸附列头 + 行占位）顶上，
+          数据到达后原地替换——期间没有整块内容突然出现，也没有列头/页脚的位移。 */}
       {isLoading && !data ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
+        <Panel
+          bodyClassName="p-0"
+          footer={
+            <>
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-8 w-20" />
+            </>
+          }
+        >
+          <div className="max-h-[calc(100vh-20rem)] overflow-auto">
+            <AuditColumnHeader />
+            <ListSkeleton rows={12} />
+          </div>
+        </Panel>
       ) : isError ? (
         <p className="text-destructive">{t('audit.loadError')}</p>
       ) : (
-        <>
-          <Panel bodyClassName="p-0">
-            {/* 列头 */}
-            <div className="flex items-center gap-3 border-b bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground">
-              <span className="w-4 shrink-0" />
-              <span className="w-40 shrink-0">{t('audit.time')}</span>
-              <span className="w-28 shrink-0">{t('audit.user')}</span>
-              <span className="w-44 shrink-0">{t('audit.action')}</span>
-              <span className="min-w-0 flex-1">{t('audit.target')}</span>
-              <span className="w-28 shrink-0">{t('audit.ip')}</span>
-            </div>
+        <Panel
+          bodyClassName="p-0"
+          footer={
+            <>
+              <span>{t('audit.loadedCount', { loaded: logs.length, total })}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!hasNextPage || isFetchingNextPage}
+                onClick={() => fetchNextPage()}
+              >
+                {t('audit.loadMore')}
+              </Button>
+            </>
+          }
+        >
+          {/* 虚拟窗口的滚动容器（面板底部区留在容器外，始终可见） */}
+          <div
+            ref={containerRef}
+            onScroll={onScroll}
+            data-testid="audit-log-virtual"
+            className="max-h-[calc(100vh-20rem)] overflow-auto"
+          >
+            {/* 列头：随窗口滚动吸附在顶部（否则滚下去就看不到列名） */}
+            <AuditColumnHeader />
             {logs.length === 0 ? (
               <p className="px-3 py-10 text-center text-sm text-muted-foreground">{t('audit.empty')}</p>
             ) : (
-              logs.map((log) => (
-                <AuditRow
-                  key={log.id}
-                  log={log}
-                  open={expanded === log.id}
-                  onToggle={() => setExpanded((id) => (id === log.id ? null : log.id))}
-                />
-              ))
+              <>
+                {/* 窗口上/下占位：窗口外的行用高度撑开，滚动条与整体高度保持真实 */}
+                {range.before > 0 && <div aria-hidden="true" style={{ height: range.before }} />}
+                {logs.slice(range.start, range.end).map((log, offset) => {
+                  const index = range.start + offset
+                  return (
+                    <AuditRow
+                      key={log.id}
+                      log={log}
+                      open={expanded === log.id}
+                      isLast={index === logs.length - 1}
+                      rowRef={expanded === log.id ? expandedRef : undefined}
+                      onToggle={() => setExpanded((id) => (id === log.id ? null : log.id))}
+                    />
+                  )
+                })}
+                {range.after > 0 && <div aria-hidden="true" style={{ height: range.after }} />}
+              </>
             )}
-          </Panel>
-
-          {/* 加载更多 */}
-          <div className="flex items-center justify-between text-sm text-muted-foreground">
-            <span>{t('audit.loadedCount', { loaded: logs.length, total })}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!hasNextPage || isFetchingNextPage}
-              onClick={() => fetchNextPage()}
-            >
-              {t('audit.loadMore')}
-            </Button>
           </div>
-        </>
+        </Panel>
       )}
+    </PageShell>
+  )
+  }
+
+/**
+ * 列表列头（FR-496 阶段 6 补丁抽出）：内容是静态列名，不依赖数据，
+ * 因此加载态与就绪态共用同一份——骨架期间列名/列宽就已就位，数据到达只是「行长出来」。
+ */
+function AuditColumnHeader() {
+  const { t } = useTranslation()
+  return (
+    // 随窗口滚动吸附在顶部（否则滚下去就看不到列名）
+    <div className="sticky top-0 z-10 flex items-center gap-3 border-b bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground backdrop-blur-sm">
+      <span className="w-4 shrink-0" />
+      <span className="w-40 shrink-0">{t('audit.time')}</span>
+      <span className="w-28 shrink-0">{t('audit.user')}</span>
+      <span className="w-44 shrink-0">{t('audit.action')}</span>
+      <span className="min-w-0 flex-1">{t('audit.target')}</span>
+      <span className="w-28 shrink-0">{t('audit.ip')}</span>
     </div>
   )
 }
 
-/** 单条审计行：可点展开查看变更详情（detail）。 */
-function AuditRow({
+/** 单条审计行：可点展开查看变更详情（detail）。 */function AuditRow({
   log,
   open,
+  isLast,
+  rowRef,
   onToggle,
 }: {
   log: AuditLogInfo
   open: boolean
+  /** 末行不画分隔线：虚拟窗口下 `last:` 变体只看「已渲染的最后一个」，会误伤窗口末行。 */
+  isLast: boolean
+  /** 展开行挂给页面实测高度（仅展开时传入）。 */
+  rowRef?: Ref<HTMLDivElement>
   onToggle: () => void
 }) {
   const { t } = useTranslation()
   const detail = formatAuditDetail(log.detail)
   const hasDetail = detail !== '' || (log.failed && !!log.error)
-  // FR-303：action 键翻译。audit.actions 下是含点的扁平键（如 instance.start），
-  // 依赖 i18next ignoreJSONStructure（默认开）解析；未知键回退原键（defaultValue），保证不崩。
-  const actionLabel = t(`audit.actions.${log.action}`, { defaultValue: log.action })
+  // FR-303：action 键翻译。已知键显翻译 + 原键角标，未知键回退原键（defaultValue），保证不崩。
+  const { label: actionLabel, showsRawKey } = resolveActionLabel(t, log.action)
   return (
-    <div className="border-b border-border/60 last:border-b-0">
+    <div ref={rowRef} className={cn('border-border/60', !isLast && 'border-b')}>
       <button
         type="button"
         onClick={onToggle}
@@ -205,13 +308,13 @@ function AuditRow({
         <span className="w-28 shrink-0 truncate">{log.user?.username ?? `#${log.userId}`}</span>
         {/* FR-303：有翻译时显翻译 + 小号 mono 原键角标（筛选仍按原键，心智不断）；无翻译时保持原 mono 徽章。 */}
         <span className="w-44 min-w-0 shrink-0" title={log.action}>
-          {actionLabel === log.action ? (
-            <span className="rounded bg-muted px-2 py-0.5 font-mono text-[11px]">{log.action}</span>
-          ) : (
+          {showsRawKey ? (
             <span className="flex flex-col">
               <span className="truncate">{actionLabel}</span>
               <span className="truncate font-mono text-[10px] text-muted-foreground">{log.action}</span>
             </span>
+          ) : (
+            <span className="rounded bg-muted px-2 py-0.5 font-mono text-[11px]">{log.action}</span>
           )}
         </span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
