@@ -60,4 +60,40 @@ describe('InstanceGroupManager', () => {
 
     await waitFor(() => expect(removed).toEqual({ groupId: 2, instanceIds: [1] }))
   })
+
+  it('千级实例下只渲染可视窗口内的卡片', async () => {
+    server.use(
+      http.get(API('/instances'), () =>
+        HttpResponse.json(
+          Array.from({ length: 1200 }, (_, n) => ({
+            id: n + 1,
+            uuid: `i-${n + 1}`,
+            nodeId: 1,
+            name: `inst-${String(n + 1).padStart(4, '0')}`,
+            type: 'minecraft_java',
+            role: 'backend',
+            processType: 'daemon',
+            status: 'STOPPED',
+            startCommand: 'java -jar server.jar',
+            workDir: `/srv/inst-${n + 1}`,
+            serverPort: 25565 + n,
+            autoStart: false,
+            autoRestart: false,
+            tags: null,
+            createdAt: '2026-01-01T00:00:00Z',
+          })),
+        ),
+      ),
+      http.get(API('/nodes'), () => HttpResponse.json([{ id: 1, name: 'host-1' }])),
+      http.get(API('/instance-groups'), () => HttpResponse.json([])),
+    )
+    loginMockUser()
+    renderWithProviders(<InstanceGroupManager />)
+
+    const grid = await screen.findByTestId('instance-group-grid')
+    expect(Number(grid.dataset.totalCount)).toBe(1200)
+    // 虚拟化护栏：入 DOM 的卡片应是「视口行数 × 列数」量级，而非全部 1200 张。
+    // jsdom 无布局，useVirtualRows 会落到 fallbackViewportSize（本组件显式传 720）。
+    expect(within(grid).queryAllByRole('checkbox').length).toBeLessThan(60)
+  })
 })

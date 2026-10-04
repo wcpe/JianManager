@@ -6,6 +6,11 @@ export interface ScheduleInfo {
   id: number
   uuid: string
   instanceId: number
+  /**
+   * 实例展示名（后端已回填）。有了它，调度列表不必为了显示名字而拉全量实例列表。
+   * 实例被删时缺省，前端回退显示 #id。
+   */
+  instanceName?: string
   name: string
   cronExpr: string
   /** 动作：start / stop / restart / command / backup。 */

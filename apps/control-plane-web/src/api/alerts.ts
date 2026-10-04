@@ -33,6 +33,11 @@ export interface AlertEventInfo {
   id: number
   ruleId: number
   targetId: number
+  /**
+   * 实例展示名（后端按规则维度回填）：仅当规则的 targetType 为 instance 时存在。
+   * 有了它，列表就不必为了显示名字而拉全量实例列表。实例被删时缺省，前端回退显示 #id。
+   */
+  instanceName?: string
   level: string
   triggerType: string
   value: number

@@ -10,7 +10,7 @@ import {
   useScheduleLogs,
   type ScheduleInfo,
 } from '@/api/schedules'
-import { useInstances } from '@/api/instances'
+import { InstancePicker } from '@/components/InstancePicker'
 import { validateCron, nextRuns, describeCron, CRON_PRESETS } from '@/lib/cron'
 import {
   ConfigRow,
@@ -60,7 +60,6 @@ import DangerConfirm from '@/components/DangerConfirm'
 export default function SchedulesPage() {
   const { t } = useTranslation()
   const { data: schedules, isLoading } = useSchedules()
-  const { data: instances } = useInstances()
 
   const createSchedule = useCreateSchedule()
   const updateSchedule = useUpdateSchedule()
@@ -77,8 +76,15 @@ export default function SchedulesPage() {
   // 汇总条筛选：'enabled' 仅启用 / 'disabled' 仅停用 / null 全部。
   const [filter, setFilter] = useState<'enabled' | 'disabled' | null>(null)
 
-  const instanceName = (id: number) =>
-    instances?.find((i) => i.id === id)?.name ?? `#${id}`
+  /**
+   * 调度行显示的实例名。
+   *
+   * 后端已在 `/schedules` 回填 `instanceName`（见 `service.ScheduleView`），故直接用行上的字段，
+   * 不再全量拉实例列表做 id→name 反查——那在千级规模下是约 1MB/轮的开销，且带 30 秒兜底轮询。
+   * 实例被删时后端留空，这里回退显示 #id。
+   */
+  const instanceNameOf = (s: { instanceId: number; instanceName?: string }) =>
+    s.instanceName ?? `#${s.instanceId}`
 
   // cron 人类可读文案（FR-153）：可识别则译，否则退回原表达式。
   const cronReadable = (expr: string): string => {
@@ -194,7 +200,7 @@ export default function SchedulesPage() {
                 tone={s.enabled ? 'primary' : 'neutral'}
                 title={s.name}
                 code={s.cronExpr}
-                subtitle={`${instanceName(s.instanceId)} · ${t(`schedules.action_${s.action}`, { defaultValue: s.action })} · ${cronReadable(s.cronExpr)}`}
+                subtitle={`${instanceNameOf(s)} · ${t(`schedules.action_${s.action}`, { defaultValue: s.action })} · ${cronReadable(s.cronExpr)}`}
                 meta={
                   <>
                     <div>{s.enabled ? t('schedules.nextRunLabel') : t('schedules.disabledLabel')}</div>
@@ -262,7 +268,7 @@ export default function SchedulesPage() {
                   <Fragment key={s.id}>
                     <TableRow>
                       <TableCell className="font-medium text-foreground">{s.name}</TableCell>
-                      <TableCell className="text-muted-foreground">{instanceName(s.instanceId)}</TableCell>
+                      <TableCell className="text-muted-foreground">{instanceNameOf(s)}</TableCell>
                       <TableCell className="font-mono text-xs">
                         <div>{s.cronExpr}</div>
                         <div className="font-sans text-muted-foreground">{cronReadable(s.cronExpr)}</div>
@@ -336,7 +342,6 @@ export default function SchedulesPage() {
       <ScheduleFormDialog
         open={showCreate}
         mode="create"
-        instances={instances ?? []}
         submitting={createSchedule.isPending}
         onClose={() => setShowCreate(false)}
         onSubmit={(form) => {
@@ -356,7 +361,6 @@ export default function SchedulesPage() {
         open={editing !== null}
         mode="edit"
         initial={editing}
-        instances={instances ?? []}
         submitting={updateSchedule.isPending}
         onClose={() => setEditing(null)}
         onSubmit={(form) => {
@@ -439,7 +443,6 @@ interface ScheduleFormDialogProps {
   /** create：可选实例/名称；edit：实例/名称只读，仅改 cron/action/启用。 */
   mode: 'create' | 'edit'
   initial?: ScheduleInfo | null
-  instances: { id: number; name: string }[]
   submitting: boolean
   onClose: () => void
   onSubmit: (form: ScheduleFormState) => void
@@ -450,7 +453,6 @@ function ScheduleFormDialog({
   open,
   mode,
   initial,
-  instances,
   submitting,
   onClose,
   onSubmit,
@@ -474,7 +476,6 @@ function ScheduleFormDialog({
   const nameMissing = mode === 'create' && form.name.trim() === ''
   const canSubmit = !submitting && cron.valid && !instanceMissing && !nameMissing
 
-  const instanceOptions: ComboboxOption[] = instances.map((i) => ({ value: String(i.id), label: i.name }))
   const actionOptions: ComboboxOption[] = SCHEDULE_ACTIONS.map((a) => ({ value: a, label: t(`schedules.action_${a}`) }))
 
   const handleSubmit = (e: FormEvent) => {
@@ -497,17 +498,16 @@ function ScheduleFormDialog({
             <div className="space-y-1.5">
               <FieldLabel required={mode === 'create'}>{t('schedules.instance')}</FieldLabel>
               {mode === 'create' ? (
-                <Combobox
-                  options={instanceOptions}
-                  value={form.instanceId}
-                  onChange={(v) => setForm({ ...form, instanceId: v })}
-                  allowCustom={false}
+                <InstancePicker
+                  value={form.instanceId ? Number(form.instanceId) : null}
+                  onChange={(id) => setForm({ ...form, instanceId: id === null ? '' : String(id) })}
+                  enabled={open}
                   placeholder={t('schedules.selectInstance')}
                   invalid={instanceMissing}
                 />
               ) : (
                 <div className="w-full rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-                  {initial ? (instances.find((i) => i.id === initial.instanceId)?.name ?? `#${initial.instanceId}`) : ''}
+                  {initial ? (initial.instanceName ?? `#${initial.instanceId}`) : ''}
                 </div>
               )}
             </div>

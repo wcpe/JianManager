@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -11,7 +11,7 @@ import {
   type BotLoadPreflightResult,
   type BotLoadTemplate,
 } from '@/api/botLoad'
-import { useInstances } from '@/api/instances'
+import { InstancePicker } from '@/components/InstancePicker'
 import {
   createDefaultDraft,
   draftTargetBots,
@@ -28,7 +28,6 @@ import CapacityPlan from './CapacityPlan'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import {
   Dialog,
   DialogContent,
@@ -60,7 +59,6 @@ interface BotLoadWizardProps {
 export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadWizardProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { data: instances } = useInstances()
   const createRun = useCreateBotLoadRun()
   const createFromTemplate = useCreateBotLoadRunFromTemplate()
   const preflight = usePreflightBotLoadRun()
@@ -111,10 +109,7 @@ export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadW
   const targetBots = draftTargetBots(draft)
   const names = previewBotNames(draft.namePrefix, targetBots)
 
-  const instanceOptions: ComboboxOption[] = useMemo(
-    () => (instances ?? []).map((i) => ({ value: String(i.id), label: i.name })),
-    [instances],
-  )
+  // 实例候选改由 InstancePicker 走服务端搜索（见下方 target 步骤），不再本地拉全量。
 
   const stepIndex = WIZARD_STEPS.indexOf(draft.step)
 
@@ -289,7 +284,7 @@ export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadW
                 type="button"
                 className={cn(
                   'rounded-md border px-2.5 py-1 text-xs',
-                  draft.step === s ? 'border-primary bg-primary/10 font-semibold' : 'text-muted-foreground',
+                  draft.step === s ? 'border-primary bg-primary/10 font-semibold' : 'text-muted-foreground hover:text-foreground',
                 )}
                 aria-current={draft.step === s ? 'step' : undefined}
                 onClick={() => go(s)}
@@ -305,13 +300,10 @@ export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadW
             <div className="space-y-3">
               <div className="space-y-1">
                 <FieldLabel required>{t('bots.instance')}</FieldLabel>
-                <Combobox
-                  options={instanceOptions}
-                  value={draft.instanceId ? String(draft.instanceId) : ''}
-                  onChange={(v) => {
-                    const id = Number(v)
-                    dispatch({ type: 'patch', patch: { instanceId: id || null } })
-                    const inst = instances?.find((i) => i.id === id)
+                <InstancePicker
+                  value={draft.instanceId}
+                  onChange={(id, inst) => {
+                    dispatch({ type: 'patch', patch: { instanceId: id } })
                     if (inst) {
                       dispatch({
                         type: 'patch',
@@ -325,7 +317,7 @@ export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadW
                       })
                     }
                   }}
-                  allowCustom={false}
+                  enabled={open}
                   placeholder={t('bots.selectInstance')}
                 />
               </div>

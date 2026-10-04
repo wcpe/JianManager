@@ -3,7 +3,10 @@ import { fireEvent, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
+import { http, HttpResponse } from 'msw'
 import { mockInject } from '@jianmanager/devmock/inject'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import api from '@/api/client'
 import type { AlertChannelInfo, AlertRuleInfo } from '@/api/alerts'
 import { RuleDialog } from './RuleDialog'
@@ -81,6 +84,16 @@ async function pickSelectOption(trigger: HTMLElement, optionName: string) {
   fireEvent.click(option as HTMLElement)
 }
 
+/**
+ * 选实例：该维度已由 Radix Select 改为 InstancePicker（Popover 基座 + 普通 button 选项），
+ * 选项不再是 role=option，故不能复用 pickSelectOption。
+ */
+async function pickInstanceOption(trigger: HTMLElement, optionName: string) {
+  HTMLElement.prototype.scrollIntoView ??= () => {}
+  await userEvent.click(trigger.closest('button') ?? trigger)
+  await userEvent.click(await screen.findByRole('button', { name: optionName }))
+}
+
 describe('RuleDialog（mock 假后端）', () => {
   it('① 创建模式：渲染表单字段（名称 + 静默窗口 + 通道复选）', async () => {
     loginMockUser()
@@ -126,6 +139,36 @@ describe('RuleDialog（mock 假后端）', () => {
   // 本对话框含 6 个 Radix Select，jsdom 下一次「展开 + 选中」约 2s；本用例两次交互（切触发类型 +
   // 选目标实例）叠加，默认 10s 上限在并行满载时会擦边，故显式放宽（同 CloneInstanceDialog.dom.test）。
   it('② 切到日志关键字：目标自动改为实例并提交 targetId/keyword', async () => {
+    // 实例维度改走服务端搜索：devmock 的实例种子被 padding 到千级且按名升序，survival-1
+    // 排不进前 50 条候选，故这里显式给一个只含它的搜索响应。
+    server.use(
+      http.get(API('/instances/search'), () =>
+        HttpResponse.json({
+          items: [
+            {
+              id: 1,
+              uuid: 'i-survival-1',
+              nodeId: 1,
+              name: 'survival-1',
+              type: 'minecraft_java',
+              role: 'backend',
+              processType: 'daemon',
+              status: 'RUNNING',
+              startCommand: '',
+              workDir: '/srv/survival-1',
+              serverPort: 25565,
+              autoStart: false,
+              autoRestart: false,
+              tags: null,
+              createdAt: '2026-01-01T00:00:00Z',
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 50,
+        }),
+      ),
+    )
     loginMockUser()
     const postSpy = vi.spyOn(api, 'post')
     const onClose = vi.fn()
@@ -135,8 +178,8 @@ describe('RuleDialog（mock 假后端）', () => {
     fireEvent.change(within(panel).getAllByRole('textbox')[0], { target: { value: '日志异常告警' } })
     await pickSelectOption(within(panel).getByText('指标阈值'), '日志关键字')
 
-    // 切到日志关键字后目标维度自动落到实例：下拉当前显示「全部实例」，改选种子实例 survival-1（id=1）。
-    await pickSelectOption(await within(panel).findByText('全部实例'), 'survival-1')
+    // 切到日志关键字后目标维度自动落到实例：控件当前显示「全部实例」，改选种子实例 survival-1（id=1）。
+    await pickInstanceOption(await within(panel).findByText('全部实例'), 'survival-1')
     fireEvent.change(within(panel).getByPlaceholderText('OutOfMemoryError'), { target: { value: 'OutOfMemoryError' } })
     fireEvent.click(within(panel).getByRole('button', { name: '保存' }))
 

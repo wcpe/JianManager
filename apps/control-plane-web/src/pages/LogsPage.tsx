@@ -14,7 +14,7 @@ import {
 } from '@/api/logFederation'
 import { useAuthStore } from '@/stores/auth'
 import { useNodes } from '@/api/nodes'
-import { useInstances } from '@/api/instances'
+import { InstancePicker } from '@/components/InstancePicker'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -128,7 +128,6 @@ const FOLLOW_INTERVAL = 3000
 export default function LogsPage() {
   const { t } = useTranslation()
   const { data: nodes } = useNodes()
-  const { data: instances } = useInstances()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const isPlatformAdmin = useAuthStore((state) => state.role === ROLE_PLATFORM_ADMIN)
@@ -539,25 +538,18 @@ export default function LogsPage() {
               ))}
             </SelectContent>
           </Select>
-        <Select
-            disabled={view === 'platform'}
-            value={instanceId === null ? SENTINEL_ALL : String(instanceId)}
-            onValueChange={(v: string) =>
-              resetTo(setInstanceId)(v === SENTINEL_ALL ? null : Number(v))
-            }
-          >
-            <SelectTrigger size="sm" className="w-44">
-              <SelectValue placeholder={t('logs.allInstances')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={SENTINEL_ALL}>{t('logs.allInstances')}</SelectItem>
-              {instances?.map((inst) => (
-                <SelectItem key={inst.id} value={String(inst.id)}>
-                  {inst.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* 实例筛选：千级实例改走服务端搜索（InstancePicker），不再全量列举。
+            Select 换掉的另一个原因：Radix Select 依赖全部 SelectItem mount 才能提供
+            首字母跳转与方向键导航，因此无法只渲染前 N 项。 */}
+        <InstancePicker
+          value={instanceId}
+          onChange={(id) => resetTo(setInstanceId)(id)}
+          allowAll
+          allLabel={t('logs.allInstances')}
+          placeholder={t('logs.allInstances')}
+          disabled={view === 'platform'}
+          className="w-44"
+        />
 
         {/* 实时跟随开关 pill，靠右 */}
         <button
