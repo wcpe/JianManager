@@ -463,6 +463,9 @@ type Manager struct {
 	// deliverPlanHook 是"锁外投递规划（本批规范化 + 去重）"前调用的**仅测试用**观测点
 	// （#54 修复红/绿）：断言该处未持 m.mu。
 	deliverPlanHook atomic.Value // func()
+	// resolveGapsPlanHook 是「解算的锁外计算结束、重新取锁复验之前」调用的**仅测试用**观测点（#58）：
+	// 供用例在锁外窗口里注入一次账本写，断言第三段复验必须丢弃（不写入任何变更）。生产 nil ⇒ 零开销。
+	resolveGapsPlanHook func()
 	// rebuildSourceBuildHook 是"锁外构建源重建体"前调用的**仅测试用**观测点（#55-B 红/绿）：
 	// 断言该处未持 m.mu；同时供"锁外期间源又变了 ⇒ 第三段必须丢弃重建"的确定性用例注入变更。
 	rebuildSourceBuildHook atomic.Value // func()
@@ -1358,29 +1361,43 @@ func (m *Manager) ResolveCoveredGapsForSource(ctx context.Context, storageNamesp
 	// 45-60s 全 TIMEOUT。放弃裁定"忙即快速失败"是安全的：它**未写入任何变更**，
 	// 返回明确错误让调用方重试，远优于"调用方超时但服务端仍在排队"。
 	// #57：持有观测（tag=resolveGapsForSource）—— 获取侧走 acquireBounded（等锁读数在那边记）。
+	// #58：三段式收窄（照 #55-B 范式）。修前整个函数体都在 cycleMu 内 —— 含**账本克隆 + 缺口扫描 +
+	// 放弃写入 + 恢复采集 + 最重的 m.persist()**（索引规划/落库/fsync/WAL 剪枝）⇒ 现场实测
+	// `cycleMu 慢持有 section=resolveGapsForSource hold=1m26.374992592s`（观测仪首条 Warn）。
+	// 第一段（持锁）只取 O(1) 守卫快照；第二段（锁外）做重活；第三段复验守卫后做最小必要变更；
+	// persist 移到临界区外 —— 与同族路径 ResolveCoveredGaps（末尾 m.persist() 本就在 cycleMu 外）同型。
 	w := m.observeCycleMu("resolveGapsForSource")
 	if !m.acquireCycleMuBounded(ctx, resolveGapsCycleMuWait) {
 		return fmt.Errorf("ingest: 采集轮忙（cycleMu 等待超 %s 预算），放弃裁定未写入任何变更，请稍后重试", resolveGapsCycleMuWait)
 	}
 	w.locked()
-	defer func() {
-		m.cycleMu.Unlock()
-		w.done()
-	}()
+	// 第一段（持 cycleMu，全 O(1)）：停止标记 / 管道句柄 / 账本修订号（守卫）。
 	m.mu.Lock()
 	stopped := m.stopped
 	pipe := m.pipes[storageNamespace]
 	m.mu.Unlock()
 	if stopped {
+		m.cycleMu.Unlock()
+		w.done()
 		return fmt.Errorf("ingest: manager 已停止，拒绝放弃裁定（停止后不得再写账本或重开索引句柄）")
 	}
 	// 临界区内再校验一次：等锁期间调用方可能已取消——此时不得留下「无人认领的放弃」。
 	if err := ctx.Err(); err != nil {
+		m.cycleMu.Unlock()
+		w.done()
 		return fmt.Errorf("ingest: 放弃裁定被取消（未写入任何变更）: %w", err)
 	}
 	if pipe == nil {
+		m.cycleMu.Unlock()
+		w.done()
 		return fmt.Errorf("ingest: source %s not found", storageNamespace)
 	}
+	// 守卫：账本修订号。Ledger.touch 在**所有写路径的入口** require() 内推进 ⇒ 任何账本写都会变。
+	rev := pipe.Ledger().Revision(pipe.Key())
+	m.cycleMu.Unlock()
+	w.done()
+
+	// ── 第二段（**锁外**）：重活 —— 克隆账本条目 + 扫描未解决缺口求 through（O(缺口数)）。
 	entry := pipe.Ledger().Get(pipe.Key())
 	if entry == nil {
 		return fmt.Errorf("ingest: source %s ledger missing", storageNamespace)
@@ -1397,16 +1414,51 @@ func (m *Manager) ResolveCoveredGapsForSource(ctx context.Context, storageNamesp
 			through = gap.EndPos
 		}
 	}
+
+	// 仅测试观测点（生产 nil，零开销）：锁外计算到此结束 ⇒ 用例可在此注入「源又变了」以验证复验。
+	if m.resolveGapsPlanHook != nil {
+		m.resolveGapsPlanHook()
+	}
+	// ── 第三段（复验守卫 + 最小必要变更）：重新取有界 cycleMu；守卫（停止标记 / 管道身份 /
+	// 账本修订号）任一变化 ⇒ **不写入任何变更**地返回明确错误（调用方重试即可；与 C 修复同型）。
+	// 为什么要复验：第二段在锁外算 through，期间采集轮/投递/回收都可能写该源账本 ⇒ 直接用旧
+	// through 落「放弃」会放弃一段**未经判定**的缺口区间（审计凭据失真）⇒ 丢弃重算。
+	wc := m.observeCycleMu("resolveGapsForSource.commit")
+	if !m.acquireCycleMuBounded(ctx, resolveGapsCycleMuWait) {
+		return fmt.Errorf("ingest: 采集轮忙（cycleMu 等待超 %s 预算），放弃裁定未写入任何变更，请稍后重试", resolveGapsCycleMuWait)
+	}
+	wc.locked()
+	m.mu.Lock()
+	stoppedNow := m.stopped
+	pipeNow := m.pipes[storageNamespace]
+	m.mu.Unlock()
+	if stoppedNow || pipeNow != pipe || pipeNow.Ledger().Revision(pipeNow.Key()) != rev {
+		m.cycleMu.Unlock()
+		wc.done()
+		return fmt.Errorf("ingest: 源 %s 在放弃裁定计算期间发生变化（未写入任何变更），请重试", storageNamespace)
+	}
+	if err := ctx.Err(); err != nil {
+		m.cycleMu.Unlock()
+		wc.done()
+		return fmt.Errorf("ingest: 放弃裁定被取消（未写入任何变更）: %w", err)
+	}
 	if _, err := pipe.Ledger().AbandonGapsThrough(pipe.Key(), through, ledger.GapAbandonment{
 		ReasonCode: ledger.GapReasonPermanentlyLost,
 		Operator:   operator,
 		Detail:     "manual abandonment via ResolveCoveredGapsForSource",
 	}); err != nil {
+		m.cycleMu.Unlock()
+		wc.done()
 		return err
 	}
 	if err := resumeAcquireRespectingGates(pipe); err != nil {
+		m.cycleMu.Unlock()
+		wc.done()
 		return err
 	}
+	m.cycleMu.Unlock()
+	wc.done()
+	// #58：落库（索引规划/Apply/fsync/WAL 剪枝，现场 1m26s 的主项）在 cycleMu **之外**。
 	return m.persist()
 }
 
