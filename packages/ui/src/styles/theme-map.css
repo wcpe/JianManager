@@ -1,0 +1,114 @@
+/**
+ * dark 变体绑定到应用内主题 class（FR-496 阶段 1 修复）。
+ *
+ * 此前全仓没有任何 @custom-variant 声明，Tailwind v4 的 `dark:` 因此默认解析为
+ * `@media (prefers-color-scheme: dark)`——即全站 88 处 `dark:` 工具类跟随的是
+ * **操作系统偏好**，而非应用内的明暗切换。平时看不出问题：实际换肤由 tokens.css
+ * 里 `.dark` 的变量覆盖承担；但组件中显式写 `dark:` 的样式在用户手动切到暗色时
+ * 并不生效，属半失效状态（系统亮 + 应用暗 的组合下尤其明显）。
+ *
+ * 此处把 dark 变体显式绑定到 `.dark` 祖先，与切主题策略对齐
+ * （class 由 apps/control-plane-web/src/lib/theme.ts 写在 <html> 上）。
+ */
+@custom-variant dark (&:is(.dark *));
+
+/**
+ * hover 变体脱离 `@media (hover: hover)` 包裹（FR-496 阶段 6 补丁）。
+ *
+ * Tailwind v4 把 `hover:` 默认编译成 `&:hover { @media (hover: hover) { … } }`，
+ * 于是整站 hover 反馈都挂在一条环境查询上。该查询在**混合输入设备**上会判否：
+ * 带触摸屏的笔记本、远程/虚拟化会话、以及各类自动化浏览器都会报告
+ * `(hover: none) and (pointer: coarse)`——这类环境里鼠标照样能移动，
+ * 但所有 hover 样式会静默消失（实测：本仓 104 条 hover 规则同时失效，
+ * 表现为「按钮滑过去毫无反应」，且没有任何报错或控制台线索）。
+ *
+ * 覆盖为无条件的 `&:hover` 是本项目的明确取舍：运维台以桌面指针操作为主，
+ * 「鼠标悬停必须有反馈」比「触屏点击后不残留悬停态」更重要；
+ * 清空悬停态的成本（指针移开即恢复）远低于「整站失去交互反馈」。
+ * 触屏设备上的残留由各组件自身的 `active:`/焦点态转移吸收。
+ */
+@custom-variant hover (&:hover);
+
+/**
+ * token → Tailwind utility 映射（FR-496 阶段 1 自 packages/ui 提供）。
+ *
+ * 迁入缘由：此前这份映射定义在 apps/control-plane-web/src/index.css 本地，
+ * 而 packages/ui/src/components/* 是全站样式的主要产出方——结果组件库不自包含，
+ * 它的样式实际依赖"消费方愿意提供 token"；同时 packages/ui/src/styles.css 里
+ * 存在一份平行副本，两份已经漂移（主控台独有 --brand-*、--radius-2xl、
+ * 精工卡片派生令牌等）。此处成为唯一定义源。
+ *
+ * 用 `@theme inline` 而非 `@theme`：只登记 Tailwind 生成 utility 所需的映射，
+ * 不额外发射 CSS 声明——真实取值由 tokens.css 的 CSS 自定义属性提供，
+ * 因此换肤（明暗 / 主题色）时 utility 自动跟随新值，无需重新生成 CSS。
+ */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-destructive: var(--destructive);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  /* 状态色系（FR-061）：资源/TPS/实例状态按阈值着色，独立于主色 */
+  --color-status-success: var(--status-success);
+  --color-status-success-foreground: var(--status-success-foreground);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-foreground: var(--status-warning-foreground);
+  --color-status-danger: var(--status-danger);
+  --color-status-danger-foreground: var(--status-danger-foreground);
+  --color-status-info: var(--status-info);
+  --color-status-info-foreground: var(--status-info-foreground);
+  --color-brand-forest: var(--brand-forest);
+  --color-brand-cobalt: var(--brand-cobalt);
+  /* 多序列历史曲线配色（FR-060 TimeSeriesChart） */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 3px);
+  --radius-md: calc(var(--radius) - 1px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+
+  /* 设计底座（FR-163）：柔和弱阴影 + 主色晕染抬升 + 统一动效 token + 呼吸灯。
+     品牌相关取值（--brand-shadow）经变量路由，FR-164 第二主题仅覆盖变量即可换肤。 */
+  --shadow-soft: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 1px 3px -1px rgb(var(--shadow-color) / 0.05);
+  --shadow-lift: 0 6px 16px -5px rgb(var(--shadow-color) / 0.14), 0 2px 6px -3px rgb(var(--shadow-color) / 0.08);
+  /* ── 全局动效收敛（FR-244）：唯一的动画词汇表，任何交互动效都从这里取值，禁止再散落硬编码毫秒 ──
+       时长 token：--motion-duration-fast(120)｜normal(180)｜slow(320)｜route(360)｜progress-*(进度条专用)。
+       缓动 token：--motion-easing-standard（iOS 收敛缓动，别名 --ease-ios，Tailwind 用 ease-ios）｜--motion-easing-emphasized。
+       语义类（定义在 motion.css）：
+         .jm-page-stack   — 页面内容进场（jm-page-in，页根统一套）；
+         .jm-route-transition — 路由级切页进场（jm-route-enter，Workspace 路由壳统一套）；
+         .jm-panel-up/.jm-panel-down（keyframes）— 浮层/面板升起·落下，[data-state] 驱动（如 .jm-mobile-nav-panel）；
+         .animate-breathing — 运行对象呼吸光环。
+       组件里做卡片/行/控件的 hover、浮层进出等一次性动效时：用 Tailwind 任意值绑 token
+       （如 `duration-[var(--motion-duration-slow)] ease-ios`），不要写 `duration-300` 这类脱离 token 的定值。 */
+  --motion-duration-fast: 120ms;
+  --motion-duration-normal: 180ms;
+  --motion-duration-slow: 320ms;
+  --motion-duration-route: 360ms;
+  --motion-duration-progress-route: 720ms;
+  --motion-duration-progress-busy: 1100ms;
+  --motion-duration-progress-done: 240ms;
+  --motion-delay-sidebar-mode: 80ms;
+  --motion-easing-standard: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-easing-emphasized: ease-out;
+  --ease-ios: var(--motion-easing-standard);
+  --animate-breathing: breathing 1.8s ease-in-out infinite;
+  --animate-top-progress: top-progress var(--motion-duration-progress-route) var(--motion-easing-emphasized) forwards;
+}

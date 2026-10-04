@@ -1,0 +1,109 @@
+/**
+ * 动效词汇表（FR-244；FR-496 阶段 1 自主控台迁入）。
+ *
+ * 这里只有 @keyframes：时长/缓动 token 在 theme-map.css 定义（--motion-duration-*、
+ * --motion-easing-*），动画名 token（--animate-breathing / --animate-top-progress）
+ * 也引用本文件的关键帧，故关键帧必须与 token 同处包内，包才自包含。
+ *
+ * 应用级动效语义类（.jm-page-stack / .jm-route-transition / .jm-mobile-nav-panel 等）
+ * 仍留在各应用自己的样式表中消费这些关键帧——关键帧是全局作用域，跨文件引用有效。
+ */
+
+/* 呼吸灯（FR-163）：运行对象脉动光环。环色取 currentColor，套用方设 text-* 即定色。 */
+@keyframes breathing {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* 页眉顶部加载进度条（FR-243）：切页时一次性 0→100% 后淡出。 */
+@keyframes top-progress {
+  0% {
+    transform: scaleX(0);
+    opacity: 1;
+  }
+  70% {
+    transform: scaleX(0.86);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0;
+  }
+}
+
+@keyframes top-progress-busy {
+  0% {
+    transform: translateX(-58%) scaleX(0.34);
+    opacity: 0.75;
+  }
+  50% {
+    transform: translateX(18%) scaleX(0.56);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(112%) scaleX(0.34);
+    opacity: 0.75;
+  }
+}
+
+@keyframes top-progress-done {
+  0% {
+    transform: scaleX(0.86);
+    opacity: 1;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0;
+  }
+}
+
+@keyframes jm-page-in {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes jm-route-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) scale(0.992);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes jm-panel-up {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes jm-panel-down {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}

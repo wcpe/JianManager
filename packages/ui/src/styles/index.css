@@ -1,0 +1,16 @@
+/**
+ * 共享设计底座汇总入口（FR-496 阶段 1）。
+ *
+ * packages/ui 的样式自此自包含：消费方 import 本文件一次，即获得
+ *   theme-map.css  token → Tailwind utility 映射（@theme inline）
+ *   tokens.css     设计 token 原始值（:root / .dark）
+ *   themes.css     主题色覆盖组（data-theme × 明暗）
+ *   motion.css     动效关键帧
+ *
+ * 引入顺序按「映射 → 基线 → 覆盖 → 关键帧」排列，与语义依赖一致。
+ * 注意：各应用仍需自行 @import "tailwindcss" 并声明 @source（内容扫描是应用级的）。
+ */
+@import "./theme-map.css";
+@import "./tokens.css";
+@import "./themes.css";
+@import "./motion.css";

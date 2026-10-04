@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { startTransition, useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Brush, CartesianGrid, Legend, Line, LineChart, XAxis, YAxis } from 'recharts'
 import { formatterFor, type PlotSeries } from '../lib/monitor-metrics'
@@ -6,6 +6,24 @@ import { brushSelectionToWindow } from '../lib/brush'
 import { hoverSnapshotAt, type SampleRow } from '../lib/chart-hover'
 
 const CHART_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)']
+
+/**
+ * 容器宽度变化的防抖时长（FR-496 阶段 6 补丁）。
+ *
+ * 侧栏开合、面板折叠、窗口拖拽都会让容器宽度**逐帧**变化，ResizeObserver 因此每帧回调。
+ * 而 recharts 重绘极贵——实测展开一次侧栏，图表侧产生 240 次 `<g>` 子节点替换 +
+ * 48 次 `<line>` 宽度改写，正好铺满 320ms 过渡期，把主线程占满、动画帧插不进来。
+ *
+ * 【为什么取 2000ms 而不是刚够盖住动画】取值必须大于侧栏折叠动画（320ms），否则防抖到期时
+ * 动画仍在进行，那次重绘会直接砸在动画中间（实测 120ms 时展开期间只剩 4 帧、最大帧间隔
+ * 433ms）。但仅取 400ms 仍然不够：React Profiler 埋点显示，点击侧栏后内容区累计阻塞
+ * 538.8ms、最大单项 229ms，且**从点击后 812ms 才开始**——正好落在防抖到期处。
+ * 也就是说"图表适应新宽度"这件事本身要花几百毫秒，只要它还挨着操作时段，用户就会感到卡。
+ * 取 2000ms 把它推到操作结束之后：用户点完侧栏、视线移开，图表才安静地重排一次。
+ * 代价是图表宽度延迟约 2 秒跟随——对趋势图这种"看形状不看精确宽度"的内容肉眼无感，
+ * 这也是与用户确认后接受的取舍。
+ */
+const CHART_RESIZE_DEBOUNCE_MS = 2000
 
 /** 据跨度选 X 轴时间格式：≤24h 显示时:分，更长显示月-日（与 TimeSeriesChart 一致）。 */
 function makeTickFormatter(spanMs: number): (ts: string) => string {
@@ -98,14 +116,22 @@ export function MonitorChart({
   // 容器实测宽度直喂 LineChart，规避 ResponsiveContainer 在 0 尺寸容器内 width(-1) 告警（BUG-007）。
   const [width, setWidth] = useState(0)
   const observerRef = useRef<ResizeObserver | null>(null)
+  const debounceRef = useRef<number | undefined>(undefined)
   const containerRef = useCallback((el: HTMLDivElement | null) => {
     observerRef.current?.disconnect()
+    window.clearTimeout(debounceRef.current)
     if (!el) {
       observerRef.current = null
       return
     }
     const observer = new ResizeObserver((entries) => {
-      setWidth(Math.floor(entries[0]?.contentRect.width ?? 0))
+      const next = Math.floor(entries[0]?.contentRect.width ?? 0)
+      window.clearTimeout(debounceRef.current)
+      debounceRef.current = window.setTimeout(() => {
+        // startTransition：把这次重绘降级为可中断的低优先级更新，
+        // 让浏览器优先绘制正在进行的 CSS 动画帧（见 CHART_RESIZE_DEBOUNCE_MS 的说明）。
+        startTransition(() => setWidth(next))
+      }, CHART_RESIZE_DEBOUNCE_MS)
     })
     observer.observe(el)
     observerRef.current = observer
