@@ -18,6 +18,17 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
+  /**
+   * 断言默认 5 秒对本站偏紧：mock 种子是约 1200 实例 / 12000 日志的量级，
+   * 而导航重构后首屏还要按路由分块多下载几个 chunk——实测若干页面从 goto 到页头出现
+   * 需要 8 秒以上。于是「goto 后 expect(标题).toBeVisible()」这个全站到处都在用的写法
+   * 会成片超时，且失败信息显示为「元素(s) not found」，极易被误判成选择器写错或页面没渲染
+   * （本次排查中确实一度如此误判）。
+   *
+   * 放宽到 15 秒：真正的缺陷仍会失败，只是不再把「慢」报成「没有」。
+   * test timeout 保持默认 30 秒不变——单个断言慢不该演变成整例无限期挂起。
+   */
+  expect: { timeout: 15_000 },
   use: {
     baseURL: e2eBaseURL,
     trace: process.env.CI ? 'retain-on-failure' : 'on-first-retry',
