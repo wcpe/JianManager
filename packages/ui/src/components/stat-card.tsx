@@ -53,7 +53,8 @@ export function StatCard({
       data-slot="stat-card"
       title={title}
       className={cn(
-        'flex flex-col rounded-lg border bg-card/95 px-3 py-2.5 text-card-foreground shadow-soft backdrop-blur-sm',
+        // 同 Panel：bg-card/95 之下模糊只有 5% 的可见度，收益远小于每个卡片各占一个合成层的成本。
+        'flex flex-col rounded-lg border bg-card/95 px-3 py-2.5 text-card-foreground shadow-soft',
         className,
       )}
     >

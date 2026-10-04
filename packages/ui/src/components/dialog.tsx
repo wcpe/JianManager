@@ -2,10 +2,29 @@
 
 import * as React from "react"
 import { XIcon } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { Dialog as DialogPrimitive } from "radix-ui"
 
 import { cn } from "../lib/utils"
+import { focusRing } from "../lib/focus-ring"
 import { Button } from "./button"
+
+/**
+ * 关闭文案的 i18n 键与兜底值（FR-496 阶段 6）。
+ *
+ * 组件库不自己初始化 i18next——初始化意味着替宿主决定语言与资源。这里只在宿主已初始化
+ * 时按键取值，取不到就回落英文，因此「未接 i18n 的应用/组件库单测」的行为与硬编码英文完全一致。
+ * 键名取主控台 common.close（zh=关闭 / en=Close），宿主已有资源可直接生效。
+ */
+const DIALOG_CLOSE_LABEL_KEY = "common.close"
+const DIALOG_CLOSE_LABEL_DEFAULT = "Close"
+
+/** 解析关闭按钮文案：显式传入 > i18n > 英文兜底。 */
+function useDialogCloseLabel(closeLabel?: string): string {
+  const { t } = useTranslation()
+  if (closeLabel !== undefined) return closeLabel
+  return t(DIALOG_CLOSE_LABEL_KEY, { defaultValue: DIALOG_CLOSE_LABEL_DEFAULT })
+}
 
 function Dialog({
   ...props
@@ -19,10 +38,25 @@ function DialogTrigger({
   return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />
 }
 
+/**
+ * 门户（FR-496 阶段 6 修复死钩子）。
+ *
+ * Radix 的 `DialogPortal` 只读 `container` / `forceMount` / `children`，其余 props 直接丢弃，
+ * 所以以前挂在它身上的 `data-slot="dialog-portal"` 从未落进 DOM（阶段 0 记录的缺陷）。
+ * 现在在门户内部包一层 `display: contents` 的标记元素：它不生成布局盒（子元素照旧
+ * 按 fixed 定位参与布局），但钩子真实存在，供样式与测试命中。
+ */
 function DialogPortal({
+  children,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Portal>) {
-  return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />
+  return (
+    <DialogPrimitive.Portal {...props}>
+      <div data-slot="dialog-portal" className="contents">
+        {children}
+      </div>
+    </DialogPrimitive.Portal>
+  )
 }
 
 function DialogClose({
@@ -55,14 +89,19 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  closeLabel,
   onPointerDownOutside,
   onInteractOutside,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  /** 覆盖关闭按钮文案（默认取 i18n `common.close`，缺失时英文 Close）。 */
+  closeLabel?: string
 }) {
+  const resolvedCloseLabel = useDialogCloseLabel(closeLabel)
+
   return (
-    <DialogPortal data-slot="dialog-portal">
+    <DialogPortal>
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
@@ -87,13 +126,17 @@ function DialogContent({
       >
         {children}
         {showCloseButton && (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+          <DialogClose
+            className={cn(
+              // 阶段 6 收敛：原来的 `focus:ring-*` 会在鼠标点击时也亮出焦点环，
+              // 改为统一的 `:focus-visible` 细环（键盘才显示），避免"点一下框一下"的闪烁。
+              focusRing,
+              "absolute top-4 right-4 rounded-xs opacity-70 transition-opacity duration-[var(--motion-duration-fast)] ease-ios hover:opacity-100 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            )}
           >
             <XIcon />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
+            <span className="sr-only">{resolvedCloseLabel}</span>
+          </DialogClose>
         )}
       </DialogPrimitive.Content>
     </DialogPortal>
@@ -113,11 +156,16 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
 function DialogFooter({
   className,
   showCloseButton = false,
+  closeLabel,
   children,
   ...props
 }: React.ComponentProps<"div"> & {
   showCloseButton?: boolean
+  /** 覆盖关闭按钮文案（默认取 i18n `common.close`，缺失时英文 Close）。 */
+  closeLabel?: string
 }) {
+  const resolvedCloseLabel = useDialogCloseLabel(closeLabel)
+
   return (
     <div
       data-slot="dialog-footer"
@@ -129,9 +177,16 @@ function DialogFooter({
     >
       {children}
       {showCloseButton && (
-        <DialogPrimitive.Close asChild>
-          <Button variant="outline">Close</Button>
-        </DialogPrimitive.Close>
+        <DialogClose asChild>
+          {/*
+            钩子显式落在 Button 上：Radix Slot 合并 props 时子元素优先，
+            Button 自带的 data-slot="button" 会把外层传入的 dialog-close 盖掉，
+            结果页脚关闭按钮与右上角 X 的钩子不对称（阶段 0 记录的缺陷）。
+          */}
+          <Button variant="outline" data-slot="dialog-close">
+            {resolvedCloseLabel}
+          </Button>
+        </DialogClose>
       )}
     </div>
   )
