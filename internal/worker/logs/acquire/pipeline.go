@@ -44,6 +44,12 @@ type Pipeline struct {
 	// maxReplayEventsPerDrain 是「暂停/恢复期排空存量」单轮最多外发的事件数（0 表示用默认）。
 	// 见 deliverPendingBestEffort 的限速说明。
 	maxReplayEventsPerDrain int
+	// appendRejectedHook 是「追加被拒（暂停/上限）时该做什么」的接线点（#56）。
+	//
+	// 非 nil ⇒ 把「排空已 durable 存量」交给**调度者**在摄取路径之外执行；nil ⇒ 退回本包原有的
+	// **同步**尽力投递（独立使用本包与既有回归的语义逐字不变，见 pipeline_drain_test.go 的
+	// TestPausedIngestStillDrainsDurablePending）。
+	appendRejectedHook func()
 }
 
 // NewPipeline 创建管道。deliver 为 nil 时不投递（仅 WAL）。
@@ -71,6 +77,26 @@ func (p *Pipeline) SetCapacityBudget(b CapacityBudget) { p.budget = b }
 // 供配置接线与测试使用。
 func (p *Pipeline) SetMaxReplayEventsPerDrain(n int) { p.maxReplayEventsPerDrain = n }
 
+// SetAppendRejectedHook 注入「追加被拒」处理（#56，见 appendRejectedHook 的说明）。
+// 生产由 ingest 层接成"调度一次路径外排空"；未接线时保持本包原有的同步语义。
+func (p *Pipeline) SetAppendRejectedHook(fn func()) { p.appendRejectedHook = fn }
+
+// handleAppendRejected 处理一次「追加被拒」（暂停/上限）：把「排空已 durable 存量」交给调度者，
+// **不在摄取路径内当场执行**。
+//
+// 为什么必须调度（现场 opt2 三栈定名）：此处原先同步调用 deliverPendingBestEffort ⇒ 整窗 replay
+// （replay=true，百万级批）把 emit→ingest 整条链按住 ⇒ 采集轮读不再前进、goroutine 越堆越多
+// （挂死期 183→242 活锁堆积），而 m.mu 全程无慢持锁记录 ⇒ 典型的**在途阻塞**（in-path blocking）。
+// 语义不变量：存量仍会被投递（调度者及时触发一次），只是不再阻塞摄取路径；未接调度者时
+// （本包独立使用/回归）行为与 #56 之前逐字一致 ⇒ 不静默改变既有契约。
+func (p *Pipeline) handleAppendRejected() {
+	if p.appendRejectedHook != nil {
+		p.appendRejectedHook()
+		return
+	}
+	_, _ = p.deliverPendingBestEffort()
+}
+
 // WALAppendedBytesTotal 返回本进程累计追加的估算字节（观测口径，不作门禁）。
 func (p *Pipeline) WALAppendedBytesTotal() uint64 { return p.walAppendedBytesTotal }
 
@@ -96,7 +122,7 @@ func (p *Pipeline) IngestReplay(events []logtypes.Event) error {
 		p.noteSelfFailure(err.Error())
 	}
 	if err := p.wal.AppendReplay(events...); err != nil {
-		_, _ = p.deliverPendingBestEffort()
+		p.handleAppendRejected() // #56：改为调度（不在摄取路径内同步整窗重投）
 		return err
 	}
 	return nil
@@ -168,7 +194,12 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 		// 被暂停（含积压上限）时，仍把 WAL 里**已 durable、未确认投递**的条目发出去：
 		// 投递不能挂在摄取上，否则暂停即断流 → 已读未投的积压永不外发 →
 		// 回收位置不动 → 段无从覆盖 → 滞回永不满足（2026-09-30 生产实证：残留 7998 条卡死数小时）。
-		_, _ = p.deliverPendingBestEffort()
+		//
+		// #56：这件事**不再在本路径内同步执行** —— 改为向调度者登记一次"该源需排空"并立即返回
+		// （见 handleAppendRejected 的现场证据：同步整窗 replay 把 emit→ingest 按住 ⇒ 采集轮停摆、
+		// goroutine 堆积在途）。存量仍会被投递（及时触发、单飞且合并同源重复请求），故上面那条
+		// "不能挂在摄取上"的语义**保留**：只是把"挂在"从**同步执行**换成**调度执行**。
+		p.handleAppendRejected()
 		_ = p.led.RecordGap(p.key, gapStart, gapEnd, ledger.GapReasonAppendRejected, err.Error())
 		p.noteSelfFailure(err.Error())
 		return err

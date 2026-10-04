@@ -35,6 +35,9 @@ type Options struct {
 	SourceCategory logtypes.Source
 	// Delivery WAL durable 后的投递钩子。
 	Delivery DeliveryHook
+	// AppendRejected 是「WAL 追加被拒（暂停/上限）」的处理钩子（#56）：非 nil 时由它**调度**一次
+	// 路径外排空（不再在 emit→ingest 链上同步执行整窗 replay）；nil 时沿用 acquire 的同步语义。
+	AppendRejected func()
 	// Location / BaseTime / IngestTimeUTC 传递给 normalize。
 	Location      *time.Location
 	BaseTime      time.Time
@@ -206,6 +209,10 @@ func New(opts Options) (*Pipeline, error) {
 			p.deliveredCount += len(events)
 			return res.HTTPStatus, res.AckLost, nil
 		})
+	}
+	// #56：追加被拒时的**调度**接线（见 Options.AppendRejected）。
+	if opts.AppendRejected != nil {
+		inner.SetAppendRejectedHook(opts.AppendRejected)
 	}
 
 	switch mode {

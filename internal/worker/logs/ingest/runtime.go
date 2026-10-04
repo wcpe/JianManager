@@ -261,6 +261,15 @@ type Manager struct {
 	// 执行 `fn` **之前**回调。为什么注在**这一步内部**（2026-10-05 纪律⑥：注入点必须"准且稳" ✓）：
 	// 用全局锁（`m.mu`）注入会**既测错位置**（环入口就要拿它 ✗）**又偶发**（时紧时松 ✗）✓。
 	sweepStepHold func()
+	// #56：追加被拒（暂停/上限）⇒「排空已 durable 存量」改为**调度**（不在摄取路径内当场执行）。
+	// replayMu 只保护下面两个集合与唤醒通道（叶子锁：绝不在持它时调用任何外部代码）；
+	// replayWake 是 cap=1 的**非阻塞唤醒**（同源/并发多次请求合并成一次唤醒）。
+	replayMu       sync.Mutex
+	replayPending  map[string]struct{} // 待排空的源（同源多次被拒 ⇒ 合并成一条）
+	replayInflight map[string]struct{} // 正在排空的源（单飞：同源不并发整窗 replay）
+	replayWake     chan struct{}
+	// replayScheduledTotal 是「追加被拒 ⇒ 登记待办」的累计次数（观测面：证明调度确实发生）。
+	replayScheduledTotal atomic.Int64
 	// sweepStepBudget 是兜底环**单源单步**的有界等待预算（0 ⇒ 默认 150ms ✓，见 sweepStepBudgetOf）。
 	sweepStepBudget time.Duration
 	// skipBlocked 统计"本轮因**有界等待超时**而跳过"的次数（2026-10-05 现场 ✓）：
@@ -2086,6 +2095,9 @@ func (m *Manager) Register(source SourceConfig) error {
 		Delivery: pipeline.FuncHook(func(events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
 			return m.deliver(source, events, replay)
 		}),
+		// #56：追加被拒（暂停/上限）不再在本路径内同步整窗重投，改为**调度**一次路径外排空
+		//（见 schedulePendingReplay：摄取路径内只登记待办 + 非阻塞唤醒）。
+		AppendRejected: func() { m.schedulePendingReplay(key) },
 	})
 	if err != nil {
 		return err
@@ -6170,6 +6182,147 @@ func (m *Manager) sourceConfigFor(p *pipeline.Pipeline) (SourceConfig, bool) {
 	return src, ok
 }
 
+// ── #56：追加被拒 ⇒ 「排空存量」改为调度（宿主 = 既有容量自愈兜底环） ─────────────────
+//
+// 现场（opt2 三栈定名）：WAL.Append 被拒（暂停/上限）时原先在 emit→ingest 链上**同步**执行
+// deliverPendingBestEffort（replay=true，整窗、百万级批）⇒ 采集轮停摆、goroutine 堆积 183→242，
+// 而全程 m.mu 无慢持锁 ⇒ 在途阻塞。修法：摄取路径只登记待办 + 非阻塞唤醒（O(1)），
+// 排空由**既有**兜底环在路径外执行（不新造环 ⇒ 生命周期/关停沿用已审的那条路径）。
+
+// schedulePendingReplay 登记「该源需排空已 durable 存量」并唤醒兜底环（#56，摄取路径内只做这件事）。
+//
+// 合并语义：同源已有待办 ⇒ 不重复入队、不重复唤醒（避免一次暂停风暴刷出 N 次整窗 replay）。
+// 单飞语义：该源正在排空时新到的被拒**仍会登记**（待办保留），由排空完成后的再唤醒接手；
+// 绝不并发发起同源两次整窗 replay（那会打乱同源投递的串行前提）。
+func (m *Manager) schedulePendingReplay(key string) {
+	if m == nil || key == "" {
+		return
+	}
+	m.replayMu.Lock()
+	if m.replayPending == nil {
+		m.replayPending = make(map[string]struct{})
+	}
+	if m.replayWake == nil {
+		m.replayWake = make(chan struct{}, 1)
+	}
+	_, dup := m.replayPending[key]
+	m.replayPending[key] = struct{}{}
+	wake := m.replayWake
+	m.replayMu.Unlock()
+	m.replayScheduledTotal.Add(1)
+	if dup {
+		return // 合并：同源已有待办 ⇒ 不重复唤醒
+	}
+	select {
+	case wake <- struct{}{}:
+	default: // 已有待唤醒信号：合并
+	}
+}
+
+// replayWakeCh 返回唤醒通道（懒创建；nil 通道在 select 里等价于"永不就绪"，安全）。
+func (m *Manager) replayWakeCh() <-chan struct{} {
+	m.replayMu.Lock()
+	defer m.replayMu.Unlock()
+	if m.replayWake == nil {
+		m.replayWake = make(chan struct{}, 1)
+	}
+	return m.replayWake
+}
+
+// takeScheduledReplay 认领一条「待排空且不在飞」的源（标记在飞、从待办移除）。
+// 全部待办都在飞或没有待办 ⇒ 返回 false（调用方据此结束本轮）。
+func (m *Manager) takeScheduledReplay() (string, bool) {
+	m.replayMu.Lock()
+	defer m.replayMu.Unlock()
+	for key := range m.replayPending {
+		if _, busy := m.replayInflight[key]; busy {
+			continue // 在飞：跳过（待办保留 ⇒ 该源排空结束后由再唤醒接手）
+		}
+		if m.replayInflight == nil {
+			m.replayInflight = make(map[string]struct{})
+		}
+		m.replayInflight[key] = struct{}{}
+		delete(m.replayPending, key)
+		return key, true
+	}
+	return "", false
+}
+
+// finishScheduledReplay 结束一次排空：清在飞标记；若该源在排空期间又被登记（新到的追加被拒）
+// ⇒ 再唤醒一次，让待办在不远的将来被真正处理（不依赖下一轮兜底 tick）。
+func (m *Manager) finishScheduledReplay(key string) {
+	m.replayMu.Lock()
+	delete(m.replayInflight, key)
+	_, stillPending := m.replayPending[key]
+	wake := m.replayWake
+	m.replayMu.Unlock()
+	if !stillPending || wake == nil {
+		return
+	}
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+// abandonScheduledReplay 撤回一次认领（有界执行器因**在飞上限**拒绝发起时）：
+// 待办放回集合、清在飞标记 ⇒ 留待下一轮，绝不把源永久标成"在飞"（否则该源再也不会被排空 ✗）。
+func (m *Manager) abandonScheduledReplay(key string) {
+	m.replayMu.Lock()
+	delete(m.replayInflight, key)
+	if m.replayPending == nil {
+		m.replayPending = make(map[string]struct{})
+	}
+	m.replayPending[key] = struct{}{}
+	m.replayMu.Unlock()
+}
+
+// drainScheduledReplay 排空「因追加被拒而登记」的存量投递（#56）。由兜底环在**路径外**调用。
+//
+// 每源一步都走既有的**有界执行器**（慢源不拖死兜底环：超预算放弃等待、调用在后台跑完并自清在飞）。
+// 返回本轮真正发起排空的源数（观测/回归用）。
+func (m *Manager) drainScheduledReplay() int {
+	handled := 0
+	for {
+		key, ok := m.takeScheduledReplay()
+		if !ok {
+			return handled
+		}
+		p, ok := m.pipeFor(key)
+		if !ok || p == nil {
+			m.finishScheduledReplay(key) // 源已注销：丢弃待办（无管道可排空）
+			continue
+		}
+		handled++
+		started := make(chan struct{})
+		finished := m.runSweepStepBounded(m.sweepStepBudgetOf(), func() {
+			close(started)
+			defer m.finishScheduledReplay(key)
+			_, _ = p.DeliverPending()
+		})
+		if !finished {
+			select {
+			case <-started:
+				// 已发起、只是等待超预算：调用在后台继续，在飞标记由它结束时清除 ✓
+			default:
+				// 未发起（在飞上限拒绝）：撤回认领并**结束本轮** —— 不能就地重试，否则
+				// takeScheduledReplay 会再次认领同一个键 ⇒ 热自旋（在飞上限在被别人占用时
+				// 会持续拒绝，循环永不退出 ✗）。待办已放回集合 ⇒ 下一轮/下一次被拒再试 ✓。
+				m.abandonScheduledReplay(key)
+				return handled
+			}
+		}
+	}
+}
+
+// ScheduledReplayCount 返回「追加被拒 ⇒ 登记待办」的累计次数（#56 观测读数）。
+func (m *Manager) ScheduledReplayCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.replayScheduledTotal.Load()
+}
+
 // RunCapacityResumeLoop 是容量自愈兜底循环（低频、只读账本、ctx 结束即退）。
 func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
 	if ctx == nil {
@@ -6181,6 +6334,11 @@ func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-m.replayWakeCh():
+			// #56：追加被拒的排空请求 —— 在**摄取路径之外**执行（这正是本修复的目的）。
+			// 关停故事：环随 ctx 退出；已发起的排空调用是有界的 WAL 快照投递，其在飞时长与
+			// sweepOnce 的既有有界步骤同源（超预算放弃**等待**、调用后台跑完，不丢数据：条目仍在 WAL）。
+			m.drainScheduledReplay()
 		case <-ticker.C:
 			m.sweepTicks.Add(1) // 心跳：环活着就有读数 ✓（停止 ⇒ 心跳不动 ⇒ 一眼可辨 ✓）
 			// **兜底 recover（连栈）**：一轮内的 panic 不许杀死整个兜底环 ✗（现场"计数恒定"的形态 ✓）；
