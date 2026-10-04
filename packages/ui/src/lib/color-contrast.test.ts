@@ -167,6 +167,45 @@ function mergeLayers(layers: Array<DeclarationMap | undefined>): DeclarationMap 
   return merged
 }
 
+/** 匹配一处 `var(--name)` 或 `var(--name, fallback)`；fallback 可含一层括号（如 color-mix）。 */
+const VAR_PATTERN = /var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*(?:\([^()]*\)[^()]*)*))?\)/
+
+/**
+ * 把变量表里的 `var()` 引用展开成字面量。
+ *
+ * 【为什么必须有这一步】阶段 2 起 token 改成「种子优先、缺省回落基线」的写法：
+ *   `--primary: var(--seed-brand, #158053)`
+ * 于是合并后的表里存的是 `var(...)` 文本而非颜色。不展开就算不出对比度——
+ * 而且会以「解析失败」的形式暴露，这比静默跳过要好。
+ *
+ * 展开按 CSS 语义：`--x` 已定义则取它的值；未定义则用 fallback；两者都没有即报错
+ * （CSS 里这会让整条声明失效，是真实的 bug，不能放过）。fallback 自身可以是 var()，
+ * 故采用「逐处替换、循环直到没有 var()」的迭代展开，并设上限防循环引用。
+ */
+function expandVars(vars: DeclarationMap, where: string): DeclarationMap {
+  const MAX_DEPTH = 32
+
+  const resolveValue = (value: string): string => {
+    let current = value
+    for (let depth = 0; depth < MAX_DEPTH; depth += 1) {
+      const match = VAR_PATTERN.exec(current)
+      if (!match) return current
+      const [token, name, fallback] = match
+      const defined = vars.get(name)
+      const replacement = defined ?? fallback?.trim()
+      if (replacement === undefined) {
+        throw new Error(`${where} 的「${current}」引用了未定义的 ${name}，且未提供缺省值`)
+      }
+      current = current.slice(0, match.index) + replacement + current.slice(match.index + token.length)
+    }
+    throw new Error(`${where} 的「${value}」展开 var() 超过 ${MAX_DEPTH} 层，疑似循环引用`)
+  }
+
+  const expanded: DeclarationMap = new Map()
+  for (const [name, value] of vars) expanded.set(name, resolveValue(value))
+  return expanded
+}
+
 /**
  * 还原某套主题在某明暗下的最终变量表。
  *
@@ -218,9 +257,12 @@ interface ThemeCell {
   vars: DeclarationMap
 }
 
-/** 10 组配色（5 主题 × 2 明暗）的最终变量表。 */
+/** 10 组配色（5 主题 × 2 明暗）的最终变量表；var() 已展开为字面量。 */
 const MATRIX: ThemeCell[] = THEME_NAMES.flatMap((theme) =>
-  MODES.map((mode) => ({ theme, mode, label: `${theme}·${mode}`, vars: cascadeVars(TOKENS, THEMES, theme, mode) })),
+  MODES.map((mode) => {
+    const label = `${theme}·${mode}`
+    return { theme, mode, label, vars: expandVars(cascadeVars(TOKENS, THEMES, theme, mode), label) }
+  }),
 )
 
 // ───────────────────────── 待校验的配对与阈值 ─────────────────────────
