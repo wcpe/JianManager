@@ -107,7 +107,7 @@ export default function DirectorConsolePage() {
             onClick={() => setCarouselOn(!carouselOn)}
             title={carouselOn ? t('director.carouselStop') : t('director.carouselStart')}
             className={cn(
-              'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+              'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-40',
               carouselOn
                 ? 'border-primary/40 bg-primary/10 text-primary'
                 : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
@@ -116,13 +116,15 @@ export default function DirectorConsolePage() {
             {carouselOn ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
             {carouselOn ? t('director.carouselOn') : t('director.carousel')}
           </button>
+          {/* 禁用态一律用 pointer-events-none 屏蔽指针：只降透明度的话 hover 仍会点亮，
+              变成「看起来能点、点了没反应」。cursor 声明在指针事件被屏蔽后必然失效，故不保留。 */}
           <button
             type="button"
             disabled={scenes.length < 2}
             onClick={() => advance()}
             title={t('director.next')}
             aria-label={t('director.next')}
-            className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
           >
             <SkipForward className="size-4" />
           </button>

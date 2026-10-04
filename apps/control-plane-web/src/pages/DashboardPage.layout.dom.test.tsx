@@ -72,7 +72,7 @@ describe('DashboardPage 宽屏布局', () => {
     expect(main).toHaveAttribute('data-slot', 'console-main')
   })
 
-  it('桌面侧栏切换期间锁定布局宽度，动画结束后再落位', async () => {
+  it('折叠只改侧栏自身状态：外壳不再有「锁定宽度 / 动画落位」的第二段状态机', async () => {
     const user = userEvent.setup()
     const { container } = renderWithProviders(<DashboardPage />, { route: '/instances/2' })
 
@@ -80,23 +80,39 @@ describe('DashboardPage 宽屏布局', () => {
     await waitFor(() => expect(container.querySelector('[data-page="instance-console"]')).toBeInTheDocument(), { timeout: 5_000 })
 
     const shell = container.querySelector('[data-slot="console-shell"]') as HTMLElement
+    const sidebar = container.querySelector('[data-slot="console-sidebar"]') as HTMLElement
     const content = container.querySelector('[data-slot="console-content"]') as HTMLElement
 
-    expect(shell).toHaveAttribute('data-sidebar-layout', 'expanded')
-    expect(shell).toHaveAttribute('data-sidebar-motion', 'idle')
+    // 外壳**不得**承载侧栏折叠态：一旦挂上 data-sidebar-target，根组件就必须订阅 sidebarCollapsed，
+    // 于是点一次 logo 要 reconcile 整棵树（实测 532ms）。折叠态只由侧栏自身的 data-state 表达，
+    // 顶栏品牌列的宽度由 index.css 的 :has() 从这里派生。此断言即该约束的守护。
+    expect(shell).not.toHaveAttribute('data-sidebar-target')
+    expect(sidebar).toHaveAttribute('data-state', 'expanded')
     expect(content).toHaveClass('jm-console-content')
+    // FR-496 阶段 6 补丁：`data-sidebar-layout` / `data-sidebar-motion`（320ms 落位状态机）整段退场，
+    // 宽度过渡改由 `.jm-console-sidebar` 自己承担（见 console-shell-motion.test.ts）。
+    expect(shell).not.toHaveAttribute('data-sidebar-layout')
+    expect(shell).not.toHaveAttribute('data-sidebar-motion')
 
     const collapseButtons = screen.getAllByRole('button', { name: '收起侧栏' })
     await user.click(collapseButtons[1]!)
 
-    expect(shell).toHaveAttribute('data-sidebar-target', 'collapsed')
-    expect(shell).toHaveAttribute('data-sidebar-layout', 'expanded')
-    expect(shell).toHaveAttribute('data-sidebar-motion', 'collapsing')
+    // 目标态与侧栏状态同帧切换：没有中间态，也就没有「两段式位移」。
+    expect(shell).not.toHaveAttribute('data-sidebar-target')
+    expect(sidebar).toHaveAttribute('data-state', 'collapsed')
+    // 内容区只是同一 flex 行的兄弟节点，外壳不再给它加任何过渡/平移钩子。
+    expect(shell).not.toHaveAttribute('data-sidebar-motion')
+  })
 
-    await waitFor(() => {
-      expect(shell).toHaveAttribute('data-sidebar-layout', 'collapsed')
-      expect(shell).toHaveAttribute('data-sidebar-motion', 'idle')
-    })
+  it('顶栏是唯一一条：工作区切换在顶栏内，不再另起一行', async () => {
+    const { container } = renderWithProviders(<DashboardPage />, { route: '/instances' })
+
+    const header = container.querySelector('[data-slot="console-header"]') as HTMLElement
+    expect(header).toHaveClass('h-[53px]')
+    expect(container.querySelector('[data-slot="console-workspace-bar"]')).toBeNull()
+    expect(within(header).getByRole('navigation', { name: '工作区' })).toBeInTheDocument()
+    // 顶栏不输出页名：页名只由内容页的大标题承担。
+    expect(container.querySelector('[aria-label="breadcrumb"]')).toBeNull()
   })
 
   it('移动端提供可见导航入口，并能展开导航面板', async () => {

@@ -109,7 +109,7 @@ export function SessionMetrics({ runId }: { runId: number | string }) {
           <button
             key={k}
             type="button"
-            className={`rounded-md border px-2.5 py-1 text-xs ${range === k ? 'bg-primary text-primary-foreground' : 'bg-card'}`}
+            className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${range === k ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-accent/50'}`}
             onClick={() => setRange(k)}
           >
             {t(`botLoad.range.${k}`)}

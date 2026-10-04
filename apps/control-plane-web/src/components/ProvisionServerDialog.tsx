@@ -372,7 +372,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
             <button
               type="submit"
               disabled={provision.isPending || hasErrors(errors) || !!jdkBlockText}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
+              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:pointer-events-none disabled:opacity-50 hover:bg-primary/90"
             >
               {provision.isPending ? t('provision.provisioning') : t('provision.submit')}
             </button>

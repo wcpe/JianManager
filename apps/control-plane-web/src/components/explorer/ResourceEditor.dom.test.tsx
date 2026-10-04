@@ -178,7 +178,12 @@ describe('文件编辑器内容 round-trip（mock 假后端，FR-204）', () => 
     await waitFor(() => expect(editorHeaderSaveButton()).toBeDisabled())
 
     // 关闭编辑器（头部 关闭 X 按钮，title=common.close=关闭）。
-    await user.click(screen.getByRole('button', { name: '关闭' }))
+    // FR-496：Dialog 右上角 X 也走 i18n 后与页脚按钮同名为「关闭」，故按 data-slot 区分。
+    await user.click(
+      screen
+        .getAllByRole('button', { name: '关闭' })
+        .find((el) => el.getAttribute('data-slot') === 'button')!,
+    )
     await waitFor(() => expect(container.querySelector('.cm-content')).toBeNull())
 
     // 重新打开 config.yml → openByPath 走 GET /files/read → 读回刚写入的新内容（含标记 QQQ）。

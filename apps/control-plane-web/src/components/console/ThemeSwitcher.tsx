@@ -42,7 +42,19 @@ export default function ThemeSwitcher({ compact = false }: { compact?: boolean }
   const ModeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor
 
   return (
-    <div className={cn('flex items-center gap-1', compact && 'flex-col gap-1')}>
+    // 【为什么不再 `flex-col`】`flex-direction` **不参与过渡**（瞬跳）：折叠瞬间两个按钮
+    // 从横排跳成纵排，紧接着侧栏宽度过渡又把它们挤一次——布局连算两遍，
+    // 这正是底部那处高度回折的来源。
+    // 折叠态改为「只留主题色按钮，明暗按钮收宽淡出」：横排方向不变，
+    // 用 `grid-cols 0fr→1fr` 收宽度（可过渡），整个过程连续无跳变。
+    // 代价是折叠态少一个明暗入口——明暗仍可在 `/settings` 的「外观」分组改（FR-164）。
+    // `gap` 一并归零并纳入过渡，否则留着的 4px 会把剩下的按钮推偏 2px。
+    <div
+      className={cn(
+        'flex items-center transition-[gap] duration-[var(--motion-duration-slow)] ease-ios',
+        compact ? 'gap-0' : 'gap-1',
+      )}
+    >
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
@@ -81,27 +93,39 @@ export default function ThemeSwitcher({ compact = false }: { compact?: boolean }
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label={t('theme.toggle')}
-            title={t(`theme.${theme}`)}
-            className="grid size-7 shrink-0 place-items-center rounded-md text-foreground/70 transition-colors hover:bg-accent/60 hover:text-foreground"
-          >
-            <ModeIcon className="size-4" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent side="top" align={compact ? 'center' : 'end'} className="w-40">
-          {MODE_OPTIONS.map(({ value, icon: Icon, labelKey }) => (
-            <DropdownMenuItem key={value} onClick={() => setTheme(value)}>
-              <Icon className="size-4" />
-              <span className="flex-1">{t(labelKey)}</span>
-              {theme === value && <Check className="size-3.5" />}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {/* 明暗按钮：折叠态整块收起（宽度归零 + 淡出），而非换行。
+          `inert` 与视觉收起同步——元素仍在 DOM 里，不加它 Tab 与读屏仍会走到它。 */}
+      <div
+        inert={compact ? true : undefined}
+        className={cn(
+          'grid transition-[grid-template-columns,opacity] duration-[var(--motion-duration-slow)] ease-ios',
+          compact ? 'grid-cols-[0fr] opacity-0' : 'grid-cols-[1fr] opacity-100',
+        )}
+      >
+        <div className="overflow-hidden">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('theme.toggle')}
+                title={t(`theme.${theme}`)}
+                className="grid size-7 shrink-0 place-items-center rounded-md text-foreground/70 transition-colors hover:bg-accent/60 hover:text-foreground"
+              >
+                <ModeIcon className="size-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align={compact ? 'center' : 'end'} className="w-40">
+              {MODE_OPTIONS.map(({ value, icon: Icon, labelKey }) => (
+                <DropdownMenuItem key={value} onClick={() => setTheme(value)}>
+                  <Icon className="size-4" />
+                  <span className="flex-1">{t(labelKey)}</span>
+                  {theme === value && <Check className="size-3.5" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
     </div>
   )
 }

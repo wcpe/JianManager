@@ -7,6 +7,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: 5174,
+    // 监听所有网络接口：默认 127.0.0.1 只有本机可达，而外壳预览需要从局域网设备查看
+    // （手机/平板验证响应式、同事评审）。这是纯本地开发服务器，不含生产数据。
+    host: true,
   },
   build: {
     outDir: 'dist',

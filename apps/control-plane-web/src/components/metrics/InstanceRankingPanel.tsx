@@ -156,7 +156,7 @@ export function InstanceRankingPanel({ nodes }: InstanceRankingPanelProps) {
                 key={row.instanceUuid}
                 tabIndex={0}
                 data-testid="ranking-row"
-                className="cursor-pointer"
+                className="cursor-pointer transition-colors hover:bg-accent/50"
                 onClick={() => navigate(`/instances/${row.instanceId}`)}
               >
                 <TableCell className={`tabular-nums ${rankClass(row.rank)}`}>{row.rank}</TableCell>

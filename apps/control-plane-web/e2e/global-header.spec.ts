@@ -3,10 +3,12 @@ import { login } from './helpers'
 
 /**
  * FR-162 全局页眉/顶栏 · 单机（Playwright + mock 模式）验收。
- * 覆盖：面包屑 + 搜索入口 + 集群概览徽标 + 通知铃铛 + 账户菜单。
+ * 覆盖：工作区切换 + 搜索入口 + 集群概览徽标 + 通知铃铛 + 账户菜单。
  * 徽标交互按 FR-294 改版：点击**弹缩略浮窗**（不再直接跳筛选页），
  * 浮窗底部「查看全部」才跳对应筛选页——本测试随之更新（v0.15.0 验收 G2）。
  * （搜索本期为命令面板入口 FR-241；通知合并 FR-216）
+ * FR-496 阶段 6 补丁：顶栏面包屑整段移除、工作区切换并回顶栏（唯一一条 53px 通栏），
+ * 本测试的 banner 断言随之改成「工作区切换在顶栏内 + 无面包屑」。
  * 证据落 .tmp/acceptance/FR-162/。
  */
 
@@ -14,7 +16,9 @@ test('FR-162 顶栏 集群徽标+搜索+通知+账户 与徽标浮窗（FR-294�
   await login(page)
 
   const banner = page.getByRole('banner')
-  await expect(banner.getByRole('navigation', { name: 'breadcrumb' })).toBeVisible() // 面包屑
+  // FR-496 阶段 6 补丁：顶栏只剩「工作区切换 + 全局工具」，不再输出页名/面包屑。
+  await expect(banner.getByRole('navigation', { name: 'breadcrumb' })).toHaveCount(0)
+  await expect(banner.getByRole('navigation', { name: '工作区' })).toBeVisible()
   await expect(banner.getByRole('button', { name: /搜索服务器/ })).toBeVisible() // 搜索入口
   await expect(banner.getByRole('button', { name: /在线节点/ })).toBeVisible() // 集群徽标
   await expect(banner.getByRole('button', { name: /运行服务器/ })).toBeVisible()

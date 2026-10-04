@@ -1,51 +1,58 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router'
 import { Suspense, lazy, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { PageSkeleton } from '@jianmanager/ui/components/layout'
 import { useAuthStore } from '@/stores/auth'
+import { ROUTE_CHUNKS } from '@/lib/route-chunks'
 import WorkspaceEmpty from './WorkspaceEmpty'
 
-const OverviewPage = lazy(() => import('@/pages/OverviewPage'))
-const MonitoringPage = lazy(() => import('@/pages/MonitoringPage'))
-const NodesPage = lazy(() => import('@/pages/NodesPage'))
-const InstancesPage = lazy(() => import('@/pages/InstancesPage'))
-const InstanceDetailPage = lazy(() => import('@/pages/InstanceDetailPage'))
-const InstanceFilesPage = lazy(() => import('@/pages/InstanceFilesPage'))
-const InstanceWizardPage = lazy(() => import('@/pages/InstanceWizardPage'))
-const ConfigBaselinesPage = lazy(() => import('@/pages/ConfigBaselinesPage'))
-const NetworksPage = lazy(() => import('@/pages/NetworksPage'))
-const PlayersPage = lazy(() => import('@/pages/PlayersPage'))
-const UsersPage = lazy(() => import('@/pages/UsersPage'))
-const PermissionsPage = lazy(() => import('@/pages/PermissionsPage'))
-const GroupsPage = lazy(() => import('@/pages/GroupsPage'))
-const SchedulesPage = lazy(() => import('@/pages/SchedulesPage'))
-const BackupsPage = lazy(() => import('@/pages/BackupsPage'))
-const BackupStoragesPage = lazy(() => import('@/pages/BackupStoragesPage'))
-const ArtifactStoragesPage = lazy(() => import('@/pages/ArtifactStoragesPage'))
-const ArtifactVersionsPage = lazy(() => import('@/pages/ArtifactVersionsPage'))
-const BotsPage = lazy(() => import('@/pages/BotsPage'))
-const BotLoadSessionPage = lazy(() => import('@/pages/BotLoadSessionPage'))
-const AuditPage = lazy(() => import('@/pages/AuditPage'))
-const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
-const RuntimeAssetsPage = lazy(() => import('@/pages/RuntimeAssetsPage'))
-const AlertsPage = lazy(() => import('@/pages/AlertsPage'))
-const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
-const StoragePage = lazy(() => import('@/pages/StoragePage'))
-const LogsPage = lazy(() => import('@/pages/LogsPage'))
-const StatisticsPage = lazy(() => import('@/pages/StatisticsPage'))
-const ClientChannelsPage = lazy(() => import('@/pages/ClientChannelsPage'))
-const ProtectionCenterPage = lazy(() => import('@/pages/ProtectionCenterPage'))
-const ClientDistRedirect = lazy(() => import('@/pages/ClientDistRedirect'))
-const ClientPublishPage = lazy(() => import('@/pages/ClientPublishPage'))
-const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
-const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
-const AgentTokensPage = lazy(() => import('@/pages/AgentTokensPage'))
-const McpActivityPage = lazy(() => import('@/pages/McpActivityPage'))
-const AgentCallLogsPage = lazy(() => import('@/pages/AgentCallLogsPage'))
-const LicensesPage = lazy(() => import('@/pages/LicensesPage'))
-const TasksPage = lazy(() => import('@/pages/TasksPage'))
-const NotificationCenterPage = lazy(() => import('@/pages/NotificationCenterPage'))
-const SuperWorkbenchPage = lazy(() => import('./SuperWorkbenchPage'))
-const DirectorConsolePage = lazy(() => import('./DirectorConsolePage'))
+/**
+ * 路由表的懒加载声明（FR-496 阶段 6 补丁）：加载器一律从 `@/lib/route-chunks` 取，
+ * 不再各写一份 `import('@/pages/X')`——预取器查的就是同一张表，两处同源才能保证
+ * 「hover 预取过的 chunk」与「点下去要等的 chunk」是同一个（否则预取会静默失效）。
+ */
+const OverviewPage = lazy(ROUTE_CHUNKS['/'])
+const MonitoringPage = lazy(ROUTE_CHUNKS['/monitor'])
+const NodesPage = lazy(ROUTE_CHUNKS['/nodes'])
+const InstancesPage = lazy(ROUTE_CHUNKS['/instances'])
+const InstanceDetailPage = lazy(ROUTE_CHUNKS['/instances/:id'])
+const InstanceFilesPage = lazy(ROUTE_CHUNKS['/instances/:id/files'])
+const InstanceWizardPage = lazy(ROUTE_CHUNKS['/instances/new'])
+const ConfigBaselinesPage = lazy(ROUTE_CHUNKS['/config-baselines'])
+const NetworksPage = lazy(ROUTE_CHUNKS['/networks'])
+const PlayersPage = lazy(ROUTE_CHUNKS['/players'])
+const UsersPage = lazy(ROUTE_CHUNKS['/users'])
+const PermissionsPage = lazy(ROUTE_CHUNKS['/permissions'])
+const GroupsPage = lazy(ROUTE_CHUNKS['/groups'])
+const SchedulesPage = lazy(ROUTE_CHUNKS['/schedules'])
+const BackupsPage = lazy(ROUTE_CHUNKS['/backups'])
+const BackupStoragesPage = lazy(ROUTE_CHUNKS['/backup-storages'])
+const ArtifactStoragesPage = lazy(ROUTE_CHUNKS['/artifact-storages'])
+const ArtifactVersionsPage = lazy(ROUTE_CHUNKS['/artifact-versions'])
+const BotsPage = lazy(ROUTE_CHUNKS['/bots'])
+const BotLoadSessionPage = lazy(ROUTE_CHUNKS['/bots/sessions/:id'])
+const AuditPage = lazy(ROUTE_CHUNKS['/audit'])
+const TemplatesPage = lazy(ROUTE_CHUNKS['/templates'])
+const RuntimeAssetsPage = lazy(ROUTE_CHUNKS['/runtime-assets'])
+const AlertsPage = lazy(ROUTE_CHUNKS['/alerts'])
+const SettingsPage = lazy(ROUTE_CHUNKS['/settings'])
+const StoragePage = lazy(ROUTE_CHUNKS['/storage'])
+const LogsPage = lazy(ROUTE_CHUNKS['/logs'])
+const StatisticsPage = lazy(ROUTE_CHUNKS['/statistics'])
+const ClientChannelsPage = lazy(ROUTE_CHUNKS['/client-channels'])
+const ProtectionCenterPage = lazy(ROUTE_CHUNKS['/client-dist-ops'])
+const ClientDistRedirect = lazy(ROUTE_CHUNKS['/client-dist-security'])
+const ClientPublishPage = lazy(ROUTE_CHUNKS['/client-channels/:id/publish'])
+const DatabasePage = lazy(ROUTE_CHUNKS['/database'])
+const SystemUpdatePage = lazy(ROUTE_CHUNKS['/system-update'])
+const AgentTokensPage = lazy(ROUTE_CHUNKS['/agent-tokens'])
+const McpActivityPage = lazy(ROUTE_CHUNKS['/mcp-activity'])
+const AgentCallLogsPage = lazy(ROUTE_CHUNKS['/agent-call-logs'])
+const LicensesPage = lazy(ROUTE_CHUNKS['/licenses'])
+const TasksPage = lazy(ROUTE_CHUNKS['/tasks'])
+const NotificationCenterPage = lazy(ROUTE_CHUNKS['/notifications'])
+const SuperWorkbenchPage = lazy(ROUTE_CHUNKS['/super'])
+const DirectorConsolePage = lazy(ROUTE_CHUNKS['/director'])
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
 const ROLE_PLATFORM_ADMIN = 10
@@ -83,8 +90,9 @@ export default function Workspace() {
 
   // 超级工作台全幅（自带实例库 + 画布），不套统一内边距与滚动壳。
   if (location.pathname === '/super' || location.pathname.startsWith('/super/')) {
+    // FR-496 阶段 6 补丁：fallback 从「一行加载中文字」换成同壳骨架（工具壳，无外层留白/页头）。
     return (
-      <Suspense fallback={<div className="p-6 text-muted-foreground">{t('common.loading')}</div>}>
+      <Suspense fallback={<PageSkeleton variant="tool" aria-label={t('common.loading')} />}>
         <SuperWorkbenchPage />
       </Suspense>
     )
@@ -93,21 +101,33 @@ export default function Workspace() {
   // 导播台全幅（场景舞台 + 缩略图条），不套统一内边距与滚动壳。
   if (location.pathname === '/director' || location.pathname.startsWith('/director/')) {
     return (
-      <Suspense fallback={<div className="p-6 text-muted-foreground">{t('common.loading')}</div>}>
+      <Suspense fallback={<PageSkeleton variant="tool" aria-label={t('common.loading')} />}>
         <DirectorConsolePage />
       </Suspense>
     )
   }
 
   return (
-    <Suspense fallback={<div className="p-6 text-muted-foreground">{t('common.loading')}</div>}>
-      {/* 实例路由走视口自适应骨架（FR-422）：外层不滚动，滚动收口到页内卡片；
-          顶栏与 Tab 栏因此常驻可见，底部不再随屏幕变大而留白。其他路由保持整页滚动不变。 */}
-      <div className={isFixedViewportRoute ? 'jm-workspace-bg flex h-full w-full flex-col overflow-hidden p-3' : 'jm-workspace-bg h-full w-full overflow-auto p-3 [scrollbar-gutter:stable] sm:p-5 lg:p-6'}>
-        <div
-          key={routeKey}
-          data-slot="workspace-route-transition"
-          className={isFixedViewportRoute ? 'jm-route-transition flex min-h-0 flex-1 flex-col' : 'jm-route-transition min-h-full'}
+    // 实例路由走视口自适应骨架（FR-422）：外层不滚动，滚动收口到页内卡片；
+    // 顶栏与 Tab 栏因此常驻可见，底部不再随屏幕变大而留白。其他路由保持整页滚动不变。
+    <div className={isFixedViewportRoute ? 'jm-workspace-bg flex h-full w-full flex-col overflow-hidden p-3' : 'jm-workspace-bg h-full w-full overflow-auto p-3 [scrollbar-gutter:stable] sm:p-5 lg:p-6'}>
+      <div
+        key={routeKey}
+        data-slot="workspace-route-transition"
+        className={isFixedViewportRoute ? 'jm-route-transition flex min-h-0 flex-1 flex-col' : 'jm-route-transition min-h-full'}
+      >
+        {/* FR-496 阶段 6 补丁：Suspense 边界收进路由子树**内部**。
+            此前边界包住整个工作区壳，切页时 fallback 把外壳（背景、内边距、滚动容器、路由进场容器）
+            一并替换掉，于是「骨架 → 真实页面」会整页跳动一次；现在外壳常驻，只有路由内容在
+            「页面骨架 ↔ 真实页面」之间切换，骨架与页面共用同一套留白与滚动模型。
+            骨架壳态跟随当前路由：实例控制台/权限页是固定视口态，其余是整页滚动态。 */}
+        <Suspense
+          fallback={
+            <PageSkeleton
+              variant={isFixedViewportRoute ? 'fixed' : 'default'}
+              aria-label={t('common.loading')}
+            />
+          }
         >
           <Routes>
             <Route index element={<OverviewPage />} />
@@ -171,8 +191,8 @@ export default function Workspace() {
             <Route path="licenses" element={<RequirePlatformAdmin><LicensesPage /></RequirePlatformAdmin>} />
             <Route path="*" element={<WorkspaceEmpty />} />
           </Routes>
-        </div>
+        </Suspense>
       </div>
-    </Suspense>
+    </div>
   )
 }

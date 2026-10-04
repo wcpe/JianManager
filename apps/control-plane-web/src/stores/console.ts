@@ -4,6 +4,8 @@ import { create } from 'zustand'
 const SIDEBAR_COLLAPSED_KEY = 'sidebar.collapsed'
 const COLLAPSED_GROUPS_KEY = 'sidebar.collapsedGroups'
 const SELECTED_NODE_KEY = 'sidebar.selectedNodeId'
+/** 上次选择的工作区键（FR-496 阶段 6）。 */
+const LAST_WORKSPACE_KEY = 'console.lastWorkspace'
 
 /** 安全读取布尔持久值（非 DOM/解析失败回退默认）。 */
 function loadBool(key: string, fallback: boolean): boolean {
@@ -33,6 +35,13 @@ function loadSelectedNode(): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/** 安全读取字符串持久值（空串按「未设置」处理，避免写入空值后永久覆盖默认）。 */
+function loadString(key: string, fallback: string | null): string | null {
+  if (typeof localStorage === 'undefined') return fallback
+  const value = localStorage.getItem(key)
+  return value ? value : fallback
+}
+
 function persist(key: string, value: string | null): void {
   if (typeof localStorage === 'undefined') return
   if (value === null) localStorage.removeItem(key)
@@ -44,6 +53,8 @@ function persist(key: string, value: string | null): void {
  * 存「页眉节点作用域」「侧栏折叠/分组折叠态」。实例视图一律由 `/instances/:id`
  * 深链承载，避免 URL 与工作区状态双轨漂移。侧栏折叠态/分组态/节点作用域持久化 localStorage（FR-131/FR-268）。
  * 打开实例后的画布/卡片/预设状态由 `stores/workspace.ts` 承载（FR-166 可组合卡片工作区）。
+ * 当前工作区**不由本 store 承载**（它由路由决定，见 `workspace-navigation.ts` 的 `workspaceOfPath`）；
+ * 这里只记「上次选择的工作区」做高亮兜底（FR-496 阶段 6）。
  */
 interface ConsoleState {
   /** 页眉节点作用域：null = 全部节点，否则为某节点 id（持久） */
@@ -54,6 +65,12 @@ interface ConsoleState {
   sidebarCollapsed: boolean
   /** 全局命令面板是否打开（FR-241 Ctrl+K，不持久）。 */
   commandPaletteOpen: boolean
+  /**
+   * 上次选择的工作区键（FR-496 阶段 6，持久）。
+   * 类型故意保持 `string`：工作区键的唯一真源在导航数据层，store 不该反向依赖它；
+   * 消费方（`WorkspaceSidebar`）会按当前可见工作区列表校验，陈旧值自然失效。
+   */
+  lastWorkspaceKey: string | null
   setSelectedNodeId: (nodeId: number | null) => void
   /** 切换侧栏分组展开/折叠（FR-061/FR-131）。 */
   toggleGroup: (key: string) => void
@@ -61,6 +78,8 @@ interface ConsoleState {
   toggleSidebar: () => void
   /** 打开/关闭全局命令面板（FR-241）。 */
   setCommandPaletteOpen: (open: boolean) => void
+  /** 记住用户选过的工作区（FR-496 阶段 6）：仅供顶栏在路由判不出工作区时兜底高亮。 */
+  setLastWorkspaceKey: (key: string) => void
 }
 
 export const useConsoleStore = create<ConsoleState>((set) => ({
@@ -68,6 +87,7 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
   collapsedGroups: loadJSON<Record<string, boolean>>(COLLAPSED_GROUPS_KEY, {}),
   sidebarCollapsed: loadBool(SIDEBAR_COLLAPSED_KEY, false),
   commandPaletteOpen: false,
+  lastWorkspaceKey: loadString(LAST_WORKSPACE_KEY, null),
   setSelectedNodeId: (nodeId) => {
     persist(SELECTED_NODE_KEY, nodeId === null ? null : String(nodeId))
     set({ selectedNodeId: nodeId })
@@ -85,4 +105,8 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
       return { sidebarCollapsed: next }
     }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+  setLastWorkspaceKey: (key) => {
+    persist(LAST_WORKSPACE_KEY, key)
+    set({ lastWorkspaceKey: key })
+  },
 }))

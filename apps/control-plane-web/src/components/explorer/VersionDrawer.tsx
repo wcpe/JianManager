@@ -101,9 +101,10 @@ export default function VersionDrawer({
                         >
                           {t('fileVersions.diffTo')}
                         </button>
+                        {/* 回滚按钮禁用时屏蔽指针事件，否则 hover:underline 仍会触发下划线，看着像能点。 */}
                         <button
                           type="button"
-                          className="text-amber-600 hover:underline disabled:opacity-50"
+                          className="text-amber-600 hover:underline disabled:pointer-events-none disabled:opacity-50"
                           disabled={rollbackMut.isPending}
                           onClick={() => setRollbackTarget(v.id)}
                         >
