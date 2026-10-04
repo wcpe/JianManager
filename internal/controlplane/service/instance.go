@@ -537,7 +537,13 @@ var instanceSortColumns = map[string]string{
 // 另加自由文本 Query（名称子串）、Sort/Order、Page/PageSize。
 type InstanceSearchParams struct {
 	InstanceFilter
-	Query    string
+	Query string
+	// UUID 按实例 uuid 精确查。
+	//
+	// 用途：前端持有的是 URL 里的实例 uuid（下钻深链 `?instance=<uuid>`），但下游接口要的是
+	// 数字 id（例如进程详情按 instanceId 取）。此前前端只能拉全量实例列表再本地 find，
+	// 千级规模下约 1MB/轮且带 30 秒兜底轮询——加这个参数后一次精确查询即可。
+	UUID     *string
 	Sort     string
 	Order    string
 	Page     int
@@ -573,18 +579,25 @@ type NodeCount struct {
 }
 
 // InstanceAggregate 实例维度计数（FR-247）：供前端筛选 chip / 分组头不拉全集即得计数。
-// ByStatus/ByRole 含全部枚举键（零补 0）；ByNode 仅含出现的节点（按 nodeId 升序）。
+// ByStatus/ByRole/ByProcessType 含全部枚举键（零补 0）；ByNode 仅含出现的节点（按 nodeId 升序）。
+//
+// 加 ByProcessType 的动机：统计页原先为画「按进程类型分布」而拉全量实例列表（千级约 1MB + 30 秒
+// 兜底轮询）。聚合里补上这一维后，前端不必再为一张分布图付全量代价。
 type InstanceAggregate struct {
-	Total    int64            `json:"total"`
-	ByStatus map[string]int64 `json:"byStatus"`
-	ByNode   []NodeCount      `json:"byNode"`
-	ByRole   map[string]int64 `json:"byRole"`
+	Total         int64            `json:"total"`
+	ByStatus      map[string]int64 `json:"byStatus"`
+	ByNode        []NodeCount      `json:"byNode"`
+	ByRole        map[string]int64 `json:"byRole"`
+	ByProcessType map[string]int64 `json:"byProcessType"`
 }
 
 // applySearchFilters 把可下推维度附加到查询；env/tag 用引号定界 LIKE 精确下推到 SQL
 // （分页路径不能再 Go 后置过滤，否则破坏 page/total 一致性），并加名称子串 q。
 // 不含 GroupID / 权限作用域（由 scopedBase 按管理员/非管理员分别 JOIN）。
 func applySearchFilters(q *gorm.DB, p InstanceSearchParams) *gorm.DB {
+	if p.UUID != nil {
+		q = q.Where("instances.uuid = ?", *p.UUID)
+	}
 	if p.NodeID != nil {
 		q = q.Where("instances.node_id = ?", *p.NodeID)
 	}
@@ -712,7 +725,11 @@ func (s *InstanceService) SearchInstances(scope []uint, p InstanceSearchParams) 
 
 // AggregateInstances 在同筛选 + 作用域下按状态/节点/角色分组计数（FR-247）。
 func (s *InstanceService) AggregateInstances(scope []uint, p InstanceSearchParams) (InstanceAggregate, error) {
-	agg := InstanceAggregate{ByStatus: map[string]int64{}, ByRole: map[string]int64{}}
+	agg := InstanceAggregate{
+		ByStatus:      map[string]int64{},
+		ByRole:        map[string]int64{},
+		ByProcessType: map[string]int64{},
+	}
 	// 预置全枚举键为 0，前端 chip 不缺键。
 	for _, st := range []model.InstanceStatus{
 		model.InstanceStatusStopped, model.InstanceStatusStarting, model.InstanceStatusRunning,
@@ -725,6 +742,11 @@ func (s *InstanceService) AggregateInstances(scope []uint, p InstanceSearchParam
 		model.InstanceRoleUniversal, model.InstanceRoleBeacon,
 	} {
 		agg.ByRole[string(r)] = 0
+	}
+	for _, pt := range []model.ProcessType{
+		model.ProcessTypeDirect, model.ProcessTypeDaemon, model.ProcessTypeDocker, model.ProcessTypeRCON,
+	} {
+		agg.ByProcessType[string(pt)] = 0
 	}
 	if scope != nil && len(scope) == 0 {
 		return agg, nil
@@ -755,6 +777,15 @@ func (s *InstanceService) AggregateInstances(scope []uint, p InstanceSearchParam
 	}
 	for _, r := range roleRows {
 		agg.ByRole[r.Grp] = r.Cnt
+	}
+
+	var ptRows []countRow
+	if err := s.scopedBase(scope, p).Select("instances.process_type as grp, count(*) as cnt").
+		Group("instances.process_type").Scan(&ptRows).Error; err != nil {
+		return agg, fmt.Errorf("按进程类型聚合失败: %w", err)
+	}
+	for _, r := range ptRows {
+		agg.ByProcessType[r.Grp] = r.Cnt
 	}
 
 	if err := s.scopedBase(scope, p).Select("instances.node_id as node_id, count(*) as cnt").

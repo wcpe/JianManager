@@ -71,12 +71,27 @@ type BotListQuery struct {
 	PageSize int
 }
 
+// BotListItem Bot 列表项：在 model.Bot 之上补一个实例名。
+//
+// 【为什么用服务层视图而不是给 model.Bot 加字段】model 是 AutoMigrate 的真源，
+// 加一个非持久化字段会被一并映射成列。
+//
+// 【可见性说明——有意为之的取舍，决策记录】instanceName 会把实例名直接暴露给能读 Bot 列表的人，
+// 而本列表当前没有按组收敛 scope。我们**显式接受**这一扩大，理由：改造前前端为了在列表里显示
+// 实例名，是直接拉取**全量实例列表**（`GET /instances`，千级约 1MB 且带 30s 兜底轮询），
+// 那等于把全部实例清单交给每一个能打开本页的人——现在暴露的反而更少、更窄。
+// 若将来为本列表补上 scope 收敛，应同步复查此处。
+type BotListItem struct {
+	model.Bot
+	InstanceName string `json:"instanceName,omitempty"`
+}
+
 // BotListResult 分页列表结果。
 type BotListResult struct {
-	Items    []model.Bot `json:"items"`
-	Total    int64       `json:"total"`
-	Page     int         `json:"page"`
-	PageSize int         `json:"pageSize"`
+	Items    []BotListItem `json:"items"`
+	Total    int64         `json:"total"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"pageSize"`
 }
 
 // BotSummaryGroup 分组聚合的单组计数。
@@ -207,7 +222,13 @@ func (s *BotService) ListPaged(query BotListQuery, scopeIDs []uint, scope bool) 
 	// 列表也回填实时状态：否则重连/连接的 Bot 在聚合页一直显示 connecting。
 	s.refreshStatuses(items)
 
-	return &BotListResult{Items: items, Total: total, Page: page, PageSize: size}, nil
+	// 实例名已在 Preload("Instance.Node") 里，此处只是拷进视图，不产生额外查询。
+	out := make([]BotListItem, len(items))
+	for i := range items {
+		out[i] = BotListItem{Bot: items[i], InstanceName: items[i].Instance.Name}
+	}
+
+	return &BotListResult{Items: out, Total: total, Page: page, PageSize: size}, nil
 }
 
 // refreshStatuses 按节点聚合批量拉取各 Bot 的实时状态并回填 DB（每个 Worker 仅一次 ListBots）。

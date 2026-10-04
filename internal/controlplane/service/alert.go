@@ -531,9 +531,22 @@ type EventFilter struct {
 	PageSize     int        // 每页条数，<=0 取默认 50；FR-149
 }
 
+// AlertEventView 告警事件列表项：在 model.AlertEvent 之上补一个实例名（仅当规则维度是实例）。
+//
+// 【为什么要判定 rule.TargetType】事件的 TargetID 是「规则目标 id」，含义随规则维度而变：
+// instance 维度才是实例 id，node 维度是节点 id。不判定就会把节点 id 当成实例 id 去查名。
+//
+// 【可见性说明——有意为之的取舍，决策记录】本端点没有 scope 收敛，加 instanceName 会把实例名
+// 交给每个能读告警事件的人。我们显式接受：改造前前端为了显示实例名直接拉**全量实例列表**
+// （千级约 1MB + 30 秒兜底轮询），对调用者暴露的实例清单更完整。将来若补 scope 收敛，同步复查此处。
+type AlertEventView struct {
+	model.AlertEvent
+	InstanceName string `json:"instanceName,omitempty"`
+}
+
 // ListEvents 返回告警事件分页列表（FR-011 + FR-085 多维筛选 + FR-149 关键字/时间范围/分页）。
-// 预加载规则名；返回当前页与命中总数。
-func (s *AlertService) ListEvents(f EventFilter) ([]model.AlertEvent, int64, error) {
+// 预加载规则名；为 instance 维度的事件回填实例名；返回当前页与命中总数。
+func (s *AlertService) ListEvents(f EventFilter) ([]AlertEventView, int64, error) {
 	page := f.Page
 	if page < 1 {
 		page = 1
@@ -576,10 +589,42 @@ func (s *AlertService) ListEvents(f EventFilter) ([]model.AlertEvent, int64, err
 		Limit(pageSize).Offset((page - 1) * pageSize).Find(&events).Error; err != nil {
 		return nil, 0, err
 	}
-	if events == nil {
-		events = []model.AlertEvent{}
+	views := make([]AlertEventView, len(events))
+	for i := range events {
+		views[i] = AlertEventView{AlertEvent: events[i]}
 	}
-	return events, total, nil
+
+	// 一次主键 IN 查询回填实例名，避免按行查（N+1）。**必须先用 rule.TargetType 判定**：
+	// 事件的 TargetID 语义随规则维度而变，node 维度的值不是实例 id。
+	ids := make([]uint, 0, len(events))
+	seen := make(map[uint]struct{}, len(events))
+	for i := range events {
+		if events[i].Rule.TargetType != "instance" || events[i].TargetID == 0 {
+			continue
+		}
+		if _, ok := seen[events[i].TargetID]; ok {
+			continue
+		}
+		seen[events[i].TargetID] = struct{}{}
+		ids = append(ids, events[i].TargetID)
+	}
+	if len(ids) > 0 {
+		// 实例是软删除：已删实例查不到名字 → 留空，由前端回退显示 #id。
+		// 刻意不用 Unscoped()，那会把已删实例的存在也暴露出去。
+		var insts []model.Instance
+		s.db.Select("id", "name").Where("id IN ?", ids).Find(&insts)
+		nameByID := make(map[uint]string, len(insts))
+		for _, in := range insts {
+			nameByID[in.ID] = in.Name
+		}
+		for i := range views {
+			if views[i].Rule.TargetType == "instance" {
+				views[i].InstanceName = nameByID[views[i].TargetID]
+			}
+		}
+	}
+
+	return views, total, nil
 }
 
 // Acknowledge 确认/认领一条告警事件（FR-085）。记录确认人与时间，并置为已读。
