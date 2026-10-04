@@ -182,3 +182,84 @@ func TestRollingReclaimBoundedAndHoldSafe(t *testing.T) {
 	require.NotNil(t, entry)
 	require.Len(t, entry.RecoveryRefs, refsBefore, "hold 期间不得新增任何段（不许绕开人工约束 ✓）")
 }
+
+// newReclaimChainFixture 造一条**首尾相接**的陈旧段链（#64 现场形态：段数 ≫ 单轮步数）：
+// 第 i 段覆盖 [i*w, (i+1)*w)，末段末端 = N*w = 已确认投递水位 ✓（位置**始终被覆盖** ⇒ 只能一段一跳 ✓）。
+// tune 非 nil 时先改 Options（用于验证配置面上的步数上界 ✓）。
+func newReclaimChainFixture(t *testing.T, n int, tune func(*Options)) (*Manager, SourceConfig, *pipeline.Pipeline) {
+	t.Helper()
+	client, _ := newProjectionVL(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "latest.log")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+	src := SourceConfig{
+		LogSourceID: "inst:chain", SourceGeneration: "g1", Path: path,
+		StorageNamespace: "inst:chain", UTCDay: runtimeTestUTCDay(),
+	}
+	cat := catalog.New(catalog.NewMemJournal())
+	opts := Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{src}}
+	if tune != nil {
+		tune(&opts)
+	}
+	m, err := newTestManager(t, opts)
+	require.NoError(t, err)
+	m.SetSelfHealInterval(time.Nanosecond)
+	p := m.pipes[src.LogSourceID+"/"+src.SourceGeneration]
+	require.NotNil(t, p)
+	const width = uint64(100_000)
+	total := uint64(n) * width
+	identity := logtypes.SourceIdentity{LogSourceID: src.LogSourceID, SourceGeneration: src.SourceGeneration, ParserVersion: "v1"}
+	require.NoError(t, p.WAL().Append(logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 0, End: total},
+		"2026-10-05T00:00:00Z", "2026-10-05T00:00:01Z", "INFO", "stdout", "chain")))
+	require.NoError(t, p.WAL().Commit())
+	require.NoError(t, p.WAL().RecordHTTPResult(acquire.DeliveryResult{StartPos: 0, EndPos: total, HTTPStatus: 200}))
+	for i := 0; i < n; i++ {
+		segID := fmt.Sprintf("projection-recovery-chain-%d", i)
+		require.NoError(t, p.BindRecoverySegment(segID, "projection://chain", uint64(i)*width, uint64(i+1)*width))
+		require.NoError(t, p.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", ""))
+		require.NoError(t, p.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", "projection:chain"))
+	}
+	require.NoError(t, p.Ledger().PauseAcquire(p.Key(), "TEST_STALL: backlog over limit (fixture)"))
+	p.SetDelivery(pipeline.FuncHook(func([]logtypes.Event, bool) (pipeline.DeliveryResult, error) {
+		return pipeline.DeliveryResult{}, errors.New("stub: VL 不可用（本用例只考滚动回收）")
+	}))
+	return m, src, p
+}
+
+// TestRollingReclaimEatsSegmentChainWithinStepCap（#64-③）：
+//   - **N=32 段链** ⇒ 单轮 ≤32 步必须吃完（每段一跳 ✓）；
+//   - **N=48 段链** ⇒ 第一轮**如实打满**（`steps == 32` ⇒ 现场据此可辨 ✗✓），第二轮接着吃完 ✓；
+//   - **配置面**：`Options.ReclaimRoll{MaxSteps: 64}` ⇒ N=48 段链**单轮**吃完（热调生效 ✓）。
+func TestRollingReclaimEatsSegmentChainWithinStepCap(t *testing.T) {
+	const width = uint64(100_000)
+
+	// ① N=32：单轮吃完（≤32 步 ✓）。
+	m32, src32, p32 := newReclaimChainFixture(t, 32, nil)
+	m32.selfHealPausedSource(src32, p32)
+	require.Equal(t, 32*width, reclaimOf(t, p32), "32 段链必须在一个单轮内吃完（≤32 步 ✓）")
+	st32 := m32.ReclaimRollingStats()
+	require.LessOrEqual(t, st32.Last.Steps, 32)
+	t.Logf("#64 观测（N=32）：steps=%d firstAdvance=%d advance=%d elapsed=%s",
+		st32.Last.Steps, st32.Last.FirstAdvance, st32.Last.Advanced, st32.Last.Elapsed)
+
+	// ② N=48：第一轮如实打满，第二轮吃完。
+	m48, src48, p48 := newReclaimChainFixture(t, 48, nil)
+	m48.selfHealPausedSource(src48, p48)
+	st48 := m48.ReclaimRollingStats()
+	t.Logf("#64 观测（N=48 第一轮）：steps=%d advance=%d reclaim=%d（链总长 %d）",
+		st48.Last.Steps, st48.Last.Advanced, reclaimOf(t, p48), 48*width)
+	require.Equal(t, 32, st48.Last.Steps, "第一轮必须**如实**打满步数上界（现场可辨 ✓）")
+	// 诚实口径：滚动循环自己推进 32 段（= 步数上界 ✓）；随后 `selfHealPausedSource` 步 3 的
+	// `EvaluateResume`（其内部也调一次 TryReclaim ✓）会再推进最多一段 ⇒ 落在 [32w, 48w) 即正确 ✓。
+	require.GreaterOrEqual(t, reclaimOf(t, p48), 32*width, "至少要走满步数上界（部分推进 ✓）")
+	require.Less(t, reclaimOf(t, p48), 48*width, "第一轮不得吃完（48 段 > 32 步 ⇒ 必然分轮 ✓）")
+	m48.selfHealPausedSource(src48, p48)
+	require.Equal(t, 48*width, reclaimOf(t, p48), "第二轮必须接着吃完（不饿死 ✓）")
+
+	// ③ 配置面：Options.ReclaimRoll{MaxSteps: 64} ⇒ N=48 单轮吃完（现场热调免发版 ✓）。
+	m64, src64, p64 := newReclaimChainFixture(t, 48, func(o *Options) {
+		o.ReclaimRoll = &ReclaimRollTuning{MaxSteps: 64}
+	})
+	m64.selfHealPausedSource(src64, p64)
+	require.Equal(t, 48*width, reclaimOf(t, p64), "配置面提到 64 步后，48 段链必须单轮吃完（旋钮真的生效 ✓）")
+}

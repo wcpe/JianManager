@@ -661,6 +661,8 @@ type Options struct {
 	SweepBackpressureStreak int
 	// SweepInflightCap 是在飞被放弃调用的并发上限（0 ⇒ 默认 4 ✓）。
 	SweepInflightCap int
+	// ReclaimRoll 是**滚动回收**（#63/#64）的单轮上界旋钮（键 log_index.reclaim_roll.*；nil/零值 ⇒ 默认）。
+	ReclaimRoll *ReclaimRollTuning
 	// ResolvePersistBudget 是解算收尾落库在持久化门上的有界等待预算（#59；0 ⇒ 默认 2s）。
 	// 超预算即交办后台并返回（受理即返，最终一致），详见 persistResolveTail 的说明。
 	ResolvePersistBudget time.Duration
@@ -1560,6 +1562,15 @@ func New(opts Options) (*Manager, error) {
 	m.vlNotReady = make(map[string]string)
 	m.defaultCharset = opts.DefaultCharset
 	m.resolvePersistBudget = opts.ResolvePersistBudget
+	// #64：滚动回收的单轮上界（键 log_index.reclaim_roll.*；nil/非正 ⇒ 用默认 32 步 / 1s ✓）。
+	if opts.ReclaimRoll != nil {
+		if opts.ReclaimRoll.MaxSteps > 0 {
+			m.reclaimRollMaxSteps = opts.ReclaimRoll.MaxSteps
+		}
+		if opts.ReclaimRoll.Budget > 0 {
+			m.reclaimRollBudget = opts.ReclaimRoll.Budget
+		}
+	}
 	// #57：cycleMu 持有者观测仪（env 默认关；Options 可显式打开，供回归与现场按需取读数）。
 	m.cycleMuProfile = opts.CycleMuProfile || cycleMuProfileEnabled()
 	m.defaultTimeZone = opts.DefaultTimeZone
@@ -5190,7 +5201,18 @@ func (m *Manager) rollingReclaimRepair(p *pipeline.Pipeline, source SourceConfig
 		}
 	}
 	if steps == 0 && advanced == 0 {
-		return // 无活可做：不打点（避免刷屏 ✗）
+		// 诊断（#64-④）：本轮一步未动 ⇒ 取一次**拒绝原因**（按源去重：同因不刷屏、换因再报 ✓）。
+		// 现场据此分辨三者：「无料（reclaim ≥ delivery，正常终态 ⇒ 不打点 ✓）」
+		// 「CanReclaim 拒（state=… / hold=…）」「配置层 hold（CanCleanup 假）⇒ 连补段都不做」✓。
+		if before.Reclaim < before.Delivery {
+			if _, err := p.TryReclaim(); err != nil && !errors.Is(err, ledger.ErrReclaimNoSegment) {
+				if m.noteSourceError(source.LogSourceID, err.Error()) {
+					slog.Warn("滚动回收：本轮未推进（回收被拒）", "logSourceID", source.LogSourceID,
+						"reclaim", before.Reclaim, "delivery", before.Delivery, "error", err.Error())
+				}
+			}
+		}
+		return // 无活可做：不打"本轮链式推进"行（避免刷屏 ✗）
 	}
 	elapsed := time.Since(start)
 	m.reclaimRollRounds.Add(1)
@@ -5210,10 +5232,24 @@ func (m *Manager) rollingReclaimRepair(p *pipeline.Pipeline, source SourceConfig
 }
 
 const (
-	// defaultReclaimRollMaxSteps / defaultReclaimRollBudget 是单轮有界（#63 裁定：≤8 步 / ≤200ms ✓）。
-	defaultReclaimRollMaxSteps = 8
-	defaultReclaimRollBudget   = 200 * time.Millisecond
+	// defaultReclaimRollMaxSteps / defaultReclaimRollBudget 是单轮有界（#64 裁定：≤32 步 / ≤1s ✓）。
+	//
+	// 为什么从 8 步/200ms 提到 32 步/1s（#63 落地首读）：现场单源已见 `steps=8` **打满** ⇒ 说明
+	// reclaim 与 delivery 之间还夹着 >8 条**首尾相接的陈旧段**（每段一跳 ✓，段可多达几十~上千 ✗）⇒
+	// 每轮只走 8 跳 ⇒ 段链长 N 时需 ⌈N/8⌉ 轮（每轮 10s）。提到 32 步 ⇒ ⌈N/32⌉ 轮；且现场可用
+	// 配置键 `log_index.reclaim_roll.*` 热调（免发版 ✓）；仍属**单轮有界**（1s ≪ 轮周期，且只对有洞的源 ✓）。
+	defaultReclaimRollMaxSteps = 32
+	defaultReclaimRollBudget   = time.Second
 )
+
+// ReclaimRollTuning 是「滚动回收」单轮上界的配置面（#64；零值 ⇒ ingest 侧默认 32 步 / 1s ✓）。
+//
+// 取舍口径（与 ScanTuning 同）：这类旋钮**回退默认永远安全**（最坏只是"下一轮继续滚"✓），
+// 因此非正数一律视为"用默认"，绝不解释成"关闭"✗。
+type ReclaimRollTuning struct {
+	MaxSteps int           // 单轮最多推进步数；≤0 ⇒ 默认
+	Budget   time.Duration // 单轮墙钟上界；≤0 ⇒ 默认
+}
 
 // ReclaimRollSnapshot 是「上一轮滚动回收」的读数（#63-Z3-c；现场读数与红/绿判据同一套数 ✓）。
 type ReclaimRollSnapshot struct {

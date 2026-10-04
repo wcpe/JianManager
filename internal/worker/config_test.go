@@ -379,6 +379,44 @@ func TestScanTuningDefaultsAndOverride(t *testing.T) {
 	assert.Zero(t, zt.Budget)
 }
 
+// TestReclaimRollTuningDefaultsAndOverride（#64 绑定回归）：滚动回收的单轮上界必须可经
+// `log_index.reclaim_roll.*` 热调（现场见 `steps` 打满 ⇒ 需要免发版调参 ✓），
+// 且**非法/非正一律回退"用默认"**（32 步 / 1s ✓）——这类旋钮回退默认永远安全，但绝不能被
+// 配成 0 后解释成"关闭"（那会让滚动回收停摆 ✗）。
+func TestReclaimRollTuningDefaultsAndOverride(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Zero(t, cfg.LogIndex.ReclaimRoll.MaxSteps, "默认 0 ⇒ 交由 ingest 侧默认（32 步）✓")
+	assert.Empty(t, cfg.LogIndex.ReclaimRoll.Budget, "默认空 ⇒ 交由 ingest 侧默认（1s）✓")
+	dflt := cfg.ReclaimRollTuning()
+	require.NotNil(t, dflt)
+	assert.Zero(t, dflt.MaxSteps, "0 ⇒ ingest 侧默认（32）✓")
+	assert.Zero(t, dflt.Budget)
+
+	// 环境变量覆盖（与 yml 等价路径 ✓）。
+	t.Setenv("JIANMANAGER_LOG_INDEX_RECLAIM_ROLL_MAX_STEPS", "64")
+	t.Setenv("JIANMANAGER_LOG_INDEX_RECLAIM_ROLL_BUDGET", "2s")
+	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	tuning2 := cfg2.ReclaimRollTuning()
+	require.NotNil(t, tuning2)
+	assert.Equal(t, 64, tuning2.MaxSteps)
+	assert.Equal(t, 2*time.Second, tuning2.Budget)
+
+	// 非法/非正一律回退"用默认"（安全方向 ✓）：配成 0 / 非法 duration 不得变成"关闭滚动" ✗。
+	zero := &Config{}
+	zero.LogIndex.ReclaimRoll.MaxSteps = 0
+	zero.LogIndex.ReclaimRoll.Budget = "not-a-duration"
+	zt := zero.ReclaimRollTuning()
+	require.NotNil(t, zt)
+	assert.Zero(t, zt.MaxSteps, "0 ⇒ 交由 ingest 侧默认（32）✓")
+	assert.Zero(t, zt.Budget, "非法 duration ⇒ 交由 ingest 侧默认（1s）✓")
+
+	// nil Config ⇒ nil 旋钮（Options 侧按 nil 处理 ✓）。
+	var nilCfg *Config
+	assert.Nil(t, nilCfg.ReclaimRollTuning())
+}
+
 // TestRecoveryQuotaTuningDefaultsAndOverride（方案② 的绑定回归）：默认必须是 4× / 30m ✓，
 // 且可经 log_capacity.recovery_* 覆盖 ✓；非法/非正一律回退默认（安全方向 ✓）。
 func TestRecoveryQuotaTuningDefaultsAndOverride(t *testing.T) {

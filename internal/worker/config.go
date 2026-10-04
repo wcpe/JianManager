@@ -297,6 +297,17 @@ type LogIndexConfig struct {
 	// Scan 段读聚合（publishedClosedForSourceCtx→readSegment）的让路与轮内预算：
 	// 现场点名它是每轮重活的 I/O 大头 ✗，且**既不让路也无上界** ⇒ `pollOnce` 的 WaitGroup 等分钟级。
 	Scan LogIndexScanConfig `mapstructure:"scan"`
+	// ReclaimRoll 滚动回收（#63/#64）的单轮上界：现场见 `steps` 打满 ⇒ 需要热调（免发版 ✓）。
+	ReclaimRoll LogIndexReclaimRollConfig `mapstructure:"reclaim_roll"`
+}
+
+// LogIndexReclaimRollConfig 是**滚动回收**的单轮上界（键 `log_index.reclaim_roll.*`）。
+//
+// 语义：单次自愈调用里"探测→补段→推进"最多做多少步、最多花多久。**非正/非法一律回退默认**
+// （32 步 / 1s ✓）：这类旋钮回退默认永远安全（最坏只是下一轮继续滚 ✓），绝不解释成"关闭"✗。
+type LogIndexReclaimRollConfig struct {
+	MaxSteps int    `mapstructure:"max_steps"`
+	Budget   string `mapstructure:"budget"`
 }
 
 // LogIndexScanConfig 是**段读聚合**的让路与轮内预算（键 `log_index.scan.*`）。
@@ -1234,6 +1245,21 @@ func (c *Config) ScanTuning() ingest.ScanTuning {
 	return tuning
 }
 
+// ReclaimRollTuning 把 `log_index.reclaim_roll.*` 收敛为 ingest 的滚动回收旋钮（零值 ⇒ ingest 默认 ✓）。
+func (c *Config) ReclaimRollTuning() *ingest.ReclaimRollTuning {
+	if c == nil {
+		return nil
+	}
+	tuning := ingest.ReclaimRollTuning{}
+	if c.LogIndex.ReclaimRoll.MaxSteps > 0 {
+		tuning.MaxSteps = c.LogIndex.ReclaimRoll.MaxSteps
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.ReclaimRoll.Budget)); err == nil && d > 0 {
+		tuning.Budget = d
+	}
+	return &tuning
+}
+
 // LogArchiveConfig 是 Worker Deep Archive 的受管对象存储配置。
 // SecretKey 只允许由环境变量注入，禁止写入 worker.yml 或诊断快照。
 type LogArchiveConfig struct {
@@ -1346,6 +1372,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_index.scan.slice_rows", 8192)
 	v.SetDefault("log_index.scan.yield", "1ms")
 	v.SetDefault("log_index.scan.budget", "2s")
+	// 滚动回收单轮上界（#64）：0/空 = 用 ingest 默认（32 步 / 1s ✓）。
+	v.SetDefault("log_index.reclaim_roll.max_steps", 0)
+	v.SetDefault("log_index.reclaim_roll.budget", "")
 	v.SetDefault("log_index.persist.priority_streak", 0)
 	v.SetDefault("log_index.persist.hot_budget", "")
 	// 校验查询的全局天花板（2026-10-03 现场 ×410 重试风暴）：0 = 用 ingest 默认（30/s、6 在飞、单簇 12 次）。
