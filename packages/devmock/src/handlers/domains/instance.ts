@@ -3,6 +3,7 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 import { capabilityProfileFor, type MockCapabilityProfile } from '@jianmanager/devmock/capability-profile'
+import { mockDataScaleProfile } from '@jianmanager/devmock/runtime-control'
 
 /**
  * 实例核心域 mock handler（FR-201，照 spec §7 范式）。
@@ -348,7 +349,6 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
   },
 ]
 
-const INSTANCE_SEED_SIZE = 1200
 const STATUS_POOL = ['RUNNING', 'STOPPED', 'CRASHED', 'STARTING', 'STOPPING'] as const
 const ENV_POOL = ['prod', 'test', 'dev'] as const
 
@@ -389,8 +389,11 @@ function buildGeneratedInstance(id: number): MockInstance {
 }
 
 function seedInstances(): MockInstance[] {
+  // 规模在**播种时**从运行时档位读（FR-496 阶段 6 补丁）：写成模块级常量会被本函数在
+  // import 时捕获，调试面板改档位后即便重播种也还是旧规模。
+  const size = mockDataScaleProfile().instanceCount
   const rows = new Map<number, MockInstance>()
-  for (let id = 1; id <= INSTANCE_SEED_SIZE; id++) rows.set(id, buildGeneratedInstance(id))
+  for (let id = 1; id <= size; id++) rows.set(id, buildGeneratedInstance(id))
   for (const row of INSTANCE_SEED_OVERRIDES) rows.set(row.id, row)
   return [...rows.values()].sort((a, b) => a.id - b.id)
 }
@@ -727,8 +730,12 @@ function filterInstancesByQuery(url: URL): MockInstance[] {
   const env = url.searchParams.get('env')
   const tag = url.searchParams.get('tag')
   const networkId = url.searchParams.get('networkId')
+  // uuid 精确匹配：供前端把 URL 里的实例 uuid（下钻深链 ?instance=<uuid>）解析成数字 id，
+  // 不必为此拉全量实例列表（千级约 1MB/轮）。与真后端 /instances/search?uuid= 对齐。
+  const uuid = url.searchParams.get('uuid')
   const q = (url.searchParams.get('q') ?? '').trim().toLowerCase()
   return instances.list((i) => {
+    if (uuid && i.uuid !== uuid) return false
     if (nodeId && String(i.nodeId) !== nodeId) return false
     if (status && i.status !== status) return false
     if (role && i.role !== role) return false
@@ -859,10 +866,13 @@ function pageParam(url: URL): { page: number; pageSize: number } {
 function aggregateRows(rows: MockInstance[]) {
   const byStatus: Record<string, number> = { RUNNING: 0, STOPPED: 0, CRASHED: 0, STARTING: 0, STOPPING: 0 }
   const byRole: Record<string, number> = { backend: 0, proxy: 0, universal: 0 }
+  // 与真后端 ByProcessType 对齐（含全部枚举键零补）：统计页据此画进程类型分布，不必拉全量实例。
+  const byProcessType: Record<string, number> = { direct: 0, daemon: 0, docker: 0, rcon: 0 }
   const byNode = new Map<number, number>()
   for (const row of rows) {
     byStatus[row.status] = (byStatus[row.status] ?? 0) + 1
     byRole[row.role] = (byRole[row.role] ?? 0) + 1
+    byProcessType[row.processType] = (byProcessType[row.processType] ?? 0) + 1
     byNode.set(row.nodeId, (byNode.get(row.nodeId) ?? 0) + 1)
   }
   return {
@@ -870,6 +880,7 @@ function aggregateRows(rows: MockInstance[]) {
     byStatus,
     byNode: [...byNode.entries()].sort((a, b) => a[0] - b[0]).map(([nodeId, count]) => ({ nodeId, count })),
     byRole,
+    byProcessType,
   }
 }
 
@@ -1028,6 +1039,8 @@ export const handlers = [
       byStatus: countBy(rows, 'status'),
       byNode,
       byRole: countBy(rows, 'role'),
+      // 与真后端 ByProcessType 对齐（含全部枚举键零补）。
+      byProcessType: { direct: 0, daemon: 0, docker: 0, rcon: 0, ...countBy(rows, 'processType') },
     })
   }),
 
