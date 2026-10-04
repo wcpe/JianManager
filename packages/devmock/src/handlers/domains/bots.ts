@@ -19,6 +19,11 @@ export interface BotRow {
   id: number
   uuid: string
   instanceId: number
+  /**
+   * 实例展示名（真后端 `/bots` 已回填）。前端优先用它，不必为了显示名字而拉全量实例列表。
+   * 可选：实例被删时后端留空，前端回退显示 #id。
+   */
+  instanceName?: string
   stressSessionId?: number
   /** 所属节点 ID，供 GET /bots/summary?groupBy=node 聚合（BotInfo 不含此字段，仅 mock 内部用于分组）。 */
   nodeId: number
@@ -503,7 +508,11 @@ export const handlers = [
     const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1)
     const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? 20) || 20))
     const start = (page - 1) * pageSize
-    return HttpResponse.json({ items: rows.slice(start, start + pageSize), total: rows.length, page, pageSize })
+    // 回填实例名（对齐真后端 BotListItem.instanceName）：一次建 Map，避免逐行 O(n) 查找。
+    const names = new Map<number, string>()
+    for (const inst of db<{ id: number; name: string }>('instances').list()) names.set(inst.id, inst.name)
+    const items = rows.slice(start, start + pageSize).map((b) => ({ ...b, instanceName: names.get(b.instanceId) }))
+    return HttpResponse.json({ items, total: rows.length, page, pageSize })
   }),
 
   domainRoute('post', '/bots', async (info) => {

@@ -10,6 +10,7 @@ import type {
   SLOInfo,
   Task,
 } from '@jianmanager/devmock/contracts'
+import { mockDataScaleProfile } from '@jianmanager/devmock/runtime-control'
 
 /**
  * 可观测与日志域 mock handler（FR-208）：metrics / alerts / notifications / tasks / logs。
@@ -53,6 +54,8 @@ interface AlertEvent {
   id: number
   ruleId: number
   targetId: number
+  /** 实例展示名（真后端已回填；仅 rule.targetType === 'instance' 时存在，实例被删则缺省）。 */
+  instanceName?: string
   level: string
   triggerType: string
   value: number
@@ -132,13 +135,52 @@ interface LogRow {
 const NOW = Date.now()
 const iso = (offsetMs: number): string => new Date(NOW + offsetMs).toISOString()
 const YEAR_MS = 365 * 86_400_000
-const MOCK_INSTANCE_COUNT = 1200
-const MOCK_LOG_COUNT = 12_000
-const MOCK_TASK_COUNT = 1500
-const MOCK_FEED_COUNT = 1200
+
+/**
+ * 任务从创建到完成的模拟时长（FR-496 阶段 6 补丁）。
+ *
+ * 【为什么必须让任务状态随时间推进】任务表的状态原先是一份**静态**随机值：种子里的
+ * `running` 与批量生成里的 pending/running 都永不改变。而前端
+ * `api/tasks.ts` 的 `tasksRefetchInterval` 是「**只要有非终态任务就轮询**」——
+ * 于是轮询**永远**停不下来：实测静止无操作时，`tasks?limit=100` 与 `tasks?limit=5`
+ * 每 2 秒各发一次请求，页面持续重渲染（6 秒内 37 请求 / 132 次 DOM 变更）。
+ *
+ * 真实后端里任务必然走向终态，因此这里按「创建时刻 + 本时长」推导当前状态，
+ * 到期即 succeeded，轮询自然停止。
+ *
+ * 注意与实例的处置**不同**：实例有 SSE 推送（`api/events.ts`），所以那边是把轮询
+ * 降级成兜底；任务没有推送通道，轮询是它唯一的刷新手段，不能删——只能让数据会收敛。
+ */
+const TASK_MOCK_DURATION_MS = 90_000
+
+/** 按经过时间推导任务的当前状态；已处于终态的任务原样返回。 */
+function advanceTaskState(task: Task, now: number): Task['state'] {
+  if (task.state !== 'pending' && task.state !== 'running') return task.state
+  const created = new Date(task.createdAt).getTime()
+  if (!Number.isFinite(created)) return task.state
+  const elapsed = now - created
+  if (elapsed < 0) return task.state
+  if (elapsed >= TASK_MOCK_DURATION_MS) return 'succeeded'
+  return elapsed >= TASK_MOCK_DURATION_MS * 0.2 ? 'running' : 'pending'
+}
 
 const TASK_KIND_POOL = ['jdk_install', 'instance_backup', 'runtime_install', 'client_publish', 'node_repair'] as const
-const TASK_STATE_POOL: Task['state'][] = ['pending', 'running', 'succeeded', 'failed', 'canceled']
+/**
+ * 历史批量任务的状态池：**只含终态**。
+ *
+ * 【为什么不放 pending/running】真后端里一年前的任务必然已收敛，读作 running 是假象。
+ * 更关键的是前端 `tasksRefetchInterval` 是「只要有一条非终态就一直 2s 轮询」——旧实现按
+ * 5 态轮转生成，large 档 1500 条里就有 600 条被种成非终态。`advanceTaskState` 虽能按
+ * 时间把它们推导回 succeeded，但代价是**每个** `/tasks` 请求都要遍历全量重算一遍，
+ * 而 MSW 跑在浏览器主线程上，等于把这份成本转嫁给了页面。
+ *
+ * 活跃态只留给「近期」的少数任务（见 RECENT_ACTIVE_TASK_SLOTS），它们在 90s 内自然收敛。
+ * 分布偏重 succeeded，贴合任务中心「绝大多数已成功、失败/取消是少数」的真实观感。
+ * 池长 6 与 5 元的 TASK_KIND_POOL 错开周期，避免 kind 与 state 绑死（同一类任务永远同状态）。
+ */
+const TASK_TERMINAL_POOL: Task['state'][] = ['succeeded', 'succeeded', 'failed', 'succeeded', 'canceled', 'succeeded']
+/** 近窗口内保留非终态的批量任务条数：够 UI 看到「有任务在跑」，且 90s 内全部收敛。 */
+const RECENT_ACTIVE_TASK_SLOTS = 3
 const LOG_LEVEL_POOL = ['debug', 'info', 'warn', 'error'] as const
 const LOG_SOURCE_POOL = ['instance', 'control_plane', 'worker'] as const
 const NOTIFICATION_LEVEL_POOL: Notification['level'][] = ['info', 'success', 'warning', 'error']
@@ -296,19 +338,22 @@ function seedAlertEvents(): AlertEvent[] {
     },
   ]
 
+  // 生成规模在**播种时**读运行时档位（FR-496 阶段 6 补丁）：模块级常量会被 import 时捕获，
+  // 调试面板改档位后重播种也无效。循环外取一次，别在循环条件里每次都读。
+  const { feedCount, instanceCount } = mockDataScaleProfile()
   const generated: AlertEvent[] = []
-  for (let i = 3; i <= MOCK_FEED_COUNT + 2; i++) {
+  for (let i = 3; i <= feedCount + 2; i++) {
     const critical = i % 9 === 0
-    const offset = -Math.floor(((i - 2) / MOCK_FEED_COUNT) * YEAR_MS)
+    const offset = -Math.floor(((i - 2) / feedCount) * YEAR_MS)
     generated.push({
       id: i,
       ruleId: critical ? 2 : 1,
-      targetId: ((i - 1) % MOCK_INSTANCE_COUNT) + 1,
+      targetId: ((i - 1) % instanceCount) + 1,
       level: critical ? 'critical' : 'warn',
       triggerType: critical ? 'instance_crash' : 'metric',
       value: critical ? 0 : 75 + (i % 25),
       message: critical
-        ? `实例 server-${String(((i - 1) % MOCK_INSTANCE_COUNT) + 1).padStart(4, '0')} 异常退出`
+        ? `实例 server-${String(((i - 1) % instanceCount) + 1).padStart(4, '0')} 异常退出`
         : `节点 node-${(i % 2) + 1} 资源水位超过阈值 ${75 + (i % 25)}%`,
       count: 1 + (i % 5),
       resolved: i % 3 !== 0,
@@ -355,16 +400,18 @@ function seedNotifications(): Notification[] {
     },
   ]
 
+  // 同上：规模取运行时档位（FR-496 阶段 6 补丁）
+  const { feedCount, instanceCount } = mockDataScaleProfile()
   const generated: Notification[] = []
-  for (let i = 4; i <= MOCK_FEED_COUNT + 3; i++) {
-    const offset = -Math.floor(((i - 3) / MOCK_FEED_COUNT) * YEAR_MS)
+  for (let i = 4; i <= feedCount + 3; i++) {
+    const offset = -Math.floor(((i - 3) / feedCount) * YEAR_MS)
     const level = NOTIFICATION_LEVEL_POOL[i % NOTIFICATION_LEVEL_POOL.length]
     generated.push({
       id: i,
       userId: 1,
       level,
       title: `批量运维事件 ${i - 3}`,
-      body: `server-${String(((i - 1) % MOCK_INSTANCE_COUNT) + 1).padStart(4, '0')} 的 ${TASK_KIND_POOL[i % TASK_KIND_POOL.length]} 已记录`,
+      body: `server-${String(((i - 1) % instanceCount) + 1).padStart(4, '0')} 的 ${TASK_KIND_POOL[i % TASK_KIND_POOL.length]} 已记录`,
       taskId: i % 5 === 0 ? `task-scale-${i}` : undefined,
       readAt: i % 4 === 0 ? iso(offset + 120_000) : undefined,
       createdAt: iso(offset),
@@ -404,7 +451,9 @@ function seedTasks(): Task[] {
       result: '',
       cancelRequested: false,
       createdBy: 1,
-      createdAt: iso(-300_000),
+      // 刻意留在「尚未到期」的窗口内：页面加载后约 60 秒内它仍是 running，让 mock 有
+      // 真实的活跃任务可看；到点自动收敛为 succeeded，`tasksRefetchInterval` 随之返回 false。
+      createdAt: iso(-30_000),
       updatedAt: iso(-30_000),
     },
     {
@@ -444,11 +493,23 @@ function seedTasks(): Task[] {
     },
   ]
 
+  // 同上：任务规模取运行时档位（FR-496 阶段 6 补丁）
+  const { taskCount, instanceCount } = mockDataScaleProfile()
   const generated: Task[] = []
-  for (let i = 4; i <= MOCK_TASK_COUNT + 3; i++) {
-    const state = TASK_STATE_POOL[i % TASK_STATE_POOL.length]
+  for (let i = 4; i <= taskCount + 3; i++) {
+    const seq = i - 3
+    // 开头 RECENT_ACTIVE_TASK_SLOTS 条留在 90s 活跃窗口内（createdAt 落在 15s~45s 前），
+    // 其余历史任务一律终态——理由见 TASK_TERMINAL_POOL 的说明。
+    // 放「开头」而不是末尾：生成序与 createdAt 同向（seq 越小越新），所以开头就是最新的
+    // 几条，能被 /tasks 首窗（limit≤100）取到，任务中心与顶栏看板都看得到活跃态。
+    const isRecent = seq <= RECENT_ACTIVE_TASK_SLOTS
+    const state: Task['state'] = isRecent
+      ? seq % 2 === 0
+        ? 'running'
+        : 'pending'
+      : TASK_TERMINAL_POOL[i % TASK_TERMINAL_POOL.length]
     const kind = TASK_KIND_POOL[i % TASK_KIND_POOL.length]
-    const offset = -Math.floor(((i - 3) / MOCK_TASK_COUNT) * YEAR_MS)
+    const offset = isRecent ? -(15_000 * seq) : -Math.floor((seq / taskCount) * YEAR_MS)
     const progress = state === 'succeeded' ? 100 : state === 'pending' ? 0 : 10 + (i % 85)
     generated.push({
       id: i,
@@ -458,7 +519,7 @@ function seedTasks(): Task[] {
       state,
       progress,
       title: `${kind} 批量任务 ${i - 3}`,
-      detail: `server-${String(((i - 1) % MOCK_INSTANCE_COUNT) + 1).padStart(4, '0')}`,
+      detail: `server-${String(((i - 1) % instanceCount) + 1).padStart(4, '0')}`,
       error: state === 'failed' ? '模拟失败：节点返回非零退出码' : '',
       result: state === 'succeeded' ? JSON.stringify({ ok: true, batch: i }) : '',
       cancelRequested: state === 'running' && i % 7 === 0,
@@ -541,12 +602,14 @@ function seedLogs(): LogRow[] {
     },
   ]
 
+  // 同上：日志规模取运行时档位（FR-496 阶段 6 补丁）
+  const { logCount, instanceCount } = mockDataScaleProfile()
   const generated: LogRow[] = []
-  for (let i = 5; i <= MOCK_LOG_COUNT + 4; i++) {
-    const instanceId = ((i - 1) % MOCK_INSTANCE_COUNT) + 1
+  for (let i = 5; i <= logCount + 4; i++) {
+    const instanceId = ((i - 1) % instanceCount) + 1
     const source = LOG_SOURCE_POOL[i % LOG_SOURCE_POOL.length]
     const level = LOG_LEVEL_POOL[i % LOG_LEVEL_POOL.length]
-    const offset = -Math.floor(((i - 4) / MOCK_LOG_COUNT) * YEAR_MS)
+    const offset = -Math.floor(((i - 4) / logCount) * YEAR_MS)
     generated.push({
       id: i,
       source,
@@ -1660,7 +1723,21 @@ export const handlers = [
 
     const total = items.length
     const start = (page - 1) * pageSize
-    return HttpResponse.json({ items: items.slice(start, start + pageSize), total })
+    const pageItems = items.slice(start, start + pageSize)
+
+    // 回填实例名（对齐真后端 AlertEventView.instanceName）。**必须按规则的 targetType 判定**：
+    // 事件的 targetId 含义随规则维度而变，node 维度的值不是实例 id，混用会查到错误的实例名。
+    const ruleTargetType = new Map<number, string>()
+    for (const r of alertRules.list()) ruleTargetType.set(r.id, r.targetType)
+    const names = new Map<number, string>()
+    for (const inst of db<{ id: number; name: string }>('instances').list()) names.set(inst.id, inst.name)
+
+    return HttpResponse.json({
+      items: pageItems.map((e) =>
+        ruleTargetType.get(e.ruleId) === 'instance' ? { ...e, instanceName: names.get(e.targetId) } : e,
+      ),
+      total,
+    })
   }),
 
   domainRoute('get', '/alerts/events/unread-count', (info) => {
@@ -1915,7 +1992,14 @@ export const handlers = [
     const nodeId = url.searchParams.get('nodeId')
     const keyword = url.searchParams.get('keyword')
     const since = url.searchParams.get('since')
-    let items = [...artifactMigrationTasks.list(), ...tasks.list()]
+    // 先按经过时间推进活跃任务的状态，再过滤：否则 `state=running` 这类筛选会依据
+    // 那份静态旧值，与真正返回给前端的状态自相矛盾。
+    const now = Date.now()
+    let items = [...artifactMigrationTasks.list(), ...tasks.list()].map((t) => {
+      const state = advanceTaskState(t, now)
+      if (state === t.state) return t
+      return { ...t, state, progress: state === 'succeeded' ? 100 : t.progress, updatedAt: new Date(now).toISOString() }
+    })
     if (kind) items = items.filter((t) => t.kind === kind)
     if (state) items = items.filter((t) => t.state === state)
     if (nodeId) items = items.filter((t) => t.nodeId === Number(nodeId))
