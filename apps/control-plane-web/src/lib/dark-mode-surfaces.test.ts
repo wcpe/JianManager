@@ -4,14 +4,21 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+/** FR-496：设计 token 已归一到 packages/ui/src/styles/，故暗色 token 断言改读组件包。 */
+const repoRoot = resolve(root, '../../..')
 
 function source(path: string): string {
   return readFileSync(resolve(root, path), 'utf8')
 }
 
+/** 读取组件包设计底座中的样式文件（token 单一真源）。 */
+function uiStyle(file: string): string {
+  return readFileSync(resolve(repoRoot, 'packages/ui/src/styles', file), 'utf8')
+}
+
 describe('暗色模式设计表面', () => {
   it('暗色 token 使用 B 方案深色云运维台基调', () => {
-    const css = source('index.css')
+    const css = uiStyle('tokens.css')
 
     expect(css).toContain('--background: #0f141b;')
     expect(css).toContain('--card: #161c24;')

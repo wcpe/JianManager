@@ -226,7 +226,7 @@ export default function ConfigFileEditor({
               type="button"
               disabled={!schema}
               title={schema ? '' : t('configExplorer.noSchema')}
-              className={`px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${
+              className={`px-2 py-1 disabled:pointer-events-none disabled:opacity-40 ${
                 mode === 'form' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
               }`}
               onClick={() => schema && setMode('form')}

@@ -487,12 +487,14 @@ export default function InstanceConsoleView({
                   })
                 : t('instanceDetail.terminalSearchReady')}
             </span>
+            {/* 禁用态用 pointer-events-none 屏蔽指针：只降透明度时 hover 仍会点亮，
+                变成「看起来能点、点了没反应」；指针事件既已屏蔽，cursor 声明必为死代码故不留。 */}
             <button
               type="button"
               onClick={() => moveSearchMatch(-1)}
               disabled={matches.length === 0}
               aria-label={t('instanceDetail.terminalSearchPrevious')}
-              className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:pointer-events-none disabled:opacity-40"
             >
               ↑
             </button>
@@ -501,7 +503,7 @@ export default function InstanceConsoleView({
               onClick={() => moveSearchMatch(1)}
               disabled={matches.length === 0}
               aria-label={t('instanceDetail.terminalSearchNext')}
-              className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:pointer-events-none disabled:opacity-40"
             >
               ↓
             </button>
@@ -611,11 +613,12 @@ export default function InstanceConsoleView({
             jumpTarget={jumpTarget}
             historyActions={
               <>
+                {/* 同上：跳转按钮禁用时也要屏蔽指针，避免 hover 背景仍亮起。 */}
                 <button
                   type="button"
                   onClick={jumpToStartup}
                   disabled={jumping}
-                  className="rounded px-1.5 py-0.5 hover:bg-white/10 hover:text-gray-200 disabled:opacity-50"
+                  className="rounded px-1.5 py-0.5 hover:bg-white/10 hover:text-gray-200 disabled:pointer-events-none disabled:opacity-50"
                 >
                   {t('instanceDetail.consoleJumpToStartup')}
                 </button>
@@ -623,7 +626,7 @@ export default function InstanceConsoleView({
                   type="button"
                   onClick={() => setTimeJumpOpen(true)}
                   disabled={jumping}
-                  className="rounded px-1.5 py-0.5 hover:bg-white/10 hover:text-gray-200 disabled:opacity-50"
+                  className="rounded px-1.5 py-0.5 hover:bg-white/10 hover:text-gray-200 disabled:pointer-events-none disabled:opacity-50"
                 >
                   {t('instanceDetail.consoleJumpToTime')}
                 </button>

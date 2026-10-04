@@ -63,7 +63,13 @@ describe('UsersPage（mock 假后端）', () => {
     await user.click(within(dialog).getByRole('button', { name: '创建邀请' }))
 
     expect(await screen.findByText('member@example.com')).toBeInTheDocument()
-    await user.click(within(dialog).getByRole('button', { name: '关闭' }))
+    // FR-496：Dialog 右上角 X 也走 i18n 后与页脚按钮同名为「关闭」，故按 data-slot 区分：
+    // 页脚关闭按钮是 data-slot="button"，右上角 X 是 data-slot="dialog-close"。
+    await user.click(
+      within(dialog)
+        .getAllByRole('button', { name: '关闭' })
+        .find((el) => el.getAttribute('data-slot') === 'button')!,
+    )
     await user.click(screen.getByRole('button', { name: '撤销邀请' }))
     expect(await screen.findByText('已撤销')).toBeInTheDocument()
   })

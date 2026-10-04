@@ -2,6 +2,7 @@ import { NavLink } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { useRouteIntentPrefetch } from '@/lib/route-prefetch'
 
 /** 侧栏导航项（多级侧栏共用）。`perm` 为权限节点，数组表示 any-of（FR-431）。 */
 export interface NavEntry {
@@ -19,11 +20,14 @@ export default function SidebarNavLink({
   nested = false,
 }: NavEntry & { nested?: boolean }) {
   const { t } = useTranslation()
+  // FR-496 阶段 6 补丁：悬停/聚焦即预取目标页 chunk，把下载提前到点击之前（幂等，见 route-prefetch）。
+  const prefetchHandlers = useRouteIntentPrefetch(to)
   const exact = to === '/' || to === '/networks'
   return (
     <NavLink
       to={to}
       end={exact}
+      {...prefetchHandlers}
       className={({ isActive }) =>
         cn(
           'jm-nav-link group relative flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px]',

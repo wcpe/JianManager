@@ -98,7 +98,7 @@ export default function BotLoadSessionsTab() {
               {items.map((session) => (
                 <TableRow
                   key={session.id}
-                  className="cursor-pointer"
+                  className="cursor-pointer transition-colors hover:bg-accent/50"
                   onClick={() => navigate(`/bots/sessions/${session.id}?tab=overview`)}
                 >
                   <TableCell className="font-medium">{session.namePrefix}</TableCell>

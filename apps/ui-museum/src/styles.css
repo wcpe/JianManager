@@ -1,3 +1,7 @@
+/* Tailwind 由应用自行引入（FR-496）：设计底座包只提供 token / 主题 / 关键帧与 @theme 映射，
+   不替消费方决定 Tailwind 版本与引入方式。此前该 import 藏在包内 styles.css 首行，
+   底座迁出后必须在此显式声明，否则 utility 层不会生成（页面会退回浏览器默认样式）。 */
+@import "tailwindcss";
 @import "@jianmanager/ui/styles.css";
 
 @source "./**/*.{ts,tsx}";

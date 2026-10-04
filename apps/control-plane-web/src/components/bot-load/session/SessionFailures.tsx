@@ -90,7 +90,7 @@ export function SessionFailures({ runId }: { runId: number | string }) {
           <button
             key={cat}
             type="button"
-            className={`rounded-lg border p-3 text-left ${filter.category === cat ? 'border-primary bg-primary/5' : 'bg-card'}`}
+            className={`rounded-lg border p-3 text-left transition-colors ${filter.category === cat ? 'border-primary bg-primary/5' : 'bg-card hover:bg-accent/50'}`}
             onClick={() =>
               patch({ category: filter.category === cat ? undefined : cat, page: 1 })
             }

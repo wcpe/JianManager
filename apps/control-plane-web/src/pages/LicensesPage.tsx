@@ -182,7 +182,7 @@ function DependencyTable({
               return (
                 <Fragment key={key}>
                   <TableRow
-                    className="cursor-pointer transition-colors duration-200 ease-ios"
+                    className="cursor-pointer transition-colors duration-[var(--motion-duration-fast)] ease-ios hover:bg-accent/50"
                     onClick={() => onToggle(key)}
                   >
                     <TableCell className="text-muted-foreground">

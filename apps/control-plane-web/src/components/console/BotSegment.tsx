@@ -299,7 +299,9 @@ function BotGroupBlock({
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex items-center gap-1.5 text-sm font-medium"
+          // 标题基色已继承卡片前景色（WorkspaceCard 的 text-card-foreground 与 foreground 同值），
+          // hover:text-foreground 不会产生可见变化，故按同卡族可点文本的既有写法取 primary。
+          className="flex items-center gap-1.5 text-sm font-medium hover:text-primary"
         >
           <ChevronRight className={cn('size-4 transition-transform', open && 'rotate-90')} />
           <span>{label}</span>

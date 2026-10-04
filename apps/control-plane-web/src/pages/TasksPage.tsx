@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useSearchParams } from 'react-router'
 import { ChevronRight, Ban, Loader2, Wifi } from 'lucide-react'
 import { isNetworkDownloadFailure } from '@/lib/download-failure'
+import { useVirtualRows } from '@/lib/virtual-list'
 import { useTasks, useTask, useCancelTask, isTerminalTask, TASK_KIND_LABEL_KEYS, type Task, type TaskState } from '@/api/tasks'
 import { useNodes } from '@/api/nodes'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { ListSkeleton } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import {
@@ -41,6 +43,20 @@ function sinceFromFilter(v: string): string | undefined {
 /** 任务列表增长窗口（FR-337）：初始/步长 100，封顶 500（到顶引导用筛选缩小范围）。 */
 const TASKS_WINDOW_STEP = 100
 const TASKS_WINDOW_MAX = 500
+
+/**
+ * 行高估算（px，FR-496 阶段 6 视口裁剪用）：`px-3 py-2.5`(20) + 最高单元格 + `border-b`(1)，
+ * 实测（Chromium 1440×900，root 16px）：有详情的行 56.7；最高单元格在「状态徽章 22」与
+ * 「标题 20 / 标题+详情 35.7」之间切换 —— 单行 20+22+1=43，两行 20+35.7+1≈57。
+ * 估算只用于「尚未量测到的行」撑滚动高度；两档行共用同一基准，故基准的绝对误差只会整体平移
+ * 滚动区间，不会累积错位（错位只可能来自「两行/一行」判定错，故该判定与行渲染同源：detail 非空即有第二行）。
+ */
+const TASK_ROW_BASE_PX = 43
+const TASK_ROW_EXTRA_LINE_PX = 14
+/** 展开行（错误正文 + 日志）的估算高度：仅用于首帧与无布局环境，浏览器实测后以实测为准。 */
+const TASK_ROW_EXPANDED_PX = 260
+/** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
+const FALLBACK_VIEWPORT_PX = 640
 
 /**
  * 全局任务中心页（FR-183 + FR-227 + FR-337）。
@@ -81,10 +97,39 @@ export default function TasksPage() {
     since,
     limit,
   })
-  const tasks = page?.items ?? []
+  const tasks = useMemo(() => page?.items ?? [], [page])
   const total = page?.total ?? 0
   const canLoadMore = tasks.length < total && limit < TASKS_WINDOW_MAX
   const windowCapped = tasks.length < total && limit >= TASKS_WINDOW_MAX
+
+  // 视口裁剪（FR-496 阶段 6）：增长窗口最大 500 行，一次性铺进 DOM 是本页的主开销。
+  // 展开行的错误正文 + 日志长短不定（估算误差会让其后所有行偏移错位），故实测后回填。
+  const expandedRef = useRef<HTMLDivElement>(null)
+  const [expandedSize, setExpandedSize] = useState<{ id: string; px: number } | null>(null)
+  const expandedPx = expandedSize && expandedSize.id === expanded ? expandedSize.px : TASK_ROW_EXPANDED_PX
+  useLayoutEffect(() => {
+    // jsdom 无布局：offsetHeight 恒 0 → 保留估算，测试里窗口完全确定。
+    const px = expandedRef.current?.offsetHeight ?? 0
+    if (expanded !== null && px > 0 && px !== expandedPx) setExpandedSize({ id: expanded, px })
+  }, [expanded, expandedPx, tasks])
+
+  /** 逐行高度：折叠行按「一行/两行」估算，展开行用实测值 → 偏移前缀和贴近真实布局。 */
+  const rowSizes = useMemo(
+    () =>
+      tasks.map((task) =>
+        task.taskId === expanded
+          ? expandedPx
+          : TASK_ROW_BASE_PX + (task.detail ? TASK_ROW_EXTRA_LINE_PX : 0),
+      ),
+    [expanded, expandedPx, tasks],
+  )
+  const { containerRef, onScroll, range } = useVirtualRows({
+    total: tasks.length,
+    itemSize: TASK_ROW_BASE_PX,
+    overscan: 6,
+    fallbackViewportSize: FALLBACK_VIEWPORT_PX,
+    sizes: rowSizes,
+  })
 
   const hasFilters = !!(stateF || kindF || nodeF || keyword || timeF)
   const resetFilters = () => {
@@ -126,8 +171,15 @@ export default function TasksPage() {
         )}
       </div>
 
+      {/* FR-496 阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与筛选条先渲染，
+          数据区用同壳骨架（同一张 Panel + 同一条吸附列头 + 行占位）顶上，数据到达原地替换。 */}
       {isLoading && !page ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
+        <Panel bodyClassName="p-0">
+          <div className="max-h-[calc(100vh-20rem)] overflow-auto">
+            <TasksColumnHeader />
+            <ListSkeleton rows={12} />
+          </div>
+        </Panel>
       ) : isError ? (
         <p className="text-destructive">{t('tasks.loadError')}</p>
       ) : tasks.length === 0 ? (
@@ -139,22 +191,32 @@ export default function TasksPage() {
       ) : (
         <>
           <Panel bodyClassName="p-0">
-            <div className="flex items-center gap-3 border-b bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground">
-              <span className="w-4 shrink-0" />
-              <span className="min-w-0 flex-1">{t('tasks.task')}</span>
-              <span className="w-24 shrink-0">{t('tasks.stateLabel')}</span>
-              <span className="w-40 shrink-0">{t('tasks.progress')}</span>
-              <span className="w-40 shrink-0">{t('tasks.updatedAt')}</span>
-              <span className="w-20 shrink-0" />
+            {/* 虚拟窗口的滚动容器（「加载更多」留在容器外，始终可见） */}
+            <div
+              ref={containerRef}
+              onScroll={onScroll}
+              data-testid="tasks-virtual"
+              className="max-h-[calc(100vh-20rem)] overflow-auto"
+            >
+              {/* 列头：随窗口滚动吸附在顶部（否则滚下去就看不到列名） */}
+              <TasksColumnHeader />
+              {/* 窗口上/下占位：窗口外的行用高度撑开，滚动条与整体高度保持真实 */}
+              {range.before > 0 && <div aria-hidden="true" style={{ height: range.before }} />}
+              {tasks.slice(range.start, range.end).map((task, offset) => {
+                const index = range.start + offset
+                return (
+                  <TaskRow
+                    key={task.taskId}
+                    task={task}
+                    open={expanded === task.taskId}
+                    isLast={index === tasks.length - 1}
+                    rowRef={expanded === task.taskId ? expandedRef : undefined}
+                    onToggle={() => setExpanded((id) => (id === task.taskId ? null : task.taskId))}
+                  />
+                )
+              })}
+              {range.after > 0 && <div aria-hidden="true" style={{ height: range.after }} />}
             </div>
-            {tasks.map((task) => (
-              <TaskRow
-                key={task.taskId}
-                task={task}
-                open={expanded === task.taskId}
-                onToggle={() => setExpanded((id) => (id === task.taskId ? null : task.taskId))}
-              />
-            ))}
           </Panel>
 
           {/* 加载更多（FR-337）：扩大 limit 的增长窗口；到顶（500）且仍有剩余时引导筛选收窄。 */}
@@ -175,6 +237,25 @@ export default function TasksPage() {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+/**
+ * 列表列头（FR-496 阶段 6 补丁抽出）：静态列名，不依赖数据，加载态与就绪态共用同一份，
+ * 因而骨架期间列名/列宽就已就位，数据到达只是「行长出来」。
+ */
+function TasksColumnHeader() {
+  const { t } = useTranslation()
+  return (
+    // 随窗口滚动吸附在顶部（否则滚下去就看不到列名）
+    <div className="sticky top-0 z-10 flex items-center gap-3 border-b bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground backdrop-blur-sm">
+      <span className="w-4 shrink-0" />
+      <span className="min-w-0 flex-1">{t('tasks.task')}</span>
+      <span className="w-24 shrink-0">{t('tasks.stateLabel')}</span>
+      <span className="w-40 shrink-0">{t('tasks.progress')}</span>
+      <span className="w-40 shrink-0">{t('tasks.updatedAt')}</span>
+      <span className="w-20 shrink-0" />
     </div>
   )
 }
@@ -204,7 +285,21 @@ function FilterSelect({ value, onChange, placeholder, options }: {
 }
 
 /** 单条任务行：进度条 + 状态徽标 + 强制停止；点击展开看日志（详情懒查）。 */
-function TaskRow({ task, open, onToggle }: { task: Task; open: boolean; onToggle: () => void }) {
+function TaskRow({
+  task,
+  open,
+  isLast,
+  rowRef,
+  onToggle,
+}: {
+  task: Task
+  open: boolean
+  /** 末行不画分隔线：虚拟窗口下 `last:` 变体只看「已渲染的最后一个」，会误伤窗口末行。 */
+  isLast: boolean
+  /** 展开行挂给页面实测高度（仅展开时传入）。 */
+  rowRef?: Ref<HTMLDivElement>
+  onToggle: () => void
+}) {
   const { t } = useTranslation()
   // 在线 running 已请求取消 → 显「取消中」；否则按状态。
   const canceling = task.state === 'running' && task.cancelRequested
@@ -212,7 +307,7 @@ function TaskRow({ task, open, onToggle }: { task: Task; open: boolean; onToggle
     ? { variant: 'outline' as const, label: t('tasks.state.canceling', '取消中') }
     : { variant: STATE_META[task.state].variant, label: t(STATE_META[task.state].key) }
   return (
-    <div className="border-b border-border/60 last:border-b-0">
+    <div ref={rowRef} className={cn('border-border/60', !isLast && 'border-b')}>
       <div className="flex items-center">
         <button
           type="button"

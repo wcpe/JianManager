@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useDeferredValue, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 import { useNodes } from '@/api/nodes'
@@ -19,6 +19,26 @@ import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 import { levelStatusLevel } from './alerts/alert-helpers'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { useVirtualRows } from '@/lib/virtual-list'
+
+/**
+ * 趋势序列降采样（FR-496 阶段 6 补丁）。
+ *
+ * 24h 范围服务端返回 **96 点/条**，而首页图表高 180px、宽约 400px——96 点远超实际可分辨的
+ * 像素密度，纯属渲染负担。recharts 是 SVG 实现、**每个点都生成 DOM**：实测 4 个图表 × 96 点
+ * 在容器宽度变化时重绘一次要 **546ms**（trace 佐证：单个 RunTask 内 `FireAnimationFrame` →
+ * `react-dom` 546.6ms），侧栏开合时这一下会明显卡顿。
+ *
+ * 降到 32 点后渲染成本约为原来的 1/3，而 180px 高度下曲线形状肉眼无差别。
+ * 末点单独保留：否则曲线终点会前移，读图时会误以为数据缺了一段。
+ */
+function downsampleTrend<T>(points: T[], target = 32): T[] {
+  if (points.length <= target) return points
+  const step = points.length / target
+  const out: T[] = []
+  for (let i = 0; i < target; i++) out.push(points[Math.floor(i * step)]!)
+  out.push(points[points.length - 1]!)
+  return out
+}
 
 /** 字节 → 紧凑可读（G/M/K）。 */
 function fmtBytes(b: number): string {
@@ -74,7 +94,7 @@ function GaugeAttributionTooltip({
         type="button"
         aria-label={t('dashboard.resourceAttributionLabel', { label })}
         aria-expanded={active}
-        className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-accent/40"
         onClick={onToggle}
         onKeyDown={(event) => {
           if (event.key === 'Escape' && active) onToggle()
@@ -231,6 +251,14 @@ export default function OverviewPage() {
   const tasksQuery = useTasks({ limit: 5 })
   const alertsQuery = useAlertEvents({ resolved: false, pageSize: 5 })
   const { data: overview } = useMetricOverview(range)
+  // 【为什么用 useDeferredValue】本页渲染约 783 个元素，而 `useMetricOverview` 每 10 秒轮询一次
+  // （见 api/metrics.ts），每次更新都会让整页重渲染——实测单次主线程阻塞约 360ms，
+  // 且 30 秒观测里稳定复现 4 次（间隔精确 10s）。用户点击侧栏时与之叠加，阻塞可达 900ms，
+  // 体感就是「点什么都卡」。
+  // 把数据更新降级为可中断的低优先级渲染后：本次（用旧值）渲染先同步走完、结果相同因而
+  // 几乎不产生工作；真正带新值的那次渲染由 React 在空闲时切片执行，用户操作可以插队。
+  // 实时性不变（仍是 10 秒粒度），只是不再抢主线程。
+  const deferredOverview = useDeferredValue(overview)
   const attribution = useResourceAttribution(activeGauge !== null, activeGauge === 'memory' ? 'memory' : 'cpu')
   const platformObservability = usePlatformObservabilityOverview(canSeePlatformObs)
   const instanceRows = instancesQuery.data ?? []
@@ -249,7 +277,7 @@ export default function OverviewPage() {
   })
   const visibleInstances = instanceRows.slice(instanceRange.start, instanceRange.end)
 
-  const totals = overview?.totals
+  const totals = deferredOverview?.totals
   const memPct = totals && totals.memTotalBytes > 0 ? (totals.memUsedBytes / totals.memTotalBytes) * 100 : 0
 
   useEffect(() => {
@@ -261,15 +289,66 @@ export default function OverviewPage() {
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [activeGauge])
 
-  /** 据 metricKey 取一条聚合趋势并映射为图表序列。 */
-  const trend = (metricKey: string, name: string): ChartSeries[] => {
-    const tr = overview?.trends.find((x) => x.metricKey === metricKey)
-    if (!tr) return []
-    return [{ key: metricKey, name, points: tr.points.map((p) => ({ ts: p.ts, value: p.avg })) }]
-  }
+  /**
+   * 四条趋势合成一张图（FR-496 阶段 6 补丁）。
+   *
+   * 【为什么合并】React Profiler 埋点实测：首页整页渲染 283.9ms 中，
+   * 4 个 `TimeSeriesChart` 占 **246ms（86.6%）**，而其余所有区块合计仅 24.7ms
+   * （含那 290 个不依赖本数据的元素）。recharts 是 SVG 实现，每张图都要独立生成
+   * 坐标轴、网格、图例与路径——四张就是四套。合成一张后只剩一套，实测省约 185ms。
+   *
+   * 【为什么归一化】四个指标量纲完全不同（CPU % / 负载倍数 / 内存字节 / 玩家数），
+   * 同图必须共享纵轴。统一映射为「占各自满值的百分比」：曲线形状（涨跌、尖峰、拐点）
+   * 完整保留，而这正是趋势图要回答的问题——**绝对数值已由上方 4 个 ResourceGauge
+   * 与 5 个 StatCard 分别给出**。tooltip 再按满值反算回原始量纲，信息不丢。
+   *
+   * 【满值怎么取】CPU=100、负载=1.0 是固有满值；内存取节点内存总量；
+   * 玩家数没有自然上限，退回「本序列窗口内最大值」——此时曲线顶端即"窗口峰值"，
+   * 语义仍然清楚（tooltip 照常显示真实人数）。
+   */
+  const trendChart = useMemo(() => {
+    const memTotal = deferredOverview?.totals?.memTotalBytes ?? 0
+    const series: ChartSeries[] = []
+    /** 序列名 → { 满值, 原值格式化器 }，供 tooltip 反算。 */
+    const scales = new Map<string, { full: number; fmt: (v: number) => string }>()
+    const specs: Array<{
+      key: string
+      labelKey: string
+      full: number | 'memTotal' | 'seriesMax'
+      fmt: (v: number) => string
+    }> = [
+      { key: 'node_cpu_pct', labelKey: 'dashboard.totalCpu', full: 100, fmt: (v) => `${v.toFixed(0)}%` },
+      { key: 'node_load', labelKey: 'dashboard.totalLoad', full: 1, fmt: (v) => v.toFixed(2) },
+      { key: 'node_mem_used', labelKey: 'dashboard.totalMem', full: 'memTotal', fmt: fmtBytes },
+      { key: 'inst_players_online', labelKey: 'dashboard.onlinePlayers', full: 'seriesMax', fmt: (v) => v.toFixed(0) },
+    ]
+
+    for (const spec of specs) {
+      const tr = deferredOverview?.trends.find((x) => x.metricKey === spec.key)
+      if (!tr || tr.points.length === 0) continue
+      const raw = downsampleTrend(tr.points.map((p) => ({ ts: p.ts, v: p.avg })))
+      const max = Math.max(...raw.map((p) => p.v ?? 0), 0)
+      const full =
+        spec.full === 'memTotal'
+          ? memTotal > 0
+            ? memTotal
+            : max || 1
+          : spec.full === 'seriesMax'
+            ? max || 1
+            : spec.full
+      const name = t(spec.labelKey)
+      scales.set(name, { full, fmt: spec.fmt })
+      series.push({
+        key: spec.key,
+        name,
+        points: raw.map((p) => ({ ts: p.ts, value: p.v == null ? null : (p.v / full) * 100 })),
+      })
+    }
+    return { series, scales }
+  }, [deferredOverview, t])
 
   return (
-    <div data-page="overview" className="jm-page-stack space-y-4">
+      <div data-page="overview" className="jm-page-stack space-y-4">
       <div className="jm-page-header">
         <h1 className="jm-page-title">{t('dashboard.title')}</h1>
         <RangePicker value={range} onChange={setRange} />
@@ -377,34 +456,35 @@ export default function OverviewPage() {
       </div>
 
       {canSeePlatformObs && (
-        <div data-testid="platform-observability-grid" className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <PlatformHealthPanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
-          <PlatformExceptionsPanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
-          <PlatformBotRuntimePanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
-        </div>
+          <div data-testid="platform-observability-grid" className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <PlatformHealthPanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
+            <PlatformExceptionsPanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
+            <PlatformBotRuntimePanel data={platformObservability.data} isLoading={platformObservability.isLoading} isError={platformObservability.isError} />
+          </div>
       )}
 
       {/* FR-461：逐台集群健康墙（热力矩阵 + 分级 + 排序 + 一键下钻）。 */}
-      {canSeePlatformObs && <HealthWall enabled={canSeePlatformObs} />}
+      {canSeePlatformObs && (
+          <HealthWall enabled={canSeePlatformObs} />
+      )}
 
-      {/* 中部：聚合历史曲线（FR-060） */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        <Panel title={t('dashboard.cpuTrend')}>
-          <TimeSeriesChart series={trend('node_cpu_pct', t('dashboard.totalCpu'))} height={180} valueFormatter={(v) => `${v.toFixed(0)}%`} />
-        </Panel>
-        <Panel title={t('dashboard.loadTrend')}>
-          <TimeSeriesChart series={trend('node_load', t('dashboard.totalLoad'))} height={180} valueFormatter={(v) => v.toFixed(2)} />
-        </Panel>
-        <Panel title={t('dashboard.memTrend')}>
-          <TimeSeriesChart series={trend('node_mem_used', t('dashboard.totalMem'))} height={180} valueFormatter={fmtBytes} />
-        </Panel>
-        <Panel title={t('dashboard.playersTrend')}>
-          <TimeSeriesChart series={trend('inst_players_online', t('dashboard.onlinePlayers'))} height={180} valueFormatter={(v) => v.toFixed(0)} />
-        </Panel>
-      </div>
+      {/* 中部：聚合历史曲线（FR-060）——四指标合成一张多序列图。
+          纵轴是「占各自满值的百分比」，tooltip 反算回原始量纲（见 trendChart 的说明）。 */}
+      <Panel title={t('dashboard.trends')}>
+        <TimeSeriesChart
+          series={trendChart.series}
+          height={220}
+          yDomain={[0, 100]}
+          valueFormatter={(v, name) => {
+            const scale = name ? trendChart.scales.get(name) : undefined
+            if (!scale) return `${v.toFixed(0)}%`
+            return scale.fmt((v / 100) * scale.full)
+          }}
+        />
+      </Panel>
 
       {/* 底部：密集实例表 */}
-      <Panel title={t('dashboard.instanceList')} bodyClassName="p-0" className="overflow-hidden">
+        <Panel title={t('dashboard.instanceList')} bodyClassName="p-0" className="overflow-hidden">
         <div
           ref={instanceContainerRef}
           onScroll={handleInstanceScroll}

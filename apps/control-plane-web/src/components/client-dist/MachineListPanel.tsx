@@ -98,14 +98,14 @@ export function MachineListPanel({ channelId, from, to }: { channelId?: string; 
           <TableRow>
             <TableHead className="w-32">{t('clientDistObs.colMachine', '机器')}</TableHead>
             <TableHead>{t('clientDistObs.colPlayer', '玩家')}</TableHead>
-            <TableHead className="cursor-pointer" onClick={() => toggleSort('updates')}>
+            <TableHead className="cursor-pointer hover:text-foreground" onClick={() => toggleSort('updates')}>
               {t('clientDistObs.colUpdates', '更新次数')}{sortIcon('updates')}
             </TableHead>
-            <TableHead className="cursor-pointer" onClick={() => toggleSort('lastUpdateAt')}>
+            <TableHead className="cursor-pointer hover:text-foreground" onClick={() => toggleSort('lastUpdateAt')}>
               {t('clientDistObs.colLastUpdate', '最近更新')}{sortIcon('lastUpdateAt')}
             </TableHead>
             <TableHead>{t('clientDistObs.colVersion', '客户端版本')}</TableHead>
-            <TableHead className="cursor-pointer" onClick={() => toggleSort('versionLag')}>
+            <TableHead className="cursor-pointer hover:text-foreground" onClick={() => toggleSort('versionLag')}>
               {t('clientDistObs.colLag', '版本滞后')}{sortIcon('versionLag')}
             </TableHead>
             <TableHead>{t('clientDistObs.colBytes', '下载量')}</TableHead>
@@ -113,7 +113,7 @@ export function MachineListPanel({ channelId, from, to }: { channelId?: string; 
         </TableHeader>
         <TableBody>
           {items.map((m) => (
-            <TableRow key={m.machineId} className="cursor-pointer" onClick={() => setSelected(m)} data-testid="machine-row">
+            <TableRow key={m.machineId} className="cursor-pointer transition-colors hover:bg-accent/50" onClick={() => setSelected(m)} data-testid="machine-row">
               <TableCell className="font-mono text-xs text-muted-foreground">{m.machineId}</TableCell>
               <TableCell data-testid="machine-player">
                 {m.playerName
