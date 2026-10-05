@@ -18,6 +18,7 @@ import {
 } from './settings-form'
 import { FieldError } from '@jianmanager/ui/components/field-label'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -120,11 +121,11 @@ export default function SettingsPage() {
   }
 
   return (
-    <div data-page="settings" className="jm-page-stack space-y-4">
-      <div>
-        <h1 className="jm-page-title">{t('settings.title')}</h1>
-        <p className="jm-page-subtitle">{t('settings.subtitle')}</p>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语。data-page 由 PageShell spread 透传，保持原值。
+    // 下方的双栏（分类导航 + 内容）暂不动——现有 w-44 与 SettingsLayout 的 170px 有视觉差异，
+    // 归入「双栏布局统一」单独处理，避免把骨架对齐与间距调整混在一次改动里。
+    <PageShell data-page="settings">
+      <PageHeader title={t('settings.title')} description={t('settings.subtitle')} />
 
       <div className="flex gap-4">
         {/* 内部侧边栏：分类导航 */}
@@ -194,7 +195,7 @@ export default function SettingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   )
 }
 
