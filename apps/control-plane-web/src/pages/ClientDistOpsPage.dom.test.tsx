@@ -53,7 +53,8 @@ describe('ClientDistOpsPage 外壳（7 Tab / data-page / 守卫）', () => {
     const { container } = renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops' })
 
     expect(container.firstElementChild).toHaveAttribute('data-page', 'client-dist-ops')
-    expect(container.firstElementChild).toHaveClass('jm-page-stack')
+    // 阶段 6 起外壳改用布局层 PageShell，结构标识随之从 jm-page-stack 换为 data-slot。
+    expect(container.firstElementChild).toHaveAttribute('data-slot', 'page-shell')
     expect(await screen.findByRole('heading', { name: '客户端分发运维' })).toBeInTheDocument()
 
     for (const name of ['总览', '统计', '实时监控', '全量日志', '机器 / 客户端', '画像', '处置']) {
