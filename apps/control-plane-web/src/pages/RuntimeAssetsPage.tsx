@@ -17,6 +17,7 @@ import {
 import { useSearchInstances } from '@/api/instances'
 import { useBatchDeployPlugins, type PluginBatchDeployResult } from '@/api/plugins'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -72,16 +73,17 @@ export default function RuntimeAssetsPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-bold">{t('runtimeAssets.title')}</h1>
-        <p className="text-xs text-muted-foreground">{t('runtimeAssets.subtitle')}</p>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语。原先无 data-page，迁移时补上。
+    <PageShell data-page="runtime-assets">
+      <PageHeader
+        title={t('runtimeAssets.title')}
+        description={t('runtimeAssets.subtitle')}
+      />
 
       <JDKSection jdks={data.jdks} summary={data.jdkSummary} runtimes={data.runtimes} syncedAt={data.syncedAt} />
       <AssetSection groups={data.assets} summary={data.assetSummary} channels={data.artifactChannels} />
       <ArtifactReconcileSection channels={data.artifactChannels} />
-    </div>
+    </PageShell>
   )
 }
 
