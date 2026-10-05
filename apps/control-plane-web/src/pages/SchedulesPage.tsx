@@ -154,7 +154,6 @@ export default function SchedulesPage() {
       {/* 方案 A「精工卡片」：标题/计数/主操作进卡片头，表格 refined 外观，底部汇总。 */}
       <TableCard>
         <TableCardHeader
-          title={t('schedules.title')}
           count={t('schedules.cardCount', { total: (schedules ?? []).length })}
           actions={
             <>
