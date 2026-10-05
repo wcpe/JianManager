@@ -423,6 +423,12 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
   })
 
   test('记录关键页面切换耗时', async ({ page }) => {
+    // 本用例要遍历 6 个路由，每个都含就绪等待与虚拟渲染断言，其中两条还要走整页 goto
+    // （冷启动）。默认 30 秒的 test 上限远不够——同文件其它遍历型用例都显式放宽过。
+    // 不放宽的话，test 会在中途被掐断，失败点却落在当时正在执行的那一步，
+    // 看起来像那个页面有问题，而不是「预算不够」。
+    test.setTimeout(300_000)
+
     const results: Array<{ label: string; elapsedMs: number }> = []
 
     for (const route of ROUTES) {
@@ -443,10 +449,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       }
 
       const started = await page.evaluate(() => performance.now())
-      // 这条分支走整页 goto，属**冷启动**：要下载路由分块、重建应用、再跑首屏查询，
-      // 比点链接的 SPA 切换慢一个量级——/client-dist-ops 这类多 Tab 重页面尤其明显。
-      // 给更宽松的上限：本用例要测的是**切换**耗时，不该因为冷启动慢而失败。
-      await expect(page.locator(route.readySelector), `${route.label} 页面就绪`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS * 2 })
+      await expect(page.locator(route.readySelector), `${route.label} 页面就绪`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
       await expectVirtualRendering(page, route)
       await page.evaluate(() => new Promise(requestAnimationFrame))
       const ended = await page.evaluate(() => performance.now())
@@ -464,6 +467,12 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
   })
 
   test('全部服务器首屏只走分页端点，返回后恢复滚动并附截图', async ({ page }) => {
+    // 本用例含两次整页导航（进实例详情、再后退）与多轮网络/滚动等待，还要截两张图，
+    // 合计会超过默认 30 秒的 test 上限；一旦超限，test 在最后一步被掐断，
+    // 报出来的却是「返回后找不到 [data-page=instances]」——极易误判成后退逻辑有缺陷。
+    // 同文件其它多步用例都显式放宽过上限，这里保持一致。
+    test.setTimeout(180_000)
+
     await page.goto('/instances?status=RUNNING&pageSize=50')
     await expect(page.locator('[data-page="instances"]'), '全部服务器页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
     const surface = page.locator('[data-testid="instances-table-virtual"]')
@@ -495,9 +504,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
     await page.goto('/instances/1')
     await expect(page.locator('[data-page="instance-console"]'), '实例详情深链就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
     await page.goBack()
-    // 后退同样是一次整页回退（前一步的 goto('/instances/1') 是整页导航），
-    // 需重新加载并重跑首屏查询，故与冷启动同量级，用更宽松的上限。
-    await expect(page.locator('[data-page="instances"]'), '返回全部服务器页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS * 2 })
+    await expect(page.locator('[data-page="instances"]'), '返回全部服务器页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
     const restored = page.locator('[data-testid="instances-table-virtual"]')
     await expect.poll(async () => restored.evaluate((el) => Math.round(el.scrollTop)), { message: '返回后恢复列表滚动位置' }).toBeGreaterThanOrEqual(300)
     await test.info().attach('instances-table-after-back', {
@@ -667,23 +674,27 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
 
     // 侧栏随工作区切换：/logs 的入口在「观测与自动化」下，而当前所在网络拓扑页属
     // 服务器运维，其侧栏里没有 /logs（旧版把六个域的分组头铺在同一列，故可直接点到）。
-    // 这里必须走「切工作区 → 点链接」的真实导航路径，不能退化成 page.goto ——
-    // goto 不经过路由过渡，也就测不到本用例要验的进度反馈。
-    // 注意顺序：先切工作区并等它就绪，之后才装探针，免得把切换那一次的导航算进来。
+    // 必须走真实导航路径，不能退化成 page.goto —— goto 不经过路由过渡，
+    // 也就测不到本用例要验的进度反馈。
+    //
+    // 探针装在**切工作区之前**：跨工作区切换本身就是一次完整的路由过渡，动画时长足以被观测到。
+    // 若先切过去再点 /logs，那一步是同域内的相邻切换，实测短到不足 120ms，
+    // 断言会误报「进度反馈不可见」——踩过一次。
+    await armVisibleAnimationDurationProbe(page, progressTrackSelector, '[data-testid="top-loading-bar"]')
     const workspaces = page.locator('[data-slot="top-nav-workspaces"]')
     await workspaces.getByRole('button', { name: '观测与自动化' }).click()
-    await expect(page.locator('[data-page="monitoring"]'), '观测工作区就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
-
-    await armVisibleAnimationDurationProbe(page, progressTrackSelector, '[data-testid="top-loading-bar"]')
-    await page.locator('a[href="/logs"]').first().click()
     // 模拟慢速 CI：测试进程恢复断言时，路由进度反馈可能已经结束。
     await page.waitForTimeout(800)
     expect(await readVisibleAnimationDurationProbe(page, progressTrackSelector), '减少动态模式下进度条动画可见').toBeGreaterThanOrEqual(120)
-    await expect(page.locator('[data-page="logs"]'), '日志中心页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
+    await expect(page.locator('[data-page="monitoring"]'), '观测工作区就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
     await expect.poll(
       async () => page.locator('[data-slot="top-loading-track"]').getAttribute('data-visible'),
       { message: '切页完成后顶部进度条稳定隐藏' },
     )
       .toBe('false')
+
+    // 顺带确认同域内再切一次仍能正常到达日志页（这一次不验进度条时长——同域相邻切换本就极快）。
+    await page.locator('a[href="/logs"]').first().click()
+    await expect(page.locator('[data-page="logs"]'), '日志中心页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
   })
 })
