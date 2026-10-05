@@ -10,7 +10,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
-  ChevronLeft,
   FileArchive,
   FolderUp,
   X,
@@ -39,6 +38,7 @@ import {
 } from '@/lib/client-publish-wizard'
 import { cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import DangerConfirm from '@/components/DangerConfirm'
 import FileExplorer from '@/components/FileExplorer'
@@ -509,25 +509,31 @@ export default function ClientPublishPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <div className="space-y-1">
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-          onClick={attemptCancel}
-        >
-          <ChevronLeft className="size-4" />
-          {t('clientPublish.backToChannel', '返回频道工作台')}
-        </button>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Upload className="size-6" /> {t('clientVersions.publish', '发布新版本')}
-        </h1>
-        <p className="text-sm text-muted-foreground max-w-2xl">
-          {t('clientVersions.wizardDesc', '拖入文件/文件夹本地暂存并编排（此时不上传），点「发布」才批量上传并发布。本期为未压缩（codec=none）发布。')}
-        </p>
-        <p className="text-xs text-muted-foreground font-mono">{channelId}</p>
-        <EmbeddedUpdaterSummary />
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语，与创建实例向导同处理——它是窄栏流程页，
+    // 保留 mx-auto max-w-4xl；返回语义由面包屑承载，原先左侧的返回按钮去掉
+    // （与向导页同理：它与页名并列时，读屏会先念按钮再念标题）。
+    // channelId 并入 description（等宽），不单独占一行。
+    <PageShell className="mx-auto max-w-4xl" data-page="client-publish">
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Upload className="size-6" />
+            {t('clientVersions.publish', '发布新版本')}
+          </span>
+        }
+        description={
+          <>
+            {t('clientVersions.wizardDesc', '拖入文件/文件夹本地暂存并编排（此时不上传），点「发布」才批量上传并发布。本期为未压缩（codec=none）发布。')}
+            {' · '}
+            <span className="font-mono">{channelId}</span>
+          </>
+        }
+        breadcrumbs={[
+          { label: t('nav.clientChannels'), to: '/client-channels' },
+          { label: t('clientVersions.publish', '发布新版本') },
+        ]}
+      />
+      <EmbeddedUpdaterSummary />
 
       <PublishStepIndicator step={step} />
 
@@ -768,7 +774,7 @@ export default function ClientPublishPage() {
         }}
         onCancel={() => setCleanAllConfirm(false)}
       />
-    </div>
+    </PageShell>
   )
 }
 
