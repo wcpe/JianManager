@@ -32,7 +32,7 @@ import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { ResourceGauge } from '@jianmanager/ui/components/gauge'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
-import { CardsGrid, DataPanelSkeleton, PageHeader, PageShell, ScopeBar } from '@jianmanager/ui/components/layout'
+import { CardsGrid, DataPanelSkeleton, PageHeader, PageShell, ScopeBar, Segment, Segments } from '@jianmanager/ui/components/layout'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -910,26 +910,16 @@ export default function NodesPage() {
                 </button>
               </div>
               {/* 活跃 | 归档 页面级分段（FR-393，URL ?view=） */}
-              <div className="inline-flex w-full rounded-md border p-0.5" role="tablist" aria-label={t('nodes.title')}>
+              <Segments className="w-full" aria-label={t('nodes.title')}>
                 {([
                   ['active', 'nodes.viewActive'],
                   ['archive', 'nodes.viewArchive'],
                 ] as const).map(([k, labelKey]) => (
-                  <button
-                    key={k}
-                    type="button"
-                    role="tab"
-                    aria-selected={view === k}
-                    onClick={() => setView(k)}
-                    className={cn(
-                      'flex-1 rounded px-2 py-1 text-xs transition-colors',
-                      view === k ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground',
-                    )}
-                  >
+                  <Segment key={k} className="flex-1" active={view === k} onClick={() => setView(k)}>
                     {t(labelKey)}
-                  </button>
+                  </Segment>
                 ))}
-              </div>
+              </Segments>
               {!isArchive && (
                 <>
                   {/* 集群汇总头：状态计数 chip + CPU/内存/磁盘聚合水位（复用 summarizeNodes，FR-144） */}

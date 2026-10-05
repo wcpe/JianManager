@@ -10,6 +10,8 @@ import {
   PlatformTab,
   PlatformTabs,
   ScopeBar,
+  Segment,
+  Segments,
   SettingsLayout,
   SummaryItem,
   SummaryStrip,
@@ -175,6 +177,49 @@ describe('PlatformTabs 工作区页签', () => {
   it('页签容器语义为 nav', () => {
     render(<PlatformTabs aria-label="平台管理分组" />)
     expect(screen.getByRole('navigation', { name: '平台管理分组' })).toBeInTheDocument()
+  })
+})
+
+describe('Segments 分段控件', () => {
+  it('容器语义为 tablist，选中项暴露 data-active 与 aria-selected', () => {
+    render(
+      <Segments aria-label="节点视图">
+        <Segment active>活跃</Segment>
+        <Segment>归档</Segment>
+      </Segments>,
+    )
+    const list = screen.getByRole('tablist', { name: '节点视图' })
+    expect(list).toHaveAttribute('data-slot', 'segments')
+
+    const active = screen.getByRole('tab', { name: '活跃' })
+    expect(active).toHaveAttribute('data-active', 'true')
+    expect(active).toHaveAttribute('aria-selected', 'true')
+
+    // 未选中项：无 data-active，但仍要显式 aria-selected=false（tab 语义要求）
+    const idle = screen.getByRole('tab', { name: '归档' })
+    expect(idle).not.toHaveAttribute('data-active')
+    expect(idle).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('选中块抬为卡片底色，未选中项走中性前景色', () => {
+    render(
+      <Segments>
+        <Segment active>活跃</Segment>
+        <Segment>归档</Segment>
+      </Segments>,
+    )
+    expect(screen.getByRole('tab', { name: '活跃' }).className).toContain('bg-card')
+    expect(screen.getByRole('tab', { name: '归档' }).className).not.toContain('bg-card')
+  })
+
+  it('容器与项都透传 className（调用方需要 w-full / flex-1 这类宽度覆盖）', () => {
+    render(
+      <Segments className="w-full" data-testid="list">
+        <Segment className="flex-1">活跃</Segment>
+      </Segments>,
+    )
+    expect(screen.getByTestId('list').className).toContain('w-full')
+    expect(screen.getByRole('tab', { name: '活跃' }).className).toContain('flex-1')
   })
 })
 
