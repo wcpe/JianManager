@@ -7305,6 +7305,10 @@ func (m *Manager) persistLoop(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// #67-B（b）：受控截断的**锁外执行点** —— 独立 tick（与"周期是否完成"无关 ✓），
+	// 每轮只做一次"能不能截断"的判定；真正要求 TryLock 成功 + 无读者 + 残余 ≤ 门限 ✓。
+	truncateTicker := time.NewTicker(defaultControlledTruncateInterval)
+	defer truncateTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -7313,8 +7317,31 @@ func (m *Manager) persistLoop(ctx context.Context) {
 			if err := m.persist(); err != nil {
 				slog.Warn("后台持久化失败（下一轮重试）", "error", err)
 			}
+		case <-truncateTicker.C:
+			m.tryControlledTruncate(ctx)
 		}
 	}
+}
+
+// defaultControlledTruncateInterval 是受控截断执行点的节拍（#67-B（b））：低频、与持久化周期解耦 ✓。
+const defaultControlledTruncateInterval = 60 * time.Second
+
+// tryControlledTruncate 在持久化环的 tick 上、**锁外**尝试一次受控截断（#67-B（b））。
+//
+// 为什么放在这里：TRUNCATE 会等读者并做页拷贝 —— 在持 `stateindex.Store.mu` 时做会把落库/采样/读面
+// 一起冻住（2026-10-05 生产 58min 停摆的机制本体 ✗✗）。本入口只在**环的节拍**上调用，且真正截断
+// 由 `Store.TryControlledTruncate` 用 `TryLock` 自证"没有在飞 apply/读"后才执行 ✓。
+func (m *Manager) tryControlledTruncate(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	m.persistPlanMu.Lock()
+	plan := m.persistPlan
+	m.persistPlanMu.Unlock()
+	if plan == nil || plan.store == nil {
+		return
+	}
+	plan.store.TryControlledTruncate(ctx)
 }
 
 // persistCtx 是 persist 的**可取消 + 分步 + 显式公平**实现。

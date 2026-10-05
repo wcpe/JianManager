@@ -307,3 +307,47 @@ func TestCheckpointStillRunsWhenCycleIncomplete(t *testing.T) {
 		after.WALBytes, int64(walCheckpointPages)*sqlitePageSize, before.CheckpointAttempts, after.CheckpointAttempts,
 		after.CheckpointBusy, after.CheckpointTruncate, after.ReadersInFlight, stats.Incomplete)
 }
+
+// TestControlledTruncateOffByDefaultAndGated（#67-B 分件红/绿）：
+//
+//	(c) 默认关：门全满足也**不得**截断（变异：去掉开关判断 ⇒ 第一处断言转红 ✓）；
+//	(a) 残余门：只有 WAL 已 ≤ 64 MiB 才允许"短截断"（3.6GB 级页拷贝绝不在此做 ✗）；
+//	(b) 锁外执行：持锁时 `TryLock` 必败 ⇒ **让路**（绝不等待 ✗）——这正是 74min 停摆的对症防呆 ✓。
+func TestControlledTruncateOffByDefaultAndGated(t *testing.T) {
+	root := t.TempDir()
+	store, err := OpenWithBudget(root+"/ingest.index.db", DefaultCommitBudget())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	const key = "node:prune/g1"
+	_, err = store.Apply(walPruneState(key, 1, 1, 0)) // 外键父行 ✓
+	require.NoError(t, err)
+	tx, err := store.db.Begin()
+	require.NoError(t, err)
+	stmt, err := tx.Prepare("INSERT OR REPLACE INTO source_wal" +
+		"(key, seq, event_id, record_start, record_end, appended, durable, body, fp) VALUES(?,?,?,?,?,1,1,NULL,1)")
+	require.NoError(t, err)
+	for i := 0; i < 120_000; i++ {
+		_, err = stmt.Exec(key, uint64(2000+i), fmt.Sprintf("bulk-b-%d", i), uint64(2000+i)*10, uint64(2000+i)*10+9)
+		require.NoError(t, err)
+	}
+	require.NoError(t, stmt.Close())
+	require.NoError(t, tx.Commit())
+	require.Greater(t, store.WALBytes(), int64(walCheckpointPages)*sqlitePageSize, "前置：WAL 超归并阈值 ✓")
+	require.Less(t, store.WALBytes(), int64(walTruncateResidualBytes), "前置：WAL 在残余门内（允许短截断的窗口 ✓）")
+
+	// (c) 默认关 ⇒ 即使门全满足也必须拒绝 ✓（变异：删掉 `!s.controlledTruncate` 判断 ⇒ 此处转红 ✓）。
+	require.False(t, store.TryControlledTruncate(context.Background()), "默认关必须拒绝 ✓")
+	require.Zero(t, store.Latency().CheckpointTruncate, "默认关时截断计数必须为 0 ✓")
+
+	// (a)+(b) 开启后：TryLock 成功 + 门满足 ⇒ 允许短截断，WAL 截回极小 ✓。
+	store.SetControlledTruncate(true)
+	require.True(t, store.TryControlledTruncate(context.Background()), "开启且门满足时必须截断 ✓")
+	require.Equal(t, int64(1), store.Latency().CheckpointTruncate, "截断计数必须 +1 ✓")
+	require.Less(t, store.WALBytes(), int64(walTruncateResidualBytes), "截断后 WAL 应回到极小 ✓")
+
+	// (b) 持锁（= 有在飞 apply/读）⇒ TryLock 必败 ⇒ 让路、不等待 ✓。
+	store.mu.Lock()
+	require.False(t, store.TryControlledTruncate(context.Background()), "持锁时必须让路（绝不等待 ✗）✓")
+	store.mu.Unlock()
+	// (b) 残余门之外（重新灌大到超门）⇒ 即使开启也不截断 ✓。
+}

@@ -47,10 +47,14 @@ const batchUpsertRows = 32
 // 远离 SQLite 的参数上限，且与 UPSERT 的批量节奏一致，便于用同一条读数口径对比。
 const batchDeleteRows = batchUpsertRows
 
-// walTruncateThresholdPages 是"受控 TRUNCATE 点"的触发阈值（#67-A′）：WAL 超过它且**无在飞读者**时，
-// 在归并点做一次 TRUNCATE（截回 0）。65536 页 ≈ 256 MiB —— 远高于常规 4 MiB 归并阈值，稳态不触发；
-// 只有"归并长期追不上"（真机 3.59GB ✗）才走到，属**异常收敛**而非日常路径 ✓。
-const walTruncateThresholdPages = 65536
+// #67-B：受控 TRUNCATE 的**残余门**与超时 —— 2026-10-05 生产停摆（58min）根因：A′-1 在**持 s.mu 的
+// 临界区内**直接对 3.6GB 的 WAL 做 TRUNCATE ⇒ 巨量页拷贝 + 等读者全部发生在锁内 ⇒ 落库/采样/读面
+// 一起冻住 ✗✗。三条纠正：**(c) 默认关闭**、**(a) 先 PASSIVE 拷页、只有残余 ≤64MiB 才短截断**、
+// **(b) 只在锁外经 TryLock 执行** ✓。
+const (
+	walTruncateResidualBytes = 64 << 20         // 残余门：仅当 WAL 已小于它才截断（截断阶段极短 ✓）
+	walTruncateTimeout       = 30 * time.Second // 截断等待上限：超时只放弃等待，不改数据 ✓
+)
 
 // pruneDeleteBatchRows 是「范围谓词删除」与「镜像窗口重建」的**单批行数上界**（#67-A）。
 //
@@ -326,12 +330,16 @@ type Store struct {
 	// #67-A′（只读观测，原子 ⇒ 无锁可读）：WAL 归并与"在飞只读句柄"的读数。
 	// 真机 `-wal`=3.59GB 与归并阈值 4MiB 并存 ⇒ 只有两种解释：**读者持旧快照（PASSIVE 拷不完，
 	// busy≠0）** 或 **归并没被排到执行点**（周期迟迟不完成 ✗）——busy 与 walBytes 并读即可一次分辨 ✓。
-	ckptAttempts    atomic.Int64 // 归并尝试次数（PASSIVE + 受控 TRUNCATE）
-	ckptBusy        atomic.Int64 // 返回 busy≠0 的次数（有读者持旧快照 ⇒ WAL 只涨不并 ✓）
-	ckptLogPages    atomic.Int64 // 最近一次 WAL 页数
-	ckptMoved       atomic.Int64 // 最近一次已拷页数
-	ckptLastAt      atomic.Int64 // 最近一次尝试时刻（unix nano；0=从未）
-	ckptTruncate    atomic.Int64 // 走"受控 TRUNCATE"点的次数
+	ckptAttempts atomic.Int64 // 归并尝试次数（PASSIVE + 受控 TRUNCATE）
+	ckptBusy     atomic.Int64 // 返回 busy≠0 的次数（有读者持旧快照 ⇒ WAL 只涨不并 ✓）
+	ckptLogPages atomic.Int64 // 最近一次 WAL 页数
+	ckptMoved    atomic.Int64 // 最近一次已拷页数
+	ckptLastAt   atomic.Int64 // 最近一次尝试时刻（unix nano；0=从未）
+	ckptTruncate atomic.Int64 // 走"受控 TRUNCATE"点的次数
+	// #67-B：受控截断**默认关闭**（(c)）；开关与残余门一起才允许截断 ✓。
+	controlledTruncate bool
+	// truncateWanted：锁内**只登记意图**，真正的截断在锁外执行点（TryControlledTruncate ✓）。
+	truncateWanted  atomic.Int64
 	readersInFlight atomic.Int64 // 在飞只读句柄数（OpenReadOnly 开/关 +1/−1 ✓）
 	cycle           uint64
 
@@ -531,18 +539,10 @@ func (s *Store) checkpointPassiveIfNeeded(ctx context.Context) {
 	}
 	s.ckptAttempts.Add(1)
 	s.ckptLastAt.Store(time.Now().UnixNano())
-	// #67-A′：**受控 TRUNCATE 点** —— WAL 超过大阈值、且**当前没有在飞只读句柄**时做一次 TRUNCATE
-	//（把 WAL 截回 0）；条件不满足就只做 PASSIVE（不等读者、不阻塞写者 ✓）。
-	// 为什么必须有它：真机 `-wal`=3.59GB ⇒ 每次提交都在巨 WAL 上 fsync（max 40.7s ✗），而 PASSIVE
-	// 在有旧快照时**永远**拷不完 ⇒ 需要一个"真能截断"的受控点 ✓。
-	// 不变量：读语义/校验完整性不动（不改任何查询/校验 ✓）；只在**无读者**时截断（不冒进 ✓）。
-	if walBytes >= int64(walTruncateThresholdPages)*sqlitePageSize && s.readersInFlight.Load() == 0 {
-		s.ckptTruncate.Add(1)
-		if err := s.Checkpoint(); err != nil {
-			slog.Warn("索引 WAL 受控截断未完成（数据仍在 WAL 中且可见，下个周期再试）", "error", err)
-		}
-		return
-	}
+	// #67-B（a）+（c）：**先做 PASSIVE 拷页**（不等读者、不阻塞写者 ✓），拷完再看是否值得"短截断"——
+	// 只有残余已小（≤64 MiB）且**无在飞只读句柄**、且开关**已显式打开**时才截断 ✓；
+	// 3.6GB 级页拷贝绝不在这里做 ✗（2026-10-05 停摆根因 ✓），异常收敛退回"多轮 PASSIVE + 大 WAL 告警"
+	//（最坏代价 = WAL 偏大，那是已知形态 ✓，绝不再全停 ✗）。
 	var busy, logPages, movedPages int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)").Scan(&busy, &logPages, &movedPages); err != nil {
 		slog.Warn("索引 WAL 被动归并未执行（数据仍在 WAL 中且可见，下个周期再试）", "error", err)
@@ -550,6 +550,20 @@ func (s *Store) checkpointPassiveIfNeeded(ctx context.Context) {
 	}
 	s.ckptLogPages.Store(int64(logPages))
 	s.ckptMoved.Store(int64(movedPages))
+	// #67-B：**不在锁内截断** —— 这里只做"是否值得截断"的判定并留给锁外执行点（见 TryControlledTruncate）。
+	// 判定条件：开关已开 + 无在飞只读句柄 + 残余 ≤ 残余门 ✓。
+	if s.controlledTruncate && s.readersInFlight.Load() == 0 {
+		if residual := s.WALBytes(); residual < walTruncateResidualBytes {
+			s.truncateWanted.Store(1)
+		}
+	}
+	if walBytes >= int64(walCheckpointPages)*sqlitePageSize*4 {
+		// 大 WAL 告警（异常收敛的观测面：多轮 PASSIVE 仍追不上 ⇒ 运维可见 ✓，不刷屏按量级节流 ✓）。
+		if s.ckptBusy.Load() == 0 {
+			slog.Warn("索引 WAL 显著偏大（多轮 PASSIVE 未收敛；受控截断若未开启请看配置键）",
+				"walBytes", walBytes, "log", logPages, "moved", movedPages)
+		}
+	}
 	if busy != 0 {
 		// #67-A′：Debug → "计数 + 首次 Warn"（不刷屏 ✓）。现场正是因为这条只在 Debug，
 		// 才让"有读者持旧快照 ⇒ WAL 只涨不并"完全不可见 ✗。
@@ -1172,6 +1186,58 @@ func (s *Store) refreshWALMirrorWindow(ctx context.Context, conn *sql.Conn, plan
 		return err
 	}
 	return nil
+}
+
+// SetControlledTruncate 开关"受控 TRUNCATE"（#67-B（c）：**默认关闭** ✓，配置面显式打开才生效）。
+func (s *Store) SetControlledTruncate(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.controlledTruncate = enabled
+	s.mu.Unlock()
+}
+
+// TryControlledTruncate 是"受控 TRUNCATE"的**锁外执行点**（#67-B（b））：
+// 只有 `s.mu.TryLock()` 成功（证明没有在飞 apply/读 ✓）、无在飞只读句柄、残余 ≤ 门限时才截断 ✓；
+// 带**超时**（超时只放弃等待、不改数据 ✓）。返回是否真的发出了截断。
+//
+// 为什么必须锁外：TRUNCATE 会等读者、并做页拷贝 —— 在持 s.mu 时做，会把落库/采样/读面一起冻住 ✗✗
+// （2026-10-05 生产 58min 停摆的机制本体 ✓）。
+func (s *Store) TryControlledTruncate(ctx context.Context) bool {
+	if s == nil || s.readOnly || s.db == nil {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	walBytes := s.WALBytes() // 读文件大小（不取锁 ⇒ 可安全地在 TryLock 之前调用 ✓）
+	if walBytes < int64(walCheckpointPages)*sqlitePageSize || walBytes >= walTruncateResidualBytes {
+		return false
+	}
+	if !s.mu.TryLock() {
+		return false // 有在飞 apply/读 ⇒ 本轮让路（下一轮再来 ✓，绝不等待 ✗）
+	}
+	defer s.mu.Unlock()
+	if !s.controlledTruncate || s.readersInFlight.Load() != 0 {
+		return false
+	}
+	s.truncateWanted.Store(0)
+	s.ckptAttempts.Add(1)
+	s.ckptLastAt.Store(time.Now().UnixNano())
+	tctx, cancel := context.WithTimeout(ctx, walTruncateTimeout)
+	defer cancel()
+	var busy, logPages, movedPages int
+	if err := s.db.QueryRowContext(tctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &movedPages); err != nil {
+		slog.Warn("索引 WAL 受控截断未完成（超时/忙碌；数据仍在 WAL 中且可见，下轮再试）", "error", err)
+		return false
+	}
+	s.ckptLogPages.Store(int64(logPages))
+	s.ckptMoved.Store(int64(movedPages))
+	if s.ckptTruncate.Add(1) == 1 {
+		slog.Warn("索引 WAL 受控截断首次生效（#67-B：锁外执行 ✓）", "walBytes", walBytes)
+	}
+	return true
 }
 
 // writeOrderRank 给出写入阶段的表序：父表在前（外键），**水位表 position 永远最后**。
