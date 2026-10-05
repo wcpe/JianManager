@@ -996,7 +996,10 @@ export default function NodesPage() {
       </aside>
 
       {/* 右栏：活跃详情 / 归档只读详情（FR-393） */}
-      <section className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+      {/* 阶段 6 第二步：详情态改用 PageShell 的 tool 变体。
+          它原是裸 <section>——那时左栏列表与它同处一个 flex-row；两态分离后右栏独占整页，
+          滚动收口到它自身（tool 变体是 gap-0 p-0，不叠加默认留白）。 */}
+      <PageShell variant="tool" className="min-h-0 min-w-0 flex-1 overflow-y-auto">
         {isArchive ? (
           selectedArchived ? (
             <ArchivedNodeDetailPane
@@ -1032,7 +1035,7 @@ export default function NodesPage() {
             </div>
           </div>
         )}
-      </section>
+      </PageShell>
 
       <AddNodeDialog open={addOpen} onClose={() => setAddOpen(false)} />
       <DangerConfirm
