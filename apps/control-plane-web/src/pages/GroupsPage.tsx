@@ -9,6 +9,7 @@ import GroupMembersDialog from '@/components/GroupMembersDialog'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { formatSizeMb } from '@/pages/backups-view'
 
 /** 用户组详情可打开的面板（FR-128 可寻址）：编辑属性 / 管理成员。 */
@@ -48,11 +49,13 @@ export default function GroupsPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">{t('groups.title')}</h1>
-        <Button onClick={() => setShowCreate(true)}>+ {t('groups.createGroup')}</Button>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语。原为裸 <div>（连 space-y 都没有），
+    // 且无 data-page，迁移时补上。
+    <PageShell data-page="groups">
+      <PageHeader
+        title={t('groups.title')}
+        actions={<Button onClick={() => setShowCreate(true)}>+ {t('groups.createGroup')}</Button>}
+      />
 
       <CreateGroupDialog open={showCreate} onClose={() => setShowCreate(false)} />
 
@@ -148,7 +151,7 @@ export default function GroupsPage() {
         onConfirm={() => { if (deleteGroup) del.mutate(deleteGroup.id); setDeleteGroup(null) }}
         onCancel={() => setDeleteGroup(null)}
       />
-    </div>
+    </PageShell>
   )
 }
 
