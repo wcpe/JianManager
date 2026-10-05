@@ -124,8 +124,13 @@ export function ResourceTree({
         </div>
       )}
 
-      {/* 滚动只发生在这里：搜索框必须常驻（原型 .resource-search 位于 .resource-scroll 之外）。 */}
-      <div data-slot="resource-tree-list" className="min-h-0 flex-1 overflow-auto px-[9px] pb-[14px]">
+      {/*
+        滚动只发生在这里：搜索框必须常驻（原型 .resource-search 位于 .resource-scroll 之外）。
+        滚动条隐藏但保留滚动（FR-131）——与侧栏其它滚动区（WorkspaceGroupSections /
+        WorkspaceIconRail）保持一致。本包内 PlatformTabs、ObjectPageHeader 同样使用
+        scrollbar-none，由宿主 app 的 index.css 提供定义，故此前的缺失是遗漏。
+      */}
+      <div data-slot="resource-tree-list" className="min-h-0 flex-1 overflow-auto scrollbar-none px-[9px] pb-[14px]">
         {rows.length === 0 ? (
           <p data-slot="resource-tree-empty" className="px-[10px] py-[10px] text-[11px] text-muted-foreground">
             {emptyText}
