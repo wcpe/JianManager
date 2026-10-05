@@ -28,7 +28,7 @@ import { InstancePicker } from '@/components/InstancePicker'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { PageHeader, PageShell, Segment, Segments } from '@jianmanager/ui/components/layout'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { cn } from '@jianmanager/ui'
 import {
@@ -815,30 +815,60 @@ export default function LogsPage() {
         onConfirm={(bounds) => void handleExport('range', bounds)}
       />
 
-      <div
-        className="jm-toolbar-surface flex flex-wrap gap-1 p-1"
-        role="tablist"
-        aria-label={t('logs.viewLabel')}
-      >
-        {LOG_VIEWS.filter(
-          // 非平台管理员只能看 node_instance（联邦查询按实例范围收敛）。
-          (candidate) => isPlatformAdmin || candidate === 'node_instance',
-        ).map(
-          (candidate) => (
-            <Button
-              key={candidate}
-              variant={view === candidate ? 'default' : 'ghost'}
-              size="sm"
-              role="tab"
-              aria-selected={view === candidate}
-              onClick={() => {
-                switchView(candidate)
-              }}
-            >
-              {t(`logs.view_${candidate}`)}
-            </Button>
-          ),
-        )}
+      <div className="jm-toolbar-surface flex flex-wrap items-center gap-1 p-1">
+        <Segments aria-label={t('logs.viewLabel')}>
+          {LOG_VIEWS.filter(
+            // legacy 是「切换前存量日志」的只读入口，不是平级主视图：收纳到右侧「更多」，
+            // 避免与平台/节点视图并列造成误解，也减少工具栏元素数量。
+            (candidate) =>
+              candidate !== 'legacy' && (isPlatformAdmin || candidate === 'node_instance'),
+          ).map(
+            (candidate) => (
+              <Segment
+                key={candidate}
+                active={view === candidate}
+                onClick={() => {
+                  setView(candidate)
+                  setPage(1)
+                  setFederationCursors({})
+                  if (candidate === 'legacy') setFollow(false)
+                }}
+              >
+                {t(`logs.view_${candidate}`)}
+              </Segment>
+            ),
+          )}
+        </Segments>
+        {/* 右侧收纳：非常用入口（Legacy 只读）进「更多」，保持主视图区稳定。 */}
+        <div className="ml-auto flex items-center">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                data-testid="logs-more-trigger"
+                aria-label={t('logs.more')}
+              >
+                <MoreHorizontal className="size-4" />
+                {t('logs.more')}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                data-testid="logs-view-legacy"
+                disabled={!isPlatformAdmin}
+                onSelect={() => {
+                  setView('legacy')
+                  setPage(1)
+                  setFederationCursors({})
+                  setFollow(false)
+                }}
+              >
+                {t('logs.view_legacy')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {/* 强筛选工具栏 */}
