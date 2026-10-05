@@ -18,7 +18,7 @@ import {
 } from './settings-form'
 import { FieldError } from '@jianmanager/ui/components/field-label'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { PageHeader, PageShell, SettingsLayout } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -122,14 +122,16 @@ export default function SettingsPage() {
 
   return (
     // 全量对齐：外壳与页头改用布局层原语。data-page 由 PageShell spread 透传，保持原值。
-    // 下方的双栏（分类导航 + 内容）暂不动——现有 w-44 与 SettingsLayout 的 170px 有视觉差异，
-    // 归入「双栏布局统一」单独处理，避免把骨架对齐与间距调整混在一次改动里。
+    // 双栏（分类导航 + 内容）改用 SettingsLayout：原手写 flex + w-44(176px) 与原型
+    // 的 170px 不一致，且缺窄屏单列降级，本原语把这两项一并固定。
+    // 注：ARCHITECTURE 与原型都要求设置页用 fixed 壳态（内部区域自行滚动），
+    // 那属滚动模型变更，留待单独处理，不与本次间距统一混改。
     <PageShell data-page="settings">
       <PageHeader title={t('settings.title')} description={t('settings.subtitle')} />
 
-      <div className="flex gap-4">
+      <SettingsLayout>
         {/* 内部侧边栏：分类导航 */}
-        <aside className="w-44 shrink-0 rounded-lg border bg-card/80 p-2 shadow-soft">
+        <aside className="rounded-lg border bg-card/80 p-2 shadow-soft">
           <nav className="space-y-0.5">
             {categories.map((c) => {
               const Icon = CATEGORY_ICON[c]
@@ -176,7 +178,7 @@ export default function SettingsPage() {
             />
           )}
         </div>
-      </div>
+      </SettingsLayout>
 
       {/* FR-158：切分类未保存拦截确认 */}
       <Dialog open={pendingCat !== null} onOpenChange={(o) => !o && setPendingCat(null)}>
