@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ArrowLeft, Boxes, ChevronLeft, ChevronRight, Check, Plus, X } from 'lucide-react'
+import { Boxes, ChevronLeft, ChevronRight, Check, Plus, X } from 'lucide-react'
 import api from '@/api/client'
 import { useNodes } from '@/api/nodes'
 import { useNodeDockerCheck } from '@/api/docker'
@@ -13,6 +13,7 @@ import { useTemplates } from '@/api/templates'
 import { useNodeJDKs } from '@/api/jdks'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { useConsoleStore } from '@/stores/console'
@@ -197,21 +198,25 @@ export default function InstanceWizardPage() {
   const jdkLabel = jdkOptions.find((o) => o.value === jdkId)?.label || t('instances.jdkSystemDefault')
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => navigate('/instances')}
-          className="grid size-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-          aria-label={t('common.back')}
-        >
-          <ArrowLeft className="size-4" />
-        </button>
-        <div>
-          <h1 className="text-xl font-bold">{t('instances.createInstance')}</h1>
-          <p className="text-xs text-muted-foreground">{t('instances.wizardSubtitle', '按步骤填写，几步就能在某台节点上建好一个服。')}</p>
-        </div>
-      </div>
+    // 阶段 6 页面迁移：外壳改用 PageShell，保留 `mx-auto max-w-3xl`——向导是窄栏流程，
+    // 不是全宽内容页（原型 `wizardPage` 也是 `.page > .wizard` 的窄栏包裹）。
+    <PageShell className="mx-auto max-w-3xl">
+      {/* 页头按原型 `wizardPage` 的形态：面包屑「实例 > 创建实例」+ 右侧「取消」。
+          原先左侧的返回箭头按钮去掉——原型里流程页的返回语义由面包屑承载，
+          它原先的 aria-label 是「返回」，与「取消」构成两个同义入口，属冗余。 */}
+      <PageHeader
+        title={t('instances.createInstance')}
+        description={t('instances.wizardSubtitle', '按步骤填写，几步就能在某台节点上建好一个服。')}
+        breadcrumbs={[
+          { label: t('nav.allInstances'), to: '/instances' },
+          { label: t('instances.createInstance') },
+        ]}
+        actions={
+          <Button variant="outline" onClick={() => navigate('/instances')}>
+            {t('common.cancel')}
+          </Button>
+        }
+      />
 
       {/* 步骤指示器 */}
       <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
@@ -375,7 +380,7 @@ export default function InstanceWizardPage() {
           </Button>
         )}
       </div>
-    </div>
+    </PageShell>
   )
 }
 
