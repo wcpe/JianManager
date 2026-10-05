@@ -67,4 +67,7 @@ export * from './components/views/file-browser/FileBrowserTree'
 // ADR-097 起：应用业务组件按 a+b 双范式受控化并入，按域归档
 export * from './components/views/nodes/NodePortsPanel'
 export * from './components/views/nodes/NodeArtifactCachePanel'
+export * from './components/views/nodes/NodeProbeVersionPanel'
+export * from './components/views/nodes/NodeProxyPanel'
+export * from './components/views/nodes/NodeGlobalPackagesSection'
 export * from './components/views/DangerConfirm'

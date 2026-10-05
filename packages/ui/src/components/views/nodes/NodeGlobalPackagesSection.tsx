@@ -1,51 +1,85 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import { ArrowUpCircle, Loader2, Package, RefreshCw, Search, Trash2 } from 'lucide-react'
-import {
-  useGlobalPackages,
-  useInstallGlobalPackage,
-  useRemoveGlobalPackage,
-} from '@/api/pmConfig'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import DangerConfirm from '@/components/DangerConfirm'
+import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+
+/**
+ * 一条全局包（本组件所需的最小结构）。
+ *
+ * 外壳直接传 `@/api/pmConfig` 的 `GlobalPackage` 会结构兼容，故无需把该 API 类型迁进包。
+ */
+export interface GlobalPackageView {
+  name: string
+  version: string
+  /** 可更新到的版本；无则不可更新。 */
+  latest?: string
+}
+
+/** 全局包视图（同上）。 */
+export interface GlobalPackagesView {
+  /** 包管理器名（展示用徽章）。 */
+  pm: string
+  packages: GlobalPackageView[]
+}
 
 /**
  * 节点全局包管理（FR-307）：托管全局目录（<数据根>/opt/runtimes/global）内已装包的
  * 列表 / 搜索 / 安装 / 升级 / 卸载。安装与升级为任务中心异步（202+taskId，进度看任务中心）；
  * 卸载同步。包管理器与下载源取节点 FR-306 配置，此处不重复选择。
+ *
+ * 受控视图（ADR-097 b 范式）：不取数、不发请求、不弹 toast——数据与刷新/安装/卸载
+ * 一律经 props 与回调进出；搜索词、安装表单草稿、待删包名等 UI 状态留在组件内。
+ * 是否挂载（对应原先的 `active`）由外壳决定，组件不再自行判断。
  */
-export default function NodeGlobalPackagesSection({ nodeId, active = true }: { nodeId: number; active?: boolean }) {
+export interface NodeGlobalPackagesSectionProps {
+  /** 列表数据；外壳取数后注入。 */
+  data?: GlobalPackagesView
+  /** 首次加载态（渲染骨架）。 */
+  isLoading?: boolean
+  /** 后台刷新中（刷新按钮转圈）。 */
+  isFetching?: boolean
+  /** 列表读取失败的后端消息；外壳注入。 */
+  errorMessage?: string
+  /** 手动刷新。 */
+  onRefresh: () => void
+  /** 安装或升级到指定版本（version 缺省=latest）。返回是否成功。 */
+  onInstall: (name: string, version?: string) => Promise<boolean>
+  /** 卸载。返回是否成功。 */
+  onRemove: (name: string) => Promise<boolean>
+  /** 安装在途：禁用安装按钮。 */
+  installing?: boolean
+}
+
+export default function NodeGlobalPackagesSection({
+  data,
+  isLoading,
+  isFetching = false,
+  errorMessage,
+  onRefresh,
+  onInstall,
+  onRemove,
+  installing = false,
+}: NodeGlobalPackagesSectionProps) {
   const { t } = useTranslation()
-  const { data, isLoading, isFetching, refetch, error } = useGlobalPackages(nodeId, { enabled: active })
-  const install = useInstallGlobalPackage(nodeId)
-  const removePkg = useRemoveGlobalPackage(nodeId)
 
   const [query, setQuery] = useState('')
   const [name, setName] = useState('')
   const [version, setVersion] = useState('')
   const [pendingDel, setPendingDel] = useState<string | null>(null)
 
-  if (!active) return null
-
   const pkgs = (data?.packages ?? []).filter((p) => !query.trim() || p.name.toLowerCase().includes(query.trim().toLowerCase()))
 
-  const submitInstall = (pkgName: string, ver?: string) => {
-    install.mutate(
-      { name: pkgName.trim(), version: ver?.trim() || undefined },
-      {
-        onSuccess: () => {
-          toast.success(t('pkg.installSubmitted', '安装任务已提交，进度见任务中心'))
-          setName('')
-          setVersion('')
-        },
-        onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-          toast.error(err.response?.data?.message || t('pkg.installFailed', '提交安装失败')),
-      },
-    )
+  const submitInstall = async (pkgName: string, ver?: string) => {
+    const ok = await onInstall(pkgName, ver)
+    // 成功才清空表单（失败保留输入，便于用户修正后重试）。
+    if (ok) {
+      setName('')
+      setVersion('')
+    }
   }
 
   return (
@@ -55,7 +89,7 @@ export default function NodeGlobalPackagesSection({ nodeId, active = true }: { n
         <span className="text-sm font-medium">{t('pkg.title', '全局包')}</span>
         {data?.pm && <Badge variant="outline" className="text-xs">{data.pm}</Badge>}
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" onClick={() => refetch()} disabled={isFetching} aria-label={t('common.refresh', '刷新')}>
+        <Button variant="ghost" size="sm" onClick={onRefresh} disabled={isFetching} aria-label={t('common.refresh', '刷新')}>
           {isFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
         </Button>
       </div>
@@ -76,8 +110,8 @@ export default function NodeGlobalPackagesSection({ nodeId, active = true }: { n
           aria-label={t('pkg.versionLabel', '版本')}
           className="h-8 w-36 text-xs"
         />
-        <Button size="sm" disabled={install.isPending || !name.trim()} onClick={() => submitInstall(name, version)}>
-          {install.isPending ? <Loader2 className="size-4 animate-spin" /> : t('pkg.install', '安装')}
+        <Button size="sm" disabled={installing || !name.trim()} onClick={() => void submitInstall(name, version)}>
+          {installing ? <Loader2 className="size-4 animate-spin" /> : t('pkg.install', '安装')}
         </Button>
       </div>
 
@@ -89,10 +123,8 @@ export default function NodeGlobalPackagesSection({ nodeId, active = true }: { n
           <Skeleton className="h-10 w-full" />
           <Skeleton className="h-10 w-full" />
         </div>
-      ) : error ? (
-        <div className="text-sm text-status-danger">
-          {(error as Error & { response?: { data?: { message?: string } } }).response?.data?.message || t('pkg.listFailed', '获取全局包失败')}
-        </div>
+      ) : errorMessage ? (
+        <div className="text-sm text-status-danger">{errorMessage}</div>
       ) : (
         <>
           {(data?.packages?.length ?? 0) > 3 && (
@@ -122,7 +154,7 @@ export default function NodeGlobalPackagesSection({ nodeId, active = true }: { n
                       type="button"
                       aria-label={t('pkg.upgrade', '升级')}
                       className="shrink-0 text-muted-foreground transition-colors hover:text-primary"
-                      onClick={() => submitInstall(p.name)}
+                      onClick={() => void submitInstall(p.name)}
                     >
                       <ArrowUpCircle className="size-4" />
                     </button>
@@ -150,11 +182,7 @@ export default function NodeGlobalPackagesSection({ nodeId, active = true }: { n
         onConfirm={() => {
           const n = pendingDel!
           setPendingDel(null)
-          removePkg.mutate(n, {
-            onSuccess: () => toast.success(t('pkg.removed', '已卸载')),
-            onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-              toast.error(err.response?.data?.message || t('pkg.removeFailed', '卸载失败')),
-          })
+          void onRemove(n)
         }}
         onCancel={() => setPendingDel(null)}
       />
