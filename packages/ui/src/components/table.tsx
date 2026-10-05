@@ -321,8 +321,12 @@ function TableCardHeader({
   children,
   ...props
 }: Omit<React.ComponentProps<"div">, "title"> & {
-  /** 卡片标题（已翻译）。 */
-  title: React.ReactNode
+  /**
+   * 卡片标题（已翻译）。**可选**——按布局规范，页名只出现在页面级 `PageHeader` 里，
+   * 卡片头不再重复（原型：「减少重复的页名、指标和外层卡壳」）。
+   * 仅当这张表与页面不同名时才传（如页内的分组表、子表）。
+   */
+  title?: React.ReactNode
   /** 标题右侧计数/简述（等宽数字），可选。 */
   count?: React.ReactNode
   /** 标题下方的副说明（如页面功能说明），可选。 */
@@ -342,7 +346,7 @@ function TableCardHeader({
       {...props}
     >
       <div className="flex flex-wrap items-center gap-2.5">
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        {title != null && <h2 className="text-sm font-semibold text-foreground">{title}</h2>}
         {count != null && (
           <span className="font-mono text-xs text-muted-foreground tabular-nums">{count}</span>
         )}
