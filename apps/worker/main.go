@@ -1607,6 +1607,13 @@ func logIndexPersistSample(window *logIndexPersistWindow, latency stateindex.Lat
 		"nsPlan", latency.NsPlan,
 		"nsPrune", latency.NsPrune,
 		"nsMirrorRebuild", latency.NsMirrorRebuild,
+		// #67-A′：WAL 归并面 —— "-wal 3.59GB 与阈值 4MiB 并存"的两种解释（读者持旧快照 / 归并没被
+		// 排到执行点）由 busy 与 walBytes 一次分辨 ✓；truncate 计受控截断点被走到几次 ✓。
+		"walBytes", latency.WALBytes,
+		"checkpointAttempts", latency.CheckpointAttempts,
+		"checkpointBusy", latency.CheckpointBusy,
+		"checkpointTruncate", latency.CheckpointTruncate,
+		"readersInFlight", latency.ReadersInFlight,
 	)
 }
 

@@ -249,3 +249,61 @@ func TestWALPruneDeleteIsBatchedUnderLargeRanges(t *testing.T) {
 	rows := walRowsOf(t, store, key)
 	require.Len(t, rows, 1+3, "水位之上 1 条 + 未耐久 3 条 = 4 条必须留下 ✓")
 }
+
+// TestCheckpointStillRunsWhenCycleIncomplete（#67-A′ 红/绿）：WAL 超阈值 + 周期**未完成**时，
+// WAL 归并仍必须被**尝试**。
+//
+// 现场：归并原来只挂在"周期完成"出口 ⇒ 单元动辄 10s–40s、周期频繁 `Incomplete` ⇒ 归并永远排不上
+// ⇒ `-wal` 涨到 3.59GB ⇒ 每次提交都在巨 WAL 上 fsync（max 40,767ms / rows 0 ✗✗）。
+//
+// 红（变异：撤掉"未完成出口"那次调用）⇒ `CheckpointAttempts` 不再增长 ⇒ 本用例转红 ✓（实测）。
+// 绿 ⇒ 计数增长且五读数可见 ✓；不变量：读语义/校验完整性一字未动 ✓。
+func TestCheckpointStillRunsWhenCycleIncomplete(t *testing.T) {
+	root := t.TempDir()
+	budget := DefaultCommitBudget()
+	budget.CycleMaxRows = 1 // 强制周期**未完成**（一次调用只推进 1 行差异 ✓）
+	store, err := OpenWithBudget(root+"/ingest.index.db", budget)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	const key = "node:prune/g1"
+	// 先把源/水位行落地（外键父行 ✓，同时也是"期望状态"的底座 ✓）。
+	small := walPruneState(key, 1, 1, 0)
+	_, err = store.Apply(small)
+	require.NoError(t, err)
+	// 再**绕过镜像**直接灌足量 WAL 行，把 WAL 顶过归并阈值（4 MiB）——
+	// `source_wal` 的正文列对本例是 NULL（引用条目），索引体积只随**行数**增长 ✓。
+	tx, err := store.db.Begin()
+	require.NoError(t, err)
+	stmt, err := tx.Prepare("INSERT OR REPLACE INTO source_wal" +
+		"(key, seq, event_id, record_start, record_end, appended, durable, body, fp) VALUES(?,?,?,?,?,1,1,NULL,1)")
+	require.NoError(t, err)
+	for i := 0; i < 120_000; i++ {
+		_, err = stmt.Exec(key, uint64(1000+i), fmt.Sprintf("bulk-%d", i),
+			uint64(1000+i)*10, uint64(1000+i)*10+9)
+		require.NoError(t, err)
+	}
+	require.NoError(t, stmt.Close())
+	require.NoError(t, tx.Commit())
+	require.Greater(t, store.WALBytes(), int64(walCheckpointPages)*sqlitePageSize,
+		"前置：WAL 必须超过归并阈值（4 MiB）——否则归并本就会在阈值处提前返回 ✓")
+
+	// 只改一行（差异 ≥1 ⇒ 至少一个提交单元 ⇒ 因 CycleMaxRows=1 而**未完成** ✓）。
+	desired := small
+	desired.WAL = append([]WALRow(nil), small.WAL...)
+	desired.WAL[0].Body = []byte("changed-body-for-incomplete-cycle")
+	desired.WAL[0].FP = fingerprint(desired.WAL[0].Body)
+	before := store.Latency()
+	stats, err := store.ApplyScopedCtx(context.Background(), desired, []string{key},
+		[]WALPrune{{Owner: key, EndThrough: 0}})
+	require.NoError(t, err)
+	require.True(t, stats.Incomplete, "前置：本周期必须**未完成**（预算足够小 ✓）")
+	after := store.Latency()
+
+	// 绿：未完成出口也必须尝试归并 ✓（变异：撤掉该调用 ⇒ 此处转红 ✓）。
+	require.Greater(t, after.CheckpointAttempts, before.CheckpointAttempts,
+		"周期未完成时 WAL 归并仍必须被尝试（否则巨 WAL 永不收敛 ✗）")
+	require.Positive(t, after.WALBytes, "walBytes 读数必须可见 ✓")
+	t.Logf("#67-A′ 观测：walBytes=%d（阈值 %d）、checkpointAttempts %d→%d、busy=%d、truncate=%d、readersInFlight=%d、Incomplete=%v",
+		after.WALBytes, int64(walCheckpointPages)*sqlitePageSize, before.CheckpointAttempts, after.CheckpointAttempts,
+		after.CheckpointBusy, after.CheckpointTruncate, after.ReadersInFlight, stats.Incomplete)
+}

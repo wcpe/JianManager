@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	// 纯 Go 的嵌入式 SQLite 驱动：CGO_ENABLED=0 可直接编译（spec §2.1）。
@@ -45,6 +46,11 @@ const batchUpsertRows = 32
 // 语句解析全花在删除上。合并行数取同一个 32：单条语句的实参最多 32×5=160 个（主键最长 5 列），
 // 远离 SQLite 的参数上限，且与 UPSERT 的批量节奏一致，便于用同一条读数口径对比。
 const batchDeleteRows = batchUpsertRows
+
+// walTruncateThresholdPages 是"受控 TRUNCATE 点"的触发阈值（#67-A′）：WAL 超过它且**无在飞读者**时，
+// 在归并点做一次 TRUNCATE（截回 0）。65536 页 ≈ 256 MiB —— 远高于常规 4 MiB 归并阈值，稳态不触发；
+// 只有"归并长期追不上"（真机 3.59GB ✗）才走到，属**异常收敛**而非日常路径 ✓。
+const walTruncateThresholdPages = 65536
 
 // pruneDeleteBatchRows 是「范围谓词删除」与「镜像窗口重建」的**单批行数上界**（#67-A）。
 //
@@ -229,6 +235,12 @@ type Latency struct {
 	NsPlan          int64
 	NsPrune         int64
 	NsMirrorRebuild int64
+	// #67-A′（只读）：WAL 体量、归并尝试/未拷完/受控截断次数、在飞只读句柄数。
+	WALBytes           int64
+	CheckpointAttempts int64
+	CheckpointBusy     int64
+	CheckpointTruncate int64
+	ReadersInFlight    int64
 }
 
 // Stats 是一次 Apply 的写入统计。RowsWritten/BytesWritten 是「只写变更行」的直接观测量：
@@ -311,6 +323,16 @@ type Store struct {
 	nsPlan          int64
 	nsPrune         int64
 	nsMirrorRebuild int64
+	// #67-A′（只读观测，原子 ⇒ 无锁可读）：WAL 归并与"在飞只读句柄"的读数。
+	// 真机 `-wal`=3.59GB 与归并阈值 4MiB 并存 ⇒ 只有两种解释：**读者持旧快照（PASSIVE 拷不完，
+	// busy≠0）** 或 **归并没被排到执行点**（周期迟迟不完成 ✗）——busy 与 walBytes 并读即可一次分辨 ✓。
+	ckptAttempts    atomic.Int64 // 归并尝试次数（PASSIVE + 受控 TRUNCATE）
+	ckptBusy        atomic.Int64 // 返回 busy≠0 的次数（有读者持旧快照 ⇒ WAL 只涨不并 ✓）
+	ckptLogPages    atomic.Int64 // 最近一次 WAL 页数
+	ckptMoved       atomic.Int64 // 最近一次已拷页数
+	ckptLastAt      atomic.Int64 // 最近一次尝试时刻（unix nano；0=从未）
+	ckptTruncate    atomic.Int64 // 走"受控 TRUNCATE"点的次数
+	readersInFlight atomic.Int64 // 在飞只读句柄数（OpenReadOnly 开/关 +1/−1 ✓）
 	cycle           uint64
 
 	// testCrashHook 仅供测试注入：在一次写入事务**提交之前**、写完全部变更行之后被调用，
@@ -411,6 +433,7 @@ func OpenReadOnly(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	s := &Store{path: path, db: db, readOnly: true, mirror: newMirror(), budget: DefaultCommitBudget()}
+	s.readersInFlight.Add(1) // #67-A′：在飞只读句柄（Close 归还）——checkpoint 能否截断取决于它是否为零 ✓
 	s.rowBudget = s.budget.MaxRows
 	if _, err := db.ExecContext(context.Background(), "PRAGMA query_only=ON"); err != nil {
 		_ = db.Close()
@@ -434,6 +457,9 @@ func (s *Store) Path() string { return s.path }
 // checkpoint 失败（例如有未结束的读事务）不阻断关闭：这会退化成旧行为（WAL 留盘、下次打开
 // 时由 SQLite 自动归并），不影响正确性，故只记录不报错——Close 必须总是能关闭句柄。
 func (s *Store) Close() error {
+	if s != nil && s.readOnly {
+		s.readersInFlight.Add(-1) // #67-A′：与 OpenReadOnly 的 +1 配对
+	}
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -459,6 +485,8 @@ func (s *Store) checkpoint(ctx context.Context) error {
 	// 未能完全归并。此时不算错误（数据仍在 WAL 里、依然可见），但必须让调用方知道，
 	// 故以错误形态暴露，由调用点决定是否降级。
 	var busy, logPages, movedPages int
+	s.ckptAttempts.Add(1)
+	s.ckptLastAt.Store(time.Now().UnixNano())
 	if err := s.db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logPages, &movedPages); err != nil {
 		return fmt.Errorf("stateindex: WAL 归并失败: %w", err)
 	}
@@ -497,7 +525,22 @@ func (s *Store) checkpointPassiveIfNeeded(ctx context.Context) {
 	if s == nil || s.db == nil || s.readOnly {
 		return
 	}
-	if s.WALBytes() < int64(walCheckpointPages)*sqlitePageSize {
+	walBytes := s.WALBytes()
+	if walBytes < int64(walCheckpointPages)*sqlitePageSize {
+		return
+	}
+	s.ckptAttempts.Add(1)
+	s.ckptLastAt.Store(time.Now().UnixNano())
+	// #67-A′：**受控 TRUNCATE 点** —— WAL 超过大阈值、且**当前没有在飞只读句柄**时做一次 TRUNCATE
+	//（把 WAL 截回 0）；条件不满足就只做 PASSIVE（不等读者、不阻塞写者 ✓）。
+	// 为什么必须有它：真机 `-wal`=3.59GB ⇒ 每次提交都在巨 WAL 上 fsync（max 40.7s ✗），而 PASSIVE
+	// 在有旧快照时**永远**拷不完 ⇒ 需要一个"真能截断"的受控点 ✓。
+	// 不变量：读语义/校验完整性不动（不改任何查询/校验 ✓）；只在**无读者**时截断（不冒进 ✓）。
+	if walBytes >= int64(walTruncateThresholdPages)*sqlitePageSize && s.readersInFlight.Load() == 0 {
+		s.ckptTruncate.Add(1)
+		if err := s.Checkpoint(); err != nil {
+			slog.Warn("索引 WAL 受控截断未完成（数据仍在 WAL 中且可见，下个周期再试）", "error", err)
+		}
 		return
 	}
 	var busy, logPages, movedPages int
@@ -505,9 +548,16 @@ func (s *Store) checkpointPassiveIfNeeded(ctx context.Context) {
 		slog.Warn("索引 WAL 被动归并未执行（数据仍在 WAL 中且可见，下个周期再试）", "error", err)
 		return
 	}
+	s.ckptLogPages.Store(int64(logPages))
+	s.ckptMoved.Store(int64(movedPages))
 	if busy != 0 {
-		slog.Debug("索引 WAL 被动归并未拷完（有读者持旧快照），下个周期再试",
-			"log", logPages, "moved", movedPages)
+		// #67-A′：Debug → "计数 + 首次 Warn"（不刷屏 ✓）。现场正是因为这条只在 Debug，
+		// 才让"有读者持旧快照 ⇒ WAL 只涨不并"完全不可见 ✗。
+		if s.ckptBusy.Add(1) == 1 {
+			slog.Warn("索引 WAL 被动归并首次未拷完（有读者持旧快照 ⇒ WAL 会继续增长，下个周期再试）",
+				"walBytes", walBytes, "log", logPages, "moved", movedPages,
+				"readersInFlight", s.readersInFlight.Load())
+		}
 	}
 }
 
@@ -906,6 +956,11 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 	// 每周期总预算耗尽：如实报告未完成与剩余行数（**不**宣称完成）。剩余部分由调用方下一轮
 	// 再调本入口续做；因为镜像已按提交单元更新到与库一致，下一轮重算的差异天然只剩剩余行。
 	if progress.remaining() > 0 {
+		// #67-A′：**把 WAL 归并从"周期完成"上解耦** —— 周期因预算/大单元迟迟不完成时，原来连
+		// 归并都排不上（真机 `-wal` 3.59GB ✗）⇒ 在**未完成**这条出口也尝试一次（阈值门控 + 无读者
+		// 才受控截断 ✓）。放在此处而不是"环的 tick"：本函数正是 WAL 增长的唯一来源路径
+		//（每次提交都在这里），且此处已持锁 ⇒ 无需新plumbing、不引入新的并发面 ✓。
+		s.checkpointPassiveIfNeeded(ctx)
 		stats.Incomplete = true
 		stats.RemainingRows = progress.remaining()
 	}
@@ -1807,7 +1862,12 @@ func (s *Store) Latency() Latency {
 	s.mu.Unlock()
 	if len(samples) == 0 {
 		// #67-C：无样本也要带上累计读数（否则"一个单元都没采到"时三段耗时全不可见 ✗）。
-		return Latency{NsPlan: s.nsPlan, NsPrune: s.nsPrune, NsMirrorRebuild: s.nsMirrorRebuild}
+		return Latency{
+			NsPlan: s.nsPlan, NsPrune: s.nsPrune, NsMirrorRebuild: s.nsMirrorRebuild,
+			WALBytes: s.WALBytes(), CheckpointAttempts: s.ckptAttempts.Load(),
+			CheckpointBusy: s.ckptBusy.Load(), CheckpointTruncate: s.ckptTruncate.Load(),
+			ReadersInFlight: s.readersInFlight.Load(),
+		}
 	}
 	durations := make([]time.Duration, 0, len(samples))
 	var max time.Duration
@@ -1832,6 +1892,11 @@ func (s *Store) Latency() Latency {
 	result.NsPlan = s.nsPlan
 	result.NsPrune = s.nsPrune
 	result.NsMirrorRebuild = s.nsMirrorRebuild
+	result.WALBytes = s.WALBytes()
+	result.CheckpointAttempts = s.ckptAttempts.Load()
+	result.CheckpointBusy = s.ckptBusy.Load()
+	result.CheckpointTruncate = s.ckptTruncate.Load()
+	result.ReadersInFlight = s.readersInFlight.Load()
 	return result
 }
 
