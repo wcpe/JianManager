@@ -16,9 +16,18 @@ test('FR-131 折叠为图标轨 + 隐藏滚动条 + 折叠态刷新持久', asyn
   const wExpanded = (await aside.boundingBox())!.width
   expect(wExpanded).toBeGreaterThan(180)
 
-  // 导航区滚动条隐藏但保留滚动（FR-131：scrollbar-none 工具类）
-  const nav = aside.locator('nav').first()
-  await expect(nav).toHaveClass(/scrollbar-none/)
+  // 导航区滚动条隐藏但保留滚动（FR-131）：由 .scrollbar-none 工具类承载（见 index.css，
+  // ui-details.test.ts 亦有守护）。
+  //
+  // 不要写成 `aside.locator('nav').first()`——侧栏内有多个 nav（快捷项 SideNavShortcuts、
+  // 资源树等），谁排第一取决于当前视图是「按节点 / 按群组 / 收藏」中的哪一种，
+  // 于是断言会随视图漂移而失败，失败信息却是「类名不匹配」，看不出是定位问题。
+  // 改为断言「侧栏内存在带该工具类的滚动区」，既守住 FR-131 的需求本身，
+  // 又不绑定某一种具体的导航结构。
+  // 加 :visible —— 侧栏（及其抽屉）内此类滚动区不止一处，其中有的处于隐藏态，
+  // 不加就会匹配到隐藏的那个，失败信息仍是「不可见」，同样指不到真正的定位问题。
+  const scrollArea = aside.locator('.scrollbar-none:visible').first()
+  await expect(scrollArea).toBeVisible()
 
   // 点「收起侧栏」→ 收缩为仅图标轨（宽度 < 100）
   await page.getByRole('button', { name: '收起侧栏' }).first().click()
