@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useAgentCallLogs, type AgentCallLogFilter } from '@/api/agentObservability'
 import { useAgentTokens } from '@/api/agentTokens'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import {
@@ -64,24 +65,28 @@ export default function AgentCallLogsPage() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return (
-    <div className="jm-page-stack space-y-4">
-      <div className="jm-page-header flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="jm-page-title flex items-center gap-2">
+    // 全量对齐：外壳与页头改用布局层原语。原先无 data-page，迁移时补上。
+    // 标题内的图标带 aria-hidden，不影响 h1 的可访问名。
+    <PageShell data-page="agent-call-logs">
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
             <ScrollText className="size-5 text-primary" aria-hidden />
             {t('agentCallLogs.title')}
-          </h1>
-          <p className="jm-page-subtitle">{t('agentCallLogs.subtitle')}</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/mcp-activity">{t('agentCallLogs.openSessions')}</Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/agent-tokens">{t('agentCallLogs.openTokens')}</Link>
-          </Button>
-        </div>
-      </div>
+          </span>
+        }
+        description={t('agentCallLogs.subtitle')}
+        actions={
+          <>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/mcp-activity">{t('agentCallLogs.openSessions')}</Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/agent-tokens">{t('agentCallLogs.openTokens')}</Link>
+            </Button>
+          </>
+        }
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <Select
@@ -264,6 +269,6 @@ export default function AgentCallLogsPage() {
           </Button>
         </div>
       )}
-    </div>
+    </PageShell>
   )
 }
