@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Copy, Download } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
 import { useUpdaterJarsInfo, downloadUpdaterJar, useRevealClientKey, type ClientPullKey } from '@/api/clientChannels'
 
 /**

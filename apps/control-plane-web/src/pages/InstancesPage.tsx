@@ -85,7 +85,7 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import { useVirtualRows } from '@/lib/virtual-list'
+import { useVirtualRows } from '@jianmanager/biz-views/lib/virtual-list'
 import { useCardColumns } from '@/lib/use-card-columns'
 
 /** Radix Select 不允许空字符串 value，用哨兵值表示「全部 / 不过滤」。 */

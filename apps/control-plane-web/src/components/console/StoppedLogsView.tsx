@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { Copy, History } from 'lucide-react'
 import { useLogsFederation } from '@/api/logFederation'
 import type { LogEntry } from '@/api/logs'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
 import { cn } from '@jianmanager/ui'
 
 /** 联邦事件 → LogEntry 行（与 LogsPage 的 mapFederationItems 同口径，只保留这里用到的字段）。 */

@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@jianmanager/ui/components/button'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
 import { useSessionEvents } from './SessionEventProvider'
 
 export function SessionConfig() {

@@ -8,7 +8,7 @@ import { useInstanceAggregate, useSearchInstances, type InstanceInfo } from '@/a
 import { useNodes } from '@/api/nodes'
 import { useConsoleStore } from '@/stores/console'
 import { useInstanceHoverPrefetch, type HoverPrefetcher } from '@/lib/instance-prefetch'
-import { useVirtualRows } from '@/lib/virtual-list'
+import { useVirtualRows } from '@jianmanager/biz-views/lib/virtual-list'
 import { cn } from '@jianmanager/ui'
 import {
   recordRecentServer,

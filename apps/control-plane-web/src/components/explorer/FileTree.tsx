@@ -4,7 +4,7 @@ import { ChevronRight, ChevronDown, Folder, FolderOpen } from 'lucide-react'
 import { fetchFileList } from '@/api/files'
 import { joinPath } from '@jianmanager/biz-views/lib/paths'
 import { cn } from '@jianmanager/ui'
-import { useVirtualRows } from '@/lib/virtual-list'
+import { useVirtualRows } from '@jianmanager/biz-views/lib/virtual-list'
 
 /** 树节点（懒加载：children 为 undefined 表示未展开/未加载）。 */
 interface TreeNode {
