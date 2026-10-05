@@ -443,7 +443,10 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       }
 
       const started = await page.evaluate(() => performance.now())
-      await expect(page.locator(route.readySelector), `${route.label} 页面就绪`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
+      // 这条分支走整页 goto，属**冷启动**：要下载路由分块、重建应用、再跑首屏查询，
+      // 比点链接的 SPA 切换慢一个量级——/client-dist-ops 这类多 Tab 重页面尤其明显。
+      // 给更宽松的上限：本用例要测的是**切换**耗时，不该因为冷启动慢而失败。
+      await expect(page.locator(route.readySelector), `${route.label} 页面就绪`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS * 2 })
       await expectVirtualRendering(page, route)
       await page.evaluate(() => new Promise(requestAnimationFrame))
       const ended = await page.evaluate(() => performance.now())
@@ -492,7 +495,9 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
     await page.goto('/instances/1')
     await expect(page.locator('[data-page="instance-console"]'), '实例详情深链就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
     await page.goBack()
-    await expect(page.locator('[data-page="instances"]'), '返回全部服务器页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
+    // 后退同样是一次整页回退（前一步的 goto('/instances/1') 是整页导航），
+    // 需重新加载并重跑首屏查询，故与冷启动同量级，用更宽松的上限。
+    await expect(page.locator('[data-page="instances"]'), '返回全部服务器页就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS * 2 })
     const restored = page.locator('[data-testid="instances-table-virtual"]')
     await expect.poll(async () => restored.evaluate((el) => Math.round(el.scrollTop)), { message: '返回后恢复列表滚动位置' }).toBeGreaterThanOrEqual(300)
     await test.info().attach('instances-table-after-back', {
@@ -659,6 +664,16 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
     expect(await animationDurationMs(page, '[data-slot="workspace-route-transition"]'), '减少动态模式下关闭装饰切页动画').toBe(0)
 
     const progressTrackSelector = '[data-slot="top-loading-track"]'
+
+    // 侧栏随工作区切换：/logs 的入口在「观测与自动化」下，而当前所在网络拓扑页属
+    // 服务器运维，其侧栏里没有 /logs（旧版把六个域的分组头铺在同一列，故可直接点到）。
+    // 这里必须走「切工作区 → 点链接」的真实导航路径，不能退化成 page.goto ——
+    // goto 不经过路由过渡，也就测不到本用例要验的进度反馈。
+    // 注意顺序：先切工作区并等它就绪，之后才装探针，免得把切换那一次的导航算进来。
+    const workspaces = page.locator('[data-slot="top-nav-workspaces"]')
+    await workspaces.getByRole('button', { name: '观测与自动化' }).click()
+    await expect(page.locator('[data-page="monitoring"]'), '观测工作区就绪').toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
+
     await armVisibleAnimationDurationProbe(page, progressTrackSelector, '[data-testid="top-loading-bar"]')
     await page.locator('a[href="/logs"]').first().click()
     // 模拟慢速 CI：测试进程恢复断言时，路由进度反馈可能已经结束。
