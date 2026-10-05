@@ -19,8 +19,11 @@ test('FR-062 仪表盘总负载环 + 负载趋势曲线', async ({ page }) => {
   // 环内值以「×」倍数呈现（load÷核，FR-108 封顶 1.0=满核，不破环）。
   await expect(page.getByText(/×/).first()).toBeVisible()
 
-  // 负载趋势曲线面板（node_load 时序落图）。
-  await expect(page.getByText('负载趋势').first()).toBeVisible()
+  // 负载曲线随「资源趋势」面板呈现（node_load 时序落图）。
+  // 仪表盘把 在线玩家 / 总 CPU / 总内存 / 总负载 合并为一个「资源趋势」面板，
+  // 负载不再是独立的「负载趋势」面板标题；故断言面板标题 + 该序列名。
+  await expect(page.getByText('资源趋势').first()).toBeVisible()
+  await expect(page.getByText('总负载').first()).toBeVisible()
   // 曲线真渲染（recharts 折线）。
   await expect
     .poll(async () => page.locator('path.recharts-line-curve').count(), { timeout: 15_000 })
