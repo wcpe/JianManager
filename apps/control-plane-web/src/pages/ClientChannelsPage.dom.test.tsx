@@ -58,7 +58,9 @@ describe('ClientChannelsPage（mock 假后端）', () => {
     const user = userEvent.setup()
     renderWithProviders(<ClientChannelsPage />, { route: '/client-channels?channel=skyblock-s1&tab=keys' })
 
-    await screen.findByText('空岛一区')
+    // 工作台的对象头同时渲染面包屑末级与可见标题（与实例/节点详情同形态），
+    // 故用 heading 精确定位，避免 getByText 同时命中两处。
+    await screen.findByRole('heading', { name: '空岛一区' })
     await user.click(screen.getByRole('button', { name: '创建密钥' }))
     const createDialog = await screen.findByRole('dialog')
     await user.type(within(createDialog).getByPlaceholderText('如：正式包 / 灰度'), '回归密钥')
