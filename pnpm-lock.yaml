@@ -206,6 +206,9 @@ importers:
 
   apps/ui-museum:
     dependencies:
+      '@jianmanager/biz-views':
+        specifier: workspace:*
+        version: link:../../packages/biz-views
       '@jianmanager/ui':
         specifier: workspace:*
         version: link:../../packages/ui

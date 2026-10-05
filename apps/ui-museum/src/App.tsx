@@ -1,6 +1,10 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { Inbox, SearchX } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+// 这两个未进主 barrel（barrel 只含首波清单），按项目惯例走深路径。
+import { EmptyState } from '@jianmanager/ui/components/empty-state'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 
 import { ThemeMatrix } from './ThemeMatrix'
 import {
@@ -8,6 +12,8 @@ import {
   Button,
   CardsGrid,
   Checkbox,
+  Combobox,
+  ContextMenuSurface,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -20,11 +26,15 @@ import {
   FieldError,
   FieldLabel,
   Input,
+  Label,
   MetricCell,
+  MetricComparePanel,
   MetricGrid,
   MetricsOverviewStrip,
   MiniBar,
   MonitorChart,
+  MonitorSkeleton,
+  NODE_CHART_DEFS,
   ObjectPageHeader,
   PageHeader,
   PageShell,
@@ -33,8 +43,11 @@ import {
   PlatformTab,
   PlatformTabs,
   RangePicker,
+  ResolutionPicker,
   ResourceGauge,
   ScopeBar,
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
   Segment,
   Segments,
   Select,
@@ -73,9 +86,29 @@ import {
   ViewToggle,
   type ChartSeries,
   type MetricRange,
+  type MetricResolution,
   type RawSeries,
   type ViewMode,
 } from '@jianmanager/ui'
+
+/**
+ * 业务视图包（@jianmanager/biz-views）——受控复合组件，与设计系统原语分列展示。
+ * 它们由原语拼装、带自身交互状态，但不取数、不碰路由：数据与路由身份经 props 注入。
+ */
+import { DisclaimerBanner } from '@jianmanager/biz-views/components/bot-load/session/DisclaimerBanner'
+import { BotHealthBar } from '@jianmanager/biz-views/components/console/BotHealthBar'
+import WorkspaceEmpty from '@jianmanager/biz-views/components/console/WorkspaceEmpty'
+import EditorShortcutsHelp from '@jianmanager/biz-views/components/explorer/editor/EditorShortcutsHelp'
+import PromptDialog from '@jianmanager/biz-views/components/explorer/PromptDialog'
+import BizToolbar from '@jianmanager/biz-views/components/explorer/Toolbar'
+import FileBrowserTree from '@jianmanager/biz-views/components/file-browser/FileBrowserTree'
+import type { FileEntry } from '@jianmanager/biz-views/lib/file-browser-types'
+import { TopLoadingBar } from '@jianmanager/biz-views/components/TopLoadingBar'
+import { UnifiedDiff } from '@jianmanager/biz-views/components/UnifiedDiff'
+import UntrustedFieldBadge from '@jianmanager/biz-views/components/UntrustedFieldBadge'
+import { ReleaseNotes } from '@jianmanager/biz-views/components/ReleaseNotes'
+import ClientDistFlowGuide from '@jianmanager/biz-views/components/ClientDistFlowGuide'
+import { ObsTimeRangePicker } from '@jianmanager/biz-views/components/client-dist/ObsTimeRangePicker'
 
 const rawSeries: RawSeries[] = [
   {
@@ -111,6 +144,19 @@ const chartSeries: ChartSeries[] = [
   },
 ]
 
+/** 博物馆用的演示数据源：受控组件不自行取数，数据经 source 注入。 */
+const demoEntries: FileEntry[] = [
+  { name: 'server.properties', path: 'server.properties', isDir: false, size: 1024 },
+  { name: 'plugins', path: 'plugins', isDir: true },
+  { name: 'world', path: 'world', isDir: true },
+  { name: 'EssentialsX.jar', path: 'plugins/EssentialsX.jar', isDir: false, size: 4_100_000 },
+]
+const demoSource = {
+  flat: true,
+  list: async () => demoEntries,
+  readContent: async () => ({ kind: 'text' as const, content: '# 演示内容' }),
+}
+
 /**
  * 博物馆分区清单 —— 侧边栏按它渲染，一次只展示一个分区。
  *
@@ -127,6 +173,7 @@ const SECTIONS = [
   { id: 'monitoring', label: 'Monitoring', hint: '图表与指标条' },
   { id: 'tabs', label: 'Tabs', hint: '页签' },
   { id: 'layout', label: '布局', hint: '页面壳与布局原语' },
+  { id: 'biz-views', label: '业务视图', hint: 'biz-views · 受控复合组件' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
@@ -163,6 +210,14 @@ export default function App() {
   const [dark, setDark] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [scrollDialogOpen, setScrollDialogOpen] = useState(false)
+  const [comboValue, setComboValue] = useState('survival-01')
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
+  const [resolution, setResolution] = useState<MetricResolution>('auto')
+  const [compareSel, setCompareSel] = useState<string[]>([])
+  const [promptOpen, setPromptOpen] = useState(false)
+  const toggleCompare = (k: string) =>
+    setCompareSel((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]))
   const chips = useMemo(
     () => [
       { key: 'online', label: '在线', count: 8, level: 'success' as const, breathing: true },
@@ -278,6 +333,29 @@ export default function App() {
               <FieldError error="端口范围不可为空" />
             </div>
           </Panel>
+
+          <Panel title="Combobox · 可编辑下拉">
+            <div className="max-w-64">
+              <Combobox
+                options={[
+                  { value: 'survival-01' },
+                  { value: 'survival-02' },
+                  { value: 'lobby-01', label: 'lobby-01（大厅）' },
+                ]}
+                value={comboValue}
+                onChange={setComboValue}
+                placeholder="选择或输入实例名"
+                ariaLabel="实例选择示例"
+              />
+            </div>
+          </Panel>
+
+          <Panel title="Label · 表单标签">
+            <div className="grid max-w-64 gap-1.5">
+              <Label htmlFor="demo-host">主机名</Label>
+              <Input id="demo-host" defaultValue="node-east-01" />
+            </div>
+          </Panel>
         </Section>
 
         <Section id="data" active={section} title="Data" hint="表格、卡片、统计与图谱">
@@ -319,6 +397,37 @@ export default function App() {
           </Panel>
           <SummaryChips chips={chips} />
           <ViewToggle value={mode} onChange={setMode} cardLabel="卡片视图" listLabel="列表视图" />
+
+          <Panel title="EmptyState · 空态">
+            <div className="grid gap-3 lg:grid-cols-2">
+              <div className="rounded-md border">
+                <EmptyState icon={<Inbox />} title="暂无实例" description="创建第一个实例后这里会显示它。" />
+              </div>
+              <div className="rounded-md border">
+                <EmptyState
+                  icon={<SearchX />}
+                  title="没有匹配的节点"
+                  action={
+                    <Button size="sm" variant="outline">
+                      清除筛选
+                    </Button>
+                  }
+                />
+              </div>
+            </div>
+          </Panel>
+
+          <Panel title="Skeleton · 骨架屏">
+            <div className="grid items-center gap-4 lg:grid-cols-[1fr_1fr_auto]">
+              <div className="grid gap-2">
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-4/5" />
+              </div>
+              <Skeleton className="h-20 rounded-lg" />
+              <Skeleton className="size-12 rounded-full" />
+            </div>
+          </Panel>
         </Section>
 
         <Section id="overlay" active={section} title="Overlay" hint="对话框与 Sheet">
@@ -337,6 +446,51 @@ export default function App() {
               </DropdownMenu>
             </div>
           </Panel>
+
+          <Panel title="ScrollableDialog · 头脚固定、仅正文滚动">
+            <div className="grid gap-2">
+              <p className="text-[11px] text-muted-foreground">
+                表单类模态的强制形态（见 .claude/rules/ui-modals.md）：DialogContent 套
+                scrollableDialogContentClass，正文包 ScrollableDialogBody，小屏下底部按钮不被挤出。
+              </p>
+              <Button variant="outline" className="w-fit" onClick={() => setScrollDialogOpen(true)}>
+                打开可滚动对话框
+              </Button>
+            </div>
+          </Panel>
+
+          <Panel title="ContextMenuSurface · 右键菜单浮层基座">
+            <div className="grid gap-2">
+              <div
+                className="grid h-24 cursor-context-menu place-items-center rounded-md border border-dashed text-[11px] text-muted-foreground"
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setMenuPos({ x: e.clientX, y: e.clientY })
+                }}
+              >
+                在此右键
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                portal 到 body 并做视口钳制——控制台外壳带 transform 会劫持 fixed 包含块，
+                不 portal 的浮层会整体漂移。
+              </p>
+            </div>
+            {menuPos !== null && (
+              <ContextMenuSurface
+                x={menuPos.x}
+                y={menuPos.y}
+                className="min-w-[160px] rounded-md border bg-popover p-1 shadow-md"
+              >
+                <button
+                  type="button"
+                  className="block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                  onClick={() => setMenuPos(null)}
+                >
+                  menu surface（portal + 钳制）
+                </button>
+              </ContextMenuSurface>
+            )}
+          </Panel>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogContent>
               <DialogHeader>
@@ -353,6 +507,23 @@ export default function App() {
               </SheetHeader>
             </SheetContent>
           </Sheet>
+
+          <Dialog open={scrollDialogOpen} onOpenChange={setScrollDialogOpen}>
+            <DialogContent className={scrollableDialogContentClass}>
+              <DialogHeader>
+                <DialogTitle>编辑分组（可滚动）</DialogTitle>
+                <DialogDescription>头部与底部固定，仅正文滚动。</DialogDescription>
+              </DialogHeader>
+              <ScrollableDialogBody className="space-y-3">
+                {Array.from({ length: 10 }, (_, i) => (
+                  <div key={i} className="grid gap-1.5">
+                    <Label htmlFor={`sd-${i}`}>字段 {i + 1}</Label>
+                    <Input id={`sd-${i}`} defaultValue={`value-${i + 1}`} />
+                  </div>
+                ))}
+              </ScrollableDialogBody>
+            </DialogContent>
+          </Dialog>
         </Section>
 
         <Section id="monitoring" active={section} title="Monitoring" hint="图表与指标条">
@@ -377,6 +548,38 @@ export default function App() {
           </Panel>
           <Panel title="MetricsOverviewStrip">
             <MetricsOverviewStrip kind="node" raw={rawSeries} isLoading={false} />
+          </Panel>
+
+          <Panel title="ResolutionPicker · 聚合粒度">
+            <ResolutionPicker value={resolution} onChange={setResolution} />
+          </Panel>
+
+          <Panel title="TimeSeriesChart · 参考线">
+            <TimeSeriesChart
+              series={chartSeries}
+              height={180}
+              valueFormatter={(v) => v.toFixed(1)}
+              referenceLines={[{ value: 50, label: '阈值 50' }]}
+            />
+          </Panel>
+
+          <Panel title="MetricComparePanel · 多指标叠加对比">
+            <MetricComparePanel
+              kind="node"
+              raw={rawSeries}
+              selected={compareSel}
+              onToggle={toggleCompare}
+              height={180}
+            />
+          </Panel>
+
+          <Panel title="MonitorSkeleton · 监控加载骨架">
+            <MonitorSkeleton
+              defs={NODE_CHART_DEFS.slice(0, 3)}
+              source={{ kind: 'node', uuid: 'alpha' }}
+              chartHeight={110}
+              useSeries={() => ({ series: [], isLoading: true })}
+            />
           </Panel>
         </Section>
 
@@ -542,6 +745,119 @@ export default function App() {
                 <div className="rounded-lg border bg-card p-3 text-[11px]">SettingsLayout · 内容区</div>
               </SettingsLayout>
             </div>
+          </Panel>
+        </Section>
+
+        <Section
+          id="biz-views"
+          active={section}
+          title="业务视图（@jianmanager/biz-views）"
+          hint="受控复合组件：由原语拼装、带自身交互状态，但不取数、不碰路由、不发请求"
+        >
+          <Panel title="TopLoadingBar · 顶部加载进度条">
+            <div className="relative h-10 overflow-hidden rounded-md border">
+              <TopLoadingBar routeKey="/demo" pendingCount={2} />
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              受控：路由身份 routeKey 与在途请求数 pendingCount 由外壳注入——原先它自行
+              useLocation + useIsFetching，因而无法脱离主控台运行时复用。
+            </p>
+          </Panel>
+
+          <Panel title="UnifiedDiff · diff 着色">
+            <UnifiedDiff
+              diff={
+                '--- a/server.properties\n+++ b/server.properties\n@@ -1,4 +1,4 @@\n-max-players=20\n+max-players=40\n motd=A Minecraft Server\n online-mode=true'
+              }
+            />
+          </Panel>
+
+          <Panel title="UntrustedFieldBadge / WorkspaceEmpty">
+            <div className="grid gap-3 lg:grid-cols-2">
+              <div className="flex items-center gap-3">
+                <UntrustedFieldBadge />
+                <span className="text-[11px] text-muted-foreground">不可信身份字段（脱敏）</span>
+              </div>
+              <div className="rounded-md border">
+                <WorkspaceEmpty />
+              </div>
+            </div>
+          </Panel>
+
+          <Panel title="DisclaimerBanner · bot.chat 边界免责">
+            <DisclaimerBanner />
+          </Panel>
+
+          <Panel title="ReleaseNotes · 发布说明（react-markdown）">
+            <ReleaseNotes
+              markdown={
+                '### v0.24.0\n\n- 新增按分组批量运维\n- 修复 [外部链接](https://example.com) 的确认弹窗\n- 优化日志中心虚拟滚动'
+              }
+            />
+          </Panel>
+
+          <Panel title="ClientDistFlowGuide · 分发流程引导">
+            <ClientDistFlowGuide />
+          </Panel>
+
+          <Panel title="BotHealthBar · Bot 健康分档">
+            <BotHealthBar total={8} online={6} byStatus={{ idle: 2, working: 3, error: 1 }} />
+          </Panel>
+
+          <Panel title="ObsTimeRangePicker · 观测时间范围">
+            <ObsTimeRangePicker value={{ range: '7d' }} onChange={() => {}} />
+          </Panel>
+
+          <Panel title="Toolbar · 资源管理器工具条">
+            <BizToolbar
+              currentDir="/plugins"
+              selectedCount={2}
+              canPaste={false}
+              onNavigate={() => {}}
+              onNewFile={() => {}}
+              onNewFolder={() => {}}
+              onUpload={() => {}}
+              onDownloadSelected={() => {}}
+              onDeleteSelected={() => {}}
+              onPaste={() => {}}
+              onSelectAll={() => {}}
+              onClearSelection={() => {}}
+              onToggleSearch={() => {}}
+              searchActive={false}
+            />
+          </Panel>
+
+          <Panel title="EditorShortcutsHelp · 编辑器快捷键帮助">
+            <EditorShortcutsHelp />
+          </Panel>
+
+          <Panel title="PromptDialog · 输入提示对话框">
+            <div className="grid gap-2">
+              <Button variant="outline" size="sm" className="w-fit" onClick={() => setPromptOpen(true)}>
+                打开 PromptDialog
+              </Button>
+              <PromptDialog
+                open={promptOpen}
+                title="重命名文件夹"
+                initialValue="plugins"
+                onSubmit={() => setPromptOpen(false)}
+                onCancel={() => setPromptOpen(false)}
+              />
+            </div>
+          </Panel>
+
+          <Panel title="FileBrowserTree · 文件树">
+            <div className="h-72 overflow-hidden rounded-md border">
+              <FileBrowserTree
+                source={demoSource}
+                selectedPath="server.properties"
+                onSelectFile={() => {}}
+                actions={[]}
+              />
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              受控：数据由 source（读目录/读内容）注入，组件自身不发请求。
+            </p>
           </Panel>
         </Section>
           </div>
