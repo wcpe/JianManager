@@ -62,7 +62,7 @@ import ClientVersionsPanel from '@/components/ClientVersionsPanel'
 import ClientStatsPanel from '@/components/ClientStatsPanel'
 import ClientIntegrationGuide from '@/components/ClientIntegrationGuide'
 import ClientUpdaterCoreSelector from '@/components/ClientUpdaterCoreSelector'
-import ClientDistFlowGuide from '@/components/ClientDistFlowGuide'
+import ClientDistFlowGuide from '@jianmanager/biz-views/components/ClientDistFlowGuide'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback

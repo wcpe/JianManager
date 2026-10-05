@@ -3,7 +3,7 @@ import { Bot, Server, Activity, Box, ChevronDown, ChevronRight } from 'lucide-re
 import type { BotSummaryGroup } from '@/api/bots'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Badge } from '@jianmanager/ui/components/badge'
-import { BotHealthBar } from './BotHealthBar'
+import { BotHealthBar } from '@jianmanager/biz-views/components/console/BotHealthBar'
 import type { GroupByDim } from '@/pages/bots-overview'
 import { toneChipClass, type Tone } from '@/lib/tone'
 import { cn } from '@jianmanager/ui'

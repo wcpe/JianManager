@@ -3,7 +3,7 @@
  * 描述各入口能做什么，由 UnifiedExplorerShell / 调用方消费；不删业务能力、不硬套。
  */
 
-import type { FileBrowserAction } from './types'
+import type { FileBrowserAction } from '@jianmanager/biz-views/lib/file-browser-types'
 
 /** 壳渲染模式。 */
 export type ExplorerShellMode =

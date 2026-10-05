@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Download, FileQuestion, FileWarning, Loader2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import CodeEditor from '@/components/explorer/editor/CodeEditor'
-import type { FileEntry, PreviewContent } from './types'
+import type { FileEntry, PreviewContent } from '@jianmanager/biz-views/lib/file-browser-types'
 
 /** 字节数转人类可读。 */
 function formatBytes(n: number): string {

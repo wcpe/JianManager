@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { renderWithProviders } from '@/test/render'
+import { renderWithI18n } from '../test/i18n'
 import { ReleaseNotes } from './ReleaseNotes'
 
 describe('ReleaseNotes 外链确认', () => {
@@ -19,7 +19,7 @@ describe('ReleaseNotes 外链确认', () => {
   it('点击安全外链先打开共享 Dialog，确认后新标签打开', async () => {
     const user = userEvent.setup()
     const href = 'https://github.com/wcpe/JianManager/releases'
-    renderWithProviders(<ReleaseNotes markdown={`[release](${href})`} />)
+    renderWithI18n(<ReleaseNotes markdown={`[release](${href})`} />)
 
     await user.click(screen.getByRole('link', { name: 'release' }))
 
@@ -35,7 +35,7 @@ describe('ReleaseNotes 外链确认', () => {
 
   it('危险 scheme 不打开确认弹窗', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<ReleaseNotes markdown="[bad](javascript:alert(1))" />)
+    renderWithI18n(<ReleaseNotes markdown="[bad](javascript:alert(1))" />)
 
     await user.click(screen.getByText('bad'))
 

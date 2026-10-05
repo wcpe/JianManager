@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { Button } from '@jianmanager/ui/components/button'
-import PromptDialog from '@/components/explorer/PromptDialog'
+import PromptDialog from '@jianmanager/biz-views/components/explorer/PromptDialog'
 import type { WorkspacePreset } from '@/lib/workspace-preset'
 
 /**
