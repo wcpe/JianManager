@@ -21,10 +21,11 @@ test('FR-061 高密度面板：环形仪表盘 + 分区面板 + 密集实例表'
   // 仪表盘为 SVG 环（recharts / 自绘）——至少一个 svg 在仪表区渲染。
   await expect(page.locator('[data-page="overview"] svg').first()).toBeVisible()
 
-  // 分区面板 Panel（标题栏 + 内容区）：聚合历史曲线区四块标题。
-  await expect(page.getByText('CPU 趋势')).toBeVisible()
-  await expect(page.getByText('负载趋势').first()).toBeVisible()
-  await expect(page.getByText('内存趋势')).toBeVisible()
+  // 分区面板 Panel（标题栏 + 内容区）：聚合历史曲线区现为**单个「资源趋势」面板**，
+  // 序列（在线玩家 / 总 CPU / 总内存 / 总负载）作为面板内的子项，
+  // 不再是 CPU、负载各自独立成面板，故按面板标题与其中一项序列断言。
+  await expect(page.getByText('资源趋势').first()).toBeVisible()
+  await expect(page.getByText('总负载').first()).toBeVisible()
 
   // 底部密集实例表（虚拟滚动容器 + dense 行）。
   const denseTable = page.locator('[data-testid="overview-instances-virtual"]')
