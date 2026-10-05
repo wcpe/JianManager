@@ -63,3 +63,8 @@ export * from './components/views/explorer/PromptDialog'
 export * from './components/views/explorer/Toolbar'
 export * from './components/views/explorer/editor/EditorShortcutsHelp'
 export * from './components/views/file-browser/FileBrowserTree'
+
+// ADR-097 起：应用业务组件按 a+b 双范式受控化并入，按域归档
+export * from './components/views/nodes/NodePortsPanel'
+export * from './components/views/nodes/NodeArtifactCachePanel'
+export * from './components/views/DangerConfirm'
