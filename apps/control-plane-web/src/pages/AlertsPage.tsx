@@ -19,6 +19,7 @@ import {
 import DangerConfirm from '@/components/DangerConfirm'
 import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
@@ -66,10 +67,10 @@ export default function AlertsPage() {
   const { data: unread } = useUnreadAlertCount()
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t('alerts.title')}</h1>
-      </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语。
+    // 标题字号由 text-2xl 统一到布局规范的 text-xl（PageHeader 的固定字号）。
+    <PageShell data-page="alerts">
+      <PageHeader title={t('alerts.title')} />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="w-full">
         <TabsList className="mb-4">
@@ -95,7 +96,7 @@ export default function AlertsPage() {
           <ChannelsTab />
         </TabsContent>
       </Tabs>
-    </div>
+    </PageShell>
   )
 }
 
