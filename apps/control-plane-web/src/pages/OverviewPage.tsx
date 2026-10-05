@@ -298,7 +298,9 @@ export default function OverviewPage() {
    * 滚动触发补齐——与 InstancesPage 的 onNeedMore 是同一套做法。
    */
   const handleInstanceScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    handleInstanceScrollBase(e)
+    // useVirtualRows 的 onScroll 不接受事件参数——它自己从 containerRef.current 读 scrollTop
+    // （见 lib/virtual-list.ts）。这里先触发它更新虚拟窗口，再用事件本身判断是否近底。
+    handleInstanceScrollBase()
     const el = e.currentTarget
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 240
     if (nearBottom && instancesQuery.hasNextPage && !instancesQuery.isFetchingNextPage) {
