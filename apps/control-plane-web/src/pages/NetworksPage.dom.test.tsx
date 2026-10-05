@@ -39,7 +39,9 @@ describe('NetworksPage（mock 假后端）', () => {
     const { container } = renderWithProviders(<NetworksPage />, { route: '/networks' })
 
     expect(container.firstElementChild).toHaveAttribute('data-page', 'networks')
-    expect(container.firstElementChild).toHaveClass('jm-page-stack')
+    // 阶段 6 页面迁移起，外壳改用布局层 PageShell（原为手写的 jm-page-stack 骨架类）。
+    // data-page 由 PageShell spread 透传，故上一行断言不变；这里改认它的标识。
+    expect(container.firstElementChild).toHaveAttribute('data-slot', 'page-shell')
     expect(screen.getByRole('button', { name: '创建群组' })).toHaveAttribute('data-slot', 'button')
     expect(screen.getByRole('button', { name: /列表/ }).parentElement).toHaveClass('jm-toolbar-surface')
     expect(await screen.findByText('survival')).toBeInTheDocument()
