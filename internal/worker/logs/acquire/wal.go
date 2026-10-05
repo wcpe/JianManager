@@ -364,8 +364,10 @@ func IsBacklogPauseReason(reason string) bool {
 // 返回错误会让调用方误判为「追加失败」并重试。暂停对**后续**追加生效——Append 的既有
 // 首判据（AcquirePaused）会拒绝并提示必须记 gap，FileTailer 同样据此停止读取。
 // 调用方需持 w.mu。
-func (w *WAL) enforceBacklogLimitLocked(ent *ledger.Entry) {
-	if ent == nil || ent.AcquirePaused {
+func (w *WAL) enforceBacklogLimitLocked() {
+	// #66-③：判据只读 AcquirePaused ⇒ O(1) 轻量读（旧实现的 Get 在每次追加后再克隆一次 ✗）。
+	st, ok := w.led.AcquireState(w.key)
+	if !ok || st.Paused {
 		return
 	}
 	entries, bytes := w.backlogLocked()
@@ -389,8 +391,11 @@ func (w *WAL) enforceBacklogLimitLocked(ent *ledger.Entry) {
 // 恢复条件（三选一不满足即不恢复）：① 当前暂停确实由本包造成（原因前缀匹配，
 // 不越权清除容量门禁等其它路径的暂停）；② 积压已回落至上限的一半以下（滞回，避免抖动）；
 // ③ 账本无未解决 gap（ResumeAcquire 自身会拒绝，这里先判以免噪声）。调用方需持 w.mu。
-func (w *WAL) maybeResumeBacklogLocked(ent *ledger.Entry) {
-	if ent == nil || !ent.AcquirePaused || !strings.HasPrefix(ent.PauseReason, walBacklogPauseReason) {
+func (w *WAL) maybeResumeBacklogLocked() {
+	// #66-③：热路径判据只读 Paused/PauseReason 两个标量 ⇒ O(1) 轻量读；**需要 gaps 的罕见
+	// 自愈分支**保持惰性 Get（语义不变 ✓）。
+	st, ok := w.led.AcquireState(w.key)
+	if !ok || !st.Paused || !strings.HasPrefix(st.PauseReason, walBacklogPauseReason) {
 		return
 	}
 	entries, bytes := w.backlogLocked()
@@ -401,15 +406,18 @@ func (w *WAL) maybeResumeBacklogLocked(ent *ledger.Entry) {
 	if err := w.led.ResumeAcquire(w.key); err != nil {
 		// **打破环死**（2026-10-04 现场：60 源零积压仍无一动 ✗）：`ResumeAcquire` 对任何未消解
 		// 缺口一律拒绝 ✗，而 `APPEND_REJECTED` 的定义是"该批从未进入 WAL（采集被暂停/容量门禁
-		// 拒了）"⇒ 它只能靠**回读**愈合 ⇐ 回读在暂停期间被 tailer 拒绝 ✗ ⇒
+		// 拒了）" ⇒ 它只能靠**回读**愈合 ⇐ 回读在暂停期间被 tailer 拒绝 ✗ ⇒
 		// 「暂停 ⇒ 缺口不清 ⇒ 不许恢复 ⇒ 不回读」自锁 ✓✓。
 		// 这里按**分类裁定**消解这一类（不是操作员放弃 ✗）：恢复后回读会重新产生并投递该批 ✓
 		// （不丢数据；重复按 event_id 幂等 ✓）。其余原因保持拦截 ✓。
-		if healed := w.resolveReReadHealableGapsLocked(ent); healed > 0 {
-			if err2 := w.led.ResumeAcquire(w.key); err2 == nil {
-				slog.Info("积压已回落：已按「恢复后回读重放」分类消解暂停期缺口并恢复采集",
-					"logSourceID", w.key.LogSourceID, "gaps", healed, "entries", entries, "approxBytes", bytes)
-				return
+		// #66-③：仅此罕见分支惰性取整条（自愈需要 gaps ✗）——热路径不受影响 ✓。
+		if ent := w.led.Get(w.key); ent != nil {
+			if healed := w.resolveReReadHealableGapsLocked(ent); healed > 0 {
+				if err2 := w.led.ResumeAcquire(w.key); err2 == nil {
+					slog.Info("积压已回落：已按「恢复后回读重放」分类消解暂停期缺口并恢复采集",
+						"logSourceID", w.key.LogSourceID, "gaps", healed, "entries", entries, "approxBytes", bytes)
+					return
+				}
 			}
 		}
 		slog.Info("积压已回落但暂不能恢复采集", "logSourceID", w.key.LogSourceID, "error", err)
@@ -535,8 +543,9 @@ func (w *WAL) EvaluateResume() bool {
 	// 而它无论成败都会按**当前**水位剪枝并在剪枝后做一次滞回恢复评估；这里忽略返回值，
 	// 只按最终状态回答「是否已恢复」。
 	_, _ = w.TryReclaim()
-	entry := w.led.Get(w.key)
-	return entry != nil && !entry.AcquirePaused
+	// #66-③：判据只读 AcquirePaused ⇒ 轻量读（旧实现的 Get 会克隆整条 ✗）。
+	st, ok := w.led.AcquireState(w.key)
+	return ok && !st.Paused
 }
 
 // NewWAL 创建绑定账本条目的 WAL。
@@ -582,12 +591,14 @@ func (w *WAL) Append(events ...logtypes.Event) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	ent := w.led.Get(w.key)
-	if ent == nil {
+	// #66-③：高频路径 —— 旧实现这里 Get（深克隆）一次、判闸处再 Get 一次（每次追加两发 ✗）。
+	// 本函数只读 Paused/PauseReason/Positions.Read 三个标量 ⇒ 全部可由 O(1) 轻量读覆盖 ✓。
+	st, ok := w.led.AcquireState(w.key)
+	if !ok {
 		return fmt.Errorf("acquire: wal source %s missing", w.key)
 	}
-	if ent.AcquirePaused {
-		return fmt.Errorf("acquire: paused (%s); must record gap, not silent drop", ent.PauseReason)
+	if st.Paused {
+		return fmt.Errorf("acquire: paused (%s); must record gap, not silent drop", st.PauseReason)
 	}
 
 	for _, ev := range events {
@@ -601,12 +612,12 @@ func (w *WAL) Append(events ...logtypes.Event) error {
 		w.noteEntryAddedLocked(newEntry) // #66-②：积压计数增量维护
 	}
 	// read_position 可先推进；durable 等 Commit。
-	end := lastRecordEnd(events, ent.Positions.Read)
+	end := lastRecordEnd(events, st.Positions.Read)
 	if err := w.led.AdvanceRead(w.key, end); err != nil {
 		return err
 	}
 	// 追加后检查积压上限（B1b）：越界即暂停该源采集，避免单源洪流无界增长拖垮整机。
-	w.enforceBacklogLimitLocked(w.led.Get(w.key))
+	w.enforceBacklogLimitLocked()
 	return nil
 }
 
@@ -700,8 +711,9 @@ func (w *WAL) TryReclaim() (uint64, error) {
 		// 永不回落 → 滞回（≤上限一半）永不满足 → 源永久停在 paused。
 		// 2026-09-30 生产实证：这里一错即返，prune 便永不执行，7998 条卡死数小时、
 		// 积压数字一个字节不动。剪枝上界仍是账本自己的水位，不越过任何未裁定安全的位置。
-		if cur := w.led.Get(w.key); cur != nil {
-			w.pruneReclaimed(cur.Positions.Reclaim)
+		// #66-③：这里只需要 Positions.Reclaim ⇒ 用 #61 的 O(1) 轻量读（旧实现 Get 深克隆 ✗）。
+		if p, ok := w.led.Positions(w.key); ok {
+			w.pruneReclaimed(p.Reclaim)
 		}
 		return pos, err
 	}
@@ -723,7 +735,7 @@ func (w *WAL) pruneReclaimed(pos uint64) {
 		// 会读到撕裂的积压状态（且 Go 竞态检测会直接报数据竞争）。
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		w.maybeResumeBacklogLocked(w.led.Get(w.key))
+		w.maybeResumeBacklogLocked()
 		return
 	}
 	w.mu.Lock()
@@ -768,7 +780,7 @@ func (w *WAL) pruneReclaimed(pos uint64) {
 		w.entries = w.entries[:len(kept)]
 	}
 	// 回收后按低水位恢复采集（B1b）：积压回落即自动解暂停。
-	w.maybeResumeBacklogLocked(w.led.Get(w.key))
+	w.maybeResumeBacklogLocked()
 }
 
 // Snapshot 返回 WAL 内事件（测试/恢复用）。
@@ -802,7 +814,7 @@ func (w *WAL) Restore(entries []WALEntry) error {
 	}
 	// 恢复完立刻判一次闸：索引里的**持久积压**可能已经越界，此时必须当场暂停，而不是等下一次
 	// Append（现场形态：内存积压早已越界、暂停却滞后到下一次追加才发生）。
-	w.enforceBacklogLimitLocked(w.led.Get(w.key))
+	w.enforceBacklogLimitLocked()
 	return nil
 }
 

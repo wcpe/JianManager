@@ -642,6 +642,32 @@ func (l *Ledger) Positions(key SourceKey) (logtypes.Positions, bool) {
 	return e.Positions, true
 }
 
+// AcquireState 是采集面的**轻量状态视图**（#66-③）：`enforceBacklogLimitLocked` /
+// `maybeResumeBacklogLocked` / `EvaluateResume` / `Append` 的高频判据只读这三个标量，
+// 而 `Get` 会克隆整条条目（O(缺口数 + 批次数)，积压场景可达十万级 ✗）⇒ 每次 Append 曾付
+// 两次深克隆（现场单跳 ~1s 的组成之一，见 #65 归因）✗✗。
+//
+// 语义与 Get 的对应字段逐字一致；需要完整条目（如 gaps 自愈消解）的罕见分支仍应惰性 Get ✓。
+type AcquireState struct {
+	Paused      bool
+	PauseReason string
+	Positions   logtypes.Positions
+}
+
+// AcquireState 返回某源的轻量采集状态（O(1)，不克隆条目）。
+func (l *Ledger) AcquireState(key SourceKey) (AcquireState, bool) {
+	if l == nil {
+		return AcquireState{}, false
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	e, ok := l.entries[key]
+	if !ok || e == nil {
+		return AcquireState{}, false
+	}
+	return AcquireState{Paused: e.AcquirePaused, PauseReason: e.PauseReason, Positions: e.Positions}, true
+}
+
 // Snapshot 返回全部账本条目副本，供 Worker 持久化和崩溃恢复使用。
 func (l *Ledger) Snapshot() []Entry {
 	l.mu.RLock()
