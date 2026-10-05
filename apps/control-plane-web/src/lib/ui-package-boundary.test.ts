@@ -42,6 +42,9 @@ const firstWaveCharts = [
   'MonitorChart',
   'MonitorSkeleton',
   'MetricsOverviewStrip',
+  // 全量对齐补录：它此前漏在清单外，于是 charts 目录里留了一份与包内逐字相同的副本
+  // 而无人察觉（MonitoringPage 用的正是那份副本，包内实现反成死代码）。
+  'MetricComparePanel',
 ]
 
 const sharedHelpers = ['utils', 'threshold', 'brush', 'chart-hover', 'monitor-metrics']
