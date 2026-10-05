@@ -284,7 +284,7 @@ func TestPlanDeliveryBatchOutsideMutex(t *testing.T) {
 		newEvent("e2", 10, 19, "b"),
 		newEvent("e3", 20, 29, "c"),
 	}
-	seen := map[string]string{}
+	seen := map[string]eventIdentity{}
 	toWrite, fail := m.planDeliveryBatchOutsideLock(events, seen)
 	require.Nil(t, fail)
 	require.False(t, held.Load(),
@@ -300,12 +300,14 @@ func TestPlanDeliveryBatchOutsideMutex(t *testing.T) {
 		logtypes.CanonicalContentHash(toWrite[0].EventTimeUTC, "INFO", "stdout", "a"),
 		toWrite[0].CanonicalHash, "规范化必须补齐 canonical 内容哈希")
 	// 契约：去重表按本次投递结果推进（同批内后续重复才能被识别）。
-	require.Equal(t, map[string]string{"e1": toWrite[0].CanonicalHash, "e2": toWrite[1].CanonicalHash, "e3": toWrite[2].CanonicalHash}, seen)
+	require.Equal(t, toWrite[0].CanonicalHash, seen["e1"].hash)
+	require.Equal(t, toWrite[1].CanonicalHash, seen["e2"].hash)
+	require.Equal(t, toWrite[2].CanonicalHash, seen["e3"].hash)
 
 	// 负例（红敏感性）：持锁调用 ⇒ 钩子必须观察到"已持锁"。
 	held.Store(false)
 	m.mu.Lock()
-	_, fail = m.planDeliveryBatchOutsideLock(events, map[string]string{})
+	_, fail = m.planDeliveryBatchOutsideLock(events, map[string]eventIdentity{})
 	m.mu.Unlock()
 	require.Nil(t, fail)
 	require.True(t, held.Load(), "负例：持锁调用时钩子必须观察到已持锁（证明绿断言可红）")
@@ -325,21 +327,22 @@ func TestPlanDeliveryBatchContractUnchanged(t *testing.T) {
 	}
 
 	// 1) 同 ID 同哈希 ⇒ 跳过（不重复写），其余保序。
-	first, fail := m.planDeliveryBatchOutsideLock([]logtypes.Event{mk("e1", 1, 9, "a")}, map[string]string{})
+	first, fail := m.planDeliveryBatchOutsideLock([]logtypes.Event{mk("e1", 1, 9, "a")}, map[string]eventIdentity{})
 	require.Nil(t, fail)
 	dup := mk("e1", 1, 9, "a")
 	dup.EventTimeUTC, dup.CanonicalHash = first[0].EventTimeUTC, first[0].CanonicalHash
 	toWrite, fail := m.planDeliveryBatchOutsideLock(
-		[]logtypes.Event{dup, mk("e2", 10, 19, "b")}, map[string]string{"e1": first[0].CanonicalHash})
+		[]logtypes.Event{dup, mk("e2", 10, 19, "b")}, map[string]eventIdentity{"e1": {hash: first[0].CanonicalHash}})
 	require.Nil(t, fail)
 	require.Len(t, toWrite, 1, "同 ID 同哈希必须跳过（去重语义不变）")
 	require.Equal(t, "e2", toWrite[0].EventID)
 
-	// 2) 同 ID 异哈希 ⇒ IDENTITY_CONFLICT（硬失败，status 0）。
+	// 2) 同 ID 异哈希、**不可裁定形态**（等长）⇒ IDENTITY_CONFLICT（硬失败，status 0）。
 	//    注意：这里必须让事件**不带** event_time_utc（否则 normalize 会原样返回、沿用旧哈希，
-	//    冲突根本不会被识别——那测的就不是这条分支）。
+	//    冲突根本不会被识别——那测的就不是这条分支）；等长是刻意的，用以避开"较长者"裁定 ✓。
 	conflict := mk("e1", 1, 9, "tampered")
-	toWrite, fail = m.planDeliveryBatchOutsideLock([]logtypes.Event{conflict}, map[string]string{"e1": first[0].CanonicalHash})
+	toWrite, fail = m.planDeliveryBatchOutsideLock([]logtypes.Event{conflict},
+		map[string]eventIdentity{"e1": {hash: first[0].CanonicalHash, start: 1, end: 9, size: len("tampered")}})
 	require.Nil(t, toWrite)
 	require.NotNil(t, fail)
 	require.Equal(t, 0, fail.result.HTTPStatus, "身份冲突必须保持 status 0（不是 422）")
@@ -347,7 +350,7 @@ func TestPlanDeliveryBatchContractUnchanged(t *testing.T) {
 
 	// 3) 零宽事件 ⇒ 422 + 原文错误。
 	toWrite, fail = m.planDeliveryBatchOutsideLock(
-		[]logtypes.Event{{EventID: "zero", Source: identity, Level: "INFO", Stream: "stdout"}}, map[string]string{})
+		[]logtypes.Event{{EventID: "zero", Source: identity, Level: "INFO", Stream: "stdout"}}, map[string]eventIdentity{})
 	require.Nil(t, toWrite)
 	require.NotNil(t, fail)
 	require.Equal(t, http.StatusUnprocessableEntity, fail.result.HTTPStatus)
@@ -356,7 +359,7 @@ func TestPlanDeliveryBatchContractUnchanged(t *testing.T) {
 	// 4) 规范化失败（无 event_time_utc 且 ingest_time_utc 非法）⇒ 422。
 	broken := mk("bad", 30, 39, "c")
 	broken.IngestTimeUTC = "not-a-timestamp"
-	toWrite, fail = m.planDeliveryBatchOutsideLock([]logtypes.Event{broken}, map[string]string{})
+	toWrite, fail = m.planDeliveryBatchOutsideLock([]logtypes.Event{broken}, map[string]eventIdentity{})
 	require.Nil(t, toWrite)
 	require.NotNil(t, fail)
 	require.Equal(t, http.StatusUnprocessableEntity, fail.result.HTTPStatus)

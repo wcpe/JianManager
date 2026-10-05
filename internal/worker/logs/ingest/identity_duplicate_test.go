@@ -55,3 +55,42 @@ func TestCanonicalRecoveryEventsAdjudicatesTailPartialDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 }
+
+// TestPlanDeliveryBatchAdjudicatesTailPartialDuplicate 验收 #179 自愈面门闩（投递批规划）：
+// 批内/批对既有存储撞上「同区间异哈希」时按较长者（完整行）裁定；不可裁定形态仍硬失败 ✗。
+func TestPlanDeliveryBatchAdjudicatesTailPartialDuplicate(t *testing.T) {
+	m := &Manager{}
+	identity := logtypes.SourceIdentity{LogSourceID: "inst:179", SourceGeneration: "g1", ParserVersion: "v1"}
+	rec := logtypes.RecordRange{Start: 328911045, End: 328911216}
+	mk := func(message string) logtypes.Event {
+		return logtypes.Event{EventID: "same-id", Source: identity, Record: rec,
+			IngestTimeUTC: "2026-10-05T00:00:00.000000000Z", Level: "INFO", Stream: "stdout", Message: message}
+	}
+	partial, full := mk(strings.Repeat("x", 947)), mk(strings.Repeat("y", 1034))
+
+	// ① 批内成对（残行先、完整行后）⇒ 完整行替换入账 ✓（只投一条、且是完整行）。
+	got, fail := m.planDeliveryBatchOutsideLock([]logtypes.Event{partial, full}, map[string]eventIdentity{})
+	require.Nil(t, fail)
+	require.Len(t, got, 1)
+	require.Equal(t, len(full.Message), len(got[0].Message))
+
+	// ② 既有存储持残行、批携带完整行 ⇒ 完整行追加投出 ✓（不再硬失败 ⇒ 自愈面可推进）。
+	pre := map[string]eventIdentity{"same-id": {hash: "stale", start: rec.Start, end: rec.End, size: 947, idx: -1}}
+	got, fail = m.planDeliveryBatchOutsideLock([]logtypes.Event{full}, pre)
+	require.Nil(t, fail)
+	require.Len(t, got, 1)
+	require.Equal(t, len(full.Message), len(got[0].Message))
+
+	// ③ 既有存储持完整行、批携带残行 ⇒ 残行跳过 ✓（不重复投、不硬失败）。
+	pre = map[string]eventIdentity{"same-id": {hash: "stale", start: rec.Start, end: rec.End, size: 1034, idx: -1}}
+	got, fail = m.planDeliveryBatchOutsideLock([]logtypes.Event{partial}, pre)
+	require.Nil(t, fail)
+	require.Empty(t, got)
+
+	// ④ 不可裁定（等长异哈希）⇒ 硬失败 ✗（判据不放宽）。
+	other := mk(strings.Repeat("z", 947))
+	pre = map[string]eventIdentity{"same-id": {hash: "stale", start: rec.Start, end: rec.End, size: 947, idx: -1}}
+	_, fail = m.planDeliveryBatchOutsideLock([]logtypes.Event{other}, pre)
+	require.NotNil(t, fail)
+	require.ErrorContains(t, fail.err, "IDENTITY_CONFLICT")
+}

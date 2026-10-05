@@ -3650,6 +3650,32 @@ type deliveryPlanFailure struct {
 	err    error
 }
 
+// eventIdentity 是投递/重建两面共用的身份对账项：规范哈希 + 记录区间 + 正文字节数。
+// size/区间用于「同 ID 异哈希」的确定性裁定（2026-10-05 #179 现场：同区间、残行 947 B
+// vs 重读完整行 1034 B ✓）；idx≥0 指该事件在本批 toWrite 中的下标（−1 表示来自既有存储
+// 或内联集合，不在本批 ✗ —— 裁定取"后到者"时需按此决定替换还是追加 ✓）。
+type eventIdentity struct {
+	hash  string
+	start uint64
+	end   uint64
+	size  int
+	idx   int
+}
+
+// adjudicateSameIntervalIdentity 对「同 ID 异哈希」按**确定性证据**裁定（判据不放宽 ✗）：
+// 仅当「同记录区间 ＋ 一方严格更长」时才给结论 —— 区间决定源字节，同区间两变体只能是
+// 截断/规范化差异 ⇒ 较长者更接近完整行 ✓；返回 (keepExisting, takeIncoming)；两者皆 false
+// ⇒ 调用方维持硬失败（异区间/等长/伪造形态 ✓）。
+func adjudicateSameIntervalIdentity(existing eventIdentity, event logtypes.Event, incomingSize int) (bool, bool) {
+	if existing.start != event.Record.Start || existing.end != event.Record.End || incomingSize == existing.size {
+		return false, false
+	}
+	if incomingSize > existing.size {
+		return false, true
+	}
+	return true, false
+}
+
 // planDeliveryBatchOutsideLock 在**锁外**完成本批的「零宽校验 + 规范化 + 去重」（#54 修复）。
 //
 // 现场（本分支 #54 专项）：这段 O(本批) 的工作原先整段持 m.mu —— 单批 47 万–173 万条 ⇒
@@ -3664,7 +3690,7 @@ type deliveryPlanFailure struct {
 // "写不写、写什么"的后续步骤（canonicalRecoveryEvents / writeProjectionPlan）本来就在
 // 锁外 —— 即旧实现的锁既没有把「去重判定」与「写入」做成原子，也不提供任何跨源串行化
 // 保证（同源投递的串行化由采集轮"每源一个工作项"给出，见 defaultPollConcurrency 说明）。
-func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map[string]string) ([]logtypes.Event, *deliveryPlanFailure) {
+func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map[string]eventIdentity) ([]logtypes.Event, *deliveryPlanFailure) {
 	if hook, _ := m.deliverPlanHook.Load().(func()); hook != nil {
 		hook()
 	}
@@ -3685,13 +3711,39 @@ func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map
 			}
 		}
 		if existing, exists := seen[event.EventID]; exists {
-			if existing != event.CanonicalHash {
+			if existing.hash == event.CanonicalHash {
+				continue
+			}
+			// 同 ID 异哈希：**默认硬失败** ✗；仅「同区间 ＋ 一方严格更长」两种裁定出口
+			// （同 canonicalRecoveryEvents 的同一判据与同一留痕口径 ✓）。
+			incomingSize := len(event.Message)
+			keepExisting, takeIncoming := adjudicateSameIntervalIdentity(existing, event, incomingSize)
+			switch {
+			case takeIncoming:
+				if existing.idx >= 0 && existing.idx < len(toWrite) && toWrite[existing.idx].EventID == event.EventID {
+					toWrite[existing.idx] = event // 本批内的残行 ⇒ 原位替换 ✓
+				} else {
+					toWrite = append(toWrite, event) // 既有存储里的残行 ⇒ 追加完整行投出 ✓
+				}
+				slog.Warn("身份重复裁定：同区间异哈希取较长者（弃尾部残行变体）",
+					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+					"kept_bytes", incomingSize, "dropped_bytes", existing.size,
+					"kept_hash", event.CanonicalHash, "dropped_hash", existing.hash)
+				seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+					end: event.Record.End, size: incomingSize, idx: len(toWrite) - 1}
+			case keepExisting:
+				slog.Warn("身份重复裁定：后写变体较短（残行），保留完整行变体",
+					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+					"kept_bytes", existing.size, "dropped_bytes", incomingSize,
+					"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+			default:
 				return nil, &deliveryPlanFailure{err: fmt.Errorf("ingest: IDENTITY_CONFLICT for event_id %s", event.EventID)}
 			}
 			continue
 		}
 		toWrite = append(toWrite, event)
-		seen[event.EventID] = event.CanonicalHash
+		seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+			end: event.Record.End, size: len(event.Message), idx: len(toWrite) - 1}
 	}
 	return toWrite, nil
 }
@@ -3729,19 +3781,20 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	// 重建身份集合——这是单位行成本里最贵的一项（生产单源段实测可达 70 万行，微基准
 	// 单次遍历 8.7 µs/行 ≈ 6 秒/批，而段只增不减，成本随运行时长线性增长）。
 	tail := m.planDeliveryTail(key, saved, events, replay)
-	var seen map[string]string
+	var seen map[string]eventIdentity
 	if tail.Fast {
-		seen = make(map[string]string, len(events))
+		seen = make(map[string]eventIdentity, len(events))
 		timing.mark("seen-skipped")
 	} else {
-		seen = make(map[string]string, len(inlineEvents))
+		seen = make(map[string]eventIdentity, len(inlineEvents))
 		// 段 B（#54 修复）：内联集合的规范化遍历（O(段行数)）**在锁外** —— 锁内只留上面的快照。
 		for _, event := range inlineEvents {
 			event, err := normalizeCanonicalEvent(event)
 			if err != nil {
 				return pipeline.DeliveryResult{}, err
 			}
-			seen[event.EventID] = event.CanonicalHash
+			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+				end: event.Record.End, size: len(event.Message), idx: -1}
 		}
 		// 事件体已落段时，身份集合从段流式重建（不持全量切片）；旧格式仍走内联切片。
 		if eventsStored {
@@ -3750,7 +3803,8 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 				if err != nil {
 					return err
 				}
-				seen[normalized.EventID] = normalized.CanonicalHash
+				seen[normalized.EventID] = eventIdentity{hash: normalized.CanonicalHash, start: normalized.Record.Start,
+					end: normalized.Record.End, size: len(normalized.Message), idx: -1}
 				return nil
 			}); err != nil {
 				return pipeline.DeliveryResult{}, err
@@ -5883,14 +5937,7 @@ func (m *Manager) eventBodyLookup(key string) func(eventID string) (logtypes.Eve
 // 事件体来自磁盘段（eventstore）；仅当该源仍是旧格式（EventsStored=false）时才用内联切片。
 // 集合语义不变：仍为**全部**已登账事件，不做任何裁剪。
 func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]logtypes.Event, error) {
-	type seenEntry struct {
-		hash  string
-		start uint64
-		end   uint64
-		size  int
-		idx   int
-	}
-	seen := make(map[string]seenEntry, len(saved.WAL))
+	seen := make(map[string]eventIdentity, len(saved.WAL))
 	events := make([]logtypes.Event, 0, len(saved.WAL))
 	add := func(event logtypes.Event) error {
 		if event.Record.End <= event.Record.Start {
@@ -5904,7 +5951,7 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 		// 该 event_id 的规范哈希已在本次登账集合中时不重复入账（只用于身份对账）。
 		existing, ok := seen[event.EventID]
 		if !ok {
-			seen[event.EventID] = seenEntry{hash: event.CanonicalHash, start: event.Record.Start,
+			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
 				end: event.Record.End, size: len(event.Message), idx: len(events)}
 			events = append(events, event)
 			return nil
@@ -5912,22 +5959,21 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 		if existing.hash == event.CanonicalHash {
 			return nil
 		}
-		// 同 ID 异哈希：**默认硬失败** ✗；仅在具备**确定性证据**的形态下裁定（2026-10-05 现场）：
-		// 同源 ＋ **同记录区间**（区间决定源字节 ⇒ 同区间两变体只能是截断/规范化差异 ✓）
-		// ＋ 一方严格更长（轮转尾部残行 vs 重读完整行：947 B vs 1034 B ✓）⇒ 较长者胜。
-		// 其余形态（异区间、等长）一律维持硬失败 —— 判据不放宽 ✗。
+		// 同 ID 异哈希：**默认硬失败** ✗；仅「同区间 ＋ 一方严格更长」按较长者（完整行）裁定 ✓
+		//（判据与留痕口径与 planDeliveryBatchOutsideLock / adjudicateSameIntervalIdentity 同源 ✓）。
 		incomingSize := len(event.Message)
-		if existing.start == event.Record.Start && existing.end == event.Record.End && incomingSize != existing.size {
-			if incomingSize > existing.size {
-				events[existing.idx] = event // 完整行替换先入账的残行变体 ✓
-				seen[event.EventID] = seenEntry{hash: event.CanonicalHash, start: event.Record.Start,
-					end: event.Record.End, size: incomingSize, idx: existing.idx}
-				slog.Warn("身份重复裁定：同区间异哈希取较长者（弃尾部残行变体）",
-					"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
-					"kept_bytes", incomingSize, "dropped_bytes", existing.size,
-					"kept_hash", event.CanonicalHash, "dropped_hash", existing.hash)
-				return nil
-			}
+		keepExisting, takeIncoming := adjudicateSameIntervalIdentity(existing, event, incomingSize)
+		switch {
+		case takeIncoming:
+			events[existing.idx] = event // 完整行替换先入账的残行变体 ✓
+			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+				end: event.Record.End, size: incomingSize, idx: existing.idx}
+			slog.Warn("身份重复裁定：同区间异哈希取较长者（弃尾部残行变体）",
+				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+				"kept_bytes", incomingSize, "dropped_bytes", existing.size,
+				"kept_hash", event.CanonicalHash, "dropped_hash", existing.hash)
+			return nil
+		case keepExisting:
 			slog.Warn("身份重复裁定：后写变体较短（残行），保留完整行变体",
 				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
 				"kept_bytes", existing.size, "dropped_bytes", incomingSize,
