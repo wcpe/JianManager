@@ -24,6 +24,11 @@ test.describe('FR-040 全局 Bot 管理页重构（mock 模式真浏览器）', 
   })
 
   test('聚合总览 → 控制台联动 → 分页窥视 → 分组批量', async ({ page }) => {
+    // 多步用例（总览 → 控制台联动 → 分页窥视 → 分组批量）且含截图。
+    // 实测单跑约 29 秒，正好压在默认 30 秒上限上——全量跑时稍有资源竞争就会翻过去，
+    // 表现为「偶发失败」，而失败点落在当时那一步，看不出是预算问题。
+    test.setTimeout(120_000)
+
     await page.goto('/bots')
     await expect(page.getByRole('heading', { name: 'Bot 管理' })).toBeVisible()
     await expect(page.getByText('2 实例 · 2 节点')).toBeVisible()
