@@ -1,7 +1,32 @@
 /**
- * 节点制品缓存面板的纯逻辑工具（FR-178）：字节格式化、容量上限的 GB ↔ 字节换算。
- * 抽成纯函数便于单测，UI 组件只调用、不内联换算。
+ * 节点制品缓存的契约类型与纯逻辑工具（FR-178）。
+ *
+ * 归属说明（ADR-097）：类型由两侧共用——应用 API 层 `@/api/nodeRuntime` 的查询 hook
+ * 返回 `ArtifactCacheView`，受控视图 `components/views/nodes/NodeArtifactCachePanel`
+ * 经 props 接收它。类型随组件归包，避免包内组件为取类型而反向依赖 `@/api`。
+ * 纯函数（字节格式化、容量上限 GB ↔ 字节换算）一并归包，便于单测。
  */
+
+/** 一条节点制品缓存项。name/version 由 CP 用 asset 表按 sha256 补全（可能为空）。 */
+export interface ArtifactCacheItem {
+  sha256: string
+  name: string
+  type: string
+  version: string
+  size: number
+  /** 首次存入时间（Unix 秒）。 */
+  cachedAt: number
+  /** 最近命中/存入时间（Unix 秒，LRU 依据）。 */
+  lastUsedAt: number
+}
+
+/** 节点制品缓存视图：列表 + 总占用 + 当前上限。 */
+export interface ArtifactCacheView {
+  items: ArtifactCacheItem[]
+  totalBytes: number
+  /** 容量上限（字节，0=不限）。 */
+  capBytes: number
+}
 
 /** 把字节数格式化为人类可读大小（B/KB/MB/GB/TB），0 或非有限值回 "0 B"。 */
 export function formatCacheBytes(bytes: number): string {

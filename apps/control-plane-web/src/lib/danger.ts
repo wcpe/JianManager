@@ -1,4 +1,8 @@
 import { useAuthStore } from '@/stores/auth'
+// 范围类型是「应用权限判定」与「组件库 DangerConfirm」共用的契约，随组件归包（ADR-097）。
+import type { DangerScope } from '@jianmanager/ui/components/views/DangerConfirm'
+
+export type { DangerScope } from '@jianmanager/ui/components/views/DangerConfirm'
 
 /**
  * 危险操作的「权限范围」分级（FR-059 角色门禁）。
@@ -7,7 +11,6 @@ import { useAuthStore } from '@/stores/auth'
  * 的 RBAC 中间件强制（architecture-invariants）。这里按最低角色等级判定，
  * 与后端 model.UserRole（0 组成员 / 1 组管理员 / 10 平台管理员）对齐。
  */
-export type DangerScope = 'group' | 'platform'
 
 /** 与后端 model.UserRole 对齐的角色等级常量。 */
 export const Role = {
