@@ -111,9 +111,9 @@ function SessionPageBody({ runId }: { runId: number | string }) {
 
   return (
     // 全量对齐：外壳改用 PageShell，保留 mx-auto max-w-7xl（窄栏内容页）与 data-testid。
-    // 页头（SessionHeader 子组件）本次不动——它是对象头形态（对象名 + 5 个实时状态 chip +
-    // 操作），改用 ObjectPageHeader 需把那些 chip 映射成 meta，而它们带 aria-live="polite"
-    // 的实时播报语义，属可访问性行为，不宜顺手改。
+    // 页头由 SessionHeader 渲染，它已改用布局层 ObjectPageHeader：运行名 → title，
+    // 五个实时状态（运行状态/判定/阶段/时长/目标实例）→ metrics（判定保留三态语义色），
+    // 返回 Bots 与实时流状态 → breadcrumbs，停止/取消/报告下载 → actions。
     <PageShell className="mx-auto max-w-7xl p-1 sm:p-0" data-testid="bot-load-session-page">
       <SessionHeader run={run} streamStatus={String(streamStatus)} reportReady={reportReady} />
 
