@@ -10,6 +10,7 @@ import { HealthWall } from '@/components/HealthWall'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { ResourceGauge } from '@jianmanager/ui/components/gauge'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
@@ -380,11 +381,13 @@ export default function OverviewPage() {
   }, [deferredOverview, t])
 
   return (
-      <div data-page="overview" className="jm-page-stack space-y-4">
-      <div className="jm-page-header">
-        <h1 className="jm-page-title">{t('dashboard.title')}</h1>
-        <RangePicker value={range} onChange={setRange} />
-      </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
+    // data-page 由 PageShell spread 透传，e2e 的就绪信号依赖它。
+    <PageShell data-page="overview">
+      <PageHeader
+        title={t('dashboard.title')}
+        actions={<RangePicker value={range} onChange={setRange} />}
+      />
 
       {/* 顶部：环形仪表盘 + 统计块 */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
@@ -563,6 +566,6 @@ export default function OverviewPage() {
           </Table>
         </div>
       </Panel>
-    </div>
+    </PageShell>
   )
 }
