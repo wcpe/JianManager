@@ -254,17 +254,32 @@ func NewJournalWithStore(store Store) (*JournalWithStore, error) {
 		}
 	}
 	sort.SliceStable(entries, func(i, k int) bool { return entries[i].Seq < entries[k].Seq })
-	merged := make([]JournalEntry, 0, len(entries))
+	maxSeq := uint64(0)
 	for _, e := range entries {
 		if e.Seq == 0 {
 			return nil, fmt.Errorf("%w: journal entry with zero seq", ErrJournalOrder)
 		}
-		if n := len(merged); n > 0 && merged[n-1].Seq == e.Seq {
-			if !reflect.DeepEqual(merged[n-1], e) {
-				return nil, fmt.Errorf("%w: same seq %d with different content", ErrJournalOrder, e.Seq)
-			}
-			continue // 精确重复 ⇒ 跳过 ✓
+		if e.Seq > maxSeq {
+			maxSeq = e.Seq
 		}
+	}
+	merged := make([]JournalEntry, 0, len(entries))
+	seen := make(map[uint64]struct{}, len(entries))
+	renumbered := 0
+	for _, e := range entries {
+		if _, dup := seen[e.Seq]; dup {
+			// 同 seq：先判精确重复（跳过 ✓）；再判"同 seq 异内容" —— 现场形态＝**两个写者
+			// 各自分配序号**（一个长期在跑的旧实例 + 新实例共用一个文件 ✗），两条都可能是
+			// 真实状态迁移 ⇒ **不丢任何一条**：把后位置者改判到全局尾部（seq = maxSeq+1），
+			// 并显式告警（可见，不静默 ✗）。seq 仅为应用次序序号，改判不改变条目内容语义 ✓。
+			if n := len(merged); n > 0 && dupEqual(merged, e) {
+				continue
+			}
+			maxSeq++
+			e.Seq = maxSeq
+			renumbered++
+		}
+		seen[e.Seq] = struct{}{}
 		merged = append(merged, e)
 	}
 	for _, e := range merged {
@@ -272,11 +287,24 @@ func NewJournalWithStore(store Store) (*JournalWithStore, error) {
 			return nil, fmt.Errorf("catalog: replay journal store: %w", err)
 		}
 	}
-	if outOfOrder {
-		slog.Warn("journal 文件行序非 seq 序：已按 seq 归并后重放（正常重启不得再因此拒启）",
-			"entries", len(merged))
+	if outOfOrder || renumbered > 0 {
+		slog.Warn("journal 重放已归并/改判（正常重启不得再因此拒启）",
+			"entries", len(merged), "out_of_order", outOfOrder, "renumbered", renumbered)
 	}
 	return j, nil
+}
+
+// dupEqual 判断 e 是否与 merged 中"同 seq 的最新一条"内容完全相同（精确重复 ⇒ 可跳过 ✓）。
+func dupEqual(merged []JournalEntry, e JournalEntry) bool {
+	for i := len(merged) - 1; i >= 0; i-- {
+		if merged[i].Seq == e.Seq {
+			return reflect.DeepEqual(merged[i], e)
+		}
+		if merged[i].Seq < e.Seq {
+			break
+		}
+	}
+	return false
 }
 
 // Append 写入内存并同步到 store（若有）。

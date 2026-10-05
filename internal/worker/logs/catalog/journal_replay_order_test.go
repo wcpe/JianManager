@@ -27,18 +27,25 @@ func TestJournalReplayToleratesOutOfOrderLines(t *testing.T) {
 	require.Equal(t, uint64(2), snap[1].Seq)
 }
 
-// TestJournalReplayRejectsTrueCorruption 判据不放宽：同 seq 异内容／seq==0 ⇒ 仍拒 ✗；
-// 同 seq 同内容（精确重复）⇒ 去重跳过 ✓。
-func TestJournalReplayRejectsTrueCorruption(t *testing.T) {
+// TestJournalReplayRepairsSameSeqCollision 判据（现场修订）：同 seq 异内容＝**双写者各自计数**
+// 的现场形态 ⇒ 不丢任何一条：后位置者改判到全局尾部 ✓；同 seq 同内容（精确重复）⇒ 去重跳过 ✓；
+// seq==0 ⇒ 仍拒 ✗（写入器不可能产生）。
+func TestJournalReplayRepairsSameSeqCollision(t *testing.T) {
 	dir := t.TempDir()
 
-	// ① 同 seq 异内容 ⇒ 拒 ✗。
+	// ① 同 seq 异内容 ⇒ 改判不丢 ✓。
 	store, err := NewJSONLFileStore(filepath.Join(dir, "dup-diff.jsonl"))
 	require.NoError(t, err)
 	require.NoError(t, store.AppendEntry(JournalEntry{Seq: 1, Key: PartitionKey{StorageNamespace: "ns", UTCDay: "2026-10-06"}}))
 	require.NoError(t, store.AppendEntry(JournalEntry{Seq: 1, Key: PartitionKey{StorageNamespace: "ns", UTCDay: "2026-10-07"}}))
-	_, err = NewJournalWithStore(store)
-	require.ErrorContains(t, err, "same seq 1 with different content")
+	j, err := NewJournalWithStore(store)
+	require.NoError(t, err, "同 seq 异内容必须可修复重放（不丢任何一条 ✗）")
+	snap := j.Snapshot()
+	require.Len(t, snap, 2)
+	require.Equal(t, uint64(1), snap[0].Seq)
+	require.Equal(t, "2026-10-06", snap[0].Key.UTCDay)
+	require.Equal(t, uint64(2), snap[1].Seq, "后位置者改判到全局尾部 ✓")
+	require.Equal(t, "2026-10-07", snap[1].Key.UTCDay)
 
 	// ② 同 seq 同内容 ⇒ 精确重复，跳过 ✓。
 	store2, err := NewJSONLFileStore(filepath.Join(dir, "dup-same.jsonl"))
@@ -46,9 +53,9 @@ func TestJournalReplayRejectsTrueCorruption(t *testing.T) {
 	e := JournalEntry{Seq: 1, Key: PartitionKey{StorageNamespace: "ns", UTCDay: "2026-10-06"}}
 	require.NoError(t, store2.AppendEntry(e))
 	require.NoError(t, store2.AppendEntry(e))
-	j, err := NewJournalWithStore(store2)
+	j2, err := NewJournalWithStore(store2)
 	require.NoError(t, err)
-	require.Len(t, j.Snapshot(), 1, "精确重复必须去重 ✓")
+	require.Len(t, j2.Snapshot(), 1, "精确重复必须去重 ✓")
 
 	// ③ seq==0（写入器不可能产生）⇒ 拒 ✗。
 	store3, err := NewJSONLFileStore(filepath.Join(dir, "zero.jsonl"))
