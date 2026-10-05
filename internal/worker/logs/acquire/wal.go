@@ -615,6 +615,14 @@ func (w *WAL) Append(events ...logtypes.Event) error {
 		return fmt.Errorf("acquire: paused (%s); must record gap, not silent drop", st.PauseReason)
 	}
 
+	// #179 上游根修：回放/补账入口先与既有条目对账，杜绝"同一 id 写两遍"✗（详见函数注释 ✓）。
+	if w.appendOriginReplay && len(events) > 0 {
+		events = w.adjudicateReplayDuplicatesLocked(events)
+		if len(events) == 0 {
+			return nil
+		}
+	}
+
 	for _, ev := range events {
 		newEntry := WALEntry{
 			Replay:   w.appendOriginReplay,
@@ -633,6 +641,55 @@ func (w *WAL) Append(events ...logtypes.Event) error {
 	// 追加后检查积压上限（B1b）：越界即暂停该源采集，避免单源洪流无界增长拖垮整机。
 	w.enforceBacklogLimitLocked()
 	return nil
+}
+
+// adjudicateReplayDuplicatesLocked 是 #179 的**上游根修**（同一 id 写两遍 ✗）。
+//
+// 现场：同一段字节被两次读取（先实时、后回放），日期推断差异 ⇒ 同 event_id、同区间、异哈希；
+// 旧行为把第二遍**再追加一次** ✗ ⇒ WAL 静止态长期躺着两个变体，下游一路硬失败。
+//
+// 本函数只在**回放/补账**入口对账（常规采集不受影响 ✓）：
+//   - 同哈希 ⇒ 丢弃本批该条（真正冗余 ⇒ 不写第二遍 ✓）；
+//   - 同区间且「level/stream/message 全同（仅时间不同）」⇒ 用本批**原位替换旧条目**
+//     （静止态不再留异哈希 ✗）并**照常追加一份**——追加的那份走投递（更正版本需要投出去 ✓），
+//     替换让 canonical/重建面只见同一哈希（同哈希 ⇒ 天然收敛 ✓）；
+//   - 其余形态（含"较长/较短"的长度差）⇒ 原样追加（**本层不按长度裁定** ✗ —— 长度差不能
+//     证明是同一物理行；由下游既有裁定与可见硬失败处理，判据不放宽 ✓）。
+func (w *WAL) adjudicateReplayDuplicatesLocked(events []logtypes.Event) []logtypes.Event {
+	if len(w.entries) == 0 {
+		return events
+	}
+	out := make([]logtypes.Event, 0, len(events))
+	for _, ev := range events {
+		idx := -1
+		for i := range w.entries {
+			if w.entries[i].Event.EventID == ev.EventID {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			out = append(out, ev)
+			continue
+		}
+		existing := w.entries[idx].Event
+		if existing.CanonicalHash == ev.CanonicalHash {
+			continue // 同哈希 ⇒ 已在 WAL：丢弃副本，不再写第二遍 ✓
+		}
+		keyLabel := w.key.LogSourceID + "/" + w.key.SourceGeneration
+		sameSpan := existing.Record.Start == ev.Record.Start && existing.Record.End == ev.Record.End
+		sameLine := existing.Level == ev.Level && existing.Stream == ev.Stream && existing.Message == ev.Message
+		if sameSpan && sameLine {
+			w.entries[idx].Event = ev // 胜者原位替换：静止态收敛为同一内容 ✓
+			w.entries[idx].Replay = true
+			slog.Warn("回放去重：同区间仅时间不同 ⇒ 替换既有条目并追加更正版待投递",
+				"key", keyLabel, "event_id", ev.EventID, "start", ev.Record.Start, "end", ev.Record.End)
+			out = append(out, ev)
+			continue
+		}
+		out = append(out, ev) // 其余形态原样追加（下游既有裁定/可见硬失败处理 ✓）
+	}
+	return out
 }
 
 // Commit fsync/等效提交后推进 durable_position。
