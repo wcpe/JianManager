@@ -431,7 +431,22 @@ func (w *WAL) maybeResumeBacklogLocked() {
 //
 // 与"操作员放弃"（AbandonGaps）严格区分 ✓：放弃是人的裁定（FreeText），本标记是**机械推论**——
 // 恢复后回读必然重新产生该批 ✓，因此它不构成"已确认落库"，只是"将在恢复后重放" ✓。
-const gapResolutionReReadOnResume = "re-read on resume (append rejected while paused)"
+// #179-①：两条"待重读"消解词的**真源导出**（既有小写名保留为别名 ⇒ 既有调用点逐字不变 ✓）。
+// 为什么要导出：ingest 侧的"待重读类缝"判据与测试夹具都必须引用同一真源，绝不抄字面量 ✗。
+const ResolutionReReadOnResume = "re-read on resume (append rejected while paused)"
+const ResolutionReReadOnResumeDelivery = "re-read on resume (delivery error while paused)"
+
+// 兼容别名：既有调用点（含消解词比较处）逐字不变 ✓。
+const (
+	gapResolutionReReadOnResume         = ResolutionReReadOnResume
+	gapResolutionReReadOnResumeDelivery = ResolutionReReadOnResumeDelivery
+)
+
+// IsReReadHealableResolution 判定某条缺口的消解词是否属"**待重读**"类（#179）：已 resolved 但**非终局**
+// ⇒ 仍必须靠一次真实重投/重读才能闭合 ✓（179 正是这种"已消解却钉死"的形态 ✗）。行为中性：只读 ✓。
+func IsReReadHealableResolution(res string) bool {
+	return res == ResolutionReReadOnResume || res == ResolutionReReadOnResumeDelivery
+}
 
 // gapResolutionReReadOnResumeDelivery 是投递失败类缺口的分类裁定文本（与上一条**明确分账** ✓）。
 //
@@ -440,7 +455,6 @@ const gapResolutionReReadOnResume = "re-read on resume (append rejected while pa
 // `UNSENT basis=gap` 区间**（现场 `inst:156` 覆盖 119.78MB ✓、紧贴水位 ✓）⇒ 它**恰恰是可愈合的** ✓✓。
 // 我上批假设"投递失败类回读治不了 ⇒ 必须永远挡住恢复" ✗ 被现场 67 条恒等不变**证否** ✓（那 67 条
 // 所属源已暂停 ⇒ 活投递事件结构性不可达 ⇒ 两种证据都拿不到 ⇒ 永久停死 ✗）。
-const gapResolutionReReadOnResumeDelivery = "re-read on resume (delivery error while paused)"
 
 // gapResolutionExcludedReasons 是**绝不能被本条路径放行**的缺口原因（fail-closed 名单 ✓）。
 //
