@@ -42,8 +42,14 @@ issues:
 
 ### 必须通过
 
-- `tsc --noEmit` — 无类型错误
+- `tsc -b` — 无类型错误（**不能用 `tsc --noEmit`**，原因见下）
 - `eslint .` — 无 error
+
+> **为什么必须是 `tsc -b`**：`apps/control-plane-web/tsconfig.json` 是 `files: []` + `references`
+> 形式（真正的配置在 `tsconfig.app.json` / `tsconfig.node.json`）。这种工程里
+> `tsc --noEmit` **一个文件都不会检查**，且退出码恒为 0 —— 看上去「通过」，实则什么都没做，
+> 于是 `Expected corresponding JSX closing tag` 这类硬错误会被漏掉。`tsc -b` 才会沿
+> references 逐个构建检查，本仓 `build` script 用的也正是它。
 
 ### 规则
 
