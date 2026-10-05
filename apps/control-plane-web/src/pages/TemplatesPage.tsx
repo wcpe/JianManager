@@ -38,6 +38,7 @@ import {
 } from '@/lib/template-apply'
 import type { Tone } from '@/lib/tone'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { Button } from '@jianmanager/ui/components/button'
@@ -141,17 +142,19 @@ export default function TemplatesPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-bold">{t('templates.title')}</h1>
-          <p className="text-xs text-muted-foreground">{t('templates.marketSubtitle')}</p>
-        </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus />
-          {t('templates.create')}
-        </Button>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语。原为裸 space-y-4 + 手写页头，
+    // 且无 data-page，迁移时补上。
+    <PageShell data-page="templates">
+      <PageHeader
+        title={t('templates.title')}
+        description={t('templates.marketSubtitle')}
+        actions={
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus />
+            {t('templates.create')}
+          </Button>
+        }
+      />
 
       {isLoading ? (
         /* 加载骨架：与真实市场卡片网格同布局，占位卡拼封面/标题/描述/按钮轮廓，避免布局跳动。 */
@@ -236,7 +239,7 @@ export default function TemplatesPage() {
         onConfirm={confirmDelete}
         onCancel={() => setDeleteTarget(null)}
       />
-    </div>
+    </PageShell>
   )
 }
 
