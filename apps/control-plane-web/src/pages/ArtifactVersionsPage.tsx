@@ -12,6 +12,7 @@ import {
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 
 /** ServerProbe 首期制品包管理页：管理员手动同步、缓存和选择全局默认。 */
 export default function ArtifactVersionsPage() {
@@ -54,11 +55,13 @@ export default function ArtifactVersionsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">{t('artifactVersions.title')}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{t('artifactVersions.description')}</p>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语。保留 mx-auto max-w-5xl——本页是窄栏内容页
+    // （与创建实例向导同处理）。原先无 data-page，迁移时补上。
+    <PageShell data-page="artifact-versions" className="mx-auto max-w-5xl">
+      <PageHeader
+        title={t('artifactVersions.title')}
+        description={t('artifactVersions.description')}
+      />
 
       <Panel title={t('artifactVersions.sources')}>
         <div className="divide-y">
@@ -134,6 +137,6 @@ export default function ArtifactVersionsPage() {
       </Panel>
 
       <p className="text-xs text-muted-foreground">{t('artifactVersions.rolloutHint', { count: cachedVersions.length })}</p>
-    </div>
+    </PageShell>
   )
 }
