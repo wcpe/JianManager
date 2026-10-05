@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Network, GitBranch, List } from 'lucide-react'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { ListSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -111,26 +112,29 @@ export default function NetworksPage() {
   }
 
   return (
-    <div data-page="networks" className="jm-page-stack space-y-4">
-      <div className="jm-page-header">
-        <div>
-          <h1 className="jm-page-title">{t('networks.title')}</h1>
-          <p className="jm-page-subtitle">{t('networks.subtitle')}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="jm-toolbar-surface inline-flex items-center gap-1 p-1">
-            <ViewTab active={view === 'list'} onClick={() => setView('list')} icon={<List className="size-3.5" />}>
-              {t('networks.viewList')}
-            </ViewTab>
-            <ViewTab active={view === 'topology'} onClick={() => setView('topology')} icon={<GitBranch className="size-3.5" />}>
-              {t('networks.viewTopology')}
-            </ViewTab>
-          </div>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
-            {t('networks.create')}
-          </Button>
-        </div>
-      </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader），
+    // 不再手写 `jm-page-stack space-y-4` 与 `jm-page-header` 骨架类名。
+    // `data-page` 由 PageShell 透传（它 spread 剩余 props），e2e 的就绪信号依赖它。
+    <PageShell data-page="networks">
+      <PageHeader
+        title={t('networks.title')}
+        description={t('networks.subtitle')}
+        actions={
+          <>
+            <div className="jm-toolbar-surface inline-flex items-center gap-1 p-1">
+              <ViewTab active={view === 'list'} onClick={() => setView('list')} icon={<List className="size-3.5" />}>
+                {t('networks.viewList')}
+              </ViewTab>
+              <ViewTab active={view === 'topology'} onClick={() => setView('topology')} icon={<GitBranch className="size-3.5" />}>
+                {t('networks.viewTopology')}
+              </ViewTab>
+            </div>
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              {t('networks.create')}
+            </Button>
+          </>
+        }
+      />
       {view === 'topology' ? (
         <Panel
           title={t('networks.topoTitle')}
@@ -142,7 +146,8 @@ export default function NetworksPage() {
           <TopologyLegend />
         </Panel>
       ) : isLoading ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
+        // 裸 <p> 换成统一骨架：与其它页的数据区占位一致（阶段 6 补丁的 PageSkeleton 一族）。
+        <ListSkeleton />
       ) : (
         <NetworkList networks={networks ?? []} onView={openDetail} onDelete={setDeleteTarget} />
       )}
@@ -158,7 +163,7 @@ export default function NetworksPage() {
         onConfirm={confirmDelete}
         onCancel={() => setDeleteTarget(null)}
       />
-    </div>
+    </PageShell>
   )
 }
 
