@@ -124,9 +124,9 @@ export default function SettingsPage() {
     // 全量对齐：外壳与页头改用布局层原语。data-page 由 PageShell spread 透传，保持原值。
     // 双栏（分类导航 + 内容）改用 SettingsLayout：原手写 flex + w-44(176px) 与原型
     // 的 170px 不一致，且缺窄屏单列降级，本原语把这两项一并固定。
-    // 注：ARCHITECTURE 与原型都要求设置页用 fixed 壳态（内部区域自行滚动），
-    // 那属滚动模型变更，留待单独处理，不与本次间距统一混改。
-    <PageShell data-page="settings">
+    // 壳态取 fixed：ARCHITECTURE 与原型 settingsPage() 的 .page fixed 都要求设置页
+    // 固定视口、由内部区域自行滚动，使分类导航常驻、只有内容区滚动。
+    <PageShell variant="fixed" data-page="settings">
       <PageHeader title={t('settings.title')} description={t('settings.subtitle')} />
 
       <SettingsLayout>
@@ -163,8 +163,9 @@ export default function SettingsPage() {
           </nav>
         </aside>
 
-        {/* 右侧：当前分类面板 */}
-        <div className="min-w-0 max-w-2xl flex-1">
+        {/* 右侧：当前分类面板。fixed 壳态下外壳不再滚动，故内容区自行溢出滚动
+            （安全/系统等分类的表单比一屏高）。 */}
+        <div className="min-w-0 max-w-2xl flex-1 overflow-auto">
           {cat === 'appearance' ? (
             <AppearanceSettings />
           ) : (
