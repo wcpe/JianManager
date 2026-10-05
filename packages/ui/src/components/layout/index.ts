@@ -19,7 +19,7 @@
  * ```
  */
 export { PageShell } from './PageShell'
-export { PageHeader } from './PageHeader'
+export { PageHeader, type PageBreadcrumb } from './PageHeader'
 // 骨架（FR-496 阶段 6 补丁）：路由 fallback 与页内数据区的统一占位，见 PageSkeleton.tsx 头注。
 export { PageSkeleton, DataPanelSkeleton, ListSkeleton, type PageSkeletonVariant } from './PageSkeleton'
 export { ScopeBar } from './ScopeBar'
