@@ -46,6 +46,14 @@ const batchUpsertRows = 32
 // 远离 SQLite 的参数上限，且与 UPSERT 的批量节奏一致，便于用同一条读数口径对比。
 const batchDeleteRows = batchUpsertRows
 
+// pruneDeleteBatchRows 是「范围谓词删除」与「镜像窗口重建」的**单批行数上界**（#67-A）。
+//
+// 为什么需要它：这两步都是"与单源数据量成正比的整段操作"，而删除那条语句跑在**提交单元事务内**
+// ——该事务的耗时硬上界只在语句之间检查 ⇒ 一条无界 DELETE / 一次整段读回就能把单元耗时推到 10s 级
+// （真机 p95=11,095ms、max=40,767ms ✗）。取 2000 是为了让单批在常见磁盘上稳定落在几十毫秒内，
+// 同时不至于把批数抬得过高（语句开销约 1ms 量级）。
+const pruneDeleteBatchRows = 2000
+
 // walCheckpointPages / sqlitePageSize 决定显式 WAL 归并的触发阈值（页数 × 页大小 ≈ 4 MiB），
 // 与 SQLite 默认的 wal_autocheckpoint（1000 页）同量级——但**归并时机由我们自己决定**
 // （见 Open 里关闭 wal_autocheckpoint 的理由与 checkpointPassiveIfNeeded 的说明）。
@@ -215,6 +223,12 @@ type Latency struct {
 	Max     time.Duration
 	MaxRows int
 	Cycles  int
+	// #67-C（只读）：本进程**累计**的"规划耗时 / 范围剪枝耗时 / 镜像重建耗时"（ns）。
+	// 为什么必须单列：单元耗时分位只能告诉你"慢在单元内"，分不出"规划（planState 的指纹+主键编码）"
+	// 与"范围剪枝（无界谓词删除+镜像重建）"——真机 p95 11s / max 40.7s 的定性就靠这三项 ✓。
+	NsPlan          int64
+	NsPrune         int64
+	NsMirrorRebuild int64
 }
 
 // Stats 是一次 Apply 的写入统计。RowsWritten/BytesWritten 是「只写变更行」的直接观测量：
@@ -292,7 +306,12 @@ type Store struct {
 	// 当前行数预算（在 [MinRows, MaxRows] 之间随实测耗时收缩/扩张），cycle 是周期序号。
 	budget    CommitBudget
 	rowBudget int
-	cycle     uint64
+	// #67-C（只读观测，均在 ApplyScopedCtxRows 的持锁区内累加 ⇒ 无需原子）：
+	// nsPlan/nsPrune/nsMirrorRebuild 是"规划 / 范围剪枝 / 镜像重建"三段各自的累计墙钟（ns）。
+	nsPlan          int64
+	nsPrune         int64
+	nsMirrorRebuild int64
+	cycle           uint64
 
 	// testCrashHook 仅供测试注入：在一次写入事务**提交之前**、写完全部变更行之后被调用，
 	// 用于在子进程中模拟进程异常中断（os.Exit 或 SIGKILL），验证未提交批次不会残留。
@@ -796,7 +815,9 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 	if err := Validate(planned); err != nil {
 		return Stats{}, err
 	}
+	tPlan := time.Now()
 	plans, err := planState(planned, started.UnixMilli())
+	s.nsPlan += int64(time.Since(tPlan)) // #67-C：规划段（scopeState + Validate + planState）
 	if err != nil {
 		return Stats{}, err
 	}
@@ -998,17 +1019,37 @@ func walMirrorKeyAtOrBelow(spec tableSpec, mirrorKey string, through uint64) boo
 // 为什么可以省掉 durable 判断之外的任何条件：谓词与内存剪枝同源，且守门已保证期望集里不存在
 // 满足谓词的行 ⇒ 被删的每一行都不在期望集里。
 func (s *Store) applyWALPrune(ctx context.Context, conn *sql.Conn, plan walPrunePlan, stats *Stats) (int, error) {
-	result, err := conn.ExecContext(ctx,
-		"DELETE FROM source_wal WHERE key = ? AND durable = 1 AND record_end <= ?", plan.owner, int64(plan.EndThrough))
-	if err != nil {
-		return 0, fmt.Errorf("stateindex: 范围剪枝 source_wal 失败（归属 %s）: %w", plan.owner, err)
+	// #67-A：范围谓词删除**切批**（原为一条无界 DELETE）。谓词**逐字不变**
+	//（`durable = 1 AND record_end <= 水位` ✓），只是每次只取 ≤pruneDeleteBatchRows 行，循环到
+	// 「本批不足一批」即整段删净 ⇒ 与单条无界语句**语义等价**（同一谓词、同一终止状态 ✓）。
+	//
+	// 为什么必须切：该语句在**提交单元事务内**执行，而单元的耗时硬上界只在语句之间检查
+	//（见 commitChunks）⇒ 一条 10^5 级的 DELETE 会把单元耗时直接推到 10s 级（真机 p95 11s /
+	// max 40.7s ✗，p50 也已 322ms ✗）。切批后单语句受影响行数有界 ⇒ 单元回到 ≤50ms 线 ✓。
+	const stmt = "DELETE FROM source_wal WHERE rowid IN (" +
+		"SELECT rowid FROM source_wal WHERE key = ? AND durable = 1 AND record_end <= ? LIMIT ?)"
+	deleted := 0
+	for {
+		result, err := conn.ExecContext(ctx, stmt, plan.owner, int64(plan.EndThrough), pruneDeleteBatchRows)
+		if err != nil {
+			return deleted, fmt.Errorf("stateindex: 范围剪枝 source_wal 失败（归属 %s）: %w", plan.owner, err)
+		}
+		stats.Statements++
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return deleted, nil // 行数不可读不是失败：语句已提交，观测值退化（与旧实现同口径 ✓）
+		}
+		if affected <= 0 {
+			return deleted, nil // 删空（且无剩余）⇒ 收工
+		}
+		deleted += int(affected)
+		if int(affected) < pruneDeleteBatchRows {
+			return deleted, nil // 不足一批 ⇒ 必已删净 ⇒ 省一次空语句 ✓
+		}
+		if err := ctx.Err(); err != nil {
+			return deleted, err
+		}
 	}
-	stats.Statements++
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return 0, nil // 行数不可读不是失败：语句已提交，观测值退化为 0
-	}
-	return int(affected), nil
 }
 
 // refreshWALMirrorWindow 在范围删除提交后刷新该归属「record_end ≤ 水位」那一段的镜像：先把该段
@@ -1032,7 +1073,23 @@ func (s *Store) refreshWALMirrorWindow(ctx context.Context, conn *sql.Conn, plan
 		key string
 		fp  uint64
 	}
-	var rebuilt []mirrorEntry
+	// #67-A：**分批回写镜像**（原来是"读完整段 → 删段 → 一次性回写" ✗）。语义不变：先把该段镜像
+	// 删掉、再按库内容重建（不能按谓词删镜像 —— 镜像键里没有 durable，会误抹未耐久行 ✓，见函数头）。
+	// 分批后：每积累 pruneDeleteBatchRows 行即写入镜像并检查一次 ctx ✓ ⇒ 单步耗时有界、可被打断；
+	// 中途失败只让镜像**偏旧**（少几行），与既有失败语义一致（下一步差异比对会幂等补回，
+	// 水位不推进则重放范围删除 ✓）。
+	table := s.mirrorTable(spec.name)
+	owned := table[plan.owner]
+	if owned == nil {
+		owned = make(map[string]uint64)
+		table[plan.owner] = owned
+	}
+	for key := range owned {
+		if walMirrorKeyAtOrBelow(spec, key, plan.EndThrough) {
+			delete(owned, key)
+		}
+	}
+	batch := 0
 	for rows.Next() {
 		columns, err := rows.Columns()
 		if err != nil {
@@ -1047,24 +1104,17 @@ func (s *Store) refreshWALMirrorWindow(ctx context.Context, conn *sql.Conn, plan
 		if values[len(values)-1] == nil {
 			return fmt.Errorf("stateindex: %s 指纹列为空", spec.name)
 		}
-		rebuilt = append(rebuilt, mirrorEntry{key: key, fp: mustFingerprint(values[len(values)-1])})
+		owned[key] = mustFingerprint(values[len(values)-1])
+		batch++
+		if batch >= pruneDeleteBatchRows {
+			batch = 0
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
-	}
-	table := s.mirrorTable(spec.name)
-	owned := table[plan.owner]
-	if owned == nil {
-		owned = make(map[string]uint64)
-		table[plan.owner] = owned
-	}
-	for key := range owned {
-		if walMirrorKeyAtOrBelow(spec, key, plan.EndThrough) {
-			delete(owned, key)
-		}
-	}
-	for _, entry := range rebuilt {
-		owned[entry.key] = entry.fp
 	}
 	return nil
 }
@@ -1180,7 +1230,9 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 				if limit > 0 && rows > 0 && time.Since(chunkStarted) >= limit {
 					return nil // 耗时硬上界：剩余（含范围删除）留给下一个提交单元
 				}
+				tPrune := time.Now()
 				affected, err := s.applyWALPrune(ctx, conn, prune, &chunkStats)
+				s.nsPrune += int64(time.Since(tPrune)) // #67-C：范围剪枝（无界谓词删除那条线）
 				if err != nil {
 					return err
 				}
@@ -1224,7 +1276,10 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 		}
 		for _, prune := range prunesApplied {
 			// 该段镜像按库内容重建（不能按谓词删：镜像键里没有 durable，会误抹未耐久行）。
-			if err := s.refreshWALMirrorWindow(ctx, conn, prune); err != nil {
+			tMirror := time.Now()
+			mirrorErr := s.refreshWALMirrorWindow(ctx, conn, prune)
+			s.nsMirrorRebuild += int64(time.Since(tMirror)) // #67-C：镜像窗口重建段
+			if err := mirrorErr; err != nil {
 				// 刷新失败只可能让镜像**偏旧**（多留几行）——下一步的差异比对会把这些行的逐行
 				// 删除重算一遍（幂等，无害），而水位不推进则会重放一次范围删除（同样幂等）。
 				return nil, commitProgress{}, err
@@ -1751,7 +1806,8 @@ func (s *Store) Latency() Latency {
 	samples := append([]Sample(nil), s.samples...)
 	s.mu.Unlock()
 	if len(samples) == 0 {
-		return Latency{}
+		// #67-C：无样本也要带上累计读数（否则"一个单元都没采到"时三段耗时全不可见 ✗）。
+		return Latency{NsPlan: s.nsPlan, NsPrune: s.nsPrune, NsMirrorRebuild: s.nsMirrorRebuild}
 	}
 	durations := make([]time.Duration, 0, len(samples))
 	var max time.Duration
@@ -1773,6 +1829,9 @@ func (s *Store) Latency() Latency {
 	result.P50 = percentile(durations, 0.50)
 	result.P95 = percentile(durations, 0.95)
 	result.Max = max
+	result.NsPlan = s.nsPlan
+	result.NsPrune = s.nsPrune
+	result.NsMirrorRebuild = s.nsMirrorRebuild
 	return result
 }
 

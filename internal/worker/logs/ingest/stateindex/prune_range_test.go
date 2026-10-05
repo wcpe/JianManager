@@ -207,3 +207,45 @@ func TestWALPruneStatementsDoNotGrowWithPrunedRows(t *testing.T) {
 	require.LessOrEqual(t, large.Statements, 6, "范围剪枝的语句数应当是常数级")
 	_ = time.Now
 }
+
+// TestWALPruneDeleteIsBatchedUnderLargeRanges（#67-A 红/绿）：范围谓词删除必须**逐批**执行。
+//
+// 现场：单条无界 DELETE 在**提交单元事务内**可能删 10^5 级行，而单元耗时硬上界只在语句之间检查
+// （见 commitChunks）⇒ 单元耗时被推到 10s 级（真机 p95=11,095ms / max=40,767ms ✗，p50 也 322ms ✗）。
+//
+// 绿：语句数随行数**按批线性**（≈ ⌈rows / pruneDeleteBatchRows⌉），且删除结果与旧实现逐行等价
+// （"非耐久行必须留下"这条危险面照旧由 TestWALPruneRangeDeleteKeepsNonDurableRowsBelowWatermark 守 ✓）。
+// 红（变异：退回单条无界 DELETE）⇒ 语句数恒为 1 ⇒ 本用例第一处断言转红 ✓（实测）。
+func TestWALPruneDeleteIsBatchedUnderLargeRanges(t *testing.T) {
+	const pruned = pruneDeleteBatchRows + 500 // 超出单批上界 ⇒ 必须切批
+	root := t.TempDir()
+	store, err := OpenWithBudget(root+"/ingest.index.db", DefaultCommitBudget())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	const key = "node:prune/g1"
+	seeded := walPruneState(key, pruned, 1, 3) // 3 条「≤水位但未耐久」必须留下的行
+	_, err = store.Apply(seeded)
+	require.NoError(t, err)
+	desired := seeded
+	desired.WAL = nil
+	for _, row := range seeded.WAL {
+		if row.Durable && row.RecordEnd <= uint64(10+pruned*10) {
+			continue
+		}
+		desired.WAL = append(desired.WAL, row)
+	}
+	stats, err := store.ApplyScopedCtx(context.Background(), desired, []string{key},
+		[]WALPrune{{Owner: key, EndThrough: uint64(10 + pruned*10)}})
+	require.NoError(t, err)
+	require.Equal(t, pruned, stats.RangePruned, "剪枝行数不变（谓词逐字未动 ✓）")
+	// 核心断言（切批）：单条无界 DELETE ⇒ 恒为 1 条 ⇒ 转红 ✓。
+	require.GreaterOrEqual(t, stats.Statements, 2,
+		"超过单批上界(%d)时必须切批：语句数 %d（单条无界 DELETE 会让单元耗时无界 ✗）",
+		pruneDeleteBatchRows, stats.Statements)
+	// 上界：只允许按批增长（不能退化成逐行 2500 条 ✗）。
+	require.LessOrEqual(t, stats.Statements, pruned/pruneDeleteBatchRows+3,
+		"语句数只允许按批线性增长（实测 %d 条）", stats.Statements)
+	// 逐行等价：未耐久行（≤水位）必须仍在库 ✓；水位之上的耐久行也必须在 ✓。
+	rows := walRowsOf(t, store, key)
+	require.Len(t, rows, 1+3, "水位之上 1 条 + 未耐久 3 条 = 4 条必须留下 ✓")
+}

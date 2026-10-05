@@ -1601,6 +1601,12 @@ func logIndexPersistSample(window *logIndexPersistWindow, latency stateindex.Lat
 		"rowsWrittenDelta", delta.RowsWritten,
 		"rowsDeletedDelta", delta.RowsDeleted,
 		"bytesWrittenDelta", delta.BytesWritten,
+		// #67-C：三段耗时的**累计**读数（只加不减，单位 ns）——把"单元慢"拆成
+		// 规划 / 范围剪枝 / 镜像重建三处，真机排障一眼可辨 ✓（maxRows 与 rowsDeletedDelta
+		// 本就在本行，正是"行数有界却仍慢"与"慢在删不在写"两个判据 ✓）。
+		"nsPlan", latency.NsPlan,
+		"nsPrune", latency.NsPrune,
+		"nsMirrorRebuild", latency.NsMirrorRebuild,
 	)
 }
 
