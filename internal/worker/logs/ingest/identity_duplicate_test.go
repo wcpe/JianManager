@@ -94,3 +94,39 @@ func TestPlanDeliveryBatchAdjudicatesTailPartialDuplicate(t *testing.T) {
 	require.NotNil(t, fail)
 	require.ErrorContains(t, fail.err, "IDENTITY_CONFLICT")
 }
+
+// TestAdjudicatesSameIntervalDayShiftDuplicate 验收 #179 真实形态（fixture 实录 ✓）：
+// 同一段字节两次读取把日期推成了两天（10-03 vs 10-02），**message/level/stream 全同**、
+// **message 长度相等** ⇒ 长度判据不可用 ✗ ⇒ 按「仅时间不同 ⇒ 后写者（更正版）胜」裁定 ✓；
+// 同区间但 message 不同（即便等长）⇒ 仍硬失败 ✗。
+func TestAdjudicatesSameIntervalDayShiftDuplicate(t *testing.T) {
+	identity := logtypes.SourceIdentity{LogSourceID: "inst:179", SourceGeneration: "g1", ParserVersion: "v1"}
+	rec := logtypes.RecordRange{Start: 328911045, End: 328911216}
+	build := func(eventTime string) logtypes.Event {
+		return logtypes.BuildEvent(identity, rec, eventTime, "2026-10-03T00:17:08.875Z", "WARN", "stdout", "同样的那行")
+	}
+	old := build("2026-10-03T05:08:50Z")   // seq=9999：先写，日期被推成 10-03
+	fixed := build("2026-10-02T05:08:50Z") // seq=10000：后写，更正版 10-02
+	require.Equal(t, old.EventID, fixed.EventID)
+	require.NotEqual(t, old.CanonicalHash, fixed.CanonicalHash)
+	require.Equal(t, len(old.Message), len(fixed.Message), "现场形态：message 长度相等（长度判据不可用 ✗）")
+
+	// ① 规划面：批内成对（先旧后更正）⇒ 取后写者，不再硬失败 ✓。
+	got, fail := (&Manager{}).planDeliveryBatchOutsideLock([]logtypes.Event{old, fixed}, map[string]eventIdentity{})
+	require.Nil(t, fail)
+	require.Len(t, got, 1)
+	require.Equal(t, fixed.CanonicalHash, got[0].CanonicalHash, "同区间仅时间差异 ⇒ 后写者（更正版）胜 ✓")
+
+	// ② 重建面：同上 ⇒ 一条入账且为后写者 ✓。
+	events, err := (&Manager{}).canonicalRecoveryEvents("inst:179/g1", persistedSource{Events: []logtypes.Event{old, fixed}})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, fixed.CanonicalHash, events[0].CanonicalHash)
+
+	// ③ 边界：同区间但 message 不同且等长 ⇒ 仍硬失败 ✗（形态 2 不适用、形态 1 不成立 ✓）。
+	a := logtypes.BuildEvent(identity, rec, "2026-10-03T05:08:50Z", "2026-10-03T00:17:08.875Z", "WARN", "stdout", "AAAAAAAA")
+	b := logtypes.BuildEvent(identity, rec, "2026-10-02T05:08:50Z", "2026-10-03T00:17:08.875Z", "WARN", "stdout", "BBBBBBBB")
+	_, fail = (&Manager{}).planDeliveryBatchOutsideLock([]logtypes.Event{a, b}, map[string]eventIdentity{})
+	require.NotNil(t, fail)
+	require.ErrorContains(t, fail.err, "IDENTITY_CONFLICT")
+}

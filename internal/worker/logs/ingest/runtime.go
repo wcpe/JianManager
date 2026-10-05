@@ -3655,19 +3655,31 @@ type deliveryPlanFailure struct {
 // vs 重读完整行 1034 B ✓）；idx≥0 指该事件在本批 toWrite 中的下标（−1 表示来自既有存储
 // 或内联集合，不在本批 ✗ —— 裁定取"后到者"时需按此决定替换还是追加 ✓）。
 type eventIdentity struct {
-	hash  string
-	start uint64
-	end   uint64
-	size  int
-	idx   int
+	hash   string
+	start  uint64
+	end    uint64
+	size   int
+	msg    string
+	level  string
+	stream string
+	idx    int
 }
 
 // adjudicateSameIntervalIdentity 对「同 ID 异哈希」按**确定性证据**裁定（判据不放宽 ✗）：
-// 仅当「同记录区间 ＋ 一方严格更长」时才给结论 —— 区间决定源字节，同区间两变体只能是
-// 截断/规范化差异 ⇒ 较长者更接近完整行 ✓；返回 (keepExisting, takeIncoming)；两者皆 false
-// ⇒ 调用方维持硬失败（异区间/等长/伪造形态 ✓）。
+//  1. 同记录区间 ＋ 一方严格更长 ⇒ 取较长者（轮转尾部残行 vs 重读完整行 ✓）；
+//  2. 同记录区间 ＋ **level/stream/message 全同、仅事件时间不同** ⇒ 取后写者
+//     （2026-10-05 #179 现场：同一段字节两次读取把日期推成了两天，后一次为更正版 ✓；
+//     message 相同即同一物理行的身份证据 ✓，长度不可用 —— 现场两条 message 长度相等 ✗）。
+//
+// 其余形态（异区间、同区间但 message 不同、等长且非形态 2）⇒ 两者皆 false，调用方维持硬失败 ✓。
 func adjudicateSameIntervalIdentity(existing eventIdentity, event logtypes.Event, incomingSize int) (bool, bool) {
-	if existing.start != event.Record.Start || existing.end != event.Record.End || incomingSize == existing.size {
+	if existing.start != event.Record.Start || existing.end != event.Record.End {
+		return false, false
+	}
+	if existing.level == event.Level && existing.stream == event.Stream && existing.msg == event.Message {
+		return false, true // 形态 2：同一物理行，时间推断差异 ⇒ 后写者（更正版）胜 ✓
+	}
+	if incomingSize == existing.size {
 		return false, false
 	}
 	if incomingSize > existing.size {
@@ -3730,7 +3742,8 @@ func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map
 					"kept_bytes", incomingSize, "dropped_bytes", existing.size,
 					"kept_hash", event.CanonicalHash, "dropped_hash", existing.hash)
 				seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
-					end: event.Record.End, size: incomingSize, idx: len(toWrite) - 1}
+					end: event.Record.End, size: incomingSize, msg: event.Message, level: event.Level,
+					stream: event.Stream, idx: len(toWrite) - 1}
 			case keepExisting:
 				slog.Warn("身份重复裁定：后写变体较短（残行），保留完整行变体",
 					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
@@ -3743,7 +3756,8 @@ func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map
 		}
 		toWrite = append(toWrite, event)
 		seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
-			end: event.Record.End, size: len(event.Message), idx: len(toWrite) - 1}
+			end: event.Record.End, size: len(event.Message), msg: event.Message, level: event.Level,
+			stream: event.Stream, idx: len(toWrite) - 1}
 	}
 	return toWrite, nil
 }
@@ -3794,7 +3808,8 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 				return pipeline.DeliveryResult{}, err
 			}
 			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
-				end: event.Record.End, size: len(event.Message), idx: -1}
+				end: event.Record.End, size: len(event.Message), msg: event.Message, level: event.Level,
+				stream: event.Stream, idx: -1}
 		}
 		// 事件体已落段时，身份集合从段流式重建（不持全量切片）；旧格式仍走内联切片。
 		if eventsStored {
@@ -3804,7 +3819,8 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 					return err
 				}
 				seen[normalized.EventID] = eventIdentity{hash: normalized.CanonicalHash, start: normalized.Record.Start,
-					end: normalized.Record.End, size: len(normalized.Message), idx: -1}
+					end: normalized.Record.End, size: len(normalized.Message), msg: normalized.Message,
+					level: normalized.Level, stream: normalized.Stream, idx: -1}
 				return nil
 			}); err != nil {
 				return pipeline.DeliveryResult{}, err
@@ -5952,7 +5968,8 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 		existing, ok := seen[event.EventID]
 		if !ok {
 			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
-				end: event.Record.End, size: len(event.Message), idx: len(events)}
+				end: event.Record.End, size: len(event.Message), msg: event.Message, level: event.Level,
+				stream: event.Stream, idx: len(events)}
 			events = append(events, event)
 			return nil
 		}
@@ -5967,7 +5984,8 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 		case takeIncoming:
 			events[existing.idx] = event // 完整行替换先入账的残行变体 ✓
 			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
-				end: event.Record.End, size: incomingSize, idx: existing.idx}
+				end: event.Record.End, size: incomingSize, msg: event.Message, level: event.Level,
+				stream: event.Stream, idx: existing.idx}
 			slog.Warn("身份重复裁定：同区间异哈希取较长者（弃尾部残行变体）",
 				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
 				"kept_bytes", incomingSize, "dropped_bytes", existing.size,
