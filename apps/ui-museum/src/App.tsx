@@ -109,6 +109,9 @@ import UntrustedFieldBadge from '@jianmanager/ui/components/views/UntrustedField
 import { ReleaseNotes } from '@jianmanager/ui/components/views/ReleaseNotes'
 import ClientDistFlowGuide from '@jianmanager/ui/components/views/ClientDistFlowGuide'
 import { ObsTimeRangePicker } from '@jianmanager/ui/components/views/client-dist/ObsTimeRangePicker'
+import NodePortsPanel from '@jianmanager/ui/components/views/nodes/NodePortsPanel'
+import NodeArtifactCachePanel from '@jianmanager/ui/components/views/nodes/NodeArtifactCachePanel'
+import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
 
 const rawSeries: RawSeries[] = [
   {
@@ -216,6 +219,7 @@ export default function App() {
   const [resolution, setResolution] = useState<MetricResolution>('auto')
   const [compareSel, setCompareSel] = useState<string[]>([])
   const [promptOpen, setPromptOpen] = useState(false)
+  const [dangerOpen, setDangerOpen] = useState(false)
   const toggleCompare = (k: string) =>
     setCompareSel((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]))
   const chips = useMemo(
@@ -857,6 +861,81 @@ export default function App() {
             </div>
             <p className="mt-2 text-[11px] text-muted-foreground">
               受控：数据由 source（读目录/读内容）注入，组件自身不发请求。
+            </p>
+          </Panel>
+
+          <Panel title="NodePortsPanel · 节点端口占用（a 范式）">
+            <NodePortsPanel
+              data={{
+                nodeId: 1,
+                ranges: { serverPortBase: 25565, rangeSize: 2000 },
+                occupied: [
+                  { instanceId: 1, name: 'survival-proxy', role: 'proxy', serverPort: 25565, queryPort: 0 },
+                  { instanceId: 2, name: 'survival-lobby', role: 'backend', serverPort: 25566, queryPort: 25566 },
+                  { instanceId: 3, name: 'creative-plot', role: 'backend', serverPort: 25567, queryPort: 25567 },
+                ],
+              }}
+            />
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              受控（a 范式）：端口数据由外壳调 useNodePorts 取数后经 props 注入，组件自身不发请求；
+              过滤词与虚拟滚动窗口留在组件内——它们不随应用运行时变化。
+            </p>
+          </Panel>
+
+          <Panel title="NodeArtifactCachePanel · 节点制品缓存（b 范式）">
+            <NodeArtifactCachePanel
+              data={{
+                items: [
+                  {
+                    sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+                    name: 'paper-1.20.4',
+                    type: 'core',
+                    version: '1.20.4-496',
+                    size: 48234496,
+                    cachedAt: 1719550800,
+                    lastUsedAt: 1719550800,
+                  },
+                  {
+                    sha256: 'ffeeddccbbaa99887766554433221100',
+                    name: 'velocity-3.3.0',
+                    type: 'core',
+                    version: '3.3.0-1',
+                    size: 12582912,
+                    cachedAt: 1719464400,
+                    lastUsedAt: 1719464400,
+                  },
+                ],
+                totalBytes: 60817408,
+                capBytes: 0,
+              }}
+              onSaveCap={async () => true}
+              onEvict={async () => true}
+              onClear={async () => true}
+            />
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              受控（b 范式）：三个写动作以回调上报（返回 Promise&lt;boolean&gt; 供组件决定是否复位编辑态），
+              组件自身不发请求、不弹 toast——成功/失败文案由外壳决定。清空与逐项清会走 DangerConfirm 二次确认。
+            </p>
+          </Panel>
+
+          <Panel title="DangerConfirm · 危险操作确认（受控）">
+            <div className="grid gap-2">
+              <Button variant="outline" size="sm" className="w-fit" onClick={() => setDangerOpen(true)}>
+                打开 DangerConfirm
+              </Button>
+              <DangerConfirm
+                open={dangerOpen}
+                title="删除实例 survival-01？"
+                description="将同时删除其工作目录与备份，操作不可撤销。"
+                confirmLabel="删除实例"
+                confirmText="survival-01"
+                onConfirm={() => setDangerOpen(false)}
+                onCancel={() => setDangerOpen(false)}
+              />
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              受控：权限门禁结果由外壳注入（allowed），组件库不持有鉴权状态；本例演示高危二次校验
+              （需逐字输入资源名 survival-01 才能确认）。
             </p>
           </Panel>
         </Section>
