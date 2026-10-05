@@ -15,6 +15,7 @@ import { composeScopeKey, isValidScopeKey, scopeKindOf, scopeValueOf, shortHash,
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import {
   Dialog,
@@ -44,17 +45,20 @@ export default function ConfigBaselinesPage() {
   const [deleteTarget, setDeleteTarget] = useState<ConfigBaseline | null>(null)
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-xl font-bold">{t('baselines.title')}</h1>
-          <p className="text-xs text-muted-foreground">{t('baselines.subtitle')}</p>
-        </div>
-        <Button size="sm" onClick={() => { setEditing(null); setCreateOpen(true) }} data-testid="baseline-create">
-          <Plus className="mr-1 size-4" />
-          {t('baselines.create')}
-        </Button>
-      </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语。
+    // 本页原页头的三段（h1 / 副标题 / 创建按钮）与 PageHeader 的 title / description /
+    // actions 一一对应，映射干净。
+    <PageShell data-page="config-baselines">
+      <PageHeader
+        title={t('baselines.title')}
+        description={t('baselines.subtitle')}
+        actions={
+          <Button size="sm" onClick={() => { setEditing(null); setCreateOpen(true) }} data-testid="baseline-create">
+            <Plus className="mr-1 size-4" />
+            {t('baselines.create')}
+          </Button>
+        }
+      />
 
       <Panel title={t('baselines.listTitle')} bodyClassName="p-0">
         {isLoading ? (
@@ -134,7 +138,7 @@ export default function ConfigBaselinesPage() {
         }}
         onCancel={() => setDeleteTarget(null)}
       />
-    </div>
+    </PageShell>
   )
 }
 
