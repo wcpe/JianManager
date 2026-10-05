@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Shield, UsersRound, Link2, Diff, CheckCircle2 } from 'lucide-react'
+import { UsersRound, Link2, Diff, CheckCircle2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
@@ -416,18 +417,24 @@ export default function PermissionsPage() {
 
   if (!viewerIsPlatformAdmin && !hasPerm('rbac.read')) {
     return (
-      <div data-page="permissions" className="jm-page-stack">
-        <Panel title={t('permissions.title')} icon={<Shield className="size-3.5" />}>
+      // 全量对齐：无权限态是普通内容页，套标准骨架。
+      <PageShell data-page="permissions">
+        <PageHeader title={t('permissions.title')} />
+        <Panel>
           <p className="text-sm text-muted-foreground">{t('permissions.forbidden')}</p>
         </Panel>
-      </div>
+      </PageShell>
     )
   }
 
   return (
-    <div
+    // 全量对齐：正常态是**三栏工作区**（角色/用户列表 → 权限项 → 生效预览），
+    // 顶栏承载「标题 + 当前对象 + 变更角标」，属工作区顶栏而非页面级 PageHeader
+    // （它随选中对象变化，不是静态页名）。故用 tool 变体：全占满、无外层留白，
+    // 滚动收口到各栏自身——与节点页那类工作区型页面同处理。
+    <PageShell
+      variant="tool"
       data-page="permissions"
-      className="flex h-full min-h-0 w-full flex-col overflow-hidden"
       onKeyDown={handleKeyDown}
     >
       {/* 紧凑顶栏：标题 + 当前对象 + 变更角标；保存在中栏工具区 */}
@@ -907,6 +914,6 @@ export default function PermissionsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   )
 }
