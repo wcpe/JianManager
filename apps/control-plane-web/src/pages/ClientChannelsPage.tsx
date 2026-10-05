@@ -55,6 +55,7 @@ import {
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { ObjectPageHeader } from '@jianmanager/ui/components/shell'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientVersionsPanel from '@/components/ClientVersionsPanel'
@@ -442,30 +443,39 @@ function ChannelWorkbench({
   }
 
   return (
-    // 全量对齐（视图 2 · 频道工作台）：外壳先换 PageShell——这一步不动视觉
-    // （原 space-y-4 为 16px，PageShell 的 gap 是 17px，差 1px）。
-    // 页头暂留：它是「返回按钮 + sr-only 标题 + channelId + 删除」，改用 ObjectPageHeader
-    // 会把刻意隐藏的标题变可见，属视觉变化，待确认后再做。
+    // 全量对齐（视图 2 · 频道工作台）：外壳与页头改用布局层原语。
+    // 页头按确认后的方案：**标题（频道名）+ channelId 小字都显示**——原先标题是 sr-only，
+    // 视觉上只有 channelId，用户看不到频道名。现把名字提为可见标题，id 落进 meta（等宽），
+    // 复制/排查时仍一眼可见。面包屑承载层级，与实例/节点详情同形态。
+    // 「返回列表」按钮保留：原型要求「页面的『返回』保留进入之前的筛选」，纯面包屑不足以
+    // 承载这一步（它还要清掉当前 channelId 上下文）。
     <PageShell data-page="client-channel-workbench">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        {/* 面包屑表达层级；返回仍给页内显式入口（纯面包屑不够直观）。 */}
-        <div className="flex min-w-0 items-center gap-3">
-          <Button variant="ghost" size="sm" className="shrink-0 -ml-1.5 text-muted-foreground" onClick={onBack}>
-            <ArrowLeft className="size-4" />
-            {t('clientChannels.backToList', '返回列表')}
-          </Button>
-          <div className="min-w-0">
-            <h1 className="sr-only">{detail?.name ?? channelId}</h1>
-            <p className="text-xs text-muted-foreground font-mono truncate">{channelId}</p>
-          </div>
-        </div>
-        <button
-          className="text-destructive hover:underline text-sm"
-          onClick={() => setDeleteChannel(true)}
-        >
-          {t('clientChannels.deleteChannel', '删除频道')}
-        </button>
-      </div>
+      <ObjectPageHeader
+        breadcrumbs={[
+          { label: t('nav.clientChannels'), to: '/client-channels' },
+          { label: detail?.name ?? channelId },
+        ]}
+        title={detail?.name ?? channelId}
+        meta={[{ label: 'channelId', value: <span className="font-mono">{channelId}</span> }]}
+        actions={
+          <>
+            <Button variant="ghost" size="sm" className="-ml-1.5 shrink-0 text-muted-foreground" onClick={onBack}>
+              <ArrowLeft className="size-4" />
+              {t('clientChannels.backToList', '返回列表')}
+            </Button>
+            <button
+              className="text-destructive hover:underline text-sm"
+              onClick={() => setDeleteChannel(true)}
+            >
+              {t('clientChannels.deleteChannel', '删除频道')}
+            </button>
+          </>
+        }
+        onNavigate={(to: string) => {
+          // 面包屑指向列表时走页内的 onBack（SPA 返回，保留进入前的状态），不整页跳转。
+          if (to === '/client-channels') onBack()
+        }}
+      />
 
       <ChannelSecuritySummaryBar channelId={channelId} />
 
