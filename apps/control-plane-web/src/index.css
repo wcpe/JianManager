@@ -7,6 +7,7 @@
    不扫 node_modules——显式声明 ui 包源码为扫描源，否则 ui 独有的 utility class
   （如 Sheet 的滑入 transform 组合）不会生成。 */
 @source "../../../packages/ui/src";
+@source "../../../packages/biz-views/src";
 
 
 @layer base {
