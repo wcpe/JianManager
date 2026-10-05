@@ -87,7 +87,9 @@ export function ObjectPageHeader({
   toolsLabel = '对象工具',
   onNavigate,
   className,
-}: {
+  live,
+  ...props
+}: Omit<React.ComponentProps<'header'>, 'className'> & {
   /** 层级路径；**少于两级时整块省略**（单级面包屑没有信息增量）。 */
   breadcrumbs?: ObjectBreadcrumb[]
   /** 对象名（实例名 / 节点名）。 */
@@ -114,6 +116,14 @@ export function ObjectPageHeader({
    * 组件库不依赖具体路由实现，这是两者之间的唯一接缝。
    */
   onNavigate?: (to: string) => void
+  /**
+   * 实时区标记：`true` 时整块页头挂 `aria-live="polite"`。
+   *
+   * 对象详情页的状态/指标可能由推送驱动（如压测会话的 SSE 流），值变化时需要播报。
+   * 挂在 `<header>` 而非指标条上：`aria-live` 只播报**发生变化**的内容，标题与面包屑
+   * 是静态的不会触发，因此两者等价；而挂在页头上不会漏掉身份区里的状态徽章。
+   */
+  live?: boolean
   className?: string
 }) {
   // 单级面包屑（如列表页的「实例」）不提供层级信息，直接不渲染这一行
@@ -159,10 +169,12 @@ export function ObjectPageHeader({
   return (
     <header
       data-slot="object-page-header"
+      aria-live={live ? 'polite' : undefined}
       className={cn(
         'flex shrink-0 flex-col border-b bg-card px-[22px] pt-4 max-md:px-3 max-md:pt-[13px]',
         className,
       )}
+      {...props}
     >
       {showBreadcrumbs && (
         <nav
