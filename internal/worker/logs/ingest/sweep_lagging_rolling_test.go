@@ -195,3 +195,114 @@ func TestSelfHealDueCountersReflectRateLimitGate(t *testing.T) {
 	require.Equal(t, skip0+1, st.SelfHealDueSkip, "未命中计数必须 +1（只读诊断 ✓）")
 	// **状态闸不计入**（口径对齐 ✓）：它发生在 selfHealDue **之前** ⇒ 这两个读数只反映限频闸 ✓。
 }
+
+// ── #66-⑥：**投递欠账型落后源** ─────────────────────────────────────────────
+//
+// 现场（inst:160）：`read=441M / delivery=331M / reclaim=331M` ⇒ 回收已追平投递，
+// **真欠账在投递侧**（read − delivery ≈ 110M）⇒ ⑤ 的回收欠账前置（reclaim < delivery）**恒假**
+// ⇒ 钩子对它一步都不发 ✗；而三条现存投递面也全都到不了它：
+//   · 自愈面步 1（`DeliverPending`）**在 `AcquirePaused` 之内** ⇒ 非暂停源即使走到也不投递 ✗；
+//   · 自愈面的状态闸（未暂停 且 零缺口 ⇒ 早退）⇒ `SelfHealDuePass/Skip` 双恒 0 ✓（与现场读数一致 ✓）；
+//   · 兜底环候选路径的投递只服务"暂停 且 积压/容量类" ⇒ 非候选不投递 ✗；
+//   · #56 排空宿主只服务**登记过 `AppendRejected`** 的源 ⇒ 无"追加被拒"的源从未登记 ⇒ 永不排空 ✗。
+// ⇒ 修法：同一钩子位再挂一条**有界投递步**（`DeliverPending` ≤500 条/次 + 有界执行器 +
+//   #56 同一张在飞表的单源互斥 ✓），不复活、不改暂停态、候选红线不变 ✓。
+
+// newDeliveryBacklogFixture：`read=24 / delivery=9 / reclaim=9`（回收已追平、投递欠账 15 ✓）、
+// 未暂停、零缺口、**无落盘新批次**（安静源 ✓），投递桩**成功** 200（本用例只考"能否被驱动"）。
+func newDeliveryBacklogFixture(t *testing.T) laggingFixture {
+	t.Helper()
+	client, _ := newProjectionVL(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "latest.log")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+	src := SourceConfig{
+		LogSourceID: "inst:delivery-backlog", SourceGeneration: "g1", Path: path,
+		StorageNamespace: "inst:delivery-backlog", UTCDay: runtimeTestUTCDay(),
+	}
+	cat := catalog.New(catalog.NewMemJournal())
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(),
+		Sources: []SourceConfig{src},
+	})
+	require.NoError(t, err)
+	key := src.LogSourceID + "/" + src.SourceGeneration
+	p := m.pipes[key]
+	require.NotNil(t, p)
+	identity := logtypes.SourceIdentity{LogSourceID: src.LogSourceID, SourceGeneration: src.SourceGeneration, ParserVersion: "v1"}
+	for i := 0; i < 5; i++ {
+		start := uint64(i * 5)
+		ev := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: start, End: start + 4},
+			"2026-10-05T00:00:00Z", "2026-10-05T00:00:01Z", "INFO", "stdout", "delivery-backlog")
+		require.NoError(t, p.WAL().Append(ev))
+	}
+	require.NoError(t, p.WAL().Commit())
+	// 只确认前缀 [0,9] ⇒ read=24、delivery=9（投递欠账 15 ✓，与现场同形：reclaim 追平 delivery ✓）。
+	require.NoError(t, p.WAL().RecordHTTPResult(acquire.DeliveryResult{StartPos: 0, EndPos: 9, HTTPStatus: 200}))
+	// 投递桩**成功**（300 ⇒ 调用方按 2xx 记账 ✓）：本用例考"能否被驱动到投递面"，不考 ingest 落库 ✓。
+	p.SetDelivery(pipeline.FuncHook(func([]logtypes.Event, bool) (pipeline.DeliveryResult, error) {
+		return pipeline.DeliveryResult{HTTPStatus: 200}, nil
+	}))
+	// 先把**回收**欠账清零（补段 + 推进）⇒ 本用例只考 ⑥ 的投递步（⑤ 的回收分支在此恒不触发 ✓）。
+	require.NoError(t, m.repairStalledReclaim(p, src))
+	_, _ = p.TryReclaim()
+	f := laggingFixture{m: m, src: src, p: p}
+	entry := p.Ledger().Get(p.Key())
+	require.NotNil(t, entry)
+	require.False(t, entry.AcquirePaused, "前置：未暂停（非候选 ✓）")
+	require.Zero(t, ledger.UnresolvedGapCountOf(entry), "前置：零未解决缺口 ✓")
+	pos, ok := p.Ledger().Positions(p.Key())
+	require.True(t, ok)
+	require.Equal(t, uint64(24), pos.Read, "前置：已读 24 ✓")
+	require.Equal(t, uint64(9), pos.Delivery, "前置：已确认投递 9（欠账 15 ✓）")
+	require.Equal(t, pos.Delivery, pos.Reclaim, "前置：回收已追平投递 ⇒ ⑤ 前置恒假 ✓")
+	return f
+}
+
+func TestSweepRotationDrivesDeliveryForBacklogSource(t *testing.T) {
+	f := newDeliveryBacklogFixture(t)
+	key := f.src.LogSourceID + "/" + f.src.SourceGeneration
+	pos0, _ := f.p.Ledger().Positions(f.p.Key())
+	require.Greater(t, pos0.Read, pos0.Delivery, "前置：投递欠账（read > delivery ✓）")
+	require.Zero(t, f.m.ResumeSweepStats().DeliveryProbes, "前置：投递探测尚未发生 ✓")
+
+	_, revived := f.m.maybeResumePausedSources()
+
+	pos1, _ := f.p.Ledger().Positions(f.p.Key())
+	st := f.m.ResumeSweepStats()
+	require.Greater(t, pos1.Delivery, pos0.Delivery, "兜底环轮转窗口必须有界驱动投递、delivery 必须前进 ✓")
+	require.Equal(t, pos0.Read, pos1.Delivery, "投递必须追平已读水位（本夹具一批发完 ✓）")
+	require.Zero(t, revived, "不得被算作复活（不复活红线 ✓）")
+	require.Zero(t, st.Candidates, "候选红线不变（非候选不入恢复口径 ✓）")
+	require.Positive(t, st.DeliveryProbes, "投递步必须可观测（只读读数 ✓）")
+	require.False(t, f.p.Ledger().Get(f.p.Key()).AcquirePaused, "不得改写暂停/恢复语义 ✓")
+	// 在飞标记必须**已释放**（可重入 ✓）：认领应当**成功**，随即释放以免影响后续断言 ✓。
+	require.True(t, f.m.tryClaimReplayInflight(key), "投递步结束后在飞标记必须已释放（可重入 ✓）")
+	f.m.finishScheduledReplay(key)
+	t.Logf("#66-⑥ 观测：read=%d、delivery %d→%d、reclaim=%d、Candidates=%d、DeliveryProbes=%d、revived=%d",
+		pos0.Read, pos0.Delivery, pos1.Delivery, pos1.Reclaim, st.Candidates, st.DeliveryProbes, revived)
+}
+
+// TestReplayInflightClaimIsPerSourceMutualExclusion：单源互斥本体 ——
+// 两条面（#56 宿主 / ⑥ 投递步）必须认同一张在飞表，否则"绝不并发对同源发起两次整窗 replay"被破 ✗。
+func TestReplayInflightClaimIsPerSourceMutualExclusion(t *testing.T) {
+	f := newDeliveryBacklogFixture(t)
+	key := f.src.LogSourceID + "/" + f.src.SourceGeneration
+	require.True(t, f.m.tryClaimReplayInflight(key), "首次认领必须成功 ✓")
+	require.False(t, f.m.tryClaimReplayInflight(key), "同源在飞时必须拒绝（绝不并发两次整窗 replay ✓）")
+
+	// 在飞期间：投递步必须**让路**（不发起第二次）⇒ delivery 一动不动 ✓。
+	posHeld, _ := f.p.Ledger().Positions(f.p.Key())
+	_, _ = f.m.maybeResumePausedSources()
+	posAfterHeld, _ := f.p.Ledger().Positions(f.p.Key())
+	require.Equal(t, posHeld.Delivery, posAfterHeld.Delivery, "在飞认领期间不得再发起投递（互斥 ✓）")
+
+	f.m.finishScheduledReplay(key) // 释放（清在飞 + 待办仍在则再唤醒 ✓）
+	require.True(t, f.m.tryClaimReplayInflight(key), "释放后必须可再次认领（单源可重入 ✓）")
+	f.m.finishScheduledReplay(key)
+
+	// 释放后再扫一轮 ⇒ 投递恢复推进（证明上一步的"静止"确因互斥、非别的原因 ✓）。
+	_, _ = f.m.maybeResumePausedSources()
+	posFinal, _ := f.p.Ledger().Positions(f.p.Key())
+	require.Greater(t, posFinal.Delivery, posHeld.Delivery, "释放后投递必须恢复推进 ✓")
+}

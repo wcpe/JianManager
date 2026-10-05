@@ -351,6 +351,10 @@ type Manager struct {
 	// **成本定界**的证明 ✓）。
 	sweepRollingProbes atomic.Int64
 	nsRolling          atomic.Int64
+	// sweepDeliveryProbes / nsRollingDelivery（#66-⑥ 诊断，只读）：同一窗口里**实际发起**的
+	// "有界投递步"次数与耗时（前置是 O(1) 的"投递欠账"判据 delivery < read ✓ ⇒ 无欠账不发起 ✓）。
+	sweepDeliveryProbes atomic.Int64
+	nsRollingDelivery   atomic.Int64
 	// sweepBackpressureStreak 是窗口化背压的阈值（连续 N 轮净涨才跳过 ✓；0 ⇒ 默认 3）。
 	sweepBackpressureStreak int
 	// sweepInflightCap 是在飞并发上限（见 defaultSweepInflightCap ✓）。
@@ -6535,6 +6539,10 @@ type ResumeSweepStats struct {
 	// 与耗时（前置为 O(1) 有欠账判据 ⇒ 健康源不发起 ⇒ 本读数即成本定界证明 ✓）。
 	RollingProbes int64
 	NsRolling     int64
+	// DeliveryProbes / NsRollingDelivery（#66-⑥ 只读）：同上窗口里**实际发起**的"有界投递步"
+	// 次数与耗时（前置为 O(1) 投递欠账判据 ⇒ 无欠账不发起 ⇒ 本读数即成本定界证明 ✓）。
+	DeliveryProbes    int64
+	NsRollingDelivery int64
 }
 
 func (m *Manager) ResumeSweepStats() ResumeSweepStats {
@@ -6569,6 +6577,9 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		MuWaitResumeMax:  m.muWaitResume.Load(),
 		RollingProbes:    m.sweepRollingProbes.Load(),
 		NsRolling:        m.nsRolling.Load(),
+
+		DeliveryProbes:    m.sweepDeliveryProbes.Load(),
+		NsRollingDelivery: m.nsRollingDelivery.Load(),
 	}
 }
 
@@ -6794,14 +6805,53 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		// 超预算只表示"本轮不等它"、后台照跑 ✓）⇒ **每轮有界** ✓。
 		// **不新增旁路语义**：调用的就是两面共用的同一助手，hold 优先/幂等/绑定前后水位复读
 		//（repairStalledReclaim → backfillDeliveryConfirmedCoverage ✓）全部继承 ✓。
-		if pos, ok := led.Positions(p.Key()); ok && pos.Reclaim < pos.Delivery {
-			if src, srcOK := m.sourceConfigFor(p); srcOK {
-				m.sweepRollingProbes.Add(1)
-				tRoll := time.Now()
-				if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { m.reclaimStep0RollingOnly(p, src) }) {
-					m.skipBlocked.Add(1)
+		if pos, ok := led.Positions(p.Key()); ok {
+			if pos.Reclaim < pos.Delivery {
+				if src, srcOK := m.sourceConfigFor(p); srcOK {
+					m.sweepRollingProbes.Add(1)
+					tRoll := time.Now()
+					if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { m.reclaimStep0RollingOnly(p, src) }) {
+						m.skipBlocked.Add(1)
+					}
+					m.nsRolling.Add(int64(time.Since(tRoll)))
 				}
-				m.nsRolling.Add(int64(time.Since(tRoll)))
+			}
+			// #66-⑥：**投递欠账**（read > delivery）同样在这里被**有界驱动一次**。
+			// 为什么必须在"这里"：现场 `inst:160` 是 `read=441M / delivery=reclaim=331M` ⇒ ⑤ 的回收欠账
+			// 前置恒假（reclaim 已追平 ✗），而三条现存投递面全都到不了这类源 —— 自愈面步 1 在
+			// `AcquirePaused` **之内** ✗、自愈面状态闸要求"暂停或缺口" ✗、兜底环候选只服务积压/
+			// 容量类暂停 ✗、#56 排空宿主只服务**登记过 `AppendRejected`** 的源 ✗ ⇒ 投递水位永久静止 ✗✗。
+			//
+			// **有界**：复用既有 `DeliverPending`（单次 ≤ `log_capacity.max_replay_events_per_drain`
+			// 条，默认 500 ✓；只发 Durable 条目 ✓；位置账本幂等 ✓；未推进退避/失败不退避 ✓）
+			// + 既有有界执行器（单步预算 + 在飞上限 ✓）。
+			// **单源可重入幂等**：整窗 replay 的既有前提是"绝不并发对同源发起两次"
+			//（见 schedulePendingReplay 注释 ✓）⇒ 必须与 #56 宿主**共用同一张在飞表**认领；
+			// 认领不到（他面在飞）⇒ 本轮让路、**下一轮重试**（窗口轮转必然再来 ✓）。
+			// **不复活**：不调 EvaluateResume、不改暂停态、不入候选口径 ⇒ 候选红线不变 ✓。
+			if pos.Delivery < pos.Read {
+				key := p.Key().LogSourceID + "/" + p.Key().SourceGeneration
+				if _, srcOK := m.sourceConfigFor(p); srcOK && m.tryClaimReplayInflight(key) {
+					m.sweepDeliveryProbes.Add(1)
+					tDeliver := time.Now()
+					started := make(chan struct{})
+					finished := m.runSweepStepBounded(m.sweepStepBudgetOf(), func() {
+						close(started)
+						defer m.finishScheduledReplay(key) // 清在飞（待办仍在则再唤醒 ✓）
+						_, _ = p.DeliverPending()
+					})
+					if !finished {
+						select {
+						case <-started:
+							// 已发起、只是等待超预算：调用在后台继续，在飞标记由它结束时清 ✓
+						default:
+							// 未发起（在飞上限拒绝）：撤回认领 ⇒ 本轮不排空该源，且**不热自旋** ✓
+							//（本路径不登记 replayPending ⇒ 释放即可，下一轮重试 ✓）。
+							m.finishScheduledReplay(key)
+						}
+					}
+					m.nsRollingDelivery.Add(int64(time.Since(tDeliver)))
+				}
 			}
 		}
 		entry := led.Get(p.Key())
@@ -6957,6 +7007,31 @@ func (m *Manager) takeScheduledReplay() (string, bool) {
 		return key, true
 	}
 	return "", false
+}
+
+// tryClaimReplayInflight 以 #56 的**同一张在飞表**为"整窗 replay 排空"做**单源互斥**（#66-⑥）。
+//
+// 为什么必须共用这张表：`drainScheduledReplay`（#56 宿主）与兜底环轮转窗口的投递步（#66-⑥）
+// 都会发起 `DeliverPending`（replay=true ⇒ ingest 侧**整窗 replace**），而该路径的既有前提是
+// "绝不并发对同源发起两次整窗 replay（那会打乱同源投递的串行前提）"（见 schedulePendingReplay 注释 ✓）。
+// 直调而不认领 = 把这个前提破掉 ✗✗ ⇒ 两条面必须认同一张在飞表 ✓。
+//
+// 与 takeScheduledReplay 的差别：本方法**不动** replayPending（钩子路径不是"追加被拒"登记来的 ✓）；
+// 释放一律走 finishScheduledReplay（清在飞 + 待办仍在则再唤醒 ✓）。
+func (m *Manager) tryClaimReplayInflight(key string) bool {
+	if m == nil || key == "" {
+		return false
+	}
+	m.replayMu.Lock()
+	defer m.replayMu.Unlock()
+	if m.replayInflight == nil {
+		m.replayInflight = make(map[string]struct{})
+	}
+	if _, busy := m.replayInflight[key]; busy {
+		return false
+	}
+	m.replayInflight[key] = struct{}{}
+	return true
 }
 
 // finishScheduledReplay 结束一次排空：清在飞标记；若该源在排空期间又被登记（新到的追加被拒）
