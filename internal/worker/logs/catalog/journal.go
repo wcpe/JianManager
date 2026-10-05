@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"sync"
 )
 
@@ -224,6 +227,16 @@ type JournalWithStore struct {
 }
 
 // NewJournalWithStore 创建带可选持久化的 journal。store 为 nil 时退化为纯内存。
+//
+// **2026-10-06 修复（确定性启动失败 ✗✗）**：文件行序可能不是 seq 序（现场重启后
+// `got 33726 last 33787` 每次必现 —— 崩溃残留尾／两个写者先后共文件都会造成行序≠逻辑序），
+// 旧实现按行序逐条重放 ⇒ 直接拒绝 ⇒ 启动判"增量对账不可信" ⇒ 回退整窗重发 ⇒ 单源 175 万
+// 事件整窗物化，把 60 源平台拖死 ✗。修法：**先按 seq 归并再重放** ——
+//   - 乱序可容忍 ✓（按 seq 升序应用，与应用顺序的真实语义一致 ✓）；
+//   - 同 seq 且内容完全相同 ⇒ 视为精确重复，跳过 ✓；
+//   - 同 seq 但内容不同 ⇒ **真损坏，仍拒绝** ✗（判据不放宽）；
+//   - seq==0 ⇒ 写入器不可能产生（Append 必先分配 seq）⇒ 拒绝 ✗。
+// 发现乱序时显式告警（可见，不静默 ✗）。
 func NewJournalWithStore(store Store) (*JournalWithStore, error) {
 	j := &JournalWithStore{mem: NewMemJournal(), store: store}
 	if store == nil {
@@ -233,10 +246,35 @@ func NewJournalWithStore(store Store) (*JournalWithStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	outOfOrder := false
+	for i := 1; i < len(entries); i++ {
+		if entries[i].Seq < entries[i-1].Seq {
+			outOfOrder = true
+			break
+		}
+	}
+	sort.SliceStable(entries, func(i, k int) bool { return entries[i].Seq < entries[k].Seq })
+	merged := make([]JournalEntry, 0, len(entries))
 	for _, e := range entries {
+		if e.Seq == 0 {
+			return nil, fmt.Errorf("%w: journal entry with zero seq", ErrJournalOrder)
+		}
+		if n := len(merged); n > 0 && merged[n-1].Seq == e.Seq {
+			if !reflect.DeepEqual(merged[n-1], e) {
+				return nil, fmt.Errorf("%w: same seq %d with different content", ErrJournalOrder, e.Seq)
+			}
+			continue // 精确重复 ⇒ 跳过 ✓
+		}
+		merged = append(merged, e)
+	}
+	for _, e := range merged {
 		if err := j.mem.Append(e); err != nil {
 			return nil, fmt.Errorf("catalog: replay journal store: %w", err)
 		}
+	}
+	if outOfOrder {
+		slog.Warn("journal 文件行序非 seq 序：已按 seq 归并后重放（正常重启不得再因此拒启）",
+			"entries", len(merged))
 	}
 	return j, nil
 }
