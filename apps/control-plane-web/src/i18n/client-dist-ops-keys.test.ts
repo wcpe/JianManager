@@ -20,6 +20,14 @@ import en from './en.json'
 
 const i18nDir = dirname(fileURLToPath(import.meta.url))
 const srcDir = join(i18nDir, '..')
+/**
+ * 业务视图包（packages/biz-views）的源码根。
+ *
+ * 页面 B 的部分组件与共享逻辑已迁入该包。键扫描必须**同时覆盖两处**，
+ * 否则迁走文件里引用的键会静默漏检——这正是本测试要防的那类缺口。
+ * 布局：apps/control-plane-web/src/i18n → 仓库根为再上溯三级。
+ */
+const bizViewsDir = join(srcDir, '..', '..', '..', 'packages', 'biz-views', 'src')
 
 function flattenKeys(obj: Record<string, unknown>, prefix = ''): Set<string> {
   const out = new Set<string>()
@@ -34,15 +42,30 @@ function flattenKeys(obj: Record<string, unknown>, prefix = ''): Set<string> {
   return out
 }
 
-/** 页面 B 相关源码文件（相对 src）——外壳 + 安全侧区块 + 迁移组件 + 不可信徽标。 */
+/** 绝对路径 → 便于阅读的仓库内相对路径（断言失败时能直接看出是哪个文件）。 */
+function rel(abs: string): string {
+  const marker = 'JianManager-web-overhaul/'
+  const i = abs.indexOf(marker)
+  return i >= 0 ? abs.slice(i + marker.length) : abs
+}
+
+/** 页面 B 相关源码文件（绝对路径）——外壳 + 安全侧区块 + 迁移组件 + 不可信徽标。 */
 function pageBFiles(): string[] {
-  const files = ['pages/ProtectionCenterPage.tsx', 'components/UntrustedFieldBadge.tsx']
-  const distDir = join(srcDir, 'components', 'client-dist')
-  for (const entry of readdirSync(distDir, { withFileTypes: true })) {
-    if (!entry.isFile()) continue
-    if (!/\.(ts|tsx)$/.test(entry.name)) continue
-    if (/\.(dom\.)?test\.(ts|tsx)$/.test(entry.name)) continue
-    files.push(`components/client-dist/${entry.name}`)
+  const files = [
+    join(srcDir, 'pages/ProtectionCenterPage.tsx'),
+    // 已迁入 biz-views，故按包的路径取
+    join(bizViewsDir, 'components/UntrustedFieldBadge.tsx'),
+  ]
+  for (const dir of [
+    join(srcDir, 'components', 'client-dist'),
+    join(bizViewsDir, 'components', 'client-dist'),
+  ]) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue
+      if (!/\.(ts|tsx)$/.test(entry.name)) continue
+      if (/\.(dom\.)?test\.(ts|tsx)$/.test(entry.name)) continue
+      files.push(join(dir, entry.name))
+    }
   }
   return files
 }
@@ -52,12 +75,13 @@ const KEY_RE = /(['"])(clientDistOps\.[A-Za-z0-9_.]+)\1/g
 
 function collectReferencedKeys(): Map<string, string[]> {
   const refs = new Map<string, string[]>()
-  for (const rel of pageBFiles()) {
-    const text = readFileSync(join(srcDir, rel), 'utf-8')
+  for (const abs of pageBFiles()) {
+    const text = readFileSync(abs, 'utf-8')
     for (const m of text.matchAll(KEY_RE)) {
       const key = m[2]
+      const label = rel(abs)
       const list = refs.get(key) ?? []
-      if (!list.includes(rel)) list.push(rel)
+      if (!list.includes(label)) list.push(label)
       refs.set(key, list)
     }
   }

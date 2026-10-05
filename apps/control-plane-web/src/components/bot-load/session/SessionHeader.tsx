@@ -20,7 +20,7 @@ import {
 } from '@/api/bot-load'
 import type { BotLoadRunV2, BotLoadVerdict } from '@/lib/bot-load/types'
 import { isLiveRunState, isTerminalRunState } from '@/lib/bot-load/types'
-import { DisclaimerBanner } from './DisclaimerBanner'
+import { DisclaimerBanner } from '@jianmanager/biz-views/components/bot-load/session/DisclaimerBanner'
 
 export function SessionHeader({
   run,

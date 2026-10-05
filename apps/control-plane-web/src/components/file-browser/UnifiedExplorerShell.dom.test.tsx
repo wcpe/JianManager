@@ -7,7 +7,7 @@ import {
   storageBrowseCapability,
   customExplorerCapability,
 } from './capability'
-import type { FileBrowserSource } from './types'
+import type { FileBrowserSource } from '@jianmanager/biz-views/lib/file-browser-types'
 
 vi.mock('@/components/explorer/ExplorerTabHost', () => ({
   default: ({ instanceId }: { instanceId: number }) => (

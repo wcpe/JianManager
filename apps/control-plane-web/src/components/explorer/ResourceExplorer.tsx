@@ -28,14 +28,14 @@ import {
 } from '@/api/files'
 import { reportInstanceDraft } from '@/lib/console-draft-registry'
 import CodeEditor from './editor/CodeEditor'
-import EditorShortcutsHelp from './editor/EditorShortcutsHelp'
+import EditorShortcutsHelp from '@jianmanager/biz-views/components/explorer/editor/EditorShortcutsHelp'
 import ArchiveViewer from './ArchiveViewer'
 import DecompileViewer from './DecompileViewer'
 import FileTree from './FileTree'
 import FileList from './FileList'
-import Toolbar from './Toolbar'
+import Toolbar from '@jianmanager/biz-views/components/explorer/Toolbar'
 import SearchPanel from './SearchPanel'
-import PromptDialog from './PromptDialog'
+import PromptDialog from '@jianmanager/biz-views/components/explorer/PromptDialog'
 import VersionDrawer from './VersionDrawer'
 import {
   emptySelection,
@@ -63,7 +63,7 @@ import {
   readDragFromDataTransfer,
   setDragPayload,
 } from './explorer-clipboard-bus'
-import { joinPath, baseName, isValidName } from './paths'
+import { joinPath, baseName, isValidName } from '@jianmanager/biz-views/lib/paths'
 import { needsDiscardConfirm } from './discard-guard'
 import {
   emptyNavHistory,
@@ -81,7 +81,7 @@ import {
   sortFiles,
   type FileSortState,
   type FileViewMode,
-} from './file-sort'
+} from '@jianmanager/biz-views/lib/file-sort'
 
 
 /**

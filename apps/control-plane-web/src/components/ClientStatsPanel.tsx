@@ -13,8 +13,8 @@ import {
 import InsightCards from '@/components/client-dist/InsightCards'
 import UpdateHeatmap from '@/components/client-dist/UpdateHeatmap'
 import MachineListPanel from '@/components/client-dist/MachineListPanel'
-import { ObsTimeRangePicker } from '@/components/client-dist/ObsTimeRangePicker'
-import type { ObsWindow } from '@/components/client-dist/obs-window'
+import { ObsTimeRangePicker } from '@jianmanager/biz-views/components/client-dist/ObsTimeRangePicker'
+import type { ObsWindow } from '@jianmanager/biz-views/lib/obs-window'
 import { readClientDistQuery } from '@/lib/client-dist-query'
 import {
   KPI_I18N,
