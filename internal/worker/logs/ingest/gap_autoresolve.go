@@ -146,7 +146,7 @@ func (m *Manager) selfHealPausedSource(source SourceConfig, p *pipeline.Pipeline
 	// 现场 344 位/s/源 = 3.7 天 ✗✗），故改为"探测驱动的小循环"（≤8 步 / ≤200ms ✓）：
 	// 典型 ~3 步即"推到陈旧段末端 → 补一整段 [reclaim, delivery] → 推到 delivery" ✓；
 	// 生产仍灌料时每轮覆盖新增的已确认区间 ⇒ **追平生成速率** ✓（及格语义）。
-	m.rollingReclaimRepair(p, source)
+	m.reclaimStep0RollingOnly(p, source)
 	if entry.AcquirePaused {
 		delivered, err := p.DeliverPending()
 		if delivered {
@@ -238,9 +238,11 @@ func (m *Manager) selfHealDue(key string) bool {
 		m.gapAutoResolveAt = map[string]time.Time{}
 	}
 	if last, ok := m.gapAutoResolveAt[key]; ok && now.Sub(last) < interval {
+		m.selfHealDueSkip.Add(1) // #66-⑤ 诊断：被限频闸挡下（≠ 被状态闸挡下 ✓）
 		return false
 	}
 	m.gapAutoResolveAt[key] = now
+	m.selfHealDuePass.Add(1) // #66-⑤ 诊断：越过限频闸 ⇒ 自愈面确已轮到该源 ✓
 	return true
 }
 

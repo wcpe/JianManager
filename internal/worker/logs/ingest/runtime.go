@@ -339,6 +339,18 @@ type Manager struct {
 	skipEnumeration  atomic.Int64
 	sweepCandidates  atomic.Int64
 	sweepRevived     atomic.Int64
+	// selfHealDuePass / selfHealDueSkip（#66-⑤ 诊断，只读）：自愈面**限频闸**的命中/未命中计数。
+	// 为什么要它：现场"四落后源零 `滚动回收` 行"的第一嫌疑是"自愈面根本没轮到它们"——而准入链上
+	// 可能拦住它们的位置只有两处：① **状态闸**（未暂停且零未解决缺口 ⇒ 直接返回，**不计入**本对计数）；
+	// ② **限频闸**（本对计数 ✓）。两者并读即可分辨（pass 有增长 ⇒ 状态闸放行了；skip 恒涨而 pass 不动
+	// ⇒ 全被限频挡住；两个都恒为 0 ⇒ 连状态闸都没放行或自愈面未被调用 ⇒ 嫌疑上移到管道/轮转面 ✓）。
+	selfHealDuePass atomic.Int64
+	selfHealDueSkip atomic.Int64
+	// sweepRollingProbes / nsRolling（#66-⑤ 诊断，只读）：兜底环轮转窗口里**实际发起**的
+	// "只滚动/补段"自愈次数与耗时（前置是 O(1) 的"有欠账"判据 ⇒ 健康源不发起 ⇒ 本读数同时是
+	// **成本定界**的证明 ✓）。
+	sweepRollingProbes atomic.Int64
+	nsRolling          atomic.Int64
 	// sweepBackpressureStreak 是窗口化背压的阈值（连续 N 轮净涨才跳过 ✓；0 ⇒ 默认 3）。
 	sweepBackpressureStreak int
 	// sweepInflightCap 是在飞并发上限（见 defaultSweepInflightCap ✓）。
@@ -5162,6 +5174,26 @@ const deliveryConfirmedSegPrefix = "delivery-confirmed-"
 //
 // 不变量：上界仍是**已确认投递水位 `delivery`**（default-deny 不放宽 ✓，`reclaim ≥ delivery` 时零动作 ✓）；
 // 每段仍逐段入账本（`delivery-confirmed-<from>-<to>` ✓ 可审计）；hold 优先（每步复读 ✓）；单轮有界 ✓。
+// reclaimStep0RollingOnly 是「步 0：只推进/补段滚动回收」的**共用精简入口**（#66-⑤）——
+// 两条面共用同一助手，避免各写一份而语义分叉 ✗：
+//
+//	· **自愈面**：selfHealPausedSource 步 0（#62 起 ✓；其准入＝已暂停 或 仍有未解决缺口）；
+//	· **兜底环轮转窗口**：maybeResumePausedSources 的**早退之前**（#66-⑤ 新挂 ✓）。
+//
+// **只做这一步**：不做投递（步 1）、不做缺口消解（步 2）、不做恢复评估（步 3）——兜底环自己已有那三步
+// 的等价路径（DeliverPending / autoResolveGapsFromPublished / EvaluateResume ✓），且那三步的准入红线
+// （积压/容量类暂停 ✓）**不变** ✗（本入口只放宽"谁来推进回收"，不放宽"谁能被复活" ✓）。
+//
+// 为什么需要它（#66-⑤ 现场）：一条"采集仍在跑、只是回收链被卡住"的源（非积压类暂停 或 未暂停，
+// 且零未解决缺口）三条面全都到不了它 ⇒ 新窗零 `滚动回收` 行、全库零「本轮未推进（回收被拒）」行
+// ✗✗（被拒行只在 rolling 内部才会打 ⇒ rolling 从未被调用 ✓）。
+func (m *Manager) reclaimStep0RollingOnly(p *pipeline.Pipeline, source SourceConfig) {
+	if m == nil || p == nil {
+		return
+	}
+	m.rollingReclaimRepair(p, source)
+}
+
 func (m *Manager) rollingReclaimRepair(p *pipeline.Pipeline, source SourceConfig) {
 	if m == nil || p == nil || p.Ledger() == nil {
 		return
@@ -5269,6 +5301,11 @@ type ReclaimRollingStats struct {
 	FirstAdvance uint64
 	Elapsed      time.Duration
 	Last         ReclaimRollSnapshot
+	// #66-⑤ 诊断（只读）：自愈面**限频闸**的通过/跳过累计 —— 见 Manager.selfHealDuePass 字段注释 ✓。
+	// 状态闸（未暂停且零缺口 ⇒ 早退）**不**计入任何计数 ⇒ 组合读法：两值恒为 0 ⇒ 该源连状态闸都
+	// 没放行（或自愈面根本没被调用）；skip 恒涨而 pass 不动 ⇒ 全被限频挡住 ✓。
+	SelfHealDuePass int64
+	SelfHealDueSkip int64
 }
 
 // ReclaimRollingStats 读取滚动回收读数（#63-Z3-c）。
@@ -5279,7 +5316,9 @@ func (m *Manager) ReclaimRollingStats() ReclaimRollingStats {
 	st := ReclaimRollingStats{
 		Rounds: m.reclaimRollRounds.Load(), Steps: m.reclaimRollSteps.Load(),
 		Advanced: uint64(m.reclaimRollAdvanced.Load()), FirstAdvance: uint64(m.reclaimRollFirstAdvance.Load()),
-		Elapsed: time.Duration(m.reclaimRollNanos.Load()),
+		Elapsed:         time.Duration(m.reclaimRollNanos.Load()),
+		SelfHealDuePass: m.selfHealDuePass.Load(),
+		SelfHealDueSkip: m.selfHealDueSkip.Load(),
 	}
 	if last, _ := m.reclaimRollLast.Load().(ReclaimRollSnapshot); last.Steps > 0 || last.Advanced > 0 {
 		st.Last = last
@@ -6492,6 +6531,10 @@ type ResumeSweepStats struct {
 	MuWaitQuotaMax   int64
 	MuWaitSourcesMax int64
 	MuWaitResumeMax  int64
+	// RollingProbes / NsRolling（#66-⑤ 只读）：兜底环轮转窗口里**实际发起**的"只滚动/补段"自愈次数
+	// 与耗时（前置为 O(1) 有欠账判据 ⇒ 健康源不发起 ⇒ 本读数即成本定界证明 ✓）。
+	RollingProbes int64
+	NsRolling     int64
 }
 
 func (m *Manager) ResumeSweepStats() ResumeSweepStats {
@@ -6524,6 +6567,8 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		MuWaitQuotaMax:   m.muWaitQuota.Load(),
 		MuWaitSourcesMax: m.muWaitSources.Load(),
 		MuWaitResumeMax:  m.muWaitResume.Load(),
+		RollingProbes:    m.sweepRollingProbes.Load(),
+		NsRolling:        m.nsRolling.Load(),
 	}
 }
 
@@ -6736,6 +6781,28 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		led := p.Ledger()
 		if led == nil {
 			continue
+		}
+		// #66-⑤：**早退之前**先给该源一次「只滚动/补段」的机会。否则"既非积压/容量类暂停、又无未解决
+		// 缺口"的落后源（现场 `inst:160/202/203/179`：新窗零 `滚动回收` 行、全库零「回收被拒」行 ✓）
+		// 三条面都到不了它：投递确认面要等新批次被确认（安静源没有 ✗）、自愈面准入要求"暂停或缺口"
+		//（它两者皆非 ✗）、本环候选资格又要求"积压/容量类暂停"（早退 ✗）⇒ 回收链永久卡住。
+		// 轮转窗口**会扫遍所有管道**（游标 ⌈E/batch⌉ 轮内覆盖全部 ✓）⇒ 挂在这里 ⇒ 任意落后源
+		// 在有限轮内必被推进一次 ✓。
+		//
+		// **成本定界**：先做 O(1) 的"有欠账"前置（reclaim ≥ delivery ⇒ 无可推进 ⇒ 不 probe ✓，
+		// 健康源每轮只多一次 Positions 读 ✓），再走**既有有界执行器**（单步预算 + 在飞上限；
+		// 超预算只表示"本轮不等它"、后台照跑 ✓）⇒ **每轮有界** ✓。
+		// **不新增旁路语义**：调用的就是两面共用的同一助手，hold 优先/幂等/绑定前后水位复读
+		//（repairStalledReclaim → backfillDeliveryConfirmedCoverage ✓）全部继承 ✓。
+		if pos, ok := led.Positions(p.Key()); ok && pos.Reclaim < pos.Delivery {
+			if src, srcOK := m.sourceConfigFor(p); srcOK {
+				m.sweepRollingProbes.Add(1)
+				tRoll := time.Now()
+				if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { m.reclaimStep0RollingOnly(p, src) }) {
+					m.skipBlocked.Add(1)
+				}
+				m.nsRolling.Add(int64(time.Since(tRoll)))
+			}
 		}
 		entry := led.Get(p.Key())
 		if entry == nil || !entry.AcquirePaused {
