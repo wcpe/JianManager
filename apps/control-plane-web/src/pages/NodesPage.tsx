@@ -31,6 +31,7 @@ import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { ResourceGauge } from '@jianmanager/ui/components/gauge'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
+import { CardsGrid, DataPanelSkeleton, PageHeader, PageShell, ScopeBar } from '@jianmanager/ui/components/layout'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -426,6 +427,66 @@ function RowUsage({ label, pct, online }: { label: string; pct: number; online: 
   )
 }
 
+/**
+ * 节点卡片（阶段 6 重做，原型 `.node-card`）：列表态的主展示单元。
+ *
+ * 与 `NodeListRow` 分工不同——那是双栏形态下给「已选中节点」当导航用的紧凑行；
+ * 卡片墙要在一屏里横向铺开、彼此可比，故把 host / 核数 / 内存 / 实例数 / 三项水位都摆出来。
+ */
+function NodeCard({ node, instanceCount, onOpen }: { node: NodeInfo; instanceCount: number; onOpen: () => void }) {
+  const { t } = useTranslation()
+  const online = node.status === 1
+  const level = nodeStatusLevel(node.status)
+  const dotColor = `var(--status-${level === 'neutral' ? 'info' : level})`
+  const statusLabel = node.maintenance ? t('nodes.maintenance') : online ? t('nodes.online') : t('nodes.offline')
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      // 整张卡片是一个按钮，若不指定可访问名，读屏会把卡片里的全部文本（名 / host /
+      // 核数 / 内存 / 实例数 / 三项水位）串成一长串念出来；而且那串里含「在线」与数字，
+      // 会与状态 chip 的正则断言互相干扰（实测触发 strict mode 冲突）。
+      // 收敛为「节点名 + 状态」——状态 chip 已是页面级的概览，卡片这里表达的是「这台怎么样」。
+      aria-label={`${node.name} ${statusLabel}`}
+      className={cn(
+        'flex flex-col gap-2 rounded-lg border bg-card p-3 text-left shadow-soft transition-colors hover:bg-accent/40',
+        !online && 'opacity-70',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={cn('size-2 shrink-0 rounded-full', online && 'animate-breathing')}
+          style={{ backgroundColor: dotColor, color: dotColor }}
+          aria-hidden
+        />
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold" title={node.name}>
+          {node.name}
+        </span>
+        <StatusBadge level={level} label={statusLabel} />
+      </div>
+      <div className="truncate text-[11px] text-muted-foreground" title={node.host}>
+        {node.host}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+        <span>
+          {node.cpuCores} {t('nodes.cpuCores')}
+        </span>
+        <span>{Math.round(node.memoryMb / 1024)} GB</span>
+        <span className="inline-flex items-center gap-0.5">
+          <Box className="size-3" />
+          <span className="tabular-nums">{instanceCount}</span>
+        </span>
+      </div>
+      <div className="flex items-center gap-3">
+        <RowUsage label={t('nodes.cpu')} pct={(node.cpuUsage ?? 0) * 100} online={online} />
+        <RowUsage label={t('nodes.memory')} pct={(node.memoryUsage ?? 0) * 100} online={online} />
+        <RowUsage label={t('nodes.disk')} pct={(node.diskUsage ?? 0) * 100} online={online} />
+      </div>
+    </button>
+  )
+}
+
 /** 左栏节点列表行（FR-177）：状态点呼吸灯 + 名 + host + mini 水位（CPU/内存）+ 实例数；选中高亮、离线置灰。 */
 function NodeListRow({
   node,
@@ -731,6 +792,58 @@ export default function NodesPage() {
   ]
   const gauge = (pct: number | null) => (pct === null ? '--' : `${pct.toFixed(0)}%`)
   const listLoading = isArchive ? archivedLoading : isLoading
+
+  // 阶段 6 页面重做（照原型 `nodesPage()`）：本页拆成**列表态**与**详情态**。
+  //
+  // 判据用 `selectedId` —— 它就是「URL 里有没有 node 参数」（null 即没有）。
+  // 不能用 `effectiveSelectedId`：后者在无参数时会回退到第一个节点，
+  // 那样列表态会错误地自动选中一个，用户以为进了详情。
+  if (selectedId === null) {
+    return (
+      <PageShell data-page="nodes">
+        <PageHeader
+          title={t('nodes.title')}
+          description={t('nodes.subtitle')}
+          actions={
+            <Button onClick={() => setAddOpen(true)}>
+              <Plus className="size-4" />
+              {t('nodes.enroll.addNode')}
+            </Button>
+          }
+        />
+        {/* 作用域条：状态计数即本页范围入口（点它按状态筛）+ 本地搜索（原型同款，
+            搜索框在 scope-bar 内而不是页头操作区）。 */}
+        <ScopeBar>
+          <SummaryChips chips={summaryChips} />
+          <div className="relative ml-auto">
+            <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t('nodes.searchPlaceholder')}
+              aria-label={t('nodes.searchPlaceholder')}
+              className="h-8 w-56 pl-7"
+            />
+          </div>
+        </ScopeBar>
+        {listLoading ? (
+          <DataPanelSkeleton />
+        ) : (
+          <CardsGrid className="min-h-0 flex-1">
+            {filtered.map((node) => (
+              <NodeCard
+                key={node.id}
+                node={node}
+                instanceCount={instanceCountByNode.get(node.id) ?? 0}
+                onOpen={() => setSelectedId(node.id)}
+              />
+            ))}
+          </CardsGrid>
+        )}
+        <AddNodeDialog open={addOpen} onClose={() => setAddOpen(false)} />
+      </PageShell>
+    )
+  }
 
   return (
     <div data-page="nodes" className="jm-page-stack flex h-auto min-h-0 flex-col gap-3 lg:h-[calc(100vh-8.25rem)] lg:flex-row">
