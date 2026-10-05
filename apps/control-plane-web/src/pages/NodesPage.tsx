@@ -846,7 +846,10 @@ export default function NodesPage() {
   }
 
   return (
-    <div data-page="nodes" className="jm-page-stack flex h-auto min-h-0 flex-col gap-3 lg:h-[calc(100vh-8.25rem)] lg:flex-row">
+    // 全量对齐：详情态双栏（左栏节点列表 + 右栏详情）改用布局层 PageShell 的 fixed 壳态
+    // ——固定视口、内部区域自行滚动，与列表态共用同一套留白与纵向节奏。
+    // 原为手写骨架：jm-page-stack + h-[calc(100vh-8.25rem)] 硬编码视口高度 + 自定 gap。
+    <PageShell variant="fixed" data-page="nodes" className="gap-3 lg:flex-row">
       {/* 左栏：可收缩节点列表（窄图标轨 ⇄ 展开），收缩态持久 */}
       <aside
         className={cn(
@@ -1107,7 +1110,7 @@ export default function NodesPage() {
         onConfirm={confirmForcePurge}
         onCancel={() => setForcePurgePending(null)}
       />
-    </div>
+    </PageShell>
   )
 }
 
