@@ -69,8 +69,8 @@ import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodeLogRuntimePanel from '@/components/NodeLogRuntimePanel'
 import NodePortsTab from '@/components/nodes/NodePortsTab'
 import NodeArtifactCacheTab from '@/components/nodes/NodeArtifactCacheTab'
-import NodeProxyPanel from '@/components/NodeProxyPanel'
-import NodeProbeVersionPanel from '@/components/NodeProbeVersionPanel'
+import NodeProxyTab from '@/components/nodes/NodeProxyTab'
+import NodeProbeVersionTab from '@/components/nodes/NodeProbeVersionTab'
 import NodeRepairPanel from '@/components/NodeRepairPanel'
 import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialog from '@/components/AddNodeDialog'
@@ -1299,12 +1299,12 @@ function NodeDetailPane({
         )}
         {tab === 'proxy' && (
           <Panel title={t('nodeProxy.title')}>
-            <NodeProxyPanel nodeId={node.id} active />
+            <NodeProxyTab nodeId={node.id} />
           </Panel>
         )}
         {tab === 'probe' && (
           <Panel title={t('probe.nodeVersionTitle')}>
-            <NodeProbeVersionPanel nodeId={node.id} active />
+            <NodeProbeVersionTab nodeId={node.id} />
           </Panel>
         )}
         {tab === 'monitor' && <NodeMonitorCharts node={node} />}
