@@ -8,6 +8,7 @@ import { useMetricOverview } from '@/api/metrics'
 import { useClientDistObservability } from '@/api/clientStats'
 import { useAuthStore } from '@/stores/auth'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { RangePicker, type MetricRange } from '@jianmanager/ui'
@@ -138,11 +139,14 @@ export default function StatisticsPage() {
   const distPlatforms = tallyBy(dist?.platformDist ?? [], (p) => p.os ?? '—')
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">{t('statistics.title')}</h1>
-        <RangePicker value={range} onChange={setRange} />
-      </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
+    // 本页原为裸 `space-y-4` + 手写页头（其 h1 类名与 PageHeader 的完全一致，映射干净）；
+    // 原先没有 data-page，迁移时补上——e2e 的就绪信号依赖它。
+    <PageShell data-page="statistics">
+      <PageHeader
+        title={t('statistics.title')}
+        actions={<RangePicker value={range} onChange={setRange} />}
+      />
 
       {/* KPI 行：节点 / 实例 / 玩家 + 崩溃单列 */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -257,6 +261,6 @@ export default function StatisticsPage() {
           <p className="py-6 text-center text-sm text-muted-foreground">{t('statistics.distAdminOnly')}</p>
         </Panel>
       )}
-    </div>
+    </PageShell>
   )
 }
