@@ -282,6 +282,10 @@ func NewJournalWithStore(store Store) (*JournalWithStore, error) {
 		seen[e.Seq] = struct{}{}
 		merged = append(merged, e)
 	}
+	// **必须再按 seq 重排一次**：改判把冲突条目排到全局尾部（seq=maxSeq+1），但它是**按原位置
+	// 插回 merged** 的 ✗ ⇒ 结果会乱序（如 [1A, 3(改判), 2B]）⇒ 顺序重放必再撞 ErrJournalOrder ✗✗
+	//（2026-10-06 第 7 窗实测：修复后仍报 `got 33727 last 34492`，真因即此 ✓）。
+	sort.SliceStable(merged, func(i, k int) bool { return merged[i].Seq < merged[k].Seq })
 	for _, e := range merged {
 		if err := j.mem.Append(e); err != nil {
 			return nil, fmt.Errorf("catalog: replay journal store: %w", err)

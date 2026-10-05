@@ -27,6 +27,30 @@ func TestJournalReplayToleratesOutOfOrderLines(t *testing.T) {
 	require.Equal(t, uint64(2), snap[1].Seq)
 }
 
+// TestJournalReplayRenumberedEntriesStayOrdered 回归 2026-10-06 第 7 窗实测缺陷：
+// 改判条目曾按"原位置"插回 ⇒ 归并结果乱序 ⇒ 重放再撞 ErrJournalOrder ✗。交错冲突形态必须
+// 一并覆盖（[1A, 3C, 1B] ⇒ 改判后须重排为 [1,2,3] ✓）。
+func TestJournalReplayRenumberedEntriesStayOrdered(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewJSONLFileStore(filepath.Join(dir, "interleaved.jsonl"))
+	require.NoError(t, err)
+	// 文件行序：seq1(A)、seq3(C)、seq1(B 异内容) ⇒ 归并后若不重排 = [1A, 4B, 3C] ✗。
+	require.NoError(t, store.AppendEntry(JournalEntry{Seq: 1, Key: PartitionKey{StorageNamespace: "ns", UTCDay: "d-A"}}))
+	require.NoError(t, store.AppendEntry(JournalEntry{Seq: 3, Key: PartitionKey{StorageNamespace: "ns", UTCDay: "d-C"}}))
+	require.NoError(t, store.AppendEntry(JournalEntry{Seq: 1, Key: PartitionKey{StorageNamespace: "ns", UTCDay: "d-B"}}))
+
+	j, err := NewJournalWithStore(store)
+	require.NoError(t, err, "交错冲突+改判后必须按 seq 重排，不得再撞序号回退 ✗")
+	snap := j.Snapshot()
+	require.Len(t, snap, 3)
+	for i := 1; i < len(snap); i++ {
+		require.Less(t, snap[i-1].Seq, snap[i].Seq, "重放序列必须严格递增 ✓")
+	}
+	require.Equal(t, "d-A", snap[0].Key.UTCDay)
+	require.Equal(t, "d-C", snap[1].Key.UTCDay)
+	require.Equal(t, "d-B", snap[2].Key.UTCDay, "改判者排到全局尾部 ✓")
+}
+
 // TestJournalReplayRepairsSameSeqCollision 判据（现场修订）：同 seq 异内容＝**双写者各自计数**
 // 的现场形态 ⇒ 不丢任何一条：后位置者改判到全局尾部 ✓；同 seq 同内容（精确重复）⇒ 去重跳过 ✓；
 // seq==0 ⇒ 仍拒 ✗（写入器不可能产生）。
