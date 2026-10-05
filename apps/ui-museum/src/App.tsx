@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
+import { cn } from '@jianmanager/ui'
 
 import { ThemeMatrix } from './ThemeMatrix'
-import ShellPreview from './ShellPreview'
-import type { ReactNode } from 'react'
 import {
   Badge,
   Button,
@@ -111,11 +111,46 @@ const chartSeries: ChartSeries[] = [
   },
 ]
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/**
+ * 博物馆分区清单 —— 侧边栏按它渲染，一次只展示一个分区。
+ *
+ * 为什么分批而不是一长页：这是**组件库/控件博物馆**，用途是「按需查某个控件长什么样」；
+ * 全部件堆在一页会滚很久、也难以定位。旧版即是一长页（且把应用级外壳也塞进来当展品）。
+ */
+const SECTIONS = [
+  { id: 'foundation', label: 'Foundation', hint: '设计 token 与色板' },
+  { id: 'themes', label: '主题矩阵', hint: '5 主题 × 明暗' },
+  { id: 'actions', label: 'Actions', hint: '按钮与操作触发件' },
+  { id: 'forms', label: 'Forms', hint: '输入、选择与表单字段' },
+  { id: 'data', label: 'Data', hint: '表格、卡片、统计与图谱' },
+  { id: 'overlay', label: 'Overlay', hint: '对话框与 Sheet' },
+  { id: 'monitoring', label: 'Monitoring', hint: '图表与指标条' },
+  { id: 'tabs', label: 'Tabs', hint: '页签' },
+  { id: 'layout', label: '布局', hint: '页面壳与布局原语' },
+] as const
+
+type SectionId = (typeof SECTIONS)[number]['id']
+
+/** 分区容器：只有当前分区才渲染子树（分批展示，不把九套样例同时挂进 DOM）。 */
+function Section({
+  id,
+  active,
+  title,
+  hint,
+  children,
+}: {
+  id: SectionId
+  active: SectionId
+  title: string
+  hint: string
+  children: ReactNode
+}) {
+  if (id !== active) return null
   return (
-    <section className="grid gap-3 border-t py-5 md:grid-cols-[180px_1fr]">
-      <div>
-        <h2 className="text-sm font-semibold">{title}</h2>
+    <section className="grid gap-4">
+      <div className="border-b pb-3">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
       </div>
       <div className="grid gap-3">{children}</div>
     </section>
@@ -137,45 +172,67 @@ export default function App() {
     [],
   )
 
+  const [section, setSection] = useState<SectionId>('foundation')
+
   return (
-    <main className={dark ? 'dark min-h-screen bg-background text-foreground' : 'min-h-screen bg-background text-foreground'}>
-      <div className="mx-auto max-w-6xl px-5 py-5">
-        <header className="flex flex-wrap items-center justify-between gap-3 pb-3">
-          <div>
-            <h1 className="text-xl font-bold">JianManager 控件博物馆</h1>
-            <p className="mt-1 text-xs text-muted-foreground">@jianmanager/ui · A+C 高密度运维控件</p>
-          </div>
-          <Button size="sm" variant="outline" onClick={() => setDark((v) => !v)}>
-            {dark ? '亮色' : '暗色'}
-          </Button>
-        </header>
+    <main className={dark ? 'dark flex h-screen flex-col bg-background text-foreground' : 'flex h-screen flex-col bg-background text-foreground'}>
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-5 py-3">
+        <div>
+          <h1 className="text-lg font-bold">JianManager 控件博物馆</h1>
+          <p className="mt-0.5 text-xs text-muted-foreground">@jianmanager/ui · 按分类查看控件</p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => setDark((v) => !v)}>
+          {dark ? '亮色' : '暗色'}
+        </Button>
+      </header>
 
-        <Section title="Foundation">
-          <Panel title="Token">
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              {['primary', 'card', 'muted', 'success', 'danger'].map((name) => (
-                <div key={name} className="rounded-md border bg-card p-2">
-                  <div
-                    className="h-8 rounded"
-                    style={{ background: name === 'success' ? 'var(--status-success)' : name === 'danger' ? 'var(--status-danger)' : `var(--${name})` }}
-                  />
-                  <p className="mt-2 text-xs text-muted-foreground">{name}</p>
+      <div className="flex min-h-0 flex-1">
+        {/* 分类导航：一次只展示一个分类的控件，避免全部件堆成一长页 */}
+        <nav aria-label="控件分类" className="w-60 shrink-0 overflow-y-auto border-r bg-card/40 p-2">
+          {SECTIONS.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              aria-current={section === s.id ? 'page' : undefined}
+              onClick={() => setSection(s.id)}
+              className={cn(
+                'block w-full rounded-md px-3 py-2 text-left text-sm transition-colors',
+                section === s.id
+                  ? 'bg-accent font-medium text-accent-foreground'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {s.label}
+              <span className="mt-0.5 block text-[11px] font-normal opacity-70">{s.hint}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="mx-auto grid max-w-5xl gap-6">
+            <Section id="foundation" active={section} title="Foundation" hint="设计 token 与色板">
+              <Panel title="Token">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  {['primary', 'card', 'muted', 'success', 'danger'].map((name) => (
+                    <div key={name} className="rounded-md border bg-card p-2">
+                      <div
+                        className="h-8 rounded"
+                        style={{ background: name === 'success' ? 'var(--status-success)' : name === 'danger' ? 'var(--status-danger)' : `var(--${name})` }}
+                      />
+                      <p className="mt-2 text-xs text-muted-foreground">{name}</p>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </Panel>
-        </Section>
+              </Panel>
+            </Section>
 
-        {/* 阶段 7 的验证台：主题矩阵与外壳预览此前只有实现、没挂上来 */}
-        <Section title="主题矩阵">
+        {/* 主题矩阵：阶段 7 的验证台。外壳预览已移除——它展示的是应用级骨架
+            （AppShell/TopNav/SideNav）而非可复用的控件，不属于本博物馆的展品范围。 */}
+        <Section id="themes" active={section} title="主题矩阵" hint="5 套主题色 × 明暗，控件随变量实时跟变">
           <ThemeMatrix />
         </Section>
 
-        <Section title="外壳预览">
-          <ShellPreview />
-        </Section>
-
-        <Section title="Actions">
+        <Section id="actions" active={section} title="Actions" hint="按钮与操作触发件">
           <Panel title="Button">
             <div className="flex flex-wrap items-center gap-2">
               <Button>主操作</Button>
@@ -187,7 +244,7 @@ export default function App() {
           </Panel>
         </Section>
 
-        <Section title="Forms">
+        <Section id="forms" active={section} title="Forms" hint="输入、选择与表单字段">
           <Panel title="Inputs">
             <div className="grid gap-3 md:grid-cols-2">
               <label className="grid gap-1">
@@ -223,7 +280,7 @@ export default function App() {
           </Panel>
         </Section>
 
-        <Section title="Data">
+        <Section id="data" active={section} title="Data" hint="表格、卡片、统计与图谱">
           <div className="grid gap-3 lg:grid-cols-3">
             <StatCard label="在线节点" value="8/10" sub="集群" bar={{ value: 80, level: 'success' }} />
             <StatCard label="CPU" value="58%" sub="平均" bar={{ value: 58, level: 'warning' }} />
@@ -264,7 +321,7 @@ export default function App() {
           <ViewToggle value={mode} onChange={setMode} cardLabel="卡片视图" listLabel="列表视图" />
         </Section>
 
-        <Section title="Overlay">
+        <Section id="overlay" active={section} title="Overlay" hint="对话框与 Sheet">
           <Panel title="Dialog / Sheet / Menu">
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => setDialogOpen(true)}>Dialog</Button>
@@ -298,7 +355,7 @@ export default function App() {
           </Sheet>
         </Section>
 
-        <Section title="Monitoring">
+        <Section id="monitoring" active={section} title="Monitoring" hint="图表与指标条">
           <Panel title="Range">
             <RangePicker value={range} onChange={setRange} />
           </Panel>
@@ -323,7 +380,7 @@ export default function App() {
           </Panel>
         </Section>
 
-        <Section title="Tabs">
+        <Section id="tabs" active={section} title="Tabs" hint="页签">
           <Tabs defaultValue="light">
             <TabsList>
               <TabsTrigger value="light">亮色</TabsTrigger>
@@ -336,7 +393,7 @@ export default function App() {
 
         {/* 布局层（FR-496 阶段 3 + 阶段 6 收尾）：此前一处都没收录，页面迁移依赖它却无从在此核对。
             它是「一页内部怎么摆」的唯一出处——页面只从这里取原语，不再手写 space-y / grid-cols 骨架类名。 */}
-        <Section title="布局">
+        <Section id="layout" active={section} title="布局" hint="页面壳与布局原语">
           <p className="text-[11px] text-muted-foreground">
             内容页骨架的唯一出处：任何内容页的第一个子元素都是 PageHeader（或详情页的 ObjectPageHeader）。
           </p>
@@ -487,6 +544,8 @@ export default function App() {
             </div>
           </Panel>
         </Section>
+          </div>
+        </div>
       </div>
     </main>
   )
