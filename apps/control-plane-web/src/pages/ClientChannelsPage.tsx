@@ -442,7 +442,11 @@ function ChannelWorkbench({
   }
 
   return (
-    <div data-page="client-channel-workbench" className="jm-page-stack space-y-4">
+    // 全量对齐（视图 2 · 频道工作台）：外壳先换 PageShell——这一步不动视觉
+    // （原 space-y-4 为 16px，PageShell 的 gap 是 17px，差 1px）。
+    // 页头暂留：它是「返回按钮 + sr-only 标题 + channelId + 删除」，改用 ObjectPageHeader
+    // 会把刻意隐藏的标题变可见，属视觉变化，待确认后再做。
+    <PageShell data-page="client-channel-workbench">
       <div className="flex items-center justify-between flex-wrap gap-2">
         {/* 面包屑表达层级；返回仍给页内显式入口（纯面包屑不够直观）。 */}
         <div className="flex min-w-0 items-center gap-3">
@@ -514,7 +518,7 @@ function ChannelWorkbench({
         onConfirm={doDeleteChannel}
         onCancel={() => setDeleteChannel(false)}
       />
-    </div>
+    </PageShell>
   )
 }
 
