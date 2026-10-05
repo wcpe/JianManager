@@ -51,7 +51,6 @@ import {
   loadNodeListCollapsed,
   persistNodeListCollapsed,
 } from '@/lib/node-list'
-import { toneChipClass } from '@/lib/tone'
 import { cn } from '@jianmanager/ui'
 
 import {
@@ -1163,6 +1162,7 @@ function ArchivedNodeDetailPane({
   purging: boolean
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const when = node.deletedAt ? new Date(node.deletedAt).toLocaleString() : '--'
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: t('nodes.ip'), value: node.host },
@@ -1173,23 +1173,24 @@ function ArchivedNodeDetailPane({
   ]
   return (
     <div className="space-y-3">
-      <Panel bodyClassName="p-4">
-        <div className="flex items-start gap-3">
-          <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-xl', toneChipClass('neutral'))}>
-            <Server className="size-5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="truncate text-base font-semibold" title={node.name}>{node.name}</h2>
-              <Badge variant="outline">{t('nodes.viewArchive')}</Badge>
-            </div>
-            <p className="mt-0.5 truncate text-sm text-muted-foreground">{node.host}</p>
-          </div>
+      {/* 阶段 6 收尾：归档详情与活跃详情用同一对象头形态（此处无分段工具，故不传 tools）。
+          归档徽标走 status，「清理」走 actions，host 走 meta。 */}
+      <ObjectPageHeader
+        breadcrumbs={[
+          { label: t('nodes.title'), to: '/nodes' },
+          { label: node.name },
+        ]}
+        icon={<Server className="size-5" />}
+        title={node.name}
+        status={{ tone: 'default', label: t('nodes.viewArchive') }}
+        meta={[{ label: t('nodes.ip'), value: node.host }]}
+        actions={
           <Button variant="destructive" size="sm" onClick={onPurge} disabled={purging}>
             {t('nodes.purge')}
           </Button>
-        </div>
-      </Panel>
+        }
+        onNavigate={navigate}
+      />
       <Panel title={t('nodes.overviewSection')}>
         <dl className="grid gap-2 sm:grid-cols-2">
           {rows.map((r) => (
