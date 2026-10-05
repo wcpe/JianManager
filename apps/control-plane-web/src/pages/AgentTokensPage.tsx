@@ -21,6 +21,7 @@ import { useNodes } from '@/api/nodes'
 import { copyToClipboard } from '@/lib/clipboard'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
@@ -180,24 +181,26 @@ export default function AgentTokensPage() {
   }
 
   return (
-    <div data-page="agent-tokens" className="jm-page-stack space-y-4">
-      <div className="jm-page-header">
-        <div>
-          <h1 className="jm-page-title">{t('agentTokens.title')}</h1>
-          <p className="jm-page-subtitle">{t('agentTokens.subtitle')}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/mcp-activity">{t('agentTokens.openSessions')}</Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/agent-call-logs">{t('agentTokens.openLogs')}</Link>
-          </Button>
-          <Button onClick={() => setShowCreate(true)}>
-            <Plus className="size-4" /> {t('agentTokens.create')}
-          </Button>
-        </div>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语（三段与 PageHeader 的 title / description /
+    // actions 一一对应）。data-page 由 PageShell spread 透传，保持原值。
+    <PageShell data-page="agent-tokens">
+      <PageHeader
+        title={t('agentTokens.title')}
+        description={t('agentTokens.subtitle')}
+        actions={
+          <>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/mcp-activity">{t('agentTokens.openSessions')}</Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/agent-call-logs">{t('agentTokens.openLogs')}</Link>
+            </Button>
+            <Button onClick={() => setShowCreate(true)}>
+              <Plus className="size-4" /> {t('agentTokens.create')}
+            </Button>
+          </>
+        }
+      />
 
       {listQ.isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
@@ -331,7 +334,7 @@ export default function AgentTokensPage() {
         onConfirm={onRevoke}
         onCancel={() => setRevokeTarget(null)}
       />
-    </div>
+    </PageShell>
   )
 }
 
