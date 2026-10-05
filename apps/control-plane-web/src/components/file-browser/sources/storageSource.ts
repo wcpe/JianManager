@@ -4,7 +4,7 @@
  */
 import api from '@/api/client'
 import type { StorageFileEntry } from '@/api/storage'
-import type { FileBrowserSource, FileEntry, PreviewContent } from '../types'
+import type { FileBrowserSource, FileEntry, PreviewContent } from '@jianmanager/biz-views/lib/file-browser-types'
 
 function joinStorage(dir: string, name: string): string {
   if (!dir) return name

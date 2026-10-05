@@ -32,7 +32,7 @@ import {
   type FileSortState,
   type FileSortKey,
   type FileViewMode,
-} from './file-sort'
+} from '@jianmanager/biz-views/lib/file-sort'
 
 interface FileListProps {
   files: FileInfo[]

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@jianmanager/ui/components/sheet'
 import DangerConfirm from '@/components/DangerConfirm'
-import { UnifiedDiff } from '@/components/UnifiedDiff'
+import { UnifiedDiff } from '@jianmanager/biz-views/components/UnifiedDiff'
 import {
   useFileVersions,
   useFileVersionDiff,

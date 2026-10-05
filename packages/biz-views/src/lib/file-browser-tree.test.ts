@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildTree } from './tree'
-import type { FileEntry } from './types'
+import { buildTree } from './file-browser-tree'
+import type { FileEntry } from './file-browser-types'
 
 /** 便捷构造文件条目。 */
 function file(path: string, size = 0): FileEntry {

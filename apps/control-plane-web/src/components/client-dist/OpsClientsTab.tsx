@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type { ChartSeries } from '@jianmanager/ui'
 import type { ClientRuntimeOverview, ClientRuntimeState } from '@/api/clientRuntimeStates'
 import { ObsOverviewSection } from './ObsOverviewSection'
-import type { ObsWindow } from './obs-window'
+import type { ObsWindow } from '@jianmanager/biz-views/lib/obs-window'
 import {
   LinkableDistPanel,
   TrendCard,

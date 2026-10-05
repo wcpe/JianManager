@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, ChevronDown, Folder, FolderOpen } from 'lucide-react'
 import { fetchFileList } from '@/api/files'
-import { joinPath } from './paths'
+import { joinPath } from '@jianmanager/biz-views/lib/paths'
 import { cn } from '@jianmanager/ui'
 import { useVirtualRows } from '@/lib/virtual-list'
 

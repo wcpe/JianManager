@@ -9,7 +9,7 @@ import {
   instanceFilesCapability,
 } from '@/components/file-browser/capability'
 import { instanceFileSource } from '@/components/file-browser/sources/instanceSource'
-import type { FileBrowserAction } from '@/components/file-browser/types'
+import type { FileBrowserAction } from '@jianmanager/biz-views/lib/file-browser-types'
 
 /**
  * 实例「资源卡片」（FR-130 文件+配置合一；FR-213 共享浏览器；FR-378 统一壳）。

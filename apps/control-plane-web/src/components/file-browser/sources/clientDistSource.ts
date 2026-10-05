@@ -17,7 +17,7 @@ import {
   downloadClientArtifact,
   type ManifestFile,
 } from '@/api/clientVersions'
-import type { FileBrowserSource, FileEntry, PreviewContent } from '../types'
+import type { FileBrowserSource, FileEntry, PreviewContent } from '@jianmanager/biz-views/lib/file-browser-types'
 
 type ApiError = Error & { response?: { status?: number; data?: { error?: string } } }
 

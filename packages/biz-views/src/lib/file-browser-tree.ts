@@ -8,7 +8,7 @@
  * 泛化自 FR-191 `lib/client-publish-wizard` 的 `buildFileTree`（那版携 manifest 专有字段
  * sync/platform/index，与 manifest 编排耦合）。本版只依赖通用 `FileEntry`，纯函数、node 可测。
  */
-import type { FileEntry } from './types'
+import type { FileEntry } from './file-browser-types'
 
 /** 文件浏览器树的文件叶节点。 */
 export interface BrowserTreeFile {

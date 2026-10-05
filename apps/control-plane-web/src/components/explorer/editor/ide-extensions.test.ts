@@ -10,7 +10,7 @@ import {
   toggleBlockComment,
 } from '@codemirror/commands'
 import { ideKeymap } from './ide-extensions'
-import { editorShortcutRows } from './shortcuts'
+import { editorShortcutRows } from '@jianmanager/biz-views/lib/shortcuts'
 
 describe('ideKeymap', () => {
   const bindings = ideKeymap()
