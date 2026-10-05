@@ -75,7 +75,8 @@ describe('ProtectionCenterPage（页面 B · 安全侧）', () => {
     const { container } = renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops?tab=logs&type=all' })
 
     expect(container.firstElementChild).toHaveAttribute('data-page', 'client-dist-ops')
-    expect(container.firstElementChild).toHaveClass('jm-page-stack')
+    // 全量对齐起，外壳改用布局层 PageShell（原为手写的 jm-page-stack 骨架类）。
+    expect(container.firstElementChild).toHaveAttribute('data-slot', 'page-shell')
     expect(screen.getByRole('heading', { name: '客户端分发运维' })).toBeInTheDocument()
     expect(screen.getByRole('tablist')).toHaveClass('jm-toolbar-surface')
     expect(screen.queryByRole('tab', { name: '遥测告知' })).not.toBeInTheDocument()

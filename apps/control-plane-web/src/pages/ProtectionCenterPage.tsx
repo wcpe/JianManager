@@ -8,6 +8,7 @@ import { useClientChannels } from '@/api/clientChannels'
 import { useAuthStore } from '@/stores/auth'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import {
   Select,
   SelectContent,
@@ -161,16 +162,21 @@ export default function ProtectionCenterPage() {
   )
 
   return (
-    <div data-page="client-dist-ops" className="jm-page-stack space-y-4">
-      <div className="jm-page-header flex-wrap">
-        <h1 className="jm-page-title">{t('nav.clientDistOps')}</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          {isPlatformAdmin && channelPicker}
-          {isPlatformAdmin && <ObsTimeRangePicker value={obsWindow} onChange={setTimeWindow} />}
-          {isPlatformAdmin && <ClientDistExportButton kind="stats-summary" filters={{ channelId, range: toApiRange(effRange) }} />}
-          <Button asChild size="sm" variant="outline"><Link to={channelHref}>{t('clientDistOps.openChannelWorkbench')}</Link></Button>
-        </div>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语。
+    // data-page 保持 `client-dist-ops` 原值——e2e 就绪信号依赖它，且它与本页路由
+    // （旧 security 重定向到客户端分发运维）的语义一致，不因组件名是「保护中心」而改名。
+    <PageShell data-page="client-dist-ops">
+      <PageHeader
+        title={t('nav.clientDistOps')}
+        actions={
+          <>
+            {isPlatformAdmin && channelPicker}
+            {isPlatformAdmin && <ObsTimeRangePicker value={obsWindow} onChange={setTimeWindow} />}
+            {isPlatformAdmin && <ClientDistExportButton kind="stats-summary" filters={{ channelId, range: toApiRange(effRange) }} />}
+            <Button asChild size="sm" variant="outline"><Link to={channelHref}>{t('clientDistOps.openChannelWorkbench')}</Link></Button>
+          </>
+        }
+      />
 
       {!isPlatformAdmin ? (
         <Panel>
@@ -256,6 +262,6 @@ export default function ProtectionCenterPage() {
           </TabsContent>
         </Tabs>
       )}
-    </div>
+    </PageShell>
   )
 }
