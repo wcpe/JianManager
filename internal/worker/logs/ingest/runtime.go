@@ -6900,6 +6900,11 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 			//（见 schedulePendingReplay 注释 ✓）⇒ 必须与 #56 宿主**共用同一张在飞表**认领；
 			// 认领不到（他面在飞）⇒ 本轮让路、**下一轮重试**（窗口轮转必然再来 ✓）。
 			// **不复活**：不调 EvaluateResume、不改暂停态、不入候选口径 ⇒ 候选红线不变 ✓。
+			// #179-②：**破环直投** —— 缝属"待重读"类且已 resolved（非终局）时不等实例 resume，
+			// 直接把缝区间的 durable 存量经标准投递面投出 ⇒ 成功路径自动按既有证据口径关缝 ✓。
+			if src, okSrc := m.sourceConfigFor(p); okSrc {
+				m.directDeliverResolvedReReadGap(p, src)
+			}
 			if pos.Delivery < pos.Read {
 				key := p.Key().LogSourceID + "/" + p.Key().SourceGeneration
 				if _, srcOK := m.sourceConfigFor(p); srcOK && m.tryClaimReplayInflight(key) {
@@ -7427,6 +7432,70 @@ func (m *Manager) noteReclaimStall(p *pipeline.Pipeline, source SourceConfig, po
 			"read", pos.Read, "durable", pos.Durable, "delivery", pos.Delivery, "reclaim", pos.Reclaim,
 			"blocked_seg_hold", m.blockedSegHold.Load(), "blocked_config_hold", m.blockedConfigHold.Load(),
 			"blocked_no_material", m.blockedNoMaterial.Load(), "blocked_watermark_moved", m.blockedWatermark.Load())
+	}
+}
+
+// directDeliverResolvedReReadGap 是 #179-② 的**破环直投步**（红线照批 ✓）：
+// 区间上界＝缝 EndPos（目的正是越过当前 delivery ✓）；只投确在 WAL 的 durable 字节（缺 ⇒ 可见缺口+告警 ✓）；
+// 不绕导入守卫、不 MarkImported、hold 优先、判据不放宽 ✓；单源互斥复用 #56 在飞表 ✓；
+// 上限取配置值（`maxReplayEventsPerDrain`），未配置时回退**导出真源** `DefaultReplayEventsPerDrain` ✓；
+// **不做自动终局裁定** ✗（升级梯首级就是本步 ✓）。
+func (m *Manager) directDeliverResolvedReReadGap(p *pipeline.Pipeline, source SourceConfig) {
+	if m == nil || p == nil || p.Ledger() == nil {
+		return
+	}
+	entry := p.Ledger().Get(p.Key())
+	if entry == nil {
+		return
+	}
+	var from, to uint64
+	found := false
+	for _, g := range entry.Gaps {
+		if !g.Resolved || !acquire.IsReReadHealableResolution(g.Resolution) {
+			continue
+		}
+		from, to = g.StartPos, g.EndPos
+		found = true
+		break
+	}
+	if !found || to <= from {
+		return
+	}
+	limit := m.maxReplayEventsPerDrain
+	if limit <= 0 {
+		limit = acquire.DefaultReplayEventsPerDrain
+	}
+	slice := make([]logtypes.Event, 0, 16)
+	for _, e := range p.WAL().Snapshot() {
+		if !e.Durable || e.Event.Record.End < from || e.Event.Record.Start > to {
+			continue
+		}
+		slice = append(slice, e.Event)
+		if len(slice) >= limit {
+			break
+		}
+	}
+	if len(slice) == 0 {
+		if m.noteSourceError(source.LogSourceID, "reclaim-repair: 缝区间在 WAL 中无 durable 字节") {
+			slog.Warn("破环直投：缝区间在 WAL 中找不到 durable 字节（保持可见缺口，不静默）",
+				"logSourceID", source.LogSourceID, "from", from, "to", to)
+		}
+		return
+	}
+	key := p.Key().LogSourceID + "/" + p.Key().SourceGeneration
+	if !m.tryClaimReplayInflight(key) {
+		return // 他面在飞 ⇒ 让路（下轮重试 ✓）
+	}
+	defer m.finishScheduledReplay(key)
+	if _, err := m.deliver(source, slice, true); err != nil {
+		slog.Warn("破环直投失败（下轮重试）", "logSourceID", source.LogSourceID, "error", err)
+		return
+	}
+	// **关键**：仅调 m.deliver 不推进位置账本 ✗ ⇒ 必须补记，否则 delivery 不会越过缝 ✓。
+	if err := p.WAL().RecordHTTPResult(acquire.DeliveryResult{
+		StartPos: slice[0].Record.Start, EndPos: slice[len(slice)-1].Record.End, HTTPStatus: 200,
+	}); err != nil {
+		slog.Warn("破环直投：投递结果登记失败（下轮重试）", "logSourceID", source.LogSourceID, "error", err)
 	}
 }
 

@@ -15,7 +15,11 @@ import (
 // 取值 500 的取舍：与投递侧的单次 VL 插入批量上限（ingest 的 insertBatchMaxEvents=500）
 // 对齐——一轮排空正好一批 HTTP 请求，恢复期不会一次攒出多个批次；而重建 5000 条积压
 // 只需 10 轮，采集轮本身是秒级频率，恢复时长仍在秒级，不会因为限速而变慢到不可接受。
-const defaultReplayEventsPerDrain = 500
+// DefaultReplayEventsPerDrain 是"暂停/恢复期单轮外发事件数上限"的**真源**（导出给 ingest 侧引用，
+// 避免裸写字面量 ✗）。既有小写名保留为别名 ⇒ 既有调用点逐字不变 ✓。
+const DefaultReplayEventsPerDrain = 500
+
+const defaultReplayEventsPerDrain = DefaultReplayEventsPerDrain
 
 // Pipeline 将 FileTailer / ArchiveImporter / STDIO 统一写入事件管道。
 // source=worker 使用同一管道；采集失败不得递归写回自身 VL 失败日志。
