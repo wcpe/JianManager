@@ -32,6 +32,14 @@ func TestDirectDeliveryClosesResolvedReReadGap(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "前置：缝必须已决且消解词属待重读类 ✓")
 
+	// 诱饵：**落后于 delivery 水位**的旧待重读缝（[0,4] ≤ delivery=9）——
+	// 首验实测教训：不得被误选（旧代码取 Gaps 首个 ⇒ 每轮只报"找不到字节"、真正挡路者永远轮不到 ✗）。
+	require.NoError(t, f.p.Ledger().RecordGap(key, 0, 4, ledger.GapReasonDeliverError, "old seam"))
+	_, err = f.p.Ledger().ResolveGapsCoveredByRanges(key,
+		[]ledger.PositionRange{{From: 0, To: 4}},
+		acquire.ResolutionReReadOnResumeDelivery, ledger.GapReasonDeliverError)
+	require.NoError(t, err)
+
 	before, ok := f.p.Ledger().Positions(key)
 	require.True(t, ok)
 	require.Equal(t, uint64(9), before.Delivery, "前置：投递欠账（delivery=9 ✓）")
@@ -66,6 +74,17 @@ func TestDirectDeliveryClosesResolvedReReadGap(t *testing.T) {
 		}
 	}
 	require.True(t, closed, "缝必须仍在账本中（未被裁掉）✓")
+
+	// 诱饵（[0,4]，落后水位）必须原样保留为待重读类：既未被选、也未被改判 ✓。
+	decoyIntact := false
+	for _, g := range entry.Gaps {
+		if g.StartPos == 0 && g.EndPos == 4 {
+			require.True(t, acquire.IsReReadHealableResolution(g.Resolution),
+				"落后水位的旧缝不得被误选/误改（首验 id=0 教训 ✓）")
+			decoyIntact = true
+		}
+	}
+	require.True(t, decoyIntact, "诱饵缝必须仍在账本中 ✓")
 
 	// 幂等：再次直投 ⇒ 缝隙已非待重读类 ⇒ 本步不再触发，账本不变。
 	f.m.directDeliverResolvedReReadGap(f.p, f.src)

@@ -7448,37 +7448,67 @@ func (m *Manager) directDeliverResolvedReReadGap(p *pipeline.Pipeline, source So
 	if entry == nil {
 		return
 	}
-	var from, to uint64
-	found := false
+	// 选缝：只取**仍阻挡当前 delivery 水位的待重读缝**（EndPos > delivery ✓）。
+	// 落后于水位的旧缝（字节多已被回收）不得被误选——2026-10-05 179 首验实测：旧缝 id=0
+	// 被误选 ⇒ 每轮只报"找不到字节"，真正挡路的 id=1 永远轮不到 ✗✗。
+	delivery := entry.Positions.Delivery
+	type reReadGap struct{ from, to uint64 }
+	candidates := make([]reReadGap, 0, 4)
 	for _, g := range entry.Gaps {
 		if !g.Resolved || !acquire.IsReReadHealableResolution(g.Resolution) {
 			continue
 		}
-		from, to = g.StartPos, g.EndPos
-		found = true
-		break
+		if g.EndPos <= delivery || g.EndPos <= g.StartPos {
+			continue
+		}
+		candidates = append(candidates, reReadGap{g.StartPos, g.EndPos})
 	}
-	if !found || to <= from {
+	if len(candidates) == 0 {
 		return
 	}
 	limit := m.maxReplayEventsPerDrain
 	if limit <= 0 {
 		limit = acquire.DefaultReplayEventsPerDrain
 	}
+	snapshot := p.WAL().Snapshot()
 	slice := make([]logtypes.Event, 0, 16)
-	for _, e := range p.WAL().Snapshot() {
-		if !e.Durable || e.Event.Record.End < from || e.Event.Record.Start > to {
-			continue
+	picked := false
+	tried := make([]bool, len(candidates))
+	for {
+		// 按 StartPos 升序逐个尝试（离水位最近者优先 ✓），取第一个确有 durable 字节的。
+		best := -1
+		for i, c := range candidates {
+			if tried[i] {
+				continue
+			}
+			if best < 0 || c.from < candidates[best].from {
+				best = i
+			}
 		}
-		slice = append(slice, e.Event)
-		if len(slice) >= limit {
+		if best < 0 {
+			break
+		}
+		tried[best] = true
+		c := candidates[best]
+		slice = slice[:0]
+		for _, e := range snapshot {
+			if !e.Durable || e.Event.Record.End < c.from || e.Event.Record.Start > c.to {
+				continue
+			}
+			slice = append(slice, e.Event)
+			if len(slice) >= limit {
+				break
+			}
+		}
+		if len(slice) > 0 {
+			picked = true
 			break
 		}
 	}
-	if len(slice) == 0 {
+	if !picked {
 		if m.noteSourceError(source.LogSourceID, "reclaim-repair: 缝区间在 WAL 中无 durable 字节") {
-			slog.Warn("破环直投：缝区间在 WAL 中找不到 durable 字节（保持可见缺口，不静默）",
-				"logSourceID", source.LogSourceID, "from", from, "to", to)
+			slog.Warn("破环直投：待重读缝区间在 WAL 中找不到 durable 字节（保持可见缺口，不静默）",
+				"logSourceID", source.LogSourceID, "candidates", len(candidates))
 		}
 		return
 	}
