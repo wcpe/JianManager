@@ -35,6 +35,9 @@ export * from './charts/TimeSeriesChart'
 export * from './charts/MonitorChart'
 export * from './charts/MonitorSkeleton'
 export * from './charts/MetricsOverviewStrip'
+// 全量对齐补录：它此前既漏在 barrel 外、又漏在边界测试清单外，于是主控台只能
+// 自己留一份副本（见 apps/control-plane-web/src/components/charts/MetricComparePanel.tsx）。
+export * from './charts/MetricComparePanel'
 
 // 跨组件基础设施（FR-496 阶段 6）：焦点环/交互覆盖层常量与 a11y hooks
 export * from './hooks'

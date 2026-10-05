@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { RangePicker, ResolutionPicker, type MetricRange, type MetricResolution } from '@jianmanager/ui'
 import { MonitorSkeleton, type MonitorSource } from '@jianmanager/ui'
 import { MetricsOverviewStrip } from '@jianmanager/ui'
-import { MetricComparePanel } from '@/components/charts/MetricComparePanel'
+import { MetricComparePanel } from '@jianmanager/ui'
 import { DrillTargetPicker, targetKey, type DrillTarget } from '@/components/charts/DrillTargetPicker'
 import { useTargetSeries } from '@/components/charts/use-target-series'
 import { InstanceRankingPanel } from '@/components/metrics/InstanceRankingPanel'
