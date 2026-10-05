@@ -27,6 +27,7 @@ import {
   TableRow,
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import {
   ConfigRow,
   ConfigSwitch,
@@ -84,11 +85,12 @@ export default function UsersPage() {
   const enabledUsers = (users ?? []).filter((u) => u.status === 0).length
 
   return (
-    <div data-page="users" className="jm-page-stack space-y-4">
-      {/* 方案 A「精工卡片」：标题/计数/主操作收进卡片头，表格套 refined 外观，底部一句汇总。 */}
+    // 全量对齐：标题上移到页面级 PageHeader（页名只出现一次、且在页面最上面），
+    // 卡片头只留计数与操作（TableCardHeader.title 已改为可选）。
+    <PageShell data-page="users">
+      <PageHeader title={t('users.title')} />
       <TableCard>
         <TableCardHeader
-          title={t('users.title')}
           count={t('users.cardCount', { total: totalUsers })}
           actions={
             <>
@@ -284,6 +286,6 @@ export default function UsersPage() {
       {editUser && (
         <EditUserDialog key={editUser.id} user={editUser} onClose={() => setEditUser(null)} />
       )}
-    </div>
+    </PageShell>
   )
 }

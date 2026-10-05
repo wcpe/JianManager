@@ -40,6 +40,7 @@ import {
   TableRow,
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Dialog,
@@ -241,7 +242,9 @@ export default function ArtifactStoragesPage() {
   }
 
   return (
-    <div className="space-y-6">
+    // 全量对齐：外壳改用 PageShell；标题上移到页面级 PageHeader（页名只出现一次、且在页面
+    // 最上面），卡片头只留计数与操作。原先也没有 data-page，迁移时补上。
+    <PageShell data-page="artifact-storages">
       <Dialog open={showForm} onOpenChange={(o) => { setShowForm(o); if (!o) { setDraftTestResult(null); setEditing(null) } }}>
         <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
           <DialogHeader>
@@ -340,6 +343,13 @@ export default function ArtifactStoragesPage() {
         </DialogContent>
       </Dialog>
 
+      {/* 标题按布局规范上移到页面级。表单 Dialog 是浮层（内容走 Portal、不占布局位置），
+          故 PageHeader 仍排在视觉最前。 */}
+      <PageHeader
+        title={t('artifactStorages.title', '文件存储配置')}
+        description={t('artifactStorages.subtitle', '配置客户端分发制品的存储渠道。活跃渠道决定新上传制品的落点；S3 兼容渠道（rustfs / MinIO 等）由对象存储直接分发下载流量，主控不中继大文件。')}
+      />
+
       {/* 在途迁移进度卡（FR-348）：任务非终态时展示，2s 轮询推进；可强制停止（重新发起即续跑）。 */}
       {migrationActive && migTask && (
         <div className="rounded-lg border bg-card p-4 space-y-2">
@@ -393,9 +403,7 @@ export default function ArtifactStoragesPage() {
       {/* 方案 A「精工卡片」：页面标题 + 功能说明 + 主操作全部收进卡片头。 */}
       <TableCard>
         <TableCardHeader
-          title={t('artifactStorages.title', '文件存储配置')}
           count={t('artifactStorages.cardCount', { total: (channels ?? []).length })}
-          description={t('artifactStorages.subtitle', '配置客户端分发制品的存储渠道。活跃渠道决定新上传制品的落点；S3 兼容渠道（rustfs / MinIO 等）由对象存储直接分发下载流量，主控不中继大文件。')}
           actions={
             <Button
               onClick={() => { setForm(emptyForm); setEditing(null); setDraftTestResult(null); gate.reset(); setShowForm(true) }}
@@ -623,6 +631,6 @@ export default function ArtifactStoragesPage() {
         onConfirm={() => { if (deleteTarget) handleDelete(deleteTarget.id) }}
         onCancel={() => setDeleteTarget(null)}
       />
-    </div>
+    </PageShell>
   )
 }
