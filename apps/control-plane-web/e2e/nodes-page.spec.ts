@@ -39,9 +39,10 @@ test('FR-144 节点详情态：操作 kebab + 分段工具', async ({ page }) =>
   await login(page)
   await page.goto('/nodes?node=1')
 
-  // 注：详情态目前仍是旧的双栏右栏（阶段 6 第二步尚未重做），其标题在左栏内，
-  // 待第二步换成对象头后，这里应改为断言对象名 heading。
-  await expect(page.getByRole('heading', { name: '节点管理' })).toBeVisible()
+  // 阶段 6 第二步已换对象头：标题即**对象名**（不再是左栏内的「节点管理」），
+  // 层级由面包屑承载（节点管理 > alpha）。
+  await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '面包屑' })).toBeVisible()
 
   await expect(page.getByRole('button', { name: '操作' }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: '概览', exact: true })).toBeVisible()

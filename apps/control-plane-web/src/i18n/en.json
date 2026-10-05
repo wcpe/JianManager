@@ -1108,6 +1108,7 @@
   },
   "nodes": {
     "title": "Node Management",
+    "tools": "Node tools",
     "subtitle": "Machine resources, runtimes, and the instances they host.",
     "name": "Name",
     "ip": "IP",
