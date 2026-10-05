@@ -57,11 +57,11 @@ describe('NodesPage（mock 假后端）', () => {
     stubInstances()
     const { container } = renderWithProviders(<NodesPage />)
     expect(container.firstElementChild).toHaveAttribute('data-page', 'nodes')
-    expect(container.firstElementChild).toHaveClass('jm-page-stack')
-    expect(container.firstElementChild).toHaveClass('flex-col')
-    expect(container.firstElementChild).toHaveClass('lg:flex-row')
+    // 阶段 6 重做：外壳改用布局层 PageShell（原为手写的 jm-page-stack + 双栏 flex 类）。
+    expect(container.firstElementChild).toHaveAttribute('data-slot', 'page-shell')
 
-    // beta 仅列表出现（唯一，作 await 锚点）；alpha 为首个、进页默认选中（FR-232）→ 列表 + 详情各一处，故 getAllByText。
+    // 列表态**不**自动选中节点（与旧双栏的「进页默认选中首个」不同），故 alpha 与其 host
+    // 各只出现一次；下面用 getAllByText(...).length > 0，两种情形都成立，不必跟着改。
     expect(await screen.findByText('beta')).toBeInTheDocument()
     expect(screen.getAllByText('alpha').length).toBeGreaterThan(0)
     expect(screen.getAllByText('10.0.0.11').length).toBeGreaterThan(0) // alpha host：列表 + 详情
@@ -71,8 +71,9 @@ describe('NodesPage（mock 假后端）', () => {
     loginPlatformAdmin()
     stubInstances()
     const user = userEvent.setup()
-    // 直接深链归档视图，避免依赖点击后 URL 同步时序。
-    renderWithProviders(<NodesPage />, { route: '/nodes?view=archive' })
+    // 阶段 6 重做后 /nodes 是列表态、/nodes?node=x 才是详情态；「清理」按钮在详情态，
+    // 故深链要同时带 view 与 node（gamma-archived 的 id 见 devmock node.ts = 3）。
+    renderWithProviders(<NodesPage />, { route: '/nodes?view=archive&node=3' })
 
     // 列表 + 详情都会渲染名称，用 getAllByText。
     expect((await screen.findAllByText('gamma-archived')).length).toBeGreaterThan(0)
@@ -90,9 +91,10 @@ describe('NodesPage（mock 假后端）', () => {
     loginMockUser()
     stubInstances()
     const user = userEvent.setup()
-    renderWithProviders(<NodesPage />)
+    // 阶段 6 重做后列表态**不**自动选中（旧双栏会默认选中首个），操作菜单只在详情态出现，
+    // 故显式深链到 alpha（id=1）。
+    renderWithProviders(<NodesPage />, { route: '/nodes?node=1' })
 
-    // alpha 为首个、进页即默认选中（FR-232）→ 右栏详情直接出操作菜单（kebab，aria-label=操作），无需先点选。
     await screen.findByText('beta') // 等节点列表渲染完成
     const actionsBtn = await screen.findByRole('button', { name: '操作' })
     await user.click(actionsBtn)
@@ -140,9 +142,10 @@ describe('NodesPage（mock 假后端）', () => {
     stubInstances()
     stubMetricSeries()
     const user = userEvent.setup()
-    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    // 阶段 6 重做后详情分段只在 /nodes?node=x 下出现，故深链到 alpha（id=1）。
+    renderWithProviders(<NodesPage />, { route: '/nodes?node=1' })
 
-    await screen.findByText('beta') // 列表就绪；alpha 默认选中
+    await screen.findByText('beta') // 列表就绪
     // 默认 overview 不写 tab 参数。
     expect(new URLSearchParams(window.location.search).get('tab')).toBeNull()
 
