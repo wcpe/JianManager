@@ -2,6 +2,7 @@ import { Fragment, useId, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@jianmanager/ui/components/button'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import {
   Dialog,
   DialogContent,
@@ -64,9 +65,11 @@ export default function PlayersPage() {
   const [tab, setTab] = useState<Tab>('online')
 
   return (
-    <div>
-      <h1 className="text-2xl font-bold mb-1">{t('players.title')}</h1>
-      <p className="text-xs text-muted-foreground mb-4">{t('players.subtitle')}</p>
+    // 全量对齐：外壳与页头改用布局层原语。原为裸 <div> + 手写页头，且无 data-page。
+    // 下方的手写 tab（下划线式）本次保留——把它换成布局层的 Tabs 属「页内导航统一」，
+    // 与骨架对齐是两件事，不混在一次改动里。
+    <PageShell data-page="players">
+      <PageHeader title={t('players.title')} description={t('players.subtitle')} />
 
       <div className="flex gap-1 mb-4 border-b">
         {(['online', 'live', 'bans', 'whitelist'] as Tab[]).map((key) => (
@@ -86,7 +89,7 @@ export default function PlayersPage() {
       {tab === 'live' && <LiveTab />}
       {tab === 'bans' && <BansTab />}
       {tab === 'whitelist' && <WhitelistTab />}
-    </div>
+    </PageShell>
   )
 }
 
