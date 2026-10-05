@@ -27,7 +27,7 @@ import (
 
 // newReplaySuppressFixture 造一个"水位停滞"的最小夹具：真账本 + 真 WAL + 3 条 durable 存量。
 // 停滞的现场形态：无人登记投递结果、回收不推进（本夹具里没有恢复链 ⇒ TryReclaim 不动）。
-func newReplaySuppressFixture(t *testing.T) (*Pipeline, ledger.SourceKey, *atomic.Int64) {
+func newReplaySuppressFixture(t *testing.T) (*Pipeline, ledger.SourceKey, *atomic.Int64, *atomic.Bool) {
 	t.Helper()
 	const id, gen = "src-replay-suppress", "g1"
 	key := testKey(id, gen)
@@ -36,32 +36,34 @@ func newReplaySuppressFixture(t *testing.T) (*Pipeline, ledger.SourceKey, *atomi
 	pipe := NewPipeline(led, key, wal)
 	pipe.SetMaxReplayEventsPerDrain(3)
 	pipe.SetReplaySuppressBase(time.Second) // 生产默认 5s；用例只需"窗口 > 0"以便确定性观测
-	var replays atomic.Int64
+	var drains atomic.Int64
+	var lastReplay atomic.Bool
 	pipe.SetDeliver(func(_ []logtypes.Event, replay bool) (int, bool, error) {
-		if replay {
-			replays.Add(1)
-		}
+		drains.Add(1)
+		lastReplay.Store(replay)
 		return 200, false, nil
 	})
 	// 种子：走正常 Ingest（注册账本 + 一次普通投递）；此后无人再写账本 ⇒ 水位停滞。
 	require.NoError(t, pipe.Ingest(buildWALEvents(id, gen, 0, 3, "seed")))
-	return pipe, key, &replays
+	return pipe, key, &drains, &lastReplay
 }
 
 func TestReplayDrainSuppressedWhileWatermarkStalled(t *testing.T) {
-	pipe, key, replays := newReplaySuppressFixture(t)
+	pipe, key, drains, lastReplay := newReplaySuppressFixture(t)
 
-	// ① 同一水位下连续 5 次触发（现场三面：兜底环 / 自愈 / 追加被拒调度）⇒ 只允许 1 次整窗重投。
-	base := replays.Load()
+	// ① 同一水位下连续 5 次触发（现场三面：兜底环 / 自愈 / 追加被拒调度）⇒ 只允许 1 次排空。
+	base := drains.Load()
 	for i := 0; i < 5; i++ {
 		_, _ = pipe.DeliverPending()
 	}
-	require.Equal(t, base+1, replays.Load(),
-		"同一水位下 5 次排空只允许 1 次整窗重投（冗余整窗是 159s/次的主项）")
+	require.Equal(t, base+1, drains.Load(),
+		"同一水位下 5 次排空只允许 1 次（冗余整窗是 159s/次的主项）")
 	require.Equal(t, int64(4), pipe.SuppressedReplayDrains(),
 		"被抑制的次数必须可读（受理 vs 跳过要可测）")
+	require.False(t, lastReplay.Load(),
+		"2026-10-06 快验回归修复：排空必须以增量语义投递（replay=false）——整窗 replace 是 61min/轮的元凶 ✗")
 
-	// ② 水位前进 ⇒ 立即放行一次（合法 replay 不被饿死）。
+	// ② 水位前进 ⇒ 立即放行一次（合法重投不被饿死）。
 	//    注入点必须是**真水位**（投递位置）——`RecordGap` 只加缺口、不动水位，测不到这条 ✓。
 	// 投递水位 = 从 reclaim 起**连续**已确认区间的末端 ⇒ 只有**紧接**既有末端的批次才会推进
 	//（重复登记既有区间 [100,399] 是 no-op —— 这正是"冗余"的判据本身 ✓）。
@@ -70,24 +72,22 @@ func TestReplayDrainSuppressedWhileWatermarkStalled(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint64(399), pos.Delivery, "前置：投递水位必须真的前进（否则测不到放行分支）")
 	_, _ = pipe.DeliverPending()
-	require.Equal(t, base+2, replays.Load(), "水位前进后必须立即放行")
+	require.Equal(t, base+2, drains.Load(), "水位前进后必须立即放行")
 
-	// ③ **失败必须立即可重试**（不变量：合法 replay 不被饿死）。这条是证据驱动的收窄：把失败计入退避后，
-	//    端到端自愈用例 TestPausedSourceSelfHealsEndToEnd 转红（首次失败 ⇒ 5s 内重试被抑制 ⇒ 缺口消解链被饿死）。
+	// ③ **失败必须立即可重试**（不变量：合法重投不被饿死）。
 	pipe.SetDeliver(func(_ []logtypes.Event, replay bool) (int, bool, error) {
-		if replay {
-			replays.Add(1)
-		}
+		drains.Add(1)
+		lastReplay.Store(replay)
 		return 0, false, fmt.Errorf("stub: VL 未接受")
 	})
 	require.NoError(t, pipe.wal.RecordHTTPResult(DeliveryResult{StartPos: 400, EndPos: 499, HTTPStatus: 200}))
 	_, err := pipe.DeliverPending()
 	require.Error(t, err, "夹具：这一次投递必须失败")
-	after := replays.Load()
+	after := drains.Load()
 	for i := 0; i < 3; i++ {
 		_, _ = pipe.DeliverPending()
 	}
-	require.Equal(t, after+3, replays.Load(),
+	require.Equal(t, after+3, drains.Load(),
 		"失败后必须**每次都允许重试**（不被退避抑制）：自愈链的时效性靠这条守 ✓")
 }
 

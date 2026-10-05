@@ -492,7 +492,12 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 	} else {
 		defer func() { p.noteReplayDrain(progressed, outcomeFailed) }()
 	}
-	status, ackLost, err := p.deliver(pending, true)
+	// **2026-10-06 快验回归修复**：排空原以 `replay=true` 投递 ⇒ ingest 侧 `replace=true`
+	// ⇒ **每次排空都重建该源权威全量并重发**（60 源现场：单源 175 万事件被每轮物化一次，
+	// 兜底环单轮 61 分钟、其余源全部饿死 ✗✗）。常规排空**不需要**该语义：补齐已确认数据
+	// 走 append 幂等即可（幂等由位置账本＋消费端 event_id 去重保证 ✓）；真正需要"重建权威"
+	// 的修复场景由 ingest 侧自身的 `PublicationPending`／代次耗尽判据触发 ✓。故传 `false`。
+	status, ackLost, err := p.deliver(pending, false)
 	if err != nil {
 		// 失败不改状态、不记 gap：源本就处于暂停，重试留给下一轮（失败不进入退避 ⇒ 节奏不变 ✓）。
 		outcomeFailed = true
