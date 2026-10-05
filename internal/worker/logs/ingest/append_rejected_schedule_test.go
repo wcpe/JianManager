@@ -86,14 +86,18 @@ func TestAppendRejectedSchedulesReplayOutsideIngestPath(t *testing.T) {
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(releaseReplay) }) }
 	var normalDeliveries atomic.Int64
+	// **2026-10-06 快验回归修复**：排空已改增量语义（replay=false）⇒ 不能再以 replay 参数
+	// 区分"排空 vs 常规批" ✗。改用阶段位：Flush 之前一律被视为常规批（500 ⇒ 积压稳定 ✓）；
+	// 阶段位在进入"追加被拒"分支前置真，此后按"排空"建模（慢批 ⇒ 断言摄取路径不被拖住 ✓）。
+	var drainPhase atomic.Bool
 	p.SetDelivery(pipeline.FuncHook(func(events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
-		if !replay {
+		if !drainPhase.Load() {
 			normalDeliveries.Add(1)
 			// 模拟"VL 未接受"（现场形态：源正是因为投递跟不上才积压被暂停）⇒ 条目保持未确认
 			// ⇒ 积压不回落 ⇒ 暂停态稳定（否则成功的投递会立刻 reclaim 并把源自动恢复）。
 			return pipeline.DeliveryResult{HTTPStatus: 500}, nil
 		}
-		// 模拟"整窗 replay 很慢"（现场：百万级批。原实现在此处把摄取路径按住 ⇒ 在途阻塞）：
+		// 模拟"排空很慢"（现场：重批。原实现在此处把摄取路径按住 ⇒ 在途阻塞）：
 		// 阻塞到测试显式放行，或以 replayBlockFor 为上限（避免任何残留 goroutine 拖长用例）。
 		replayOnce.Do(func() { close(replayEntered) })
 		select {
@@ -110,6 +114,8 @@ func TestAppendRejectedSchedulesReplayOutsideIngestPath(t *testing.T) {
 		"前置：WALLimits{MaxEntries:1} 下首批追加后该源必须处于暂停态")
 
 	// 第 2 步：强制冲刷未闭合事件 ⇒ emit→ingest 走到 Append 被拒分支（本修复的现场点）。
+	// 此后按"排空"建模（阶段位置真 ⇒ 慢批 ✓）。
+	drainPhase.Store(true)
 	//
 	// 有界观测（而不是同步直接调用）：改前（或把接线去掉的变异）时本调用会被整窗 replay 按住，
 	// 同步等待只会把用例一起挂死（得到"超时"而不是"被拖住多久"这个读数）⇒ 这里**限时等**，
