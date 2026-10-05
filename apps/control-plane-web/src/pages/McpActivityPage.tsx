@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useMcpActivity, mcpBaseUrl } from '@/api/agentObservability'
 import { copyToClipboard } from '@/lib/clipboard'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import {
   Table,
@@ -69,16 +70,19 @@ export default function McpActivityPage() {
   }
 
   return (
-    <div className="jm-page-stack space-y-4">
-      <div className="jm-page-header flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="jm-page-title flex items-center gap-2">
+    // 全量对齐：外壳与页头改用布局层原语。原先无 data-page，迁移时补上。
+    // 标题内的图标带 aria-hidden，不影响 h1 的可访问名。
+    <PageShell data-page="mcp-activity">
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
             <Cable className="size-5 text-primary" aria-hidden />
             {t('mcpActivity.title')}
-          </h1>
-          <p className="jm-page-subtitle">{t('mcpActivity.subtitle')}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+          </span>
+        }
+        description={t('mcpActivity.subtitle')}
+        actions={
+          <>
           <div
             className="flex items-center gap-1 rounded-md border p-0.5"
             role="group"
@@ -109,8 +113,9 @@ export default function McpActivityPage() {
           <Button variant="outline" size="sm" asChild>
             <Link to="/agent-tokens">{t('mcpActivity.revokeToken')}</Link>
           </Button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <Panel className="space-y-2 p-3 text-sm text-muted-foreground">
         <div>
@@ -186,6 +191,6 @@ export default function McpActivityPage() {
           </Table>
         </Panel>
       )}
-    </div>
+    </PageShell>
   )
 }
