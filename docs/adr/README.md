@@ -16,6 +16,7 @@
 
 ## 索引（最近新增）
 
+- [ADR-102](102-business-component-contract-extraction.md) 应用业务组件受控化并入 @jianmanager/ui（FR-502：a+b 双范式——纯读走外壳取数 + props 注入、含写走受控 + 回调注入；增强 ADR-064、兑现 ADR-058）
 - [ADR-101](101-manual-gap-abandonment-with-audit-trail.md) 永久空洞只许人工裁定放弃且必须留痕（结构化凭据 + 操作人闸 + 回收链带上界放行；FR-474 配套）
 - [ADR-100](100-archive-generation-ownership-enforcement.md) 归档代次归属必须有执行体（禁止"假设当前代次"；FR-474/475 配套）
 - [ADR-099](099-log-cost-governance-and-invariant-r.md) 日志成本治理与不变量 R（采样折叠/默认不丢/单位成本结论；FR-501 配套）
