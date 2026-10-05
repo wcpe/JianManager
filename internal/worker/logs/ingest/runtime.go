@@ -5883,7 +5883,14 @@ func (m *Manager) eventBodyLookup(key string) func(eventID string) (logtypes.Eve
 // 事件体来自磁盘段（eventstore）；仅当该源仍是旧格式（EventsStored=false）时才用内联切片。
 // 集合语义不变：仍为**全部**已登账事件，不做任何裁剪。
 func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]logtypes.Event, error) {
-	seen := make(map[string]string, len(saved.WAL))
+	type seenEntry struct {
+		hash  string
+		start uint64
+		end   uint64
+		size  int
+		idx   int
+	}
+	seen := make(map[string]seenEntry, len(saved.WAL))
 	events := make([]logtypes.Event, 0, len(saved.WAL))
 	add := func(event logtypes.Event) error {
 		if event.Record.End <= event.Record.Start {
@@ -5895,15 +5902,39 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 			return err
 		}
 		// 该 event_id 的规范哈希已在本次登账集合中时不重复入账（只用于身份对账）。
-		if existing, ok := seen[event.EventID]; ok {
-			if existing != event.CanonicalHash {
-				return fmt.Errorf("ingest: IDENTITY_CONFLICT for event_id %s", event.EventID)
-			}
+		existing, ok := seen[event.EventID]
+		if !ok {
+			seen[event.EventID] = seenEntry{hash: event.CanonicalHash, start: event.Record.Start,
+				end: event.Record.End, size: len(event.Message), idx: len(events)}
+			events = append(events, event)
 			return nil
 		}
-		seen[event.EventID] = event.CanonicalHash
-		events = append(events, event)
-		return nil
+		if existing.hash == event.CanonicalHash {
+			return nil
+		}
+		// 同 ID 异哈希：**默认硬失败** ✗；仅在具备**确定性证据**的形态下裁定（2026-10-05 现场）：
+		// 同源 ＋ **同记录区间**（区间决定源字节 ⇒ 同区间两变体只能是截断/规范化差异 ✓）
+		// ＋ 一方严格更长（轮转尾部残行 vs 重读完整行：947 B vs 1034 B ✓）⇒ 较长者胜。
+		// 其余形态（异区间、等长）一律维持硬失败 —— 判据不放宽 ✗。
+		incomingSize := len(event.Message)
+		if existing.start == event.Record.Start && existing.end == event.Record.End && incomingSize != existing.size {
+			if incomingSize > existing.size {
+				events[existing.idx] = event // 完整行替换先入账的残行变体 ✓
+				seen[event.EventID] = seenEntry{hash: event.CanonicalHash, start: event.Record.Start,
+					end: event.Record.End, size: incomingSize, idx: existing.idx}
+				slog.Warn("身份重复裁定：同区间异哈希取较长者（弃尾部残行变体）",
+					"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+					"kept_bytes", incomingSize, "dropped_bytes", existing.size,
+					"kept_hash", event.CanonicalHash, "dropped_hash", existing.hash)
+				return nil
+			}
+			slog.Warn("身份重复裁定：后写变体较短（残行），保留完整行变体",
+				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+				"kept_bytes", existing.size, "dropped_bytes", incomingSize,
+				"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+			return nil
+		}
+		return fmt.Errorf("ingest: IDENTITY_CONFLICT for event_id %s", event.EventID)
 	}
 	// 段的权威性**不依赖 state 里的 EventsStored 标记**：该标记随 state 一起持久化，而
 	// state 可能被重置或丢失（运维处置/损坏恢复），此时段本身仍完好在盘上；若因标记为假而
