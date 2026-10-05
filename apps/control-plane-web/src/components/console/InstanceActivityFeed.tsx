@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Copy } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
 import { cn } from '@jianmanager/ui'
 import CrashDiagnostics from './CrashDiagnosticsCard'
 

@@ -23,13 +23,13 @@ import {
 import { ScrollableDialogBody, scrollableDialogContentClass } from '@jianmanager/ui/components/scrollable-dialog'
 import { cn } from '@jianmanager/ui'
 
-import { searchCommandHistory, type CommandHistoryMatch } from '@/lib/console-command-history'
+import { searchCommandHistory, type CommandHistoryMatch } from '@jianmanager/biz-views/lib/console-command-history'
 import {
   applyCommonPrefix,
   applyCompletion,
   computeCompletion,
   type CompletionState,
-} from '@/lib/console-completion'
+} from '@jianmanager/biz-views/lib/console-completion'
 
 /**
  * 控制台命令栏（FR-415 spec §2.2 + FR-416 智能输入；ADR-086）：原生 `<input>`。

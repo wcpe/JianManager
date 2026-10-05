@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from 'react-router'
 import { ChevronRight } from 'lucide-react'
 
-import { breadcrumbTrail } from '@/lib/breadcrumb'
+import { breadcrumbTrail } from '@jianmanager/biz-views/lib/breadcrumb'
 import { cn } from '@jianmanager/ui'
 
 /**

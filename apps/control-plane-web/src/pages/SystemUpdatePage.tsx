@@ -31,7 +31,7 @@ import DangerConfirm from '@/components/DangerConfirm'
 import { ReleaseNotes } from '@jianmanager/biz-views/components/ReleaseNotes'
 import { formatCacheBytes } from '@/lib/artifact-cache'
 import { formatRelativeTime } from '@/lib/relative-time'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
 const ROLE_PLATFORM_ADMIN = 10

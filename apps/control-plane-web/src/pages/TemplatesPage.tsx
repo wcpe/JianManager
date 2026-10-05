@@ -56,7 +56,7 @@ import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combob
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validateUrl, validateAbsPath, validateFields, hasErrors } from '@/lib/form-validation'
 import { useFieldGate } from '@/lib/use-field-gate'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 

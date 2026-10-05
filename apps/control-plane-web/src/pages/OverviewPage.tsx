@@ -19,7 +19,7 @@ import { RangePicker, type MetricRange } from '@jianmanager/ui'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 import { levelStatusLevel } from './alerts/alert-helpers'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
-import { useVirtualRows } from '@/lib/virtual-list'
+import { useVirtualRows } from '@jianmanager/biz-views/lib/virtual-list'
 
 /**
  * 趋势序列降采样（FR-496 阶段 6 补丁）。

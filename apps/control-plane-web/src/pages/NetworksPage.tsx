@@ -30,7 +30,7 @@ import { memberHealth, memberHealthFromStatus, type MemberHealth } from '@/lib/t
 import TopologyGraph from '@/components/console/TopologyGraph'
 import { useInstanceSearch } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import { useVirtualRows } from '@/lib/virtual-list'
+import { useVirtualRows } from '@jianmanager/biz-views/lib/virtual-list'
 import { useDebounced } from '@/lib/use-debounced'
 
 /**
