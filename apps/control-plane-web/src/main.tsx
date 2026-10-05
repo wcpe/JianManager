@@ -53,14 +53,33 @@ async function enableMocking() {
   mountMockControlPanel()
 }
 
-void enableMocking().then(() => {
-  createRoot(document.getElementById('root')!).render(
-    <StrictMode>
-      <BrowserRouter>
-        <QueryClientProvider client={queryClient}>
-          <App />
-        </QueryClientProvider>
-      </BrowserRouter>
-    </StrictMode>,
-  )
-})
+/**
+ * 先挂载，再异步启动 mock —— **绝不把 render 放在 mock 就绪之后**。
+ *
+ * 旧实现是 `enableMocking().then(() => render())`：MSW 启动慢或卡住时，整页始终空白，
+ * 且**没有任何可观测线索**（console 静默、body 为空、模块请求挂起），极易被误判成页面崩溃。
+ * 实测 e2e 的 navigation-benchmark 就因此稳定失败在「关键页面就绪」这一条上。
+ *
+ * 代价与补偿：外壳先渲染后，MSW 尚未接管期间发出的 API 请求会失败。故 mock 就绪后
+ * `invalidateQueries()` 让这些查询重来一次——数据比外壳晚到是可接受的，白屏不是。
+ * 真后端模式下本就不进 mock 分支，行为与旧版一致。
+ */
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <BrowserRouter>
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    </BrowserRouter>
+  </StrictMode>,
+)
+
+void enableMocking()
+  .then(() => {
+    // 此前发出的请求可能打在 MSW 接管之前，就绪后统一重取。
+    void queryClient.invalidateQueries()
+  })
+  .catch((err) => {
+    // mock 起不来只应影响数据，不该让整个控制台不可用。
+    console.error('[mock] 启动失败，控制台将以真后端模式继续：', err)
+  })
