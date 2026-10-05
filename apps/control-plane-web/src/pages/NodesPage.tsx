@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -24,6 +24,7 @@ import {
 import { useInstanceAggregate, useInstanceSearch } from '@/api/instances'
 import { useMetricSeries, useMetricSeriesBatch } from '@/api/metrics'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { ObjectPageHeader } from '@jianmanager/ui/components/shell'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Input } from '@jianmanager/ui/components/input'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
@@ -1222,83 +1223,70 @@ function NodeDetailPane({
   onDelete: () => void
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const online = node.status === 1
-  const level = nodeStatusLevel(node.status)
   const statusLabel = online ? t('nodes.online') : node.status === 2 ? t('nodes.starting') : t('nodes.offline')
   const loadPct = node.cpuCores > 0 ? ((node.loadAvg1 ?? 0) / node.cpuCores) * 100 : 0
 
   return (
     <div className="space-y-3">
-      {/* 身份块：图标 + 名 + host + 系统/架构 + 状态徽标 + 操作 kebab */}
-      <Panel bodyClassName="p-4">
-        <div className="flex items-start gap-3">
-          <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-xl', toneChipClass(online ? 'primary' : 'neutral'))}>
-            <Server className="size-5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h2 className="truncate text-base font-semibold" title={node.name}>{node.name}</h2>
-              <StatusBadge level={level} label={statusLabel} />
-              {/* 反向隧道状态（FR-281，见 ADR-066）：仅在线节点有意义——隧道已连=指令免入站；直拨回退=走 node.Host:GRPCPort */}
-              {online && (
-                <Badge
-                  variant="outline"
-                  className={node.tunnelConnected ? 'text-status-success border-status-success/50' : 'text-muted-foreground'}
-                  title={node.tunnelConnected ? t('nodes.tunnelConnectedHint') : t('nodes.tunnelDirectHint')}
-                >
-                  {node.tunnelConnected ? t('nodes.tunnelConnected') : t('nodes.tunnelDirect')}
-                </Badge>
-              )}
-              {node.maintenance && (
-                <Badge variant="outline" className="text-status-warning border-status-warning/50">
-                  {t('nodes.maintenance')}
-                </Badge>
-              )}
-            </div>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-              <span className="truncate" title={node.host}>{node.host}</span>
-              <span>{node.os} {node.arch}</span>
-              <span className="inline-flex items-center gap-1">
-                <Box className="size-3" /> {instanceCount} {t('nodes.instancesUnit')}
-              </span>
-            </div>
-          </div>
-          {/* 资源仪表内联右置（FR-311 v2）：用掉身份行右侧空区，紧凑一排贴着 kebab；
-              仪表与身份同排信息密度高、不再单独占一行摊开。窄屏（<md）降级为下方 2×2。 */}
-          <div className="hidden shrink-0 items-center gap-5 md:flex">
-            <ResourceGauge label={t('nodes.cpu')} value={online ? (node.cpuUsage ?? 0) * 100 : 0} unit="%" size={56} />
-            <ResourceGauge label={t('nodes.memory')} value={online ? (node.memoryUsage ?? 0) * 100 : 0} unit="%" size={56} />
-            <ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={56} />
-            <ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={56} />
-          </div>
+      {/* 阶段 6 第二步：身份块与分段 Tabs 合并为对象头（原型 `object-head` 的六段：
+          面包屑 → 名/状态/元信息/操作 → 指标条 → 工具导航）。
+          两个取舍：① 4 个环形仪表**不进 metrics**——原型 `object-stats` 是文字格，但
+          FR-311 v2 明确「资源仪表内联右置」，那个设计比原型新且是有意的，故留在内容区；
+          ② 隧道/维护徽标同理，对象头只有单个 status，它们在仪表行一并呈现。 */}
+      <ObjectPageHeader
+        breadcrumbs={[
+          { label: t('nodes.title'), to: '/nodes' },
+          { label: node.name },
+        ]}
+        icon={<Server className="size-5" />}
+        title={node.name}
+        status={{ tone: online ? 'success' : node.status === 2 ? 'warning' : 'default', label: statusLabel }}
+        meta={[
+          { label: t('nodes.ip'), value: node.host },
+          { label: t('nodes.system'), value: `${node.os} ${node.arch}` },
+          { label: t('nodes.instancesUnit'), value: instanceCount },
+        ]}
+        actions={
           <NodeActionsMenu node={node} onToggleMaintenance={onToggleMaintenance} onDrain={onDrain} onDelete={onDelete} />
-        </div>
+        }
+        tools={DETAIL_TABS.map((k) => ({
+          key: k,
+          label: t(`nodes.tab.${k}`),
+          active: k === tab,
+          onSelect: () => onTab(k),
+        }))}
+        toolsLabel={t('nodes.tools')}
+        onNavigate={navigate}
+      />
 
-        {/* 窄屏降级：仪表 2×2 紧凑网格（md 以上已内联到身份行）。 */}
-        <div className="mt-3 grid grid-cols-2 gap-2 md:hidden">
-          <div className="flex justify-center"><ResourceGauge label={t('nodes.cpu')} value={online ? (node.cpuUsage ?? 0) * 100 : 0} unit="%" size={56} /></div>
-          <div className="flex justify-center"><ResourceGauge label={t('nodes.memory')} value={online ? (node.memoryUsage ?? 0) * 100 : 0} unit="%" size={56} /></div>
-          <div className="flex justify-center"><ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={56} /></div>
-          <div className="flex justify-center"><ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={56} /></div>
+      {/* 资源仪表 + 隧道/维护徽标：对象头之下的独立一行（见上注的取舍①）。 */}
+      <Panel bodyClassName="p-4">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <ResourceGauge label={t('nodes.cpu')} value={online ? (node.cpuUsage ?? 0) * 100 : 0} unit="%" size={56} />
+          <ResourceGauge label={t('nodes.memory')} value={online ? (node.memoryUsage ?? 0) * 100 : 0} unit="%" size={56} />
+          <ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={56} />
+          <ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={56} />
+          <div className="flex flex-wrap items-center gap-2">
+            {/* 反向隧道状态（FR-281，见 ADR-066）：仅在线节点有意义——隧道已连=指令免入站；直拨回退=走 node.Host:GRPCPort */}
+            {online && (
+              <Badge
+                variant="outline"
+                className={node.tunnelConnected ? 'text-status-success border-status-success/50' : 'text-muted-foreground'}
+                title={node.tunnelConnected ? t('nodes.tunnelConnectedHint') : t('nodes.tunnelDirectHint')}
+              >
+                {node.tunnelConnected ? t('nodes.tunnelConnected') : t('nodes.tunnelDirect')}
+              </Badge>
+            )}
+            {node.maintenance && (
+              <Badge variant="outline" className="text-status-warning border-status-warning/50">
+                {t('nodes.maintenance')}
+              </Badge>
+            )}
+          </div>
         </div>
       </Panel>
-
-      {/* 分段 Tabs：固定工具条，切段不致下方内容上下重排（抽屉 UX 约束，FR-178 §5） */}
-      <div className="flex flex-wrap gap-1 rounded-lg border bg-muted/30 p-1 text-sm">
-        {DETAIL_TABS.map((k) => (
-          <button
-            key={k}
-            type="button"
-            onClick={() => onTab(k)}
-            className={cn(
-              'rounded-md px-3 py-1.5 transition-colors',
-              tab === k ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t(`nodes.tab.${k}`)}
-          </button>
-        ))}
-      </div>
 
       <div>
         {tab === 'overview' && <NodeOverviewSection node={node} />}
