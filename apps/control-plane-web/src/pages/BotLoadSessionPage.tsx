@@ -16,6 +16,7 @@ import { SessionFailures } from '@/components/bot-load/session/SessionFailures'
 import { SessionEvents } from '@/components/bot-load/session/SessionEvents'
 import { SessionConfig } from '@/components/bot-load/session/SessionConfig'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
+import { PageShell } from '@jianmanager/ui/components/layout'
 
 export default function BotLoadSessionPage() {
   const { t } = useTranslation()
@@ -109,7 +110,11 @@ function SessionPageBody({ runId }: { runId: number | string }) {
   const reportReady = live.reportReady || isTerminalRunState(run.runState)
 
   return (
-    <div className="mx-auto max-w-7xl space-y-4 p-1 sm:p-0" data-testid="bot-load-session-page">
+    // 全量对齐：外壳改用 PageShell，保留 mx-auto max-w-7xl（窄栏内容页）与 data-testid。
+    // 页头（SessionHeader 子组件）本次不动——它是对象头形态（对象名 + 5 个实时状态 chip +
+    // 操作），改用 ObjectPageHeader 需把那些 chip 映射成 meta，而它们带 aria-live="polite"
+    // 的实时播报语义，属可访问性行为，不宜顺手改。
+    <PageShell className="mx-auto max-w-7xl p-1 sm:p-0" data-testid="bot-load-session-page">
       <SessionHeader run={run} streamStatus={String(streamStatus)} reportReady={reportReady} />
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -140,6 +145,6 @@ function SessionPageBody({ runId }: { runId: number | string }) {
           {tab === 'config' ? <SessionConfig /> : null}
         </TabsContent>
       </Tabs>
-    </div>
+    </PageShell>
   )
 }
