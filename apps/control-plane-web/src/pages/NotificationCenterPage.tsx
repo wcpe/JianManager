@@ -13,6 +13,7 @@ import {
   type FeedQuery,
 } from '@/api/notification-feed'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Button } from '@jianmanager/ui/components/button'
 import type { StatusLevel } from '@jianmanager/ui'
@@ -60,13 +61,16 @@ export default function NotificationCenterPage() {
   ]
 
   return (
-    <div data-page="notifications" className="jm-page-stack space-y-4">
-      <div className="jm-page-header">
-        <h1 className="jm-page-title">{t('notificationCenter.title')}</h1>
-        <Button variant="outline" size="sm" onClick={() => markAll.mutate()} disabled={markAll.isPending}>
-          {t('notificationCenter.markAllRead')}
-        </Button>
-      </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
+    <PageShell data-page="notifications">
+      <PageHeader
+        title={t('notificationCenter.title')}
+        actions={
+          <Button variant="outline" size="sm" onClick={() => markAll.mutate()} disabled={markAll.isPending}>
+            {t('notificationCenter.markAllRead')}
+          </Button>
+        }
+      />
 
       {/* 类型筛选 + 仅未读 + 关键字 */}
       <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
@@ -143,7 +147,7 @@ export default function NotificationCenterPage() {
           </Button>
         </div>
       )}
-    </div>
+    </PageShell>
   )
 }
 

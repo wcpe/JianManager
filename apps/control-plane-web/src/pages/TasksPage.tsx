@@ -8,7 +8,7 @@ import { useTasks, useTask, useCancelTask, isTerminalTask, TASK_KIND_LABEL_KEYS,
 import { useNodes } from '@/api/nodes'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { ListSkeleton } from '@jianmanager/ui/components/layout'
+import { ListSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import {
@@ -138,15 +138,13 @@ export default function TasksPage() {
   }
 
   return (
-    <div data-page="tasks" className="jm-page-stack space-y-4">
-      <div className="jm-page-header">
-        <h1 className="jm-page-title">{t('tasks.title')}</h1>
-        {page != null && !isError && (
-          <span className="self-center text-xs tabular-nums text-muted-foreground">
-            {t('tasks.countSummary', { total, loaded: tasks.length })}
-          </span>
-        )}
-      </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
+    // 计数说明（「已加载 X / 共 Y」）是文字而非纯数字，故走 description 而不是 count。
+    <PageShell data-page="tasks">
+      <PageHeader
+        title={t('tasks.title')}
+        description={page != null && !isError ? t('tasks.countSummary', { total, loaded: tasks.length }) : undefined}
+      />
 
       {/* 筛选条（FR-227） */}
       <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
@@ -237,7 +235,7 @@ export default function TasksPage() {
           )}
         </>
       )}
-    </div>
+    </PageShell>
   )
 }
 

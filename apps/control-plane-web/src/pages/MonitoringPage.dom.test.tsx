@@ -114,7 +114,8 @@ describe('MonitoringPage（mock 假后端）', () => {
     loginMockUser()
     const { container } = renderWithProviders(<MonitoringPage />)
     expect(container.firstElementChild).toHaveAttribute('data-page', 'monitoring')
-    expect(container.firstElementChild).toHaveClass('jm-page-stack')
+    // 阶段 6 页面迁移起，外壳改用布局层 PageShell（原为手写的 jm-page-stack 骨架类）。
+    expect(container.firstElementChild).toHaveAttribute('data-slot', 'page-shell')
     expect(await screen.findByRole('heading', { name: '监控' })).toBeInTheDocument()
     // 平台主图网格标题「负载/内存」唯一（概览/对比用「1 分钟/内存已用」别名，不冲突），证明骨架挂载。
     // CPU/在线玩家 因 FR-221 概览/对比也用同名，故仅断言「至少出现一次」。
