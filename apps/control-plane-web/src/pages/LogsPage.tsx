@@ -28,6 +28,7 @@ import { InstancePicker } from '@/components/InstancePicker'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { cn } from '@jianmanager/ui'
 import {
@@ -724,10 +725,15 @@ export default function LogsPage() {
   )
 
   return (
-    <div data-page="logs" className="jm-page-stack flex h-full min-h-0 flex-col gap-4">
-      <div className="jm-page-header">
-        <div className="flex min-w-0 items-center gap-2">
-          <h1 className="jm-page-title">{t('logs.title')}</h1>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语。
+    // 保留 `h-full min-h-0 flex-col gap-4`——本页是视口自适应型（日志区内部滚动）。
+    // 标题行原本带两个徽标/提示（来源标记、联邦降级），它们是标题的限定语，故一并进 title；
+    // e2e 断言 heading「日志中心」是子串匹配，不受影响。
+    <PageShell data-page="logs" className="h-full min-h-0 flex-col gap-4">
+      <PageHeader
+        title={
+          <>
+            {t('logs.title')}
           {/* 状态与提示固定在标题区：不占用列表空间，也不因状态变化推动下方布局。 */}
           {/* 徽标仅在确有来源标记时渲染：标题行是 flex，空占位只会让测试与读屏
               多拿到一个空节点，而它本身不承载高度，去掉不影响布局稳定。 */}
@@ -759,9 +765,11 @@ export default function LogsPage() {
               </span>
             </span>
           )}
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+          </>
+        }
+        actions={
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
             <Button
               variant="outline"
               size="sm"
@@ -789,11 +797,14 @@ export default function LogsPage() {
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
-        </DropdownMenu>
-        {exporting && (
-          <Button size="sm" variant="outline" onClick={() => exportRequest.current?.abort()}>{t('common.cancel')}</Button>
-        )}
-      </div>
+            </DropdownMenu>
+            {exporting && (
+              <Button size="sm" variant="outline" onClick={() => exportRequest.current?.abort()}>{t('common.cancel')}</Button>
+            )}
+          </>
+        }
+      />
+      {/* 导出范围对话框放在 PageHeader 之外：它是浮层，不属于头部动作列。 */}
       <LogExportRangeDialog
         key={`${scopeKey}|${exportRangeOpen}`}
         open={exportRangeOpen}
@@ -1090,7 +1101,7 @@ export default function LogsPage() {
           />
         </Panel>
       )}
-    </div>
+    </PageShell>
   )
 }
 
