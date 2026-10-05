@@ -1,10 +1,12 @@
 import { type CSSProperties } from 'react'
+import { useIsFetching, useIsMutating } from '@tanstack/react-query'
+import { useLocation } from 'react-router'
+import { TopLoadingBar } from '@jianmanager/biz-views'
 import { useInstanceEvents } from '@/api/events'
 import ConsoleHeader from '@/components/console/ConsoleHeader'
 import WorkspaceSidebar from '@/components/console/WorkspaceSidebar'
 import CommandPalette from '@/components/console/CommandPalette'
 import MobileConsoleNav from '@/components/console/MobileConsoleNav'
-import { TopLoadingBar } from '@/components/console/TopLoadingBar'
 import Workspace from '@/components/console/Workspace'
 
 /**
@@ -39,6 +41,10 @@ const SIDEBAR_WIDTH_VARS = {
 export default function DashboardPage() {
   // 订阅实例状态变更 SSE，收到事件后自动失效缓存
   useInstanceEvents()
+  // 外壳注入：TopLoadingBar 已受控（见 @jianmanager/biz-views），不自行读路由与请求状态。
+  // routeKey 必须含 location.key——否则同一路径上重复点击不产生变化、进度条不再重播。
+  const location = useLocation()
+  const pendingCount = useIsFetching() + useIsMutating()
 
   return (
     <div
@@ -46,7 +52,10 @@ export default function DashboardPage() {
       style={SIDEBAR_WIDTH_VARS}
       className="jm-console-shell flex h-screen w-screen flex-col overflow-hidden"
     >
-      <TopLoadingBar />
+      <TopLoadingBar
+        routeKey={`${location.key}:${location.pathname}${location.search}`}
+        pendingCount={pendingCount}
+      />
       <ConsoleHeader />
       <div data-slot="console-body" className="flex min-h-0 w-full flex-1">
         <WorkspaceSidebar />
