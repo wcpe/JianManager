@@ -54,6 +54,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Button } from '@jianmanager/ui/components/button'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientVersionsPanel from '@/components/ClientVersionsPanel'
@@ -121,20 +122,20 @@ export default function ClientChannelsPage() {
   const isEmpty = list.length === 0 && !isLoading
 
   return (
-    <div data-page="client-channels" className="jm-page-stack space-y-4">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="jm-page-title">{t('nav.clientChannels')}</h1>
-          <p className="jm-page-subtitle">
-            {t('clientChannels.subtitle', '管理客户端分发频道与拉取密钥。每服一个频道，密钥用于玩家侧更新器拉取。')}
-          </p>
-        </div>
-        {!isEmpty && (
-          <Button onClick={() => setCreateOpen(true)} className="shrink-0">
-            <Plus className="size-4" /> {t('clientChannels.addChannel', '新增频道')}
-          </Button>
-        )}
-      </div>
+    // 全量对齐（视图 1 · 频道列表）：外壳与页头改用布局层原语。
+    // data-page 保持 client-channels 原值。
+    <PageShell data-page="client-channels">
+      <PageHeader
+        title={t('nav.clientChannels')}
+        description={t('clientChannels.subtitle', '管理客户端分发频道与拉取密钥。每服一个频道，密钥用于玩家侧更新器拉取。')}
+        actions={
+          !isEmpty && (
+            <Button onClick={() => setCreateOpen(true)} className="shrink-0">
+              <Plus className="size-4" /> {t('clientChannels.addChannel', '新增频道')}
+            </Button>
+          )
+        }
+      />
 
       <ClientDistFlowGuide />
 
@@ -161,7 +162,7 @@ export default function ClientChannelsPage() {
           setSearchParams(updateClientDistQuery(searchParams, { channelId: id }), { replace: true })
         }}
       />
-    </div>
+    </PageShell>
   )
 }
 
