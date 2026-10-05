@@ -28,10 +28,18 @@ test.describe('FR-037 运维控制台布局（mock 模式真浏览器）', () =>
     await expect(page.locator('[data-slot="console-main"]')).toBeVisible()
     const sidebar = page.locator('[data-slot="console-sidebar"]')
     await expect(sidebar.getByRole('link', { name: '平台首页', exact: true })).toBeVisible()
-    await expect(sidebar.getByRole('button', { name: '服务器', exact: true })).toBeVisible()
-    // FR-431 六域：原「平台管理」改为「平台设置」（内含审计与设置等分节）
-    await expect(sidebar.getByRole('button', { name: '平台设置', exact: true })).toBeVisible()
-    await expect(sidebar.getByRole('button', { name: '客户端分发', exact: true })).toBeVisible()
+
+    // 侧栏已按**工作区**重构，不再是「域分组头按钮（服务器 / 平台设置 / 客户端分发）+ 子项」
+    // 那种两级结构——侧栏内已无任何这类按钮。服务器运维工作区下，域内入口直接平铺为链接，
+    // 其中「全部服务器」「节点」带计数，计数属于链接可访问名的一部分，故不能用 exact。
+    // 跨域切换改由顶栏工作区承担（同类适配见 FR-215 用例）。
+    await expect(sidebar.getByRole('link', { name: /^全部服务器/ })).toBeVisible()
+    await expect(sidebar.getByRole('link', { name: /^节点/ })).toBeVisible()
+    await expect(sidebar.getByRole('link', { name: '网络拓扑', exact: true })).toBeVisible()
+
+    // 资源区仍在同一侧栏内：分段（按节点/按群组/收藏）与服务器选择器。
+    await expect(sidebar.getByRole('button', { name: '按节点', exact: true })).toBeVisible()
+    await expect(sidebar.getByRole('button', { name: '选择服务器', exact: true })).toBeVisible()
     // 方案 C：品牌 Logo 位于顶栏品牌区，节点作用域下拉已下线。
     await expect(page.locator('[data-slot="console-header"]').getByText('JianManager')).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr037-e2e-console-shell.png'), fullPage: true })
