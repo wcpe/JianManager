@@ -37,7 +37,7 @@ import {
   type BotStatusCounts,
   type Distribution,
 } from './bots-overview'
-import { BotHealthBar } from '@jianmanager/biz-views/components/console/BotHealthBar'
+import { BotHealthBar } from '@jianmanager/ui/components/views/console/BotHealthBar'
 import { BotWorktableCard } from '@/components/console/BotWorktableCard'
 import DangerConfirm from '@/components/DangerConfirm'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'

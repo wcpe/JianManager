@@ -21,13 +21,14 @@ import en from './en.json'
 const i18nDir = dirname(fileURLToPath(import.meta.url))
 const srcDir = join(i18nDir, '..')
 /**
- * 业务视图包（packages/biz-views）的源码根。
+ * 共享 UI 包内「业务视图」的源码根。
  *
- * 页面 B 的部分组件与共享逻辑已迁入该包。键扫描必须**同时覆盖两处**，
- * 否则迁走文件里引用的键会静默漏检——这正是本测试要防的那类缺口。
+ * 页面 B 的部分组件已迁入该包（原 `packages/biz-views`，后并入 `@jianmanager/ui`）。
+ * 键扫描必须**同时覆盖两处**，否则迁走文件里引用的键会静默漏检
+ * ——这正是本测试要防的那类缺口。
  * 布局：apps/control-plane-web/src/i18n → 仓库根为再上溯三级。
  */
-const bizViewsDir = join(srcDir, '..', '..', '..', 'packages', 'biz-views', 'src')
+const uiViewsDir = join(srcDir, '..', '..', '..', 'packages', 'ui', 'src', 'components', 'views')
 
 function flattenKeys(obj: Record<string, unknown>, prefix = ''): Set<string> {
   const out = new Set<string>()
@@ -53,12 +54,12 @@ function rel(abs: string): string {
 function pageBFiles(): string[] {
   const files = [
     join(srcDir, 'pages/ProtectionCenterPage.tsx'),
-    // 已迁入 biz-views，故按包的路径取
-    join(bizViewsDir, 'components/UntrustedFieldBadge.tsx'),
+    // 已迁入 @jianmanager/ui 的业务视图目录，故按包的路径取
+    join(uiViewsDir, 'UntrustedFieldBadge.tsx'),
   ]
   for (const dir of [
     join(srcDir, 'components', 'client-dist'),
-    join(bizViewsDir, 'components', 'client-dist'),
+    join(uiViewsDir, 'client-dist'),
   ]) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isFile()) continue

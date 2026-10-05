@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Copy, History } from 'lucide-react'
 import { useLogs } from '@/api/logs'
-import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 import { cn } from '@jianmanager/ui'
 
 /**

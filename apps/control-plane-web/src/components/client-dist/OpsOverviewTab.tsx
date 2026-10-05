@@ -20,7 +20,7 @@ import { useClientDistSecurityOverview, type SecurityRankItem } from '@/api/clie
 import type { ClientRuntimeOverview } from '@/api/clientRuntimeStates'
 import { buildClientDistHref } from '@/lib/client-dist-query'
 import InsightCards from './InsightCards'
-import type { ObsWindow } from '@jianmanager/biz-views/lib/obs-window'
+import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
 import {
   ErrorPanel,
   LinkableDistPanel,

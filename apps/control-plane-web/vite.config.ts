@@ -51,7 +51,7 @@ export default defineConfig({
     // 注：曾短暂怀疑本配置能修「访问某些页面时长时间白屏」，实测**无关**（加了 exclude 后
     // 同样复现，见 e2e/navigation-benchmark 的已知问题）。保留它只因这是第一方源码包的
     // 正确形态，与那次白屏无因果关系，勿据此处注释去推断白屏的成因。
-    exclude: ['@jianmanager/ui', '@jianmanager/biz-views', '@jianmanager/devmock'],
+    exclude: ['@jianmanager/ui', '@jianmanager/devmock'],
   },
   server: {
     host: '127.0.0.1',

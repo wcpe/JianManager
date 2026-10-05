@@ -18,17 +18,17 @@ import { CornerDownLeft, Copy, History, WrapText } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 
 import { useOnlinePlayers } from '@/api/players'
-import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
-import { loadCommandHistory, pushCommandHistory } from '@jianmanager/biz-views/lib/console-command-history'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
+import { loadCommandHistory, pushCommandHistory } from '@jianmanager/ui/lib/console-command-history'
 import {
   consoleErrorLines,
   consoleLinesToText,
   filterConsoleLines,
   type ConsoleLevelFilter,
-} from '@jianmanager/biz-views/lib/console-filter'
+} from '@jianmanager/ui/lib/console-filter'
 import { findStartupSeq, mergeHistoryAndLive, useConsoleHistory, type HistoryJumpOutcome } from '@/lib/console-history'
 import { applyPlayerChunk } from '@/lib/console-players'
-import { findConsoleMatches, type ConsoleSearchMatch } from '@jianmanager/biz-views/lib/console-search'
+import { findConsoleMatches, type ConsoleSearchMatch } from '@jianmanager/ui/lib/console-search'
 import { useDirectorRender } from '@/lib/director-render'
 import { terminalSessionManager, type FetchTerminalCreds } from '@/lib/terminal-session-manager'
 import {

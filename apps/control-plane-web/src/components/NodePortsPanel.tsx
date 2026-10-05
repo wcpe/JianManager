@@ -11,7 +11,7 @@ import {
 } from '@jianmanager/ui/components/table'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { useNodePorts } from '@/api/ports'
-import { useVirtualRows } from '@jianmanager/biz-views/lib/virtual-list'
+import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
 
 /** 端口表虚拟化行高（px），与 Table 行内边距匹配。 */
 const PORT_ROW_HEIGHT = 44

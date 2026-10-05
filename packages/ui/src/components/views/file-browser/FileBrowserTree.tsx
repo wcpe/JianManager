@@ -8,8 +8,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
-import type { FileBrowserAction, FileBrowserSource, FileEntry } from '../../lib/file-browser-types'
-import { buildTree, type BrowserTreeDir, type BrowserTreeFile } from '../../lib/file-browser-tree'
+import type { FileBrowserAction, FileBrowserSource, FileEntry } from '../../../lib/file-browser-types'
+import { buildTree, type BrowserTreeDir, type BrowserTreeFile } from '../../../lib/file-browser-tree'
 
 /** 字节数转人类可读。 */
 function formatBytes(n: number): string {

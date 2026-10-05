@@ -9,7 +9,7 @@
  * 二进制（含 NUL）/ 超大（1 MiB 阈值）判定沿用 {@link looksBinary}/{@link PREVIEW_MAX_BYTES}
  * （与 `instanceSource` 同口径）；下载经 object URL 触发（本地字节，不走服务端）。
  */
-import type { FileBrowserSource, FileEntry, PreviewContent } from '@jianmanager/biz-views/lib/file-browser-types'
+import type { FileBrowserSource, FileEntry, PreviewContent } from '@jianmanager/ui/lib/file-browser-types'
 import { PREVIEW_MAX_BYTES, looksBinary } from './instanceSource'
 
 /** 本地草稿数据源的最小输入：目标相对路径 + 浏览器内 File（尚未上传）。 */

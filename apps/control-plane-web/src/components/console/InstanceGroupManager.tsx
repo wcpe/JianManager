@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { cn } from '@jianmanager/ui'
-import { useVirtualRows } from '@jianmanager/biz-views/lib/virtual-list'
+import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
 import { useCardColumns } from '@/lib/use-card-columns'
 
 /** 卡片行高（px）：与 InstancesPage 的卡片网格同源。虚拟化按「行」定位，须与真实渲染高度一致。 */
