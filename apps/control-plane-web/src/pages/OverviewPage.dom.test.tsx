@@ -142,7 +142,9 @@ describe('OverviewPage（mock 假后端）', () => {
     )
     const { container } = renderWithProviders(<OverviewPage />, { route: '/' })
     expect(container.firstElementChild).toHaveAttribute('data-page', 'overview')
-    expect(container.firstElementChild).toHaveClass('jm-page-stack')
+    // 阶段 6 页面迁移起，外壳改用布局层 PageShell（原为手写的 jm-page-stack 骨架类）。
+    // data-page 由 PageShell spread 透传，其断言保持不变——那才是行为契约。
+    expect(container.firstElementChild).toHaveAttribute('data-slot', 'page-shell')
     const instanceTable = within(await screen.findByTestId('overview-instances-virtual'))
     expect(await instanceTable.findByText('survival-1')).toBeInTheDocument()
     expect(instanceTable.getByText('lobby-proxy')).toBeInTheDocument()
