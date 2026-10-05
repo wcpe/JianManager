@@ -43,6 +43,7 @@ import DangerConfirm from '@/components/DangerConfirm'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
 import { Activity, Plus, Send } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Input } from '@jianmanager/ui/components/input'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
@@ -113,17 +114,20 @@ export default function BotsPage() {
   const [showWizard, setShowWizard] = useState(false)
 
   return (
-    <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t('bots.title')}</h1>
-        <div className="flex gap-2">
-          {(tab === 'sessions' || tab === 'templates') && (
+    // 全量对齐：外壳与页头改用布局层原语。原为裸 <div> + 手写页头，且无 data-page。
+    // 「创建运行」按钮按 tab 条件显示（仅 sessions/templates 下有意义）——PageHeader 的
+    // actions 对 falsy 会短路，故该条件可原样保留。
+    <PageShell data-page="bots">
+      <PageHeader
+        title={t('bots.title')}
+        actions={
+          (tab === 'sessions' || tab === 'templates') && (
             <Button variant="outline" onClick={() => setShowWizard(true)}>
               {t('botsLoad.createRun')}
             </Button>
-          )}
-        </div>
-      </div>
+          )
+        }
+      />
 
       <Tabs value={tab} onValueChange={setTab} className="w-full">
         <TabsList className="mb-4">
@@ -143,7 +147,7 @@ export default function BotsPage() {
       </Tabs>
 
       <BotLoadWizard open={showWizard} onOpenChange={setShowWizard} />
-    </div>
+    </PageShell>
   )
 }
 
