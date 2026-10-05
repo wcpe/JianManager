@@ -55,6 +55,7 @@ import {
   TableRow,
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import DangerConfirm from '@/components/DangerConfirm'
 
 export default function SchedulesPage() {
@@ -122,7 +123,13 @@ export default function SchedulesPage() {
   }
 
   return (
-    <div className="space-y-4">
+    // 阶段 6 页面迁移 + 全量对齐：外壳与页头改用布局层原语。
+    // 标题按布局规范上移到页面级 PageHeader——「页名只出现一次」且「在页面最上面」，
+    // 卡片头随之只留计数与操作（TableCardHeader 的 title 已改为可选）。
+    // PageHeader 必须是第一个子元素，故汇总筛选条排到它之后。
+    <PageShell data-page="schedules">
+      <PageHeader title={t('schedules.title')} />
+
       {/* 汇总筛选条保持在卡片外（作用于列表视图的可见行）。 */}
       <ConfigSummaryChips
         chips={[
@@ -388,7 +395,7 @@ export default function SchedulesPage() {
         onConfirm={confirmDelete}
         onCancel={() => setDeleteTarget(null)}
       />
-    </div>
+    </PageShell>
   )
 }
 
