@@ -6,6 +6,7 @@ import { ArrowLeft, ChevronDown, ChevronRight, Package, ScrollText, Search, Wren
 import { useLicenses, type LicenseDependency } from '@/api/licenses'
 import { depKey, filterByName, partitionDeps } from '@/lib/licenses'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -40,21 +41,24 @@ export default function LicensesPage() {
     })
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="gap-1.5">
-          <ArrowLeft className="size-4" />
-          {t('licenses.back')}
-        </Button>
-        <div className="min-w-0">
-          <h1 className="text-xl font-bold">{t('licenses.title')}</h1>
-          {data?.generatedAt && (
-            <p className="text-xs text-muted-foreground">
-              {t('licenses.generatedAt', { time: new Date(data.generatedAt).toLocaleString() })}
-            </p>
-          )}
-        </div>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语。原先无 data-page，迁移时补上。
+    // 「返回」按钮从左侧移到 actions（页头右侧）——它与页名并列在左时，读屏顺序会先念
+    // 按钮再念标题；放进操作区后标题始终是页头的第一项。
+    <PageShell data-page="licenses">
+      <PageHeader
+        title={t('licenses.title')}
+        description={
+          data?.generatedAt
+            ? t('licenses.generatedAt', { time: new Date(data.generatedAt).toLocaleString() })
+            : undefined
+        }
+        actions={
+          <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="gap-1.5">
+            <ArrowLeft className="size-4" />
+            {t('licenses.back')}
+          </Button>
+        }
+      />
 
       <p className="text-sm text-muted-foreground">{t('licenses.subtitle')}</p>
 
@@ -122,7 +126,7 @@ export default function LicensesPage() {
           />
         </>
       )}
-    </div>
+    </PageShell>
   )
 }
 

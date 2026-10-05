@@ -18,6 +18,7 @@ import {
 } from '@/api/storage'
 import { useAuthStore } from '@/stores/auth'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
@@ -61,23 +62,29 @@ export default function StoragePage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start gap-2">
-        <HardDrive className="mt-0.5 size-5 text-muted-foreground" />
-        <div className="min-w-0">
-          <h1 className="text-xl font-bold">{t('storage.title')}</h1>
-          <p className="text-xs text-muted-foreground">{t('storage.subtitle')}</p>
-          <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground/70" title={data.base}>
-            {data.base}
-          </p>
-        </div>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语。原先无 data-page，迁移时补上。
+    // 图标随 title 进 h1（PageHeader 无独立 icon 槽，且该图标无 aria 语义）；
+    // 存储基址由独立一行降为描述的一部分（等宽），仍保留 title 供悬停看全。
+    <PageShell data-page="storage">
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <HardDrive className="size-5 text-muted-foreground" />
+            {t('storage.title')}
+          </span>
+        }
+        description={
+          <>
+            {t('storage.subtitle')} · <span className="font-mono" title={data.base}>{data.base}</span>
+          </>
+        }
+      />
 
       <OverviewSection data={data} />
       <DirUsageSection data={data} onCacheCleared={bumpBrowse} />
       <ArchiveSection data={data} />
       <BrowserSection refreshKey={browseRefreshKey} onRefresh={bumpBrowse} />
-    </div>
+    </PageShell>
   )
 }
 
