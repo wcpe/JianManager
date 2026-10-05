@@ -29,6 +29,7 @@ import {
   TableRow,
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import {
@@ -184,13 +185,13 @@ export default function BackupStoragesPage() {
   const totalUsed = (storages ?? []).reduce((sum, s) => sum + Number(s.usedBytes ?? 0), 0)
 
   return (
-    <div className="space-y-6">
-      {/* 方案 A「精工卡片」：页面标题 + 功能说明 + 主操作全部收进卡片头。 */}
+    // 全量对齐：标题上移到页面级 PageHeader（页名只出现一次、且在页面最上面），
+    // 卡片头只留计数与操作。原先也没有 data-page，迁移时补上。
+    <PageShell data-page="backup-storages">
+      <PageHeader title={t('backupStorages.title', '备份存储后端')} />
       <TableCard>
         <TableCardHeader
-          title={t('backupStorages.title', '备份存储后端')}
           count={t('backupStorages.cardCount', { total: (storages ?? []).length })}
-          description={t('backupStorages.subtitle', '')}
           actions={
             <Button
               onClick={() => { setForm(emptyForm); setEditing(null); setDraftTestResult(null); gate.reset(); setShowForm(true) }}
@@ -410,6 +411,6 @@ export default function BackupStoragesPage() {
         onConfirm={() => { if (deleteTarget) handleDelete(deleteTarget) }}
         onCancel={() => setDeleteTarget(null)}
       />
-    </div>
+    </PageShell>
   )
 }
