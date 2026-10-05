@@ -22,7 +22,9 @@ test('FR-192 拉取密钥 创建 + 可随时查看明文 + 可编辑/吊销', as
   const secret = page.getByRole('dialog', { name: '拉取密钥' })
   await expect(secret).toContainText('此密钥已加密保存，关闭后仍可在密钥列表中随时查看明文。')
   await expect(secret).not.toContainText(/仅此一次|无法再次查看/)
-  await secret.getByRole('button', { name: '关闭' }).click()
+  // 弹窗内有两个可访问名为「关闭」的按钮：内容区的操作按钮，以及右上角的 X
+  // （data-slot="dialog-close"，aria-label 同样是「关闭」）。取内容区那个——它在 DOM 顺序上在前。
+  await secret.getByRole('button', { name: '关闭' }).first().click()
 
   // 密钥行：查看（可随时再看明文）/ 编辑 / 吊销
   await expect(page.getByText('e2e-key')).toBeVisible()
