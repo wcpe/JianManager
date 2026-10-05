@@ -346,6 +346,18 @@ type Manager struct {
 	// ⇒ 全被限频挡住；两个都恒为 0 ⇒ 连状态闸都没放行或自愈面未被调用 ⇒ 嫌疑上移到管道/轮转面 ✓）。
 	selfHealDuePass atomic.Int64
 	selfHealDueSkip atomic.Int64
+	// #179 第 1 步（③ 观测，行为中性）：补段助手的**四处静默 return** 的按源去重计数 + 首次 Debug。
+	// 为什么要它：现场"某源零 `滚动回收` 行、且看不出为什么不动"的根因就是这四处全静默 ✗。
+	blockedSegHold     atomic.Int64 // 段 hold（HasRecoveryHold）
+	blockedConfigHold  atomic.Int64 // 配置层 hold（m.recoveryHold）
+	blockedNoMaterial  atomic.Int64 // to <= from（无"已确认未覆盖"区间）
+	blockedWatermark   atomic.Int64 // 水位复读失败（变则弃）
+	blockedStallWarns  atomic.Int64 // ② 有界判据：N 轮无进展 ⇒ 告警次数（可观测 ✓）
+	blockedLoggedMu    sync.Mutex
+	blockedLogged      map[string]struct{} // 按源去重（首次 Debug 一次，不刷屏 ✓）
+	reclaimStallMu     sync.Mutex
+	reclaimStallRounds map[string]int // ② 按源"回收停滞轮次"（reclaim 未前进的连续轮数 ✓）
+	reclaimStallLast   map[string]uint64
 	// sweepRollingProbes / nsRolling（#66-⑤ 诊断，只读）：兜底环轮转窗口里**实际发起**的
 	// "只滚动/补段"自愈次数与耗时（前置是 O(1) 的"有欠账"判据 ⇒ 健康源不发起 ⇒ 本读数同时是
 	// **成本定界**的证明 ✓）。
@@ -5310,6 +5322,12 @@ type ReclaimRollingStats struct {
 	// 没放行（或自愈面根本没被调用）；skip 恒涨而 pass 不动 ⇒ 全被限频挡住 ✓。
 	SelfHealDuePass int64
 	SelfHealDueSkip int64
+	// #179 第 1 步（③）：**受阻类别**（只读）——"为什么这条缝/这回补段没发生"一眼可读 ✓。
+	BlockedSegmentHold    int64 // 段 hold（运维钉住的段覆盖该位置 ✓）
+	BlockedConfigHold     int64 // 配置层 hold（连补段都不做 ✓）
+	BlockedNoMaterial     int64 // 无"已确认但未覆盖"的区间（to <= from ✓）
+	BlockedWatermarkMoved int64 // 水位在复读窗口内变化（变则弃 ✓）
+	BlockedStallWarns     int64 // ② N 轮无进展的告警次数 ✓
 }
 
 // ReclaimRollingStats 读取滚动回收读数（#63-Z3-c）。
@@ -5323,6 +5341,12 @@ func (m *Manager) ReclaimRollingStats() ReclaimRollingStats {
 		Elapsed:         time.Duration(m.reclaimRollNanos.Load()),
 		SelfHealDuePass: m.selfHealDuePass.Load(),
 		SelfHealDueSkip: m.selfHealDueSkip.Load(),
+
+		BlockedSegmentHold:    m.blockedSegHold.Load(),
+		BlockedConfigHold:     m.blockedConfigHold.Load(),
+		BlockedNoMaterial:     m.blockedNoMaterial.Load(),
+		BlockedWatermarkMoved: m.blockedWatermark.Load(),
+		BlockedStallWarns:     m.blockedStallWarns.Load(),
 	}
 	if last, _ := m.reclaimRollLast.Load().(ReclaimRollSnapshot); last.Steps > 0 || last.Advanced > 0 {
 		st.Last = last
@@ -5359,6 +5383,46 @@ func (m *Manager) repairStalledReclaim(p *pipeline.Pipeline, source SourceConfig
 		"logSourceID", source.LogSourceID, "generation", source.SourceGeneration,
 		"reclaim", positions.Reclaim, "delivery", positions.Delivery)
 	return m.backfillDeliveryConfirmedCoverage(p, source, generation, positions)
+}
+
+// noteReclaimBlocked 记录一次"补段被静默拦下"（#179 第 1 步③）：按类别计数 + **按源首次 Debug**（不刷屏 ✓）。
+// 行为中性：只加计数与一次性日志，不改变任何判据或返回值 ✓。
+func (m *Manager) noteReclaimBlocked(category string, p *pipeline.Pipeline, source SourceConfig) {
+	if m == nil {
+		return
+	}
+	switch category {
+	case "seg-hold":
+		m.blockedSegHold.Add(1)
+	case "config-hold":
+		m.blockedConfigHold.Add(1)
+	case "no-material":
+		m.blockedNoMaterial.Add(1)
+	case "watermark-moved":
+		m.blockedWatermark.Add(1)
+	}
+	key := ""
+	if p != nil {
+		key = p.Key().LogSourceID + "/" + p.Key().SourceGeneration
+	}
+	if key == "" {
+		key = source.LogSourceID
+	}
+	m.blockedLoggedMu.Lock()
+	if m.blockedLogged == nil {
+		m.blockedLogged = make(map[string]struct{})
+	}
+	dup := false
+	if _, ok := m.blockedLogged[category+"|"+key]; ok {
+		dup = true
+	} else {
+		m.blockedLogged[category+"|"+key] = struct{}{}
+	}
+	m.blockedLoggedMu.Unlock()
+	if !dup {
+		slog.Debug("补段被拦下（首次可见；后续同源同类不再打点）",
+			"logSourceID", source.LogSourceID, "category", category)
+	}
 }
 
 // backfillDeliveryConfirmedCoverage 在**投递确认点**补注册覆盖段（#61-Z-a，父级裁刀）。
@@ -5399,16 +5463,19 @@ func (m *Manager) backfillDeliveryConfirmedCoverage(p *pipeline.Pipeline, source
 	//   · **配置层** hold（Options.RecoveryHold）：运维显式钉住 ⇒ 连补段都不做（此处按源自身的
 	//     UTCDay 求值，属保守口径：宁可少补一段，也不越过人工约束 ✓ —— 既有绑定点不受本闸影响 ✓）。
 	if p.Ledger().HasRecoveryHold(p.Key()) {
+		m.noteReclaimBlocked("seg-hold", p, source)
 		return nil
 	}
 	if m.recoveryHold != nil {
 		if hold, _ := m.recoveryHold(source, generation); hold {
+			m.noteReclaimBlocked("config-hold", p, source)
 			return nil
 		}
 	}
 	from := positions.Reclaim
 	to := positions.Delivery // 不越界未来：只覆盖"已确认投递"到的那一段
 	if to <= from {
+		m.noteReclaimBlocked("no-material", p, source)
 		return nil // 无"已确认但未覆盖"的区间
 	}
 	// gate 由调用方给出（"先探一次回收 + 哨兵命中"）：本函数只负责"按已确认水位补段"。
@@ -5418,6 +5485,7 @@ func (m *Manager) backfillDeliveryConfirmedCoverage(p *pipeline.Pipeline, source
 	}
 	// 复验守卫（变则弃）：绑定前再读一次水位 —— 期间 Reclaim 前移 ⇒ 本段起点已过期。
 	if now, ok := p.Ledger().Positions(p.Key()); !ok || now.Reclaim != from || now.Delivery < to {
+		m.noteReclaimBlocked("watermark-moved", p, source)
 		return nil
 	}
 	// Path 用**与投影背书段同款**的 `projection://<generation>`：常规释放链会据此把释放依据登记为
@@ -6806,6 +6874,9 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		// **不新增旁路语义**：调用的就是两面共用的同一助手，hold 优先/幂等/绑定前后水位复读
 		//（repairStalledReclaim → backfillDeliveryConfirmedCoverage ✓）全部继承 ✓。
 		if pos, ok := led.Positions(p.Key()); ok {
+			if src, srcOK := m.sourceConfigFor(p); srcOK {
+				m.noteReclaimStall(p, src, pos)
+			}
 			if pos.Reclaim < pos.Delivery {
 				if src, srcOK := m.sourceConfigFor(p); srcOK {
 					m.sweepRollingProbes.Add(1)
@@ -7325,6 +7396,39 @@ func (m *Manager) persistLoop(ctx context.Context) {
 
 // defaultControlledTruncateInterval 是受控截断执行点的节拍（#67-B（b））：低频、与持久化周期解耦 ✓。
 const defaultControlledTruncateInterval = 60 * time.Second
+
+// noteReclaimStall 是 #179 第 1 步②的**有界判据（本步只告警）**：同一源连续 ≥3 轮"回收未前进"
+// 即升级为一条 Warn（含受阻类别读数 ✓），之后每 3 轮再报一次（节流 ✓）。
+// **本步不做任何自动动作** ✗（"存量段直投"那一级待 ① 落地后接入 ✓）——目的只是"禁止静默永久钉死" ✓。
+func (m *Manager) noteReclaimStall(p *pipeline.Pipeline, source SourceConfig, pos logtypes.Positions) {
+	if m == nil || p == nil {
+		return
+	}
+	key := p.Key().LogSourceID + "/" + p.Key().SourceGeneration
+	m.reclaimStallMu.Lock()
+	if m.reclaimStallRounds == nil {
+		m.reclaimStallRounds = make(map[string]int)
+		m.reclaimStallLast = make(map[string]uint64)
+	}
+	if last, ok := m.reclaimStallLast[key]; ok && pos.Reclaim > last {
+		m.reclaimStallRounds[key] = 0 // 有进展 ⇒ 计数清零 ✓
+	} else if pos.Reclaim < pos.Delivery {
+		m.reclaimStallRounds[key]++ // 有欠账且未前进 ⇒ 记一轮 ✓
+	} else {
+		m.reclaimStallRounds[key] = 0 // 无欠账（reclaim ≥ delivery）⇒ 非停滞 ✓
+	}
+	rounds := m.reclaimStallRounds[key]
+	m.reclaimStallLast[key] = pos.Reclaim
+	m.reclaimStallMu.Unlock()
+	if rounds >= 3 && rounds%3 == 0 {
+		m.blockedStallWarns.Add(1)
+		slog.Warn("回收连续多轮无进展（②有界判据：本步只告警，不做自动动作）",
+			"logSourceID", source.LogSourceID, "rounds", rounds,
+			"read", pos.Read, "durable", pos.Durable, "delivery", pos.Delivery, "reclaim", pos.Reclaim,
+			"blocked_seg_hold", m.blockedSegHold.Load(), "blocked_config_hold", m.blockedConfigHold.Load(),
+			"blocked_no_material", m.blockedNoMaterial.Load(), "blocked_watermark_moved", m.blockedWatermark.Load())
+	}
+}
 
 // tryControlledTruncate 在持久化环的 tick 上、**锁外**尝试一次受控截断（#67-B（b））。
 //
