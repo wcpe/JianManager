@@ -7517,7 +7517,11 @@ func (m *Manager) directDeliverResolvedReReadGap(p *pipeline.Pipeline, source So
 		return // 他面在飞 ⇒ 让路（下轮重试 ✓）
 	}
 	defer m.finishScheduledReplay(key)
-	if _, err := m.deliver(source, slice, true); err != nil {
+	// 增量语义（replay=false ✓）：本步投的是**缝区间的部分切片**，不是整窗——
+	// `deliver()` 内 `replace := saved.PublicationPending || replay` ⇒ replay=true 会按
+	// 「整窗重发」走权威全量重建（O(段行数)≈秒级）并把全量当写入面 ✗✗（2026-10-05 首验：
+	// 该形态带来 202 的「投影可见性期限」重试与时延；部分切片本就不该走整窗语义 ✗）。
+	if _, err := m.deliver(source, slice, false); err != nil {
 		slog.Warn("破环直投失败（下轮重试）", "logSourceID", source.LogSourceID, "error", err)
 		return
 	}
