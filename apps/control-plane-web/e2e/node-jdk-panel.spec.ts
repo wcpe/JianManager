@@ -9,7 +9,8 @@ import { login } from './helpers'
 
 test('FR-178 节点 JDK 面板: foojay 下载 + 异步进度 + 测试存活', async ({ page }) => {
   await login(page)
-  await page.goto('/nodes')
+  // 阶段 6 起 /nodes 是列表态，分段工具只在详情态，故 JDK 面板改走详情态深链。
+  await page.goto('/nodes?node=1')
 
   await page.getByRole('button', { name: '运行时', exact: true }).click() // FR-311：JDK 分段更名运行时
   await expect(page.getByRole('button', { name: '一键下载' })).toBeVisible()

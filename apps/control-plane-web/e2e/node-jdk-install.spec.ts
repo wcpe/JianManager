@@ -15,8 +15,9 @@ test.describe('FR-033 JDK 与运行时管理（mock 模式真浏览器）', () =
   })
 
   test('节点 JDK 列表、探测登记与一键下载链路可见可操作', async ({ page }) => {
-    await page.goto('/nodes')
-    await expect(page.getByRole('heading', { name: '节点管理' })).toBeVisible()
+    // 阶段 6 起 /nodes 是列表态，分段工具只在详情态，故 JDK 链路改走详情态深链。
+    await page.goto('/nodes?node=1')
+    await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
     await page.getByRole('button', { name: '运行时', exact: true }).click() // FR-311：JDK 分段更名运行时
 
     await expect(page.getByRole('button', { name: '已登记' })).toBeVisible()

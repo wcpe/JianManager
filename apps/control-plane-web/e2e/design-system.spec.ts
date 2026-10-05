@@ -16,8 +16,10 @@ test('FR-163 共享 Panel / StatCard 设计底座渲染', async ({ page }) => {
   await expect(page.locator('[data-slot="panel"]').first()).toBeVisible({ timeout: 15_000 })
   expect(await page.locator('[data-slot="panel"]').count()).toBeGreaterThanOrEqual(1)
 
-  // StatCard 底座（节点页）
-  await page.goto('/nodes')
+  // StatCard 底座（节点详情态左栏的 CPU / 内存 / 磁盘聚合水位）。
+  // 阶段 6 起 /nodes 是列表态（状态计数 chip + 节点卡片墙，照原型不含 StatCard），
+  // 故指向详情态。
+  await page.goto('/nodes?node=1')
   await expect(page.locator('[data-slot="stat-card"]').first()).toBeVisible()
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-163/single-machine-design-system.png', fullPage: true })

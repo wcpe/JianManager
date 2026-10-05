@@ -45,8 +45,10 @@ test.describe('FR-032 群组服关系模型（mock 模式真浏览器）', () =>
 
     await page.screenshot({ path: path.join(artifactsDir, 'fr032-e2e-topology.png'), fullPage: true })
 
-    await page.goto('/nodes')
-    await expect(page.getByRole('heading', { name: '节点管理' })).toBeVisible()
+    // 阶段 6 起 /nodes 是列表态（状态计数 + 节点卡片墙），分段工具只在详情态，
+    // 故端口占用改走详情态深链。
+    await page.goto('/nodes?node=1')
+    await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
     await page.getByRole('button', { name: '端口', exact: true }).click()
     await expect(page.getByText('端口占用')).toBeVisible()
     await expect(page.getByText('分配范围：server 25565+（每段 100 个）')).toBeVisible()
