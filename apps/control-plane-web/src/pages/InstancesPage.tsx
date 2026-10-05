@@ -55,7 +55,7 @@ import { runtimeDriftOf } from '@/lib/runtime-drift'
 import { summarizeInstances, summaryFilterStatus, type SummaryFilterKey } from '@/lib/instance-summary'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { DataPanelSkeleton } from '@jianmanager/ui/components/layout'
+import { DataPanelSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
@@ -767,26 +767,30 @@ export default function InstancesPage() {
   }
 
   return (
-    <div data-page="instances" className="jm-page-stack space-y-4">
-      <div className="jm-page-header">
-        <h1 className="jm-page-title">{t('instances.title')}</h1>
-        {/* flex-wrap：四个入口按钮在移动端（390px）超行宽须换行——修 v0.15.0 验收 e2e
-            抓出的移动端横向溢出 120px（FR-302 加第 4 按钮后顶爆无 wrap 的一行）。 */}
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => setShowProvision(true)}>
-            <Zap className="size-4" /> {t('provision.entry')}
-          </Button>
-          <Button variant="outline" onClick={() => setShowProvisionProxy(true)}>
-            <Globe className="size-4" /> {t('proxy.entry')}
-          </Button>
-          <Button variant="outline" onClick={() => setShowImport(true)}>
-            <HardDriveDownload className="size-4" /> {t('importServer.entry')}
-          </Button>
-          <Button onClick={() => navigate('/instances/new')}>
-            <Plus className="size-4" /> {t('instances.createInstance')}
-          </Button>
-        </div>
-      </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
+    // data-page 由 PageShell spread 透传，e2e 的就绪信号依赖它。
+    <PageShell data-page="instances">
+      <PageHeader
+        title={t('instances.title')}
+        actions={
+          // flex-wrap：四个入口按钮在移动端（390px）超行宽须换行——修 v0.15.0 验收 e2e
+          // 抓出的移动端横向溢出 120px（FR-302 加第 4 按钮后顶爆无 wrap 的一行）。
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => setShowProvision(true)}>
+              <Zap className="size-4" /> {t('provision.entry')}
+            </Button>
+            <Button variant="outline" onClick={() => setShowProvisionProxy(true)}>
+              <Globe className="size-4" /> {t('proxy.entry')}
+            </Button>
+            <Button variant="outline" onClick={() => setShowImport(true)}>
+              <HardDriveDownload className="size-4" /> {t('importServer.entry')}
+            </Button>
+            <Button onClick={() => navigate('/instances/new')}>
+              <Plus className="size-4" /> {t('instances.createInstance')}
+            </Button>
+          </div>
+        }
+      />
 
       {/* 汇总头：运行/停止/崩溃计数，可点设筛选（FR-136） + 视图切换 */}
       <div className="flex items-center gap-2">
@@ -1128,7 +1132,7 @@ export default function InstancesPage() {
         onConfirm={() => { if (adoptTarget) adopt.mutate(adoptTarget.id); setAdoptTarget(null) }}
         onCancel={() => setAdoptTarget(null)}
       />
-    </div>
+    </PageShell>
   )
 }
 

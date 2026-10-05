@@ -53,7 +53,9 @@ describe('InstancesPage（mock 假后端）', () => {
     // FR-452：默认视图改为分组树表 + region 维度，故显式请求平铺以断言「实例名可见」。
     const { container } = renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
     expect(container.firstElementChild).toHaveAttribute('data-page', 'instances')
-    expect(container.firstElementChild).toHaveClass('jm-page-stack')
+    // 阶段 6 页面迁移起，外壳改用布局层 PageShell（原为手写的 jm-page-stack 骨架类）。
+    // data-page 由 PageShell spread 透传，故上一行断言不变；这里改认它的标识。
+    expect(container.firstElementChild).toHaveAttribute('data-slot', 'page-shell')
     expect(await screen.findByText('survival-1')).toBeInTheDocument()
     expect(screen.getByText('lobby-proxy')).toBeInTheDocument()
     expect(screen.getByText('creative-1')).toBeInTheDocument()
