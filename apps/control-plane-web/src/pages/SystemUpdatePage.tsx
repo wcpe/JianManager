@@ -21,6 +21,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
@@ -145,29 +146,28 @@ export default function SystemUpdatePage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">{t('systemUpdate.title', '系统更新')}</h1>
-          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            {t('systemUpdate.subtitle', '检查并升级 Control Plane 与各节点 Worker 的二进制版本。升级经 sha256 校验后热替换并平滑重启，daemon 模式下不影响运行中的游戏服。')}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {(lastChecked || refreshing) && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Clock className={refreshing ? 'size-3.5 animate-spin' : 'size-3.5'} />
-              {refreshing
-                ? t('systemUpdate.checking', '正在检查…')
-                : t('systemUpdate.lastChecked', '上次检查：{{time}}', { time: lastChecked })}
-            </span>
-          )}
-          <Button onClick={doRefresh} disabled={refreshing}>
-            <RefreshCw className={refreshing ? 'size-4 animate-spin' : 'size-4'} />
-            {t('systemUpdate.checkUpdate', '检查更新')}
-          </Button>
-        </div>
-      </div>
+    // 全量对齐：外壳与页头改用布局层原语。原先无 data-page，迁移时补上。
+    <PageShell data-page="system-update">
+      <PageHeader
+        title={t('systemUpdate.title', '系统更新')}
+        description={t('systemUpdate.subtitle', '检查并升级 Control Plane 与各节点 Worker 的二进制版本。升级经 sha256 校验后热替换并平滑重启，daemon 模式下不影响运行中的游戏服。')}
+        actions={
+          <>
+            {(lastChecked || refreshing) && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Clock className={refreshing ? 'size-3.5 animate-spin' : 'size-3.5'} />
+                {refreshing
+                  ? t('systemUpdate.checking', '正在检查…')
+                  : t('systemUpdate.lastChecked', '上次检查：{{time}}', { time: lastChecked })}
+              </span>
+            )}
+            <Button onClick={doRefresh} disabled={refreshing}>
+              <RefreshCw className={refreshing ? 'size-4 animate-spin' : 'size-4'} />
+              {t('systemUpdate.checkUpdate', '检查更新')}
+            </Button>
+          </>
+        }
+      />
 
       {/* 刷新失败保留旧缓存数据，仅在「从未有过任何结果」时才整屏报错；否则错误经 toast 提示（doRefresh）。 */}
       {check.isError && !result && (
@@ -295,7 +295,7 @@ export default function SystemUpdatePage() {
         onConfirm={doUpgradeAll}
         onCancel={() => setConfirmAll(false)}
       />
-    </div>
+    </PageShell>
   )
 }
 
