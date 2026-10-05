@@ -476,6 +476,59 @@ func (l *Ledger) ResolveGapsCoveredByRanges(key SourceKey, ranges []PositionRang
 	return resolved, nil
 }
 
+// SupersedeDeliveredReReadGaps 把「已决但非终局」的待重读缝**按投递证据改判为终局**（#179-③）。
+//
+// 为什么需要（2026-10-05 现场 ✓）：待重读类消解（"re-read on resume …"）是**非终局**——缝在等一次
+// 真 resume 重读；若该 resume 被积压堵死，缝就永久钉住 delivery ⇒ reclaim 永不前进（依赖环 ✗）。
+// 既有"未决→已决"通道到不了这里（缝已 Resolved=true ✗），故本入口只做**改判**：
+//   - 只改 Resolution（Resolved 保持 true ✓）；Reason/Detail/ReasonCode/ResolvedAtUTC 一律不动 ✓；
+//   - 默认拒绝：现 Resolution 不在 allowedCurrentResolutions 内即跳过 ✓；
+//   - 区间只做包含判定（照 ResolveGapsCoveredByRanges 同口径 ✓）；
+//   - 空参报错（装配错误必须响亮 ✓）；n>0 后照惯例裁剪 ✓。
+//
+// 调用点只在「破环直投」的成功分支（作用面最小 ✓），不新增旁路语义 ✓。
+func (l *Ledger) SupersedeDeliveredReReadGaps(key SourceKey, ranges []PositionRange,
+	newResolution string, allowedCurrentResolutions ...string) (int, error) {
+	if newResolution == "" {
+		return 0, fmt.Errorf("ledger: gap resolution is required")
+	}
+	if len(allowedCurrentResolutions) == 0 {
+		return 0, fmt.Errorf("ledger: gap supersede requires a non-empty current-resolution allowlist")
+	}
+	if len(ranges) == 0 {
+		return 0, nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, err := l.require(key)
+	if err != nil {
+		return 0, err
+	}
+	if len(entry.Gaps) == 0 {
+		return 0, nil
+	}
+	allowed := make(map[string]bool, len(allowedCurrentResolutions))
+	for _, res := range allowedCurrentResolutions {
+		allowed[res] = true
+	}
+	superseded := 0
+	for index := range entry.Gaps {
+		gap := &entry.Gaps[index]
+		if !gap.Resolved || !allowed[gap.Resolution] {
+			continue
+		}
+		if !CoveredByPositionRanges(ranges, gap.StartPos, gap.EndPos) {
+			continue
+		}
+		gap.Resolution = newResolution
+		superseded++
+	}
+	if superseded > 0 {
+		l.trimResolvedGapsLocked(entry)
+	}
+	return superseded, nil
+}
+
 // RecoveryRef 受管恢复分段在账本中的引用。
 type RecoveryRef struct {
 	SegmentID     string                        `json:"segment_id"`

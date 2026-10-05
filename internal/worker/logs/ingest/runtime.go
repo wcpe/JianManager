@@ -7496,6 +7496,16 @@ func (m *Manager) directDeliverResolvedReReadGap(p *pipeline.Pipeline, source So
 		StartPos: slice[0].Record.Start, EndPos: slice[len(slice)-1].Record.End, HTTPStatus: 200,
 	}); err != nil {
 		slog.Warn("破环直投：投递结果登记失败（下轮重试）", "logSourceID", source.LogSourceID, "error", err)
+		return
+	}
+	// #179-③ 收口：缝的"关闭"在本形态是**改判**（待重读类 ⇒ 已投递类）——
+	// 既有"未决→已决"通道到不了已决缝 ✗（实测 `缝已关=false` ✓）。
+	if n, err := p.Ledger().SupersedeDeliveredReReadGaps(p.Key(), gapRangesOfEvents(slice),
+		gapResolutionDeliveryRetry,
+		acquire.ResolutionReReadOnResume, acquire.ResolutionReReadOnResumeDelivery); err != nil {
+		slog.Warn("破环直投：缝升级失败（数据已投出，下轮重试）", "logSourceID", source.LogSourceID, "error", err)
+	} else if n > 0 {
+		slog.Info("破环直投：待重读缝已按投递证据升级为终局", "logSourceID", source.LogSourceID, "gaps", n)
 	}
 }
 
