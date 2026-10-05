@@ -7,6 +7,7 @@ import { useBackupStorages } from '@/api/backupStorages'
 import { useInstance, useInstanceSearch } from '@/api/instances'
 import { useDebounced } from '@/lib/use-debounced'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Button } from '@jianmanager/ui/components/button'
@@ -164,39 +165,44 @@ export default function BackupsPage() {
   }
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h1 className="text-2xl font-bold">{t('backups.title', '备份管理')}</h1>
-        <div className="flex gap-2 flex-wrap items-center">
-          <Combobox
-            className="w-52"
-            options={instanceOptions}
-            value={selectedInstance ? String(selectedInstance) : ''}
-            onChange={(v) => setSelectedInstance(v ? Number(v) : undefined)}
-            onQueryChange={setInstanceQuery}
-            allowCustom={false}
-            placeholder={t('backups.selectInstance', '选择实例')}
-          />
-          <select
-            className="p-2 border rounded bg-background text-sm"
-            value={storageId ?? ''}
-            onChange={(e) => setStorageId(e.target.value ? Number(e.target.value) : undefined)}
-            title={t('backups.selectStorage', '存储位置')}
-          >
-            <option value="">{t('backups.localStorage', '本地')}</option>
-            {(storages ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          {selectedInstance && (
-            <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
-          )}
-          <Button onClick={() => handleCreate(false)} disabled={!selectedInstance || createBackup.isPending}>
-            {t('backups.createFull', '全量备份')}
-          </Button>
-          <Button variant="outline" onClick={() => handleCreate(true)} disabled={!selectedInstance || createBackup.isPending}>
-            {t('backups.createIncremental', '增量备份')}
-          </Button>
-        </div>
-      </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语。
+    // 标题字号由 text-2xl 统一到布局规范的 text-xl（PageHeader 的固定字号）；
+    // 原先无 data-page，迁移时补上（e2e 的就绪信号依赖它）。
+    <PageShell data-page="backups">
+      <PageHeader
+        title={t('backups.title', '备份管理')}
+        actions={
+          <>
+            <Combobox
+              className="w-52"
+              options={instanceOptions}
+              value={selectedInstance ? String(selectedInstance) : ''}
+              onChange={(v) => setSelectedInstance(v ? Number(v) : undefined)}
+              onQueryChange={setInstanceQuery}
+              allowCustom={false}
+              placeholder={t('backups.selectInstance', '选择实例')}
+            />
+            <select
+              className="p-2 border rounded bg-background text-sm"
+              value={storageId ?? ''}
+              onChange={(e) => setStorageId(e.target.value ? Number(e.target.value) : undefined)}
+              title={t('backups.selectStorage', '存储位置')}
+            >
+              <option value="">{t('backups.localStorage', '本地')}</option>
+              {(storages ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            {selectedInstance && (
+              <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
+            )}
+            <Button onClick={() => handleCreate(false)} disabled={!selectedInstance || createBackup.isPending}>
+              {t('backups.createFull', '全量备份')}
+            </Button>
+            <Button variant="outline" onClick={() => handleCreate(true)} disabled={!selectedInstance || createBackup.isPending}>
+              {t('backups.createIncremental', '增量备份')}
+            </Button>
+          </>
+        }
+      />
 
       {!selectedInstance && <p className="text-muted-foreground">{t('backups.hint', '请先选择一个实例查看备份列表')}</p>}
 
@@ -358,6 +364,6 @@ export default function BackupsPage() {
         onConfirm={() => { if (deleteTarget) handleDelete(deleteTarget); setDeleteTarget(null) }}
         onCancel={() => setDeleteTarget(null)}
       />
-    </div>
+    </PageShell>
   )
 }
