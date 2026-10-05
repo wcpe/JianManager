@@ -32,7 +32,7 @@ import {
   type ClientChannelSecuritySummary,
   type SecurityLevel,
 } from '@/api/clientDistSecurity'
-import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
 import { useTabParam } from '@/lib/use-tab-param'
 import {
@@ -62,7 +62,7 @@ import ClientVersionsPanel from '@/components/ClientVersionsPanel'
 import ClientStatsPanel from '@/components/ClientStatsPanel'
 import ClientIntegrationGuide from '@/components/ClientIntegrationGuide'
 import ClientUpdaterCoreSelector from '@/components/ClientUpdaterCoreSelector'
-import ClientDistFlowGuide from '@jianmanager/biz-views/components/ClientDistFlowGuide'
+import ClientDistFlowGuide from '@jianmanager/ui/components/views/ClientDistFlowGuide'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback

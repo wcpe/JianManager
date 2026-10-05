@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
-import UntrustedFieldBadge from '@jianmanager/biz-views/components/UntrustedFieldBadge'
+import UntrustedFieldBadge from '@jianmanager/ui/components/views/UntrustedFieldBadge'
 import { maskInstallId, maskMachineId, maskPlayerName } from '@/lib/privacy-mask'
 import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime, levelVariant, useSecurityQuery } from './security-shared'
 

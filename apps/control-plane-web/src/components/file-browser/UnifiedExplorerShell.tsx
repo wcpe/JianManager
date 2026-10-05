@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { cn } from '@jianmanager/ui'
 import FileBrowser from './FileBrowser'
-import type { FileBrowserSource } from '@jianmanager/biz-views/lib/file-browser-types'
+import type { FileBrowserSource } from '@jianmanager/ui/lib/file-browser-types'
 import {
   browserPropsFromCapability,
   type ExplorerCapability,

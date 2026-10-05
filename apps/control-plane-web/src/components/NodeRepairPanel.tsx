@@ -13,7 +13,7 @@ import {
 import { Button } from '@jianmanager/ui/components/button'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import DangerConfirm from '@/components/DangerConfirm'
-import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 
 /**
  * 坏节点修复面板（BUG-A / ADR-039 §2，FR-177 右栏分段）。

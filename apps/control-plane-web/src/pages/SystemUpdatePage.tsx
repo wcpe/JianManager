@@ -28,10 +28,10 @@ import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/DangerConfirm'
-import { ReleaseNotes } from '@jianmanager/biz-views/components/ReleaseNotes'
+import { ReleaseNotes } from '@jianmanager/ui/components/views/ReleaseNotes'
 import { formatCacheBytes } from '@/lib/artifact-cache'
 import { formatRelativeTime } from '@/lib/relative-time'
-import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
 const ROLE_PLATFORM_ADMIN = 10

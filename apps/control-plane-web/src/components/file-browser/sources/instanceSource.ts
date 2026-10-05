@@ -9,8 +9,8 @@
  * 本适配器只提供只读浏览面（与全功能管理器并存，能力不减；详见 spec）。
  */
 import { fetchFileList, readFileContent, downloadFile, type FileInfo } from '@/api/files'
-import { joinPath } from '@jianmanager/biz-views/lib/paths'
-import type { FileBrowserSource, FileEntry, PreviewContent } from '@jianmanager/biz-views/lib/file-browser-types'
+import { joinPath } from '@jianmanager/ui/lib/paths'
+import type { FileBrowserSource, FileEntry, PreviewContent } from '@jianmanager/ui/lib/file-browser-types'
 
 /** 超过此字节数的文件不读全量、降级为「仅下载」。 */
 export const PREVIEW_MAX_BYTES = 1024 * 1024 // 1 MiB

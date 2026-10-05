@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
-import { isSafeExternalLink, confirmOpenMessage } from '../lib/release-notes-link'
+import { isSafeExternalLink, confirmOpenMessage } from '../../lib/release-notes-link'
 
 /** ReleaseNotes 的 props。 */
 interface ReleaseNotesProps {

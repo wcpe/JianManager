@@ -1,8 +1,8 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
-import { ConsoleLineBuffer } from '@jianmanager/biz-views/lib/console-line-buffer'
-import type { LogLine, LogStream } from '@jianmanager/biz-views/lib/console-log-line'
+import { ConsoleLineBuffer } from '@jianmanager/ui/lib/console-line-buffer'
+import type { LogLine, LogStream } from '@jianmanager/ui/lib/console-log-line'
 
 /**
  * 跨服控制台热集容量**基线**（FR-296 起存在，FR-414 由写死的 3 提到 6 并改为可配）。

@@ -17,7 +17,7 @@ import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 import DirectoryPicker from '@/components/DirectoryPicker'
 import NodeRuntimeSection from '@/components/NodeRuntimeSection'
-import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 
 /** JDK 厂商集（foojay 支持，可自定义其它发行版）。 */
 const VENDOR_OPTIONS: ComboboxOption[] = [
