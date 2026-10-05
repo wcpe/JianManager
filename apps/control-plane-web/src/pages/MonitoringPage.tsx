@@ -7,6 +7,7 @@ import { useInstanceSearch } from '@/api/instances'
 import { useBotRuntimeMetrics, useManagedProcessAction, useManagedProcessDetail, useMetricOverview, useMetricSeries, useProcessTop, type ManagedProcessAction, type ManagedProcessDetail, type ManagedProcessInfo, type ProcessTopItem } from '@/api/metrics'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { RangePicker, ResolutionPicker, type MetricRange, type MetricResolution } from '@jianmanager/ui'
@@ -400,14 +401,17 @@ export default function MonitoringPage() {
     : t('monitor.processActionDescription', '将只作用于该实例当前受管进程树内的目标 PID；后端会再次确认 PID 归属并要求 confirm=true。')
 
   return (
-    <div data-page="monitoring" className="jm-page-stack space-y-4">
-      <div className="jm-page-header flex-wrap">
-        <h1 className="jm-page-title">{t('monitor.title')}</h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <ResolutionPicker value={resolution} onChange={setResolution} />
-          <RangePicker value={range} onChange={setRange} />
-        </div>
-      </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
+    <PageShell data-page="monitoring">
+      <PageHeader
+        title={t('monitor.title')}
+        actions={
+          <>
+            <ResolutionPicker value={resolution} onChange={setResolution} />
+            <RangePicker value={range} onChange={setRange} />
+          </>
+        }
+      />
 
       {/* 下钻：平台 → 节点 → 实例 → 世界 */}
       <Panel bodyClassName="px-3 py-2">
@@ -481,6 +485,6 @@ export default function MonitoringPage() {
         worldFilter={worldFilter}
         useSeries={useMonitorSeries}
       />
-    </div>
+    </PageShell>
   )
 }
