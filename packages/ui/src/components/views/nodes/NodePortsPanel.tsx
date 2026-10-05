@@ -10,16 +10,28 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import { useNodePorts } from '@/api/ports'
 import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
+import type { NodePorts } from '@jianmanager/ui/lib/node-ports'
 
 /** 端口表虚拟化行高（px），与 Table 行内边距匹配。 */
 const PORT_ROW_HEIGHT = 44
 
-/** 节点端口占用面板（FR-032）：展示系统已分配的 server/query 端口与分配范围（RCON 已退役 FR-067）。 */
-export default function NodePortsPanel({ nodeId }: { nodeId: number }) {
+/**
+ * 节点端口占用面板（FR-032）：展示系统已分配的 server/query 端口与分配范围。
+ *
+ * 受控视图（ADR-097 a 范式）：**不取数**——端口数据与加载态由外壳经 props 注入
+ * （外壳调 `@/api/ports` 的 `useNodePorts`）。过滤词、虚拟滚动窗口等 UI 状态留在本组件内，
+ * 它们不随应用运行时变化，不属于注入范围。
+ */
+export interface NodePortsPanelProps {
+  /** 端口占用与分配范围；外壳取数后注入。未就绪时为 undefined。 */
+  data?: NodePorts
+  /** 加载态；外壳注入。为真时渲染骨架占位。 */
+  isLoading?: boolean
+}
+
+export default function NodePortsPanel({ data, isLoading }: NodePortsPanelProps) {
   const { t } = useTranslation()
-  const { data, isLoading } = useNodePorts(nodeId)
   // 实例名过滤（大量占用时便于定位某端口，大小写不敏感子串匹配）。
   const [filter, setFilter] = useState('')
 

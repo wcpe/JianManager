@@ -29,7 +29,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/DangerConfirm'
 import { ReleaseNotes } from '@jianmanager/ui/components/views/ReleaseNotes'
-import { formatCacheBytes } from '@/lib/artifact-cache'
+import { formatCacheBytes } from '@jianmanager/ui/lib/artifact-cache'
 import { formatRelativeTime } from '@/lib/relative-time'
 import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 

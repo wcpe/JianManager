@@ -1,33 +1,19 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import { Trash2, Copy, Database, FileArchive, Search } from 'lucide-react'
-import {
-  useArtifactCache,
-  useEvictArtifactCache,
-  useClearArtifactCache,
-  useSetArtifactCacheCap,
-  type ArtifactCacheItem,
-} from '@/api/nodeRuntime'
-import { formatCacheBytes, capGiBToBytes, capBytesToGiB, describeCap } from '@/lib/artifact-cache'
 import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
+import {
+  formatCacheBytes,
+  capGiBToBytes,
+  capBytesToGiB,
+  describeCap,
+  type ArtifactCacheItem,
+  type ArtifactCacheView,
+} from '@jianmanager/ui/lib/artifact-cache'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import DangerConfirm from '@/components/DangerConfirm'
-
-/**
- * 节点制品缓存面板（FR-178）：列缓存项（名/版本/大小/最近用）+ 总占用 + 容量上限设置 + 清/逐项清。
- *
- * 真·节点级（性能优化）：Worker 按 sha256 缓存下载过的核心 jar，建实例命中即秒拷免重下。
- * 全局制品库管理仍归控制面板（FR-082），此面板只看/清这份本地缓存。
- * 可复用独立组件（不绑死容器，便于 FR-177 改挂右栏分段）。
- */
-interface NodeArtifactCachePanelProps {
-  nodeId: number
-  /** 是否启用查询（抽屉/分段打开时为 true，避免后台轮询离屏节点）。 */
-  active?: boolean
-}
+import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
 
 /** 把 Unix 秒格式化为本地日期时间；0/空回「—」。 */
 function fmtTime(sec: number): string {
@@ -35,12 +21,51 @@ function fmtTime(sec: number): string {
   return new Date(sec * 1000).toLocaleString()
 }
 
-export default function NodeArtifactCachePanel({ nodeId, active = true }: NodeArtifactCachePanelProps) {
+/**
+ * 节点制品缓存面板（FR-178）：列缓存项（名/版本/大小/最近用）+ 总占用 + 容量上限设置 + 清/逐项清。
+ *
+ * 真·节点级（性能优化）：Worker 按 sha256 缓存下载过的核心 jar，建实例命中即秒拷免重下。
+ * 全局制品库管理仍归控制面板（FR-082），此面板只看/清这份本地缓存。
+ *
+ * 受控视图（ADR-097 b 范式）：**不取数、不发请求、不弹 toast**——
+ * - 数据与加载/错误态经 props 注入（外壳调 `@/api/nodeRuntime` 的查询 hook）；
+ * - 三个写动作以回调上报，由外壳执行 mutation 并决定成功/失败文案与提示；
+ *   回调返回 Promise<boolean>，组件据此决定是否复位本地编辑态（失败时保留输入便于重试）；
+ * - 二次确认弹窗、搜索词、上限输入框等 UI 状态留在本组件内。
+ */
+export interface NodeArtifactCachePanelProps {
+  /** 缓存视图（列表 + 总占用 + 上限）；外壳取数后注入。 */
+  data?: ArtifactCacheView
+  /** 加载态；外壳注入。 */
+  isLoading?: boolean
+  /** 错误态；外壳注入。 */
+  isError?: boolean
+  /** 保存容量上限（参数为字节数，0=不限）。返回是否成功。 */
+  onSaveCap: (bytes: number) => Promise<boolean>
+  /** 逐项清理。返回是否成功。 */
+  onEvict: (sha256: string) => Promise<boolean>
+  /** 清空全部缓存。返回是否成功。 */
+  onClear: () => Promise<boolean>
+  /** 复制 sha256 后的结果上报（由外壳决定提示文案）。 */
+  onCopyResult?: (ok: boolean) => void
+  /** 保存上限在途：禁用保存按钮。 */
+  capSaving?: boolean
+  /** 清空在途：禁用清空按钮。 */
+  clearing?: boolean
+}
+
+export default function NodeArtifactCachePanel({
+  data,
+  isLoading,
+  isError,
+  onSaveCap,
+  onEvict,
+  onClear,
+  onCopyResult,
+  capSaving = false,
+  clearing = false,
+}: NodeArtifactCachePanelProps) {
   const { t } = useTranslation()
-  const { data, isLoading, isError } = useArtifactCache(nodeId, { enabled: active })
-  const evict = useEvictArtifactCache(nodeId)
-  const clear = useClearArtifactCache(nodeId)
-  const setCap = useSetArtifactCacheCap(nodeId)
 
   const [capInput, setCapInput] = useState('')
   const [capDirty, setCapDirty] = useState(false)
@@ -51,16 +76,11 @@ export default function NodeArtifactCachePanel({ nodeId, active = true }: NodeAr
   // 上限输入：未编辑时回显服务端值（GB）；编辑后用本地值（稳定区，不切换隐显）。
   const capValue = capDirty ? capInput : capBytesToGiB(data?.capBytes ?? 0)
 
-  const onSaveCap = () => {
+  const handleSaveCap = async () => {
     const bytes = capGiBToBytes(capValue)
-    setCap.mutate(bytes, {
-      onSuccess: () => {
-        toast.success(t('artifactCache.capSaved', { cap: describeCap(bytes) }))
-        setCapDirty(false)
-      },
-      onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-        toast.error(err.response?.data?.message || t('artifactCache.capFailed')),
-    })
+    const ok = await onSaveCap(bytes)
+    // 成功后退回回显态（显示服务端已生效的值）；失败保留输入，便于用户修正后重试。
+    if (ok) setCapDirty(false)
   }
 
   const items = data?.items ?? []
@@ -103,14 +123,14 @@ export default function NodeArtifactCachePanel({ nodeId, active = true }: NodeAr
               aria-label={t('artifactCache.capInputLabel')}
             />
           </label>
-          <Button size="sm" variant="outline" onClick={onSaveCap} disabled={setCap.isPending || !capDirty}>
+          <Button size="sm" variant="outline" onClick={handleSaveCap} disabled={capSaving || !capDirty}>
             {t('common.save')}
           </Button>
           <Button
             size="sm"
             variant="outline"
             onClick={() => setConfirmClear(true)}
-            disabled={clear.isPending || items.length === 0}
+            disabled={clearing || items.length === 0}
           >
             <Trash2 className="size-3.5" />
             {t('artifactCache.clearAll')}
@@ -170,8 +190,7 @@ export default function NodeArtifactCachePanel({ nodeId, active = true }: NodeAr
                     title={it.sha256}
                     onClick={async () => {
                       const ok = await copyToClipboard(it.sha256)
-                      if (ok) toast.success(t('artifactCache.shaCopied'))
-                      else toast.error(t('common.copyFailed'))
+                      onCopyResult?.(ok)
                     }}
                   >
                     <span>{it.sha256.slice(0, 12)}…</span>
@@ -204,11 +223,7 @@ export default function NodeArtifactCachePanel({ nodeId, active = true }: NodeAr
         onConfirm={() => {
           const sha = pendingEvict!.sha256
           setPendingEvict(null)
-          evict.mutate(sha, {
-            onSuccess: () => toast.success(t('artifactCache.evicted')),
-            onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-              toast.error(err.response?.data?.message || t('artifactCache.evictFailed')),
-          })
+          void onEvict(sha)
         }}
         onCancel={() => setPendingEvict(null)}
       />
@@ -220,11 +235,7 @@ export default function NodeArtifactCachePanel({ nodeId, active = true }: NodeAr
         confirmLabel={t('artifactCache.clearAll')}
         onConfirm={() => {
           setConfirmClear(false)
-          clear.mutate(undefined, {
-            onSuccess: () => toast.success(t('artifactCache.cleared')),
-            onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-              toast.error(err.response?.data?.message || t('artifactCache.clearFailed')),
-          })
+          void onClear()
         }}
         onCancel={() => setConfirmClear(false)}
       />

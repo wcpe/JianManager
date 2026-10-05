@@ -1,26 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
+// 契约类型随受控视图归包（ADR-097 b 范式）：API 层与包内组件共用同一份定义。
+import type { ArtifactCacheView } from '@jianmanager/ui/lib/artifact-cache'
 
-/** 一条节点制品缓存项（FR-178）。name/version 由 CP 用 asset 表按 sha256 补全（可能为空）。 */
-export interface ArtifactCacheItem {
-  sha256: string
-  name: string
-  type: string
-  version: string
-  size: number
-  /** 首次存入时间（Unix 秒）。 */
-  cachedAt: number
-  /** 最近命中/存入时间（Unix 秒，LRU 依据）。 */
-  lastUsedAt: number
-}
-
-/** 节点制品缓存视图：列表 + 总占用 + 当前上限（FR-178）。 */
-export interface ArtifactCacheView {
-  items: ArtifactCacheItem[]
-  totalBytes: number
-  /** 容量上限（字节，0=不限）。 */
-  capBytes: number
-}
+export type { ArtifactCacheItem, ArtifactCacheView } from '@jianmanager/ui/lib/artifact-cache'
 
 /** 一条可选 JDK 构建（foojay 版本选择器，FR-178）。 */
 export interface JDKCatalogPackage {
