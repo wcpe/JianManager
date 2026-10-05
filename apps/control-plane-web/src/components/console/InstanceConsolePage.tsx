@@ -13,6 +13,7 @@ import { useLogs } from '@/api/logs'
 import { useNodes } from '@/api/nodes'
 import { useServerState } from '@/api/serverState'
 import { Button } from '@jianmanager/ui/components/button'
+import { PageShell } from '@jianmanager/ui/components/layout'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@jianmanager/ui/components/dropdown-menu'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
@@ -286,7 +287,12 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   return (
     // 视口自适应骨架（FR-422）：根与内层都是 flex 列，横幅/顶栏/Tab 栏 flex-none、
     // Tab 内容区 flex-1 min-h-0——滚动收口到页内卡片，顶栏常驻可见、底部不留白。
-    <div data-page="instance-console" className="jm-page-stack flex min-h-0 flex-1 flex-col text-[13px] text-foreground">
+    //
+    // 阶段 6 页面迁移：外壳改用布局层 PageShell 的 tool 变体（gap-0 p-0）。
+    // 实例路由在 Workspace 里走 isFixedViewportRoute 分支、外层已带 p-3，
+    // 页内若再叠加 PageShell 默认的 px-[25px] py-[22px]，间距会翻倍。
+    // data-page 由 PageShell spread 透传，e2e 的就绪信号依赖它。
+    <PageShell variant="tool" data-page="instance-console" className="text-[13px] text-foreground">
       <div className="flex min-h-0 flex-1 flex-col gap-2">
         {startFailReason && (
           <div
@@ -662,7 +668,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
         onConfirm={() => { kill.mutate(instance.id); setKillConfirmOpen(false) }}
         onCancel={() => setKillConfirmOpen(false)}
       />
-    </div>
+    </PageShell>
   )
 }
 
