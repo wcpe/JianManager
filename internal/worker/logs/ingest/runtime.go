@@ -548,6 +548,10 @@ type Manager struct {
 	// gapAutoResolveAt 记录每源最近一次自愈尝试的时刻（缺陷 A）。
 	// 自愈要投递存量并按天聚合事件区间，故按源限频（见 gapAutoResolveInterval）。
 	gapAutoResolveAt map[string]time.Time
+	// reReadGapProbeAt 记录每源最近一次"待重读缝直投"探测时刻（2026-10-06 快验回归修复）。
+	// 该步含 Ledger.Get（深克隆）＋ WAL 全量 Snapshot ⇒ 只允许**有投递欠账**的源在冷却期外
+	// 至多探一次（详见 directDeliverResolvedReReadGap 的门闸说明 ✓）。
+	reReadGapProbeAt map[string]time.Time
 	// selfHealInterval 是自愈的最小重试间隔；0 表示用默认常量。
 	selfHealInterval time.Duration
 	// generationProbeCache 是「该源该代次已确认未占用」的进程内缓存（复审 P2-11，
@@ -6934,7 +6938,7 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 		// 仍在暂停 ⇒ **照样计入**（它仍是"可解源" ✓）。
 		// ⇒ 与"★应复活"之差 = **滞回条件（backlog < 半闸）** ✓ ⇒ 现场"eligible 稳 46 而剪刀差在降"
 		// **不是矛盾**，是两把尺口径不同 ✓✓。
-		if e := led.Get(p.Key()); e != nil && e.AcquirePaused && acquire.IsBacklogPauseReason(e.PauseReason) {
+		if st, ok := led.AcquireState(p.Key()); ok && st.Paused && acquire.IsBacklogPauseReason(st.PauseReason) {
 			eligible++
 		}
 	}
@@ -7530,6 +7534,34 @@ func (m *Manager) noteReclaimStall(p *pipeline.Pipeline, source SourceConfig, po
 	}
 }
 
+// allowReReadGapProbe 是"待重读缝直投"的**每源冷却门**（O(1)，2026-10-06 快验回归修复）：
+// 同源 30s 内至多探一次 ⇒ 把该步的代价从"每源每轮 × 全量快照"降到"欠账源 ≤2 次/分钟" ✓。
+// 设计取舍：宁可让个别缝多等 ≤30s，也不允许它再占死兜底环（饿死 60 源的代价远大于此 ✗）。
+func (m *Manager) allowReReadGapProbe(key ledger.SourceKey) bool {
+	if m == nil {
+		return false
+	}
+	k := key.LogSourceID + "/" + key.SourceGeneration
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.reReadGapProbeAt == nil {
+		m.reReadGapProbeAt = make(map[string]time.Time)
+	}
+	if last, ok := m.reReadGapProbeAt[k]; ok && now.Sub(last) < 30*time.Second {
+		return false
+	}
+	if len(m.reReadGapProbeAt) > 4096 {
+		for kk, ts := range m.reReadGapProbeAt {
+			if now.Sub(ts) > 10*time.Minute {
+				delete(m.reReadGapProbeAt, kk)
+			}
+		}
+	}
+	m.reReadGapProbeAt[k] = now
+	return true
+}
+
 // directDeliverResolvedReReadGap 是 #179-② 的**破环直投步**（红线照批 ✓）：
 // 区间上界＝缝 EndPos（目的正是越过当前 delivery ✓）；只投确在 WAL 的 durable 字节（缺 ⇒ 可见缺口+告警 ✓）；
 // 不绕导入守卫、不 MarkImported、hold 优先、判据不放宽 ✓；单源互斥复用 #56 在飞表 ✓；
@@ -7537,6 +7569,18 @@ func (m *Manager) noteReclaimStall(p *pipeline.Pipeline, source SourceConfig, po
 // **不做自动终局裁定** ✗（升级梯首级就是本步 ✓）。
 func (m *Manager) directDeliverResolvedReReadGap(p *pipeline.Pipeline, source SourceConfig) {
 	if m == nil || p == nil || p.Ledger() == nil {
+		return
+	}
+	// 门闸（2026-10-06 探针快验回归修复 ✗✗）：本步原来对**每个源、每轮**先做
+	// `Ledger.Get`（深克隆 O(缺口数＋批次数)）＋ `WAL.Snapshot`（全量拷贝 O(WAL 条数)）——
+	// 60 源 × 数十万条目实测把兜底环单轮拖到 **48.5 分钟**（采集读面被饿死 ✓）。
+	// 两道 O(1) 前置：① 无投递欠账（delivery ≥ read）⇒ 直接返回 ✓；
+	//              ② 同源冷却期内不重复探测 ✓（默认 30s，见 allowReReadGapProbe ✓）。
+	pos, ok := p.Ledger().Positions(p.Key())
+	if !ok || pos.Delivery >= pos.Read {
+		return
+	}
+	if !m.allowReReadGapProbe(p.Key()) {
 		return
 	}
 	entry := p.Ledger().Get(p.Key())
