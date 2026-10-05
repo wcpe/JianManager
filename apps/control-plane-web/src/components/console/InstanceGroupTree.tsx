@@ -18,7 +18,7 @@ import {
   type GroupTreeNode,
   type VisibleGroupRow,
 } from './instance-group-tree'
-import { useVirtualRows } from '@jianmanager/biz-views/lib/virtual-list'
+import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import {

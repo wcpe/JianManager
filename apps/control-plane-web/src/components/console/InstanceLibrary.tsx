@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, GripVertical, PanelLeftClose, PanelLeftOpen,
 import { useInfiniteInstanceSearch, type InstanceInfo } from '@/api/instances'
 import { cn } from '@jianmanager/ui'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import { useVirtualRows } from '@jianmanager/biz-views/lib/virtual-list'
+import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
 import { useDebounced } from '@/lib/use-debounced'
 import { CARD_TYPES, cardTypeDef, type CardType } from '@/lib/workspace-card'
 import { WORKSPACE_DND_MIME, encodeDragPayload, type DragPayload } from '@/lib/instance-library'

@@ -2,7 +2,7 @@ import type { Extension } from '@codemirror/state'
 import { StreamLanguage } from '@codemirror/language'
 import { json } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
-import { extName } from '@jianmanager/biz-views/lib/paths'
+import { extName } from '@jianmanager/ui/lib/paths'
 
 /**
  * 编辑器语言种类（FR-070 多格式高亮）。

@@ -21,7 +21,7 @@ import { Label } from '@jianmanager/ui/components/label'
 import {
   OBS_PRESETS, obsWindowLabel, presetLabel, toLocalInput,
   type ObsWindow,
-} from '../../lib/obs-window'
+} from '../../../lib/obs-window'
 
 /**
  * 分发三页统一时间筛选（FR-425）：预设档 + 任意起止日期时间。

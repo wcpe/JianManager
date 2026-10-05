@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
 import CodeEditor from '@/components/explorer/editor/CodeEditor'
-import EditorShortcutsHelp from '@jianmanager/biz-views/components/explorer/editor/EditorShortcutsHelp'
+import EditorShortcutsHelp from '@jianmanager/ui/components/views/explorer/editor/EditorShortcutsHelp'
 import {
   useConfigRead,
   useWriteConfig,

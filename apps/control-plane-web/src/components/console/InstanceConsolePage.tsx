@@ -18,7 +18,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { cn, instanceStatusLevel } from '@jianmanager/ui'
-import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 import { instanceStatusGlowClass } from '@/lib/instance-glow'
 import { useInstanceCapabilities, hasCapability, type Capability } from '@/lib/capabilities'
 import type { CardType } from '@/lib/workspace-card'

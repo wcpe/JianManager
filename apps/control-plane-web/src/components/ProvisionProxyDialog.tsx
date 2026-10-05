@@ -20,7 +20,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@/lib/form-validation'
 import { useFieldGate } from '@/lib/use-field-gate'
 

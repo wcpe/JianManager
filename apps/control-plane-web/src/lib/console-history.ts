@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 
 import { fetchLogCursorPage, type LogEntry } from '@/api/logs'
-import { createLogLineParser, type LogLine, type LogStream } from '@jianmanager/biz-views/lib/console-log-line'
+import { createLogLineParser, type LogLine, type LogStream } from '@jianmanager/ui/lib/console-log-line'
 
 /**
  * 控制台历史日志回溯（FR-419，spec §4.3）。

@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@/i18n'
 import FileBrowser from './FileBrowser'
-import type { FileBrowserSource, FileEntry, PreviewContent } from '@jianmanager/biz-views/lib/file-browser-types'
+import type { FileBrowserSource, FileEntry, PreviewContent } from '@jianmanager/ui/lib/file-browser-types'
 
 /**
  * FileBrowser 组件强断言（FR-213）。

@@ -15,6 +15,7 @@
     "./components/*": "./src/components/*.tsx",
     "./components/layout": "./src/components/layout/index.ts",
     "./components/shell": "./src/components/shell/index.ts",
+    "./components/views/*": "./src/components/views/*.tsx",
     "./charts/*": "./src/charts/*.tsx",
     "./lib/*": "./src/lib/*.ts"
   },
@@ -22,7 +23,9 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.18.0",
+    "react-markdown": "^9.1.0",
     "recharts": "^3.8.1",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.6.0"
   },
   "peerDependencies": {
@@ -36,6 +39,7 @@
     "@jianmanager/tsconfig": "workspace:*",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",

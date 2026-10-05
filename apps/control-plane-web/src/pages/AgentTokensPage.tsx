@@ -18,7 +18,7 @@ import {
 import { mcpBaseUrl } from '@/api/agentObservability'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'

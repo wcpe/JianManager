@@ -1,4 +1,4 @@
-import { baseName, joinPath, isWithin } from '@jianmanager/biz-views/lib/paths'
+import { baseName, joinPath, isWithin } from '@jianmanager/ui/lib/paths'
 
 /**
  * 资源管理器剪贴板模型（FR-070）。

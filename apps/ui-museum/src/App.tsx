@@ -92,23 +92,23 @@ import {
 } from '@jianmanager/ui'
 
 /**
- * 业务视图包（@jianmanager/biz-views）——受控复合组件，与设计系统原语分列展示。
+ * 业务视图（@jianmanager/ui 的 components/views，原 biz-views 包已并入）——受控复合组件，与设计系统原语分列展示。
  * 它们由原语拼装、带自身交互状态，但不取数、不碰路由：数据与路由身份经 props 注入。
  */
-import { DisclaimerBanner } from '@jianmanager/biz-views/components/bot-load/session/DisclaimerBanner'
-import { BotHealthBar } from '@jianmanager/biz-views/components/console/BotHealthBar'
-import WorkspaceEmpty from '@jianmanager/biz-views/components/console/WorkspaceEmpty'
-import EditorShortcutsHelp from '@jianmanager/biz-views/components/explorer/editor/EditorShortcutsHelp'
-import PromptDialog from '@jianmanager/biz-views/components/explorer/PromptDialog'
-import BizToolbar from '@jianmanager/biz-views/components/explorer/Toolbar'
-import FileBrowserTree from '@jianmanager/biz-views/components/file-browser/FileBrowserTree'
-import type { FileEntry } from '@jianmanager/biz-views/lib/file-browser-types'
-import { TopLoadingBar } from '@jianmanager/biz-views/components/TopLoadingBar'
-import { UnifiedDiff } from '@jianmanager/biz-views/components/UnifiedDiff'
-import UntrustedFieldBadge from '@jianmanager/biz-views/components/UntrustedFieldBadge'
-import { ReleaseNotes } from '@jianmanager/biz-views/components/ReleaseNotes'
-import ClientDistFlowGuide from '@jianmanager/biz-views/components/ClientDistFlowGuide'
-import { ObsTimeRangePicker } from '@jianmanager/biz-views/components/client-dist/ObsTimeRangePicker'
+import { DisclaimerBanner } from '@jianmanager/ui/components/views/bot-load/session/DisclaimerBanner'
+import { BotHealthBar } from '@jianmanager/ui/components/views/console/BotHealthBar'
+import WorkspaceEmpty from '@jianmanager/ui/components/views/console/WorkspaceEmpty'
+import EditorShortcutsHelp from '@jianmanager/ui/components/views/explorer/editor/EditorShortcutsHelp'
+import PromptDialog from '@jianmanager/ui/components/views/explorer/PromptDialog'
+import BizToolbar from '@jianmanager/ui/components/views/explorer/Toolbar'
+import FileBrowserTree from '@jianmanager/ui/components/views/file-browser/FileBrowserTree'
+import type { FileEntry } from '@jianmanager/ui/lib/file-browser-types'
+import { TopLoadingBar } from '@jianmanager/ui/components/views/TopLoadingBar'
+import { UnifiedDiff } from '@jianmanager/ui/components/views/UnifiedDiff'
+import UntrustedFieldBadge from '@jianmanager/ui/components/views/UntrustedFieldBadge'
+import { ReleaseNotes } from '@jianmanager/ui/components/views/ReleaseNotes'
+import ClientDistFlowGuide from '@jianmanager/ui/components/views/ClientDistFlowGuide'
+import { ObsTimeRangePicker } from '@jianmanager/ui/components/views/client-dist/ObsTimeRangePicker'
 
 const rawSeries: RawSeries[] = [
   {
@@ -173,7 +173,7 @@ const SECTIONS = [
   { id: 'monitoring', label: 'Monitoring', hint: '图表与指标条' },
   { id: 'tabs', label: 'Tabs', hint: '页签' },
   { id: 'layout', label: '布局', hint: '页面壳与布局原语' },
-  { id: 'biz-views', label: '业务视图', hint: 'biz-views · 受控复合组件' },
+  { id: 'views', label: '业务视图', hint: 'views · 受控复合组件' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
@@ -749,9 +749,9 @@ export default function App() {
         </Section>
 
         <Section
-          id="biz-views"
+          id="views"
           active={section}
-          title="业务视图（@jianmanager/biz-views）"
+          title="业务视图（@jianmanager/ui · views）"
           hint="受控复合组件：由原语拼装、带自身交互状态，但不取数、不碰路由、不发请求"
         >
           <Panel title="TopLoadingBar · 顶部加载进度条">

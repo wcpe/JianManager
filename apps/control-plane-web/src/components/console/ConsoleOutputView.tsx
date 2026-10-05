@@ -15,9 +15,9 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@jianmanager/ui'
 
-import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
-import { parseAnsi, type AnsiSegment } from '@jianmanager/biz-views/lib/console-ansi'
-import type { LogLine } from '@jianmanager/biz-views/lib/console-log-line'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
+import { parseAnsi, type AnsiSegment } from '@jianmanager/ui/lib/console-ansi'
+import type { LogLine } from '@jianmanager/ui/lib/console-log-line'
 import {
   CONSOLE_CELL_BODY,
   CONSOLE_CELL_LEVEL,
@@ -26,7 +26,7 @@ import {
   isSameMatch,
   matchesForCell,
   type ConsoleSearchMatch,
-} from '@jianmanager/biz-views/lib/console-search'
+} from '@jianmanager/ui/lib/console-search'
 import {
   edgeScrollStep,
   isLineSelected,
@@ -36,10 +36,10 @@ import {
   useEdgeAutoScroll,
   useSeqSelection,
   type SeqRange,
-} from '@jianmanager/biz-views/lib/console-selection'
-import { buildStackBlocks, stackBlockText, visibleConsoleRows, type StackBlock } from '@jianmanager/biz-views/lib/console-stack-block'
-import { estimateRowLines, type WrapWidthSpec } from '@jianmanager/biz-views/lib/console-wrap'
-import { useVirtualRows } from '@jianmanager/biz-views/lib/virtual-list'
+} from '@jianmanager/ui/lib/console-selection'
+import { buildStackBlocks, stackBlockText, visibleConsoleRows, type StackBlock } from '@jianmanager/ui/lib/console-stack-block'
+import { estimateRowLines, type WrapWidthSpec } from '@jianmanager/ui/lib/console-wrap'
+import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
 
 /**
  * 控制台输出区（FR-415，spec §2.1；ADR-086）：**只读** DOM 虚拟列表。

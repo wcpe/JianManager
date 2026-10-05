@@ -4,7 +4,7 @@ import { useClientDistObservability } from '@/api/clientStats'
 import InsightCards from './InsightCards'
 import UpdateHeatmap from './UpdateHeatmap'
 import MachineListPanel from './MachineListPanel'
-import type { ObsWindow } from '@jianmanager/biz-views/lib/obs-window'
+import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
 
 /**
  * 分发观测总览区块（FR-426/427/428 mock 集成）：
