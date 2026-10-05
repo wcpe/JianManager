@@ -10,7 +10,7 @@ import {
   type ArtifactCacheItem,
 } from '@/api/nodeRuntime'
 import { formatCacheBytes, capGiBToBytes, capBytesToGiB, describeCap } from '@/lib/artifact-cache'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'

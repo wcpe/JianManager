@@ -22,7 +22,7 @@ import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 import NodePMConfigSection from '@/components/NodePMConfigSection'
 import NodeGlobalPackagesSection from '@/components/NodeGlobalPackagesSection'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
 
 /** 运行时类型展示名（专有名词，不进 i18n）。 */
 const TYPE_LABEL: Record<string, string> = { jdk: 'JDK', nodejs: 'Node.js', python: 'Python' }

@@ -93,7 +93,7 @@ const wsHarness = vi.hoisted(() => {
 vi.mock('@xterm/xterm', () => ({ Terminal: xtermHarness.MockTerminal }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: xtermHarness.MockFitAddon }))
 
-import { CONSOLE_BUFFER_LIMIT } from './console-line-buffer'
+import { CONSOLE_BUFFER_LIMIT } from '@jianmanager/biz-views/lib/console-line-buffer'
 import {
   createTerminalSessionManager,
   IDLE_DISCONNECT_MS,

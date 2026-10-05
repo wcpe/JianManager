@@ -4,7 +4,7 @@ import type { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { useDirectorRender } from '@/lib/director-render'
 import { terminalSessionManager } from '@/lib/terminal-session-manager'
-import { copyToClipboard, readClipboard } from '@/lib/clipboard'
+import { copyToClipboard, readClipboard } from '@jianmanager/biz-views/lib/clipboard'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 

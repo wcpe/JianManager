@@ -1,4 +1,4 @@
-import { stripAnsi } from './console-ansi'
+import { stripAnsi } from '@jianmanager/biz-views/lib/console-ansi'
 
 /**
  * 从控制台输出推断在线玩家（FR-416 Tab 补全的数据源之一）。

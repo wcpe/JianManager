@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { ChevronDown, Copy, FileWarning } from 'lucide-react'
 
 import { useCrashSnapshots, useCrashTrend, type CrashSnapshot, type CrashTrend } from '@/api/crashSnapshots'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/biz-views/lib/clipboard'
 import { cn } from '@jianmanager/ui'
 
 interface CrashDiagnosticsProps {
