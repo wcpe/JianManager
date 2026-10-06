@@ -171,6 +171,9 @@ export default function LogsPage() {
     // 「24h/全部」等更大范围仍从时间范围筛选器显式选择（走慢路径与完整校验 ✓，绝不给假完整 ✗）。
     const [range, setRange] = useState<TimeRangePreset>('15m')
   const [page, setPage] = useState(1)
+	// tail-first 连续分页（用户点名 ✓）：`federationCursors` 复用为**向更早的锚点**（毫秒时间戳）
+	// 而非"窗内游标"——15 分钟窗最多一页，窗内翻页形同虚设 ✗；"下一页"＝把窗口**整体向前推**
+	// （新 `to`＝当前页最旧一条的时间 ⇒ 继续取更早日志 ✓），直到窗口下界早于可查范围（空页即停 ✓）。
 	const [federationCursors, setFederationCursors] = useState<Record<number, string>>({ 1: '' })
   // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（FR-480 online_only）。
   const [onlineOnly, setOnlineOnly] = useState(false)
@@ -221,7 +224,11 @@ export default function LogsPage() {
 		limit: PAGE_SIZE,
 		...(follow ? { tailMode: 'FOLLOW_LIVE' } : {}),
 		...(onlineOnly ? { onlineOnly: true } : {}),
-		...(!follow && page > 1 && federationCursors[page] ? { cursor: federationCursors[page] } : {}),
+		// tail-first 连续分页（用户点名 ✓）：第 2 页起**不用窗内游标** ✗，而以上一页最旧一条的时间为
+		// 新的窗口上界，继续取更早日志（覆盖 `timeParams` 的 from/to ⇒ 毫秒级首屏与连续翻页并存 ✓）。
+		...(!follow && page > 1 && federationCursors[page]
+			? timeRangeToParams(range, new Date(Number(federationCursors[page])))
+			: {}),
 	}
   const federationQuery = useLogsFederation(federationParams, {
 		enabled: !legacyMode,
@@ -676,11 +683,16 @@ export default function LogsPage() {
             onPrev={() => setPage((p) => Math.max(1, p - 1))}
 			onNext={() => {
 				if (federationActive) {
-					const cursor = federation.response.nextCursor
-					if (!cursor) return
-					setFederationCursors((current) => ({ ...current, [page + 1]: cursor }))
+					// tail-first：以本页**最旧一条**（排序为 event_time DESC，故取末条 ✓）的时间为新锚点，
+					// 下一页即"继续取更早" ✓；无条目（空页）⇒ 不再前进（到底）✗。
+					const list = federationItems ?? []
+					const oldest = list.length > 0 ? list[list.length - 1] : null
+					const oldestTime = oldest?.time
+					if (!oldestTime) return
+					const anchor = String(new Date(oldestTime).getTime())
+					setFederationCursors((current) => ({ ...current, [page + 1]: anchor }))
 				}
-				setPage((p) => Math.min(totalPages, p + 1))
+				setPage((p) => p + 1)
 			}}
           />
         </Panel>
