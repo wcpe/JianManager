@@ -66,12 +66,12 @@ import {
   ScrollableDialogBody,
 } from '@jianmanager/ui/components/scrollable-dialog'
 import NodeJDKPanel from '@/components/NodeJDKPanel'
-import NodeLogRuntimePanel from '@/components/NodeLogRuntimePanel'
+import NodeLogRuntimeTab from '@/components/nodes/NodeLogRuntimeTab'
 import NodePortsTab from '@/components/nodes/NodePortsTab'
 import NodeArtifactCacheTab from '@/components/nodes/NodeArtifactCacheTab'
 import NodeProxyTab from '@/components/nodes/NodeProxyTab'
 import NodeProbeVersionTab from '@/components/nodes/NodeProbeVersionTab'
-import NodeRepairPanel from '@/components/NodeRepairPanel'
+import NodeRepairTab from '@/components/nodes/NodeRepairTab'
 import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialog from '@/components/AddNodeDialog'
 import { Button } from '@jianmanager/ui/components/button'
@@ -1288,7 +1288,7 @@ function NodeDetailPane({
         {tab === 'runtime' && (
           <div className="space-y-4">
             <NodeJDKPanel nodeId={node.id} active />
-            <NodeLogRuntimePanel nodeId={node.id} os={node.os} arch={node.arch} online={online} />
+            <NodeLogRuntimeTab nodeId={node.id} os={node.os} arch={node.arch} online={online} />
           </div>
         )}
         {tab === 'cache' && <NodeArtifactCacheTab nodeId={node.id} />}
@@ -1308,7 +1308,7 @@ function NodeDetailPane({
           </Panel>
         )}
         {tab === 'monitor' && <NodeMonitorCharts node={node} />}
-        {tab === 'repair' && <NodeRepairPanel node={node} active />}
+        {tab === 'repair' && <NodeRepairTab node={node} active />}
       </div>
     </div>
   )
