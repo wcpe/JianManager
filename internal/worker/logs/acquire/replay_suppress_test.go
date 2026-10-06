@@ -91,12 +91,13 @@ func TestReplayDrainSuppressedWhileWatermarkStalled(t *testing.T) {
 		"失败后必须**每次都允许重试**（不被退避抑制）：自愈链的时效性靠这条守 ✓")
 }
 
-// TestReplaySuppressBackoffTable 守住退避算式（父级裁定：2^k × 5s，上限 60s）。
+// TestReplaySuppressBackoffTable 守住退避算式（2026-10-06 收窄：base 500ms、上限 2s ——
+// 排空已改增量语义，原按"159s/次整窗"设的 5s/60s 区间失去依据，且在停滞形态下"越等越不动"）。
 func TestReplaySuppressBackoffTable(t *testing.T) {
 	pipe := NewPipeline(ledger.New(), testKey("src-backoff", "g1"), nil)
 	want := map[int]time.Duration{
-		1: 5 * time.Second, 2: 10 * time.Second, 3: 20 * time.Second,
-		4: 40 * time.Second, 5: 60 * time.Second, 6: 60 * time.Second, 9: 60 * time.Second,
+		1: 500 * time.Millisecond, 2: time.Second, 3: 2 * time.Second,
+		4: 2 * time.Second, 5: 2 * time.Second, 9: 2 * time.Second,
 	}
 	for streak, w := range want {
 		require.Equal(t, w, pipe.replayBackoffFor(streak), "streak=%d", streak)

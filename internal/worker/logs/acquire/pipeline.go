@@ -65,17 +65,20 @@ type Pipeline struct {
 	replaySuppressBaseOverride time.Duration
 }
 
-// replaySuppressBase / replaySuppressMax 是「冗余整窗重投」抑制的退避区间（#60-Z1，父级裁定）：
-// 同一水位下第 k 次重复 ⇒ 等 2^(k-1) × 5s，上限 60s；**水位一前进即放行** ✓。
-//
-// 现场（opt2 采）：门队列浅（1–9 帧）⇒ 不是排队问题；单次持久化 maxMs=159,934ms ✗✗ ⇒ 慢在「单次大 payload
-// 提交」；投递链上**相邻样本 79.7% 是新代次（+1）**⇒ 几乎每次写入都在整窗 replace；≥1M 批占 4.8%、峰值 126 条/h。
-// 环：排空（deliverPendingBestEffort）每次只发 ≤500 条，却以 replay=true 调用投递 ⇒ ingest 侧 replace=true ⇒
-// **重建权威全量 + 发新代次**（现场单次 159s）；滞留期的重复触发把同一段未推进的水位反复整窗重投 ✗✗。
+// replaySuppressBase / replaySuppressMax 是「冗余整窗重投」抑制的退避区间（#60-Z1，父级裁定）；
+// **2026-10-06 收窄**：排空已改增量语义（replay=false，单次代价 ≤ 本批上限）✗ ⇒ 原来按"159s/次整窗"
+// 设的 60s 封顶已失去依据 ✗，且在"delivery==reclaim<read"的停滞形态下会**越等越不动** ✗。
+// 现封顶降到 2s：冗余排空的**安全阀仍在**（同水位连续触发照样被抑制 ✓，见用例），
+// 但停滞形态最多等 2s 即可再试 ⇒ 不再自锁 ✓。
 const (
-	replaySuppressBase = 5 * time.Second
-	replaySuppressMax  = 60 * time.Second
+	replaySuppressBase = 500 * time.Millisecond
+	replaySuppressMax  = 2 * time.Second
 )
+// 历史记录（#60-Z1 现场，opt2 采）：门队列浅（1–9 帧）⇒ 不是排队问题；单次持久化 maxMs=159,934ms ✗✗
+// ⇒ 慢在「单次大 payload 提交」；投递链上相邻样本 79.7% 是新代次（+1）⇒ 几乎每次写入都在整窗 replace；
+// ≥1M 批占 4.8%、峰值 126 条/h。环：排空每次只发 ≤500 条，却以 replay=true 调用投递 ⇒ ingest 侧
+// replace=true ⇒ **重建权威全量 + 发新代次**（现场单次 159s）⇒ 退避闸的由来。**2026-10-06 起排空已改
+// 增量语义（replay=false）⇒ 该历史形态的成本已消失，封顶收窄到 2s（见上）✓。**
 
 // replayGateState 是"冗余整窗重投"抑制闸的状态（零值 ⇒ 从未尝试）。
 //
