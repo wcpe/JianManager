@@ -35,14 +35,16 @@ void testI18n.use(initReactI18next).init({
 })
 
 function renderSwitcher(props: Partial<Parameters<typeof ThemeSwitcher>[0]> = {}) {
-  const merged = { colorTheme: 'indigo' as const, theme: 'system' as const, ...props }
+  const merged = {
+    colorTheme: 'indigo' as const,
+    theme: 'system' as const,
+    onColorThemeChange: vi.fn(),
+    onThemeChange: vi.fn(),
+    ...props,
+  }
   render(
     <I18nextProvider i18n={testI18n}>
-      <ThemeSwitcher
-        onColorThemeChange={vi.fn()}
-        onThemeChange={vi.fn()}
-        {...(merged as Parameters<typeof ThemeSwitcher>[0])}
-      />
+      <ThemeSwitcher {...merged} />
     </I18nextProvider> as ReactNode,
   )
   return merged
