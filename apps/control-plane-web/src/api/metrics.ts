@@ -3,12 +3,16 @@ import { toast } from 'sonner'
 // 序列与实时指标契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的查询泛型使用。
 import type { InstanceMetricsData } from '@jianmanager/ui/lib/instance-metrics'
+import type { PlayerTrendResult } from '@jianmanager/ui/lib/player-trend'
+import type { SLOResult } from '@jianmanager/ui/lib/slo'
 import type { MetricSeries, SeriesPoint } from '@jianmanager/ui/lib/metric-series'
 export type {
   InstanceMetricsData,
   WorldMetric,
 } from '@jianmanager/ui/lib/instance-metrics'
 export type { MetricSeries, SeriesPoint } from '@jianmanager/ui/lib/metric-series'
+export type { PlayerTrendResult } from '@jianmanager/ui/lib/player-trend'
+export type { SLOResult } from '@jianmanager/ui/lib/slo'
 
 import api from '@/api/client'
 import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
@@ -617,15 +621,6 @@ export function useInstanceRanking(params: {
 }
 
 /** 玩家在线趋势结果（FR-469）：全网合计曲线 + 24 时段分布 + 峰值/日均。 */
-export interface PlayerTrendResult {
-  resolution: string
-  timezone: string
-  trend: SeriesPoint[]
-  hourlyDist: number[]
-  peakValue: number
-  peakAt: string | null
-  dailyAvg: number
-}
 
 /**
  * 玩家在线趋势与时段分析（FR-469）。tz 缺省时后端按服务器本地时区分桶，
@@ -648,22 +643,6 @@ export function usePlayerTrend(params: { range: MetricRange; resolution?: Metric
 }
 
 /** 可用性/SLO 结果（FR-463）。MTTR/MTBF 为 null 表示无已恢复故障/无故障（不是 Infinity）。 */
-export interface SLOResult {
-  scope: 'platform' | 'node' | 'instance'
-  availability: number
-  totalSamples: number
-  upSamples: number
-  incidents: number
-  activeIncidents: number
-  mttrSeconds: number | null
-  mtbfSeconds: number | null
-  budgetAllowedSec: number
-  budgetBurnedSec: number
-  target: number
-  approximatedBuckets: boolean
-  /** false=窗口内无可用证据（分母为 0）：可用率与误差预算均不适用，前端显示「不适用」。 */
-  applicable: boolean
-}
 
 /**
  * 平台/实例/节点可用性与 SLO 聚合（FR-463）。platform 为非管理员的可见实例汇总；
