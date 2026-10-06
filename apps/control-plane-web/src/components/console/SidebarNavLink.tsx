@@ -1,16 +1,11 @@
 import { NavLink } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import type { LucideIcon } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import type { NavEntry } from '@jianmanager/ui/lib/nav-config'
 import { useRouteIntentPrefetch } from '@/lib/route-prefetch'
 
-/** 侧栏导航项（多级侧栏共用）。`perm` 为权限节点，数组表示 any-of（FR-431）。 */
-export interface NavEntry {
-  to: string
-  labelKey: string
-  icon?: LucideIcon
-  perm?: string | string[]
-}
+// 导航项类型已收敛到包内 nav-config（单一来源）；此处转出以兼容既有 import 点。
+export type { NavEntry }
 
 /** 侧栏单个导航链接（FR-061 高密度 + MC 绿激活态）；`/` 用 end 精确匹配。 */
 export default function SidebarNavLink({
