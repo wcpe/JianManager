@@ -1,10 +1,6 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import { Copy, Download, FolderOpen, Loader2, Package, PackageCheck, Pencil, Coffee, Search, Trash2 } from 'lucide-react'
-import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK, useProbeJDK, useUpdateJDK, type NodeJDK, type ProbeResult } from '@/api/jdks'
-import { useJDKCatalog } from '@/api/nodeRuntime'
-import { PingNodeButton } from '@/components/PingNodeButton'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -14,9 +10,7 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { cn } from '@jianmanager/ui'
-import DangerConfirm from '@/components/DangerConfirm'
-import DirectoryPicker from '@/components/DirectoryPicker'
-import NodeRuntimeTab from '@/components/nodes/NodeRuntimeTab'
+import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
 import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 
 /** JDK 厂商集（foojay 支持，可自定义其它发行版）。 */
@@ -45,10 +39,35 @@ function ProbeRow({ label, value, mono }: { label: string; value: string; mono?:
   )
 }
 
-interface NodeJDKPanelProps {
-  nodeId: number
-  /** 是否启用查询（抽屉/分段打开时为 true）。 */
-  active?: boolean
+/** 一条已登记的 JDK（本组件所需的最小结构；外壳传 API 返回项会结构兼容）。 */
+export interface NodeJDKView {
+  id: number
+  vendor: string
+  majorVersion: number
+  version: string
+  arch: string
+  path: string
+  /** 平台托管（删除会连文件一起删）。 */
+  managed: boolean
+}
+
+/** 路径探测结果（同上）。 */
+export interface ProbeResultView {
+  valid: boolean
+  vendor: string
+  majorVersion: number
+  version: string
+  arch: string
+  /** 探测出的 JDK 根目录（登记时作为 path 提交）。 */
+  javaHome: string
+  error?: string
+}
+
+/** foojay 版本目录的一个可选项（同上）。 */
+export interface JDKCatalogItemView {
+  javaVersion: string
+  latest?: boolean
+  archiveType: string
 }
 
 /** 面板内子视图：已登记列表 / 一键下载 / 登记已有（分段切换，容器固定不重排）。 */
@@ -60,14 +79,96 @@ type JDKTab = 'list' | 'install' | 'register'
  * - 一键下载支持多厂商 + foojay 具体版本选择器，下发接任务中心（FR-183）；
  * - 登记已有用目录选择器选路径（非手敲）。
  * 三个动作以分段切换（容器稳定，符合抽屉 UX 约束：不切换隐显内联表单致布局重组）。
- * 可复用独立组件（不绑死容器，便于 FR-177 改挂右栏分段）。
+ *
+ * 受控视图（ADR-097 b 范式）：不取数、不发请求、不弹 toast。五类动作回调化，
+ * 其中「探测」与「刷新目录」必须**回传结果**（探测结果要展示、要驱动登记表单可用性）；
+ * 表单草稿、分段、筛选、编辑草稿等 UI 状态留在组件内。
+ *
+ * 三处注入点（都是本视图不该认识的取数组件）：
+ * - `pingSlot`：安装前的节点存活测试（自带取数）；
+ * - `renderDirectoryPicker`：目录选择器（自带取数，且视图要控制其开关并接收选定路径，
+ *   故用渲染函数而非普通 slot）；
+ * - `runtimeSlot`：分区末尾的运行时库（自成一块、自行取数）。
  */
-export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProps) {
+export interface NodeJDKPanelProps {
+  /** 已登记 JDK 列表；外壳取数注入。 */
+  jdks?: NodeJDKView[]
+  /** 首次加载态。 */
+  isLoading?: boolean
+  /** 后台同步中（列表从节点回同步时显式提示，避免「卡住无反馈」）。 */
+  isFetching?: boolean
+  /** foojay 版本目录：加载中。 */
+  catalogLoading?: boolean
+  /** foojay 目录不可用（出错或无结果）→ 降级为手填具体版本。 */
+  catalogUnavailable?: boolean
+  /** foojay 目录选项。 */
+  catalogVersions?: JDKCatalogItemView[]
+  /**
+   * 上报 foojay 目录的查询键（厂商 + 大版本 + 是否处于「一键下载」分段）。
+   * 这两个值是视图内的表单草稿，却同时是目录查询的键，故变化时上报、由外壳执行查询。
+   */
+  onCatalogQuery?: (vendor: string, major: number, open: boolean) => void
+  /** 一键下载在途。 */
+  installing?: boolean
+  /** 登记在途。 */
+  creating?: boolean
+  /** 路径探测在途。 */
+  probing?: boolean
+  /** 编辑保存在途。 */
+  saving?: boolean
+  /** 安装前的节点存活测试位（外壳注入，自带取数）。 */
+  pingSlot?: ReactNode
+  /** 目录选择器渲染器（外壳注入，自带取数）。 */
+  renderDirectoryPicker?: (args: { onPick: (path: string) => void; onCancel: () => void }) => ReactNode
+  /** 分区末尾的运行时库（外壳注入，自成一块）。 */
+  runtimeSlot?: ReactNode
+  /** 触发一键下载。返回是否成功（成功则回列表分段）。 */
+  onInstall: (body: { vendor: string; majorVersion: number; arch: string; version?: string }) => Promise<boolean>
+  /** 登记探测到的 JDK。返回是否成功（成功则清空草稿并回列表分段）。 */
+  onRegister: (body: {
+    vendor: string
+    majorVersion: number
+    version: string
+    arch: string
+    path: string
+    managed: boolean
+  }) => Promise<boolean>
+  /** 探测路径。成功回传结果；失败回 null（视图保留输入以便重试）。 */
+  onProbe: (path: string) => Promise<ProbeResultView | null>
+  /** 保存编辑（FR-311）。返回是否成功。 */
+  onUpdate: (
+    jdkId: number,
+    body: { vendor: string; majorVersion: number; version: string; arch: string; path: string },
+  ) => Promise<boolean>
+  /** 删除登记。返回是否成功（失败原因由外壳提示）。 */
+  onDelete: (jdk: NodeJDKView) => Promise<boolean>
+  /** 复制路径的结果上报（由外壳决定提示文案）。 */
+  onCopyResult?: (ok: boolean) => void
+}
+
+export default function NodeJDKPanel({
+  jdks,
+  isLoading,
+  isFetching = false,
+  catalogLoading = false,
+  catalogUnavailable = false,
+  catalogVersions = [],
+  onCatalogQuery,
+  installing = false,
+  creating = false,
+  probing = false,
+  saving = false,
+  pingSlot,
+  renderDirectoryPicker,
+  runtimeSlot,
+  onInstall,
+  onRegister,
+  onProbe,
+  onUpdate,
+  onDelete,
+  onCopyResult,
+}: NodeJDKPanelProps) {
   const { t } = useTranslation()
-  const { data: jdks, isLoading, isFetching } = useNodeJDKs(nodeId)
-  const create = useCreateJDK(nodeId)
-  const del = useDeleteJDK(nodeId)
-  const install = useInstallJDK(nodeId)
 
   const [tab, setTab] = useState<JDKTab>('list')
 
@@ -80,47 +181,41 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
   // 登记表单状态（FR-228：选目录 + 后端探测自动填，不再手填厂商/版本/架构）。
   const [regManaged, setRegManaged] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [probed, setProbed] = useState<ProbeResult | null>(null)
+  const [probed, setProbed] = useState<ProbeResultView | null>(null)
   const [pathInput, setPathInput] = useState('') // 登记路径：可手输或经选目录填入（FR-228 细化）
-  const probe = useProbeJDK(nodeId)
 
-  const [pendingDel, setPendingDel] = useState<NodeJDK | null>(null)
+  const [pendingDel, setPendingDel] = useState<NodeJDKView | null>(null)
   const [view, setView] = useState<ViewMode>('list')
   const [query, setQuery] = useState('')
   const [sourceFilter, setSourceFilter] = useState<'all' | 'managed' | 'external'>('all')
 
   // 编辑登记信息（FR-311）：行内铅笔 → 模态改厂商/大版本/具体版本/arch/路径，走既有 PUT。
-  const update = useUpdateJDK(nodeId)
-  const [editing, setEditing] = useState<NodeJDK | null>(null)
+  const [editing, setEditing] = useState<NodeJDKView | null>(null)
   const [editForm, setEditForm] = useState({ vendor: '', majorVersion: '', version: '', arch: '', path: '' })
-  const openEdit = (j: NodeJDK) => {
+  const openEdit = (j: NodeJDKView) => {
     setEditing(j)
     setEditForm({ vendor: j.vendor, majorVersion: String(j.majorVersion), version: j.version ?? '', arch: j.arch ?? '', path: j.path })
   }
-  const submitEdit = () => {
+  const submitEdit = async () => {
     if (!editing) return
-    update.mutate(
-      {
-        jdkId: editing.id,
-        body: {
-          vendor: editForm.vendor.trim(),
-          majorVersion: Number(editForm.majorVersion) || editing.majorVersion,
-          version: editForm.version.trim(),
-          arch: editForm.arch.trim(),
-          path: editForm.path.trim(),
-        },
-      },
-      {
-        onSuccess: () => { toast.success(t('nodes.jdkEditSaved', '已保存 JDK 登记信息')); setEditing(null) },
-        onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-          toast.error(err.response?.data?.message || t('nodes.jdkEditFailed', '保存失败')),
-      },
-    )
+    const ok = await onUpdate(editing.id, {
+      vendor: editForm.vendor.trim(),
+      majorVersion: Number(editForm.majorVersion) || editing.majorVersion,
+      version: editForm.version.trim(),
+      arch: editForm.arch.trim(),
+      path: editForm.path.trim(),
+    })
+    if (ok) setEditing(null)
   }
 
-  // foojay 版本目录（仅在「一键下载」分段且 vendor 非空时查询）。
   const majorNum = Number(major) || 0
-  const catalog = useJDKCatalog(nodeId, vendor, majorNum, { enabled: active && tab === 'install' })
+
+  // 厂商/大版本是 foojay 目录的查询键（换厂商/版本即换查询），且只在「一键下载」
+  // 分段才需要——故把三者的组合上报外壳，由它决定何时发起查询。
+  // 外壳侧用幂等 setState 吸收重复上报，避免本 effect 触发重渲染循环。
+  useEffect(() => {
+    onCatalogQuery?.(vendor, majorNum, tab === 'install')
+  }, [vendor, majorNum, tab, onCatalogQuery])
 
   // 已登记列表的来源筛选 + 文本搜索（FR-195：行卡片 / 网格视图的轻量过滤）。
   const allJdks = jdks ?? []
@@ -147,70 +242,49 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
       </span>
     )
 
-  const onInstall = () => {
-    install.mutate(
-      { vendor, majorVersion: majorNum, arch, version: version.trim() || undefined },
-      {
-        // FR-183：异步任务，回执 taskId；进度/完成在「任务中心」与站内信查看。
-        onSuccess: () => {
-          toast.success(t('artifactCache.jdkInstallDispatched'))
-          setTab('list')
-        },
-        onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-          toast.error(err.response?.data?.message || t('nodes.jdkInstallFailed')),
-      }
-    )
+  const submitInstall = async () => {
+    // FR-183：异步任务，回执 taskId；进度/完成在「任务中心」与站内信查看。
+    const ok = await onInstall({ vendor, majorVersion: majorNum, arch, version: version.trim() || undefined })
+    if (ok) setTab('list')
   }
 
-  const onRegister = (e: FormEvent) => {
+  const submitRegister = async (e: FormEvent) => {
     e.preventDefault()
     if (!probed?.valid) return
-    create.mutate(
-      {
-        vendor: probed.vendor,
-        majorVersion: probed.majorVersion,
-        version: probed.version,
-        arch: probed.arch,
-        path: probed.javaHome,
-        managed: regManaged,
-      },
-      {
-        onSuccess: () => {
-          toast.success(t('nodes.jdkRegistered'))
-          setProbed(null)
-          setPathInput('')
-          setRegManaged(false)
-          setTab('list')
-        },
-        onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-          toast.error(err.response?.data?.message || t('nodes.jdkRegisterFailed')),
-      }
-    )
+    const ok = await onRegister({
+      vendor: probed.vendor,
+      majorVersion: probed.majorVersion,
+      version: probed.version,
+      arch: probed.arch,
+      path: probed.javaHome,
+      managed: regManaged,
+    })
+    if (ok) {
+      setProbed(null)
+      setPathInput('')
+      setRegManaged(false)
+      setTab('list')
+    }
   }
 
   // 探测路径（FR-228）：后端 java -version 自动得出厂商/版本/架构，结果存 probed。手输或选目录都走这里。
-  const runProbe = (path: string) => {
+  const runProbe = async (path: string) => {
     if (!path) return
-    probe.mutate(path, {
-      onSuccess: (res) => setProbed(res),
-      onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-        setProbed(null)
-        toast.error(err.response?.data?.message || t('nodes.jdkProbeFailed', '探测失败'))
-      },
-    })
+    const res = await onProbe(path)
+    // 失败时清空上一次结果，避免把旧结果当成新路径的探测结论。
+    setProbed(res)
   }
 
   // 选目录后填入路径并自动探测（FR-228）。
   const onPickPath = (path: string) => {
     setPickerOpen(false)
     setPathInput(path)
-    runProbe(path)
+    void runProbe(path)
   }
 
   const copyPath = async (p: string) => {
     const ok = await copyToClipboard(p)
-    if (ok) toast.success(t('artifactCache.pathCopied'))
-    else toast.error(t('common.copyFailed'))
+    onCopyResult?.(ok)
   }
 
   return (
@@ -319,7 +393,7 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
                       type="button"
                       className="mt-0.5 flex max-w-full items-center gap-1 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
                       title={j.path}
-                      onClick={() => copyPath(j.path)}
+                      onClick={() => void copyPath(j.path)}
                     >
                       <span className="truncate">{j.path}</span>
                       <Copy className="size-3 shrink-0" />
@@ -397,7 +471,7 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
                     type="button"
                     className="mt-2 flex w-full items-center gap-1 border-t pt-2 font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
                     title={j.path}
-                    onClick={() => copyPath(j.path)}
+                    onClick={() => void copyPath(j.path)}
                   >
                     <span className="truncate">{j.path}</span>
                     <Copy className="size-3 shrink-0" />
@@ -426,16 +500,16 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
             </label>
             <label className="space-y-1">
               <span className="font-medium">{t('artifactCache.jdkVersionPick')}</span>
-              {catalog.isLoading ? (
+              {catalogLoading ? (
                 <p className="px-1 py-1.5 text-xs text-muted-foreground">{t('artifactCache.jdkCatalogLoading')}</p>
-              ) : catalog.isError || !catalog.data || catalog.data.length === 0 ? (
+              ) : catalogUnavailable ? (
                 // foojay 不可达/无结果：降级为手填具体版本（仍可下载）。
                 <Input value={version} onChange={(e) => setVersion(e.target.value)} placeholder={t('artifactCache.jdkVersionLatest')} />
               ) : (
                 <Combobox
                   options={[
                     { value: '', label: t('artifactCache.jdkVersionLatest') },
-                    ...catalog.data.map((p) => ({
+                    ...catalogVersions.map((p) => ({
                       value: p.javaVersion,
                       label: `${p.javaVersion}${p.latest ? ` (${t('artifactCache.jdkLatest')})` : ''} · ${p.archiveType}`,
                     })),
@@ -460,8 +534,8 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
           </div>
           {/* 下载前先测节点存活（FR-229）：避免对离线/卡顿节点发起会卡死的下载 */}
           <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-            <PingNodeButton nodeId={nodeId} />
-            <Button onClick={onInstall} disabled={install.isPending || majorNum <= 0}>
+            {pingSlot}
+            <Button onClick={() => void submitInstall()} disabled={installing || majorNum <= 0}>
               <Download className="size-4" />
               {t('nodes.jdkInstall')}
             </Button>
@@ -470,7 +544,7 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
       )}
 
       {tab === 'register' && (
-        <form onSubmit={onRegister} className="space-y-3 rounded-md border p-3 text-sm">
+        <form onSubmit={submitRegister} className="space-y-3 rounded-md border p-3 text-sm">
           {/* 托管标记置顶：让用户先决定（FR-228） */}
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={regManaged} onCheckedChange={(v) => setRegManaged(v === true)} aria-label={t('nodes.jdkMarkManaged')} />
@@ -491,8 +565,8 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
                 <FolderOpen className="size-4" />
                 {t('artifactCache.browse', '浏览')}
               </Button>
-              <Button type="button" variant="outline" size="sm" disabled={!pathInput.trim() || probe.isPending} onClick={() => runProbe(pathInput.trim())}>
-                {probe.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+              <Button type="button" variant="outline" size="sm" disabled={!pathInput.trim() || probing} onClick={() => void runProbe(pathInput.trim())}>
+                {probing ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
                 {t('nodes.jdkDetect', '检测')}
               </Button>
             </div>
@@ -500,7 +574,7 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
           </div>
 
           {/* 探测结果：有效 → 只读展示；无效 → 错误 */}
-          {probed && !probe.isPending && (
+          {probed && !probing && (
             probed.valid ? (
               <dl className="divide-y rounded-md border bg-muted/30 text-sm">
                 <ProbeRow label={t('nodes.jdkPath')} value={probed.javaHome} mono />
@@ -517,18 +591,18 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
           )}
 
           <div className="flex justify-end">
-            <Button type="submit" disabled={create.isPending || !probed?.valid}>
-              {create.isPending ? t('common.saving') : t('common.save')}
+            <Button type="submit" disabled={creating || !probed?.valid}>
+              {creating ? t('common.saving') : t('common.save')}
             </Button>
           </div>
 
-          {/* 目录选择器：模态承载（FR-228，不内联动布局） */}
+          {/* 目录选择器：模态承载（FR-228，不内联动布局），实现由外壳注入（自带取数） */}
           <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
             <DialogContent className="sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>{t('nodes.jdkSelectDir', '选择 JDK 目录')}</DialogTitle>
               </DialogHeader>
-              <DirectoryPicker nodeId={nodeId} onPick={onPickPath} onCancel={() => setPickerOpen(false)} />
+              {renderDirectoryPicker?.({ onPick: onPickPath, onCancel: () => setPickerOpen(false) })}
             </DialogContent>
           </Dialog>
         </form>
@@ -545,19 +619,9 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
         confirmLabel={t('common.delete')}
         confirmText={pendingDel?.managed ? `${pendingDel?.vendor} ${pendingDel?.majorVersion}` : undefined}
         onConfirm={() => {
-          const id = pendingDel!.id
+          const target = pendingDel!
           setPendingDel(null)
-          del.mutate(id, {
-            onSuccess: () => toast.success(t('nodes.jdkDeleted')),
-            onError: (err: Error & { response?: { data?: { message?: string; instances?: { name: string }[] } } }) => {
-              const insts = err.response?.data?.instances
-              if (insts && insts.length > 0) {
-                toast.error(t('nodes.jdkInUse', { names: insts.map((i) => i.name).join(', ') }))
-              } else {
-                toast.error(err.response?.data?.message || t('nodes.jdkDeleteFailed'))
-              }
-            },
-          })
+          void onDelete(target)
         }}
         onCancel={() => setPendingDel(null)}
       />
@@ -597,16 +661,16 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
             </label>
             <div className="flex justify-end gap-2 pt-1">
               <Button variant="outline" onClick={() => setEditing(null)}>{t('common.cancel')}</Button>
-              <Button disabled={update.isPending || !editForm.vendor.trim() || !editForm.path.trim()} onClick={submitEdit}>
-                {update.isPending ? t('common.saving', '保存中…') : t('common.save', '保存')}
+              <Button disabled={saving || !editForm.vendor.trim() || !editForm.path.trim()} onClick={() => void submitEdit()}>
+                {saving ? t('common.saving', '保存中…') : t('common.save', '保存')}
               </Button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* 运行时分区（FR-298 节点运行时库）：统一列表（类型徽章）+ 扫描发现候选勾选入库。 */}
-      <NodeRuntimeTab nodeId={nodeId} active={active} />
+      {/* 运行时分区（FR-298 节点运行时库）：由外壳注入，自成一块、自行取数。 */}
+      {runtimeSlot}
     </div>
   )
 }
