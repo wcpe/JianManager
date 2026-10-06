@@ -17,6 +17,7 @@ import {
   type ResourceStatus,
 } from '@jianmanager/ui/components/shell'
 import { ThemeSwitcher, type ThemeSwitcherProps } from '@jianmanager/ui/components/views/console/ThemeSwitcher'
+import type { SidebarLinkArgs } from '@jianmanager/ui/components/views/console/sidebar-link'
 import { statusDotKind } from '@jianmanager/ui/lib/instance-tree'
 import type { NavEntry } from '@jianmanager/ui/lib/nav-config'
 import { resolveWorkspacePath, type WorkspaceDef } from '@jianmanager/ui/lib/workspace-navigation'
@@ -102,15 +103,11 @@ export interface WorkspaceSidebarPermissions {
   loaded: boolean
 }
 
-/** 外壳注入的链接渲染入参（包内不依赖 react-router）。 */
-export interface WorkspaceLinkArgs {
-  to: string
-  className?: string
-  ariaCurrent?: 'page'
-  ariaLabel?: string
-  title?: string
-  children: ReactNode
-}
+/**
+ * 链接渲染入参：与旧控制台侧栏共用同一份（见 {@link SidebarLinkArgs}），
+ * 此处保留旧名以免已引用它的代码改动。
+ */
+export type WorkspaceLinkArgs = SidebarLinkArgs
 
 export interface WorkspaceSidebarProps {
   /** 折叠态（应用侧 store 驱动）。 */

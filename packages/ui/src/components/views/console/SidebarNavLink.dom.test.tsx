@@ -27,8 +27,9 @@ void testI18n.use(initReactI18next).init({
 function renderLink({ to, end, className, children }: NavLinkRenderArgs) {
   // 用固定激活态覆盖 className 回调，便于断言样式分支。
   const isActive = to === '/active'
+  const cls = typeof className === 'function' ? className(isActive) : className
   return (
-    <a href={to} data-end={String(end)} className={className(isActive)}>
+    <a href={to} data-end={String(end)} className={cls}>
       {children}
     </a>
   )
