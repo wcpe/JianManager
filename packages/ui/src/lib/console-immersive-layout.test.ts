@@ -61,8 +61,8 @@ describe('控制台沉浸模式 pane 树', () => {
 
     const widened = setSplitRatio(tree, target, 0.68)
     expect(widened).toMatchObject({ ratio: 0.68 })
-    // 原树不可变
-    expect(tree.ratio).toBeUndefined()
+    // 原树不可变（target 与 tree 是同一节点，其 ratio 仍是初始的「未设置」）。
+    expect(target.ratio).toBeUndefined()
 
     expect(setSplitRatio(tree, target, 0.05)).toMatchObject({ ratio: MIN_RATIO })
     expect(setSplitRatio(tree, target, 0.95)).toMatchObject({ ratio: MAX_RATIO })
