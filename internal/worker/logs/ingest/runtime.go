@@ -146,6 +146,8 @@ type Manager struct {
 	// 取值语义：pending=true 且非存量重放时，先按最近已发布代次在查询面复核；确认已完整可见 ⇒ 记 1 次。
 	// 用途：#5 验收直接判「VL 完整 ⇒ 零重发」是否真的发生 ✓。
 	republishSkipped atomic.Int64
+	// replaceRowsWritten：写入面（差集后）实际落库行数读数（w21 稿 ③），用于 #12 判读「整窗重发 vs 只写差集」。
+	replaceRowsWritten atomic.Int64
 	// registerMu 串行化「实例登记 / 采集绑定」自身，使这条路径**永不等待采集轮的长临界区**。
 	//
 	// 为什么要与 cycleMu 分离（2026-10-01 生产事故根因）：cycleMu 的持有者是「整轮采集」
@@ -4278,7 +4280,14 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 	if current, ok := m.cat.Get(catKey); ok && !replace && !tailPlanned &&
 		len(publishedSourceProjectionGenerations(current.PublishedProjection, source)) >= maxPublishedProjectionGenerations {
 		replace = true
-		writeEvents = events
+		// 代次用尽 ⇒ 进位换代：新代按 replace 语义声明为「覆盖旧代并集」，读路径跨代解析 ✓。
+		// 但**写入面保持调用方给出的差集**（本批；未变更行已由管线按「同 ID 同哈希」剔除，见 deliver 的
+		// toWrite）：旧实现在此把写入面覆写为整窗全量 events ✗ ⇒ 同一 event_id 同 canonical_content_hash
+		// 被再写进新代 ⇒ 查询面判重（w21 稿 ② 的根因）。仅当调用方未给出写入面（空）时才回退整窗，
+		// 避免"声明了整窗却没写"。
+		if len(writeEvents) == 0 {
+			writeEvents = events
+		}
 	}
 	client, frozen, err := m.clientForSource(source)
 	if err != nil {
@@ -4293,6 +4302,8 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		batchFirst = writeEvents[0].EventTimeUTC
 		batchLast = writeEvents[len(writeEvents)-1].EventTimeUTC
 	}
+	// 写面幂等（w21 稿 ②）尚未落地：差集预检与「对账不可用/关闭 ⇒ 整窗重发」（不得放宽）的既有护栏
+	// 存在语义冲突，需先修订设计（仅在已发布面可信时启用 ✓），详见 w21-plan-idempotent-write.md 的后续裁定。
 	slog.Info("投影写入开始",
 		"generation", generation, "source", source.LogSourceID,
 		"events", len(writeEvents), "archiveEvents", len(archiveEvents),
@@ -4360,6 +4371,7 @@ func (m *Manager) insertInBatches(client *vlsup.Client, events []logtypes.Event,
 		if err != nil {
 			return status, err
 		}
+		m.replaceRowsWritten.Add(int64(end - start))
 	}
 	return status, nil
 }
