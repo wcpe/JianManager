@@ -264,7 +264,7 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 	if fanoutLimit > 0 && uint32(launch) > fanoutLimit {
 		launch = int(fanoutLimit)
 	}
-	const maxRangeParallel = 16
+	const maxRangeParallel = 8
 	outcomes := make([]searchRangeOutcome, launch)
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxRangeParallel)
@@ -427,7 +427,7 @@ func (s *Service) Stats(ctx context.Context, req QueryRequest, groupBy []string)
 	if fanoutLimit > 0 && uint32(launch) > fanoutLimit {
 		launch = int(fanoutLimit)
 	}
-	const maxRangeParallel = 16
+	const maxRangeParallel = 8
 	outcomes := make([]statsRangeOutcome, launch)
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxRangeParallel)
@@ -528,7 +528,7 @@ func (s *Service) Fields(ctx context.Context, req QueryRequest) FieldsResponse {
 		res FieldsResult
 		err error
 	}
-	const maxRangeParallel = 16
+	const maxRangeParallel = 8
 	outcomes := make([]fieldsRangeOutcome, len(plan.Ranges))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxRangeParallel)
@@ -632,7 +632,7 @@ func (s *Service) Facets(ctx context.Context, req QueryRequest, dimensions []str
 		res RangeFacetsResult
 		err error
 	}
-	const maxRangeParallel = 16
+	const maxRangeParallel = 8
 	outcomes := make([]facetsRangeOutcome, len(plan.Ranges))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxRangeParallel)
@@ -857,7 +857,7 @@ func (s *Service) Tail(ctx context.Context, req QueryRequest, mode TailMode) Tai
 		res RangeResult
 		err error
 	}
-	const maxRangeParallel = 16
+	const maxRangeParallel = 8
 	outcomes := make([]tailRangeOutcome, len(plan.Ranges))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxRangeParallel)
