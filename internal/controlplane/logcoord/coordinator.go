@@ -594,6 +594,31 @@ func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget 
 	return
 }
 
+// dedupeMergedRows 对本页合并结果做 (EventID, CanonicalHash) **双键**去重，并回报"去重前是否存在同 EventID 多行"：
+//   - 去重：同 id **同 hash** ⇒ 真重复（跨代次并集持有同一事件）⇒ 丢弃后出现者，保留排序键最靠前者 ✓（不破坏游标续页语义 ✗）；
+//     同 id **不同 hash** ⇒ 内容不同 ⇒ **必须保留** ✓（不得误删）；
+//   - 回报：任一同 EventID 出现 >1 ⇒ duplicated=true ⇒ 调用方把质量从 exact 降级为 unresolved ✓——
+//     跨代次并集让同一事件重复出现时，不得对外宣称 exact，否则导出闸会放行含重复的结果 ✗。
+func dedupeMergedRows(rows []Event) ([]Event, bool) {
+	if len(rows) < 2 {
+		return rows, false
+	}
+	seenHash := make(map[string]string, len(rows))
+	duplicated := false
+	out := make([]Event, 0, len(rows))
+	for _, event := range rows {
+		if hash, ok := seenHash[event.EventID]; ok {
+			duplicated = true
+			if hash == event.CanonicalHash {
+				continue // 同 id 同 hash：真重复 ⇒ 去 ✓
+			}
+		}
+		seenHash[event.EventID] = event.CanonicalHash
+		out = append(out, event)
+	}
+	return out, duplicated
+}
+
 func workerCursor(raw, workerViewID string, pageLimit int) string {
 	if raw == "" {
 		return ""
@@ -658,6 +683,13 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 		maxBytes = q.Budget.MaxBytes
 	}
 	rows, pageMore, byteCut := MergeStreams(streams, capRows, maxBytes)
+	// 唯一口径（见 dedupeMergedRows）：本页双键去重；任一同 id 多行 ⇒ 质量不得保持 exact ✗。
+	if deduped, duplicated := dedupeMergedRows(rows); duplicated {
+		rows = deduped
+		quality.DuplicateQuality = DupUnresolved
+	} else {
+		rows = deduped
+	}
 	hasMore := pageMore || workerOpen
 
 	enum := EnumExhausted
@@ -1149,6 +1181,14 @@ func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error
 		}
 		last = resp
 		items = append(items, resp.Items...)
+		// 导出共用唯一口径（dedupeMergedRows ✓）：跨页/跨轮同 id 同 hash ⇒ 去重；
+		// 任一同 id 多行 ⇒ 质量降级 unresolved（BuildExport 取的就是 resp.Quality ✓，导出闸随之一致 ✓）。
+		if dedupedItems, duplicatedItems := dedupeMergedRows(items); duplicatedItems {
+			items = dedupedItems
+			resp.Quality.DuplicateQuality = DupUnresolved
+		} else {
+			items = dedupedItems
+		}
 		for _, event := range resp.Items {
 			used += event.ApproxBytes()
 		}
