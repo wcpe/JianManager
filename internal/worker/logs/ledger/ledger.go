@@ -558,6 +558,18 @@ type Entry struct {
 	Identity  logtypes.SourceIdentity `json:"identity"`
 	Positions logtypes.Positions      `json:"positions"`
 
+	// PositionsFingerprint / PositionsFingerprintAt 是「已确认水位处」的内容采样指纹与它对应的位置
+	// （w18 漂移防护：外部原地重写/截断会让旧偏移指向不同内容，恢复续读必须据此判真伪）。
+	//
+	// 语义分工：段 2 由 tailer 在推进水位时采样写入（与位置成对，水位前进即失效需重采样，
+	// 避免"旧指纹贴新位置"的错配）；段 3 由 acquire 在恢复/重启续读前校验——
+	//   一致   ⇒ 从已确认水位续读 ✓；
+	//   不一致 ⇒ 走对账补齐，禁止按旧偏移回读历史内容 ✗；
+	//   缺指纹（零值）⇒ **视作不一致**（旧账本无此字段 ⇒ JSON 零值 ⇒ 宁可走对账不回读 ✓）。
+	// 迁移兼容：旧账本无这两个字段，加载时得到零值即可，不改变任何既有字段语义。
+	PositionsFingerprint   string `json:"positions_fingerprint,omitempty"`
+	PositionsFingerprintAt uint64 `json:"positions_fingerprint_at,omitempty"`
+
 	// DeliveryState 最近批次投递状态；不能用位置编码 UNKNOWN。
 	DeliveryState logtypes.DeliveryState `json:"delivery_state"`
 	// DeliveryBatches 批次结果；delivery_position 只反映连续前缀。
