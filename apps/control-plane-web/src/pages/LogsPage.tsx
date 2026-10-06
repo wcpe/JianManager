@@ -275,13 +275,17 @@ export default function LogsPage() {
 		// 复用搜索视图会被 CP 按 F-006 语义拒（409 VIEW_STALE；实测 stats 与 facets 两呼皆 409 ✓）。
 		// 去除后二者各自重建视图，服务端校验一字不动 ✗。
 	}
+	// 编排（§1 延后串行）：① 主列表先出——stats/facets 均已 gate 在「主查询有数据且拿到 viewId」之后 ✓；
+	// ② stats → facets 再串行——facets 额外等 stats 落定（成功或失败），
+	// 任一时刻最多一个聚合请求在飞 ⇒ 不再与主列表/彼此并发挤 VL 的 maxConcurrentRequests=2 两个槽 ✗。
 	const federationStats = useLogsFederationStats(
 		{ ...aggregateParams, groupBy: 'level' },
 		federationActive && !follow && !!federation?.response.viewId,
 	)
 	const federationFacets = useLogsFederationFacets(
 		{ ...aggregateParams, dimensions: 'level,stream', dimensionLimit: 8 },
-		federationActive && !follow && !!federation?.response.viewId,
+		federationActive && !follow && !!federation?.response.viewId
+			&& (federationStats.isSuccess || federationStats.isError),
 	)
 	// Stats 计数来自后端 `agg.count`（wire 真源）；兼容扁平 `count`。
 	const statsCount = federationStats.data?.points?.reduce(
