@@ -489,12 +489,25 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 	// 声明必须在 defer 之前（闭包捕获的是变量本身 ✓）。
 	outcomeFailed := false
 	now := time.Now()
-	if suppress, progressed := p.replayDrainDecision(now); suppress {
+	suppress, progressed := p.replayDrainDecision(now)
+	// #7 复盘定点（**只观测、零判据改动** ✗）：滞留期排空"碎批 2–840"的根因三判一 ——
+	//   抑制跳轮 ✗ ／ 快照碎批（snapshot/durable 大而 pending 小）✗ ／ 读数口径错（碎批其实来自常规轮）✓。
+	// 一次跑即可判：本行 pending 与 snapshot/durable 同刻并列，suppress/progressed 亦并列。
+	{
+		durableN := 0
+		for _, e := range entries {
+			if e.Durable {
+				durableN++
+			}
+		}
+		slog.Info("排空取批诊断", "pending", len(pending), "snapshot", len(entries), "durable", durableN,
+			"cap", cap0, "suppress", suppress, "progressed", progressed)
+	}
+	if suppress {
 		p.noteSuppressedReplayDrain(now)
 		return nil, nil
-	} else {
-		defer func() { p.noteReplayDrain(progressed, outcomeFailed) }()
 	}
+	defer func() { p.noteReplayDrain(progressed, outcomeFailed) }()
 	// **2026-10-06 快验回归修复**：排空原以 `replay=true` 投递 ⇒ ingest 侧 `replace=true`
 	// ⇒ **每次排空都重建该源权威全量并重发**（60 源现场：单源 175 万事件被每轮物化一次，
 	// 兜底环单轮 61 分钟、其余源全部饿死 ✗✗）。常规排空**不需要**该语义：补齐已确认数据
