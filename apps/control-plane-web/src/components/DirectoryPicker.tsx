@@ -1,10 +1,8 @@
 import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Folder, FolderUp, RefreshCw, Check } from 'lucide-react'
 import { useBrowseDir } from '@/api/nodeRuntime'
-import { Button } from '@jianmanager/ui/components/button'
+import DirectoryPickerView from '@jianmanager/ui/components/views/nodes/DirectoryPicker'
 
-/** 节点目录选择器（FR-178）：逐级浏览节点上的目录、选定一个绝对路径用于 JDK 登记。 */
+/** 节点目录选择器的公开 props（与原实现一致，调用点无需改动）。 */
 interface DirectoryPickerProps {
   /** 节点 ID（经 CP 委托 Worker 浏览）。 */
   nodeId: number
@@ -17,81 +15,30 @@ interface DirectoryPickerProps {
 }
 
 /**
- * 目录选择器：内联在登记表单内的稳定子视图（不切换隐显致布局重组，符合抽屉 UX 约束）。
- * 顶部显示当前路径与「选定此目录」，列表逐级进入子目录、可回到上级。
+ * 节点目录选择器的应用接线层（ADR-097 a 范式）。
+ *
+ * 选择器本体已迁入组件库并受控（不取数）；本层持有「当前路径」——它是查询键的一部分，
+ * 换路径即换查询，因此不能留在视图内部——并把浏览结果注入视图。
+ * 保留同名同签名的默认导出，使既有调用点（JDK 登记、导入向导）无需改动。
  */
 export default function DirectoryPicker({ nodeId, onPick, onCancel, initialPath = '' }: DirectoryPickerProps) {
-  const { t } = useTranslation()
   const [path, setPath] = useState(initialPath)
   const { data, isLoading, isError, error, refetch, isFetching } = useBrowseDir(nodeId, path)
 
-  const current = data?.path ?? path
   const errMsg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message
 
   return (
-    <div className="rounded-md border bg-muted/30 p-3 space-y-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground shrink-0">{t('artifactCache.browseCurrent')}</span>
-        <code className="flex-1 truncate rounded bg-background px-2 py-1 text-xs font-mono" title={current || '/'}>
-          {current || t('artifactCache.browseRoots')}
-        </code>
-        <button
-          type="button"
-          onClick={() => refetch()}
-          disabled={isFetching}
-          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
-          title={t('common.refresh')}
-        >
-          <RefreshCw className={`size-3.5 ${isFetching ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
-
-      <div className="max-h-56 overflow-y-auto rounded border bg-background">
-        {data?.parent !== undefined && data.parent !== '' && (
-          <button
-            type="button"
-            onClick={() => setPath(data.parent)}
-            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-accent"
-          >
-            <FolderUp className="size-4 shrink-0 text-muted-foreground" />
-            <span>..</span>
-          </button>
-        )}
-        {isLoading ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">{t('common.loading')}</p>
-        ) : isError ? (
-          <p className="px-2 py-2 text-xs text-destructive">{errMsg || t('artifactCache.browseFailed')}</p>
-        ) : !data || data.dirs.length === 0 ? (
-          <p className="px-2 py-2 text-xs text-muted-foreground">{t('artifactCache.browseEmpty')}</p>
-        ) : (
-          data.dirs.map((d) => (
-            <button
-              key={d.path}
-              type="button"
-              onClick={() => setPath(d.path)}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-accent"
-            >
-              <Folder className="size-4 shrink-0 text-muted-foreground" />
-              <span className="truncate">{d.name}</span>
-            </button>
-          ))
-        )}
-      </div>
-
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={onCancel}>
-          {t('common.cancel')}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          disabled={!current}
-          onClick={() => onPick(current)}
-        >
-          <Check className="size-3.5" />
-          {t('artifactCache.browsePick')}
-        </Button>
-      </div>
-    </div>
+    <DirectoryPickerView
+      path={path}
+      data={data}
+      isLoading={isLoading}
+      isError={isError}
+      errorMessage={errMsg}
+      isFetching={isFetching}
+      onNavigate={setPath}
+      onRefresh={() => void refetch()}
+      onPick={onPick}
+      onCancel={onCancel}
+    />
   )
 }
