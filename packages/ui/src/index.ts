@@ -166,3 +166,15 @@ export * from './lib/file-browser-capability'
 export * from './components/views/file-browser/FilePreview'
 export * from './components/views/file-browser/FileBrowser'
 export * from './components/views/file-browser/UnifiedExplorerShell'
+export * from './lib/storage-types'
+// 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics` 同名（两者语义不同，
+// 前者格式化存储占用、后者格式化监控指标），barrel 里不能同时通配导出。
+// 需要存储版 `formatBytes` 的调用方走深路径 `@jianmanager/ui/lib/storage-view`。
+export {
+  deriveArchive,
+  sortDirsByUsage,
+  buildCrumbs,
+  joinStoragePath,
+} from './lib/storage-view'
+export type { ArchiveDerived, Crumb } from './lib/storage-view'
+export * from './lib/storage-source'
