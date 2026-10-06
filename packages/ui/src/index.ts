@@ -205,3 +205,28 @@ export * from './lib/bot-load-types'
 export * from './lib/bot-load-filters'
 export * from './lib/bot-load-url-state'
 export * from './lib/bot-load-report'
+export * from './lib/bot-load-presets'
+// 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics`、`FieldError` 与
+// `./components/field-label` 同名（语义不同），barrel 里不能同时通配导出。
+// 需要这两者的调用方走深路径 `@jianmanager/ui/lib/bot-load-metrics`。
+export {
+  LIVE_METRIC_MAX_POINTS,
+  CHART_MAX_POINTS,
+  clampChartPoints,
+  formatLatencyMs,
+  formatRatio,
+  pickLatency,
+  seriesWithNulls,
+  appendMetricPoints,
+} from './lib/bot-load-metrics'
+// 同上：`FieldError` 与 `./components/field-label` 同名（此处是「校验错误条目」，
+// 那边是「表单字段错误壳」）。需要本模块版的调用方走深路径。
+export {
+  validateCommandSchedule,
+  validateLoadProfile,
+  validateThresholds,
+  validateConnection,
+  validateCountMatchesProfile,
+  previewBotNames,
+} from './lib/bot-load-validation'
+export * from './lib/bot-load-summaries'
