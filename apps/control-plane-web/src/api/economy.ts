@@ -12,69 +12,24 @@ import api from '@/api/client'
  */
 
 /** 经济镜像一行：某 (node, zone, player, currency) 的最新余额（与后端 model.EconomyBalanceMirror 对应）。 */
-export interface EconomyMirrorRow {
-  id: number
-  nodeUuid: string
-  zoneId: string
-  playerName: string
-  currency: string
-  currencyId: number
-  /** 最新余额（字符串承载 BigDecimal，禁浮点）。 */
-  balance: string
-  lastSeq: number
-  lastLedgerId: number
-  lastEntryType: string
-  occurredAt: number
-  updatedAt: string
-}
-
-/** 排行一行：某 (node, zone) 内某玩家某货币的余额 + 名次（与后端 service.EconomyLeaderboardRow 对应）。 */
-export interface EconomyLeaderboardRow {
-  rank: number
-  playerName: string
-  currency: string
-  nodeUuid: string
-  zoneId: string
-  balance: string
-}
-
-/** 通用业务事件 envelope 一行（与后端 model.BusinessEvent 对应）；流水由经济域事件解析而来。 */
-export interface BusinessEvent {
-  id: number
-  domain: string
-  dedupKey: string
-  action: string
-  nodeUuid: string
-  instanceUuid: string
-  operator?: string
-  /** 业务信封原始载荷 JSON（探针产物；经济流水从其 data 段解析）。 */
-  payloadJson: string
-  occurredAt: number
-  createdAt: string
-}
-
-/** 余额镜像查询入参（任意组合，留空表示该维度不过滤）。 */
-export interface EconomyMirrorParams {
-  player?: string
-  currency?: string
-  node?: string
-  zone?: string
-  limit?: number
-}
-
-/** 排行查询入参；currency 必填（跨货币余额不可比）。 */
-export interface EconomyLeaderboardParams {
-  currency: string
-  zone?: string
-  node?: string
-  limit?: number
-}
-
-/** 流水查询入参（经济事件流）。 */
-export interface EconomyEventsParams {
-  node?: string
-  limit?: number
-}
+// 经济域契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 本地绑定供本文件的 fetch 函数签名使用。
+import type {
+  BusinessEvent,
+  EconomyEventsParams,
+  EconomyLeaderboardParams,
+  EconomyLeaderboardRow,
+  EconomyMirrorParams,
+  EconomyMirrorRow,
+} from '@jianmanager/ui/lib/economy'
+export type {
+  BusinessEvent,
+  EconomyEventsParams,
+  EconomyLeaderboardParams,
+  EconomyLeaderboardRow,
+  EconomyMirrorParams,
+  EconomyMirrorRow,
+} from '@jianmanager/ui/lib/economy'
 
 /** 查经济镜像最新余额（逐 node→zone 行，跨区同名玩家分行不混）。 */
 export async function fetchEconomyMirror(params: EconomyMirrorParams): Promise<EconomyMirrorRow[]> {
