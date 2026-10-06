@@ -1,173 +1,40 @@
-import { useState, type FormEvent } from 'react'
-import { useTranslation } from 'react-i18next'
-import { useQueryClient, useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
-import { Button } from '@jianmanager/ui/components/button'
-import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import {
-  ScrollableDialogBody,
-  scrollableDialogContentClass,
-} from '@jianmanager/ui/components/scrollable-dialog'
-import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { Input } from '@jianmanager/ui/components/input'
-import { validateRequired, minLength, validateFields, hasErrors } from '@/lib/form-validation'
-import { useFieldGate } from '@/lib/use-field-gate'
+import CreateUserDialogView from '@jianmanager/ui/components/views/CreateUserDialog'
 
-interface CreateUserDialogProps {
+/**
+ * 新建用户对话框的应用接线层（ADR-097 b 范式）。
+ *
+ * 对话框本体已迁入组件库并受控；本层发创建请求、失效用户列表、把提示交给 toast。
+ * 保留同路径的默认导出与同一套 props，调用点无需改动。
+ */
+export default function CreateUserDialog({
+  open,
+  onClose,
+}: {
   open: boolean
   onClose: () => void
-}
-
-const USERNAME_MIN = 3
-// 与初始化引导（SetupPage）的密码下限一致，避免同系统两处策略矛盾（BUG-022）。
-const PASSWORD_MIN = 8
-
-export default function CreateUserDialog({ open, onClose }: CreateUserDialogProps) {
-  const { t } = useTranslation()
+}) {
   const qc = useQueryClient()
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [role, setRole] = useState('0')
-  const [status, setStatus] = useState('0')
-  const [error, setError] = useState('')
-  const gate = useFieldGate()
-
-  const roleOptions: ComboboxOption[] = [
-    { value: '0', label: t('users.member') },
-    { value: '1', label: t('users.groupAdmin') },
-    { value: '10', label: t('users.platformAdmin') },
-  ]
-  const statusOptions: ComboboxOption[] = [
-    { value: '0', label: t('users.enabled') },
-    { value: '1', label: t('users.disabled') },
-  ]
-
-  const errors = validateFields(
-    { username, password },
-    {
-      username: [validateRequired, minLength(USERNAME_MIN)],
-      password: [validateRequired, minLength(PASSWORD_MIN)],
-    },
-  )
-
   const create = useMutation({
-    mutationFn: async (body: { username: string; password: string; role: string; status: string }) => {
-      await api.post('/users', {
-        username: body.username,
-        password: body.password,
-        role: Number(body.role),
-        status: Number(body.status),
-      })
+    mutationFn: async (body: { username: string; password: string; role: number; status: number }) => {
+      await api.post('/users', body)
     },
     onSuccess: () => {
-      toast.success(t('users.created'))
-      qc.invalidateQueries({ queryKey: ['users'] })
-      onClose()
-      resetForm()
-    },
-    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-      setError(err.response?.data?.message || t('common.error'))
+      void qc.invalidateQueries({ queryKey: ['users'] })
     },
   })
 
-  const resetForm = () => {
-    setUsername('')
-    setPassword('')
-    setRole('0')
-    setStatus('0')
-    setError('')
-    gate.reset()
-  }
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault()
-    gate.submit()
-    if (hasErrors(errors)) return
-    setError('')
-    create.mutate({ username, password, role, status })
-  }
-
-  const handleClose = () => {
-    onClose()
-    resetForm()
-  }
-
-  if (!open) return null
-
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) handleClose() }}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-sm`}>
-        <DialogHeader>
-          <DialogTitle>{t('users.createUser')}</DialogTitle>
-        </DialogHeader>
-
-        {error && (
-          <div className="mb-3 rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
-        )}
-
-        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-          <ScrollableDialogBody className="space-y-3">
-            <div>
-              <FieldLabel htmlFor="create-user-username" required>{t('users.username')}</FieldLabel>
-              <Input
-                id="create-user-username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                onBlur={() => gate.touch('username')}
-                className="mt-1"
-                aria-invalid={!!gate.show('username', errors.username)}
-              />
-              <FieldError error={gate.show('username', errors.username)} values={{ min: USERNAME_MIN }} />
-            </div>
-
-            <div>
-              <FieldLabel htmlFor="create-user-password" required>{t('login.password')}</FieldLabel>
-              <Input
-                id="create-user-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onBlur={() => gate.touch('password')}
-                className="mt-1"
-                aria-invalid={!!gate.show('password', errors.password)}
-              />
-              <FieldError error={gate.show('password', errors.password)} values={{ min: PASSWORD_MIN }} />
-            </div>
-
-            <div>
-              <FieldLabel>{t('users.role')}</FieldLabel>
-              <div className="mt-1">
-                <Combobox options={roleOptions} value={role} onChange={setRole} allowCustom={false} />
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">{t(`users.roleDesc_${role}`)}</p>
-            </div>
-
-            <div>
-              <FieldLabel>{t('users.status')}</FieldLabel>
-              <div className="mt-1">
-                <Combobox options={statusOptions} value={status} onChange={setStatus} allowCustom={false} />
-              </div>
-            </div>
-          </ScrollableDialogBody>
-
-          <DialogFooter className="pt-4">
-            <Button type="button" variant="outline" onClick={handleClose}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={create.isPending || hasErrors(errors)}>
-              {create.isPending ? t('common.creating') : t('common.create')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <CreateUserDialogView
+      open={open}
+      onClose={onClose}
+      onCreate={(payload) => create.mutateAsync(payload).then(() => undefined)}
+      notify={(kind, message) => {
+        if (kind === 'success') toast.success(message)
+        else toast.error(message)
+      }}
+    />
   )
 }
