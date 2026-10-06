@@ -38,53 +38,9 @@ export interface BotLoadAllocation {
 }
 
 /** 单条命令声明。 */
-export interface BotLoadCommand {
-  id: string
-  atMs: number
-  command: string
-  repeat?: { intervalMs: number; count: number }
-}
-
-/** 命令编排计划。 */
-export interface BotLoadCommandSchedule {
-  commands: BotLoadCommand[]
-  durationMs: number
-  jitterMs?: number
-}
-
-/** 负载曲线。 */
-export type BotLoadProfile =
-  | { type: 'stable'; targetBots: number; rampUpSeconds: number; durationSeconds: number }
-  | { type: 'step'; stages: Array<{ targetBots: number; holdSeconds: number }>; stopOnThresholdFailure: boolean }
-  | {
-      type: 'spike'
-      targetBots: number
-      connectWindowSeconds: number
-      barrier?: { key: string; releaseWindowMs: number }
-      holdSeconds: number
-    }
-
-/** 判定阈值。 */
-export interface BotLoadThresholds {
-  minOnlineRate: number
-  minCommandSentRate: number
-  minScheduleCompletionRate: number
-  minWorkerHealthRate: number
-  minBarrierArrivalRate: number
-  maxScheduleLagP95Ms: number
-  maxProcessCrashes: number
-  safety?: {
-    maxExecutorMemoryRate: number
-    maxEventLoopP95Ms: number
-    sustainSeconds: number
-  }
-  legacy?: {
-    enabled: boolean
-    minTps?: number
-    maxMsptP95?: number
-    requireBusinessObservation?: boolean
-  }
-}
+// 命令/曲线/阈值类型已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
+import type { BotLoadCommandSchedule, BotLoadProfile, BotLoadThresholds } from '@jianmanager/ui'
+export type { BotLoadCommand, BotLoadCommandSchedule, BotLoadProfile, BotLoadThresholds } from '@jianmanager/ui'
 
 /** 压测模板。 */
 export interface BotLoadTemplate {
