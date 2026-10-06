@@ -9,7 +9,8 @@
  * 依赖视图的行删除/移动命令的「绑定正确性」已在 ide-extensions.test.ts 断言。
  */
 import { describe, it, expect } from 'vitest'
-import { EditorState, EditorSelection, type Command } from '@codemirror/state'
+import { EditorState, EditorSelection } from '@codemirror/state'
+import type { Command } from '@codemirror/view'
 import { toggleComment } from '@codemirror/commands'
 import { languageKindFor } from './explorer-language'
 import { commentTokensForFilename } from './explorer-comment'
