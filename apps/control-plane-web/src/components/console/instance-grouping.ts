@@ -2,9 +2,10 @@ import type { InstanceInfo } from '@/api/instances'
 import type { InstanceGroupNode } from '@/api/instanceGroups'
 import { buildGroupTree, type GroupTreeNode } from './instance-group-tree'
 import { resolveCapabilities } from '@/lib/capabilities'
+import { ENV_TAG_PREFIX } from '@jianmanager/ui/lib/instance-tags'
 
-/** 环境维度复用 Tags 字段的约定前缀（FR-047），与后端 model.EnvTagPrefix 一致。 */
-export const ENV_TAG_PREFIX = 'env:'
+/** 环境维度复用 Tags 字段的约定前缀（FR-047）：常量随视图归包（ADR-097），此处再导出以保单一真源。 */
+export { ENV_TAG_PREFIX }
 
 /**
  * 把实例 `tags` 字段规范化为字符串数组。
