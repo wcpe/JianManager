@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { ArchiveSummary, DirUsage } from '@/api/storage'
+import type { ArchiveSummary, DirUsage } from './storage-types'
 import {
   formatBytes,
   deriveArchive,

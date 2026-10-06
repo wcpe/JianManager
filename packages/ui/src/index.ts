@@ -178,3 +178,4 @@ export {
 } from './lib/storage-view'
 export type { ArchiveDerived, Crumb } from './lib/storage-view'
 export * from './lib/storage-source'
+export * from './components/views/StoragePage'
