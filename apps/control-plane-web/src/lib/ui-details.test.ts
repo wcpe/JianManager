@@ -64,7 +64,7 @@ const HOVER_CARD_FILES = [
   '@ui/components/views/instances/InstanceWorktableCard.tsx',
   'components/ui/summary-chips.tsx',
   'pages/config-row.tsx',
-  'components/console/InventorySegment.tsx',
+  '@ui/components/views/instances/InventorySegment.tsx',
 ] as const
 
 describe('FR-176 ① 卡片 hover 去位移留阴影', () => {
@@ -76,7 +76,7 @@ describe('FR-176 ① 卡片 hover 去位移留阴影', () => {
   }
 
   // shadow-lift 是这些卡片在 FR-163 下的 hover 反馈载体；去位移后阴影必须留存（InventorySegment 单格用 hover:bg-accent 反馈，单列）。
-  const SHADOW_LIFT_FILES = HOVER_CARD_FILES.filter((f) => f !== 'components/console/InventorySegment.tsx')
+  const SHADOW_LIFT_FILES = HOVER_CARD_FILES.filter((f) => f !== '@ui/components/views/instances/InventorySegment.tsx')
   for (const file of SHADOW_LIFT_FILES) {
     it(`${file} 保留 hover:shadow-lift（阴影反馈不丢）`, () => {
       const src = read(file)
@@ -85,7 +85,7 @@ describe('FR-176 ① 卡片 hover 去位移留阴影', () => {
   }
 
   it('InventorySegment 单格保留 hover:bg-accent（hover 反馈不丢）', () => {
-    const src = read('components/console/InventorySegment.tsx')
+    const src = read('@ui/components/views/instances/InventorySegment.tsx')
     expect(src).toMatch(/hover:bg-accent/)
   })
 })
