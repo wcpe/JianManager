@@ -5518,6 +5518,8 @@ func (m *Manager) noteReclaimBlocked(category string, p *pipeline.Pipeline, sour
 // 凭据（不越界未来 + default-deny 未放宽）：Delivery 水位只在「ingest 侧插入 + 逐字段可见性校验 +
 // 已发布投影」之后推进（writeProjectionPlan → RecordHTTPResult），故它就是"已证明另存"的水位 ✓；
 // 越过 Delivery 的位置**永远**没有本段覆盖 ⇒ 未确认数据一个字节都不会被跳过 ✓。
+// （2026-10-06 曾试把上界放宽到 durable 以解停滞 ✗ —— 被不变量测试当场捉住：覆盖未投递区间会让其
+// WAL 条目被回收 ⇒ 事件再也投不出去 ✗ ⇒ 已撤回；停滞真修点＝让投递水位前进 ✓。）
 // 审计：段名 `delivery-confirmed-<from>-<to>`、路径 `delivery-confirmed://<generation>`，状态链只推进到
 // `WAL_RESPONSIBILITY_TRANSFERRED`（接收者 = projection:<generation>），**不**直接 Released/Cleaned ——
 // 把"这一段凭什么被释放"留给常规释放链独立裁定 ✓。
@@ -5548,6 +5550,10 @@ func (m *Manager) backfillDeliveryConfirmedCoverage(p *pipeline.Pipeline, source
 	}
 	from := positions.Reclaim
 	to := positions.Delivery // 不越界未来：只覆盖"已确认投递"到的那一段
+	// **2026-10-06 记录（已撤回的错误改法）**：曾试过"read==durable ∧ 无缺口 ⇒ 上界放宽到 durable"，
+	// 被现有不变量测试当场捉住 ✗ —— 覆盖未投递区间会让其 WAL 条目被回收 ⇒ 那些事件**再也投不出去** ✗
+	// ⇒ 红线：**未确认投递的数据一个字节都不许被越过** ✓（见 reclaim_backfill_test.go 的不变量断言）。
+	// 停滞的真修点＝**让投递水位前进**（delivery==reclaim<read 的环 ✗），不是放宽本上界 ✗。
 	if to <= from {
 		m.noteReclaimBlocked("no-material", p, source)
 		return nil // 无"已确认但未覆盖"的区间
