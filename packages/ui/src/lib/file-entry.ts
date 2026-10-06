@@ -34,3 +34,61 @@ export function isArchiveName(name: string): boolean {
 export function isClassName(name: string): boolean {
   return name.toLowerCase().endsWith('.class')
 }
+
+/** 归档内一条条目（与后端 service.ArchiveEntry 对应，FR-075）。 */
+export interface ArchiveEntry {
+  /** 归档内条目名（「/」分隔；目录条目以「/」结尾）。 */
+  name: string
+  isDir: boolean
+  /** 解压后字节。 */
+  size: number
+  compressedSize: number
+  /** Unix 秒。 */
+  modified: number
+  crc32: number
+}
+
+/** 归档内条目列表结果（FR-075）。 */
+export interface ArchiveEntries {
+  entries: ArchiveEntry[]
+  /** 条目数超上限被截断。 */
+  truncated: boolean
+}
+
+/** 文件搜索模式（FR-074）。 */
+export type SearchMode = 'content' | 'filename'
+
+/** 一条搜索命中（与后端 service.SearchHit 对应，FR-074）。 */
+export interface SearchHit {
+  /** 相对工作目录、以 / 分隔的路径。 */
+  path: string
+  /** 命中行号（1 起；filename 模式为 0）。 */
+  line: number
+  /** 命中行片段（仅 content 模式）。 */
+  snippet: string
+}
+
+/** 搜索范围（FR-074）。 */
+export interface SearchScope {
+  /** 限定在该相对目录内搜索，空表示全工作目录。 */
+  rootPath?: string
+  /** 限定文件扩展名，形如 .yml。空表示不限。 */
+  extensions?: string[]
+}
+
+/** 搜索结果（FR-074）。 */
+export interface SearchResult {
+  hits: SearchHit[]
+  /** 命中达到上限被截断。 */
+  truncated: boolean
+  /** 索引首建未就绪（FR-113，ADR-024）：hits 为空，应稍后用同一查询重试。 */
+  indexing: boolean
+}
+
+/** 归档内某条目的内容（FR-075）。 */
+export interface ArchiveEntryContent {
+  /** 条目文本内容（二进制条目时为占位提示，由调用方据 binary 决定展示）。 */
+  text: string
+  truncated: boolean
+  binary: boolean
+}
