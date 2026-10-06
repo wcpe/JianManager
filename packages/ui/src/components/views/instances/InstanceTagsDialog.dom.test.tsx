@@ -79,7 +79,7 @@ describe('InstanceTagsDialog（FR-047 · ADR-097 b 范式）', () => {
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
-    expect(onSave.mock.calls[0][0]).toEqual(['env:prod', '生产', 'region:r1', '新增'])
+    expect(vi.mocked(onSave).mock.calls[0][0]).toEqual(['env:prod', '生产', 'region:r1', '新增'])
   })
 
   it('保存成功后才关闭', async () => {

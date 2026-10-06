@@ -78,7 +78,7 @@ describe('EditInstanceLimitsDialog（FR-079 · ADR-097 b 范式）', () => {
 
     await user.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
-    expect(onSave.mock.calls[0][0]).toEqual({ cpuLimit: 1.5, memLimitMb: 2048, diskLimitMb: 0 })
+    expect(vi.mocked(onSave).mock.calls[0][0]).toEqual({ cpuLimit: 1.5, memLimitMb: 2048, diskLimitMb: 0 })
   })
 
   it('校验不通过时禁用保存并给出错误', async () => {
