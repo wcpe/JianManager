@@ -80,19 +80,9 @@ export function toTreeBranches(
  * 实例状态点的视觉分类。
  * RUNNING=绿，STARTING/STOPPING=琥珀，CRASHED/DAMAGED=红，其余（STOPPED 等）=空心灰。
  */
-export type StatusDotKind = 'running' | 'transitioning' | 'crashed' | 'stopped'
-
-export function statusDotKind(status: string): StatusDotKind {
-  switch (status) {
-    case 'RUNNING':
-      return 'running'
-    case 'STARTING':
-    case 'STOPPING':
-      return 'transitioning'
-    case 'CRASHED':
-    case 'DAMAGED':
-      return 'crashed'
-    default:
-      return 'stopped'
-  }
-}
+/**
+ * 状态点类型与归并函数已归包（受控视图 `InstanceStatusDot` 与树共用，ADR-097）。
+ * 此处原样再导出，调用点无需改动。
+ */
+export type { StatusDotKind } from '@jianmanager/ui/lib/instance-status'
+export { statusDotKind } from '@jianmanager/ui/lib/instance-status'
