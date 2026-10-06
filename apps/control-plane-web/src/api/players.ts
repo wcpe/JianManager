@@ -4,58 +4,22 @@ import api, { ensureFreshToken } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 
 /** 在线玩家及其所在子服（BC 跨服感知，FR-054）。 */
-export interface OnlinePlayer {
-  name: string
-  instanceId: number
-  instanceName: string
-}
-
-/** 单个后端子服的探针可用性（优雅降级提示，FR-067）。 */
-export interface BackendStatus {
-  instanceId: number
-  instanceName: string
-  available: boolean
-  error?: string
-}
-
-/** 在线玩家聚合结果。 */
-export interface OnlinePlayersResult {
-  players: OnlinePlayer[]
-  backends: BackendStatus[]
-}
-
-/** 踢/封/解封在多后端的执行汇总。 */
-export interface PlayerActionResult {
-  player: string
-  action: string
-  total: number
-  succeeded: number
-  failed: number
-  results: { instanceId: number; instanceName: string; ok: boolean; output?: string; error?: string }[]
-}
-
-/** 封禁记录（FR-054）。 */
-export interface BanRecord {
-  id: number
-  uuid: string
-  playerName: string
-  reason: string
-  scope: 'network' | 'instance' | 'global'
-  scopeId: number
-  operatorId: number
-  active: boolean
-  createdAt: string
-  unbannedAt?: string | null
-  operator?: { id: number; username: string }
-}
-
-/** 单后端白名单查询结果。 */
-export interface WhitelistResult {
-  instanceId: number
-  available: boolean
-  players: string[]
-  error?: string
-}
+// 玩家治理契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 本地绑定供本文件的查询/变更泛型使用。
+import type {
+  BanRecord,
+  OnlinePlayersResult,
+  PlayerActionResult,
+  WhitelistResult,
+} from '@jianmanager/ui/lib/player'
+export type {
+  BackendStatus,
+  BanRecord,
+  OnlinePlayer,
+  OnlinePlayersResult,
+  PlayerActionResult,
+  WhitelistResult,
+} from '@jianmanager/ui/lib/player'
 
 /** 踢/封/解封作用域（互斥，按 instanceId > networkId > 全部 解析）。 */
 export interface PlayerActionScope {
