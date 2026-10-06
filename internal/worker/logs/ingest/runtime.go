@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/shirou/gopsutil/v4/disk"
+	"google.golang.org/grpc/metadata"
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
@@ -1262,7 +1263,30 @@ func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pi
 		return err
 	}
 	if !complete {
-		return fmt.Errorf("ingest: source %s has no complete published projection", key)
+		// ADR-101 显式出口（FR-483 §6）：操作人与显式理由由 CP 经 gRPC metadata 下传
+		// （x-jm-operator / x-jm-reason，见 CP 侧 ResolveIngestGaps 的 outgoing context）。
+		// 无操作人、无理由 ⇒ 一律照旧拒绝（不开静默放宽的口子 ✗）；
+		// 二者齐备 ⇒ 记「永久丢失」放弃裁定（持久、跨重启存活、可用 AbandonmentsCovering 审计 ✓）后放行 ✓。
+		operator, reason := "", ""
+		if md, mdOK := metadata.FromIncomingContext(ctx); mdOK {
+			if v := md.Get("x-jm-operator"); len(v) > 0 {
+				operator = strings.TrimSpace(v[0])
+			}
+			if v := md.Get("x-jm-reason"); len(v) > 0 {
+				reason = strings.TrimSpace(v[0])
+			}
+		}
+		if operator == "" || reason == "" {
+			return fmt.Errorf("ingest: source %s has no complete published projection", key)
+		}
+		if _, abErr := pipe.Ledger().AbandonGapsThrough(pipe.Key(), entry.Positions.Reclaim, ledger.GapAbandonment{
+			ReasonCode: ledger.GapReasonPermanentlyLost,
+			Operator:   operator,
+			Reason:     reason,
+			Detail:     "no complete published projection; ADR-101 abandonment",
+		}); abErr != nil {
+			return fmt.Errorf("ingest: source %s abandon unpublished projection: %w", key, abErr)
+		}
 	}
 	if closed < entry.Positions.Durable || entry.Positions.Reclaim < entry.Positions.Durable {
 		return fmt.Errorf("ingest: source %s recovery coverage is behind durable position", key)

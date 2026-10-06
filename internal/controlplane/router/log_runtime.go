@@ -93,6 +93,9 @@ func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
 	// 不传：与既有整节点行为逐字一致（向后兼容）。
 	var body struct {
 		StorageNamespace string `json:"storageNamespace"`
+		// Reason 是「放弃裁定」的显式理由（ADR-101 / FR-483 §6）：仅当某源"从未有完整已发布投影"
+		// 这类死结需要人工裁定终局时才必填；缺失 ⇒ Worker 侧照旧拒绝（不开静默放宽的口子 ✗）。
+		Reason string `json:"reason"`
 	}
 	if c.Request.ContentLength > 0 {
 		if bindErr := c.ShouldBindJSON(&body); bindErr != nil {
@@ -102,7 +105,12 @@ func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
 	}
 	// 操作人经 outgoing metadata 下传（隧道会把它还原成 Worker 侧的 incoming metadata）：
 	// 不注入它，Worker 的放弃裁定分支必然拒绝——这正是产品面不可达的成因。
-	ctx := metadata.NewOutgoingContext(c.Request.Context(), metadata.Pairs(operatorMetadataKey, operator))
+	// 理由是同一通道的可审计凭据（x-jm-reason）：与操作人成对，缺一 Worker 即拒绝 ✓。
+	mdPairs := []string{operatorMetadataKey, operator}
+	if reason := strings.TrimSpace(body.Reason); reason != "" {
+		mdPairs = append(mdPairs, "x-jm-reason", reason)
+	}
+	ctx := metadata.NewOutgoingContext(c.Request.Context(), metadata.Pairs(mdPairs...))
 	resp, err := client.Worker.LogResolveIngestGaps(ctx, &workerpb.LogResolveIngestGapsRequest{
 		RequestId: c.GetHeader("X-Request-ID"), ProtocolVersion: "log-query/1",
 		StorageNamespace: strings.TrimSpace(body.StorageNamespace),
