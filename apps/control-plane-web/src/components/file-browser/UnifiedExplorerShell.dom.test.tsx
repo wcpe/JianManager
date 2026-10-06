@@ -9,7 +9,9 @@ import {
 } from './capability'
 import type { FileBrowserSource } from '@jianmanager/ui/lib/file-browser-types'
 
-vi.mock('@/components/explorer/ExplorerTabHost', () => ({
+// 组件已迁至 `@jianmanager/ui`（ADR-097）：包内 UnifiedExplorerShell 从包内 import 标签宿主，
+// 因此 mock 必须打在包路径上才拦得到。
+vi.mock('@jianmanager/ui/components/views/explorer/ExplorerTabHost', () => ({
   default: ({ instanceId }: { instanceId: number }) => (
     <div data-testid="mock-tab-host">tab-host-{instanceId}</div>
   ),
