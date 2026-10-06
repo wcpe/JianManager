@@ -5,6 +5,7 @@ import api from '@/api/client'
 import { removeServer } from '@/components/console/server-selection'
 import { apiErrorMessage } from '@/lib/api-error'
 import type { InstanceCapabilityProfile } from '@/lib/capabilities'
+import type { InstanceBatchAction, InstanceBatchResult } from '@jianmanager/ui/lib/instance-batch'
 
 /**
  * 实例域查询缓存保留时长（FR-297）：控制台来回切换（页签/跨服）时命中缓存先呈现旧数据、
@@ -422,8 +423,11 @@ export function useDeleteInstance() {
   })
 }
 
-/** 实例批量操作动作（FR-058）。 */
-export type InstanceBatchAction = 'command' | 'start' | 'stop' | 'restart' | 'kill'
+/**
+ * 实例批量操作动作与结果计数（FR-058）：契约归包，受控视图与 API 层共用（ADR-097）。
+ * 本地绑定来自文件顶部的 import，此处仅对外再导出，避免两处各写一份。
+ */
+export type { InstanceBatchAction, InstanceBatchResult } from '@jianmanager/ui/lib/instance-batch'
 
 /** 批量操作筛选条件（与列表筛选维度一致）。 */
 export interface InstanceBatchFilter {
@@ -443,15 +447,7 @@ export interface InstanceBatchRequest {
   command?: string
 }
 
-/** 批量操作结果计数。 */
-export interface InstanceBatchResult {
-  action: string
-  requested: number
-  succeeded: number
-  failed: number
-  skipped: number
-  errors: { instanceId: number; error: string }[]
-}
+// 批量操作结果计数 `InstanceBatchResult` 的定义已随受控视图归包（见上方 re-export）。
 
 /** 批量执行 command/start/stop/restart/kill（FR-058）。 */
 export function useInstanceBatch() {
