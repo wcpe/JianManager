@@ -80,13 +80,5 @@ export async function decompile(
   return data
 }
 
-/** 判断某文件名是否为可打开的归档（jar/zip）。 */
-export function isArchiveName(name: string): boolean {
-  const lower = name.toLowerCase()
-  return lower.endsWith('.jar') || lower.endsWith('.zip')
-}
-
-/** 判断某归档内条目（或工作目录文件名）是否为可反编译的 class。 */
-export function isClassName(name: string): boolean {
-  return name.toLowerCase().endsWith('.class')
-}
+// 文件名判定已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
+export { isArchiveName, isClassName } from '@jianmanager/ui'

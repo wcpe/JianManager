@@ -2,22 +2,9 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 文件/目录信息（与后端 service.FileInfo 对应，FR-008；FR-373 权限元数据加性）。 */
-export interface FileInfo {
-  name: string
-  isDir: boolean
-  size: number
-  modTime: number
-  /** 八进制权限串，如 "0644"（Windows 可空）。 */
-  modeOctal?: string
-  /** rwx 展示串，如 "rw-r--r--"（Windows 可空）。 */
-  modeString?: string
-  /** 相对 Worker 进程用户是否可读。 */
-  readable?: boolean
-  /** 相对 Worker 进程用户是否可写。 */
-  writable?: boolean
-  owner?: string
-  group?: string
-}
+// 条目类型已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
+import type { FileInfo } from '@jianmanager/ui'
+export type { FileInfo } from '@jianmanager/ui'
 
 /** 写前/浏览前权限探测结果（FR-373）。 */
 export interface PathAccess {
