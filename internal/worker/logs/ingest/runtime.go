@@ -3955,8 +3955,10 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 		evidence = expected
 	}
 	plan := projectionWritePlan{Write: writeEvents, Archive: toWrite, Replace: replace}
-	if tail.Fast && !replace {
+	if tail.Fast && !replace && !replay {
 		// 增量尾部：段追加走 O(本批) 路径、发布水位走缓存（见 projectionWritePlan.Tail）。
+		// 重放（replay）不属于增量尾部 ✗：它是全量恢复投递，必须走慢路径——否则会被当成"快路径"
+		// 而绕过恢复期的 staging 幂等过滤（以及其它恢复期判据）✗。
 		tail.Events = toWrite
 		plan.Tail = &tail
 	}
@@ -4348,6 +4350,10 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		"events", len(writeEvents), "archiveEvents", len(archiveEvents),
 		"firstEventTime", batchFirst, "lastEventTime", batchLast,
 	)
+	// staging 幂等（w21 ② 第四落点，路 A）：恢复/重放（慢路径 !replace && !tailPlanned）投递前，对
+	// **未发布代次**做 event_id 分片查询，同 id 同 hash 已在 staging ⇒ 只跳过本次新代写入 ✓。
+	// 作用域严格限定未发布代次（已发布代次由 catalog 列表界定并整条排除）✓；查询失败一律照写 ✓。
+	// 红线：replace=true 三支整窗语义、白名单/代次/差集主链一律不动 ✗。
 	status, err := m.insertInBatches(client, writeEvents, generation)
 	slog.Info("投影写入结束",
 		"generation", generation, "source", source.LogSourceID,
