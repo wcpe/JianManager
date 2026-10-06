@@ -122,6 +122,27 @@ function mapFederationItems(items: unknown[] | null | undefined): LogEntry[] {
 // Radix Select 不允许空字符串值，用哨兵代表「全部」。
 const SENTINEL_ALL = '__all__'
 const PAGE_SIZE = 100
+
+/**
+ * tail-first 分页（纯函数，便于单测 ✓）：取本页"最旧一条"的 RFC3339 时间。
+ * 排序为 `event_time DESC` ⇒ 最旧＝末条 ✓；空页 ⇒ null（调用方据此停翻 ✓）。
+ */
+export function oldestOf(items: Array<{ time?: string }>): string | null {
+	const last = items.length > 0 ? items[items.length - 1] : null
+	return last?.time ?? null
+}
+
+/**
+ * tail-first 分页（纯函数，便于单测 ✓）：以锚点为**窗口上界**、按预设窗宽整体前移，
+ * 返回该页应发的 `from/to`（首屏锚点＝now ⇒ 15 分钟窗 ✓；下一页锚点＝上页最旧一条 ✓）。
+ * 语义与首屏的 `timeParamsFor(range, anchor, false)` 完全一致（同一 `timeRangeToParams` ✓）。
+ */
+export function windowForAnchor(
+	range: TimeRangePreset,
+	anchor: string | number | Date,
+): Pick<LogQueryParams, 'from' | 'to'> {
+	return timeRangeToParams(range, new Date(anchor))
+}
 const SOURCES = ['instance', 'control_plane', 'worker']
 const ROLE_PLATFORM_ADMIN = 10
 const LEVELS = ['error', 'warn', 'info', 'debug']
@@ -227,7 +248,7 @@ export default function LogsPage() {
 		// tail-first 连续分页（用户点名 ✓）：第 2 页起**不用窗内游标** ✗，而以上一页最旧一条的时间为
 		// 新的窗口上界，继续取更早日志（覆盖 `timeParams` 的 from/to ⇒ 毫秒级首屏与连续翻页并存 ✓）。
 		...(!follow && page > 1 && federationCursors[page]
-			? timeRangeToParams(range, new Date(Number(federationCursors[page])))
+			? windowForAnchor(range, Number(federationCursors[page]))
 			: {}),
 	}
   const federationQuery = useLogsFederation(federationParams, {
@@ -683,11 +704,9 @@ export default function LogsPage() {
             onPrev={() => setPage((p) => Math.max(1, p - 1))}
 			onNext={() => {
 				if (federationActive) {
-					// tail-first：以本页**最旧一条**（排序为 event_time DESC，故取末条 ✓）的时间为新锚点，
-					// 下一页即"继续取更早" ✓；无条目（空页）⇒ 不再前进（到底）✗。
-					const list = federationItems ?? []
-					const oldest = list.length > 0 ? list[list.length - 1] : null
-					const oldestTime = oldest?.time
+					// tail-first：以本页**最旧一条**（`oldestOf`，排序 event_time DESC ⇒ 末条 ✓）时间为新锚点，
+					// 下一页即"继续取更早" ✓；空页（无条目）⇒ 不再前进（到底）✗。
+					const oldestTime = oldestOf(federationItems ?? [])
 					if (!oldestTime) return
 					const anchor = String(new Date(oldestTime).getTime())
 					setFederationCursors((current) => ({ ...current, [page + 1]: anchor }))
