@@ -74,7 +74,7 @@ import NodeProxyTab from '@/components/nodes/NodeProxyTab'
 import NodeProbeVersionTab from '@/components/nodes/NodeProbeVersionTab'
 import NodeRepairTab from '@/components/nodes/NodeRepairTab'
 import DangerConfirm from '@/components/DangerConfirm'
-import AddNodeDialog from '@/components/AddNodeDialog'
+import AddNodeDialogContainer from '@/components/nodes/AddNodeDialogContainer'
 import DiagnosticsLogDialog from '@/components/DiagnosticsLogDialog'
 import { Button } from '@jianmanager/ui/components/button'
 
@@ -862,7 +862,7 @@ export default function NodesPage() {
             ))}
           </CardsGrid>
         )}
-        <AddNodeDialog open={addOpen} onClose={() => setAddOpen(false)} />
+        <AddNodeDialogContainer open={addOpen} onClose={() => setAddOpen(false)} />
       </PageShell>
     )
   }
@@ -1053,7 +1053,7 @@ export default function NodesPage() {
         )}
       </PageShell>
 
-      <AddNodeDialog open={addOpen} onClose={() => setAddOpen(false)} />
+      <AddNodeDialogContainer open={addOpen} onClose={() => setAddOpen(false)} />
       <DiagnosticsLogDialog
         open={diagnosticsNode !== null}
         onOpenChange={(o) => {
