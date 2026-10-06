@@ -61,10 +61,12 @@ func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// 首屏快路径开关（搜索门面默认开 ✓）：Coordinator 侧据 Query.Fast 走 resolveForQueryFast +
-	// Coverage{Pending:true}（未接线前该字段惰性无副作用 ✗）；**导出路径不得置位** ✗——
-	// 导出闸（下方 export_incomplete 判定）与可见性/完整性语义由此保持一字不动 ✓。
-	q.Fast = true
+	// 首屏快路径（Query.Fast）**不再默认开启** ✗——2026-10-07 现网实测：默认开快路径后，**裸查询**
+	// 也返 409 `VIEW_STALE`（快路径的未绑定视图在 Worker 侧被判未知视图 ⇒ 整条搜索路径不可用）。
+	// 且 <1s 目标不依赖它：15 分钟窗走**慢路径**实测 0.57–0.73s 即达标 ✓。
+	// 保留 `Query.Fast` 字段与 Worker/CP 两侧的第二路径实现，供后续"窗口收窄＋校验解耦"专项使用；
+	// 开关改由显式请求参数（如需）驱动，**默认慢路径＝现有完整校验语义** ✓。
+	// 导出路径同样不置位 ⇒ 导出闸（本函数下方 export_incomplete 判定）不受影响 ✓。
 	resp, err := h.coord.Search(c.Request.Context(), q)
 	if err != nil {
 		writeFederationError(c, err)
