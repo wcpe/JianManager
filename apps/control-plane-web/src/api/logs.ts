@@ -2,22 +2,9 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 单条日志（实例运行日志或平台运行日志，FR-049）。 */
-export interface LogEntry {
-  id: number
-  /** 来源：instance（实例）/ control_plane（平台）/ worker。 */
-  source: string
-  /** 级别：debug / info / warn / error。 */
-  level: string
-  instanceId: number
-  instanceUuid: string
-  nodeId: number
-  /** 原始流名（stdout/stderr），仅实例日志。 */
-  stream?: string
-  message: string
-  /** 日志产生时间（RFC3339）。 */
-  time: string
-}
-
+// 日志条目类型已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
+import type { LogEntry } from '@jianmanager/ui'
+export type { LogEntry } from '@jianmanager/ui'
 /** 日志查询筛选条件（DB 侧过滤 + 分页，FR-049/FR-050）。 */
 export interface LogQueryParams {
   /** 主视图：平台仅 CP；节点/实例聚合 Worker 与实例；all 仅平台管理员。 */
