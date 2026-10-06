@@ -465,7 +465,14 @@ export function useLogsFederation(
 		delete requestParams.tailMode
 		if (tailMode) requestParams.mode = tailMode
 		const path = tailMode ? LOGS_FEDERATION_TAIL_PATH : LOGS_FEDERATION_PATH
-        const { data } = await api.get<LogsFederationEnvelope>(path, { params: requestParams })
+        // 联邦查询是重活：162 目标逐目标覆盖解析，实测 6–13s（24h 全量窗曾达 12.8s）✗。
+        // 全局 10s 超时会把慢查询 abort ⇒ 页面据 abort 误判"实时日志查询服务暂不可用"并回退
+        // legacy（legacy 只有切换前旧数据 ⇒ 24h 窗 0 条）✗。故给联邦查询单独的 60s 预算；
+        // tail 探针（0.43s）与其它请求不受影响 ✓。
+        const { data } = await api.get<LogsFederationEnvelope>(path, {
+          params: requestParams,
+          timeout: 60_000,
+        })
         const envelope = data && typeof data === 'object' ? data : {}
         // 日志查询引擎未就绪（受管 VL 未配置/未启动）时降级到经典 `/logs` 路径：
         // 平台日志与切换前的实例日志本就能从 CP 库直接读，不应因为新引擎没开就让
