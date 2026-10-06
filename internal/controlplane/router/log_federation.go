@@ -104,10 +104,26 @@ func fedAggCacheKey(q logcoord.Query, c *gin.Context) string {
 // 预热热门窗（15m/1h/24h × 平台级 ✓）：与用户走同一条 Search 代码路径、结果写进同一 TTL 缓存，
 // 唯一差别是"发起者身份"——平台级查询已采用**共享键**（授权集合 "*" ⇒ 去掉 user/role/scope 段 ✓），
 // 故任何管理员查询同名窗口都直接命中预热条目 ✓✓。失败只做频控日志，绝不影响请求路径 ✗。
+//
+// 节奏（按窗口定间隔 ✗✓）：24h 冷扫本身要 20–40s ⇒ 若与 15m 同用短间隔，等于**持续占满 VL 的
+// 并发槽**（实测第 1 次 24h 被掐在 39.99s ✗）。故：15m⇒25s、1h⇒150s、24h⇒12min；
+// 全局 20s tick 串行调度（同一时刻只有一个预热在飞 ✓），单次 25s 超时到点即放弃（不堆叠 ✗，
+// ctx 取消会让 VL 立刻放槽 ✓）。
 const (
-	fedWarmInterval = 25 * time.Second
-	fedWarmTimeout  = 20 * time.Second
+	fedWarmTick    = 20 * time.Second
+	fedWarmTimeout = 25 * time.Second
 )
+
+type fedWarmWindow struct {
+	win   time.Duration
+	every time.Duration
+}
+
+var fedWarmWindows = []fedWarmWindow{
+	{win: 15 * time.Minute, every: 25 * time.Second},
+	{win: time.Hour, every: 150 * time.Second},
+	{win: 24 * time.Hour, every: 12 * time.Minute},
+}
 
 func (h *LogFederationHandler) startWarmLoop() {
 	if h == nil || h.coord == nil {
@@ -120,20 +136,21 @@ func (h *LogFederationHandler) startWarmLoop() {
 	}
 	go func() {
 		defer func() { _ = recover() }()
-		ticker := time.NewTicker(fedWarmInterval)
+		ticker := time.NewTicker(fedWarmTick)
 		defer ticker.Stop()
+		last := map[time.Duration]time.Time{}
 		for {
-			h.warmOnce()
+			now := time.Now()
+			for _, w := range fedWarmWindows {
+				// 串行＋按窗口间隔：到点的窗口才跑，且同一时刻至多一个在飞 ✓
+				if t, ok := last[w.win]; !ok || now.Sub(t) >= w.every {
+					last[w.win] = now
+					h.warmWindow(now.UTC(), w.win)
+				}
+			}
 			<-ticker.C
 		}
 	}()
-}
-
-func (h *LogFederationHandler) warmOnce() {
-	now := time.Now().UTC()
-	for _, win := range []time.Duration{15 * time.Minute, time.Hour, 24 * time.Hour} {
-		h.warmWindow(now, win)
-	}
 }
 
 // warmWindow 单窗口预热；任何 panic/错误都被吞掉并频控记录（每窗口每分钟最多一条 ✗）。
