@@ -32,7 +32,17 @@ function resolveSourcePath(rel: string): string {
   return existingSourcePath(path.join(rootDir, 'packages/ui/src', pureReexport[1]))
 }
 
+/**
+ * 读应用侧源码。`@ui/` 前缀表示「本体已迁入组件库」（ADR-097），此时读包内实现——
+ * 应用侧那个文件只是接线层（取数 + 注入），断言要落的是实现。
+ *
+ * 不用「文件里出现 views 导入就跳转」这类启发式：普通组件也会导入 views 组件
+ * （例如 BotWorktableCard 引 BotHealthBar），那样会被误判成接线层、读到别人的源码。
+ */
 function read(rel: string): string {
+  if (rel.startsWith('@ui/')) {
+    return readFileSync(existingSourcePath(path.join(rootDir, 'packages/ui/src', rel.slice(4))), 'utf8')
+  }
   return readFileSync(resolveSourcePath(rel), 'utf8')
 }
 
@@ -46,13 +56,12 @@ function readUiStyles(): string {
     .map((f) => readFileSync(path.join(dir, f), 'utf8'))
     .join('\n')
 }
-
 /** 既参与 hover 抬升、又需在 FR-176 去位移的卡片/行原语。 */
 const HOVER_CARD_FILES = [
   'components/ui/panel.tsx',
   'components/console/NodeWorktableCard.tsx',
   'components/console/BotWorktableCard.tsx',
-  'components/console/InstanceWorktableCard.tsx',
+  '@ui/components/views/instances/InstanceWorktableCard.tsx',
   'components/ui/summary-chips.tsx',
   'pages/config-row.tsx',
   'components/console/InventorySegment.tsx',
