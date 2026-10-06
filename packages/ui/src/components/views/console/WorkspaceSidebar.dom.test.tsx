@@ -87,7 +87,13 @@ const platformWorkspace: WorkspaceDef = {
 /** 测试自备的链接渲染：朴素 `<a>`（无需任何路由库）。 */
 function renderLink({ to, className, ariaCurrent, ariaLabel, title, children }: WorkspaceLinkArgs) {
   return (
-    <a href={to} className={className} aria-current={ariaCurrent} aria-label={ariaLabel} title={title}>
+    <a
+      href={to}
+      className={typeof className === 'function' ? className(false) : className}
+      aria-current={ariaCurrent}
+      aria-label={ariaLabel}
+      title={title}
+    >
       {children}
     </a>
   )

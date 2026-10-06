@@ -1,20 +1,13 @@
-import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@jianmanager/ui'
 import type { NavEntry } from '@jianmanager/ui/lib/nav-config'
+import type { SidebarLinkArgs, SidebarLinkRenderer } from '@jianmanager/ui/components/views/console/sidebar-link'
 
-/** 外壳注入的路由渲染入参（ADR-097：包内不依赖 react-router）。 */
-export interface NavLinkRenderArgs {
-  to: string
-  /** 精确匹配标记（`/` 与 `/networks` 用 end）。 */
-  end: boolean
-  /** 由激活态决定 class —— 样式规则归视图，激活态只有路由知道。 */
-  className: (isActive: boolean) => string
-  children: ReactNode
-}
+/** 渲染入参：与侧栏其它链接共用同一份（见 {@link SidebarLinkArgs}）；此处保留旧名以免已引用它的代码改动。 */
+export type NavLinkRenderArgs = SidebarLinkArgs
 
 /** 外壳注入的路由渲染函数：接 react-router 的 NavLink 与悬停预取处理器。 */
-export type NavLinkRenderer = (args: NavLinkRenderArgs) => ReactNode
+export type NavLinkRenderer = SidebarLinkRenderer
 
 export interface SidebarNavLinkProps extends NavEntry {
   nested?: boolean

@@ -23,7 +23,12 @@ export default function SidebarNavLink({ to, labelKey, icon, nested = false }: N
       icon={icon}
       nested={nested}
       renderLink={({ to: linkTo, end, className, children }) => (
-        <NavLink to={linkTo} end={end} {...prefetchHandlers} className={({ isActive }) => className(isActive)}>
+        <NavLink
+          to={linkTo}
+          end={end}
+          {...prefetchHandlers}
+          className={typeof className === 'function' ? ({ isActive }) => className(isActive) : className}
+        >
           {children}
         </NavLink>
       )}
