@@ -242,7 +242,9 @@ export default function LogsPage() {
 		...(nodeId !== null ? { nodeId } : {}),
 		...(instanceId !== null ? { instanceId } : {}),
 		...(keyword.trim() ? { keyword: keyword.trim() } : {}),
-		...(federation?.response.viewId ? { viewId: federation.response.viewId } : {}),
+		// 注意：**不得**把搜索的 viewId 带入聚合参数 ✗——stats/facets 是各自固定条件的独立查询，
+		// 复用搜索视图会被 CP 按 F-006 语义拒（409 VIEW_STALE；实测 stats 与 facets 两呼皆 409 ✓）。
+		// 去除后二者各自重建视图，服务端校验一字不动 ✗。
 	}
 	const federationStats = useLogsFederationStats(
 		{ ...aggregateParams, groupBy: 'level' },
