@@ -127,7 +127,7 @@ describe('CreateBotDialog（FR-039 · ADR-097 b 范式）', () => {
 
   it('创建成功但节点侧委托失败：不关窗，留在弹窗内显示原因', async () => {
     const user = userEvent.setup()
-    const { onCreate, onOpenChange } = renderDialog({
+    const { onOpenChange } = renderDialog({
       onCreate: vi.fn<Props['onCreate']>().mockResolvedValue({ ok: false, error: 'bot 依赖未安装' }),
     })
 
