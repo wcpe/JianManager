@@ -1,16 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 import { Boxes, Coffee, Copy, Download, Hexagon, Loader2, Radar, Trash2 } from 'lucide-react'
-import {
-  useNodeRuntimes,
-  useScanRuntimes,
-  useRegisterRuntime,
-  useDeleteRuntime,
-  useInstallRuntime,
-  type NodeRuntimeItem,
-  type RuntimeCandidate,
-} from '@/api/runtimes'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
@@ -19,9 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { cn } from '@jianmanager/ui'
-import DangerConfirm from '@/components/DangerConfirm'
-import NodePMConfigSection from '@/components/NodePMConfigSection'
-import NodeGlobalPackagesTab from '@/components/nodes/NodeGlobalPackagesTab'
+import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
 import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 
 /** 运行时类型展示名（专有名词，不进 i18n）。 */
@@ -37,10 +25,29 @@ function TypeIcon({ type, className }: { type: string; className?: string }) {
   return <Boxes className={className} />
 }
 
-interface NodeRuntimeSectionProps {
-  nodeId: number
-  /** 是否启用查询（所在分段打开时为 true）。 */
-  active?: boolean
+/** 运行时列表行（本组件所需的最小结构；外壳传 API 返回项会结构兼容）。 */
+export interface RuntimeRowView {
+  id: number
+  type: string
+  name: string
+  version: string
+  arch: string
+  path: string
+  /** 是否由平台托管（托管项删除会连文件一起删）。 */
+  managed?: boolean
+  majorVersion: number
+}
+
+/** 扫描发现的候选运行时（同上）。 */
+export interface RuntimeCandidateView {
+  type: string
+  vendor: string
+  majorVersion: number
+  version: string
+  arch: string
+  path: string
+  /** 已在库中：候选禁勾并标注。 */
+  alreadyRegistered?: boolean
 }
 
 /**
@@ -48,40 +55,65 @@ interface NodeRuntimeSectionProps {
  * - 统一 Runtime 列表（node_jdks + node_runtimes 读侧拼装，类型徽章区分）；
  * - 「扫描发现」按钮开模态（scrollable-dialog 壳）列候选勾选入库，已在库项禁勾；
  * - 删除走 DangerConfirm（type=jdk 委托现链路托管连文件；其它只删记录）。
- * 挂在节点页 JDK 面板下方（NodeJDKPanel 扩展分区）。
+ *
+ * 受控视图（ADR-097 b 范式）：不取数、不发请求、不弹 toast。
+ * - 扫描结果、登记成功数、安装与删除的结果都由回调的返回值交回（视图要据此
+ *   关闭模态或复位勾选），故四个回调都返回结果而非仅上报；
+ * - 分区尾部的两个子区块（包管理器配置、全局包管理）各自取数、不属本视图，
+ *   经 `footer` 槽注入——这样视图不必认识它们，也就不会反向依赖应用层组件。
  */
-export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntimeSectionProps) {
+export interface NodeRuntimeSectionProps {
+  /** 运行时列表（含 jdk；本组件会过滤掉 jdk，理由见 render 内注释）。 */
+  runtimes?: RuntimeRowView[]
+  /** 列表加载态。 */
+  isLoading?: boolean
+  /** 尾部扩展区：外壳注入包管理器配置与全局包等子区块。 */
+  footer?: ReactNode
+  /** 扫描发现候选。成功回传列表；失败回 null（视图据此关闭模态）。 */
+  onScan: () => Promise<RuntimeCandidateView[] | null>
+  /** 登记选中的候选（逐条 POST）。回传成功条数，供视图决定提示与是否关闭模态。 */
+  onRegister: (picked: RuntimeCandidateView[]) => Promise<number>
+  /** 删除一条运行时。返回是否成功。 */
+  onDelete: (item: RuntimeRowView) => Promise<boolean>
+  /** 一键安装 Node.js 指定 LTS 主版本。返回是否成功。 */
+  onInstall: (major: number) => Promise<boolean>
+  /** 复制路径的结果上报（由外壳决定提示文案）。 */
+  onCopyResult?: (ok: boolean) => void
+}
+
+export default function NodeRuntimeSection({
+  runtimes,
+  isLoading,
+  footer,
+  onScan,
+  onRegister,
+  onDelete,
+  onInstall,
+  onCopyResult,
+}: NodeRuntimeSectionProps) {
   const { t } = useTranslation()
-  const { data: runtimes, isLoading } = useNodeRuntimes(nodeId, { enabled: active })
-  const scan = useScanRuntimes(nodeId)
-  const register = useRegisterRuntime(nodeId)
-  const del = useDeleteRuntime(nodeId)
-  const install = useInstallRuntime(nodeId)
 
   const [scanOpen, setScanOpen] = useState(false)
-  const [candidates, setCandidates] = useState<RuntimeCandidate[] | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [candidates, setCandidates] = useState<RuntimeCandidateView[] | null>(null)
   const [checked, setChecked] = useState<Record<string, boolean>>({})
-  const [pendingDel, setPendingDel] = useState<NodeRuntimeItem | null>(null)
+  const [pendingDel, setPendingDel] = useState<RuntimeRowView | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [registering, setRegistering] = useState(false)
   const [installOpen, setInstallOpen] = useState(false)
+  const [installing, setInstalling] = useState(false)
   const [installMajor, setInstallMajor] = useState(String(NODE_LTS_MAJORS[0]))
 
   const installMajorNum = Number.parseInt(installMajor, 10)
   const installMajorValid = Number.isInteger(installMajorNum) && installMajorNum > 0
 
   // 一键安装 Node.js（FR-299）：202 受理即提示跳任务中心，终态由心跳落库后列表自然出现。
-  const onInstall = () => {
+  const submitInstall = async () => {
     if (!installMajorValid) return
-    install.mutate(
-      { type: 'nodejs', major: installMajorNum },
-      {
-        onSuccess: () => {
-          toast.success(t('nodes.runtimeLib.installDispatched'))
-          setInstallOpen(false)
-        },
-        onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-          toast.error(err.response?.data?.message || t('nodes.runtimeLib.installFailed')),
-      },
-    )
+    setInstalling(true)
+    const ok = await onInstall(installMajorNum)
+    setInstalling(false)
+    if (ok) setInstallOpen(false)
   }
 
   // 列表只承载非 JDK 类型（v0.15.0 验收 e2e 抓出的双列重复修复）：JDK 已由上方 JDK 面板
@@ -91,55 +123,34 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
   const selectedCount = useMemo(() => Object.values(checked).filter(Boolean).length, [checked])
 
   // 打开模态即扫描（重扫也走这里）：候选与勾选态清零重建。
-  const runScan = () => {
+  const runScan = async () => {
     setCandidates(null)
     setChecked({})
-    scan.mutate(undefined, {
-      onSuccess: (list) => setCandidates(list),
-      onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-        toast.error(err.response?.data?.message || t('nodes.runtimeLib.scanFailed'))
-        setScanOpen(false)
-      },
-    })
+    setScanning(true)
+    const list = await onScan()
+    setScanning(false)
+    if (list) setCandidates(list)
+    else setScanOpen(false)
   }
 
   const openScan = () => {
     setScanOpen(true)
-    runScan()
+    void runScan()
   }
 
   // 勾选入库：逐条 POST（type=jdk 转发现有 JDK 登记链路，其它落 node_runtimes）。
   const onRegisterSelected = async () => {
     const picked = (candidates ?? []).filter((c) => checked[c.path])
     if (picked.length === 0) return
-    let okCount = 0
-    for (const c of picked) {
-      try {
-        await register.mutateAsync({
-          type: c.type,
-          vendor: c.type === 'jdk' ? c.vendor : undefined,
-          name: c.type === 'jdk' ? undefined : `${c.vendor} ${c.majorVersion}`,
-          majorVersion: c.majorVersion,
-          version: c.version,
-          arch: c.arch,
-          path: c.path,
-        })
-        okCount++
-      } catch (err) {
-        const e = err as Error & { response?: { data?: { message?: string } } }
-        toast.error(`${c.path}: ${e.response?.data?.message || t('nodes.runtimeLib.registerFailed')}`)
-      }
-    }
-    if (okCount > 0) {
-      toast.success(t('nodes.runtimeLib.registerSuccess', { count: okCount }))
-      setScanOpen(false)
-    }
+    setRegistering(true)
+    const okCount = await onRegister(picked)
+    setRegistering(false)
+    if (okCount > 0) setScanOpen(false)
   }
 
   const copyPath = async (p: string) => {
     const ok = await copyToClipboard(p)
-    if (ok) toast.success(t('artifactCache.pathCopied'))
-    else toast.error(t('common.copyFailed'))
+    onCopyResult?.(ok)
   }
 
   return (
@@ -200,7 +211,7 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
                   type="button"
                   className="mt-0.5 flex max-w-full items-center gap-1 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
                   title={rt.path}
-                  onClick={() => copyPath(rt.path)}
+                  onClick={() => void copyPath(rt.path)}
                 >
                   <span className="truncate">{rt.path}</span>
                   <Copy className="size-3 shrink-0" />
@@ -261,8 +272,8 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
             <Button variant="outline" onClick={() => setInstallOpen(false)}>
               {t('common.cancel')}
             </Button>
-            <Button onClick={onInstall} disabled={!installMajorValid || install.isPending}>
-              {install.isPending && <Loader2 className="size-4 animate-spin" />}
+            <Button onClick={() => void submitInstall()} disabled={!installMajorValid || installing}>
+              {installing && <Loader2 className="size-4 animate-spin" />}
               {t('nodes.runtimeLib.installConfirm')}
             </Button>
           </DialogFooter>
@@ -276,7 +287,7 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
             <DialogTitle>{t('nodes.runtimeLib.scanTitle')}</DialogTitle>
           </DialogHeader>
           <ScrollableDialogBody className="space-y-2">
-            {scan.isPending ? (
+            {scanning ? (
               <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />
                 {t('nodes.runtimeLib.scanning')}
@@ -328,8 +339,8 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
             <Button variant="outline" onClick={() => setScanOpen(false)}>
               {t('common.cancel')}
             </Button>
-            <Button onClick={onRegisterSelected} disabled={selectedCount === 0 || register.isPending}>
-              {register.isPending && <Loader2 className="size-4 animate-spin" />}
+            <Button onClick={() => void onRegisterSelected()} disabled={selectedCount === 0 || registering}>
+              {registering && <Loader2 className="size-4 animate-spin" />}
               {t('nodes.runtimeLib.register', { count: selectedCount })}
             </Button>
           </DialogFooter>
@@ -349,29 +360,17 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
         confirmText={pendingDel?.managed
           ? (pendingDel.type === 'jdk' ? `${pendingDel.name} ${pendingDel.majorVersion}` : pendingDel.name)
           : undefined}
+        pending={deleting}
         onConfirm={() => {
           const target = pendingDel!
           setPendingDel(null)
-          del.mutate({ id: target.id, type: target.type }, {
-            onSuccess: () => toast.success(t('nodes.runtimeLib.deleted')),
-            onError: (err: Error & { response?: { data?: { message?: string; instances?: { name: string }[] } } }) => {
-              const insts = err.response?.data?.instances
-              if (insts && insts.length > 0) {
-                toast.error(t('nodes.jdkInUse', { names: insts.map((i) => i.name).join(', ') }))
-              } else {
-                toast.error(err.response?.data?.message || t('nodes.runtimeLib.deleteFailed'))
-              }
-            },
-          })
+          setDeleting(true)
+          void onDelete(target).finally(() => setDeleting(false))
         }}
         onCancel={() => setPendingDel(null)}
       />
 
-      {/* 包管理器与 registry 配置（FR-306） */}
-      <NodePMConfigSection nodeId={nodeId} active={active} />
-
-      {/* 全局包管理（FR-307）：托管全局目录已装包 列表/搜索/安装/升级/卸载。 */}
-      <NodeGlobalPackagesTab nodeId={nodeId} active={active} />
+      {footer}
     </div>
   )
 }
