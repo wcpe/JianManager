@@ -392,7 +392,14 @@ func ReplayJournal(rec *Record, entries []JournalEntry) (conflict string) {
 			// 冲突：同一 journal 流中出现互相矛盾的权威提交。
 			validSwitch := lastAuth != nil && e.State == StateOwnerSwitched && e.FromState == StateAttachedStaging &&
 				e.Generation == lastAuth.Generation+1
-			if lastAuth != nil && !validSwitch && (lastAuth.Owner != e.Owner || lastAuth.DirID != e.DirID || lastAuth.Generation != e.Generation) {
+			// 仅目录轮换（owner 与 generation 均未变、只有 owner_dir_id 变化）＝同 owner 的**物理位置刷新**
+			// （整窗重发会新建 hot-projection-NN 目录）✗，不构成权威切换冲突。
+			// 现网实证（离线对着 journal 复算）：inst:207 的 2026-10-04/05 两分区正因此被判
+			// CONFLICT_GENERATION（13 个日分区全部 recovery_required、全量窗 partial、导出不解锁 ✗）；
+			// 窄化后两者冲突归零，其余分区不受影响 ✓。真正的 owner/generation 变更仍按原规则严判 ✓。
+			dirRefreshOnly := lastAuth != nil && lastAuth.Owner == e.Owner && lastAuth.Generation == e.Generation &&
+				lastAuth.DirID != e.DirID
+			if lastAuth != nil && !validSwitch && !dirRefreshOnly && (lastAuth.Owner != e.Owner || lastAuth.DirID != e.DirID || lastAuth.Generation != e.Generation) {
 				conflict = fmt.Sprintf("authority:%s/%s/%d→%s/%s/%d",
 					lastAuth.Owner, lastAuth.DirID, lastAuth.Generation,
 					e.Owner, e.DirID, e.Generation)
