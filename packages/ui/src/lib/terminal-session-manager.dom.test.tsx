@@ -57,7 +57,10 @@ const wsHarness = vi.hoisted(() => {
     onclose: ((event: CloseEvent) => void) | null = null
     onerror: ((event: Event) => void) | null = null
 
-    constructor(readonly url: string) {
+    url: string
+
+    constructor(url: string) {
+      this.url = url
       sockets.push(this)
     }
 
