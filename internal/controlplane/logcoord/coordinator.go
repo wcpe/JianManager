@@ -29,6 +29,78 @@ type Coordinator struct {
 
 	mu    sync.Mutex
 	views map[string]View
+
+	// 同参秒级 TTL 缓存（第二笔：首屏/分页重复查询提速，扇出成本 20s+ 时回收最大）。
+	// 键含授权主体摘要 ⇒ 跨主体绝不命中 ✗；Export 路径不经过此处 ⇒ 天然旁路 ✗。
+	searchCacheMu sync.Mutex
+	searchCache   map[string]searchCacheEntry
+}
+
+// searchCacheTTL 双档 TTL：pending（覆盖校验后置 ✗）结果短档，避免新日志被掩盖过久；
+// 已完成完整校验的结果可用常规档。
+const (
+	searchCacheTTLPending   = 4 * time.Second
+	searchCacheTTLCompleted = 45 * time.Second
+)
+
+type searchCacheEntry struct {
+	resp     *SearchResponse
+	expireAt time.Time
+}
+
+// searchCacheKey 同参键＝授权主体摘要 ‖ view 维度/scope ‖ 时间片 ‖ 过滤 ‖ onlineOnly ‖
+// order ‖ limit/maxBytes ‖ Fast。**跨主体绝不命中 ✗**（主体与 scope 都在键内 ✓）。
+func searchCacheKey(q Query) string {
+	return strings.Join([]string{
+		q.PrincipalKey,
+		q.PermissionScope,
+		q.FromUTC,
+		q.ToUTC,
+		normalizeFilter(q.Filter),
+		fmt.Sprint(q.OnlineOnly),
+		q.OrderVersion,
+		fmt.Sprint(q.Budget.Limit),
+		fmt.Sprint(q.Budget.MaxBytes),
+		fmt.Sprint(q.Fast),
+	}, "\x1f")
+}
+
+// lookupSearchCache 命中即返回同一 SearchResponse（只读使用 ✓；未命中返回 false）。
+func (c *Coordinator) lookupSearchCache(q Query) (*SearchResponse, bool) {
+	key := searchCacheKey(q)
+	c.searchCacheMu.Lock()
+	defer c.searchCacheMu.Unlock()
+	entry, ok := c.searchCache[key]
+	if !ok || time.Now().After(entry.expireAt) {
+		if ok {
+			delete(c.searchCache, key)
+		}
+		return nil, false
+	}
+	return entry.resp, true
+}
+
+// storeSearchCache 写入同参缓存，TTL 按 pending 双档（上限保护防无界增长 ✓）。
+func (c *Coordinator) storeSearchCache(q Query, resp *SearchResponse) {
+	if resp == nil {
+		return
+	}
+	ttl := searchCacheTTLCompleted
+	if resp.Coverage.Pending {
+		ttl = searchCacheTTLPending
+	}
+	key := searchCacheKey(q)
+	c.searchCacheMu.Lock()
+	defer c.searchCacheMu.Unlock()
+	if c.searchCache == nil {
+		c.searchCache = make(map[string]searchCacheEntry)
+	}
+	if len(c.searchCache) > 2048 {
+		for k := range c.searchCache {
+			delete(c.searchCache, k)
+		}
+	}
+	c.searchCache[key] = searchCacheEntry{resp: resp, expireAt: time.Now().Add(ttl)}
 }
 
 // maxRetainedViews CP 视图注册表上限。与 Worker 侧同理：每个「不带 view_id 的首次查询」都新建视图，
@@ -687,6 +759,11 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 		return nil, err
 	}
 	view, resolved := viewFast, resolvedFast
+	// 同参秒级 TTL 缓存：命中直接返回（重复/翻页查询免扇出 ✓）。Export 路径不经 Search 本函数
+	// ⇒ 天然旁路 ✗；键含主体/scope ⇒ 跨主体绝不命中 ✗。
+	if cached, ok := c.lookupSearchCache(q); ok {
+		return cached, nil
+	}
 	streams, covBy, quality, workerCut, workerOpen, err := c.fanoutSearch(ctx, view, resolved, q, "")
 	if err != nil {
 		return nil, err
@@ -755,6 +832,8 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 			SortKey: rows[len(rows)-1].SortKey(), PageLimit: capRows,
 		})
 	}
+	// 同参缓存写入（pending 短档／完整校验常规档 ✓）；返回的指针仅供只读使用 ✓。
+	c.storeSearchCache(q, resp)
 	return resp, nil
 }
 
