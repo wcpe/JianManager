@@ -1,216 +1,62 @@
-import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCreateBot } from '@/api/bots'
 import { useInstance } from '@/api/instances'
 import { useNode } from '@/api/nodes'
 import { suggestBotServer } from './bot-list'
-import { Button } from '@jianmanager/ui/components/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import { Input } from '@jianmanager/ui/components/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
-import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/form-validation'
+import CreateBotDialogView from '@jianmanager/ui/components/views/instances/CreateBotDialog'
 
 /**
- * 控制台 Bot 段「新建 Bot」对话框（FR-039）。
- * 实例 id 由当前工作区实例预填（不可改），连接地址用「所在节点 host + 默认端口」预填且可改。
+ * 「新建 Bot」对话框的应用接线层（ADR-097 b 范式）。
+ *
+ * 对话框本体已迁入组件库并受控；本层算两样它不该自己拿的东西：归属实例名、
+ * 「节点 host + 实例端口」的建议连接地址（要查实例与节点），以及创建动作。
+ * 保留同路径的默认导出与同一套 props，调用点无需改动。
  */
-interface CreateBotDialogProps {
+export default function CreateBotDialog({
+  open,
+  onOpenChange,
+  instanceId,
+}: {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** 当前工作区打开的实例 id，新建 Bot 归属于它 */
   instanceId: number
-}
-
-export default function CreateBotDialog({ open, onOpenChange, instanceId }: CreateBotDialogProps) {
+}) {
   const { t } = useTranslation()
   const create = useCreateBot()
   const { data: instance } = useInstance(instanceId)
   const { data: node } = useNode(instance?.nodeId ?? 0)
   const suggested = suggestBotServer(node, instance?.serverPort)
 
-  const [name, setName] = useState('')
-  const [auth, setAuth] = useState('offline')
-  const [behavior, setBehavior] = useState('idle')
-  const [error, setError] = useState('')
-  // server/port 用户覆盖值：null 表示未改，跟随节点 host 建议值显示（避免在 effect 里同步 props）
-  const [serverOverride, setServerOverride] = useState<string | null>(null)
-  const [portOverride, setPortOverride] = useState<string | null>(null)
-
-  const server = serverOverride ?? suggested.server
-  const port = portOverride ?? String(suggested.port)
-
-  const errors = validateFields(
-    { name, server, port },
-    {
-      name: [validateRequired],
-      server: [validateRequired, validateHost],
-      port: [validateRequired, validatePort],
-    },
-  )
-
-  const behaviorOptions = [
-    { value: 'idle', label: t('bots.idle') },
-    { value: 'guard', label: t('bots.guard') },
-    { value: 'follow', label: t('bots.follow') },
-    { value: 'patrol', label: t('bots.patrol') },
-  ]
-
-  const resetForm = () => {
-    setName('')
-    setAuth('offline')
-    setBehavior('idle')
-    setError('')
-    setServerOverride(null)
-    setPortOverride(null)
-  }
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault()
-    if (hasErrors(errors)) return
-    setError('')
-    create.mutate(
-      {
-        instanceId,
-        name,
-        config: { server, port: Number(port), auth },
-        behavior,
-      },
-      {
-        onSuccess: (bot) => {
-          // 记录创建成功但委托 Worker 失败（如 bot 依赖未装）：留在弹窗内显示可操作原因，
-          // 不再静默关窗留下一个永远 pending 的 Bot（真机「两侧零反馈」）。
+  return (
+    <CreateBotDialogView
+      open={open}
+      onOpenChange={onOpenChange}
+      instanceName={instance?.name ?? `#${instanceId}`}
+      suggestedServer={suggested.server}
+      suggestedPort={suggested.port}
+      creating={create.isPending}
+      onCreate={async (payload) => {
+        try {
+          const bot = await create.mutateAsync({
+            instanceId,
+            name: payload.name,
+            config: { server: payload.server, port: payload.port, auth: payload.auth },
+            behavior: payload.behavior,
+          })
+          // 记录创建成功但委托 Worker 失败（如 bot 依赖未装）：交回视图显示可操作原因。
           if (bot?.status === 'error') {
-            setError(bot.lastError || t('bots.delegateFailed'))
-            return
+            return { ok: false as const, error: bot.lastError || t('bots.delegateFailed') }
           }
-          onOpenChange(false)
-          resetForm()
-        },
-        onError: (err: unknown) => {
+          return { ok: true as const }
+        } catch (err) {
           const msg =
             err instanceof Error && 'response' in err
               ? (err as { response?: { data?: { message?: string } } }).response?.data?.message
               : undefined
-          setError(msg || t('bots.createFailed'))
-        },
-      },
-    )
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
-        <DialogHeader>
-          <DialogTitle>{t('bots.createBot')}</DialogTitle>
-        </DialogHeader>
-
-        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-          <ScrollableDialogBody className="space-y-3 py-1">
-            {error && (
-              <div className="p-2 text-sm text-destructive bg-destructive/10 rounded">{error}</div>
-            )}
-
-            <div className="space-y-1">
-              <FieldLabel>{t('bots.instance')}</FieldLabel>
-              <Input value={instance?.name ?? `#${instanceId}`} disabled readOnly />
-            </div>
-
-            <div className="space-y-1">
-              <FieldLabel required>{t('bots.name')}</FieldLabel>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="GuardBot"
-                aria-invalid={!!errors.name}
-              />
-              <FieldError error={errors.name} />
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2 space-y-1">
-                <FieldLabel required>{t('bots.serverAddr')}</FieldLabel>
-                <Input
-                  value={server}
-                  onChange={(e) => setServerOverride(e.target.value)}
-                  placeholder="mc.example.com"
-                  aria-invalid={!!errors.server}
-                />
-                <FieldError error={errors.server} />
-              </div>
-              <div className="space-y-1">
-                <FieldLabel required>{t('bots.port')}</FieldLabel>
-                <Input
-                  value={port}
-                  onChange={(e) => setPortOverride(e.target.value)}
-                  type="number"
-                  aria-invalid={!!errors.port}
-                />
-                <FieldError error={errors.port} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <FieldLabel>{t('bots.authMethod')}</FieldLabel>
-                <Select value={auth} onValueChange={setAuth}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="offline">{t('bots.offline')}</SelectItem>
-                    <SelectItem value="microsoft">{t('bots.microsoft')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <FieldLabel>{t('bots.initialBehavior')}</FieldLabel>
-                <Select value={behavior} onValueChange={setBehavior}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {behaviorOptions.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </ScrollableDialogBody>
-
-          <DialogFooter className="pt-4">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                onOpenChange(false)
-                resetForm()
-              }}
-            >
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={create.isPending || hasErrors(errors)}>
-              {create.isPending ? t('common.creating') : t('common.create')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+          return { ok: false as const, error: msg || t('bots.createFailed') }
+        }
+      }}
+    />
   )
 }
