@@ -1,159 +1,59 @@
 import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@jianmanager/ui/components/sheet'
-import DangerConfirm from '@/components/DangerConfirm'
-import { UnifiedDiff } from '@jianmanager/ui/components/views/UnifiedDiff'
-import {
-  useFileVersions,
-  useFileVersionDiff,
-  useRollbackFile,
-  type FileVersion,
-} from '@/api/fileVersions'
 
-/** 历史版本抽屉（FR-070）：版本列表 / diff / 一键回滚，复用 FR-051 后端，回滚走 DangerConfirm。 */
-interface VersionDrawerProps {
+import VersionDrawer from '@jianmanager/ui/components/views/explorer/VersionDrawer'
+import { useFileVersions, useFileVersionDiff, useRollbackFile } from '@/api/fileVersions'
+
+/**
+ * 历史版本抽屉接线层（ADR-097）：三个取数 hook 留在这里，视图只做受控渲染。
+ *
+ * `diffFrom`/`diffTo` 由视图上报（它们是视图内的选择态），这里只用来驱动 diff 查询——
+ * 查询自身的 enabled 条件（两者都非空且不同）与原实现一致。
+ */
+type ConnectedProps = Omit<
+  Parameters<typeof VersionDrawer>[0],
+  | 'versions'
+  | 'versionsLoading'
+  | 'versionsFailed'
+  | 'onDiffSelect'
+  | 'diff'
+  | 'diffLoading'
+  | 'diffError'
+  | 'onRollback'
+  | 'rollbackPending'
+  | 'notify'
+> & {
+  /** 实例 ID（视图不需要它——取数都在这一层）。 */
   instanceId: number
-  /** 选中文件完整相对路径；为 null 时抽屉不渲染内容。 */
-  filePath: string | null
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  /** 回滚成功后回调，供父组件刷新文件内容。 */
-  onRolledBack?: () => void
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-export default function VersionDrawer({
-  instanceId,
-  filePath,
-  open,
-  onOpenChange,
-  onRolledBack,
-}: VersionDrawerProps) {
-  const { t } = useTranslation()
+export default function VersionDrawerConnected(props: ConnectedProps) {
+  const { instanceId, filePath, open } = props
   const [diffFrom, setDiffFrom] = useState<number | null>(null)
   const [diffTo, setDiffTo] = useState<number | null>(null)
-  const [rollbackTarget, setRollbackTarget] = useState<number | null>(null)
 
   const versionsQ = useFileVersions(instanceId, open ? filePath : null)
   const diffQ = useFileVersionDiff(instanceId, filePath, diffFrom ?? undefined, diffTo ?? undefined)
   const rollbackMut = useRollbackFile(instanceId, filePath)
-  const versions: FileVersion[] = versionsQ.data ?? []
-
-  const confirmRollback = () => {
-    if (rollbackTarget == null) return
-    const target = rollbackTarget
-    rollbackMut.mutate(
-      { versionId: target },
-      {
-        onSuccess: () => {
-          toast.success(t('fileVersions.rollbackSuccess', { version: target }))
-          setRollbackTarget(null)
-          onRolledBack?.()
-        },
-        onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-          toast.error(err.response?.data?.message || t('fileVersions.rollbackFailed'))
-          setRollbackTarget(null)
-        },
-      },
-    )
-  }
 
   return (
-    <>
-      <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>{t('fileVersions.title')}</SheetTitle>
-            <SheetDescription className="truncate font-mono text-xs">{filePath}</SheetDescription>
-          </SheetHeader>
-
-          <div className="flex-1 overflow-auto">
-            {versionsQ.isLoading ? (
-              <p className="p-3 text-xs text-muted-foreground">{t('files.loading')}</p>
-            ) : versionsQ.error ? (
-              <p className="p-3 text-xs text-destructive">{t('fileVersions.loadFailed')}</p>
-            ) : versions.length === 0 ? (
-              <p className="p-3 text-xs text-muted-foreground">{t('fileVersions.empty')}</p>
-            ) : (
-              <ul className="space-y-1">
-                {versions.map((v) => (
-                  <li key={v.id} className="rounded border px-3 py-2 text-xs hover:bg-muted/30">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">#{v.id}</span>
-                      <div className="flex gap-2 shrink-0">
-                        <button
-                          type="button"
-                          className={diffFrom === v.id ? 'font-semibold text-primary' : 'text-primary hover:underline'}
-                          onClick={() => setDiffFrom(v.id)}
-                        >
-                          {t('fileVersions.diffFrom')}
-                        </button>
-                        <button
-                          type="button"
-                          className={diffTo === v.id ? 'font-semibold text-primary' : 'text-primary hover:underline'}
-                          onClick={() => setDiffTo(v.id)}
-                        >
-                          {t('fileVersions.diffTo')}
-                        </button>
-                        {/* 回滚按钮禁用时屏蔽指针事件，否则 hover:underline 仍会触发下划线，看着像能点。 */}
-                        <button
-                          type="button"
-                          className="text-amber-600 hover:underline disabled:pointer-events-none disabled:opacity-50"
-                          disabled={rollbackMut.isPending}
-                          onClick={() => setRollbackTarget(v.id)}
-                        >
-                          {t('fileVersions.rollback')}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="mt-0.5 flex justify-between gap-2 text-muted-foreground">
-                      <span className="text-[10px]">{new Date(v.createdAt).toLocaleString()}</span>
-                      <span className="text-[10px] shrink-0">{formatSize(v.size)}</span>
-                    </div>
-                    {v.rollbackOfVersionId ? (
-                      <div className="text-[10px] text-amber-600">
-                        {t('fileVersions.rollbackVia')} #{v.rollbackOfVersionId}
-                      </div>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          {diffFrom != null && diffTo != null && diffFrom !== diffTo && (
-            <div className="mt-2 max-h-48 overflow-auto rounded border bg-muted/30 p-2">
-              <div className="mb-1 text-xs font-medium">
-                {t('fileVersions.diffTitle')} #{diffFrom} → #{diffTo}
-              </div>
-              {diffQ.isLoading ? (
-                <p className="text-xs">{t('files.loading')}</p>
-              ) : diffQ.data?.binary ? (
-                <p className="text-xs text-muted-foreground">{t('fileVersions.binary')}</p>
-              ) : diffQ.data ? (
-                <UnifiedDiff diff={diffQ.data.unifiedDiff} />
-              ) : (
-                <p className="text-xs text-destructive">{diffQ.error ? (diffQ.error as Error).message : ''}</p>
-              )}
-            </div>
-          )}
-        </SheetContent>
-      </Sheet>
-
-      <DangerConfirm
-        open={rollbackTarget != null}
-        title={t('fileVersions.rollbackTitle')}
-        description={t('fileVersions.rollbackConfirm', { name: filePath ?? '', version: rollbackTarget ?? 0 })}
-        confirmLabel={t('fileVersions.rollback')}
-        onConfirm={confirmRollback}
-        onCancel={() => setRollbackTarget(null)}
-      />
-    </>
+    <VersionDrawer
+      {...props}
+      versions={versionsQ.data}
+      versionsLoading={versionsQ.isLoading}
+      versionsFailed={!!versionsQ.error}
+      onDiffSelect={(from, to) => {
+        setDiffFrom(from)
+        setDiffTo(to)
+      }}
+      diff={diffQ.data}
+      diffLoading={diffQ.isLoading}
+      diffError={diffQ.error ? (diffQ.error as Error).message : undefined}
+      onRollback={async (versionId) => {
+        await rollbackMut.mutateAsync({ versionId })
+      }}
+      rollbackPending={rollbackMut.isPending}
+      notify={(kind, message) => (kind === 'success' ? toast.success(message) : toast.error(message))}
+    />
   )
 }
