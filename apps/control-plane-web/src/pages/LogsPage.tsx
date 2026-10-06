@@ -23,7 +23,6 @@ import { usePlatformDiagnosticsLog } from '@/api/nodeDiagnostics'
 import { useNodes } from '@/api/nodes'
 import { LogExportRangeDialog } from '@/components/LogExportRangeDialog'
 import { useDebounced } from '@/lib/use-debounced'
-import { ClearConflictsDialog } from '@/components/ClearConflictsDialog'
 import { InstancePicker } from '@/components/InstancePicker'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -578,24 +577,6 @@ export default function LogsPage() {
     [],
   )
 
-  /**
-   * 切换视图：只重置分页状态，**保留** nodeId / instanceId 等筛选。
-   *
-   * 保留筛选而非清空：用户选定的范围不该在切视图时被替他放大（曾一度在这里清掉
-   * nodeId/instanceId，依据是「平台日志不带这两个维度」——该前提是错的，已回退）。
-   *
-   * 已无 `legacy` 分支：该视图随 CP `logs` 表删除而下线（2026-10-29）。
-   */
-  const switchView = useCallback(
-    (candidate: (typeof LOG_VIEWS)[number]) => {
-      exportRequest.current?.abort()
-      setView(candidate)
-      setPage(1)
-      setFederationCursors({})
-    },
-    [],
-  )
-
   // 导出门禁（2026-10-29 变更）：
   //
   // CP `/logs/export` 已随 `logs` 表一并下线，**平台视图没有导出能力**。
@@ -768,6 +749,7 @@ export default function LogsPage() {
           </>
         }
         actions={
+          <>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
             <Button
@@ -818,20 +800,18 @@ export default function LogsPage() {
       <div className="jm-toolbar-surface flex flex-wrap items-center gap-1 p-1">
         <Segments aria-label={t('logs.viewLabel')}>
           {LOG_VIEWS.filter(
-            // legacy 是「切换前存量日志」的只读入口，不是平级主视图：收纳到右侧「更多」，
-            // 避免与平台/节点视图并列造成误解，也减少工具栏元素数量。
-            (candidate) =>
-              candidate !== 'legacy' && (isPlatformAdmin || candidate === 'node_instance'),
+            // 非平台管理员只能看 node_instance（联邦查询按实例范围收敛）。
+            (candidate) => isPlatformAdmin || candidate === 'node_instance',
           ).map(
             (candidate) => (
               <Segment
                 key={candidate}
                 active={view === candidate}
                 onClick={() => {
+                  exportRequest.current?.abort()
                   setView(candidate)
                   setPage(1)
                   setFederationCursors({})
-                  if (candidate === 'legacy') setFollow(false)
                 }}
               >
                 {t(`logs.view_${candidate}`)}
@@ -839,36 +819,6 @@ export default function LogsPage() {
             ),
           )}
         </Segments>
-        {/* 右侧收纳：非常用入口（Legacy 只读）进「更多」，保持主视图区稳定。 */}
-        <div className="ml-auto flex items-center">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                data-testid="logs-more-trigger"
-                aria-label={t('logs.more')}
-              >
-                <MoreHorizontal className="size-4" />
-                {t('logs.more')}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                data-testid="logs-view-legacy"
-                disabled={!isPlatformAdmin}
-                onSelect={() => {
-                  setView('legacy')
-                  setPage(1)
-                  setFederationCursors({})
-                  setFollow(false)
-                }}
-              >
-                {t('logs.view_legacy')}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
       </div>
 
       {/* 强筛选工具栏 */}

@@ -10,7 +10,7 @@ import {
   usePlatformDiagnosticsLog,
   type ProcessLogTail,
 } from '@/api/nodeDiagnostics'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 
 /**
  * 进程日志诊断抽屉（不是日志检索页）。

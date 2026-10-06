@@ -1247,6 +1247,7 @@ function NodeDetailPane({
   onToggleMaintenance: () => void
   onDrain: () => void
   onDelete: () => void
+  /** 打开进程日志诊断抽屉（本组件内只透传给 NodeActionsMenu，由顶层持有抽屉状态）。 */
   onShowDiagnostics: () => void
 }) {
   const { t } = useTranslation()
@@ -1276,7 +1277,7 @@ function NodeDetailPane({
           { label: t('nodes.instancesUnit'), value: instanceCount },
         ]}
         actions={
-          <NodeActionsMenu node={node} onToggleMaintenance={onToggleMaintenance} onDrain={onDrain} onDelete={onDelete} />
+          <NodeActionsMenu node={node} onToggleMaintenance={onToggleMaintenance} onDrain={onDrain} onDelete={onDelete} onShowDiagnostics={onShowDiagnostics} />
         }
         tools={DETAIL_TABS.map((k) => ({
           key: k,
