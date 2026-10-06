@@ -4354,6 +4354,13 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 	// **未发布代次**做 event_id 分片查询，同 id 同 hash 已在 staging ⇒ 只跳过本次新代写入 ✓。
 	// 作用域严格限定未发布代次（已发布代次由 catalog 列表界定并整条排除）✓；查询失败一律照写 ✓。
 	// 红线：replace=true 三支整窗语义、白名单/代次/差集主链一律不动 ✗。
+	// staging 幂等（w21 ② 第四落点，路 A+）：慢路径（恢复/重放/非尾部增量）投递前，对**已写入过的
+	// 同 id 同 hash**（含未发布 staging 代次）做 id 级过滤，命中则从本次写入面剔除 ✓；
+	// 常规尾部快路径与 `replace=true` 三支（整窗语义 ✓）都不经过此处 ✗。
+	// 注意：**不得**用 `expectedAuthority != nil` 早短路——分区记录暂缺（重启早期）与幂等无关 ✗。
+	if !replace && !tailPlanned && len(writeEvents) > 0 {
+		writeEvents = m.dropEventsAlreadyInStaging(client, source, writeEvents)
+	}
 	status, err := m.insertInBatches(client, writeEvents, generation)
 	slog.Info("投影写入结束",
 		"generation", generation, "source", source.LogSourceID,
@@ -4400,6 +4407,77 @@ const insertBatchMaxEvents = 500
 
 // insertInBatches 按条数上限把事件分批投递到 VL，返回最后一批的 HTTP 状态。
 // 任一批失败即中断，并原样返回该批状态与错误（调用方据此判定投递结果）。
+// dropEventsAlreadyInStaging 对「已写入过（含未发布 staging 代次）的同 id 同 hash」做 id 级幂等
+// （w21 ② 第四落点，路 A+）：≤500 个 event_id 一批查询，命中则从本次写入面剔除 ✓。
+//
+// 语义与安全：
+//   - 只作用于**慢路径**（!replace && !tailPlanned，即恢复/重放/非尾部增量）⇒ 常规尾部零开销 ✓；
+//   - `replace=true` 三支整窗路径不经过本函数 ⇒ 取代语义、白名单与差集主链一字不动 ✗；
+//   - 任何查询失败/权威缺失一律**照写**（宁可多写不漏，绝不因缺证据而少写 ✓）；
+//   - 调用侧**不得**加 `expectedAuthority != nil` 之类早短路：分区记录暂缺（重启早期）与幂等无关 ✗。
+func (m *Manager) dropEventsAlreadyInStaging(client *vlsup.Client, source SourceConfig, events []logtypes.Event) []logtypes.Event {
+	if client == nil || len(events) == 0 {
+		return events
+	}
+	const identityChunk = 500
+	staged := make(map[string]string, len(events))
+	for start := 0; start < len(events); start += identityChunk {
+		end := start + identityChunk
+		if end > len(events) {
+			end = len(events)
+		}
+		ids := make([]string, 0, end-start)
+		seenID := make(map[string]bool, end-start)
+		for _, event := range events[start:end] {
+			if event.EventID == "" || seenID[event.EventID] {
+				continue
+			}
+			seenID[event.EventID] = true
+			ids = append(ids, strconv.Quote(event.EventID))
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		query := fmt.Sprintf("log_source_id:=%q AND source_generation:=%q AND event_id:in(%s) | fields event_id, canonical_content_hash | limit 20000",
+			source.LogSourceID, source.SourceGeneration, strings.Join(ids, ","))
+		params := url.Values{"query": {query}}
+		err := client.Stream(context.Background(), "/select/logsql/query", params, func(body io.Reader) error {
+			scanner := bufio.NewScanner(io.LimitReader(body, 32<<20))
+			scanner.Buffer(make([]byte, 64*1024), 8<<20)
+			for scanner.Scan() {
+				var row struct {
+					EventID string `json:"event_id"`
+					Hash    string `json:"canonical_content_hash"`
+				}
+				if json.Unmarshal(scanner.Bytes(), &row) == nil && row.EventID != "" {
+					staged[row.EventID] = row.Hash
+				}
+			}
+			return scanner.Err()
+		})
+		if err != nil {
+			return events // 证据缺失：照写（宁可多写不漏 ✓）
+		}
+	}
+	if len(staged) == 0 {
+		return events
+	}
+	kept := make([]logtypes.Event, 0, len(events))
+	skipped := 0
+	for _, event := range events {
+		if hash, ok := staged[event.EventID]; ok && hash == event.CanonicalHash {
+			skipped++
+			continue
+		}
+		kept = append(kept, event)
+	}
+	if skipped > 0 {
+		// 可观测性：跳过条数并入既有 republishSkipped（与"确认快路径"的跳过同口径 ✓）。
+		m.republishSkipped.Add(int64(skipped))
+	}
+	return kept
+}
+
 func (m *Manager) insertInBatches(client *vlsup.Client, events []logtypes.Event, generation string) (int, error) {
 	status := 0
 	for start := 0; start < len(events); start += insertBatchMaxEvents {
