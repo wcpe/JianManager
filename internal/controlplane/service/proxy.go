@@ -91,6 +91,13 @@ func (p *ProxyService) ProvisionProxyAsync(ctx context.Context, req ProvisionPro
 		}
 		return nil, err
 	}
+	// 代理搭建必须在后台任务启动前完成「实例即时注册」（幂等）：重连重推只在节点重连时
+	// 快照推送，若只依赖它，新建实例直到下次重连前一直「未注册」，核心下载必失败
+	// （304/306/308/310/312 五次同因）。此处此时实例行已提交、任务尚未启动，无锁竞争。
+	var resyncNode model.Node
+	if p.db != nil && p.instance != nil && p.db.First(&resyncNode, req.NodeID).Error == nil {
+		p.instance.ResyncNode(resyncNode.UUID)
+	}
 	// 存搭建参数供损毁后「重建」复用（FR-342）：与 server 一致，失败进 DAMAGED 后参数已在库。
 	if specJSON, mErr := json.Marshal(req); mErr == nil {
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", result.Instance.ID).Update("provision_spec", string(specJSON)).Error
