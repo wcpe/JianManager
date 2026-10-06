@@ -1,34 +1,35 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+// Bot 域契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 本地绑定供本文件的 hook 签名使用。
+import type {
+  BotConfig,
+  BotInfo,
+  BotListParams,
+  BotListResponse,
+  BotSummary,
+  BotBatchRequest,
+  BotBatchResult,
+  CreateBotRequest,
+} from '@jianmanager/ui/lib/bot'
+export type {
+  BotConfig,
+  BotInfo,
+  BotListParams,
+  BotListResponse,
+  BotSummary,
+  BotSummaryGroup,
+  BotBatchAction,
+  BotBatchFilter,
+  BotBatchRequest,
+  BotBatchResult,
+  CreateBotRequest,
+} from '@jianmanager/ui/lib/bot'
+
 import api, { ensureFreshToken } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 
-export interface BotConfig {
-  server: string
-  port: number
-  auth: string
-}
 
-export interface BotInfo {
-  id: number
-  uuid: string
-  instanceId: number
-  /**
-   * 实例展示名（后端已回填）。有了它，Bot 列表不必为了显示名字而拉全量实例列表。
-   * 实例被删时缺省，前端回退显示 #id。
-   */
-  instanceName?: string
-  name: string
-  status: string
-  /** 最近一次委托 Worker 失败的原因（status=error 时非空，如 bot 依赖未装）。 */
-  lastError?: string
-  /** Bot 连接配置，后端以 JSON 字符串存储。 */
-  config: string
-  behavior: string
-  workerId: string
-  createdAt: string
-  updatedAt: string
-}
 
 /** Bot 实时事件（SSE event: bot）。 */
 export interface BotRealtimeEvent {
@@ -98,78 +99,20 @@ export interface CreateBotStressSessionRequest {
   orchestrationYaml?: string
 }
 
-export interface CreateBotRequest {
-  instanceId: number
-  name: string
-  config: BotConfig
-  behavior: string
-}
 
 /** Bot 列表筛选条件（分页 + 多维过滤，FR-038）。 */
-export interface BotListParams {
-  page?: number
-  pageSize?: number
-  instanceId?: number
-  nodeId?: number
-  status?: string
-  behavior?: string
-  /** 关键字，匹配 name 或 uuid。 */
-  q?: string
-}
 
 /** 分页列表响应。 */
-export interface BotListResponse {
-  items: BotInfo[]
-  total: number
-  page: number
-  pageSize: number
-}
 
 /** 摘要分组计数。 */
-export interface BotSummaryGroup {
-  key: string
-  label: string
-  total: number
-  online: number
-}
 
 /** Bot 计数聚合（FR-038），不含逐条 Bot。 */
-export interface BotSummary {
-  total: number
-  byStatus: Record<string, number>
-  groupBy?: string
-  groups?: BotSummaryGroup[]
-}
-
-export type BotBatchAction = 'set-behavior' | 'start' | 'stop' | 'delete'
 
 /** 批量操作筛选条件（与列表筛选维度一致）。 */
-export interface BotBatchFilter {
-  instanceId?: number
-  nodeId?: number
-  status?: string
-  behavior?: string
-  q?: string
-}
 
 /** 批量操作请求，目标由 ids 或 filter 二选一指定。 */
-export interface BotBatchRequest {
-  action: BotBatchAction
-  ids?: number[]
-  filter?: BotBatchFilter
-  behavior?: string
-  target?: string
-}
 
 /** 批量操作结果计数。 */
-export interface BotBatchResult {
-  action: string
-  requested: number
-  succeeded: number
-  failed: number
-  skipped: number
-  errors: { botId: number; error: string }[]
-}
 
 /** Bot 状态是异步演进的（connecting→connected/error 在秒级发生、且由读取触发回填），
  * 列表与聚合必须短轮询：此前仅挂载取一次，真机表现为「bot 已进服、面板永远显示连接中」。 */
