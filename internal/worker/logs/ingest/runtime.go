@@ -1279,7 +1279,16 @@ func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pi
 		if operator == "" || reason == "" {
 			return fmt.Errorf("ingest: source %s has no complete published projection", key)
 		}
-		if _, abErr := pipe.Ledger().AbandonGapsThrough(pipe.Key(), entry.Positions.Reclaim, ledger.GapAbandonment{
+		// 放弃裁定的覆盖跨度取「已消费水位」：Reclaim 为主；若尚未回收（Reclaim=0）则回退 Durable；
+		// 两者皆 0（真·未消费源，无可放弃之物）⇒ 保持原报错，不开空转口子 ✗。
+		abandonThrough := entry.Positions.Reclaim
+		if abandonThrough == 0 {
+			abandonThrough = entry.Positions.Durable
+		}
+		if abandonThrough == 0 {
+			return fmt.Errorf("ingest: source %s has no complete published projection", key)
+		}
+		if _, abErr := pipe.Ledger().AbandonGapsThrough(pipe.Key(), abandonThrough, ledger.GapAbandonment{
 			ReasonCode: ledger.GapReasonPermanentlyLost,
 			Operator:   operator,
 			Reason:     reason,
