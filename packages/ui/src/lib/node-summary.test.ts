@@ -13,6 +13,7 @@ function node(p: Partial<NodeInfo>): NodeInfo {
     wsPort: 0,
     status: 1,
     maintenance: false,
+    tunnelConnected: false,
     os: '',
     arch: '',
     cpuCores: 4,
