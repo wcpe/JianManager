@@ -2,25 +2,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 定时任务（与后端 model.Schedule 对齐）。 */
-export interface ScheduleInfo {
-  id: number
-  uuid: string
-  instanceId: number
-  /**
-   * 实例展示名（后端已回填）。有了它，调度列表不必为了显示名字而拉全量实例列表。
-   * 实例被删时缺省，前端回退显示 #id。
-   */
-  instanceName?: string
-  name: string
-  cronExpr: string
-  /** 动作：start / stop / restart / command / backup。 */
-  action: string
-  /** action=command 时的命令文本（后端 model.Schedule.Payload，FR-153）。 */
-  payload: string
-  enabled: boolean
-  lastRun: string | null
-  createdAt: string
-}
+// 定时任务契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+import type { ScheduleInfo } from '@jianmanager/ui/lib/schedule'
+export type { ScheduleInfo } from '@jianmanager/ui/lib/schedule'
 
 /** 定时任务执行日志（与后端 model.ScheduleExecutionLog 对齐）。 */
 export interface ScheduleLogInfo {
