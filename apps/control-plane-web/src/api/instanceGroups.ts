@@ -1,26 +1,16 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
+import type { InstanceGroupNode } from '@jianmanager/ui/lib/instance-group'
+
 /**
  * 实例组织分组树节点（对应后端 service.InstanceGroupNodeView，FR-165 / ADR-033）。
  * 扁平节点列表，前端据 parentId 重建层级；instanceCount 为「子树聚合去重」实例数。
  * 与用户组（RBAC）、网络群组（部署）正交——纯组织归类。
+ *
+ * 契约已归包（受控视图与纯逻辑共用，ADR-097）；此处原样再导出，调用点无需改动。
  */
-export interface InstanceGroupNode {
-  id: number
-  uuid: string
-  name: string
-  /** 父节点 ID，null=根分组。 */
-  parentId: number | null
-  sort: number
-  /** 子树（含自身及所有后代）去重后的实例数。 */
-  instanceCount: number
-  /**
-   * 该组**直接**挂载（不含后代）的实例 ID（FR-452）。
-   * 供列表页 `groupTree` 维度一次取数构建「实例→组」映射，避免 per-group N+1。旧后端缺省。
-   */
-  memberInstanceIds?: number[]
-}
+export type { InstanceGroupNode } from '@jianmanager/ui/lib/instance-group'
 
 /** 分组成员实例概要。 */
 export interface InstanceGroupMember {
