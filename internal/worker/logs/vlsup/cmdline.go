@@ -126,6 +126,12 @@ func BuildArgs(cfg InstanceConfig) ([]string, error) {
 		"-storageDataPath=" + cfg.StorageDataPath,
 		"-httpListenAddr=" + ListenAddr(cfg.Port),
 		"-retentionPeriod=" + cfg.RetentionPeriod,
+		// 查询边界与资源上限（架构文档 §九 起步档）：并发 2、单查询上限 10s、
+		// 查询时间窗上限 1d、排队上限 2s —— 宽窗查询不得抢占整机（30d 保留不受影响）。
+		"-search.maxConcurrentRequests=2",
+		"-search.maxQueryDuration=10s",
+		"-search.maxQueryTimeRange=1d",
+		"-search.maxQueueDuration=2s",
 	}
 	if cache := cfg.EffectiveCacheBytes(); cache > 0 {
 		args = append(args, "-memory.allowedBytes="+strconv.FormatInt(cache, 10))
