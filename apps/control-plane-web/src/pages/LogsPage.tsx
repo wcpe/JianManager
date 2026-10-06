@@ -269,9 +269,11 @@ export default function LogsPage() {
 
   const items = legacyMode ? (legacyQuery.data?.items ?? []) : federationActive ? (federationItems ?? []) : (data?.items ?? [])
   const total = legacyMode ? (legacyQuery.data?.total ?? 0) : federationActive ? items.length : (data?.total ?? 0)
-	const federationHasNext = federationActive && !!federation.response.nextCursor
+	// 页码＝**已访问页数**（page），不再对"还有下一页"预先加 1 ✗——CP 在"恰好整页到边"时也会发
+	// `next_cursor`（hasMore 含 workerOpen ✓），旧式 `page + 1` 于是把 100 条整页显示成 2/2 ✗。
+	// 「下一页」按钮的可点性由查询结果的 nextCursor 直接驱动（不复用本页数值 ✓）。
 	const totalPages = federationActive
-		? Math.max(1, page + (federationHasNext ? 1 : 0))
+		? Math.max(1, page)
 		: Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   // 改任一筛选都回到第 1 页，避免停留在越界页。
@@ -312,9 +314,11 @@ export default function LogsPage() {
     setExporting(true)
     try {
 		if (federationActive) {
+			// 导出同样**不得复用过期视图** ✗：仅当当前响应确实带 viewId 时携带（视图来自最近一次查询 ⇒
+			// 与当前条件同源 ✓）；否则省去 viewId，由 CP 按当前条件重建视图。
 			await exportFederatedLogs({
 				...buildExportParams(params, scope),
-				viewId: federation.response.viewId,
+				...(federation.response.viewId ? { viewId: federation.response.viewId } : {}),
 			})
 		} else {
 			await exportLogs(buildExportParams(params, scope))
