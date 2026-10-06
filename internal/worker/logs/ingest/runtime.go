@@ -3867,7 +3867,13 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	// （重放 / 待发布 / 代次数达上限）才需要它作为写入面与证据面。快路径下本批就是权威集合的
 	// 增量尾部，写入面 / 证据面 / 段追加 / 发布水位全部可由「本批 + 缓存水位」给出，
 	// 故跳过全量重建（判据见 planDeliveryTail）。
-	replace := saved.PublicationPending || replay
+	// 重放/微代支改走**累积**（w21 稿 ② 第三落点，2026-10-06 #13 实测跨代拷贝后定稿）：
+	//   新代只承载「未确认差集」（下方 writeEvents = toWrite），旧代仍留在读白名单里 ⇒ 并集完备 ✓
+	//   且不再产生跨代同 id 拷贝 ✓（差集与已 ack 的旧代内容不相交）。
+	// 硬约束（血训）：差集**绝不能**配 replace=true——publish 内 replace 分支会把白名单重置为仅新代
+	//   （scope.ProjectionGenerations = []string{projectionGeneration}）⇒ 旧事件从读面消失 ✗；
+	//   故一切 replace=true 的路径（代次用尽、待发布整窗支）仍保持整窗写入面，本处只摘掉 replay 的取代项。
+	replace := saved.PublicationPending
 	if !replace && m.projectionGenerationsExhausted(source) {
 		// 与 writeProjectionDay 内同一判据等价：它只取决于**本源自己**已发布的代次数，
 		// 而同源的投递是串行的，所以提前到这里判定不会与后续判定不一致；
@@ -3907,7 +3913,7 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	// → VL 排序超 51MB → 400 → 该目标恒 not_ready。
 	// 注：曾试过用数据形状判别（EventsStored / EventsStoredThrough / eventsStored /
 	// len(toWrite)==len(expected)），全部被证伪：真实重放的批次只是全量的子集。
-	replace = replace || saved.PublicationPending || replay
+	replace = replace || saved.PublicationPending
 	// 本次**实际写入面**（校验逐字段覆盖的就是它）：
 	// replace 为真时 writeProjectionPlan 会把写入面扩为权威全量（整窗重发），否则就是本批。
 	// 自动消解必须按实际写入面取证据，否则重放会「写了却没消解」，缺口又只能等人工。
