@@ -694,6 +694,41 @@ var ErrReclaimNoSegment = errors.New("ledger: reclaim blocked")
 //   - `Revision` **不能**当水位用：`TryReclaim` 在入口调 `require`（⇒ 无条件推进修订号）
 //     即便什么都没改 ⇒ 排空收尾的每轮 `TryReclaim` 都会让修订号变化 ⇒ 判据恒为「已前进」✗✗
 //     （2026-10-05 实测：用 Revision 做判据时 5/5 次冗余整窗全部放行）。
+// SetPositionsFingerprint 成对写入「已确认水位处的内容指纹」（w18 漂移防护：段 2 由采集侧采样写入，
+// 段 3 由 acquire 在恢复/重启续读前校验——一致 ⇒ 从已确认水位续读；不一致或缺指纹 ⇒ 走对账补齐、
+// 禁止按旧偏移回读历史内容 ✗）。
+//
+// 不变量：at 必须是调用时的已确认水位（回收线）；水位前进后调用方必须重采样（旧指纹贴新位置无意义 ✗）。
+func (l *Ledger) SetPositionsFingerprint(key SourceKey, at uint64, fingerprint string) bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, ok := l.entries[key]
+	if !ok || entry == nil {
+		return false
+	}
+	entry.PositionsFingerprint = fingerprint
+	entry.PositionsFingerprintAt = at
+	return true
+}
+
+// PositionsFingerprint 返回已确认水位指纹与其对应位置（O(1)）。ok 表示**指纹存在**
+// （条目存在但从未采样 ⇒ ok=false，即段 3 判定的「缺指纹」分支 ✗）。
+func (l *Ledger) PositionsFingerprint(key SourceKey) (uint64, string, bool) {
+	if l == nil {
+		return 0, "", false
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	entry, ok := l.entries[key]
+	if !ok || entry == nil || entry.PositionsFingerprint == "" {
+		return 0, "", false
+	}
+	return entry.PositionsFingerprintAt, entry.PositionsFingerprint, true
+}
+
 func (l *Ledger) Positions(key SourceKey) (logtypes.Positions, bool) {
 	if l == nil {
 		return logtypes.Positions{}, false

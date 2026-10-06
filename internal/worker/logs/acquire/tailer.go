@@ -222,6 +222,10 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 	if ent.AcquirePaused {
 		return nil, fmt.Errorf("acquire: tailer paused (%s)", ent.PauseReason)
 	}
+	// 已确认水位指纹（w18 漂移防护段 2）在**顶部**刷新：投递线可能在"本轮无新数据"时前进，
+	// 而那种 Poll 不会走到读循环之后 ⇒ 若只挂在尾部，指纹会停旧水位、段 3 判定即失真 ✗。
+	// 本方法自带"水位未前进不重采样"的短路，故每 Poll 一次的代价是 O(1) ✓。
+	t.refreshConfirmedFingerprintLocked()
 
 	_, err := t.PrepareRotation()
 	if err != nil {
@@ -461,6 +465,41 @@ func prefixSHA256At(path string, from, size int64) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// refreshConfirmedFingerprintLocked 把「已确认水位（回收线）处的内容采样指纹」成对写入账本（w18 漂移防护段 2）。
+//
+// 恢复/重启续读前的三态判定在段 3（一致续读／不一致或缺指纹禁旧偏移回读走对账 ✗），本函数只负责采样＋持久化。
+// 语义：水位前进 ⇒ 位置上移 ⇒ 旧指纹失效 ⇒ 在**新水位**重采样 ✓；水位未前进 ⇒ 不重复采样（O(512) 只在变化时付出 ✓）。
+// 采样失败 ⇒ 不写（缺指纹在段 3 视作不一致 ⇒ 宁可走对账，绝不带漂移偏移续读 ✗）。
+func (t *FileTailer) refreshConfirmedFingerprintLocked() {
+	state, ok := t.led.AcquireState(t.key)
+	if !ok {
+		return
+	}
+	// 已确认水位取**投递线**：它是平台确认落库的最强水位（回收线只代表本地消费，可能滞后）。
+	// 段 3 的三态判定将按同一水位校验 ✓。
+	watermark := state.Positions.Delivery
+	if watermark == 0 {
+		return // 尚无已确认水位：无凭证可写（段 3 按「缺指纹」处理 ✓）
+	}
+	if at, fp, ok := t.led.PositionsFingerprint(t.key); ok && at == watermark && fp != "" {
+		return // 水位未前进，指纹仍有效 ✓
+	}
+	const window = 512
+	from := int64(watermark) - window
+	if from < 0 {
+		from = 0
+	}
+	size := int64(watermark) - from
+	if size <= 0 {
+		return
+	}
+	fingerprint, err := prefixSHA256At(t.path, from, size)
+	if err != nil {
+		return
+	}
+	_ = t.led.SetPositionsFingerprint(t.key, watermark, fingerprint)
 }
 
 // refreshTailHashLocked 维护「游标前 512B 窗口」指纹（每次 Poll 收束后调用一次，O(512) ✓）。
