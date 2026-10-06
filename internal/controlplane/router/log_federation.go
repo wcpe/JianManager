@@ -2,12 +2,14 @@ package router
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,11 +33,75 @@ var testLogCoord *logcoord.Coordinator
 type LogFederationHandler struct {
 	coord *logcoord.Coordinator
 	authz *service.AuthzService
+	// 面板聚合类（stats/facets）的同参秒级缓存：这两条查询同样打满 VL 并发槽，
+	// 页面加载时与主列表互挤（实测 5.7–8.7s ✗）⇒ 命中即免扇出。键含授权主体/scope ⇒
+	// 跨主体绝不命中 ✗；导出/校验路径不经这两个 handler ⇒ 天然旁路 ✗。
+	aggCache *fedTTLCache
+}
+
+// fedTTLCache 极简同参 TTL 缓存（只读复用，返回副本字节）。
+type fedTTLCache struct {
+	mu sync.Mutex
+	m  map[string]fedTTLEntry
+}
+
+type fedTTLEntry struct {
+	body []byte
+	exp  time.Time
+}
+
+// fedAggTTL 聚合类短档 TTL：与 Coordinator 侧 pending 档同量级（新日志最多晚 TTL 秒 ✗）。
+const fedAggTTL = 4 * time.Second
+
+func (c *fedTTLCache) get(key string) ([]byte, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.m[key]
+	if !ok || time.Now().After(e.exp) {
+		if ok {
+			delete(c.m, key)
+		}
+		return nil, false
+	}
+	return e.body, true
+}
+
+func (c *fedTTLCache) put(key string, body []byte) {
+	if c == nil || len(body) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = make(map[string]fedTTLEntry)
+	}
+	if len(c.m) > 512 {
+		for k := range c.m {
+			delete(c.m, k)
+		}
+	}
+	c.m[key] = fedTTLEntry{body: body, exp: time.Now().Add(fedAggTTL)}
+}
+
+// fedAggCacheKey 聚合类同参键＝授权主体/scope/时间片/过滤/onlineOnly + 原始查询串。
+// 原始查询串把 groupBy/timeBucket/维度等参数一并纳入 ⇒ 参数不同绝不命中 ✗。
+func fedAggCacheKey(q logcoord.Query, c *gin.Context) string {
+	return strings.Join([]string{
+		q.PrincipalKey,
+		q.PermissionScope,
+		q.FromUTC,
+		q.ToUTC,
+		fmt.Sprint(q.OnlineOnly),
+		c.Request.URL.RawQuery,
+	}, "\x1f")
 }
 
 // NewLogFederationHandler 创建联邦查询处理器。
 func NewLogFederationHandler(coord *logcoord.Coordinator, authz *service.AuthzService) *LogFederationHandler {
-	return &LogFederationHandler{coord: coord, authz: authz}
+	return &LogFederationHandler{coord: coord, authz: authz, aggCache: &fedTTLCache{}}
 }
 
 // RegisterRoutes 注册联邦查询路由（挂在 log.read 权限组下）。
@@ -399,9 +465,21 @@ func (h *LogFederationHandler) Stats(c *gin.Context) {
 		TimeBucket:  c.Query("timeBucket"),
 		MetricField: c.Query("metricField"),
 	}
+	// 同参 TTL：命中即直接回放（面板"stats 延后加载"时仍可能重复取数 ✓）；
+	// 冷未命中的真实耗时如实保留（VL 扫描成本 ✗），不做任何伪造 ✓。
+	key := "s\x1f" + fedAggCacheKey(q, c)
+	if body, ok := h.aggCache.get(key); ok {
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
 	resp, err := h.coord.Stats(c.Request.Context(), sq)
 	if err != nil {
 		writeFederationError(c, err)
+		return
+	}
+	if body, mErr := json.Marshal(resp); mErr == nil {
+		h.aggCache.put(key, body)
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -422,9 +500,20 @@ func (h *LogFederationHandler) Facets(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "dimensions 不能为空"})
 		return
 	}
+	// 同参 TTL：与 Stats 同口径（键含主体/scope/RawQuery ✓），命中回放、冷查如实计耗时 ✓。
+	key := "f\x1f" + fedAggCacheKey(q, c)
+	if body, ok := h.aggCache.get(key); ok {
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
 	resp, err := h.coord.Facets(c.Request.Context(), fq)
 	if err != nil {
 		writeFederationError(c, err)
+		return
+	}
+	if body, mErr := json.Marshal(resp); mErr == nil {
+		h.aggCache.put(key, body)
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
