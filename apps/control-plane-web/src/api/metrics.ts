@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import type { InstanceMetricsData } from '@jianmanager/ui/lib/instance-metrics'
 import type { PlayerTrendResult } from '@jianmanager/ui/lib/player-trend'
 import type { SLOResult } from '@jianmanager/ui/lib/slo'
+import type { RankingMetric, RankingResult } from '@jianmanager/ui/lib/ranking'
 import type { MetricSeries, SeriesPoint } from '@jianmanager/ui/lib/metric-series'
 export type {
   InstanceMetricsData,
@@ -13,6 +14,7 @@ export type {
 export type { MetricSeries, SeriesPoint } from '@jianmanager/ui/lib/metric-series'
 export type { PlayerTrendResult } from '@jianmanager/ui/lib/player-trend'
 export type { SLOResult } from '@jianmanager/ui/lib/slo'
+export type { RankingItem, RankingMetric, RankingResult } from '@jianmanager/ui/lib/ranking'
 
 import api from '@/api/client'
 import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
@@ -573,28 +575,9 @@ export function usePerformanceAttribution(params: {
 }
 
 /** 排行支持的指标键（与后端 rankingSupportedMetrics 对齐）。 */
-export type RankingMetric = 'inst_tps' | 'inst_mspt' | 'inst_cpu_pct' | 'inst_heap_used' | 'inst_players_online'
-
 /** 排行一项（FR-469）。 */
-export interface RankingItem {
-  instanceId: number
-  instanceUuid: string
-  name: string
-  nodeUuid: string
-  value: number
-  rank: number
-  sampledAt: string
-}
 
 /** 排行结果（FR-469）。scoped=true 表示非管理员受限视图。 */
-export interface RankingResult {
-  metricKey: string
-  order: 'asc' | 'desc'
-  windowSeconds: number
-  scoped: boolean
-  skippedNoData: number
-  items: RankingItem[]
-}
 
 /** 跨实例全局排行（FR-469）。30s 轮询与采样节奏对齐。 */
 export function useInstanceRanking(params: {
