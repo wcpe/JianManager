@@ -95,7 +95,7 @@ const (
 	// defaultWALMaxEntries / defaultWALMaxBytes 是单源的默认积压上限（0 表示用默认值）。
 	// 取值的取舍：正常源（约 1 事件/秒）可积压约 80 分钟，足以覆盖 VL 短暂不可用；
 	// 而最坏情况下每源对状态的贡献被限定在十几 MB 级，不再出现 GB 级状态文件。
-	defaultWALMaxEntries = 5000
+	defaultWALMaxEntries = 2000
 	defaultWALMaxBytes   = 16 << 20 // 16 MiB
 
 	// walBacklogPauseReason 是暂停原因的前缀，用于『只自动恢复本包造成的暂停』判别——
