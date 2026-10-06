@@ -22,6 +22,8 @@ export interface SidebarLinkArgs {
   title?: string
   /** 激活标记（`data-active`，供样式钩子）。 */
   dataActive?: string
+  /** 点击回调（如移动端面板项点击后收起面板）。 */
+  onClick?: () => void
   children: ReactNode
 }
 
