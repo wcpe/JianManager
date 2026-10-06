@@ -8,9 +8,12 @@ import {
   workspaceOfPath,
   workspacesForPermissions,
   workspacesForRole,
-  type WorkspaceDef,
   type WorkspaceKey,
-} from './workspace-navigation'
+} from '@jianmanager/ui/lib/workspace-navigation'
+
+// 纯函数（isDeepLink / landingPathOf）已迁至 `@jianmanager/ui`；此处转出，调用点零改动。
+export { isDeepLink, landingPathOf } from '@jianmanager/ui/lib/use-workspace-navigation'
+import { landingPathOf } from '@jianmanager/ui/lib/use-workspace-navigation'
 
 /**
  * 工作区导航的唯一数据源（FR-496 阶段 6 补丁：从 `WorkspaceSidebar` 抽成独立模块）。
@@ -60,24 +63,3 @@ export function useWorkspaceNavigation() {
   return { workspaces, activeKey, activeWorkspace, goToWorkspace }
 }
 
-/** 深链（`/instances/:id` 这类带参数的子路由）不是可停留的页面，不进导航行与落地页。 */
-export function isDeepLink(to: string): boolean {
-  return to.includes(':')
-}
-
-/**
- * 工作区的落地页：第一个分组的第一个导航目的地（原型「切工作区进该区第一页」）。
- * 服务器运维 → 平台首页、观测与自动化 → 监控总览、运营与分发 → 玩家、平台管理 → 用户。
- */
-export function landingPathOf(workspace: WorkspaceDef): string | null {
-  for (const group of workspace.groups) {
-    if (group.to && !isDeepLink(group.to)) return group.to
-    for (const entry of group.children ?? []) {
-      if (!isDeepLink(entry.to)) return entry.to
-    }
-    for (const section of group.sections ?? []) {
-      for (const entry of section.children) if (!isDeepLink(entry.to)) return entry.to
-    }
-  }
-  return null
-}
