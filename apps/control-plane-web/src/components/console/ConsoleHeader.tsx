@@ -2,18 +2,19 @@ import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Bell, Boxes, ListChecks, Loader2, LogOut, PanelLeftClose, RotateCw, Search, Server, UserRound, Users } from 'lucide-react'
+import { AlertTriangle, Boxes, LogOut, PanelLeftClose, RotateCw, Search, Server, UserRound, Users } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import { useInstanceAggregate, useSearchInstances, type InstanceInfo } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useInstanceMetrics, useMetricOverview } from '@/api/metrics'
-import { useTasks, isTerminalTask, TASK_KIND_LABEL_KEYS, type Task } from '@/api/tasks'
-import { useNotificationFeed, useFeedUnreadCount, type FeedItem } from '@/api/notification-feed'
+import { useTasks } from '@/api/tasks'
+import { useNotificationFeed, useFeedUnreadCount } from '@/api/notification-feed'
 import { cn } from '@jianmanager/ui'
-import { Badge } from '@jianmanager/ui/components/badge'
 import { TopNav } from '@jianmanager/ui/components/shell'
+import { TasksMenu } from '@jianmanager/ui/components/views/console/TasksMenu'
+import { NotificationBell } from '@jianmanager/ui/components/views/console/NotificationBell'
 import { logoToggleLabelKey } from './sidebar-logo'
 import { searchBoxClass, slotVisibility, visibilityClass } from './header-layout'
 import { useWorkspaceNavigation } from './use-workspace-navigation'
@@ -87,14 +88,31 @@ export default function ConsoleHeader() {
  * 容器（右对齐 / 14px 内边距 / 5px 间距）由 ui 包 `TopNav` 的 actions 槽位提供，本组件只排内容。
  */
 function HeaderTools() {
+  const navigate = useNavigate()
+  // 两个常驻弹层的数据在这里取（弹层无 enabled 开关，与改前挂载即取一致）；
+  // 视图侧只负责渲染与上报意图。
+  const { data: taskPage } = useTasks()
+  const { data: unread = 0 } = useFeedUnreadCount()
+  const { data: feed } = useNotificationFeed({ pageSize: 8 })
+
   return (
     <>
       <SearchBox />
       <div className="flex items-center gap-0.5 sm:gap-1">
         <RefreshButton />
         <ClusterBadges />
-        <TasksMenu />
-        <NotificationBell />
+        <TasksMenu tasks={taskPage?.items} onOpenTask={(taskId) => navigate(taskId ? `/tasks?task=${taskId}` : '/tasks')} />
+        <NotificationBell
+          unread={unread}
+          items={feed?.items}
+          onOpenItem={(item) => {
+            // 快捷跳转（FR-226）：任务类站内信→任务中心定位该任务；告警→告警页；其余→通知中心。
+            if (item.source === 'message' && item.taskId) navigate(`/tasks?task=${item.taskId}`)
+            else if (item.source === 'alert') navigate('/alerts')
+            else navigate('/notifications')
+          }}
+          onViewAll={() => navigate('/notifications')}
+        />
         <AccountMenu />
       </div>
     </>
@@ -436,218 +454,7 @@ function ClusterBadges() {
   )
 }
 
-/** 页眉任务下拉的行数上限（FR-327）：最近 N 条，看全量进任务中心页。 */
-const TASKS_MENU_MAX_ROWS = 8
 
-/** 终态任务 → 徽章变体与文案键（tasks.state.*，与任务中心页同款语义）。 */
-const TASK_BADGE_META: Record<string, { variant: 'secondary' | 'destructive' | 'outline'; key: string }> = {
-  succeeded: { variant: 'secondary', key: 'tasks.state.succeeded' },
-  failed: { variant: 'destructive', key: 'tasks.state.failed' },
-  canceled: { variant: 'outline', key: 'tasks.state.canceled' },
-}
-
-/**
- * 页眉任务中心入口 + 下拉面板（FR-327，下拉化 FR-226 的「点击直跳任务中心」）：
- * 入口常驻——有在跑任务（pending/running）时显示数量 + 平均进度（转圈反馈），空闲时静态图标；
- * 点击弹下拉面板列最近 N 条任务（kind 徽标/名称/stage 进度/终态徽章），点条目跳任务中心定位该任务
- * （FR-226 `?task=` 深链），底部「进入任务中心」看全量。面板外点击关闭为 DropdownMenu 缺省行为。
- * 数据/轮询复用 useTasks（FR-329：活跃 2s 短轮询、空闲停），下拉不额外发请求。
- */
-function TasksMenu() {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  // FR-337 分页信封：消费 items（首窗 ≤100，active 计数/最近 N 条口径与改前一致）。
-  const { data } = useTasks()
-  const tasks = data?.items ?? []
-  const active = tasks.filter((tk) => !isTerminalTask(tk))
-  const recent = tasks.slice(0, TASKS_MENU_MAX_ROWS)
-  const avg = active.length > 0 ? Math.round(active.reduce((s, tk) => s + tk.progress, 0) / active.length) : 0
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          title={active.length > 0 ? t('header.tasksRunning', { count: active.length, progress: avg }) : t('header.tasks')}
-          aria-label={t('header.tasks')}
-          className={cn(
-            'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs transition-colors hover:bg-accent/60',
-            active.length > 0 ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          {active.length > 0 ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin" />
-              <span className="font-medium tabular-nums">{active.length}</span>
-              <span className="tabular-nums text-muted-foreground">{avg}%</span>
-            </>
-          ) : (
-            <ListChecks className="size-4" />
-          )}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80">
-        <div className="flex items-center justify-between px-2 py-1.5 text-xs font-medium">
-          <span>{t('header.tasks')}</span>
-          {active.length > 0 && (
-            <span className="text-muted-foreground">{t('header.tasksActiveCount', { count: active.length })}</span>
-          )}
-        </div>
-        <DropdownMenuSeparator />
-        {recent.length === 0 ? (
-          <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('tasks.empty')}</div>
-        ) : (
-          // 内容自适应 + 超高内部滚动（ui-modals 纪律：禁固定尺寸溢出）。
-          <div className="max-h-72 overflow-y-auto">
-            {recent.map((task) => (
-              <TaskMenuRow key={task.taskId} task={task} />
-            ))}
-          </div>
-        )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => navigate('/tasks')} className="justify-center text-xs text-muted-foreground">
-          {t('header.viewAllTasks')}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-/**
- * 页眉任务下拉单行（FR-327）：kind 徽标 + 标题 + 进行中进度条（% 数值）/终态徽章 + stage 详情。
- * 点击跳任务中心并深链定位该任务（`/tasks?task=<taskId>`，进页自动展开，FR-226）。
- */
-function TaskMenuRow({ task }: { task: Task }) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const kindKey = TASK_KIND_LABEL_KEYS[task.kind]
-  // 取消中（已请求停止但 Worker 未确认）优先于状态徽章，语义与任务中心页一致（FR-227）。
-  const canceling = task.state === 'running' && task.cancelRequested
-  const badge = TASK_BADGE_META[task.state]
-  const pct = Math.max(0, Math.min(100, task.progress))
-  return (
-    <DropdownMenuItem onClick={() => navigate(`/tasks?task=${task.taskId}`)} className="items-start text-xs">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] font-medium text-primary">
-            {kindKey ? t(kindKey) : task.kind}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-foreground">{task.title || task.kind}</span>
-          {canceling ? (
-            <Badge variant="outline">{t('tasks.state.canceling', '取消中')}</Badge>
-          ) : (
-            badge && <Badge variant={badge.variant}>{t(badge.key)}</Badge>
-          )}
-        </div>
-        {!isTerminalTask(task) && !canceling && (
-          <div className="mt-1 flex items-center gap-2">
-            <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-            </div>
-            <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">{pct}%</span>
-          </div>
-        )}
-        {task.detail && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{task.detail}</p>}
-      </div>
-    </DropdownMenuItem>
-  )
-}
-
-/** 统一通知级别 → 圆点配色类（站内信四档；告警三档已在后端就近映射到此）。 */
-function feedLevelDotClass(level: string): string {
-  if (level === 'error') return 'bg-status-danger'
-  if (level === 'warning') return 'bg-status-warning'
-  if (level === 'success') return 'bg-status-success'
-  return 'bg-status-info'
-}
-
-/**
- * 统一通知铃铛（FR-216，见 ADR-048）：合并原「站内信收件箱」+「告警铃铛」为单一入口。
- * 未读计数（统一：本人站内信 + 全局告警，30s 轮询）+ 下拉只读最近通知（消息/告警混合，各带来源标识与级别色点）；
- * 点「查看全部」进通知中心页。处置（确认/认领）仍在告警页，本下拉只读预览。
- */
-function NotificationBell() {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const { data: unread = 0 } = useFeedUnreadCount()
-  const { data: feed } = useNotificationFeed({ pageSize: 8 })
-  const recent = feed?.items ?? []
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={t('header.notifications')}
-          className="relative rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-        >
-          <Bell className="size-4" />
-          {unread > 0 && (
-            <span className="absolute -right-0.5 -top-0.5 grid min-w-4 place-items-center rounded-full bg-status-danger px-1 text-[10px] font-semibold leading-4 text-white">
-              {unread > 99 ? '99+' : unread}
-            </span>
-          )}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80">
-        <div className="flex items-center justify-between px-2 py-1.5 text-xs font-medium">
-          <span>{t('header.notifications')}</span>
-          {unread > 0 && <span className="text-muted-foreground">{t('header.unreadCount', { count: unread })}</span>}
-        </div>
-        <DropdownMenuSeparator />
-        {recent.length === 0 ? (
-          <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('notificationCenter.empty')}</div>
-        ) : (
-          <div className="max-h-72 overflow-y-auto">
-            {recent.map((it) => (
-              <NotificationPreviewRow key={`${it.source}-${it.id}`} item={it} />
-            ))}
-          </div>
-        )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => navigate('/notifications')}>
-          {t('header.viewAllNotifications')}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-/** 下拉内单条通知预览：级别色点 + 来源徽标 + 标题/正文 + 时间 + 未读点。 */
-function NotificationPreviewRow({ item }: { item: FeedItem }) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const sourceLabel = item.source === 'alert' ? t('notificationCenter.badgeAlert') : t('notificationCenter.badgeMessage')
-  // 快捷跳转（FR-226）：任务类站内信→任务中心定位该任务；告警→告警页；其余→通知中心。
-  const jump = () => {
-    if (item.source === 'message' && item.taskId) navigate(`/tasks?task=${item.taskId}`)
-    else if (item.source === 'alert') navigate('/alerts')
-    else navigate('/notifications')
-  }
-  return (
-    <button type="button" onClick={jump} className="flex w-full items-start gap-2 px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent/60">
-      <span className={cn('mt-1 size-1.5 shrink-0 rounded-full', feedLevelDotClass(item.level))} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span
-            className={cn(
-              'shrink-0 rounded px-1 py-px text-[10px] font-medium',
-              item.source === 'alert'
-                ? 'bg-status-warning/15 text-status-warning'
-                : 'bg-primary/10 text-primary',
-            )}
-          >
-            {sourceLabel}
-          </span>
-          <p className="truncate text-foreground">{item.title}</p>
-        </div>
-        {item.body && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{item.body}</p>}
-        <p className="text-[11px] text-muted-foreground">{new Date(item.createdAt).toLocaleString()}</p>
-      </div>
-      {!item.read && <span className="mt-1 size-1.5 shrink-0 rounded-full bg-primary" />}
-    </button>
-  )
-}
 
 /** 账户菜单（FR-162）：显示用户名 / 角色 + 退出登录（接管 FR-132 的退出图标化）。 */
 function AccountMenu() {
