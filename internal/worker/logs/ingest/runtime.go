@@ -4020,6 +4020,9 @@ func (m *Manager) tryConfirmPendingPublication(source SourceConfig, key string, 
 	m.state.Sources[key] = cur
 	m.mu.Unlock()
 	m.republishSkipped.Add(1)
+	// 实战可核验（#5 复盘缺口）：跳过整窗重发必须有日志，否则外部只见"pending 消了"而无从判是否真的走了快路径。
+	slog.Info("发布确认快路径：VL 已完整，跳过整窗重发",
+		"source", source.LogSourceID, "generation", saved.ProjectionGeneration, "events", len(want))
 	// 持久化：内存已清、落库未跟上时，下次启动仍会整窗重发（安全方向 ✓），故持久化失败不影响本次放行。
 	_ = m.persistHot()
 	return true, nil
