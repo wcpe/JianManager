@@ -1,12 +1,12 @@
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Boxes, LogOut, PanelLeftClose, RotateCw, Search, Server, UserRound, Users } from 'lucide-react'
+import { PanelLeftClose, RotateCw, Search } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
-import { useInstanceAggregate, useSearchInstances, type InstanceInfo } from '@/api/instances'
+import { useInstanceAggregate, useSearchInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useInstanceMetrics, useMetricOverview } from '@/api/metrics'
 import { useTasks } from '@/api/tasks'
@@ -15,25 +15,21 @@ import { cn } from '@jianmanager/ui'
 import { TopNav } from '@jianmanager/ui/components/shell'
 import { TasksMenu } from '@jianmanager/ui/components/views/console/TasksMenu'
 import { NotificationBell } from '@jianmanager/ui/components/views/console/NotificationBell'
+import { ClusterBadges, STAT_POPOVER_MAX_ROWS, type ClusterSlot } from '@jianmanager/ui/components/views/console/ClusterBadges'
+import { AccountMenu } from '@jianmanager/ui/components/views/console/AccountMenu'
 import { logoToggleLabelKey } from './sidebar-logo'
-import { searchBoxClass, slotVisibility, visibilityClass } from './header-layout'
+import { searchBoxClass } from './header-layout'
 import { useWorkspaceNavigation } from './use-workspace-navigation'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@jianmanager/ui/components/dropdown-menu'
 
-/** 角色值 → i18n key（复用 users.* 角色文案，避免重复维护）。 */
-const ROLE_LABEL_KEY: Record<number, string> = {
-  0: 'users.member',
-  1: 'users.groupAdmin',
-  2: 'users.groupOperator',
-  3: 'users.groupViewer',
-  10: 'users.platformAdmin',
+/**
+ * 行级在线人数取数：把实例 metrics 查询适配成 `ClusterBadges` 需要的形状。
+ * 模块级定义（不是每次渲染新建的内联函数），作为 hook 引用注入给包内视图按行顶层调用。
+ */
+function useInstancePlayers(instanceId: number, enabled: boolean) {
+  const { data } = useInstanceMetrics(instanceId, enabled)
+  return data ? { available: data.playersAvailable, online: data.onlinePlayers } : undefined
 }
+
 
 /**
  * 全局顶栏（FR-496 阶段 6 补丁：**全局唯一一条**；承接 ADR-071 / FR-162 / FR-179、通知合并 FR-216）。
@@ -89,18 +85,73 @@ export default function ConsoleHeader() {
  */
 function HeaderTools() {
   const navigate = useNavigate()
-  // 两个常驻弹层的数据在这里取（弹层无 enabled 开关，与改前挂载即取一致）；
-  // 视图侧只负责渲染与上报意图。
+  // 常驻弹层的数据在这里取（弹层无 enabled 开关，与改前挂载即取一致）；视图侧只渲染与上报意图。
   const { data: taskPage } = useTasks()
   const { data: unread = 0 } = useFeedUnreadCount()
   const { data: feed } = useNotificationFeed({ pageSize: 8 })
+
+  // 集群三个浮窗：视图内各自持有 open 态并上报，这里只记「当前开着哪个」，
+  // 把对应查询的 enabled 绑到它——数据仍只在浮窗打开时拉取（FR-294 原语义）。
+  const [clusterSlot, setClusterSlot] = useState<ClusterSlot | null>(null)
+  const { data: nodes } = useNodes()
+  const { data: runningAgg } = useInstanceAggregate({ status: 'RUNNING' }, clusterSlot === 'nodes')
+  const { data: runningPage } = useSearchInstances(
+    { status: 'RUNNING', pageSize: STAT_POPOVER_MAX_ROWS },
+    clusterSlot === 'running',
+  )
+  const { data: crashedPage } = useSearchInstances(
+    { status: 'CRASHED', pageSize: STAT_POPOVER_MAX_ROWS },
+    clusterSlot === 'crashed',
+  )
+  const { data: overview } = useMetricOverview('24h')
+  const { data: aggregate } = useInstanceAggregate()
+
+  const runningByNode = new Map((runningAgg?.byNode ?? []).map((n) => [n.nodeId, n.count]))
+  const nodeNames = new Map((nodes ?? []).map((n) => [n.id, n.name]))
+  const runningItems = runningPage?.items ?? []
+  const crashedItems = crashedPage?.items ?? []
+  const username = useAuthStore((s) => s.username)
+  const role = useAuthStore((s) => s.role)
+  const logout = useAuthStore((s) => s.logout)
 
   return (
     <>
       <SearchBox />
       <div className="flex items-center gap-0.5 sm:gap-1">
         <RefreshButton />
-        <ClusterBadges />
+        <ClusterBadges
+          online={overview?.totals.onlineNodeCount ?? 0}
+          running={overview?.totals.runningInstances ?? 0}
+          crashed={aggregate?.byStatus.CRASHED ?? 0}
+          nodeRows={(nodes ?? []).map((n) => ({
+            id: n.id,
+            name: n.name,
+            status: n.status,
+            runningCount: runningByNode.get(n.id) ?? 0,
+          }))}
+          runningRows={runningItems.map((i) => ({ id: i.id, name: i.name, nodeId: i.nodeId, nodeName: nodeNames.get(i.nodeId) }))}
+          crashedRows={crashedItems.map((i) => ({
+            id: i.id,
+            name: i.name,
+            nodeId: i.nodeId,
+            nodeName: nodeNames.get(i.nodeId),
+            statusReason: i.statusReason,
+          }))}
+          remaining={{
+            nodes: (nodes?.length ?? 0) - STAT_POPOVER_MAX_ROWS,
+            running: Math.max(0, (runningPage?.total ?? 0) - runningItems.length),
+            crashed: Math.max(0, (crashedPage?.total ?? 0) - crashedItems.length),
+          }}
+          useInstancePlayers={useInstancePlayers}
+          onSlotToggle={(slot, open) => setClusterSlot(open ? slot : null)}
+          onOpenNode={(nodeId) => navigate(`/nodes?node=${nodeId}`)}
+          onOpenInstance={(instanceId) => navigate(`/instances/${instanceId}`)}
+          onViewAll={(slot) => {
+            if (slot === 'nodes') navigate('/nodes')
+            else if (slot === 'running') navigate('/instances?status=RUNNING')
+            else navigate('/instances?status=CRASHED')
+          }}
+        />
         <TasksMenu tasks={taskPage?.items} onOpenTask={(taskId) => navigate(taskId ? `/tasks?task=${taskId}` : '/tasks')} />
         <NotificationBell
           unread={unread}
@@ -113,7 +164,7 @@ function HeaderTools() {
           }}
           onViewAll={() => navigate('/notifications')}
         />
-        <AccountMenu />
+        <AccountMenu username={username} role={role} onLogout={logout} />
       </div>
     </>
   )
@@ -231,266 +282,3 @@ function RefreshButton() {
   )
 }
 
-/** 集群统计浮窗行数上限（FR-294）：超出在底部提示「还有 N 个，查看全部」。 */
-const STAT_POPOVER_MAX_ROWS = 8
-
-/**
- * 集群概览徽标 + 缩略浮窗外壳（FR-294，复用 FR-216 铃铛的 DropdownMenu 范式、同款视觉）：
- * 徽标点击由「直接跳筛选页」改为弹缩略浮窗；受控 open 态经 render prop 传给内容，
- * 让浮窗数据查询 enabled 绑定 open——数据仅浮窗打开时拉取。danger 时计数着红。
- */
-function ClusterStatPopover({
-  icon: Icon,
-  value,
-  label,
-  danger,
-  children,
-}: {
-  icon: typeof Server
-  value: number
-  label: string
-  danger?: boolean
-  /** 浮窗内容，接收当前 open 态用于绑定查询 enabled。 */
-  children: (open: boolean) => ReactNode
-}) {
-  const [open, setOpen] = useState(false)
-  return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          title={`${label}: ${value}`}
-          aria-label={`${label}: ${value}`}
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-        >
-          <Icon className={cn('size-3.5', danger && 'text-status-danger')} />
-          <span className={cn('tabular-nums', danger && 'font-medium text-status-danger')}>{value}</span>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
-        <div className="px-2 py-1.5 text-xs font-medium">{label}</div>
-        <DropdownMenuSeparator />
-        {children(open)}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-/** 浮窗底部「查看全部」项（FR-294）：行数超上限时改为提示剩余数。 */
-function StatPopoverFooter({ remaining, label, onClick }: { remaining: number; label: string; onClick: () => void }) {
-  const { t } = useTranslation()
-  return (
-    <>
-      <DropdownMenuSeparator />
-      <DropdownMenuItem onClick={onClick} className="justify-center text-xs text-muted-foreground">
-        {remaining > 0 ? t('header.moreCount', { count: remaining }) : label}
-      </DropdownMenuItem>
-    </>
-  )
-}
-
-/**
- * 在线节点浮窗内容（FR-294）：行 = 节点名 + 在线状态点 + 该节点运行实例数。
- * 节点列表复用页眉 NodeScopeSelector 已缓存的 ['nodes'] 查询（不额外发请求）；
- * 每节点运行数复用 FR-247 聚合（status=RUNNING 的 byNode），enabled 绑定浮窗 open 态。
- * 行点击 → /nodes?node=<id> 定位该节点（FR-128 深链）。
- */
-function NodeStatRows({ open }: { open: boolean }) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const { data: nodes } = useNodes()
-  const { data: runningAgg } = useInstanceAggregate({ status: 'RUNNING' }, open)
-  const runningByNode = new Map((runningAgg?.byNode ?? []).map((n) => [n.nodeId, n.count]))
-  const visible = (nodes ?? []).slice(0, STAT_POPOVER_MAX_ROWS)
-
-  return (
-    <>
-      {nodes && visible.length === 0 ? (
-        <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('header.noNodes')}</div>
-      ) : (
-        visible.map((node) => (
-          <DropdownMenuItem key={node.id} onClick={() => navigate(`/nodes?node=${node.id}`)} className="text-xs">
-            <span
-              className={cn('size-1.5 shrink-0 rounded-full', node.status === 1 ? 'bg-status-success' : 'bg-muted-foreground/50')}
-            />
-            <span className="min-w-0 flex-1 truncate">{node.name}</span>
-            <span className="shrink-0 tabular-nums text-muted-foreground">
-              {t('header.runningOnNode', { count: runningByNode.get(node.id) ?? 0 })}
-            </span>
-          </DropdownMenuItem>
-        ))
-      )}
-      <StatPopoverFooter
-        remaining={(nodes?.length ?? 0) - visible.length}
-        label={t('header.viewAllNodes')}
-        onClick={() => navigate('/nodes')}
-      />
-    </>
-  )
-}
-
-/**
- * 运行中服务器浮窗内容（FR-294）：行 = 实例名 + 节点名 + 在线人数（有数据时）。
- * 复用 FR-247 分页搜索（status=RUNNING，pageSize=行数上限），enabled 绑定浮窗 open 态；
- * 行点击 → /instances/:id 该服控制台，底部「查看全部」→ /instances?status=RUNNING。
- */
-function RunningInstanceRows({ open }: { open: boolean }) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const { data: nodes } = useNodes()
-  const { data } = useSearchInstances({ status: 'RUNNING', pageSize: STAT_POPOVER_MAX_ROWS }, open)
-  const items = data?.items ?? []
-  const nodeNames = new Map((nodes ?? []).map((n) => [n.id, n.name]))
-
-  return (
-    <>
-      {data && items.length === 0 ? (
-        <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('header.noRunningInstances')}</div>
-      ) : (
-        items.map((inst) => (
-          <RunningInstanceRow key={inst.id} instance={inst} nodeName={nodeNames.get(inst.nodeId)} open={open} />
-        ))
-      )}
-      <StatPopoverFooter
-        remaining={Math.max(0, (data?.total ?? 0) - items.length)}
-        label={t('header.viewAll')}
-        onClick={() => navigate('/instances?status=RUNNING')}
-      />
-    </>
-  )
-}
-
-/**
- * 运行中服务器浮窗单行（FR-294）：在线人数复用既有实例 metrics 查询（FR-060），
- * enabled 绑定浮窗 open 态（行仅在浮窗打开时挂载），无数据时不显示人数。
- */
-function RunningInstanceRow({ instance, nodeName, open }: { instance: InstanceInfo; nodeName?: string; open: boolean }) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const { data: metrics } = useInstanceMetrics(instance.id, open)
-  return (
-    <DropdownMenuItem onClick={() => navigate(`/instances/${instance.id}`)} className="text-xs">
-      <span className="size-1.5 shrink-0 rounded-full bg-status-success" />
-      <span className="min-w-0 flex-1 truncate">{instance.name}</span>
-      {nodeName && <span className="shrink-0 text-muted-foreground">{nodeName}</span>}
-      {metrics && (
-        <span className="flex shrink-0 items-center gap-1 tabular-nums text-muted-foreground">
-          <Users className="size-3" />
-          {metrics.playersAvailable ? t('header.onlinePlayersCount', { count: metrics.onlinePlayers }) : t('metrics.unavailable')}
-        </span>
-      )}
-    </DropdownMenuItem>
-  )
-}
-
-/**
- * 崩溃服务器浮窗内容（FR-294）：行 = 实例名 + 节点名 + 崩溃原因（statusReason，有则显）；
- * 空态显示友好文案。复用 FR-247 分页搜索（status=CRASHED），enabled 绑定浮窗 open 态；
- * 行点击 → /instances/:id，底部「查看全部」→ /instances?status=CRASHED。
- */
-function CrashedInstanceRows({ open }: { open: boolean }) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const { data: nodes } = useNodes()
-  const { data } = useSearchInstances({ status: 'CRASHED', pageSize: STAT_POPOVER_MAX_ROWS }, open)
-  const items = data?.items ?? []
-  const nodeNames = new Map((nodes ?? []).map((n) => [n.id, n.name]))
-
-  return (
-    <>
-      {data && items.length === 0 ? (
-        <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('header.noCrashedInstances')}</div>
-      ) : (
-        items.map((inst) => (
-          <DropdownMenuItem key={inst.id} onClick={() => navigate(`/instances/${inst.id}`)} className="items-start text-xs">
-            <span className="mt-1 size-1.5 shrink-0 rounded-full bg-status-danger" />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className="min-w-0 flex-1 truncate">{inst.name}</span>
-                {nodeNames.get(inst.nodeId) && (
-                  <span className="shrink-0 text-muted-foreground">{nodeNames.get(inst.nodeId)}</span>
-                )}
-              </div>
-              {inst.statusReason && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{inst.statusReason}</p>}
-            </div>
-          </DropdownMenuItem>
-        ))
-      )}
-      <StatPopoverFooter
-        remaining={Math.max(0, (data?.total ?? 0) - items.length)}
-        label={t('header.viewAll')}
-        onClick={() => navigate('/instances?status=CRASHED')}
-      />
-    </>
-  )
-}
-
-/**
- * 集群概览徽标组（FR-162；FR-294 点击改弹缩略浮窗）：在线节点 / 运行实例 / 崩溃数。
- * 徽标计数数据源不变（总览页同款聚合 + FR-247 聚合，避免页眉为计数拉全量实例）；
- * 原「点击跳筛选页」保留为浮窗底部「查看全部」。窄屏隐藏逻辑（header-layout）不变。
- */
-function ClusterBadges() {
-  const { t } = useTranslation()
-  const { data: overview } = useMetricOverview('24h')
-  const { data: aggregate } = useInstanceAggregate()
-  const online = overview?.totals.onlineNodeCount ?? 0
-  const running = overview?.totals.runningInstances ?? 0
-  const crashed = aggregate?.byStatus.CRASHED ?? 0
-
-  return (
-    // `data-slot` 供外壳 CSS 在 lg~xl 之间收起本组（顶栏并回工作区切换后要腾宽度，见 index.css）。
-    <div data-slot="console-header-badges" className={cn('items-center', visibilityClass(slotVisibility('clusterBadges')))}>
-      <ClusterStatPopover icon={Server} value={online} label={t('header.onlineNodes')}>
-        {(open) => <NodeStatRows open={open} />}
-      </ClusterStatPopover>
-      <ClusterStatPopover icon={Boxes} value={running} label={t('header.runningInstances')}>
-        {(open) => <RunningInstanceRows open={open} />}
-      </ClusterStatPopover>
-      <ClusterStatPopover icon={AlertTriangle} value={crashed} label={t('header.crashedInstances')} danger={crashed > 0}>
-        {(open) => <CrashedInstanceRows open={open} />}
-      </ClusterStatPopover>
-    </div>
-  )
-}
-
-
-
-/** 账户菜单（FR-162）：显示用户名 / 角色 + 退出登录（接管 FR-132 的退出图标化）。 */
-function AccountMenu() {
-  const { t } = useTranslation()
-  const username = useAuthStore((s) => s.username)
-  const role = useAuthStore((s) => s.role)
-  const logout = useAuthStore((s) => s.logout)
-  const roleKey = role != null ? ROLE_LABEL_KEY[role] : undefined
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={t('header.account')}
-          className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-        >
-          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
-            <UserRound className="size-3.5" />
-          </span>
-          <span className="hidden max-w-32 truncate text-xs font-medium text-foreground sm:block">
-            {username ?? t('header.account')}
-          </span>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        <div className="px-2 py-1.5">
-          <p className="truncate text-sm font-medium">{username ?? '—'}</p>
-          {roleKey && <p className="text-xs text-muted-foreground">{t(roleKey)}</p>}
-        </div>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onClick={logout}>
-          <LogOut className="size-4" />
-          {t('common.logout')}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
