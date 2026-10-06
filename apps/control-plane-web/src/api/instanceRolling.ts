@@ -2,6 +2,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
 import type { InstanceBatchAction, InstanceBatchFilter } from '@/api/instances'
+import {
+  isRollingActive,
+  type RollingControlAction,
+  type RollingOp,
+} from '@jianmanager/ui/lib/instance-rolling'
+
+// 编排契约（状态 / 失败明细 / 会话 / 控制动作 / 推进判定）归包，双侧共用（ADR-097）。
+// 本地绑定来自上方 import，此处仅对外再导出，避免两处各写一份。
+export type {
+  RollingControlAction,
+  RollingError,
+  RollingOp,
+  RollingState,
+} from '@jianmanager/ui/lib/instance-rolling'
+export { isRollingActive } from '@jianmanager/ui/lib/instance-rolling'
 
 /**
  * 实例滚动/分批/灰度编排（FR-457）。
@@ -11,35 +26,7 @@ import type { InstanceBatchAction, InstanceBatchFilter } from '@/api/instances'
  * 契约见 `docs/API.md`（`/instances/rolling`）。
  */
 
-/** 编排会话状态。 */
-export type RollingState = 'pending' | 'running' | 'paused' | 'done' | 'canceled'
-
-/** 单条失败明细。 */
-export interface RollingError {
-  instanceId: number
-  error: string
-}
-
-/** 滚动编排会话（含进度）。 */
-export interface RollingOp {
-  id: number
-  action: string
-  command?: string
-  batchSize: number
-  batchIntervalSec: number
-  failFast: boolean
-  ratio: number
-  targets: number[]
-  cursor: number
-  state: RollingState
-  requested: number
-  succeeded: number
-  failed: number
-  skipped: number
-  errors: RollingError[]
-  createdAt: string
-  updatedAt: string
-}
+// `RollingState` / `RollingError` / `RollingOp` 的定义已随受控视图归包（见上方 re-export）。
 
 /** 创建并启动编排会话的请求。 */
 export interface RollingCreateRequest {
@@ -74,11 +61,6 @@ export function useCreateRollingOp() {
   })
 }
 
-/** 编排是否处于推进中（需要轮询进度）。 */
-export function isRollingActive(state: RollingState | undefined): boolean {
-  return state === 'pending' || state === 'running' || state === 'paused'
-}
-
 /** 查询编排会话进度；非终态时自动轮询。 */
 export function useRollingOp(opId: number | null, enabled = true) {
   return useQuery({
@@ -91,9 +73,6 @@ export function useRollingOp(opId: number | null, enabled = true) {
     refetchInterval: (query) => (isRollingActive(query.state.data?.state) ? 1500 : false),
   })
 }
-
-/** 编排控制动作（暂停/继续/取消）。 */
-export type RollingControlAction = 'pause' | 'resume' | 'cancel'
 
 /** 暂停/继续/取消编排会话。 */
 export function useRollingControl() {
