@@ -142,6 +142,10 @@ type Manager struct {
 	cycleMuWaitMax       atomic.Int64 // 有界获取侧：最长单次等待（ns）
 	cycleMuWaitAttempts  atomic.Int64 // 有界获取侧的**调用次数**（每次调用记一条，与"探针 20/20 全忙"口径可比）
 	cycleMuWaitTimeouts  atomic.Int64 // 有界获取侧：超预算/被取消次数
+	// republishSkipped：「发布确认快路径」累计**跳过整窗重发**的次数（单位=次，见 tryConfirmPendingPublication）。
+	// 取值语义：pending=true 且非存量重放时，先按最近已发布代次在查询面复核；确认已完整可见 ⇒ 记 1 次。
+	// 用途：#5 验收直接判「VL 完整 ⇒ 零重发」是否真的发生 ✓。
+	republishSkipped atomic.Int64
 	// registerMu 串行化「实例登记 / 采集绑定」自身，使这条路径**永不等待采集轮的长临界区**。
 	//
 	// 为什么要与 cycleMu 分离（2026-10-01 生产事故根因）：cycleMu 的持有者是「整轮采集」
@@ -3799,6 +3803,18 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	// 重建身份集合——这是单位行成本里最贵的一项（生产单源段实测可达 70 万行，微基准
 	// 单次遍历 8.7 µs/行 ≈ 6 秒/批，而段只增不减，成本随运行时长线性增长）。
 	tail := m.planDeliveryTail(key, saved, events, replay)
+	// 发布确认快路径（2026-10-06，协议 #5 的①）：pending 的含义是「上次发布**未获确认**」✗。
+	// 整窗重发前先按**最近已发布代次**在查询面逐字段复核：确认已完整可见 ⇒ 发布事实上已完成 ⇒
+	// 清 pending（持久化，终态与 L4019 写成功后清理一致）并放行快路径，**跳过整窗重发** ✓。
+	// 任何不确定（缺行 / 查询出错 / 取证不稳 / 空集）⇒ 维持「整窗重发」原语义，**判据不放宽** ✗。
+	// 红线：**绝不把 pending 降级为「累积」** ✗ —— 这里跳过的是"整窗重发的写入"，不是取代语义，
+	// 否则重现 2026-09-30「查询并集无界 ⇒ VL 排序超 51MB ⇒ 400 ⇒ 该目标恒 not_ready」旧漏洞。
+	if saved.PublicationPending && !replay {
+		if ok, cerr := m.tryConfirmPendingPublication(source, key, saved); cerr == nil && ok {
+			// 本地快照同步：否则下方 L3876/L3892 会再次把 replace 拉回整窗重发。
+			saved.PublicationPending = false
+		}
+	}
 	var seen map[string]eventIdentity
 	if tail.Fast {
 		seen = make(map[string]eventIdentity, len(events))
@@ -3938,6 +3954,79 @@ type projectionWritePlan struct {
 	// 不需要（也没有）权威全量（判据与安全论证见 deliveryTailPlan）。
 	Tail *deliveryTailPlan
 }
+
+// verifyProjectionChunkSize 是「发布确认快路径」的分批规模：与既有投影校验的批形一致（2000/批），
+// 既避免单次查询过大，也避免一次性把整份证据塞进单条查询。
+const verifyProjectionChunkSize = 2000
+
+// tryConfirmPendingPublication 在「上次发布未获确认（PublicationPending）且本次不是存量重放」时，
+// 先按**最近已发布代次**（saved.ProjectionGeneration）在查询面逐字段复核本源当前事件是否已完整可见：
+//   - 全部批次 complete ⇒ 发布事实上已完成 ⇒ 清 pending（持久化，同 L4019 终态）＋记 republishSkipped
+//     ⇒ (true, nil) —— 调用方据此跳过整窗重发（并放行快路径）。
+//   - 任一批不 complete / 查询出错 / 取证不稳 / 空集 ⇒ (false, nil)，**维持整窗重发原语义**（判据不放宽 ✗）。
+//
+// 成本：仅在 pending 且非重放时触发（确认后 pending 即被清）；O(段行数) 的取证与写路径同源
+// （canonicalRecoveryEvents），它换掉的是**每一批都整窗重写**的代价 ✓。
+// 语义安全：pending 的真义是"上次发布未获确认"，而这里用查询面拿到了**已确认可见**的证据；
+// 清 pending 的终态与「写成功后清 pending」完全一致，只是证据来源不同（查询面 vs 写入面）✓。
+func (m *Manager) tryConfirmPendingPublication(source SourceConfig, key string, saved persistedSource) (bool, error) {
+	if !saved.PublicationPending || saved.ProjectionGeneration == "" {
+		return false, nil
+	}
+	ctx := context.Background()
+	// 取证与写路径同源：canonicalRecoveryEvents 同时覆盖「段已落」与「内联旧格式」两条路。
+	// 成本 O(段行数) 只在 pending 且非重放时付一次（写完/确认后 pending 即被清），
+	// 而它换掉的是**每一批都整窗重写**的代价（量级远大于此）✓。
+	want, werr := m.canonicalRecoveryEvents(key, saved)
+	if werr != nil || len(want) == 0 {
+		return false, nil
+	}
+	// 必须**按事件归属的 UTC 日**分组校验：校验窗口由「源.UTCDay × 事件时间」共同决定，
+	// 若沿用源的当天日期而事件属于历史日，窗口会成像 start>end 的倒置区间 ⇒ 恒 0 行 ⇒ 误判不完整 ✗
+	//（本次开发中真实踩到，故此处显式按日拆分，与 reconcile 用例设 verifySource.UTCDay 同法）。
+	grouped, _, gerr := groupEventsByUTCDay(source, want)
+	if gerr != nil || len(grouped) == 0 {
+		return false, nil
+	}
+	incomplete := false
+	for day, dayEvents := range grouped {
+		vs := source
+		vs.UTCDay = day
+		for start := 0; start < len(dayEvents); start += verifyProjectionChunkSize {
+			end := start + verifyProjectionChunkSize
+			if end > len(dayEvents) {
+				end = len(dayEvents)
+			}
+			ok, err := m.verifyProjectionOnce(ctx, vs, saved.ProjectionGeneration, dayEvents[start:end])
+			if err != nil {
+				return false, nil
+			}
+			if !ok {
+				incomplete = true
+				break
+			}
+		}
+		if incomplete {
+			break
+		}
+	}
+	if incomplete {
+		// 缺行：证据不足，绝不据此清 pending（保持整窗重发 ✗）。
+		return false, nil
+	}
+	m.mu.Lock()
+	cur := m.state.Sources[key]
+	cur.PublicationPending = false
+	m.state.Sources[key] = cur
+	m.mu.Unlock()
+	m.republishSkipped.Add(1)
+	// 持久化：内存已清、落库未跟上时，下次启动仍会整窗重发（安全方向 ✓），故持久化失败不影响本次放行。
+	_ = m.persistHot()
+	return true, nil
+}
+
+// RepublishSkipped 返回「发布确认快路径」累计跳过整窗重发的次数（观测用，单位=次）。
+func (m *Manager) RepublishSkipped() int64 { return m.republishSkipped.Load() }
 
 func (m *Manager) writeProjection(source SourceConfig, events []logtypes.Event, generation string, writeEvents, archiveEvents []logtypes.Event, replace bool) (pipeline.DeliveryResult, error) {
 	return m.writeProjectionPlan(source, events, generation, projectionWritePlan{
