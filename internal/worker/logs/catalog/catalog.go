@@ -412,12 +412,6 @@ func (c *Catalog) StartingRecover() map[PartitionKey]RecoveryView {
 		if conflict != "" {
 			rec.ConflictGeneration = conflict
 			rec.RecoveryRequired = true
-		} else if rec.ConflictGeneration != "" {
-			// 对称清除（#14 收尾）：本次对照已一致 ⇒ 冲突态必须治愈。
-			// 原实现只在冲突时置位、从不清空 ⇒ 分区会永久停在 CONFLICT_GENERATION/partial
-			// （全量窗 complete=false、导出不解锁），即便数据与读面都已正常 ✗。
-			// 只清"账本侧冲突标记"，不触碰任何可见性/完整性判据 ✗。
-			rec.ConflictGeneration = ""
 		}
 		view := Recover(rec)
 		// 把恢复结论写回记录，供查询层读取。
