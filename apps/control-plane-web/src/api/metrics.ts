@@ -1,5 +1,15 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+// 序列与实时指标契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 本地绑定供本文件的查询泛型使用。
+import type { InstanceMetricsData } from '@jianmanager/ui/lib/instance-metrics'
+import type { MetricSeries, SeriesPoint } from '@jianmanager/ui/lib/metric-series'
+export type {
+  InstanceMetricsData,
+  WorldMetric,
+} from '@jianmanager/ui/lib/instance-metrics'
+export type { MetricSeries, SeriesPoint } from '@jianmanager/ui/lib/metric-series'
+
 import api from '@/api/client'
 import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
 import type { MetricRange } from '@jianmanager/ui'
@@ -14,53 +24,7 @@ export interface NodeMetricsData {
   diskTotalMb: number
 }
 
-export interface WorldMetric {
-  name: string
-  loadedChunks: number
-  entities: number
-  tileEntities: number
-}
 
-export interface InstanceMetricsData {
-  tps: number
-  onlinePlayers: number
-  memoryMb: number
-  msptMillis: number
-  threads: number
-  cpuPercent: number
-  heapMaxMb: number
-  uptimeSeconds: number
-  worlds: WorldMetric[] | null
-  probeAvailable: boolean
-  // === MC 直探（SLP / Query，FR-446 / FR-447）补充字段与显式可用性位 ===
-  // 采集优先级链 `探针 → SLP → Query → 不可用`：`*Available=false` 即「不可用」，
-  // 前端据此渲染「不可用」而非 `0` / `-1` / `--` 伪值（消除「0 人在线」回归）。
-  playersAvailable: boolean
-  motd: string
-  motdAvailable: boolean
-  version: string
-  versionAvailable: boolean
-  /**
-   * 服务端图标（`data:image/png;base64,...`，可达 ~50KB）。**预留字段**：后端 SLP → Worker →
-   * `MetricsData.favicon` 已端到端回传，前端当前仅声明未渲染；若要展示应在实例详情页 MOTD
-   * 卡片按需渲染，避免把大 base64 注入卡片列表（FR-446 审计项 7）。
-   */
-  favicon: string
-  maxPlayers: number
-  maxPlayersAvailable: boolean
-  playerNames: string[] | null
-  playerNamesAvailable: boolean
-  /** true=名单取自 SLP sample（弱信息，可能不完整，非实名）。 */
-  playerNamesPartial: boolean
-  plugins: string[] | null
-  pluginsAvailable: boolean
-  map: string
-  mapAvailable: boolean
-  slpAvailable: boolean
-  queryAvailable: boolean
-  /** 本拍命中来源位：1=探针 2=SLP 4=Query（与后端 `metrics.SourceMask` 对齐）。 */
-  sourceMask: number
-}
 
 export function useNodeMetrics(nodeId: number) {
   return useQuery({
@@ -92,20 +56,8 @@ export function useInstanceMetrics(instanceId: number, enabled = true) {
 // === 时序历史指标（FR-060：/metrics/series、/metrics/overview） ===
 
 /** 曲线上一点：raw 档 avg=min=max；缺测为 null（断点）。 */
-export interface SeriesPoint {
-  ts: string
-  avg: number | null
-  min: number | null
-  max: number | null
-}
 
 /** 一条历史序列。scope=instance 含分世界时 world 非空。 */
-export interface MetricSeries {
-  metricKey: string
-  unit: string
-  world: string
-  points: SeriesPoint[]
-}
 
 export interface MetricSeriesResponse {
   resolution: string
