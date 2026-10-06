@@ -38,9 +38,11 @@ type Coordinator struct {
 
 // searchCacheTTL 双档 TTL：pending（覆盖校验后置 ✗）结果短档，避免新日志被掩盖过久；
 // 已完成完整校验的结果可用常规档。
+// 与"整分桶键"配合：同一分钟内的滚动窗口共用同一键 ⇒ TTL 稍长也不会放大陈旧度 ✗，
+// 却能让"连打/翻页/多组件重复取数"稳定命中（配合预热器可做到用户侧恒热 ✓）。
 const (
-	searchCacheTTLPending   = 4 * time.Second
-	searchCacheTTLCompleted = 45 * time.Second
+	searchCacheTTLPending   = 25 * time.Second
+	searchCacheTTLCompleted = 60 * time.Second
 )
 
 type searchCacheEntry struct {
@@ -48,14 +50,27 @@ type searchCacheEntry struct {
 	expireAt time.Time
 }
 
-// searchCacheKey 同参键＝授权主体摘要 ‖ view 维度/scope ‖ 时间片 ‖ 过滤 ‖ onlineOnly ‖
+// searchCacheKeyBucket 把时间片对齐到整分桶：滚动窗口（如"最近 15 分钟"）每秒都会换
+// from/to ⇒ 原样入键会让缓存永远未命中 ✗✓。取整后同一分钟共享键；查询本身仍用真实窗 ✓
+// （键只影响命中，不影响结果语义 ✗）。
+func searchCacheKeyBucket(t string) string {
+	if ts, err := time.Parse(time.RFC3339Nano, t); err == nil {
+		return ts.UTC().Truncate(time.Minute).Format(time.RFC3339Nano)
+	}
+	if ts, err := time.Parse(time.RFC3339, t); err == nil {
+		return ts.UTC().Truncate(time.Minute).Format(time.RFC3339Nano)
+	}
+	return t
+}
+
+// searchCacheKey 同参键＝授权主体摘要 ‖ view 维度/scope ‖ 时间片（整分桶 ✓）‖ 过滤 ‖ onlineOnly ‖
 // order ‖ limit/maxBytes ‖ Fast。**跨主体绝不命中 ✗**（主体与 scope 都在键内 ✓）。
 func searchCacheKey(q Query) string {
 	return strings.Join([]string{
 		q.PrincipalKey,
 		q.PermissionScope,
-		q.FromUTC,
-		q.ToUTC,
+		searchCacheKeyBucket(q.FromUTC),
+		searchCacheKeyBucket(q.ToUTC),
 		normalizeFilter(q.Filter),
 		fmt.Sprint(q.OnlineOnly),
 		q.OrderVersion,
