@@ -41,6 +41,13 @@
 - **代价与边界**：跨空洞回收会**推进 WAL 回收水位**（数据确实没有补齐，只是被裁定放弃）；该缺失对下游**可见**（`ingest_position_gaps`）。放弃**不可撤销**——凭据只增不删；如需恢复数据，只能重新导入，且受 ADR-100 的代次归属闸约束（不得归到当前代次）。
 - **可转红防护**：`internal/worker/logs/ledger/abandon_test.go`（`TestAbandonGapsThroughRequiresOperator`：去掉操作人空值检查即红；`TestAbandonGapsThroughRecordsStructuredEvidence`：去掉 `Entry.Abandonments` 写入即红；`TestAutoResolveNeverMarksPermanentlyLost`：自动路径守卫）、`internal/worker/logs/query/grpcsvc/service_test.go`（"已放弃位置"标记必须单独回填在 `ingest_position_gaps` 上，**不得污染 coverage 语义**）。
 - **实现**：提交 `afeb5359`（空洞放弃协议批 1：结构化凭据、操作人闸与自动路径守卫）、`792ea9ea`（空洞放弃放行 = ADR-B 批 2）、`22112465`（查询面位置缺失标记：独立 proto 字段，与 coverage 语义分开）。
+- **实现注记（2026-10-06，收尾死结出口）**：CP `ingest/resolve-gaps` 本就强制解析操作人并经
+  `x-jm-operator` 下传（元数据经隧道还原为 Worker 侧 incoming）；本次把 **Worker 侧 `resolveOneSourceGaps`
+  的 `!complete` 分支**接上同一出口：操作人（`x-jm-operator`）＋显式理由（`x-jm-reason`）齐备 ⇒
+  `AbandonGapsThrough` 落 `PERMANENTLY_LOST` 裁定后放行；缺任一项、或**零消费源**（Reclaim 与 Durable 皆 0）
+  ⇒ 照旧拒绝（不写空区间留痕）。跨度取值：`Reclaim` 为主，`Reclaim=0 ⇒ 回退 Durable`。
+  可转红防护：`internal/worker/logs/ingest/resolve_abandon_rendezvous_test.go`（无参拒／带参留痕／
+  只理由拒／变异去留痕红）。**边界**：VL/覆盖层阻塞（有发布、位置收敛仍报同一死结）不在此出口可达范围。
 - **后续项（登记项，尚未实现）**：
   1. **跨代次补账通道**（ADR-100 的出口：按**原代次**人工补账）——独立项；
   2. **proto 生成物有 3 行注释偏差**：真 `protoc` 重跑即还原，**不得手改生成物**；
