@@ -77,4 +77,9 @@ export * from './components/views/nodes/AddNodeDialog'
 export * from './components/views/nodes/NodeJDKPanel'
 export * from './components/views/nodes/PingNodeButton'
 export * from './components/views/nodes/DirectoryPicker'
+
+// instances 域（实例详情与控制台的分段/面板）
+export * from './components/views/instances/HealthPanel'
+export * from './components/views/instances/BinarySegment'
+export * from './components/views/instances/InstanceEnvSegment'
 export * from './components/views/DangerConfirm'
