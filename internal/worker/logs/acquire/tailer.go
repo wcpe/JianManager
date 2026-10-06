@@ -50,6 +50,11 @@ type FileTailer struct {
 	identityDev uint64
 	identityIno uint64
 	identityOK  bool
+	// tailSHA256 / tailHashAt（2026-10-06 原地重写检测 ✗✗）：[cursor-512, cursor) 尾窗指纹与其采点。
+	// 既有检测只覆盖「首 512B + 物理身份」⇒ 对"保头吞尾"的原地重写结构性看不见 ✗（实例日志栈实测：
+	// 文件头不动、尾部区域被吞 ⇒ 偏移漂移 ⇒ IDENTITY_CONFLICT ⇒ 水位钉死 ✗）。每次 Poll 收束后刷新 ✓。
+	tailSHA256 string
+	tailHashAt int64
 	// rotateTo 轮转目标路径模板（可选）；检测到截断时登记关联。
 	rotateTo string
 	// rotationCount 轮转次数（测试断言）。
@@ -237,6 +242,29 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 		return nil, err
 	}
 
+	// **原地重写检测（2026-10-06 ✗✗）**：同 inode（Stat 未变）∧ 尺寸未倒退 ∧ **游标前 512B 窗口指纹不符**
+	// ⇒ 判"保头吞尾"式重写 ✓。硬序：**先记可见缺口**（FILE_REWRITTEN，与 WAL_BODY_MISSING 同族 ✓，
+	// 绝不静默 ✗）⇒ **跳过歧义区到 EOF 再锚**（不清零 cursor 重读：那会把已读前缀当新事件重灌 ✗）⇒
+	// 段/身份重置（registerLiveSegment ✓，**不发 LinkRotation** ✗）⇒ 从新锚续读 ✓；逻辑位置继续累计 ✓。
+	if t.cursor > 0 && fi.Size() >= t.cursor && t.tailSHA256 != "" && t.tailHashAt == t.cursor {
+		from := t.cursor - 512
+		if from < 0 {
+			from = 0
+		}
+		if cur, herr := prefixSHA256At(t.path, from, t.cursor-from); herr == nil && cur != t.tailSHA256 {
+			_ = t.led.RecordGap(t.key, uint64(t.cursor), uint64(fi.Size()), "FILE_REWRITTEN",
+				"tailed file rewritten in place (same inode, header intact); re-anchored at EOF with visible gap")
+			t.segmentStart = t.logicalPos
+			t.cursor = fi.Size()
+			t.lastSize = fi.Size()
+			t.active = false
+			t.identityBytes, t.identitySHA256, t.tailSHA256, t.tailHashAt = 0, "", "", 0
+			t.identityDev, t.identityIno, t.identityOK = 0, 0, false
+			_ = t.registerLiveSegment()
+			return nil, nil // 本轮不读歧义区；下轮起从新锚续读 ✓
+		}
+	}
+
 	if fi.Size() == t.cursor {
 		return nil, nil
 	}
@@ -346,6 +374,8 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 		}
 	}
 
+	// 尾窗指纹刷新（原地重写检测的基准 ✓；每 Poll 一次，O(512) ✓）。
+	t.refreshTailHashLocked()
 	// 导出 normalize 协调点：cursor 与 read_position 已更新；durable 由 WAL Commit 推进。
 	_ = filepath.Base(t.path)
 	return events, nil
@@ -414,6 +444,44 @@ func (t *FileTailer) registerLiveSegment() error {
 		EndPos: t.logicalPos, IdentityBytes: t.identityBytes,
 		IdentitySHA256: t.identitySHA256, ParserVersion: t.parser.ParserVersion,
 	})
+}
+
+// prefixSHA256At 计算文件 [from, from+size) 窗口的 SHA256（只读、有界 O(size) ✓）。
+func prefixSHA256At(path string, from, size int64) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.Seek(from, io.SeekStart); err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	if _, err := io.CopyN(h, f, size); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// refreshTailHashLocked 维护「游标前 512B 窗口」指纹（每次 Poll 收束后调用一次，O(512) ✓）。
+// 失败 ⇒ 清空指纹（下一轮走"不确定 ⇒ 停在旧位置＋告警"支路 ✗，绝不带漂移偏移续读 ✗）。
+func (t *FileTailer) refreshTailHashLocked() {
+	const window = 512
+	from := t.cursor - window
+	if from < 0 {
+		from = 0
+	}
+	size := t.cursor - from
+	if size <= 0 {
+		t.tailSHA256, t.tailHashAt = "", t.cursor
+		return
+	}
+	h, err := prefixSHA256At(t.path, from, size)
+	if err != nil {
+		t.tailSHA256, t.tailHashAt = "", t.cursor
+		return
+	}
+	t.tailSHA256, t.tailHashAt = h, t.cursor
 }
 
 func filePrefixSHA256(path string, size int64) (string, error) {
