@@ -52,13 +52,23 @@ export default function WorkspaceSidebar() {
   )
 
   // 注入面保持引用稳定，避免视图每次渲染都重建元素树。
+  // 链接激活态：`end` 为真时精确匹配（根路径等），否则前缀匹配——与视图的 end 判定一致。
+  const isActive = (to: string, end?: boolean) =>
+    end ? pathname === to : pathname === to || pathname.startsWith(to + '/')
   const renderLink = useCallback<WorkspaceSidebarProps['renderLink']>(
-    ({ to, className, ariaCurrent, ariaLabel, title, children }) => (
-      <Link to={to} className={className} aria-current={ariaCurrent} aria-label={ariaLabel} title={title}>
+    ({ to, end, className, ariaCurrent, ariaLabel, title, children }) => (
+      <Link
+        to={to}
+        className={typeof className === 'function' ? className(isActive(to, end)) : className}
+        aria-current={ariaCurrent}
+        aria-label={ariaLabel}
+        title={title}
+      >
         {children}
       </Link>
     ),
-    [],
+    // isActive 依赖 pathname：路径变化时重建，保证回调式 class 拿到最新激活态。
+    [pathname],
   )
   const onNavigate = useCallback((to: string) => navigate(to), [navigate])
   const renderServerSelector = useCallback(() => <ServerSelector />, [])
