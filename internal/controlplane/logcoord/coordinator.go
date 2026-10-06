@@ -219,7 +219,13 @@ func workerTargetID(target TargetInfo) string {
 
 func ensureWorkerViewBinding(view View, workerID string, targets []TargetInfo, respViewID string, results []WorkerTargetResult) error {
 	wantView, _, ok := workerViewID(view, workerID)
-	if !ok || respViewID != wantView {
+	if !ok {
+		// 快路径（q.Fast）的视图不绑 Worker（见 resolve_fast.go 与 L503-506 的既定语义：
+		// "视图未绑定属预期" ✗），此时无期望 viewId ⇒ 不做绑定比对，避免误判 ErrViewReuseMismatch
+		// 而被映射成 409 VIEW_STALE ✗。慢路径视图始终绑定，故本支对慢路径不可达 ✓。
+		return nil
+	}
+	if respViewID != wantView {
 		return fmt.Errorf("%w: worker %s returned view %q want %q", ErrViewReuseMismatch, workerID, respViewID, wantView)
 	}
 	got := make(map[string]WorkerTargetResult, len(results))

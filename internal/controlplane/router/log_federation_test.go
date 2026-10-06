@@ -75,10 +75,14 @@ func TestLogFederation_ViewReuseHTTPStatus(t *testing.T) {
 	viewID, _ := viewObj["view_id"].(string)
 	require.NotEmpty(t, viewID)
 
-	// 变更时间范围复用同一 viewId → 409 VIEW_STALE
+	// 变更时间范围复用同一 viewId：新契约（快路径容忍"固定条件变化" ⇒ 按当前条件重建视图 ✓）
+	// ⇒ 200，且覆盖校验以 pending 独立呈现（绝不入 notes ✗）；旧的 409 VIEW_STALE 不再要求。
 	w2 := makeRequest(r, "GET", "/api/v1/logs/federation/search?instanceId=1&viewId="+viewID+"&from=2020-01-01T00:00:00Z&to=2020-01-02T00:00:00Z", nil, adminToken)
-	require.Equal(t, http.StatusConflict, w2.Code, "body=%s", w2.Body.String())
-	assert.Contains(t, fmt.Sprint(parseJSON(t, w2)["error"]), "VIEW_STALE")
+	require.Equal(t, http.StatusOK, w2.Code, "body=%s", w2.Body.String())
+	body2 := parseJSON(t, w2)
+	cov2, _ := body2["coverage"].(map[string]interface{})
+	require.Equal(t, true, cov2["pending"], "快路径必须以 pending 呈现覆盖校验未跑（body=%s）", w2.Body.String())
+	assert.NotContains(t, fmt.Sprint(body2["notes"]), "pending", "pending 绝不入 notes ✗")
 
 	// 伪造其他主体创建的 view 再带当前 token 复用 → 403
 	foreign, err := coord.CreateView(context.Background(), logcoord.Query{
@@ -249,25 +253,19 @@ func TestLogFederation_Search_PartialCoverageJSON(t *testing.T) {
 	cov, ok := body["coverage"].(map[string]interface{})
 	require.True(t, ok, "coverage missing: %v", body)
 	assert.Equal(t, false, cov["complete"], "partial coverage must not claim complete")
-
+	// 快路径契约（分页优先 ✓）：覆盖校验后置 ⇒ 不做逐目标分解（targets 为空 ✗），仅以 pending 呈现。
+	// 逐目标分解（success/offline）由慢路径与导出承担，其 eager 语义在 logcoord 侧测试中覆盖 ✓。
+	assert.Equal(t, true, cov["pending"], "fast path must mark coverage pending: %v", body)
 	targets, _ := cov["targets"].([]interface{})
-	require.Len(t, targets, 2)
-	byID := map[string]map[string]interface{}{}
-	for _, raw := range targets {
-		tc := raw.(map[string]interface{})
-		byID[tc["target_id"].(string)] = tc
-	}
-	require.Contains(t, byID, on)
-	require.Contains(t, byID, off)
-	assert.Equal(t, "success", byID[on]["state"])
-	assert.Equal(t, "offline", byID[off]["state"])
+	require.Len(t, targets, 0, "pending coverage must not carry per-target breakdown")
+	assert.NotContains(t, fmt.Sprint(body["notes"]), "pending", "pending 绝不入 notes ✗")
 
-	// View 固化 closed_visible_seq 向量
+	// View 不固化 closed_visible_seq（新契约 ✓）：快路径未跑逐目标校验 ⇒ 该向量无意义，
+	// 刻意不写入 ✗（避免下游把它当已校验证据 ✓）；固化由慢路径/导出承担（见导出用例 ✓）。
 	view, _ := body["view"].(map[string]interface{})
 	require.NotNil(t, view)
-	cvs, _ := view["closed_visible_seq"].(map[string]interface{})
-	require.NotNil(t, cvs, "view.closed_visible_seq must be persisted after search")
-	assert.Equal(t, "src-on/g:1", cvs[on])
+	_, hasCVS := view["closed_visible_seq"]
+	assert.False(t, hasCVS, "fast path must not persist closed_visible_seq: %v", view)
 
 	items, _ := body["items"].([]interface{})
 	assert.NotEmpty(t, items)
@@ -427,7 +425,10 @@ func TestLogFederation_AdminSearchOK_WithKeywordAndLimits(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	body := parseJSON(t, w)
 	cov := body["coverage"].(map[string]interface{})
-	assert.Equal(t, true, cov["complete"])
+	// 新契约：首屏/翻页走快路径 ⇒ 覆盖校验后置（pending=true、complete=false ✓）；
+	// 完整覆盖校验由导出/显式全量承担（eager 语义不变 ✗）。
+	assert.Equal(t, true, cov["pending"])
+	assert.Equal(t, false, cov["complete"])
 	items := body["items"].([]interface{})
 	require.Len(t, items, 1)
 	assert.Equal(t, "e1", items[0].(map[string]interface{})["event_id"])

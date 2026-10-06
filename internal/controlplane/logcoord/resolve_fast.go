@@ -2,6 +2,7 @@ package logcoord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -19,7 +20,13 @@ func (c *Coordinator) resolveForQueryFast(ctx context.Context, q Query) (View, *
 			return View{}, nil, fmt.Errorf("%w: %s", errNoView, q.ViewID)
 		}
 		if err := authorizeViewReuse(v, q); err != nil {
-			return View{}, nil, err
+			// 首屏/翻页快路径容忍"固定条件变化"（时间范围/过滤/onlineOnly/permission scope/order ✗）：
+			// 不再 409，而是按当前条件重建视图继续（等价一次新查询 ✓）。
+			// 安全线不动 ✗：授权主体不匹配与授权集合不覆盖走 ErrViewAuthz，原样上抛 ⇒ 越权复用不可能。
+			if !errors.Is(err, ErrViewReuseMismatch) {
+				return View{}, nil, err
+			}
+			goto newViewBranch
 		}
 		// 复用同一逻辑目标集合；不因当前 readiness 变化而重新选择集合。
 		// 仍需 TargetInfo 以便 fanout/coverage：按 view.TargetIDs 再解析身份映射，
@@ -54,6 +61,8 @@ func (c *Coordinator) resolveForQueryFast(ctx context.Context, q Query) (View, *
 		return v, rt, nil
 	}
 	// 快路径的"新视图"支：内联 CreateView 的构造段，**跳过** bindWorkerViews 与 c.views 登记 ✗。
+	// 上方复用分支在"条件变化被容忍"时也跳到此处（按当前条件重建 ✗）。
+newViewBranch:
 	resolved, err := ResolveTargets(ctx, c.resolver, q.AuthorizedTargetIDs, q.OnlineOnly)
 	if err != nil {
 		return View{}, nil, err
@@ -81,5 +90,15 @@ func (c *Coordinator) resolveForQueryFast(ctx context.Context, q Query) (View, *
 			view.TargetAuthorizationIDs[target.ID] = target.AuthorizationID
 		}
 	}
+	// 登记进 c.views（新契约 ✓）：快查询返回的 viewId 必须二次可用（分页/翻页会带回来），
+	// 否则第二次请求落 400「view 不存在」✗。该视图 WorkerViewIDs 为空 ⇒ 属"未绑定"形态：
+	// 复用分支已按新契约容忍（resolve_fast.go 顶部 ✓），慢路径重推/绑定另有其判定 ✗。
+	c.mu.Lock()
+	if c.views == nil {
+		c.views = make(map[string]View)
+	}
+	c.views[view.ViewID] = view
+	c.pruneViewsLocked()
+	c.mu.Unlock()
 	return view, resolved, nil
 }

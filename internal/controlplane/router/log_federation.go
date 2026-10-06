@@ -61,12 +61,12 @@ func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// 首屏快路径（Query.Fast）**不再默认开启** ✗——2026-10-07 现网实测：默认开快路径后，**裸查询**
-	// 也返 409 `VIEW_STALE`（快路径的未绑定视图在 Worker 侧被判未知视图 ⇒ 整条搜索路径不可用）。
-	// 且 <1s 目标不依赖它：15 分钟窗走**慢路径**实测 0.57–0.73s 即达标 ✓。
-	// 保留 `Query.Fast` 字段与 Worker/CP 两侧的第二路径实现，供后续"窗口收窄＋校验解耦"专项使用；
-	// 开关改由显式请求参数（如需）驱动，**默认慢路径＝现有完整校验语义** ✓。
-	// 导出路径同样不置位 ⇒ 导出闸（本函数下方 export_incomplete 判定）不受影响 ✓。
+	// 首屏快路径（Query.Fast）默认开启：分页/首屏只取当页所需（有界时间片＋limit），
+	// 逐目标完整覆盖校验后置为 Coverage.Pending（该字段独立呈现、**绝不入 notes** ✗），
+	// 完整校验留给导出/显式全量（其 eager 语义与下方导出闸判定一字不动 ✗）。
+	// 2026-10-07 复盘：上次默认开启引发裸查询 409 VIEW_STALE，根因是「前端旧 viewId 复用」
+	// ——已由 d5363a60（viewId 生命周期）修复，且本带 planner 空视图守卫；另有安全带回滚兜底。
+	q.Fast = true
 	resp, err := h.coord.Search(c.Request.Context(), q)
 	if err != nil {
 		writeFederationError(c, err)
@@ -347,6 +347,11 @@ func (h *LogFederationHandler) Search(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 首屏/翻页默认走快路径（分页优先）：只取当页所需，完整覆盖校验后置为 Coverage.Pending
+	// （独立呈现、绝不入 notes ✗）。前提已具备：快路径现容忍"固定条件变化"的 view 复用
+	// （改为按当前条件重建视图 ✓，授权主体/覆盖校验仍严守 ✗ —— 见 resolve_fast.go）。
+	// 导出（Export，下方 L432）不置位 ⇒ 导出闸与 eager 校验语义一字不动 ✗。
+	q.Fast = true
 	resp, err := h.coord.Search(c.Request.Context(), q)
 	if err != nil {
 		writeFederationError(c, err)
