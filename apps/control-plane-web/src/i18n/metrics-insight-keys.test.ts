@@ -49,8 +49,15 @@ function listSourceFiles(dir: string): string[] {
   return out
 }
 
+/**
+ * 包内源码根：视图迁入 @jianmanager/ui 后不再位于应用侧 src。
+ * 孤儿键检查必须一并覆盖包内源码，否则迁包即误报「键零引用」。
+ */
+const uiPackageSrcDir = join(i18nDir, '../../../../packages/ui/src')
+
 function collectSourceBlob(): string {
-  return listSourceFiles(srcDir)
+  return [srcDir, uiPackageSrcDir]
+    .flatMap((dir) => listSourceFiles(dir))
     .filter((f) => statSync(f).isFile())
     .map((f) => readFileSync(f, 'utf-8'))
     .join('\n')
