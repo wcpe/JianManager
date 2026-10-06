@@ -61,6 +61,10 @@ func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 首屏快路径开关（搜索门面默认开 ✓）：Coordinator 侧据 Query.Fast 走 resolveForQueryFast +
+	// Coverage{Pending:true}（未接线前该字段惰性无副作用 ✗）；**导出路径不得置位** ✗——
+	// 导出闸（下方 export_incomplete 判定）与可见性/完整性语义由此保持一字不动 ✓。
+	q.Fast = true
 	resp, err := h.coord.Search(c.Request.Context(), q)
 	if err != nil {
 		writeFederationError(c, err)

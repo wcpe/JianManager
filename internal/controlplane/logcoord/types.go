@@ -107,6 +107,9 @@ type Query struct {
 	// OnlineOnly 仅在调用方显式选择「仅在线」时为 true；不得默认。
 	OnlineOnly bool        `json:"online_only"`
 	Budget     QueryBudget `json:"budget"`
+	// Fast：首屏快路径 ✗——跳过视图绑定（OpenView 往返）与逐目标完整性校验，直接以有界查询返回 items，
+	// coverage 以 Pending 标记；导出路径（export.go 的逐页 Search）**不得**置位，校验语义一律不动 ✓。
+	Fast bool `json:"fast,omitempty"`
 	// ViewID 非空时复用既有逻辑事件集合，不重新选择最新目标集合。
 	ViewID string `json:"view_id,omitempty"`
 	// Cursor 是 CP 联邦分页边界，绑定 View 与全局复合排序键。
@@ -223,6 +226,10 @@ type Coverage struct {
 	PartialReasons   []string         `json:"partial_reasons,omitempty"`
 	Targets          []TargetCoverage `json:"targets,omitempty"`
 	EnumerationState EnumerationState `json:"enumeration_state"`
+	// Pending：首屏快路径（Fast）尚未做逐目标完整性校验时的独立标记 ✗。
+	// **绝不写入 notes、不改变 Complete 的枚举语义** ✓——否则前端会把它读成 not-ready 并回退 legacy
+	// （2026-10-07 浏览器 E2E 的真实回退坑 ✓）；导出闸仍只看 Complete/Quality（log_federation.go:76-78 ✗）。
+	Pending bool `json:"pending,omitempty"`
 }
 
 // Quality 查询质量维度（与 complete 独立）。

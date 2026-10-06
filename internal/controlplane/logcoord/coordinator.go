@@ -500,7 +500,10 @@ func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget 
 		return
 	}
 	workerView, viewErr, viewOK := workerViewID(view, workerID)
-	if !viewOK {
+	// 首屏快路径（q.Fast）不经 bindWorkerViews ⇒ 视图未绑定属**预期** ✓：不发 worker_view_failed，
+	// 而是以 ViewID:"" 调 Worker——其 planFromRequest 直接从请求推导计划（已在 service.go:212 核实 ✓），
+	// 慢路径（导出等）不置 Fast ⇒ 原有的失败早退一字不动 ✗。
+	if !viewOK && !q.Fast {
 		for _, target := range targets {
 			// 显式补 NotReady：不依赖 CoverageFromReadiness 的原因白名单单点生效，
 			// 与 dial_failed/search_failed 的既有写法一致（B-1 双保险）。
@@ -662,10 +665,22 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 		}
 		q.Budget.Limit = pageCursor.PageLimit
 	}
-	view, resolved, err := c.resolveForQuery(ctx, q)
+	// 首屏快路径（w21 快首屏）：Fast ⇒ resolveForQueryFast（省 bind 往返 ✗，workerView 为空 ⇒
+	// fanoutOne 走显式 View=nil 第二路径 ✓）；导出路径不置 Fast ⇒ 慢路径一字不动 ✓。
+	var (
+		viewFast     View
+		resolvedFast *ResolvedTargets
+		err          error
+	)
+	if q.Fast {
+		viewFast, resolvedFast, err = c.resolveForQueryFast(ctx, q)
+	} else {
+		viewFast, resolvedFast, err = c.resolveForQuery(ctx, q)
+	}
 	if err != nil {
 		return nil, err
 	}
+	view, resolved := viewFast, resolvedFast
 	streams, covBy, quality, workerCut, workerOpen, err := c.fanoutSearch(ctx, view, resolved, q, "")
 	if err != nil {
 		return nil, err
@@ -701,14 +716,24 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 		_ = s
 	}
 
-	cov := BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, enum)
+	// 首屏快路径：逐目标完整性校验尚未跑 ⇒ 以 **Pending** 独立标记呈现（**绝不写 notes、不改
+	// Complete 的枚举语义** ✓）；慢路径（导出等）一字不动 ⇒ 导出闸（log_federation.go:76-78）不受影响 ✗。
+	var cov Coverage
+	if q.Fast {
+		cov = Coverage{Pending: true, EnumerationState: enum}
+	} else {
+		cov = BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, enum)
+	}
 	if byteCut {
 		cov.PartialReasons = appendUniqueReason(cov.PartialReasons, "BUDGET_EXCEEDED")
 		cov.Complete = false
 	}
 	// FR-480：Search 完成后把 coverage 上的 closed_visible_seq 向量固化到 View，
 	// Export 与后续 view 复用必须看到同一向量。
-	c.persistClosedVisibleSeq(&view, cov)
+	// 快路径（Fast）未做逐目标校验 ⇒ 该向量无意义，**不固化** ✗（避免下游把它当已校验证据 ✓）。
+	if !q.Fast {
+		c.persistClosedVisibleSeq(&view, cov)
+	}
 
 	resp := &SearchResponse{
 		View:      view,

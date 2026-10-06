@@ -166,9 +166,10 @@ export default function LogsPage() {
   })
   const [keyword, setKeyword] = useState('')
     // 默认 24h（2026-09-30 实测依据）：默认「全部时间」会让每个目标的全部分区参与查询——
-    // 实测单次联邦请求扫描 105 个日分区、约 2.6s；带 24h 窗口的同规模查询仅 ~108ms（约 24×）。
-    // 「全部时间」仍可从时间范围筛选器显式选择。
-    const [range, setRange] = useState<TimeRangePreset>('24h')
+    // 默认窗＝**15 分钟**（w21 快首屏 ✗）：搜索页首屏走 CP 快路径（Query.Fast ⇒ resolveForQueryFast，
+    // 省每 Worker 一次 OpenView 往返 ＋ 未校验标记 Coverage.Pending ✓），窗口越小首屏越快；
+    // 「24h/全部」等更大范围仍从时间范围筛选器显式选择（走慢路径与完整校验 ✓，绝不给假完整 ✗）。
+    const [range, setRange] = useState<TimeRangePreset>('15m')
   const [page, setPage] = useState(1)
 	const [federationCursors, setFederationCursors] = useState<Record<number, string>>({ 1: '' })
   // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（FR-480 online_only）。
