@@ -8460,12 +8460,17 @@ var ErrVerifyDeferred = errors.New("verification deferred to next round")
 // 维护环的职责是**周期性巡检**，不是等待重活完成 ⇒ 单步必须能被放弃 ✓。
 const defaultSweepStepBudget = 150 * time.Millisecond
 
-// defaultSweepInflightCap 是在飞被放弃调用的**并发上限**（0 ⇒ 默认 4 ✓）。
+// defaultSweepInflightCap 是在飞被放弃调用的**并发上限**（0 ⇒ 默认 12 ✓）。
 //
 // 为什么需要上限（新账 2 ✓）：超时只放弃"等"、不放弃"做" ✗ ⇒ 每个被放弃的调用仍持有载荷在后台
 //
 //	等 `m.mu`。上限把"同时在飞的这类调用"钉住 ⇒ 内存不再随轮数叠加 ✓（超出即本轮不再发起新步 ✓）。
-const defaultSweepInflightCap = 4
+//
+// 2026-10-06 #6 复盘（父令定点）：原默认 4 ⇒ 95 源规模下 `inflight` 长期贴 1–4、`skip_inflight_cap`
+// 单调增（实测 0→363）、单轮 300 s+、排水停摆（WAL 760 020 悬空、read 900 000 vs reclaim 0）✗。
+// 提到 12：只放开**跨源**并发；**同源仍严格单飞**（tryClaimReplayInflight 逐源互斥 ✗）；
+// 有界执行器语义不变（超预算只不等待、后台继续 ✓）。
+const defaultSweepInflightCap = 12
 
 func (m *Manager) sweepInflightCapOf() int {
 	if m == nil || m.sweepInflightCap <= 0 {
