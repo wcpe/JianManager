@@ -63,12 +63,23 @@ func searchCacheKeyBucket(t string) string {
 	return t
 }
 
-// searchCacheKey 同参键＝授权主体摘要 ‖ view 维度/scope ‖ 时间片（整分桶 ✓）‖ 过滤 ‖ onlineOnly ‖
+// searchCacheKey 同参键＝授权主体摘要 ‖ scope ‖ 时间片（整分桶 ✓）‖ 过滤 ‖ onlineOnly ‖
 // order ‖ limit/maxBytes ‖ Fast。**跨主体绝不命中 ✗**（主体与 scope 都在键内 ✓）。
+//
+// 平台级例外（共享键 ✓）：授权目标含通配 "*" 时，结果只取决于"平台全量"这一授权集合本身，
+// 与是哪个管理员、其 scope 摘要无关 ⇒ **键去掉 user/role 与 scope 段**，同一授权集合的多个
+// 用户共享缓存 ✓（安全等价 ✓；仅动缓存键，不碰 view 身份与越权判定 ✗）。个人级查询保持原键 ✗。
 func searchCacheKey(q Query) string {
+	principal, scope := q.PrincipalKey, q.PermissionScope
+	for _, id := range q.AuthorizedTargetIDs {
+		if id == "*" {
+			principal, scope = "*", "*"
+			break
+		}
+	}
 	return strings.Join([]string{
-		q.PrincipalKey,
-		q.PermissionScope,
+		principal,
+		scope,
 		searchCacheKeyBucket(q.FromUTC),
 		searchCacheKeyBucket(q.ToUTC),
 		normalizeFilter(q.Filter),

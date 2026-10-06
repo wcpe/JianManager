@@ -1,10 +1,12 @@
 package router
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -99,9 +101,80 @@ func fedAggCacheKey(q logcoord.Query, c *gin.Context) string {
 	}, "\x1f")
 }
 
-// NewLogFederationHandler 创建联邦查询处理器。
+// 预热热门窗（15m/1h/24h × 平台级 ✓）：与用户走同一条 Search 代码路径、结果写进同一 TTL 缓存，
+// 唯一差别是"发起者身份"——平台级查询已采用**共享键**（授权集合 "*" ⇒ 去掉 user/role/scope 段 ✓），
+// 故任何管理员查询同名窗口都直接命中预热条目 ✓✓。失败只做频控日志，绝不影响请求路径 ✗。
+const (
+	fedWarmInterval = 25 * time.Second
+	fedWarmTimeout  = 20 * time.Second
+)
+
+func (h *LogFederationHandler) startWarmLoop() {
+	if h == nil || h.coord == nil {
+		return
+	}
+	// 测试路径（经 testLogCoord 注入的协调器/假 dialer）不启预热：避免后台并发打假客户端造成
+	// 数据竞争与用例间干扰 ✗（生产装配不设 testLogCoord ⇒ 正常预热 ✓）。
+	if testLogCoord != nil {
+		return
+	}
+	go func() {
+		defer func() { _ = recover() }()
+		ticker := time.NewTicker(fedWarmInterval)
+		defer ticker.Stop()
+		for {
+			h.warmOnce()
+			<-ticker.C
+		}
+	}()
+}
+
+func (h *LogFederationHandler) warmOnce() {
+	now := time.Now().UTC()
+	for _, win := range []time.Duration{15 * time.Minute, time.Hour, 24 * time.Hour} {
+		h.warmWindow(now, win)
+	}
+}
+
+// warmWindow 单窗口预热；任何 panic/错误都被吞掉并频控记录（每窗口每分钟最多一条 ✗）。
+// 预热器频控状态（进程级即可：处理器单例 ✓）。
+var (
+	fedWarmFailMu   sync.Mutex
+	fedWarmFailOnce = map[string]time.Time{}
+)
+
+func (h *LogFederationHandler) warmWindow(now time.Time, win time.Duration) {
+	defer func() { _ = recover() }()
+	ctx, cancel := context.WithTimeout(context.Background(), fedWarmTimeout)
+	defer cancel()
+	q := logcoord.Query{
+		AuthorizedTargetIDs: []string{"*"},
+		PrincipalKey:        "warm", // 平台级共享键下该段被置 "*" ⇒ 不影响命中 ✓
+		PermissionScope:     "warm",
+		FromUTC:             now.Add(-win).Format(time.RFC3339),
+		ToUTC:               now.Format(time.RFC3339),
+		Budget:              logcoord.QueryBudget{Limit: 50},
+		Fast:                true,
+	}
+	if _, err := h.coord.Search(ctx, q); err != nil {
+		key := win.String()
+		fedWarmFailMu.Lock()
+		last, ok := fedWarmFailOnce[key]
+		if !ok || time.Since(last) > time.Minute {
+			fedWarmFailOnce[key] = time.Now()
+		}
+		fedWarmFailMu.Unlock()
+		if !ok || time.Since(last) > time.Minute {
+			slog.Debug("日志联邦预热失败（频控）", "window", key, "error", err)
+		}
+	}
+}
+
+// NewLogFederationHandler 创建联邦查询处理器（并启动热门窗预热器 ✓）。
 func NewLogFederationHandler(coord *logcoord.Coordinator, authz *service.AuthzService) *LogFederationHandler {
-	return &LogFederationHandler{coord: coord, authz: authz, aggCache: &fedTTLCache{}}
+	h := &LogFederationHandler{coord: coord, authz: authz, aggCache: &fedTTLCache{}}
+	h.startWarmLoop()
+	return h
 }
 
 // RegisterRoutes 注册联邦查询路由（挂在 log.read 权限组下）。
