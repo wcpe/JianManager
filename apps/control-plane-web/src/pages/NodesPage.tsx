@@ -86,6 +86,11 @@ import {
   NodeRailIcon,
 } from '@jianmanager/ui/components/views/nodes/NodeListParts'
 import { ArchivedNodeDetailPane } from '@jianmanager/ui/components/views/nodes/ArchivedNodeDetailPane'
+import {
+  COMPARE_TARGET_CAP,
+  NodeInstanceCompare,
+  NodeMonitorCharts,
+} from '@jianmanager/ui/components/views/nodes/NodeCharts'
 
 
 /** 待二次确认的危险节点操作（FR-048）。 */
@@ -116,115 +121,6 @@ function readDetailTab(searchParams: URLSearchParams): DetailTab {
   return DETAIL_TABS.includes(tab as DetailTab) ? (tab as DetailTab) : 'overview'
 }
 
-/** 各实例对比图可切的指标（FR-060 #2：节点上各实例 TPS/MSPT/堆/线程对比）。 */
-const COMPARE_METRICS: { key: string; labelKey: string; fmt: (v: number) => string }[] = [
-  { key: 'inst_tps', labelKey: 'metrics.tps', fmt: (v) => v.toFixed(1) },
-  { key: 'inst_mspt', labelKey: 'metrics.mspt', fmt: (v) => `${v.toFixed(1)}ms` },
-  { key: 'inst_heap_used', labelKey: 'metrics.heap', fmt: formatBytes },
-  { key: 'inst_threads', labelKey: 'metrics.threads', fmt: (v) => v.toFixed(0) },
-]
-
-/** 对比图可读性上限：一图最多 12 条线（超出仅取名称升序前 12，FR-340）。50 是后端硬上限。 */
-const COMPARE_TARGET_CAP = 12
-
-/**
- * 节点上各实例同一指标对比：每实例一条线，可切 TPS/MSPT/堆/线程（FR-060 #2）。
- * FR-340：实例清单走服务端按节点分页（`/instances/search`）取前 12（名称升序），
- * 指标一次批量查询（`/metrics/series/batch`）拆分为各线，消 N+1 请求风暴。
- */
-function NodeInstanceCompare({ node, range }: { node: NodeInfo; range: MetricRange }) {
-  const { t } = useTranslation()
-  const [metric, setMetric] = useState('inst_tps')
-  const spec = COMPARE_METRICS.find((m) => m.key === metric) ?? COMPARE_METRICS[0]
-
-  // 服务端按节点过滤分页取前 12（名称升序）；total 为该节点实例总数（提示中的 N）。
-  const { data: search } = useInstanceSearch({
-    nodeId: node.id,
-    pageSize: COMPARE_TARGET_CAP,
-    sort: 'name',
-    order: 'asc',
-  })
-  const nodeInstances = search?.items ?? []
-  const total = search?.total ?? 0
-  const targetIds = nodeInstances.map((i) => i.uuid)
-
-  // 单条批量查询替代逐实例 useQueries × N（FR-340）。
-  const { data: batch } = useMetricSeriesBatch({ scope: 'instance', targetIds, range, metrics: [metric] })
-
-  const series: ChartSeries[] = nodeInstances.map((inst) => {
-    const s = batch?.series[inst.uuid]?.find((x) => x.metricKey === metric && x.world === '')
-    return { key: inst.uuid, name: inst.name, points: (s?.points ?? []).map((p) => ({ ts: p.ts, value: p.avg })) }
-  })
-
-  return (
-    <Panel
-      title={t('nodes.instanceCompare')}
-      actions={
-        <div className="inline-flex rounded-md border p-0.5">
-          {COMPARE_METRICS.map((m) => (
-            <button
-              key={m.key}
-              type="button"
-              onClick={() => setMetric(m.key)}
-              className={`rounded px-2 py-0.5 text-xs ${metric === m.key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-            >
-              {t(m.labelKey)}
-            </button>
-          ))}
-        </div>
-      }
-    >
-      {total > COMPARE_TARGET_CAP && (
-        <p className="mb-2 text-xs text-muted-foreground">
-          {t('nodes.compareCap', { shown: COMPARE_TARGET_CAP, total })}
-        </p>
-      )}
-      <TimeSeriesChart series={series} height={180} valueFormatter={spec.fmt} emptyHint={t('nodes.empty')} />
-    </Panel>
-  )
-}
-
-/** 详情「监控」分段：节点历史曲线组（CPU/内存/磁盘/网络/负载，FR-061/FR-060）。 */
-function NodeMonitorCharts({ node }: { node: NodeInfo }) {
-  const { t } = useTranslation()
-  const [range, setRange] = useState<MetricRange>('24h')
-  const { data } = useMetricSeries({ scope: 'node', targetId: node.uuid, range })
-
-  const seriesOf = (metricKey: string, name: string): ChartSeries[] => {
-    const s = data?.series.find((x) => x.metricKey === metricKey)
-    if (!s) return []
-    return [{ key: metricKey, name, points: s.points.map((p) => ({ ts: p.ts, value: p.avg })) }]
-  }
-  const netSeries: ChartSeries[] = [
-    ...seriesOf('node_net_rx_rate', t('nodes.netRx')),
-    ...seriesOf('node_net_tx_rate', t('nodes.netTx')),
-  ]
-
-  return (
-    <div className="space-y-3">
-      <div className="flex justify-end">
-        <RangePicker value={range} onChange={setRange} />
-      </div>
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        <Panel title={t('dashboard.cpuTrend')}>
-          <TimeSeriesChart series={seriesOf('node_cpu_pct', t('nodes.cpu'))} height={160} valueFormatter={(v) => `${v.toFixed(0)}%`} />
-        </Panel>
-        <Panel title={t('dashboard.memTrend')}>
-          <TimeSeriesChart series={seriesOf('node_mem_used', t('nodes.memory'))} height={160} valueFormatter={formatBytes} />
-        </Panel>
-        <Panel title={t('nodes.diskTrend')}>
-          <TimeSeriesChart series={seriesOf('node_disk_used', t('nodes.disk'))} height={160} valueFormatter={formatBytes} />
-        </Panel>
-        <Panel title={t('nodes.netTrend')}>
-          <TimeSeriesChart series={netSeries} height={160} valueFormatter={(v) => `${formatBytes(v)}/s`} />
-        </Panel>
-        <Panel title={t('nodes.loadTrend')}>
-          <TimeSeriesChart series={seriesOf('node_load', t('nodes.load'))} height={160} valueFormatter={(v) => v.toFixed(2)} />
-        </Panel>
-      </div>
-    </div>
-  )
-}
 
 
 
@@ -780,6 +676,41 @@ export default function NodesPage() {
 
 
 /** 右栏详情主体：身份块 + 资源仪表 + 分段 Tabs（切段稳定工具条，布局不重组）。 */
+/** 实例对比图的取数接线层（ADR-097）：视图已入包，此处注入服务端搜索与批量指标。 */
+function NodeInstanceCompareContainer({ node }: { node: NodeInfo }) {
+  const [metric, setMetric] = useState('inst_tps')
+  // 服务端按节点过滤分页取前 12（名称升序）；total 为该节点实例总数（提示中的 N）。
+  const { data: search } = useInstanceSearch({
+    nodeId: node.id,
+    pageSize: COMPARE_TARGET_CAP,
+    sort: 'name',
+    order: 'asc',
+  })
+  const nodeInstances = search?.items ?? []
+  const targetIds = nodeInstances.map((i) => i.uuid)
+  // 单条批量查询替代逐实例 useQueries × N（FR-340）。
+  const { data: batch } = useMetricSeriesBatch({ scope: 'instance', targetIds, range: '24h', metrics: [metric] })
+  const series: ChartSeries[] = nodeInstances.map((inst) => {
+    const s = batch?.series[inst.uuid]?.find((x) => x.metricKey === metric && x.world === '')
+    return { key: inst.uuid, name: inst.name, points: (s?.points ?? []).map((p) => ({ ts: p.ts, value: p.avg })) }
+  })
+  return (
+    <NodeInstanceCompare
+      metric={metric}
+      onMetricChange={setMetric}
+      total={search?.total ?? 0}
+      series={series}
+    />
+  )
+}
+
+/** 节点监控曲线的取数接线层（ADR-097）。 */
+function NodeMonitorChartsContainer({ node }: { node: NodeInfo }) {
+  const [range, setRange] = useState<MetricRange>('24h')
+  const { data } = useMetricSeries({ scope: 'node', targetId: node.uuid, range })
+  return <NodeMonitorCharts range={range} onRangeChange={setRange} series={data?.series ?? []} />
+}
+
 function NodeDetailPane({
   node,
   instanceCount,
@@ -865,7 +796,7 @@ function NodeDetailPane({
 
       <div>
         {tab === 'overview' && <NodeOverviewSection node={node} />}
-        {tab === 'instances' && <NodeInstanceCompare node={node} range="24h" />}
+        {tab === 'instances' && <NodeInstanceCompareContainer node={node} />}
         {tab === 'runtime' && (
           <div className="space-y-4">
             <NodeJDKTab nodeId={node.id} active />
@@ -888,7 +819,7 @@ function NodeDetailPane({
             <NodeProbeVersionTab nodeId={node.id} />
           </Panel>
         )}
-        {tab === 'monitor' && <NodeMonitorCharts node={node} />}
+        {tab === 'monitor' && <NodeMonitorChartsContainer node={node} />}
         {tab === 'repair' && <NodeRepairTab node={node} active />}
       </div>
     </div>

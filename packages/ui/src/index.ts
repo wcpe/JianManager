@@ -112,6 +112,7 @@ export {
   NodeRailIcon,
 } from './components/views/nodes/NodeListParts'
 export * from './components/views/nodes/ArchivedNodeDetailPane'
+export * from './components/views/nodes/NodeCharts'
 export * from './components/views/nodes/PingNodeButton'
 export * from './components/views/nodes/DirectoryPicker'
 
