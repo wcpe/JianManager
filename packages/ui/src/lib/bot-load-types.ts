@@ -390,3 +390,51 @@ export const SESSION_TABS: readonly SessionTab[] = [
   'events',
   'config',
 ] as const
+
+/** 发压节点容量（GET /bots/load-nodes）。 */
+export interface BotLoadNodeCapacity {
+  nodeId: number
+  nodeUuid: string
+  nodeName: string
+  online: boolean
+  tunnelConnected: boolean
+  botWorkerReady: boolean
+  legacy: boolean
+  maxBots: number
+  activeBots: number
+  reservedBots: number
+  availableBots: number
+  capacityGeneration: number
+  workerEpoch?: string
+  botWorkerVersion?: string
+  runtimeSource?: string
+  rssBytes?: number
+  eventLoopP95Ms?: number
+  lastHeartbeatAt?: string
+  unavailableReason?: string
+}
+
+/** 预检结果（当前契约 + 可选 planned 扩展字段）。 */
+export interface BotLoadPreflightResult {
+  runId: number
+  runUuid: string
+  ready: boolean
+  planToken?: string
+  expiresAt?: string
+  targetBots: number
+  totalAvailable: number
+  allocations: BotLoadAllocation[]
+  nodeCapacities: BotLoadNodeCapacity[]
+  probe: {
+    required: false
+    connected: boolean
+    instanceId: number
+    instanceUuid: string
+    message?: string
+  }
+  estimatedDurationSeconds: number
+  warnings: Array<{ code: string; message: string }>
+  blockers: Array<{ code: string; message: string; nodeId?: number }>
+  instanceId?: number
+  commandSchedule?: BotLoadCommandSchedule
+}
