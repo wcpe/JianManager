@@ -254,6 +254,30 @@ export * from './lib/logs-federation/types'
 export * from './lib/logs-federation/i18n'
 export * from './lib/logs-federation/helpers'
 export * from './lib/client-publish-wizard'
+export * from './lib/settings-form'
+export * from './lib/runtime-assets-contracts'
+// 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics` 同名（两者格式不同，
+// 前者 1024 进制带 B/KB/MB 后缀、后者是监控指标的 G/M/K 缩写），barrel 里不能同时通配导出。
+// 需要制品占用版 `formatBytes` 的调用方走深路径 `@jianmanager/ui/lib/runtime-assets-view`。
+export {
+  buildJDKMatrix,
+  RUNTIME_TYPE_LABEL,
+  buildRuntimeGrid,
+  DEFAULT_ASSET_FILTER,
+  filterAssetGroups,
+  shortSha,
+} from './lib/runtime-assets-view'
+export type {
+  JDKMatrixCell,
+  JDKMatrix,
+  JDKMatrixColumn,
+  JDKMatrixRow,
+  RuntimeGridCell,
+  RuntimeGridColumn,
+  RuntimeGridRow,
+  RuntimeGrid,
+  AssetFilter,
+} from './lib/runtime-assets-view'
 export * from './components/views/console/DirectorSceneStrip'
 export * from './components/views/console/QuotaPanel'
 export * from './components/views/console/InstanceConfigSurfacePanel'
