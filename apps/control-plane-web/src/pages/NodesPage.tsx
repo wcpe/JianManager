@@ -85,6 +85,7 @@ import {
   NodeOverviewSection,
   NodeRailIcon,
 } from '@jianmanager/ui/components/views/nodes/NodeListParts'
+import { ArchivedNodeDetailPane } from '@jianmanager/ui/components/views/nodes/ArchivedNodeDetailPane'
 
 
 /** 待二次确认的危险节点操作（FR-048）。 */
@@ -232,6 +233,7 @@ export default function NodesPage() {
   // 选中节点与激活分段均入 URL（FR-128 可寻址）：`?node=<id>` 深链（命令面板 FR-241 跳转携带）、
   // `?tab=<DetailTab>` 激活分段（默认 overview 省略）；`?view=active|archive` 页面视图（FR-393）。
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const view = readNodesView(searchParams)
   const isArchive = view === 'archive'
   const { data: nodes, isLoading } = useNodes({
@@ -650,6 +652,7 @@ export default function NodesPage() {
               node={selectedArchived}
               onPurge={() => setPurgeTarget(selectedArchived)}
               purging={purge.isPending}
+              onNavigate={navigate}
             />
           ) : (
             <div className="grid h-full place-items-center rounded-lg border border-dashed bg-card/50 shadow-soft">
@@ -775,59 +778,6 @@ export default function NodesPage() {
 }
 
 
-/** 归档只读详情 + 清理按钮（FR-393/394）。 */
-function ArchivedNodeDetailPane({
-  node,
-  onPurge,
-  purging,
-}: {
-  node: ArchivedNode
-  onPurge: () => void
-  purging: boolean
-}) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const when = node.deletedAt ? new Date(node.deletedAt).toLocaleString() : '--'
-  const rows: { label: string; value: React.ReactNode }[] = [
-    { label: t('nodes.ip'), value: node.host },
-    { label: t('nodes.system'), value: `${node.os || '--'} ${node.arch || ''}`.trim() },
-    { label: t('nodes.cpuCores'), value: node.cpuCores > 0 ? node.cpuCores : '--' },
-    { label: t('nodes.deletedAt'), value: when },
-    { label: 'UUID', value: <span className="font-mono text-xs break-all">{node.uuid}</span> },
-  ]
-  return (
-    <div className="space-y-3">
-      {/* 阶段 6 收尾：归档详情与活跃详情用同一对象头形态（此处无分段工具，故不传 tools）。
-          归档徽标走 status，「清理」走 actions，host 走 meta。 */}
-      <ObjectPageHeader
-        breadcrumbs={[
-          { label: t('nodes.title'), to: '/nodes' },
-          { label: node.name },
-        ]}
-        icon={<Server className="size-5" />}
-        title={node.name}
-        status={{ tone: 'default', label: t('nodes.viewArchive') }}
-        meta={[{ label: t('nodes.ip'), value: node.host }]}
-        actions={
-          <Button variant="destructive" size="sm" onClick={onPurge} disabled={purging}>
-            {t('nodes.purge')}
-          </Button>
-        }
-        onNavigate={navigate}
-      />
-      <Panel title={t('nodes.overviewSection')}>
-        <dl className="grid gap-2 sm:grid-cols-2">
-          {rows.map((r) => (
-            <div key={r.label} className="rounded-md border px-3 py-2">
-              <dt className="text-[11px] text-muted-foreground">{r.label}</dt>
-              <dd className="mt-0.5 text-sm">{r.value}</dd>
-            </div>
-          ))}
-        </dl>
-      </Panel>
-    </div>
-  )
-}
 
 /** 右栏详情主体：身份块 + 资源仪表 + 分段 Tabs（切段稳定工具条，布局不重组）。 */
 function NodeDetailPane({
