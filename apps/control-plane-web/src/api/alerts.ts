@@ -2,87 +2,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
 
-/** 告警规则（FR-011 + FR-085）。 */
-export interface AlertRuleInfo {
-  id: number
-  uuid: string
-  name: string
-  triggerType: string
-  level: string
-  targetType: string
-  targetId: number | null
-  metric: string
-  operator: string
-  threshold: number
-  durationSec: number
-  keyword: string
-  eventMatch: string
-  channelIds: string
-  dedupWindowSec: number
-  silenceStart: string
-  silenceEnd: string
-  notifyRecover: boolean
-  notifyType: string
-  notifyTarget: string
-  enabled: boolean
-  createdAt: string
-}
-
-/** 告警事件（FR-011 + FR-085）。 */
-export interface AlertEventInfo {
-  id: number
-  ruleId: number
-  targetId: number
-  /**
-   * 实例展示名（后端按规则维度回填）：仅当规则的 targetType 为 instance 时存在。
-   * 有了它，列表就不必为了显示名字而拉全量实例列表。实例被删时缺省，前端回退显示 #id。
-   */
-  instanceName?: string
-  level: string
-  triggerType: string
-  value: number
-  /** 基线/突升突降偏离方向（up|down）；其余触发类型缺省。 */
-  direction?: string
-  message: string
-  count: number
-  resolved: boolean
-  firedAt: string
-  lastFiredAt?: string
-  resolvedAt?: string
-  acknowledged: boolean
-  acknowledgedBy?: number
-  acknowledgedAt?: string
-  read: boolean
-  rule?: { name?: string }
-}
-
-
 // 实现已迁至 @jianmanager/ui（ADR-097），此处保留 re-export 维持既有导入路径。
-import type { ChannelConfig, AlertChannelInfo } from '@jianmanager/ui/lib/alert-contracts'
+import type {
+  AlertRuleInfo,
+  CreateRuleBody,
+  UpdateRuleBody,
+  ChannelConfig,
+  AlertChannelInfo,
+} from '@jianmanager/ui/lib/alert-contracts'
 
-export type { ChannelConfig, AlertChannelInfo }
+export type { AlertRuleInfo, CreateRuleBody, UpdateRuleBody, ChannelConfig, AlertChannelInfo }
 
-/** 创建告警规则请求体。 */
-export interface CreateRuleBody {
-  name: string
-  triggerType: string
-  level: string
-  targetType: string
-  targetId?: number | null
-  metric?: string
-  operator?: string
-  threshold?: number
-  durationSec?: number
-  keyword?: string
-  eventMatch?: string
-  channelIds?: number[]
-  dedupWindowSec?: number
-  silenceStart?: string
-  silenceEnd?: string
-  notifyRecover?: boolean
-  notifyType?: string
-  notifyTarget?: string
-}
 
 // ── 规则 ──
 
@@ -109,20 +39,6 @@ export function useCreateAlertRule() {
   })
 }
 
-/** 更新告警规则的可变字段（与 CreateRuleBody 不同：触发类型/目标不可改）。 */
-export interface UpdateRuleBody {
-  id: number
-  enabled?: boolean
-  threshold?: number
-  level?: string
-  channelIds?: number[]
-  dedupWindowSec?: number
-  silenceStart?: string
-  silenceEnd?: string
-  notifyRecover?: boolean
-  keyword?: string
-  eventMatch?: string
-}
 
 export function useUpdateAlertRule() {
   const qc = useQueryClient()
