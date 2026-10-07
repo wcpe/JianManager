@@ -126,9 +126,18 @@ func BuildArgs(cfg InstanceConfig) ([]string, error) {
 		"-storageDataPath=" + cfg.StorageDataPath,
 		"-httpListenAddr=" + ListenAddr(cfg.Port),
 		"-retentionPeriod=" + cfg.RetentionPeriod,
-		// 查询边界与资源上限（架构文档 §九 起步档）：并发 2、单查询上限 10s、
+		// 查询边界与资源上限（架构文档 §九 起步档）：并发槽、单查询上限 10s、
 		// 查询时间窗上限 1d、排队上限 2s —— 宽窗查询不得抢占整机（30d 保留不受影响）。
-		"-search.maxConcurrentRequests=2",
+		// 2026-10-07 调参（实测 ✓）：worker 的扇出对同一 VL 并发打 N 个目标扫描，
+		// 162÷2×~0.3s ≈ 24.1s 与实测完全吻合 ⇒ 并发槽是全量冷查的直接瓶颈 ✗✓；
+		// 故由起步档 2 提到 8（内部扇出吃满后，整机仍受切片 CPUQuota=200% 封顶 ✗，
+		// 用户侧多查询的排队保护由 CP 侧 TTL/预热与 maxQueueDuration 承担 ✓）。
+		// 2026-10-08 再调（实测 ✓）：投影校验/对账的积压重放批次窗口可达 17-22 小时
+		// （单查 1-17s），与前台查询争抢 8 槽 ⇒ 面板查询被拖到 2-8s（绕过 worker
+		// 直测 VL 同样慢）。配合 log_index.verify 限流（在飞 2）把槽扩到 16：
+		// 后台校验仍限 2、前台留 14，不再互抢；VL 内存上限（memory.allowedBytes）
+		// 仍在 VL 侧封顶，超额并发由 VL 自行降速而非崩溃。
+		"-search.maxConcurrentRequests=16",
 		"-search.maxQueryDuration=10s",
 		"-search.maxQueryTimeRange=1d",
 		"-search.maxQueueDuration=2s",
