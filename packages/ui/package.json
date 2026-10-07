@@ -31,6 +31,7 @@
     "@xterm/xterm": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "fflate": "^0.8.3",
     "lucide-react": "^1.18.0",
     "react-grid-layout": "^1.5.3",
     "react-markdown": "^9.1.0",
