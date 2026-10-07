@@ -419,6 +419,8 @@ export * from './components/views/console/console-header-parts'
 export * from './components/views/console/metric-segment'
 export * from './components/views/console/console-kpi-parts'
 export * from './components/views/console/ConsoleLeafParts'
+export * from './components/views/console/SegmentPills'
+export * from './components/views/console/DirectorCanvas'
 // WorkbenchLeafParts 的 PageBreadcrumb 与 './components/layout' 的同名导出（类型）冲突，
 // 故显式列出其余导出；PageBreadcrumb 组件走深路径
 // '@jianmanager/ui/components/views/console/WorkbenchLeafParts'。
