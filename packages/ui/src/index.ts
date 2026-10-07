@@ -285,6 +285,8 @@ export * from './lib/client-runtime-contracts'
 export * from './components/views/client-dist/OpsShared'
 export * from './components/views/client-dist/OpsStatisticsTab'
 export * from './components/views/client-dist/OpsRealtimeTab'
+export * from './components/views/client-dist/ObsOverviewView'
+export * from './components/views/client-dist/OpsClientsTabView'
 // 显式列出而非 `export *`：`SummaryChip` 与 `./components/summary-chips` 同名但语义不同
 // （前者是可点击筛选 chip、后者是带状态等级的汇总 chip）；`ConfigSwitch` 已由
 // `./components/views/instances/ConfigSwitch` 导出。两者都不能在 barrel 里同时通配。
