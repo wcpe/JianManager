@@ -1,43 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 发压节点容量（GET /bots/load-nodes）。 */
-export interface BotLoadNodeCapacity {
-  nodeId: number
-  nodeUuid: string
-  nodeName: string
-  online: boolean
-  tunnelConnected: boolean
-  botWorkerReady: boolean
-  legacy: boolean
-  maxBots: number
-  activeBots: number
-  reservedBots: number
-  availableBots: number
-  capacityGeneration: number
-  workerEpoch?: string
-  botWorkerVersion?: string
-  runtimeSource?: string
-  rssBytes?: number
-  eventLoopP95Ms?: number
-  lastHeartbeatAt?: string
-  unavailableReason?: string
-}
+/**
+ * 发压容量与预检契约已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ */
+export type {
+  BotLoadNodeCapacity,
+  BotLoadAllocation,
+  BotLoadPreflightResult,
+} from '@jianmanager/ui/lib/bot-load-types'
+import type {
+  BotLoadNodeCapacity,
+  BotLoadPreflightResult,
+} from '@jianmanager/ui/lib/bot-load-types'
 
-/** 预检分片分配。 */
-export interface BotLoadAllocation {
-  batchId: string
-  ordinal: number
-  executorNodeId: number
-  executorNodeUuid: string
-  executorNodeName: string
-  plannedCount: number
-  connectStartAt: string
-  connectIntervalMs: number
-  idempotencyKey: string
-}
-
-/** 单条命令声明。 */
 // 命令/曲线/阈值类型已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
 import type { BotLoadCommandSchedule, BotLoadProfile, BotLoadThresholds } from '@jianmanager/ui'
 export type { BotLoadCommand, BotLoadCommandSchedule, BotLoadProfile, BotLoadThresholds } from '@jianmanager/ui'
@@ -89,30 +65,6 @@ export interface BotLoadNodesResponse {
   updatedAt: string
 }
 
-/** 预检结果（当前契约 + 可选 planned 扩展字段）。 */
-export interface BotLoadPreflightResult {
-  runId: number
-  runUuid: string
-  ready: boolean
-  planToken?: string
-  expiresAt?: string
-  targetBots: number
-  totalAvailable: number
-  allocations: BotLoadAllocation[]
-  nodeCapacities: BotLoadNodeCapacity[]
-  probe: {
-    required: false
-    connected: boolean
-    instanceId: number
-    instanceUuid: string
-    message?: string
-  }
-  estimatedDurationSeconds: number
-  warnings: Array<{ code: string; message: string }>
-  blockers: Array<{ code: string; message: string; nodeId?: number }>
-  instanceId?: number
-  commandSchedule?: BotLoadCommandSchedule
-}
 
 export interface CreateBotLoadRunRequest {
   instanceId: number
