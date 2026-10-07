@@ -64,13 +64,23 @@ func searchCacheKeyBucket(t string) string {
 	return t
 }
 
-// searchCacheKey 同参键＝**授权集合摘要（targets digest ✓）** ‖ 时间片（整分桶 ✓）‖ 过滤 ‖
-// onlineOnly ‖ order ‖ limit/maxBytes ‖ Fast。
+// searchCacheKey 同参键＝**授权集合摘要（targets digest ✓）** ‖ 时间片（整分桶 ✓） ‖ 过滤 ‖
+// onlineOnly ‖ order ‖ limit/maxBytes ‖ Fast ‖ 复用视图 ID ‖ 游标。
 //
 // 为什么不再用主体/身份入键（2026-10-07 裁定 ✓）：日志内容只取决于**授权集合**（同一集合 ⇒
 // 同一结果 ✓），越权由上游 authorizedTargets 判定（403 用例保留 ✓）；把 user/role/scope 放进键
 // 属过度保守 ✗，且会让"平台级/单实例预热"永远无法被真实用户命中 ✗。改为 targets digest 后，
 // 个人级与平台级同规则、预热条目天然共享 ✓，而**跨集合绝不命中** ✓（不同 targets ⇒ 不同 digest）。
+//
+// 为什么 ViewID 必须入键（2026-10-08 修复）：带 ViewID 的复用调用必须重新扇出以执行
+// ensureWorkerViewBinding 的 worker 绑定与 catalog 代次漂移校验（ErrViewReuseMismatch）——
+// 若与"新建视图"（ViewID 为空）的条目同键，复用调用会被缓存直接短路，漂移被静默掩盖
+// （TestCoordinatorRejectsWorkerGenerationDriftWithinView 回归）。同一 ViewID 的重复查询
+// （翻页/重查）仍可命中，语义不变。
+//
+// 为什么 Cursor 必须入键（2026-10-08 修复）：不同页的 q 只差 Cursor，若不入键则第二页起的
+// 查询全部命中第一页条目、返回同一批行与同一 NextCursor——Export 循环游标原地打转直到字节
+// 超限，把"预算充足"误判为 incomplete（TestExportAccumulatesBytesAcrossPages 回归）。
 func searchCacheKey(q Query) string {
 	return strings.Join([]string{
 		targetsDigest(q.AuthorizedTargetIDs),
@@ -82,6 +92,8 @@ func searchCacheKey(q Query) string {
 		fmt.Sprint(q.Budget.Limit),
 		fmt.Sprint(q.Budget.MaxBytes),
 		fmt.Sprint(q.Fast),
+		q.ViewID,
+		q.Cursor,
 	}, "\x1f")
 }
 
