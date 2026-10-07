@@ -78,6 +78,7 @@ import {
 } from '@jianmanager/ui/components/select'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { InstancePicker } from '@/components/InstancePicker'
+import CreateBotDialogView from '@jianmanager/ui/components/views/instances/CreateBotDialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/form-validation'
 import { useFieldGate } from '@/lib/use-field-gate'
@@ -302,7 +303,7 @@ function BotFleetTab() {
         )}
       />
 
-      <CreateBotDialog open={showCreate} onOpenChange={setShowCreate} />
+      <CreateBotDialogContainer open={showCreate} onOpenChange={setShowCreate} />
       <BotStressSessionDialog
         open={showStress}
         onOpenChange={setShowStress}
@@ -509,192 +510,48 @@ function GroupPeek({ params, onOpenBot }: { params: BotListParams; onOpenBot: (i
 
 
 
-/** 新建 Bot 对话框（沿用 FR-009 既有表单，复用 useCreateBot）。 */
-function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
+
+/** 新建 Bot 弹窗的取数接线层（ADR-097）：视图已入包，此处注入实例选择与创建 mutation。 */
+function CreateBotDialogContainer({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation()
   const create = useCreateBot()
-
-  const [name, setName] = useState('')
-  const [instanceId, setInstanceId] = useState('')
-  const [server, setServer] = useState('')
-  const [port, setPort] = useState('25565')
-  const [auth, setAuth] = useState('offline')
-  const [behavior, setBehavior] = useState('idle')
-  const [error, setError] = useState('')
-  const gate = useFieldGate()
-
-  // 千级实例只在弹窗打开时才展开：本组件是**常驻挂载**的（调用处写 `<XxxDialog open={...} />`
-  // 而非 `{open && ...}`），而 Radix 的 DialogContent 关闭时虽不挂 DOM，其 children 仍会在每次
-  // render 求值——不设门控时，每次渲染都会凭空创建 1200 个 ComboboxOption 对象。
-  // 实例候选改由 InstancePicker 走服务端搜索，不再本地拉全量再映射。
-
-  const errors = validateFields(
-    { name, instanceId, server, port },
-    {
-      name: [validateRequired],
-      instanceId: [validateRequired],
-      server: [validateRequired, validateHost],
-      port: [validateRequired, validatePort],
-    },
-  )
-
-  const resetForm = () => {
-    setName('')
-    setInstanceId('')
-    setServer('')
-    setPort('25565')
-    setAuth('offline')
-    setBehavior('idle')
-    setError('')
-    gate.reset()
-  }
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault()
-    gate.submit()
-    if (hasErrors(errors)) return
-    setError('')
-    create.mutate(
-      {
-        instanceId: Number(instanceId),
-        name,
-        config: { server, port: Number(port), auth },
-        behavior,
-      },
-      {
-        onSuccess: () => {
-          onOpenChange(false)
-          resetForm()
-        },
-        onError: (err: unknown) => {
-          const msg =
-            err instanceof Error && 'response' in err
-              ? (err as { response?: { data?: { message?: string } } }).response?.data?.message
-              : undefined
-          setError(msg || t('bots.createFailed'))
-        },
-      },
-    )
-  }
+  const [instanceId, setInstanceId] = useState<number | null>(null)
+  const [suggestedServer, setSuggestedServer] = useState('')
+  const [suggestedPort, setSuggestedPort] = useState(25565)
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
-        <DialogHeader>
-          <DialogTitle>{t('bots.createBot')}</DialogTitle>
-        </DialogHeader>
-
-        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-          <ScrollableDialogBody className="space-y-3 py-1">
-            {error && (
-              <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
-            )}
-
-            <div className="space-y-1">
-              <FieldLabel required>{t('bots.name')}</FieldLabel>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onBlur={() => gate.touch('name')}
-                placeholder="GuardBot"
-                aria-invalid={!!gate.show('name', errors.name)}
-              />
-              <FieldError error={gate.show('name', errors.name)} />
-            </div>
-
-            <div className="space-y-1">
-              <FieldLabel required>{t('bots.instance')}</FieldLabel>
-              <InstancePicker
-                value={instanceId ? Number(instanceId) : null}
-                onChange={(id, inst) => {
-                  gate.touch('instanceId')
-                  setInstanceId(id === null ? '' : String(id))
-                  // 选实例即默认连到该实例（本机回环 + 实例实际端口），避免端口填错连不进
-                  if (inst) {
-                    setServer('127.0.0.1')
-                    setPort(String(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565))
-                  }
-                }}
-                enabled={open}
-                placeholder={t('bots.selectInstance')}
-                invalid={!!gate.show('instanceId', errors.instanceId)}
-              />
-              <FieldError error={gate.show('instanceId', errors.instanceId)} />
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2 space-y-1">
-                <FieldLabel required>{t('bots.serverAddr')}</FieldLabel>
-                <Input
-                  value={server}
-                  onChange={(e) => setServer(e.target.value)}
-                  onBlur={() => gate.touch('server')}
-                  placeholder="mc.example.com"
-                  aria-invalid={!!gate.show('server', errors.server)}
-                />
-                <FieldError error={gate.show('server', errors.server)} />
-              </div>
-              <div className="space-y-1">
-                <FieldLabel required>{t('bots.port')}</FieldLabel>
-                <Input
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                  onBlur={() => gate.touch('port')}
-                  type="number"
-                  aria-invalid={!!gate.show('port', errors.port)}
-                />
-                <FieldError error={gate.show('port', errors.port)} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <FieldLabel>{t('bots.authMethod')}</FieldLabel>
-                <Select value={auth} onValueChange={setAuth}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="offline">{t('bots.offline')}</SelectItem>
-                    <SelectItem value="microsoft">{t('bots.microsoft')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <FieldLabel>{t('bots.initialBehavior')}</FieldLabel>
-                <Select value={behavior} onValueChange={setBehavior}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {BEHAVIOR_OPTIONS.map((b) => (
-                      <SelectItem key={b} value={b}>
-                        {t(`bots.${b}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </ScrollableDialogBody>
-
-          <DialogFooter className="pt-4">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                onOpenChange(false)
-                resetForm()
-              }}
-            >
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={create.isPending || hasErrors(errors)}>
-              {create.isPending ? t('common.creating') : t('common.create')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <CreateBotDialogView
+      open={open}
+      onOpenChange={onOpenChange}
+      suggestedServer={suggestedServer}
+      suggestedPort={suggestedPort}
+      creating={create.isPending}
+      instanceId={instanceId}
+      instanceSelected={instanceId !== null}
+      onInstancePick={(id, inst) => {
+        setInstanceId(id)
+        if (inst) {
+          setSuggestedServer('127.0.0.1')
+          setSuggestedPort(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565)
+        }
+      }}
+      renderInstancePicker={(args) => (
+        <InstancePicker {...args} enabled={open} placeholder={t('bots.selectInstance')} />
+      )}
+      onCreate={async (payload) => {
+        try {
+          await create.mutateAsync({
+            instanceId: instanceId ?? 0,
+            name: payload.name,
+            config: { server: payload.server, port: payload.port, auth: payload.auth },
+            behavior: payload.behavior,
+          })
+          return { ok: true }
+        } catch (err) {
+          const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+          return { ok: false, error: msg || t('bots.createFailed') }
+        }
+      }}
+    />
   )
 }
