@@ -109,9 +109,14 @@ func fedAggCacheKey(q logcoord.Query, c *gin.Context) string {
 // 并发槽**（实测第 1 次 24h 被掐在 39.99s ✗）。故：15m⇒25s、1h⇒150s、24h⇒12min；
 // 全局 20s tick 串行调度（同一时刻只有一个预热在飞 ✓），单次 25s 超时到点即放弃（不堆叠 ✗，
 // ctx 取消会让 VL 立刻放槽 ✓）。
+//
+// 单实例维度（零配置 ✓）：记录最近被真实查询过的实例（热集），对其 15m/1h 窗预热 ⇒
+// 用户切到"刚看过的实例"时直接命中，无需任何配置项 ✗；热集只保留最近 K 个、随时间淘汰 ✗。
 const (
 	fedWarmTick    = 20 * time.Second
 	fedWarmTimeout = 25 * time.Second
+	fedWarmHotKeep = 3
+	fedWarmHotTTL  = 30 * time.Minute
 )
 
 type fedWarmWindow struct {
@@ -123,6 +128,49 @@ var fedWarmWindows = []fedWarmWindow{
 	{win: 15 * time.Minute, every: 25 * time.Second},
 	{win: time.Hour, every: 150 * time.Second},
 	{win: 24 * time.Hour, every: 12 * time.Minute},
+}
+
+// 热集：最近查询过的单实例（按最近使用排序，最多 fedWarmHotKeep 个）。
+var (
+	fedWarmHotMu sync.Mutex
+	fedWarmHot   = map[uint]time.Time{}
+)
+
+// noteHotInstance 请求路径调用（常量开销 ✓）：记录单实例查询，供预热器选择窗口。
+func noteHotInstance(id uint) {
+	if id == 0 {
+		return
+	}
+	fedWarmHotMu.Lock()
+	fedWarmHot[id] = time.Now()
+	fedWarmHotMu.Unlock()
+}
+
+// hotInstances 返回最近使用、未过期的实例 id（最多 K 个 ✓）。
+func hotInstances() []uint {
+	fedWarmHotMu.Lock()
+	defer fedWarmHotMu.Unlock()
+	type pair struct {
+		id uint
+		at time.Time
+	}
+	all := make([]pair, 0, len(fedWarmHot))
+	for id, at := range fedWarmHot {
+		if time.Since(at) <= fedWarmHotTTL {
+			all = append(all, pair{id, at})
+		} else {
+			delete(fedWarmHot, id)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].at.After(all[j].at) })
+	if len(all) > fedWarmHotKeep {
+		all = all[:fedWarmHotKeep]
+	}
+	ids := make([]uint, 0, len(all))
+	for _, p := range all {
+		ids = append(ids, p.id)
+	}
+	return ids
 }
 
 func (h *LogFederationHandler) startWarmLoop() {

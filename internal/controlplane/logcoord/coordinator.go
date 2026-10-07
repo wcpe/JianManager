@@ -2,6 +2,7 @@ package logcoord
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sort"
@@ -63,23 +64,16 @@ func searchCacheKeyBucket(t string) string {
 	return t
 }
 
-// searchCacheKey 同参键＝授权主体摘要 ‖ scope ‖ 时间片（整分桶 ✓）‖ 过滤 ‖ onlineOnly ‖
-// order ‖ limit/maxBytes ‖ Fast。**跨主体绝不命中 ✗**（主体与 scope 都在键内 ✓）。
+// searchCacheKey 同参键＝**授权集合摘要（targets digest ✓）** ‖ 时间片（整分桶 ✓）‖ 过滤 ‖
+// onlineOnly ‖ order ‖ limit/maxBytes ‖ Fast。
 //
-// 平台级例外（共享键 ✓）：授权目标含通配 "*" 时，结果只取决于"平台全量"这一授权集合本身，
-// 与是哪个管理员、其 scope 摘要无关 ⇒ **键去掉 user/role 与 scope 段**，同一授权集合的多个
-// 用户共享缓存 ✓（安全等价 ✓；仅动缓存键，不碰 view 身份与越权判定 ✗）。个人级查询保持原键 ✗。
+// 为什么不再用主体/身份入键（2026-10-07 裁定 ✓）：日志内容只取决于**授权集合**（同一集合 ⇒
+// 同一结果 ✓），越权由上游 authorizedTargets 判定（403 用例保留 ✓）；把 user/role/scope 放进键
+// 属过度保守 ✗，且会让"平台级/单实例预热"永远无法被真实用户命中 ✗。改为 targets digest 后，
+// 个人级与平台级同规则、预热条目天然共享 ✓，而**跨集合绝不命中** ✓（不同 targets ⇒ 不同 digest）。
 func searchCacheKey(q Query) string {
-	principal, scope := q.PrincipalKey, q.PermissionScope
-	for _, id := range q.AuthorizedTargetIDs {
-		if id == "*" {
-			principal, scope = "*", "*"
-			break
-		}
-	}
 	return strings.Join([]string{
-		principal,
-		scope,
+		targetsDigest(q.AuthorizedTargetIDs),
 		searchCacheKeyBucket(q.FromUTC),
 		searchCacheKeyBucket(q.ToUTC),
 		normalizeFilter(q.Filter),
@@ -89,6 +83,17 @@ func searchCacheKey(q Query) string {
 		fmt.Sprint(q.Budget.MaxBytes),
 		fmt.Sprint(q.Fast),
 	}, "\x1f")
+}
+
+// targetsDigest 授权集合同摘要：排序去重后 sha256（长集合也不膨胀键 ✓；空集合用固定标记 ✓）。
+func targetsDigest(ids []string) string {
+	if len(ids) == 0 {
+		return "-"
+	}
+	sorted := append([]string(nil), ids...)
+	sort.Strings(sorted)
+	h := sha256.Sum256([]byte(strings.Join(sorted, "\x1e")))
+	return fmt.Sprintf("%x", h[:8])
 }
 
 // lookupSearchCache 命中即返回同一 SearchResponse（只读使用 ✓；未命中返回 false）。
