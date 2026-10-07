@@ -136,6 +136,12 @@ var (
 	fedWarmHot   = map[uint]time.Time{}
 )
 
+// 预热失败频控状态（进程级即可：处理器单例 ✓）。
+var (
+	fedWarmFailMu   sync.Mutex
+	fedWarmFailOnce = map[string]time.Time{}
+)
+
 // noteHotInstance 请求路径调用（常量开销 ✓）：记录单实例查询，供预热器选择窗口。
 func noteHotInstance(id uint) {
 	if id == 0 {
@@ -187,13 +193,25 @@ func (h *LogFederationHandler) startWarmLoop() {
 		ticker := time.NewTicker(fedWarmTick)
 		defer ticker.Stop()
 		last := map[time.Duration]time.Time{}
+		lastHot := map[time.Duration]time.Time{}
 		for {
 			now := time.Now()
 			for _, w := range fedWarmWindows {
 				// 串行＋按窗口间隔：到点的窗口才跑，且同一时刻至多一个在飞 ✓
 				if t, ok := last[w.win]; !ok || now.Sub(t) >= w.every {
 					last[w.win] = now
-					h.warmWindow(now.UTC(), w.win)
+					h.warmWindow(now.UTC(), w.win, nil)
+				}
+			}
+			// 热集（最近查询过的单实例 ⇒ 键为 targets digest，预热可被真实用户命中 ✓）：
+			// 只预热 15m/1h 两窗（24h 单实例成本高、不常驻 ✗），间隔复用同表 ✓。
+			for _, id := range hotInstances() {
+				for _, w := range fedWarmWindows[:2] {
+					key := w.win
+					if t, ok := lastHot[key]; !ok || time.Since(t) >= w.every {
+						lastHot[key] = time.Now()
+						h.warmWindow(now.UTC(), w.win, []string{fmt.Sprintf("inst:%d", id)})
+					}
 				}
 			}
 			<-ticker.C
@@ -201,20 +219,18 @@ func (h *LogFederationHandler) startWarmLoop() {
 	}()
 }
 
-// warmWindow 单窗口预热；任何 panic/错误都被吞掉并频控记录（每窗口每分钟最多一条 ✗）。
-// 预热器频控状态（进程级即可：处理器单例 ✓）。
-var (
-	fedWarmFailMu   sync.Mutex
-	fedWarmFailOnce = map[string]time.Time{}
-)
-
-func (h *LogFederationHandler) warmWindow(now time.Time, win time.Duration) {
+// warmWindow 单窗口预热（targets 为空 ⇒ 平台级 "*" ✓；否则为单实例集 ✓）；
+// 任何 panic/错误都被吞掉并频控记录（每窗口每分钟最多一条 ✗）。
+func (h *LogFederationHandler) warmWindow(now time.Time, win time.Duration, targets []string) {
 	defer func() { _ = recover() }()
 	ctx, cancel := context.WithTimeout(context.Background(), fedWarmTimeout)
 	defer cancel()
+	if len(targets) == 0 {
+		targets = []string{"*"}
+	}
 	q := logcoord.Query{
-		AuthorizedTargetIDs: []string{"*"},
-		PrincipalKey:        "warm", // 平台级共享键下该段被置 "*" ⇒ 不影响命中 ✓
+		AuthorizedTargetIDs: targets,
+		PrincipalKey:        "warm", // 键已改为 targets digest ⇒ 身份段不参与命中 ✓
 		PermissionScope:     "warm",
 		FromUTC:             now.Add(-win).Format(time.RFC3339),
 		ToUTC:               now.Format(time.RFC3339),
@@ -556,6 +572,15 @@ func (h *LogFederationHandler) Search(c *gin.Context) {
 	// （改为按当前条件重建视图 ✓，授权主体/覆盖校验仍严守 ✗ —— 见 resolve_fast.go）。
 	// 导出（Export，下方 L432）不置位 ⇒ 导出闸与 eager 校验语义一字不动 ✗。
 	q.Fast = true
+	// 热集登记（零配置 ✓）：FacadeSearch 是面板主路径 ⇒ 在此记录单实例查询
+	//（键已改为 targets digest ⇒ 热集预热条目可被真实用户命中 ✓）。
+	for _, tid := range q.AuthorizedTargetIDs {
+		if raw := strings.TrimPrefix(tid, "inst:"); raw != tid {
+			if id, err := strconv.ParseUint(raw, 10, 64); err == nil {
+				noteHotInstance(uint(id))
+			}
+		}
+	}
 	resp, err := h.coord.Search(c.Request.Context(), q)
 	if err != nil {
 		writeFederationError(c, err)
