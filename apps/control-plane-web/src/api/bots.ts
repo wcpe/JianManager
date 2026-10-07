@@ -28,28 +28,10 @@ export type {
 
 import api, { ensureFreshToken } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import type { BotRealtimeEvent, BotRealtimeState } from '@jianmanager/ui/lib/bot-realtime-types'
 
-
-
-/** Bot 实时事件（SSE event: bot）。 */
-export interface BotRealtimeEvent {
-  botId: number
-  botUuid: string
-  type: string
-  data: Record<string, unknown>
-  timestamp: number
-}
-
-/** 单 Bot 实时状态。 */
-export interface BotRealtimeState {
-  status?: string
-  health?: number
-  food?: number
-  behavior?: string
-  position?: { x: number; y: number; z: number }
-  events: BotRealtimeEvent[]
-  connected: boolean
-}
+// 实现已迁至 @jianmanager/ui（ADR-097），此处保留 re-export 维持既有导入路径。
+export type { BotRealtimeEvent, BotRealtimeState }
 
 export interface BotStressSessionCounts {
   total: number
