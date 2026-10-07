@@ -2,7 +2,7 @@ import { Activity, Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Activity as ActivityIcon, AlertTriangle, ChevronDown, ChevronUp, Copy, Gauge, Hammer, HardDrive, Layers, Loader2, MoreHorizontal, Play, RotateCw, Square, Users, type LucideIcon } from 'lucide-react'
+import { Activity as ActivityIcon, AlertTriangle, ChevronDown, ChevronUp, Copy, Gauge, Hammer, HardDrive, Layers, Loader2, MoreHorizontal, Play, RotateCw, Square, Users } from 'lucide-react'
 
 import { useInstance, useKillInstance, useRebuildInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
 import { usePermissionsStore } from '@/stores/permissions'
@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { cn, instanceStatusLevel } from '@jianmanager/ui'
 import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 import { MetricDivider, MetricSegment, ProbeMissingChip } from '@jianmanager/ui/components/views/console/metric-segment'
+import { KpiCard, buildWatchItems, formatNumber, formatUptime } from '@jianmanager/ui/components/views/console/console-kpi-parts'
 import {
   TAB_CARD_TYPE,
   TAB_GROUP_BREAK,
@@ -786,68 +787,4 @@ function OverviewPanel({
       </div>
     </div>
   )
-}
-
-function KpiCard({ icon: Icon, label, value, sub, progress, danger }: { icon: LucideIcon; label: string; value: string; sub?: string; progress: number; danger?: boolean }) {
-  return (
-    <div className="rounded-lg border bg-card p-2 shadow-soft">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-[11px] text-muted-foreground">{label}</p>
-          <p className={cn('mt-0.5 font-mono text-lg font-semibold tabular-nums', danger && 'text-status-danger')}>{value}</p>
-          {sub && <p className="truncate text-[10px] text-muted-foreground">{sub}</p>}
-        </div>
-        <Icon className={cn('size-4 shrink-0', danger ? 'text-status-danger' : 'text-primary')} />
-      </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-sm bg-muted">
-        <div className={cn('h-full rounded-sm', danger ? 'bg-status-danger' : progress > 80 ? 'bg-status-warning' : 'bg-primary')} style={{ width: `${Math.max(4, Math.min(100, progress))}%` }} />
-      </div>
-    </div>
-  )
-}
-
-function formatNumber(value: number | undefined, digits: number) {
-  if (value == null || Number.isNaN(value)) return '—'
-  return value.toFixed(digits)
-}
-
-/** 运行时长（秒）人性化：Xd Yh / Xh Ym / Xm / Xs；无值显 —。 */
-function formatUptime(sec: number | undefined): string {
-  if (!sec || sec <= 0) return '—'
-  const d = Math.floor(sec / 86400)
-  const h = Math.floor((sec % 86400) / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  if (d > 0) return `${d}d ${h}h`
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m`
-  return `${Math.floor(sec)}s`
-}
-
-/** 关注事项文案的翻译签名（够用即可，不引 i18next 全量类型）。 */
-type Translate = (key: string, opts?: Record<string, unknown>) => string
-
-function buildWatchItems({
-  status,
-  metrics,
-  probeConnected,
-  mcSemantics,
-  t,
-}: {
-  status?: string
-  metrics?: { tps: number; msptMillis: number; cpuPercent: number; probeAvailable: boolean }
-  probeConnected?: boolean
-  /** 是否 MC 世界语义（FR-448）：TPS/MSPT 与探针相关告警只对世界语义实例成立。 */
-  mcSemantics: boolean
-  t: Translate
-}) {
-  const items: string[] = []
-  // 走 i18n（修硬编码中文）：这些文案会出现在英文界面的「动态与告警」时间线里。
-  if (status === 'CRASHED') items.push(t('serverConsole.watch.crashed'))
-  if (status === 'STARTING' || status === 'STOPPING') items.push(t('serverConsole.watch.transition'))
-  // TPS/MSPT 与探针在线是世界语义专属（FR-448）：proxy/二进制/beacon 不该出现这些 MC 告警。
-  if (mcSemantics && metrics?.probeAvailable && metrics.tps < 18) items.push(t('serverConsole.watch.tpsLow'))
-  if (mcSemantics && metrics?.probeAvailable && metrics.msptMillis > 50) items.push(t('serverConsole.watch.msptHigh'))
-  if (metrics?.cpuPercent != null && metrics.cpuPercent > 85) items.push(t('serverConsole.watch.cpuHigh'))
-  if (mcSemantics && !probeConnected) items.push(t('serverConsole.watch.probeOffline'))
-  return items
 }
