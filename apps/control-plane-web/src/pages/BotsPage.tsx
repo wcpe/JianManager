@@ -52,6 +52,7 @@ import { BotToolbar } from '@jianmanager/ui/components/views/bots/BotToolbar'
 import { BotBatchBar } from '@jianmanager/ui/components/views/bots/BotBatchBar'
 import { BotGroupOverview } from '@jianmanager/ui/components/views/bots/BotGroupOverview'
 import { BotStressSessionDialog } from '@jianmanager/ui/components/views/bots/BotStressSessionDialog'
+import { BotDetailDialog as BotDetailDialogView } from '@jianmanager/ui/components/views/bots/BotDetailDialog'
 import { useDangerPermission } from '@/lib/danger'
 import { BotWorktableCard } from '@/components/console/BotWorktableCard'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -89,6 +90,28 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
+
+/**
+ * Bot 详情弹窗的取数接线层（ADR-097）：视图已入包，此处注入元数据、实时流与命令下发。
+ */
+function BotDetailDialog({ botId, onOpenChange }: { botId: number | null; onOpenChange: (open: boolean) => void }) {
+  const { data: bot } = useBot(botId ?? 0)
+  const realtime = useBotEvents(botId)
+  const sendCommand = useSendBotCommand()
+  return (
+    <BotDetailDialogView
+      botId={botId}
+      onOpenChange={onOpenChange}
+      bot={bot}
+      realtime={realtime}
+      onSendCommand={async (command) => {
+        await sendCommand.mutateAsync({ id: botId ?? 0, command })
+      }}
+      sending={sendCommand.isPending}
+      onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
+    />
+  )
+}
 
 const SENTINEL_ALL = 'all'
 
@@ -485,94 +508,6 @@ function GroupPeek({ params, onOpenBot }: { params: BotListParams; onOpenBot: (i
 }
 
 
-function BotDetailDialog({ botId, onOpenChange }: { botId: number | null; onOpenChange: (open: boolean) => void }) {
-  const { t } = useTranslation()
-  const { data: bot } = useBot(botId ?? 0)
-  const realtime = useBotEvents(botId)
-  const sendCommand = useSendBotCommand()
-  const [command, setCommand] = useState('')
-  const open = botId !== null
-
-  const status = realtime.status || bot?.status || ''
-  const behavior = realtime.behavior || bot?.behavior || ''
-  const health = realtime.health
-  const food = realtime.food
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    const text = command.trim()
-    if (!botId || !text) return
-    sendCommand.mutate(
-      { id: botId, command: text },
-      {
-        onSuccess: () => setCommand(''),
-        onError: () => toast.error(t('bots.commandFailed')),
-      },
-    )
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
-        <DialogHeader>
-          <DialogTitle>{bot ? bot.name : t('bots.detail')}</DialogTitle>
-        </DialogHeader>
-        <ScrollableDialogBody className="space-y-4 py-1">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <BotMetric label={t('bots.status')} value={status ? t(`bots.status_${status}`, status) : '—'} />
-            <BotMetric label={t('bots.behavior')} value={behavior ? t(`bots.${behavior}`, behavior) : '—'} />
-            <BotMetric label={t('bots.health')} value={health == null ? '—' : String(Math.round(health))} />
-            <BotMetric label={t('bots.food')} value={food == null ? '—' : String(food)} />
-          </div>
-
-          {realtime.position && (
-            <div className="rounded-lg border px-3 py-2 text-sm text-muted-foreground">
-              {t('bots.position')}: {formatPosition(realtime.position)}
-            </div>
-          )}
-
-          <form onSubmit={submit} className="flex gap-2">
-            <Input
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder={t('bots.commandPlaceholder')}
-            />
-            <Button type="submit" disabled={!command.trim() || sendCommand.isPending}>
-              <Send className="size-4" />
-              {t('bots.sendCommand')}
-            </Button>
-          </form>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-medium">{t('bots.realtimeEvents')}</span>
-              <span className="text-xs text-muted-foreground">
-                {realtime.connected ? t('bots.streamConnected') : t('bots.streamConnecting')}
-              </span>
-            </div>
-            <div className="max-h-72 overflow-auto rounded-lg border">
-              {realtime.events.length === 0 ? (
-                <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('bots.noEvents')}</p>
-              ) : (
-                <ul className="divide-y text-sm">
-                  {realtime.events.map((event, index) => (
-                    <li key={`${event.timestamp}-${index}`} className="px-3 py-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="font-medium">{t(`bots.event_${event.type}`, event.type)}</span>
-                        <span className="text-xs text-muted-foreground">{formatEventTime(event.timestamp)}</span>
-                      </div>
-                      <p className="mt-1 break-words text-muted-foreground">{formatBotEvent(event)}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </ScrollableDialogBody>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 /** 新建 Bot 对话框（沿用 FR-009 既有表单，复用 useCreateBot）。 */
 function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
