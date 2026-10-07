@@ -9,9 +9,19 @@ import type {
   UpdateRuleBody,
   ChannelConfig,
   AlertChannelInfo,
+  QQBindTaskInfo,
+  QQBindResult,
 } from '@jianmanager/ui/lib/alert-contracts'
 
-export type { AlertRuleInfo, CreateRuleBody, UpdateRuleBody, ChannelConfig, AlertChannelInfo }
+export type {
+  AlertRuleInfo,
+  CreateRuleBody,
+  UpdateRuleBody,
+  ChannelConfig,
+  AlertChannelInfo,
+  QQBindTaskInfo,
+  QQBindResult,
+}
 
 
 // ── 规则 ──
@@ -295,23 +305,6 @@ export function useCreateQQShareLink() {
 //   GET  /alerts/qq/bind-task/:taskId → {status}；仅 completed 追加 {appId, userOpenid, secretEnv}
 // 响应**绝不含 appSecret 明文**——前端只把 secretEnv（形如 ${QQ-1020001}）填进表单。
 
-/** 绑定任务创建响应：qrUrl 供渲染二维码，打开后跳 QQ 官方连接页。 */
-export interface QQBindTaskInfo {
-  taskId: string
-  qrUrl: string
-}
-
-/** 绑定任务状态：none=未开始 / pending=等待扫码 / completed=已授权 / expired=二维码过期。 */
-export type QQBindStatus = 'none' | 'pending' | 'completed' | 'expired'
-
-/** 绑定任务轮询结果；appId/userOpenid/secretEnv 只在 completed 时出现。 */
-export interface QQBindResult {
-  status: QQBindStatus
-  appId?: string
-  userOpenid?: string
-  /** 形如 ${QQ-1020001} 的引用名（密钥已由 CP 落盘，前端只填引用名，不接触明文）。 */
-  secretEnv?: string
-}
 
 /**
  * 轮询节拍：2s。
