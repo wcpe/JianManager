@@ -45,3 +45,11 @@ export interface QQBindFill {
   /** 单聊目标 user_openid。 */
   userOpenid: string
 }
+
+/** 通道创建/更新请求体（FR-085；不含 id，编辑时由调用方补）。 */
+export interface ChannelSubmitBody {
+  name: string
+  type: string
+  enabled: boolean
+  config: ChannelConfig
+}
