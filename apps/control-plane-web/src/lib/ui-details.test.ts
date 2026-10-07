@@ -60,7 +60,7 @@ function readUiStyles(): string {
 const HOVER_CARD_FILES = [
   'components/ui/panel.tsx',
   '@ui/components/views/console/NodeWorktableCard.tsx',
-  'components/console/BotWorktableCard.tsx',
+  '@ui/components/views/console/ConsoleLeafParts.tsx',
   '@ui/components/views/instances/InstanceWorktableCard.tsx',
   'components/ui/summary-chips.tsx',
   '@ui/components/views/config-explorer/ConfigRow.tsx',
