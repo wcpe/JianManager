@@ -160,10 +160,14 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	sources := make([]string, 0, len(rngs))
 	seen := make(map[string]bool, len(rngs))
 	for _, rng := range rngs {
-		if rng.Owner != first.Owner || rng.Key.UTCDay != first.Key.UTCDay {
+		// 2026-10-08 修正：合并组**允许跨 UTC 天**（窗口取各天并集，行归因按各 rng
+		// 权威谓词）——此前的"同天"防御与跨天合并改造冲突，会让整组报错并使
+		// 全部 target 标 RANGE_UNAVAILABLE（24h 跨天查询返回 0 条的生产缺陷）。
+		// 仅保留同 Owner 约束（不同分布层级的数据时间可重叠，不得合并）。
+		if rng.Owner != first.Owner {
 			return query.RangeResult{}, fmt.Errorf(
-				"vlrange: merged ranges must share owner and UTC day (got %s/%s and %s/%s)",
-				first.Owner, first.Key.UTCDay, rng.Owner, rng.Key.UTCDay)
+				"vlrange: merged ranges must share owner (got %s and %s)",
+				first.Owner, rng.Owner)
 		}
 		scopes, ok := query.MergeableScope(rng)
 		if !ok {

@@ -196,8 +196,24 @@ func TestSearchMergedFiltersDedupesAndAttributes(t *testing.T) {
 	require.True(t, res.Exhausted)
 }
 
-func TestSearchMergedRejectsMixedOwnerOrDay(t *testing.T) {
-	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: "http://127.0.0.1:1", AllowNonLoopback: true})
+// 跨天合并：窗口取各天并集、行归因跨天正确。
+// 回归守护（2026-10-08 生产缺陷）：曾因 SearchMerged 残留"同 UTC 天"防御，
+// 使 24h 跨天查询整组报错、全部 target 标 RANGE_UNAVAILABLE 返回 0 条。
+func TestSearchMergedAcrossDaysUsesUnionWindow(t *testing.T) {
+	var seenStart, seenEnd string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenStart = r.URL.Query().Get("start")
+		seenEnd = r.URL.Query().Get("end")
+		w.Header().Set("Content-Type", "application/json")
+		// 两行分属两天（09-22 与 09-23），各自由对应 rng 的谓词接受。
+		w.Write([]byte(
+			`{"_time":"2026-09-22T20:00:00Z","_msg":"d1","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}` + "\n" +
+				`{"_time":"2026-09-23T05:00:00Z","_msg":"d2","event_id":"e2","log_source_id":"src-b","source_generation":"gen-b","projection_generation":"pgen-B-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h2"}` + "\n",
+		))
+	}))
+	defer srv.Close()
+
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL, AllowNonLoopback: true})
 	require.NoError(t, err)
 	client, err := New(vl)
 	require.NoError(t, err)
@@ -206,17 +222,39 @@ func TestSearchMergedRejectsMixedOwnerOrDay(t *testing.T) {
 	day2 := scopedRange("inst:2", "src-b", "gen-b", []string{"pgen-B-1"}, 100)
 	day2.Key.UTCDay = "2026-09-23"
 
-	_, err = client.SearchMerged(context.Background(), []query.AuthoritativeRange{day1, day2}, query.RangeQuery{})
-	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "share owner and UTC day"))
+	res, err := client.SearchMerged(context.Background(), []query.AuthoritativeRange{day1, day2}, query.RangeQuery{
+		TimeRange: query.TimeRange{FromUTC: "2026-09-22T12:00:00Z", ToUTC: "2026-09-23T12:00:00Z"},
+		Budget:    query.Budget{Limit: 100, MaxBytes: 1 << 20},
+	})
+	require.NoError(t, err, "跨天合并必须被接受（回归：曾整组报错返回 0 条）")
+	require.Len(t, res.Items, 2, "两天的行都应归因保留")
+	// 窗口 = 各天并集 ∩ TimeRange。
+	require.Equal(t, "2026-09-22T12:00:00Z", seenStart)
+	require.Equal(t, "2026-09-23T12:00:00Z", seenEnd)
+}
 
-	// 无来源约束的 range 被拒绝（不放大可见范围）。Owner/天同日，仅来源不可枚举。
+// 混 Owner → 拒绝（不同分布层级的数据时间可重叠，不得合并）。
+func TestSearchMergedRejectsMixedOwner(t *testing.T) {
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: "http://127.0.0.1:1", AllowNonLoopback: true})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+
+	hot := scopedRange("inst:1", "src-a", "gen-a", []string{"pgen-A-1"}, 100)
+	cold := scopedRange("inst:2", "src-b", "gen-b", []string{"pgen-B-1"}, 100)
+	cold.Owner = catalog.OwnerCold
+
+	_, err = client.SearchMerged(context.Background(), []query.AuthoritativeRange{hot, cold}, query.RangeQuery{})
+	require.Error(t, err)
+	require.True(t, strings.Contains(err.Error(), "share owner"))
+
+	// 无来源约束的 range 被拒绝（不放大可见范围）。
 	bare := query.AuthoritativeRange{
 		TargetID: "inst:3",
 		Key:      catalog.PartitionKey{UTCDay: "2026-09-22"},
 		Owner:    catalog.OwnerHot,
 	}
-	_, err = client.SearchMerged(context.Background(), []query.AuthoritativeRange{day1, bare}, query.RangeQuery{})
+	_, err = client.SearchMerged(context.Background(), []query.AuthoritativeRange{hot, bare}, query.RangeQuery{})
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "no expressible source scope"))
 }
