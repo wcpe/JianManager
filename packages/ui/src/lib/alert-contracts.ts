@@ -144,3 +144,8 @@ export interface UpdateRuleBody {
   keyword?: string
   eventMatch?: string
 }
+
+/** 规则提交载荷：创建与更新的字段集不同（编辑时触发类型/目标不可改），用 mode 区分。 */
+export type RuleSubmitPayload =
+  | { mode: 'create'; body: CreateRuleBody }
+  | { mode: 'update'; body: UpdateRuleBody }
