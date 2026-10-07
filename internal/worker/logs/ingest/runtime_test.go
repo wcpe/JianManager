@@ -432,8 +432,10 @@ func TestOwnerChangeDuringVerificationCannotPublishToNewOwner(t *testing.T) {
 	switched := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 注入「验证期间换主」的时点必须锚定在**校验查询**上：代次占用探测（见
-		// nextFreeProjectionGeneration）走的是同一个端点但没有时间窗，它不是验证。
-		if r.URL.Path == "/select/logsql/query" && r.URL.Query().Get("start") != "" && !switched {
+		// nextFreeProjectionGeneration）走的是同一个端点，其特征为 `| fields _time | limit 1`
+		// （2026-10-08 起也带显式时间窗），校验查询才带 `_msg` 等完整字段列表——按查询内容
+		// 区分，不再依赖「探测无时间窗」这一已变更的实现细节。
+		if r.URL.Path == "/select/logsql/query" && strings.Contains(r.URL.Query().Get("query"), "_msg") && !switched {
 			switched = true
 			rec := catalog.NewStableRecord(key, catalog.OwnerCold, 2, "cold-after-switch")
 			require.NoError(t, cat.AppendJournal(catalog.JournalEntry{Key: key, Record: rec, AuthorityCommit: true}))

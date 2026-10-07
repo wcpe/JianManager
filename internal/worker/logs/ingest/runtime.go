@@ -5989,6 +5989,10 @@ const (
 	// projectionProbeTimeout 是单次占用探测的超时。探测只是「避免重名」的保障，不允许把投递卡在
 	// 网络上，故用远小于校验窗口（默认 5 分钟）的短超时。
 	projectionProbeTimeout = 5 * time.Second
+	// projectionProbeWindow 是占用探测的时间窗（全保留期 + 余量）：retention 默认 30d，
+	// 更早的数据已被 VL 淘汰、不可能再被本进程写入的批次读到；VL 侧单查窗口上限
+	// （-search.maxQueryTimeRange）必须不小于它，否则探测会被 400 拒绝。
+	projectionProbeWindow = 31 * 24 * time.Hour
 )
 
 // nextFreeProjectionGeneration 返回该源在 VL 中尚未出现过的物理代次名。
@@ -6119,12 +6123,22 @@ func (m *Manager) projectionGenerationUsed(ctx context.Context, client *vlsup.Cl
 	if client == nil {
 		return false, nil
 	}
-	// 选择器与写入/校验同口径（源 + 来源代次），但不带时间窗：同一名字在任何一天的旧行都会
-	// 让「整窗重发」的校验失败，故占用判定必须覆盖该源的全部数据。
+	// 选择器与写入/校验同口径（源 + 来源代次），窗口显式取**全保留期**
+	// （retention 30d + 1d 余量）：同一名字在任何一天的旧行都会让「整窗重发」的
+	// 校验失败，故占用判定必须覆盖该源的全部数据。
+	//
+	// 2026-10-08 修复：此前不带 start/end，VL 以默认全时段（[1677-09-21, 2262-04-11]）
+	// 处理并被 `-search.maxQueryTimeRange` 以 400 拒绝 → 「按未占用继续」→ 重名
+	// 防护静默失效（生产日志可查）。显式有界后探测恢复有效，且不再依赖 VL 默认值。
 	selector := "projection_generation:=" + strconv.Quote(generation) +
 		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
 		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
-	params := url.Values{"query": {selector + " | fields _time | limit 1"}}
+	now := time.Now().UTC()
+	params := url.Values{
+		"query": {selector + " | fields _time | limit 1"},
+		"start": {now.Add(-projectionProbeWindow).Format(time.RFC3339Nano)},
+		"end":   {now.Format(time.RFC3339Nano)},
+	}
 	// Q3（2026-10-03 现场 1364/min）：**代次占用探测也是投影查询** ✗ —— 它发生在每次取新代次时
 	// （重放的每一天、每个源各一次），此前**完全没走天花板闸** ✓。现在并入同一 limiter：
 	// 与校验查询共享速率/在飞上限（天花板语义 ⇒ 正常路径零等待 ✓）。

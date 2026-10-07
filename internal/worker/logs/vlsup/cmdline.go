@@ -137,9 +137,16 @@ func BuildArgs(cfg InstanceConfig) ([]string, error) {
 		// 直测 VL 同样慢）。配合 log_index.verify 限流（在飞 2）把槽扩到 16：
 		// 后台校验仍限 2、前台留 14，不再互抢；VL 内存上限（memory.allowedBytes）
 		// 仍在 VL 侧封顶，超额并发由 VL 自行降速而非崩溃。
+		//
+		// 2026-10-08 三调（查询时间窗 1d → 31d，实测 ✓）：投影代次**占用探测**必须
+		// 覆盖该源的全部保留期（同一代次名在任意一天有旧行都会让「整窗重发」的校验
+		// 失败），此前不带时间窗的探测被 VL 以 400 `too big time range selected`
+		// （[1677-09-21, 2262-04-11] 全时段）拒绝 → 「按未占用继续」→ 重名防护静默
+		// 失效（生产日志可查）。31d = retention 30d + 1d 余量；前台查询的窗口由
+		// worker 侧合并段切分钳在 ≤24h，不受本次放宽影响。
 		"-search.maxConcurrentRequests=16",
 		"-search.maxQueryDuration=10s",
-		"-search.maxQueryTimeRange=1d",
+		"-search.maxQueryTimeRange=31d",
 		"-search.maxQueueDuration=2s",
 	}
 	if cache := cfg.EffectiveCacheBytes(); cache > 0 {
