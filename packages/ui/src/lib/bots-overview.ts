@@ -9,24 +9,12 @@ import type { BotListParams, BotSummary, BotSummaryGroup } from './bot'
 export const BOT_STATUSES = ['pending', 'connecting', 'connected', 'disconnected', 'error', 'stopped'] as const
 export type BotStatusKind = (typeof BOT_STATUSES)[number]
 
-/** 概览卡片用的状态计数：在线=connected，连接中=connecting，异常=error。 */
-export interface BotStatusCounts {
-  total: number
-  online: number
-  connecting: number
-  error: number
-}
-
-/** 从全局摘要（无 groupBy）提取概览卡片计数。byStatus 缺失维度按 0 处理。 */
-export function statusCounts(summary?: BotSummary): BotStatusCounts {
-  const by = summary?.byStatus ?? {}
-  return {
-    total: summary?.total ?? 0,
-    online: by.connected ?? 0,
-    connecting: by.connecting ?? 0,
-    error: by.error ?? 0,
-  }
-}
+/**
+ * 概览卡片计数与派生函数与 bot-list 同源（此前两份实现逐字重复，此处收口为转发，
+ * 对外仍以原导出名提供）。
+ */
+export type { BotStatusCounts } from './bot-list'
+export { summaryCounts as statusCounts } from './bot-list'
 
 /** 健康条的一段：占比 0~1，用于按比例渲染宽度。 */
 export interface HealthSegment {
