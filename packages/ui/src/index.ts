@@ -282,11 +282,17 @@ export * from './components/views/bot-load/CommandPlanEditor'
 export * from './lib/client-dist-stats-contracts'
 export * from './lib/client-dist-events-contracts'
 export * from './lib/client-runtime-contracts'
+export * from './lib/client-dist-machines-contracts'
 export * from './components/views/client-dist/OpsShared'
 export * from './components/views/client-dist/OpsStatisticsTab'
 export * from './components/views/client-dist/OpsRealtimeTab'
 export * from './components/views/client-dist/ObsOverviewView'
 export * from './components/views/client-dist/OpsClientsTabView'
+export * from './components/views/client-dist/MachineListPanelView'
+export * from './components/views/client-dist/MachineTimelineView'
+// 显式列出而非 `export *`：`fmtBytes` / `fmtTime` 与 `./components/views/client-dist/OpsShared` 同名（口径不同），
+// 需要机器清单版格式化函数的调用方走深路径 `@jianmanager/ui/components/views/client-dist/machine-format`。
+export { resultBadge, lagBadge } from './components/views/client-dist/machine-format'
 // 显式列出而非 `export *`：`SummaryChip` 与 `./components/summary-chips` 同名但语义不同
 // （前者是可点击筛选 chip、后者是带状态等级的汇总 chip）；`ConfigSwitch` 已由
 // `./components/views/instances/ConfigSwitch` 导出。两者都不能在 barrel 里同时通配。
