@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@jianmanager/ui/components/button'
 import {
@@ -34,11 +34,18 @@ export type CreateBotOutcome = { ok: true } | { ok: false; error: string }
  * 若一律关窗就会留下一个永远 pending 的 Bot（两侧零反馈）。故 `onCreate` 用 `ok:false`
  * 区分这种情形，视图据此留在弹窗内显示原因而非静默关闭。
  */
+/** 实例选择器插槽参数（无预设实例的场景，如全局 Bot 管理页）。 */
+export interface CreateBotInstancePickerArgs {
+  value: number | null
+  /** 选中实例时一并回传其 serverPort，用于自动填充端口。 */
+  onChange: (id: number | null, inst?: { serverPort?: number }) => void
+}
+
 export interface CreateBotDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** 归属实例的展示名（只读展示）。 */
-  instanceName: string
+  /** 归属实例的展示名（只读展示）；提供 `renderInstancePicker` 时忽略。 */
+  instanceName?: string
   /** 建议的连接地址（外壳按节点 host 与实例端口算出）。 */
   suggestedServer: string
   /** 建议的端口。 */
@@ -53,6 +60,17 @@ export interface CreateBotDialogProps {
     auth: string
     behavior: string
   }) => Promise<CreateBotOutcome>
+  /**
+   * 实例选择器插槽：提供时替代只读实例名（全局 Bot 管理页需先选实例）。
+   * 千级实例须走服务端搜索，故由外壳注入。
+   */
+  renderInstancePicker?: (args: CreateBotInstancePickerArgs) => ReactNode
+  /** 插槽场景下实例是否已选（参与必填校验）。 */
+  instanceSelected?: boolean
+  /** 插槽场景下的当前实例 id（受控，由外壳持有）。 */
+  instanceId?: number | null
+  /** 插槽选中实例时回调（外壳据此更新实例 id 与建议连接地址）。 */
+  onInstancePick?: (id: number | null, inst?: { serverPort?: number }) => void
 }
 
 export default function CreateBotDialog({
@@ -63,6 +81,10 @@ export default function CreateBotDialog({
   suggestedPort,
   creating = false,
   onCreate,
+  renderInstancePicker,
+  instanceSelected = true,
+  instanceId = null,
+  onInstancePick,
 }: CreateBotDialogProps) {
   const { t } = useTranslation()
 
@@ -130,8 +152,15 @@ export default function CreateBotDialog({
             )}
 
             <div className="space-y-1">
-              <FieldLabel>{t('bots.instance')}</FieldLabel>
-              <Input value={instanceName} disabled readOnly />
+              <FieldLabel required={!!renderInstancePicker}>{t('bots.instance')}</FieldLabel>
+              {renderInstancePicker ? (
+                renderInstancePicker({ value: instanceId, onChange: (id, inst) => onInstancePick?.(id, inst) })
+              ) : (
+                <Input value={instanceName ?? ''} disabled readOnly />
+              )}
+              {renderInstancePicker && !instanceSelected && (
+                <FieldError error={t('validation.required')} />
+              )}
             </div>
 
             <div className="space-y-1">
