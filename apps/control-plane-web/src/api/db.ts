@@ -13,24 +13,11 @@ export interface DbTableInfo {
   rowCount: number
 }
 
-/** 一列的定义：名称 / 数据库类型 / 是否敏感（敏感列值已脱敏）。 */
-export interface DbColumn {
-  name: string
-  type: string
-  sensitive: boolean
-}
-
-/** GET /db/tables/:name/rows 响应：列定义 + 当前页行 + 分页元信息。 */
-export interface DbRowsResult {
-  table: string
-  columns: DbColumn[]
-  /** 行集合，键为列名；值类型随列而定（敏感列已被替换为打码占位）。 */
-  rows: Array<Record<string, unknown>>
-  page: number
-  pageSize: number
-  total: number
-}
-
+/**
+ * 数据库浏览契约（FR-084）已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ */
+export type { DbColumn, DbRowsResult } from '@jianmanager/ui/lib/db-contracts'
+import type { DbRowsResult } from '@jianmanager/ui/lib/db-contracts'
 /** 行查询参数：分页 / 排序 / 简单过滤（列必须命中表列，否则后端忽略）。 */
 export interface DbRowsParams {
   page?: number
