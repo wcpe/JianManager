@@ -414,6 +414,19 @@ export * from './components/views/console/sidebar-link'
 export * from './components/views/console/console-header-parts'
 export * from './components/views/console/metric-segment'
 export * from './components/views/console/console-kpi-parts'
+export * from './components/views/console/ConsoleLeafParts'
+// WorkbenchLeafParts 的 PageBreadcrumb 与 './components/layout' 的同名导出（类型）冲突，
+// 故显式列出其余导出；PageBreadcrumb 组件走深路径
+// '@jianmanager/ui/components/views/console/WorkbenchLeafParts'。
+export {
+  DirectorAddSceneMenu,
+  SuperWorkbenchToolbar,
+  type DirectorAddSceneMenuProps,
+  type PageBreadcrumbProps,
+  type RenderRouterLink,
+  type RouterLinkArgs,
+  type SuperWorkbenchToolbarProps,
+} from './components/views/console/WorkbenchLeafParts'
 export * from './lib/artifact-cache'
 export * from './lib/attribution'
 export * from './lib/backup'
