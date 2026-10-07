@@ -354,3 +354,113 @@ export * from './components/views/console/SidebarNavLink'
 export * from './components/views/console/WorkspaceSidebar'
 export * from './components/views/console/ConsoleSidebar'
 export * from './components/views/console/sidebar-link'
+export * from './lib/artifact-cache'
+export * from './lib/attribution'
+export * from './lib/backup'
+export * from './lib/bot-health'
+// 显式列出而非 `export *`：`BotStatusKind` 与 `./lib/bots-overview` 的后端状态枚举同名但语义不同
+// （此处是前端语义分桶 online/connecting/offline/error）；需要它的调用方走深路径 `@jianmanager/ui/lib/bot-list`。
+export {
+  indexBotBadgesByInstance,
+  botStatusKind,
+  summaryCounts,
+  groupBots,
+  parseBotConfig,
+  suggestBotServer,
+} from './lib/bot-list'
+export type { InstanceBotBadge, BotStatusCounts, BotGroupBy, BotGroup } from './lib/bot-list'
+export * from './lib/bot'
+export * from './lib/breadcrumb'
+export * from './lib/business-actions'
+export * from './lib/business'
+export * from './lib/clipboard'
+export * from './lib/color-contrast'
+export * from './lib/combobox'
+export * from './lib/command-palette'
+export * from './lib/console-ansi'
+export * from './lib/console-command-history'
+export * from './lib/console-completion'
+export * from './lib/console-filter'
+export * from './lib/console-line-buffer'
+export * from './lib/console-log-line'
+export * from './lib/console-search'
+export * from './lib/console-selection'
+export * from './lib/console-stack-block'
+export * from './lib/console-wrap'
+export * from './lib/crash'
+export * from './lib/cron'
+export * from './lib/economy'
+export * from './lib/economy-view'
+export * from './lib/file-browser-tree'
+export * from './lib/file-browser-types'
+export * from './lib/file-sort'
+// 显式列出而非 `export *`：`FieldError` 与 `./components/field-label` 的展示组件同名但语义不同
+// （此处是校验错误文本类型）；需要它的调用方走深路径 `@jianmanager/ui/lib/form-validation`。
+export {
+  validateRequired,
+  minLength,
+  validatePort,
+  validatePositiveInt,
+  validateNonNegativeNumber,
+  validateResourceLimitNumber,
+  validateAbsPath,
+  validateUrl,
+  validateEnvRef,
+  validateHost,
+  validateFields,
+  hasErrors,
+} from './lib/form-validation'
+export type { FieldRules } from './lib/form-validation'
+export * from './lib/instance-batch'
+export * from './lib/instance-glow'
+export * from './lib/instance-group-path'
+export * from './lib/instance-group-tree'
+export * from './lib/instance-group'
+// 显式列出而非 `export *`：`DragPayload` 与 `./lib/explorer-clipboard-bus` 的同名类型语义不同
+// （此处是工作台卡拖拽载荷）；需要它的调用方走深路径 `@jianmanager/ui/lib/instance-library`。
+export {
+  WORKSPACE_DND_MIME,
+  encodeDragPayload,
+  parseDragPayload,
+  dragPayloadToCards,
+  dedupeCards,
+} from './lib/instance-library'
+export * from './lib/instance-metrics'
+export * from './lib/instance-rolling'
+export * from './lib/instance-status'
+export * from './lib/instance-tags'
+export * from './lib/managed-process'
+export * from './lib/metrics-availability'
+export * from './lib/metric-series'
+// 不导出：该模块仅有的 `fmtBytes` 与 `./components/views/client-dist/OpsShared` 同名（两者格式口径不同），
+// 需要它的调用方走深路径 `@jianmanager/ui/lib/metrics-format`。
+export * from './lib/node-ports'
+export * from './lib/obs-window'
+export * from './lib/paths'
+export * from './lib/player-trend'
+export * from './lib/player'
+export * from './lib/proxy-registration'
+export * from './lib/ranking'
+export * from './lib/release-notes-link'
+export * from './lib/schedule'
+// 显式列出而非 `export *`：`HoverPrefetcher` 与 `./lib/instance-prefetch` 的同名类型语义不同；
+// 需要它的调用方走深路径 `@jianmanager/ui/lib/server-selection`。
+export type { StoredInstance } from './lib/server-selection'
+export * from './lib/server-state'
+export * from './lib/shortcuts'
+export * from './lib/slo'
+export * from './lib/stat-card'
+export * from './lib/tone'
+export * from './lib/use-card-columns'
+export * from './lib/use-debounced'
+export * from './lib/use-field-gate'
+// 显式列出而非 `export *`：`VirtualWindow` / `VirtualWindowInput` 与 `./lib/logs-filters` 的同名类型语义不同
+// （此处是通用虚拟列表窗口、后者是日志中心专用）；需要它们的调用方走深路径 `@jianmanager/ui/lib/virtual-list`。
+export {
+  virtualWindow,
+  virtualWindowVaried,
+  useVirtualRows,
+} from './lib/virtual-list'
+export type { VirtualWindowVariedInput } from './lib/virtual-list'
+export * from './lib/workspace-card'
+export * from './lib/workspace-preset'
