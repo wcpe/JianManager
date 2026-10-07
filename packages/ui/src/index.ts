@@ -275,6 +275,10 @@ export * from './lib/webkit-entry-adapter'
 export * from './lib/client-dist-query'
 export * from './lib/logs-filters'
 export * from './lib/schedule-form'
+export * from './lib/db-contracts'
+export * from './lib/db-rows-view'
+export * from './components/views/console/NodeWorktableCard'
+export * from './components/views/bot-load/CommandPlanEditor'
 // 显式列出而非 `export *`：`SummaryChip` 与 `./components/summary-chips` 同名但语义不同
 // （前者是可点击筛选 chip、后者是带状态等级的汇总 chip）；`ConfigSwitch` 已由
 // `./components/views/instances/ConfigSwitch` 导出。两者都不能在 barrel 里同时通配。
