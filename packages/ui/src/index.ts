@@ -504,8 +504,25 @@ export * from './lib/ranking'
 export * from './lib/release-notes-link'
 export * from './lib/schedule'
 // 显式列出而非 `export *`：`HoverPrefetcher` 与 `./lib/instance-prefetch` 的同名类型语义不同；
-// 需要它的调用方走深路径 `@jianmanager/ui/lib/server-selection`。
-export type { StoredInstance } from './lib/server-selection'
+// server-selection 的 store 与类型（FR-240 / FR-293）。
+export type { StoredInstance, StorableInstance, HoverPrefetcher } from './lib/server-selection'
+export {
+  FAVORITES_KEY,
+  FAVORITES_LIMIT,
+  getFavoriteServers,
+  getRecentServers,
+  RECENT_KEY,
+  RECENT_LIMIT,
+  recordRecentServer,
+  removeServer,
+  subscribeServerSelection,
+  toStored,
+  toggleFavoriteServer,
+  useFavoriteServers,
+  useRecentServers,
+} from './lib/server-selection'
+export * from './lib/import-server-path'
+export * from './lib/file-sources'
 export * from './lib/server-state'
 export * from './lib/shortcuts'
 export * from './lib/slo'
