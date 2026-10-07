@@ -59,7 +59,7 @@ function readUiStyles(): string {
 /** 既参与 hover 抬升、又需在 FR-176 去位移的卡片/行原语。 */
 const HOVER_CARD_FILES = [
   'components/ui/panel.tsx',
-  'components/console/NodeWorktableCard.tsx',
+  '@ui/components/views/console/NodeWorktableCard.tsx',
   'components/console/BotWorktableCard.tsx',
   '@ui/components/views/instances/InstanceWorktableCard.tsx',
   'components/ui/summary-chips.tsx',
