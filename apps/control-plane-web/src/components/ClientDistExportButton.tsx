@@ -1,8 +1,6 @@
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Download } from 'lucide-react'
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入导出实现与结果回执（受控化）。
 import { toast } from 'sonner'
-import { Button } from '@jianmanager/ui/components/button'
+import { ClientDistExportButton as ClientDistExportButtonView } from '@jianmanager/ui/components/views/client-dist/EmbeddedUpdaterParts'
 import {
   exportClientDistCSV,
   saveClientDistCSV,
@@ -16,28 +14,18 @@ interface ClientDistExportButtonProps {
   size?: 'xs' | 'sm' | 'default' | 'lg' | 'icon' | 'icon-sm' | 'icon-lg'
 }
 
+/** 分发数据导出按钮的接线层：注入导出端点与 toast 回执。 */
 export default function ClientDistExportButton({ kind, filters, size = 'sm' }: ClientDistExportButtonProps) {
-  const { t } = useTranslation()
-  const [exporting, setExporting] = useState(false)
-
-  const runExport = async () => {
-    setExporting(true)
-    try {
-      const result = await exportClientDistCSV(kind, filters)
-      saveClientDistCSV(result.blob, result.filename)
-      toast.success(t('clientDistExport.success'))
-    } catch (error) {
-      const status = (error as { response?: { status?: number } }).response?.status
-      toast.error(status === 429 ? t('clientDistExport.rateLimited') : t('clientDistExport.failed'))
-    } finally {
-      setExporting(false)
-    }
-  }
-
   return (
-    <Button type="button" variant="outline" size={size} disabled={exporting} onClick={runExport}>
-      <Download className="size-3.5" />
-      {exporting ? t('clientDistExport.exporting') : t('clientDistExport.button')}
-    </Button>
+    <ClientDistExportButtonView
+      kind={kind}
+      filters={filters}
+      size={size}
+      onExport={async (k, f) => {
+        const result = await exportClientDistCSV(k as ClientDistExportKind, f as ClientDistExportFilters)
+        saveClientDistCSV(result.blob, result.filename)
+      }}
+      onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
+    />
   )
 }
