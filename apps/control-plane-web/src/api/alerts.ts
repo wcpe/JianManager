@@ -56,39 +56,11 @@ export interface AlertEventInfo {
   rule?: { name?: string }
 }
 
-/** 通道连接配置（凭证子字段经 ${ENV} 引用）。 */
-export interface ChannelConfig {
-  url?: string
-  token?: string
-  chatId?: string
-  host?: string
-  port?: number
-  username?: string
-  password?: string
-  from?: string
-  to?: string
-  /** QQ 机器人 AppID（FR-494，明文）。 */
-  appId?: string
-  /** QQ 机器人密钥（FR-494，须 ${ENV_VAR} 引用）。 */
-  appSecret?: string
-  /** QQ 投递目标类型：仅 c2c=单聊（FR-494；group 已被平台拒绝，前端不再暴露）。 */
-  targetType?: string
-  /** QQ 目标 user_openid（单聊）（FR-494，明文）；扫码绑定时自动填入。 */
-  targetId?: string
-  /** QQ 开放平台 API 根地址（FR-494，可选，留空取后端默认值）。 */
-  baseUrl?: string
-}
 
-/** 通知通道（FR-085）。 */
-export interface AlertChannelInfo {
-  id: number
-  uuid: string
-  name: string
-  type: string
-  enabled: boolean
-  config: string
-  createdAt: string
-}
+// 实现已迁至 @jianmanager/ui（ADR-097），此处保留 re-export 维持既有导入路径。
+import type { ChannelConfig, AlertChannelInfo } from '@jianmanager/ui/lib/alert-contracts'
+
+export type { ChannelConfig, AlertChannelInfo }
 
 /** 创建告警规则请求体。 */
 export interface CreateRuleBody {

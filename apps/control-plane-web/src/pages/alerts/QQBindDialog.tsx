@@ -21,15 +21,11 @@ import {
   scrollableDialogContentClass,
 } from '@jianmanager/ui/components/scrollable-dialog'
 import { QQBindQrCode } from './qq-badge'
+import type { QQBindFill } from '@jianmanager/ui/lib/alert-contracts'
 
-/** 扫码结果回填载荷：appSecret 位置放的是后端返回的**引用名**（secretEnv），不是明文密钥。 */
-export interface QQBindFill {
-  appId: string
-  /** 形如 ${QQ-102000001} 的 ${ENV} 引用名（密钥已由 CP 落盘，前端不接触明文）。 */
-  secretEnv: string
-  /** 单聊目标 user_openid。 */
-  userOpenid: string
-}
+// 实现已迁至 @jianmanager/ui（ADR-097），此处保留 re-export 维持既有导入路径。
+export type { QQBindFill }
+
 
 /** 弹窗当前所处的阶段（同一时刻只展示一条状态文案）。 */
 type BindPhase =
