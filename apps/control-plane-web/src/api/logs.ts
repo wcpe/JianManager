@@ -1,36 +1,12 @@
-// 说明（2026-10-29）：本文件原本还导出 useLogs / useLegacyLogs / fetchLogCursorPage /
-// exportLogs / exportCurrentLogPage —— 它们都直接请求 CP 的 `/logs`、`/logs/export`、
-// `/logs/legacy`，而这三个端点在 CP `logs` 表删除后已不存在，故一并删除。
-//
-// 保留的是**类型与纯工具**：LogEntry / LogQueryParams 等仍被日志中心、控制台历史、
-// 联邦查询与实例控制台使用；downloadLogBlob / sameLogItems 是联邦导出复用的纯函数，
-// 与“日志从哪来”无关。日志数据现在只有两个来源：VL 联邦（实例）与进程日志文件（平台）。
+import { useQuery } from '@tanstack/react-query'
+import api from '@/api/client'
 
 /** 单条日志（实例运行日志或平台运行日志，FR-049）。 */
 // 日志条目类型已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
 import type { LogEntry } from '@jianmanager/ui'
 export type { LogEntry } from '@jianmanager/ui'
-/** 日志查询筛选条件（DB 侧过滤 + 分页，FR-049/FR-050）。 */
-export interface LogQueryParams {
-  /**
-   * 主视图：平台仅 CP；节点/实例聚合 Worker 与实例；all 仅平台管理员。
-   *
-   * 曾有 `legacy`（CP `logs` 表的切换前存量），随该表删除而下线（2026-10-29）。
-   */
-  view?: 'platform' | 'node_instance' | 'all'
-  source?: string
-  level?: string
-  instanceId?: number
-  nodeId?: number
-  /** 关键字，匹配 message。 */
-  keyword?: string
-  /** 起始时间（RFC3339）。 */
-  from?: string
-  /** 结束时间（RFC3339）。 */
-  to?: string
-  page?: number
-  pageSize?: number
-}
+export type { LogQueryParams } from '@jianmanager/ui'
+import type { LogQueryParams } from '@jianmanager/ui'
 
 /** 日志分页响应。 */
 export interface LogPage {
@@ -68,27 +44,74 @@ export interface LogCursorPage {
  * 不走 useQuery：回溯是「按用户滚动逐页累积」的命令式流程，缓存键会随 cursor 变化而无限增长，
  * 且页与页之间必须严格串行（上一页的 nextCursor 是下一页的入参），交给 react-query 反而更绕。
  */
-/** 仅在请求仍属于当前页面时下载，卸载或用户取消后不得偷偷交付附件。 */
-export function downloadLogBlob(blob: Blob, prefix: string, signal?: AbortSignal): void {
-  signal?.throwIfAborted()
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `${prefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`
-  anchor.click()
-  // 等浏览器消费点击后再回收，避免真实浏览器中附件偶发为空。
-  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+export async function fetchLogCursorPage(params: LogCursorParams): Promise<LogCursorPage> {
+  const { data } = await api.get<LogCursorPage>('/logs', { params })
+  return data
 }
 
-/** 对比完整原始行而非虚拟挂载行或展示映射；键顺序不影响内容身份。 */
-export function sameLogItems(left: readonly unknown[], right: readonly unknown[]): boolean {
-  const canonical = (value: unknown): string => {
-    if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
-    if (value && typeof value === 'object') {
-      return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, v]) => `${JSON.stringify(key)}:${canonical(v)}`).join(',')}}`
-    }
-    return JSON.stringify(value) ?? 'null'
-  }
-  return canonical(left) === canonical(right)
+/** useLogs 可选项。 */
+export interface UseLogsOptions {
+  /**
+   * 自动重拉间隔（ms）；用于「实时跟随」(tail, FR-150)。
+   * 传 false 或省略则不轮询，仅在 params 变化时取数。
+   */
+  refetchInterval?: number | false
+  enabled?: boolean
+}
+
+/**
+ * 分页查询日志。
+ * 过滤与分页全部在后端 DB 完成，不全量序列化（FR-049）。
+ * keepPreviousData 让翻页/改筛选时旧页保留，避免表格闪烁。
+ * 传 refetchInterval 时按间隔自动重拉，实现实时跟随（FR-150）。
+ */
+export function useLogs(params: LogQueryParams, options: UseLogsOptions = {}) {
+  return useQuery({
+    queryKey: ['logs', params],
+    queryFn: async () => {
+      const { data } = await api.get<LogPage>('/logs', { params })
+      return data
+    },
+    placeholderData: (prev) => prev,
+    refetchInterval: options.refetchInterval ?? false,
+    enabled: options.enabled ?? true,
+  })
+}
+
+export interface LegacyLogPage extends LogPage {
+  sourceTag: 'legacy'
+  coverage?: Record<string, unknown>
+}
+
+export function useLegacyLogs(params: LogQueryParams, enabled: boolean) {
+  // legacy 路径不接受 view 参数（视图维度由 federated 侧承担），构造参数时剔除。
+  const legacyParams = { ...params }
+  delete legacyParams.view
+  return useQuery({
+    queryKey: ['logsLegacy', legacyParams],
+    queryFn: async () => (await api.get<LegacyLogPage>('/logs/legacy', { params: { ...legacyParams, source: 'legacy' } })).data,
+    enabled,
+    placeholderData: (prev) => prev,
+  })
+}
+
+/**
+ * 按当前筛选导出日志为 NDJSON 文件并触发浏览器下载（GET /logs/export）。
+ * 经 api 客户端发起，自动携带鉴权并复用 401 刷新；分页参数不参与导出。
+ */
+export async function exportLogs(params: LogQueryParams): Promise<void> {
+  const exportParams: LogQueryParams = { ...params }
+  delete exportParams.page
+  delete exportParams.pageSize
+
+  const { data } = await api.get('/logs/export', {
+    params: exportParams,
+    responseType: 'blob',
+  })
+  const url = URL.createObjectURL(data as Blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `logs-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`
+  a.click()
+  URL.revokeObjectURL(url)
 }

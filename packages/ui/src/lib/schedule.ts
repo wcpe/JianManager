@@ -25,3 +25,22 @@ export interface ScheduleInfo {
   lastRun: string | null
   createdAt: string
 }
+
+/** 创建定时任务请求体（与后端 CreateScheduleRequest 对齐）。 */
+export interface CreateScheduleBody {
+  instanceId: number
+  name: string
+  cronExpr: string
+  action: string
+  /** action=command 时携带的命令文本（后端存入 payload）。 */
+  payload?: string
+}
+
+/** 更新定时任务请求体（后端按 PUT /schedules/:id 仅接收这三个可选字段）。 */
+export interface UpdateScheduleBody {
+  cronExpr?: string
+  enabled?: boolean
+  action?: string
+  /** action=command 时携带的命令文本，使编辑可改命令（FR-153）。 */
+  payload?: string
+}

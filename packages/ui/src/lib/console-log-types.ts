@@ -20,3 +20,21 @@ export interface LogEntry {
   /** 日志产生时间（RFC3339）。 */
   time: string
 }
+
+/** 日志查询筛选条件（DB 侧过滤 + 分页，FR-049/FR-050）。 */
+export interface LogQueryParams {
+  /** 主视图：平台仅 CP；节点/实例聚合 Worker 与实例；all 仅平台管理员。 */
+  view?: 'platform' | 'node_instance' | 'all' | 'legacy'
+  source?: string
+  level?: string
+  instanceId?: number
+  nodeId?: number
+  /** 关键字，匹配 message。 */
+  keyword?: string
+  /** 起始时间（RFC3339）。 */
+  from?: string
+  /** 结束时间（RFC3339）。 */
+  to?: string
+  page?: number
+  pageSize?: number
+}
