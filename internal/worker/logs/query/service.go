@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
@@ -210,8 +211,12 @@ type CapabilitiesRequest struct {
 
 // Search 执行查询面 Search stub。
 func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
+	// 临时诊断（2026-10-08 慢查询根因定位；验证后降级/移除）：
+	// 分解 plan / 任务执行 / 组装 的耗时，回答"端到端 8s 花在哪"。
+	diagStart := time.Now()
 	resp := SearchResponse{RequestID: req.RequestID}
 	plan := s.planFromRequest(req)
+	planMs := time.Since(diagStart).Milliseconds()
 	resp.Coverage = plan.Coverage
 	remapCoverageTargets(&resp.Coverage, req.AuthorizedTargets)
 	resp.Quality = plan.Quality
@@ -256,18 +261,18 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 	// 副作用按任务顺序施加，故早退、取消、按 target 改写 coverage、
 	// 质量覆盖、items 追加与预算计数全部与串行逐字一致（后续 SortEvents 与顺序无关）。
 	//
-	// 合并执行（2026-10-08）：同 (Owner, UTC 天) 的可合并 range 聚为一次粗筛
-	// （MergedRangeClient，行级按各 range 权威谓词归因）；客户端未实现该能力、
-	// 或组内存在无来源约束 range 时自动退回逐 range——语义不变，仅性能差异。
+	// 合并执行（2026-10-08）：可合并 range 聚为一次粗筛（MergedRangeClient，行级按各
+	// range 权威谓词归因）；客户端未实现该能力、或组内存在无来源约束 range 时自动
+	// 退回逐 range——语义不变，仅性能差异。
 	//
-	// 天批次降序 + 早停（2026-10-08 实测）：任务按 UTC 天降序分批执行，累计候选行数
-	// 达到「页大小+1」即跳过更旧天的批次——更旧天的行 _time 严格早于更新天，不可能
-	// 进入本页 top-N（分页/导出每页请求独立判断，下一页带收窄窗口继续取，枚举不丢行）。
-	// 实测依据：24h 平台级窗口的 VL 查询成本集中在"旧天的稀疏宽窗"（10-06 段 2.9s），
-	// 而全局 top-100 经对照 100/100 全部来自最新天分区。
+	// 跨天合并（2026-10-08 修正，直测 10× 差距）：**不得按 UTC 天拆查询**——VL 在
+	// "窗口内匹配行数 < limit"时必须扫完整个窗口，按天拆分把一次查询放大成
+	// "每天一次全扫"（实测 154 源 24h 跨天一次查 0.44-0.83s，分天后旧天单查即
+	// 4.8-6.2s）。同 Owner 的 rng 合并为一次跨天查询，行归因按各 rng 谓词
+	// （含各自天分区水位）在内存完成；批次间（跨 Owner）保留早停语义。
 	mergedClient, _ := s.client.(MergedRangeClient)
 	tasks := groupSearchTasks(plan.Ranges, mergedClient != nil)
-	batches := groupTasksByUTCDay(tasks)
+	batches := groupTasksByOwner(tasks)
 	type searchRangeOutcome struct {
 		res       RangeResult
 		err       error
@@ -345,6 +350,11 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 	if skippedDays > 0 {
 		slog.Debug("search 天批次早停", "skipped_days", skippedDays)
 	}
+	// 临时诊断：任务执行（含全部 VL 请求）阶段耗时。
+	slog.Debug("query-timing: tasks",
+		"req", req.RequestID, "plan_ms", planMs,
+		"tasks_ms", time.Since(diagStart).Milliseconds()-planMs,
+		"batches", len(batches), "tasks", len(tasks), "outcomes", len(outcomes))
 
 	// applied 按原始 range 数累计（合并组记组内全部 target）。
 	applied := 0
@@ -443,6 +453,9 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 	if plan.Quality.DuplicateQuality != "" && resp.Quality.DuplicateQuality == DupExact {
 		resp.Quality = plan.Quality
 	}
+	// 临时诊断：端到端总耗时（worker 视角）。
+	slog.Debug("query-timing: total",
+		"req", req.RequestID, "total_ms", time.Since(diagStart).Milliseconds(), "items", len(items))
 	return resp
 }
 

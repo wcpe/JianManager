@@ -206,14 +206,22 @@ func (c *Client) params(rng query.AuthoritativeRange, q query.RangeQuery) (url.V
 }
 
 // dayParams 构造某 UTC 天分区的 HTTP 查询参数（start/end/游标收窄/extra_filters）。
-// 抽自原 params()：单 range 与合并粗筛（merged.go）共用同一窗口语义——两个入口
-// 的 start/end 计算必须逐字一致，否则合并路径会看到与逐 range 路径不同的数据面。
+// 单 range 与合并粗筛（merged.go）共用 windowParams 的窗口语义——两个入口的
+// start/end 计算必须逐字一致，否则合并路径会看到与逐 range 路径不同的数据面。
 func (c *Client) dayParams(utcDay string, q query.RangeQuery) (url.Values, bool, error) {
 	start, err := time.Parse("2006-01-02", utcDay)
 	if err != nil {
 		return nil, false, fmt.Errorf("vlrange: invalid Catalog UTC day: %w", err)
 	}
-	end := start.AddDate(0, 0, 1)
+	return c.windowParams(start, start.AddDate(0, 0, 1), q)
+}
+
+// windowParams 构造 [start,end) 窗口的 HTTP 查询参数。
+//
+// 2026-10-08：由 dayParams 抽出以支持**跨天窗口**（merged.go 的合并粗筛把同 Owner
+// 的多天 rng 合并为一次查询——按天拆分会让 VL 对每个窗口独立全扫，实测 10× 差距）。
+// 收窄规则（TimeRange 夹取 / 游标上界 / extra_filters）与单天路径逐字相同。
+func (c *Client) windowParams(start, end time.Time, q query.RangeQuery) (url.Values, bool, error) {
 	if q.TimeRange.FromUTC != "" {
 		from, err := time.Parse(time.RFC3339Nano, q.TimeRange.FromUTC)
 		if err != nil {

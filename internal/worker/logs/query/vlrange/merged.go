@@ -3,9 +3,11 @@ package vlrange
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
@@ -178,7 +180,28 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	// 查询文本确定性：来源排序后拼接（便于日志/调试对照，不影响命中集合）。
 	sort.Strings(sources)
 
-	params, empty, err := c.dayParams(first.Key.UTCDay, q)
+	// 窗口 = 组内各天分区的**并集**（跨天一次查）。按天拆分会让 VL 对每个窗口
+	// 独立全扫（"窗口内匹配行数 < limit"时无法 top-K 早停）——实测 154 源 24h
+	// 跨天一次查 0.44-0.83s，而分天后旧天单查即 4.8-6.2s（10× 差距）。
+	// 归因时按各 rng 的权威谓词（含其天分区水位）过滤，行不会跨天误配。
+	minDay, maxDay := first.Key.UTCDay, first.Key.UTCDay
+	for _, rng := range rngs {
+		if rng.Key.UTCDay < minDay {
+			minDay = rng.Key.UTCDay
+		}
+		if rng.Key.UTCDay > maxDay {
+			maxDay = rng.Key.UTCDay
+		}
+	}
+	winStart, err := time.Parse("2006-01-02", minDay)
+	if err != nil {
+		return query.RangeResult{}, fmt.Errorf("vlrange: invalid merged window start day %q: %w", minDay, err)
+	}
+	winEnd, err := time.Parse("2006-01-02", maxDay)
+	if err != nil {
+		return query.RangeResult{}, fmt.Errorf("vlrange: invalid merged window end day %q: %w", maxDay, err)
+	}
+	params, empty, err := c.windowParams(winStart, winEnd.AddDate(0, 0, 1), q)
 	if err != nil {
 		return query.RangeResult{}, err
 	}
@@ -191,6 +214,8 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	var out query.RangeResult
 	seenHash := make(map[string]string, mergedScanMinRows)
 	duplicated := false
+	// 临时诊断（2026-10-08）：合并查询的 VL 侧耗时（区分"等 VL"与"本地处理"）。
+	vlStart := time.Now()
 	bytesRead, truncated, err := c.stream(ctx, params, scanLimit(q.Budget), func(line []byte) error {
 		ev, err := eventFromJSON(line)
 		if err != nil {
@@ -222,6 +247,10 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	if err != nil {
 		return query.RangeResult{}, err
 	}
+	// 临时诊断：VL 请求耗时（含网络往返 + 流式读取 + 归因过滤）。
+	slog.Debug("query-timing: vl-merged",
+		"targets", len(rngs), "vl_ms", time.Since(vlStart).Milliseconds(),
+		"rows", len(out.Items), "bytes", bytesRead, "truncated", truncated)
 	out.Bytes = bytesRead
 	out.Exhausted = !truncated
 	out.DuplicateQuality = query.DupExact

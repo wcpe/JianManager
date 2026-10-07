@@ -99,8 +99,9 @@ func TestSearchMergesSameDayTargetsIntoOneCall(t *testing.T) {
 	require.Equal(t, "merged-line", resp.Items[0].Message)
 }
 
-// 跨天单目标 → 不合并（每天 1 个 range，无同组可合）。
-func TestSearchKeepsPerRangeForSingleTargetDays(t *testing.T) {
+// 跨天合并：同 Owner 的多天 rng 合并为一次查询（不再按天拆分——VL 对"行数不足"
+// 的窗口必须全扫，分天会把一次查询放大成每天一次全扫，实测 10× 差距）。
+func TestSearchMergesSingleTargetAcrossDaysIntoSingleCall(t *testing.T) {
 	c := catalog.New(nil)
 	for i := 0; i < 3; i++ {
 		from := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i)
@@ -128,8 +129,10 @@ func TestSearchKeepsPerRangeForSingleTargetDays(t *testing.T) {
 	})
 
 	require.Nil(t, resp.Err)
-	require.Equal(t, int32(0), atomic.LoadInt32(&fake.mergedCalls), "每天仅 1 个 range，无可合并组")
-	require.Equal(t, int32(3), atomic.LoadInt32(&fake.searchCalls), "应保持逐 range 执行")
+	require.Equal(t, int32(1), atomic.LoadInt32(&fake.mergedCalls),
+		"同 Owner 的 3 天应合并为一次跨天查询")
+	require.Equal(t, int32(3), atomic.LoadInt32(&fake.lastMergedN))
+	require.Equal(t, int32(0), atomic.LoadInt32(&fake.searchCalls), "不得逐 range/逐天执行")
 }
 
 // 客户端未实现 MergedRangeClient → 自动退回逐 range（回归保障）。
@@ -200,8 +203,23 @@ func twoDayRequest() QueryRequest {
 	}
 }
 
-// 天批次早停：最新天候选行达「页大小+1」→ 更旧天不查询（其行不可能进入 top-N）。
-func TestSearchEarlyStopsOnNewerDayWhenPageFilled(t *testing.T) {
+// 跨天合并：最新天 + 旧天合并为一次查询；不足页时同一次查询自然覆盖全部天
+// （不再按天续查——分天会让 VL 每天独立全扫）。
+func TestSearchMergesAcrossDaysWhenPageNotFilled(t *testing.T) {
+	c := twoDayCatalog(t)
+	fake := &fakeMergedClient{mergedItems: make([]logtypes.Event, 3)}
+	svc := NewService(NewPlanner(c, nil), fake, "test-build")
+
+	resp := svc.Search(context.Background(), twoDayRequest())
+
+	require.Nil(t, resp.Err)
+	require.Equal(t, int32(1), atomic.LoadInt32(&fake.mergedCalls),
+		"两天应合并为一次跨天查询（不足页也由同一窗口覆盖）")
+	require.Len(t, resp.Items, 3, "合并查询返回的行原样透出")
+}
+
+// 天批次早停（跨 Owner 批次间）：最新批（Owner 组）够页后，更旧批不再查询。
+func TestSearchMergesAcrossDaysAndFillsPageFromNewest(t *testing.T) {
 	c := twoDayCatalog(t)
 	fake := &fakeMergedClient{mergedItems: make([]logtypes.Event, 101)}
 	svc := NewService(NewPlanner(c, nil), fake, "test-build")
@@ -210,22 +228,8 @@ func TestSearchEarlyStopsOnNewerDayWhenPageFilled(t *testing.T) {
 
 	require.Nil(t, resp.Err)
 	require.Equal(t, int32(1), atomic.LoadInt32(&fake.mergedCalls),
-		"最新天（09-10）够页后，更旧天（09-09）不得再查询")
+		"同 Owner 的多天合并为一次查询")
 	require.Equal(t, int32(0), atomic.LoadInt32(&fake.searchCalls))
 	require.Len(t, resp.Items, 100, "响应仍截断到页大小")
 	require.NotEmpty(t, resp.NextCursor, "有更多数据时必须给下一页游标")
-}
-
-// 最新天不足页 → 继续查更旧天（枚举不丢行）。
-func TestSearchContinuesToOlderDayWhenPageNotFilled(t *testing.T) {
-	c := twoDayCatalog(t)
-	fake := &fakeMergedClient{mergedItems: make([]logtypes.Event, 3)}
-	svc := NewService(NewPlanner(c, nil), fake, "test-build")
-
-	resp := svc.Search(context.Background(), twoDayRequest())
-
-	require.Nil(t, resp.Err)
-	require.Equal(t, int32(2), atomic.LoadInt32(&fake.mergedCalls),
-		"不足页时必须继续查询更旧天")
-	require.Len(t, resp.Items, 6, "两天的行都应返回")
 }

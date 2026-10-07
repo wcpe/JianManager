@@ -53,43 +53,46 @@ func MergeableScope(rng AuthoritativeRange) ([]string, bool) {
 	return nil, false
 }
 
-// groupTasksByUTCDay 把任务按 UTC 天分组为批次（天降序，批内保持原顺序）。
+// groupTasksByOwner 把任务按 Owner 聚为批次（批内保持原顺序）。
 //
-// 用途是 tail-first 早停：分区的数据时间边界严格（更旧天的所有行 _time 都早于
-// 更新天的所有行——由 catalog 的天分区归属语义保证），因此**最新天的候选行数
-// 达到「页大小+1」时，更旧天不可能贡献本页 top-N**，其查询可直接跳过。
+// 2026-10-08 修正（直测 10× 差距，推翻按天拆分）：
+// **不得按 UTC 天拆查询**——VL 在「窗口内匹配行数 < limit」时必须扫完整个窗口
+// （无法 top-K 早停），按天拆分把一次查询放大成「每天一次全扫」：实测 154 源
+// 24h 跨天一次查 0.44-0.83s（top-303 早停，根本不触旧天），而分天后旧天单查
+// 即 4.8-6.2s（含空源的全窗扫描）。同 Owner 的全部 rng 合并为**一次跨天查询**，
+// 行归因按各 rng 谓词（含各自天分区的水位）在内存完成。
 //
-// 正确性边界（2026-10-08 实测 + 论证）：
-//   - 早停以「每个请求的窗口」为界独立判断——分页/导出的下一页请求窗口已收窄到
-//     游标之前，会从更早的批次继续取，**枚举不丢行**；
-//   - 跳过批次不需要标记 coverage（数据够页时跳过是语义正确，非缺失）；
-//   - 批内含同日多 Owner 的任务（同天的 hot/cold 行时间可重叠，不得跨 Owner 早停）。
-func groupTasksByUTCDay(tasks []searchTask) [][]searchTask {
-	byDay := make(map[string][]searchTask, 8)
-	days := make([]string, 0, 8)
+// 批次边界只保留 Owner（不同分布层级的数据时间可重叠，不得跨 Owner 早停）。
+func groupTasksByOwner(tasks []searchTask) [][]searchTask {
+	byOwner := make(map[string][]searchTask, 4)
+	owners := make([]string, 0, 4)
 	for _, t := range tasks {
 		if len(t.rngs) == 0 {
 			continue
 		}
-		day := t.rngs[0].Key.UTCDay
-		if _, ok := byDay[day]; !ok {
-			days = append(days, day)
+		owner := string(t.rngs[0].Owner)
+		if _, ok := byOwner[owner]; !ok {
+			owners = append(owners, owner)
 		}
-		byDay[day] = append(byDay[day], t)
+		byOwner[owner] = append(byOwner[owner], t)
 	}
-	// YYYY-MM-DD 字典序即时间序；降序 = 最新天在前。
-	sort.Sort(sort.Reverse(sort.StringSlice(days)))
-	out := make([][]searchTask, 0, len(days))
-	for _, d := range days {
-		out = append(out, byDay[d])
+	sort.Strings(owners)
+	out := make([][]searchTask, 0, len(owners))
+	for _, o := range owners {
+		out = append(out, byOwner[o])
 	}
 	return out
 }
 
 // groupSearchTasks 把 ranges 聚为任务列表：
 //   - canMerge=false（客户端未实现 MergedRangeClient）或 ranges<=1 → 全部逐 range 任务；
-//   - 同 (Owner, UTCDay) 组大小 >1 且每个 range 都有可枚举来源 → 合并任务；
+//   - 同 Owner 组大小 >1 且每个 range 都有可枚举来源 → **一次跨天合并任务**；
 //   - 组内出现不可合并 range → 该组整体拆回逐 range（保守，绝不放大可见范围）。
+//
+// 2026-10-08 修正：任务键从 (Owner, UTC 天) 改为 **Owner**——按天拆任务会让 VL
+// 对每个天窗口独立全扫（"窗口内匹配行数 < limit"时无法 top-K 早停），实测
+// 154 源 24h 跨天一次查 0.44-0.83s、分天后旧天单查即 4.8-6.2s（10× 差距）。
+// 行归因由各 rng 的权威谓词（含其天分区水位）在内存完成，跨天合并语义安全。
 //
 // 任务顺序按 ranges 的首现顺序（副作用施加顺序与串行执行保持一致）。
 func groupSearchTasks(ranges []AuthoritativeRange, canMerge bool) []searchTask {
@@ -106,7 +109,7 @@ func groupSearchTasks(ranges []AuthoritativeRange, canMerge bool) []searchTask {
 	var buckets []*bucket
 	index := make(map[string]*bucket, len(ranges))
 	for _, rng := range ranges {
-		key := string(rng.Owner) + "\x1f" + rng.Key.UTCDay
+		key := string(rng.Owner)
 		b, ok := index[key]
 		if !ok {
 			b = &bucket{}
