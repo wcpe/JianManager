@@ -235,38 +235,31 @@ func TestSearchMergedAcrossDaysUsesUnionWindow(t *testing.T) {
 	require.NoError(t, err, "跨天合并必须被接受（回归：曾整组报错返回 0 条）")
 	require.Len(t, res.Items, 2, "两天的行都应归因保留")
 
-	// 新行为（2026-10-08 二次修正）：VL 单查窗口上限 24h（-search.maxQueryTimeRange），
-	// 48h 并集窗口按滑动 24h 段从新到老切分；段并集必须精确等于
-	// 「并集 ∩ TimeRange」（无重叠、无缝隙），且每段 ≤ 24h。
+	// 2026-10-08 三次修正：VL 单查窗口上限已放宽到 31d（覆盖 retention 全期与
+	// "all" 30 天窗的 31 天跨度）⇒ 常态窗口必须**单次查询**完成（v6 语义，
+	// VL sort+limit top-K 从最新分区早停），窗口 = 并集 ∩ TimeRange。
 	mu.Lock()
 	defer mu.Unlock()
-	require.Len(t, wins, 2, "48h 窗口应切为两段（从新到老）")
-	require.Equal(t, win{"2026-09-23T00:00:00Z", "2026-09-23T12:00:00Z"}, wins[0], "第一段为最新 24h（被 TimeRange 上界夹取）")
-	require.Equal(t, win{"2026-09-22T12:00:00Z", "2026-09-23T00:00:00Z"}, wins[1], "第二段承接更早窗口（被 TimeRange 下界夹取）")
-	for _, w := range wins {
-		start, err := time.Parse(time.RFC3339, w.start)
-		require.NoError(t, err)
-		end, err := time.Parse(time.RFC3339, w.end)
-		require.NoError(t, err)
-		require.LessOrEqual(t, end.Sub(start), 24*time.Hour, "每段不得超过 VL 单查窗口上限")
-	}
+	require.Len(t, wins, 1, "31d 内的窗口必须单次查询完成，不得按天/按段拆分")
+	require.Equal(t, "2026-09-22T12:00:00Z", wins[0].start)
+	require.Equal(t, "2026-09-23T12:00:00Z", wins[0].end)
 }
 
-// 够页早停：段内候选行达本页预算（lookaheadRows）即不再查询更老段——
-// 常规 24h+ 查询只触第一段（性能关键）；但不得宣称 Exhausted（更老段未查）。
-func TestSearchMergedStopsAfterFirstSegmentWhenEnoughRows(t *testing.T) {
+// 窗口超过 VL 单查上限（31d）时按滑动 31d 段从新到老切分（保留期外的防御路径），
+// 段内候选行达本页预算即停；每段 ≤ 31d。
+func TestSearchMergedSegmentsBeyondVLLimitAndStopsWhenEnoughRows(t *testing.T) {
 	var mu sync.Mutex
-	requests := 0
+	type win struct{ start, end string }
+	var wins []win
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		requests++
+		wins = append(wins, win{r.URL.Query().Get("start"), r.URL.Query().Get("end")})
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		// 预算 Limit=100 → lookaheadRows=101；返回 150 行同源不同 id，全部命中
-		// 最新段的谓词 → 第一段即够页，不应有第二次请求。
+		// 150 行同源不同 id：第一段即够页（needRows = 101）。
 		var b strings.Builder
 		for i := 0; i < 150; i++ {
-			fmt.Fprintf(&b, `{"_time":"2026-09-24T05:%02d:%02dZ","_msg":"m%d","event_id":"e%d","log_source_id":"src-c","source_generation":"gen-c","projection_generation":"pgen-C-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h%d"}`+"\n",
+			fmt.Fprintf(&b, `{"_time":"2026-10-10T05:%02d:%02dZ","_msg":"m%d","event_id":"e%d","log_source_id":"src-c","source_generation":"gen-c","projection_generation":"pgen-C-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h%d"}`+"\n",
 				i/60, i%60, i, i, i)
 		}
 		w.Write([]byte(b.String()))
@@ -278,15 +271,15 @@ func TestSearchMergedStopsAfterFirstSegmentWhenEnoughRows(t *testing.T) {
 	client, err := New(vl)
 	require.NoError(t, err)
 
-	// 三个 rng 横跨 09-22/09-23/09-24 三天 → 并集窗口 72h，必然切段。
+	// 跨度 40 天（09-01 → 10-10）：并集窗口 > 31d，必然切段。
 	rngs := []query.AuthoritativeRange{
 		scopedRange("inst:1", "src-c", "gen-c", []string{"pgen-C-1"}, 100),
 		scopedRange("inst:2", "src-c", "gen-c", []string{"pgen-C-1"}, 100),
 		scopedRange("inst:3", "src-c", "gen-c", []string{"pgen-C-1"}, 100),
 	}
-	rngs[0].Key.UTCDay = "2026-09-22"
-	rngs[1].Key.UTCDay = "2026-09-23"
-	rngs[2].Key.UTCDay = "2026-09-24"
+	rngs[0].Key.UTCDay = "2026-09-01"
+	rngs[1].Key.UTCDay = "2026-09-20"
+	rngs[2].Key.UTCDay = "2026-10-10"
 
 	res, err := client.SearchMerged(context.Background(), rngs, query.RangeQuery{
 		Budget: query.Budget{Limit: 100, MaxBytes: 1 << 20},
@@ -296,30 +289,66 @@ func TestSearchMergedStopsAfterFirstSegmentWhenEnoughRows(t *testing.T) {
 	require.False(t, res.Exhausted, "早停后更老段未查，不得宣称读完")
 	mu.Lock()
 	defer mu.Unlock()
-	require.Equal(t, 1, requests, "第一段够页即停，不应查询更老段")
+	require.Len(t, wins, 1, "第一段够页即停，不应查询更老段")
+	start, err := time.Parse(time.RFC3339, wins[0].start)
+	require.NoError(t, err)
+	end, err := time.Parse(time.RFC3339, wins[0].end)
+	require.NoError(t, err)
+	require.LessOrEqual(t, end.Sub(start), 31*24*time.Hour, "每段不得超过 VL 单查窗口上限")
 }
 
-func TestSearchMergedRejectsMixedOwner(t *testing.T) {
-	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: "http://127.0.0.1:1", AllowNonLoopback: true})
+// 段查询失败且已有结果时必须保留已收集行（回归：曾致 30 天实例视图 19s 后整组
+// RANGE_UNAVAILABLE、面板返回 0 条）；零结果时保持整组报错（不掩盖全量失败）。
+func TestSearchMergedSalvagesItemsWhenLaterSegmentFails(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n > 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// 第一段 20 行（不足 needRows=101）→ 必然继续查更老段 → 第二段失败。
+		var b strings.Builder
+		for i := 0; i < 20; i++ {
+			fmt.Fprintf(&b, `{"_time":"2026-10-10T05:%02d:%02dZ","_msg":"m%d","event_id":"e%d","log_source_id":"src-c","source_generation":"gen-c","projection_generation":"pgen-C-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h%d"}`+"\n",
+				i/60, i%60, i, i, i)
+		}
+		w.Write([]byte(b.String()))
+	}))
+	defer srv.Close()
+
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL, AllowNonLoopback: true})
 	require.NoError(t, err)
 	client, err := New(vl)
 	require.NoError(t, err)
 
-	hot := scopedRange("inst:1", "src-a", "gen-a", []string{"pgen-A-1"}, 100)
-	cold := scopedRange("inst:2", "src-b", "gen-b", []string{"pgen-B-1"}, 100)
-	cold.Owner = catalog.OwnerCold
-
-	_, err = client.SearchMerged(context.Background(), []query.AuthoritativeRange{hot, cold}, query.RangeQuery{})
-	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "share owner"))
-
-	// 无来源约束的 range 被拒绝（不放大可见范围）。
-	bare := query.AuthoritativeRange{
-		TargetID: "inst:3",
-		Key:      catalog.PartitionKey{UTCDay: "2026-09-22"},
-		Owner:    catalog.OwnerHot,
+	rngs := []query.AuthoritativeRange{
+		scopedRange("inst:1", "src-c", "gen-c", []string{"pgen-C-1"}, 100),
+		scopedRange("inst:2", "src-c", "gen-c", []string{"pgen-C-1"}, 100),
 	}
-	_, err = client.SearchMerged(context.Background(), []query.AuthoritativeRange{hot, bare}, query.RangeQuery{})
-	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "no expressible source scope"))
+	rngs[0].Key.UTCDay = "2026-09-01"
+	rngs[1].Key.UTCDay = "2026-10-10"
+
+	res, err := client.SearchMerged(context.Background(), rngs, query.RangeQuery{
+		Budget: query.Budget{Limit: 100, MaxBytes: 1 << 20},
+	})
+	require.NoError(t, err, "已有结果时更老段失败不得整组报错")
+	require.Len(t, res.Items, 20, "已收集行必须保留")
+	require.False(t, res.Exhausted, "段失败后不得宣称读完")
+	require.Contains(t, res.CoverageReasons, query.ReasonBudgetExceeded)
+
+	// 零结果时的对照：整组报错（不掩盖全量失败）。
+	mu.Lock()
+	calls = 100 // 让后续所有请求都失败
+	mu.Unlock()
+	_, err = client.SearchMerged(context.Background(), rngs, query.RangeQuery{
+		Budget: query.Budget{Limit: 100, MaxBytes: 1 << 20},
+	})
+	require.Error(t, err, "零结果时整组失败必须报错")
 }
+

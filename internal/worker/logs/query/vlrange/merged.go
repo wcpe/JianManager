@@ -27,11 +27,13 @@ const (
 	mergedScanFactor  = 3
 )
 
-// searchMaxWindow 是 VL 单次查询的时间窗口上限，必须与 vlsup 启动参数
-// `-search.maxQueryTimeRange`（当前 24h）保持一致：超过即被 VL 以 400
-// `too big time range selected` 拒绝。合并粗筛的并集窗口超过它时按此长度
-// 切分为滑动段（见 SearchMerged）。
-const searchMaxWindow = 24 * time.Hour
+// searchMaxWindow 是合并粗筛单次 VL 查询的时间窗口上限，必须不大于 VL 启动参数
+// `-search.maxQueryTimeRange`（当前 31d，见 vlsup.BuildArgs）：超过即被 VL 以 400
+// `too big time range selected` 拒绝。31d 覆盖 retention 30d 场景下的一切并集窗口
+// （"all"=30 天窗最多跨 31 个 UTC 天 ⇒ 31×24h，实测恰在 VL 边界内），故常态下
+// **单次查询**即完成——VL 的 sort+limit top-K 从最新分区早停，实测 30 天窗 1.2-1.3s。
+// 仅当窗口超过 31d（保留期外的防御路径）才切分为滑动段。
+const searchMaxWindow = 31 * 24 * time.Hour
 
 // projectionGenerationField 是投影代次字段名（eventFromJSON 会把它放进 Event.Fields）。
 const projectionGenerationField = "projection_generation"
@@ -195,14 +197,16 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	// 跨天一次查 0.44-0.83s，而分天后旧天单查即 4.8-6.2s（10× 差距）。
 	// 归因时按各 rng 的权威谓词（含其天分区水位）过滤，行不会跨天误配。
 	//
-	// 2026-10-08 二次修正：VL 有 `-search.maxQueryTimeRange=24h` 硬限制——窗口
-	// 超过 24h 的单次查询被 VL 以 400 拒绝（`too big time range selected`），
-	// 生产实测 2 天及以上窗口整组 RANGE_UNAVAILABLE、面板返回 0 条。故并集窗口
-	// 超过 24h 时改为**滑动 24h 段**从新到老逐段查询：段内仍合并全部来源，
-	// 段间首尾相接不重叠（行只落在唯一段），每段独立应用收窄规则（游标/TimeRange
-	// 夹取）——收窄只会让段更短，恒 ≤ 24h。段内候选行达本页预算
-	// （lookaheadRows）即停：常规查询只触第一段，更老段仅在深翻页或稀疏命中时
-	// 才被查询。
+	// 2026-10-08 二次修正（历史）：VL 曾有 `-search.maxQueryTimeRange=24h` 硬限制，
+	// 超过 24h 的单次查询被 VL 以 400 拒绝（2 天及以上窗口整组 RANGE_UNAVAILABLE）。
+	// 三次修正：VL 上限已放宽到 31d（见 vlsup.BuildArgs，覆盖 retention 全期与
+	// "all" 30 天窗的 31 天跨度）——**恢复单次并集查询**（v6 语义：VL 的 sort+limit
+	// top-K 从最新分区早停，实测 30 天窗 1.2-1.3s），不再按 24h 切段。
+	//
+	// 段切分仅保留为 >31d 窗口的防御路径：从新到老、首尾相接不重叠，每段独立应用
+	// 收窄规则（游标/TimeRange 夹取），恒 ≤ 31d。段查询失败且已有结果时不得整组
+	// 丢弃（曾致 30 天实例视图 19s 后返回 0 条）：标记原因、保留已收集行、停在
+	// 该段，更老数据由游标翻页继续触达。
 	minDay, maxDay := first.Key.UTCDay, first.Key.UTCDay
 	for _, rng := range rngs {
 		if rng.Key.UTCDay < minDay {
@@ -272,7 +276,16 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 				return nil
 			})
 			if err != nil {
-				return query.RangeResult{}, err
+				if len(out.Items) == 0 {
+					return query.RangeResult{}, err
+				}
+				// 已有结果：更老段失败不得整组丢弃。标记原因、停在该段，
+				// 更老数据由游标翻页继续触达。
+				slog.Warn("合并粗筛段查询失败，保留已收集结果",
+					"targets", len(rngs), "segment_start", segStart.Format(time.RFC3339), "err", err)
+				exhausted = false
+				out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
+				break
 			}
 			out.Bytes += bytesRead
 			if truncated {
@@ -281,17 +294,19 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 				out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
 			}
 		}
+		// 已到最老段：本段即最后一段，exhausted 由各段 truncated 决定。
+		if !segStart.After(winStart) {
+			break
+		}
 		// 够页早停：组内候选行已达本页预算 ⇒ 更老段不可能贡献本页 top-N；
 		// 但更老段未查，不得宣称读完（翻页时由游标收窄窗口继续）。
 		if len(out.Items) >= needRows {
 			exhausted = false
 			break
 		}
-		if !segStart.After(winStart) {
-			break
-		}
 		segEnd = segStart
 	}
+
 	// 临时诊断：VL 请求耗时（含网络往返 + 流式读取 + 归因过滤）。
 	slog.Debug("query-timing: vl-merged",
 		"targets", len(rngs), "segments", segments, "vl_ms", time.Since(vlStart).Milliseconds(),
@@ -305,7 +320,7 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	}
 	out.StatsQuality = query.StatsExact
 	return out, nil
-	}
+}
 
 func containsString(list []string, v string) bool {
 	for _, s := range list {
