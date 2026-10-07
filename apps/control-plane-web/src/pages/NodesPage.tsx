@@ -91,6 +91,11 @@ import {
   NodeInstanceCompare,
   NodeMonitorCharts,
 } from '@jianmanager/ui/components/views/nodes/NodeCharts'
+import {
+  DETAIL_TABS,
+  NodeDetailPane,
+  type DetailTab,
+} from '@jianmanager/ui/components/views/nodes/NodeDetailPane'
 
 
 /** 待二次确认的危险节点操作（FR-048）。 */
@@ -110,9 +115,6 @@ function readNodesView(searchParams: URLSearchParams): NodesView {
 }
 
 
-/** 右栏分段（FR-177 §3.3 + FR-185）：概览/实例/JDK/缓存/端口/代理/监控/坏节点修复。 */
-type DetailTab = 'overview' | 'instances' | 'runtime' | 'cache' | 'ports' | 'proxy' | 'probe' | 'monitor' | 'repair'
-const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'runtime', 'cache', 'ports', 'proxy', 'probe', 'monitor', 'repair']
 
 /** 从 URL `?tab=` 解析激活分段（FR-128 可寻址；非法值回退默认 overview）。 */
 function readDetailTab(searchParams: URLSearchParams): DetailTab {
@@ -568,6 +570,42 @@ export default function NodesPage() {
             onToggleMaintenance={() => toggleMaintenance(selected)}
             onDrain={() => setPending({ kind: 'drain', node: selected })}
             onDelete={() => setPending({ kind: 'delete', node: selected })}
+            onNavigate={navigate}
+            renderTab={(tabKey, paneNode) => (
+              <>
+                {tabKey === 'overview' && <NodeOverviewSection node={paneNode} />}
+                {tabKey === 'instances' && <NodeInstanceCompareContainer node={paneNode} />}
+                {tabKey === 'runtime' && (
+                  <div className="space-y-4">
+                    <NodeJDKTab nodeId={paneNode.id} active />
+                    <NodeLogRuntimeTab
+                      nodeId={paneNode.id}
+                      os={paneNode.os}
+                      arch={paneNode.arch}
+                      online={paneNode.status === 1}
+                    />
+                  </div>
+                )}
+                {tabKey === 'cache' && <NodeArtifactCacheTab nodeId={paneNode.id} />}
+                {tabKey === 'ports' && (
+                  <Panel title={t('ports.title')}>
+                    <NodePortsTab nodeId={paneNode.id} />
+                  </Panel>
+                )}
+                {tabKey === 'proxy' && (
+                  <Panel title={t('nodeProxy.title')}>
+                    <NodeProxyTab nodeId={paneNode.id} />
+                  </Panel>
+                )}
+                {tabKey === 'probe' && (
+                  <Panel title={t('probe.nodeVersionTitle')}>
+                    <NodeProbeVersionTab nodeId={paneNode.id} />
+                  </Panel>
+                )}
+                {tabKey === 'monitor' && <NodeMonitorChartsContainer node={paneNode} />}
+                {tabKey === 'repair' && <NodeRepairTab node={paneNode} active />}
+              </>
+            )}
           />
         ) : (
           <div className="grid h-full place-items-center rounded-lg border border-dashed bg-card/50 shadow-soft">
@@ -711,117 +749,3 @@ function NodeMonitorChartsContainer({ node }: { node: NodeInfo }) {
   return <NodeMonitorCharts range={range} onRangeChange={setRange} series={data?.series ?? []} />
 }
 
-function NodeDetailPane({
-  node,
-  instanceCount,
-  tab,
-  onTab,
-  onToggleMaintenance,
-  onDrain,
-  onDelete,
-}: {
-  node: NodeInfo
-  instanceCount: number
-  tab: DetailTab
-  onTab: (t: DetailTab) => void
-  onToggleMaintenance: () => void
-  onDrain: () => void
-  onDelete: () => void
-}) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const online = node.status === 1
-  const statusLabel = online ? t('nodes.online') : node.status === 2 ? t('nodes.starting') : t('nodes.offline')
-  const loadPct = node.cpuCores > 0 ? ((node.loadAvg1 ?? 0) / node.cpuCores) * 100 : 0
-
-  return (
-    <div className="space-y-3">
-      {/* 阶段 6 第二步：身份块与分段 Tabs 合并为对象头（原型 `object-head` 的六段：
-          面包屑 → 名/状态/元信息/操作 → 指标条 → 工具导航）。
-          两个取舍：① 4 个环形仪表**不进 metrics**——原型 `object-stats` 是文字格，但
-          FR-311 v2 明确「资源仪表内联右置」，那个设计比原型新且是有意的，故留在内容区；
-          ② 隧道/维护徽标同理，对象头只有单个 status，它们在仪表行一并呈现。 */}
-      <ObjectPageHeader
-        breadcrumbs={[
-          { label: t('nodes.title'), to: '/nodes' },
-          { label: node.name },
-        ]}
-        icon={<Server className="size-5" />}
-        title={node.name}
-        status={{ tone: online ? 'success' : node.status === 2 ? 'warning' : 'default', label: statusLabel }}
-        meta={[
-          { label: t('nodes.ip'), value: node.host },
-          { label: t('nodes.system'), value: `${node.os} ${node.arch}` },
-          { label: t('nodes.instancesUnit'), value: instanceCount },
-        ]}
-        actions={
-          <NodeActionsMenu node={node} onToggleMaintenance={onToggleMaintenance} onDrain={onDrain} onDelete={onDelete} />
-        }
-        tools={DETAIL_TABS.map((k) => ({
-          key: k,
-          label: t(`nodes.tab.${k}`),
-          active: k === tab,
-          onSelect: () => onTab(k),
-        }))}
-        toolsLabel={t('nodes.tools')}
-        onNavigate={navigate}
-      />
-
-      {/* 资源仪表 + 隧道/维护徽标：对象头之下的独立一行（见上注的取舍①）。 */}
-      <Panel bodyClassName="p-4">
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-          <ResourceGauge label={t('nodes.cpu')} value={online ? (node.cpuUsage ?? 0) * 100 : 0} unit="%" size={56} />
-          <ResourceGauge label={t('nodes.memory')} value={online ? (node.memoryUsage ?? 0) * 100 : 0} unit="%" size={56} />
-          <ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={56} />
-          <ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={56} />
-          <div className="flex flex-wrap items-center gap-2">
-            {/* 反向隧道状态（FR-281，见 ADR-066）：仅在线节点有意义——隧道已连=指令免入站；直拨回退=走 node.Host:GRPCPort */}
-            {online && (
-              <Badge
-                variant="outline"
-                className={node.tunnelConnected ? 'text-status-success border-status-success/50' : 'text-muted-foreground'}
-                title={node.tunnelConnected ? t('nodes.tunnelConnectedHint') : t('nodes.tunnelDirectHint')}
-              >
-                {node.tunnelConnected ? t('nodes.tunnelConnected') : t('nodes.tunnelDirect')}
-              </Badge>
-            )}
-            {node.maintenance && (
-              <Badge variant="outline" className="text-status-warning border-status-warning/50">
-                {t('nodes.maintenance')}
-              </Badge>
-            )}
-          </div>
-        </div>
-      </Panel>
-
-      <div>
-        {tab === 'overview' && <NodeOverviewSection node={node} />}
-        {tab === 'instances' && <NodeInstanceCompareContainer node={node} />}
-        {tab === 'runtime' && (
-          <div className="space-y-4">
-            <NodeJDKTab nodeId={node.id} active />
-            <NodeLogRuntimeTab nodeId={node.id} os={node.os} arch={node.arch} online={online} />
-          </div>
-        )}
-        {tab === 'cache' && <NodeArtifactCacheTab nodeId={node.id} />}
-        {tab === 'ports' && (
-          <Panel title={t('ports.title')}>
-            <NodePortsTab nodeId={node.id} />
-          </Panel>
-        )}
-        {tab === 'proxy' && (
-          <Panel title={t('nodeProxy.title')}>
-            <NodeProxyTab nodeId={node.id} />
-          </Panel>
-        )}
-        {tab === 'probe' && (
-          <Panel title={t('probe.nodeVersionTitle')}>
-            <NodeProbeVersionTab nodeId={node.id} />
-          </Panel>
-        )}
-        {tab === 'monitor' && <NodeMonitorChartsContainer node={node} />}
-        {tab === 'repair' && <NodeRepairTab node={node} active />}
-      </div>
-    </div>
-  )
-}
