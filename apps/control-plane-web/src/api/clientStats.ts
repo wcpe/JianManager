@@ -1,6 +1,18 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
+/**
+ * 客户端分发观测契约（FR-217 / FR-428）已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ */
+export type {
+  ClientDistObservabilitySummary,
+  ClientDistObservabilityCompare,
+} from '@jianmanager/ui/lib/client-dist-observability-contracts'
+import type {
+  ClientDistObservabilitySummary,
+  ClientDistObservabilityCompare,
+} from '@jianmanager/ui/lib/client-dist-observability-contracts'
+
 /** 下载量按日点（FR-095）。 */
 export interface StatsDayPoint {
   day: string
@@ -55,37 +67,6 @@ export function useClientStats(channelId: string | null | undefined, days: numbe
 }
 
 // === 客户端分发观测（FR-217，消费方含 FR-220 平台统计页） ===
-
-/** 观测汇总标量（区间内跨频道/单频道合并；率为 0~1 小数）。 */
-export interface ClientDistObservabilitySummary {
-  manifestPulls: number
-  artifactPulls: number
-  downloadBytes: number
-  updateTotal: number
-  updateSuccess: number
-  updateFailStatic: number
-  updateRolledBack: number
-  updateError: number
-  successRate: number
-  failStaticRate: number
-  rollbackRate: number
-  activeMachines: number
-  /** 区间在明细保留窗(14d)内=精确去重独立数 true；窗外=各桶人次求和近似 false（ADR-049）。 */
-  activeMachinesExact: boolean
-}
-
-/** FR-428：前一等长窗口的同环比基数（不含率值与 exact 标记；率由消费方现算）。 */
-export interface ClientDistObservabilityCompare {
-  manifestPulls: number
-  artifactPulls: number
-  downloadBytes: number
-  updateTotal: number
-  updateSuccess: number
-  updateFailStatic: number
-  updateRolledBack: number
-  updateError: number
-  activeMachines: number
-}
 
 /** 版本/平台/滞后分布项（区间内跨桶合并）。 */
 export interface ClientDistDistItem {
