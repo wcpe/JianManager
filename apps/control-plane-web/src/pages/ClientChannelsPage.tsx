@@ -76,10 +76,9 @@ import {
   SecretDialog,
 } from '@jianmanager/ui/components/views/client-dist/KeySecretDialogs'
 import { CreateChannelDialog } from '@jianmanager/ui/components/views/client-dist/CreateChannelDialog'
-import {
-  CreateKeyDialog,
-  EditKeyDialog,
-} from '@jianmanager/ui/components/views/client-dist/KeyEditDialogs'
+import { KeysSegment } from '@jianmanager/ui/components/views/client-dist/KeysSegment'
+import { ChannelSecuritySummaryBar } from '@jianmanager/ui/components/views/client-dist/ChannelSecuritySummaryBar'
+import { useDangerPermission } from '@/lib/danger'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -195,65 +194,6 @@ export default function ClientChannelsPage() {
  * 密钥 / 版本 / 统计 / 接入指引 分段。取代原 ChannelDetail，全程模态化。
  * 频道名由顶栏面包屑末级承载（ConsoleHeader leaf）；返回仍给页内显式按钮，避免只靠面包屑。
  */
-function riskBadgeVariant(level?: SecurityLevel): 'default' | 'secondary' | 'destructive' | 'outline' {
-  if (level === 'critical' || level === 'high') return 'destructive'
-  if (level === 'warn') return 'default'
-  return 'secondary'
-}
-
-/** 频道工作台安全摘要条（FR-358）：近窗风险与封禁/受限计数，链到安全中心。 */
-function ChannelSecuritySummaryBar({ channelId }: { channelId: string }) {
-  const { t } = useTranslation()
-  const [searchParams] = useSearchParams()
-  const { data, isError, isLoading } = useClientChannelSecuritySummary(channelId)
-  const summary = data as ClientChannelSecuritySummary | undefined
-  const securityHref = buildClientDistHref('/client-dist-ops', searchParams, { channelId, tab: 'logs' })
-
-  return (
-    <div
-      data-testid="channel-security-summary"
-      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2"
-    >
-      <div className="flex min-w-0 flex-wrap items-center gap-3 text-sm">
-        <div className="flex items-center gap-1.5 font-medium">
-          <ShieldAlert className="size-4 text-muted-foreground" />
-          <span>{t('clientChannels.securitySummary', '安全摘要')}</span>
-        </div>
-        {isError ? (
-          <span className="text-xs text-muted-foreground">{t('clientChannels.securitySummaryUnavailable', '安全摘要暂不可用')}</span>
-        ) : isLoading || !summary ? (
-          <span className="text-xs text-muted-foreground">{t('common.loading', '加载中…')}</span>
-        ) : (
-          <>
-            <Badge variant={riskBadgeVariant(summary.riskLevel)}>{summary.riskLevel || 'info'}</Badge>
-            <span className="text-xs text-muted-foreground">
-              {t('clientChannels.securityAbnormal', '近窗异常')} {summary.abnormalRequests}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              {t('clientChannels.securityBlockedIp', '封禁 IP')} {summary.blockedIpCount}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              {t('clientChannels.securityRestrictedKey', '受限 Key')} {summary.restrictedKeyCount}
-            </span>
-            {summary.protectionMode ? (
-              <span className="text-xs text-muted-foreground">
-                {t('clientChannels.securityProtectionMode', '防护')} {summary.protectionMode}
-              </span>
-            ) : null}
-            {summary.windowMinutes ? (
-              <span className="text-xs text-muted-foreground">
-                {t('clientChannels.securityWindow', '窗口')} {summary.windowMinutes}m
-              </span>
-            ) : null}
-          </>
-        )}
-      </div>
-      <Button asChild size="sm" variant="outline">
-        <Link to={securityHref}>{t('clientChannels.openSecurityCenter', '打开安全中心')}</Link>
-      </Button>
-    </div>
-  )
-}
 
 function ChannelWorkbench({
   channelId,
@@ -265,6 +205,14 @@ function ChannelWorkbench({
   const { t } = useTranslation()
   const { data: detail, isLoading } = useClientChannel(channelId)
   const del = useDeleteClientChannel()
+  const [searchParams] = useSearchParams()
+  const securitySummary = useClientChannelSecuritySummary(channelId)
+  const revokeKey = useRevokeClientKey()
+  const revealKey = useRevealClientKey()
+  const createKey = useCreateClientKey()
+  const updateKey = useUpdateClientKey()
+  const { allowed: dangerAllowed } = useDangerPermission('platform')
+  const securityHref = buildClientDistHref('/client-dist-ops', searchParams, { channelId, tab: 'logs' })
 
   const [tab, setTab] = useTabParam<WorkbenchTab>('tab', 'keys', ['keys', 'versions', 'core', 'stats', 'guide'])
   const [deleteChannel, setDeleteChannel] = useState(false)
@@ -323,7 +271,13 @@ function ChannelWorkbench({
         }}
       />
 
-      <ChannelSecuritySummaryBar channelId={channelId} />
+      <ChannelSecuritySummaryBar
+        summary={securitySummary.data as ClientChannelSecuritySummary | undefined}
+        isError={securitySummary.isError}
+        isLoading={securitySummary.isLoading}
+        securityHref={securityHref}
+        renderLink={({ href, children }) => <Link to={href}>{children}</Link>}
+      />
 
       <ReadinessStepper
         steps={steps}
@@ -348,6 +302,14 @@ function ChannelWorkbench({
             loading={isLoading}
             createOpen={keyCreateOpen && tab === 'keys'}
             onCreateOpenChange={setKeyCreateOpen}
+            onReveal={(key) => revealKey.mutateAsync({ channelId, keyId: key.id })}
+            onRevoke={(key) => revokeKey.mutateAsync({ channelId, keyId: key.id })}
+            onCreateKey={(body) => createKey.mutateAsync(body)}
+            onUpdateKey={(body) => updateKey.mutateAsync(body)}
+            keyMutating={createKey.isPending || updateKey.isPending}
+            revealing={revealKey.isPending}
+            dangerAllowed={dangerAllowed}
+            onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
           />
         </TabsContent>
         <TabsContent value="versions">
@@ -377,207 +339,4 @@ function ChannelWorkbench({
     </PageShell>
   )
 }
-
-
-/** 密钥分段：列表 + 「创建密钥」模态 + 查看/编辑/吊销（DangerConfirm）+ 一次性明文弹窗。 */
-function KeysSegment({
-  channelId,
-  keys,
-  loading,
-  createOpen,
-  onCreateOpenChange,
-}: {
-  channelId: string
-  keys: ClientPullKey[]
-  loading: boolean
-  createOpen: boolean
-  onCreateOpenChange: (v: boolean) => void
-}) {
-  const { t } = useTranslation()
-  const revokeKey = useRevokeClientKey()
-  const revealKey = useRevealClientKey()
-  const createKey = useCreateClientKey()
-  const updateKey = useUpdateClientKey()
-
-  const [secret, setSecret] = useState<ClientKeyWithSecret | null>(null)
-  const [revokeTarget, setRevokeTarget] = useState<ClientPullKey | null>(null)
-  const [editTarget, setEditTarget] = useState<ClientPullKey | null>(null)
-  // 查看明文弹窗（FR-192）：保存当前查看到的密钥名 + 明文。
-  const [revealed, setRevealed] = useState<{ name: string; key: string } | null>(null)
-
-  const doReveal = async (key: ClientPullKey) => {
-    if (!key.revealable) {
-      toast.error(t('clientChannels.notRevealable'))
-      return
-    }
-    try {
-      const res = await revealKey.mutateAsync({ channelId, keyId: key.id })
-      setRevealed({ name: key.name, key: res.key })
-    } catch (e) {
-      // 兜底：后端返 KEY_NOT_REVEALABLE（如并发改值/降级）也走不可找回提示。
-      const code = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
-      if (code === 'KEY_NOT_REVEALABLE') toast.error(t('clientChannels.notRevealable'))
-      else toast.error(errMsg(e, t('clientChannels.revealFailed', '查看密钥失败')))
-    }
-  }
-
-  const doRevoke = (key: ClientPullKey) => {
-    setRevokeTarget(null)
-    revokeKey.mutate(
-      { channelId, keyId: key.id },
-      {
-        onSuccess: () => toast.success(t('clientChannels.revoked', '密钥已吊销')),
-        onError: (e) => toast.error(errMsg(e, t('clientChannels.revokeFailed', '吊销密钥失败'))),
-      },
-    )
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <p className="text-sm text-muted-foreground max-w-2xl">
-          {t(
-            'clientChannels.keysSubtitleViewable',
-            '拉取密钥以可逆加密存储，发出后永久使用、可随时查看明文并复制到 jm-updater.json。可编辑密钥值（改值会使持旧值的已分发客户端失效）。',
-          )}
-        </p>
-        <Button onClick={() => onCreateOpenChange(true)} className="shrink-0">
-          <Plus className="size-4" /> {t('clientChannels.createKey', '创建密钥')}
-        </Button>
-      </div>
-
-      <div className="overflow-hidden rounded-lg border">
-        <Table>
-          <TableHeader className="bg-muted/50">
-            <TableRow>
-              <TableHead>{t('common.name', '名称')}</TableHead>
-              <TableHead>{t('clientChannels.keyPrefix', '前缀')}</TableHead>
-              <TableHead>{t('common.status', '状态')}</TableHead>
-              <TableHead>{t('clientChannels.expiresAt', '过期时间')}</TableHead>
-              <TableHead>{t('clientChannels.lastUsed', '最近使用')}</TableHead>
-              <TableHead className="text-right">{t('common.actions', '操作')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {keys.map((k) => {
-              const expiryState = keyExpiryState(k.expiresAt)
-              return (
-                <TableRow key={k.id}>
-                  <TableCell className="font-medium">{k.name}</TableCell>
-                  <TableCell className="font-mono text-xs">{k.keyPrefix}…</TableCell>
-                  <TableCell>
-                    {k.revoked ? (
-                      <Badge variant="outline" className="border-destructive/40 text-destructive">
-                        {t('clientChannels.statusRevoked', '已吊销')}
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline">{t('clientChannels.statusActive', '有效')}</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span>{formatKeyExpiresAt(k.expiresAt, t('clientChannels.neverExpires', '永不过期'))}</span>
-                      {expiryState === 'expired' && (
-                        <Badge variant="outline" className="border-status-danger/50 bg-status-danger/10 text-status-danger">
-                          {t('clientChannels.expired', '已过期')}
-                        </Badge>
-                      )}
-                      {expiryState === 'expiring' && (
-                        <Badge variant="outline" className="border-status-warning/50 bg-status-warning/10 text-status-warning">
-                          {t('clientChannels.expiringSoon', '即将过期')}
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-xs">{k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : '-'}</TableCell>
-                  <TableCell>
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => doReveal(k)}
-                        disabled={!k.revealable || revealKey.isPending}
-                        title={k.revealable ? undefined : t('clientChannels.notRevealable')}
-                      >
-                        <Eye className="size-3.5" /> {t('clientChannels.reveal', '查看')}
-                      </Button>
-                      <Button variant="ghost" size="xs" onClick={() => setEditTarget(k)} disabled={k.revoked}>
-                        <Pencil className="size-3.5" /> {t('common.edit', '编辑')}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        className="text-status-danger hover:text-status-danger"
-                        onClick={() => setRevokeTarget(k)}
-                        disabled={k.revoked}
-                      >
-                        <Ban className="size-3.5" /> {t('clientChannels.revoke', '吊销')}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-            {keys.length === 0 && !loading && (
-              <TableRow>
-                <TableCell colSpan={6} className="h-16 text-center text-muted-foreground">
-                  {t('clientChannels.noKeys', '暂无密钥')}
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
-
-      <CreateKeyDialog
-        channelId={channelId}
-        open={createOpen}
-        onOpenChange={onCreateOpenChange}
-        onCreated={(s) => setSecret(s)}
-        onCreate={(body) => createKey.mutateAsync(body)}
-        submitting={createKey.isPending}
-        onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
-      />
-
-      <EditKeyDialog
-        channelId={channelId}
-        target={editTarget}
-        onOpenChange={(v) => !v && setEditTarget(null)}
-        onUpdated={(s) => {
-          // 改了值才回显新明文弹窗（后端 key 非空表示改了值）；仅改名不弹。
-          if (s.key) setSecret(s)
-        }}
-        onUpdate={(body) => updateKey.mutateAsync(body)}
-        submitting={updateKey.isPending}
-        onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
-      />
-
-      <SecretDialog
-        secret={secret}
-        onClose={() => setSecret(null)}
-        onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
-      />
-
-      <RevealDialog
-        revealed={revealed}
-        onClose={() => setRevealed(null)}
-        onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
-      />
-
-      <DangerConfirm
-        open={revokeTarget !== null}
-        title={t('clientChannels.revokeConfirm', '确定吊销此密钥？')}
-        description={t(
-          'clientChannels.revokeConfirmDesc',
-          '吊销不可恢复：使用此密钥的已分发客户端将无法再更新（拉取 manifest/制品一律被拒）。仅在确认该密钥不再服务于任何已发出的整合包时吊销。',
-        )}
-        scope="platform"
-        confirmLabel={t('clientChannels.revoke', '吊销')}
-        onConfirm={() => revokeTarget && doRevoke(revokeTarget)}
-        onCancel={() => setRevokeTarget(null)}
-      />
-    </div>
-  )
-}
-
 
