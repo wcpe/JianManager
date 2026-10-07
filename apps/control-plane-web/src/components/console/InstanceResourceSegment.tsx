@@ -5,9 +5,10 @@ import { cn } from '@jianmanager/ui'
 import InstanceConfigSurfacePanel from './InstanceConfigSurfacePanel'
 import InstanceEnvSegment from './InstanceEnvSegment'
 import WorkspaceCardBody from './WorkspaceCardBody'
+import type { ResourceSegment } from '@jianmanager/ui/lib/instance-console-tabs'
 
-/** 文件配置页签内的分段（FR-413；FR-451 增「关键配置」段）。 */
-export type ResourceSegment = 'files' | 'config' | 'env'
+/** 文件配置页签内的分段（FR-413；FR-451 增「关键配置」段）。类型定义已归包（与控制台页签解析同源）。 */
+export type { ResourceSegment } from '@jianmanager/ui/lib/instance-console-tabs'
 
 // 分段标签用「文件」而非「文件配置」——后者是本页签自己的名字，同名会撞可访问性名称。
 const SEGMENTS: Array<{ key: ResourceSegment; labelKey: string }> = [
