@@ -75,6 +75,7 @@ import {
   RevealDialog,
   SecretDialog,
 } from '@jianmanager/ui/components/views/client-dist/KeySecretDialogs'
+import { CreateChannelDialog } from '@jianmanager/ui/components/views/client-dist/CreateChannelDialog'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -103,6 +104,7 @@ type WorkbenchTab = 'keys' | 'versions' | 'core' | 'stats' | 'guide'
 export default function ClientChannelsPage() {
   const { t } = useTranslation()
   const { data: channels, isLoading } = useClientChannels()
+  const createChannel = useCreateClientChannel()
   const [searchParams, setSearchParams] = useSearchParams()
   // 兼容历史 `channel`，统一按 `channelId` 还原频道工作台。
   const selected = readClientDistQuery(searchParams).channelId ?? null
@@ -174,113 +176,15 @@ export default function ClientChannelsPage() {
         onCreated={(id) => {
           setSearchParams(updateClientDistQuery(searchParams, { channelId: id }), { replace: true })
         }}
+        onCreate={(body) => createChannel.mutateAsync(body)}
+        submitting={createChannel.isPending}
+        onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
       />
     </PageShell>
   )
 }
 
 
-/** 创建频道模态（FR-187，取代原内联展开表单；内容自适应壳）。 */
-function CreateChannelDialog({
-  open,
-  onOpenChange,
-  onCreated,
-}: {
-  open: boolean
-  onOpenChange: (v: boolean) => void
-  onCreated: (channelId: string) => void
-}) {
-  const { t } = useTranslation()
-  const create = useCreateClientChannel()
-  const [channelId, setChannelId] = useState('')
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-
-  const slugOk = /^[a-z0-9][a-z0-9-]{1,63}$/.test(channelId)
-  const canSubmit = slugOk && name.trim() !== '' && !create.isPending
-
-  const reset = () => {
-    setChannelId('')
-    setName('')
-    setDescription('')
-  }
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault()
-    if (!canSubmit) return
-    try {
-      await create.mutateAsync({ channelId, name, description })
-      toast.success(t('clientChannels.created', '频道已创建'))
-      const created = channelId
-      reset()
-      onOpenChange(false)
-      onCreated(created)
-    } catch (e) {
-      toast.error(errMsg(e, t('clientChannels.createFailed', '创建频道失败')))
-    }
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(v: boolean) => {
-        if (!v) reset()
-        onOpenChange(v)
-      }}
-    >
-      <DialogContent className={cn(scrollableDialogContentClass, 'sm:max-w-lg')}>
-        <DialogHeader>
-          <DialogTitle>{t('clientChannels.addChannel', '新增频道')}</DialogTitle>
-          <DialogDescription>
-            {t('clientChannels.createDialogDesc', '为一个服务器创建分发频道；创建后进入工作台继续配置密钥与发布版本。')}
-          </DialogDescription>
-        </DialogHeader>
-        <form id="create-channel-form" onSubmit={submit}>
-          <ScrollableDialogBody className="space-y-3">
-            <label className="flex flex-col gap-1 text-sm">
-              {t('clientChannels.channelId', '频道标识')}
-              <input
-                className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive"
-                placeholder="skyblock-s1"
-                aria-invalid={channelId !== '' && !slugOk}
-                value={channelId}
-                onChange={(e) => setChannelId(e.target.value)}
-                autoFocus
-              />
-              <span className="text-xs text-muted-foreground">
-                {t('clientChannels.channelIdHint', '小写字母/数字/连字符，2-64 位，创建后不可改')}
-              </span>
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              {t('common.name', '名称')}
-              <input
-                className="p-2 border rounded bg-background"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              {t('clientChannels.description', '描述')}
-              <input
-                className="p-2 border rounded bg-background"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-            </label>
-          </ScrollableDialogBody>
-        </form>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {t('common.cancel', '取消')}
-          </Button>
-          <Button type="submit" form="create-channel-form" disabled={!canSubmit}>
-            {t('common.create', '创建')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 /**
  * 频道工作台：顶部就绪度步骤器（状态由 keyCount/currentVersion 推导）+
