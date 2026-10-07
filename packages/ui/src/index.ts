@@ -255,6 +255,9 @@ export * from './lib/logs-federation/i18n'
 export * from './lib/logs-federation/helpers'
 export * from './lib/client-publish-wizard'
 export * from './lib/settings-form'
+export * from './lib/audit-contracts'
+export * from './lib/audit-filters'
+export * from './lib/bots-overview'
 export * from './lib/runtime-assets-contracts'
 // 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics` 同名（两者格式不同，
 // 前者 1024 进制带 B/KB/MB 后缀、后者是监控指标的 G/M/K 缩写），barrel 里不能同时通配导出。

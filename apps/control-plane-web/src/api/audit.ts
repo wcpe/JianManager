@@ -1,43 +1,19 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-export interface AuditLogInfo {
-  id: number
-  uuid: string
-  userId: number
-  action: string
-  targetType: string
-  targetId: string
-  detail: string
-  ip: string
-  /** 操作是否失败（FR-321：失败操作也留痕；历史行零值=未失败）。 */
-  failed: boolean
-  /** 失败时的错误内容（响应 error body 截断，FR-321）。 */
-  error: string
-  createdAt: string
-  user?: { id: number; username: string }
-}
-
 /**
- * 审计日志筛选参数（FR-015）：任意组合，留空表示该维度不过滤。
- * 全部透传为 `GET /audit` 的 query；后端按 RFC3339 解析 from/to。
+ * 审计契约（FR-015 / FR-172 / FR-321）已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export interface AuditQueryParams {
-  userId?: number
-  action?: string
-  targetType?: string
-  /** 起始时间（RFC3339，含时区，如 2026-06-22T10:30:00Z）。 */
-  from?: string
-  /** 结束时间（RFC3339，含时区）。 */
-  to?: string
-}
-
-export interface AuditLogPage {
-  items: AuditLogInfo[]
-  total: number
-  page: number
-  pageSize: number
-}
+export type {
+  AuditLogInfo,
+  AuditQueryParams,
+  AuditLogPage,
+} from '@jianmanager/ui/lib/audit-contracts'
+import type {
+  AuditLogInfo,
+  AuditQueryParams,
+  AuditLogPage,
+} from '@jianmanager/ui/lib/audit-contracts'
 
 const AUDIT_PAGE_SIZE = 100
 
