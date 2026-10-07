@@ -273,6 +273,18 @@ export * from './lib/config-discover'
 export * from './lib/config-favorites'
 export * from './lib/webkit-entry-adapter'
 export * from './lib/client-dist-query'
+export * from './lib/logs-filters'
+export * from './lib/schedule-form'
+// 显式列出而非 `export *`：`SummaryChip` 与 `./components/summary-chips` 同名但语义不同
+// （前者是可点击筛选 chip、后者是带状态等级的汇总 chip）；`ConfigSwitch` 已由
+// `./components/views/instances/ConfigSwitch` 导出。两者都不能在 barrel 里同时通配。
+// 需要 ConfigRow 版 SummaryChip 的调用方走深路径 `@jianmanager/ui/components/views/config-explorer/ConfigRow`。
+export {
+  ConfigViewToggle,
+  ConfigSummaryChips,
+  ConfigRow,
+} from './components/views/config-explorer/ConfigRow'
+export type { ConfigView } from './components/views/config-explorer/ConfigRow'
 export * from './lib/client-dist-kpi'
 export * from './lib/client-dist-observability-contracts'
 export * from './components/views/client-dist/InsightCards'

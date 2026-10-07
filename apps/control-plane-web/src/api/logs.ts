@@ -5,23 +5,8 @@ import api from '@/api/client'
 // 日志条目类型已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
 import type { LogEntry } from '@jianmanager/ui'
 export type { LogEntry } from '@jianmanager/ui'
-/** 日志查询筛选条件（DB 侧过滤 + 分页，FR-049/FR-050）。 */
-export interface LogQueryParams {
-  /** 主视图：平台仅 CP；节点/实例聚合 Worker 与实例；all 仅平台管理员。 */
-  view?: 'platform' | 'node_instance' | 'all' | 'legacy'
-  source?: string
-  level?: string
-  instanceId?: number
-  nodeId?: number
-  /** 关键字，匹配 message。 */
-  keyword?: string
-  /** 起始时间（RFC3339）。 */
-  from?: string
-  /** 结束时间（RFC3339）。 */
-  to?: string
-  page?: number
-  pageSize?: number
-}
+export type { LogQueryParams } from '@jianmanager/ui'
+import type { LogQueryParams } from '@jianmanager/ui'
 
 /** 日志分页响应。 */
 export interface LogPage {
