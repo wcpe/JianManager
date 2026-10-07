@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 
 /**
  * 实例能力画像（FR-445，ADR-091）——前端门控的唯一真源。
@@ -110,4 +111,12 @@ export function resolveCapabilities(inst?: CapabilitySubject | null): InstanceCa
 /** 画像是否声明某能力。 */
 export function hasCapability(profile: InstanceCapabilityProfile, cap: Capability): boolean {
   return profile.capabilities.includes(cap)
+}
+
+/**
+ * 实例能力画像 hook（FR-445 §2.5）：稳定的画像对象，供详情页 Tab 门控与分段渲染消费。
+ * 传 undefined（实例尚未加载）时返回 universal 回退画像。
+ */
+export function useInstanceCapabilities(inst?: CapabilitySubject | null): InstanceCapabilityProfile {
+  return useMemo(() => resolveCapabilities(inst), [inst])
 }
