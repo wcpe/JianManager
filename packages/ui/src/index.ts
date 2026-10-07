@@ -100,6 +100,7 @@ export * from './components/views/nodes/NodeLogRuntimePanel'
 export * from './components/views/nodes/NodeRuntimeSection'
 export * from './components/views/nodes/AddNodeDialog'
 export * from './components/views/nodes/NodeJDKPanel'
+export * from './components/views/nodes/BlockedByInstancesDialog'
 export * from './components/views/nodes/PingNodeButton'
 export * from './components/views/nodes/DirectoryPicker'
 
