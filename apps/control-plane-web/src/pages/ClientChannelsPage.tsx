@@ -67,6 +67,14 @@ import {
   ReadinessStepper,
   STEP_META,
 } from '@jianmanager/ui/components/views/client-dist/ReadinessStepper'
+import {
+  ChannelCard,
+  EmptyChannelsGuide,
+} from '@jianmanager/ui/components/views/client-dist/ChannelCards'
+import {
+  RevealDialog,
+  SecretDialog,
+} from '@jianmanager/ui/components/views/client-dist/KeySecretDialogs'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -171,80 +179,6 @@ export default function ClientChannelsPage() {
   )
 }
 
-/** 空状态大引导卡：说明用途 + 主 CTA「创建第一个分发频道」。 */
-function EmptyChannelsGuide({ onCreate }: { onCreate: () => void }) {
-  const { t } = useTranslation()
-  return (
-    <div className="rounded-xl border border-dashed bg-card/40 p-10 text-center flex flex-col items-center gap-4">
-      <span className="grid size-14 place-items-center rounded-full bg-primary/10 text-primary">
-        <DownloadCloud className="size-7" />
-      </span>
-      <div className="space-y-1 max-w-md">
-        <h2 className="text-lg font-semibold">{t('clientChannels.emptyTitle', '创建第一个分发频道')}</h2>
-        <p className="text-sm text-muted-foreground">
-          {t(
-            'clientChannels.emptyDesc',
-            '分发频道是玩家客户端 OTA 更新的入口：建频道 → 拉取密钥 → 发布版本 → 接入启动器，四步即可让玩家自动收到更新。',
-          )}
-        </p>
-      </div>
-      <Button onClick={onCreate} size="lg">
-        <Plus className="size-4" /> {t('clientChannels.createFirst', '创建分发频道')}
-      </Button>
-    </div>
-  )
-}
-
-/** 频道卡片：当前版本 / 密钥数 + 就绪度小标，点击进入工作台。 */
-function ChannelCard({ channel, onOpen }: { channel: ClientChannel; onOpen: () => void }) {
-  const { t } = useTranslation()
-  const steps = useMemo(
-    () => deriveReadiness({ keyCount: channel.keyCount ?? 0, currentVersion: channel.currentVersion }),
-    [channel.keyCount, channel.currentVersion],
-  )
-  const completed = readinessCompletedCount(steps)
-  const ready = completed === steps.length
-
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="group text-left rounded-xl border bg-card/40 p-4 transition-colors hover:border-primary/40 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="font-semibold truncate">{channel.name}</div>
-          <div className="font-mono text-xs text-muted-foreground truncate">{channel.channelId}</div>
-        </div>
-        <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-      </div>
-
-      {channel.description && (
-        <p className="mt-2 text-xs text-muted-foreground line-clamp-2">{channel.description}</p>
-      )}
-
-      <div className="mt-3 flex items-center gap-2 flex-wrap text-xs">
-        <Badge variant={channel.currentVersion > 0 ? 'default' : 'outline'}>
-          {channel.currentVersion > 0
-            ? `v${channel.currentVersion}`
-            : t('clientChannels.unpublished', '未发布')}
-        </Badge>
-        <Badge variant="outline">
-          {t('clientChannels.keyCountBadge', '{{n}} 个密钥', { n: channel.keyCount ?? 0 })}
-        </Badge>
-        {ready ? (
-          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-500">
-            <Check className="size-3.5" /> {t('clientChannels.ready', '已就绪')}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">
-            {t('clientChannels.readinessShort', '就绪度 {{c}}/{{n}}', { c: completed, n: steps.length })}
-          </span>
-        )}
-      </div>
-    </button>
-  )
-}
 
 /** 创建频道模态（FR-187，取代原内联展开表单；内容自适应壳）。 */
 function CreateChannelDialog({
@@ -702,9 +636,17 @@ function KeysSegment({
         }}
       />
 
-      <SecretDialog secret={secret} onClose={() => setSecret(null)} />
+      <SecretDialog
+        secret={secret}
+        onClose={() => setSecret(null)}
+        onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
+      />
 
-      <RevealDialog revealed={revealed} onClose={() => setRevealed(null)} />
+      <RevealDialog
+        revealed={revealed}
+        onClose={() => setRevealed(null)}
+        onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
+      />
 
       <DangerConfirm
         open={revokeTarget !== null}
@@ -965,81 +907,3 @@ function EditKeyForm({
   )
 }
 
-/** 创建或改值后的明文展示弹窗：密钥已加密保存，后续仍可从列表查看（复制兼容 HTTP 非安全上下文）。 */
-function SecretDialog({ secret, onClose }: { secret: ClientKeyWithSecret | null; onClose: () => void }) {
-  const { t } = useTranslation()
-
-  const copy = async () => {
-    if (!secret) return
-    const ok = await copyToClipboard(secret.key)
-    if (ok) toast.success(t('clientChannels.copied', '已复制到剪贴板'))
-    else toast.error(t('clientChannels.copyFailed', '复制失败，请手动选择复制'))
-  }
-
-  return (
-    <Dialog open={secret !== null} onOpenChange={(v: boolean) => { if (!v) onClose() }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t('clientChannels.secretTitle', '拉取密钥')}</DialogTitle>
-          <DialogDescription>
-            {t('clientChannels.secretDesc', '此密钥已加密保存，关闭后仍可在密钥列表中随时查看明文。')}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
-          <code className="flex-1 break-all font-mono text-sm">{secret?.key}</code>
-          <Button type="button" variant="outline" size="sm" onClick={copy} className="shrink-0">
-            <Copy className="size-4" /> {t('clientChannels.copy', '复制')}
-          </Button>
-        </div>
-        <DialogFooter>
-          <Button onClick={onClose}>{t('common.close', '关闭')}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/** 查看已存密钥明文弹窗（FR-192，可逆加密存储 → 可随时查看）：展示明文 + 复制（走 copyToClipboard）。 */
-function RevealDialog({
-  revealed,
-  onClose,
-}: {
-  revealed: { name: string; key: string } | null
-  onClose: () => void
-}) {
-  const { t } = useTranslation()
-
-  const copy = async () => {
-    if (!revealed) return
-    const ok = await copyToClipboard(revealed.key)
-    if (ok) toast.success(t('clientChannels.copied', '已复制到剪贴板'))
-    else toast.error(t('clientChannels.copyFailed', '复制失败，请手动选择复制'))
-  }
-
-  return (
-    <Dialog open={revealed !== null} onOpenChange={(v: boolean) => { if (!v) onClose() }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{t('clientChannels.revealTitle', '拉取密钥明文')}</DialogTitle>
-          <DialogDescription>
-            {t('clientChannels.revealDesc', '用于玩家侧更新器鉴权拉取，请复制到 jm-updater.json 妥善保存。')}
-          </DialogDescription>
-        </DialogHeader>
-        {revealed && (
-          <p className="text-xs text-muted-foreground">
-            {t('clientChannels.revealKeyName', '密钥名称')}：{revealed.name}
-          </p>
-        )}
-        <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
-          <code className="flex-1 break-all font-mono text-sm">{revealed?.key}</code>
-          <Button type="button" variant="outline" size="sm" onClick={copy} className="shrink-0">
-            <Copy className="size-4" /> {t('clientChannels.copy', '复制')}
-          </Button>
-        </div>
-        <DialogFooter>
-          <Button onClick={onClose}>{t('common.close', '关闭')}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
