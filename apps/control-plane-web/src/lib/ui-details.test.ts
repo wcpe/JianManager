@@ -63,7 +63,7 @@ const HOVER_CARD_FILES = [
   'components/console/BotWorktableCard.tsx',
   '@ui/components/views/instances/InstanceWorktableCard.tsx',
   'components/ui/summary-chips.tsx',
-  'pages/config-row.tsx',
+  '@ui/components/views/config-explorer/ConfigRow.tsx',
   '@ui/components/views/instances/InventorySegment.tsx',
 ] as const
 
