@@ -697,6 +697,7 @@ export default function LogsPage() {
             items={items}
             total={total}
             follow={follow}
+            filterKey={`${view}|${instanceId ?? ''}|${nodeId ?? ''}|${level}|${keyword.trim()}|${range}`}
             loading={isLoading}
             emptySuccessAllowed={emptySuccessAllowed}
           />
@@ -927,12 +928,19 @@ function LogTimeline({
   items,
   total,
   follow,
+  filterKey,
   loading = false,
   emptySuccessAllowed = true,
 }: {
   items: import('@/api/logs').LogEntry[]
   total: number
   follow: boolean
+  /**
+   * 筛选身份键（view/实例/节点/级别/关键字/范围；**不含 page** ✗——翻页需保留滚动位置）。
+   * 变化即重置滚动：切实例后新列表更短时，旧 scrollTop 会落在空白区，visible 为空 ⇒
+   * 表现为「点什么都不动/刷不出来」✗✓。
+   */
+  filterKey: string
   /** 查询尚未完成：此时不判空态，避免把「未就绪」误报为空结果。 */
   loading?: boolean
   /** FR-482：false 时禁止把空列表呈成「无日志」成功空态。 */
@@ -949,6 +957,14 @@ function LogTimeline({
       setScrollTop(0)
     }
   }, [follow, items])
+
+  // 筛选变化（非翻页）⇒ 无条件重置滚动到顶部：避免旧偏移落在新列表的空白区 ✗✓。
+  useEffect(() => {
+    if (containerRef.current) {
+      containerRef.current.scrollTop = 0
+    }
+    setScrollTop(0)
+  }, [filterKey])
 
   const win = computeVirtualWindow({
     scrollTop,
