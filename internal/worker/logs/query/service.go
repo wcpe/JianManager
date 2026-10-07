@@ -252,55 +252,113 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 	)
 	cursorKey := decodeCursorSort(req.View)
 
-	// 并发取数：只取前 fanoutLimit 个 range（与串行实际发出的请求一致）；
-	// 副作用按 ranges 原顺序施加，故早退、取消、按 target 改写 coverage、
+	// 并发取数：任务执行顺序与 ranges 原顺序一致；
+	// 副作用按任务顺序施加，故早退、取消、按 target 改写 coverage、
 	// 质量覆盖、items 追加与预算计数全部与串行逐字一致（后续 SortEvents 与顺序无关）。
+	//
+	// 合并执行（2026-10-08）：同 (Owner, UTC 天) 的可合并 range 聚为一次粗筛
+	// （MergedRangeClient，行级按各 range 权威谓词归因）；客户端未实现该能力、
+	// 或组内存在无来源约束 range 时自动退回逐 range——语义不变，仅性能差异。
+	//
+	// 天批次降序 + 早停（2026-10-08 实测）：任务按 UTC 天降序分批执行，累计候选行数
+	// 达到「页大小+1」即跳过更旧天的批次——更旧天的行 _time 严格早于更新天，不可能
+	// 进入本页 top-N（分页/导出每页请求独立判断，下一页带收窄窗口继续取，枚举不丢行）。
+	// 实测依据：24h 平台级窗口的 VL 查询成本集中在"旧天的稀疏宽窗"（10-06 段 2.9s），
+	// 而全局 top-100 经对照 100/100 全部来自最新天分区。
+	mergedClient, _ := s.client.(MergedRangeClient)
+	tasks := groupSearchTasks(plan.Ranges, mergedClient != nil)
+	batches := groupTasksByUTCDay(tasks)
 	type searchRangeOutcome struct {
-		res      RangeResult
-		err      error
-		targetID string
+		res       RangeResult
+		err       error
+		targetIDs []string
 	}
-	launch := len(plan.Ranges)
-	if fanoutLimit > 0 && uint32(launch) > fanoutLimit {
-		launch = int(fanoutLimit)
-	}
+	// appliedRanges 计账保持「最多处理 fanoutLimit 个原始 range」（组是原子单位，不切割）。
 	const maxRangeParallel = 8
-	outcomes := make([]searchRangeOutcome, launch)
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, maxRangeParallel)
-	for i := 0; i < launch; i++ {
-		rng := plan.Ranges[i]
-		wg.Add(1)
-		go func(idx int, rng AuthoritativeRange) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			q := RangeQuery{
-				RequestID:        req.RequestID,
-				TimeRange:        req.TimeRange,
-				Filter:           req.Filter,
-				Budget:           req.Budget,
-				ClosedVisibleSeq: rng.ClosedVisibleSeq,
-				CursorSortKey:    cursorKey,
+	outcomes := make([]searchRangeOutcome, 0, len(tasks))
+	appliedRanges := 0
+	skippedDays := 0
+	for bi, batch := range batches {
+		batchOutcomes := make([]searchRangeOutcome, len(batch))
+		launched := 0
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, maxRangeParallel)
+		for i := range batch {
+			t := batch[i]
+			if fanoutLimit > 0 && uint32(appliedRanges+len(t.rngs)) > fanoutLimit {
+				// 超预算：本批剩余任务不执行（与原「最多处理 fanoutLimit 个 range」一致）。
+				break
 			}
-			rres, err := s.client.Search(ctx, rng, q)
-			outcomes[idx] = searchRangeOutcome{res: rres, err: err, targetID: rng.TargetID}
-		}(i, rng)
+			appliedRanges += len(t.rngs)
+			launched++
+			wg.Add(1)
+			go func(idx int, t searchTask) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				ids := make([]string, 0, len(t.rngs))
+				for _, rng := range t.rngs {
+					ids = append(ids, rng.TargetID)
+				}
+				if t.merged {
+					// 合并粗筛：前缀水位/代次由每 range 的权威谓词在归因时检查，
+					// 故 q.ClosedVisibleSeq 传 0——组内各 range 水位不同，不得用任一
+					// range 的水位冒充全局（vlrange.SearchMerged 只读 rng.ClosedVisibleSeq）。
+					q := RangeQuery{
+						RequestID:     req.RequestID,
+						TimeRange:     req.TimeRange,
+						Filter:        req.Filter,
+						Budget:        req.Budget,
+						CursorSortKey: cursorKey,
+					}
+					rres, err := mergedClient.SearchMerged(ctx, t.rngs, q)
+					batchOutcomes[idx] = searchRangeOutcome{res: rres, err: err, targetIDs: ids}
+					return
+				}
+				rng := t.rngs[0]
+				q := RangeQuery{
+					RequestID:        req.RequestID,
+					TimeRange:        req.TimeRange,
+					Filter:           req.Filter,
+					Budget:           req.Budget,
+					ClosedVisibleSeq: rng.ClosedVisibleSeq,
+					CursorSortKey:    cursorKey,
+				}
+				rres, err := s.client.Search(ctx, rng, q)
+				batchOutcomes[idx] = searchRangeOutcome{res: rres, err: err, targetIDs: ids}
+			}(i, t)
+		}
+		wg.Wait()
+		outcomes = append(outcomes, batchOutcomes[:launched]...)
+		// 早停：累计候选行数达「页大小+1」⇒ 更旧天的批次不可能贡献本页 top-N。
+		collected := 0
+		for _, o := range outcomes {
+			if o.err == nil {
+				collected += len(o.res.Items)
+			}
+		}
+		if collected >= int(limit)+1 {
+			skippedDays = len(batches) - bi - 1
+			break
+		}
 	}
-	wg.Wait()
+	if skippedDays > 0 {
+		slog.Debug("search 天批次早停", "skipped_days", skippedDays)
+	}
 
-	applied := uint32(0)
+	// applied 按原始 range 数累计（合并组记组内全部 target）。
+	applied := 0
 	for _, o := range outcomes {
 		if err := ctx.Err(); err != nil {
 			cancelled = true
 			break
 		}
-		if fanoutLimit > 0 && applied >= fanoutLimit {
+		if fanoutLimit > 0 && uint32(applied) >= fanoutLimit {
 			plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 			budgetHit = true
 			break
 		}
-		applied++
+		applied += len(o.targetIDs)
 		if o.err != nil {
 			if errors.Is(o.err, ErrRangeClientUnimplemented) {
 				resp.Err = newErr(ErrCodeUnsupported, "range client search unimplemented")
@@ -313,14 +371,17 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 				break
 			}
 			plan.Coverage.MarkIncomplete(ReasonRangeUnavailable)
-			for i := range plan.Coverage.Targets {
-				if plan.Coverage.Targets[i].TargetID == o.targetID {
-					plan.Coverage.Targets[i].State = CoverageNotReady
-					// 观测日志（2026-09-30）：这个标签在 CP 侧只剩一个符号，看不到原因；
-					// 打一行就能终止“它到底为何不可查”的反复猜测。
-					slog.Info("search range 不可用，标记 RANGE_UNAVAILABLE",
-						"target", o.targetID, "err", o.err)
-					plan.Coverage.Targets[i].Reasons = appendUniqueStr(plan.Coverage.Targets[i].Reasons, ReasonRangeUnavailable)
+			// 观测日志（2026-09-30）：这个标签在 CP 侧只剩一个符号，看不到原因；
+			// 打一行就能终止“它到底为何不可查”的反复猜测。
+			// 合并组失败时组内全部 target 均随之不可用（整组原子）。
+			slog.Info("search range 不可用，标记 RANGE_UNAVAILABLE",
+				"targets", o.targetIDs, "err", o.err)
+			for _, tid := range o.targetIDs {
+				for i := range plan.Coverage.Targets {
+					if plan.Coverage.Targets[i].TargetID == tid {
+						plan.Coverage.Targets[i].State = CoverageNotReady
+						plan.Coverage.Targets[i].Reasons = appendUniqueStr(plan.Coverage.Targets[i].Reasons, ReasonRangeUnavailable)
+					}
 				}
 			}
 			continue

@@ -51,6 +51,24 @@ type RangeClient interface {
 	Tail(ctx context.Context, rng AuthoritativeRange, q RangeQuery, mode TailMode) (RangeResult, error)
 }
 
+// MergedRangeClient 是可选能力：把**同分布层级、同 UTC 天**的多个 range 合并为
+// 一次粗筛查询执行（LogsQL `in()` 列出来源集合），行级按各 range 的权威范围
+// 谓词（来源/代次/前缀水位）在内存归因过滤。
+//
+// 语义约定（实现者必须逐字遵守，谓词与单 range 查询等价）：
+//   - rngs 必须同 Owner 且同 Key.UTCDay，且每个 range 都有可枚举的来源集合
+//     （否则调用方不应合并）；
+//   - 返回 Items 已按各 range 的 scope/代次/水位过滤；同 event_id 同 hash 去重
+//     （异 hash 保留并触发质量降级语义，与 CP 侧 dedupe 一致）；
+//   - Exhausted 表示粗筛未截断（全部匹配行已取回）。
+//
+// 背景（2026-10-08 实测）：面板 24h 平台级查询经 162 目标逐 range 扇出
+// 7.4-20.9s；合并后同数据 0.3-0.4s（VL `in()` 一次查询），故浏览路径启用。
+// 未实现本接口时 Service 自动退化为逐 range 执行——语义不变，仅性能差异。
+type MergedRangeClient interface {
+	SearchMerged(ctx context.Context, rngs []AuthoritativeRange, q RangeQuery) (RangeResult, error)
+}
+
 // FieldsRangeClient 扩展查询字段枚举。实现必须读取同一 authoritative range，
 // 不得从物理副本集合自行拼接结果。
 type FieldsRangeClient interface {

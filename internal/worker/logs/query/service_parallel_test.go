@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,16 +20,20 @@ import (
 //  2. 总耗时必须显著低于「n × 单 range 耗时」（串行实现下必然超过）。
 //
 // 同时它也是并行化的实效证据：并发取数时总耗时约等于单 range 耗时。
+//
+// 2026-10-08 调整：并发发生在**天批次内**（天批次间因 tail-first 早停而顺序执行），
+// 故构造「同一天、多目标」的分区（8 个 namespace × 同一天）——批内 8 任务并发。
 func TestSearch_FetchesRangesInParallel(t *testing.T) {
 	const n = 8
 	const perRange = 40 * time.Millisecond
 
 	c := catalog.New(nil)
 	from := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	day := from.Format("2006-01-02")
 	for i := 0; i < n; i++ {
 		key := catalog.PartitionKey{
-			StorageNamespace: "ns/game-1",
-			UTCDay:           from.AddDate(0, 0, i).Format("2006-01-02"),
+			StorageNamespace: fmt.Sprintf("ns/game-%d", i),
+			UTCDay:           day,
 		}
 		rec := catalog.NewStableRecord(key, catalog.OwnerHot, 1, "hot-g1")
 		rec.PublishedProjection = &catalog.PublishedProjection{
@@ -66,7 +71,7 @@ func TestSearch_FetchesRangesInParallel(t *testing.T) {
 		RequestID: "parallel-1",
 		TimeRange: TimeRange{
 			FromUTC: from.Format(time.RFC3339),
-			ToUTC:   from.AddDate(0, 0, n+1).Format(time.RFC3339),
+			ToUTC:   from.AddDate(0, 0, 1).Format(time.RFC3339),
 		},
 		Budget: Budget{Limit: 100},
 	})

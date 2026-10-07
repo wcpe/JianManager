@@ -41,6 +41,19 @@ func (t *Tiered) Search(ctx context.Context, rng query.AuthoritativeRange, q que
 	return c.Search(ctx, rng, q)
 }
 
+// SearchMerged 合并检索：组内必然同 Owner（调用方按 (Owner, UTCDay) 分组），
+// 故取首个 range 选层后整组交给该层客户端；跨层合并会被下层拒绝。
+func (t *Tiered) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRange, q query.RangeQuery) (query.RangeResult, error) {
+	if len(rngs) == 0 {
+		return query.RangeResult{}, fmt.Errorf("vlrange: empty merged range set")
+	}
+	c, err := t.forRange(rngs[0])
+	if err != nil {
+		return query.RangeResult{}, err
+	}
+	return c.SearchMerged(ctx, rngs, q)
+}
+
 func (t *Tiered) Stats(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.StatsResult, error) {
 	c, err := t.forRange(rng)
 	if err != nil {
@@ -82,6 +95,7 @@ func (t *Tiered) FollowLive(ctx context.Context, rng query.AuthoritativeRange, q
 }
 
 var _ query.RangeClient = (*Tiered)(nil)
+var _ query.MergedRangeClient = (*Tiered)(nil)
 var _ query.FieldsRangeClient = (*Tiered)(nil)
 var _ query.FacetsRangeClient = (*Tiered)(nil)
 var _ query.FollowLiveRangeClient = (*Tiered)(nil)

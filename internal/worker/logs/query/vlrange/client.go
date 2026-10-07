@@ -202,7 +202,14 @@ func (c *Client) FollowLive(ctx context.Context, rng query.AuthoritativeRange, q
 }
 
 func (c *Client) params(rng query.AuthoritativeRange, q query.RangeQuery) (url.Values, bool, error) {
-	start, err := time.Parse("2006-01-02", rng.Key.UTCDay)
+	return c.dayParams(rng.Key.UTCDay, q)
+}
+
+// dayParams 构造某 UTC 天分区的 HTTP 查询参数（start/end/游标收窄/extra_filters）。
+// 抽自原 params()：单 range 与合并粗筛（merged.go）共用同一窗口语义——两个入口
+// 的 start/end 计算必须逐字一致，否则合并路径会看到与逐 range 路径不同的数据面。
+func (c *Client) dayParams(utcDay string, q query.RangeQuery) (url.Values, bool, error) {
+	start, err := time.Parse("2006-01-02", utcDay)
 	if err != nil {
 		return nil, false, fmt.Errorf("vlrange: invalid Catalog UTC day: %w", err)
 	}
