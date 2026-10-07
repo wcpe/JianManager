@@ -4,6 +4,8 @@ import api from '@/api/client'
 // 节点实体类型已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
 import type { NodeInfo } from '@jianmanager/ui'
 export type { NodeInfo } from '@jianmanager/ui'
+import type { ArchivedNode } from '@jianmanager/ui/lib/node-types'
+export type { ArchivedNode } from '@jianmanager/ui/lib/node-types'
 
 /** 节点排空结果（FR-048）。 */
 export interface DrainResult {
@@ -162,26 +164,6 @@ export function useDeleteNode() {
   })
 }
 
-/** 归档节点（已软删，FR-393）：活跃 NodeInfo 摘要 + deletedAt。 */
-export interface ArchivedNode {
-  id: number
-  uuid: string
-  name: string
-  host: string
-  grpcPort: number
-  wsPort: number
-  status: number
-  maintenance: boolean
-  os: string
-  arch: string
-  cpuCores: number
-  memoryMb: number
-  lastHeartbeat: string | null
-  createdAt: string
-  updatedAt?: string
-  /** 下线（软删）时间，RFC3339。 */
-  deletedAt: string
-}
 
 /** 归档清理结果（FR-394）：硬删节点记录；force 时含级联实例数。 */
 export interface NodePurgeResult {

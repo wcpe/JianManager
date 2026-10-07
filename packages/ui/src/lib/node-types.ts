@@ -32,3 +32,23 @@ export interface NodeInfo {
   lastHeartbeat: string | null
   createdAt: string
 }
+/** 归档节点（已软删，FR-393）：活跃 NodeInfo 摘要 + deletedAt。 */
+export interface ArchivedNode {
+  id: number
+  uuid: string
+  name: string
+  host: string
+  grpcPort: number
+  wsPort: number
+  status: number
+  maintenance: boolean
+  os: string
+  arch: string
+  cpuCores: number
+  memoryMb: number
+  lastHeartbeat: string | null
+  createdAt: string
+  updatedAt?: string
+  /** 下线（软删）时间，RFC3339。 */
+  deletedAt: string
+}

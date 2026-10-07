@@ -101,6 +101,16 @@ export * from './components/views/nodes/NodeRuntimeSection'
 export * from './components/views/nodes/AddNodeDialog'
 export * from './components/views/nodes/NodeJDKPanel'
 export * from './components/views/nodes/BlockedByInstancesDialog'
+// NodeListParts 的 formatBytes 与 './lib/monitor-metrics' 同名，故显式列出其余导出；
+// formatBytes 走深路径 '@jianmanager/ui/components/views/nodes/NodeListParts'。
+export {
+  ArchivedNodeListRow,
+  NodeActionsMenu,
+  NodeCard,
+  NodeListRow,
+  NodeOverviewSection,
+  NodeRailIcon,
+} from './components/views/nodes/NodeListParts'
 export * from './components/views/nodes/PingNodeButton'
 export * from './components/views/nodes/DirectoryPicker'
 
