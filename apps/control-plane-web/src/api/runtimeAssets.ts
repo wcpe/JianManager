@@ -2,8 +2,12 @@ import type { AxiosProgressEvent } from 'axios'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 资产类型（与后端 model.AssetType 对齐，FR-045）。 */
-export type AssetType = 'core' | 'plugin' | 'image' | 'video' | 'archive' | 'blob' | 'client-file'
+/**
+ * 制品契约（FR-045）已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ */
+export type { AssetType, AssetInfo } from '@jianmanager/ui/lib/asset-contracts'
+import type { AssetInfo, AssetType } from '@jianmanager/ui/lib/asset-contracts'
+
 
 /** 引用某 JDK 的实例（引用关系下钻 / 删除占用方提示，FR-082）。 */
 export interface JDKRefInstance {
@@ -40,26 +44,6 @@ export interface JDKSummary {
 }
 
 /** 制品库资产（与后端 model.Asset 对齐，FR-045）。 */
-export interface AssetInfo {
-  id: number
-  type: AssetType
-  name: string
-  version: string
-  filename: string
-  sha256: string
-  md5: string
-  size: number
-  contentType: string
-  sourceUrl: string
-  metadata: string
-  storageState: 'hot' | 'archived' | 'external' | 'lost'
-  storageBackend: string
-  storageChannelId: number
-  refCount: number
-  relPath: string
-  createdAt: string
-  lastUsedAt: string | null
-}
 
 /** 制品按类型分组（每组含占用/去重/冷热统计）。 */
 export interface AssetTypeGroup {

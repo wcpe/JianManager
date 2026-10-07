@@ -51,6 +51,7 @@ function renderEditor(props: Partial<ComponentProps<typeof ConfigFileEditor>> = 
       content: 'motd=hello',
       format: 'properties',
       fields: [],
+      schemaJson: '',
       validation: { valid: true, issues: [] },
     },
     onWrite,
@@ -97,6 +98,7 @@ describe('ConfigFileEditor（FR-071 单文件配置编辑器受控视图）', ()
         content: 'x',
         format: 'properties',
         fields: [],
+        schemaJson: '',
         validation: { valid: false, issues: [{ key: 'motd', message: 'bad' } as never] },
       },
     })
