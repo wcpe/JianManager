@@ -100,6 +100,15 @@ export interface TargetCoverage {
 export interface Coverage {
   /** true = 本次结果集在声明的授权目标与时间窗内完整。 */
   complete: boolean
+  /**
+   * 首屏快路径（Query.Fast）尚未做逐目标完整性校验时的独立标记。
+   *
+   * 与 complete 正交、**绝不冒充 complete**：pending=true 表示「未校验」，
+   * 不是「有具体缺失」——不得据此渲染「部分日志无法查询」的失败/缺失文案，
+   * 但也不可把空结果当完整成功，且全量历史完整性（historyFullyEnumerated）不得为真。
+   * 导出入口不因 pending 关闭：产出物由后端慢路径在下载前做完整校验（FR-482 由后端闸保证）。
+   */
+  pending?: boolean
   /** 结构化部分原因；失败 / 降级时不得省略。 */
   partialReasons: PartialReason[]
   /** 目标覆盖摘要。 */
@@ -203,13 +212,15 @@ export interface FormattedCoverageSummary {
   /**
    * 横幅档位。
    * - complete：显式 complete 且无 partial / 未解析重复
-   * - partial：有 coverage 但不完整
+   * - partial：有 coverage 但不完整（含 pending 未校验；由 pending 字段区分语义）
    * - failed：无 coverage（查询失败信封），**禁止**当成空成功
    * - unknown：coverage 形状无法识别
    */
   status: 'complete' | 'partial' | 'failed' | 'unknown'
   /** 仅 status=complete 时为 true。 */
   complete: boolean
+  /** 首屏快路径未校验标记（Coverage.Pending 的透传；不是缺失原因）。 */
+  pending: boolean
   /**
    * 是否允许 UI 把「0 条结果」呈现为成功空态。
    * 失败 / 不完整 / coverage 缺失时一律 false——失败不得显示为空成功。
@@ -239,6 +250,8 @@ export type LogViewState =
   | 'truncated'
   | 'legacy'
   | 'gap'
+  /** 首屏快路径未做完整性校验（Coverage.Pending）：结果可用但未验证，非缺失。 */
+  | 'verifying'
   | 'partial'
   | 'ready_complete'
   | 'unknown'
@@ -248,11 +261,21 @@ export interface ClassifiedLogViewState {
   state: LogViewState
   /** 是否为失败态（传输错误 / VIEW_STALE / 引擎未就绪等，不可渲染成空成功）。 */
   isFailure: boolean
-  /** 是否为不完整结果（partial 各态）。 */
+  /** 是否为不完整结果（partial 各态；含未校验的 verifying）。 */
   isIncomplete: boolean
+  /**
+   * 是否处于「未校验」态（state='verifying'）：首屏快路径结果，完整性未验证。
+   * 结果可用、可继续浏览与翻页；不得渲染为「缺失/失败」，也不得宣称完整。
+   */
+  pendingVerification: boolean
   /** 空结果是否可作为「成功且完整」展示。 */
   emptySuccessAllowed: boolean
-  /** 是否允许导出下载入口（仅在覆盖完整且校验通过时为 true）。 */
+  /**
+   * 是否允许导出下载入口。
+   * complete 校验通过时为 true；**未校验（verifying）时同样开放入口**——
+   * 下载物由后端慢路径在产出前做完整校验（FR-482「只有校验后可下载」由后端闸保证），
+   * 前端把「未校验」当「已失败」会把导出永久锁死。
+   */
   allowsExportDownload: boolean
   /** 当前 view 枚举是否已结束（nextCursor=null 或 EXHAUSTED）；≠ 全量历史完整。 */
   viewEnumerationEnded: boolean

@@ -318,20 +318,23 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 
 	it('联邦 next_cursor 驱动下一页且保持完整 coverage', async () => {
 		loginMockUser()
+		// tail-first 翻页语义：第二页请求以首页最旧一条的时间为新窗口上界（覆盖 from/to），
+		// **不**携带窗内 cursor 参数；用 to 是否已前移到条目时间区分两页。
 		server.use(
 			http.get(API('/logs/federation'), ({ request }) => {
-				const cursor = new URL(request.url).searchParams.get('cursor')
+				const to = new URL(request.url).searchParams.get('to') ?? ''
+				const second = to.startsWith('2026-09-22')
 				return HttpResponse.json({
 					sourceTag: 'federated',
 					items: [{
-						event_id: cursor ? 'page-2' : 'page-1', log_source_id: 'node:1',
-						message: cursor ? 'federation-page-two' : 'federation-page-one',
-						event_time_utc: cursor ? '2026-09-22T11:00:00Z' : '2026-09-22T12:00:00Z',
+						event_id: second ? 'page-2' : 'page-1', log_source_id: 'node:1',
+						message: second ? 'federation-page-two' : 'federation-page-one',
+						event_time_utc: second ? '2026-09-22T11:00:00Z' : '2026-09-22T12:00:00Z',
 					}],
-					coverage: { complete: true, partial_reasons: [], targets: [], enumeration_state: cursor ? 'EXHAUSTED' : 'OPEN' },
+					coverage: { complete: true, partial_reasons: [], targets: [], enumeration_state: second ? 'EXHAUSTED' : 'OPEN' },
 					quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
-					view: { view_id: 'cv-pages' }, exhausted: !!cursor,
-					next_cursor: cursor ? '' : 'cursor-page-2',
+					view: { view_id: 'cv-pages' }, exhausted: second,
+					next_cursor: second ? '' : 'cursor-page-2',
 				})
 			}),
 		)
@@ -344,7 +347,7 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 		expect(screen.queryByTestId('logs-coverage-banner')).not.toBeInTheDocument()
 	})
 
-	it('同一联邦 View 展示 Stats 与 level Facets', async () => {
+	it('Stats 与 level Facets 洞察展示（stats/facets 各自重建视图，不携带搜索 viewId）', async () => {
 		loginMockUser()
 		server.use(
 			http.get(API('/logs/federation'), () => HttpResponse.json({
@@ -352,19 +355,22 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 				coverage: { complete: true, targets: [], enumeration_state: 'EXHAUSTED' },
 				quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
 			})),
+			// F-006 实测：聚合查询复用搜索 viewId 会被 CP 拒（409 VIEW_STALE），
+			// 故 stats/facets 按各自固定条件独立重建视图——此处断言**不带** viewId。
 			http.get(API('/logs/federation/stats'), ({ request }) => {
-				expect(new URL(request.url).searchParams.get('viewId')).toBe('cv-insights')
+				expect(new URL(request.url).searchParams.get('viewId')).toBeNull()
 				return HttpResponse.json({ points: [{ dimensions: { level: 'ERROR' }, count: 42 }], coverage: { complete: true } })
 			}),
 			http.get(API('/logs/federation/facets'), ({ request }) => {
-				expect(new URL(request.url).searchParams.get('viewId')).toBe('cv-insights')
+				expect(new URL(request.url).searchParams.get('viewId')).toBeNull()
 				return HttpResponse.json({ dimensions: [{ dimension: 'level', values: [{ value: 'ERROR', count: 42 }] }], coverage: { complete: true } })
 			}),
 		)
 		renderWithProviders(<LogsPage />)
 		const insights = await screen.findByTestId('logs-federation-insights')
 		expect(insights).toHaveTextContent('当前视图 42 个事件')
-		expect(insights).toHaveTextContent('ERROR 42')
+		// facets 串行在 stats 落定之后（统计 → 维度），文本到达需等待。
+		await waitFor(() => expect(insights).toHaveTextContent('ERROR 42'))
 	})
 
 	it('Stats 使用后端真实 wire 形态 agg.count 呈现事件数', async () => {

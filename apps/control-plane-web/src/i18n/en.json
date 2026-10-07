@@ -3423,6 +3423,7 @@
     "exporting": "Exporting…",
     "exportStarted": "Log export started",
     "exportFailed": "Log export failed",
+    "exportBlockedReasons": "Export did not pass the completeness check; no file is provided (reasons: {{reasons}})",
     "empty": "No logs",
     "loadError": "Failed to load logs",
     "slowQueryHint": "Still loading after {{seconds}}s. Narrow the time range above to speed this up.",
@@ -3453,6 +3454,7 @@
     "viewState": {
       "ready_complete": "Complete results",
       "ready_complete_empty": "No logs in selected range (coverage complete)",
+      "verifying": "Verifying full coverage; showing available results (export performs a full verification)",
       "partial": "Partial results: coverage incomplete",
       "offline": "Some nodes offline; results incomplete",
       "engine_not_ready": "Log query engine not ready",

@@ -7,6 +7,7 @@ import { useLegacyLogs, useLogs, exportLogs, type LogQueryParams } from '@/api/l
 import {
 	buildFederationResult,
 	exportFederatedLogs,
+	FederatedExportIncompleteError,
 	useLogsFederation,
 	useLogsFederationFacets,
 	useLogsFederationStats,
@@ -308,6 +309,17 @@ export default function LogsPage() {
 		? Math.max(1, page)
 		: Math.max(1, Math.ceil(total / PAGE_SIZE))
 
+	// tail-first「下一页」可点性（联邦模式）：由服务端 nextCursor 驱动——非空游标表示
+	// 窗口内仍有更早数据未取（后端仅在 hasMore/budgetCut 时下发游标）；本页空（0 条）
+	// 停住（「空页即停」）；翻页请求在飞时禁用，避免连点跳页。
+	// 注意**不得**复用 totalPages 作可点性：它是「已访问页数」（恒等于 page），
+	// 会让按钮永久 disabled ✗（此前实测的「下一页永远点不动」根因）。
+	const federationNextAvailable =
+		federationActive &&
+		items.length > 0 &&
+		Boolean(federation?.response.nextCursor) &&
+		!federationQuery.isFetching
+
   // 改任一筛选都回到第 1 页，避免停留在越界页。
   const resetTo = useCallback(
     <T,>(setter: (v: T) => void) =>
@@ -356,8 +368,14 @@ export default function LogsPage() {
 			await exportLogs(buildExportParams(params, scope))
 		}
       toast.success(t('logs.exportStarted'))
-    } catch {
-      toast.error(t('logs.exportFailed'))
+    } catch (error) {
+      // 导出闸阻断（覆盖/质量/预算未过）与传输失败分开呈现：前者给出后端原因，
+      // 让用户知道「为什么没有文件」，而不是以为功能坏了。
+      if (error instanceof FederatedExportIncompleteError && error.reasons.length > 0) {
+        toast.error(t('logs.exportBlockedReasons', { reasons: error.reasons.join(', ') }))
+      } else {
+        toast.error(t('logs.exportFailed'))
+      }
     } finally {
       setExporting(false)
     }
@@ -706,6 +724,7 @@ export default function LogsPage() {
             total={total}
             page={follow ? 1 : page}
             totalPages={totalPages}
+            canNext={federationActive ? federationNextAvailable : undefined}
             onPrev={() => setPage((p) => Math.max(1, p - 1))}
 			onNext={() => {
 				if (federationActive) {
@@ -1040,6 +1059,7 @@ function LogFooter({
   total,
   page,
   totalPages,
+  canNext,
   onPrev,
   onNext,
 }: {
@@ -1047,6 +1067,8 @@ function LogFooter({
   total: number
   page: number
   totalPages: number
+  /** 联邦 tail-first 模式的显式可翻性（服务端 next_cursor 驱动）；省略时回退页码比较（legacy）。 */
+  canNext?: boolean
   onPrev: () => void
   onNext: () => void
 }) {
@@ -1068,7 +1090,12 @@ function LogFooter({
           {t('logs.prevPage')}
         </Button>
         <span>{t('logs.pageInfo', { page, totalPages })}</span>
-        <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={onNext}>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={canNext === undefined ? page >= totalPages : !canNext}
+          onClick={onNext}
+        >
           {t('logs.nextPage')}
         </Button>
       </div>

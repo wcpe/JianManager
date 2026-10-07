@@ -15,6 +15,7 @@ export const LOGS_FEDERATION_KEYS = {
 
   viewReadyComplete: 'logsFederation.viewState.ready_complete',
   viewReadyCompleteEmpty: 'logsFederation.viewState.ready_complete_empty',
+  viewVerifying: 'logsFederation.viewState.verifying',
   viewPartial: 'logsFederation.viewState.partial',
   viewOffline: 'logsFederation.viewState.offline',
   viewEngineNotReady: 'logsFederation.viewState.engine_not_ready',
@@ -84,6 +85,7 @@ export const LOGS_FEDERATION_LOCALES = {
       viewState: {
         ready_complete: '结果完整',
         ready_complete_empty: '所选范围内无日志（覆盖完整）',
+        verifying: '正在校验完整覆盖，先展示已取到的结果；导出时将做完整校验',
         partial: '部分结果：覆盖不完整',
         offline: '部分节点离线，结果不完整',
         engine_not_ready: '日志查询引擎未就绪',
@@ -148,6 +150,7 @@ export const LOGS_FEDERATION_LOCALES = {
       viewState: {
         ready_complete: 'Complete results',
         ready_complete_empty: 'No logs in selected range (coverage complete)',
+        verifying: 'Verifying full coverage; showing available results (export performs a full verification)',
         partial: 'Partial results: coverage incomplete',
         offline: 'Some nodes offline; results incomplete',
         engine_not_ready: 'Log query engine not ready',

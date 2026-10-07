@@ -3402,6 +3402,7 @@
     "exporting": "导出中…",
     "exportStarted": "日志导出已开始",
     "exportFailed": "日志导出失败",
+    "exportBlockedReasons": "导出未通过完整性校验，暂不提供下载文件（原因：{{reasons}}）",
     "empty": "暂无日志",
     "loadError": "加载日志失败",
     "slowQueryHint": "已等待 {{seconds}} 秒，日志量较大时请缩小上方时间范围",
@@ -3432,6 +3433,7 @@
     "viewState": {
       "ready_complete": "结果完整",
       "ready_complete_empty": "所选范围内无日志（覆盖完整）",
+      "verifying": "正在校验完整覆盖，先展示已取到的结果；导出时将做完整校验",
       "partial": "部分日志暂时无法查询，以下为已取到的结果",
       "offline": "部分节点当前不可达，结果可能缺少这些节点的日志",
       "engine_not_ready": "日志查询服务未启用，暂时只能查看平台与历史日志",

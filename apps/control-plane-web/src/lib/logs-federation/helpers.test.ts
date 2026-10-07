@@ -472,3 +472,87 @@ describe('toCoverageBannerProps / mergeQualityIntoSummary / i18n', () => {
     expect(reasonI18nKey('SOME_FUTURE_CODE')).toBe('logsFederation.reasons.unknown')
   })
 })
+
+describe('pending 未校验态（Coverage.Pending，首屏快路径）', () => {
+  it('pending + 无具体原因 → verifying：不误报缺失、不宣称完整、导出入口保持开放', () => {
+    const v = classifyLogViewState({
+      ok: true,
+      items: [{ id: 1 }],
+      coverage: coverage({ complete: false, pending: true, partialReasons: [] }),
+      nextCursor: 'cursor-1',
+    })
+    expect(v.state).toBe('verifying')
+    expect(v.pendingVerification).toBe(true)
+    // 不是失败、也不是「有缺失」的 partial。
+    expect(v.isFailure).toBe(false)
+    expect(v.isIncomplete).toBe(true)
+    expect(v.bannerKey).toBe(LOGS_FEDERATION_KEYS.viewVerifying)
+    // 空结果不得当完整成功；历史完整性不得宣称。
+    expect(v.emptySuccessAllowed).toBe(false)
+    expect(v.historyFullyEnumerated).toBe(false)
+    // 导出由后端慢路径在产出前校验 ⇒ 入口开放（此前 pending 被当 partial，导出被永久锁死）。
+    expect(v.allowsExportDownload).toBe(true)
+    expect(v.exportBlockedKey).toBeUndefined()
+  })
+
+  it('pending 横幅：info 温和色、无「重试」误导动作、不阻断导出', () => {
+    const v = classifyLogViewState({
+      ok: true,
+      items: [{ id: 1 }],
+      coverage: coverage({ complete: false, pending: true, partialReasons: [] }),
+    })
+    const props = toCoverageBannerProps(v)
+    expect(props.visible).toBe(true)
+    expect(props.tone).toBe('info')
+    expect(props.showRetry).toBe(false)
+    expect(props.showExport).toBe(true)
+    const affordance = resolveExportDownloadAffordance(null, v)
+    expect(affordance.showDownload).toBe(true)
+  })
+
+  it('pending + 具体原因（BACKLOG）→ 原因优先，仍按 partial 阻断导出', () => {
+    const v = classifyLogViewState({
+      ok: true,
+      items: [{ id: 1 }],
+      coverage: coverage({
+        complete: false,
+        pending: true,
+        partialReasons: [PARTIAL_REASONS.BACKLOG],
+      }),
+    })
+    expect(v.state).toBe('backlog')
+    expect(v.pendingVerification).toBe(false)
+    expect(v.allowsExportDownload).toBe(false)
+  })
+
+  it('非 pending 的无原因 incomplete 仍走 partial（不误开导出、不误报「校验中」）', () => {
+    const v = classifyLogViewState({
+      ok: true,
+      items: [{ id: 1 }],
+      coverage: coverage({ complete: false, partialReasons: [] }),
+    })
+    expect(v.state).toBe('partial')
+    expect(v.pendingVerification).toBe(false)
+    expect(v.allowsExportDownload).toBe(false)
+  })
+
+  it('complete=true 与 pending 同现（矛盾输入）→ complete 优先，pending 被忽略', () => {
+    const s = formatCoverageSummary(coverage({ complete: true, pending: true }))
+    expect(s.pending).toBe(false)
+    const v = classifyLogViewState({
+      ok: true,
+      items: [],
+      coverage: coverage({ complete: true, pending: true }),
+    })
+    expect(v.state).toBe('ready_complete')
+    expect(v.pendingVerification).toBe(false)
+    expect(v.emptySuccessAllowed).toBe(true)
+  })
+
+  it('formatCoverageSummary：pending 原样透传，仍属不完整档且禁止空成功', () => {
+    const s = formatCoverageSummary(coverage({ complete: false, pending: true, partialReasons: [] }))
+    expect(s.pending).toBe(true)
+    expect(s.status).toBe('partial')
+    expect(s.emptySuccessAllowed).toBe(false)
+  })
+})

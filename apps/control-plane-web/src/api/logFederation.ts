@@ -43,6 +43,8 @@ export type LogSourceTag = 'legacy' | 'federated'
 export interface FederationCoverageBody {
   sourceTag?: LogSourceTag
   complete?: boolean
+  /** 首屏快路径未做完整性校验（后端 Coverage.Pending）；缺失视为 false。 */
+  pending?: boolean
   partialReasons?: PartialReason[]
   partial_reasons?: PartialReason[]
   targets?: TargetCoverage[]
@@ -193,6 +195,7 @@ export function normalizeFederationCoverage(
   const rawComplete = body.complete
   const hasCoverageShape =
     rawComplete !== undefined ||
+    body.pending !== undefined ||
     body.partialReasons !== undefined ||
     body.partial_reasons !== undefined ||
     Array.isArray(body.targets)
@@ -203,14 +206,19 @@ export function normalizeFederationCoverage(
     const isLegacy = sourceTag === 'legacy' || body.sourceTag === 'legacy'
     // Legacy 路径后端声明 Complete 恒 false；即便漏传也不得当完整成功。
     const complete = isLegacy ? false : rawComplete === true
+    // 快路径未校验标记（Coverage.Pending）：独立于缺失原因，原样透传。
+    // 未校验 ≠ 有缺失：不塞 EXPORT_INCOMPLETE 占位（那是「导出物不完整」的具体原因，
+    // 套在 pending 上会把「未校验」误渲染成「覆盖不完整」）。
+    const pending = !isLegacy && !complete && body.pending === true
     return {
       complete,
+      pending,
       partialReasons:
         reasons.length > 0
           ? reasons
           : isLegacy
             ? [PARTIAL_REASONS.LEGACY]
-            : complete
+            : complete || pending
               ? []
               : [PARTIAL_REASONS.EXPORT_INCOMPLETE],
       targets,
@@ -356,7 +364,9 @@ export function mapFederationEnvelope(envelope: LogsFederationEnvelope): {
       coverage,
       quality,
       viewId: asString(envelope.view?.view_id) ?? asString(envelope.view?.viewId),
-      nextCursor: envelope.next_cursor ?? null,
+      // 空串游标归一为 null（后端无更多数据时发 ''）：'' 不是有效游标，
+      // 让它以 null 形态参与「枚举是否结束」与下一页可点性判定。
+      nextCursor: asString(envelope.next_cursor) ?? null,
       exhausted: envelope.exhausted,
       errorCode,
       errorMessage: asString(envelope.errorMessage),
@@ -562,6 +572,36 @@ export function useLogsFederationFacets(params: Record<string, unknown>, enabled
 	})
 }
 
+/**
+ * 后端导出闸阻断（200 JSON 报告 + artifact:null，不交付附件）。
+ *
+ * FR-482 的「覆盖不完整时不得下载成功附件」由后端闸执行：覆盖 / 质量 / 预算
+ * 任一未过即不产出文件（见 internal/controlplane/router/log_federation.go 的 Export）。
+ * 本错误携带 incomplete_reasons，供 UI 展示「为什么没有文件」而不是笼统失败。
+ */
+export class FederatedExportIncompleteError extends Error {
+  readonly reasons: string[]
+
+  constructor(reasons: string[]) {
+    super(`federated export blocked: ${reasons.join(',') || 'unknown'}`)
+    this.name = 'FederatedExportIncompleteError'
+    this.reasons = reasons
+  }
+}
+
+/** 从导出闸阻断响应体（JSON 文本）提取 incomplete_reasons；非法输入返回空数组。 */
+export function parseExportBlockedReasons(text: string): string[] {
+  try {
+    const body = JSON.parse(text) as { incomplete_reasons?: unknown }
+    if (!Array.isArray(body.incomplete_reasons)) return []
+    return body.incomplete_reasons.filter(
+      (r): r is string => typeof r === 'string' && r.length > 0,
+    )
+  } catch {
+    return []
+  }
+}
+
 /** 在同一联邦 Query View 上物化并下载经覆盖校验的 NDJSON。 */
 export async function exportFederatedLogs(params: Record<string, unknown>): Promise<void> {
   const exportParams = { ...params }
@@ -576,7 +616,15 @@ export async function exportFederatedLogs(params: Record<string, unknown>): Prom
   })
   const contentType = String(response.headers['content-type'] ?? '')
   if (!contentType.includes('application/x-ndjson')) {
-    throw new Error('federated export did not produce a verified NDJSON artifact')
+    // 非 NDJSON = 导出闸阻断（200 + 报告 JSON）。解析原因后抛出结构化错误；
+    // 非 JSON（网关错误页等）时 reasons 为空，调用方走泛化失败文案。
+    let reasons: string[] = []
+    try {
+      reasons = parseExportBlockedReasons(await (response.data as Blob).text())
+    } catch {
+      // Blob 读取失败：保持空 reasons。
+    }
+    throw new FederatedExportIncompleteError(reasons)
   }
   const url = URL.createObjectURL(response.data as Blob)
   const anchor = document.createElement('a')

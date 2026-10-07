@@ -8,6 +8,9 @@
  *   coverage.complete 且无缺口类 reason。
  * - **覆盖不完整 → 无下载 affordance**：allowsExportDownload / showDownload 在
  *   partial、VIEW_STALE、DUPLICATE_UNRESOLVED、校验未通过时均为 false。
+ * - **未校验（Coverage.Pending）不等于缺失**：state='verifying' 走温和提示，
+ *   不得渲染「部分日志无法查询」的缺失文案，也不得宣称完整；导出入口保持开放，
+ *   由后端慢路径在产出前做完整校验（FR-482 的「校验后可下载」由后端闸保证）。
  *
  * 本模块无 React / i18n 运行时依赖；只产出 key 与结构化状态。
  */
@@ -86,6 +89,7 @@ const VIEW_BANNER_KEY: Record<LogViewState, string> = {
   truncated: LOGS_FEDERATION_KEYS.viewTruncated,
   legacy: LOGS_FEDERATION_KEYS.viewLegacy,
   gap: LOGS_FEDERATION_KEYS.viewGap,
+  verifying: LOGS_FEDERATION_KEYS.viewVerifying,
   partial: LOGS_FEDERATION_KEYS.viewPartial,
   ready_complete: LOGS_FEDERATION_KEYS.viewReadyComplete,
   unknown: LOGS_FEDERATION_KEYS.viewUnknown,
@@ -103,6 +107,9 @@ const VIEW_ACTION_KEYS: Record<LogViewState, string[]> = {
   truncated: [LOGS_FEDERATION_KEYS.actionRetry],
   legacy: [],
   gap: [LOGS_FEDERATION_KEYS.actionRetry],
+  // 未校验是快路径的正常中间态，不是可重试的故障：重试仍走快路径、pending 不会因此消除，
+  // 给「重试」只会误导（实测点重试后横幅依旧）。等用户改筛选/换窗口触发新校验即可。
+  verifying: [],
   partial: [LOGS_FEDERATION_KEYS.actionRetry],
   ready_complete: [],
   unknown: [LOGS_FEDERATION_KEYS.actionRetry, LOGS_FEDERATION_KEYS.actionContactAdmin],
@@ -183,6 +190,7 @@ export function formatCoverageSummary(
     return {
       status: 'failed',
       complete: false,
+      pending: false,
       emptySuccessAllowed: false,
       summaryKey: LOGS_FEDERATION_KEYS.coverageFailed,
       reasons: [],
@@ -197,6 +205,9 @@ export function formatCoverageSummary(
   const targetStats = summarizeTargets(cov)
   const enumerationState = cov.enumerationState
   const duplicateUnresolved = hasDuplicateUnresolved(reasons, quality)
+  // 未校验标记：快路径（Query.Fast）尚未做逐目标完整性校验。独立于缺失原因；
+  // 仅 complete=false 时有意义（complete 时忽略，避免自相矛盾的摘要）。
+  const pending = cov.complete === true ? false : cov.pending === true
 
   const completeFlag = cov.complete === true
   // 防御：complete=true 但仍有 partial_reasons / 目标未纳入 / 重复未解析 → 不得当完整成功。
@@ -209,6 +220,7 @@ export function formatCoverageSummary(
     return {
       status: 'partial',
       complete: false,
+      pending,
       emptySuccessAllowed: false,
       summaryKey: LOGS_FEDERATION_KEYS.coveragePartial,
       reasons,
@@ -223,6 +235,7 @@ export function formatCoverageSummary(
     return {
       status: 'partial',
       complete: false,
+      pending,
       emptySuccessAllowed: false,
       summaryKey: LOGS_FEDERATION_KEYS.coveragePartial,
       reasons: reasons.length > 0 ? reasons : [PARTIAL_REASONS.EXPORT_INCOMPLETE],
@@ -238,6 +251,7 @@ export function formatCoverageSummary(
   return {
     status: 'complete',
     complete: true,
+    pending: false,
     // complete 时允许 UI 在 items.length===0 呈现成功空态（仍需 items 确认）。
     emptySuccessAllowed: true,
     summaryKey: LOGS_FEDERATION_KEYS.coverageComplete,
@@ -346,6 +360,7 @@ export function classifyLogViewState(
       state: 'query_failed',
       isFailure: true,
       isIncomplete: false,
+      pendingVerification: false,
       emptySuccessAllowed: false,
       allowsExportDownload: false,
       viewEnumerationEnded: false,
@@ -371,6 +386,7 @@ export function classifyLogViewState(
       state: 'query_failed',
       isFailure: true,
       isIncomplete: false,
+      pendingVerification: false,
       emptySuccessAllowed: false,
       allowsExportDownload: false,
       viewEnumerationEnded: false,
@@ -396,6 +412,7 @@ export function classifyLogViewState(
       state,
       isFailure: state === 'query_failed',
       isIncomplete: true,
+      pendingVerification: false,
       emptySuccessAllowed: false,
       allowsExportDownload: false,
       viewEnumerationEnded: false,
@@ -409,16 +426,25 @@ export function classifyLogViewState(
   }
 
   const primaryReason = errorCode ?? pickPrimaryReason(reasons)
+  // 未校验（Coverage.Pending）：快路径结果，**无具体缺失原因时**进入 verifying 态——
+  // 结果可用但未验证，不得渲染成「部分日志无法查询」的缺失文案，也不得宣称完整；
+  // 若已带具体原因（OFFLINE/BACKLOG…），按原因呈现（原因比「未校验」更可操作）。
+  const pendingInput = !coverage.complete && coverage.pending === true
   let state: LogViewState = coverage.complete
     ? 'ready_complete'
     : primaryReason
       ? stateFromReason(primaryReason)
-      : 'partial'
+      : pendingInput
+        ? 'verifying'
+        : 'partial'
 
   // errorCode（如 VIEW_STALE）可覆盖 coverage.reasons 未登记的情况。
   if (errorCode && stateFromReason(errorCode) !== 'partial') {
     state = stateFromReason(errorCode)
   }
+
+  // 与最终状态对齐：有具体原因（或被 errorCode 覆盖）时按原因呈现，不标记为未校验态。
+  const pendingVerification = state === 'verifying'
 
   const isFailure =
     state === 'query_failed' ||
@@ -438,9 +464,10 @@ export function classifyLogViewState(
     viewEnumerationEnded && coverage.complete && !historyGap && !coverage.duplicateUnresolved
 
   const allowsExportDownload =
-    coverage.complete &&
+    // 未校验（verifying）同样开放导出入口：产出物由后端慢路径在下载前做完整校验，
+    // 「只有校验后可下载」由后端闸保证；前端把「未校验」当「已失败」会把导出永久锁死 ✗。
+    ((coverage.complete && !isIncomplete) || state === 'verifying') &&
     !isFailure &&
-    !isIncomplete &&
     !coverage.duplicateUnresolved &&
     res.exportStatus !== 'FAILED' &&
     res.exportStatus !== 'INCOMPLETE' &&
@@ -459,6 +486,7 @@ export function classifyLogViewState(
     state,
     isFailure,
     isIncomplete: state === 'ready_complete' && coverage.complete ? false : isIncomplete,
+    pendingVerification,
     emptySuccessAllowed,
     allowsExportDownload,
     viewEnumerationEnded,
@@ -474,9 +502,12 @@ export function classifyLogViewState(
 }
 
 /**
- * 导出下载 affordance：覆盖不完整 / 失败 / 未校验 → 不展示下载入口。
+ * 导出下载 affordance：**已判定缺失 / 失败 / 未决**时不给下载入口；
+ * 未校验（verifying，快路径 Pending）例外——入口开放，由后端慢路径在产出前做完整校验。
  *
  * FR-482：「导出只有校验后可下载且下载前复核权限」；「覆盖不完整时不得下载成功附件」。
+ * 前者的「校验」由后端导出闸执行（前端无法独立判定完整性）；后者对应已判定不完整
+ * （partial/view_stale/重复未决等）——这些仍一律不展示下载成功入口。
  * 允许下载时仍提示服务端会在下载前复核权限。
  */
 export function resolveExportDownloadAffordance(
@@ -506,14 +537,18 @@ export function toCoverageBannerProps(
   classified: ClassifiedLogViewState,
 ): CoverageBannerProps {
   const { state, coverage } = classified
+  // verifying（未校验）用 info 温和色：既不是 success（未验证不得宣称完整），
+  // 也不是 warning（没有具体缺失，不能渲染成「结果有问题」）。
   const tone: CoverageBannerProps['tone'] =
     state === 'ready_complete'
       ? 'success'
       : classified.isFailure
         ? 'danger'
-        : classified.isIncomplete
-          ? 'warning'
-          : 'success'
+        : state === 'verifying'
+          ? 'info'
+          : classified.isIncomplete
+            ? 'warning'
+            : 'success'
 
   return {
     visible: classified.isFailure || classified.isIncomplete || !coverage.complete,
