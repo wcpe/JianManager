@@ -297,6 +297,7 @@ export {
   ConfigRow,
 } from './components/views/config-explorer/ConfigRow'
 export type { ConfigView } from './components/views/config-explorer/ConfigRow'
+export * from './components/views/config-explorer/FavoritesBarView'
 export * from './lib/client-dist-kpi'
 export * from './lib/client-dist-observability-contracts'
 export * from './components/views/client-dist/InsightCards'
