@@ -2,14 +2,15 @@ package query
 
 import "sort"
 
-// 合并检索的任务规划（2026-10-08）：把 plan.Ranges 按 (Owner, UTC 天) 聚为
-// 执行任务——同组多 range 由 MergedRangeClient 一次粗筛 + 内存归因完成；
+// 合并检索的任务规划（2026-10-08）：把 plan.Ranges 按 Owner 聚为
+// 执行任务——同组多 range 由 MergedRangeClient 一次粗筛 + 内存归因完成
+// （跨 UTC 天由实现按存储层单查上限切滑动段，见 vlrange.SearchMerged）；
 // 任何不满足条件的情形自动退回逐 range（语义不变，仅性能差异）。
 //
 // 背景实测：面板 24h 平台级 162 目标逐 range 扇出 7.4-20.9s；
 // 合并（VL `in()` 一次查询 + 代次归因）0.3-0.4s。
 
-// searchTask 是一次待执行的检索任务：单个 range，或一组同 (Owner, UTC 天) 的
+// searchTask 是一次待执行的检索任务：单个 range，或一组同 Owner 的
 // 可合并 range。
 type searchTask struct {
 	rngs   []AuthoritativeRange

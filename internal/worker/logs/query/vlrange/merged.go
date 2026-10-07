@@ -27,6 +27,12 @@ const (
 	mergedScanFactor  = 3
 )
 
+// searchMaxWindow 是 VL 单次查询的时间窗口上限，必须与 vlsup 启动参数
+// `-search.maxQueryTimeRange`（当前 24h）保持一致：超过即被 VL 以 400
+// `too big time range selected` 拒绝。合并粗筛的并集窗口超过它时按此长度
+// 切分为滑动段（见 SearchMerged）。
+const searchMaxWindow = 24 * time.Hour
+
 // projectionGenerationField 是投影代次字段名（eventFromJSON 会把它放进 Event.Fields）。
 const projectionGenerationField = "projection_generation"
 
@@ -188,6 +194,15 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	// 独立全扫（"窗口内匹配行数 < limit"时无法 top-K 早停）——实测 154 源 24h
 	// 跨天一次查 0.44-0.83s，而分天后旧天单查即 4.8-6.2s（10× 差距）。
 	// 归因时按各 rng 的权威谓词（含其天分区水位）过滤，行不会跨天误配。
+	//
+	// 2026-10-08 二次修正：VL 有 `-search.maxQueryTimeRange=24h` 硬限制——窗口
+	// 超过 24h 的单次查询被 VL 以 400 拒绝（`too big time range selected`），
+	// 生产实测 2 天及以上窗口整组 RANGE_UNAVAILABLE、面板返回 0 条。故并集窗口
+	// 超过 24h 时改为**滑动 24h 段**从新到老逐段查询：段内仍合并全部来源，
+	// 段间首尾相接不重叠（行只落在唯一段），每段独立应用收窄规则（游标/TimeRange
+	// 夹取）——收窄只会让段更短，恒 ≤ 24h。段内候选行达本页预算
+	// （lookaheadRows）即停：常规查询只触第一段，更老段仅在深翻页或稀疏命中时
+	// 才被查询。
 	minDay, maxDay := first.Key.UTCDay, first.Key.UTCDay
 	for _, rng := range rngs {
 		if rng.Key.UTCDay < minDay {
@@ -205,58 +220,83 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	if err != nil {
 		return query.RangeResult{}, fmt.Errorf("vlrange: invalid merged window end day %q: %w", maxDay, err)
 	}
-	params, empty, err := c.windowParams(winStart, winEnd.AddDate(0, 0, 1), q)
-	if err != nil {
-		return query.RangeResult{}, err
-	}
-	if empty {
-		return query.RangeResult{Exhausted: true, DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}, nil
-	}
-	params.Set("query", mergedSearchQuery(sources, q))
-	params.Set("limit", strconv.FormatUint(mergedScanRows(q), 10))
+	winEnd = winEnd.AddDate(0, 0, 1)
 
 	var out query.RangeResult
 	seenHash := make(map[string]string, mergedScanMinRows)
 	duplicated := false
+	exhausted := true
+	needRows := int(lookaheadRows(q))
 	// 临时诊断（2026-10-08）：合并查询的 VL 侧耗时（区分"等 VL"与"本地处理"）。
 	vlStart := time.Now()
-	bytesRead, truncated, err := c.stream(ctx, params, scanLimit(q.Budget), func(line []byte) error {
-		ev, err := eventFromJSON(line)
+	segments := 0
+	for segEnd := winEnd; ; {
+		segStart := segEnd.Add(-searchMaxWindow)
+		if segStart.Before(winStart) {
+			segStart = winStart
+		}
+		segments++
+		params, empty, err := c.windowParams(segStart, segEnd, q)
 		if err != nil {
-			return err
+			return query.RangeResult{}, err
 		}
-		// 归因：命中任一 range 的权威谓词才保留（旧代次/超水位行在此被过滤）。
-		matched := false
-		for _, rng := range rngs {
-			if rangeMatchesEvent(rng, ev) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return nil
-		}
-		// 去重语义与 CP 侧 dedupeMergedRows 一致：同 id 同 hash 去重；
-		// 同 id 异 hash 保留（内容不同的两份都要可见），并触发质量降级。
-		if prev, ok := seenHash[ev.EventID]; ok {
-			duplicated = true
-			if prev == ev.CanonicalHash {
+		if !empty {
+			params.Set("query", mergedSearchQuery(sources, q))
+			params.Set("limit", strconv.FormatUint(mergedScanRows(q), 10))
+			bytesRead, truncated, err := c.stream(ctx, params, scanLimit(q.Budget), func(line []byte) error {
+				ev, err := eventFromJSON(line)
+				if err != nil {
+					return err
+				}
+				// 归因：命中任一 range 的权威谓词才保留（旧代次/超水位行在此被过滤）。
+				matched := false
+				for _, rng := range rngs {
+					if rangeMatchesEvent(rng, ev) {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					return nil
+				}
+				// 去重语义与 CP 侧 dedupeMergedRows 一致：同 id 同 hash 去重；
+				// 同 id 异 hash 保留（内容不同的两份都要可见），并触发质量降级。
+				if prev, ok := seenHash[ev.EventID]; ok {
+					duplicated = true
+					if prev == ev.CanonicalHash {
+						return nil
+					}
+				}
+				seenHash[ev.EventID] = ev.CanonicalHash
+				out.Items = append(out.Items, ev)
 				return nil
+			})
+			if err != nil {
+				return query.RangeResult{}, err
+			}
+			out.Bytes += bytesRead
+			if truncated {
+				// 任一段被预算截断：不得宣称读完。
+				exhausted = false
+				out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
 			}
 		}
-		seenHash[ev.EventID] = ev.CanonicalHash
-		out.Items = append(out.Items, ev)
-		return nil
-	})
-	if err != nil {
-		return query.RangeResult{}, err
+		// 够页早停：组内候选行已达本页预算 ⇒ 更老段不可能贡献本页 top-N；
+		// 但更老段未查，不得宣称读完（翻页时由游标收窄窗口继续）。
+		if len(out.Items) >= needRows {
+			exhausted = false
+			break
+		}
+		if !segStart.After(winStart) {
+			break
+		}
+		segEnd = segStart
 	}
 	// 临时诊断：VL 请求耗时（含网络往返 + 流式读取 + 归因过滤）。
 	slog.Debug("query-timing: vl-merged",
-		"targets", len(rngs), "vl_ms", time.Since(vlStart).Milliseconds(),
-		"rows", len(out.Items), "bytes", bytesRead, "truncated", truncated)
-	out.Bytes = bytesRead
-	out.Exhausted = !truncated
+		"targets", len(rngs), "segments", segments, "vl_ms", time.Since(vlStart).Milliseconds(),
+		"rows", len(out.Items), "bytes", out.Bytes, "truncated", !exhausted)
+	out.Exhausted = exhausted
 	out.DuplicateQuality = query.DupExact
 	if duplicated {
 		// 跨 range 并集出现同 id 多哈希：不得对外宣称 exact（与逐 range 路径
@@ -264,11 +304,8 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 		out.DuplicateQuality = query.DupUnresolved
 	}
 	out.StatsQuality = query.StatsExact
-	if truncated {
-		out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
-	}
 	return out, nil
-}
+	}
 
 func containsString(list []string, v string) bool {
 	for _, s := range list {

@@ -51,13 +51,14 @@ type RangeClient interface {
 	Tail(ctx context.Context, rng AuthoritativeRange, q RangeQuery, mode TailMode) (RangeResult, error)
 }
 
-// MergedRangeClient 是可选能力：把**同分布层级、同 UTC 天**的多个 range 合并为
+// MergedRangeClient 是可选能力：把**同分布层级**的多个 range 合并为
 // 一次粗筛查询执行（LogsQL `in()` 列出来源集合），行级按各 range 的权威范围
 // 谓词（来源/代次/前缀水位）在内存归因过滤。
 //
 // 语义约定（实现者必须逐字遵守，谓词与单 range 查询等价）：
-//   - rngs 必须同 Owner 且同 Key.UTCDay，且每个 range 都有可枚举的来源集合
-//     （否则调用方不应合并）；
+//   - rngs 必须同 Owner，且每个 range 都有可枚举的来源集合（否则调用方不应合并）；
+//     **允许跨 UTC 天**——窗口取各天分区并集，超过存储层单查上限时由实现
+//     自行切分为滑动段（见 vlrange.SearchMerged）；
 //   - 返回 Items 已按各 range 的 scope/代次/水位过滤；同 event_id 同 hash 去重
 //     （异 hash 保留并触发质量降级语义，与 CP 侧 dedupe 一致）；
 //   - Exhausted 表示粗筛未截断（全部匹配行已取回）。
