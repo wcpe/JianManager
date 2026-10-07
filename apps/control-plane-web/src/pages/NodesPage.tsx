@@ -75,6 +75,7 @@ import NodeRepairTab from '@/components/nodes/NodeRepairTab'
 import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialogContainer from '@/components/nodes/AddNodeDialogContainer'
 import { Button } from '@jianmanager/ui/components/button'
+import { BlockedByInstancesDialog } from '@jianmanager/ui/components/views/nodes/BlockedByInstancesDialog'
 
 /** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
 function formatBytes(bytes: number): string {
@@ -101,117 +102,6 @@ function readNodesView(searchParams: URLSearchParams): NodesView {
   return searchParams.get('view') === 'archive' ? 'archive' : 'active'
 }
 
-/**
- * 节点下线被实例守卫拒绝的清单模态（FR-309）：列出名下实例（名称 + 状态）；
- * 离线节点额外提供「强制下线」入口（级联删平台记录、明示不清理远端文件）。
- */
-function NodeDeleteBlockedDialog({
-  conflict,
-  onClose,
-  onForce,
-}: {
-  conflict: DeleteConflict | null
-  onClose: () => void
-  onForce: () => void
-}) {
-  const { t } = useTranslation()
-  // 实例状态 → 既有 instances.* i18n 文案；未知状态原样展示兜底。
-  const statusText = (status: string) => {
-    const keys: Record<string, string> = {
-      STOPPED: 'instances.stopped',
-      STARTING: 'instances.starting',
-      RUNNING: 'instances.running',
-      STOPPING: 'instances.stopping',
-      CRASHED: 'instances.crashed',
-    }
-    return keys[status] ? t(keys[status]) : status
-  }
-  const offline = conflict !== null && conflict.node.status !== 1
-  return (
-    <Dialog open={conflict !== null} onOpenChange={(v: boolean) => { if (!v) onClose() }}>
-      <DialogContent className={scrollableDialogContentClass}>
-        <DialogHeader>
-          <DialogTitle>{t('nodes.deleteBlockedTitle')}</DialogTitle>
-          <DialogDescription>
-            {t('nodes.deleteBlockedDesc', { name: conflict?.node.name, count: conflict?.instances.length })}
-          </DialogDescription>
-        </DialogHeader>
-        <ScrollableDialogBody className="space-y-1.5">
-          {(conflict?.instances ?? []).map((inst) => (
-            <div key={inst.id} className="flex items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-sm">
-              <span className="min-w-0 truncate" title={inst.name}>{inst.name}</span>
-              <Badge variant="outline" className="shrink-0 text-[11px] text-muted-foreground">
-                {statusText(inst.status)}
-              </Badge>
-            </div>
-          ))}
-          {offline && (
-            <p className="pt-1 text-xs text-muted-foreground">{t('nodes.deleteBlockedForceHint')}</p>
-          )}
-        </ScrollableDialogBody>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          {offline && (
-            <Button variant="destructive" onClick={onForce}>{t('nodes.forceDelete')}</Button>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/**
- * 归档清理被实例守卫拒绝的清单模态（FR-394）：列出名下实例记录；
- * 提供「强制清理」入口（级联硬删平台记录、明示不清理远端文件）。
- */
-function NodePurgeBlockedDialog({
-  conflict,
-  onClose,
-  onForce,
-}: {
-  conflict: PurgeConflict | null
-  onClose: () => void
-  onForce: () => void
-}) {
-  const { t } = useTranslation()
-  const statusText = (status: string) => {
-    const keys: Record<string, string> = {
-      STOPPED: 'instances.stopped',
-      STARTING: 'instances.starting',
-      RUNNING: 'instances.running',
-      STOPPING: 'instances.stopping',
-      CRASHED: 'instances.crashed',
-    }
-    return keys[status] ? t(keys[status]) : status
-  }
-  return (
-    <Dialog open={conflict !== null} onOpenChange={(v: boolean) => { if (!v) onClose() }}>
-      <DialogContent className={scrollableDialogContentClass}>
-        <DialogHeader>
-          <DialogTitle>{t('nodes.purgeBlockedTitle')}</DialogTitle>
-          <DialogDescription>
-            {t('nodes.purgeBlockedDesc', { name: conflict?.node.name, count: conflict?.instances.length })}
-          </DialogDescription>
-        </DialogHeader>
-        <ScrollableDialogBody className="space-y-1.5">
-          {(conflict?.instances ?? []).map((inst) => (
-            <div key={inst.id} className="flex items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-sm">
-              <span className="min-w-0 truncate" title={inst.name}>{inst.name}</span>
-              <Badge variant="outline" className="shrink-0 text-[11px] text-muted-foreground">
-                {statusText(inst.status)}
-              </Badge>
-            </div>
-          ))}
-          <p className="pt-1 text-xs text-muted-foreground">{t('nodes.purgeBlockedForceHint')}</p>
-        </ScrollableDialogBody>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
-          <Button variant="destructive" onClick={onForce}>{t('nodes.forcePurge')}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 /** 右栏分段（FR-177 §3.3 + FR-185）：概览/实例/JDK/缓存/端口/代理/监控/坏节点修复。 */
 type DetailTab = 'overview' | 'instances' | 'runtime' | 'cache' | 'ports' | 'proxy' | 'probe' | 'monitor' | 'repair'
@@ -1046,8 +936,15 @@ export default function NodesPage() {
         onCancel={() => setPending(null)}
       />
       {/* FR-309：下线被实例守卫拒绝的清单模态 + 离线节点强制下线确认（输入名称）。 */}
-      <NodeDeleteBlockedDialog
+      <BlockedByInstancesDialog
         conflict={conflict}
+        title={t('nodes.deleteBlockedTitle')}
+        description={t('nodes.deleteBlockedDesc', { name: conflict?.node.name, count: conflict?.instances.length })}
+        force={
+          conflict && conflict.node.status !== 1
+            ? { label: t('nodes.forceDelete'), hint: t('nodes.deleteBlockedForceHint') }
+            : null
+        }
         onClose={() => setConflict(null)}
         onForce={() => {
           setForcePending(conflict)
@@ -1088,8 +985,11 @@ export default function NodesPage() {
         onConfirm={confirmPurge}
         onCancel={() => setPurgeTarget(null)}
       />
-      <NodePurgeBlockedDialog
+      <BlockedByInstancesDialog
         conflict={purgeConflict}
+        title={t('nodes.purgeBlockedTitle')}
+        description={t('nodes.purgeBlockedDesc', { name: purgeConflict?.node.name, count: purgeConflict?.instances.length })}
+        force={{ label: t('nodes.forcePurge'), hint: t('nodes.purgeBlockedForceHint') }}
         onClose={() => setPurgeConflict(null)}
         onForce={() => {
           setForcePurgePending(purgeConflict)
