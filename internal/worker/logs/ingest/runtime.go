@@ -5989,10 +5989,13 @@ const (
 	// projectionProbeTimeout 是单次占用探测的超时。探测只是「避免重名」的保障，不允许把投递卡在
 	// 网络上，故用远小于校验窗口（默认 5 分钟）的短超时。
 	projectionProbeTimeout = 5 * time.Second
-	// projectionProbeWindow 是占用探测的时间窗（全保留期 + 余量）：retention 默认 30d，
-	// 更早的数据已被 VL 淘汰、不可能再被本进程写入的批次读到；VL 侧单查窗口上限
-	// （-search.maxQueryTimeRange）必须不小于它，否则探测会被 400 拒绝。
-	projectionProbeWindow = 31 * 24 * time.Hour
+	// projectionProbeWindow 是占用探测的时间窗。2026-10-08 实测（inst:149/file 单源）：
+	// VL 查询成本由「是否触达已落盘分区」主导而非窗口本身——≤3d 窗口（内存分区）
+	// 恒 0.02-0.2s，>3d 起要读盘（5s 级，且 sort/limit 均无法早停）。
+	// 故取 3d：覆盖近期重名（状态回滚/积压重放的实际窗口），更早的同名旧行由
+	// 「整窗重发」的逐批校验兜底（校验失败即运行时创建失败，与修复前同语义）。
+	// VL 侧单查窗口上限（-search.maxQueryTimeRange=31d）必须不小于它。
+	projectionProbeWindow = 3 * 24 * time.Hour
 )
 
 // nextFreeProjectionGeneration 返回该源在 VL 中尚未出现过的物理代次名。
@@ -6123,19 +6126,20 @@ func (m *Manager) projectionGenerationUsed(ctx context.Context, client *vlsup.Cl
 	if client == nil {
 		return false, nil
 	}
-	// 选择器与写入/校验同口径（源 + 来源代次），窗口显式取**全保留期**
-	// （retention 30d + 1d 余量）：同一名字在任何一天的旧行都会让「整窗重发」的
-	// 校验失败，故占用判定必须覆盖该源的全部数据。
+	// 选择器与写入/校验同口径（源 + 来源代次），窗口显式取**近期**（见 projectionProbeWindow）：
+	// 同一名字的旧行会让「整窗重发」的校验失败，故占用判定要覆盖重放可能触达的近期数据。
 	//
 	// 2026-10-08 修复：此前不带 start/end，VL 以默认全时段（[1677-09-21, 2262-04-11]）
 	// 处理并被 `-search.maxQueryTimeRange` 以 400 拒绝 → 「按未占用继续」→ 重名
 	// 防护静默失效（生产日志可查）。显式有界后探测恢复有效，且不再依赖 VL 默认值。
+	// sort 只为让「确已占用」走最新分区早停（实测 0.01s 级）；「未占用」需扫全窗口，
+	// 窗口本身已按内存分区边界取 3d。
 	selector := "projection_generation:=" + strconv.Quote(generation) +
 		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
 		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
 	now := time.Now().UTC()
 	params := url.Values{
-		"query": {selector + " | fields _time | limit 1"},
+		"query": {selector + " | fields _time | sort by (_time desc) | limit 1"},
 		"start": {now.Add(-projectionProbeWindow).Format(time.RFC3339Nano)},
 		"end":   {now.Format(time.RFC3339Nano)},
 	}

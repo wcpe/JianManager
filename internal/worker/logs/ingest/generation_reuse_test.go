@@ -162,7 +162,8 @@ func TestProjectionGenerationProbeIsCachedAndInvalidatedOnWrite(t *testing.T) {
 		"写入尝试必须让该代次的「未占用」缓存立即失效（写入可能只完成一部分）")
 }
 
-// probeCount 统计发往假 VL 的「代次占用探测」查询次数（该查询的特征是 `| fields _time | limit 1`）。
+// probeCount 统计发往假 VL 的「代次占用探测」查询次数（该查询的特征是只取 `_time` 的字段列表
+// 加 `| limit 1`；2026-10-08 起还带 `| sort by (_time desc)` 与显式时间窗）。
 func (f *projectionVLFixture) probeCount(generation string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

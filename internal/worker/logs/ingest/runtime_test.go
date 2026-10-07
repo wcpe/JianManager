@@ -114,7 +114,7 @@ func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusOK)
 	case "/select/logsql/query":
 		selector := r.URL.Query().Get("query")
-		if strings.Contains(selector, "| fields _time | limit 1") {
+		if strings.Contains(selector, "| fields _time |") && strings.Contains(selector, "| limit 1") {
 			f.mu.Lock()
 			f.probes = append(f.probes, selector)
 			f.mu.Unlock()
