@@ -48,6 +48,7 @@ import {
   PeekRow,
   SummaryCards,
 } from '@jianmanager/ui/components/views/bots/BotListParts'
+import { BotToolbar } from '@jianmanager/ui/components/views/bots/BotToolbar'
 import { BotWorktableCard } from '@/components/console/BotWorktableCard'
 import DangerConfirm from '@/components/DangerConfirm'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
@@ -176,6 +177,8 @@ function BotFleetTab() {
   const [detailBotId, setDetailBotId] = useState<number | null>(null)
   // 工作台卡 ⇄ 列表视图（FR-147，§4.5）；运行实体默认卡片。
   const [view, setView] = useState<ViewMode>('card')
+  // 节点筛选数据源（原在 Toolbar 内取数，视图入包后上提到容器）。
+  const { data: nodes } = useNodes()
 
   const debouncedSearch = useDebounced(search, 300)
   const filter: OverviewFilter = useMemo(
@@ -230,7 +233,7 @@ function BotFleetTab() {
         byStatus={byStatus}
       />
 
-      <Toolbar
+      <BotToolbar
         search={search}
         onSearch={setSearch}
         nodeId={nodeId}
@@ -241,6 +244,7 @@ function BotFleetTab() {
         onGroupBy={setGroupBy}
         view={view}
         onView={setView}
+        nodes={nodes}
       />
 
       {/* key=groupBy：维度切换时重挂 GroupOverview，自然复位其展开/选择状态（避免 effect 内 setState） */}
@@ -262,99 +266,6 @@ function BotFleetTab() {
 }
 
 /** 页顶概览卡片：总计/在线/连接中/异常 + 分布（X 实例·Y 节点）+ 舰队健康条（多段）。 */
-/** 工具栏：搜索 + 节点筛选 + 状态筛选 + 分组维度切换 + 卡/列表视图切换。 */
-function Toolbar({
-  search,
-  onSearch,
-  nodeId,
-  onNode,
-  status,
-  onStatus,
-  groupBy,
-  onGroupBy,
-  view,
-  onView,
-}: {
-  search: string
-  onSearch: (v: string) => void
-  nodeId: number | null
-  onNode: (v: number | null) => void
-  status: string
-  onStatus: (v: string) => void
-  groupBy: GroupByDim
-  onGroupBy: (v: GroupByDim) => void
-  view: ViewMode
-  onView: (v: ViewMode) => void
-}) {
-  const { t } = useTranslation()
-  const { data: nodes } = useNodes()
-
-  return (
-    <div className="mb-3 flex flex-wrap items-center gap-2">
-      <Input
-        value={search}
-        onChange={(e) => onSearch(e.target.value)}
-        placeholder={t('bots.searchPlaceholder')}
-        className="h-9 w-56"
-      />
-      <Select
-        value={nodeId === null ? SENTINEL_ALL : String(nodeId)}
-        onValueChange={(v: string) => onNode(v === SENTINEL_ALL ? null : Number(v))}
-      >
-        <SelectTrigger size="sm" className="w-40">
-          <SelectValue placeholder={t('bots.allNodes')} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={SENTINEL_ALL}>{t('bots.allNodes')}</SelectItem>
-          {nodes?.map((node) => (
-            <SelectItem key={node.id} value={String(node.id)}>
-              {node.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Select
-        value={status === '' ? SENTINEL_ALL : status}
-        onValueChange={(v: string) => onStatus(v === SENTINEL_ALL ? '' : v)}
-      >
-        <SelectTrigger size="sm" className="w-36">
-          <SelectValue placeholder={t('bots.allStatus')} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={SENTINEL_ALL}>{t('bots.allStatus')}</SelectItem>
-          {BOT_STATUSES.map((s) => (
-            <SelectItem key={s} value={s}>
-              {t(`bots.status_${s}`)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
-      <div className="ml-auto flex items-center gap-2">
-        <div className="flex items-center gap-1 rounded-md border p-0.5">
-          <span className="px-2 text-xs text-muted-foreground">{t('bots.groupBy')}</span>
-          {GROUP_BY_DIMS.map((dim) => (
-            <Button
-              key={dim}
-              type="button"
-              size="xs"
-              variant={groupBy === dim ? 'default' : 'ghost'}
-              onClick={() => onGroupBy(dim)}
-            >
-              {t(`bots.groupDim_${dim}`)}
-            </Button>
-          ))}
-        </div>
-        <ViewToggle
-          value={view}
-          onChange={onView}
-          cardLabel={t('grouping.viewCard')}
-          listLabel={t('grouping.viewList')}
-        />
-      </div>
-    </div>
-  )
-}
 
 function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation()
