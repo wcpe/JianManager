@@ -35,7 +35,6 @@ import {
 import { instanceStatusGlowClass } from '@/lib/instance-glow'
 import { useInstanceCapabilities, hasCapability } from '@/lib/capabilities'
 import type { LogEntry } from '@/api/logs'
-import type { CardType } from '@/lib/workspace-card'
 import InstanceActivityFeed from './InstanceActivityFeed'
 import InstanceBackupSegment from './InstanceBackupSegment'
 import InstancePlayersSegment from './InstancePlayersSegment'

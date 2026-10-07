@@ -9,6 +9,7 @@ import type {
   UpdateRuleBody,
   ChannelConfig,
   AlertChannelInfo,
+  AlertEventInfo,
   QQBindTaskInfo,
   QQBindResult,
 } from '@jianmanager/ui/lib/alert-contracts'
