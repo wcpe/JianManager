@@ -50,6 +50,7 @@ import {
 } from '@jianmanager/ui/components/views/bots/BotListParts'
 import { BotToolbar } from '@jianmanager/ui/components/views/bots/BotToolbar'
 import { BotBatchBar } from '@jianmanager/ui/components/views/bots/BotBatchBar'
+import { BotGroupOverview } from '@jianmanager/ui/components/views/bots/BotGroupOverview'
 import { useDangerPermission } from '@/lib/danger'
 import { BotWorktableCard } from '@/components/console/BotWorktableCard'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -181,6 +182,9 @@ function BotFleetTab() {
   const [view, setView] = useState<ViewMode>('card')
   // 节点筛选数据源（原在 Toolbar 内取数，视图入包后上提到容器）。
   const { data: nodes } = useNodes()
+  // 分组总览的批量与门禁（原在 GroupOverview 内，视图入包后上提到容器）。
+  const batch = useBotBatch()
+  const { allowed: dangerAllowed } = useDangerPermission('group')
 
   const debouncedSearch = useDebounced(search, 300)
   const filter: OverviewFilter = useMemo(
@@ -249,15 +253,50 @@ function BotFleetTab() {
         nodes={nodes}
       />
 
-      {/* key=groupBy：维度切换时重挂 GroupOverview，自然复位其展开/选择状态（避免 effect 内 setState） */}
-      <GroupOverview
+      {/* key=groupBy：维度切换时重挂 BotGroupOverview，自然复位其展开/选择状态（避免 effect 内 setState） */}
+      <BotGroupOverview
         key={groupBy}
         groupBy={groupBy}
         groups={groups}
-        baseFilter={filter}
         loading={activeSummary.isLoading}
         view={view}
-        onOpenBot={setDetailBotId}
+        renderBatchBar={({ selectedGroups, onClear }) => (
+          <BotBatchBar
+            groupBy={groupBy}
+            groups={selectedGroups}
+            baseFilter={filter}
+            onClear={onClear}
+            onBatch={(body) => batch.mutateAsync(body)}
+            batchPending={batch.isPending}
+            dangerAllowed={dangerAllowed}
+            onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
+          />
+        )}
+        renderCard={({ group, checked, onCheck, expanded, onToggleExpand }) => (
+          <BotWorktableCard
+            groupBy={groupBy}
+            group={group}
+            checked={checked}
+            onCheck={onCheck}
+            expanded={expanded}
+            onToggleExpand={onToggleExpand}
+            actions={<GroupActions groupBy={groupBy} group={group} baseFilter={filter} />}
+          >
+            <GroupPeek params={groupFilter(groupBy, group, filter)} onOpenBot={setDetailBotId} />
+          </BotWorktableCard>
+        )}
+        renderRow={({ group, checked, onCheck, expanded, onToggleExpand }) => (
+          <GroupRow
+            groupBy={groupBy}
+            group={group}
+            baseFilter={filter}
+            checked={checked}
+            onCheck={onCheck}
+            expanded={expanded}
+            onToggleExpand={onToggleExpand}
+            onOpenBot={setDetailBotId}
+          />
+        )}
       />
 
       <CreateBotDialog open={showCreate} onOpenChange={setShowCreate} />
@@ -462,113 +501,6 @@ function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   )
 }
 
-/** 分组总览：每组一卡/行（含多段健康条 + 总数 + 批量 + 展开窥视 + 在控制台打开）。 */
-function GroupOverview({
-  groupBy,
-  groups,
-  baseFilter,
-  loading,
-  view,
-  onOpenBot,
-}: {
-  groupBy: GroupByDim
-  groups: BotSummaryGroup[]
-  baseFilter: OverviewFilter
-  loading: boolean
-  view: ViewMode
-  onOpenBot: (id: number) => void
-}) {
-  const { t } = useTranslation()
-  const batch = useBotBatch()
-  const { allowed: dangerAllowed } = useDangerPermission('group')
-  const [expanded, setExpanded] = useState<string | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-
-  const selectedGroups = useMemo(
-    () => groups.filter((g) => selected.has(g.key)),
-    [groups, selected],
-  )
-
-  const toggle = (key: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  const toggleExpand = (key: string) => setExpanded((cur) => (cur === key ? null : key))
-
-  if (loading) {
-    return <p className="text-muted-foreground">{t('common.loading')}</p>
-  }
-
-  return (
-    <div className="space-y-3">
-      {selectedGroups.length > 0 && (
-        <BotBatchBar
-          groupBy={groupBy}
-          groups={selectedGroups}
-          baseFilter={baseFilter}
-          onClear={() => setSelected(new Set())}
-          onBatch={(body) => batch.mutateAsync(body)}
-          batchPending={batch.isPending}
-          dangerAllowed={dangerAllowed}
-          onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
-        />
-      )}
-
-      {groups.length === 0 ? (
-        <p className="rounded-lg border py-10 text-center text-muted-foreground">{t('bots.empty')}</p>
-      ) : view === 'card' ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {groups.map((group) => (
-            <BotWorktableCard
-              key={group.key}
-              groupBy={groupBy}
-              group={group}
-              checked={selected.has(group.key)}
-              onCheck={() => toggle(group.key)}
-              expanded={expanded === group.key}
-              onToggleExpand={() => toggleExpand(group.key)}
-              actions={<GroupActions groupBy={groupBy} group={group} baseFilter={baseFilter} />}
-            >
-              <GroupPeek params={groupFilter(groupBy, group, baseFilter)} onOpenBot={onOpenBot} />
-            </BotWorktableCard>
-          ))}
-        </div>
-      ) : (
-        <div className="rounded-lg border">
-          <Table>
-            <TableHeader className="bg-muted/50">
-              <TableRow>
-                <TableHead className="w-10" />
-                <TableHead>{t(`bots.groupDim_${groupBy}`)}</TableHead>
-                <TableHead className="w-[34%]">{t('bots.health')}</TableHead>
-                <TableHead className="w-20 text-right">{t('bots.count')}</TableHead>
-                <TableHead className="w-44 text-right">{t('bots.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {groups.map((group) => (
-                <GroupRow
-                  key={group.key}
-                  groupBy={groupBy}
-                  group={group}
-                  baseFilter={baseFilter}
-                  checked={selected.has(group.key)}
-                  onCheck={() => toggle(group.key)}
-                  expanded={expanded === group.key}
-                  onToggleExpand={() => toggleExpand(group.key)}
-                  onOpenBot={onOpenBot}
-                />
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-    </div>
-  )
-}
 
 /** 分组操作区（卡片/行复用）：在控制台打开（仅实例维度）+ 单组批量菜单。 */
 function GroupActions({
