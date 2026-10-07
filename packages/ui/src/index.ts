@@ -291,6 +291,12 @@ export * from './components/views/client-dist/ObsOverviewView'
 export * from './components/views/client-dist/OpsClientsTabView'
 export * from './components/views/client-dist/MachineListPanelView'
 export * from './components/views/client-dist/MachineTimelineView'
+export * from './components/views/client-dist/SecurityEventsView'
+export * from './components/views/client-dist/SecurityEventRowView'
+// 显式列出而非 `export *`：`fmtTime` / `fmtBytes` 与 OpsShared、machine-format 同名（口径不同），
+// 需要安全侧格式化函数的调用方走深路径 `@jianmanager/ui/components/views/client-dist/security-format`。
+export { SECURITY_EMPTY, levelVariant, statusVariant, EmptyState } from './components/views/client-dist/security-format'
+export * from './lib/client-dist-security-contracts'
 // 显式列出而非 `export *`：`fmtBytes` / `fmtTime` 与 `./components/views/client-dist/OpsShared` 同名（口径不同），
 // 需要机器清单版格式化函数的调用方走深路径 `@jianmanager/ui/components/views/client-dist/machine-format`。
 export { resultBadge, lagBadge } from './components/views/client-dist/machine-format'

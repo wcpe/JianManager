@@ -1,15 +1,21 @@
 /* eslint-disable react-refresh/only-export-components -- 安全侧共享展示件与查询读写同文件导出（仅影响 Fast Refresh） */
 import { useSearchParams } from 'react-router'
-import type { SecurityLevel } from '@/api/clientDistSecurity'
 import { readClientDistQuery, updateClientDistQuery, type ClientDistQueryKey } from '@/lib/client-dist-query'
 
 /**
  * 页面 B「客户端分发运维」安全侧共享件（FR-430 / ADR-088）。
- * 由旧 `ProtectionCenterPage.tsx` 内联实现原样迁出，供安全侧各 Tab 复用，行为不变。
+ *
+ * 展示工具（占位符/时间与字节格式化/徽标变体/空态）已归包，
+ * 此处保留依赖 router 的查询读写 hook 并转发展示工具，调用点无需改动。
  */
-
-/** 空值占位符。 */
-export const SECURITY_EMPTY = '—'
+export {
+  SECURITY_EMPTY,
+  fmtTime,
+  fmtBytes,
+  levelVariant,
+  statusVariant,
+  EmptyState,
+} from '@jianmanager/ui/components/views/client-dist/security-format'
 
 type SecurityQueryPatch = Partial<Record<ClientDistQueryKey, string | null>>
 
@@ -22,41 +28,4 @@ export function useSecurityQuery() {
       setSearchParams(updateClientDistQuery(searchParams, patch), { replace: true })
     },
   }
-}
-
-/** ISO 时间 → 本地化字符串（空值返回占位符，非法值原样返回）。 */
-export function fmtTime(iso?: string | null): string {
-  if (!iso) return SECURITY_EMPTY
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
-}
-
-/** 字节数 → 人类可读（KiB/MiB/GiB）。 */
-export function fmtBytes(bytes?: number): string {
-  const b = Number(bytes ?? 0)
-  if (!Number.isFinite(b) || b <= 0) return '0 B'
-  if (b >= 1024 ** 3) return `${(b / 1024 ** 3).toFixed(1)} GiB`
-  if (b >= 1024 ** 2) return `${(b / 1024 ** 2).toFixed(1)} MiB`
-  if (b >= 1024) return `${(b / 1024).toFixed(1)} KiB`
-  return `${b} B`
-}
-
-/** 风险等级 → 徽标变体。 */
-export function levelVariant(level?: SecurityLevel): 'default' | 'secondary' | 'destructive' | 'outline' {
-  if (level === 'critical' || level === 'high') return 'destructive'
-  if (level === 'warn') return 'default'
-  return 'secondary'
-}
-
-/** 处置动作状态 → 徽标变体。 */
-export function statusVariant(status?: string): 'default' | 'secondary' | 'destructive' | 'outline' {
-  if (status === 'active' || status === 'suspended' || status === 'revoked') return 'destructive'
-  if (status === 'throttled' || status === 'observe') return 'default'
-  if (status === 'canceled' || status === 'expired') return 'outline'
-  return 'secondary'
-}
-
-/** 居中空态文案。 */
-export function EmptyState({ text }: { text: string }) {
-  return <p className="py-10 text-center text-sm text-muted-foreground">{text}</p>
 }
