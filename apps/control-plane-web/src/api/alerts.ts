@@ -97,13 +97,20 @@ export interface AlertEventPage {
   total: number
 }
 
-export function useAlertEvents(params?: EventQuery) {
+/**
+ * 告警事件分页查询。
+ *
+ * `options.enabled` 供调用方按当前 Tab 门控：事件列表原挂在事件 Tab 组件内，Radix 未激活即不挂载，
+ * 因此只有在事件 Tab 才发起请求；视图受控化后 hook 归容器，改由该开关保住同一时机。
+ */
+export function useAlertEvents(params?: EventQuery, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['alertEvents', params],
     queryFn: async () => {
       const { data } = await api.get<AlertEventPage>('/alerts/events', { params })
       return data
     },
+    enabled: options?.enabled ?? true,
   })
 }
 
