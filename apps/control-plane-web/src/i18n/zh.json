@@ -3813,7 +3813,8 @@
       "network": "网络",
       "backup": "备份",
       "email": "邀请邮件",
-      "security": "安全 / 系统"
+      "security": "安全 / 系统",
+      "policy": "运行策略"
     },
     "catDesc": {
       "appearance": "界面主题与语言（本机偏好）",
@@ -3822,7 +3823,8 @@
       "network": "出站代理（自更新/JDK/服务端 jar 下载经此），同时作为各节点默认代理",
       "backup": "备份保留与默认策略",
       "email": "邀请链接与 SMTP 投递配置",
-      "security": "启动固定的服务/数据库/鉴权参数（只读）"
+      "security": "启动固定的服务/数据库/鉴权参数（只读）",
+      "policy": "健康巡检与自愈、配额强制、快照与统计保留、无主运行时与 Bot 回收"
     },
     "networkNotice": "全局出站代理：Control Plane 自身下载经此代理，并作为各节点的默认代理（节点可在节点页覆盖）。保存即生效，无需重启。含账号密码的地址回显时已脱敏。",
     "emailNotice": "平台公共基址用于生成邀请等绝对链接，必须是不含查询参数或片段的 HTTP 或 HTTPS 地址；SMTP 密码仅接受 ${环境变量名} 引用，已配置密码不会回显。",
@@ -3834,10 +3836,13 @@
       "jdk.mirror.temurin": "JDK 镜像源（Temurin）",
       "jdk.mirror.corretto": "JDK 镜像源（Corretto）",
       "jdk.mirror.zulu": "JDK 镜像源（Zulu）",
+      "runtime.mirror.nodejs": "Node.js 镜像源",
       "graceful_stop.timeout": "优雅停止超时",
       "direct_probe.slp_timeout": "MC 直探超时（SLP）",
       "direct_probe.query_timeout": "MC 直探超时（Query）",
+      "health.scan_enabled": "健康巡检开关",
       "backup.retention_days": "默认备份保留天数",
+      "snapshot.retention_count": "快照保留条数上限",
       "proxy.url": "出站代理地址",
       "github.token": "GitHub API 令牌（自更新 / 制品版本库同步）",
       "proxy.no_proxy": "免代理列表",
@@ -3854,7 +3859,27 @@
       "database.dsn": "数据库连接串",
       "jwt.secret": "JWT 密钥",
       "jwt.access_ttl": "访问令牌有效期",
-      "jwt.refresh_ttl": "刷新令牌有效期"
+      "jwt.refresh_ttl": "刷新令牌有效期",
+      "health.scan_interval": "健康巡检周期",
+      "health.probe_kind": "巡检探针类型",
+      "health.suspicion_threshold": "连续判假死阈值",
+      "health.action": "假死处置动作",
+      "health.circuit_breaker_threshold": "熔断窗口内重启阈值",
+      "health.circuit_breaker_window": "熔断滚动窗口",
+      "health.startup_warmup": "启动宽限期",
+      "health.self_heal_max_restarts": "自愈重启次数上限",
+      "quota.enforce_interval": "配额强制巡检周期",
+      "quota.enforce_mode": "配额超限处置档位",
+      "quota.enforce_streak": "连续超限拍数阈值",
+      "snapshot.retention_days": "快照保留天数上限",
+      "snapshot.pre_rollback_keep": "回滚前快照保留条数",
+      "snapshot.max_per_instance": "单实例快照条数上限",
+      "snapshot.max_total_mb": "单实例快照总占用上限（MiB）",
+      "crash.stat_retention_days": "崩溃统计保留天数",
+      "instance_reverse_reconcile.grace_period": "无主运行时宽限期",
+      "instance_reverse_reconcile.auto_dispose": "宽限后自动处置无主运行时",
+      "bot_reclaim.grace_period": "失效 Bot 回收宽限期",
+      "bot_reclaim.auto_reclaim": "宽限后自动回收失效 Bot"
     }
   },
   "nodeProxy": {

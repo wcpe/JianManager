@@ -3834,7 +3834,8 @@
       "network": "Network",
       "backup": "Backup",
       "email": "Invitation Email",
-      "security": "Security / System"
+      "security": "Security / System",
+      "policy": "Runtime policy"
     },
     "catDesc": {
       "appearance": "Interface theme and language (local preference)",
@@ -3843,7 +3844,8 @@
       "network": "Outbound proxy (self-update/JDK/server jar downloads go through it); also the default proxy for all nodes",
       "backup": "Backup retention and defaults",
       "email": "Invitation links and SMTP delivery",
-      "security": "Startup-fixed server/database/auth parameters (read-only)"
+      "security": "Startup-fixed server/database/auth parameters (read-only)",
+      "policy": "Health checks and self-healing, quota enforcement, retention, and reclaim windows"
     },
     "networkNotice": "Global outbound proxy: the Control Plane's own downloads go through it, and it serves as the default proxy for all nodes (each node can override it on the node page). Takes effect immediately, no restart needed. Addresses containing credentials are masked when displayed.",
     "emailNotice": "The platform public base URL generates invitation and other absolute links. It must be an HTTP or HTTPS URL without a query or fragment. SMTP passwords only accept ${ENV_VAR} references and configured values are never shown.",
@@ -3855,10 +3857,13 @@
       "jdk.mirror.temurin": "JDK mirror (Temurin)",
       "jdk.mirror.corretto": "JDK mirror (Corretto)",
       "jdk.mirror.zulu": "JDK mirror (Zulu)",
+      "runtime.mirror.nodejs": "Node.js mirror base",
       "graceful_stop.timeout": "Graceful stop timeout",
       "direct_probe.slp_timeout": "MC direct-probe timeout (SLP)",
       "direct_probe.query_timeout": "MC direct-probe timeout (Query)",
+      "health.scan_enabled": "Health check enabled",
       "backup.retention_days": "Default backup retention (days)",
+      "snapshot.retention_count": "Snapshot retention count",
       "proxy.url": "Outbound proxy URL",
       "github.token": "GitHub API token (self-update / artifact sync)",
       "proxy.no_proxy": "No-proxy list",
@@ -3875,7 +3880,27 @@
       "database.dsn": "Database DSN",
       "jwt.secret": "JWT secret",
       "jwt.access_ttl": "Access token TTL",
-      "jwt.refresh_ttl": "Refresh token TTL"
+      "jwt.refresh_ttl": "Refresh token TTL",
+      "health.scan_interval": "Health check interval",
+      "health.probe_kind": "Probe kind",
+      "health.suspicion_threshold": "Suspicion threshold",
+      "health.action": "Action on suspected hang",
+      "health.circuit_breaker_threshold": "Circuit breaker threshold",
+      "health.circuit_breaker_window": "Circuit breaker window",
+      "health.startup_warmup": "Startup warm-up",
+      "health.self_heal_max_restarts": "Self-heal max restarts",
+      "quota.enforce_interval": "Quota enforcement interval",
+      "quota.enforce_mode": "Quota enforcement mode",
+      "quota.enforce_streak": "Quota over-limit streak",
+      "snapshot.retention_days": "Snapshot retention days",
+      "snapshot.pre_rollback_keep": "Pre-rollback snapshots kept",
+      "snapshot.max_per_instance": "Max snapshots per instance",
+      "snapshot.max_total_mb": "Max snapshot size per instance (MiB)",
+      "crash.stat_retention_days": "Crash stats retention days",
+      "instance_reverse_reconcile.grace_period": "Orphan runtime grace period",
+      "instance_reverse_reconcile.auto_dispose": "Auto-dispose orphan runtimes",
+      "bot_reclaim.grace_period": "Bot reclaim grace period",
+      "bot_reclaim.auto_reclaim": "Auto-reclaim dead bots"
     }
   },
   "theme": {
