@@ -175,7 +175,8 @@ GET /api/v1/logs?...&cursor=<time>_<id>&limit=N
 
 - 归档 NDJSON 纳入 API 查询（14 天足够排障，超期去 `/logs` 页或直接看文件）
 - 后端日志结构化落库（`Message` 仍存原始文本，解析在前端；后端结构化是独立议题）
-- 全站立即移除 `@xterm/*` 依赖（遗留 `components/Terminal.tsx` 与其兼容测试仍在仓库；依赖清理另开 refactor）
+- ~~全站立即移除 `@xterm/*` 依赖（遗留 `components/Terminal.tsx` 与其兼容测试仍在仓库；依赖清理另开 refactor）~~
+  **已由后续 refactor 完成**（2026-10-09）：遗留渲染壳与其兼容测试已删除，会话管理器中的 xterm 路径收窄，`@xterm/*` 三处依赖与 lockfile 条目一并移除。见 ADR-086 的补记。
 - 终端仿真（光标移动、清屏、`\r` 原地覆盖一律不支持，见 ADR-086 代价 5）
 - 跨行字符级选区（虚拟列表下不可靠；跨行一律行级）
 - 输出区的可写化（输出区永远只读，输入只经命令栏）
