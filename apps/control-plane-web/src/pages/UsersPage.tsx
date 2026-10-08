@@ -1,291 +1,122 @@
-import { useState } from 'react'
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做用户/邀请取数、五个写动作、写入口与删除门禁、路由链接接线。
 import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Shield, UserRound } from 'lucide-react'
-import { useUsers, useDeleteUser, useUpdateUser, useUserInvitations, useRevokeInvitation, type UserInfo } from '@/api/users'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import api from '@/api/client'
+import {
+  useUsers,
+  useDeleteUser,
+  useUpdateUser,
+  useUserInvitations,
+  useRevokeInvitation,
+  type CreateInvitationResponse,
+} from '@/api/users'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { isPlatformAdmin as isAdminRole } from '@/lib/roles'
-import DangerConfirm from '@/components/DangerConfirm'
-import CreateUserDialog from '@/components/CreateUserDialog'
-import CreateInvitationDialog from '@/components/CreateInvitationDialog'
-import EditUserDialog from '@/components/EditUserDialog'
-import { Button } from '@jianmanager/ui/components/button'
-import { Panel } from '@jianmanager/ui/components/panel'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { useDangerPermission } from '@/lib/danger'
 import {
-  Table,
-  TableBody,
-  TableCard,
-  TableCardFooter,
-  TableCardHeader,
-  TableCell,
-  TableEmptyRow,
-  TableHead,
-  TableHeader,
-  TableRow,
-  TableSkeletonRows,
-} from '@jianmanager/ui/components/table'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
-import {
-  ConfigRow,
-  ConfigSwitch,
-  ConfigViewToggle,
-  type ConfigView,
-} from '@/pages/config-row'
+  UsersPageView,
+  type CreateUserPayload,
+} from '@jianmanager/ui/components/views/users/UsersPageView'
 
+/** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
+function errMessage(err: unknown, fallback: string): string {
+  const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+  return msg || fallback
+}
+
+/**
+ * 用户管理页容器（ADR-097 b 范式）：用户/邀请取数、五个写动作、写入口门禁（FR-432 user.manage）
+ * 与平台级删除门禁、toast 文案都在这里决定，列表、邀请面板与三个对话框交共享视图。
+ *
+ * 两处门禁的判定留在应用侧（包内不持鉴权状态）：`canManageUsers` 决定写入口是否可见，
+ * `dangerAllowed` 决定删除用户是否放行（scope 固定 platform，不降级）。
+ * 权限页跳转经 `renderPermissionsLink` 插槽注入（包内不依赖 react-router）。
+ * 保留同路径默认导出，路由表无需改动。
+ */
 export default function UsersPage() {
   const { t } = useTranslation()
-  const [showCreate, setShowCreate] = useState(false)
-  const [showInvite, setShowInvite] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<{ id: number; username: string } | null>(null)
-  const [editUser, setEditUser] = useState<UserInfo | null>(null)
-  const [view, setView] = useState<ConfigView>('list')
+  const queryClient = useQueryClient()
   const { data: users, isLoading } = useUsers()
   const { data: invitations } = useUserInvitations()
   const deleteUser = useDeleteUser()
   const updateUser = useUpdateUser()
   const revokeInvitation = useRevokeInvitation()
+
+  // 新建用户与签发邀请没有现成 hook（原先的内联 mutation 在对话框接线层里），故在容器内联：
+  // 成功失效对应缓存，失败原样抛回视图作内联错误（与迁包前一致，不额外弹错误 toast）。
+  const createUser = useMutation({
+    mutationFn: async (payload: CreateUserPayload) => {
+      await api.post('/users', payload)
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['users'] })
+    },
+  })
+  const createInvitation = useMutation({
+    mutationFn: async (email: string) => {
+      const { data } = await api.post<CreateInvitationResponse>('/users/invitations', { email, sendEmail: true })
+      return data
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['users', 'invitations'] })
+    },
+  })
+
   const isPlatformAdmin = useAuthStore((s) => isAdminRole(s.role))
   // FR-432：用户写操作与 API 对齐（user.manage），不再仅看 role===10
   const hasPerm = usePermissionsStore((s) => s.hasPerm)
   const canManageUsers = isPlatformAdmin || hasPerm('user.manage')
 
-  const roleLabel = (role: number): string => {
-    switch (role) {
-      case 0:
-        return t('users.member')
-      case 1:
-        return t('users.groupAdmin')
-      case 2:
-        return t('users.groupOperator')
-      case 3:
-        return t('users.groupViewer')
-      case 10:
-        return t('users.platformAdmin')
-      default:
-        return t('users.roleUnknown', { role })
-    }
-  }
-
-  // 平台管理员主色 pill，其余中性，作角色 pill 着色。
-  const roleTone = (role: number) => (isAdminRole(role) ? 'info' : 'neutral')
-  // 用户状态 0=启用。toggle 即在 0/1 间切换。
-  const toggleStatus = (u: UserInfo) =>
-    updateUser.mutate(
-      { id: u.id, status: u.status === 0 ? 1 : 0 },
-      {
-        onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-          toast.error(err.response?.data?.message || t('common.error')),
-      },
-    )
-
-  const totalUsers = users?.length ?? 0
-  const enabledUsers = (users ?? []).filter((u) => u.status === 0).length
+  // 删除是平台级破坏操作：角色门禁在应用侧判定后注入（包内不持鉴权状态）。
+  const { allowed: dangerAllowed } = useDangerPermission('platform')
 
   return (
-    // 全量对齐：标题上移到页面级 PageHeader（页名只出现一次、且在页面最上面），
-    // 卡片头只留计数与操作（TableCardHeader.title 已改为可选）。
-    <PageShell data-page="users">
-      <PageHeader title={t('users.title')} />
-      <TableCard>
-        <TableCardHeader
-          count={t('users.cardCount', { total: totalUsers })}
-          actions={
-            <>
-              <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
-              {canManageUsers && <Button variant="outline" onClick={() => setShowInvite(true)}>{t('users.inviteUser')}</Button>}
-              {canManageUsers && <Button onClick={() => setShowCreate(true)}>+ {t('users.createUser')}</Button>}
-            </>
-          }
-        />
-
-        {isLoading ? (
-          <Table appearance="refined">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('users.username')}</TableHead>
-                <TableHead>{t('users.role')}</TableHead>
-                <TableHead>{t('users.status')}</TableHead>
-                <TableHead align="right">{t('users.createdAt')}</TableHead>
-                <TableHead align="right">{t('users.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <TableSkeletonRows rows={4} cols={5} />
-            </TableBody>
-          </Table>
-        ) : !users || users.length === 0 ? (
-          <Table appearance="refined">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('users.username')}</TableHead>
-                <TableHead>{t('users.role')}</TableHead>
-                <TableHead>{t('users.status')}</TableHead>
-                <TableHead align="right">{t('users.createdAt')}</TableHead>
-                <TableHead align="right">{t('users.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <TableEmptyRow colSpan={5} icon={<UserRound />} title={t('users.empty')} description={t('users.emptyHint')} />
-            </TableBody>
-          </Table>
-        ) : view === 'card' ? (
-          <div className="flex flex-col gap-2.5 p-3">
-            {users.map((u) => (
-              <ConfigRow
-                key={u.id}
-                icon={<UserRound className="size-[18px]" />}
-                tone={u.status === 0 ? 'primary' : 'neutral'}
-                title={u.username}
-                subtitle={`${roleLabel(u.role)} · ${new Date(u.createdAt).toLocaleDateString()}`}
-                trailing={
-                  <>
-                    <StatusBadge level={roleTone(u.role)} label={roleLabel(u.role)} dot={false} />
-                    <StatusBadge
-                      level={u.status === 0 ? 'success' : 'neutral'}
-                      label={u.status === 0 ? t('users.enabled') : t('users.disabled')}
-                    />
-                    <ConfigSwitch
-                      checked={u.status === 0}
-                      disabled={updateUser.isPending}
-                      onChange={() => toggleStatus(u)}
-                      label={t('users.status')}
-                      onLabel={t('users.enabled')}
-                      offLabel={t('users.disabled')}
-                    />
-                    {canManageUsers && (
-                      <Button variant="ghost" size="xs" asChild data-testid={`users-permissions-link-${u.id}`}>
-                        <Link to={`/permissions?user=${u.id}`} title={t('permissions.openForUser')}>
-                          <Shield className="mr-1 size-3" />
-                          {t('permissions.title')}
-                        </Link>
-                      </Button>
-                    )}
-                    <Button variant="ghost" size="xs" onClick={() => setEditUser(u)}>
-                      {t('common.edit')}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      className="text-status-danger hover:text-status-danger"
-                      onClick={() => setDeleteTarget({ id: u.id, username: u.username })}
-                    >
-                      {t('common.delete')}
-                    </Button>
-                  </>
-                }
-              />
-            ))}
-          </div>
-        ) : (
-          <Table appearance="refined">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('users.username')}</TableHead>
-                <TableHead>{t('users.role')}</TableHead>
-                <TableHead>{t('users.status')}</TableHead>
-                <TableHead align="right">{t('users.createdAt')}</TableHead>
-                <TableHead align="right">{t('users.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {users.map((u) => (
-                <TableRow key={u.id}>
-                  <TableCell className="font-medium text-foreground">{u.username}</TableCell>
-                  <TableCell>
-                    <StatusBadge level={roleTone(u.role)} label={roleLabel(u.role)} dot={false} />
-                  </TableCell>
-                  <TableCell>
-                    <ConfigSwitch
-                      checked={u.status === 0}
-                      disabled={updateUser.isPending}
-                      onChange={() => toggleStatus(u)}
-                      label={t('users.status')}
-                      onLabel={t('users.enabled')}
-                      offLabel={t('users.disabled')}
-                    />
-                  </TableCell>
-                  <TableCell align="right" className="text-muted-foreground tabular-nums">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
-                  <TableCell align="right">
-                    <div className="flex justify-end gap-1">
-                      {canManageUsers && (
-                        <Button variant="ghost" size="xs" asChild data-testid={`users-permissions-link-${u.id}`}>
-                          <Link to={`/permissions?user=${u.id}`} title={t('permissions.openForUser')}>
-                            <Shield className="mr-1 size-3" />
-                            {t('permissions.title')}
-                          </Link>
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="xs" onClick={() => setEditUser(u)}>
-                        {t('common.edit')}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => setDeleteTarget({ id: u.id, username: u.username })}
-                        className="text-status-danger hover:text-status-danger"
-                      >
-                        {t('common.delete')}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
-
-        <TableCardFooter>
-          {t('users.cardSummary', { total: totalUsers, enabled: enabledUsers })}
-        </TableCardFooter>
-      </TableCard>
-
-      <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />
-      <CreateInvitationDialog open={showInvite} onClose={() => setShowInvite(false)} />
-
-      {canManageUsers && (
-        <Panel>
-          <h2 className="text-sm font-semibold">{t('users.invitations')}</h2>
-          {!invitations || invitations.length === 0 ? (
-            <p className="mt-3 text-sm text-muted-foreground">{t('users.invitationsEmpty')}</p>
-          ) : (
-            <div className="mt-3 space-y-2">
-              {invitations.map((invitation) => (
-                <div key={invitation.id} className="flex items-center justify-between gap-3 rounded border px-3 py-2 text-sm">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{invitation.email}</p>
-                    <p className="text-xs text-muted-foreground">{t('users.invitationExpiresAt', { date: new Date(invitation.expiresAt).toLocaleString() })}</p>
-                  </div>
-                  {invitation.revoked ? (
-                    <span className="text-xs text-muted-foreground">{t('users.invitationRevoked')}</span>
-                  ) : !invitation.used && (
-                    <Button variant="ghost" size="xs" onClick={() => revokeInvitation.mutate(invitation.id)} disabled={revokeInvitation.isPending}>
-                      {t('users.revokeInvitation')}
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
+    <UsersPageView
+      users={users}
+      isLoading={isLoading}
+      invitations={invitations}
+      canManageUsers={canManageUsers}
+      updating={updateUser.isPending}
+      revoking={revokeInvitation.isPending}
+      dangerAllowed={dangerAllowed}
+      notify={(kind, message) => {
+        if (kind === 'success') toast.success(message)
+        else toast.error(message)
+      }}
+      onCreateUser={async (payload) => {
+        await createUser.mutateAsync(payload)
+      }}
+      onCreateInvitation={async (email) => {
+        const data = await createInvitation.mutateAsync(email)
+        return { invitationUrl: data.invitationUrl }
+      }}
+      onToggleStatus={(u) => {
+        // 0=启用，toggle 即在 0/1 间切换。
+        updateUser.mutate(
+          { id: u.id, status: u.status === 0 ? 1 : 0 },
+          {
+            onError: (err: Error & { response?: { data?: { message?: string } } }) =>
+              toast.error(errMessage(err, t('common.error'))),
+          },
+        )
+      }}
+      onUpdateUser={async (id, values) => {
+        await updateUser.mutateAsync({ id, ...values })
+      }}
+      onDeleteUser={(id) => {
+        deleteUser.mutate(id)
+      }}
+      onRevokeInvitation={(id) => {
+        revokeInvitation.mutate(id)
+      }}
+      renderPermissionsLink={({ to, title, children }) => (
+        <Link to={to} title={title}>
+          {children}
+        </Link>
       )}
-
-      <DangerConfirm
-        open={deleteTarget !== null}
-        title={t('danger.deleteUserTitle', { name: deleteTarget?.username ?? '' })}
-        description={t('danger.deleteUserDesc')}
-        confirmLabel={t('common.delete')}
-        confirmText={deleteTarget?.username}
-        scope="platform"
-        onConfirm={() => { if (deleteTarget) deleteUser.mutate(deleteTarget.id); setDeleteTarget(null) }}
-        onCancel={() => setDeleteTarget(null)}
-      />
-
-      {editUser && (
-        <EditUserDialog key={editUser.id} user={editUser} onClose={() => setEditUser(null)} />
-      )}
-    </PageShell>
+    />
   )
 }
