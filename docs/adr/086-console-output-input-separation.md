@@ -80,3 +80,15 @@
 - ANSI 着色与 xterm 渲染结果肉眼一致；未知转义不产生可见垃圾字符
 - 停机态输入禁用并给出原因与直达动作
 - ✱ 真机（FR-277 主机，HTTP 非安全上下文）复验粘贴与复制
+
+## 补记（2026-10-09）：代价 4 已结清，xterm 全站下线
+
+本文「代价」第 4 条记的「`@xterm/*` 依赖不能立即移除、依赖清理是后续 refactor」，即本次收口。当时保留的理由是遗留 `components/Terminal.tsx` 与兼容测试仍需该渲染器；此后 FR-415 的 DOM 输出区全面接管，该渲染壳在应用侧已无任何生产消费方（只有它自己的用例引用它），保留它反而让每次组件清点都要重新判定一次它的去留。本次处置：
+
+- 删除遗留渲染壳 `apps/control-plane-web/src/components/Terminal.tsx` 与其用例 `Terminal.clipboard.dom.test.tsx`。
+- 收窄 `terminal-session-manager` 中**仅为该渲染壳存在**的成员：`attach` / `fit` / `setFontSize` / `getTerm` 与 `TerminalSession` 的 `term` / `fitAddon` / `legacyFontSize` 字段，以及 `acquire` 的 `options.fontSize`（唯一生产调用点本就只传两个参数）。
+- **保活语义一字未动**：连接建立、重连退避、行缓冲、热集 pin/release、空闲超时、状态广播、`detach`（ADR-067 的「卸载只脱钩渲染层」锚点，虽是空实现但保留）全部原样。迁移前后的成员清单逐项比对过。
+- 移除 `@xterm/xterm`、`@xterm/addon-fit`、`@xterm/addon-web-links` 依赖与其 lockfile 条目、`vite.config.ts` 的 `terminal` 分包规则、许可证清单中的三条条目。
+- 测试侧：删除三处 `vi.mock('@xterm/*')` 与 `xterm-ws-harness` 的 `MockTerminal` / `MockFitAddon`（该文件只保留 WS 桩）。`keepalive` 用例里 `expect(xtermInstances).toHaveLength(0)` 这条「不创建 xterm」的断言随实现一起退场——现已无 xterm 实现可断言，改由输出区 DOM 断言承担。
+
+验收：会话管理器相关 50 个用例（包内 25 + 应用侧 25）与受影响的 console 用例全部通过；全仓 `@xterm` 的 import 点归零。
