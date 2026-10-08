@@ -113,6 +113,16 @@ import NodePortsPanel from '@jianmanager/ui/components/views/nodes/NodePortsPane
 import NodeArtifactCachePanel from '@jianmanager/ui/components/views/nodes/NodeArtifactCachePanel'
 import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
 
+/**
+ * FR-502 迁移批的按域分区（见 `./sections/`）——每域一批受控业务视图，用内联样例数据渲染。
+ * 与上面零散登记的差别只是规模：这些域各有十来个视图，单分区塞不下，故按域各占一个分区。
+ */
+import { ViewsConsole } from './sections/views-console'
+import { ViewsClientDist } from './sections/views-client-dist'
+import { ViewsOps } from './sections/views-ops'
+import { ViewsAdmin } from './sections/views-admin'
+import { ViewsWorkflow } from './sections/views-workflow'
+
 const rawSeries: RawSeries[] = [
   {
     metricKey: 'node_cpu_pct',
@@ -177,6 +187,11 @@ const SECTIONS = [
   { id: 'tabs', label: 'Tabs', hint: '页签' },
   { id: 'layout', label: '布局', hint: '页面壳与布局原语' },
   { id: 'views', label: '业务视图', hint: 'views · 受控复合组件' },
+  { id: 'views-console', label: '视图 · 控制台与实例', hint: 'console · instances · bots · explorer' },
+  { id: 'views-client-dist', label: '视图 · 客户端分发', hint: 'client-dist 全域' },
+  { id: 'views-ops', label: '视图 · 运维对象', hint: 'agent · artifacts · backups · logs · networks · players' },
+  { id: 'views-admin', label: '视图 · 平台管理', hint: 'auth · users · groups · permissions · settings' },
+  { id: 'views-workflow', label: '视图 · 任务与工作流', hint: 'alerts · bot-load · schedules · tasks · overview' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
@@ -938,6 +953,51 @@ export default function App() {
               （需逐字输入资源名 survival-01 才能确认）。
             </p>
           </Panel>
+        </Section>
+
+        <Section
+          id="views-console"
+          active={section}
+          title="业务视图 · 控制台与实例"
+          hint="console / instances / bots / explorer / database / config-explorer —— 数据经 props 注入，组件不取数、不碰路由"
+        >
+          <ViewsConsole />
+        </Section>
+
+        <Section
+          id="views-client-dist"
+          active={section}
+          title="业务视图 · 客户端分发"
+          hint="client-dist 全域 —— 含密钥揭示、脱敏画像与运维日志等受控边界较细的视图"
+        >
+          <ViewsClientDist />
+        </Section>
+
+        <Section
+          id="views-ops"
+          active={section}
+          title="业务视图 · 运维对象"
+          hint="agent / artifacts / backups / logs / networks / players / runtime-assets —— 多为页面级视图，整页壳在面板内裁剪"
+        >
+          <ViewsOps />
+        </Section>
+
+        <Section
+          id="views-admin"
+          active={section}
+          title="业务视图 · 平台管理"
+          hint="auth / users / groups / permissions / settings / audit / statistics —— 敏感项按引用与打码形态展示"
+        >
+          <ViewsAdmin />
+        </Section>
+
+        <Section
+          id="views-workflow"
+          active={section}
+          title="业务视图 · 任务与工作流"
+          hint="alerts / bot-load / schedules / tasks / overview / provision / system-update —— 向导与对话框类视图按按钮开场"
+        >
+          <ViewsWorkflow />
         </Section>
           </div>
         </div>
