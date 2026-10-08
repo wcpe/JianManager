@@ -9,6 +9,8 @@
  * 路由跳转类插槽（页头入口）一律省略，插槽类 props 传包内真实实现或静态占位。
  */
 
+import { useState } from 'react'
+
 import { Panel } from '@jianmanager/ui'
 
 import { AgentCallLogsPageView } from '@jianmanager/ui/components/views/agent/AgentCallLogsPageView'
@@ -46,6 +48,7 @@ import type {
   NetworkCandidateView,
   NetworkDetailView,
   NetworkSummaryView,
+  NetworkView,
 } from '@jianmanager/ui/components/views/networks/NetworksPageView'
 import { PlayersPageView } from '@jianmanager/ui/components/views/players/PlayersPageView'
 import type {
@@ -853,6 +856,17 @@ const RUNTIME_INSTANCE_CANDIDATES: RuntimeAssetsInstanceCandidateView[] = [
  * 都在外壳（应用侧接线层）里完成，博物馆没有那套运行时，故只展示视图自身的呈现与本地交互态。
  */
 export function ViewsOps() {
+  /*
+   * 受控样例状态：博物馆在这里扮演「外壳」。
+   *
+   * 群组视图与详情开合在真实应用里由路由 / 查询参数派生（`?view=` 与 `?network=`），这里用 useState 代持。
+   * **绝不能用固定值代替**：详情面板的 open 完全由 `detailId` 决定（本体不持 open），传常量 `1` 就等于
+   * 把详情钉死——点「关闭」、按 Esc 都改不动它，弹出来就关不掉。这类「受控值恒定 + 回调空函数」的组合
+   * 会让样例看起来正常、一交互就卡死，是本分区登记时踩过的坑。
+   */
+  const [networksView, setNetworksView] = useState<NetworkView>('list')
+  const [networkDetailId, setNetworkDetailId] = useState<number | null>(1)
+
   return (
     <>
       <Panel title="AgentCallLogsPageView · Agent 调用流水">
@@ -1097,13 +1111,13 @@ export function ViewsOps() {
 
       <Panel title="NetworksPageView · 群组列表 + 详情双栏">
         <NetworksPageView
-          view="list"
-          onViewChange={() => {}}
+          view={networksView}
+          onViewChange={setNetworksView}
           networks={NETWORK_SUMMARIES}
-          detailId={1}
+          detailId={networkDetailId}
           detail={NETWORK_DETAIL}
-          onOpenDetail={() => {}}
-          onCloseDetail={() => {}}
+          onOpenDetail={setNetworkDetailId}
+          onCloseDetail={() => setNetworkDetailId(null)}
           onCreate={() => Promise.resolve(true)}
           onDelete={() => {}}
           onAddMembers={() => Promise.resolve(true)}

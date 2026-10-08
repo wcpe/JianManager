@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build"
+    "build": "node ../../scripts/check-museum-samples.mjs && tsc -b && vite build",
+    "check:samples": "node ../../scripts/check-museum-samples.mjs"
   },
   "dependencies": {
     "@jianmanager/ui": "workspace:*",
