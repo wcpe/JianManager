@@ -1,32 +1,21 @@
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做候选取数、探测/预检/权限修复/导入写请求与提示文案。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import { HardDriveDownload, MapPin, Truck, ShieldAlert } from 'lucide-react'
 import { useNodes } from '@/api/nodes'
 import { useNodeJDKs } from '@/api/jdks'
-import {
-  useInspectImportDir,
-  useImportServer,
-  type ImportInspectResult,
-} from '@/api/importServer'
+import { useInspectImportDir, useImportServer } from '@/api/importServer'
 import { checkNodePathAccess, chmodNodePath } from '@/api/nodeRuntime'
 import DirectoryPicker from '@/components/DirectoryPicker'
-import DangerConfirm from '@/components/DangerConfirm'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
-import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
-import { Checkbox } from '@jianmanager/ui/components/checkbox'
-import { FieldLabel } from '@jianmanager/ui/components/field-label'
-import { Button } from '@jianmanager/ui/components/button'
-import { joinAbsPath, isPermissionErrorMessage } from '@/components/import-server-path'
+import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
+import ImportServerWizardView, {
+  makeImportServerQueryInit,
+  type ImportFixOutcome,
+  type ImportInspectOutcome,
+  type ImportServerQueryInput,
+  type ImportServerSubmitResult,
+} from '@jianmanager/ui/components/views/import-server/ImportServerWizardView'
 
 interface ImportServerWizardProps {
   open: boolean
@@ -35,51 +24,37 @@ interface ImportServerWizardProps {
   initialNodeId?: number
 }
 
-type Step = 'dir' | 'inspect' | 'mode' | 'config'
-
-/** 人类可读文件大小（jar 候选展示）。 */
-function formatSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${bytes} B`
-}
-
-/** 从目录路径提取默认实例名（最后一段）。 */
-function dirBaseName(path: string): string {
-  const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/)
-  return parts[parts.length - 1] || 'imported-server'
+/** 取服务端 message，回退到本地文案（端点错误形态：`{ response: { data: { message } } }`）。 */
+function apiMessage(err: unknown, fallback: string): string {
+  const msg =
+    (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+    (err as Error)?.message
+  return msg || fallback
 }
 
 /**
- * 导入现有服务器向导（FR-302 + FR-374）：选目录/手输绝对路径 → 探测 → 模式 → 配置 → 提交。
- * FR-374：权限失败诊断与尝试修复、就地写预检阻断。
+ * 导入现有服务器向导接线层（ADR-097 b 范式，原 FR-302 导入现有服务器 / FR-374 权限诊断与就地写预检）。
+ *
+ * 视图本体已迁入组件库并受控（不取数、不发请求、不弹 toast、不读路由）；本层负责：
+ * - 候选取数：`useNodes()` 映射节点选项（含在线/启动中/离线状态文案）、
+ *   `useNodeJDKs(query.nodeId)` 映射该节点的 JDK 选项（查询键由视图上报，选中节点变更或复位即重取）；
+ * - 探测与预检：`useInspectImportDir()` 的 mutation 与 `checkNodePathAccess` 注入视图——
+ *   探测失败文案在此组装（服务端 message 优先）并 toast，同时交回视图做内联诊断区；
+ * - 权限修复：`chmodNodePath` 单路径 chmod，成功/失败提示在此 toast；
+ * - 「草稿 → 请求体」组装与一次写请求（POST /instances/import）：Number 化、空值省略；
+ * - 成功后的跳转：视图关窗后回调新实例 id，本层 `navigate` 到实例详情。
+ *
+ * 保留同路径默认导出与同名 props，调用点（InstancesPage）无需改动。
  */
 export default function ImportServerWizard({ open, onClose, initialNodeId }: ImportServerWizardProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { data: nodes } = useNodes()
 
-  const [step, setStep] = useState<Step>('dir')
-  const [nodeId, setNodeId] = useState(initialNodeId ? String(initialNodeId) : '')
-  const [path, setPath] = useState('')
-  const [pathDraft, setPathDraft] = useState('')
-  const [result, setResult] = useState<ImportInspectResult | null>(null)
-  const [jarPath, setJarPath] = useState('')
-  const [jdkPaths, setJdkPaths] = useState<string[]>([])
-  const [mode, setMode] = useState<'in_place' | 'migrate'>('in_place')
-  const [name, setName] = useState('')
-  const [memoryMb, setMemoryMb] = useState('2048')
-  const [jdkId, setJdkId] = useState('')
-  /** FR-374：最近一次权限/预检失败文案（内联展示）。 */
-  const [permError, setPermError] = useState('')
-  /** FR-374：就地写预检是否未通过。 */
-  const [writePrecheckFailed, setWritePrecheckFailed] = useState(false)
-  const [precheckHint, setPrecheckHint] = useState('')
-  const [chmodOpen, setChmodOpen] = useState(false)
-  const [chmodBusy, setChmodBusy] = useState(false)
-  const [precheckBusy, setPrecheckBusy] = useState(false)
+  // 取数查询键由视图上报（节点草稿留在视图内），本层只保存查询键本身。
+  const [query, setQuery] = useState<ImportServerQueryInput>(() => makeImportServerQueryInit(initialNodeId))
+  const { data: jdks } = useNodeJDKs(query.nodeId ? Number(query.nodeId) : 0)
 
-  const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
   const inspect = useInspectImportDir()
   const importServer = useImportServer()
 
@@ -99,509 +74,78 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
     label: `${j.vendor} ${j.majorVersion} (${j.version})`,
   }))
 
-  const reset = () => {
-    setStep('dir')
-    setNodeId(initialNodeId ? String(initialNodeId) : '')
-    setPath('')
-    setPathDraft('')
-    setResult(null)
-    setJarPath('')
-    setJdkPaths([])
-    setMode('in_place')
-    setName('')
-    setMemoryMb('2048')
-    setJdkId('')
-    setPermError('')
-    setWritePrecheckFailed(false)
-    setPrecheckHint('')
-    setChmodOpen(false)
-    inspect.reset()
-  }
-
-  const close = () => {
-    onClose()
-    reset()
-  }
-
-  /** FR-374：就地模式写预检（根目录 + server.properties）。 */
-  const runWritePrecheck = async (root: string, res: ImportInspectResult) => {
-    if (!nodeId) return
-    setPrecheckBusy(true)
-    setWritePrecheckFailed(false)
-    setPrecheckHint('')
-    try {
-      const rootAccess = await checkNodePathAccess(Number(nodeId), root)
-      if (!rootAccess.readable) {
-        setWritePrecheckFailed(true)
-        setPrecheckHint(rootAccess.reason || t('importServer.precheckNotReadable'))
-        return
-      }
-      // 预检时默认按就地假设；migrate 在 mode 步再放宽
-      if (!rootAccess.writable) {
-        setWritePrecheckFailed(true)
-        setPrecheckHint(rootAccess.reason || t('importServer.precheckNotWritable'))
-        return
-      }
-      if (res.propsFound) {
-        const propsPath = joinAbsPath(root, 'server.properties')
-        const fa = await checkNodePathAccess(Number(nodeId), propsPath)
-        if (fa.exists && !fa.writable) {
-          setWritePrecheckFailed(true)
-          setPrecheckHint(fa.reason || t('importServer.precheckPropsNotWritable'))
-          return
-        }
-      }
-    } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-        (err as Error)?.message ||
-        t('importServer.precheckFailed')
-      setWritePrecheckFailed(true)
-      setPrecheckHint(msg)
-    } finally {
-      setPrecheckBusy(false)
-    }
-  }
-
-  const runInspect = (picked: string) => {
-    const target = picked.trim()
-    if (!target || !nodeId) return
-    setPath(target)
-    setPathDraft(target)
-    setPermError('')
-    setWritePrecheckFailed(false)
-    setPrecheckHint('')
-    inspect.mutate(
-      { nodeId: Number(nodeId), path: target },
-      {
-        onSuccess: (res) => {
-          setResult(res)
-          setJarPath(res.jars[0]?.path ?? '')
-          setJdkPaths([])
-          if (!name) setName(dirBaseName(target))
-          setStep('inspect')
-          void runWritePrecheck(target, res)
-        },
-        onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-          const msg = err.response?.data?.message || t('importServer.inspectFailed')
-          setPermError(msg)
-          toast.error(msg)
-        },
-      },
-    )
-  }
-
-  const tryFixPerm = async () => {
-    if (!nodeId || !pathDraft.trim()) return
-    setChmodBusy(true)
-    try {
-      await chmodNodePath(Number(nodeId), pathDraft.trim())
-      toast.success(t('importServer.fixOk'))
-      setChmodOpen(false)
-      setPermError('')
-      runInspect(pathDraft.trim())
-    } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-        (err as Error)?.message ||
-        t('importServer.fixFailed')
-      toast.error(msg)
-      setPermError(msg)
-    } finally {
-      setChmodBusy(false)
-    }
-  }
-
-  const toggleJdk = (p: string) =>
-    setJdkPaths((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]))
-
-  /** 就地且写预检失败时禁止提交。migrate 不要求源可写。 */
-  const submitBlocked = mode === 'in_place' && writePrecheckFailed
-
-  const submit = () => {
-    if (submitBlocked) {
-      toast.error(precheckHint || t('importServer.precheckBlocked'))
-      return
-    }
-    importServer.mutate(
-      {
-        nodeId: Number(nodeId),
-        path,
-        mode,
-        name: name.trim(),
-        jarPath,
-        jdkId: jdkId ? Number(jdkId) : undefined,
-        registerJdkPaths: jdkPaths.length > 0 ? jdkPaths : undefined,
-        memoryMb: memoryMb ? Number(memoryMb) : undefined,
-      },
-      {
-        onSuccess: (inst) => {
-          toast.success(t('importServer.success', { name: inst.name }))
-          close()
-          navigate(`/instances/${inst.id}`)
-        },
-        onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-          toast.error(err.response?.data?.message || t('importServer.failed'))
-        },
-      },
-    )
-  }
-
-  if (!open) return null
-
-  const stepTitle: Record<Step, string> = {
-    dir: t('importServer.stepDir'),
-    inspect: t('importServer.stepInspect'),
-    mode: t('importServer.stepMode'),
-    config: t('importServer.stepConfig'),
-  }
-
-  const showPermActions = !!permError && isPermissionErrorMessage(permError)
-
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) close() }}>
-      <DialogContent
-        showCloseButton={false}
-        onPointerDownOutside={(event) => event.preventDefault()}
-        className={`${scrollableDialogContentClass} sm:max-w-lg`}
-      >
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <HardDriveDownload className="size-4" />
-            {t('importServer.title')}
-          </DialogTitle>
-          <DialogDescription className="text-xs">{stepTitle[step]}</DialogDescription>
-        </DialogHeader>
-
-        <ScrollableDialogBody className="space-y-3 py-2">
-          {step === 'dir' && (
-            <>
-              <div>
-                <FieldLabel required>{t('importServer.nodeLabel')}</FieldLabel>
-                <div className="mt-1">
-                  <Combobox
-                    options={nodeOptions}
-                    value={nodeId}
-                    onChange={(v) => { setNodeId(v); setPath(''); setPathDraft(''); setPermError('') }}
-                    allowCustom={false}
-                    placeholder={t('importServer.selectNode')}
-                  />
-                </div>
-              </div>
-              {nodeId ? (
-                <div className="space-y-2">
-                  <div>
-                    <FieldLabel>{t('importServer.pathInputLabel')}</FieldLabel>
-                    <div className="mt-1 flex gap-2">
-                      <input
-                        value={pathDraft}
-                        onChange={(e) => setPathDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault()
-                            runInspect(pathDraft)
-                          }
-                        }}
-                        className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 font-mono text-xs"
-                        placeholder={t('importServer.pathPlaceholder')}
-                        aria-label={t('importServer.pathInputLabel')}
-                      />
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled={!pathDraft.trim() || inspect.isPending}
-                        onClick={() => runInspect(pathDraft)}
-                      >
-                        {t('importServer.pathProbe')}
-                      </Button>
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">{t('importServer.pathHint')}</p>
-                  </div>
-
-                  {permError && (
-                    <div
-                      className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"
-                      role="alert"
-                      data-testid="import-perm-error"
-                    >
-                      <p className="flex items-start gap-1.5 text-destructive">
-                        <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
-                        <span>{permError}</span>
-                      </p>
-                      {showPermActions && (
-                        <div className="flex flex-wrap gap-2">
-                          <Button type="button" size="sm" variant="outline" onClick={() => setChmodOpen(true)}>
-                            {t('importServer.tryFixPerm')}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setMode('migrate')
-                              toast.message(t('importServer.switchMigrateHint'))
-                            }}
-                          >
-                            {t('importServer.suggestMigrate')}
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div>
-                    <FieldLabel>{t('importServer.dirLabel')}</FieldLabel>
-                    <div className="mt-1">
-                      <DirectoryPicker
-                        key={nodeId}
-                        nodeId={Number(nodeId)}
-                        onPick={runInspect}
-                        onCancel={close}
-                      />
-                    </div>
-                    {inspect.isPending && (
-                      <p className="mt-1 text-xs text-muted-foreground">{t('importServer.inspecting')}</p>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">{t('importServer.selectNodeFirst')}</p>
-              )}
-            </>
-          )}
-
-          {step === 'inspect' && result && (
-            <>
-              <p className="break-all rounded bg-muted/40 px-2 py-1 font-mono text-xs" title={path}>{path}</p>
-
-              {(writePrecheckFailed || precheckBusy) && (
-                <div
-                  className="space-y-2 rounded-md border border-yellow-600/40 bg-yellow-500/5 p-2 text-xs"
-                  data-testid="import-write-precheck"
-                >
-                  {precheckBusy ? (
-                    <p className="text-muted-foreground">{t('importServer.prechecking')}</p>
-                  ) : (
-                    <>
-                      <p className="text-yellow-700 dark:text-yellow-500">
-                        {precheckHint || t('importServer.precheckBlocked')}
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        <Button type="button" size="sm" variant="outline" onClick={() => setChmodOpen(true)}>
-                          {t('importServer.tryFixPerm')}
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setMode('migrate')
-                            setWritePrecheckFailed(false)
-                            toast.message(t('importServer.switchMigrateHint'))
-                          }}
-                        >
-                          {t('importServer.suggestMigrate')}
-                        </Button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <FieldLabel required>{t('importServer.jarSection')}</FieldLabel>
-                {result.jars.length === 0 ? (
-                  <p className="mt-1 text-sm text-destructive">{t('importServer.noJars')}</p>
-                ) : (
-                  <div className="mt-1 max-h-48 space-y-1 overflow-y-auto rounded border p-1.5">
-                    {result.jars.map((j) => (
-                      <label key={j.path} className="flex cursor-pointer items-start gap-2 rounded px-1.5 py-1 text-sm hover:bg-accent">
-                        <input
-                          type="radio"
-                          name="import-jar"
-                          className="mt-1"
-                          checked={jarPath === j.path}
-                          onChange={() => setJarPath(j.path)}
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-mono text-xs">{j.path}</span>
-                          <span className="block text-xs text-muted-foreground">
-                            {formatSize(j.size)}
-                            {j.mainClassHint ? ` · Main-Class: ${j.mainClassHint}` : ''}
-                          </span>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <FieldLabel>{t('importServer.jdkSection')}</FieldLabel>
-                {result.jdks.length === 0 ? (
-                  <p className="mt-1 text-xs text-muted-foreground">{t('importServer.noJdks')}</p>
-                ) : (
-                  <div className="mt-1 space-y-1 rounded border p-1.5">
-                    {result.jdks.map((j) => (
-                      <label key={j.path} className="flex cursor-pointer items-start gap-2 rounded px-1.5 py-1 text-sm hover:bg-accent">
-                        <Checkbox
-                          checked={jdkPaths.includes(j.path)}
-                          onCheckedChange={() => toggleJdk(j.path)}
-                          aria-label={j.path}
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm">{j.vendor} {j.majorVersion} ({j.version}, {j.arch})</span>
-                          <span className="block truncate font-mono text-xs text-muted-foreground">{j.path}</span>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <span className="text-xs text-muted-foreground">{t('importServer.portLabel')}</span>
-                  <p>{result.propsFound && result.serverPort > 0 ? result.serverPort : t('importServer.portUnknown')}</p>
-                </div>
-                <div>
-                  <span className="text-xs text-muted-foreground">{t('importServer.eulaLabel')}</span>
-                  <p className={result.eulaAccepted ? '' : 'text-yellow-600'}>
-                    {result.eulaAccepted ? t('importServer.eulaAccepted') : t('importServer.eulaMissing')}
-                  </p>
-                </div>
-              </div>
-            </>
-          )}
-
-          {step === 'mode' && (
-            <div className="space-y-2">
-              {([
-                { value: 'in_place' as const, icon: MapPin, title: t('importServer.modeInPlace'), desc: t('importServer.modeInPlaceDesc') },
-                { value: 'migrate' as const, icon: Truck, title: t('importServer.modeMigrate'), desc: t('importServer.modeMigrateDesc') },
-              ]).map((opt) => (
-                <label
-                  key={opt.value}
-                  className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
-                    mode === opt.value ? 'border-primary bg-primary/5' : 'hover:bg-accent/50'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="import-mode"
-                    className="mt-1"
-                    checked={mode === opt.value}
-                    onChange={() => setMode(opt.value)}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5 text-sm font-medium">
-                      <opt.icon className="size-3.5" /> {opt.title}
-                    </span>
-                    <span className="mt-0.5 block text-xs text-muted-foreground">{opt.desc}</span>
-                  </span>
-                </label>
-              ))}
-              {mode === 'in_place' && writePrecheckFailed && (
-                <p className="text-xs text-destructive" data-testid="import-inplace-blocked">
-                  {t('importServer.precheckBlocked')}
-                </p>
-              )}
-            </div>
-          )}
-
-          {step === 'config' && (
-            <>
-              <div>
-                <FieldLabel required>{t('importServer.nameLabel')}</FieldLabel>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                  placeholder="old-server"
-                  aria-label={t('importServer.nameLabel')}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <FieldLabel>{t('importServer.memoryLabel')}</FieldLabel>
-                  <input
-                    value={memoryMb}
-                    onChange={(e) => setMemoryMb(e.target.value)}
-                    inputMode="numeric"
-                    className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                    placeholder="2048"
-                    aria-label={t('importServer.memoryLabel')}
-                  />
-                </div>
-                <div>
-                  <FieldLabel>{t('importServer.jdkBindLabel')}</FieldLabel>
-                  <div className="mt-1">
-                    <Combobox
-                      options={jdkOptions}
-                      value={jdkId}
-                      onChange={setJdkId}
-                      allowCustom={false}
-                      placeholder={t('importServer.noJdkBind')}
-                    />
-                  </div>
-                </div>
-              </div>
-              <p className="rounded bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
-                {mode === 'in_place' ? t('importServer.modeInPlaceDesc') : t('importServer.modeMigrateDesc')}
-              </p>
-              {submitBlocked && (
-                <p className="text-xs text-destructive">{t('importServer.precheckBlocked')}</p>
-              )}
-            </>
-          )}
-        </ScrollableDialogBody>
-
-        <DialogFooter className="flex-row justify-end gap-2 pt-2">
-          <Button type="button" variant="outline" onClick={close}>
-            {t('common.cancel')}
-          </Button>
-          {step !== 'dir' && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setStep(step === 'config' ? 'mode' : step === 'mode' ? 'inspect' : 'dir')}
-            >
-              {t('importServer.back')}
-            </Button>
-          )}
-          {(step === 'inspect' || step === 'mode') && (
-            <Button
-              type="button"
-              disabled={
-                (step === 'inspect' && !jarPath) ||
-                (step === 'mode' && mode === 'in_place' && writePrecheckFailed)
-              }
-              onClick={() => setStep(step === 'inspect' ? 'mode' : 'config')}
-            >
-              {t('importServer.next')}
-            </Button>
-          )}
-          {step === 'config' && (
-            <Button
-              type="button"
-              disabled={importServer.isPending || !name.trim() || !jarPath || submitBlocked}
-              onClick={submit}
-            >
-              {importServer.isPending ? t('importServer.importing') : t('importServer.submit')}
-            </Button>
-          )}
-        </DialogFooter>
-      </DialogContent>
-
-      <DangerConfirm
-        open={chmodOpen}
-        onCancel={() => setChmodOpen(false)}
-        title={t('importServer.tryFixPerm')}
-        description={t('importServer.fixConfirmDesc', { path: pathDraft || path })}
-        confirmLabel={t('importServer.tryFixPerm')}
-        pending={chmodBusy}
-        onConfirm={() => { void tryFixPerm() }}
-      />
-    </Dialog>
+    <ImportServerWizardView
+      open={open}
+      initialNodeId={initialNodeId}
+      nodeOptions={nodeOptions}
+      jdkOptions={jdkOptions}
+      importing={importServer.isPending}
+      onQueryChange={setQuery}
+      onClose={onClose}
+      onNotify={(kind, message) =>
+        kind === 'success' ? toast.success(message) : kind === 'error' ? toast.error(message) : toast(message)
+      }
+      onInspect={(target) =>
+        // mutation 化探测：以 Promise 收口成「结果 / 失败文案」，失败提示在本层 toast
+        new Promise<ImportInspectOutcome>((resolve) => {
+          inspect.mutate(
+            { nodeId: target.nodeId, path: target.path },
+            {
+              onSuccess: (res) => resolve({ ok: true, result: res }),
+              onError: (err) => {
+                const msg = apiMessage(err, t('importServer.inspectFailed'))
+                toast.error(msg)
+                resolve({ ok: false, message: msg })
+              },
+            },
+          )
+        })
+      }
+      onCheckAccess={(target) => checkNodePathAccess(target.nodeId, target.path)}
+      onFixPermission={async (target): Promise<ImportFixOutcome> => {
+        try {
+          await chmodNodePath(target.nodeId, target.path)
+          toast.success(t('importServer.fixOk'))
+          return { ok: true }
+        } catch (err) {
+          const msg = apiMessage(err, t('importServer.fixFailed'))
+          toast.error(msg)
+          return { ok: false, message: msg }
+        }
+      }}
+      onSubmit={(draft) =>
+        // 导入写请求：草稿原文在此组装为请求体（Number 化、空值省略），成功回传新实例 id
+        new Promise<ImportServerSubmitResult>((resolve) => {
+          importServer.mutate(
+            {
+              nodeId: Number(draft.nodeId),
+              path: draft.path,
+              mode: draft.mode,
+              name: draft.name.trim(),
+              jarPath: draft.jarPath,
+              jdkId: draft.jdkId ? Number(draft.jdkId) : undefined,
+              registerJdkPaths: draft.jdkPaths.length > 0 ? draft.jdkPaths : undefined,
+              memoryMb: draft.memoryMb ? Number(draft.memoryMb) : undefined,
+            },
+            {
+              onSuccess: (inst) => {
+                toast.success(t('importServer.success', { name: inst.name }))
+                resolve({ ok: true, instanceId: inst.id })
+              },
+              onError: (err) => {
+                toast.error(apiMessage(err, t('importServer.failed')))
+                resolve({ ok: false })
+              },
+            },
+          )
+        })
+      }
+      onImported={(instanceId) => navigate(`/instances/${instanceId}`)}
+      renderDirectoryPicker={({ nodeId, onPick, onCancel }) => (
+        // key=nodeId：换节点即重挂目录选择器（复位其内部浏览路径），与迁包前一致
+        <DirectoryPicker key={nodeId} nodeId={nodeId} onPick={onPick} onCancel={onCancel} />
+      )}
+    />
   )
 }
