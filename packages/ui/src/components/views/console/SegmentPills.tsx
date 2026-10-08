@@ -22,6 +22,8 @@ export interface SegmentPillsProps<T extends string> {
    * 按 Tab/Enter 换段而不掉到 body。
    */
   autoFocusActive?: boolean
+  /** 尺寸：sm 用于寄居在密集工具栏的场景（FR-422），default 用于常规分段（FR-413）。 */
+  size?: 'sm' | 'default'
   /** 额外类名（寄居场景可微调内边距）。 */
   className?: string
 }
@@ -39,6 +41,7 @@ export function SegmentPills<T extends string>({
   onChange,
   ariaLabel,
   autoFocusActive = false,
+  size = 'default',
   className,
 }: SegmentPillsProps<T>) {
   const { t } = useTranslation()
@@ -62,7 +65,8 @@ export function SegmentPills<T extends string>({
           onClick={() => onChange(key)}
           aria-pressed={value === key}
           className={cn(
-            'rounded-full px-3 py-1 text-xs transition-colors',
+            'rounded-full transition-colors',
+            size === 'sm' ? 'px-2.5 py-0.5 text-xs' : 'px-3 py-1 text-xs',
             value === key
               ? 'bg-card font-semibold text-foreground shadow-soft'
               : 'text-muted-foreground hover:text-foreground',
