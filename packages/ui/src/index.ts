@@ -562,3 +562,108 @@ export {
 export type { VirtualWindowVariedInput } from './lib/virtual-list'
 export * from './lib/workspace-card'
 export * from './lib/workspace-preset'
+
+// ==== FR-502 迁移批：新增视图按域补录 ====
+// 逐条列出以便逐个核对；同名冲突沿用本文件既有先例（显式列出，冲突名走深路径）。
+export * from './components/views/EditUserDialogView'
+// agent 域
+// 显式列出而非 export *：AgentTokenOption 与同域其它视图同名（字段不同），
+// barrel 里不能同时通配；需要本模块版该类型的调用方走深路径。
+export {
+  AgentCallLogsPageView,
+} from './components/views/agent/AgentCallLogsPageView'
+export type { AgentCallLogsQuery, AgentCallLogRow, AgentCallLogsPageViewProps } from './components/views/agent/AgentCallLogsPageView'
+export * from './components/views/agent/AgentTokensPageView'
+export * from './components/views/agent/McpActivityPageView'
+// alerts 域
+export * from './components/views/alerts/AlertsPageView'
+// artifacts 域
+export * from './components/views/artifacts/ArtifactReconcileSectionView'
+export * from './components/views/artifacts/ArtifactStoragesPageView'
+export * from './components/views/artifacts/ArtifactVersionsPageView'
+// audit 域
+export * from './components/views/audit/AuditPageView'
+// auth 域
+export * from './components/views/auth/InvitePageView'
+export * from './components/views/auth/LoginPageView'
+export * from './components/views/auth/SetupPageView'
+// backups 域
+export * from './components/views/backups/BackupStoragesPageView'
+export * from './components/views/backups/BackupsPageView'
+// bot-load 域
+export * from './components/views/bot-load/BotLoadWizard'
+export * from './components/views/bot-load/SessionsTabView'
+export * from './components/views/bot-load/TemplateDialog'
+export * from './components/views/bot-load/TemplatesTabView'
+export * from './components/views/bot-load/session/SessionBots'
+export * from './components/views/bot-load/session/SessionEvents'
+export * from './components/views/bot-load/session/SessionFailures'
+export * from './components/views/bot-load/session/SessionMetrics'
+export * from './components/views/bot-load/session/SessionOverviewParts'
+// bots 域
+export * from './components/views/bots/BotGroupPartsView'
+// client-dist 域
+export * from './components/views/client-dist/ClientDistLogsTabView'
+export * from './components/views/client-dist/ClientIntegrationGuideView'
+export * from './components/views/client-dist/ClientPublishPageView'
+export * from './components/views/client-dist/ClientStatsPanelView'
+export * from './components/views/client-dist/ClientUpdaterCoreSelectorView'
+export * from './components/views/client-dist/ClientVersionsPanelView'
+export * from './components/views/client-dist/OpsOverviewTabView'
+export * from './components/views/client-dist/SecurityActionsTabView'
+export * from './components/views/client-dist/SecurityAnalysisTabsView'
+export * from './components/views/client-dist/SecurityGroupsTabView'
+export * from './components/views/client-dist/SecurityProfilesTabView'
+// config-baselines 域
+export * from './components/views/config-baselines/ConfigBaselinesPageView'
+// config-explorer 域
+export * from './components/views/config-explorer/ConfigVersionDrawer'
+// console 域
+export * from './components/views/console/InstanceConsolePageView'
+export * from './components/views/console/InstanceResourceSegmentView'
+// database 域
+export * from './components/views/database/DatabaseExplorerView'
+export * from './components/views/database/DatabaseRowsView'
+// explorer 域
+export * from './components/views/explorer/FileTree'
+// groups 域
+export * from './components/views/groups/CreateGroupDialogView'
+export * from './components/views/groups/GroupEditDialogView'
+export * from './components/views/groups/GroupMembersDialogView'
+// import-server 域
+export * from './components/views/import-server/ImportServerWizardView'
+// instances 域
+export * from './components/views/instances/CloneInstanceDialogView'
+export * from './components/views/instances/InstanceRowView'
+// licenses 域
+export * from './components/views/licenses/LicensesPageView'
+// logs 域
+export * from './components/views/logs/LogsPageView'
+// networks 域
+export * from './components/views/networks/NetworksPageView'
+// notifications 域
+export * from './components/views/notifications/NotificationCenterPageView'
+// overview 域
+export * from './components/views/overview/OverviewPageView'
+// permissions 域
+export * from './components/views/permissions/PermissionsPageView'
+// players 域
+export * from './components/views/players/PlayersPageView'
+// provision 域
+export * from './components/views/provision/ProvisionProxyDialogView'
+export * from './components/views/provision/ProvisionServerDialogView'
+// runtime-assets 域
+export * from './components/views/runtime-assets/RuntimeAssetsPageView'
+// schedules 域
+export * from './components/views/schedules/SchedulesPageView'
+// settings 域
+export * from './components/views/settings/SettingsPageView'
+// statistics 域
+export * from './components/views/statistics/StatisticsPageView'
+// system-update 域
+export * from './components/views/system-update/SystemUpdatePageView'
+// tasks 域
+export * from './components/views/tasks/TasksPageView'
+// users 域
+export * from './components/views/users/GroupsPageView'
+export * from './components/views/users/UsersPageView'
