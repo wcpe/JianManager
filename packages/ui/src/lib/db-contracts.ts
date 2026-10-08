@@ -3,6 +3,12 @@
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 
+/** 表清单项：表名与行数，行数小于零时表示无法统计。 */
+export interface DbTableInfo {
+  name: string
+  rowCount: number
+}
+
 /** 一列的定义：名称 / 数据库类型 / 是否敏感（敏感列值已脱敏）。 */
 export interface DbColumn {
   name: string
