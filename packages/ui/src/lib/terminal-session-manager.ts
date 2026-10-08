@@ -1,6 +1,3 @@
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-
 import { ConsoleLineBuffer } from '@jianmanager/ui/lib/console-line-buffer'
 import type { LogLine, LogStream } from '@jianmanager/ui/lib/console-log-line'
 
@@ -88,7 +85,7 @@ export function resolveHotSetCapacity(visibleCount: number, baseline = getHotSet
  */
 export const IDLE_DISCONNECT_MS = 5 * 60_000
 
-// 重连退避参数：语义与原 Terminal.tsx 完全一致（FIX-B 防 open→立即 close 死循环）。
+// 重连退避参数：语义自 xterm 渲染壳年代迁入后未变（FIX-B 防 open→立即 close 死循环）。
 const MAX_RETRIES = 3
 const BASE_RETRY_DELAY = 1000
 // 连接存活超过此时长才视为「真正连上」并清零重试计数。
@@ -121,16 +118,6 @@ interface TerminalSession {
   instanceId: number
   /** 常驻行缓冲（ADR-086：取代 xterm 内部 buffer 成为保活缓冲的载体，是**唯一权威缓冲**）。 */
   buffer: ConsoleLineBuffer
-  /**
-   * 遗留 xterm 渲染器（`components/Terminal.tsx`），**惰性创建**：只有 {@link
-   * TerminalSessionManager.attach} 被调用才 new。实例控制台已改走 DOM 输出区
-   * （FR-415），永不触发这条路径，故新路径零 xterm 开销；`@xterm/*` 依赖与该渲染器
-   * 一并保留，全站下线 xterm 属后续 refactor（ADR-086 代价 4）。
-   */
-  term: Terminal | null
-  fitAddon: FitAddon | null
-  /** 遗留渲染器创建时用的字号（attach 前 setFontSize 也要能记住）。 */
-  legacyFontSize: number
   ws: WebSocket | null
   state: TerminalSessionState
   fetchCreds: FetchTerminalCreds
@@ -178,7 +165,7 @@ export class TerminalSessionManager {
    * 已有会话仅更新 fetchCreds（token 拉取闭包可能随组件重建而更新），
    * 若会话处于 idle-disconnected/closed 则自动拉起重连。
    */
-  acquire(instanceId: number, fetchCreds: FetchTerminalCreds, options?: { fontSize?: number }): void {
+  acquire(instanceId: number, fetchCreds: FetchTerminalCreds): void {
     const existing = this.sessions.get(instanceId)
     if (existing) {
       existing.fetchCreds = fetchCreds
@@ -192,9 +179,6 @@ export class TerminalSessionManager {
     const session: TerminalSession = {
       instanceId,
       buffer: new ConsoleLineBuffer(),
-      term: null,
-      fitAddon: null,
-      legacyFontSize: options?.fontSize ?? 14,
       ws: null,
       state: 'connecting',
       fetchCreds,
@@ -216,68 +200,11 @@ export class TerminalSessionManager {
   }
 
   /**
-   * 把**遗留 xterm 渲染器**附着到容器（首挂惰性创建并回放已有缓冲，再挂只移动 DOM 节点）。
-   *
-   * 新的 DOM 输出区（FR-415）不走这里——它订阅行缓冲，不需要管理器持有任何 DOM。
-   */
-  attach(instanceId: number, container: HTMLElement): void {
-    const session = this.sessions.get(instanceId)
-    if (!session) return
-    if (!session.term) {
-      const term = new Terminal({
-        cursorBlink: true,
-        disableStdin: false,
-        fontSize: session.legacyFontSize,
-        fontFamily: 'Consolas, Monaco, monospace',
-        theme: { background: '#1a1b26', foreground: '#a9b1d6', cursor: '#c0caf5' },
-      })
-      const fitAddon = new FitAddon()
-      term.loadAddon(fitAddon)
-      session.term = term
-      session.fitAddon = fitAddon
-      term.open(container)
-      // 回放已积攒的缓冲：会话可能早于遗留渲染器存在（新控制台先连上、再被 attach）。
-      const history = session.buffer.snapshot()
-      if (history.length > 0) term.write(`${history.map((line) => line.raw).join('\r\n')}\r\n`)
-    } else {
-      const el = session.term.element
-      if (el && el.parentElement !== container) container.appendChild(el)
-    }
-    this.fit(instanceId)
-  }
-
-  /**
    * 组件卸载（含 Activity 隐藏）时的解绑：只做渲染层脱钩，不断 WS、不丢缓冲。
    * 保留为语义锚点——ADR-067 的「卸载只 detach 渲染层」在新架构下即「退订 + 不动会话」。
    */
   detach(instanceId: number): void {
     void instanceId
-  }
-
-  /** 重排遗留 xterm 尺寸（无遗留渲染器时空转）。 */
-  fit(instanceId: number): void {
-    const session = this.sessions.get(instanceId)
-    if (!session?.fitAddon) return
-    try {
-      session.fitAddon.fit()
-    } catch {
-      // jsdom / 离屏容器无有效尺寸时 fit 可能抛错，忽略（下次可见再 fit）。
-    }
-  }
-
-  /** 运行时调整遗留 xterm 字号。新输出区的字号是纯 CSS，由组件自己拿 prop。 */
-  setFontSize(instanceId: number, fontSize: number): void {
-    const session = this.sessions.get(instanceId)
-    if (!session) return
-    session.legacyFontSize = fontSize
-    if (!session.term) return
-    session.term.options.fontSize = fontSize
-    this.fit(instanceId)
-  }
-
-  /** 遗留 xterm 实例（仅 `components/Terminal.tsx` 使用）。 */
-  getTerm(instanceId: number): Terminal | undefined {
-    return this.sessions.get(instanceId)?.term ?? undefined
   }
 
   /** 独立表面（画布卡片等非 keep-alive 宿主）卸载语义：未被热集 pin 时立即整体释放。 */
@@ -382,10 +309,8 @@ export class TerminalSessionManager {
     for (const item of pending) {
       if (item.kind === 'stream') {
         session.buffer.appendChunk(item.text, item.stream)
-        session.term?.write(item.text.replace(/\r?\n/g, '\r\n'))
       } else {
         session.buffer.appendSystem(item.text)
-        session.term?.write(`\r\n${item.text}\r\n`)
       }
     }
     this.notifyLines(instanceId)
@@ -430,7 +355,6 @@ export class TerminalSessionManager {
     const session = this.sessions.get(instanceId)
     if (!session) return
     session.buffer.clear()
-    session.term?.clear()
     this.notifyLines(instanceId)
   }
 
@@ -483,9 +407,6 @@ export class TerminalSessionManager {
     const ws = session.ws
     session.ws = null
     ws?.close()
-    session.term?.dispose()
-    session.term = null
-    session.fitAddon = null
     session.outputListeners.clear()
     session.stateListeners.clear()
     this.sessions.delete(instanceId)
@@ -521,8 +442,6 @@ export class TerminalSessionManager {
       return
     }
     session.buffer.appendChunk(text, stream)
-    // xterm 只认 CRLF 换行，LF 单独出现不会回到行首。
-    session.term?.write(text.replace(/\r?\n/g, '\r\n'))
     this.notifyLines(session.instanceId)
   }
 
@@ -534,7 +453,6 @@ export class TerminalSessionManager {
       return
     }
     session.buffer.appendSystem(text)
-    session.term?.write(`\r\n${text}\r\n`)
     this.notifyLines(session.instanceId)
   }
 
@@ -655,7 +573,6 @@ export class TerminalSessionManager {
     } catch {
       // 非 JSON 帧：原样入缓冲，不丢内容（诊断价值大于格式洁癖）。
       session.buffer.appendChunk(String(event.data), 'stdout')
-      session.term?.write(String(event.data))
       this.notifyLines(session.instanceId)
     }
   }

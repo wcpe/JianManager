@@ -1,47 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// ---- xterm / fit 侧 mock：只记录关键调用（write/dispose/open），无真实渲染。
-// FR-415 后 xterm 只是**遗留渲染器**（`components/Terminal.tsx`），管理器惰性创建：
-// 不 attach 就不 new。故断言权威缓冲一律走 getLines，xterm 只在 attach 用例里出现。 ----
-const xtermHarness = vi.hoisted(() => {
-  class MockTerminal {
-    options: { fontSize?: number }
-    writes: string[] = []
-    disposed = false
-    openedInto: HTMLElement | null = null
-    element: HTMLElement | undefined
-
-    constructor(options: { fontSize?: number } = {}) {
-      this.options = options
-      instances.push(this)
-    }
-
-    loadAddon() {}
-    open(container: HTMLElement) {
-      this.openedInto = container
-      this.element = document.createElement('div')
-      this.element.className = 'terminal xterm'
-      container.append(this.element)
-    }
-    write(data: string) {
-      this.writes.push(data)
-    }
-    clear() {
-      this.writes.push('<clear>')
-    }
-    dispose() {
-      this.disposed = true
-    }
-  }
-  class MockFitAddon {
-    fitCalls = 0
-    fit() {
-      this.fitCalls++
-    }
-  }
-  const instances: MockTerminal[] = []
-  return { instances, MockTerminal, MockFitAddon }
-})
+// xterm 渲染壳已全站下线（无 xterm 依赖、管理器不持有任何渲染器）：
+// 本文件的断言一律落在权威行缓冲（getLines）与 WS 状态上。
 
 // ---- WebSocket 桩：完全手动驱动 open/close/error/message，不依赖计时器 ----
 const wsHarness = vi.hoisted(() => {
@@ -90,9 +50,6 @@ const wsHarness = vi.hoisted(() => {
   return { sockets, FakeWebSocket }
 })
 
-vi.mock('@xterm/xterm', () => ({ Terminal: xtermHarness.MockTerminal }))
-vi.mock('@xterm/addon-fit', () => ({ FitAddon: xtermHarness.MockFitAddon }))
-
 import { CONSOLE_BUFFER_LIMIT } from '@jianmanager/ui/lib/console-line-buffer'
 import {
   createTerminalSessionManager,
@@ -131,7 +88,6 @@ describe('TerminalSessionManager 状态机（FR-295/296，FR-415 后缓冲为行
 
   beforeEach(() => {
     vi.useFakeTimers()
-    xtermHarness.instances.length = 0
     wsHarness.sockets.length = 0
     vi.stubGlobal('WebSocket', wsHarness.FakeWebSocket)
     manager = createTerminalSessionManager()
@@ -158,15 +114,15 @@ describe('TerminalSessionManager 状态机（FR-295/296，FR-415 后缓冲为行
     expect(manager.getState(1)).toBe('connected')
   })
 
-  it('新控制台路径不创建 xterm：仅 acquire + 收流也零 xterm 实例（ADR-086）', async () => {
+  it('仅 acquire + 收流即落权威行缓冲，不需要任何渲染器（ADR-086）', async () => {
     const fetchCreds = credsStub()
     manager.acquire(1, fetchCreds)
     await flush()
     lastSocket().serverOpen()
     lastSocket().serverMessage({ type: 'stdout', data: 'hello\n' })
 
+    // xterm 渲染壳已全站下线：这条路径的产物只有权威行缓冲，断言落在它上面。
     expect(bufferText(1)).toContain('hello')
-    expect(xtermHarness.instances).toHaveLength(0)
   })
 
   it('重复 acquire 同一实例不重建：仍是同一条 WS，且已有缓冲不被清空', async () => {
@@ -201,26 +157,6 @@ describe('TerminalSessionManager 状态机（FR-295/296，FR-415 后缓冲为行
     // detach 后继续收流：连接仍在管理器手里。
     lastSocket().serverMessage({ type: 'stdout', data: 'after-detach\n' })
     expect(bufferText(1)).toContain('after-detach')
-  })
-
-  it('attach 惰性拉起遗留 xterm 渲染器，并回放已有缓冲', async () => {
-    const fetchCreds = credsStub()
-    manager.acquire(1, fetchCreds)
-    await flush()
-    lastSocket().serverOpen()
-    lastSocket().serverMessage({ type: 'stdout', data: 'before-attach\n' })
-    expect(xtermHarness.instances).toHaveLength(0)
-
-    const container = document.createElement('div')
-    manager.attach(1, container)
-
-    expect(xtermHarness.instances).toHaveLength(1)
-    expect(xtermHarness.instances[0].openedInto).toBe(container)
-    // attach 前积攒的行必须被回放，否则遗留渲染器一片空白。
-    expect(xtermHarness.instances[0].writes.join('')).toContain('before-attach')
-    // attach 之后的输出继续镜像到遗留渲染器。
-    lastSocket().serverMessage({ type: 'stdout', data: 'after-attach\n' })
-    expect(xtermHarness.instances[0].writes.join('')).toContain('after-attach')
   })
 
   it('stdout 输出落权威行缓冲并解析出结构化字段，输出监听器收到原始文本', async () => {
@@ -295,19 +231,16 @@ describe('TerminalSessionManager 状态机（FR-295/296，FR-415 后缓冲为行
     expect(manager.getLines(1).at(-1)).toMatchObject({ kind: 'command', body: 'stop' })
   })
 
-  it('clearLines 清空权威缓冲，并同步清遗留渲染器', async () => {
+  it('clearLines 清空权威行缓冲', async () => {
     const fetchCreds = credsStub()
     manager.acquire(1, fetchCreds)
     await flush()
     lastSocket().serverOpen()
-    const container = document.createElement('div')
-    manager.attach(1, container)
     lastSocket().serverMessage({ type: 'stdout', data: 'to-be-cleared\n' })
 
     manager.clearLines(1)
 
     expect(manager.getLines(1)).toEqual([])
-    expect(xtermHarness.instances[0].writes.at(-1)).toBe('<clear>')
   })
 
   it('getDroppedCount 反映环形缓冲溢出（输出区顶部回溯锚点据此显示）', async () => {
@@ -397,18 +330,16 @@ describe('TerminalSessionManager 状态机（FR-295/296，FR-415 后缓冲为行
     expect(bufferText(1)).toContain('kept-across-reconnect')
   })
 
-  it('dispose 整体释放：断 WS + 丢缓冲 + dispose 遗留 xterm + 会话移除', async () => {
+  it('dispose 整体释放：断 WS + 丢缓冲 + 会话移除', async () => {
     const fetchCreds = credsStub()
     manager.acquire(1, fetchCreds)
     await flush()
     lastSocket().serverOpen()
-    manager.attach(1, document.createElement('div'))
     lastSocket().serverMessage({ type: 'stdout', data: 'gone-after-dispose\n' })
 
     manager.dispose(1)
 
     expect(lastSocket().closedByClient).toBe(true)
-    expect(xtermHarness.instances[0].disposed).toBe(true)
     expect(manager.hasSession(1)).toBe(false)
     expect(manager.getLines(1)).toEqual([])
   })
@@ -431,7 +362,6 @@ describe('TerminalSessionManager 状态机（FR-295/296，FR-415 后缓冲为行
     manager.acquire(1, fetchCreds)
     await flush()
     lastSocket().serverOpen()
-    manager.attach(1, document.createElement('div'))
 
     manager.pin(1)
     manager.release(1)
@@ -440,7 +370,6 @@ describe('TerminalSessionManager 状态机（FR-295/296，FR-415 后缓冲为行
     manager.unpin(1)
     manager.release(1)
     expect(manager.hasSession(1)).toBe(false)
-    expect(xtermHarness.instances[0].disposed).toBe(true)
   })
 
   it('token 拉取失败按退避重试，超过上限写入 [连接错误] 系统行', async () => {

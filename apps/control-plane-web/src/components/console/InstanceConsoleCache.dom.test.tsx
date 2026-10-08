@@ -11,16 +11,7 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import { clearInstanceDrafts, reportInstanceDraft } from '@/lib/console-draft-registry'
 
-vi.mock('@xterm/xterm', async () => {
-  const harness = await import('@/test/xterm-ws-harness')
-  return { Terminal: harness.MockTerminal }
-})
-vi.mock('@xterm/addon-fit', async () => {
-  const harness = await import('@/test/xterm-ws-harness')
-  return { FitAddon: harness.MockFitAddon }
-})
-
-import { MockWebSocket, resetTerminalHarness, wsSockets, xtermInstances } from '@/test/xterm-ws-harness'
+import { MockWebSocket, resetTerminalHarness, wsSockets } from '@/test/xterm-ws-harness'
 import { HOT_SET_SIZE, IDLE_DISCONNECT_MS, terminalSessionManager } from '@/lib/terminal-session-manager'
 import InstanceConsoleCache from './InstanceConsoleCache'
 
@@ -126,9 +117,8 @@ describe('InstanceConsoleCache 跨服热缓存（FR-296）', () => {
     expect(wsSockets).toHaveLength(3)
     expect(wsSockets.every((s) => !s.closedByClient)).toBe(true)
     // FR-415 起实例控制台走 DOM 输出区（ADR-086），常驻缓冲是行缓冲而非 xterm buffer。
-    // 原「3 个 xterm 未被销毁」的断言在此拆成两条更强的：①三个会话与其缓冲逐一存活、
-    // ②这条路径根本不创建 xterm（防日后误把 xterm 渲染器接回实例控制台）。
-    expect(xtermInstances).toHaveLength(0)
+    // 原「3 个 xterm 未被销毁」的断言：xterm 渲染壳已全站下线（已无 xterm 对象可断言），
+    // 保活语义落在下面的更强证据上——三个会话与其缓冲逐一存活。
     expect([1, 10, 11].map((id) => terminalSessionManager.hasSession(id))).toEqual([true, true, true])
     expect(terminalSessionManager.getLines(10)).toBe(buffersBefore[0])
     expect(terminalSessionManager.getLines(11)).toBe(buffersBefore[1])
@@ -149,7 +139,6 @@ describe('InstanceConsoleCache 跨服热缓存（FR-296）', () => {
       await user.click(screen.getByRole('button', { name }))
     }
     expect(wsSockets).toHaveLength(3)
-    expect(xtermInstances).toHaveLength(0)
     expect(terminalSessionManager.getLines(10)).toBe(buffersBefore[0])
     expect(terminalSessionManager.getLines(11)).toBe(buffersBefore[1])
   })

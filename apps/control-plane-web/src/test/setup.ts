@@ -54,8 +54,8 @@ if (typeof Blob !== 'undefined' && typeof Blob.prototype.stream !== 'function') 
 
 /**
  * 终端会话常驻单例管理器（FR-295，ADR-067），在 beforeAll 里动态 import 缓存到此，缘由有二：
- * ① **动态 import**——静态顶层 import 会在测试文件的 `vi.mock('@xterm/xterm')` 生效前把真 xterm
- *    绑进管理器模块缓存，使各测试文件的 xterm mock 失效；`beforeAll` 晚于 vi.mock 注册，import 得到 mock。
+ * ① **动态 import**——晚于各测试文件的 `vi.mock` 注册与全局桩安装，import 拿到的是这些桩生效后的模块；
+ *    静态顶层 import 会抢在它们之前把模块绑进缓存。
  * ② **缓存供 afterEach 同步调用**——afterEach 内若 `await import(...)` 会多出一个拆卸 tick，
  *    让在途查询（如 `/nodes`）在鉴权态已清后走到刷新令牌失败路径、抛出未处理 rejection 污染无关用例。
  */

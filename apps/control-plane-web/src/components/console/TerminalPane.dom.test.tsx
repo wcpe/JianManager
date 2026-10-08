@@ -6,16 +6,7 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 
-vi.mock('@xterm/xterm', async () => {
-  const harness = await import('@/test/xterm-ws-harness')
-  return { Terminal: harness.MockTerminal }
-})
-vi.mock('@xterm/addon-fit', async () => {
-  const harness = await import('@/test/xterm-ws-harness')
-  return { FitAddon: harness.MockFitAddon }
-})
-
-import { MockWebSocket, resetTerminalHarness, wsSockets, xtermInstances } from '@/test/xterm-ws-harness'
+import { MockWebSocket, resetTerminalHarness, wsSockets } from '@/test/xterm-ws-harness'
 import { terminalSessionManager } from '@/lib/terminal-session-manager'
 import TerminalPane from './TerminalPane'
 
@@ -50,7 +41,8 @@ function currentMatchSeq() {
  * seed：id=1 RUNNING、id=2 STOPPED（见 mocks/handlers/domains/instance.ts）。
  *
  * FR-415 起控制台是「DOM 输出区 + 原生命令栏」（ADR-086），故本文件的断言从
- * 「xterm 实例/缓冲」平移到「输出区 DOM / 权威行缓冲」，并新增「这条路径零 xterm」的守卫。
+ * 「xterm 实例/缓冲」平移到「输出区 DOM / 权威行缓冲」；xterm 渲染壳随后全站下线，
+ * 已无 xterm 对象可断言（原「这条路径零 xterm」的守卫随之退场）。
  */
 describe('TerminalPane（mock 假后端）', () => {
   it('F11 进入沉浸模式，覆盖实例详情外壳而不改当前路由', async () => {
@@ -96,14 +88,12 @@ describe('TerminalPane（mock 假后端）', () => {
     const newLine = screen.getByText('[Server thread/INFO]: ThreadedAnvilChunkStorage: All dimensions are saved')
     expect(oldLine.compareDocumentPosition(newLine) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(screen.getByRole('link', { name: '查看完整历史' })).toHaveAttribute('href', '/logs?instanceId=2')
-    expect(xtermInstances).toHaveLength(0)
     expect(wsSockets).toHaveLength(0)
 
     firstMount.unmount()
     renderWithProviders(<TerminalPane instanceId={2} hideHeader />)
     expect(await screen.findByText('[Server thread/INFO]: Saving chunks for level minecraft:overworld')).toBeInTheDocument()
     await waitFor(() => expect(logReads).toBeGreaterThanOrEqual(2))
-    expect(xtermInstances).toHaveLength(0)
     expect(wsSockets).toHaveLength(0)
   })
 
@@ -121,7 +111,7 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(screen.getByRole('button', { name: '启动实例' })).toBeEnabled()
   })
 
-  it('运行中实例：挂载控制台（不显示停机占位），且不创建 xterm', async () => {
+  it('运行中实例：挂载控制台（不显示停机占位）', async () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
@@ -131,8 +121,8 @@ describe('TerminalPane（mock 假后端）', () => {
     await waitFor(() => {
       expect(screen.queryByText(/实例未运行/)).not.toBeInTheDocument()
     })
-    // ADR-086：实例控制台路径不再经 xterm 渲染。
-    expect(xtermInstances).toHaveLength(0)
+    // 原「这条路径零 xterm」的守卫已退场：xterm 渲染壳全站下线，无 xterm 对象可断言；
+    // 挂载成功的证据即上面的 findOutput()（DOM 输出区已就位）。
   })
 
   it('运行中实例：显示读写徽标、重连和字号工具', async () => {
