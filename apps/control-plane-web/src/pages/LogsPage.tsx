@@ -716,7 +716,10 @@ export default function LogsPage() {
             total={total}
             follow={follow}
             filterKey={`${view}|${instanceId ?? ''}|${nodeId ?? ''}|${level}|${keyword.trim()}|${range}`}
-            loading={isLoading}
+            // 切窗口/筛选期间展示的是上一份数据（placeholderData）：此时 isLoading 为 false
+            // 但新结果尚未到达，须维持 loading 语义（timeline 据此不把旧数据误判为空态）；
+            // follow 轮询每 3 秒换桶，不置位以免闪烁。
+            loading={isLoading || (!follow && federationQuery.isPlaceholderData)}
             emptySuccessAllowed={emptySuccessAllowed}
           />
           <LogFooter

@@ -9,7 +9,7 @@
  *
  * 本模块无 React 组件依赖；LogsPage 只消费 {@link LogsFederationResult}。
  */
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 import {
   PARTIAL_REASONS,
@@ -516,6 +516,11 @@ export function useLogsFederation(
 	refetchInterval: options.refetchInterval,
     // 覆盖状态变化不频繁；跟随轮询时由页面 key 带动 refetch。
     staleTime: 30_000,
+    // 切窗口/筛选时保留上一份列表（stale-while-revalidate）：服务端命中缓存约 0.03s、
+    // 冷查 1-2s，期间若清空列表会"闪白"，观感远慢于实际耗时。保留旧数据后由
+    // isPlaceholderData 暴露「正在刷新」——页面据此维持 loading 语义（timeline 不判空），
+    // 新数据到达即自动替换。
+    placeholderData: keepPreviousData,
   })
 }
 
