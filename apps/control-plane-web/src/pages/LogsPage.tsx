@@ -21,13 +21,12 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { usePlatformDiagnosticsLog } from '@/api/nodeDiagnostics'
 import { useNodes } from '@/api/nodes'
+import { useInstances } from '@/api/instances'
 import { LogExportRangeDialog } from '@/components/LogExportRangeDialog'
 import { useDebounced } from '@/lib/use-debounced'
-import { InstancePicker } from '@/components/InstancePicker'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell, Segment, Segments } from '@jianmanager/ui/components/layout'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { cn } from '@jianmanager/ui'
 import {
@@ -206,6 +205,7 @@ function bucketFloor(ms: number): number {
 export default function LogsPage() {
   const { t } = useTranslation()
   const { data: nodes } = useNodes()
+  const { data: instances } = useInstances()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const isPlatformAdmin = useAuthStore((state) => state.role === ROLE_PLATFORM_ADMIN)
@@ -577,6 +577,24 @@ export default function LogsPage() {
     [],
   )
 
+  /**
+   * 切换视图：只重置分页状态，**保留** nodeId / instanceId 等筛选。
+   *
+   * 保留筛选而非清空：用户选定的范围不该在切视图时被替他放大（曾一度在这里清掉
+   * nodeId/instanceId，依据是「平台日志不带这两个维度」——该前提是错的，已回退）。
+   *
+   * 已无 `legacy` 分支：该视图随 CP `logs` 表删除而下线（2026-10-29）。
+   */
+  const switchView = useCallback(
+    (candidate: (typeof LOG_VIEWS)[number]) => {
+      exportRequest.current?.abort()
+      setView(candidate)
+      setPage(1)
+      setFederationCursors({})
+    },
+    [],
+  )
+
   // 导出门禁（2026-10-29 变更）：
   //
   // CP `/logs/export` 已随 `logs` 表一并下线，**平台视图没有导出能力**。
@@ -706,15 +724,10 @@ export default function LogsPage() {
   )
 
   return (
-    // 阶段 6 页面迁移：外壳与页头改用布局层原语。
-    // 保留 `h-full min-h-0 flex-col gap-4`——本页是视口自适应型（日志区内部滚动）。
-    // 标题行原本带两个徽标/提示（来源标记、联邦降级），它们是标题的限定语，故一并进 title；
-    // e2e 断言 heading「日志中心」是子串匹配，不受影响。
-    <PageShell data-page="logs" className="h-full min-h-0 flex-col gap-4">
-      <PageHeader
-        title={
-          <>
-            {t('logs.title')}
+    <div data-page="logs" className="jm-page-stack flex h-full min-h-0 flex-col gap-4">
+      <div className="jm-page-header">
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="jm-page-title">{t('logs.title')}</h1>
           {/* 状态与提示固定在标题区：不占用列表空间，也不因状态变化推动下方布局。 */}
           {/* 徽标仅在确有来源标记时渲染：标题行是 flex，空占位只会让测试与读屏
               多拿到一个空节点，而它本身不承载高度，去掉不影响布局稳定。 */}
@@ -746,12 +759,9 @@ export default function LogsPage() {
               </span>
             </span>
           )}
-          </>
-        }
-        actions={
-          <>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
             <Button
               variant="outline"
               size="sm"
@@ -779,14 +789,11 @@ export default function LogsPage() {
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
-            </DropdownMenu>
-            {exporting && (
-              <Button size="sm" variant="outline" onClick={() => exportRequest.current?.abort()}>{t('common.cancel')}</Button>
-            )}
-          </>
-        }
-      />
-      {/* 导出范围对话框放在 PageHeader 之外：它是浮层，不属于头部动作列。 */}
+        </DropdownMenu>
+        {exporting && (
+          <Button size="sm" variant="outline" onClick={() => exportRequest.current?.abort()}>{t('common.cancel')}</Button>
+        )}
+      </div>
       <LogExportRangeDialog
         key={`${scopeKey}|${exportRangeOpen}`}
         open={exportRangeOpen}
@@ -797,28 +804,30 @@ export default function LogsPage() {
         onConfirm={(bounds) => void handleExport('range', bounds)}
       />
 
-      <div className="jm-toolbar-surface flex flex-wrap items-center gap-1 p-1">
-        <Segments aria-label={t('logs.viewLabel')}>
-          {LOG_VIEWS.filter(
-            // 非平台管理员只能看 node_instance（联邦查询按实例范围收敛）。
-            (candidate) => isPlatformAdmin || candidate === 'node_instance',
-          ).map(
-            (candidate) => (
-              <Segment
-                key={candidate}
-                active={view === candidate}
-                onClick={() => {
-                  exportRequest.current?.abort()
-                  setView(candidate)
-                  setPage(1)
-                  setFederationCursors({})
-                }}
-              >
-                {t(`logs.view_${candidate}`)}
-              </Segment>
-            ),
-          )}
-        </Segments>
+      <div
+        className="jm-toolbar-surface flex flex-wrap gap-1 p-1"
+        role="tablist"
+        aria-label={t('logs.viewLabel')}
+      >
+        {LOG_VIEWS.filter(
+          // 非平台管理员只能看 node_instance（联邦查询按实例范围收敛）。
+          (candidate) => isPlatformAdmin || candidate === 'node_instance',
+        ).map(
+          (candidate) => (
+            <Button
+              key={candidate}
+              variant={view === candidate ? 'default' : 'ghost'}
+              size="sm"
+              role="tab"
+              aria-selected={view === candidate}
+              onClick={() => {
+                switchView(candidate)
+              }}
+            >
+              {t(`logs.view_${candidate}`)}
+            </Button>
+          ),
+        )}
       </div>
 
       {/* 强筛选工具栏 */}
@@ -905,18 +914,25 @@ export default function LogsPage() {
               ))}
             </SelectContent>
           </Select>
-        {/* 实例筛选：千级实例改走服务端搜索（InstancePicker），不再全量列举。
-            Select 换掉的另一个原因：Radix Select 依赖全部 SelectItem mount 才能提供
-            首字母跳转与方向键导航，因此无法只渲染前 N 项。 */}
-        <InstancePicker
-          value={instanceId}
-          onChange={(id) => resetTo(setInstanceId)(id)}
-          allowAll
-          allLabel={t('logs.allInstances')}
-          placeholder={t('logs.allInstances')}
-          disabled={view === 'platform'}
-          className="w-44"
-        />
+        <Select
+            disabled={view === 'platform'}
+            value={instanceId === null ? SENTINEL_ALL : String(instanceId)}
+            onValueChange={(v: string) =>
+              resetTo(setInstanceId)(v === SENTINEL_ALL ? null : Number(v))
+            }
+          >
+            <SelectTrigger size="sm" className="w-44">
+              <SelectValue placeholder={t('logs.allInstances')} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={SENTINEL_ALL}>{t('logs.allInstances')}</SelectItem>
+              {instances?.map((inst) => (
+                <SelectItem key={inst.id} value={String(inst.id)}>
+                  {inst.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
         {/* 实时跟随开关 pill，靠右 */}
         <button
@@ -1081,7 +1097,7 @@ export default function LogsPage() {
           />
         </Panel>
       )}
-    </PageShell>
+    </div>
   )
 }
 

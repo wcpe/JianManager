@@ -13,28 +13,14 @@ import {
 } from './helpers'
 import {
   LOGS_FEDERATION_KEYS,
-  LOGS_FEDERATION_LOCALES,
   reasonI18nKey,
 } from './i18n'
-// 真实运行时语言包（`src/i18n/index.ts` 实际注册、`main.tsx` 加载的那两份）。
-// FE-8 订正：断言必须落在它们上，而不是上面那个桩副本 `LOGS_FEDERATION_LOCALES`。
-import realZh from '@/i18n/zh.json'
-import realEn from '@/i18n/en.json'
   import { EXPORT_BLOCK_REASONS, PARTIAL_REASONS } from './types'
   import type { Coverage, LogFederationResponse } from './types'
 
-/**
- * get 按点路径从嵌套对象里取值（测试专用，不引第三方依赖）。
- * i18n 键形如 `logsFederation.export.blocked_row_limit`，locale 对象是同形嵌套结构。
- */
-function get(obj: unknown, path: string): unknown {
-  return path.split('.').reduce<unknown>((acc, part) => {
-    if (acc && typeof acc === 'object' && part in (acc as Record<string, unknown>)) {
-      return (acc as Record<string, unknown>)[part]
-    }
-    return undefined
-  }, obj)
-}
+// 注：涉及**真实运行时语言包**（`src/i18n/{zh,en}.json`）的 i18n 用例只存在应用侧副本
+// （`apps/control-plane-web/src/lib/logs-federation/helpers.test.ts`）——包内不可依赖应用侧资源；
+// 「新增导出键存在性 / 预算键存在性 / zh-en 键对齐」由应用侧经 re-export 壳对同一份实现运行。
 
 function coverage(partial: Partial<Coverage> = {}): Coverage {
   return {
@@ -494,53 +480,6 @@ describe('导出预算上限文案（FR-480 导出闸）', () => {
     expect(v.exportBlockedKey).toBe(LOGS_FEDERATION_KEYS.exportBlockedBudget)
   })
 
-    // FE-8：不能只断「字符串前缀」——那对「键在 zh/en 中是否真的有文案」毫无约束。
-    // 改为对**真实运行时语言包**（src/i18n/{zh,en}.json）取键值：缺失即失败，空串也失败。
-    //
-    // 为什么必须读真实包（2026-10-12 终审订正）：本用例此前的实现读的是
-    // `LOGS_FEDERATION_LOCALES`——那是 `lib/logs-federation/i18n.ts` 内的**桩副本**，
-    // 不是 `main.tsx` 实际加载的资源包，且两侧此后独立漂移（实测：桩 56 叶 vs 真实 83 叶，
-    // 27 个键缺失、43 条文案不一致）。实测变异：**同时**删除真实 zh.json 与 en.json 的同一
-    // 键，全站 48 条测试仍全绿——即「翻译缺失」这一真实缺陷形态当时无任何守卫。
-    // 现在断言的是渲染层真正读取的那份资源：漏键 ⇒ 本用例红。
-    it('新增的导出文案键在真实 zh / en 语言包中都存在且非空', () => {
-      for (const key of [
-        LOGS_FEDERATION_KEYS.exportBlockedRowLimit,
-        LOGS_FEDERATION_KEYS.exportBlockedByteBudget,
-        LOGS_FEDERATION_KEYS.exportBlockedBudget,
-      ]) {
-        for (const [localeName, locale] of Object.entries({ zh: realZh, en: realEn })) {
-          const value = get(locale, key)
-          expect(typeof value, `键 ${key} 在真实 ${localeName} 语言包中缺失`).toBe('string')
-          expect((value as string).length, `键 ${key} 在真实 ${localeName} 语言包中为空串`).toBeGreaterThan(0)
-        }
-      }
-    })
-
-    // 动态 i18n 键的静态覆盖：`exportBlockedKeyForReasons` **有意**只给预算类原因发专用键
-    // （其余原因由调用方走泛化 incomplete 文案，见该函数注释）。因此断言分两半：
-    //   ① 能发键的原因 ⇒ 键必须在真实 zh/en 语言包都有非空文案；
-    //   ② 不发键的原因不得被误加上键（保持「专用文案只用于预算类」的语义边界）。
-    it('预算类阻断原因的 i18n 键在真实 zh / en 语言包中都存在且非空', () => {
-      const budgetReasons = Object.values(EXPORT_BLOCK_REASONS).filter((reason) =>
-        exportBlockedKeyForReasons([reason]) !== undefined,
-      )
-      expect(budgetReasons.length, '至少要有预算类原因映射到专用键').toBeGreaterThan(0)
-      for (const reason of budgetReasons) {
-        const key = exportBlockedKeyForReasons([reason])
-        for (const [localeName, locale] of Object.entries({ zh: realZh, en: realEn })) {
-          const value = get(locale, key as string)
-          expect(typeof value, `键 ${key}（${reason}）在真实 ${localeName} 语言包中缺失`).toBe('string')
-          expect((value as string).length, `键 ${key}（${reason}）在真实 ${localeName} 语言包中为空串`)
-            .toBeGreaterThan(0)
-        }
-      }
-      // ② 非预算原因不得拿到专用键（否则 UI 会对「覆盖不完整」说成「行数上限」）。
-      for (const reason of Object.values(EXPORT_BLOCK_REASONS)) {
-        if (budgetReasons.includes(reason)) continue
-        expect(exportBlockedKeyForReasons([reason]), `非预算原因 ${reason} 不得映射到专用键`).toBeUndefined()
-      }
-    })
   })
 
 describe('toCoverageBannerProps / mergeQualityIntoSummary / i18n', () => {
@@ -569,40 +508,6 @@ describe('toCoverageBannerProps / mergeQualityIntoSummary / i18n', () => {
     })
     expect(merged.status).toBe('partial')
     expect(merged.emptySuccessAllowed).toBe(false)
-  })
-
-  it('i18n zh/en logsFederation 键对齐', () => {
-    function flatten(obj: Record<string, unknown>, prefix = ''): Set<string> {
-      const out = new Set<string>()
-      for (const [k, v] of Object.entries(obj)) {
-        const path = prefix ? `${prefix}.${k}` : k
-        if (v && typeof v === 'object') {
-          for (const nested of flatten(v as Record<string, unknown>, path)) out.add(nested)
-        } else {
-          out.add(path)
-        }
-      }
-      return out
-    }
-    // 断言必须落在**真实运行时语言包**上（NEW-2，2026-10-12 修复）。
-    // 此前这里读的是 `LOGS_FEDERATION_LOCALES` —— `i18n.ts` 内的**过渡期桩副本**，
-    // 它自述的使命（"正式接入时把本对象合并进 zh.json/en.json"）**早已完成**，
-    // 此后两侧独立漂移（实测：桩 56 叶 vs 真实 83 叶、27 键缺失、43 条文案不一致）。
-    // 读桩等于桩 vs 桩自证：真实包里漏键它不会红，运维改真实文案它也不反映。
-    const zh = flatten(realZh as unknown as Record<string, unknown>)
-    const en = flatten(realEn as unknown as Record<string, unknown>)
-    expect([...zh].sort()).toEqual([...en].sort())
-    // LOGS_FEDERATION_KEYS 中的 key 都必须能在**真实** zh/en 树中解析。
-    for (const key of Object.values(LOGS_FEDERATION_KEYS)) {
-      expect(zh.has(key), `键 ${key} 在真实 zh 语言包中缺失`).toBe(true)
-      expect(en.has(key), `键 ${key} 在真实 en 语言包中缺失`).toBe(true)
-    }
-    // 桩副本必须仍是真实包的**子集**：桩只增不减地把 key 对齐即可，但绝不能出现
-    // 「真实包已删除、桩还留着」的悬空键（那会让下面的 reasonI18nKey 类断言失去意义）。
-    const stubZh = flatten(LOGS_FEDERATION_LOCALES.zh as unknown as Record<string, unknown>)
-    for (const key of stubZh) {
-      expect(zh.has(key), `桩里有键 ${key} 但真实 zh 语言包已无（桩已陈旧）`).toBe(true)
-    }
   })
 
   it('reasonI18nKey：已登记码与未知码', () => {
