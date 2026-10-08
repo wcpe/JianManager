@@ -1,7 +1,9 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+// 列表行展示层已迁至 @jianmanager/ui（ADR-097）：平铺表与分组树表共用的行渲染件在包内；
+// 本层保留取数（无限搜索 / 聚合 / 节点 / 群组 / 分组树）、URL 状态、批量选择与各弹窗目标的装配。
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { ArrowUpDown, ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Wrench } from 'lucide-react'
+import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal } from 'lucide-react'
 import {
   useInfiniteInstanceSearch,
   useInstanceAggregate,
@@ -32,44 +34,28 @@ import CloneInstanceDialog from '@/components/CloneInstanceDialog'
 import InstanceTagsDialog from '@/components/InstanceTagsDialog'
 import EditInstanceLimitsDialog from '@/components/EditInstanceLimitsDialog'
 import EditInstanceConfigDialog from '@/components/EditInstanceConfigDialog'
-import { hasCapability, resolveCapabilities } from '@/lib/capabilities'
+import { resolveCapabilities } from '@/lib/capabilities'
 import { InstanceWorktableCard } from '@/components/console/InstanceWorktableCard'
 import { InstanceGroupManager } from '@/components/console/InstanceGroupManager'
-import { RuntimeDriftBadge } from '@/components/console/RuntimeDriftNotice'
 import {
   buildGroupTreeSource,
   buildKeyMap,
   collectEnvs,
   collectTags,
-  envOf,
-  freeTagsOf,
   groupInstances,
   groupInstancesByGroupTree,
   parseTags,
   GROUP_DIMENSIONS,
   type GroupDimension,
-  type InstanceGroup,
 } from '@/components/console/instance-grouping'
-import { memberHealth, type MemberHealth } from '@/lib/topology'
 import { runtimeDriftOf } from '@/lib/runtime-drift'
 import { summarizeInstances, summaryFilterStatus, type SummaryFilterKey } from '@/lib/instance-summary'
-import { Badge } from '@jianmanager/ui/components/badge'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { DataPanelSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
-import { cn, instanceStatusLevel } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
-import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Input } from '@jianmanager/ui/components/input'
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from '@jianmanager/ui/components/dropdown-menu'
 import {
   Select,
   SelectContent,
@@ -78,19 +64,8 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@jianmanager/ui/components/table'
-import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
-import { useCardColumns } from '@/lib/use-card-columns'
-import {
   SCROLL_KEY_PREFIX,
   buildInstanceTreeRows,
-  useStoredVirtualScroll,
   VirtualizedGroupedInstanceTable,
   VirtualizedInstanceTable,
 } from '@jianmanager/ui/components/views/instances/VirtualizedInstanceTables'
@@ -98,11 +73,10 @@ import {
   FilterSelect,
   InstanceRowMenu,
   InstanceTableHeader,
-  RoleBadge,
-  SortableTableHead,
   type InstanceSortKey,
   type InstanceSortOrder,
 } from '@jianmanager/ui/components/views/instances/InstanceTableParts'
+import { InstanceRowView } from '@jianmanager/ui/components/views/instances/InstanceRowView'
 import {
   BackendsInline,
   CardView,
@@ -650,153 +624,36 @@ export default function InstancesPage() {
       return next
     })
 
-  const renderRow = (inst: InstanceInfo) => {
-    const st = statusConfig[inst.status] || statusConfig.STOPPED
-    const instEnv = envOf(inst)
-    const free = freeTagsOf(inst)
-    // 代理的分组展开行由画像 `bcTopology` 能力判定（FR-445），取代写死的 role === 'proxy'。
-    const isProxy = resolveCapabilities(inst).capabilities.includes('bcTopology')
-    const proxyExpanded = expandedProxies.has(inst.id)
-    // 运行态漂移（FR-471）：无漂移为 undefined，行内据此决定是否出标记。
-    const rowDrift = runtimeDriftOf(inst)
-    return (
-      <Fragment key={inst.id}>
-        <TableRow data-state={selectedIds.includes(inst.id) ? 'selected' : undefined}>
-          <TableCell>
-            <Checkbox
-              checked={selectedIds.includes(inst.id)}
-              onCheckedChange={() => toggleOne(inst.id)}
-              aria-label={inst.name}
-            />
-          </TableCell>
-          <TableCell className="font-medium">
-            <div className="flex items-center gap-1.5">
-              {isProxy && (
-                <button
-                  type="button"
-                  onClick={() => toggleProxy(inst.id)}
-                  aria-label={t('proxy.manageBackends')}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  {proxyExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-                </button>
-              )}
-              <button
-                type="button"
-                className="text-left text-primary hover:underline"
-                onClick={() => openInstance(inst.id)}
-              >
-                {inst.name}
-              </button>
-              {/* 就地导入徽章（FR-302）：工作目录在托管区外，删除实例不删原目录。 */}
-              {inst.workDirInPlace && (
-                <Badge variant="outline" className="shrink-0 border-amber-500/50 text-amber-600 dark:text-amber-400">
-                  {t('importServer.inPlaceBadge')}
-                </Badge>
-              )}
-              {/* 运行态漂移标记（FR-471）：目录下有未纳管活进程，面板状态可能不准（行内只做标记，
-                  接管入口收在「⋯」菜单，避免每行多插一个破坏密度的按钮）。 */}
-              {rowDrift && <RuntimeDriftBadge pid={rowDrift.pid} cmdline={rowDrift.cmdline} />}
-            </div>
-          </TableCell>
-          <TableCell className="text-muted-foreground">{inst.type}</TableCell>
-          {/* 节点:端口（FR-136）：serverPort 已有数据 */}
-          <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
-            {nodeName(inst.nodeId)}
-            {inst.serverPort > 0 && <span className="tabular-nums">:{inst.serverPort}</span>}
-          </TableCell>
-          <TableCell>
-            <RoleBadge role={inst.role} />
-          </TableCell>
-          <TableCell>
-            <div className="flex flex-wrap items-center gap-1">
-              {instEnv && (
-                <Badge variant="outline" className="border-primary/40 text-primary">
-                  {t(`grouping.env_${instEnv}`, { defaultValue: instEnv })}
-                </Badge>
-              )}
-              {free.map((tg) => (
-                <Badge key={tg} variant="secondary" className="font-normal">
-                  {tg}
-                </Badge>
-              ))}
-              {!instEnv && free.length === 0 && <span className="text-muted-foreground text-xs">--</span>}
-            </div>
-          </TableCell>
-          <TableCell>
-            <StatusBadge
-              level={instanceStatusLevel(inst.status)}
-              label={st.text}
-              pulse={inst.status === 'STARTING' || inst.status === 'STOPPING'}
-            />
-          </TableCell>
-          <TableCell>
-            <div className="flex items-center gap-1">
-              {/* 主操作随状态，操作进行中禁用防连点（FR-138）；
-                  搭建中硬性禁启（FR-331），tooltip 由外层 span 承载（禁用态 pointer-events-none）。 */}
-              {(inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
-                <span title={isProvisioningInstance(inst) ? t('instances.provisioningBlocked') : undefined}>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    disabled={isProvisioningInstance(inst) || (start.isPending && start.variables === inst.id)}
-                    onClick={() => start.mutate(inst.id)}
-                    aria-label={t('instances.start')}
-                    className="text-green-600 hover:text-green-700"
-                  >
-                    {start.isPending && start.variables === inst.id ? t('instances.processing') : t('instances.start')}
-                  </Button>
-                </span>
-              )}
-              {inst.status === 'RUNNING' && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    disabled={stop.isPending && stop.variables === inst.id}
-                    onClick={() => stop.mutate(inst.id)}
-                    aria-label={t('instances.stop')}
-                    className="text-yellow-600 hover:text-yellow-700"
-                  >
-                    {stop.isPending && stop.variables === inst.id ? t('instances.processing') : t('instances.stop')}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    disabled={restart.isPending && restart.variables === inst.id}
-                    onClick={() => restart.mutate(inst.id)}
-                    aria-label={t('instances.restart')}
-                    className="text-blue-600 hover:text-blue-700"
-                  >
-                    {restart.isPending && restart.variables === inst.id ? t('instances.processing') : t('instances.restart')}
-                  </Button>
-                </>
-              )}
-              {(inst.status === 'STARTING' || inst.status === 'STOPPING') && (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => setKillTarget({ id: inst.id, name: inst.name })}
-                  aria-label={t('instances.kill')}
-                  className="text-yellow-600 hover:text-yellow-700"
-                >
-                  {t('instances.kill')}
-                </Button>
-              )}
-              {buildMenu(inst)}
-            </div>
-          </TableCell>
-        </TableRow>
-        {isProxy && proxyExpanded && (
-          <TableRow className="bg-muted/30 hover:bg-muted/30">
-            <TableCell colSpan={8} className="p-0">
-              <BackendsInlineContainer proxyId={inst.id} />
-            </TableCell>
-          </TableRow>
-        )}
-      </Fragment>
-    )
-  }
+  /**
+   * 行装配（ADR-097）：行展示件已入包（平铺表与分组树表共用），此处只注入数据与回调。
+   * 逐行判别留在应用侧：节点名（查节点表）、代理画像（FR-445）、搭建中、运行态漂移（FR-471）、
+   * 三个动作的按 id 在途态（别的行在提交不该禁用本行）。
+   * proxy 内联展开与批量勾选是跨行共享状态，故仍由本页持有——虚拟窗口滚动会卸载行，
+   * 行内自持会丢失展开态；勾选还与表头全选、批量栏同源。
+   */
+  const renderRow = (inst: InstanceInfo) => (
+    <InstanceRowView
+      inst={inst}
+      nodeName={nodeName(inst.nodeId)}
+      selected={selectedIds.includes(inst.id)}
+      onToggleSelect={() => toggleOne(inst.id)}
+      isProxy={resolveCapabilities(inst).capabilities.includes('bcTopology')}
+      provisioning={isProvisioningInstance(inst)}
+      drift={runtimeDriftOf(inst)}
+      proxyExpanded={expandedProxies.has(inst.id)}
+      onToggleProxy={() => toggleProxy(inst.id)}
+      renderBackends={() => <BackendsInlineContainer proxyId={inst.id} />}
+      starting={start.isPending && start.variables === inst.id}
+      stopping={stop.isPending && stop.variables === inst.id}
+      restarting={restart.isPending && restart.variables === inst.id}
+      menu={buildMenu(inst)}
+      onOpenInstance={openInstance}
+      onStart={() => start.mutate(inst.id)}
+      onStop={() => stop.mutate(inst.id)}
+      onRestart={() => restart.mutate(inst.id)}
+      onKill={() => setKillTarget({ id: inst.id, name: inst.name })}
+    />
+  )
 
   return (
     // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
