@@ -1,56 +1,44 @@
-import { useMemo, useState } from 'react'
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做内嵌更新器取数、密钥揭示与 wedge 下载接线。
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Copy, Download } from 'lucide-react'
-import { Button } from '@jianmanager/ui/components/button'
-import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
-import { useUpdaterJarsInfo, downloadUpdaterJar, useRevealClientKey, type ClientPullKey } from '@/api/clientChannels'
+import { ClientIntegrationGuideView } from '@jianmanager/ui/components/views/client-dist/ClientIntegrationGuideView'
+import {
+  useUpdaterJarsInfo,
+  downloadUpdaterJar,
+  useRevealClientKey,
+  type ClientPullKey,
+} from '@/api/clientChannels'
 
 /**
- * 客户端更新器接入指引（FR-107 / FR-259）。面向运营方：在频道详情一页拿齐——下载楔子、
+ * 客户端更新器接入指引（FR-107 / FR-259）的接线层（ADR-097）。面向运营方：在频道详情一页拿齐——下载楔子、
  * 该频道专属 jm-updater.json、启动器 JVM 参数、行为说明，照做即可接入并下发玩家。
  *
  * FR-259 起 core 不再随整合包附带：整合包只带 wedge.jar（~30KB），首次启动楔子自动经
  * API 根 endpoint 拼接 updater-core 端点并拉取（gradle-wrapper 模式，见 FR-258）。
+ *
+ * 展示层已归包（`ClientIntegrationGuideView`），此处只保留应用侧职责：
+ * - 取数：内嵌更新器 jar 信息（`useUpdaterJarsInfo`）注入视图；
+ * - **密钥揭示（敏感边界）**：选中密钥与已揭示明文由本层持有，明文只在「用户主动选择 + 后端 reveal 成功」
+ *   时落定、改选或失败一律清空（与迁包前逐字一致），只经 props 交给视图用于拼 jm-updater.json；
+ * - wedge.jar 下载（`downloadUpdaterJar`）与全部 toast（复制结果 / 下载前置校验 / 下载失败 / 揭示结果）。
+ * 保留原路径与原默认导出、原 props 签名，调用点（频道工作台「接入指引」Tab）零改动。
  */
 export default function ClientIntegrationGuide({ channelId, keys }: { channelId: string; keys: ClientPullKey[] }) {
   const { t } = useTranslation()
   const { data: jars } = useUpdaterJarsInfo()
   const revealKey = useRevealClientKey()
-  const [endpoint, setEndpoint] = useState(`${window.location.origin}/api/v1`)
+  // 选中密钥 id（'' = 不自动填入，保留占位）与已揭示明文：上提本层（选谁触发揭示请求），改选/失败清空明文。
   const [selectedKeyId, setSelectedKeyId] = useState('')
-  const [selectedKeyPlaintext, setSelectedKeyPlaintext] = useState('')
-  const [downloading, setDownloading] = useState<'wedge' | 'config' | null>(null)
+  const [revealedKeyPlaintext, setRevealedKeyPlaintext] = useState('')
 
-  const selectedKey = useMemo(
-    () => keys.find((key) => String(key.id) === selectedKeyId) ?? null,
-    [keys, selectedKeyId],
-  )
-  const hasRealConfigKey = selectedKeyPlaintext.trim().length > 0
-  const configKey = selectedKeyPlaintext || t('clientGuide.keyPlaceholder', '在「拉取密钥」Tab 创建后填入')
-  const jmUpdaterJson = JSON.stringify(
-    {
-      channel: channelId,
-      key: configKey,
-      endpoint,
-      timeoutSec: 120,
-      telemetry: true,
-      bootConfirmSec: 5,
-    },
-    null,
-    2,
-  )
-  const javaagentArg = '-javaagent:jm-updater\\wedge.jar'
-
-  const copy = async (text: string) => {
-    const ok = await copyToClipboard(text)
-    if (ok) toast.success(t('clientGuide.copied', '已复制'))
-    else toast.error(t('clientGuide.copyFailed', '复制失败'))
-  }
-
+  /**
+   * 选择密钥并揭示明文：先落选中值与清空上一次明文（下拉立即响应），再请后端 reveal。
+   * 不可查看明文的密钥不发请求、直接提示；失败只提示不改选中值，明文保持为空（视图侧因此仍禁用配置下载）。
+   */
   const revealSelectedKey = async (keyId: string) => {
     setSelectedKeyId(keyId)
-    setSelectedKeyPlaintext('')
+    setRevealedKeyPlaintext('')
     const key = keys.find((item) => String(item.id) === keyId)
     if (!key) return
     if (!key.revealable) {
@@ -59,232 +47,24 @@ export default function ClientIntegrationGuide({ channelId, keys }: { channelId:
     }
     try {
       const res = await revealKey.mutateAsync({ channelId, keyId: key.id })
-      setSelectedKeyPlaintext(res.key)
+      setRevealedKeyPlaintext(res.key)
       toast.success(t('clientGuide.keyFilled', '已填入所选密钥'))
     } catch {
       toast.error(t('clientGuide.keyRevealFailed', '读取密钥明文失败'))
     }
   }
 
-  const downloadConfig = () => {
-    const blob = new Blob([jmUpdaterJson], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'jm-updater.json'
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const download = async (comp: 'wedge' | 'config') => {
-    if (comp === 'config' && !hasRealConfigKey) {
-      toast.error(t('clientGuide.configKeyRequired', '请先选择可查看的拉取密钥，再下载 jm-updater.json。'))
-      return
-    }
-    setDownloading(comp)
-    try {
-      if (comp === 'config') {
-        downloadConfig()
-      } else {
-        await downloadUpdaterJar('wedge')
-      }
-    } catch {
-      toast.error(t('clientGuide.downloadFailed', '下载失败（jar 可能未内嵌）'))
-    } finally {
-      setDownloading(null)
-    }
-  }
-
   return (
-    <div className="space-y-6 text-sm">
-      {/* 简介 + 内嵌版本 */}
-      <div className="border rounded-lg p-4 space-y-2">
-        <p className="text-muted-foreground">
-          {t(
-            'clientGuide.intro',
-            '楔子在游戏启动前自定位、加载 updater-core、拉 manifest、增量更新客户端资源后放行游戏；断网兜底启动、异常兜底放行，绝不挡启动。按下面步骤把更新器接入整合包并下发玩家。',
-          )}
-        </p>
-        {jars && (
-          <dl className="grid gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-[auto_1fr]" data-testid="embedded-updater-info">
-            <dt>{t('clientGuide.embeddedVersion', '内嵌更新器版本')}</dt>
-            <dd className="font-mono">{jars.version}</dd>
-            <dt>{t('clientGuide.embeddedCoreVersion', 'core 整数版本')}</dt>
-            <dd className="font-mono">{jars.coreVersion}</dd>
-            <dt>wedge.jar</dt>
-            <dd>{formatJarState(jars.wedge, t)}</dd>
-            <dt>updater-core.jar</dt>
-            <dd>{formatJarState(jars.core, t)}</dd>
-          </dl>
-        )}
-      </div>
-
-      {/* 步骤一：下载楔子 */}
-      <Step title={t('clientGuide.step1Title', '① 下载楔子')}>
-        <p className="text-muted-foreground">
-          {t(
-            'clientGuide.step1Desc',
-            '只下载 wedge.jar（楔子，~30KB）。updater-core 不再随整合包附带——首次启动时楔子自动经 API 根 endpoint 拉取。',
-          )}
-        </p>
-        <div className="flex flex-wrap gap-2 mt-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!jars?.wedge.available || downloading === 'wedge'}
-            onClick={() => download('wedge')}
-          >
-            <Download className="size-4 mr-1" /> wedge.jar
-          </Button>
-          {jars && !jars.wedge.available && (
-            <span className="text-xs text-amber-600 self-center" role="status">
-              {t('clientGuide.notEmbedded', '楔子未内嵌，当前无法下载（构建时需 make embed-client-updater）')}
-            </span>
-          )}
-        </div>
-      </Step>
-
-      {/* 步骤二：放置文件 */}
-      <Step title={t('clientGuide.step2Title', '② 放置文件')}>
-        <p className="text-muted-foreground">
-          {t('clientGuide.step2Desc', '把 wedge.jar 与 jm-updater.json 放进游戏目录的 jm-updater 子目录：')}
-        </p>
-        <CodeBlock text={'<.minecraft>/jm-updater/\n  ├─ wedge.jar\n  └─ jm-updater.json'} onCopy={copy} t={t} />
-      </Step>
-
-      {/* 步骤三：频道专属 jm-updater.json */}
-      <Step title={t('clientGuide.step3Title', '③ 配置 jm-updater.json（本频道专属）')}>
-        <p className="text-muted-foreground">
-          {t(
-            'clientGuide.step3Desc',
-            '下面是本频道专属配置。key 使用你在「拉取密钥」Tab 创建的密钥（可随时查看明文并自动填入）；endpoint 必须是玩家可访问的 API 根地址，例如 http://127.0.0.1:18370/api/v1，禁止填写 /client-channels 等后缀。',
-          )}
-        </p>
-        <label className="flex flex-col gap-1 mt-2">
-          <span className="text-xs text-muted-foreground">{t('clientGuide.keySelectLabel', '选择拉取密钥')}</span>
-          <select
-            className="border rounded px-2 py-1 text-sm bg-background"
-            value={selectedKeyId}
-            onChange={(e) => void revealSelectedKey(e.target.value)}
-            disabled={revealKey.isPending}
-          >
-            <option value="">{t('clientGuide.keySelectPlaceholder', '不自动填入，保留占位')}</option>
-            {keys.map((key) => (
-              <option key={key.id} value={key.id} disabled={!key.revealable || key.revoked}>
-                {key.name} · {key.keyPrefix}…{key.expiresAt ? '' : ` · ${t('clientChannels.neverExpires', '永不过期')}`}
-              </option>
-            ))}
-          </select>
-        </label>
-        {selectedKey && selectedKeyPlaintext && (
-          <p className="text-xs text-status-success">
-            {t('clientGuide.keyFilledHint', '已把所选密钥明文写入下方 jm-updater.json。')}
-          </p>
-        )}
-        <label className="flex flex-col gap-1 mt-2">
-          <span className="text-xs text-muted-foreground">{t('clientGuide.endpointLabel', '公网分发端点')}</span>
-          <input
-            className="border rounded px-2 py-1 text-sm font-mono bg-background"
-            value={endpoint}
-            onChange={(e) => setEndpoint(e.target.value)}
-          />
-        </label>
-        <div className="flex flex-wrap items-center gap-2 mt-3">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={downloading === 'config' || !hasRealConfigKey}
-            onClick={() => download('config')}
-          >
-            <Download className="size-4 mr-1" /> {t('clientGuide.downloadConfig', '下载 jm-updater.json')}
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {t(
-              'clientGuide.coreAutoFetchHint',
-              'updater-core 不在整合包内——楔子首次启动自动拉取，运营可在「Core 版本」Tab 切换回滚。',
-            )}
-          </span>
-        </div>
-        <CodeBlock text={jmUpdaterJson} onCopy={copy} t={t} />
-      </Step>
-
-      {/* 步骤四：启动器 JVM 参数 */}
-      <Step title={t('clientGuide.step4Title', '④ 启动器加 JVM 参数')}>
-        <p className="text-muted-foreground">
-          {t(
-            'clientGuide.step4Desc',
-            '在 HMCL / PCL2 的「自定义 JVM 参数」里加下面这行（相对路径，推荐）。启动器启动游戏前会切到 .minecraft 目录，故相对路径相对游戏目录解析；省略 =gameDir 让楔子自动从 MC 命令行 --gameDir 取绝对路径。',
-          )}
-        </p>
-        <CodeBlock text={javaagentArg} onCopy={copy} t={t} />
-        <p className="text-xs text-muted-foreground">
-          {t('clientGuide.step4Abs', '若启动器不切到 .minecraft，改用绝对路径：')}
-          <span className="font-mono"> -javaagent:&lt;.minecraft&gt;\jm-updater\wedge.jar</span>
-        </p>
-      </Step>
-
-      {/* 行为说明 */}
-      <Step title={t('clientGuide.behaviorTitle', '行为说明')}>
-        <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
-          <li>{t('clientGuide.behaviorFailStatic', '断网 / 端点不可达 → 以本地现有版本兜底启动游戏。')}</li>
-          <li>{t('clientGuide.behaviorFailOpen', '配置缺失 / 异常 → 跳过更新兜底放行直接启动，绝不挡启动。')}</li>
-          <li>{t('clientGuide.behaviorProgress', '更新期弹独立进度窗口（进度条 + 速度 + ETA）；无显示环境降级为文本。')}</li>
-          <li>{t('clientGuide.behaviorMultiAgent', '可与外置登录 authlib-injector 等其它 -javaagent 共存，加载顺序无关。')}</li>
-        </ul>
-      </Step>
-    </div>
-  )
-}
-
-/** 步骤区块：标题 + 内容。 */
-function formatJarState(
-  jar: { available: boolean; size: number },
-  t: (key: string, fallback: string, options?: Record<string, unknown>) => string,
-): string {
-  if (!jar.available) return t('clientGuide.jarUnavailable', '不可用 · 0 B')
-  return t('clientGuide.jarAvailable', '可用 · {{size}}', { size: formatBytes(jar.size) })
-}
-
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
-}
-
-function Step({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="border rounded-lg p-4 space-y-2">
-      <h3 className="font-medium">{title}</h3>
-      {children}
-    </div>
-  )
-}
-
-/** 等宽代码块 + 复制按钮。 */
-function CodeBlock({
-  text,
-  onCopy,
-  t,
-}: {
-  text: string
-  onCopy: (text: string) => void
-  t: (key: string, fallback: string) => string
-}) {
-  return (
-    <div className="relative mt-2">
-      <pre className="bg-muted rounded-lg p-3 pr-12 text-xs font-mono whitespace-pre-wrap break-all overflow-x-auto">
-        {text}
-      </pre>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="absolute top-2 right-2 h-7 px-2"
-        onClick={() => onCopy(text)}
-        aria-label={t('clientGuide.copy', '复制')}
-      >
-        <Copy className="size-3.5" />
-      </Button>
-    </div>
+    <ClientIntegrationGuideView
+      channelId={channelId}
+      keys={keys}
+      jars={jars}
+      selectedKeyId={selectedKeyId}
+      revealedKeyPlaintext={revealedKeyPlaintext}
+      revealing={revealKey.isPending}
+      onSelectKey={(keyId) => void revealSelectedKey(keyId)}
+      onDownloadWedge={() => downloadUpdaterJar('wedge')}
+      onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
+    />
   )
 }
