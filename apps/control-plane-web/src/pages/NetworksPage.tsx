@@ -1,91 +1,111 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做列表/详情取数、五个写动作、路由（视图切换 + 详情深链）
+// 以及两个插槽实现：拓扑接线层（自行取数）与实例候选的防抖服务端搜索。
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { Network, GitBranch, List } from 'lucide-react'
-import DangerConfirm from '@/components/DangerConfirm'
-import { Panel } from '@jianmanager/ui/components/panel'
-import { ListSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
-import { Checkbox } from '@jianmanager/ui/components/checkbox'
-import { Button } from '@jianmanager/ui/components/button'
-import { Input } from '@jianmanager/ui/components/input'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import {
-  ScrollableDialogBody,
-  scrollableDialogContentClass,
-} from '@jianmanager/ui/components/scrollable-dialog'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { validateRequired } from '@/lib/form-validation'
-import { useFieldGate } from '@/lib/use-field-gate'
-import { instanceStatusLevel, statusColorVar } from '@jianmanager/ui'
-import { cn } from '@jianmanager/ui'
-import { memberHealth, memberHealthFromStatus, type MemberHealth } from '@/lib/topology'
-import TopologyGraph from '@/components/console/TopologyGraph'
+  useAddNetworkMembers,
+  useCreateNetwork,
+  useDeleteNetwork,
+  useNetwork,
+  useNetworkAction,
+  useNetworks,
+  useRemoveNetworkMember,
+} from '@/api/networks'
 import { useInstanceSearch } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
 import { useDebounced } from '@/lib/use-debounced'
+import TopologyGraph from '@/components/console/TopologyGraph'
+import {
+  NetworkInstancePickerView,
+  NetworksPageView,
+  type NetworksInstancePickerArgs,
+  type NetworkView,
+} from '@jianmanager/ui/components/views/networks/NetworksPageView'
 
 /**
- * 成员候选的默认窗口。靠键入下发服务端 q 缩小，与 GroupMembersDialog（FR-336）同款。
+ * 成员候选的默认窗口。靠键入下发服务端 q 缩小，与 GroupMembersDialog（FR-336）同款；
+ * 「一次取多少条」属应用侧策略，故留在容器而非组件库。
  */
 const CANDIDATE_LIMIT = 50
 
 /**
- * 成员候选行的固定行高（px）。行盒用 `h-9` 钉死，行内 `text-sm`（20px）与 Checkbox（16px）
- * 都不超过它，未加任何行间距（间距已折进行高，理由见候选列表处的注释）。
- * 虚拟化按 `index × 该值` 定位，必须与真实渲染高度严格一致，否则滚动会累积漂移。
+ * 详情面板右栏（实例候选）的插槽实现。
+ *
+ * 独立成本文件内的局部组件：插槽实现要用 hooks，而它只在详情面板挂载时被渲染，
+ * 于是「详情未打开就不拉候选/节点」这一取数时机与迁包前完全一致（`useNodes` 同样只在此时发请求）。
+ * 候选走服务端搜索（千级实例不得一次拉全量）：默认前 CANDIDATE_LIMIT 条，键入经 300ms 防抖下发 `q`。
+ * 「排除已入组成员」留在组件库侧（成员数远小于实例数，代价可忽略），故这里只回传 `memberIds`。
  */
-const CAND_ROW_HEIGHT = 36
-import {
-  useNetworks,
-  useNetwork,
-  useCreateNetwork,
-  useDeleteNetwork,
-  useAddNetworkMembers,
-  useRemoveNetworkMember,
-  useNetworkAction,
-  type NetworkSummary,
-} from '@/api/networks'
+function NetworkInstanceCandidates({ selected, onToggle, memberIds, onAdd, adding }: NetworksInstancePickerArgs) {
+  const [kw, setKw] = useState('')
+  const q = useDebounced(kw, 300).trim()
+  const { data: page } = useInstanceSearch({
+    ...(q ? { q } : {}),
+    page: 1,
+    pageSize: CANDIDATE_LIMIT,
+    sort: 'name',
+    order: 'asc',
+  })
+  const { data: nodes } = useNodes()
 
-/** 实例运行状态 → i18n 文案键（复用实例页既有键，FR-160 统一 StatusBadge）。 */
-const STATUS_LABEL: Record<string, string> = {
-  RUNNING: 'instances.running',
-  STOPPED: 'instances.stopped',
-  STARTING: 'instances.starting',
-  STOPPING: 'instances.stopping',
-  CRASHED: 'instances.crashed',
+  return (
+    <NetworkInstancePickerView
+      items={page?.items}
+      total={page?.total}
+      selected={selected}
+      onToggle={onToggle}
+      memberIds={memberIds}
+      nodes={nodes}
+      onQueryChange={setKw}
+      onAdd={onAdd}
+      adding={adding}
+    />
+  )
+}
+
+/** 从 mutation 错误里取后端错误码/消息（仅创建群的冲突码有专门文案）。 */
+function createErrorOf(err: unknown): { code?: string; message?: string } {
+  const data = (err as { response?: { data?: { error?: string; message?: string } } })?.response?.data
+  return { code: data?.error, message: data?.message }
 }
 
 /**
- * 群组（Network 软标签）管理页（FR-032 / FR-145 / ADR-007）：
- * 列表（成员健康分布）/ 拓扑（proxy↔backend 注册关系）两视图，详情可深链（?network=&view=）改为可寻址双栏。
+ * 群组（Network 软标签）管理页容器（ADR-097 a+b 范式）：列表/详情取数、五个写动作与 toast 文案
+ * 都在这里决定，页面骨架、列表、拓扑外壳、新建弹窗与详情双栏交共享视图。
+ *
+ * 两处受控状态归容器：`view`（切换会换掉数据源）与 `detailId`（`useNetwork` 的查询键）——
+ * 二者本就由路由/查询参数派生（FR-145 可寻址：详情可深链 `?network=`，视图可走 `/networks/topology`），
+ * 故容器的 `onViewChange` / `onOpenDetail` / `onCloseDetail` 做的正是原页面的导航。
+ * 两个插槽把应用侧策略留在本层：拓扑接线层 `TopologyGraph`（自行取数）与候选的服务端搜索。
+ * 保留原路径与原默认导出，路由表（route-chunks 的 `/networks` 与 `/networks/topology` 精确匹配）无需改动。
  */
 export default function NetworksPage() {
   const { t } = useTranslation()
-  const { data: networks, isLoading } = useNetworks()
-  const [createOpen, setCreateOpen] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<NetworkSummary | null>(null)
-  const del = useDeleteNetwork()
   const location = useLocation()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  const { data: networks, isLoading } = useNetworks()
 
   // 详情与视图存入 URL，支持深链 / 刷新还原（FR-145 可寻址；完整可寻址归 FR-128）。
-  const [searchParams, setSearchParams] = useSearchParams()
   const detailId = searchParams.get('network') ? Number(searchParams.get('network')) : null
-  const view =
+  const view: NetworkView =
     location.pathname.startsWith('/networks/topology') || searchParams.get('view') === 'topology'
       ? 'topology'
       : 'list'
 
-  const setView = (v: 'list' | 'topology') => {
+  // 0 表示「无详情」：useNetwork 以 id 真值门控，等价于迁包前「详情面板未挂载即不请求」。
+  const { data: detail } = useNetwork(detailId ?? 0)
+
+  const create = useCreateNetwork()
+  const del = useDeleteNetwork()
+  const addMembers = useAddNetworkMembers(detailId ?? 0)
+  const removeMember = useRemoveNetworkMember(detailId ?? 0)
+  const action = useNetworkAction(detailId ?? 0)
+
+  const setView = (v: NetworkView) => {
     const next = new URLSearchParams(searchParams)
     next.delete('view')
     const search = next.toString()
@@ -102,555 +122,66 @@ export default function NetworksPage() {
     setSearchParams(next)
   }
 
-  const confirmDelete = () => {
-    if (!deleteTarget) return
-    del.mutate(deleteTarget.id, {
-      onSuccess: () => toast.success(t('networks.deleted')),
-      onError: () => toast.error(t('common.error')),
-    })
-    setDeleteTarget(null)
-  }
-
   return (
-    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader），
-    // 不再手写 `jm-page-stack space-y-4` 与 `jm-page-header` 骨架类名。
-    // `data-page` 由 PageShell 透传（它 spread 剩余 props），e2e 的就绪信号依赖它。
-    <PageShell data-page="networks">
-      <PageHeader
-        title={t('networks.title')}
-        description={t('networks.subtitle')}
-        actions={
-          <>
-            <div className="jm-toolbar-surface inline-flex items-center gap-1 p-1">
-              <ViewTab active={view === 'list'} onClick={() => setView('list')} icon={<List className="size-3.5" />}>
-                {t('networks.viewList')}
-              </ViewTab>
-              <ViewTab active={view === 'topology'} onClick={() => setView('topology')} icon={<GitBranch className="size-3.5" />}>
-                {t('networks.viewTopology')}
-              </ViewTab>
-            </div>
-            <Button size="sm" onClick={() => setCreateOpen(true)}>
-              {t('networks.create')}
-            </Button>
-          </>
-        }
-      />
-      {view === 'topology' ? (
-        <Panel
-          title={t('networks.topoTitle')}
-          icon={<Network className="size-4" />}
-          bodyClassName="p-4"
-        >
-          <p className="mb-3 text-xs text-muted-foreground">{t('networks.topoSubtitle')}</p>
-          <TopologyGraph />
-          <TopologyLegend />
-        </Panel>
-      ) : isLoading ? (
-        // 裸 <p> 换成统一骨架：与其它页的数据区占位一致（阶段 6 补丁的 PageSkeleton 一族）。
-        <ListSkeleton />
-      ) : (
-        <NetworkList networks={networks ?? []} onView={openDetail} onDelete={setDeleteTarget} />
-      )}
-
-      {createOpen && <CreateNetworkModal onClose={() => setCreateOpen(false)} />}
-      {detailId !== null && <NetworkDetailPanel networkId={detailId} onClose={closeDetail} />}
-
-      <DangerConfirm
-        open={deleteTarget !== null}
-        title={t('networks.deleteConfirm', { name: deleteTarget?.name ?? '' })}
-        confirmLabel={t('common.delete')}
-        scope="platform"
-        onConfirm={confirmDelete}
-        onCancel={() => setDeleteTarget(null)}
-      />
-    </PageShell>
-  )
-}
-
-function ViewTab({
-  active,
-  onClick,
-  icon,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  icon: React.ReactNode
-  children: React.ReactNode
-}) {
-  return (
-    <Button
-      type="button"
-      size="xs"
-      variant={active ? 'default' : 'ghost'}
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        'h-7 px-2.5',
-        active ? 'shadow-soft' : 'text-muted-foreground hover:text-foreground',
-      )}
-    >
-      {icon}
-      {children}
-    </Button>
-  )
-}
-
-/** 群组列表：卡片化行 + 成员健康分布（FR-335：直接读概要内联的 memberStatus 计数，零详情请求）。 */
-function NetworkList({
-  networks,
-  onView,
-  onDelete,
-}: {
-  networks: NetworkSummary[]
-  onView: (id: number) => void
-  onDelete: (n: NetworkSummary) => void
-}) {
-  const { t } = useTranslation()
-
-  if (networks.length === 0) {
-    return <p className="text-muted-foreground text-center py-8">{t('networks.empty')}</p>
-  }
-
-  return (
-    <div className="space-y-2.5">
-      {networks.map((n) => {
-        const health = memberHealthFromStatus(n.memberStatus)
-        return (
-          <Panel key={n.id} hoverable className="px-0" bodyClassName="px-4 py-3">
-            <div className="flex items-start justify-between gap-3">
-              <button onClick={() => onView(n.id)} className="min-w-0 text-left group">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold group-hover:text-primary transition-colors">{n.name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {t('networks.memberCount', { count: n.memberCount })}
-                  </span>
-                </div>
-                {n.description && <p className="mt-0.5 truncate text-sm text-muted-foreground">{n.description}</p>}
-              </button>
-              <div className="flex shrink-0 items-center gap-3">
-                <Button size="xs" variant="ghost" className="text-primary hover:text-primary" onClick={() => onView(n.id)}>
-                  {t('networks.manage')}
-                </Button>
-                <Button size="xs" variant="ghost" className="text-status-danger hover:text-status-danger" onClick={() => onDelete(n)}>
-                  {t('common.delete')}
-                </Button>
-              </div>
-            </div>
-            <div className="mt-2.5">
-              <HealthDistribution health={health} loading={false} />
-            </div>
-          </Panel>
-        )
-      })}
-    </div>
-  )
-}
-
-/** 成员健康分布条（运行/过渡/崩溃/停止分段着色 + 计数摘要）。 */
-function HealthDistribution({ health, loading }: { health: MemberHealth | null; loading: boolean }) {
-  const { t } = useTranslation()
-  if (loading || !health) {
-    return <div className="h-1.5 w-full animate-pulse rounded-full bg-muted" />
-  }
-  if (health.total === 0) {
-    return <p className="text-xs text-muted-foreground">{t('networks.noMembers')}</p>
-  }
-  const segs: { value: number; className: string; label: string }[] = [
-    { value: health.running, className: 'bg-status-success', label: t('networks.healthRunning') },
-    { value: health.transitioning, className: 'bg-status-warning', label: t('networks.healthTransitioning') },
-    { value: health.crashed, className: 'bg-status-danger', label: t('networks.healthCrashed') },
-    { value: health.stopped, className: 'bg-muted-foreground/40', label: t('networks.healthStopped') },
-  ]
-  return (
-    <div>
-      <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-muted">
-        {segs.map((s, i) =>
-          s.value > 0 ? (
-            <div
-              key={i}
-              className={s.className}
-              style={{ width: `${(s.value / health.total) * 100}%` }}
-              title={`${s.label}: ${s.value}`}
-            />
-          ) : null,
-        )}
-      </div>
-      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-        {segs
-          .filter((s) => s.value > 0)
-          .map((s, i) => (
-            <span key={i} className="inline-flex items-center gap-1">
-              <span className={cn('size-1.5 rounded-full', s.className)} />
-              {s.label} {s.value}
-            </span>
-          ))}
-      </div>
-    </div>
-  )
-}
-
-/** 拓扑图例：状态色 + 启用/禁用连线说明。 */
-function TopologyLegend() {
-  const { t } = useTranslation()
-  const items = [
-    { className: 'bg-status-success', label: t('networks.healthRunning') },
-    { className: 'bg-status-warning', label: t('networks.healthTransitioning') },
-    { className: 'bg-status-danger', label: t('networks.healthCrashed') },
-    { className: 'bg-muted-foreground/50', label: t('networks.topoDisabled') },
-  ]
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-3 text-[11px] text-muted-foreground">
-      {items.map((it, i) => (
-        <span key={i} className="inline-flex items-center gap-1.5">
-          <span className={cn('size-2 rounded-full', it.className)} />
-          {it.label}
-        </span>
-      ))}
-    </div>
-  )
-}
-
-function CreateNetworkModal({ onClose }: { onClose: () => void }) {
-  const { t } = useTranslation()
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const create = useCreateNetwork()
-  const gate = useFieldGate()
-
-  const nameError = validateRequired(name)
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    gate.submit()
-    if (nameError) return
-    create.mutate(
-      { name, description: description || undefined },
-      {
-        onSuccess: () => {
+    <NetworksPageView
+      view={view}
+      onViewChange={setView}
+      networks={networks}
+      isLoading={isLoading}
+      detailId={detailId}
+      detail={detail}
+      onOpenDetail={openDetail}
+      onCloseDetail={closeDetail}
+      creating={create.isPending}
+      onCreate={async (input) => {
+        try {
+          await create.mutateAsync(input)
           toast.success(t('networks.created'))
-          onClose()
-        },
-        onError: (err: Error & { response?: { data?: { error?: string; message?: string } } }) => {
-          if (err.response?.data?.error === 'NETWORK_NAME_CONFLICT') {
-            toast.error(t('networks.nameConflict'))
-            return
-          }
-          toast.error(err.response?.data?.message || t('networks.createFailed'))
-        },
-      },
-    )
-  }
-
-  return (
-    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
-        <DialogHeader>
-          <DialogTitle>{t('networks.create')}</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
-          <ScrollableDialogBody className="space-y-3">
-            <div>
-              <FieldLabel required>{t('networks.name')}</FieldLabel>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onBlur={() => gate.touch('name')}
-                className="mt-1"
-                placeholder="survival"
-                aria-invalid={!!gate.show('name', nameError)}
-              />
-              <FieldError error={gate.show('name', nameError)} />
-            </div>
-            <div>
-              <FieldLabel>{t('networks.description')}</FieldLabel>
-              <Input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="mt-1"
-              />
-            </div>
-          </ScrollableDialogBody>
-          <DialogFooter className="pt-4">
-            <Button type="button" variant="outline" onClick={onClose}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={create.isPending || !!nameError}>
-              {create.isPending ? t('common.creating') : t('common.create')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/**
- * 群组详情：可寻址双栏（左成员 / 右候选），消除原嵌套滚动模态（FR-145）。
- * 成员用 StatusBadge；候选含节点·状态·端口并可筛。
- */
-function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose: () => void }) {
-  const { t } = useTranslation()
-  const { data: detail } = useNetwork(networkId)
-  const { data: nodes } = useNodes()
-  const addMembers = useAddNetworkMembers(networkId)
-  const removeMember = useRemoveNetworkMember(networkId)
-  const action = useNetworkAction(networkId)
-  const [selected, setSelected] = useState<number[]>([])
-  const [candFilter, setCandFilter] = useState('')
-  const [removeTarget, setRemoveTarget] = useState<{ instanceId: number; name: string } | null>(null)
-
-  const nodeName = useMemo(() => {
-    const m = new Map<number, string>()
-    for (const n of nodes ?? []) m.set(n.id, n.name)
-    return (id: number) => m.get(id) ?? `#${id}`
-  }, [nodes])
-
-  const memberIds = useMemo(() => new Set(detail?.members.map((m) => m.instanceId)), [detail])
-  /**
-   * 候选改走服务端搜索：实例数是千级（大档 1200），原先拉全量再本地过滤，约 1MB/轮且带 30 秒
-   * 兜底轮询。现在键入经防抖下发服务端 q，默认只取前 CANDIDATE_LIMIT 条。
-   * 「排除已入组成员」仍留在客户端——成员数远小于实例数，代价可忽略。
-   */
-  const candQ = useDebounced(candFilter, 300).trim()
-  const { data: candPage } = useInstanceSearch({
-    ...(candQ ? { q: candQ } : {}),
-    page: 1,
-    pageSize: CANDIDATE_LIMIT,
-    sort: 'name',
-    order: 'asc',
-  })
-  const candidates = useMemo(
-    () => (candPage?.items ?? []).filter((i) => !memberIds.has(i.id)),
-    [candPage, memberIds],
-  )
-  /** 服务端截断时提示引导继续键入缩小范围。 */
-  const candTruncated = candPage ? candPage.total > candPage.items.length : false
-
-  /**
-   * 候选列表虚拟化。实例数是千级（大档 1200），此前候选面板把整表铺进 DOM。
-   *
-   * 【为什么去掉原先的 space-y-1】它给相邻行加 4px 间距，而这 4px 不计入行高：
-   * 第 N 行的真实偏移是 N×行高 + 4×(N−1)。等距虚拟化按 index×itemSize 定位，
-   * 千行时累计偏差 4×999 ≈ 4000px，滚到底会明显漂移。故把间距折进行盒（h-9 = 36px）。
-   */
-  const { containerRef: candScrollRef, onScroll: onCandScroll, range: candRange, totalSize: candTotalSize } =
-    useVirtualRows({ total: candidates.length, itemSize: CAND_ROW_HEIGHT, overscan: 8 })
-
-  // 已选态改 Set：候选行按 selected.includes(id) 判断，1200 行 × O(已选数) 会随勾选累积成热点。
-  const selectedSet = useMemo(() => new Set(selected), [selected])
-
-  // 过滤收窄后回到顶部：候选骤短时，上一轮的 scrollOffset 会让窗口落在列表之外（空窗一帧）。
-  useEffect(() => {
-    if (candScrollRef.current) candScrollRef.current.scrollTop = 0
-  }, [candFilter, candScrollRef])
-
-  const roleLabel = (role: string) => t(`networks.role_${role}`, { defaultValue: role })
-  const statusLabel = (s: string) => (STATUS_LABEL[s] ? t(STATUS_LABEL[s]) : s)
-  const health = detail ? memberHealth(detail.members) : null
-
-  const runBatch = (act: 'start' | 'stop') => {
-    action.mutate(act, {
-      onSuccess: (res) => toast.success(t('networks.batchResult', { succeeded: res.succeeded, failed: res.failed })),
-      onError: () => toast.error(t('common.error')),
-    })
-  }
-
-  const toggleSel = (id: number, on: boolean) =>
-    setSelected((prev) => (on ? [...prev, id] : prev.filter((x) => x !== id)))
-
-  const addSelected = () => {
-    if (selected.length === 0) return
-    addMembers.mutate(selected, {
-      onSuccess: () => {
-        toast.success(t('networks.added', { count: selected.length }))
-        setSelected([])
-      },
-      onError: () => toast.error(t('common.error')),
-    })
-  }
-
-  // 成员移除是可逆软操作（可重新加入），但会改变群组拓扑，故加二次确认。
-  const confirmRemove = () => {
-    if (!removeTarget) return
-    removeMember.mutate(removeTarget.instanceId, {
-      onSuccess: () => toast.success(t('networks.memberRemoved')),
-      onError: () => toast.error(t('common.error')),
-      onSettled: () => setRemoveTarget(null),
-    })
-  }
-
-  return (
-    <>
-    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent
-        className="flex max-h-[88vh] w-full max-w-4xl flex-col gap-0 overflow-hidden p-0"
-        showCloseButton={false}
-      >
-        {/* 头部 */}
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b px-5 py-3.5">
-          <div className="min-w-0">
-            <DialogTitle className="truncate text-lg font-bold">{detail?.name}</DialogTitle>
-            {health && (
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {t('networks.memberCount', { count: health.total })}
-                {health.total > 0 && (
-                  <>
-                    {' · '}
-                    <span className="text-status-success">{t('networks.healthRunning')} {health.running}</span>
-                    {health.crashed > 0 && (
-                      <span className="text-status-danger"> · {t('networks.healthCrashed')} {health.crashed}</span>
-                    )}
-                  </>
-                )}
-              </p>
-            )}
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() => runBatch('start')}
-              disabled={action.isPending}
-            >
-              {t('networks.batchStart')}
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() => runBatch('stop')}
-              disabled={action.isPending}
-            >
-              {t('networks.batchStop')}
-            </Button>
-            <Button type="button" size="xs" variant="ghost" onClick={onClose} className="text-muted-foreground">
-              {t('common.close')}
-            </Button>
-          </div>
-        </div>
-
-        {/* 双栏：左成员 / 右候选 */}
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-px overflow-hidden bg-border md:grid-cols-2">
-          {/* 左：成员 */}
-          <div className="flex min-h-0 flex-col bg-card">
-            <div className="shrink-0 px-4 pt-3 pb-2 text-xs font-semibold tracking-wide text-muted-foreground">
-              {t('networks.members')}
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-              {detail && detail.members.length === 0 ? (
-                <p className="px-2 py-6 text-center text-xs text-muted-foreground">{t('networks.noMembers')}</p>
-              ) : (
-                <ul className="space-y-1">
-                  {detail?.members.map((m) => (
-                    <li
-                      key={m.instanceId}
-                      className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 hover:bg-accent/60"
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <StatusBadge
-                          level={instanceStatusLevel(m.status)}
-                          label={statusLabel(m.status)}
-                          pulse={m.status === 'STARTING' || m.status === 'STOPPING'}
-                        />
-                        <span className="truncate text-sm font-medium">{m.name}</span>
-                        <span className="shrink-0 text-[11px] text-muted-foreground">{roleLabel(m.role)}</span>
-                      </div>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="ghost"
-                        className="shrink-0 text-status-danger hover:text-status-danger"
-                        onClick={() => setRemoveTarget({ instanceId: m.instanceId, name: m.name })}
-                      >
-                        {t('networks.removeMember')}
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-
-          {/* 右：候选 */}
-          <div className="flex min-h-0 flex-col bg-card">
-            <div className="flex shrink-0 items-center justify-between gap-2 px-4 pt-3 pb-2">
-              <span className="text-xs font-semibold tracking-wide text-muted-foreground">
-                {t('networks.addMembers')}
-              </span>
-              <Input
-                value={candFilter}
-                onChange={(e) => setCandFilter(e.target.value)}
-                placeholder={t('networks.filterCandidates')}
-                className="h-7 w-36 text-xs"
-              />
-            </div>
-            {candTruncated && (
-              <p className="shrink-0 px-4 pb-1 text-[11px] text-muted-foreground">
-                {t('common.searchTruncated', { shown: candidates.length, total: candPage?.total ?? 0 })}
-              </p>
-            )}
-            <div ref={candScrollRef} onScroll={onCandScroll} className="min-h-0 flex-1 overflow-y-auto px-2">
-              {candidates.length === 0 ? (
-                <p className="px-2 py-6 text-center text-xs text-muted-foreground">{t('networks.noCandidates')}</p>
-              ) : (
-                // 虚拟化：外层撑起总高，内层按 range.before 平移，只渲染窗口内的行。
-                <div className="relative" style={{ height: candTotalSize }}>
-                  <ul style={{ transform: `translateY(${candRange.before}px)` }}>
-                    {candidates.slice(candRange.start, candRange.end).map((i) => {
-                      const on = selectedSet.has(i.id)
-                      return (
-                        <li key={i.id} className="h-9">
-                          <label
-                            className={cn(
-                              'flex h-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 transition-colors',
-                              on ? 'bg-primary/10' : 'hover:bg-accent/60',
-                            )}
-                          >
-                            <Checkbox checked={on} onCheckedChange={(v) => toggleSel(i.id, v === true)} aria-label={i.name} />
-                            <span
-                              className="size-1.5 shrink-0 rounded-full"
-                              style={{ backgroundColor: statusColorVar(instanceStatusLevel(i.status)) }}
-                            />
-                            <span className="min-w-0 flex-1 truncate text-sm">{i.name}</span>
-                            <span className="shrink-0 text-[11px] text-muted-foreground">
-                              {roleLabel((i as { role?: string }).role || 'universal')}
-                              {' · '}
-                              {nodeName(i.nodeId)}
-                              {i.serverPort ? ` · :${i.serverPort}` : ''}
-                            </span>
-                          </label>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </div>
-              )}
-            </div>
-            <div className="flex shrink-0 justify-end border-t p-3">
-              <Button
-                type="button"
-                size="xs"
-                onClick={addSelected}
-                disabled={selected.length === 0 || addMembers.isPending}
-              >
-                {t('networks.addSelected', { count: selected.length })}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-      <DangerConfirm
-        open={removeTarget !== null}
-        title={t('networks.removeMemberConfirm', { name: removeTarget?.name ?? '' })}
-        description={t('networks.removeMemberDesc')}
-        confirmLabel={t('networks.removeMember')}
-        pending={removeMember.isPending}
-        onConfirm={confirmRemove}
-        onCancel={() => setRemoveTarget(null)}
-      />
-    </>
+          // 成功：视图据此关窗。
+          return true
+        } catch (err) {
+          const { code, message } = createErrorOf(err)
+          if (code === 'NETWORK_NAME_CONFLICT') toast.error(t('networks.nameConflict'))
+          else toast.error(message || t('networks.createFailed'))
+          // 失败：不关窗、不清草稿，便于修正后重试。
+          return false
+        }
+      }}
+      onDelete={(n) => {
+        del.mutate(n.id, {
+          onSuccess: () => toast.success(t('networks.deleted')),
+          onError: () => toast.error(t('common.error')),
+        })
+      }}
+      addingMembers={addMembers.isPending}
+      removingMember={removeMember.isPending}
+      batchPending={action.isPending}
+      onAddMembers={async (instanceIds) => {
+        try {
+          await addMembers.mutateAsync(instanceIds)
+          toast.success(t('networks.added', { count: instanceIds.length }))
+          return true
+        } catch {
+          toast.error(t('common.error'))
+          return false
+        }
+      }}
+      onRemoveMember={async (instanceId) => {
+        try {
+          await removeMember.mutateAsync(instanceId)
+          toast.success(t('networks.memberRemoved'))
+        } catch {
+          toast.error(t('common.error'))
+        }
+      }}
+      onBatchAction={(act) => {
+        action.mutate(act, {
+          onSuccess: (res) => toast.success(t('networks.batchResult', { succeeded: res.succeeded, failed: res.failed })),
+          onError: () => toast.error(t('common.error')),
+        })
+      }}
+      renderTopology={() => <TopologyGraph />}
+      renderInstancePicker={(args) => <NetworkInstanceCandidates {...args} />}
+    />
   )
 }
