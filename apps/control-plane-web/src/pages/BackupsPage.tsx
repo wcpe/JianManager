@@ -1,369 +1,107 @@
-import { useMemo, useState } from 'react'
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做列表取数、进行中轮询、写动作与 toast 接线。
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Archive } from 'lucide-react'
-import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackup, type BackupInfo } from '@/api/backups'
+import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackup } from '@/api/backups'
 import { useBackupStorages } from '@/api/backupStorages'
-import { useInstance, useInstanceSearch } from '@/api/instances'
-import { useDebounced } from '@/lib/use-debounced'
-import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
-import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { Button } from '@jianmanager/ui/components/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@jianmanager/ui/components/table'
-import DangerConfirm from '@/components/DangerConfirm'
-import {
-  ConfigRow,
-  ConfigViewToggle,
-  ConfigSummaryChips,
-  type ConfigView,
-} from '@/pages/config-row'
-import {
-  backupStatusKey,
-  backupStatusLevel,
-  hasActiveBackup,
-  summarizeBackups,
-  countDependents,
-  isIncrementalChild,
-  formatSizeMb,
-  BACKUP_COMPLETED,
-  BACKUP_MODE_INCREMENTAL,
-} from '@/pages/backups-view'
+import { useInstance } from '@/api/instances'
+import { InstancePicker } from '@/components/InstancePicker'
+import { hasActiveBackup } from '@/pages/backups-view'
+import { BackupsPageView } from '@jianmanager/ui/components/views/backups/BackupsPageView'
 
 /** 进行中备份时的轮询间隔（毫秒）：刷新进度直至完成（FR-151）。 */
 const ACTIVE_POLL_MS = 3000
 
-/** 备份管理页：全量/增量（FR-056）+ 远程存储（FR-057）+ 进度轮询/汇总/链路依赖（FR-151）。 */
+/** 从 mutation 错误里取后端消息，缺省回落到兜底文案（增量缺基准 422 / 实例未停止 409 都靠它透传）。 */
+function errMessage(err: unknown, fallback: string): string {
+  const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+  return msg || fallback
+}
+
+/**
+ * 备份管理页容器（ADR-097 b 范式）：备份列表取数与进行中轮询、实例选择、创建/恢复/删除三个
+ * 写动作与 toast 文案都在这里决定，表格、卡片、视图切换与两次二次确认交共享视图。
+ *
+ * 受控状态归属：`instanceId` 是备份列表与实例详情查询的键（一变即重新取数），故归本层；
+ * 视图内的卡片/列表切换、创建目标存储位置与两个确认框开合是纯 UI 状态，留包内。
+ * 保留同路径默认导出，路由表（route-chunks 惰性加载）与既有 DOM 测试无需改动。
+ */
 export default function BackupsPage() {
   const { t } = useTranslation()
-  const [selectedInstance, setSelectedInstance] = useState<number | undefined>()
-  const [storageId, setStorageId] = useState<number | undefined>()
-  const [restoreTarget, setRestoreTarget] = useState<number | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<BackupInfo | null>(null)
-  const [view, setView] = useState<ConfigView>('list')
+  /** 当前选中实例；null = 未选（不发起备份列表与实例详情查询）。 */
+  const [instanceId, setInstanceId] = useState<number | null>(null)
   const { data: storages } = useBackupStorages()
-
-  // 实例选择器改服务端按需搜索（Combobox）：输入防抖后下发 q，避免全量 option。
-  const [instanceQuery, setInstanceQuery] = useState('')
-  const debouncedInstanceQuery = useDebounced(instanceQuery.trim(), 250)
-  const { data: instanceSearch } = useInstanceSearch({
-    ...(debouncedInstanceQuery ? { q: debouncedInstanceQuery } : {}),
-    page: 1,
-    pageSize: 50,
-    sort: 'name',
-    order: 'asc',
-  })
   // 当前选中实例详情（恢复守卫需其状态；深链/搜索翻页后仍可解析名称与状态）。
-  const { data: selectedInst } = useInstance(selectedInstance ?? 0)
-  // Combobox 选项：服务端搜索结果 + 保证已选实例始终在列（否则触发器显不出其名称）。
-  const instanceOptions = useMemo<ComboboxOption[]>(() => {
-    const opts = (instanceSearch?.items ?? []).map((inst) => ({ value: String(inst.id), label: inst.name }))
-    if (selectedInst && !opts.some((o) => o.value === String(selectedInst.id))) {
-      opts.unshift({ value: String(selectedInst.id), label: selectedInst.name })
-    }
-    return opts
-  }, [instanceSearch, selectedInst])
+  const { data: selectedInst } = useInstance(instanceId ?? 0)
 
   // 先无轮询取一次以判定是否有进行中备份，再据此决定轮询间隔（FR-151）。
-  const probe = useBackups(selectedInstance)
+  const probe = useBackups(instanceId ?? undefined)
   const active = hasActiveBackup(probe.data ?? [])
-  const { data: backups, isLoading } = useBackups(selectedInstance, {
+  const { data: backups, isLoading } = useBackups(instanceId ?? undefined, {
     refetchInterval: active ? ACTIVE_POLL_MS : false,
   })
 
-  const createBackup = useCreateBackup(selectedInstance ?? 0)
+  const createBackup = useCreateBackup(instanceId ?? 0)
   const deleteBackup = useDeleteBackup()
   const restoreBackup = useRestoreBackup()
 
   // 实例进程可能存活（STARTING/RUNNING/STOPPING）时禁止恢复，与后端恢复守卫一致：
   // 运行中的服务器下次自动存档会覆盖掉刚恢复的文件，恢复会静默失效。
   const instanceLive = !!selectedInst && ['STARTING', 'RUNNING', 'STOPPING'].includes(selectedInst.status)
-  const restoreDisabledTitle = instanceLive
-    ? t('backups.restoreNeedStopped', '实例运行中，请先停止实例再恢复')
-    : undefined
-
-  const list = useMemo(() => backups ?? [], [backups])
-  const summary = useMemo(() => summarizeBackups(list), [list])
-  const backupById = useMemo(() => new Map(list.map((b) => [b.id, b])), [list])
-
-  const storageName = (id?: number) =>
-    id ? (storages ?? []).find((s) => s.id === id)?.name ?? `#${id}` : t('backups.localStorage', '本地')
-  const parentName = (b: BackupInfo) =>
-    b.parentId !== undefined ? backupById.get(b.parentId)?.name ?? `#${b.parentId}` : undefined
-  const checksumLabel = (b: BackupInfo) =>
-    b.checksum ? `${b.checksum.slice(0, 12)}...` : t('backups.checksumMissing', '未记录')
-
-  const handleCreate = async (incremental: boolean) => {
-    if (!selectedInstance) return
-    try {
-      await createBackup.mutateAsync({
-        name: `${incremental ? 'inc' : 'full'}-${new Date().toISOString().slice(0, 19)}`,
-        incremental,
-        storageId,
-      })
-      toast.success(t('backups.creating', '创建中...'))
-    } catch (e: unknown) {
-      // 增量缺少基准时后端回 422 BUSINESS_ERROR。
-      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
-      toast.error(msg || t('backups.createFailed', '创建备份失败'))
-    }
-  }
-
-  const handleRestore = async (backupId: number) => {
-    try {
-      await restoreBackup.mutateAsync(backupId)
-      toast.success(t('backups.restoring', '恢复中...'))
-    } catch (e: unknown) {
-      // 实例未停止时后端回 409 INSTANCE_NOT_STOPPED，透传定向提示。
-      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
-      toast.error(msg || t('backups.restoreFailed', '恢复备份失败'))
-    }
-    setRestoreTarget(null)
-  }
-
-  const handleDelete = (backup: BackupInfo) => {
-    deleteBackup.mutate(backup.id, {
-      onSuccess: () => toast.success(t('common.deleted', '已删除')),
-      onError: (e: unknown) => {
-        const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
-        toast.error(msg || t('backups.deleteFailed', '删除备份失败'))
-      },
-    })
-  }
-
-  // 删除前算直接依赖此备份的增量数，用于二次确认警告（FR-151）。
-  const dependents = deleteTarget ? countDependents(list, deleteTarget.id) : 0
-
-  const modeBadge = (b: BackupInfo) =>
-    b.mode === BACKUP_MODE_INCREMENTAL ? (
-      <StatusBadge level="info" label={t('backups.incremental', '增量')} dot={false} />
-    ) : (
-      <StatusBadge level="neutral" label={t('backups.full', '全量')} dot={false} />
-    )
-
-  const statusBadge = (b: BackupInfo) => (
-    <StatusBadge
-      level={backupStatusLevel(b.status)}
-      label={t(`backups.${backupStatusKey(b.status)}`)}
-      pulse={b.status !== BACKUP_COMPLETED && b.status !== 3}
-    />
-  )
-
-  // 增量行的副信息：存储位置 + 父备份关系（链路可视，FR-151）。
-  const rowSubtitle = (b: BackupInfo) => {
-    const parts = [storageName(b.storageId)]
-    if (isIncrementalChild(b)) parts.push(`${t('backups.basedOn', '基于')} ${parentName(b)}`)
-    return parts.join(' · ')
-  }
 
   return (
-    // 阶段 6 页面迁移：外壳与页头改用布局层原语。
-    // 标题字号由 text-2xl 统一到布局规范的 text-xl（PageHeader 的固定字号）；
-    // 原先无 data-page，迁移时补上（e2e 的就绪信号依赖它）。
-    <PageShell data-page="backups">
-      <PageHeader
-        title={t('backups.title', '备份管理')}
-        actions={
-          <>
-            <Combobox
-              className="w-52"
-              options={instanceOptions}
-              value={selectedInstance ? String(selectedInstance) : ''}
-              onChange={(v) => setSelectedInstance(v ? Number(v) : undefined)}
-              onQueryChange={setInstanceQuery}
-              allowCustom={false}
-              placeholder={t('backups.selectInstance', '选择实例')}
-            />
-            <select
-              className="p-2 border rounded bg-background text-sm"
-              value={storageId ?? ''}
-              onChange={(e) => setStorageId(e.target.value ? Number(e.target.value) : undefined)}
-              title={t('backups.selectStorage', '存储位置')}
-            >
-              <option value="">{t('backups.localStorage', '本地')}</option>
-              {(storages ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-            {selectedInstance && (
-              <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
-            )}
-            <Button onClick={() => handleCreate(false)} disabled={!selectedInstance || createBackup.isPending}>
-              {t('backups.createFull', '全量备份')}
-            </Button>
-            <Button variant="outline" onClick={() => handleCreate(true)} disabled={!selectedInstance || createBackup.isPending}>
-              {t('backups.createIncremental', '增量备份')}
-            </Button>
-          </>
-        }
-      />
-
-      {!selectedInstance && <p className="text-muted-foreground">{t('backups.hint', '请先选择一个实例查看备份列表')}</p>}
-
-      {selectedInstance && (
-        <>
-          {/* 汇总条（FR-151）：总占用 / 份数 / 最近成功；进行中时显轮询提示。 */}
-          <div className="flex flex-wrap items-center gap-3">
-            <ConfigSummaryChips
-              chips={[
-                { label: t('backups.summaryTotalSize'), value: formatSizeMb(summary.totalSizeMb) },
-                { label: t('backups.summaryCount'), value: summary.count },
-                {
-                  label: t('backups.summaryLastSuccess'),
-                  value: summary.lastSuccessAt ? new Date(summary.lastSuccessAt).toLocaleString() : t('backups.neverSuccess'),
-                },
-              ]}
-            />
-            {active && (
-              <span className="inline-flex items-center gap-1.5 text-xs text-status-info">
-                <span className="size-1.5 animate-pulse rounded-full bg-status-info" />
-                {t('backups.autoRefreshing')}
-              </span>
-            )}
-          </div>
-
-          {isLoading && list.length === 0 ? (
-            <p className="text-muted-foreground">{t('common.loading')}</p>
-          ) : list.length === 0 ? (
-            <Panel>
-              <p className="py-6 text-center text-sm text-muted-foreground">{t('backups.empty', '暂无备份')}</p>
-            </Panel>
-          ) : view === 'card' ? (
-            <div className="flex flex-col gap-2.5">
-              {list.map((b) => {
-                const dep = countDependents(list, b.id)
-                return (
-                  <ConfigRow
-                    key={b.id}
-                    icon={<Archive className="size-[18px]" />}
-                    tone={backupStatusLevel(b.status) === 'neutral' ? 'primary' : backupStatusLevel(b.status)}
-                    title={b.name}
-                    subtitle={rowSubtitle(b)}
-                    meta={
-                      <>
-                        <div>{formatSizeMb(b.fileSizeMb)}</div>
-                        <div title={b.checksum}>{checksumLabel(b)}</div>
-                        <div>{new Date(b.createdAt).toLocaleString()}</div>
-                      </>
-                    }
-                    trailing={
-                      <>
-                        {modeBadge(b)}
-                        {statusBadge(b)}
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => setRestoreTarget(b.id)}
-                          disabled={b.status !== BACKUP_COMPLETED || restoreBackup.isPending || instanceLive}
-                          title={restoreDisabledTitle}
-                        >
-                          {t('backups.restore', '恢复')}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          className="text-status-danger hover:text-status-danger"
-                          onClick={() => setDeleteTarget(b)}
-                          title={dep > 0 ? t('backups.dependentsWarn', { count: dep }) : undefined}
-                        >
-                          {t('common.delete', '删除')}
-                        </Button>
-                      </>
-                    }
-                  />
-                )
-              })}
-            </div>
-          ) : (
-            <Panel bodyClassName="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t('backups.name', '名称')}</TableHead>
-                    <TableHead>{t('backups.mode', '模式')}</TableHead>
-                    <TableHead>{t('backups.size', '大小')}</TableHead>
-                    <TableHead>{t('backups.storageLocation', '存储位置')}</TableHead>
-                    <TableHead>{t('backups.checksum', '校验和')}</TableHead>
-                    <TableHead>{t('backups.status', '状态')}</TableHead>
-                    <TableHead>{t('backups.time', '时间')}</TableHead>
-                    <TableHead className="text-right">{t('common.actions', '操作')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {list.map((b) => (
-                    <TableRow key={b.id}>
-                      <TableCell className="font-medium">{b.name}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-1">
-                          {modeBadge(b)}
-                          {isIncrementalChild(b) && (
-                            <span className="text-xs text-muted-foreground">
-                              {t('backups.basedOn', '基于')} {parentName(b)}
-                            </span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>{formatSizeMb(b.fileSizeMb)}</TableCell>
-                      <TableCell>{storageName(b.storageId)}</TableCell>
-                      <TableCell className="font-mono text-xs" title={b.checksum}>{checksumLabel(b)}</TableCell>
-                      <TableCell>{statusBadge(b)}</TableCell>
-                      <TableCell className="text-muted-foreground">{new Date(b.createdAt).toLocaleString()}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            onClick={() => setRestoreTarget(b.id)}
-                            disabled={b.status !== BACKUP_COMPLETED || restoreBackup.isPending || instanceLive}
-                            title={restoreDisabledTitle}
-                          >
-                            {t('backups.restore', '恢复')}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            className="text-status-danger hover:text-status-danger"
-                            onClick={() => setDeleteTarget(b)}
-                            title={countDependents(list, b.id) > 0 ? t('backups.dependentsWarn', { count: countDependents(list, b.id) }) : undefined}
-                          >
-                            {t('common.delete', '删除')}
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Panel>
-          )}
-        </>
+    <BackupsPageView
+      instanceId={instanceId}
+      onInstanceChange={setInstanceId}
+      storages={storages ?? []}
+      backups={backups ?? []}
+      isLoading={isLoading}
+      backupsActive={active}
+      instanceLive={instanceLive}
+      creating={createBackup.isPending}
+      restoring={restoreBackup.isPending}
+      // 实例候选走服务端搜索（千级实例不能一次拉全量）：防抖、候选窗口与请求时机都在接线层。
+      // valueLabel 保证已选实例不在候选窗口内时触发器仍显示名称，而非退化成裸 id。
+      renderInstancePicker={({ value, onChange }) => (
+        <InstancePicker
+          className="w-52"
+          value={value}
+          onChange={onChange}
+          valueLabel={selectedInst?.name}
+          placeholder={t('backups.selectInstance', '选择实例')}
+        />
       )}
-
-      <DangerConfirm
-        open={restoreTarget !== null}
-        title={t('backups.confirmRestore', '确认恢复此备份？')}
-        description={t('backups.restoreWarning', '当前文件将被覆盖，此操作不可撤销。')}
-        confirmLabel={t('backups.restore', '恢复')}
-        scope="group"
-        onConfirm={() => { if (restoreTarget) handleRestore(restoreTarget) }}
-        onCancel={() => setRestoreTarget(null)}
-      />
-
-      <DangerConfirm
-        open={deleteTarget !== null}
-        title={t('backups.deleteConfirm', '确定删除此备份？')}
-        description={dependents > 0 ? t('backups.dependentsWarn', { count: dependents }) : t('common.irreversible')}
-        confirmLabel={t('common.delete', '删除')}
-        scope="group"
-        onConfirm={() => { if (deleteTarget) handleDelete(deleteTarget); setDeleteTarget(null) }}
-        onCancel={() => setDeleteTarget(null)}
-      />
-    </PageShell>
+      onCreate={({ incremental, storageId }) => {
+        if (!instanceId) return
+        createBackup.mutate(
+          {
+            name: `${incremental ? 'inc' : 'full'}-${new Date().toISOString().slice(0, 19)}`,
+            incremental,
+            storageId,
+          },
+          {
+            onSuccess: () => toast.success(t('backups.creating', '创建中...')),
+            // 增量缺少基准时后端回 422 BUSINESS_ERROR，透传定向提示。
+            onError: (err: unknown) => toast.error(errMessage(err, t('backups.createFailed', '创建备份失败'))),
+          },
+        )
+      }}
+      onRestore={async (backupId) => {
+        try {
+          await restoreBackup.mutateAsync(backupId)
+          toast.success(t('backups.restoring', '恢复中...'))
+        } catch (err: unknown) {
+          // 实例未停止时后端回 409 INSTANCE_NOT_STOPPED，透传定向提示。错误在此吞掉：
+          // 视图据 Promise 结束关窗，与原页「成败都关窗」一致。
+          toast.error(errMessage(err, t('backups.restoreFailed', '恢复备份失败')))
+        }
+      }}
+      onDelete={(backupId) => {
+        deleteBackup.mutate(backupId, {
+          onSuccess: () => toast.success(t('common.deleted', '已删除')),
+          onError: (err: unknown) => toast.error(errMessage(err, t('backups.deleteFailed', '删除备份失败'))),
+        })
+      }}
+    />
   )
 }
