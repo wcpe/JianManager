@@ -171,14 +171,21 @@ export function useRollout() {
   })
 }
 
-/** 查看 CP 本地 Worker 二进制缓存状态（FR-190）。 */
-export function useWorkerAssets() {
+/**
+ * 查看 CP 本地 Worker 二进制缓存状态（FR-190）。
+ *
+ * `options.enabled` 供调用方门控取数时机：缓存面板原挂在节点区内、而节点区只在「检查结果到手」
+ * 后才渲染，未挂载即不发请求；视图受控化后 hook 归容器，改由该开关保住同一时机
+ * （同 `api/alerts` 的 `useAlertEvents`）。
+ */
+export function useWorkerAssets(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['self-update', 'worker-assets'],
     queryFn: async () => {
       const { data } = await api.get<WorkerAssetCacheEntry[]>('/self-update/worker-assets')
       return data
     },
+    enabled: options?.enabled ?? true,
     retry: false,
     refetchOnWindowFocus: false,
   })
