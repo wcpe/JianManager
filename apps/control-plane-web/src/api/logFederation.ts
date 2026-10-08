@@ -459,6 +459,33 @@ export function buildFederationResult(
 }
 
 /**
+ * 带短退避重试的 GET：**仅对 429（瞬时限流）重试**。
+ *
+ * 背景（2026-10-08 压测）：CP 全局限流为 10 req/s、桶 20，一次窗口切换约产生
+ * 3 个请求（主查询 + stats + facets）——人手正常速度不会触限，但狂点/多标签页
+ * 并发时会偶发 429。而 queryFn 内部吞错返回"失败态"结果 ⇒ react-query 视为成功、
+ * 不会自动重试 ⇒ 用户直接看到"传输失败"。限流是瞬时的（令牌桶很快回补），
+ * 此处做 ≤2 次短退避重试把偶发 429 吸收掉；仍失败才抛出，由上层呈现失败态。
+ */
+export async function getWithRateLimitRetry<T>(
+  path: string,
+  config: Parameters<typeof api.get>[1],
+  delaysMs: number[] = [250, 600],
+): Promise<{ data: T }> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await api.get<T>(path, config)
+    } catch (error) {
+      const status = (error as { response?: { status?: number } } | null)?.response?.status
+      if (status !== 429 || attempt >= delaysMs.length) {
+        throw error
+      }
+      await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]))
+    }
+  }
+}
+
+/**
  * 探测联邦覆盖（与 LogsPage 筛选参数同源）。
  * 404 → degraded legacy；其它错误 → 传输失败态（非空成功）。
  */
@@ -479,7 +506,8 @@ export function useLogsFederation(
         // 全局 10s 超时会把慢查询 abort ⇒ 页面据 abort 误判"实时日志查询服务暂不可用"并回退
         // legacy（legacy 只有切换前旧数据 ⇒ 24h 窗 0 条）✗。故给联邦查询单独的 60s 预算；
         // tail 探针（0.43s）与其它请求不受影响 ✓。
-        const { data } = await api.get<LogsFederationEnvelope>(path, {
+        // 429（瞬时限流）由 getWithRateLimitRetry 短退避吸收，不落到用户可见的失败态。
+        const { data } = await getWithRateLimitRetry<LogsFederationEnvelope>(path, {
           params: requestParams,
           timeout: 60_000,
         })
