@@ -1,9 +1,10 @@
-/* eslint-disable react-refresh/only-export-components -- 纯函数 parseIdInput/mergeIds/formatScopeSummary 与 DOM 测同文件导出 */
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+/* eslint-disable react-refresh/only-export-components -- 纯函数 parseIdInput/mergeIds/formatScopeSummary 经本文件再导出，保持 AgentTokensPage.dom.test.tsx 既有导入路径可用 */
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做平台管理员门禁、列表/候选取数、签发与吊销 mutation、
+// 危险操作门禁与 toast 文案接线。
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
-import { Copy, KeyRound, Plus } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
 import {
   useAgentTokens,
@@ -13,151 +14,59 @@ import {
   WRITE_ALLOWLIST_OPTIONS,
   CAPABILITY_OPTIONS,
   DEFAULT_CAPABILITIES,
-  type AgentTokenInfo,
 } from '@/api/agentTokens'
 import { mcpBaseUrl } from '@/api/agentObservability'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
-import DangerConfirm from '@/components/DangerConfirm'
-import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { useDangerPermission } from '@/lib/danger'
 import { Button } from '@jianmanager/ui/components/button'
-import { Input } from '@jianmanager/ui/components/input'
-import { Label } from '@jianmanager/ui/components/label'
-import { Badge } from '@jianmanager/ui/components/badge'
-import { Checkbox } from '@jianmanager/ui/components/checkbox'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@jianmanager/ui/components/table'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+  AgentTokensPageView,
+  type AgentTokenRow,
+} from '@jianmanager/ui/components/views/agent/AgentTokensPageView'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
 const ROLE_PLATFORM_ADMIN = 10
 
 type ErrResp = { response?: { data?: { message?: string }; status?: number } }
+
+/** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
-/** 解析逗号/空格分隔的正整数 ID 列表。 */
-export function parseIdInput(raw: string): number[] {
-  if (!raw.trim()) return []
-  const parts = raw.split(/[\s,;]+/).filter(Boolean)
-  const ids: number[] = []
-  const seen = new Set<number>()
-  for (const p of parts) {
-    const n = Number(p)
-    if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) continue
-    if (seen.has(n)) continue
-    seen.add(n)
-    ids.push(n)
-  }
-  return ids
-}
-
-/** 合并多选 ID 与手动输入 ID（去重保序）。 */
-export function mergeIds(selected: number[], typed: string): number[] {
-  const out: number[] = []
-  const seen = new Set<number>()
-  for (const id of [...selected, ...parseIdInput(typed)]) {
-    if (seen.has(id)) continue
-    seen.add(id)
-    out.push(id)
-  }
-  return out
-}
-
-/** scope 摘要：如「实例 1,2 · 节点 3」；空则「未授权」。 */
-export function formatScopeSummary(
-  instIds: number[],
-  nodeIds: number[],
-  labels: { instances: string; nodes: string; none: string },
-): string {
-  const parts: string[] = []
-  if (instIds.length) parts.push(`${labels.instances} ${instIds.join(',')}`)
-  if (nodeIds.length) parts.push(`${labels.nodes} ${nodeIds.join(',')}`)
-  return parts.length ? parts.join(' · ') : labels.none
-}
-
-/** 写白名单展示文案（V1 兼容）。 */
-function formatWriteAllowlist(list: string[], t: (k: string) => string): string {
-  if (!list.length) return t('agentTokens.write.none')
-  return list
-    .map((v) => {
-      const opt = WRITE_ALLOWLIST_OPTIONS.find((o) => o.value === v)
-      return opt ? t(opt.labelKey) : v
-    })
-    .join('、')
-}
-
-/** V2 能力展示文案。 */
-function formatCapabilities(list: string[], t: (k: string) => string): string {
-  if (!list.length) return t('agentTokens.capability.none')
-  return list
-    .map((v) => {
-      const opt = CAPABILITY_OPTIONS.find((o) => o.value === v)
-      return opt ? t(opt.labelKey) : v
-    })
-    .join('、')
-}
-
-/** 权限列：V2 显示能力，V1 显示旧写白名单。 */
-function formatPermissions(tok: AgentTokenInfo, t: (k: string) => string): string {
-  if (tok.policyVersion === 2) return formatCapabilities(tok.capabilities, t)
-  return formatWriteAllowlist(tok.writeAllowlist, t)
-}
-
-function statusLevel(status: ReturnType<typeof agentTokenStatus>): 'success' | 'warning' | 'danger' {
-  if (status === 'active') return 'success'
-  if (status === 'expired') return 'warning'
-  return 'danger'
-}
-
-/** 复制按钮：写剪贴板 + toast。 */
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const { t } = useTranslation()
-  const copy = async () => {
-    const ok = await copyToClipboard(text)
-    if (ok) toast.success(t('agentTokens.copied'))
-    else toast.error(t('agentTokens.copyFailed'))
-  }
-  return (
-    <Button type="button" variant="outline" size="sm" onClick={copy} className="shrink-0">
-      <Copy className="size-4" /> {label}
-    </Button>
-  )
-}
+/**
+ * 视图内的纯函数（`parseIdInput` / `mergeIds` / `formatScopeSummary`）随视图迁入包内，此处原样再导出：
+ * `AgentTokensPage.dom.test.tsx` 直接从本模块按名导入并逐项校验，经本文件再导出后，该守卫继续
+ * 盯住视图真正使用的那份实现，而不是应用侧的一份副本（同 `McpActivityPage` 的 `WINDOW_PRESETS` 先例）。
+ */
+export { parseIdInput, mergeIds, formatScopeSummary } from '@jianmanager/ui/components/views/agent/AgentTokensPageView'
 
 /**
- * Agent Token 管理页（FR-387，消费 FR-384 API）。
- * 平台管理员可列表 / 新建 / 吊销；创建成功一次性展示明文 + 复制 env/命令片段。
- * 入口仅管理员可见（侧栏）+ 本页角色兜底 + 后端 RBAC，三重把关。
+ * Agent Token 管理页容器（FR-387，消费 FR-384 API，ADR-097 b 范式）：平台管理员门禁、列表取数、
+ * 签发/吊销两个写动作、候选数据与映射表注入、页头跳转入口都在这里决定，
+ * 表格、签发对话框与一次性明文展示交共享视图。
+ *
+ * 平台管理员三重把关（侧栏入口 + 本页兜底 + 后端 RBAC）中的本页兜底留在本层：非管理员不渲染视图，
+ * 且三个查询的 `enabled` 全部收敛到 `isPlatformAdmin`（不因渲染本页而发出任何请求）。
+ * 保留原路径与原默认导出，路由表（route-chunks 的 `/agent-tokens`）无需改动。
  */
 export default function AgentTokensPage() {
   const { t } = useTranslation()
   const role = useAuthStore((s) => s.role)
   const isPlatformAdmin = role === ROLE_PLATFORM_ADMIN
 
+  // 吊销是平台级破坏操作：角色门禁在应用侧判定后注入（包内不持鉴权状态），scope 固定 platform 不降级。
+  const { allowed: revokeAllowed } = useDangerPermission('platform')
+
   const listQ = useAgentTokens({ enabled: isPlatformAdmin })
   const issue = useIssueAgentToken()
   const revoke = useRevokeAgentToken()
 
-  const [showCreate, setShowCreate] = useState(false)
-  const [issuedPlain, setIssuedPlain] = useState<{ name: string; plaintext: string } | null>(null)
-  const [revokeTarget, setRevokeTarget] = useState<AgentTokenInfo | null>(null)
+  // 签发对话框的开合状态归视图持有；这里只接收「已打开」的单向通知，用于把节点候选查询
+  // 收敛到与原页相同的取数时机（原页 `useNodes({ enabled: open })`：只在弹窗打开时才请求节点列表）。
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  // 实例候选：原页在弹窗打开前就已随页面取数（`useInstances()` 无门控），故保持同一时机与全量口径。
+  const { data: instances } = useInstances(undefined, isPlatformAdmin)
+  const { data: nodes } = useNodes({ enabled: isPlatformAdmin && createDialogOpen })
 
   if (!isPlatformAdmin) {
     return (
@@ -167,460 +76,70 @@ export default function AgentTokensPage() {
     )
   }
 
-  const tokens = listQ.data ?? []
-
-  const onRevoke = () => {
-    if (!revokeTarget) return
-    revoke.mutate(revokeTarget.id, {
-      onSuccess: () => {
-        toast.success(t('agentTokens.revokeSuccess'))
-        setRevokeTarget(null)
-      },
-      onError: (e) => toast.error(errMsg(e, t('agentTokens.revokeFailed'))),
-    })
-  }
+  // 行 = 规范化后的 Token 元数据 + 展示状态。状态判定沿用 API 层已被 `agentTokens.test.ts` 覆盖的
+  // `agentTokenStatus`，包内不再复制一份规则，避免两侧漂移。
+  const tokens: AgentTokenRow[] = (listQ.data ?? []).map((tok) => ({
+    ...tok,
+    status: agentTokenStatus(tok),
+  }))
 
   return (
-    // 全量对齐：外壳与页头改用布局层原语（三段与 PageHeader 的 title / description /
-    // actions 一一对应）。data-page 由 PageShell spread 透传，保持原值。
-    <PageShell data-page="agent-tokens">
-      <PageHeader
-        title={t('agentTokens.title')}
-        description={t('agentTokens.subtitle')}
-        actions={
-          <>
-            <Button variant="outline" size="sm" asChild>
-              <Link to="/mcp-activity">{t('agentTokens.openSessions')}</Link>
-            </Button>
-            <Button variant="outline" size="sm" asChild>
-              <Link to="/agent-call-logs">{t('agentTokens.openLogs')}</Link>
-            </Button>
-            <Button onClick={() => setShowCreate(true)}>
-              <Plus className="size-4" /> {t('agentTokens.create')}
-            </Button>
-          </>
+    <AgentTokensPageView
+      tokens={tokens}
+      isLoading={listQ.isLoading}
+      isError={listQ.isError}
+      errorText={errMsg(listQ.error, t('agentTokens.loadFailed'))}
+      revokeAllowed={revokeAllowed}
+      notify={(kind, message) => {
+        if (kind === 'success') toast.success(message)
+        else toast.error(message)
+      }}
+      capabilityOptions={CAPABILITY_OPTIONS}
+      defaultCapabilities={DEFAULT_CAPABILITIES}
+      writeAllowlistOptions={WRITE_ALLOWLIST_OPTIONS}
+      instanceOptions={instances}
+      nodeOptions={nodes}
+      onCreateDialogOpenChange={setCreateDialogOpen}
+      mcpUrl={mcpBaseUrl()}
+      onCopyResult={(ok) => {
+        if (ok) toast.success(t('agentTokens.copied'))
+        else toast.error(t('agentTokens.copyFailed'))
+      }}
+      onIssue={async (payload) => {
+        try {
+          const res = await issue.mutateAsync(payload)
+          toast.success(t('agentTokens.createSuccess'))
+          // 明文只在本次响应里出现一次，原样交给视图做一次性展示。
+          return { name: res.token.name, plaintext: res.plaintext }
+        } catch (e) {
+          const status = (e as ErrResp)?.response?.status
+          if (status === 403) toast.error(t('agentTokens.forbidden'))
+          else toast.error(errMsg(e, t('agentTokens.createFailed')))
+          // 失败返回 null：视图保持对话框打开以便修正后重试（与原页 onError 分支一致），提示已在此弹出。
+          return null
         }
-      />
-
-      {listQ.isLoading ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
-      ) : listQ.isError ? (
-        <Panel>
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            {errMsg(listQ.error, t('agentTokens.loadFailed'))}
-          </p>
-        </Panel>
-      ) : tokens.length === 0 ? (
-        <Panel>
-          <p className="py-6 text-center text-sm text-muted-foreground">{t('agentTokens.empty')}</p>
-        </Panel>
-      ) : (
-        <Panel bodyClassName="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('agentTokens.col.name')}</TableHead>
-                <TableHead>{t('agentTokens.col.prefix')}</TableHead>
-                <TableHead>{t('agentTokens.col.policy')}</TableHead>
-                <TableHead>{t('agentTokens.col.scope')}</TableHead>
-                <TableHead>{t('agentTokens.col.write')}</TableHead>
-                <TableHead>{t('agentTokens.col.expires')}</TableHead>
-                <TableHead>{t('agentTokens.col.lastUsed')}</TableHead>
-                <TableHead>{t('agentTokens.col.callCount24h')}</TableHead>
-                <TableHead>{t('agentTokens.col.status')}</TableHead>
-                <TableHead className="w-28 text-right">{t('common.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {tokens.map((tok) => {
-                const status = agentTokenStatus(tok)
-                const nodeLabel =
-                  tok.policyVersion === 2
-                    ? t('agentTokens.scope.nodesInherit')
-                    : t('agentTokens.scope.nodesNoInherit')
-                const scope = formatScopeSummary(tok.scopedInstanceIds, tok.scopedNodeIds, {
-                  instances: t('agentTokens.scope.instances'),
-                  nodes: nodeLabel,
-                  none: t('agentTokens.scope.none'),
-                })
-                const perms = formatPermissions(tok, t)
-                const policyLabel =
-                  tok.policyVersion === 2 ? t('agentTokens.policy.v2') : t('agentTokens.policy.v1')
-                return (
-                  <TableRow key={tok.id}>
-                    <TableCell className="font-medium">{tok.name}</TableCell>
-                    <TableCell>
-                      <code className="font-mono text-xs">{tok.tokenPrefix}…</code>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={tok.policyVersion === 2 ? 'default' : 'secondary'} className="text-[10px]">
-                        {policyLabel}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="max-w-[14rem] truncate text-xs text-muted-foreground" title={scope}>
-                      {scope}
-                    </TableCell>
-                    <TableCell className="max-w-[12rem] truncate text-xs" title={perms}>
-                      {perms}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                      {tok.expiresAt ? new Date(tok.expiresAt).toLocaleString() : '—'}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
-                      {tok.lastUsedAt ? new Date(tok.lastUsedAt).toLocaleString() : '—'}
-                    </TableCell>
-                    <TableCell className="tabular-nums text-xs">{tok.callCount24h ?? 0}</TableCell>
-                    <TableCell>
-                      <StatusBadge
-                        level={statusLevel(status)}
-                        label={t(`agentTokens.status.${status}`)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {status !== 'revoked' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="text-destructive"
-                          onClick={() => setRevokeTarget(tok)}
-                        >
-                          {t('agentTokens.revoke')}
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </Panel>
-      )}
-
-      <CreateAgentTokenDialog
-        open={showCreate}
-        pending={issue.isPending}
-        onClose={() => setShowCreate(false)}
-        onSubmit={(body) => {
-          issue.mutate(body, {
-            onSuccess: (res) => {
-              setShowCreate(false)
-              setIssuedPlain({ name: res.token.name, plaintext: res.plaintext })
-              toast.success(t('agentTokens.createSuccess'))
-            },
-            onError: (e) => {
-              const status = (e as ErrResp)?.response?.status
-              if (status === 403) toast.error(t('agentTokens.forbidden'))
-              else toast.error(errMsg(e, t('agentTokens.createFailed')))
-            },
-          })
-        }}
-      />
-
-      <PlaintextRevealDialog
-        open={issuedPlain != null}
-        name={issuedPlain?.name ?? ''}
-        plaintext={issuedPlain?.plaintext ?? ''}
-        onClose={() => setIssuedPlain(null)}
-      />
-
-      <DangerConfirm
-        open={revokeTarget != null}
-        title={t('agentTokens.revokeTitle')}
-        description={t('agentTokens.revokeDesc', { name: revokeTarget?.name ?? '' })}
-        confirmLabel={t('agentTokens.revoke')}
-        confirmText={revokeTarget?.name}
-        scope="platform"
-        pending={revoke.isPending}
-        onConfirm={onRevoke}
-        onCancel={() => setRevokeTarget(null)}
-      />
-    </PageShell>
-  )
-}
-
-/** 新建 Token 对话框。 */
-function CreateAgentTokenDialog({
-  open,
-  pending,
-  onClose,
-  onSubmit,
-}: {
-  open: boolean
-  pending: boolean
-  onClose: () => void
-  onSubmit: (body: {
-    name: string
-    scopedInstanceIds: number[]
-    scopedNodeIds: number[]
-    policyVersion: number
-    capabilities: string[]
-    ttlDays: number
-  }) => void
-}) {
-  const { t } = useTranslation()
-  const [name, setName] = useState('')
-  const [selectedInst, setSelectedInst] = useState<number[]>([])
-  const [selectedNode, setSelectedNode] = useState<number[]>([])
-  const [instIdsText, setInstIdsText] = useState('')
-  const [nodeIdsText, setNodeIdsText] = useState('')
-  const [capabilities, setCapabilities] = useState<string[]>([...DEFAULT_CAPABILITIES])
-  const [ttlDays, setTtlDays] = useState('90')
-
-  const { data: instances } = useInstances()
-  const { data: nodes } = useNodes({ enabled: open })
-
-  // 每次打开重置表单（父组件改 open 时 Radix 不一定触发 onOpenChange）。
-  useEffect(() => {
-    if (!open) return
-    /* eslint-disable react-hooks/set-state-in-effect -- 弹窗打开瞬间一次性清空，属合法同步 */
-    setName('')
-    setSelectedInst([])
-    setSelectedNode([])
-    setInstIdsText('')
-    setNodeIdsText('')
-    setCapabilities([...DEFAULT_CAPABILITIES])
-    setTtlDays('90')
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [open])
-
-  const handleOpenChange = (next: boolean) => {
-    if (!next) onClose()
-  }
-
-  const toggleId = (list: number[], id: number, set: (v: number[]) => void) => {
-    set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id])
-  }
-
-  const toggleCapability = (value: string) => {
-    setCapabilities((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]))
-  }
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault()
-    const trimmed = name.trim()
-    if (!trimmed) {
-      toast.error(t('agentTokens.validation.nameRequired'))
-      return
-    }
-    const ttl = Number(ttlDays)
-    if (!Number.isFinite(ttl) || ttl <= 0 || !Number.isInteger(ttl)) {
-      toast.error(t('agentTokens.validation.ttlInvalid'))
-      return
-    }
-    if (ttl > 365) {
-      toast.error(t('agentTokens.validation.ttlMax'))
-      return
-    }
-    onSubmit({
-      name: trimmed,
-      scopedInstanceIds: mergeIds(selectedInst, instIdsText),
-      scopedNodeIds: mergeIds(selectedNode, nodeIdsText),
-      policyVersion: 2,
-      capabilities,
-      ttlDays: ttl,
-    })
-  }
-
-  // 千级实例只在弹窗打开时才展开。本组件是**常驻挂载**的（调用处写 `<CreateAgentTokenDialog open={...} />`
-  // 而非 `{open && ...}`），而 Radix 的 DialogContent 关闭时虽不挂 DOM，**其 children 仍会在每次
-  // render 求值**——不设门控时，每次渲染都会凭空创建 1200 个实例 × 4 个元素（label/Checkbox/span/Badge）
-  // 的 React 元素对象（且 Checkbox 是带 Context 的复合控件，比普通元素更贵）。
-  const instList = useMemo(() => (open ? (instances ?? []) : []), [open, instances])
-  const nodeList = nodes ?? []
-
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className={scrollableDialogContentClass}>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <KeyRound className="size-4" />
-            {t('agentTokens.createTitle')}
-          </DialogTitle>
-          <DialogDescription>{t('agentTokens.createDesc')}</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit}>
-          <ScrollableDialogBody className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="agent-token-name">
-                {t('agentTokens.field.name')} <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="agent-token-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={t('agentTokens.field.namePlaceholder')}
-                autoFocus
-                maxLength={128}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>{t('agentTokens.field.instances')}</Label>
-              <p className="text-xs text-muted-foreground">{t('agentTokens.field.instancesHint')}</p>
-              <div className="max-h-36 space-y-1 overflow-y-auto rounded-md border p-2">
-                {instList.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">{t('agentTokens.field.noInstances')}</p>
-                ) : (
-                  instList.map((inst) => (
-                    <label key={inst.id} className="flex cursor-pointer items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={selectedInst.includes(inst.id)}
-                        onCheckedChange={() => toggleId(selectedInst, inst.id, setSelectedInst)}
-                      />
-                      <span className="truncate">
-                        #{inst.id} {inst.name}
-                      </span>
-                      <Badge variant="secondary" className="ml-auto text-[10px]">
-                        {inst.status}
-                      </Badge>
-                    </label>
-                  ))
-                )}
-              </div>
-              <Input
-                value={instIdsText}
-                onChange={(e) => setInstIdsText(e.target.value)}
-                placeholder={t('agentTokens.field.idsPlaceholder')}
-                aria-label={t('agentTokens.field.instanceIds')}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>{t('agentTokens.field.nodes')}</Label>
-              <p className="text-xs text-muted-foreground">{t('agentTokens.field.nodesHint')}</p>
-              <div className="max-h-36 space-y-1 overflow-y-auto rounded-md border p-2">
-                {nodeList.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">{t('agentTokens.field.noNodes')}</p>
-                ) : (
-                  nodeList.map((node) => (
-                    <label key={node.id} className="flex cursor-pointer items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={selectedNode.includes(node.id)}
-                        onCheckedChange={() => toggleId(selectedNode, node.id, setSelectedNode)}
-                      />
-                      <span className="truncate">
-                        #{node.id} {node.name}
-                      </span>
-                    </label>
-                  ))
-                )}
-              </div>
-              <Input
-                value={nodeIdsText}
-                onChange={(e) => setNodeIdsText(e.target.value)}
-                placeholder={t('agentTokens.field.idsPlaceholder')}
-                aria-label={t('agentTokens.field.nodeIds')}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>{t('agentTokens.field.capabilities')}</Label>
-              <p className="text-xs text-muted-foreground">{t('agentTokens.field.capabilitiesHint')}</p>
-              <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-2">
-                {CAPABILITY_OPTIONS.map((opt) => (
-                  <label key={opt.value} className="flex cursor-pointer items-center gap-2 text-sm">
-                    <Checkbox
-                      checked={capabilities.includes(opt.value)}
-                      onCheckedChange={() => toggleCapability(opt.value)}
-                    />
-                    <span>{t(opt.labelKey)}</span>
-                    <code className="ml-auto font-mono text-[10px] text-muted-foreground">{opt.value}</code>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="agent-token-ttl">{t('agentTokens.field.ttlDays')}</Label>
-              <Input
-                id="agent-token-ttl"
-                type="number"
-                min={1}
-                max={365}
-                value={ttlDays}
-                onChange={(e) => setTtlDays(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">{t('agentTokens.field.ttlHint')}</p>
-            </div>
-          </ScrollableDialogBody>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={pending}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={pending}>
-              {pending ? t('common.saving') : t('agentTokens.createSubmit')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/** 创建成功后一次性展示明文 + 复制 env / jm-agent 示例。 */
-function PlaintextRevealDialog({
-  open,
-  name,
-  plaintext,
-  onClose,
-}: {
-  open: boolean
-  name: string
-  plaintext: string
-  onClose: () => void
-}) {
-  const { t } = useTranslation()
-  const envLine = useMemo(() => `JM_AGENT_TOKEN=${plaintext}`, [plaintext])
-  const whoamiCmd = useMemo(
-    () => `jm-agent --token ${plaintext} whoami`,
-    [plaintext],
-  )
-  const mcpUrl = useMemo(() => mcpBaseUrl(), [])
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className={scrollableDialogContentClass}>
-        <DialogHeader>
-          <DialogTitle>{t('agentTokens.revealTitle')}</DialogTitle>
-          <DialogDescription>{t('agentTokens.revealDesc', { name })}</DialogDescription>
-        </DialogHeader>
-        <ScrollableDialogBody className="space-y-3">
-          <div className="rounded-md border border-status-warning/40 bg-status-warning/10 p-2 text-xs text-muted-foreground">
-            {t('agentTokens.revealWarning')}
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs font-medium text-muted-foreground">{t('agentTokens.reveal.plaintext')}</div>
-            <div className="flex items-start gap-2 rounded-md border bg-muted/50 p-2">
-              <code className="flex-1 break-all font-mono text-xs leading-relaxed">{plaintext}</code>
-              <CopyButton text={plaintext} label={t('agentTokens.copy')} />
-            </div>
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs font-medium text-muted-foreground">{t('agentTokens.mcpUrl')}</div>
-            <div className="flex items-start gap-2 rounded-md border bg-muted/50 p-2">
-              <code className="flex-1 break-all font-mono text-xs leading-relaxed">{mcpUrl}</code>
-              <CopyButton text={mcpUrl} label={t('agentTokens.copy')} />
-            </div>
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs font-medium text-muted-foreground">{t('agentTokens.reveal.env')}</div>
-            <div className="flex items-start gap-2 rounded-md border bg-muted/50 p-2">
-              <code className="flex-1 break-all font-mono text-xs leading-relaxed">{envLine}</code>
-              <CopyButton text={envLine} label={t('agentTokens.copy')} />
-            </div>
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs font-medium text-muted-foreground">{t('agentTokens.reveal.cli')}</div>
-            <div className="flex items-start gap-2 rounded-md border bg-muted/50 p-2">
-              <code className="flex-1 break-all font-mono text-xs leading-relaxed">{whoamiCmd}</code>
-              <CopyButton text={whoamiCmd} label={t('agentTokens.copy')} />
-            </div>
-          </div>
-        </ScrollableDialogBody>
-        <DialogFooter>
-          <Button onClick={onClose}>{t('agentTokens.revealDone')}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      }}
+      onRevoke={async (tok) => {
+        try {
+          await revoke.mutateAsync(tok.id)
+          toast.success(t('agentTokens.revokeSuccess'))
+          return true
+        } catch (e) {
+          toast.error(errMsg(e, t('agentTokens.revokeFailed')))
+          // 失败返回 false：视图保留二次确认框（与原页一致），提示已在此弹出。
+          return false
+        }
+      }}
+      headerLinks={
+        <>
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/mcp-activity">{t('agentTokens.openSessions')}</Link>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/agent-call-logs">{t('agentTokens.openLogs')}</Link>
+          </Button>
+        </>
+      }
+    />
   )
 }
