@@ -1,4 +1,6 @@
-import { useMemo, useState, type FormEvent } from 'react'
+// 分组总览的展示件已迁至 @jianmanager/ui（ADR-097）：分组操作区、分组行与成员窥视在包内；
+// 本层保留取数（概览 summary / 窥视 bots / 批量 mutation）、路由跳转与提示。
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -11,11 +13,9 @@ import {
   useCreateBot,
   useCreateBotStressSession,
   useSendBotCommand,
-  type BotInfo,
-  type BotRealtimeEvent,
-  type BotSummaryGroup,
   type BotBatchAction,
   type BotListParams,
+  type BotSummaryGroup,
 } from '@/api/bots'
 import { useNodes } from '@/api/nodes'
 import { useDebounced } from '@/lib/use-debounced'
@@ -30,67 +30,29 @@ import {
   toListParams,
   groupFilter,
   distribution,
-  GROUP_BY_DIMS,
-  BOT_STATUSES,
   type GroupByDim,
   type OverviewFilter,
-  type BotStatusCounts,
-  type Distribution,
 } from './bots-overview'
-import { BotHealthBar } from '@jianmanager/ui/components/views/console/BotHealthBar'
-import {
-  BehaviorConfigDialog,
-  BotMetric,
-  formatBotEvent,
-  formatEventTime,
-  formatPosition,
-  LegendDot,
-  PeekRow,
-  SummaryCards,
-} from '@jianmanager/ui/components/views/bots/BotListParts'
+import { SummaryCards } from '@jianmanager/ui/components/views/bots/BotListParts'
 import { BotToolbar } from '@jianmanager/ui/components/views/bots/BotToolbar'
 import { BotBatchBar } from '@jianmanager/ui/components/views/bots/BotBatchBar'
 import { BotGroupOverview } from '@jianmanager/ui/components/views/bots/BotGroupOverview'
+import {
+  BOT_PEEK_PAGE_SIZE,
+  BotGroupActions,
+  BotGroupPeek,
+  BotGroupRow,
+} from '@jianmanager/ui/components/views/bots/BotGroupPartsView'
 import { BotStressSessionDialog } from '@jianmanager/ui/components/views/bots/BotStressSessionDialog'
 import { BotDetailDialog as BotDetailDialogView } from '@jianmanager/ui/components/views/bots/BotDetailDialog'
 import { useDangerPermission } from '@/lib/danger'
 import { BotWorktableCard } from '@/components/console/BotWorktableCard'
-import DangerConfirm from '@/components/DangerConfirm'
-import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
-import { Activity, Plus, Send } from 'lucide-react'
+import type { ViewMode } from '@jianmanager/ui/components/view-toggle'
+import { Plus } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
-import { Input } from '@jianmanager/ui/components/input'
-import { Checkbox } from '@jianmanager/ui/components/checkbox'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { InstancePicker } from '@/components/InstancePicker'
 import CreateBotDialogView from '@jianmanager/ui/components/views/instances/CreateBotDialog'
-import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/form-validation'
-import { useFieldGate } from '@/lib/use-field-gate'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@jianmanager/ui/components/table'
-import { cn } from '@jianmanager/ui'
 
 /**
  * Bot 详情弹窗的取数接线层（ADR-097）：视图已入包，此处注入元数据、实时流与命令下发。
@@ -114,10 +76,27 @@ function BotDetailDialog({ botId, onOpenChange }: { botId: number | null; onOpen
   )
 }
 
-const SENTINEL_ALL = 'all'
-
-const BEHAVIOR_OPTIONS = ['idle', 'guard', 'follow', 'patrol'] as const
-
+/**
+ * 分组窥视的取数接线层（ADR-097）：展示件已入包，此处只做参数展开、页码状态与成员取数。
+ *
+ * 页码会触发重新取数，故由本层持有（与列表页码同规则）；窥视随分组展开态挂载/卸载——
+ * 收起即卸载、换组即重挂（行与卡都按 `group.key` 成键），页码自然复位为 1，与原页
+ * 「各窥视件自持页码」的行为一致。
+ */
+function BotGroupPeekContainer({ params, onOpenBot }: { params: BotListParams; onOpenBot: (id: number) => void }) {
+  const [page, setPage] = useState(1)
+  const { data, isLoading } = useBots({ ...params, page, pageSize: BOT_PEEK_PAGE_SIZE })
+  return (
+    <BotGroupPeek
+      items={data?.items}
+      total={data?.total}
+      isLoading={isLoading}
+      page={page}
+      onPage={setPage}
+      onOpenBot={onOpenBot}
+    />
+  )
+}
 
 /**
  * 全局 Bot 管理页（FR-040 / ADR-009 + FR-371）。
@@ -173,6 +152,8 @@ export default function BotsPage() {
  */
 function BotFleetTab() {
   const { t } = useTranslation()
+  // 分组操作区的「在控制台打开」要跳实例深链（原在 GroupActions 内取 navigate，视图入包后上提到容器）。
+  const navigate = useNavigate()
   const [showCreate, setShowCreate] = useState(false)
   const [showStress, setShowStress] = useState(false)
   const [search, setSearch] = useState('')
@@ -223,6 +204,30 @@ function BotFleetTab() {
   // 全局各状态精确计数，供舰队健康条多段着色（FR-147）。
   const byStatus = globalSummary.data?.byStatus
   const fleetTotal = globalSummary.data?.total ?? 0
+
+  /**
+   * 单组批量下发（FR-147）：目标 = 该组筛选，结果经 toast 回执（mutation 与提示都留在应用侧）。
+   * 与原页一致：成功回执带成功/失败计数，失败只报动作失败。
+   */
+  const runGroupBatch = (group: BotSummaryGroup, action: BotBatchAction, behavior?: string) =>
+    batch.mutate(
+      { action, filter: groupFilter(groupBy, group, filter), behavior },
+      {
+        onSuccess: (res) =>
+          toast.success(t('bots.batchDone', { succeeded: res.succeeded, failed: res.failed })),
+        onError: () => toast.error(t('bots.batchFailed')),
+      },
+    )
+
+  /** 分组操作区（卡片与行共用）：在控制台打开（仅实例维度）+ 单组批量菜单。 */
+  const renderGroupActions = (group: BotSummaryGroup) => (
+    <BotGroupActions
+      groupBy={groupBy}
+      onOpenInConsole={() => navigate(`/instances/${group.key}`)}
+      pending={batch.isPending}
+      onRunBatch={(action, behavior) => runGroupBatch(group, action, behavior)}
+    />
+  )
 
   return (
     <div>
@@ -284,21 +289,23 @@ function BotFleetTab() {
             onCheck={onCheck}
             expanded={expanded}
             onToggleExpand={onToggleExpand}
-            actions={<GroupActions groupBy={groupBy} group={group} baseFilter={filter} />}
+            actions={renderGroupActions(group)}
           >
-            <GroupPeek params={groupFilter(groupBy, group, filter)} onOpenBot={setDetailBotId} />
+            <BotGroupPeekContainer params={groupFilter(groupBy, group, filter)} onOpenBot={setDetailBotId} />
           </BotWorktableCard>
         )}
         renderRow={({ group, checked, onCheck, expanded, onToggleExpand }) => (
-          <GroupRow
-            groupBy={groupBy}
+          <BotGroupRow
             group={group}
-            baseFilter={filter}
             checked={checked}
             onCheck={onCheck}
             expanded={expanded}
             onToggleExpand={onToggleExpand}
-            onOpenBot={setDetailBotId}
+            actions={renderGroupActions(group)}
+            // 窥视经函数传入：折叠行不建窥视元素，保持原页「仅展开才取数」的行为。
+            renderPeek={() => (
+              <BotGroupPeekContainer params={groupFilter(groupBy, group, filter)} onOpenBot={setDetailBotId} />
+            )}
           />
         )}
       />
@@ -315,201 +322,6 @@ function BotFleetTab() {
     </div>
   )
 }
-
-/** 页顶概览卡片：总计/在线/连接中/异常 + 分布（X 实例·Y 节点）+ 舰队健康条（多段）。 */
-
-
-
-/** 分组操作区（卡片/行复用）：在控制台打开（仅实例维度）+ 单组批量菜单。 */
-function GroupActions({
-  groupBy,
-  group,
-  baseFilter,
-}: {
-  groupBy: GroupByDim
-  group: BotSummaryGroup
-  baseFilter: OverviewFilter
-}) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const openInConsole = () => navigate(`/instances/${group.key}`)
-  return (
-    <>
-      {groupBy === 'instance' && (
-        <Button variant="ghost" size="xs" onClick={openInConsole}>
-          {t('bots.openInConsole')}
-        </Button>
-      )}
-      <GroupBatchMenu groupBy={groupBy} group={group} baseFilter={baseFilter} />
-    </>
-  )
-}
-
-/** 单个分组行（列表视图）：勾选 + 标签 + 健康条 + 总数 + 操作（批量/在控制台打开/展开）。 */
-function GroupRow({
-  groupBy,
-  group,
-  baseFilter,
-  checked,
-  onCheck,
-  expanded,
-  onToggleExpand,
-  onOpenBot,
-}: {
-  groupBy: GroupByDim
-  group: BotSummaryGroup
-  baseFilter: OverviewFilter
-  checked: boolean
-  onCheck: () => void
-  expanded: boolean
-  onToggleExpand: () => void
-  onOpenBot: (id: number) => void
-}) {
-  const { t } = useTranslation()
-
-  return (
-    <>
-      <TableRow>
-        <TableCell>
-          <Checkbox checked={checked} onCheckedChange={onCheck} aria-label={t('bots.select')} />
-        </TableCell>
-        <TableCell>
-          <button
-            type="button"
-            onClick={onToggleExpand}
-            className="flex items-center gap-1.5 text-left font-medium hover:underline"
-          >
-            <span className="text-muted-foreground">{expanded ? '▾' : '▸'}</span>
-            <span className="truncate">{group.label || group.key}</span>
-          </button>
-        </TableCell>
-        <TableCell>
-          <BotHealthBar total={group.total} online={group.online} />
-        </TableCell>
-        <TableCell className="text-right tabular-nums">{group.total}</TableCell>
-        <TableCell>
-          <div className="flex items-center justify-end gap-1">
-            <GroupActions groupBy={groupBy} group={group} baseFilter={baseFilter} />
-          </div>
-        </TableCell>
-      </TableRow>
-      {expanded && (
-        <TableRow className="bg-muted/30 hover:bg-muted/30">
-          <TableCell colSpan={5} className="p-0">
-            <GroupPeek params={groupFilter(groupBy, group, baseFilter)} onOpenBot={onOpenBot} />
-          </TableCell>
-        </TableRow>
-      )}
-    </>
-  )
-}
-
-/** 每组批量操作菜单：设行为 / 停止 / 删除（经 useBotBatch，目标=该组筛选）。 */
-function GroupBatchMenu({
-  groupBy,
-  group,
-  baseFilter,
-}: {
-  groupBy: GroupByDim
-  group: BotSummaryGroup
-  baseFilter: OverviewFilter
-}) {
-  const { t } = useTranslation()
-  const batch = useBotBatch()
-  const params = groupFilter(groupBy, group, baseFilter)
-
-  const run = (action: BotBatchAction, behavior?: string) => {
-    batch.mutate(
-      { action, filter: params, behavior },
-      {
-        onSuccess: (res) =>
-          toast.success(t('bots.batchDone', { succeeded: res.succeeded, failed: res.failed })),
-        onError: () => toast.error(t('bots.batchFailed')),
-      },
-    )
-  }
-
-  return (
-    <Select
-      value=""
-      onValueChange={(v: string) => {
-        if (v.startsWith('behavior:')) run('set-behavior', v.slice('behavior:'.length))
-        else run(v as BotBatchAction)
-      }}
-    >
-      <SelectTrigger size="sm" className="w-28" disabled={batch.isPending}>
-        <SelectValue placeholder={t('bots.batch')} />
-      </SelectTrigger>
-      <SelectContent>
-        {BEHAVIOR_OPTIONS.map((b) => (
-          <SelectItem key={b} value={`behavior:${b}`}>
-            {t('bots.setBehaviorTo', { behavior: t(`bots.${b}`) })}
-          </SelectItem>
-        ))}
-        <SelectItem value="stop">{t('bots.batchStop')}</SelectItem>
-        <SelectItem value="delete">{t('bots.batchDelete')}</SelectItem>
-      </SelectContent>
-    </Select>
-  )
-}
-
-/** 行为是否需要目标参数（巡逻路径 / 跟随目标）。 */
-
-/** 行为参数化配置对话框（FR-147）：跟随=目标玩家名，巡逻=路径点（逗号分隔坐标）。 */
-
-/** 展开窥视：仅拉该组首页 Bot（分页，绝不全量），用于核对组内成员。 */
-function GroupPeek({ params, onOpenBot }: { params: BotListParams; onOpenBot: (id: number) => void }) {
-  const { t } = useTranslation()
-  const [page, setPage] = useState(1)
-  const peekSize = 10
-  const { data, isLoading } = useBots({ ...params, page, pageSize: peekSize })
-
-  if (isLoading) {
-    return <p className="px-4 py-3 text-sm text-muted-foreground">{t('common.loading')}</p>
-  }
-  const items = data?.items ?? []
-  const total = data?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(total / peekSize))
-
-  if (items.length === 0) {
-    return <p className="px-4 py-3 text-sm text-muted-foreground">{t('bots.empty')}</p>
-  }
-
-  return (
-    <div className="px-4 py-3">
-      <ul className="divide-y text-sm">
-        {items.map((bot) => (
-          <PeekRow key={bot.id} bot={bot} onOpen={() => onOpenBot(bot.id)} />
-        ))}
-      </ul>
-      <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-        <span>{t('bots.peekTotal', { total })}</span>
-        <div className="flex items-center gap-2">
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-          >
-            {t('bots.prevPage')}
-          </Button>
-          <span>{t('bots.pageOf', { page, totalPages })}</span>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-          >
-            {t('bots.nextPage')}
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-
-
 
 /** 新建 Bot 弹窗的取数接线层（ADR-097）：视图已入包，此处注入实例选择与创建 mutation。 */
 function CreateBotDialogContainer({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
