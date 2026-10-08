@@ -1,274 +1,87 @@
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做平台管理员门禁、筛选取数与跳转接线。
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
-import { ScrollText } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
 import { useAgentCallLogs, type AgentCallLogFilter } from '@/api/agentObservability'
 import { useAgentTokens } from '@/api/agentTokens'
-import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
-import { Input } from '@jianmanager/ui/components/input'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@jianmanager/ui/components/table'
-import { Badge } from '@jianmanager/ui/components/badge'
+  AgentCallLogsPageView,
+  type AgentCallLogsQuery,
+} from '@jianmanager/ui/components/views/agent/AgentCallLogsPageView'
 
 const ROLE_PLATFORM_ADMIN = 10
-const SENTINEL_ALL = '__all__'
 
-/** Agent 调用流水页（FR-391 / FR-390）。 */
+/** 每页条数：后端默认值，同时用于换算总页数。 */
+const PAGE_SIZE = 50
+
+/** 初始筛选：全维度不过滤、第一页（空串即「该维度不过滤」，与视图的对外契约一致）。 */
+const DEFAULT_QUERY: AgentCallLogsQuery = {
+  tokenId: '',
+  action: '',
+  client: '',
+  success: '',
+  page: 1,
+}
+
+/**
+ * Agent 调用流水页（FR-391 / FR-390）容器：平台管理员门禁、筛选/分页状态、Token 候选取数、
+ * 按筛选构造请求与页头跳转入口都在这里，筛选条、表格与三态展示交共享视图（ADR-097）。
+ * 保留同路径默认导出，路由表无需改动。
+ */
 export default function AgentCallLogsPage() {
   const { t } = useTranslation()
   const role = useAuthStore((s) => s.role)
   const isAdmin = role === ROLE_PLATFORM_ADMIN
 
-  const [tokenId, setTokenId] = useState('')
-  const [action, setAction] = useState('')
-  const [client, setClient] = useState('')
-  const [success, setSuccess] = useState<string>(SENTINEL_ALL)
-  const [page, setPage] = useState(1)
+  // 筛选与分页都会进入查询键，属「取数时机」决策，故 state 归容器；视图只受控展示并逐字段上报改动。
+  const [query, setQuery] = useState<AgentCallLogsQuery>(DEFAULT_QUERY)
 
   const filter = useMemo((): AgentCallLogFilter => {
-    const f: AgentCallLogFilter = { page, pageSize: 50 }
-    const tid = Number(tokenId)
+    const f: AgentCallLogFilter = { page: query.page, pageSize: PAGE_SIZE }
+    const tid = Number(query.tokenId)
     if (Number.isInteger(tid) && tid > 0) f.tokenId = tid
-    if (action.trim()) f.action = action.trim()
-    if (client.trim() && client !== SENTINEL_ALL) f.client = client.trim()
-    if (success === 'true') f.success = true
-    if (success === 'false') f.success = false
+    if (query.action.trim()) f.action = query.action.trim()
+    if (query.client.trim()) f.client = query.client.trim()
+    if (query.success === 'true') f.success = true
+    if (query.success === 'false') f.success = false
     return f
-  }, [tokenId, action, client, success, page])
+  }, [query])
 
   const { data: tokens } = useAgentTokens({ enabled: isAdmin })
   const { data, isLoading, isError, isFetching } = useAgentCallLogs(filter, { enabled: isAdmin })
 
+  // 非管理员不渲染页面、也不发请求（两个查询的 enabled 已收敛，此处只是不再挂视图）。
   if (!isAdmin) {
     return <p className="text-sm text-muted-foreground">{t('agentCallLogs.forbidden')}</p>
   }
 
-  const items = data?.items ?? []
-  const total = data?.total ?? 0
-  const pageSize = data?.pageSize ?? 50
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
-
   return (
-    // 全量对齐：外壳与页头改用布局层原语。原先无 data-page，迁移时补上。
-    // 标题内的图标带 aria-hidden，不影响 h1 的可访问名。
-    <PageShell data-page="agent-call-logs">
-      <PageHeader
-        title={
-          <span className="inline-flex items-center gap-2">
-            <ScrollText className="size-5 text-primary" aria-hidden />
-            {t('agentCallLogs.title')}
-          </span>
-        }
-        description={t('agentCallLogs.subtitle')}
-        actions={
-          <>
-            <Button variant="outline" size="sm" asChild>
-              <Link to="/mcp-activity">{t('agentCallLogs.openSessions')}</Link>
-            </Button>
-            <Button variant="outline" size="sm" asChild>
-              <Link to="/agent-tokens">{t('agentCallLogs.openTokens')}</Link>
-            </Button>
-          </>
-        }
-      />
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Select
-          value={tokenId === '' ? SENTINEL_ALL : tokenId}
-          onValueChange={(v) => {
-            setTokenId(v === SENTINEL_ALL ? '' : v)
-            setPage(1)
-          }}
-        >
-          <SelectTrigger size="sm" className="w-48">
-            <SelectValue placeholder={t('agentCallLogs.allTokens')} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={SENTINEL_ALL}>{t('agentCallLogs.allTokens')}</SelectItem>
-            {tokens?.map((tok) => (
-              <SelectItem key={tok.id} value={String(tok.id)}>
-                {tok.name} ({tok.tokenPrefix}…)
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input
-          value={action}
-          onChange={(e) => {
-            setAction(e.target.value)
-            setPage(1)
-          }}
-          placeholder={t('agentCallLogs.actionPlaceholder')}
-          className="h-9 w-48"
-        />
-        <Select
-          value={client === '' ? SENTINEL_ALL : client}
-          onValueChange={(v) => {
-            setClient(v === SENTINEL_ALL ? '' : v)
-            setPage(1)
-          }}
-        >
-          <SelectTrigger size="sm" className="w-36">
-            <SelectValue placeholder={t('agentCallLogs.allClients')} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={SENTINEL_ALL}>{t('agentCallLogs.allClients')}</SelectItem>
-            {['mcp', 'jmagent', 'curl', 'unknown'].map((c) => (
-              <SelectItem key={c} value={c}>
-                {t(`agentCallLogs.clients.${c}`, { defaultValue: c })}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select
-          value={success}
-          onValueChange={(v) => {
-            setSuccess(v)
-            setPage(1)
-          }}
-        >
-          <SelectTrigger size="sm" className="w-36">
-            <SelectValue placeholder={t('agentCallLogs.allResults')} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={SENTINEL_ALL}>{t('agentCallLogs.allResults')}</SelectItem>
-            <SelectItem value="true">{t('agentCallLogs.success')}</SelectItem>
-            <SelectItem value="false">{t('agentCallLogs.failed')}</SelectItem>
-          </SelectContent>
-        </Select>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            setTokenId('')
-            setAction('')
-            setClient('')
-            setSuccess(SENTINEL_ALL)
-            setPage(1)
-          }}
-        >
-          {t('agentCallLogs.clear')}
-        </Button>
-      </div>
-
-      <p className="text-xs text-muted-foreground">
-        {t('agentCallLogs.summary', { loaded: items.length, total })}
-        {isFetching ? ` · ${t('common.loading')}` : ''}
-      </p>
-
-      {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading')}</p>}
-      {isError && <p className="text-sm text-destructive">{t('agentCallLogs.loadFailed')}</p>}
-
-      {!isLoading && !isError && items.length === 0 && (
-        <Panel className="p-6 text-center text-sm text-muted-foreground">{t('agentCallLogs.empty')}</Panel>
-      )}
-
-      {items.length > 0 && (
-        <Panel className="overflow-x-auto p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('agentCallLogs.col.time')}</TableHead>
-                <TableHead>{t('agentCallLogs.col.token')}</TableHead>
-                <TableHead>{t('agentCallLogs.col.action')}</TableHead>
-                <TableHead>{t('agentCallLogs.col.client')}</TableHead>
-                <TableHead>{t('agentCallLogs.col.transport')}</TableHead>
-                <TableHead>{t('agentCallLogs.col.result')}</TableHead>
-                <TableHead>{t('agentCallLogs.col.latency')}</TableHead>
-                <TableHead>{t('agentCallLogs.col.ip')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {row.createdAt ? new Date(row.createdAt).toLocaleString() : '—'}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    <div className="font-medium">{row.tokenName || `#${row.tokenId}`}</div>
-                  </TableCell>
-                  <TableCell>
-                    {(() => {
-                      const label = t(`audit.actions.${row.action}`, { defaultValue: row.action })
-                      return label === row.action ? (
-                        <code className="font-mono text-[11px]">{row.action}</code>
-                      ) : (
-                        <div className="min-w-0">
-                          <div className="truncate text-xs">{label}</div>
-                          <code className="font-mono text-[10px] text-muted-foreground">{row.action}</code>
-                        </div>
-                      )
-                    })()}
-                    {(row.targetType || row.targetId) && (
-                      <div className="text-[10px] text-muted-foreground">
-                        {row.targetType}
-                        {row.targetId ? `#${row.targetId}` : ''}
-                      </div>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {t(`agentCallLogs.clients.${row.client}`, { defaultValue: row.client })}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {row.transport
-                      ? t(`agentCallLogs.transports.${row.transport}`, { defaultValue: row.transport })
-                      : '—'}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={row.success ? 'default' : 'destructive'} className="text-[10px]">
-                      {row.success ? t('agentCallLogs.success') : t('agentCallLogs.failed')}
-                    </Badge>
-                    {!row.success && row.error && (
-                      <div className="mt-0.5 max-w-[12rem] truncate text-[10px] text-muted-foreground" title={row.error}>
-                        {row.error}
-                      </div>
-                    )}
-                  </TableCell>
-                  <TableCell className="tabular-nums text-xs">
-                    {row.latencyMs != null ? `${row.latencyMs} ms` : '—'}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">{row.ip || '—'}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Panel>
-      )}
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-end gap-2">
-          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
-            {t('agentCallLogs.prev')}
+    <AgentCallLogsPageView
+      query={query}
+      // 改动筛选维度一律回到第 1 页（原页每个筛选 handler 都重置了页码），只有翻页才带 page。
+      onQueryChange={(patch) =>
+        setQuery((q) => ({ ...q, ...patch, page: patch.page ?? 1 }))
+      }
+      onClear={() => setQuery(DEFAULT_QUERY)}
+      tokens={tokens}
+      items={data?.items ?? []}
+      total={data?.total ?? 0}
+      pageSize={data?.pageSize ?? PAGE_SIZE}
+      isLoading={isLoading}
+      isError={isError}
+      isFetching={isFetching}
+      headerLinks={
+        <>
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/mcp-activity">{t('agentCallLogs.openSessions')}</Link>
           </Button>
-          <span className="text-xs text-muted-foreground">
-            {page} / {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            {t('agentCallLogs.next')}
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/agent-tokens">{t('agentCallLogs.openTokens')}</Link>
           </Button>
-        </div>
-      )}
-    </PageShell>
+        </>
+      }
+    />
   )
 }
