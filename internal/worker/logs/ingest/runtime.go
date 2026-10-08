@@ -3769,8 +3769,14 @@ func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map
 			if existing.hash == event.CanonicalHash {
 				continue
 			}
-			// 同 ID 异哈希：**默认硬失败** ✗；仅「同区间 ＋ 一方严格更长」两种裁定出口
-			// （同 canonicalRecoveryEvents 的同一判据与同一留痕口径 ✓）。
+			// 同 ID 异哈希：先走两种裁定出口（同 canonicalRecoveryEvents 的同一判据与
+			// 同一留痕口径 ✓）；**不可裁定形态（异区间/等长）保留先到者并跳过本行**。
+			//
+			// 2026-10-08 修复（生产实测）：不可裁定形态此前以硬失败终止整批投递 ——
+			// 冲突是确定性的（重试输入不变）⇒ 该源投递永续失败 ⇒ closed_visible_seq
+			// 钉死 ⇒ 查询按水位截断（实测 VL 侧 4844 行/小时而面板仅 6 条可见，用户观感
+			// 「日志不更新/丢数据」）。改为跳过冲突行后水位得以推进；同 ID 多行的质量
+			// 语义由查询侧「unresolved」承接（与 keepExisting 同效，只是不再整批失败）。
 			incomingSize := len(event.Message)
 			keepExisting, takeIncoming := adjudicateSameIntervalIdentity(existing, event, incomingSize)
 			switch {
@@ -3793,7 +3799,9 @@ func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map
 					"kept_bytes", existing.size, "dropped_bytes", incomingSize,
 					"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
 			default:
-				return nil, &deliveryPlanFailure{err: fmt.Errorf("ingest: IDENTITY_CONFLICT for event_id %s", event.EventID)}
+				slog.Warn("身份冲突：保留先到者并跳过冲突行（不再整批失败）",
+					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+					"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
 			}
 			continue
 		}
@@ -6231,8 +6239,10 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 		if existing.hash == event.CanonicalHash {
 			return nil
 		}
-		// 同 ID 异哈希：**默认硬失败** ✗；仅「同区间 ＋ 一方严格更长」按较长者（完整行）裁定 ✓
-		//（判据与留痕口径与 planDeliveryBatchOutsideLock / adjudicateSameIntervalIdentity 同源 ✓）。
+		// 同 ID 异哈希：先走两种裁定出口（「同区间 ＋ 一方严格更长」按较长者裁定 ✓）；
+		// **不可裁定形态（异区间/等长）保留先到者并跳过本行**。
+		// 2026-10-08 修复（与 planDeliveryBatchOutsideLock 同源）：不可裁定形态此前以
+		// 硬失败终止恢复/重建 —— 确定性冲突会让重启恢复/重放永久撞墙（水位钉死）。
 		incomingSize := len(event.Message)
 		keepExisting, takeIncoming := adjudicateSameIntervalIdentity(existing, event, incomingSize)
 		switch {
@@ -6252,8 +6262,12 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 				"kept_bytes", existing.size, "dropped_bytes", incomingSize,
 				"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
 			return nil
+		default:
+			slog.Warn("身份冲突：保留先到者并跳过冲突行（恢复/重建路径，不再整批失败）",
+				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+				"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+			return nil
 		}
-		return fmt.Errorf("ingest: IDENTITY_CONFLICT for event_id %s", event.EventID)
 	}
 	// 段的权威性**不依赖 state 里的 EventsStored 标记**：该标记随 state 一起持久化，而
 	// state 可能被重置或丢失（运维处置/损坏恢复），此时段本身仍完好在盘上；若因标记为假而

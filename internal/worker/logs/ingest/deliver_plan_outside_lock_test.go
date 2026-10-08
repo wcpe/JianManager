@@ -313,8 +313,9 @@ func TestPlanDeliveryBatchOutsideMutex(t *testing.T) {
 	require.True(t, held.Load(), "负例：持锁调用时钩子必须观察到已持锁（证明绿断言可红）")
 }
 
-// TestPlanDeliveryBatchContractUnchanged 守住 #54 外移后**逐字不变**的三条契约：
-// 去重语义（同 ID 同哈希 ⇒ 跳过）、身份冲突（同 ID 异哈希 ⇒ 硬失败、status 0）、
+// TestPlanDeliveryBatchContractUnchanged 守住 #54 外移后的契约：
+// 去重语义（同 ID 同哈希 ⇒ 跳过）、身份冲突（同 ID 异哈希不可裁定 ⇒ **保留先到者、
+// 跳过冲突行**，2026-10-08 起不再整批失败——确定性冲突曾致投递永续失败、水位钉死）、
 // 以及两种 422 失败形态（零宽事件 / 规范化失败）。
 func TestPlanDeliveryBatchContractUnchanged(t *testing.T) {
 	m := &Manager{}
@@ -337,16 +338,16 @@ func TestPlanDeliveryBatchContractUnchanged(t *testing.T) {
 	require.Len(t, toWrite, 1, "同 ID 同哈希必须跳过（去重语义不变）")
 	require.Equal(t, "e2", toWrite[0].EventID)
 
-	// 2) 同 ID 异哈希、**不可裁定形态**（等长）⇒ IDENTITY_CONFLICT（硬失败，status 0）。
+	// 2) 同 ID 异哈希、**不可裁定形态**（等长）⇒ 保留先到者、跳过冲突行（不再整批失败）。
 	//    注意：这里必须让事件**不带** event_time_utc（否则 normalize 会原样返回、沿用旧哈希，
 	//    冲突根本不会被识别——那测的就不是这条分支）；等长是刻意的，用以避开"较长者"裁定 ✓。
+	//    2026-10-08：确定性冲突不再终止整批投递（曾致投递永续失败、closed_visible_seq 钉死、
+	//    面板只见极少量行）；跳过冲突行后水位得以推进，质量语义由查询侧 unresolved 承接。
 	conflict := mk("e1", 1, 9, "tampered")
 	toWrite, fail = m.planDeliveryBatchOutsideLock([]logtypes.Event{conflict},
 		map[string]eventIdentity{"e1": {hash: first[0].CanonicalHash, start: 1, end: 9, size: len("tampered")}})
-	require.Nil(t, toWrite)
-	require.NotNil(t, fail)
-	require.Equal(t, 0, fail.result.HTTPStatus, "身份冲突必须保持 status 0（不是 422）")
-	require.ErrorContains(t, fail.err, "IDENTITY_CONFLICT")
+	require.Nil(t, fail, "不可裁定的身份冲突不得再整批失败")
+	require.Empty(t, toWrite, "冲突行被跳过（保留先到者）")
 
 	// 3) 零宽事件 ⇒ 422 + 原文错误。
 	toWrite, fail = m.planDeliveryBatchOutsideLock(
