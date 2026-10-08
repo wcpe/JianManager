@@ -28,14 +28,20 @@ export interface PlayerActionScope {
   reason?: string
 }
 
-/** 在线玩家列表（聚合可达后端探针，标注所在子服，FR-067）。每 10s 刷新。 */
-export function useOnlinePlayers() {
+/**
+ * 在线玩家列表（聚合可达后端探针，标注所在子服，FR-067）。每 10s 刷新。
+ *
+ * `options.enabled` 供调用方按当前 Tab 门控：名册原挂在「在线玩家」Tab 组件内，Radix 未激活即不挂载，
+ * 因此只有该 Tab 才请求（且才带 10s 轮询）；视图受控化后 hook 归容器，改由该开关保住同一时机。
+ */
+export function useOnlinePlayers(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['players', 'online'],
     queryFn: async () => {
       const { data } = await api.get<OnlinePlayersResult>('/players')
       return data
     },
+    enabled: options?.enabled ?? true,
     refetchInterval: 10000,
   })
 }
@@ -73,8 +79,13 @@ export function useUnbanPlayer() {
   })
 }
 
-/** 封禁记录列表。 */
-export function useBans(params?: { player?: string; active?: boolean }) {
+/**
+ * 封禁记录列表。
+ *
+ * `options.enabled` 供调用方按当前 Tab 门控：列表原挂在「封禁记录」Tab 组件内，Radix 未激活即不挂载，
+ * 因此只有该 Tab 才请求；视图受控化后 hook 归容器，改由该开关保住同一时机。
+ */
+export function useBans(params?: { player?: string; active?: boolean }, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['bans', params],
     queryFn: async () => {
@@ -83,6 +94,7 @@ export function useBans(params?: { player?: string; active?: boolean }) {
       })
       return data
     },
+    enabled: options?.enabled ?? true,
   })
 }
 
