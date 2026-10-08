@@ -7,16 +7,7 @@ import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 
-vi.mock('@xterm/xterm', async () => {
-  const harness = await import('@/test/xterm-ws-harness')
-  return { Terminal: harness.MockTerminal }
-})
-vi.mock('@xterm/addon-fit', async () => {
-  const harness = await import('@/test/xterm-ws-harness')
-  return { FitAddon: harness.MockFitAddon }
-})
-
-import { MockWebSocket, resetTerminalHarness, wsSockets, xtermInstances } from '@/test/xterm-ws-harness'
+import { MockWebSocket, resetTerminalHarness, wsSockets } from '@/test/xterm-ws-harness'
 import { terminalSessionManager } from '@/lib/terminal-session-manager'
 import InstanceConsolePage from './InstanceConsolePage'
 
@@ -81,10 +72,10 @@ describe('InstanceConsolePage 页签 keep-alive（FR-295）', () => {
     // WS 未断未重连，缓冲仍在 DOM（Activity 隐藏保留）。
     expect(wsSockets).toHaveLength(1)
     expect(socket.closedByClient).toBe(false)
-    // 原「xterm 未重建」的断言改为两条更强的：①往返期间没有新行，快照引用必须**完全相同**
-    //（引用变了就说明缓冲对象被换过）；②实例控制台路径根本不建 xterm（ADR-086）。
+    // 原「xterm 未重建」的断言已退场：xterm 渲染壳全站下线，不再有可断言的 xterm 实例。
+    // 保活语义改由这条更强的证据承担——往返期间没有新行，缓冲快照引用必须**完全相同**
+    //（引用变了就说明缓冲对象被换过）。
     expect(terminalSessionManager.getLines(1)).toBe(bufferBefore)
-    expect(xtermInstances).toHaveLength(0)
     expect(screen.getByText('keepalive-buffer-line')).toBeInTheDocument()
 
     // 切走期间服务端继续推送，缓冲连续（WS 在管理器手里持续收数据）。
