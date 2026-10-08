@@ -2,7 +2,7 @@
  * @file CreateGroupDialogView：新建用户组对话框的受控视图，创建请求由应用容器负责。
  * @input form-validation、useFieldGate、FieldLabel/FieldError、Input/Textarea、Dialog/Button 原语、翻译上下文
  * @output CreateGroupDialogView、CreateGroupDialogViewProps、CreateGroupValues
- * @sync apps/control-plane-web/src/components/CreateGroupDialog.tsx、apps/control-plane-web/src/pages/GroupsPage.tsx
+ * @sync apps/control-plane-web/src/pages/GroupsPage.tsx
  * @since FR-502（组件受控化迁包；原 FR-156，兑现 FR-003）
  */
 import { useState, type FormEvent } from 'react'
