@@ -1,22 +1,17 @@
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做五个查询取数、统计窗口、管理员门禁与两个区块的接线。
 import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Server, Boxes, Users, Download, AlertTriangle } from 'lucide-react'
 import { useNodes } from '@/api/nodes'
 import { useInstanceAggregate } from '@/api/instances'
 import { useOnlinePlayers } from '@/api/players'
 import { useMetricOverview } from '@/api/metrics'
 import { useClientDistObservability } from '@/api/clientStats'
 import { useAuthStore } from '@/stores/auth'
-import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
-import { StatCard } from '@jianmanager/ui/components/stat-card'
-import { MiniBar } from '@jianmanager/ui/components/mini-bar'
-import { RangePicker, type MetricRange } from '@jianmanager/ui'
-import { summarizeNodes } from '@/lib/node-summary'
-import { bucketsFromCounts, tallyBy, summarizeProbeReachability, type DistBucket } from '@/lib/platform-stats'
+import type { MetricRange } from '@jianmanager/ui'
 import { SLOSection } from '@/components/metrics/SLOSection'
 import { PlayerTrendCard } from '@/components/metrics/PlayerTrendCard'
+import { StatisticsPageView } from '@jianmanager/ui/components/views/statistics/StatisticsPageView'
 
+/** 平台管理员角色位（与后端 roles.ts 同源，应用侧权威副本；包内不持鉴权状态）。 */
 const ROLE_PLATFORM_ADMIN = 10
 
 /** 客户端分发观测端点的区间枚举（24h/7d/30d/90d/180d，ADR-049）。 */
@@ -42,54 +37,16 @@ function toObsRange(r: MetricRange): ObsRange {
   }
 }
 
-/** 字节 → 紧凑可读（G/M/K）。 */
-function fmtBytes(b: number): string {
-  if (!Number.isFinite(b) || b <= 0) return '0'
-  if (b >= 1e9) return `${(b / 1024 / 1024 / 1024).toFixed(1)}G`
-  if (b >= 1e6) return `${(b / 1024 / 1024).toFixed(0)}M`
-  if (b >= 1e3) return `${(b / 1024).toFixed(0)}K`
-  return String(b)
-}
-
-/** 率（0~1 小数）→ 百分比字符串。 */
-function fmtRate(r: number): string {
-  return `${((Number.isFinite(r) ? r : 0) * 100).toFixed(1)}%`
-}
-
-/** 构成分布面板：标签 + 计数 + 占比条（信息色，占比高不视作异常）。空集显占位。 */
-function DistPanel({ title, buckets, empty }: { title: string; buckets: DistBucket[]; empty: string }) {
-  return (
-    <Panel title={title}>
-      {buckets.length === 0 ? (
-        <p className="py-6 text-center text-sm text-muted-foreground">{empty}</p>
-      ) : (
-        <ul className="space-y-2.5">
-          {buckets.map((b) => (
-            <li key={b.key} className="space-y-1">
-              <div className="flex items-baseline justify-between text-sm">
-                <span className="font-medium">{b.key}</span>
-                <span className="tabular-nums text-muted-foreground">
-                  {b.count}
-                  <span className="ml-1.5 text-xs">{(b.pct * 100).toFixed(0)}%</span>
-                </span>
-              </div>
-              <MiniBar value={b.pct * 100} level="info" />
-            </li>
-          ))}
-        </ul>
-      )}
-    </Panel>
-  )
-}
-
 /**
- * 观测·统计页（FR-220）：平台级聚合统计——节点 / 实例 / 玩家 / 客户端分发多维计数 + 构成分布。
- * 全复用既有端点（/metrics/overview、/nodes、/instances、/players、/client-dist/observability），
- * 状态构成（含 CRASHED）由 /instances 列表前端聚合得出，无后端改动。
- * 与 `/`（OverviewPage 实时资源仪表盘）互补：本页偏整体规模与构成，非此刻资源水位。
+ * 观测·统计页容器（ADR-097 a 范式）：五个平台级查询、统计窗口与分发观测的权限门禁都在这里决定，
+ * KPI、构成分布与分发区块交共享视图。
+ *
+ * 受控状态归属：`range` 归容器——它是全部查询的查询键，且分发观测端点只认 `toObsRange` 换算出的
+ * 区间枚举（换算含策略，属取数口径）；平台管理员判定同样归容器，因为非管理员必须**不发起**该请求。
+ * 可用性区块与玩家趋势卡各自带应用侧接线层（取数 hook + 浏览器时区读取），故以插槽注入。
+ * 保留同路径默认导出，路由表（`ROUTE_CHUNKS['/statistics']`）与既有用例无需改动。
  */
 export default function StatisticsPage() {
-  const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>('7d')
 
   const isPlatformAdmin = useAuthStore((s) => s.role) === ROLE_PLATFORM_ADMIN
@@ -97,170 +54,28 @@ export default function StatisticsPage() {
   const { data: overview } = useMetricOverview(range)
   const { data: nodes } = useNodes()
   /**
-   * 实例维度改走后端聚合（`/instances/aggregate`）。
-   *
-   * 此前为画「状态 / 角色 / 进程类型」三张分布图而拉全量实例列表（千级约 1MB/轮，且带 30 秒
-   * 兜底轮询、页面还持有全集）；现在一次聚合即可拿到三组计数与总数，前端不再持有全集。
+   * 实例维度走后端聚合（`/instances/aggregate`）：视图不再为「状态 / 角色 / 进程类型」三张分布图
+   * 拉全量实例列表（千级约 1MB/轮，且带 30 秒兜底轮询、页面还持有全集）。
    */
   const { data: instAgg } = useInstanceAggregate()
   const { data: players } = useOnlinePlayers()
   // 分发观测仅平台管理员可查；非管理员不发起请求（enabled=false），UI 整区降级。
   const distQuery = useClientDistObservability({ range: toObsRange(range), enabled: isPlatformAdmin })
 
-  const totals = overview?.totals
-  const nodeSum = summarizeNodes(nodes ?? [])
-  // 实例计数与分布均来自后端聚合（见上），不再本地遍历列表。
-  const instSum = {
-    total: instAgg?.total ?? 0,
-    running: instAgg?.byStatus.RUNNING ?? 0,
-    stopped: instAgg?.byStatus.STOPPED ?? 0,
-    crashed: instAgg?.byStatus.CRASHED ?? 0,
-  }
-  const probe = summarizeProbeReachability(players?.backends ?? [])
-
-  const instByRole = bucketsFromCounts(instAgg?.byRole)
-  const instByProcess = bucketsFromCounts(instAgg?.byProcessType)
-  const nodeByOs = tallyBy(nodes ?? [], (n) => n.os)
-  const nodeByArch = tallyBy(nodes ?? [], (n) => n.arch)
-
-  // 实例状态分布（含 CRASHED，danger 提示在 KPI 卡上单列）
-  const instByStatus: DistBucket[] = (() => {
-    const total = instSum.total
-    const mk = (key: string, count: number): DistBucket => ({ key, count, pct: total > 0 ? count / total : 0 })
-    return [
-      mk(t('statistics.statusRunning'), instSum.running),
-      mk(t('statistics.statusStopped'), instSum.stopped),
-      mk(t('statistics.statusCrashed'), instSum.crashed),
-    ].filter((b) => b.count > 0)
-  })()
-
-  const dist = distQuery.data
-  const distVersions = tallyBy(dist?.versionDist ?? [], (v) => `v${v.version}`)
-  const distPlatforms = tallyBy(dist?.platformDist ?? [], (p) => p.os ?? '—')
-
   return (
-    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
-    // 本页原为裸 `space-y-4` + 手写页头（其 h1 类名与 PageHeader 的完全一致，映射干净）；
-    // 原先没有 data-page，迁移时补上——e2e 的就绪信号依赖它。
-    <PageShell data-page="statistics">
-      <PageHeader
-        title={t('statistics.title')}
-        actions={<RangePicker value={range} onChange={setRange} />}
-      />
-
-      {/* KPI 行：节点 / 实例 / 玩家 + 崩溃单列 */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <StatCard
-          icon={<Server className="size-3.5" />}
-          label={t('statistics.nodes')}
-          value={`${totals?.onlineNodeCount ?? nodeSum.online}/${totals?.nodeCount ?? nodeSum.total}`}
-          sub={t('dashboard.online')}
-        />
-        <StatCard
-          icon={<Boxes className="size-3.5" />}
-          label={t('statistics.instances')}
-          value={`${totals?.runningInstances ?? instSum.running}/${instSum.total}`}
-          sub={t('statistics.running')}
-        />
-        <StatCard
-          icon={<AlertTriangle className="size-3.5" />}
-          tone={instSum.crashed > 0 ? 'danger' : 'neutral'}
-          label={t('statistics.statusCrashed')}
-          value={String(instSum.crashed)}
-          sub={t('nav.instances')}
-        />
-        <StatCard
-          icon={<Users className="size-3.5" />}
-          label={t('statistics.onlinePlayers')}
-          value={String(totals?.onlinePlayers ?? players?.players.length ?? 0)}
-          sub={t('nav.players')}
-        />
-        <StatCard
-          icon={<Server className="size-3.5" />}
-          tone="info"
-          label={t('statistics.probeReach')}
-          value={fmtRate(probe.pct)}
-          sub={`${probe.available}/${probe.total}`}
-        />
-        <StatCard
-          icon={<Server className="size-3.5" />}
-          tone="warning"
-          label={t('statistics.maintenance')}
-          value={String(nodeSum.maintenance)}
-          sub={t('nav.nodes')}
-        />
-      </div>
-
-      {/* 构成分布区 */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <DistPanel title={t('statistics.distByStatus')} buckets={instByStatus} empty={t('instances.empty')} />
-        <DistPanel title={t('statistics.distByRole')} buckets={instByRole} empty={t('instances.empty')} />
-        <DistPanel title={t('statistics.distByProcess')} buckets={instByProcess} empty={t('instances.empty')} />
-        <DistPanel title={t('statistics.distByOs')} buckets={nodeByOs} empty={t('nodes.empty')} />
-        <DistPanel title={t('statistics.distByArch')} buckets={nodeByArch} empty={t('nodes.empty')} />
-      </div>
-
-      {/* 可用性（FR-463）：平台级窗口可用率/故障次数/MTTR/MTBF/误差预算。 */}
-      <SLOSection range={range} scope="platform" />
-
-      {/* 玩家在线趋势与时段分布（FR-469）。 */}
-      <PlayerTrendCard range={range} />
-
-      {/* 客户端分发概览（平台管理员） */}
-      {isPlatformAdmin ? (
-        distQuery.isError ? (
-          <Panel title={t('statistics.distribution')}>
-            <p className="py-6 text-center text-sm text-muted-foreground">{t('statistics.distError')}</p>
-          </Panel>
-        ) : (
-          <>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              <StatCard
-                icon={<Download className="size-3.5" />}
-                label={t('statistics.manifestPulls')}
-                value={String(dist?.summary.manifestPulls ?? 0)}
-                sub={t('statistics.distribution')}
-              />
-              <StatCard
-                icon={<Download className="size-3.5" />}
-                label={t('statistics.artifactPulls')}
-                value={String(dist?.summary.artifactPulls ?? 0)}
-              />
-              <StatCard
-                icon={<Download className="size-3.5" />}
-                label={t('statistics.downloadBytes')}
-                value={fmtBytes(dist?.summary.downloadBytes ?? 0)}
-              />
-              <StatCard
-                icon={<Users className="size-3.5" />}
-                label={t('statistics.activeMachines')}
-                value={String(dist?.summary.activeMachines ?? 0)}
-                sub={dist?.summary.activeMachinesExact === false ? t('statistics.approx') : undefined}
-              />
-              <StatCard
-                icon={<Download className="size-3.5" />}
-                tone="success"
-                label={t('statistics.successRate')}
-                value={fmtRate(dist?.summary.successRate ?? 0)}
-              />
-              <StatCard
-                icon={<AlertTriangle className="size-3.5" />}
-                tone="warning"
-                label={t('statistics.rollbackRate')}
-                value={fmtRate(dist?.summary.rollbackRate ?? 0)}
-              />
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <DistPanel title={t('statistics.distByVersion')} buckets={distVersions} empty={t('statistics.distEmpty')} />
-              <DistPanel title={t('statistics.distByPlatform')} buckets={distPlatforms} empty={t('statistics.distEmpty')} />
-            </div>
-          </>
-        )
-      ) : (
-        <Panel title={t('statistics.distribution')}>
-          <p className="py-6 text-center text-sm text-muted-foreground">{t('statistics.distAdminOnly')}</p>
-        </Panel>
-      )}
-    </PageShell>
+    <StatisticsPageView
+      range={range}
+      onRangeChange={setRange}
+      overviewTotals={overview?.totals}
+      nodes={nodes}
+      instanceCounts={instAgg}
+      players={players}
+      isPlatformAdmin={isPlatformAdmin}
+      distribution={distQuery.data}
+      distributionError={distQuery.isError}
+      // 两个区块的取数分别在应用侧接线层内（useSLO / usePlayerTrend + 时区读取），故只交出渲染结果。
+      renderSloSection={() => <SLOSection range={range} scope="platform" />}
+      renderPlayerTrend={() => <PlayerTrendCard range={range} />}
+    />
   )
 }
