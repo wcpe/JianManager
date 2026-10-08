@@ -438,3 +438,28 @@ export interface BotLoadPreflightResult {
   instanceId?: number
   commandSchedule?: BotLoadCommandSchedule
 }
+
+/** 压测模板。 */
+export interface BotLoadTemplate {
+  id: number
+  uuid: string
+  name: string
+  description: string
+  commandSchedule: BotLoadCommandSchedule
+  loadProfile: BotLoadProfile
+  thresholds: BotLoadThresholds
+  tags: string[]
+  createdBy: number
+  createdAt: string
+  updatedAt: string
+}
+
+/** 创建/更新模板请求体。 */
+export interface BotLoadTemplateInput {
+  name: string
+  description: string
+  commandSchedule: BotLoadCommandSchedule
+  loadProfile: BotLoadProfile
+  thresholds: BotLoadThresholds
+  tags: string[]
+}
