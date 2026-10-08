@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import type { DbTableInfo, DbRowsResult } from '@jianmanager/ui/lib/db-contracts'
 import api from '@/api/client'
 
 /**
@@ -7,17 +8,11 @@ import api from '@/api/client'
  * 敏感列由后端脱敏（前端再兜底打码），无任何写端点。
  */
 
-/** 表清单中的一项：表名 + 行数（行数未知时后端回 -1）。 */
-export interface DbTableInfo {
-  name: string
-  rowCount: number
-}
-
 /**
  * 数据库浏览契约（FR-084）已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type { DbColumn, DbRowsResult } from '@jianmanager/ui/lib/db-contracts'
-import type { DbRowsResult } from '@jianmanager/ui/lib/db-contracts'
+export type { DbTableInfo, DbColumn, DbRowsResult } from '@jianmanager/ui/lib/db-contracts'
+
 /** 行查询参数：分页 / 排序 / 简单过滤（列必须命中表列，否则后端忽略）。 */
 export interface DbRowsParams {
   page?: number
