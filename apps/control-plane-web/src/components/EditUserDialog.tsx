@@ -1,24 +1,5 @@
-import { useState, type FormEvent } from 'react'
-import { useTranslation } from 'react-i18next'
 import { useUpdateUser, type UserInfo } from '@/api/users'
-import {
-  ScrollableDialogBody,
-  scrollableDialogContentClass,
-} from '@jianmanager/ui/components/scrollable-dialog'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import { Button } from '@jianmanager/ui/components/button'
-import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
-import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { minLength } from '@/lib/form-validation'
-
-// 与初始化/创建用户的密码下限一致（BUG-022）。
-const PASSWORD_MIN = 8
+import { EditUserDialogView } from '@jianmanager/ui/components/views/EditUserDialogView'
 
 interface EditUserDialogProps {
   /** 编辑目标用户（父组件须以 user.id 作 key 渲染，确保切换用户时表单重置）。 */
@@ -26,93 +7,24 @@ interface EditUserDialogProps {
   onClose: () => void
 }
 
-/** 编辑用户：调整角色 + 可选重置登录密码（FR-156，兑现 FR-003）。 */
+/**
+ * 编辑用户对话框的应用接线层（ADR-097 b 范式）。
+ *
+ * 表单与校验（角色、可选重置密码）已迁入组件库并受控；本层只负责把视图上报的改动转成
+ * `PUT /users/:id`（成功 toast 与列表失效由 `useUpdateUser` 挂），失败原样抛回视图作内联错误。
+ * 保留同路径默认导出与同一套 props，调用点无需改动。
+ */
 export default function EditUserDialog({ user, onClose }: EditUserDialogProps) {
-  const { t } = useTranslation()
   const update = useUpdateUser()
-  const [role, setRole] = useState(String(user.role))
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-
-  const roleOptions: ComboboxOption[] = [
-    { value: '0', label: t('users.member') },
-    { value: '1', label: t('users.groupAdmin') },
-    { value: '2', label: t('users.groupOperator') },
-    { value: '3', label: t('users.groupViewer') },
-    { value: '10', label: t('users.platformAdmin') },
-  ]
-
-  // 密码留空=不改；填了则须达下限。
-  const passwordError = password !== '' ? minLength(PASSWORD_MIN)(password) : ''
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault()
-    if (passwordError) return
-    setError('')
-    const body: { id: number; role?: number; password?: string } = { id: user.id }
-    if (Number(role) !== user.role) body.role = Number(role)
-    if (password !== '') body.password = password
-    // 无任何改动直接关闭，避免空请求。
-    if (body.role === undefined && body.password === undefined) {
-      onClose()
-      return
-    }
-    update.mutate(body, {
-      onSuccess: () => onClose(),
-      onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-        setError(err.response?.data?.message || t('common.error')),
-    })
-  }
 
   return (
-    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-sm`}>
-        <DialogHeader>
-          <DialogTitle>{t('users.editUser', { name: user.username })}</DialogTitle>
-        </DialogHeader>
-
-        {error && (
-          <div className="mb-3 p-2 text-sm text-destructive bg-destructive/10 rounded">{error}</div>
-        )}
-
-        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-          <ScrollableDialogBody className="space-y-3">
-            <div>
-              <FieldLabel>{t('users.role')}</FieldLabel>
-              <div className="mt-1">
-                <Combobox options={roleOptions} value={role} onChange={setRole} allowCustom={false} />
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">{t('users.roleHint')}</p>
-            </div>
-
-            <div>
-              <FieldLabel>{t('users.resetPassword')}</FieldLabel>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={t('users.resetPasswordPlaceholder')}
-                autoComplete="new-password"
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
-                aria-invalid={!!passwordError}
-              />
-              <FieldError error={passwordError} values={{ min: PASSWORD_MIN }} />
-            </div>
-          </ScrollableDialogBody>
-
-          <DialogFooter className="pt-4">
-            <Button type="button" variant="outline" onClick={onClose}>
-              {t('common.cancel')}
-            </Button>
-            <Button
-              type="submit"
-              disabled={update.isPending || !!passwordError}
-            >
-              {update.isPending ? t('common.saving') : t('common.save')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <EditUserDialogView
+      user={user}
+      onClose={onClose}
+      submitting={update.isPending}
+      onSubmit={async (values) => {
+        await update.mutateAsync({ id: user.id, ...values })
+      }}
+    />
   )
 }
