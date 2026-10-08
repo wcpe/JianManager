@@ -41,10 +41,64 @@ type Coordinator struct {
 // 已完成完整校验的结果可用常规档。
 // 与"整分桶键"配合：同一分钟内的滚动窗口共用同一键 ⇒ TTL 稍长也不会放大陈旧度 ✗，
 // 却能让"连打/翻页/多组件重复取数"稳定命中（配合预热器可做到用户侧恒热 ✓）。
+//
+// 2026-10-08 分档加固（面板切换恒热）：短窗（<30min）保持短 TTL 保新鲜；长窗
+// （1h/24h/7d/无界 all）历史数据占绝对多数、变化缓慢，用长档 TTL 覆盖预热周期
+// （40s ≪ TTL），把"用户来回切换窗口"从每次冷查（1-3s）压到缓存命中（~0.03s）。
+// tail/跟随路径不经本缓存 ⇒ 实时性不受影响 ✓。
+//
+// 长档 pending 取 50s：预热 every=30s、调度 tick 20s ⇒ 实际轮间隔 = 40s，TTL 必须
+// 严格大于相邻两轮间隔才能让每条自然分钟无缝隙命中（命中率不降）。同时把
+// 「worker 侧投影重建/重放期的可见集波动」经缓存暴露给用户的滞后压到 ≤90s——
+// 实测同一窗口两轮预热快照曾从 58 条变 6 条（可见集翻转属 worker 恢复链路的既有
+// 问题），缓存不应把这个波动放大成分钟级。
 const (
-	searchCacheTTLPending   = 25 * time.Second
-	searchCacheTTLCompleted = 60 * time.Second
+	searchCacheTTLPending       = 25 * time.Second
+	searchCacheTTLCompleted     = 60 * time.Second
+	searchCacheTTLPendingLong   = 50 * time.Second
+	searchCacheTTLCompletedLong = 180 * time.Second
+	searchCacheLongWindowCutoff = 30 * time.Minute
 )
+
+// searchCacheTTLFor 按查询时间跨度与 pending 状态选择 TTL（见上）。
+func searchCacheTTLFor(q Query, pending bool) time.Duration {
+	from, okFrom := parseCacheTime(q.FromUTC)
+	to, okTo := parseCacheTime(q.ToUTC)
+	if okFrom && okTo {
+		span := to.Sub(from)
+		if span > 0 && span < searchCacheLongWindowCutoff {
+			if pending {
+				return searchCacheTTLPending
+			}
+			return searchCacheTTLCompleted
+		}
+	}
+	// 长窗或无法解析（无界 all）：长档。
+	if pending {
+		return searchCacheTTLPendingLong
+	}
+	return searchCacheTTLCompletedLong
+}
+
+// parseCacheTime 宽松解析 RFC3339（含纳秒）；失败返回 false。
+func parseCacheTime(t string) (time.Time, bool) {
+	if ts, err := time.Parse(time.RFC3339Nano, t); err == nil {
+		return ts.UTC(), true
+	}
+	if ts, err := time.Parse(time.RFC3339, t); err == nil {
+		return ts.UTC(), true
+	}
+	return time.Time{}, false
+}
+
+// shiftMinutes 把 RFC3339（含纳秒）时间串平移 delta 分钟；空串或解析失败原样返回。
+func shiftMinutes(t string, delta int) string {
+	ts, ok := parseCacheTime(t)
+	if !ok {
+		return t
+	}
+	return ts.Add(time.Duration(delta) * time.Minute).Format(time.RFC3339Nano)
+}
 
 type searchCacheEntry struct {
 	resp     *SearchResponse
@@ -123,15 +177,19 @@ func (c *Coordinator) lookupSearchCache(q Query) (*SearchResponse, bool) {
 	return entry.resp, true
 }
 
-// storeSearchCache 写入同参缓存，TTL 按 pending 双档（上限保护防无界增长 ✓）。
+// storeSearchCache 写入同参缓存，TTL 按查询跨度与 pending 双档（上限保护防无界增长 ✓）。
 func (c *Coordinator) storeSearchCache(q Query, resp *SearchResponse) {
 	if resp == nil {
 		return
 	}
-	ttl := searchCacheTTLCompleted
-	if resp.Coverage.Pending {
-		ttl = searchCacheTTLPending
+	// 空覆盖结果不缓存（2026-10-08）：CP 启动早期 dial 未就绪、worker 整体不可用等
+	// 情形下，Search 以「空 items + 不完整覆盖」正常返回；若被缓存，用户与预热器会
+	// 持续命中这份空结果（配合预热预写下一桶形成跨分钟雪球，面板长期显示 0 条）。
+	// 空窗口每次重查代价 1-2s，安全性优先。
+	if len(resp.Items) == 0 && !resp.Coverage.Complete {
+		return
 	}
+	ttl := searchCacheTTLFor(q, resp.Coverage.Pending)
 	key := searchCacheKey(q)
 	c.searchCacheMu.Lock()
 	defer c.searchCacheMu.Unlock()
@@ -144,6 +202,39 @@ func (c *Coordinator) storeSearchCache(q Query, resp *SearchResponse) {
 		}
 	}
 	c.searchCache[key] = searchCacheEntry{resp: resp, expireAt: time.Now().Add(ttl)}
+}
+
+// WarmSearch 在 Search 之上把结果**同时**写入「时间窗 +1 分钟」桶的缓存条目。
+//
+// 为什么需要（2026-10-08，面板来回切换恒冷）：缓存键把时间片对齐到整分桶，
+// 桶 M 的条目只能由落在 M 内的查询写入 —— 预热周期（40s）大于桶宽时会留出
+// 「桶首缝隙」（用户恰在缝隙内切换即冷查 1-3s）。预写下一桶后，桶 M+1 从
+// 第 0 秒起即可命中；长档 TTL（120s）保证条目活到该桶末。
+// 两次写入共享同一响应：命中「未来桶」时数据窗口最多滞后约 1 分钟，属浏览
+// 路径可接受范围（tail/跟随路径不经本缓存 ✓）。无界查询（all，from/to 为空）
+// 键不含时间片、本身稳定命中，无需重复写入。
+//
+// 必须绕开缓存读取（BypassCache）：预热若命中上一轮自己的条目，会把旧结果
+// 原样续写进新桶——启动早期 dial 失败的空结果就这样被逐分钟「雪球」复制，
+// 用户落进这些桶即拿到 0 条（2026-10-08 复盘）。空覆盖结果不预写（同
+// storeSearchCache 守卫）。
+func (c *Coordinator) WarmSearch(ctx context.Context, q Query) (*SearchResponse, error) {
+	wq := q
+	wq.BypassCache = true
+	resp, err := c.Search(ctx, wq)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	if len(resp.Items) == 0 && !resp.Coverage.Complete {
+		return resp, nil
+	}
+	nq := wq
+	nq.FromUTC, nq.ToUTC = shiftMinutes(q.FromUTC, 1), shiftMinutes(q.ToUTC, 1)
+	if nq.FromUTC == q.FromUTC && nq.ToUTC == q.ToUTC {
+		return resp, nil
+	}
+	c.storeSearchCache(nq, resp)
+	return resp, nil
 }
 
 // maxRetainedViews CP 视图注册表上限。与 Worker 侧同理：每个「不带 view_id 的首次查询」都新建视图，
@@ -804,8 +895,11 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 	view, resolved := viewFast, resolvedFast
 	// 同参秒级 TTL 缓存：命中直接返回（重复/翻页查询免扇出 ✓）。Export 路径不经 Search 本函数
 	// ⇒ 天然旁路 ✗；键含主体/scope ⇒ 跨主体绝不命中 ✗。
-	if cached, ok := c.lookupSearchCache(q); ok {
-		return cached, nil
+	// BypassCache（仅预热器）：跳过读取但照常写入，防止预热命中自身旧条目形成雪球。
+	if !q.BypassCache {
+		if cached, ok := c.lookupSearchCache(q); ok {
+			return cached, nil
+		}
 	}
 	streams, covBy, quality, workerCut, workerOpen, err := c.fanoutSearch(ctx, view, resolved, q, "")
 	if err != nil {

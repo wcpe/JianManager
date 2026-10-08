@@ -119,6 +119,11 @@ type Query struct {
 	Filter          string `json:"filter,omitempty"`
 	PermissionScope string `json:"permission_scope,omitempty"`
 	CancelToken     string `json:"cancellation_token,omitempty"`
+	// BypassCache 跳过同参缓存读取（仍正常写缓存），**仅预热器内部使用**、不参与
+	// 缓存键：预热若允许命中上一轮自己的条目，会把旧结果（含启动早期 dial 失败
+	// 的空结果）反复续写进新桶形成「雪球」，用户落进这些桶即拿到 0 条/陈旧数据
+	// （2026-10-08 面板恒冷复盘）。只读路径不受影响。
+	BypassCache bool `json:"-"`
 }
 
 // SortKey 稳定复合排序键。

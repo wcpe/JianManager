@@ -117,6 +117,10 @@ const (
 	fedWarmTimeout = 25 * time.Second
 	fedWarmHotKeep = 3
 	fedWarmHotTTL  = 30 * time.Minute
+	// fedWarmPageLimit 必须与前端 LogsPage 的 PAGE_SIZE（limit 参数）及 logcoord
+	// 缓存的 Budget.Limit 键段一致：此前预热用 50 而用户发 100，键不同 ⇒ 预热条目
+	// 永远不命中（2026-10-08 面板来回切换恒冷复盘）。
+	fedWarmPageLimit = 100
 )
 
 type fedWarmWindow struct {
@@ -124,10 +128,17 @@ type fedWarmWindow struct {
 	every time.Duration
 }
 
+// fedWarmWindows 覆盖前端全部时间预设（logs-filters.ts: all/15m/1h/24h/7d）。
+// every 与缓存 TTL 必须满足「实际轮间隔 < TTL」才不至于留桶首缝隙：调度 tick 为
+// 20s，every=30s 的实际间隔恒为 40s（< 长档 TTL 50s），every=20s 即每 tick 一轮
+// （15m 短档 TTL 25s）。配合 WarmSearch 预写下一桶，每条自然分钟从第 0 秒起即可
+// 命中。win=0 表示无界（all，不传 from/to）。
 var fedWarmWindows = []fedWarmWindow{
-	{win: 15 * time.Minute, every: 25 * time.Second},
-	{win: time.Hour, every: 150 * time.Second},
-	{win: 24 * time.Hour, every: 12 * time.Minute},
+	{win: 15 * time.Minute, every: 20 * time.Second},
+	{win: time.Hour, every: 30 * time.Second},
+	{win: 24 * time.Hour, every: 30 * time.Second},
+	{win: 7 * 24 * time.Hour, every: 30 * time.Second},
+	{win: 0, every: 30 * time.Second},
 }
 
 // 热集：最近查询过的单实例（按最近使用排序，最多 fedWarmHotKeep 个）。
@@ -219,7 +230,9 @@ func (h *LogFederationHandler) startWarmLoop() {
 	}()
 }
 
-// warmWindow 单窗口预热（targets 为空 ⇒ 平台级 "*" ✓；否则为单实例集 ✓）；
+// warmWindow 单窗口预热（targets 为空 ⇒ 平台级 "*" ✓；否则为单实例集 ✓；
+// win=0 ⇒ 无界 all 预设，不传 from/to，与前端 timeRangeToParams 逐字一致）；
+// 使用 WarmSearch（同时预写下一分钟桶，消除整分桶键的桶首缝隙）；
 // 任何 panic/错误都被吞掉并频控记录（每窗口每分钟最多一条 ✗）。
 func (h *LogFederationHandler) warmWindow(now time.Time, win time.Duration, targets []string) {
 	defer func() { _ = recover() }()
@@ -232,12 +245,14 @@ func (h *LogFederationHandler) warmWindow(now time.Time, win time.Duration, targ
 		AuthorizedTargetIDs: targets,
 		PrincipalKey:        "warm", // 键已改为 targets digest ⇒ 身份段不参与命中 ✓
 		PermissionScope:     "warm",
-		FromUTC:             now.Add(-win).Format(time.RFC3339),
-		ToUTC:               now.Format(time.RFC3339),
-		Budget:              logcoord.QueryBudget{Limit: 50},
+		Budget:              logcoord.QueryBudget{Limit: fedWarmPageLimit},
 		Fast:                true,
 	}
-	if _, err := h.coord.Search(ctx, q); err != nil {
+	if win > 0 {
+		q.FromUTC = now.Add(-win).Format(time.RFC3339)
+		q.ToUTC = now.Format(time.RFC3339)
+	}
+	if _, err := h.coord.WarmSearch(ctx, q); err != nil {
 		key := win.String()
 		fedWarmFailMu.Lock()
 		last, ok := fedWarmFailOnce[key]

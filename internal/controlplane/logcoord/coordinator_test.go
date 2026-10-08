@@ -1114,3 +1114,104 @@ func TestNewViewIDIsOpaqueAndUnique(t *testing.T) {
 		prev = id
 	}
 }
+
+// WarmSearch 必须把结果额外写入「时间窗 +1 分钟」桶：整分桶键下，桶 M 的条目
+// 只能由落在 M 内的查询写入，预热周期与桶边界之间的缝隙会让用户切换窗口时
+// 冷查（2026-10-08 面板来回切换恒冷复盘）。本用例锁定：
+//  1. 同一分钟内的真实查询命中预热条目（不触发新扇出）；
+//  2. 下一分钟的真实查询同样命中（WarmSearch 预写桶生效）。
+func TestWarmSearchCoversSameAndNextMinuteBucket(t *testing.T) {
+	worker := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "n", "g", 1, "2026-10-08T07:00:00Z", "INFO", "x")},
+		searchTarget: []WorkerTargetResult{{TargetID: "node:1", State: CoverageSuccess, CatalogGeneration: "1"}}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = worker
+	coord := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}, dialer)
+
+	base := Query{AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "p",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z",
+		Budget: QueryBudget{Limit: 100}, Fast: true}
+	_, err := coord.WarmSearch(context.Background(), base)
+	require.NoError(t, err)
+
+	worker.mu.Lock()
+	afterWarm := worker.searchCalls
+	worker.mu.Unlock()
+	require.Equal(t, 1, afterWarm, "预热必须实际执行一次查询")
+
+	// 同分钟（桶 07:30）内的真实查询：命中预热条目。
+	same := base
+	same.FromUTC, same.ToUTC = "2026-10-08T06:30:55Z", "2026-10-08T07:30:55Z"
+	_, err = coord.Search(context.Background(), same)
+	require.NoError(t, err)
+
+	// 下一分钟（桶 07:31）的真实查询：命中 WarmSearch 预写条目。
+	next := base
+	next.FromUTC, next.ToUTC = "2026-10-08T06:31:10Z", "2026-10-08T07:31:10Z"
+	_, err = coord.Search(context.Background(), next)
+	require.NoError(t, err)
+
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	require.Equal(t, 1, worker.searchCalls,
+		"同分钟与下一分钟的查询都必须命中预热缓存，不得再次扇出")
+}
+
+// 缓存 TTL 分档：短窗保持短档保新鲜；长窗（含无界 all）走长档以覆盖预热周期。
+func TestSearchCacheTTLForWindowTiers(t *testing.T) {
+	pendingTTL := func(from, to string) time.Duration {
+		return searchCacheTTLFor(Query{FromUTC: from, ToUTC: to}, true)
+	}
+	require.Equal(t, searchCacheTTLPending, pendingTTL("2026-10-08T06:45:00Z", "2026-10-08T07:00:00Z"), "15m 短窗")
+	require.Equal(t, searchCacheTTLPendingLong, pendingTTL("2026-10-08T06:00:00Z", "2026-10-08T07:00:00Z"), "1h")
+	require.Equal(t, searchCacheTTLPendingLong, pendingTTL("2026-10-07T07:00:00Z", "2026-10-08T07:00:00Z"), "24h")
+	require.Equal(t, searchCacheTTLPendingLong, pendingTTL("2026-10-01T07:00:00Z", "2026-10-08T07:00:00Z"), "7d")
+	require.Equal(t, searchCacheTTLPendingLong, pendingTTL("", ""), "无界 all")
+	require.Equal(t, searchCacheTTLCompletedLong,
+		searchCacheTTLFor(Query{FromUTC: "2026-10-07T07:00:00Z", ToUTC: "2026-10-08T07:00:00Z"}, false), "长窗完整校验")
+	require.Equal(t, searchCacheTTLCompleted,
+		searchCacheTTLFor(Query{FromUTC: "2026-10-08T06:45:00Z", ToUTC: "2026-10-08T07:00:00Z"}, false), "短窗完整校验")
+}
+
+// 雪球回归：预热必须每轮真正扇出（BypassCache），不得命中自己上一轮的条目后
+// 把旧结果（含启动早期 dial 失败的空结果）原样续写进新桶——那会让用户落进
+// 这些桶时持续拿到 0 条/陈旧数据（2026-10-08 面板恒冷复盘）。
+func TestWarmSearchBypassesOwnCacheAndRefreshes(t *testing.T) {
+	worker := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "n", "g", 1, "2026-10-08T07:00:00Z", "INFO", "x")},
+		searchTarget: []WorkerTargetResult{{TargetID: "node:1", State: CoverageSuccess, CatalogGeneration: "1"}}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = worker
+	coord := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}, dialer)
+
+	base := Query{AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "warm",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z",
+		Budget: QueryBudget{Limit: 100}, Fast: true}
+	for i := 0; i < 3; i++ {
+		q := base
+		q.FromUTC, q.ToUTC = shiftMinutes(base.FromUTC, i), shiftMinutes(base.ToUTC, i)
+		_, err := coord.WarmSearch(context.Background(), q)
+		require.NoError(t, err)
+	}
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	require.Equal(t, 3, worker.searchCalls,
+		"每轮预热都必须真正扇出，不得命中自身旧条目（雪球）")
+}
+
+// 空覆盖结果不得写入同参缓存：否则 CP 启动早期 dial 失败的空结果会被用户与
+// 预热器持续命中（面板长期 0 条）。
+func TestEmptyIncompleteResultIsNotCached(t *testing.T) {
+	dialer := newFakeDialer() // 不注册任何 worker → dial 失败 → 空 items + 不完整覆盖
+	coord := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}, dialer)
+	q := Query{AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "p",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z", Budget: QueryBudget{Limit: 100}}
+	resp, err := coord.Search(context.Background(), q)
+	require.NoError(t, err)
+	require.Empty(t, resp.Items)
+	require.False(t, resp.Coverage.Complete)
+
+	coord.searchCacheMu.Lock()
+	defer coord.searchCacheMu.Unlock()
+	require.Empty(t, coord.searchCache, "空覆盖结果不得写入同参缓存")
+}
