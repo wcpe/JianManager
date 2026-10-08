@@ -1,208 +1,41 @@
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做通知流取数、标记已读与两处跳转接线。
 import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { Bell } from 'lucide-react'
-
 import {
   useNotificationFeed,
   useMarkFeedRead,
   useMarkAllFeedRead,
-  type FeedItem,
-  type FeedSource,
-  type FeedLevel,
   type FeedQuery,
 } from '@/api/notification-feed'
-import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { Button } from '@jianmanager/ui/components/button'
-import type { StatusLevel } from '@jianmanager/ui'
-import { cn } from '@jianmanager/ui'
-
-/** 统一通知级别 → StatusBadge 等级。error→danger、success/warning/info 同名直映。 */
-function feedLevelStatus(level: FeedLevel): StatusLevel {
-  switch (level) {
-    case 'error':
-      return 'danger'
-    case 'warning':
-      return 'warning'
-    case 'success':
-      return 'success'
-    default:
-      return 'info'
-  }
-}
+import { NotificationCenterPageView } from '@jianmanager/ui/components/views/notifications/NotificationCenterPageView'
 
 /**
- * 通知中心页（FR-216，见 ADR-048）。
- * 统一消费站内信（定向消息）+ 告警事件（系统警报）合并的通知流：
- * 按类型[消息/告警]筛选、仅未读、关键字查询、分页、行内/全部标记已读。
- * 告警条目附「查看告警详情」入口跳 /alerts（确认/认领等深处置仍在告警页）。
+ * 通知中心页（FR-216，见 ADR-048）容器：统一通知流查询、单条/全部标记已读两个 mutation
+ * 与任务中心定位 / 告警页两处跳转留在此处；筛选状态决定请求参数（改筛选即回第 1 页），
+ * 故整份留在容器，列表与分页展示交共享视图。
+ * 保留同路径默认导出，路由表无需改动。
  */
 export default function NotificationCenterPage() {
-  const { t } = useTranslation()
+  const navigate = useNavigate()
   const [filter, setFilter] = useState<FeedQuery>({})
   const { data: page } = useNotificationFeed(filter)
+  const markRead = useMarkFeedRead()
   const markAll = useMarkAllFeedRead()
 
-  const items = page?.items ?? []
-  const total = page?.total ?? 0
-  const curPage = filter.page ?? 1
-  const pageSize = filter.pageSize ?? 50
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
-
-  // 改筛选条件即回第 1 页；翻页用单独 setFilter。
+  // 改筛选条件即回第 1 页；翻页用 onPageChange（只改页码，不动其它条件）。
   const patchFilter = (patch: Partial<FeedQuery>) => setFilter((f) => ({ ...f, ...patch, page: 1 }))
 
-  const sourceTabs: { value: FeedSource | undefined; label: string }[] = [
-    { value: undefined, label: t('notificationCenter.sourceAll') },
-    { value: 'message', label: t('notificationCenter.sourceMessage') },
-    { value: 'alert', label: t('notificationCenter.sourceAlert') },
-  ]
-
   return (
-    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
-    <PageShell data-page="notifications">
-      <PageHeader
-        title={t('notificationCenter.title')}
-        actions={
-          <Button variant="outline" size="sm" onClick={() => markAll.mutate()} disabled={markAll.isPending}>
-            {t('notificationCenter.markAllRead')}
-          </Button>
-        }
-      />
-
-      {/* 类型筛选 + 仅未读 + 关键字 */}
-      <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
-        <div className="flex gap-1 rounded-lg border p-0.5">
-          {sourceTabs.map((tab) => (
-            <button
-              key={tab.label}
-              type="button"
-              onClick={() => patchFilter({ source: tab.value })}
-              className={cn(
-                'rounded-md px-3 py-1 text-sm font-medium transition-colors',
-                filter.source === tab.value
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
-              )}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <input
-            type="checkbox"
-            className="size-4 accent-primary"
-            checked={filter.unread ?? false}
-            onChange={(e) => patchFilter({ unread: e.target.checked || undefined })}
-          />
-          {t('notificationCenter.onlyUnread')}
-        </label>
-
-        <input
-          className="rounded border p-2 text-sm"
-          placeholder={t('notificationCenter.keywordPlaceholder')}
-          value={filter.keyword ?? ''}
-          onChange={(e) => patchFilter({ keyword: e.target.value || undefined })}
-        />
-      </div>
-
-      <Panel bodyClassName="p-0">
-        {items.length === 0 ? (
-          <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 text-center">
-            <Bell className="size-10 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">{t('notificationCenter.empty')}</p>
-          </div>
-        ) : (
-          <ul className="divide-y">
-            {items.map((it) => (
-              <NotificationRow key={`${it.source}-${it.id}`} item={it} />
-            ))}
-          </ul>
-        )}
-      </Panel>
-
-      {total > 0 && (
-        <div className="flex items-center justify-end gap-3 text-sm text-muted-foreground">
-          <span>{t('notificationCenter.total', { count: total })}</span>
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={curPage <= 1}
-            onClick={() => setFilter((f) => ({ ...f, page: curPage - 1 }))}
-          >
-            {t('notificationCenter.prevPage')}
-          </Button>
-          <span>{t('notificationCenter.pageOf', { page: curPage, total: totalPages })}</span>
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={curPage >= totalPages}
-            onClick={() => setFilter((f) => ({ ...f, page: curPage + 1 }))}
-          >
-            {t('notificationCenter.nextPage')}
-          </Button>
-        </div>
-      )}
-    </PageShell>
-  )
-}
-
-/** 单条通知行：来源徽标 + 级别 + 标题/正文/时间 + 未读高亮 + 标记已读 +（告警）查看详情。 */
-function NotificationRow({ item }: { item: FeedItem }) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const markRead = useMarkFeedRead()
-  const sourceLabel = item.source === 'alert' ? t('notificationCenter.badgeAlert') : t('notificationCenter.badgeMessage')
-
-  return (
-    <li className={cn('flex items-start gap-3 px-4 py-3', !item.read && 'bg-primary/5')}>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={cn(
-              'shrink-0 rounded px-1.5 py-px text-[11px] font-medium',
-              item.source === 'alert'
-                ? 'bg-status-warning/15 text-status-warning'
-                : 'bg-primary/10 text-primary',
-            )}
-          >
-            {sourceLabel}
-          </span>
-          <StatusBadge level={feedLevelStatus(item.level)} label={item.level} dot={false} />
-          <span className="truncate font-medium">{item.title}</span>
-          {!item.read && <span className="size-1.5 shrink-0 rounded-full bg-primary" title={t('notificationCenter.unread')} />}
-        </div>
-        {item.body && <p className="mt-1 break-words text-sm text-muted-foreground">{item.body}</p>}
-        <p className="mt-1 font-mono text-[11px] text-muted-foreground">{new Date(item.createdAt).toLocaleString()}</p>
-      </div>
-      <div className="flex shrink-0 flex-col items-end gap-1">
-        {!item.read && (
-          <Button
-            type="button"
-            variant="link"
-            size="xs"
-            className="h-auto p-0"
-            onClick={() => markRead.mutate({ source: item.source, id: item.id })}
-          >
-            {t('notificationCenter.markRead')}
-          </Button>
-        )}
-        {/* 任务类站内信（含 taskId）→ 一键跳任务中心并定位该任务（FR-226 联动）。 */}
-        {item.source === 'message' && item.taskId && (
-          <Button type="button" variant="link" size="xs" className="h-auto p-0" onClick={() => navigate(`/tasks?task=${item.taskId}`)}>
-            {t('notificationCenter.viewTask')}
-          </Button>
-        )}
-        {item.source === 'alert' && (
-          <Button type="button" variant="link" size="xs" className="h-auto p-0 text-muted-foreground hover:text-foreground" onClick={() => navigate('/alerts')}>
-            {t('notificationCenter.viewAlertDetail')}
-          </Button>
-        )}
-      </div>
-    </li>
+    <NotificationCenterPageView
+      query={filter}
+      data={page}
+      markingAll={markAll.isPending}
+      onPatchFilter={patchFilter}
+      onPageChange={(next) => setFilter((f) => ({ ...f, page: next }))}
+      onMarkAllRead={() => markAll.mutate()}
+      onMarkRead={(item) => markRead.mutate({ source: item.source, id: item.id })}
+      onOpenTask={(taskId) => navigate(`/tasks?task=${taskId}`)}
+      onOpenAlertDetail={() => navigate('/alerts')}
+    />
   )
 }
