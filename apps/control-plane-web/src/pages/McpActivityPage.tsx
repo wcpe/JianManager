@@ -1,196 +1,77 @@
+// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做平台管理员门禁、按窗口取数、刷新与跳转接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Link } from 'react-router'
-import { Cable, RefreshCw } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
 import { useMcpActivity, mcpBaseUrl } from '@/api/agentObservability'
 import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
-import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@jianmanager/ui/components/table'
+  McpActivityPageView,
+  WINDOW_PRESETS,
+  type McpWindowPreset,
+} from '@jianmanager/ui/components/views/agent/McpActivityPageView'
 
 const ROLE_PLATFORM_ADMIN = 10
 
 /**
- * 统计窗口档位：取值会原样作为 `window` 查询参数发给后端，因此必须能被
- * `internal/controlplane/mcp/handler.go` 的 `ListActivity` 按 Go duration 解析，
- * 并落在闭区间 1h~168h（同文件的 minActivityWindow / maxActivityWindow），否则该请求被 400 拒绝。
- * Go duration 没有「天」单位，所以「7 天」只能写 `168h`——写成 `7d` 会被后端判为非法。
- * 档位与后端可解析性的契约由 McpActivityPage.dom.test.tsx 的形态/区间守卫测试兜底。
+ * 窗口档位常量定义在包内（档位按钮的实际渲染处），此处原样再导出：
+ * McpActivityPage.dom.test.tsx 用 `import { WINDOW_PRESETS } from './McpActivityPage'` 逐项枚举，
+ * 校验「Go duration 形态 + 1h~168h 区间」这一后端可解析性契约（完整说明见包内常量的注释）。
+ * 经本文件再导出，该守卫才继续盯住包内真正渲染的档位值，而不是一份副本。
  */
-// eslint-disable-next-line react-refresh/only-export-components -- 档位需被单测逐项枚举，导出为本次改动的必要部分
-export const WINDOW_PRESETS = ['24h', '168h'] as const
-type WindowPreset = (typeof WINDOW_PRESETS)[number]
-const DEFAULT_WINDOW: WindowPreset = '24h'
-
-/** 客户端标识 → 调用次数 映射转成「客户端 ×次数」列表，按次数降序。 */
-function formatClients(clients: Record<string, number> | undefined): string {
-  const entries = Object.entries(clients ?? {})
-  if (entries.length === 0) return '—'
-  return entries
-    .sort((a, b) => b[1] - a[1])
-    .map(([client, count]) => `${client} ×${count}`)
-    .join('，')
-}
+export { WINDOW_PRESETS }
 
 /**
- * MCP 活动运维页（FR-391 / ADR-096）：按 Token 聚合的调用活动、MCP URL 复制与吊销入口。
- * 端点去会话化后已无「会话」可观测，故本页只呈现窗口内的活动聚合。
+ * MCP 活动运维页（FR-391 / ADR-096）容器：平台管理员门禁、按窗口取数（端点无会话可观测，
+ * 靠轮询兜底实时性）、手动刷新、端点复制提示与页头两个跳转入口都在这里决定，
+ * 表格与三态展示交共享视图（ADR-097）。保留同路径默认导出，路由表无需改动。
  */
 export default function McpActivityPage() {
   const { t } = useTranslation()
   const role = useAuthStore((s) => s.role)
   const isAdmin = role === ROLE_PLATFORM_ADMIN
-  const [windowValue, setWindowValue] = useState<WindowPreset>(DEFAULT_WINDOW)
+  // 默认档位 24h（即 WINDOW_PRESETS 首档）：切档会改查询键并重新取数，属「取数时机」决策，故 state 归容器。
+  const [windowValue, setWindowValue] = useState<McpWindowPreset>('24h')
 
   const { data, isLoading, isError, refetch, isFetching } = useMcpActivity(windowValue, {
     enabled: isAdmin,
   })
 
+  // 非管理员不渲染页面、也不发请求（enabled 已收敛，此处只是不再挂视图）。
   if (!isAdmin) {
     return <p className="text-sm text-muted-foreground">{t('mcpActivity.forbidden')}</p>
   }
 
-  const items = data?.items ?? []
-  const base = mcpBaseUrl()
-
   const onCopyUrl = async () => {
-    const ok = await copyToClipboard(base)
+    const ok = await copyToClipboard(mcpBaseUrl())
     if (ok) toast.success(t('mcpActivity.copied'))
     else toast.error(t('mcpActivity.copyFailed'))
   }
 
   return (
-    // 全量对齐：外壳与页头改用布局层原语。原先无 data-page，迁移时补上。
-    // 标题内的图标带 aria-hidden，不影响 h1 的可访问名。
-    <PageShell data-page="mcp-activity">
-      <PageHeader
-        title={
-          <span className="inline-flex items-center gap-2">
-            <Cable className="size-5 text-primary" aria-hidden />
-            {t('mcpActivity.title')}
-          </span>
-        }
-        description={t('mcpActivity.subtitle')}
-        actions={
-          <>
-          <div
-            className="flex items-center gap-1 rounded-md border p-0.5"
-            role="group"
-            aria-label={t('mcpActivity.window')}
-          >
-            {WINDOW_PRESETS.map((w) => (
-              <Button
-                key={w}
-                variant={windowValue === w ? 'secondary' : 'ghost'}
-                size="sm"
-                aria-pressed={windowValue === w}
-                onClick={() => setWindowValue(w)}
-              >
-                {t(`mcpActivity.window_${w}`)}
-              </Button>
-            ))}
-          </div>
-          <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
-            <RefreshCw className={`size-3.5 ${isFetching ? 'animate-spin' : ''}`} />
-            {t('mcpActivity.refresh')}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => void onCopyUrl()}>
-            {t('mcpActivity.copyUrl')}
-          </Button>
+    <McpActivityPageView
+      window={windowValue}
+      onWindowChange={setWindowValue}
+      items={data?.items ?? []}
+      generatedAt={data?.generatedAt}
+      isLoading={isLoading}
+      isError={isError}
+      isFetching={isFetching}
+      onRefresh={() => void refetch()}
+      endpoint={mcpBaseUrl()}
+      onCopyEndpoint={() => void onCopyUrl()}
+      headerLinks={
+        <>
           <Button variant="outline" size="sm" asChild>
             <Link to="/agent-call-logs">{t('mcpActivity.openLogs')}</Link>
           </Button>
           <Button variant="outline" size="sm" asChild>
             <Link to="/agent-tokens">{t('mcpActivity.revokeToken')}</Link>
           </Button>
-          </>
-        }
-      />
-
-      <Panel className="space-y-2 p-3 text-sm text-muted-foreground">
-        <div>
-          <span className="font-medium text-foreground">{t('mcpActivity.endpoint')}: </span>
-          <code className="break-all font-mono text-xs">{base}</code>
-        </div>
-        <p>{t('mcpActivity.endpointHint')}</p>
-        <p className="text-xs">{t('mcpActivity.endpointHintSse')}</p>
-        <p className="text-xs">{t('mcpActivity.authNote')}</p>
-        <p className="text-xs">{t('mcpActivity.protocolVersion')}</p>
-        {data?.generatedAt && (
-          <p className="text-xs">
-            {t('mcpActivity.generatedAt', { time: new Date(data.generatedAt).toLocaleString() })}
-          </p>
-        )}
-      </Panel>
-
-      {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading')}</p>}
-      {isError && <p className="text-sm text-destructive">{t('mcpActivity.loadFailed')}</p>}
-
-      {!isLoading && !isError && items.length === 0 && (
-        <Panel className="p-6 text-center text-sm text-muted-foreground">{t('mcpActivity.empty')}</Panel>
-      )}
-
-      {items.length > 0 && (
-        <Panel className="overflow-x-auto p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('mcpActivity.col.token')}</TableHead>
-                <TableHead>{t('mcpActivity.col.client')}</TableHead>
-                <TableHead>{t('mcpActivity.col.lastActivity')}</TableHead>
-                <TableHead>{t('mcpActivity.col.lastAction')}</TableHead>
-                <TableHead className="text-right">{t('mcpActivity.col.calls')}</TableHead>
-                <TableHead className="text-right">{t('mcpActivity.col.failures')}</TableHead>
-                <TableHead>{t('mcpActivity.col.ip')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((item) => (
-                <TableRow key={item.tokenId}>
-                  <TableCell>
-                    <div className="font-medium">{item.tokenName || `Token #${item.tokenId}`}</div>
-                    <code className="font-mono text-[11px] text-muted-foreground">
-                      {item.tokenPrefix}…
-                    </code>
-                  </TableCell>
-                  <TableCell
-                    className="max-w-[12rem] truncate text-xs"
-                    title={formatClients(item.clients)}
-                  >
-                    {formatClients(item.clients)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {item.lastActivityAt ? new Date(item.lastActivityAt).toLocaleString() : '—'}
-                  </TableCell>
-                  <TableCell
-                    className="max-w-[10rem] truncate font-mono text-xs"
-                    title={item.lastAction}
-                  >
-                    {item.lastAction || '—'}
-                  </TableCell>
-                  <TableCell className="text-right text-xs tabular-nums">{item.callCount}</TableCell>
-                  <TableCell className="text-right text-xs tabular-nums">
-                    {item.failureCount}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {item.clientIPs?.length ? item.clientIPs.join('，') : '—'}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Panel>
-      )}
-    </PageShell>
+        </>
+      }
+    />
   )
 }
