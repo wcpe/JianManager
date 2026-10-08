@@ -11,7 +11,7 @@
 import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
-import { Palette, ScrollText, Cpu, Archive, Lock, ShieldAlert, Network, Mail, ExternalLink, type LucideIcon } from 'lucide-react'
+import { Palette, ScrollText, Cpu, HeartPulse, Archive, Lock, ShieldAlert, Network, Mail, ExternalLink, type LucideIcon } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -63,6 +63,7 @@ const CATEGORY_ICON: Record<SettingCategory, LucideIcon> = {
   appearance: Palette,
   logging: ScrollText,
   runtime: Cpu,
+  policy: HeartPulse,
   network: Network,
   backup: Archive,
   email: Mail,
@@ -187,7 +188,7 @@ export function SettingsPageView({
   const [pendingCat, setPendingCat] = useState<SettingCategory | null>(null)
 
   const categories: SettingCategory[] = isPlatformAdmin
-    ? ['appearance', 'logging', 'runtime', 'network', 'backup', 'email', 'security']
+    ? ['appearance', 'logging', 'runtime', 'policy', 'network', 'backup', 'email', 'security']
     : ['appearance']
 
   // 当前分类的可编辑项（appearance 无平台项）。

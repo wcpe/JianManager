@@ -398,13 +398,38 @@ const settingsEditable: SettingsItemView[] = [
   { key: 'jdk.mirror.temurin', value: 'https://api.adoptium.net', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
   { key: 'runtime.mirror.nodejs', value: 'https://nodejs.org/dist', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
   { key: 'direct_probe.slp_timeout', value: '3s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  // 运行策略（FR-299 / FR-326 / FR-460）：健康巡检与自愈、配额强制、崩溃统计保留、无主运行时与 Bot 回收
+  // 取值一律对齐后端 defaultValue；probe_kind 空串表示「自动推断探针类型」，是真实的默认态。
+  { key: 'health.scan_enabled', value: 'true', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'health.scan_interval', value: '30s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'health.probe_kind', value: '', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'health.suspicion_threshold', value: '3', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'health.action', value: 'warn', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'health.circuit_breaker_threshold', value: '5', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'health.circuit_breaker_window', value: '10m', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'health.startup_warmup', value: '5m', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'health.self_heal_max_restarts', value: '3', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'quota.enforce_interval', value: '60s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'quota.enforce_mode', value: 'alert', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'quota.enforce_streak', value: '5', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'crash.stat_retention_days', value: '90', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'instance_reverse_reconcile.grace_period', value: '10m', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'instance_reverse_reconcile.auto_dispose', value: 'false', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'bot_reclaim.grace_period', value: '2m', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'bot_reclaim.auto_reclaim', value: 'true', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
   // 网络：proxy.url / github.token 都是敏感项
   // proxy.url 只回显 scheme://host:port（本例不含凭据），github.token 回显掩码而不回显明文。
   { key: 'proxy.url', value: 'http://proxy.example.internal:3128', editable: true, sensitive: true, overridden: false, effectiveImmediately: true },
   { key: 'proxy.no_proxy', value: 'localhost,127.0.0.1,.internal', editable: true, sensitive: false, overridden: false, effectiveImmediately: true },
   { key: 'github.token', value: '(已配置)', editable: true, sensitive: true, overridden: true, effectiveImmediately: true },
-  // 备份
+  // 备份：含整机快照的保留与占用上限（FR-3xx 快照族）
   { key: 'backup.retention_days', value: '30', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'snapshot.retention_count', value: '10', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'snapshot.retention_days', value: '30', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'snapshot.pre_rollback_keep', value: '3', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { key: 'snapshot.max_per_instance', value: '20', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  // max_total_mb=0 表示不设总量上限（后端默认），不是「上限为 0」。
+  { key: 'snapshot.max_total_mb', value: '0', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
   // 邮件（邀请）：password 只回显「已配置」，输入框自身以 ${ENV_VAR} 作占位提示收引用串
   { key: 'platform.public_base_url', value: 'https://panel.example.com', editable: true, sensitive: false, overridden: true, effectiveImmediately: true },
   { key: 'invite.smtp.host', value: 'smtp.example.com', editable: true, sensitive: false, overridden: true, effectiveImmediately: true },
@@ -434,6 +459,7 @@ const SETTINGS_CATEGORIES: SettingCategory[] = [
   'appearance',
   'logging',
   'runtime',
+  'policy',
   'network',
   'backup',
   'email',
@@ -898,8 +924,11 @@ export function ViewsAdmin() {
           受控（b 范式）：配置数据与保存经 props 往来——onSave 返回是否成功，成功才清掉已落库的草稿键；
           当前分类是筛选语义，归外壳（本分区代持，上面的按钮即外壳行为）；明暗与语言的值/变更也是 props（外壳接主题 store 与 i18n）。
           留组件内的是各键草稿、切分类未保存拦截弹窗与分类导航的未保存指示。
-          数据里刻意保留了 runtime.mirror.nodejs：它按 keyCategory 默认落进 security，而 security 分区只渲染只读项，
-          故界面上看不到——这是当前分类口径的真实行为（不是样例写错），同一情况也见于 health.* 等可编辑键。
+          分类口径：keyCategory 把「后端允许编辑」的键归入可编辑分区，只读项落 security（该分区只渲染只读行）。
+          这里刻意把 health.* / quota.* / snapshot.* / instance_reverse_reconcile.* / bot_reclaim.* / crash.* 与
+          runtime.mirror.nodejs 都摆进来：它们曾因未登记前缀族而兜底落进 security，在界面上完全不可见，
+          在组件受控化迁包时才被发现——现在由 packages/ui 的 settings-form.test.ts 守卫用例盯着（解析后端
+          settings.go 的可编辑键清单，任何一个掉进 security 就变红）。
           <strong className="font-medium text-foreground">敏感项：</strong>
           样例里 invite.smtp.password / github.token / proxy.url 都是脱敏回显（「(已配置)」或仅 scheme://host:port，
           jwt.secret 为 ***），不含任何真实凭据——值是否回显、以何种形态回显由外壳与后端决定；
