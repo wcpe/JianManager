@@ -1,3 +1,11 @@
+/*
+ * 用 node:fs 直接读仓库内后端源码来钉跨层契约。`@ts-expect-error` 是必需的：packages/ui 的
+ * tsconfig `types` 只声明 vite/client（不含 node），而本文件由 vitest 的 node project 执行、
+ * 确实能加载 node 内置模块。与 `color-contrast.test.ts` 同一处置，不为此给组件包补 node 类型依赖。
+ * 读源码而非断言硬编码清单，是为了让后端新增可编辑键时这里立刻变红，而不是等界面缺项被发现。
+ */
+// @ts-expect-error 见上方说明：node 内置模块类型不在本包 tsconfig 的 types 列表内
+import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 import {
   diffSettings,
@@ -128,5 +136,66 @@ describe('keyCategory（github.token 归网络类，与出站代理同面板）'
     expect(keyCategory('log.level')).toBe('logging')
     expect(keyCategory('invite.smtp.password')).toBe('email')
     expect(keyCategory('jwt.secret')).toBe('security')
+  })
+})
+
+// 后端 settings.go 的 editable 数组是「界面上应当可编辑」的真源，这里把契约钉住。
+// 曾出现：运行时策略类新键未同步 keyCategory 的前缀族，兜底落进 security，
+// 而 security 分区只渲染只读行 —— 23 个可编辑键在界面上完全不可见（含 runtime.mirror.nodejs、
+// health.*、snapshot.*、quota.*、instance_reverse_reconcile.*、bot_reclaim.*、crash.*）。
+describe('keyCategory 与后端可编辑键的契约', () => {
+  // 敏感项走专用构造器（proxyURLItem / inviteSMTPPasswordItem / githubTokenItem），
+  // 不是 editableItem，正则抓不到，故显式列出。
+  const SPECIAL_EDITABLE = ['proxy.url', 'invite.smtp.password', 'github.token']
+
+  const loadEditableKeys = (): string[] | null => {
+    let src: string
+    try {
+      src = readFileSync(
+        new URL('../../../../internal/controlplane/service/settings.go', import.meta.url),
+        'utf8',
+      )
+    } catch {
+      // 包被单独安装（无仓库内后端源码）时跳过；本用例只守仓库内的一致性
+      return null
+    }
+    // 常量名 → 键字符串
+    const constToKey = new Map<string, string>()
+    for (const m of src.matchAll(/^\s*(SettingKey\w+)\s*=\s*"([^"]+)"/gm)) {
+      constToKey.set(m[1], m[2])
+    }
+    expect(constToKey.size, '未能解析出 SettingKey 常量').toBeGreaterThan(0)
+
+    const block = src.match(/editable\s*:?=\s*\[\]SettingItem\{([\s\S]*?)\n\t\}/)
+    expect(block, '未能在 settings.go 中定位 editable 数组').toBeTruthy()
+    const keys = [...block![1].matchAll(/s\.editableItem\((SettingKey\w+)/g)].map((m) =>
+      constToKey.get(m[1]),
+    )
+    expect(keys.every(Boolean), '有 editableItem 引用了未解析到的常量').toBe(true)
+    return [...(keys as string[]), ...SPECIAL_EDITABLE]
+  }
+
+  it('后端标记可编辑的键都不落进只读的 security 分区', () => {
+    const keys = loadEditableKeys()
+    if (!keys) return
+    // 后端当前 38 项可编辑；低于 30 说明解析失效，别让用例假绿
+    expect(keys.length).toBeGreaterThanOrEqual(30)
+    const invisible = keys.filter((k) => keyCategory(k) === 'security')
+    expect(
+      invisible,
+      `这些键后端允许编辑，但会落进只读的 security 分区而不可见：${invisible.join(', ')}`,
+    ).toEqual([])
+  })
+
+  it('新增键族各自归入预期分类', () => {
+    expect(keyCategory('health.scan_interval')).toBe('policy')
+    expect(keyCategory('quota.enforce_mode')).toBe('policy')
+    expect(keyCategory('crash.stat_retention_days')).toBe('policy')
+    expect(keyCategory('instance_reverse_reconcile.grace_period')).toBe('policy')
+    expect(keyCategory('bot_reclaim.auto_reclaim')).toBe('policy')
+    expect(keyCategory('snapshot.retention_days')).toBe('backup')
+    expect(keyCategory('runtime.mirror.nodejs')).toBe('runtime')
+    // 只读键仍须归 security，否则会把不可编辑项渲染成输入框
+    expect(keyCategory('server.host')).toBe('security')
   })
 })

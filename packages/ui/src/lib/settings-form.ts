@@ -10,7 +10,15 @@ export interface DraftDiffItem {
 }
 
 /** 设置分类：appearance 为客户端偏好，其余为平台配置。 */
-export type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'network' | 'backup' | 'email' | 'security'
+export type SettingCategory =
+  | 'appearance'
+  | 'logging'
+  | 'runtime'
+  | 'policy'
+  | 'network'
+  | 'backup'
+  | 'email'
+  | 'security'
 
 /**
  * MC 直探（SLP/Query）超时上界，毫秒。
@@ -22,13 +30,33 @@ export type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'network' |
  */
 export const MAX_DIRECT_PROBE_TIMEOUT_MS = 10_000
 
-/** 把平台配置键映射到分类：可编辑项落 logging/runtime/network/backup/email，只读项落 security。 */
+/**
+ * 把平台配置键映射到分类：**可编辑项**落 logging / runtime / policy / network / backup / email，
+ * **只读项**落 security（该分区的渲染分支只画只读项，见 `SettingsPageView`）。
+ *
+ * 兜底落 security 意味着「新增一族可编辑键却忘了在此登记」会被静默吞掉——界面上既不显示也不可改。
+ * 这条曾经真的发生过：FR-299 之后的 health / quota / snapshot / crash / instance_reverse_reconcile /
+ * bot_reclaim / runtime.mirror 七族共 23 个键全部落进兜底，直到组件受控化迁包时才被发现。
+ * 现在由 `settings-form.test.ts` 的守卫用例盯着：它解析后端 `settings.go` 的可编辑键清单，
+ * 断言每个键都能归入非 security 分类。**后端加了可编辑键而这里没同步，测试会红。**
+ */
 export function keyCategory(key: string): SettingCategory {
   if (key.startsWith('log.') || key.startsWith('debug.')) return 'logging'
   if (key.startsWith('jdk.') || key.startsWith('graceful_stop.') || key.startsWith('direct_probe.')) return 'runtime'
+  if (key.startsWith('runtime.mirror.')) return 'runtime'
   if (key.startsWith('proxy.') || key === 'github.token') return 'network'
-  if (key.startsWith('backup.')) return 'backup'
+  if (key.startsWith('backup.') || key.startsWith('snapshot.')) return 'backup'
   if (key === 'platform.public_base_url' || key.startsWith('invite.')) return 'email'
+  // 运行期策略：健康巡检与自愈、配额强制、崩溃统计保留、无主运行时宽限、Bot 回收。
+  if (
+    key.startsWith('health.') ||
+    key.startsWith('quota.') ||
+    key.startsWith('crash.') ||
+    key.startsWith('instance_reverse_reconcile.') ||
+    key.startsWith('bot_reclaim.')
+  ) {
+    return 'policy'
+  }
   return 'security'
 }
 
