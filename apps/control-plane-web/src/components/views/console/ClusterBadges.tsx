@@ -56,8 +56,13 @@ export interface ClusterBadgesProps {
   /**
    * 每行的在线人数取数（外壳注入的 hook；包内按行顶层调用，符合 hooks 规则）。
    * 返回 undefined 表示无数据（不显示人数）。
+   *
+   * **必填**：曾是可空 + `useInstancePlayers ? useInstancePlayers(...) : undefined`，
+   * 属条件调用 Hook——只有当「注入与否在组件生命周期内不变」这条调用方约定成立时才安全，
+   * 而那靠自觉维持、类型与运行时都不保证。改为必填后调用无条件，约定变成编译期约束。
+   * 不取数时由外壳传一个返回 undefined 的占位 hook 即可。
    */
-  useInstancePlayers?: (instanceId: number, enabled: boolean) => { available: boolean; online: number } | undefined
+  useInstancePlayers: (instanceId: number, enabled: boolean) => { available: boolean; online: number } | undefined
   /** 浮窗开合（外壳据此开关对应查询）。 */
   onSlotToggle: (slot: ClusterSlot, open: boolean) => void
   /** 跳节点详情（FR-128 深链 `/nodes?node=<id>`）。 */
@@ -257,7 +262,7 @@ function RunningInstanceRows({
 }: {
   rows?: ClusterInstanceRow[]
   remaining: number
-  useInstancePlayers?: ClusterBadgesProps['useInstancePlayers']
+  useInstancePlayers: ClusterBadgesProps['useInstancePlayers']
   open: boolean
   onOpenInstance: (instanceId: number) => void
   onViewAll: () => void
@@ -296,16 +301,13 @@ function RunningInstanceRow({
   onOpen,
 }: {
   instance: ClusterInstanceRow
-  useInstancePlayers?: ClusterBadgesProps['useInstancePlayers']
+  useInstancePlayers: ClusterBadgesProps['useInstancePlayers']
   open: boolean
   onOpen: () => void
 }) {
   const { t } = useTranslation()
-  // 取数 hook 由外壳注入；未注入时不显示人数（等价于「无数据」）。
-  // 注入与否在组件生命周期内不变（props 契约如此），故条件调用在运行时是稳定的；
-  // 规则无法得知该前提，按例外显式豁免。
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const players = useInstancePlayers ? useInstancePlayers(instance.id, open) : undefined
+  // 无条件调用：取数 hook 由外壳注入且为必填（不取数时外壳传占位实现）。
+  const players = useInstancePlayers(instance.id, open)
   return (
     <DropdownMenuItem onClick={onOpen} className="text-xs">
       <span className="size-1.5 shrink-0 rounded-full bg-status-success" />
