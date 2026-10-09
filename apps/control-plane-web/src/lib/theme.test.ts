@@ -8,7 +8,7 @@ import {
   nextMode,
   colorThemeAttr,
   cycleColorTheme,
-} from './theme'
+} from '@jianmanager/ui/lib/theme'
 
 describe('resolveColorTheme', () => {
   it('合法 5 值原样返回', () => {

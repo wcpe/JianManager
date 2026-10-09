@@ -1,5 +1,5 @@
 import type { HealthLevel, HealthWallNode, HealthWallSort } from './health-wall-types'
-import type { StatusLevel } from './threshold'
+import type { StatusLevel } from '@jianmanager/ui/lib/threshold'
 
 /**
  * 集群健康墙（FR-461）纯函数：分级排序、标签、配色与汇总计数。

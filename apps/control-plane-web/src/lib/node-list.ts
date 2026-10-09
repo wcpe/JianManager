@@ -1,5 +1,5 @@
 import type { NodeInfo } from './node-types'
-import type { StatusLevel } from './threshold'
+import type { StatusLevel } from '@jianmanager/ui/lib/threshold'
 
 /**
  * 节点管理页（FR-177 主从双栏）左栏列表的纯逻辑：状态等级映射、搜索筛选、选中态解析、
