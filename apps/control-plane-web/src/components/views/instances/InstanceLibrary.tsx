@@ -30,6 +30,20 @@ const LIBRARY_ROW_HEIGHT = 34
 const SEARCH_DEBOUNCE_MS = 250
 
 /**
+ * 拖拽钉行：正在拖的那一行必须始终留在 DOM 里。
+ *
+ * 原生 HTML5 拖拽期间若把源元素卸载，浏览器会直接取消拖拽且**不触发 `dragend`**。
+ * 而拖拽时用户常要滚动去找目标（本面板自身可滚，拖动中滚轮与边缘自动滚动都成立），
+ * 源行滑出窗口被回收是常态而非边角情况。与 `InstanceGroupManager` 同一处理。
+ */
+function renderRowIndexes(range: { start: number; end: number }, draggingRowIndex: number): number[] {
+  const indexes: number[] = []
+  for (let r = range.start; r < range.end; r++) indexes.push(r)
+  if (draggingRowIndex >= 0 && !indexes.includes(draggingRowIndex)) indexes.push(draggingRowIndex)
+  return indexes
+}
+
+/**
  * 超级工作台「实例库」面板（FR-167 / design §9）：左侧可收起，HTML5 原生 DnD 拖拽源。
  *
  * - 搜索走服务端（`/instances/search` 的 `q`，输入防抖），滚动到底按页补齐（FR-235 范式），
@@ -88,6 +102,8 @@ export default function InstanceLibrary({
   }, [debouncedQuery])
 
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  // 拖拽钉行：拖拽源在原生拖拽期间不能被虚拟窗口回收，理由见 renderRowIndexes。
+  const [draggingKey, setDraggingKey] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
 
   const toggleExpand = (id: number) =>
@@ -125,6 +141,12 @@ export default function InstanceLibrary({
     [instances, expanded],
   )
 
+  // 拖拽钉行：把正在拖的行键换算成行号（虚拟窗口据此把它钉在渲染集合里）。
+  const draggingRowIndex = useMemo(() => {
+    if (draggingKey === null) return -1
+    return rows.findIndex((r) => r.key === draggingKey)
+  }, [draggingKey, rows])
+
   const { containerRef, onScroll, range, totalSize } = useVirtualRows({
     total: rows.length,
     itemSize: LIBRARY_ROW_HEIGHT,
@@ -157,7 +179,6 @@ export default function InstanceLibrary({
     )
   }
 
-  const visible = rows.slice(range.start, range.end)
 
   return (
     <div className="flex w-64 shrink-0 flex-col border-r bg-card/40">
@@ -211,8 +232,12 @@ export default function InstanceLibrary({
           className="min-h-0 flex-1 overflow-y-auto scrollbar-none px-2 pb-2"
         >
           <ul className="relative" style={{ height: totalSize }}>
-            {visible.map((row, i) => {
-              const top = (range.start + i) * LIBRARY_ROW_HEIGHT
+            {renderRowIndexes(range, draggingRowIndex).map((idx) => {
+              const row = rows[idx]
+              if (!row) return null
+              // 钉住的那一行可能落在窗口外（用户滚动去找目标），仍按绝对定位放在它的自然位置：
+              // 它在 DOM 里但不可见，这正是原生拖拽需要的——不必可见，只求不被卸载。
+              const top = idx * LIBRARY_ROW_HEIGHT
               if (row.kind === 'instance') {
                 return (
                   <InstanceLibraryRow
@@ -224,10 +249,19 @@ export default function InstanceLibrary({
                     selectedIds={selected}
                     onToggleExpand={() => toggleExpand(row.instance.id)}
                     onToggleSelect={() => toggleSelect(row.instance.id)}
+                    onDragStateChange={(dragging) => setDraggingKey(dragging ? row.key : null)}
                   />
                 )
               }
-              return <FunctionDragItem key={row.key} top={top} instanceId={row.instanceId} type={row.type} />
+              return (
+                <FunctionDragItem
+                  key={row.key}
+                  top={top}
+                  instanceId={row.instanceId}
+                  type={row.type}
+                  onDragStateChange={(dragging) => setDraggingKey(dragging ? row.key : null)}
+                />
+              )
             })}
           </ul>
         </div>
@@ -256,6 +290,7 @@ function InstanceLibraryRow({
   selectedIds,
   onToggleExpand,
   onToggleSelect,
+  onDragStateChange,
 }: {
   top: number
   instance: LibraryInstance
@@ -264,6 +299,8 @@ function InstanceLibraryRow({
   selectedIds: Set<number>
   onToggleExpand: () => void
   onToggleSelect: () => void
+  /** 拖拽开始/结束上报：外壳据此把本行钉在渲染集合里，避免原生拖拽被虚拟回收打断。 */
+  onDragStateChange: (dragging: boolean) => void
 }) {
   const { t } = useTranslation()
 
@@ -280,7 +317,11 @@ function InstanceLibraryRow({
     <li className="absolute inset-x-0" style={{ top, height: LIBRARY_ROW_HEIGHT }}>
       <div
         draggable
-        onDragStart={handleInstanceDragStart}
+        onDragStart={(e) => {
+          handleInstanceDragStart(e)
+          onDragStateChange(true)
+        }}
+        onDragEnd={() => onDragStateChange(false)}
         className={cn(
           'group flex h-full cursor-grab items-center gap-1.5 rounded-md px-1.5 text-sm active:cursor-grabbing',
           selected ? 'bg-primary/10' : 'hover:bg-accent/50',
@@ -318,14 +359,29 @@ function InstanceLibraryRow({
  * 单功能拖拽源：拖到画布 = 加该实例该类型单卡。
  * 虚拟化定位：绝对定位到 `top`，定高 {@link LIBRARY_ROW_HEIGHT}。
  */
-function FunctionDragItem({ top, instanceId, type }: { top: number; instanceId: number; type: CardType }) {
+function FunctionDragItem({
+  top,
+  instanceId,
+  type,
+  onDragStateChange,
+}: {
+  top: number
+  instanceId: number
+  type: CardType
+  /** 拖拽开始/结束上报，同 {@link InstanceLibraryRow}。 */
+  onDragStateChange: (dragging: boolean) => void
+}) {
   const { t } = useTranslation()
   const def = cardTypeDef(type)!
   return (
     <li className="absolute inset-x-0 pl-7 pr-0" style={{ top, height: LIBRARY_ROW_HEIGHT }}>
       <div
         draggable
-        onDragStart={(e) => setDragData(e, { kind: 'card', instanceId, cardType: type })}
+        onDragStart={(e) => {
+          setDragData(e, { kind: 'card', instanceId, cardType: type })
+          onDragStateChange(true)
+        }}
+        onDragEnd={() => onDragStateChange(false)}
         className="ml-2 flex h-full cursor-grab items-center gap-1.5 rounded border-l px-1.5 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground active:cursor-grabbing"
       >
         <GripVertical className="size-3 shrink-0 opacity-40" />

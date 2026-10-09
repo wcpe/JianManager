@@ -20,6 +20,14 @@ import type { GroupTreeNode, VisibleGroupRow } from '@/lib/instances/instance-gr
 export const INSTANCE_DND_MIME = 'application/x-jm-instances'
 
 /** 分组树行高（px）。虚拟化按行定位，须与真实渲染高度一致。 */
+/**
+ * 虚拟化行高（= 行盒高度，px）。
+ *
+ * 【为什么容器不能用 space-y-*】间距不计入行高：第 N 行的真实偏移是 N×行高 + 间距×(N−1)，
+ * 而等距虚拟化按 index×itemSize 定位，偏移会随已渲染行数累积。故不设行间距，
+ * 把呼吸空间折进行盒——行盒用本常量显式定高，「声明值 = 真实值」由构造保证。
+ * 同一取舍见 `views/networks/NetworksPageView.tsx`。
+ */
 const GROUP_TREE_ROW_HEIGHT = 34
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
@@ -204,7 +212,7 @@ export function InstanceGroupTree({
         onScroll={onScroll}
         role="tree"
         aria-label={t('instanceGroups.treeTitle')}
-        className="min-h-0 flex-1 space-y-0.5 overflow-auto pr-1"
+        className="min-h-0 flex-1 overflow-auto pr-1"
       >
         {/* 「全部实例」根行：选中=清空组筛选 */}
         <button
@@ -355,7 +363,7 @@ function GroupRow({
         selected ? 'bg-accent' : 'hover:bg-accent/50',
         isDropTarget && 'ring-2 ring-primary ring-inset',
       )}
-      style={{ paddingLeft: row.depth * 14 }}
+      style={{ paddingLeft: row.depth * 14, height: GROUP_TREE_ROW_HEIGHT }}
       onKeyDown={handleKeyDown}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes(INSTANCE_DND_MIME)) {

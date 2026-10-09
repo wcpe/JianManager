@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
@@ -135,4 +135,54 @@ describe('InstanceLibrary（mock 假后端）', () => {
     renderWithProviders(<InstanceLibrary collapsed={false} onToggleCollapsed={() => {}} />)
     expect(await screen.findByTestId('instance-library-skeleton')).toBeInTheDocument()
   })
+
+  /**
+   * 拖拽期间源行必须留在 DOM 里。
+   *
+   * 原生 HTML5 拖拽在源元素被卸载时会被静默取消，且**不触发 `dragend`**——用户拖到一半
+   * 滚动去找目标，行滑出窗口被虚拟回收，拖拽就此中断，界面无任何提示。
+   *
+   * 末尾那条「srv-2 已不在 DOM」是必需的：否则窗口没真的前移时，本条也会绿，
+   * 等于没验到「钉住」这件事。
+   */
+  it('拖拽中的行不被虚拟窗口回收（钉行）', async () => {
+    const many = Array.from({ length: 1000 }, (_, i) => ({
+      id: i + 1,
+      uuid: `i-${i + 1}`,
+      name: `srv-${i + 1}`,
+      nodeId: 1,
+      role: 'backend',
+      status: 'STOPPED',
+      serverPort: 0,
+    }))
+    server.use(
+      http.get(API('/instances/search'), ({ request }) => {
+        const url = new URL(request.url)
+        const page = Number(url.searchParams.get('page') ?? 1)
+        const pageSize = Number(url.searchParams.get('pageSize') ?? 50)
+        const start = (page - 1) * pageSize
+        return HttpResponse.json({ items: many.slice(start, start + pageSize), total: many.length, page, pageSize })
+      }),
+    )
+    renderWithProviders(<InstanceLibrary collapsed={false} onToggleCollapsed={() => {}} />)
+
+    const surface = await screen.findByTestId('instance-library-virtual')
+    await screen.findByText('srv-1')
+
+    // 在首行开始拖拽（jsdom 无真实 dataTransfer，给个最小桩）。
+    const firstRow = screen.getByText('srv-1').closest('li')!
+    const source = firstRow.querySelector('[draggable]')!
+    fireEvent.dragStart(source, { dataTransfer: { setData: () => {}, effectAllowed: '' } })
+    expect(screen.getByText('srv-1')).toBeInTheDocument()
+
+    // 滚到列表深处：没有钉行时首行会被回收。
+    surface.scrollTop = 30000
+    fireEvent.scroll(surface)
+
+    // 窗口确实前移了（证明下面那条断言不是假绿）。
+    expect(screen.queryByText('srv-2')).not.toBeInTheDocument()
+    // 钉住：源行已不在可视窗口内，但仍须留在 DOM。
+    expect(screen.getByText('srv-1')).toBeInTheDocument()
+  })
+
 })

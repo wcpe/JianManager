@@ -8,7 +8,36 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import { useConsoleStore } from '@/stores/console'
+import {
+  INSTANCE_EXPANDED_ROW_HEIGHT,
+  INSTANCE_ROW_HEIGHT,
+} from '@/components/views/instances/InstanceRowView'
+import { INSTANCE_GROUP_ROW_HEIGHT } from '@/components/views/instances/VirtualizedInstanceTables'
 import InstancesPage from './InstancesPage'
+
+/**
+ * 展开使该实例「项」在虚拟模型里增加的高度 = 追加的后端摘要行高。
+ * 主行仍在，故增加量就是追加行的高度本身（不是它的差值）。
+ */
+const EXPANDED_ROW_EXTRA = INSTANCE_EXPANDED_ROW_HEIGHT
+
+/**
+ * 虚拟表「内容总高」（DOM 侧）：已渲染各行（含窗口上/下占位行）声明高度之和。
+ *
+ * 该值恒等于虚拟模型的总高，且与当前窗口落在哪一段无关——占位行的高度取自 `sizes` 的前缀和，
+ * 数据行的高度就是各自的 `sizes`。因此「展开前后的差值」可以直接断言展开行是否被计入模型：
+ * 任何一处漏算都会让差值不再是 `EXPANDED_ROW_EXTRA`。
+ *
+ * 行高统一从行盒读（占位行的高度写在单元格上，故行盒缺省时回落取首格）。
+ */
+function virtualContentHeight(surface: HTMLElement): number {
+  const px = (el: Element | null | undefined) =>
+    Number.parseFloat((el as HTMLElement | null)?.style.height ?? '') || 0
+  return [...surface.querySelectorAll('tbody tr')].reduce(
+    (sum, row) => sum + (px(row) || px(row.querySelector('td'))),
+    0,
+  )
+}
 
 /**
  * 实例域页面强断言（FR-201）：种子渲染 + 启停状态联动 + 错误注入。
@@ -317,5 +346,62 @@ describe('InstancesPage（mock 假后端）', () => {
     // 列表查询失败 → 空态文案出现，且不渲染任何种子实例行。
     expect(await screen.findByText('暂无实例')).toBeInTheDocument()
     expect(screen.queryByText('survival-1')).not.toBeInTheDocument()
+  })
+
+  /**
+   * proxy 行的内联后端摘要（展开时追加的那一个 `<tr>`）必须计入虚拟高度模型（平铺表）。
+   *
+   * 展开是在同一个虚拟「项」下**追加一个 `<tr>`**：虚拟窗口若只按「1 项 = 实例行高」计算，
+   * 这段高度完全不计入占位，其后所有行的位置与滚动条长度都会漂移。
+   * 断言用「内容总高 = 模型总高」这一与窗口无关的量：模型总高必须恰好多出一个追加行，
+   * 且追加行盒自己也声明为该高度（声明值与模型同源）。
+   */
+  it('展开 proxy 后端摘要：展开行计入虚拟高度模型（平铺表）', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
+    const surface = await screen.findByTestId('instances-table-virtual')
+
+    // 「管理后端」切换按钮只出现在 proxy 行上；点第一个即可（其它 proxy 行的展开态与本断言无关）。
+    await user.click((await screen.findAllByRole('button', { name: '管理后端' }))[0])
+    const expandedCell = await screen.findByText(/已注册后端|暂无已注册后端/)
+    const expandedRow = expandedCell.closest('tr') as HTMLElement
+    expect(expandedRow.style.height).toBe(`${INSTANCE_EXPANDED_ROW_HEIGHT}px`)
+
+    // 【关键】把窗口滚到展开行之后：此后展开行与追加行都不在 DOM 里（虚拟窗口已卸载它们），
+    // 「内容总高」若仍然涨出追加行的高度，就只可能来自模型的逐行高度——展开行真的被计入了。
+    // （只断言「展开后总高变大」是不够的：追加行本身就在窗口里时，它无论如何都会被算进 DOM。）
+    surface.scrollTop = 6000
+    fireEvent.scroll(surface)
+    expect(surface.querySelectorAll(`tbody tr[style*="height: ${INSTANCE_EXPANDED_ROW_HEIGHT}px"]`)).toHaveLength(0)
+
+    // 平铺表每一项都是实例行，故模型总高 = N × 实例行高 + 追加行高。
+    const total = Number(surface.dataset.totalCount)
+    expect(virtualContentHeight(surface)).toBe(total * INSTANCE_ROW_HEIGHT + EXPANDED_ROW_EXTRA)
+  })
+
+  /**
+   * 同一判据在分组树表（组头 / 实例行 / 展开追加行三种高度共存）同样成立。
+   *
+   * 收敛到单个节点：树表的行模型 = 1 个组头行 + 该节点的全部实例行（全部已加载时才可精确推算），
+   * 于是模型总高可写成 `组头 + N × 实例行 + 追加行` 这一确定式。
+   */
+  it('展开 proxy 后端摘要：展开行计入虚拟高度模型（分组树表）', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=node&nodeId=1' })
+    const surface = await screen.findByTestId('instances-table-virtual')
+    expect(within(surface).getAllByTestId('instances-group-row').length).toBe(1)
+
+    await user.click((await screen.findAllByRole('button', { name: '管理后端' }))[0])
+    await screen.findByText(/已注册后端|暂无已注册后端/)
+
+    surface.scrollTop = 3000
+    fireEvent.scroll(surface)
+    expect(surface.querySelectorAll(`tbody tr[style*="height: ${INSTANCE_EXPANDED_ROW_HEIGHT}px"]`)).toHaveLength(0)
+
+    const loaded = Number(/已加载 (\d+)/.exec(screen.getByTestId('instances-loaded-count').textContent ?? '')?.[1])
+    expect(loaded).toBeGreaterThan(0)
+    expect(virtualContentHeight(surface)).toBe(
+      INSTANCE_GROUP_ROW_HEIGHT + loaded * INSTANCE_ROW_HEIGHT + EXPANDED_ROW_EXTRA,
+    )
   })
 })
