@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
-import { StoppedLogsView as StoppedLogsViewImpl } from '@jianmanager/ui'
+import { StoppedLogsView as StoppedLogsViewImpl } from '@/components/views/console/StoppedLogsView'
 import { useLogsFederation } from '@/api/logFederation'
 import type { LogEntry } from '@/api/logs'
 

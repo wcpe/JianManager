@@ -38,8 +38,8 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
-import { ConsoleCommandBar } from '@jianmanager/ui/components/views/console/ConsoleCommandBar'
-import { ConsoleOutputView, type ConsoleOutputHandle } from '@jianmanager/ui/components/views/console/ConsoleOutputView'
+import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
+import { ConsoleOutputView, type ConsoleOutputHandle } from '@/components/views/console/ConsoleOutputView'
 
 /**
  * 实例控制台（FR-415，ADR-086）：输出区（只读 DOM 虚拟列表）+ 命令栏（原生 input）。

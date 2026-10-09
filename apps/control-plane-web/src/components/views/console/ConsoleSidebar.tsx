@@ -23,9 +23,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
-import { SidebarNavLink } from '@jianmanager/ui/components/views/console/SidebarNavLink'
-import { ThemeSwitcher, type ThemeSwitcherProps } from '@jianmanager/ui/components/views/console/ThemeSwitcher'
-import type { SidebarLinkArgs } from '@jianmanager/ui/components/views/console/sidebar-link'
+import { SidebarNavLink } from '@/components/views/console/SidebarNavLink'
+import { ThemeSwitcher, type ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
+import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 import type { NavGroup, NavSection } from '@jianmanager/ui/lib/nav-config'
 
 /** 分节小标题图标（仅视觉，折叠态不显）。 */

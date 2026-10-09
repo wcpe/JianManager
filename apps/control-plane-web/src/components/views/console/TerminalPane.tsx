@@ -4,9 +4,9 @@ import { Eye, Maximize2, Minimize2, Pencil, Play, RotateCcw, Search, ZoomIn, Zoo
 
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
-import { ConsoleCommandBar } from '@jianmanager/ui/components/views/console/ConsoleCommandBar'
-import { InstanceConsoleView } from '@jianmanager/ui/components/views/console/InstanceConsoleView'
-import { ConsoleImmersiveMode } from '@jianmanager/ui/components/views/console/ConsoleImmersiveMode'
+import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
+import { InstanceConsoleView } from '@/components/views/console/InstanceConsoleView'
+import { ConsoleImmersiveMode } from '@/components/views/console/ConsoleImmersiveMode'
 import { terminalSessionManager, type FetchTerminalCreds } from '@jianmanager/ui/lib/terminal-session-manager'
 import type { ConsoleHistoryState } from '@jianmanager/ui/lib/console-history'
 

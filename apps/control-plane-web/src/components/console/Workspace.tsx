@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { PageSkeleton } from '@jianmanager/ui/components/layout'
 import { useAuthStore } from '@/stores/auth'
 import { ROUTE_CHUNKS } from '@/lib/route-chunks'
-import WorkspaceEmpty from '@jianmanager/ui/components/views/console/WorkspaceEmpty'
+import WorkspaceEmpty from '@/components/views/console/WorkspaceEmpty'
 
 /**
  * 路由表的懒加载声明（FR-496 阶段 6 补丁）：加载器一律从 `@/lib/route-chunks` 取，

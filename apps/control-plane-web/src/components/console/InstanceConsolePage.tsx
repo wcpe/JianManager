@@ -14,12 +14,12 @@ import { useLogsFederation } from '@/api/logFederation'
 import type { LogEntry } from '@/api/logs'
 import { useNodes } from '@/api/nodes'
 import { useServerState } from '@/api/serverState'
-import { buildWatchItems } from '@jianmanager/ui/components/views/console/console-kpi-parts'
+import { buildWatchItems } from '@/components/views/console/console-kpi-parts'
 import {
   InstanceConsoleOverviewPanel,
   InstanceConsolePageView,
-} from '@jianmanager/ui/components/views/console/InstanceConsolePageView'
-import type { InstanceConsoleLinkArgs } from '@jianmanager/ui/components/views/console/InstanceConsolePageView'
+} from '@/components/views/console/InstanceConsolePageView'
+import type { InstanceConsoleLinkArgs } from '@/components/views/console/InstanceConsolePageView'
 import {
   TAB_CARD_TYPE,
   TAB_KEYS,

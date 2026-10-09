@@ -59,8 +59,6 @@ export * from './components/views/alerts/ChannelDialogView'
 export * from './components/views/alerts/RuleDialogView'
 export * from './components/views/alerts/QQQrCode'
 export * from './components/views/alerts/QQBindDialogView'
-export * from './components/views/console/BotHealthBar'
-export * from './components/views/console/WorkspaceEmpty'
 export * from './components/views/explorer/PromptDialog'
 export * from './components/views/explorer/Toolbar'
 export * from './components/views/explorer/editor/EditorShortcutsHelp'
@@ -130,10 +128,6 @@ export * from './lib/nav-config'
 export * from './lib/header-layout'
 export * from './lib/sidebar-logo'
 export * from './lib/task-status'
-export * from './components/views/console/TasksMenu'
-export * from './components/views/console/NotificationBell'
-export * from './components/views/console/ClusterBadges'
-export * from './components/views/console/AccountMenu'
 export * from './lib/explorer-selection'
 export * from './lib/explorer-clipboard'
 export * from './lib/explorer-tabs'
@@ -174,10 +168,6 @@ export {
 export type { ArchiveDerived, Crumb } from './lib/storage-view'
 export * from './lib/storage-source'
 export * from './components/views/StoragePage'
-export * from './components/views/console/BcSegment'
-export * from './components/views/console/BcPlayersPanel'
-export * from './components/views/console/InstanceActivityFeed'
-export * from './components/views/console/TopologyGraph'
 export * from './lib/node-types'
 export * from './lib/node-summary'
 export * from './lib/instance-summary'
@@ -269,7 +259,6 @@ export * from './lib/logs-filters'
 export * from './lib/schedule-form'
 export * from './lib/db-contracts'
 export * from './lib/db-rows-view'
-export * from './components/views/console/NodeWorktableCard'
 export * from './lib/client-dist-stats-contracts'
 export * from './lib/client-dist-events-contracts'
 export * from './lib/client-runtime-contracts'
@@ -321,45 +310,11 @@ export type {
   RuntimeGrid,
   AssetFilter,
 } from './lib/runtime-assets-view'
-export * from './components/views/console/DirectorSceneStrip'
-export * from './components/views/console/QuotaPanel'
-export * from './components/views/console/InstanceConfigSurfacePanel'
-export * from './components/views/console/MobileConsoleNav'
-export * from './components/views/console/ConsoleCommandBar'
-export * from './components/views/console/ConsoleOutputView'
-export * from './components/views/console/InstanceConsoleView'
-export * from './components/views/console/ConsoleImmersiveMode'
-export * from './components/views/console/StoppedLogsView'
-export * from './components/views/console/TerminalPane'
-export * from './components/views/console/DirectorConsolePage'
-export * from './components/views/console/SuperWorkbenchPage'
 export * from './components/views/config-explorer/ConfigFileEditor'
 export * from './lib/theme'
-export * from './components/views/console/ThemeSwitcher'
-export * from './components/views/console/SidebarNavLink'
-export * from './components/views/console/WorkspaceSidebar'
-export * from './components/views/console/ConsoleSidebar'
-export * from './components/views/console/sidebar-link'
-export * from './components/views/console/console-header-parts'
-export * from './components/views/console/metric-segment'
-export * from './components/views/console/console-kpi-parts'
-export * from './components/views/console/ConsoleLeafParts'
-export * from './components/views/console/SegmentPills'
-export * from './components/views/console/DirectorCanvas'
-export * from './components/views/console/GenericConfigSegment'
-export * from './components/views/console/InstanceResourceCard'
 // WorkbenchLeafParts 的 PageBreadcrumb 与 './components/layout' 的同名导出（类型）冲突，
 // 故显式列出其余导出；PageBreadcrumb 组件走深路径
 // '@jianmanager/ui/components/views/console/WorkbenchLeafParts'。
-export {
-  DirectorAddSceneMenu,
-  SuperWorkbenchToolbar,
-  type DirectorAddSceneMenuProps,
-  type PageBreadcrumbProps,
-  type RenderRouterLink,
-  type RouterLinkArgs,
-  type SuperWorkbenchToolbarProps,
-} from './components/views/console/WorkbenchLeafParts'
 export * from './lib/artifact-cache'
 export * from './lib/attribution'
 export * from './lib/backup'
@@ -504,8 +459,6 @@ export * from './components/views/backups/BackupsPageView'
 // config-explorer 域
 export * from './components/views/config-explorer/ConfigVersionDrawer'
 // console 域
-export * from './components/views/console/InstanceConsolePageView'
-export * from './components/views/console/InstanceResourceSegmentView'
 // explorer 域
 export * from './components/views/explorer/FileTree'
 // groups 域

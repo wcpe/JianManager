@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { healthBreakdown, type HealthKind } from '../../../lib/bot-health'
+import { healthBreakdown, type HealthKind } from '@jianmanager/ui/lib/bot-health'
 import { cn } from '@jianmanager/ui'
 
 /** 健康段类型 → 配色（绿/琥珀/红/灰），用 FR-163 状态 token。 */

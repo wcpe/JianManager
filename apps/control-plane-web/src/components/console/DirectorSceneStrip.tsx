@@ -1,4 +1,4 @@
-import { DirectorSceneStrip as DirectorSceneStripView } from '@jianmanager/ui'
+import { DirectorSceneStrip as DirectorSceneStripView } from '@/components/views/console/DirectorSceneStrip'
 import { useDirectorStore } from '@/stores/director'
 
 /**
