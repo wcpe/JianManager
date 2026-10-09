@@ -116,8 +116,6 @@ export interface SchedulesPageViewProps {
   creating?: boolean
   /** 更新在途：禁用编辑弹窗的提交按钮。 */
   updating?: boolean
-  /** 危险操作（删除）是否放行：应用侧读角色等级后注入（组件库不持鉴权状态）。 */
-  dangerAllowed?: boolean
   /** 提交表单；`editingId` 为 null 表示创建。返回是否成功——成功才关窗。 */
   onSubmit: (form: ScheduleFormState, editingId: number | null) => Promise<boolean>
   /** 启用/停用切换上报（容器执行 PUT 并决定提示文案）。 */
@@ -395,7 +393,6 @@ export function SchedulesPageView({
   logsLoading = false,
   creating = false,
   updating = false,
-  dangerAllowed,
   onSubmit,
   onToggleEnabled,
   onDelete,
@@ -664,14 +661,13 @@ export function SchedulesPageView({
         onSubmit={(form) => (editing ? onSubmit(form, editing.id) : Promise.resolve(false))}
       />
 
-      {/* 删除二次确认：scope/allowed 语义与原页一致——scope 固定 group，是否放行由容器注入。 */}
+      {/* 删除二次确认：scope 固定 group，角色门禁由 DangerConfirm 自行读登录态判定。 */}
       <DangerConfirm
         open={deleteTarget !== null}
         title={t('schedules.deleteTitle', { name: deleteTarget?.name ?? '' })}
         description={t('schedules.deleteDesc')}
         confirmLabel={t('common.delete')}
         scope="group"
-        allowed={dangerAllowed}
         onConfirm={() => {
           if (!deleteTarget) return
           const target = deleteTarget

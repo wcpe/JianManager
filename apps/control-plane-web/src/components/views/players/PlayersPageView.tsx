@@ -637,8 +637,6 @@ export interface PlayersBansTabViewProps {
   activeOnly: boolean
   /** 筛选变更上报（容器写回并触发重新取数）。 */
   onActiveOnlyChange: (activeOnly: boolean) => void
-  /** 危险操作（解封）是否放行：应用侧读角色等级后注入（组件库不持鉴权状态）。 */
-  unbanAllowed?: boolean
   /** 解封上报；返回是否成功——成功才收起确认弹窗（失败保留弹窗便于重试，与原页一致）。 */
   onUnban: (name: string) => Promise<boolean>
 }
@@ -649,7 +647,6 @@ export function PlayersBansTabView({
   isLoading = false,
   activeOnly,
   onActiveOnlyChange,
-  unbanAllowed,
   onUnban,
 }: PlayersBansTabViewProps) {
   const { t } = useTranslation()
@@ -726,14 +723,13 @@ export function PlayersBansTabView({
         </div>
       )}
 
-      {/* 解封二次确认：scope 与原页一致（组级），allowed 由容器注入——不放宽、也不新增门禁。 */}
+      {/* 解封二次确认：scope 固定 group，角色门禁由 DangerConfirm 自行读角色等级判定。 */}
       <DangerConfirm
         open={pending !== null}
         title={t('players.unbanTitle')}
         description={t('players.unbanConfirm', { player: pending || '' })}
         confirmLabel={t('players.unban')}
         scope="group"
-        allowed={unbanAllowed}
         onConfirm={() => void doUnban()}
         onCancel={() => setPending(null)}
       />
@@ -901,8 +897,7 @@ export function PlayersWhitelistTabView({
  * - **留本组件**的纯 UI 状态：子服筛选与勾选集合、踢/封确认弹窗与原因草稿、事件面板的
  *  筛选/暂停快照/清空水位、解封待确认目标、白名单输入草稿——它们只影响本 Tab 的展示，
  *  且随 Tab 切换（区块按 Tab 条件挂载）重置，与原页一致；
- * - 解封的门禁语义不变：`DangerConfirm` 仍是 `scope="group"`，`unbanAllowed` 由容器
- *   读角色等级注入（包内不持鉴权状态，也不默认放行）。
+ * - 解封的门禁语义不变：`DangerConfirm` 仍是 `scope="group"`，自行读角色等级判定。
  */
 export interface PlayersPageViewProps {
   /** 当前 Tab（受控：容器据此门控各 Tab 的查询与订阅）。 */
@@ -937,8 +932,6 @@ export interface PlayersPageViewProps {
   bansActiveOnly: boolean
   /** 筛选变更上报。 */
   onBansActiveOnlyChange: (activeOnly: boolean) => void
-  /** 解封是否放行（容器读角色等级后注入）。 */
-  unbanAllowed?: boolean
   /** 解封上报；成功才收起确认弹窗。 */
   onUnban: (name: string) => Promise<boolean>
   /** 白名单的后端子服候选（容器按 `tab === 'whitelist'` 门控取数）。 */
@@ -984,7 +977,6 @@ export function PlayersPageView({
   bansLoading = false,
   bansActiveOnly,
   onBansActiveOnlyChange,
-  unbanAllowed,
   onUnban,
   whitelistBackends,
   whitelistInstanceId,
@@ -1046,7 +1038,6 @@ export function PlayersPageView({
           isLoading={bansLoading}
           activeOnly={bansActiveOnly}
           onActiveOnlyChange={onBansActiveOnlyChange}
-          unbanAllowed={unbanAllowed}
           onUnban={onUnban}
         />
       )}

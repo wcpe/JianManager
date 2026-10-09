@@ -91,8 +91,8 @@ export interface UsersPermissionsLinkArgs {
  *   据此回显服务端 message；
  * - **留本组件**的纯 UI 状态：三个对话框的开合与编辑目标、待删除确认目标、卡片/列表视图切换；
  * - **归容器**的受控状态：无——本页无过滤/分页等触发取数的状态（列表口径由容器查询决定）；
- * - **鉴权状态一律由容器注入**：`canManageUsers` 决定写入口是否可见（FR-432：平台管理员或
- *   持有 `user.manage`），`dangerAllowed` 决定平台级删除是否放行。包内不读登录态；
+ * - **鉴权状态由容器注入**：`canManageUsers` 决定写入口是否可见（FR-432：平台管理员或
+ *   持有 `user.manage`）；危险确认的角色门禁由 `DangerConfirm` 自行读登录态；
  * - 跳转 `/permissions?user=<id>` 走 `renderPermissionsLink` 插槽（缺省渲染原生 `<a href>`），
  *   包内不依赖 react-router。
  */
@@ -109,8 +109,6 @@ export interface UsersPageViewProps {
   updating?: boolean
   /** 撤销邀请在途：禁用撤销按钮。 */
   revoking?: boolean
-  /** 危险操作（删除用户）是否放行：应用侧读角色等级后注入（组件库不持鉴权状态）。 */
-  dangerAllowed: boolean
   /** 提示通道：新建用户成功的提示文案由容器弹（包内不弹 toast）。 */
   notify: CreateUserNotice
   /** 新建用户；失败请抛错，对话框取服务端 message 作内联提示。 */
@@ -140,7 +138,6 @@ export function UsersPageView({
   canManageUsers = false,
   updating = false,
   revoking = false,
-  dangerAllowed,
   notify,
   onCreateUser,
   onCreateInvitation,
@@ -401,7 +398,6 @@ export function UsersPageView({
         confirmLabel={t('common.delete')}
         confirmText={deleteTarget?.username}
         scope="platform"
-        allowed={dangerAllowed}
         onConfirm={() => {
           if (deleteTarget) onDeleteUser(deleteTarget.id)
           setDeleteTarget(null)

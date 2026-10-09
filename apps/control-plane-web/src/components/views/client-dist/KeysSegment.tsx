@@ -52,8 +52,6 @@ export interface KeysSegmentProps {
   keyMutating?: boolean
   /** 查看明文进行中（透传禁用态）。 */
   revealing?: boolean
-  /** 危险操作（吊销）是否放行：应用侧读角色等级后注入（组件库不持鉴权状态）。 */
-  dangerAllowed?: boolean
   /** 结果回执（容器注入 toast；组件库不依赖 toast 实现）。 */
   onNotify?: (level: 'success' | 'error', message: string) => void
 }
@@ -71,7 +69,6 @@ export function KeysSegment({
   onUpdateKey,
   keyMutating = false,
   revealing = false,
-  dangerAllowed,
   onNotify,
 }: KeysSegmentProps) {
   const { t } = useTranslation()
@@ -250,7 +247,6 @@ export function KeysSegment({
           '吊销不可恢复：使用此密钥的已分发客户端将无法再更新（拉取 manifest/制品一律被拒）。仅在确认该密钥不再服务于任何已发出的整合包时吊销。',
         )}
         scope="platform"
-        allowed={dangerAllowed}
         confirmLabel={t('clientChannels.revoke', '吊销')}
         onConfirm={() => revokeTarget && doRevoke(revokeTarget)}
         onCancel={() => setRevokeTarget(null)}

@@ -2,7 +2,6 @@
 import { useSearchParams } from 'react-router'
 import { useGroups, useCreateGroup, useUpdateGroup, useUpdateGroupQuota, useDeleteGroup } from '@/api/groups'
 import GroupMembersDialog from '@/components/groups/GroupMembersDialog'
-import { useDangerPermission } from '@/lib/shared/danger'
 import { GroupsPageView } from '@/components/views/users/GroupsPageView'
 import type { GroupPanel } from '@/components/views/users/GroupsPageView'
 
@@ -47,7 +46,6 @@ export default function GroupsPage() {
   }
 
   // 删除是平台级破坏操作：角色门禁在应用侧判定后注入（包内不持鉴权状态）。
-  const { allowed: dangerAllowed } = useDangerPermission('platform')
 
   return (
     <GroupsPageView
@@ -57,7 +55,6 @@ export default function GroupsPage() {
       activePanel={activePanel}
       onOpenPanel={openPanel}
       onClosePanel={closePanel}
-      dangerAllowed={dangerAllowed}
       creating={createGroup.isPending}
       updating={updateGroup.isPending || updateQuota.isPending}
       onCreateGroup={async (values) => {

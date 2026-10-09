@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import { RuntimeDriftAdoptButton, RuntimeDriftBadge, RuntimeDriftBanner } from '@/components/views/instances/RuntimeDriftNotice'
+import { loginMockUserAs } from '@/test/auth'
+import { Role } from '@/lib/shared/danger'
 
 /**
  * FR-471 运行态漂移提示 · 受控视图测（ADR-097）。
@@ -42,6 +44,12 @@ void testI18n.use(initReactI18next).init({
 function Wrapper({ children }: { children: ReactNode }) {
   return <I18nextProvider i18n={testI18n}>{children}</I18nextProvider>
 }
+
+// 面板内的危险操作确认按登录态角色判定（scope="group"）；未登录（role=null）一律落到越权态，
+// 输入框不渲染、确认按钮禁用。
+beforeEach(() => {
+  loginMockUserAs(Role.GroupAdmin)
+})
 
 describe('RuntimeDriftNotice（FR-471 · ADR-097）', () => {
   it('紧凑徽章带 PID 提示，且不含接管入口', () => {

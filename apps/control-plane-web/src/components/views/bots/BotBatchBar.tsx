@@ -37,8 +37,6 @@ export interface BotBatchBarProps {
   onBatch: (body: BotBatchBody) => Promise<{ succeeded: number; failed: number }>
   /** 批量进行中（容器注入 mutation pending）。 */
   batchPending?: boolean
-  /** 危险操作（批量删除）是否放行：应用侧读角色等级后注入（组件库不持鉴权状态）。 */
-  dangerAllowed?: boolean
   /** 结果回执（容器注入 toast；组件库不依赖 toast 实现）。 */
   onNotify?: (level: 'success' | 'error', message: string) => void
 }
@@ -55,7 +53,6 @@ export function BotBatchBar({
   onClear,
   onBatch,
   batchPending = false,
-  dangerAllowed,
   onNotify,
 }: BotBatchBarProps) {
   const { t } = useTranslation()
@@ -177,7 +174,6 @@ export function BotBatchBar({
         description={t('bots.batchDeleteConfirm', { count: totalSelected })}
         confirmLabel={t('bots.batchDelete')}
         scope="group"
-        allowed={dangerAllowed}
         onConfirm={() => {
           setConfirmDelete(false)
           runAll('delete')

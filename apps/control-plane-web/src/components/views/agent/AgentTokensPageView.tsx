@@ -209,8 +209,6 @@ export interface AgentTokensPageViewProps {
   isError: boolean
   /** 取数失败的一句话说明（容器取后端 message 或兜底文案后注入）。 */
   errorText?: string
-  /** 吊销是否放行：容器读角色等级后注入（组件库不持鉴权状态）。 */
-  revokeAllowed: boolean
   /** 提示通道：签发表单的本地校验提示经它上报（包内不弹 toast）。 */
   notify: AgentTokensNotice
   /** 能力候选项（容器注入应用侧 `CAPABILITY_OPTIONS`）。 */
@@ -324,14 +322,13 @@ function statusLevel(status: AgentTokenStatus): 'success' | 'warning' | 'danger'
  * Agent Token 管理页展示层（FR-387）。
  * 列表 / 新建 / 吊销三段；创建成功一次性展示明文 + 复制 env/命令片段。
  * 入口仅管理员可见（侧栏）+ 本页角色兜底 + 后端 RBAC，三重把关——本视图只呈现通过门禁后的内容，
- * 角色门禁由容器在挂载本视图前完成（非管理员不会渲染到这里），吊销确认的门禁经 `revokeAllowed` 注入。
+ * 角色门禁由容器在挂载本视图前完成（非管理员不会渲染到这里），吊销确认的门禁由 `DangerConfirm` 自行判定。
  */
 export function AgentTokensPageView({
   tokens,
   isLoading,
   isError,
   errorText,
-  revokeAllowed,
   notify,
   capabilityOptions,
   defaultCapabilities,
@@ -502,7 +499,7 @@ export function AgentTokensPageView({
         onClose={() => setIssuedPlain(null)}
       />
 
-      {/* 吊销二次确认：scope 与原页一致（平台级），allowed 由容器读角色注入；本视图不新增也不放宽门禁。 */}
+      {/* 吊销二次确认：scope 固定 platform，角色门禁由 DangerConfirm 自行读登录态判定。 */}
       <DangerConfirm
         open={revokeTarget != null}
         title={t('agentTokens.revokeTitle')}
@@ -510,7 +507,6 @@ export function AgentTokensPageView({
         confirmLabel={t('agentTokens.revoke')}
         confirmText={revokeTarget?.name}
         scope="platform"
-        allowed={revokeAllowed}
         pending={revoking}
         onConfirm={handleRevoke}
         onCancel={() => setRevokeTarget(null)}
