@@ -2,10 +2,12 @@
 /**
  * @file AgentTokensPageView：Agent Token 管理页的受控视图，列表取数、签发/吊销 mutation、候选数据取数与 toast 由应用容器负责。
  * @input Panel/Button/Input/Label/Badge/Checkbox/StatusBadge/Table/Dialog 原语、layout 页壳（PageShell/PageHeader）、
+ *        lib/virtual-list（useVirtualRows：候选项千级时只渲染窗口内的行）、
  *        视图层 DangerConfirm（吊销二次确认）、lib/clipboard（复制）、lucide-react 图标、翻译上下文
  * @output AgentTokensPageView、AgentTokensPageViewProps、AgentTokenRow、AgentTokenStatus、AgentTokenOption、
  *         AgentTokenInstanceOption、AgentTokenNodeOption、AgentTokenIssuePayload、IssuedAgentTokenPlain、
- *         AgentTokensNotice、parseIdInput、mergeIds、formatScopeSummary
+ *         AgentTokensNotice、AgentTokenInstanceCandidateView、AgentTokenInstanceCandidateViewProps、
+ *         parseIdInput、mergeIds、formatScopeSummary
  * @sync apps/control-plane-web/src/pages/AgentTokensPage.tsx（容器，再导出三个纯函数）、
  *        apps/control-plane-web/src/pages/AgentTokensPage.dom.test.tsx
  * @since FR-502（组件受控化迁包；原页 FR-387 Agent Token 管理，消费 FR-384 API）
@@ -40,6 +42,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
 
 /** 解析逗号/空格分隔的正整数 ID 列表。 */
 export function parseIdInput(raw: string): number[] {
@@ -217,8 +220,17 @@ export interface AgentTokensPageViewProps {
   defaultCapabilities: readonly string[]
   /** V1 写白名单展示映射（容器注入应用侧 `WRITE_ALLOWLIST_OPTIONS`）。 */
   writeAllowlistOptions: readonly AgentTokenOption[]
-  /** 实例候选（容器注入，可为空）。 */
-  instanceOptions?: AgentTokenInstanceOption[]
+  /**
+   * 实例候选窗口（容器按服务端搜索注入：默认前 N 条 + 键入下发 `q`，可为空）。
+   *
+   * 千级实例（大档 1200）不得一次拉全量再在弹窗里铺开；候选窗口与总数由容器向服务端要，
+   * 本视图只渲染窗口内的行（见 AgentTokenInstanceCandidateView）。
+   */
+  instanceCandidates?: AgentTokenInstanceOption[]
+  /** 实例候选总数（服务端返回），用于候选区的截断提示；不给则不提示。 */
+  instanceCandidateTotal?: number
+  /** 实例候选键入上报（容器做 300ms 防抖后下发服务端 `q`）。 */
+  onInstanceQueryChange?: (keyword: string) => void
   /** 节点候选（容器注入，可为空；容器只在签发对话框打开时取）。 */
   nodeOptions?: AgentTokenNodeOption[]
   /**
@@ -333,7 +345,9 @@ export function AgentTokensPageView({
   capabilityOptions,
   defaultCapabilities,
   writeAllowlistOptions,
-  instanceOptions,
+  instanceCandidates,
+  instanceCandidateTotal,
+  onInstanceQueryChange,
   nodeOptions,
   onCreateDialogOpenChange,
   onIssue,
@@ -474,7 +488,9 @@ export function AgentTokensPageView({
         open={showCreate}
         capabilityOptions={capabilityOptions}
         defaultCapabilities={defaultCapabilities}
-        instanceOptions={instanceOptions}
+        instanceCandidates={instanceCandidates}
+        instanceCandidateTotal={instanceCandidateTotal}
+        onInstanceQueryChange={onInstanceQueryChange}
         nodeOptions={nodeOptions}
         notify={notify}
         onClose={() => setShowCreate(false)}
@@ -515,6 +531,133 @@ export function AgentTokensPageView({
   )
 }
 
+/** 候选行高（px）。虚拟化按它等距定位，故行内只留内边距、不加外边距（同 NetworkInstancePickerView 的取舍）。 */
+const INSTANCE_CAND_ROW_HEIGHT = 36
+
+/**
+ * 实例候选选择器（多选）：服务端搜索 + 虚拟化勾选列表 + 截断提示 + 已选回显。
+ *
+ * 【为什么不是单选 `InstancePicker`】本表单要「勾选多个实例 → 与手输 ID 合并后签发」的批量语义，
+ * 单选 Combobox 无法表达。两者共享同一取舍：候选一律走服务端搜索——实例数是千级（大档 1200），
+ * 原先「容器拉全量 `/instances` → 弹窗里一次性挂 1200 × 4 个元素（label/Checkbox/span/Badge）」既让
+ * 页面一挂载就付整份列表的代价，也让弹窗每次渲染都把整份列表求值一遍。
+ *
+ * 候选窗口与总数由容器按服务端搜索结果注入；键入经 `onQueryChange` 上报（防抖与请求都在容器——
+ * 那是「何时发请求」的应用侧策略）。本组件只做三件本地事：维护搜索框草稿、按窗口虚拟化渲染、
+ * 记下已勾选实例的展示名（候选窗口随键入变化，已选项可能不在窗口内——不记名字就只能回显裸 id）。
+ */
+export interface AgentTokenInstanceCandidateViewProps {
+  /** 候选窗口（容器取数注入）；缺省按空候选渲染。 */
+  items?: AgentTokenInstanceOption[]
+  /** 候选总数（服务端返回），用于截断提示。 */
+  total?: number
+  /** 已勾选的实例 id（受控：与「已勾选 N 个实例」计数同源，由对话框持有）。 */
+  selected: number[]
+  /** 勾选变更上报。 */
+  onToggle: (id: number, on: boolean) => void
+  /** 键入关键字上报（容器做 300ms 防抖后下发服务端 `q`）。 */
+  onQueryChange: (keyword: string) => void
+}
+
+/** 实例候选选择器：搜索框 + 虚拟化勾选列表 + 截断提示 + 已选回显。 */
+export function AgentTokenInstanceCandidateView({
+  items,
+  total,
+  selected,
+  onToggle,
+  onQueryChange,
+}: AgentTokenInstanceCandidateViewProps) {
+  const { t } = useTranslation()
+  // 搜索框草稿（纯展示态）：关键字原样上报，防抖与请求由容器负责。
+  const [keyword, setKeyword] = useState('')
+  // 已勾选实例的展示名（勾选当时从候选行记下）。
+  const [names, setNames] = useState<Record<number, string>>({})
+  const list = items ?? []
+
+  // 已选态改 Set：候选行按 selected.includes(id) 判断时，勾选累积后会随窗口渲染变成热点。
+  const selectedSet = useMemo(() => new Set(selected), [selected])
+  /** 服务端截断时提示继续输入缩小范围（按服务端窗口判定，与已勾选多少无关）。 */
+  const truncated = total !== undefined && total > list.length
+
+  const toggle = (inst: AgentTokenInstanceOption, on: boolean) => {
+    if (on) setNames((prev) => (prev[inst.id] === inst.name ? prev : { ...prev, [inst.id]: inst.name }))
+    onToggle(inst.id, on)
+  }
+
+  const { containerRef, onScroll, range, totalSize } = useVirtualRows({
+    total: list.length,
+    itemSize: INSTANCE_CAND_ROW_HEIGHT,
+    overscan: 8,
+  })
+
+  // 过滤收窄后回到顶部：候选骤短时，上一轮的 scrollOffset 会让窗口落到列表之外（空窗一帧）。
+  useEffect(() => {
+    if (containerRef.current) containerRef.current.scrollTop = 0
+  }, [keyword, containerRef])
+
+  return (
+    <div className="space-y-1">
+      <Input
+        value={keyword}
+        onChange={(e) => {
+          setKeyword(e.target.value)
+          onQueryChange(e.target.value)
+        }}
+        placeholder={t('agentTokens.field.instanceSearch')}
+        aria-label={t('agentTokens.field.instanceSearch')}
+        className="h-8 text-xs"
+      />
+      {truncated && (
+        <p className="text-[11px] text-muted-foreground">
+          {t('common.searchTruncated', { shown: list.length, total: total ?? 0 })}
+        </p>
+      )}
+      {/* 已选回显：候选窗口之外（键入收窄后）的已选项也在这里显示，否则勾了什么就看不见了。 */}
+      {selected.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">
+            {t('agentTokens.field.instancesSelected', { count: selected.length })}
+          </span>
+          {selected.map((id) => (
+            <Badge key={id} variant="secondary" className="text-[10px]">
+              {names[id] ? `#${id} ${names[id]}` : `#${id}`}
+            </Badge>
+          ))}
+        </div>
+      )}
+      <div ref={containerRef} onScroll={onScroll} className="max-h-36 overflow-y-auto rounded-md border p-1">
+        {list.length === 0 ? (
+          <p className="px-2 py-3 text-center text-xs text-muted-foreground">{t('agentTokens.field.noInstances')}</p>
+        ) : (
+          // 虚拟化：外层撑起总高，内层按 range.before 平移，只渲染窗口内的行。
+          <div className="relative" style={{ height: totalSize }}>
+            <ul style={{ transform: `translateY(${range.before}px)` }}>
+              {list.slice(range.start, range.end).map((inst) => (
+                <li key={inst.id} className="h-9">
+                  <label className="flex h-full cursor-pointer items-center gap-2 rounded px-1 text-sm hover:bg-muted/60">
+                    {/* aria-label 落在 Checkbox（可聚焦元素）上，读屏取到的名字不受行内其它文本影响。 */}
+                    <Checkbox
+                      checked={selectedSet.has(inst.id)}
+                      onCheckedChange={(v) => toggle(inst, v === true)}
+                      aria-label={inst.name}
+                    />
+                    <span className="truncate">
+                      #{inst.id} {inst.name}
+                    </span>
+                    <Badge variant="secondary" className="ml-auto text-[10px]">
+                      {inst.status}
+                    </Badge>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /**
  * 新建 Token 对话框（视图内部件）：表单草稿与开合都由宿主视图持有。
  *
@@ -525,7 +668,9 @@ function CreateAgentTokenDialog({
   open,
   capabilityOptions,
   defaultCapabilities,
-  instanceOptions,
+  instanceCandidates,
+  instanceCandidateTotal,
+  onInstanceQueryChange,
   nodeOptions,
   notify,
   onClose,
@@ -534,7 +679,9 @@ function CreateAgentTokenDialog({
   open: boolean
   capabilityOptions: readonly AgentTokenOption[]
   defaultCapabilities: readonly string[]
-  instanceOptions?: AgentTokenInstanceOption[]
+  instanceCandidates?: AgentTokenInstanceOption[]
+  instanceCandidateTotal?: number
+  onInstanceQueryChange?: (keyword: string) => void
   nodeOptions?: AgentTokenNodeOption[]
   notify: AgentTokensNotice
   onClose: () => void
@@ -571,8 +718,9 @@ function CreateAgentTokenDialog({
     if (!next) onClose()
   }
 
-  const toggleId = (list: number[], id: number, set: (v: number[]) => void) => {
-    set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id])
+  /** 勾选变更：按 `on` 精确增删（两个候选区都把它当受控组件用，勾选状态由本对话框持有）。 */
+  const toggleId = (list: number[], id: number, on: boolean, set: (v: number[]) => void) => {
+    set(on ? (list.includes(id) ? list : [...list, id]) : list.filter((x) => x !== id))
   }
 
   const toggleCapability = (value: string) => {
@@ -610,12 +758,12 @@ function CreateAgentTokenDialog({
     }
   }
 
-  // 千级实例只在弹窗打开时才展开。本组件是**常驻挂载**的（调用处写 `<CreateAgentTokenDialog open={...} />`
-  // 而非 `{open && ...}`），而 Radix 的 DialogContent 关闭时虽不挂 DOM，**其 children 仍会在每次
-  // render 求值**——不设门控时，每次渲染都会凭空创建 1200 个实例 × 4 个元素（label/Checkbox/span/Badge）
-  // 的 React 元素对象（且 Checkbox 是带 Context 的复合控件，比普通元素更贵）。
-  const instList = useMemo(() => (open ? (instanceOptions ?? []) : []), [open, instanceOptions])
-  // 节点候选由容器按「对话框已打开」门控取数，未取到时为空数组（门控语义见 AgentTokensPageViewProps）。
+  /**
+   * 实例候选已改为服务端搜索（候选窗口 ≤ CANDIDATE_LIMIT 条），故原先「弹窗关闭时把千级列表置空」
+   * 的 memo 门控不再必要：`.map()` 现在发生在子组件 AgentTokenInstanceCandidateView 内部，
+   * 而 Radix 的 DialogContent 关闭时连 children 都不渲染，元素创建成本随之消失。
+   * 节点候选由容器按「对话框已打开」门控取数，未取到时为空数组（门控语义见 AgentTokensPageViewProps）。
+   */
   const nodeList = nodeOptions ?? []
 
   return (
@@ -647,26 +795,14 @@ function CreateAgentTokenDialog({
             <div className="space-y-1.5">
               <Label>{t('agentTokens.field.instances')}</Label>
               <p className="text-xs text-muted-foreground">{t('agentTokens.field.instancesHint')}</p>
-              <div className="max-h-36 space-y-1 overflow-y-auto rounded-md border p-2">
-                {instList.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">{t('agentTokens.field.noInstances')}</p>
-                ) : (
-                  instList.map((inst) => (
-                    <label key={inst.id} className="flex cursor-pointer items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={selectedInst.includes(inst.id)}
-                        onCheckedChange={() => toggleId(selectedInst, inst.id, setSelectedInst)}
-                      />
-                      <span className="truncate">
-                        #{inst.id} {inst.name}
-                      </span>
-                      <Badge variant="secondary" className="ml-auto text-[10px]">
-                        {inst.status}
-                      </Badge>
-                    </label>
-                  ))
-                )}
-              </div>
+              {/* 千级实例：候选走服务端搜索（默认前 N 条 + 键入 300ms 防抖下发 q）+ 虚拟化渲染。 */}
+              <AgentTokenInstanceCandidateView
+                items={instanceCandidates}
+                total={instanceCandidateTotal}
+                selected={selectedInst}
+                onToggle={(id, on) => toggleId(selectedInst, id, on, setSelectedInst)}
+                onQueryChange={(kw) => onInstanceQueryChange?.(kw)}
+              />
               <Input
                 value={instIdsText}
                 onChange={(e) => setInstIdsText(e.target.value)}
@@ -686,7 +822,7 @@ function CreateAgentTokenDialog({
                     <label key={node.id} className="flex cursor-pointer items-center gap-2 text-sm">
                       <Checkbox
                         checked={selectedNode.includes(node.id)}
-                        onCheckedChange={() => toggleId(selectedNode, node.id, setSelectedNode)}
+                        onCheckedChange={(v) => toggleId(selectedNode, node.id, v === true, setSelectedNode)}
                       />
                       <span className="truncate">
                         #{node.id} {node.name}

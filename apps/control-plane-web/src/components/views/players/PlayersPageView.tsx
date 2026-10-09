@@ -2,11 +2,13 @@
  * @file PlayersPageView：玩家管理页（在线玩家 / 实时事件 / 封禁记录 / 白名单四个 Tab）的受控视图，
  *       取数、SSE 订阅、写动作与 toast 由应用容器负责。
  * @input lib/player（OnlinePlayersResult / OnlinePlayer / BanRecord / WhitelistResult）、
- *        lib/instance-types（InstanceInfo：实时事件与白名单两处实例选择器的候选）、
+ *        lib/instance-types（InstanceInfo：两个实例选择器透传给容器的选中对象）、
+ *        views/instances/InstancePicker（千级实例的服务端搜索选择器，本体受控、不取数）、
  *        views/DangerConfirm（解封二次确认）、Button/Dialog/Input/Label/Select/Checkbox/Table/
  *        PageShell/PageHeader 等原语、翻译上下文
  * @output PlayersPageView、PlayersPageViewProps、PlayerTab、PlayerActionKind、PlayerActionRequest、
- *         PlayerEventType、PlayerEventRow、RosterEntry、PlayersOnlineTabView、PlayersOnlineTabViewProps、
+ *         PlayerEventType、PlayerEventRow、RosterEntry、PlayersInstancePickerInjection、
+ *         PlayersOnlineTabView、PlayersOnlineTabViewProps、
  *         PlayersLiveTabView、PlayersLiveTabViewProps、PlayersBansTabView、PlayersBansTabViewProps、
  *         PlayersWhitelistTabView、PlayersWhitelistTabViewProps
  * @sync apps/control-plane-web/src/pages/PlayersPage.tsx（容器）、apps/control-plane-web/src/pages/PlayersPage.dom.test.tsx
@@ -43,6 +45,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
+import { InstancePicker } from '@/components/views/instances/InstancePicker'
 import type { InstanceInfo } from '@/lib/instances/instance-types'
 import type { BanRecord, OnlinePlayer, OnlinePlayersResult, WhitelistResult } from '@/lib/players/player'
 
@@ -424,6 +427,30 @@ export function PlayersOnlineTabView({
 // ── 实时事件 ──
 
 /**
+ * 实例选择器的注入契约：本视图**不取数**——候选窗口、总数、当前值展示名由容器按服务端搜索结果注入，
+ * 键入关键字经 `onQueryChange` 上报（防抖与请求都由容器负责：那是「何时发请求」的策略）。
+ *
+ * 【为什么不再用 Radix Select】原先两个 Tab 都是「容器拉全量 `/instances` → map 成 SelectItem」。
+ * 实例数是千级（大档 1200，约 1MB/轮，且 `useInstances` 带 30 秒兜底轮询，每轮重传整份）；
+ * 而 Select 依赖全部 SelectItem mount 才能提供首字母跳转与方向键导航，无法只渲染前 N 项。
+ * 现改用 views/instances/InstancePicker（Popover + 有界渲染 + 服务端搜索），候选默认窗口
+ * `CANDIDATE_LIMIT` 条，截断时提示继续输入。
+ */
+export interface PlayersInstancePickerInjection {
+  /** 候选窗口（服务端已按名排序并截断；未取到时为空）。容器按 `useInstanceSearch` 的结果注入，
+   *  故元素是完整实例对象——选择器把它原样回传给 `onChange`，调用方无需再查一次列表。 */
+  items?: InstanceInfo[]
+  /** 候选总数（服务端返回），用于截断提示；不给则不提示。 */
+  total?: number
+  /** 当前值的展示名：候选窗口随键入变化，已选项可能不在窗口内，缺它会退化成显示裸 id。 */
+  valueLabel?: string
+  /** 无任何可选实例时禁用触发器（容器按服务端 total 判定，而非按当前候选窗口——否则键入无结果就再也改不回来）。 */
+  disabled?: boolean
+  /** 键入关键字上报（容器做 300ms 防抖后下发服务端 `q`）。 */
+  onQueryChange: (keyword: string) => void
+}
+
+/**
  * 实时事件 Tab 的注入契约：SSE 订阅（探针连接状态、实时名册、事件流）**留在容器**——
  * 它是长驻订阅副作用，不属展示层；本组件只呈现订阅结果。
  *
@@ -431,12 +458,12 @@ export function PlayersOnlineTabView({
  * 事件筛选、暂停快照与「清空」水位只影响本面板的展示，留本组件。
  */
 export interface PlayersLiveTabViewProps {
-  /** 可选实例候选（子服与代理都可选：Bukkit 探针报本服 join/quit/chat，BC 探针报跨服路由）。 */
-  instances: InstanceInfo[]
+  /** 实例选择器的候选与回显契约（容器按服务端搜索注入；子服与代理都可选）。 */
+  picker: PlayersInstancePickerInjection
   /** 当前订阅目标实例 id（容器已解析「未选即首个」）；null 表示无候选。 */
   instanceId: number | null
-  /** 切换订阅目标上报。 */
-  onInstanceChange: (id: number) => void
+  /** 切换订阅目标上报（值域与 InstancePicker 的 onChange 一致）；第二参数是选中实例（候选窗口内查不到时为 undefined）。 */
+  onInstanceChange: (id: number | null, instance?: InstanceInfo) => void
   /** 探针是否在位连接（false 时降级提示）。 */
   connected: boolean
   /** 实时在线名册（探针在位时由事件流维护）。 */
@@ -450,7 +477,7 @@ export interface PlayersLiveTabViewProps {
  * 探针未连入时降级提示。子服与代理实例都可选（Bukkit 探针报本服 join/quit/chat，BC 探针报跨服路由）。
  */
 export function PlayersLiveTabView({
-  instances,
+  picker,
   instanceId,
   onInstanceChange,
   connected,
@@ -479,22 +506,19 @@ export function PlayersLiveTabView({
     <div>
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm font-medium">{t('players.liveSelectInstance')}</label>
-        <Select
-          value={instanceId === null ? '' : String(instanceId)}
-          onValueChange={(v) => onInstanceChange(Number(v))}
-          disabled={instances.length === 0}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder={t('players.noBackends')} />
-          </SelectTrigger>
-          <SelectContent>
-            {instances.map((i) => (
-              <SelectItem key={i.id} value={String(i.id)}>
-                {i.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* 千级实例：候选走服务端搜索（默认前 N 条 + 键入 300ms 防抖下发 q），不再全量列举。 */}
+        <InstancePicker
+          className="flex-1"
+          ariaLabel={t('players.liveSelectInstance')}
+          value={instanceId}
+          valueLabel={picker.valueLabel}
+          items={picker.items}
+          total={picker.total}
+          disabled={picker.disabled}
+          onChange={onInstanceChange}
+          onQueryChange={picker.onQueryChange}
+          placeholder={t('players.noBackends')}
+        />
       </div>
 
       {instanceId === null ? (
@@ -745,12 +769,12 @@ export function PlayersBansTabView({
  * 添加输入草稿随本 Tab 卸载而清空，留本组件。
  */
 export interface PlayersWhitelistTabViewProps {
-  /** 后端子服候选（白名单是实例原生能力，代理实例不支持）。 */
-  backends: InstanceInfo[]
+  /** 后端子服选择器的候选与回显契约（容器按服务端搜索注入，已按 role=backend 收窄）。 */
+  picker: PlayersInstancePickerInjection
   /** 当前查询实例 id（容器已解析「未选即首个」）；null 表示无候选。 */
   instanceId: number | null
-  /** 切换查询目标上报（容器写回并触发重新取数）。 */
-  onInstanceChange: (id: number) => void
+  /** 切换查询目标上报（容器写回并触发重新取数）；第二参数是选中实例（候选窗口内查不到时为 undefined）。 */
+  onInstanceChange: (id: number | null, instance?: InstanceInfo) => void
   /** 白名单查询结果。 */
   whitelist?: WhitelistResult
   /** 查询加载态。 */
@@ -769,7 +793,7 @@ export interface PlayersWhitelistTabViewProps {
 
 /** 白名单 Tab（FR-054 / FR-067）：单后端白名单的查看、添加与移除，含探针不可达与查询失败的降级。 */
 export function PlayersWhitelistTabView({
-  backends,
+  picker,
   instanceId,
   onInstanceChange,
   whitelist,
@@ -795,22 +819,19 @@ export function PlayersWhitelistTabView({
     <div>
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm font-medium">{t('players.selectBackend')}</label>
-        <Select
-          value={instanceId === null ? '' : String(instanceId)}
-          onValueChange={(v) => onInstanceChange(Number(v))}
-          disabled={backends.length === 0}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder={t('players.noBackends')} />
-          </SelectTrigger>
-          <SelectContent>
-            {backends.map((b) => (
-              <SelectItem key={b.id} value={String(b.id)}>
-                {b.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* 白名单是实例原生能力（代理不支持），故候选由容器按 role=backend 服务端搜索注入。 */}
+        <InstancePicker
+          className="flex-1"
+          ariaLabel={t('players.selectBackend')}
+          value={instanceId}
+          valueLabel={picker.valueLabel}
+          items={picker.items}
+          total={picker.total}
+          disabled={picker.disabled}
+          onChange={onInstanceChange}
+          onQueryChange={picker.onQueryChange}
+          placeholder={t('players.noBackends')}
+        />
       </div>
 
       {instanceId === null ? (
@@ -883,12 +904,14 @@ export function PlayersWhitelistTabView({
  *
  * 受控边界：
  * - 四块数据（在线名册 / 实时事件三件套 / 封禁记录 / 白名单）经 props 注入，容器调用
- *   `useOnlinePlayers` / `usePlayerEvents` / `useBans` / `useWhitelist` / `useInstances` 取数；
+ *   `useOnlinePlayers` / `usePlayerEvents` / `useBans` / `useWhitelist` / `useInstanceSearch` 取数；
+ *   两个实例选择器的候选走**服务端搜索**（千级实例不得全量列举）：窗口与总数经
+ *   `livePicker` / `whitelistPicker` 注入，键入经各自的 `onQueryChange` 上报给容器防抖下发 `q`；
  * - 写动作（踢/封、解封、白名单增删）以回调上报，其中解封与白名单添加回传 `Promise<boolean>`，
  *   由本组件据返回值决定是否收起弹窗/清空输入；mutation、结果 toast 由容器决定；
  * - **归容器**的受控状态（都是「会触发取数/换订阅」的查询语义）：
  *   ① `tab` —— 原先四个 Tab 的内容组件各自挂载，未激活即不取数（在线名册还带 10s 轮询、
- *      两个实例选择器会打 `/instances`）；视图受控化后 hook 归容器，改用 `enabled` 开关
+ *      两个实例选择器会打实例列表）；视图受控化后 hook 归容器，改用 `enabled` 开关
  *      保住同一时机，tab 因此成为「会触发取数的状态」；
  *   ② `bansActiveOnly` —— `useBans` 的查询参数；
  *   ③ `whitelistInstanceId` —— `useWhitelist` / `useWhitelistAction` 的查询键与作用域；
@@ -912,12 +935,12 @@ export interface PlayersPageViewProps {
   playerActionPending?: boolean
   /** 踢出/封禁上报（容器循环提交并汇总 succeeded/failed 文案）。 */
   onPlayerAction: (request: PlayerActionRequest) => Promise<void>
-  /** 实时事件 Tab 的实例候选（容器按 `tab === 'live'` 门控取数）。 */
-  liveInstances: InstanceInfo[]
+  /** 实时事件 Tab 的实例候选与键入上报（容器按 `tab === 'live'` 门控的服务端搜索注入）。 */
+  livePicker: PlayersInstancePickerInjection
   /** 实时事件的订阅目标实例 id（容器解析「未选即首个」）；null 表示无候选。 */
   liveInstanceId: number | null
   /** 订阅目标切换上报（容器换订阅）。 */
-  onLiveInstanceChange: (id: number) => void
+  onLiveInstanceChange: (id: number | null, instance?: InstanceInfo) => void
   /** 探针是否在位连接（降级提示用）。 */
   probeConnected: boolean
   /** 实时在线名册（订阅结果，由容器注入）。 */
@@ -934,12 +957,12 @@ export interface PlayersPageViewProps {
   onBansActiveOnlyChange: (activeOnly: boolean) => void
   /** 解封上报；成功才收起确认弹窗。 */
   onUnban: (name: string) => Promise<boolean>
-  /** 白名单的后端子服候选（容器按 `tab === 'whitelist'` 门控取数）。 */
-  whitelistBackends: InstanceInfo[]
+  /** 白名单的后端子服候选与键入上报（容器按 `tab === 'whitelist'` 门控的服务端搜索注入）。 */
+  whitelistPicker: PlayersInstancePickerInjection
   /** 白名单查询目标实例 id（容器解析「未选即首个」）；null 表示无候选。 */
   whitelistInstanceId: number | null
   /** 查询目标切换上报。 */
-  onWhitelistInstanceChange: (id: number) => void
+  onWhitelistInstanceChange: (id: number | null, instance?: InstanceInfo) => void
   /** 白名单查询结果。 */
   whitelist?: WhitelistResult
   /** 查询加载态。 */
@@ -967,7 +990,7 @@ export function PlayersPageView({
   onlineLoading = false,
   playerActionPending = false,
   onPlayerAction,
-  liveInstances,
+  livePicker,
   liveInstanceId,
   onLiveInstanceChange,
   probeConnected,
@@ -978,7 +1001,7 @@ export function PlayersPageView({
   bansActiveOnly,
   onBansActiveOnlyChange,
   onUnban,
-  whitelistBackends,
+  whitelistPicker,
   whitelistInstanceId,
   onWhitelistInstanceChange,
   whitelist,
@@ -1024,7 +1047,7 @@ export function PlayersPageView({
       )}
       {tab === 'live' && (
         <PlayersLiveTabView
-          instances={liveInstances}
+          picker={livePicker}
           instanceId={liveInstanceId}
           onInstanceChange={onLiveInstanceChange}
           connected={probeConnected}
@@ -1043,7 +1066,7 @@ export function PlayersPageView({
       )}
       {tab === 'whitelist' && (
         <PlayersWhitelistTabView
-          backends={whitelistBackends}
+          picker={whitelistPicker}
           instanceId={whitelistInstanceId}
           onInstanceChange={onWhitelistInstanceChange}
           whitelist={whitelist}

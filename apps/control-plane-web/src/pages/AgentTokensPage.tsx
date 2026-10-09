@@ -8,8 +8,10 @@ import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth'
 import { useAgentTokens, useIssueAgentToken, useRevokeAgentToken, agentTokenStatus, WRITE_ALLOWLIST_OPTIONS, CAPABILITY_OPTIONS, DEFAULT_CAPABILITIES } from '@/api/agentTokens'
 import { mcpBaseUrl } from '@/api/agentObservability'
-import { useInstances } from '@/api/instances'
+import { useInstanceSearch } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
+import { useDebounced } from '@/lib/hooks/use-debounced'
+import { CANDIDATE_LIMIT } from '@/components/views/instances/InstancePicker'
 import { Button } from '@jianmanager/ui/components/button'
 import { AgentTokensPageView } from '@/components/views/agent/AgentTokensPageView'
 import type { AgentTokenRow } from '@/components/views/agent/AgentTokensPageView'
@@ -49,11 +51,22 @@ export default function AgentTokensPage() {
   const issue = useIssueAgentToken()
   const revoke = useRevokeAgentToken()
 
-  // 签发对话框的开合状态归视图持有；这里只接收「已打开」的单向通知，用于把节点候选查询
-  // 收敛到与原页相同的取数时机（原页 `useNodes({ enabled: open })`：只在弹窗打开时才请求节点列表）。
+  // 签发对话框的开合状态归视图持有；这里只接收「已打开」的单向通知，用于把节点与实例候选查询
+  // 都收敛到同一取数时机（节点沿用原页 `useNodes({ enabled: open })`；实例候选见下）。
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
-  // 实例候选：原页在弹窗打开前就已随页面取数（`useInstances()` 无门控），故保持同一时机与全量口径。
-  const { data: instances } = useInstances(undefined, isPlatformAdmin)
+  /**
+   * 实例候选：改为服务端搜索（默认前 CANDIDATE_LIMIT 条 + 键入 300ms 防抖下发 `q`）。
+   *
+   * 原页是 `useInstances()` 无门控地随页面取数、并在弹窗里把整份列表（千级：大档 1200）铺成勾选项，
+   * 等于页面一挂载就付约 1MB 的整份列表，且每次渲染都要把 1200 × 4 个元素求值一遍；现按同一时机
+   * 收敛到「弹窗已打开」，候选窗口与总数由服务端给，视图只渲染窗口内的行。
+   */
+  const [instKeyword, setInstKeyword] = useState('')
+  const instQ = useDebounced(instKeyword, 300).trim()
+  const { data: instPage } = useInstanceSearch(
+    { ...(instQ ? { q: instQ } : {}), page: 1, pageSize: CANDIDATE_LIMIT, sort: 'name', order: 'asc' },
+    isPlatformAdmin && createDialogOpen,
+  )
   const { data: nodes } = useNodes({ enabled: isPlatformAdmin && createDialogOpen })
 
   if (!isPlatformAdmin) {
@@ -84,9 +97,18 @@ export default function AgentTokensPage() {
       capabilityOptions={CAPABILITY_OPTIONS}
       defaultCapabilities={DEFAULT_CAPABILITIES}
       writeAllowlistOptions={WRITE_ALLOWLIST_OPTIONS}
-      instanceOptions={instances}
+      instanceCandidates={instPage?.items}
+      instanceCandidateTotal={instPage?.total}
+      onInstanceQueryChange={setInstKeyword}
       nodeOptions={nodes}
-      onCreateDialogOpenChange={setCreateDialogOpen}
+      onCreateDialogOpenChange={(open) => {
+        // 关键字归容器持有、搜索框草稿归视图，而搜索框在弹窗关闭时随视图卸载：
+        // 不归零就会出现「框是空的、候选却仍被上次的关键字过滤」。
+        // 但本回调在父级每次渲染都会被视图的 effect 重放一次（prop 是新函数引用），
+        // 故只在**关闭→打开**这一跳归零，否则会把用户正在输入的关键字反复清掉。
+        if (open && !createDialogOpen) setInstKeyword('')
+        setCreateDialogOpen(open)
+      }}
       mcpUrl={mcpBaseUrl()}
       onCopyResult={(ok) => {
         if (ok) toast.success(t('agentTokens.copied'))

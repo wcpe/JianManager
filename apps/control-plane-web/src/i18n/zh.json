@@ -3196,6 +3196,8 @@
       "namePlaceholder": "如：ci-prod-ops / cursor-dev",
       "instances": "实例 Scope",
       "instancesHint": "勾选可访问实例，或在下方手动输入 ID（逗号/空格分隔）。空 = 未授权任何实例。",
+      "instanceSearch": "输入实例名筛选",
+      "instancesSelected": "已勾选 {{count}} 个实例",
       "instanceIds": "实例 ID 输入",
       "noInstances": "暂无实例",
       "nodes": "节点 Scope",
