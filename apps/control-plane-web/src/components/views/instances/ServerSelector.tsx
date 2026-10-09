@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Search, Server, Star, X } from 'lucide-react'
 
 import { useVirtualRows } from '@/lib/shared/virtual-list'
-import { cn } from '@jianmanager/ui'
+import { cn, useFocusTrap } from '@jianmanager/ui'
 import type { HoverPrefetcher, StoredInstance } from '@/lib/console/server-selection'
 
 /** 选择器行所需的实例最小信息（外壳可传结构兼容的更宽类型）。 */
@@ -90,6 +90,27 @@ export default function ServerSelector({
   })
   const visibleRows = rows.slice(range.start, range.end)
 
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // 键盘可达性（FR-496）：弹层此前只有 `role="dialog" aria-modal="true"` 两个声明，
+  // 却没有配套的键盘与焦点管理——Esc 关不掉（只能点遮罩或关闭按钮），Tab 能一路跑到
+  // 遮罩背后的侧栏与页眉，且屏读器仍读得到背景内容（ARIA 承诺了模态却没兑现）。
+  // 这里接上共享焦点陷阱：Esc 交给 onOpenChange，Tab 在弹层内首尾环绕，关闭时还原焦点。
+  // 陷阱边界取面板本身（而非遮罩）：遮罩只是点击热区、不含可聚焦内容。
+  const { containerRef: dialogRef } = useFocusTrap<HTMLDivElement>({
+    isActive: open,
+    onEscape: () => onOpenChange(false),
+  })
+
+  // 打开后把焦点交给搜索框（呼出即可打字，与命令面板一致；陷阱的 focusFirst() 会落在
+  // 关闭按钮上，那不是本弹层的主入口）。
+  // 必须声明在 useFocusTrap 之后：陷阱要先记下「打开前的焦点」（触发按钮）作为还原点，
+  // 若抢在它之前把焦点移进弹层，还原点就变成随后会被卸载的搜索框，关闭时焦点会掉到 body。
+  useEffect(() => {
+    if (!open) return
+    searchInputRef.current?.focus()
+  }, [open])
+
   return (
     <>
       <button
@@ -107,6 +128,7 @@ export default function ServerSelector({
       {open && createPortal(
         <div className="fixed inset-0 z-[58] flex items-start justify-center bg-black/45 p-4 pt-[10vh]" role="presentation" onClick={() => onOpenChange(false)}>
           <div
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-label={t('serverSelector.title')}
@@ -128,6 +150,7 @@ export default function ServerSelector({
               <label className="flex h-9 items-center gap-2 rounded-md border bg-background px-2.5 text-sm shadow-soft">
                 <Search className="size-4 shrink-0 text-muted-foreground" />
                 <input
+                  ref={searchInputRef}
                   type="search"
                   value={query}
                   onChange={(event) => onQueryChange(event.target.value)}
