@@ -9,7 +9,7 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import App from '@/App'
 import { useStartInstance, useStopInstance, useRestartInstance, useKillInstance, useDeleteInstance } from '@/api/instances'
 import ResourceExplorer from '@/components/explorer/ResourceExplorer'
-import CreateInstanceDialog from '@/components/CreateInstanceDialog'
+import CreateInstanceDialog from '@/components/instances/CreateInstanceDialog'
 
 /**
  * FR-030 前端通知系统与 UX 标准化回归：

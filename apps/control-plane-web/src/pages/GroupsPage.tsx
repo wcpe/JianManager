@@ -1,7 +1,7 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做组取数、三个写动作、URL 深链解析/写回与成员对话框接线。
 import { useSearchParams } from 'react-router'
 import { useGroups, useCreateGroup, useUpdateGroup, useUpdateGroupQuota, useDeleteGroup } from '@/api/groups'
-import GroupMembersDialog from '@/components/GroupMembersDialog'
+import GroupMembersDialog from '@/components/groups/GroupMembersDialog'
 import { useDangerPermission } from '@/lib/danger'
 import { GroupsPageView } from '@/components/views/users/GroupsPageView'
 import type { GroupPanel } from '@/components/views/users/GroupsPageView'
