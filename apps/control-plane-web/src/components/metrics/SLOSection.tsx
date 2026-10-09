@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- 兼容旧入口：转出视图的组件与纯逻辑，非组件导出按仓库约定在此豁免 */
 import { useSLO } from '@/api/metrics'
 import { SLOSection as SLOSectionView } from '@/components/views/instances/SLOSection'
 import type { MetricRange } from '@jianmanager/ui'

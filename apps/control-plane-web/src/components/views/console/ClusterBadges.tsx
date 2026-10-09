@@ -302,6 +302,9 @@ function RunningInstanceRow({
 }) {
   const { t } = useTranslation()
   // 取数 hook 由外壳注入；未注入时不显示人数（等价于「无数据」）。
+  // 注入与否在组件生命周期内不变（props 契约如此），故条件调用在运行时是稳定的；
+  // 规则无法得知该前提，按例外显式豁免。
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const players = useInstancePlayers ? useInstancePlayers(instance.id, open) : undefined
   return (
     <DropdownMenuItem onClick={onOpen} className="text-xs">
