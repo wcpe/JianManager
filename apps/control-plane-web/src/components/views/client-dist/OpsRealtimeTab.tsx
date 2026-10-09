@@ -15,7 +15,7 @@ import {
   fmtTime,
   kindLabel,
   type RuntimeLink,
-} from './OpsShared'
+} from '@/components/views/client-dist/OpsShared'
 
 /**
  * 页面 B · 实时监控 Tab（FR-430，迁自旧监控页 `MonitorTab`）。

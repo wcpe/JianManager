@@ -20,7 +20,7 @@ import {
   reversePlatformLabel,
   runtimeUpdateSeries,
   type RuntimeLink,
-} from './OpsShared'
+} from '@/components/views/client-dist/OpsShared'
 import { KPI_I18N } from '@jianmanager/ui/lib/client-dist-kpi'
 
 /**

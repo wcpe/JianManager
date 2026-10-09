@@ -6,7 +6,7 @@ import type {
   ClientDistIpAnalysis,
   ClientDistPlayerAnalysis,
 } from '@jianmanager/ui/lib/client-dist-security-contracts'
-import { EmptyState, SECURITY_EMPTY as EMPTY, fmtBytes, fmtTime } from './security-format'
+import { EmptyState, SECURITY_EMPTY as EMPTY, fmtBytes, fmtTime } from '@/components/views/client-dist/security-format'
 
 /**
  * 安全侧「IP 剖析 / 玩家名剖析」两个只读聚合 Tab（FR-430 / ADR-088）。

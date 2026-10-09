@@ -10,7 +10,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@jianmanager/ui/components/table'
 import type { ClientMachineSummary, MachineSortField } from '@jianmanager/ui/lib/client-dist-machines-contracts'
-import { fmtBytes, fmtTime, lagBadge } from './machine-format'
+import { fmtBytes, fmtTime, lagBadge } from '@/components/views/client-dist/machine-format'
 
 /**
  * 机器级更新清单与钻取（FR-426）：「用户」= 机器（machineId）。

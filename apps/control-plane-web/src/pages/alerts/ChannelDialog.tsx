@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { ChannelDialogView } from '@jianmanager/ui/components/views/alerts/ChannelDialogView'
+import { ChannelDialogView } from '@/components/views/alerts/ChannelDialogView'
 import { useCreateAlertChannel, useUpdateAlertChannel, type AlertChannelInfo } from '@/api/alerts'
 import { QQBindDialog } from './QQBindDialog'
 

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useGroups, useAddGroupMember, useRemoveGroupMember } from '@/api/groups'
 import { useUserSearch } from '@/api/users'
 import { useDebounced } from '@/lib/use-debounced'
-import { GroupMembersDialogView } from '@jianmanager/ui/components/views/groups/GroupMembersDialogView'
+import { GroupMembersDialogView } from '@/components/views/groups/GroupMembersDialogView'
 
 /** 候选默认窗口：只取前 50 条，靠键入服务端 q 缩小（FR-336）。请求上限属应用侧策略，故留在容器。 */
 const CANDIDATE_LIMIT = 50

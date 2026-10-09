@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
-import { InstanceConsoleView } from './InstanceConsoleView'
+import { InstanceConsoleView } from '@/components/views/console/InstanceConsoleView'
 import type { ConsoleHistoryState } from '@jianmanager/ui/lib/console-history'
 
 /**

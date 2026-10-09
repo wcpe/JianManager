@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
-import { ClusterBadges, STAT_POPOVER_MAX_ROWS, type ClusterBadgesProps } from './ClusterBadges'
+import { ClusterBadges, STAT_POPOVER_MAX_ROWS, type ClusterBadgesProps } from '@/components/views/console/ClusterBadges'
 
 /**
  * FR-294 集群概览徽标 · 受控视图测（ADR-097 c 范式）。

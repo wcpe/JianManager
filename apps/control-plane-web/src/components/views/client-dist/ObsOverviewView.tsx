@@ -2,8 +2,8 @@ import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
 import type { ClientDistObservability } from '@jianmanager/ui/lib/client-dist-stats-contracts'
-import { InsightCards } from './InsightCards'
-import { UpdateHeatmap } from './UpdateHeatmap'
+import { InsightCards } from '@/components/views/client-dist/InsightCards'
+import { UpdateHeatmap } from '@/components/views/client-dist/UpdateHeatmap'
 
 /**
  * 分发观测总览区块的展示层（FR-426/427/428）。

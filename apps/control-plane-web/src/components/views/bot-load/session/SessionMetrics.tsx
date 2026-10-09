@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
 import { clampChartPoints, formatLatencyMs } from '@jianmanager/ui/lib/bot-load-metrics'
 import type { BotLoadMetricPoint } from '@jianmanager/ui/lib/bot-load-types'
-import { DisclaimerBanner } from './DisclaimerBanner'
+import { DisclaimerBanner } from '@/components/views/bot-load/session/DisclaimerBanner'
 
 /** 时间窗（决定服务端 resolution，故由容器持有）。 */
 export type SessionMetricsRange = '15m' | '1h' | 'all'

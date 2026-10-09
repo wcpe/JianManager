@@ -1,4 +1,4 @@
-import FilePreview from '@jianmanager/ui/components/views/file-browser/FilePreview'
+import FilePreview from '@/components/views/file-browser/FilePreview'
 import { useThemeStore } from '@/stores/theme'
 
 /**

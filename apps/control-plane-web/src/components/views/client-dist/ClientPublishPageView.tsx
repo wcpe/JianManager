@@ -36,7 +36,7 @@ import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
 import FileExplorer from '@jianmanager/ui/components/views/explorer/FileExplorer'
-import FileBrowser from '@jianmanager/ui/components/views/file-browser/FileBrowser'
+import FileBrowser from '@/components/views/file-browser/FileBrowser'
 import { CleanScopeEditor } from '@/components/views/client-dist/CleanScopeEditor'
 import {
   EmbeddedUpdaterSummary,

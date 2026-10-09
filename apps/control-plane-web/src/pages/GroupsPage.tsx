@@ -12,7 +12,7 @@ import { useDangerPermission } from '@/lib/danger'
 import {
   GroupsPageView,
   type GroupPanel,
-} from '@jianmanager/ui/components/views/users/GroupsPageView'
+} from '@/components/views/users/GroupsPageView'
 
 /**
  * 用户组管理页容器（ADR-097 b 范式）：组列表取数、创建/编辑/删除三个写动作、平台级删除门禁

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
-import { QuotaPanel } from './QuotaPanel'
+import { QuotaPanel } from '@/components/views/console/QuotaPanel'
 import type { InstanceQuotaStatus } from '@jianmanager/ui/lib/quota-status'
 
 /**

@@ -16,7 +16,7 @@ import {
   resultLabel,
   totalBytes,
   type RuntimeLink,
-} from './OpsShared'
+} from '@/components/views/client-dist/OpsShared'
 import {
   KPI_I18N,
   activeClientsHintKey,

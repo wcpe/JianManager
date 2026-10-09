@@ -18,11 +18,11 @@ import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
 import {
   CreateGroupDialogView,
   type CreateGroupValues,
-} from '@jianmanager/ui/components/views/groups/CreateGroupDialogView'
+} from '@/components/views/groups/CreateGroupDialogView'
 import {
   GroupEditDialogView,
   type GroupEditValues,
-} from '@jianmanager/ui/components/views/groups/GroupEditDialogView'
+} from '@/components/views/groups/GroupEditDialogView'
 import { formatSizeMb } from '@jianmanager/ui/lib/backup'
 
 /** 用户组详情可打开的面板（FR-128 可寻址）：编辑属性 / 管理成员。 */

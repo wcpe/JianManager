@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
-import { SuperWorkbenchPage } from './SuperWorkbenchPage'
+import { SuperWorkbenchPage } from '@/components/views/console/SuperWorkbenchPage'
 import type { PlacedCard } from '@jianmanager/ui/lib/workspace-preset'
 
 /**

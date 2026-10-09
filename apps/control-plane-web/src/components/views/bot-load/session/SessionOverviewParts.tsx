@@ -4,10 +4,10 @@ import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 import { formatRatio } from '@jianmanager/ui/lib/bot-load-metrics'
 import { sumCommandCounts } from '@jianmanager/ui/lib/bot-load-session-store'
 import type { BotLoadMetricPoint, BotLoadRunV2, SessionTab } from '@jianmanager/ui/lib/bot-load-types'
-import { ConnectionFunnel } from './ConnectionFunnel'
-import { DisclaimerBanner } from './DisclaimerBanner'
-import { ExecutorDistribution } from './ExecutorDistribution'
-import { ThresholdVerdict } from './ThresholdVerdict'
+import { ConnectionFunnel } from '@/components/views/bot-load/session/ConnectionFunnel'
+import { DisclaimerBanner } from '@/components/views/bot-load/session/DisclaimerBanner'
+import { ExecutorDistribution } from '@/components/views/bot-load/session/ExecutorDistribution'
+import { ThresholdVerdict } from '@/components/views/bot-load/session/ThresholdVerdict'
 
 /** 会话概览所需的实时流切片（容器经 useSessionEvents 取数）。 */
 export interface SessionLiveSlice {

@@ -1,7 +1,7 @@
 import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
 
-import StoragePage from '@jianmanager/ui/components/views/StoragePage'
+import StoragePage from '@/components/views/StoragePage'
 import { useStorageOverview, clearStorageCache } from '@/api/storage'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'

@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Download, FileQuestion, FileWarning, Loader2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
-import CodeEditor from '../explorer/CodeEditor'
+import CodeEditor from '@jianmanager/ui/components/views/explorer/CodeEditor'
 import type { FileEntry, PreviewContent } from '@jianmanager/ui/lib/file-browser-types'
 
 /** 字节数转人类可读。 */

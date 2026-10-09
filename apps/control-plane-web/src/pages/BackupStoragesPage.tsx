@@ -10,7 +10,7 @@ import {
   useTestBackupStorageDraft,
 } from '@/api/backupStorages'
 import { useDangerPermission } from '@/lib/danger'
-import { BackupStoragesPageView } from '@jianmanager/ui/components/views/backups/BackupStoragesPageView'
+import { BackupStoragesPageView } from '@/components/views/backups/BackupStoragesPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {

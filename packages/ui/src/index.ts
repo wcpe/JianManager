@@ -55,14 +55,9 @@ export * from './components/views/ReleaseNotes'
 export * from './components/views/UnifiedDiff'
 export * from './components/views/UntrustedFieldBadge'
 export * from './components/views/ClientDistFlowGuide'
-export * from './components/views/alerts/ChannelDialogView'
-export * from './components/views/alerts/RuleDialogView'
-export * from './components/views/alerts/QQQrCode'
-export * from './components/views/alerts/QQBindDialogView'
 export * from './components/views/explorer/PromptDialog'
 export * from './components/views/explorer/Toolbar'
 export * from './components/views/explorer/editor/EditorShortcutsHelp'
-export * from './components/views/file-browser/FileBrowserTree'
 
 // ADR-097 起：应用业务组件按 a+b 双范式受控化并入，按域归档
 
@@ -152,9 +147,6 @@ export * from './components/views/explorer/ExplorerTabHost'
 export { default as FileExplorer } from './components/views/explorer/FileExplorer'
 export type { FileExplorerProps } from './components/views/explorer/FileExplorer'
 export * from './lib/file-browser-capability'
-export * from './components/views/file-browser/FilePreview'
-export * from './components/views/file-browser/FileBrowser'
-export * from './components/views/file-browser/UnifiedExplorerShell'
 export * from './lib/storage-types'
 // 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics` 同名（两者语义不同，
 // 前者格式化存储占用、后者格式化监控指标），barrel 里不能同时通配导出。
@@ -167,7 +159,6 @@ export {
 } from './lib/storage-view'
 export type { ArchiveDerived, Crumb } from './lib/storage-view'
 export * from './lib/storage-source'
-export * from './components/views/StoragePage'
 export * from './lib/node-types'
 export * from './lib/node-summary'
 export * from './lib/instance-summary'
@@ -448,12 +439,7 @@ export * from './lib/workspace-preset'
 export * from './components/views/EditUserDialogView'
 // 显式列出而非 export *：AgentTokenOption 与同域其它视图同名（字段不同），
 // barrel 里不能同时通配；需要本模块版该类型的调用方走深路径。
-// alerts 域
-export * from './components/views/alerts/AlertsPageView'
 // audit 域
-// backups 域
-export * from './components/views/backups/BackupStoragesPageView'
-export * from './components/views/backups/BackupsPageView'
 // client-dist 域
 // config-baselines 域
 // config-explorer 域
@@ -461,10 +447,6 @@ export * from './components/views/config-explorer/ConfigVersionDrawer'
 // console 域
 // explorer 域
 export * from './components/views/explorer/FileTree'
-// groups 域
-export * from './components/views/groups/CreateGroupDialogView'
-export * from './components/views/groups/GroupEditDialogView'
-export * from './components/views/groups/GroupMembersDialogView'
 // import-server 域
 // instances 域
 export * from './components/views/instances/CloneInstanceDialogView'
@@ -476,12 +458,7 @@ export * from './components/views/instances/InstanceRowView'
 // permissions 域
 // players 域
 // runtime-assets 域
-// schedules 域
-export * from './components/views/schedules/SchedulesPageView'
 // settings 域
 // statistics 域
 // system-update 域
 // tasks 域
-// users 域
-export * from './components/views/users/GroupsPageView'
-export * from './components/views/users/UsersPageView'

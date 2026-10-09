@@ -1,12 +1,12 @@
 import type { ReactNode } from 'react'
 import { cn } from '@jianmanager/ui'
-import FileBrowser from './FileBrowser'
+import FileBrowser from '@/components/views/file-browser/FileBrowser'
 import type { FileBrowserSource } from '@jianmanager/ui/lib/file-browser-types'
 import {
   browserPropsFromCapability,
   type ExplorerCapability,
-} from '../../../lib/file-browser-capability'
-import ExplorerTabHost from '../explorer/ExplorerTabHost'
+} from '@jianmanager/ui/lib/file-browser-capability'
+import ExplorerTabHost from '@jianmanager/ui/components/views/explorer/ExplorerTabHost'
 
 export interface UnifiedExplorerShellProps {
   /** 场景能力描述（FR-378）。 */

@@ -5,9 +5,9 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { LayoutDashboard, Network, Server, Shield, HardDrive } from 'lucide-react'
-import { WorkspaceSidebar } from './WorkspaceSidebar'
+import { WorkspaceSidebar } from '@/components/views/console/WorkspaceSidebar'
 import type { WorkspaceDef } from '@jianmanager/ui/lib/workspace-navigation'
-import type { WorkspaceLinkArgs } from './WorkspaceSidebar'
+import type { WorkspaceLinkArgs } from '@/components/views/console/WorkspaceSidebar'
 
 /**
  * 工作区侧栏 · 受控视图测（ADR-097）。

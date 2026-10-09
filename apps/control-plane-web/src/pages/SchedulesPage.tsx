@@ -15,7 +15,7 @@ import { toCreateBody, toUpdateBody } from '@/pages/schedule-form'
 import {
   SchedulesPageView,
   type ScheduleFilter,
-} from '@jianmanager/ui/components/views/schedules/SchedulesPageView'
+} from '@/components/views/schedules/SchedulesPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {

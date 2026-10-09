@@ -7,7 +7,7 @@ import { useBackupStorages } from '@/api/backupStorages'
 import { useInstance } from '@/api/instances'
 import { InstancePicker } from '@/components/InstancePicker'
 import { hasActiveBackup } from '@/pages/backups-view'
-import { BackupsPageView } from '@jianmanager/ui/components/views/backups/BackupsPageView'
+import { BackupsPageView } from '@/components/views/backups/BackupsPageView'
 
 /** 进行中备份时的轮询间隔（毫秒）：刷新进度直至完成（FR-151）。 */
 const ACTIVE_POLL_MS = 3000

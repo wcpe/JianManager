@@ -24,10 +24,10 @@ import {
   validateLoadProfile,
   validateThresholds,
 } from '@jianmanager/ui/lib/bot-load-validation'
-import { CapacityPlan } from './CapacityPlan'
-import { CommandPlanEditor } from './CommandPlanEditor'
-import { LoadProfileEditor } from './LoadProfileEditor'
-import { ThresholdEditor } from './ThresholdEditor'
+import { CapacityPlan } from '@/components/views/bot-load/CapacityPlan'
+import { CommandPlanEditor } from '@/components/views/bot-load/CommandPlanEditor'
+import { LoadProfileEditor } from '@/components/views/bot-load/LoadProfileEditor'
+import { ThresholdEditor } from '@/components/views/bot-load/ThresholdEditor'
 
 /** 实例选择器插槽所需的 props（应用侧组件，千级场景走服务端搜索）。 */
 export interface InstancePickerSlotProps {

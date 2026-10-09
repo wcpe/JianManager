@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
-import { DirectorSceneStrip } from './DirectorSceneStrip'
+import { DirectorSceneStrip } from '@/components/views/console/DirectorSceneStrip'
 import { createDirectorState, type DirectorState } from '@jianmanager/ui/lib/director'
 
 /**
