@@ -13,8 +13,15 @@ import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import type { NodePorts } from '@/lib/nodes/node-ports'
 
-/** 端口表虚拟化行高（px），与 Table 行内边距匹配。 */
-const PORT_ROW_HEIGHT = 44
+/**
+ * 端口表行高（px）：**声明值 = 真实值**——同一常量既喂虚拟窗口（`itemSize`），
+ * 也写成行盒的行内 style，不由类名反推（先例：`views/logs/LogsPageView` 的 `ROW_HEIGHT`）。
+ *
+ * 数值依据（实测）：本表单元格只有一行文本（`text-[13px]`，行高约 19.5）加上
+ * `TableCell` 的 `py-1.5`（12）≈ 32，原先声明 44 比真实行盒高，滚动条偏长；
+ * 取 36 与实例页行高栅格一致（36 = 24px 控件 + 12px 内距），只要行内容不超过 24px 行盒就恒为 36。
+ */
+const PORT_ROW_HEIGHT = 36
 
 /**
  * 节点端口占用面板（FR-032）：展示系统已分配的 server/query 端口与分配范围。
@@ -114,7 +121,8 @@ export default function NodePortsPanel({ data, isLoading }: NodePortsPanelProps)
               </TableRow>
             )}
             {visible.map((p) => (
-              <TableRow key={p.instanceId}>
+              // 行高写进行盒：与 itemSize 同源，滚动条长度因而不虚长。
+              <TableRow key={p.instanceId} style={{ height: PORT_ROW_HEIGHT }}>
                 <TableCell className="font-medium">{p.name}</TableCell>
                 <TableCell>{t(`networks.role_${p.role}`, { defaultValue: p.role })}</TableCell>
                 <TableCell>{p.serverPort || '--'}</TableCell>

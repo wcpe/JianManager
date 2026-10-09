@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- 视图与随其导出的纯逻辑/变体同文件（沿用原组织方式），非组件导出按仓库约定在此豁免 */
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -10,12 +10,48 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
+import { INSTANCE_EXPANDED_ROW_HEIGHT, INSTANCE_ROW_HEIGHT } from '@/components/views/instances/InstanceRowView'
 import { memberHealth } from '@/lib/networks/topology'
 import type { MemberHealth } from '@/lib/networks/topology'
 import type { GroupDimension, InstanceGroup } from '@/lib/instances/instance-grouping'
 import type { InstanceInfo } from '@/lib/instances/instance-types'
 /** 虚拟滚动位置的 sessionStorage 键前缀（与 URL 组合成唯一键）。 */
 export const SCROLL_KEY_PREFIX = 'jm.instances.scroll:'
+
+/**
+ * 分组头行高（px）：与实例行同样是**导出常量 = 行盒行内 style** 的「声明值即真实值」，
+ * 供逐行 `sizes` 与分组头行共用。
+ *
+ * 数值依据（实测）：分组头单元格内容 = 折叠按钮（`size-5` = 20）+ `py-2`（16）= 36，
+ * 行高取其上的 44（`h-11` 的旧值），实测行盒恰为 44。
+ */
+export const INSTANCE_GROUP_ROW_HEIGHT = 44
+
+/**
+ * 逐行高度模型（变高虚拟窗口）：与行盒的行内 style 同源——组头用组头常量、
+ * 实例行用实例行常量、展开行按「主行 + 追加行」求和，三者都不从类名反推。
+ *
+ * 之所以必须逐行建模而不是单一 `itemSize`：树表里组头与实例行本来就不同高，
+ * 且 proxy 展开会在同一「项」下**追加**一个 `<tr>`（INSTANCE_EXPANDED_ROW_HEIGHT）——
+ * 用单一 itemSize 时这部分高度完全不计入占位，其后所有行的位置与滚动条长度都会漂移。
+ */
+function useInstanceRowsSizes(count: number, heightAt: (index: number) => number): readonly number[] {
+  // `heightAt` 由调用方按「行模型 + 展开集合」记忆化，故本数组只在两者真的变化时重建。
+  return useMemo(() => {
+    const sizes = new Array<number>(count)
+    for (let i = 0; i < count; i++) sizes[i] = heightAt(i)
+    return sizes
+  }, [count, heightAt])
+}
+
+/**
+ * 实例「项」在虚拟模型里的高度（px）：主行恒在，展开时**追加**一个后端摘要行。
+ * 与 `InstanceRowView` 里「展开时多渲染一个 `<tr>`、否则不渲染」同判据（isRowExpanded）。
+ */
+function instanceRowHeight(expanded: boolean): number {
+  return INSTANCE_ROW_HEIGHT + (expanded ? INSTANCE_EXPANDED_ROW_HEIGHT : 0)
+}
+
 /**
  * 树表统一行模型（FR-452）：分组头行与成员实例行同属一个虚拟化列表，
  * 避免「每组一个虚拟表」的分片表头与滚动错位。
@@ -180,6 +216,9 @@ function GroupHealthBand({ health }: { health: MemberHealth }) {
 /**
  * 实例分组树表（FR-452）：单个虚拟表承载「分组头行（可折叠）+ 成员实例行」。
  * 分组头行显示折叠箭头 + 分组名 + 成员计数 + 聚合健康色带；折叠态由父级写回 URL（`?collapsed=`）。
+ *
+ * 行高按逐行 `sizes` 建模（组头 44 / 实例行 36 / 展开时再追加一行 160），与行盒的行内 style
+ * 同源，故滚动条长度与滚动位置映射严格贴合真实行盒。
  */
 export function VirtualizedGroupedInstanceTable({
   rows,
@@ -191,6 +230,7 @@ export function VirtualizedGroupedInstanceTable({
   header,
   renderRow,
   emptyLabel,
+  isRowExpanded,
 }: {
   rows: InstanceTreeRow[]
   totalCount: number
@@ -201,15 +241,27 @@ export function VirtualizedGroupedInstanceTable({
   header: React.ReactNode
   renderRow: (inst: InstanceInfo) => React.ReactNode
   emptyLabel: string
+  /** 展开行判据（与行渲染同源）：展开行多渲染一个 `<tr>`，须按展开行高计入模型。 */
+  isRowExpanded?: (inst: InstanceInfo) => boolean
 }) {
   const { t } = useTranslation()
+  const heightAt = useCallback(
+    (index: number) => {
+      const row = rows[index]
+      if (row.kind === 'group') return INSTANCE_GROUP_ROW_HEIGHT
+      return instanceRowHeight(isRowExpanded?.(row.instance) === true)
+    },
+    [isRowExpanded, rows],
+  )
+  const sizes = useInstanceRowsSizes(rows.length, heightAt)
   const {
     containerRef,
     onScroll,
     range,
   } = useVirtualRows({
     total: rows.length,
-    itemSize: 44,
+    itemSize: INSTANCE_ROW_HEIGHT,
+    sizes,
     overscan: 10,
     fallbackViewportSize: 520,
   })
@@ -233,7 +285,8 @@ export function VirtualizedGroupedInstanceTable({
         {header}
         <TableBody>
           {range.before > 0 && (
-            <TableRow aria-hidden="true">
+            // 窗口上占位（高度来自逐行 sizes 的前缀和）；testid 供「内容总高 = 模型总高」断言取数。
+            <TableRow aria-hidden="true" data-testid="instances-virtual-spacer-before">
               <TableCell colSpan={8} className="p-0" style={{ height: range.before }} />
             </TableRow>
           )}
@@ -243,9 +296,11 @@ export function VirtualizedGroupedInstanceTable({
               data-testid="instances-group-row"
               data-group-depth={row.depth}
               data-collapsed={row.collapsed ? 'true' : 'false'}
+              // 组头行高写进行盒（不再用单元格的 `h-11`）：声明值与逐行 sizes 是同一个常量。
+              style={{ height: INSTANCE_GROUP_ROW_HEIGHT }}
               className="sticky top-9 z-10 bg-muted/80 backdrop-blur"
             >
-              <TableCell colSpan={8} className="h-11 px-4 py-2">
+              <TableCell colSpan={8} className="px-4 py-2">
                 <div className="flex items-center gap-2" style={{ paddingLeft: row.depth * 16 }}>
                   <button
                     type="button"
@@ -271,7 +326,8 @@ export function VirtualizedGroupedInstanceTable({
             <Fragment key={row.key}>{renderRow(row.instance)}</Fragment>
           ))}
           {range.after > 0 && (
-            <TableRow aria-hidden="true">
+            // 窗口下占位（同上）：展开行的高度必须同样体现在这里，否则滚动条长度与位置映射会漂移。
+            <TableRow aria-hidden="true" data-testid="instances-virtual-spacer-after">
               <TableCell colSpan={8} className="p-0" style={{ height: range.after }} />
             </TableRow>
           )}
@@ -288,6 +344,11 @@ export function VirtualizedGroupedInstanceTable({
   )
 }
 
+/**
+ * 平铺实例虚拟表（`?groupBy=none`）：单一行模型（只有实例行，含未加载尾部占位）。
+ *
+ * 行高同样逐行建模——展开行按展开行常量计入，不与行渲染分叉。
+ */
 export function VirtualizedInstanceTable({
   instances,
   totalCount,
@@ -296,6 +357,7 @@ export function VirtualizedInstanceTable({
   header,
   renderRow,
   emptyLabel,
+  isRowExpanded,
 }: {
   instances: InstanceInfo[]
   totalCount: number
@@ -304,14 +366,26 @@ export function VirtualizedInstanceTable({
   header: React.ReactNode
   renderRow: (inst: InstanceInfo) => React.ReactNode
   emptyLabel: string
+  /** 展开行判据（与行渲染同源）：展开行多渲染一个 `<tr>`，须按展开行高计入模型。 */
+  isRowExpanded?: (inst: InstanceInfo) => boolean
 }) {
+  // 未加载的尾部（index ≥ instances.length）按实例行常量占位，与占位行盒一致。
+  const heightAt = useCallback(
+    (index: number) => {
+      const inst = instances[index]
+      return instanceRowHeight(inst !== undefined && isRowExpanded?.(inst) === true)
+    },
+    [instances, isRowExpanded],
+  )
+  const sizes = useInstanceRowsSizes(totalCount, heightAt)
   const {
     containerRef,
     onScroll,
     range,
   } = useVirtualRows({
     total: totalCount,
-    itemSize: 44,
+    itemSize: INSTANCE_ROW_HEIGHT,
+    sizes,
     overscan: 10,
     fallbackViewportSize: 520,
   })
@@ -340,21 +414,24 @@ export function VirtualizedInstanceTable({
         {header}
         <TableBody>
           {range.before > 0 && (
-            <TableRow aria-hidden="true">
+            // 窗口上占位（高度来自逐行 sizes 的前缀和）；testid 供「内容总高 = 模型总高」断言取数。
+            <TableRow aria-hidden="true" data-testid="instances-virtual-spacer-before">
               <TableCell colSpan={8} className="p-0" style={{ height: range.before }} />
             </TableRow>
           )}
           {visible.map(({ index, inst }) => (
             <Fragment key={inst?.id ?? `placeholder-${index}`}>
               {inst ? renderRow(inst) : (
-                <TableRow aria-hidden="true">
-                  <TableCell colSpan={8} className="p-0" style={{ height: 44 }} />
+                <TableRow aria-hidden="true" data-testid="instances-row-placeholder">
+                  {/* 未加载行的占位：高度与 INSTANCE_ROW_HEIGHT 同源（模型也按它算该行）。 */}
+                  <TableCell colSpan={8} className="p-0" style={{ height: INSTANCE_ROW_HEIGHT }} />
                 </TableRow>
               )}
             </Fragment>
           ))}
           {range.after > 0 && (
-            <TableRow aria-hidden="true">
+            // 窗口下占位（同上）：展开行的高度必须同样体现在这里，否则滚动条长度与位置映射会漂移。
+            <TableRow aria-hidden="true" data-testid="instances-virtual-spacer-after">
               <TableCell colSpan={8} className="p-0" style={{ height: range.after }} />
             </TableRow>
           )}
