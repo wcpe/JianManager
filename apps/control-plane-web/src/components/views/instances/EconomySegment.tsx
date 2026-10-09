@@ -16,7 +16,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import type { BusinessResult } from '@jianmanager/ui/lib/business'
 import type {
   EconomyLeaderboardRow,

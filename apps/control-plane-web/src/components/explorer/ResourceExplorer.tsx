@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
-import ResourceExplorer from '@jianmanager/ui/components/views/explorer/ResourceExplorer'
+import ResourceExplorer from '@/components/views/explorer/ResourceExplorer'
 import {
   fetchFileList,
   readFileContent,
@@ -22,7 +22,7 @@ import { useThemeStore } from '@/stores/theme'
 import VersionDrawer from './VersionDrawer'
 
 // 配置增强能力的类型在这里转出：它的消费方（ConfigExplorer）按原路径 import。
-export type { ConfigCapabilities } from '@jianmanager/ui/components/views/explorer/ResourceExplorer'
+export type { ConfigCapabilities } from '@/components/views/explorer/ResourceExplorer'
 
 /** 接线层对外暴露的 props：包内视图的 props 去掉全部注入项。 */
 type ConnectedProps = Omit<

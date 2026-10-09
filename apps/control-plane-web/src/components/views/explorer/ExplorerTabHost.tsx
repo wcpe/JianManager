@@ -18,7 +18,7 @@ import {
   dockTab,
   updateTabContext,
   type ExplorerTabsState,
-} from '../../../lib/explorer-tabs'
+} from '@jianmanager/ui/lib/explorer-tabs'
 
 interface ExplorerTabHostProps {
   instanceId: number

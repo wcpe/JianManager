@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Search, X, Loader2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
-import type { SearchHit, SearchMode, SearchResult, SearchScope } from '../../../lib/file-entry'
+import type { SearchHit, SearchMode, SearchResult, SearchScope } from '@jianmanager/ui/lib/file-entry'
 
 /** 「索引中」自动重试间隔（毫秒，FR-113）。 */
 const INDEXING_RETRY_MS = 1000

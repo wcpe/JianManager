@@ -32,7 +32,7 @@ import { ListSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/
 import { Panel } from '@jianmanager/ui/components/panel'
 import { ScrollableDialogBody, scrollableDialogContentClass } from '@jianmanager/ui/components/scrollable-dialog'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import { validateRequired } from '@jianmanager/ui/lib/form-validation'
 import { instanceStatusLevel, statusColorVar } from '@jianmanager/ui/lib/threshold'
 import {

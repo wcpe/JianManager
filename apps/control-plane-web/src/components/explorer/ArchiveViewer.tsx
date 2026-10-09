@@ -1,4 +1,4 @@
-import ArchiveViewer from '@jianmanager/ui/components/views/explorer/ArchiveViewer'
+import ArchiveViewer from '@/components/views/explorer/ArchiveViewer'
 import { listArchiveEntries, readArchiveEntry, decompile } from '@/api/archive'
 import { useThemeStore } from '@/stores/theme'
 

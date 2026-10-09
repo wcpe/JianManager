@@ -4,7 +4,7 @@ import { Camera, RotateCcw, Trash2 } from 'lucide-react'
 
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 
 /** 快照行数据（本组件所需的最小结构；外壳传 API 返回项会结构兼容）。 */
 export interface InstanceSnapshotView {

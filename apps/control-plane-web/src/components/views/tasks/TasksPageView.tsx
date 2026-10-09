@@ -23,7 +23,7 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { ListSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import { isNetworkDownloadFailure } from '@jianmanager/ui/lib/download-failure'
 import { isTerminalTask, TASK_KIND_LABEL_KEYS, type Task, type TaskLog, type TaskState } from '@jianmanager/ui/lib/task-status'
 import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'

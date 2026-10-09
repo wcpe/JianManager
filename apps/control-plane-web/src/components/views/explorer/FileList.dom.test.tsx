@@ -3,9 +3,9 @@ import { render, screen } from '@testing-library/react'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
-import FileList from './FileList'
-import { emptySelection } from '../../../lib/explorer-selection'
-import type { FileInfo } from '../../../lib/file-entry'
+import FileList from '@/components/views/explorer/FileList'
+import { emptySelection } from '@jianmanager/ui/lib/explorer-selection'
+import type { FileInfo } from '@jianmanager/ui/lib/file-entry'
 
 /**
  * FR-070 资源管理器文件列表 · 受控视图测（ADR-097）。

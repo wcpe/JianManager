@@ -1,7 +1,7 @@
 import { type CSSProperties } from 'react'
 import { useIsFetching, useIsMutating } from '@tanstack/react-query'
 import { useLocation } from 'react-router'
-import { TopLoadingBar } from '@jianmanager/ui/components/views/TopLoadingBar'
+import { TopLoadingBar } from '@/components/views/TopLoadingBar'
 import { useInstanceEvents } from '@/api/events'
 import ConsoleHeader from '@/components/console/ConsoleHeader'
 import WorkspaceSidebar from '@/components/console/WorkspaceSidebar'

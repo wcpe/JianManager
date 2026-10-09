@@ -10,16 +10,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
-import DangerConfirm from '../DangerConfirm'
-import CodeEditor from './CodeEditor'
-import EditorShortcutsHelp from './editor/EditorShortcutsHelp'
-import ArchiveViewer from './ArchiveViewer'
-import DecompileViewer from './DecompileViewer'
-import FileTree from './FileTree'
-import FileList from './FileList'
-import Toolbar from './Toolbar'
-import SearchPanel from './SearchPanel'
-import PromptDialog from './PromptDialog'
+import DangerConfirm from '@/components/views/DangerConfirm'
+import CodeEditor from '@/components/views/explorer/CodeEditor'
+import EditorShortcutsHelp from '@/components/views/explorer/editor/EditorShortcutsHelp'
+import ArchiveViewer from '@/components/views/explorer/ArchiveViewer'
+import DecompileViewer from '@/components/views/explorer/DecompileViewer'
+import FileTree from '@/components/views/explorer/FileTree'
+import FileList from '@/components/views/explorer/FileList'
+import Toolbar from '@/components/views/explorer/Toolbar'
+import SearchPanel from '@/components/views/explorer/SearchPanel'
+import PromptDialog from '@/components/views/explorer/PromptDialog'
 import {
   emptySelection,
   clickSelect,
@@ -27,7 +27,7 @@ import {
   pruneSelection,
   type SelectionState,
   type ClickModifiers,
-} from '../../../lib/explorer-selection'
+} from '@jianmanager/ui/lib/explorer-selection'
 import {
   cutEntries,
   copyEntries,
@@ -35,7 +35,7 @@ import {
   type Clipboard,
   type ClipboardEntry,
   type PasteOp,
-} from '../../../lib/explorer-clipboard'
+} from '@jianmanager/ui/lib/explorer-clipboard'
 import {
   setBusClipboard,
   getBusClipboard,
@@ -45,9 +45,9 @@ import {
   writeDragToDataTransfer,
   readDragFromDataTransfer,
   setDragPayload,
-} from '../../../lib/explorer-clipboard-bus'
-import { joinPath, baseName, isValidName } from '../../../lib/paths'
-import { needsDiscardConfirm } from '../../../lib/discard-guard'
+} from '@jianmanager/ui/lib/explorer-clipboard-bus'
+import { joinPath, baseName, isValidName } from '@jianmanager/ui/lib/paths'
+import { needsDiscardConfirm } from '@jianmanager/ui/lib/discard-guard'
 import {
   emptyNavHistory,
   navPush,
@@ -55,7 +55,7 @@ import {
   navForward,
   canNavBack,
   canNavForward,
-} from '../../../lib/nav-history'
+} from '@jianmanager/ui/lib/nav-history'
 import {
   loadSortState,
   saveSortState,
@@ -64,7 +64,7 @@ import {
   sortFiles,
   type FileSortState,
   type FileViewMode,
-} from '../../../lib/file-sort'
+} from '@jianmanager/ui/lib/file-sort'
 import type {
   ArchiveEntries,
   ArchiveEntryContent,
@@ -72,7 +72,7 @@ import type {
   SearchMode,
   SearchResult,
   SearchScope,
-} from '../../../lib/file-entry'
+} from '@jianmanager/ui/lib/file-entry'
 
 /** 提示通道：形状与 sonner 的 toast 一致——`loading` 返回 id，`success`/`error` 可带 id 更新同一条。 */
 export interface ExplorerToast {

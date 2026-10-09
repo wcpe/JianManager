@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2, X } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
-import CodeEditor from './CodeEditor'
+import CodeEditor from '@/components/views/explorer/CodeEditor'
 
 /**
  * 单文件反编译视图（FR-075）：对工作目录内某 .class/.jar 调 Worker CFR 反编译，

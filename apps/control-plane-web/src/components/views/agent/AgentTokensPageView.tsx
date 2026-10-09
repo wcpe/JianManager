@@ -14,7 +14,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 're
 import { useTranslation } from 'react-i18next'
 import { Copy, KeyRound, Plus } from 'lucide-react'
 import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'

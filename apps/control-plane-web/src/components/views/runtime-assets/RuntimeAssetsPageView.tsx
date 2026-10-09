@@ -34,7 +34,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import type { AssetInfo, AssetType } from '@jianmanager/ui/lib/asset-contracts'
 import type { AssetTypeGroup, JDKMatrixItem, RuntimeMatrixEntry } from '@jianmanager/ui/lib/runtime-assets-contracts'
 import { formatRelativeTime } from '@jianmanager/ui/lib/relative-time'

@@ -25,8 +25,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@jianmanager/ui/components/dropdown-menu'
-import { breadcrumbs } from '../../../lib/paths'
-import type { FileViewMode } from '../../../lib/file-sort'
+import { breadcrumbs } from '@jianmanager/ui/lib/paths'
+import type { FileViewMode } from '@jianmanager/ui/lib/file-sort'
 import { cn } from '@jianmanager/ui'
 
 interface ToolbarProps {

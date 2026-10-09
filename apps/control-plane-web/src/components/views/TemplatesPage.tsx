@@ -48,7 +48,7 @@ import {
   type MarketIcon,
 } from '@jianmanager/ui/lib/template-apply'
 import type { Tone } from '@jianmanager/ui/lib/tone'
-import DangerConfirm from './DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type TemplateNotice = (kind: 'success' | 'error', message: string) => void

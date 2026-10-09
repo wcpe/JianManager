@@ -4,7 +4,7 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import ClientIntegrationGuide from './ClientIntegrationGuide'
-import ClientDistFlowGuide from '@jianmanager/ui/components/views/ClientDistFlowGuide'
+import ClientDistFlowGuide from '@/components/views/ClientDistFlowGuide'
 
 /**
  * ClientIntegrationGuide 强断言（FR-259）：jm-updater.json 示例只含 API 根 endpoint
