@@ -16,6 +16,7 @@
 
 ## 索引（最近新增）
 
+- [ADR-104](104-danger-gate-self-judged.md) 危险操作的角色门禁由 DangerConfirm 自行判定（**修订 ADR-103** 保留的 a+b 范式中的门禁归属一环：删除 `allowed` prop，漏配即静默空转的失效模式随之消失）
 - [ADR-103](103-business-views-return-to-app.md) 业务视图与业务契约退回应用，组件库回归设计系统（**取代 ADR-102**：撤销业务组件并入包的归属决策；a+b 双范式作为组件写法保留，包内只留设计系统）
 - [ADR-102](102-business-component-contract-extraction.md) 应用业务组件受控化并入 @jianmanager/ui（**superseded-by ADR-103**；原文保留作决策史）
 - [ADR-101](101-manual-gap-abandonment-with-audit-trail.md) 永久空洞只许人工裁定放弃且必须留痕（结构化凭据 + 操作人闸 + 回收链带上界放行；FR-474 配套）
