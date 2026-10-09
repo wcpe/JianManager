@@ -1,7 +1,7 @@
 import { useBinaryRollback, useBinaryUpgrade, useBinaryVersion } from '@/api/binaryVersion'
 import { useInstance } from '@/api/instances'
 import { usePermissionsStore } from '@/stores/permissions'
-import BinaryVersionPanelView from '@jianmanager/ui/components/views/instances/BinaryVersionPanel'
+import BinaryVersionPanelView from '@/components/views/instances/BinaryVersionPanel'
 
 /**
  * 实例「二进制版本」区的应用接线层（ADR-097 b 范式）。

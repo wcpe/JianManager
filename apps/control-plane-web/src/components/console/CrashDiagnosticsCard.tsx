@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
 import { useCrashSnapshots, useCrashTrend } from '@/api/crashSnapshots'
-import CrashDiagnosticsView from '@jianmanager/ui/components/views/instances/CrashDiagnosticsCard'
+import CrashDiagnosticsView from '@/components/views/instances/CrashDiagnosticsCard'
 
 /**
  * 崩溃诊断的应用接线层（ADR-097 a 范式）。

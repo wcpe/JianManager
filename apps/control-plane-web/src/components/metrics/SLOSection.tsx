@@ -1,5 +1,5 @@
 import { useSLO } from '@/api/metrics'
-import { SLOSection as SLOSectionView } from '@jianmanager/ui/components/views/instances/SLOSection'
+import { SLOSection as SLOSectionView } from '@/components/views/instances/SLOSection'
 import type { MetricRange } from '@jianmanager/ui'
 
 // 纯逻辑格式化函数与配色判定原样再导出（其他页面与测试直接引用）。
@@ -8,7 +8,7 @@ export {
   budgetBurnRatio,
   fmtAvailability,
   fmtDuration,
-} from '@jianmanager/ui/components/views/instances/SLOSection'
+} from '@/components/views/instances/SLOSection'
 
 /**
  * 可用性区块的应用接线层（ADR-097 a 范式）。

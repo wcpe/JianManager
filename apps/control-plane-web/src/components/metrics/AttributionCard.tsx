@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { usePerformanceAttribution } from '@/api/metrics'
-import { AttributionCard as AttributionCardView } from '@jianmanager/ui/components/views/instances/AttributionCard'
+import { AttributionCard as AttributionCardView } from '@/components/views/instances/AttributionCard'
 import type { MetricRange } from '@jianmanager/ui'
 
 // 结果视图是纯展示，原样再导出（其他页面直接用它渲染已有结果）。
-export { AttributionResultView } from '@jianmanager/ui/components/views/instances/AttributionCard'
+export { AttributionResultView } from '@/components/views/instances/AttributionCard'
 
 /**
  * 性能归因卡的应用接线层（ADR-097 a 范式）。

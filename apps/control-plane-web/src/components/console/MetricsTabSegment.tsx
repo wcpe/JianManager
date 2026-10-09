@@ -2,7 +2,7 @@ import { useInstance } from '@/api/instances'
 import { useInstanceMetrics } from '@/api/metrics'
 import { useInstanceCapabilities } from '@/lib/capabilities'
 import { resolveMetricsTabStyle } from '@/lib/metrics-source'
-import MetricsTabSegmentView from '@jianmanager/ui/components/views/instances/MetricsTabSegment'
+import MetricsTabSegmentView from '@/components/views/instances/MetricsTabSegment'
 import MetricsSegment from './MetricsSegment'
 import MetricsFallbackSegment from './MetricsFallbackSegment'
 

@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
-import InstanceTagsDialogView from '@jianmanager/ui/components/views/instances/InstanceTagsDialog'
+import InstanceTagsDialogView from '@/components/views/instances/InstanceTagsDialog'
 
 /**
  * 实例标签编辑器的应用接线层（ADR-097 b 范式）。

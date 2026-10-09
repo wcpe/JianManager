@@ -1,5 +1,5 @@
 import { useConfigDiscover } from '@/api/configs'
-import { FavoritesBarView } from '@jianmanager/ui/components/views/config-explorer/FavoritesBarView'
+import { FavoritesBarView } from '@/components/views/config-explorer/FavoritesBarView'
 
 /**
  * 配置左栏：收藏（书签）+ 已发现配置面板（FR-071）。

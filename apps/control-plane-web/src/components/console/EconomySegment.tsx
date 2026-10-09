@@ -9,7 +9,7 @@ import {
   type EconomyMirrorRow,
 } from '@/api/economy'
 import { toLedgerRows } from './economy-view'
-import EconomySegmentView from '@jianmanager/ui/components/views/instances/EconomySegment'
+import EconomySegmentView from '@/components/views/instances/EconomySegment'
 
 /**
  * 经济定制页的应用接线层（ADR-097 a 范式）。

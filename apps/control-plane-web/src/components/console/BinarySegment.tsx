@@ -1,5 +1,5 @@
 import { useInstance, useUpdateInstance } from '@/api/instances'
-import BinarySegmentView from '@jianmanager/ui/components/views/instances/BinarySegment'
+import BinarySegmentView from '@/components/views/instances/BinarySegment'
 import { ProcessPanel } from './ProcessPanel'
 
 /**

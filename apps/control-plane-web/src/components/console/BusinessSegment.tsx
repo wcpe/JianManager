@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { dispatchBusiness, fetchBusinessManifest } from '@/api/business'
-import BusinessSegmentView from '@jianmanager/ui/components/views/instances/BusinessSegment'
+import BusinessSegmentView from '@/components/views/instances/BusinessSegment'
 
 /**
  * 业务掌控台的应用接线层（ADR-097 a 范式）。

@@ -9,7 +9,7 @@ import {
 } from '@/api/bots'
 import type { BotBatchFilter } from '@jianmanager/ui/lib/bot'
 import CreateBotDialog from './CreateBotDialog'
-import BotSegmentView from '@jianmanager/ui/components/views/instances/BotSegment'
+import BotSegmentView from '@/components/views/instances/BotSegment'
 
 const PAGE_SIZE = 50
 

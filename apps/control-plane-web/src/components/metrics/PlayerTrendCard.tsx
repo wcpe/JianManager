@@ -1,9 +1,9 @@
 import { usePlayerTrend } from '@/api/metrics'
-import { PlayerTrendCard as PlayerTrendCardView } from '@jianmanager/ui/components/views/instances/PlayerTrendCard'
+import { PlayerTrendCard as PlayerTrendCardView } from '@/components/views/instances/PlayerTrendCard'
 import type { MetricRange } from '@jianmanager/ui'
 
 // 纯展示子组件原样再导出。
-export { HourlyBars } from '@jianmanager/ui/components/views/instances/PlayerTrendCard'
+export { HourlyBars } from '@/components/views/instances/PlayerTrendCard'
 
 /**
  * 玩家在线趋势卡的应用接线层（ADR-097 a 范式）。

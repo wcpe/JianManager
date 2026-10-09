@@ -2,7 +2,7 @@ import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useInstance } from '@/api/instances'
 import { cardTypeDef, type CardType } from '@/lib/workspace-card'
-import WorkspaceCardView from '@jianmanager/ui/components/views/instances/WorkspaceCard'
+import WorkspaceCardView from '@/components/views/instances/WorkspaceCard'
 import WorkspaceCardBody from './WorkspaceCardBody'
 
 /**
