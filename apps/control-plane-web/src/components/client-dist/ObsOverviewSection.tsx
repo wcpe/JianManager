@@ -1,5 +1,5 @@
 import { useClientDistObservability } from '@/api/clientStats'
-import { ObsOverviewView } from '@jianmanager/ui/components/views/client-dist/ObsOverviewView'
+import { ObsOverviewView } from '@/components/views/client-dist/ObsOverviewView'
 import MachineListPanel from './MachineListPanel'
 import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
 

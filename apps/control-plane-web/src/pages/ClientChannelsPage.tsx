@@ -66,18 +66,18 @@ import ClientDistFlowGuide from '@jianmanager/ui/components/views/ClientDistFlow
 import {
   ReadinessStepper,
   STEP_META,
-} from '@jianmanager/ui/components/views/client-dist/ReadinessStepper'
+} from '@/components/views/client-dist/ReadinessStepper'
 import {
   ChannelCard,
   EmptyChannelsGuide,
-} from '@jianmanager/ui/components/views/client-dist/ChannelCards'
+} from '@/components/views/client-dist/ChannelCards'
 import {
   RevealDialog,
   SecretDialog,
-} from '@jianmanager/ui/components/views/client-dist/KeySecretDialogs'
-import { CreateChannelDialog } from '@jianmanager/ui/components/views/client-dist/CreateChannelDialog'
-import { KeysSegment } from '@jianmanager/ui/components/views/client-dist/KeysSegment'
-import { ChannelSecuritySummaryBar } from '@jianmanager/ui/components/views/client-dist/ChannelSecuritySummaryBar'
+} from '@/components/views/client-dist/KeySecretDialogs'
+import { CreateChannelDialog } from '@/components/views/client-dist/CreateChannelDialog'
+import { KeysSegment } from '@/components/views/client-dist/KeysSegment'
+import { ChannelSecuritySummaryBar } from '@/components/views/client-dist/ChannelSecuritySummaryBar'
 import { useDangerPermission } from '@/lib/danger'
 
 type ErrResp = { response?: { data?: { message?: string } } }

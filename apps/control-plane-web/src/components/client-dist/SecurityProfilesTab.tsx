@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { SecurityProfilesTabView, type ProfileMaskers } from '@jianmanager/ui/components/views/client-dist/SecurityProfilesTabView'
+import { SecurityProfilesTabView, type ProfileMaskers } from '@/components/views/client-dist/SecurityProfilesTabView'
 import { maskInstallId, maskMachineId, maskPlayerName } from '@/lib/privacy-mask'
 import { useClientDistSecurityProfile, useClientDistSecurityProfiles } from '@/api/clientDistSecurity'
 import { useSecurityQuery } from './security-shared'

@@ -33,18 +33,18 @@ import {
   type GroupByDim,
   type OverviewFilter,
 } from './bots-overview'
-import { SummaryCards } from '@jianmanager/ui/components/views/bots/BotListParts'
-import { BotToolbar } from '@jianmanager/ui/components/views/bots/BotToolbar'
-import { BotBatchBar } from '@jianmanager/ui/components/views/bots/BotBatchBar'
-import { BotGroupOverview } from '@jianmanager/ui/components/views/bots/BotGroupOverview'
+import { SummaryCards } from '@/components/views/bots/BotListParts'
+import { BotToolbar } from '@/components/views/bots/BotToolbar'
+import { BotBatchBar } from '@/components/views/bots/BotBatchBar'
+import { BotGroupOverview } from '@/components/views/bots/BotGroupOverview'
 import {
   BOT_PEEK_PAGE_SIZE,
   BotGroupActions,
   BotGroupPeek,
   BotGroupRow,
-} from '@jianmanager/ui/components/views/bots/BotGroupPartsView'
-import { BotStressSessionDialog } from '@jianmanager/ui/components/views/bots/BotStressSessionDialog'
-import { BotDetailDialog as BotDetailDialogView } from '@jianmanager/ui/components/views/bots/BotDetailDialog'
+} from '@/components/views/bots/BotGroupPartsView'
+import { BotStressSessionDialog } from '@/components/views/bots/BotStressSessionDialog'
+import { BotDetailDialog as BotDetailDialogView } from '@/components/views/bots/BotDetailDialog'
 import { useDangerPermission } from '@/lib/danger'
 import { BotWorktableCard } from '@/components/console/BotWorktableCard'
 import type { ViewMode } from '@jianmanager/ui/components/view-toggle'

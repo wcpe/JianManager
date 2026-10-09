@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { ClientVersionsPanelView } from '@jianmanager/ui/components/views/client-dist/ClientVersionsPanelView'
+import { ClientVersionsPanelView } from '@/components/views/client-dist/ClientVersionsPanelView'
 import {
   useClientVersions,
   useClientVersion,

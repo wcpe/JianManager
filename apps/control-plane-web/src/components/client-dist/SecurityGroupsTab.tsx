@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { GroupsTabView } from '@jianmanager/ui/components/views/client-dist/SecurityGroupsTabView'
+import { GroupsTabView } from '@/components/views/client-dist/SecurityGroupsTabView'
 import type { SaveSecurityGroupRequest } from '@jianmanager/ui/lib/client-dist-security-contracts'
 import { useClientSecurityGroups, useCreateClientSecurityGroup } from '@/api/clientDistSecurity'
 

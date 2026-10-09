@@ -2,7 +2,7 @@ import { useClientDistIpAnalysis, useClientDistPlayerAnalysis } from '@/api/clie
 import {
   IpAnalysisTabView,
   PlayerAnalysisTabView,
-} from '@jianmanager/ui/components/views/client-dist/SecurityAnalysisTabsView'
+} from '@/components/views/client-dist/SecurityAnalysisTabsView'
 
 /**
  * 安全侧「IP 剖析 / 玩家名剖析」两个只读聚合 Tab（FR-430 / ADR-088）。

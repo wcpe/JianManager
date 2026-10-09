@@ -1,6 +1,6 @@
 // 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入导出实现与结果回执（受控化）。
 import { toast } from 'sonner'
-import { ClientDistExportButton as ClientDistExportButtonView } from '@jianmanager/ui/components/views/client-dist/EmbeddedUpdaterParts'
+import { ClientDistExportButton as ClientDistExportButtonView } from '@/components/views/client-dist/EmbeddedUpdaterParts'
 import {
   exportClientDistCSV,
   saveClientDistCSV,
