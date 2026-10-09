@@ -1257,12 +1257,13 @@ apps/ui-museum/                   # 控件博物馆 Vite workspace 应用，直�
 
 ### 8.7 危险操作保护（FR-059）
 
-所有破坏性操作统一经 `components/common/DangerConfirm.tsx` 二次确认，替代 `window.confirm` 与零散内联确认弹窗：
+所有破坏性操作统一经 `components/views/common/DangerConfirm.tsx` 二次确认，替代 `window.confirm` 与零散内联确认弹窗：
 
 - **二次确认**：基于 shadcn Dialog，主按钮恒为 `destructive` 样式。
 - **高危输入名校验**：传 `confirmText`（通常为资源名）后，用户须逐字输入该名称方可确认（删实例/删用户等）。
 - **角色门禁**：传 `scope`（`group` = 组管理员+，如删实例/删备份/删 Bot；`platform` = 仅平台管理员，如删用户/删群组）。越权用户确认按钮禁用并提示；前端仅做 UI 拦截，最终拒绝由 Control Plane RBAC 中间件强制（架构不变量）。审计经既有后端中间件留痕。
-- 角色来自 `stores/auth` 解码自身 access token 的 `role` 声明（`lib/auth/jwt.ts`），门禁判定纯函数为 `lib/shared/danger.ts#canRunDanger`。
+- **门禁由组件自行判定**（ADR-099）：传了 `scope` 即由 `DangerConfirm` 内部读登录态角色判定，调用点不传也不需要传判定结果。曾经的「外壳读角色后经 `allowed` 注入」已废弃——`allowed` 可选且默认放行，外壳漏传即静默空转（全仓曾查出 17 处）。
+- 角色来自 `stores/auth` 解码自身 access token 的 `role` 声明（`lib/auth/jwt.ts`），门禁判定纯函数为 `lib/shared/danger.ts#canRunDanger`（`DangerScope` 亦定义在此，属业务契约）。
 
 其它 FR 的新破坏性操作（如 FR-048 节点下线、FR-052 删插件、FR-058 批量 kill）应复用此组件，按上述 `scope`/`confirmText` 约定接入。
 

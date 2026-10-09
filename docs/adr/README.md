@@ -16,6 +16,7 @@
 
 ## 索引（最近新增）
 
+- [ADR-099](099-danger-gate-self-judged.md) 危险操作的角色门禁由 DangerConfirm 自行判定（**修订 ADR-098** 保留的 a+b 范式中的门禁归属一环：删除 `allowed` prop，漏配即静默空转的失效模式随之消失）
 - [ADR-098](098-business-views-return-to-app.md) 业务视图与业务契约退回应用，组件库回归设计系统（**取代 ADR-097**：撤销业务组件并入包的归属决策；a+b 双范式作为组件写法保留，包内只留设计系统）
 - [ADR-097](097-business-component-contract-extraction.md) 应用业务组件受控化并入 @jianmanager/ui（**superseded-by ADR-098**；原文保留作决策史）
 - [ADR-096](096-mcp-stateless-endpoint.md) MCP 端点在 Streamable HTTP 路径上无状态化（FR-489，部分取代 ADR-077 的会话运维模型、修订 ADR-080 决策 6 的论证）

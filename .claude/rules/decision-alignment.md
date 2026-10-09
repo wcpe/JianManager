@@ -26,6 +26,8 @@
 | ADR-008 | MC 结构化启动 + 托管多 JDK | MC 实例由 jdk+jvm参数+jar 派生启动命令；按节点托管多 JDK 并绑定 |
 | ADR-094 | Worker 日志本地数据面与 CP 联邦查询 | Worker 可持久化 Worker-owned 日志数据面；CP 业务库、权限真源、指标时序仍仅 CP 可写。Log RPC 只经 ADR-081 反向隧道，浏览器不得直连 Worker/VL |
 | ADR-096 | MCP 端点在 Streamable HTTP 路径上无状态化 | 不得重新引入协议会话（`Mcp-Session-Id` 与随之而来的超时、并发上限、列表/踢线、`SESSION_GONE`）；授权必须取**每请求重建的 principal**；SSE 兼容路径只保留传输连接登记；MCP 运维视图按 Token 聚合（`agent_call_logs`），不依赖进程内状态 |
+| ADR-098 | 业务视图与业务契约退回应用，组件库回归设计系统 | 业务视图只在 `apps/control-plane-web/src/components/views/`、业务 lib 只在 `apps/control-plane-web/src/lib/`；`@jianmanager/ui` 只含设计系统（原语/布局/外壳/12 个 helper），不得再并入业务代码；包与应用不得互相引用（应用→包单向）。由 `ui-package-rollback.test.ts` 守门 |
+| ADR-099 | 危险操作角色门禁由 `DangerConfirm` 自行判定 | 不在 `DangerConfirm` 与其调用点之间传 `allowed`（已删除该 prop）——调用点只声明 `scope`，判定在组件内。新增危险操作不得自行注入门禁结果，也不得依赖「外壳会拦」；后端 RBAC 仍是最终防线 |
 
 ## 检查时机
 
