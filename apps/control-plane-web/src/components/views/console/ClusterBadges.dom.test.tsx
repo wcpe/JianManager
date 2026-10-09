@@ -51,6 +51,8 @@ function renderBadges(over: Partial<ClusterBadgesProps> = {}) {
     runningRows: [{ id: 11, name: 'inst-a', nodeId: 1, nodeName: 'n1' }],
     crashedRows: [],
     remaining: { nodes: 0, running: 0, crashed: 0 },
+    // 占位取数 hook：不取数（等价于「无数据」）。必填，见 ClusterBadgesProps 的说明。
+    useInstancePlayers: () => undefined,
     onSlotToggle: vi.fn(),
     onOpenNode: vi.fn(),
     onOpenInstance: vi.fn(),
