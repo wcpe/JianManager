@@ -1,27 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { uploadFilesEfficient, type EfficientUploadProgress } from './efficientUpload'
-import { AGGREGATE_MAX_FILE_BYTES, HASH_MAX_FILE_BYTES } from '@/lib/client-dist/client-upload-plan'
-import { precheckClientFiles, uploadClientFilesBatch } from '@/api/clientVersions'
-import type { ClientFileResult, PrecheckFileResult } from '@/api/clientVersions'
-import { uploadFileChunked } from './chunkedUpload'
+import { uploadFilesEfficient } from './efficient-upload'
+import type {
+  EfficientPrecheckEntry,
+  EfficientPrecheckResult,
+  EfficientUploadDeps,
+  EfficientUploadProgress,
+} from './efficient-upload'
+import type { ChunkUploadResult } from './chunked-upload'
+import { AGGREGATE_MAX_FILE_BYTES, HASH_MAX_FILE_BYTES } from './client-upload-plan'
 
 /**
- * FR-346 上传编排器：预查命中跳过上传 / miss 小文件聚合 / 大文件分块 /
- * 超大免预查 / 预查失败降级 / fail-fast / 进度单调。
- * 网络层（api 封装与分块客户端）全 mock，编排逻辑真跑。
+ * FR-346 上传编排器（`efficient-upload.ts` 纯逻辑）：预查命中跳过上传 / miss 小文件聚合 /
+ * 大文件分块 / 超大免预查 / 预查失败降级 / fail-fast / 进度单调。
+ *
+ * 三个取数依赖经 `EfficientUploadDeps` 直接注入替身，**不 mock `@/api/*`**——被测的就是
+ * 编排本身。api 接线的正确性（真实 precheckClientFiles / uploadClientFilesBatch /
+ * uploadFileChunked 是否被注入位）由 `client-upload-api.test.ts` 覆盖。
  */
-
-vi.mock('@/api/clientVersions', () => ({
-  precheckClientFiles: vi.fn(),
-  uploadClientFilesBatch: vi.fn(),
-}))
-vi.mock('./chunkedUpload', () => ({
-  uploadFileChunked: vi.fn(),
-}))
-
-const mockPrecheck = vi.mocked(precheckClientFiles)
-const mockBatch = vi.mocked(uploadClientFilesBatch)
-const mockChunked = vi.mocked(uploadFileChunked)
 
 /** 构造内容可控的小文件。 */
 function smallFile(name: string, content: string): File {
@@ -35,21 +30,45 @@ function fakeSizeFile(name: string, size: number): File {
   return f
 }
 
-function mkResult(sha256: string, size: number): ClientFileResult {
+function mkResult(sha256: string, size: number): ChunkUploadResult {
   return { sha256, md5: 'md5-' + sha256.slice(0, 8), size, codec: 'none' }
 }
 
 /** 按请求回显全命中的预查结果。 */
-function allHit(files: { sha256: string; size: number }[]): PrecheckFileResult[] {
+function allHit(files: EfficientPrecheckEntry[]): EfficientPrecheckResult[] {
   return files.map((f) => ({ sha256: f.sha256, hit: true, result: mkResult(f.sha256, f.size) }))
 }
 
 /** 按请求回显全未命中的预查结果。 */
-function allMiss(files: { sha256: string; size: number }[]): PrecheckFileResult[] {
+function allMiss(files: EfficientPrecheckEntry[]): EfficientPrecheckResult[] {
   return files.map((f) => ({ sha256: f.sha256, hit: false }))
 }
 
+// 依赖替身：签名取自 EfficientUploadDeps，参数显式标注以保类型（不得用 any）。
+// 默认实现按入参回显，用例内可再覆盖。
+type ChunkedOpts = Parameters<EfficientUploadDeps['uploadChunked']>[2]
+
+const mockPrecheck = vi.fn(async (_channelId: string, query: EfficientPrecheckEntry[]) =>
+  // 默认全未命中（要让某个文件命中，用例内覆盖实现）。
+  query.map<EfficientPrecheckResult>(() => ({ hit: false })),
+)
+// 第 3 位 options 本替身用不上，但必须留在这个元组签名里——用例要经 `mock.calls`
+// 观察 onUploadProgress / signal 是如何被编排器传下去的。
+const mockBatch = vi.fn(async (...args: Parameters<EfficientUploadDeps['uploadBatch']>) =>
+  args[1].map((e) => mkResult(e.sha256, e.size)),
+)
+const mockChunked = vi.fn(async (_channelId: string, file: File, opts?: ChunkedOpts) =>
+  // 默认回显编排器透传的 expectedSha256（无则给个固定值），便于断言强校验链路。
+  mkResult(opts?.expectedSha256 ?? 'e'.repeat(64), file.size),
+)
+
+/** 每次调用现取替身，避免用例间互相污染。 */
+function deps(): EfficientUploadDeps {
+  return { precheck: mockPrecheck, uploadBatch: mockBatch, uploadChunked: mockChunked }
+}
+
 beforeEach(() => {
+  // 只清调用记录与实例，保留上面各 mock 的默认实现（用例内的实现覆盖在用例内设置）。
   vi.clearAllMocks()
 })
 
@@ -62,7 +81,9 @@ describe('uploadFilesEfficient', () => {
       { key: 'b', file: smallFile('b.txt', 'bbbb'), label: 'mods/b.txt' },
     ]
     const events: EfficientUploadProgress[] = []
-    const out = await uploadFilesEfficient('ch-1', entries, { onProgress: (p) => events.push({ ...p }) })
+    const out = await uploadFilesEfficient(deps(), 'ch-1', entries, {
+      onProgress: (p) => events.push({ ...p }),
+    })
 
     expect(out.size).toBe(2)
     expect(out.get('a')?.codec).toBe('none')
@@ -77,15 +98,12 @@ describe('uploadFilesEfficient', () => {
 
   it('未命中的小文件进聚合批（meta 与内容同序），不走分块', async () => {
     mockPrecheck.mockImplementation(async (_ch, files) => allMiss(files))
-    mockBatch.mockImplementation(async (_ch, entries) =>
-      entries.map((e) => mkResult(e.sha256, e.size)),
-    )
 
     const entries = [
       { key: 'a', file: smallFile('a.txt', 'aaa'), label: 'a.txt' },
       { key: 'b', file: smallFile('b.txt', 'bb'), label: 'b.txt' },
     ]
-    const out = await uploadFilesEfficient('ch-1', entries, {})
+    const out = await uploadFilesEfficient(deps(), 'ch-1', entries, {})
 
     expect(mockBatch).toHaveBeenCalledTimes(1)
     const sent = mockBatch.mock.calls[0][1]
@@ -99,12 +117,10 @@ describe('uploadFilesEfficient', () => {
     const originalCrypto = globalThis.crypto
     vi.stubGlobal('crypto', {})
     mockPrecheck.mockImplementation(async (_ch, files) => allMiss(files))
-    mockBatch.mockImplementation(async (_ch, entries) =>
-      entries.map((e) => mkResult(e.sha256, e.size)),
-    )
 
     try {
       const out = await uploadFilesEfficient(
+        deps(),
         'ch-1',
         [
           { key: 'a', file: smallFile('a.txt', 'aaa'), label: 'a.txt' },
@@ -125,12 +141,9 @@ describe('uploadFilesEfficient', () => {
 
   it('大文件（>8MiB）走分块并携带 expectedSha256；不入聚合', async () => {
     mockPrecheck.mockImplementation(async (_ch, files) => allMiss(files))
-    mockChunked.mockImplementation(async (_ch, file, opts) =>
-      mkResult(opts?.expectedSha256 ?? 'no-sha', file.size),
-    )
 
     const big = fakeSizeFile('big.jar', AGGREGATE_MAX_FILE_BYTES + 1)
-    const out = await uploadFilesEfficient('ch-1', [{ key: 'big', file: big, label: 'big.jar' }], {})
+    const out = await uploadFilesEfficient(deps(), 'ch-1', [{ key: 'big', file: big, label: 'big.jar' }], {})
 
     expect(mockBatch).not.toHaveBeenCalled()
     expect(mockChunked).toHaveBeenCalledTimes(1)
@@ -141,15 +154,12 @@ describe('uploadFilesEfficient', () => {
 
   it('超大文件（>256MiB）不 hash、不进预查，直接分块（无 expectedSha256）', async () => {
     mockPrecheck.mockImplementation(async (_ch, files) => allMiss(files))
-    mockChunked.mockImplementation(async (_ch, file) => mkResult('e'.repeat(64), file.size))
 
     const huge = fakeSizeFile('huge.bin', HASH_MAX_FILE_BYTES + 1)
     const small = smallFile('s.txt', 'ss')
-    mockBatch.mockImplementation(async (_ch, entries) =>
-      entries.map((e) => mkResult(e.sha256, e.size)),
-    )
 
     await uploadFilesEfficient(
+      deps(),
       'ch-1',
       [
         { key: 'huge', file: huge, label: 'huge.bin' },
@@ -167,11 +177,9 @@ describe('uploadFilesEfficient', () => {
 
   it('预查请求失败：降级全量上传，不阻断发布', async () => {
     mockPrecheck.mockRejectedValue(new Error('precheck 500'))
-    mockBatch.mockImplementation(async (_ch, entries) =>
-      entries.map((e) => mkResult(e.sha256, e.size)),
-    )
 
     const out = await uploadFilesEfficient(
+      deps(),
       'ch-1',
       [{ key: 'a', file: smallFile('a.txt', 'aaa'), label: 'a.txt' }],
       {},
@@ -186,7 +194,12 @@ describe('uploadFilesEfficient', () => {
     mockBatch.mockRejectedValue(boom)
 
     await expect(
-      uploadFilesEfficient('ch-1', [{ key: 'a', file: smallFile('a.txt', 'x'), label: 'a.txt' }], {}),
+      uploadFilesEfficient(
+        deps(),
+        'ch-1',
+        [{ key: 'a', file: smallFile('a.txt', 'x'), label: 'a.txt' }],
+        {},
+      ),
     ).rejects.toBe(boom)
   })
 
@@ -194,9 +207,12 @@ describe('uploadFilesEfficient', () => {
     const ac = new AbortController()
     ac.abort()
     await expect(
-      uploadFilesEfficient('ch-1', [{ key: 'a', file: smallFile('a.txt', 'x'), label: 'a.txt' }], {
-        signal: ac.signal,
-      }),
+      uploadFilesEfficient(
+        deps(),
+        'ch-1',
+        [{ key: 'a', file: smallFile('a.txt', 'x'), label: 'a.txt' }],
+        { signal: ac.signal },
+      ),
     ).rejects.toMatchObject({ name: 'AbortError' })
     expect(mockPrecheck).not.toHaveBeenCalled()
     expect(mockBatch).not.toHaveBeenCalled()
@@ -205,7 +221,11 @@ describe('uploadFilesEfficient', () => {
   it('混合场景进度单调不倒退、终值等于总字节', async () => {
     // a 命中；b miss 小文件；c 大文件分块。
     mockPrecheck.mockImplementation(async (_ch, files) =>
-      files.map((f, i) => (i === 0 ? { sha256: f.sha256, hit: true, result: mkResult(f.sha256, f.size) } : { sha256: f.sha256, hit: false })),
+      files.map((f, i) =>
+        i === 0
+          ? { sha256: f.sha256, hit: true, result: mkResult(f.sha256, f.size) }
+          : { sha256: f.sha256, hit: false },
+      ),
     )
     mockBatch.mockImplementation(async (_ch, entries, opts) => {
       opts?.onUploadProgress?.(1) // 在途部分进度
@@ -223,7 +243,7 @@ describe('uploadFilesEfficient', () => {
       { key: 'c', file: big, label: 'c.bin' },
     ]
     const seen: number[] = []
-    const out = await uploadFilesEfficient('ch-1', entries, {
+    const out = await uploadFilesEfficient(deps(), 'ch-1', entries, {
       onProgress: (p) => seen.push(p.uploadedBytes),
     })
 
@@ -233,7 +253,7 @@ describe('uploadFilesEfficient', () => {
   })
 
   it('空入参：直接返回空映射、不发请求', async () => {
-    const out = await uploadFilesEfficient('ch-1', [], {})
+    const out = await uploadFilesEfficient(deps(), 'ch-1', [], {})
     expect(out.size).toBe(0)
     expect(mockPrecheck).not.toHaveBeenCalled()
   })

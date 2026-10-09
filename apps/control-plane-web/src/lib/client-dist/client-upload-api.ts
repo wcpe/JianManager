@@ -1,22 +1,24 @@
 import api from '@/api/client'
+import { precheckClientFiles, uploadClientFilesBatch } from '@/api/clientVersions'
 import type { ClientFileResult } from '@/api/clientVersions'
-
-// 纯逻辑（切片数学、进度归并、abortError、类型）已回迁应用侧；
-// 此处转出，调用点零改动。
-export * from '@/lib/client-dist/chunked-upload'
-
-import { abortError, progressBytes, sliceRanges } from '@/lib/client-dist/chunked-upload'
+import { abortError, progressBytes, sliceRanges } from './chunked-upload'
+import type { UploadFileChunkedOptions } from './chunked-upload'
+import { uploadFilesEfficient as runEfficientUpload } from './efficient-upload'
+import type { EfficientUploadEntry, EfficientUploadOptions } from './efficient-upload'
 
 /**
- * 客户端分发大文件分块上传客户端（FR-251，增强 FR-088）。
+ * 客户端分发上传的 **api 接线模块**：`lib/client-dist/` 内唯一 import `@/api/*` 的模块。
  *
- * 复用后端分块协议：init（声明大小得 uploadId/chunkSize/chunkCount）→ 按 chunkSize 顺序
- * PUT 各分片原始字节（幂等）→ complete（服务端拼装喂 CAS，返回与单次上传一致的
- * {sha256,md5,size,codec}）。onProgress 报已上传/总字节；signal 支持取消（取消即 DELETE 弃单）。
+ * 分层约定（为可测性服务，勿让纯逻辑反向依赖 api）：
+ * - 纯逻辑留在 `chunked-upload.ts`（切片数学 / 进度归并 / 取消错误）、
+ *   `client-upload-plan.ts`（hash、装箱、分路、并发池）、`efficient-upload.ts`（上传编排，
+ *   取数经 `EfficientUploadDeps` 注入）——它们不 import `@/api/*`，单测可直接塞替身，
+ *   无需 mock 模块；
+ * - 应用侧 api 实现只在**本模块**注入一次，对外仍是发布页要用的两个入口：分块上传
+ *   `uploadFileChunked(channelId,file,opts)` 与批量编排 `uploadFilesEfficient(channelId,entries,opts)`。
  *
- * 签名对 FR-250（延迟批量上传编排）稳定：uploadFileChunked(channelId,file,{onProgress,signal})。
- *
- * 网络部分留应用侧（要读 `@/api/client` 与 `ClientFileResult`），纯逻辑取自包内。
+ * 拆开的意义：编排分支（秒传命中 / 聚合 / 分块 / 降级）的测试不再需要穿透一层
+ * 「转出 + 注入」的壳，接线本身由 `client-upload-api.test.ts` 走真实 api 契约覆盖。
  */
 
 /** init 返回（对应后端 service.InitResult）。 */
@@ -29,6 +31,12 @@ interface InitUploadResult {
 /**
  * 分块上传一个文件到指定频道，返回内容寻址元数据（与单次上传 usePublishClientFile 同结构）。
  *
+ * 复用后端分块协议：init（声明大小得 uploadId/chunkSize/chunkCount）→ 按 chunkSize 顺序
+ * PUT 各分片原始字节（幂等）→ complete（服务端拼装喂 CAS，返回与单次上传一致的
+ * {sha256,md5,size,codec}）。onProgress 报已上传/总字节；signal 支持取消（取消即 DELETE 弃单）。
+ *
+ * 签名对 FR-250（延迟批量上传编排）稳定：uploadFileChunked(channelId,file,{onProgress,signal})。
+ *
  * 流程：init → 顺序 PUT 各分片（application/octet-stream 原始字节）→ complete。
  * 0 字节文件（.gitkeep/空配置）：init(totalSize=0) 合法、无分片，直达 complete（后端落空内容 CAS）。
  * 取消（signal.aborted）在任意阶段生效：已 init 则 best-effort DELETE 弃单后抛 AbortError。
@@ -37,7 +45,7 @@ interface InitUploadResult {
 export async function uploadFileChunked(
   channelId: string,
   file: File,
-  opts: import('@/lib/client-dist/chunked-upload').UploadFileChunkedOptions = {},
+  opts: UploadFileChunkedOptions = {},
 ): Promise<ClientFileResult> {
   const { onProgress, signal, chunkSize: wantChunkSize, expectedSha256 } = opts
 
@@ -93,4 +101,28 @@ async function abortUpload(channelId: string, uploadId: string): Promise<void> {
   } catch {
     // 弃单失败不阻断：服务端 TTL 会回收空闲会话的临时分片。
   }
+}
+
+/**
+ * 批量上传一组文件，返回 key → ClientFileResult 映射（与逐文件 uploadFileChunked 同构结果）。
+ * 任一任务失败即 fail-fast 抛错（调用方保草稿可重试）；取消抛 AbortError。
+ *
+ * 编排逻辑在 `efficient-upload.ts`，本处只注入三个取数依赖（预查 / 聚合批 / 分块），
+ * 因此对外签名仍是迁移前发布页调用的那个（channelId, entries, opts）。
+ */
+export async function uploadFilesEfficient(
+  channelId: string,
+  entries: EfficientUploadEntry[],
+  opts: EfficientUploadOptions = {},
+): Promise<Map<string, ClientFileResult>> {
+  return runEfficientUpload(
+    {
+      precheck: precheckClientFiles,
+      uploadBatch: uploadClientFilesBatch,
+      uploadChunked: uploadFileChunked,
+    },
+    channelId,
+    entries,
+    opts,
+  )
 }

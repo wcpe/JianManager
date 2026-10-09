@@ -1,3 +1,11 @@
+/**
+ * 分块上传的**纯逻辑**与类型契约（FR-251，增强 FR-088）：切片数学、进度归并、取消错误。
+ *
+ * 不 import `@/api/*`——网络侧（init → 顺序 PUT 分片 → complete → 失败弃单）在
+ * `client-upload-api.ts`，api 实现只在那边注入。拆开的收益是切片数学与进度归并
+ * 能被单测直接覆盖，不必先 mock 掉 axios。
+ */
+
 /** 内容寻址元数据（与后端 service.ClientFileResult 对应，FR-251）。 */
 export interface ChunkUploadResult {
   sha256: string
@@ -5,16 +13,6 @@ export interface ChunkUploadResult {
   size: number
   codec: string
 }
-
-/**
- * 客户端分发大文件分块上传客户端（FR-251，增强 FR-088）。
- *
- * 复用后端分块协议：init（声明大小得 uploadId/chunkSize/chunkCount）→ 按 chunkSize 顺序
- * PUT 各分片原始字节（幂等）→ complete（服务端拼装喂 CAS，返回与单次上传一致的
- * {sha256,md5,size,codec}）。onProgress 报已上传/总字节；signal 支持取消（取消即 DELETE 弃单）。
- *
- * 签名对 FR-250（延迟批量上传编排）稳定：uploadFileChunked(channelId,file,{onProgress,signal})。
- */
 
 /** 单个分片的字节区间（半开区间 [start,end)），由纯函数 sliceRanges 产出。 */
 export interface ChunkRange {
@@ -26,7 +24,7 @@ export interface ChunkRange {
   end: number
 }
 
-/** uploadFileChunked 可选项。 */
+/** `uploadFileChunked`（实现在 client-upload-api.ts）可选项。 */
 export interface UploadFileChunkedOptions {
   /** 进度回调：已上传字节数 / 总字节数。片粒度推进（每片完成后回调）。 */
   onProgress?: (uploadedBytes: number, totalBytes: number) => void
@@ -81,12 +79,3 @@ export function progressBytes(
 export function abortError(): Error {
   return new DOMException('上传已取消', 'AbortError')
 }
-
-/**
- * 分块上传一个文件到指定频道，返回内容寻址元数据（与单次上传 usePublishClientFile 同结构）。
- *
- * 流程：init → 顺序 PUT 各分片（application/octet-stream 原始字节）→ complete。
- * 0 字节文件（.gitkeep/空配置）：init(totalSize=0) 合法、无分片，直达 complete（后端落空内容 CAS）。
- * 取消（signal.aborted）在任意阶段生效：已 init 则 best-effort DELETE 弃单后抛 AbortError。
- * codec 恒 none（本期发布不压缩，与既有 ClientPublishPage 一致）。
- */
