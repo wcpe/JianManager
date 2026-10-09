@@ -9,7 +9,7 @@ import { isPlatformAdmin } from '@/lib/roles'
 import { useSettings, useUpdateSettings } from '@/api/settings'
 import type { SettingCategory } from '@/pages/settings-form'
 import { OutboundTestButton } from '@/components/OutboundTestButton'
-import { SettingsPageView } from '@jianmanager/ui/components/views/settings/SettingsPageView'
+import { SettingsPageView } from '@/components/views/settings/SettingsPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {

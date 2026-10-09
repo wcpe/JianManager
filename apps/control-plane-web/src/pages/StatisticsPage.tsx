@@ -9,7 +9,7 @@ import { useAuthStore } from '@/stores/auth'
 import type { MetricRange } from '@jianmanager/ui'
 import { SLOSection } from '@/components/metrics/SLOSection'
 import { PlayerTrendCard } from '@/components/metrics/PlayerTrendCard'
-import { StatisticsPageView } from '@jianmanager/ui/components/views/statistics/StatisticsPageView'
+import { StatisticsPageView } from '@/components/views/statistics/StatisticsPageView'
 
 /** 平台管理员角色位（与后端 roles.ts 同源，应用侧权威副本；包内不持鉴权状态）。 */
 const ROLE_PLATFORM_ADMIN = 10

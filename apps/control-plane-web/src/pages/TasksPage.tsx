@@ -10,7 +10,7 @@ import {
   TASKS_WINDOW_STEP,
   TasksPageView,
   type TasksFilterState,
-} from '@jianmanager/ui/components/views/tasks/TasksPageView'
+} from '@/components/views/tasks/TasksPageView'
 
 /** 全部筛选清空（重置按钮与初次进入共用同一份初值）。 */
 const EMPTY_FILTERS: TasksFilterState = { state: '', kind: '', nodeId: '', keyword: '', time: '' }

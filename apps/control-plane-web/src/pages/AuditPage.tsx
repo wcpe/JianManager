@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react'
 import { useAuditLogs, exportAuditLogs } from '@/api/audit'
 import { useUsers } from '@/api/users'
-import { AuditPageView } from '@jianmanager/ui/components/views/audit/AuditPageView'
+import { AuditPageView } from '@/components/views/audit/AuditPageView'
 import { DEFAULT_AUDIT_FILTER, toAuditParams, type AuditFilterState } from './audit-filters'
 
 /**

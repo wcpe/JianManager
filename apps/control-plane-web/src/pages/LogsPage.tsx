@@ -28,7 +28,7 @@ import {
   type LogsFilterState,
   type LogsInsights,
   type LogsView,
-} from '@jianmanager/ui/components/views/logs/LogsPageView'
+} from '@/components/views/logs/LogsPageView'
 import {
   buildExportParams,
   timeRangeToParams,

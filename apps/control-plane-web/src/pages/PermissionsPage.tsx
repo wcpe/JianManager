@@ -15,7 +15,7 @@ import { usePermissionsStore } from '@/stores/permissions'
 import {
   PermissionsPageView,
   type PermissionSelection,
-} from '@jianmanager/ui/components/views/permissions/PermissionsPageView'
+} from '@/components/views/permissions/PermissionsPageView'
 
 /**
  * 深链初始选择：只在挂载时读一次 `?user=<id>`（`?role` 不参与，与迁包前一致）。
