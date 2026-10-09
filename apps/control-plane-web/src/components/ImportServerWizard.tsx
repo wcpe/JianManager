@@ -15,7 +15,7 @@ import ImportServerWizardView, {
   type ImportInspectOutcome,
   type ImportServerQueryInput,
   type ImportServerSubmitResult,
-} from '@jianmanager/ui/components/views/import-server/ImportServerWizardView'
+} from '@/components/views/import-server/ImportServerWizardView'
 
 interface ImportServerWizardProps {
   open: boolean

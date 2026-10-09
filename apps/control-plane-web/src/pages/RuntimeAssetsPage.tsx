@@ -17,7 +17,7 @@ import {
   RuntimeAssetsInstancePickerView,
   RuntimeAssetsPageView,
   type RuntimeAssetsInstancePickerArgs,
-} from '@jianmanager/ui/components/views/runtime-assets/RuntimeAssetsPageView'
+} from '@/components/views/runtime-assets/RuntimeAssetsPageView'
 import ArtifactReconcileSection from './ArtifactReconcileSection'
 
 /** API 错误形状（占用方提示从 message + instances 字段取）。 */

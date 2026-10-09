@@ -21,7 +21,7 @@ import {
   type SystemUpdateNodePending,
   type SystemUpdateRolloutDraft,
   type SystemUpdateWorkerAssetTarget,
-} from '@jianmanager/ui/components/views/system-update/SystemUpdatePageView'
+} from '@/components/views/system-update/SystemUpdatePageView'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
 const ROLE_PLATFORM_ADMIN = 10

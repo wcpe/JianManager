@@ -9,7 +9,7 @@ import {
 } from '@/api/configBaselines'
 import { useInstanceGroups } from '@/api/instanceGroups'
 import { useDangerPermission } from '@/lib/danger'
-import { ConfigBaselinesPageView } from '@jianmanager/ui/components/views/config-baselines/ConfigBaselinesPageView'
+import { ConfigBaselinesPageView } from '@/components/views/config-baselines/ConfigBaselinesPageView'
 
 /**
  * 配置基线页容器（ADR-097 b 范式）：基线列表、漂移明细与分组候选的取数，保存 / 删除 / 收敛三个写动作，

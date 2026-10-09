@@ -407,7 +407,6 @@ export * from './components/views/console/TerminalPane'
 export * from './components/views/console/DirectorConsolePage'
 export * from './components/views/console/SuperWorkbenchPage'
 export * from './components/views/config-explorer/ConfigFileEditor'
-export * from './components/views/plugins/PluginManager'
 export * from './lib/theme'
 export * from './components/views/console/ThemeSwitcher'
 export * from './components/views/console/SidebarNavLink'
@@ -581,7 +580,6 @@ export * from './components/views/artifacts/ArtifactReconcileSectionView'
 export * from './components/views/artifacts/ArtifactStoragesPageView'
 export * from './components/views/artifacts/ArtifactVersionsPageView'
 // audit 域
-export * from './components/views/audit/AuditPageView'
 // auth 域
 export * from './components/views/auth/InvitePageView'
 export * from './components/views/auth/LoginPageView'
@@ -614,7 +612,6 @@ export * from './components/views/client-dist/SecurityAnalysisTabsView'
 export * from './components/views/client-dist/SecurityGroupsTabView'
 export * from './components/views/client-dist/SecurityProfilesTabView'
 // config-baselines 域
-export * from './components/views/config-baselines/ConfigBaselinesPageView'
 // config-explorer 域
 export * from './components/views/config-explorer/ConfigVersionDrawer'
 // console 域
@@ -630,37 +627,25 @@ export * from './components/views/groups/CreateGroupDialogView'
 export * from './components/views/groups/GroupEditDialogView'
 export * from './components/views/groups/GroupMembersDialogView'
 // import-server 域
-export * from './components/views/import-server/ImportServerWizardView'
 // instances 域
 export * from './components/views/instances/CloneInstanceDialogView'
 export * from './components/views/instances/InstanceRowView'
 // logs 域
-export * from './components/views/logs/LogsPageView'
 // networks 域
-export * from './components/views/networks/NetworksPageView'
 // notifications 域
-export * from './components/views/notifications/NotificationCenterPageView'
 // overview 域
-export * from './components/views/overview/OverviewPageView'
 // permissions 域
-export * from './components/views/permissions/PermissionsPageView'
 // players 域
-export * from './components/views/players/PlayersPageView'
 // provision 域
 export * from './components/views/provision/ProvisionProxyDialogView'
 export * from './components/views/provision/ProvisionServerDialogView'
 // runtime-assets 域
-export * from './components/views/runtime-assets/RuntimeAssetsPageView'
 // schedules 域
 export * from './components/views/schedules/SchedulesPageView'
 // settings 域
-export * from './components/views/settings/SettingsPageView'
 // statistics 域
-export * from './components/views/statistics/StatisticsPageView'
 // system-update 域
-export * from './components/views/system-update/SystemUpdatePageView'
 // tasks 域
-export * from './components/views/tasks/TasksPageView'
 // users 域
 export * from './components/views/users/GroupsPageView'
 export * from './components/views/users/UsersPageView'

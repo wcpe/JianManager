@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { PluginManager as PluginManagerImpl } from '@jianmanager/ui'
+import { PluginManager as PluginManagerImpl } from '@/components/views/plugins/PluginManager'
 import type { PluginManagerProps as PluginManagerPropsFull } from '@jianmanager/ui'
 import {
   usePlugins,

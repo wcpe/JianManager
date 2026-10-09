@@ -7,7 +7,7 @@ import {
   useMarkAllFeedRead,
   type FeedQuery,
 } from '@/api/notification-feed'
-import { NotificationCenterPageView } from '@jianmanager/ui/components/views/notifications/NotificationCenterPageView'
+import { NotificationCenterPageView } from '@/components/views/notifications/NotificationCenterPageView'
 
 /**
  * 通知中心页（FR-216，见 ADR-048）容器：统一通知流查询、单条/全部标记已读两个 mutation
