@@ -46,6 +46,22 @@ if (typeof Blob !== 'undefined' && typeof Blob.prototype.stream !== 'function') 
 }
 
 /**
+ * jsdom 缺 `Range.getClientRects` / `getBoundingClientRect`，CodeMirror 6 的坐标测量会异步抛
+ * 「textRange(...).getClientRects is not a function」，表现为测试文件在收集阶段即失败。
+ * 原先 explorer / config-explorer 的三个测试文件各自在文件内打桩；业务视图回迁后，
+ * BotsPage / DatabasePage / NodesPage 等渲染树同样含 CodeMirror，故提升到全局统一垫片。
+ * 返回零矩形即可——相关断言不依赖布局几何。
+ */
+if (typeof Range !== 'undefined') {
+  const emptyRects = () =>
+    ({ length: 0, item: () => null, [Symbol.iterator]: function* () {} }) as unknown as DOMRectList
+  const emptyRect = () =>
+    ({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, toJSON: () => ({}) }) as DOMRect
+  Range.prototype.getClientRects = emptyRects
+  Range.prototype.getBoundingClientRect = emptyRect
+}
+
+/**
  * jsdom 组件 / 页面测试的全局 setup（FR-196，vitest dom project）。
  * onUnhandledRequest:'error' 是有意的覆盖闸：未 mock 的请求即让测试失败，逼域簇补齐 handler。
  * 每例后卸载 DOM + 重置 handler 覆盖 + 假后端 + 注入 + 鉴权态（localStorage / store），保证用例隔离

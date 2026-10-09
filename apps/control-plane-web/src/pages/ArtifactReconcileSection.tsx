@@ -15,7 +15,7 @@ import {
 import {
   ArtifactReconcileSectionView,
   type ArtifactReconcileRunView,
-} from '@jianmanager/ui/components/views/artifacts/ArtifactReconcileSectionView'
+} from '@/components/views/artifacts/ArtifactReconcileSectionView'
 
 /** 差异列表每页条数；同时是查询参数与分页器算页数的依据。 */
 const DIFF_PAGE_SIZE = 50

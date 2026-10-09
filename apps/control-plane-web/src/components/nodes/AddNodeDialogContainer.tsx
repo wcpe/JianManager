@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useIssueEnrollToken } from '@/api/nodes'
-import AddNodeDialog from '@jianmanager/ui/components/views/nodes/AddNodeDialog'
+import AddNodeDialog from '@/components/views/nodes/AddNodeDialog'
 
 /**
  * 「添加节点」对话框容器（ADR-097 b 范式）。

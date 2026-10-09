@@ -1,5 +1,5 @@
 // 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入出站测试 mutation（受控化）。
-import { OutboundTestButton as OutboundTestButtonView } from '@jianmanager/ui/components/views/nodes/OutboundTestButton'
+import { OutboundTestButton as OutboundTestButtonView } from '@/components/views/nodes/OutboundTestButton'
 import { useTestHTTP } from '@/api/diagnostics'
 
 /**

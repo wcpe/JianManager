@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { SessionHeaderView } from '@jianmanager/ui/components/views/bot-load/session/SessionHeaderView'
+import { SessionHeaderView } from '@/components/views/bot-load/session/SessionHeaderView'
 import type { BotLoadRunV2 } from '@jianmanager/ui/lib/bot-load-types'
 import {
   useCancelBotLoadRun,

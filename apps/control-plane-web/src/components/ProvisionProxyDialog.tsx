@@ -11,7 +11,7 @@ import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
 import ProvisionProxyDialogView, {
   PROVISION_PROXY_QUERY_INIT,
   needsProxyVersion,
-} from '@jianmanager/ui/components/views/provision/ProvisionProxyDialogView'
+} from '@/components/views/provision/ProvisionProxyDialogView'
 
 /** 搭建代理端点的错误形态（服务端 message）。 */
 type ProvisionProxyError = Error & { response?: { data?: { message?: string } } }

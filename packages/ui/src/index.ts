@@ -73,15 +73,6 @@ export * from './components/views/bots/BotBatchBar'
 export * from './components/views/bots/BotGroupOverview'
 export * from './components/views/bots/BotStressSessionDialog'
 export * from './components/views/bots/BotDetailDialog'
-export * from './components/views/bot-load/session/DisclaimerBanner'
-export * from './components/views/bot-load/session/ThresholdVerdict'
-export * from './components/views/bot-load/session/SessionHeaderView'
-export * from './components/views/bot-load/session/ConnectionFunnel'
-export * from './components/views/bot-load/session/ExecutorDistribution'
-export * from './components/views/bot-load/session/FailureTraceDrawer'
-export * from './components/views/bot-load/LoadProfileEditor'
-export * from './components/views/bot-load/ThresholdEditor'
-export * from './components/views/bot-load/CapacityPlan'
 export * from './components/views/client-dist/ObsTimeRangePicker'
 export * from './components/views/console/BotHealthBar'
 export * from './components/views/console/WorkspaceEmpty'
@@ -91,35 +82,6 @@ export * from './components/views/explorer/editor/EditorShortcutsHelp'
 export * from './components/views/file-browser/FileBrowserTree'
 
 // ADR-097 起：应用业务组件按 a+b 双范式受控化并入，按域归档
-export * from './components/views/nodes/NodePortsPanel'
-export * from './components/views/nodes/NodeArtifactCachePanel'
-export * from './components/views/nodes/NodeProbeVersionPanel'
-export * from './components/views/nodes/NodeProxyPanel'
-export * from './components/views/nodes/NodeGlobalPackagesSection'
-export * from './components/views/nodes/NodeRepairPanel'
-export * from './components/views/nodes/NodeLogRuntimePanel'
-export * from './components/views/nodes/NodeRuntimeSection'
-export * from './components/views/nodes/AddNodeDialog'
-export * from './components/views/nodes/NodeJDKPanel'
-export * from './components/views/nodes/OutboundTestButton'
-export * from './components/views/nodes/HealthWall'
-export * from './components/views/nodes/NodePMConfigSection'
-export * from './components/views/nodes/BlockedByInstancesDialog'
-// NodeListParts 的 formatBytes 与 './lib/monitor-metrics' 同名，故显式列出其余导出；
-// formatBytes 走深路径 '@jianmanager/ui/components/views/nodes/NodeListParts'。
-export {
-  ArchivedNodeListRow,
-  NodeActionsMenu,
-  NodeCard,
-  NodeListRow,
-  NodeOverviewSection,
-  NodeRailIcon,
-} from './components/views/nodes/NodeListParts'
-export * from './components/views/nodes/ArchivedNodeDetailPane'
-export * from './components/views/nodes/NodeCharts'
-export * from './components/views/nodes/NodeDetailPane'
-export * from './components/views/nodes/PingNodeButton'
-export * from './components/views/nodes/DirectoryPicker'
 
 // instances 域（实例详情与控制台的分段/面板）
 export * from './components/views/instances/HealthPanel'
@@ -323,7 +285,6 @@ export * from './lib/schedule-form'
 export * from './lib/db-contracts'
 export * from './lib/db-rows-view'
 export * from './components/views/console/NodeWorktableCard'
-export * from './components/views/bot-load/CommandPlanEditor'
 export * from './lib/client-dist-stats-contracts'
 export * from './lib/client-dist-events-contracts'
 export * from './lib/client-runtime-contracts'
@@ -564,39 +525,14 @@ export * from './lib/workspace-preset'
 // ==== FR-502 迁移批：新增视图按域补录 ====
 // 逐条列出以便逐个核对；同名冲突沿用本文件既有先例（显式列出，冲突名走深路径）。
 export * from './components/views/EditUserDialogView'
-// agent 域
 // 显式列出而非 export *：AgentTokenOption 与同域其它视图同名（字段不同），
 // barrel 里不能同时通配；需要本模块版该类型的调用方走深路径。
-export {
-  AgentCallLogsPageView,
-} from './components/views/agent/AgentCallLogsPageView'
-export type { AgentCallLogsQuery, AgentCallLogRow, AgentCallLogsPageViewProps } from './components/views/agent/AgentCallLogsPageView'
-export * from './components/views/agent/AgentTokensPageView'
-export * from './components/views/agent/McpActivityPageView'
 // alerts 域
 export * from './components/views/alerts/AlertsPageView'
-// artifacts 域
-export * from './components/views/artifacts/ArtifactReconcileSectionView'
-export * from './components/views/artifacts/ArtifactStoragesPageView'
-export * from './components/views/artifacts/ArtifactVersionsPageView'
 // audit 域
-// auth 域
-export * from './components/views/auth/InvitePageView'
-export * from './components/views/auth/LoginPageView'
-export * from './components/views/auth/SetupPageView'
 // backups 域
 export * from './components/views/backups/BackupStoragesPageView'
 export * from './components/views/backups/BackupsPageView'
-// bot-load 域
-export * from './components/views/bot-load/BotLoadWizard'
-export * from './components/views/bot-load/SessionsTabView'
-export * from './components/views/bot-load/TemplateDialog'
-export * from './components/views/bot-load/TemplatesTabView'
-export * from './components/views/bot-load/session/SessionBots'
-export * from './components/views/bot-load/session/SessionEvents'
-export * from './components/views/bot-load/session/SessionFailures'
-export * from './components/views/bot-load/session/SessionMetrics'
-export * from './components/views/bot-load/session/SessionOverviewParts'
 // bots 域
 export * from './components/views/bots/BotGroupPartsView'
 // client-dist 域
@@ -617,9 +553,6 @@ export * from './components/views/config-explorer/ConfigVersionDrawer'
 // console 域
 export * from './components/views/console/InstanceConsolePageView'
 export * from './components/views/console/InstanceResourceSegmentView'
-// database 域
-export * from './components/views/database/DatabaseExplorerView'
-export * from './components/views/database/DatabaseRowsView'
 // explorer 域
 export * from './components/views/explorer/FileTree'
 // groups 域
@@ -636,9 +569,6 @@ export * from './components/views/instances/InstanceRowView'
 // overview 域
 // permissions 域
 // players 域
-// provision 域
-export * from './components/views/provision/ProvisionProxyDialogView'
-export * from './components/views/provision/ProvisionServerDialogView'
 // runtime-assets 域
 // schedules 域
 export * from './components/views/schedules/SchedulesPageView'

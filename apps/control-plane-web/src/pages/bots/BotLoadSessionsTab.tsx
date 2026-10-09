@@ -12,7 +12,7 @@ import BotLoadWizard from '@/components/bot-load/BotLoadWizard'
 import {
   SESSIONS_TAB_PAGE_SIZE,
   SessionsTabView,
-} from '@jianmanager/ui/components/views/bot-load/SessionsTabView'
+} from '@/components/views/bot-load/SessionsTabView'
 
 /**
  * 压测会话列表 tab 的容器：取数、启停 mutation/toast、分页写 URL 与详情路由。

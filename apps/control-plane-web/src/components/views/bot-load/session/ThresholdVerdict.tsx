@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2, CircleDashed, MinusCircle, XCircle } from 'lucide-react'
-import type { BotLoadVerdictReason } from '../../../../lib/bot-load-types'
-import { formatLatencyMs, formatRatio } from '../../../../lib/bot-load-metrics'
+import type { BotLoadVerdictReason } from '@jianmanager/ui/lib/bot-load-types'
+import { formatLatencyMs, formatRatio } from '@jianmanager/ui/lib/bot-load-metrics'
 
 export function ThresholdVerdict({ reasons }: { reasons: BotLoadVerdictReason[] }) {
   const { t } = useTranslation()

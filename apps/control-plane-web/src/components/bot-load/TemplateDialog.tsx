@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { TemplateDialog as TemplateDialogView } from '@jianmanager/ui/components/views/bot-load/TemplateDialog'
+import { TemplateDialog as TemplateDialogView } from '@/components/views/bot-load/TemplateDialog'
 import {
   useCreateBotLoadTemplate,
   useUpdateBotLoadTemplate,

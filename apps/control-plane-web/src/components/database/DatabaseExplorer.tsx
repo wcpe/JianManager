@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useDbTables, useDbTableRows, type DbRowsParams } from '@/api/db'
-import { DatabaseExplorerView } from '@jianmanager/ui/components/views/database/DatabaseExplorerView'
-import { DatabaseRowsView } from '@jianmanager/ui/components/views/database/DatabaseRowsView'
+import { DatabaseExplorerView } from '@/components/views/database/DatabaseExplorerView'
+import { DatabaseRowsView } from '@/components/views/database/DatabaseRowsView'
 
 /**
  * 数据库资源管理器（FR-084）容器：取数与查询状态留在应用，展示交共享视图（ADR-097）。

@@ -1,5 +1,5 @@
 import { useNodePorts } from '@/api/ports'
-import NodePortsPanel from '@jianmanager/ui/components/views/nodes/NodePortsPanel'
+import NodePortsPanel from '@/components/views/nodes/NodePortsPanel'
 
 /**
  * 节点端口占用页签外壳（ADR-097 a 范式）。
