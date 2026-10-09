@@ -187,7 +187,81 @@ JM_SSH_HOST=<worker-host> JM_SSH_USER=<user> JM_INSTALL_DIR=/home/<user>/jianman
 
 新版本健康检查失败时脚本会恢复先前 `current`；但数据库 schema、CP 制品数据和 Worker 身份不会随回滚倒退。版本化模型仅覆盖 `user` scope；`system` scope 仍是旧的直接二进制加 `.bak` 更新方式。
 
-### 9.2 CP 直接启停的受控 POSIX 模板
+### 9.2 新 Worker 机器的 systemd 部署（必须带 `KillMode=process`）
+
+> **这一节请务必读完再上新机器。** 漏掉 `KillMode=process` 的后果是：`systemctl restart` / `stop` 该 unit 时，systemd 向整个 cgroup 发信号，**连坐杀掉该机上全部游戏服**（wrapper + java）。
+
+#### 为什么必须带
+
+四层模型 `CP → Worker → wrapper(setsid 游离) → sh -c → java` 承诺「重启 Worker 不牵连服务器」。`setsid` 让 wrapper 逃出 Worker 的**进程组**，但逃不出 systemd 的 **cgroup**：`KillMode=control-group`（systemd 默认值）会在停止 unit 时向该 unit cgroup 内的**全部**进程发 SIGTERM。
+
+运行期还有一层防护（wrapper 自迁到单元同级的 `jianmanager-daemons/`，见 [ADR-097](adr/097-daemon-cgroup-isolation.md)），但它**有失效场景**：当 Worker 所在单元归 root（如手工把 Worker 跑在 `/system.slice/ssh.service` 里）时，非特权用户对源与目标的**共同祖先**（cgroup 根）没有写权限，内核拒绝迁移——此时 **`KillMode=process` 是唯一防线**。2026-10-09 真机事故正是这两层同时失效：实际 unit 是手工 `systemd-run` 创建的 transient 单元（未带该项，落到默认 `control-group`），13 个实例又因源单元归 root 无法运行期隔离。
+
+#### 正确做法
+
+**方式 A（推荐）：用安装脚本** —— `scripts/install-worker.sh` 生成的 unit 已含 `KillMode=process`：
+
+```bash
+scripts/install-worker.sh --service --service-scope user \
+  --control-plane <cp-host>:9100 --token <jmet_...>
+```
+
+（`--token` 亦可用环境变量 `JIANMANAGER_ENROLL_TOKEN` 传入，避免明文出现在命令行与进程列表）
+
+或用仓库的版本化部署 `scripts/deploy-worker.sh`（首次部署会内部调用 `install-worker.sh`，同样带该项）：
+
+```bash
+JM_SSH_HOST=<worker-host> JM_SSH_USER=<user> JM_SERVICE_SCOPE=user \
+  JM_CONTROL_PLANE=<cp-host>:9100 JM_ENROLL_TOKEN=<jmet_...> scripts/deploy-worker.sh
+```
+
+**方式 B：手工创建 unit** —— 必须在 `[Service]` 段显式写上：
+
+```ini
+[Service]
+Type=simple
+WorkingDirectory=<安装根>
+ExecStart=<安装根>/jianmanager-worker
+Restart=always
+RestartSec=5
+KillMode=process      # ← 必须；漏掉则重启 unit 会杀掉全部游戏服
+```
+
+> ⚠️ **不要**用 `systemd-run --unit=... <worker>` 直接拉起 Worker：这样创建的是 transient 单元，**不带** `KillMode=process`，落到默认 `control-group`。若确需 `systemd-run`，必须显式加 `-p KillMode=process`。
+
+#### 部署后验证（务必执行）
+
+```bash
+# user 档
+systemctl --user show <unit> -p KillMode
+# 期望输出：KillMode=process
+# system 档
+systemctl show <unit> -p KillMode
+```
+
+若输出 `KillMode=control-group`，对**已在运行**的单元可用 drop-in 补上（无需重启、不中断服务）：
+
+```bash
+systemctl --user edit <unit>          # system 档去掉 --user
+# 写入：
+#   [Service]
+#   KillMode=process
+systemctl --user daemon-reload
+systemctl --user show <unit> -p KillMode   # 复核：应变为 process
+```
+
+该 drop-in 对**同名 transient 单元被重新创建**后依然生效（已实测），故是一次性补救而非临时措施。
+
+#### 启动自检（新版 Worker 自动告警）
+
+新版 Worker 启动时会读取自身单元的生效 `KillMode`，若发现**无保护**则打印告警，提示补 `KillMode=process`；有保护时打印一行 INFO。该自检：
+
+- **只告警、不阻断启动**——单元属性属运维决策，且风险只在重启 unit 时才兑现，不应因此拒绝服务；
+- 覆盖**任何**部署方式（含手工 `systemd-run`、手写 unit 等不走脚本的场景）；
+- 非 systemd 环境（前台运行、容器、cgroup v1）与任何查询失败（`systemctl` 缺失、D-Bus 不可达、超时）一律静默跳过，不引入新的失败面；
+- 可用 `JM_DAEMON_CGROUP_ISOLATION=0` 关闭（该开关同时关闭运行期隔离，此时不再告警以免误导）。
+
+### 9.3 CP 直接启停的受控 POSIX 模板
 
 仓库当前没有受控的 `start.sh` / `stop.sh`。需要在非 systemd 场景下直接管理 CP 时，使用仓库中的单入口模板 `scripts/cp-lifecycle.sh`，通过 `start` / `stop` 子命令避免两份启停逻辑漂移：
 

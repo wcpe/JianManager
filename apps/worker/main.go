@@ -398,6 +398,12 @@ func runWorker() {
 
 	slog.Info("Worker Node 启动", "name", nodeName, "wsPort", wsPort, "dataDir", root.Base(), "serversDir", serversDir)
 
+	// 启后自检：本 Worker 所在 systemd 单元的 KillMode 是否会让「重启单元」连坐杀掉全部游戏服
+	// （见 daemon.WarnIfUnitKillModeUnprotected：该属性是部署期属性，手工 systemd-run / 手写单元
+	// 的部署会漏掉，落到默认 control-group——2026-10-09 真机正是如此）。只告警、不阻断启动，
+	// 任何查询失败（非 systemd 环境、systemctl 缺失、超时）均静默跳过。
+	daemon.WarnIfUnitKillModeUnprotected()
+
 	// 启前回收本节点 vlsup 孤儿（P0 复盘 2026-10-03 ✓）：worker 被强杀后其 vlsup 子进程成孤儿、
 	// 继续占用 hot/cold 端口 ⇒ 新 worker 报 `hot exited immediately after start`（现场 ✓，只能靠
 	// RangeClient 接旧实例 ⇒ 采集面降级 ✗）。判据＝**本 data 根**（cmdline 含根 ＋ exe 在根下，两道都过 ✓）

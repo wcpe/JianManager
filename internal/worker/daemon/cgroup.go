@@ -72,7 +72,13 @@ func cgroupFSPath(cgroupRelPath string) string {
 
 // ownCgroupReader 读取本进程在 cgroup2 中的路径（形如 `/user.slice/…/xxx.service`）。
 // 独立成变量便于测试注入假数据，避免测试依赖运行环境的 cgroup 布局。
+// 默认实现见平台文件（unix 读 /proc/self/cgroup；windows 无 cgroup2 语义，恒失败）。
 var ownCgroupReader = readOwnCgroupPath
+
+// workerUnitKillModeReader 查询「本进程所在 systemd 单元的生效 KillMode」。
+// 独立成变量便于测试注入假读数（真实实现需调 systemctl，测试不应依赖宿主 systemd）。
+// 默认实现见平台文件（unix 调 systemctl；windows 无该问题面，恒失败）。
+var workerUnitKillModeReader = queryWorkerUnitKillMode
 
 // CgroupIsolationEnabled 报告是否启用 daemon 子树 cgroup 隔离（默认启用）。
 func CgroupIsolationEnabled() bool {
@@ -112,6 +118,51 @@ func DaemonCgroupRoot(ownCgroup string) (string, bool) {
 		return "", false
 	}
 	return filepath.Join(parent, daemonCgroupDirName), true
+}
+
+// WorkerUnitNameFromCgroup 由自身 cgroup 路径反推**承载本进程的 systemd 单元名**（如 `jm-prod-worker.service`）。
+//
+// 为什么需要反推而不是让调用方自己填单元名：启动自检要查该单元的 KillMode，而「查一个不存在的单元」
+// 在 systemd 下**不报错**——`systemctl show <不存在>.service -p KillMode` 会返回默认值 `control-group`
+// 且退出码 0（实测），于是「单元名猜错」与「单元真无保护」无法区分，自检会静默误报。由 cgroup 路径
+// 取得真实单元名可消除该歧义（单元确实存在，因为本进程就在其中）。
+//
+// 返回 ok=false 表示本进程不在 systemd service 单元内（前台运行、scope/session、容器、cgroup v1），
+// 此时不存在「重启单元连坐」的问题面，调用方应静默跳过。
+func WorkerUnitNameFromCgroup(ownCgroup string) (string, bool) {
+	clean := filepath.Clean(strings.TrimSpace(ownCgroup))
+	if clean == "" || !strings.HasPrefix(clean, "/") || clean == "/" {
+		return "", false
+	}
+	// 已迁入隔离目录时自身是 `…/jianmanager-daemons/<uuid>`，末段不是单元名；
+	// 该形态下 Worker 单元仍是隔了一层的父级，但自检只需在启动期跑一次（此时尚未迁移），
+	// 故这里保守返回 false，避免把实例 UUID 误当单元名去查。
+	if filepath.Base(filepath.Dir(clean)) == daemonCgroupDirName {
+		return "", false
+	}
+	unit := filepath.Base(clean)
+	if !strings.HasSuffix(unit, ".service") {
+		return "", false
+	}
+	return unit, true
+}
+
+// KillModeProtectsDaemonSubtree 报告该 KillMode 取值能否让 daemon 子树活过「重启/停止该单元」。
+//
+// systemd 语义（`man systemd.kill`）：
+//   - `process` / `none`：只对主进程发信号（或完全不发）⇒ wrapper 与 java 存活，**有保护**；
+//   - `control-group`（默认值）：向单元 cgroup 内**全部**进程发 KillSignal ⇒ 子树被杀；
+//   - `mixed`：先对主进程发 KillSignal，再对其余进程发 SIGKILL ⇒ 子树被杀。
+//
+// 未知取值按**最危险**处理（返回 false）：告警多报一句无害，漏报则会让「重启赔上全部服务器」
+// 这一后果在毫无提示的情况下发生。空串同理。
+func KillModeProtectsDaemonSubtree(killMode string) bool {
+	switch strings.ToLower(strings.TrimSpace(killMode)) {
+	case "process", "none":
+		return true
+	default:
+		return false
+	}
 }
 
 // DaemonCgroupDirFor 在 DaemonCgroupRoot 之上拼出该实例的隔离叶目录。

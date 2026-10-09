@@ -48,3 +48,16 @@
 **验收实测**（同一现场）：对运行中的生产单元执行 `systemctl --user restart`（即本 ADR 要解决的触发动作），**19/19 实例 java 全部存活**（修复前该动作全灭），新 Worker 自动收养全部活进程并成功迁移 6 个子树；CP 侧确认 19/19 `RUNNING`。另实测对生产 CP 发 `SIGKILL`：worker 存活、21/21 实例存活，CP 重启后隧道自动重建、实例状态自动对账（验证「CP 崩溃不牵连服务器」与「重启自动认领」）。
 
 **仍未覆盖（作为已知残留）**：源单元归 root 时非特权用户无解，只能靠部署侧 `KillMode` 或把 Worker 移入用户单元；隔离状态目前只落审计/日志，未上行到 CP 面板展示。
+
+### 部署侧收口：启动自检（2026-10-09 追加）
+
+上述残留意味着「运行期隔离不可用」时**唯一防线是单元自身的 `KillMode=process`**。但该属性是部署期属性，且真机证明它会**静默缺失**（有人用 `systemd-run` 裸拉起 Worker，transient 单元不带该项，落到默认 `control-group`），而代码无法在运行期修改他人创建的单元属性。
+
+因此补一条**启动自检**（`daemon.WarnIfUnitKillModeUnprotected`，由 `runWorker` 在启动早期调用）：读自身单元的生效 `KillMode`，无保护则显式告警并提示补 `KillMode=process`（含 drop-in 写法）；有保护则记一行 INFO。定位是「把沉默的代价变成一句告警」——让部署者在上线当天就知道「重启这台 Worker 会打死全部服务器」，而不是在下次重启时才以事故形式得知。
+
+实现上有两处**必须**的细节，均由实测得出（否则自检会静默失效或误报）：
+
+1. **单元名由 `/proc/self/cgroup` 反推，不由调用方填写**：`systemctl show <不存在的单元> -p KillMode` 返回默认值 `control-group` 且退出码 0，若不校验就会把「名字猜错」误报成「无保护」；故同时校验 `LoadState=loaded`。
+2. **不用 `--value`**：该选项下输出顺序与 `-p` 书写顺序无关（实测按属性名排序），按位置取值会把 `KillMode` 误当 `LoadState`，使 `LoadState == "loaded"` 恒不成立而**自检完全静默**；改用 `Key=Value` 按名解析。
+
+边界：只告警不阻断启动（单元属性属运维决策，风险只在重启 unit 时兑现）；非 systemd 环境（前台运行、容器、cgroup v1）与任何查询失败（`systemctl` 缺失、D-Bus 不可达、超时 3s）一律静默跳过，不引入新的失败面；`JM_DAEMON_CGROUP_ISOLATION=0` 时跳过告警（此时隔离已关闭，该前提不成立，告警会误导）。运维侧的操作指引见 [docs/DEPLOY.md](../DEPLOY.md) §9.2。

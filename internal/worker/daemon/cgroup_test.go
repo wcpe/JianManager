@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -199,4 +200,157 @@ func TestRemoveDaemonCgroupDirKeepsNonEmpty(t *testing.T) {
 	RemoveDaemonCgroupDir("inst-1")
 	_, err = os.Stat(fsDir)
 	assert.True(t, os.IsNotExist(err), "目录已空应被回收")
+}
+
+// TestWorkerUnitNameFromCgroup 锁定「从自身 cgroup 路径反推 systemd 单元名」的推导。
+//
+// 用途（2026-10-09 事故的启动自检）：Worker 需知道自己跑在哪个单元里，才能查到该单元的
+// KillMode 并告警「重启会连坐杀掉全部实例」。仅靠 `systemctl show <name>` 不可行——查不存在的
+// 单元会返回默认值 control-group 且 exit=0（静默误报），故必须先由 cgroup 路径确定真实单元名。
+func TestWorkerUnitNameFromCgroup(t *testing.T) {
+	cases := []struct {
+		name string
+		own  string
+		want string
+		ok   bool
+	}{
+		{"用户级 service 单元", "/user.slice/user-1000.slice/user@1000.service/app.slice/jm-prod-worker.service",
+			"jm-prod-worker.service", true},
+		{"系统级 service 单元", "/system.slice/jianmanager-worker.service",
+			"jianmanager-worker.service", true},
+		{"带 nice/ionice 的 transient 单元（真机形态）",
+			"/user.slice/user-51404.slice/user@51404.service/jm.slice/jm-logs.slice/jm-worker-node-main.service",
+			"jm-worker-node-main.service", true},
+		{"已在隔离目录内（自身单元仍是 Worker 单元）",
+			"/user.slice/user-1000.slice/user@1000.service/app.slice/jianmanager-daemons/inst-1", "", false},
+		{"非 service（scope/session）", "/user.slice/user-0.slice/session-3.scope", "", false},
+		{"cgroup 根", "/", "", false},
+		{"空路径", "", "", false},
+		{"相对路径", "user.slice/foo.service", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := WorkerUnitNameFromCgroup(c.own)
+			assert.Equal(t, c.ok, ok)
+			assert.Equal(t, c.want, got)
+		})
+	}
+}
+
+// TestKillModeProtectsDaemonSubtree 锁定「哪些 KillMode 取值能让 daemon 子树活过单元重启」。
+//
+// systemd 语义（`man systemd.kill`）：
+//   - process / none        → 只对主进程发信号（或完全不发）⇒ 子树存活，**有**保护；
+//   - control-group（默认） → 向单元 cgroup 内全部进程发 KillSignal ⇒ 子树被杀，无保护；
+//   - mixed                 → 对主进程发 KillSignal 后，对其余进程发 SIGKILL ⇒ 子树被杀，无保护。
+//
+// 真机事故：实际单元是手工 systemd-run 创建的 transient 单元（未带 KillMode），落到默认
+// control-group，restart 时 13 个 wrapper + java 全部被 SIGTERM。
+func TestKillModeProtectsDaemonSubtree(t *testing.T) {
+	cases := []struct {
+		killMode string
+		want     bool
+	}{
+		{"process", true},
+		{"none", true},
+		{"control-group", false},
+		{"mixed", false},
+		{"PROCESS", true},   // systemd 取值大小写不敏感
+		{" Process ", true}, // 容忍空白
+		{"", false},         // 未知/空：按最危险处理，宁可告警
+		{"bogus", false},    // 未知取值：同上
+	}
+	for _, c := range cases {
+		t.Run(c.killMode, func(t *testing.T) {
+			assert.Equal(t, c.want, KillModeProtectsDaemonSubtree(c.killMode))
+		})
+	}
+}
+
+// TestWarnIfUnitKillModeUnprotected 锁定启动自检的判定与「失败即静默」边界。
+//
+// 背景（2026-10-09 真机事故）：实际运行的 Worker 单元是手工 systemd-run 创建的 transient 单元，
+// 未带 KillMode，落到默认 control-group；而该机 13 个实例因源单元归 root 无法运行期隔离，
+// KillMode 是唯一防线。代码改不了别人创建的单元属性，但必须让「重启会打死全部服务器」不再沉默。
+func TestWarnIfUnitKillModeUnprotected(t *testing.T) {
+	const ownCgroup = "/user.slice/user-1000.slice/user@1000.service/app.slice/jm-prod-worker.service"
+
+	withSeams := func(t *testing.T, own string, readErr error, killMode string, readOK bool) *[]string {
+		t.Helper()
+		called := &[]string{}
+		oldOwn, oldReader := ownCgroupReader, workerUnitKillModeReader
+		ownCgroupReader = func() (string, error) { return own, readErr }
+		workerUnitKillModeReader = func(unit string, isUser bool) (string, bool) {
+			*called = append(*called, unit)
+			return killMode, readOK
+		}
+		t.Cleanup(func() { ownCgroupReader, workerUnitKillModeReader = oldOwn, oldReader })
+		return called
+	}
+
+	t.Run("无保护时查询该单元（触发告警）", func(t *testing.T) {
+		called := withSeams(t, ownCgroup, nil, "control-group", true)
+		WarnIfUnitKillModeUnprotected()
+		require.Equal(t, []string{"jm-prod-worker.service"}, *called,
+			"应拿 cgroup 推导出的真实单元名去查（否则查不存在单元会返回默认值而误判）")
+	})
+
+	t.Run("有保护时不告警但仍记录", func(t *testing.T) {
+		withSeams(t, ownCgroup, nil, "process", true)
+		WarnIfUnitKillModeUnprotected() // 不 panic、不阻断即可
+	})
+
+	t.Run("非 service 单元（前台/容器）静默跳过", func(t *testing.T) {
+		called := withSeams(t, "/user.slice/user-0.slice/session-3.scope", nil, "control-group", true)
+		WarnIfUnitKillModeUnprotected()
+		require.Empty(t, *called, "非 service 单元不存在连坐问题面，不该去查 KillMode")
+	})
+
+	t.Run("读自身 cgroup 失败静默跳过", func(t *testing.T) {
+		called := withSeams(t, "", errors.New("cgroup v1"), "control-group", true)
+		WarnIfUnitKillModeUnprotected()
+		require.Empty(t, *called)
+	})
+
+	t.Run("KillMode 查询失败静默跳过（不误报）", func(t *testing.T) {
+		withSeams(t, ownCgroup, nil, "", false)
+		WarnIfUnitKillModeUnprotected() // ok=false 时不得把空值当无保护
+	})
+
+	t.Run("隔离被显式关闭时不告警（前提已不成立）", func(t *testing.T) {
+		called := withSeams(t, ownCgroup, nil, "control-group", true)
+		t.Setenv(EnvCgroupIsolation, "0")
+		WarnIfUnitKillModeUnprotected()
+		require.Empty(t, *called, "隔离关闭时 KillMode 不再是唯一防线，避免误导性告警")
+	})
+}
+
+// TestParseSystemctlProps 锁定 systemctl 输出解析**不依赖行的顺序**。
+//
+// 为什么单独钉住（2026-10-09 实现期实测）：`systemctl show -p A -p B --value` 的输出顺序
+// 与 `-p` 书写顺序**无关**（实测按属性名排序：请求 `-p LoadState -p KillMode` 返回
+// `process\nloaded`，即 KillMode 在前）。若按位置取值，会把 KillMode 误当 LoadState，
+// 于是 `LoadState == "loaded"` 恒不成立、自检**静默失效**——恰好是本次要消灭的那类沉默。
+func TestParseSystemctlProps(t *testing.T) {
+	t.Run("真实形态：KillMode 在前 LoadState 在后", func(t *testing.T) {
+		props := parseSystemctlProps("KillMode=process\nLoadState=loaded\n")
+		assert.Equal(t, "process", props["KillMode"])
+		assert.Equal(t, "loaded", props["LoadState"])
+	})
+
+	t.Run("反向顺序同样正确", func(t *testing.T) {
+		props := parseSystemctlProps("LoadState=loaded\nKillMode=control-group\n")
+		assert.Equal(t, "control-group", props["KillMode"])
+		assert.Equal(t, "loaded", props["LoadState"])
+	})
+
+	t.Run("容忍空行与无等号行", func(t *testing.T) {
+		props := parseSystemctlProps("\nKillMode=mixed\nnot-a-property\n\n")
+		assert.Equal(t, "mixed", props["KillMode"])
+		assert.Len(t, props, 1)
+	})
+
+	t.Run("空输出得空映射", func(t *testing.T) {
+		assert.Empty(t, parseSystemctlProps(""))
+	})
 }
