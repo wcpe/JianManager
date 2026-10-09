@@ -302,7 +302,6 @@ export * from './lib/password-strength'
 export * from './lib/permission-explain'
 export * from './lib/page-title'
 export * from './lib/platform-stats'
-export * from './lib/licenses'
 export * from './lib/jwt'
 export * from './lib/config-baseline'
 export * from './lib/client-readiness'
@@ -635,8 +634,6 @@ export * from './components/views/import-server/ImportServerWizardView'
 // instances 域
 export * from './components/views/instances/CloneInstanceDialogView'
 export * from './components/views/instances/InstanceRowView'
-// licenses 域
-export * from './components/views/licenses/LicensesPageView'
 // logs 域
 export * from './components/views/logs/LogsPageView'
 // networks 域

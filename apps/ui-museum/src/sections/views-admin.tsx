@@ -34,7 +34,6 @@ import {
   type GroupMemberCandidate,
   type GroupMemberView,
 } from '@jianmanager/ui/components/views/groups/GroupMembersDialogView'
-import { LicensesPageView, type LicenseDepEntry } from '@jianmanager/ui/components/views/licenses/LicensesPageView'
 import {
   NotificationCenterPageView,
   type NotificationFeedItem,
@@ -150,73 +149,6 @@ const auditUserOptions = [
   { id: 12, username: 'ops_alpha' },
   { id: 18, username: 'build_robot' },
   { id: 9, username: 'audit_bot' },
-]
-
-// --- 开源许可样例：运行时/开发两分区，含「无正文」「非链接」两条边界 -------------------------------
-
-const MIT_TEXT = [
-  'MIT License',
-  '',
-  'Permission is hereby granted, free of charge, to any person obtaining a copy',
-  'of this software and associated documentation files (the "Software"), to deal',
-  'in the Software without restriction, including without limitation the rights',
-  'to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies',
-  'of the Software…（正文略）',
-].join('\n')
-
-const licenseDeps: LicenseDepEntry[] = [
-  {
-    name: 'gin',
-    version: 'v1.10.1',
-    license: 'MIT',
-    author: 'gin-gonic',
-    url: 'https://github.com/gin-gonic/gin',
-    scope: 'go',
-    type: 'runtime',
-    licenseText: MIT_TEXT,
-  },
-  {
-    name: 'react',
-    version: '19.2.6',
-    license: 'MIT',
-    author: 'Meta Platforms, Inc. and affiliates',
-    url: 'https://react.dev',
-    scope: 'web',
-    type: 'runtime',
-    licenseText: MIT_TEXT,
-  },
-  {
-    name: 'mineflayer',
-    version: '4.37.1',
-    license: 'MIT',
-    author: 'PrismarineJS',
-    url: 'https://github.com/PrismarineJS/mineflayer',
-    scope: 'bot-worker',
-    type: 'runtime',
-    licenseText: MIT_TEXT,
-  },
-  {
-    name: 'typescript',
-    version: '6.0.2',
-    license: 'Apache-2.0',
-    author: 'Microsoft Corporation',
-    url: 'https://www.typescriptlang.org/',
-    scope: 'web',
-    type: 'dev',
-    // 刻意留空：演示「许可证全文缺失」分支（行内展开显示无正文提示）。
-    licenseText: '',
-  },
-  {
-    name: 'shadow',
-    version: '8.1.1',
-    license: 'Apache-2.0',
-    author: 'Gradle',
-    // 刻意用非 https 值：演示「不可点链接」（只渲染纯文本包名）的分支。
-    url: '',
-    scope: 'client-updater',
-    type: 'dev',
-    licenseText: 'Apache License\n\nVersion 2.0, January 2004\nhttp://www.apache.org/licenses/\n\n（正文略）',
-  },
 ]
 
 // --- 通知中心样例：站内信 + 告警混排，含未读、任务联动与已读三类 --------------------------------
@@ -824,21 +756,6 @@ export function ViewsAdmin() {
           受控：成员列表与候选窗口经 props 注入，键入经 onQueryChange 上报（300ms 防抖与候选请求是外壳策略，
           故本分区不响应键入——候选为静态注入），加入/移除经 onAdd/onRemove 上报。candidateTotal 大于已注入候选数，
           正是「已显示前 N / 共 total」截断提示的触发条件；仅用于演示该分支。挂载即打开，故按按钮挂载。
-        </p>
-      </Panel>
-
-      <Panel title="LicensesPageView · 开源许可与依赖清单">
-        <PageFrame>
-          <LicensesPageView
-            dependencies={licenseDeps}
-            generatedAt="2026-07-01T08:00:00Z"
-            onBack={() => {}}
-          />
-        </PageFrame>
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          受控（b 范式）：清单与加载/错误态经 props 注入（外壳读静态 /licenses.json）；页头「返回」以回调上报，
-          由外壳接 navigate(-1)。包名搜索与行内展开是纯 UI 状态，留视图内（本地过滤已取回的清单，不触发取数）。
-          样例含两条边界：typescript 的 licenseText 为空（演示「无正文」分支）、shadow 的 url 非 https（演示不可点链接分支）。
         </p>
       </Panel>
 
