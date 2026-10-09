@@ -6,6 +6,7 @@ import { ChevronDown, Copy, FileWarning } from 'lucide-react'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import { cn } from '@jianmanager/ui'
 import type { CrashSnapshot, CrashTrend } from '@/lib/instances/crash'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type CrashDiagnosticsNotice = (kind: 'success' | 'error', message: string) => void
@@ -306,14 +307,14 @@ function CrashCorrelationBlock({ correlation }: { correlation: NonNullable<Crash
         {correlation.rssAtCrash > 0 && (
           <li className="font-mono text-muted-foreground">
             {t('serverConsole.crashRssAtCrash', {
-              rss: formatBytes(correlation.rssAtCrash),
+              rss: formatFileSize(correlation.rssAtCrash),
               limit: correlation.memLimitMb > 0 ? `${correlation.memLimitMb} MiB` : t('serverConsole.crashNoLimit'),
             })}
           </li>
         )}
         {correlation.heapUsedMax > 0 && (
           <li className="font-mono text-muted-foreground">
-            {t('serverConsole.crashHeapPeak', { heap: formatBytes(correlation.heapUsedMax) })}
+            {t('serverConsole.crashHeapPeak', { heap: formatFileSize(correlation.heapUsedMax) })}
           </li>
         )}
         {correlation.note && <li className="text-muted-foreground">{correlation.note}</li>}
@@ -335,9 +336,3 @@ export function formatCrashDuration(ms: number): string {
 }
 
 /** 字节人性化（<1KiB 显示 B，<1MiB 显示 KiB，否则 MiB/GiB）。 */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KiB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`
-}

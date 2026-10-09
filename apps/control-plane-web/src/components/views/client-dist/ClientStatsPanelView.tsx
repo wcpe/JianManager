@@ -21,15 +21,9 @@ import type { ClientDistStats, ClientDistObservability } from '@/lib/client-dist
 import { InsightCards } from '@/components/views/client-dist/InsightCards'
 import { UpdateHeatmap } from '@/components/views/client-dist/UpdateHeatmap'
 import { ObsTimeRangePicker } from '@/components/views/client-dist/ObsTimeRangePicker'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 字节数转人类可读。 */
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
-
 /** 平台 os 标识 → 展示名（空串=未知）。 */
 function platformLabel(os: string): string {
   if (!os) return '—'
@@ -173,7 +167,7 @@ export function ClientStatsPanelView({
       <section className="space-y-2">
         <h3 className="text-sm font-medium">{t('clientStats.downloadBytesTrend', '下载字节趋势')}</h3>
         <div className="border rounded-lg p-3">
-          <TimeSeriesChart series={bytesSeries} valueFormatter={formatBytes} emptyHint={t('clientStats.empty', '暂无数据')} />
+          <TimeSeriesChart series={bytesSeries} valueFormatter={(v) => formatFileSize(v)} emptyHint={t('clientStats.empty', '暂无数据')} />
         </div>
       </section>
 
@@ -240,7 +234,7 @@ export function ClientStatsPanelView({
       {stats && stats.downloads.length > 0 && (
         <p className="text-xs text-muted-foreground">
           {t('clientStats.totalBytes', '窗口内流量合计')}{' '}
-          {formatBytes(stats.downloads.reduce((s, d) => s + d.bytes, 0))}
+          {formatFileSize(stats.downloads.reduce((s, d) => s + d.bytes, 0))}
         </p>
       )}
 

@@ -30,6 +30,7 @@ import {
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { joinAbsPath, isPermissionErrorMessage } from '@/lib/import-server/import-server-path'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 向导步骤：目录 → 探测结果 → 导入方式 → 实例配置。 */
 type Step = 'dir' | 'inspect' | 'mode' | 'config'
@@ -206,12 +207,6 @@ export interface ImportServerWizardViewProps {
 }
 
 /** 人类可读文件大小（jar 候选展示）。 */
-function formatSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${bytes} B`
-}
-
 /** 从目录路径提取默认实例名（最后一段）。 */
 function dirBaseName(path: string): string {
   const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/)
@@ -774,7 +769,7 @@ function ImportInspectStep({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-mono text-xs">{j.path}</span>
                   <span className="block text-xs text-muted-foreground">
-                    {formatSize(j.size)}
+                    {formatFileSize(j.size)}
                     {j.mainClassHint ? ` · Main-Class: ${j.mainClassHint}` : ''}
                   </span>
                 </span>

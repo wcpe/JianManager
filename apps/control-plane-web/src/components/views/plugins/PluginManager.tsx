@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 const MANAGED_DIRS = ['plugins', 'mods', 'resourcepacks', 'datapacks'] as const
 
@@ -268,7 +269,7 @@ export function PluginManager({
                               )}
                             </TableCell>
                             <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
-                              {formatSize(p.size)}
+                              {formatFileSize(p.size)}
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-1.5">
@@ -664,7 +665,7 @@ function PluginBatchAssetOption({
       <span className="min-w-0">
         <span className="block truncate font-medium">{asset.filename}</span>
         <span className="block text-muted-foreground">
-          {asset.version || '—'} · {formatSize(asset.size)}
+          {asset.version || '—'} · {formatFileSize(asset.size)}
         </span>
       </span>
     </label>
@@ -703,12 +704,6 @@ function toggleSetValue(values: Set<number>, value: number): Set<number> {
   if (next.has(value)) next.delete(value)
   else next.add(value)
   return next
-}
-
-function formatSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function uploadPercent(progress: UploadProgress): number {

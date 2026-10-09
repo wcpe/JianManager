@@ -17,7 +17,8 @@ import DangerConfirm from '@/components/views/common/DangerConfirm'
 import UnifiedExplorerShell from '@/components/views/file-browser/UnifiedExplorerShell'
 import { storageBrowseCapability } from '@/lib/file-browser/file-browser-capability'
 import type { FileBrowserSource } from '@/lib/file-browser/file-browser-types'
-import { formatBytes, deriveArchive, sortDirsByUsage } from '@/lib/file-browser/storage-view'
+import { deriveArchive, sortDirsByUsage } from '@/lib/file-browser/storage-view'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 import type { DirUsage, StorageOverview } from '@/lib/file-browser/storage-types'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
@@ -147,7 +148,7 @@ function OverviewSection({ data }: { data: StorageOverview }) {
 
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-      <StatCard label={t('storage.totalSize')} value={formatBytes(data.totalSize)} accent />
+      <StatCard label={t('storage.totalSize')} value={formatFileSize(data.totalSize)} accent />
       <StatCard label={t('storage.totalFiles')} value={data.totalFiles} />
       <StatCard label={t('storage.dirCount')} value={data.dirs.length} />
       <StatCard
@@ -155,7 +156,7 @@ function OverviewSection({ data }: { data: StorageOverview }) {
         value={
           <span className="text-sm">
             {cold.cold}
-            <span className="text-muted-foreground"> · {formatBytes(cold.coldSize)}</span>
+            <span className="text-muted-foreground"> · {formatFileSize(cold.coldSize)}</span>
           </span>
         }
       />
@@ -241,7 +242,7 @@ function DirRow({
         </span>
       </TableCell>
       <TableCell className="font-mono text-[11px] text-muted-foreground">{dir.path}</TableCell>
-      <TableCell className="text-right tabular-nums">{formatBytes(dir.size)}</TableCell>
+      <TableCell className="text-right tabular-nums">{formatFileSize(dir.size)}</TableCell>
       <TableCell className="text-right tabular-nums">{dir.fileCount}</TableCell>
       <TableCell className="text-right">
         {dir.clearable ? (
@@ -309,7 +310,7 @@ function ClearCacheButton({
       <DangerConfirm
         open={confirming}
         title={t('storage.clearCacheTitle')}
-        description={t('storage.clearCacheDescription', { size: formatBytes(size), count: fileCount })}
+        description={t('storage.clearCacheDescription', { size: formatFileSize(size), count: fileCount })}
         confirmLabel={t('storage.clearCache')}
         scope="platform"
         onConfirm={() => void runClear()}
@@ -363,7 +364,7 @@ function ArchiveSection({ data }: { data: StorageOverview }) {
                 </span>
               </TableCell>
               <TableCell className="text-right tabular-nums">{r.count}</TableCell>
-              <TableCell className="text-right tabular-nums">{formatBytes(r.size)}</TableCell>
+              <TableCell className="text-right tabular-nums">{formatFileSize(r.size)}</TableCell>
             </TableRow>
           ))}
         </TableBody>

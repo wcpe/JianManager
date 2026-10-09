@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import type { BotLoadAllocation, BotLoadMetricPoint } from '@/lib/bot-load/bot-load-types'
-import { formatBytes } from '@/lib/bot-load/bot-load-metrics'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 import { Button } from '@jianmanager/ui/components/button'
 
 export function ExecutorDistribution({
@@ -44,7 +44,7 @@ export function ExecutorDistribution({
                   <td className="py-1.5 pr-2 tabular-nums">{a.plannedCount}</td>
                   <td className="py-1.5 pr-2 tabular-nums">{live?.activeBots ?? '—'}</td>
                   <td className="py-1.5 pr-2">{live?.health ?? '—'}</td>
-                  <td className="py-1.5 pr-2 tabular-nums">{formatBytes(live?.rssBytes)}</td>
+                  <td className="py-1.5 pr-2 tabular-nums">{formatFileSize(live?.rssBytes, { fallback: '—' })}</td>
                   <td className="py-1.5 pr-2 tabular-nums">
                     {live?.eventLoopP95Ms != null ? `${live.eventLoopP95Ms} ms` : '—'}
                   </td>

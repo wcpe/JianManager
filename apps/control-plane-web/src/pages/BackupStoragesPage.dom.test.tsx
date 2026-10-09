@@ -36,7 +36,9 @@ describe('BackupStoragesPage（mock）', () => {
     expect(screen.getByText('sftp-offsite')).toBeInTheDocument()
     // 凭证以 ${ENV_VAR} 引用展示，不返回明文（FR-057）。
     expect(screen.getByText('${JIANMANAGER_BACKUP_S3_AK}')).toBeInTheDocument()
-    expect(screen.getByText('256 MB · 1 个备份')).toBeInTheDocument()
+    // 容量文案随收敛统一为共享实现的「非字节档保留 1 位小数」：seed 为 268435456 B = 256 MiB，
+    // 原实现的「≥10 不保留小数」已并入 `@/lib/shared/format-file-size`，故为 256.0 MB。
+    expect(screen.getByText('256.0 MB · 1 个备份')).toBeInTheDocument()
     expect(screen.getByText('连接正常')).toBeInTheDocument()
   })
 

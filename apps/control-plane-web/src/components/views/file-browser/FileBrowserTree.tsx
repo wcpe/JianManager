@@ -11,13 +11,7 @@ import {
 import type { FileBrowserAction, FileBrowserSource, FileEntry } from '@/lib/file-browser/file-browser-types'
 import { buildTree } from '@/lib/file-browser/file-browser-tree'
 import type { BrowserTreeDir, BrowserTreeFile } from '@/lib/file-browser/file-browser-tree'
-
-/** 字节数转人类可读。 */
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 interface FileBrowserTreeProps {
   source: FileBrowserSource
@@ -197,7 +191,7 @@ function StaticDirRow({
         )}
         <span className="truncate font-medium">{dir.name}</span>
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {t('fileBrowser.dirSummary', { n: dir.fileCount, size: formatBytes(dir.totalSize) })}
+          {t('fileBrowser.dirSummary', { n: dir.fileCount, size: formatFileSize(dir.totalSize) })}
         </span>
       </button>
       {open && (
@@ -431,7 +425,7 @@ function FileRow({
         <span className="truncate font-mono text-xs">{file.name}</span>
         {file.entry.size != null && (
           <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-            {formatBytes(file.entry.size)}
+            {formatFileSize(file.entry.size)}
           </span>
         )}
       </button>

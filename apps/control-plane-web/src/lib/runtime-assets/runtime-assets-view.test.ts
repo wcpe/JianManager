@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import type { AssetInfo } from '@/lib/artifacts/asset-contracts'
 import type { AssetTypeGroup, JDKMatrixItem } from './runtime-assets-contracts'
 import {
-  formatBytes,
   buildJDKMatrix,
   buildRuntimeGrid,
   filterAssetGroups,
@@ -53,19 +52,9 @@ function asset(p: Partial<AssetInfo>): AssetInfo {
   }
 }
 
-describe('formatBytes', () => {
-  it('handles zero and negatives', () => {
-    expect(formatBytes(0)).toBe('0 B')
-    expect(formatBytes(-5)).toBe('0 B')
-    expect(formatBytes(NaN)).toBe('0 B')
-  })
-  it('scales units', () => {
-    expect(formatBytes(512)).toBe('512 B')
-    expect(formatBytes(1024)).toBe('1 KB')
-    expect(formatBytes(1536)).toBe('1.5 KB')
-    expect(formatBytes(1024 * 1024 * 5)).toBe('5 MB')
-  })
-})
+// 本模块原有的 `formatBytes` 用例已随实现一并收敛到
+// `@/lib/shared/format-file-size.test.ts`（覆盖更全：0/负值/空值/非有限数 + 各档进位 + 单位后缀），
+// 此处不再保留重复断言，避免两处口径再次分叉。
 
 describe('buildJDKMatrix', () => {
   it('builds rows/columns and merges same vendor-major into one cell', () => {

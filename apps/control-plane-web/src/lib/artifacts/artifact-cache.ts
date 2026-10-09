@@ -4,8 +4,10 @@
  * 归属说明（ADR-097）：类型由两侧共用——应用 API 层 `@/api/nodeRuntime` 的查询 hook
  * 返回 `ArtifactCacheView`，受控视图 `components/views/nodes/NodeArtifactCachePanel`
  * 经 props 接收它。类型随组件归包，避免包内组件为取类型而反向依赖 `@/api`。
- * 纯函数（字节格式化、容量上限 GB ↔ 字节换算）一并归包，便于单测。
+ * 纯函数（容量上限 GB ↔ 字节换算）一并归包，便于单测。
  */
+
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 一条节点制品缓存项。name/version 由 CP 用 asset 表按 sha256 补全（可能为空）。 */
 export interface ArtifactCacheItem {
@@ -28,15 +30,6 @@ export interface ArtifactCacheView {
   capBytes: number
 }
 
-/** 把字节数格式化为人类可读大小（B/KB/MB/GB/TB），0 或非有限值回 "0 B"。 */
-export function formatCacheBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  const value = bytes / Math.pow(1024, i)
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
-}
-
 /** 把 GB 输入（用户在上限框填的数）换算为字节；空/非法/<=0 视为 0（不限）。 */
 export function capGiBToBytes(gib: string | number): number {
   const n = typeof gib === 'number' ? gib : parseFloat(gib)
@@ -55,5 +48,5 @@ export function capBytesToGiB(bytes: number): string {
 /** 上限的人类可读描述：0/空=不限，否则格式化字节。 */
 export function describeCap(capBytes: number): string {
   if (!Number.isFinite(capBytes) || capBytes <= 0) return '不限'
-  return formatCacheBytes(capBytes)
+  return formatFileSize(capBytes)
 }
