@@ -42,8 +42,9 @@ async function gotoInstances(page: Page): Promise<void> {
   await page.getByRole('link', { name: /^全部服务器/ }).click()
   await expect(page.locator('[data-page="instances"]')).toBeVisible()
   // 显式切卡片视图（ViewToggle aria-label = grouping.viewCard「卡片视图」）。
-  // 卡片视图按分组维度分段渲染，页面上会有多个 instances-card-virtual 分段容器，
-  // 故以切换按钮的 aria-pressed 作为「已进入卡片视图」的就绪信号。
+  // 卡片视图现为单一容器 + 单一虚拟窗口的行流（组头行与卡片行同属一个列表），
+  // 故页面上只有一个 instances-card-virtual；此处仍以切换按钮的 aria-pressed 作为
+  // 「已进入卡片视图」的就绪信号（与容器数量无关，切维度时同样成立）。
   await page.getByRole('button', { name: '卡片视图' }).click()
   await expect(page.getByRole('button', { name: '卡片视图' })).toHaveAttribute('aria-pressed', 'true')
 }
@@ -55,6 +56,13 @@ test.describe('实例生命周期（mock 模式，FR-211）', () => {
 
   test('进实例页 → 看到 FR-201 种子实例', async ({ page }) => {
     await gotoInstances(page)
+    // 卡片视图是**单一虚拟窗口**：只挂载首屏（改前按分组分段，每组各挂一个窗口，
+    // 于是「每组第一屏」都在 DOM 里）。分组后 CRASHED 的 creative-1 属 region r2，
+    // 落在首屏之外；本用例要一次看全三个种子，故显式进「无分组卡片视图」——
+    // 种子 id 为 1/2/3 且默认按创建时间升序，三个必在首屏内。
+    // 这一步是整页加载（不是 SPA 跳转），故放在用例最开始、任何内存态联动之前。
+    await page.goto('/instances?view=card&groupBy=none')
+    await expect(page.getByTestId('instances-card-virtual')).toBeVisible()
     // 三个种子实例（RUNNING / STOPPED / CRASHED）均应在卡片视图出现。
     await expect(page.getByRole('button', { name: 'survival-1', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'lobby-proxy', exact: true })).toBeVisible()
