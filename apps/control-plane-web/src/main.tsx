@@ -4,7 +4,7 @@ import { BrowserRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './i18n'
 import './index.css'
-import { initThemeFromStorage } from '@/lib/theme'
+import { initThemeFromStorage } from '@jianmanager/ui/lib/theme'
 import App from './App'
 
 // 首屏无闪 + 登录/初始化页也套主题（FR-164）：在 React 挂载前先把

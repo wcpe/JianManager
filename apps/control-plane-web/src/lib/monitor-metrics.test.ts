@@ -14,7 +14,7 @@ import {
   buildCompareSeries,
   NODE_METRIC_CATALOG,
   type RawSeries,
-} from './monitor-metrics'
+} from '@jianmanager/ui/lib/monitor-metrics'
 
 describe('formatBytes', () => {
   it('按量级取 G/M/K', () => {

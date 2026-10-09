@@ -5,7 +5,7 @@ import {
   isKnownValue,
   shouldOfferCustom,
   toOptions,
-} from './combobox'
+} from '@jianmanager/ui/lib/combobox'
 
 const opts = [
   { value: 'paper', label: 'Paper' },

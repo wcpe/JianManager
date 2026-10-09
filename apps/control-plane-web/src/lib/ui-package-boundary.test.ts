@@ -88,35 +88,33 @@ describe('@jianmanager/ui package boundary', () => {
     }
   }, 15_000)
 
-  it('keeps first-wave legacy entries as package re-exports only', () => {
+  it('no longer keeps design-system compat re-export layers in the app', () => {
+    // 这三组路径曾是「旧入口 → 包」的再导出层。消费者改指包路径后它们已删除，
+    // 此处断言其不复存在，防止再造出中转层——设计系统一律经 @jianmanager/ui 访问。
+    const stale: string[] = []
     for (const name of firstWaveUi) {
       const file = path.join(sourceRoot, 'components/ui', `${name}.tsx`)
-      const text = readFileSync(file, 'utf8').trim()
-      expect(text, rel(file)).toMatch(/from ['"]@jianmanager\/ui(?:\/[^'"]+)?['"]/)
+      if (existsSync(file)) stale.push(rel(file))
     }
-
     for (const name of firstWaveCharts) {
       const file = path.join(sourceRoot, 'components/charts', `${name}.tsx`)
-      const text = readFileSync(file, 'utf8').trim()
-      expect(text, rel(file)).toMatch(/from ['"]@jianmanager\/ui(?:\/[^'"]+)?['"]/)
+      if (existsSync(file)) stale.push(rel(file))
     }
-
     for (const name of sharedHelpers) {
       const file = path.join(sourceRoot, 'lib', `${name}.ts`)
-      const text = readFileSync(file, 'utf8').trim()
-      expect(text, rel(file)).toMatch(/from ['"]@jianmanager\/ui(?:\/[^'"]+)?['"]/)
+      if (existsSync(file)) stale.push(rel(file))
     }
+    expect(stale, '设计系统一律经 @jianmanager/ui 访问，应用侧不应再有再导出层').toEqual([])
   })
 
   it('routes app consumers through @jianmanager/ui instead of legacy component paths', () => {
+    // 原先还豁免 src/components/ui、src/components/charts、src/lib 三个目录——那是为放过
+    // 再导出层自身。层已删除，豁免随之取消；设计系统的全部模块名一并在禁止清单内。
     const offenders = walk(sourceRoot)
-      .filter((file) => !rel(file).startsWith('src/components/ui/'))
-      .filter((file) => !rel(file).startsWith('src/components/charts/'))
-      .filter((file) => !rel(file).startsWith('src/lib/'))
       .filter((file) => !file.endsWith('.test.ts') && !file.endsWith('.dom.test.tsx'))
       .filter((file) => {
         const text = readFileSync(file, 'utf8')
-        return /@\/components\/ui\/|@\/components\/charts\/(?:RangePicker|Sparkline|TimeSeriesChart|MonitorChart|MonitorSkeleton|MetricsOverviewStrip)|@\/lib\/(?:utils|threshold|brush|chart-hover|monitor-metrics)/.test(text)
+        return /@\/components\/ui\/|@\/components\/charts\/(?:RangePicker|Sparkline|TimeSeriesChart|MonitorChart|MonitorSkeleton|MetricsOverviewStrip|MetricComparePanel)|@\/lib\/(?:utils|threshold|brush|chart-hover|monitor-metrics|theme|tone|stat-card|combobox|color-contrast|focus-ring|interaction-overlay)/.test(text)
       })
       .map(rel)
 

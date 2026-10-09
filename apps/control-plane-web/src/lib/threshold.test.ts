@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resourceLevel, tpsLevel, instanceStatusLevel, statusColorVar } from './threshold'
+import { resourceLevel, tpsLevel, instanceStatusLevel, statusColorVar } from '@jianmanager/ui/lib/threshold'
 
 describe('resourceLevel', () => {
   it('按阈值分级 <50 / 50-80 / >80', () => {

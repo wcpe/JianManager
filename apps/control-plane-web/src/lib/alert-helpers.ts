@@ -3,7 +3,7 @@
  * 触发类型字段可见性判定、级别→状态等级映射、规则汇总——抽为纯函数便于 vitest 覆盖，
  * UI 组件只做渲染。
  */
-import type { StatusLevel } from './threshold'
+import type { StatusLevel } from '@jianmanager/ui/lib/threshold'
 
 /** 告警级别。 */
 export type AlertLevel = 'info' | 'warn' | 'critical'

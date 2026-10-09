@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { RangePicker } from './RangePicker'
+import { RangePicker } from '@jianmanager/ui/charts/RangePicker'
 
 describe('RangePicker', () => {
   it('使用统一工具条与按钮控件渲染时间范围', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { toneChipClass } from './tone'
+import { toneChipClass } from '@jianmanager/ui/lib/tone'
 
 describe('toneChipClass', () => {
   it('主色走淡染 accent + 主色前景', () => {

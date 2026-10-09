@@ -4,7 +4,7 @@
  * 1. 变量占位（`{{var}}`）的提取 / 填充 / 校验——支撑「含占位变量时的填充预览」。
  * 2. 市场展示元数据派生（类型 label/图标/语义色、Java·RAM 需求推断）——支撑封面卡片。
  */
-import type { Tone } from './tone'
+import type { Tone } from '@jianmanager/ui/lib/tone'
 
 /** 占位变量语法：`{{ name }}`，变量名限 [A-Za-z0-9_]。全局匹配。 */
 const VAR_RE = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pickStatVisual, deltaTone } from './stat-card'
+import { pickStatVisual, deltaTone } from '@jianmanager/ui/lib/stat-card'
 
 describe('pickStatVisual', () => {
   it('按指标性质混搭右侧视觉：占比→条 / 走势→趋势线 / 计数→双值 / 普通→无', () => {
