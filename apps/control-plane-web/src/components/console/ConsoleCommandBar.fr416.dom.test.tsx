@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 
 import { clearCommandHistory, loadCommandHistory, pushCommandHistory } from '@/lib/console-command-history'
 import { renderWithProviders } from '@/test/render'
-import ConsoleCommandBar from './ConsoleCommandBar'
+import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 import InstanceConsoleView from './InstanceConsoleView'
 
 /**

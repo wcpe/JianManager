@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { languageKindFor, languageExtensionFor } from './language'
+import { languageKindFor, languageExtensionFor } from '@/lib/explorer-language'
 
 describe('languageKindFor', () => {
   it('maps yaml family', () => {

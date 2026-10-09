@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import ExplorerTabHost from './ExplorerTabHost'
-import { resetTabIdSeq } from './explorer-tabs'
+import { resetTabIdSeq } from '@/lib/explorer-tabs'
 
 /**
  * FR-376：多标签宿主 DOM——新标签、切换、弹出/收回。

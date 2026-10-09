@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { planPaste, cutEntries, copyEntries, type Clipboard } from './clipboard'
+import { planPaste, cutEntries, copyEntries, Clipboard } from '@/lib/explorer-clipboard'
 
 const file = (path: string): { path: string; isDir: boolean } => ({ path, isDir: false })
 const dir = (path: string): { path: string; isDir: boolean } => ({ path, isDir: true })

@@ -1,18 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import {
-  setBusClipboard,
-  getBusClipboard,
-  clearBusClipboard,
-  toClipboard,
-  subscribeBusClipboard,
-  setDragPayload,
-  getDragPayload,
-  writeDragToDataTransfer,
-  readDragFromDataTransfer,
-  resetClipboardBusForTests,
-  CLIP_MIME,
-  CLIP_TTL_MS,
-} from './explorer-clipboard-bus'
+import { setBusClipboard, getBusClipboard, clearBusClipboard, toClipboard, subscribeBusClipboard, setDragPayload, getDragPayload, writeDragToDataTransfer, readDragFromDataTransfer, resetClipboardBusForTests, CLIP_MIME, CLIP_TTL_MS } from '@/lib/explorer-clipboard-bus'
 
 /** node 工程无 DOM：为 sessionStorage 镜像测补简易 polyfill。 */
 function installSessionStoragePolyfill() {

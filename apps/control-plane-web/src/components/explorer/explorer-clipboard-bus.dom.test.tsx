@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import ResourceExplorer from './ResourceExplorer'
-import { resetClipboardBusForTests } from './explorer-clipboard-bus'
+import { resetClipboardBusForTests } from '@/lib/explorer-clipboard-bus'
 
 /**
  * FR-377：同页双 ResourceExplorer 剪贴板互通（主区↔浮动等价）。

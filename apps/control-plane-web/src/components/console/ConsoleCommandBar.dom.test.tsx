@@ -3,7 +3,7 @@ import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { renderWithProviders } from '@/test/render'
-import ConsoleCommandBar from './ConsoleCommandBar'
+import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 
 /**
  * 命令栏（FR-415，spec §2.2/§2.3；ADR-086）。
