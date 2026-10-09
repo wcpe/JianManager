@@ -17,7 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
-import UntrustedFieldBadge from '@/components/views/UntrustedFieldBadge'
+import UntrustedFieldBadge from '@/components/views/client-dist/UntrustedFieldBadge'
 import type { ClientDistSecurityProfile, ClientDistSecurityProfileDetail } from '@/lib/client-dist/client-dist-security-contracts'
 import type { ClientDistQuery, ClientDistQueryKey } from '@/lib/client-dist/client-dist-query'
 import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime, levelVariant } from '@/components/views/client-dist/security-format'

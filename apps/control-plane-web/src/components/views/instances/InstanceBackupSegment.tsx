@@ -15,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { ConfigSwitch } from '@/components/views/instances/ConfigSwitch'
 import { describeCron } from '@/lib/shared/cron'
 import { BACKUP_COMPLETED, BACKUP_MODE_INCREMENTAL, backupStatusKey, backupStatusLevel, countDependents, formatSizeMb, isIncrementalChild } from '@/lib/backups/backup'

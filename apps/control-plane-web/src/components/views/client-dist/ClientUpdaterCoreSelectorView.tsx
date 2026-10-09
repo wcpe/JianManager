@@ -16,7 +16,7 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 
 /**
  * updater-core 归档版本摘要（容器经 `useUpdaterCoreVersions` 取数注入）。

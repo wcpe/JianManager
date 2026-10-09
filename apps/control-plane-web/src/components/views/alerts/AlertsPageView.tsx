@@ -36,7 +36,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { ConfigRow, ConfigSwitch, ConfigSummaryChips, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
 import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
 import type { AlertChannelInfo, AlertEventInfo, AlertRuleInfo } from '@/lib/alerts/alert-contracts'

@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import CodeEditor from '@/components/views/explorer/CodeEditor'
 import EditorShortcutsHelp from '@/components/views/explorer/editor/EditorShortcutsHelp'
 import ArchiveViewer from '@/components/views/explorer/ArchiveViewer'

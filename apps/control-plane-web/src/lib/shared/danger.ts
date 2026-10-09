@@ -1,5 +1,5 @@
 import { useAuthStore } from '@/stores/auth'
-import type { DangerScope } from '@/components/views/DangerConfirm'
+import type { DangerScope } from '@/components/views/common/DangerConfirm'
 
 /**
  * 危险操作的「权限范围」分级（FR-059 角色门禁）。

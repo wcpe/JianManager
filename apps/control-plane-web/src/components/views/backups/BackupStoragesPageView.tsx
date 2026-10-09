@@ -37,7 +37,7 @@ import {
   TableRow,
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { validateRequired, validateEnvRef, validateFields, hasErrors } from '@/lib/shared/form-validation'
 import { useFieldGate } from '@/lib/hooks/use-field-gate'
 

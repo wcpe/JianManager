@@ -50,7 +50,7 @@ import {
   scrollableDialogContentClass,
   ScrollableDialogBody,
 } from '@jianmanager/ui/components/scrollable-dialog'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 
 /** 平台「全部」哨兵（Radix Select 不允许空字符串值，回写时映射回 ""）。 */
 const PLATFORM_ALL = '__all__'

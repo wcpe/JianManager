@@ -29,11 +29,11 @@ import {
   TableRow,
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
-import CreateUserDialogView, { type CreateUserNotice } from '@/components/views/CreateUserDialog'
-import CreateInvitationDialogView from '@/components/views/CreateInvitationDialog'
-import DangerConfirm from '@/components/views/DangerConfirm'
-import { EditUserDialogView } from '@/components/views/EditUserDialogView'
-import type { EditUserValues } from '@/components/views/EditUserDialogView'
+import CreateUserDialogView, { type CreateUserNotice } from '@/components/views/users/CreateUserDialog'
+import CreateInvitationDialogView from '@/components/views/users/CreateInvitationDialog'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
+import { EditUserDialogView } from '@/components/views/users/EditUserDialogView'
+import type { EditUserValues } from '@/components/views/users/EditUserDialogView'
 import { ConfigRow, ConfigSwitch, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
 import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
 import { isPlatformAdmin } from '@/lib/shared/roles'

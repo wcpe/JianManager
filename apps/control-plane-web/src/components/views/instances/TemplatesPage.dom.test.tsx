@@ -4,8 +4,8 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
-import { TemplatesPage } from '@/components/views/TemplatesPage'
-import type { TemplateView } from '@/components/views/TemplatesPage'
+import { TemplatesPage } from '@/components/views/instances/TemplatesPage'
+import type { TemplateView } from '@/components/views/instances/TemplatesPage'
 
 /**
  * FR-064/FR-154 模板市场 · 受控视图测（ADR-097 a/b 范式）。
