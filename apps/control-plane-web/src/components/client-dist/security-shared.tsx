@@ -15,7 +15,7 @@ export {
   levelVariant,
   statusVariant,
   EmptyState,
-} from '@jianmanager/ui/components/views/client-dist/security-format'
+} from '@/components/views/client-dist/security-format'
 
 type SecurityQueryPatch = Partial<Record<ClientDistQueryKey, string | null>>
 

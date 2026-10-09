@@ -6,7 +6,7 @@ import {
   isClientDistLogTypeValue,
   type ClientDistLogTypeValue,
   type ClientDistLogsLinkRenderer,
-} from '@jianmanager/ui/components/views/client-dist/ClientDistLogsTabView'
+} from '@/components/views/client-dist/ClientDistLogsTabView'
 import ClientDistExportButton from '@/components/ClientDistExportButton'
 import { useClientDistSecurityLogs } from '@/api/clientDistSecurity'
 import { useClientDistEventDetail, useClientDistEventSearch } from '@/api/clientDistEvents'

@@ -7,7 +7,7 @@ import {
   type ClientPublishOutcome,
   type ClientPublishSubmitPayload,
   type ClientPublishUploadProgress,
-} from '@jianmanager/ui/components/views/client-dist/ClientPublishPageView'
+} from '@/components/views/client-dist/ClientPublishPageView'
 import { usePublishClientVersion, type ManifestFile } from '@/api/clientVersions'
 import { useUpdaterJarsInfo } from '@/api/clientChannels'
 import { useThemeStore } from '@/stores/theme'

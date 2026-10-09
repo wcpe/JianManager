@@ -1,5 +1,5 @@
 import type { ClientRuntimeOverview, RuntimeLink } from '@jianmanager/ui'
-import { OpsClientsTabView } from '@jianmanager/ui/components/views/client-dist/OpsClientsTabView'
+import { OpsClientsTabView } from '@/components/views/client-dist/OpsClientsTabView'
 import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
 import { ObsOverviewSection } from './ObsOverviewSection'
 

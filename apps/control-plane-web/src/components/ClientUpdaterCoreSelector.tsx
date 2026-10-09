@@ -5,7 +5,7 @@ import {
   ClientUpdaterCoreSelectorView,
   type ClientUpdaterCoreUploadOutcome,
   type ClientUpdaterCoreUploadPayload,
-} from '@jianmanager/ui/components/views/client-dist/ClientUpdaterCoreSelectorView'
+} from '@/components/views/client-dist/ClientUpdaterCoreSelectorView'
 import { useUpdaterCoreVersions, useSelectUpdaterCore, useUploadUpdaterCore } from '@/api/clientChannels'
 import { useDangerPermission } from '@/lib/danger'
 

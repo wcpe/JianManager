@@ -1,5 +1,5 @@
 import { Link, useSearchParams } from 'react-router'
-import { OpsOverviewTabView, type OpsOverviewLinkRenderer, type RankFilterKey } from '@jianmanager/ui/components/views/client-dist/OpsOverviewTabView'
+import { OpsOverviewTabView, type OpsOverviewLinkRenderer, type RankFilterKey } from '@/components/views/client-dist/OpsOverviewTabView'
 import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
 import { useClientDistObservability, type ClientDistStats } from '@/api/clientStats'
 import { useClientDistSecurityOverview } from '@/api/clientDistSecurity'

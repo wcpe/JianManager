@@ -6,7 +6,7 @@ import {
   type ObservabilityRange,
   type ObservabilityWindow,
 } from '@/api/clientDistObservability'
-import { ClientStatsPanelView } from '@jianmanager/ui/components/views/client-dist/ClientStatsPanelView'
+import { ClientStatsPanelView } from '@/components/views/client-dist/ClientStatsPanelView'
 import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
 import { readClientDistQuery } from '@/lib/client-dist-query'
 import MachineListPanel from '@/components/client-dist/MachineListPanel'

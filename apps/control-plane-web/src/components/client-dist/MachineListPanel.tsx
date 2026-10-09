@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { MachineListPanelView } from '@jianmanager/ui/components/views/client-dist/MachineListPanelView'
-import { MachineTimelineView } from '@jianmanager/ui/components/views/client-dist/MachineTimelineView'
+import { MachineListPanelView } from '@/components/views/client-dist/MachineListPanelView'
+import { MachineTimelineView } from '@/components/views/client-dist/MachineTimelineView'
 import type { ClientMachineSummary, MachineSortField } from '@jianmanager/ui/lib/client-dist-machines-contracts'
 import ClientDistExportButton from '@/components/ClientDistExportButton'
 import { useClientDistMachines, useClientMachineEvents } from '@/api/clientDistMachines'
