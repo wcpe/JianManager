@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { SessionHeaderView } from '@/components/views/bot-load/session/SessionHeaderView'
-import type { BotLoadRunV2 } from '@/lib/bot-load-types'
+import type { BotLoadRunV2 } from '@/lib/bot-load/bot-load-types'
 import { useCancelBotLoadRun, useDownloadBotLoadReport, useStopBotLoadRun } from '@/api/bot-load'
 
 /**

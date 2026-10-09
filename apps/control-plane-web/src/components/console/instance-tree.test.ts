@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { groupInstancesByNode, statusDotKind, treeBranchKey, toTreeBranches } from '@/lib/instance-tree'
+import { groupInstancesByNode, statusDotKind, treeBranchKey, toTreeBranches } from '@/lib/instances/instance-tree'
 import type { InstanceInfo } from '@/api/instances'
 import type { NodeInfo } from '@/api/nodes'
 

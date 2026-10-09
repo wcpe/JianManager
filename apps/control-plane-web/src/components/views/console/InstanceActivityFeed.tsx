@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Copy } from 'lucide-react'
 
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@/lib/shared/clipboard'
 import { cn } from '@jianmanager/ui'
 
 /** 一条近期日志（结构化子集）。 */

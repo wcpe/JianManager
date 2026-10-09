@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import ProxyRegistrationsDialog from '@/components/views/instances/ProxyRegistrationsDialog'
-import type { ProxyRegistration } from '@/lib/proxy-registration'
+import type { ProxyRegistration } from '@/lib/instances/proxy-registration'
 
 /**
  * FR-035 代理后端注册管理 · 受控视图测（ADR-097 b 范式）。

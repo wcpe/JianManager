@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { StoppedLogsView } from '@/components/views/console/StoppedLogsView'
-import type { LogEntry } from '@/lib/console-log-types'
+import type { LogEntry } from '@/lib/console/console-log-types'
 
 /**
  * 停机日志回放 · 受控视图测（ADR-097）。

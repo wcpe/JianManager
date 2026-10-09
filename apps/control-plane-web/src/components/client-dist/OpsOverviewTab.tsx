@@ -1,11 +1,11 @@
 import { Link, useSearchParams } from 'react-router'
 import { OpsOverviewTabView } from '@/components/views/client-dist/OpsOverviewTabView'
 import type { OpsOverviewLinkRenderer, RankFilterKey } from '@/components/views/client-dist/OpsOverviewTabView'
-import type { ObsWindow } from '@/lib/obs-window'
+import type { ObsWindow } from '@/lib/metrics/obs-window'
 import { useClientDistObservability, type ClientDistStats } from '@/api/clientStats'
 import { useClientDistSecurityOverview } from '@/api/clientDistSecurity'
 import type { ClientRuntimeOverview } from '@/api/clientRuntimeStates'
-import { buildClientDistHref } from '@/lib/client-dist-query'
+import { buildClientDistHref } from '@/lib/client-dist/client-dist-query'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
 /**

@@ -9,10 +9,10 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
-import { clearInstanceDrafts, reportInstanceDraft } from '@/lib/console-draft-registry'
+import { clearInstanceDrafts, reportInstanceDraft } from '@/lib/console/console-draft-registry'
 
 import { MockWebSocket, resetTerminalHarness, wsSockets } from '@/test/xterm-ws-harness'
-import { HOT_SET_SIZE, IDLE_DISCONNECT_MS, terminalSessionManager } from '@/lib/terminal-session-manager'
+import { HOT_SET_SIZE, IDLE_DISCONNECT_MS, terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import InstanceConsoleCache from './InstanceConsoleCache'
 
 /**

@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import api from '@/api/client'
 
 // 实现已回迁应用侧（原 ADR-097 迁包已撤销），此处保留 re-export 维持既有导入路径。
-import type { AlertRuleInfo, AlertEventInfo, CreateRuleBody, UpdateRuleBody, ChannelConfig, AlertChannelInfo, QQBindTaskInfo, QQBindResult } from '@/lib/alert-contracts'
+import type { AlertRuleInfo, AlertEventInfo, CreateRuleBody, UpdateRuleBody, ChannelConfig, AlertChannelInfo, QQBindTaskInfo, QQBindResult } from '@/lib/alerts/alert-contracts'
 
 export type { AlertRuleInfo, CreateRuleBody, UpdateRuleBody, ChannelConfig, AlertChannelInfo, QQBindTaskInfo, QQBindResult }
 

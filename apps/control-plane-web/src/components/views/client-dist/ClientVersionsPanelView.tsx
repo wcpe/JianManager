@@ -27,7 +27,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import type { ManifestFileLike } from '@/lib/client-publish-wizard'
+import type { ManifestFileLike } from '@/lib/client-dist/client-publish-wizard'
 import { ClientFileTree } from '@/components/views/client-dist/ClientFileTree'
 
 /** 版本历史列表项（视图展示所需最小字段；与 `@/api/clientVersions` 的 `ClientVersionSummary` 结构兼容）。 */

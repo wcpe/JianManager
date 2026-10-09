@@ -24,8 +24,8 @@ import {
 import DangerConfirm from '@/components/views/DangerConfirm'
 import { ConfigRow, ConfigSummaryChips, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
 import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
-import { BACKUP_COMPLETED, BACKUP_MODE_INCREMENTAL, backupStatusKey, backupStatusLevel, countDependents, formatSizeMb, isIncrementalChild, summarizeBackups } from '@/lib/backup'
-import type { BackupInfo } from '@/lib/backup'
+import { BACKUP_COMPLETED, BACKUP_MODE_INCREMENTAL, backupStatusKey, backupStatusLevel, countDependents, formatSizeMb, isIncrementalChild, summarizeBackups } from '@/lib/backups/backup'
+import type { BackupInfo } from '@/lib/backups/backup'
 
 /**
  * 可选备份存储位置（本视图渲染下拉与解析存储名所需的最小字段集）。

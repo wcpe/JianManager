@@ -1,5 +1,5 @@
 import { useAdoptInstanceRuntime } from '@/api/instances'
-import type { RuntimeDriftInfo } from '@/lib/runtime-drift'
+import type { RuntimeDriftInfo } from '@/lib/runtime-assets/runtime-drift'
 import { RuntimeDriftAdoptButton as RuntimeDriftAdoptButtonView, RuntimeDriftBanner as RuntimeDriftBannerView } from '@/components/views/instances/RuntimeDriftNotice'
 
 /**

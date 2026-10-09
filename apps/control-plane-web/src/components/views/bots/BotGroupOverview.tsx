@@ -8,8 +8,8 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import type { ViewMode } from '@jianmanager/ui/components/view-toggle'
-import type { BotSummaryGroup } from '@/lib/bot'
-import type { GroupByDim } from '@/lib/bots-overview'
+import type { BotSummaryGroup } from '@/lib/bots/bot'
+import type { GroupByDim } from '@/lib/bots/bots-overview'
 
 /** 组卡片/行的公共参数：选中与展开状态由本组件持有后下发。 */
 export interface BotGroupItemArgs {

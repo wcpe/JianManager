@@ -13,9 +13,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
-import { clampRatio, findPane, instanceIdsInTrees, paneCount, paneLeaves, removePane, replacePaneInstance, reidTree, setSplitRatio, splitPane } from '@/lib/console-immersive-layout'
-import type { ImmersivePaneLeaf, ImmersivePaneSplit, ImmersivePaneTree, PaneSplitDirection } from '@/lib/console-immersive-layout'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import { clampRatio, findPane, instanceIdsInTrees, paneCount, paneLeaves, removePane, replacePaneInstance, reidTree, setSplitRatio, splitPane } from '@/lib/console/console-immersive-layout'
+import type { ImmersivePaneLeaf, ImmersivePaneSplit, ImmersivePaneTree, PaneSplitDirection } from '@/lib/console/console-immersive-layout'
+import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 
 type PickerRequest =
   | { kind: 'split'; paneId: string; direction: PaneSplitDirection }

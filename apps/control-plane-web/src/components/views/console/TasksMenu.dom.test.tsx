@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import { TasksMenu } from '@/components/views/console/TasksMenu'
-import type { Task } from '@/lib/task-status'
+import type { Task } from '@/lib/tasks/task-status'
 
 /**
  * FR-327 页眉任务下拉 · 受控视图测（ADR-097 c 范式）。

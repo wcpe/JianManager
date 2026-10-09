@@ -3,7 +3,7 @@ import { Suspense, lazy, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PageSkeleton } from '@jianmanager/ui/components/layout'
 import { useAuthStore } from '@/stores/auth'
-import { ROUTE_CHUNKS } from '@/lib/route-chunks'
+import { ROUTE_CHUNKS } from '@/lib/shared/route-chunks'
 import WorkspaceEmpty from '@/components/views/console/WorkspaceEmpty'
 
 /**

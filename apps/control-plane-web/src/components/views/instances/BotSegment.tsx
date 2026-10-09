@@ -17,9 +17,9 @@ import {
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import BotStatusDot from '@/components/views/instances/BotStatusDot'
-import type { BotBatchAction, BotBatchFilter, BotBatchRequest, BotBatchResult, BotInfo, BotSummary } from '@/lib/bot'
-import { groupBots, parseBotConfig, summaryCounts } from '@/lib/bot-list'
-import type { BotGroupBy, BotStatusKind } from '@/lib/bot-list'
+import type { BotBatchAction, BotBatchFilter, BotBatchRequest, BotBatchResult, BotInfo, BotSummary } from '@/lib/bots/bot'
+import { groupBots, parseBotConfig, summaryCounts } from '@/lib/bots/bot-list'
+import type { BotGroupBy, BotStatusKind } from '@/lib/bots/bot-list'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type BotNotice = (kind: 'success' | 'error', message: string) => void

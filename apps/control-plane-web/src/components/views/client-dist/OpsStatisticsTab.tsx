@@ -3,10 +3,10 @@ import { Activity, AlertTriangle, Download, Server, Users } from 'lucide-react'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { Badge } from '@jianmanager/ui/components/badge'
 import type { ChartSeries } from '@jianmanager/ui'
-import type { ClientDistStats, StatsIP } from '@/lib/client-dist-stats-contracts'
+import type { ClientDistStats, StatsIP } from '@/lib/client-dist/client-dist-stats-contracts'
 import { DistPanel, ErrorPanel, LinkableDistPanel, TrendCard, distBuckets, fmtBytes, fmtRate, kindRequests, resultLabel, totalBytes } from '@/components/views/client-dist/OpsShared'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
-import { KPI_I18N, activeClientsHintKey, clientDistEmptyI18nKey, formatKpiRate, resolveActiveClients, resolveClientDistEmptyKind, resolveRequestRates } from '@/lib/client-dist-kpi'
+import { KPI_I18N, activeClientsHintKey, clientDistEmptyI18nKey, formatKpiRate, resolveActiveClients, resolveClientDistEmptyKind, resolveRequestRates } from '@/lib/client-dist/client-dist-kpi'
 
 /**
  * 页面 B · 统计 Tab（FR-430，迁自旧监控页 `StatisticsTab`）。

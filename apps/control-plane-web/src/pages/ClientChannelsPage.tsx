@@ -5,9 +5,9 @@ import { toast } from 'sonner'
 import { ArrowLeft, Plus } from 'lucide-react'
 import { useClientChannels, useClientChannel, useCreateClientChannel, useDeleteClientChannel, useCreateClientKey, useUpdateClientKey, useRevokeClientKey, useRevealClientKey, type ClientChannel } from '@/api/clientChannels'
 import { useClientChannelSecuritySummary, type ClientChannelSecuritySummary } from '@/api/clientDistSecurity'
-import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
-import { useTabParam } from '@/lib/use-tab-param'
-import { deriveReadiness } from '@/lib/client-readiness'
+import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist/client-dist-query'
+import { useTabParam } from '@/lib/hooks/use-tab-param'
+import { deriveReadiness } from '@/lib/client-dist/client-readiness'
 import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { ObjectPageHeader } from '@jianmanager/ui/components/shell'
@@ -23,7 +23,7 @@ import { ChannelCard, EmptyChannelsGuide } from '@/components/views/client-dist/
 import { CreateChannelDialog } from '@/components/views/client-dist/CreateChannelDialog'
 import { KeysSegment } from '@/components/views/client-dist/KeysSegment'
 import { ChannelSecuritySummaryBar } from '@/components/views/client-dist/ChannelSecuritySummaryBar'
-import { useDangerPermission } from '@/lib/danger'
+import { useDangerPermission } from '@/lib/shared/danger'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback

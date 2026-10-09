@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { InstanceConfigSurfacePanel } from '@/components/views/console/InstanceConfigSurfacePanel'
-import type { ConfigSurfaceItem } from '@/lib/config-surface'
+import type { ConfigSurfaceItem } from '@/lib/config-explorer/config-surface'
 
 /**
  * 实例「关键配置」面板 · 受控视图测（ADR-097）。

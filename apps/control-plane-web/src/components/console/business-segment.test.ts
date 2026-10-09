@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildBusinessPayload, coerceBusinessArg, isWriteAction } from '@/lib/business-actions'
+import { buildBusinessPayload, coerceBusinessArg, isWriteAction } from '@/lib/console/business-actions'
 import type { BusinessAction } from '@/api/business'
 
 function action(name: string, readOnly?: boolean): BusinessAction {

@@ -14,7 +14,7 @@ import {
   ScrollableDialogBody,
   scrollableDialogContentClass,
 } from '@jianmanager/ui/components/scrollable-dialog'
-import type { ClientKeyWithSecret, ClientPullKey } from '@/lib/client-channel-types'
+import type { ClientKeyWithSecret, ClientPullKey } from '@/lib/client-dist/client-channel-types'
 
 /** ISO 时间串转 `<input type="datetime-local">` 可用的本地值；空值转空串。 */
 const toDatetimeLocal = (value: string | null) =>

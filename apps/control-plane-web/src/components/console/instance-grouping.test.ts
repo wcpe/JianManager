@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { envOf, freeTagsOf, collectEnvs, collectTags, groupInstances, groupInstancesByGroupTree, buildGroupTreeSource, groupTreeKey, regionOf, zoneOf, GROUP_DIMENSIONS, dimensionNeedsKeyMap, buildKeyMap, dimensionValueOf } from '@/lib/instance-grouping'
+import { envOf, freeTagsOf, collectEnvs, collectTags, groupInstances, groupInstancesByGroupTree, buildGroupTreeSource, groupTreeKey, regionOf, zoneOf, GROUP_DIMENSIONS, dimensionNeedsKeyMap, buildKeyMap, dimensionValueOf } from '@/lib/instances/instance-grouping'
 import type { InstanceInfo } from '@/api/instances'
 import type { InstanceGroupNode } from '@/api/instanceGroups'
 

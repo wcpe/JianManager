@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
-import type { ClientSecurityGroup, SaveSecurityGroupRequest, SecurityTargetType } from '@/lib/client-dist-security-contracts'
+import type { ClientSecurityGroup, SaveSecurityGroupRequest, SecurityTargetType } from '@/lib/client-dist/client-dist-security-contracts'
 import { EmptyState, fmtTime } from '@/components/views/client-dist/security-format'
 
 /**

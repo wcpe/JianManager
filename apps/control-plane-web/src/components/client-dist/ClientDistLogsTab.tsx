@@ -5,7 +5,7 @@ import type { ClientDistLogTypeValue, ClientDistLogsLinkRenderer } from '@/compo
 import ClientDistExportButton from '@/components/client-dist/ClientDistExportButton'
 import { useClientDistSecurityLogs } from '@/api/clientDistSecurity'
 import { useClientDistEventDetail, useClientDistEventSearch } from '@/api/clientDistEvents'
-import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
+import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist/client-dist-query'
 import { OPS_ALL } from '@/components/views/client-dist/OpsShared'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 

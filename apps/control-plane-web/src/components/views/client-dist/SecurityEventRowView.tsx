@@ -5,8 +5,8 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { TableCell, TableRow } from '@jianmanager/ui/components/table'
 import UntrustedFieldBadge from '@/components/views/UntrustedFieldBadge'
-import type { ClientDistSecurityEvent } from '@/lib/client-dist-security-contracts'
-import { maskPlayerName } from '@/lib/privacy-mask'
+import type { ClientDistSecurityEvent } from '@/lib/client-dist/client-dist-security-contracts'
+import { maskPlayerName } from '@/lib/shared/privacy-mask'
 import { fmtTime, levelVariant, SECURITY_EMPTY as EMPTY } from '@/components/views/client-dist/security-format'
 
 /** 行内确认弹窗的三种处置动作。 */

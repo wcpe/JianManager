@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readBotFilter, writeBotFilter, readFailureFilter, writeFailureFilter, FAILURE_CATEGORIES } from '@/lib/bot-load-filters'
+import { readBotFilter, writeBotFilter, readFailureFilter, writeFailureFilter, FAILURE_CATEGORIES } from '@/lib/bot-load/bot-load-filters'
 
 describe('bot-load filters', () => {
   it('读写 Bot 筛选', () => {

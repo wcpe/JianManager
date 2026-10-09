@@ -7,7 +7,7 @@ import { useClientVersions, useClientVersion, useRollbackClientVersion } from '@
 import EmbeddedUpdaterSummary from '@/components/client-dist/EmbeddedUpdaterSummary'
 import FileBrowser from '@/components/file-browser/FileBrowser'
 import { clientDistSource, manifestFilesToDistFiles } from '@/components/file-browser/sources/clientDistSource'
-import { useDangerPermission } from '@/lib/danger'
+import { useDangerPermission } from '@/lib/shared/danger'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback

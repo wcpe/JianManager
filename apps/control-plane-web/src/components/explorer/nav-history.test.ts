@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { emptyNavHistory, navPush, navBack, navForward, canNavBack, canNavForward } from '@/lib/nav-history'
+import { emptyNavHistory, navPush, navBack, navForward, canNavBack, canNavForward } from '@/lib/shared/nav-history'
 
 describe('nav-history（FR-375）', () => {
   it('push / back / forward 闭环', () => {

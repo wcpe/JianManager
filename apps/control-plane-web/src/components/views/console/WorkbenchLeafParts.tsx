@@ -11,8 +11,8 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import PromptDialog from '@/components/views/explorer/PromptDialog'
-import { breadcrumbTrail } from '@/lib/breadcrumb'
-import type { WorkspacePreset } from '@/lib/workspace-preset'
+import { breadcrumbTrail } from '@/lib/shared/breadcrumb'
+import type { WorkspacePreset } from '@/lib/console/workspace-preset'
 
 /** 路由链接渲染插槽（应用侧注入 react-router Link；缺省渲染原生 `<a>`）。 */
 export interface RouterLinkArgs {

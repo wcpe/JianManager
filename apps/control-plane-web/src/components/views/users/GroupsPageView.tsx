@@ -19,7 +19,7 @@ import { CreateGroupDialogView } from '@/components/views/groups/CreateGroupDial
 import type { CreateGroupValues } from '@/components/views/groups/CreateGroupDialogView'
 import { GroupEditDialogView } from '@/components/views/groups/GroupEditDialogView'
 import type { GroupEditValues } from '@/components/views/groups/GroupEditDialogView'
-import { formatSizeMb } from '@/lib/backup'
+import { formatSizeMb } from '@/lib/backups/backup'
 
 /** 用户组详情可打开的面板（FR-128 可寻址）：编辑属性 / 管理成员。 */
 export type GroupPanel = 'edit' | 'members'

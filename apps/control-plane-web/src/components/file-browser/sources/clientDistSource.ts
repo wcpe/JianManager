@@ -8,8 +8,8 @@
  * 内容预览经**管理面** JWT 端点按制品 sha256 读文本（玩家制品端点走拉取密钥，浏览器无之不能复用）。
  */
 import { fetchClientArtifactContent, downloadClientArtifact } from '@/api/clientVersions'
-import { createClientDistSource, manifestFilesToDistFiles } from '@/lib/file-sources'
-import type { ClientDistApi, ClientDistFile, ClientDistSourceMessages } from '@/lib/file-sources'
+import { createClientDistSource, manifestFilesToDistFiles } from '@/lib/file-browser/file-sources'
+import type { ClientDistApi, ClientDistFile, ClientDistSourceMessages } from '@/lib/file-browser/file-sources'
 
 export { manifestFilesToDistFiles }
 export type { ClientDistFile, ClientDistSourceMessages }

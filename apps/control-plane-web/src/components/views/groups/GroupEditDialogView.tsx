@@ -20,7 +20,7 @@ import {
   ScrollableDialogBody,
   scrollableDialogContentClass,
 } from '@jianmanager/ui/components/scrollable-dialog'
-import { validateRequired } from '@/lib/form-validation'
+import { validateRequired } from '@/lib/shared/form-validation'
 
 /** 视图只需要展示用字段；组的 id 等归属信息留在应用容器（请求由容器发出）。 */
 export interface GroupEditTarget {

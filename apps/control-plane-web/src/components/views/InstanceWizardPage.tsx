@@ -8,10 +8,10 @@ import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { cn } from '@jianmanager/ui'
-import { validateRequired, validateResourceLimitNumber, validateFields } from '@/lib/form-validation'
-import { useFieldGate } from '@/lib/use-field-gate'
-import { buildNodeOptions } from '@/lib/instance-wizard-options'
-import type { NodeOptionInput, NodeStatusLabels } from '@/lib/instance-wizard-options'
+import { validateRequired, validateResourceLimitNumber, validateFields } from '@/lib/shared/form-validation'
+import { useFieldGate } from '@/lib/hooks/use-field-gate'
+import { buildNodeOptions } from '@/lib/instances/instance-wizard-options'
+import type { NodeOptionInput, NodeStatusLabels } from '@/lib/instances/instance-wizard-options'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type WizardNotice = (kind: 'success' | 'error', message: string) => void

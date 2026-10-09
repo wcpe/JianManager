@@ -2,7 +2,7 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useBackupStorages, useCreateBackupStorage, useUpdateBackupStorage, useDeleteBackupStorage, useTestBackupStorage, useTestBackupStorageDraft } from '@/api/backupStorages'
-import { useDangerPermission } from '@/lib/danger'
+import { useDangerPermission } from '@/lib/shared/danger'
 import { BackupStoragesPageView } from '@/components/views/backups/BackupStoragesPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */

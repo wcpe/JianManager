@@ -5,9 +5,9 @@ import { Download } from 'lucide-react'
 import { InstanceResourceCard as InstanceResourceCardView } from '@/components/views/console/InstanceResourceCard'
 import ConfigExplorer from '@/components/config-explorer/ConfigExplorer'
 import UnifiedExplorerShell from '@/components/file-browser/UnifiedExplorerShell'
-import { instanceBrowseCapability, instanceFilesCapability } from '@/lib/file-browser-capability'
+import { instanceBrowseCapability, instanceFilesCapability } from '@/lib/file-browser/file-browser-capability'
 import { instanceFileSource } from '@/components/file-browser/sources/instanceSource'
-import type { FileBrowserAction } from '@/lib/file-browser-types'
+import type { FileBrowserAction } from '@/lib/file-browser/file-browser-types'
 
 /**
  * 实例「资源卡片」的取数接线层（FR-130 / FR-213 / FR-378 / FR-422）。

@@ -5,10 +5,10 @@ import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { Panel } from '@jianmanager/ui/components/panel'
 import type { MetricRange } from '@jianmanager/ui'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
-import type { ClientDistStats } from '@/lib/client-dist-stats-contracts'
-import type { ClientDistEvent, ClientDistRealtime } from '@/lib/client-dist-events-contracts'
-import type { ClientRuntimeOverview, RuntimeUpdateSeriesPoint } from '@/lib/client-runtime-contracts'
-import type { DistBucket } from '@/lib/platform-stats'
+import type { ClientDistStats } from '@/lib/client-dist/client-dist-stats-contracts'
+import type { ClientDistEvent, ClientDistRealtime } from '@/lib/client-dist/client-dist-events-contracts'
+import type { ClientRuntimeOverview, RuntimeUpdateSeriesPoint } from '@/lib/client-dist/client-runtime-contracts'
+import type { DistBucket } from '@/lib/overview/platform-stats'
 
 /**
  * 页面 B「客户端分发运维」共享展示件与格式化（FR-430 / ADR-088）。

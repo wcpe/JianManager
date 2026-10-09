@@ -1,4 +1,4 @@
-import type { CardType } from '@/lib/workspace-card'
+import type { CardType } from '@/lib/console/workspace-card'
 import TerminalPane from './TerminalPane'
 import BotSegment from './BotSegment'
 import MetricsTabSegment from './MetricsTabSegment'

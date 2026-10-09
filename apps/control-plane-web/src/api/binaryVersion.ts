@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
 import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
-import { apiErrorMessage } from '@/lib/api-error'
+import { apiErrorMessage } from '@/lib/shared/api-error'
 
 /**
  * 实例二进制/Beacon 版本（FR-468）。版本真源是制品库 Asset：

@@ -13,7 +13,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { validateResourceLimitNumber } from '@/lib/form-validation'
+import { validateResourceLimitNumber } from '@/lib/shared/form-validation'
 
 /** 0 视为「不限制」，编辑框留空展示；非 0 才回填具体值，避免把「不限制」显示成 0。 */
 function toField(v: number): string {

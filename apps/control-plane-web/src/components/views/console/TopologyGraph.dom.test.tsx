@@ -6,9 +6,9 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import { TopologyGraph } from '@/components/views/console/TopologyGraph'
 import type { TopologyGraphData } from '@/components/views/console/TopologyGraph'
-import type { ProxyRegistration } from '@/lib/proxy-registration'
-import type { NodeInfo } from '@/lib/node-types'
-import type { InstanceGroupNode } from '@/lib/instance-group'
+import type { ProxyRegistration } from '@/lib/instances/proxy-registration'
+import type { NodeInfo } from '@/lib/nodes/node-types'
+import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 
 /**
  * 拓扑图 · 受控视图测（ADR-097）。

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { SecurityProfilesTabView } from '@/components/views/client-dist/SecurityProfilesTabView'
 import type { ProfileMaskers } from '@/components/views/client-dist/SecurityProfilesTabView'
-import { maskInstallId, maskMachineId, maskPlayerName } from '@/lib/privacy-mask'
+import { maskInstallId, maskMachineId, maskPlayerName } from '@/lib/shared/privacy-mask'
 import { useClientDistSecurityProfile, useClientDistSecurityProfiles } from '@/api/clientDistSecurity'
 import { useSecurityQuery } from './security-shared'
 

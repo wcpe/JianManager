@@ -6,8 +6,8 @@ import { Trophy } from 'lucide-react'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jianmanager/ui/components/select'
-import { fmtBytes } from '@/lib/metrics-format'
-import type { RankingItem, RankingMetric, RankingResult } from '@/lib/ranking'
+import { fmtBytes } from '@/lib/metrics/metrics-format'
+import type { RankingItem, RankingMetric, RankingResult } from '@/lib/instances/ranking'
 
 /** 可切换的排行指标（与后端 rankingSupportedMetrics 对齐）。 */
 const RANKING_METRICS: { value: RankingMetric; labelKey: string }[] = [

@@ -7,7 +7,7 @@ import { loginMockUser } from '@/test/auth'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { useConsoleStore } from '@/stores/console'
-import { DEFAULT_ROLE_NODES } from '@/lib/roles'
+import { DEFAULT_ROLE_NODES } from '@/lib/shared/roles'
 import ConsoleHeader from './ConsoleHeader'
 
 /**

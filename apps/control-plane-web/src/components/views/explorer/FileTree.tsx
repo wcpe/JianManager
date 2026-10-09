@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, ChevronDown, Folder, FolderOpen } from 'lucide-react'
-import type { FileInfo } from '@/lib/file-entry'
-import { joinPath } from '@/lib/paths'
+import type { FileInfo } from '@/lib/file-browser/file-entry'
+import { joinPath } from '@/lib/shared/paths'
 import { cn } from '@jianmanager/ui'
-import { useVirtualRows } from '@/lib/virtual-list'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
 
 /** 树节点（懒加载：children 为 undefined 表示未展开/未加载）。 */
 interface TreeNode {

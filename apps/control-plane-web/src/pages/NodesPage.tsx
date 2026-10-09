@@ -15,8 +15,8 @@ import { CardsGrid, DataPanelSkeleton, PageHeader, PageShell, ScopeBar, Segment,
 import { type ChartSeries } from '@jianmanager/ui'
 import { type MetricRange } from '@jianmanager/ui'
 import { resourceLevel } from '@jianmanager/ui'
-import { summarizeNodes } from '@/lib/node-summary'
-import { filterNodes, resolveSelectedNode, loadNodeListCollapsed, persistNodeListCollapsed } from '@/lib/node-list'
+import { summarizeNodes } from '@/lib/nodes/node-summary'
+import { filterNodes, resolveSelectedNode, loadNodeListCollapsed, persistNodeListCollapsed } from '@/lib/nodes/node-list'
 import { cn } from '@jianmanager/ui'
 
 import NodeJDKTab from '@/components/nodes/NodeJDKTab'

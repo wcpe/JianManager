@@ -9,8 +9,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
-import { copyToClipboard } from '@/lib/clipboard'
-import type { ClientKeyWithSecret } from '@/lib/client-channel-types'
+import { copyToClipboard } from '@/lib/shared/clipboard'
+import type { ClientKeyWithSecret } from '@/lib/client-dist/client-channel-types'
 /** 创建或改值后的明文展示弹窗：密钥已加密保存，后续仍可从列表查看（复制兼容 HTTP 非安全上下文）。 */
 export function SecretDialog({
   secret,

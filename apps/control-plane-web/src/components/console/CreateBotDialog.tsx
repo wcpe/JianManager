@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { useCreateBot } from '@/api/bots'
 import { useInstance } from '@/api/instances'
 import { useNode } from '@/api/nodes'
-import { suggestBotServer } from '@/lib/bot-list'
+import { suggestBotServer } from '@/lib/bots/bot-list'
 import CreateBotDialogView from '@/components/views/instances/CreateBotDialog'
 
 /**

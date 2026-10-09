@@ -7,7 +7,7 @@ import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 
 import { MockWebSocket, resetTerminalHarness, wsSockets } from '@/test/xterm-ws-harness'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import TerminalPane from './TerminalPane'
 
 beforeEach(() => {

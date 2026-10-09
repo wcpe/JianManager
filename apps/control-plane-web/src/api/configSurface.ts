@@ -16,8 +16,8 @@ import api from '@/api/client'
 /**
  * 配置源契约已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type { ConfigSourceKind, ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-surface'
-import type { ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-surface'
+export type { ConfigSourceKind, ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-explorer/config-surface'
+import type { ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-explorer/config-surface'
 
 /** 查询实例受管配置项清单（FR-451）。 */
 export function useConfigSurface(instanceId: number, enabled = true) {

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, FolderPlus, FolderTree, Pencil, Plus, Trash2 } from 'lucide-react'
-import { useVirtualRows } from '@/lib/virtual-list'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import {
@@ -12,9 +12,9 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { cn } from '@jianmanager/ui'
-import type { InstanceGroupNode } from '@/lib/instance-group'
-import { buildGroupTree, flattenVisibleGroups, groupBranchKey } from '@/lib/instance-group-tree'
-import type { GroupTreeNode, VisibleGroupRow } from '@/lib/instance-group-tree'
+import type { InstanceGroupNode } from '@/lib/instances/instance-group'
+import { buildGroupTree, flattenVisibleGroups, groupBranchKey } from '@/lib/instances/instance-group-tree'
+import type { GroupTreeNode, VisibleGroupRow } from '@/lib/instances/instance-group-tree'
 
 /** 实例拖入分组用的自定义 MIME（与工作区拖拽载荷同源，由实例库/分组管理页发出）。 */
 export const INSTANCE_DND_MIME = 'application/x-jm-instances'

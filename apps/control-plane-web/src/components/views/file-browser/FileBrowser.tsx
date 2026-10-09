@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { cn } from '@jianmanager/ui'
 import FileBrowserTree from '@/components/views/file-browser/FileBrowserTree'
 import FilePreview from '@/components/views/file-browser/FilePreview'
-import type { FileBrowserAction, FileBrowserSource, FileEntry, PreviewContent } from '@/lib/file-browser-types'
+import type { FileBrowserAction, FileBrowserSource, FileEntry, PreviewContent } from '@/lib/file-browser/file-browser-types'
 
-export type { FileBrowserAction, FileBrowserSource, FileEntry, PreviewContent } from '@/lib/file-browser-types'
+export type { FileBrowserAction, FileBrowserSource, FileEntry, PreviewContent } from '@/lib/file-browser/file-browser-types'
 
 interface FileBrowserProps {
   /** 数据源（注入；与具体后端解耦）。 */

@@ -3,9 +3,9 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, Copy, FileWarning } from 'lucide-react'
 
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@/lib/shared/clipboard'
 import { cn } from '@jianmanager/ui'
-import type { CrashSnapshot, CrashTrend } from '@/lib/crash'
+import type { CrashSnapshot, CrashTrend } from '@/lib/instances/crash'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type CrashDiagnosticsNotice = (kind: 'success' | 'error', message: string) => void

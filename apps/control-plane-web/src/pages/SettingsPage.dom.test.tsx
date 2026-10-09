@@ -6,7 +6,7 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import { useAuthStore } from '@/stores/auth'
 import SettingsPage from './SettingsPage'
-import { keyCategory, validateSettingDraft } from '@/lib/settings-form'
+import { keyCategory, validateSettingDraft } from '@/lib/settings/settings-form'
 
 /**
  * SettingsPage 强断言（FR-210）：渲染 seed 平台配置 → 改设置保存联动回读新值 → 注入 500 显错误态。

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { HEADER_RIGHT_SLOTS, NOTIFICATIONS_SLOT, searchBoxClass, slotVisibility, visibilityClass } from '@/lib/header-layout'
-import type { HeaderSlot } from '@/lib/header-layout'
+import { HEADER_RIGHT_SLOTS, NOTIFICATIONS_SLOT, searchBoxClass, slotVisibility, visibilityClass } from '@/lib/shared/header-layout'
+import type { HeaderSlot } from '@/lib/shared/header-layout'
 
 describe('header-layout（FR-179 全局页眉右对齐 + FR-216 通知铃铛合并）', () => {
   it('右侧操作区按「搜索→集群徽标→通知铃铛→账户」固定顺序', () => {

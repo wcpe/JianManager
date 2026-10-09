@@ -16,7 +16,7 @@ import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import { cn } from '@jianmanager/ui'
-import { formatBytes } from '@/lib/runtime-assets-view'
+import { formatBytes } from '@/lib/runtime-assets/runtime-assets-view'
 
 /** 制品存储渠道引用（本视图只消费展示与筛选所需字段）。 */
 export interface ArtifactChannelRefView {

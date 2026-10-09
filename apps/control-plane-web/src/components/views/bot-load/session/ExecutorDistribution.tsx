@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
-import type { BotLoadAllocation, BotLoadMetricPoint } from '@/lib/bot-load-types'
-import { formatBytes } from '@/lib/bot-load-metrics'
+import type { BotLoadAllocation, BotLoadMetricPoint } from '@/lib/bot-load/bot-load-types'
+import { formatBytes } from '@/lib/bot-load/bot-load-metrics'
 import { Button } from '@jianmanager/ui/components/button'
 
 export function ExecutorDistribution({

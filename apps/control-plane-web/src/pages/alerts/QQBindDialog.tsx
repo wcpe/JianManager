@@ -1,10 +1,10 @@
 import { QQ_BIND_POLL_MS, fetchQQBindResult, isBindTaskExpiredError, useCreateQQBindTask } from '@/api/alerts'
 import { QQBindDialogView } from '@/components/views/alerts/QQBindDialogView'
-import type { QQBindFill } from '@/lib/alert-contracts'
+import type { QQBindFill } from '@/lib/alerts/alert-contracts'
 import { QQBindQrCode } from '@/components/views/alerts/QQQrCode'
 
 // 实现已回迁应用侧（原 ADR-097 迁包已撤销），以下保留 re-export 维持既有导入路径。
-export type { QQBindFill } from '@/lib/alert-contracts'
+export type { QQBindFill } from '@/lib/alerts/alert-contracts'
 export { MAX_QQ_BIND_AUTO_REFRESH } from '@/components/views/alerts/QQBindDialogView'
 
 interface QQBindDialogProps {

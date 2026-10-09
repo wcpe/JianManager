@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Star, ChevronDown, ChevronRight, FileText, Search } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
-import type { ConfigDiscoverResult } from '@/lib/config-contracts'
-import { groupDiscovered, baseNameOf } from '@/lib/config-discover'
+import type { ConfigDiscoverResult } from '@/lib/config-explorer/config-contracts'
+import { groupDiscovered, baseNameOf } from '@/lib/config-explorer/config-discover'
 
 /**
  * 配置左栏：收藏（书签）+ 已发现配置面板（FR-071）。

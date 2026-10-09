@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
-import { clearCommandHistory, loadCommandHistory, pushCommandHistory } from '@/lib/console-command-history'
+import { clearCommandHistory, loadCommandHistory, pushCommandHistory } from '@/lib/console/console-command-history'
 import { renderWithProviders } from '@/test/render'
 import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 import InstanceConsoleView from './InstanceConsoleView'

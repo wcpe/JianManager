@@ -2,16 +2,16 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { toast } from 'sonner'
 // 序列与实时指标契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的查询泛型使用。
-import type { InstanceMetricsData } from '@/lib/instance-metrics'
-import type { PlayerTrendResult } from '@/lib/player-trend'
-import type { SLOResult } from '@/lib/slo'
-import type { RankingMetric, RankingResult } from '@/lib/ranking'
-import type { MetricSeries, SeriesPoint } from '@/lib/metric-series'
-export type { InstanceMetricsData, WorldMetric } from '@/lib/instance-metrics'
-export type { MetricSeries, SeriesPoint } from '@/lib/metric-series'
-export type { PlayerTrendResult } from '@/lib/player-trend'
-export type { SLOResult } from '@/lib/slo'
-export type { RankingItem, RankingMetric, RankingResult } from '@/lib/ranking'
+import type { InstanceMetricsData } from '@/lib/instances/instance-metrics'
+import type { PlayerTrendResult } from '@/lib/players/player-trend'
+import type { SLOResult } from '@/lib/metrics/slo'
+import type { RankingMetric, RankingResult } from '@/lib/instances/ranking'
+import type { MetricSeries, SeriesPoint } from '@/lib/metrics/metric-series'
+export type { InstanceMetricsData, WorldMetric } from '@/lib/instances/instance-metrics'
+export type { MetricSeries, SeriesPoint } from '@/lib/metrics/metric-series'
+export type { PlayerTrendResult } from '@/lib/players/player-trend'
+export type { SLOResult } from '@/lib/metrics/slo'
+export type { RankingItem, RankingMetric, RankingResult } from '@/lib/instances/ranking'
 
 import api from '@/api/client'
 import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
@@ -278,8 +278,8 @@ export function usePlatformObservabilityOverview(enabled: boolean) {
 
 /** FR-461 健康墙单格分级。 */
 // 健康墙类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
-import type { HealthWallResponse, HealthWallSort } from '@/lib/health-wall-types'
-export type { HealthLevel, HealthWallNode, HealthWallResponse, HealthWallSort } from '@/lib/health-wall-types'
+import type { HealthWallResponse, HealthWallSort } from '@/lib/metrics/health-wall-types'
+export type { HealthLevel, HealthWallNode, HealthWallResponse, HealthWallSort } from '@/lib/metrics/health-wall-types'
 
 /** 集群健康墙（FR-461）：只读快照一次查询给全，不触发 Worker RPC。 */
 export function useHealthWall(enabled: boolean, sort: HealthWallSort = 'level') {

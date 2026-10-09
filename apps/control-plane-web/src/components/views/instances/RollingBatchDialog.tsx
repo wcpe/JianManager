@@ -12,9 +12,9 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { cn } from '@jianmanager/ui'
-import type { InstanceBatchAction } from '@/lib/instance-batch'
-import { isRollingActive } from '@/lib/instance-rolling'
-import type { RollingControlAction, RollingCreatePayload, RollingOp } from '@/lib/instance-rolling'
+import type { InstanceBatchAction } from '@/lib/instances/instance-batch'
+import { isRollingActive } from '@/lib/instances/instance-rolling'
+import type { RollingControlAction, RollingCreatePayload, RollingOp } from '@/lib/instances/instance-rolling'
 import type { BatchSelectedInstance } from '@/components/views/instances/InstanceBatchBar'
 
 /**

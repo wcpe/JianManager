@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { decodeJwt } from '@/lib/jwt'
+import { decodeJwt } from '@/lib/auth/jwt'
 import { queryClient } from '@/lib/query-client'
 
 /** 登录/恢复后异步拉取 /auth/me，填充权限 store（失败由 store 自身回落）。 */
@@ -16,7 +16,7 @@ export function loadPermissionsModule() {
 
 /** 终端会话管理器的动态 import 入口（理由同上：xterm 不进首屏 chunk，但要可等待）。 */
 export function loadTerminalSessionManager() {
-  return import('@/lib/terminal-session-manager')
+  return import('@/lib/console/terminal-session-manager')
 }
 
 /**

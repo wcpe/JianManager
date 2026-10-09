@@ -3,7 +3,7 @@ import { screen, fireEvent } from '@testing-library/react'
 import { useState } from 'react'
 import { renderWithProviders } from '@/test/render'
 import { CleanScopeEditor } from '@/components/views/client-dist/CleanScopeEditor'
-import type { ManifestFileLike } from '@/lib/client-publish-wizard'
+import type { ManifestFileLike } from '@/lib/client-dist/client-publish-wizard'
 
 /**
  * CleanScopeEditor 组件测试（FR-262）：

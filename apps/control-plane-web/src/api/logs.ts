@@ -3,10 +3,10 @@ import api from '@/api/client'
 
 /** 单条日志（实例运行日志或平台运行日志，FR-049）。 */
 // 日志条目类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
-import type { LogEntry } from '@/lib/console-log-types'
-export type { LogEntry } from '@/lib/console-log-types'
-export type { LogQueryParams } from '@/lib/console-log-types'
-import type { LogQueryParams } from '@/lib/console-log-types'
+import type { LogEntry } from '@/lib/console/console-log-types'
+export type { LogEntry } from '@/lib/console/console-log-types'
+export type { LogQueryParams } from '@/lib/console/console-log-types'
+import type { LogQueryParams } from '@/lib/console/console-log-types'
 
 /** 日志分页响应。 */
 export interface LogPage {

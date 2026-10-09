@@ -1,7 +1,7 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只注入 store 动作（受控化）。
 import { DirectorAddSceneMenu as DirectorAddSceneMenuView } from '@/components/views/console/WorkbenchLeafParts'
 import { useDirectorStore } from '@/stores/director'
-import type { WorkspacePreset } from '@/lib/workspace-preset'
+import type { WorkspacePreset } from '@/lib/console/workspace-preset'
 
 interface DirectorAddSceneMenuProps {
   /** 可选的用户预设（跨实例 + 单实例共享一份，FR-167）。 */

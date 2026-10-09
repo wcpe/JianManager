@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { dirOf, baseNameOf, groupDiscovered, DiscoveredConfig } from '@/lib/config-discover'
+import { dirOf, baseNameOf, groupDiscovered, DiscoveredConfig } from '@/lib/config-explorer/config-discover'
 
 describe('dirOf / baseNameOf', () => {
   it('根文件', () => {

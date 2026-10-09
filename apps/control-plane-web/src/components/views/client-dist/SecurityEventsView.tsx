@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
-import type { ClientDistSecurityEvent } from '@/lib/client-dist-security-contracts'
-import type { ClientDistQuery } from '@/lib/client-dist-query'
+import type { ClientDistSecurityEvent } from '@/lib/client-dist/client-dist-security-contracts'
+import type { ClientDistQuery } from '@/lib/client-dist/client-dist-query'
 import { EmptyState } from '@/components/views/client-dist/security-format'
 
 /**

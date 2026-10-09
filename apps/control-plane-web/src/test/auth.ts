@@ -1,9 +1,9 @@
-import { decodeJwt } from '@/lib/jwt'
+import { decodeJwt } from '@/lib/auth/jwt'
 import { db } from '@jianmanager/devmock/db'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import type { Session } from '@jianmanager/devmock/handlers/domains/auth'
-import { ALL_PERMISSION_NODE_IDS, DEFAULT_ROLE_NODES, ROLE_KEY_BY_VALUE, isPlatformAdmin } from '@/lib/roles'
+import { ALL_PERMISSION_NODE_IDS, DEFAULT_ROLE_NODES, ROLE_KEY_BY_VALUE, isPlatformAdmin } from '@/lib/shared/roles'
 
 /**
  * 让后续渲染的页面处于已登录态（FR-196 测试工具）。

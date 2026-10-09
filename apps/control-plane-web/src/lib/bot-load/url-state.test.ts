@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mergeSearchParams, parseBotsTab, readSessionsFilter, readTemplatesFilter } from '@/lib/bot-load-url-state'
+import { mergeSearchParams, parseBotsTab, readSessionsFilter, readTemplatesFilter } from '@/lib/bot-load/bot-load-url-state'
 
 describe('bot-load url-state', () => {
   it('tab 非法回退 fleet', () => {

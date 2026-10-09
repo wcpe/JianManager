@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- 兼容旧入口：转出视图的组件与纯逻辑，非组件导出按仓库约定在此豁免 */
 import { useState } from 'react'
 import { useInstanceSearch } from '@/api/instances'
-import { useDebounced } from '@/lib/use-debounced'
+import { useDebounced } from '@/lib/hooks/use-debounced'
 import type { NodeInfo } from '@/api/nodes'
 import { DrillTargetPicker as DrillTargetPickerView } from '@/components/views/instances/DrillTargetPicker'
 import type { DrillTarget } from '@/components/views/instances/DrillTargetPicker'

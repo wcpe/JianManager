@@ -1,6 +1,6 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只注入卡壳（受控化）。
 import { DirectorCanvas as DirectorCanvasView } from '@/components/views/console/DirectorCanvas'
-import type { PlacedCard } from '@/lib/workspace-preset'
+import type { PlacedCard } from '@/lib/console/workspace-preset'
 import WorkspaceCard from './WorkspaceCard'
 
 interface DirectorCanvasProps {

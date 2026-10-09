@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { ArrowRight, Check, DownloadCloud, Plus } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
-import { deriveReadiness, readinessCompletedCount } from '@/lib/client-readiness'
-import type { ClientChannel } from '@/lib/client-channel-types'
+import { deriveReadiness, readinessCompletedCount } from '@/lib/client-dist/client-readiness'
+import type { ClientChannel } from '@/lib/client-dist/client-channel-types'
 /** 空状态大引导卡：说明用途 + 主 CTA「创建第一个分发频道」。 */
 export function EmptyChannelsGuide({ onCreate }: { onCreate: () => void }) {
   const { t } = useTranslation()

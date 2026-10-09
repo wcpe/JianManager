@@ -23,12 +23,12 @@ import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { RangePicker, TimeSeriesChart, type ChartSeries, type MetricRange } from '@jianmanager/ui'
-import { levelStatusLevel } from '@/lib/alert-helpers'
-import type { AlertEventInfo } from '@/lib/alert-contracts'
-import type { InstanceInfo } from '@/lib/instance-types'
-import type { Task, TaskState } from '@/lib/task-status'
+import { levelStatusLevel } from '@/lib/alerts/alert-helpers'
+import type { AlertEventInfo } from '@/lib/alerts/alert-contracts'
+import type { InstanceInfo } from '@/lib/instances/instance-types'
+import type { Task, TaskState } from '@/lib/tasks/task-status'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui/lib/threshold'
-import { useVirtualRows } from '@/lib/virtual-list'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
 
 /**
  * 单张聚合卡片的截断条数。

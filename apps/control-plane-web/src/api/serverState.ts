@@ -4,8 +4,8 @@ import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
 
 // 服务器状态契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的查询泛型使用。
-import type { ServerStateResponse } from '@/lib/server-state'
-export type { Bounded, ClassloaderSection, JvmSection, ListenersSection, ProbeServerState, SchedulerSection, ServerSection, ServerStateResponse, WorldEntry } from '@/lib/server-state'
+import type { ServerStateResponse } from '@/lib/console/server-state'
+export type { Bounded, ClassloaderSection, JvmSection, ListenersSection, ProbeServerState, SchedulerSection, ServerSection, ServerStateResponse, WorldEntry } from '@/lib/console/server-state'
 
 /**
  * 按需查询某实例全量服务器状态（FR-076 / FR-077）。

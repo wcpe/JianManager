@@ -12,7 +12,7 @@ import { useTranslation } from 'react-i18next'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@jianmanager/ui/components/sheet'
 import { UnifiedDiff } from '@/components/views/UnifiedDiff'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import type { ConfigDiff, ConfigVersion } from '@/lib/config-contracts'
+import type { ConfigDiff, ConfigVersion } from '@/lib/config-explorer/config-contracts'
 
 /**
  * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast**。

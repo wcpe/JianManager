@@ -8,7 +8,7 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import NetworksPage from './NetworksPage'
-import { NAV_GROUPS } from '@/lib/nav-config'
+import { NAV_GROUPS } from '@/lib/shared/nav-config'
 
 /**
  * NetworksPage 强断言纵切（FR-203 群组服网络域）：验种子渲染 + 创建联动 + 错误注入。

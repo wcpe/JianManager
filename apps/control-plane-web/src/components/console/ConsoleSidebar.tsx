@@ -7,7 +7,7 @@ import { usePermissionsStore } from '@/stores/permissions'
 import { useConsoleStore } from '@/stores/console'
 import { useThemeStore } from '@/stores/theme'
 import { changeLanguage } from '@/i18n'
-import { navGroupsForPermissions, navGroupsForRole } from '@/lib/nav-config'
+import { navGroupsForPermissions, navGroupsForRole } from '@/lib/shared/nav-config'
 import ServerSelector from './ServerSelector'
 import SidebarServerList from './SidebarServerList'
 

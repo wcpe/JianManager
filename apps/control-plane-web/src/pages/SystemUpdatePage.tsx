@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useSelfUpdateCheck, useRefreshSelfUpdateCheck, useRollout, useWorkerAssets, useCacheWorkerAsset, useUpgradeControlPlane, useUpgradeNode, useUpgradeAll, useRollbackControlPlane, useRollbackNode } from '@/api/selfUpdate'
 import { useAuthStore } from '@/stores/auth'
-import { useDangerPermission } from '@/lib/danger'
+import { useDangerPermission } from '@/lib/shared/danger'
 import { SystemUpdatePageView } from '@/components/views/system-update/SystemUpdatePageView'
 import type { SystemUpdateNodePending, SystemUpdateRolloutDraft, SystemUpdateWorkerAssetTarget } from '@/components/views/system-update/SystemUpdatePageView'
 

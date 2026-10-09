@@ -3,8 +3,8 @@ import api from '@/api/client'
 
 /** 文件/目录信息（与后端 service.FileInfo 对应，FR-008；FR-373 权限元数据加性）。 */
 // 条目类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
-import type { FileInfo } from '@/lib/file-entry'
-export type { FileInfo } from '@/lib/file-entry'
+import type { FileInfo } from '@/lib/file-browser/file-entry'
+export type { FileInfo } from '@/lib/file-browser/file-entry'
 
 /** 写前/浏览前权限探测结果（FR-373）。 */
 export interface PathAccess {

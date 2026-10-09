@@ -5,7 +5,7 @@ import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { nodeStatusLevel } from '@/lib/node-list'
+import { nodeStatusLevel } from '@/lib/nodes/node-list'
 import { Button } from '@jianmanager/ui/components/button'
 import {
   DropdownMenu,
@@ -15,7 +15,7 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import type { ArchivedNode, NodeInfo } from '@/lib/node-types'
+import type { ArchivedNode, NodeInfo } from '@/lib/nodes/node-types'
 
 /** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
 export function formatBytes(bytes: number): string {

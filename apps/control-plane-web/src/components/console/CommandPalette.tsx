@@ -7,9 +7,9 @@ import { useNodes } from '@/api/nodes'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { useConsoleStore } from '@/stores/console'
-import { flatNavItems } from '@/lib/nav-config'
-import { prefetchRoute } from '@/lib/route-prefetch'
-import type { PaletteEntry } from '@/lib/command-palette'
+import { flatNavItems } from '@/lib/shared/nav-config'
+import { prefetchRoute } from '@/lib/shared/route-prefetch'
+import type { PaletteEntry } from '@/lib/console/command-palette'
 import CommandPaletteView from '@/components/views/instances/CommandPalette'
 
 /**

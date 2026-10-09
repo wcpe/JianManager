@@ -1,7 +1,7 @@
 import ControlledDangerConfirm, {
   type DangerConfirmProps as ControlledDangerConfirmProps,
 } from '@/components/views/DangerConfirm'
-import { useDangerPermission } from '@/lib/danger'
+import { useDangerPermission } from '@/lib/shared/danger'
 
 /**
  * 危险操作确认弹窗的应用接线层（ADR-097）。
