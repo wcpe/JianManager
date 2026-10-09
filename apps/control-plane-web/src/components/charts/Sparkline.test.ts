@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sparkPath } from './Sparkline'
+import { sparkPath } from '@jianmanager/ui/charts/Sparkline'
 
 describe('sparkPath（FR-221 迷你趋势线）', () => {
   it('全空/空数组返回空 d', () => {

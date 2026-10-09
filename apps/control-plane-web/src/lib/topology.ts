@@ -15,7 +15,7 @@ import {
   type GroupKeyLabels,
   type InstanceGroupKeyMap,
 } from './instance-grouping'
-import { instanceStatusLevel, type StatusLevel } from './threshold'
+import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 
 /**
  * 拓扑构图所需的实例最小投影（FR-453 全量实例上拓扑）：

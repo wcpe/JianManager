@@ -62,11 +62,11 @@ function readUiStyles(): string {
 }
 /** 既参与 hover 抬升、又需在 FR-176 去位移的卡片/行原语。 */
 const HOVER_CARD_FILES = [
-  'components/ui/panel.tsx',
+  '@ui/components/panel.tsx',
   'components/views/console/NodeWorktableCard.tsx',
   'components/views/console/ConsoleLeafParts.tsx',
   'components/views/instances/InstanceWorktableCard.tsx',
-  'components/ui/summary-chips.tsx',
+  '@ui/components/summary-chips.tsx',
   'components/views/config-explorer/ConfigRow.tsx',
   'components/views/instances/InventorySegment.tsx',
 ] as const
@@ -95,7 +95,7 @@ describe('FR-176 ① 卡片 hover 去位移留阴影', () => {
 })
 
 describe('FR-176 ② 输入焦点环收敛', () => {
-  const src = read('components/ui/input.tsx')
+  const src = read('@ui/components/input.tsx')
 
   it('不再使用 3px 焦点环（过粗，糊邻近文字）', () => {
     expect(src).not.toMatch(/focus-visible:ring-\[3px\]/)
@@ -180,10 +180,10 @@ describe('FR-244 全局动画 token 化', () => {
   // 全站动效收敛（FR-244 剩余缺口）：共享原语的一次性交互动效从散落的 duration-200/300 收敛到 motion token。
   // 每项断言「不含硬编码定值」+「引用 motion-duration token」，防新代码或回退再引入脱离节奏的毫秒值。
   const CONVERGED_MOTION_PRIMITIVES = [
-    'components/ui/panel.tsx',
-    'components/ui/dialog.tsx',
-    'components/ui/summary-chips.tsx',
-    'components/ui/view-toggle.tsx',
+    '@ui/components/panel.tsx',
+    '@ui/components/dialog.tsx',
+    '@ui/components/summary-chips.tsx',
+    '@ui/components/view-toggle.tsx',
   ] as const
 
   for (const file of CONVERGED_MOTION_PRIMITIVES) {

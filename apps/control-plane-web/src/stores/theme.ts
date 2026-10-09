@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { COLOR_THEME_KEY, MODE_KEY, applyColorTheme, applyMode, getSystemMode, resolveColorTheme, resolveMode, resolveSystemMode, type ColorTheme, type ResolvedMode, type ThemeMode } from '@/lib/theme'
+import { COLOR_THEME_KEY, MODE_KEY, applyColorTheme, applyMode, getSystemMode, resolveColorTheme, resolveMode, resolveSystemMode, type ColorTheme, type ResolvedMode, type ThemeMode } from '@jianmanager/ui/lib/theme'
 
 /**
  * 全局主题 store（FR-026 明暗 + FR-164 主题色）。

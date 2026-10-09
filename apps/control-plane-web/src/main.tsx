@@ -4,7 +4,7 @@ import { BrowserRouter } from 'react-router'
 import { QueryClientProvider } from '@tanstack/react-query'
 import './i18n'
 import './index.css'
-import { initThemeFromStorage } from '@/lib/theme'
+import { initThemeFromStorage } from '@jianmanager/ui/lib/theme'
 import { queryClient } from '@/lib/query-client'
 import App from './App'
 
