@@ -397,7 +397,7 @@ function MarketCard({
 /**
  * 应用模板对话框（FR-154）：轻量预览 + 一键创建，不改共享 ProvisionServerDialog。
  * 含占位变量（`{{var}}`）时提供填充表单 + 实时 startCommand 派生预览（可复制/展开）；
- * 选节点 + 实例名后，经外壳的 `onApply` 落 `POST /instances`（与 CreateInstanceDialog 同流）。
+ * 选节点 + 实例名后，经外壳的 `onApply` 落 `POST /instances`（与创建实例向导同流）。
  */
 function ApplyTemplateDialog({
   template,

@@ -610,6 +610,7 @@ export function InstanceConsoleView({
             currentMatch={currentMatch}
             filterActive={levelFilter !== 'all'}
             onContextMenu={openMenu}
+            onNotify={notify}
             onSelectionChange={(text) => {
               anchorSelectionRef.current = text
             }}
