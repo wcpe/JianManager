@@ -7,7 +7,7 @@ import { ResourceGauge } from '@jianmanager/ui/components/gauge'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { ObjectPageHeader } from '@jianmanager/ui/components/shell'
 import { NodeActionsMenu } from '@/components/views/nodes/NodeListParts'
-import type { NodeInfo } from '@/lib/node-types'
+import type { NodeInfo } from '@/lib/nodes/node-types'
 
 /** 右栏分段（FR-177 §3.3 + FR-185）：概览/实例/JDK/缓存/端口/代理/监控/坏节点修复。 */
 export type DetailTab = 'overview' | 'instances' | 'runtime' | 'cache' | 'ports' | 'proxy' | 'probe' | 'monitor' | 'repair'

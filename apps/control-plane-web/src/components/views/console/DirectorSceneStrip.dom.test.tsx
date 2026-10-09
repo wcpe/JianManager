@@ -5,8 +5,8 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { DirectorSceneStrip } from '@/components/views/console/DirectorSceneStrip'
-import { createDirectorState } from '@/lib/director'
-import type { DirectorState } from '@/lib/director'
+import { createDirectorState } from '@/lib/director/director'
+import type { DirectorState } from '@/lib/director/director'
 
 /**
  * 导播台缩略图条 · 受控视图测（ADR-097）。

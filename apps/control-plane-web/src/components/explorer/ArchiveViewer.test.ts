@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildEntryTree } from '@/lib/archive-tree'
+import { buildEntryTree } from '@/lib/file-browser/archive-tree'
 import type { ArchiveEntry } from '@/api/archive'
 
 /** 构造归档条目；目录条目 name 以「/」结尾、isDir=true（与 Worker 列举一致）。 */

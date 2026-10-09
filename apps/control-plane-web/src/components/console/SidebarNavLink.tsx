@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router'
 import { SidebarNavLink as SidebarNavLinkView } from '@/components/views/console/SidebarNavLink'
-import type { NavEntry } from '@/lib/nav-config'
-import { useRouteIntentPrefetch } from '@/lib/route-prefetch'
+import type { NavEntry } from '@/lib/shared/nav-config'
+import { useRouteIntentPrefetch } from '@/lib/shared/route-prefetch'
 
 // 导航项类型已收敛到包内 nav-config（单一来源）；此处转出以兼容既有 import 点。
 export type { NavEntry }

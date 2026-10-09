@@ -34,8 +34,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import { diffSettings, hasInvalidDraft, hasUnsavedChanges, keyCategory, validateSettingDraft } from '@/lib/settings-form'
-import type { SettingCategory } from '@/lib/settings-form'
+import { diffSettings, hasInvalidDraft, hasUnsavedChanges, keyCategory, validateSettingDraft } from '@/lib/settings/settings-form'
+import type { SettingCategory } from '@/lib/settings/settings-form'
 
 /** 明暗偏好三态（与主题 store 的 ThemeMode 同形；组件库不 import 应用 store，故此处自持同名常量类型）。 */
 export type SettingsThemeMode = 'light' | 'dark' | 'system'

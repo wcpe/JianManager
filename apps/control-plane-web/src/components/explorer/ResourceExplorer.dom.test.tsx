@@ -9,7 +9,7 @@ import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import ResourceExplorer, { type ConfigCapabilities } from './ResourceExplorer'
-import { resetClipboardBusForTests } from '@/lib/explorer-clipboard-bus'
+import { resetClipboardBusForTests } from '@/lib/explorer/explorer-clipboard-bus'
 
 /**
  * 资源管理器（文件管理器主视图）强断言（FR-204 文件归档域）。

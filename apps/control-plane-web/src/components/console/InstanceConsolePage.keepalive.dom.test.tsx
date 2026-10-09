@@ -8,7 +8,7 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 
 import { MockWebSocket, resetTerminalHarness, wsSockets } from '@/test/xterm-ws-harness'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import InstanceConsolePage from './InstanceConsolePage'
 
 // MetricsSegment 图表（recharts）依赖 ResizeObserver 实测宽度，jsdom 无之 → 补桩。

@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import { ENV_TAG_PREFIX } from '@/lib/instance-tags'
+import { ENV_TAG_PREFIX } from '@/lib/instances/instance-tags'
 
 /** 内置环境维度选项（FR-047 复用 Tags 的 env: 约定）。无环境用哨兵值。 */
 const ENV_NONE = '__none__'

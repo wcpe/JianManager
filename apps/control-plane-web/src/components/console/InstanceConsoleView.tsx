@@ -3,8 +3,8 @@ import { toast } from 'sonner'
 import { InstanceConsoleView as InstanceConsoleViewImpl } from '@/components/views/console/InstanceConsoleView'
 import type { InstanceConsoleViewProps as InstanceConsoleViewPropsFull } from '@/components/views/console/InstanceConsoleView'
 import { useOnlinePlayers } from '@/api/players'
-import { useConsoleHistory } from '@/lib/console-history'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import { useConsoleHistory } from '@/lib/console/console-history'
+import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 
 /**
  * 对外 props（沿用原导出名）：接线层自己注入的字段（名册 / 回溯控制器 / 提示通道）

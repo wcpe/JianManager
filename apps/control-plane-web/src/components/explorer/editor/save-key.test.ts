@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isSaveKey } from '@/lib/explorer-save-key'
+import { isSaveKey } from '@/lib/explorer/explorer-save-key'
 
 describe('isSaveKey', () => {
   it('matches Ctrl+S and Cmd+S (lower and upper case)', () => {

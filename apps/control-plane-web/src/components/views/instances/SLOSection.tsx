@@ -5,7 +5,7 @@ import { Percent } from 'lucide-react'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
-import type { SLOResult } from '@/lib/slo'
+import type { SLOResult } from '@/lib/metrics/slo'
 
 /** 秒 → 紧凑时长（s/m/h/d）。null 表示无故障/无恢复，显式渲染「无故障」而非 0。 */
 export function fmtDuration(seconds: number | null): string | null {

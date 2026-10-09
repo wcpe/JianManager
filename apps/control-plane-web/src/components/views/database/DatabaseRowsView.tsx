@@ -8,9 +8,9 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowDown, ArrowUp, Search } from 'lucide-react'
-import type { DbColumn, DbRowsResult } from '@/lib/db-contracts'
+import type { DbColumn, DbRowsResult } from '@/lib/database/db-contracts'
 import { cn } from '@jianmanager/ui/lib/utils'
-import { normalizeColumns, normalizeRows, shouldShowEmptyRow } from '@/lib/db-rows-view'
+import { normalizeColumns, normalizeRows, shouldShowEmptyRow } from '@/lib/database/db-rows-view'
 import { Input } from '@jianmanager/ui/components/input'
 import { Button } from '@jianmanager/ui/components/button'
 import {

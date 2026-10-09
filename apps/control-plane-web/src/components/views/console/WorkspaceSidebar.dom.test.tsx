@@ -6,7 +6,7 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { LayoutDashboard, Network, Server, Shield, HardDrive } from 'lucide-react'
 import { WorkspaceSidebar } from '@/components/views/console/WorkspaceSidebar'
-import type { WorkspaceDef } from '@/lib/workspace-navigation'
+import type { WorkspaceDef } from '@/lib/console/workspace-navigation'
 import type { WorkspaceLinkArgs } from '@/components/views/console/WorkspaceSidebar'
 
 /**

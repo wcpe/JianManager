@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, screen } from '@testing-library/react'
 
 import { renderWithProviders } from '@/test/render'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import ConsoleImmersiveMode from './ConsoleImmersiveMode'
 
 vi.mock('@/api/instances', () => ({

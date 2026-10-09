@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import type { BotLoadLoadCounts } from '@/lib/bot-load-types'
+import type { BotLoadLoadCounts } from '@/lib/bot-load/bot-load-types'
 
 export function ConnectionFunnel({ counts }: { counts: BotLoadLoadCounts }) {
   const { t } = useTranslation()

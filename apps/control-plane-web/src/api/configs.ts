@@ -5,8 +5,8 @@ import api from '@/api/client'
 /**
  * 配置文件契约（FR-071）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type { ConfigFileInfo, ConfigField, ValidationIssue, ConfigValidationResult, ConfigReadResult, FieldSchema, ModelSchema, CrossCheckIssue, ConfigVersion, ConfigDiff, DiscoveredConfig, ConfigDiscoverResult } from '@/lib/config-contracts'
-import type { ConfigFileInfo, ConfigReadResult, ConfigValidationResult, ConfigVersion, ConfigDiff, ConfigDiscoverResult, CrossCheckIssue } from '@/lib/config-contracts'
+export type { ConfigFileInfo, ConfigField, ValidationIssue, ConfigValidationResult, ConfigReadResult, FieldSchema, ModelSchema, CrossCheckIssue, ConfigVersion, ConfigDiff, DiscoveredConfig, ConfigDiscoverResult } from '@/lib/config-explorer/config-contracts'
+import type { ConfigFileInfo, ConfigReadResult, ConfigValidationResult, ConfigVersion, ConfigDiff, ConfigDiscoverResult, CrossCheckIssue } from '@/lib/config-explorer/config-contracts'
 
 /** 递归发现实例 server 目录下全部配置文件（FR-071，不限内置 schema）。 */
 export function useConfigDiscover(instanceId: number) {

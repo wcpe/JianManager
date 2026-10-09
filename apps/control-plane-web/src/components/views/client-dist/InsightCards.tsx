@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, Minus, Users, Download, RefreshCw, HardDrive, Activity } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
-import type { ClientDistObservabilitySummary, ClientDistObservabilityCompare } from '@/lib/client-dist-observability-contracts'
+import type { ClientDistObservabilitySummary, ClientDistObservabilityCompare } from '@/lib/client-dist/client-dist-observability-contracts'
 
 /**
  * 分发概览洞察卡（FR-428）：KPI 同环比 + 异常标记 + 口径解释。

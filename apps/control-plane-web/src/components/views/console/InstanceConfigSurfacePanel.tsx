@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ExternalLink, FileText, Save } from 'lucide-react'
-import type { ConfigSourceKind, ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-surface'
+import type { ConfigSourceKind, ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-explorer/config-surface'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { cn } from '@jianmanager/ui'

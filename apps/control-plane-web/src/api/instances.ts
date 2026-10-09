@@ -2,9 +2,9 @@ import { keepPreviousData, queryOptions, useInfiniteQuery, useQuery, useMutation
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import api from '@/api/client'
-import { removeServer } from '@/lib/server-selection'
-import { apiErrorMessage } from '@/lib/api-error'
-import type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instance-batch'
+import { removeServer } from '@/lib/console/server-selection'
+import { apiErrorMessage } from '@/lib/shared/api-error'
+import type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instances/instance-batch'
 
 /**
  * 实例域查询缓存保留时长（FR-297）：控制台来回切换（页签/跨服）时命中缓存先呈现旧数据、
@@ -13,8 +13,8 @@ import type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instance-ba
 export const INSTANCE_QUERY_GC_TIME_MS = 15 * 60_000
 
 // 实例实体类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
-import type { InstanceInfo } from '@/lib/instance-types'
-export type { InstanceInfo } from '@/lib/instance-types'
+import type { InstanceInfo } from '@/lib/instances/instance-types'
+export type { InstanceInfo } from '@/lib/instances/instance-types'
 
 /**
  * 实例是否处于「长操作在途」（FR-331，FR-323 扩展导入/克隆）：一键搭建 / 导入搬迁 / 克隆拷贝
@@ -372,7 +372,7 @@ export function useDeleteInstance() {
  * 实例批量操作动作与结果计数（FR-058）：契约归包，受控视图与 API 层共用（ADR-097）。
  * 本地绑定来自文件顶部的 import，此处仅对外再导出，避免两处各写一份。
  */
-export type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instance-batch'
+export type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instances/instance-batch'
 
 /** 批量操作筛选条件（与列表筛选维度一致）。 */
 export interface InstanceBatchFilter {

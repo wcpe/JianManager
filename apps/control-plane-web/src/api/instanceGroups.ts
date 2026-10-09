@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-import type { InstanceGroupNode } from '@/lib/instance-group'
+import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 
 /**
  * 实例组织分组树节点（对应后端 service.InstanceGroupNodeView，FR-165 / ADR-033）。
@@ -10,7 +10,7 @@ import type { InstanceGroupNode } from '@/lib/instance-group'
  *
  * 契约已回迁应用侧（受控视图与纯逻辑共用，ADR-097）；此处原样再导出，调用点无需改动。
  */
-export type { InstanceGroupNode } from '@/lib/instance-group'
+export type { InstanceGroupNode } from '@/lib/instances/instance-group'
 
 /** 分组成员实例概要。 */
 export interface InstanceGroupMember {

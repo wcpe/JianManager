@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { botStatusKind, summaryCounts, groupBots, parseBotConfig, suggestBotServer } from '@/lib/bot-list'
+import { botStatusKind, summaryCounts, groupBots, parseBotConfig, suggestBotServer } from '@/lib/bots/bot-list'
 import type { BotInfo, BotSummary } from '@/api/bots'
 import type { NodeInfo } from '@/api/nodes'
 

@@ -18,7 +18,7 @@ import {
 } from '@jianmanager/ui/components/select'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/form-validation'
+import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/shared/form-validation'
 
 /** 创建结果：成功；或「创建成功但委托 Worker 失败」（需留在弹窗内显示可操作原因）。 */
 export type CreateBotOutcome = { ok: true } | { ok: false; error: string }

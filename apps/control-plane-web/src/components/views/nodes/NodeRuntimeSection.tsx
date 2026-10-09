@@ -10,7 +10,7 @@ import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@/lib/shared/clipboard'
 
 /** 运行时类型展示名（专有名词，不进 i18n）。 */
 const TYPE_LABEL: Record<string, string> = { jdk: 'JDK', nodejs: 'Node.js', python: 'Python' }

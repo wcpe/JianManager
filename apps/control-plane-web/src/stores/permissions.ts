@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import api from '@/api/client'
-import { isPlatformAdmin as isAdminRole } from '@/lib/roles'
+import { isPlatformAdmin as isAdminRole } from '@/lib/shared/roles'
 import { useAuthStore } from '@/stores/auth'
 
 /** GET /api/v1/auth/me 响应（FR-432）。 */

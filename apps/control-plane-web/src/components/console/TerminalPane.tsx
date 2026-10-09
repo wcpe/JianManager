@@ -5,8 +5,8 @@ import type { TerminalPaneProps as TerminalPanePropsFull } from '@/components/vi
 import { useInstance, useStartInstance } from '@/api/instances'
 import { useTerminalToken } from '@/api/terminal'
 import { usePermissionsStore } from '@/stores/permissions'
-import { useConsoleHistory } from '@/lib/console-history'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import { useConsoleHistory } from '@/lib/console/console-history'
+import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import StoppedLogsView from './StoppedLogsView'
 
 /**

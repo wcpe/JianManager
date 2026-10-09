@@ -2,13 +2,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 // 本地绑定仍叫 `Registration`（本文件内使用），对外导出名不变。
-import type { ProxyRegistration as Registration } from '@/lib/proxy-registration'
+import type { ProxyRegistration as Registration } from '@/lib/instances/proxy-registration'
 
 /**
  * proxy↔backend 注册关系契约（对应后端 model.ServerRegistration + backend 概要，FR-032/035）
  * 已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名 `Registration`，调用点无需改动。
  */
-export type { ProxyRegistration as Registration } from '@/lib/proxy-registration'
+export type { ProxyRegistration as Registration } from '@/lib/instances/proxy-registration'
 
 /** 创建注册请求体。 */
 export interface CreateRegistrationBody {

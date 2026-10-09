@@ -81,4 +81,4 @@ export async function decompile(
 }
 
 // 文件名判定已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
-export { isArchiveName, isClassName } from '@/lib/file-entry'
+export { isArchiveName, isClassName } from '@/lib/file-browser/file-entry'

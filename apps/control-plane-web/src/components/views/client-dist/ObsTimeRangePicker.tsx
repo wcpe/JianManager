@@ -18,8 +18,8 @@ import {
 } from '@jianmanager/ui/components/dropdown-menu'
 import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
-import { OBS_PRESETS, obsWindowLabel, presetLabel, toLocalInput } from '@/lib/obs-window'
-import type { ObsWindow } from '@/lib/obs-window'
+import { OBS_PRESETS, obsWindowLabel, presetLabel, toLocalInput } from '@/lib/metrics/obs-window'
+import type { ObsWindow } from '@/lib/metrics/obs-window'
 
 /**
  * 分发三页统一时间筛选（FR-425）：预设档 + 任意起止日期时间。

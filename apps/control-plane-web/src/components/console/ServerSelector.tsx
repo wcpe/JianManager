@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router'
 import { useInstanceAggregate, useSearchInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useConsoleStore } from '@/stores/console'
-import { useInstanceHoverPrefetch } from '@/lib/instance-prefetch'
-import { recordRecentServer, toggleFavoriteServer, useFavoriteServers, useRecentServers } from '@/lib/server-selection'
+import { useInstanceHoverPrefetch } from '@/lib/instances/instance-prefetch'
+import { recordRecentServer, toggleFavoriteServer, useFavoriteServers, useRecentServers } from '@/lib/console/server-selection'
 import ServerSelectorView from '@/components/views/instances/ServerSelector'
 
 const PAGE_SIZE = 200

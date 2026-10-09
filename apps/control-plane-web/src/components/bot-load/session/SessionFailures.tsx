@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { SESSION_FAILURES_PAGE_SIZE, SessionFailures as SessionFailuresView } from '@/components/views/bot-load/session/SessionFailures'
 import { useBotLoadFailures, useRetryBotLoadFailed } from '@/api/bot-load'
-import { readFailureFilter, writeFailureFilter } from '@/lib/bot-load-filters'
+import { readFailureFilter, writeFailureFilter } from '@/lib/bot-load/bot-load-filters'
 import { useSessionEvents } from './SessionEventProvider'
 
 /**

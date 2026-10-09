@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { Download } from 'lucide-react'
-import type { ClientMachineEvent } from '@/lib/client-dist-machines-contracts'
+import type { ClientMachineEvent } from '@/lib/client-dist/client-dist-machines-contracts'
 import { fmtBytes, fmtTime, resultBadge } from '@/components/views/client-dist/machine-format'
 
 /**

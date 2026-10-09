@@ -4,7 +4,7 @@ import { Server } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { ObjectPageHeader } from '@jianmanager/ui/components/shell'
-import type { ArchivedNode } from '@/lib/node-types'
+import type { ArchivedNode } from '@/lib/nodes/node-types'
 
 export interface ArchivedNodeDetailPaneProps {
   node: ArchivedNode

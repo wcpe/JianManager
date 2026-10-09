@@ -7,8 +7,8 @@ import api from '@/api/client'
 /**
  * 插件契约已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type { PluginInfo, PluginBatchDeployRequest } from '@/lib/plugin-contracts'
-import type { PluginInfo, PluginBatchDeployRequest } from '@/lib/plugin-contracts'
+export type { PluginInfo, PluginBatchDeployRequest } from '@/lib/plugins/plugin-contracts'
+import type { PluginInfo, PluginBatchDeployRequest } from '@/lib/plugins/plugin-contracts'
 
 
 export interface PluginBatchDeployInstanceResult {

@@ -4,12 +4,12 @@ import { useLocation, useNavigate } from 'react-router'
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import { usePermissionsStore } from '@/stores/permissions'
-import { workspaceOfPath, workspacesForPermissions, workspacesForRole } from '@/lib/workspace-navigation'
-import type { WorkspaceKey } from '@/lib/workspace-navigation'
+import { workspaceOfPath, workspacesForPermissions, workspacesForRole } from '@/lib/console/workspace-navigation'
+import type { WorkspaceKey } from '@/lib/console/workspace-navigation'
 
 // 纯函数（isDeepLink / landingPathOf）已回迁应用侧；此处转出，调用点零改动。
-export { isDeepLink, landingPathOf } from '@/lib/use-workspace-navigation'
-import { landingPathOf } from '@/lib/use-workspace-navigation'
+export { isDeepLink, landingPathOf } from '@/lib/hooks/use-workspace-navigation'
+import { landingPathOf } from '@/lib/hooks/use-workspace-navigation'
 
 /**
  * 工作区导航的唯一数据源（FR-496 阶段 6 补丁：从 `WorkspaceSidebar` 抽成独立模块）。

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createDefaultDraft, isPlanTokenFresh, wizardReducer } from '@/lib/bot-load-draft'
-import { COMMAND_ORCHESTRATION_V1 } from '@/lib/bot-load-presets'
+import { createDefaultDraft, isPlanTokenFresh, wizardReducer } from '@/lib/bot-load/bot-load-draft'
+import { COMMAND_ORCHESTRATION_V1 } from '@/lib/bot-load/bot-load-presets'
 
 describe('bot-load draft reducer', () => {
   it('默认草稿含 command-orchestration-v1 与严格阈值', () => {

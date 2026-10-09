@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useInstances } from '@/api/instances'
 import { useOnlinePlayers, useKickPlayer, useBanPlayer, useUnbanPlayer, useBans, useWhitelist, useWhitelistAction, usePlayerEvents, type PlayerActionResult } from '@/api/players'
-import { useDangerPermission } from '@/lib/danger'
+import { useDangerPermission } from '@/lib/shared/danger'
 import { PlayersPageView } from '@/components/views/players/PlayersPageView'
 import type { PlayerActionRequest, PlayerTab } from '@/components/views/players/PlayersPageView'
 

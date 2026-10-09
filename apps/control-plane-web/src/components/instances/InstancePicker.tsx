@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useInstanceSearch, type InstanceInfo } from '@/api/instances'
-import { useDebounced } from '@/lib/use-debounced'
+import { useDebounced } from '@/lib/hooks/use-debounced'
 import { CANDIDATE_LIMIT, InstancePicker as InstancePickerView } from '@/components/views/instances/InstancePicker'
 import type { InstancePickerProps as InstancePickerViewProps } from '@/components/views/instances/InstancePicker'
 

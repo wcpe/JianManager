@@ -5,7 +5,7 @@ import { useInstance } from '@/api/instances'
 import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackup } from '@/api/backups'
 import { useBackupStorages } from '@/api/backupStorages'
 import { useDeleteSchedule, useSchedules, useUpdateSchedule } from '@/api/schedules'
-import { hasActiveBackup } from '@/lib/backup'
+import { hasActiveBackup } from '@/lib/backups/backup'
 import InstanceBackupSegmentView from '@/components/views/instances/InstanceBackupSegment'
 import { useTranslation } from 'react-i18next'
 

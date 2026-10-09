@@ -4,8 +4,8 @@ import { useClientStats } from '@/api/clientStats'
 import { useClientDistObservability } from '@/api/clientDistObservability'
 import type { ObservabilityRange, ObservabilityWindow } from '@/api/clientDistObservability'
 import { ClientStatsPanelView } from '@/components/views/client-dist/ClientStatsPanelView'
-import type { ObsWindow } from '@/lib/obs-window'
-import { readClientDistQuery } from '@/lib/client-dist-query'
+import type { ObsWindow } from '@/lib/metrics/obs-window'
+import { readClientDistQuery } from '@/lib/client-dist/client-dist-query'
 import MachineListPanel from '@/components/client-dist/MachineListPanel'
 
 /** 天数窗口 → 观测端点 range 枚举（两看板共用一个时间选择器）。 */

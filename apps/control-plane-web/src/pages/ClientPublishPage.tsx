@@ -8,9 +8,9 @@ import { usePublishClientVersion } from '@/api/clientVersions'
 import type { ManifestFile } from '@/api/clientVersions'
 import { useUpdaterJarsInfo } from '@/api/clientChannels'
 import { useThemeStore } from '@/stores/theme'
-import { uploadFilesEfficient } from '@/lib/efficientUpload'
-import { PUBLISH_STEPS, batchProgressBytes, dedupUnits, localDedupKey, normalizeManifestPath } from '@/lib/client-publish-wizard'
-import type { PublishStepId } from '@/lib/client-publish-wizard'
+import { uploadFilesEfficient } from '@/lib/client-dist/efficientUpload'
+import { PUBLISH_STEPS, batchProgressBytes, dedupUnits, localDedupKey, normalizeManifestPath } from '@/lib/client-dist/client-publish-wizard'
+import type { PublishStepId } from '@/lib/client-dist/client-publish-wizard'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback

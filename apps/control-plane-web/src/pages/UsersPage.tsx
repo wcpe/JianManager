@@ -8,8 +8,8 @@ import { useUsers, useDeleteUser, useUpdateUser, useUserInvitations, useRevokeIn
 import type { CreateInvitationResponse } from '@/api/users'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
-import { isPlatformAdmin as isAdminRole } from '@/lib/roles'
-import { useDangerPermission } from '@/lib/danger'
+import { isPlatformAdmin as isAdminRole } from '@/lib/shared/roles'
+import { useDangerPermission } from '@/lib/shared/danger'
 import { UsersPageView } from '@/components/views/users/UsersPageView'
 import type { CreateUserPayload } from '@/components/views/users/UsersPageView'
 

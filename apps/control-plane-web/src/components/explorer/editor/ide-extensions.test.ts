@@ -9,8 +9,8 @@ import {
   toggleComment,
   toggleBlockComment,
 } from '@codemirror/commands'
-import { ideKeymap } from '@/lib/explorer-ide-extensions'
-import { editorShortcutRows } from '@/lib/shortcuts'
+import { ideKeymap } from '@/lib/explorer/explorer-ide-extensions'
+import { editorShortcutRows } from '@/lib/shared/shortcuts'
 
 describe('ideKeymap', () => {
   const bindings = ideKeymap()

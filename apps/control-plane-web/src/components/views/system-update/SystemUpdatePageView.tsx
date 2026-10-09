@@ -32,9 +32,9 @@ import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import { ReleaseNotes } from '@/components/views/ReleaseNotes'
-import { formatCacheBytes } from '@/lib/artifact-cache'
-import { copyToClipboard } from '@/lib/clipboard'
-import { formatRelativeTime } from '@/lib/relative-time'
+import { formatCacheBytes } from '@/lib/artifacts/artifact-cache'
+import { copyToClipboard } from '@/lib/shared/clipboard'
+import { formatRelativeTime } from '@/lib/shared/relative-time'
 
 /**
  * 单个组件（CP 或某节点）的版本对比结果（本视图所需的最小结构）。

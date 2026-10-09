@@ -10,7 +10,7 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
-import { DEFAULT_ROLE_NODES } from '@/lib/roles'
+import { DEFAULT_ROLE_NODES } from '@/lib/shared/roles'
 import InstanceConsolePage from './InstanceConsolePage'
 
 /**

@@ -4,8 +4,8 @@ import api from '@/api/client'
 /**
  * 审计契约（FR-015 / FR-172 / FR-321）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type { AuditLogInfo, AuditQueryParams, AuditLogPage } from '@/lib/audit-contracts'
-import type { AuditLogInfo, AuditQueryParams, AuditLogPage } from '@/lib/audit-contracts'
+export type { AuditLogInfo, AuditQueryParams, AuditLogPage } from '@/lib/audit/audit-contracts'
+import type { AuditLogInfo, AuditQueryParams, AuditLogPage } from '@/lib/audit/audit-contracts'
 
 const AUDIT_PAGE_SIZE = 100
 

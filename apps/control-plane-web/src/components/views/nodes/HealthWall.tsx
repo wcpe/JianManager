@@ -1,9 +1,9 @@
 import { useState, type ReactNode } from 'react'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { cn } from '@jianmanager/ui'
-import { HEALTH_WALL_SORTS, formatPct, healthLevelLabel, healthLevelTone, healthWallSortLabel, summarizeHealthWall } from '@/lib/health-wall'
+import { HEALTH_WALL_SORTS, formatPct, healthLevelLabel, healthLevelTone, healthWallSortLabel, summarizeHealthWall } from '@/lib/metrics/health-wall'
 import { toneChipClass } from '@jianmanager/ui/lib/tone'
-import type { HealthLevel, HealthWallNode, HealthWallSort } from '@/lib/health-wall-types'
+import type { HealthLevel, HealthWallNode, HealthWallSort } from '@/lib/metrics/health-wall-types'
 
 /** 分级 → 单元格着色（半透明状态底 + 状态前景，高密度热力墙用）。 */
 const CELL_CLASS: Record<HealthLevel, string> = {

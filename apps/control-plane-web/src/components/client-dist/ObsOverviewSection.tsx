@@ -1,7 +1,7 @@
 import { useClientDistObservability } from '@/api/clientStats'
 import { ObsOverviewView } from '@/components/views/client-dist/ObsOverviewView'
 import MachineListPanel from './MachineListPanel'
-import type { ObsWindow } from '@/lib/obs-window'
+import type { ObsWindow } from '@/lib/metrics/obs-window'
 
 /**
  * 分发观测总览区块（FR-426/427/428 mock 集成）：

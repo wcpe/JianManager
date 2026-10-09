@@ -4,9 +4,9 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import type { InstanceInfo } from '@/api/instances'
-import { clearInstanceDrafts, hasInstanceDraft } from '@/lib/console-draft-registry'
-import { pickEvictionTarget, promoteHotSet } from '@/lib/console-hot-cache'
-import { resolveHotSetCapacity, terminalSessionManager } from '@/lib/terminal-session-manager'
+import { clearInstanceDrafts, hasInstanceDraft } from '@/lib/console/console-draft-registry'
+import { pickEvictionTarget, promoteHotSet } from '@/lib/console/console-hot-cache'
+import { resolveHotSetCapacity, terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import InstanceConsolePage from './InstanceConsolePage'
 
 interface InstanceConsoleCacheProps {

@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
-import type { ClientDistIpAnalysis, ClientDistPlayerAnalysis } from '@/lib/client-dist-security-contracts'
+import type { ClientDistIpAnalysis, ClientDistPlayerAnalysis } from '@/lib/client-dist/client-dist-security-contracts'
 import { EmptyState, SECURITY_EMPTY as EMPTY, fmtBytes, fmtTime } from '@/components/views/client-dist/security-format'
 
 /**

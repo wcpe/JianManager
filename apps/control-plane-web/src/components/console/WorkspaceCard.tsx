@@ -1,8 +1,8 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useInstance } from '@/api/instances'
-import { cardTypeDef } from '@/lib/workspace-card'
-import type { CardType } from '@/lib/workspace-card'
+import { cardTypeDef } from '@/lib/console/workspace-card'
+import type { CardType } from '@/lib/console/workspace-card'
 import WorkspaceCardView from '@/components/views/instances/WorkspaceCard'
 import WorkspaceCardBody from './WorkspaceCardBody'
 

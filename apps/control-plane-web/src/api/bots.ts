@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 // Bot 域契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的 hook 签名使用。
-import type { BotConfig, BotInfo, BotListParams, BotListResponse, BotSummary, BotBatchRequest, BotBatchResult, CreateBotRequest } from '@/lib/bot'
-export type { BotConfig, BotInfo, BotListParams, BotListResponse, BotSummary, BotSummaryGroup, BotBatchAction, BotBatchFilter, BotBatchRequest, BotBatchResult, CreateBotRequest } from '@/lib/bot'
+import type { BotConfig, BotInfo, BotListParams, BotListResponse, BotSummary, BotBatchRequest, BotBatchResult, CreateBotRequest } from '@/lib/bots/bot'
+export type { BotConfig, BotInfo, BotListParams, BotListResponse, BotSummary, BotSummaryGroup, BotBatchAction, BotBatchFilter, BotBatchRequest, BotBatchResult, CreateBotRequest } from '@/lib/bots/bot'
 
 import api, { ensureFreshToken } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
-import type { BotRealtimeEvent, BotRealtimeState } from '@/lib/bot-realtime-types'
+import type { BotRealtimeEvent, BotRealtimeState } from '@/lib/bots/bot-realtime-types'
 
 // 实现已回迁应用侧（原 ADR-097 迁包已撤销），此处保留 re-export 维持既有导入路径。
 export type { BotRealtimeEvent, BotRealtimeState }

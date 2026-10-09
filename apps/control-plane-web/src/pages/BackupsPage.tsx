@@ -6,7 +6,7 @@ import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackup } from '
 import { useBackupStorages } from '@/api/backupStorages'
 import { useInstance } from '@/api/instances'
 import { InstancePicker } from '@/components/instances/InstancePicker'
-import { hasActiveBackup } from '@/lib/backup'
+import { hasActiveBackup } from '@/lib/backups/backup'
 import { BackupsPageView } from '@/components/views/backups/BackupsPageView'
 
 /** 进行中备份时的轮询间隔（毫秒）：刷新进度直至完成（FR-151）。 */

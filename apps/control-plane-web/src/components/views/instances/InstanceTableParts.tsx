@@ -23,8 +23,8 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import { hasCapability, resolveCapabilities } from '@/lib/capabilities'
-import type { InstanceInfo } from '@/lib/instance-types'
+import { hasCapability, resolveCapabilities } from '@/lib/instances/capabilities'
+import type { InstanceInfo } from '@/lib/instances/instance-types'
 
 /**
  * 实例列表排序键（与 /instances/search 的 `sort` 参数对齐）。

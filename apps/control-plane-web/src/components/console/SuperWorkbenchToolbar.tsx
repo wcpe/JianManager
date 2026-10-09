@@ -1,7 +1,7 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只注入路由链接渲染（受控化）。
 import { Link } from 'react-router'
 import { SuperWorkbenchToolbar as SuperWorkbenchToolbarView } from '@/components/views/console/WorkbenchLeafParts'
-import type { WorkspacePreset } from '@/lib/workspace-preset'
+import type { WorkspacePreset } from '@/lib/console/workspace-preset'
 
 interface SuperWorkbenchToolbarProps {
   /** 当前应用的预设 id。 */

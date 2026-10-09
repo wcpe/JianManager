@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { cn } from '@jianmanager/ui'
-import { activeMetricSources, metricSourceLabelKey } from '@/lib/metrics-availability'
-import type { AvailabilityBits } from '@/lib/metrics-availability'
+import { activeMetricSources, metricSourceLabelKey } from '@/lib/metrics/metrics-availability'
+import type { AvailabilityBits } from '@/lib/metrics/metrics-availability'
 
 /**
  * 数据来源标注（FR-447）：按 `探针 → SLP → Query` 优先级列出本拍命中来源。

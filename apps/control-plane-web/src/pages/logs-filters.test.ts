@@ -2,14 +2,12 @@ import { describe, it, expect } from 'vitest'
 import {
   logLevelStatus,
   timeRangeToParams,
-  normalizeLogScope,
-  logScopeKey,
   buildExportParams,
   computeVirtualWindow,
   TIME_RANGE_PRESETS,
   LOG_VIEWS,
-} from '@/lib/logs-filters'
-import type { LogExportScope } from '@/lib/logs-filters'
+} from '@/lib/logs/logs-filters'
+import type { LogExportScope } from '@/lib/logs/logs-filters'
 import type { LogQueryParams } from '@/api/logs'
 
 describe('logLevelStatus', () => {
@@ -64,26 +62,6 @@ describe('timeRangeToParams', () => {
     expect(TIME_RANGE_PRESETS).toContain('all')
     expect(TIME_RANGE_PRESETS).toContain('15m')
     expect(TIME_RANGE_PRESETS).toContain('7d')
-  })
-})
-
-describe('唯一规范化scope', () => {
-  const base = { view: 'node_instance' as const, level: 'error', keyword: '  boom  ', onlineOnly: true, nodeId: 7, instanceId: 11, from: '2026-06-26T11:00:00.000Z', to: '2026-06-26T12:00:00.000Z' }
-
-  it('保留所有实际条件并trim关键字，不携分页或聚合参数', () => {
-    const out = normalizeLogScope({ ...base, ...{ page: 3, cursor: 'opaque', viewId: 'old-view', groupBy: 'level' } })
-    expect(out).toEqual({ ...base, keyword: 'boom' })
-    expect(base.keyword).toBe('  boom  ')
-  })
-
-  it('字段输入顺序与空白不改变指纹', () => {
-    expect(logScopeKey(base)).toBe(logScopeKey({ to: base.to, from: base.from, instanceId: 11, nodeId: 7, onlineOnly: true, keyword: 'boom', level: 'error', view: 'node_instance' }))
-    expect(normalizeLogScope({ keyword: '  ', onlineOnly: false })).toEqual({})
-  })
-
-  it.each(['onlineOnly', 'from', 'to', 'nodeId', 'instanceId', 'keyword'])('%s变化必须产生新视图身份', (field) => {
-    const changed = { ...base, [field]: field === 'onlineOnly' ? false : field.endsWith('Id') ? 99 : 'changed' }
-    expect(logScopeKey(changed)).not.toBe(logScopeKey(base))
   })
 })
 

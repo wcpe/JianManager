@@ -40,12 +40,12 @@ import FileBrowser from '@/components/views/file-browser/FileBrowser'
 import { CleanScopeEditor } from '@/components/views/client-dist/CleanScopeEditor'
 import { EmbeddedUpdaterSummary } from '@/components/views/client-dist/EmbeddedUpdaterParts'
 import type { EmbeddedUpdaterSummaryProps } from '@/components/views/client-dist/EmbeddedUpdaterParts'
-import { localDraftSource } from '@/lib/file-sources'
-import { adaptEntry } from '@/lib/webkit-entry-adapter'
-import type { NativeFileSystemEntry } from '@/lib/webkit-entry-adapter'
-import { unzipWithNames } from '@/lib/zip-filename-decode'
-import { PUBLISH_STEPS, canAdvance, canPublish, nextStep, prevStep, normalizeManifestPath, isZipFilename, hasPublishDraft, collectEntries, joinDirPath, CLEAN_ALL_SENTINEL, isCleanAll } from '@/lib/client-publish-wizard'
-import type { PublishStepId, LocalUnit, FileSystemEntryLike, ManifestFileLike } from '@/lib/client-publish-wizard'
+import { localDraftSource } from '@/lib/file-browser/file-sources'
+import { adaptEntry } from '@/lib/shared/webkit-entry-adapter'
+import type { NativeFileSystemEntry } from '@/lib/shared/webkit-entry-adapter'
+import { unzipWithNames } from '@/lib/shared/zip-filename-decode'
+import { PUBLISH_STEPS, canAdvance, canPublish, nextStep, prevStep, normalizeManifestPath, isZipFilename, hasPublishDraft, collectEntries, joinDirPath, CLEAN_ALL_SENTINEL, isCleanAll } from '@/lib/client-dist/client-publish-wizard'
+import type { PublishStepId, LocalUnit, FileSystemEntryLike, ManifestFileLike } from '@/lib/client-dist/client-publish-wizard'
 
 /** 取异常里的服务端文案，回退到给定文案（本地解包/拖拽解析失败时的文案口径与迁包前一致）。 */
 function errMsg(e: unknown, fallback: string): string {

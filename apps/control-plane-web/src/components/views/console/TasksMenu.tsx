@@ -10,8 +10,8 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { cn } from '@jianmanager/ui'
-import { isTerminalTask, TASK_KIND_LABEL_KEYS } from '@/lib/task-status'
-import type { Task } from '@/lib/task-status'
+import { isTerminalTask, TASK_KIND_LABEL_KEYS } from '@/lib/tasks/task-status'
+import type { Task } from '@/lib/tasks/task-status'
 
 /** 页眉任务下拉的行数上限（FR-327）：最近 N 条，看全量进任务中心页。 */
 export const TASKS_MENU_MAX_ROWS = 8

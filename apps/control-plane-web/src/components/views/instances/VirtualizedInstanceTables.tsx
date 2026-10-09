@@ -9,11 +9,11 @@ import {
   TableCell,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import { useVirtualRows } from '@/lib/virtual-list'
-import { memberHealth } from '@/lib/topology'
-import type { MemberHealth } from '@/lib/topology'
-import type { GroupDimension, InstanceGroup } from '@/lib/instance-grouping'
-import type { InstanceInfo } from '@/lib/instance-types'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
+import { memberHealth } from '@/lib/networks/topology'
+import type { MemberHealth } from '@/lib/networks/topology'
+import type { GroupDimension, InstanceGroup } from '@/lib/instances/instance-grouping'
+import type { InstanceInfo } from '@/lib/instances/instance-types'
 /** 虚拟滚动位置的 sessionStorage 键前缀（与 URL 组合成唯一键）。 */
 export const SCROLL_KEY_PREFIX = 'jm.instances.scroll:'
 /**

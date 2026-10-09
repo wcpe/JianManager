@@ -3,7 +3,7 @@ import ResourceExplorer, { type ConfigCapabilities } from '@/components/explorer
 import ConfigFileEditor from './ConfigFileEditor'
 import ConfigVersionDrawer from './ConfigVersionDrawer'
 import FavoritesBar from './FavoritesBar'
-import { browserStorage, loadFavorites, saveFavorites, toggleFavorite as toggleFav } from '@/lib/config-favorites'
+import { browserStorage, loadFavorites, saveFavorites, toggleFavorite as toggleFav } from '@/lib/config-explorer/config-favorites'
 
 /**
  * 配置管理资源管理器（FR-071）。

@@ -7,8 +7,8 @@ vi.mock('sonner', () => ({
 }))
 
 import { toast } from 'sonner'
-import { ConsoleLineBuffer } from '@/lib/console-line-buffer'
-import type { LogLine } from '@/lib/console-log-line'
+import { ConsoleLineBuffer } from '@/lib/console/console-line-buffer'
+import type { LogLine } from '@/lib/console/console-log-line'
 import { renderWithProviders } from '@/test/render'
 import ConsoleOutputView from './ConsoleOutputView'
 

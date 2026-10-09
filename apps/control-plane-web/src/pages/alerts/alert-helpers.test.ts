@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { levelBadgeClass, levelStatusLevel, triggerUsesMetric, triggerUsesKeyword, triggerUsesEventMatch, channelUsesURL, channelIsTelegram, channelIsEmail, channelIsInApp, channelIsQQ, isQQTargetType, isEnvRef, formatSilenceWindow, isValidHHMM, parseChannelIds, summarizeRules, targetTypeForTrigger, triggerAllowsTargetSwitch } from '@/lib/alert-helpers'
+import { levelBadgeClass, levelStatusLevel, triggerUsesMetric, triggerUsesKeyword, triggerUsesEventMatch, channelUsesURL, channelIsTelegram, channelIsEmail, channelIsInApp, channelIsQQ, isQQTargetType, isEnvRef, formatSilenceWindow, isValidHHMM, parseChannelIds, summarizeRules, targetTypeForTrigger, triggerAllowsTargetSwitch } from '@/lib/alerts/alert-helpers'
 
 describe('levelBadgeClass', () => {
   it('distinguishes levels', () => {

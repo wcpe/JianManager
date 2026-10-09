@@ -23,7 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import { depKey, filterByName, partitionDeps } from '@/lib/licenses'
+import { depKey, filterByName, partitionDeps } from '@/lib/licenses/licenses'
 
 /**
  * 单条依赖的许可信息（本视图渲染所需的最小字段集）。

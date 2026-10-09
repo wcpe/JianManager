@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import FileExplorer from '@/components/views/explorer/FileExplorer'
-import type { LocalUnit, ManifestFileLike } from '@/lib/client-publish-wizard'
+import type { LocalUnit, ManifestFileLike } from '@/lib/client-dist/client-publish-wizard'
 
 /** 构造文件资源管理器所需的最小 manifest 文件。 */
 function manifestFiles(...paths: string[]): ManifestFileLike[] {

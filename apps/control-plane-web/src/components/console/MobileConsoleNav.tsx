@@ -2,7 +2,7 @@ import { NavLink, useLocation } from 'react-router'
 import { MobileConsoleNav as MobileConsoleNavView } from '@/components/views/console/MobileConsoleNav'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
-import { navGroupsForPermissions, navGroupsForRole } from '@/lib/nav-config'
+import { navGroupsForPermissions, navGroupsForRole } from '@/lib/shared/nav-config'
 
 /**
  * 手机端底部导航的应用接线层（ADR-097）。
