@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  emptySelection,
-  clickSelect,
-  selectAll,
-  clearSelection,
-  isSelected,
-  pruneSelection,
-} from './selection'
+import { emptySelection, clickSelect, selectAll, clearSelection, isSelected, pruneSelection } from '@/lib/explorer-selection'
 
 const keys = ['a', 'b', 'c', 'd', 'e']
 

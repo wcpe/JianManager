@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { commandScheduleToYaml, summarizeCommandSchedule, yamlToCommandSchedule } from './summaries'
-import { COMMAND_ORCHESTRATION_V1 } from './presets'
+import { commandScheduleToYaml, summarizeCommandSchedule, yamlToCommandSchedule } from '@/lib/bot-load-summaries'
+import { COMMAND_ORCHESTRATION_V1 } from '@/lib/bot-load-presets'
 
 describe('bot-load summaries / yaml 往返', () => {
   it('摘要命令计划', () => {

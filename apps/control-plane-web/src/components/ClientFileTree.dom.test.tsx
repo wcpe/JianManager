@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { screen, fireEvent } from '@testing-library/react'
 import { renderWithProviders } from '@/test/render'
-import ClientFileTree from '@/components/ClientFileTree'
+import { ClientFileTree } from '@/components/views/client-dist/ClientFileTree'
 import type { ManifestFileLike } from '@/lib/client-publish-wizard'
 
 /**

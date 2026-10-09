@@ -1,14 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AssetInfo, AssetTypeGroup, JDKMatrixItem } from '@/api/runtimeAssets'
-import {
-  formatBytes,
-  buildJDKMatrix,
-  buildRuntimeGrid,
-  filterAssetGroups,
-  shortSha,
-  DEFAULT_ASSET_FILTER,
-  RUNTIME_TYPE_LABEL,
-} from './runtime-assets-view'
+import { formatBytes, buildJDKMatrix, buildRuntimeGrid, filterAssetGroups, shortSha, DEFAULT_ASSET_FILTER, RUNTIME_TYPE_LABEL } from '@/lib/runtime-assets-view'
 
 function jdk(p: Partial<JDKMatrixItem>): JDKMatrixItem {
   return {

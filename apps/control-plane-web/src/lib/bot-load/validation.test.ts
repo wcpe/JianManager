@@ -1,13 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import {
-  previewBotNames,
-  validateCommandSchedule,
-  validateConnection,
-  validateCountMatchesProfile,
-  validateLoadProfile,
-  validateThresholds,
-} from './validation'
-import { COMMAND_ORCHESTRATION_V1, DEFAULT_STABLE_PROFILE, DEFAULT_STRICT_THRESHOLDS } from './presets'
+import { previewBotNames, validateCommandSchedule, validateConnection, validateCountMatchesProfile, validateLoadProfile, validateThresholds } from '@/lib/bot-load-validation'
+import { COMMAND_ORCHESTRATION_V1, DEFAULT_STABLE_PROFILE, DEFAULT_STRICT_THRESHOLDS } from '@/lib/bot-load-presets'
 
 describe('bot-load validation', () => {
   it('接受 command-orchestration-v1 预设', () => {

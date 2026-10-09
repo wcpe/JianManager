@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { needsDiscardConfirm, type OpenFileSnapshot } from './discard-guard'
+import { needsDiscardConfirm, OpenFileSnapshot } from '@/lib/discard-guard'
 
 const clean: OpenFileSnapshot = { path: 'a.txt', saved: 'x', draft: 'x' }
 const dirty: OpenFileSnapshot = { path: 'a.txt', saved: 'x', draft: 'y' }

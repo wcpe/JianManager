@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { consoleTitleKey } from './pageTitle'
+import { consoleTitleKey } from '@/lib/page-title'
 
 describe('consoleTitleKey', () => {
   it('根路径映射到平台首页', () => {

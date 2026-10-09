@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { logoToggleLabelKey } from './sidebar-logo'
+import { logoToggleLabelKey } from '@/lib/sidebar-logo'
 
 /**
  * 顶部 logo 折叠/展开触发器的无障碍标签解析（FR-181，增强 FR-131）。
