@@ -43,7 +43,7 @@ import {
   TableRow,
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import { validateRequired, validateFields, hasErrors } from '@jianmanager/ui/lib/form-validation'
 import { isTerminalTask, type TaskState } from '@jianmanager/ui/lib/task-status'
 import { useFieldGate } from '@jianmanager/ui/lib/use-field-gate'

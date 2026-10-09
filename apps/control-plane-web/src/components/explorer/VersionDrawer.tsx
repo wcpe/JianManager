@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 
-import VersionDrawer from '@jianmanager/ui/components/views/explorer/VersionDrawer'
+import VersionDrawer from '@/components/views/explorer/VersionDrawer'
 import { useFileVersions, useFileVersionDiff, useRollbackFile } from '@/api/fileVersions'
 
 /**

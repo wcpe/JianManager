@@ -1,6 +1,6 @@
 import ControlledDangerConfirm, {
   type DangerConfirmProps as ControlledDangerConfirmProps,
-} from '@jianmanager/ui/components/views/DangerConfirm'
+} from '@/components/views/DangerConfirm'
 import { useDangerPermission } from '@/lib/danger'
 
 /**

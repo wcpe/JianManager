@@ -4,11 +4,8 @@ import { useNavigate, useSearchParams } from 'react-router'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
-import {
-  InstanceWizardPage as InstanceWizardView,
-  initialWizardNodeId,
-  type WizardTemplateOption,
-} from '@jianmanager/ui'
+import { initialWizardNodeId, type WizardTemplateOption } from '@jianmanager/ui'
+import { InstanceWizardPage as InstanceWizardView } from '@/components/views/InstanceWizardPage'
 import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
 import api from '@/api/client'
 import { useNodes } from '@/api/nodes'

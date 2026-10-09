@@ -6,7 +6,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { cn } from '@jianmanager/ui'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import type { BusinessAction, BusinessResult } from '@jianmanager/ui/lib/business'
 import { buildBusinessPayload, isWriteAction } from '@jianmanager/ui/lib/business-actions'
 

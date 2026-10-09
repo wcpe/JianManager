@@ -36,7 +36,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import {
   ConfigRow,
   ConfigSwitch,

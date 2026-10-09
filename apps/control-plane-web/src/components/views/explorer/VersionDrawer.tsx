@@ -2,9 +2,9 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@jianmanager/ui/components/sheet'
-import { UnifiedDiff } from '../UnifiedDiff'
-import DangerConfirm from '../DangerConfirm'
-import type { FileVersion, FileVersionDiff } from '../../../lib/file-version'
+import { UnifiedDiff } from '@/components/views/UnifiedDiff'
+import DangerConfirm from '@/components/views/DangerConfirm'
+import type { FileVersion, FileVersionDiff } from '@jianmanager/ui/lib/file-version'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type VersionNotice = (kind: 'success' | 'error', message: string) => void

@@ -1,4 +1,4 @@
-import SearchPanel from '@jianmanager/ui/components/views/explorer/SearchPanel'
+import SearchPanel from '@/components/views/explorer/SearchPanel'
 import { searchFiles } from '@/api/files'
 
 /**

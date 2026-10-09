@@ -62,7 +62,7 @@ import ClientVersionsPanel from '@/components/ClientVersionsPanel'
 import ClientStatsPanel from '@/components/ClientStatsPanel'
 import ClientIntegrationGuide from '@/components/ClientIntegrationGuide'
 import ClientUpdaterCoreSelector from '@/components/ClientUpdaterCoreSelector'
-import ClientDistFlowGuide from '@jianmanager/ui/components/views/ClientDistFlowGuide'
+import ClientDistFlowGuide from '@/components/views/ClientDistFlowGuide'
 import {
   ReadinessStepper,
   STEP_META,

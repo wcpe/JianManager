@@ -6,7 +6,7 @@ import {
   browserPropsFromCapability,
   type ExplorerCapability,
 } from '@jianmanager/ui/lib/file-browser-capability'
-import ExplorerTabHost from '@jianmanager/ui/components/views/explorer/ExplorerTabHost'
+import ExplorerTabHost from '@/components/views/explorer/ExplorerTabHost'
 
 export interface UnifiedExplorerShellProps {
   /** 场景能力描述（FR-378）。 */

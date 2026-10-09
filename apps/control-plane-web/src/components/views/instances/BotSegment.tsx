@@ -15,7 +15,7 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { cn } from '@jianmanager/ui'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import BotStatusDot from '@/components/views/instances/BotStatusDot'
 import type {
   BotBatchAction,

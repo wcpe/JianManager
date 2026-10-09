@@ -1,4 +1,4 @@
-import DecompileViewer from '@jianmanager/ui/components/views/explorer/DecompileViewer'
+import DecompileViewer from '@/components/views/explorer/DecompileViewer'
 import { decompile } from '@/api/archive'
 import { useThemeStore } from '@/stores/theme'
 

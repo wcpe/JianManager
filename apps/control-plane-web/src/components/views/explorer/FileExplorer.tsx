@@ -45,7 +45,7 @@ import {
   type ManifestFileLike,
   type TreeDir,
   type TreeFile,
-} from '../../../lib/client-publish-wizard'
+} from '@/lib/client-publish-wizard'
 import { ContextMenuSurface, cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
@@ -68,7 +68,7 @@ import {
   scrollableDialogContentClass,
   ScrollableDialogBody,
 } from '@jianmanager/ui/components/scrollable-dialog'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 
 /** 平台「全部」哨兵（Radix Select 不允许空字符串值，回写时映射回 ""）。 */
 const PLATFORM_ALL = '__all__'

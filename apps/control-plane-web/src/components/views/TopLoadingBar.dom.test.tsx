@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
-import { TopLoadingBar } from './TopLoadingBar'
+import { TopLoadingBar } from '@/components/views/TopLoadingBar'
 
 /**
  * TopLoadingBar（FR-243 加载进度条）· 业务视图包。
