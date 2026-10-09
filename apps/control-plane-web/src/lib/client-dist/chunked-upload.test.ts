@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest'
 
 import { sliceRanges, progressBytes, type ChunkRange } from './chunked-upload'
 
-// 网络部分（uploadFileChunked）的契约由应用侧同名测试覆盖——那里 mock 了 `@/api/client`；
-// 包内只测纯逻辑。
+// 分块上传的纯逻辑（切片数学 / 进度归并）在这里测：本模块不依赖 `@/api/*`，故无需 mock。
+// `uploadFileChunked` 的 0 字节文件等网络契约、以及 api 接线断言由 `client-upload-api.test.ts`
+// 覆盖（那里 mock 了 `@/api/client`）。
 
 /** 分块上传切片数学（FR-251）：片数 / 边界 / 末片 / 进度归并纯逻辑。 */
 describe('sliceRanges', () => {
@@ -64,10 +65,7 @@ describe('sliceRanges', () => {
   })
 })
 
-/**
- * 0 字节文件（整合包常见 .gitkeep / 空配置）上传契约：init(totalSize=0) → 零次分片 PUT →
- * 直达 complete；进度回调有终态且无 NaN（uploadedBytes === totalBytes === 0 即 100%）。
- */
+/** 进度归并纯逻辑：整片计、末片封顶、整除边界。 */
 describe('progressBytes', () => {
   it('已完成 N 片按整片计', () => {
     expect(progressBytes(0, 10, 25)).toBe(0)

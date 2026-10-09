@@ -8,7 +8,7 @@ import { usePublishClientVersion } from '@/api/clientVersions'
 import type { ManifestFile } from '@/api/clientVersions'
 import { useUpdaterJarsInfo } from '@/api/clientChannels'
 import { useThemeStore } from '@/stores/theme'
-import { uploadFilesEfficient } from '@/lib/client-dist/efficientUpload'
+import { uploadFilesEfficient } from '@/lib/client-dist/client-upload-api'
 import { PUBLISH_STEPS, batchProgressBytes, dedupUnits, localDedupKey, normalizeManifestPath } from '@/lib/client-dist/client-publish-wizard'
 import type { PublishStepId } from '@/lib/client-dist/client-publish-wizard'
 
