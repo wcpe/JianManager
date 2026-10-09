@@ -24,7 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { BanRecord, OnlinePlayer, OnlinePlayersResult, PlayerActionResult, WhitelistResult } from '@/lib/players/player'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */

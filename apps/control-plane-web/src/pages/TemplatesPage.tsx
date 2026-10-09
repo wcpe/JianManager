@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
-import { TemplatesPage as TemplatesView } from '@/components/views/TemplatesPage'
+import { TemplatesPage as TemplatesView } from '@/components/views/instances/TemplatesPage'
 import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
 import api from '@/api/client'
 import { useTemplates, useCreateTemplate, useDeleteTemplate } from '@/api/templates'

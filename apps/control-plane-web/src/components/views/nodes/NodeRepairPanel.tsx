@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Copy, RotateCw, ShieldCheck, Trash2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 
 /**

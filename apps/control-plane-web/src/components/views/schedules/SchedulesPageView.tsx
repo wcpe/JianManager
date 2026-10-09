@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next'
 import { Clock, Pencil, ScrollText, Trash2 } from 'lucide-react'
 import { ConfigRow, ConfigSwitch, ConfigSummaryChips, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
 import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { Button } from '@jianmanager/ui/components/button'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import {

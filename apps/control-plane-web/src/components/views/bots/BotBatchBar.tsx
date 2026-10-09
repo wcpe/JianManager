@@ -8,7 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { BehaviorConfigDialog } from '@/components/views/bots/BotListParts'
 import { groupFilter } from '@/lib/bots/bots-overview'
 import type { GroupByDim, OverviewFilter } from '@/lib/bots/bots-overview'

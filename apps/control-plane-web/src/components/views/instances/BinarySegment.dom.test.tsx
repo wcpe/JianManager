@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { renderWithI18n } from '../../../test/i18n'
+import { renderWithI18n } from '@/test/i18n'
 import BinarySegment, { LaunchParamsPanel } from '@/components/views/instances/BinarySegment'
 
 /**

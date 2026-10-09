@@ -89,8 +89,6 @@ describe('业务视图/lib 回迁后的包边界', () => {
     for (const d of ['instances', 'console', 'client-dist', 'nodes', 'explorer', 'licenses']) {
       expect(domains, `缺少域 ${d}`).toContain(d)
     }
-    // 顶层零散视图也在同一层
-    expect(domains).toContain('DangerConfirm.tsx')
   })
 
   /**
@@ -116,5 +114,10 @@ describe('业务视图/lib 回迁后的包边界', () => {
   it('应用侧 components 按域分组，根层不再平铺', () => {
     const compDir = path.join(root, 'src/components')
     expect(looseFilesIn(compDir), 'components 根层不应再有平铺文件').toEqual([])
+  })
+
+  it('应用侧 views 按域分组，根层不再平铺', () => {
+    expect(existsSync(appViews)).toBe(true)
+    expect(looseFilesIn(appViews), 'views 根层不应再有平铺文件').toEqual([])
   })
 })

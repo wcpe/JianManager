@@ -11,7 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { ClientKeyWithSecret, ClientPullKey } from '@/lib/client-dist/client-channel-types'
 import { CreateKeyDialog, EditKeyDialog } from '@/components/views/client-dist/KeyEditDialogs'
 import type { CreateKeyBody, UpdateKeyBody } from '@/components/views/client-dist/KeyEditDialogs'
