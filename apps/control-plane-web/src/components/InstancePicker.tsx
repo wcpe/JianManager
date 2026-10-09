@@ -5,10 +5,10 @@ import {
   CANDIDATE_LIMIT,
   InstancePicker as InstancePickerView,
   type InstancePickerProps as InstancePickerViewProps,
-} from '@jianmanager/ui/components/views/instances/InstancePicker'
+} from '@/components/views/instances/InstancePicker'
 
 /** 哨兵值由组件库定义，这里再导出以保持既有引用路径可用。 */
-export { INSTANCE_PICKER_ALL } from '@jianmanager/ui/components/views/instances/InstancePicker'
+export { INSTANCE_PICKER_ALL } from '@/components/views/instances/InstancePicker'
 
 /**
  * 服务端搜索的实例选择器（应用接线层，ADR-097 a 范式）。

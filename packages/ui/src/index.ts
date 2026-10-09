@@ -62,57 +62,9 @@ export * from './components/views/explorer/editor/EditorShortcutsHelp'
 // ADR-097 起：应用业务组件按 a+b 双范式受控化并入，按域归档
 
 // instances 域（实例详情与控制台的分段/面板）
-export * from './components/views/instances/HealthPanel'
-export * from './components/views/instances/BinarySegment'
-export * from './components/views/instances/InstanceEnvSegment'
-export * from './components/views/instances/WorkspaceCard'
-export * from './components/views/instances/RuntimeDriftNotice'
-export * from './components/views/instances/InstancePicker'
-export * from './components/views/instances/BinaryVersionPanel'
-export * from './components/views/instances/SnapshotPanel'
-export * from './components/views/instances/InstanceWorktableCard'
-export * from './components/views/instances/ProcessPanel'
-export * from './components/views/instances/MetricsFallbackSegment'
-export * from './components/views/instances/MetricsTabSegment'
-export * from './components/views/instances/InstanceTagsDialog'
-export * from './components/views/instances/EditInstanceLimitsDialog'
-export * from './components/views/instances/CreateBotDialog'
-export * from './components/views/instances/InstanceBatchBar'
-export * from './components/views/instances/RollingBatchDialog'
-export * from './components/views/instances/ProxyRegistrationsDialog'
-export * from './components/views/instances/EditInstanceConfigDialog'
-export * from './components/views/instances/InstanceStatusDot'
-export * from './components/views/instances/InstanceLibrary'
-export * from './components/views/instances/InstanceGroupTree'
-export * from './components/views/instances/InstanceGroupManager'
-export * from './components/views/instances/ConfigSwitch'
-export * from './components/views/instances/InstanceBackupSegment'
-export * from './components/views/instances/CrashDiagnosticsCard'
-export * from './components/views/instances/InstancePlayersSegment'
-export * from './components/views/instances/ServerStateSegment'
-export * from './components/views/instances/ServerSelector'
-export * from './components/views/instances/InventorySegment'
-export * from './components/views/instances/EconomySegment'
-export * from './components/views/instances/BotStatusDot'
-export * from './components/views/instances/BotSegment'
-export * from './components/views/instances/MetricSourceChips'
-export * from './components/views/instances/AttributionCard'
-export * from './components/views/instances/CapacityForecastCard'
-export * from './components/views/instances/MetricsSegment'
-export * from './components/views/instances/PlayerTrendCard'
-export * from './components/views/instances/SLOSection'
-export * from './components/views/instances/InstanceRankingPanel'
-export * from './components/views/instances/DrillTargetPicker'
-export * from './components/views/instances/MonitoringPage'
-export * from './components/views/instances/BusinessSegment'
 export * from './components/views/CreateUserDialog'
 export * from './components/views/CreateInvitationDialog'
 export * from './components/views/CreateInstanceDialog'
-export * from './components/views/instances/SidebarServerList'
-export * from './components/views/instances/CommandPalette'
-export * from './components/views/instances/VirtualizedInstanceTables'
-export * from './components/views/instances/InstanceTableParts'
-export * from './components/views/instances/InstanceCardViews'
 export * from './components/views/DangerConfirm'
 export * from './components/views/InstanceWizardPage'
 export * from './lib/instance-wizard-options'
@@ -259,13 +211,6 @@ export * from './lib/client-dist-security-contracts'
 // （前者是可点击筛选 chip、后者是带状态等级的汇总 chip）；`ConfigSwitch` 已由
 // `./components/views/instances/ConfigSwitch` 导出。两者都不能在 barrel 里同时通配。
 // 需要 ConfigRow 版 SummaryChip 的调用方走深路径 `@jianmanager/ui/components/views/config-explorer/ConfigRow`。
-export {
-  ConfigViewToggle,
-  ConfigSummaryChips,
-  ConfigRow,
-} from './components/views/config-explorer/ConfigRow'
-export type { ConfigView } from './components/views/config-explorer/ConfigRow'
-export * from './components/views/config-explorer/FavoritesBarView'
 export * from './lib/client-dist-kpi'
 export * from './lib/client-dist-observability-contracts'
 export * from './lib/client-dist-ops-tab'
@@ -301,7 +246,6 @@ export type {
   RuntimeGrid,
   AssetFilter,
 } from './lib/runtime-assets-view'
-export * from './components/views/config-explorer/ConfigFileEditor'
 export * from './lib/theme'
 // WorkbenchLeafParts 的 PageBreadcrumb 与 './components/layout' 的同名导出（类型）冲突，
 // 故显式列出其余导出；PageBreadcrumb 组件走深路径
@@ -443,14 +387,11 @@ export * from './components/views/EditUserDialogView'
 // client-dist 域
 // config-baselines 域
 // config-explorer 域
-export * from './components/views/config-explorer/ConfigVersionDrawer'
 // console 域
 // explorer 域
 export * from './components/views/explorer/FileTree'
 // import-server 域
 // instances 域
-export * from './components/views/instances/CloneInstanceDialogView'
-export * from './components/views/instances/InstanceRowView'
 // logs 域
 // networks 域
 // notifications 域

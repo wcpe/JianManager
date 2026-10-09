@@ -27,7 +27,7 @@ import {
   ConfigSummaryChips,
   ConfigViewToggle,
   type ConfigView,
-} from '@jianmanager/ui/components/views/config-explorer/ConfigRow'
+} from '@/components/views/config-explorer/ConfigRow'
 import {
   BACKUP_COMPLETED,
   BACKUP_MODE_INCREMENTAL,

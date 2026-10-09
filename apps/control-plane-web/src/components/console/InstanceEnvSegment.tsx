@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useInstanceEnv, useUpdateInstance } from '@/api/instances'
-import InstanceEnvSegmentView from '@jianmanager/ui/components/views/instances/InstanceEnvSegment'
+import InstanceEnvSegmentView from '@/components/views/instances/InstanceEnvSegment'
 
 /**
  * 环境变量页签的应用接线层（ADR-097 b 范式）。

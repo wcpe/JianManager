@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useInfiniteInstanceSearch, type InstanceInfo } from '@/api/instances'
-import InstanceLibraryView from '@jianmanager/ui/components/views/instances/InstanceLibrary'
+import InstanceLibraryView from '@/components/views/instances/InstanceLibrary'
 
 /**
  * 实例库面板的应用接线层（ADR-097 a 范式）。

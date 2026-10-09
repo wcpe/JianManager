@@ -10,7 +10,7 @@ import {
 import { runtimeDriftOf } from '@/lib/runtime-drift'
 import { useInstanceMetrics } from '@/api/metrics'
 import { resolveCapabilities } from '@/lib/capabilities'
-import { InstanceWorktableCard as InstanceWorktableCardView } from '@jianmanager/ui/components/views/instances/InstanceWorktableCard'
+import { InstanceWorktableCard as InstanceWorktableCardView } from '@/components/views/instances/InstanceWorktableCard'
 
 /**
  * 实例工作台卡的应用接线层（ADR-097 b 范式）。

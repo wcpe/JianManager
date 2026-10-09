@@ -1,6 +1,6 @@
 // 视图已迁至 @jianmanager/ui（ADR-097）；本层只做三个取数与回滚 mutation 的接线。
 import { useState } from 'react'
-import ConfigVersionDrawerView from '@jianmanager/ui/components/views/config-explorer/ConfigVersionDrawer'
+import ConfigVersionDrawerView from '@/components/views/config-explorer/ConfigVersionDrawer'
 import { useConfigVersions, useConfigDiff, useRollbackConfig } from '@/api/configs'
 
 interface ConfigVersionDrawerProps {

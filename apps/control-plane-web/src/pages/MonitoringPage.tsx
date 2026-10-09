@@ -22,7 +22,7 @@ import { DrillTargetPicker, type DrillTarget } from '@/components/charts/DrillTa
 import { InstanceRankingPanel } from '@/components/metrics/InstanceRankingPanel'
 import { CapacityForecastCard } from '@/components/metrics/CapacityForecastCard'
 import { SLOSection } from '@/components/metrics/SLOSection'
-import MonitoringPageView from '@jianmanager/ui/components/views/instances/MonitoringPage'
+import MonitoringPageView from '@/components/views/instances/MonitoringPage'
 import { useTranslation } from 'react-i18next'
 
 /** 据 target 选用的图定义集（平台 4 / 节点 6 / 实例 6）。 */

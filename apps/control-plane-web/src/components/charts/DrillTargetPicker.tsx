@@ -5,11 +5,11 @@ import type { NodeInfo } from '@/api/nodes'
 import {
   DrillTargetPicker as DrillTargetPickerView,
   type DrillTarget,
-} from '@jianmanager/ui/components/views/instances/DrillTargetPicker'
+} from '@/components/views/instances/DrillTargetPicker'
 
 // 类型与纯函数原样再导出（调用方与测试直接引用）。
-export type { DrillTarget, DrillNode } from '@jianmanager/ui/components/views/instances/DrillTargetPicker'
-export { targetKey } from '@jianmanager/ui/components/views/instances/DrillTargetPicker'
+export type { DrillTarget, DrillNode } from '@/components/views/instances/DrillTargetPicker'
+export { targetKey } from '@/components/views/instances/DrillTargetPicker'
 
 /** 候选窗口大小（与 InstancePicker 的约定一致）。 */
 const CANDIDATE_LIMIT = 50

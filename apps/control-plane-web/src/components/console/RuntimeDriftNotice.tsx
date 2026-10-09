@@ -3,7 +3,7 @@ import type { RuntimeDriftInfo } from '@/lib/runtime-drift'
 import {
   RuntimeDriftAdoptButton as RuntimeDriftAdoptButtonView,
   RuntimeDriftBanner as RuntimeDriftBannerView,
-} from '@jianmanager/ui/components/views/instances/RuntimeDriftNotice'
+} from '@/components/views/instances/RuntimeDriftNotice'
 
 /**
  * 运行态漂移提示的应用接线层（ADR-097）。
@@ -13,7 +13,7 @@ import {
  *
  * 接管不弹 toast——与迁移前一致：结果由后端状态与后续刷新体现，确认框本身已交代副作用。
  */
-export { RuntimeDriftBadge } from '@jianmanager/ui/components/views/instances/RuntimeDriftNotice'
+export { RuntimeDriftBadge } from '@/components/views/instances/RuntimeDriftNotice'
 
 export function RuntimeDriftAdoptButton({
   instanceId,

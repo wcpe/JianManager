@@ -8,7 +8,7 @@ import {
   useWhitelist,
   useWhitelistAction,
 } from '@/api/players'
-import InstancePlayersSegmentView from '@jianmanager/ui/components/views/instances/InstancePlayersSegment'
+import InstancePlayersSegmentView from '@/components/views/instances/InstancePlayersSegment'
 
 /**
  * 实例「玩家」分区的应用接线层（ADR-097 a 范式）。

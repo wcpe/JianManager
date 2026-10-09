@@ -1,6 +1,6 @@
 import { useCreateRollingOp, useRollingControl, useRollingOp } from '@/api/instanceRolling'
 import type { BatchSelectedInstance } from '@/components/InstanceBatchBar'
-import RollingBatchDialogView, { RollingProgress } from '@jianmanager/ui/components/views/instances/RollingBatchDialog'
+import RollingBatchDialogView, { RollingProgress } from '@/components/views/instances/RollingBatchDialog'
 
 /**
  * 滚动/分批/灰度编排对话框的应用接线层（ADR-097 b 范式）。

@@ -10,7 +10,7 @@ import {
   useFavoriteServers,
   useRecentServers,
 } from './server-selection'
-import ServerSelectorView from '@jianmanager/ui/components/views/instances/ServerSelector'
+import ServerSelectorView from '@/components/views/instances/ServerSelector'
 
 const PAGE_SIZE = 200
 

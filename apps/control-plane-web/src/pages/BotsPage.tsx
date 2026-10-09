@@ -52,7 +52,7 @@ import { Plus } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { InstancePicker } from '@/components/InstancePicker'
-import CreateBotDialogView from '@jianmanager/ui/components/views/instances/CreateBotDialog'
+import CreateBotDialogView from '@/components/views/instances/CreateBotDialog'
 
 /**
  * Bot 详情弹窗的取数接线层（ADR-097）：视图已入包，此处注入元数据、实时流与命令下发。

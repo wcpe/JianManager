@@ -7,7 +7,7 @@ import {
   type BusinessResult,
 } from '@/api/business'
 import { parseInventoryView, type InventoryView } from './inventory-view'
-import InventorySegmentView from '@jianmanager/ui/components/views/instances/InventorySegment'
+import InventorySegmentView from '@/components/views/instances/InventorySegment'
 
 /** manifest 里是否存在指定动作（按 action 精确判断，探针未连/无背包插件则降级）。 */
 function hasInventoryAction(output: unknown, action: string): boolean {

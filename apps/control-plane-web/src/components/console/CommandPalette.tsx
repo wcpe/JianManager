@@ -10,7 +10,7 @@ import { useConsoleStore } from '@/stores/console'
 import { flatNavItems } from './nav-config'
 import { prefetchRoute } from '@/lib/route-prefetch'
 import type { PaletteEntry } from '@jianmanager/ui/lib/command-palette'
-import CommandPaletteView from '@jianmanager/ui/components/views/instances/CommandPalette'
+import CommandPaletteView from '@/components/views/instances/CommandPalette'
 
 /**
  * 全局命令面板的应用接线层（ADR-097 a 范式）。

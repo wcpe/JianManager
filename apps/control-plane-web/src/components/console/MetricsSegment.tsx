@@ -15,7 +15,7 @@ import { CapacityForecastCard } from '@/components/metrics/CapacityForecastCard'
 import MetricsSegmentView, {
   type ProbeUpdateCardData,
   type ResourceLimitData,
-} from '@jianmanager/ui/components/views/instances/MetricsSegment'
+} from '@/components/views/instances/MetricsSegment'
 
 /**
  * 实例监控段的应用接线层（ADR-097 a 范式）。

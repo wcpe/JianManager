@@ -11,7 +11,7 @@ import {
   useRemoveInstanceGroupMembers,
 } from '@/api/instanceGroups'
 import { InstanceGroupTree } from './InstanceGroupTree'
-import { InstanceGroupManager as InstanceGroupManagerView } from '@jianmanager/ui/components/views/instances/InstanceGroupManager'
+import { InstanceGroupManager as InstanceGroupManagerView } from '@/components/views/instances/InstanceGroupManager'
 
 /**
  * 实例分组管理页的应用接线层（ADR-097 b 范式）。

@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useInstanceRanking } from '@/api/metrics'
-import { InstanceRankingPanel as InstanceRankingPanelView, type RankingWindow } from '@jianmanager/ui/components/views/instances/InstanceRankingPanel'
+import { InstanceRankingPanel as InstanceRankingPanelView, type RankingWindow } from '@/components/views/instances/InstanceRankingPanel'
 import type { RankingMetric } from '@jianmanager/ui/lib/ranking'
 
 // 纯逻辑格式化函数与窗口常量原样再导出（测试与其他页面直接引用）。
-export { fmtRankingValue, RANKING_WINDOWS } from '@jianmanager/ui/components/views/instances/InstanceRankingPanel'
+export { fmtRankingValue, RANKING_WINDOWS } from '@/components/views/instances/InstanceRankingPanel'
 
 /**
  * 全局排行面板的应用接线层（ADR-097 a 范式）。

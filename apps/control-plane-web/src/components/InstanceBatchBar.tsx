@@ -1,11 +1,11 @@
 import { toast } from 'sonner'
 import { useInstanceBatch } from '@/api/instances'
-import type { BatchSelectedInstance } from '@jianmanager/ui/components/views/instances/InstanceBatchBar'
-import InstanceBatchBarView from '@jianmanager/ui/components/views/instances/InstanceBatchBar'
+import type { BatchSelectedInstance } from '@/components/views/instances/InstanceBatchBar'
+import InstanceBatchBarView from '@/components/views/instances/InstanceBatchBar'
 import RollingBatchDialog from './RollingBatchDialog'
 
 // 原文件的导出名必须原样再导出，否则调用点（RollingBatchDialog 等）会断。
-export type { BatchSelectedInstance } from '@jianmanager/ui/components/views/instances/InstanceBatchBar'
+export type { BatchSelectedInstance } from '@/components/views/instances/InstanceBatchBar'
 
 /**
  * 实例批量操作栏的应用接线层（ADR-097 b 范式）。

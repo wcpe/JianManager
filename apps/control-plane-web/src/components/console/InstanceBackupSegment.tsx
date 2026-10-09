@@ -6,7 +6,7 @@ import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackup } from '
 import { useBackupStorages } from '@/api/backupStorages'
 import { useDeleteSchedule, useSchedules, useUpdateSchedule } from '@/api/schedules'
 import { hasActiveBackup } from '@/pages/backups-view'
-import InstanceBackupSegmentView from '@jianmanager/ui/components/views/instances/InstanceBackupSegment'
+import InstanceBackupSegmentView from '@/components/views/instances/InstanceBackupSegment'
 import { useTranslation } from 'react-i18next'
 
 /** 进行中备份时的轮询间隔（毫秒）：刷新进度直至完成（FR-151，复用 BackupsPage 模式）。 */

@@ -1,11 +1,11 @@
 import { useInstanceMetrics } from '@/api/metrics'
-import MetricsFallbackSegmentView from '@jianmanager/ui/components/views/instances/MetricsFallbackSegment'
+import MetricsFallbackSegmentView from '@/components/views/instances/MetricsFallbackSegment'
 
 /** 直探摘要及其数据类型随视图归包；这里再导出，保持既有引用路径可用。 */
 export {
   DirectProbeSummary,
   type DirectProbeSummaryData,
-} from '@jianmanager/ui/components/views/instances/MetricsFallbackSegment'
+} from '@/components/views/instances/MetricsFallbackSegment'
 
 /**
  * 轻量监控视图的应用接线层（ADR-097 a 范式）。
