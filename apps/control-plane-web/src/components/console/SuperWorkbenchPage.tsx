@@ -1,4 +1,4 @@
-import { SuperWorkbenchPage as SuperWorkbenchPageImpl } from '@jianmanager/ui'
+import { SuperWorkbenchPage as SuperWorkbenchPageImpl } from '@/components/views/console/SuperWorkbenchPage'
 import { useWorkspaceStore } from '@/stores/workspace'
 import WorkspaceCard from './WorkspaceCard'
 import TerminalPane from './TerminalPane'

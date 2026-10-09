@@ -11,15 +11,15 @@ import { useInstanceMetrics, useMetricOverview } from '@/api/metrics'
 import { useTasks } from '@/api/tasks'
 import { useNotificationFeed, useFeedUnreadCount } from '@/api/notification-feed'
 import { TopNav } from '@jianmanager/ui/components/shell'
-import { TasksMenu } from '@jianmanager/ui/components/views/console/TasksMenu'
-import { NotificationBell } from '@jianmanager/ui/components/views/console/NotificationBell'
-import { ClusterBadges, STAT_POPOVER_MAX_ROWS, type ClusterSlot } from '@jianmanager/ui/components/views/console/ClusterBadges'
-import { AccountMenu } from '@jianmanager/ui/components/views/console/AccountMenu'
+import { TasksMenu } from '@/components/views/console/TasksMenu'
+import { NotificationBell } from '@/components/views/console/NotificationBell'
+import { ClusterBadges, STAT_POPOVER_MAX_ROWS, type ClusterSlot } from '@/components/views/console/ClusterBadges'
+import { AccountMenu } from '@/components/views/console/AccountMenu'
 import {
   ConsoleBrandSegment,
   ConsoleRefreshButton,
   ConsoleSearchBox,
-} from '@jianmanager/ui/components/views/console/console-header-parts'
+} from '@/components/views/console/console-header-parts'
 import { useWorkspaceNavigation } from './use-workspace-navigation'
 
 /**

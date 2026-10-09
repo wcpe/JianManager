@@ -33,8 +33,12 @@ function resolveSourcePath(rel: string): string {
 }
 
 /**
- * 读应用侧源码。`@ui/` 前缀表示「本体已迁入组件库」（ADR-097），此时读包内实现——
- * 应用侧那个文件只是接线层（取数 + 注入），断言要落的是实现。
+ * 读应用侧源码。`@ui/` 前缀表示「该文件仍在组件库内」，此时读包内实现。
+ *
+ * 约定来源与现状：ADR-097 曾把业务视图并入组件库，故断言要落包内实现；此后业务视图
+ * 已陆续回迁应用侧，凡已回迁的文件直接写应用侧相对路径（如 `components/views/console/X.tsx`），
+ * 仅剩尚未回迁的（instances / config-explorer 等）继续用 `@ui/` 前缀读包内。
+ * 回迁全部完成后本前缀即可整体废弃。
  *
  * 不用「文件里出现 views 导入就跳转」这类启发式：普通组件也会导入 views 组件
  * （例如 BotWorktableCard 引 BotHealthBar），那样会被误判成接线层、读到别人的源码。
@@ -59,8 +63,8 @@ function readUiStyles(): string {
 /** 既参与 hover 抬升、又需在 FR-176 去位移的卡片/行原语。 */
 const HOVER_CARD_FILES = [
   'components/ui/panel.tsx',
-  '@ui/components/views/console/NodeWorktableCard.tsx',
-  '@ui/components/views/console/ConsoleLeafParts.tsx',
+  'components/views/console/NodeWorktableCard.tsx',
+  'components/views/console/ConsoleLeafParts.tsx',
   '@ui/components/views/instances/InstanceWorktableCard.tsx',
   'components/ui/summary-chips.tsx',
   '@ui/components/views/config-explorer/ConfigRow.tsx',

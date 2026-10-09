@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from 'react-router'
-import { ConsoleSidebar as ConsoleSidebarView } from '@jianmanager/ui'
+import { ConsoleSidebar as ConsoleSidebarView } from '@/components/views/console/ConsoleSidebar'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { useConsoleStore } from '@/stores/console'

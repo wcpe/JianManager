@@ -1,6 +1,6 @@
 import { Link } from 'react-router'
 
-import BcSegment from '@jianmanager/ui/components/views/console/BcSegment'
+import BcSegment from '@/components/views/console/BcSegment'
 import { useTopology } from '@/api/topology'
 
 /**

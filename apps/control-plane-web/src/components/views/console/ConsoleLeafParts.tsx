@@ -12,10 +12,10 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { BotHealthBar } from './BotHealthBar'
-import { toneChipClass, type Tone } from '../../../lib/tone'
-import type { BotSummaryGroup } from '../../../lib/bot'
-import type { InstanceBotBadge as InstanceBotBadgeData } from '../../../lib/bot-list'
-import type { GroupByDim } from '../../../lib/bots-overview'
+import { toneChipClass, type Tone } from '@jianmanager/ui/lib/tone'
+import type { BotSummaryGroup } from '@jianmanager/ui/lib/bot'
+import type { InstanceBotBadge as InstanceBotBadgeData } from '@jianmanager/ui/lib/bot-list'
+import type { GroupByDim } from '@jianmanager/ui/lib/bots-overview'
 
 // ── 实例树行内的 Bot 聚合徽标（FR-039）────────────────────────────────
 

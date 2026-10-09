@@ -1,5 +1,5 @@
 import { toast } from 'sonner'
-import { ConsoleOutputView as ConsoleOutputViewImpl } from '@jianmanager/ui'
+import { ConsoleOutputView as ConsoleOutputViewImpl } from '@/components/views/console/ConsoleOutputView'
 import type { ConsoleOutputViewProps } from '@jianmanager/ui'
 
 // 类型转出：调用点（InstanceConsoleView 等）沿用原路径导入，零改动。

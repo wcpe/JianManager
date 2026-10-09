@@ -1,5 +1,5 @@
 // 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入卡壳（受控化）。
-import { DirectorCanvas as DirectorCanvasView } from '@jianmanager/ui/components/views/console/DirectorCanvas'
+import { DirectorCanvas as DirectorCanvasView } from '@/components/views/console/DirectorCanvas'
 import type { PlacedCard } from '@/lib/workspace-preset'
 import WorkspaceCard from './WorkspaceCard'
 

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
-import type { SidebarLinkArgs } from '@jianmanager/ui/components/views/console/sidebar-link'
+import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 import type { NavGroup, NavSection } from '@jianmanager/ui/lib/nav-config'
 
 /** 收集一个分组下所有可导航路由，用于移动端主域高亮。 */

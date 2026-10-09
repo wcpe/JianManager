@@ -2,7 +2,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Download } from 'lucide-react'
-import { InstanceResourceCard as InstanceResourceCardView } from '@jianmanager/ui/components/views/console/InstanceResourceCard'
+import { InstanceResourceCard as InstanceResourceCardView } from '@/components/views/console/InstanceResourceCard'
 import ConfigExplorer from '@/components/config-explorer/ConfigExplorer'
 import UnifiedExplorerShell from '@/components/file-browser/UnifiedExplorerShell'
 import { instanceBrowseCapability, instanceFilesCapability } from '@/components/file-browser/capability'

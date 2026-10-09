@@ -12,7 +12,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { FieldLabel } from '@jianmanager/ui/components/field-label'
 import { Input } from '@jianmanager/ui/components/input'
-import { BotHealthBar } from '@jianmanager/ui/components/views/console/BotHealthBar'
+import { BotHealthBar } from '@/components/views/console/BotHealthBar'
 import type { BotInfo } from '@jianmanager/ui/lib/bot'
 import type { BotStatusCounts } from '@jianmanager/ui/lib/bot-list'
 import type { Distribution } from '@jianmanager/ui/lib/bots-overview'

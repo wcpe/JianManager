@@ -1,4 +1,4 @@
-import { ThemeSwitcher as ThemeSwitcherView } from '@jianmanager/ui'
+import { ThemeSwitcher as ThemeSwitcherView } from '@/components/views/console/ThemeSwitcher'
 import { useThemeStore } from '@/stores/theme'
 
 /**

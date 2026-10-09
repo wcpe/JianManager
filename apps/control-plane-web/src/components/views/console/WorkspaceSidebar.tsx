@@ -16,8 +16,8 @@ import {
   type ResourceNode,
   type ResourceStatus,
 } from '@jianmanager/ui/components/shell'
-import { ThemeSwitcher, type ThemeSwitcherProps } from '@jianmanager/ui/components/views/console/ThemeSwitcher'
-import type { SidebarLinkArgs } from '@jianmanager/ui/components/views/console/sidebar-link'
+import { ThemeSwitcher, type ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
+import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 import { statusDotKind } from '@jianmanager/ui/lib/instance-tree'
 import type { NavEntry } from '@jianmanager/ui/lib/nav-config'
 import { resolveWorkspacePath, type WorkspaceDef } from '@jianmanager/ui/lib/workspace-navigation'

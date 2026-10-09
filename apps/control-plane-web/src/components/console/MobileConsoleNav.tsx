@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router'
-import { MobileConsoleNav as MobileConsoleNavView } from '@jianmanager/ui'
+import { MobileConsoleNav as MobileConsoleNavView } from '@/components/views/console/MobileConsoleNav'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { navGroupsForPermissions, navGroupsForRole } from '@jianmanager/ui/lib/nav-config'

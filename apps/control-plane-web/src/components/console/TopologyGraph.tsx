@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { TopologyGraph as TopologyGraphView } from '@jianmanager/ui'
+import { TopologyGraph as TopologyGraphView } from '@/components/views/console/TopologyGraph'
 import { useTopology } from '@/api/topology'
 import { useNodes } from '@/api/nodes'
 import { useInstanceGroups } from '@/api/instanceGroups'

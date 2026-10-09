@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { toast } from 'sonner'
-import { TerminalPane as TerminalPaneImpl } from '@jianmanager/ui'
+import { TerminalPane as TerminalPaneImpl } from '@/components/views/console/TerminalPane'
 import type { TerminalPaneProps as TerminalPanePropsFull } from '@jianmanager/ui'
 import { useInstance, useStartInstance } from '@/api/instances'
 import { useTerminalToken } from '@/api/terminal'

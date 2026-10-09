@@ -1,6 +1,6 @@
 import { Link } from 'react-router'
 import { toast } from 'sonner'
-import { StoppedLogsView as StoppedLogsViewImpl } from '@jianmanager/ui'
+import { StoppedLogsView as StoppedLogsViewImpl } from '@/components/views/console/StoppedLogsView'
 import { useLogs } from '@/api/logs'
 
 /**

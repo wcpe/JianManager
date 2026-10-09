@@ -1,5 +1,5 @@
 // 外壳已迁至 @jianmanager/ui（ADR-097）；本层只把三段内容接线层注入插槽。
-import InstanceResourceSegmentView from '@jianmanager/ui/components/views/console/InstanceResourceSegmentView'
+import InstanceResourceSegmentView from '@/components/views/console/InstanceResourceSegmentView'
 import type { ResourceSegment } from '@jianmanager/ui/lib/instance-console-tabs'
 
 import InstanceConfigSurfacePanel from './InstanceConfigSurfacePanel'
