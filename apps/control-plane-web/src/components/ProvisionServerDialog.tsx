@@ -10,7 +10,7 @@ import { useCoreVersions, useResolvedCore, useProvisionServer } from '@/api/prov
 import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
 import ProvisionServerDialogView, {
   PROVISION_SERVER_QUERY_INIT,
-} from '@jianmanager/ui/components/views/provision/ProvisionServerDialogView'
+} from '@/components/views/provision/ProvisionServerDialogView'
 
 /** 搭建端点的错误形态（服务端 message + 部分失败时回带的 instance）。 */
 type ProvisionError = Error & { response?: { data?: { message?: string; instance?: unknown } } }

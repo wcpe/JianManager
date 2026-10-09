@@ -1,7 +1,7 @@
 // 视图已迁至 @jianmanager/ui（ADR-097）；本层只做初始化状态查询与创建请求接线。
 import { Navigate } from 'react-router'
 import { useSetupStatus, useSetup } from '@/api/setup'
-import { SetupPageView } from '@jianmanager/ui/components/views/auth/SetupPageView'
+import { SetupPageView } from '@/components/views/auth/SetupPageView'
 
 /**
  * 首次使用引导（FR-157）容器：初始化状态查询、「无需初始化」重定向与创建 mutation

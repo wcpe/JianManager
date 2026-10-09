@@ -3,7 +3,7 @@ import {
   SessionMetrics as SessionMetricsView,
   rangeResolution,
   type SessionMetricsRange,
-} from '@jianmanager/ui/components/views/bot-load/session/SessionMetrics'
+} from '@/components/views/bot-load/session/SessionMetrics'
 import { useBotLoadMetrics } from '@/api/bot-load'
 import { useSessionEvents } from './SessionEventProvider'
 

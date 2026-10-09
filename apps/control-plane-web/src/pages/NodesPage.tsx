@@ -75,7 +75,7 @@ import NodeRepairTab from '@/components/nodes/NodeRepairTab'
 import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialogContainer from '@/components/nodes/AddNodeDialogContainer'
 import { Button } from '@jianmanager/ui/components/button'
-import { BlockedByInstancesDialog } from '@jianmanager/ui/components/views/nodes/BlockedByInstancesDialog'
+import { BlockedByInstancesDialog } from '@/components/views/nodes/BlockedByInstancesDialog'
 import {
   ArchivedNodeListRow,
   formatBytes,
@@ -84,18 +84,18 @@ import {
   NodeListRow,
   NodeOverviewSection,
   NodeRailIcon,
-} from '@jianmanager/ui/components/views/nodes/NodeListParts'
-import { ArchivedNodeDetailPane } from '@jianmanager/ui/components/views/nodes/ArchivedNodeDetailPane'
+} from '@/components/views/nodes/NodeListParts'
+import { ArchivedNodeDetailPane } from '@/components/views/nodes/ArchivedNodeDetailPane'
 import {
   COMPARE_TARGET_CAP,
   NodeInstanceCompare,
   NodeMonitorCharts,
-} from '@jianmanager/ui/components/views/nodes/NodeCharts'
+} from '@/components/views/nodes/NodeCharts'
 import {
   DETAIL_TABS,
   NodeDetailPane,
   type DetailTab,
-} from '@jianmanager/ui/components/views/nodes/NodeDetailPane'
+} from '@/components/views/nodes/NodeDetailPane'
 
 
 /** 待二次确认的危险节点操作（FR-048）。 */

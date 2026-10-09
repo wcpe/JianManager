@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router'
 import {
   SESSION_BOTS_PAGE_SIZE,
   SessionBots as SessionBotsView,
-} from '@jianmanager/ui/components/views/bot-load/session/SessionBots'
+} from '@/components/views/bot-load/session/SessionBots'
 import { useBotLoadRunBots } from '@/api/bot-load'
 import { readBotFilter, writeBotFilter } from '@/lib/bot-load/filters'
 

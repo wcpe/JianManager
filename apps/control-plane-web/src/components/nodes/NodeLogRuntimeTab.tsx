@@ -11,7 +11,7 @@ import {
 import NodeLogRuntimePanel, {
   namespaceNames,
   type LogNamespace,
-} from '@jianmanager/ui/components/views/nodes/NodeLogRuntimePanel'
+} from '@/components/views/nodes/NodeLogRuntimePanel'
 
 /** 后端错误消息：优先 `message`，回退 `error` 字段（沿用迁移前的取值顺序）。 */
 function errorMessage(error: unknown): string {

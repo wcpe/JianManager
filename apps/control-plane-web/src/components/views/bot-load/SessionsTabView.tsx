@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus } from 'lucide-react'
-import { Button } from '../../button'
-import { Input } from '../../input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../table'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 
 /** 会话列表分页尺寸（容器取数须与本常量一致）。 */
 export const SESSIONS_TAB_PAGE_SIZE = 20

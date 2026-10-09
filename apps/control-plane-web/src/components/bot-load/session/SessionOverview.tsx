@@ -1,4 +1,4 @@
-import { SessionOverview as SessionOverviewView } from '@jianmanager/ui/components/views/bot-load/session/SessionOverviewParts'
+import { SessionOverview as SessionOverviewView } from '@/components/views/bot-load/session/SessionOverviewParts'
 import type { SessionTab } from '@/lib/bot-load/types'
 import { useSessionEvents } from './SessionEventProvider'
 

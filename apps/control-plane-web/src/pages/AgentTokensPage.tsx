@@ -23,7 +23,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import {
   AgentTokensPageView,
   type AgentTokenRow,
-} from '@jianmanager/ui/components/views/agent/AgentTokensPageView'
+} from '@/components/views/agent/AgentTokensPageView'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
 const ROLE_PLATFORM_ADMIN = 10
@@ -38,7 +38,7 @@ const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?
  * `AgentTokensPage.dom.test.tsx` 直接从本模块按名导入并逐项校验，经本文件再导出后，该守卫继续
  * 盯住视图真正使用的那份实现，而不是应用侧的一份副本（同 `McpActivityPage` 的 `WINDOW_PRESETS` 先例）。
  */
-export { parseIdInput, mergeIds, formatScopeSummary } from '@jianmanager/ui/components/views/agent/AgentTokensPageView'
+export { parseIdInput, mergeIds, formatScopeSummary } from '@/components/views/agent/AgentTokensPageView'
 
 /**
  * Agent Token 管理页容器（FR-387，消费 FR-384 API，ADR-097 b 范式）：平台管理员门禁、列表取数、

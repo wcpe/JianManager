@@ -8,18 +8,18 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowDown, ArrowUp, Search } from 'lucide-react'
-import type { DbColumn, DbRowsResult } from '../../../lib/db-contracts'
-import { cn } from '../../../lib/utils'
-import { normalizeColumns, normalizeRows, shouldShowEmptyRow } from '../../../lib/db-rows-view'
-import { Input } from '../../input'
-import { Button } from '../../button'
+import type { DbColumn, DbRowsResult } from '@jianmanager/ui/lib/db-contracts'
+import { cn } from '@jianmanager/ui/lib/utils'
+import { normalizeColumns, normalizeRows, shouldShowEmptyRow } from '@jianmanager/ui/lib/db-rows-view'
+import { Input } from '@jianmanager/ui/components/input'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '../../select'
+} from '@jianmanager/ui/components/select'
 import {
   Table,
   TableBody,
@@ -27,7 +27,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '../../table'
+} from '@jianmanager/ui/components/table'
 
 /** 受控行视图的状态；接口请求参数及其可选值映射留在应用容器。 */
 export interface DatabaseRowsState {

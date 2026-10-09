@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useNodeProxy, useUpdateNodeProxy } from '@/api/nodes'
-import NodeProxyPanel from '@jianmanager/ui/components/views/nodes/NodeProxyPanel'
+import NodeProxyPanel from '@/components/views/nodes/NodeProxyPanel'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {

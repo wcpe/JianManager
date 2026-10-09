@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   SESSION_EVENTS_PAGE_SIZE,
   SessionEvents as SessionEventsView,
-} from '@jianmanager/ui/components/views/bot-load/session/SessionEvents'
+} from '@/components/views/bot-load/session/SessionEvents'
 import { useBotLoadEvents } from '@/api/bot-load'
 import { useSessionEvents } from './SessionEventProvider'
 

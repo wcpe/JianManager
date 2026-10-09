@@ -15,7 +15,7 @@ import {
   useArtifactMigrationFailures,
 } from '@/api/artifactStorages'
 import { useCancelTask } from '@/api/tasks'
-import { ArtifactStoragesPageView } from '@jianmanager/ui/components/views/artifacts/ArtifactStoragesPageView'
+import { ArtifactStoragesPageView } from '@/components/views/artifacts/ArtifactStoragesPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案（守卫/409/422 都用它呈现准确原因）。 */
 function errMessage(err: unknown, fallback: string): string {

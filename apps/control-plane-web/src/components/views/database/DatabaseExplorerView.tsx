@@ -8,8 +8,8 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Database } from 'lucide-react'
-import type { DbTableInfo } from '../../../lib/db-contracts'
-import { cn } from '../../../lib/utils'
+import type { DbTableInfo } from '@jianmanager/ui/lib/db-contracts'
+import { cn } from '@jianmanager/ui/lib/utils'
 
 /** 表选择与取数由应用容器维护，包内仅展示左侧表树和右侧内容。 */
 export interface DatabaseExplorerViewProps {

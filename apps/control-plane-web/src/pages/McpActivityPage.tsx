@@ -11,7 +11,7 @@ import {
   McpActivityPageView,
   WINDOW_PRESETS,
   type McpWindowPreset,
-} from '@jianmanager/ui/components/views/agent/McpActivityPageView'
+} from '@/components/views/agent/McpActivityPageView'
 
 const ROLE_PLATFORM_ADMIN = 10
 

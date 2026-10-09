@@ -1,21 +1,21 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button } from '../../button'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../../dialog'
-import { FieldError, FieldLabel } from '../../field-label'
-import { Input } from '../../input'
-import { ScrollableDialogBody, scrollableDialogContentClass } from '../../scrollable-dialog'
+import { Button } from '@jianmanager/ui/components/button'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
+import { FieldError, FieldLabel } from '@jianmanager/ui/components/field-label'
+import { Input } from '@jianmanager/ui/components/input'
+import { ScrollableDialogBody, scrollableDialogContentClass } from '@jianmanager/ui/components/scrollable-dialog'
 import {
   COMMAND_ORCHESTRATION_V1,
   DEFAULT_STABLE_PROFILE,
   DEFAULT_STRICT_THRESHOLDS,
-} from '../../../lib/bot-load-presets'
-import type { BotLoadTemplate, BotLoadTemplateInput } from '../../../lib/bot-load-types'
+} from '@jianmanager/ui/lib/bot-load-presets'
+import type { BotLoadTemplate, BotLoadTemplateInput } from '@jianmanager/ui/lib/bot-load-types'
 import {
   validateCommandSchedule,
   validateLoadProfile,
   validateThresholds,
-} from '../../../lib/bot-load-validation'
+} from '@jianmanager/ui/lib/bot-load-validation'
 import { CommandPlanEditor } from './CommandPlanEditor'
 import { LoadProfileEditor } from './LoadProfileEditor'
 import { ThresholdEditor } from './ThresholdEditor'

@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import NodePortsPanel from './NodePortsPanel'
-import type { NodePorts } from '../../../lib/node-ports'
+import type { NodePorts } from '@jianmanager/ui/lib/node-ports'
 
 /**
  * 本文件自带局部 i18n 实例，而不复用 `src/test/i18n.tsx` 的共享实例。

@@ -7,7 +7,7 @@ import {
   useDeleteRuntime,
   useInstallRuntime,
 } from '@/api/runtimes'
-import NodeRuntimeSection from '@jianmanager/ui/components/views/nodes/NodeRuntimeSection'
+import NodeRuntimeSection from '@/components/views/nodes/NodeRuntimeSection'
 import NodePMConfigSection from '@/components/NodePMConfigSection'
 import NodeGlobalPackagesTab from '@/components/nodes/NodeGlobalPackagesTab'
 

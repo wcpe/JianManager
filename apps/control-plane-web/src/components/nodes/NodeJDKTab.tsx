@@ -10,7 +10,7 @@ import {
   useUpdateJDK,
 } from '@/api/jdks'
 import { useJDKCatalog } from '@/api/nodeRuntime'
-import NodeJDKPanel from '@jianmanager/ui/components/views/nodes/NodeJDKPanel'
+import NodeJDKPanel from '@/components/views/nodes/NodeJDKPanel'
 import { PingNodeButton } from '@/components/PingNodeButton'
 import DirectoryPicker from '@/components/DirectoryPicker'
 import NodeRuntimeTab from '@/components/nodes/NodeRuntimeTab'

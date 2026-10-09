@@ -5,7 +5,7 @@ import {
   useInstallGlobalPackage,
   useRemoveGlobalPackage,
 } from '@/api/pmConfig'
-import NodeGlobalPackagesSection from '@jianmanager/ui/components/views/nodes/NodeGlobalPackagesSection'
+import NodeGlobalPackagesSection from '@/components/views/nodes/NodeGlobalPackagesSection'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {
