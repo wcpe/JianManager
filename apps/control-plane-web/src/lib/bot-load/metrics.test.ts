@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { appendMetricPoints, clampChartPoints, formatRatio, formatLatencyMs } from '@/lib/bot-load-metrics'
-import type { BotLoadMetricPoint } from './types'
+import type { BotLoadMetricPoint } from '@/lib/bot-load-types'
 
 function pt(ts: string, connected: number): BotLoadMetricPoint {
   return {

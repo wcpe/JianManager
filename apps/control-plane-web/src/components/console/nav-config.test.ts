@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { flatNavItems, navGroupsForPermissions, navGroupsForRole, NAV_GROUPS, type NavGroup } from './nav-config'
+import { flatNavItems, navGroupsForPermissions, navGroupsForRole, NAV_GROUPS } from '@/lib/nav-config'
+import type { NavGroup } from '@/lib/nav-config'
 import { ALL_PERMISSION_NODE_IDS, ROLE_GROUP_VIEWER, ROLE_PLATFORM_ADMIN } from '@/lib/roles'
 
 const adminNodes = new Set(ALL_PERMISSION_NODE_IDS)

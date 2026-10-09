@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  parseInventoryView,
-  buildSlotGrid,
-  INVENTORY_SLOTS,
-  ENDER_CHEST_SLOTS,
-  type RawItemSlot,
-} from './inventory-view'
+import { parseInventoryView, buildSlotGrid, INVENTORY_SLOTS, ENDER_CHEST_SLOTS } from '@/lib/inventory-view'
+import type { RawItemSlot } from '@/lib/inventory-view'
 
 /** 构造一条原始物品槽（模拟探针 inventory.view 编码出的 encodeItem 结构）。 */
 function item(slot: number, extra: Partial<RawItemSlot> = {}): RawItemSlot {

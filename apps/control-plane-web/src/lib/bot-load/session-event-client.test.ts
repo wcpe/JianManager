@@ -1,11 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import {
-  parseSseBuffer,
-  BotLoadEventClient,
-  subscribeBotLoadRunStream,
-  __resetBotLoadStreamSingletonsForTest,
-  __botLoadStreamSharedCountForTest,
-} from './session-event-client'
+import { parseSseBuffer, BotLoadEventClient, subscribeBotLoadRunStream, __resetBotLoadStreamSingletonsForTest, __botLoadStreamSharedCountForTest } from '@/lib/bot-load-session-event-client'
 
 describe('parseSseBuffer', () => {
   it('解析 event/id/data 多行 data', () => {

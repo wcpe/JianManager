@@ -5,7 +5,8 @@ import { toast } from 'sonner'
 import { BotLoadWizard as BotLoadWizardView } from '@/components/views/bot-load/BotLoadWizard'
 import { useBotLoadNodes, useCreateBotLoadRun, useCreateBotLoadRunFromTemplate, usePreflightBotLoadRun, useStartBotLoadRun, type BotLoadTemplate } from '@/api/botLoad'
 import { InstancePicker } from '@/components/InstancePicker'
-import { draftTargetBots, type BotLoadWizardDraft } from '@/lib/bot-load/draft'
+import { draftTargetBots } from '@/lib/bot-load-draft'
+import type { BotLoadWizardDraft } from '@/lib/bot-load-draft'
 
 interface BotLoadWizardProps {
   open: boolean

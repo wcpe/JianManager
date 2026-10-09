@@ -2,7 +2,7 @@ import { keepPreviousData, queryOptions, useInfiniteQuery, useQuery, useMutation
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import api from '@/api/client'
-import { removeServer } from '@/components/console/server-selection'
+import { removeServer } from '@/lib/server-selection'
 import { apiErrorMessage } from '@/lib/api-error'
 import type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instance-batch'
 

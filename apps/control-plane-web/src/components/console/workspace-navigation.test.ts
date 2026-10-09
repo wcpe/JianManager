@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { LucideIcon } from 'lucide-react'
 
-import { AUTH_ROUTE_PATHS, SUB_ROUTE_PATTERNS, WORKSPACES, WORKSPACE_I18N_KEYS_TO_ADD, flatWorkspaceItems, resolveWorkspacePath, workspaceOfPath, workspacesForPermissions, workspacesForRole, WorkspaceKey } from '@/lib/workspace-navigation'
-import { NAV_GROUPS, flatNavItems, type NavGroup } from './nav-config'
+import { AUTH_ROUTE_PATHS, SUB_ROUTE_PATTERNS, WORKSPACES, WORKSPACE_I18N_KEYS_TO_ADD, flatWorkspaceItems, resolveWorkspacePath, workspaceOfPath, workspacesForPermissions, workspacesForRole } from '@/lib/workspace-navigation'
+import type { WorkspaceKey } from '@/lib/workspace-navigation'
+import { NAV_GROUPS, flatNavItems } from '@/lib/nav-config'
+import type { NavGroup } from '@/lib/nav-config'
 import { ALL_PERMISSION_NODE_IDS, DEFAULT_ROLE_NODES, ROLE_MEMBER, ROLE_PLATFORM_ADMIN } from '@/lib/roles'
 import zh from '@/i18n/zh.json'
 

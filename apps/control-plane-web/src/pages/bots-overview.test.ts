@@ -1,11 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  statusCounts,
-  healthSegments,
-  toListParams,
-  groupFilter,
-  distribution,
-} from './bots-overview'
+import { statusCounts, healthSegments, toListParams, groupFilter, distribution } from '@/lib/bots-overview'
 import type { BotSummary, BotSummaryGroup } from '@/api/bots'
 
 function group(key: string, total: number, online: number, label = key): BotSummaryGroup {

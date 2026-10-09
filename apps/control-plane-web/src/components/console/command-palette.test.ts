@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { searchPalette, PaletteSources } from '@/lib/command-palette'
+import { searchPalette } from '@/lib/command-palette'
+import type { PaletteSources } from '@/lib/command-palette'
 
 const src: PaletteSources = {
   instances: [

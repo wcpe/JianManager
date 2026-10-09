@@ -4,10 +4,13 @@ import {
   timeRangeToParams,
   normalizeLogScope,
   logScopeKey,
+  buildExportParams,
   computeVirtualWindow,
   TIME_RANGE_PRESETS,
   LOG_VIEWS,
-} from './logs-filters'
+} from '@/lib/logs-filters'
+import type { LogExportScope } from '@/lib/logs-filters'
+import type { LogQueryParams } from '@/api/logs'
 
 describe('logLevelStatus', () => {
   it('maps error to danger and warn to warning (unified with alerts semantics)', () => {

@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { dispatchBusiness, fetchBusinessManifest, type BusinessResult } from '@/api/business'
 import { fetchEconomyEvents, fetchEconomyLeaderboard, fetchEconomyMirror, type EconomyLeaderboardRow, type EconomyMirrorRow } from '@/api/economy'
-import { toLedgerRows } from './economy-view'
+import { toLedgerRows } from '@/lib/economy-view'
 import EconomySegmentView from '@/components/views/instances/EconomySegment'
 
 /**
