@@ -26,7 +26,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { useNodes } from '@/api/nodes'
 import { ClearConflictsDialog } from '@/components/ClearConflictsDialog'
-import { InstancePicker } from '@/components/InstancePicker'
+import { InstancePicker } from '@/components/instances/InstancePicker'
 import { LOGS_FEDERATION_KEYS, exportBlockedKeyForReasons } from '@/lib/logs-federation'
 import { LogsPageView } from '@/components/views/logs/LogsPageView'
 import type { LogsFilterState, LogsInsights, LogsView } from '@/components/views/logs/LogsPageView'

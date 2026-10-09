@@ -6,7 +6,7 @@ import { SecurityEventsView } from '@/components/views/client-dist/SecurityEvent
 import { SecurityEventRowView } from '@/components/views/client-dist/SecurityEventRowView'
 import type { ClientDistSecurityEvent } from '@/lib/client-dist-security-contracts'
 import { buildClientDistHref } from '@/lib/client-dist-query'
-import DangerConfirm from '@/components/DangerConfirm'
+import DangerConfirm from '@/components/common/DangerConfirm'
 import { useBlockClientDistIP, useClientDistSecurityEvents, useSetClientDistChannelProtection, useSetClientDistKeyState } from '@/api/clientDistSecurity'
 import { useSecurityQuery } from './security-shared'
 

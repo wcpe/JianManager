@@ -56,7 +56,7 @@ vi.mock('@/api/nodeRuntime', async (importOriginal) => {
     chmodNodePath: (...args: unknown[]) => chmodNodePath(...args),
   }
 })
-vi.mock('@/components/DirectoryPicker', () => ({
+vi.mock('@/components/nodes/DirectoryPicker', () => ({
   __esModule: true,
   default: ({ onPick }: { onPick: (p: string) => void }) => (
     <button type="button" onClick={() => onPick('/srv/paper')}>pick-dir</button>

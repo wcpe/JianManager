@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useNodeRuntimes, useScanRuntimes, useRegisterRuntime, useDeleteRuntime, useInstallRuntime } from '@/api/runtimes'
 import NodeRuntimeSection from '@/components/views/nodes/NodeRuntimeSection'
-import NodePMConfigSection from '@/components/NodePMConfigSection'
+import NodePMConfigSection from '@/components/nodes/NodePMConfigSection'
 import NodeGlobalPackagesTab from '@/components/nodes/NodeGlobalPackagesTab'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */

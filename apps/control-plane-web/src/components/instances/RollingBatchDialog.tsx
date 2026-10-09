@@ -1,5 +1,5 @@
 import { useCreateRollingOp, useRollingControl, useRollingOp } from '@/api/instanceRolling'
-import type { BatchSelectedInstance } from '@/components/InstanceBatchBar'
+import type { BatchSelectedInstance } from '@/components/instances/InstanceBatchBar'
 import RollingBatchDialogView, { RollingProgress } from '@/components/views/instances/RollingBatchDialog'
 
 /**

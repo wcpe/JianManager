@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { BotLoadWizard as BotLoadWizardView } from '@/components/views/bot-load/BotLoadWizard'
 import { useBotLoadNodes, useCreateBotLoadRun, useCreateBotLoadRunFromTemplate, usePreflightBotLoadRun, useStartBotLoadRun, type BotLoadTemplate } from '@/api/botLoad'
-import { InstancePicker } from '@/components/InstancePicker'
+import { InstancePicker } from '@/components/instances/InstancePicker'
 import { draftTargetBots } from '@/lib/bot-load-draft'
 import type { BotLoadWizardDraft } from '@/lib/bot-load-draft'
 

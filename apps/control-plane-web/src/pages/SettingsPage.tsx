@@ -8,7 +8,7 @@ import { changeLanguage } from '@/i18n'
 import { isPlatformAdmin } from '@/lib/roles'
 import { useSettings, useUpdateSettings } from '@/api/settings'
 import type { SettingCategory } from '@/lib/settings-form'
-import { OutboundTestButton } from '@/components/OutboundTestButton'
+import { OutboundTestButton } from '@/components/nodes/OutboundTestButton'
 import { SettingsPageView } from '@/components/views/settings/SettingsPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */

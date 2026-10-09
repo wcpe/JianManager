@@ -7,7 +7,7 @@ import { useNodes } from '@/api/nodes'
 import { useNodeJDKs } from '@/api/jdks'
 import { useInspectImportDir, useImportServer } from '@/api/importServer'
 import { checkNodePathAccess, chmodNodePath } from '@/api/nodeRuntime'
-import DirectoryPicker from '@/components/DirectoryPicker'
+import DirectoryPicker from '@/components/nodes/DirectoryPicker'
 import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
 import ImportServerWizardView, {
   makeImportServerQueryInit,
