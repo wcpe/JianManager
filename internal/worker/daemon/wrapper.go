@@ -47,6 +47,9 @@ type WrapperConfig struct {
 // 环境变量键名约定。Worker spawn wrapper 时写入这些变量。
 const (
 	EnvWrapperConfig = "JM_DAEMON_WRAPPER_CONFIG" // JSON 编码的 WrapperConfig
+	// javaHomeKey 是 JAVA_HOME 变量名。合成实例环境时须先剥离基线里继承的同名键，再按实例绑定注入，
+	// 避免实例的 Java 运行时被 Worker 自身环境决定（真机事故 2026-10-09，见 composeEnv 注释）。
+	javaHomeKey = "JAVA_HOME"
 )
 
 // controlCommand 是 Worker 通过 ChannelControl 下发的控制命令。
@@ -798,8 +801,14 @@ func writeEnvFile(cfg WrapperConfig) {
 
 // composeEnv 合成进程环境：基线 (os.Environ) + JAVA_HOME + PATH 前置 + 实例 EnvVars。
 // 与 internal/worker/process.ComposeEnv 行为一致，本地复制以避免 daemon ↔ process 包循环依赖。
+//
+// 一致性要求（真机事故 2026-10-09）：基线里**继承**的 JAVA_HOME 必须先剥离，再按 cfg.JavaHome 注入；
+// 实例 EnvVars 也须移除基线同名键（此前只 append，与 process 版并不一致）。否则实例的 Java 运行时
+// 会被 Worker 自身环境决定——真机 Worker 继承了 `~/.sdkman/candidates/java/current` 软链，该软链被
+// 切到 Java 8 后，Paper 1.20 实例全部启动即崩。
 func composeEnv(base []string, cfg WrapperConfig) []string {
 	out := append([]string(nil), base...)
+	out = dropEnvKey(out, javaHomeKey)
 
 	javaBin := cfg.JDKBinPath
 	if javaBin == "" && cfg.JavaHome != "" {
@@ -811,7 +820,7 @@ func composeEnv(base []string, cfg WrapperConfig) []string {
 	}
 
 	if cfg.JavaHome != "" {
-		out = append(out, "JAVA_HOME="+cfg.JavaHome)
+		out = append(out, javaHomeKey+"="+cfg.JavaHome)
 	}
 	if javaBin != "" {
 		replaced := false
@@ -827,9 +836,24 @@ func composeEnv(base []string, cfg WrapperConfig) []string {
 		}
 	}
 	for k, v := range cfg.EnvVars {
+		// 同名键移除基线旧值，确保子进程实际生效的是实例 env。
+		out = dropEnvKey(out, k)
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+// dropEnvKey 返回剔除所有键为 key 的条目后的切片（原地复用底层数组）。
+// 环境数组里出现重复键时，Go os/exec 只保留**最后**一个，故「先剔除、再追加」可确保
+// 实例侧的值是唯一且最终生效的那个，不受基线继承值影响。
+func dropEnvKey(env []string, key string) []string {
+	kept := env[:0]
+	for _, kv := range env {
+		if name, _, ok := splitEnvKey(kv); !ok || name != key {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
 }
 
 func splitEnvKey(kv string) (key, value string, ok bool) {

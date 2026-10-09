@@ -108,10 +108,24 @@ INFO Worker Node 已停止
 
 `go build ./...`、`CGO_ENABLED=0 go build ./apps/worker`、`gofmt`（改动面）、`go vet`、`go test ./internal/worker/process/... ./internal/worker/ -count=1`、`go test ./internal/worker/... -count=1`、`go test -race ./internal/worker/process/ ./internal/worker/daemon/ -count=1` 全绿；端到端用例另在真实 cgroup 内以 `-race` 跑通。
 
+### 4.4 生产实机复验（2026-10-09）
+
+本项自「生产复验未做」转为**已实测**，三条用户可感知的承诺逐条验证：
+
+| 承诺 | 实测动作 | 结果 |
+|---|---|---|
+| Worker 重启不牵连服务器 | 对运行中的生产单元 `systemctl --user restart jm-worker-node-main.service`（即本项要解决的触发动作） | **19/19 实例 java 全部存活**（修复前该动作全灭）；新 Worker 启动后自动收养全部活进程，并成功迁移 6 个子树至隔离目录；CP 侧确认 19/19 `RUNNING` |
+| CP 崩溃不牵连服务器 | 对生产 CP 发 `SIGKILL`（比 SIGTERM 更极端，等价 panic/OOM） | worker 存活，**21/21 实例存活**；CP 重启后反向隧道自动重建、实例状态自动对账 |
+| 重启后自动认领 | 承接上两条 | `RecoverDaemonInstances` + FR-497 收养在 Worker 与 CP 两侧均实测生效，无需人工干预 |
+
+部署侧修复（`KillMode=process`）经 drop-in 落地，并实测该 drop-in 对**重新创建**的同名 transient 单元同样生效（探针验证），故非一次性补救；A/B 对照实测 `control-group` 杀 cgroup 内子进程、`process` 不杀。
+
 ## 5. 风险与边界（如实登记）
 
 - **不覆盖 system 级 unit 以非特权用户运行的情形**：目标目录的父级（`/system.slice`）属 root，`mkdir` 会被拒 → 降级为原状（该场景的保障仍依赖 unit 的 `KillMode=process`）。本项的定位是补齐**运行期**纵深，不替代部署层配置。
+  **2026-10-09 实机补充**：该边界被真实触发，且比原描述更严——13 个 wrapper 位于 `/system.slice/ssh.service`（归 root、由 PID 1 收养），与目标（用户 slice）的**共同祖先是 root 的 `/`**，非特权用户在**任何** cgroup 祖先下都没有可写位置，因此**纯路径回退无解**（已实测确认，非推测）。已补的代码侧动作是「零迁移且 wrapper 仍存活时落 `cgroup.isolate_failed` 审计」（`m.pidAlive` 接缝），把「无保护」变成可观测事实，而不是继续尝试无解的路径推导。
 - **cgroup v1 不支持**：`/proc/self/cgroup` 无 `0::` 行即放弃迁移（保守不动）。
 - **不影响**：docker 实例（容器资源限额由 Docker Engine 注入，与本项无关）、`direct` 实例（非 systemd 单元子进程，本项不涉及）、日志 VL 受管子进程（生命周期本就与 Worker 绑定，不迁移）。
-- **生产复验未做**：本项不含部署动作；生产 unit 补 `KillMode=process` 属运维侧变更（脚本模板已含该项），另行执行。**首次重启仍会杀掉旧代码 spawn 的 wrapper**——投产后的第一次重启由「接管迁移」在起服后覆盖，故第二次起不再连坐；若要第一次即生效，需在新 Worker 起来并完成接管迁移之后再做重启。
+- **生产复验已完成**（原「生产复验未做」条目已由 §4.4 取代）：生产 unit 的 `KillMode=process` 以 drop-in 补齐并实测生效。原条目担心的「首次重启仍会杀掉旧代码 spawn 的 wrapper」在本次实测中**未发生**——该批 wrapper 因处于 `/system.slice/ssh.service`（非 Worker 单元）而不在连坐范围内；对仍留在 Worker 单元 cgroup 内的 wrapper，接管迁移按 §3.2 覆盖。
+- **已知残留**：13 个历史孤儿仍停在 `/system.slice/ssh.service`，其安全性来自「不在 Worker 单元内」而非隔离目录，若该 ssh 单元被重启仍会波及；隔离状态目前只落审计/日志，未上行到 CP 面板展示。
 - **无配置键**：为守住改动面（`internal/worker/process/**`、`internal/worker/daemon/**`、`apps/worker/main.go` 的信号/关闭路径），逃生开关用环境变量而非 `worker.yml`；若后续需要配置化，再按仓库既有 `SetDefault` 风格补键。

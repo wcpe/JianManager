@@ -119,6 +119,8 @@ type Manager struct {
 	recoverKillTree func(pid int) error
 	recoverPIDAlive func(pid int) bool
 	recoverSleep    func(d time.Duration)
+	// recoverMigrate 隔离接管子树的测试接缝；nil 使用现有 cgroup 迁移实现。
+	recoverMigrate func(pid int, instanceUUID string) (int, error)
 	// recoverBackoff 是接管 reconnect 的有界重试间隔序列（FR-455①）的注入点：
 	// 空/nil=默认 DefaultRecoverRetryBackoff（≈127s，覆盖分钟级瞬时故障）；
 	// 由 worker main 按配置 recover.retry_backoff 经 SetRecoverRetryBackoff 装配（测试注入小值）。
@@ -1323,14 +1325,36 @@ func (m *Manager) isolateAdoptedWrapper(instanceUUID string, rec *daemon.PIDReco
 	if rec.WrapperPID <= 0 {
 		return
 	}
-	moved, err := daemon.MigratePIDTreeToCgroup(rec.WrapperPID, instanceUUID)
+	migrate := m.recoverMigrate
+	if migrate == nil {
+		migrate = daemon.MigratePIDTreeToCgroup
+	}
+	moved, err := migrate(rec.WrapperPID, instanceUUID)
 	if err != nil {
 		slog.Warn("接管实例的 daemon 子树迁出 Worker 单元 cgroup 失败，保持原状",
 			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "error", err)
+		m.auditOrphan("cgroup.isolate_failed", instanceUUID,
+			fmt.Sprintf(`{"wrapperPid":%d,"moved":%d,"reason":"迁移调用失败"}`, rec.WrapperPID, moved), false, err.Error())
 		return
 	}
 	if moved > 0 {
 		slog.Info("已把接管的 daemon 子树迁出 Worker 单元 cgroup（单元重启不再连坐）",
 			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "moved", moved)
+		return
 	}
+	// moved==0 且 wrapper 仍存活 = **一个进程都没迁成**，实例仍在 Worker 单元 cgroup 内，下一次
+	// `systemctl restart` 会被连坐杀掉。此前这里没有任何输出（`moved > 0` 分支不成立即静默返回），
+	// 真机后果（2026-10-09 事故）：13 个 wrapper 因源在当前用户无写权限的单元（如 /system.slice）
+	// 而无从迁移，逐进程 WARN 只落在 wrapper 侧日志里，CP 侧看不到「这批实例已无保护」。
+	//
+	// 因此显式落审计（非静默），让「无隔离保护」成为可观测事实而非隐性风险。注意与「wrapper 已退出」
+	// 区分：后者无需保护，不算失败。
+	if !m.pidAlive(rec.WrapperPID) {
+		return
+	}
+	m.auditOrphan("cgroup.isolate_failed", instanceUUID,
+		fmt.Sprintf(`{"wrapperPid":%d,"javaPid":%d,"moved":0,"reason":"实例仍在 Worker 单元 cgroup 内，重启该单元会被连坐"}`,
+			rec.WrapperPID, rec.JavaPID), false, "")
+	slog.Warn("接管实例未能获得 cgroup 隔离，实例仍在 Worker 单元 cgroup 内（重启该单元会被连坐）",
+		"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID)
 }

@@ -37,3 +37,14 @@
 - **正面**：`systemctl restart <worker 单元>` 在 cgroup 维度也碰不到 daemon 子树，wrapper 与 java 存活并由下一次启动接管；该保障与 unit 的 `KillMode` 取值解耦（配置正确时是纵深防御，配置漂移时是唯一防线）。
 - **代价与边界**：新增一处对 cgroup 层级的写操作（隔离目录 `jianmanager-daemons/<uuid>`），需回收——wrapper 正常退出自清，被 `kill -9` 留下的空壳由 Worker 启动清扫（只删空目录）。**不覆盖** cgroup v1 与「system 级 unit 以非特权用户运行」（父目录属 root，降级为原状，其保障仍依赖 unit 的 `KillMode=process`）。
 - **可转红防护**：真实进程端到端用例（`internal/worker/process/shutdown_cgroup_test.go`）与真实二进制三臂实验共同钉住该行为；逐字移除自迁调用即转红（见 spec §4）。
+
+## 实机确认（2026-10-09，上述边界被真实触发）
+
+真机同时命中本 ADR 两条已登记边界，可作为后续评审的现场证据：
+
+1. **部署层漂移**：实际运行的 `jm-worker-node-main.service` 是仓库外手工创建的 transient 单元，`KillMode=control-group`（`Slice=jm-logs.slice`），而 `scripts/install-worker.sh` 生成的 `jm-prod-worker.service`（`KillMode=process`）处于 inactive。决策 2 的「部署期配置不能承担运行期承诺」被直接验证。**已用 drop-in 补齐**：`~/.config/systemd/user/jm-worker-node-main.service.d/10-killmode.conf` 写入 `KillMode=process`，`daemon-reload` 即生效、无需重启或中断实例。已实测该 drop-in 对**重新创建**的同名 transient 单元同样生效（探针验证），故不是一次性补救。A/B 对照实测：`control-group` 重启会杀该 cgroup 内的子进程，`process` 不会。
+2. **代码层降级路径**：13 个 wrapper 位于 `/system.slice/ssh.service`（归 root，由 PID 1 收养），隔离目标在用户 slice 内，二者**共同祖先是 root 的 `/`**——非特权用户在**任何** cgroup 祖先下都没有可写位置，纯路径回退无解（实测确认，非推测）。日志累计 9102 次 `permission denied`。此处本 ADR 原设计即「只告警、保持原状」，但**告警落在 wrapper 侧且接管路径在零迁移时无任何输出**，导致「这批实例已失去隔离保护」对 CP 不可见。**已补**：接管路径在「零迁移且 wrapper 仍存活」时落 `cgroup.isolate_failed` 审计（`m.pidAlive` 接缝），使无保护成为可观测事实。
+
+**验收实测**（同一现场）：对运行中的生产单元执行 `systemctl --user restart`（即本 ADR 要解决的触发动作），**19/19 实例 java 全部存活**（修复前该动作全灭），新 Worker 自动收养全部活进程并成功迁移 6 个子树；CP 侧确认 19/19 `RUNNING`。另实测对生产 CP 发 `SIGKILL`：worker 存活、21/21 实例存活，CP 重启后隧道自动重建、实例状态自动对账（验证「CP 崩溃不牵连服务器」与「重启自动认领」）。
+
+**仍未覆盖（作为已知残留）**：源单元归 root 时非特权用户无解，只能靠部署侧 `KillMode` 或把 Worker 移入用户单元；隔离状态目前只落审计/日志，未上行到 CP 面板展示。
