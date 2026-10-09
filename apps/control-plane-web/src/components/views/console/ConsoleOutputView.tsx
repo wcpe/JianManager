@@ -15,29 +15,17 @@ import { useTranslation } from 'react-i18next'
 import { cn } from '@jianmanager/ui'
 
 import { copyToClipboard } from '@/lib/clipboard'
-import { parseAnsi, type AnsiSegment } from '@/lib/console-ansi'
+import { parseAnsi } from '@/lib/console-ansi'
+import type { AnsiSegment } from '@/lib/console-ansi'
 import type { LogLine } from '@/lib/console-log-line'
-import {
-  CONSOLE_CELL_BODY,
-  CONSOLE_CELL_LEVEL,
-  CONSOLE_CELL_SOURCE,
-  CONSOLE_CELL_TS,
-  isSameMatch,
-  matchesForCell,
-  type ConsoleSearchMatch,
-} from '@/lib/console-search'
-import {
-  edgeScrollStep,
-  isLineSelected,
-  linesInRange,
-  selectionText,
-  seqRangeBounds,
-  useEdgeAutoScroll,
-  useSeqSelection,
-  type SeqRange,
-} from '@/lib/console-selection'
-import { buildStackBlocks, stackBlockText, visibleConsoleRows, type StackBlock } from '@/lib/console-stack-block'
-import { estimateRowLines, type WrapWidthSpec } from '@/lib/console-wrap'
+import { CONSOLE_CELL_BODY, CONSOLE_CELL_LEVEL, CONSOLE_CELL_SOURCE, CONSOLE_CELL_TS, isSameMatch, matchesForCell } from '@/lib/console-search'
+import type { ConsoleSearchMatch } from '@/lib/console-search'
+import { edgeScrollStep, isLineSelected, linesInRange, selectionText, seqRangeBounds, useEdgeAutoScroll, useSeqSelection } from '@/lib/console-selection'
+import type { SeqRange } from '@/lib/console-selection'
+import { buildStackBlocks, stackBlockText, visibleConsoleRows } from '@/lib/console-stack-block'
+import type { StackBlock } from '@/lib/console-stack-block'
+import { estimateRowLines } from '@/lib/console-wrap'
+import type { WrapWidthSpec } from '@/lib/console-wrap'
 import { useVirtualRows } from '@/lib/virtual-list'
 
 /**

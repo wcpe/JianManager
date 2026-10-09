@@ -1,12 +1,6 @@
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router'
-import {
-  useStartInstance,
-  useStopInstance,
-  useRestartInstance,
-  isProvisioningInstance,
-  type InstanceInfo,
-} from '@/api/instances'
+import { useStartInstance, useStopInstance, useRestartInstance, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
 import { runtimeDriftOf } from '@/lib/runtime-drift'
 import { useInstanceMetrics } from '@/api/metrics'
 import { resolveCapabilities } from '@/lib/capabilities'

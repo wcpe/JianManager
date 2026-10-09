@@ -3,13 +3,12 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 import { useAuthStore } from '@/stores/auth'
-import { useAgentCallLogs, type AgentCallLogFilter } from '@/api/agentObservability'
+import { useAgentCallLogs } from '@/api/agentObservability'
+import type { AgentCallLogFilter } from '@/api/agentObservability'
 import { useAgentTokens } from '@/api/agentTokens'
 import { Button } from '@jianmanager/ui/components/button'
-import {
-  AgentCallLogsPageView,
-  type AgentCallLogsQuery,
-} from '@/components/views/agent/AgentCallLogsPageView'
+import { AgentCallLogsPageView } from '@/components/views/agent/AgentCallLogsPageView'
+import type { AgentCallLogsQuery } from '@/components/views/agent/AgentCallLogsPageView'
 
 const ROLE_PLATFORM_ADMIN = 10
 

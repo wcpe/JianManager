@@ -22,23 +22,10 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import {
-  ConfigRow,
-  ConfigSummaryChips,
-  ConfigViewToggle,
-  type ConfigView,
-} from '@/components/views/config-explorer/ConfigRow'
-import {
-  BACKUP_COMPLETED,
-  BACKUP_MODE_INCREMENTAL,
-  backupStatusKey,
-  backupStatusLevel,
-  countDependents,
-  formatSizeMb,
-  isIncrementalChild,
-  summarizeBackups,
-  type BackupInfo,
-} from '@/lib/backup'
+import { ConfigRow, ConfigSummaryChips, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
+import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
+import { BACKUP_COMPLETED, BACKUP_MODE_INCREMENTAL, backupStatusKey, backupStatusLevel, countDependents, formatSizeMb, isIncrementalChild, summarizeBackups } from '@/lib/backup'
+import type { BackupInfo } from '@/lib/backup'
 
 /**
  * 可选备份存储位置（本视图渲染下拉与解析存储名所需的最小字段集）。

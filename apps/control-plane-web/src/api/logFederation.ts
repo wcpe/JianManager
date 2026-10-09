@@ -11,21 +11,7 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
-import {
-  PARTIAL_REASONS,
-  classifyLogViewState,
-  resolveExportDownloadAffordance,
-  toCoverageBannerProps,
-  type ClassifiedLogViewState,
-  type Coverage,
-  type CoverageBannerProps,
-  type ExportDownloadAffordance,
-  type LogFederationResponse,
-  type PartialReason,
-  type Quality,
-  type TargetCoverage,
-  type TargetQueryStatus,
-} from '@/lib/logs-federation'
+import { PARTIAL_REASONS, classifyLogViewState, resolveExportDownloadAffordance, toCoverageBannerProps, type ClassifiedLogViewState, type Coverage, type CoverageBannerProps, type ExportDownloadAffordance, type LogFederationResponse, type PartialReason, type Quality, type TargetCoverage, type TargetQueryStatus } from '@/lib/logs-federation'
 
 /** 后端 ErrFederatedNotReady 错误文案（internal/controlplane/service/log_legacy.go）。 */
 export const FEDERATED_NOT_READY_MESSAGE = 'federated log query path not ready'

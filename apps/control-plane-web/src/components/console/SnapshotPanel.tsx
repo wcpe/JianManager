@@ -1,9 +1,4 @@
-import {
-  useCreateSnapshot,
-  useDeleteSnapshot,
-  useInstanceSnapshots,
-  useRollbackSnapshot,
-} from '@/api/snapshots'
+import { useCreateSnapshot, useDeleteSnapshot, useInstanceSnapshots, useRollbackSnapshot } from '@/api/snapshots'
 import { useInstance } from '@/api/instances'
 import { usePermissionsStore } from '@/stores/permissions'
 import SnapshotPanelView from '@/components/views/instances/SnapshotPanel'

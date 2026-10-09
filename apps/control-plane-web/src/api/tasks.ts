@@ -11,10 +11,10 @@ import api from '@/api/client'
 // 类型与纯逻辑（终态判定、kind 文案键、轮询启停）已回迁应用侧（原 ADR-097 迁包已撤销）；
 // 此处转出，调用点零改动。本模块只保留取数 hook 与请求参数类型。
 import { tasksRefetchInterval } from '@/lib/task-status'
-import { TaskState, Task, TaskLog, TaskPage } from '@/lib/task-status'
+import type { TaskState, Task, TaskLog, TaskPage } from '@/lib/task-status'
 
 export { isTerminalTask, tasksRefetchInterval, TASK_KIND_LABEL_KEYS, ACTIVE_TASKS_REFETCH_MS } from '@/lib/task-status'
-export { TaskState, Task, TaskLog, TaskPage } from '@/lib/task-status'
+export type { TaskState, Task, TaskLog, TaskPage } from '@/lib/task-status'
 
 /** 任务列表筛选（FR-227）+ 分页窗口（FR-337）。空字段不传。 */
 export interface TaskListParams {

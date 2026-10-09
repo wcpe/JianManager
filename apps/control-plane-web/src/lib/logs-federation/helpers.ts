@@ -13,18 +13,7 @@
  */
 import { LOGS_FEDERATION_KEYS, reasonI18nKey } from './i18n'
 import { PARTIAL_REASONS } from './types'
-import type {
-  ClassifiedLogViewState,
-  Coverage,
-  CoverageBannerProps,
-  CoverageTargetStats,
-  ExportDownloadAffordance,
-  FormattedCoverageSummary,
-  LogFederationResponse,
-  LogViewState,
-  PartialReason,
-  Quality,
-} from './types'
+import type { ClassifiedLogViewState, Coverage, CoverageBannerProps, CoverageTargetStats, ExportDownloadAffordance, FormattedCoverageSummary, LogFederationResponse, LogViewState, PartialReason, Quality } from './types'
 
 /** 空目标统计。 */
 const EMPTY_STATS: CoverageTargetStats = {

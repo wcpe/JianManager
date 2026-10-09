@@ -4,20 +4,11 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import {
-  useRuntimeAssetsOverview,
-  useRefreshRuntimeAssets,
-  useDeleteRuntimeJDK,
-  useDeleteAsset,
-  useImportAsset,
-} from '@/api/runtimeAssets'
+import { useRuntimeAssetsOverview, useRefreshRuntimeAssets, useDeleteRuntimeJDK, useDeleteAsset, useImportAsset } from '@/api/runtimeAssets'
 import { useSearchInstances } from '@/api/instances'
 import { useBatchDeployPlugins } from '@/api/plugins'
-import {
-  RuntimeAssetsInstancePickerView,
-  RuntimeAssetsPageView,
-  type RuntimeAssetsInstancePickerArgs,
-} from '@/components/views/runtime-assets/RuntimeAssetsPageView'
+import { RuntimeAssetsInstancePickerView, RuntimeAssetsPageView } from '@/components/views/runtime-assets/RuntimeAssetsPageView'
+import type { RuntimeAssetsInstancePickerArgs } from '@/components/views/runtime-assets/RuntimeAssetsPageView'
 import ArtifactReconcileSection from './ArtifactReconcileSection'
 
 /** API 错误形状（占用方提示从 message + instances 字段取）。 */

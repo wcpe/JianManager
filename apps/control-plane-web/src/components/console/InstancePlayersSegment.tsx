@@ -1,13 +1,5 @@
 import { toast } from 'sonner'
-import {
-  useBanPlayer,
-  useBans,
-  useKickPlayer,
-  useOnlinePlayers,
-  useUnbanPlayer,
-  useWhitelist,
-  useWhitelistAction,
-} from '@/api/players'
+import { useBanPlayer, useBans, useKickPlayer, useOnlinePlayers, useUnbanPlayer, useWhitelist, useWhitelistAction } from '@/api/players'
 import InstancePlayersSegmentView from '@/components/views/instances/InstancePlayersSegment'
 
 /**

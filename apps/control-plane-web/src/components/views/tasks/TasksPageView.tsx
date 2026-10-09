@@ -25,7 +25,8 @@ import {
 import { ListSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import { isNetworkDownloadFailure } from '@/lib/download-failure'
-import { isTerminalTask, TASK_KIND_LABEL_KEYS, type Task, type TaskLog, type TaskState } from '@/lib/task-status'
+import { isTerminalTask, TASK_KIND_LABEL_KEYS } from '@/lib/task-status'
+import type { Task, TaskLog, TaskState } from '@/lib/task-status'
 import { useVirtualRows } from '@/lib/virtual-list'
 import { cn } from '@jianmanager/ui'
 

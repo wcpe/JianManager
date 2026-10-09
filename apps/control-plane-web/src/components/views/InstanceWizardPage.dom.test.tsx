@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
-import { InstanceWizardPage, type InstanceWizardPageProps } from '@/components/views/InstanceWizardPage'
+import { InstanceWizardPage } from '@/components/views/InstanceWizardPage'
+import type { InstanceWizardPageProps } from '@/components/views/InstanceWizardPage'
 
 /**
  * FR-230 创建实例向导 · 受控视图测（ADR-097 a 范式）。

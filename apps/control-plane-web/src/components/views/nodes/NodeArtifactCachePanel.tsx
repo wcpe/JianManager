@@ -2,14 +2,8 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Trash2, Copy, Database, FileArchive, Search } from 'lucide-react'
 import { copyToClipboard } from '@/lib/clipboard'
-import {
-  formatCacheBytes,
-  capGiBToBytes,
-  capBytesToGiB,
-  describeCap,
-  type ArtifactCacheItem,
-  type ArtifactCacheView,
-} from '@/lib/artifact-cache'
+import { formatCacheBytes, capGiBToBytes, capBytesToGiB, describeCap } from '@/lib/artifact-cache'
+import type { ArtifactCacheItem, ArtifactCacheView } from '@/lib/artifact-cache'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'

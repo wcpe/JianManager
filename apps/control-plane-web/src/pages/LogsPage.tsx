@@ -12,23 +12,13 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { exportLogs, useLegacyLogs, useLogs, type LogEntry, type LogQueryParams } from '@/api/logs'
-import {
-  buildFederationResult,
-  exportFederatedLogs,
-  useLogsFederation,
-  useLogsFederationFacets,
-  useLogsFederationStats,
-} from '@/api/logFederation'
+import { buildFederationResult, exportFederatedLogs, useLogsFederation, useLogsFederationFacets, useLogsFederationStats } from '@/api/logFederation'
 import { useAuthStore } from '@/stores/auth'
 import { useNodes } from '@/api/nodes'
 import { InstancePicker } from '@/components/InstancePicker'
 import { LOGS_FEDERATION_KEYS } from '@/lib/logs-federation'
-import {
-  LogsPageView,
-  type LogsFilterState,
-  type LogsInsights,
-  type LogsView,
-} from '@/components/views/logs/LogsPageView'
+import { LogsPageView } from '@/components/views/logs/LogsPageView'
+import type { LogsFilterState, LogsInsights, LogsView } from '@/components/views/logs/LogsPageView'
 import {
   buildExportParams,
   timeRangeToParams,

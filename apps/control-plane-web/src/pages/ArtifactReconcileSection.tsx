@@ -3,19 +3,9 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import {
-  useCleanupOrphans,
-  useReconcileDiffs,
-  useReconcileRuns,
-  useReconcileSettings,
-  useResolveMissing,
-  useTriggerReconcile,
-  useUpdateReconcileSettings,
-} from '@/api/artifactReconcile'
-import {
-  ArtifactReconcileSectionView,
-  type ArtifactReconcileRunView,
-} from '@/components/views/artifacts/ArtifactReconcileSectionView'
+import { useCleanupOrphans, useReconcileDiffs, useReconcileRuns, useReconcileSettings, useResolveMissing, useTriggerReconcile, useUpdateReconcileSettings } from '@/api/artifactReconcile'
+import { ArtifactReconcileSectionView } from '@/components/views/artifacts/ArtifactReconcileSectionView'
+import type { ArtifactReconcileRunView } from '@/components/views/artifacts/ArtifactReconcileSectionView'
 
 /** 差异列表每页条数；同时是查询参数与分页器算页数的依据。 */
 const DIFF_PAGE_SIZE = 50

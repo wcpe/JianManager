@@ -26,7 +26,8 @@ import { instanceStatusLevel } from '@jianmanager/ui'
 import { envOf, freeTagsOf } from '@/lib/instance-grouping'
 import type { InstanceInfo } from '@/lib/instance-types'
 import { RoleBadge } from '@/components/views/instances/InstanceTableParts'
-import { RuntimeDriftBadge, type RuntimeDriftInfoView } from '@/components/views/instances/RuntimeDriftNotice'
+import { RuntimeDriftBadge } from '@/components/views/instances/RuntimeDriftNotice'
+import type { RuntimeDriftInfoView } from '@/components/views/instances/RuntimeDriftNotice'
 
 /**
  * 实例状态 → i18n 文案键（与实例页状态筛选项同源）。

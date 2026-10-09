@@ -1,16 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  type Bounded,
-  type ProbeServerState,
-  type ServerSection,
-  type ServerStateResponse,
-  type JvmSection,
-  type ClassloaderSection,
-  type SchedulerSection,
-  type ListenersSection,
-  type WorldEntry,
-} from '@/lib/server-state'
+import type { Bounded, ProbeServerState, ServerSection, ServerStateResponse, JvmSection, ClassloaderSection, SchedulerSection, ListenersSection, WorldEntry } from '@/lib/server-state'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'

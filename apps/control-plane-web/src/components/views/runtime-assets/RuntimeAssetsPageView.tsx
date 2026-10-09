@@ -40,15 +40,8 @@ import type { AssetTypeGroup, JDKMatrixItem, RuntimeMatrixEntry } from '@/lib/ru
 import { formatRelativeTime } from '@/lib/relative-time'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 import { cn } from '@jianmanager/ui'
-import {
-  buildRuntimeGrid,
-  DEFAULT_ASSET_FILTER,
-  filterAssetGroups,
-  formatBytes,
-  RUNTIME_TYPE_LABEL,
-  shortSha,
-  type AssetFilter,
-} from '@/lib/runtime-assets-view'
+import { buildRuntimeGrid, DEFAULT_ASSET_FILTER, filterAssetGroups, formatBytes, RUNTIME_TYPE_LABEL, shortSha } from '@/lib/runtime-assets-view'
+import type { AssetFilter } from '@/lib/runtime-assets-view'
 
 /** 状态等级 → 色点类（实例状态前导点）。 */
 const LEVEL_DOT: Record<StatusLevel, string> = {

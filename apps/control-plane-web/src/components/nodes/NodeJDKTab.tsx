@@ -1,14 +1,7 @@
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  useNodeJDKs,
-  useCreateJDK,
-  useDeleteJDK,
-  useInstallJDK,
-  useProbeJDK,
-  useUpdateJDK,
-} from '@/api/jdks'
+import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK, useProbeJDK, useUpdateJDK } from '@/api/jdks'
 import { useJDKCatalog } from '@/api/nodeRuntime'
 import NodeJDKPanel from '@/components/views/nodes/NodeJDKPanel'
 import { PingNodeButton } from '@/components/PingNodeButton'

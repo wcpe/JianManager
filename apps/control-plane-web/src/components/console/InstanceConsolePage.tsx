@@ -14,19 +14,10 @@ import { useLogs } from '@/api/logs'
 import { useNodes } from '@/api/nodes'
 import { useServerState } from '@/api/serverState'
 import { buildWatchItems } from '@/components/views/console/console-kpi-parts'
-import {
-  InstanceConsoleOverviewPanel,
-  InstanceConsolePageView,
-} from '@/components/views/console/InstanceConsolePageView'
+import { InstanceConsoleOverviewPanel, InstanceConsolePageView } from '@/components/views/console/InstanceConsolePageView'
 import type { InstanceConsoleLinkArgs } from '@/components/views/console/InstanceConsolePageView'
-import {
-  TAB_CARD_TYPE,
-  TAB_KEYS,
-  readActiveTab,
-  readResourceSegment,
-  visibleTabsFor,
-  type TabKey,
-} from '@/lib/instance-console-tabs'
+import { TAB_CARD_TYPE, TAB_KEYS, readActiveTab, readResourceSegment, visibleTabsFor } from '@/lib/instance-console-tabs'
+import type { TabKey } from '@/lib/instance-console-tabs'
 import { useInstanceCapabilities, hasCapability } from '@/lib/capabilities'
 import InstanceActivityFeed from './InstanceActivityFeed'
 import InstanceBackupSegment from './InstanceBackupSegment'

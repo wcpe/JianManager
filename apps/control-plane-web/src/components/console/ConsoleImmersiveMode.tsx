@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
 import { ConsoleImmersiveMode as ConsoleImmersiveModeImpl } from '@/components/views/console/ConsoleImmersiveMode'
-import type { ConsoleImmersiveModeProps as ConsoleImmersiveModePropsFull } from '@jianmanager/ui'
+import type { ConsoleImmersiveModeProps as ConsoleImmersiveModePropsFull } from '@/components/views/console/ConsoleImmersiveMode'
 import { useInstance, useInstanceSearch } from '@/api/instances'
 import { useInstanceMetrics } from '@/api/metrics'
 

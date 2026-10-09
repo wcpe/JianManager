@@ -1,11 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  useArtifactCache,
-  useEvictArtifactCache,
-  useClearArtifactCache,
-  useSetArtifactCacheCap,
-} from '@/api/nodeRuntime'
+import { useArtifactCache, useEvictArtifactCache, useClearArtifactCache, useSetArtifactCacheCap } from '@/api/nodeRuntime'
 import { describeCap } from '@/lib/artifact-cache'
 import NodeArtifactCachePanel from '@/components/views/nodes/NodeArtifactCachePanel'
 

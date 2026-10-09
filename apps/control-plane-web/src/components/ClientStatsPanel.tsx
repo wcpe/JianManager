@@ -1,11 +1,8 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useClientStats } from '@/api/clientStats'
-import {
-  useClientDistObservability,
-  type ObservabilityRange,
-  type ObservabilityWindow,
-} from '@/api/clientDistObservability'
+import { useClientDistObservability } from '@/api/clientDistObservability'
+import type { ObservabilityRange, ObservabilityWindow } from '@/api/clientDistObservability'
 import { ClientStatsPanelView } from '@/components/views/client-dist/ClientStatsPanelView'
 import type { ObsWindow } from '@/lib/obs-window'
 import { readClientDistQuery } from '@/lib/client-dist-query'

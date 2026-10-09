@@ -3,10 +3,7 @@
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 
-import type {
-  ClientDistObservabilitySummary,
-  ClientDistObservabilityCompare,
-} from './client-dist-observability-contracts'
+import type { ClientDistObservabilitySummary, ClientDistObservabilityCompare } from './client-dist-observability-contracts'
 
 /** 下载量按日点（FR-095）。 */
 export interface StatsDayPoint {

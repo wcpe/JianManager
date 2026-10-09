@@ -1,9 +1,9 @@
 import { toast } from 'sonner'
 import { ConsoleOutputView as ConsoleOutputViewImpl } from '@/components/views/console/ConsoleOutputView'
-import type { ConsoleOutputViewProps } from '@jianmanager/ui'
+import type { ConsoleOutputViewProps } from '@/components/views/console/ConsoleOutputView'
 
 // 类型转出：调用点（InstanceConsoleView 等）沿用原路径导入，零改动。
-export type { ConsoleOutputHandle, ConsoleHistoryBanner, ConsoleOutputViewProps } from '@jianmanager/ui'
+export type { ConsoleOutputHandle, ConsoleHistoryBanner, ConsoleOutputViewProps } from '@/components/views/console/ConsoleOutputView'
 
 /**
  * 控制台输出区的应用接线层（ADR-097）。

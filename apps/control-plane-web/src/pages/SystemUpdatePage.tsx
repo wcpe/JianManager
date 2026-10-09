@@ -2,26 +2,11 @@
 // 四处危险确认的门禁注入与全部 toast 文案。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  useSelfUpdateCheck,
-  useRefreshSelfUpdateCheck,
-  useRollout,
-  useWorkerAssets,
-  useCacheWorkerAsset,
-  useUpgradeControlPlane,
-  useUpgradeNode,
-  useUpgradeAll,
-  useRollbackControlPlane,
-  useRollbackNode,
-} from '@/api/selfUpdate'
+import { useSelfUpdateCheck, useRefreshSelfUpdateCheck, useRollout, useWorkerAssets, useCacheWorkerAsset, useUpgradeControlPlane, useUpgradeNode, useUpgradeAll, useRollbackControlPlane, useRollbackNode } from '@/api/selfUpdate'
 import { useAuthStore } from '@/stores/auth'
 import { useDangerPermission } from '@/lib/danger'
-import {
-  SystemUpdatePageView,
-  type SystemUpdateNodePending,
-  type SystemUpdateRolloutDraft,
-  type SystemUpdateWorkerAssetTarget,
-} from '@/components/views/system-update/SystemUpdatePageView'
+import { SystemUpdatePageView } from '@/components/views/system-update/SystemUpdatePageView'
+import type { SystemUpdateNodePending, SystemUpdateRolloutDraft, SystemUpdateWorkerAssetTarget } from '@/components/views/system-update/SystemUpdatePageView'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
 const ROLE_PLATFORM_ADMIN = 10

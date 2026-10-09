@@ -2,24 +2,15 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  ClientPublishPageView,
-  type ClientPublishOutcome,
-  type ClientPublishSubmitPayload,
-  type ClientPublishUploadProgress,
-} from '@/components/views/client-dist/ClientPublishPageView'
-import { usePublishClientVersion, type ManifestFile } from '@/api/clientVersions'
+import { ClientPublishPageView } from '@/components/views/client-dist/ClientPublishPageView'
+import type { ClientPublishOutcome, ClientPublishSubmitPayload, ClientPublishUploadProgress } from '@/components/views/client-dist/ClientPublishPageView'
+import { usePublishClientVersion } from '@/api/clientVersions'
+import type { ManifestFile } from '@/api/clientVersions'
 import { useUpdaterJarsInfo } from '@/api/clientChannels'
 import { useThemeStore } from '@/stores/theme'
 import { uploadFilesEfficient } from '@/lib/efficientUpload'
-import {
-  PUBLISH_STEPS,
-  batchProgressBytes,
-  dedupUnits,
-  localDedupKey,
-  normalizeManifestPath,
-  type PublishStepId,
-} from '@/lib/client-publish-wizard'
+import { PUBLISH_STEPS, batchProgressBytes, dedupUnits, localDedupKey, normalizeManifestPath } from '@/lib/client-publish-wizard'
+import type { PublishStepId } from '@/lib/client-publish-wizard'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback

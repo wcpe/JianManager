@@ -2,20 +2,12 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  useSchedules,
-  useCreateSchedule,
-  useUpdateSchedule,
-  useDeleteSchedule,
-  useScheduleLogs,
-} from '@/api/schedules'
+import { useSchedules, useCreateSchedule, useUpdateSchedule, useDeleteSchedule, useScheduleLogs } from '@/api/schedules'
 import { InstancePicker } from '@/components/InstancePicker'
 import { useDangerPermission } from '@/lib/danger'
 import { toCreateBody, toUpdateBody } from '@/pages/schedule-form'
-import {
-  SchedulesPageView,
-  type ScheduleFilter,
-} from '@/components/views/schedules/SchedulesPageView'
+import { SchedulesPageView } from '@/components/views/schedules/SchedulesPageView'
+import type { ScheduleFilter } from '@/components/views/schedules/SchedulesPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {

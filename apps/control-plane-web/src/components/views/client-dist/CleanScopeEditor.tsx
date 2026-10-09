@@ -12,18 +12,8 @@ import {
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { ChevronRight, Eraser, Ban, ShieldCheck, Folder, FolderOpen, X } from 'lucide-react'
-import {
-  buildFileTreeWithDirs,
-  collectAllDirPaths,
-  buildCleanMap,
-  computeDirVisualState,
-  exportMarkings,
-  getDescendantDirPaths,
-  type CleanMark,
-  type DirVisualState,
-  type ManifestFileLike,
-  type TreeDir,
-} from '@/lib/client-publish-wizard'
+import { buildFileTreeWithDirs, collectAllDirPaths, buildCleanMap, computeDirVisualState, exportMarkings, getDescendantDirPaths } from '@/lib/client-publish-wizard'
+import type { CleanMark, DirVisualState, ManifestFileLike, TreeDir } from '@/lib/client-publish-wizard'
 import { ContextMenuSurface, cn } from '@jianmanager/ui'
 
 // ── 颜色映射 ──────────────────────────────────────────────────────────

@@ -1,9 +1,6 @@
 import { useAdoptInstanceRuntime } from '@/api/instances'
 import type { RuntimeDriftInfo } from '@/lib/runtime-drift'
-import {
-  RuntimeDriftAdoptButton as RuntimeDriftAdoptButtonView,
-  RuntimeDriftBanner as RuntimeDriftBannerView,
-} from '@/components/views/instances/RuntimeDriftNotice'
+import { RuntimeDriftAdoptButton as RuntimeDriftAdoptButtonView, RuntimeDriftBanner as RuntimeDriftBannerView } from '@/components/views/instances/RuntimeDriftNotice'
 
 /**
  * 运行态漂移提示的应用接线层（ADR-097）。

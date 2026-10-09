@@ -4,12 +4,7 @@ import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { useInstances, useStartInstance, useStopInstance, useRestartInstance } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import {
-  useInstanceGroups,
-  useInstanceGroupSubtree,
-  useAddInstanceGroupMembers,
-  useRemoveInstanceGroupMembers,
-} from '@/api/instanceGroups'
+import { useInstanceGroups, useInstanceGroupSubtree, useAddInstanceGroupMembers, useRemoveInstanceGroupMembers } from '@/api/instanceGroups'
 import { InstanceGroupTree } from './InstanceGroupTree'
 import { InstanceGroupManager as InstanceGroupManagerView } from '@/components/views/instances/InstanceGroupManager'
 

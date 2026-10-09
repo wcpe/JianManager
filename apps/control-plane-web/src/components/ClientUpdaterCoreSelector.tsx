@@ -1,11 +1,8 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做版本列表取数、切换/上传写请求与角色门禁注入。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  ClientUpdaterCoreSelectorView,
-  type ClientUpdaterCoreUploadOutcome,
-  type ClientUpdaterCoreUploadPayload,
-} from '@/components/views/client-dist/ClientUpdaterCoreSelectorView'
+import { ClientUpdaterCoreSelectorView } from '@/components/views/client-dist/ClientUpdaterCoreSelectorView'
+import type { ClientUpdaterCoreUploadOutcome, ClientUpdaterCoreUploadPayload } from '@/components/views/client-dist/ClientUpdaterCoreSelectorView'
 import { useUpdaterCoreVersions, useSelectUpdaterCore, useUploadUpdaterCore } from '@/api/clientChannels'
 import { useDangerPermission } from '@/lib/danger'
 

@@ -1,11 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  useNodeSuspects,
-  useNodeOrphans,
-  useReenrollNode,
-  usePurgeOrphans,
-} from '@/api/nodeRepair'
+import { useNodeSuspects, useNodeOrphans, useReenrollNode, usePurgeOrphans } from '@/api/nodeRepair'
 import NodeRepairPanel from '@/components/views/nodes/NodeRepairPanel'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */

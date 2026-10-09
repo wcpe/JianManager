@@ -13,8 +13,8 @@ import type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instance-ba
 export const INSTANCE_QUERY_GC_TIME_MS = 15 * 60_000
 
 // 实例实体类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
-import { InstanceInfo } from '@/lib/instance-types'
-export { InstanceInfo } from '@/lib/instance-types'
+import type { InstanceInfo } from '@/lib/instance-types'
+export type { InstanceInfo } from '@/lib/instance-types'
 
 /**
  * 实例是否处于「长操作在途」（FR-331，FR-323 扩展导入/克隆）：一键搭建 / 导入搬迁 / 克隆拷贝

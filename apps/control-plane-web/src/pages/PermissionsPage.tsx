@@ -3,19 +3,10 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useUsers } from '@/api/users'
-import {
-  useRbacCatalog,
-  useRbacRoles,
-  useSetRolePermissions,
-  useSetUserOverrides,
-  useSetUserRole,
-  useUserPermissions,
-} from '@/api/rbac'
+import { useRbacCatalog, useRbacRoles, useSetRolePermissions, useSetUserOverrides, useSetUserRole, useUserPermissions } from '@/api/rbac'
 import { usePermissionsStore } from '@/stores/permissions'
-import {
-  PermissionsPageView,
-  type PermissionSelection,
-} from '@/components/views/permissions/PermissionsPageView'
+import { PermissionsPageView } from '@/components/views/permissions/PermissionsPageView'
+import type { PermissionSelection } from '@/components/views/permissions/PermissionsPageView'
 
 /**
  * 深链初始选择：只在挂载时读一次 `?user=<id>`（`?role` 不参与，与迁包前一致）。

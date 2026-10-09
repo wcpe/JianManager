@@ -1,6 +1,7 @@
 import { Navigate, useSearchParams } from 'react-router'
 import { buildClientDistHref } from '@/lib/client-dist-query'
-import { normalizeOpsTab, type OpsSource } from '@/lib/client-dist-ops-tab'
+import { normalizeOpsTab } from '@/lib/client-dist-ops-tab'
+import type { OpsSource } from '@/lib/client-dist-ops-tab'
 
 /**
  * 旧分发路由（`/client-dist-security` · `/client-dist-monitor`）→ `/client-dist-ops`

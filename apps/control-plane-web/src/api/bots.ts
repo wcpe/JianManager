@@ -2,29 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 // Bot 域契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的 hook 签名使用。
-import type {
-  BotConfig,
-  BotInfo,
-  BotListParams,
-  BotListResponse,
-  BotSummary,
-  BotBatchRequest,
-  BotBatchResult,
-  CreateBotRequest,
-} from '@/lib/bot'
-export type {
-  BotConfig,
-  BotInfo,
-  BotListParams,
-  BotListResponse,
-  BotSummary,
-  BotSummaryGroup,
-  BotBatchAction,
-  BotBatchFilter,
-  BotBatchRequest,
-  BotBatchResult,
-  CreateBotRequest,
-} from '@/lib/bot'
+import type { BotConfig, BotInfo, BotListParams, BotListResponse, BotSummary, BotBatchRequest, BotBatchResult, CreateBotRequest } from '@/lib/bot'
+export type { BotConfig, BotInfo, BotListParams, BotListResponse, BotSummary, BotSummaryGroup, BotBatchAction, BotBatchFilter, BotBatchRequest, BotBatchResult, CreateBotRequest } from '@/lib/bot'
 
 import api, { ensureFreshToken } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'

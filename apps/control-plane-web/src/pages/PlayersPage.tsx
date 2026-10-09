@@ -3,23 +3,10 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useInstances } from '@/api/instances'
-import {
-  useOnlinePlayers,
-  useKickPlayer,
-  useBanPlayer,
-  useUnbanPlayer,
-  useBans,
-  useWhitelist,
-  useWhitelistAction,
-  usePlayerEvents,
-  type PlayerActionResult,
-} from '@/api/players'
+import { useOnlinePlayers, useKickPlayer, useBanPlayer, useUnbanPlayer, useBans, useWhitelist, useWhitelistAction, usePlayerEvents, type PlayerActionResult } from '@/api/players'
 import { useDangerPermission } from '@/lib/danger'
-import {
-  PlayersPageView,
-  type PlayerActionRequest,
-  type PlayerTab,
-} from '@/components/views/players/PlayersPageView'
+import { PlayersPageView } from '@/components/views/players/PlayersPageView'
+import type { PlayerActionRequest, PlayerTab } from '@/components/views/players/PlayersPageView'
 
 /**
  * 玩家管理页容器（ADR-097 b 范式）：四块数据取数、实时事件 SSE 订阅、全部写动作与解封的角色门禁

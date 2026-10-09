@@ -1,9 +1,4 @@
-import {
-  QQ_BIND_POLL_MS,
-  fetchQQBindResult,
-  isBindTaskExpiredError,
-  useCreateQQBindTask,
-} from '@/api/alerts'
+import { QQ_BIND_POLL_MS, fetchQQBindResult, isBindTaskExpiredError, useCreateQQBindTask } from '@/api/alerts'
 import { QQBindDialogView } from '@/components/views/alerts/QQBindDialogView'
 import type { QQBindFill } from '@/lib/alert-contracts'
 import { QQBindQrCode } from './qq-badge'

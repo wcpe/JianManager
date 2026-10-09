@@ -27,14 +27,8 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import {
-  composeScopeKey,
-  isValidScopeKey,
-  scopeKindOf,
-  scopeValueOf,
-  shortHash,
-  type ScopeKind,
-} from '@/lib/config-baseline'
+import { composeScopeKey, isValidScopeKey, scopeKindOf, scopeValueOf, shortHash } from '@/lib/config-baseline'
+import type { ScopeKind } from '@/lib/config-baseline'
 import type { InstanceGroupNode } from '@/lib/instance-group'
 
 /**

@@ -18,16 +18,9 @@ import {
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import type { BusinessResult } from '@/lib/business'
-import type {
-  EconomyLeaderboardRow,
-  EconomyMirrorRow,
-} from '@/lib/economy'
-import {
-  aggregateByCurrency,
-  fmtEpochMillis,
-  isValidAmount,
-  type EconomyLedgerRow,
-} from '@/lib/economy-view'
+import type { EconomyLeaderboardRow, EconomyMirrorRow } from '@/lib/economy'
+import { aggregateByCurrency, fmtEpochMillis, isValidAmount } from '@/lib/economy-view'
+import type { EconomyLedgerRow } from '@/lib/economy-view'
 
 /**
  * 经济定制页（JBIS，FR-123，见 ADR-026/028/029）。

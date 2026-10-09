@@ -8,12 +8,8 @@
  * 视图与工厂已回迁应用侧（原 ADR-097 迁包已撤销），本层只注入端点实现（纯接线层）。
  */
 import { fetchFileList, readFileContent, downloadFile } from '@/api/files'
-import {
-  createInstanceFileSource,
-  looksBinary,
-  PREVIEW_MAX_BYTES,
-  type InstanceFileApi,
-} from '@/lib/file-sources'
+import { createInstanceFileSource, looksBinary, PREVIEW_MAX_BYTES } from '@/lib/file-sources'
+import type { InstanceFileApi } from '@/lib/file-sources'
 
 export { looksBinary, PREVIEW_MAX_BYTES }
 

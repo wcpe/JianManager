@@ -4,11 +4,7 @@ import { useMetricSeries, useInstanceMetrics } from '@/api/metrics'
 import { useInstance } from '@/api/instances'
 import { useInstanceCapabilities } from '@/lib/capabilities'
 import { useProbeUpdateStatus, useUpdateProbe } from '@/api/probe'
-import {
-  useInstanceProbeVersion,
-  useSelectableProbeVersions,
-  useSetInstanceProbeVersion,
-} from '@/api/artifactVersions'
+import { useInstanceProbeVersion, useSelectableProbeVersions, useSetInstanceProbeVersion } from '@/api/artifactVersions'
 import type { MetricRange } from '@jianmanager/ui'
 import { AttributionCard } from '@/components/metrics/AttributionCard'
 import { CapacityForecastCard } from '@/components/metrics/CapacityForecastCard'

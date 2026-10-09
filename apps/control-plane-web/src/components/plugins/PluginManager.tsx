@@ -1,14 +1,8 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { PluginManager as PluginManagerImpl } from '@/components/views/plugins/PluginManager'
-import type { PluginManagerProps as PluginManagerPropsFull } from '@jianmanager/ui'
-import {
-  usePlugins,
-  useUploadPlugin,
-  useDeletePlugin,
-  useTogglePlugin,
-  usePluginBatchDeploy,
-} from '@/api/plugins'
+import type { PluginManagerProps as PluginManagerPropsFull } from '@/components/views/plugins/PluginManager'
+import { usePlugins, useUploadPlugin, useDeletePlugin, useTogglePlugin, usePluginBatchDeploy } from '@/api/plugins'
 import { useRuntimeAssetsOverview } from '@/api/runtimeAssets'
 import { useInstanceSearch } from '@/api/instances'
 

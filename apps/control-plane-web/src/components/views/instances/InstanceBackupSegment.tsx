@@ -18,16 +18,8 @@ import {
 import DangerConfirm from '@/components/views/DangerConfirm'
 import { ConfigSwitch } from '@/components/views/instances/ConfigSwitch'
 import { describeCron } from '@/lib/cron'
-import {
-  BACKUP_COMPLETED,
-  BACKUP_MODE_INCREMENTAL,
-  backupStatusKey,
-  backupStatusLevel,
-  countDependents,
-  formatSizeMb,
-  isIncrementalChild,
-  type BackupInfo,
-} from '@/lib/backup'
+import { BACKUP_COMPLETED, BACKUP_MODE_INCREMENTAL, backupStatusKey, backupStatusLevel, countDependents, formatSizeMb, isIncrementalChild } from '@/lib/backup'
+import type { BackupInfo } from '@/lib/backup'
 import type { ScheduleInfo } from '@/lib/schedule'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */

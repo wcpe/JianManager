@@ -36,19 +36,9 @@ import {
 } from '@jianmanager/ui/components/select'
 import type { LogEntry } from '@/lib/console-log-types'
 import { LOGS_FEDERATION_KEYS } from '@/lib/logs-federation/i18n'
-import type {
-  ClassifiedLogViewState,
-  CoverageBannerProps,
-  ExportDownloadAffordance,
-} from '@/lib/logs-federation/types'
-import {
-  computeVirtualWindow,
-  logLevelStatus,
-  LOG_VIEWS,
-  TIME_RANGE_PRESETS,
-  type LogExportScope,
-  type TimeRangePreset,
-} from '@/lib/logs-filters'
+import type { ClassifiedLogViewState, CoverageBannerProps, ExportDownloadAffordance } from '@/lib/logs-federation/types'
+import { computeVirtualWindow, logLevelStatus, LOG_VIEWS, TIME_RANGE_PRESETS } from '@/lib/logs-filters'
+import type { LogExportScope, TimeRangePreset } from '@/lib/logs-filters'
 
 /** 日志中心主视图取值（与后端 `view` 参数同域；`legacy` 为只读存量入口）。 */
 export type LogsView = (typeof LOG_VIEWS)[number]

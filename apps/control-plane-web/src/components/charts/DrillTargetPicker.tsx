@@ -2,10 +2,8 @@ import { useState } from 'react'
 import { useInstanceSearch } from '@/api/instances'
 import { useDebounced } from '@/lib/use-debounced'
 import type { NodeInfo } from '@/api/nodes'
-import {
-  DrillTargetPicker as DrillTargetPickerView,
-  type DrillTarget,
-} from '@/components/views/instances/DrillTargetPicker'
+import { DrillTargetPicker as DrillTargetPickerView } from '@/components/views/instances/DrillTargetPicker'
+import type { DrillTarget } from '@/components/views/instances/DrillTargetPicker'
 
 // 类型与纯函数原样再导出（调用方与测试直接引用）。
 export type { DrillTarget, DrillNode } from '@/components/views/instances/DrillTargetPicker'

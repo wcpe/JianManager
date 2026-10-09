@@ -3,14 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { BotLoadWizard as BotLoadWizardView } from '@/components/views/bot-load/BotLoadWizard'
-import {
-  useBotLoadNodes,
-  useCreateBotLoadRun,
-  useCreateBotLoadRunFromTemplate,
-  usePreflightBotLoadRun,
-  useStartBotLoadRun,
-  type BotLoadTemplate,
-} from '@/api/botLoad'
+import { useBotLoadNodes, useCreateBotLoadRun, useCreateBotLoadRunFromTemplate, usePreflightBotLoadRun, useStartBotLoadRun, type BotLoadTemplate } from '@/api/botLoad'
 import { InstancePicker } from '@/components/InstancePicker'
 import { draftTargetBots, type BotLoadWizardDraft } from '@/lib/bot-load/draft'
 
@@ -89,7 +82,9 @@ export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadW
 
   const onPreflight = async (args: { runId: number; executorNodeIds?: number[] }) => {
     try {
-      return await preflight.mutateAsync(args)
+      // 视图以 runId 表达会话身份，API hook 的载荷键是 id——在此转换（此前直接透传
+      // 会让请求路径落到 /stress-sessions/undefined/preflight）。
+      return await preflight.mutateAsync({ id: args.runId, executorNodeIds: args.executorNodeIds })
     } catch (e: unknown) {
       throw serverError(e, t('botsLoad.preflightFailed'))
     }
@@ -97,7 +92,7 @@ export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadW
 
   const onStart = async (args: { runId: number; planToken: string }) => {
     try {
-      return await startRun.mutateAsync(args)
+      return await startRun.mutateAsync({ id: args.runId, planToken: args.planToken })
     } catch (e: unknown) {
       throw serverError(e, t('botsLoad.startFailed'))
     }

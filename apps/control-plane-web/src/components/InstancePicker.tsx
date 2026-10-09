@@ -1,11 +1,8 @@
 import { useState } from 'react'
 import { useInstanceSearch, type InstanceInfo } from '@/api/instances'
 import { useDebounced } from '@/lib/use-debounced'
-import {
-  CANDIDATE_LIMIT,
-  InstancePicker as InstancePickerView,
-  type InstancePickerProps as InstancePickerViewProps,
-} from '@/components/views/instances/InstancePicker'
+import { CANDIDATE_LIMIT, InstancePicker as InstancePickerView } from '@/components/views/instances/InstancePicker'
+import type { InstancePickerProps as InstancePickerViewProps } from '@/components/views/instances/InstancePicker'
 
 /** 哨兵值由组件库定义，这里再导出以保持既有引用路径可用。 */
 export { INSTANCE_PICKER_ALL } from '@/components/views/instances/InstancePicker'

@@ -1,11 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
-import {
-  dispatchBusiness,
-  fetchBusinessManifest,
-  type BusinessResult,
-} from '@/api/business'
+import { dispatchBusiness, fetchBusinessManifest, type BusinessResult } from '@/api/business'
 import { parseInventoryView, type InventoryView } from './inventory-view'
 import InventorySegmentView from '@/components/views/instances/InventorySegment'
 

@@ -1,58 +1,13 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  ArrowLeft,
-  ArrowRight,
-  Ban,
-  Check,
-  Copy,
-  DownloadCloud,
-  Eye,
-  Pencil,
-  Plus,
-  ShieldAlert,
-} from 'lucide-react'
-import {
-  useClientChannels,
-  useClientChannel,
-  useCreateClientChannel,
-  useDeleteClientChannel,
-  useCreateClientKey,
-  useUpdateClientKey,
-  useRevokeClientKey,
-  useRevealClientKey,
-  type ClientChannel,
-  type ClientPullKey,
-  type ClientKeyWithSecret,
-} from '@/api/clientChannels'
-import {
-  useClientChannelSecuritySummary,
-  type ClientChannelSecuritySummary,
-  type SecurityLevel,
-} from '@/api/clientDistSecurity'
-import { copyToClipboard } from '@/lib/clipboard'
+import { ArrowLeft, Plus } from 'lucide-react'
+import { useClientChannels, useClientChannel, useCreateClientChannel, useDeleteClientChannel, useCreateClientKey, useUpdateClientKey, useRevokeClientKey, useRevealClientKey, type ClientChannel } from '@/api/clientChannels'
+import { useClientChannelSecuritySummary, type ClientChannelSecuritySummary } from '@/api/clientDistSecurity'
 import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
 import { useTabParam } from '@/lib/use-tab-param'
-import {
-  deriveReadiness,
-  readinessCompletedCount,
-  type ReadinessStep,
-  type ReadinessStepId,
-} from '@/lib/client-readiness'
-import { cn } from '@jianmanager/ui'
-import { Badge } from '@jianmanager/ui/components/badge'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { deriveReadiness } from '@/lib/client-readiness'
 import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { ObjectPageHeader } from '@jianmanager/ui/components/shell'
@@ -63,18 +18,8 @@ import ClientStatsPanel from '@/components/ClientStatsPanel'
 import ClientIntegrationGuide from '@/components/ClientIntegrationGuide'
 import ClientUpdaterCoreSelector from '@/components/ClientUpdaterCoreSelector'
 import ClientDistFlowGuide from '@/components/views/ClientDistFlowGuide'
-import {
-  ReadinessStepper,
-  STEP_META,
-} from '@/components/views/client-dist/ReadinessStepper'
-import {
-  ChannelCard,
-  EmptyChannelsGuide,
-} from '@/components/views/client-dist/ChannelCards'
-import {
-  RevealDialog,
-  SecretDialog,
-} from '@/components/views/client-dist/KeySecretDialogs'
+import { ReadinessStepper, STEP_META } from '@/components/views/client-dist/ReadinessStepper'
+import { ChannelCard, EmptyChannelsGuide } from '@/components/views/client-dist/ChannelCards'
 import { CreateChannelDialog } from '@/components/views/client-dist/CreateChannelDialog'
 import { KeysSegment } from '@/components/views/client-dist/KeysSegment'
 import { ChannelSecuritySummaryBar } from '@/components/views/client-dist/ChannelSecuritySummaryBar'
@@ -82,17 +27,6 @@ import { useDangerPermission } from '@/lib/danger'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
-const KEY_EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000
-const formatKeyExpiresAt = (value: string | null, neverLabel: string) => value ? new Date(value).toLocaleString() : neverLabel
-const toDatetimeLocal = (value: string | null) => value ? new Date(value).toISOString().slice(0, 16) : ''
-const keyExpiryState = (value: string | null, now = Date.now()) => {
-  if (!value) return 'none'
-  const expiresAt = new Date(value).getTime()
-  if (Number.isNaN(expiresAt)) return 'none'
-  if (expiresAt <= now) return 'expired'
-  if (expiresAt - now <= KEY_EXPIRING_SOON_MS) return 'expiring'
-  return 'active'
-}
 
 /** 工作台分段标识，与就绪度步骤 CTA 联动跳转。 */
 type WorkbenchTab = 'keys' | 'versions' | 'core' | 'stats' | 'guide'
@@ -179,7 +113,9 @@ export default function ClientChannelsPage() {
         onCreated={(id) => {
           setSearchParams(updateClientDistQuery(searchParams, { channelId: id }), { replace: true })
         }}
-        onCreate={(body) => createChannel.mutateAsync(body)}
+        onCreate={async (body) => {
+          await createChannel.mutateAsync(body)
+        }}
         submitting={createChannel.isPending}
         onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
       />
@@ -303,7 +239,9 @@ function ChannelWorkbench({
             createOpen={keyCreateOpen && tab === 'keys'}
             onCreateOpenChange={setKeyCreateOpen}
             onReveal={(key) => revealKey.mutateAsync({ channelId, keyId: key.id })}
-            onRevoke={(key) => revokeKey.mutateAsync({ channelId, keyId: key.id })}
+            onRevoke={async (key) => {
+              await revokeKey.mutateAsync({ channelId, keyId: key.id })
+            }}
             onCreateKey={(body) => createKey.mutateAsync(body)}
             onUpdateKey={(body) => updateKey.mutateAsync(body)}
             keyMutating={createKey.isPending || updateKey.isPending}
