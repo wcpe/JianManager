@@ -46,6 +46,7 @@ import type { NativeFileSystemEntry } from '@/lib/shared/webkit-entry-adapter'
 import { unzipWithNames } from '@/lib/shared/zip-filename-decode'
 import { PUBLISH_STEPS, canAdvance, canPublish, nextStep, prevStep, normalizeManifestPath, isZipFilename, hasPublishDraft, collectEntries, joinDirPath, CLEAN_ALL_SENTINEL, isCleanAll } from '@/lib/client-dist/client-publish-wizard'
 import type { PublishStepId, LocalUnit, FileSystemEntryLike, ManifestFileLike } from '@/lib/client-dist/client-publish-wizard'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 取异常里的服务端文案，回退到给定文案（本地解包/拖拽解析失败时的文案口径与迁包前一致）。 */
 function errMsg(e: unknown, fallback: string): string {
@@ -54,12 +55,6 @@ function errMsg(e: unknown, fallback: string): string {
 }
 
 /** 字节数转人类可读。 */
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
-
 /** 生成草稿稳定本地 id（React key / 编排定位；仅前端用，不入 manifest）。 */
 let draftSeq = 0
 function nextDraftId(): string {
@@ -802,8 +797,8 @@ export function UploadProgressBar({ progress, onCancel }: UploadProgressBarProps
               : t('clientVersions.uploadProgressBytes', '{{current}}/{{count}} · {{done}} / {{total}}', {
                   current: Math.min(progress.completedFiles + 1, progress.fileCount),
                   count: progress.fileCount,
-                  done: formatBytes(progress.uploadedBytes),
-                  total: formatBytes(progress.totalBytes),
+                  done: formatFileSize(progress.uploadedBytes),
+                  total: formatFileSize(progress.totalBytes),
                 })}
           </span>
           <span className="tabular-nums font-medium text-foreground">{pct}%</span>

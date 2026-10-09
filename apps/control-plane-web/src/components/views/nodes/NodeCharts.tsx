@@ -3,13 +3,13 @@ import { useTranslation } from 'react-i18next'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { RangePicker, type MetricRange } from '@jianmanager/ui/charts/RangePicker'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
-import { formatBytes } from '@/components/views/nodes/NodeListParts'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 各实例对比图可切的指标（FR-060 #2：节点上各实例 TPS/MSPT/堆/线程对比）。 */
 export const COMPARE_METRICS: { key: string; labelKey: string; fmt: (v: number) => string }[] = [
   { key: 'inst_tps', labelKey: 'metrics.tps', fmt: (v) => v.toFixed(1) },
   { key: 'inst_mspt', labelKey: 'metrics.mspt', fmt: (v) => `${v.toFixed(1)}ms` },
-  { key: 'inst_heap_used', labelKey: 'metrics.heap', fmt: formatBytes },
+  { key: 'inst_heap_used', labelKey: 'metrics.heap', fmt: formatFileSize },
   { key: 'inst_threads', labelKey: 'metrics.threads', fmt: (v) => v.toFixed(0) },
 ]
 
@@ -100,13 +100,13 @@ export function NodeMonitorCharts({ range, onRangeChange, series: nodeSeries }: 
           <TimeSeriesChart series={seriesOf('node_cpu_pct', t('nodes.cpu'))} height={160} valueFormatter={(v) => `${v.toFixed(0)}%`} />
         </Panel>
         <Panel title={t('dashboard.memTrend')}>
-          <TimeSeriesChart series={seriesOf('node_mem_used', t('nodes.memory'))} height={160} valueFormatter={formatBytes} />
+          <TimeSeriesChart series={seriesOf('node_mem_used', t('nodes.memory'))} height={160} valueFormatter={(v) => formatFileSize(v)} />
         </Panel>
         <Panel title={t('nodes.diskTrend')}>
-          <TimeSeriesChart series={seriesOf('node_disk_used', t('nodes.disk'))} height={160} valueFormatter={formatBytes} />
+          <TimeSeriesChart series={seriesOf('node_disk_used', t('nodes.disk'))} height={160} valueFormatter={(v) => formatFileSize(v)} />
         </Panel>
         <Panel title={t('nodes.netTrend')}>
-          <TimeSeriesChart series={netSeries} height={160} valueFormatter={(v) => `${formatBytes(v)}/s`} />
+          <TimeSeriesChart series={netSeries} height={160} valueFormatter={(v) => `${formatFileSize(v)}/s`} />
         </Panel>
         <Panel title={t('nodes.loadTrend')}>
           <TimeSeriesChart series={seriesOf('node_load', t('nodes.load'))} height={160} valueFormatter={(v) => v.toFixed(2)} />

@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Trash2, Copy, Database, FileArchive, Search } from 'lucide-react'
 import { copyToClipboard } from '@/lib/shared/clipboard'
-import { formatCacheBytes, capGiBToBytes, capBytesToGiB, describeCap } from '@/lib/artifacts/artifact-cache'
+import { capGiBToBytes, capBytesToGiB, describeCap } from '@/lib/artifacts/artifact-cache'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 import type { ArtifactCacheItem, ArtifactCacheView } from '@/lib/artifacts/artifact-cache'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -96,7 +97,7 @@ export default function NodeArtifactCachePanel({
             <div className="mb-1.5 flex items-baseline gap-2">
               <Database className="size-4 self-center text-muted-foreground" />
               <span className="text-sm text-muted-foreground">{t('artifactCache.total')}</span>
-              <span className="font-mono text-base font-medium">{formatCacheBytes(totalBytes)}</span>
+              <span className="font-mono text-base font-medium">{formatFileSize(totalBytes)}</span>
               <span className="text-xs text-muted-foreground">/ {describeCap(capBytes)}</span>
             </div>
             {capBytes > 0 && (
@@ -192,7 +193,7 @@ export default function NodeArtifactCachePanel({
                   </button>
                 </div>
                 <div className="shrink-0 text-right">
-                  <div className="font-mono text-sm font-medium">{formatCacheBytes(it.size)}</div>
+                  <div className="font-mono text-sm font-medium">{formatFileSize(it.size)}</div>
                   <div className="text-[11px] text-muted-foreground">{fmtTime(it.lastUsedAt)}</div>
                 </div>
                 <button

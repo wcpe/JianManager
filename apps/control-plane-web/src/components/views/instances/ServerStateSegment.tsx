@@ -4,18 +4,13 @@ import type { Bounded, ProbeServerState, ServerSection, ServerStateResponse, Jvm
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 默认折叠阈值：有界列表超过此数量时默认仅展示前 N 行，余下点「展开全部」纯前端切片（不二次请求）。 */
 const COLLAPSE_THRESHOLD = 20
 
-/** 字节 → 人类可读（GiB/MiB/KiB）；非正数显示 0。 */
-function fmtBytes(b: number | undefined): string {
-  if (b == null || !Number.isFinite(b) || b <= 0) return '0'
-  if (b >= 1024 ** 3) return `${(b / 1024 ** 3).toFixed(2)} GiB`
-  if (b >= 1024 ** 2) return `${(b / 1024 ** 2).toFixed(1)} MiB`
-  if (b >= 1024) return `${(b / 1024).toFixed(0)} KiB`
-  return `${b} B`
-}
+/** JVM 内存字段的占位：沿用本卡片原有口径，0/缺失显 `0`（而非 `0 B`）。 */
+const JVM_BYTES_FALLBACK = { fallback: '0' } as const
 
 /** 毫秒时长 → d/h/m/s 紧凑展示。 */
 function fmtDuration(ms: number | undefined): string {
@@ -206,10 +201,10 @@ function JvmPanel({ data }: { data: JvmSection | undefined }) {
         <KV label={t('serverState.jvm.version')} value={data.jvmVersion} />
         <KV label={t('serverState.jvm.processors')} value={data.availableProcessors} />
         <KV label={t('serverState.jvm.uptime')} value={fmtDuration(data.uptimeMs)} />
-        <KV label={t('serverState.jvm.heapUsed')} value={fmtBytes(data.heapUsedBytes)} />
-        <KV label={t('serverState.jvm.heapCommitted')} value={fmtBytes(data.heapCommittedBytes)} />
-        <KV label={t('serverState.jvm.heapMax')} value={data.heapMaxBytes != null && data.heapMaxBytes > 0 ? fmtBytes(data.heapMaxBytes) : '—'} />
-        <KV label={t('serverState.jvm.nonHeapUsed')} value={fmtBytes(data.nonHeapUsedBytes)} />
+        <KV label={t('serverState.jvm.heapUsed')} value={formatFileSize(data.heapUsedBytes, JVM_BYTES_FALLBACK)} />
+        <KV label={t('serverState.jvm.heapCommitted')} value={formatFileSize(data.heapCommittedBytes, JVM_BYTES_FALLBACK)} />
+        <KV label={t('serverState.jvm.heapMax')} value={data.heapMaxBytes != null && data.heapMaxBytes > 0 ? formatFileSize(data.heapMaxBytes, JVM_BYTES_FALLBACK) : '—'} />
+        <KV label={t('serverState.jvm.nonHeapUsed')} value={formatFileSize(data.nonHeapUsedBytes, JVM_BYTES_FALLBACK)} />
         <KV label={t('serverState.jvm.threads')} value={data.threadCount} />
         <KV label={t('serverState.jvm.daemonThreads')} value={data.daemonThreadCount} />
         <KV label={t('serverState.jvm.peakThreads')} value={data.peakThreadCount} />

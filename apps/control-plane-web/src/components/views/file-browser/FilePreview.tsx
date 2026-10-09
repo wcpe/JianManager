@@ -3,13 +3,7 @@ import { Download, FileQuestion, FileWarning, Loader2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import CodeEditor from '@/components/views/explorer/CodeEditor'
 import type { FileEntry, PreviewContent } from '@/lib/file-browser/file-browser-types'
-
-/** 字节数转人类可读。 */
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 interface FilePreviewProps {
   /** 当前选中的文件（null=未选中，显示引导占位）。 */
@@ -84,7 +78,7 @@ export default function FilePreview({ entry, content, loading, onDownload, theme
     content.kind === 'binary'
       ? t('fileBrowser.binaryNotice')
       : content.kind === 'too-large'
-        ? t('fileBrowser.tooLargeNotice', { size: formatBytes(content.size) })
+        ? t('fileBrowser.tooLargeNotice', { size: formatFileSize(content.size) })
         : content.message
 
   return (

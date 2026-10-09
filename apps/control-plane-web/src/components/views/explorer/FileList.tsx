@@ -28,6 +28,7 @@ import { isSelected } from '@/lib/explorer/explorer-selection'
 import { cn } from '@jianmanager/ui'
 import { sortFiles, toggleSort } from '@/lib/file-browser/file-sort'
 import type { FileSortState, FileSortKey, FileViewMode } from '@/lib/file-browser/file-sort'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 interface FileListProps {
   files: FileInfo[]
@@ -53,12 +54,6 @@ interface FileListProps {
   onSortChange?: (sort: FileSortState) => void
   /** FR-375 视图模式。 */
   viewMode?: FileViewMode
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function formatTime(unix: number): string {
@@ -277,7 +272,7 @@ export default function FileList({
                             {f.isDir ? t('files.folderType') : typeOf(f)}
                           </span>
                           <span className="w-16 shrink-0 text-right text-xs text-muted-foreground">
-                            {f.isDir ? '' : formatSize(f.size)}
+                            {f.isDir ? '' : formatFileSize(f.size)}
                           </span>
                           <span className="hidden w-36 shrink-0 truncate text-xs text-muted-foreground md:block">
                             {formatTime(f.modTime)}
@@ -289,7 +284,7 @@ export default function FileList({
                       )}
                       {viewMode === 'list' && (
                         <span className="ml-2 shrink-0 text-xs text-muted-foreground">
-                          {f.isDir ? '' : formatSize(f.size)}
+                          {f.isDir ? '' : formatFileSize(f.size)}
                         </span>
                       )}
                     </li>

@@ -48,6 +48,7 @@ import { validateRequired, validateFields, hasErrors } from '@/lib/shared/form-v
 import { isTerminalTask } from '@/lib/tasks/task-status'
 import type { TaskState } from '@/lib/tasks/task-status'
 import { useFieldGate } from '@/lib/hooks/use-field-gate'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /**
  * 存储渠道行（本视图渲染、表单回填与迁移展示所需的最小字段集）。
@@ -146,14 +147,6 @@ export interface ArtifactMigrationFailureView {
 const emptyForm: ArtifactStorageForm = {
   name: '', type: 's3', endpoint: '', bucket: '', region: '', prefix: '',
   accessKey: '', secretKey: '', useSsl: false, presignTtlSeconds: 600,
-}
-
-/** 字节数转人类可读，供迁移失败明细展示文件大小（保持原页 1 位小数口径）。 */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
 }
 
 /**
@@ -696,7 +689,7 @@ export function ArtifactStoragesPageView({
                   <span className="font-medium truncate">{f.filename || f.sha256}</span>
                   <span className="flex items-center gap-2 text-muted-foreground shrink-0">
                     <span className="font-mono">{f.sha256.slice(0, 12)}</span>
-                    <span>{formatBytes(f.size)}</span>
+                    <span>{formatFileSize(f.size)}</span>
                   </span>
                 </div>
                 <p className="text-status-danger break-all">{f.reason}</p>

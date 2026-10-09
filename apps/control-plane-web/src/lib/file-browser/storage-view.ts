@@ -1,24 +1,10 @@
 import type { ArchiveSummary, DirUsage } from './storage-types'
 
 /**
- * 平台存储资源管理器（FR-083）的纯展示逻辑：字节格式化、归档冷热汇总、目录占用排序。
+ * 平台存储资源管理器（FR-083）的纯展示逻辑：归档冷热汇总、目录占用排序。
  * 抽成无 React 依赖的模块以便 vitest 单测（参照 runtime-assets-view.ts 约定）。
+ * 字节格式化已收敛到 `@/lib/shared/format-file-size`，本模块不再自带实现。
  */
-
-/** 人类可读字节（1024 进制）。负数/非有限按 0 处理。 */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let v = bytes
-  let i = 0
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024
-    i++
-  }
-  // 整数位用整数，否则保留一位小数。
-  const text = v >= 100 || Number.isInteger(v) ? Math.round(v).toString() : v.toFixed(1)
-  return `${text} ${units[i]}`
-}
 
 /** 归档冷热汇总：资产总数、冷数据（归档+外置）数、冷数据占用字节。 */
 export interface ArchiveDerived {

@@ -40,14 +40,6 @@ export function formatRatio(v: number | null | undefined): string {
   return `${(v * 100).toFixed(1)}%`
 }
 
-export function formatBytes(v: number | null | undefined): string {
-  if (v == null || Number.isNaN(v)) return '—'
-  if (v < 1024) return `${v} B`
-  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`
-  if (v < 1024 * 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(1)} MB`
-  return `${(v / (1024 * 1024 * 1024)).toFixed(2)} GB`
-}
-
 export function pickLatency(
   latency: BotLoadLatencySummary | undefined,
   key: keyof BotLoadLatencySummary,

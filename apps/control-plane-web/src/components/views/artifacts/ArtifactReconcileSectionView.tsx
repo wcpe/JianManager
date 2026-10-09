@@ -16,7 +16,7 @@ import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { cn } from '@jianmanager/ui'
-import { formatBytes } from '@/lib/runtime-assets/runtime-assets-view'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 制品存储渠道引用（本视图只消费展示与筛选所需字段）。 */
 export interface ArtifactChannelRefView {
@@ -304,12 +304,12 @@ function ReconcileReportDialog({
           <ScrollableDialogBody className="space-y-5">
             <DiffSection title={t('artifactReconcile.missingTitle')} action={<Button variant="destructive" size="sm" disabled={!openMissing || resolving} onClick={() => setConfirm('missing')}>{t('artifactReconcile.markLost')}</Button>}>
               <Table className="text-xs"><TableHeader><TableRow><TableHead>{t('artifactReconcile.sha')}</TableHead><TableHead>{t('artifactReconcile.objectKey')}</TableHead><TableHead className="text-right">{t('runtimeAssets.size')}</TableHead><TableHead>{t('artifactReconcile.disposition')}</TableHead></TableRow></TableHeader>
-                <TableBody>{(missing.data?.items ?? []).map((item) => <TableRow key={item.id}><TableCell className="font-mono">{item.sha256.slice(0, 12)}</TableCell><TableCell className="max-w-96 truncate font-mono" title={item.objectKey}>{item.objectKey}</TableCell><TableCell className="text-right">{formatBytes(item.size)}</TableCell><TableCell>{item.status === 'open' ? t('artifactReconcile.open') : t(`artifactReconcile.action_${item.resolvedAction}`)}</TableCell></TableRow>)}</TableBody>
+                <TableBody>{(missing.data?.items ?? []).map((item) => <TableRow key={item.id}><TableCell className="font-mono">{item.sha256.slice(0, 12)}</TableCell><TableCell className="max-w-96 truncate font-mono" title={item.objectKey}>{item.objectKey}</TableCell><TableCell className="text-right">{formatFileSize(item.size)}</TableCell><TableCell>{item.status === 'open' ? t('artifactReconcile.open') : t(`artifactReconcile.action_${item.resolvedAction}`)}</TableCell></TableRow>)}</TableBody>
               </Table><Pager page={missing.page} total={missing.data?.total ?? 0} pageSize={missing.pageSize} onChange={onMissingPageChange} />
             </DiffSection>
             <DiffSection title={t('artifactReconcile.orphanTitle')} action={<Button variant="destructive" size="sm" disabled={!openOrphans || cleaning} onClick={() => setConfirm('orphan')}>{t('artifactReconcile.cleanupOrphans')}</Button>}>
               <Table className="text-xs"><TableHeader><TableRow><TableHead>{t('artifactReconcile.objectKey')}</TableHead><TableHead className="text-right">{t('runtimeAssets.size')}</TableHead><TableHead>{t('artifactReconcile.lastModified')}</TableHead><TableHead>{t('artifactReconcile.disposition')}</TableHead></TableRow></TableHeader>
-                <TableBody>{(orphan.data?.items ?? []).map((item) => <TableRow key={item.id}><TableCell className="max-w-96 truncate font-mono" title={item.objectKey}>{item.objectKey}</TableCell><TableCell className="text-right">{formatBytes(item.size)}</TableCell><TableCell>{item.lastModified ? new Date(item.lastModified).toLocaleString() : '—'}</TableCell><TableCell>{item.status === 'open' ? t('artifactReconcile.open') : t(`artifactReconcile.action_${item.resolvedAction}`)}</TableCell></TableRow>)}</TableBody>
+                <TableBody>{(orphan.data?.items ?? []).map((item) => <TableRow key={item.id}><TableCell className="max-w-96 truncate font-mono" title={item.objectKey}>{item.objectKey}</TableCell><TableCell className="text-right">{formatFileSize(item.size)}</TableCell><TableCell>{item.lastModified ? new Date(item.lastModified).toLocaleString() : '—'}</TableCell><TableCell>{item.status === 'open' ? t('artifactReconcile.open') : t(`artifactReconcile.action_${item.resolvedAction}`)}</TableCell></TableRow>)}</TableBody>
               </Table><Pager page={orphan.page} total={orphan.data?.total ?? 0} pageSize={orphan.pageSize} onChange={onOrphanPageChange} />
             </DiffSection>
           </ScrollableDialogBody>

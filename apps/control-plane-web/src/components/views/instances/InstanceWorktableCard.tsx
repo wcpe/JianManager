@@ -61,6 +61,19 @@ export interface InstanceWorktableDriftView {
 }
 
 /**
+ * 卡片内「附加提示区」（失败原因 / 搭建中 / 运行态漂移）的最大高度（px）= 35。
+ *
+ * 两段提示各按一行（16.5）加段间距（2）计满；再多（如失败原因本身折了两行）就从这里裁掉——
+ * 卡面只需把事实说清到两行以内，完整文本仍在各段的 `title` 里。
+ *
+ * 【为什么必须硬封】卡片实高 = 固定骨架 199.5 + 头部超出基础高（40）的部分，而不封顶时该区
+ * 可到 4 行（66），卡片实高 267.5 会顶穿列表行盒（`CARD_ROW_HEIGHT` − 行间距 = 244）
+ * 与下一行重叠。封到 35 后卡片实高上限 = 234.5，行盒内留有 9.5px 余量——「声明值 = 真实行盒」
+ * 由构造保证，而不是靠「现有数据恰好不长」。
+ */
+export const CARD_EXTRA_MAX_HEIGHT = 35
+
+/**
  * 实例工作台卡（FR-136，§4.5 运行实体范式）。
  * 内嵌资源（CPU/内存条 + 玩家/TPS）+ 呼吸灯（运行时脉动）+ 启停/重启按钮；点名进控制台工作区。
  * 仅运行态拉实时指标（原先在卡内惰性 enable），停机卡不轮询、资源显「--」。
@@ -177,29 +190,28 @@ export function InstanceWorktableCard({
               className="bg-transparent px-0 py-0"
             />
           </div>
-          {/* 失败原因（FR-312 放宽 FR-#2 条件）：statusReason 非空即显、不看 status——
-              Worker 心跳会把 CRASHED 冲回 STOPPED，以 CRASHED 为前置条件时原因随之不可见。
-              搭建中的 reason 是进行时状态而非失败（FR-331），只走下方琥珀行、不落红。 */}
-          {inst.statusReason && !provisioning && (
-            <p className="mt-0.5 line-clamp-2 text-[11px] text-status-danger" title={inst.statusReason}>
-              {inst.statusReason}
-            </p>
-          )}
-          {/* 搭建中提示（FR-319）：一键搭建异步化后核心下载期间实例为 STOPPED，
-              标注「搭建中」让用户知道尚不可启动（启动按钮同步禁用 + 后端启动闸兜底，FR-331）。 */}
-          {provisioning && (
-            <p className="mt-0.5 line-clamp-2 text-[11px] text-status-warning" title={inst.statusReason}>
-              {inst.statusReason}
-            </p>
-          )}
-          {/* 运行态漂移（FR-471）：目录下有未纳管活进程——卡片只说清事实，接管入口在「⋯」菜单。 */}
-          {drift && (
-            <p
-              className="mt-0.5 line-clamp-2 text-[11px] text-status-warning"
-              title={drift.cmdline}
-            >
-              {t('serverConsole.runtimeDriftDesc', { pid: drift.pid })}
-            </p>
+          {/* 附加提示区（失败原因 / 搭建中 / 运行态漂移）——整区高度硬封在 CARD_EXTRA_MAX_HEIGHT
+              以内：两段 `line-clamp-2` 同时出现时，不封顶的卡片实高会顶穿行盒、与下一行重叠
+              （行高口径见 InstanceCardViews 的 CARD_ROW_HEIGHT 说明）。
+              失败原因非空即显、不看 status（FR-312）：Worker 心跳会把 CRASHED 冲回 STOPPED，
+              以 CRASHED 为前置条件时原因随之不可见；搭建中的 reason 是进行时状态而非失败（FR-331），
+              故只走琥珀行、不落红。运行态漂移（FR-471）只说清事实，接管入口在「⋯」菜单。 */}
+          {(inst.statusReason || drift) && (
+            <div className="mt-0.5 overflow-hidden" style={{ maxHeight: CARD_EXTRA_MAX_HEIGHT }}>
+              {inst.statusReason && (
+                <p
+                  className={cn('line-clamp-2 text-[11px]', provisioning ? 'text-status-warning' : 'text-status-danger')}
+                  title={inst.statusReason}
+                >
+                  {inst.statusReason}
+                </p>
+              )}
+              {drift && (
+                <p className="mt-0.5 line-clamp-2 text-[11px] text-status-warning" title={drift.cmdline}>
+                  {t('serverConsole.runtimeDriftDesc', { pid: drift.pid })}
+                </p>
+              )}
+            </div>
           )}
         </div>
         {roleBadge}

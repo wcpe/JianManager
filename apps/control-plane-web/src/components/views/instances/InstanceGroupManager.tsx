@@ -19,6 +19,9 @@ import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 import { groupPathOf } from '@/lib/instances/instance-group-path'
 import { InstanceWorktableCard } from '@/components/views/instances/InstanceWorktableCard'
 import type { InstanceWorktableCardInstanceView } from '@/components/views/instances/InstanceWorktableCard'
+// 卡片行高与行盒口径：与 InstancesPage 卡片视图共用同一组导出常量（原先此处本地抄了一份 244，
+// 且留白口径是 -12 而列表页是 -16，两者会各自漂移）。
+import { CARD_ROW_GAP, CARD_ROW_HEIGHT } from '@/components/views/instances/InstanceCardViews'
 import { INSTANCE_DND_MIME } from '@/components/views/instances/InstanceGroupTree'
 
 /** 分组管理页所需的实例视图：卡面字段 + 所属节点 id（用于解析节点名）。 */
@@ -28,9 +31,6 @@ export interface GroupManagerInstance extends InstanceWorktableCardInstanceView 
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type GroupManagerNotice = (kind: 'success' | 'error', message: string) => void
-
-/** 卡片行高（px）：与 InstancesPage 的卡片网格同源。虚拟化按「行」定位，须与真实渲染高度一致。 */
-const CARD_ROW_HEIGHT = 244
 
 /**
  * 本次要渲染哪些行：窗口内的行，外加「拖拽中」那一行（若它已在窗口外）。
@@ -196,8 +196,9 @@ export function InstanceGroupManager({
               {renderRowIndexes(gridRange, draggingRowIndex).map((rowIndex) => (
                 <div
                   key={rowIndex}
-                  className="absolute inset-x-0 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
-                  style={{ top: rowIndex * CARD_ROW_HEIGHT, minHeight: CARD_ROW_HEIGHT - 12 }}
+                  className="absolute inset-x-0 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3"
+                  // 行盒高度 = CARD_ROW_HEIGHT − CARD_ROW_GAP，与列表页卡片行同一口径（gap-4 同源）。
+                  style={{ top: rowIndex * CARD_ROW_HEIGHT, height: CARD_ROW_HEIGHT - CARD_ROW_GAP }}
                 >
                   {visible.slice(rowIndex * columns, rowIndex * columns + columns).map((inst) => (
                     <DraggableInstance

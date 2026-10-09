@@ -40,6 +40,7 @@ import {
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { validateRequired, validateEnvRef, validateFields, hasErrors } from '@/lib/shared/form-validation'
 import { useFieldGate } from '@/lib/hooks/use-field-gate'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 可选存储类型（local 由内置「本机存储」独占，此页只管远程后端）。 */
 const TYPES = ['s3', 'sftp', 'webdav'] as const
@@ -135,21 +136,6 @@ export interface BackupStoragesPageViewProps {
   onTest: (id: number) => void
   /** 删除已保存的后端（二次确认已在本视图内完成）。 */
   onDelete: (id: number) => void
-}
-
-/** 字节数格式化（容量列与页脚汇总共用）：<1024 显 B，逐级进位到 TB。 */
-function formatBytes(bytes: number | undefined) {
-  const value = Number(bytes ?? 0)
-  if (value < 1024) return `${value} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let current = value / 1024
-  for (const unit of units) {
-    if (current < 1024 || unit === 'TB') {
-      return `${current.toFixed(current >= 10 ? 0 : 1)} ${unit}`
-    }
-    current /= 1024
-  }
-  return `${value} B`
 }
 
 /**
@@ -281,7 +267,7 @@ export function BackupStoragesPageView({
                     <span className="block max-w-[10rem] truncate" title={s.prefix || undefined}>{s.prefix || '-'}</span>
                   </TableCell>
                   <TableCell align="right" className="text-xs tabular-nums">
-                    {formatBytes(s.usedBytes)} · {t('backupStorages.backupCount', '{{count}} 个备份', { count: s.backupCount })}
+                    {formatFileSize(s.usedBytes)} · {t('backupStorages.backupCount', '{{count}} 个备份', { count: s.backupCount })}
                   </TableCell>
                   <TableCell className="text-xs">
                     {s.lastTestAt ? (
@@ -344,7 +330,7 @@ export function BackupStoragesPageView({
         </Table>
 
         <TableCardFooter>
-          {t('backupStorages.cardSummary', { total: (storages ?? []).length, used: formatBytes(totalUsed) })}
+          {t('backupStorages.cardSummary', { total: (storages ?? []).length, used: formatFileSize(totalUsed) })}
         </TableCardFooter>
       </TableCard>
 

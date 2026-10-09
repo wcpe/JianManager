@@ -3,7 +3,8 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import type { ClientDistIpAnalysis, ClientDistPlayerAnalysis } from '@/lib/client-dist/client-dist-security-contracts'
-import { EmptyState, SECURITY_EMPTY as EMPTY, fmtBytes, fmtTime } from '@/components/views/client-dist/security-format'
+import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime } from '@/components/views/client-dist/security-format'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /**
  * 安全侧「IP 剖析 / 玩家名剖析」两个只读聚合 Tab（FR-430 / ADR-088）。
@@ -53,7 +54,7 @@ export function IpAnalysisTabView({ rows, isLoading, isError }: IpAnalysisTabVie
                 <TableCell className="font-medium">{row.ip}</TableCell>
                 <TableCell>{row.requestCount} / {row.rejectCount}</TableCell>
                 <TableCell>{row.invalidKeyCount} / {row.notFoundCount} / {row.rangeCount}</TableCell>
-                <TableCell>{fmtBytes(row.downloadBytes)}</TableCell>
+                <TableCell>{formatFileSize(row.downloadBytes)}</TableCell>
                 <TableCell>{row.keyCount} / {row.channelCount}</TableCell>
                 <TableCell>{row.riskScore}</TableCell>
                 <TableCell><Badge variant={row.blocked ? 'destructive' : 'secondary'}>{row.blocked ? t('clientDistOps.ip.blocked') : t('clientDistOps.ip.unblocked')}</Badge></TableCell>
@@ -104,7 +105,7 @@ export function PlayerAnalysisTabView({ rows, isLoading, isError }: PlayerAnalys
                 <TableCell className="font-medium">{row.playerName || EMPTY}</TableCell>
                 <TableCell>{row.installCount} / {row.machineCount}</TableCell>
                 <TableCell>{row.ipCount} / {row.keyCount} / {row.channelCount}</TableCell>
-                <TableCell>{fmtBytes(row.downloadBytes)}</TableCell>
+                <TableCell>{formatFileSize(row.downloadBytes)}</TableCell>
                 <TableCell>{row.abnormalRequests}</TableCell>
                 <TableCell>{row.riskScore}</TableCell>
                 <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(row.lastSeen)}</TableCell>

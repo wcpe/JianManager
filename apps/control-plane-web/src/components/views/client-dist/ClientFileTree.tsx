@@ -13,16 +13,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 平台「全部」哨兵（Radix Select 不允许空字符串值，回写时映射回 ""）。 */
 const PLATFORM_ALL = '__all__'
-
-/** 字节数转人类可读。 */
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
 
 // ── FR-254：文件树拖拽编排 ──────────────────────────────────────────────
 
@@ -271,7 +265,7 @@ function DirRow({ dir, depth, ...rest }: LevelProps) {
           <span className="ml-auto shrink-0 text-xs text-muted-foreground">
             {t('clientVersions.treeDirSummary', '{{n}} 个文件 · {{size}}', {
               n: dir.fileCount,
-              size: formatBytes(dir.totalSize),
+              size: formatFileSize(dir.totalSize),
             })}
           </span>
         </button>
@@ -313,7 +307,7 @@ function FileRow({
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           <SyncBadge sync={file.sync} t={t} />
           {file.platform && <Badge variant="outline" className="text-[10px]">{file.platform}</Badge>}
-          <span className="text-xs text-muted-foreground whitespace-nowrap">{formatBytes(file.size)}</span>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">{formatFileSize(file.size)}</span>
         </span>
       </div>
     )
@@ -379,7 +373,7 @@ function FileRow({
             <SelectItem value="linux">linux</SelectItem>
           </SelectContent>
         </Select>
-        <span className="text-xs text-muted-foreground whitespace-nowrap">{formatBytes(file.size)}</span>
+        <span className="text-xs text-muted-foreground whitespace-nowrap">{formatFileSize(file.size)}</span>
         <button
           type="button"
           className="text-destructive hover:opacity-70"

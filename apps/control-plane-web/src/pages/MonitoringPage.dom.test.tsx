@@ -180,14 +180,16 @@ describe('MonitoringPage（mock 假后端）', () => {
     expect(screen.getByText('仅展示 JianManager 受管实例进程树，命令摘要已脱敏。')).toBeInTheDocument()
     expect((await screen.findAllByText('java -Xmx4G -jar server.jar')).length).toBeGreaterThan(0)
     expect(screen.getAllByText('minecraft').length).toBeGreaterThan(0)
-    expect(screen.getByText('1.5 MiB/s')).toBeInTheDocument()
+    // 后缀随 FR 收敛统一为 KB/MB（原 KiB/MiB）：全仓文件体积格式化已合并到
+    // `@/lib/shared/format-file-size`，除数仍是 1024，仅后缀写法统一。
+    expect(screen.getByText('1.5 MB/s')).toBeInTheDocument()
 
     const row = screen.getAllByTestId('process-top-row')[0]
     await user.hover(row)
     const detail = within(row).getByTestId('process-top-hover')
     expect(within(detail).getByText('采样时间')).toBeInTheDocument()
     expect(within(detail).getByText('IO 读/写')).toBeInTheDocument()
-    expect(within(detail).getByText('1.0 MiB/s · 512.0 KiB/s')).toBeInTheDocument()
+    expect(within(detail).getByText('1.0 MB/s · 512.0 KB/s')).toBeInTheDocument()
   })
 
   it('④ 支持受管进程详情探查与 PID 级处置确认（FR-407/408）', async () => {
