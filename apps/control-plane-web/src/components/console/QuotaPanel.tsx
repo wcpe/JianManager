@@ -1,4 +1,4 @@
-import { QuotaPanel as QuotaPanelView } from '@jianmanager/ui'
+import { QuotaPanel as QuotaPanelView } from '@/components/views/console/QuotaPanel'
 import { useInstanceQuota } from '@/api/quota'
 
 /**

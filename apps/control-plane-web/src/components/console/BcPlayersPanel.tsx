@@ -1,4 +1,4 @@
-import BcPlayersPanel from '@jianmanager/ui/components/views/console/BcPlayersPanel'
+import BcPlayersPanel from '@/components/views/console/BcPlayersPanel'
 import { useOnlinePlayers } from '@/api/players'
 import { useTopology } from '@/api/topology'
 

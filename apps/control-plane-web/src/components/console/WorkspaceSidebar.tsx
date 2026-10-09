@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
-import { WorkspaceSidebar as WorkspaceSidebarView, type WorkspaceSidebarProps } from '@jianmanager/ui'
+import { type WorkspaceSidebarProps } from '@jianmanager/ui'
+import { WorkspaceSidebar as WorkspaceSidebarView } from '@/components/views/console/WorkspaceSidebar'
 import { useInstanceAggregate, useInstanceSearch } from '@/api/instances'
 import { useNetworks } from '@/api/networks'
 import { useNodes } from '@/api/nodes'

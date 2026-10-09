@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
 
-import InstanceActivityFeed from '@jianmanager/ui/components/views/console/InstanceActivityFeed'
+import InstanceActivityFeed from '@/components/views/console/InstanceActivityFeed'
 import CrashDiagnostics from './CrashDiagnosticsCard'
 
 /**

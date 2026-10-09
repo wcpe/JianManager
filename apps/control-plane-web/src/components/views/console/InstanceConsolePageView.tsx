@@ -54,8 +54,8 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import { KpiCard, formatNumber, formatUptime } from '@jianmanager/ui/components/views/console/console-kpi-parts'
-import { MetricDivider, MetricSegment, ProbeMissingChip } from '@jianmanager/ui/components/views/console/metric-segment'
+import { KpiCard, formatNumber, formatUptime } from '@/components/views/console/console-kpi-parts'
+import { MetricDivider, MetricSegment, ProbeMissingChip } from '@/components/views/console/metric-segment'
 import { MetricSourceChips } from '@jianmanager/ui/components/views/instances/MetricSourceChips'
 import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 import type { LogEntry } from '@jianmanager/ui/lib/console-log-types'

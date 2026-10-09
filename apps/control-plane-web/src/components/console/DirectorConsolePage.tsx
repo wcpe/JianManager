@@ -1,4 +1,4 @@
-import { DirectorConsolePage as DirectorConsolePageImpl } from '@jianmanager/ui'
+import { DirectorConsolePage as DirectorConsolePageImpl } from '@/components/views/console/DirectorConsolePage'
 import { useDirectorStore } from '@/stores/director'
 import { useWorkspaceStore } from '@/stores/workspace'
 import DirectorCanvas from './DirectorCanvas'

@@ -1,10 +1,10 @@
 import { useTranslation } from 'react-i18next'
 import { Server, Cpu, MemoryStick, HardDrive, Box, ChevronDown, ChevronRight } from 'lucide-react'
-import type { NodeInfo } from '../../../lib/node-types'
+import type { NodeInfo } from '@jianmanager/ui/lib/node-types'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { toneChipClass } from '../../../lib/tone'
+import { toneChipClass } from '@jianmanager/ui/lib/tone'
 import type { StatusLevel } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
 

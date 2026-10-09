@@ -1,5 +1,5 @@
 import { Link } from 'react-router'
-import { InstanceConfigSurfacePanel as InstanceConfigSurfacePanelView } from '@jianmanager/ui'
+import { InstanceConfigSurfacePanel as InstanceConfigSurfacePanelView } from '@/components/views/console/InstanceConfigSurfacePanel'
 import { useConfigSurface, useUpdateConfigSurface } from '@/api/configSurface'
 
 /**

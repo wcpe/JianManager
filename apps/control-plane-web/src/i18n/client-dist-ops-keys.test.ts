@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import zh from './zh.json'
@@ -21,14 +21,17 @@ import en from './en.json'
 const i18nDir = dirname(fileURLToPath(import.meta.url))
 const srcDir = join(i18nDir, '..')
 /**
- * 共享 UI 包内「业务视图」的源码根。
+ * 共享 UI 包内「业务视图」的源码根，以及应用侧回迁后的视图根。
  *
- * 页面 B 的部分组件已迁入该包（原 `packages/biz-views`，后并入 `@jianmanager/ui`）。
- * 键扫描必须**同时覆盖两处**，否则迁走文件里引用的键会静默漏检
- * ——这正是本测试要防的那类缺口。
+ * 页面 B 的组件曾在包与应用之间迁移过（原 `packages/biz-views` → 并入 `@jianmanager/ui`
+ * → 业务视图回迁应用侧）。键扫描必须**覆盖所有现存位置**，否则文件挪走时
+ * 其引用的键会静默漏检——这正是本测试要防的那类缺口。
+ * 因此下面按「目录存在才扫」处理，两侧都不假设。
  * 布局：apps/control-plane-web/src/i18n → 仓库根为再上溯三级。
  */
 const uiViewsDir = join(srcDir, '..', '..', '..', 'packages', 'ui', 'src', 'components', 'views')
+/** 回迁后的视图根（apps/control-plane-web/src/components/views）。 */
+const appViewsDir = join(srcDir, 'components', 'views')
 
 function flattenKeys(obj: Record<string, unknown>, prefix = ''): Set<string> {
   const out = new Set<string>()
@@ -54,13 +57,15 @@ function rel(abs: string): string {
 function pageBFiles(): string[] {
   const files = [
     join(srcDir, 'pages/ProtectionCenterPage.tsx'),
-    // 已迁入 @jianmanager/ui 的业务视图目录，故按包的路径取
+    // 顶层零散视图：仍在包内，故按包的路径取
     join(uiViewsDir, 'UntrustedFieldBadge.tsx'),
-  ]
+  ].filter((f) => existsSync(f))
   for (const dir of [
     join(srcDir, 'components', 'client-dist'),
     join(uiViewsDir, 'client-dist'),
+    join(appViewsDir, 'client-dist'),
   ]) {
+    if (!existsSync(dir)) continue
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isFile()) continue
       if (!/\.(ts|tsx)$/.test(entry.name)) continue

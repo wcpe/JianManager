@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { toast } from 'sonner'
-import { InstanceConsoleView as InstanceConsoleViewImpl } from '@jianmanager/ui'
+import { InstanceConsoleView as InstanceConsoleViewImpl } from '@/components/views/console/InstanceConsoleView'
 import type { InstanceConsoleViewProps as InstanceConsoleViewPropsFull } from '@jianmanager/ui'
 import { useOnlinePlayers } from '@/api/players'
 import { useConsoleHistory } from '@/lib/console-history'

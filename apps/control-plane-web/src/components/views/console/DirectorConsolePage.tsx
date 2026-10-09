@@ -4,7 +4,7 @@ import { Clapperboard, Pause, Play, SkipForward } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { sceneStatus, type DirectorState } from '@jianmanager/ui/lib/director'
 import type { WorkspacePreset } from '@jianmanager/ui/lib/workspace-preset'
-import { DirectorSceneStrip } from '@jianmanager/ui/components/views/console/DirectorSceneStrip'
+import { DirectorSceneStrip } from '@/components/views/console/DirectorSceneStrip'
 
 /**
  * 工作区导播台页面（FR-168 / ADR-035 / design §9）· 受控视图（ADR-097）。

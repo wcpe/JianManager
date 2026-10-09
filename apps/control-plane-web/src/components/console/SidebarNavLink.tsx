@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router'
-import { SidebarNavLink as SidebarNavLinkView } from '@jianmanager/ui'
+import { SidebarNavLink as SidebarNavLinkView } from '@/components/views/console/SidebarNavLink'
 import type { NavEntry } from '@jianmanager/ui/lib/nav-config'
 import { useRouteIntentPrefetch } from '@/lib/route-prefetch'
 
