@@ -55,6 +55,18 @@ export interface TerminalPaneProps {
   tokenError?: string
   /** 是否有 `terminal.access`（应用侧权限；无则命令栏禁用，FR-432）。 */
   canAccessTerminal?: boolean
+  /**
+   * 在线玩家名册（FR-416 命令补全的权威候选来源，应用侧 `useOnlinePlayers` 按本实例过滤后注入）。
+   * 透传给 {@link InstanceConsoleView}；缺省即只用控制台输出解析出的 join/quit/list 名册兜底。
+   */
+  onlinePlayers?: readonly string[]
+  /**
+   * 提示通道（复制/跳转回执；应用侧接 toast）。
+   *
+   * 同时透传给 {@link InstanceConsoleView}（输出区与命令栏的回执）与沉浸台（其自身的复制回执），
+   * 故取三值并集；缺省即静默——**生产路径必须注入**，否则回执全部丢失。
+   */
+  onNotify?: (kind: 'success' | 'error' | 'info', message: string) => void
   /** 历史回溯控制器（透传给 {@link InstanceConsoleView}；应用侧 `useConsoleHistory`）。 */
   historyBacktrack: ConsoleHistoryState
   /**
@@ -78,6 +90,8 @@ export function TerminalPane({
   isTokenLoading = false,
   tokenError,
   canAccessTerminal = true,
+  onlinePlayers,
+  onNotify,
   historyBacktrack,
   renderStoppedLogs,
 }: TerminalPaneProps) {
@@ -271,6 +285,8 @@ export function TerminalPane({
             disabledReason={disabledReason}
             disabledAction={startAction}
             immersive={embeddedImmersive}
+            onlinePlayers={onlinePlayers}
+            onNotify={onNotify}
             historyBacktrack={historyBacktrack}
           />
         )}
@@ -280,6 +296,7 @@ export function TerminalPane({
         <ConsoleImmersiveMode
           initialInstanceId={instanceId}
           onExit={() => setImmersive(false)}
+          onNotify={onNotify}
           renderPane={({ instanceId: paneInstanceId, onFocus }) => (
             <TerminalPane
               instanceId={paneInstanceId}
@@ -290,7 +307,7 @@ export function TerminalPane({
               // release-dispose，否则会连带释放实例页主视图正在用的会话导致控制台空白。
               // 会话生命周期由管理器 LRU（FR-296）兜底，这里只租不还。
               persistSession
-              // 沉浸 pane 复用外层已注入的取数面（状态 / 凭据 / 权限 / 回溯），不再各自取数。
+              // 沉浸 pane 复用外层已注入的取数面（状态 / 凭据 / 权限 / 回溯 / 名册 / 提示），不再各自取数。
               status={status}
               instanceName={instanceName}
               fetchToken={fetchToken}
@@ -299,6 +316,8 @@ export function TerminalPane({
               isTokenLoading={isTokenLoading}
               tokenError={tokenError}
               canAccessTerminal={canAccessTerminal}
+              onlinePlayers={onlinePlayers}
+              onNotify={onNotify}
               historyBacktrack={historyBacktrack}
               renderStoppedLogs={renderStoppedLogs}
             />

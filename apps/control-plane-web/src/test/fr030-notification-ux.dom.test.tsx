@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeAll } from 'vitest'
-import { useState } from 'react'
 import { toast, Toaster } from 'sonner'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -9,7 +8,7 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import App from '@/App'
 import { useStartInstance, useStopInstance, useRestartInstance, useKillInstance, useDeleteInstance } from '@/api/instances'
 import ResourceExplorer from '@/components/explorer/ResourceExplorer'
-import CreateInstanceDialog from '@/components/instances/CreateInstanceDialog'
+import InstanceWizardPage from '@/pages/InstanceWizardPage'
 
 /**
  * FR-030 前端通知系统与 UX 标准化回归：
@@ -17,6 +16,10 @@ import CreateInstanceDialog from '@/components/instances/CreateInstanceDialog'
  * 2. 实例启动/停止/重启/终止/删除操作给 toast 反馈；
  * 3. 文件写操作给 toast 反馈；
  * 4. 创建实例错误走 toast，不依赖旧内联 error div。
+ *
+ * 第 4 条的宿主是**活着的**创建向导页（`/instances/new` → `pages/InstanceWizardPage`）：
+ * 原宿主 `components/instances/CreateInstanceDialog` 已无生产入口（生产建实例走本向导），
+ * 故合同随实现一起搬到向导上——契约本身（失败给 toast 且不离开页面）不变。
  */
 
 beforeAll(() => {
@@ -54,10 +57,9 @@ function FileToastHarness() {
 }
 
 function CreateInstanceToastHarness() {
-  const [open, setOpen] = useState(true)
   return (
     <div>
-      <CreateInstanceDialog open={open} onClose={() => setOpen(false)} />
+      <InstanceWizardPage />
       <Toaster />
     </div>
   )
@@ -113,20 +115,21 @@ describe('FR-030 前端通知系统与 UX 标准化', () => {
     expect(await screen.findByText('fr030-toast.txt')).toBeInTheDocument()
   })
 
-  it('创建实例错误显示 Toast，且对话框不误关闭', async () => {
+  it('创建实例错误显示 Toast，且向导不误关闭', async () => {
     const user = userEvent.setup()
     loginMockUser()
     mockInject('post', '/instances', { kind: 'status', status: 500 })
-    renderWithProviders(<CreateInstanceToastHarness />)
+    // 预填节点（?node=1）后只剩「填名称 → 下一步 → 下一步 → 创建」四步。
+    renderWithProviders(<CreateInstanceToastHarness />, { route: '/instances/new?node=1' })
 
-    await screen.findByText('创建实例')
-    await user.type(screen.getByPlaceholderText('Survival Server'), 'fr030-create-fail')
-    await user.click(screen.getByText('选择节点'))
-    await user.click(await screen.findByRole('button', { name: 'alpha' }))
-    await user.type(screen.getByPlaceholderText('java -Xmx2G -jar paper.jar nogui'), 'java -jar paper.jar nogui')
+    await user.type(await screen.findByPlaceholderText('Survival Server'), 'fr030-create-fail')
+    await user.click(screen.getByRole('button', { name: /下一步/ })) // → 启动
+    await user.click(screen.getByRole('button', { name: /下一步/ })) // → 确认
     await user.click(screen.getByRole('button', { name: '创建' }))
 
+    // 服务端 message 经 toast 透出（而不是内联 error div）。
     expect(await screen.findByText('注入的模拟错误')).toBeInTheDocument()
-    expect(screen.getByText('创建实例')).toBeInTheDocument()
+    // 失败不离开向导：仍在确认步，可改后重试。
+    expect(screen.getByRole('button', { name: '创建' })).toBeInTheDocument()
   })
 })

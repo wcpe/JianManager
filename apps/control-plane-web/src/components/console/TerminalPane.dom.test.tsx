@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}))
+
+import { toast } from 'sonner'
+
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
@@ -302,5 +309,50 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(tokenFetches).toBeGreaterThan(fetchesBeforeReconnect)
     // 新连接携带的是新签发的一次性 token，而非复用首连已消费的旧 token。
     expect(secondToken).not.toBe(firstToken)
+  })
+})
+
+/**
+ * 活路径接线守卫：`onlinePlayers`（FR-416 补全的权威名册）与 `onNotify`（复制/跳转回执）
+ * 在受控视图里都是**可选**的——缺省即静默降级（补全只剩控制台输出解析出的名册，回执直接丢弃）。
+ * 这两处注入原挂在 `components/console/InstanceConsoleView` 上，而它已不在活路径里；
+ * 本组用例把「活接线层必须注入这两者」钉在端到端行为上，避免再次无声退化。
+ */
+describe('TerminalPane 活路径接线（名册与提示通道必须注入）', () => {
+  it('FR-416：命令栏补全用得上 /players 的本实例名册', async () => {
+    const user = userEvent.setup()
+    loginMockUser()
+    renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
+
+    const input = await screen.findByRole('textbox', { name: '控制台命令输入' })
+    // seed 的 /players 返回 Alice(instanceId=1) 与 Bob(instanceId=2)：只有本实例的 Alice 该进候选。
+    await user.type(input, 'kick Al')
+    // /players 是异步查询：名册到位前 Tab 无可补（不吞键），故重试到补全生效为止。
+    await waitFor(() => {
+      fireEvent.keyDown(input, { key: 'Tab' })
+      expect(input).toHaveValue('kick Alice ')
+    })
+  })
+
+  it('复制回执：输出区复制结果接回 toast，而不是静默丢弃', async () => {
+    loginMockUser()
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn(async () => undefined) },
+    })
+    renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
+
+    const output = await findOutput()
+    const ws = await findSocket()
+    act(() => ws.emitMessage({ type: 'stdout', data: 'hello console\n' }))
+    await screen.findByText('hello console')
+
+    // Ctrl+A 全选缓冲 → 工具条「复制」：回执必须经 onNotify 变成 toast。
+    // 限定在选区工具条内点：控制台头部另有一个同名「复制」菜单按钮。
+    fireEvent.keyDown(output, { key: 'a', ctrlKey: true })
+    const toolbar = await screen.findByTestId('console-selection-toolbar')
+    fireEvent.click(within(toolbar).getByRole('button', { name: '复制' }))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('已复制'))
   })
 })

@@ -21,7 +21,7 @@ export default function TemplatesPage() {
   const createTemplate = useCreateTemplate()
   const deleteTemplate = useDeleteTemplate()
 
-  // 「用此模板建实例」与 CreateInstanceDialog 同流：直接 POST /instances。
+  // 「用此模板建实例」与创建实例向导（/instances/new）同流：直接 POST /instances。
   const createInstance = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.post('/instances', body),
   })
