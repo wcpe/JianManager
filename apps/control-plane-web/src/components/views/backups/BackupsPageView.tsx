@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { ConfigRow, ConfigSummaryChips, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
 import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
 import { BACKUP_COMPLETED, BACKUP_MODE_INCREMENTAL, backupStatusKey, backupStatusLevel, countDependents, formatSizeMb, isIncrementalChild, summarizeBackups } from '@/lib/backups/backup'

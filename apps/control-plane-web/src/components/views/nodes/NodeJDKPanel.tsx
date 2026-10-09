@@ -10,7 +10,7 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { cn } from '@jianmanager/ui'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 
 /** JDK 厂商集（foojay 支持，可自定义其它发行版）。 */

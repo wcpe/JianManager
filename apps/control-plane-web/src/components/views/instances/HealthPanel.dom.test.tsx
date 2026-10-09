@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { screen } from '@testing-library/react'
-import { renderWithI18n } from '../../../test/i18n'
+import { renderWithI18n } from '@/test/i18n'
 import { HealthPanel } from '@/components/views/instances/HealthPanel'
 
 /**

@@ -16,7 +16,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { BusinessResult } from '@/lib/console/business'
 import type { EconomyLeaderboardRow, EconomyMirrorRow } from '@/lib/instances/economy'
 import { aggregateByCurrency, fmtEpochMillis, isValidAmount } from '@/lib/instances/economy-view'

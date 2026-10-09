@@ -43,7 +43,7 @@ import { cn } from '@jianmanager/ui'
 import { deriveMarketMeta, extractVariables, fillTemplate, validateVariableValues } from '@/lib/instances/template-apply'
 import type { MarketIcon } from '@/lib/instances/template-apply'
 import type { Tone } from '@jianmanager/ui/lib/tone'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type TemplateNotice = (kind: 'success' | 'error', message: string) => void

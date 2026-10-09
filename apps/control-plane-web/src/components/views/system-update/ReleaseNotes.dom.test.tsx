@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { renderWithI18n } from '../../test/i18n'
-import { ReleaseNotes } from '@/components/views/ReleaseNotes'
+import { renderWithI18n } from '@/test/i18n'
+import { ReleaseNotes } from '@/components/views/system-update/ReleaseNotes'
 
 describe('ReleaseNotes 外链确认', () => {
   const openSpy = vi.fn()

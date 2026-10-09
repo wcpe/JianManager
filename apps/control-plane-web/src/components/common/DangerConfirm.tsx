@@ -1,6 +1,6 @@
 import ControlledDangerConfirm, {
   type DangerConfirmProps as ControlledDangerConfirmProps,
-} from '@/components/views/DangerConfirm'
+} from '@/components/views/common/DangerConfirm'
 import { useDangerPermission } from '@/lib/shared/danger'
 
 /**

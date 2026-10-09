@@ -11,7 +11,7 @@ import { MonitorSkeleton, type MonitorSeriesHook, type MonitorSource } from '@ji
 import type { MetricChartDef } from '@jianmanager/ui/lib/monitor-metrics'
 import { MetricsOverviewStrip } from '@jianmanager/ui/charts/MetricsOverviewStrip'
 import { MetricComparePanel } from '@jianmanager/ui/charts/MetricComparePanel'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { RawSeries } from '@jianmanager/ui/lib/monitor-metrics'
 import type { DrillTarget } from '@/components/views/instances/DrillTargetPicker'
 import type { ManagedProcessAction, ManagedProcessDetail, ManagedProcessInfo, ProcessTopItem } from '@/lib/console/managed-process'

@@ -42,7 +42,7 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { InstanceInfo } from '@/lib/instances/instance-types'
 import type { BanRecord, OnlinePlayer, OnlinePlayersResult, WhitelistResult } from '@/lib/players/player'
 

@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { cn } from '@jianmanager/ui'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 
 /** 运行时类型展示名（专有名词，不进 i18n）。 */

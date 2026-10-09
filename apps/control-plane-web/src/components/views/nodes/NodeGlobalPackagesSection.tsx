@@ -5,7 +5,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 
 /**
  * 一条全局包（本组件所需的最小结构）。

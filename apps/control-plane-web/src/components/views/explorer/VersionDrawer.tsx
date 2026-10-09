@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@jianmanager/ui/components/sheet'
-import { UnifiedDiff } from '@/components/views/UnifiedDiff'
-import DangerConfirm from '@/components/views/DangerConfirm'
+import { UnifiedDiff } from '@/components/views/common/UnifiedDiff'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { FileVersion, FileVersionDiff } from '@/lib/file-browser/file-version'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
