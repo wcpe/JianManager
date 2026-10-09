@@ -25,13 +25,14 @@ function CreateChannelForm() {
 ## 必须：内容自适应模态框
 
 用 shadcn `<Dialog>` 承载，并套 `FR-072` 的高度自适应壳
-（实现 = `packages/ui/src/components/scrollable-dialog.tsx`，FR-283 后主控台经
-`apps/control-plane-web/src/components/ui/scrollable-dialog.tsx` 兼容 re-export 引入）：
+（实现 = `packages/ui/src/components/scrollable-dialog.tsx`，主控台经
+`@jianmanager/ui/components/scrollable-dialog` 直接引入——应用侧 `components/ui/` 的
+兼容 re-export 层**已删除**，再按旧路径 `@/components/ui/*` 写会直接编译失败）：
 
 ```tsx
 // ✅ 正确：模态框 + 内容自适应（头/脚固定、正文超高内部滚动）
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@jianmanager/ui/components/dialog'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 
 <Dialog open={open} onOpenChange={setOpen}>
   <DialogContent className={scrollableDialogContentClass}>
@@ -47,7 +48,7 @@ import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components
 1. **宽度按内容**：用 `sm:max-w-*`（或默认 `sm:max-w-lg`）按表单繁简选，不写死像素宽。
 2. **高度自适应 + 超高内部滚动**：长表单套 `scrollableDialogContentClass`（`max-h-[calc(100dvh-4rem)]`）+ `ScrollableDialogBody`；**禁止固定高度**、禁止内容超出视口被裁切或顶满屏。
 3. **头/脚不滚、仅正文滚**：标题与操作按钮始终可见。
-4. **裸 `fixed inset-0` 自绘模态**：复用 `MODAL_OVERLAY` / `MODAL_PANEL` 常量（同样受 `max-h-[88vh] + overflow-y-auto`），不得自写固定尺寸面板。
+4. **裸 `fixed inset-0` 自绘模态**：复用 `MODAL_OVERLAY` / `MODAL_PANEL` 常量（同样从 `@jianmanager/ui/components/scrollable-dialog` 引出，受 `max-h-[88vh] + overflow-y-auto`），不得自写固定尺寸面板。
 
 ## 例外
 
