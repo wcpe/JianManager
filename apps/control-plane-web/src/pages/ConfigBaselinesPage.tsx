@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做列表/漂移取数、三个写动作、组级删除门禁与分组候选接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表/漂移取数、三个写动作、组级删除门禁与分组候选接线。
 import { useState } from 'react'
 import {
   useBaselineDrift,

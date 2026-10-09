@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入三个视图（受控化）。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只注入三个视图（受控化）。
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Download } from 'lucide-react'
@@ -7,7 +7,7 @@ import ConfigExplorer from '@/components/config-explorer/ConfigExplorer'
 import UnifiedExplorerShell from '@/components/file-browser/UnifiedExplorerShell'
 import { instanceBrowseCapability, instanceFilesCapability } from '@/components/file-browser/capability'
 import { instanceFileSource } from '@/components/file-browser/sources/instanceSource'
-import type { FileBrowserAction } from '@jianmanager/ui/lib/file-browser-types'
+import type { FileBrowserAction } from '@/lib/file-browser-types'
 
 /**
  * 实例「资源卡片」的取数接线层（FR-130 / FR-213 / FR-378 / FR-422）。

@@ -6,7 +6,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
 } from '@jianmanager/ui/components/dropdown-menu'
-import { editorShortcutRows } from '@jianmanager/ui/lib/shortcuts'
+import { editorShortcutRows } from '@/lib/shortcuts'
 
 /**
  * 编辑器迷你 IDE 快捷键速查（FR-073）。

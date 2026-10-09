@@ -13,10 +13,10 @@ import {
 import { FieldLabel } from '@jianmanager/ui/components/field-label'
 import { Input } from '@jianmanager/ui/components/input'
 import { BotHealthBar } from '@/components/views/console/BotHealthBar'
-import type { BotInfo } from '@jianmanager/ui/lib/bot'
-import type { BotStatusCounts } from '@jianmanager/ui/lib/bot-list'
-import type { Distribution } from '@jianmanager/ui/lib/bots-overview'
-import type { BotRealtimeEvent } from '@jianmanager/ui/lib/bot-realtime-types'
+import type { BotInfo } from '@/lib/bot'
+import type { BotStatusCounts } from '@/lib/bot-list'
+import type { Distribution } from '@/lib/bots-overview'
+import type { BotRealtimeEvent } from '@/lib/bot-realtime-types'
 export function SummaryCards({
   counts,
   dist,

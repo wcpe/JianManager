@@ -5,8 +5,8 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 
-import { ConsoleLineBuffer } from '@jianmanager/ui/lib/console-line-buffer'
-import type { LogLine } from '@jianmanager/ui/lib/console-log-line'
+import { ConsoleLineBuffer } from '@/lib/console-line-buffer'
+import type { LogLine } from '@/lib/console-log-line'
 import { ConsoleOutputView } from '@/components/views/console/ConsoleOutputView'
 
 /**

@@ -11,7 +11,7 @@ import ProxyRegistrationsDialogView from '@/components/views/instances/ProxyRegi
 /**
  * 代理后端注册管理的应用接线层（ADR-097 b 范式）。
  *
- * 对话框本体已迁入组件库并受控；本层取注册列表与候选后端、接三个动作、把提示交给 toast。
+ * 对话框本体是受控视图（见 components/views）；本层取注册列表与候选后端、接三个动作、把提示交给 toast。
  * 候选后端按「已注册的排除掉」在壳侧算好（视图不该为了过滤再去理解注册集合）。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。
  */

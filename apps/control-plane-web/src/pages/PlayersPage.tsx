@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做四块数据取数、SSE 订阅、写动作、角色门禁注入与 toast。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做四块数据取数、SSE 订阅、写动作、角色门禁注入与 toast。
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'

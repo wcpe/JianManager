@@ -13,7 +13,7 @@ import {
   BOT_STATUSES,
   GROUP_BY_DIMS,
   type GroupByDim,
-} from '@jianmanager/ui/lib/bots-overview'
+} from '@/lib/bots-overview'
 
 /** 节点筛选项（容器取数：个位/十位量级，无服务端搜索需求）。 */
 export interface BotToolbarNode {

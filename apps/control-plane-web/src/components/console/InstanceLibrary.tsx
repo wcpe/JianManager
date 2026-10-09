@@ -5,7 +5,7 @@ import InstanceLibraryView from '@/components/views/instances/InstanceLibrary'
 /**
  * 实例库面板的应用接线层（ADR-097 a 范式）。
  *
- * 面板本体已迁入组件库并受控；本层接服务端搜索分页（`/instances/search`，FR-235 范式）：
+ * 面板本体是受控视图（见 components/views）；本层接服务端搜索分页（`/instances/search`，FR-235 范式）：
  * 视图给出已防抖的搜索词，本层据此取数并把累积结果、分页状态回灌。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。
  */

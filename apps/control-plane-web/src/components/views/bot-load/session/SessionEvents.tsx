@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
-import type { BotLoadRunEvent } from '@jianmanager/ui/lib/bot-load-types'
+import type { BotLoadRunEvent } from '@/lib/bot-load-types'
 
 export const SESSION_EVENTS_PAGE_SIZE = 50
 

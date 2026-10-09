@@ -1,4 +1,4 @@
-import { storageFileSource as buildStorageFileSource } from '@jianmanager/ui/lib/storage-source'
+import { storageFileSource as buildStorageFileSource } from '@/lib/storage-source'
 import api from '@/api/client'
 import type { StorageFileEntry } from '@/api/storage'
 

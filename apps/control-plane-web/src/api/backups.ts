@@ -2,9 +2,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 备份记录。status/mode/type 取值与后端 model.Backup 对齐。 */
-// 备份记录契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
-import type { BackupInfo } from '@jianmanager/ui/lib/backup'
-export type { BackupInfo } from '@jianmanager/ui/lib/backup'
+// 备份记录契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+import type { BackupInfo } from '@/lib/backup'
+export type { BackupInfo } from '@/lib/backup'
 
 /** 创建备份请求体。 */
 export interface CreateBackupBody {

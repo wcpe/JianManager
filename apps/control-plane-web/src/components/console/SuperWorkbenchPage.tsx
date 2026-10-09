@@ -9,7 +9,7 @@ import SuperWorkbenchToolbar from './SuperWorkbenchToolbar'
 /**
  * 跨实例超级工作台的应用接线层（ADR-097）。
  *
- * 视图本体已迁入组件库并受控；本层注入工作台 store 的画布状态与全部动作，
+ * 视图本体是受控视图（见 components/views）；本层注入工作台 store 的画布状态与全部动作，
  * 以及四个自带取数的子组件（卡壳 / 实例库 / 工具栏 / 专注终端沉浸台）。
  * 保留同路径的默认导出与零 props，调用点无需改动。
  */

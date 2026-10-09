@@ -6,7 +6,7 @@ import {
   isRollingActive,
   type RollingControlAction,
   type RollingOp,
-} from '@jianmanager/ui/lib/instance-rolling'
+} from '@/lib/instance-rolling'
 
 // 编排契约（状态 / 失败明细 / 会话 / 控制动作 / 推进判定）归包，双侧共用（ADR-097）。
 // 本地绑定来自上方 import，此处仅对外再导出，避免两处各写一份。
@@ -15,8 +15,8 @@ export type {
   RollingError,
   RollingOp,
   RollingState,
-} from '@jianmanager/ui/lib/instance-rolling'
-export { isRollingActive } from '@jianmanager/ui/lib/instance-rolling'
+} from '@/lib/instance-rolling'
+export { isRollingActive } from '@/lib/instance-rolling'
 
 /**
  * 实例滚动/分批/灰度编排（FR-457）。

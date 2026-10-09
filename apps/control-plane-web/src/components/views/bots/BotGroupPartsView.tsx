@@ -25,8 +25,8 @@ import {
 import { TableCell, TableRow } from '@jianmanager/ui/components/table'
 import { BotHealthBar } from '@/components/views/console/BotHealthBar'
 import { PeekRow } from '@/components/views/bots/BotListParts'
-import type { BotBatchAction, BotInfo, BotSummaryGroup } from '@jianmanager/ui/lib/bot'
-import type { GroupByDim } from '@jianmanager/ui/lib/bots-overview'
+import type { BotBatchAction, BotInfo, BotSummaryGroup } from '@/lib/bot'
+import type { GroupByDim } from '@/lib/bots-overview'
 
 /**
  * 窥视列表的固定页大小（FR-147）。

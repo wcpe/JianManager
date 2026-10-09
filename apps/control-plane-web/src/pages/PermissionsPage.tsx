@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做目录/角色/用户取数、选中态与深链、两个保存动作、权限门禁与 toast。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做目录/角色/用户取数、选中态与深链、两个保存动作、权限门禁与 toast。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'

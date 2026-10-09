@@ -27,7 +27,7 @@ import {
   pruneSelection,
   type SelectionState,
   type ClickModifiers,
-} from '@jianmanager/ui/lib/explorer-selection'
+} from '@/lib/explorer-selection'
 import {
   cutEntries,
   copyEntries,
@@ -35,7 +35,7 @@ import {
   type Clipboard,
   type ClipboardEntry,
   type PasteOp,
-} from '@jianmanager/ui/lib/explorer-clipboard'
+} from '@/lib/explorer-clipboard'
 import {
   setBusClipboard,
   getBusClipboard,
@@ -45,9 +45,9 @@ import {
   writeDragToDataTransfer,
   readDragFromDataTransfer,
   setDragPayload,
-} from '@jianmanager/ui/lib/explorer-clipboard-bus'
-import { joinPath, baseName, isValidName } from '@jianmanager/ui/lib/paths'
-import { needsDiscardConfirm } from '@jianmanager/ui/lib/discard-guard'
+} from '@/lib/explorer-clipboard-bus'
+import { joinPath, baseName, isValidName } from '@/lib/paths'
+import { needsDiscardConfirm } from '@/lib/discard-guard'
 import {
   emptyNavHistory,
   navPush,
@@ -55,7 +55,7 @@ import {
   navForward,
   canNavBack,
   canNavForward,
-} from '@jianmanager/ui/lib/nav-history'
+} from '@/lib/nav-history'
 import {
   loadSortState,
   saveSortState,
@@ -64,7 +64,7 @@ import {
   sortFiles,
   type FileSortState,
   type FileViewMode,
-} from '@jianmanager/ui/lib/file-sort'
+} from '@/lib/file-sort'
 import type {
   ArchiveEntries,
   ArchiveEntryContent,
@@ -72,7 +72,7 @@ import type {
   SearchMode,
   SearchResult,
   SearchScope,
-} from '@jianmanager/ui/lib/file-entry'
+} from '@/lib/file-entry'
 
 /** 提示通道：形状与 sonner 的 toast 一致——`loading` 返回 id，`success`/`error` 可带 id 更新同一条。 */
 export interface ExplorerToast {

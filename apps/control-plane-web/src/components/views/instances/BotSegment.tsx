@@ -24,14 +24,14 @@ import type {
   BotBatchResult,
   BotInfo,
   BotSummary,
-} from '@jianmanager/ui/lib/bot'
+} from '@/lib/bot'
 import {
   groupBots,
   parseBotConfig,
   summaryCounts,
   type BotGroupBy,
   type BotStatusKind,
-} from '@jianmanager/ui/lib/bot-list'
+} from '@/lib/bot-list'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type BotNotice = (kind: 'success' | 'error', message: string) => void

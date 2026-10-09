@@ -81,7 +81,7 @@ export function toTreeBranches(
  * RUNNING=绿，STARTING/STOPPING=琥珀，CRASHED/DAMAGED=红，其余（STOPPED 等）=空心灰。
  */
 /**
- * 状态点类型与归并函数已归包（受控视图 `InstanceStatusDot` 与树共用，ADR-097）。
+ * 状态点类型与归并函数已回迁应用侧（受控视图 `InstanceStatusDot` 与树共用，ADR-097）。
  * 此处原样再导出，调用点无需改动。
  */
 export type { StatusDotKind } from './instance-status'

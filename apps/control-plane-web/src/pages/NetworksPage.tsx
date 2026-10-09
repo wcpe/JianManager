@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做列表/详情取数、五个写动作、路由（视图切换 + 详情深链）
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表/详情取数、五个写动作、路由（视图切换 + 详情深链）
 // 以及两个插槽实现：拓扑接线层（自行取数）与实例候选的防抖服务端搜索。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'

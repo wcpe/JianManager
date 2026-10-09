@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做列表取数、写动作与危险操作门禁接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表取数、写动作与危险操作门禁接线。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {

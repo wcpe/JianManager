@@ -50,7 +50,7 @@ const wsHarness = vi.hoisted(() => {
   return { sockets, FakeWebSocket }
 })
 
-import { CONSOLE_BUFFER_LIMIT } from '@jianmanager/ui/lib/console-line-buffer'
+import { CONSOLE_BUFFER_LIMIT } from '@/lib/console-line-buffer'
 import {
   createTerminalSessionManager,
   IDLE_DISCONNECT_MS,

@@ -5,19 +5,19 @@ import api from '@/api/client'
  * CP 插件无关，仅转发信封；具体业务语义由探针侧 per-plugin Provider 解释。
  */
 
-// 业务动作契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 业务动作契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的函数签名使用。
 import type {
   BusinessManifest,
   BusinessResult,
   BusinessWriteOptions,
-} from '@jianmanager/ui/lib/business'
+} from '@/lib/business'
 export type {
   BusinessAction,
   BusinessManifest,
   BusinessResult,
   BusinessWriteOptions,
-} from '@jianmanager/ui/lib/business'
+} from '@/lib/business'
 
 /**
  * 取某实例的业务能力清单（JBIS 元查询，GET /business/manifest）。

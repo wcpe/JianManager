@@ -12,7 +12,7 @@ import { toneChipClass, type Tone } from '@jianmanager/ui/lib/tone'
  * 柔和阴影、iOS 缓动），不硬编码品牌色。这些原语仅供本批次「配置记录」四页复用。
  */
 
-// 启用开关已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 启用开关已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 export { ConfigSwitch } from '@/components/views/instances/ConfigSwitch'
 
 /** 视图模式：卡片或列表。 */

@@ -29,7 +29,7 @@ function usePaneData(instanceId: number) {
 /**
  * 沉浸控制台工作台的应用接线层（ADR-097）。
  *
- * 视图本体已迁入组件库并受控；本层注入实例选择器的取数（仅选择器打开时查询）、
+ * 视图本体是受控视图（见 components/views）；本层注入实例选择器的取数（仅选择器打开时查询）、
  * 按 pane 的实例/指标查表器，并把提示回执接回 toast。其余 props 原样透传。
  */
 export default function ConsoleImmersiveMode({ initialInstanceId, onExit, renderPane }: ConsoleImmersiveModeProps) {

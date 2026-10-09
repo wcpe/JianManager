@@ -17,7 +17,7 @@ import {
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import { ConfigSwitch } from '@/components/views/instances/ConfigSwitch'
-import { describeCron } from '@jianmanager/ui/lib/cron'
+import { describeCron } from '@/lib/cron'
 import {
   BACKUP_COMPLETED,
   BACKUP_MODE_INCREMENTAL,
@@ -27,8 +27,8 @@ import {
   formatSizeMb,
   isIncrementalChild,
   type BackupInfo,
-} from '@jianmanager/ui/lib/backup'
-import type { ScheduleInfo } from '@jianmanager/ui/lib/schedule'
+} from '@/lib/backup'
+import type { ScheduleInfo } from '@/lib/schedule'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type BackupNotice = (kind: 'success' | 'error', message: string) => void

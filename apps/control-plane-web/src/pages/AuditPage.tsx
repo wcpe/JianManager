@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做列表分页取数、筛选态、候选用户、导出与骨架/错误态接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表分页取数、筛选态、候选用户、导出与骨架/错误态接线。
 import { useMemo, useState } from 'react'
 import { useAuditLogs, exportAuditLogs } from '@/api/audit'
 import { useUsers } from '@/api/users'

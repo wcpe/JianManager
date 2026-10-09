@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import InstanceBatchBar from '@/components/views/instances/InstanceBatchBar'
-import type { InstanceBatchResult } from '@jianmanager/ui/lib/instance-batch'
+import type { InstanceBatchResult } from '@/lib/instance-batch'
 
 /**
  * FR-058 / FR-139 实例批量操作栏 · 受控视图测（ADR-097 b 范式）。

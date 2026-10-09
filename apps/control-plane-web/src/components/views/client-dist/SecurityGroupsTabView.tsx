@@ -20,7 +20,7 @@ import type {
   ClientSecurityGroup,
   SaveSecurityGroupRequest,
   SecurityTargetType,
-} from '@jianmanager/ui/lib/client-dist-security-contracts'
+} from '@/lib/client-dist-security-contracts'
 import { EmptyState, fmtTime } from '@/components/views/client-dist/security-format'
 
 /**

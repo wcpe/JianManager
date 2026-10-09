@@ -5,8 +5,8 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import type { ChartSeries } from '@jianmanager/ui'
-import type { StatsIP } from '@jianmanager/ui/lib/client-dist-stats-contracts'
-import type { ClientDistErrorSummary, ClientDistRealtime } from '@jianmanager/ui/lib/client-dist-events-contracts'
+import type { StatsIP } from '@/lib/client-dist-stats-contracts'
+import type { ClientDistErrorSummary, ClientDistRealtime } from '@/lib/client-dist-events-contracts'
 import {
   LinkableDistPanel,
   TrendCard,

@@ -1,4 +1,4 @@
-// 列表行展示层已迁至 @jianmanager/ui（ADR-097）：平铺表与分组树表共用的行渲染件在包内；
+// 列表行展示层已回迁应用侧（原 ADR-097 迁包已撤销）：平铺表与分组树表共用的行渲染件在包内；
 // 本层保留取数（无限搜索 / 聚合 / 节点 / 群组 / 分组树）、URL 状态、批量选择与各弹窗目标的装配。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'

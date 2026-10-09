@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做六个查询取数、两处受控状态（时间窗 / 归因 Tooltip）
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做六个查询取数、两处受控状态（时间窗 / 归因 Tooltip）
 // 与三处接线（健康墙、链接、按需续取守卫）。
 import { useCallback, useDeferredValue, useState } from 'react'
 import { Link } from 'react-router'

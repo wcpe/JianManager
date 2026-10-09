@@ -4,7 +4,7 @@ import { AlertTriangle, Copy, RotateCw, ShieldCheck, Trash2 } from 'lucide-react
 import { Button } from '@jianmanager/ui/components/button'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
+import { copyToClipboard } from '@/lib/clipboard'
 
 /**
  * 疑似坏节点条目（本组件所需的最小结构）。

@@ -13,7 +13,7 @@ import InstancePlayersSegmentView from '@/components/views/instances/InstancePla
 /**
  * 实例「玩家」分区的应用接线层（ADR-097 a 范式）。
  *
- * 分区本体已迁入组件库并受控；本层取三份数据（在线聚合 / 封禁 / 白名单）、接五个动作
+ * 分区本体是受控视图（见 components/views）；本层取三份数据（在线聚合 / 封禁 / 白名单）、接五个动作
  * （踢/封/解封/白名单增删，scope 一律限定本实例）、把提示交给 toast。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。
  */

@@ -1,5 +1,14 @@
+import { useEffect, useState } from 'react'
+
 /**
- * 通用防抖 hook 已归包（受控视图与业务页面共用，ADR-097）。
- * 此处原样再导出，调用点无需改动。
+ * 防抖：value 停止变化 delay 毫秒后才更新返回值，用于搜索输入等高频源
+ * （自 BotsPage 抽出共用，FR-336）。
  */
-export * from '@jianmanager/ui/lib/use-debounced'
+export function useDebounced<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay)
+    return () => clearTimeout(id)
+  }, [value, delay])
+  return debounced
+}

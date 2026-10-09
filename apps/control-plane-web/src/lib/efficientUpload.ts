@@ -4,14 +4,14 @@ import {
   type ClientFileResult,
 } from '@/api/clientVersions'
 
-// 编排逻辑与类型已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
-export * from '@jianmanager/ui/lib/efficient-upload'
+// 编排逻辑与类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
+export * from '@/lib/efficient-upload'
 
 import {
   uploadFilesEfficient as runEfficientUpload,
   type EfficientUploadEntry,
   type EfficientUploadOptions,
-} from '@jianmanager/ui/lib/efficient-upload'
+} from '@/lib/efficient-upload'
 import { uploadFileChunked } from './chunkedUpload'
 
 /**

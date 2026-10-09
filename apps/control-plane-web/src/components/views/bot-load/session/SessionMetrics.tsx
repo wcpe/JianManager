@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
-import { clampChartPoints, formatLatencyMs } from '@jianmanager/ui/lib/bot-load-metrics'
-import type { BotLoadMetricPoint } from '@jianmanager/ui/lib/bot-load-types'
+import { clampChartPoints, formatLatencyMs } from '@/lib/bot-load-metrics'
+import type { BotLoadMetricPoint } from '@/lib/bot-load-types'
 import { DisclaimerBanner } from '@/components/views/bot-load/session/DisclaimerBanner'
 
 /** 时间窗（决定服务端 resolution，故由容器持有）。 */

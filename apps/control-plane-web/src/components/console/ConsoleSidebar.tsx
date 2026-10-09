@@ -7,14 +7,14 @@ import { usePermissionsStore } from '@/stores/permissions'
 import { useConsoleStore } from '@/stores/console'
 import { useThemeStore } from '@/stores/theme'
 import { changeLanguage } from '@/i18n'
-import { navGroupsForPermissions, navGroupsForRole } from '@jianmanager/ui/lib/nav-config'
+import { navGroupsForPermissions, navGroupsForRole } from '@/lib/nav-config'
 import ServerSelector from './ServerSelector'
 import SidebarServerList from './SidebarServerList'
 
 /**
  * 控制台侧栏的应用接线层（ADR-097）。
  *
- * 视图本体已迁入组件库并受控；本层注入：导航分组的权限/角色裁剪、折叠态与分组折叠
+ * 视图本体是受控视图（见 components/views）；本层注入：导航分组的权限/角色裁剪、折叠态与分组折叠
  * （store）、当前路径（路由）、主题与语言切换（store / i18n），以及两个自带取数的
  * 子组件（选择器与常驻服务器列）。保留同路径的默认导出与零 props，调用点无需改动。
  */

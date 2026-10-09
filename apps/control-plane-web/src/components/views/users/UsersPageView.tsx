@@ -42,7 +42,7 @@ import {
   ConfigViewToggle,
   type ConfigView,
 } from '@/components/views/config-explorer/ConfigRow'
-import { isPlatformAdmin } from '@jianmanager/ui/lib/roles'
+import { isPlatformAdmin } from '@/lib/roles'
 
 /**
  * 用户行（本视图渲染所需的最小字段集）。
@@ -358,7 +358,7 @@ export function UsersPageView({
         </TableCardFooter>
       </TableCard>
 
-      {/* 三个对话框均为已归包的受控视图：开关留本组件（与列表同屏的本地 UI 状态），
+      {/* 三个对话框均为已回迁应用侧的受控视图：开关留本组件（与列表同屏的本地 UI 状态），
           写动作经回调交由容器执行（成功提示与列表失效都在容器侧）。 */}
       <CreateUserDialogView
         open={showCreate}

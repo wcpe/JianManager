@@ -13,7 +13,7 @@ export { INSTANCE_PICKER_ALL } from '@/components/views/instances/InstancePicker
 /**
  * 服务端搜索的实例选择器（应用接线层，ADR-097 a 范式）。
  *
- * 选择器本体已迁入组件库并受控；本层承担「何时发请求」这一策略：
+ * 选择器本体是受控视图（见 components/views）；本层承担「何时发请求」这一策略：
  * 默认取前 N 条、键入经 300ms 防抖下发服务端 `q`、按 `nodeIdFilter` 收窄范围。
  * 泛型参数显式写成 `InstanceInfo`，使 `onChange` 的第二参数仍是完整实例对象
  * （调用方可顺手取 serverPort 等字段，无需再查一次列表）。

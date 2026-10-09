@@ -21,7 +21,7 @@ import UntrustedFieldBadge from '@/components/views/UntrustedFieldBadge'
 import type {
   ClientDistSecurityProfile,
   ClientDistSecurityProfileDetail,
-} from '@jianmanager/ui/lib/client-dist-security-contracts'
+} from '@/lib/client-dist-security-contracts'
 import type { ClientDistQuery, ClientDistQueryKey } from '@/lib/client-dist-query'
 import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime, levelVariant } from '@/components/views/client-dist/security-format'
 

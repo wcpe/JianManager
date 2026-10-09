@@ -28,8 +28,8 @@ import {
   type ImmersivePaneSplit,
   type ImmersivePaneTree,
   type PaneSplitDirection,
-} from '@jianmanager/ui/lib/console-immersive-layout'
-import { terminalSessionManager } from '@jianmanager/ui/lib/terminal-session-manager'
+} from '@/lib/console-immersive-layout'
+import { terminalSessionManager } from '@/lib/terminal-session-manager'
 
 type PickerRequest =
   | { kind: 'split'; paneId: string; direction: PaneSplitDirection }

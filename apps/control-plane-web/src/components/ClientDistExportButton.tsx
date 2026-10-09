@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入导出实现与结果回执（受控化）。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只注入导出实现与结果回执（受控化）。
 import { toast } from 'sonner'
 import { ClientDistExportButton as ClientDistExportButtonView } from '@/components/views/client-dist/EmbeddedUpdaterParts'
 import {

@@ -13,7 +13,7 @@ interface ChannelDialogProps {
 /**
  * 通知通道创建/编辑对话框（取数容器）。
  *
- * 表单状态、字段校验与渲染已迁至 @jianmanager/ui（ADR-097）；此处只保留
+ * 表单状态、字段校验与渲染已回迁应用侧（原 ADR-097 迁包已撤销）；此处只保留
  * 创建/更新 mutation 调用与 QQ 扫码弹窗绑定，视图侧经回调注入。
  */
 export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {

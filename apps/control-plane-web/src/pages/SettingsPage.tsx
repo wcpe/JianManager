@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做平台配置取数/保存、客户端偏好（主题/语言）落盘与出站测试按钮接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做平台配置取数/保存、客户端偏好（主题/语言）落盘与出站测试按钮接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'

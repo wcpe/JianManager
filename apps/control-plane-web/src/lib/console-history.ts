@@ -1,94 +1,156 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 
-import api from '@/api/client'
-import { LOGS_FEDERATION_PATH } from '@/api/logFederation'
-import { type LogEntry } from '@/api/logs'
+import { fetchLogCursorPage } from '@/api/logs'
 
-// 纯逻辑（历史分页常量、序号/行合并、启动行定位、类型）已迁至 `@jianmanager/ui`；
-// 此处转出，调用点零改动。
-export * from '@jianmanager/ui/lib/console-history'
-
-import {
-  HISTORY_JUMP_MAX_PAGES,
-  HISTORY_PAGE_SIZE,
-  historyRowsToLines,
-  historySeqAt,
-  STARTUP_KEYWORD,
-  type ConsoleHistoryState,
-  type HistoryJumpOutcome,
-  type UseConsoleHistoryOptions,
-} from '@jianmanager/ui/lib/console-history'
-import type { LogEntry as _LogEntryFromPkg } from '@jianmanager/ui/lib/console-log-types'
+import { createLogLineParser, type LogLine, type LogStream } from './console-log-line'
+import type { LogEntry } from './console-log-types'
 
 /**
- * 历史上溯数据源适配（2026-10-29）。
+ * 控制台历史日志回溯（FR-419，spec §4.3）。
  *
- * 背景：CP `logs` 表与其游标接口 `/logs` 已删除，实例日志的权威副本在 Worker 的 VL 里。
- * 本函数把联邦查询（`GET /logs/federation`）包装回历史回溯需要的「游标页」形状，
- * 使 `fetchPage` / `findStartupTime` 两处调用点只需换数据源、不必改翻页逻辑。
+ * 数据源分层（spec §4.1）：内存环形缓冲覆盖最新输出，数据库活日志覆盖更早，归档 NDJSON
+ * 本批不做。未溢出时接缝是会话开始；溢出后接缝推进到最早保留行的浏览器接收时刻，故被挤掉
+ * 的会话内日志也会被数据库回溯补上。DB/WS 的极短写入时差由 mergeHistoryAndLive 去重。
  *
- * 语义对应：
- *   - 原 `to`（冻结接缝）→ 联邦 `to`，仍是「只取接缝之前」，保证已加载历史连续无洞；
- *   - 原 `cursor`（上一页 nextCursor）→ 联邦 `nextCursor`，同样是“更早一页”的边界；
- *   - 联邦返回按时间倒序（最新在前），与原游标接口一致，调用侧的反转逻辑不变。
- *
- * 行字段映射：联邦事件是扁平结构（`_msg`/`level`/`stream`），这里转回 `LogEntry`，
- * 使下游解析器（`historyRowsToLines`）不必区分数据源。
+ * **接缝冻结**（spec §4.3 修订）：接缝只在实例切换时重置；同一实例内接缝随缓冲溢出
+ * 前移不重置——DB 行不会消失，重置只会把已加载历史整体作废重拉。
  */
-async function fetchHistoryCursorPage(params: {
-  instanceId: number
-  to?: string
-  keyword?: string
-  cursor?: string
-  limit: number
-}, signal?: AbortSignal): Promise<{ items: LogEntry[]; nextCursor: string | null }> {
-  const query: Record<string, unknown> = {
-    instanceId: params.instanceId,
-    limit: params.limit,
-  }
-  if (params.to) query.to = params.to
-  if (params.keyword) query.keyword = params.keyword
-  if (params.cursor) query.cursor = params.cursor
 
-  const { data } = await api.get<{ items?: unknown[]; next_cursor?: string | null; nextCursor?: string | null }>(LOGS_FEDERATION_PATH, {
-    params: query,
-    signal,
-    // 联邦查询是重活（多目标逐目标覆盖解析，实测 6–13s），给与 LogsPage 同口径的 60s 预算。
-    timeout: 60_000,
-  })
+/** 单页行数。比页码分页默认的 50 大：回溯是「一屏一屏往上翻」，页太小会把滚动切碎成一串请求。 */
+export const HISTORY_PAGE_SIZE = 200
 
-  const items = Array.isArray(data?.items) ? data.items : []
-  // 后端信封体是 **snake_case**（`next_cursor`，见 router/log_federation.go）。
-  //
-  // 2026-10-29 修：这里曾只读 `nextCursor`，于是**永远读到 undefined ⇒ 游标永为 null**，
-  // 控制台「向上滚动加载更早日志」只能翻到第一页就停，且不报错——静默断头。
-  // 两种写法都接受，但以真实 wire 的 snake_case 为准。
-  const rawCursor = data?.next_cursor ?? data?.nextCursor
-  return {
-    items: items.map((raw, index) => {
-      const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-      return {
-        id: typeof o.id === 'number' ? o.id : -(index + 1),
-        source: 'instance',
-        level: typeof o.level === 'string' ? o.level.toLowerCase() : 'info',
-        instanceId: params.instanceId,
-        instanceUuid: typeof o.instance_uuid === 'string' ? o.instance_uuid : '',
-        nodeId: typeof o.node_id === 'number' ? o.node_id : 0,
-        stream: typeof o.stream === 'string' ? o.stream : undefined,
-        message: typeof o.message === 'string' ? o.message : typeof o._msg === 'string' ? o._msg : '',
-        time: typeof o.event_time_utc === 'string'
-          ? o.event_time_utc
-          : typeof o.time === 'string'
-            ? o.time
-            : '',
-      } satisfies LogEntry
+/**
+ * 一次「跳到时间点」最多连续回溯多少页。
+ *
+ * 跳转实现为「一直往更早翻直到覆盖目标时刻」，以保证已加载历史始终是**连续无洞**的一段
+ * （挖洞式跳转会让用户以为中间那段日志不存在）。代价是目标很久远时请求数线性增长，
+ * 故设上限，到顶就明确告知而不是无声地一直打后端。
+ */
+export const HISTORY_JUMP_MAX_PAGES = 30
+
+/**
+ * 启动完成标记（spec §4.3「跳到本次启动」）。
+ *
+ * 只认 MC/Paper 服务端启动完成那一行的稳定特征 `Done (12.345s)!`；
+ * 宁可找不到也不误判——把随便一行认成「本次启动」比找不到更糟。
+ */
+const STARTUP_DONE = /\bDone\s*\([^)]*\)!/
+
+/**
+ * 去库里定位启动行时用的 LIKE 关键字。
+ *
+ * DB 侧只有 `message LIKE %kw%`（无正则），故用标记的稳定前缀粗筛，
+ * 拿到时间后仍由 {@link findStartupSeq} 的正则做精判——粗筛只用来决定「往前翻到哪」。
+ */
+export const STARTUP_KEYWORD = 'Done ('
+
+/**
+ * 历史行的 seq 一律为**负数**：`-1` 是最新的历史行，越早越负。
+ *
+ * 环形缓冲的 seq 从 0 起单调递增，负号使两段天然不冲突且排序即时间序
+ * （选区与定位一律用 seq，见 spec §1.1）。增量 prepend 时旧行 seq 不变：
+ * 新页插在更负的一侧，`-1` 永远是「紧邻内存缓冲边界的那一行」。
+ */
+export function historySeqAt(index: number, total: number): number {
+  return index - total
+}
+
+/**
+ * DB 行 → 渲染行。
+ *
+ * 走与实时输出**同一个解析器**（spec §1.2）：同一条日志无论来自 WS 还是数据库，拆出的
+ * 时间/级别/来源与堆栈归属都必须一致，否则用户滚过接缝会看到同格式的行长得不一样。
+ * 级别：优先解析行内（MC 前缀 / 结构化 level=）；都没有时用 DB 的 stream 列兜底
+ * （stdout→INFO、stderr→ERROR），与 log_ingest 的推断同源。
+ *
+ * 必须整段重解析而非只解析新页：堆栈帧的 `stackOf` 依赖前一行，新加载的更早页里可能正是
+ * 某个异常头，只解析新页会让接缝处的堆栈挂错头。
+ */
+export function historyRowsToLines(rows: readonly LogEntry[]): LogLine[] {
+  const parser = createLogLineParser()
+  return rows.map((row, index) =>
+    parser.parse(row.message, {
+      seq: historySeqAt(index, rows.length),
+      stream: (row.stream === 'stderr' ? 'stderr' : 'stdout') as LogStream,
     }),
-    nextCursor: typeof rawCursor === 'string' ? rawCursor : null,
+  )
+}
+
+/**
+ * 合并数据库历史与内存缓冲。
+ *
+ * 缓冲溢出后，回溯接缝取浏览器收到的最早保留行，而 DB 的写入时间可能早几个毫秒；
+ * 因此最后几条 DB 行可能与内存首段重复。只消掉**至少两条连续原文**的重叠：单条高频
+ * 文案（如 Can't keep up）可能恰好重复，宁可留一个重复也不能把真实日志误删。
+ */
+export function mergeHistoryAndLive(history: readonly LogLine[], live: readonly LogLine[]): readonly LogLine[] {
+  const comparableLive = live.filter((line) => line.kind !== 'command' && line.kind !== 'system')
+  const maxOverlap = Math.min(history.length, comparableLive.length)
+  for (let size = maxOverlap; size >= 2; size--) {
+    const historyTail = history.slice(-size)
+    const liveHead = comparableLive.slice(0, size)
+    if (historyTail.every((line, index) => line.raw === liveHead[index].raw)) {
+      return [...history.slice(0, -size), ...live]
+    }
   }
+  return history.length > 0 ? [...history, ...live] : live
+}
+
+/** 在给定行集中找最近一次启动完成行的 seq；找不到返回 null。 */
+export function findStartupSeq(lines: readonly LogLine[]): number | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (STARTUP_DONE.test(lines[i].raw)) return lines[i].seq
+  }
+  return null
+}
+
+/** 「跳到时间点」的结果：到达 / 已回溯到最早仍未覆盖 / 撞单次页数上限 / 请求失败。 */
+export type HistoryJumpOutcome = 'reached' | 'exhausted' | 'capped' | 'failed'
+
+export interface UseConsoleHistoryOptions {
+  instanceId: number
+  /**
+   * 内存缓冲历史接缝 ISO；会话尚未建立时可为 undefined，首次请求前兜底为「现在」。
+   *
+   * **冻结语义**：本 hook 只在实例切换时跟随该 prop 更新内部接缝，同一实例内
+   * 接缝随缓冲溢出前移**不会**作废已加载历史——DB 行不会消失，本就无需重置；
+   * 若每次前移都换数据 key，用户翻着历史时日志一涌、已加载的页会整体蒸发。
+   */
+  anchorTime?: string
+}
+
+export interface ConsoleHistoryState {
+  /** 已加载的历史行（时间正序，seq 为负）。 */
+  lines: readonly LogLine[]
+  /** 已回溯的行数。 */
+  rowCount: number
+  /** 已加载历史中最早一行的时间（ISO），供横幅标明「回溯到哪儿了」。 */
+  oldestTime?: string
+  loading: boolean
+  /** 已到数据库最早一条（后端 nextCursor 为 null）。 */
+  exhausted: boolean
+  error: string | null
+  /** 取更早一页；正在加载 / 已到最早时空转。 */
+  loadEarlier: () => void
+  /** 一直回溯到覆盖目标时刻（或到最早 / 撞页数上限 / 失败）。 */
+  loadUntil: (targetIso: string) => Promise<HistoryJumpOutcome>
+  /**
+   * 去库里问「最近一次启动完成行在什么时候」（spec §4.3：缓冲内找不到则按时间条件查库）。
+   * 返回 null 表示库里也没有。
+   */
+  findStartupTime: () => Promise<string | null>
+  /**
+   * 已加载历史里**第一条不早于**目标时刻的行的 seq；目标晚于全部历史则返回 null
+   * （落点在内存缓冲里，由调用方决定怎么定位）。
+   *
+   * 放在控制器里而不是让调用方自己算：绝对时间只在 DB 行上有（渲染行模型里只有 `HH:MM:SS`
+   * 甚至没有），且必须读**刚加载完那一刻**的行——调用方闭包里的 lines 要等 React 提交才更新。
+   */
+  seqAtTime: (targetIso: string) => number | null
 }
 
 
-/** 一次取页的结果，供 loadUntil 判断是否继续。 */
+/** 一次取页的结果，供 loadUntil 判断是否继续（只被下面的 hook 用）。 */
 interface FetchPageResult {
   added: number
   exhausted: boolean
@@ -96,7 +158,7 @@ interface FetchPageResult {
 }
 
 /**
- * 已加载历史 + 它所属的实例与回溯接缝。
+ * 已加载历史 + 它所属的实例与回溯接缝（同上）。
  *
  * `key` 与状态绑在一起，使「实例或接缝变了 → 已加载的行作废」可以**派生**出来，
  * 不必在渲染期改 ref、也不必用 effect 事后重置（两者都会开出一段旧游标仍生效的窗口）。
@@ -108,19 +170,13 @@ interface HistoryData {
   error: string | null
 }
 
-const EMPTY_DATA = { rows: [] as readonly LogEntry[], exhausted: false, error: null as string | null }
-
+/** 查询去重键（只被下面的 hook 用，故留在这里）。 */
 function dataKey(instanceId: number, anchorTime: string | undefined): string {
-  return `${instanceId}|${anchorTime ?? ''}`
+  return `${instanceId}:${anchorTime ?? ''}`
 }
 
-/**
- * 历史回溯控制器。
- *
- * 串行保证：`cursor` 是「翻到哪了」的唯一状态，所有取页都经内部 fetchPage 走同一把在途锁。
- * 并发触发（滚动抖动连发、跳转循环与滚动触发撞上）只产生一个真请求，不会出现两个请求
- * 拿同一个 cursor 而把同一页 prepend 两次。
- */
+/** 空数据占位（同上）。 */
+const EMPTY_DATA = { rows: [], exhausted: false, error: null as string | null }
 export function useConsoleHistory({ instanceId, anchorTime }: UseConsoleHistoryOptions): ConsoleHistoryState {
   // **接缝冻结**：内部接缝（frozen.anchorTime）只在实例切换时跟随 prop 更新，
   // 同一实例内接缝随缓冲溢出前移不变化——若直接用 prop 做 key，每丢一行前移一次
@@ -176,8 +232,9 @@ export function useConsoleHistory({ instanceId, anchorTime }: UseConsoleHistoryO
     }
     commit({ ...base, error: null })
     try {
-      const page = await fetchHistoryCursorPage({
+      const page = await fetchLogCursorPage({
         instanceId: frozen.instanceId,
+        source: 'instance',
         // to 是数据层接缝：只取内存缓冲最早保留行之前的日志（spec §4.1）。
         // 冻结接缝：多次取页共用同一上界，同实例内缓冲溢出前移不改变它。
         to: frozen.anchorTime ?? new Date().toISOString(),
@@ -226,8 +283,9 @@ export function useConsoleHistory({ instanceId, anchorTime }: UseConsoleHistoryO
     try {
       // limit=1 + 关键字：只要「最近一条」的时间，不拉整段——定位用不到内容。
       // 不带 to 上界：启动行可能位于会话起点之后（缓冲丢过行的那一段），先拿到时间再说。
-      const page = await fetchHistoryCursorPage({
+      const page = await fetchLogCursorPage({
         instanceId: frozen.instanceId,
+        source: 'instance',
         keyword: STARTUP_KEYWORD,
         limit: 1,
       })

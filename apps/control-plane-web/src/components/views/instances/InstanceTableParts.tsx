@@ -24,7 +24,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { hasCapability, resolveCapabilities } from '@/lib/capabilities'
-import type { InstanceInfo } from '@jianmanager/ui/lib/instance-types'
+import type { InstanceInfo } from '@/lib/instance-types'
 
 /**
  * 实例列表排序键（与 /instances/search 的 `sort` 参数对齐）。

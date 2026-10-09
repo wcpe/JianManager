@@ -1,6 +1,6 @@
 import { Link, useSearchParams } from 'react-router'
 import { OpsOverviewTabView, type OpsOverviewLinkRenderer, type RankFilterKey } from '@/components/views/client-dist/OpsOverviewTabView'
-import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
+import type { ObsWindow } from '@/lib/obs-window'
 import { useClientDistObservability, type ClientDistStats } from '@/api/clientStats'
 import { useClientDistSecurityOverview } from '@/api/clientDistSecurity'
 import type { ClientRuntimeOverview } from '@/api/clientRuntimeStates'
@@ -11,7 +11,7 @@ import type { RuntimeLink } from './ops-shared'
  * 页面 B · 总览 Tab（全面融合：分发健康 + 运行态 + 请求侧 + 安全态势）。
  * KPI 口径严格遵循 FR-356：更新侧率只信 observability，请求侧率只信 stats。
  *
- * 展示层已归包（`OpsOverviewTabView`），此处只保留取数与路由语义：
+ * 展示层已回迁应用侧（`OpsOverviewTabView`），此处只保留取数与路由语义：
  * 更新侧观测（`useClientDistObservability`，随页头频道/时间窗）与安全态势快照
  * （`useClientDistSecurityOverview`，不随窗口）两个 hook、排行主体 → 全量日志的深链构造
  * （目标依赖当前查询串）与 `Link` 注入都在这里；`stats` / `runtime` / `onLink` 仍由页面传入。

@@ -4,12 +4,12 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { instanceStatusLevel } from '@jianmanager/ui/lib/threshold'
 import { useCardColumns } from '@/lib/use-card-columns'
-import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
+import { useVirtualRows } from '@/lib/virtual-list'
 import { useStoredVirtualScroll } from '@/components/views/instances/VirtualizedInstanceTables'
 import { RoleBadge } from '@/components/views/instances/InstanceTableParts'
-import type { GroupDimension, InstanceGroup } from '@jianmanager/ui/lib/instance-grouping'
-import type { InstanceInfo } from '@jianmanager/ui/lib/instance-types'
-import type { ProxyRegistration } from '@jianmanager/ui/lib/proxy-registration'
+import type { GroupDimension, InstanceGroup } from '@/lib/instance-grouping'
+import type { InstanceInfo } from '@/lib/instance-types'
+import type { ProxyRegistration } from '@/lib/proxy-registration'
 
 /** 工作台卡渲染参数：由应用侧注入的卡片组件消费（该组件含启停等 mutation）。 */
 export interface InstanceCardRenderArgs {

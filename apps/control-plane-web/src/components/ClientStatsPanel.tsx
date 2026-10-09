@@ -7,7 +7,7 @@ import {
   type ObservabilityWindow,
 } from '@/api/clientDistObservability'
 import { ClientStatsPanelView } from '@/components/views/client-dist/ClientStatsPanelView'
-import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
+import type { ObsWindow } from '@/lib/obs-window'
 import { readClientDistQuery } from '@/lib/client-dist-query'
 import MachineListPanel from '@/components/client-dist/MachineListPanel'
 
@@ -32,7 +32,7 @@ function spanToDays(fromIso: string, toIso: string): number {
 /**
  * 客户端分发统计看板（FR-095 + FR-217/FR-219 + FR-356，见 ADR-023/ADR-049）的接线层（ADR-097）。
  *
- * 展示层已归包（`ClientStatsPanelView`），此处只保留应用侧职责：
+ * 展示层已回迁应用侧（`ClientStatsPanelView`），此处只保留应用侧职责：
  * - 统一时间窗（FR-425）的持有与 URL 深链解析：初始窗读当前查询串（`from`/`to` 优先，否则默认 30d），
  *   之后由本层状态驱动；
  * - 窗口 → 查询参数映射：预设档映射回天数供 `/client-dist/stats`（FR-095 日看板），

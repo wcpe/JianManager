@@ -5,9 +5,9 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import { TopologyGraph, type TopologyGraphData } from '@/components/views/console/TopologyGraph'
-import type { ProxyRegistration } from '@jianmanager/ui/lib/proxy-registration'
-import type { NodeInfo } from '@jianmanager/ui/lib/node-types'
-import type { InstanceGroupNode } from '@jianmanager/ui/lib/instance-group'
+import type { ProxyRegistration } from '@/lib/proxy-registration'
+import type { NodeInfo } from '@/lib/node-types'
+import type { InstanceGroupNode } from '@/lib/instance-group'
 
 /**
  * 拓扑图 · 受控视图测（ADR-097）。

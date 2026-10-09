@@ -5,7 +5,7 @@ import type { MetricRange } from '@jianmanager/ui'
 /**
  * 容量预测卡的应用接线层（ADR-097 a 范式）。
  *
- * 卡片本体已迁入组件库并受控；本层按 scope/targetId/range 取预测。
+ * 卡片本体是受控视图（见 components/views）；本层按 scope/targetId/range 取预测。
  * 保留同路径的导出与同一套 props，调用点无需改动。
  */
 export function CapacityForecastCard({

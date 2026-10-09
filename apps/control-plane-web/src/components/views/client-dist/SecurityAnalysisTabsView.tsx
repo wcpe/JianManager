@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type {
   ClientDistIpAnalysis,
   ClientDistPlayerAnalysis,
-} from '@jianmanager/ui/lib/client-dist-security-contracts'
+} from '@/lib/client-dist-security-contracts'
 import { EmptyState, SECURITY_EMPTY as EMPTY, fmtBytes, fmtTime } from '@/components/views/client-dist/security-format'
 
 /**

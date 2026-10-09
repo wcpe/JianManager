@@ -17,7 +17,7 @@ import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@jianmanager/ui/components/tabs'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import type { BusinessResult } from '@jianmanager/ui/lib/business'
+import type { BusinessResult } from '@/lib/business'
 import {
   buildSlotGrid,
   ENDER_CHEST_SLOTS,
@@ -26,7 +26,7 @@ import {
   type BasicAttrs,
   type InventoryView,
   type RawItemSlot,
-} from '@jianmanager/ui/lib/inventory-view'
+} from '@/lib/inventory-view'
 
 /**
  * 背包定制页（JBIS，FR-127，见 JM ADR-026 + ServerProbe ADR-0016）。

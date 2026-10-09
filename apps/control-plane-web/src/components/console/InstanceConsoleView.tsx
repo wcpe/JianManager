@@ -18,7 +18,7 @@ export type InstanceConsoleViewProps = Omit<
 /**
  * 实例控制台视图的应用接线层（ADR-097）。
  *
- * 视图本体已迁入组件库并受控；本层补三处注入：
+ * 视图本体是受控视图（见 components/views）；本层补三处注入：
  * - `onlinePlayers`：`/players` 聚合按本实例过滤后的名册（跨实例聚合的过滤属取数层职责）；
  * - `historyBacktrack`：历史回溯控制器（`useConsoleHistory` 内部走 DB 分页取数）；
  * - `onNotify`：把视图算好的复制/跳转回执接回应用侧 toast。

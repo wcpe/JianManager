@@ -1,6 +1,7 @@
-import type { ClientRuntimeOverview, RuntimeLink } from '@jianmanager/ui'
+import type { RuntimeLink } from '@jianmanager/ui'
+import { ClientRuntimeOverview } from '@/lib/client-runtime-contracts'
 import { OpsClientsTabView } from '@/components/views/client-dist/OpsClientsTabView'
-import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
+import type { ObsWindow } from '@/lib/obs-window'
 import { ObsOverviewSection } from './ObsOverviewSection'
 
 /**
@@ -8,7 +9,7 @@ import { ObsOverviewSection } from './ObsOverviewSection'
  * 更新侧总览（洞察卡 + 热力图 + 机器排行）+ 运行态 KPI/分布/明细；
  * 维护 FR-265「统计/监控=请求侧」边界——本 Tab 只走更新侧与运行态数据。
  *
- * 展示层已归包（`OpsClientsTabView`），此处只组装取数容器 slot：更新侧总览区块。
+ * 展示层已回迁应用侧（`OpsClientsTabView`），此处只组装取数容器 slot：更新侧总览区块。
  */
 export default function OpsClientsTab({
   channelId,

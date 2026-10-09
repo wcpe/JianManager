@@ -4,7 +4,7 @@ import {
   activeMetricSources,
   metricSourceLabelKey,
   type AvailabilityBits,
-} from '@jianmanager/ui/lib/metrics-availability'
+} from '@/lib/metrics-availability'
 
 /**
  * 数据来源标注（FR-447）：按 `探针 → SLP → Query` 优先级列出本拍命中来源。

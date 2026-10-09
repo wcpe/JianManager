@@ -11,10 +11,10 @@ import {
   X,
 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
-import type { ArchiveEntries, ArchiveEntry, ArchiveEntryContent } from '@jianmanager/ui/lib/file-entry'
-import { isClassName } from '@jianmanager/ui/lib/file-entry'
+import type { ArchiveEntries, ArchiveEntry, ArchiveEntryContent } from '@/lib/file-entry'
+import { isClassName } from '@/lib/file-entry'
 import CodeEditor from '@/components/views/explorer/CodeEditor'
-import { buildEntryTree, type EntryNode } from '@jianmanager/ui/lib/archive-tree'
+import { buildEntryTree, type EntryNode } from '@/lib/archive-tree'
 import { cn } from '@jianmanager/ui'
 
 /**

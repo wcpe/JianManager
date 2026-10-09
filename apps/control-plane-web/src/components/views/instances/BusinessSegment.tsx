@@ -7,8 +7,8 @@ import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import type { BusinessAction, BusinessResult } from '@jianmanager/ui/lib/business'
-import { buildBusinessPayload, isWriteAction } from '@jianmanager/ui/lib/business-actions'
+import type { BusinessAction, BusinessResult } from '@/lib/business'
+import { buildBusinessPayload, isWriteAction } from '@/lib/business-actions'
 
 /**
  * 业务掌控台（JBIS，FR-119，见 ADR-026/027）。

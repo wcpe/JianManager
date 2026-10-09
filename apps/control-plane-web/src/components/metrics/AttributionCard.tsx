@@ -9,7 +9,7 @@ export { AttributionResultView } from '@/components/views/instances/AttributionC
 /**
  * 性能归因卡的应用接线层（ADR-097 a 范式）。
  *
- * 卡片本体已迁入组件库并受控；本层持有「是否已分析过」并接按需取数。
+ * 卡片本体是受控视图（见 components/views）；本层持有「是否已分析过」并接按需取数。
  * 保留同路径的导出与同一套 props，调用点无需改动。
  */
 export function AttributionCard({ instanceUuid, range }: { instanceUuid: string; range: MetricRange }) {

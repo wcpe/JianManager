@@ -3,7 +3,7 @@ import { Gauge } from 'lucide-react'
 
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
-import type { InstanceQuotaStatus } from '@jianmanager/ui/lib/quota-status'
+import type { InstanceQuotaStatus } from '@/lib/quota-status'
 
 export interface QuotaPanelProps {
   /** 配额快照（应用侧取数；未加载/失败时为 undefined）。 */

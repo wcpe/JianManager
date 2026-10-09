@@ -4,7 +4,7 @@ import { Box, CornerDownLeft, Network, Search, Server, Terminal } from 'lucide-r
 
 import { cn } from '@jianmanager/ui'
 import { instanceStatusLevel } from '@jianmanager/ui'
-import { searchPalette, type PaletteEntry, type PaletteSources } from '@jianmanager/ui/lib/command-palette'
+import { searchPalette, type PaletteEntry, type PaletteSources } from '@/lib/command-palette'
 
 /** kind → 行首图标。 */
 const KIND_ICON = {

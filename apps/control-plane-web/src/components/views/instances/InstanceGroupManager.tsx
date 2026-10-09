@@ -13,10 +13,10 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { cn } from '@jianmanager/ui'
-import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
-import { useCardColumns } from '@jianmanager/ui/lib/use-card-columns'
-import type { InstanceGroupNode } from '@jianmanager/ui/lib/instance-group'
-import { groupPathOf } from '@jianmanager/ui/lib/instance-group-path'
+import { useVirtualRows } from '@/lib/virtual-list'
+import { useCardColumns } from '@/lib/use-card-columns'
+import type { InstanceGroupNode } from '@/lib/instance-group'
+import { groupPathOf } from '@/lib/instance-group-path'
 import {
   InstanceWorktableCard,
   type InstanceWorktableCardInstanceView,

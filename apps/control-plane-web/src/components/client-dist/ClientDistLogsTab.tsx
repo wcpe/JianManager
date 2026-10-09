@@ -20,7 +20,7 @@ import { OPS_ALL, type RuntimeLink } from './ops-shared'
  * - `type=request`（缺省）：加厚请求表 + 脱敏详情（`useClientDistEventSearch` + `useClientDistEventDetail`，保留 FR-357/FR-265）。
  * - `type=all` 或其余 5 类：安全聚合多类型表（`useClientDistSecurityLogs`，服务端聚合 hello/risk/action/request/runtime/telemetry）。
  *
- * 展示层已归包（`ClientDistRequestLogsView` / `ClientDistAggregateLogsView`），此处只保留应用侧职责：
+ * 展示层已回迁应用侧（`ClientDistRequestLogsView` / `ClientDistAggregateLogsView`），此处只保留应用侧职责：
  * 两路取数（各分支容器内调用，保持「只有当前分支的 hook 生效」）、`type` 与筛选的查询串读写、
  * 排行/联动深链构造与 `Link` 注入、导出按钮接线；详情弹窗开合真源在视图，容器只镜像 id 驱动取详情。
  */

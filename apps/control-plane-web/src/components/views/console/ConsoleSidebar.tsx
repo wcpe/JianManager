@@ -26,7 +26,7 @@ import {
 import { SidebarNavLink } from '@/components/views/console/SidebarNavLink'
 import { ThemeSwitcher, type ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
-import type { NavGroup, NavSection } from '@jianmanager/ui/lib/nav-config'
+import type { NavGroup, NavSection } from '@/lib/nav-config'
 
 /** 分节小标题图标（仅视觉，折叠态不显）。 */
 const SECTION_ICON: Record<string, LucideIcon> = {

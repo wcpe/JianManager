@@ -9,7 +9,7 @@ import type {
   SecurityTargetType,
   SetChannelProtectionRequest,
   SetKeyStateRequest,
-} from '@jianmanager/ui/lib/client-dist-security-contracts'
+} from '@/lib/client-dist-security-contracts'
 import {
   useBlockClientDistIP,
   useCancelClientDistIPBlock,
@@ -26,7 +26,7 @@ import { useSecurityQuery } from './security-shared'
 /**
  * 安全侧「封禁与降级」：顶部动作按钮 + 三模态 + 全宽动作流水（处置入口统一，候选可下拉）。
  *
- * 展示层已归包（`SecurityActionsTabView`），此处只保留取数、候选汇总与五个写 mutation：
+ * 展示层已回迁应用侧（`SecurityActionsTabView`），此处只保留取数、候选汇总与五个写 mutation：
  * 处置流水与三个筛选条件（触发重新取数）、四个候选来源（频道列表 / IP 建议 /
  * 密钥列表 / 频道安全摘要）都在容器侧；两个模态的频道选择由视图上报后镜像，仅用于取候选。
  * 成功/失败 toast 与在途状态由容器提供，模态关闭时机由视图按 onXxx 返回值处理。

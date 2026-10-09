@@ -20,7 +20,7 @@ import {
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { validateRequired } from '@jianmanager/ui/lib/form-validation'
+import { validateRequired } from '@/lib/form-validation'
 import { cn } from '@jianmanager/ui'
 
 /** 可登记进代理的候选（视图只需要 id 与展示名；应用侧传完整实例对象亦结构兼容）。 */

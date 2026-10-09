@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做通知流取数、标记已读与两处跳转接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做通知流取数、标记已读与两处跳转接线。
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import {

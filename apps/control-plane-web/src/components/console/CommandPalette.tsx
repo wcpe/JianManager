@@ -9,13 +9,13 @@ import { usePermissionsStore } from '@/stores/permissions'
 import { useConsoleStore } from '@/stores/console'
 import { flatNavItems } from './nav-config'
 import { prefetchRoute } from '@/lib/route-prefetch'
-import type { PaletteEntry } from '@jianmanager/ui/lib/command-palette'
+import type { PaletteEntry } from '@/lib/command-palette'
 import CommandPaletteView from '@/components/views/instances/CommandPalette'
 
 /**
  * 全局命令面板的应用接线层（ADR-097 a 范式）。
  *
- * 面板本体已迁入组件库并受控；本层持有开合（含全局 Ctrl/⌘+K 监听）、四类数据源
+ * 面板本体是受控视图（见 components/views）；本层持有开合（含全局 Ctrl/⌘+K 监听）、四类数据源
  * （实例走服务端搜索、节点、页面来自导航配置、操作静态）、以及「执行结果」的跳转与副作用。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。
  */

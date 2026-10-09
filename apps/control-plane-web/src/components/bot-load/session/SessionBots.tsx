@@ -8,7 +8,7 @@ import { useBotLoadRunBots } from '@/api/bot-load'
 import { readBotFilter, writeBotFilter } from '@/lib/bot-load/filters'
 
 /**
- * 会话 Bot 列表接线层：过滤条件与页码在 URL 上（可分享深链），展示层已归包。
+ * 会话 Bot 列表接线层：过滤条件与页码在 URL 上（可分享深链），展示层已回迁应用侧。
  */
 export function SessionBots({ runId }: { runId: number | string }) {
   const [params, setParams] = useSearchParams()

@@ -10,7 +10,7 @@ export interface TopologyGraphProps {
 }
 
 /**
- * 群组服拓扑图接线层（ADR-097）：视图已归包，取数留在应用侧。
+ * 群组服拓扑图接线层（ADR-097）：视图已回迁应用侧，取数留在应用侧。
  *
  * - `useTopology()`：单条聚合查询消 per-proxy N+1（FR-335）；
  * - `useNodes()`：节点负载标签数据源（FR-453，复用已缓存的节点列表，无 per-instance N+1）；

@@ -15,7 +15,7 @@ import { InstanceWorktableCard as InstanceWorktableCardView } from '@/components
 /**
  * 实例工作台卡的应用接线层（ADR-097 b 范式）。
  *
- * 卡本体已迁入组件库并受控；本层承担四件它不该自己做的事：路由跳转（列表页可自定义、
+ * 卡本体是受控视图（见 components/views）；本层承担四件它不该自己做的事：路由跳转（列表页可自定义、
  * 超级工作台用默认深链）、能力画像判定（是否代理）、搭建中判定、运行态漂移判定，
  * 外加实时指标取数与三个动作。保留同名同路径的具名导出与同一套 props，调用点无需改动。
  */

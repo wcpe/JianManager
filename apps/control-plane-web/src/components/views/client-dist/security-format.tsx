@@ -1,4 +1,4 @@
-import type { SecurityLevel } from '@jianmanager/ui/lib/client-dist-security-contracts'
+import type { SecurityLevel } from '@/lib/client-dist-security-contracts'
 
 /**
  * 客户端分发安全侧的展示工具（FR-430 / ADR-088）。

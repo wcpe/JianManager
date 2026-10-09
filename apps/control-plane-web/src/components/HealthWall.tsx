@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入健康墙快照与路由链接（受控化）。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只注入健康墙快照与路由链接（受控化）。
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { HealthWall as HealthWallView } from '@/components/views/nodes/HealthWall'

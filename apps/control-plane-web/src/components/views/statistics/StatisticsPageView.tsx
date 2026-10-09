@@ -17,11 +17,11 @@ import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { RangePicker, type MetricRange } from '@jianmanager/ui'
-import type { ClientDistObservability } from '@jianmanager/ui/lib/client-dist-stats-contracts'
-import { summarizeNodes } from '@jianmanager/ui/lib/node-summary'
-import type { NodeInfo } from '@jianmanager/ui/lib/node-types'
-import type { OnlinePlayersResult } from '@jianmanager/ui/lib/player'
-import { bucketsFromCounts, summarizeProbeReachability, tallyBy, type DistBucket } from '@jianmanager/ui/lib/platform-stats'
+import type { ClientDistObservability } from '@/lib/client-dist-stats-contracts'
+import { summarizeNodes } from '@/lib/node-summary'
+import type { NodeInfo } from '@/lib/node-types'
+import type { OnlinePlayersResult } from '@/lib/player'
+import { bucketsFromCounts, summarizeProbeReachability, tallyBy, type DistBucket } from '@/lib/platform-stats'
 
 /** 字节 → 紧凑可读（G/M/K）。 */
 function fmtBytes(b: number): string {

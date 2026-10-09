@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { cn } from '@jianmanager/ui'
-import type { NavEntry } from '@jianmanager/ui/lib/nav-config'
+import type { NavEntry } from '@/lib/nav-config'
 import type { SidebarLinkArgs, SidebarLinkRenderer } from '@/components/views/console/sidebar-link'
 
 /** 渲染入参：与侧栏其它链接共用同一份（见 {@link SidebarLinkArgs}）；此处保留旧名以免已引用它的代码改动。 */

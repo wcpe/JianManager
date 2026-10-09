@@ -12,7 +12,7 @@ import CreateInstanceDialogView from '@/components/views/CreateInstanceDialog'
 /**
  * 新建实例对话框的应用接线层（ADR-097 b 范式）。
  *
- * 对话框本体已迁入组件库并受控；本层取四份候选（启用态节点 / 该节点 JDK / 用户组 / 模板）、
+ * 对话框本体是受控视图（见 components/views）；本层取四份候选（启用态节点 / 该节点 JDK / 用户组 / 模板）、
  * 发创建请求并失效实例列表。保留同路径的默认导出与同一套 props，调用点无需改动。
  */
 export default function CreateInstanceDialog({
