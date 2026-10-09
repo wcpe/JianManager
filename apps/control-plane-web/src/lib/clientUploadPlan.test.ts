@@ -1,17 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import {
-  AGGREGATE_MAX_FILE_BYTES,
-  HASH_MAX_FILE_BYTES,
-  BATCH_MAX_FILES,
-  BATCH_MAX_TOTAL_BYTES,
-  shouldHash,
-  uploadRouteFor,
-  packBatches,
-  chunkList,
-  runLimited,
-  createProgressTracker,
-  sha256HexOfBlob,
-} from './clientUploadPlan'
+import { AGGREGATE_MAX_FILE_BYTES, HASH_MAX_FILE_BYTES, BATCH_MAX_FILES, BATCH_MAX_TOTAL_BYTES, shouldHash, uploadRouteFor, packBatches, chunkList, runLimited, createProgressTracker, sha256HexOfBlob } from '@/lib/client-upload-plan'
 
 /** FR-346 上传增效纯逻辑：分路 / 装箱 / 并发池 / 单调进度 / 浏览器 hash。 */
 

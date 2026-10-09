@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { uploadFilesEfficient, type EfficientUploadProgress } from './efficientUpload'
-import { AGGREGATE_MAX_FILE_BYTES, HASH_MAX_FILE_BYTES } from './clientUploadPlan'
+import { AGGREGATE_MAX_FILE_BYTES, HASH_MAX_FILE_BYTES } from '@/lib/client-upload-plan'
 import { precheckClientFiles, uploadClientFilesBatch } from '@/api/clientVersions'
 import type { ClientFileResult, PrecheckFileResult } from '@/api/clientVersions'
 import { uploadFileChunked } from './chunkedUpload'

@@ -9,7 +9,7 @@ import {
   toggleComment,
   toggleBlockComment,
 } from '@codemirror/commands'
-import { ideKeymap } from './ide-extensions'
+import { ideKeymap } from '@/lib/explorer-ide-extensions'
 import { editorShortcutRows } from '@/lib/shortcuts'
 
 describe('ideKeymap', () => {

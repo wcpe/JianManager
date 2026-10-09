@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { buildNodeOptions, initialWizardNodeId } from './instance-wizard-options'
+import { buildNodeOptions, initialWizardNodeId } from '@/lib/instance-wizard-options'
 
 const labels = { online: '在线', offline: '离线', starting: '启动中', maintenance: '维护中' }
 

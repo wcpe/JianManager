@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { screen, fireEvent } from '@testing-library/react'
 import { useState } from 'react'
 import { renderWithProviders } from '@/test/render'
-import CleanScopeEditor from './CleanScopeEditor'
+import { CleanScopeEditor } from '@/components/views/client-dist/CleanScopeEditor'
 import type { ManifestFileLike } from '@/lib/client-publish-wizard'
 
 /**

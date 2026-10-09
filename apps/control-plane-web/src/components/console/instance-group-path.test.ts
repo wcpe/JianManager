@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { groupPathOf } from './instance-group-path'
+import { groupPathOf } from '@/lib/instance-group-path'
 import type { InstanceGroupNode } from '@/api/instanceGroups'
 
 function gnode(id: number, parentId: number | null, name = `grp-${id}`): InstanceGroupNode {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { joinAbsPath, isPermissionErrorMessage } from './import-server-path'
+import { joinAbsPath, isPermissionErrorMessage } from '@/lib/import-server-path'
 
 describe('import-server-path（FR-374）', () => {
   it('joinAbsPath Unix', () => {

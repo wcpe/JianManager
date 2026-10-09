@@ -11,8 +11,8 @@
 import { describe, it, expect } from 'vitest'
 import { EditorState, EditorSelection, type Command } from '@codemirror/state'
 import { toggleComment } from '@codemirror/commands'
-import { languageKindFor } from '../language'
-import { commentTokensForFilename } from './comment'
+import { languageKindFor } from '@/lib/explorer-language'
+import { commentTokensForFilename } from '@/lib/explorer-comment'
 
 /** 用某文件名对应的注释符建一个光标在行首的最小编辑状态。 */
 function stateFor(filename: string, doc: string): EditorState {
