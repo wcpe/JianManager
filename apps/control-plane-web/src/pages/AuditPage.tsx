@@ -3,7 +3,8 @@ import { useMemo, useState } from 'react'
 import { useAuditLogs, exportAuditLogs } from '@/api/audit'
 import { useUsers } from '@/api/users'
 import { AuditPageView } from '@/components/views/audit/AuditPageView'
-import { DEFAULT_AUDIT_FILTER, toAuditParams, type AuditFilterState } from './audit-filters'
+import { DEFAULT_AUDIT_FILTER, toAuditParams } from '@/lib/audit-filters'
+import type { AuditFilterState } from '@/lib/audit-filters'
 
 /**
  * 审计日志页容器（ADR-097 a 范式）：分页取数、筛选态、候选用户与导出都在这里决定，

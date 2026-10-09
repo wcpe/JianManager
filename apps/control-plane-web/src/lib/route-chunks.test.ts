@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { ROUTE_CHUNKS, ROUTE_KEYS, matchRouteKey } from './route-chunks'
-import { flatNavItems } from '@/components/console/nav-config'
+import { flatNavItems } from '@/lib/nav-config'
 
 /**
  * 路由 chunk 表测试（FR-496 阶段 6 补丁）。

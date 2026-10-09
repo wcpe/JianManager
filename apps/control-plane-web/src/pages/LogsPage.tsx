@@ -19,11 +19,8 @@ import { InstancePicker } from '@/components/InstancePicker'
 import { LOGS_FEDERATION_KEYS } from '@/lib/logs-federation'
 import { LogsPageView } from '@/components/views/logs/LogsPageView'
 import type { LogsFilterState, LogsInsights, LogsView } from '@/components/views/logs/LogsPageView'
-import {
-  buildExportParams,
-  timeRangeToParams,
-  type LogExportScope,
-} from './logs-filters'
+import { buildExportParams, timeRangeToParams } from '@/lib/logs-filters'
+import type { LogExportScope } from '@/lib/logs-filters'
 
 /**
  * 把事件的原始来源标识归一为下拉取值域（instance/control_plane/worker）。

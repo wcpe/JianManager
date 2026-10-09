@@ -14,10 +14,12 @@ import {
 } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { botLoadQueryKeys, botLoadStreamUrl, ensureFreshToken } from '@/api/bot-load'
-import { subscribeBotLoadRunStream, type BotLoadEventClientStatus } from '@/lib/bot-load/session-event-client'
-import { applyStreamFrame, createSessionLiveState, type SessionLiveState } from '@/lib/bot-load/session-store'
-import type { BotLoadRunV2 } from '@/lib/bot-load/types'
-import { isTerminalRunState } from '@/lib/bot-load/types'
+import { subscribeBotLoadRunStream } from '@/lib/bot-load-session-event-client'
+import type { BotLoadEventClientStatus } from '@/lib/bot-load-session-event-client'
+import { applyStreamFrame, createSessionLiveState } from '@/lib/bot-load-session-store'
+import type { SessionLiveState } from '@/lib/bot-load-session-store'
+import type { BotLoadRunV2 } from '@/lib/bot-load-types'
+import { isTerminalRunState } from '@/lib/bot-load-types'
 
 interface SessionEventContextValue {
   live: SessionLiveState

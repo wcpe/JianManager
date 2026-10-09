@@ -7,7 +7,7 @@ import { useThemeStore } from '@/stores/theme'
 import { changeLanguage } from '@/i18n'
 import { isPlatformAdmin } from '@/lib/roles'
 import { useSettings, useUpdateSettings } from '@/api/settings'
-import type { SettingCategory } from '@/pages/settings-form'
+import type { SettingCategory } from '@/lib/settings-form'
 import { OutboundTestButton } from '@/components/OutboundTestButton'
 import { SettingsPageView } from '@/components/views/settings/SettingsPageView'
 

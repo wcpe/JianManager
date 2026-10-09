@@ -8,19 +8,14 @@ import { useBots, useBot, useBotEvents, useBotSummary, useBotBatch, useCreateBot
 import { useNodes } from '@/api/nodes'
 import { useDebounced } from '@/lib/use-debounced'
 import { useTabParam } from '@/lib/use-tab-param'
-import { BOTS_TABS, type BotsTab } from '@/lib/bot-load/url-state'
+import { BOTS_TABS } from '@/lib/bot-load-url-state'
+import type { BotsTab } from '@/lib/bot-load-url-state'
 import BotLoadSessionsTab from '@/pages/bots/BotLoadSessionsTab'
 import BotLoadTemplatesTab from '@/pages/bots/BotLoadTemplatesTab'
 import BotLoadWizard from '@/components/bot-load/BotLoadWizard'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
-import {
-  statusCounts,
-  toListParams,
-  groupFilter,
-  distribution,
-  type GroupByDim,
-  type OverviewFilter,
-} from './bots-overview'
+import { statusCounts, toListParams, groupFilter, distribution } from '@/lib/bots-overview'
+import type { GroupByDim, OverviewFilter } from '@/lib/bots-overview'
 import { SummaryCards } from '@/components/views/bots/BotListParts'
 import { BotToolbar } from '@/components/views/bots/BotToolbar'
 import { BotBatchBar } from '@/components/views/bots/BotBatchBar'
@@ -29,7 +24,7 @@ import { BOT_PEEK_PAGE_SIZE, BotGroupActions, BotGroupPeek, BotGroupRow } from '
 import { BotStressSessionDialog } from '@/components/views/bots/BotStressSessionDialog'
 import { BotDetailDialog as BotDetailDialogView } from '@/components/views/bots/BotDetailDialog'
 import { useDangerPermission } from '@/lib/danger'
-import { BotWorktableCard } from '@/components/console/BotWorktableCard'
+import { BotWorktableCard } from '@/components/views/console/ConsoleLeafParts'
 import type { ViewMode } from '@jianmanager/ui/components/view-toggle'
 import { Plus } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'

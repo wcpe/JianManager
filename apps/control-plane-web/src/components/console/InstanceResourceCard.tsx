@@ -5,7 +5,7 @@ import { Download } from 'lucide-react'
 import { InstanceResourceCard as InstanceResourceCardView } from '@/components/views/console/InstanceResourceCard'
 import ConfigExplorer from '@/components/config-explorer/ConfigExplorer'
 import UnifiedExplorerShell from '@/components/file-browser/UnifiedExplorerShell'
-import { instanceBrowseCapability, instanceFilesCapability } from '@/components/file-browser/capability'
+import { instanceBrowseCapability, instanceFilesCapability } from '@/lib/file-browser-capability'
 import { instanceFileSource } from '@/components/file-browser/sources/instanceSource'
 import type { FileBrowserAction } from '@/lib/file-browser-types'
 

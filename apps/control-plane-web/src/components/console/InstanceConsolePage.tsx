@@ -33,7 +33,7 @@ import GenericConfigSegment from './GenericConfigSegment'
 import { HealthPanel } from './HealthPanel'
 import { RuntimeDriftBanner } from './RuntimeDriftNotice'
 import WorkspaceCardBody from './WorkspaceCardBody'
-import { recordRecentServer } from './server-selection'
+import { recordRecentServer } from '@/lib/server-selection'
 
 interface InstanceConsolePageProps {
   instanceId: number

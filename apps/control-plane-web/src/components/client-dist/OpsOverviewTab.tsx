@@ -6,7 +6,7 @@ import { useClientDistObservability, type ClientDistStats } from '@/api/clientSt
 import { useClientDistSecurityOverview } from '@/api/clientDistSecurity'
 import type { ClientRuntimeOverview } from '@/api/clientRuntimeStates'
 import { buildClientDistHref } from '@/lib/client-dist-query'
-import type { RuntimeLink } from './ops-shared'
+import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
 /**
  * 页面 B · 总览 Tab（全面融合：分发健康 + 运行态 + 请求侧 + 安全态势）。
