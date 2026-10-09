@@ -35,3 +35,25 @@ export function loginMockUser(token = 'test-access-token'): void {
     })
   }
 }
+
+/**
+ * 构造仅供前端解码角色声明的测试 JWT（结构最小，不校验签名）。
+ *
+ * 角色得是真的 JWT 声明才解得出来——这是重点，见 `loginMockUserAs`。
+ */
+export function makeTestJwt(role: number): string {
+  const b64url = (obj: Record<string, unknown>) =>
+    btoa(JSON.stringify(obj)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  return `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url({ userId: 1, username: 'tester', role })}.sig`
+}
+
+/**
+ * 以指定角色登录（FR-059 危险操作门禁依赖 token 里的 `role` 声明）。
+ *
+ * `loginMockUser()` 的默认 token 不是 JWT，`decodeJwt` 解不出 role，而 `canRunDanger`
+ * 对未登录（role=null）判为拒绝。这对「未登录」语义是对的，但渲染带 `scope` 的
+ * 危险确认弹窗的用例必须给真实角色，否则弹窗一律落到越权态、输入框根本不渲染。
+ */
+export function loginMockUserAs(role: number): void {
+  loginMockUser(makeTestJwt(role))
+}

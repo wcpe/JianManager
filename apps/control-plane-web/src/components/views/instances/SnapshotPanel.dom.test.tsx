@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithI18n } from '@/test/i18n'
 import SnapshotPanel, { type InstanceSnapshotView } from '@/components/views/instances/SnapshotPanel'
+import { loginMockUserAs } from '@/test/auth'
+import { Role } from '@/lib/shared/danger'
 
 /**
  * FR-466 实例整机快照面板 · 受控视图测（ADR-097 b 范式）。
@@ -37,6 +39,12 @@ function renderPanel(props: Partial<Props> = {}) {
   const result = renderWithI18n(<SnapshotPanel snapshots={snaps} {...handlers} />)
   return { ...handlers, ...result }
 }
+
+// 面板内的危险操作确认按登录态角色判定（scope="group"）；未登录（role=null）一律落到越权态，
+// 输入框不渲染、确认按钮禁用。
+beforeEach(() => {
+  loginMockUserAs(Role.GroupAdmin)
+})
 
 describe('SnapshotPanel（FR-466 · ADR-097 b 范式）', () => {
   it('读取失败渲染错误块，而不是「暂无快照」', () => {

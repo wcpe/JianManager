@@ -2,7 +2,6 @@
 import { useState } from 'react'
 import { useBaselineDrift, useConfigBaselines, useConvergeBaseline, useDeleteBaseline, useUpsertBaseline } from '@/api/configBaselines'
 import { useInstanceGroups } from '@/api/instanceGroups'
-import { useDangerPermission } from '@/lib/shared/danger'
 import { ConfigBaselinesPageView } from '@/components/views/config-baselines/ConfigBaselinesPageView'
 
 /**
@@ -27,7 +26,6 @@ export default function ConfigBaselinesPage() {
   // `group:<id>` scope 选择器的候选：组织树分组（ADR-033），与用户组 id 正交。
   const { data: groups } = useInstanceGroups()
   // 删除是组级破坏操作：角色门禁在应用侧判定后注入（包内不持鉴权状态）。
-  const { allowed: dangerAllowed } = useDangerPermission('group')
 
   return (
     <ConfigBaselinesPageView
@@ -43,7 +41,6 @@ export default function ConfigBaselinesPage() {
       converging={converge.isPending}
       saving={upsert.isPending}
       deleting={del.isPending}
-      dangerAllowed={dangerAllowed}
       // 创建与编辑同走 upsert（后端按 scopeKey+filePath 覆盖），故无需消费 editingId。
       // 归一化在此完成：filePath 去首尾空格、message 为空则省略（与原实现提交的落库体逐字一致）。
       onSubmit={async (values) => {

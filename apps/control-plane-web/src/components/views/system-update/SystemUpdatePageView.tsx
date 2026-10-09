@@ -415,7 +415,6 @@ export interface SystemUpdateNodeRowProps {
   /** 本行在途的动作；null=空闲。 */
   pending: 'upgrade' | 'rollback' | null
   /** DangerConfirm 的平台范围门禁结果（应用侧读登录态角色后注入）。 */
-  dangerAllowed: boolean
   /** 单节点升级上报。 */
   onUpgrade: (nodeId: number) => void
   /** 单节点回滚上报。 */
@@ -428,7 +427,6 @@ export function SystemUpdateNodeRow({
   latest,
   rolloutRunning,
   pending,
-  dangerAllowed,
   onUpgrade,
   onRollback,
 }: SystemUpdateNodeRowProps) {
@@ -480,14 +478,13 @@ export function SystemUpdateNodeRow({
           </Button>
         </div>
 
-        {/* 危险动作边界（FR-059，逐字保持）：scope=platform、无 confirmText、不在途标记；
-            门禁结果 allowed 由容器注入，本视图不得自行判定或放宽。 */}
+        {/* 危险动作边界（FR-059）：scope=platform、无 confirmText、不在途标记；
+            角色门禁由 DangerConfirm 自行读登录态判定。 */}
         <DangerConfirm
           open={confirm}
           title={t('systemUpdate.nodeUpgradeConfirm', '确定升级该节点？')}
           description={t('systemUpdate.nodeUpgradeConfirmDesc', '将令该节点下载新版 Worker（{{v}}）、sha256 校验后替换并重启。daemon 模式下运行中的游戏服不掉。', { v: latest })}
           scope="platform"
-          allowed={dangerAllowed}
           confirmLabel={t('systemUpdate.upgrade', '升级')}
           onConfirm={() => {
             setConfirm(false)
@@ -502,7 +499,6 @@ export function SystemUpdateNodeRow({
           title={t('systemUpdate.nodeRollbackConfirm', '确定回滚该节点？')}
           description={t('systemUpdate.nodeRollbackConfirmDesc', '将令该节点换回升级前备份（v{{v}}）、sha256 校验后替换并重启 Worker。daemon 模式下运行中的游戏服不掉。', { v: node.backupVersion })}
           scope="platform"
-          allowed={dangerAllowed}
           confirmLabel={t('systemUpdate.rollback', '回滚')}
           onConfirm={() => {
             setConfirmRollback(false)
@@ -535,7 +531,6 @@ export interface SystemUpdateNodesSectionProps {
   /** 打开全网升级配置弹窗（开合与二次确认留在本视图）。 */
   onUpgradeAll: () => void
   /** DangerConfirm 的平台范围门禁结果。 */
-  dangerAllowed: boolean
   /** Worker 二进制缓存条目。 */
   workerAssets?: SystemUpdateWorkerAssetEntry[]
   /** Worker 缓存取数中。 */
@@ -560,7 +555,6 @@ export function SystemUpdateNodesSection({
   onUpgradeNode,
   onRollbackNode,
   onUpgradeAll,
-  dangerAllowed,
   workerAssets,
   workerAssetsFetching,
   workerAssetsErrorMessage,
@@ -613,7 +607,6 @@ export function SystemUpdateNodesSection({
                 rolloutRunning={rolloutRunning}
                 // 先判 nodePending 非空再比 nodeId：nodeId 本身可选，`undefined === undefined` 会误命中。
                 pending={nodePending && nodePending.nodeId === n.nodeId ? nodePending.action : null}
-                dangerAllowed={dangerAllowed}
                 onUpgrade={onUpgradeNode}
                 onRollback={onRollbackNode}
               />
@@ -643,7 +636,6 @@ export interface SystemUpdateControlPlaneCardProps {
   /** 回滚在途。 */
   rollingBack: boolean
   /** DangerConfirm 的平台范围门禁结果。 */
-  dangerAllowed: boolean
   /** 自升级上报（容器执行 mutation + toast + 延迟刷新检查结果）。 */
   onUpgrade: () => void
   /** 回滚上报。 */
@@ -656,7 +648,6 @@ export function SystemUpdateControlPlaneCard({
   latest,
   upgrading,
   rollingBack,
-  dangerAllowed,
   onUpgrade,
   onRollback,
 }: SystemUpdateControlPlaneCardProps) {
@@ -702,14 +693,13 @@ export function SystemUpdateControlPlaneCard({
         </div>
       </div>
 
-      {/* 危险动作边界（FR-059，逐字保持）：scope=platform + confirmText=目标版本号（须逐字输入）。
-          门禁结果 allowed 由容器注入，本视图不得自行判定或放宽。 */}
+      {/* 危险动作边界（FR-059）：scope=platform + confirmText=目标版本号（须逐字输入）。
+          角色门禁由 DangerConfirm 自行读登录态判定。 */}
       <DangerConfirm
         open={confirm}
         title={t('systemUpdate.cpUpgradeConfirm', '确定升级 Control Plane？')}
         description={t('systemUpdate.cpUpgradeConfirmDesc', '将下载新版二进制、sha256 校验后替换并平滑重启控制台。重启期间 Web 短暂不可用，重连后即为新版本。')}
         scope="platform"
-        allowed={dangerAllowed}
         confirmLabel={t('systemUpdate.upgrade', '升级')}
         confirmText={latest}
         onConfirm={() => {
@@ -724,7 +714,6 @@ export function SystemUpdateControlPlaneCard({
         title={t('systemUpdate.cpRollbackConfirm', '确定回滚 Control Plane？')}
         description={t('systemUpdate.cpRollbackConfirmDesc', '将把控制台换回升级前备份（v{{v}}）、sha256 校验后替换并平滑重启。重启期间 Web 短暂不可用，重连后即为旧版本。', { v: cp.backupVersion })}
         scope="platform"
-        allowed={dangerAllowed}
         confirmLabel={t('systemUpdate.rollback', '回滚')}
         confirmText={cp.backupVersion}
         onConfirm={() => {
@@ -870,7 +859,7 @@ export function SystemUpdateRolloutPanel({ rollout }: SystemUpdateRolloutPanelPr
  *   由容器执行 mutation 与 toast 文案；复制回执走 `onNotify` 通道（包内不引 sonner）。
  * - **危险动作边界逐字保持**：四处 `DangerConfirm` 的 scope=platform、confirmText（CP 升级=目标版本号、
  *   CP 回滚=备份版本号、节点升级/回滚=无）、按钮禁用判据、确认框开合时机（先关窗再发请求）与迁包前完全一致；
- *   门禁结果经 `dangerAllowed` 注入（容器读登录态角色），视图既不判定也不放宽。
+ *   门禁由 `DangerConfirm` 自行读登录态角色判定。
  * - **受控状态归属**：本页查询键固定，没有「一变就重新取数」的状态；因此弹窗开合（全网升级配置/二次确认、
  *   CP 与节点行的二次确认）与金丝雀草稿（金丝雀数、每批数、失败即中止）都留包内——它们是纯 UI 状态。
  *   只有「在途目标」这类由 mutation 派生的展示态由容器注入（`nodePending` / `pendingWorkerAsset` /
@@ -881,7 +870,6 @@ export interface SystemUpdatePageViewProps {
   /** 是否平台管理员：false 时整页渲染 forbidden 提示（路由守卫之外的纵深防御）。 */
   isPlatformAdmin: boolean
   /** 四处危险确认的平台范围门禁结果（应用侧读登录态角色后注入）。 */
-  dangerAllowed: boolean
   /** `GET /self-update/check` 的结果；缺省表示尚未拿到任何结果（渲染引导占位）。 */
   check?: SystemUpdateCheckResult
   /** 检查失败的后端消息（缺省=无错误）；仅当尚无 check 结果时渲染整屏错误横幅。 */
@@ -934,7 +922,6 @@ export interface SystemUpdatePageViewProps {
  */
 export function SystemUpdatePageView({
   isPlatformAdmin,
-  dangerAllowed,
   check,
   checkErrorMessage,
   refreshing,
@@ -1055,7 +1042,6 @@ export function SystemUpdatePageView({
             latest={result.latestVersion}
             upgrading={cpUpgrading}
             rollingBack={cpRollingBack}
-            dangerAllowed={dangerAllowed}
             onUpgrade={onUpgradeControlPlane}
             onRollback={onRollbackControlPlane}
           />
@@ -1069,7 +1055,6 @@ export function SystemUpdatePageView({
             onUpgradeNode={onUpgradeNode}
             onRollbackNode={onRollbackNode}
             onUpgradeAll={() => setConfigAll(true)}
-            dangerAllowed={dangerAllowed}
             workerAssets={workerAssets}
             workerAssetsFetching={workerAssetsFetching}
             workerAssetsErrorMessage={workerAssetsErrorMessage}
@@ -1143,7 +1128,6 @@ export function SystemUpdatePageView({
         title={t('systemUpdate.upgradeAllConfirm', '确定升级全网节点？')}
         description={t('systemUpdate.upgradeAllConfirmDesc', '将对所有在线节点逐个下发升级（串行）。每个节点下载校验后热替换并重启 Worker；daemon 模式下游戏服不掉。')}
         scope="platform"
-        allowed={dangerAllowed}
         confirmLabel={t('systemUpdate.upgradeAll', '全网升级')}
         onConfirm={() => {
           setConfirmAll(false)

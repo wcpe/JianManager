@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useInstances } from '@/api/instances'
 import { useOnlinePlayers, useKickPlayer, useBanPlayer, useUnbanPlayer, useBans, useWhitelist, useWhitelistAction, usePlayerEvents, type PlayerActionResult } from '@/api/players'
-import { useDangerPermission } from '@/lib/shared/danger'
 import { PlayersPageView } from '@/components/views/players/PlayersPageView'
 import type { PlayerActionRequest, PlayerTab } from '@/components/views/players/PlayersPageView'
 
@@ -65,7 +64,6 @@ export default function PlayersPage() {
   const { data: bans, isLoading: bansLoading } = useBans({ active: bansActiveOnly }, { enabled: tab === 'bans' })
   const unban = useUnbanPlayer()
   // 解封走 DangerConfirm scope=group 的前端角色门禁：包内视图不持鉴权状态，判定结果由本层注入。
-  const { allowed: unbanAllowed } = useDangerPermission('group')
 
   /** 解封：成功返回 true（视图据此收起确认弹窗），失败保留弹窗便于重试——与原页 onSuccess 语义一致。 */
   const handleUnban = async (name: string) => {
@@ -133,7 +131,6 @@ export default function PlayersPage() {
       bansLoading={bansLoading}
       bansActiveOnly={bansActiveOnly}
       onBansActiveOnlyChange={setBansActiveOnly}
-      unbanAllowed={unbanAllowed}
       onUnban={handleUnban}
       whitelistBackends={whitelistBackends}
       whitelistInstanceId={whitelistEffectiveId}

@@ -1,5 +1,4 @@
 import { useAuthStore } from '@/stores/auth'
-import type { DangerScope } from '@/components/views/common/DangerConfirm'
 
 /**
  * 危险操作的「权限范围」分级（FR-059 角色门禁）。
@@ -8,9 +7,13 @@ import type { DangerScope } from '@/components/views/common/DangerConfirm'
  * 的 RBAC 中间件强制（architecture-invariants）。这里按最低角色等级判定，
  * 与后端 model.UserRole（0 组成员 / 1 组管理员 / 10 平台管理员）对齐。
  *
- * 位置说明：本模块的纯逻辑曾随业务契约并入组件库，后随业务视图回迁应用侧——
- * 它依赖 DangerConfirm 视图的 DangerScope 类型，属业务契约而非设计系统。
+ * 位置说明：本模块的纯逻辑曾随业务契约并入组件库，后随业务视图回迁应用侧。
+ * `DangerScope` 定义在此处（契约侧）而非视图里——视图要 import 本模块的 hook，
+ * 类型若留在视图会形成循环。
  */
+
+/** 危险操作的范围：'group' 组管理员+ / 'platform' 仅平台管理员。 */
+export type DangerScope = 'group' | 'platform'
 
 /** 与后端 model.UserRole 对齐的角色等级常量。 */
 export const Role = {

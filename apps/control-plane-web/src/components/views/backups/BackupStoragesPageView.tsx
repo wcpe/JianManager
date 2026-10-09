@@ -127,8 +127,6 @@ export interface BackupStoragesPageViewProps {
   testing?: boolean
   /** 行内测试在途的目标 id：只禁用该行的测试按钮，其余行不受影响。 */
   rowTestingId?: number | null
-  /** 危险操作（删除）是否放行：应用侧读角色等级后注入（组件库不持鉴权状态）。 */
-  dangerAllowed?: boolean
   /** 提交表单；`editingId` 为 null 表示创建。返回是否成功——成功才关窗并清空草稿。 */
   onSubmit: (values: BackupStorageForm, editingId: number | null) => Promise<boolean>
   /** 测试未保存的草稿（不落库）；回传结果供弹窗内联回显。 */
@@ -166,7 +164,6 @@ export function BackupStoragesPageView({
   saving = false,
   testing = false,
   rowTestingId = null,
-  dangerAllowed,
   onSubmit,
   onTestDraft,
   onTest,
@@ -454,12 +451,11 @@ export function BackupStoragesPageView({
         </DialogContent>
       </Dialog>
 
-      {/* 删除二次确认：scope/allowed 语义与原页一致——scope 固定 platform，是否放行由容器注入。 */}
+      {/* 删除二次确认：scope 固定 platform，角色门禁由 DangerConfirm 自行读登录态判定。 */}
       <DangerConfirm
         open={deleteTarget !== null}
         title={t('backupStorages.deleteConfirm', '确定删除此存储后端？')}
         scope="platform"
-        allowed={dangerAllowed}
         confirmLabel={t('common.delete', '删除')}
         onConfirm={() => {
           if (deleteTarget === null) return

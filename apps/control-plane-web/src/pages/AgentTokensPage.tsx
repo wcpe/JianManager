@@ -10,7 +10,6 @@ import { useAgentTokens, useIssueAgentToken, useRevokeAgentToken, agentTokenStat
 import { mcpBaseUrl } from '@/api/agentObservability'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import { useDangerPermission } from '@/lib/shared/danger'
 import { Button } from '@jianmanager/ui/components/button'
 import { AgentTokensPageView } from '@/components/views/agent/AgentTokensPageView'
 import type { AgentTokenRow } from '@/components/views/agent/AgentTokensPageView'
@@ -45,7 +44,6 @@ export default function AgentTokensPage() {
   const isPlatformAdmin = role === ROLE_PLATFORM_ADMIN
 
   // 吊销是平台级破坏操作：角色门禁在应用侧判定后注入（包内不持鉴权状态），scope 固定 platform 不降级。
-  const { allowed: revokeAllowed } = useDangerPermission('platform')
 
   const listQ = useAgentTokens({ enabled: isPlatformAdmin })
   const issue = useIssueAgentToken()
@@ -79,7 +77,6 @@ export default function AgentTokensPage() {
       isLoading={listQ.isLoading}
       isError={listQ.isError}
       errorText={errMsg(listQ.error, t('agentTokens.loadFailed'))}
-      revokeAllowed={revokeAllowed}
       notify={(kind, message) => {
         if (kind === 'success') toast.success(message)
         else toast.error(message)

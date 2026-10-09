@@ -9,7 +9,6 @@ import type { CreateInvitationResponse } from '@/api/users'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { isPlatformAdmin as isAdminRole } from '@/lib/shared/roles'
-import { useDangerPermission } from '@/lib/shared/danger'
 import { UsersPageView } from '@/components/views/users/UsersPageView'
 import type { CreateUserPayload } from '@/components/views/users/UsersPageView'
 
@@ -23,8 +22,8 @@ function errMessage(err: unknown, fallback: string): string {
  * 用户管理页容器（ADR-097 b 范式）：用户/邀请取数、五个写动作、写入口门禁（FR-432 user.manage）
  * 与平台级删除门禁、toast 文案都在这里决定，列表、邀请面板与三个对话框交共享视图。
  *
- * 两处门禁的判定留在应用侧（包内不持鉴权状态）：`canManageUsers` 决定写入口是否可见，
- * `dangerAllowed` 决定删除用户是否放行（scope 固定 platform，不降级）。
+ * `canManageUsers` 决定写入口是否可见；删除用户的角色门禁（scope 固定 platform，不降级）
+ * 由 `DangerConfirm` 自行读登录态判定。
  * 权限页跳转经 `renderPermissionsLink` 插槽注入（包内不依赖 react-router）。
  * 保留同路径默认导出，路由表无需改动。
  */
@@ -63,7 +62,6 @@ export default function UsersPage() {
   const canManageUsers = isPlatformAdmin || hasPerm('user.manage')
 
   // 删除是平台级破坏操作：角色门禁在应用侧判定后注入（包内不持鉴权状态）。
-  const { allowed: dangerAllowed } = useDangerPermission('platform')
 
   return (
     <UsersPageView
@@ -73,7 +71,6 @@ export default function UsersPage() {
       canManageUsers={canManageUsers}
       updating={updateUser.isPending}
       revoking={revokeInvitation.isPending}
-      dangerAllowed={dangerAllowed}
       notify={(kind, message) => {
         if (kind === 'success') toast.success(message)
         else toast.error(message)

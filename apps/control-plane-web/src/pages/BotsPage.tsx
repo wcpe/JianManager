@@ -23,7 +23,6 @@ import { BotGroupOverview } from '@/components/views/bots/BotGroupOverview'
 import { BOT_PEEK_PAGE_SIZE, BotGroupActions, BotGroupPeek, BotGroupRow } from '@/components/views/bots/BotGroupPartsView'
 import { BotStressSessionDialog } from '@/components/views/bots/BotStressSessionDialog'
 import { BotDetailDialog as BotDetailDialogView } from '@/components/views/bots/BotDetailDialog'
-import { useDangerPermission } from '@/lib/shared/danger'
 import { BotWorktableCard } from '@/components/views/console/ConsoleLeafParts'
 import type { ViewMode } from '@jianmanager/ui/components/view-toggle'
 import { Plus } from 'lucide-react'
@@ -145,7 +144,6 @@ function BotFleetTab() {
   const { data: nodes } = useNodes()
   // 分组总览的批量与门禁（原在 GroupOverview 内，视图入包后上提到容器）。
   const batch = useBotBatch()
-  const { allowed: dangerAllowed } = useDangerPermission('group')
   // 压测会话创建（原在 StressSessionDialog 内，视图入包后上提到容器）。
   const createStressSession = useCreateBotStressSession()
 
@@ -255,7 +253,6 @@ function BotFleetTab() {
             onClear={onClear}
             onBatch={(body) => batch.mutateAsync(body)}
             batchPending={batch.isPending}
-            dangerAllowed={dangerAllowed}
             onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
           />
         )}

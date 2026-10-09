@@ -100,8 +100,7 @@ export interface BaselineFormValues {
  *   属「面板在看哪条基线」这一查询语义；容器同时是其关闭动作（同 id 再触发即收起）的唯一持有者；
  * - **留本组件**的纯 UI 状态：编辑弹窗开合与编辑目标、删除确认目标、编辑器草稿；
  *   编辑目标不触发取数（取数由容器的 mutation 成功钩子失效缓存驱动）；
- * - 删除二次确认沿用原语义：scope 固定 `group`，是否放行由容器读角色等级后注入 `dangerAllowed`——
- *   组件库不持鉴权状态，故本视图可在无登录态环境（组件博物馆）独立渲染。
+ * - 删除二次确认沿用原语义：scope 固定 `group`，由 `DangerConfirm` 自行读角色等级判定。
  */
 export interface ConfigBaselinesPageViewProps {
   /** 基线列表；容器取数后注入（缺省或空数组渲染空态）。 */
@@ -128,8 +127,6 @@ export interface ConfigBaselinesPageViewProps {
   saving?: boolean
   /** 删除在途：禁用确认按钮。 */
   deleting?: boolean
-  /** 危险操作（删除）是否放行：应用侧读角色等级后注入（组件库不持鉴权状态）。 */
-  dangerAllowed?: boolean
   /** 保存基线；`editingId` 为 null 表示创建。返回是否成功——成功才关窗。 */
   onSubmit: (values: BaselineFormValues, editingId: number | null) => Promise<boolean>
   /** 删除已确认的基线（二次确认已在本视图内完成）。返回是否成功——成功才关确认框。 */
@@ -488,7 +485,6 @@ export function ConfigBaselinesPageView({
   converging = false,
   saving = false,
   deleting = false,
-  dangerAllowed,
   onSubmit,
   onDelete,
   onConverge,
@@ -599,14 +595,13 @@ export function ConfigBaselinesPageView({
         />
       )}
 
-      {/* 删除二次确认：scope/allowed 语义与原页一致——scope 固定 group，是否放行由容器注入。 */}
+      {/* 删除二次确认：scope 固定 group，角色门禁由 DangerConfirm 自行读角色等级判定。 */}
       <DangerConfirm
         open={deleteTarget !== null}
         title={t('baselines.deleteTitle')}
         description={t('baselines.deleteDesc', { scope: deleteTarget?.scopeKey ?? '' })}
         confirmLabel={t('common.delete')}
         scope="group"
-        allowed={dangerAllowed}
         pending={deleting}
         onConfirm={() => {
           if (!deleteTarget) return

@@ -12,14 +12,7 @@ import {
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
-
-/**
- * 危险操作的「权限范围」分级（FR-059 角色门禁）。
- *
- * 与后端 model.UserRole（0 组成员 / 1 组管理员 / 10 平台管理员）对齐。
- * 前端门禁仅用于在 UI 上提前禁用/提示越权操作，最终拒绝由 Control Plane 的 RBAC 强制。
- */
-export type DangerScope = 'group' | 'platform'
+import { useDangerPermission, type DangerScope } from '@/lib/shared/danger'
 
 /**
  * 统一危险操作确认弹窗（FR-059）。
@@ -27,10 +20,12 @@ export type DangerScope = 'group' | 'platform'
  * 在既有 Dialog 之上，把零散的二次确认收敛为一处：
  * - 普通破坏性操作：二次确认 + destructive 主按钮；
  * - 高危操作（传 `confirmText`，如删实例/删节点/批量 kill）：要求逐字输入资源名称二次校验；
- * - 角色门禁（传 `scope` + `allowed`）：越权时禁用并提示。
+ * - 角色门禁（传 `scope`）：越权时禁用并提示。
  *
- * 受控（ADR-097）：**不自行判定权限**——`allowed` 由外壳注入（应用侧读登录态角色后判定）。
- * 组件库不持有鉴权状态，故本组件可在无登录态的环境（组件博物馆）独立渲染。
+ * 门禁自行判定：本组件直接读登录态角色。曾按 ADR-097 把角色判定留在外壳、
+ * 由 props 注入 `allowed`，结果是外壳漏传即静默放行——全仓 17 处传了 `scope`
+ * 却没接上判定，门禁空转且无测试或类型能发现。角色是渲染决策的一部分，
+ * 收进组件本身后该失效模式从结构上消失；后端 RBAC 仍是最终防线。
  * 文案全部走 i18n（danger 命名空间 + common），颜色用主题 CSS 变量，暗/亮色自适应。
  */
 export interface DangerConfirmProps {
@@ -52,11 +47,6 @@ export interface DangerConfirmProps {
    * 省略时不做前端角色门禁（仅二次确认）。
    */
   scope?: DangerScope
-  /**
-   * 角色门禁判定结果（外壳注入）。为 false 时禁用确认并展示越权提示。
-   * 仅当声明了 `scope` 时参与判定；缺省 true（视为允许）。
-   */
-  allowed?: boolean
   /** 确认回调（仅在允许且校验通过时可触发）。 */
   onConfirm: () => void
   /** 取消/关闭回调。 */
@@ -73,7 +63,6 @@ export default function DangerConfirm({
   confirmLabel,
   confirmText,
   scope,
-  allowed = true,
   onConfirm,
   onCancel,
   pending = false,
@@ -81,6 +70,8 @@ export default function DangerConfirm({
   const { t } = useTranslation()
   const inputId = useId()
   const [typed, setTyped] = useState('')
+  // 自行判定角色（hook 必须无条件调用，故 scope 缺省时按最宽松的 group 取值）。
+  const { allowed } = useDangerPermission(scope ?? 'group')
   // 仅当声明了 scope 时才做前端门禁；未声明视为允许（普通二次确认）。
   const denied = scope !== undefined && !allowed
 
