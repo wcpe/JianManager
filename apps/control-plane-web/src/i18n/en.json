@@ -2381,6 +2381,7 @@
   },
   "clientChannels": {
     "title": "Client Distribution",
+    "notFound": "Channel not found",
     "subtitle": "Manage client distribution channels and pull keys. One channel per server; keys let the player-side updater fetch the manifest and artifacts.",
     "addChannel": "Add Channel",
     "backToList": "Back to list",

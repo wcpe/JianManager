@@ -5,6 +5,7 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 import { mockInject } from '@jianmanager/devmock/inject'
+import { Route, Routes } from 'react-router'
 import ClientPublishPage from './ClientPublishPage'
 
 /**
@@ -16,6 +17,22 @@ import ClientPublishPage from './ClientPublishPage'
 /** 统计命中「上传」端点的请求数——发布前应恒为 0。
  * 覆盖 FR-251 分块三段（.../uploads*）与 FR-346 增效端点（files/precheck、files/batch）：
  * 行为契约不变（选文件零请求、点发布才上传），仅线上协议随 FR-346 演进。 */
+/**
+ * 按真实路由挂载发布页。
+ *
+ * `renderWithProviders` 只 pushState 改 URL，不声明 `<Route>`，`useParams()` 会返回空对象——
+ * 页面于是在「已挂载但没有 :id」这个不可能的状态下运行。此前靠 `channelId!` 把 undefined
+ * 一路传下去（上传路径里出现 undefined 也不报错），缺陷被掩盖。此处补上路由声明。
+ */
+function renderPublishPage() {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/client-channels/:id/publish" element={<ClientPublishPage />} />
+    </Routes>,
+    { route: CH },
+  )
+}
+
 function countUploadRequests(): { get: () => number; stop: () => void } {
   let n = 0
   const listener = ({ request }: { request: Request }) => {
@@ -101,7 +118,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
   it('选文件入草稿但不触发任何上传请求（延迟上传）', async () => {
     loginMockUser()
     const user = userEvent.setup()
-    const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+    const { container } = renderPublishPage()
     // 落区渲染出来（页面就绪）。
     expect(await screen.findByTestId('publish-dropzone')).toBeInTheDocument()
     expect(await screen.findByTestId('embedded-updater-summary')).toHaveTextContent('内嵌更新器 v0.9.0 · core 3')
@@ -117,7 +134,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
 
   it('拖拽文件夹按目录结构进草稿、仍不上传（原生回调式 entry，BUG-F 回归）', async () => {
     loginMockUser()
-    renderWithProviders(<ClientPublishPage />, { route: CH })
+    renderPublishPage()
     const zone = await screen.findByTestId('publish-dropzone')
 
     // 造 webkitGetAsEntry 的**浏览器原生**形态（回调式，非 Promise）：
@@ -174,7 +191,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
   it('上传 GBK 文件名 zip：解包后草稿路径为正确中文（BUG-G 回归）', async () => {
     loginMockUser()
     const user = userEvent.setup()
-    const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+    const { container } = renderPublishPage()
     await screen.findByTestId('publish-dropzone')
 
     // 文件名 "模组/配置.txt" 以 GBK 编码、不置 UTF-8 位（"模"=C4A3 "组"=D7E9 "配"=C5E4 "置"=D6C3）。
@@ -193,7 +210,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     const user = userEvent.setup()
     const versionPub = countVersionPublishRequests()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await screen.findByTestId('publish-dropzone')
       await user.upload(addFilesInput(container), new File(['data'], 'mod.jar'))
       await screen.findByText('mod.jar')
@@ -219,7 +236,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     const user = userEvent.setup()
     const versionPub = countVersionPublishRequests()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await screen.findByTestId('publish-dropzone')
       const input = addFilesInput(container)
       await user.upload(input, new File(['keep'], 'keep.jar'))
@@ -258,7 +275,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     const user = userEvent.setup()
     const versionPub = countVersionPublishRequests()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await screen.findByTestId('publish-dropzone')
       const input = addFilesInput(container)
       // 整合包常见形态：普通文件 + 0 字节占位文件（.gitkeep / 空配置）。
@@ -287,7 +304,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     // 预查失败会被降级吞掉（纯优化），batch 才是必经的字节上传步——注入点选它。
     mockInject('post', '/client-channels/:channelId/files/batch', { kind: 'status', status: 500 })
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await screen.findByTestId('publish-dropzone')
       await user.upload(addFilesInput(container), new File(['x'], 'boom.jar'))
       await screen.findByText('boom.jar')
@@ -349,7 +366,7 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
     const user = userEvent.setup()
     const pub = capturePublishBody()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await gotoMeta(user, container)
 
       // 右键 config/foo 目录 → 标记为清理（FR-262 新交互）
@@ -379,7 +396,7 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
     const user = userEvent.setup()
     const pub = capturePublishBody()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await gotoMeta(user, container)
 
       // 开启「清空整个游戏目录」开关。
@@ -419,7 +436,7 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
     const user = userEvent.setup()
     const pub = capturePublishBody()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await gotoMeta(user, container)
 
       // 添加自定义目录「玩家mod」。
@@ -455,7 +472,7 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
     const user = userEvent.setup()
     const pub = capturePublishBody()
     try {
-      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      const { container } = renderPublishPage()
       await gotoMeta(user, container)
       await user.click(screen.getByTestId('clean-all-toggle'))
       await user.click(screen.getByRole('button', { name: /下一步/ }))

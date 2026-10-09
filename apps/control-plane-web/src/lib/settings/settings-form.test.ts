@@ -148,16 +148,22 @@ describe('keyCategory 与后端可编辑键的契约', () => {
   // 不是 editableItem，正则抓不到，故显式列出。
   const SPECIAL_EDITABLE = ['proxy.url', 'invite.smtp.password', 'github.token']
 
-  const loadEditableKeys = (): string[] | null => {
+  const loadEditableKeys = (): string[] => {
+    // 五级 ../ 到仓库根（本文件在 apps/control-plane-web/src/lib/settings/）。
+    // 曾写四级：解析到 apps/internal/...（不存在）→ 被 catch 吞掉 → `if (!keys) return` 跳过，
+    // 于是本用例永久绿，它要防的事故（23 个可编辑键落进只读 security 分区而界面不可见）原样复现也无人报警。
+    // 故此处不再静默跳过：读不到就让用例变红，路径被移动时必须立刻暴露。
+    const backendSource = new URL(
+      '../../../../../internal/controlplane/service/settings.go',
+      import.meta.url,
+    )
     let src: string
     try {
-      src = readFileSync(
-        new URL('../../../../internal/controlplane/service/settings.go', import.meta.url),
-        'utf8',
-      )
-    } catch {
-      // 包被单独安装（无仓库内后端源码）时跳过；本用例只守仓库内的一致性
-      return null
+      src = readFileSync(backendSource, 'utf8')
+    } catch (err) {
+      throw new Error(`读不到后端 settings.go（路径失效？）：${backendSource.pathname}`, {
+        cause: err,
+      })
     }
     // 常量名 → 键字符串
     const constToKey = new Map<string, string>()
@@ -177,7 +183,6 @@ describe('keyCategory 与后端可编辑键的契约', () => {
 
   it('后端标记可编辑的键都不落进只读的 security 分区', () => {
     const keys = loadEditableKeys()
-    if (!keys) return
     // 后端当前 38 项可编辑；低于 30 说明解析失效，别让用例假绿
     expect(keys.length).toBeGreaterThanOrEqual(30)
     const invisible = keys.filter((k) => keyCategory(k) === 'security')

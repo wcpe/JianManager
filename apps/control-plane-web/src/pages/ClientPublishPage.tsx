@@ -82,6 +82,13 @@ export default function ClientPublishPage() {
    * 结果一律以 `{ ok }` 落定（不抛出）：视图据此决定保留草稿还是离页。
    */
   const doPublish = async (payload: ClientPublishSubmitPayload): Promise<ClientPublishOutcome> => {
+    // 窄化而非 `channelId!`：它来自 useParams（`string | undefined`）。上面的 effect 只负责导航回退，
+    // 不保证本回调执行时它已存在（替换导航生效前仍可点发布），`!` 会把"异常直链"变成带着 undefined
+    // 继续发请求。视图的 channelId 仍按可空传入（同文件下方），契约保持一致。
+    if (!channelId) {
+      toast.error(t('clientChannels.notFound'))
+      return { ok: false }
+    }
     setUploading(true)
     setProgress(null)
     try {
@@ -89,7 +96,7 @@ export default function ClientPublishPage() {
       const plan = dedupUnits(payload.files, (d) => ({ name: d.filename, size: d.size }))
       // 键 → 上传结果（sha256/md5/size/codec），供发布时为每个草稿（含被去重者）回填。
       const resultByKey = await uploadFilesEfficient(
-        channelId!,
+        channelId,
         plan.unique.map((d) => ({ key: localDedupKey(d.filename, d.size), file: d.file, label: d.path })),
         {
           signal: payload.signal,
@@ -125,7 +132,7 @@ export default function ClientPublishPage() {
         }
       })
       const pubRes = await publish.mutateAsync({
-        channelId: channelId!,
+        channelId: channelId,
         files,
         managedDirs: payload.managedDirs,
         cleanExclude: payload.cleanExclude,
