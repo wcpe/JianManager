@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { RangePicker, type MetricRange } from '../../../charts/RangePicker'
-import { TimeSeriesChart, type ChartSeries } from '../../../charts/TimeSeriesChart'
+import { RangePicker, type MetricRange } from '@jianmanager/ui/charts/RangePicker'
+import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
 import { formatBytes } from './NodeListParts'
 
 /** 各实例对比图可切的指标（FR-060 #2：节点上各实例 TPS/MSPT/堆/线程对比）。 */

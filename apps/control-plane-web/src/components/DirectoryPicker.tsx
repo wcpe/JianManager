@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useBrowseDir } from '@/api/nodeRuntime'
-import DirectoryPickerView from '@jianmanager/ui/components/views/nodes/DirectoryPicker'
+import DirectoryPickerView from '@/components/views/nodes/DirectoryPicker'
 
 /** 节点目录选择器的公开 props（与原实现一致，调用点无需改动）。 */
 interface DirectoryPickerProps {

@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button } from '../../../button'
-import { Input } from '../../../input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../table'
-import type { BotLoadRunBot } from '../../../../lib/bot-load-types'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import type { BotLoadRunBot } from '@jianmanager/ui/lib/bot-load-types'
 
 export const SESSION_BOTS_PAGE_SIZE = 50
 

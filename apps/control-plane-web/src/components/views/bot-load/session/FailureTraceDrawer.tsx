@@ -5,7 +5,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
-import type { BotLoadFailure } from '../../../../lib/bot-load-types'
+import type { BotLoadFailure } from '@jianmanager/ui/lib/bot-load-types'
 
 export function FailureTraceDrawer({
   failure,

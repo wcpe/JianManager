@@ -1,5 +1,5 @@
 import { toast } from 'sonner'
-import { SessionConfig as SessionConfigView } from '@jianmanager/ui/components/views/bot-load/session/SessionOverviewParts'
+import { SessionConfig as SessionConfigView } from '@/components/views/bot-load/session/SessionOverviewParts'
 import { useSessionEvents } from './SessionEventProvider'
 
 /**

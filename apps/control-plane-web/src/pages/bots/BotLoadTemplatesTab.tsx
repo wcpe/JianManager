@@ -15,7 +15,7 @@ import DangerConfirm from '@/components/DangerConfirm'
 import {
   TEMPLATES_TAB_PAGE_SIZE,
   TemplatesTabView,
-} from '@jianmanager/ui/components/views/bot-load/TemplatesTabView'
+} from '@/components/views/bot-load/TemplatesTabView'
 
 /**
  * 压测模板列表 tab 的容器：取数、搜索防抖/筛选写 URL、删除 mutation 与三处弹窗装配。

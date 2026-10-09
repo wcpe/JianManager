@@ -1,11 +1,11 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Pencil, Plus, Trash2, Play } from 'lucide-react'
-import { Button } from '../../button'
-import { Input } from '../../input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../table'
-import { summarizeCommandSchedule, summarizeLoadProfile } from '../../../lib/bot-load-summaries'
-import type { BotLoadTemplate } from '../../../lib/bot-load-types'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import { summarizeCommandSchedule, summarizeLoadProfile } from '@jianmanager/ui/lib/bot-load-summaries'
+import type { BotLoadTemplate } from '@jianmanager/ui/lib/bot-load-types'
 
 /** 模板列表分页尺寸（容器取数须与本常量一致）。 */
 export const TEMPLATES_TAB_PAGE_SIZE = 20

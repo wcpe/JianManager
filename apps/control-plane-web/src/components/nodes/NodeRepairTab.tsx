@@ -6,7 +6,7 @@ import {
   useReenrollNode,
   usePurgeOrphans,
 } from '@/api/nodeRepair'
-import NodeRepairPanel from '@jianmanager/ui/components/views/nodes/NodeRepairPanel'
+import NodeRepairPanel from '@/components/views/nodes/NodeRepairPanel'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {

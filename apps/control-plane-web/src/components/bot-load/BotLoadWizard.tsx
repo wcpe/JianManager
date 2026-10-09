@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import { BotLoadWizard as BotLoadWizardView } from '@jianmanager/ui/components/views/bot-load/BotLoadWizard'
+import { BotLoadWizard as BotLoadWizardView } from '@/components/views/bot-load/BotLoadWizard'
 import {
   useBotLoadNodes,
   useCreateBotLoadRun,

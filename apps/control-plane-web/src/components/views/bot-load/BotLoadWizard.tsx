@@ -1,12 +1,12 @@
 import { useEffect, useReducer, useState, type ComponentType } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@jianmanager/ui'
-import { Button } from '../../button'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../../dialog'
-import { FieldError, FieldLabel } from '../../field-label'
-import { Input } from '../../input'
-import { ScrollableDialogBody, scrollableDialogContentClass } from '../../scrollable-dialog'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../select'
+import { Button } from '@jianmanager/ui/components/button'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
+import { FieldError, FieldLabel } from '@jianmanager/ui/components/field-label'
+import { Input } from '@jianmanager/ui/components/input'
+import { ScrollableDialogBody, scrollableDialogContentClass } from '@jianmanager/ui/components/scrollable-dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jianmanager/ui/components/select'
 import {
   WIZARD_STEPS,
   createDefaultDraft,
@@ -15,15 +15,15 @@ import {
   wizardReducer,
   type BotLoadWizardDraft,
   type WizardStep,
-} from '../../../lib/bot-load-draft'
-import type { BotLoadNodeCapacity, BotLoadPreflightResult, BotLoadTemplate } from '../../../lib/bot-load-types'
+} from '@jianmanager/ui/lib/bot-load-draft'
+import type { BotLoadNodeCapacity, BotLoadPreflightResult, BotLoadTemplate } from '@jianmanager/ui/lib/bot-load-types'
 import {
   previewBotNames,
   validateCommandSchedule,
   validateConnection,
   validateLoadProfile,
   validateThresholds,
-} from '../../../lib/bot-load-validation'
+} from '@jianmanager/ui/lib/bot-load-validation'
 import { CapacityPlan } from './CapacityPlan'
 import { CommandPlanEditor } from './CommandPlanEditor'
 import { LoadProfileEditor } from './LoadProfileEditor'

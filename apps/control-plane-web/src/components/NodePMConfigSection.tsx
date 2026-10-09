@@ -1,7 +1,7 @@
 // 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入配置快照与保存 mutation（受控化）。
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
-import { NodePMConfigSection as NodePMConfigSectionView } from '@jianmanager/ui/components/views/nodes/NodePMConfigSection'
+import { NodePMConfigSection as NodePMConfigSectionView } from '@/components/views/nodes/NodePMConfigSection'
 import { useNodePMConfig, useSetNodePMConfig } from '@/api/pmConfig'
 
 interface NodePMConfigSectionProps {

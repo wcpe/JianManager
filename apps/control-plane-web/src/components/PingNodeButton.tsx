@@ -1,5 +1,5 @@
 import { usePingNode } from '@/api/diagnostics'
-import { PingNodeButton as ControlledPingNodeButton } from '@jianmanager/ui/components/views/nodes/PingNodeButton'
+import { PingNodeButton as ControlledPingNodeButton } from '@/components/views/nodes/PingNodeButton'
 
 /**
  * 节点存活测试按钮的应用接线层（ADR-097）。

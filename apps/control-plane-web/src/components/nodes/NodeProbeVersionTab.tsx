@@ -5,7 +5,7 @@ import {
   useServerProbeCatalog,
   useSetNodeProbeVersion,
 } from '@/api/artifactVersions'
-import NodeProbeVersionPanel from '@jianmanager/ui/components/views/nodes/NodeProbeVersionPanel'
+import NodeProbeVersionPanel from '@/components/views/nodes/NodeProbeVersionPanel'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {

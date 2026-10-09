@@ -9,7 +9,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import {
   AgentCallLogsPageView,
   type AgentCallLogsQuery,
-} from '@jianmanager/ui/components/views/agent/AgentCallLogsPageView'
+} from '@/components/views/agent/AgentCallLogsPageView'
 
 const ROLE_PLATFORM_ADMIN = 10
 

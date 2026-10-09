@@ -5,7 +5,7 @@ import { useLogin } from '@/api/auth'
 import { getSafeReturnTo } from '@/api/client'
 import { useSetupStatus } from '@/api/setup'
 import { useAuthStore } from '@/stores/auth'
-import { LoginPageView } from '@jianmanager/ui/components/views/auth/LoginPageView'
+import { LoginPageView } from '@/components/views/auth/LoginPageView'
 
 /**
  * 登录页（FR-157）容器：表单草稿与内联错误交共享视图，这里保留 returnTo 解析、
