@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useSchedules, useCreateSchedule, useUpdateSchedule, useDeleteSchedule, useScheduleLogs } from '@/api/schedules'
 import { InstancePicker } from '@/components/instances/InstancePicker'
-import { useDangerPermission } from '@/lib/shared/danger'
 import { toCreateBody, toUpdateBody } from '@/lib/schedules/schedule-form'
 import { SchedulesPageView } from '@/components/views/schedules/SchedulesPageView'
 import type { ScheduleFilter } from '@/components/views/schedules/SchedulesPageView'
@@ -39,7 +38,6 @@ export default function SchedulesPage() {
   const { data: logs, isLoading: logsLoading } = useScheduleLogs(logsId)
 
   // 删除是组级破坏操作：角色门禁在应用侧判定后注入（包内不持鉴权状态）。
-  const { allowed: dangerAllowed } = useDangerPermission('group')
 
   return (
     <SchedulesPageView
@@ -53,7 +51,6 @@ export default function SchedulesPage() {
       logsLoading={logsLoading}
       creating={createSchedule.isPending}
       updating={updateSchedule.isPending}
-      dangerAllowed={dangerAllowed}
       onSubmit={async (form, editingId) => {
         try {
           if (editingId !== null) {

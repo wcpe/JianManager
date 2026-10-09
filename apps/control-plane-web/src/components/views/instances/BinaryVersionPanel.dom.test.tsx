@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import BinaryVersionPanel, { type BinaryVersionView } from '@/components/views/instances/BinaryVersionPanel'
+import { loginMockUserAs } from '@/test/auth'
+import { Role } from '@/lib/shared/danger'
 
 /**
  * FR-468 实例二进制版本区 · 受控视图测（ADR-097 b 范式）。
@@ -82,6 +84,12 @@ function renderPanel(props: Partial<Props> = {}) {
   const result = render(<BinaryVersionPanel view={view} {...handlers} />, { wrapper: Wrapper })
   return { ...handlers, ...result }
 }
+
+// 面板内的危险操作确认按登录态角色判定（scope="group"）；未登录（role=null）一律落到越权态，
+// 输入框不渲染、确认按钮禁用。
+beforeEach(() => {
+  loginMockUserAs(Role.GroupAdmin)
+})
 
 describe('BinaryVersionPanel（FR-468 · ADR-097 b 范式）', () => {
   it('渲染当前版本与上一版本', () => {

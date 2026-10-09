@@ -7,7 +7,6 @@ import { useClientVersions, useClientVersion, useRollbackClientVersion } from '@
 import EmbeddedUpdaterSummary from '@/components/client-dist/EmbeddedUpdaterSummary'
 import FileBrowser from '@/components/file-browser/FileBrowser'
 import { clientDistSource, manifestFilesToDistFiles } from '@/components/file-browser/sources/clientDistSource'
-import { useDangerPermission } from '@/lib/shared/danger'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -19,7 +18,7 @@ const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?
  * - 取数：版本列表（`useClientVersions`）与选中版本详情（`useClientVersion(channelId, detailVersion)`；
  *   选中版本由本层持有，因为它是详情查询的入参）；
  * - 写操作：回滚 mutation（`useRollbackClientVersion`）与成功/失败 toast；
- * - 门禁：回滚限平台管理员（FR-059），读角色等级后经 `dangerAllowed` 注入；
+ * - 门禁：回滚限平台管理员（FR-059），由 `DangerConfirm` 自行读角色判定；
  * - 路由：发布走独立页面（FR-191），「发布新版本」导航到 `/client-channels/:id/publish`；
  * - 应用侧接线层注入：内嵌更新器摘要（自行取数）与制品内容 `FileBrowser`（注入主题 + 管理面制品端点），
  *   二者经槽传入视图，包内不 import 应用侧模块。
@@ -29,7 +28,6 @@ export default function ClientVersionsPanel({ channelId }: { channelId: string }
   const navigate = useNavigate()
   const { data: versions, isLoading } = useClientVersions(channelId)
   const rollback = useRollbackClientVersion()
-  const { allowed: dangerAllowed } = useDangerPermission('platform')
 
   // 选中版本（null=无详情弹窗）：容器持有——它是详情取数的入参。
   const [detailVersion, setDetailVersion] = useState<number | null>(null)
@@ -65,7 +63,6 @@ export default function ClientVersionsPanel({ channelId }: { channelId: string }
       onDetailVersionChange={setDetailVersion}
       detail={detail}
       detailLoading={detailLoading}
-      dangerAllowed={dangerAllowed}
       onRollback={doRollback}
       onPublishNewVersion={() => navigate(`/client-channels/${encodeURIComponent(channelId)}/publish`)}
       updaterSummarySlot={<EmbeddedUpdaterSummary />}

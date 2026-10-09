@@ -120,4 +120,26 @@ describe('业务视图/lib 回迁后的包边界', () => {
     expect(existsSync(appViews)).toBe(true)
     expect(looseFilesIn(appViews), 'views 根层不应再有平铺文件').toEqual([])
   })
+
+  /**
+   * 危险操作门禁不得再依赖外壳注入。
+   *
+   * ADR-097 把角色判定留在外壳、经 `allowed` prop 注入视图。外壳漏传即静默放行——
+   * 全仓曾查出 17 处传了 `scope` 却没接上判定，门禁空转，而 `allowed` 可选且有默认值，
+   * 类型与测试都发现不了（守卫用例测的是组件本身，覆盖不到漏配的调用点）。
+   * 现由视图自行读登录态判定；本条守住「注入式门禁」不得回来。
+   */
+  it('危险操作门禁由 DangerConfirm 自行判定，不由外壳注入', () => {
+    const src = readFileSync(path.join(appViews, 'common/DangerConfirm.tsx'), 'utf8')
+    expect(src, '门禁必须自行读登录态角色').toMatch(/useDangerPermission\s*\(/)
+    expect(src, '不得再接受外壳注入的 allowed').not.toMatch(/allowed\??:\s*boolean/)
+
+    // 调用点一律不得传 allowed——传了也无处可去，却会让人以为门禁在外壳。
+    // 用 [\s{] 而不用 \b：后者会把 `data-export-allowed=` 这类 DOM 属性误判为注入。
+    const offenders = walk(path.join(root, 'src'))
+      .filter((f) => /\.tsx?$/.test(f) && !f.includes('.test.'))
+      .filter((f) => /<DangerConfirm[\s\S]{0,800}?[\s{]allowed=/.test(readFileSync(f, 'utf8')))
+      .map((f) => path.relative(repoRoot, f))
+    expect(offenders, '不得再向 DangerConfirm 注入 allowed').toEqual([])
+  })
 })

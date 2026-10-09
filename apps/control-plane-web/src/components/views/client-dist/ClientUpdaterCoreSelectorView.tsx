@@ -1,7 +1,7 @@
 /**
  * @file ClientUpdaterCoreSelectorView：频道工作台「Core 版本」Tab 的 updater-core 版本选择器受控视图，
  *       版本列表由容器取数注入，切换/上传写请求与 toast 由容器负责。
- * @input views/DangerConfirm（切换二次确认；allowed 由容器读角色注入）、Badge/Button/Table/Dialog 原语、
+ * @input views/DangerConfirm（切换二次确认；角色门禁由其自行读登录态判定）、Badge/Button/Table/Dialog 原语、
  *        lucide 图标、翻译上下文
  * @output ClientUpdaterCoreSelectorView（+ ClientUpdaterCoreSelectorViewProps、ClientUpdaterCoreVersion、
  *         ClientUpdaterCoreUploadPayload、ClientUpdaterCoreUploadOutcome）
@@ -66,8 +66,7 @@ export interface ClientUpdaterCoreUploadOutcome {
  *   上报（PUT 请求与成功/失败 toast 在容器）；`selecting` 为在途禁用态，避免重复提交；
  * - 上传：弹窗开合与表单草稿（file / version / select）留本视图，提交经 `onUpload` 交容器（POST + toast），
  *   仅在回执 `ok=true` 时清空表单并关窗；
- * - `dangerAllowed` 由容器读登录态角色注入——**切换确认的 scope/allowed 语义与迁包前逐字一致**
- *   （`scope="platform"`、`allowed` 由容器注入；组件库不持鉴权状态，缺省视为放行）。
+ * - 切换确认保持 `scope="platform"`，角色门禁由 `DangerConfirm` 自行读登录态判定。
  */
 export interface ClientUpdaterCoreSelectorViewProps {
   /** 归档版本列表（容器取数注入；缺省或空数组渲染空态行）。 */
@@ -82,8 +81,6 @@ export interface ClientUpdaterCoreSelectorViewProps {
   uploading?: boolean
   /** 提交上传（容器执行 POST + toast）；回执决定视图是否清空并关窗。 */
   onUpload: (payload: ClientUpdaterCoreUploadPayload) => Promise<ClientUpdaterCoreUploadOutcome>
-  /** 危险操作（切换版本）是否放行：应用侧读角色等级后注入（组件库不持鉴权状态）。 */
-  dangerAllowed?: boolean
 }
 
 /**
@@ -98,7 +95,6 @@ export function ClientUpdaterCoreSelectorView({
   onSelect,
   uploading = false,
   onUpload,
-  dangerAllowed,
 }: ClientUpdaterCoreSelectorViewProps) {
   const { t } = useTranslation()
   // 待确认的切换目标 sha256（null = 未开确认弹窗）：弹窗开合属 UI 状态，留本视图。
@@ -231,7 +227,6 @@ export function ClientUpdaterCoreSelectorView({
           '切换后客户端下次启动按 endpoint 自动查询并使用该版本。本地已有该版本 jar 的客户端直接用、没有的自动下载。请确认确需切换。',
         )}
         scope="platform"
-        allowed={dangerAllowed}
         confirmLabel={t('clientCore.select', '选定')}
         onConfirm={doSelect}
         onCancel={() => setTarget(null)}

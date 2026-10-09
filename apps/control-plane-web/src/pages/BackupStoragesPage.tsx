@@ -2,7 +2,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useBackupStorages, useCreateBackupStorage, useUpdateBackupStorage, useDeleteBackupStorage, useTestBackupStorage, useTestBackupStorageDraft } from '@/api/backupStorages'
-import { useDangerPermission } from '@/lib/shared/danger'
 import { BackupStoragesPageView } from '@/components/views/backups/BackupStoragesPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
@@ -25,7 +24,6 @@ export default function BackupStoragesPage() {
   const testStorage = useTestBackupStorage()
   const testDraft = useTestBackupStorageDraft()
   // 删除是平台级破坏操作：角色门禁在应用侧判定后注入（包内不持鉴权状态）。
-  const { allowed: dangerAllowed } = useDangerPermission('platform')
 
   return (
     <BackupStoragesPageView
@@ -35,7 +33,6 @@ export default function BackupStoragesPage() {
       testing={testDraft.isPending}
       // 只有容器知道行内测试在测哪一行；未在测试时为 null，所有行都可点。
       rowTestingId={testStorage.isPending ? (testStorage.variables ?? null) : null}
-      dangerAllowed={dangerAllowed}
       onSubmit={async (values, editingId) => {
         try {
           if (editingId !== null) {

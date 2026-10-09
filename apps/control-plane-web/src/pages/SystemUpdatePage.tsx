@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useSelfUpdateCheck, useRefreshSelfUpdateCheck, useRollout, useWorkerAssets, useCacheWorkerAsset, useUpgradeControlPlane, useUpgradeNode, useUpgradeAll, useRollbackControlPlane, useRollbackNode } from '@/api/selfUpdate'
 import { useAuthStore } from '@/stores/auth'
-import { useDangerPermission } from '@/lib/shared/danger'
 import { SystemUpdatePageView } from '@/components/views/system-update/SystemUpdatePageView'
 import type { SystemUpdateNodePending, SystemUpdateRolloutDraft, SystemUpdateWorkerAssetTarget } from '@/components/views/system-update/SystemUpdatePageView'
 
@@ -16,14 +15,14 @@ const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?
 
 /**
  * 面板自更新页容器（ADR-097 a 范式）：检查结果 / 全网升级进度 / Worker 二进制缓存三份查询、
- * 八个写动作（检查、CP 升级回滚、节点升级回滚、全网升级、预缓存）、四处危险确认的平台门禁
- * 与全部 toast 文案都在这里决定；版本对比卡片、节点区、缓存面板与进度面板交共享视图。
+ * 八个写动作（检查、CP 升级回滚、节点升级回滚、全网升级、预缓存）与全部 toast 文案都在这里决定；
+ * 版本对比卡片、节点区、缓存面板与进度面板交共享视图。
  *
  * 受控状态归属：本页三份查询的查询键固定，没有「一变就重新取数」的状态，故弹窗开合与金丝雀
  * 草稿（视图侧纯 UI 状态）都留视图；容器只从 mutation 派生在途展示态（`cpUpgrading` /
  * `cpRollingBack` / `nodePending` / `pendingWorkerAsset`），因为视图不持 mutation 实例。
- * 角色兜底（`ROLE_PLATFORM_ADMIN`）与危险确认门禁（`useDangerPermission('platform')`）同样是
- * 应用状态，故在此判定后以布尔注入——包内组件不得读鉴权 store。
+ * 角色兜底（`ROLE_PLATFORM_ADMIN`）是应用状态，在此判定后注入；而危险确认的角色门禁由
+ * `DangerConfirm` 自行读登录态——曾由外壳注入 `allowed`，外壳漏传即静默放行。
  * 保留同路径默认导出，路由表（`ROUTE_CHUNKS['/system-update']`）与既有用例无需改动。
  */
 export default function SystemUpdatePage() {
@@ -53,7 +52,6 @@ export default function SystemUpdatePage() {
   const assets = useWorkerAssets({ enabled: !!check.data })
 
   // 四处危险确认统一 scope=platform：角色门禁在应用侧判定后注入（包内不持鉴权状态）。
-  const { allowed: dangerAllowed } = useDangerPermission('platform')
 
   /** 升级/回滚成功后重新取检查结果（CP 升级会重启，故延迟 4s 等重连）。 */
   const refreshCheck = () => refresh.mutate(undefined)
@@ -163,7 +161,7 @@ export default function SystemUpdatePage() {
    *
    * 原实现每行各持一个 mutation 实例，归容器后收敛为「单实例 + 目标标记」：取消 `isPending` 后
    * `variables` 仍在，故必须同时判 isPending。差异仅限极端并发——先发起的那一行会在第二个节点动作
-   * 发起后提前恢复可点（可能多一次重复提交），与四处确认框的 scope/allowed 门禁无关。
+   * 发起后提前恢复可点（可能多一次重复提交），与四处确认框的 scope 门禁无关。
    */
   const nodePending: SystemUpdateNodePending | null =
     upgradeNode.isPending && upgradeNode.variables
@@ -177,7 +175,6 @@ export default function SystemUpdatePage() {
   return (
     <SystemUpdatePageView
       isPlatformAdmin={isPlatformAdmin}
-      dangerAllowed={dangerAllowed}
       check={check.data}
       // 刷新失败保留旧缓存数据，仅在「从未有过任何结果」时才整屏报错（视图侧判 check 是否为空）。
       checkErrorMessage={check.isError ? errMsg(check.error, t('systemUpdate.checkFailed', '检查更新失败')) : undefined}

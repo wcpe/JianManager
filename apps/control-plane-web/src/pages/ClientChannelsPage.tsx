@@ -12,7 +12,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { ObjectPageHeader } from '@jianmanager/ui/components/shell'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
-import DangerConfirm from '@/components/common/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import ClientVersionsPanel from '@/components/client-dist/ClientVersionsPanel'
 import ClientStatsPanel from '@/components/client-dist/ClientStatsPanel'
 import ClientIntegrationGuide from '@/components/client-dist/ClientIntegrationGuide'
@@ -23,7 +23,6 @@ import { ChannelCard, EmptyChannelsGuide } from '@/components/views/client-dist/
 import { CreateChannelDialog } from '@/components/views/client-dist/CreateChannelDialog'
 import { KeysSegment } from '@/components/views/client-dist/KeysSegment'
 import { ChannelSecuritySummaryBar } from '@/components/views/client-dist/ChannelSecuritySummaryBar'
-import { useDangerPermission } from '@/lib/shared/danger'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -147,7 +146,6 @@ function ChannelWorkbench({
   const revealKey = useRevealClientKey()
   const createKey = useCreateClientKey()
   const updateKey = useUpdateClientKey()
-  const { allowed: dangerAllowed } = useDangerPermission('platform')
   const securityHref = buildClientDistHref('/client-dist-ops', searchParams, { channelId, tab: 'logs' })
 
   const [tab, setTab] = useTabParam<WorkbenchTab>('tab', 'keys', ['keys', 'versions', 'core', 'stats', 'guide'])
@@ -246,7 +244,6 @@ function ChannelWorkbench({
             onUpdateKey={(body) => updateKey.mutateAsync(body)}
             keyMutating={createKey.isPending || updateKey.isPending}
             revealing={revealKey.isPending}
-            dangerAllowed={dangerAllowed}
             onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
           />
         </TabsContent>

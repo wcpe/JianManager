@@ -7,7 +7,7 @@ import { useDebounced } from '@/lib/hooks/use-debounced'
 import { mergeSearchParams, readTemplatesFilter } from '@/lib/bot-load/bot-load-url-state'
 import TemplateDialog from '@/components/bot-load/TemplateDialog'
 import BotLoadWizard from '@/components/bot-load/BotLoadWizard'
-import DangerConfirm from '@/components/common/DangerConfirm'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { TEMPLATES_TAB_PAGE_SIZE, TemplatesTabView } from '@/components/views/bot-load/TemplatesTabView'
 
 /**

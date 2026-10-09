@@ -64,7 +64,7 @@ export interface GroupsMembersDialogArgs {
  *   变化、浏览器前进/后退须复原，故解析与写回都在容器；容器读 `groups` 后把 id 与面板传下来，
  *   视图据「组是否真实存在」做兜底（深链到已删除组时视为未选）；
  * - **留本组件**的纯 UI 状态：创建弹窗开合、待删除确认目标（两者都是瞬时动作，不入 URL）；
- * - **鉴权状态一律由容器注入**：`dangerAllowed` 决定平台级删除是否放行，包内不读登录态；
+ * - **危险确认的角色门禁**：`DangerConfirm` 自行读登录态判定（曾由容器注入 `dangerAllowed`）；
  * - 成员管理对话框走 `renderMembersDialog` 插槽：候选默认窗口、键入防抖与服务端搜索是外壳策略，
  *   视图只决定「哪个组、何时打开」，实现由外壳注入（包内不依赖取数钩子）。
  */
@@ -81,8 +81,6 @@ export interface GroupsPageViewProps {
   onOpenPanel: (id: number, panel: GroupPanel) => void
   /** 关闭面板（容器负责清掉 URL 参数）。 */
   onClosePanel: () => void
-  /** 危险操作（删除用户组）是否放行：应用侧读角色等级后注入（组件库不持鉴权状态）。 */
-  dangerAllowed: boolean
   /** 创建在途：禁用创建弹窗的提交按钮。 */
   creating?: boolean
   /** 编辑在途：禁用编辑弹窗的提交按钮（名称/描述与配额两次请求任一在途即为真）。 */
@@ -108,7 +106,6 @@ export function GroupsPageView({
   activePanel,
   onOpenPanel,
   onClosePanel,
-  dangerAllowed,
   creating = false,
   updating = false,
   onCreateGroup,
@@ -236,7 +233,6 @@ export function GroupsPageView({
         confirmLabel={t('common.delete')}
         confirmText={deleteGroup?.name}
         scope="platform"
-        allowed={dangerAllowed}
         onConfirm={() => {
           if (deleteGroup) onDeleteGroup(deleteGroup.id)
           setDeleteGroup(null)

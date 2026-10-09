@@ -67,8 +67,7 @@ export interface ClientVersionsPanelVersionDetail {
  * - 发布跳转：「发布新版本」经 `onPublishNewVersion` 上报，路由语义（`/client-channels/:id/publish`）在容器；
  * - 内嵌更新器摘要与制品内容浏览器是**应用侧接线层**（前者取更新器版本、后者注入主题与制品文本端点），
  *   经 `updaterSummarySlot` / `previewSlot` 插槽注入，包内不 import 应用侧模块；
- * - 画面门禁：回滚的 `DangerConfirm` 保持 `scope="platform"`，放行结果由容器读登录态角色后经
- *   `dangerAllowed` 注入（包内不持鉴权状态）；
+ * - 画面门禁：回滚的 `DangerConfirm` 保持 `scope="platform"`，由它自行读登录态角色判定；
  * - **留本视图**的 UI 状态：回滚二次确认的目标版本与开合、详情弹窗的结构/预览视图切换。
  */
 export interface ClientVersionsPanelViewProps {
@@ -84,8 +83,6 @@ export interface ClientVersionsPanelViewProps {
   detail?: ClientVersionsPanelVersionDetail
   /** 详情取数中（弹窗内展示加载态）。 */
   detailLoading: boolean
-  /** 回滚是否放行：应用侧读角色等级后注入（组件库不持鉴权状态）。 */
-  dangerAllowed?: boolean
   /** 回滚某版本（容器注入 mutation + toast）。 */
   onRollback: (version: number) => void
   /** 发布新版本（容器导航到频道发布页）。 */
@@ -111,7 +108,6 @@ export function ClientVersionsPanelView({
   onDetailVersionChange,
   detail,
   detailLoading,
-  dangerAllowed,
   onRollback,
   onPublishNewVersion,
   updaterSummarySlot,
@@ -203,7 +199,6 @@ export function ClientVersionsPanelView({
         title={t('clientVersions.rollbackConfirm', '确定回滚到 v{{n}}？', { n: rollbackTarget ?? '' })}
         description={t('clientVersions.rollbackConfirmDesc', '将以更高的新版本号重发该版本内容为 latest（保持版本单调，客户端正常前进、不被防降级拒绝）。')}
         scope="platform"
-        allowed={dangerAllowed}
         confirmLabel={t('clientVersions.rollback', '回滚')}
         onConfirm={() => {
           const target = rollbackTarget
