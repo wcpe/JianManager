@@ -1,6 +1,6 @@
 import { useInstance } from '@/api/instances'
 import { useServerState } from '@/api/serverState'
-import { HealthPanel as HealthPanelView } from '@jianmanager/ui/components/views/instances/HealthPanel'
+import { HealthPanel as HealthPanelView } from '@/components/views/instances/HealthPanel'
 
 /**
  * 端口 + 健康检查面板的应用接线层（ADR-097 a 范式）。

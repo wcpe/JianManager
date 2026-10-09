@@ -11,7 +11,7 @@ import {
   useFavoriteServers,
   useRecentServers,
 } from './server-selection'
-import SidebarServerList from '@jianmanager/ui/components/views/instances/SidebarServerList'
+import SidebarServerList from '@/components/views/instances/SidebarServerList'
 
 /** 状态合并查询的刷新间隔：侧栏不引入高频轮询（FR-293），仅低频合并刷新列表内实例。 */
 const STATUS_REFRESH_MS = 60_000

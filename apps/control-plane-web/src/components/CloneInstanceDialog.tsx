@@ -5,7 +5,7 @@ import { useInstances } from '@/api/instances'
 import { useCloneInstance } from '@/api/clone'
 import CloneInstanceDialogView, {
   type CloneFormDraft,
-} from '@jianmanager/ui/components/views/instances/CloneInstanceDialogView'
+} from '@/components/views/instances/CloneInstanceDialogView'
 
 /** 把逗号/换行分隔的 glob 串解析为数组（FR-231 高级复制筛选）。 */
 const parseGlobs = (s: string) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean)

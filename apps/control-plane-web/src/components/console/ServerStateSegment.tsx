@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useServerState } from '@/api/serverState'
-import ServerStateSegmentView from '@jianmanager/ui/components/views/instances/ServerStateSegment'
+import ServerStateSegmentView from '@/components/views/instances/ServerStateSegment'
 
 /**
  * 「服务器状态」段的应用接线层（ADR-097 a 范式）。

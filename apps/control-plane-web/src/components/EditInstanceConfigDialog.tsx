@@ -2,7 +2,7 @@ import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
 import { useNodeJDKs } from '@/api/jdks'
 import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
-import EditInstanceConfigDialogView from '@jianmanager/ui/components/views/instances/EditInstanceConfigDialog'
+import EditInstanceConfigDialogView from '@/components/views/instances/EditInstanceConfigDialog'
 
 /**
  * 实例配置编辑器的应用接线层（ADR-097 b 范式）。

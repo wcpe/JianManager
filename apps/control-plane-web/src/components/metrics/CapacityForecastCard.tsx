@@ -1,5 +1,5 @@
 import { useCapacityForecast } from '@/api/metrics'
-import { CapacityForecastCard as CapacityForecastCardView } from '@jianmanager/ui/components/views/instances/CapacityForecastCard'
+import { CapacityForecastCard as CapacityForecastCardView } from '@/components/views/instances/CapacityForecastCard'
 import type { MetricRange } from '@jianmanager/ui'
 
 /**

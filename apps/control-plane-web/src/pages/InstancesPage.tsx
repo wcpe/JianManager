@@ -68,19 +68,19 @@ import {
   buildInstanceTreeRows,
   VirtualizedGroupedInstanceTable,
   VirtualizedInstanceTable,
-} from '@jianmanager/ui/components/views/instances/VirtualizedInstanceTables'
+} from '@/components/views/instances/VirtualizedInstanceTables'
 import {
   FilterSelect,
   InstanceRowMenu,
   InstanceTableHeader,
   type InstanceSortKey,
   type InstanceSortOrder,
-} from '@jianmanager/ui/components/views/instances/InstanceTableParts'
-import { InstanceRowView } from '@jianmanager/ui/components/views/instances/InstanceRowView'
+} from '@/components/views/instances/InstanceTableParts'
+import { InstanceRowView } from '@/components/views/instances/InstanceRowView'
 import {
   BackendsInline,
   CardView,
-} from '@jianmanager/ui/components/views/instances/InstanceCardViews'
+} from '@/components/views/instances/InstanceCardViews'
 
 // 供针对性测试（rowMenu 门控）沿用既有导入路径。
 export { InstanceRowMenu }

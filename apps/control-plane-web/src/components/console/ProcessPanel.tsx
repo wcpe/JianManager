@@ -1,5 +1,5 @@
 import { useInstanceMetrics } from '@/api/metrics'
-import { ProcessPanel as ProcessPanelView } from '@jianmanager/ui/components/views/instances/ProcessPanel'
+import { ProcessPanel as ProcessPanelView } from '@/components/views/instances/ProcessPanel'
 
 /**
  * 通用进程指标面板的应用接线层（ADR-097 a 范式）。

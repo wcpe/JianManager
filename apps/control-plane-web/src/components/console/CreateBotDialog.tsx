@@ -3,7 +3,7 @@ import { useCreateBot } from '@/api/bots'
 import { useInstance } from '@/api/instances'
 import { useNode } from '@/api/nodes'
 import { suggestBotServer } from './bot-list'
-import CreateBotDialogView from '@jianmanager/ui/components/views/instances/CreateBotDialog'
+import CreateBotDialogView from '@/components/views/instances/CreateBotDialog'
 
 /**
  * 「新建 Bot」对话框的应用接线层（ADR-097 b 范式）。

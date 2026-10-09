@@ -7,10 +7,10 @@ import {
   useAddInstanceGroupMembers,
 } from '@/api/instanceGroups'
 import { useConsoleStore } from '@/stores/console'
-import { InstanceGroupTree as InstanceGroupTreeView } from '@jianmanager/ui/components/views/instances/InstanceGroupTree'
+import { InstanceGroupTree as InstanceGroupTreeView } from '@/components/views/instances/InstanceGroupTree'
 
 // 原文件的导出名必须原样再导出，否则调用点（InstanceGroupManager 等）会断。
-export { INSTANCE_DND_MIME } from '@jianmanager/ui/components/views/instances/InstanceGroupTree'
+export { INSTANCE_DND_MIME } from '@/components/views/instances/InstanceGroupTree'
 
 /**
  * 分组树的应用接线层（ADR-097 b 范式）。

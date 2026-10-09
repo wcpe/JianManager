@@ -41,7 +41,7 @@ import {
   ConfigSwitch,
   ConfigViewToggle,
   type ConfigView,
-} from '@jianmanager/ui/components/views/config-explorer/ConfigRow'
+} from '@/components/views/config-explorer/ConfigRow'
 import { isPlatformAdmin } from '@jianmanager/ui/lib/roles'
 
 /**

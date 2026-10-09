@@ -6,7 +6,7 @@ import {
   useDeleteRegistration,
 } from '@/api/registrations'
 import { useResyncProxy } from '@/api/proxy'
-import ProxyRegistrationsDialogView from '@jianmanager/ui/components/views/instances/ProxyRegistrationsDialog'
+import ProxyRegistrationsDialogView from '@/components/views/instances/ProxyRegistrationsDialog'
 
 /**
  * 代理后端注册管理的应用接线层（ADR-097 b 范式）。

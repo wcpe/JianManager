@@ -6,7 +6,7 @@ import {
 } from '@/api/snapshots'
 import { useInstance } from '@/api/instances'
 import { usePermissionsStore } from '@/stores/permissions'
-import SnapshotPanelView from '@jianmanager/ui/components/views/instances/SnapshotPanel'
+import SnapshotPanelView from '@/components/views/instances/SnapshotPanel'
 
 /**
  * 实例整机快照面板的应用接线层（ADR-097 b 范式）。

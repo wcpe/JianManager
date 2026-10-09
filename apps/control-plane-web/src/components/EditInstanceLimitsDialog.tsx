@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
-import EditInstanceLimitsDialogView from '@jianmanager/ui/components/views/instances/EditInstanceLimitsDialog'
+import EditInstanceLimitsDialogView from '@/components/views/instances/EditInstanceLimitsDialog'
 
 /**
  * 实例资源限额编辑器的应用接线层（ADR-097 b 范式）。
