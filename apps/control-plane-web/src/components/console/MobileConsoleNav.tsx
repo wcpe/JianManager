@@ -2,12 +2,12 @@ import { NavLink, useLocation } from 'react-router'
 import { MobileConsoleNav as MobileConsoleNavView } from '@/components/views/console/MobileConsoleNav'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
-import { navGroupsForPermissions, navGroupsForRole } from '@jianmanager/ui/lib/nav-config'
+import { navGroupsForPermissions, navGroupsForRole } from '@/lib/nav-config'
 
 /**
  * 手机端底部导航的应用接线层（ADR-097）。
  *
- * 视图本体已迁入组件库并受控；本层注入按权限/角色裁剪的导航分组、当前路径与路由链接，
+ * 视图本体是受控视图（见 components/views）；本层注入按权限/角色裁剪的导航分组、当前路径与路由链接，
  * 保留同路径的默认导出与零 props，调用点无需改动。
  */
 export default function MobileConsoleNav() {

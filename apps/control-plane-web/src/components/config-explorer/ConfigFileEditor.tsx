@@ -25,7 +25,7 @@ export type ConfigFileEditorProps = { instanceId: number } & Omit<
 /**
  * 配置编辑器的应用接线层（ADR-097）。
  *
- * 视图本体已迁入组件库并受控；本层注入：读取结果与加载/失败态、三种写入（原文 / 字段补丁 / 跨文件校验）、
+ * 视图本体是受控视图（见 components/views）；本层注入：读取结果与加载/失败态、三种写入（原文 / 字段补丁 / 跨文件校验）、
  * 编辑器本体（CodeEditor 接线层，注入主题），以及把提示回执接回 toast。其余 props 原样透传。
  */
 export default function ConfigFileEditor({ instanceId, path, ...rest }: ConfigFileEditorProps) {

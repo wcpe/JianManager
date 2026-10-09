@@ -17,9 +17,9 @@ export const CRASH_ROOT_CAUSES = [
 export type CrashRootCause = (typeof CRASH_ROOT_CAUSES)[number]
 
 /** 崩溃与资源关联证据（FR-470 §2.3，OOM 证据链）。 */
-// 崩溃诊断契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 崩溃诊断契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的查询泛型使用。
-import type { CrashSnapshot, CrashTrend } from '@jianmanager/ui/lib/crash'
+import type { CrashSnapshot, CrashTrend } from '@/lib/crash'
 export type {
   CrashCauseCount,
   CrashCorrelation,
@@ -27,7 +27,7 @@ export type {
   CrashSnapshot,
   CrashTrend,
   CrashTrendPoint,
-} from '@jianmanager/ui/lib/crash'
+} from '@/lib/crash'
 
 // `CrashSnapshot` / `CrashTrend*` 的定义已随受控视图归包（见上方 re-export）。
 

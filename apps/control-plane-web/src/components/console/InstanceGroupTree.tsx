@@ -15,7 +15,7 @@ export { INSTANCE_DND_MIME } from '@/components/views/instances/InstanceGroupTre
 /**
  * 分组树的应用接线层（ADR-097 b 范式）。
  *
- * 树本体已迁入组件库并受控；本层取分组列表、接 console store 的折叠态与四个写动作、
+ * 树本体是受控视图（见 components/views）；本层取分组列表、接 console store 的折叠态与四个写动作、
  * 把提示交给 toast。保留同路径的导出与同一套 props，调用点无需改动。
  */
 export function InstanceGroupTree({

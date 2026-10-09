@@ -2,14 +2,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 定时任务（与后端 model.Schedule 对齐）。 */
-// 定时任务契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
-import type { ScheduleInfo } from '@jianmanager/ui/lib/schedule'
-export type { ScheduleInfo } from '@jianmanager/ui/lib/schedule'
+// 定时任务契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+import type { ScheduleInfo } from '@/lib/schedule'
+export type { ScheduleInfo } from '@/lib/schedule'
 export type {
   CreateScheduleBody,
   UpdateScheduleBody,
-} from '@jianmanager/ui/lib/schedule'
-import type { CreateScheduleBody, UpdateScheduleBody } from '@jianmanager/ui/lib/schedule'
+} from '@/lib/schedule'
+import type { CreateScheduleBody, UpdateScheduleBody } from '@/lib/schedule'
 
 /** 定时任务执行日志（与后端 model.ScheduleExecutionLog 对齐）。 */
 export interface ScheduleLogInfo {

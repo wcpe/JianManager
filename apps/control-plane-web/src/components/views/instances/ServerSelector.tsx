@@ -3,9 +3,9 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Search, Server, Star, X } from 'lucide-react'
 
-import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
+import { useVirtualRows } from '@/lib/virtual-list'
 import { cn } from '@jianmanager/ui'
-import type { HoverPrefetcher, StoredInstance } from '@jianmanager/ui/lib/server-selection'
+import type { HoverPrefetcher, StoredInstance } from '@/lib/server-selection'
 
 /** 选择器行所需的实例最小信息（外壳可传结构兼容的更宽类型）。 */
 export interface SelectorInstance {

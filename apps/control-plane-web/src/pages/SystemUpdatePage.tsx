@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做三份查询取数、八个写动作、
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做三份查询取数、八个写动作、
 // 四处危险确认的门禁注入与全部 toast 文案。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'

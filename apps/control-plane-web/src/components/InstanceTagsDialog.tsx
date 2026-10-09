@@ -6,7 +6,7 @@ import InstanceTagsDialogView from '@/components/views/instances/InstanceTagsDia
 /**
  * 实例标签编辑器的应用接线层（ADR-097 b 范式）。
  *
- * 编辑器本体已迁入组件库并受控；本层只做一件事：把合并好的标签数组持久化并提示。
+ * 编辑器本体是受控视图（见 components/views）；本层只做一件事：把合并好的标签数组持久化并提示。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。
  */
 export default function InstanceTagsDialog({

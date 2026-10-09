@@ -35,8 +35,8 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { cn } from '@jianmanager/ui'
-import { permDomainExplain, permExplain } from '@jianmanager/ui/lib/permission-explain'
-import { ROLE_LABEL_KEY } from '@jianmanager/ui/lib/roles'
+import { permDomainExplain, permExplain } from '@/lib/permission-explain'
+import { ROLE_LABEL_KEY } from '@/lib/roles'
 
 /** 选中对象：角色模板或用户；null 表示未选择。 */
 export type PermissionSelection =

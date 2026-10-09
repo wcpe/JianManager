@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做列表/详情取数、筛选与窗口状态、取消任务与 toast 接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表/详情取数、筛选与窗口状态、取消任务与 toast 接线。
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useSearchParams } from 'react-router'

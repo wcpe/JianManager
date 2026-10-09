@@ -6,7 +6,7 @@ import BinaryVersionPanelView from '@/components/views/instances/BinaryVersionPa
 /**
  * 实例「二进制版本」区的应用接线层（ADR-097 b 范式）。
  *
- * 面板本体已迁入组件库并受控；本层取三样它不该自己拿的东西：版本视图、实例运行态
+ * 面板本体是受控视图（见 components/views）；本层取三样它不该自己拿的东西：版本视图、实例运行态
  * （升级/回滚要求已停止）、写权限（来自 permissions store，属应用状态）。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。
  */

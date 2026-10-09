@@ -8,7 +8,7 @@ import { useBotLoadMetrics } from '@/api/bot-load'
 import { useSessionEvents } from './SessionEventProvider'
 
 /**
- * 会话指标接线层：时间窗决定服务端聚合粒度，故状态留容器；展示层已归包。
+ * 会话指标接线层：时间窗决定服务端聚合粒度，故状态留容器；展示层已回迁应用侧。
  */
 export function SessionMetrics({ runId }: { runId: number | string }) {
   const { live } = useSessionEvents()

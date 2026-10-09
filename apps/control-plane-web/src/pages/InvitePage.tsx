@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只读 URL fragment 令牌、发接受请求并清理 URL。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只读 URL fragment 令牌、发接受请求并清理 URL。
 import { Link } from 'react-router'
 import api from '@/api/client'
 import { InvitePageView } from '@/components/views/auth/InvitePageView'

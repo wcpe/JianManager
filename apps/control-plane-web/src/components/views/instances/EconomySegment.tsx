@@ -17,17 +17,17 @@ import {
 } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import type { BusinessResult } from '@jianmanager/ui/lib/business'
+import type { BusinessResult } from '@/lib/business'
 import type {
   EconomyLeaderboardRow,
   EconomyMirrorRow,
-} from '@jianmanager/ui/lib/economy'
+} from '@/lib/economy'
 import {
   aggregateByCurrency,
   fmtEpochMillis,
   isValidAmount,
   type EconomyLedgerRow,
-} from '@jianmanager/ui/lib/economy-view'
+} from '@/lib/economy-view'
 
 /**
  * 经济定制页（JBIS，FR-123，见 ADR-026/028/029）。

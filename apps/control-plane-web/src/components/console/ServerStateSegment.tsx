@@ -5,7 +5,7 @@ import ServerStateSegmentView from '@/components/views/instances/ServerStateSegm
 /**
  * 「服务器状态」段的应用接线层（ADR-097 a 范式）。
  *
- * 视图本体已迁入组件库并受控；本层持有自动刷新间隔（它是 `useServerState` 的入参，
+ * 视图本体是受控视图（见 components/views）；本层持有自动刷新间隔（它是 `useServerState` 的入参，
  * 必须在 hook 这一层）并接取数与刷新。保留同路径的默认导出与同一套 props，调用点无需改动。
  */
 export default function ServerStateSegment({ instanceId }: { instanceId: number }) {

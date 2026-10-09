@@ -22,7 +22,7 @@ interface BotLoadWizardProps {
 }
 
 /**
- * 五步创建向导接线层：草稿状态机与校验已归包，此处注入四个 mutation、实例选择器、
+ * 五步创建向导接线层：草稿状态机与校验已回迁应用侧，此处注入四个 mutation、实例选择器、
  * 节点容量查询与导航。失败时把服务端 message 包成 Error 抛出，供展示层就地显示。
  */
 export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadWizardProps) {

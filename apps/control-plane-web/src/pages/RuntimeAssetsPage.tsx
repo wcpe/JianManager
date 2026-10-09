@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做聚合取数、五类写动作与 toast 接线，以及两处插槽实现：
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做聚合取数、五类写动作与 toast 接线，以及两处插槽实现：
 // 实例候选的服务端搜索（千级实例）与制品存储对账区块（其自身容器化在上一批完成）。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'

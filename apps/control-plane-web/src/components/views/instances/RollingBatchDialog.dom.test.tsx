@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import RollingBatchDialog, { RollingProgress } from '@/components/views/instances/RollingBatchDialog'
-import type { RollingOp } from '@jianmanager/ui/lib/instance-rolling'
+import type { RollingOp } from '@/lib/instance-rolling'
 
 /**
  * FR-457 滚动/分批/灰度编排 · 受控视图测（ADR-097 b 范式）。

@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { cn } from '@jianmanager/ui'
-import { slotVisibility, visibilityClass } from '@jianmanager/ui/lib/header-layout'
+import { slotVisibility, visibilityClass } from '@/lib/header-layout'
 
 /** 集群统计浮窗行数上限（FR-294）：超出在底部提示「还有 N 个，查看全部」。 */
 export const STAT_POPOVER_MAX_ROWS = 8

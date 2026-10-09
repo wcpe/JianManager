@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做五个查询取数、统计窗口、管理员门禁与两个区块的接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做五个查询取数、统计窗口、管理员门禁与两个区块的接线。
 import { useState } from 'react'
 import { useNodes } from '@/api/nodes'
 import { useInstanceAggregate } from '@/api/instances'

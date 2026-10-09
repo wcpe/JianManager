@@ -38,7 +38,7 @@ import {
   isIncrementalChild,
   summarizeBackups,
   type BackupInfo,
-} from '@jianmanager/ui/lib/backup'
+} from '@/lib/backup'
 
 /**
  * 可选备份存储位置（本视图渲染下拉与解析存储名所需的最小字段集）。

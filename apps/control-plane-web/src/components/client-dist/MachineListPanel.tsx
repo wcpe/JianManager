@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { MachineListPanelView } from '@/components/views/client-dist/MachineListPanelView'
 import { MachineTimelineView } from '@/components/views/client-dist/MachineTimelineView'
-import type { ClientMachineSummary, MachineSortField } from '@jianmanager/ui/lib/client-dist-machines-contracts'
+import type { ClientMachineSummary, MachineSortField } from '@/lib/client-dist-machines-contracts'
 import ClientDistExportButton from '@/components/ClientDistExportButton'
 import { useClientDistMachines, useClientMachineEvents } from '@/api/clientDistMachines'
 
@@ -10,7 +10,7 @@ import { useClientDistMachines, useClientMachineEvents } from '@/api/clientDistM
  * 窗口内每台机器的更新次数 / 最近更新 / 版本滞后；点行看该机器更新事件时间线。
  * 明细保留窗 14 天：exact=false 时 UI 明示「近似」（ADR-049）。
  *
- * 展示层已归包（`MachineListPanelView` / `MachineTimelineView`），此处只保留取数、
+ * 展示层已回迁应用侧（`MachineListPanelView` / `MachineTimelineView`），此处只保留取数、
  * 查询状态（sort/order/page 驱动查询，故留在容器）与 slot 组装。
  */
 export function MachineListPanel({ channelId, from, to }: { channelId?: string; from: string; to: string }) {

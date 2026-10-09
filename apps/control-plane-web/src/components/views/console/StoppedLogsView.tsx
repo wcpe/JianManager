@@ -1,8 +1,8 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, History } from 'lucide-react'
-import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
-import type { LogEntry } from '@jianmanager/ui/lib/console-log-types'
+import { copyToClipboard } from '@/lib/clipboard'
+import type { LogEntry } from '@/lib/console-log-types'
 import { cn } from '@jianmanager/ui'
 
 export interface StoppedLogsViewProps {

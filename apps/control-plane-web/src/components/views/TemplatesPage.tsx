@@ -36,9 +36,9 @@ import {
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { validateRequired, validateUrl, validateAbsPath, validateFields, hasErrors } from '@jianmanager/ui/lib/form-validation'
-import { useFieldGate } from '@jianmanager/ui/lib/use-field-gate'
-import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
+import { validateRequired, validateUrl, validateAbsPath, validateFields, hasErrors } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
+import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@jianmanager/ui'
 import {
   deriveMarketMeta,
@@ -46,7 +46,7 @@ import {
   fillTemplate,
   validateVariableValues,
   type MarketIcon,
-} from '@jianmanager/ui/lib/template-apply'
+} from '@/lib/template-apply'
 import type { Tone } from '@jianmanager/ui/lib/tone'
 import DangerConfirm from '@/components/views/DangerConfirm'
 

@@ -23,7 +23,7 @@ import {
   GroupEditDialogView,
   type GroupEditValues,
 } from '@/components/views/groups/GroupEditDialogView'
-import { formatSizeMb } from '@jianmanager/ui/lib/backup'
+import { formatSizeMb } from '@/lib/backup'
 
 /** 用户组详情可打开的面板（FR-128 可寻址）：编辑属性 / 管理成员。 */
 export type GroupPanel = 'edit' | 'members'
@@ -136,7 +136,7 @@ export function GroupsPageView({
         actions={<Button onClick={() => setShowCreate(true)}>+ {t('groups.createGroup')}</Button>}
       />
 
-      {/* 创建对话框为已归包的受控视图：开合留本组件（瞬时动作），创建经回调交由容器执行。 */}
+      {/* 创建对话框为已回迁应用侧的受控视图：开合留本组件（瞬时动作），创建经回调交由容器执行。 */}
       <CreateGroupDialogView
         open={showCreate}
         onClose={() => setShowCreate(false)}

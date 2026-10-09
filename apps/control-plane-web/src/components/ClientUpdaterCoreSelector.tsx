@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做版本列表取数、切换/上传写请求与角色门禁注入。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做版本列表取数、切换/上传写请求与角色门禁注入。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -16,7 +16,7 @@ const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?
  * updater-core 版本选择器（FR-259）的接线层（ADR-097）。频道工作台「Core 版本」tab：
  * 列出所有归档 core 版本，当前选定版本高亮，一键切换实现回滚。切换后提示"客户端下次启动生效"。
  *
- * 展示层已归包（`ClientUpdaterCoreSelectorView`），此处只保留应用侧职责：
+ * 展示层已回迁应用侧（`ClientUpdaterCoreSelectorView`），此处只保留应用侧职责：
  * - 取数：版本列表（`useUpdaterCoreVersions`）与加载态注入视图；
  * - 切换（`useSelectUpdaterCore`）：视图确认弹窗通过后落 PUT，成功/失败提示在此发；
  * - 上传（`useUploadUpdaterCore`）：视图交来弹窗内的表单草稿，这里发 POST 并把「是否成功」以

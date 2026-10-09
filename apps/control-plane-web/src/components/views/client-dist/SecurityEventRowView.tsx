@@ -5,7 +5,7 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { TableCell, TableRow } from '@jianmanager/ui/components/table'
 import UntrustedFieldBadge from '@/components/views/UntrustedFieldBadge'
-import type { ClientDistSecurityEvent } from '@jianmanager/ui/lib/client-dist-security-contracts'
+import type { ClientDistSecurityEvent } from '@/lib/client-dist-security-contracts'
 import { maskPlayerName } from '@/lib/privacy-mask'
 import { fmtTime, levelVariant, SECURITY_EMPTY as EMPTY } from '@/components/views/client-dist/security-format'
 

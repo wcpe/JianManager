@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入发现结果与编辑器（受控化）。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只注入发现结果与编辑器（受控化）。
 import { GenericConfigSegment as GenericConfigSegmentView } from '@/components/views/console/GenericConfigSegment'
 import { useConfigDiscover } from '@/api/configs'
 import ConfigFileEditor from '@/components/config-explorer/ConfigFileEditor'

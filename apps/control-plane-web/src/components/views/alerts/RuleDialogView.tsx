@@ -26,7 +26,7 @@ import type {
   AlertRuleInfo,
   AlertChannelInfo,
   RuleSubmitPayload,
-} from '@jianmanager/ui/lib/alert-contracts'
+} from '@/lib/alert-contracts'
 import {
   triggerUsesMetric,
   triggerUsesKeyword,
@@ -35,7 +35,7 @@ import {
   triggerAllowsTargetSwitch,
   isValidHHMM,
   parseChannelIds,
-} from '@jianmanager/ui/lib/alert-helpers'
+} from '@/lib/alert-helpers'
 
 /** 目标维度可选节点（容器取数：个位/十位量级，无服务端搜索需求）。 */
 export interface RuleDialogNodeOption {

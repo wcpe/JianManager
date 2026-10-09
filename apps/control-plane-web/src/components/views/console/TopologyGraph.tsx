@@ -10,10 +10,10 @@ import {
   type GroupDimension,
   type GroupKeyLabels,
   type InstanceGroupKeyMap,
-} from '@jianmanager/ui/lib/instance-grouping'
-import type { InstanceGroupNode } from '@jianmanager/ui/lib/instance-group'
-import type { NodeInfo } from '@jianmanager/ui/lib/node-types'
-import type { ProxyRegistration } from '@jianmanager/ui/lib/proxy-registration'
+} from '@/lib/instance-grouping'
+import type { InstanceGroupNode } from '@/lib/instance-group'
+import type { NodeInfo } from '@/lib/node-types'
+import type { ProxyRegistration } from '@/lib/proxy-registration'
 import {
   buildTopology,
   groupTopologyByDimension,
@@ -22,7 +22,7 @@ import {
   type LaidNode,
   type ProxyRegistrations,
   type TopoInstanceInput,
-} from '@jianmanager/ui/lib/topology'
+} from '@/lib/topology'
 import { instanceStatusLevel, statusColorVar, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 import { cn } from '@jianmanager/ui'
 

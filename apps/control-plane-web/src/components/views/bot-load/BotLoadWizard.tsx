@@ -15,15 +15,15 @@ import {
   wizardReducer,
   type BotLoadWizardDraft,
   type WizardStep,
-} from '@jianmanager/ui/lib/bot-load-draft'
-import type { BotLoadNodeCapacity, BotLoadPreflightResult, BotLoadTemplate } from '@jianmanager/ui/lib/bot-load-types'
+} from '@/lib/bot-load-draft'
+import type { BotLoadNodeCapacity, BotLoadPreflightResult, BotLoadTemplate } from '@/lib/bot-load-types'
 import {
   previewBotNames,
   validateCommandSchedule,
   validateConnection,
   validateLoadProfile,
   validateThresholds,
-} from '@jianmanager/ui/lib/bot-load-validation'
+} from '@/lib/bot-load-validation'
 import { CapacityPlan } from '@/components/views/bot-load/CapacityPlan'
 import { CommandPlanEditor } from '@/components/views/bot-load/CommandPlanEditor'
 import { LoadProfileEditor } from '@/components/views/bot-load/LoadProfileEditor'

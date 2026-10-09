@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
-import type { InstanceBatchAction, InstanceBatchResult } from '@jianmanager/ui/lib/instance-batch'
+import type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instance-batch'
 
 /** 批量栏所需的选中实例最小信息（含状态，用于状态感知禁用与失败明细，FR-058/FR-139）。 */
 export interface BatchSelectedInstance {

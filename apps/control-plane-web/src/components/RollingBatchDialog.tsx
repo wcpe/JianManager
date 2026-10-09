@@ -5,7 +5,7 @@ import RollingBatchDialogView, { RollingProgress } from '@/components/views/inst
 /**
  * 滚动/分批/灰度编排对话框的应用接线层（ADR-097 b 范式）。
  *
- * 对话框本体已迁入组件库并受控；本层接三样它不该自己拿的东西：创建动作、会话轮询、
+ * 对话框本体是受控视图（见 components/views）；本层接三样它不该自己拿的东西：创建动作、会话轮询、
  * 控制动作。进度视图用轮询到的会话数据渲染后以插槽交回视图。
  * 保留同路径的默认导出与同一套 props，调用点（InstanceBatchBar）无需改动。
  */

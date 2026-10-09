@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- 纯函数 parseIdInput/mergeIds/formatScopeSummary 经本文件再导出，保持 AgentTokensPage.dom.test.tsx 既有导入路径可用 */
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做平台管理员门禁、列表/候选取数、签发与吊销 mutation、
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做平台管理员门禁、列表/候选取数、签发与吊销 mutation、
 // 危险操作门禁与 toast 文案接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'

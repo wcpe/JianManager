@@ -24,8 +24,8 @@ import {
   resolveClientDistEmptyKind,
   resolveUpdateRates,
 } from '@/lib/client-dist-kpi'
-import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
-import type { ClientDistStats, ClientDistObservability } from '@jianmanager/ui/lib/client-dist-stats-contracts'
+import type { ObsWindow } from '@/lib/obs-window'
+import type { ClientDistStats, ClientDistObservability } from '@/lib/client-dist-stats-contracts'
 import { InsightCards } from '@/components/views/client-dist/InsightCards'
 import { UpdateHeatmap } from '@/components/views/client-dist/UpdateHeatmap'
 import { ObsTimeRangePicker } from '@/components/views/client-dist/ObsTimeRangePicker'

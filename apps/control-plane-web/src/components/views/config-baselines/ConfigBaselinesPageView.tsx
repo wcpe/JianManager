@@ -34,8 +34,8 @@ import {
   scopeValueOf,
   shortHash,
   type ScopeKind,
-} from '@jianmanager/ui/lib/config-baseline'
-import type { InstanceGroupNode } from '@jianmanager/ui/lib/instance-group'
+} from '@/lib/config-baseline'
+import type { InstanceGroupNode } from '@/lib/instance-group'
 
 /**
  * 配置基线行（本视图渲染与编辑回填所需的最小字段集）。

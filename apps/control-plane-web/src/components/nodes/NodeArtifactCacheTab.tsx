@@ -6,7 +6,7 @@ import {
   useClearArtifactCache,
   useSetArtifactCacheCap,
 } from '@/api/nodeRuntime'
-import { describeCap } from '@jianmanager/ui/lib/artifact-cache'
+import { describeCap } from '@/lib/artifact-cache'
 import NodeArtifactCachePanel from '@/components/views/nodes/NodeArtifactCachePanel'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */

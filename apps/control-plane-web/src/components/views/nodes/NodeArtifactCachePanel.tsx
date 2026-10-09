@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Trash2, Copy, Database, FileArchive, Search } from 'lucide-react'
-import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
+import { copyToClipboard } from '@/lib/clipboard'
 import {
   formatCacheBytes,
   capGiBToBytes,
@@ -9,7 +9,7 @@ import {
   describeCap,
   type ArtifactCacheItem,
   type ArtifactCacheView,
-} from '@jianmanager/ui/lib/artifact-cache'
+} from '@/lib/artifact-cache'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'

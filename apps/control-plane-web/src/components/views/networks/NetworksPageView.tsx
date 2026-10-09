@@ -33,17 +33,17 @@ import { Panel } from '@jianmanager/ui/components/panel'
 import { ScrollableDialogBody, scrollableDialogContentClass } from '@jianmanager/ui/components/scrollable-dialog'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import { validateRequired } from '@jianmanager/ui/lib/form-validation'
+import { validateRequired } from '@/lib/form-validation'
 import { instanceStatusLevel, statusColorVar } from '@jianmanager/ui/lib/threshold'
 import {
   memberHealth,
   memberHealthFromStatus,
   type MemberHealth,
   type MemberStatusCounts,
-} from '@jianmanager/ui/lib/topology'
-import { useFieldGate } from '@jianmanager/ui/lib/use-field-gate'
+} from '@/lib/topology'
+import { useFieldGate } from '@/lib/use-field-gate'
 import { cn } from '@jianmanager/ui/lib/utils'
-import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
+import { useVirtualRows } from '@/lib/virtual-list'
 
 /** 页面双视图：'list' 列表（成员健康分布）/ 'topology' 拓扑（proxy↔backend 注册关系）。 */
 export type NetworkView = 'list' | 'topology'

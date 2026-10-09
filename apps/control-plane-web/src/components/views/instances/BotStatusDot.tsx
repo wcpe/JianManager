@@ -1,4 +1,4 @@
-import { botStatusKind } from '@jianmanager/ui/lib/bot-list'
+import { botStatusKind } from '@/lib/bot-list'
 import { cn } from '@jianmanager/ui'
 
 /**

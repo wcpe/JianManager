@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做三块数据取数、写动作触发、事件筛选持有与两个对话框容器的接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做三块数据取数、写动作触发、事件筛选持有与两个对话框容器的接线。
 import { useState } from 'react'
 import {
   useAlertRules,

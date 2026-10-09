@@ -42,9 +42,9 @@ import {
   EmbeddedUpdaterSummary,
   type EmbeddedUpdaterSummaryProps,
 } from '@/components/views/client-dist/EmbeddedUpdaterParts'
-import { localDraftSource } from '@jianmanager/ui/lib/file-sources'
-import { adaptEntry, type NativeFileSystemEntry } from '@jianmanager/ui/lib/webkit-entry-adapter'
-import { unzipWithNames } from '@jianmanager/ui/lib/zip-filename-decode'
+import { localDraftSource } from '@/lib/file-sources'
+import { adaptEntry, type NativeFileSystemEntry } from '@/lib/webkit-entry-adapter'
+import { unzipWithNames } from '@/lib/zip-filename-decode'
 import {
   PUBLISH_STEPS,
   canAdvance,
@@ -62,7 +62,7 @@ import {
   type LocalUnit,
   type FileSystemEntryLike,
   type ManifestFileLike,
-} from '@jianmanager/ui/lib/client-publish-wizard'
+} from '@/lib/client-publish-wizard'
 
 /** 取异常里的服务端文案，回退到给定文案（本地解包/拖拽解析失败时的文案口径与迁包前一致）。 */
 function errMsg(e: unknown, fallback: string): string {

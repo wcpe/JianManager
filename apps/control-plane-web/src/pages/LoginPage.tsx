@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只解析 returnTo、判定重定向并执行登录请求。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只解析 returnTo、判定重定向并执行登录请求。
 import { useState } from 'react'
 import { Navigate, useLocation } from 'react-router'
 import { useLogin } from '@/api/auth'

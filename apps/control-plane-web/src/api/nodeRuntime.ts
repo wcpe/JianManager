@@ -1,9 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 // 契约类型随受控视图归包（ADR-097 b 范式）：API 层与包内组件共用同一份定义。
-import type { ArtifactCacheView } from '@jianmanager/ui/lib/artifact-cache'
+import type { ArtifactCacheView } from '@/lib/artifact-cache'
 
-export type { ArtifactCacheItem, ArtifactCacheView } from '@jianmanager/ui/lib/artifact-cache'
+export type { ArtifactCacheItem, ArtifactCacheView } from '@/lib/artifact-cache'
 
 /** 一条可选 JDK 构建（foojay 版本选择器，FR-178）。 */
 export interface JDKCatalogPackage {

@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做列表/日志取数、四个写动作、组级删除门禁与实例选择器接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表/日志取数、四个写动作、组级删除门禁与实例选择器接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'

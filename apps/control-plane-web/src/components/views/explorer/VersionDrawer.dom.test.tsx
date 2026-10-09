@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import VersionDrawer, { type VersionDrawerProps } from '@/components/views/explorer/VersionDrawer'
-import type { FileVersion } from '@jianmanager/ui/lib/file-version'
+import type { FileVersion } from '@/lib/file-version'
 
 /**
  * FR-070 历史版本抽屉 · 受控视图测（ADR-097 c 范式）。

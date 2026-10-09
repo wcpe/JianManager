@@ -22,8 +22,8 @@ import {
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { Input } from '@jianmanager/ui/components/input'
 import { Textarea } from '@jianmanager/ui/components/textarea'
-import { validateRequired } from '@jianmanager/ui/lib/form-validation'
-import { useFieldGate } from '@jianmanager/ui/lib/use-field-gate'
+import { validateRequired } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 
 /** 提交载荷：新建用户组的名称与描述。 */
 export interface CreateGroupValues {

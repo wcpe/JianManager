@@ -4,7 +4,7 @@ import { ChevronDown } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
-import type { NavGroup, NavSection } from '@jianmanager/ui/lib/nav-config'
+import type { NavGroup, NavSection } from '@/lib/nav-config'
 
 /** 收集一个分组下所有可导航路由，用于移动端主域高亮。 */
 function groupRoutes(group: NavGroup): string[] {

@@ -25,9 +25,9 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import type { AuditLogInfo } from '@jianmanager/ui/lib/audit-contracts'
-import { formatAuditDetail, type AuditFilterState } from '@jianmanager/ui/lib/audit-filters'
-import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
+import type { AuditLogInfo } from '@/lib/audit-contracts'
+import { formatAuditDetail, type AuditFilterState } from '@/lib/audit-filters'
+import { useVirtualRows } from '@/lib/virtual-list'
 import { cn } from '@jianmanager/ui'
 
 /**

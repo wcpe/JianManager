@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 /**
- * 客户端分发安全契约（FR-430 / ADR-088）已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ * 客户端分发安全契约（FR-430 / ADR-088）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
 export type {
   SecurityLevel,
@@ -28,7 +28,7 @@ export type {
   SetKeyStateRequest,
   SetChannelProtectionRequest,
   SaveSecurityGroupRequest,
-} from '@jianmanager/ui/lib/client-dist-security-contracts'
+} from '@/lib/client-dist-security-contracts'
 import type {
   ClientDistSecurityOverview,
   ClientDistSecurityEvent,
@@ -46,7 +46,7 @@ import type {
   SetKeyStateRequest,
   SetChannelProtectionRequest,
   SaveSecurityGroupRequest,
-} from '@jianmanager/ui/lib/client-dist-security-contracts'
+} from '@/lib/client-dist-security-contracts'
 
 const securityKey = ['client-dist-security'] as const
 

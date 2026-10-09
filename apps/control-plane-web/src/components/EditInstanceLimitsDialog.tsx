@@ -6,7 +6,7 @@ import EditInstanceLimitsDialogView from '@/components/views/instances/EditInsta
 /**
  * 实例资源限额编辑器的应用接线层（ADR-097 b 范式）。
  *
- * 编辑器本体已迁入组件库并受控；本层只做持久化与提示。
+ * 编辑器本体是受控视图（见 components/views）；本层只做持久化与提示。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。
  */
 export default function EditInstanceLimitsDialog({

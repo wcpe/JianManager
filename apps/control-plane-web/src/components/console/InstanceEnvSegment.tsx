@@ -6,7 +6,7 @@ import InstanceEnvSegmentView from '@/components/views/instances/InstanceEnvSegm
 /**
  * 环境变量页签的应用接线层（ADR-097 b 范式）。
  *
- * 页签本体已迁入组件库并受控（不取数、不弹 toast）；本层取三份环境数据并承接保存与提示。
+ * 页签本体是受控视图（见 components/views，不取数、不弹 toast）；本层取三份环境数据并承接保存与提示。
  * 保留同路径的默认导出，调用点无需改动。
  */
 export default function InstanceEnvSegment({ instanceId }: { instanceId: number }) {

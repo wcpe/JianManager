@@ -7,9 +7,9 @@ import {
   storageBrowseCapability,
   customExplorerCapability,
 } from './capability'
-import type { FileBrowserSource } from '@jianmanager/ui/lib/file-browser-types'
+import type { FileBrowserSource } from '@/lib/file-browser-types'
 
-// 组件已迁至 `@jianmanager/ui`（ADR-097）：包内 UnifiedExplorerShell 从包内 import 标签宿主，
+// 组件已回迁应用侧（原 ADR-097 迁包已撤销）：包内 UnifiedExplorerShell 从包内 import 标签宿主，
 // 因此 mock 必须打在包路径上才拦得到。
 vi.mock('@/components/views/explorer/ExplorerTabHost', () => ({
   default: ({ instanceId }: { instanceId: number }) => (

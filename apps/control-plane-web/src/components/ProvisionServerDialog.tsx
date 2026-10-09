@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做候选取数、核心解析、搭建写请求与提示文案。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做候选取数、核心解析、搭建写请求与提示文案。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
@@ -23,7 +23,7 @@ interface ProvisionServerDialogProps {
 /**
  * 一键搭建后端子服向导接线层（ADR-097 b 范式，原 FR-034 一键搭建 / FR-046 核心解析 / FR-316 版本-JDK 预检）。
  *
- * 视图本体已迁入组件库并受控（不取数、不发请求、不弹 toast）；本层负责：
+ * 视图本体是受控视图（见 components/views，不取数、不发请求、不弹 toast）；本层负责：
  * - 候选取数：`useNodes()` 过滤启用态后映射节点选项、`useGroups()` 映射用户组选项、
  *   `useNodeJDKs(nodeId)` 注入 JDK 记录（未取到时为 undefined，视图据此跳过无 JDK 阻断）、
  *   `useCoreVersions(coreType)` 注入版本列表；

@@ -6,7 +6,7 @@ import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { Sparkline } from '@jianmanager/ui'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import type { MetricRange } from '@jianmanager/ui'
-import type { PlayerTrendResult } from '@jianmanager/ui/lib/player-trend'
+import type { PlayerTrendResult } from '@/lib/player-trend'
 
 /** 24 时段柱状图的 props。 */
 interface HourlyBarsProps {

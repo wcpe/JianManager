@@ -57,12 +57,12 @@ import {
 import { KpiCard, formatNumber, formatUptime } from '@/components/views/console/console-kpi-parts'
 import { MetricDivider, MetricSegment, ProbeMissingChip } from '@/components/views/console/metric-segment'
 import { MetricSourceChips } from '@/components/views/instances/MetricSourceChips'
-import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
-import type { LogEntry } from '@jianmanager/ui/lib/console-log-types'
-import { instanceStatusGlowClass } from '@jianmanager/ui/lib/instance-glow'
-import { TAB_CARD_TYPE, TAB_GROUP_BREAK, TAB_ICON, TAB_LABEL_KEY, type TabKey } from '@jianmanager/ui/lib/instance-console-tabs'
-import type { InstanceMetricsData } from '@jianmanager/ui/lib/instance-metrics'
-import type { InstanceInfo } from '@jianmanager/ui/lib/instance-types'
+import { copyToClipboard } from '@/lib/clipboard'
+import type { LogEntry } from '@/lib/console-log-types'
+import { instanceStatusGlowClass } from '@/lib/instance-glow'
+import { TAB_CARD_TYPE, TAB_GROUP_BREAK, TAB_ICON, TAB_LABEL_KEY, type TabKey } from '@/lib/instance-console-tabs'
+import type { InstanceMetricsData } from '@/lib/instance-metrics'
+import type { InstanceInfo } from '@/lib/instance-types'
 import { instanceStatusLevel } from '@jianmanager/ui/lib/threshold'
 
 /** 路由链接渲染参数：`to` 为应用侧路由路径，包内不认路由实现。 */

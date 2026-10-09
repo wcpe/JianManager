@@ -3,14 +3,14 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, GripVertical, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import { useVirtualRows } from '@jianmanager/ui/lib/virtual-list'
-import { useDebounced } from '@jianmanager/ui/lib/use-debounced'
-import { CARD_TYPES, cardTypeDef, type CardType } from '@jianmanager/ui/lib/workspace-card'
+import { useVirtualRows } from '@/lib/virtual-list'
+import { useDebounced } from '@/lib/use-debounced'
+import { CARD_TYPES, cardTypeDef, type CardType } from '@/lib/workspace-card'
 import {
   WORKSPACE_DND_MIME,
   encodeDragPayload,
   type DragPayload,
-} from '@jianmanager/ui/lib/instance-library'
+} from '@/lib/instance-library'
 import InstanceStatusDot from '@/components/views/instances/InstanceStatusDot'
 
 /** 库行所需的最小实例信息（外壳可传结构兼容的更宽类型）。 */

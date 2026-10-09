@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做内嵌更新器取数、密钥揭示与 wedge 下载接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做内嵌更新器取数、密钥揭示与 wedge 下载接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -17,7 +17,7 @@ import {
  * FR-259 起 core 不再随整合包附带：整合包只带 wedge.jar（~30KB），首次启动楔子自动经
  * API 根 endpoint 拼接 updater-core 端点并拉取（gradle-wrapper 模式，见 FR-258）。
  *
- * 展示层已归包（`ClientIntegrationGuideView`），此处只保留应用侧职责：
+ * 展示层已回迁应用侧（`ClientIntegrationGuideView`），此处只保留应用侧职责：
  * - 取数：内嵌更新器 jar 信息（`useUpdaterJarsInfo`）注入视图；
  * - **密钥揭示（敏感边界）**：选中密钥与已揭示明文由本层持有，明文只在「用户主动选择 + 后端 reveal 成功」
  *   时落定、改选或失败一律清空（与迁包前逐字一致），只经 props 交给视图用于拼 jm-updater.json；

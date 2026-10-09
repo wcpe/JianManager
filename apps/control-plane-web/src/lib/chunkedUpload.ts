@@ -1,11 +1,11 @@
 import api from '@/api/client'
 import type { ClientFileResult } from '@/api/clientVersions'
 
-// 纯逻辑（切片数学、进度归并、abortError、类型）已迁至 `@jianmanager/ui`；
+// 纯逻辑（切片数学、进度归并、abortError、类型）已回迁应用侧；
 // 此处转出，调用点零改动。
-export * from '@jianmanager/ui/lib/chunked-upload'
+export * from '@/lib/chunked-upload'
 
-import { abortError, progressBytes, sliceRanges } from '@jianmanager/ui/lib/chunked-upload'
+import { abortError, progressBytes, sliceRanges } from '@/lib/chunked-upload'
 
 /**
  * 客户端分发大文件分块上传客户端（FR-251，增强 FR-088）。
@@ -37,7 +37,7 @@ interface InitUploadResult {
 export async function uploadFileChunked(
   channelId: string,
   file: File,
-  opts: import('@jianmanager/ui/lib/chunked-upload').UploadFileChunkedOptions = {},
+  opts: import('@/lib/chunked-upload').UploadFileChunkedOptions = {},
 ): Promise<ClientFileResult> {
   const { onProgress, signal, chunkSize: wantChunkSize, expectedSha256 } = opts
 

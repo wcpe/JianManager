@@ -6,7 +6,7 @@ import { useLogs } from '@/api/logs'
 /**
  * 停机日志回放的应用接线层（ADR-097）。
  *
- * 视图本体已迁入组件库并受控；本层取最近 300 条日志、把复制回执接回 toast，
+ * 视图本体是受控视图（见 components/views）；本层取最近 300 条日志、把复制回执接回 toast，
  * 并注入「完整历史」的路由链接。对外 props 与原实现一致，调用点零改动。
  */
 export default function StoppedLogsView({ instanceId, status }: { instanceId: number; status: string }) {
