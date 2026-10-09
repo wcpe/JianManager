@@ -40,8 +40,8 @@ import { DEFAULT_ROLE_NODES, isPlatformAdmin } from './roles'
 /**
  * 侧栏导航项（多级侧栏共用）。`perm` 为权限节点，数组表示 any-of（FR-431）。
  *
- * 定义在本模块而非 `SidebarNavLink`：导航数据（本模块）与导航渲染（链接组件）
- * 是两件事，数据不该反向依赖渲染组件；链接组件按需 import 本类型。
+ * 定义在本模块而非链接组件（`components/views/console/SidebarNavLink`）：导航数据（本模块）
+ * 与导航渲染（链接组件）是两件事，数据不该反向依赖渲染组件；链接组件按需 import 本类型。
  */
 export interface NavEntry {
   to: string
