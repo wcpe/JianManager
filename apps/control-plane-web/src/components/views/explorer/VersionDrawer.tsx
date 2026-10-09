@@ -5,6 +5,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '
 import { UnifiedDiff } from '@/components/views/common/UnifiedDiff'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { FileVersion, FileVersionDiff } from '@/lib/file-browser/file-version'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type VersionNotice = (kind: 'success' | 'error', message: string) => void
@@ -37,12 +38,6 @@ export interface VersionDrawerProps {
   rollbackPending: boolean
   /** 提示通道。 */
   notify: VersionNotice
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 /**
@@ -144,7 +139,7 @@ export default function VersionDrawer({
                     </div>
                     <div className="mt-0.5 flex justify-between gap-2 text-muted-foreground">
                       <span className="text-[10px]">{new Date(v.createdAt).toLocaleString()}</span>
-                      <span className="text-[10px] shrink-0">{formatSize(v.size)}</span>
+                      <span className="text-[10px] shrink-0">{formatFileSize(v.size)}</span>
                     </div>
                     {v.rollbackOfVersionId ? (
                       <div className="text-[10px] text-amber-600">

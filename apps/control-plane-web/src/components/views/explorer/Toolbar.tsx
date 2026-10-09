@@ -26,6 +26,7 @@ import {
   DropdownMenuItem,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { breadcrumbs } from '@/lib/shared/paths'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 import type { FileViewMode } from '@/lib/file-browser/file-sort'
 import { cn } from '@jianmanager/ui'
 
@@ -62,14 +63,6 @@ interface ToolbarProps {
   itemCount?: number
   /** FR-422：当前目录内文件字节总计（不含子目录递归）。0 或 undefined 不渲染。 */
   totalSize?: number
-}
-
-/** 目录汇总用的字节格式化。比 FileList 的单文件版多一档 GB——目录总量常达 GB 级。 */
-function formatTotalSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
 /**
@@ -139,7 +132,7 @@ export default function Toolbar({
   const hasSelection = selectedCount > 0
   const summaryParts: string[] = []
   if (itemCount !== undefined && itemCount > 0) summaryParts.push(t('files.dirSummaryItems', { count: itemCount }))
-  if (totalSize !== undefined && totalSize > 0) summaryParts.push(formatTotalSize(totalSize))
+  if (totalSize !== undefined && totalSize > 0) summaryParts.push(formatFileSize(totalSize))
   const summary = summaryParts.join(' · ')
 
   return (

@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components -- 视图与随其导出的纯逻辑/变体同文件（沿用原组织方式），非组件导出按仓库约定在此豁免 */
 import { useTranslation } from 'react-i18next'
 import { Box } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
@@ -16,15 +15,7 @@ import {
 } from '@jianmanager/ui/components/dropdown-menu'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import type { ArchivedNode, NodeInfo } from '@/lib/nodes/node-types'
-
-/** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
-export function formatBytes(bytes: number): string {
-  if (bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  const value = bytes / Math.pow(1024, i)
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
-}
+import { formatFileSize } from '@/lib/shared/format-file-size'
 /** 详情「概览」分段：硬件 + 系统 + 网络等次要信息（FR-144）。 */
 export function NodeOverviewSection({ node }: { node: NodeInfo }) {
   const { t } = useTranslation()
@@ -37,7 +28,7 @@ export function NodeOverviewSection({ node }: { node: NodeInfo }) {
       label: t('nodes.network'),
       value:
         online && (node.networkBytesSent || node.networkBytesRecv)
-          ? `↑${formatBytes(node.networkBytesSent)} ↓${formatBytes(node.networkBytesRecv)}`
+          ? `↑${formatFileSize(node.networkBytesSent)} ↓${formatFileSize(node.networkBytesRecv)}`
           : '--',
     },
     { label: t('nodes.grpcPort'), value: node.grpcPort > 0 ? node.grpcPort : '--' },

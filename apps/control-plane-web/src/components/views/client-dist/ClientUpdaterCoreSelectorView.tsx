@@ -17,6 +17,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /**
  * updater-core 归档版本摘要（容器经 `useUpdaterCoreVersions` 取数注入）。
@@ -134,7 +135,7 @@ export function ClientUpdaterCoreSelectorView({
             {latestVersion ? displayCoreVersion(latestVersion) : '—'}
           </div>
           <div className="mt-1 text-[11px] text-muted-foreground">
-            {latestVersion ? `${latestVersion.sha256.slice(0, 12)}… · ${formatBytes(latestVersion.size)}` : t('clientCore.noVersionsShort', '暂无归档')}
+            {latestVersion ? `${latestVersion.sha256.slice(0, 12)}… · ${formatFileSize(latestVersion.size)}` : t('clientCore.noVersionsShort', '暂无归档')}
           </div>
         </div>
         <div className="rounded-lg border bg-card p-3">
@@ -144,7 +145,7 @@ export function ClientUpdaterCoreSelectorView({
           </div>
           <div className="mt-1 text-[11px] text-muted-foreground">
             {selectedVersion
-              ? `${selectedVersion.sha256.slice(0, 12)}… · ${formatBytes(selectedVersion.size)}`
+              ? `${selectedVersion.sha256.slice(0, 12)}… · ${formatFileSize(selectedVersion.size)}`
               : t('clientCore.followLatestHint', '频道未固定版本时，客户端使用最新归档 updater-core。')}
           </div>
         </div>
@@ -177,7 +178,7 @@ export function ClientUpdaterCoreSelectorView({
                     {v.dirty ? <Badge variant="outline">dirty</Badge> : null}
                   </div>
                 </TableCell>
-                <TableCell className="text-xs">{formatBytes(v.size)}</TableCell>
+                <TableCell className="text-xs">{formatFileSize(v.size)}</TableCell>
                 <TableCell className="text-xs">{new Date(v.createdAt).toLocaleString()}</TableCell>
                 <TableCell>
                   <div className="flex justify-end items-center gap-2">
@@ -333,9 +334,3 @@ function displayCoreVersion(v: { version: number; displayVersion?: string }): st
   return v.displayVersion || `v${v.version}`
 }
 
-/** formatBytes 把字节数格式化为人类可读（KB/MB）。 */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}

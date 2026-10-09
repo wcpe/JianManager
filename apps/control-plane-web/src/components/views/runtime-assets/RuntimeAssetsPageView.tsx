@@ -1,7 +1,7 @@
 /**
  * @file RuntimeAssetsPageView：运行时与制品全局页（JDK 跨节点矩阵 + 制品库）的受控视图——聚合载荷、
  *       刷新/删除/导入/批量部署四类写动作与 toast 文案全由应用容器注入，实例候选与制品对账区块经插槽注入。
- * @input lib/runtime-assets-view（formatBytes / buildRuntimeGrid / filterAssetGroups / shortSha /
+ * @input lib/shared/format-file-size（formatFileSize）、lib/runtime-assets-view（buildRuntimeGrid / filterAssetGroups / shortSha /
  *        DEFAULT_ASSET_FILTER / RUNTIME_TYPE_LABEL / AssetFilter）、lib/asset-contracts（AssetInfo / AssetType）、
  *        lib/runtime-assets-contracts（JDKMatrixItem / AssetTypeGroup / RuntimeMatrixEntry）、
  *        lib/relative-time（formatRelativeTime）、lib/threshold（instanceStatusLevel / StatusLevel）、
@@ -40,7 +40,8 @@ import type { AssetTypeGroup, JDKMatrixItem, RuntimeMatrixEntry } from '@/lib/ru
 import { formatRelativeTime } from '@/lib/shared/relative-time'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 import { cn } from '@jianmanager/ui'
-import { buildRuntimeGrid, DEFAULT_ASSET_FILTER, filterAssetGroups, formatBytes, RUNTIME_TYPE_LABEL, shortSha } from '@/lib/runtime-assets/runtime-assets-view'
+import { buildRuntimeGrid, DEFAULT_ASSET_FILTER, filterAssetGroups, RUNTIME_TYPE_LABEL, shortSha } from '@/lib/runtime-assets/runtime-assets-view'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 import type { AssetFilter } from '@/lib/runtime-assets/runtime-assets-view'
 
 /** 状态等级 → 色点类（实例状态前导点）。 */
@@ -681,7 +682,7 @@ function AssetSection({
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <StatCard label={t('runtimeAssets.assetCount')} value={summary.assetCount} />
-        <StatCard label={t('runtimeAssets.totalSize')} value={formatBytes(summary.totalSize)} accent />
+        <StatCard label={t('runtimeAssets.totalSize')} value={formatFileSize(summary.totalSize)} accent />
         <StatCard label={t('runtimeAssets.referencedAssets')} value={summary.referencedCount} />
         <StatCard
           label={t('runtimeAssets.hotCold')}
@@ -746,7 +747,7 @@ function AssetSection({
               <span className="flex items-center gap-2">
                 <span className="font-mono text-foreground">{g.type}</span>
                 <span className="font-normal text-muted-foreground">
-                  {g.items.length} · {formatBytes(g.totalSize)}
+                  {g.items.length} · {formatFileSize(g.totalSize)}
                 </span>
               </span>
             }
@@ -960,7 +961,7 @@ function AssetRow({
       <TableCell className="font-mono text-[11px] text-muted-foreground" title={asset.sha256}>
         {shortSha(asset.sha256)}
       </TableCell>
-      <TableCell className="text-right tabular-nums">{formatBytes(asset.size)}</TableCell>
+      <TableCell className="text-right tabular-nums">{formatFileSize(asset.size)}</TableCell>
       <TableCell className="text-center">
         <span
           className={cn(
@@ -1118,7 +1119,7 @@ function PluginBatchDeployDialog({
                   <span className="min-w-0 text-sm">
                     <span className="block font-medium">{asset.name || asset.filename}</span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {asset.filename} · {formatBytes(asset.size)}
+                      {asset.filename} · {formatFileSize(asset.size)}
                     </span>
                   </span>
                 </label>

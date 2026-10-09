@@ -2,7 +2,7 @@
  * @file SystemUpdatePageView：面板自更新页（`/system-update`）的受控视图——检查结果 / 全网升级进度 /
  *       Worker 二进制缓存三份查询与检查、CP 升级回滚、节点升级回滚、全网升级、预缓存这些写动作
  *       全由应用容器注入；视图只保留弹窗开合与金丝雀草稿这类纯 UI 状态。
- * @input lib/artifact-cache（formatCacheBytes）、lib/relative-time（formatRelativeTime）、lib/clipboard（copyToClipboard）、
+ * @input lib/shared/format-file-size（formatFileSize）、lib/relative-time（formatRelativeTime）、lib/clipboard（copyToClipboard）、
  *        views/DangerConfirm（危险操作二次确认）、views/ReleaseNotes（更新说明 Markdown）、
  *        layout（PageShell / PageHeader）、Badge / Button / Checkbox / Dialog / Input / Label / Table 原语、翻译上下文
  * @output SystemUpdatePageView、SystemUpdatePageViewProps、SystemUpdateControlPlaneCard、SystemUpdateControlPlaneCardProps、
@@ -32,7 +32,7 @@ import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { ReleaseNotes } from '@/components/views/system-update/ReleaseNotes'
-import { formatCacheBytes } from '@/lib/artifacts/artifact-cache'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import { formatRelativeTime } from '@/lib/shared/relative-time'
 
@@ -67,7 +67,7 @@ export interface SystemUpdateWorkerAssetEntry {
   /** CP 本地是否已缓存该平台制品。 */
   cached: boolean
   sha256: string
-  /** 制品字节数（`formatCacheBytes` 展示）。 */
+  /** 制品字节数（`formatFileSize` 展示）。 */
   size: number
   /** 缓存完成时刻（ISO 字符串）；空表示未缓存。 */
   cachedAt?: string
@@ -291,7 +291,7 @@ export function SystemUpdateWorkerAssetTableRow({
           '-'
         )}
       </TableCell>
-      <TableCell className="whitespace-nowrap font-mono text-xs">{formatCacheBytes(row.size)}</TableCell>
+      <TableCell className="whitespace-nowrap font-mono text-xs">{formatFileSize(row.size)}</TableCell>
       <TableCell className="whitespace-nowrap font-mono text-xs">{formatWorkerAssetTime(row.cachedAt)}</TableCell>
       <TableCell className={row.lastError ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
         {row.lastError || '-'}

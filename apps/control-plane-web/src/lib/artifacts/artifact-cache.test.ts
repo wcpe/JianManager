@@ -1,20 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatCacheBytes, capGiBToBytes, capBytesToGiB, describeCap } from './artifact-cache'
-
-describe('formatCacheBytes', () => {
-  it('0 或非有限值回 0 B', () => {
-    expect(formatCacheBytes(0)).toBe('0 B')
-    expect(formatCacheBytes(-5)).toBe('0 B')
-    expect(formatCacheBytes(NaN)).toBe('0 B')
-  })
-  it('按量级带单位', () => {
-    expect(formatCacheBytes(512)).toBe('512 B')
-    expect(formatCacheBytes(1024)).toBe('1.0 KB')
-    expect(formatCacheBytes(1536)).toBe('1.5 KB')
-    expect(formatCacheBytes(1024 * 1024)).toBe('1.0 MB')
-    expect(formatCacheBytes(1024 * 1024 * 1024)).toBe('1.0 GB')
-  })
-})
+import { capGiBToBytes, capBytesToGiB, describeCap } from './artifact-cache'
 
 describe('capGiBToBytes', () => {
   it('GB → 字节', () => {

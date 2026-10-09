@@ -15,22 +15,17 @@ import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { RawSeries } from '@jianmanager/ui/lib/monitor-metrics'
 import type { DrillTarget } from '@/components/views/instances/DrillTargetPicker'
 import type { ManagedProcessAction, ManagedProcessDetail, ManagedProcessInfo, ProcessTopItem } from '@/lib/console/managed-process'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '--'
-  const units = ['B', 'KiB', 'MiB', 'GiB']
-  let value = bytes
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit++
-  }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
-}
+/**
+ * 本页字节展示统一走共享实现。
+ * 0/负值/非有限数沿用本页原有的 `--` 占位（进程 RSS 与读写速率为 0 时「无数据」比「0 B」更贴切）。
+ */
+const BYTES_FALLBACK = { fallback: '--' } as const
 
 function formatRate(read: number, write: number): string {
   const total = read + write
-  return total > 0 ? `${formatBytes(total)}/s` : '--'
+  return total > 0 ? `${formatFileSize(total)}/s` : '--'
 }
 
 function formatTime(value: string): string {
@@ -71,7 +66,7 @@ function ProcessTopPanel({ rows, onInspect }: { rows: ProcessTopItem[]; onInspec
                 {row.commandSummary || row.name || '--'}
               </span>
               <span className="font-mono tabular-nums">{row.cpuPercent.toFixed(1)}%</span>
-              <span className="font-mono tabular-nums">{formatBytes(row.rssBytes)}</span>
+              <span className="font-mono tabular-nums">{formatFileSize(row.rssBytes, BYTES_FALLBACK)}</span>
               <span className="font-mono tabular-nums">{formatRate(row.readBytesPerSec, row.writeBytesPerSec)}</span>
               <Button type="button" variant="outline" size="xs" onClick={() => onInspect(row)}>
                 {t('monitor.inspectProcess', '探查')}
@@ -91,10 +86,10 @@ function ProcessTopPanel({ rows, onInspect }: { rows: ProcessTopItem[]; onInspec
                   <dt className="text-muted-foreground">{t('monitor.processCpu', 'CPU')}</dt>
                   <dd className="font-mono tabular-nums">{row.cpuPercent.toFixed(1)}%</dd>
                   <dt className="text-muted-foreground">{t('monitor.processMemory', '内存')}</dt>
-                  <dd className="font-mono tabular-nums">{formatBytes(row.rssBytes)}</dd>
+                  <dd className="font-mono tabular-nums">{formatFileSize(row.rssBytes, BYTES_FALLBACK)}</dd>
                   <dt className="text-muted-foreground">{t('monitor.processIo', 'IO 读/写')}</dt>
                   <dd className="font-mono tabular-nums">
-                    {formatBytes(row.readBytesPerSec)}/s · {formatBytes(row.writeBytesPerSec)}/s
+                    {formatFileSize(row.readBytesPerSec, BYTES_FALLBACK)}/s · {formatFileSize(row.writeBytesPerSec, BYTES_FALLBACK)}/s
                   </dd>
                 </dl>
               </div>
@@ -135,7 +130,7 @@ function ProcessNodeItem({ item }: { item: ManagedProcessInfo }) {
       </div>
       <p className="mt-1 truncate text-muted-foreground">{item.commandSummary || item.name || '--'}</p>
       <p className="mt-1 text-xs text-muted-foreground">
-        {item.cpuPercent.toFixed(1)}% · {formatBytes(item.rssBytes)} · {formatDuration(item.uptimeSeconds)}
+        {item.cpuPercent.toFixed(1)}% · {formatFileSize(item.rssBytes, BYTES_FALLBACK)} · {formatDuration(item.uptimeSeconds)}
       </p>
     </div>
   )
@@ -199,8 +194,8 @@ function ProcessDetailDialog({
                 <ProcessField label={t('monitor.processWindow', '窗口')} value={t('monitor.processHistoryWindow', '{{seconds}} 秒', { seconds: detail.history.windowSeconds })} />
                 <ProcessField label={t('monitor.processSamples', '样本数')} value={String(detail.history.sampleCount)} mono />
                 <ProcessField label={t('monitor.processAvgCpu', '平均 CPU')} value={`${detail.history.avgCpuPercent.toFixed(1)}%`} mono />
-                <ProcessField label={t('monitor.processAvgWrite', '平均写入')} value={`${formatBytes(detail.history.avgWriteBytesPerSec)}/s`} mono />
-                <ProcessField label={t('monitor.processRssDelta', 'RSS 变化')} value={formatBytes(detail.history.rssDeltaBytes)} mono />
+                <ProcessField label={t('monitor.processAvgWrite', '平均写入')} value={`${formatFileSize(detail.history.avgWriteBytesPerSec, BYTES_FALLBACK)}/s`} mono />
+                <ProcessField label={t('monitor.processRssDelta', 'RSS 变化')} value={formatFileSize(detail.history.rssDeltaBytes, BYTES_FALLBACK)} mono />
                 <ProcessField label={t('monitor.processLatestSample', '最近采样')} value={formatTime(detail.history.latestSampledAt)} />
               </Panel>
             </div>

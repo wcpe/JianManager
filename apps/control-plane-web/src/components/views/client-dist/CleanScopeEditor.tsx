@@ -15,6 +15,7 @@ import { ChevronRight, Eraser, Ban, ShieldCheck, Folder, FolderOpen, X } from 'l
 import { buildFileTreeWithDirs, collectAllDirPaths, buildCleanMap, computeDirVisualState, exportMarkings, getDescendantDirPaths } from '@/lib/client-dist/client-publish-wizard'
 import type { CleanMark, DirVisualState, ManifestFileLike, TreeDir } from '@/lib/client-dist/client-publish-wizard'
 import { ContextMenuSurface, cn } from '@jianmanager/ui'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 // ── 颜色映射 ──────────────────────────────────────────────────────────
 
@@ -476,7 +477,7 @@ function DirScopeRow({ dir, depth }: { dir: TreeDir; depth: number }) {
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           {t('clientVersions.treeDirSummary', '{{n}} 个文件 · {{size}}', {
             n: dir.fileCount,
-            size: formatBytes(dir.totalSize),
+            size: formatFileSize(dir.totalSize),
           })}
         </span>
       </div>
@@ -497,13 +498,6 @@ function collectVisibleDirs(dir: TreeDir, collapsedPaths: Set<string>): string[]
     }
   }
   return out
-}
-
-/** 字节数转人类可读（与 ClientFileTree 同口径，保持一致展示）。 */
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
 // ── 自定义排除标签输入（FR-255，从 ManagedDirsEditor 迁移） ──────────────

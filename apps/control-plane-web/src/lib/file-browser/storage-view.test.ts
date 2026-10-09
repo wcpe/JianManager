@@ -1,12 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { ArchiveSummary, DirUsage } from './storage-types'
-import {
-  formatBytes,
-  deriveArchive,
-  sortDirsByUsage,
-  buildCrumbs,
-  joinStoragePath,
-} from './storage-view'
+import { deriveArchive, sortDirsByUsage, buildCrumbs, joinStoragePath } from './storage-view'
 
 function dir(p: Partial<DirUsage>): DirUsage {
   return {
@@ -20,26 +14,9 @@ function dir(p: Partial<DirUsage>): DirUsage {
   }
 }
 
-describe('formatBytes', () => {
-  it('formats zero and non-positive as 0 B', () => {
-    expect(formatBytes(0)).toBe('0 B')
-    expect(formatBytes(-100)).toBe('0 B')
-    expect(formatBytes(Number.NaN)).toBe('0 B')
-    expect(formatBytes(Number.POSITIVE_INFINITY)).toBe('0 B')
-  })
-
-  it('scales through binary units', () => {
-    expect(formatBytes(512)).toBe('512 B')
-    expect(formatBytes(1024)).toBe('1 KB')
-    expect(formatBytes(1536)).toBe('1.5 KB')
-    expect(formatBytes(1024 * 1024)).toBe('1 MB')
-    expect(formatBytes(1024 * 1024 * 1024)).toBe('1 GB')
-  })
-
-  it('uses integer for values >= 100', () => {
-    expect(formatBytes(150 * 1024)).toBe('150 KB')
-  })
-})
+// 本模块原有的 `formatBytes` 用例已随实现一并收敛到
+// `@/lib/shared/format-file-size.test.ts`（覆盖更全：0/负值/空值/非有限数 + 各档进位 + 单位后缀），
+// 此处不再保留重复断言，避免两处口径再次分叉。
 
 describe('deriveArchive', () => {
   it('aggregates total / cold count / cold size', () => {

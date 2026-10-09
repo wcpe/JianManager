@@ -29,6 +29,7 @@ import { joinPath, baseName, isValidName } from '@/lib/shared/paths'
 import { needsDiscardConfirm } from '@/lib/shared/discard-guard'
 import { emptyNavHistory, navPush, navBack, navForward, canNavBack, canNavForward } from '@/lib/shared/nav-history'
 import { loadSortState, saveSortState, loadViewMode, saveViewMode, sortFiles } from '@/lib/file-browser/file-sort'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 import type { FileSortState, FileViewMode } from '@/lib/file-browser/file-sort'
 import type { ArchiveEntries, ArchiveEntryContent, FileInfo, SearchMode, SearchResult, SearchScope } from '@/lib/file-browser/file-entry'
 
@@ -251,12 +252,6 @@ const BINARY_PREVIEW_EXTENSIONS = new Set([
   '.xz',
   '.7z',
 ])
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
 
 function fileExt(name: string): string {
   const dot = name.lastIndexOf('.')
@@ -1271,7 +1266,7 @@ export default function ResourceExplorer({
                 <p className="max-w-sm text-sm text-muted-foreground">
                   {blockedPreview.reason === 'binary'
                     ? t('fileBrowser.binaryNotice')
-                    : t('fileBrowser.tooLargeNotice', { size: formatBytes(blockedPreview.size) })}
+                    : t('fileBrowser.tooLargeNotice', { size: formatFileSize(blockedPreview.size) })}
                 </p>
                 <p className="font-mono text-xs text-muted-foreground">{blockedPreview.path}</p>
                 <Button

@@ -2,24 +2,10 @@ import type { AssetType } from '@/lib/artifacts/asset-contracts'
 import type { AssetTypeGroup, JDKMatrixItem, RuntimeMatrixEntry } from './runtime-assets-contracts'
 
 /**
- * 「运行时与制品」全局页（FR-082）的纯展示逻辑：字节格式化、JDK 节点×版本引用矩阵、
- * 制品筛选。抽成无 React 依赖的模块以便 vitest 单测（参照 bots-overview.ts 约定）。
+ * 「运行时与制品」全局页（FR-082）的纯展示逻辑：JDK 节点×版本引用矩阵、制品筛选。
+ * 抽成无 React 依赖的模块以便 vitest 单测（参照 bots-overview.ts 约定）。
+ * 字节格式化已收敛到 `@/lib/shared/format-file-size`，本模块不再自带实现。
  */
-
-/** 人类可读字节（1024 进制）。负数/非有限按 0 处理。 */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let v = bytes
-  let i = 0
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024
-    i++
-  }
-  // 整数位用整数，否则保留一位小数。
-  const text = v >= 100 || Number.isInteger(v) ? Math.round(v).toString() : v.toFixed(1)
-  return `${text} ${units[i]}`
-}
 
 /** 矩阵一格：某节点 × 某「vendor-major」列上的 JDK 实例与引用数（可能多条同 vendor-major）。 */
 export interface JDKMatrixCell {

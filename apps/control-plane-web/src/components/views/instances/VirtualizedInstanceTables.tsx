@@ -58,7 +58,7 @@ function instanceRowHeight(expanded: boolean): number {
  * - group：分组头（可折叠），带成员计数与聚合健康色带；`depth` 区分 region 两级（0=大区 / 1=小区）。
  * - instance：成员实例行（沿用既有 `renderRow`）。
  */
-type InstanceTreeRow =
+export type InstanceTreeRow =
   | {
       kind: 'group'
       key: string
@@ -214,6 +214,54 @@ function GroupHealthBand({ health }: { health: MemberHealth }) {
 }
 
 /**
+ * 分组头内容（折叠按钮 + 组名 + 成员计数 + 聚合健康色带）：树表行与卡片行流**共用同一份**。
+ *
+ * 抽出来的理由：卡片视图此前是「每个分组一段、段头只有组名与计数、不可折叠」，与表格视图
+ * 是两套实现——折叠、大区/小区两级（region）、多级分组树（groupTree）在这两种视图下会各自
+ * 分叉。现在两处渲染同一份内容，行模型又同取 `buildInstanceTreeRows`，行为由构造保持一致。
+ * 行盒高度仍由调用方写进行盒（表 44 / 卡片同样 44），本组件只负责行内布局。
+ */
+export function InstanceGroupHeaderContent({
+  label,
+  depth,
+  count,
+  health,
+  collapsed,
+  onToggle,
+}: {
+  label: string
+  /** 层级深度（0 起）：region 两级为 0/1，groupTree 为分组树实际深度。 */
+  depth: number
+  count: number
+  health: MemberHealth
+  collapsed: boolean
+  onToggle: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-center gap-2" style={{ paddingLeft: depth * 16 }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        aria-label={
+          collapsed
+            ? t('grouping.expandGroup', { name: label })
+            : t('grouping.collapseGroup', { name: label })
+        }
+        data-testid="instances-group-toggle"
+        className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+      >
+        {collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+      </button>
+      <span className="text-sm font-medium">{label}</span>
+      <Badge variant="outline" className="font-normal">{count}</Badge>
+      <GroupHealthBand health={health} />
+    </div>
+  )
+}
+
+/**
  * 实例分组树表（FR-452）：单个虚拟表承载「分组头行（可折叠）+ 成员实例行」。
  * 分组头行显示折叠箭头 + 分组名 + 成员计数 + 聚合健康色带；折叠态由父级写回 URL（`?collapsed=`）。
  *
@@ -244,7 +292,6 @@ export function VirtualizedGroupedInstanceTable({
   /** 展开行判据（与行渲染同源）：展开行多渲染一个 `<tr>`，须按展开行高计入模型。 */
   isRowExpanded?: (inst: InstanceInfo) => boolean
 }) {
-  const { t } = useTranslation()
   const heightAt = useCallback(
     (index: number) => {
       const row = rows[index]
@@ -301,25 +348,14 @@ export function VirtualizedGroupedInstanceTable({
               className="sticky top-9 z-10 bg-muted/80 backdrop-blur"
             >
               <TableCell colSpan={8} className="px-4 py-2">
-                <div className="flex items-center gap-2" style={{ paddingLeft: row.depth * 16 }}>
-                  <button
-                    type="button"
-                    onClick={() => onToggleCollapse(row.collapseKey)}
-                    aria-expanded={!row.collapsed}
-                    aria-label={
-                      row.collapsed
-                        ? t('grouping.expandGroup', { name: row.label })
-                        : t('grouping.collapseGroup', { name: row.label })
-                    }
-                    data-testid="instances-group-toggle"
-                    className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                  >
-                    {row.collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-                  </button>
-                  <span className="text-sm font-medium">{row.label}</span>
-                  <Badge variant="outline" className="font-normal">{row.count}</Badge>
-                  <GroupHealthBand health={row.health} />
-                </div>
+                <InstanceGroupHeaderContent
+                  label={row.label}
+                  depth={row.depth}
+                  count={row.count}
+                  health={row.health}
+                  collapsed={row.collapsed}
+                  onToggle={() => onToggleCollapse(row.collapseKey)}
+                />
               </TableCell>
             </TableRow>
           ) : (

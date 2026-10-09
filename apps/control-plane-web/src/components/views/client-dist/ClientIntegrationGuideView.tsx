@@ -14,6 +14,7 @@ import { Copy, Download } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import type { ClientPullKey } from '@/lib/client-dist/client-channel-types'
+import { formatFileSize } from '@/lib/shared/format-file-size'
 
 /** 内嵌更新器 jar 信息（容器经 `useUpdaterJarsInfo` 取数注入；结构与应用侧 API 类型同形）。 */
 export interface ClientUpdaterJarsInfo {
@@ -285,16 +286,10 @@ function formatJarState(
   t: (key: string, fallback: string, options?: Record<string, unknown>) => string,
 ): string {
   if (!jar.available) return t('clientGuide.jarUnavailable', '不可用 · 0 B')
-  return t('clientGuide.jarAvailable', '可用 · {{size}}', { size: formatBytes(jar.size) })
+  return t('clientGuide.jarAvailable', '可用 · {{size}}', { size: formatFileSize(jar.size) })
 }
 
 /** 字节数转人类可读。 */
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
-}
-
 /** 步骤区块：标题 + 内容。 */
 function Step({ title, children }: { title: string; children: ReactNode }) {
   return (
