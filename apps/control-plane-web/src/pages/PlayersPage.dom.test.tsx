@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
+import { server } from '@jianmanager/devmock/server'
 import { db } from '@jianmanager/devmock/db'
 import { useAuthStore } from '@/stores/auth'
 import type { Session } from '@jianmanager/devmock/handlers/domains/auth'
@@ -144,6 +145,70 @@ describe('PlayersPage（mock 假后端）', () => {
     })
   })
 
+  /**
+   * 千级实例的判据：实例数是千级（大档 1200），筛选器**不得**用全量列举——
+   * 实时事件与白名单两处原先都是「容器拉全量 `/instances` → map 成 Radix SelectItem」，
+   * 现改走服务端搜索：默认前 N 条 + 键入经 300ms 防抖下发 `q`，截断时提示继续输入。
+   * 本用例盯住两件事：不下发裸 `/instances`，以及键入确实变成了带 `q` 的服务端搜索请求。
+   */
+  it('两个实例选择器改走服务端搜索：不下发全量 /instances，键入后带 q（白名单另按 role=backend 收窄）', async () => {
+    const user = userEvent.setup()
+    const originalFetch = globalThis.fetch
+    // 实时事件的 SSE 走 fetch + ReadableStream（jsdom 下无真实端点），给一个空的 init 帧即可。
+    globalThis.fetch = vi.fn(
+      async () => new Response('event: init\ndata: {"connected":false,"players":[]}\n\n'),
+    ) as unknown as typeof fetch
+
+    // 记录实例域的每次请求：路径 + 查询串。
+    const calls: { path: string; params: URLSearchParams }[] = []
+    const listener = ({ request }: { request: Request }) => {
+      const url = new URL(request.url)
+      if (url.pathname.startsWith('/api/v1/instances')) calls.push({ path: url.pathname, params: url.searchParams })
+    }
+    server.events.on('request:start', listener)
+
+    try {
+      loginMockAdmin()
+      renderWithProviders(<PlayersPage />, { route: '/players' })
+
+      // ① 实时事件 Tab：候选默认窗口走服务端搜索，且整页不出现裸 /instances（全量列举）。
+      await user.click(screen.getByRole('button', { name: '实时事件' }))
+      await waitFor(() =>
+        expect(
+          calls.some((c) => c.path === '/api/v1/instances/search' && c.params.get('pageSize') === '50'),
+        ).toBe(true),
+      )
+      expect(calls.filter((c) => c.path === '/api/v1/instances')).toEqual([])
+      // 服务端截断 → 选择器提示继续输入缩小范围。
+      expect(await screen.findByText(/已显示前 50 项，共 \d+ 项/)).toBeInTheDocument()
+
+      // ② 键入经防抖下发 q（服务端搜索，而不是本地过滤全量列表）。
+      await user.click(screen.getByLabelText('选择实例'))
+      await user.type(await screen.findByPlaceholderText('搜索或输入…'), 'lobby')
+      await waitFor(() => expect(calls.some((c) => c.params.get('q') === 'lobby')).toBe(true), { timeout: 2000 })
+
+      // ③ 白名单 Tab：候选同样走服务端搜索，并按 role=backend 收窄（代理不支持白名单）。
+      // 先收起候选下拉：Popover 是 modal，展开时页内其余内容对可访问性查询不可见。
+      await user.keyboard('{Escape}')
+      await waitFor(() => expect(screen.queryByPlaceholderText('搜索或输入…')).not.toBeInTheDocument())
+      await user.click(screen.getByRole('button', { name: '白名单' }))
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (c) =>
+              c.path === '/api/v1/instances/search' &&
+              c.params.get('role') === 'backend' &&
+              c.params.get('pageSize') === '50',
+          ),
+        ).toBe(true),
+      )
+      expect(calls.filter((c) => c.path === '/api/v1/instances')).toEqual([])
+    } finally {
+      server.events.removeListener('request:start', listener)
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('注入 500 → 在线列表降级为空态，不崩溃（页面标题仍在）', async () => {
     mockInject('get', '/players', { kind: 'status', status: 500 })
     loginMockAdmin()
@@ -183,7 +248,9 @@ describe('PlayersPage（mock 假后端）', () => {
       expect(await within(eventPanel).findByText('Carl')).toBeInTheDocument()
       expect(await within(eventPanel).findByText(/hi/)).toBeInTheDocument()
 
-      await user.click(screen.getAllByRole('combobox')[1]!)
+      // 事件类型筛选仍是 Radix Select；实例选择器已改为服务端搜索的 InstancePicker（Popover + 普通按钮选项），
+      // 故本 Tab 里 role=combobox 只剩这一个。
+      await user.click(screen.getByRole('combobox', { name: '事件类型' }))
       await user.click(await screen.findByRole('option', { name: '发言' }))
       expect(within(eventPanel).queryByText('Carl')).not.toBeInTheDocument()
       expect(within(eventPanel).getByText(/hi/)).toBeInTheDocument()

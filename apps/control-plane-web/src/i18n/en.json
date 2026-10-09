@@ -3217,6 +3217,8 @@
       "namePlaceholder": "e.g. ci-prod-ops / cursor-dev",
       "instances": "Instance scope",
       "instancesHint": "Select instances or type IDs below (comma/space separated). Empty = no instances authorized.",
+      "instanceSearch": "Filter by instance name",
+      "instancesSelected": "{{count}} instance(s) selected",
       "instanceIds": "Instance ID input",
       "noInstances": "No instances",
       "nodes": "Node scope",
