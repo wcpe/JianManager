@@ -130,4 +130,89 @@ describe('ServerSelector DOM', () => {
       server.events.removeListener('request:start', listener)
     }
   })
+
+  // 键盘与焦点（FR-496）：弹层是自绘 portal，只声明了 `role="dialog" aria-modal="true"`。
+  // 以下用例锁定这个声明的兑现契约——它们都不会抛错，去掉实现后只会静默失效
+  // （Esc 关不掉、Tab 跑到遮罩背后的侧栏、关闭后焦点掉到 body），故必须逐条钉住。
+  it('Esc 关闭弹层（自绘模态此前没有键盘出口）', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<ServerSelector />)
+
+    await user.click(screen.getByRole('button', { name: '选择服务器' }))
+    expect(await screen.findByRole('dialog', { name: '服务器选择器' })).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '服务器选择器' })).not.toBeInTheDocument()
+    })
+  })
+
+  it('打开即聚焦搜索框，Tab / Shift+Tab 在弹层内首尾环绕', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<ServerSelector />)
+
+    await user.click(screen.getByRole('button', { name: '选择服务器' }))
+    const dialog = await screen.findByRole('dialog', { name: '服务器选择器' })
+
+    // 焦点进入弹层并落在搜索框（呼出即可打字），而不是留在遮罩背后的触发按钮上
+    const searchbox = screen.getByRole('searchbox', { name: '搜索服务器' })
+    expect(document.activeElement).toBe(searchbox)
+
+    // 等可视窗口出第一批行，弹层内的可聚焦集合才稳定
+    await screen.findAllByTestId('server-selector-row')
+    const focusables = Array.from(dialog.querySelectorAll<HTMLElement>('button, input'))
+    const first = focusables[0]
+    // 首 = 标题栏关闭按钮（弹层 Tab 序列的头部）
+    expect(first).toBe(within(dialog).getByRole('button', { name: '关闭' }))
+
+    // Shift+Tab 从头部往回退：环绕到弹层另一端，而不是退到遮罩背后的页面。
+    // 不写死落点元素：环绕落点由弹层内的 Tab 序列决定（真实浏览器里 = 最后一行行内控件），
+    // 而 jsdom 的 querySelectorAll 对逗号选择器组不按文档顺序返回（先 button 后 input），
+    // 按元素名断言会把这条用例绑在 jsdom 的选择器实现上。
+    first.focus()
+    await user.tab({ shift: true })
+    const wrapped = document.activeElement
+    expect(dialog.contains(wrapped)).toBe(true)
+    expect(wrapped).not.toBe(first)
+
+    // 从另一端再 Tab：回到弹层第一个可聚焦元素，闭环成立且中途不落到 body / 背景页
+    await user.tab()
+    expect(document.activeElement).toBe(first)
+  })
+
+  it('关闭后焦点还回触发按钮，不落在 body 上', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<ServerSelector />)
+
+    const trigger = screen.getByRole('button', { name: '选择服务器' })
+    await user.click(trigger)
+    const dialog = await screen.findByRole('dialog', { name: '服务器选择器' })
+    expect(document.activeElement).not.toBe(trigger)
+
+    await user.click(within(dialog).getByRole('button', { name: '关闭' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '服务器选择器' })).not.toBeInTheDocument()
+    })
+
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('点遮罩关闭仍然有效，且焦点同样还回触发按钮', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<ServerSelector />)
+
+    const trigger = screen.getByRole('button', { name: '选择服务器' })
+    await user.click(trigger)
+    const dialog = await screen.findByRole('dialog', { name: '服务器选择器' })
+
+    // 遮罩 = 弹层面板的外壳。焦点陷阱只把「键盘导航带出去」的焦点拉回来，
+    // 鼠标点出去的焦点不能被抢（否则点遮罩关闭会失灵）——关闭回调语义必须原样保留。
+    await user.click(dialog.parentElement as HTMLElement)
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '服务器选择器' })).not.toBeInTheDocument()
+    })
+    expect(document.activeElement).toBe(trigger)
+  })
 })
