@@ -23,7 +23,7 @@ import type {
   ClientDistSecurityProfileDetail,
 } from '@jianmanager/ui/lib/client-dist-security-contracts'
 import type { ClientDistQuery, ClientDistQueryKey } from '@/lib/client-dist-query'
-import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime, levelVariant } from './security-format'
+import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime, levelVariant } from '@/components/views/client-dist/security-format'
 
 /**
  * 脱敏函数注入（FR-360）：隐私策略归应用侧，包内不持有明文展示策略。

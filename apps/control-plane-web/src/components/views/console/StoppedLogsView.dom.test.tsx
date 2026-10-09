@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
-import { StoppedLogsView } from './StoppedLogsView'
+import { StoppedLogsView } from '@/components/views/console/StoppedLogsView'
 import type { LogEntry } from '@jianmanager/ui/lib/console-log-types'
 
 /**

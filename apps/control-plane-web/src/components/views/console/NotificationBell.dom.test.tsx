@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
-import { NotificationBell, type NotificationFeedEntry } from './NotificationBell'
+import { NotificationBell, type NotificationFeedEntry } from '@/components/views/console/NotificationBell'
 
 /**
  * FR-216 统一通知铃铛 · 受控视图测（ADR-097 c 范式）。

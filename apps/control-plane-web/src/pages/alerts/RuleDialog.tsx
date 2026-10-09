@@ -7,7 +7,7 @@ import {
   type AlertRuleInfo,
   type AlertChannelInfo,
 } from '@/api/alerts'
-import { RuleDialogView } from '@jianmanager/ui/components/views/alerts/RuleDialogView'
+import { RuleDialogView } from '@/components/views/alerts/RuleDialogView'
 
 interface RuleDialogProps {
   /** 编辑目标；null 表示创建。 */

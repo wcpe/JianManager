@@ -13,7 +13,7 @@ import {
   ScrollableDialogBody,
   scrollableDialogContentClass,
 } from '@jianmanager/ui/components/scrollable-dialog'
-import { BotMetric, formatBotEvent, formatEventTime, formatPosition } from './BotListParts'
+import { BotMetric, formatBotEvent, formatEventTime, formatPosition } from '@/components/views/bots/BotListParts'
 import type { BotInfo } from '@jianmanager/ui/lib/bot'
 import type { BotRealtimeState } from '@jianmanager/ui/lib/bot-realtime-types'
 

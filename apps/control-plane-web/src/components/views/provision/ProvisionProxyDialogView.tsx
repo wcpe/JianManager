@@ -29,7 +29,7 @@ import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
 import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@jianmanager/ui/lib/form-validation'
 import { useFieldGate } from '@jianmanager/ui/lib/use-field-gate'
-import type { ProvisionJdkOption, ProvisionResolvedCore } from './ProvisionServerDialogView'
+import type { ProvisionJdkOption, ProvisionResolvedCore } from '@/components/views/provision/ProvisionServerDialogView'
 
 // eslint-disable-next-line react-refresh/only-export-components -- 判据与查询初值须与渲染同源导出：容器据此折算请求体与初始化查询键，两处各写一份会静默错位
 export function needsProxyVersion(proxyType: string): boolean {

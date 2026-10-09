@@ -16,9 +16,9 @@ import {
   validateLoadProfile,
   validateThresholds,
 } from '@jianmanager/ui/lib/bot-load-validation'
-import { CommandPlanEditor } from './CommandPlanEditor'
-import { LoadProfileEditor } from './LoadProfileEditor'
-import { ThresholdEditor } from './ThresholdEditor'
+import { CommandPlanEditor } from '@/components/views/bot-load/CommandPlanEditor'
+import { LoadProfileEditor } from '@/components/views/bot-load/LoadProfileEditor'
+import { ThresholdEditor } from '@/components/views/bot-load/ThresholdEditor'
 
 export type TemplateDialogMode = 'create' | 'edit' | 'copy'
 

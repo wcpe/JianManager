@@ -4,7 +4,7 @@ import { Users } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
 import { Panel } from '@jianmanager/ui/components/panel'
-import type { BcRegistration } from './BcSegment'
+import type { BcRegistration } from '@/components/views/console/BcSegment'
 
 /** 在线玩家探针结果（结构化子集：只取本面板聚合所需字段）。 */
 export interface BcOnlineSnapshot {

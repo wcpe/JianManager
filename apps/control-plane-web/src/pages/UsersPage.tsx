@@ -19,7 +19,7 @@ import { useDangerPermission } from '@/lib/danger'
 import {
   UsersPageView,
   type CreateUserPayload,
-} from '@jianmanager/ui/components/views/users/UsersPageView'
+} from '@/components/views/users/UsersPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {

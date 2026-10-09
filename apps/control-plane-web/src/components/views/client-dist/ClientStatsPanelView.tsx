@@ -26,9 +26,9 @@ import {
 } from '@/lib/client-dist-kpi'
 import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
 import type { ClientDistStats, ClientDistObservability } from '@jianmanager/ui/lib/client-dist-stats-contracts'
-import { InsightCards } from './InsightCards'
-import { UpdateHeatmap } from './UpdateHeatmap'
-import { ObsTimeRangePicker } from './ObsTimeRangePicker'
+import { InsightCards } from '@/components/views/client-dist/InsightCards'
+import { UpdateHeatmap } from '@/components/views/client-dist/UpdateHeatmap'
+import { ObsTimeRangePicker } from '@/components/views/client-dist/ObsTimeRangePicker'
 
 /** 字节数转人类可读。 */
 function formatBytes(n: number): string {

@@ -13,7 +13,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import type { BotLoadRunV2, BotLoadVerdict } from '@jianmanager/ui/lib/bot-load-types'
 import { isLiveRunState, isTerminalRunState } from '@jianmanager/ui/lib/bot-load-types'
-import { DisclaimerBanner } from './DisclaimerBanner'
+import { DisclaimerBanner } from '@/components/views/bot-load/session/DisclaimerBanner'
 
 /**
  * 压测会话对象头（FR-…）：运行名 + 实时状态指标条 + 停止/取消/报告下载。

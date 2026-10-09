@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 
-import { ConsoleCommandBar } from './ConsoleCommandBar'
+import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 
 /**
  * 命令栏（FR-415，spec §2.2/§2.3；ADR-086）· 受控视图测（ADR-097）。

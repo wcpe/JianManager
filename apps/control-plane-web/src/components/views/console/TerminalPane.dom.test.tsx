@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
-import { TerminalPane } from './TerminalPane'
+import { TerminalPane } from '@/components/views/console/TerminalPane'
 import type { ConsoleHistoryState } from '@jianmanager/ui/lib/console-history'
 import { terminalSessionManager } from '@jianmanager/ui/lib/terminal-session-manager'
 

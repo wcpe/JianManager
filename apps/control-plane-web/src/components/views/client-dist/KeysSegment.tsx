@@ -18,8 +18,8 @@ import {
   EditKeyDialog,
   type CreateKeyBody,
   type UpdateKeyBody,
-} from './KeyEditDialogs'
-import { RevealDialog, SecretDialog } from './KeySecretDialogs'
+} from '@/components/views/client-dist/KeyEditDialogs'
+import { RevealDialog, SecretDialog } from '@/components/views/client-dist/KeySecretDialogs'
 
 /** 「即将过期」判定窗口：7 天。 */
 const KEY_EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000

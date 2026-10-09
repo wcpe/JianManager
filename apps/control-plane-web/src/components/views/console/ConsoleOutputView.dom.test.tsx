@@ -7,7 +7,7 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 
 import { ConsoleLineBuffer } from '@jianmanager/ui/lib/console-line-buffer'
 import type { LogLine } from '@jianmanager/ui/lib/console-log-line'
-import { ConsoleOutputView } from './ConsoleOutputView'
+import { ConsoleOutputView } from '@/components/views/console/ConsoleOutputView'
 
 /**
  * 输出区（FR-415，spec §2.1；ADR-086）· 受控视图测（ADR-097）：

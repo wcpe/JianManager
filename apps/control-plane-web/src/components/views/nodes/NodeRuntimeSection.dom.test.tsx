@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import NodeRuntimeSection, {
   type RuntimeCandidateView,
   type RuntimeRowView,
-} from './NodeRuntimeSection'
+} from '@/components/views/nodes/NodeRuntimeSection'
 
 /**
  * FR-298 节点运行时库 · 受控视图测（ADR-097 b 范式）。

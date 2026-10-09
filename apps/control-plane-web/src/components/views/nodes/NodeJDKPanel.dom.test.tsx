@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import NodeJDKPanel, {
   type NodeJDKView,
   type ProbeResultView,
-} from './NodeJDKPanel'
+} from '@/components/views/nodes/NodeJDKPanel'
 
 /**
  * FR-033 / FR-311 节点 JDK 管理 · 受控视图测（ADR-097 b 范式）。

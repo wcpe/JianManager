@@ -5,9 +5,9 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { Boxes, HardDrive, LayoutDashboard, Server, ShieldCheck, Wrench } from 'lucide-react'
-import { ConsoleSidebar } from './ConsoleSidebar'
+import { ConsoleSidebar } from '@/components/views/console/ConsoleSidebar'
 import type { NavGroup } from '@jianmanager/ui/lib/nav-config'
-import type { SidebarLinkArgs } from './sidebar-link'
+import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 
 /**
  * 控制台侧栏 · 受控视图测（ADR-097）。

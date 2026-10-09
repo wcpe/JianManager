@@ -45,7 +45,7 @@ import type {
   SetKeyStateRequest,
 } from '@jianmanager/ui/lib/client-dist-security-contracts'
 import type { ClientChannel, ClientPullKey } from '@jianmanager/ui/lib/client-channel-types'
-import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime, statusVariant } from './security-format'
+import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime, statusVariant } from '@/components/views/client-dist/security-format'
 
 /** 当前打开的处置模态（`null` = 全部关闭）。 */
 type ActionsDialog = 'block-ip' | 'key-state' | 'channel-protection' | null

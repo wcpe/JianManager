@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
-import NodePortsPanel from './NodePortsPanel'
+import NodePortsPanel from '@/components/views/nodes/NodePortsPanel'
 import type { NodePorts } from '@jianmanager/ui/lib/node-ports'
 
 /**

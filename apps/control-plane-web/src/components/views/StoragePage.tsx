@@ -13,12 +13,12 @@ import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
-import DangerConfirm from './DangerConfirm'
-import UnifiedExplorerShell from './file-browser/UnifiedExplorerShell'
-import { storageBrowseCapability } from '../../lib/file-browser-capability'
-import type { FileBrowserSource } from '../../lib/file-browser-types'
-import { formatBytes, deriveArchive, sortDirsByUsage } from '../../lib/storage-view'
-import type { DirUsage, StorageOverview } from '../../lib/storage-types'
+import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import UnifiedExplorerShell from '@/components/views/file-browser/UnifiedExplorerShell'
+import { storageBrowseCapability } from '@jianmanager/ui/lib/file-browser-capability'
+import type { FileBrowserSource } from '@jianmanager/ui/lib/file-browser-types'
+import { formatBytes, deriveArchive, sortDirsByUsage } from '@jianmanager/ui/lib/storage-view'
+import type { DirUsage, StorageOverview } from '@jianmanager/ui/lib/storage-types'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type StorageNotice = (kind: 'success' | 'error', message: string) => void

@@ -24,7 +24,7 @@ vi.mock('@/components/explorer/ResourceExplorer', () => ({
 
 // 组件已迁至 `@jianmanager/ui`（ADR-097）：UnifiedExplorerShell 从包内 import FileBrowser，
 // 因此 mock 必须打在包路径上，否则拦不到、真实实现会去调未 mock 的 source.list。
-vi.mock('@jianmanager/ui/components/views/file-browser/FileBrowser', () => ({
+vi.mock('@/components/views/file-browser/FileBrowser', () => ({
   default: () => <div data-testid="file-browser">只读浏览</div>,
 }))
 
