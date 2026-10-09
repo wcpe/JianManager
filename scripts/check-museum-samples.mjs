@@ -2,11 +2,12 @@
 /**
  * 组件博物馆样例自检：受控组件的「开合」不能靠固定值。
  *
- * 背景——受控复合组件（ADR-097 b 范式）把开合交给外壳，视图自己不持 open：
+ * 背景——受控复合组件把开合交给外壳，样例自己不持 open：
  * 详情面板「由 `detailId`（容器按深链派生）决定，故本体不持 open」。样例若给它一个
  * **固定值**（`detailId={1}`）再配一个**空回调**（`onCloseDetail={() => {}}`），
  * 这个面板就弹出来关不掉——点关闭、按 Esc 都改不动它，因为能改变开合的只有那个常量。
- * views-ops 的群组详情正是如此，登记时被当成静态展示，直到有人点开才发现卡死。
+ * 历史案例：业务视图分区的 views-ops 群组详情曾如此，登记时被当成静态展示，
+ * 直到有人点开才发现卡死（该分区已随业务视图回迁应用侧而移除）。
  *
  * 判据（同一组件标签块内同时成立才算缺陷）：
  *   1. 有空的开合回调：`onCloseXxx={() => {}}` 或 `xxxOpenChange={() => {}}`
@@ -16,10 +17,13 @@
  * 用法：node scripts/check-museum-samples.mjs   （退出码非 0 即有缺陷）
  */
 
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const SECTIONS_DIR = 'apps/ui-museum/src/sections'
+// 以脚本自身位置解析，避免 cwd 不同（npm run 在包目录、手工从仓库根）导致路径失配
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const SAMPLE_FILE = resolve(REPO_ROOT, 'apps/ui-museum/src/App.tsx')
 
 /**
  * 决定开合的 prop：传字面量就意味着开合被钉死。
@@ -36,11 +40,11 @@ const LITERAL = /^\s*(?:\d+|true|false|'[^']*'|"[^"]*")\s*$/
 /** 组件标签块的开头。 */
 const TAG_OPEN = /<([A-Z]\w*)/
 
-const files = readdirSync(SECTIONS_DIR).filter((f) => f.endsWith('.tsx'))
+const files = [SAMPLE_FILE]
 const problems = []
 
 for (const file of files) {
-  const lines = readFileSync(join(SECTIONS_DIR, file), 'utf8').split('\n')
+  const lines = readFileSync(file, 'utf8').split('\n')
   // 记录每个空回调所属的组件块范围：[标签名, 起始行, 回调行]
   let tagStart = -1
   let tagName = ''
@@ -73,7 +77,7 @@ for (const file of files) {
 }
 
 if (problems.length === 0) {
-  console.log(`✓ 博物馆样例自检通过（${files.length} 个分区文件，无「固定开合值 + 空关闭回调」组合）`)
+  console.log(`✓ 博物馆样例自检通过（${files.length} 个样例文件，无「固定开合值 + 空关闭回调」组合）`)
   process.exit(0)
 }
 
@@ -83,5 +87,5 @@ for (const p of problems) {
   console.error(`    组件 <${p.tag}> 的 ${p.prop} 是空函数，但第 ${p.openLine} 行把 ${p.openProp}={${p.value}} 钉成了常量`)
   console.error(`    → 开合只由该常量决定，弹出来后点关闭/按 Esc 都改不动。改用 useState 代持外壳状态。\n`)
 }
-console.error('参见 apps/ui-museum/src/sections/views-ops.tsx 中 ViewsOps() 的样例状态写法。')
+console.error('修法：用 useState 代持外壳状态，把开合回调接到 setter 上。')
 process.exit(1)
