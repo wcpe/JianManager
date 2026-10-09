@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import type { ArchivedNode, NodeInfo } from '@jianmanager/ui/lib/node-types'
+import type { ArchivedNode, NodeInfo } from '@/lib/node-types'
 
 /** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
 export function formatBytes(bytes: number): string {

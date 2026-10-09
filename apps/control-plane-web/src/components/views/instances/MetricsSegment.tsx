@@ -7,10 +7,10 @@ import { Button } from '@jianmanager/ui/components/button'
 import { TimeSeriesChart, type ChartReferenceLine, type ChartSeries } from '@jianmanager/ui'
 import { RangePicker, type MetricRange } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
-import { activeMetricSources } from '@jianmanager/ui/lib/metrics-availability'
+import { activeMetricSources } from '@/lib/metrics-availability'
 import { MetricSourceChips } from '@/components/views/instances/MetricSourceChips'
-import type { MetricSeries } from '@jianmanager/ui/lib/metric-series'
-import type { InstanceMetricsData } from '@jianmanager/ui/lib/instance-metrics'
+import type { MetricSeries } from '@/lib/metric-series'
+import type { InstanceMetricsData } from '@/lib/instance-metrics'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type MetricsNotice = (kind: 'success' | 'error', message: string) => void

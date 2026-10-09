@@ -10,7 +10,7 @@ import {
   type SchedulerSection,
   type ListenersSection,
   type WorldEntry,
-} from '@jianmanager/ui/lib/server-state'
+} from '@/lib/server-state'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'

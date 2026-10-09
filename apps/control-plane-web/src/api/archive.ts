@@ -80,5 +80,5 @@ export async function decompile(
   return data
 }
 
-// 文件名判定已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
-export { isArchiveName, isClassName } from '@jianmanager/ui'
+// 文件名判定已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
+export { isArchiveName, isClassName } from '@/lib/file-entry'

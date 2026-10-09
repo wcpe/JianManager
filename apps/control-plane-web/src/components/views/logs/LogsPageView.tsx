@@ -34,13 +34,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import type { LogEntry } from '@jianmanager/ui/lib/console-log-types'
-import { LOGS_FEDERATION_KEYS } from '@jianmanager/ui/lib/logs-federation/i18n'
+import type { LogEntry } from '@/lib/console-log-types'
+import { LOGS_FEDERATION_KEYS } from '@/lib/logs-federation/i18n'
 import type {
   ClassifiedLogViewState,
   CoverageBannerProps,
   ExportDownloadAffordance,
-} from '@jianmanager/ui/lib/logs-federation/types'
+} from '@/lib/logs-federation/types'
 import {
   computeVirtualWindow,
   logLevelStatus,
@@ -48,7 +48,7 @@ import {
   TIME_RANGE_PRESETS,
   type LogExportScope,
   type TimeRangePreset,
-} from '@jianmanager/ui/lib/logs-filters'
+} from '@/lib/logs-filters'
 
 /** 日志中心主视图取值（与后端 `view` 参数同域；`legacy` 为只读存量入口）。 */
 export type LogsView = (typeof LOG_VIEWS)[number]

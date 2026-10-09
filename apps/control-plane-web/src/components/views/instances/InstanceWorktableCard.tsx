@@ -7,7 +7,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 import { toneChipClass, type Tone } from '@jianmanager/ui/lib/tone'
-import { instanceStatusGlowClass } from '@jianmanager/ui/lib/instance-glow'
+import { instanceStatusGlowClass } from '@/lib/instance-glow'
 import { cn } from '@jianmanager/ui'
 
 /** 实例状态 → 图标块语义色调（与状态徽章同色系，运行=主色块）。 */

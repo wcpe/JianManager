@@ -5,7 +5,7 @@ import { Loader2, Sparkles } from 'lucide-react'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
-import type { AttributionFactor, AttributionResult } from '@jianmanager/ui/lib/attribution'
+import type { AttributionFactor, AttributionResult } from '@/lib/attribution'
 
 /**
  * 因子指标键 → i18n 显示名键。

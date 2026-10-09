@@ -9,7 +9,7 @@
 import { Activity, type ReactNode } from 'react'
 import { cn } from '@jianmanager/ui'
 import { SegmentPills, type SegmentPillOption } from '@/components/views/console/SegmentPills'
-import type { ResourceSegment } from '@jianmanager/ui/lib/instance-console-tabs'
+import type { ResourceSegment } from '@/lib/instance-console-tabs'
 
 // 分段标签用「文件」而非「文件配置」——后者是本页签自己的名字，同名会撞可访问性名称。
 const SEGMENTS: SegmentPillOption<ResourceSegment>[] = [

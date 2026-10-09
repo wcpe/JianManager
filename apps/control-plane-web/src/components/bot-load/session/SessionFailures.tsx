@@ -12,7 +12,7 @@ import { useSessionEvents } from './SessionEventProvider'
 
 /**
  * 会话失败明细接线层：过滤条件在 URL 上，重试走 mutation 并把结果文案交回展示层，
- * 展示层已归包。
+ * 展示层已回迁应用侧。
  */
 export function SessionFailures({ runId }: { runId: number | string }) {
   const { t } = useTranslation()

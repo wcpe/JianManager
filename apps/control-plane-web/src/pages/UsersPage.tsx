@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做用户/邀请取数、五个写动作、写入口与删除门禁、路由链接接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做用户/邀请取数、五个写动作、写入口与删除门禁、路由链接接线。
 import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'

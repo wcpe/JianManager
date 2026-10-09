@@ -2,10 +2,10 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /**
- * 客户端分发观测契约（FR-217）已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ * 客户端分发观测契约（FR-217）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type { ObservabilitySeriesPoint } from '@jianmanager/ui/lib/client-dist-observability-contracts'
-import type { ObservabilitySeriesPoint } from '@jianmanager/ui/lib/client-dist-observability-contracts'
+export type { ObservabilitySeriesPoint } from '@/lib/client-dist-observability-contracts'
+import type { ObservabilitySeriesPoint } from '@/lib/client-dist-observability-contracts'
 
 /** 时序区间枚举（无 from/to 时回退；与后端 range 枚举一致，FR-217 spec §5）。 */
 export type ObservabilityRange = '24h' | '7d' | '30d' | '90d' | '180d'

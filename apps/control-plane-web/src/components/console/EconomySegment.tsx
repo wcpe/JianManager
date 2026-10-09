@@ -14,7 +14,7 @@ import EconomySegmentView from '@/components/views/instances/EconomySegment'
 /**
  * 经济定制页的应用接线层（ADR-097 a 范式）。
  *
- * 视图本体已迁入组件库并受控；本层做四件事：按 manifest 发现经济能力、三块查询
+ * 视图本体是受控视图（见 components/views）；本层做四件事：按 manifest 发现经济能力、三块查询
  * （余额镜像 / 排行 / 事件流）、经济写动作下发。保留同路径的默认导出与同一套 props，
  * 调用点无需改动。
  */

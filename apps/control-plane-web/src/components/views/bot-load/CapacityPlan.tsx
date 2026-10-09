@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import type { BotLoadAllocation, BotLoadNodeCapacity, BotLoadPreflightResult } from '@jianmanager/ui/lib/bot-load-types'
+import type { BotLoadAllocation, BotLoadNodeCapacity, BotLoadPreflightResult } from '@/lib/bot-load-types'
 import {
   Table,
   TableBody,

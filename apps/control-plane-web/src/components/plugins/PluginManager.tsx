@@ -40,7 +40,7 @@ export type PluginManagerProps = Omit<
 /**
  * 插件/模组管理面板的应用接线层（ADR-097）。
  *
- * 视图本体已迁入组件库并受控；本层注入：插件列表与加载/失败态、四种操作（上传含进度回传 /
+ * 视图本体是受控视图（见 components/views）；本层注入：插件列表与加载/失败态、四种操作（上传含进度回传 /
  * 启停 / 删除 / 批量部署）、制品库与实例候选，以及把提示回执接回 toast。其余 props 原样透传。
  */
 export default function PluginManager({ instanceId }: PluginManagerProps) {

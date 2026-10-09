@@ -9,11 +9,11 @@ import {
   workspacesForPermissions,
   workspacesForRole,
   type WorkspaceKey,
-} from '@jianmanager/ui/lib/workspace-navigation'
+} from '@/lib/workspace-navigation'
 
-// 纯函数（isDeepLink / landingPathOf）已迁至 `@jianmanager/ui`；此处转出，调用点零改动。
-export { isDeepLink, landingPathOf } from '@jianmanager/ui/lib/use-workspace-navigation'
-import { landingPathOf } from '@jianmanager/ui/lib/use-workspace-navigation'
+// 纯函数（isDeepLink / landingPathOf）已回迁应用侧；此处转出，调用点零改动。
+export { isDeepLink, landingPathOf } from '@/lib/use-workspace-navigation'
+import { landingPathOf } from '@/lib/use-workspace-navigation'
 
 /**
  * 工作区导航的唯一数据源（FR-496 阶段 6 补丁：从 `WorkspaceSidebar` 抽成独立模块）。

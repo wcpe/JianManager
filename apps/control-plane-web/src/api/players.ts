@@ -4,14 +4,14 @@ import api, { ensureFreshToken } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 
 /** 在线玩家及其所在子服（BC 跨服感知，FR-054）。 */
-// 玩家治理契约已归包（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 玩家治理契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的查询/变更泛型使用。
 import type {
   BanRecord,
   OnlinePlayersResult,
   PlayerActionResult,
   WhitelistResult,
-} from '@jianmanager/ui/lib/player'
+} from '@/lib/player'
 export type {
   BackendStatus,
   BanRecord,
@@ -19,7 +19,7 @@ export type {
   OnlinePlayersResult,
   PlayerActionResult,
   WhitelistResult,
-} from '@jianmanager/ui/lib/player'
+} from '@/lib/player'
 
 /** 踢/封/解封作用域（互斥，按 instanceId > networkId > 全部 解析）。 */
 export interface PlayerActionScope {

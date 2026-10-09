@@ -41,7 +41,6 @@ export * from './charts/MetricComparePanel'
 
 // 跨组件基础设施（FR-496 阶段 6）：焦点环/交互覆盖层常量与 a11y hooks
 export * from './hooks'
-export * from './lib/focus-ring'
 export * from './lib/interaction-overlay'
 export * from './lib/utils'
 export * from './lib/threshold'
@@ -50,301 +49,31 @@ export * from './lib/chart-hover'
 export * from './lib/monitor-metrics'
 
 
-export * from './lib/instance-wizard-options'
-export * from './lib/template-apply'
-export * from './lib/roles'
-export * from './lib/nav-config'
-export * from './lib/header-layout'
-export * from './lib/sidebar-logo'
-export * from './lib/task-status'
-export * from './lib/explorer-selection'
-export * from './lib/explorer-clipboard'
-export * from './lib/explorer-tabs'
-export * from './lib/explorer-clipboard-bus'
-export * from './lib/explorer-save-key'
-export * from './lib/file-entry'
-export * from './lib/explorer-language'
-export * from './lib/explorer-comment'
-export * from './lib/explorer-ide-extensions'
-export * from './lib/archive-tree'
-export * from './lib/file-version'
-export * from './lib/discard-guard'
-export * from './lib/nav-history'
-export * from './lib/file-browser-capability'
-export * from './lib/storage-types'
 // 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics` 同名（两者语义不同，
 // 前者格式化存储占用、后者格式化监控指标），barrel 里不能同时通配导出。
-// 需要存储版 `formatBytes` 的调用方走深路径 `@jianmanager/ui/lib/storage-view`。
-export {
-  deriveArchive,
-  sortDirsByUsage,
-  buildCrumbs,
-  joinStoragePath,
-} from './lib/storage-view'
-export type { ArchiveDerived, Crumb } from './lib/storage-view'
-export * from './lib/storage-source'
-export * from './lib/node-types'
-export * from './lib/node-summary'
-export * from './lib/instance-summary'
-export * from './lib/node-list'
-export * from './lib/health-wall-types'
-export * from './lib/health-wall'
-export * from './lib/instance-prefetch'
-export * from './lib/console-log-types'
-export * from './lib/capabilities'
-export * from './lib/console-history'
-export * from './lib/client-upload-plan'
-export * from './lib/chunked-upload'
-export * from './lib/efficient-upload'
-export * from './lib/instance-grouping'
-export * from './lib/instance-tree'
-export * from './lib/instance-types'
-export * from './lib/workspace-navigation'
-export * from './lib/use-workspace-navigation'
-export * from './lib/bot-load-types'
-export * from './lib/bot-load-filters'
-export * from './lib/bot-load-url-state'
-export * from './lib/bot-load-report'
-export * from './lib/bot-load-presets'
 // 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics`、`FieldError` 与
 // `./components/field-label` 同名（语义不同），barrel 里不能同时通配导出。
-// 需要这两者的调用方走深路径 `@jianmanager/ui/lib/bot-load-metrics`。
-export {
-  LIVE_METRIC_MAX_POINTS,
-  CHART_MAX_POINTS,
-  clampChartPoints,
-  formatLatencyMs,
-  formatRatio,
-  pickLatency,
-  seriesWithNulls,
-  appendMetricPoints,
-} from './lib/bot-load-metrics'
 // 同上：`FieldError` 与 `./components/field-label` 同名（此处是「校验错误条目」，
 // 那边是「表单字段错误壳」）。需要本模块版的调用方走深路径。
-export {
-  validateCommandSchedule,
-  validateLoadProfile,
-  validateThresholds,
-  validateConnection,
-  validateCountMatchesProfile,
-  previewBotNames,
-} from './lib/bot-load-validation'
-export * from './lib/bot-load-summaries'
-export * from './lib/bot-load-draft'
-export * from './lib/bot-load-session-store'
-export * from './lib/bot-load-session-event-client'
-export * from './lib/topology'
-export * from './lib/inventory-view'
-export * from './lib/director'
-export * from './lib/quota-status'
-export * from './lib/config-surface'
-export * from './lib/terminal-session-manager'
-export * from './lib/console-immersive-layout'
-export * from './lib/console-players'
-export * from './lib/director-render'
-export * from './lib/runtime-drift'
-export * from './lib/config-contracts'
-export * from './lib/plugin-contracts'
-export * from './lib/asset-contracts'
-export * from './lib/api-error'
-export * from './lib/privacy-mask'
-export * from './lib/relative-time'
-export * from './lib/password-strength'
-export * from './lib/permission-explain'
-export * from './lib/page-title'
-export * from './lib/platform-stats'
-export * from './lib/jwt'
-export * from './lib/config-baseline'
-export * from './lib/client-readiness'
-export * from './lib/console-draft-registry'
-export * from './lib/console-hot-cache'
-export * from './lib/download-failure'
-export * from './lib/metrics-source'
-export * from './lib/instance-console-tabs'
-export * from './lib/alert-helpers'
-export * from './lib/alert-contracts'
-export * from './lib/client-channel-types'
-export * from './lib/bot-realtime-types'
-export * from './lib/config-discover'
-export * from './lib/config-favorites'
-export * from './lib/webkit-entry-adapter'
-export * from './lib/client-dist-query'
-export * from './lib/logs-filters'
-export * from './lib/schedule-form'
-export * from './lib/db-contracts'
-export * from './lib/db-rows-view'
-export * from './lib/client-dist-stats-contracts'
-export * from './lib/client-dist-events-contracts'
-export * from './lib/client-runtime-contracts'
-export * from './lib/client-dist-machines-contracts'
-export * from './lib/client-dist-security-contracts'
 // 显式列出而非 `export *`：`SummaryChip` 与 `./components/summary-chips` 同名但语义不同
 // （前者是可点击筛选 chip、后者是带状态等级的汇总 chip）；`ConfigSwitch` 已由
-export * from './lib/client-dist-kpi'
-export * from './lib/client-dist-observability-contracts'
-export * from './lib/client-dist-ops-tab'
-export * from './lib/zip-filename-decode'
-export * from './lib/logs-federation/types'
-export * from './lib/logs-federation/i18n'
-export * from './lib/logs-federation/helpers'
-export * from './lib/client-publish-wizard'
-export * from './lib/settings-form'
-export * from './lib/audit-contracts'
-export * from './lib/audit-filters'
-export * from './lib/bots-overview'
-export * from './lib/runtime-assets-contracts'
 // 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics` 同名（两者格式不同，
 // 前者 1024 进制带 B/KB/MB 后缀、后者是监控指标的 G/M/K 缩写），barrel 里不能同时通配导出。
-// 需要制品占用版 `formatBytes` 的调用方走深路径 `@jianmanager/ui/lib/runtime-assets-view`。
-export {
-  buildJDKMatrix,
-  RUNTIME_TYPE_LABEL,
-  buildRuntimeGrid,
-  DEFAULT_ASSET_FILTER,
-  filterAssetGroups,
-  shortSha,
-} from './lib/runtime-assets-view'
-export type {
-  JDKMatrixCell,
-  JDKMatrix,
-  JDKMatrixColumn,
-  JDKMatrixRow,
-  RuntimeGridCell,
-  RuntimeGridColumn,
-  RuntimeGridRow,
-  RuntimeGrid,
-  AssetFilter,
-} from './lib/runtime-assets-view'
 export * from './lib/theme'
 // WorkbenchLeafParts 的 PageBreadcrumb 与 './components/layout' 的同名导出（类型）冲突，
 // 故显式列出其余导出；PageBreadcrumb 组件走深路径
-export * from './lib/artifact-cache'
-export * from './lib/attribution'
-export * from './lib/backup'
-export * from './lib/bot-health'
 // 显式列出而非 `export *`：`BotStatusKind` 与 `./lib/bots-overview` 的后端状态枚举同名但语义不同
-// （此处是前端语义分桶 online/connecting/offline/error）；需要它的调用方走深路径 `@jianmanager/ui/lib/bot-list`。
-export {
-  indexBotBadgesByInstance,
-  botStatusKind,
-  summaryCounts,
-  groupBots,
-  parseBotConfig,
-  suggestBotServer,
-} from './lib/bot-list'
-export type { InstanceBotBadge, BotStatusCounts, BotGroupBy, BotGroup } from './lib/bot-list'
-export * from './lib/bot'
-export * from './lib/breadcrumb'
-export * from './lib/business-actions'
-export * from './lib/business'
-export * from './lib/clipboard'
-export * from './lib/color-contrast'
 export * from './lib/combobox'
-export * from './lib/command-palette'
-export * from './lib/console-ansi'
-export * from './lib/console-command-history'
-export * from './lib/console-completion'
-export * from './lib/console-filter'
-export * from './lib/console-line-buffer'
-export * from './lib/console-log-line'
-export * from './lib/console-search'
-export * from './lib/console-selection'
-export * from './lib/console-stack-block'
-export * from './lib/console-wrap'
-export * from './lib/crash'
-export * from './lib/cron'
-export * from './lib/economy'
-export * from './lib/economy-view'
-export * from './lib/file-browser-tree'
-export * from './lib/file-browser-types'
-export * from './lib/file-sort'
+export * from './lib/color-contrast'
+export * from './lib/focus-ring'
 // 显式列出而非 `export *`：`FieldError` 与 `./components/field-label` 的展示组件同名但语义不同
-// （此处是校验错误文本类型）；需要它的调用方走深路径 `@jianmanager/ui/lib/form-validation`。
-export {
-  validateRequired,
-  minLength,
-  validatePort,
-  validatePositiveInt,
-  validateNonNegativeNumber,
-  validateResourceLimitNumber,
-  validateAbsPath,
-  validateUrl,
-  validateEnvRef,
-  validateHost,
-  validateFields,
-  hasErrors,
-} from './lib/form-validation'
-export type { FieldRules } from './lib/form-validation'
-export * from './lib/instance-batch'
-export * from './lib/instance-glow'
-export * from './lib/instance-group-path'
-export * from './lib/instance-group-tree'
-export * from './lib/instance-group'
 // 显式列出而非 `export *`：`DragPayload` 与 `./lib/explorer-clipboard-bus` 的同名类型语义不同
-// （此处是工作台卡拖拽载荷）；需要它的调用方走深路径 `@jianmanager/ui/lib/instance-library`。
-export {
-  WORKSPACE_DND_MIME,
-  encodeDragPayload,
-  parseDragPayload,
-  dragPayloadToCards,
-  dedupeCards,
-} from './lib/instance-library'
-export * from './lib/instance-metrics'
-export * from './lib/instance-rolling'
-export * from './lib/instance-status'
-export * from './lib/instance-tags'
-export * from './lib/managed-process'
-export * from './lib/metrics-availability'
-export * from './lib/metric-series'
 // 不导出：该模块仅有的 `fmtBytes` 与 client-dist 的 OpsShared 同名（两者格式口径不同），
-// 需要它的调用方走深路径 `@jianmanager/ui/lib/metrics-format`。
-export * from './lib/node-ports'
-export * from './lib/obs-window'
-export * from './lib/paths'
-export * from './lib/player-trend'
-export * from './lib/player'
-export * from './lib/proxy-registration'
-export * from './lib/ranking'
-export * from './lib/release-notes-link'
-export * from './lib/schedule'
 // 显式列出而非 `export *`：`HoverPrefetcher` 与 `./lib/instance-prefetch` 的同名类型语义不同；
 // server-selection 的 store 与类型（FR-240 / FR-293）。
-export type { StoredInstance, StorableInstance, HoverPrefetcher } from './lib/server-selection'
-export {
-  FAVORITES_KEY,
-  FAVORITES_LIMIT,
-  getFavoriteServers,
-  getRecentServers,
-  RECENT_KEY,
-  RECENT_LIMIT,
-  recordRecentServer,
-  removeServer,
-  subscribeServerSelection,
-  toStored,
-  toggleFavoriteServer,
-  useFavoriteServers,
-  useRecentServers,
-} from './lib/server-selection'
-export * from './lib/import-server-path'
-export * from './lib/file-sources'
-export * from './lib/server-state'
-export * from './lib/shortcuts'
-export * from './lib/slo'
 export * from './lib/stat-card'
 export * from './lib/tone'
-export * from './lib/use-card-columns'
-export * from './lib/use-debounced'
-export * from './lib/use-field-gate'
 // 显式列出而非 `export *`：`VirtualWindow` / `VirtualWindowInput` 与 `./lib/logs-filters` 的同名类型语义不同
-// （此处是通用虚拟列表窗口、后者是日志中心专用）；需要它们的调用方走深路径 `@jianmanager/ui/lib/virtual-list`。
-export {
-  virtualWindow,
-  virtualWindowVaried,
-  useVirtualRows,
-} from './lib/virtual-list'
-export type { VirtualWindowVariedInput } from './lib/virtual-list'
-export * from './lib/workspace-card'
-export * from './lib/workspace-preset'
 
 // ==== FR-502 迁移批：新增视图按域补录 ====
 // 逐条列出以便逐个核对；同名冲突沿用本文件既有先例（显式列出，冲突名走深路径）。

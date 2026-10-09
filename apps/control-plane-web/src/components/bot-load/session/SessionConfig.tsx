@@ -4,7 +4,7 @@ import { useSessionEvents } from './SessionEventProvider'
 
 /**
  * 会话配置快照接线层：会话快照来自 `SessionEventProvider`，复制回执桥接为 sonner toast
- * （展示层已归包，包内不依赖 sonner）。
+ * （展示层已回迁应用侧，包内不依赖 sonner）。
  */
 export function SessionConfig() {
   const { run } = useSessionEvents()

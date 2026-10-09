@@ -8,7 +8,7 @@ import { useSessionEvents } from './SessionEventProvider'
 
 /**
  * 会话事件接线层：分页 / 类型过滤状态与 snapshot 锚点留在容器（它们决定服务端取数），
- * 表格与合并去重逻辑已归包。
+ * 表格与合并去重逻辑已回迁应用侧。
  */
 export function SessionEvents({ runId }: { runId: number | string }) {
   const { live } = useSessionEvents()

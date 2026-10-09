@@ -4,7 +4,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { SuperWorkbenchPage } from '@/components/views/console/SuperWorkbenchPage'
-import type { PlacedCard } from '@jianmanager/ui/lib/workspace-preset'
+import type { PlacedCard } from '@/lib/workspace-preset'
 
 /**
  * 超级工作台页面 · 受控视图测（ADR-097）。

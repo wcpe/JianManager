@@ -13,7 +13,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
-import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
+import { copyToClipboard } from '@/lib/clipboard'
 
 /**
  * 一次性 enrollment token 的签发结果（本组件所需的最小结构）。

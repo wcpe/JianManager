@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入 store 动作（受控化）。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只注入 store 动作（受控化）。
 import { DirectorAddSceneMenu as DirectorAddSceneMenuView } from '@/components/views/console/WorkbenchLeafParts'
 import { useDirectorStore } from '@/stores/director'
 import type { WorkspacePreset } from '@/lib/workspace-preset'

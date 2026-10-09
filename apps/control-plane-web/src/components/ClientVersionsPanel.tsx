@@ -19,7 +19,7 @@ const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?
 /**
  * 客户端分发版本管理面板（FR-088，见 ADR-022）的接线层（ADR-097）。
  *
- * 展示层已归包（`ClientVersionsPanelView`），此处只保留应用侧职责：
+ * 展示层已回迁应用侧（`ClientVersionsPanelView`），此处只保留应用侧职责：
  * - 取数：版本列表（`useClientVersions`）与选中版本详情（`useClientVersion(channelId, detailVersion)`；
  *   选中版本由本层持有，因为它是详情查询的入参）；
  * - 写操作：回滚 mutation（`useRollbackClientVersion`）与成功/失败 toast；

@@ -16,7 +16,7 @@ import {
 
 /**
  * 压测会话列表 tab 的容器：取数、启停 mutation/toast、分页写 URL 与详情路由。
- * 展示层已归包（`SessionsTabView`，ADR-097）；详情页路由 `/bots/sessions/:id`
+ * 展示层已回迁应用侧（`SessionsTabView`，ADR-097）；详情页路由 `/bots/sessions/:id`
  * 由 FR-372 承接，此处仅列表与创建向导入口。
  */
 export default function BotLoadSessionsTab() {

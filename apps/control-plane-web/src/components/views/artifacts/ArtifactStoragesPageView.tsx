@@ -44,9 +44,9 @@ import {
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import { validateRequired, validateFields, hasErrors } from '@jianmanager/ui/lib/form-validation'
-import { isTerminalTask, type TaskState } from '@jianmanager/ui/lib/task-status'
-import { useFieldGate } from '@jianmanager/ui/lib/use-field-gate'
+import { validateRequired, validateFields, hasErrors } from '@/lib/form-validation'
+import { isTerminalTask, type TaskState } from '@/lib/task-status'
+import { useFieldGate } from '@/lib/use-field-gate'
 
 /**
  * 存储渠道行（本视图渲染、表单回填与迁移展示所需的最小字段集）。

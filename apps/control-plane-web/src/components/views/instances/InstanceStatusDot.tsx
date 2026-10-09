@@ -1,5 +1,5 @@
 import { cn } from '@jianmanager/ui'
-import { statusDotKind } from '@jianmanager/ui/lib/instance-status'
+import { statusDotKind } from '@/lib/instance-status'
 
 /** 实例状态点：RUNNING 绿 / STARTING·STOPPING 琥珀 / CRASHED 红 / STOPPED 空心灰。 */
 export interface InstanceStatusDotProps {

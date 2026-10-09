@@ -5,7 +5,7 @@
  * 使共享 `FileBrowser` 能用于实例工作目录的**只读浏览 / 内容预览 / 下载**。
  * 二进制 / 超大判定的口径在此（适配器决定，组件只消费结果）。
  *
- * 视图与工厂已迁至 @jianmanager/ui（ADR-097），本层只注入端点实现（纯接线层）。
+ * 视图与工厂已回迁应用侧（原 ADR-097 迁包已撤销），本层只注入端点实现（纯接线层）。
  */
 import { fetchFileList, readFileContent, downloadFile } from '@/api/files'
 import {
@@ -13,7 +13,7 @@ import {
   looksBinary,
   PREVIEW_MAX_BYTES,
   type InstanceFileApi,
-} from '@jianmanager/ui/lib/file-sources'
+} from '@/lib/file-sources'
 
 export { looksBinary, PREVIEW_MAX_BYTES }
 

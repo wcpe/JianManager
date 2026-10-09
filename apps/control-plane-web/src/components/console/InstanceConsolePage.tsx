@@ -1,4 +1,4 @@
-// 展示主体已迁至 @jianmanager/ui（ADR-097）：页头（状态/标题/操作/指标条）、页签栏与概览面板都在包内；
+// 展示主体已回迁应用侧（原 ADR-097 迁包已撤销）：页头（状态/标题/操作/指标条）、页签栏与概览面板都在包内；
 // 本层保留路由参数解析、取数分发、keep-alive 生命周期宿主与各页签子组件的接线。
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router'
@@ -26,7 +26,7 @@ import {
   readResourceSegment,
   visibleTabsFor,
   type TabKey,
-} from '@jianmanager/ui/lib/instance-console-tabs'
+} from '@/lib/instance-console-tabs'
 import { useInstanceCapabilities, hasCapability } from '@/lib/capabilities'
 import InstanceActivityFeed from './InstanceActivityFeed'
 import InstanceBackupSegment from './InstanceBackupSegment'
@@ -51,7 +51,7 @@ interface InstanceConsolePageProps {
 /**
  * 服务器统一控制台（FR-269）的容器：固定分区的单服默认入口。
  *
- * 展示主体已归包（ADR-097）：页头、页签栏与概览面板由 {@link InstanceConsolePageView} 渲染，
+ * 展示主体已回迁应用侧（ADR-097）：页头、页签栏与概览面板由 {@link InstanceConsolePageView} 渲染，
  * 页签内容经 `renderTabPanel` 按页签注入本层的接线组件。留在本层的是：
  * - 深链解析与写回（`?tab=` / `?seg=`）：「当前页签」会改变子组件取数（隐藏页签停轮询），属取数口径；
  * - 十余个取数 hook 的分发、能力画像门控（FR-445/448）与「最近打开」记录（FR-293）；

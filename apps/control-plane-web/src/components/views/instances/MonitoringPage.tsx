@@ -19,7 +19,7 @@ import type {
   ManagedProcessDetail,
   ManagedProcessInfo,
   ProcessTopItem,
-} from '@jianmanager/ui/lib/managed-process'
+} from '@/lib/managed-process'
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '--'

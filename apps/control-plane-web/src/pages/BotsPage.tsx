@@ -1,4 +1,4 @@
-// 分组总览的展示件已迁至 @jianmanager/ui（ADR-097）：分组操作区、分组行与成员窥视在包内；
+// 分组总览的展示件已回迁应用侧（原 ADR-097 迁包已撤销）：分组操作区、分组行与成员窥视在包内；
 // 本层保留取数（概览 summary / 窥视 bots / 批量 mutation）、路由跳转与提示。
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'

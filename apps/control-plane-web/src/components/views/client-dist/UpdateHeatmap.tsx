@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Panel } from '@jianmanager/ui/components/panel'
-import type { ObservabilitySeriesPoint } from '@jianmanager/ui/lib/client-dist-observability-contracts'
+import type { ObservabilitySeriesPoint } from '@/lib/client-dist-observability-contracts'
 
 /**
  * 更新活动热力图（FR-427，GitHub 贡献图风格）：

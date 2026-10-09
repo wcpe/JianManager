@@ -21,7 +21,7 @@ import {
 import { Button } from '@jianmanager/ui/components/button'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { minLength } from '@jianmanager/ui/lib/form-validation'
+import { minLength } from '@/lib/form-validation'
 
 // 与初始化/创建用户的密码下限一致（BUG-022）。
 const PASSWORD_MIN = 8

@@ -19,7 +19,7 @@ import {
 
 /**
  * 压测模板列表 tab 的容器：取数、搜索防抖/筛选写 URL、删除 mutation 与三处弹窗装配。
- * 展示层已归包（`TemplatesTabView`，ADR-097）。
+ * 展示层已回迁应用侧（`TemplatesTabView`，ADR-097）。
  */
 export default function BotLoadTemplatesTab() {
   const { t } = useTranslation()

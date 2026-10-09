@@ -7,7 +7,7 @@ import {
   useSetBotBehavior,
   useDeleteBot,
 } from '@/api/bots'
-import type { BotBatchFilter } from '@jianmanager/ui/lib/bot'
+import type { BotBatchFilter } from '@/lib/bot'
 import CreateBotDialog from './CreateBotDialog'
 import BotSegmentView from '@/components/views/instances/BotSegment'
 
@@ -16,7 +16,7 @@ const PAGE_SIZE = 50
 /**
  * Bot 段的应用接线层（ADR-097 a 范式）。
  *
- * 视图本体已迁入组件库并受控；本层持有筛选与分页（取数依赖它们）、取聚合与列表、
+ * 视图本体是受控视图（见 components/views）；本层持有筛选与分页（取数依赖它们）、取聚合与列表、
  * 接批量/改行为/删除三个动作、注入已迁包的创建对话框。保留同路径的默认导出与同一套 props，
  * 调用点无需改动。
  */

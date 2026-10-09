@@ -7,7 +7,7 @@ import { FavoritesBarView } from '@/components/views/config-explorer/FavoritesBa
  * 收藏点选打开 / 取消收藏；已发现配置为 `GET /configs/discover` 递归结果（不限内置 schema），
  * 按目录分组展示，点选打开、星标收藏。
  *
- * 展示层已归包（`FavoritesBarView`），此处只做取数与透传。
+ * 展示层已回迁应用侧（`FavoritesBarView`），此处只做取数与透传。
  */
 interface FavoritesBarProps {
   instanceId: number

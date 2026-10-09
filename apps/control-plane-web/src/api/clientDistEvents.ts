@@ -7,7 +7,7 @@ import api from '@/api/client'
  */
 
  /**
-  * 客户端分发事件契约已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+  * 客户端分发事件契约已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
   */
  export type {
    ClientDistEvent,
@@ -22,16 +22,16 @@ import api from '@/api/client'
    ClientDistErrorCount,
    ClientDistFailureSample,
    ClientDistErrorSummary,
-} from '@jianmanager/ui/lib/client-dist-events-contracts'
+} from '@/lib/client-dist-events-contracts'
 // StatsIP 由统计契约定义（此前本文件有一份重复定义，已去重）；对外仍从本模块可用。
-export type { StatsIP } from '@jianmanager/ui/lib/client-dist-stats-contracts'
+export type { StatsIP } from '@/lib/client-dist-stats-contracts'
 import type {
    ClientDistEventSearchFilter,
    ClientDistEventPage,
    ClientDistEventDetail,
    ClientDistRealtime,
    ClientDistErrorSummary,
- } from '@jianmanager/ui/lib/client-dist-events-contracts'
+ } from '@/lib/client-dist-events-contracts'
 /** 分页检索分发事件（FR-265），支持运行态维度联动过滤。 */
 export function useClientDistEventSearch(filter: ClientDistEventSearchFilter) {
   const {

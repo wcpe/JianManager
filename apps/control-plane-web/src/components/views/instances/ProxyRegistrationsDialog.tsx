@@ -22,12 +22,12 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { validateHost } from '@jianmanager/ui/lib/form-validation'
+import { validateHost } from '@/lib/form-validation'
 import type {
   ProxyRegistration,
   ProxyResyncResult,
   RegisterProxyBackendPayload,
-} from '@jianmanager/ui/lib/proxy-registration'
+} from '@/lib/proxy-registration'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type ProxyNotice = (kind: 'success' | 'warning' | 'error', message: string) => void

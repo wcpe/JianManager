@@ -29,7 +29,7 @@ import type {
   ChannelConfig,
   ChannelSubmitBody,
   QQBindFill,
-} from '@jianmanager/ui/lib/alert-contracts'
+} from '@/lib/alert-contracts'
 import {
   channelUsesURL,
   channelIsTelegram,
@@ -38,7 +38,7 @@ import {
   channelIsQQ,
   isQQTargetType,
   isEnvRef,
-} from '@jianmanager/ui/lib/alert-helpers'
+} from '@/lib/alert-helpers'
 
 /** 扫码绑定弹窗的渲染参数（应用侧提供具体实现，如 QQBindDialog）。 */
 export interface ChannelBindDialogArgs {

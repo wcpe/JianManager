@@ -36,7 +36,7 @@ function isAbortError(e: unknown): boolean {
 /**
  * 客户端分发「发布新版本」独立页面（FR-191，编排重做 FR-250）的接线层（ADR-097）。
  *
- * 展示层已归包（`ClientPublishPageView`），此处只保留应用侧职责：
+ * 展示层已回迁应用侧（`ClientPublishPageView`），此处只保留应用侧职责：
  * - 步骤与 `?step=` 的双向同步（浏览器前进/后退）；
  * - 取数（内嵌更新器信息）与主题注入（本地预览用），导航（离页回频道工作台版本 tab、缺 channelId 兜底）；
  * - **批量上传编排**：点「发布」才上传——视图把草稿 + 清理范围 + 备注 + 取消信号交来，

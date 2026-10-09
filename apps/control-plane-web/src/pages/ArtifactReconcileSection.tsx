@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做对账设置/运行/差异的取数与处置动作接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做对账设置/运行/差异的取数与处置动作接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'

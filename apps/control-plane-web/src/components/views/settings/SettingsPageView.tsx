@@ -41,7 +41,7 @@ import {
   keyCategory,
   validateSettingDraft,
   type SettingCategory,
-} from '@jianmanager/ui/lib/settings-form'
+} from '@/lib/settings-form'
 
 /** 明暗偏好三态（与主题 store 的 ThemeMode 同形；组件库不 import 应用 store，故此处自持同名常量类型）。 */
 export type SettingsThemeMode = 'light' | 'dark' | 'system'

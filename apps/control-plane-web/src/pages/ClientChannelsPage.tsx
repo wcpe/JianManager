@@ -32,7 +32,7 @@ import {
   type ClientChannelSecuritySummary,
   type SecurityLevel,
 } from '@/api/clientDistSecurity'
-import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
+import { copyToClipboard } from '@/lib/clipboard'
 import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
 import { useTabParam } from '@/lib/use-tab-param'
 import {

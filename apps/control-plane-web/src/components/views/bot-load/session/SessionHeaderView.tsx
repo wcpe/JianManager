@@ -11,8 +11,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
-import type { BotLoadRunV2, BotLoadVerdict } from '@jianmanager/ui/lib/bot-load-types'
-import { isLiveRunState, isTerminalRunState } from '@jianmanager/ui/lib/bot-load-types'
+import type { BotLoadRunV2, BotLoadVerdict } from '@/lib/bot-load-types'
+import { isLiveRunState, isTerminalRunState } from '@/lib/bot-load-types'
 import { DisclaimerBanner } from '@/components/views/bot-load/session/DisclaimerBanner'
 
 /**

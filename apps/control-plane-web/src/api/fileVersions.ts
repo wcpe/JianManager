@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-// 版本类型已迁至 `@jianmanager/ui`（ADR-097）；此处转出，调用点零改动。
-import type { FileVersion, FileVersionDiff } from '@jianmanager/ui'
-export type { FileVersion, FileVersionDiff } from '@jianmanager/ui'
+// 版本类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
+import { FileVersion, FileVersionDiff } from '@/lib/file-version'
+export { FileVersion, FileVersionDiff } from '@/lib/file-version'
 
 /** 列出某文件的历史版本（按 ID 倒序，最新在前）。 */
 export function useFileVersions(instanceId: number, filePath: string | null) {

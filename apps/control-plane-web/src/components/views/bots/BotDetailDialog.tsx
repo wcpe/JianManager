@@ -14,8 +14,8 @@ import {
   scrollableDialogContentClass,
 } from '@jianmanager/ui/components/scrollable-dialog'
 import { BotMetric, formatBotEvent, formatEventTime, formatPosition } from '@/components/views/bots/BotListParts'
-import type { BotInfo } from '@jianmanager/ui/lib/bot'
-import type { BotRealtimeState } from '@jianmanager/ui/lib/bot-realtime-types'
+import type { BotInfo } from '@/lib/bot'
+import type { BotRealtimeState } from '@/lib/bot-realtime-types'
 
 export interface BotDetailDialogProps {
   /** 目标 Bot；null 表示关闭。 */

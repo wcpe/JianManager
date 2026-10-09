@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react'
 import { cn } from '@jianmanager/ui'
 import FileBrowser from '@/components/views/file-browser/FileBrowser'
-import type { FileBrowserSource } from '@jianmanager/ui/lib/file-browser-types'
+import type { FileBrowserSource } from '@/lib/file-browser-types'
 import {
   browserPropsFromCapability,
   type ExplorerCapability,
-} from '@jianmanager/ui/lib/file-browser-capability'
+} from '@/lib/file-browser-capability'
 import ExplorerTabHost from '@/components/views/explorer/ExplorerTabHost'
 
 export interface UnifiedExplorerShellProps {

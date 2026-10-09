@@ -2,8 +2,8 @@ import { useTranslation } from 'react-i18next'
 import { TrendingUp } from 'lucide-react'
 
 import { Panel } from '@jianmanager/ui/components/panel'
-import type { ForecastResult } from '@jianmanager/ui/lib/attribution'
-import { fmtBytes } from '@jianmanager/ui/lib/metrics-format'
+import type { ForecastResult } from '@/lib/attribution'
+import { fmtBytes } from '@/lib/metrics-format'
 
 /** 待预测的「已用」指标 → i18n 标签键。 */
 const CAPACITY_METRIC_LABEL: Record<string, string> = {

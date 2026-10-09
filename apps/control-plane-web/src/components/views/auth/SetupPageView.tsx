@@ -12,7 +12,7 @@ import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
 import { Button } from '@jianmanager/ui/components/button'
 import { PasswordInput } from '@jianmanager/ui/components/password-input'
-import { passwordStrength } from '@jianmanager/ui/lib/password-strength'
+import { passwordStrength } from '@/lib/password-strength'
 
 /** 密码强度档位对应的进度条配色（FR-157）。 */
 const STRENGTH_BAR: Record<number, string> = {

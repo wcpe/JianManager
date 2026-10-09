@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
 
-// 实现已迁至 @jianmanager/ui（ADR-097），此处保留 re-export 维持既有导入路径。
+// 实现已回迁应用侧（原 ADR-097 迁包已撤销），此处保留 re-export 维持既有导入路径。
 import type {
   AlertRuleInfo,
   CreateRuleBody,
@@ -11,7 +11,7 @@ import type {
   AlertChannelInfo,
   QQBindTaskInfo,
   QQBindResult,
-} from '@jianmanager/ui/lib/alert-contracts'
+} from '@/lib/alert-contracts'
 
 export type {
   AlertRuleInfo,

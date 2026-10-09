@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只注入出站测试 mutation（受控化）。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只注入出站测试 mutation（受控化）。
 import { OutboundTestButton as OutboundTestButtonView } from '@/components/views/nodes/OutboundTestButton'
 import { useTestHTTP } from '@/api/diagnostics'
 

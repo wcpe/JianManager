@@ -10,7 +10,7 @@ import type {
   FieldSchema,
   ModelSchema,
   ValidationIssue,
-} from '@jianmanager/ui/lib/config-contracts'
+} from '@/lib/config-contracts'
 
 /**
  * 单文件配置编辑器（FR-071）· 受控视图（ADR-097）。

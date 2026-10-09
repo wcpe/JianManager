@@ -37,9 +37,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
-import type { ClientDistEvent, ClientDistEventDetail } from '@jianmanager/ui/lib/client-dist-events-contracts'
+import type { ClientDistEvent, ClientDistEventDetail } from '@/lib/client-dist-events-contracts'
 import type { ClientDistQuery, ClientDistQueryKey } from '@/lib/client-dist-query'
-import type { ClientDistSecurityLogItem, ClientDistSecurityLogType } from '@jianmanager/ui/lib/client-dist-security-contracts'
+import type { ClientDistSecurityLogItem, ClientDistSecurityLogType } from '@/lib/client-dist-security-contracts'
 import { OPS_ALL, ResultBadge, fmtTime, kindLabel, targetOf, type RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
 /** 全量日志视图取值集合（request 为独立加厚视图，其余走安全聚合流）。 */

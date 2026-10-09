@@ -30,7 +30,7 @@ export type TerminalPaneProps = Omit<
 /**
  * 终端面板的应用接线层（ADR-097）。
  *
- * 视图本体已迁入组件库并受控；本层注入：实例状态与名称、终端凭据的取数回调（每次连接前现取，
+ * 视图本体是受控视图（见 components/views）；本层注入：实例状态与名称、终端凭据的取数回调（每次连接前现取，
  * 一次性 token 复用会 401，见 FR-140）、启动动作与其 pending、`terminal.access` 权限，
  * 以及历史回溯控制器（内部走 DB 分页取数）。其余 props 原样透传。
  */

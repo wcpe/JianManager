@@ -5,7 +5,7 @@ import { ProcessPanel } from './ProcessPanel'
 /**
  * 进程能力分段的应用接线层（ADR-097 b 范式）。
  *
- * 分段本体已迁入组件库并受控；本层提供两样东西：进程指标块（`ProcessPanel` 自带取数，
+ * 分段本体是受控视图（见 components/views）；本层提供两样东西：进程指标块（`ProcessPanel` 自带取数，
  * 经 slot 注入）+ 启动参数的取数与保存。保留同路径的默认导出，调用点无需改动。
  */
 export default function BinarySegment({ instanceId }: { instanceId: number }) {

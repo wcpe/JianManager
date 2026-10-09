@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ShieldAlert } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
-import type { ClientChannelSecuritySummary } from '@jianmanager/ui/lib/client-dist-security-contracts'
+import type { ClientChannelSecuritySummary } from '@/lib/client-dist-security-contracts'
 
 export interface ChannelSecuritySummaryBarProps {
   /** 安全摘要数据（容器经 useClientChannelSecuritySummary 取数）。 */

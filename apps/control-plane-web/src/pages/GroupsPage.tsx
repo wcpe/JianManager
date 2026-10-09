@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做组取数、三个写动作、URL 深链解析/写回与成员对话框接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做组取数、三个写动作、URL 深链解析/写回与成员对话框接线。
 import { useSearchParams } from 'react-router'
 import {
   useGroups,

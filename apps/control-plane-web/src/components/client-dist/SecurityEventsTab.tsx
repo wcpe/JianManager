@@ -4,8 +4,8 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { SecurityEventsView } from '@/components/views/client-dist/SecurityEventsView'
 import { SecurityEventRowView } from '@/components/views/client-dist/SecurityEventRowView'
-import type { ClientDistSecurityEvent } from '@jianmanager/ui/lib/client-dist-security-contracts'
-import { buildClientDistHref } from '@jianmanager/ui/lib/client-dist-query'
+import type { ClientDistSecurityEvent } from '@/lib/client-dist-security-contracts'
+import { buildClientDistHref } from '@/lib/client-dist-query'
 import DangerConfirm from '@/components/DangerConfirm'
 import {
   useBlockClientDistIP,
@@ -19,7 +19,7 @@ import { useSecurityQuery } from './security-shared'
  * 安全侧「异常请求分析」Tab（FR-430 / ADR-088）。
  * 由旧 `ProtectionCenterPage.tsx` 内联实现原样迁出，行为不变。
  *
- * 展示层已归包（`SecurityEventsView` / `SecurityEventRowView`），此处提供取数、
+ * 展示层已回迁应用侧（`SecurityEventsView` / `SecurityEventRowView`），此处提供取数、
  * 查询读写、三个处置 mutation（含提示）、日志深链与确认弹窗（权限注入）。
  */
 

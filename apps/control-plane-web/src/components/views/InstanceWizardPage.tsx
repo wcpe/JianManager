@@ -12,9 +12,9 @@ import {
   validateRequired,
   validateResourceLimitNumber,
   validateFields,
-} from '@jianmanager/ui/lib/form-validation'
-import { useFieldGate } from '@jianmanager/ui/lib/use-field-gate'
-import { buildNodeOptions, type NodeOptionInput, type NodeStatusLabels } from '@jianmanager/ui/lib/instance-wizard-options'
+} from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
+import { buildNodeOptions, type NodeOptionInput, type NodeStatusLabels } from '@/lib/instance-wizard-options'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type WizardNotice = (kind: 'success' | 'error', message: string) => void

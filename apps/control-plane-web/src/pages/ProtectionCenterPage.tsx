@@ -20,7 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/compon
 import ClientDistExportButton from '@/components/ClientDistExportButton'
 import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
 import { ObsTimeRangePicker } from '@/components/views/client-dist/ObsTimeRangePicker'
-import type { ObsWindow } from '@jianmanager/ui/lib/obs-window'
+import type { ObsWindow } from '@/lib/obs-window'
 import { DEFAULT_SEG_BY_TAB, isOpsTab, normalizeOpsTab, resolveOpsSeg, type OpsSeg, type OpsTab } from '@/lib/client-dist-ops-tab'
 import ClientDistLogsTab from '@/components/client-dist/ClientDistLogsTab'
 import OpsOverviewTab from '@/components/client-dist/OpsOverviewTab'

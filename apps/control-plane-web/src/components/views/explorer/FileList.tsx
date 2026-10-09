@@ -21,10 +21,10 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
 } from '@jianmanager/ui/components/context-menu'
-import type { FileInfo } from '@jianmanager/ui/lib/file-entry'
-import { isArchiveName, isClassName } from '@jianmanager/ui/lib/file-entry'
-import type { SelectionState, ClickModifiers } from '@jianmanager/ui/lib/explorer-selection'
-import { isSelected } from '@jianmanager/ui/lib/explorer-selection'
+import type { FileInfo } from '@/lib/file-entry'
+import { isArchiveName, isClassName } from '@/lib/file-entry'
+import type { SelectionState, ClickModifiers } from '@/lib/explorer-selection'
+import { isSelected } from '@/lib/explorer-selection'
 import { cn } from '@jianmanager/ui'
 import {
   sortFiles,
@@ -32,7 +32,7 @@ import {
   type FileSortState,
   type FileSortKey,
   type FileViewMode,
-} from '@jianmanager/ui/lib/file-sort'
+} from '@/lib/file-sort'
 
 interface FileListProps {
   files: FileInfo[]

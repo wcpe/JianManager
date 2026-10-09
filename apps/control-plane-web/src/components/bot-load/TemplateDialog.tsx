@@ -17,7 +17,7 @@ interface TemplateDialogProps {
 }
 
 /**
- * 模板对话框接线层：本地校验与表单已归包，此处只注入 create/update mutation，
+ * 模板对话框接线层：本地校验与表单已回迁应用侧，此处只注入 create/update mutation，
  * 并把失败原因（服务端 message 优先）作为字符串回传给展示层就地展示。
  */
 export default function TemplateDialog({

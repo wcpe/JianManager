@@ -12,7 +12,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import type { ClientKeyWithSecret, ClientPullKey } from '@jianmanager/ui/lib/client-channel-types'
+import type { ClientKeyWithSecret, ClientPullKey } from '@/lib/client-channel-types'
 import {
   CreateKeyDialog,
   EditKeyDialog,

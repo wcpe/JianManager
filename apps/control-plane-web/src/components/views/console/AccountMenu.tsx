@@ -8,7 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
-import { ROLE_LABEL_KEY } from '@jianmanager/ui/lib/roles'
+import { ROLE_LABEL_KEY } from '@/lib/roles'
 
 export interface AccountMenuProps {
   /** 当前用户名（未加载传 null）。 */

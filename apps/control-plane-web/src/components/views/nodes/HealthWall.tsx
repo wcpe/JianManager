@@ -10,7 +10,7 @@ import {
   summarizeHealthWall,
 } from '@/lib/health-wall'
 import { toneChipClass } from '@jianmanager/ui/lib/tone'
-import type { HealthLevel, HealthWallNode, HealthWallSort } from '@jianmanager/ui/lib/health-wall-types'
+import type { HealthLevel, HealthWallNode, HealthWallSort } from '@/lib/health-wall-types'
 
 /** 分级 → 单元格着色（半透明状态底 + 状态前景，高密度热力墙用）。 */
 const CELL_CLASS: Record<HealthLevel, string> = {

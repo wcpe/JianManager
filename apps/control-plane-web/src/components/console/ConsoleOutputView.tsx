@@ -8,7 +8,7 @@ export type { ConsoleOutputHandle, ConsoleHistoryBanner, ConsoleOutputViewProps 
 /**
  * 控制台输出区的应用接线层（ADR-097）。
  *
- * 视图本体已迁入组件库并受控（不弹 toast）；本层补上「提示通道」——把复制回执
+ * 视图本体是受控视图（见 components/views，不弹 toast）；本层补上「提示通道」——把复制回执
  * 接回应用侧的 toast，并原样透传其余 props 与 ref，调用点无需改动。
  */
 export default function ConsoleOutputView(props: ConsoleOutputViewProps) {

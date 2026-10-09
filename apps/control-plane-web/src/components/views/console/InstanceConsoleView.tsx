@@ -16,19 +16,19 @@ import { CornerDownLeft, Copy, History, WrapText } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
 
-import { copyToClipboard } from '@jianmanager/ui/lib/clipboard'
-import { loadCommandHistory, pushCommandHistory } from '@jianmanager/ui/lib/console-command-history'
+import { copyToClipboard } from '@/lib/clipboard'
+import { loadCommandHistory, pushCommandHistory } from '@/lib/console-command-history'
 import {
   consoleErrorLines,
   consoleLinesToText,
   filterConsoleLines,
   type ConsoleLevelFilter,
-} from '@jianmanager/ui/lib/console-filter'
-import { findStartupSeq, mergeHistoryAndLive, type ConsoleHistoryState, type HistoryJumpOutcome } from '@jianmanager/ui/lib/console-history'
-import { applyPlayerChunk } from '@jianmanager/ui/lib/console-players'
-import { findConsoleMatches, type ConsoleSearchMatch } from '@jianmanager/ui/lib/console-search'
-import { useDirectorRender } from '@jianmanager/ui/lib/director-render'
-import { terminalSessionManager, type FetchTerminalCreds } from '@jianmanager/ui/lib/terminal-session-manager'
+} from '@/lib/console-filter'
+import { findStartupSeq, mergeHistoryAndLive, type ConsoleHistoryState, type HistoryJumpOutcome } from '@/lib/console-history'
+import { applyPlayerChunk } from '@/lib/console-players'
+import { findConsoleMatches, type ConsoleSearchMatch } from '@/lib/console-search'
+import { useDirectorRender } from '@/lib/director-render'
+import { terminalSessionManager, type FetchTerminalCreds } from '@/lib/terminal-session-manager'
 import {
   Dialog,
   DialogContent,

@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PanelLeftClose, RotateCw, Search } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
-import { logoToggleLabelKey } from '@jianmanager/ui/lib/sidebar-logo'
-import { searchBoxClass } from '@jianmanager/ui/lib/header-layout'
+import { logoToggleLabelKey } from '@/lib/sidebar-logo'
+import { searchBoxClass } from '@/lib/header-layout'
 
 /**
  * 全局顶栏的三个展示部件（FR-496 阶段 6 补丁 / FR-179 / FR-232）。

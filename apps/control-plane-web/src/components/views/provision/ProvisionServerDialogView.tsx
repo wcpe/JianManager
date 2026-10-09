@@ -26,8 +26,8 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@jianmanager/ui/lib/form-validation'
-import { useFieldGate } from '@jianmanager/ui/lib/use-field-gate'
+import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 
 /** 可选 JDK 记录（`NodeJDK` 结构兼容）：视图按大版本做 FR-316 预检、按厂商/版本拼展示名。 */
 export interface ProvisionJdkOption {

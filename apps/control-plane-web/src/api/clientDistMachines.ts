@@ -7,7 +7,7 @@ import api from '@/api/client'
  */
 
 /**
- * 机器清单契约（FR-426）已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ * 机器清单契约（FR-426）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
 export type {
   ClientMachineSummary,
@@ -15,12 +15,12 @@ export type {
   ClientMachineListResponse,
   ClientMachineEventsResponse,
   MachineSortField,
-} from '@jianmanager/ui/lib/client-dist-machines-contracts'
+} from '@/lib/client-dist-machines-contracts'
 import type {
   ClientMachineListResponse,
   ClientMachineEventsResponse,
   MachineSortField,
-} from '@jianmanager/ui/lib/client-dist-machines-contracts'
+} from '@/lib/client-dist-machines-contracts'
 
 export function useClientDistMachines(params: {
   channelId?: string

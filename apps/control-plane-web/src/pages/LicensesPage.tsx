@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做许可清单取数与页头「返回」跳转接线。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做许可清单取数与页头「返回」跳转接线。
 import { useNavigate } from 'react-router'
 import { useLicenses } from '@/api/licenses'
 import { LicensesPageView } from '@/components/views/licenses/LicensesPageView'

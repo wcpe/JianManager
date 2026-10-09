@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import api from '@/api/client'
 
 /**
- * 配置文件契约（FR-071）已归包，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ * 配置文件契约（FR-071）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
 export type {
   ConfigFileInfo,
@@ -18,7 +18,7 @@ export type {
   ConfigDiff,
   DiscoveredConfig,
   ConfigDiscoverResult,
-} from '@jianmanager/ui/lib/config-contracts'
+} from '@/lib/config-contracts'
 import type {
   ConfigFileInfo,
   ConfigReadResult,
@@ -27,7 +27,7 @@ import type {
   ConfigDiff,
   ConfigDiscoverResult,
   CrossCheckIssue,
-} from '@jianmanager/ui/lib/config-contracts'
+} from '@/lib/config-contracts'
 
 /** 递归发现实例 server 目录下全部配置文件（FR-071，不限内置 schema）。 */
 export function useConfigDiscover(instanceId: number) {

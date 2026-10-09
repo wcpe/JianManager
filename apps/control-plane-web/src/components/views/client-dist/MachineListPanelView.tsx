@@ -9,7 +9,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@jianmanager/ui/co
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@jianmanager/ui/components/table'
-import type { ClientMachineSummary, MachineSortField } from '@jianmanager/ui/lib/client-dist-machines-contracts'
+import type { ClientMachineSummary, MachineSortField } from '@/lib/client-dist-machines-contracts'
 import { fmtBytes, fmtTime, lagBadge } from '@/components/views/client-dist/machine-format'
 
 /**

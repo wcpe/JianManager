@@ -19,7 +19,7 @@ interface RuleDialogProps {
 /**
  * 告警规则创建/编辑对话框（取数容器）。
  *
- * 表单状态、字段校验与渲染已迁至 @jianmanager/ui（ADR-097）；此处只保留
+ * 表单状态、字段校验与渲染已回迁应用侧（原 ADR-097 迁包已撤销）；此处只保留
  * 规则 mutation、节点列表取数与实例选择器（服务端搜索）绑定。
  */
 export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {

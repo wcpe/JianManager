@@ -5,7 +5,7 @@ import { HealthPanel as HealthPanelView } from '@/components/views/instances/Hea
 /**
  * 端口 + 健康检查面板的应用接线层（ADR-097 a 范式）。
  *
- * 面板本体已迁入组件库并受控（不取数）；本层取实例与探针连接态后注入。
+ * 面板本体是受控视图（见 components/views，不取数）；本层取实例与探针连接态后注入。
  * 保留同名同路径的具名导出，使既有调用点无需改动。
  */
 export function HealthPanel({ instanceId }: { instanceId: number }) {

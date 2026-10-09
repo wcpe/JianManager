@@ -9,13 +9,13 @@ import {
   COMMAND_ORCHESTRATION_V1,
   DEFAULT_STABLE_PROFILE,
   DEFAULT_STRICT_THRESHOLDS,
-} from '@jianmanager/ui/lib/bot-load-presets'
-import type { BotLoadTemplate, BotLoadTemplateInput } from '@jianmanager/ui/lib/bot-load-types'
+} from '@/lib/bot-load-presets'
+import type { BotLoadTemplate, BotLoadTemplateInput } from '@/lib/bot-load-types'
 import {
   validateCommandSchedule,
   validateLoadProfile,
   validateThresholds,
-} from '@jianmanager/ui/lib/bot-load-validation'
+} from '@/lib/bot-load-validation'
 import { CommandPlanEditor } from '@/components/views/bot-load/CommandPlanEditor'
 import { LoadProfileEditor } from '@/components/views/bot-load/LoadProfileEditor'
 import { ThresholdEditor } from '@/components/views/bot-load/ThresholdEditor'

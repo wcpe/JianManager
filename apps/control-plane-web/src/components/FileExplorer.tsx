@@ -1,4 +1,4 @@
-// 实现已迁至 @jianmanager/ui（ADR-097），此处保留默认导出维持既有导入路径。
+// 实现已回迁应用侧（原 ADR-097 迁包已撤销），此处保留默认导出维持既有导入路径。
 //
 // 原接线层读 useDangerPermission('group') 计算门禁，但受控版 DangerConfirm 仅在调用点
 // 显式声明 scope 时才参与门禁判定，而本组件从未声明 scope —— 即该删除一直没有门禁。

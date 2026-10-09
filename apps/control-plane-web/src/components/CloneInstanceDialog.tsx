@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做代理候选取数、预检/提交两次写请求与提示文案。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做代理候选取数、预检/提交两次写请求与提示文案。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useInstances } from '@/api/instances'
@@ -22,7 +22,7 @@ interface CloneInstanceDialogProps {
 /**
  * 复制子服向导接线层（ADR-097 b 范式，原 FR-036 一键复制 / FR-231 高级筛选）。
  *
- * 视图本体已迁入组件库并受控（不取数、不发请求、不弹 toast）；本层负责：
+ * 视图本体是受控视图（见 components/views，不取数、不发请求、不弹 toast）；本层负责：
  * - 代理候选：`useInstances({ role: 'proxy' })` 取数后注入（原实现同源）；
  * - 「草稿 → 请求体」组装：`motd`/`levelName` 去空白后留空即不下发，`include`/`exclude` 仅在
  *   advanced 模式下解析为 glob 数组（请求语义留应用侧，视图只给表单原文）；

@@ -1,4 +1,4 @@
-// 视图已迁至 @jianmanager/ui（ADR-097）；本层只做候选取数、探测/预检/权限修复/导入写请求与提示文案。
+// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做候选取数、探测/预检/权限修复/导入写请求与提示文案。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
@@ -35,7 +35,7 @@ function apiMessage(err: unknown, fallback: string): string {
 /**
  * 导入现有服务器向导接线层（ADR-097 b 范式，原 FR-302 导入现有服务器 / FR-374 权限诊断与就地写预检）。
  *
- * 视图本体已迁入组件库并受控（不取数、不发请求、不弹 toast、不读路由）；本层负责：
+ * 视图本体是受控视图（见 components/views，不取数、不发请求、不弹 toast、不读路由）；本层负责：
  * - 候选取数：`useNodes()` 映射节点选项（含在线/启动中/离线状态文案）、
  *   `useNodeJDKs(query.nodeId)` 映射该节点的 JDK 选项（查询键由视图上报，选中节点变更或复位即重取）；
  * - 探测与预检：`useInspectImportDir()` 的 mutation 与 `checkNodePathAccess` 注入视图——

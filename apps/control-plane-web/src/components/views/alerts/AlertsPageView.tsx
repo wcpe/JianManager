@@ -48,13 +48,13 @@ import type {
   AlertChannelInfo,
   AlertEventInfo,
   AlertRuleInfo,
-} from '@jianmanager/ui/lib/alert-contracts'
+} from '@/lib/alert-contracts'
 import {
   formatSilenceWindow,
   levelStatusLevel,
   parseChannelIds,
   summarizeRules,
-} from '@jianmanager/ui/lib/alert-helpers'
+} from '@/lib/alert-helpers'
 
 /** 页内三个 Tab：规则 / 事件 / 渠道。 */
 export type AlertTab = 'rules' | 'events' | 'channels'

@@ -22,7 +22,7 @@ function hasInventoryAction(output: unknown, action: string): boolean {
 /**
  * 背包定制页的应用接线层（ADR-097 a 范式）。
  *
- * 视图本体已迁入组件库并受控；本层做三件事：按 manifest 发现背包能力（view / writeBasicAttrs）、
+ * 视图本体是受控视图（见 components/views）；本层做三件事：按 manifest 发现背包能力（view / writeBasicAttrs）、
  * 查询并解析背包视图、下发基础属性写。保留同路径的默认导出与同一套 props，调用点无需改动。
  */
 export default function InventorySegment({ instanceId }: { instanceId: number }) {
