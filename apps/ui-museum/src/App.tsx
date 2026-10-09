@@ -91,12 +91,6 @@ import {
   type ViewMode,
 } from '@jianmanager/ui'
 
-/**
- * 业务视图（@jianmanager/ui 的 components/views，原 biz-views 包已并入）——受控复合组件，与设计系统原语分列展示。
- * 它们由原语拼装、带自身交互状态，但不取数、不碰路由：数据与路由身份经 props 注入。
- */
-
-
 const rawSeries: RawSeries[] = [
   {
     metricKey: 'node_cpu_pct',
