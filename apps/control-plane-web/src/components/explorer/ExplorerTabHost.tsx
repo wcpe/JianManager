@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
 
-import ExplorerTabHost from '@jianmanager/ui/components/views/explorer/ExplorerTabHost'
+import ExplorerTabHost from '@/components/views/explorer/ExplorerTabHost'
 import ResourceExplorer from './ResourceExplorer'
 
 /**

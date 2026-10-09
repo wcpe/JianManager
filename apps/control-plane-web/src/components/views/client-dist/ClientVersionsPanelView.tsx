@@ -26,7 +26,7 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import type { ManifestFileLike } from '@/lib/client-publish-wizard'
 import { ClientFileTree } from '@/components/views/client-dist/ClientFileTree'
 

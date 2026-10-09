@@ -7,7 +7,7 @@ import { useGroups } from '@/api/groups'
 import { useTemplates } from '@/api/templates'
 import { useNodeJDKs } from '@/api/jdks'
 import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
-import CreateInstanceDialogView from '@jianmanager/ui/components/views/CreateInstanceDialog'
+import CreateInstanceDialogView from '@/components/views/CreateInstanceDialog'
 
 /**
  * 新建实例对话框的应用接线层（ADR-097 b 范式）。

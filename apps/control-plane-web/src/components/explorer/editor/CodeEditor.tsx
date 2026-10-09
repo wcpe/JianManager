@@ -1,4 +1,4 @@
-import CodeEditor from '@jianmanager/ui/components/views/explorer/CodeEditor'
+import CodeEditor from '@/components/views/explorer/CodeEditor'
 import { useThemeStore } from '@/stores/theme'
 
 /**

@@ -49,26 +49,8 @@ export * from './lib/brush'
 export * from './lib/chart-hover'
 export * from './lib/monitor-metrics'
 
-// 业务视图（原 @jianmanager/biz-views 并入）：受控复合组件，不取数/不碰路由/不发请求/不弹 toast
-export * from './components/views/TopLoadingBar'
-export * from './components/views/ReleaseNotes'
-export * from './components/views/UnifiedDiff'
-export * from './components/views/UntrustedFieldBadge'
-export * from './components/views/ClientDistFlowGuide'
-export * from './components/views/explorer/PromptDialog'
-export * from './components/views/explorer/Toolbar'
-export * from './components/views/explorer/editor/EditorShortcutsHelp'
 
-// ADR-097 起：应用业务组件按 a+b 双范式受控化并入，按域归档
-
-// instances 域（实例详情与控制台的分段/面板）
-export * from './components/views/CreateUserDialog'
-export * from './components/views/CreateInvitationDialog'
-export * from './components/views/CreateInstanceDialog'
-export * from './components/views/DangerConfirm'
-export * from './components/views/InstanceWizardPage'
 export * from './lib/instance-wizard-options'
-export * from './components/views/TemplatesPage'
 export * from './lib/template-apply'
 export * from './lib/roles'
 export * from './lib/nav-config'
@@ -80,24 +62,14 @@ export * from './lib/explorer-clipboard'
 export * from './lib/explorer-tabs'
 export * from './lib/explorer-clipboard-bus'
 export * from './lib/explorer-save-key'
-export * from './components/views/explorer/FileList'
 export * from './lib/file-entry'
 export * from './lib/explorer-language'
 export * from './lib/explorer-comment'
 export * from './lib/explorer-ide-extensions'
-export * from './components/views/explorer/CodeEditor'
-export * from './components/views/explorer/DecompileViewer'
 export * from './lib/archive-tree'
-export * from './components/views/explorer/SearchPanel'
-export * from './components/views/explorer/ArchiveViewer'
 export * from './lib/file-version'
-export * from './components/views/explorer/VersionDrawer'
 export * from './lib/discard-guard'
 export * from './lib/nav-history'
-export * from './components/views/explorer/ResourceExplorer'
-export * from './components/views/explorer/ExplorerTabHost'
-export { default as FileExplorer } from './components/views/explorer/FileExplorer'
-export type { FileExplorerProps } from './components/views/explorer/FileExplorer'
 export * from './lib/file-browser-capability'
 export * from './lib/storage-types'
 // 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics` 同名（两者语义不同，
@@ -117,7 +89,6 @@ export * from './lib/instance-summary'
 export * from './lib/node-list'
 export * from './lib/health-wall-types'
 export * from './lib/health-wall'
-export * from './lib/danger'
 export * from './lib/instance-prefetch'
 export * from './lib/console-log-types'
 export * from './lib/capabilities'
@@ -209,8 +180,6 @@ export * from './lib/client-dist-machines-contracts'
 export * from './lib/client-dist-security-contracts'
 // 显式列出而非 `export *`：`SummaryChip` 与 `./components/summary-chips` 同名但语义不同
 // （前者是可点击筛选 chip、后者是带状态等级的汇总 chip）；`ConfigSwitch` 已由
-// `./components/views/instances/ConfigSwitch` 导出。两者都不能在 barrel 里同时通配。
-// 需要 ConfigRow 版 SummaryChip 的调用方走深路径 `@jianmanager/ui/components/views/config-explorer/ConfigRow`。
 export * from './lib/client-dist-kpi'
 export * from './lib/client-dist-observability-contracts'
 export * from './lib/client-dist-ops-tab'
@@ -249,7 +218,6 @@ export type {
 export * from './lib/theme'
 // WorkbenchLeafParts 的 PageBreadcrumb 与 './components/layout' 的同名导出（类型）冲突，
 // 故显式列出其余导出；PageBreadcrumb 组件走深路径
-// '@jianmanager/ui/components/views/console/WorkbenchLeafParts'。
 export * from './lib/artifact-cache'
 export * from './lib/attribution'
 export * from './lib/backup'
@@ -380,7 +348,6 @@ export * from './lib/workspace-preset'
 
 // ==== FR-502 迁移批：新增视图按域补录 ====
 // 逐条列出以便逐个核对；同名冲突沿用本文件既有先例（显式列出，冲突名走深路径）。
-export * from './components/views/EditUserDialogView'
 // 显式列出而非 export *：AgentTokenOption 与同域其它视图同名（字段不同），
 // barrel 里不能同时通配；需要本模块版该类型的调用方走深路径。
 // audit 域
@@ -388,8 +355,6 @@ export * from './components/views/EditUserDialogView'
 // config-baselines 域
 // config-explorer 域
 // console 域
-// explorer 域
-export * from './components/views/explorer/FileTree'
 // import-server 域
 // instances 域
 // logs 域

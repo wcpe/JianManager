@@ -29,13 +29,13 @@ import {
   TableRow,
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
-import CreateUserDialogView, { type CreateUserNotice } from '@jianmanager/ui/components/views/CreateUserDialog'
-import CreateInvitationDialogView from '@jianmanager/ui/components/views/CreateInvitationDialog'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import CreateUserDialogView, { type CreateUserNotice } from '@/components/views/CreateUserDialog'
+import CreateInvitationDialogView from '@/components/views/CreateInvitationDialog'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import {
   EditUserDialogView,
   type EditUserValues,
-} from '@jianmanager/ui/components/views/EditUserDialogView'
+} from '@/components/views/EditUserDialogView'
 import {
   ConfigRow,
   ConfigSwitch,

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { History, Save, X } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
-import EditorShortcutsHelp from '@jianmanager/ui/components/views/explorer/editor/EditorShortcutsHelp'
+import EditorShortcutsHelp from '@/components/views/explorer/editor/EditorShortcutsHelp'
 import type {
   ConfigReadResult,
   CrossCheckIssue,

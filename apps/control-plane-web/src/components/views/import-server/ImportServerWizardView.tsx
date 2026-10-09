@@ -28,7 +28,7 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import { joinAbsPath, isPermissionErrorMessage } from '@jianmanager/ui/lib/import-server-path'
 
 /** 向导步骤：目录 → 探测结果 → 导入方式 → 实例配置。 */

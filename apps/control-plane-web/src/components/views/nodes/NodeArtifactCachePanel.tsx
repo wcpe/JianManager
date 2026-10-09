@@ -13,7 +13,7 @@ import {
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 
 /** 把 Unix 秒格式化为本地日期时间；0/空回「—」。 */
 function fmtTime(sec: number): string {

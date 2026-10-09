@@ -16,7 +16,7 @@ import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@jianmanager/ui/components/tabs'
 import { cn } from '@jianmanager/ui'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import type { BusinessResult } from '@jianmanager/ui/lib/business'
 import {
   buildSlotGrid,

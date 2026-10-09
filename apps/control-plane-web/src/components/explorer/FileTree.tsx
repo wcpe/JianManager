@@ -1,4 +1,4 @@
-import FileTree from '@jianmanager/ui/components/views/explorer/FileTree'
+import FileTree from '@/components/views/explorer/FileTree'
 import { fetchFileList } from '@/api/files'
 
 /**

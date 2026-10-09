@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
-import PromptDialog from '@jianmanager/ui/components/views/explorer/PromptDialog'
+import PromptDialog from '@/components/views/explorer/PromptDialog'
 import { breadcrumbTrail } from '@jianmanager/ui/lib/breadcrumb'
 import type { WorkspacePreset } from '@/lib/workspace-preset'
 

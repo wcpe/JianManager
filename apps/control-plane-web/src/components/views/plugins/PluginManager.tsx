@@ -34,7 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 
 const MANAGED_DIRS = ['plugins', 'mods', 'resourcepacks', 'datapacks'] as const
 

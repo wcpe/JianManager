@@ -18,7 +18,7 @@ import {
   ConfigViewToggle,
   type ConfigView,
 } from '@/components/views/config-explorer/ConfigRow'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import { Button } from '@jianmanager/ui/components/button'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import {

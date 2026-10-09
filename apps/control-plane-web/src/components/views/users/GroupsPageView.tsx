@@ -14,7 +14,7 @@ import { Users, Server, Bot, HardDrive } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Panel } from '@jianmanager/ui/components/panel'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import {
   CreateGroupDialogView,
   type CreateGroupValues,

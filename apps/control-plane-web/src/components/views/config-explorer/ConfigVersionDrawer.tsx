@@ -10,8 +10,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@jianmanager/ui/components/sheet'
-import { UnifiedDiff } from '@jianmanager/ui/components/views/UnifiedDiff'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
+import { UnifiedDiff } from '@/components/views/UnifiedDiff'
+import DangerConfirm from '@/components/views/DangerConfirm'
 import type { ConfigDiff, ConfigVersion } from '@jianmanager/ui/lib/config-contracts'
 
 /**
