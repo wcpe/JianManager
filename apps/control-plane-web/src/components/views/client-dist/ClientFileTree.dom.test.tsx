@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { screen, fireEvent } from '@testing-library/react'
 import { renderWithProviders } from '@/test/render'
 import { ClientFileTree } from '@/components/views/client-dist/ClientFileTree'
-import type { ManifestFileLike } from '@/lib/client-publish-wizard'
+import type { ManifestFileLike } from '@/lib/client-dist/client-publish-wizard'
 
 /**
  * ClientFileTree 拖拽编排 DOM 测试（FR-254）。

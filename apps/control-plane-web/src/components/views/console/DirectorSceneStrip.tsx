@@ -1,8 +1,8 @@
 import { useTranslation } from 'react-i18next'
 import { Gauge, Trash2, Zap } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
-import { MAX_PREHEAT_LIMIT, MIN_PREHEAT_LIMIT, sceneStatus } from '@/lib/director'
-import type { DirectorState, SceneStatus } from '@/lib/director'
+import { MAX_PREHEAT_LIMIT, MIN_PREHEAT_LIMIT, sceneStatus } from '@/lib/director/director'
+import type { DirectorState, SceneStatus } from '@/lib/director/director'
 
 export interface DirectorSceneStripProps {
   /** 场景列表（应用侧 store；此处只需 id 与展示名）。 */

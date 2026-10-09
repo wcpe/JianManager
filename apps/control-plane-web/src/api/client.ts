@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { isTokenExpired } from '@/lib/jwt'
+import { isTokenExpired } from '@/lib/auth/jwt'
 import { useAuthStore } from '@/stores/auth'
 
 const api = axios.create({

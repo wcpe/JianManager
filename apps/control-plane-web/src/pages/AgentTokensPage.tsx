@@ -10,7 +10,7 @@ import { useAgentTokens, useIssueAgentToken, useRevokeAgentToken, agentTokenStat
 import { mcpBaseUrl } from '@/api/agentObservability'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import { useDangerPermission } from '@/lib/danger'
+import { useDangerPermission } from '@/lib/shared/danger'
 import { Button } from '@jianmanager/ui/components/button'
 import { AgentTokensPageView } from '@/components/views/agent/AgentTokensPageView'
 import type { AgentTokenRow } from '@/components/views/agent/AgentTokensPageView'

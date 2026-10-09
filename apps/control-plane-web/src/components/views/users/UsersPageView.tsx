@@ -36,7 +36,7 @@ import { EditUserDialogView } from '@/components/views/EditUserDialogView'
 import type { EditUserValues } from '@/components/views/EditUserDialogView'
 import { ConfigRow, ConfigSwitch, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
 import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
-import { isPlatformAdmin } from '@/lib/roles'
+import { isPlatformAdmin } from '@/lib/shared/roles'
 
 /**
  * 用户行（本视图渲染所需的最小字段集）。

@@ -12,8 +12,8 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Download } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
-import { copyToClipboard } from '@/lib/clipboard'
-import type { ClientPullKey } from '@/lib/client-channel-types'
+import { copyToClipboard } from '@/lib/shared/clipboard'
+import type { ClientPullKey } from '@/lib/client-dist/client-channel-types'
 
 /** 内嵌更新器 jar 信息（容器经 `useUpdaterJarsInfo` 取数注入；结构与应用侧 API 类型同形）。 */
 export interface ClientUpdaterJarsInfo {

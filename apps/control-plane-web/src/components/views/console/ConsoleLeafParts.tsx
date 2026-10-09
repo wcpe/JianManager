@@ -13,9 +13,9 @@ import {
 } from '@jianmanager/ui/components/select'
 import { BotHealthBar } from '@/components/views/console/BotHealthBar'
 import { toneChipClass, type Tone } from '@jianmanager/ui/lib/tone'
-import type { BotSummaryGroup } from '@/lib/bot'
-import type { InstanceBotBadge as InstanceBotBadgeData } from '@/lib/bot-list'
-import type { GroupByDim } from '@/lib/bots-overview'
+import type { BotSummaryGroup } from '@/lib/bots/bot'
+import type { InstanceBotBadge as InstanceBotBadgeData } from '@/lib/bots/bot-list'
+import type { GroupByDim } from '@/lib/bots/bots-overview'
 
 // ── 实例树行内的 Bot 聚合徽标（FR-039）────────────────────────────────
 

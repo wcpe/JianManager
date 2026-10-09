@@ -29,7 +29,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import { joinAbsPath, isPermissionErrorMessage } from '@/lib/import-server-path'
+import { joinAbsPath, isPermissionErrorMessage } from '@/lib/import-server/import-server-path'
 
 /** 向导步骤：目录 → 探测结果 → 导入方式 → 实例配置。 */
 type Step = 'dir' | 'inspect' | 'mode' | 'config'

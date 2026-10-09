@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { DbRowsResult } from '@/api/db'
-import { normalizeColumns, normalizeRows, shouldShowEmptyRow } from '@/lib/db-rows-view'
+import { normalizeColumns, normalizeRows, shouldShowEmptyRow } from '@/lib/database/db-rows-view'
 
 /**
  * BUG-009 回归：后端把空结果序列化为 `rows: null` / `columns: null`，

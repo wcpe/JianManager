@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { QuotaPanel } from '@/components/views/console/QuotaPanel'
-import type { InstanceQuotaStatus } from '@/lib/quota-status'
+import type { InstanceQuotaStatus } from '@/lib/instances/quota-status'
 
 /**
  * 配额面板 · 受控视图测（ADR-097）。

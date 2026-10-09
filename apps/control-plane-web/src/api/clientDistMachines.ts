@@ -9,8 +9,8 @@ import api from '@/api/client'
 /**
  * 机器清单契约（FR-426）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type { ClientMachineSummary, ClientMachineEvent, ClientMachineListResponse, ClientMachineEventsResponse, MachineSortField } from '@/lib/client-dist-machines-contracts'
-import type { ClientMachineListResponse, ClientMachineEventsResponse, MachineSortField } from '@/lib/client-dist-machines-contracts'
+export type { ClientMachineSummary, ClientMachineEvent, ClientMachineListResponse, ClientMachineEventsResponse, MachineSortField } from '@/lib/client-dist/client-dist-machines-contracts'
+import type { ClientMachineListResponse, ClientMachineEventsResponse, MachineSortField } from '@/lib/client-dist/client-dist-machines-contracts'
 
 export function useClientDistMachines(params: {
   channelId?: string

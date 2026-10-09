@@ -4,8 +4,8 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { TerminalPane } from '@/components/views/console/TerminalPane'
-import type { ConsoleHistoryState } from '@/lib/console-history'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import type { ConsoleHistoryState } from '@/lib/console/console-history'
+import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 
 /**
  * 终端面板 · 受控视图测（ADR-097）。

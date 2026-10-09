@@ -3,7 +3,7 @@ import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { useAuthStore } from '@/stores/auth'
-import { Role } from '@/lib/danger'
+import { Role } from '@/lib/shared/danger'
 import DangerConfirm from './DangerConfirm'
 
 /** 构造仅供前端解码角色声明的测试 JWT。 */

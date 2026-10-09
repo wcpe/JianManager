@@ -2,10 +2,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 // 节点实体类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
-import type { NodeInfo } from '@/lib/node-types'
-export type { NodeInfo } from '@/lib/node-types'
-import type { ArchivedNode } from '@/lib/node-types'
-export type { ArchivedNode } from '@/lib/node-types'
+import type { NodeInfo } from '@/lib/nodes/node-types'
+export type { NodeInfo } from '@/lib/nodes/node-types'
+import type { ArchivedNode } from '@/lib/nodes/node-types'
+export type { ArchivedNode } from '@/lib/nodes/node-types'
 
 /** 节点排空结果（FR-048）。 */
 export interface DrainResult {

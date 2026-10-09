@@ -5,7 +5,7 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
-import { ALL_PERMISSION_NODE_IDS } from '@/lib/roles'
+import { ALL_PERMISSION_NODE_IDS } from '@/lib/shared/roles'
 import PermissionsPage from './PermissionsPage'
 
 function adminJwt(role = 10): string {

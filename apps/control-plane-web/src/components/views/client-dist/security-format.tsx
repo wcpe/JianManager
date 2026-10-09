@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- 视图与随其导出的纯逻辑/变体同文件（沿用原组织方式），非组件导出按仓库约定在此豁免 */
-import type { SecurityLevel } from '@/lib/client-dist-security-contracts'
+import type { SecurityLevel } from '@/lib/client-dist/client-dist-security-contracts'
 
 /**
  * 客户端分发安全侧的展示工具（FR-430 / ADR-088）。

@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- 安全侧共享展示件与查询读写同文件导出（仅影响 Fast Refresh） */
 import { useSearchParams } from 'react-router'
-import { readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
-import type { ClientDistQueryKey } from '@/lib/client-dist-query'
+import { readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist/client-dist-query'
+import type { ClientDistQueryKey } from '@/lib/client-dist/client-dist-query'
 
 /**
  * 页面 B「客户端分发运维」安全侧共享件（FR-430 / ADR-088）。

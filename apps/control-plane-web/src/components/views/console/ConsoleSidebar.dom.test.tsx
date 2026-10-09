@@ -6,7 +6,7 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { Boxes, HardDrive, LayoutDashboard, Server, ShieldCheck, Wrench } from 'lucide-react'
 import { ConsoleSidebar } from '@/components/views/console/ConsoleSidebar'
-import type { NavGroup } from '@/lib/nav-config'
+import type { NavGroup } from '@/lib/shared/nav-config'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 
 /**

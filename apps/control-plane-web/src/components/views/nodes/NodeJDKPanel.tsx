@@ -11,7 +11,7 @@ import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggl
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import { copyToClipboard } from '@/lib/clipboard'
+import { copyToClipboard } from '@/lib/shared/clipboard'
 
 /** JDK 厂商集（foojay 支持，可自定义其它发行版）。 */
 const VENDOR_OPTIONS: ComboboxOption[] = [

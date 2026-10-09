@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { ClientUpdaterCoreSelectorView } from '@/components/views/client-dist/ClientUpdaterCoreSelectorView'
 import type { ClientUpdaterCoreUploadOutcome, ClientUpdaterCoreUploadPayload } from '@/components/views/client-dist/ClientUpdaterCoreSelectorView'
 import { useUpdaterCoreVersions, useSelectUpdaterCore, useUploadUpdaterCore } from '@/api/clientChannels'
-import { useDangerPermission } from '@/lib/danger'
+import { useDangerPermission } from '@/lib/shared/danger'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback

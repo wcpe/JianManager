@@ -7,7 +7,7 @@ import { resetDb } from '@jianmanager/devmock/db'
 import { clearInjections } from '@jianmanager/devmock/inject'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
-import type { TerminalSessionManager } from '@/lib/terminal-session-manager'
+import type { TerminalSessionManager } from '@/lib/console/terminal-session-manager'
 
 /**
  * jsdom Blob 缺 `stream()` 的最小 polyfill（CI Node 20 真机踩坑）：
@@ -79,7 +79,7 @@ let terminalSessionManager: TerminalSessionManager | null = null
 
 beforeAll(async () => {
   server.listen({ onUnhandledRequest: 'error' })
-  ;({ terminalSessionManager } = await import('@/lib/terminal-session-manager'))
+  ;({ terminalSessionManager } = await import('@/lib/console/terminal-session-manager'))
 })
 afterEach(() => {
   cleanup()

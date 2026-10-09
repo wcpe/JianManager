@@ -35,13 +35,13 @@ import {
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import type { AssetInfo, AssetType } from '@/lib/asset-contracts'
-import type { AssetTypeGroup, JDKMatrixItem, RuntimeMatrixEntry } from '@/lib/runtime-assets-contracts'
-import { formatRelativeTime } from '@/lib/relative-time'
+import type { AssetInfo, AssetType } from '@/lib/artifacts/asset-contracts'
+import type { AssetTypeGroup, JDKMatrixItem, RuntimeMatrixEntry } from '@/lib/runtime-assets/runtime-assets-contracts'
+import { formatRelativeTime } from '@/lib/shared/relative-time'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 import { cn } from '@jianmanager/ui'
-import { buildRuntimeGrid, DEFAULT_ASSET_FILTER, filterAssetGroups, formatBytes, RUNTIME_TYPE_LABEL, shortSha } from '@/lib/runtime-assets-view'
-import type { AssetFilter } from '@/lib/runtime-assets-view'
+import { buildRuntimeGrid, DEFAULT_ASSET_FILTER, filterAssetGroups, formatBytes, RUNTIME_TYPE_LABEL, shortSha } from '@/lib/runtime-assets/runtime-assets-view'
+import type { AssetFilter } from '@/lib/runtime-assets/runtime-assets-view'
 
 /** 状态等级 → 色点类（实例状态前导点）。 */
 const LEVEL_DOT: Record<StatusLevel, string> = {

@@ -2,8 +2,8 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Scale } from 'lucide-react'
 
-import type { InstanceInfo } from '@/lib/instance-types'
-import type { NodeInfo } from '@/lib/node-types'
+import type { InstanceInfo } from '@/lib/instances/instance-types'
+import type { NodeInfo } from '@/lib/nodes/node-types'
 import { cn } from '@jianmanager/ui'
 import {
   ResourceTree,
@@ -19,12 +19,12 @@ import {
 import { ThemeSwitcher } from '@/components/views/console/ThemeSwitcher'
 import type { ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
-import { statusDotKind } from '@/lib/instance-tree'
-import type { NavEntry } from '@/lib/nav-config'
-import { resolveWorkspacePath } from '@/lib/workspace-navigation'
-import type { WorkspaceDef } from '@/lib/workspace-navigation'
-import { isDeepLink, landingPathOf } from '@/lib/use-workspace-navigation'
-import type { MemberStatusCounts } from '@/lib/topology'
+import { statusDotKind } from '@/lib/instances/instance-tree'
+import type { NavEntry } from '@/lib/shared/nav-config'
+import { resolveWorkspacePath } from '@/lib/console/workspace-navigation'
+import type { WorkspaceDef } from '@/lib/console/workspace-navigation'
+import { isDeepLink, landingPathOf } from '@/lib/hooks/use-workspace-navigation'
+import type { MemberStatusCounts } from '@/lib/networks/topology'
 
 /**
  * 工作区外壳侧栏（FR-496 阶段 6）：把「资源优先工作区」原型（`.tmp/设计/`）的侧栏接进主控台。

@@ -3910,7 +3910,7 @@
     "lagDist": [{ lag, count }]              // current_version - toVersion，按 lag 升序
   }
   ```
-- **KPI 语义（FR-356）**: `summary.successRate`/`failStaticRate`/`rollbackRate` 为 **更新遥测**率（`client_telemetry.result`，分母 `updateTotal`）；与 stats 的 HTTP 请求率严格区分。`activeMachines`+`activeMachinesExact` 为活跃客户端权威源。前端共享字典见 `apps/control-plane-web/src/lib/client-dist-kpi.ts` 与 `docs/specs/client-dist-kpi-semantics/spec.md`。
+- **KPI 语义（FR-356）**: `summary.successRate`/`failStaticRate`/`rollbackRate` 为 **更新遥测**率（`client_telemetry.result`，分母 `updateTotal`）；与 stats 的 HTTP 请求率严格区分。`activeMachines`+`activeMachinesExact` 为活跃客户端权威源。前端共享字典见 `apps/control-plane-web/src/lib/lib/client-dist/client-dist-kpi.ts` 与 `docs/specs/client-dist-kpi-semantics/spec.md`。
 - **错误**: 400 `INVALID_RANGE`（from/to 非法或 `to<=from`，或 range 非枚举）| 403 `FORBIDDEN`（非平台管理员）| 500 `INTERNAL_ERROR`
 - **说明**: 未知 `channelId` 返 200 空时序 + 零汇总（不 404，避免泄露频道存在性、便于前端统一空态）。machineId 客户端可伪造、不可信，仅统计近似（ADR-023）
 

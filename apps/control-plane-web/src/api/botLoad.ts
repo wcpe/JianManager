@@ -4,16 +4,16 @@ import api from '@/api/client'
 /**
  * 发压容量与预检契约已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type { BotLoadNodeCapacity, BotLoadAllocation, BotLoadPreflightResult } from '@/lib/bot-load-types'
-import type { BotLoadNodeCapacity, BotLoadPreflightResult } from '@/lib/bot-load-types'
+export type { BotLoadNodeCapacity, BotLoadAllocation, BotLoadPreflightResult } from '@/lib/bot-load/bot-load-types'
+import type { BotLoadNodeCapacity, BotLoadPreflightResult } from '@/lib/bot-load/bot-load-types'
 
 // 命令/曲线/阈值类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
-import type { BotLoadCommandSchedule, BotLoadProfile, BotLoadThresholds } from '@/lib/bot-load-types'
-export type { BotLoadCommand, BotLoadCommandSchedule, BotLoadProfile, BotLoadThresholds } from '@/lib/bot-load-types'
+import type { BotLoadCommandSchedule, BotLoadProfile, BotLoadThresholds } from '@/lib/bot-load/bot-load-types'
+export type { BotLoadCommand, BotLoadCommandSchedule, BotLoadProfile, BotLoadThresholds } from '@/lib/bot-load/bot-load-types'
 
 // 模板类型已随命令/曲线/阈值一并迁至 `@jianmanager/ui`；此处转出，调用点零改动。
-import type { BotLoadTemplate, BotLoadTemplateInput } from '@/lib/bot-load-types'
-export type { BotLoadTemplate, BotLoadTemplateInput } from '@/lib/bot-load-types'
+import type { BotLoadTemplate, BotLoadTemplateInput } from '@/lib/bot-load/bot-load-types'
+export type { BotLoadTemplate, BotLoadTemplateInput } from '@/lib/bot-load/bot-load-types'
 
 export interface BotLoadTemplateListParams {
   page?: number

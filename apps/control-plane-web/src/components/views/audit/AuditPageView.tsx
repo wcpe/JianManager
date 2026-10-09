@@ -25,10 +25,10 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import type { AuditLogInfo } from '@/lib/audit-contracts'
-import { formatAuditDetail } from '@/lib/audit-filters'
-import type { AuditFilterState } from '@/lib/audit-filters'
-import { useVirtualRows } from '@/lib/virtual-list'
+import type { AuditLogInfo } from '@/lib/audit/audit-contracts'
+import { formatAuditDetail } from '@/lib/audit/audit-filters'
+import type { AuditFilterState } from '@/lib/audit/audit-filters'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { cn } from '@jianmanager/ui'
 
 /**

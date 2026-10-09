@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-import { FAVORITES_KEY, RECENT_KEY, getFavoriteServers, getRecentServers, recordRecentServer, removeServer, subscribeServerSelection, toggleFavoriteServer } from '@/lib/server-selection'
-import type { StoredInstance } from '@/lib/server-selection'
+import { FAVORITES_KEY, RECENT_KEY, getFavoriteServers, getRecentServers, recordRecentServer, removeServer, subscribeServerSelection, toggleFavoriteServer } from '@/lib/console/server-selection'
+import type { StoredInstance } from '@/lib/console/server-selection'
 
 const a: StoredInstance = { id: 1, uuid: 'i-a', nodeId: 1, name: 'a', status: 'RUNNING' }
 const b: StoredInstance = { id: 2, uuid: 'i-b', nodeId: 1, name: 'b', status: 'STOPPED' }

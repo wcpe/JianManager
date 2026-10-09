@@ -1,5 +1,5 @@
 import { SessionOverview as SessionOverviewView } from '@/components/views/bot-load/session/SessionOverviewParts'
-import type { SessionTab } from '@/lib/bot-load-types'
+import type { SessionTab } from '@/lib/bot-load/bot-load-types'
 import { useSessionEvents } from './SessionEventProvider'
 
 /**

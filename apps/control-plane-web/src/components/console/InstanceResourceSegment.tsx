@@ -1,13 +1,13 @@
 // 外壳已回迁应用侧（原 ADR-097 迁包已撤销）；本层只把三段内容接线层注入插槽。
 import InstanceResourceSegmentView from '@/components/views/console/InstanceResourceSegmentView'
-import type { ResourceSegment } from '@/lib/instance-console-tabs'
+import type { ResourceSegment } from '@/lib/instances/instance-console-tabs'
 
 import InstanceConfigSurfacePanel from './InstanceConfigSurfacePanel'
 import InstanceEnvSegment from './InstanceEnvSegment'
 import WorkspaceCardBody from './WorkspaceCardBody'
 
 /** 文件配置页签内的分段（FR-413；FR-451 增「关键配置」段）。类型定义已回迁应用侧（与控制台页签解析同源）。 */
-export type { ResourceSegment } from '@/lib/instance-console-tabs'
+export type { ResourceSegment } from '@/lib/instances/instance-console-tabs'
 
 interface InstanceResourceSegmentProps {
   instanceId: number

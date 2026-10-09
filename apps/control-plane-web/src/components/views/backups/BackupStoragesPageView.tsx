@@ -38,8 +38,8 @@ import {
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import { validateRequired, validateEnvRef, validateFields, hasErrors } from '@/lib/form-validation'
-import { useFieldGate } from '@/lib/use-field-gate'
+import { validateRequired, validateEnvRef, validateFields, hasErrors } from '@/lib/shared/form-validation'
+import { useFieldGate } from '@/lib/hooks/use-field-gate'
 
 /** 可选存储类型（local 由内置「本机存储」独占，此页只管远程后端）。 */
 const TYPES = ['s3', 'sftp', 'webdav'] as const

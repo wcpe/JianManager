@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commentTokensFor, commentTokensForFilename } from '@/lib/explorer-comment'
+import { commentTokensFor, commentTokensForFilename } from '@/lib/explorer/explorer-comment'
 
 describe('commentTokensFor', () => {
   it('uses # for yaml/properties/toml/plain', () => {

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useBots, useBotSummary, useBotBatch, useSetBotBehavior, useDeleteBot } from '@/api/bots'
-import type { BotBatchFilter } from '@/lib/bot'
+import type { BotBatchFilter } from '@/lib/bots/bot'
 import CreateBotDialog from './CreateBotDialog'
 import BotSegmentView from '@/components/views/instances/BotSegment'
 

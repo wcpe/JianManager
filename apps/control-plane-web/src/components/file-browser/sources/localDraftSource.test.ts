@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { localDraftSource } from '@/lib/file-sources'
-import type { LocalDraftFile } from '@/lib/file-sources'
+import { localDraftSource } from '@/lib/file-browser/file-sources'
+import type { LocalDraftFile } from '@/lib/file-browser/file-sources'
 import { PREVIEW_MAX_BYTES } from './instanceSource'
 
 /** 造一个含指定文本内容的本地 File。 */

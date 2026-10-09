@@ -27,7 +27,7 @@ import { SidebarNavLink } from '@/components/views/console/SidebarNavLink'
 import { ThemeSwitcher } from '@/components/views/console/ThemeSwitcher'
 import type { ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
-import type { NavGroup, NavSection } from '@/lib/nav-config'
+import type { NavGroup, NavSection } from '@/lib/shared/nav-config'
 
 /** 分节小标题图标（仅视觉，折叠态不显）。 */
 const SECTION_ICON: Record<string, LucideIcon> = {

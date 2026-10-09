@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { GroupsTabView } from '@/components/views/client-dist/SecurityGroupsTabView'
-import type { SaveSecurityGroupRequest } from '@/lib/client-dist-security-contracts'
+import type { SaveSecurityGroupRequest } from '@/lib/client-dist/client-dist-security-contracts'
 import { useClientSecurityGroups, useCreateClientSecurityGroup } from '@/api/clientDistSecurity'
 
 /**

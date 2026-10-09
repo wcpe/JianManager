@@ -7,8 +7,8 @@ import api from '@/api/client'
 
 // 业务动作契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的函数签名使用。
-import type { BusinessManifest, BusinessResult, BusinessWriteOptions } from '@/lib/business'
-export type { BusinessAction, BusinessManifest, BusinessResult, BusinessWriteOptions } from '@/lib/business'
+import type { BusinessManifest, BusinessResult, BusinessWriteOptions } from '@/lib/console/business'
+export type { BusinessAction, BusinessManifest, BusinessResult, BusinessWriteOptions } from '@/lib/console/business'
 
 /**
  * 取某实例的业务能力清单（JBIS 元查询，GET /business/manifest）。

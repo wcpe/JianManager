@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
-import { ConsoleLineBuffer } from '@/lib/console-line-buffer'
-import type { LogLine } from '@/lib/console-log-line'
+import { ConsoleLineBuffer } from '@/lib/console/console-line-buffer'
+import type { LogLine } from '@/lib/console/console-log-line'
 import { renderWithProviders } from '@/test/render'
 import ConsoleOutputView from './ConsoleOutputView'
 

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { MachineListPanelView } from '@/components/views/client-dist/MachineListPanelView'
 import { MachineTimelineView } from '@/components/views/client-dist/MachineTimelineView'
-import type { ClientMachineSummary, MachineSortField } from '@/lib/client-dist-machines-contracts'
+import type { ClientMachineSummary, MachineSortField } from '@/lib/client-dist/client-dist-machines-contracts'
 import ClientDistExportButton from '@/components/client-dist/ClientDistExportButton'
 import { useClientDistMachines, useClientMachineEvents } from '@/api/clientDistMachines'
 

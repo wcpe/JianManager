@@ -16,8 +16,8 @@ import {
 } from '@jianmanager/ui/components/scrollable-dialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { Input } from '@jianmanager/ui/components/input'
-import { validateRequired, minLength, validateFields, hasErrors } from '@/lib/form-validation'
-import { useFieldGate } from '@/lib/use-field-gate'
+import { validateRequired, minLength, validateFields, hasErrors } from '@/lib/shared/form-validation'
+import { useFieldGate } from '@/lib/hooks/use-field-gate'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type CreateUserNotice = (kind: 'success' | 'error', message: string) => void

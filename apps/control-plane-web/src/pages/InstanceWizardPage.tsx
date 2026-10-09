@@ -5,7 +5,7 @@ import { useQueryClient, useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import type { WizardTemplateOption } from '@/components/views/InstanceWizardPage'
-import { initialWizardNodeId } from '@/lib/instance-wizard-options'
+import { initialWizardNodeId } from '@/lib/instances/instance-wizard-options'
 import { InstanceWizardPage as InstanceWizardView } from '@/components/views/InstanceWizardPage'
 import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
 import api from '@/api/client'

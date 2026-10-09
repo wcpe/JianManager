@@ -24,10 +24,10 @@ import {
 } from '@jianmanager/ui/components/select'
 import { ListSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import { isNetworkDownloadFailure } from '@/lib/download-failure'
-import { isTerminalTask, TASK_KIND_LABEL_KEYS } from '@/lib/task-status'
-import type { Task, TaskLog, TaskState } from '@/lib/task-status'
-import { useVirtualRows } from '@/lib/virtual-list'
+import { isNetworkDownloadFailure } from '@/lib/client-dist/download-failure'
+import { isTerminalTask, TASK_KIND_LABEL_KEYS } from '@/lib/tasks/task-status'
+import type { Task, TaskLog, TaskState } from '@/lib/tasks/task-status'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { cn } from '@jianmanager/ui'
 
 /** 任务状态 → Badge 变体与文案键。 */

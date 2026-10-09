@@ -33,8 +33,8 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
-import type { BlockIPRequest, ChannelProtectionMode, ClientChannelSecuritySummary, ClientProtectionAction, KeySecurityState, ProtectionActionStatus, SecurityTargetType, SetChannelProtectionRequest, SetKeyStateRequest } from '@/lib/client-dist-security-contracts'
-import type { ClientChannel, ClientPullKey } from '@/lib/client-channel-types'
+import type { BlockIPRequest, ChannelProtectionMode, ClientChannelSecuritySummary, ClientProtectionAction, KeySecurityState, ProtectionActionStatus, SecurityTargetType, SetChannelProtectionRequest, SetKeyStateRequest } from '@/lib/client-dist/client-dist-security-contracts'
+import type { ClientChannel, ClientPullKey } from '@/lib/client-dist/client-channel-types'
 import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime, statusVariant } from '@/components/views/client-dist/security-format'
 
 /** 当前打开的处置模态（`null` = 全部关闭）。 */

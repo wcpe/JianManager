@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { decodeJwt } from '@/lib/jwt'
+import { decodeJwt } from '@/lib/auth/jwt'
 
 /** 登录/恢复后异步拉取 /auth/me，填充权限 store（失败由 store 自身回落）。 */
 function schedulePermissionsLoad(): void {
@@ -57,7 +57,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     void import('@/stores/permissions').then((m) => m.usePermissionsStore.getState().reset())
     // 登出即整体释放全部终端会话（FR-295/296，ADR-067）：连接常驻管理器不随组件卸载断开，
     // 必须在此统一 dispose 防孤儿 WS。动态 import 避免把会话管理器卷进首屏 chunk。
-    void import('@/lib/terminal-session-manager').then((m) => m.terminalSessionManager.disposeAll())
+    void import('@/lib/console/terminal-session-manager').then((m) => m.terminalSessionManager.disposeAll())
   },
 
   loadFromStorage: () => {

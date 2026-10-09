@@ -17,10 +17,10 @@ import {
 } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import type { BusinessResult } from '@/lib/business'
-import type { EconomyLeaderboardRow, EconomyMirrorRow } from '@/lib/economy'
-import { aggregateByCurrency, fmtEpochMillis, isValidAmount } from '@/lib/economy-view'
-import type { EconomyLedgerRow } from '@/lib/economy-view'
+import type { BusinessResult } from '@/lib/console/business'
+import type { EconomyLeaderboardRow, EconomyMirrorRow } from '@/lib/instances/economy'
+import { aggregateByCurrency, fmtEpochMillis, isValidAmount } from '@/lib/instances/economy-view'
+import type { EconomyLedgerRow } from '@/lib/instances/economy-view'
 
 /**
  * 经济定制页（JBIS，FR-123，见 ADR-026/028/029）。

@@ -20,8 +20,8 @@ import {
   indentOnInput,
   bracketMatching,
 } from '@codemirror/language'
-import { languageExtensionFor } from '@/lib/explorer-language'
-import { ideExtensions } from '@/lib/explorer-ide-extensions'
+import { languageExtensionFor } from '@/lib/explorer/explorer-language'
+import { ideExtensions } from '@/lib/explorer/explorer-ide-extensions'
 
 /**
  * 共享 CodeMirror 6 编辑器（FR-070 编辑器基础）。

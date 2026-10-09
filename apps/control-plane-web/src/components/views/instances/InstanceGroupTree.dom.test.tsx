@@ -5,7 +5,7 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import { InstanceGroupTree, INSTANCE_DND_MIME } from '@/components/views/instances/InstanceGroupTree'
-import type { InstanceGroupNode } from '@/lib/instance-group'
+import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 
 /**
  * FR-165 分组树 · 受控视图测（ADR-097 b 范式）。

@@ -27,9 +27,9 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import { composeScopeKey, isValidScopeKey, scopeKindOf, scopeValueOf, shortHash } from '@/lib/config-baseline'
-import type { ScopeKind } from '@/lib/config-baseline'
-import type { InstanceGroupNode } from '@/lib/instance-group'
+import { composeScopeKey, isValidScopeKey, scopeKindOf, scopeValueOf, shortHash } from '@/lib/config-explorer/config-baseline'
+import type { ScopeKind } from '@/lib/config-explorer/config-baseline'
+import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 
 /**
  * 配置基线行（本视图渲染与编辑回填所需的最小字段集）。

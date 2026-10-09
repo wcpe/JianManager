@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { applyStreamFrame, createSessionLiveState, sumCommandCounts } from '@/lib/bot-load-session-store'
-import type { BotLoadRunV2 } from '@/lib/bot-load-types'
+import { applyStreamFrame, createSessionLiveState, sumCommandCounts } from '@/lib/bot-load/bot-load-session-store'
+import type { BotLoadRunV2 } from '@/lib/bot-load/bot-load-types'
 
 function sampleRun(partial?: Partial<BotLoadRunV2>): BotLoadRunV2 {
   return {

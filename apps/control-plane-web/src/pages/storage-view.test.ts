@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { ArchiveSummary, DirUsage } from '@/api/storage'
-import { formatBytes, deriveArchive, sortDirsByUsage, buildCrumbs, joinStoragePath } from '@/lib/storage-view'
+import { formatBytes, deriveArchive, sortDirsByUsage, buildCrumbs, joinStoragePath } from '@/lib/file-browser/storage-view'
 
 function dir(p: Partial<DirUsage>): DirUsage {
   return {

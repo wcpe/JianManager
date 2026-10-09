@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { favoritesKey, loadFavorites, saveFavorites, isFavorite, toggleFavorite, removeFavorite } from '@/lib/config-favorites'
-import type { FavoritesStorage } from '@/lib/config-favorites'
+import { favoritesKey, loadFavorites, saveFavorites, isFavorite, toggleFavorite, removeFavorite } from '@/lib/config-explorer/config-favorites'
+import type { FavoritesStorage } from '@/lib/config-explorer/config-favorites'
 
 /** 内存 storage（模拟 localStorage）。 */
 function memStorage(initial: Record<string, string> = {}): FavoritesStorage & { data: Record<string, string> } {

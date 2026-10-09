@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { BusinessEvent } from '@/api/economy'
 import type { EconomyMirrorRow } from '@/api/economy'
-import { toLedgerRow, toLedgerRows, isValidAmount, canQueryLeaderboard, fmtEpochMillis, sumDecimalStrings, aggregateByCurrency } from '@/lib/economy-view'
+import { toLedgerRow, toLedgerRows, isValidAmount, canQueryLeaderboard, fmtEpochMillis, sumDecimalStrings, aggregateByCurrency } from '@/lib/instances/economy-view'
 
 /** 构造一条经济业务事件 envelope（模拟后端 GET /business/events 的 BusinessEvent 行）。 */
 function evt(id: number, data: Record<string, string> | null, extra: Partial<BusinessEvent> = {}): BusinessEvent {

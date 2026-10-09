@@ -1,7 +1,7 @@
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
-import type { ClientRuntimeOverview } from '@/lib/client-runtime-contracts'
+import type { ClientRuntimeOverview } from '@/lib/client-dist/client-runtime-contracts'
 import { OpsClientsTabView } from '@/components/views/client-dist/OpsClientsTabView'
-import type { ObsWindow } from '@/lib/obs-window'
+import type { ObsWindow } from '@/lib/metrics/obs-window'
 import { ObsOverviewSection } from './ObsOverviewSection'
 
 /**

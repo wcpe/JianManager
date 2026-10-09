@@ -5,7 +5,7 @@ import { Toaster } from 'sonner'
 import { PageSkeleton } from '@jianmanager/ui/components/layout'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
-import { useLinkIntentPrefetch, useSidebarShortcutWarmup } from '@/lib/route-prefetch'
+import { useLinkIntentPrefetch, useSidebarShortcutWarmup } from '@/lib/shared/route-prefetch'
 
 const LoginPage = lazy(() => import('./pages/LoginPage'))
 const SetupPage = lazy(() => import('./pages/SetupPage'))

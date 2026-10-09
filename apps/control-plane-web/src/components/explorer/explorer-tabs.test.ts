@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { emptyTabsState, openTab, closeTab, activateTab, floatTab, dockTab, updateTabContext, titleFromPath, resetTabIdSeq, MAX_EXPLORER_TABS, MAX_EXPLORER_FLOATS } from '@/lib/explorer-tabs'
+import { emptyTabsState, openTab, closeTab, activateTab, floatTab, dockTab, updateTabContext, titleFromPath, resetTabIdSeq, MAX_EXPLORER_TABS, MAX_EXPLORER_FLOATS } from '@/lib/explorer/explorer-tabs'
 
 describe('explorer-tabs（FR-376）', () => {
   beforeEach(() => {

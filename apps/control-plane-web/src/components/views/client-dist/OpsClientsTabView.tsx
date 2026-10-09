@@ -5,11 +5,11 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import type { ChartSeries } from '@jianmanager/ui'
-import type { ClientRuntimeOverview, ClientRuntimeState } from '@/lib/client-runtime-contracts'
+import type { ClientRuntimeOverview, ClientRuntimeState } from '@/lib/client-dist/client-runtime-contracts'
 import type { ReactNode } from 'react'
 import { LinkableDistPanel, TrendCard, ErrorPanel, distBuckets, fmtTime, fmtRate, lagLabel, parseLagLabel, platformLabel, reversePlatformLabel, runtimeUpdateSeries } from '@/components/views/client-dist/OpsShared'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
-import { KPI_I18N } from '@/lib/client-dist-kpi'
+import { KPI_I18N } from '@/lib/client-dist/client-dist-kpi'
 
 /**
  * 页面 B · 机器 / 客户端 Tab（FR-430，迁自旧监控页 `ClientsTab` + `ObsOverviewSection`）。

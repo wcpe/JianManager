@@ -10,9 +10,9 @@ import {
 } from '@jianmanager/ui/components/select'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import { BehaviorConfigDialog } from '@/components/views/bots/BotListParts'
-import { groupFilter } from '@/lib/bots-overview'
-import type { GroupByDim, OverviewFilter } from '@/lib/bots-overview'
-import type { BotBatchAction, BotSummaryGroup } from '@/lib/bot'
+import { groupFilter } from '@/lib/bots/bots-overview'
+import type { GroupByDim, OverviewFilter } from '@/lib/bots/bots-overview'
+import type { BotBatchAction, BotSummaryGroup } from '@/lib/bots/bot'
 
 /** 批量下发请求体（逐组调用时由本组件构造）。 */
 export interface BotBatchBody {

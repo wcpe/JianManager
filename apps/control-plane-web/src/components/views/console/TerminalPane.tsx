@@ -7,9 +7,9 @@ import { cn } from '@jianmanager/ui'
 import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 import { InstanceConsoleView } from '@/components/views/console/InstanceConsoleView'
 import { ConsoleImmersiveMode } from '@/components/views/console/ConsoleImmersiveMode'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
-import type { FetchTerminalCreds } from '@/lib/terminal-session-manager'
-import type { ConsoleHistoryState } from '@/lib/console-history'
+import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
+import type { FetchTerminalCreds } from '@/lib/console/terminal-session-manager'
+import type { ConsoleHistoryState } from '@/lib/console/console-history'
 
 /**
  * 工作区终端面板：为单个实例打开控制台（ADR-009 / FR-037）。

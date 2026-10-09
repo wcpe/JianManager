@@ -7,7 +7,7 @@ import { loginMockUser } from '@/test/auth'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { useConsoleStore } from '@/stores/console'
-import { ALL_PERMISSION_NODE_IDS, DEFAULT_ROLE_NODES } from '@/lib/roles'
+import { ALL_PERMISSION_NODE_IDS, DEFAULT_ROLE_NODES } from '@/lib/shared/roles'
 import WorkspaceSidebar from './WorkspaceSidebar'
 
 /**

@@ -2,7 +2,7 @@
 import { useSearchParams } from 'react-router'
 import { useGroups, useCreateGroup, useUpdateGroup, useUpdateGroupQuota, useDeleteGroup } from '@/api/groups'
 import GroupMembersDialog from '@/components/groups/GroupMembersDialog'
-import { useDangerPermission } from '@/lib/danger'
+import { useDangerPermission } from '@/lib/shared/danger'
 import { GroupsPageView } from '@/components/views/users/GroupsPageView'
 import type { GroupPanel } from '@/components/views/users/GroupsPageView'
 

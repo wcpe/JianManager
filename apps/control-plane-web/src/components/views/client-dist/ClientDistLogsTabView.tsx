@@ -37,9 +37,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
-import type { ClientDistEvent, ClientDistEventDetail } from '@/lib/client-dist-events-contracts'
-import type { ClientDistQuery, ClientDistQueryKey } from '@/lib/client-dist-query'
-import type { ClientDistSecurityLogItem, ClientDistSecurityLogType } from '@/lib/client-dist-security-contracts'
+import type { ClientDistEvent, ClientDistEventDetail } from '@/lib/client-dist/client-dist-events-contracts'
+import type { ClientDistQuery, ClientDistQueryKey } from '@/lib/client-dist/client-dist-query'
+import type { ClientDistSecurityLogItem, ClientDistSecurityLogType } from '@/lib/client-dist/client-dist-security-contracts'
 import { OPS_ALL, ResultBadge, fmtTime, kindLabel, targetOf } from '@/components/views/client-dist/OpsShared'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 

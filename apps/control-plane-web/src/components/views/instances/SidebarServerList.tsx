@@ -4,7 +4,7 @@ import { Star } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
 import InstanceStatusDot from '@/components/views/instances/InstanceStatusDot'
-import type { StoredInstance } from '@/lib/server-selection'
+import type { StoredInstance } from '@/lib/console/server-selection'
 
 /** 最近打开在侧栏的展示上限（与存储层的 LRU 上限独立）。 */
 export const SIDEBAR_RECENT_LIMIT = 8

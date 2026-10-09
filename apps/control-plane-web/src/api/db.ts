@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import type { DbTableInfo, DbRowsResult } from '@/lib/db-contracts'
+import type { DbTableInfo, DbRowsResult } from '@/lib/database/db-contracts'
 import api from '@/api/client'
 
 /**
@@ -11,7 +11,7 @@ import api from '@/api/client'
 /**
  * 数据库浏览契约（FR-084）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type { DbTableInfo, DbColumn, DbRowsResult } from '@/lib/db-contracts'
+export type { DbTableInfo, DbColumn, DbRowsResult } from '@/lib/database/db-contracts'
 
 /** 行查询参数：分页 / 排序 / 简单过滤（列必须命中表列，否则后端忽略）。 */
 export interface DbRowsParams {

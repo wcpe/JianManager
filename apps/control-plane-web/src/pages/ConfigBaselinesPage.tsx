@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { useBaselineDrift, useConfigBaselines, useConvergeBaseline, useDeleteBaseline, useUpsertBaseline } from '@/api/configBaselines'
 import { useInstanceGroups } from '@/api/instanceGroups'
-import { useDangerPermission } from '@/lib/danger'
+import { useDangerPermission } from '@/lib/shared/danger'
 import { ConfigBaselinesPageView } from '@/components/views/config-baselines/ConfigBaselinesPageView'
 
 /**

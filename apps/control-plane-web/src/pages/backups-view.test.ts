@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { backupStatusKey, backupStatusLevel, isActiveStatus, hasActiveBackup, summarizeBackups, countDependents, isIncrementalChild, formatSizeMb } from '@/lib/backup'
-import type { BackupLike } from '@/lib/backup'
+import { backupStatusKey, backupStatusLevel, isActiveStatus, hasActiveBackup, summarizeBackups, countDependents, isIncrementalChild, formatSizeMb } from '@/lib/backups/backup'
+import type { BackupLike } from '@/lib/backups/backup'
 
 const mk = (over: Partial<BackupLike>): BackupLike => ({
   id: 1,

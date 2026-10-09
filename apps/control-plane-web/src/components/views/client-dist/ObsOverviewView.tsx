@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
-import type { ClientDistObservability } from '@/lib/client-dist-stats-contracts'
+import type { ClientDistObservability } from '@/lib/client-dist/client-dist-stats-contracts'
 import { InsightCards } from '@/components/views/client-dist/InsightCards'
 import { UpdateHeatmap } from '@/components/views/client-dist/UpdateHeatmap'
 
