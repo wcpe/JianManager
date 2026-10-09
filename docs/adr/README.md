@@ -16,7 +16,8 @@
 
 ## 索引（最近新增）
 
-- [ADR-097](097-business-component-contract-extraction.md) 应用业务组件受控化并入 @jianmanager/ui（FR-502：a+b 双范式——纯读走外壳取数 + props 注入、含写走受控 + 回调注入；增强 ADR-064、兑现 ADR-058）
+- [ADR-098](098-business-views-return-to-app.md) 业务视图与业务契约退回应用，组件库回归设计系统（**取代 ADR-097**：撤销业务组件并入包的归属决策；a+b 双范式作为组件写法保留，包内只留设计系统）
+- [ADR-097](097-business-component-contract-extraction.md) 应用业务组件受控化并入 @jianmanager/ui（**superseded-by ADR-098**；原文保留作决策史）
 - [ADR-096](096-mcp-stateless-endpoint.md) MCP 端点在 Streamable HTTP 路径上无状态化（FR-489，部分取代 ADR-077 的会话运维模型、修订 ADR-080 决策 6 的论证）
 - [ADR-093](093-process-lifecycle-resilience.md) 进程生命周期韧性与孤儿治理（FR-455/456/459：防误杀、孤儿周期兜底、状态真源收敛、重推多源化）
 - [ADR-092](092-config-surface-and-direct-probe.md) 实例配置源明面化与 MC 直探能力（FR-446/447/451：SLP+Query 直探、配置项内联/文件引用二态）

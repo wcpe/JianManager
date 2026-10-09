@@ -1223,7 +1223,9 @@ packages/ui/                      # @jianmanager/ui 通用 UI/token/charts/helpe
   src/styles/                     # 设计底座单一真源：theme-map / tokens / themes / motion + index 汇总（FR-496 阶段 1）
   src/components/layout/          # 内容页布局规范层：PageShell / PageHeader / ScopeBar / SummaryStrip / Toolbar / PlatformTabs / 网格原语（FR-496 阶段 3）
   src/components/shell/           # 导航骨架外壳层：AppShell / TopNav / SideNav / ResourceTree / CommandPalette / ObjectPageHeader（FR-496 阶段 4）
-  src/lib/color-contrast.ts       # 主题配色对比度计算与门禁（FR-496 阶段 2）
+  src/lib/                        # 设计系统自用 helper（12 个：brush / chart-hover / color-contrast /
+                                  # combobox / focus-ring / interaction-overlay / monitor-metrics / stat-card /
+                                  # theme / threshold / tone / utils）；业务 lib 不在此（ADR-098）
 apps/control-plane-web/           # 主控台（原 web/，FR-283 迁入）
   src/
     api/          # Axios client + per-module API (TanStack Query hooks)
@@ -1231,12 +1233,13 @@ apps/control-plane-web/           # 主控台（原 web/，FR-283 迁入）
     stores/       # Zustand (auth, theme, console[选中实例/节点])
     pages/        # 页面（懒加载）；DashboardPage = 运维控制台 Shell；V2 新增 NetworksPage(群组服拓扑) + 节点详情 JDK 标签
     components/   # 业务/页面组件；ui 与第一版通用 charts 为 @jianmanager/ui 兼容 re-export
+    components/views/  # 业务视图层（按域归档，39 个域 + 顶层零散视图）；原并入组件库，ADR-098 起回迁应用侧
                   # console/workspace-navigation.ts：四工作区×组×页面导航登记真源（FR-496 阶段 5，与 nav-config.ts 并存）
                   # V2: config-editor(表单/原始/版本) · provision-wizard · jdk-manager · clone-dialog · registration-editor
                   # DangerConfirm: 统一危险操作二次确认（高危需输入名校验 + 角色门禁，FR-059）
     hooks/        # 自定义 hooks
     i18n/         # 中文 + 英文（danger 命名空间 = 危险操作文案）
-    lib/          # 应用工具函数；通用 helper 由 @jianmanager/ui 供给
+    lib/          # 应用业务逻辑与契约（约 320 个模块）；设计系统 helper 经 @jianmanager/ui 取（ADR-098）
   router.tsx
   route-permissions.ts
 apps/ui-museum/                   # 控件博物馆 Vite workspace 应用，直接消费 @jianmanager/ui（原 web/wiki，FR-273/283）
