@@ -95,33 +95,7 @@ import {
  * 业务视图（@jianmanager/ui 的 components/views，原 biz-views 包已并入）——受控复合组件，与设计系统原语分列展示。
  * 它们由原语拼装、带自身交互状态，但不取数、不碰路由：数据与路由身份经 props 注入。
  */
-import { DisclaimerBanner } from '@jianmanager/ui/components/views/bot-load/session/DisclaimerBanner'
-import { BotHealthBar } from '@jianmanager/ui/components/views/console/BotHealthBar'
-import WorkspaceEmpty from '@jianmanager/ui/components/views/console/WorkspaceEmpty'
-import EditorShortcutsHelp from '@jianmanager/ui/components/views/explorer/editor/EditorShortcutsHelp'
-import PromptDialog from '@jianmanager/ui/components/views/explorer/PromptDialog'
-import BizToolbar from '@jianmanager/ui/components/views/explorer/Toolbar'
-import FileBrowserTree from '@jianmanager/ui/components/views/file-browser/FileBrowserTree'
-import type { FileEntry } from '@jianmanager/ui/lib/file-browser-types'
-import { TopLoadingBar } from '@jianmanager/ui/components/views/TopLoadingBar'
-import { UnifiedDiff } from '@jianmanager/ui/components/views/UnifiedDiff'
-import UntrustedFieldBadge from '@jianmanager/ui/components/views/UntrustedFieldBadge'
-import { ReleaseNotes } from '@jianmanager/ui/components/views/ReleaseNotes'
-import ClientDistFlowGuide from '@jianmanager/ui/components/views/ClientDistFlowGuide'
-import { ObsTimeRangePicker } from '@jianmanager/ui/components/views/client-dist/ObsTimeRangePicker'
-import NodePortsPanel from '@jianmanager/ui/components/views/nodes/NodePortsPanel'
-import NodeArtifactCachePanel from '@jianmanager/ui/components/views/nodes/NodeArtifactCachePanel'
-import DangerConfirm from '@jianmanager/ui/components/views/DangerConfirm'
 
-/**
- * FR-502 迁移批的按域分区（见 `./sections/`）——每域一批受控业务视图，用内联样例数据渲染。
- * 与上面零散登记的差别只是规模：这些域各有十来个视图，单分区塞不下，故按域各占一个分区。
- */
-import { ViewsConsole } from './sections/views-console'
-import { ViewsClientDist } from './sections/views-client-dist'
-import { ViewsOps } from './sections/views-ops'
-import { ViewsAdmin } from './sections/views-admin'
-import { ViewsWorkflow } from './sections/views-workflow'
 
 const rawSeries: RawSeries[] = [
   {
@@ -158,17 +132,6 @@ const chartSeries: ChartSeries[] = [
 ]
 
 /** 博物馆用的演示数据源：受控组件不自行取数，数据经 source 注入。 */
-const demoEntries: FileEntry[] = [
-  { name: 'server.properties', path: 'server.properties', isDir: false, size: 1024 },
-  { name: 'plugins', path: 'plugins', isDir: true },
-  { name: 'world', path: 'world', isDir: true },
-  { name: 'EssentialsX.jar', path: 'plugins/EssentialsX.jar', isDir: false, size: 4_100_000 },
-]
-const demoSource = {
-  flat: true,
-  list: async () => demoEntries,
-  readContent: async () => ({ kind: 'text' as const, content: '# 演示内容' }),
-}
 
 /**
  * 博物馆分区清单 —— 侧边栏按它渲染，一次只展示一个分区。
@@ -186,12 +149,6 @@ const SECTIONS = [
   { id: 'monitoring', label: 'Monitoring', hint: '图表与指标条' },
   { id: 'tabs', label: 'Tabs', hint: '页签' },
   { id: 'layout', label: '布局', hint: '页面壳与布局原语' },
-  { id: 'views', label: '业务视图', hint: 'views · 受控复合组件' },
-  { id: 'views-console', label: '视图 · 控制台与实例', hint: 'console · instances · bots · explorer' },
-  { id: 'views-client-dist', label: '视图 · 客户端分发', hint: 'client-dist 全域' },
-  { id: 'views-ops', label: '视图 · 运维对象', hint: 'agent · artifacts · backups · logs · networks · players' },
-  { id: 'views-admin', label: '视图 · 平台管理', hint: 'auth · users · groups · permissions · settings' },
-  { id: 'views-workflow', label: '视图 · 任务与工作流', hint: 'alerts · bot-load · schedules · tasks · overview' },
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
@@ -233,8 +190,6 @@ export default function App() {
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [resolution, setResolution] = useState<MetricResolution>('auto')
   const [compareSel, setCompareSel] = useState<string[]>([])
-  const [promptOpen, setPromptOpen] = useState(false)
-  const [dangerOpen, setDangerOpen] = useState(false)
   const toggleCompare = (k: string) =>
     setCompareSel((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]))
   const chips = useMemo(
@@ -767,238 +722,7 @@ export default function App() {
           </Panel>
         </Section>
 
-        <Section
-          id="views"
-          active={section}
-          title="业务视图（@jianmanager/ui · views）"
-          hint="受控复合组件：由原语拼装、带自身交互状态，但不取数、不碰路由、不发请求"
-        >
-          <Panel title="TopLoadingBar · 顶部加载进度条">
-            <div className="relative h-10 overflow-hidden rounded-md border">
-              <TopLoadingBar routeKey="/demo" pendingCount={2} />
-            </div>
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              受控：路由身份 routeKey 与在途请求数 pendingCount 由外壳注入——原先它自行
-              useLocation + useIsFetching，因而无法脱离主控台运行时复用。
-            </p>
-          </Panel>
 
-          <Panel title="UnifiedDiff · diff 着色">
-            <UnifiedDiff
-              diff={
-                '--- a/server.properties\n+++ b/server.properties\n@@ -1,4 +1,4 @@\n-max-players=20\n+max-players=40\n motd=A Minecraft Server\n online-mode=true'
-              }
-            />
-          </Panel>
-
-          <Panel title="UntrustedFieldBadge / WorkspaceEmpty">
-            <div className="grid gap-3 lg:grid-cols-2">
-              <div className="flex items-center gap-3">
-                <UntrustedFieldBadge />
-                <span className="text-[11px] text-muted-foreground">不可信身份字段（脱敏）</span>
-              </div>
-              <div className="rounded-md border">
-                <WorkspaceEmpty />
-              </div>
-            </div>
-          </Panel>
-
-          <Panel title="DisclaimerBanner · bot.chat 边界免责">
-            <DisclaimerBanner />
-          </Panel>
-
-          <Panel title="ReleaseNotes · 发布说明（react-markdown）">
-            <ReleaseNotes
-              markdown={
-                '### v0.24.0\n\n- 新增按分组批量运维\n- 修复 [外部链接](https://example.com) 的确认弹窗\n- 优化日志中心虚拟滚动'
-              }
-            />
-          </Panel>
-
-          <Panel title="ClientDistFlowGuide · 分发流程引导">
-            <ClientDistFlowGuide />
-          </Panel>
-
-          <Panel title="BotHealthBar · Bot 健康分档">
-            <BotHealthBar total={8} online={6} byStatus={{ idle: 2, working: 3, error: 1 }} />
-          </Panel>
-
-          <Panel title="ObsTimeRangePicker · 观测时间范围">
-            <ObsTimeRangePicker value={{ range: '7d' }} onChange={() => {}} />
-          </Panel>
-
-          <Panel title="Toolbar · 资源管理器工具条">
-            <BizToolbar
-              currentDir="/plugins"
-              selectedCount={2}
-              canPaste={false}
-              onNavigate={() => {}}
-              onNewFile={() => {}}
-              onNewFolder={() => {}}
-              onUpload={() => {}}
-              onDownloadSelected={() => {}}
-              onDeleteSelected={() => {}}
-              onPaste={() => {}}
-              onSelectAll={() => {}}
-              onClearSelection={() => {}}
-              onToggleSearch={() => {}}
-              searchActive={false}
-            />
-          </Panel>
-
-          <Panel title="EditorShortcutsHelp · 编辑器快捷键帮助">
-            <EditorShortcutsHelp />
-          </Panel>
-
-          <Panel title="PromptDialog · 输入提示对话框">
-            <div className="grid gap-2">
-              <Button variant="outline" size="sm" className="w-fit" onClick={() => setPromptOpen(true)}>
-                打开 PromptDialog
-              </Button>
-              <PromptDialog
-                open={promptOpen}
-                title="重命名文件夹"
-                initialValue="plugins"
-                onSubmit={() => setPromptOpen(false)}
-                onCancel={() => setPromptOpen(false)}
-              />
-            </div>
-          </Panel>
-
-          <Panel title="FileBrowserTree · 文件树">
-            <div className="h-72 overflow-hidden rounded-md border">
-              <FileBrowserTree
-                source={demoSource}
-                selectedPath="server.properties"
-                onSelectFile={() => {}}
-                actions={[]}
-              />
-            </div>
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              受控：数据由 source（读目录/读内容）注入，组件自身不发请求。
-            </p>
-          </Panel>
-
-          <Panel title="NodePortsPanel · 节点端口占用（a 范式）">
-            <NodePortsPanel
-              data={{
-                nodeId: 1,
-                ranges: { serverPortBase: 25565, rangeSize: 2000 },
-                occupied: [
-                  { instanceId: 1, name: 'survival-proxy', role: 'proxy', serverPort: 25565, queryPort: 0 },
-                  { instanceId: 2, name: 'survival-lobby', role: 'backend', serverPort: 25566, queryPort: 25566 },
-                  { instanceId: 3, name: 'creative-plot', role: 'backend', serverPort: 25567, queryPort: 25567 },
-                ],
-              }}
-            />
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              受控（a 范式）：端口数据由外壳调 useNodePorts 取数后经 props 注入，组件自身不发请求；
-              过滤词与虚拟滚动窗口留在组件内——它们不随应用运行时变化。
-            </p>
-          </Panel>
-
-          <Panel title="NodeArtifactCachePanel · 节点制品缓存（b 范式）">
-            <NodeArtifactCachePanel
-              data={{
-                items: [
-                  {
-                    sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
-                    name: 'paper-1.20.4',
-                    type: 'core',
-                    version: '1.20.4-496',
-                    size: 48234496,
-                    cachedAt: 1719550800,
-                    lastUsedAt: 1719550800,
-                  },
-                  {
-                    sha256: 'ffeeddccbbaa99887766554433221100',
-                    name: 'velocity-3.3.0',
-                    type: 'core',
-                    version: '3.3.0-1',
-                    size: 12582912,
-                    cachedAt: 1719464400,
-                    lastUsedAt: 1719464400,
-                  },
-                ],
-                totalBytes: 60817408,
-                capBytes: 0,
-              }}
-              onSaveCap={async () => true}
-              onEvict={async () => true}
-              onClear={async () => true}
-            />
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              受控（b 范式）：三个写动作以回调上报（返回 Promise&lt;boolean&gt; 供组件决定是否复位编辑态），
-              组件自身不发请求、不弹 toast——成功/失败文案由外壳决定。清空与逐项清会走 DangerConfirm 二次确认。
-            </p>
-          </Panel>
-
-          <Panel title="DangerConfirm · 危险操作确认（受控）">
-            <div className="grid gap-2">
-              <Button variant="outline" size="sm" className="w-fit" onClick={() => setDangerOpen(true)}>
-                打开 DangerConfirm
-              </Button>
-              <DangerConfirm
-                open={dangerOpen}
-                title="删除实例 survival-01？"
-                description="将同时删除其工作目录与备份，操作不可撤销。"
-                confirmLabel="删除实例"
-                confirmText="survival-01"
-                onConfirm={() => setDangerOpen(false)}
-                onCancel={() => setDangerOpen(false)}
-              />
-            </div>
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              受控：权限门禁结果由外壳注入（allowed），组件库不持有鉴权状态；本例演示高危二次校验
-              （需逐字输入资源名 survival-01 才能确认）。
-            </p>
-          </Panel>
-        </Section>
-
-        <Section
-          id="views-console"
-          active={section}
-          title="业务视图 · 控制台与实例"
-          hint="console / instances / bots / explorer / database / config-explorer —— 数据经 props 注入，组件不取数、不碰路由"
-        >
-          <ViewsConsole />
-        </Section>
-
-        <Section
-          id="views-client-dist"
-          active={section}
-          title="业务视图 · 客户端分发"
-          hint="client-dist 全域 —— 含密钥揭示、脱敏画像与运维日志等受控边界较细的视图"
-        >
-          <ViewsClientDist />
-        </Section>
-
-        <Section
-          id="views-ops"
-          active={section}
-          title="业务视图 · 运维对象"
-          hint="agent / artifacts / backups / logs / networks / players / runtime-assets —— 多为页面级视图，整页壳在面板内裁剪"
-        >
-          <ViewsOps />
-        </Section>
-
-        <Section
-          id="views-admin"
-          active={section}
-          title="业务视图 · 平台管理"
-          hint="auth / users / groups / permissions / settings / audit / statistics —— 敏感项按引用与打码形态展示"
-        >
-          <ViewsAdmin />
-        </Section>
-
-        <Section
-          id="views-workflow"
-          active={section}
-          title="业务视图 · 任务与工作流"
-          hint="alerts / bot-load / schedules / tasks / overview / provision / system-update —— 向导与对话框类视图按按钮开场"
-        >
-          <ViewsWorkflow />
-        </Section>
           </div>
         </div>
       </div>
