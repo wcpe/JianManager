@@ -22,7 +22,7 @@ import {
   NetworksPageView,
   type NetworksInstancePickerArgs,
   type NetworkView,
-} from '@jianmanager/ui/components/views/networks/NetworksPageView'
+} from '@/components/views/networks/NetworksPageView'
 
 /**
  * 成员候选的默认窗口。靠键入下发服务端 q 缩小，与 GroupMembersDialog（FR-336）同款；
