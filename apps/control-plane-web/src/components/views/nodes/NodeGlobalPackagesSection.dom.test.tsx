@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithI18n } from '../../../test/i18n'
-import NodeGlobalPackagesSection, { type GlobalPackagesView } from './NodeGlobalPackagesSection'
+import NodeGlobalPackagesSection, { type GlobalPackagesView } from '@/components/views/nodes/NodeGlobalPackagesSection'
 
 /**
  * FR-307 节点全局包管理 · 受控视图测（ADR-097 b 范式）。

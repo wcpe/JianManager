@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import { BotHealthBar } from './BotHealthBar'
+import { BotHealthBar } from '@/components/views/console/BotHealthBar'
 import { toneChipClass, type Tone } from '@jianmanager/ui/lib/tone'
 import type { BotSummaryGroup } from '@jianmanager/ui/lib/bot'
 import type { InstanceBotBadge as InstanceBotBadgeData } from '@jianmanager/ui/lib/bot-list'

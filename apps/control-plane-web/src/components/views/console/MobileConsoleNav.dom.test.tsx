@@ -5,9 +5,9 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { Boxes, LayoutDashboard, Server, ShieldCheck } from 'lucide-react'
-import { MobileConsoleNav } from './MobileConsoleNav'
+import { MobileConsoleNav } from '@/components/views/console/MobileConsoleNav'
 import type { NavGroup } from '@jianmanager/ui/lib/nav-config'
-import type { SidebarLinkArgs } from './sidebar-link'
+import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 
 /**
  * 手机端底部导航 · 受控视图测（ADR-097）。

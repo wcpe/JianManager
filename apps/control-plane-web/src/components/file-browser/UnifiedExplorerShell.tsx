@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
 
-import UnifiedExplorerShell from '@jianmanager/ui/components/views/file-browser/UnifiedExplorerShell'
+import UnifiedExplorerShell from '@/components/views/file-browser/UnifiedExplorerShell'
 import { useThemeStore } from '@/stores/theme'
 import ResourceExplorer from '@/components/explorer/ResourceExplorer'
 

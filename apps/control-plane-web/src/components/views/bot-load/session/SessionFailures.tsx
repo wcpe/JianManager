@@ -4,7 +4,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { FAILURE_CATEGORIES } from '@jianmanager/ui/lib/bot-load-filters'
 import type { BotLoadFailure } from '@jianmanager/ui/lib/bot-load-types'
-import { FailureTraceDrawer } from './FailureTraceDrawer'
+import { FailureTraceDrawer } from '@/components/views/bot-load/session/FailureTraceDrawer'
 
 export const SESSION_FAILURES_PAGE_SIZE = 50
 

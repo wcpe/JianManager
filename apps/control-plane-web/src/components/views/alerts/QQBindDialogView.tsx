@@ -13,7 +13,7 @@ import {
   ScrollableDialogBody,
   scrollableDialogContentClass,
 } from '@jianmanager/ui/components/scrollable-dialog'
-import type { QQBindFill, QQBindTaskInfo, QQBindResult } from '../../../lib/alert-contracts'
+import type { QQBindFill, QQBindTaskInfo, QQBindResult } from '@jianmanager/ui/lib/alert-contracts'
 
 /** 二维码渲染插槽参数（应用侧提供 QR 组件，依赖 react-qr-code）。 */
 export interface QQBindQrArgs {

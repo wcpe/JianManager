@@ -4,13 +4,13 @@ import {
   isBindTaskExpiredError,
   useCreateQQBindTask,
 } from '@/api/alerts'
-import { QQBindDialogView } from '@jianmanager/ui/components/views/alerts/QQBindDialogView'
+import { QQBindDialogView } from '@/components/views/alerts/QQBindDialogView'
 import type { QQBindFill } from '@jianmanager/ui/lib/alert-contracts'
 import { QQBindQrCode } from './qq-badge'
 
 // 实现已迁至 @jianmanager/ui（ADR-097），以下保留 re-export 维持既有导入路径。
 export type { QQBindFill } from '@jianmanager/ui/lib/alert-contracts'
-export { MAX_QQ_BIND_AUTO_REFRESH } from '@jianmanager/ui/components/views/alerts/QQBindDialogView'
+export { MAX_QQ_BIND_AUTO_REFRESH } from '@/components/views/alerts/QQBindDialogView'
 
 interface QQBindDialogProps {
   /** 扫码成功且三要素齐全时回调（父表单据此回填并关闭本弹窗）。 */

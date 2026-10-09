@@ -16,7 +16,7 @@ import {
   AlertsPageView,
   type AlertEventFilter,
   type AlertTab,
-} from '@jianmanager/ui/components/views/alerts/AlertsPageView'
+} from '@/components/views/alerts/AlertsPageView'
 import { RuleDialog } from './alerts/RuleDialog'
 import { ChannelDialog } from './alerts/ChannelDialog'
 

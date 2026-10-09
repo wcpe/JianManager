@@ -1,4 +1,4 @@
-import FileBrowser from '@jianmanager/ui/components/views/file-browser/FileBrowser'
+import FileBrowser from '@/components/views/file-browser/FileBrowser'
 import { useThemeStore } from '@/stores/theme'
 
 /**

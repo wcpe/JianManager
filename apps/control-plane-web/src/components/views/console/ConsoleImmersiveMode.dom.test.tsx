@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
-import { ConsoleImmersiveMode, type ConsoleImmersiveModeProps } from './ConsoleImmersiveMode'
+import { ConsoleImmersiveMode, type ConsoleImmersiveModeProps } from '@/components/views/console/ConsoleImmersiveMode'
 import { terminalSessionManager } from '@jianmanager/ui/lib/terminal-session-manager'
 
 /**

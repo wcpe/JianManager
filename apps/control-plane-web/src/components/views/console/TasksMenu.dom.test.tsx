@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
-import { TasksMenu } from './TasksMenu'
+import { TasksMenu } from '@/components/views/console/TasksMenu'
 import type { Task } from '@jianmanager/ui/lib/task-status'
 
 /**

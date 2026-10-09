@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
-import { DirectorConsolePage } from './DirectorConsolePage'
+import { DirectorConsolePage } from '@/components/views/console/DirectorConsolePage'
 import { createDirectorState } from '@jianmanager/ui/lib/director'
 
 /**

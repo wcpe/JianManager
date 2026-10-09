@@ -24,7 +24,7 @@ import {
 } from '@jianmanager/ui/components/select'
 import { TableCell, TableRow } from '@jianmanager/ui/components/table'
 import { BotHealthBar } from '@/components/views/console/BotHealthBar'
-import { PeekRow } from './BotListParts'
+import { PeekRow } from '@/components/views/bots/BotListParts'
 import type { BotBatchAction, BotInfo, BotSummaryGroup } from '@jianmanager/ui/lib/bot'
 import type { GroupByDim } from '@jianmanager/ui/lib/bots-overview'
 

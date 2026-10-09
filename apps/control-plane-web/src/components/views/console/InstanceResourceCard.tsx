@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { SegmentPills, type SegmentPillOption } from './SegmentPills'
+import { SegmentPills, type SegmentPillOption } from '@/components/views/console/SegmentPills'
 
 /** 资源卡片的视图分段。 */
 export type ResourceView = 'manage' | 'files' | 'browse'

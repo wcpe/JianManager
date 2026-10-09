@@ -7,7 +7,7 @@ import { TableCell, TableRow } from '@jianmanager/ui/components/table'
 import UntrustedFieldBadge from '@jianmanager/ui/components/views/UntrustedFieldBadge'
 import type { ClientDistSecurityEvent } from '@jianmanager/ui/lib/client-dist-security-contracts'
 import { maskPlayerName } from '@/lib/privacy-mask'
-import { fmtTime, levelVariant, SECURITY_EMPTY as EMPTY } from './security-format'
+import { fmtTime, levelVariant, SECURITY_EMPTY as EMPTY } from '@/components/views/client-dist/security-format'
 
 /** 行内确认弹窗的三种处置动作。 */
 export type EventRowConfirm = 'block-ip' | 'key-state' | 'channel-protection' | null

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
-import NodeLogRuntimePanel, { type LogRuntimeView } from './NodeLogRuntimePanel'
+import NodeLogRuntimePanel, { type LogRuntimeView } from '@/components/views/nodes/NodeLogRuntimePanel'
 
 /**
  * 本文件自带局部 i18n 实例，而不复用 `src/test/i18n.tsx` 的共享实例。

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
-import { ThemeSwitcher } from './ThemeSwitcher'
+import { ThemeSwitcher } from '@/components/views/console/ThemeSwitcher'
 
 /**
  * 主题切换器 · 受控视图测（ADR-097）。

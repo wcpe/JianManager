@@ -21,7 +21,7 @@ import type {
   SaveSecurityGroupRequest,
   SecurityTargetType,
 } from '@jianmanager/ui/lib/client-dist-security-contracts'
-import { EmptyState, fmtTime } from './security-format'
+import { EmptyState, fmtTime } from '@/components/views/client-dist/security-format'
 
 /**
  * 安全分组：顶部「新建分组」按钮 + 模态表单 + 全宽分组列表（与处置 Tab 同范式）。

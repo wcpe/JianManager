@@ -32,7 +32,7 @@ import type { ClientDistObservability, ClientDistStats } from '@jianmanager/ui/l
 import type { ClientDistSecurityOverview, SecurityRankItem } from '@jianmanager/ui/lib/client-dist-security-contracts'
 import type { ClientRuntimeOverview } from '@jianmanager/ui/lib/client-runtime-contracts'
 import { KPI_I18N, formatKpiRate, resolveRequestRates } from '@/lib/client-dist-kpi'
-import { InsightCards } from './InsightCards'
+import { InsightCards } from '@/components/views/client-dist/InsightCards'
 import {
   ErrorPanel,
   LinkableDistPanel,
@@ -47,7 +47,7 @@ import {
   reversePlatformLabel,
   runtimeUpdateSeries,
   type RuntimeLink,
-} from './OpsShared'
+} from '@/components/views/client-dist/OpsShared'
 
 /** 可下钻的排行维度（仅这两类在日志页有对应过滤键，沿用原实现）。 */
 export type RankFilterKey = 'ip' | 'channelId'

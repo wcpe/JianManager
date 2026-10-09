@@ -6,7 +6,7 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 
 import { ConsoleLineBuffer } from '@jianmanager/ui/lib/console-line-buffer'
 import type { LogLine } from '@jianmanager/ui/lib/console-log-line'
-import { ConsoleOutputView } from './ConsoleOutputView'
+import { ConsoleOutputView } from '@/components/views/console/ConsoleOutputView'
 
 /**
  * 锚点选区与堆栈块折叠（FR-418，spec §3）· 受控视图测（ADR-097）。
