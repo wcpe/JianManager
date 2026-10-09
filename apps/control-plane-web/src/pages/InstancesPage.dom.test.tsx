@@ -99,6 +99,32 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.queryAllByTestId('instances-card-virtual-item').length).toBeLessThan(80)
   })
 
+  /**
+   * 分组卡片视图同样是**一个**容器 + **一个**虚拟窗口：组头行与卡片行同属一个行流。
+   *
+   * 守的是「挂载量不随分组数放大」这条性质——旧实现每组一段各挂一个 `VirtualizedCardGrid`
+   * （各带一个滚动容器与一个虚拟窗口），段数 = 顶层分组数，每段都各自铺满视口窗口；
+   * 真机 Chromium（1440×900）实测 `?view=card&groupBy=region` 4 个容器共挂 79 张卡
+   * （21+21+21+16）。这里以 region（两级）与 tag（段数更多）两个维度断言：容器恒为 1 个、
+   * 组头行确实渲染、挂载卡数仍在单一视口窗口量级。
+   */
+  it('分组卡片视图使用单个虚拟容器，不为每组重复网格', async () => {
+    const { unmount } = renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=region' })
+
+    const surface = await screen.findByTestId('instances-card-virtual')
+    expect(screen.queryAllByTestId('instances-card-virtual')).toHaveLength(1)
+    await waitFor(() => expect(within(surface).queryAllByTestId('instances-card-group-row').length).toBeGreaterThan(0))
+    expect(screen.queryAllByTestId('instances-card-virtual-item').length).toBeLessThan(40)
+    unmount()
+
+    // tag 维度的分组数更多（旧实现下段数随之放大），单一窗口下挂载量仍与分组数无关。
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=tag' })
+    const tagged = await screen.findByTestId('instances-card-virtual')
+    expect(screen.queryAllByTestId('instances-card-virtual')).toHaveLength(1)
+    await waitFor(() => expect(within(tagged).queryAllByTestId('instances-card-group-row').length).toBeGreaterThan(0))
+    expect(screen.queryAllByTestId('instances-card-virtual-item').length).toBeLessThan(40)
+  })
+
   it('1000+ 实例页首屏走分页搜索与聚合，不再拉取全集', async () => {
     const requests = collectInstanceRequests()
     try {

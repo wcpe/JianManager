@@ -47,7 +47,7 @@ import { SCROLL_KEY_PREFIX, buildInstanceTreeRows, VirtualizedGroupedInstanceTab
 import { FilterSelect, InstanceRowMenu, InstanceTableHeader } from '@/components/views/instances/InstanceTableParts'
 import type { InstanceSortKey, InstanceSortOrder } from '@/components/views/instances/InstanceTableParts'
 import { InstanceRowView } from '@/components/views/instances/InstanceRowView'
-import { BackendsInline, CardView } from '@/components/views/instances/InstanceCardViews'
+import { BackendsInline, VirtualizedGroupedCardView } from '@/components/views/instances/InstanceCardViews'
 
 // 供针对性测试（rowMenu 门控）沿用既有导入路径。
 export { InstanceRowMenu }
@@ -915,17 +915,19 @@ export default function InstancesPage() {
             )}
           </div>
           {view === 'card' ? (
-            <CardView
-              groupBy={groupBy}
-              groups={groups}
+            <VirtualizedGroupedCardView
+              // 卡片视图与表格视图共用同一行模型（buildInstanceTreeRows）：折叠、大区/小区两级、
+              // 多级分组树的展开/收起行为由构造一致，不再各写一套分段逻辑。
+              rows={treeRows}
               totalCount={totalCount}
+              loadedCount={instances.length}
               onNeedMore={loadMoreInstances}
+              onToggleCollapse={toggleGroupCollapsed}
               scrollStorageKey={scrollStorageKey}
-              groupLabel={groupLabel}
               nodeName={nodeName}
               buildMenu={buildMenu}
-              hasActiveFilter={hasActiveFilter}
               onOpenInstance={openInstance}
+              emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
               renderCard={(args) => <InstanceWorktableCard {...args} />}
             />
           ) : groupBy === 'none' ? (
