@@ -15,7 +15,7 @@ import { exportLogs, useLegacyLogs, useLogs, type LogEntry, type LogQueryParams 
 import { buildFederationResult, exportFederatedLogs, useLogsFederation, useLogsFederationFacets, useLogsFederationStats } from '@/api/logFederation'
 import { useAuthStore } from '@/stores/auth'
 import { useNodes } from '@/api/nodes'
-import { InstancePicker } from '@/components/InstancePicker'
+import { InstancePicker } from '@/components/instances/InstancePicker'
 import { LOGS_FEDERATION_KEYS } from '@/lib/logs-federation'
 import { LogsPageView } from '@/components/views/logs/LogsPageView'
 import type { LogsFilterState, LogsInsights, LogsView } from '@/components/views/logs/LogsPageView'

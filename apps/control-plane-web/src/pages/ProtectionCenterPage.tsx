@@ -17,7 +17,7 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
-import ClientDistExportButton from '@/components/ClientDistExportButton'
+import ClientDistExportButton from '@/components/client-dist/ClientDistExportButton'
 import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
 import { ObsTimeRangePicker } from '@/components/views/client-dist/ObsTimeRangePicker'
 import type { ObsWindow } from '@/lib/obs-window'

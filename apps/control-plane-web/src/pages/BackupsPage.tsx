@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackup } from '@/api/backups'
 import { useBackupStorages } from '@/api/backupStorages'
 import { useInstance } from '@/api/instances'
-import { InstancePicker } from '@/components/InstancePicker'
+import { InstancePicker } from '@/components/instances/InstancePicker'
 import { hasActiveBackup } from '@/lib/backup'
 import { BackupsPageView } from '@/components/views/backups/BackupsPageView'
 

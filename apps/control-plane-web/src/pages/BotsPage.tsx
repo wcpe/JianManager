@@ -29,7 +29,7 @@ import type { ViewMode } from '@jianmanager/ui/components/view-toggle'
 import { Plus } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
-import { InstancePicker } from '@/components/InstancePicker'
+import { InstancePicker } from '@/components/instances/InstancePicker'
 import CreateBotDialogView from '@/components/views/instances/CreateBotDialog'
 
 /**

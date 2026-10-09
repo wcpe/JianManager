@@ -4,8 +4,8 @@ import { toast } from 'sonner'
 import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK, useProbeJDK, useUpdateJDK } from '@/api/jdks'
 import { useJDKCatalog } from '@/api/nodeRuntime'
 import NodeJDKPanel from '@/components/views/nodes/NodeJDKPanel'
-import { PingNodeButton } from '@/components/PingNodeButton'
-import DirectoryPicker from '@/components/DirectoryPicker'
+import { PingNodeButton } from '@/components/nodes/PingNodeButton'
+import DirectoryPicker from '@/components/nodes/DirectoryPicker'
 import NodeRuntimeTab from '@/components/nodes/NodeRuntimeTab'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
