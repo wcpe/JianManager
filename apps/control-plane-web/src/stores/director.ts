@@ -1,15 +1,8 @@
 import { create } from 'zustand'
-import { makeCard, type PlacedCard, type WorkspacePreset } from '@/lib/workspace-preset'
-import {
-  activateScene as machineActivate,
-  addScene as machineAdd,
-  clampLimit,
-  createDirectorState,
-  nextSceneId as machineNext,
-  removeScene as machineRemove,
-  setLimit as machineSetLimit,
-  type DirectorState,
-} from '@/lib/director'
+import { makeCard } from '@/lib/workspace-preset'
+import type { PlacedCard, WorkspacePreset } from '@/lib/workspace-preset'
+import { activateScene as machineActivate, addScene as machineAdd, clampLimit, createDirectorState, nextSceneId as machineNext, removeScene as machineRemove, setLimit as machineSetLimit } from '@/lib/director'
+import type { DirectorState } from '@/lib/director'
 
 /**
  * 工作区导播台状态（FR-168 / ADR-035）。

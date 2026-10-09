@@ -13,13 +13,8 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { cn } from '@jianmanager/ui'
 import type { InstanceGroupNode } from '@/lib/instance-group'
-import {
-  buildGroupTree,
-  flattenVisibleGroups,
-  groupBranchKey,
-  type GroupTreeNode,
-  type VisibleGroupRow,
-} from '@/lib/instance-group-tree'
+import { buildGroupTree, flattenVisibleGroups, groupBranchKey } from '@/lib/instance-group-tree'
+import type { GroupTreeNode, VisibleGroupRow } from '@/lib/instance-group-tree'
 
 /** 实例拖入分组用的自定义 MIME（与工作区拖拽载荷同源，由实例库/分组管理页发出）。 */
 export const INSTANCE_DND_MIME = 'application/x-jm-instances'

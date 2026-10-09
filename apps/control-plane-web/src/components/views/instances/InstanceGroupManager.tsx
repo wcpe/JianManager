@@ -17,10 +17,8 @@ import { useVirtualRows } from '@/lib/virtual-list'
 import { useCardColumns } from '@/lib/use-card-columns'
 import type { InstanceGroupNode } from '@/lib/instance-group'
 import { groupPathOf } from '@/lib/instance-group-path'
-import {
-  InstanceWorktableCard,
-  type InstanceWorktableCardInstanceView,
-} from '@/components/views/instances/InstanceWorktableCard'
+import { InstanceWorktableCard } from '@/components/views/instances/InstanceWorktableCard'
+import type { InstanceWorktableCardInstanceView } from '@/components/views/instances/InstanceWorktableCard'
 import { INSTANCE_DND_MIME } from '@/components/views/instances/InstanceGroupTree'
 
 /** 分组管理页所需的实例视图：卡面字段 + 所属节点 id（用于解析节点名）。 */

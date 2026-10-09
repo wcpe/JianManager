@@ -16,11 +16,13 @@ import {
   type ResourceNode,
   type ResourceStatus,
 } from '@jianmanager/ui/components/shell'
-import { ThemeSwitcher, type ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
+import { ThemeSwitcher } from '@/components/views/console/ThemeSwitcher'
+import type { ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 import { statusDotKind } from '@/lib/instance-tree'
 import type { NavEntry } from '@/lib/nav-config'
-import { resolveWorkspacePath, type WorkspaceDef } from '@/lib/workspace-navigation'
+import { resolveWorkspacePath } from '@/lib/workspace-navigation'
+import type { WorkspaceDef } from '@/lib/workspace-navigation'
 import { isDeepLink, landingPathOf } from '@/lib/use-workspace-navigation'
 import type { MemberStatusCounts } from '@/lib/topology'
 

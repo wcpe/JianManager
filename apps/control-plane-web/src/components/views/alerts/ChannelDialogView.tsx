@@ -24,21 +24,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import type {
-  AlertChannelInfo,
-  ChannelConfig,
-  ChannelSubmitBody,
-  QQBindFill,
-} from '@/lib/alert-contracts'
-import {
-  channelUsesURL,
-  channelIsTelegram,
-  channelIsEmail,
-  channelIsInApp,
-  channelIsQQ,
-  isQQTargetType,
-  isEnvRef,
-} from '@/lib/alert-helpers'
+import type { AlertChannelInfo, ChannelConfig, ChannelSubmitBody, QQBindFill } from '@/lib/alert-contracts'
+import { channelUsesURL, channelIsTelegram, channelIsEmail, channelIsInApp, channelIsQQ, isQQTargetType, isEnvRef } from '@/lib/alert-helpers'
 
 /** 扫码绑定弹窗的渲染参数（应用侧提供具体实现，如 QQBindDialog）。 */
 export interface ChannelBindDialogArgs {

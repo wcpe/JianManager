@@ -3,11 +3,7 @@ import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ClientVersionsPanelView } from '@/components/views/client-dist/ClientVersionsPanelView'
-import {
-  useClientVersions,
-  useClientVersion,
-  useRollbackClientVersion,
-} from '@/api/clientVersions'
+import { useClientVersions, useClientVersion, useRollbackClientVersion } from '@/api/clientVersions'
 import EmbeddedUpdaterSummary from '@/components/EmbeddedUpdaterSummary'
 import FileBrowser from '@/components/file-browser/FileBrowser'
 import { clientDistSource, manifestFilesToDistFiles } from '@/components/file-browser/sources/clientDistSource'

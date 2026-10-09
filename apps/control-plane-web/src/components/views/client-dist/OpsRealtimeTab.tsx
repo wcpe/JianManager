@@ -7,15 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type { ChartSeries } from '@jianmanager/ui'
 import type { StatsIP } from '@/lib/client-dist-stats-contracts'
 import type { ClientDistErrorSummary, ClientDistRealtime } from '@/lib/client-dist-events-contracts'
-import {
-  LinkableDistPanel,
-  TrendCard,
-  ErrorPanel,
-  distBuckets,
-  fmtTime,
-  kindLabel,
-  type RuntimeLink,
-} from '@/components/views/client-dist/OpsShared'
+import { LinkableDistPanel, TrendCard, ErrorPanel, distBuckets, fmtTime, kindLabel } from '@/components/views/client-dist/OpsShared'
+import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
 /**
  * 页面 B · 实时监控 Tab（FR-430，迁自旧监控页 `MonitorTab`）。

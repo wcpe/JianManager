@@ -18,17 +18,16 @@ import { cn } from '@jianmanager/ui'
 
 import { copyToClipboard } from '@/lib/clipboard'
 import { loadCommandHistory, pushCommandHistory } from '@/lib/console-command-history'
-import {
-  consoleErrorLines,
-  consoleLinesToText,
-  filterConsoleLines,
-  type ConsoleLevelFilter,
-} from '@/lib/console-filter'
-import { findStartupSeq, mergeHistoryAndLive, type ConsoleHistoryState, type HistoryJumpOutcome } from '@/lib/console-history'
+import { consoleErrorLines, consoleLinesToText, filterConsoleLines } from '@/lib/console-filter'
+import type { ConsoleLevelFilter } from '@/lib/console-filter'
+import { findStartupSeq, mergeHistoryAndLive } from '@/lib/console-history'
+import type { ConsoleHistoryState, HistoryJumpOutcome } from '@/lib/console-history'
 import { applyPlayerChunk } from '@/lib/console-players'
-import { findConsoleMatches, type ConsoleSearchMatch } from '@/lib/console-search'
+import { findConsoleMatches } from '@/lib/console-search'
+import type { ConsoleSearchMatch } from '@/lib/console-search'
 import { useDirectorRender } from '@/lib/director-render'
-import { terminalSessionManager, type FetchTerminalCreds } from '@/lib/terminal-session-manager'
+import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import type { FetchTerminalCreds } from '@/lib/terminal-session-manager'
 import {
   Dialog,
   DialogContent,
@@ -39,7 +38,8 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
-import { ConsoleOutputView, type ConsoleOutputHandle } from '@/components/views/console/ConsoleOutputView'
+import { ConsoleOutputView } from '@/components/views/console/ConsoleOutputView'
+import type { ConsoleOutputHandle } from '@/components/views/console/ConsoleOutputView'
 
 /**
  * 实例控制台（FR-415，ADR-086）：输出区（只读 DOM 虚拟列表）+ 命令栏（原生 input）。

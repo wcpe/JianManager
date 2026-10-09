@@ -13,13 +13,10 @@ import { useNotificationFeed, useFeedUnreadCount } from '@/api/notification-feed
 import { TopNav } from '@jianmanager/ui/components/shell'
 import { TasksMenu } from '@/components/views/console/TasksMenu'
 import { NotificationBell } from '@/components/views/console/NotificationBell'
-import { ClusterBadges, STAT_POPOVER_MAX_ROWS, type ClusterSlot } from '@/components/views/console/ClusterBadges'
+import { ClusterBadges, STAT_POPOVER_MAX_ROWS } from '@/components/views/console/ClusterBadges'
+import type { ClusterSlot } from '@/components/views/console/ClusterBadges'
 import { AccountMenu } from '@/components/views/console/AccountMenu'
-import {
-  ConsoleBrandSegment,
-  ConsoleRefreshButton,
-  ConsoleSearchBox,
-} from '@/components/views/console/console-header-parts'
+import { ConsoleBrandSegment, ConsoleRefreshButton, ConsoleSearchBox } from '@/components/views/console/console-header-parts'
 import { useWorkspaceNavigation } from './use-workspace-navigation'
 
 /**

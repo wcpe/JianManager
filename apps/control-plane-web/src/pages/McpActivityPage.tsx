@@ -7,11 +7,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useMcpActivity, mcpBaseUrl } from '@/api/agentObservability'
 import { copyToClipboard } from '@/lib/clipboard'
 import { Button } from '@jianmanager/ui/components/button'
-import {
-  McpActivityPageView,
-  WINDOW_PRESETS,
-  type McpWindowPreset,
-} from '@/components/views/agent/McpActivityPageView'
+import { McpActivityPageView, WINDOW_PRESETS } from '@/components/views/agent/McpActivityPageView'
+import type { McpWindowPreset } from '@/components/views/agent/McpActivityPageView'
 
 const ROLE_PLATFORM_ADMIN = 10
 

@@ -1,10 +1,6 @@
 import { toast } from 'sonner'
 import { useInstances } from '@/api/instances'
-import {
-  useRegistrations,
-  useCreateRegistration,
-  useDeleteRegistration,
-} from '@/api/registrations'
+import { useRegistrations, useCreateRegistration, useDeleteRegistration } from '@/api/registrations'
 import { useResyncProxy } from '@/api/proxy'
 import ProxyRegistrationsDialogView from '@/components/views/instances/ProxyRegistrationsDialog'
 

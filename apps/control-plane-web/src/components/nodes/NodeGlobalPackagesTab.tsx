@@ -1,10 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  useGlobalPackages,
-  useInstallGlobalPackage,
-  useRemoveGlobalPackage,
-} from '@/api/pmConfig'
+import { useGlobalPackages, useInstallGlobalPackage, useRemoveGlobalPackage } from '@/api/pmConfig'
 import NodeGlobalPackagesSection from '@/components/views/nodes/NodeGlobalPackagesSection'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */

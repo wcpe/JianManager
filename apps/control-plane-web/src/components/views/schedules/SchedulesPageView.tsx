@@ -11,13 +11,8 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Clock, Pencil, ScrollText, Trash2 } from 'lucide-react'
-import {
-  ConfigRow,
-  ConfigSwitch,
-  ConfigSummaryChips,
-  ConfigViewToggle,
-  type ConfigView,
-} from '@/components/views/config-explorer/ConfigRow'
+import { ConfigRow, ConfigSwitch, ConfigSummaryChips, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
+import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import { Button } from '@jianmanager/ui/components/button'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
@@ -49,12 +44,8 @@ import {
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
 import { CRON_PRESETS, describeCron, nextRuns, validateCron } from '@/lib/cron'
-import {
-  EMPTY_SCHEDULE_FORM,
-  SCHEDULE_ACTIONS,
-  formFromSchedule,
-  type ScheduleFormState,
-} from '@/lib/schedule-form'
+import { EMPTY_SCHEDULE_FORM, SCHEDULE_ACTIONS, formFromSchedule } from '@/lib/schedule-form'
+import type { ScheduleFormState } from '@/lib/schedule-form'
 import type { ScheduleInfo } from '@/lib/schedule'
 
 /** 汇总筛选条取值：'enabled' 仅启用 / 'disabled' 仅停用 / null 全部。 */

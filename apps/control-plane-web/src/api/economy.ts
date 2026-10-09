@@ -14,22 +14,8 @@ import api from '@/api/client'
 /** 经济镜像一行：某 (node, zone, player, currency) 的最新余额（与后端 model.EconomyBalanceMirror 对应）。 */
 // 经济域契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的 fetch 函数签名使用。
-import type {
-  BusinessEvent,
-  EconomyEventsParams,
-  EconomyLeaderboardParams,
-  EconomyLeaderboardRow,
-  EconomyMirrorParams,
-  EconomyMirrorRow,
-} from '@/lib/economy'
-export type {
-  BusinessEvent,
-  EconomyEventsParams,
-  EconomyLeaderboardParams,
-  EconomyLeaderboardRow,
-  EconomyMirrorParams,
-  EconomyMirrorRow,
-} from '@/lib/economy'
+import type { BusinessEvent, EconomyEventsParams, EconomyLeaderboardParams, EconomyLeaderboardRow, EconomyMirrorParams, EconomyMirrorRow } from '@/lib/economy'
+export type { BusinessEvent, EconomyEventsParams, EconomyLeaderboardParams, EconomyLeaderboardRow, EconomyMirrorParams, EconomyMirrorRow } from '@/lib/economy'
 
 /** 查经济镜像最新余额（逐 node→zone 行，跨区同名玩家分行不混）。 */
 export async function fetchEconomyMirror(params: EconomyMirrorParams): Promise<EconomyMirrorRow[]> {

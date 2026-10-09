@@ -37,24 +37,10 @@ import {
 } from '@jianmanager/ui/components/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import DangerConfirm from '@/components/views/DangerConfirm'
-import {
-  ConfigRow,
-  ConfigSwitch,
-  ConfigSummaryChips,
-  ConfigViewToggle,
-  type ConfigView,
-} from '@/components/views/config-explorer/ConfigRow'
-import type {
-  AlertChannelInfo,
-  AlertEventInfo,
-  AlertRuleInfo,
-} from '@/lib/alert-contracts'
-import {
-  formatSilenceWindow,
-  levelStatusLevel,
-  parseChannelIds,
-  summarizeRules,
-} from '@/lib/alert-helpers'
+import { ConfigRow, ConfigSwitch, ConfigSummaryChips, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
+import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
+import type { AlertChannelInfo, AlertEventInfo, AlertRuleInfo } from '@/lib/alert-contracts'
+import { formatSilenceWindow, levelStatusLevel, parseChannelIds, summarizeRules } from '@/lib/alert-helpers'
 
 /** 页内三个 Tab：规则 / 事件 / 渠道。 */
 export type AlertTab = 'rules' | 'events' | 'channels'

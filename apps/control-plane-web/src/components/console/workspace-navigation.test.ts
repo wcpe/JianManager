@@ -14,12 +14,7 @@ import {
   type WorkspaceKey,
 } from './workspace-navigation'
 import { NAV_GROUPS, flatNavItems, type NavGroup } from './nav-config'
-import {
-  ALL_PERMISSION_NODE_IDS,
-  DEFAULT_ROLE_NODES,
-  ROLE_MEMBER,
-  ROLE_PLATFORM_ADMIN,
-} from '@/lib/roles'
+import { ALL_PERMISSION_NODE_IDS, DEFAULT_ROLE_NODES, ROLE_MEMBER, ROLE_PLATFORM_ADMIN } from '@/lib/roles'
 import zh from '@/i18n/zh.json'
 
 /**

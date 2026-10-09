@@ -24,7 +24,8 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { SidebarNavLink } from '@/components/views/console/SidebarNavLink'
-import { ThemeSwitcher, type ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
+import { ThemeSwitcher } from '@/components/views/console/ThemeSwitcher'
+import type { ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 import type { NavGroup, NavSection } from '@/lib/nav-config'
 

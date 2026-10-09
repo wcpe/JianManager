@@ -1,7 +1,8 @@
 /* eslint-disable react-refresh/only-export-components -- 与组件同文件导出类型/纯函数 targetKey，仅影响 Fast Refresh */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { InstancePicker, type InstancePickerItemView } from '@/components/views/instances/InstancePicker'
+import { InstancePicker } from '@/components/views/instances/InstancePicker'
+import type { InstancePickerItemView } from '@/components/views/instances/InstancePicker'
 
 /** 实例候选行（与 InstancePicker 的视图类型同源）。 */
 export type InstancePickerItem = InstancePickerItemView

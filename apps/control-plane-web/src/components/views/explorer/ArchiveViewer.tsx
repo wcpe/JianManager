@@ -14,7 +14,8 @@ import { Button } from '@jianmanager/ui/components/button'
 import type { ArchiveEntries, ArchiveEntry, ArchiveEntryContent } from '@/lib/file-entry'
 import { isClassName } from '@/lib/file-entry'
 import CodeEditor from '@/components/views/explorer/CodeEditor'
-import { buildEntryTree, type EntryNode } from '@/lib/archive-tree'
+import { buildEntryTree } from '@/lib/archive-tree'
+import type { EntryNode } from '@/lib/archive-tree'
 import { cn } from '@jianmanager/ui'
 
 /**

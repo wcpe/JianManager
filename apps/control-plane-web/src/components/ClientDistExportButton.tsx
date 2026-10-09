@@ -1,12 +1,8 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只注入导出实现与结果回执（受控化）。
 import { toast } from 'sonner'
 import { ClientDistExportButton as ClientDistExportButtonView } from '@/components/views/client-dist/EmbeddedUpdaterParts'
-import {
-  exportClientDistCSV,
-  saveClientDistCSV,
-  type ClientDistExportFilters,
-  type ClientDistExportKind,
-} from '@/api/clientDistExport'
+import { exportClientDistCSV, saveClientDistCSV } from '@/api/clientDistExport'
+import type { ClientDistExportFilters, ClientDistExportKind } from '@/api/clientDistExport'
 
 interface ClientDistExportButtonProps {
   kind: ClientDistExportKind

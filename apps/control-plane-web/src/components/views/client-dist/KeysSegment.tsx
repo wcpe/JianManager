@@ -13,12 +13,8 @@ import {
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import type { ClientKeyWithSecret, ClientPullKey } from '@/lib/client-channel-types'
-import {
-  CreateKeyDialog,
-  EditKeyDialog,
-  type CreateKeyBody,
-  type UpdateKeyBody,
-} from '@/components/views/client-dist/KeyEditDialogs'
+import { CreateKeyDialog, EditKeyDialog } from '@/components/views/client-dist/KeyEditDialogs'
+import type { CreateKeyBody, UpdateKeyBody } from '@/components/views/client-dist/KeyEditDialogs'
 import { RevealDialog, SecretDialog } from '@/components/views/client-dist/KeySecretDialogs'
 
 /** 「即将过期」判定窗口：7 天。 */
@@ -45,7 +41,7 @@ export interface KeysSegmentProps {
   createOpen: boolean
   onCreateOpenChange: (v: boolean) => void
   /** 查看明文（容器注入 mutation）；返回密钥名与一次性明文。 */
-  onReveal: (key: ClientPullKey) => Promise<{ name: string; key: string }>
+  onReveal: (key: ClientPullKey) => Promise<{ key: string }>
   /** 吊销密钥（容器注入 mutation）。 */
   onRevoke: (key: ClientPullKey) => Promise<void>
   /** 创建密钥（透传给内部创建模态）。 */

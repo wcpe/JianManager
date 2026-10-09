@@ -2,11 +2,8 @@ import { useTranslation } from 'react-i18next'
 import { ArrowRight, Check } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
-import {
-  readinessCompletedCount,
-  type ReadinessStep,
-  type ReadinessStepId,
-} from '@/lib/client-readiness'
+import { readinessCompletedCount } from '@/lib/client-readiness'
+import type { ReadinessStep, ReadinessStepId } from '@/lib/client-readiness'
 
 /** 渠道工作台页签标识（应用侧 ChannelWorkbench 的 tab 值）。 */
 export type WorkbenchTabId = 'keys' | 'versions' | 'core' | 'stats' | 'guide'

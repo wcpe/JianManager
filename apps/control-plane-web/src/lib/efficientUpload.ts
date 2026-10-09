@@ -1,17 +1,11 @@
-import {
-  precheckClientFiles,
-  uploadClientFilesBatch,
-  type ClientFileResult,
-} from '@/api/clientVersions'
+import { precheckClientFiles, uploadClientFilesBatch } from '@/api/clientVersions'
+import type { ClientFileResult } from '@/api/clientVersions'
 
 // 编排逻辑与类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
 export * from '@/lib/efficient-upload'
 
-import {
-  uploadFilesEfficient as runEfficientUpload,
-  type EfficientUploadEntry,
-  type EfficientUploadOptions,
-} from '@/lib/efficient-upload'
+import { uploadFilesEfficient as runEfficientUpload } from '@/lib/efficient-upload'
+import type { EfficientUploadEntry, EfficientUploadOptions } from '@/lib/efficient-upload'
 import { uploadFileChunked } from './chunkedUpload'
 
 /**

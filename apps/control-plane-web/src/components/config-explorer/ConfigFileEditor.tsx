@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
 import { ConfigFileEditor as ConfigFileEditorImpl } from '@/components/views/config-explorer/ConfigFileEditor'
-import type { ConfigFileEditorProps as ConfigFileEditorPropsFull } from '@jianmanager/ui'
+import type { ConfigFileEditorProps as ConfigFileEditorPropsFull } from '@/components/views/config-explorer/ConfigFileEditor'
 import { useConfigRead, useWriteConfig, useWriteConfigFields, useCrossCheck } from '@/api/configs'
 import CodeEditor from '@/components/explorer/editor/CodeEditor'
 

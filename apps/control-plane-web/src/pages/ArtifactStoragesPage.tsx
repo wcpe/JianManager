@@ -2,18 +2,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  useArtifactStorages,
-  useCreateArtifactStorage,
-  useUpdateArtifactStorage,
-  useDeleteArtifactStorage,
-  useActivateArtifactStorage,
-  useTestArtifactStorage,
-  useTestArtifactStorageDraft,
-  useArtifactMigrationStatus,
-  useStartArtifactMigration,
-  useArtifactMigrationFailures,
-} from '@/api/artifactStorages'
+import { useArtifactStorages, useCreateArtifactStorage, useUpdateArtifactStorage, useDeleteArtifactStorage, useActivateArtifactStorage, useTestArtifactStorage, useTestArtifactStorageDraft, useArtifactMigrationStatus, useStartArtifactMigration, useArtifactMigrationFailures } from '@/api/artifactStorages'
 import { useCancelTask } from '@/api/tasks'
 import { ArtifactStoragesPageView } from '@/components/views/artifacts/ArtifactStoragesPageView'
 

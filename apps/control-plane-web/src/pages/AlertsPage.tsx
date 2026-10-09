@@ -1,22 +1,8 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做三块数据取数、写动作触发、事件筛选持有与两个对话框容器的接线。
 import { useState } from 'react'
-import {
-  useAlertRules,
-  useAlertEvents,
-  useDeleteAlertRule,
-  useUpdateAlertRule,
-  useAlertChannels,
-  useDeleteAlertChannel,
-  useTestAlertChannel,
-  useAcknowledgeEvent,
-  useMarkAllRead,
-  useUnreadAlertCount,
-} from '@/api/alerts'
-import {
-  AlertsPageView,
-  type AlertEventFilter,
-  type AlertTab,
-} from '@/components/views/alerts/AlertsPageView'
+import { useAlertRules, useAlertEvents, useDeleteAlertRule, useUpdateAlertRule, useAlertChannels, useDeleteAlertChannel, useTestAlertChannel, useAcknowledgeEvent, useMarkAllRead, useUnreadAlertCount } from '@/api/alerts'
+import { AlertsPageView } from '@/components/views/alerts/AlertsPageView'
+import type { AlertEventFilter, AlertTab } from '@/components/views/alerts/AlertsPageView'
 import { RuleDialog } from './alerts/RuleDialog'
 import { ChannelDialog } from './alerts/ChannelDialog'
 

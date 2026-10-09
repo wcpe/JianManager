@@ -2,8 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
 // 存储类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
-import { StorageOverview, StorageFileEntry } from '@/lib/storage-types'
-export { DirUsage, ArchiveSummary, StorageOverview, StorageFileEntry } from '@/lib/storage-types'
+import type { StorageOverview, StorageFileEntry } from '@/lib/storage-types'
+export type { DirUsage, ArchiveSummary, StorageOverview, StorageFileEntry } from '@/lib/storage-types'
 
 /** 拉取平台存储概览（FR-083）。仅平台管理员可见。 */
 export function useStorageOverview() {

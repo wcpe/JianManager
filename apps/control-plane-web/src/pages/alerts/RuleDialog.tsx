@@ -1,12 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useNodes } from '@/api/nodes'
 import { InstancePicker } from '@/components/InstancePicker'
-import {
-  useCreateAlertRule,
-  useUpdateAlertRule,
-  type AlertRuleInfo,
-  type AlertChannelInfo,
-} from '@/api/alerts'
+import { useCreateAlertRule, useUpdateAlertRule, type AlertRuleInfo, type AlertChannelInfo } from '@/api/alerts'
 import { RuleDialogView } from '@/components/views/alerts/RuleDialogView'
 
 interface RuleDialogProps {

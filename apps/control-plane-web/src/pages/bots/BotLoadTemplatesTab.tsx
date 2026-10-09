@@ -2,20 +2,13 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  useBotLoadTemplates,
-  useDeleteBotLoadTemplate,
-  type BotLoadTemplate,
-} from '@/api/botLoad'
+import { useBotLoadTemplates, useDeleteBotLoadTemplate, type BotLoadTemplate } from '@/api/botLoad'
 import { useDebounced } from '@/lib/use-debounced'
 import { mergeSearchParams, readTemplatesFilter } from '@/lib/bot-load/url-state'
 import TemplateDialog from '@/components/bot-load/TemplateDialog'
 import BotLoadWizard from '@/components/bot-load/BotLoadWizard'
 import DangerConfirm from '@/components/DangerConfirm'
-import {
-  TEMPLATES_TAB_PAGE_SIZE,
-  TemplatesTabView,
-} from '@/components/views/bot-load/TemplatesTabView'
+import { TEMPLATES_TAB_PAGE_SIZE, TemplatesTabView } from '@/components/views/bot-load/TemplatesTabView'
 
 /**
  * 压测模板列表 tab 的容器：取数、搜索防抖/筛选写 URL、删除 mutation 与三处弹窗装配。

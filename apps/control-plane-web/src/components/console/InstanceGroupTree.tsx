@@ -1,11 +1,5 @@
 import { toast } from 'sonner'
-import {
-  useInstanceGroups,
-  useCreateInstanceGroup,
-  useUpdateInstanceGroup,
-  useDeleteInstanceGroup,
-  useAddInstanceGroupMembers,
-} from '@/api/instanceGroups'
+import { useInstanceGroups, useCreateInstanceGroup, useUpdateInstanceGroup, useDeleteInstanceGroup, useAddInstanceGroupMembers } from '@/api/instanceGroups'
 import { useConsoleStore } from '@/stores/console'
 import { InstanceGroupTree as InstanceGroupTreeView } from '@/components/views/instances/InstanceGroupTree'
 

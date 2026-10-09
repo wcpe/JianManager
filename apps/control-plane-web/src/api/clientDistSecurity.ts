@@ -3,50 +3,8 @@ import api from '@/api/client'
 /**
  * 客户端分发安全契约（FR-430 / ADR-088）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type {
-  SecurityLevel,
-  KeySecurityState,
-  ProtectionActionStatus,
-  SecurityTargetType,
-  ChannelProtectionMode,
-  SecurityRankItem,
-  ClientDistSecurityOverview,
-  ClientDistSecurityEvent,
-  ClientDistSecurityProfile,
-  ClientDistSecurityProfileDetail,
-  ClientChannelSecuritySummary,
-  ClientDistIpAnalysis,
-  ClientDistPlayerAnalysis,
-  ClientProtectionAction,
-  ClientSecurityGroup,
-  ClientSecurityPrivacyNotice,
-  ClientDistSecurityLogType,
-  ClientDistSecurityLogItem,
-  ClientDistSecurityLogPage,
-  ClientDistSecurityListParams,
-  BlockIPRequest,
-  SetKeyStateRequest,
-  SetChannelProtectionRequest,
-  SaveSecurityGroupRequest,
-} from '@/lib/client-dist-security-contracts'
-import type {
-  ClientDistSecurityOverview,
-  ClientDistSecurityEvent,
-  ClientDistSecurityProfile,
-  ClientDistSecurityProfileDetail,
-  ClientChannelSecuritySummary,
-  ClientDistIpAnalysis,
-  ClientDistPlayerAnalysis,
-  ClientProtectionAction,
-  ClientSecurityGroup,
-  ClientSecurityPrivacyNotice,
-  ClientDistSecurityLogPage,
-  ClientDistSecurityListParams,
-  BlockIPRequest,
-  SetKeyStateRequest,
-  SetChannelProtectionRequest,
-  SaveSecurityGroupRequest,
-} from '@/lib/client-dist-security-contracts'
+export type { SecurityLevel, KeySecurityState, ProtectionActionStatus, SecurityTargetType, ChannelProtectionMode, SecurityRankItem, ClientDistSecurityOverview, ClientDistSecurityEvent, ClientDistSecurityProfile, ClientDistSecurityProfileDetail, ClientChannelSecuritySummary, ClientDistIpAnalysis, ClientDistPlayerAnalysis, ClientProtectionAction, ClientSecurityGroup, ClientSecurityPrivacyNotice, ClientDistSecurityLogType, ClientDistSecurityLogItem, ClientDistSecurityLogPage, ClientDistSecurityListParams, BlockIPRequest, SetKeyStateRequest, SetChannelProtectionRequest, SaveSecurityGroupRequest } from '@/lib/client-dist-security-contracts'
+import type { ClientDistSecurityOverview, ClientDistSecurityEvent, ClientDistSecurityProfile, ClientDistSecurityProfileDetail, ClientChannelSecuritySummary, ClientDistIpAnalysis, ClientDistPlayerAnalysis, ClientProtectionAction, ClientSecurityGroup, ClientSecurityPrivacyNotice, ClientDistSecurityLogPage, ClientDistSecurityListParams, BlockIPRequest, SetKeyStateRequest, SetChannelProtectionRequest, SaveSecurityGroupRequest } from '@/lib/client-dist-security-contracts'
 
 const securityKey = ['client-dist-security'] as const
 

@@ -2,7 +2,8 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, type ReactNode } fro
 import { useTranslation } from 'react-i18next'
 import { Clapperboard, Pause, Play, SkipForward } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
-import { sceneStatus, type DirectorState } from '@/lib/director'
+import { sceneStatus } from '@/lib/director'
+import type { DirectorState } from '@/lib/director'
 import type { WorkspacePreset } from '@/lib/workspace-preset'
 import { DirectorSceneStrip } from '@/components/views/console/DirectorSceneStrip'
 

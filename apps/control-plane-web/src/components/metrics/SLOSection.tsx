@@ -3,12 +3,7 @@ import { SLOSection as SLOSectionView } from '@/components/views/instances/SLOSe
 import type { MetricRange } from '@jianmanager/ui'
 
 // 纯逻辑格式化函数与配色判定原样再导出（其他页面与测试直接引用）。
-export {
-  availabilityLevel,
-  budgetBurnRatio,
-  fmtAvailability,
-  fmtDuration,
-} from '@/components/views/instances/SLOSection'
+export { availabilityLevel, budgetBurnRatio, fmtAvailability, fmtDuration } from '@/components/views/instances/SLOSection'
 
 /**
  * 可用性区块的应用接线层（ADR-097 a 范式）。

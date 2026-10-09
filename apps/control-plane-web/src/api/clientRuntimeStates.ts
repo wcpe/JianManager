@@ -4,15 +4,7 @@ import api from '@/api/client'
 /**
  * 客户端运行态契约（FR-265）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type {
-  ClientRuntimeState,
-  ClientRuntimeSummary,
-  RuntimeVersionCount,
-  RuntimeStringCount,
-  RuntimeLagCount,
-  RuntimeUpdateSeriesPoint,
-  ClientRuntimeOverview,
-} from '@/lib/client-runtime-contracts'
+export type { ClientRuntimeState, ClientRuntimeSummary, RuntimeVersionCount, RuntimeStringCount, RuntimeLagCount, RuntimeUpdateSeriesPoint, ClientRuntimeOverview } from '@/lib/client-runtime-contracts'
 import type { ClientRuntimeOverview } from '@/lib/client-runtime-contracts'
 
 /** 查询客户端运行态聚合：省略 channelId=跨频道总。 */

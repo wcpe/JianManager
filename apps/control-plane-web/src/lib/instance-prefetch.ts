@@ -1,3 +1,5 @@
+import { useEffect, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 
 /**
  * 悬停预取防抖时长（FR-297）：快速掠过的行不触发请求，
@@ -43,11 +45,7 @@ export function createHoverPrefetcher(
   }
 }
 
-import { useEffect, useMemo } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 
-
-import { createHoverPrefetcher, INSTANCE_PREFETCH_DELAY_MS, type HoverPrefetcher } from './instance-prefetch'
 import { instanceQueryOptions } from '@/api/instances'
 
 /**

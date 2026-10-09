@@ -6,24 +6,14 @@ import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth'
-import {
-  useAgentTokens,
-  useIssueAgentToken,
-  useRevokeAgentToken,
-  agentTokenStatus,
-  WRITE_ALLOWLIST_OPTIONS,
-  CAPABILITY_OPTIONS,
-  DEFAULT_CAPABILITIES,
-} from '@/api/agentTokens'
+import { useAgentTokens, useIssueAgentToken, useRevokeAgentToken, agentTokenStatus, WRITE_ALLOWLIST_OPTIONS, CAPABILITY_OPTIONS, DEFAULT_CAPABILITIES } from '@/api/agentTokens'
 import { mcpBaseUrl } from '@/api/agentObservability'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useDangerPermission } from '@/lib/danger'
 import { Button } from '@jianmanager/ui/components/button'
-import {
-  AgentTokensPageView,
-  type AgentTokenRow,
-} from '@/components/views/agent/AgentTokensPageView'
+import { AgentTokensPageView } from '@/components/views/agent/AgentTokensPageView'
+import type { AgentTokenRow } from '@/components/views/agent/AgentTokensPageView'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
 const ROLE_PLATFORM_ADMIN = 10

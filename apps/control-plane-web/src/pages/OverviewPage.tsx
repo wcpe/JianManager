@@ -11,7 +11,8 @@ import { HealthWall } from '@/components/HealthWall'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import type { MetricRange } from '@jianmanager/ui'
-import { OverviewPageView, type AttributionGauge } from '@/components/views/overview/OverviewPageView'
+import { OverviewPageView } from '@/components/views/overview/OverviewPageView'
+import type { AttributionGauge } from '@/components/views/overview/OverviewPageView'
 
 /**
  * 概览页容器（ADR-097 a 范式）：六个查询、平台观测区权限判定、两处受控状态与三处接线都在这里决定，

@@ -7,20 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type { ChartSeries } from '@jianmanager/ui'
 import type { ClientRuntimeOverview, ClientRuntimeState } from '@/lib/client-runtime-contracts'
 import type { ReactNode } from 'react'
-import {
-  LinkableDistPanel,
-  TrendCard,
-  ErrorPanel,
-  distBuckets,
-  fmtTime,
-  fmtRate,
-  lagLabel,
-  parseLagLabel,
-  platformLabel,
-  reversePlatformLabel,
-  runtimeUpdateSeries,
-  type RuntimeLink,
-} from '@/components/views/client-dist/OpsShared'
+import { LinkableDistPanel, TrendCard, ErrorPanel, distBuckets, fmtTime, fmtRate, lagLabel, parseLagLabel, platformLabel, reversePlatformLabel, runtimeUpdateSeries } from '@/components/views/client-dist/OpsShared'
+import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 import { KPI_I18N } from '@/lib/client-dist-kpi'
 
 /**

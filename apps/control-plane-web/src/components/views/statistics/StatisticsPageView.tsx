@@ -21,7 +21,8 @@ import type { ClientDistObservability } from '@/lib/client-dist-stats-contracts'
 import { summarizeNodes } from '@/lib/node-summary'
 import type { NodeInfo } from '@/lib/node-types'
 import type { OnlinePlayersResult } from '@/lib/player'
-import { bucketsFromCounts, summarizeProbeReachability, tallyBy, type DistBucket } from '@/lib/platform-stats'
+import { bucketsFromCounts, summarizeProbeReachability, tallyBy } from '@/lib/platform-stats'
+import type { DistBucket } from '@/lib/platform-stats'
 
 /** 字节 → 紧凑可读（G/M/K）。 */
 function fmtBytes(b: number): string {

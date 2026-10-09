@@ -4,12 +4,8 @@ import { useLocation, useNavigate } from 'react-router'
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import { usePermissionsStore } from '@/stores/permissions'
-import {
-  workspaceOfPath,
-  workspacesForPermissions,
-  workspacesForRole,
-  type WorkspaceKey,
-} from '@/lib/workspace-navigation'
+import { workspaceOfPath, workspacesForPermissions, workspacesForRole } from '@/lib/workspace-navigation'
+import type { WorkspaceKey } from '@/lib/workspace-navigation'
 
 // 纯函数（isDeepLink / landingPathOf）已回迁应用侧；此处转出，调用点零改动。
 export { isDeepLink, landingPathOf } from '@/lib/use-workspace-navigation'

@@ -21,13 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import {
-  hasErrors,
-  validateFields,
-  validateHost,
-  validatePort,
-  validateRequired,
-} from '@/lib/form-validation'
+import { hasErrors, validateFields, validateHost, validatePort, validateRequired } from '@/lib/form-validation'
 import { useFieldGate } from '@/lib/use-field-gate'
 
 /** 批量条与压测弹窗共用的行为集合（与后端 behavior 枚举对齐）。 */

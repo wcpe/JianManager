@@ -2,69 +2,23 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  Box,
-  ChevronsLeft,
-  ChevronsRight,
-  Plus,
-  Search,
-  Server,
-} from 'lucide-react'
-import {
-  useNodes,
-  useSetNodeMaintenance,
-  useDrainNode,
-  useDeleteNode,
-  useArchivedNodes,
-  usePurgeArchivedNode,
-  type NodeInfo,
-  type ArchivedNode,
-  type NodeDeleteBlockedInstance,
-} from '@/api/nodes'
+import { ChevronsLeft, ChevronsRight, Plus, Search, Server } from 'lucide-react'
+import { useNodes, useSetNodeMaintenance, useDrainNode, useDeleteNode, useArchivedNodes, usePurgeArchivedNode, type NodeInfo, type ArchivedNode } from '@/api/nodes'
+import type { NodeDeleteBlockedInstance } from '@/api/nodes'
 import { useInstanceAggregate, useInstanceSearch } from '@/api/instances'
 import { useMetricSeries, useMetricSeriesBatch } from '@/api/metrics'
-import { Badge } from '@jianmanager/ui/components/badge'
-import { ObjectPageHeader } from '@jianmanager/ui/components/shell'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Input } from '@jianmanager/ui/components/input'
-import { MiniBar } from '@jianmanager/ui/components/mini-bar'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { ResourceGauge } from '@jianmanager/ui/components/gauge'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
 import { CardsGrid, DataPanelSkeleton, PageHeader, PageShell, ScopeBar, Segment, Segments } from '@jianmanager/ui/components/layout'
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-} from '@jianmanager/ui/components/dropdown-menu'
-import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
-import { RangePicker, type MetricRange } from '@jianmanager/ui'
+import { type ChartSeries } from '@jianmanager/ui'
+import { type MetricRange } from '@jianmanager/ui'
 import { resourceLevel } from '@jianmanager/ui'
 import { summarizeNodes } from '@/lib/node-summary'
-import {
-  nodeStatusLevel,
-  filterNodes,
-  resolveSelectedNode,
-  loadNodeListCollapsed,
-  persistNodeListCollapsed,
-} from '@/lib/node-list'
+import { filterNodes, resolveSelectedNode, loadNodeListCollapsed, persistNodeListCollapsed } from '@/lib/node-list'
 import { cn } from '@jianmanager/ui'
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import {
-  scrollableDialogContentClass,
-  ScrollableDialogBody,
-} from '@jianmanager/ui/components/scrollable-dialog'
 import NodeJDKTab from '@/components/nodes/NodeJDKTab'
 import NodeLogRuntimeTab from '@/components/nodes/NodeLogRuntimeTab'
 import NodePortsTab from '@/components/nodes/NodePortsTab'
@@ -76,26 +30,11 @@ import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialogContainer from '@/components/nodes/AddNodeDialogContainer'
 import { Button } from '@jianmanager/ui/components/button'
 import { BlockedByInstancesDialog } from '@/components/views/nodes/BlockedByInstancesDialog'
-import {
-  ArchivedNodeListRow,
-  formatBytes,
-  NodeActionsMenu,
-  NodeCard,
-  NodeListRow,
-  NodeOverviewSection,
-  NodeRailIcon,
-} from '@/components/views/nodes/NodeListParts'
+import { ArchivedNodeListRow, NodeCard, NodeListRow, NodeOverviewSection, NodeRailIcon } from '@/components/views/nodes/NodeListParts'
 import { ArchivedNodeDetailPane } from '@/components/views/nodes/ArchivedNodeDetailPane'
-import {
-  COMPARE_TARGET_CAP,
-  NodeInstanceCompare,
-  NodeMonitorCharts,
-} from '@/components/views/nodes/NodeCharts'
-import {
-  DETAIL_TABS,
-  NodeDetailPane,
-  type DetailTab,
-} from '@/components/views/nodes/NodeDetailPane'
+import { COMPARE_TARGET_CAP, NodeInstanceCompare, NodeMonitorCharts } from '@/components/views/nodes/NodeCharts'
+import { DETAIL_TABS, NodeDetailPane } from '@/components/views/nodes/NodeDetailPane'
+import type { DetailTab } from '@/components/views/nodes/NodeDetailPane'
 
 
 /** 待二次确认的危险节点操作（FR-048）。 */

@@ -3,19 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import ResourceExplorer from '@/components/views/explorer/ResourceExplorer'
-import {
-  fetchFileList,
-  readFileContent,
-  writeFileContent,
-  deleteFile,
-  renameFile,
-  uploadFile,
-  downloadFile,
-  downloadArchive,
-  checkFileAccess,
-  chmodFile,
-  searchFiles,
-} from '@/api/files'
+import { fetchFileList, readFileContent, writeFileContent, deleteFile, renameFile, uploadFile, downloadFile, downloadArchive, checkFileAccess, chmodFile, searchFiles } from '@/api/files'
 import { listArchiveEntries, readArchiveEntry, decompile } from '@/api/archive'
 import { reportInstanceDraft } from '@/lib/console-draft-registry'
 import { useThemeStore } from '@/stores/theme'
