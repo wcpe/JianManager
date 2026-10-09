@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  EMPTY_SCHEDULE_FORM,
-  formFromSchedule,
-  toCreateBody,
-  toUpdateBody,
-  type ScheduleFormState,
-} from './schedule-form'
+import { EMPTY_SCHEDULE_FORM, formFromSchedule, toCreateBody, toUpdateBody } from '@/lib/schedule-form'
+import type { ScheduleFormState } from '@/lib/schedule-form'
 import type { ScheduleInfo } from '@/api/schedules'
 
 const sample: ScheduleInfo = {

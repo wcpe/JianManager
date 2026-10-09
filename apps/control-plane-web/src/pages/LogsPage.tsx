@@ -28,19 +28,10 @@ import { useNodes } from '@/api/nodes'
 import { ClearConflictsDialog } from '@/components/ClearConflictsDialog'
 import { InstancePicker } from '@/components/InstancePicker'
 import { LOGS_FEDERATION_KEYS, exportBlockedKeyForReasons } from '@/lib/logs-federation'
-import {
-  LogsPageView,
-  type LogsFilterState,
-  type LogsInsights,
-  type LogsView,
-} from '@/components/views/logs/LogsPageView'
-import {
-  buildExportParams,
-  timeRangeToParams,
-  windowForAnchor,
-  type LogExportScope,
-  type TimeRangePreset,
-} from './logs-filters'
+import { LogsPageView } from '@/components/views/logs/LogsPageView'
+import type { LogsFilterState, LogsInsights, LogsView } from '@/components/views/logs/LogsPageView'
+import { buildExportParams, timeRangeToParams, windowForAnchor } from '@/lib/logs-filters'
+import type { LogExportScope, TimeRangePreset } from '@/lib/logs-filters'
 
 /**
  * 把事件的原始来源标识归一为下拉取值域（instance/control_plane/worker）。

@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useBotStressSessions, useStartBotStressSession, useStopBotStressSession } from '@/api/bots'
-import { mergeSearchParams, readSessionsFilter } from '@/lib/bot-load/url-state'
+import { mergeSearchParams, readSessionsFilter } from '@/lib/bot-load-url-state'
 import BotLoadWizard from '@/components/bot-load/BotLoadWizard'
 import { SESSIONS_TAB_PAGE_SIZE, SessionsTabView } from '@/components/views/bot-load/SessionsTabView'
 

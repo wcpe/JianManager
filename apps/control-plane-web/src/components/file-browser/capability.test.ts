@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  instanceFilesCapability,
-  instanceBrowseCapability,
-  storageBrowseCapability,
-  clientDistBrowseCapability,
-  customExplorerCapability,
-  browserPropsFromCapability,
-} from './capability'
+import { instanceFilesCapability, instanceBrowseCapability, storageBrowseCapability, clientDistBrowseCapability, customExplorerCapability, browserPropsFromCapability } from '@/lib/file-browser-capability'
 
 describe('ExplorerCapability（FR-378）', () => {
   it('instance-files 全开写', () => {

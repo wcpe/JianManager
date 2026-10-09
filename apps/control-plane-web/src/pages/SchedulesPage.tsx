@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { useSchedules, useCreateSchedule, useUpdateSchedule, useDeleteSchedule, useScheduleLogs } from '@/api/schedules'
 import { InstancePicker } from '@/components/InstancePicker'
 import { useDangerPermission } from '@/lib/danger'
-import { toCreateBody, toUpdateBody } from '@/pages/schedule-form'
+import { toCreateBody, toUpdateBody } from '@/lib/schedule-form'
 import { SchedulesPageView } from '@/components/views/schedules/SchedulesPageView'
 import type { ScheduleFilter } from '@/components/views/schedules/SchedulesPageView'
 

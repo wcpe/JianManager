@@ -2,11 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { screen } from '@testing-library/react'
 import { renderWithProviders } from '@/test/render'
 import UnifiedExplorerShell from './UnifiedExplorerShell'
-import {
-  instanceFilesCapability,
-  storageBrowseCapability,
-  customExplorerCapability,
-} from './capability'
+import { instanceFilesCapability, storageBrowseCapability, customExplorerCapability } from '@/lib/file-browser-capability'
 import type { FileBrowserSource } from '@/lib/file-browser-types'
 
 // 组件已回迁应用侧（原 ADR-097 迁包已撤销）：包内 UnifiedExplorerShell 从包内 import 标签宿主，

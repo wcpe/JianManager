@@ -6,7 +6,8 @@ import ClientDistExportButton from '@/components/ClientDistExportButton'
 import { useClientDistSecurityLogs } from '@/api/clientDistSecurity'
 import { useClientDistEventDetail, useClientDistEventSearch } from '@/api/clientDistEvents'
 import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
-import { OPS_ALL, type RuntimeLink } from './ops-shared'
+import { OPS_ALL } from '@/components/views/client-dist/OpsShared'
+import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
 /**
  * 页面 B · 全量日志 Tab（FR-430 / ADR-088 去重合并的**唯一入口**）。

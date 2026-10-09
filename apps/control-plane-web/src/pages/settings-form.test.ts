@@ -1,13 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  diffSettings,
-  hasUnsavedChanges,
-  keyCategory,
-  validateSettingDraft,
-  hasInvalidDraft,
-  MAX_DIRECT_PROBE_TIMEOUT_MS,
-  type DraftDiffItem,
-} from './settings-form'
+import { diffSettings, hasUnsavedChanges, keyCategory, validateSettingDraft, hasInvalidDraft, MAX_DIRECT_PROBE_TIMEOUT_MS } from '@/lib/settings-form'
+import type { DraftDiffItem } from '@/lib/settings-form'
 
 const items: DraftDiffItem[] = [
   { key: 'log.level', value: 'info' },

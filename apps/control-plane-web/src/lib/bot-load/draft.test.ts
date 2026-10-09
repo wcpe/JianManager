@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  createDefaultDraft,
-  isPlanTokenFresh,
-  wizardReducer,
-} from './draft'
+import { createDefaultDraft, isPlanTokenFresh, wizardReducer } from '@/lib/bot-load-draft'
 import { COMMAND_ORCHESTRATION_V1 } from '@/lib/bot-load-presets'
 
 describe('bot-load draft reducer', () => {

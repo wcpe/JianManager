@@ -1,12 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  DEFAULT_AUDIT_FILTER,
-  toAuditParams,
-  toRFC3339,
-  formatAuditDetail,
-  auditRowsToNDJSON,
-  type AuditFilterState,
-} from './audit-filters'
+import { DEFAULT_AUDIT_FILTER, toAuditParams, toRFC3339, formatAuditDetail, auditRowsToNDJSON } from '@/lib/audit-filters'
+import type { AuditFilterState } from '@/lib/audit-filters'
 import type { AuditLogInfo } from '@/api/audit'
 
 function state(overrides: Partial<AuditFilterState> = {}): AuditFilterState {

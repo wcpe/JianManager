@@ -4,13 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 import type { InstanceInfo } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import {
-  recordRecentServer,
-  removeServer,
-  toggleFavoriteServer,
-  useFavoriteServers,
-  useRecentServers,
-} from './server-selection'
+import { recordRecentServer, removeServer, toggleFavoriteServer, useFavoriteServers, useRecentServers } from '@/lib/server-selection'
 import SidebarServerList from '@/components/views/instances/SidebarServerList'
 
 /** 状态合并查询的刷新间隔：侧栏不引入高频轮询（FR-293），仅低频合并刷新列表内实例。 */
