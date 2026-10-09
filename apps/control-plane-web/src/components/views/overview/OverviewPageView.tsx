@@ -38,6 +38,17 @@ import { useVirtualRows } from '@/lib/shared/virtual-list'
 const AGGREGATION_LIMIT = 5
 
 /**
+ * 概览底部实例表行高（px）：**声明值 = 真实值**——同一个常量既喂虚拟窗口（`itemSize`），
+ * 也写成行盒的行内 style，不由类名反推（先例：`views/logs/LogsPageView` 的 `ROW_HEIGHT`）。
+ *
+ * 数值依据（实测）：行内最高内容是状态徽章（`StatusBadge` 高 20，含行内基线间隙约 21）
+ * 加上 `TableCell` 的 `py-1.5`（12）≈ 33；这里取 36 使概览与实例页共用同一行高栅格
+ * （36 = 24px 控件 + 12px 内距），只要行内容不超过 24px 行盒就恒为 36。
+ * 原先声明 42：既比真实行盒高（滚动条偏长），又没有任何行盒去承载它。
+ */
+const OVERVIEW_INSTANCE_ROW_HEIGHT = 36
+
+/**
  * 趋势序列降采样（FR-496 阶段 6 补丁）。
  *
  * 24h 范围服务端返回 **96 点/条**，而首页图表高 180px、宽约 400px——96 点远超实际可分辨的
@@ -466,7 +477,7 @@ export function OverviewInstancePanel({ instances, onNeedMore }: OverviewInstanc
     range: instanceRange,
   } = useVirtualRows({
     total: instances.length,
-    itemSize: 42,
+    itemSize: OVERVIEW_INSTANCE_ROW_HEIGHT,
     overscan: 8,
     fallbackViewportSize: 420,
   })
@@ -509,7 +520,12 @@ export function OverviewInstancePanel({ instances, onNeedMore }: OverviewInstanc
               </TableRow>
             )}
             {visibleInstances.map((inst) => (
-              <TableRow key={inst.id} data-testid="overview-instance-row">
+              // 行高写进行盒：与 itemSize 同源，滚动条长度因而不虚长。
+              <TableRow
+                key={inst.id}
+                data-testid="overview-instance-row"
+                style={{ height: OVERVIEW_INSTANCE_ROW_HEIGHT }}
+              >
                 <TableCell className="font-medium">{inst.name}</TableCell>
                 <TableCell className="text-muted-foreground">{inst.type}</TableCell>
                 <TableCell>

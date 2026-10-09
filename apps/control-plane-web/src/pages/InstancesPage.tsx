@@ -174,6 +174,16 @@ function writeInstanceUrlState(searchParams: URLSearchParams, updates: InstanceU
   if (updates.nodeId !== undefined) writeParam(searchParams, 'nodeId', updates.nodeId)
 }
 
+/**
+ * proxy 行判定（能力画像 `bcTopology`）。
+ *
+ * 抽成模块级函数是为了让**行渲染与虚拟高度模型共用同一判据**：展开行会在同一虚拟「项」下
+ * 多渲染一个 `<tr>`，模型必须按展开行高计入，两处判据一旦分叉就会重新引入行位漂移。
+ */
+function isProxyInstance(inst: InstanceInfo): boolean {
+  return resolveCapabilities(inst).capabilities.includes('bcTopology')
+}
+
 export default function InstancesPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -592,6 +602,16 @@ export default function InstancesPage() {
     })
 
   /**
+   * 展开行判据（喂给虚拟高度模型）：与 `renderRow` 的渲染条件完全同源——
+   * proxy 画像 + 该 id 在展开集合中。展开会在该实例项下追加一个 `INSTANCE_EXPANDED_ROW_HEIGHT`
+   * 高的行，模型必须按同一判据计入，否则其后所有行的定位与滚动条长度都会漂移。
+   */
+  const isRowExpanded = useCallback(
+    (inst: InstanceInfo) => isProxyInstance(inst) && expandedProxies.has(inst.id),
+    [expandedProxies],
+  )
+
+  /**
    * 行装配（ADR-097）：行展示件已入包（平铺表与分组树表共用），此处只注入数据与回调。
    * 逐行判别留在应用侧：节点名（查节点表）、代理画像（FR-445）、搭建中、运行态漂移（FR-471）、
    * 三个动作的按 id 在途态（别的行在提交不该禁用本行）。
@@ -604,7 +624,7 @@ export default function InstancesPage() {
       nodeName={nodeName(inst.nodeId)}
       selected={selectedIds.includes(inst.id)}
       onToggleSelect={() => toggleOne(inst.id)}
-      isProxy={resolveCapabilities(inst).capabilities.includes('bcTopology')}
+      isProxy={isProxyInstance(inst)}
       provisioning={isProvisioningInstance(inst)}
       drift={runtimeDriftOf(inst)}
       proxyExpanded={expandedProxies.has(inst.id)}
@@ -913,6 +933,7 @@ export default function InstancesPage() {
               instances={instances}
               totalCount={totalCount}
               onNeedMore={loadMoreInstances}
+              isRowExpanded={isRowExpanded}
               scrollStorageKey={scrollStorageKey}
               header={
                 <InstanceTableHeader
@@ -934,6 +955,7 @@ export default function InstancesPage() {
               loadedCount={instances.length}
               onNeedMore={loadMoreInstances}
               onToggleCollapse={toggleGroupCollapsed}
+              isRowExpanded={isRowExpanded}
               scrollStorageKey={scrollStorageKey}
               header={
                 <InstanceTableHeader
