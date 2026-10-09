@@ -2,6 +2,12 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+// 主语言包：`@/i18n` 在导入时自注册（顶层 i18n.use(initReactI18next).init）。
+// 【必须在此显式引入】此前只引了下面那行 logs-federation 的局部语言包，主包仅被
+// SettingsPage / api/plugins / ConsoleSidebar 间接引入 —— 而从入口可达的文件里没有它们，
+// 于是应用启动时主语言包从未注册，全部 t() 渲染原始 key（如 `login.submit`、`nav.workspaceOps`），
+// 直到用户走到某个间接引入它的页面才恢复。登录页尤其显眼：那是启动后第一屏。
+import '@/i18n'
 import '@/lib/logs-federation/i18n'
 import './index.css'
 import { initThemeFromStorage } from '@jianmanager/ui/lib/theme'
