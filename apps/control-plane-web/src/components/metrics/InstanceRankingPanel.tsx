@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- 兼容旧入口：转出视图的组件与纯逻辑，非组件导出按仓库约定在此豁免 */
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useInstanceRanking } from '@/api/metrics'

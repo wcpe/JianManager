@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- 视图与随其导出的纯逻辑/变体同文件（沿用原组织方式），非组件导出按仓库约定在此豁免 */
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@jianmanager/ui/components/button'

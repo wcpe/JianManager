@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/refs -- renderLink 是 render-prop，不读本组件的 ref；
+   规则对「渲染期调用外部函数」保守告警，本文件的 ref（closeTimer）只在事件处理与清理 effect 中访问 */
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
