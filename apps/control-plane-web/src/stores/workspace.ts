@@ -1,17 +1,9 @@
 import { create } from 'zustand'
 import type { CardType } from '@/lib/workspace-card'
-import {
-  builtinPresets,
-  defaultOpsPreset,
-  deserializePresets,
-  layoutToCards,
-  makeCard,
-  serializePresets,
-  PRESETS_STORAGE_KEY,
-  type PlacedCard,
-  type WorkspacePreset,
-} from '@/lib/workspace-preset'
-import { dedupeCards, dragPayloadToCards, type DragPayload } from '@/lib/instance-library'
+import { builtinPresets, defaultOpsPreset, deserializePresets, layoutToCards, makeCard, serializePresets, PRESETS_STORAGE_KEY } from '@/lib/workspace-preset'
+import type { PlacedCard, WorkspacePreset } from '@/lib/workspace-preset'
+import { dedupeCards, dragPayloadToCards } from '@/lib/instance-library'
+import type { DragPayload } from '@/lib/instance-library'
 
 /**
  * 可组合工作区状态（FR-166 单实例 / FR-167 跨实例超级工作台 / ADR-034 取代 ADR-030）。

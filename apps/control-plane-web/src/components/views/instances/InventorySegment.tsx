@@ -18,15 +18,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@jianmanager/ui/compon
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import type { BusinessResult } from '@/lib/business'
-import {
-  buildSlotGrid,
-  ENDER_CHEST_SLOTS,
-  INVENTORY_SLOTS,
-  SLOTS_PER_ROW,
-  type BasicAttrs,
-  type InventoryView,
-  type RawItemSlot,
-} from '@/lib/inventory-view'
+import { buildSlotGrid, ENDER_CHEST_SLOTS, INVENTORY_SLOTS, SLOTS_PER_ROW } from '@/lib/inventory-view'
+import type { BasicAttrs, InventoryView, RawItemSlot } from '@/lib/inventory-view'
 
 /**
  * 背包定制页（JBIS，FR-127，见 JM ADR-026 + ServerProbe ADR-0016）。

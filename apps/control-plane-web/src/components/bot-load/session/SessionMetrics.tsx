@@ -1,9 +1,6 @@
 import { useState } from 'react'
-import {
-  SessionMetrics as SessionMetricsView,
-  rangeResolution,
-  type SessionMetricsRange,
-} from '@/components/views/bot-load/session/SessionMetrics'
+import { SessionMetrics as SessionMetricsView, rangeResolution } from '@/components/views/bot-load/session/SessionMetrics'
+import type { SessionMetricsRange } from '@/components/views/bot-load/session/SessionMetrics'
 import { useBotLoadMetrics } from '@/api/bot-load'
 import { useSessionEvents } from './SessionEventProvider'
 

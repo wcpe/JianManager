@@ -1,4 +1,5 @@
-import { useMetricOverview, useMetricSeries, type MetricResolution } from '@/api/metrics'
+import { useMetricOverview, useMetricSeries } from '@/api/metrics'
+import type { MetricResolution } from '@/api/metrics'
 import type { MetricRange } from '@jianmanager/ui'
 import type { MonitorSource } from '@jianmanager/ui/charts/MonitorSkeleton'
 import type { RawSeries } from '@jianmanager/ui/lib/monitor-metrics'

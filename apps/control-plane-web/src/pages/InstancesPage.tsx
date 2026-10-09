@@ -4,20 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal } from 'lucide-react'
-import {
-  useInfiniteInstanceSearch,
-  useInstanceAggregate,
-  useStartInstance,
-  useStopInstance,
-  useRestartInstance,
-  useDeleteInstance,
-  useKillInstance,
-  useAdoptInstanceRuntime,
-  isProvisioningInstance,
-  type InstanceListParams,
-  type InstanceSearchParams,
-  type InstanceInfo,
-} from '@/api/instances'
+import { useInfiniteInstanceSearch, useInstanceAggregate, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance, useAdoptInstanceRuntime, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
+import type { InstanceListParams, InstanceSearchParams } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useNetworks } from '@/api/networks'
 import { useTopology } from '@/api/topology'
@@ -37,19 +25,10 @@ import EditInstanceConfigDialog from '@/components/EditInstanceConfigDialog'
 import { resolveCapabilities } from '@/lib/capabilities'
 import { InstanceWorktableCard } from '@/components/console/InstanceWorktableCard'
 import { InstanceGroupManager } from '@/components/console/InstanceGroupManager'
-import {
-  buildGroupTreeSource,
-  buildKeyMap,
-  collectEnvs,
-  collectTags,
-  groupInstances,
-  groupInstancesByGroupTree,
-  parseTags,
-  GROUP_DIMENSIONS,
-  type GroupDimension,
-} from '@/components/console/instance-grouping'
+import { buildGroupTreeSource, buildKeyMap, collectEnvs, collectTags, groupInstances, groupInstancesByGroupTree, parseTags, GROUP_DIMENSIONS, type GroupDimension } from '@/components/console/instance-grouping'
 import { runtimeDriftOf } from '@/lib/runtime-drift'
-import { summarizeInstances, summaryFilterStatus, type SummaryFilterKey } from '@/lib/instance-summary'
+import { summarizeInstances, summaryFilterStatus } from '@/lib/instance-summary'
+import type { SummaryFilterKey } from '@/lib/instance-summary'
 import { DataPanelSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
@@ -63,24 +42,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import {
-  SCROLL_KEY_PREFIX,
-  buildInstanceTreeRows,
-  VirtualizedGroupedInstanceTable,
-  VirtualizedInstanceTable,
-} from '@/components/views/instances/VirtualizedInstanceTables'
-import {
-  FilterSelect,
-  InstanceRowMenu,
-  InstanceTableHeader,
-  type InstanceSortKey,
-  type InstanceSortOrder,
-} from '@/components/views/instances/InstanceTableParts'
+import { SCROLL_KEY_PREFIX, buildInstanceTreeRows, VirtualizedGroupedInstanceTable, VirtualizedInstanceTable } from '@/components/views/instances/VirtualizedInstanceTables'
+import { FilterSelect, InstanceRowMenu, InstanceTableHeader } from '@/components/views/instances/InstanceTableParts'
+import type { InstanceSortKey, InstanceSortOrder } from '@/components/views/instances/InstanceTableParts'
 import { InstanceRowView } from '@/components/views/instances/InstanceRowView'
-import {
-  BackendsInline,
-  CardView,
-} from '@/components/views/instances/InstanceCardViews'
+import { BackendsInline, CardView } from '@/components/views/instances/InstanceCardViews'
 
 // 供针对性测试（rowMenu 门控）沿用既有导入路径。
 export { InstanceRowMenu }

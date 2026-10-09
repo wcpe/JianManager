@@ -35,12 +35,8 @@ import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import { validateRequired } from '@/lib/form-validation'
 import { instanceStatusLevel, statusColorVar } from '@jianmanager/ui/lib/threshold'
-import {
-  memberHealth,
-  memberHealthFromStatus,
-  type MemberHealth,
-  type MemberStatusCounts,
-} from '@/lib/topology'
+import { memberHealth, memberHealthFromStatus } from '@/lib/topology'
+import type { MemberHealth, MemberStatusCounts } from '@/lib/topology'
 import { useFieldGate } from '@/lib/use-field-gate'
 import { cn } from '@jianmanager/ui/lib/utils'
 import { useVirtualRows } from '@/lib/virtual-list'

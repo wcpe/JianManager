@@ -44,12 +44,7 @@ import {
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import type { InstanceInfo } from '@/lib/instance-types'
-import type {
-  BanRecord,
-  OnlinePlayer,
-  OnlinePlayersResult,
-  WhitelistResult,
-} from '@/lib/player'
+import type { BanRecord, OnlinePlayer, OnlinePlayersResult, WhitelistResult } from '@/lib/player'
 
 /** 页内四个 Tab：在线玩家 / 实时事件 / 封禁记录 / 白名单。 */
 export type PlayerTab = 'online' | 'live' | 'bans' | 'whitelist'

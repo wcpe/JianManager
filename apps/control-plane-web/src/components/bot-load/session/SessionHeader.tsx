@@ -3,11 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { SessionHeaderView } from '@/components/views/bot-load/session/SessionHeaderView'
 import type { BotLoadRunV2 } from '@/lib/bot-load-types'
-import {
-  useCancelBotLoadRun,
-  useDownloadBotLoadReport,
-  useStopBotLoadRun,
-} from '@/api/bot-load'
+import { useCancelBotLoadRun, useDownloadBotLoadReport, useStopBotLoadRun } from '@/api/bot-load'
 
 /**
  * 压测会话对象头：展示层已回迁应用侧（`SessionHeaderView`），此处提供导航与三个 mutation

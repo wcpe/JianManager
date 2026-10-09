@@ -33,21 +33,8 @@ import type { ClientDistSecurityOverview, SecurityRankItem } from '@/lib/client-
 import type { ClientRuntimeOverview } from '@/lib/client-runtime-contracts'
 import { KPI_I18N, formatKpiRate, resolveRequestRates } from '@/lib/client-dist-kpi'
 import { InsightCards } from '@/components/views/client-dist/InsightCards'
-import {
-  ErrorPanel,
-  LinkableDistPanel,
-  TrendCard,
-  distBuckets,
-  fmtBytes as fmtBytesCompact,
-  kindLabel,
-  lagLabel,
-  parseLagLabel,
-  platformLabel,
-  resultLabel,
-  reversePlatformLabel,
-  runtimeUpdateSeries,
-  type RuntimeLink,
-} from '@/components/views/client-dist/OpsShared'
+import { ErrorPanel, LinkableDistPanel, TrendCard, distBuckets, fmtBytes as fmtBytesCompact, kindLabel, lagLabel, parseLagLabel, platformLabel, resultLabel, reversePlatformLabel, runtimeUpdateSeries } from '@/components/views/client-dist/OpsShared'
+import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
 /** 可下钻的排行维度（仅这两类在日志页有对应过滤键，沿用原实现）。 */
 export type RankFilterKey = 'ip' | 'channelId'

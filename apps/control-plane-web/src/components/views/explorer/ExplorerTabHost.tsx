@@ -9,16 +9,8 @@ import {
 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
-import {
-  emptyTabsState,
-  openTab,
-  closeTab,
-  activateTab,
-  floatTab,
-  dockTab,
-  updateTabContext,
-  type ExplorerTabsState,
-} from '@/lib/explorer-tabs'
+import { emptyTabsState, openTab, closeTab, activateTab, floatTab, dockTab, updateTabContext } from '@/lib/explorer-tabs'
+import type { ExplorerTabsState } from '@/lib/explorer-tabs'
 
 interface ExplorerTabHostProps {
   instanceId: number

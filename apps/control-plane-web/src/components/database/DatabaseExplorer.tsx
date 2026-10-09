@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { useDbTables, useDbTableRows, type DbRowsParams } from '@/api/db'
+import { useDbTables, useDbTableRows } from '@/api/db'
+import type { DbRowsParams } from '@/api/db'
 import { DatabaseExplorerView } from '@/components/views/database/DatabaseExplorerView'
 import { DatabaseRowsView } from '@/components/views/database/DatabaseRowsView'
 

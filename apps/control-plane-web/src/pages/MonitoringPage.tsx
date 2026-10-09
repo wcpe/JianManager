@@ -3,14 +3,8 @@ import { useSearchParams } from 'react-router'
 import { useNodes } from '@/api/nodes'
 import { useInstanceSearch } from '@/api/instances'
 import type { MetricRange, MetricResolution } from '@jianmanager/ui'
-import {
-  useBotRuntimeMetrics,
-  useManagedProcessAction,
-  useManagedProcessDetail,
-  useProcessTop,
-  type ManagedProcessAction,
-  type ProcessTopItem,
-} from '@/api/metrics'
+import { useBotRuntimeMetrics, useManagedProcessAction, useManagedProcessDetail, useProcessTop } from '@/api/metrics'
+import type { ManagedProcessAction, ProcessTopItem } from '@/api/metrics'
 import {
   INSTANCE_CHART_DEFS,
   NODE_CHART_DEFS,

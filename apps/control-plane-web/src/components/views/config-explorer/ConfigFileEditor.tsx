@@ -4,13 +4,7 @@ import { History, Save, X } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
 import EditorShortcutsHelp from '@/components/views/explorer/editor/EditorShortcutsHelp'
-import type {
-  ConfigReadResult,
-  CrossCheckIssue,
-  FieldSchema,
-  ModelSchema,
-  ValidationIssue,
-} from '@/lib/config-contracts'
+import type { ConfigReadResult, CrossCheckIssue, FieldSchema, ModelSchema, ValidationIssue } from '@/lib/config-contracts'
 
 /**
  * 单文件配置编辑器（FR-071）· 受控视图（ADR-097）。

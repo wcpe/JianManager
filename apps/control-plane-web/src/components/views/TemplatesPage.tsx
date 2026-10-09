@@ -40,13 +40,8 @@ import { validateRequired, validateUrl, validateAbsPath, validateFields, hasErro
 import { useFieldGate } from '@/lib/use-field-gate'
 import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@jianmanager/ui'
-import {
-  deriveMarketMeta,
-  extractVariables,
-  fillTemplate,
-  validateVariableValues,
-  type MarketIcon,
-} from '@/lib/template-apply'
+import { deriveMarketMeta, extractVariables, fillTemplate, validateVariableValues } from '@/lib/template-apply'
+import type { MarketIcon } from '@/lib/template-apply'
 import type { Tone } from '@jianmanager/ui/lib/tone'
 import DangerConfirm from '@/components/views/DangerConfirm'
 

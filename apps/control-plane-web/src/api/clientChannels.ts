@@ -1,11 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
-import type {
-  ClientChannel,
-  ClientPullKey,
-  ClientChannelDetail,
-  ClientKeyWithSecret,
-} from '@/lib/client-channel-types'
+import type { ClientChannel, ClientPullKey, ClientChannelDetail, ClientKeyWithSecret } from '@/lib/client-channel-types'
 
 // 实现已回迁应用侧（原 ADR-097 迁包已撤销），此处保留 re-export 维持既有导入路径。
 export type { ClientChannel, ClientPullKey, ClientChannelDetail, ClientKeyWithSecret }

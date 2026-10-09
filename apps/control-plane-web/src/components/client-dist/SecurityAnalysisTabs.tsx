@@ -1,8 +1,5 @@
 import { useClientDistIpAnalysis, useClientDistPlayerAnalysis } from '@/api/clientDistSecurity'
-import {
-  IpAnalysisTabView,
-  PlayerAnalysisTabView,
-} from '@/components/views/client-dist/SecurityAnalysisTabsView'
+import { IpAnalysisTabView, PlayerAnalysisTabView } from '@/components/views/client-dist/SecurityAnalysisTabsView'
 
 /**
  * 安全侧「IP 剖析 / 玩家名剖析」两个只读聚合 Tab（FR-430 / ADR-088）。

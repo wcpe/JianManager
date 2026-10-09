@@ -4,19 +4,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import {
-  useBots,
-  useBot,
-  useBotEvents,
-  useBotSummary,
-  useBotBatch,
-  useCreateBot,
-  useCreateBotStressSession,
-  useSendBotCommand,
-  type BotBatchAction,
-  type BotListParams,
-  type BotSummaryGroup,
-} from '@/api/bots'
+import { useBots, useBot, useBotEvents, useBotSummary, useBotBatch, useCreateBot, useCreateBotStressSession, useSendBotCommand, type BotBatchAction, type BotListParams, type BotSummaryGroup } from '@/api/bots'
 import { useNodes } from '@/api/nodes'
 import { useDebounced } from '@/lib/use-debounced'
 import { useTabParam } from '@/lib/use-tab-param'
@@ -37,12 +25,7 @@ import { SummaryCards } from '@/components/views/bots/BotListParts'
 import { BotToolbar } from '@/components/views/bots/BotToolbar'
 import { BotBatchBar } from '@/components/views/bots/BotBatchBar'
 import { BotGroupOverview } from '@/components/views/bots/BotGroupOverview'
-import {
-  BOT_PEEK_PAGE_SIZE,
-  BotGroupActions,
-  BotGroupPeek,
-  BotGroupRow,
-} from '@/components/views/bots/BotGroupPartsView'
+import { BOT_PEEK_PAGE_SIZE, BotGroupActions, BotGroupPeek, BotGroupRow } from '@/components/views/bots/BotGroupPartsView'
 import { BotStressSessionDialog } from '@/components/views/bots/BotStressSessionDialog'
 import { BotDetailDialog as BotDetailDialogView } from '@/components/views/bots/BotDetailDialog'
 import { useDangerPermission } from '@/lib/danger'
@@ -314,7 +297,9 @@ function BotFleetTab() {
       <BotStressSessionDialog
         open={showStress}
         onOpenChange={setShowStress}
-        onCreate={(body) => createStressSession.mutateAsync(body)}
+        onCreate={async (body) => {
+          await createStressSession.mutateAsync(body)
+        }}
         submitting={createStressSession.isPending}
         renderInstancePicker={(args) => <InstancePicker {...args} />}
       />

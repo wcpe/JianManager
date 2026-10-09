@@ -22,20 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import type {
-  AlertRuleInfo,
-  AlertChannelInfo,
-  RuleSubmitPayload,
-} from '@/lib/alert-contracts'
-import {
-  triggerUsesMetric,
-  triggerUsesKeyword,
-  triggerUsesEventMatch,
-  targetTypeForTrigger,
-  triggerAllowsTargetSwitch,
-  isValidHHMM,
-  parseChannelIds,
-} from '@/lib/alert-helpers'
+import type { AlertRuleInfo, AlertChannelInfo, RuleSubmitPayload } from '@/lib/alert-contracts'
+import { triggerUsesMetric, triggerUsesKeyword, triggerUsesEventMatch, targetTypeForTrigger, triggerAllowsTargetSwitch, isValidHHMM, parseChannelIds } from '@/lib/alert-helpers'
 
 /** 目标维度可选节点（容器取数：个位/十位量级，无服务端搜索需求）。 */
 export interface RuleDialogNodeOption {

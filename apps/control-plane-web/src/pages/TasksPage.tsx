@@ -5,12 +5,8 @@ import { Link, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { useNodes } from '@/api/nodes'
 import { useTasks, useTask, useCancelTask } from '@/api/tasks'
-import {
-  TASKS_WINDOW_MAX,
-  TASKS_WINDOW_STEP,
-  TasksPageView,
-  type TasksFilterState,
-} from '@/components/views/tasks/TasksPageView'
+import { TASKS_WINDOW_MAX, TASKS_WINDOW_STEP, TasksPageView } from '@/components/views/tasks/TasksPageView'
+import type { TasksFilterState } from '@/components/views/tasks/TasksPageView'
 
 /** 全部筛选清空（重置按钮与初次进入共用同一份初值）。 */
 const EMPTY_FILTERS: TasksFilterState = { state: '', kind: '', nodeId: '', keyword: '', time: '' }

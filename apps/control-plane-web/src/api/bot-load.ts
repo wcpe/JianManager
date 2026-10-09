@@ -4,15 +4,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api, { ensureFreshToken } from '@/api/client'
-import type {
-  BotLoadFailure,
-  BotLoadMetricPoint,
-  BotLoadRetryResult,
-  BotLoadRunBot,
-  BotLoadRunEventPage,
-  BotLoadRunV2,
-  Page,
-} from '@/lib/bot-load/types'
+import type { BotLoadFailure, BotLoadMetricPoint, BotLoadRetryResult, BotLoadRunBot, BotLoadRunEventPage, BotLoadRunV2, Page } from '@/lib/bot-load/types'
 import { downloadBlob, reportFilename } from '@/lib/bot-load/report'
 
 const ROOT = '/bots/stress-sessions'

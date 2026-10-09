@@ -4,25 +4,13 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import {
-  useAddNetworkMembers,
-  useCreateNetwork,
-  useDeleteNetwork,
-  useNetwork,
-  useNetworkAction,
-  useNetworks,
-  useRemoveNetworkMember,
-} from '@/api/networks'
+import { useAddNetworkMembers, useCreateNetwork, useDeleteNetwork, useNetwork, useNetworkAction, useNetworks, useRemoveNetworkMember } from '@/api/networks'
 import { useInstanceSearch } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useDebounced } from '@/lib/use-debounced'
 import TopologyGraph from '@/components/console/TopologyGraph'
-import {
-  NetworkInstancePickerView,
-  NetworksPageView,
-  type NetworksInstancePickerArgs,
-  type NetworkView,
-} from '@/components/views/networks/NetworksPageView'
+import { NetworkInstancePickerView, NetworksPageView } from '@/components/views/networks/NetworksPageView'
+import type { NetworksInstancePickerArgs, NetworkView } from '@/components/views/networks/NetworksPageView'
 
 /**
  * 成员候选的默认窗口。靠键入下发服务端 q 缩小，与 GroupMembersDialog（FR-336）同款；

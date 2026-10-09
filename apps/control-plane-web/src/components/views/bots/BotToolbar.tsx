@@ -9,11 +9,8 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
-import {
-  BOT_STATUSES,
-  GROUP_BY_DIMS,
-  type GroupByDim,
-} from '@/lib/bots-overview'
+import { BOT_STATUSES, GROUP_BY_DIMS } from '@/lib/bots-overview'
+import type { GroupByDim } from '@/lib/bots-overview'
 
 /** 节点筛选项（容器取数：个位/十位量级，无服务端搜索需求）。 */
 export interface BotToolbarNode {

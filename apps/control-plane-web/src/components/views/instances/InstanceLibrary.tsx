@@ -5,12 +5,10 @@ import { cn } from '@jianmanager/ui'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { useVirtualRows } from '@/lib/virtual-list'
 import { useDebounced } from '@/lib/use-debounced'
-import { CARD_TYPES, cardTypeDef, type CardType } from '@/lib/workspace-card'
-import {
-  WORKSPACE_DND_MIME,
-  encodeDragPayload,
-  type DragPayload,
-} from '@/lib/instance-library'
+import { CARD_TYPES, cardTypeDef } from '@/lib/workspace-card'
+import type { CardType } from '@/lib/workspace-card'
+import { WORKSPACE_DND_MIME, encodeDragPayload } from '@/lib/instance-library'
+import type { DragPayload } from '@/lib/instance-library'
 import InstanceStatusDot from '@/components/views/instances/InstanceStatusDot'
 
 /** 库行所需的最小实例信息（外壳可传结构兼容的更宽类型）。 */

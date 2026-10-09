@@ -1,7 +1,8 @@
 import { useTranslation } from 'react-i18next'
 
 import { Panel } from '@jianmanager/ui/components/panel'
-import { ProcessPanel, type ProcessMetricsView } from '@/components/views/instances/ProcessPanel'
+import { ProcessPanel } from '@/components/views/instances/ProcessPanel'
+import type { ProcessMetricsView } from '@/components/views/instances/ProcessPanel'
 
 /** 直探（SLP）摘要数据：无探针时由 Worker 直探 MC 服务器列表协议取得。 */
 export interface DirectProbeSummaryData {

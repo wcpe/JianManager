@@ -1,18 +1,10 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做组取数、三个写动作、URL 深链解析/写回与成员对话框接线。
 import { useSearchParams } from 'react-router'
-import {
-  useGroups,
-  useCreateGroup,
-  useUpdateGroup,
-  useUpdateGroupQuota,
-  useDeleteGroup,
-} from '@/api/groups'
+import { useGroups, useCreateGroup, useUpdateGroup, useUpdateGroupQuota, useDeleteGroup } from '@/api/groups'
 import GroupMembersDialog from '@/components/GroupMembersDialog'
 import { useDangerPermission } from '@/lib/danger'
-import {
-  GroupsPageView,
-  type GroupPanel,
-} from '@/components/views/users/GroupsPageView'
+import { GroupsPageView } from '@/components/views/users/GroupsPageView'
+import type { GroupPanel } from '@/components/views/users/GroupsPageView'
 
 /**
  * 用户组管理页容器（ADR-097 b 范式）：组列表取数、创建/编辑/删除三个写动作、平台级删除门禁

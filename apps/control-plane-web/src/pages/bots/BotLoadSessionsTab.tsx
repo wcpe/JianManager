@@ -2,17 +2,10 @@ import { useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  useBotStressSessions,
-  useStartBotStressSession,
-  useStopBotStressSession,
-} from '@/api/bots'
+import { useBotStressSessions, useStartBotStressSession, useStopBotStressSession } from '@/api/bots'
 import { mergeSearchParams, readSessionsFilter } from '@/lib/bot-load/url-state'
 import BotLoadWizard from '@/components/bot-load/BotLoadWizard'
-import {
-  SESSIONS_TAB_PAGE_SIZE,
-  SessionsTabView,
-} from '@/components/views/bot-load/SessionsTabView'
+import { SESSIONS_TAB_PAGE_SIZE, SessionsTabView } from '@/components/views/bot-load/SessionsTabView'
 
 /**
  * 压测会话列表 tab 的容器：取数、启停 mutation/toast、分页写 URL 与详情路由。

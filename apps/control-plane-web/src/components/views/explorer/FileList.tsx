@@ -26,13 +26,8 @@ import { isArchiveName, isClassName } from '@/lib/file-entry'
 import type { SelectionState, ClickModifiers } from '@/lib/explorer-selection'
 import { isSelected } from '@/lib/explorer-selection'
 import { cn } from '@jianmanager/ui'
-import {
-  sortFiles,
-  toggleSort,
-  type FileSortState,
-  type FileSortKey,
-  type FileViewMode,
-} from '@/lib/file-sort'
+import { sortFiles, toggleSort } from '@/lib/file-sort'
+import type { FileSortState, FileSortKey, FileViewMode } from '@/lib/file-sort'
 
 interface FileListProps {
   files: FileInfo[]

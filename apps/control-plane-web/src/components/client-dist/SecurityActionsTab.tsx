@@ -2,24 +2,8 @@ import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { SecurityActionsTabView } from '@/components/views/client-dist/SecurityActionsTabView'
-import type {
-  BlockIPRequest,
-  ClientProtectionAction,
-  ProtectionActionStatus,
-  SecurityTargetType,
-  SetChannelProtectionRequest,
-  SetKeyStateRequest,
-} from '@/lib/client-dist-security-contracts'
-import {
-  useBlockClientDistIP,
-  useCancelClientDistIPBlock,
-  useClearClientDistChannelProtection,
-  useClientChannelSecuritySummary,
-  useClientDistSecurityActions,
-  useClientDistSecurityEvents,
-  useSetClientDistChannelProtection,
-  useSetClientDistKeyState,
-} from '@/api/clientDistSecurity'
+import type { BlockIPRequest, ClientProtectionAction, ProtectionActionStatus, SecurityTargetType, SetChannelProtectionRequest, SetKeyStateRequest } from '@/lib/client-dist-security-contracts'
+import { useBlockClientDistIP, useCancelClientDistIPBlock, useClearClientDistChannelProtection, useClientChannelSecuritySummary, useClientDistSecurityActions, useClientDistSecurityEvents, useSetClientDistChannelProtection, useSetClientDistKeyState } from '@/api/clientDistSecurity'
 import { useClientChannel, useClientChannels } from '@/api/clientChannels'
 import { useSecurityQuery } from './security-shared'
 

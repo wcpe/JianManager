@@ -13,22 +13,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
-import {
-  clampRatio,
-  findPane,
-  instanceIdsInTrees,
-  paneCount,
-  paneLeaves,
-  removePane,
-  replacePaneInstance,
-  reidTree,
-  setSplitRatio,
-  splitPane,
-  type ImmersivePaneLeaf,
-  type ImmersivePaneSplit,
-  type ImmersivePaneTree,
-  type PaneSplitDirection,
-} from '@/lib/console-immersive-layout'
+import { clampRatio, findPane, instanceIdsInTrees, paneCount, paneLeaves, removePane, replacePaneInstance, reidTree, setSplitRatio, splitPane } from '@/lib/console-immersive-layout'
+import type { ImmersivePaneLeaf, ImmersivePaneSplit, ImmersivePaneTree, PaneSplitDirection } from '@/lib/console-immersive-layout'
 import { terminalSessionManager } from '@/lib/terminal-session-manager'
 
 type PickerRequest =

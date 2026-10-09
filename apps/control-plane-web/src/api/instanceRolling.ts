@@ -2,20 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
 import type { InstanceBatchAction, InstanceBatchFilter } from '@/api/instances'
-import {
-  isRollingActive,
-  type RollingControlAction,
-  type RollingOp,
-} from '@/lib/instance-rolling'
+import { isRollingActive } from '@/lib/instance-rolling'
+import type { RollingControlAction, RollingOp } from '@/lib/instance-rolling'
 
 // 编排契约（状态 / 失败明细 / 会话 / 控制动作 / 推进判定）归包，双侧共用（ADR-097）。
 // 本地绑定来自上方 import，此处仅对外再导出，避免两处各写一份。
-export type {
-  RollingControlAction,
-  RollingError,
-  RollingOp,
-  RollingState,
-} from '@/lib/instance-rolling'
+export type { RollingControlAction, RollingError, RollingOp, RollingState } from '@/lib/instance-rolling'
 export { isRollingActive } from '@/lib/instance-rolling'
 
 /**

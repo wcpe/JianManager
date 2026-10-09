@@ -30,7 +30,7 @@ export interface NodeMonitorChartsProps {
   range: MetricRange
   onRangeChange: (r: MetricRange) => void
   /** 节点序列数据（容器经 useMetricSeries 取数）。 */
-  series: { metricKey: string; points: { ts: string; avg: number }[] }[]
+  series: { metricKey: string; points: { ts: string; avg: number | null }[] }[]
 }
 
 /**

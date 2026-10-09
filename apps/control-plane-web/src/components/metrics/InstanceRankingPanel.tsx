@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useInstanceRanking } from '@/api/metrics'
-import { InstanceRankingPanel as InstanceRankingPanelView, type RankingWindow } from '@/components/views/instances/InstanceRankingPanel'
+import { InstanceRankingPanel as InstanceRankingPanelView } from '@/components/views/instances/InstanceRankingPanel'
+import type { RankingWindow } from '@/components/views/instances/InstanceRankingPanel'
 import type { RankingMetric } from '@/lib/ranking'
 
 // 纯逻辑格式化函数与窗口常量原样再导出（测试与其他页面直接引用）。

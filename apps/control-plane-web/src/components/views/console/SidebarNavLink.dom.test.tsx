@@ -4,7 +4,8 @@ import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { LayoutDashboard } from 'lucide-react'
-import { SidebarNavLink, type NavLinkRenderArgs } from '@/components/views/console/SidebarNavLink'
+import { SidebarNavLink } from '@/components/views/console/SidebarNavLink'
+import type { NavLinkRenderArgs } from '@/components/views/console/SidebarNavLink'
 
 /**
  * 侧栏导航链接 · 受控视图测（ADR-097）。

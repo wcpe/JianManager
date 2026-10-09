@@ -14,12 +14,7 @@ import { MetricComparePanel } from '@jianmanager/ui/charts/MetricComparePanel'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import type { RawSeries } from '@jianmanager/ui/lib/monitor-metrics'
 import type { DrillTarget } from '@/components/views/instances/DrillTargetPicker'
-import type {
-  ManagedProcessAction,
-  ManagedProcessDetail,
-  ManagedProcessInfo,
-  ProcessTopItem,
-} from '@/lib/managed-process'
+import type { ManagedProcessAction, ManagedProcessDetail, ManagedProcessInfo, ProcessTopItem } from '@/lib/managed-process'
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '--'

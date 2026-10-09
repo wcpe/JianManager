@@ -11,17 +11,8 @@ import type { AssetInfo, AssetType } from '@/lib/asset-contracts'
 /**
  * 运行时/制品视图契约（FR-082 / FR-301）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
  */
-export type {
-  JDKRefInstance,
-  JDKMatrixItem,
-  AssetTypeGroup,
-  RuntimeMatrixEntry,
-} from '@/lib/runtime-assets-contracts'
-import type {
-  JDKMatrixItem,
-  AssetTypeGroup,
-  RuntimeMatrixEntry,
-} from '@/lib/runtime-assets-contracts'
+export type { JDKRefInstance, JDKMatrixItem, AssetTypeGroup, RuntimeMatrixEntry } from '@/lib/runtime-assets-contracts'
+import type { JDKMatrixItem, AssetTypeGroup, RuntimeMatrixEntry } from '@/lib/runtime-assets-contracts'
 
 /** JDK 区汇总统计。 */
 export interface JDKSummary {

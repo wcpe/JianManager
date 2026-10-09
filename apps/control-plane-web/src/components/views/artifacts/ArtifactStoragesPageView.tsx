@@ -45,7 +45,8 @@ import {
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/DangerConfirm'
 import { validateRequired, validateFields, hasErrors } from '@/lib/form-validation'
-import { isTerminalTask, type TaskState } from '@/lib/task-status'
+import { isTerminalTask } from '@/lib/task-status'
+import type { TaskState } from '@/lib/task-status'
 import { useFieldGate } from '@/lib/use-field-gate'
 
 /**

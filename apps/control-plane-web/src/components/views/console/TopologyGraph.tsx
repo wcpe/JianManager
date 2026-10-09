@@ -3,26 +3,13 @@ import { useTranslation } from 'react-i18next'
 import { Maximize2, Search } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
-import {
-  buildGroupTreeSource,
-  buildKeyMap,
-  GROUP_DIMENSIONS,
-  type GroupDimension,
-  type GroupKeyLabels,
-  type InstanceGroupKeyMap,
-} from '@/lib/instance-grouping'
+import { buildGroupTreeSource, buildKeyMap, GROUP_DIMENSIONS } from '@/lib/instance-grouping'
+import type { GroupDimension, GroupKeyLabels, InstanceGroupKeyMap } from '@/lib/instance-grouping'
 import type { InstanceGroupNode } from '@/lib/instance-group'
 import type { NodeInfo } from '@/lib/node-types'
 import type { ProxyRegistration } from '@/lib/proxy-registration'
-import {
-  buildTopology,
-  groupTopologyByDimension,
-  layoutTopologyGrouped,
-  type LaidBand,
-  type LaidNode,
-  type ProxyRegistrations,
-  type TopoInstanceInput,
-} from '@/lib/topology'
+import { buildTopology, groupTopologyByDimension, layoutTopologyGrouped } from '@/lib/topology'
+import type { LaidBand, LaidNode, ProxyRegistrations, TopoInstanceInput } from '@/lib/topology'
 import { instanceStatusLevel, statusColorVar, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 import { cn } from '@jianmanager/ui'
 

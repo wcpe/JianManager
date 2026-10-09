@@ -3,12 +3,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ClientIntegrationGuideView } from '@/components/views/client-dist/ClientIntegrationGuideView'
-import {
-  useUpdaterJarsInfo,
-  downloadUpdaterJar,
-  useRevealClientKey,
-  type ClientPullKey,
-} from '@/api/clientChannels'
+import { useUpdaterJarsInfo, downloadUpdaterJar, useRevealClientKey, type ClientPullKey } from '@/api/clientChannels'
 
 /**
  * 客户端更新器接入指引（FR-107 / FR-259）的接线层（ADR-097）。面向运营方：在频道详情一页拿齐——下载楔子、

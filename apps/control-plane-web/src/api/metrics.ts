@@ -7,10 +7,7 @@ import type { PlayerTrendResult } from '@/lib/player-trend'
 import type { SLOResult } from '@/lib/slo'
 import type { RankingMetric, RankingResult } from '@/lib/ranking'
 import type { MetricSeries, SeriesPoint } from '@/lib/metric-series'
-export type {
-  InstanceMetricsData,
-  WorldMetric,
-} from '@/lib/instance-metrics'
+export type { InstanceMetricsData, WorldMetric } from '@/lib/instance-metrics'
 export type { MetricSeries, SeriesPoint } from '@/lib/metric-series'
 export type { PlayerTrendResult } from '@/lib/player-trend'
 export type { SLOResult } from '@/lib/slo'
@@ -281,8 +278,8 @@ export function usePlatformObservabilityOverview(enabled: boolean) {
 
 /** FR-461 健康墙单格分级。 */
 // 健康墙类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
-import { HealthWallResponse, HealthWallSort } from '@/lib/health-wall-types'
-export { HealthLevel, HealthWallNode, HealthWallResponse, HealthWallSort } from '@/lib/health-wall-types'
+import type { HealthWallResponse, HealthWallSort } from '@/lib/health-wall-types'
+export type { HealthLevel, HealthWallNode, HealthWallResponse, HealthWallSort } from '@/lib/health-wall-types'
 
 /** 集群健康墙（FR-461）：只读快照一次查询给全，不触发 Worker RPC。 */
 export function useHealthWall(enabled: boolean, sort: HealthWallSort = 'level') {

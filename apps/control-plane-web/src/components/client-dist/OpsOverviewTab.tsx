@@ -1,5 +1,6 @@
 import { Link, useSearchParams } from 'react-router'
-import { OpsOverviewTabView, type OpsOverviewLinkRenderer, type RankFilterKey } from '@/components/views/client-dist/OpsOverviewTabView'
+import { OpsOverviewTabView } from '@/components/views/client-dist/OpsOverviewTabView'
+import type { OpsOverviewLinkRenderer, RankFilterKey } from '@/components/views/client-dist/OpsOverviewTabView'
 import type { ObsWindow } from '@/lib/obs-window'
 import { useClientDistObservability, type ClientDistStats } from '@/api/clientStats'
 import { useClientDistSecurityOverview } from '@/api/clientDistSecurity'

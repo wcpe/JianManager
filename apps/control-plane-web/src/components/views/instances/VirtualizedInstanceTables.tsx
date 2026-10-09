@@ -9,7 +9,8 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { useVirtualRows } from '@/lib/virtual-list'
-import { memberHealth, type MemberHealth } from '@/lib/topology'
+import { memberHealth } from '@/lib/topology'
+import type { MemberHealth } from '@/lib/topology'
 import type { GroupDimension, InstanceGroup } from '@/lib/instance-grouping'
 import type { InstanceInfo } from '@/lib/instance-types'
 /** 虚拟滚动位置的 sessionStorage 键前缀（与 URL 组合成唯一键）。 */

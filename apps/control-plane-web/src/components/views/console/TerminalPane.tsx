@@ -7,7 +7,8 @@ import { cn } from '@jianmanager/ui'
 import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 import { InstanceConsoleView } from '@/components/views/console/InstanceConsoleView'
 import { ConsoleImmersiveMode } from '@/components/views/console/ConsoleImmersiveMode'
-import { terminalSessionManager, type FetchTerminalCreds } from '@/lib/terminal-session-manager'
+import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import type { FetchTerminalCreds } from '@/lib/terminal-session-manager'
 import type { ConsoleHistoryState } from '@/lib/console-history'
 
 /**

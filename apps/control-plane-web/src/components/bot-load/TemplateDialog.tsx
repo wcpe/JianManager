@@ -1,12 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { TemplateDialog as TemplateDialogView } from '@/components/views/bot-load/TemplateDialog'
-import {
-  useCreateBotLoadTemplate,
-  useUpdateBotLoadTemplate,
-  type BotLoadTemplate,
-  type BotLoadTemplateInput,
-} from '@/api/botLoad'
+import { useCreateBotLoadTemplate, useUpdateBotLoadTemplate, type BotLoadTemplate, type BotLoadTemplateInput } from '@/api/botLoad'
 
 interface TemplateDialogProps {
   open: boolean

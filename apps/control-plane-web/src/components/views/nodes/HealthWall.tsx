@@ -1,14 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { cn } from '@jianmanager/ui'
-import {
-  HEALTH_WALL_SORTS,
-  formatPct,
-  healthLevelLabel,
-  healthLevelTone,
-  healthWallSortLabel,
-  summarizeHealthWall,
-} from '@/lib/health-wall'
+import { HEALTH_WALL_SORTS, formatPct, healthLevelLabel, healthLevelTone, healthWallSortLabel, summarizeHealthWall } from '@/lib/health-wall'
 import { toneChipClass } from '@jianmanager/ui/lib/tone'
 import type { HealthLevel, HealthWallNode, HealthWallSort } from '@/lib/health-wall-types'
 

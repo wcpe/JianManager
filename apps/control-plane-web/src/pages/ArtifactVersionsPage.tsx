@@ -1,13 +1,7 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做目录查询与四个写动作（含提示文案）的接线。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  useCacheServerProbeVersion,
-  useServerProbeCatalog,
-  useSetGlobalProbeVersion,
-  useSyncServerProbeSource,
-  useUploadServerProbeVersion,
-} from '@/api/artifactVersions'
+import { useCacheServerProbeVersion, useServerProbeCatalog, useSetGlobalProbeVersion, useSyncServerProbeSource, useUploadServerProbeVersion } from '@/api/artifactVersions'
 import { ArtifactVersionsPageView } from '@/components/views/artifacts/ArtifactVersionsPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */

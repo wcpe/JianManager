@@ -4,22 +4,14 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
-import {
-  useUsers,
-  useDeleteUser,
-  useUpdateUser,
-  useUserInvitations,
-  useRevokeInvitation,
-  type CreateInvitationResponse,
-} from '@/api/users'
+import { useUsers, useDeleteUser, useUpdateUser, useUserInvitations, useRevokeInvitation } from '@/api/users'
+import type { CreateInvitationResponse } from '@/api/users'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { isPlatformAdmin as isAdminRole } from '@/lib/roles'
 import { useDangerPermission } from '@/lib/danger'
-import {
-  UsersPageView,
-  type CreateUserPayload,
-} from '@/components/views/users/UsersPageView'
+import { UsersPageView } from '@/components/views/users/UsersPageView'
+import type { CreateUserPayload } from '@/components/views/users/UsersPageView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {
