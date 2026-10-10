@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { DbRowsResult } from '@/api/db'
-import { normalizeColumns, normalizeRows, shouldShowEmptyRow } from '@/lib/database/db-rows-view'
+import { normalizeColumns, normalizeRows, rowKeys, shouldShowEmptyRow } from '@/lib/database/db-rows-view'
 
 /**
  * BUG-009 回归：后端把空结果序列化为 `rows: null` / `columns: null`，
@@ -68,5 +68,35 @@ describe('BUG-009 rows-view null 守卫', () => {
     expect(shouldShowEmptyRow(withRows)).toBe(false)
     expect(normalizeRows(withRows)).toHaveLength(2)
     expect(normalizeColumns(withRows)).toHaveLength(1)
+  })
+})
+
+/**
+ * 数据行 key：排序 / 翻页后同一记录必须保持同一身份。
+ *
+ * 用数组下标当 key 时，翻页与排序会把「同一位置」换成另一条记录，React 会把上一行的
+ * DOM 身份直接套给新数据（行内文本选择、焦点与任何行级状态都会错位到别的记录上）。
+ */
+describe('rowKeys（行稳定 key）', () => {
+  it('优先取主键列 id，与行在数组中的位置无关', () => {
+    const keys = rowKeys([{ id: 7, name: 'a' }, { id: 9, name: 'b' }])
+    expect(keys).toEqual(['id:7', 'id:9'])
+    // 排序/翻页后同一记录仍是同一个 key（不随下标变化）。
+    expect(rowKeys([{ id: 9, name: 'b' }, { id: 7, name: 'a' }])).toEqual(['id:9', 'id:7'])
+  })
+
+  it('无主键列时退回整行内容指纹', () => {
+    const keys = rowKeys([{ name: 'a', v: 1 }, { name: 'b', v: 2 }])
+    expect(keys).toEqual([`row:${JSON.stringify({ name: 'a', v: 1 })}`, `row:${JSON.stringify({ name: 'b', v: 2 })}`])
+  })
+
+  it('内容完全相同的多行（无主键视图结果）仍产出唯一 key', () => {
+    const keys = rowKeys([{ name: 'dup' }, { name: 'dup' }, { name: 'dup' }])
+    expect(new Set(keys).size).toBe(3)
+  })
+
+  it('id 为 null 时不吃主键分支（回退内容指纹），空集合返回空数组', () => {
+    expect(rowKeys([{ id: null, name: 'a' }])).toEqual([`row:${JSON.stringify({ id: null, name: 'a' })}`])
+    expect(rowKeys([])).toEqual([])
   })
 })

@@ -49,24 +49,32 @@ export function DatabaseExplorerView({
           {!tablesLoading && !tablesError && (tables?.length ?? 0) === 0 && (
             <p className="px-2 py-3 text-xs text-muted-foreground">{t('database.noTables')}</p>
           )}
-          {tables?.map((tb) => (
-            <button
-              key={tb.name}
-              type="button"
-              onClick={() => onSelectTable(tb.name)}
-              className={cn(
-                'flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors',
-                tb.name === activeTable
-                  ? 'bg-primary/10 font-medium text-primary'
-                  : 'text-foreground/80 hover:bg-accent/60',
-              )}
-            >
-              <span className="truncate font-mono">{tb.name}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">
-                {tb.rowCount < 0 ? '?' : tb.rowCount}
-              </span>
-            </button>
-          ))}
+          {tables?.map((tb) => {
+            const active = tb.name === activeTable
+            return (
+              <button
+                key={tb.name}
+                type="button"
+                onClick={() => onSelectTable(tb.name)}
+                // 当前选中项原先只靠「颜色 + 字重」表达：读屏与色觉障碍用户都读不出来。
+                // aria-current 表达「当前项」，aria-pressed 表达「这是个可切换的选中态」，
+                // 两者都挂上，视觉之外的通道才与视觉一致。
+                aria-current={active ? 'true' : undefined}
+                aria-pressed={active}
+                className={cn(
+                  'flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors',
+                  active
+                    ? 'bg-primary/10 font-medium text-primary'
+                    : 'text-foreground/80 hover:bg-accent/60',
+                )}
+              >
+                <span className="truncate font-mono">{tb.name}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {tb.rowCount < 0 ? '?' : tb.rowCount}
+                </span>
+              </button>
+            )
+          })}
         </div>
       </aside>
 

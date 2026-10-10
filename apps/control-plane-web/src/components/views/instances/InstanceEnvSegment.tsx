@@ -5,8 +5,19 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
 
 interface EnvRow {
+  /** 行 id：只服务于渲染 key，不参与保存载荷（保存只取 k/v）。 */
+  id: string
   k: string
   v: string
+}
+
+/** 环境变量行的 id 序号（模块级单调递增，同一页面生命周期内唯一即可）。 */
+let envRowSeq = 0
+
+/** 铸一个新的环境变量行 id。 */
+function nextEnvRowId(): string {
+  envRowSeq += 1
+  return `env-row-${envRowSeq}`
 }
 
 /**
@@ -88,10 +99,10 @@ function EnvEditor({
   onSave: (envVars: Record<string, string>) => Promise<boolean>
 }) {
   const { t } = useTranslation()
-  const [rows, setRows] = useState<EnvRow[]>(() => Object.entries(initial).map(([k, v]) => ({ k, v })))
+  const [rows, setRows] = useState<EnvRow[]>(() => Object.entries(initial).map(([k, v]) => ({ id: nextEnvRowId(), k, v })))
 
   const setRow = (i: number, patch: Partial<EnvRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
-  const addRow = () => setRows((rs) => [...rs, { k: '', v: '' }])
+  const addRow = () => setRows((rs) => [...rs, { id: nextEnvRowId(), k: '', v: '' }])
   const delRow = (i: number) => setRows((rs) => rs.filter((_, j) => j !== i))
 
   const save = () => {
@@ -109,7 +120,9 @@ function EnvEditor({
       <p className="text-xs text-muted-foreground">{t('env.customHint')}</p>
       {rows.length === 0 && <p className="text-xs text-muted-foreground">{t('env.empty')}</p>}
       {rows.map((r, i) => (
-        <div key={i} className="flex items-center gap-2">
+        // key 用行自己的稳定 id，不用下标：这是**可编辑行**，删掉中间一行时下标会让其后每行
+        // 的 DOM 身份前移一格——正在编辑的输入框（焦点/光标/输入法组合态）会落到下一条数据上。
+        <div key={r.id} className="flex items-center gap-2">
           <input
             className="h-8 w-40 shrink-0 rounded-md border bg-background px-2 font-mono text-xs"
             placeholder="KEY"

@@ -22,6 +22,7 @@ import CloneInstanceDialog from '@/components/instances/CloneInstanceDialog'
 import InstanceTagsDialog from '@/components/instances/InstanceTagsDialog'
 import EditInstanceLimitsDialog from '@/components/instances/EditInstanceLimitsDialog'
 import EditInstanceConfigDialog from '@/components/instances/EditInstanceConfigDialog'
+import { useDebounced } from '@/lib/hooks/use-debounced'
 import { resolveCapabilities } from '@/lib/instances/capabilities'
 import { InstanceWorktableCard } from '@/components/console/InstanceWorktableCard'
 import { InstanceGroupManager } from '@/components/console/InstanceGroupManager'
@@ -89,6 +90,15 @@ const INSTANCE_SORT_KEYS: InstanceSortKey[] = ['name', 'status', 'createdAt', 'n
 const INSTANCE_PAGE_SIZES = [50, 100, 200] as const
 
 /**
+ * 实例搜索防抖（毫秒）：停止输入后才把 `q` 下发 `/instances/search`。
+ *
+ * 搜索词直接进 queryKey，不防抖就是「每个键击一次服务端搜索」——1000+ 实例下这既是
+ * 无谓的请求风暴，也会让列表在输入过程中反复闪回加载态。取值与 `InstancePicker` /
+ * `InstanceLibrary` / `GroupMembersDialog` 同一量级（250~300ms）。
+ */
+const SEARCH_DEBOUNCE_MS = 300
+
+/**
  * 视图模式：FR-452 起 `list`（分组树表）为 `/instances` 默认——64 台跨区可一屏折叠管理。
  * 卡片视图保留为紧凑模式（`?view=card`）。
  */
@@ -105,10 +115,21 @@ function readGroupDimension(searchParams: URLSearchParams): GroupDimension {
   return DEFAULT_GROUP_DIMENSION
 }
 
+/**
+ * 无折叠项时复用的常量空集合（**共享只读实例，任何调用方都不得就地修改**；
+ * 本页所有变更折叠态的路径都先 `new Set(...)` 再改副本）。
+ *
+ * 为什么必须是常量：同步 effect 会在每次 URL 变化时用 `readCollapsed` 的结果 setState。
+ * 若空值也新建 `Set`，则「URL 变了但折叠态没变」的场景（改排序、改分页、改视图…）
+ * 每次都会拿到一个新身份 → 一次额外重渲染，且依赖它的 `treeRows` /
+ * `allCollapsibleGroupKeys` 两个 useMemo 全部失效重算。
+ */
+const EMPTY_COLLAPSED: Set<string> = new Set()
+
 /** 读取折叠分组键集合（FR-452）：URL `?collapsed=` 逗号分隔、逐键 decode。 */
 function readCollapsed(searchParams: URLSearchParams): Set<string> {
   const raw = searchParams.get('collapsed')
-  if (!raw) return new Set()
+  if (!raw) return EMPTY_COLLAPSED
   return new Set(
     raw
       .split(',')
@@ -192,10 +213,15 @@ export default function InstancesPage() {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const hadUrlNodeRef = useRef(searchParams.has('nodeId'))
-  const updateUrl = useCallback((updates: InstanceUrlState) => {
+  /**
+   * 写回 URL 状态。`replace: true` 用 `history.replaceState` 原地改写当前条目，
+   * 不往历史栈追加——高频来源（如搜索框逐键）必须走这条路，否则每敲一个字符
+   * 就多一条历史记录，用户输 10 个字符后要按 11 次「返回」才离开本页。
+   */
+  const updateUrl = useCallback((updates: InstanceUrlState, options?: { replace?: boolean }) => {
     const next = new URLSearchParams(searchParams)
     writeInstanceUrlState(next, updates)
-    setSearchParams(next)
+    setSearchParams(next, { replace: options?.replace })
   }, [searchParams, setSearchParams])
   const [showProvision, setShowProvision] = useState(false)
   const [showProvisionProxy, setShowProvisionProxy] = useState(false)
@@ -230,6 +256,8 @@ export default function InstancesPage() {
 
   // 多维筛选状态（FR-047 / FR-268）：群组 / 环境 / 标签 / 节点 / 状态任意组合，下发后端过滤。
   const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') ?? '')
+  // 防抖后的搜索词才是「查询真源」：输入框保持即时回显，服务端搜索等落定。
+  const debouncedSearchQuery = useDebounced(searchQuery, SEARCH_DEBOUNCE_MS)
   const [networkId, setNetworkId] = useState<string>(() => readParamOrAll(searchParams, 'networkId'))
   const [env, setEnv] = useState<string>(() => readParamOrAll(searchParams, 'env'))
   const [tag, setTag] = useState<string>(() => readParamOrAll(searchParams, 'tag'))
@@ -294,11 +322,11 @@ export default function InstancesPage() {
 
   const instanceSearchParams: Omit<InstanceSearchParams, 'page'> = useMemo(() => ({
     ...params,
-    ...(searchQuery.trim() ? { q: searchQuery.trim() } : {}),
+    ...(debouncedSearchQuery.trim() ? { q: debouncedSearchQuery.trim() } : {}),
     pageSize,
     sort: sortKey,
     order: sortOrder,
-  }), [pageSize, params, searchQuery, sortKey, sortOrder])
+  }), [debouncedSearchQuery, pageSize, params, sortKey, sortOrder])
   const {
     data: searchData,
     isLoading,
@@ -330,28 +358,43 @@ export default function InstancesPage() {
   const del = useDeleteInstance()
 
   // 批量选择（FR-058）：select-all 作用于当前筛选后的可见集合。
+  //
+  // 已选集合改 `Set`：行渲染按 `selectedIds.includes(id)` 判定，`includes` 是 O(已选数)——
+  // 全选 1200 台后「可见行 × 1200」的线性扫描会成为渲染热点（对照 NetworksPageView 同款处理）。
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const toggleOne = (id: number) =>
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  const allIds = instances?.map((i) => i.id) ?? []
-  const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.includes(id))
+  const allIds = useMemo(() => instances?.map((i) => i.id) ?? [], [instances])
+  const allSelected = allIds.length > 0 && allIds.every((id) => selectedIdSet.has(id))
   const toggleAll = () => setSelectedIds(allSelected ? [] : allIds)
   const clearSelection = () => setSelectedIds([])
   // 选中实例的 {id,name,status}，供批量栏做状态感知禁用与部分失败明细（FR-139）。
   const selectedInstances = useMemo(
     () =>
       instances
-        .filter((i) => selectedIds.includes(i.id))
+        .filter((i) => selectedIdSet.has(i.id))
         .map((i) => ({ id: i.id, name: i.name, status: i.status })),
-    [instances, selectedIds],
+    [instances, selectedIdSet],
   )
 
   const scopedAllInstances = useMemo(
     () => (selectedNodeId == null ? instances : instances.filter((i) => i.nodeId === selectedNodeId)),
     [instances, selectedNodeId],
   )
+  // 环境 / 标签候选由「已加载分页」推导（见下方 FilterSelect 处的局限说明）。
   const envOptions = useMemo(() => collectEnvs(scopedAllInstances), [scopedAllInstances])
   const tagOptions = useMemo(() => collectTags(scopedAllInstances), [scopedAllInstances])
-  const nodeName = (id: number) => nodes?.find((n) => n.id === id)?.name ?? t('console.unknownNode', { id })
+  // 节点 id → 名称：行渲染逐行调用 `nodeName`，若每次线性 `find` 节点表，
+  // 「可见行 × 节点数」会随两侧规模一起放大，故先建索引再查。
+  const nodeNameById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const n of nodes ?? []) map.set(n.id, n.name)
+    return map
+  }, [nodes])
+  const nodeName = useCallback(
+    (id: number) => nodeNameById.get(id) ?? t('console.unknownNode', { id }),
+    [nodeNameById, t],
+  )
 
   // 「实例→分组键」映射（FR-452）：仅 network 维度需要外部映射（键=群组名）；
   // groupTree 维度走独立的层级聚合（键=组 id + 按 parentId 重建的层级，见下）。
@@ -391,9 +434,26 @@ export default function InstancesPage() {
     }
   }, [fetchNextPage, hasNextPage, isFetchingNextPage])
 
+  /**
+   * 表头全选框的可访问名。
+   *
+   * 列表分页加载，「全选」实际只覆盖**已加载页**（`allIds = instances.map(...)`），
+   * 而页面上同时显示「已加载 N / 共 M」——两处口径不一致时，用户会把「全选」
+   * 当成「全库全选」，批量删除的作用域与理解不符。这里把作用域直接写进可访问名，
+   * 复用既有文案（`instanceBatch.selectAll` + `instances.loadedOfTotal`），不新增 i18n 键。
+   */
+  const selectAllLabel = `${t('instanceBatch.selectAll')} · ${t('instances.loadedOfTotal', {
+    loaded: instances.length,
+    total: totalCount,
+  })}`
+
+  /**
+   * 搜索框：输入即时回显，但服务端 `q` 走防抖（见 `SEARCH_DEBOUNCE_MS`）。
+   * URL 同步改为 replace——逐键 push 会把历史栈塞满（输 10 个字符要按 11 次返回）。
+   */
   const setSearchQueryFilter = (value: string) => {
     setSearchQuery(value)
-    updateUrl({ q: value, page: '1' })
+    updateUrl({ q: value, page: '1' }, { replace: true })
   }
   const setNetworkFilter = (value: string) => {
     setNetworkId(value)
@@ -622,7 +682,7 @@ export default function InstancesPage() {
     <InstanceRowView
       inst={inst}
       nodeName={nodeName(inst.nodeId)}
-      selected={selectedIds.includes(inst.id)}
+      selected={selectedIdSet.has(inst.id)}
       onToggleSelect={() => toggleOne(inst.id)}
       isProxy={isProxyInstance(inst)}
       provisioning={isProvisioningInstance(inst)}
@@ -784,6 +844,13 @@ export default function InstancesPage() {
               onChange={setNetworkFilter}
               options={(networks ?? []).map((n) => ({ value: String(n.id), label: n.name }))}
             />
+            {/* 已知局限（本次不修，需后端补 facet）：环境 / 标签候选由**已加载分页**推导
+                （见 `envOptions` / `tagOptions`），因此
+                ① 尚未加载到的环境 / 标签在此根本选不到——在「已加载 200 / 共 1200」时
+                   用户可能找不到某个确实存在的标签；
+                ② 滚动续取后候选会突然变多，同一个下拉的内容随加载进度变化。
+                根治要后端在 /instances/search（或 aggregate）上给出全量 facet（distinct 值 + 计数），
+                前端不擅自改接口契约，故此处只标注局限。 */}
             <FilterSelect
               label={t('grouping.filterEnv')}
               value={env}
@@ -945,6 +1012,7 @@ export default function InstancesPage() {
                   sortKey={sortKey}
                   sortOrder={sortOrder}
                   onSort={setTableSortParam}
+                  selectAllLabel={selectAllLabel}
                 />
               }
               renderRow={renderRow}
@@ -967,6 +1035,7 @@ export default function InstancesPage() {
                   sortKey={sortKey}
                   sortOrder={sortOrder}
                   onSort={setTableSortParam}
+                  selectAllLabel={selectAllLabel}
                 />
               }
               renderRow={renderRow}

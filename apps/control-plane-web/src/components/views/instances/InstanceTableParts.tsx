@@ -73,6 +73,7 @@ export function InstanceTableHeader({
   sortKey,
   sortOrder,
   onSort,
+  selectAllLabel,
 }: {
   t: (k: string, options?: Record<string, unknown>) => string
   allSelected: boolean
@@ -80,12 +81,23 @@ export function InstanceTableHeader({
   sortKey: InstanceSortKey
   sortOrder: InstanceSortOrder
   onSort: (key: InstanceSortKey) => void
+  /**
+   * 全选框的可访问名（含作用域说明）。列表是分页加载的，「全选」只覆盖**已加载页**，
+   * 与页面上「已加载 N / 共 M」同源；由外壳按已加载/总数拼好传入，避免读屏用户
+   * 把「全选」理解成「全库全选」而误用批量删除。缺省回落通用文案。
+   */
+  selectAllLabel?: string
 }) {
   return (
     <TableHeader className="bg-muted/50">
       <TableRow>
         <TableHead className="w-10">
-          <Checkbox checked={allSelected} onCheckedChange={onToggleAll} aria-label={t('instanceBatch.selectAll')} />
+          <Checkbox
+            checked={allSelected}
+            onCheckedChange={onToggleAll}
+            aria-label={selectAllLabel ?? t('instanceBatch.selectAll')}
+            title={selectAllLabel}
+          />
         </TableHead>
         <SortableTableHead
           label={t('instances.name')}

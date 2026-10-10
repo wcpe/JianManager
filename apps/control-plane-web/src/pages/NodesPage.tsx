@@ -73,16 +73,19 @@ export default function NodesPage() {
   const navigate = useNavigate()
   const view = readNodesView(searchParams)
   const isArchive = view === 'archive'
-  const { data: nodes, isLoading } = useNodes({
+  const { data: nodes, isLoading, isError: nodesError, refetch: refetchNodes } = useNodes({
     refetchInterval: 30_000,
     enabled: !isArchive,
   })
-  const { data: archivedNodes, isLoading: archivedLoading } = useArchivedNodes({
+  const { data: archivedNodes, isLoading: archivedLoading, isError: archivedError, refetch: refetchArchived } = useArchivedNodes({
     enabled: isArchive,
   })
   // 各节点实例数走服务端聚合（FR-247/FR-270）：byNode 每节点计数已在服务端算好，
   // 本页不再全量拉取实例再前端归并。
-  const { data: aggregate } = useInstanceAggregate()
+  //
+  // 归档视图用不到实例数（归档列表只显示名称/主机/下线时间），故按视图门控取数：
+  // 原先无条件请求，切到「归档」仍照发一次 /instances/aggregate。
+  const { data: aggregate } = useInstanceAggregate(undefined, !isArchive)
 
   const selectedId = (() => {
     const n = Number(searchParams.get('node'))
@@ -282,6 +285,13 @@ export default function NodesPage() {
   ]
   const gauge = (pct: number | null) => (pct === null ? '--' : `${pct.toFixed(0)}%`)
   const listLoading = isArchive ? archivedLoading : isLoading
+  /**
+   * 列表取数失败（FR-201 同款纪律）：不判 `isError` 时失败会渲染成「暂无节点」空态，
+   * 运营看到的是「节点都没了」而不是「这次没拉到」，据此误判集群已空。
+   * 错误态与空态必须分开，且给出重试入口（查询自带 30s 轮询，但显式重试更快）。
+   */
+  const listError = isArchive ? archivedError : nodesError
+  const retryList = () => void (isArchive ? refetchArchived() : refetchNodes())
 
   // 阶段 6 页面重做（照原型 `nodesPage()`）：本页拆成**列表态**与**详情态**。
   //
@@ -318,6 +328,8 @@ export default function NodesPage() {
         </ScopeBar>
         {listLoading ? (
           <DataPanelSkeleton />
+        ) : listError ? (
+          <NodeListErrorState onRetry={retryList} />
         ) : (
           <CardsGrid className="min-h-0 flex-1">
             {filtered.map((node) => (
@@ -443,6 +455,9 @@ export default function NodesPage() {
             <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
               {listLoading ? (
                 <p className="px-2 py-4 text-sm text-muted-foreground">{t('common.loading')}</p>
+              ) : listError ? (
+                // 取数失败 ≠ 没有节点：左栏同样要区分，否则详情态下运营会以为集群空了。
+                <NodeListErrorState onRetry={retryList} compact />
               ) : isArchive ? (
                 (archivedNodes?.length ?? 0) === 0 ? (
                   <p className="px-2 py-4 text-sm text-muted-foreground">{t('nodes.archivedEmpty')}</p>
@@ -654,6 +669,33 @@ export default function NodesPage() {
 
 
 /** 右栏详情主体：身份块 + 资源仪表 + 分段 Tabs（切段稳定工具条，布局不重组）。 */
+
+/**
+ * 节点列表取数失败态。
+ *
+ * 与「暂无节点」空态严格区分：`/nodes` 失败时若仍渲染空态，运营看到的是
+ * 「节点都没了」——这是会直接导致误判集群规模的假信号。文案复用既有键
+ * （`common.error` + `common.refresh`），不新增 i18n 键。
+ */
+function NodeListErrorState({ onRetry, compact = false }: { onRetry: () => void; compact?: boolean }) {
+  const { t } = useTranslation()
+  return (
+    <div
+      role="alert"
+      data-testid="nodes-list-error"
+      className={cn(
+        'flex items-center gap-2 px-2 py-4 text-sm text-destructive',
+        !compact && 'rounded-lg border border-destructive/30 bg-destructive/5',
+      )}
+    >
+      <span>{t('common.error')}</span>
+      <Button size="sm" variant="outline" onClick={onRetry}>
+        {t('common.refresh')}
+      </Button>
+    </div>
+  )
+}
+
 /** 实例对比图的取数接线层（ADR-097）：视图已入包，此处注入服务端搜索与批量指标。 */
 function NodeInstanceCompareContainer({ node }: { node: NodeInfo }) {
   const [metric, setMetric] = useState('inst_tps')

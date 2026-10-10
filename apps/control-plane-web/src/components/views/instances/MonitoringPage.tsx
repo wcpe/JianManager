@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, GitBranch, Loader2, ShieldCheck } from 'lucide-react'
 
@@ -55,21 +55,28 @@ function ProcessTopPanel({ rows, onInspect }: { rows: ProcessTopItem[]; onInspec
         <div className="divide-y divide-border text-xs">
           {rows.map((row) => (
             <div
-              key={`${row.pid}-${row.sampledAt}`}
+              // key 只用 pid：`sampledAt` 每轮采样（30s）都会变，把它并进 key 等于
+              // 每轮把整张 TOP 表的每一行全部卸载重挂——行内焦点、悬停态与 DOM 身份全丢，
+              // 而这只是一次数据刷新，不是换了一行。
+              key={row.pid}
               tabIndex={0}
               data-testid="process-top-row"
               aria-label={t('monitor.processTopRow', { pid: row.pid, name: row.name, defaultValue: `进程 ${row.pid} ${row.name}` })}
-              className="group relative grid grid-cols-[72px_80px_1fr_80px_90px_90px_72px] items-center gap-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              // 原先用 7 条固定像素列（72/80/80/90/90/72px），合计 ~556px：窄屏（390px）
+              // 必然横向溢出，要横滚才点得到「探查」。改为可换行的 flex 行——各指标格定宽
+              // （各行同宽，列仍对齐），命令格 `min-w-0 flex-1` 收缩截断，装不下时整行换行，
+              // 探查按钮始终可见。
+              className="group relative flex flex-wrap items-center gap-x-3 gap-y-1 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              <span className="font-mono text-muted-foreground">PID {row.pid}</span>
-              <span className="truncate text-muted-foreground" title={row.user || '--'}>{row.user || '--'}</span>
-              <span className="min-w-0 truncate" title={row.commandSummary || row.name}>
+              <span className="w-16 shrink-0 font-mono text-muted-foreground">PID {row.pid}</span>
+              <span className="w-20 shrink-0 truncate text-muted-foreground" title={row.user || '--'}>{row.user || '--'}</span>
+              <span className="min-w-0 flex-1 truncate" title={row.commandSummary || row.name}>
                 {row.commandSummary || row.name || '--'}
               </span>
-              <span className="font-mono tabular-nums">{row.cpuPercent.toFixed(1)}%</span>
-              <span className="font-mono tabular-nums">{formatFileSize(row.rssBytes, BYTES_FALLBACK)}</span>
-              <span className="font-mono tabular-nums">{formatRate(row.readBytesPerSec, row.writeBytesPerSec)}</span>
-              <Button type="button" variant="outline" size="xs" onClick={() => onInspect(row)}>
+              <span className="w-16 shrink-0 text-right font-mono tabular-nums">{row.cpuPercent.toFixed(1)}%</span>
+              <span className="w-20 shrink-0 text-right font-mono tabular-nums">{formatFileSize(row.rssBytes, BYTES_FALLBACK)}</span>
+              <span className="w-20 shrink-0 text-right font-mono tabular-nums">{formatRate(row.readBytesPerSec, row.writeBytesPerSec)}</span>
+              <Button type="button" variant="outline" size="xs" className="shrink-0" onClick={() => onInspect(row)}>
                 {t('monitor.inspectProcess', '探查')}
               </Button>
               <div
@@ -336,19 +343,35 @@ export default function MonitoringPage(props: MonitoringPageProps) {
     drillSlot,
   } = props
   const { t } = useTranslation()
+  /** 上一次处置是否被后端拒绝（在途/成功时复位）。 */
+  const [actionFailed, setActionFailed] = useState(false)
 
   const worldFilter = target.kind === 'instance' ? target.world : undefined
   const source: MonitorSource =
     target.kind === 'platform' ? { kind: 'platform' } : { kind: target.kind, uuid: target.uuid }
   const tKey = `${target.kind}:${target.kind === 'platform' ? '' : target.uuid}`
 
+  /**
+   * 处置确认：成功或失败都必须收起确认框。
+   *
+   * 原实现是 `void onProcessAction(...).then(() => onPendingActionChange(null))`——**没有 catch**。
+   * 后端拒绝时（PID 归属校验失败 / 越权 / 进程已退出…）promise 落成未处理拒绝，
+   * `pendingAction` 永远不为 null → 确认框卡在打开态，且本视图内没有任何失败反馈。
+   * 这里补 catch：收起确认框 + 置失败标记，由下方 alert 条给出反馈。
+   */
   const confirmAction = () => {
     if (!pendingAction || !selectedProcess) return
+    setActionFailed(false)
     void onProcessAction({
       instanceId: selectedProcess.instanceId,
       pid: selectedProcess.pid,
       action: pendingAction,
-    }).then(() => onPendingActionChange(null))
+    })
+      .then(() => onPendingActionChange(null))
+      .catch(() => {
+        setActionFailed(true)
+        onPendingActionChange(null)
+      })
   }
 
   return (
@@ -380,6 +403,14 @@ export default function MonitoringPage(props: MonitoringPageProps) {
       </Panel>
 
       <ProcessTopPanel rows={processTop} onInspect={onSelectedProcessChange} />
+
+      {/* 处置失败反馈：确认框已收起（见 confirmAction），失败原因在这里落地，
+          否则用户只看到弹窗消失、进程还在，无从判断刚才那一下到底成没成。 */}
+      {actionFailed && (
+        <p role="alert" data-testid="process-action-error" className="text-sm text-destructive">
+          {t('common.error')}
+        </p>
+      )}
 
       {/* 全局排行（FR-469）：跨节点全量实例排序 + 名次 + 下钻；非管理员只见可访问实例。 */}
       {rankingSlot}

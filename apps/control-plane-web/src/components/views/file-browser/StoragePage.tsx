@@ -72,14 +72,49 @@ export default function StoragePage({
   const [browseRefreshKey, setBrowseRefreshKey] = useState(0)
   const bumpBrowse = () => setBrowseRefreshKey((k) => k + 1)
 
+  /**
+   * 三态（非管理员 / 加载中 / 失败）共用的页头。
+   *
+   * 就绪态走 `PageShell` + `PageHeader`（标题 + 描述），三态原先直接 return 裸 `<p>`——
+   * 页面在加载与失败时会整体塌成一行无标题文字，与就绪态之间布局跳变（页头消失、
+   * 内容位置突变），也不符合全站统一的壳层结构。这里让三态落在同一套外壳里，
+   * 只是描述里不含数据根（此时拿不到 `data.base`）。
+   */
+  const shellHeader = (
+    <PageHeader
+      title={
+        <span className="inline-flex items-center gap-2">
+          <HardDrive className="size-5 text-muted-foreground" />
+          {t('storage.title')}
+        </span>
+      }
+      description={t('storage.subtitle')}
+    />
+  )
+
   if (!isPlatformAdmin) {
-    return <p className="text-muted-foreground">{t('storage.adminOnly')}</p>
+    return (
+      <PageShell data-page="storage">
+        {shellHeader}
+        <p className="text-muted-foreground">{t('storage.adminOnly')}</p>
+      </PageShell>
+    )
   }
   if (isLoading) {
-    return <p className="text-muted-foreground">{t('common.loading')}</p>
+    return (
+      <PageShell data-page="storage">
+        {shellHeader}
+        <p className="text-muted-foreground">{t('common.loading')}</p>
+      </PageShell>
+    )
   }
   if (isError || !data) {
-    return <p className="text-destructive">{t('storage.loadFailed')}</p>
+    return (
+      <PageShell data-page="storage">
+        {shellHeader}
+        <p className="text-destructive">{t('storage.loadFailed')}</p>
+      </PageShell>
+    )
   }
 
   return (

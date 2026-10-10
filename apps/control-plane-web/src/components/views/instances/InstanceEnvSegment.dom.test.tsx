@@ -97,4 +97,33 @@ describe('InstanceEnvSegment（FR-344 · ADR-097 b 范式）', () => {
     renderSegment({ configured: {}, runtimeAvailable: false })
     expect(screen.getByText('暂无自定义环境变量，点「添加」新增。')).toBeInTheDocument()
   })
+
+  /**
+   * 自定义变量行是可编辑行，key 必须稳定（行自己的 id，不是数组下标）。
+   *
+   * 用下标当 key 时，删掉中间一行会让其后每行的 DOM 身份前移一格：正在编辑的输入框
+   * （焦点、光标位置、输入法组合态）会落到下一条数据上——用户删一行，结果改了别人的内容。
+   */
+  it('删中间行后其余行保持同一 DOM 节点（行 key 稳定）', async () => {
+    const user = userEvent.setup()
+    renderSegment({
+      configured: { FIRST: '1', SECOND: '2', THIRD: '3' },
+      runtimeAvailable: false,
+    })
+
+    const before = screen.getAllByRole('textbox', { name: '环境变量名' }) as HTMLInputElement[]
+    expect(before).toHaveLength(3)
+    const third = before[2]
+    const thirdValue = (screen.getAllByRole('textbox', { name: '环境变量值' }) as HTMLInputElement[])[2]
+
+    // 删中间那行（SECOND）。
+    await user.click(screen.getAllByRole('button', { name: '删除' })[1])
+
+    const after = screen.getAllByRole('textbox', { name: '环境变量名' }) as HTMLInputElement[]
+    expect(after).toHaveLength(2)
+    expect(after.map((el) => el.value)).toEqual(['FIRST', 'THIRD'])
+    // 关键：原来的第 3 行仍是同一个 DOM 节点（下标 key 会让它变成新的第 2 行节点）。
+    expect(after[1]).toBe(third)
+    expect((screen.getAllByRole('textbox', { name: '环境变量值' }) as HTMLInputElement[])[1]).toBe(thirdValue)
+  })
 })

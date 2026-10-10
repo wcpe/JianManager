@@ -10,7 +10,7 @@ import { useTranslation } from 'react-i18next'
 import { ArrowDown, ArrowUp, Search } from 'lucide-react'
 import type { DbColumn, DbRowsResult } from '@/lib/database/db-contracts'
 import { cn } from '@jianmanager/ui/lib/utils'
-import { normalizeColumns, normalizeRows, shouldShowEmptyRow } from '@/lib/database/db-rows-view'
+import { normalizeColumns, normalizeRows, rowKeys, shouldShowEmptyRow } from '@/lib/database/db-rows-view'
 import { Input } from '@jianmanager/ui/components/input'
 import { Button } from '@jianmanager/ui/components/button'
 import {
@@ -104,6 +104,8 @@ export function DatabaseRowsView({
 
   const total = data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  // 行 key 由主键/内容指纹给出（见 `rowKeys`）：翻页与排序后同一记录保持同一身份。
+  const keys = useMemo(() => rowKeys(normalizeRows(data)), [data])
 
   const applyFilter = () => {
     onApplyFilter(filterValueDraft.trim())
@@ -124,7 +126,7 @@ export function DatabaseRowsView({
             onFilterColumnChange(v === NO_FILTER_COLUMN ? '' : v)
           }}
         >
-          <SelectTrigger size="sm" className="w-44">
+          <SelectTrigger size="sm" className="w-44" aria-label={t('database.filterColumn')}>
             <SelectValue placeholder={t('database.filterColumn')} />
           </SelectTrigger>
           <SelectContent>
@@ -142,6 +144,9 @@ export function DatabaseRowsView({
           onKeyDown={(e) => {
             if (e.key === 'Enter') applyFilter()
           }}
+          // placeholder 不是可访问名（读屏不会把它当 label），必须显式给 aria-label，
+          // 否则「过滤值」输入框在读屏下是一句「编辑框」。
+          aria-label={t('database.filterValue')}
           placeholder={t('database.filterValue')}
           disabled={!filterColumn}
           className="h-9 w-56"
@@ -184,7 +189,9 @@ export function DatabaseRowsView({
             </TableHeader>
             <TableBody>
               {normalizeRows(data).map((row, i) => (
-                <TableRow key={i}>
+                // key 取自主键/内容指纹（`rowKeys`），不用数组下标：翻页与排序会让同一位置
+                // 换成另一条记录，下标 key 会把上一行的 DOM 身份套到新数据上。
+                <TableRow key={keys[i] ?? i}>
                   {columns.map((c) => (
                     <TableCell key={c.name} className="max-w-[24rem] truncate font-mono text-xs">
                       {sensitive.has(c.name)
@@ -259,7 +266,14 @@ export function DatabaseRowsView({
   )
 }
 
-/** 列头：列名 + 排序指示（点击切换），敏感列以 monospace 弱化标注。 */
+/**
+ * 列头：列名 + 排序指示（点击切换），敏感列以 monospace 弱化标注。
+ *
+ * 可排序列用**真正的 `<button>`**：原实现是 `<TableHead aria-disabled onClick>`——
+ * `<th>` 不可聚焦、无 `role="button"`、无键盘 handler，键盘用户完全无法排序；
+ * 且表头从不声明 `aria-sort`，读屏听不到「当前按哪列排、什么方向」。
+ * 现在：`th` 声明 `aria-sort`，内部按钮承担激活（Enter/Space 原生可用）与可访问名。
+ */
 function ColumnHead({
   column,
   sorted,
@@ -272,26 +286,50 @@ function ColumnHead({
   onClick: () => void
 }) {
   const { t } = useTranslation()
+  const orderLabel = sorted === 'desc' ? t('grouping.orderDesc') : t('grouping.orderAsc')
+
+  const headContent = (
+    <>
+      <span className="font-mono">{column.name}</span>
+      {column.sensitive && (
+        <span className="rounded border border-status-warning/40 bg-status-warning/10 px-1 py-0.5 text-[10px] font-medium text-status-warning">
+          {t('database.sensitiveColumn')}
+        </span>
+      )}
+      {sorted === 'asc' && <ArrowUp className="size-3" aria-hidden="true" />}
+      {sorted === 'desc' && <ArrowDown className="size-3" aria-hidden="true" />}
+    </>
+  )
 
   return (
     <TableHead
+      // aria-sort 挂在 th（columnheader）上：读屏据此播报当前排序列与方向。
+      // 不可排序列（敏感列）不声明 aria-sort——它们本就不是可排序的表头；
+      // 但仍保留 aria-disabled，把「此列不可排序」这一语义继续对外声明。
+      aria-sort={
+        sortable ? (sorted === 'asc' ? 'ascending' : sorted === 'desc' ? 'descending' : 'none') : undefined
+      }
       aria-disabled={!sortable}
-      className={cn(
-        'select-none',
-        sortable ? 'cursor-pointer hover:text-foreground' : 'cursor-not-allowed opacity-70',
-      )}
-      onClick={sortable ? onClick : undefined}
+      // p-0 让排序按钮铺满整个表头格：原实现把 onClick 挂在 th 上（整格可点），
+      // 换成按钮后必须保住这个点击区域，否则鼠标用户的可点范围缩到文字大小。
+      className={cn('select-none', sortable ? 'p-0' : 'cursor-not-allowed opacity-70')}
     >
-      <span className="inline-flex items-center gap-1">
-        <span className="font-mono">{column.name}</span>
-        {column.sensitive && (
-          <span className="rounded border border-status-warning/40 bg-status-warning/10 px-1 py-0.5 text-[10px] font-medium text-status-warning">
-            {t('database.sensitiveColumn')}
-          </span>
-        )}
-        {sorted === 'asc' && <ArrowUp className="size-3" />}
-        {sorted === 'desc' && <ArrowDown className="size-3" />}
-      </span>
+      {sortable ? (
+        <button
+          type="button"
+          onClick={onClick}
+          aria-label={
+            sorted
+              ? t('grouping.sortHeaderActive', { label: column.name, order: orderLabel })
+              : t('grouping.sortHeader', { label: column.name })
+          }
+          className="inline-flex h-full w-full items-center gap-1 px-2 py-2 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        >
+          {headContent}
+        </button>
+      ) : (
+        <span className="inline-flex items-center gap-1">{headContent}</span>
+      )}
     </TableHead>
   )
 }
