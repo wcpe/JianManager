@@ -49,7 +49,84 @@ const (
 	// 因此不可能出现在任何写入面里。登记为显式常量是为了让自动消解出口能明确拒绝它
 	// （需要重读补投或人工确认，绝不能靠一次「别处成功」的投递证明它已落库）。
 	GapReasonAppendRejected = "APPEND_REJECTED"
+
+	// GapReasonRotatedSegmentNotReady 表示「已检测到 latest.log 被替换，但对应的轮转段尚未可读」
+	// 的**时序观察记录**：登记位置恒为 [0,0] 零长度区间，**不覆盖任何日志字节**
+	// （见 ingest.pollSource 的轮转分支）。轮转段就绪后的一次回读会自然覆盖这段时间，
+	// 因此它属于「恢复后回读可愈合」类，由恢复前的分类裁定自动消解
+	// （见 GapReasonsHealableOnReResume）——**不是**「已确认落库」。
+	GapReasonRotatedSegmentNotReady = "ROTATED_SEGMENT_NOT_READY"
+
+	// GapReasonWALBodyMissing 表示**真实正文缺失**：WAL 引用的条目在事件段存储中找不到正文，
+	// 登记区间是真实的 from/to（确有日志字节没被恢复）。它**不在**恢复白名单里——
+	// 回读造不出已经丢掉的正文，只有人工裁定能处置；自动放行等于静默掩盖丢数据。
+	GapReasonWALBodyMissing = "WAL_BODY_MISSING"
+
+	// GapReasonArchiveDiscoveryFailed 表示归档发现失败（列举目录出错）：该源本轮根本没有归档可用，
+	// 是否丢字节无法由回读证明 ⇒ 不在白名单，需人工裁定。
+	GapReasonArchiveDiscoveryFailed = "ARCHIVE_DISCOVERY_FAILED"
+	// GapReasonArchiveUnreadable 表示归档不可读（权限 / 哈希取不到）：字节仍在盘上但本次读不了，
+	// 回读不必然成功（权限问题不会因恢复采集而消失）⇒ 不在白名单，需人工裁定。
+	GapReasonArchiveUnreadable = "ARCHIVE_UNREADABLE"
+	// GapReasonArchiveOpenFailed 表示归档打开失败：同上，属归档面 IO 故障 ⇒ 不在白名单。
+	GapReasonArchiveOpenFailed = "ARCHIVE_OPEN_FAILED"
+	// GapReasonArchiveGzipCorrupt 表示归档 gzip 已损坏：损坏是**永久性**的，没有任何可重读原始字节
+	// ⇒ 不在白名单，必须人工裁定（放弃或从备份补）。
+	GapReasonArchiveGzipCorrupt = "ARCHIVE_GZIP_CORRUPT"
+	// GapReasonArchiveForeignGeneration 表示归档属于其它代次、被拒绝归账：这是**刻意的拒绝**而不是丢数据，
+	// 但放行它需要代次归属裁定 ⇒ 不在白名单，保持可见。
+	GapReasonArchiveForeignGeneration = "ARCHIVE_FOREIGN_GENERATION"
+	// GapReasonArchiveReadError 表示读取归档内容出错（读失败 / 截断）：缺的字节在归档里，回读同一份
+	// 损坏归档不会变好 ⇒ 不在白名单，需人工裁定（既有回归 archive_truncation_gap_test 依赖此语义）。
+	GapReasonArchiveReadError = "ARCHIVE_READ_ERROR"
+	// GapReasonFileRewritten 表示日志文件在采集途中被重写（大小回退 / 身份变化），游标已重锚到 EOF：
+	// 被跨过的历史内容**不再回读**（w18 防护），故它不可能靠回读愈合 ⇒ 不在白名单。
+	GapReasonFileRewritten = "FILE_REWRITTEN"
+	// GapReasonStdioReadError 表示受管 stdio 流读取出错：字节是否已产生由下游进程决定，
+	// 坏流不会因恢复采集而变好 ⇒ 不在白名单。
+	GapReasonStdioReadError = "STDIO_READ_ERROR"
 )
+
+// GapReasonsHealableOnReResume 是「恢复后回读可愈合」原因的**单一真源**白名单（默认拒绝）。
+//
+// 判据：名单内的原因都是**时序类/暂停类**观察记录——恢复采集后的一次回读会重新产生并投递那段
+// 字节（`APPEND_REJECTED` / `DELIVER_ERROR*`），或该记录本就不覆盖任何字节（`ROTATED_SEGMENT_NOT_READY`
+// 恒为 [0,0]）。因此它们不需要「已落库」证据即可放行恢复，消解词也只是**非终局**的
+// 「待重读」类（见 acquire.IsReReadHealableResolution）。
+//
+// 红线：**真实数据缺失**类原因永远不得进入本名单——`WAL_BODY_MISSING`（正文在段存储里找不到）、
+// `STDIO_RAW_WRITE_FAILED`（原始字节可能没落盘）、`ARCHIVE_*`（归档损坏/不可读）、
+// `FILE_REWRITTEN`（跨过的历史内容不再回读）、`WAL_COMMIT_FAILED`（是否 durable 未定）
+// 都不满足上述判据，回读造不出已经丢掉的字节，放行等于静默掩盖丢数据。
+//
+// 为什么要单一真源：名单若散落在登记点与判定点两处，任何一处拼错或漏改的表现都是
+// 「该原因永远不被自动消解」——源会一直停在暂停上且**没有任何报错**（无声失效 ✗，
+// 生产实测 2026-10-10：86 源被 `ROTATED_SEGMENT_NOT_READY` 永久挡住）。
+// 故 acquire 侧的分类裁定与 ingest 侧的阻塞诊断都必须只经由本名单判定。
+var gapReasonsHealableOnReResume = []string{
+	GapReasonAppendRejected,
+	GapReasonDeliverError,
+	GapReasonDeliverErrorWorkerSource,
+	GapReasonRotatedSegmentNotReady,
+}
+
+// GapReasonsHealableOnReResume 返回白名单的副本（观测与测试用）。
+//
+// 返回副本而不是切片本身：真源一旦被外部 append/改写，就会回到「多处各持一份名单」的形态，
+// 本类型存在的前提随即失效。改动副本不影响任何判定。
+func GapReasonsHealableOnReResume() []string {
+	return append([]string(nil), gapReasonsHealableOnReResume...)
+}
+
+// IsGapReasonHealableOnReResume 报告某原因是否属于「恢复后回读可愈合」白名单（未知名默认拒绝）。
+func IsGapReasonHealableOnReResume(reason string) bool {
+	for _, allowed := range gapReasonsHealableOnReResume {
+		if reason == allowed {
+			return true
+		}
+	}
+	return false
+}
 
 const (
 	// DefaultMaxUnresolvedGapsPerSource 是单源**未解决**缺口的条数上限（按原因分组，每组一条界）。
@@ -199,6 +276,9 @@ func (l *Ledger) foldUnresolvedGapsLocked(e *Entry) {
 		}
 		b.indexes = append(b.indexes, i)
 	}
+	// 所有桶先在原始切片上登记离散删除与替换位置，再统一重建；不能让前一个桶改写后一个桶的索引。
+	removed := make(map[int]bool)
+	replacements := make(map[int]Gap)
 	for _, reason := range order {
 		indexes := buckets[reason].indexes
 		excess := len(indexes) - DefaultMaxUnresolvedGapsPerSource
@@ -221,12 +301,11 @@ func (l *Ledger) foldUnresolvedGapsLocked(e *Entry) {
 		merged.Detail = foldedGapDetail(merged.Detail, len(victims), merged.StartPos, merged.EndPos)
 		merged.Resolved = false
 		merged.Resolution = ""
-		// 用删除 + 就地写回保持登记顺序：被折叠区间占据第一个受害者的位置，其余删除。
-		keep := make([]Gap, 0, len(e.Gaps)-len(victims)+1)
-		keep = append(keep, e.Gaps[:victims[0]]...)
-		keep = append(keep, merged)
-		keep = append(keep, e.Gaps[victims[len(victims)-1]+1:]...)
-		e.Gaps = keep
+		// 折叠区间占据第一个受害者的位置，只删除同因其余受害者，保留夹间审计与其他原因。
+		replacements[victims[0]] = merged
+		for _, index := range victims[1:] {
+			removed[index] = true
+		}
 		e.gapFoldedTotal += uint64(len(victims) - 1)
 		// 只在首次越界时告警：一次长故障会把折叠重复上千次，每次都打日志等于用日志
 		// 复现它本要消灭的数量级问题；后续规模由 GapObservability 的累计计数观测。
@@ -236,6 +315,20 @@ func (l *Ledger) foldUnresolvedGapsLocked(e *Entry) {
 				"reason", reason, "limit", DefaultMaxUnresolvedGapsPerSource)
 		}
 	}
+	if len(removed) == 0 {
+		return
+	}
+	keep := make([]Gap, 0, len(e.Gaps)-len(removed))
+	for index, gap := range e.Gaps {
+		if removed[index] {
+			continue
+		}
+		if replacement, ok := replacements[index]; ok {
+			gap = replacement
+		}
+		keep = append(keep, gap)
+	}
+	e.Gaps = keep
 }
 
 // trimResolvedGapsLocked 只保留最新的若干条已解决缺口（历史审计尾部），丢弃更旧的。

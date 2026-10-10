@@ -91,6 +91,12 @@ type ImportResult struct {
 	ImportedCount int
 	// ResumedFrom 从归档内恢复的起始逻辑位置。
 	ResumedFrom uint64
+	// Partial 为 true 表示本次是**有界导入**的一段：归档尚未读完，调用方应再调一次续读。
+	//
+	// 判据来自读循环本身（是否见到 EOF），而不是从「事件数 == 上限」反推：
+	// 反推无法区分「恰好读满且正好读完」与「读满但还有剩余」，会在最后一个整批处
+	// 多打一次空转调用，或在恰好读完时误判未完成而把归档永远留在「未导入」态。
+	Partial bool
 }
 
 // ArchiveObjectID 计算归档对象 provenance id（hash+size）；不参与 event_id。
@@ -117,7 +123,28 @@ func HashFile(path string) (string, int64, error) {
 
 // ImportGzip 流式导入 gzip 归档。
 // 若 rotation 已将该归档链接为逻辑源分段且已 Import，跳过整包重导入。
+//
+// 等价于 ImportGzipBounded(archivePath, 0)（不限量）——一次读完整包，行为与本修复前一致。
 func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) {
+	return a.importGzip(archivePath, 0)
+}
+
+// ImportGzipBounded 是**有界**导入：单次最多产出 maxEvents 个事件，读满即停并回
+// Partial=true + 已消费位置（ResumedFrom/segment EndPos），调用方下一轮再调一次继续读。
+//
+// maxEvents<=0 表示不限量（等价 ImportGzip）。
+//
+// 为什么要分批（缺陷二，2026-10-10 生产实测）：原实现把整个 gz 的事件一次性返回，
+// 而调用方随后的单次 WAL 追加量 = 整个归档的事件数。`inst:220/file` 的 544,278 行 gz
+// 解析出 **128,856** 个事件 = 单源条目上限（20000）的 6.4 倍 ⇒ 一次追加越闸 ⇒
+// `单源积压超过上限，已暂停该源采集`；越闸后 Append 的首判据（已暂停）拒绝后续追加
+// ⇒ 源停死、`delivery_pos` 恒 None、VL 侧 0 行，且 5 分钟内零自愈。
+func (a *ArchiveImporter) ImportGzipBounded(archivePath string, maxEvents int) (*ImportResult, error) {
+	return a.importGzip(archivePath, maxEvents)
+}
+
+// importGzip 是导入的**唯一实现**（maxEvents<=0 表示不限量）。
+func (a *ArchiveImporter) importGzip(archivePath string, maxEvents int) (*ImportResult, error) {
 	// 轮转关联检查：latest.log → .gz 已链接且已导入 → 不重复计数。
 	link, linked := a.led.RotationLinked(a.key, archivePath)
 	ent := a.led.Get(a.key)
@@ -144,16 +171,16 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 	contentHash, size, err := HashFile(archivePath)
 	if err != nil {
 		// 权限/损坏：记缺口，不拖死后续源。
-		_ = a.led.RecordGap(a.key, 0, 0, "ARCHIVE_UNREADABLE", err.Error())
-		_ = a.MarkFailed(archivePath, "ARCHIVE_UNREADABLE: "+err.Error())
+		_ = a.led.RecordGap(a.key, 0, 0, ledger.GapReasonArchiveUnreadable, err.Error())
+		_ = a.MarkFailed(archivePath, ledger.GapReasonArchiveUnreadable+": "+err.Error())
 		return &ImportResult{Skipped: true, Reason: err.Error()}, nil
 	}
 	objID := ArchiveObjectID(archivePath, size, contentHash)
 
 	f, err := os.Open(archivePath)
 	if err != nil {
-		_ = a.led.RecordGap(a.key, 0, 0, "ARCHIVE_OPEN_FAILED", err.Error())
-		_ = a.MarkFailed(archivePath, "ARCHIVE_OPEN_FAILED: "+err.Error())
+		_ = a.led.RecordGap(a.key, 0, 0, ledger.GapReasonArchiveOpenFailed, err.Error())
+		_ = a.MarkFailed(archivePath, ledger.GapReasonArchiveOpenFailed+": "+err.Error())
 		return &ImportResult{Skipped: true, Reason: err.Error(), ArchiveObjectID: objID}, nil
 	}
 	defer f.Close()
@@ -161,8 +188,8 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		// 损坏 gz：隔离/缺口可见。
-		_ = a.led.RecordGap(a.key, 0, 0, "ARCHIVE_GZIP_CORRUPT", err.Error())
-		_ = a.MarkFailed(archivePath, "ARCHIVE_GZIP_CORRUPT: "+err.Error())
+		_ = a.led.RecordGap(a.key, 0, 0, ledger.GapReasonArchiveGzipCorrupt, err.Error())
+		_ = a.MarkFailed(archivePath, ledger.GapReasonArchiveGzipCorrupt+": "+err.Error())
 		return &ImportResult{Skipped: true, Reason: "corrupt gzip: " + err.Error(), ArchiveObjectID: objID}, nil
 	}
 	defer gz.Close()
@@ -217,8 +244,8 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 			reason := fmt.Sprintf(
 				"归档 %s 已由代次 %q 导入，本代次 %q 不得重复归账（event_id 含代次，重复导入即静默重复）",
 				cleanPath, owner, a.key.SourceGeneration)
-			_ = a.led.RecordGap(a.key, 0, 0, "ARCHIVE_FOREIGN_GENERATION", reason)
-			_ = a.MarkFailed(archivePath, "ARCHIVE_FOREIGN_GENERATION: "+reason)
+			_ = a.led.RecordGap(a.key, 0, 0, ledger.GapReasonArchiveForeignGeneration, reason)
+			_ = a.MarkFailed(archivePath, ledger.GapReasonArchiveForeignGeneration+": "+reason)
 			a.refusedForeign++
 			slog.Warn("拒绝导入属于其它代次的归档（禁止归到当前代次）",
 				"logSourceID", a.key.LogSourceID, "generation", a.key.SourceGeneration,
@@ -230,6 +257,9 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 	// 接管起点：已链接轮转跳过 FileTailer 已读的物理前缀；历史归档按
 	// ledger 最大逻辑位置顺序追加。失败重试沿用首次登记的 StartPos。
 	var startFrom, segmentStart, skipBytes uint64
+	// resumingMidArchive 标记「本次跳过的前缀来自**本分段上一次读到的地方**」（而不是
+	// 轮转已覆盖前缀）。两种事实在 EOF 分支的处置不同，故必须显式区分。
+	resumingMidArchive := false
 	if existing != nil {
 		segmentStart = existing.StartPos
 		startFrom = existing.StartPos
@@ -256,6 +286,20 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 		if startFrom > segmentStart {
 			skipBytes = startFrom - segmentStart
 		}
+	} else if existing != nil && existing.EndPos > segmentStart {
+		// **断点续读**（缺陷二修复，2026-10-10）：本归档上次读到 `EndPos`，本次从那里继续。
+		//
+		// 为什么 `EndPos - StartPos` 就是「已消费的归档字节数」：本函数为归档内容分配的
+		// 逻辑位置是**从 StartPos 起按行字节数顺序推进**的（见读循环里的 `pos = end`），
+		// 而读循环总是从归档头部开始顺序读（不 seek）⇒ 已消费字节数 = pos - segmentStart。
+		// 故按该差值丢弃 bufio 前导字节即可精确续读，无需记录额外游标。
+		//
+		// 为什么必须续读（不能靠「重头读 + event_id 幂等」）：那会把 N 轮的总读取量放大成
+		// O(N²)（每轮都要重读并重解析整个归档前缀），对 12.9 万事件级的归档就是几十万次
+		// 无谓解析——分批反而变成新的性能事故。续读让总读取量恒为归档的一遍。
+		skipBytes = existing.EndPos - segmentStart
+		startFrom = existing.EndPos
+		resumingMidArchive = true
 	}
 
 	_ = a.led.RegisterSegment(a.key, ledger.Segment{
@@ -271,19 +315,45 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 	if skipBytes > 0 {
 		if _, err := io.CopyN(io.Discard, reader, int64(skipBytes)); err != nil {
 			if err == io.EOF {
+				// 前缀比归档内容还长。**只有**「跳过的是轮转已覆盖前缀」才能据此断定
+				// 「归档已被覆盖」（既有语义，逐字保留）。
+				//
+				// 断点续读形态下这**不能**当作已覆盖：EndPos 可能来自陈旧/回滚状态
+				//（换机重挂数据根、state 重置），把它当「读完了」会把归档**静默标成
+				// 已导入**而丢掉尾部数据 —— 那正是本修复要避免的静默丢。故这里如实报
+				// 「未完成」且**不置 Imported**，由下一轮重试（重试时 EndPos 已被下方
+				// RegisterSegment 修正为真实位置，故不会永久卡在这一支）。
+				if resumingMidArchive {
+					slog.Warn("归档断点续读越过了归档末尾，按未完成处理（不置已导入，下轮重试）",
+						"logSourceID", a.key.LogSourceID, "archive", archivePath,
+						"skipBytes", skipBytes, "segmentStart", segmentStart)
+					return &ImportResult{Skipped: true,
+						Reason:          "resume offset beyond end of archive; not marked imported",
+						ArchiveObjectID: objID, ResumedFrom: startFrom}, nil
+				}
 				_ = a.MarkImported(archivePath, objID, segmentStart, startFrom)
 				a.skippedAlreadyLinked++
 				return &ImportResult{Skipped: true, Reason: "rotation prefix already covered",
 					ArchiveObjectID: objID, ResumedFrom: startFrom}, nil
 			}
-			_ = a.led.RecordGap(a.key, startFrom, startFrom, "ARCHIVE_READ_ERROR", err.Error())
+			_ = a.led.RecordGap(a.key, startFrom, startFrom, ledger.GapReasonArchiveReadError, err.Error())
 			return &ImportResult{Skipped: true, Reason: err.Error(), ArchiveObjectID: objID, ResumedFrom: startFrom}, nil
 		}
 	}
 	var events []logtypes.Event
 	pos := startFrom
+	// reachedEOF 记录「本次读循环确实见到了归档末尾」。分批时它是区分「恰好读完」与
+	// 「读满上限但还有剩余」的**唯一可靠判据**（见 ImportResult.Partial 的说明）。
+	reachedEOF := false
 
 	for {
+		// 有界导入（缺陷二）：读满本批即停。已读位置由下方的 RegisterSegment 落回账本
+		// （EndPos），故下一轮从断点续读而不是从头重读 —— 这是「分批不丢、不重」的关键：
+		//   不丢 = 未读部分仍在归档里且归档未被标为已导入 ⇒ 下一轮必然重新发现；
+		//   不重 = 已读前缀的位置已记录，续读时按字节跳过（见下方 skipBytes 计算）。
+		if maxEvents > 0 && len(events) >= maxEvents {
+			break
+		}
 		line, err := reader.ReadString('\n')
 		if len(line) == 0 && err != nil {
 			// 本次读取未拿到任何字节：若是非 EOF 错误（截断 gzip 的典型收尾形态——
@@ -291,8 +361,9 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 			// 修复前此处直接 break，缺口只在 `err != nil && len(line) > 0` 时才记录，
 			// 导致「截断归档静默丢尾且不可见」，违反 FR-474 §5#1「截断可见」契约。
 			if err != io.EOF {
-				_ = a.led.RecordGap(a.key, pos, pos, "ARCHIVE_READ_ERROR", err.Error())
+				_ = a.led.RecordGap(a.key, pos, pos, ledger.GapReasonArchiveReadError, err.Error())
 			}
+			reachedEOF = err == io.EOF
 			break
 		}
 		raw := strings.TrimRight(line, "\n")
@@ -308,10 +379,11 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 		pos = end
 
 		if err != nil && err != io.EOF {
-			_ = a.led.RecordGap(a.key, pos, pos, "ARCHIVE_READ_ERROR", err.Error())
+			_ = a.led.RecordGap(a.key, pos, pos, ledger.GapReasonArchiveReadError, err.Error())
 			break
 		}
 		if err == io.EOF {
+			reachedEOF = true
 			break
 		}
 	}
@@ -327,6 +399,16 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 		ParserVersion:   a.parser.ParserVersion,
 	})
 	if len(events) == 0 {
+		// 本批没有产出事件：可能是「跳过前缀后刚好落在末尾」，也可能是「前缀越界」。
+		//
+		// **只有真的读到 EOF 才能判「已覆盖」**：分批形态下把「没读到东西」一律当成
+		// 「读完了」，会把未消费的尾部**静默标成已导入**（本缺陷类里最危险的一种：
+		// WAL 没丢但归档数据丢了）。故非 EOF 时如实报「未完成、未置导入」，留给下一轮。
+		if !reachedEOF {
+			return &ImportResult{Skipped: true,
+				Reason:          "archive not fully consumed yet; retry next round",
+				ArchiveObjectID: objID, ResumedFrom: startFrom, Partial: true}, nil
+		}
 		_ = a.MarkImported(archivePath, objID, segmentStart, pos)
 		a.skippedAlreadyLinked++
 		return &ImportResult{Skipped: true, Reason: "rotation prefix already covered",
@@ -339,6 +421,8 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 		ArchiveObjectID: objID,
 		ImportedCount:   len(events),
 		ResumedFrom:     startFrom,
+		// 读满上限但未见到 EOF ⇒ 归档还有剩余 ⇒ 调用方下一轮必须续读（见 ImportGzipBounded）。
+		Partial: maxEvents > 0 && !reachedEOF,
 	}, nil
 }
 

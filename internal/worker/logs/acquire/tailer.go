@@ -501,7 +501,7 @@ func prefixSHA256At(path string, from, size int64) (string, error) {
 // reanchorAtEOFLocked 把游标锚到 EOF 并登记**可见**缺口（w18 防护：禁止按旧偏移回读历史内容 ✗）——
 // 缺的内容交给既有对账补齐 ✓。调用者负责本轮直接返回（不读歧义区 ✓）。
 func (t *FileTailer) reanchorAtEOFLocked(size int64, detail string) {
-	_ = t.led.RecordGap(t.key, uint64(t.cursor), uint64(size), "FILE_REWRITTEN", detail)
+	_ = t.led.RecordGap(t.key, uint64(t.cursor), uint64(size), ledger.GapReasonFileRewritten, detail)
 	t.segmentStart = t.logicalPos
 	t.cursor = size
 	t.lastSize = size

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
@@ -407,7 +408,7 @@ func (m *Manager) recordRawWriteFailure(binding InstanceBinding, stream string, 
 	if entry == nil {
 		return
 	}
-	_ = pipe.Ledger().RecordGap(pipe.Key(), entry.Positions.Read, entry.Positions.Read, "STDIO_RAW_WRITE_FAILED", fmt.Sprintf("%d bytes require operator verification", size))
+	_ = pipe.Ledger().RecordGap(pipe.Key(), entry.Positions.Read, entry.Positions.Read, ledger.GapReasonStdioRawWriteFailed, fmt.Sprintf("%d bytes require operator verification", size))
 	_ = pipe.Ledger().PauseAcquire(pipe.Key(), "managed Raw write failed; manual recovery required")
 	_ = m.persist()
 }

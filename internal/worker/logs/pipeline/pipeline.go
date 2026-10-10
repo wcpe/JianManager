@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
@@ -102,6 +103,26 @@ type Pipeline struct {
 	// lastDegradeSample 是上一次读取降级读数的时刻（节流用）。
 	// 磁盘读数是一次 statfs，每批都读会与容量门禁叠加成双倍开销。
 	lastDegradeSample time.Time
+	// archiveImportDeferred 统计「因 WAL 余量耗尽而推迟归档导入」的次数（缺陷二观测面）。
+	//
+	// 为什么要可观测：推迟是**设计内的正常让路**（积压会由回收推进），但若某个源长期
+	// 停在「余量耗尽」上，那就是回收停滞而非导入问题——两个原因必须能在现场被区分，
+	// 否则下一次排障又会把它读成「导入坏了」。
+	//
+	// 原子量：本结构既被采集轮 worker 调用（pollSource 路径），也被归档扫描路径调用，
+	// 两者可并发碰同一个源 ⇒ 普通 int64 会构成数据竞争。
+	archiveImportDeferred atomic.Int64
+}
+
+// ArchiveImportDeferred 返回「因 WAL 余量耗尽而推迟归档导入」的累计次数。
+//
+// 必须导出（本仓库的既有纪律）：新增计数器若不接到可读面，就是又一个「实现存在但不可达」——
+// 现场排障时读不到，读数等于不存在。归档扫描的汇总日志会带上它。
+func (p *Pipeline) ArchiveImportDeferred() int64 {
+	if p == nil {
+		return 0
+	}
+	return p.archiveImportDeferred.Load()
 }
 
 // New 创建管道。Mode 默认 FILE_PRIMARY。
@@ -432,7 +453,7 @@ func (p *Pipeline) pollStdio() ([]logtypes.Event, error) {
 		_ = p.led.AdvanceRead(p.key, end)
 	}
 	if err := sc.Err(); err != nil && err != io.EOF {
-		_ = p.led.RecordGap(p.key, p.stdioRead, p.stdioRead, "STDIO_READ_ERROR", err.Error())
+		_ = p.led.RecordGap(p.key, p.stdioRead, p.stdioRead, ledger.GapReasonStdioReadError, err.Error())
 		return p.bound.DrainEvents(), err
 	}
 	batch := p.bound.DrainEvents()
@@ -510,9 +531,7 @@ func (p *Pipeline) RefreshDegrade(now time.Time) bool {
 //
 // 采样未启用时 sampler 为 nil，本方法逐指令等价于直接调用 p.ingest。
 func (p *Pipeline) emit(events []logtypes.Event) ([]logtypes.Event, error) {
-	if p.sampler != nil {
-		events = p.sampler.Process(events)
-	}
+	events = p.sampleEvents(events)
 	if len(events) == 0 {
 		return nil, nil
 	}
@@ -520,6 +539,21 @@ func (p *Pipeline) emit(events []logtypes.Event) ([]logtypes.Event, error) {
 		return events, err
 	}
 	return events, nil
+}
+
+// sampleEvents 只做**采样收口**，不入 WAL、不投递。
+//
+// 为什么要把它从 emit 里拆出来（缺陷二修复，2026-10-10）：归档导入需要「采样**整个归档**一次，
+// 然后按批入账」。若对每一批各采一次样，采样决策就会随切批边界漂移（采样窗口是有状态的），
+// 同一份归档在「分批」与「不分批」下会得到不同的落库集合 —— 那是口径分叉，
+// 而不是本次修复想要的「切批不改语义」。故采样必须保持整包一次，切批只发生在采样之后。
+//
+// 采样未启用（sampler == nil）时本方法逐指令等价于恒等返回（零行为变化）。
+func (p *Pipeline) sampleEvents(events []logtypes.Event) []logtypes.Event {
+	if p.sampler == nil {
+		return events
+	}
+	return p.sampler.Process(events)
 }
 
 // ingest WAL append → Commit → DeliveryHook。容量/缺口由 acquire.Pipeline 处理。
@@ -566,18 +600,164 @@ func (p *Pipeline) SetArchiveBackfill(fn func(ownerGeneration, archivePath, obje
 	p.imp.SetBackfill(fn)
 }
 
-// ImportArchive 导入 gzip 归档；已关联轮转时跳过整包，禁止双计。
-func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
-	result, err := p.imp.ImportGzip(path)
-	if err != nil || result == nil || result.Skipped || len(result.Events) == 0 {
-		return result, err
+// ArchiveImportBatchMin / ArchiveImportBatchSlack 决定归档导入的**单批事件数上界**。
+//
+// 缺陷二（2026-10-10 生产实测）：`inst:220/file` 的 544,278 行 gz 解析出 **128,856** 个事件，
+// 而原实现把它作为**一个**批次喂给 `p.emit`（WAL 追加 → Commit → 投递）。单源 WAL 条目上限
+// 当时生效 20000 ⇒ 一次追加即越闸 6.4 倍 ⇒ `单源积压超过上限，已暂停该源采集`；重启后更坏
+// （`entries=424205/20000`），`delivery_pos` 恒 None、VL 侧 0 行 —— 数据进不去、源永久卡死
+// 且不自愈（5 分钟内暂停源 101→102，零自愈）。
+//
+// 修法：把「读取整个 gz」与「一次投递全部事件」解耦——读仍是一次顺序读（读盘不重复），
+// 但**入账与投递按批推进**，每批都独立走完整的
+// `WAL 追加 → fsync/Commit(durable) → 投递 → 结果落账` 链路。
+//
+// 为什么取「上限的一半」：闸门判据是 `backlog > maxEntries`，而单批追加量为 B ⇒
+// 只要 `当前积压 + B ≤ 上限` 就不会在**正常推进**的源上越闸。取一半给 reclaim 留出
+// 推进余量（每批投递成功都会推进回收，积压在批与批之间回落），同时不至于把批切得过碎
+// （批越小，WAL 追加/投递的固定开销占比越高）。字节维度同理取一半。
+//
+// **不放宽上限**：本常量只决定「一次喂多少」，闸门阈值与语义一字不动（wal.go 的上限存在
+// 的理由是防单源积压撑爆状态文件，曾有 1.2GB 状态文件事故）。
+// **不绕过 WAL**：每批都先落 WAL 再投递，WAL 的「先持久化再投递」耐久性保证逐批成立。
+const (
+	// archiveImportBatchMax 是单批上限：即使配置把 WAL 上限抬得很高，也不允许单批回到
+	// 「一次几十万条」的形态——那正是 5s 客户端超时与 VL 单请求体量失控的来源
+	// （见 insertBatchMaxEvents 的同型教训）。
+	archiveImportBatchMax = 5000
+)
+
+// archiveImportBudget 返回**本轮**归档导入可放行的事件数上界，以及「本轮是否可以推进」。
+//
+// 取两重界（先到者生效）：
+//  1. **上限的一半**（`maxEntries/2`）：给 reclaim 留推进余量。闸门判据是
+//     `backlog > maxEntries`，而单批追加量 ≤ 上限的一半 ⇒ 空积压的源追加完也不会越闸。
+//  2. **当前余量**（`maxEntries - 当前积压`）：源已经带了积压时，按剩下的空间切批。
+//     没有这一条，「稳态带积压的源」仍会被一次 1/2 上限的追加顶过闸（例如积压 15000、
+//     上限 20000、追加 10000 ⇒ 25000 > 20000 ⇒ 暂停）。生产现场的源普遍带积压，
+//     故这一条不是理论顾虑，而是让修复对**真实形态**成立的必要条件。
+//
+// 返回 ok=false 表示**余量已耗尽**（当前积压已顶到上限）。此时调用方必须**放弃本轮推进**，
+// 而不是强行取一个最小批次：
+//   - 强推必然越闸 ⇒ 触发 `单源积压超过上限，已暂停该源采集` ⇒ 那次暂停又会拒绝后续
+//     追加 ⇒ 正是本缺陷要消灭的「源停死」形态；
+//   - 放弃本轮**不丢数据**：归档没被读完就仍是「未导入」，采集轮 250ms 后必再发现它，
+//     而积压会在这段时间里被回收推进（`Ingest` 每次追加前都会 `TryReclaim`）。
+//
+// 读的是 WAL 自己的**生效**上限（含恢复期拓宽与默认值归一，见 acquire.WAL.EffectiveLimits），
+// 而不是再写一个常数：上限被配置抬高/降低时批次自动同步
+// ——「代码默认 2000 条、生产生效 20000 条」这种脱节正是本缺陷的现场形态之一。
+func (p *Pipeline) archiveImportBudget() (int, bool) {
+	if p.wal == nil {
+		// 没有 WAL 可读（测试替身/异常构造）：退回「一次读完整包」的既有行为。
+		return 0, true
 	}
+	maxEntries, _ := p.wal.EffectiveLimits()
+	if maxEntries <= 0 {
+		return 0, true
+	}
+	size := int(maxEntries / 2)
+	if size > archiveImportBatchMax {
+		size = archiveImportBatchMax
+	}
+	// 顺序固定：先取上限，再**被余量夹住**。余量夹取必须最后做——若先套下限再夹，
+	// 下限本身就可能大于余量（`min > headroom`）⇒ 放行量越闸，正是本缺陷的形态。
+	backlog, _ := p.wal.Backlog()
+	headroom := int(maxEntries - backlog)
+	if headroom <= 0 {
+		return 0, false
+	}
+	if headroom < size {
+		size = headroom
+	}
+	return size, true
+}
+
+// archiveImportBatchSize 返回单批事件数上界（不含「余量已耗尽」这一信息）。
+// 仅供诊断与回归断言使用；生产路径必须用 archiveImportBudget —— 否则会把
+// 「余量耗尽」误读成「可以推一个最小批次」，那正是越闸暂停的入口。
+func (p *Pipeline) archiveImportBatchSize() int {
+	size, ok := p.archiveImportBudget()
+	if !ok {
+		return 0
+	}
+	return size
+}
+
+// ImportArchive 导入 gzip 归档；已关联轮转时跳过整包，禁止双计。
+//
+// **分批入账 + 跨轮续传**（缺陷二修复，2026-10-10）。
+//
+// 现场：`inst:220/file` 的 544,278 行 gz 解析出 **128,856** 个事件（单源上限 20000 的 6.4 倍），
+// 原实现把它作为**一个**批次交给 WAL ⇒ 一次追加即越闸 ⇒ `单源积压超过上限，已暂停该源采集`；
+// 越闸后 `WAL.Append` 的首判据（已暂停）拒绝**后续**追加 ⇒ 源在暂停上停死、
+// `delivery_pos` 恒 None、VL 侧 0 行，且 5 分钟内零自愈（暂停源 101→102）。
+//
+// 为什么必须「跨轮」而不只是「循环切批」（实测教训，本修复的第二版）：
+// 第一版在一个调用内循环切批，**仍然转红** —— 因为回收（`TryReclaim`）只在
+// 「责任已转移」时放行，而一批刚投完的条目往往还不可回收，于是积压**逐批累加**：
+// 300 条上限下第 2 批就把 entries 顶到 512 并触发暂停。切批只降低**单次追加量**，
+// 并不降低**累积量**。真正有界的是「每轮只推到本轮余量允许的位置，然后让路」。
+//
+// 于是本次的语义是：
+//   - 单次调用最多推进到「当前余量允许」的边界（余量 = 生效上限 − 当前积压）；
+//   - 位置随后**落回账本分段**（EndPos），归档仍标记为**未导入** ⇒ 采集轮下一轮继续；
+//   - 只有真正读到归档 EOF 才 `MarkImported`（见 acquire.ArchiveImporter 的说明）；
+//   - 采集轮 250ms 一跳，故「跨轮」不是延迟问题，而是让回收有机会在两轮之间推进。
+//
+// 不丢数据的论证（逐条）：
+//   - 已推进的每一批都走完整链路（WAL 追加 → Commit(durable) → 投递 → 结果落账）；
+//   - 未推进的部分既没被读进 WAL、也没被标成已导入 ⇒ 必然会被下一轮重新发现；
+//   - 续读位置来自账本分段（可持久化），故进程重启后仍从断点续读，不重复读已消费前缀；
+//   - 因此「丢」不可能发生（每段要么已落库、要么仍在待导入集合里），
+//     而「重」由既有 event_id + 位置账本幂等收敛（本修复不新增判据）。
+func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
+	// 先给回收一次机会，再评估本轮余量。
+	//
+	// 为什么这一步不能省（现场「不自愈」形态的机制本体）：`acquire.Pipeline.Ingest` 在每次
+	// 追加**之前**才 TryReclaim；而「余量耗尽」时我们**不会**调用 Ingest ⇒ 若不在这里补一次
+	// 回收，源一旦顶到上限就再也没有任何东西推动回收 ⇒ 余量永远回不来 ⇒ 归档导入永久推迟。
+	// 这与现场观察到的「暂停源 101→102、5 分钟零自愈」是同一种死结，必须在这里断开。
+	//
+	// 语义与既有采集循环一致（那里每轮也先 TryReclaim 再追加）；失败不致命：
+	// 无恢复分段/责任未转移时 TryReclaim 本就不放行（会原样返回错误），此时按当前余量判定。
+	if p.wal != nil {
+		if _, err := p.wal.TryReclaim(); err != nil {
+			// 回收被门禁拒绝是常态而非异常（见 WAL.TryReclaim 的说明）：它仍会按账本当前水位
+			// 剪枝，故不能因这个错误而中止导入。
+			_ = err
+		}
+	}
+	// 本轮可放行的事件上限（0 = 不限，即退回既有「一次读完整包」）。
+	budget, ok := p.archiveImportBudget()
+	if !ok {
+		// 余量已耗尽（回收也确实推不动）：**本轮不推进**。这不是失败、更不是丢数据
+		// ——归档仍未被标记为已导入，采集轮 250ms 后必再发现它，并在那时再试一次回收。
+		// 强行取最小批次反而会越闸并触发「暂停」⇒ 源停死（正是本次要消灭的形态）。
+		p.archiveImportDeferred.Add(1)
+		return &acquire.ImportResult{Skipped: true,
+			Reason: "wal headroom exhausted; archive import deferred to next round"}, nil
+	}
+	var current acquire.ImportResult
+	{
+		// 单轮只读一批：读满即停并回 Partial，位置落回账本 ⇒ 下一轮从断点继续。
+		res, err := p.imp.ImportGzipBounded(path, budget)
+		if err != nil || res == nil {
+			return res, err
+		}
+		current = *res
+	}
+	if current.Skipped || len(current.Events) == 0 {
+		out := current
+		return &out, nil
+	}
+
 	normalizeOpts := p.normalizeOpts
 	if day, dayErr := archiveUTCDay(path); dayErr == nil {
 		normalizeOpts.BaseTime = day.Add(12 * time.Hour)
 	}
 	boundary := NewNormalizeBoundary(normalizeOpts)
-	for _, raw := range result.Events {
+	for _, raw := range current.Events {
 		boundary.Feed([]byte(raw.Message), raw.Record.Start, raw.Record.End)
 	}
 	boundary.FlushComplete()
@@ -586,27 +766,41 @@ func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
 		if events[i].Fields == nil {
 			events[i].Fields = make(map[string]string)
 		}
-		events[i].Fields["archive_object_id"] = result.ArchiveObjectID
+		events[i].Fields["archive_object_id"] = current.ArchiveObjectID
 	}
+
+	result := current
 	result.Events = events
+	// ImportedCount 保持**采样前**的条数：它回答的是「这次从归档里导入了多少」，
+	// 而 Events 才是「实际落库的那批」。两者口径不同不能混用，否则现场无法判断归档是否完整。
 	result.ImportedCount = len(events)
-	ingestErr := func() error {
-		// 归档导入同样经采样收口。注意 ImportedCount 保持**采样前**的条数：
-		// 它回答的是「这次从归档里导入了多少」，而 Events 才是「实际落库的那批」。
-		// 两者口径不同不能混用，否则现场无法判断归档本身是否完整。
-		sampled, err := p.emit(events)
-		result.Events = sampled
-		return err
-	}()
-	pos, ok := p.Positions()
-	if ok && len(events) > 0 && pos.Durable >= events[len(events)-1].Record.End {
-		markErr := p.imp.MarkImported(path, result.ArchiveObjectID,
-			events[0].Record.Start, events[len(events)-1].Record.End)
-		if ingestErr == nil {
-			ingestErr = markErr
+
+	// 采样收口仍作用于放行的那批（整批一次，口径不随切批漂移）。
+	sampled := p.sampleEvents(events)
+	result.Events = sampled
+
+	var ingestErr error
+	if len(sampled) > 0 {
+		// 逐批走完整链路：WAL 追加 → Commit(durable) → 投递 → 结果落账。
+		ingestErr = p.ingest(sampled)
+	}
+	if ingestErr != nil {
+		// 本批未落库：如实上报（不伪装成成功），且**不置 Imported** ⇒ 下一轮重来。
+		return &result, ingestErr
+	}
+
+	// 「已导入」只在**归档真的读完**（Partial=false）且本批已 durable 覆盖时才置位。
+	// 这是与「读了一半就算导入完成」最要紧的区别：后者会把未读到的尾部静默丢掉。
+	if !result.Partial {
+		pos, ok := p.Positions()
+		if ok && len(sampled) > 0 && pos.Durable >= sampled[len(sampled)-1].Record.End {
+			if markErr := p.imp.MarkImported(path, result.ArchiveObjectID,
+				sampled[0].Record.Start, sampled[len(sampled)-1].Record.End); markErr != nil {
+				return &result, markErr
+			}
 		}
 	}
-	return result, ingestErr
+	return &result, nil
 }
 
 func archiveUTCDay(path string) (time.Time, error) {

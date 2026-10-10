@@ -167,6 +167,9 @@ func TestReplayDoesNotStallCollection(t *testing.T) {
 	go func() {
 		defer close(roundDone)
 		_ = m.ReconcileRoundNow(context.Background())
+		// 对账轮只登记重建；这里在**独立的** goroutine 上排空它（模拟生产 worker），
+		// 从而让「重发在飞」与「采集轮」真正重叠——这正是本用例要测的并发形态。
+		m.drainRebuilds(context.Background())
 	}()
 
 	// 关键同步：必须等重发**真的开始**（第一次插入尝试）之后再跑采集轮——否则采集轮会在重发
@@ -204,6 +207,8 @@ func TestReplaySlicesAndResumesWithoutLoss(t *testing.T) {
 	insertsBefore := fixture.insertCount()
 	result := m.ReconcileRoundNow(context.Background())
 	require.Empty(t, result.Errors, "本轮不应有错误：%v", result.Errors)
+	// 对账只登记；重建由调度器承担（见文件头：这是 2026-10-09 的异步化改动）。
+	require.Equal(t, 1, m.drainRebuilds(context.Background()), "两天缺失必须登记一次重建")
 	firstRound := fixture.insertCount() - insertsBefore
 	require.Positive(t, firstRound, "首轮必须至少发布一天（否则夹具没造出重发）")
 	require.LessOrEqual(t, firstRound, 1, "首轮只允许发布预算允许的天数（1 天）——切片必须生效")
@@ -220,6 +225,7 @@ func TestReplaySlicesAndResumesWithoutLoss(t *testing.T) {
 	// 续跑若干轮直到发完（第二轮补上剩余天）。
 	for i := 0; i < 4 && fixture.insertCount()-insertsBefore < 2; i++ {
 		require.Empty(t, m.ReconcileRoundNow(context.Background()).Errors)
+		m.drainRebuilds(context.Background())
 	}
 	total := fixture.insertCount() - insertsBefore
 	require.Equal(t, 2, total, "两天各发布一次（不重不漏）")
@@ -239,25 +245,52 @@ func TestReplaySlicesAndResumesWithoutLoss(t *testing.T) {
 
 // TestReplayWaitsForVLReady：VL 未就绪时**不发起对账/重发**（一次插入尝试都不该有）。
 //
-// 转红方式（实测）：删掉 ReconcileRoundNow 里的 ensureVLReady 调用与 runReplayWindow 里的探针
-// —— 重发会去插未就绪的 VL，本用例在「零插入尝试」处变红。
+// 转红方式（实测）：删掉重建执行体里的 `ensureVLReady` 探针 —— 重发会去插未就绪的 VL，
+// 本用例在「零插入尝试」处变红。
+//
+// 2026-10-09（异步化）：撤销登记也必须有界且可见。本用例据此断言三条：
+// ① 就绪探针在**对账轮**与**重建执行体**两处都拦得住（零写入尝试）；
+// ② 撤销的登记**不得**留下「已重建」的假象（不许写 VL、不许清 pending）；
+// ③ 就绪后必须恢复工作（门禁不是永久关闭）。
 func TestReplayWaitsForVLReady(t *testing.T) {
 	client, fixture := newSlowInsertVL(t)
-	m, _, _ := newReplayFixture(t, client, Options{})
+	m, source, _ := newReplayFixture(t, client, Options{})
+	key := source.LogSourceID + "/" + source.SourceGeneration
 	// 造「VL 里缺了一天」的现场：就绪后必须真的去重发它（否则「未就绪时零尝试」失去判别力）。
 	fixture.deleteDay("2026-09-22")
 	fixture.setHealthy(false) // VL 未就绪（/health 503）
 
 	before := fixture.insertAttempts()
 	result := m.ReconcileRoundNow(context.Background())
+	// ① 对账轮在读侧就被探针拦下：连判定都不做（既有语义），更不登记重建。
+	require.Equal(t, before, fixture.insertAttempts(), "VL 未就绪时不得发起任何写入尝试")
+	require.Contains(t, strings.Join(result.Errors, " | "), "vl_not_ready",
+		"本轮必须如实记下「VL 未就绪」（原因可执行：等 VL 起来）")
+	require.Zero(t, m.drainRebuilds(context.Background()), "VL 未就绪时不得登记重建")
+
+	// ② 即便绕过读侧探针直接登记（模拟「登记时刚好就绪、执行时已掉线」的窗口），
+	// 重建执行体自己的探针也必须拦住，且**失败可见**。
+	ok, _ := m.scheduleRebuildAsync(source, []string{"2026-09-22"}, "test_probe")
+	require.True(t, ok, "登记本身是 O(1)，必须成功")
+	require.Equal(t, 1, m.drainRebuilds(context.Background()))
 	require.Equal(t, before, fixture.insertAttempts(),
 		"VL 未就绪时不得发起任何写入尝试（这正是现场 18+ 分钟失败重试的成因）")
+	require.Positive(t, m.RebuildStats().Failed, "VL 未就绪必须计为一次可见的重建失败")
+	m.mu.Lock()
+	require.True(t, m.state.Sources[key].PublicationPending || m.state.Sources[key].ProjectionGeneration != "",
+		"撤销的登记不得被当成「已重建」")
+	m.mu.Unlock()
 
-	// 就绪后同一轮逻辑必须恢复工作（门禁不是永久关闭）。
-	joined := strings.Join(result.Errors, " | ")
-	require.Contains(t, joined, "vl_not_ready", "本轮必须如实记下「VL 未就绪」（原因可执行：等 VL 起来）")
+	// ③ 就绪后必须恢复工作（门禁不是永久关闭）。
+	// 这里清掉退避窗口：本用例测的是「就绪后能继续」，不是退避计时本身（退避由专门用例覆盖）。
 	fixture.setHealthy(true)
+	m.rebuilds.mu.Lock()
+	if st := m.rebuilds.attempts[key]; st != nil {
+		st.nextAllowedAt = time.Time{}
+	}
+	m.rebuilds.mu.Unlock()
 	require.Empty(t, m.ReconcileRoundNow(context.Background()).Errors)
+	require.Equal(t, 1, m.drainRebuilds(context.Background()))
 	require.Greater(t, fixture.insertAttempts(), before, "VL 就绪后必须继续重发")
 }
 

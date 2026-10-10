@@ -403,7 +403,12 @@ var specs = [tableCount]tableSpec{
 		onConflict: `ON CONFLICT(key, seq, event_id, record_start, record_end) DO UPDATE SET
 			appended=excluded.appended, durable=excluded.durable, body=excluded.body, fp=excluded.fp`,
 		deleteStmt: "DELETE FROM source_wal WHERE key = ? AND seq = ? AND event_id = ? AND record_start = ? AND record_end = ?",
-		orderBy:    "seq, event_id, record_start, record_end",
+		// 排序键必须与主键 (key, seq, event_id, record_start, record_end) 同序：SQLite 只有在
+		// ORDER BY 命中主键索引前缀时才省掉排序。此前这里从 seq 起排（缺 key），索引前缀对不上，
+		// 于是每行（含 5GB 级 body）都要进 TEMP B-TREE 物化——生产 711 万行时排序数据溢出到
+		// /var/tmp，空间不足直接报 `database or disk is full`，启动 6 次重试全败后放弃采集。
+		// 对齐主键后实测：711 万行全量读 9.2s，执行计划为 SCAN ... USING INDEX，无临时文件。
+		orderBy:    "key, seq, event_id, record_start, record_end",
 	},
 	tblDeliveryBatch: {
 		name:      "delivery_batch",
@@ -666,6 +671,9 @@ func sortState(st *State) {
 
 // lessWAL 是 WAL 行的规范顺序（与 orderBy 一致）。
 func lessWAL(a, b WALRow) bool {
+	if a.Key != b.Key {
+		return a.Key < b.Key
+	}
 	if a.Seq != b.Seq {
 		return a.Seq < b.Seq
 	}

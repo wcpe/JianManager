@@ -436,86 +436,118 @@ func (w *WAL) maybeResumeBacklogLocked() {
 const ResolutionReReadOnResume = "re-read on resume (append rejected while paused)"
 const ResolutionReReadOnResumeDelivery = "re-read on resume (delivery error while paused)"
 
+// ResolutionReReadOnResumeRotation 是**轮转时序类**缺口的分类裁定文本（与上两条**分账** ✓）。
+//
+// 为什么单独一个词（2026-10-10 现场）：`ROTATED_SEGMENT_NOT_READY` 的语义是"已看到 latest.log
+// 被替换、但轮转段尚未可读"的**时序观察**（登记区间恒为 [0,0]，不覆盖任何字节 ✓），
+// 用"append rejected while paused"或"delivery error while paused"记录它都是**事实错误**——
+// 审计面会读到一个从未发生的失败类型。分账使"为什么被放行"在账本里逐字可读 ✓。
+const ResolutionReReadOnResumeRotation = "re-read on resume (rotated segment not ready)"
+
 // 兼容别名：既有调用点（含消解词比较处）逐字不变 ✓。
 const (
 	gapResolutionReReadOnResume         = ResolutionReReadOnResume
 	gapResolutionReReadOnResumeDelivery = ResolutionReReadOnResumeDelivery
 )
 
+// gapResolutionReReadFallback 是白名单内「未在下面分账表中显式登记」的原因所用的兜底消解词。
+//
+// 为什么需要兜底而不是报错：分账表只影响**审计措辞**，而"是否可愈合"由 ledger 白名单单独回答
+// （见 reReadResolutionForReason ✓）。若这里回退成"拒绝消解"，新增一个白名单原因就会表现为
+// 「源永久停在暂停上且无任何报错」——正是本包要根除的无声失效 ✗。兜底保证：只要进了白名单
+// 就一定能被消解 ✓，措辞不精确由下面的钉住测试盯住 ✓。
+const gapResolutionReReadFallback = "re-read on resume (timing gap healable on re-read)"
+
+// reReadResolutionForReason 把白名单内的原因分配到消解词（分账 ⇒ 审计可读 ✓）。
+//
+// **归属判定不在这里**：某原因是否可愈合只由 `ledger.IsGapReasonHealableOnReResume` 回答
+// （单一真源 ✓）。本函数只回答"用哪个词记录"，因此对白名单外的一切输入都无意义
+// （调用点已先过白名单判定 ✓）。
+func reReadResolutionForReason(reason string) string {
+	switch reason {
+	case ledger.GapReasonAppendRejected:
+		return gapResolutionReReadOnResume
+	case ledger.GapReasonDeliverError, ledger.GapReasonDeliverErrorWorkerSource:
+		return gapResolutionReReadOnResumeDelivery
+	case ledger.GapReasonRotatedSegmentNotReady:
+		return ResolutionReReadOnResumeRotation
+	default:
+		return gapResolutionReReadFallback
+	}
+}
+
+// reReadResolutions 是「待重读」类消解词的**完整清单**（判定 `IsReReadHealableResolution` 的真源）。
+//
+// 为什么要集中一份：该谓词驱动破环直投步（#179）——只有被它认作"非终局"的已决缝才会被重新投递。
+// 某个词若写了却不在清单里，缝会被消解而**永不再投**，表现同样是无声失效 ✗。
+// 兜底词必须在此（见 gapResolutionReReadFallback 的说明 ✓）。
+var reReadResolutions = []string{
+	ResolutionReReadOnResume,
+	ResolutionReReadOnResumeDelivery,
+	ResolutionReReadOnResumeRotation,
+	gapResolutionReReadFallback,
+}
+
 // IsReReadHealableResolution 判定某条缺口的消解词是否属"**待重读**"类（#179）：已 resolved 但**非终局**
 // ⇒ 仍必须靠一次真实重投/重读才能闭合 ✓（179 正是这种"已消解却钉死"的形态 ✗）。行为中性：只读 ✓。
 func IsReReadHealableResolution(res string) bool {
-	return res == ResolutionReReadOnResume || res == ResolutionReReadOnResumeDelivery
+	for _, candidate := range reReadResolutions {
+		if res == candidate {
+			return true
+		}
+	}
+	return false
 }
 
-// gapResolutionReReadOnResumeDelivery 是投递失败类缺口的分类裁定文本（与上一条**明确分账** ✓）。
+// resolveReReadHealableGapsLocked 把「恢复后回读可愈合」白名单内的未消解缺口分类为待重读。
 //
-// 为什么这一类也进白名单（2026-10-04 现场，用户批准的红线修正 ✓）：`DELIVER_ERROR` 的语义是
-// "投递时 VL 不可达"（`connect: connection refused` ✓）⇒ 恢复后**回读会让恢复链重投那段
-// `UNSENT basis=gap` 区间**（现场 `inst:156` 覆盖 119.78MB ✓、紧贴水位 ✓）⇒ 它**恰恰是可愈合的** ✓✓。
-// 我上批假设"投递失败类回读治不了 ⇒ 必须永远挡住恢复" ✗ 被现场 67 条恒等不变**证否** ✓（那 67 条
-// 所属源已暂停 ⇒ 活投递事件结构性不可达 ⇒ 两种证据都拿不到 ⇒ 永久停死 ✗）。
-
-// gapResolutionExcludedReasons 是**绝不能被本条路径放行**的缺口原因（fail-closed 名单 ✓）。
+// **名单只有一份**：可愈合与否一律问 `ledger.IsGapReasonHealableOnReResume`（ledger 单一真源 ✓），
+// 本函数不再持有任何原因清单——曾经这里有两段按原因字面量分组的循环，它们的名单与 ingest 侧
+// 的诊断名单必须手工保持一致，漏改一处就表现为「该原因永远不被自动消解」的无声失效 ✗
+// （2026-10-10 生产实测：86 源被不在名单里的 `ROTATED_SEGMENT_NOT_READY` 永久挡住 ✓）。
 //
-// 抽成包级变量（而不是内联字面量）是为了让"放开一因 ⇒ 红"**可被变异触达** ✓：内联时该列表只会在
-// 处理 APPEND_REJECTED 时被读到 ⇒ 任何"删一项"的变异都不可达 ✗（实测：删项后用例仍绿 ✗✗），
-// 于是那条红线只有断言、没有证据 ✗。名单语义不变：**未列出者一律不放行** ✓（新增原因默认排除 ✓）。
-var gapResolutionExcludedReasons = []string{
-	// STDIO_RAW_WRITE_FAILED：原始字节**从未落盘**（写原始文件就失败了）⇒ 重投无据 ⇒ 必须挡住 ✓
-	// （这是"源文件对应字节已不再可得"的等价形态 ✓ —— 语义断言见对应用例 ✓）。
-	ledger.GapReasonStdioRawWriteFailed,
-	// WAL_COMMIT_FAILED：提交阶段的失败没有"内容确实存在"的依据 ⇒ 同样挡住 ✓。
-	ledger.GapReasonWALCommitFailed,
-	// DELIVER_ERROR / DELIVER_ERROR_WORKER_SOURCE 已于 2026-10-04 移入**白名单**
-	// （见 gapResolutionReReadOnResumeDelivery ✓，用户批准的红线修正 ✓）。
-}
-
-// resolveReReadHealableGapsLocked 只消解 REASON=APPEND_REJECTED 的未消解缺口（见调用点注释）。
-//
-// fail-closed（关键）：其余四种已知原因**显式排除** ⇒ 将来若新增原因，默认同样被排除 ✓
-// （不会被这条路径悄悄放行 ✗）。返回消解条数。
+// 水位（through）只限制候选扫描，不作为"已落库"证据；零长度缺口（EndPos=0）同样有效
+// ——消解判据是「末端 ≤ position」（见 ledger.ResolveGapsThroughAllowed ✓），
+// 故 `through=0` 能消解 `[0,0]` 形态的轮转时序缺口 ✓（这正是现场 86 源的形态 ✓）。
+// 分账仅体现在消解词上（见 reReadResolutionForReason ✓），不改变消解集合。
 func (w *WAL) resolveReReadHealableGapsLocked(ent *ledger.Entry) int {
 	if ent == nil {
 		return 0
 	}
-	// 两类各自成批消解（文本分账 ✓），**其余原因一律默认排除** ✓（fail-closed：每条调用都显式
-	// 列出排除集 ✓，将来新增原因不会被任何一条悄悄放行 ✓）。
+	// 一轮扫描把白名单内的未消解缺口按**消解词**分组：组 → 扫描上界 + 该组出现过的原因。
+	//
+	// `found` 必须与 `through` 分开存：零长度缺口（`EndPos=0`，轮转时序记录正是此形态）永远
+	// 不会推高上界，若用「key 是否存在」代表「有没有候选」，它就会被整组丢掉 ⇒ 消解集合漏项 ✗
+	// （实测：`through=0` 本身能消解 `[0,0]`，漏的是"没把这一组送进消解调用"）。
+	type healGroup struct {
+		through uint64
+		reasons []string
+	}
+	groups := map[string]*healGroup{}
+	seenReason := map[string]bool{}
+	for _, g := range ent.Gaps {
+		if g.Resolved || !ledger.IsGapReasonHealableOnReResume(g.Reason) {
+			continue
+		}
+		resolution := reReadResolutionForReason(g.Reason)
+		group := groups[resolution]
+		if group == nil {
+			group = &healGroup{}
+			groups[resolution] = group
+		}
+		if g.EndPos > group.through {
+			group.through = g.EndPos
+		}
+		if !seenReason[g.Reason] {
+			seenReason[g.Reason] = true
+			group.reasons = append(group.reasons, g.Reason)
+		}
+	}
 	total := 0
-	through := uint64(0)
-	for _, g := range ent.Gaps {
-		if g.Resolved || g.Reason != ledger.GapReasonAppendRejected {
-			continue
-		}
-		if g.EndPos > through {
-			through = g.EndPos
-		}
-	}
-	if through > 0 {
-		n, err := w.led.ResolveGapsThroughExcept(w.key, through, gapResolutionReReadOnResume,
-			gapResolutionExcludedReasons...,
-		)
-		if err == nil {
-			total += n
-		}
-	}
-
-	deliverThrough := uint64(0)
-	for _, g := range ent.Gaps {
-		if g.Resolved {
-			continue
-		}
-		if g.Reason != ledger.GapReasonDeliverError && g.Reason != ledger.GapReasonDeliverErrorWorkerSource {
-			continue
-		}
-		if g.EndPos > deliverThrough {
-			deliverThrough = g.EndPos
-		}
-	}
-	if deliverThrough > 0 {
-		n, err := w.led.ResolveGapsThroughExcept(w.key, deliverThrough, gapResolutionReReadOnResumeDelivery,
-			gapResolutionExcludedReasons...,
-		)
+	for resolution, group := range groups {
+		// 允许集只含本组原因：否则一个较大的 through 会把**别组**的缺口也一并消解，
+		// 并把错误的消解词写进它的审计字段 ✗（分组的意义就在于此 ✓）。
+		n, err := w.led.ResolveGapsThroughAllowed(w.key, group.through, resolution, group.reasons...)
 		if err == nil {
 			total += n
 		}
@@ -533,6 +565,24 @@ func (w *WAL) BacklogAndLimits() (entries int64, maxEntries int64) {
 	e, _ := w.backlogLocked()
 	mx, _ := w.limitsLocked()
 	return e, mx
+}
+
+// EffectiveLimits 返回**生效**的单源积压上限（条目 + 近似字节，含恢复期拓宽与默认值归一）。
+//
+// 为什么需要导出（缺陷二修复，2026-10-10）：导入侧必须按「上限的分数」把一次归档导入拆成
+// 有界批次，而它当时拿不到生效上限——只能硬编码一个常数，那会在上限被配置抬高/降低时
+// 与真实闸门脱节（本缺陷的现场正是「代码默认 2000 条、配置生效 20000 条」这种脱节）。
+// 让导入侧读**同一把尺**，批次大小就永远与闸门同步，不需要在两处各维护一个数字。
+//
+// 只读、不改任何状态；调用方不得据此自行"放宽/收紧"闸门（闸门仍只由本包 enforceBacklogLimitLocked
+// 判定），本方法只用于**提前规划批次**，使单次追加不会把源直接推过闸。
+func (w *WAL) EffectiveLimits() (maxEntries, maxBytes int64) {
+	if w == nil {
+		return 0, 0
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.limitsLocked()
 }
 
 // EvaluateResume 尝试一次「推进回收 + 按滞回条件评估恢复」，返回**账本当前是否不在暂停态**。
