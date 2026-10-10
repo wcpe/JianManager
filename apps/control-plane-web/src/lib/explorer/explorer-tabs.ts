@@ -89,8 +89,9 @@ export function closeTab(state: ExplorerTabsState, id: string): ExplorerTabsStat
   const tabs = state.tabs.filter((t) => t.id !== id)
   let activeId = state.activeId
   if (activeId === id) {
-    // 取过滤后邻位（原 idx 对应下一签，否则前一签）
-    activeId = tabs[Math.min(idx, tabs.length - 1)]?.id ?? tabs[0].id
+    // 取过滤后邻位（原 idx 对应下一签，否则前一签）；上方已排除「仅 1 签」，故 tabs 非空。
+    const neighbor = tabs[Math.min(idx, tabs.length - 1)] ?? tabs[0]
+    if (neighbor) activeId = neighbor.id
   }
   return { tabs, activeId }
 }
@@ -118,7 +119,8 @@ export function floatTab(state: ExplorerTabsState, id: string): FloatResult {
   let activeId = state.activeId
   if (activeId === id) {
     const docked = tabs.filter((t) => !t.floated)
-    if (docked.length > 0) activeId = docked[0].id
+    const firstDocked = docked[0]
+    if (firstDocked) activeId = firstDocked.id
   }
   return { ok: true, state: { tabs, activeId } }
 }

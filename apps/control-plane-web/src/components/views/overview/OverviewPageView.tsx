@@ -3,8 +3,8 @@
  *       健康墙 / 链接 / 按需续取三处接线全由应用容器注入。
  * @input lib/instance-types（InstanceInfo）、lib/task-status（Task、TaskState）、lib/alert-contracts（AlertEventInfo）、
  *        lib/alert-helpers（levelStatusLevel）、lib/threshold（instanceStatusLevel、StatusLevel）、lib/virtual-list（useVirtualRows）、
- *        Panel / StatCard / StatusBadge / ResourceGauge / Table 原语、layout（PageShell / PageHeader）、
- *        charts（RangePicker / TimeSeriesChart）、翻译上下文
+ *        Panel / StatCard / StatusBadge / ResourceGauge / Skeleton / Table 原语、layout（PageShell / PageHeader）、
+ *        charts（RangePicker 静态、TimeSeriesChart 懒加载）、翻译上下文
  * @output OverviewPageView、OverviewPageViewProps、OverviewAggregationPanel、OverviewAggregationPanelProps、
  *         GaugeAttributionTooltip、GaugeAttributionTooltipProps、PlatformHealthPanel、PlatformExceptionsPanel、
  *         PlatformBotRuntimePanel、PlatformPanelProps、OverviewInstancePanel、OverviewInstancePanelProps、
@@ -14,21 +14,49 @@
  * @since FR-502（组件受控化迁包；原页 FR-061 旗舰总览、FR-060 聚合历史曲线、FR-402 平台全景观测、
  *        FR-432 平台观测区权限对齐、FR-461 集群健康墙、FR-496 阶段 6 布局原语与渲染补丁）
  */
-import { useEffect, useMemo, type ReactNode, type UIEvent } from 'react'
+import { lazy, Suspense, useEffect, useMemo, type ReactNode, type UIEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { ResourceGauge } from '@jianmanager/ui/components/gauge'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
-import { RangePicker, TimeSeriesChart, type ChartSeries, type MetricRange } from '@jianmanager/ui'
+import { RangePicker } from '@jianmanager/ui/charts/RangePicker'
+import type { ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
+import type { MetricRange } from '@jianmanager/ui/charts/RangePicker'
 import { levelStatusLevel } from '@/lib/alerts/alert-helpers'
 import type { AlertEventInfo } from '@/lib/alerts/alert-contracts'
 import type { InstanceInfo } from '@/lib/instances/instance-types'
 import type { Task, TaskState } from '@/lib/tasks/task-status'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
+
+/**
+ * 首页趋势图（FR-060）**懒加载**：recharts 不能留在落地页的同步依赖里。
+ *
+ * 【为什么必须懒】`TimeSeriesChart` 静态 import recharts（含 d3 一族，构建产物中约 359 kB /
+ * gzip 约 106 kB）。它此前是从 `@jianmanager/ui` barrel 同步引入的，于是本页所在的
+ * **路由 chunk 必须等整个 recharts 下载并执行完才开始跑**——而 `/` 就是登录后的落地页，
+ * 被拖住的不只是这张图，外壳、页头、CPU/负载/内存/实例数这些纯数字指标全在同一个 chunk 里。
+ *
+ * 【延后到哪里】改成动态 import 后，recharts 只在浏览器解析完首屏 chunk 之后才发起请求，
+ * 落在首屏渲染之外。渲染时机只推迟「图表本身」，其余区块照旧。
+ *
+ * 【为什么写死成 lazy 常量而非组件内调用】`lazy()` 必须拿到稳定的组件引用，写在渲染函数里
+ * 会让每次渲染都产生新组件、整棵子树重挂载。放模块顶层，配合下面的 Suspense 边界，
+ * 图表 chunk 全生命周期只请求一次。
+ *
+ * 具名导出 → 用 `.then` 适配成 `default`（lazy 只认默认导出）。
+ */
+const TimeSeriesChart = lazy(() => import('@jianmanager/ui/charts/TimeSeriesChart').then((m) => ({ default: m.TimeSeriesChart })))
+
+/**
+ * 趋势图高度（px）：**声明值 = 真实值**——同一个常量既传给 `TimeSeriesChart` 的 `height`，
+ * 也用作懒加载骨架的高度，图表就位前后占位完全一致，不产生布局跳动。
+ */
+const TREND_CHART_HEIGHT = 220
 
 /**
  * 单张聚合卡片的截断条数。
@@ -435,6 +463,8 @@ export function PlatformExceptionsPanel({ data, isLoading, isError }: PlatformPa
 export function PlatformBotRuntimePanel({ data, isLoading, isError }: PlatformPanelProps) {
   const { t } = useTranslation()
   const bots = data?.bots
+  // 不可用原因只展示首条（与列表口径一致）
+  const firstUnavailable = bots?.unavailable[0]
   return (
     <OverviewAggregationPanel testId="platform-observability-bots" title={t('dashboard.sharedBotRuntime')} to="/monitoring" isLoading={isLoading} isError={isError} isEmpty={!bots} emptyText={t('dashboard.noData')} errorText={t('dashboard.platformOverviewUnavailable')}>
       {bots && <div className="space-y-2 p-3 text-sm">
@@ -445,7 +475,7 @@ export function PlatformBotRuntimePanel({ data, isLoading, isError }: PlatformPa
           <span className="min-w-0 break-words">{t('dashboard.botCount')}: {displayNumber(bots.activeCount)}</span>
           <span className="min-w-0 break-words">{t('dashboard.botEventLoop')}: {displayNumber(bots.eventLoopP95Ms, 'ms')}</span>
         </div>
-        {bots.unavailable.length > 0 && <p className="break-words text-amber-600">{t('dashboard.botUnavailable', { reason: bots.unavailable[0].reason })}</p>}
+        {firstUnavailable && <p className="break-words text-amber-600">{t('dashboard.botUnavailable', { reason: firstUnavailable.reason })}</p>}
       </div>}
     </OverviewAggregationPanel>
   )
@@ -861,18 +891,22 @@ export function OverviewPageView({
       {canSeePlatformObs && renderHealthWall?.()}
 
       {/* 中部：聚合历史曲线（FR-060）——四指标合成一张多序列图。
-          纵轴是「占各自满值的百分比」，tooltip 反算回原始量纲（见 trendChart 的说明）。 */}
+          纵轴是「占各自满值的百分比」，tooltip 反算回原始量纲（见 trendChart 的说明）。
+          图表走 lazy + Suspense：recharts 的下载与执行不阻塞本页其余区块，
+          骨架高度与图表高度同源（TREND_CHART_HEIGHT），就位前后不跳动。 */}
       <Panel title={t('dashboard.trends')}>
-        <TimeSeriesChart
-          series={trendChart.series}
-          height={220}
-          yDomain={[0, 100]}
-          valueFormatter={(v, name) => {
-            const scale = name ? trendChart.scales.get(name) : undefined
-            if (!scale) return `${v.toFixed(0)}%`
-            return scale.fmt((v / 100) * scale.full)
-          }}
-        />
+        <Suspense fallback={<Skeleton className="w-full" style={{ height: TREND_CHART_HEIGHT }} />}>
+          <TimeSeriesChart
+            series={trendChart.series}
+            height={TREND_CHART_HEIGHT}
+            yDomain={[0, 100]}
+            valueFormatter={(v, name) => {
+              const scale = name ? trendChart.scales.get(name) : undefined
+              if (!scale) return `${v.toFixed(0)}%`
+              return scale.fmt((v / 100) * scale.full)
+            }}
+          />
+        </Suspense>
       </Panel>
 
       {/* 底部：密集实例表（虚拟窗口 + 滚动按需续取） */}

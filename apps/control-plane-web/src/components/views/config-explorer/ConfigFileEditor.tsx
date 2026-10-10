@@ -152,7 +152,8 @@ export function ConfigFileEditor({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 读取完成后初始化草稿，属合法同步
     setDraft(readData.content)
     const init: Record<string, string> = {}
-    if (schema) for (const key of Object.keys(schema.fields)) init[key] = valueByKey[key] ?? schema.fields[key].default ?? ''
+    // 用 entries() 同时取键与字段规格，避免 schema.fields[key] 下标访问被判为可能不存在
+    if (schema) for (const [key, fs] of Object.entries(schema.fields)) init[key] = valueByKey[key] ?? fs.default ?? ''
     setFormDraft(init)
     setMessage('')
     setCrossIssues(null)
@@ -203,7 +204,11 @@ export function ConfigFileEditor({
       onWrite({ path, content: draft, message }, { onSuccess: onAfterSave })
     } else {
       const payload: Record<string, string> = {}
-      for (const k of changedFields) payload[k] = formDraft[k]
+      // changedFields 取自 formDraft 的键，值恒存在；判 undefined 仅用于类型收窄
+      for (const k of changedFields) {
+        const v = formDraft[k]
+        if (v !== undefined) payload[k] = v
+      }
       onWriteFields({ path, fields: payload, message }, { onSuccess: onAfterSave })
     }
   }
@@ -218,7 +223,8 @@ export function ConfigFileEditor({
       setDraft(readData?.content ?? '')
     } else {
       const init: Record<string, string> = {}
-      if (schema) for (const k of Object.keys(schema.fields)) init[k] = valueByKey[k] ?? schema.fields[k].default ?? ''
+      // 同上：entries() 直接给出字段规格，无需下标访问
+      if (schema) for (const [k, fs] of Object.entries(schema.fields)) init[k] = valueByKey[k] ?? fs.default ?? ''
       setFormDraft(init)
     }
     setMessage('')

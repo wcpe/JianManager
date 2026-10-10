@@ -106,7 +106,8 @@ export function Combobox({
       const q = query.trim()
       if (q === '') return
       // 回车优先选中唯一过滤项，否则在允许自定义时确认输入
-      if (filtered.length === 1) commit(filtered[0].value)
+      const onlyItem = filtered.length === 1 ? filtered[0] : undefined
+      if (onlyItem) commit(onlyItem.value)
       else if (allowCustom) commit(q)
     }
   }

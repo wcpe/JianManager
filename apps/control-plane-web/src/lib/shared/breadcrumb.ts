@@ -108,6 +108,8 @@ export function breadcrumbTrail(pathname: string): Crumb[] {
   if (segs.length === 0) return [{ labelKey: 'nav.platformHome' }]
 
   const first = segs[0]
+  // segs 非空（上面已判）故首段恒存在；判空只为收窄类型，顺带沿用「未知首段 → 空数组」的约定。
+  if (first === undefined) return []
   if (first === 'networks') {
     const pageKey = segs[1] === 'topology' ? 'nav.networkTopology' : 'nav.groupManagement'
     return [{ labelKey: 'nav.groupNetwork' }, { labelKey: pageKey }]

@@ -33,8 +33,11 @@ export function decodeJwt(token: string | null | undefined): JwtClaims | null {
   if (!token) return null
   const parts = token.split('.')
   if (parts.length < 2) return null
+  // 上方已保证至少两段，payload 段必存在；判 undefined 仅用于类型收窄（空串仍走下面 catch）。
+  const payload = parts[1]
+  if (payload === undefined) return null
   try {
-    return JSON.parse(base64UrlDecode(parts[1])) as JwtClaims
+    return JSON.parse(base64UrlDecode(payload)) as JwtClaims
   } catch {
     return null
   }

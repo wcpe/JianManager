@@ -30,8 +30,10 @@ export function applyPlayerLine(players: Set<string>, rawLine: string): boolean 
   const line = stripAnsi(rawLine)
 
   const list = LIST_TAIL.exec(line)
-  if (list) {
-    const names = list[1]
+  const listed = list?.[1]
+  // 名单组必参与匹配（`(.+)` 非可选），取不到属不可达分支。
+  if (listed !== undefined) {
+    const names = listed
       .split(/,\s*/)
       .map((name) => name.trim())
       .filter((name) => /^[A-Za-z0-9_]{1,16}$/.test(name))
@@ -42,15 +44,15 @@ export function applyPlayerLine(players: Set<string>, rawLine: string): boolean 
     return true
   }
 
-  const joined = JOINED.exec(line)
-  if (joined && !players.has(joined[1])) {
-    players.add(joined[1])
+  const joinedName = JOINED.exec(line)?.[1]
+  if (joinedName !== undefined && !players.has(joinedName)) {
+    players.add(joinedName)
     return true
   }
 
-  const left = LEFT.exec(line)
-  if (left && players.has(left[1])) {
-    players.delete(left[1])
+  const leftName = LEFT.exec(line)?.[1]
+  if (leftName !== undefined && players.has(leftName)) {
+    players.delete(leftName)
     return true
   }
   return false

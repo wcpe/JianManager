@@ -62,7 +62,8 @@ export default function FileTree({
         .filter((e) => e.isDir)
         .map((e) => ({ name: e.name, path: joinPath(path, e.name), children: undefined }))
     },
-    [instanceId],
+    // fetchEntries 由外壳注入的模块级取数函数，引用恒定，列入依赖不会引起重建。
+    [instanceId, fetchEntries],
   )
 
   // 挂载或刷新：重新加载根目录子目录，保留展开集合（失效的自然不渲染）。

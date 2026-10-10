@@ -12,8 +12,8 @@
 /** 主题色：indigo（Jian 绿）为默认（兼容旧存储值，无 data-theme，承根变量）；其余 4 色见 index.css 覆盖组。 */
 export type ColorTheme = 'indigo' | 'teal' | 'ocean' | 'violet' | 'sunset'
 
-/** 主题色全集：顺序即 ThemeSwitcher 圆点的 UI 展示顺序。 */
-export const COLOR_THEMES: readonly ColorTheme[] = ['indigo', 'teal', 'ocean', 'violet', 'sunset']
+/** 主题色全集：顺序即 ThemeSwitcher 圆点的 UI 展示顺序。声明为非空元组，首项恒存在。 */
+export const COLOR_THEMES: readonly [ColorTheme, ...ColorTheme[]] = ['indigo', 'teal', 'ocean', 'violet', 'sunset']
 
 /** 明暗偏好三态。 */
 export type ThemeMode = 'light' | 'dark' | 'system'
@@ -50,7 +50,8 @@ export function colorThemeAttr(theme: ColorTheme): string | null {
 /** 主题色按 COLOR_THEMES 顺序双向循环（圆点直选之外的快捷切换备用）。 */
 export function cycleColorTheme(theme: ColorTheme): ColorTheme {
   const index = COLOR_THEMES.indexOf(theme)
-  return COLOR_THEMES[(index + 1) % COLOR_THEMES.length]
+  // `(index + 1) % length` 恒为合法下标（未命中为 -1 时取首项、末尾环绕回首项）；判空仅为类型收窄，回落首项
+  return COLOR_THEMES[(index + 1) % COLOR_THEMES.length] ?? COLOR_THEMES[0]
 }
 
 /** 明暗三态循环 light → dark → system → light。 */

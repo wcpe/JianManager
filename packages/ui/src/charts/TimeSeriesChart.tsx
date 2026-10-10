@@ -80,8 +80,13 @@ export function TimeSeriesChart({
       }
     }
     const rows = [...byTs.values()].sort((a, b) => (String(a.ts) < String(b.ts) ? -1 : 1))
+    // rows.length > 1 时首末两行必存在；判空仅为类型收窄
+    const lastRow = rows[rows.length - 1]
+    const firstRow = rows[0]
     const span =
-      rows.length > 1 ? new Date(String(rows[rows.length - 1].ts)).getTime() - new Date(String(rows[0].ts)).getTime() : 0
+      rows.length > 1 && lastRow !== undefined && firstRow !== undefined
+        ? new Date(String(lastRow.ts)).getTime() - new Date(String(firstRow.ts)).getTime()
+        : 0
     return { data: rows, spanMs: span }
   }, [series])
 

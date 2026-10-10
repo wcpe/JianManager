@@ -50,7 +50,8 @@ describe('hoverSnapshotAt', () => {
   })
   it('序列不存在于行中时为 null', () => {
     const snap = hoverSnapshotAt(rows, [{ key: 'ghost', name: '幽灵' }], '2026-06-26T00:00:00Z')
-    expect(snap!.entries[0].value).toBeNull()
+    // 整条条目集合比对（而非取下标）：同时钉住「条目只有一条」与「缺序列取 null」
+    expect(snap!.entries).toEqual([{ key: 'ghost', name: '幽灵', value: null }])
   })
   it('空行返回 null', () => {
     expect(hoverSnapshotAt([], series, '2026-06-26T00:00:00Z')).toBeNull()

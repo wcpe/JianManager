@@ -90,8 +90,10 @@ export class ConsoleLineBuffer {
    * 以连续原文重叠去重（见 mergeHistoryAndLive），宁可保守保留一行也不漏整段。
    */
   get historyAnchorAt(): Date {
-    if (this.droppedLines === 0 || this.receivedAt.length === 0) return this.startedAt
-    return new Date(this.receivedAt[0])
+    const firstReceivedAt = this.receivedAt[0]
+    // 未溢出（缓冲覆盖整个会话）或尚无接收时刻 → 用会话起点；后者等价于原 `length === 0` 判据。
+    if (this.droppedLines === 0 || firstReceivedAt === undefined) return this.startedAt
+    return new Date(firstReceivedAt)
   }
 
   /** 清空缓冲（「清屏」）。seq 不回绕——已被复制/引用的 seq 不能指向别的行。 */

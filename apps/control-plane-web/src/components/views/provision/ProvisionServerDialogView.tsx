@@ -228,7 +228,9 @@ export default function ProvisionServerDialogView({
   useEffect(() => {
     if (nodeId && jdks && jdks.length > 0 && jdkDefaultNodeRef.current !== nodeId) {
       jdkDefaultNodeRef.current = nodeId
-      const best = [...jdks].sort((a, b) => b.majorVersion - a.majorVersion)[0]
+      // 取版本号最大的 JDK：列表非空（上方已判），reduce 无初值即返回元素本身；
+      // 并列时保留靠前者，与原先「稳定排序后取首项」口径一致，且不经过下标访问。
+      const best = jdks.reduce((a, b) => (b.majorVersion > a.majorVersion ? b : a))
       // 节点 JDK 列表到达后一次性默认绑定（经 ref 守卫，不会重复触发），非渲染期联动。
       setJdkId(String(best.id))
     }

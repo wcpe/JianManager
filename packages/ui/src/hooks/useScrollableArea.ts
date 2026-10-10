@@ -288,11 +288,9 @@ export function useScrollableArea({
           const focusable = getFocusableElements(content ?? target)
           if (focusable.length === 0) return
           event.preventDefault()
-          if (event.shiftKey) {
-            attemptFocus(focusable[focusable.length - 1])
-          } else {
-            attemptFocus(focusable[0])
-          }
+          // 上方已排除空列表，首尾元素必存在；取不到时不做聚焦（判空仅为类型收窄）
+          const focusTarget = event.shiftKey ? focusable[focusable.length - 1] : focusable[0]
+          if (focusTarget) attemptFocus(focusTarget)
           return
         }
 

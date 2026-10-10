@@ -27,8 +27,11 @@ export function pickEvictionTarget(
 ): number | null {
   if (hotSet.length <= capacity) return null
   const candidates = hotSet.slice(1)
-  for (let i = candidates.length - 1; i >= 0; i--) {
-    if (!hasDraft(candidates[i])) return candidates[i]
-  }
-  return candidates[candidates.length - 1]
+  // findLast：倒序找最后一个「无未保存草稿」的成员，即最久未用且可淘汰的那个。
+  const preferred = candidates.findLast((id) => !hasDraft(id))
+  if (preferred !== undefined) return preferred
+  // 候选全带草稿：被迫淘汰队尾（调用方负责 toast 警示）。capacity ≥ 1 时 hotSet.length ≥ 2，
+  // 故 candidates 恒非空，`at(-1)` 取不到属不可达分支；真取不到则返回 null——对调用方
+  // 的 `victim == null` 判定而言与原实现返回 undefined 同义，且与声明的返回类型一致。
+  return candidates.at(-1) ?? null
 }

@@ -73,7 +73,11 @@ export function virtualWindowVaried({
   let first = 0
   while (lo <= hi) {
     const mid = (lo + hi) >> 1
-    if (offsets[mid] <= offset) {
+    const midOffset = offsets[mid]
+    // mid ∈ [0, total-1]，而入口已校验 offsets.length ≥ total+1，故 midOffset 恒存在；
+    // 判空仅为收窄类型（命中即越界，二分已无意义，直接收束）。
+    if (midOffset === undefined) break
+    if (midOffset <= offset) {
       first = mid
       lo = mid + 1
     } else {
@@ -89,7 +93,10 @@ export function virtualWindowVaried({
     let hi2 = total - 1
     while (lo2 <= hi2) {
       const mid = (lo2 + hi2) >> 1
-      if (offsets[mid] < bottom) {
+      const midOffset = offsets[mid]
+      // 同上一处二分：mid ∈ [first, total-1] ⊂ [0, total-1]，恒在前缀和长度内，判空只为收窄类型。
+      if (midOffset === undefined) break
+      if (midOffset < bottom) {
         lo2 = mid + 1
       } else {
         end = mid
@@ -101,11 +108,20 @@ export function virtualWindowVaried({
   const start = Math.max(0, first - overscan)
   const endWithOverscan = Math.min(total, end + overscan)
 
+  // before/after 取的是前缀和：start ∈ [0, total-1]、endWithOverscan ∈ [0, total]，
+  // 均落在长度 ≥ total+1 的 offsets 内，故三处取值不会越界；判空只为收窄类型（命中即数据自相矛盾）。
+  const before = offsets[start]
+  const totalOffset = offsets[total]
+  const afterOffset = offsets[endWithOverscan]
+  if (before === undefined || totalOffset === undefined || afterOffset === undefined) {
+    return { start: 0, end: 0, before: 0, after: 0 }
+  }
+
   return {
     start,
     end: endWithOverscan,
-    before: offsets[start],
-    after: Math.max(0, offsets[total] - offsets[endWithOverscan]),
+    before,
+    after: Math.max(0, totalOffset - afterOffset),
   }
 }
 
@@ -203,11 +219,18 @@ export function useVirtualRows({
   }, [])
 
   // 变高模式：sizes → 前缀和（每行新高度时 O(n) 重建，控制台量级下可忽略）。
+  // 用累加器而不是回读 prefix[i]：与「prefix[i+1] = prefix[i] + h」逐项等价（prefix[0]=0）。
   const offsets = useMemo(() => {
     if (!sizes || sizes.length < total) return null
     const prefix = new Array<number>(total + 1)
+    let acc = 0
     prefix[0] = 0
-    for (let i = 0; i < total; i++) prefix[i + 1] = prefix[i] + (sizes[i] > 0 ? sizes[i] : itemSize)
+    for (let i = 0; i < total; i++) {
+      const size = sizes[i]
+      // 非正高度（含越界取不到）回退 itemSize，与 `sizes[i] > 0 ? sizes[i] : itemSize` 同判据。
+      acc += size !== undefined && size > 0 ? size : itemSize
+      prefix[i + 1] = acc
+    }
     return prefix
   }, [itemSize, sizes, total])
 

@@ -26,13 +26,17 @@ const UTF8_FLAG = 0x0800
 /** 通用位 bit 3：数据描述符（size/crc 在数据之后），此时 local header 里的 size 为 0。 */
 const DATA_DESCRIPTOR_FLAG = 0x0008
 
-/** 小端读 16 位。 */
+/**
+ * 小端读 16 位。
+ * 越界位置的 `d[o]` 为 undefined，位运算本就会把它当 0（`undefined | x` → `x`），
+ * 故 `?? 0` 与旧行为逐位等价，只是把这一隐式转换写明以通过下标访问检查。
+ */
 function u16(d: Uint8Array, o: number): number {
-  return d[o] | (d[o + 1] << 8)
+  return (d[o] ?? 0) | ((d[o + 1] ?? 0) << 8)
 }
-/** 小端读 32 位（无符号）。 */
+/** 小端读 32 位（无符号）。取值越界语义同 {@link u16}（隐式按 0 参与位运算）。 */
 function u32(d: Uint8Array, o: number): number {
-  return (d[o] | (d[o + 1] << 8) | (d[o + 2] << 16) | (d[o + 3] << 24)) >>> 0
+  return ((d[o] ?? 0) | ((d[o + 1] ?? 0) << 8) | ((d[o + 2] ?? 0) << 16) | ((d[o + 3] ?? 0) << 24)) >>> 0
 }
 
 const utf8Decoder = new TextDecoder('utf-8')

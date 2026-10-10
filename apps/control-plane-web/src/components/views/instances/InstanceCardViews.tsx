@@ -121,7 +121,10 @@ export function VirtualizedGroupedCardView({
     const flush = () => {
       for (let i = 0; i < buffer.length; i += columns) {
         const items = buffer.slice(i, i + columns)
-        out.push({ kind: 'cards', key: `cards:${items[0].id}`, items })
+        const head = items[0]
+        // i < buffer.length 保证分片非空，故首项恒存在；判空只为收窄类型（卡片行的 key 取首项 id）。
+        if (head === undefined) continue
+        out.push({ kind: 'cards', key: `cards:${head.id}`, items })
       }
       buffer = []
     }

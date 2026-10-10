@@ -413,7 +413,8 @@ export default function ResourceExplorer({
     configDirtyRef.current = d
     // FR-296 淘汰偏好：配置编辑器脏态同步登记到实例草稿注册表。
     reportDraft(instanceId, 'resource-config', d)
-  }, [instanceId])
+    // reportDraft 由外壳注入的模块级登记函数，引用恒定。
+  }, [instanceId, reportDraft])
   const [discardAction, setDiscardAction] = useState<{ action: () => void } | null>(null)
 
   // 切换/关闭文件前若有未保存草稿则二次确认，避免静默丢失编辑（BUG-018）。
@@ -481,7 +482,7 @@ export default function ResourceExplorer({
         setLoading(false)
       }
     },
-    [instanceId, t],
+    [instanceId, t, fetchFileList],
   )
 
   useEffect(() => {
@@ -593,7 +594,7 @@ export default function ResourceExplorer({
         setOpenFileWritable(null)
       }
     },
-    [instanceId],
+    [instanceId, checkFileAccess],
   )
 
   const tryFixOpenFilePerm = useCallback(async () => {
@@ -606,7 +607,8 @@ export default function ResourceExplorer({
     } catch (err: unknown) {
       toast.error(errorMessage(err) || t('files.saveFailed'))
     }
-  }, [instanceId, refreshOpenWritable, t])
+    // chmodFile / toast 均由外壳注入的模块级对象，引用恒定。
+  }, [instanceId, refreshOpenWritable, t, chmodFile, toast])
 
   const openByPathNow = useCallback(
     async (path: string, name: string) => {
@@ -628,7 +630,7 @@ export default function ResourceExplorer({
         toast.error(t('files.loadFailed'))
       }
     },
-    [configMode, instanceId, refreshOpenWritable, t],
+    [configMode, instanceId, refreshOpenWritable, t, readFileContent, toast],
   )
   const openByPath = useCallback(
     (path: string, name: string) => {
@@ -690,7 +692,7 @@ export default function ResourceExplorer({
         toast.error(t('files.loadFailed'))
       }
     },
-    [configMode, instanceId, t],
+    [configMode, instanceId, t, readFileContent, toast],
   )
   const openSearchHit = useCallback(
     (path: string, line: number) => {
@@ -770,7 +772,7 @@ export default function ResourceExplorer({
     } finally {
       setSaving(false)
     }
-  }, [openFile, saving, instanceId, t])
+  }, [openFile, saving, instanceId, t, invalidateVersions, toast, writeFileContent])
 
   // ---- 新建 / 重命名（PromptDialog）----
   const validateName = useCallback(
@@ -819,7 +821,7 @@ export default function ResourceExplorer({
         toast.error(kind === 'rename' ? t('files.renameFailed') : t('files.createFailed'), { id: toastId })
       }
     },
-    [prompt, instanceId, currentDir, refreshAll, t],
+    [prompt, instanceId, currentDir, refreshAll, t, renameFile, toast, writeFileContent],
   )
 
   // ---- 删除（DangerConfirm 二次确认，FR-059）----
@@ -841,7 +843,7 @@ export default function ResourceExplorer({
     } catch {
       toast.error(t('files.deleteFailed'), { id: toastId })
     }
-  }, [deleteTargets, instanceId, openFile, blockedPreview, archiveFor, decompileFor, refreshAll, t])
+  }, [deleteTargets, instanceId, openFile, blockedPreview, archiveFor, decompileFor, refreshAll, t, deleteFile, toast])
 
   // ---- 上传（拖拽 / 按钮，批量逐文件）----
   // 逐文件上传，toast 实时显示当前文件名 + 百分比（FR-324）；批量时带 i/N 计数。
@@ -869,7 +871,7 @@ export default function ResourceExplorer({
         toast.error(t('files.uploadFailed'), { id: toastId })
       }
     },
-    [currentDir, instanceId, refreshAll, t],
+    [currentDir, instanceId, refreshAll, t, invalidateVersions, toast, uploadFile],
   )
 
   // ---- 下载（单文件流式 / 多选 zip）----
@@ -881,7 +883,7 @@ export default function ResourceExplorer({
         .then(() => toast.success(t('files.downloaded'), { id: toastId }))
         .catch(() => toast.error(t('files.downloadFailed'), { id: toastId }))
     },
-    [instanceId, currentDir, t],
+    [instanceId, currentDir, t, downloadFile, toast],
   )
   const downloadSelected = useCallback(() => {
     if (selectedPaths.length === 0) return
@@ -894,7 +896,7 @@ export default function ResourceExplorer({
     void downloadArchive(instanceId, selectedPaths, 'files.zip').catch(() =>
       toast.error(t('files.downloadFailed')),
     )
-  }, [selectedPaths, selectedNames, files, instanceId, downloadSingle, t])
+  }, [selectedPaths, selectedNames, files, instanceId, downloadSingle, t, downloadArchive, toast])
 
   // ---- 剪切 / 复制 / 粘贴 / 拖拽移动 ----
   const entriesFor = useCallback(
@@ -987,7 +989,7 @@ export default function ResourceExplorer({
       else toast.error(t('files.pasteFailed'))
       refreshAll()
     },
-    [clipboard, currentDir, existingNames, instanceId, refreshAll, runFileOps, setClipboard, t],
+    [clipboard, currentDir, existingNames, instanceId, refreshAll, runFileOps, setClipboard, t, fetchFileList, readFileContent, renameFile, toast, writeFileContent],
   )
 
   // 拖拽源：记录被拖动的文件名集合（拖单个未选中项时仅拖该项）。
@@ -1034,7 +1036,7 @@ export default function ResourceExplorer({
         refreshAll()
       })()
     },
-    [instanceId, refreshAll, runFileOps, t],
+    [instanceId, refreshAll, runFileOps, t, fetchFileList, renameFile, toast],
   )
   const onDropMove = useCallback(
     (targetDir: string, dt?: DataTransfer) => {
@@ -1070,7 +1072,7 @@ export default function ResourceExplorer({
   // FR-376：多标签用 draftKey 区分，避免互相覆盖。
   useEffect(() => {
     reportDraft(instanceId, draftKey, dirty)
-  }, [dirty, instanceId, draftKey])
+  }, [dirty, instanceId, draftKey, reportDraft])
 
   return (
     <div
@@ -1336,7 +1338,7 @@ export default function ResourceExplorer({
         description={
           deleteTargets && deleteTargets.length > 1
             ? t('files.deleteConfirmMany', { count: deleteTargets.length })
-            : t('files.deleteConfirm', { name: deleteTargets ? baseName(deleteTargets[0]) : '' })
+            : t('files.deleteConfirm', { name: deleteTargets ? baseName(deleteTargets[0] ?? '') : '' })
         }
         confirmLabel={t('files.delete')}
         scope="group"

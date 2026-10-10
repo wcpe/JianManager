@@ -13,7 +13,8 @@ function pad2(n: number): string {
   return String(n).padStart(2, '0')
 }
 
-const WEEKDAY_NAMES: Record<string, string[]> = {
+/** 星期名表：键收敛为实际支持的两门语言，取值无需再判空。 */
+const WEEKDAY_NAMES: Record<'zh' | 'en', string[]> = {
   zh: ['日', '一', '二', '三', '四', '五', '六'],
   en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
 }

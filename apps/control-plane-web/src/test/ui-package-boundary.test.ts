@@ -63,7 +63,7 @@ function rel(file: string): string {
 }
 
 describe('@jianmanager/ui package boundary', () => {
-  it('exports the first-wave UI, chart and helper modules from the package entry', async () => {
+  it('exports the first-wave UI and helper modules from the package entry', async () => {
     const ui = await import('@jianmanager/ui')
 
     for (const exported of [
@@ -72,12 +72,6 @@ describe('@jianmanager/ui package boundary', () => {
       'Panel',
       'StatCard',
       'StatusBadge',
-      'RangePicker',
-      'Sparkline',
-      'TimeSeriesChart',
-      'MonitorChart',
-      'MonitorSkeleton',
-      'MetricsOverviewStrip',
       'resourceLevel',
       'brushSelectionToWindow',
       'hoverSnapshotAt',
@@ -86,6 +80,32 @@ describe('@jianmanager/ui package boundary', () => {
     ]) {
       expect(ui, exported).toHaveProperty(exported)
     }
+  }, 15_000)
+
+  /**
+   * 图表**组件**不得回到 barrel（2025-10 首屏走查）。
+   *
+   * barrel 被 120+ 个应用文件引用、几乎每个路由分块都静态可达；一旦它同步 re-export
+   * 静态 import recharts 的图表模块（TimeSeriesChart / MonitorChart），recharts 的
+   * 「被引用面」就与 react 同级，构建器把两者合并进同一个共享 chunk——实测即
+   * `charts-*.js`（359 kB / gzip 约 106 kB），而**每个 chunk 都要 import 它拿 react**，
+   * 于是它被写进 dist/index.html 的 modulepreload，任何页面（含落地页）首屏都得先下完。
+   * 组件改走 `@jianmanager/ui/charts/*` 深路径后，recharts 只被真正画图的视图引用。
+   *
+   * 类型仍从 barrel 透出：类型导出编译期擦除、不产生运行时依赖，调用方无需改类型 import。
+   */
+  it('keeps chart components off the package entry, and reachable via deep paths', async () => {
+    const ui = await import('@jianmanager/ui')
+    for (const exported of firstWaveCharts) {
+      expect(ui, `${exported} 应改走 @jianmanager/ui/charts/${exported} 深路径`).not.toHaveProperty(exported)
+    }
+
+    // 深路径仍可用（包 exports 映射 "./charts/*"），且落地页懒加载依赖它。
+    const timeSeries = await import('@jianmanager/ui/charts/TimeSeriesChart')
+    expect(timeSeries.TimeSeriesChart).toBeTypeOf('function')
+    const rangePicker = await import('@jianmanager/ui/charts/RangePicker')
+    expect(rangePicker.RangePicker).toBeTypeOf('function')
+    expect(rangePicker.ResolutionPicker).toBeTypeOf('function')
   }, 15_000)
 
   it('no longer keeps design-system compat re-export layers in the app', () => {

@@ -76,7 +76,9 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>({
     if (container === null) return false
     const focusable = getFocusableElements(container)
     for (let index = focusable.length - 1; index >= 0; index -= 1) {
-      if (attemptFocus(focusable[index])) return true
+      // index 恒为合法下标（由列表长度递减而来）；判空仅为类型收窄
+      const element = focusable[index]
+      if (element && attemptFocus(element)) return true
     }
     return false
   }, [])
@@ -116,6 +118,8 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>({
 
       const first = focusable[0]
       const last = focusable[focusable.length - 1]
+      // focusable 非空（上方已排除 length === 0），首尾元素必存在；判空仅为类型收窄
+      if (first === undefined || last === undefined) return
 
       if (document.activeElement === container) {
         // 焦点在容器边界上（tabIndex=-1 的模态面板）：先进入内容，而不是直接离开

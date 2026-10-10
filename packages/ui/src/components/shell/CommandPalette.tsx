@@ -76,9 +76,13 @@ function splitHighlight(text: string, tokens: string[]): Array<{ text: string; h
 
   const parts: Array<{ text: string; hit: boolean }> = []
   for (let i = 0; i < text.length; i += 1) {
+    // i 恒在 [0, text.length-1]，而 marked 与 text 等长，两者必存在；判空仅为类型收窄
+    const char = text[i]
+    const hit = marked[i]
+    if (char === undefined || hit === undefined) continue
     const last = parts[parts.length - 1]
-    if (last && last.hit === marked[i]) last.text += text[i]
-    else parts.push({ text: text[i], hit: marked[i] })
+    if (last && last.hit === hit) last.text += char
+    else parts.push({ text: char, hit })
   }
   return parts
 }

@@ -3,7 +3,7 @@ import { Users } from 'lucide-react'
 
 import { Panel } from '@jianmanager/ui/components/panel'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
-import { Sparkline } from '@jianmanager/ui'
+import { Sparkline } from '@jianmanager/ui/charts/Sparkline'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import type { MetricRange } from '@jianmanager/ui'
 import type { PlayerTrendResult } from '@/lib/players/player-trend'

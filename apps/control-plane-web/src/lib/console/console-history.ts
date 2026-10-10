@@ -89,7 +89,11 @@ export function mergeHistoryAndLive(history: readonly LogLine[], live: readonly 
   for (let size = maxOverlap; size >= 2; size--) {
     const historyTail = history.slice(-size)
     const liveHead = comparableLive.slice(0, size)
-    if (historyTail.every((line, index) => line.raw === liveHead[index].raw)) {
+    if (historyTail.every((line, index) => {
+      const head = liveHead[index]
+      // 两段都由 slice 得到、长度同为 size，head 取不到属不可达分支。
+      return head !== undefined && line.raw === head.raw
+    })) {
       return [...history.slice(0, -size), ...live]
     }
   }
@@ -98,10 +102,8 @@ export function mergeHistoryAndLive(history: readonly LogLine[], live: readonly 
 
 /** 在给定行集中找最近一次启动完成行的 seq；找不到返回 null。 */
 export function findStartupSeq(lines: readonly LogLine[]): number | null {
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (STARTUP_DONE.test(lines[i].raw)) return lines[i].seq
-  }
-  return null
+  // findLast：倒序找最后一个满足条件的行，即「最近一次启动完成行」。
+  return lines.findLast((line) => STARTUP_DONE.test(line.raw))?.seq ?? null
 }
 
 /** 「跳到时间点」的结果：到达 / 已回溯到最早仍未覆盖 / 撞单次页数上限 / 请求失败。 */

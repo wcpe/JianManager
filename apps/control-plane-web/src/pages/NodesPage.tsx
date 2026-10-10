@@ -154,7 +154,8 @@ export default function NodesPage() {
     const pool = isArchive ? filteredArchived : filtered
     if (pool.length === 0) return null
     if (selectedId !== null && pool.some((n) => n.id === selectedId)) return selectedId
-    return pool[0].id
+    // pool 非空（上方已排除空池），首个元素必存在；判空仅用于类型收窄。
+    return pool[0]?.id ?? null
   }, [filtered, filteredArchived, isArchive, selectedId])
   // 选中节点解析为实时列表对象（节点下线→回退第一个，右栏随轮询刷新而非陈旧快照）。
   const selected = useMemo(

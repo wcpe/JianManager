@@ -132,6 +132,8 @@ export function sumDecimalStrings(values: string[]): string {
     if (!m) continue
     const neg = m[1] === '-'
     const intPart = m[2]
+    // 正则第 2 组 `(\d+)` 是必选组，匹配成功即恒存在；判空只为收窄类型。
+    if (intPart === undefined) continue
     const fracPart = m[3] ?? ''
     if (fracPart.length > maxFrac) maxFrac = fracPart.length
     parsed.push({ neg, intPart, fracPart })

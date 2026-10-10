@@ -36,7 +36,11 @@ export function brushSelectionToWindow(
   let hi = clamp(endIndex ?? len - 1)
   if (lo > hi) [lo, hi] = [hi, lo]
 
-  return { from: timestamps[lo], to: timestamps[hi] }
+  // lo/hi 已由 clamp 夹到 [0, len-1]，两端时间戳必存在；判 undefined 仅为类型收窄
+  const from = timestamps[lo]
+  const to = timestamps[hi]
+  if (from === undefined || to === undefined) return null
+  return { from, to }
 }
 
 /**

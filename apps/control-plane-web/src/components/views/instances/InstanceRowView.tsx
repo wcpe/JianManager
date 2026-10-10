@@ -30,12 +30,15 @@ import { RoleBadge } from '@/components/views/instances/InstanceTableParts'
 import { RuntimeDriftBadge } from '@/components/views/instances/RuntimeDriftNotice'
 import type { RuntimeDriftInfoView } from '@/components/views/instances/RuntimeDriftNotice'
 
+/** 未知状态的兜底文案键；单列常量是因为登记表是索引签名，取 `.STOPPED` 拿不回确定类型。 */
+const STATUS_LABEL_FALLBACK = 'instances.stopped'
+
 /**
  * 实例状态 → i18n 文案键（与实例页状态筛选项同源）。
  * 未知状态回退「已停止」文案，与迁移前 `statusConfig[status] || statusConfig.STOPPED` 等价。
  */
 const STATUS_LABEL_KEY: Record<string, string> = {
-  STOPPED: 'instances.stopped',
+  STOPPED: STATUS_LABEL_FALLBACK,
   STARTING: 'instances.starting',
   RUNNING: 'instances.running',
   STOPPING: 'instances.stopping',
@@ -157,7 +160,7 @@ export function InstanceRowView({
   onKill,
 }: InstanceRowViewProps) {
   const { t } = useTranslation()
-  const statusLabel = t(STATUS_LABEL_KEY[inst.status] ?? STATUS_LABEL_KEY.STOPPED)
+  const statusLabel = t(STATUS_LABEL_KEY[inst.status] ?? STATUS_LABEL_FALLBACK)
   const instEnv = envOf(inst)
   const free = freeTagsOf(inst)
   const envLabel = instEnv ? t(`grouping.env_${instEnv}`, { defaultValue: instEnv }) : ''

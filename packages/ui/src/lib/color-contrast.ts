@@ -236,16 +236,21 @@ export function parseOklch(value: string): Oklch | null {
 
   // 先剥离可选 alpha（`/ 0.5`），对比度校验只关心不透明色
   const [colorPart, alphaPart, ...rest] = body.split('/')
+  // split 至少产出一段，首段恒存在；判 undefined 仅用于类型收窄
+  if (colorPart === undefined) return null
   if (rest.length > 0) return null
   if (alphaPart !== undefined && parseComponent(alphaPart, 1) === null) return null
 
   const parts = splitTopLevel(colorPart.trim())
   if (parts.length !== 3) return null
 
-  const l = parseComponent(parts[0], 1)
+  // 上方已断言恰 3 段，三个分量文本恒存在
+  const [lText, cText, hText] = parts
+  if (lText === undefined || cText === undefined || hText === undefined) return null
+  const l = parseComponent(lText, 1)
   // CSS Color 4 里 oklch 色度百分比基准是 0.4（100% 对应 C=0.4）
-  const c = parseComponent(parts[1], 0.4)
-  const h = parseAngleDegrees(parts[2])
+  const c = parseComponent(cText, 0.4)
+  const h = parseAngleDegrees(hText)
   if (l === null || c === null || h === null) return null
 
   return { l, c, h }
@@ -269,12 +274,18 @@ export function parseColor(value: string): Rgb | null {
 
   const hex = HEX_PATTERN.exec(text)
   if (hex) {
+    // 捕获组为必选组，正则命中即存在；判 undefined 仅用于类型收窄
     const digits = hex[1]
+    if (digits === undefined) return null
     if (digits.length === 3 || digits.length === 4) {
+      // #rgb / #rgba：每位复制一份（4 位的 alpha 由 makeRgb 忽略，与注释口径一致）
+      const [r, g, b] = digits
+      // 上方已断言长度 ≥ 3，三位必存在；判 undefined 仅用于类型收窄
+      if (r === undefined || g === undefined || b === undefined) return null
       return makeRgb(
-        Number.parseInt(digits[0] + digits[0], 16),
-        Number.parseInt(digits[1] + digits[1], 16),
-        Number.parseInt(digits[2] + digits[2], 16),
+        Number.parseInt(r + r, 16),
+        Number.parseInt(g + g, 16),
+        Number.parseInt(b + b, 16),
       )
     }
     if (digits.length === 6 || digits.length === 8) {
@@ -296,12 +307,16 @@ export function parseColor(value: string): Rgb | null {
   const rgbBody = wholeFunctionBody(text, RGB_FN) ?? wholeFunctionBody(text, 'rgba')
   if (rgbBody !== null) {
     const [colorPart, alphaPart, ...rest] = rgbBody.split('/')
+    // 同上：split 至少产出一段，首段恒存在
+    if (colorPart === undefined) return null
     if (rest.length > 0) return null
     if (alphaPart !== undefined && parseComponent(alphaPart, 1) === null) return null
     const parts = splitTopLevel(colorPart.trim())
     // 传统逗号写法允许第 4 个分量是 alpha：`rgba(255, 0, 0, 0.5)`，与 `/ alpha` 等价
     if (parts.length === 4) {
-      if (parseComponent(parts[3], 1) === null) return null
+      const alphaText = parts[3]
+      if (alphaText === undefined) return null
+      if (parseComponent(alphaText, 1) === null) return null
       parts.length = 3
     }
     if (parts.length !== 3) return null

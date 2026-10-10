@@ -81,7 +81,11 @@ export function MonitorChart({
   const timestamps = useMemo(() => rows.map((r) => String(r.ts)), [rows])
   const fullSpanMs = useMemo(() => {
     if (rows.length < 2) return 0
-    return new Date(String(rows[rows.length - 1].ts)).getTime() - new Date(String(rows[0].ts)).getTime()
+    // rows.length >= 2：首末两行必存在；判空仅为类型收窄
+    const lastRow = rows[rows.length - 1]
+    const firstRow = rows[0]
+    if (lastRow === undefined || firstRow === undefined) return 0
+    return new Date(String(lastRow.ts)).getTime() - new Date(String(firstRow.ts)).getTime()
   }, [rows])
 
   // brush 选区下标（受控）：默认全段。数据行数随轮询变化时，渲染期把下标夹到当前边界，
