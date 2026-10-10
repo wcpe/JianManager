@@ -366,3 +366,26 @@ func TestPlanDeliveryBatchContractUnchanged(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, fail.result.HTTPStatus)
 	require.ErrorContains(t, fail.err, "has no stable event or ingest time")
 }
+
+// 冲突变体不得进入 landed evidence；同哈希重复仍可作为已落库区间凭据。
+func TestAnalyzeDeliveryBatchSeparatesConflictEvidence(t *testing.T) {
+	identity := deliverPlanProbeIdentity()
+	mk := func(id, message string) logtypes.Event {
+		return logtypes.Event{
+			EventID: id, Source: identity, Record: logtypes.RecordRange{Start: 1, End: 9},
+			IngestTimeUTC: "2026-10-08T00:00:00Z", EventTimeUTC: "2026-10-08T00:00:00Z",
+			Level: "INFO", Stream: "stdout", Message: message,
+		}
+	}
+	base := mk("same", "base")
+	base.CanonicalHash = logtypes.CanonicalContentHash(base.EventTimeUTC, base.Level, base.Stream, base.Message)
+	duplicate := base
+	conflict := mk("same", "evil")
+	conflict.CanonicalHash = logtypes.CanonicalContentHash(conflict.EventTimeUTC, conflict.Level, conflict.Stream, conflict.Message)
+	landed, conflicts := analyzeDeliveryBatch([]logtypes.Event{duplicate, conflict}, map[string]eventIdentity{
+		"same": {hash: base.CanonicalHash, start: 1, end: 9, size: len(base.Message), msg: base.Message, level: base.Level, stream: base.Stream},
+	})
+	require.Len(t, landed, 1)
+	require.Len(t, conflicts, 1)
+	require.Equal(t, "same", conflicts[0].EventID)
+}

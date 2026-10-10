@@ -132,3 +132,11 @@ func (s *Server) LogResolveIngestGaps(ctx context.Context, req *workerpb.LogReso
 	}
 	return s.UnimplementedWorkerServiceServer.LogResolveIngestGaps(ctx, req)
 }
+
+// LogClearIdentityConflicts 人工确认并清空身份冲突记录（操作人与理由经 metadata 携带）。
+func (s *Server) LogClearIdentityConflicts(ctx context.Context, req *workerpb.LogClearIdentityConflictsRequest) (*workerpb.LogClearIdentityConflictsResponse, error) {
+	if q := s.logRPC(); q != nil {
+		return q.LogClearIdentityConflicts(ctx, req)
+	}
+	return s.UnimplementedWorkerServiceServer.LogClearIdentityConflicts(ctx, req)
+}

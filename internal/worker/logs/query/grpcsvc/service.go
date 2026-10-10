@@ -82,6 +82,9 @@ type IngestGapResolver interface {
 
 // IngestPositionGap 是「已放弃位置」查询面 DTO（与 logcoord 的 coverage 语义无关）。
 type IngestPositionGap struct {
+	// 源身份由采集凭据提供；未知时留空，不能从命名空间或查询事件推断。
+	LogSourceID      string
+	SourceGeneration string
 	StorageNamespace string
 	From             uint64
 	To               uint64
@@ -144,6 +147,31 @@ func operatorFromContext(ctx context.Context) string {
 	return ""
 }
 
+// ReasonMetadataKey 是承载「本次操作的显式理由」的 incoming gRPC metadata 键。
+//
+// 与 OperatorMetadataKey 同源同口径（都走传输层，不进请求体）：理由要进审计凭据，
+// 而请求体可被任意伪造 —— 让"为什么可以这么做"与"谁做的"一样由传输层给出，凭据才可信。
+// 该键在缺口放弃路径上早已在用（ResolveCoveredGapsForSource 读同一个字面量），
+// 此处只是把它收敛成常量名，不改任何 wire 行为。
+const ReasonMetadataKey = "x-jm-reason"
+
+// reasonFromContext 取出调用方给出的操作理由；取不到返回空串（由调用方负责拒绝）。
+func reasonFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	for _, v := range md.Get(ReasonMetadataKey) {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 type CutoverReadinessFunc func() (bool, time.Time, []string)
 
 func (f CutoverReadinessFunc) Readiness() (bool, time.Time, []string) { return f() }
@@ -178,6 +206,9 @@ type Service struct {
 	abandonments IngestAbandonmentProvider
 	// archiveImporter 提供手动归档导入入口（可空 = 未接线，返回明确不支持）。
 	archiveImporter IngestArchiveImporter
+	// identityClearer 提供「人工确认并清空身份冲突」入口（可空 = 未接线，返回明确不支持，
+	// 而不是回一个"清空 0 条"的空成功——那会让运维以为标记已经消掉）。
+	identityClearer IngestIdentityConflictClearer
 }
 
 // New 构造已启用的日志 RPC 服务层。
@@ -210,6 +241,76 @@ func (s *Service) SetIngestAbandonmentProvider(p IngestAbandonmentProvider) {
 
 // SetIngestArchiveImporter 注入手动归档导入入口。
 func (s *Service) SetIngestArchiveImporter(i IngestArchiveImporter) { s.archiveImporter = i }
+
+// IngestIdentityConflictClearer 是「人工确认并清空身份冲突」的提供者（由 ingest.Manager 满足）。
+type IngestIdentityConflictClearer interface {
+	// ClearIdentityConflicts 清空指定源（sourceKey 为空 = 全部持有冲突记录的源）的冲突记录；
+	// 返回清空的条数与逐源结果。operator / reason 为空必须拒绝。
+	ClearIdentityConflicts(ctx context.Context, sourceKey, operator, reason string) (IdentityConflictClearOutcome, error)
+}
+
+// IdentityConflictClearOutcome 是清空的逐源结果（服务层 DTO，避免反向依赖 ingest 包）。
+type IdentityConflictClearOutcome struct {
+	ClearedCount   int
+	ClearedSources []string
+	SkippedSources []string
+}
+
+// SetIngestIdentityConflictClearer 注入身份冲突人工清空入口。
+func (s *Service) SetIngestIdentityConflictClearer(c IngestIdentityConflictClearer) {
+	s.identityClearer = c
+}
+
+// IngestIdentityConflictClearerFunc 把普通函数适配成 IngestIdentityConflictClearer
+// （与 IngestAbandonmentFunc / PartitionMigrateFunc 同一模式：让 apps/worker 做跨包适配，
+// 服务层不反向依赖 ingest 包）。
+type IngestIdentityConflictClearerFunc func(ctx context.Context, sourceKey, operator, reason string) (IdentityConflictClearOutcome, error)
+
+// ClearIdentityConflicts 实现 IngestIdentityConflictClearer。
+func (f IngestIdentityConflictClearerFunc) ClearIdentityConflicts(ctx context.Context, sourceKey, operator, reason string) (IdentityConflictClearOutcome, error) {
+	if f == nil {
+		return IdentityConflictClearOutcome{}, fmt.Errorf("ingest identity conflict clearing is not configured")
+	}
+	return f(ctx, sourceKey, operator, reason)
+}
+
+// LogClearIdentityConflicts 人工确认并清空身份冲突记录（操作人与理由均必需，审计留痕）。
+//
+// 与放弃裁定的口径一致：本操作会让查询面不再提示该源存在内容歧义（质量标记消失），
+// 无痕清空等于给「掩盖数据歧义」开后门，故取不到操作人/理由一律拒绝、不下发任何变更。
+func (s *Service) LogClearIdentityConflicts(ctx context.Context, req *workerpb.LogClearIdentityConflictsRequest) (*workerpb.LogClearIdentityConflictsResponse, error) {
+	resp := &workerpb.LogClearIdentityConflictsResponse{RequestId: req.GetRequestId()}
+	// 理由与操作人同源同口径（都是传输层 metadata，见 OperatorMetadataKey 的说明）：
+	// 理由不由请求体携带，因为请求体可被任意伪造，而那会让审计凭据里的"为什么"不可信。
+	reason := reasonFromContext(ctx)
+	if s.identityClearer == nil {
+		resp.Error = unsupportedErr("ingest identity conflict clearing is not configured")
+		return resp, nil
+	}
+	operator := operatorFromContext(ctx)
+	if operator == "" {
+		resp.Error = unsupportedErr(fmt.Sprintf(
+			"清空身份冲突需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))
+		return resp, nil
+	}
+	if reason == "" {
+		resp.Error = unsupportedErr(fmt.Sprintf(
+			"清空身份冲突需要理由：请在 incoming gRPC metadata 设置 %q（审计凭据必须记录为何可以清）", ReasonMetadataKey))
+		return resp, nil
+	}
+	outcome, err := s.identityClearer.ClearIdentityConflicts(ctx, strings.TrimSpace(req.GetStorageNamespace()), operator, reason)
+	if err != nil {
+		return &workerpb.LogClearIdentityConflictsResponse{RequestId: req.GetRequestId(),
+			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: err.Error()}}, nil
+	}
+	resp.ClearedCount = uint64(outcome.ClearedCount)
+	resp.ClearedSources = outcome.ClearedSources
+	resp.SkippedSources = outcome.SkippedSources
+	slog.Info("已执行身份冲突人工清空", "operator", operator, "reason", reason,
+		"sourceKey", req.GetStorageNamespace(), "cleared", outcome.ClearedCount,
+		"sources", len(outcome.ClearedSources), "skipped", len(outcome.SkippedSources))
+	return resp, nil
+}
 
 // LogImportArchives 手动触发归档导入扫描（操作人必需，审计留痕）。
 func (s *Service) LogImportArchives(ctx context.Context, req *workerpb.LogImportArchivesRequest) (*workerpb.LogTaskResponse, error) {
@@ -362,6 +463,8 @@ func (s *Service) fillIngestPositionGaps(out *workerpb.LogSearchResponse, target
 	out.IngestPositionGaps = make([]*workerpb.IngestPositionGap, 0, len(gaps))
 	for _, g := range gaps {
 		out.IngestPositionGaps = append(out.IngestPositionGaps, &workerpb.IngestPositionGap{
+			LogSourceId:      g.LogSourceID,
+			SourceGeneration: g.SourceGeneration,
 			StorageNamespace: g.StorageNamespace,
 			From:             g.From,
 			To:               g.To,

@@ -53,6 +53,7 @@ const (
 	WorkerService_LogCutoverReadiness_FullMethodName         = "/worker.WorkerService/LogCutoverReadiness"
 	WorkerService_LogResolveIngestGaps_FullMethodName        = "/worker.WorkerService/LogResolveIngestGaps"
 	WorkerService_LogImportArchives_FullMethodName           = "/worker.WorkerService/LogImportArchives"
+	WorkerService_LogClearIdentityConflicts_FullMethodName   = "/worker.WorkerService/LogClearIdentityConflicts"
 	WorkerService_IssueTerminalToken_FullMethodName          = "/worker.WorkerService/IssueTerminalToken"
 	WorkerService_ListFiles_FullMethodName                   = "/worker.WorkerService/ListFiles"
 	WorkerService_ReadFile_FullMethodName                    = "/worker.WorkerService/ReadFile"
@@ -215,6 +216,15 @@ type WorkerServiceClient interface {
 	// 此时目录里的历史归档既不会被自动导入，运维也没有别的入口，只能干等。
 	// 本 RPC 提供那条入口，并强制携带操作人（可审计）。
 	LogImportArchives(ctx context.Context, in *LogImportArchivesRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
+	// LogClearIdentityConflicts 人工确认并清空「身份冲突」记录，使日志页的质量标记不再为
+	// conflict/partial（见 planner 的 DupConflict/StatsPartial 派生）。
+	//
+	// 语义：运维审阅后**确认这些冲突已被正确处理**（系统在不可裁定形态下保留先到者，即保留
+	// 正确版本；冲突行本身从未进入写入面），同意清空诊断记录以消除质量标记。
+	//
+	// 为什么必须显式：冲突记录是「数据歧义未裁定」的唯一凭据。清空它会让查询面**不再提示**
+	// 该源存在内容歧义，故必须由运维在审阅后明确确认，且强制携带操作人与理由（可审计）。
+	LogClearIdentityConflicts(ctx context.Context, in *LogClearIdentityConflictsRequest, opts ...grpc.CallOption) (*LogClearIdentityConflictsResponse, error)
 	// IssueTerminalToken 签发一次性终端连接 token。
 	IssueTerminalToken(ctx context.Context, in *IssueTerminalTokenRequest, opts ...grpc.CallOption) (*IssueTerminalTokenResponse, error)
 	// ListFiles 列出实例工作目录下的文件。
@@ -780,6 +790,16 @@ func (c *workerServiceClient) LogImportArchives(ctx context.Context, in *LogImpo
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LogTaskResponse)
 	err := c.cc.Invoke(ctx, WorkerService_LogImportArchives_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) LogClearIdentityConflicts(ctx context.Context, in *LogClearIdentityConflictsRequest, opts ...grpc.CallOption) (*LogClearIdentityConflictsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LogClearIdentityConflictsResponse)
+	err := c.cc.Invoke(ctx, WorkerService_LogClearIdentityConflicts_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1726,6 +1746,15 @@ type WorkerServiceServer interface {
 	// 此时目录里的历史归档既不会被自动导入，运维也没有别的入口，只能干等。
 	// 本 RPC 提供那条入口，并强制携带操作人（可审计）。
 	LogImportArchives(context.Context, *LogImportArchivesRequest) (*LogTaskResponse, error)
+	// LogClearIdentityConflicts 人工确认并清空「身份冲突」记录，使日志页的质量标记不再为
+	// conflict/partial（见 planner 的 DupConflict/StatsPartial 派生）。
+	//
+	// 语义：运维审阅后**确认这些冲突已被正确处理**（系统在不可裁定形态下保留先到者，即保留
+	// 正确版本；冲突行本身从未进入写入面），同意清空诊断记录以消除质量标记。
+	//
+	// 为什么必须显式：冲突记录是「数据歧义未裁定」的唯一凭据。清空它会让查询面**不再提示**
+	// 该源存在内容歧义，故必须由运维在审阅后明确确认，且强制携带操作人与理由（可审计）。
+	LogClearIdentityConflicts(context.Context, *LogClearIdentityConflictsRequest) (*LogClearIdentityConflictsResponse, error)
 	// IssueTerminalToken 签发一次性终端连接 token。
 	IssueTerminalToken(context.Context, *IssueTerminalTokenRequest) (*IssueTerminalTokenResponse, error)
 	// ListFiles 列出实例工作目录下的文件。
@@ -2037,6 +2066,9 @@ func (UnimplementedWorkerServiceServer) LogResolveIngestGaps(context.Context, *L
 }
 func (UnimplementedWorkerServiceServer) LogImportArchives(context.Context, *LogImportArchivesRequest) (*LogTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LogImportArchives not implemented")
+}
+func (UnimplementedWorkerServiceServer) LogClearIdentityConflicts(context.Context, *LogClearIdentityConflictsRequest) (*LogClearIdentityConflictsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LogClearIdentityConflicts not implemented")
 }
 func (UnimplementedWorkerServiceServer) IssueTerminalToken(context.Context, *IssueTerminalTokenRequest) (*IssueTerminalTokenResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method IssueTerminalToken not implemented")
@@ -2882,6 +2914,24 @@ func _WorkerService_LogImportArchives_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).LogImportArchives(ctx, req.(*LogImportArchivesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_LogClearIdentityConflicts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LogClearIdentityConflictsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).LogClearIdentityConflicts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_LogClearIdentityConflicts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).LogClearIdentityConflicts(ctx, req.(*LogClearIdentityConflictsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4392,6 +4442,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LogImportArchives",
 			Handler:    _WorkerService_LogImportArchives_Handler,
+		},
+		{
+			MethodName: "LogClearIdentityConflicts",
+			Handler:    _WorkerService_LogClearIdentityConflicts_Handler,
 		},
 		{
 			MethodName: "IssueTerminalToken",

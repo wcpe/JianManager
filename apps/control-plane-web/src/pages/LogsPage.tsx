@@ -8,6 +8,8 @@ import {
 	buildFederationResult,
 	exportFederatedLogs,
 	FederatedExportIncompleteError,
+	isRateLimitError,
+	rateLimitedEnvelope,
 	useLogsFederation,
 	useLogsFederationFacets,
 	useLogsFederationStats,
@@ -16,6 +18,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
+import { ClearConflictsDialog } from '@/components/ClearConflictsDialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -34,7 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import { LOGS_FEDERATION_KEYS, type CoverageBannerProps } from '@/lib/logs-federation'
+import { LOGS_FEDERATION_KEYS, exportBlockedKeyForReasons, type CoverageBannerProps } from '@/lib/logs-federation'
 import type { LogEntry } from '@/api/logs'
 import {
   logLevelStatus,
@@ -125,8 +128,8 @@ const SENTINEL_ALL = '__all__'
 const PAGE_SIZE = 100
 
 /**
- * tail-first 分页（纯函数，便于单测 ✓）：取本页"最旧一条"的 RFC3339 时间。
- * 排序为 `event_time DESC` ⇒ 最旧＝末条 ✓；空页 ⇒ null（调用方据此停翻 ✓）。
+ * 事件时间辅助函数：取降序事件末条的原始时间；空页返回null。
+ * 分页不得用此时间替代服务端复合游标，同戳组必须沿原视图续页。
  */
 export function oldestOf(items: Array<{ time?: string }>): string | null {
 	const last = items.length > 0 ? items[items.length - 1] : null
@@ -135,7 +138,7 @@ export function oldestOf(items: Array<{ time?: string }>): string | null {
 
 /**
  * tail-first 分页（纯函数，便于单测 ✓）：以锚点为**窗口上界**、按预设窗宽整体前移，
- * 返回该页应发的 `from/to`（首屏锚点＝now ⇒ 15 分钟窗 ✓；下一页锚点＝上页最旧一条 ✓）。
+ * 返回该窗应发的 `from/to`；首屏锚点为now，已枚举完窗口的下一窗锚点为原from。
  * 语义与首屏的 `timeParamsFor(range, anchor, false)` 完全一致（同一 `timeRangeToParams` ✓）。
  */
 export function windowForAnchor(
@@ -155,6 +158,16 @@ const OVERSCAN = 8
 const VIEWPORT_HEIGHT = 460
 // 实时跟随轮询间隔（ms）。
 const FOLLOW_INTERVAL = 3000
+
+/**
+ * 把时刻向下取整到最近一个 FOLLOW_INTERVAL 桶（纯函数，便于单测）。
+ *
+ * 跟随态的时间窗锚点必须落在桶边界上：若直接取挂钟毫秒，`from` 每次渲染都变，
+ * queryKey 随之变化，react-query 视为新查询 → 响应永远落不到地。
+ */
+function bucketFloor(ms: number): number {
+  return Math.floor(ms / FOLLOW_INTERVAL) * FOLLOW_INTERVAL
+}
 
 /**
  * 日志中心（FR-049 查看 / FR-050 检索 / FR-150 增强 + FR-482 覆盖/失败态接线）。
@@ -193,10 +206,10 @@ export default function LogsPage() {
     // 「24h/全部」等更大范围仍从时间范围筛选器显式选择（走慢路径与完整校验 ✓，绝不给假完整 ✗）。
     const [range, setRange] = useState<TimeRangePreset>('15m')
   const [page, setPage] = useState(1)
-	// tail-first 连续分页（用户点名 ✓）：`federationCursors` 复用为**向更早的锚点**（毫秒时间戳）
-	// 而非"窗内游标"——15 分钟窗最多一页，窗内翻页形同虚设 ✗；"下一页"＝把窗口**整体向前推**
-	// （新 `to`＝当前页最旧一条的时间 ⇒ 继续取更早日志 ✓），直到窗口下界早于可查范围（空页即停 ✓）。
-	const [federationCursors, setFederationCursors] = useState<Record<number, string>>({ 1: '' })
+	// 页历史保存原窗口和服务端复合游标；只有窗口枚举结束后才允许向更早窗口移动。
+	const [federationCursors, setFederationCursors] = useState<Record<number,
+		Pick<LogQueryParams, 'from' | 'to'> & { viewId?: string; cursor?: string }
+	>>({})
   // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（FR-480 online_only）。
   const [onlineOnly, setOnlineOnly] = useState(false)
   const [follow, setFollow] = useState(false)
@@ -213,14 +226,31 @@ export default function LogsPage() {
     setRangeAnchor(Date.now())
   }, [range, follow])
 
-  // 跟随态钉在第 1 页（最新）；锚点 now 在每次构建参数时取，配合轮询滚动时间窗。
-  // 锚点按轮询间隔对齐（P2-9 同类缺陷）：`from` 逐毫秒变化会让 queryKey 每次渲染都变，
-  // react-query 视为新查询 → data 恒为 undefined（federation 侧没有 keepPreviousData），
-  // 列表回落到经典 /logs → 实时行永远渲染不出来。对齐到 FOLLOW_INTERVAL 桶后同一桶内
-  // queryKey 稳定、响应能落地；窗口仍每 ≤3s 滚动一次，与轮询同频。
+  // 跟随态时间桶：**由 interval 驱动的 state**，不再在渲染期取挂钟分桶。
+  // 旧实现的渲染期分桶有双重触发：跨桶时 queryKey 变化触发一次请求，同时
+  // refetchInterval 到点又触发一次 ⇒ 同一份数据成对双发（生产 cp.out 里同参数成对请求
+  // 仅相差约 6ms 正是此）。改为「桶滚动＝唯一触发源」：跟随态下主查询
+  // refetchInterval=false（见下），每个 tick 恰好一次请求。
+  // 分桶仍然必要：`from` 逐毫秒变化会让 queryKey 每次渲染都变、响应永远落不到地。
   // 跟随态不下发 `to`（见 timeParamsFor）：时钟偏移下的未来时间戳事件仍可见。
-  const followAnchor = new Date(Math.floor(new Date().getTime() / FOLLOW_INTERVAL) * FOLLOW_INTERVAL)
-  const timeParams = timeParamsFor(range, follow ? followAnchor : new Date(rangeAnchor), follow)
+  const [followAnchorMs, setFollowAnchorMs] = useState(() => bucketFloor(Date.now()))
+  useEffect(() => {
+    if (!follow) return
+    const timer = window.setInterval(() => {
+      // 只在真正跨桶时改变 state：同一桶内返回原值 → React 跳过重渲染 → 不发请求。
+      setFollowAnchorMs((prev) => {
+        const next = bucketFloor(Date.now())
+        return next === prev ? prev : next
+      })
+    }, FOLLOW_INTERVAL)
+    return () => window.clearInterval(timer)
+  }, [follow])
+
+  const timeParams = timeParamsFor(
+    range,
+    follow ? new Date(followAnchorMs) : new Date(rangeAnchor),
+    follow,
+  )
   const params: LogQueryParams = {
     view,
     page: follow ? 1 : page,
@@ -234,37 +264,122 @@ export default function LogsPage() {
   }
 
   const legacyMode = view === 'legacy'
-  const { data, isLoading: classicLoading, isError: classicError, refetch: refetchLogs } = useLogs(params, {
-    refetchInterval: follow ? FOLLOW_INTERVAL : false,
-    enabled: !legacyMode,
-  })
+  // 平台视图的权威来源是 CP 经典日志接口；联邦数据只覆盖节点/实例日志。
+  const federationEnabled = !legacyMode && view !== 'platform'
 	const legacyQuery = useLegacyLogs(params, legacyMode)
-
   // FR-482：可选联邦覆盖探测。与 useLogs 同筛选参数；API 404 → degraded legacy。
 	const federationParams: Record<string, unknown> = {
 		...params,
 		limit: PAGE_SIZE,
 		...(follow ? { tailMode: 'FOLLOW_LIVE' } : {}),
 		...(onlineOnly ? { onlineOnly: true } : {}),
-		// tail-first 连续分页（用户点名 ✓）：第 2 页起**不用窗内游标** ✗，而以上一页最旧一条的时间为
-		// 新的窗口上界，继续取更早日志（覆盖 `timeParams` 的 from/to ⇒ 毫秒级首屏与连续翻页并存 ✓）。
-		...(!follow && page > 1 && federationCursors[page]
-			? windowForAnchor(range, Number(federationCursors[page]))
-			: {}),
+		// 续页不解析游标、不从日志时间重建窗口，保留纳秒同戳组和原视图身份。
+		...(!follow && page > 1 ? federationCursors[page] : {}),
 	}
   const federationQuery = useLogsFederation(federationParams, {
-		enabled: !legacyMode,
-		refetchInterval: follow ? FOLLOW_INTERVAL : false,
+	enabled: federationEnabled,
+	// 跟随态：时间桶 state（上）是唯一触发源，此处必须为 false，否则同拍双发。
+	// `all` 预设没有 `from`（窗口无边界 ⇒ 分桶不改变 queryKey），此时无桶可滚，
+	// 才退回 interval 作为那一次触发；两种情况都只有**一个**触发源。
+	refetchInterval: follow && !timeParams.from ? FOLLOW_INTERVAL : false,
 	})
+  /**
+   * 最近一份「联邦可用且带 items」的成功结果，用于限流期间继续渲染已有行。
+   *
+   * 用 state 而非 ref：渲染期要**读**它来决定列表内容，ref 读值不触发重渲染且违反
+   * 「渲染期不得访问 ref」；state 才能让保留生效。
+   * 只记非降级结果——降级（legacy 表格）的行来自经典接口，记进来会让限流回退时
+   * 把经典表的行冒充成联邦结果。
+   * 更新时机用「渲染期按需调整 state」而非 effect（React 官方推荐的派生 state 写法，
+   * 也避免先渲染一帧空列表再把数据补回来的闪烁）。
+   */
+  const [lastGoodFederation, setLastGoodFederation] = useState<LogsFederationResult | null>(null)
+  // 「确认并清空身份冲突」对话框开关（质量标记的运维入口，见 ClearConflictsDialog）。
+  const [clearConflictsOpen, setClearConflictsOpen] = useState(false)
+  /**
+   * 限流提示闩锁：重试耗尽观测到 429 即置位，直到重新拿到**真实成功**结果才清除。
+   *
+   * 为什么不直接用 `federationQuery.error`：跟随态每 3 秒滚动时间桶 ⇒ queryKey 每次都变，
+   * 「重试耗尽」只属于某一个 key，下一个 key 一开跑 error 就没了。实测（假后端持续返回 429、
+   * 前进 9 个 tick）：列表确实保住了，但横幅**一次都没渲染**——提示跟着 error 一起闪没，
+   * 用户只看到「数据不再更新」而没有任何原因说明。闩锁把「本轮请求正被限流」这一事实
+   * 保持到真正恢复为止。
+   */
+  const [rateLimited, setRateLimited] = useState(false)
+  const latestFederation = federationQuery.data
+  /**
+   * 「这一轮请求真的拿到结果了」——用于清除闩锁。
+   *
+   * 不含 degraded 条件：queryFn 只对 429 抛出，其它失败（404/连接失败）都会被转成信封、
+   * 在 react-query 层面算成功。若限定「非降级才算成功」，那么「先 429、随后接口变成 404」
+   * 时闩锁永远清不掉，限流横幅会盖住本该发生的 legacy 降级。
+   * 但必须排除占位数据：key 滚动期间 keepPreviousData 会用上一份顶替成「有数据」，
+   * 那不是新的结果，不能据此宣告恢复。
+   */
+  const federationSettled = federationQuery.isSuccess && !federationQuery.isPlaceholderData
+  if (federationQuery.isError && isRateLimitError(federationQuery.error)) {
+    if (!rateLimited) setRateLimited(true)
+  } else if (rateLimited && federationSettled) {
+    setRateLimited(false)
+  }
+  if (
+    !federationQuery.isError
+    && latestFederation
+    && !latestFederation.degraded
+    && Array.isArray(latestFederation.response.items)
+    && latestFederation !== lastGoodFederation
+  ) {
+    setLastGoodFederation(latestFederation)
+  }
+  const federationRateLimited = rateLimited
   const federation = legacyMode && legacyQuery.data
     ? buildFederationResult({ sourceTag: 'legacy', items: legacyQuery.data.items, coverage: legacyQuery.data.coverage })
-    : federationQuery.data
+    : federationEnabled
+      ? (federationRateLimited
+        ? buildFederationResult(rateLimitedEnvelope(
+          federationQuery.error instanceof Error ? federationQuery.error.message : undefined,
+        ))
+        : federationQuery.data)
+      : undefined
+
   // F-003：联邦可用（非降级）时列表以 federation.items 为主数据源；
   // 404 降级才回退 useLogs 的 Legacy 表。禁止「联邦横幅 + Legacy 内容」错配。
   const federationActive = !!federation && !federation.degraded && federation.available
   // 供标题区状态提示使用（与横幅同源，避免两处判定漂移）。
   const federationDegraded = federation?.degraded === true
   const federationNotReady = federation?.federatedNotReady === true
+  /**
+   * 「确认并清空身份冲突」入口可用性。
+   *
+   * 三个条件缺一不可：
+   * - 确有冲突（`duplicateUnresolved`，与横幅同源）—— 否则这个按钮没有任何可清的东西；
+   * - 选中了单一节点 —— 清空是**按节点**下发的（Worker 持有该节点的源），
+   *   未选节点时无法确定目标，此时不给入口，而不是默认拿第一个节点去清；
+   * - 联邦不是降级态 —— 降级时质量标记来自 legacy 路径，本入口对其无效。
+   */
+  const canClearConflicts =
+    federationActive &&
+    nodeId !== null &&
+    federation?.classified.coverage.duplicateUnresolved === true
+
+  /**
+   * 经典表格查询（联邦视图下作降级回退源）。
+   *
+   * 两个门控都指向同一目标：**联邦视图下不要为了「可能用得上」而重复请求**。
+   * ① `refetchInterval` 不含联邦视图：node_instance/all 视图的主数据源是 federation，
+   *    再让 useLogs 跟着每 3 秒打一条数据面请求，只会让每次轮询变成 2 条（生产 429 的
+   *    主因之一），而它拉回的行在联邦活跃时根本不参与渲染。
+   * ② `enabled` 只在「经典接口确实是权威来源」时才开：平台视图（federationEnabled=false）
+   *    或联邦已降级（404/不可达）。仅关掉 ① 还不够——跟随态的时间桶每 3 秒滚动一次，
+   *    `params` 里的 from/to 随之变化 ⇒ queryKey 变化本身就触发一次新请求（实测：即使
+   *    refetchInterval=false，classic 仍每 tick 发 1 条）。关掉 ② 才真正消除这次重复。
+   *    降级后才启用也意味着回退表按需加载，不会在联邦正常时白白预热一份没人看的表格。
+   */
+  const classicAuthoritative = !federationEnabled || federation?.degraded === true
+  const { data, isLoading: classicLoading, isError: classicError, refetch: refetchLogs } = useLogs(params, {
+    refetchInterval: follow && !federationEnabled ? FOLLOW_INTERVAL : false,
+    enabled: !legacyMode && classicAuthoritative,
+  })
 	const aggregateParams: Record<string, unknown> = {
 		...timeParams,
 		...(view === 'all' && source ? { source } : {}),
@@ -276,6 +391,16 @@ export default function LogsPage() {
 		// 复用搜索视图会被 CP 按 F-006 语义拒（409 VIEW_STALE；实测 stats 与 facets 两呼皆 409 ✓）。
 		// 去除后二者各自重建视图，服务端校验一字不动 ✗。
 	}
+	// Tail无永久位置字段：复用既有Search每30秒刷新证据，固定窗口避免每个3秒轮询桶重查。
+	const followEvidenceQuery = useLogsFederation({
+		...aggregateParams,
+		...timeParamsFor(range, new Date(rangeAnchor), true),
+		limit: 1,
+		...(onlineOnly ? { onlineOnly: true } : {}),
+	}, { enabled: federationEnabled && follow, refetchInterval: follow ? 30_000 : false })
+	const ingestPositionGaps = follow
+		? followEvidenceQuery.data?.response.ingestPositionGaps ?? []
+		: federation?.response.ingestPositionGaps ?? []
 	// 编排（§1 延后串行）：① 主列表先出——stats/facets 均已 gate 在「主查询有数据且拿到 viewId」之后 ✓；
 	// ② stats → facets 再串行——facets 额外等 stats 落定（成功或失败），
 	// 任一时刻最多一个聚合请求在飞 ⇒ 不再与主列表/彼此并发挤 VL 的 maxConcurrentRequests=2 两个槽 ✗。
@@ -296,8 +421,25 @@ export default function LogsPage() {
 	const levelFacets = federationFacets.data?.dimensions?.find((dimension) => dimension.dimension === 'level')?.values ?? []
 	// 洞察栏是否有真实内容（决定是否挂 testid；占位容器本身始终渲染以稳定高度）。
 	const insightsVisible = federationActive && (statsCount !== undefined || levelFacets.length > 0)
+  /**
+   * 列表主数据源。限流中断时回落到 {@link lastGoodFederation} 的最近一份成功列表：
+   * 已有行继续可见（不清空），绝不把限流呈成「暂无日志」。
+   *
+   * 为什么要在这里兜底而不能只靠 react-query：跟随态每 3 秒滚动时间桶 ⇒ queryKey 每次都变，
+   * 而 key 变化后的失败会把 data 丢弃（实测：keepPreviousData 只在同 key 重取时保留，
+   * 换 key 后失败则 data=undefined）⇒ 列表照样被清空。
+   */
+  const retainedFederation = federationRateLimited && lastGoodFederation
+    ? lastGoodFederation
+    : null
   const federationItems = federationActive
-    ? mapFederationItems(federation.response.items)
+    ? mapFederationItems(
+      federationRateLimited
+        // 限流且拿不到上一份列表时保持 null → 交给 timeline 的 loading/空态语义处理，
+        // 由横幅与 emptySuccessAllowed=false 说明「这次没查到」，不伪造 0 条。
+        ? retainedFederation?.response.items ?? null
+        : federation.response.items,
+    )
     : null
 
   const items = legacyMode ? (legacyQuery.data?.items ?? []) : federationActive ? (federationItems ?? []) : (data?.items ?? [])
@@ -309,16 +451,13 @@ export default function LogsPage() {
 		? Math.max(1, page)
 		: Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-	// tail-first「下一页」可点性（联邦模式）：由服务端 nextCursor 驱动——非空游标表示
-	// 窗口内仍有更早数据未取（后端仅在 hasMore/budgetCut 时下发游标）；本页空（0 条）
-	// 停住（「空页即停」）；翻页请求在飞时禁用，避免连点跳页。
-	// 注意**不得**复用 totalPages 作可点性：它是「已访问页数」（恒等于 page），
-	// 会让按钮永久 disabled ✗（此前实测的「下一页永远点不动」根因）。
-	const federationNextAvailable =
-		federationActive &&
-		items.length > 0 &&
-		Boolean(federation?.response.nextCursor) &&
-		!federationQuery.isFetching
+	// 有游标时必须原 view 续页（预算截断空页也可续）；明确结束才移动完整窗口。
+	const federationCanContinue = Boolean(federation?.response.nextCursor && federation?.response.viewId)
+	const federationCanShift = !federation?.response.nextCursor && federation?.response.exhausted === true
+		&& items.length > 0 && range !== 'all' && typeof federationParams.from === 'string'
+	const federationNextAvailable = federationActive && !follow
+		&& (federationCanContinue || federationCanShift)
+		&& !federationQuery.isFetching && !federationQuery.isPlaceholderData
 
   // 改任一筛选都回到第 1 页，避免停留在越界页。
   const resetTo = useCallback(
@@ -326,7 +465,7 @@ export default function LogsPage() {
       (v: T) => {
         setter(v)
         setPage(1)
-		setFederationCursors({ 1: '' })
+		setFederationCursors({})
       },
     [],
   )
@@ -339,19 +478,30 @@ export default function LogsPage() {
 	// federated 探测（FR-482）未落地前，items 可能暂时为空——此时不得判为「空结果」，
 	// 否则会先闪 empty-state（且 404 降级期间显示非成功空态），把尚未就绪误报成失败。
 	// 故把「联邦探测未完成」并入 loading：只有探测结束、数据源确定后才允许判空。
-	const federationProbePending = !legacyMode && federationQuery.isLoading
+	//
+	// 联邦视图下经典查询只是回退源，它的加载/失败**不得**参与页面态：联邦已拿到数据时
+	// 白屏/报错都无意义地盖住列表；只有联邦降级（真正在用经典表）时才由它说话。
+	const federationProbePending = federationEnabled && federationQuery.isLoading
 	const isLoading = legacyMode
 		? legacyQuery.isLoading
-		: classicLoading || federationProbePending
-	const isError = legacyMode ? legacyQuery.isError : classicError
-	const hasData = legacyMode ? !!legacyQuery.data : !!data
-  // 空结果语义：失败/partial 不得呈「暂无日志」空成功（FR-482）。
-  // 引擎未就绪的降级是例外中的例外：经典路径可能确实没有行，但引擎侧数据从未被查询，
-  // 此时宣称「暂无日志」是假成功，必须保留非成功空态。
-  const emptySuccessAllowed =
-    !federation ||
-    (federation.degraded && !federation.federatedNotReady) ||
-    federation.classified.emptySuccessAllowed
+		: federationProbePending || (classicAuthoritative && classicLoading)
+	const isError = legacyMode
+		? legacyQuery.isError
+		: classicAuthoritative && classicError
+	const hasData = legacyMode
+		? !!legacyQuery.data
+		: classicAuthoritative
+			? !!data
+			// 联邦视图下「有数据」= 有联邦结果（含限流时保留的上一份行）。
+			: !!federation
+	// 空结果语义：失败/partial 不得呈「暂无日志」空成功（FR-482）。
+	// 引擎未就绪的降级是例外中的例外：经典路径可能确实没有行，但引擎侧数据从未被查询，
+	// 此时宣称「暂无日志」是假成功，必须保留非成功空态。
+	// 限流（rate_limited）同样是失败态：emptySuccessAllowed 由 classified 判为 false。
+	const emptySuccessAllowed =
+		!federation ||
+		(federation.degraded && !federation.federatedNotReady) ||
+		federation.classified.emptySuccessAllowed
 
   const handleExport = async (scope: LogExportScope) => {
     if (exportDisabled) return
@@ -372,7 +522,20 @@ export default function LogsPage() {
       // 导出闸阻断（覆盖/质量/预算未过）与传输失败分开呈现：前者给出后端原因，
       // 让用户知道「为什么没有文件」，而不是以为功能坏了。
       if (error instanceof FederatedExportIncompleteError && error.reasons.length > 0) {
-        toast.error(t('logs.exportBlockedReasons', { reasons: error.reasons.join(', ') }))
+        // 预算类阻断（行数 / 字节上限）优先用专用文案：笼统的「预算超了」
+        // 无法指导操作，而「超过单次 N 行」能直接告诉用户缩小范围还是调配置。
+        // 有 limits 时把实际数字一并说出（后端本次采用的上限）。
+        const preciseKey = exportBlockedKeyForReasons(error.reasons)
+        if (preciseKey) {
+          const maxRows = error.limits?.maxRows
+          toast.error(
+            maxRows
+              ? `${t(preciseKey)}（本次上限 ${maxRows} 行）`
+              : t(preciseKey),
+          )
+        } else {
+          toast.error(t('logs.exportBlockedReasons', { reasons: error.reasons.join(', ') }))
+        }
       } else {
         toast.error(t('logs.exportFailed'))
       }
@@ -394,14 +557,14 @@ export default function LogsPage() {
           navigate('/nodes')
           break
         case LOGS_FEDERATION_KEYS.actionReopenView:
-          setFederationCursors({ 1: '' })
+          setFederationCursors({})
           setPage(1)
           void federationQuery.refetch()
           break
         case LOGS_FEDERATION_KEYS.actionRequestOnline:
           setOnlineOnly(true)
           setPage(1)
-          setFederationCursors({ 1: '' })
+          setFederationCursors({})
           break
         case LOGS_FEDERATION_KEYS.actionContactAdmin:
           toast.info(t('logsFederation.action.contactAdmin'))
@@ -504,7 +667,7 @@ export default function LogsPage() {
               onClick={() => {
                 setView(candidate)
                 setPage(1)
-				setFederationCursors({ 1: '' })
+				setFederationCursors({})
 				if (candidate === 'legacy') setFollow(false)
               }}
             >
@@ -533,7 +696,7 @@ export default function LogsPage() {
                 onSelect={() => {
                   setView('legacy')
                   setPage(1)
-                  setFederationCursors({ 1: '' })
+                  setFederationCursors({})
                   setFollow(false)
                 }}
               >
@@ -610,7 +773,7 @@ export default function LogsPage() {
               resetTo(setNodeId)(v === SENTINEL_ALL ? null : Number(v))
             }
           >
-            <SelectTrigger size="sm" className="w-36">
+            <SelectTrigger size="sm" className="w-36" data-testid="logs-node-select">
               <SelectValue placeholder={t('logs.allNodes')} />
             </SelectTrigger>
             <SelectContent>
@@ -649,7 +812,7 @@ export default function LogsPage() {
 		  onClick={() => {
 			setFollow((f) => !f)
 			setPage(1)
-			setFederationCursors({ 1: '' })
+			setFederationCursors({})
 		  }}
 		  disabled={legacyMode}
           className={cn(
@@ -692,11 +855,52 @@ export default function LogsPage() {
         <CoverageBanner
           federation={federation}
           onAction={handleFederationAction}
+          onClearConflicts={canClearConflicts ? () => setClearConflictsOpen(true) : undefined}
           onRetry={() => {
 			if (legacyMode) void legacyQuery.refetch()
 			else { void federationQuery.refetch(); void refetchLogs() }
           }}
         />
+      )}
+
+      {/* 身份冲突人工清空（运维入口）：只在有冲突、且当前选中单一节点时可用。
+          未选中单一节点时无法确定要清哪个节点，故不给入口（而不是默认清第一个）。 */}
+      {canClearConflicts && (
+        <ClearConflictsDialog
+          nodeId={nodeId}
+          open={clearConflictsOpen}
+          onOpenChange={setClearConflictsOpen}
+          onCleared={() => {
+            if (legacyMode) void legacyQuery.refetch()
+            else { void federationQuery.refetch(); void refetchLogs() }
+          }}
+        />
+      )}
+
+      {/* 永久位置凭据独立于时间覆盖；空items也必须可见，来源未知时不推测归属。 */}
+      {federationActive && ingestPositionGaps.length > 0 && (
+        <section data-testid="logs-ingest-position-gaps" role="status"
+          className="max-h-48 shrink-0 overflow-auto rounded-md border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-sm">
+          <h2 className="flex items-center gap-1.5 font-medium">
+            <AlertTriangle className="size-4 shrink-0" />
+            {t('logsFederation.positionGaps.title', { count: ingestPositionGaps.length })}
+          </h2>
+          <p className="text-xs text-muted-foreground">{t('logsFederation.positionGaps.description')}</p>
+          <ul className="mt-1.5 space-y-1.5">
+            {ingestPositionGaps.map((gap, index) => (
+              <li key={index} data-testid="logs-ingest-position-gap" className="break-all text-xs">
+                <p>{t('logsFederation.positionGaps.identity', {
+                  worker: gap.workerId, source: gap.logSourceId ?? t('logsFederation.positionGaps.unknown'),
+                  generation: gap.sourceGeneration ?? t('logsFederation.positionGaps.unknown'),
+                })}</p>
+                <p>{t('logsFederation.positionGaps.evidence', {
+                  namespace: gap.storageNamespace, from: gap.from, to: gap.to, reason: gap.reasonCode,
+                  operator: gap.operator, at: gap.atUTC,
+                })}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {isLoading && !hasData ? (
@@ -731,12 +935,13 @@ export default function LogsPage() {
             onPrev={() => setPage((p) => Math.max(1, p - 1))}
 			onNext={() => {
 				if (federationActive) {
-					// tail-first：以本页**最旧一条**（`oldestOf`，排序 event_time DESC ⇒ 末条 ✓）时间为新锚点，
-					// 下一页即"继续取更早" ✓；空页（无条目）⇒ 不再前进（到底）✗。
-					const oldestTime = oldestOf(federationItems ?? [])
-					if (!oldestTime) return
-					const anchor = String(new Date(oldestTime).getTime())
-					setFederationCursors((current) => ({ ...current, [page + 1]: anchor }))
+					if (!federationNextAvailable) return
+					const next = federationCanContinue
+						? { from: federationParams.from as string | undefined,
+							to: federationParams.to as string | undefined,
+							viewId: federation?.response.viewId, cursor: federation?.response.nextCursor ?? undefined }
+						: windowForAnchor(range, federationParams.from as string)
+					setFederationCursors((current) => ({ ...current, [page + 1]: next }))
 				}
 				setPage((p) => p + 1)
 			}}
@@ -755,10 +960,13 @@ function CoverageBanner({
   federation,
   onRetry,
   onAction,
+  onClearConflicts,
 }: {
   federation: LogsFederationResult
   onRetry: () => void
   onAction: (key: string) => void
+  /** 存在"身份冲突待确认"时提供运维入口；未传则该入口不渲染。 */
+  onClearConflicts?: () => void
 }) {
   const { t } = useTranslation()
   const props: CoverageBannerProps = federation.banner
@@ -766,6 +974,9 @@ function CoverageBanner({
   const sourceTag = federation.sourceTag
   const degraded = federation.degraded
   const federatedNotReady = federation.federatedNotReady
+  // 「有重复日志待确认」的判据与 foundation 同源（coverage.duplicateUnresolved），
+  // 不另造一套：两边若漂移，会出现「横幅说有冲突、按钮却不见」或反之的矛盾呈现。
+  const duplicateUnresolved = classified.coverage.duplicateUnresolved
   // 404 降级始终展示横幅（即使 foundation 因 items 路径判定 visible=false）。
   const visible = props.visible || degraded || federatedNotReady
   if (!visible) return null
@@ -849,7 +1060,7 @@ function CoverageBanner({
           {t('logsFederation.export.nextCursorHint')}
         </p>
       )}
-      {(props.showRetry || guidanceActions.length > 0) && !degraded && (
+      {(props.showRetry || guidanceActions.length > 0 || (duplicateUnresolved && onClearConflicts)) && !degraded && (
         <div className="flex flex-wrap gap-2">
           {props.showRetry && (
             <Button size="sm" variant="outline" onClick={onRetry} data-testid="logs-coverage-retry">
@@ -867,6 +1078,18 @@ function CoverageBanner({
               {t(key)}
             </Button>
           ))}
+          {/* 身份冲突人工清空：只在确有冲突时出现（否则这个按钮没有任何可清的东西）。
+              它改的是查询面语义（标记消失），故走二次确认 + 必填理由（见 ClearConflictsDialog）。 */}
+          {duplicateUnresolved && onClearConflicts && (
+            <Button
+              size="sm"
+              variant="destructive"
+              data-testid="logs-clear-conflicts-open"
+              onClick={onClearConflicts}
+            >
+              {t('logsFederation.clearConflicts.button')}
+            </Button>
+          )}
         </div>
       )}
     </div>
