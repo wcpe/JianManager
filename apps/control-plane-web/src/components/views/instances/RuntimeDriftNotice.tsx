@@ -143,7 +143,7 @@ export function RuntimeDriftBanner({
         <p className="mt-0.5 break-words">{t('serverConsole.runtimeDriftDesc', { pid })}</p>
         {/* 命令行摘要：常是判断「这是不是我们那台服」的关键证据，可换行完整展示。 */}
         {cmdline && (
-          <p className="mt-0.5 break-all font-mono text-[11px] opacity-90">
+          <p className="mt-0.5 break-all font-mono text-meta opacity-90">
             {t('serverConsole.runtimeDriftCmdline')}
             {': '}
             {cmdline}

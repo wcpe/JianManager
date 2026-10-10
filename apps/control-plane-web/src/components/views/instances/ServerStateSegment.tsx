@@ -99,7 +99,7 @@ function BoundedTable<T>({
           ))}
         </tbody>
       </table>
-      <div className="flex items-center justify-between gap-2 px-2 py-1 text-[11px] text-muted-foreground">
+      <div className="flex items-center justify-between gap-2 px-2 py-1 text-meta text-muted-foreground">
         {data?.truncated && <span>{t('serverState.truncatedNote', { total: data.total })}</span>}
         {collapsible && (
           <button
@@ -240,7 +240,7 @@ function ClassloaderPanel({ data }: { data: ClassloaderSection | undefined }) {
             { header: t('serverState.classloader.plugin'), cell: (p) => p.plugin },
             {
               header: t('serverState.classloader.loaderClass'),
-              cell: (p) => <span className="whitespace-nowrap font-mono text-[10px]">{p.loaderClass}</span>,
+              cell: (p) => <span className="whitespace-nowrap font-mono text-micro">{p.loaderClass}</span>,
             },
             {
               // 父链每段渲染为不换行的 chip，段间以 → 分隔并在 chip 边界换行——
@@ -251,7 +251,7 @@ function ClassloaderPanel({ data }: { data: ClassloaderSection | undefined }) {
                   {(p.chain ?? []).map((c, i) => (
                     <span key={i} className="flex items-center gap-1">
                       {i > 0 && <span className="text-muted-foreground/50">→</span>}
-                      <span className="whitespace-nowrap rounded bg-muted/50 px-1 font-mono text-[10px] text-muted-foreground">
+                      <span className="whitespace-nowrap rounded bg-muted/50 px-1 font-mono text-micro text-muted-foreground">
                         {c}
                       </span>
                     </span>
@@ -386,20 +386,20 @@ export default function ServerStateSegment({
         <div className="flex items-baseline gap-3">
           <h3 className="text-sm font-semibold">{t('serverState.title')}</h3>
           {data?.available && data.state?.collectedAt && (
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-meta text-muted-foreground">
               {t('serverState.collectedAt')} {new Date(data.state.collectedAt).toLocaleTimeString()}
             </span>
           )}
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-muted-foreground">{t('serverState.autoRefresh', '自动刷新')}</span>
+          <span className="text-meta text-muted-foreground">{t('serverState.autoRefresh', '自动刷新')}</span>
           <div className="flex items-center gap-0.5 rounded-md border p-0.5">
             {AUTO_REFRESH_OPTIONS.map((o) => (
               <button
                 key={o.key}
                 type="button"
                 className={cn(
-                  'rounded px-1.5 py-0.5 text-[11px] tabular-nums',
+                  'rounded px-1.5 py-0.5 text-meta tabular-nums',
                   autoRefreshMs === o.ms ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent',
                 )}
                 onClick={() => onAutoRefreshChange(o.ms)}

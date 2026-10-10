@@ -40,11 +40,11 @@ function ForecastRow({ item }: { item: ForecastResult }) {
     <div className="grid grid-cols-[1fr_auto] items-start gap-3 border-b border-border py-2.5 last:border-b-0">
       <div className="min-w-0">
         <p className="truncate text-sm font-medium">{label}</p>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
+        <p className="mt-0.5 text-meta text-muted-foreground">
           {t('capacity.now')}: {fmtBytes(item.nowValue)} · {t('capacity.limit')}: {fmtBytes(item.limitValue)} ·{' '}
           {t('capacity.slope')}: {fmtSlope(item.metricKey, item.slopePerSec)}
         </p>
-        {insufficient && item.note && <p className="mt-1 text-[11px] text-muted-foreground">{item.note}</p>}
+        {insufficient && item.note && <p className="mt-1 text-meta text-muted-foreground">{item.note}</p>}
       </div>
       <div className="text-right">
         {insufficient ? (
@@ -55,11 +55,11 @@ function ForecastRow({ item }: { item: ForecastResult }) {
               {item.exhaustLowDays == null ? '--' : t('capacity.days', { days: item.exhaustLowDays.toFixed(2) })}
             </p>
             {ci && (
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
+              <p className="mt-0.5 text-meta text-muted-foreground">
                 {t('capacity.ci80')}: {t('capacity.range', { low: ci.split(' ~ ')[0], high: ci.split(' ~ ')[1] })}
               </p>
             )}
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
+            <p className="mt-0.5 text-meta text-muted-foreground">
               {t('capacity.confidence')}: {t(`capacity.${item.confidence}`)}
             </p>
           </>

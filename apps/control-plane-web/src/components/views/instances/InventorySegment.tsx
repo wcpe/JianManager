@@ -543,7 +543,7 @@ function Slot({ cell, slot }: { cell: RawItemSlot | null; slot: number }) {
         {materialShort(cell.material)}
       </span>
       {cell.amount > 1 && (
-        <span className="absolute bottom-0 right-0.5 text-[10px] font-semibold tabular-nums text-primary">
+        <span className="absolute bottom-0 right-0.5 text-micro font-semibold tabular-nums text-primary">
           {cell.amount}
         </span>
       )}

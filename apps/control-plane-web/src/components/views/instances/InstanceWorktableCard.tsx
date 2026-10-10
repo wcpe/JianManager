@@ -200,14 +200,14 @@ export function InstanceWorktableCard({
             <div className="mt-0.5 overflow-hidden" style={{ maxHeight: CARD_EXTRA_MAX_HEIGHT }}>
               {inst.statusReason && (
                 <p
-                  className={cn('line-clamp-2 text-[11px]', provisioning ? 'text-status-warning' : 'text-status-danger')}
+                  className={cn('line-clamp-2 text-meta', provisioning ? 'text-status-warning' : 'text-status-danger')}
                   title={inst.statusReason}
                 >
                   {inst.statusReason}
                 </p>
               )}
               {drift && (
-                <p className="mt-0.5 line-clamp-2 text-[11px] text-status-warning" title={drift.cmdline}>
+                <p className="mt-0.5 line-clamp-2 text-meta text-status-warning" title={drift.cmdline}>
                   {t('serverConsole.runtimeDriftDesc', { pid: drift.pid })}
                 </p>
               )}
@@ -313,12 +313,12 @@ function ResourceLine({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="flex w-12 shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+      <span className="flex w-12 shrink-0 items-center gap-1 text-micro text-muted-foreground">
         {icon}
         {label}
       </span>
       <MiniBar value={active ? pct : 0} className="flex-1" />
-      <span className="w-12 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+      <span className="w-12 shrink-0 text-right text-micro tabular-nums text-muted-foreground">
         {active ? (valueLabel ?? `${pct.toFixed(0)}%`) : '--'}
       </span>
     </div>

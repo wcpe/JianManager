@@ -208,7 +208,7 @@ export default function InstanceLibrary({
           />
         </div>
         {selected.size > 0 && (
-          <p className="mt-1.5 text-[11px] text-muted-foreground">
+          <p className="mt-1.5 text-meta text-muted-foreground">
             {t('superWorkbench.selectedHint', { count: selected.size })}
           </p>
         )}

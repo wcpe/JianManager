@@ -70,7 +70,7 @@ export function PlayerTrendCard({ range, data, loading = false, error = false }:
     <Panel
       title={t('playerTrend.title')}
       icon={<Users className="size-4" />}
-      actions={data?.timezone ? <span className="text-[11px] text-muted-foreground">{t('playerTrend.timezone')}: {data.timezone}</span> : undefined}
+      actions={data?.timezone ? <span className="text-meta text-muted-foreground">{t('playerTrend.timezone')}: {data.timezone}</span> : undefined}
     >
       {error ? (
         <p className="py-5 text-center text-sm text-muted-foreground">{t('playerTrend.error')}</p>
@@ -81,7 +81,7 @@ export function PlayerTrendCard({ range, data, loading = false, error = false }:
       ) : (
         <div className="space-y-4">
           {tzFallback && (
-            <p className="text-[11px] text-muted-foreground">{t('playerTrend.tzFallback')}</p>
+            <p className="text-meta text-muted-foreground">{t('playerTrend.tzFallback')}</p>
           )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <StatCard
@@ -95,7 +95,7 @@ export function PlayerTrendCard({ range, data, loading = false, error = false }:
           </div>
           <Sparkline points={points} className="h-10 w-full" />
           <div>
-            <p className="mb-1.5 text-[11px] text-muted-foreground">{t('playerTrend.hourly')}</p>
+            <p className="mb-1.5 text-meta text-muted-foreground">{t('playerTrend.hourly')}</p>
             <HourlyBars dist={data.hourlyDist} peak={data.peakValue} />
             <MiniBar value={data.peakValue > 0 ? (data.dailyAvg / data.peakValue) * 100 : 0} level="info" />
           </div>

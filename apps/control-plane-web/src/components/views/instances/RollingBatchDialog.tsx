@@ -254,7 +254,7 @@ function ProgressBar({ op }: { op: RollingOp }) {
   const pct = op.requested > 0 ? Math.round((done / op.requested) * 100) : 0
   return (
     <div>
-      <div className="mb-1 flex justify-between text-[11px] text-muted-foreground">
+      <div className="mb-1 flex justify-between text-meta text-muted-foreground">
         <span>{totalBatches(op)} {t('rolling.batches')}</span>
         <span className="font-mono">{done}/{op.requested}</span>
       </div>
@@ -268,7 +268,7 @@ function ProgressBar({ op }: { op: RollingOp }) {
 function Stat({ label, value, tone }: { label: string; value: number; tone?: 'success' | 'danger' }) {
   return (
     <div className="rounded-md border px-2 py-1.5">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="text-meta text-muted-foreground">{label}</p>
       <p className={cn('font-mono text-base font-semibold', tone === 'success' && 'text-status-success', tone === 'danger' && 'text-status-danger')}>{value}</p>
     </div>
   )

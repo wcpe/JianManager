@@ -340,7 +340,7 @@ function MarketCard({
 
       <div className="space-y-2.5 p-3">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', coverBgClass(meta.tone), coverFgClass(meta.tone))}>
+          <span className={cn('rounded-full px-2 py-0.5 text-micro font-medium', coverBgClass(meta.tone), coverFgClass(meta.tone))}>
             {meta.typeLabel}
           </span>
         </div>
@@ -351,7 +351,7 @@ function MarketCard({
 
         {/* 运行时需求：Java + RAM（推断得到才显示）。 */}
         {(meta.java || meta.ram) && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-muted-foreground">
             {meta.java && (
               <span className="inline-flex items-center gap-1">
                 <Coffee className="size-3.5" />
@@ -367,7 +367,7 @@ function MarketCard({
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+        <div className="flex items-center justify-between gap-2 text-micro text-muted-foreground">
           <span className="inline-flex items-center gap-1">
             <Clock className="size-3" />
             {new Date(updatedAt ?? '').toLocaleDateString()}
@@ -494,7 +494,7 @@ function ApplyTemplateDialog({
           <ScrollableDialogBody className="space-y-3 py-1">
             {/* 需求摘要 */}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', coverBgClass(meta.tone), coverFgClass(meta.tone))}>
+              <span className={cn('rounded-full px-2 py-0.5 text-micro font-medium', coverBgClass(meta.tone), coverFgClass(meta.tone))}>
                 {meta.typeLabel}
               </span>
               {meta.java && (
@@ -554,7 +554,7 @@ function ApplyTemplateDialog({
             {vars.length > 0 && (
               <div className="space-y-2 rounded-lg border border-dashed p-3">
                 <p className="text-xs font-medium text-foreground">{t('templates.market.variablesTitle')}</p>
-                <p className="text-[11px] text-muted-foreground">{t('templates.market.variablesHint')}</p>
+                <p className="text-meta text-muted-foreground">{t('templates.market.variablesHint')}</p>
                 {vars.map((v) => (
                   <div key={v} className="space-y-1">
                     <FieldLabel required htmlFor={`apply-var-${v}`}>
@@ -739,7 +739,7 @@ function CreateTemplateDialog({
                 aria-invalid={!!gate.show('startCommand', errors.startCommand)}
               />
               <FieldError error={gate.show('startCommand', errors.startCommand)} />
-              <p className="text-[11px] text-muted-foreground">{t('templates.market.variablesSyntaxHint')}</p>
+              <p className="text-meta text-muted-foreground">{t('templates.market.variablesSyntaxHint')}</p>
             </div>
             <div className="space-y-1.5">
               <FieldLabel htmlFor="tpl-url">{t('templates.downloadUrl')}</FieldLabel>

@@ -140,11 +140,11 @@ function PlayerRow({ name, actions }: { name: string; actions: ReactNode }) {
           拿来给玩家头像上色会读成「这人有问题」。 */}
       <span
         aria-hidden
-        className="grid size-7 shrink-0 place-items-center rounded-md bg-accent text-[11px] font-semibold text-primary"
+        className="grid size-7 shrink-0 place-items-center rounded-md bg-accent text-meta font-semibold text-primary"
       >
         {name.slice(0, 1).toUpperCase()}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{name}</span>
+      <span className="min-w-0 flex-1 truncate text-body font-medium">{name}</span>
       <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
     </li>
   )

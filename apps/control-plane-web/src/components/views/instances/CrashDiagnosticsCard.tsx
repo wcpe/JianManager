@@ -71,13 +71,13 @@ export default function CrashDiagnostics({ snapshots, trend, notify }: CrashDiag
   return (
     <div data-testid="crash-diagnostics" className={cn(snapshots.length > 0 && 'border-b last:border-b-0')}>
       {snapshots.length === 0 ? (
-        <div className="flex items-center gap-2 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-2 px-2.5 py-1.5 text-meta text-muted-foreground">
           <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-muted-foreground/40" />
           <span>{t('serverConsole.crashEmpty')}</span>
         </div>
       ) : (
         <>
-          <div className="flex items-center gap-1.5 px-2.5 pt-2 text-[11px] font-medium text-status-danger">
+          <div className="flex items-center gap-1.5 px-2.5 pt-2 text-meta font-medium text-status-danger">
             <FileWarning className="size-3.5" />
             {/* 标题独占一个元素：与右侧提示同处一个 div 会让 textContent 连在一起，破坏按名查询。 */}
             <span>{t('serverConsole.crashDiagnostics')}</span>
@@ -125,7 +125,7 @@ function CrashTrendPanel({ trend }: { trend: CrashTrend }) {
 
   return (
     <div data-testid="crash-trend" className="space-y-1.5 px-2.5 pt-2">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-muted-foreground">
         <span>{t('serverConsole.crashTrendTitle', { days: trend.days })}</span>
         <span className="font-mono text-foreground">{t('serverConsole.crashTrendTotal', { count: trend.total })}</span>
         {/* 时区口径必须显式声明：与同卡片快照行的本地时间并列时，不标注等于让人对错柱子。 */}
@@ -157,10 +157,10 @@ function CrashTrendPanel({ trend }: { trend: CrashTrend }) {
       )}
       {trend.topSignatures.length > 0 && (
         <div data-testid="crash-signature-aggregate" className="space-y-0.5">
-          <div className="text-[11px] text-muted-foreground">{t('serverConsole.crashSameSignature')}</div>
+          <div className="text-meta text-muted-foreground">{t('serverConsole.crashSameSignature')}</div>
           <ul className="space-y-0.5">
             {trend.topSignatures.map((s) => (
-              <li key={`${s.rootCause}:${s.signature}`} className="flex items-center gap-2 text-[11px]">
+              <li key={`${s.rootCause}:${s.signature}`} className="flex items-center gap-2 text-meta">
                 <span className="truncate font-mono text-muted-foreground" title={s.signature}>
                   {s.signature || t('serverConsole.crashUnknownSignature')}
                 </span>
@@ -181,7 +181,7 @@ function RootCauseBadge({ cause, count }: { cause: string; count?: number }) {
     <span
       data-testid="crash-root-cause"
       data-cause={cause}
-      className={cn('rounded-full px-2 py-0.5 text-[11px] font-medium', ROOT_CAUSE_TONE[cause] ?? ROOT_CAUSE_TONE.unknown)}
+      className={cn('rounded-full px-2 py-0.5 text-meta font-medium', ROOT_CAUSE_TONE[cause] ?? ROOT_CAUSE_TONE.unknown)}
     >
       {t(`serverConsole.crashCause.${cause}`, { defaultValue: cause })}
       {typeof count === 'number' && <span className="ml-1 font-mono">×{count}</span>}
@@ -249,16 +249,16 @@ function CrashSnapshotRow({
       {expanded && (
         <div className="space-y-2 border-t px-2.5 py-2">
           {snapshot.confidence !== undefined && snapshot.confidence > 0 && (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-meta text-muted-foreground">
               {t('serverConsole.crashConfidence', { percent: Math.round(snapshot.confidence * 100) })}
             </p>
           )}
           {evidence.length > 0 && (
             <div data-testid="crash-evidence" className="space-y-0.5">
-              <div className="text-[11px] text-muted-foreground">{t('serverConsole.crashEvidence')}</div>
+              <div className="text-meta text-muted-foreground">{t('serverConsole.crashEvidence')}</div>
               <ul className="space-y-0.5 rounded-sm bg-muted p-2">
                 {evidence.map((line, idx) => (
-                  <li key={`${idx}-${line}`} className="truncate font-mono text-[11px] text-foreground" title={line}>
+                  <li key={`${idx}-${line}`} className="truncate font-mono text-meta text-foreground" title={line}>
                     {line}
                   </li>
                 ))}
@@ -272,13 +272,13 @@ function CrashSnapshotRow({
                 <button
                   type="button"
                   onClick={() => void copySnapshot()}
-                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
                   <Copy className="size-3" />
                   {t('serverConsole.crashCopy')}
                 </button>
               </div>
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-[11px] leading-relaxed text-foreground">
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-meta leading-relaxed text-foreground">
                 {snapshot.tailOutput}
               </pre>
             </>
@@ -298,7 +298,7 @@ function CrashSnapshotRow({
 function CrashCorrelationBlock({ correlation }: { correlation: NonNullable<CrashSnapshot['correlation']> }) {
   const { t } = useTranslation()
   return (
-    <div data-testid="crash-correlation" className="space-y-0.5 text-[11px]">
+    <div data-testid="crash-correlation" className="space-y-0.5 text-meta">
       <div className="text-muted-foreground">{t('serverConsole.crashCorrelation')}</div>
       <ul className="space-y-0.5">
         {correlation.nearOom && (
