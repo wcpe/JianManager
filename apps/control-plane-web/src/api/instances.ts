@@ -26,6 +26,22 @@ export function isProvisioningInstance(inst: Pick<InstanceInfo, 'status' | 'stat
   return inst.status === 'STOPPED' && /^(搭建中|导入中|克隆中)/.test(inst.statusReason ?? '')
 }
 
+/**
+ * 实例是否正在「损毁重建」（FR-342）。
+ *
+ * 与 `isProvisioningInstance` 同族：都是**读后端写入 statusReason 的中文前缀**来判定在途长操作，
+ * 没有独立的状态字段。判据收敛到一处，避免同一信号在多个组件里各写一份前缀匹配
+ * （原先只有 `InstanceConsolePage` 内联了 `statusReason?.startsWith('重建中')`）。
+ *
+ * ⚠️ 已知脆弱点（本次只做前端收敛，不动后端契约）：后端 `provision*.go` / `proxy.go` 把该原因
+ * 固定写成「重建中：…」，前端只能靠这个前缀认。后端一旦改词（本地化、加前缀、改写措辞），
+ * 这里会**静默失效**——按钮不再禁用、进行中的原因被当成失败横幅渲染，且不会有任何测试变红。
+ * 真要根治需要后端给出结构化字段（如 `statusReasonCode` / `operation`），前端再改为读它。
+ */
+export function isRebuildingInstance(inst: Pick<InstanceInfo, 'status' | 'statusReason'>): boolean {
+  return inst.status === 'DAMAGED' && (inst.statusReason ?? '').startsWith('重建中')
+}
+
 /** 实例列表多维筛选参数（FR-047）：任意组合，留空表示该维度不过滤。 */
 export interface InstanceListParams {
   nodeId?: number

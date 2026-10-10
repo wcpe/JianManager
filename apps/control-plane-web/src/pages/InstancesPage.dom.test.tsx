@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -75,6 +75,13 @@ function collectInstanceRequests() {
     urls,
     stop: () => server.events.removeListener('request:start', listener),
   }
+}
+
+/** 已下发的 `/instances/search` 请求的 `q` 参数序列（无 q 的请求记为空串）。 */
+function searchQueries(urls: string[]): string[] {
+  return urls
+    .filter((url) => new URL(url).pathname === '/api/v1/instances/search')
+    .map((url) => new URL(url).searchParams.get('q') ?? '')
 }
 
 describe('InstancesPage（mock 假后端）', () => {
@@ -223,6 +230,107 @@ describe('InstancesPage（mock 假后端）', () => {
 
     expect(screen.getByRole('button', { name: '展开筛选' })).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByRole('combobox', { name: '群组' })).not.toBeInTheDocument()
+  })
+
+  /**
+   * 搜索输入必须防抖（项目硬规则：服务端搜索不得逐键下发）。
+   *
+   * 搜索词直接进 queryKey，不防抖就是「每敲一个字符一次 /instances/search」：1000+ 实例下
+   * 既是请求风暴，也让列表在输入过程中反复闪回加载态。本用例连打 3 个字符，断言
+   * ① 中间态（'s' / 'su'）从未下发；② 落定值 'sur' 只下发一次。
+   */
+  it('搜索输入防抖：连续键入只下发一次落定后的服务端搜索', async () => {
+    const user = userEvent.setup()
+    // 把搜索缩到 5 条：本用例断言的是「键入与下发之间的时间关系」，而种子 1000+ 实例下
+    // 每次键入的整页重渲染在 jsdom 里可能就要几百毫秒——那会把 300ms 防抖窗口吃掉，
+    // 让用例变成对机器快慢的赌注，而不是对防抖行为的断言。
+    server.use(
+      http.get(API('/instances/search'), () =>
+        HttpResponse.json({
+          items: Array.from({ length: 5 }, (_, i) => ({
+            id: i + 1,
+            uuid: `inst-${i + 1}`,
+            nodeId: 1,
+            name: `srv-${i + 1}`,
+            type: 'minecraft_java',
+            role: 'backend',
+            processType: 'daemon',
+            status: 'STOPPED',
+            startCommand: '',
+            workDir: '/srv',
+            serverPort: 0,
+            autoStart: false,
+            autoRestart: false,
+            tags: '',
+            createdAt: new Date().toISOString(),
+          })),
+          total: 5,
+          page: 1,
+          pageSize: 200,
+        }),
+      ),
+    )
+    const requests = collectInstanceRequests()
+    try {
+      renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
+      await screen.findByTestId('instances-table-virtual')
+      await screen.findByText('srv-1')
+
+      const box = screen.getByRole('searchbox', { name: '搜索实例' })
+      // 逐字键入（每字之间只让 1ms，远小于 300ms 防抖窗口）：真实用户按键本就是独立任务，
+      // 若把三次 change 塞进同一批，只有最后一次进查询 key，用例就测不出「逐键下发」了。
+      await user.type(box, 'sur', { delay: 1 })
+
+      // 落定前不得有任何带 q 的请求（中间态一个都不许漏出去）。
+      expect(searchQueries(requests.urls).filter((q) => q !== '')).toEqual([])
+
+      await waitFor(() => expect(searchQueries(requests.urls)).toContain('sur'))
+      // 只有落定值那一次：'s' / 'su' 永不出现，且 'sur' 不重复下发。
+      expect(searchQueries(requests.urls).filter((q) => q !== '')).toEqual(['sur'])
+    } finally {
+      requests.stop()
+    }
+  })
+
+  /**
+   * 搜索键入写 URL 必须用 replace（不得 push）。
+   *
+   * 逐键 push 会把历史栈塞满：输 10 个字符后要按 11 次「返回」才离开本页。
+   */
+  it('搜索键入写 URL 走 replace，不往历史栈追加记录', async () => {
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    try {
+      renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
+      await screen.findByTestId('instances-table-virtual')
+      pushSpy.mockClear()
+      replaceSpy.mockClear()
+
+      const box = screen.getByRole('searchbox', { name: '搜索实例' })
+      fireEvent.change(box, { target: { value: 'a' } })
+      fireEvent.change(box, { target: { value: 'ab' } })
+
+      expect(new URLSearchParams(window.location.search).get('q')).toBe('ab')
+      expect(replaceSpy).toHaveBeenCalled()
+      expect(pushSpy).not.toHaveBeenCalled()
+    } finally {
+      pushSpy.mockRestore()
+      replaceSpy.mockRestore()
+    }
+  })
+
+  /**
+   * 表头「全选」的作用域必须写进可访问名。
+   *
+   * 列表分页加载，`allIds` 只覆盖**已加载页**，而页面上同时显示「已加载 N / 共 M」；
+   * 只叫「全选」会让用户（尤其读屏用户）理解成全库全选，批量删除的作用域与理解不符。
+   */
+  it('表头全选框的可访问名写明作用域（只覆盖已加载页）', async () => {
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
+    await screen.findByTestId('instances-table-virtual')
+
+    const checkbox = screen.getByRole('checkbox', { name: /全选/ })
+    expect(checkbox).toHaveAccessibleName(/已加载 \d+ \/ 共 \d+/)
   })
 
   it('返回列表时恢复虚拟列表滚动位置', async () => {
@@ -396,9 +504,15 @@ describe('InstancesPage（mock 假后端）', () => {
     // 【关键】把窗口滚到展开行之后：此后展开行与追加行都不在 DOM 里（虚拟窗口已卸载它们），
     // 「内容总高」若仍然涨出追加行的高度，就只可能来自模型的逐行高度——展开行真的被计入了。
     // （只断言「展开后总高变大」是不够的：追加行本身就在窗口里时，它无论如何都会被算进 DOM。）
+    //
+    // 断言必须 waitFor：滚动位置由 `useVirtualRows` 的 onScroll 经 requestAnimationFrame
+    // 按帧合并后写入 metrics（见 `lib/shared/virtual-list.ts` 的「为什么必须按帧合并」），
+    // 同步断言读到的仍是滚动前的窗口——窗口还没动，展开行当然还在 DOM 里。
     surface.scrollTop = 6000
     fireEvent.scroll(surface)
-    expect(surface.querySelectorAll(`tbody tr[style*="height: ${INSTANCE_EXPANDED_ROW_HEIGHT}px"]`)).toHaveLength(0)
+    await waitFor(() =>
+      expect(surface.querySelectorAll(`tbody tr[style*="height: ${INSTANCE_EXPANDED_ROW_HEIGHT}px"]`)).toHaveLength(0),
+    )
 
     // 平铺表每一项都是实例行，故模型总高 = N × 实例行高 + 追加行高。
     const total = Number(surface.dataset.totalCount)
@@ -420,9 +534,12 @@ describe('InstancesPage（mock 假后端）', () => {
     await user.click((await screen.findAllByRole('button', { name: '管理后端' }))[0])
     await screen.findByText(/已注册后端|暂无已注册后端/)
 
+    // 同上：滚动位置经 rAF 合并后才进窗口模型，同步断言会读到未滚动的旧窗口。
     surface.scrollTop = 3000
     fireEvent.scroll(surface)
-    expect(surface.querySelectorAll(`tbody tr[style*="height: ${INSTANCE_EXPANDED_ROW_HEIGHT}px"]`)).toHaveLength(0)
+    await waitFor(() =>
+      expect(surface.querySelectorAll(`tbody tr[style*="height: ${INSTANCE_EXPANDED_ROW_HEIGHT}px"]`)).toHaveLength(0),
+    )
 
     const loaded = Number(/已加载 (\d+)/.exec(screen.getByTestId('instances-loaded-count').textContent ?? '')?.[1])
     expect(loaded).toBeGreaterThan(0)

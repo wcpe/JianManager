@@ -4,7 +4,7 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { mockInject } from '@jianmanager/devmock/inject'
+import { clearInjections, mockInject } from '@jianmanager/devmock/inject'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import { useAuthStore } from '@/stores/auth'
@@ -257,5 +257,54 @@ describe('NodesPage（mock 假后端）', () => {
       expect(screen.queryByText('alpha')).not.toBeInTheDocument()
     })
     expect(within(document.body).queryByText('beta')).not.toBeInTheDocument()
+  })
+
+  /**
+   * `/nodes` 取数失败必须与「暂无节点」空态分开。
+   *
+   * 只判 `isLoading` 时失败会渲染成「暂无节点」，运营看到的是「节点都没了」——
+   * 这是会直接导致误判集群规模的假信号。错误态还须给出重试入口。
+   */
+  it('注入 500：列表显示错误态而非「暂无节点」，重试可恢复', async () => {
+    loginMockUser()
+    stubInstances()
+    mockInject('get', '/nodes', { kind: 'status', status: 500 })
+    const user = userEvent.setup()
+    renderWithProviders(<NodesPage />)
+
+    expect(await screen.findByTestId('nodes-list-error')).toBeInTheDocument()
+    expect(screen.queryByText('暂无节点')).not.toBeInTheDocument()
+
+    // 重试：撤销注入后点「刷新」，列表恢复出 seed 节点。
+    clearInjections()
+    await user.click(screen.getByRole('button', { name: '刷新' }))
+    expect(await screen.findByText('beta')).toBeInTheDocument()
+    expect(screen.queryByTestId('nodes-list-error')).not.toBeInTheDocument()
+  })
+
+  /**
+   * 切到「归档」视图不应再请求实例聚合。
+   *
+   * 归档列表只显示名称/主机/下线时间，用不到各节点实例数；原先无条件取数，
+   * 切到归档仍照发一次 `/instances/aggregate`。
+   */
+  it('归档视图不请求 /instances/aggregate（按视图门控取数）', async () => {
+    loginPlatformAdmin()
+    stubInstances()
+    const aggregateCalls: string[] = []
+    const listener = ({ request }: { request: Request }) => {
+      const url = new URL(request.url)
+      if (url.pathname === '/api/v1/instances/aggregate') aggregateCalls.push(url.toString())
+    }
+    server.events.on('request:start', listener)
+    try {
+      // 走详情态（?node=）才会渲染左栏归档列表（列表态卡片墙用的是 active 列表）。
+      renderWithProviders(<NodesPage />, { route: '/nodes?view=archive&node=3' })
+      expect((await screen.findAllByText('gamma-archived')).length).toBeGreaterThan(0)
+      // 归档视图已就绪（列表渲染出来）后，聚合请求数必须仍为 0。
+      expect(aggregateCalls).toEqual([])
+    } finally {
+      server.events.removeListener('request:start', listener)
+    }
   })
 })

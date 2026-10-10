@@ -46,6 +46,7 @@ void testI18n.use(initReactI18next).init({
           unlimited: '不限', created: '实例已创建', createFailed: '创建实例失败',
         },
         instanceDetail: { processType: '启动方式', startCommand: '启动命令', autoRestart: '崩溃自动重启' },
+        validation: { requiredMark: '必填' },
       },
     },
   },
@@ -171,5 +172,85 @@ describe('InstanceWizardPage（FR-230 创建实例向导）', () => {
 
     await waitFor(() => expect(notify).toHaveBeenCalledWith('error', '节点容量不足'))
     expect(onCancel).not.toHaveBeenCalled()
+  })
+
+  /**
+   * `Field` → `FieldLabel` 必须真正与输入框关联（`htmlFor`/`id`）。
+   *
+   * `FieldLabel` 渲染的是 `<label>`，但没有 `htmlFor` 时它不与任何控件关联——本页原状即如此
+   * （标签与输入框只是兄弟节点），于是每个文本输入框在读屏里都没有名字。
+   */
+  it('文本输入框有可访问名（标签与控件真正关联）', async () => {
+    const user = userEvent.setup()
+    renderWizard({ initialNodeId: '1' })
+
+    // 基本步：实例名称。
+    const nameInput = screen.getByLabelText(/实例名称/)
+    expect(nameInput).toHaveAttribute('placeholder', 'Survival Server')
+    await user.type(nameInput, '新服')
+    expect(nameInput).toHaveValue('新服')
+
+    // 启动步：启动命令（非 docker 时必填，同样走 Field）。
+    await user.click(screen.getByRole('button', { name: /下一步/ }))
+    const cmdInput = screen.getByLabelText(/启动命令/)
+    expect(cmdInput).toHaveAttribute('placeholder', 'java -Xmx2G -jar server.jar nogui')
+    expect(await screen.findByText('怎么启动')).toBeInTheDocument()
+  })
+
+  /** 步骤指示器要标出「当前步骤」（原先只靠底色与字重表达，读屏听不出来）。 */
+  it('步骤指示器用 aria-current="step" 标出当前步骤', async () => {
+    const user = userEvent.setup()
+    renderWizard({ initialNodeId: '1' })
+
+    const steps = screen.getAllByRole('listitem')
+    expect(steps[0]).toHaveAttribute('aria-current', 'step')
+    expect(steps[1]).not.toHaveAttribute('aria-current')
+
+    // 推进到启动步后，当前标记随之移动。
+    await user.type(screen.getByPlaceholderText('Survival Server'), '新服')
+    await user.click(screen.getByRole('button', { name: /下一步/ }))
+    const after = screen.getAllByRole('listitem')
+    expect(after[1]).toHaveAttribute('aria-current', 'step')
+    expect(after[0]).not.toHaveAttribute('aria-current')
+  })
+
+  /**
+   * docker 环境变量行是可编辑行，key 必须稳定。
+   *
+   * 用下标当 key 时，删掉中间一行会让其后每行的 DOM 身份前移一格：正在编辑的输入框
+   * （焦点、光标位置、输入法组合态）会落到下一条数据上——用户删一行，结果改了别人的内容。
+   */
+  it('docker 环境变量行：删中间行后其余行的 DOM 身份不变', async () => {
+    const user = userEvent.setup()
+    renderWizard({
+      initialNodeId: '1',
+      dockerCheck: { fetching: false, available: true, version: '24.0', blocked: false },
+      onProcessTypeChange: vi.fn(),
+    })
+
+    await user.type(screen.getByPlaceholderText('Survival Server'), '新服')
+    await user.click(screen.getByRole('button', { name: /下一步/ }))
+    await user.click(screen.getByText('daemon (启用)'))
+    await user.click(await screen.findByText('docker'))
+    await user.click(screen.getByRole('button', { name: /下一步/ }))
+
+    // 一键预设（EULA=TRUE）+ 再手动加两行 → 共 3 行。
+    await user.click(await screen.findByRole('button', { name: /应用预设/ }))
+    await user.click(screen.getByRole('button', { name: '添加变量' }))
+    await user.click(screen.getByRole('button', { name: '添加变量' }))
+
+    const keysBefore = screen.getAllByLabelText('变量名')
+    expect(keysBefore).toHaveLength(3)
+    const lastBefore = keysBefore[2]
+    const thirdValueBefore = screen.getAllByLabelText('变量值')[2]
+
+    // 删中间那行。
+    await user.click(screen.getAllByRole('button', { name: '删除' })[1])
+
+    const keysAfter = screen.getAllByLabelText('变量名')
+    expect(keysAfter).toHaveLength(2)
+    // 关键：原来的第 3 行仍是同一个 DOM 节点（下标 key 会让它变成新的第 2 行节点）。
+    expect(keysAfter[1]).toBe(lastBefore)
+    expect(screen.getAllByLabelText('变量值')[1]).toBe(thirdValueBefore)
   })
 })

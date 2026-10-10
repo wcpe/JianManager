@@ -179,8 +179,12 @@ describe('InstanceLibrary（mock 假后端）', () => {
     surface.scrollTop = 30000
     fireEvent.scroll(surface)
 
-    // 窗口确实前移了（证明下面那条断言不是假绿）。
-    expect(screen.queryByText('srv-2')).not.toBeInTheDocument()
+    // 滚动位置经 rAF 合帧后才进窗口模型（见 lib/shared/virtual-list.ts 的 onScroll），
+    // 故需等一拍——同步断言会在窗口尚未前移时读到旧集合，得到与预期相反的结论。
+    await waitFor(() => {
+      // 窗口确实前移了（证明下面那条断言不是假绿）。
+      expect(screen.queryByText('srv-2')).not.toBeInTheDocument()
+    })
     // 钉住：源行已不在可视窗口内，但仍须留在 DOM。
     expect(screen.getByText('srv-1')).toBeInTheDocument()
   })

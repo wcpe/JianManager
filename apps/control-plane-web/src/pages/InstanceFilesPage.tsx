@@ -18,11 +18,14 @@ export default function InstanceFilesPage() {
   const path = searchParams.get('path') ?? ''
   const file = searchParams.get('file') ?? undefined
   // mode=manage 预留给 Config；MVP 仅 files（spec）
-  const { data: instance } = useInstance(
+  //
+  // `isError` 必须消费：实例 404 / 已被删除时若只把标题回退成 `#id` 照常渲染整页，
+  // 用户看到的是一个「看起来正常」的文件浏览器，点进去每一步都失败。
+  const { data: instance, isError } = useInstance(
     Number.isFinite(instanceId) && instanceId > 0 ? instanceId : 0,
   )
 
-  if (!Number.isFinite(instanceId) || instanceId <= 0) {
+  if (!Number.isFinite(instanceId) || instanceId <= 0 || isError) {
     return <p className="p-4 text-muted-foreground">{t('serverConsole.noInstance')}</p>
   }
 

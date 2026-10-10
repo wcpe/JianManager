@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { Children, isValidElement, cloneElement, useId, useState, type ReactElement, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Boxes, ChevronLeft, ChevronRight, Check, Plus, X } from 'lucide-react'
 
@@ -41,8 +41,29 @@ type StepKey = 'basic' | 'launch' | 'advanced' | 'review'
 const inputClass =
   'w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive'
 
+/**
+ * docker 环境变量键值对行。
+ *
+ * `id` 只服务于渲染 key（增删行时保住其余行的 DOM 身份），不参与提交载荷——
+ * 载荷由 `envVarsFromPairs` 只取 `key`/`value` 组装。
+ */
+interface EnvVarPair {
+  id: string
+  key: string
+  value: string
+}
+
+/** 环境变量行的 id 序号（模块级单调递增即可：同一页面生命周期内唯一）。 */
+let envPairSeq = 0
+
+/** 铸一个新的环境变量行 id。 */
+function nextEnvPairId(): string {
+  envPairSeq += 1
+  return `env-${envPairSeq}`
+}
+
 /** 把 docker 环境变量键值对收敛为对象（去空键、key 去首尾空格）；无有效项返回 undefined。 */
-function envVarsFromPairs(pairs: { key: string; value: string }[]): Record<string, string> | undefined {
+function envVarsFromPairs(pairs: EnvVarPair[]): Record<string, string> | undefined {
   const out: Record<string, string> = {}
   for (const p of pairs) {
     const k = p.key.trim()
@@ -123,7 +144,7 @@ export function InstanceWizardPage({
   const [templateId, setTemplateId] = useState(initialTemplateId)
   const [jdkId, setJdkId] = useState('')
   // docker 环境变量键值对（FR-236）：一键 Minecraft 预设注入 EULA=TRUE；可手动增删。
-  const [envPairs, setEnvPairs] = useState<{ key: string; value: string }[]>([])
+  const [envPairs, setEnvPairs] = useState<EnvVarPair[]>([])
   const [pending, setPending] = useState(false)
   const gate = useFieldGate()
 
@@ -192,7 +213,7 @@ export function InstanceWizardPage({
   const applyMinecraftDockerPreset = () => {
     setType('minecraft_java')
     setImage('itzg/minecraft-server:latest')
-    setEnvPairs([{ key: 'EULA', value: 'TRUE' }])
+    setEnvPairs([{ id: nextEnvPairId(), key: 'EULA', value: 'TRUE' }])
     setStartCommand('')
   }
 
@@ -253,7 +274,9 @@ export function InstanceWizardPage({
       {/* 步骤指示器 */}
       <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
         {steps.map((k, i) => (
-          <li key={k} className="flex items-center gap-2">
+          // aria-current="step" 标出「当前步骤」：原先当前步骤只靠底色与字重表达，
+          // 读屏用户听不出自己在第几步（列表项顺序也只能推出相对位置）。
+          <li key={k} aria-current={i === safeIdx ? 'step' : undefined} className="flex items-center gap-2">
             <span
               className={cn(
                 'flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold',
@@ -416,12 +439,33 @@ export function InstanceWizardPage({
   )
 }
 
-/** 字段壳：标签 + 必填星 + 子控件 + 错误。 */
+/**
+ * 字段壳：标签 + 必填星 + 子控件 + 错误。
+ *
+ * **可访问名**：`FieldLabel` 渲染的是 `<label>`，但没有 `htmlFor` 时它不与任何控件关联——
+ * 本页原状即如此（标签与输入框只是兄弟节点），于是每个文本输入框在读屏里都没有名字。
+ * 这里给子节点里的第一个文本控件注入 `useId()` 生成的 id，并把同一个 id 交给
+ * `FieldLabel htmlFor`，两者才真正绑定。
+ *
+ * 子节点可能是数组（输入框后面还跟一行提示文字，如启动命令 / 磁盘限额），故按
+ * `Children.toArray` 展平后查找，而不是只看单个 `children`。非文本控件（Combobox 等）
+ * 不注入：它们的可访问名由各自组件负责，硬塞 id 只会造出指向不存在元素的 dangling `htmlFor`。
+ */
 function Field({ label, required, error, children }: { label: string; required?: boolean; error?: string; children: ReactNode }) {
+  const controlId = useId()
+  const items = Children.toArray(children)
+  const textControlIndex = items.findIndex((child) => isValidElement(child) && child.type === 'input')
+  const linked = textControlIndex >= 0
   return (
     <div>
-      <FieldLabel required={required}>{label}</FieldLabel>
-      {children}
+      <FieldLabel required={required} htmlFor={linked ? controlId : undefined}>{label}</FieldLabel>
+      {linked
+        ? items.map((child, i) =>
+            i === textControlIndex
+              ? cloneElement(child as ReactElement<{ id?: string }>, { id: controlId })
+              : child,
+          )
+        : children}
       <FieldError error={error} />
     </div>
   )
@@ -442,18 +486,21 @@ function EnvVarsEditor({
   pairs,
   onChange,
 }: {
-  pairs: { key: string; value: string }[]
-  onChange: (p: { key: string; value: string }[]) => void
+  pairs: EnvVarPair[]
+  onChange: (p: EnvVarPair[]) => void
 }) {
   const { t } = useTranslation()
-  const setAt = (i: number, patch: Partial<{ key: string; value: string }>) =>
+  const setAt = (i: number, patch: Partial<EnvVarPair>) =>
     onChange(pairs.map((p, idx) => (idx === i ? { ...p, ...patch } : p)))
   return (
     <Field label={t('instances.dockerEnvVars')}>
       <div className="mt-1 space-y-2">
         {pairs.length === 0 && <p className="text-xs text-muted-foreground">{t('instances.dockerEnvEmpty')}</p>}
         {pairs.map((p, i) => (
-          <div key={i} className="flex items-center gap-2">
+          // key 用行自己的稳定 id，不用下标：这是**可编辑行**，删掉中间一行时下标会让其后
+          // 每一行的 DOM 身份前移一格——正在编辑的输入框（焦点、光标位置、输入法组合态）
+          // 会落到下一条数据上，用户删一行却把别人的内容改了。
+          <div key={p.id} className="flex items-center gap-2">
             <input
               value={p.key}
               onChange={(e) => setAt(i, { key: e.target.value })}
@@ -479,7 +526,7 @@ function EnvVarsEditor({
             </button>
           </div>
         ))}
-        <Button type="button" size="sm" variant="outline" onClick={() => onChange([...pairs, { key: '', value: '' }])}>
+        <Button type="button" size="sm" variant="outline" onClick={() => onChange([...pairs, { id: nextEnvPairId(), key: '', value: '' }])}>
           <Plus className="size-4" />
           {t('instances.dockerEnvAdd')}
         </Button>
