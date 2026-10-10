@@ -52,8 +52,17 @@ type reconcileVLFixture struct {
 	rows         []reconcileVLRow
 	inserts      [][]byte
 	statsQueries int
+	// insertAttempts 统计插入请求次数（含被 failInsert / silentDropInsert 拦下的那些）：
+	// 「循环重写了多少次」靠它可数，而不是靠落库行数（后者在 drop 形态下恒为 0）。
+	insertAttempts int
 	// stallStats 为 true 时 stats 查询挂起直到请求被取消（模拟「对账不可信」）。
 	stallStats bool
+	// failInsert 为 true 时插入接口返回 500（模拟「写入直接失败」：外部条件类失败）。
+	failInsert bool
+	// silentDropInsert 为 true 时插入接口返回 200 但**不落任何行**
+	//（模拟「写入自称成功、数据却永远不可见」= 2026-10-09 生产循环的形态：
+	// `投影写入结束 status=200` 之后 `投影校验完成` 恒报 not fully visible）。
+	silentDropInsert bool
 }
 
 func (f *reconcileVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -64,9 +73,21 @@ func (f *reconcileVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/insert/jsonline":
 		payload, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
-		f.inserts = append(f.inserts, payload)
-		f.rows = append(f.rows, parseReconcileRows(payload)...)
+		fail := f.failInsert
+		drop := f.silentDropInsert
+		f.insertAttempts++ // 无论落不落行都计：这是「循环重写了多少次」的直接读数
+		if !fail && !drop {
+			f.inserts = append(f.inserts, payload)
+			f.rows = append(f.rows, parseReconcileRows(payload)...)
+		}
 		f.mu.Unlock()
+		if fail {
+			// 失败必须**可观测且非 2xx**：调用方据状态与错误判定"未落库"，
+			// 绝不能让失败看起来像成功（这是「不把失败伪装成成功」的第一道事实来源）。
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		// drop：**声称成功**但数据不可见 —— 这正是生产循环的形态（校验随后必然失败）。
 		w.WriteHeader(http.StatusOK)
 	case "/select/logsql/query":
 		f.serveContentQuery(w, r)
@@ -135,6 +156,16 @@ func (f *reconcileVLFixture) insertCount() int {
 	return len(f.inserts)
 }
 
+// insertAttemptCount 返回**插入请求次数**（含被 failInsert / silentDropInsert 拦下的）。
+//
+// 为什么需要它（与 insertCount 的区别）：在 `silentDropInsert` 形态（写入自称成功、数据不可见）
+// 下没有任何行落库，`insertCount` 恒不增长 —— 而「它到底重写了几遍」正是循环重建的核心读数。
+func (f *reconcileVLFixture) insertAttemptCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.insertAttempts
+}
+
 func (f *reconcileVLFixture) statsQueryCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -159,6 +190,13 @@ func (f *reconcileVLFixture) setStallStats(stall bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stallStats = stall
+}
+
+// rowCount 返回当前 VL 中的行数（只读；供幂等用例断言"前提确实成立"）。
+func (f *reconcileVLFixture) rowCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.rows)
 }
 
 // deleteDay 删除某 UTC 天的全部记录（模拟「人为删掉 VL 某天数据」）。

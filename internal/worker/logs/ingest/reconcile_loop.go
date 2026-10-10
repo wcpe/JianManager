@@ -377,9 +377,45 @@ func (m *Manager) reconcileOneCandidate(roundCtx context.Context, candidate reco
 		return
 	}
 	result.CheckedSources++
+	if m.reconcileCheckedHook != nil {
+		m.reconcileCheckedHook(candidate.key)
+	}
 	if len(expectation.Days) == 0 {
 		// 空源（无非空天）：没有可对账的面，既不计缺失也不重发。
 		result.Skipped++
+		return
+	}
+	m.mu.Lock()
+	saved := m.state.Sources[candidate.key]
+	inflight := m.publicationInflight[candidate.key]
+	m.mu.Unlock()
+	if saved.PublicationPending {
+		if inflight != 0 {
+			result.Skipped++
+			return
+		}
+		// 遗留 pending 不靠新输入唤醒；这里**只登记**一次「确认 + 必要时重建」的异步任务，
+		// 由重建 worker 承担那份 O(全量) 的重活（确认遍历全量事件 + 逐天逐字段查询）。
+		//
+		// 2026-10-09 改动（原为内联 `tryConfirmPendingPublicationCtx` → `replayMissingDaysCtx`）：
+		// 生产现场该段跑在对账轮 goroutine 上，单次「读 57 万条 + 逐天校验」以分钟计，
+		// 期间与采集轮争算力与 VL 容量（`inst:220/file` 46 次 `publication_pending` 回退）。
+		// 登记是 O(1) ⇒ 对账轮（跑在进程内、与采集同档）不再为重建买单。
+		//
+		// **不静默**：登记失败（退避/已放弃/队列满）一律记进本轮 Errors，语义与「重发失败」同类
+		// ——既不假装已重建，也不丢证据。
+		days := reconcileExpectationDays(expectation)
+		ok, skipReason := m.scheduleRebuildConfirmPendingAsync(candidate.source, days, "pending_unconfirmed")
+		if !ok {
+			result.Errors = appendReconcileError(result.Errors,
+				"pending_rebuild_scheduled=false:"+candidate.key+":"+skipReason)
+			return
+		}
+		// **只计源、不计天**：此刻只知道「可能缺失的天」（`days` 是该源有内容的全部天），
+		// 真正要重发哪几天由 worker 侧的内容级确认决定。把 `len(days)` 记成 ResentDays 会
+		// 虚报重发量（读数必须如实，否则排障时会被"重发了 N 天却没写入"误导）。
+		// 实际发布天数见 `RebuildLastResult`（真实结论）与 `RebuildStats`（累计读数）。
+		result.ResentSources++
 		return
 	}
 	report := m.reconcileWithExpectation(roundCtx, candidate.source, candidate.key, expectation, queryCfg)
@@ -396,14 +432,32 @@ func (m *Manager) reconcileOneCandidate(roundCtx context.Context, candidate reco
 			result.Missing = append(result.Missing, candidate.key+":"+day)
 		}
 		sort.Strings(result.Missing)
-		if err := m.replayMissingDays(candidate.source, report.MissingDays); err != nil {
+		// 缺失天同样**只登记**：`replayMissingDaysCtx` 内联时会做「取权威全量 + 逐天写 VL +
+		// 逐字段校验」，在生产单源 57 万条时以十分钟计（`inst:220/file` 的循环重建正是它）。
+		ok, skipReason := m.scheduleRebuildAsync(candidate.source, report.MissingDays, "reconcile_missing")
+		if !ok {
 			result.Errors = appendReconcileError(result.Errors,
-				"replay_failed:"+candidate.key+":"+err.Error())
+				"replay_scheduled=false:"+candidate.key+":"+skipReason)
 			return
 		}
 		result.ResentSources++
 		result.ResentDays += len(report.MissingDays)
 	}
+}
+
+// reconcileExpectationDays 返回该源「有内容的 UTC 天」列表（升序）。
+//
+// 用途：pending 分支的重建面必须覆盖「可能缺失的全部天」——判定尚未做（确认在 worker 上），
+// 故取有内容的全部天。这比凭空猜一天更保守：多算的天在 worker 侧会先经
+// `tryConfirmPendingPublicationCtx` 的内容级取证，已完整可见的天不会产生任何写入。
+func reconcileExpectationDays(expectation reconcileExpectation) []string {
+	out := make([]string, 0, len(expectation.Days))
+	for _, day := range expectation.Days {
+		if expectation.Counts[day] > 0 {
+			out = append(out, day)
+		}
+	}
+	return sortUTCDays(out)
 }
 
 // appendReconcileError 追加一条错误分类（有界，超出部分只累计计数）。
@@ -641,77 +695,32 @@ func (m *Manager) canonicalDayCounts(key string, source SourceConfig) (reconcile
 // 非缺失天上「VL 可见条数 ≥ 应有条数」，缺失天刚被写入并逐字段校验通过——合起来即
 // 「该源全量数据已在 VL 可见」，正是 releaseRecovery 要求的责任转移前提。
 func (m *Manager) replayMissingDays(source SourceConfig, missingDays []string) error {
+	return m.replayMissingDaysCtx(context.Background(), source, missingDays)
+}
+
+func (m *Manager) replayMissingDaysCtx(ctx context.Context, source SourceConfig, missingDays []string) error {
 	if len(missingDays) == 0 {
 		return nil
 	}
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	m.mu.Lock()
-	saved := m.state.Sources[key]
-	m.mu.Unlock()
-	events, err := m.canonicalRecoveryEvents(key, saved)
-	if err != nil {
-		return fmt.Errorf("ingest: 常驻对账重发取权威集合失败: %w", err)
+	// **单实现**：与异步重建 worker 共用 rebuildDaysInner（同一套发布语义、同一套切片预算、
+	// 同一套待发布登记）。这里不传 yield —— 同步调用方要求「返回即已推进」，让出会拖长它；
+	// 而需要让出以保护采集主线的路径（对账轮 / 启动恢复）已经改走异步调度器
+	// （见 reconcileOneCandidate 的 scheduleRebuildAsync），故本入口只剩测试与
+	// 需要同步语义的既有调用方。
+	//
+	// 保留本入口的理由：它是既有回归（d12 / pr61 / gap_autoresolve 等）用来**确定性**断言
+	// 「切片预算 / 待发布登记 / 回收责任不提前推进」的同步路径——把它换成异步会让那些断言
+	// 变成时序竞猜，那才是真正的覆盖度下降。
+	out := m.rebuildDaysInner(ctx, &rebuildRequest{
+		key: source.LogSourceID + "/" + source.SourceGeneration, source: source, days: missingDays,
+	}, nil)
+	if out.Err != nil {
+		return out.Err
 	}
-	if len(events) == 0 {
-		return nil
+	if len(out.Days) > 0 {
+		slog.Info("常驻增量对账已重发缺失天",
+			"source", source.LogSourceID+"/"+source.SourceGeneration, "days", out.Days)
 	}
-	writeEvents, err := eventsForDays(source, events, missingDays)
-	if err != nil {
-		return err
-	}
-	if len(writeEvents) == 0 {
-		// 计划的天在权威集合里没有任何事件：不生成空代次（与启动恢复的语义一致）。
-		return nil
-	}
-	generation := m.nextFreeProjectionGeneration(source, saved.ProjectionGeneration)
-	m.mu.Lock()
-	saved = m.state.Sources[key]
-	saved.ProjectionGeneration = generation
-	m.state.Sources[key] = saved
-	m.mu.Unlock()
-	// 按**天**切片推进（预算可配）：每天写完即发布该天；预算用尽的剩余天留给下一轮——下一轮
-	// 的对账会重新发现它们仍是缺失天（已发布的天条数已够，不会再被判缺失），因此**无需游标状态**，
-	// 天然可续且不重不漏。整窗完成前**不推进回收责任**（releaseRecovery 要求全窗口内容级保证）。
-	budget := m.replayBudget
-	startedAt := time.Now()
-	published := make([]string, 0, len(missingDays))
-	remaining := sortUTCDays(missingDays)
-	for len(remaining) > 0 {
-		if sent := len(published); sent >= budget.MaxDays || time.Since(startedAt) >= budget.MaxDuration {
-			slog.Info("常驻对账重发受切片预算约束提前收束（剩余天下一轮续跑）",
-				"source", key, "publishedDays", published, "remainingDays", remaining)
-			return nil
-		}
-		day := remaining[0]
-		if err := m.ensureVLReady(context.Background(), source); err != nil {
-			return fmt.Errorf("ingest: 常驻对账重发前 VL 未就绪（本轮不重发）: %w", err)
-		}
-		dayEvents, err := eventsForDays(source, events, []string{day})
-		if err != nil {
-			return err
-		}
-		if len(dayEvents) == 0 {
-			remaining = remaining[1:]
-			continue
-		}
-		plan := projectionWritePlan{Write: dayEvents, Replace: true, Days: []string{day}}
-		if _, err := m.writeProjectionPlan(source, events, generation, plan); err != nil {
-			return fmt.Errorf("ingest: 常驻对账重发失败: %w", err)
-		}
-		published = append(published, day)
-		remaining = remaining[1:]
-	}
-	if len(remaining) > 0 {
-		// 切片没做完：数据面已发布完成的天是确定的；回收责任留到整窗完成之后再推进。
-		return nil
-	}
-	m.resolveGapsLandedByDelivery(source, writeEvents)
-	if err := m.releaseRecovery(source, events); err != nil {
-		// best-effort：数据已落库这一事实不受影响，下一轮采集路径会再试。
-		slog.Warn("常驻对账重发后推进回收责任失败（下轮重试）", "source", key, "error", err)
-	}
-	slog.Info("常驻增量对账已重发缺失天",
-		"source", key, "days", published, "events", len(writeEvents), "generation", generation)
 	return nil
 }
 

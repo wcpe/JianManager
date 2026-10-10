@@ -7,6 +7,8 @@ package ingest
 //   - JSON 只读导出（排障与回滚前的快照）。
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -80,24 +82,60 @@ func (m *Manager) migrateLegacyState(legacy *persistedState) error {
 	if err != nil {
 		return fmt.Errorf("ingest: 旧状态无法映射为索引行（拒绝启动采集）: %w", err)
 	}
-	empty, err := m.index.IsEmpty()
+	// 绑定原始字节而非归一化后的 JSON：来源即使只被人工重新编码也不能静默续用旧凭据。
+	data, err := os.ReadFile(m.statePath)
 	if err != nil {
-		return fmt.Errorf("ingest: 检查索引是否为空失败（拒绝启动采集）: %w", err)
+		return fmt.Errorf("ingest: 读取迁移来源失败（拒绝启动采集）: %w", err)
 	}
-	if !empty {
+	var actual persistedState
+	if err := json.Unmarshal(data, &actual); err != nil {
+		return fmt.Errorf("ingest: 迁移来源变更（拒绝启动采集）: %w", err)
+	}
+	normalizePersistedState(&actual)
+	if !reflect.DeepEqual(comparisonState(legacy), comparisonState(&actual)) {
+		return fmt.Errorf("ingest: 旧状态在映射期间改变（拒绝启动采集，保留来源与索引）")
+	}
+	sourceSHA := fmt.Sprintf("%x", sha256.Sum256(data))
+	ctx := m.lifecycleCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	completed, err := m.index.CompletedMigration(ctx, sourceSHA, 1)
+	if err != nil {
+		return fmt.Errorf("ingest: 迁移来源凭据无效（拒绝启动采集）: %w", err)
+	}
+	if completed {
+		// 已验全的来源允许既有明确剪枝进度；无凭据或未完成的半库绝不走此豁免。
 		loaded, err := m.loadStateFromIndex()
 		if err != nil {
-			return fmt.Errorf("ingest: 重新读取索引失败（拒绝启动采集）: %w", err)
+			return fmt.Errorf("ingest: 已完成迁移索引读取失败（拒绝启动采集）: %w", err)
 		}
 		if !reflect.DeepEqual(comparisonState(legacy), comparisonState(loaded)) {
-			return fmt.Errorf("ingest: 采集索引与旧状态文件不一致，拒绝启动采集（不静默覆盖；保留 %s 与索引库供人工处置）", m.statePath)
+			return fmt.Errorf("ingest: 已完成迁移索引与来源不一致（拒绝启动采集）")
+		}
+		current, err := os.ReadFile(m.statePath)
+		if err != nil || fmt.Sprintf("%x", sha256.Sum256(current)) != sourceSHA {
+			return fmt.Errorf("ingest: 已完成迁移来源改变（拒绝启动采集）")
 		}
 		return m.archiveLegacyState()
 	}
-	if _, err := m.index.Apply(desired); err != nil {
-		return fmt.Errorf("ingest: 迁移写入索引失败（拒绝启动采集）: %w", err)
+	migration, err := m.index.BeginMigration(ctx, sourceSHA, 1, desired)
+	if err != nil {
+		return fmt.Errorf("ingest: 采集索引与旧状态文件不一致或迁移凭据无效（拒绝启动采集）: %w", err)
 	}
-	// 迁移是一次性大事务：写完立刻把 WAL 归并回主库，避免带着 GB 级 WAL 进入稳态
+	for {
+		stats, err := m.index.ResumeMigration(ctx, migration)
+		if err != nil {
+			return fmt.Errorf("ingest: 迁移写入索引失败（拒绝启动采集，保留可恢复进度）: %w", err)
+		}
+		if !stats.Incomplete {
+			break
+		}
+	}
+	if err := m.index.FinalizeMigration(ctx, migration); err != nil {
+		return fmt.Errorf("ingest: 迁移最终校验失败（拒绝启动采集）: %w", err)
+	}
+	// 所有有界迁移周期验全后，把 WAL 归并回主库，避免带着 GB 级 WAL 进入稳态
 	// （生产演练实测：不归并时 -wal 残留 453.6 MB）。归并失败不改变迁移结果——
 	// 数据仍在 WAL 中且可见，降级为「下次打开时自动归并」，故只告警不失败。
 	if err := m.index.Checkpoint(); err != nil {
@@ -112,6 +150,10 @@ func (m *Manager) migrateLegacyState(legacy *persistedState) error {
 	}
 	if !reflect.DeepEqual(comparisonState(legacy), comparisonState(loaded)) {
 		return fmt.Errorf("ingest: 迁移校验失败：索引内容与旧状态不一致，拒绝启动采集（保留 %s 供人工处置）", m.statePath)
+	}
+	current, err := os.ReadFile(m.statePath)
+	if err != nil || fmt.Sprintf("%x", sha256.Sum256(current)) != sourceSHA {
+		return fmt.Errorf("ingest: 迁移来源在提交期间改变（拒绝启动采集，不归档旧 JSON）: %v", err)
 	}
 	return m.archiveLegacyState()
 }
@@ -153,6 +195,12 @@ type indexAux struct {
 	// VerifiedRuns 是该源逐字段校验通过的源位置连续区间（见 persistedSource.VerifiedRuns）。
 	// 直接随本 payload 的 JSON 落盘：payload 列的指纹覆盖其全部字节，故变更必然被索引层发现。
 	VerifiedRuns []ledger.PositionRange `json:"verified_runs,omitempty"`
+	// IdentityConflicts 是不可裁定身份冲突的隔离记录，随附属 payload 持久化。
+	IdentityConflicts []identityConflictRecord `json:"identity_conflicts,omitempty"`
+	// IdentityConflictClearances 是「人工确认并清空身份冲突」的审计凭据（见
+	// persistedSource.IdentityConflictClearances）。与 IdentityConflicts 并存于同一 payload：
+	// 清空的凭据与它描述的那份记录同生共死，不引入跨结构一致性要求。
+	IdentityConflictClearances []identityConflictClearance `json:"identity_conflict_clearances,omitempty"`
 	// Abandonments 是「人工裁定永久丢失」的区间凭据（见 ledger.Entry.Abandonments）。
 	//
 	// 为什么必须落在本 payload 里（后续项③附带修复，2026-10-02）：ADR-101 要求该凭据
@@ -213,6 +261,11 @@ func (m *Manager) stateToIndexState(st *persistedState) (stateindex.State, error
 // 那里 full.WAL 必定被 partial.WAL 覆盖，此前却对**全量源逐条 json.Marshal**
 // （现场 pprof 栈证 338,521 条）后整段丢弃 —— 纯浪费且全程压在 m.mu 内。
 func (m *Manager) stateToIndexStateOpt(st *persistedState, skipWAL bool) (stateindex.State, error) {
+	return m.stateToIndexStateRows(st, skipWAL, false)
+}
+
+// 根行通道跳过所有历史派生行，未变化源不分配或遍历 gap、batch、WAL。
+func (m *Manager) stateToIndexStateRows(st *persistedState, skipWAL, skipDerived bool) (stateindex.State, error) {
 	var out stateindex.State
 	keys := make(map[string]struct{}, len(st.Sources)+len(st.SourceConfigs))
 	for key := range st.Sources {
@@ -268,6 +321,8 @@ func (m *Manager) stateToIndexStateOpt(st *persistedState, skipWAL bool) (statei
 			aux.EventsStored = saved.EventsStored
 			aux.Events = saved.Events
 			aux.VerifiedRuns = saved.VerifiedRuns
+			aux.IdentityConflicts = saved.IdentityConflicts
+			aux.IdentityConflictClearances = saved.IdentityConflictClearances
 			// 放弃凭据（首个账本条目的残余字段，与 ledgerCoreOf 同源）：nil/空时被
 			// omitempty 省略，读回侧归一后两侧同形态可比（见 normalizePersistedState）。
 			if len(saved.Ledger) > 0 {
@@ -278,7 +333,7 @@ func (m *Manager) stateToIndexStateOpt(st *persistedState, skipWAL bool) (statei
 				// 防御：首个条目之外的账本条目原样保留（现实中每源恰好一条）。
 				aux.ExtraLedger = saved.Ledger[1:]
 			}
-			position, projection, gaps, batches, err := ledgerRowsOf(key, saved, core)
+			position, projection, gaps, batches, err := ledgerRowsOfOpt(key, saved, core, skipDerived)
 			if err != nil {
 				return stateindex.State{}, err
 			}
@@ -351,7 +406,7 @@ func (m *Manager) stateToIndexStateScopedOpt(st *persistedState, changed []strin
 	// 再补上全部根行：先全量构建再覆盖派生行（source_aux 也是根，直接全量）。
 	// A-min（2026-10-04）：全量通道只为"根行"服务，WAL 行必被 partial 覆盖 ⇒ skipWAL 省掉
 	// 全量源的逐条 marshal（现场栈证 338,521 条，锁内发生且整段丢弃）。
-	full, err := m.stateToIndexStateOpt(st, true)
+	full, err := m.stateToIndexStateRows(st, true, true)
 	if err != nil {
 		return stateindex.State{}, err
 	}
@@ -364,6 +419,10 @@ func (m *Manager) stateToIndexStateScopedOpt(st *persistedState, changed []strin
 
 // ledgerRowsOf 把「首个账本条目」拆成 position/gap/delivery_batch 行（spec §2.2 各表只存一处）。
 func ledgerRowsOf(key string, saved persistedSource, core *indexLedgerCore) (stateindex.PositionRow, *stateindex.ProjectionRow, []stateindex.GapRow, []stateindex.BatchRow, error) {
+	return ledgerRowsOfOpt(key, saved, core, false)
+}
+
+func ledgerRowsOfOpt(key string, saved persistedSource, core *indexLedgerCore, skipDerived bool) (stateindex.PositionRow, *stateindex.ProjectionRow, []stateindex.GapRow, []stateindex.BatchRow, error) {
 	position := stateindex.PositionRow{Key: key}
 	projection := &stateindex.ProjectionRow{
 		Key: key, Generation: saved.ProjectionGeneration, EventsStoredThrough: saved.EventsStoredThrough,
@@ -378,6 +437,9 @@ func ledgerRowsOf(key string, saved persistedSource, core *indexLedgerCore) (sta
 	position.ReclaimPos = entry.Positions.Reclaim
 	position.AcquirePaused = entry.AcquirePaused
 	position.PauseReason = entry.PauseReason
+	if skipDerived {
+		return position, projection, nil, nil, nil
+	}
 	gaps := make([]stateindex.GapRow, 0, len(entry.Gaps))
 	for index, gap := range entry.Gaps {
 		gaps = append(gaps, stateindex.GapRow{
@@ -586,6 +648,10 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 			EventsStored:         aux.EventsStored,
 			Events:               aux.Events,
 			VerifiedRuns:         aux.VerifiedRuns,
+			IdentityConflicts:    aux.IdentityConflicts,
+			// 清空凭据必须随记录一起读回：漏掉它会让「重启后凭据消失」——
+			// 那正好把本功能做成"无痕清空"，是本功能要防的反面。
+			IdentityConflictClearances: aux.IdentityConflictClearances,
 		}
 	}
 

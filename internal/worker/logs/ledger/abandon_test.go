@@ -275,6 +275,58 @@ func TestAbandonmentOutsideSegmentDoesNotReleaseReclaim(t *testing.T) {
 	require.Zero(t, pos)
 }
 
+// 同次裁定的离散空洞不得生成凸包，否则夹间健康位置会被冒充永久丢失。
+func TestAbandonGapsKeepsDisjointEvidence(t *testing.T) {
+	led, key := abandonFixture(t, "abandon-disjoint")
+	require.NoError(t, led.RecordGap(key, 300, 350, GapReasonAppendRejected, "第二个洞"))
+	count, err := led.AbandonGapsThrough(key, 400, GapAbandonment{Operator: "ops@example", Detail: "物理损坏", AtUTC: "2026-10-08T00:00:00Z"})
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+	entry := led.Get(key)
+	require.Len(t, entry.Abandonments, 2)
+	for i, want := range []PositionRange{{From: 100, To: 150}, {From: 300, To: 350}} {
+		ab := entry.Abandonments[i]
+		require.Equal(t, want.From, ab.From)
+		require.Equal(t, want.To, ab.To)
+		require.Equal(t, "ops@example", ab.Operator)
+		require.Equal(t, "2026-10-08T00:00:00Z", ab.AtUTC)
+		require.Equal(t, uint64(400), ab.Through)
+		require.Equal(t, GapReasonPermanentlyLost, ab.ReasonCode)
+		require.Equal(t, "物理损坏", ab.Detail)
+	}
+	_, covered := led.AbandonmentsCovering(key, 200)
+	require.False(t, covered, "夹间健康位置不能成为放弃凭据")
+}
+
+// 恢复分段上界不属于该段，恰好从上界开始的凭据只能供下一段使用。
+func TestAbandonmentAtExclusiveSegmentEndDoesNotReleaseReclaim(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		start uint64
+	}{{"inside", 199}, {"exclusive", 200}} {
+		t.Run(tt.name, func(t *testing.T) {
+			led := New()
+			key := keyOf("exclusive-end", "g1")
+			led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
+			require.NoError(t, led.AdvanceRead(key, 300))
+			require.NoError(t, led.AdvanceDurable(key, 300))
+			require.NoError(t, led.RecordDelivery(key, 0, 300, logtypes.DeliveryRequestDone))
+			require.NoError(t, led.RegisterRecovery(key, RecoveryRef{SegmentID: "seg", Path: "seg", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 200}))
+			require.NoError(t, led.RecordGap(key, tt.start, tt.start, GapReasonAppendRejected, "边界洞"))
+			_, err := led.AbandonGapsThrough(key, 300, GapAbandonment{Operator: "ops@example"})
+			require.NoError(t, err)
+			pos, err := led.TryReclaim(key)
+			if tt.start == 199 {
+				require.NoError(t, err)
+				require.Equal(t, uint64(200), pos)
+			} else {
+				require.Error(t, err)
+				require.Zero(t, pos)
+			}
+		})
+	}
+}
+
 // 自动路径不得写出 PERMANENTLY_LOST：自动放弃 = 静默丢日志，明令禁止。
 func TestAutoResolveNeverMarksPermanentlyLost(t *testing.T) {
 	led := New()

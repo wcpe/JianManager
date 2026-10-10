@@ -1,10 +1,13 @@
 package ingest
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -106,8 +109,26 @@ func TestUnknownTimeZoneIsRejectedAtRegistration(t *testing.T) {
 // 只断言 IsValidTimeZone("local") 为真抓不到这一层。转红：local 分支未接 time.Local 时
 // 事件时间恒为 23:54:02Z（现场缺陷）。
 func TestDefaultTimeZoneLocalFollowsProcessTZ(t *testing.T) {
-	// Go ≥1.22 在 TZ 变更后重载 time.Local（未显式赋值 time.Local 时）。
-	t.Setenv("TZ", "Asia/Hong_Kong")
+	// time.Local 的初始化在进程内缓存；以独立进程固定 TZ，不能指望 Setenv 重置先前测试的缓存。
+	const childFlag = "JM_INGEST_LOCAL_TZ_CHILD"
+	if os.Getenv(childFlag) != "1" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDefaultTimeZoneLocalFollowsProcessTZ$", "-test.count=1")
+		for _, value := range os.Environ() {
+			if !strings.HasPrefix(value, "TZ=") && !strings.HasPrefix(value, childFlag+"=") {
+				cmd.Env = append(cmd.Env, value)
+			}
+		}
+		cmd.Env = append(cmd.Env, "TZ=Asia/Hong_Kong", childFlag+"=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "隔离进程的严格换算回归失败：%s", output)
+		return
+	}
+	// 子进程启动前已固定 TZ；不在父进程修改或重置 time.Local。
+	require.Equal(t, "Asia/Hong_Kong", time.Local.String())
+	_, offsetSeconds := time.Date(2026, time.October, 8, 23, 54, 2, 0, time.Local).Zone()
+	require.Equal(t, 8*60*60, offsetSeconds, "本地时区解析必须得到 UTC+8 的精确偏移")
 
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
@@ -129,8 +150,8 @@ func TestDefaultTimeZoneLocalFollowsProcessTZ(t *testing.T) {
 
 	events := durableEvents(t, m, source.LogSourceID+"/"+source.SourceGeneration)
 	require.NotEmpty(t, events)
-	require.True(t, strings.HasSuffix(events[0].EventTimeUTC, "T15:54:02Z"),
-		"local 时区（进程 TZ=HKT）下 23:54:02 必须落库为 15:54:02Z，实得 %s", events[0].EventTimeUTC)
-	// 审计字段记录解析后的位置名：time.Local 的 String() 恒为 "Local"。
-	require.Equal(t, "Local", events[0].Fields[normalize.FieldEventTimeZone])
+	require.Equal(t, source.UTCDay+"T15:54:02Z", events[0].EventTimeUTC,
+		"local 时区（进程 TZ=HKT）下 23:54:02 必须精确换算为当日 15:54:02Z")
+	// 审计字段按 normalize 的现行契约记录解析后的 IANA 位置名，而不是配置别名 local。
+	require.Equal(t, "Asia/Hong_Kong", events[0].Fields[normalize.FieldEventTimeZone])
 }

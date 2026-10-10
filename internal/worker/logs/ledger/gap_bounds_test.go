@@ -240,6 +240,90 @@ func TestResolvedGapsAreTrimmedButAuditTailKept(t *testing.T) {
 	require.Equal(t, uint64((total-1)*10), entry.Gaps[len(entry.Gaps)-1].StartPos)
 }
 
+// 折叠只删除离散受害者，夹间的永久洞与已解决审计必须保持原位置。
+func TestGapFoldPreservesInterleavedAuditAndPermanentGap(t *testing.T) {
+	led := New()
+	key := keyOf("fold-interleaved", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
+	for i := 0; i <= DefaultMaxUnresolvedGapsPerSource; i++ {
+		start := uint64(i * 100)
+		require.NoError(t, led.RecordGap(key, start, start+9, GapReasonDeliverError, "投递失败"))
+		if i == 0 {
+			require.NoError(t, led.RecordGap(key, 20, 29, "ARCHIVE_GZIP_CORRUPT", "永久洞"))
+			require.NoError(t, led.RecordGap(key, 40, 49, "AUDIT", "历史审计"))
+			_, err := led.ResolveGapsThroughExcept(key, 49, "已校验", GapReasonDeliverError, "ARCHIVE_GZIP_CORRUPT")
+			require.NoError(t, err)
+		}
+	}
+	gaps := led.Get(key).Gaps
+	require.Len(t, gaps, DefaultMaxUnresolvedGapsPerSource+2)
+	require.Equal(t, GapReasonDeliverError, gaps[0].Reason)
+	require.Equal(t, uint64(109), gaps[0].EndPos)
+	require.Equal(t, "ARCHIVE_GZIP_CORRUPT", gaps[1].Reason)
+	require.False(t, gaps[1].Resolved)
+	require.Equal(t, "AUDIT", gaps[2].Reason)
+	require.True(t, gaps[2].Resolved)
+	require.Equal(t, "已校验", gaps[2].Resolution)
+	require.Equal(t, uint64(200), gaps[3].StartPos)
+	require.Equal(t, uint64(1), led.GapObservability(key).FoldedTotal)
+}
+
+// 恢复旧账本可同时出现多个越界原因，所有桶都必须基于同一原始索引折叠。
+func TestGapFoldMultipleBucketsUsesOriginalIndexes(t *testing.T) {
+	led := New()
+	key := keyOf("fold-many-buckets", "g1")
+	entry := &Entry{Key: key}
+	for i := 0; i < DefaultMaxUnresolvedGapsPerSource+2; i++ {
+		start := uint64(i * 100)
+		entry.Gaps = append(entry.Gaps,
+			Gap{StartPos: start, EndPos: start + 9, Reason: GapReasonDeliverError},
+			Gap{StartPos: start + 20, EndPos: start + 29, Reason: GapReasonStdioRawWriteFailed})
+	}
+	entry.Gaps = append(entry.Gaps, Gap{StartPos: 99999, EndPos: 99999, Reason: "AUDIT", Resolved: true, Resolution: "已校验"})
+	require.NotPanics(t, func() { led.foldUnresolvedGapsLocked(entry) })
+	require.Len(t, entry.Gaps, 2*DefaultMaxUnresolvedGapsPerSource+1)
+	for i, reason := range []string{GapReasonDeliverError, GapReasonStdioRawWriteFailed} {
+		require.Equal(t, reason, entry.Gaps[i].Reason)
+		require.Equal(t, uint64(i*20), entry.Gaps[i].StartPos)
+		require.Equal(t, uint64(209+i*20), entry.Gaps[i].EndPos)
+		count := 0
+		for _, gap := range entry.Gaps {
+			if gap.Reason == reason {
+				count++
+			}
+		}
+		require.Equal(t, DefaultMaxUnresolvedGapsPerSource, count)
+	}
+	require.Equal(t, "AUDIT", entry.Gaps[len(entry.Gaps)-1].Reason)
+	require.Equal(t, uint64(4), entry.gapFoldedTotal)
+}
+
+// 新允许集入口默认拒绝未知原因，不能改变原 Except 的排除集语义。
+func TestResolveGapsThroughAllowedKeepsExceptSemantics(t *testing.T) {
+	led := New()
+	key := keyOf("allowed-except", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
+	require.NoError(t, led.RecordGap(key, 0, 0, "KNOWN", "允许原因"))
+	require.NoError(t, led.RecordGap(key, 0, 0, "UNKNOWN", "未知原因"))
+	for _, reasons := range [][]string{nil, {""}, {"KNOWN", " "}} {
+		n, err := led.ResolveGapsThroughAllowed(key, 0, "待重读", reasons...)
+		require.Error(t, err)
+		require.Zero(t, n)
+		require.Equal(t, 2, led.UnresolvedGapCount(key))
+	}
+	n, err := led.ResolveGapsThroughAllowed(key, 0, "", "KNOWN")
+	require.Error(t, err)
+	require.Zero(t, n)
+	n, err = led.ResolveGapsThroughAllowed(key, 0, "待重读", "KNOWN")
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.False(t, led.Get(key).Gaps[1].Resolved)
+	n, err = led.ResolveGapsThroughExcept(key, 0, "人工确认", "KNOWN")
+	require.NoError(t, err)
+	require.Equal(t, 1, n, "Except 仍然消解非排除原因，包括未知原因")
+	require.True(t, led.Get(key).Gaps[1].Resolved)
+}
+
 func ledgerResolveOne(led *Ledger, key SourceKey, through uint64) error {
 	_, err := led.ResolveGapsThrough(key, through, "delivery confirmed for this range")
 	return err

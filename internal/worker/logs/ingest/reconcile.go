@@ -141,9 +141,10 @@ func (r ReconcileReport) needsReplay() bool {
 
 // startupSource 是一个待恢复的源：登记完成、权威集合已重建。
 type startupSource struct {
-	source SourceConfig
-	key    string
-	events []logtypes.Event
+	source   SourceConfig
+	key      string
+	events   []logtypes.Event
+	snapshot *publicationSnapshot
 }
 
 // reconcileStartup 并发对账一批源，返回与输入等长的报告（顺序一一对应）。
@@ -528,11 +529,29 @@ func reconcileConfigOf(configured *ReconcileConfig) ReconcileConfig {
 	return configured.normalized()
 }
 
-// recordReconcileReports 保留最近一次启动对账结论，并把逐源结论写进日志。
+// recordReconcileReports 记录对账结论到读数面（**只记录、不打日志**：谁记什么见
+// `noteReconcileReports` 的分工说明）。传什么就存什么——调用方传累计集即得累计快照。
+//
+// 2026-10-10 修正（**O(n²) 日志放大**）：本方法此前**同时**负责落日志，而其调用方
+// （启动恢复）在批次循环里每批都传**累计**报告 → 第 k 批把前 k-1 批全部重打一遍，
+// 总日志量 = O(批数²)。生产现场 5 个启动窗口打出 4×1526 + 1×3359 条（同一 `(源, 缺失天)`
+// 组合反复出现，见 `.tmp/logs-perf-20261009/startup-replay/timeline-148.txt`）。这既淹没了
+// 真正的判据（"到底哪些天缺"），也是现场"看不出第一次是谁触发的"的直接原因。
+//
+// 修法（最小且不改语义）：落日志拆给 `noteReconcileReports`，由调用方只对**本批新增**调用
+// ——每份报告恰好落一行（总量 = 报告数），读数面仍可取到累计快照（语义不变）。
 func (m *Manager) recordReconcileReports(reports []ReconcileReport) {
 	m.mu.Lock()
 	m.reconcileReports = append([]ReconcileReport(nil), reports...)
 	m.mu.Unlock()
+}
+
+// noteReconcileReports 只把**本批新增**的对账结论落日志（每份报告恰好一行）。
+//
+// 与 recordReconcileReports 的分工：前者管"读数面看到什么"，后者管"日志里说什么"。
+// 为什么必须分开：把它们合成一个"既记又打"的方法，调用方就无法表达"读数是累计的、
+// 日志是本批的"这一正确语义——而正是这个无法表达导致了 O(n²) 放大。
+func (m *Manager) noteReconcileReports(reports []ReconcileReport) {
 	for _, report := range reports {
 		switch {
 		case report.Fallback:
@@ -581,19 +600,26 @@ type replayWindow struct {
 	generation string
 	// days 是剩余待重发的 UTC 天（空 = 整窗完成）。
 	days []string
+	// res 是本窗持有的**代次预留**（2026-10-10 缺陷修复）。
+	//
+	// 为什么窗必须持有它而不是「取名即释放」：本窗的代次名跨轮复用（剩余天下一趟续跑，
+	// 见 replayWindow 的说明），若取名后立刻释放，下一轮的另一条面（采集轮投递 / 重建 worker）
+	// 就会把这个名字再分配一次 —— 同一 (源, 代次) 被两条面各写一份，正是本缺陷的形态。
+	// res 为 nil 表示建窗时没拿到预留（探测失败/无 VL 客户端），此时行为与本修复前一致。
+	res *generationReservation
 }
 
 // prepareReplayWindow 建窗：分配一个投影代次并算出待重发的天（回退=整窗，否则=缺失天）。
+//
+// 代次取**预留**语义（2026-10-10 缺陷修复）：预留随窗持有、由窗的生命周期负责释放
+// （见 releaseReplayWindow），与本窗的「同一代次跨轮复用」严格配对。
 func (m *Manager) prepareReplayWindow(item startupSource, report ReconcileReport) (*replayWindow, error) {
 	m.mu.Lock()
 	saved := m.state.Sources[item.key]
 	m.mu.Unlock()
-	generation := m.nextFreeProjectionGeneration(item.source, saved.ProjectionGeneration)
-	m.mu.Lock()
-	saved = m.state.Sources[item.key]
-	saved.ProjectionGeneration = generation
-	m.state.Sources[item.key] = saved
-	m.mu.Unlock()
+	generation, res := m.reserveProjectionGeneration(item.source, saved.ProjectionGeneration,
+		"startup-replay:"+item.key)
+	// 计划未接纳前不改共享代次，避免过期重放先覆盖新尝试的 pending 所属身份。
 	days := make([]string, 0, len(report.MissingDays))
 	if report.Fallback {
 		// 回退整窗：把权威集合覆盖到的全部 UTC 天都算进窗口（与「整窗重发」语义一致）。
@@ -601,6 +627,8 @@ func (m *Manager) prepareReplayWindow(item startupSource, report ReconcileReport
 		for _, event := range item.events {
 			day, err := eventUTCDay(item.source, event)
 			if err != nil {
+				// 建窗失败：必须在这里放掉预留，否则该名被钉死到进程结束。
+				m.releaseProjectionGeneration(res)
 				return nil, err
 			}
 			daySet[day] = struct{}{}
@@ -611,7 +639,21 @@ func (m *Manager) prepareReplayWindow(item startupSource, report ReconcileReport
 	} else {
 		days = append(days, report.MissingDays...)
 	}
-	return &replayWindow{generation: generation, days: sortUTCDays(days)}, nil
+	return &replayWindow{generation: generation, days: sortUTCDays(days), res: res}, nil
+}
+
+// releaseReplayWindow 结束一个重发窗并释放它持有的代次预留。
+//
+// 为什么必须是显式出口而不是让 window 被 GC：预留表的释放只由本入口驱动；漏释放会让该源
+// 此后每次取名都无谓进位（名字永不复用），且预留表长期占着一条条目。故凡是「窗不再被续跑」
+// 的路径都必须经过它——applyStartupRecovery 的失败出口、整窗完成出口、以及驱动放弃该源的
+// 出口（见 runStartupReplayInline 的收束分支）。
+func (m *Manager) releaseReplayWindow(window *replayWindow) {
+	if window == nil {
+		return
+	}
+	m.releaseProjectionGeneration(window.res)
+	window.res = nil
 }
 
 // runReplayWindow 按**天**切片推进重发（每步：VL ready 探针 → 写该天 + 逐字段校验 → 发布该天）。
@@ -650,12 +692,23 @@ func (m *Manager) runReplayWindow(ctx context.Context, item startupSource, windo
 			window.days = window.days[1:]
 			continue
 		}
-		plan := projectionWritePlan{Write: dayEvents, Replace: true, Days: []string{day}}
+		plan := projectionWritePlan{
+			Write: dayEvents, Replace: true, Days: []string{day}, Snapshot: item.snapshot,
+			// 限速（2026-10-09）：天内插入批之间与校验簇之间主动让出 CPU。
+			//
+			// 为什么这里也要让出：启动恢复的重发**与采集轮共处同一进程**（虽然它自己跑在后台
+			// goroutine 上），单天 57 万条的原文本是一次连续跑完，期间会把采集挤在身后——
+			// 现场形态正是「恢复期大批源 readΔ=0」。发布语义不受影响（让出只在批/簇之间，
+			// 见 projectionWritePlan.Yield 的安全边界）。
+			Yield: m.rebuildYieldFn(),
+		}
 		if _, err := m.writeProjectionPlan(item.source, item.events, window.generation, plan); err != nil {
 			return false, err
 		}
 		window.days = window.days[1:]
 		sent++
+		// 天与天之间让出：本 goroutine 不持 cycleMu / m.mu，故只影响自身节奏。
+		m.rebuildYield()
 	}
 	return true, nil
 }
@@ -687,6 +740,7 @@ func (m *Manager) applyStartupRecovery(ctx context.Context, item startupSource, 
 	}
 	done, err := m.runReplayWindow(ctx, item, window)
 	if err != nil || !done {
+		// 未完成/失败：窗保留 ⇒ 预留继续由窗持有（下一趟续跑同一代次，正是预留的目的）。
 		return done, window, err
 	}
 	m.mu.Lock()
@@ -697,6 +751,9 @@ func (m *Manager) applyStartupRecovery(ctx context.Context, item startupSource, 
 			return true, window, err
 		}
 	}
+	// **整窗完成**：本窗不再续跑 ⇒ 必须释放预留（无论 releaseRecovery 成败——数据已落库这一
+	// 事实与「名字还在被持有」无关）。释放后该名回到「重新实探」判据上，不削弱重名防护。
+	defer m.releaseReplayWindow(window)
 	return true, window, m.releaseRecovery(item.source, item.events)
 }
 

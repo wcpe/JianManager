@@ -203,98 +203,139 @@ func TestWaitingCollectorCompletesUnderLongChain(t *testing.T) {
 // 转红方式（实测）：`enqueueLocked` 改为**插队首**（LIFO，复刻"谁最后来谁先走"的反 FIFO 形态）
 // ——服务序被逆转，本用例在"保序子序列"处变红。
 func TestPersistGateFairFIFO(t *testing.T) {
-	m, _ := newGateFixture(t, 2000, 16)
-	var mu sync.Mutex
-	var served []int64
-	// 门内真实**入队序**（A 裁定契约字面 ✓）：按事件到达序追加（钩子在持 g.mu 下触发 ⇒ 即真实入队序）。
-	var enqueueOrder []int64
-	// **被提交覆盖**的等待者数（用户 2026-10-05 ③ 更正版 ✓）：`persistCtx` 有合并短路
-	// （`persistCovered >= seq ⇒ 直接返回` ✓）⇒ 被某次提交覆盖的等待者**不发 acquire 事件** ✗
-	// ⇒ 只数 acquire 会把"被合并服务"误判成"被饿死" ✗✗（这正是本用例此前偶发红的真机制 ✓）。
-	servedByCover := 0
-	// 等待者用带标记的 ctx 区分（长链也走同一条落库入口，靠 seq 区分不了——它每次调用都会拿新序号）。
+	testPersistGateFIFO(t, 2000, false)
+}
+
+// 完整提交的合并另测，不能让覆盖短路掩盖长差异场景下的普通队列顺序。
+func TestPersistGateCoalescedWaitersKeepFIFO(t *testing.T) {
+	testPersistGateFIFO(t, 0, true)
+}
+
+func testPersistGateFIFO(t *testing.T, injected int, expectCoalescing bool) {
+	t.Helper()
+	cycleRows := 16
+	if expectCoalescing {
+		// 合并控制组必须单步完整提交，不能把周期预算不足误判成 coalescing 失效。
+		cycleRows = 4096
+	}
+	m, _ := newGateFixture(t, injected, cycleRows)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var holdOnce, releaseOnce sync.Once
+	m.persistStepHold = func() { holdOnce.Do(func() { close(entered); <-release }) }
+	defer releaseOnce.Do(func() { close(release) })
+
 	type waiterMark struct{}
 	marker := waiterMark{}
+	const waiters = 5
+	enqueued := make(chan int64, waiters)
+	coalescerEnqueued := make(chan struct{}, 1)
+	var mu sync.Mutex
+	var enqueueOrder, acquireOrder []int64
+	firstEnqueued := make(map[int64]bool)
 	m.persistGateStage = func(ctx context.Context, event string, seq int64, priority bool) {
-		if priority || ctx.Value(marker) == nil {
+		if ctx.Value(marker) == nil {
+			return
+		}
+		if priority {
+			if event == "enqueue" {
+				coalescerEnqueued <- struct{}{}
+			}
 			return
 		}
 		mu.Lock()
+		defer mu.Unlock()
 		switch event {
-		case "acquire":
-			served = append(served, seq)
 		case "enqueue":
-			enqueueOrder = append(enqueueOrder, seq)
+			// 同一请求的重规划不算新等待者；屏障只认门内首次真实入队。
+			if !firstEnqueued[seq] {
+				firstEnqueued[seq] = true
+				enqueueOrder = append(enqueueOrder, seq)
+				enqueued <- seq
+			}
+		case "acquire":
+			acquireOrder = append(acquireOrder, seq)
 		}
-		mu.Unlock()
 	}
 
-	// 长链持门者（普通档，一步一让）+ 5 个普通等待者。
-	stop := make(chan struct{})
-	var chainWG sync.WaitGroup
-	chainWG.Add(1)
-	go func() {
-		defer chainWG.Done()
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			if err := m.persistCtx(context.Background(), persistNormalOneStep); err != nil {
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	time.Sleep(20 * time.Millisecond) // 让长链先占门
-
-	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
+	requestCount := waiters + 1
+	if expectCoalescing {
+		requestCount++
+	}
+	done := make(chan error, requestCount)
+	go func() { done <- m.persistCtx(context.Background(), persistNormalOneStep) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("持门屏障未到达")
+	}
+	for i := 0; i < waiters; i++ {
 		go func() {
-			defer wg.Done()
-			// seqBefore 在**调用前**取 ✓：调用后若 `covered` 已越过它 ⇒ 本次请求已被某次提交覆盖 ✓。
-			seqBefore := m.persistJoin.Load()
-			_ = m.persistCtx(context.WithValue(context.Background(), marker, true), persistNormalOneStep)
-			if m.persistCovered.Load() > seqBefore {
-				mu.Lock()
-				servedByCover++
-				mu.Unlock()
-			}
+			done <- m.persistCtx(context.WithValue(context.Background(), marker, true), persistNormalOneStep)
 		}()
-		time.Sleep(2 * time.Millisecond) // 依次到达
+		select {
+		case <-enqueued:
+		case <-time.After(5 * time.Second):
+			t.Fatal("普通等待者未真实入队")
+		}
 	}
-	wg.Wait()
-	close(stop)
-	chainWG.Wait()
+	if expectCoalescing {
+		// 较晚声明的优先请求包含所有普通声明；完整提交后普通请求应走覆盖，不假报 acquire。
+		go func() {
+			done <- m.persistCtx(context.WithValue(context.Background(), marker, true), persistPriority)
+		}()
+		select {
+		case <-coalescerEnqueued:
+		case <-time.After(5 * time.Second):
+			t.Fatal("合并请求未真实入队")
+		}
+	}
+	releaseOnce.Do(func() { close(release) })
+	for i := 0; i < requestCount; i++ {
+		select {
+		case err := <-done:
+			require.NoError(t, err, "获门或覆盖必须让请求成功完成，不能忽略持久化失败")
+		case <-time.After(5 * time.Second):
+			t.Fatal("已排队普通请求未完成")
+		}
+	}
 
-	mu.Lock()
-	got := append([]int64(nil), served...)
-	covered := servedByCover
-	mu.Unlock()
-	// **判据更正**（③ ✓）：被服务 = 授予门（记进 got ✓）**或** 被某次提交覆盖（covered ✓）；
-	// 二者皆无才是饿死 ✗。序断言只对**实际拿到门的子集**保留严格 FIFO ✓（被合并者本就没排队 ✓）。
-	require.Equal(t, 5, len(got)+covered,
-		"5 个等待者都必须被服务（授予门 或 被提交覆盖；二者皆无=被长链饿死 ✗）：acquire=%v covered=%d", got, covered)
-	// **A 裁定（2026-10-05）契约字面**：门按其**队列顺序（入队序）**服务。旧断言"acquire 的 seq
-	// 严格递增"把"门外取号序"当契约 —— A-Step2 后取号与入队之间可被调度错位（门自身仍是严格
-	// 队列 FIFO ✓）。现断言：服务序必须是**入队序的保序子序列**（被 covered 合并者本就不在 got ✓）。
 	mu.Lock()
 	enq := append([]int64(nil), enqueueOrder...)
+	got := append([]int64(nil), acquireOrder...)
 	mu.Unlock()
-	pos := make(map[int64]int, len(enq))
-	for i, s := range enq {
-		if _, ok := pos[s]; !ok {
-			pos[s] = i
+	require.Len(t, enq, waiters, "必须存在五个真实等待者，重规划不能重复计入")
+	positions := make(map[int64]int, len(enq))
+	for i, seq := range enq {
+		positions[seq] = i
+	}
+	served := make(map[int64]bool)
+	last := -1
+	for _, seq := range got {
+		pos, ok := positions[seq]
+		require.True(t, ok, "获门请求必须已经入队：acquire=%v enqueue=%v", got, enq)
+		if served[seq] {
+			// 门内拒绝旧计划后的重试仍是原请求；不得重复算作已服务的等待者。
+			continue
+		}
+		require.Greater(t, pos, last, "请求首次获门顺序必须保留真实入队 FIFO：acquire=%v enqueue=%v", got, enq)
+		served[seq] = true
+		last = pos
+	}
+	covered := 0
+	for _, seq := range enq {
+		if !served[seq] {
+			require.GreaterOrEqual(t, m.persistCovered.Load(), seq,
+				"未获门请求必须有完整提交的覆盖凭据，不能将成功返回伪装成落库")
+			covered++
 		}
 	}
-	last := -1
-	for _, s := range got {
-		p, ok := pos[s]
-		require.True(t, ok, "被服务的请求必须出现在入队序中：served=%v enqueue=%v", got, enq)
-		require.Greater(t, p, last, "服务顺序必须是入队序的保序子序列（显式 FIFO 契约），服务序=%v 入队序=%v", got, enq)
-		last = p
+	require.Equal(t, waiters, len(served)+covered, "每个请求必须获门或被覆盖，不能重复计数")
+	if expectCoalescing {
+		require.Positive(t, covered, "短差异完整提交必须真实覆盖至少一个等待者")
+	} else {
+		// 长差异仍未完整提交，覆盖不能冒充服务；旧计划应在获门前重算，不能假报有效授予。
+		require.Zero(t, covered)
+		require.Equal(t, enq, got, "长差异单步请求必须按首次入队顺序各获门一次，拒写重规划不能假报 acquire")
 	}
 }
 
@@ -305,119 +346,76 @@ func TestPersistGateFairFIFO(t *testing.T) {
 // 等待者之后，本用例在「优先档早于最后一个普通档」处变红。
 func TestPersistGatePriorityFirst(t *testing.T) {
 	m, _ := newGateFixture(t, 300, 16)
-	var mu sync.Mutex
-	var order []string
-	// **被提交覆盖**的等待者计数（2026-10-05 ③ 更正版 ✓）：`persistCtx` 有合并短路 ⇒ 被提交覆盖的
-	// 等待者**不发 acquire 事件** ✗ ⇒ 前提断言"至少一人被服务"会被高负载下的全合并打红 ✗✗。
-	normalsCovered := 0
-	priorityCovered := false
-	// 普通等待者带标记（长链不带 ⇒ 被排除）；优先档无标记需求，全部记录。
+	entered, release := make(chan struct{}), make(chan struct{})
+	var holdOnce, releaseOnce sync.Once
+	m.persistStepHold = func() { holdOnce.Do(func() { close(entered); <-release }) }
+	defer releaseOnce.Do(func() { close(release) })
 	type waiterMark struct{}
 	marker := waiterMark{}
-	m.persistGateStage = func(ctx context.Context, event string, seq int64, priority bool) {
-		if event != "acquire" {
+	enqueued := make(chan string, 4)
+	var mu sync.Mutex
+	var order []string
+	firstEnqueued := map[string]bool{}
+	m.persistGateStage = func(ctx context.Context, event string, _ int64, _ bool) {
+		name, ok := ctx.Value(marker).(string)
+		if !ok {
 			return
 		}
-		if !priority && ctx.Value(marker) == nil {
-			return
-		}
-		tier := "normal"
-		if priority {
-			tier = "priority"
-		}
-		mu.Lock()
-		order = append(order, fmt.Sprintf("%s:%d", tier, seq))
-		mu.Unlock()
-	}
-
-	stop := make(chan struct{})
-	var chainWG sync.WaitGroup
-	chainWG.Add(1)
-	go func() { // 普通档长链（持门者）
-		defer chainWG.Done()
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			if err := m.persistCtx(context.Background(), persistNormalOneStep); err != nil {
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	time.Sleep(20 * time.Millisecond)
-
-	// 先排 3 个普通等待者，再插一个优先等待者。
-	var normalsWG sync.WaitGroup
-	for i := 0; i < 3; i++ {
-		normalsWG.Add(1)
-		go func() {
-			defer normalsWG.Done()
-			seqBefore := m.persistJoin.Load() // 调用前取 ✓（调用后越过它 ⇒ 已被提交覆盖 ✓）
-			_ = m.persistCtx(context.WithValue(context.Background(), marker, true), persistNormalOneStep)
-			if m.persistCovered.Load() > seqBefore {
-				mu.Lock()
-				normalsCovered++
-				mu.Unlock()
-			}
-		}()
-		time.Sleep(2 * time.Millisecond)
-	}
-	priorityDone := make(chan error, 1)
-	// 优先档同样记录「是否被提交覆盖」⇒ 被合并服务也算被服务 ✓（**调用形态逐字不动** ✓）。
-	go func() {
-		seqBefore := m.persistJoin.Load()
-		err := m.persist()
-		if m.persistCovered.Load() > seqBefore {
+		if event == "enqueue" {
 			mu.Lock()
-			priorityCovered = true
+			first := !firstEnqueued[name]
+			firstEnqueued[name] = true
+			mu.Unlock()
+			if first {
+				enqueued <- name
+			}
+		}
+		if event == "acquire" {
+			mu.Lock()
+			order = append(order, name)
 			mu.Unlock()
 		}
-		priorityDone <- err
-	}()
-
-	select {
-	case err := <-priorityDone:
-		require.NoError(t, err)
-	case <-time.After(20 * time.Second):
-		t.Fatal("优先档落库超时")
 	}
-	normalsWG.Wait()
-	close(stop)
-	chainWG.Wait()
-
+	done := make(chan error, 5)
+	go func() { done <- m.persistCtx(context.Background(), persistNormalOneStep) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("持门屏障未到达")
+	}
+	// 每个等待者必须真实入队后才启动下一个，禁止用 sleep 猜队列形态。
+	for _, name := range []string{"normal-0", "normal-1", "normal-2", "priority"} {
+		mode := persistNormalOneStep
+		if name == "priority" {
+			mode.priority = true
+		}
+		go func(name string, mode persistMode) {
+			done <- m.persistCtx(context.WithValue(context.Background(), marker, name), mode)
+		}(name, mode)
+		select {
+		case got := <-enqueued:
+			require.Equal(t, name, got)
+		case <-time.After(5 * time.Second):
+			t.Fatal("等待者未真实入队")
+		}
+	}
+	releaseOnce.Do(func() { close(release) })
+	for i := 0; i < 5; i++ {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("已排队请求未完成")
+		}
+	}
 	mu.Lock()
 	got := append([]string(nil), order...)
 	mu.Unlock()
-	// 断言口径（合并语义下「等待者被覆盖而无需取门」是合法的，故不按数量断言 ✗）：
-	//   ① 至少有一个普通等待者被服务（说明确有排队竞争）；
-	//   ② **优先档必须早于最后一个被服务的普通等待者**——这正是「优先权」的判别点：
-	//      没有优先权时它会按到达顺序排在所有普通等待者之后（变异即在此转红）。
-	priorityAt := -1
-	lastNormalAt := -1
-	normalsServed := 0
-	for index, event := range got {
-		if strings.HasPrefix(event, "priority:") {
-			if priorityAt < 0 {
-				priorityAt = index
-			}
-			continue
-		}
-		normalsServed++
-		lastNormalAt = index
-	}
-	// **前提**（③ 更正 ✓）：被服务 = 授予门 **或** 被提交覆盖（全合并时后者成立 ⇒ 不再是假红 ✗）。
-	require.GreaterOrEqual(t, normalsServed+normalsCovered, 1,
-		"夹具必须造出排队竞争（授予门 或 被覆盖皆算被服务 ✓），实测 acquire=%v covered=%d", got, normalsCovered)
-	require.True(t, priorityAt >= 0 || priorityCovered,
-		"优先档必须被服务过（授予门 或 被覆盖 ✓），实测 %v priorityCovered=%v", got, priorityCovered)
-	// **优先权判别**（文字逐字保留 ✓）：只在**双方都有 acquire 证据**时比较 —— 被合并者本就
-	// 没排队，序断言无对象 ✓；**无证据 ≠ 反例** ⇒ 不设兜底硬断言 ✗（那是间歇红的来源 ✓）。
-	if priorityAt >= 0 && lastNormalAt >= 0 {
-		require.Less(t, priorityAt, lastNormalAt,
-			"优先档必须**抢在已排队的普通等待者之前**被服务（优先权），实测 %v", got)
+	// 单步预算保证不存在完整覆盖短路，优先权必须有真实 acquire 证据。
+	require.NotEmpty(t, got)
+	require.Equal(t, "priority", got[0], "后到优先请求必须先于所有已入队普通请求获门：%v", got)
+	for _, name := range []string{"normal-0", "normal-1", "normal-2"} {
+		require.Contains(t, got, name)
 	}
 }
 
@@ -493,7 +491,8 @@ func TestPersistGateAgingPreventsReverseStarvation(t *testing.T) {
 }
 
 // TestCollectionHotPathIsNonBlockingUnderGatePressure（架构级修复 ②）：**采集/投递侧不再等门**——
-// 即使持久化门被一段"按住不放"的步骤长期占着，热路径也必须在有界时间内返回（把落库交给后台通道）。
+// 即使持久化门被一段"按住不放"的步骤长期占着，热路径也必须在有界时间内返回；
+// 交办尚未完成时还必须显式返回 ErrPersistDeferred，禁止下游提前投递。
 //
 // 现场形态（2026-10-03 二度复现）：SIGQUIT 显示采集轮与投递侧共 8 个调用方停在同一把 Cond 上等
 // 1 分钟；根因是一次落库的**单个单元可以停在一分钟级的 SQL 语句上**（单元预算只在语句之间检查）
@@ -525,7 +524,8 @@ func TestCollectionHotPathIsNonBlockingUnderGatePressure(t *testing.T) {
 
 	m.persistHotBudget = 50 * time.Millisecond
 	started := time.Now()
-	require.NoError(t, m.persistHot(), "热路径必须返回 nil（超时交给后台通道，而不是报错）")
+	require.ErrorIs(t, m.persistDurableBeforeDelivery(), ErrPersistDeferred,
+		"耐久门超时交办时必须阻止当前投递，而不是把 nil 当成已落库")
 	elapsed := time.Since(started)
 	require.Less(t, elapsed, 2*time.Second,
 		"采集/投递侧在门被按住时必须**有界返回**（实测 %s；阻塞式实现会一直等）", elapsed)

@@ -1,12 +1,7 @@
 package ingest
 
-// 收尾件（ADR-101 / FR-483 §6）：放弃裁定在产品面**可达**——按钮在"无完整已发布投影"的死结上：
-//  ① 无 metadata（CP 未注入操作人） ⇒ 照旧拒绝（不开静默口子 ✗）；
-//  ③ 只有理由、没有操作人 ⇒ 同样拒绝（二者必须成对 ✓）；
-//  ② 操作人＋显式理由齐备 ⇒ 同一错消失，且账本留痕可审计（GapReasonPermanentlyLost + Operator ✓）。
-//
-// 变异（人工验证过）：去掉 resolveOneSourceGaps 里的 AbandonGapsThrough 调用 ⇒ 留痕断言必红；
-// 逐字装回 ⇒ 绿。夹具：manager 直调 + metadata.NewIncomingContext（see resolve_round_bounded_test 同型）。
+// 人工裁定只允许显式完整源键入口；全源自动路径无论 metadata 是否齐备都不得放弃缺口。
+// 显式入口仍须保留认证操作人、理由和永久缺失审计凭据。
 
 import (
 	"context"
@@ -47,28 +42,55 @@ func TestResolveGapsAbandonRendezvous(t *testing.T) {
 	// 放弃裁定覆盖的是「缺口」⇒ 夹具必须有缺口可放弃（与 resolve_round_bounded_test 同款 ✓）。
 	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, 100, ledger.GapReasonDeliverError, "transport down"))
 
-	// ① 无 metadata ⇒ 照旧拒绝。
-	err = m.resolveOneSourceGaps(context.Background(), key, pipe, source)
-	require.ErrorContains(t, err, abandonProjectionError)
+	before := pipe.Ledger().Get(pipe.Key())
+	require.Equal(t, uint64(100), before.Positions.Durable)
+	require.Equal(t, uint64(100), before.Positions.Delivery)
+	require.Len(t, before.Gaps, 1)
+	require.Equal(t, ledger.GapReasonDeliverError, before.Gaps[0].Reason)
+	m.mu.Lock()
+	saved := m.state.Sources[key]
+	m.mu.Unlock()
+	_, complete, err := m.publishedClosedForSourceCtx(context.Background(), source, saved)
+	require.NoError(t, err)
+	require.False(t, complete, "夹具必须命中未发布投影的守卫，不能只测 Raw 提前拒绝")
 
-	// ③ 只有 reason、无 operator ⇒ 同样拒绝。
-	onlyReason := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-jm-reason", "ADR-101 无操作人"))
-	err = m.resolveOneSourceGaps(onlyReason, key, pipe, source)
-	require.ErrorContains(t, err, abandonProjectionError)
-
-	// ② 操作人＋理由齐备 ⇒ 该错消失 + 留痕可查（操作人与原因码都在）。
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
 		"x-jm-operator", "admin", "x-jm-reason", "ADR-101 永久空洞"))
-	if err2 := m.resolveOneSourceGaps(ctx, key, pipe, source); err2 != nil {
-		t.Logf("带 operator+reason 的 resolve 返回（后续阶段允许失败，但不得再报死结错）：%v", err2)
-		require.NotContains(t, err2.Error(), abandonProjectionError,
-			"带操作人+理由后不得再报同一死结错（后续阶段可因其它前置失败 ✓）")
-	} else {
-		t.Logf("带 operator+reason 的 resolve 全程无错")
+	onlyReason := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-jm-reason", "ADR-101 无操作人"))
+	for _, automatic := range []context.Context{context.Background(), onlyReason, ctx} {
+		// 调用真实全源入口，齐备的人工 metadata 也不能跨过自动消解的证据守卫。
+		err = m.ResolveCoveredGaps(automatic)
+		require.ErrorContains(t, err, abandonProjectionError)
+		entry := pipe.Ledger().Get(pipe.Key())
+		require.Equal(t, before.Positions, entry.Positions, "拒绝自动消解后消费水位不得改变")
+		require.Equal(t, before.Gaps, entry.Gaps, "未解决 DELIVER_ERROR 必须原样保留")
+		require.Empty(t, entry.Abandonments, "全源路径不得留下永久放弃凭据")
 	}
+
+	// CP 完成对象授权后只传完整源键和认证操作人；缺键或缺操作人均不得落裁定。
+	require.Error(t, m.ResolveCoveredGapsForSource(ctx, source.LogSourceID, "admin"))
+	require.Error(t, m.ResolveCoveredGapsForSource(ctx, key, ""))
+	require.Empty(t, pipe.Ledger().Get(pipe.Key()).Abandonments)
+	require.NoError(t, m.ResolveCoveredGapsForSource(ctx, key, "admin"))
 	entry := pipe.Ledger().Get(pipe.Key())
 	require.NotNil(t, entry)
-	require.NotEmpty(t, entry.Abandonments, "放弃裁定必须留痕（持久可审计）")
-	require.Equal(t, "admin", entry.Abandonments[0].Operator, "操作人必须入档")
-	require.Equal(t, ledger.GapReasonPermanentlyLost, entry.Abandonments[0].ReasonCode, "原因码必须是永久丢失")
+	require.Len(t, entry.Abandonments, 1, "放弃裁定必须留下唯一的持久审计凭据")
+	abandonment := entry.Abandonments[0]
+	require.Equal(t, "admin", abandonment.Operator, "操作人必须入档")
+	require.Equal(t, "ADR-101 永久空洞", abandonment.Reason, "人工理由必须入档")
+	require.Equal(t, ledger.GapReasonPermanentlyLost, abandonment.ReasonCode)
+	require.Equal(t, uint64(0), abandonment.From)
+	require.Equal(t, uint64(100), abandonment.To)
+	require.Equal(t, uint64(100), abandonment.Through)
+	require.NotEmpty(t, abandonment.AtUTC)
+	require.True(t, entry.Gaps[0].Resolved)
+
+	// 显式落库并从索引读回，不能把内存里的一条记录冒充持久凭据。
+	require.NoError(t, m.persist())
+	rows, err := m.index.Load()
+	require.NoError(t, err)
+	persisted, err := indexStateToState(rows)
+	require.NoError(t, err)
+	require.Len(t, persisted.Sources[key].Ledger, 1)
+	require.Equal(t, entry.Abandonments, persisted.Sources[key].Ledger[0].Abandonments)
 }

@@ -136,6 +136,19 @@ func primeCompleteProjections(t *testing.T, m *Manager) {
 	lastPending := -1
 	for {
 		m.pollOnce()
+		// 手动夹具没有调用 Start，必须补驱生产常驻对账轮，恢复耐久交办后的待投递欠账。
+		// 准备期对账服从既有停滞期限，不用无界背景轮绕过完整投影的前置验证。
+		roundCtx, cancel := context.WithDeadline(context.Background(), deadline)
+		round := m.ReconcileRoundNow(roundCtx)
+		cancel()
+		// **必须补驱重建 worker**（2026-10-09 异步化）：手动夹具没有调用 `Start`，因而生产那条
+		// 「对账轮只登记、重建由专用 worker 执行」的链路缺了后半段。这里用 `drainRebuilds`
+		// 执行**同一套执行体**（`runRebuildRequest` → `rebuildDays`），语义与生产一致，
+		// 只是把执行者换成本 goroutine —— 断言口径（完整投影前置）逐字不变。
+		m.drainRebuilds(context.Background())
+		if len(round.Errors) > 0 {
+			t.Logf("投影预热对账轮暂态错误：%v", round.Errors)
+		}
 		var pending []string
 		for _, key := range sortedSourceKeys(m) {
 			if !projectionCovered(m, key) {

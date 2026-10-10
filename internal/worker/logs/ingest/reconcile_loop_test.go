@@ -108,6 +108,14 @@ func TestReconcileLoopResendsDeletedUTCDay(t *testing.T) {
 	require.Equal(t, 1, result.CheckedSources)
 	require.Empty(t, result.Errors)
 
+	// 2026-10-09：重建已改由「重建 worker」异步执行（对账轮内联执行会把 57 万条级的
+	// 「写 VL + 逐字段校验」压在采集主线上，现场 `inst:220/file` 因此循环重写 ≥70 代次）。
+	// **先**断言「对账轮自身零写入」（登记是 O(1) 的形式保证），**再**用 `drainRebuilds`
+	// 在调用方 goroutine 上同步推进同一套执行体——断言的是「重建做了什么」（生产代码路径），
+	// 而不是「谁执行它」。
+	require.Equal(t, insertsBefore, fixture.insertCount(), "对账轮登记不得产生任何 VL 写入（登记是 O(1)）")
+	require.Equal(t, 1, manager.drainRebuilds(context.Background()), "对账必须登记恰好一次重建")
+
 	require.Greater(t, fixture.insertCount(), insertsBefore, "重发必须真的写入 VL")
 	payloads := fixture.payloadsSince(insertsBefore)
 	require.Len(t, payloads, 1, "只重发缺失天：不得整窗重写（另一天不得被重发）")

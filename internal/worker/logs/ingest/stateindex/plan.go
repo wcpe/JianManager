@@ -1,6 +1,18 @@
 package stateindex
 
-import "fmt"
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+	"time"
+)
 
 // planState 把索引的期望状态拆成各表的行计划，并按「归属键」分组。
 //
@@ -131,6 +143,410 @@ func planState(st State, nowUnixMilli int64) ([tableCount]map[string][]rowData, 
 func WALFingerprint(row WALRow) uint64 {
 	return fingerprint(row.Seq, row.EventID, row.RecordStart, row.RecordEnd, row.Appended, row.Durable,
 		row.Body != nil, row.FP)
+}
+
+// Migration 缓存一次迁移的确定性行计划；跨进程只信库内凭据，不依赖这个句柄保存进度。
+type Migration struct {
+	store       *Store
+	rows        []pendingRow
+	record      migrationRecord
+	dataVersion int64
+}
+
+type migrationRecord struct {
+	SourceSHA      string `json:"source_sha"`
+	MappingVersion int    `json:"mapping_version"`
+	StateSHA       string `json:"state_sha"`
+	Total          int    `json:"total"`
+	Committed      int    `json:"committed"`
+	Complete       bool   `json:"complete"`
+}
+
+const migrationMetaKey = "legacy_json_migration_v1"
+
+// CompletedMigration 只读查询已验全的迁移来源身份，不证明当前业务行仍与旧 JSON 等价。
+// 调用方须另行完整核验当前状态，只能豁免账本明确批准的剪枝，再补归档；未完成凭据不能走此路径。
+func (s *Store) CompletedMigration(ctx context.Context, sourceSHA string, mappingVersion int) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	decoded, err := hex.DecodeString(sourceSHA)
+	if err != nil || len(decoded) != sha256.Size || mappingVersion < 1 {
+		return false, errors.New("stateindex: 迁移来源或映射版本无效")
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	record, exists, err := readMigrationRecord(ctx, conn)
+	if err != nil || !exists {
+		return false, err
+	}
+	stateSHA, err := hex.DecodeString(record.StateSHA)
+	if err != nil || len(stateSHA) != sha256.Size || record.Total < 0 || record.Committed < 0 || record.Committed > record.Total || (record.Complete && record.Committed != record.Total) {
+		return false, errors.New("stateindex: 迁移完成凭据损坏，保留两侧状态")
+	}
+	if record.SourceSHA != strings.ToLower(sourceSHA) || record.MappingVersion != mappingVersion {
+		return false, errors.New("stateindex: 迁移来源或映射版本不一致，保留两侧状态")
+	}
+	return record.Complete, nil
+}
+
+// BeginMigration 校验来源、映射和实际已提交行后取得迁移所有权；无凭据非空库只接受完全等价的状态。
+// 来源校验值应由调用方对旧 JSON 的原始字节计算 SHA256；同一映射的行顺序在重启后仍然确定。
+func (s *Store) BeginMigration(ctx context.Context, sourceSHA string, mappingVersion int, desired State) (*Migration, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.readOnly || s.migration != nil {
+		return nil, errors.New("stateindex: 只读库或已有迁移不接受新的迁移")
+	}
+	decoded, err := hex.DecodeString(sourceSHA)
+	if err != nil || len(decoded) != sha256.Size || mappingVersion < 1 {
+		return nil, errors.New("stateindex: 迁移来源或映射版本无效")
+	}
+	if err := Validate(desired); err != nil {
+		return nil, err
+	}
+	plans, err := planState(desired, time.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	migration := &Migration{store: s}
+	for table, owners := range plans {
+		for _, rows := range owners {
+			for _, row := range rows {
+				// 固定编码结果，防止调用方改动原始切片后让凭据与后续写入的正文脱节。
+				values, err := row.values()
+				if err != nil {
+					return nil, err
+				}
+				row.values = func() ([]any, error) { return values, nil }
+				migration.rows = append(migration.rows, pendingRow{table: table, row: row})
+			}
+		}
+	}
+	sort.Slice(migration.rows, func(i, j int) bool {
+		a, b := migration.rows[i], migration.rows[j]
+		if a.table != b.table {
+			return writeOrderRank[a.table] < writeOrderRank[b.table]
+		}
+		return a.row.key < b.row.key
+	})
+	hash := sha256.New()
+	encoder := json.NewEncoder(hash)
+	for _, pending := range migration.rows {
+		values, _ := pending.row.values()
+		if err := encoder.Encode([]any{pending.table, migrationValues(pending.table, values)}); err != nil {
+			return nil, err
+		}
+	}
+	migration.record = migrationRecord{SourceSHA: strings.ToLower(sourceSHA), MappingVersion: mappingVersion, StateSHA: hex.EncodeToString(hash.Sum(nil)), Total: len(migration.rows)}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	var original migrationRecord
+	var existed bool
+	version, err := migrationReadSnapshot(ctx, conn, func(reader migrationQuery) error {
+		stored, exists, err := readMigrationRecord(ctx, reader)
+		if err != nil {
+			return err
+		}
+		original, existed = stored, exists
+		prefix := -1
+		if exists {
+			if !migration.sameOwner(stored) {
+				return errors.New("stateindex: 迁移来源、映射或进度凭据不一致，保留两侧状态")
+			}
+			migration.record = stored
+			prefix = stored.Committed
+		}
+		actual, err := migration.validateRows(ctx, reader, prefix)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if actual != 0 && actual != len(migration.rows) {
+				return errors.New("stateindex: 无迁移凭据的非空索引不一致，拒绝接管")
+			}
+			migration.record.Committed = actual
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// 全量校验不持写锁；短写事务核对 data_version 与凭据，封住读验到接管之间的竞态。
+	err = s.runUnit(ctx, conn, func() error {
+		if err := checkMigrationSnapshot(ctx, conn, version, original, existed); err != nil {
+			return err
+		}
+		if !existed {
+			return writeMigrationRecord(ctx, conn, migration.record)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	migration.dataVersion = version
+	s.migration = migration
+	s.migrationPending = !migration.record.Complete
+	return migration, nil
+}
+
+// ResumeMigration 只写尚未提交的行，并把确定性前缀进度与每个提交单元放在同一事务中。
+// 计划仅在 Begin 构造一次；正常续跑不扫描已提交历史，外部连接改变库时才重新验其实际内容。
+func (s *Store) ResumeMigration(ctx context.Context, migration *Migration) (Stats, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if migration == nil || migration.store != s || s.migration != migration {
+		return Stats{}, errors.New("stateindex: 无效迁移句柄")
+	}
+	started := time.Now()
+	stats := Stats{Written: map[string]int{}, Deleted: map[string]int{}, Planned: map[string]int{}}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return stats, err
+	}
+	var stored migrationRecord
+	version, err := migrationReadSnapshot(ctx, conn, func(reader migrationQuery) error {
+		current, exists, err := readMigrationRecord(ctx, reader)
+		if err != nil {
+			return err
+		}
+		if !exists || !migration.sameOwner(current) {
+			return errors.New("stateindex: 迁移所有权凭据已改变")
+		}
+		stored = current
+		var observedVersion int64
+		if err := reader.QueryRowContext(ctx, "PRAGMA data_version").Scan(&observedVersion); err != nil {
+			return err
+		}
+		if observedVersion != migration.dataVersion {
+			_, err = migration.validateRows(ctx, reader, stored.Committed)
+		}
+		return err
+	})
+	_ = conn.Close()
+	if err != nil {
+		return stats, err
+	}
+	migration.record = stored
+	migration.dataVersion = version
+	if s.testMigrationAfterCheckHook != nil {
+		s.testMigrationAfterCheckHook()
+	}
+	base := stored.Committed
+	if base == stored.Total {
+		return stats, nil
+	}
+	s.cycle++
+	samples, progress, err := s.commitChunks(ctx, migration.rows[base:], nil, nil, s.cycle, &stats, func(conn *sql.Conn) error {
+		var currentVersion int64
+		if err := conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&currentVersion); err != nil {
+			return err
+		}
+		if currentVersion != migration.dataVersion {
+			return errors.New("stateindex: 迁移单元写入前发现外部提交，保留两侧状态")
+		}
+		return nil
+	}, func(conn *sql.Conn, from, to int) error {
+		current, exists, err := readMigrationRecord(ctx, conn)
+		if err != nil {
+			return err
+		}
+		if !exists || !migration.sameOwner(current) || current.Committed != base+from || current.Complete {
+			return errors.New("stateindex: 迁移分块提交前凭据已改变")
+		}
+		current.Committed = base + to
+		return writeMigrationRecord(ctx, conn, current)
+	})
+	if err != nil {
+		return stats, err
+	}
+	migration.record.Committed = base + progress.writesDone
+	stats.Incomplete = progress.remaining() > 0
+	stats.RemainingRows = progress.remaining()
+	stats.Duration = time.Since(started)
+	for index := range samples {
+		samples[index].ChunkIndex = index
+		samples[index].Chunks = len(samples)
+		s.recordSample(samples[index])
+	}
+	s.checkpointPassiveIfNeeded(ctx)
+	return stats, nil
+}
+
+// FinalizeMigration 在一致只读快照中逐值验全，再用短写事务复核版本并标记完成；成功后才可归档旧 JSON。
+func (s *Store) FinalizeMigration(ctx context.Context, migration *Migration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if migration == nil || migration.store != s || s.migration != migration {
+		return errors.New("stateindex: 无效迁移句柄")
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	var validated migrationRecord
+	version, err := migrationReadSnapshot(ctx, conn, func(reader migrationQuery) error {
+		stored, exists, err := readMigrationRecord(ctx, reader)
+		if err != nil {
+			return err
+		}
+		if !exists || !migration.sameOwner(stored) || stored.Committed != stored.Total {
+			return errors.New("stateindex: 迁移尚未完成或凭据已改变")
+		}
+		validated = stored
+		_, err = migration.validateRows(ctx, reader, stored.Total)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	err = s.runUnit(ctx, conn, func() error {
+		if err := checkMigrationSnapshot(ctx, conn, version, validated, true); err != nil {
+			return err
+		}
+		validated.Complete = true
+		return writeMigrationRecord(ctx, conn, validated)
+	})
+	if err == nil {
+		migration.record.Complete = true
+		s.migration = nil
+		s.migrationPending = false
+	}
+	return err
+}
+
+func (m *Migration) sameOwner(record migrationRecord) bool {
+	return record.SourceSHA == m.record.SourceSHA && record.MappingVersion == m.record.MappingVersion && record.StateSHA == m.record.StateSHA && record.Total == m.record.Total && record.Committed >= 0 && record.Committed <= record.Total && (!record.Complete || record.Committed == record.Total)
+}
+
+type migrationQuery interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func migrationReadSnapshot(ctx context.Context, conn *sql.Conn, read func(migrationQuery) error) (int64, error) {
+	var version int64
+	if err := conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version); err != nil {
+		return 0, err
+	}
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	return version, read(tx)
+}
+
+func checkMigrationSnapshot(ctx context.Context, conn *sql.Conn, version int64, record migrationRecord, existed bool) error {
+	var currentVersion int64
+	if err := conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&currentVersion); err != nil {
+		return err
+	}
+	current, exists, err := readMigrationRecord(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if currentVersion != version || exists != existed || current != record {
+		return errors.New("stateindex: 迁移验真后数据库已改变，保留两侧状态")
+	}
+	return nil
+}
+
+func readMigrationRecord(ctx context.Context, conn migrationQuery) (migrationRecord, bool, error) {
+	var record migrationRecord
+	var text string
+	err := conn.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", migrationMetaKey).Scan(&text)
+	if errors.Is(err, sql.ErrNoRows) {
+		return record, false, nil
+	}
+	if err != nil {
+		return record, false, err
+	}
+	if err = json.Unmarshal([]byte(text), &record); err != nil {
+		return record, true, fmt.Errorf("stateindex: 迁移凭据损坏: %w", err)
+	}
+	return record, true, nil
+}
+
+func writeMigrationRecord(ctx context.Context, conn *sql.Conn, record migrationRecord) error {
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", migrationMetaKey, string(encoded))
+	return err
+}
+
+// migrationValues 忽略自动更新时间及派生指纹，比较正文和全部业务列，避免相信被篡改的 fp。
+func migrationValues(table int, values []any) []any {
+	limit := len(loadColumns[table])
+	if table == tblSource || table == tblProjection {
+		limit--
+	}
+	return values[:limit]
+}
+
+func (m *Migration) validateRows(ctx context.Context, conn migrationQuery, committed int) (int, error) {
+	if m.store.testMigrationValidateHook != nil {
+		m.store.testMigrationValidateHook()
+	}
+	limit := committed
+	if limit < 0 {
+		limit = len(m.rows)
+	}
+	var expected [tableCount]map[string]rowData
+	for _, pending := range m.rows[:limit] {
+		if expected[pending.table] == nil {
+			expected[pending.table] = make(map[string]rowData)
+		}
+		expected[pending.table][pending.row.key] = pending.row
+	}
+	count := 0
+	for table, spec := range specs {
+		rows, err := conn.QueryContext(ctx, "SELECT "+strings.Join(loadColumns[table], ",")+" FROM "+spec.name)
+		if err != nil {
+			return count, err
+		}
+		for rows.Next() {
+			values, err := scanRow(rows, len(loadColumns[table]))
+			if err != nil {
+				_ = rows.Close()
+				return count, err
+			}
+			key := mirrorKey(values[:len(spec.keyCols)]...)
+			row, ok := expected[table][key]
+			if !ok {
+				_ = rows.Close()
+				return count, fmt.Errorf("stateindex: %s 存在无迁移凭据的行，保留两侧状态", spec.name)
+			}
+			want, err := row.values()
+			if err != nil {
+				_ = rows.Close()
+				return count, err
+			}
+			if !reflect.DeepEqual(migrationValues(table, values), migrationValues(table, want)) {
+				_ = rows.Close()
+				return count, fmt.Errorf("stateindex: %s 已提交实际行改变，保留两侧状态", spec.name)
+			}
+			count++
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return count, err
+		}
+	}
+	if committed >= 0 && count != committed {
+		return count, errors.New("stateindex: 迁移凭据对应的已提交行缺失，保留两侧状态")
+	}
+	return count, nil
 }
 
 func boolToInt(v bool) int64 {

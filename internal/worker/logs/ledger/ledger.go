@@ -142,6 +142,42 @@ func (l *Ledger) ResolveGapsThroughExcept(key SourceKey, position uint64, resolu
 	return resolved, nil
 }
 
+// ResolveGapsThroughAllowed 仅标记明确允许原因的缺口，未知原因默认拒绝，保留 Except 的排除集语义。
+// position 只是候选扫描上界，不是连续落库证明；调用方负责证据或待重读分类，零位置同样有效。
+func (l *Ledger) ResolveGapsThroughAllowed(key SourceKey, position uint64, resolution string, allowedReasons ...string) (int, error) {
+	if resolution == "" || len(allowedReasons) == 0 {
+		return 0, fmt.Errorf("ledger: gap resolution and allowed reasons are required")
+	}
+	allowed := make(map[string]bool, len(allowedReasons))
+	for _, reason := range allowedReasons {
+		if strings.TrimSpace(reason) == "" {
+			return 0, fmt.Errorf("ledger: allowed gap reason must not be empty")
+		}
+		allowed[reason] = true
+	}
+	// 锁序：调用方源锁（如 WAL.mu）→ Ledger.mu；持锁仅遍历该源有界缺口，不做外部 IO。
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, err := l.require(key)
+	if err != nil {
+		return 0, err
+	}
+	resolved := 0
+	for index := range entry.Gaps {
+		gap := &entry.Gaps[index]
+		if gap.Resolved || gap.EndPos > position || !allowed[gap.Reason] {
+			continue
+		}
+		gap.Resolved = true
+		gap.Resolution = resolution
+		resolved++
+	}
+	if resolved > 0 {
+		l.trimResolvedGapsLocked(entry)
+	}
+	return resolved, nil
+}
+
 // GapReasonPermanentlyLost 是**人工裁定**「该位置的数据永久丢失、不再补齐」的原因码。
 //
 // 为什么需要独立原因码：放弃是唯一允许「回收链跨过一个永远补不上的空洞」的凭据，
@@ -218,8 +254,6 @@ func (l *Ledger) AbandonGapsThrough(key SourceKey, position uint64, ab GapAbando
 		reasonCode = GapReasonPermanentlyLost
 	}
 	resolved := 0
-	var from, to uint64
-	first := true
 	for index := range entry.Gaps {
 		gap := &entry.Gaps[index]
 		if gap.Resolved || gap.EndPos > position {
@@ -230,13 +264,12 @@ func (l *Ledger) AbandonGapsThrough(key SourceKey, position uint64, ab GapAbando
 		gap.ReasonCode = reasonCode
 		gap.ResolvedAtUTC = at
 		gap.ResolvedBy = ab.Operator
-		if first || gap.StartPos < from {
-			from = gap.StartPos
-		}
-		if gap.EndPos > to {
-			to = gap.EndPos
-		}
-		first = false
+		// 每个实际空洞先分别留凭据，随后只合并相接/重叠项，不能用首尾凸包覆盖夹间健康位置。
+		entry.Abandonments = append(entry.Abandonments, GapAbandonment{
+			From: gap.StartPos, To: gap.EndPos, ReasonCode: reasonCode,
+			Reason: ab.Reason, Detail: ab.Detail,
+			Operator: ab.Operator, AtUTC: at, Through: position,
+		})
 		resolved++
 	}
 	if resolved == 0 {
@@ -244,14 +277,6 @@ func (l *Ledger) AbandonGapsThrough(key SourceKey, position uint64, ab GapAbando
 		return 0, nil
 	}
 	l.trimResolvedGapsLocked(entry)
-	// 凭据区间取「本次实际被放弃的缺口并集」，而不是调用方传入的 through——
-	// 后者可能远大于实际空洞（它要越过读位置才能覆盖缺口），把非缺口区间写进凭据
-	// 会让「回收链凭什么跨过这里」的审计答案变宽。
-	entry.Abandonments = append(entry.Abandonments, GapAbandonment{
-		From: from, To: to, ReasonCode: reasonCode,
-		Reason: ab.Reason, Detail: ab.Detail,
-		Operator: ab.Operator, AtUTC: at, Through: position,
-	})
 	l.mergeAndTrimAbandonmentsLocked(entry)
 	return resolved, nil
 }
@@ -311,7 +336,7 @@ func (l *Ledger) AbandonmentsCovering(key SourceKey, pos uint64) (GapAbandonment
 	return findAbandonmentCovering(entry, pos)
 }
 
-// abandonmentIntersectingLocked 返回与闭区间 [from, to] 相交的第一条放弃凭据。
+// abandonmentIntersectingLocked 返回与恢复分段半开区间 [from, to) 相交的第一条放弃凭据。
 //
 // 为什么回收门禁用「相交」而不是「覆盖 reclaim 位置」：被卡住的 reclaim 位置通常落在空洞**之前**
 // （门禁要求整段责任已转移，而整段里含空洞），所以按位置覆盖判定永远匹配不上——
@@ -319,11 +344,11 @@ func (l *Ledger) AbandonmentsCovering(key SourceKey, pos uint64) (GapAbandonment
 // 判据取相交即表达这一点，而放行的**上界仍是该分段的 CoversTo**，不会越界。
 // 调用方必须已持锁（读或写）。
 func (l *Ledger) abandonmentIntersectingLocked(e *Entry, from, to uint64) (GapAbandonment, bool) {
-	if e == nil {
+	if e == nil || from >= to {
 		return GapAbandonment{}, false
 	}
 	for _, ab := range e.Abandonments {
-		if ab.To < from || ab.From > to {
+		if ab.To < from || ab.From >= to {
 			continue
 		}
 		return ab, true
@@ -694,6 +719,7 @@ var ErrReclaimNoSegment = errors.New("ledger: reclaim blocked")
 //   - `Revision` **不能**当水位用：`TryReclaim` 在入口调 `require`（⇒ 无条件推进修订号）
 //     即便什么都没改 ⇒ 排空收尾的每轮 `TryReclaim` 都会让修订号变化 ⇒ 判据恒为「已前进」✗✗
 //     （2026-10-05 实测：用 Revision 做判据时 5/5 次冗余整窗全部放行）。
+//
 // SetPositionsFingerprint 成对写入「已确认水位处的内容指纹」（w18 漂移防护：段 2 由采集侧采样写入，
 // 段 3 由 acquire 在恢复/重启续读前校验——一致 ⇒ 从已确认水位续读；不一致或缺指纹 ⇒ 走对账补齐、
 // 禁止按旧偏移回读历史内容 ✗）。

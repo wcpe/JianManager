@@ -299,9 +299,11 @@ type Stats struct {
 // Store 是索引库的句柄。单写者单连接（spec §2.1）：所有写入都经 SetMaxOpenConns(1) 的连接，
 // 且每次写入都是一个 IMMEDIATE 事务——崩溃时未提交的事务整体丢弃，已提交的批次整体保留。
 type Store struct {
-	path     string
-	db       *sql.DB
-	readOnly bool
+	path             string
+	db               *sql.DB
+	readOnly         bool
+	migration        *Migration
+	migrationPending bool
 
 	mu sync.Mutex
 	// mirror 记录每张表当前已落库行的指纹，结构为「归属键 → 主键编码 → fp」。
@@ -347,6 +349,13 @@ type Store struct {
 	// 用于在子进程中模拟进程异常中断（os.Exit 或 SIGKILL），验证未提交批次不会残留。
 	// 生产恒为 nil。
 	testCrashHook func()
+	// testLoadTableHook 仅供测试在表间提交独立写事务，验证导出不会混合两代。
+	testLoadTableHook func(int)
+	// testMigrationValidateHook 仅供测试计数，守住续跑不能按单元反复扫描历史的复杂度。
+	testMigrationValidateHook func()
+	// 以下屏障仅供迁移回归放行独立写者，分别覆盖预检后与提交单元之间的窗口。
+	testMigrationAfterCheckHook func()
+	testCommitChunkHook         func()
 }
 
 // Open 打开（必要时创建）索引库：建表、设置 WAL/单写者、并把现有行的指纹读入镜像。
@@ -412,6 +421,19 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("stateindex: 写入 schema 版本失败: %w", err)
 	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	record, exists, err := readMigrationRecord(ctx, conn)
+	_ = conn.Close()
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	// 重启不能绕过持久化的迁移所有权；先恢复凭据再允许普通采集写入。
+	s.migrationPending = exists && !record.Complete
 	if err := s.loadMirror(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -732,11 +754,17 @@ func (s *Store) Load() (State, error) {
 }
 
 func (s *Store) load(ctx context.Context) (State, error) {
+	// 固定首表查询建立的 WAL 快照；本句柄互斥锁不能阻止独立连接提交新一代。
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return State{}, fmt.Errorf("stateindex: 开启只读事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	var st State
 	for index := range specs {
 		spec := specs[index]
 		columns := strings.Join(loadColumns[index], ", ")
-		rows, err := s.db.QueryContext(ctx, "SELECT "+columns+" FROM "+spec.name+" ORDER BY "+spec.orderBy)
+		rows, err := tx.QueryContext(ctx, "SELECT "+columns+" FROM "+spec.name+" ORDER BY "+spec.orderBy)
 		if err != nil {
 			return State{}, fmt.Errorf("stateindex: 读取 %s 失败: %w", spec.name, err)
 		}
@@ -756,6 +784,9 @@ func (s *Store) load(ctx context.Context) (State, error) {
 			return State{}, fmt.Errorf("stateindex: 遍历 %s 失败: %w", spec.name, err)
 		}
 		_ = rows.Close()
+		if s.testLoadTableHook != nil {
+			s.testLoadTableHook(index)
+		}
 	}
 	sortState(&st)
 	return st, nil
@@ -853,6 +884,9 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 	defer s.mu.Unlock()
 	if s.readOnly {
 		return Stats{}, errors.New("stateindex: 只读库不接受写入")
+	}
+	if s.migration != nil || s.migrationPending {
+		return Stats{}, errors.New("stateindex: 迁移未完成，不接受普通写入")
 	}
 	started := time.Now()
 	stats := Stats{Written: map[string]int{}, Deleted: map[string]int{}, Planned: map[string]int{}}
@@ -963,7 +997,7 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 	sort.SliceStable(writes, func(i, j int) bool { return writeOrderRank[writes[i].table] < writeOrderRank[writes[j].table] })
 
 	s.cycle++
-	samples, progress, err := s.commitChunks(ctx, writes, deletes, pruneRows, s.cycle, &stats)
+	samples, progress, err := s.commitChunks(ctx, writes, deletes, pruneRows, s.cycle, &stats, nil, nil)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -1268,7 +1302,7 @@ var writeOrderRank = func() [tableCount]int {
 //
 // 返回本周期各单元的采样（**不**登记进采样环）：周期结构与周期口径的规划明细要等全部单元
 // 跑完才知道，由 ApplyScoped 统一补齐后登记。
-func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, prunes []walPrunePlan, cycle uint64, stats *Stats) ([]Sample, commitProgress, error) {
+func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, prunes []walPrunePlan, cycle uint64, stats *Stats, unitGuard func(*sql.Conn) error, progressInUnit func(*sql.Conn, int, int) error) ([]Sample, commitProgress, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, commitProgress{}, fmt.Errorf("stateindex: 获取写连接失败: %w", err)
@@ -1319,6 +1353,12 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 		// 整个单元（写 + 删 + 提交）都在同一个 IMMEDIATE 事务内：BEGIN 在写入之前，
 		// 否则语句会各自 autocommit——那正是「崩溃不丢」回归要抓的形态。
 		if err := s.runUnit(ctx, conn, func() error {
+			// BEGIN IMMEDIATE 已排除独立写者；在任何业务写入前拒绝已失效的迁移验真版本。
+			if unitGuard != nil {
+				if err := unitGuard(conn); err != nil {
+					return err
+				}
+			}
 			// 单元内先写后删：与不分单元时的顺序一致（写入建立/更新父行，删除随后收尾）。
 			//
 			// 每轮迭代只放「一条批量语句的行数」（batchUpsertRows/batchDeleteRows），因此耗时
@@ -1384,6 +1424,10 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 				rows += end - di
 				di = end
 			}
+			// 迁移凭据与本单元的数据一起提交，不能在 COMMIT 后另行记进度。
+			if progressInUnit != nil {
+				return progressInUnit(conn, writtenFrom, wi)
+			}
 			return nil
 		}); err != nil {
 			return nil, commitProgress{}, err
@@ -1429,6 +1473,9 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 			BytesWritten: chunkStats.BytesWritten,
 		})
 		s.adaptBudget(rows, elapsed)
+		if s.testCommitChunkHook != nil {
+			s.testCommitChunkHook()
+		}
 	}
 	return samples, commitProgress{
 		writesDone: wi, deletesDone: di, writesTotal: len(writes), deletesTotal: len(deletes),

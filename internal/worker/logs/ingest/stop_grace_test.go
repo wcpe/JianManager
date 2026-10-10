@@ -33,10 +33,11 @@ func TestStopPersistBoundedVsUnbounded(t *testing.T) {
 		"绿：应确实等满宽限（否则测的不是这条路径）")
 	t.Logf("绿 ✓ 有界返回 %v（grace=%v）", dGreen, stopGrace)
 
-	// ── 红（对照＝旧语义）：无 maxWait ⇒ 必等满门占用 ✗
-	holdGate(m, H)
+	// 对照使用独立门，避免第一段尚未结束的释放定时器提前释放第二段门。
+	unbounded, _ := newGateFixture(t, 64, 16)
+	holdGate(unbounded, H)
 	t1 := time.Now()
-	err = m.persistCtx(context.Background(), persistPriority)
+	err = unbounded.persistCtx(context.Background(), persistPriority)
 	dRed := time.Since(t1)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, dRed, H-100*time.Millisecond,
