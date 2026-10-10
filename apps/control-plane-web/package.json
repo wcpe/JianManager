@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:node": "vitest run --project node",
     "test:dom": "vitest run --project dom",
+    "test:coverage": "vitest run --coverage",
     "e2e": "playwright test",
     "e2e:headed": "playwright test --headed"
   },
@@ -60,6 +61,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/react-grid-layout": "^1.3.6",
     "@vitejs/plugin-react": "^6.0.1",
+    "@vitest/coverage-v8": "4.1.9",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
