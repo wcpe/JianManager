@@ -30,7 +30,20 @@ func New(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		if err := ensureSQLiteParentDir(cfg.DSN); err != nil {
 			return nil, err
 		}
-		dialector = sqlite.Open(cfg.DSN)
+		// SQLite 走自建连接池（FR-318 机制化防护，见 sqlite_pool.go）：
+		// ① 每条物理连接经 guardConn 包装，让「连接带未提交事务」可被 database/sql 在回池前
+		//    检测并驱逐（原先靠 SetMaxOpenConns(1) 消灭锁竞争来回避，放开连接数后必须换成检测）；
+		// ② 启用 WAL，使读不阻塞写、写不阻塞读；
+		// ③ 写事务经写闸门显式串行化，补回单连接顺带提供的「单写者」语义。
+		// 逃生阀 JIANMANAGER_SQLITE_MAX_OPEN_CONNS=1 可一键退回原单连接行为。
+		sqlDB, guard, plan, err := openSQLitePool(cfg.DSN)
+		if err != nil {
+			return nil, err
+		}
+		logSQLitePoolPlan(plan)
+		// 用 Conn 注入既成连接池（Dialector 仅在 Conn 为空时才自建 sql.DB），并按 pool 形态
+		// 设置 ConnPool —— 后者让所有 gorm 显式事务走写闸门入口。
+		dialector = sqlite.Dialector{DSN: cfg.DSN, Conn: newGatedConnPool(sqlDB, guard)}
 	default:
 		return nil, fmt.Errorf("不支持的数据库驱动: %s", cfg.Driver)
 	}
@@ -44,21 +57,30 @@ func New(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("连接数据库失败: %w", err)
 	}
 
-	// SQLite 收敛为单连接（FR-318 根因修复）：glebarez/go-sqlite 的 COMMIT 因 SQLITE_BUSY
-	// 失败时事务保持打开，而驱动不实现 driver.Validator/SessionResetter，database/sql 会把
-	// 带着打开事务的连接放回池中且永不驱逐——此后抽到该连接的请求全部报
-	// "cannot start a transaction within a transaction"，直到重启（线上 OOM/swap 慢 IO 即触发）。
-	// BUSY 的唯一来源是自身连接池内的锁竞争（CP 是数据库唯一读写方，见架构不变量「数据所有权」），
-	// 单连接下同库锁竞争不复存在，毒化前提被整体消除。机制与回归见 sqlite_txpoison_test.go。
-	if cfg.Driver == "sqlite" {
-		sqlDB, err := db.DB()
-		if err != nil {
-			return nil, fmt.Errorf("获取底层连接池失败: %w", err)
-		}
-		sqlDB.SetMaxOpenConns(1)
-	}
-
 	return db, nil
+}
+
+// logSQLitePoolPlan 把连接池决策打进启动日志。
+//
+// 为什么必须显式记录：WAL 是**持久化属性**（改动落在数据库文件头上），连接数决定并发形态，
+// 降级则意味着本次优化实际上没生效。三者都不能静默，否则事后排障只能靠猜。
+func logSQLitePoolPlan(plan sqlitePoolPlan) {
+	switch {
+	case plan.Memory:
+		slog.Info("SQLite 使用单连接（内存库）",
+			"max_open_conns", plan.MaxOpenConns, "reason", plan.Reason)
+	case plan.Degraded:
+		slog.Warn("SQLite WAL 启用失败，已降级为单连接（未放开连接数）",
+			"max_open_conns", plan.MaxOpenConns, "reason", plan.Reason)
+	case plan.WAL:
+		slog.Info("SQLite 已启用 WAL 与写闸门",
+			"max_open_conns", plan.MaxOpenConns,
+			"note", "读并发不再被长写任务阻塞；写事务由写闸门串行化")
+	default:
+		// 逃生阀路径：不切 WAL，回到 FR-318 原始形态。
+		slog.Warn("SQLite 已显式收敛为单连接（逃生阀），退回 FR-318 原始行为",
+			"max_open_conns", plan.MaxOpenConns, "reason", plan.Reason)
+	}
 }
 
 // ensureSQLiteParentDir 在打开 SQLite 文件前创建其父目录（含多级）。

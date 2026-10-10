@@ -321,20 +321,28 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 **数据面边界不变**：CP 业务库仍只保留 platform/audit + （切换后）Legacy 只读存量；切换打开前 instance/worker 来源仍写入 CP `logs` 表。禁止把测试全绿当作真 Worker/VL/浏览器验收。
 
+**采集索引与查询一致性（当前工作区）**：旧 JSON 迁移绑定原始字节 SHA-256、映射版本与 meta 进度凭据，分块数据/进度同事务提交；启动循环续跑 `Incomplete`，全量逐值校验及来源复核后才归档旧 JSON，非空无凭据不一致库拒绝覆盖。全表读取共用一个只读事务的 WAL 快照。锁外持久化计划携快照顺序令牌，提交门内整份拒绝过期计划（包括根行及剪枝），部分提交同样推进接纳门槛；详见 [索引规格](specs/log-index-sqlite/spec.md)。
+
+**发布恢复边界**：静默遗留 pending 由常驻对账按实际 UTC 日内容级确认或预算化续修，不依赖新日志；全部日未确认时保持 pending，清除须复核发布版本/authority/attempt，旧完成不能清新尝试。微投影 64 代阈值按本批实际日检查，到限单代 Replace 写完整 canonical 日集，保留旧历史。既有处理游标逐源完成后推进，不能按候选数抢先跨过未处理源；详细语义与回归见 [采集规格](specs/worker-log-acquisition/spec.md)。
+
+**联邦完整性与位置凭据**：Worker/CP 在读取前分配整请求扫描额度（默认 32 MiB），子调用只能使用正数预留；范围扇出截断及顶层 partial 原因不能被逐目标成功覆盖。同时间戳页边界未完整时仅补取窄时间组，证据不足不得推进跨缺失组 cursor。`LogSearchResponse.ingest_position_gaps` 独立返回人工永久放弃位置：proto 仅追加真实 `log_source_id=7/source_generation=8`，RPC/版本不变；HTTP 位置无损字符串、Worker 身份取可信路由，旧 Worker 未知字段省略，不参与 coverage/quality/Export。详见 [API](API.md) 与 [协调器规格](specs/cp-log-query-coordinator/spec.md)。
+
 **日志保留、分层与成本治理（现状 → 目标形态，ADR-098/099）**
 
 | 维度 | 现状（截至 2026-10-02） | 目标形态（已决策） |
 |---|---|---|
-| 热层保留 | 受管 VL `-retentionPeriod` 单值（默认 30d，HOT/COLD/Rehydrate 同值）；产品侧 `hot_retention` 配置面存在 | **90 天**：VL + SSD，其中按级别分级停留 `debug 3d / info 7d / warn 30d / error 90d`（设置中可配置，含源级覆盖） |
+| 热层保留 | 配置默认 `log_vl.retention_period=90d`，受管 VL 按 namespace retention（未覆盖时沿用全局）执行；启用产品保留策略时校验原始声明与实际回退值，明显矛盾启动拒绝 | **90 天**：VL + SSD，其中按级别分级停留 `debug 3d / info 7d / warn 30d / error 90d`（设置中可配置，含源级覆盖） |
 | 冷层保留 | `retention.Policy.ColdRetention` 默认 730d（声明与校验）；`log_retention.cold_retention` 与受管 VL 的**按 namespace retention** 已在工作区接线（未提交） | **730 天（2 年）**：VL + 大容量盘，**所有级别统一**；由受管 COLD 的 `-retentionPeriod` 执行 |
 | 到期动作 | 默认动作=搬运 COLD（复用 `ROUTING_FROZEN→…→CLEANED`），搬运失败=保留原物+告警、零删除；删除需 `discard` + `sweep.vl_sweep` 双闸且受管 VL 需 `-delete.enable`，**默认全关** | 不变（该语义即目标形态）；补齐"谁、何时、多少、去哪"的对外暴露（指标 + 日志行） |
 | 分层驱动 | `retention.Driver` 周期调度 + 首轮立即执行；触发口径年龄 + 磁盘水位**取先到**（磁盘触发 min_age=7d）；`log_retention.trigger.*` 配置面已在工作区接线（未提交） | 不变（接线完成后即目标形态） |
 | 实例本地 gz | 无吸存能力；平台不删实例本地任何 `.gz`（轮转尾部由 ArchiveImporter 解析，仅用于接管） | 以**文件身份、压缩态**吸存到冷层：只归档文件、不解析、不入事件流；幂等去重由系统负责；**本地 gz 一律不动** |
 | 对象存储 | FR-478 已有 S3 Provider / Rehydrate 能力（真机 RustFS 验收通过），当前未作为必需组件 | **第一阶段不上**；作为第 3 档（异地/超长期/合规）能力位与后续评估位 |
-| 采集侧成本 | `sampling` 四类策略齐备、**默认全关**；抑制以汇总事件承接（不变量 R） | 不变（默认关即目标姿态） |
+| 采集侧成本 | `Config.SamplingPolicy → ingest.Options.Sampling → Manager → 每源 Pipeline` 已接线，四类策略**默认全关**；抑制以汇总事件承接（不变量 R），恢复重投不重复采样 | 不变（默认关即目标姿态） |
 | 单位成本 | 投递路径 O(段总行数) 遍历已消除（`87af507f`：−82% 批耗时 / +68% 吞吐 / 达成率 0.555→0.93）；新鲜度换成本的分段批拉经实测收益为零、**不做** | 成本可见性平台化（每源 GB/天、ms/行），供预算化运营 |
 | 平台配额 | 机制侧有"每源预算"（默认关）；`GroupQuota` 无日志量维度 | **先可见性、后强制**：用量报表先落地，强制档位（复用 `EnforceMode` 三档）后置 |
 | 观测与关联 | 日志侧仅 `log_ingest_healthy` 一个告警指标；`log.level`/`log.format` 已装配、`LevelVar` 支持运行期调级；无 trace/correlation 字段 | FR-485 其余观测项补齐（state 尺寸与增速、persist 写字节/秒、单源积压与暂停时长、投递失败率分类、退避次数、慢 SQL、节点 iowait、比率触发）；**轻量 correlation id** 贯通 CP→Worker→事件字段（不引入 OTel collector；correlation 不得进 `stream_fields`） |
+
+**TTL 校验边界**：产品 TTL 与受管 VL 参数分开解析；VL 裸数/大写 `M` 按固定 31 天月、`y` 按 365 天，小写 `m` 非法，原 `90d/730d` 默认兼容。冷层明确可重试失败优先 Resume，不能因 Owner 已切 COLD 跳过清理或再次 Begin；活动/手工/未知状态不自动覆盖。有限 native TTL 仍会原生按日淘汰，不是搬运无限失败的保护机制；关闭保留策略、删除三闸与实例本地 `.gz` 不动的边界不变。详见 [成本治理规格](specs/log-cost-governance/spec.md)。
 
 **已知边界**：日分区 `(namespace, utcDay)` 内混着所有级别，而搬运的最小粒度是"一天"，因此**按级别的 TTL 无法在热层独立生效**（`HotWindow()` 取显式热层窗口）；真正的独立分级需要把级别分流到不同存储命名空间，属后续评估项（与"低价值等级路由独立流"同类改动）。**未决策项**：分级验证（低价值级别"只存不验"）会削弱逐字段校验的证据链，需单独评估，ADR-099 不承诺。
 
@@ -382,6 +390,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 探针部署：`ArtifactPackage/Source/Version` 叠加在既有 CAS 上（FR-409/411、ADR-083/085）。CP 手动同步 GitHub Releases 或由平台管理员按顺序提交 `version` 后提交本地 JAR；上传接口直接流式写入 CAS，不经 multipart 临时文件或完整内存缓冲，并以文件字节数实施 64 MiB 上限。来源由版本记录关联的 SourceID 判定，避免共享 CAS asset 混淆来源。版本按全局→Worker→实例解析；`DeployServerProbe` 只下发 CP-local 下载 URL、摘要、版本和生成的 config.yml。Worker 拉取到临时文件、校验后原子替换 `plugins/ServerProbe.jar`。不再分发 `libraries_zip`，游戏服首启自行联网解析依赖；实例更新只在下次重启生效。
 - 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
   - **JBIS 业务事件汇聚上行（FR-122；见 ADR-027/028）**：同一条 StreamPluginEvents 流复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义）。CP 侧 `PlayerEventService` 据 `domain` 分流：玩家/监控事件走在线名册 + SSE，业务事件交 `BusinessEventService` 按 (domain,node_uuid,zone_id,dedup_key) 去重落 `business_events` 通用信封；经济域(`economy`)再解析信封维护 `economy_balance_mirrors`(node→zone 维度、seq 单调)+`economy_ledger_entries`(node→zone→ledger 幂等审计)。探针侧由 mce `PlayerEconomyChangeEvent`/`PlayerEconomyCatchupEvent` 折算上报（覆盖 web 后台/跨服一切余额变更），currencyId Int→identifier 折算保证跨服聚合不串味。CP 插件无关、只认信封
+- **CPU 窗口采样**：一个 Worker-owned `CPUSampler` 维护累计计数基线并发布窗口差分快照，collector/register/Heartbeat/`GetNodeMetrics` 仅读，不能相互推进基线。CPU/iowait 为 0..1，CP iowait 时序转为 pct；预热、无增量、计数或时钟回退、读取失败均无效，现有 RPC 标量只能零降级，不能把该零宣称有效测量。普通 iowait 阈值告警按节点 UUID + 既有时序别名读取近期 pct，缺失/过期跳过，不伪造触发或恢复；不新增 Node 字段或 RPC。
 - 指标：`GetNodeMetrics` 采集 Worker 所在节点 CPU / 内存 / 磁盘实时快照；`GetInstanceMetrics` 请求带 `probe_port`，由 Worker 抓 ServerProbe `/metrics`（**RCON 已退役（FR-067/ADR-016）**——探针未就绪时富指标 N/A，不再回退 RCON）。`GET /api/v1/nodes/:id/metrics` 节点面板端点优先经已连接 Worker 主动拉取，连接池暂无该节点时回退 CP 中最新心跳快照；实例实时面板继续按需 `GetInstanceMetrics` 拉取；**历史时序**（FR-060）由 Worker 心跳推送 `instance_metrics`，二者互补。FR-400 在同一已认证反向隧道 Heartbeat 追加 `managed_runtime`：只读上报 Go Worker 与已运行共享 Bot Worker 的 RSS/CPU、Bot 聚合运行态、真实 `bot_capacity_max` 和观测时间；容量未就绪、缺失或无效时保持 `null` 并附原因。不得调用会拉起 Bot Worker 的 RPC，也不扫描任意 OS 进程。CP 仅保存 Node 当前快照，首页经管理员 `GET /metrics/resource-attribution` 聚合鲜节点、RUNNING 受管实例树和进程 TopN；CPU 首帧/PID 切换为空值，陈旧超过 90 秒不伪装成实时。FR-401 的 `BotRuntimeMetricSampler` 只读取该已认证快照，每 30 秒写入 ADR-013 node scope 时序；离线/陈旧/不可用字段写 `NULL` 断点，查询经 `/metrics/bot-runtime` 由节点、实例或压测会话解析关联节点并始终标明共享语义，不新增 Worker RPC、端口或数据库直连。FR-402 的 `PlatformObservabilityService` 仅用有界集合查询构造平台管理员首页读模型：鲜活节点资源、节点/实例健康、未解决告警、进行中/失败任务与共享 Bot 观察值；每类列表上限 5，跨节点事件循环 P95 取可用节点最大值。该端点不做逐项查询、绝不触发 Worker RPC，普通成员不请求也不渲染管理员区块。FR-406 把 `/monitor` 收口为平台/节点/实例观测入口，默认选中对比指标并复用 FR-400/401/402 与进程 TopN 数据；FR-407 在实例维度新增受管进程详情读模型，结合 `process_metric_snapshots` 最近窗口输出带样本数、窗口和数值证据的诊断标签；FR-408 的 PID 级处置只开放非根子进程并要求前端 DangerConfirm 与后端 `confirm=true`，审计 detail 不记录完整命令行、环境变量或密钥。
 - 玩家管理：SendPluginCommand（FR-067/ADR-016；CP 经 Worker 反向 WS 向探针下发踢/封/解封/白名单治理指令，探针经服务端 API 执行；在线列表经探针事件聚合）。**RCON 路径已退役**，`ExecRconCommand`/`rcon_client` 移除；探针未连入时优雅降级
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
@@ -1270,7 +1279,7 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 
 ## 11. 配置
 
-**Control Plane**: `control-plane.yml` — server port, gRPC port, database, JWT secret（管理员账号通过首次启动 Web 引导创建，见 FR-017）；`log_store`（日志中心，FR-049）；`proxy`（出站代理，FR-174，见 §11.2）
+**Control Plane**: `control-plane.yml` — server port, gRPC port, database, JWT secret（管理员账号通过首次启动 Web 引导创建，见 FR-017）；`log_store`（日志中心，FR-049）；`log_export`（联邦导出物化预算，FR-480）；`proxy`（出站代理，FR-174，见 §11.2）
 **Worker Node**: `worker.yml` — node name, Control Plane address, WS port, data_dir, Docker, Bot 配置；遗留 `grpc.port` 读取时静默忽略；`proxy`（出站代理，FR-174，见 §11.2）；`memory_guard`（启动内存闸，FR-317：`reserve_mb` 保留水位 MB，0=默认 max(512MB,总内存 10%)；`disabled` 应急关闭）
 
 `log_store`（日志持久化/归档/保留，均有默认值，零配置即用）：
@@ -1285,6 +1294,16 @@ log_store:
 ```
 
 归档目录恒为数据根 `var/log`（不可配，保证便携自洽）：超阈值的旧日志按 NDJSON（`logs-YYYY-MM-DD.ndjson`）滚动落盘后从表中清理。
+
+`log_export`（联邦日志导出物化预算，FR-480；均有默认值，零配置即用）：
+
+```yaml
+log_export:
+  max_rows: 10000     # 单次导出行数上限（CP 侧跨页累积）；留空/0 = 默认 10000
+  max_bytes: 67108864 # 单次导出累计字节上限（64MiB）；留空/0 = 默认 64MiB
+```
+
+导出（`POST /logs/federation/export`）是「单次请求逐页读全量并在 CP 内存里物化 NDJSON」的操作，上限即为此设。**请求参数只能在其内收紧**（`limit` 取服务端配置与请求值的较小者），放宽一律走本配置——否则任意调用方传大 `limit` 即可把有界导出变成无界资源入口。默认值与修复前的编译期常量一字不差，故零配置部署行为不变；超默认上限的部署须显式调大，否则导出会被判 `budget_exceeded` 而不产出附件（阻断报告的 `incomplete_reasons` 会给出 `row_limit_exceeded` / `byte_budget_exceeded` 精确归因，前端据此提示「缩小时间范围或调大配置」）。负数或小于 100 的行数上限在启动期 fail-fast（`config.ValidateLogExportConfig`）。
 
 **API 错误统一落平台日志（FR-320）**：全局 gin 中间件 `middleware.ErrorLog` 把 API 失败响应（4xx 业务拒绝=warn、5xx=error，401/404/429 噪音跳过）连同路径/状态码/响应体/用户/IP slog 化，经 `PersistSlogHandler` 桥自动落日志中心 platform 源——`/logs` 页可直接追查「某操作为什么报错」。此前错误只回 HTTP 响应，平台日志恒空、失败随连接断开进黑洞（FR-319 真机事故的观测性根因）。
 

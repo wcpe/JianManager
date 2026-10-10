@@ -54,8 +54,18 @@
 - `onOpen`（`tunnel.go`）去掉 `n == 1` 限制：隧道**每次**建立都触发 `onConnected`（幂等重推，由 `ResyncDeduper` 按节点去重），避免瞬时 active=2 漏推。
 - 长驻订阅类副作用（`EventService.StartWorkerStream` / `PlayerEventService.StartWorkerStream` / `recoverConnectedBotFleetSubscriptions`）与重推**语义分离**：走 `onFirstConnected`，仅在节点「从无到有」（active 0→1）时触发**一次**，避免瞬时 active=2 重复建立长驻订阅流（stdout/stderr 双写、事件重复扇出）；两个 `StartWorkerStream` 另加 per-node 单飞守卫做纵深防御。
 - 追加触发源：`Register` 成功后与心跳（低频，作自然兜底）均可触发同一幂等重推入口。
-- Worker 侧 `ResyncInstances`（`internal/worker/grpc/server.go`）已是「只补不覆盖」语义，天然幂等，无需改动。
+- Worker 侧 `ResyncInstances`（`internal/worker/grpc/server.go`）保持「不覆盖运行态和工作目录、不擅自启动」；已在表实例不再仅跳过，而是复用幂等注册补完整启动规格与端口，当前控制连接不中断、下一代策略按 stale/rebuild 生效；skipped 仍表示未新建实例。未知启动规格的收养实例在补齐前不能先停后启，详细规格与 `SetLaunchConfig` 兼容接口见 [自动收养规格 §2.2](../auto-adopt-orphans/spec.md#22-收养动作非破坏幂等)。
 - 心跳里 `syncInstanceStates` 的**证据对账异步化**（`NewEvidenceReconcileDispatcher`，按节点单飞）：最长 8s 的进程侧证据拉取移出心跳应答关键路径（重推/心跳不被阻塞）。
+
+### 2.5 生命周期取消与不确定结果收敛（RV-016）
+
+- **实例操作闸**：零值可用的 `lifecycleGate` 保持同一实例生命周期操作串行，排队直接等待令牌或 ctx 取消，不创建后台 goroutine 代等 Mutex。取得令牌后再次检查取消，防止取消与取闸同时就绪产生迟到操作。
+- **生产入口**：Worker `StartInstance/RestartInstance/StopInstance/KillInstance` 分别调用 Manager 的 `StartContext/RestartContext/StopContext/KillContext`，使用请求 RPC ctx；无 ctx 的旧入口保持 Background 包装兼容。已开始的优雅停止正常收尾，排队 Stop/Kill 被取消时不迟到停服或强杀。
+- **取消三阶段**：①取闸或停止/启动提交前取消＝未执行，不改变真实运行事实；②Restart 已完成停止但新启动提交前取消＝保留 STOPPED、不再启动新一代；③实际 `cmd.Start` 已提交＝进程已启动，不把请求 ctx 绑定为进程寿命、不为取消误杀，丢失响应交 CP 确认。取消/等待失败不是 CRASHED 的证据，不能据此触发错误自愈。
+- **CP 单实例与批量**：成功和不确定结果都以派发前观察的 `id/uuid/node_id/status/updated_at` 作条件 CAS 回写；任一已变化即放弃迟到结果，不能覆盖期间心跳、迁移或并发操作。传输失败/取消先用已有 `GetInstanceStatus` 在独立 2s 窗口确认；查询失败保持观察态并记待确认原因，继续由现有心跳收敛，不新增状态枚举或 RPC。Worker 未连接同样只记待确认，不直接标崩溃。
+- **批量兼容**：`BatchContext(ctx, req, scopeIDs, scope)` 传播调用方取消与委托超时；旧 `Batch(req, scopeIDs, scope)` 仍为 Background 包装，权限与目标筛选语义不变。
+
+**本轮验证边界**：本地新增 RV 回归重复 3 轮、相关 race、授权范围全包及 vet 已由执行组报告通过；旧 CP 内存 DB 用例重复 `-count=2` 遇共享夹具唯一 UUID 冲突，不能称所有重复测试均无环境问题（旧单轮 race 通过）。可选 native cgroup 实验因本轮授权范围排除，假 cgroupfs/本地 helper 不等于真实 systemd/cgroup 验收；未据此勾选下列真机项。运行时 RV-018/022 的最终证据另行核对，不以本节进程回归代替。
 
 ## 3. 任务拆分
 

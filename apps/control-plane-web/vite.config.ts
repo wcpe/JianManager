@@ -49,7 +49,10 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8080',
+        // 2026-10-10 修正：原指向 8080，那是 `cp-live devcp.yml`（工作目录 .tmp 已删除、
+        // 数据库是已删文件句柄），导致日志页看到的不是生产环境。生产 CP 的 HTTP 端口是 19000
+        // （19100 是 gRPC、8080 被无关的开发进程占用）。可用 VITE_API_TARGET 覆盖。
+        target: process.env.VITE_API_TARGET ?? 'http://127.0.0.1:19000',
         changeOrigin: true,
       },
     },

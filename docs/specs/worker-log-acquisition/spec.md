@@ -49,7 +49,11 @@ FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转
 - 自动化验证：`TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings`、`TestInstanceFilePrimaryDoesNotDoubleCollectConsoleOutput`、`TestInstanceRegistrationAndResyncBindManagedLogs`。真实子进程与官方 VL 验证：`TestRealProcessStdoutAndStderrReachManagedVL`；该测试不替代 CP 浏览器创建实例、daemon 重启和轮转矩阵的远端验收。
 
 - 不可变微投影发布兼容旧 journal 的单值 `projection_generation`：首次追加前先读取原已发布 generation，随后将原值与新值一起写入 `projection_generations`。只有明确的隔离全量重建才替换旧集合，不能因字段升级使历史事件从查询输入消失。回归：`TestAppendMicroProjectionPreservesLegacyPublishedGeneration`。
-- 每次物理写入前保存 Catalog 权威快照，并通过 Catalog 条件提交原子发布 manifest 与封闭水位。迁移或并发发布先完成时，旧写入者不得覆盖新 owner/manifest；`publication_pending` 在请求前落盘，响应丢失、发布冲突或进程重启后均触发隔离 generation 全量重建。回归：`TestMicroGenerationLostResponseIsExcludedAndRestartCompacts`、`TestOwnerChangeDuringVerificationCannotPublishToNewOwner`、`TestProjectionWritersCannotOverwriteAnotherCommittedManifest`。
+- 在读取 canonical 快照前捕获本源/本日发布版本，随计划进入短发布区复核；旧完成不得覆盖该源的新 scope，其他源的并发发布则基于当前 Catalog 合并。封闭水位只来自本次实际逐字段校验的写入面，追加可并入本源既有 closed 水位，Replace 不用实时 Durable 或段末端抬高未覆盖范围；VL IO、扫描与校验仍在共享锁外。
+- 每次物理写入前保存 Catalog 权威快照，并通过 Catalog 条件提交原子发布 manifest 与封闭水位。迁移或并发发布先完成时，旧写入者不得覆盖新 owner/manifest；发布尝试只有通过本源快照接纳后才更新 generation/attempt/pending，在请求前持久化。写入完成仅在 attempt 仍匹配时清 pending，旧完成不能覆盖新尝试。响应丢失、发布冲突或进程重启后保留不确定状态，隔离代次重建或按下面的内容证据确认，不能仅凭 HTTP 成功清除。回归：`TestMicroGenerationLostResponseIsExcludedAndRestartCompacts`、`TestOwnerChangeDuringVerificationCannotPublishToNewOwner`、`TestProjectionWritersCannotOverwriteAnotherCommittedManifest`、`TestPR61OldReplayCompletionCannotClearNewPending`。
+- **静默 pending 续修（RV-018）**：常驻对账区分在途尝试与遗留失败；无在途时不依赖新输入，按实际 UTC 日对已发布白名单取证。count 只检查额外行，仍须逐事件身份/哈希/正文/时间校验并确认 closed 覆盖；缺失日按重放 day/耗时预算续跑，已修日不重复写，未确认全部日不得提前清全源 pending。清除前复核源/日发布版本、Catalog authority/本源 token、attempt、无在途与 generation，任何变化维持 pending。回归：`TestPR61SilentPendingRetriesWithoutNewInput`、`TestPR61PendingExactCountRejectsWrongContents`、`TestPR61SilentPendingContinuesAcrossDayBudget`。
+- **跨日压缩（RV-022）**：tail 快路径选择前检查本批事件实际 UTC 日对应的本源投影代次数（上限 64），不只检查源登记日。到限转 canonical 全量规划；单代 Replace 必须将该日完整 canonical 集写入新代，不能把差集写入面配上替换旧白名单，否则旧历史会消失。普通未到限追加路径仍保留增量成本。回归：`TestPR61CrossDayProjectionCompactionPreservesHistory`。
+- **对账轮公平性（RV-019）**：候选枚举不提前推进处理游标；每个源实际处理后才推进一格，预算取消时下轮接第一个未处理源。原生产逻辑保持，本轮 `TestPR61ReconcileActualRoundsVisitEverySource` 用 8/16 源真实多轮与视图/回退两条路径验证，不以取候选次数代替处理证据。
 
 - FileTailer、STDIO_PRIMARY、ArchiveImporter 共享同一 `(log_source_id, source_generation)` 账本；`latest.log → 轮转 → .gz` 是同一逻辑源的连续分段，`.gz` 接管前必须登记前段结束位置，禁止按压缩包 hash 重新导入整段。
 - `source=worker` 的 Worker/Node 自身日志也进入同一采集面；采集失败不能递归写回自身 VL 失败日志。
@@ -81,7 +85,8 @@ FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转
   越界时把该原因最旧的一批折叠为一条覆盖区间——**原因之间绝不合并**，否则会丢掉按原因判定的语义
   （例：`STDIO_RAW_WRITE_FAILED` 不可由投影自动消解）。已解决缺口滚动保留最近
   `DefaultMaxResolvedGapsPerSource`（64）条。观测：`Ledger.GapObservability` 暴露
-  Unresolved/Resolved/MergedTotal/FoldedTotal，`Gap.Detail` 记录合并与折叠摘要。
+  Unresolved/Resolved/MergedTotal/FoldedTotal，`Gap.Detail` 记录合并与折叠摘要。折叠基于同一原始切片
+  计算各原因的离散 victim，一次重建；只替换/移除同因成员，保留夹间其他原因（含永久洞）、已解决审计与登记顺序，不能因前一桶重写使后一桶下标失效。
 - **自动消解（两条出口，缺一不可）**：两条出口共用**同一判据**（`ledger.ResolveGapsCoveredByRanges`）：
   **原因允许名单（默认拒绝）+ 区间连续覆盖**。
   1. **投递成功覆盖**：一次投递成功（写 VL + 逐字段可见性校验 + catalog 发布）后，消解**完全落在**
@@ -99,7 +104,13 @@ FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转
   `DELIVER_ERROR_WORKER_SOURCE`、`WAL_COMMIT_FAILED`；名单之外一律不自动消解（含
   `STDIO_RAW_WRITE_FAILED` 与一切「从未进 WAL」的原因），交重读补投或人工核验。
   人工接口 `ResolveGapsThrough` / `ResolveCoveredGapsForSource` 语义不变（仍按末端消解，
-  可显式确认放弃不可证明的原因）。
+  可显式确认放弃不可证明的原因）。永久放弃凭据按实际连续区间并集分别记录，只合并相接/重叠项，
+  不以首尾凸包覆盖健康位置；实名操作人、理由、时间、Through 与最近 64 条上限及持久化语义保持。
+  回收仅匹配恢复段 `[from, CoversTo)` 的半开相交，恰在 exclusive 上界的凭据不能放行；hold 与责任转移门禁不放宽。
+- **恢复分类不等于落库证据**：积压回落时可将 `APPEND_REJECTED` 与
+  `DELIVER_ERROR/DELIVER_ERROR_WORKER_SOURCE` 分账分类为待重读，必须使用各自明确允许集；
+  末端水位只作候选扫描上界，独立 found 标志支持零位置。未知、归档、Raw 写失败、WAL 提交失败不得顺带消解。
+  原 `ResolveGapsThroughExcept` 语义不变；待重读分类不能扩大上述终局自动消解名单。
 - **暂停源自愈**：采集暂停期间 FileTailer 拒绝读取，「读 → 投递 → 回收 → 恢复评估」整条链没有触发点
   （2026-10-01/02 现场：10 个源 `paused=1`、各带 50,863–50,864 条未解决缺口、持续 13+ 小时零新数据，
   最终靠人工按源解算 13 个源才恢复）。采集轮现在对「已暂停或仍持有缺口」的源执行限频自愈：

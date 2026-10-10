@@ -81,11 +81,15 @@ CREATE TABLE instance_binding (
 
 - 每次 `persist` 只写**本批次变更的行**（UPSERT），事务提交即持久；WAL 保证崩溃可恢复。
   一次 `persist` 不再只对应一个事务：变更行按「行数 + 耗时」双上界切成若干**提交单元**（§2.5）。
-- 启动时一次性迁移：读取旧 `ingest.state.json` → 事务写入 SQLite → 校验行数/关键字段一致 → 旧文件**改名归档**（保留一个版本，不删除）。
-- 迁移失败/校验不一致 → 拒绝启动采集并明确报错（不静默降级），保留旧文件供人工处置。
+- 启动迁移：读取旧 `ingest.state.json` → `BeginMigration` 绑定原始 JSON 字节 SHA-256、映射版本和确定性行计划 → 按提交单元/周期预算反复 `ResumeMigration` → `FinalizeMigration` 一致快照逐值验全 → 完整性及来源复核 → 旧文件**改名归档**（保留，不删除）。`Incomplete` 是可续跑进度，不是已经迁移完成。
+- 迁移凭据存在 meta 的 `legacy_json_migration_v1`：来源/映射/整态指纹、总行数、已提交前缀与完成标志；每个前缀进度与对应行在同一事务提交。重启续跑须核对来源及实际已提交行内容，不只相信行数或缓存指纹；未完成迁移拒绝普通索引写入。无凭据的非空库只在全量逐值等价时允许接管，否则拒绝覆盖。
+- 迁移失败、来源变化或校验不一致 → 拒绝启动采集并明确报错（不静默降级），保留两侧供人工处置。最终校验使用只读快照，短写事务复核版本与凭据后才标完成；旧 JSON 在提交期间改变时不归档。
 - 旧文件还含 `source_configs` 与 `instances`（实例绑定，stdout/stderr 采集依赖），**一并迁移**并在校验中逐项比对。
 - **回滚步骤（写成脚本 `scripts/rollback-log-index.sh`）**：停止 Worker → 归档现有 `ingest.index.db` → 把归档的旧 JSON 改回 `ingest.state.json` → 启动 Worker；因两格式共用同一语义层（游标/缺口/投影），回滚不需要反向导出。
-- 保留 JSON 只读导出（`ingest.index.db` → 导出命令）供排障与回滚。
+- 保留 JSON 只读导出（`ingest.index.db` → 导出命令）供排障与回滚；全表读取共用一个只读事务的 WAL 快照，不能把独立连接并发提交前后的多代状态拼在同一份结果里。
+- 持久化计划在实际快照临界区分配顺序令牌，提交门内整份拒绝被较新接纳计划超越的旧计划（包括根行、派生行和剪枝）；部分提交/`Incomplete` 同样推进接纳门槛，出门后重新规划。`persistCovered` 只能单调推进；并非要求实时 revision 一直不变，避免持续采集让所有计划饥饿。
+- scoped 映射先区分根行与变化源派生行，未变化源不构建 gap/batch/WAL 再丢弃；恢复新发现正文缺失等实际修订时保留 dirty，由后续持久化覆盖，不能用恢复登记动作将其提前标 clean。
+- 提交门回归以真实首次 `enqueue` 屏障建立等待顺序：普通 FIFO/后到优先先获门与完整提交 coalescing 分开验证；合并短路须按每个请求的准确声明号核对 `persistCovered`，不能用 sleep 猜队列，也不能因未实际获门就跳过优先权断言。回归：`TestPersistGateFairFIFO`、`TestPersistGatePriorityFirst`、`TestPersistGateCoalescedWaitersKeepFIFO`。
 
 ### 2.4 索引有界化：历史投递批次（`delivery_batch`）裁剪
 

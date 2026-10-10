@@ -146,6 +146,11 @@ log:
 #
 # ⚠ log_vl.retention_period 必须**不短于** hot_retention：VL 的 retention 到期是**直接删**，
 # 它绕过「删前归档」——若热层实例 retention 比 hot_retention 短，VL 会在搬运之前先删掉数据。
+# 启用策略时 Load 在启动受管进程之前拒绝热层/冷层声明长于实际运行时 TTL 的配置。
+# 实际回退沿用 supervisor：全局空串为 30d，冷层空白值沿用全局；未启用策略行为不变。
+# VL 裸数字和大写 M 表示固定 31 天月，y 为 365 天，小写 m 不能作为月份；不同于产品 TTL。
+# 默认 90d/730d 等值兼容，并不表示存在扫描/搬运余量：生产请为扫描与搬运耗时留足额外 TTL。
+# 原生有限 TTL 不受平台最后副本/租约闸控制，不能保证无限期搬运失败时仍保留原物。
 # log_retention:
 #   enabled: true
 #   hot_retention: 90d                 # 热层窗口：超期即搬运到冷层（默认 90d）

@@ -1,6 +1,6 @@
 # 功能规格：日志成本治理（分层 / 采样 / 保留）
 
-> 状态：**部分落地**（采样与保留两包及接线已实现并自证；冷层驱动器、观测面接线、分级验证见 §7「未做」）
+> 状态：**部分落地**（采样、保留及冷层驱动器已接线；本轮修复的完整回归与真机复验尚须单独核验，不沿用历史自证作为当前通过结论；观测面与分级验证等边界见 §7）
 > 关联 PRD：**FR-501**　·　ADR：**ADR-098**（日志保留、分层与归档）/**ADR-099**（成本治理与不变量 R）
 > 关联：FR-498（采集侧成本）、FR-477（分区 Catalog 与冷热 Lifecycle）、FR-474（容量门禁）
 > 实测环境：本地 VictoriaLogs **v1.52.0**（真二进制，`.tmp/lr-probe/`，未触碰生产）
@@ -69,6 +69,12 @@
 | `log_retention.sources[].match` / `by_level` | — | 来源级覆盖（`*` 后缀为前缀匹配） |
 | `log_retention.sweep.vl_sweep` / `interval` / `timeout` | `false` / `1h` / `30s` | **执行闸** |
 
+**装配口径**：配置经 `Config.SamplingPolicy()` → `ingest.Options.Sampling` → Manager → 每源独立 Pipeline sampler；零值默认关闭。Poll/导入/Flush 前在共享锁外复用 CapacityProvider 更新降级状态，恢复重投使用已入 WAL 的事件，不再次采样。策略在 Load 与运行时入口按原值 Validate，不能先 Normalize 掩盖非法配置。
+
+**VL retention 与产品 TTL 分开解析**：原字串 `90d/730d` 默认与关闭保留策略的行为保持兼容；受管 VL 参数按审批资产规则解析：裸数和大写 `M` 为固定 31 天月、`y` 为 365 天，小写 `m` 非法。产品 `hot_retention/cold_retention` 仍用产品 TTL 口径，不用 Go 分钟单位猜 VL 月份。启动受管 VL 前校验实际 namespace retention（含默认及空白回退）与 HOT/COLD 声明，HOT 180d/VL 90d、COLD 1000d/runtime 730d 等明显矛盾在启用保留策略时拒绝启动。有限 native TTL 仍会按日淘汰，不能承诺搬运长期失败或无限延迟时永不丢失；需在到期前观测失败并处置。
+
+**搬运重试口径**：明确的 `FAILED_RETRYABLE` 冷层迁移进入 Resume（优先于 Owner 已切 COLD 的跳过分支），不能重复 Begin；活动迁移、`FAILED_MANUAL` 与未知状态不自动覆盖。续跑复用最后副本、校验、租约门禁与失败保留原物，不把租约排空/清理失败当作稳定冷层成功。
+
 **取值口径**：`0` = 没填走默认，**负数 = 写错，启动即拒**。校验读**原始取值**而不是
 `Normalize()` 之后的值——后者会把「阈值填 -1」悄悄当成「没填」，使校验成为死代码
 （该缺陷由变异实验 M10 发现）。
@@ -94,12 +100,12 @@
 
 ### D1 热层分级（保留期档位）— 已采纳
 `debug 3d / info 7d / warn 30d / error 90d`。原为「分级删除」，随 D4 改为**分级搬运/归档**：
-段搬运（年龄到）→ 整分区搬 COLD（复用 `catalog`/`lifecycle`）。热层窗口默认 30d
-（与受管 VL 的 `-retentionPeriod` 对齐，即用户认可的热层现状）。
+段搬运（年龄到）→ 整分区搬 COLD（复用 `catalog`/`lifecycle`）。当前热层窗口默认 90d
+（以 D0 定稿为准），原始运行时 retention 与声明的交叉校验见 §2。
 
-### D2 冷层保留 — 已采纳（本项不动 VL 启动参数）
-COLD 默认保留期长（建议 365d 可配；另提供「手动清理」模式），热层保持现状 30d 没关系
-（快查靠热层、长留靠冷层），查询路径保留 Rehydrate 回灌能力。
+### D2 冷层保留 — 已采纳（当前数值以 D0 定稿为准）
+COLD 默认保留期为 730d、所有级别统一，HOT 默认 90d；按 namespace retention 已接线，
+查询路径保留 Rehydrate 回灌能力。
 **落点**：中心侧 HOT/COLD/Rehydrate 三段路径；instance-local gz 只是回退溯源来源，
 **不在本项范围**（本项不碰实例本地归档）。
 
@@ -155,7 +161,7 @@ const (
 
 **已知边界（粒度张力，如实登记）**：日分区里混着所有级别，而搬运的最小粒度就是「一天」
 （`catalog.PartitionKey` 是 `(namespace, utcDay)`）。因此按级别的 TTL **无法**在热层独立生效：
-`HotWindow()` 默认取显式 `hot_retention`（30d）；若未配则回退到「级别 TTL 最长档」（= 90d，ERROR 那档）。
+`HotWindow()` 默认取显式 `hot_retention`（90d）；若未配则回退到「级别 TTL 最长档」（= 90d，ERROR 那档）。
 按最长档取的代价是 DEBUG 会跟着多留（成本没省到头），但**承诺不失守**。
 要做到真正独立的按级别热层保留，需要把级别分流到不同存储命名空间——
 与采样侧「把低价值等级路由到独立流」是同一类改动，见 §7 的未做栏。
@@ -264,7 +270,7 @@ const (
 | 冷层搬运**驱动器** | **已接线** | `retention.Driver`（`Step` 可单测 + `Run` 周期调度，首轮立即执行）；生产适配层 `apps/worker/log_retention.go` 把 `catalog` 分区与 `lifecycle.DayManager` 接成 `PartitionLister`/`Mover`，在采集运行时之后随同一 ctx 启动。触发口径 = 年龄 + 磁盘水位**取先到**（`log_retention.trigger.*`，默认只按年龄）；磁盘读数复用采集侧**同一份** `ingest.DiskCapacityProvider`。磁盘触发带 `min_age` 下限（默认 7d）：盘再满也不搬正在写的日分区 |
 | `ActionArchiveCopy`（导出独立副本） | 仅留接口 | `retention` 已定义动作与结果语义，执行分支未实现 |
 | eventstore 段/归档对象的回收 | 未做 | `logs/eventstore` 目前无 `Prune`/`Trim`/`Reclaim`；段是「权威事件集合」的承载体，加保留必须带**下界**（有界保留）且**不得破坏** `deliverTailPlan` 的水位语义（段只换介质不裁剪） |
-| COLD/Rehydrate 的 VL 启动参数 | 未做 | `-delete.enable`、`-retention.maxDiskSpaceUsageBytes`、按 namespace 差异化 `-retentionPeriod` 尚未接入 `vlsup` 启动参数（按指示**默认不开**） |
+| COLD/Rehydrate 的 VL 启动参数 | **部分接线** | 按 namespace 差异化 `-retentionPeriod` 已接线，HOT/COLD 默认 90d/730d；此项不等于开启原生空间淘汰或删除，删除仍受既有三闸且默认不开 |
 | G10 观测面对外暴露点 | **部分** | `ArchiveStats`/`SweepStats`/`DriverResult`/`sampling.Stats` 已具备读数，驱动器每轮打印 listed/skipped/due/moved/keptOriginal/notDue；**指标端点未接线**。`log.level` 已接线并暴露 `LevelVar`（运行期可调，见 §6.8） |
 | 分级验证（info/debug 只存不验） | 未做 | 需落在 `ingest/runtime.go` 的 `verifyProjection` 调用点（该文件由并行工作流持有） |
 | 按级别独立热层保留 | 未做（可选路径） | 需把级别分流到不同存储命名空间（见 §4 已知边界），属数据面重构 |

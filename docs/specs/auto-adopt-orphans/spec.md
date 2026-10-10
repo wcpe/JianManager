@@ -15,7 +15,7 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 **目标**：给 ADR-093 的「只告警」补上非破坏出口——Worker 启动与运行期周期扫描发现 **PID 目录中未纳管的活进程对**（wrapper 与 Java 均活、PID 文件有效）→ **归属复核**通过 → **自动收养为 RUNNING**（重连 wrapper、恢复控制通道，健康巡检 / 日志采集 / 心跳与既有纳管实例同等对待），**不重启也不杀进程**；复核不过 → 只告警（保留 PID 文件），绝不处置。
 
 **范围内**：`internal/worker/process/` 的收养实现 + 周期扫描相位 + 开关；`internal/worker/config.go` 的配置键；本文档。
-**不做**：不改四层进程模型与 wrapper 的 PID 文件 / socket 协议；不改 CP 侧状态收敛（本 FR 只让 Worker 侧如实上报）；不改 `apps/worker/main.go` 的装配（受本次改动边界限制，见 §5）。
+**不做**：不改四层进程模型与 wrapper 的 PID 文件 / socket 协议，不另建 CP 状态枚举或规格同步体系。当前装配及不确定生命周期结果经既有查询/心跳收敛的边界见 §2.2、§5。
 
 ## 2. 设计
 
@@ -48,7 +48,15 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 
 登记前在锁内**二次确认未纳管**（拨号期间可能有并发路径抢先，如启动接管或 CP 重推后的人工 Start）：若已有 strategy 或已属「可能仍有活进程」状态，则丢弃本次连接（`strategy.Close()`：只断连接、不下发停止帧、不杀进程），保证 wrapper 的控制连接不被两个 strategy 争抢。
 
-**收养后与既有纳管实例同等**（无需额外接线）：
+收养登记竞争胜出且归属复核通过后，在共享锁外复用既有 `isolateAdoptedWrapper`，只迁移确认属于本实例的 wrapper/后代；不支持或无权限时仅告警降级，不撤销收养、不杀服。假 cgroupfs 回归不代表真实 systemd/内核隔离验收通过。
+
+重连策略标为 stale，仅承接当前控制通道；下一代通过既有 rebuild 路径读取完整实例规格，不另维护遗漏字段的复制映射。已有规格保留 `StartCommand/StopCommand/EnvVars/JDK/端口`；仅凭 PIDRecord 收养时 `launchSpecPending=true`，完整规格补齐前拒绝会先停再启的 Restart/自愈，保留现有运行时。
+
+`SetLaunchConfig(..., stopCommand ...string)` 兼容旧调用：仅传入可选 StopCommand 时更新停止命令。RUNNING/STARTING/STOPPING 的策略只标 stale、控制连接不中断，停止/崩溃态则锁外关闭旧策略，下一次 Start 按完整规格 rebuild。`ResyncInstances` 对已在表实例复用幂等注册，补齐启动/停止命令、JDK、环境、AutoRestart、停止超时及端口，**不覆盖运行态和工作目录，不启动或重启进程**；未在表实例仍按 STOPPED 登记。它的 skipped 计数表示未新建实例，不表示跳过规格补齐。
+
+生命周期取消与 CP 条件回写的唯一详细契约见 [重启韧性规格 §2.5](../restart-resilience/spec.md#25-生命周期取消与不确定结果收敛rv-016)：Start/Restart/排队 Stop/Kill 传播 RPC ctx，未知结果不能当作崩溃证据，也不能覆盖更新后的状态；不引入新状态枚举或 RPC。
+
+**收养后的控制与观察能力**：
 
 - **健康巡检**：FR-459 巡检按 `m.instances` + `State == RUNNING` 取目标，登记即恢复覆盖；
 - **日志采集**：进程输出经既有 `Manager.onOutput` 分流（终端 WS / `StreamInstanceEvents` / 日志采集落盘），且心跳把实例上报为 RUNNING 后，CP 侧按既有绑定链路完成/恢复实例日志绑定；
@@ -105,11 +113,11 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 ## 5. 风险 / 待定
 
 - **Windows 未实机验证（已知降级）**：Windows 无 `/proc`，`processEnvMatchesInstance` 读不到 wrapper 环境 → wrapper 分支复核 fail-closed → **收养在 Windows 上不会生效**（只告警）。这是刻意取向（宁可不收养，绝不误纳管），但意味着该平台仍是原来的「只告警」行为。彻底解决需 Windows 侧读进程环境（PEB / `NtQueryInformationProcess`）或改 wrapper 启动参数携带 UUID——属另一 FR，且会触碰 wrapper 协议（本 FR 不做）。**未在 Windows 实机验证。**
-- **`apps/worker/main.go` 装配未接线**：`orphan_scan.auto_adopt` 键已登记（`internal/worker/config.go`），但键 → 扫描器的装配点在 `apps/worker/main.go`，不在本次改动边界内，暂未接线。因此当前**运行期默认开启**（与目标一致），关闭手段为：整体关闭 `orphan_scan.disabled=true`（已接线）或代码级 `SetAutoAdopt(false)`；`auto_adopt: false` 的 YAML 生效需在装配点补一行（留给 FR-497 主线或后续小改动）。
+- **装配已接线**：`apps/worker/main.go` 将 `cfg.OrphanScan.AutoAdoptEnabled()` 传给 `SetAutoAdopt`；`auto_adopt: false` 仅关闭收养，`disabled=true` 仍整体关闭周期扫描。配置关闭与真实服务器持续运行的实机验收仍须单独记录。
 - **单轮单次拨号**：socket 瞬时抖动时本次不收养，等下一轮（≤`orphan_scan.interval`，默认 60s）。取舍：扫描轮内做长退避会拖住整轮（含 direct/docker 相），且启动接管已承担长退避。
 - **复核口径的误判率**（与 restart-resilience §5 同源）：过宽会放过非本实例记录、过窄会永远不收养。本 FR 只把复核用于**收养**（无破坏性），风险面低于强杀路径；匹配口径仍需真机标定。
 - **收养与人工 Stop 的竞态**：PID 文件由 wrapper 退出时清理，正常情况下「刚被 Stop 的实例」不会留下有效 PID 记录；但若清理失败又恰逢 Java 未退净，可能被收养回 RUNNING。已由「wrapper 与 Java 均活」+ 归属复核双重收敛；极端场景待真机观察。
-- **CP 侧审计白名单尚未补三条（越界项，本次未改）**：CP 的 `ReportOrphanAudit` 对 action 做**强白名单校验**（`internal/controlplane/grpc/orphan_audit.go` 的 `orphanAuditAllowedActions`），不在表内一律 `InvalidArgument` 拒收（审计库是运维追责面，不能让 Worker 任意写）。本 FR 的三个新 action（`orphan.auto_adopted` / `orphan.adopt_blocked` / `orphan.adopt_failed`）**当前不在该白名单**，故收养动作在本节点仍有 WARN 日志（不静默），但**进不了 CP 审计库**（Worker 侧会看到「孤儿审计上报失败，丢弃」）。按该文件自身的纪律（「新增动作必须同时更新本表、spec 与 proto 注释」），需在 CP 侧补三条白名单 + `proto/worker.proto` 的 action 注释；两者均**不在本次改动边界内**（本 FR 只允许改 `internal/worker/process/` 与 `internal/worker/config.go`），由 FR-497 主线或后续小改动补齐。
+- **审计白名单已登记**：CP `ReportOrphanAudit` 的强白名单已含 `orphan.auto_adopted/adopt_blocked/adopt_failed`，proto action 注释亦已同步；未知 action 仍拒绝，不因收养放宽审计输入边界。该接线不替代远端审计落库与归属场景实机验收。
 
 ## 6. 关键常量 / 配置键 / 审计 action 登记（实现-文档对齐）
 
@@ -117,7 +125,7 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 
 | 键 | 默认 | 语义 |
 |---|---|---|
-| `orphan_scan.auto_adopt` | `true` | 未纳管活进程全自动收养（FR-497③）。`false` 只关收养，其余扫描与告警不变。默认口径的单一真源为进程包 `DefaultOrphanAutoAdopt`。**装配点待接线**（见 §5）。 |
+| `orphan_scan.auto_adopt` | `true` | 未纳管活进程全自动收养（FR-497③）。`false` 只关收养，其余扫描与告警不变。默认口径的单一真源为进程包 `DefaultOrphanAutoAdopt`。**装配已接线**（见 §5）。 |
 | `orphan_scan.disabled` | `false` | 既有键：`true` 整体关闭周期扫描（含收养）。 |
 | `orphan_scan.interval` | `60s` | 既有键：扫描周期；收养失败的重试节奏即此周期。 |
 
@@ -131,6 +139,6 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 | `orphan.adopt_blocked` | 归属复核不通过（wrapper 或 Java 分支），只告警不收养 | false |
 | `orphan.adopt_failed` | 归属复核通过但 reconnect 拨号失败（socket 仍不可达），保留 PID 文件待下轮 | false |
 
-> ⚠️ **落库前置（CP 侧待补）**：以上三个 action 必须同时补进 `internal/controlplane/grpc/orphan_audit.go` 的 `orphanAuditAllowedActions` 强白名单与 `proto/worker.proto` 的 action 注释，否则 CP 会以 `InvalidArgument` 拒收（Worker 侧仍留 WARN 日志）。这两处不在本 FR 的改动边界内，见 §5。
+> **落库前置**：以上三个 action 已登记到 CP 强白名单与 proto action 注释；审计仍须经已认证 Worker 通道及既有范围校验，未知 action 不放行，见 §5。
 
 **新增代码入口**：`Manager.AdoptUnmanagedDaemonInstances`（一轮收养）、`OrphanScanner.SetAutoAdopt`、`OrphanScanner.Start`（立即一轮）、`OrphanScanner.ScanOnce`（第 0 相）；新增 `OrphanKindUnmanagedLiveRuntime` 与 `OrphanFinding.Adopted`。

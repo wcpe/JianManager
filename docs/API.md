@@ -311,6 +311,7 @@
 - **关联 FR**: FR-010
 - **权限**: 平台管理员
 - **响应**: `{ cpuUsage, memoryUsage, diskUsage, memoryUsedMb, memoryTotalMb, diskUsedMb, diskTotalMb }`，其中 `cpuUsage`/`memoryUsage`/`diskUsage` 为 `0~1` 比例值。
+- **采样边界**: CPU/iowait 由 Worker 唯一窗口采样 owner 发布，实时 RPC 与心跳仅读快照；预热、无增量、读取失败或计数回退时无效，既有标量协议仅能返回 0 降级（不能以此证明真实 0 占用）。CP iowait 时序为 pct，普通阈值告警缺失/过期样本跳过。
 - **错误码**: `404 NOT_FOUND`（节点不存在），`503 METRICS_UNAVAILABLE`（Worker 已连接但实时指标拉取失败）
 
 ### GET /install-worker.sh ; GET /install-worker.ps1
@@ -3121,6 +3122,10 @@
 
 公共请求基座 `LogQueryRequestBase`：`request_id` / `protocol_version` / `time_range`（UTC 闭开）/ `authorized_targets`（CP 计算；`online_only` 仅显式选择）/ `budget`（limit/max_bytes/timeout_ms/max_fanout）/ `view`（view_id/cursor/order_version）/ `filter` / `permission_scope` / `cancellation_token`。响应统一携带 `LogCoverage`（complete/partial_reasons/targets/enumeration_state）与 `LogQuality`。
 
+`LogSearchResponse.ingest_position_gaps` 是独立的人工永久放弃位置凭据，不表示查询时间覆盖缺口。`IngestPositionGap` 原字段 1～6 保持 `storage_namespace/from/to/reason_code/operator/at_utc`，仅追加 `log_source_id=7`、`source_generation=8`（来自真实源键）；既有 RPC 与 `fr433/v1` 不变。CP Search 与门面可选返回 `ingest_position_gaps[]`：`worker_id` 为可信路由绑定的 Worker UUID，`from/to` 为无损十进制字符串，其余字段沿用上述 snake_case。空集合省略，旧 Worker 未提供的真实源/代次字段省略，禁止从 namespace 或结果事件推断；不同 Worker/源/代次的凭据不得按 namespace 合并。即使 `items=[]` 也可返回凭据；它不参与 `coverage`、`quality` 或 Export 闸门判断。
+
+查询预算是整请求扫描额度而非每 Worker/range 独享额度：入口 `max_bytes=0` 使用 32 MiB 默认，执行前分配正数子额度，零份额不发请求；正常 `limit` 分页不等于扫描预算耗尽。Search/Stats 顶层保留 Worker 的 partial 原因与预算截断，不能被逐目标成功覆盖；未完整页边界同戳组或扫描截断时不提供可跨过缺失集合的全局游标。固定窗口续页须携原 view 与复合 cursor，不以毫秒时间锚点替代。
+
 实例注册消息 `CreateInstanceRequest` 另增可选字段 `log_target_id=19`、`log_acquire_mode=20`、`log_source_generation=21`，由 CP 统一创建/重连规格下发。Worker 将它们绑定到实例的受管日志采集面：Java 文件主源、通用进程 stdout/stderr 主源；缺字段保持旧 CP 兼容，不凭 UUID 猜测授权数字 ID。采集绑定失败时注册返回 `success=false`；已有实例 Resync 的绑定失败返回 `FailedPrecondition`。绑定持久化及无绑定实例禁止 cutover，见 FR-474 spec。
 
 ### 日志联邦查询端点（FR-479/480/482，**HTTP 已注册**）
@@ -3141,6 +3146,8 @@
 
 - **`GET /api/v1/logs/federation/stats`** / **`GET /api/v1/logs/federation/facets`** / **`POST /api/v1/logs/federation/export`**
   - Stats/Facets/Export 语义继承 FR-473/480；导出缺口/截断/超预算 **不交付成功附件**
+  - 导出物化预算（行数/累计字节）由 CP 配置 `log_export.max_rows` / `log_export.max_bytes` 决定，默认 10000 行 / 64MiB。请求侧 `limit` **只能收紧**（取配置与请求值的较小者），放宽必须改配置——导出是单次请求读全量并在内存物化 NDJSON 的操作，请求侧可放大即等于无界资源入口。前端导出固定携带 `limit`（`FEDERATED_EXPORT_REQUEST_LIMIT`），不再依赖服务端默认值
+  - 阻断响应（200 JSON，`artifact: null`）除既有 `incomplete_reasons` 外，新增 `limits: { max_rows, max_bytes, rows }` 回传本次实际采用的上限与实取行数；预算类阻断的 `incomplete_reasons` 同时含笼统码 `budget_exceeded` 与精确码 `row_limit_exceeded` / `byte_budget_exceeded`，供 UI 给出「缩小时间范围或调大配置」的可操作提示
   - **状态**: 聚合与导出门禁已注册到 HTTP；真实 managed VL 结果路径与真机联邦已通过，跨 Tier/失败态矩阵已验收
 
 - **`GET /api/v1/logs/federation/tail`** — 实时跟随（FR-482）
@@ -3158,6 +3165,22 @@
   - **Query**: 继承 Search 的筛选参数（`from`/`to`、`keyword`、`level`、`nodeId`/`instanceId` 等）
   - **响应**: `{ view, coverage, fields: string[] }`
   - **状态**: 已注册并有路由层测试；用于在授权范围内列出可检索字段，能力不可用时同样返回结构化 not-ready（不空成功）
+
+### POST /api/v1/nodes/:id/log-runtime/ingest/resolve-gaps
+
+- **请求**：可选 `{ "storageNamespace": "完整源键", "reason": "人工裁定理由" }`；`storageNamespace` 在本端点表示完整 `LogSourceID/SourceGeneration`，不是存储分区名。
+- **授权**：非空键须在下发任何裁定 RPC 前绑定真实实例、实例组权限、当前或已登记历史 holder 的 Worker UUID/代次与路由节点；节点能力或知道源键不能替代对象授权。畸形键 400；未知实例、组外、错节点或未登记代次统一 403，拒绝路径不发裁定 RPC。操作人取已认证主体，不信任请求 body 自报身份。
+- **语义**：空键仍仅走原整节点自动解算，不能落入永久放弃分支；终局人工放弃需实名、理由及 Worker 证据门禁。成功 `{ "state": "resolved" }`；Worker 拒绝返回 409 `GAP_RESOLUTION_FAILED`，传输失败 502 `WORKER_RPC_FAILED`。
+
+### POST /api/v1/nodes/:id/log-runtime/ingest/clear-identity-conflicts
+
+- **请求**：`{ "storageNamespace": "完整源键（可选）", "reason": "清空理由（必填）" }`。`storageNamespace` 与 resolve-gaps 取同一口径的完整 `LogSourceID/SourceGeneration`；**空 = 清该节点全部持有冲突记录的源**。
+- **语义**：人工确认并清空「身份冲突」记录（同 event_id 异内容、且系统无法按确定性证据裁定）。系统在该形态下保留先到者并跳过冲突行（保留的是正确版本，冲突行从未进入写入面），故清空只移除**诊断记录**、使查询面质量标记不再为 `conflict`/`partial`，**不改动任何日志内容**。
+- **授权**：非空键先做对象授权（与 resolve-gaps 同一判据：真实实例、实例组权限、当前或已登记历史 holder 的 Worker UUID/代次与路由节点；畸形键 400，未知实例/组外/错节点/未登记代次 403，拒绝路径不发 RPC）。**空键（批量）额外要求平台管理员**（仅 `node.manage` 的组管理员 403），因为一次调用会清掉整节点所有源的歧义提示。
+- **审计**：操作人取已认证主体（不信任请求 body 自报身份），理由必填；两者均经 `x-jm-operator` / `x-jm-reason` 下传 Worker，并随该源 payload 落库（`identity_conflict_clearances`：操作人 / 理由 / 时间 / 条数 / 被清记录明细）。缺失任一 ⇒ 400 `REASON_REQUIRED` 或 403 `OPERATOR_UNKNOWN`，且**不下发 RPC**。
+- **响应**：成功 `{ "state": "cleared", "clearedCount": N, "clearedSources": [...], "skippedSources": [...] }`；`skippedSources` 是计划内但未清的源（期间新增了未经审阅的冲突记录，或本就已无冲突记录）。Worker 拒绝返回 409 `CLEAR_CONFLICTS_FAILED`（含具体原因，如「采集轮忙」），传输失败 502 `WORKER_RPC_FAILED`。
+- **标记消失时机**：Worker 内存与索引里的记录已清空后，`ConflictCount` 由**下一次投影发布**重算为 0。仍在投递的源下次投递即归零；**已停止投递的源**要等其再次投递才归零（本操作不回退任何查询语义，只是不再提示该源的内容歧义）。
+- **状态**: 已注册并有路由层测试（`log_clear_identity_conflicts_test.go`）与 Worker 侧回归（`identity_conflict_clear_test.go`）。
 
 ### 日志入库切换与 Legacy 端点（FR-481，**HTTP 已注册**）
 
