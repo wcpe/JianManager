@@ -58,6 +58,8 @@ func (c *Coordinator) resolveForQueryFast(ctx context.Context, q Query) (View, *
 				rt.Excluded = append(rt.Excluded, t)
 			}
 		}
+		v.Budget = readBudgetForQuery(v, q)
+		v = c.bindExistingView(ctx, v, rt)
 		return v, rt, nil
 	}
 	// 快路径的"新视图"支：内联 CreateView 的构造段，**跳过** bindWorkerViews 与 c.views 登记 ✗。

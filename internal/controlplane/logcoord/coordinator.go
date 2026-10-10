@@ -35,6 +35,30 @@ type Coordinator struct {
 	// 键含授权主体摘要 ⇒ 跨主体绝不命中 ✗；Export 路径不经过此处 ⇒ 天然旁路 ✗。
 	searchCacheMu sync.Mutex
 	searchCache   map[string]searchCacheEntry
+
+	// exportBudget 导出物化的服务端上限（可配置）。
+	// 零值 = 默认 10000 行 / 64MiB，与修复前的硬编常量一致；
+	// 构造后不再改动 ⇒ 无锁读取安全（SetExportBudget 只在装配期调用）。
+	exportBudget ExportBudget
+}
+
+// SetExportBudget 注入导出物化预算上限（装配期调用一次）。
+//
+// 为什么用 setter 而不是改 New 签名：New 被大量测试与装配点直接调用，
+// 加参数会强制全部调用点改动且无收益——导出预算是可选覆盖项，
+// 零值即默认值，保持 New(resolver, dialer) 的调用形态不变。
+//
+// 非法值（<=0）由 ExportBudget.normalize 回退默认，不在此处报错：
+// 配置层已做 fail-fast 校验（见 CP config.ValidateLogExportConfig），
+// 此处只需保证「任何输入都不会产出不可用预算」。
+func (c *Coordinator) SetExportBudget(b ExportBudget) {
+	c.exportBudget = b
+}
+
+// ExportBudgetLimits 返回当前生效的导出预算上限（供装配期日志与测试断言）。
+func (c *Coordinator) ExportBudgetLimits() (maxRows int, maxBytes uint64) {
+	b := c.exportBudget.normalize()
+	return b.MaxRows, b.MaxBytes
 }
 
 // searchCacheTTL 双档 TTL：pending（覆盖校验后置 ✗）结果短档，避免新日志被掩盖过久；
@@ -135,9 +159,19 @@ func searchCacheKeyBucket(t string) string {
 // 为什么 Cursor 必须入键（2026-10-08 修复）：不同页的 q 只差 Cursor，若不入键则第二页起的
 // 查询全部命中第一页条目、返回同一批行与同一 NextCursor——Export 循环游标原地打转直到字节
 // 超限，把"预算充足"误判为 incomplete（TestExportAccumulatesBytesAcrossPages 回归）。
+//
+// 为什么 AllowProjectionDrift 必须入键（2026-10-10）：它改变了**响应可由哪些读取产生**
+// （置位时 Worker 跳过投影清单版本校验）。Export 走 c.Search ⇒ 会经本缓存读写；若不入键，
+// 一份带豁免算出的响应会以同一键被「不带豁免」的调用命中，等于把豁免静默扩散到导出之外的
+// 路径——正是本次要避免的放宽。置位后导出条目只在导出之间共享，语义边界与请求边界一致。
+// 注：当前列表路径均置 Fast=true 而导出不置（键已天然分离），但不能依赖这个巧合。
 func searchCacheKey(q Query) string {
 	return strings.Join([]string{
 		targetsDigest(q.AuthorizedTargetIDs),
+		q.PrincipalKey,
+		q.PermissionScope,
+		fmt.Sprint(q.Budget.MaxFanout),
+		fmt.Sprint(q.Budget.TimeoutMS),
 		searchCacheKeyBucket(q.FromUTC),
 		searchCacheKeyBucket(q.ToUTC),
 		normalizeFilter(q.Filter),
@@ -146,6 +180,7 @@ func searchCacheKey(q Query) string {
 		fmt.Sprint(q.Budget.Limit),
 		fmt.Sprint(q.Budget.MaxBytes),
 		fmt.Sprint(q.Fast),
+		fmt.Sprint(q.AllowProjectionDrift),
 		q.ViewID,
 		q.Cursor,
 	}, "\x1f")
@@ -162,7 +197,54 @@ func targetsDigest(ids []string) string {
 	return fmt.Sprintf("%x", h[:8])
 }
 
-// lookupSearchCache 命中即返回同一 SearchResponse（只读使用 ✓；未命中返回 false）。
+// rebindCachedSearchResponse 只复用缓存的行与覆盖摘要，绝不把创建者的 View/游标交给当前调用方。
+// 时间桶命中时按当前精确窗口过滤行，并把结果标为可继续枚举，避免旧窗口越界或伪装完整。
+func rebindCachedSearchResponse(q Query, view View, cached *SearchResponse) *SearchResponse {
+	if cached == nil {
+		return nil
+	}
+	out := *cached
+	out.View = view
+	out.IngestPositionGaps = append([]IngestPositionGap(nil), cached.IngestPositionGaps...)
+	from, fromErr := time.Parse(time.RFC3339Nano, q.FromUTC)
+	to, toErr := time.Parse(time.RFC3339Nano, q.ToUTC)
+	windowAdjusted := cached.View.FromUTC != view.FromUTC || cached.View.ToUTC != view.ToUTC
+	if fromErr == nil && toErr == nil && (q.FromUTC != "" || q.ToUTC != "") {
+		filtered := make([]Event, 0, len(cached.Items))
+		for _, event := range cached.Items {
+			ts, err := time.Parse(time.RFC3339Nano, event.EventTimeUTC)
+			if err != nil {
+				continue
+			}
+			if q.FromUTC != "" && ts.Before(from) {
+				continue
+			}
+			if q.ToUTC != "" && !ts.Before(to) {
+				continue
+			}
+			filtered = append(filtered, event)
+		}
+		out.Items = filtered
+	}
+	if windowAdjusted {
+		out.Coverage.PartialReasons = append([]string(nil), cached.Coverage.PartialReasons...)
+		out.Coverage.PartialReasons = appendUniqueReason(out.Coverage.PartialReasons, "CACHE_WINDOW_REBASED")
+		out.Coverage.Complete = false
+		out.Coverage.EnumerationState = EnumOpen
+		out.Exhausted = false
+	}
+	if cached.NextCursor != "" && len(out.Items) > 0 {
+		out.NextCursor = EncodePageCursor(PageCursor{
+			ViewID: view.ViewID, OrderVersion: view.OrderVersion,
+			SortKey: out.Items[len(out.Items)-1].SortKey(), PageLimit: view.Budget.Limit,
+		})
+	} else if len(out.Items) == 0 {
+		out.NextCursor = ""
+	}
+	return &out
+}
+
+// lookupSearchCache 命中即返回缓存载荷；调用方必须通过当前请求 View 重新绑定。
 func (c *Coordinator) lookupSearchCache(q Query) (*SearchResponse, bool) {
 	key := searchCacheKey(q)
 	c.searchCacheMu.Lock()
@@ -172,6 +254,11 @@ func (c *Coordinator) lookupSearchCache(q Query) (*SearchResponse, bool) {
 		if ok {
 			delete(c.searchCache, key)
 		}
+		return nil, false
+	}
+	// 分钟桶仍保留预热候选，但旧窗口无法证明当前窗口的完整排序前缀。
+	// 精确窗口不一致必须回源，不能把旧页边界重绑成新 View 游标而跳过新增事件。
+	if entry.resp == nil || entry.resp.View.FromUTC != q.FromUTC || entry.resp.View.ToUTC != q.ToUTC {
 		return nil, false
 	}
 	return entry.resp, true
@@ -272,12 +359,27 @@ func New(resolver TargetResolver, dialer WorkerDialer) *Coordinator {
 //
 // online_only 仅在显式 true 时收缩扇出集合；被排除目标仍写入 view 元数据与后续 coverage。
 func (c *Coordinator) CreateView(ctx context.Context, q Query) (*View, error) {
+	view, _, err := c.createView(ctx, q)
+	return view, err
+}
+
+// createView 是 CreateView 的内部形态：额外返回本次解析结果，供调用方免去二次解析。
+//
+// 为什么要带出 resolved（2026-10-09）：缓慢路径 resolveForQuery 原先「先 CreateView
+// （内部已解析一次）再 ResolveTargets 解析第二次」，同一份入参在同一请求内解析两遍
+// ⇒ 目标解析 DB 开销翻倍（实测 Stats/Facets 各 6 条 SQL 而非 3 条），而这两条正是
+// 生产最慢的联邦端点。把解析结果直接带出后降为一次。
+//
+// 顺带修掉一处既有的不一致：view.TargetIDs 原取自解析 #1、扇出集合取自解析 #2，
+// 两次快照可能不同（例如 bindWorkerViews 期间隧道变化），会造成「视图声明的目标」
+// 与「实际扇出目标」不匹配。改用同一份解析结果后二者天然一致。
+func (c *Coordinator) createView(ctx context.Context, q Query) (*View, *ResolvedTargets, error) {
 	if err := ValidateQuery(q); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	resolved, err := ResolveTargets(ctx, c.resolver, q.AuthorizedTargetIDs, q.OnlineOnly)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	view := View{
 		ViewID:                   NewViewID(),
@@ -307,7 +409,7 @@ func (c *Coordinator) CreateView(ctx context.Context, q Query) (*View, error) {
 	c.pruneViewsLocked()
 	c.views[view.ViewID] = view
 	c.mu.Unlock()
-	return &view, nil
+	return &view, resolved, nil
 }
 
 // bindWorkerViews creates one immutable local view per Worker. The CP view ID
@@ -326,17 +428,28 @@ func (c *Coordinator) bindWorkerViews(ctx context.Context, view *View, resolved 
 		errMsg   string
 	}
 	results := make([]bindResult, len(order))
+	reserved := reserveWorkerBudgets(order, view.Budget)
 
 	// 并发上限：worker 较多时避免一次性压满所有节点。
 	const maxParallel = 8
 	sem := make(chan struct{}, maxParallel)
 	var wg sync.WaitGroup
 	for i, workerID := range order {
+		local, ok := reserved[workerID]
+		if !ok {
+			results[i] = bindResult{workerID: workerID, errMsg: "BUDGET_EXCEEDED"}
+			continue
+		}
 		wg.Add(1)
 		go func(idx int, id string) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				results[idx] = bindResult{workerID: id, errMsg: ctx.Err().Error()}
+				return
+			}
 
 			targets := byWorker[id]
 			targetIDs := make([]string, 0, len(targets))
@@ -353,7 +466,7 @@ func (c *Coordinator) bindWorkerViews(ctx context.Context, view *View, resolved 
 				FromUTC:      view.FromUTC,
 				ToUTC:        view.ToUTC,
 				Filter:       view.Filter,
-				Budget:       view.Budget,
+				Budget:       local,
 				OrderVersion: view.OrderVersion,
 			})
 			if err != nil {
@@ -381,6 +494,23 @@ func (c *Coordinator) bindWorkerViews(ctx context.Context, view *View, resolved 
 		}
 		view.WorkerViewIDs[r.workerID] = r.viewID
 	}
+}
+
+func (c *Coordinator) bindExistingView(ctx context.Context, view View, resolved *ResolvedTargets) View {
+	if c == nil || resolved == nil || (len(view.WorkerViewIDs) > 0 || len(view.WorkerViewErrors) > 0) {
+		return view
+	}
+	if view.WorkerViewIDs == nil {
+		view.WorkerViewIDs = make(map[string]string)
+	}
+	if view.WorkerViewErrors == nil {
+		view.WorkerViewErrors = make(map[string]string)
+	}
+	c.bindWorkerViews(ctx, &view, resolved)
+	c.mu.Lock()
+	c.views[view.ViewID] = view
+	c.mu.Unlock()
+	return view
 }
 
 func workerViewID(view View, workerID string) (string, string, bool) {
@@ -505,13 +635,14 @@ func (c *Coordinator) resolveForQuery(ctx context.Context, q Query) (View, *Reso
 				rt.Excluded = append(rt.Excluded, t)
 			}
 		}
+		v.Budget = readBudgetForQuery(v, q)
+		v = c.bindExistingView(ctx, v, rt)
 		return v, rt, nil
 	}
-	view, err := c.CreateView(ctx, q)
-	if err != nil {
-		return View{}, nil, err
-	}
-	resolved, err := ResolveTargets(ctx, c.resolver, q.AuthorizedTargetIDs, q.OnlineOnly)
+	// 慢路径新建视图：直接复用 createView 内部那次解析的结果，不再重复解析
+	// （见 createView 注释：目标解析 DB 开销由 2 次降为 1 次，且 view.TargetIDs
+	// 与实际扇出集合保证同源）。
+	view, resolved, err := c.createView(ctx, q)
 	if err != nil {
 		return View{}, nil, err
 	}
@@ -571,20 +702,24 @@ func normalizeFilter(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// fanoutSearch 扇出各 Worker Search，返回每路事件、覆盖汇总输入、全局 cut 标记。
+// fanoutSearch 扇出各 Worker Search，返回每路事件、覆盖汇总输入、全局 cut 标记与 Worker 顶层覆盖。
 func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *ResolvedTargets, q Query, tailMode string) (
 	streams []EventStream,
 	covByTarget map[string]TargetCoverage,
 	quality Quality,
 	workerCut bool,
 	workerOpen bool,
+	workerCoverage Coverage,
+	gaps []IngestPositionGap,
 	err error,
 ) {
 	if c.dialer == nil {
-		return nil, nil, quality, false, false, errNoDialer
+		return nil, nil, quality, false, false, Coverage{}, nil, errNoDialer
 	}
 	covByTarget = make(map[string]TargetCoverage)
 	quality.DuplicateQuality = DupExact
+	workerCoverage.Complete = true
+	workerCoverage.EnumerationState = EnumExhausted
 	order, byWorker := resolved.ByWorker()
 
 	// max_fanout 预算：超出的 worker 不扇出，coverage 记 partial。
@@ -593,46 +728,75 @@ func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *Res
 		fanoutBudget = int(q.Budget.MaxFanout)
 	}
 
-	budget := view.Budget
-	if budget.Limit == 0 {
-		budget = q.Budget
-	}
+	budget := readBudgetForQuery(view, q)
 
 	type fanoutResult struct {
-		streams  []EventStream
-		coverage map[string]TargetCoverage
-		cut      bool
-		open     bool
-		quality  Quality
-		err      error
+		streams         []EventStream
+		coverage        map[string]TargetCoverage
+		coverageSummary *Coverage
+		gaps            []IngestPositionGap
+		cut             bool
+		open            bool
+		quality         Quality
+		err             error
 	}
+	reserved := reserveWorkerBudgets(order, budget)
+	if budget.TimeoutMS > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(budget.TimeoutMS)*time.Millisecond)
+		defer cancel()
+	}
+	ctx, cancelFanout := context.WithCancel(ctx)
+	defer cancelFanout()
+	sem := make(chan struct{}, 8)
 	results := make(chan fanoutResult, len(order))
 	launched := 0
 	for i, workerID := range order {
 		targets := byWorker[workerID]
-		if fanoutBudget > 0 && i >= fanoutBudget {
+		local, allowed := reserved[workerID]
+		if !allowed || (fanoutBudget > 0 && i >= fanoutBudget) {
 			for _, t := range targets {
-				covByTarget[t.ID] = CoverageFromReadiness(t, []string{"fanout_budget_exceeded"})
+				tc := CoverageFromReadiness(t, []string{"BUDGET_EXCEEDED"})
+				tc.State = CoveragePartial
+				covByTarget[t.ID] = tc
 			}
+			workerCut = true
+			workerOpen = true
+			workerCoverage.Complete = false
+			workerCoverage.PartialReasons = appendUniqueReason(workerCoverage.PartialReasons, "BUDGET_EXCEEDED")
 			continue
 		}
 		launched++
-		go func(workerID string, targets []TargetInfo) {
-			workerStreams, workerCoverage, cut, open, workerQuality, callErr := c.fanoutOne(ctx, view, q, budget, workerID, targets, tailMode)
-			results <- fanoutResult{streams: workerStreams, coverage: workerCoverage, cut: cut, open: open, quality: workerQuality, err: callErr}
-		}(workerID, append([]TargetInfo(nil), targets...))
+		go func(workerID string, targets []TargetInfo, budget QueryBudget) {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				results <- fanoutResult{err: ctx.Err()}
+				return
+			}
+			if ctx.Err() != nil {
+				results <- fanoutResult{err: ctx.Err()}
+				return
+			}
+			workerStreams, workerCoverage, coverageSummary, workerGaps, cut, open, workerQuality, callErr := c.fanoutOne(ctx, view, q, budget, workerID, targets, tailMode)
+			results <- fanoutResult{streams: workerStreams, coverage: workerCoverage, coverageSummary: coverageSummary, gaps: workerGaps, cut: cut, open: open, quality: workerQuality, err: callErr}
+		}(workerID, append([]TargetInfo(nil), targets...), local)
 	}
 	for i := 0; i < launched; i++ {
 		result := <-results
 		if result.err != nil {
-			return nil, nil, quality, false, false, result.err
+			return nil, nil, quality, false, false, workerCoverage, nil, result.err
 		}
 		streams = append(streams, result.streams...)
+		gaps = append(gaps, result.gaps...)
+		mergeWorkerCoverage(&workerCoverage, result.coverageSummary)
 		for targetID, coverage := range result.coverage {
 			covByTarget[targetID] = coverage
 		}
 		// 按最差值聚合：任一 Worker 报冲突/未决即整体降级，不能被其它 Worker 的 exact 掩盖。
 		quality.DuplicateQuality = worstDuplicateQuality(quality.DuplicateQuality, result.quality.DuplicateQuality)
+		quality.StatsQuality = worstStatsQuality(quality.StatsQuality, result.quality.StatsQuality)
 		workerCut = workerCut || result.cut
 		workerOpen = workerOpen || result.open
 	}
@@ -641,11 +805,99 @@ func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *Res
 	// duplicate quality：任一 partial → unresolved
 	for _, tc := range covByTarget {
 		if tc.State == CoveragePartial || tc.State == CoverageStale {
-			quality.DuplicateQuality = DupUnresolved
+			quality.DuplicateQuality = worstDuplicateQuality(quality.DuplicateQuality, DupUnresolved)
 			break
 		}
 	}
-	return streams, covByTarget, quality, workerCut, workerOpen, nil
+	sort.SliceStable(gaps, func(i, j int) bool {
+		a, b := gaps[i], gaps[j]
+		if a.WorkerID != b.WorkerID {
+			return a.WorkerID < b.WorkerID
+		}
+		if a.LogSourceID != b.LogSourceID {
+			return a.LogSourceID < b.LogSourceID
+		}
+		if a.SourceGeneration != b.SourceGeneration {
+			return a.SourceGeneration < b.SourceGeneration
+		}
+		return a.StorageNamespace < b.StorageNamespace
+	})
+	return streams, covByTarget, quality, workerCut, workerOpen, workerCoverage, gaps, nil
+}
+
+// readBudgetForQuery 只保留分页 Limit；读取成本属于本次请求，不能由旧 View 覆盖。
+func readBudgetForQuery(view View, q Query) QueryBudget {
+	budget := q.Budget
+	if view.Budget.Limit > 0 {
+		budget.Limit = view.Budget.Limit
+	}
+	if budget.Limit <= 0 {
+		budget.Limit = DefaultPageLimit
+	}
+	if budget.MaxBytes == 0 {
+		budget.MaxBytes = 32 << 20
+	}
+	return budget
+}
+
+// reserveWorkerBudgets 在发起读取前预留总额度，禁止把零剩余额度传成 Worker 默认额度。
+// 未声明额度沿用既有 VL 单次默认值作为整个联邦请求的上限；每路额度之和不超过总量。
+func reserveWorkerBudgets(order []string, budget QueryBudget) map[string]QueryBudget {
+	out := make(map[string]QueryBudget, len(order))
+	count := len(order)
+	if budget.MaxFanout > 0 && uint64(count) > uint64(budget.MaxFanout) {
+		count = int(budget.MaxFanout)
+	}
+	if count == 0 {
+		return out
+	}
+	total := budget.MaxBytes
+	if total == 0 {
+		total = 32 << 20
+	}
+	remaining := total
+	for _, id := range order[:count] {
+		share := remaining / uint64(count)
+		if remaining%uint64(count) > 0 {
+			share++
+		}
+		remaining -= share
+		count--
+		if share == 0 {
+			continue
+		}
+		local := budget
+		local.MaxBytes = share
+		out[id] = local
+	}
+	return out
+}
+
+// mergeWorkerCoverage 保留顶层部分覆盖与原因；开放/失效枚举不能被另一完整响应覆盖。
+func mergeWorkerCoverage(dst *Coverage, src *Coverage) {
+	if src == nil {
+		return
+	}
+	dst.Complete = dst.Complete && src.Complete
+	for _, r := range src.PartialReasons {
+		dst.PartialReasons = appendUniqueReason(dst.PartialReasons, r)
+	}
+	rank := func(s EnumerationState) int {
+		switch s {
+		case EnumCancelled:
+			return 4
+		case EnumStale:
+			return 3
+		case EnumOpen:
+			return 2
+		case EnumExhausted:
+			return 1
+		}
+		return 0
+	}
+	if rank(src.EnumerationState) > rank(dst.EnumerationState) {
+		dst.EnumerationState = src.EnumerationState
+	}
 }
 
 // worstDuplicateQuality 按「越差越优先」合并两个 Worker 上报的重复质量。
@@ -693,7 +945,7 @@ func worstStatsQuality(a, b StatsQuality) StatsQuality {
 }
 
 func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget QueryBudget, workerID string, targets []TargetInfo, tailMode string) (
-	streams []EventStream, coverage map[string]TargetCoverage, cut bool, open bool, workerQuality Quality, err error,
+	streams []EventStream, coverage map[string]TargetCoverage, coverageSummary *Coverage, gaps []IngestPositionGap, cut bool, open bool, workerQuality Quality, err error,
 ) {
 	coverage = make(map[string]TargetCoverage, len(targets))
 	targetIDs := make([]string, 0, len(targets))
@@ -729,7 +981,9 @@ func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget 
 	}
 	req := WorkerSearchRequest{TargetIDs: targetIDs, FromUTC: view.FromUTC, ToUTC: view.ToUTC,
 		Filter: view.Filter, Budget: budget, ViewID: workerView,
-		Cursor: workerCursor(q.Cursor, workerView, budget.Limit), OrderVersion: view.OrderVersion}
+		Cursor: workerCursor(q.Cursor, workerView, budget.Limit), OrderVersion: view.OrderVersion,
+		// 请求级豁免标记随本次查询下发（仅导出路径在 Export 置位 q，其余路径恒为 false）。
+		AllowProjectionDrift: q.AllowProjectionDrift}
 	var resp *WorkerSearchResponse
 	if tailMode == "" {
 		resp, err = client.Search(ctx, req)
@@ -761,13 +1015,30 @@ func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget 
 		}
 		return
 	}
+	coverageSummary = resp.Coverage
+	if coverageSummary != nil {
+		// 临时诊断（2026-10-11）：追踪 cut 的来源
+		if coverageSummary.EnumerationState == EnumOpen || coverageSummary.EnumerationState == EnumStale || coverageSummary.EnumerationState == EnumCancelled {
+			open = true
+		}
+		for _, reason := range coverageSummary.PartialReasons {
+			if reason == "BUDGET_EXCEEDED" || reason == "TRUNCATED" {
+				cut = true
+				break
+			}
+		}
+	}
 	if err = ensureWorkerViewBinding(view, workerID, targets, resp.ViewID, resp.Targets); err != nil {
 		return
 	}
 	// Worker 上报的查询质量必须带回聚合：它可能与 coverage 不同步（例如 projection 冲突时
 	// coverage 仍 complete），丢弃会让 CP 把该结果当成 exact 并放行导出（M-3）。
 	workerQuality = resp.Quality
-	cut, open = resp.Truncated, !resp.Exhausted
+	cut, open = cut || resp.Truncated, open || !resp.Exhausted
+	gaps = append([]IngestPositionGap(nil), resp.IngestPositionGaps...)
+	for i := range gaps {
+		gaps[i].WorkerID = workerID
+	}
 	if len(resp.Items) > 0 {
 		items := append([]Event(nil), resp.Items...)
 		SortEventsInPlace(items)
@@ -857,6 +1128,11 @@ func workerCursor(raw, workerViewID string, pageLimit int) string {
 
 // Search 跨 Worker K-way merge。
 func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, error) {
+	if q.Budget.TimeoutMS > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(q.Budget.TimeoutMS)*time.Millisecond)
+		defer cancel()
+	}
 	var pageCursor PageCursor
 	if q.Cursor != "" {
 		var cursorErr error
@@ -893,15 +1169,16 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 		return nil, err
 	}
 	view, resolved := viewFast, resolvedFast
+	view.Budget = readBudgetForQuery(view, q)
 	// 同参秒级 TTL 缓存：命中直接返回（重复/翻页查询免扇出 ✓）。Export 路径不经 Search 本函数
 	// ⇒ 天然旁路 ✗；键含主体/scope ⇒ 跨主体绝不命中 ✗。
 	// BypassCache（仅预热器）：跳过读取但照常写入，防止预热命中自身旧条目形成雪球。
 	if !q.BypassCache {
 		if cached, ok := c.lookupSearchCache(q); ok {
-			return cached, nil
+			return rebindCachedSearchResponse(q, view, cached), nil
 		}
 	}
-	streams, covBy, quality, workerCut, workerOpen, err := c.fanoutSearch(ctx, view, resolved, q, "")
+	streams, covBy, quality, workerCut, workerOpen, workerCoverage, gaps, err := c.fanoutSearch(ctx, view, resolved, q, "")
 	if err != nil {
 		return nil, err
 	}
@@ -918,10 +1195,19 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 		maxBytes = q.Budget.MaxBytes
 	}
 	rows, pageMore, byteCut := MergeStreams(streams, capRows, maxBytes)
+	if workerCut {
+		// 现有 wire 未携带 Worker 的安全时间栅栏：其它路的旧行可能越过未完整并列组。
+		// 多路扫描截断时不猜边界，返回明确不完整的空前缀；独立缺口凭据仍原样保留。
+		workers, _ := resolved.ByWorker()
+		if len(workers) > 1 {
+			rows = nil
+			pageMore = false
+		}
+	}
 	// 唯一口径（见 dedupeMergedRows）：本页双键去重；任一同 id 多行 ⇒ 质量不得保持 exact ✗。
 	if deduped, duplicated := dedupeMergedRows(rows); duplicated {
 		rows = deduped
-		quality.DuplicateQuality = DupUnresolved
+		quality.DuplicateQuality = worstDuplicateQuality(quality.DuplicateQuality, DupUnresolved)
 	} else {
 		rows = deduped
 	}
@@ -936,13 +1222,20 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 		_ = s
 	}
 
-	// 首屏快路径：逐目标完整性校验尚未跑 ⇒ 以 **Pending** 独立标记呈现（**绝不写 notes、不改
-	// Complete 的枚举语义** ✓）；慢路径（导出等）一字不动 ⇒ 导出闸（log_federation.go:76-78）不受影响 ✗。
-	var cov Coverage
+	// 首屏快路径只跳过 closed_visible_seq 固化，不得丢弃已经观察到的逐目标失败。
+	// 先构造完整覆盖摘要，再用 Pending 表示尚未完成更严格的快照校验。
+	cov := BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, enum)
 	if q.Fast {
-		cov = Coverage{Pending: true, EnumerationState: enum}
-	} else {
-		cov = BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, enum)
+		cov.Pending = true
+	}
+	if !workerCoverage.Complete {
+		cov.Complete = false
+	}
+	for _, reason := range workerCoverage.PartialReasons {
+		cov.PartialReasons = appendUniqueReason(cov.PartialReasons, reason)
+	}
+	if workerCoverage.EnumerationState != "" && workerCoverage.EnumerationState != EnumExhausted {
+		cov.EnumerationState = workerCoverage.EnumerationState
 	}
 	if byteCut {
 		cov.PartialReasons = appendUniqueReason(cov.PartialReasons, "BUDGET_EXCEEDED")
@@ -956,14 +1249,15 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 	}
 
 	resp := &SearchResponse{
-		View:      view,
-		Coverage:  cov,
-		Quality:   quality,
-		Items:     rows,
-		Exhausted: !hasMore && !byteCut && !workerCut && cov.Complete,
-		BudgetCut: byteCut || workerCut,
+		View:               view,
+		Coverage:           cov,
+		Quality:            quality,
+		Items:              rows,
+		Exhausted:          !hasMore && !byteCut && !workerCut && cov.Complete,
+		BudgetCut:          byteCut || workerCut,
+		IngestPositionGaps: gaps,
 	}
-	if (hasMore || byteCut) && len(rows) > 0 {
+	if !workerCut && (hasMore || byteCut) && len(rows) > 0 {
 		resp.NextCursor = EncodePageCursor(PageCursor{
 			ViewID: view.ViewID, OrderVersion: view.OrderVersion,
 			SortKey: rows[len(rows)-1].SortKey(), PageLimit: capRows,
@@ -985,7 +1279,8 @@ func (c *Coordinator) Tail(ctx context.Context, q Query, mode string) (*SearchRe
 	if err != nil {
 		return nil, err
 	}
-	streams, covBy, quality, workerCut, _, err := c.fanoutSearch(ctx, view, resolved, q, "FOLLOW_LIVE")
+	view.Budget = readBudgetForQuery(view, q)
+	streams, covBy, quality, workerCut, _, workerCoverage, gaps, err := c.fanoutSearch(ctx, view, resolved, q, "FOLLOW_LIVE")
 	if err != nil {
 		return nil, err
 	}
@@ -998,13 +1293,19 @@ func (c *Coordinator) Tail(ctx context.Context, q Query, mode string) (*SearchRe
 	}
 	rows, _, byteCut := MergeStreams(streams, limit, view.Budget.MaxBytes)
 	cov := BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, EnumOpen)
+	if !workerCoverage.Complete {
+		cov.Complete = false
+	}
+	for _, reason := range workerCoverage.PartialReasons {
+		cov.PartialReasons = appendUniqueReason(cov.PartialReasons, reason)
+	}
 	if byteCut || workerCut {
 		cov.Complete = false
 		cov.PartialReasons = appendUniqueReason(cov.PartialReasons, "TRUNCATED")
 	}
 	c.persistClosedVisibleSeq(&view, cov)
 	return &SearchResponse{View: view, Coverage: cov, Quality: quality, Items: rows,
-		Exhausted: false, BudgetCut: byteCut || workerCut}, nil
+		Exhausted: false, BudgetCut: byteCut || workerCut, IngestPositionGaps: gaps}, nil
 }
 
 func (c *Coordinator) Fields(ctx context.Context, q Query) (*FieldsResponse, error) {
@@ -1107,6 +1408,11 @@ func (c *Coordinator) persistClosedVisibleSeq(view *View, cov Coverage) {
 
 // Stats 二次聚合：可合并 count/sum/min/max；avg = sum/count（加权）。
 func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, error) {
+	if q.Budget.TimeoutMS > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(q.Budget.TimeoutMS)*time.Millisecond)
+		defer cancel()
+	}
 	view, resolved, err := c.resolveForQuery(ctx, q.Query)
 	if err != nil {
 		return nil, err
@@ -1114,16 +1420,41 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 	if c.dialer == nil {
 		return nil, errNoDialer
 	}
-
+	view.Budget = readBudgetForQuery(view, q.Query)
 	covBy := make(map[string]TargetCoverage)
 	quality := Quality{DuplicateQuality: DupExact, StatsQuality: StatsQExact}
 	order, byWorker := resolved.ByWorker()
 
 	var merged []StatsPoint
 	anyTrunc := false
+	workerCoverage := Coverage{Complete: true, EnumerationState: EnumExhausted}
+	reserved := reserveWorkerBudgets(order, view.Budget)
+	if view.Budget.TimeoutMS > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(view.Budget.TimeoutMS)*time.Millisecond)
+		defer cancel()
+	}
 
 	for _, workerID := range order {
 		targets := byWorker[workerID]
+		local, allowed := reserved[workerID]
+		if !allowed || ctx.Err() != nil {
+			reason := "BUDGET_EXCEEDED"
+			if ctx.Err() != nil {
+				reason = "CANCELLED"
+			}
+			for _, t := range targets {
+				tc := CoverageFromReadiness(t, []string{reason})
+				tc.State = CoveragePartial
+				covBy[t.ID] = tc
+			}
+			anyTrunc = true
+			workerCoverage.Complete = false
+			workerCoverage.PartialReasons = appendUniqueReason(workerCoverage.PartialReasons, reason)
+			workerCoverage.EnumerationState = EnumOpen
+			quality.StatsQuality = StatsQPartial
+			continue
+		}
 		targetIDs := make([]string, 0, len(targets))
 		for _, t := range targets {
 			targetIDs = append(targetIDs, workerTargetID(t))
@@ -1157,7 +1488,7 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 			FromUTC:      view.FromUTC,
 			ToUTC:        view.ToUTC,
 			Filter:       view.Filter,
-			Budget:       view.Budget,
+			Budget:       local,
 			ViewID:       workerView,
 			OrderVersion: view.OrderVersion,
 			MetricField:  q.MetricField,
@@ -1199,6 +1530,7 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 		}
 		// Worker 上报的统计质量按最差值并入（M-3）：它在 coverage 仍 complete 时也可能
 		// 为 partial/unavailable，丢弃会让 CP 把不完整统计当成 exact 并放行导出。
+		mergeWorkerCoverage(&workerCoverage, resp.Coverage)
 		quality.StatsQuality = worstStatsQuality(quality.StatsQuality, resp.Quality.StatsQuality)
 		quality.DuplicateQuality = worstDuplicateQuality(quality.DuplicateQuality, resp.Quality.DuplicateQuality)
 		if resp.Truncated {
@@ -1238,6 +1570,12 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 
 	points := MergeStatsPoints(merged)
 	cov := BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, EnumExhausted)
+	mergeWorkerCoverage(&cov, &workerCoverage)
+	if anyTrunc {
+		cov.Complete = false
+		cov.PartialReasons = appendUniqueReason(cov.PartialReasons, "BUDGET_EXCEEDED")
+		cov.EnumerationState = EnumOpen
+	}
 	if !cov.Complete && quality.StatsQuality == StatsQExact {
 		quality.StatsQuality = StatsQPartial
 	}
@@ -1253,6 +1591,7 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 		Points:     points,
 		Metric:     q.MetricField,
 		TimeBucket: q.TimeBucket,
+		BudgetCut:  anyTrunc,
 	}, nil
 }
 
@@ -1386,16 +1725,25 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 //
 // 任一 partial / cut / 超预算 → ExportIncomplete=true 且 Artifact=nil。
 // 源 Worker 后续离线不改变已完成成功产物的语义（完整通过后 Artifact 不再依赖 Worker）。
+//
+// 上限来源与方向（2026-10 修复：导出恒失败）：
+//   - 服务端配置（SetExportBudget，默认 10000 行 / 64MiB）是**放宽**的唯一途径；
+//   - 请求参数（q.Budget）只能**收紧**，取两者较小值——否则任意调用方传 limit=1e9
+//     即可让 CP 逐页读全量并在内存物化，把有界导出变成无界资源入口。
+//
+// 生产实证：前端导出会主动删掉 limit（apps/control-plane-web/src/api/logFederation.ts），
+// 而请求侧又被当作唯一来源，导致 165 目标 × 数十页、每页仅数十行的查询在累计到
+// 10000 行时被判 budget_exceeded，用户看到「导出未通过完整性校验」且无任何调大途径。
 func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error) {
-	const defaultExportRows = 10_000
-	const defaultExportBytes = 64 << 20
-	totalRows := q.Budget.Limit
-	if totalRows <= 0 {
-		totalRows = defaultExportRows
+	// 服务端配置预算是基准；请求参数只可收紧。
+	budget := c.exportBudget.normalize()
+	totalRows := budget.MaxRows
+	if q.Budget.Limit > 0 && q.Budget.Limit < totalRows {
+		totalRows = q.Budget.Limit
 	}
-	totalBytes := q.Budget.MaxBytes
-	if totalBytes == 0 {
-		totalBytes = defaultExportBytes
+	totalBytes := budget.MaxBytes
+	if q.Budget.MaxBytes > 0 && q.Budget.MaxBytes < totalBytes {
+		totalBytes = q.Budget.MaxBytes
 	}
 	pageLimit := DefaultPageLimit
 	if totalRows < pageLimit {
@@ -1404,6 +1752,11 @@ func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error
 
 	// 强制同 view：若调用方未带 ViewID，先建 view 再 Search，保证导出与列表同快照语义。
 	searchQ := q
+	// 导出豁免「投影清单版本变化」判 VIEW_STALE：本视图由本次导出自己创建、自己读完，
+	// 耗时可达数十秒，期间任一源写入新投影（业务服务器仍在产出日志）都会让全部目标降级
+	// partial 从而永远拿不到附件（生产实证）。豁免只覆盖该一条分支，closed_visible_seq
+	// 缩水（数据变少）仍在 Worker 侧拦截 ⇒ 不会放过数据丢失场景。
+	searchQ.AllowProjectionDrift = true
 	if searchQ.ViewID == "" {
 		viewQuery := q
 		viewQuery.Budget.Limit = pageLimit
@@ -1418,6 +1771,7 @@ func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error
 	searchQ.Budget.MaxBytes = 0
 	var items []Event
 	var last *SearchResponse
+	var exportQuality Quality
 	// 累计字节必须跨页累加：原先每页都对 items 从头重算，页数为 p、总行数为 n 时
 	// 总量约 O(n²)（M-2）。此处只对当前页增量累加，判定语义不变。
 	var used uint64
@@ -1429,13 +1783,15 @@ func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error
 		last = resp
 		items = append(items, resp.Items...)
 		// 导出共用唯一口径（dedupeMergedRows ✓）：跨页/跨轮同 id 同 hash ⇒ 去重；
-		// 任一同 id 多行 ⇒ 质量降级 unresolved（BuildExport 取的就是 resp.Quality ✓，导出闸随之一致 ✓）。
+		// 任一同 id 多行 ⇒ 质量降级 unresolved。质量只累积到本地变量，禁止改写缓存响应。
 		if dedupedItems, duplicatedItems := dedupeMergedRows(items); duplicatedItems {
 			items = dedupedItems
-			resp.Quality.DuplicateQuality = DupUnresolved
+			exportQuality.DuplicateQuality = worstDuplicateQuality(exportQuality.DuplicateQuality, DupUnresolved)
 		} else {
 			items = dedupedItems
 		}
+		exportQuality.DuplicateQuality = worstDuplicateQuality(exportQuality.DuplicateQuality, resp.Quality.DuplicateQuality)
+		exportQuality.StatsQuality = worstStatsQuality(exportQuality.StatsQuality, resp.Quality.StatsQuality)
 		for _, event := range resp.Items {
 			used += event.ApproxBytes()
 		}
@@ -1443,13 +1799,23 @@ func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error
 			exportView := resp.View
 			exportView.Budget.Limit = totalRows
 			exportView.Budget.MaxBytes = totalBytes
-			return BuildExport(exportView, resp.Coverage, resp.Quality, items, true, true), nil
+			// 归因取「哪一条先越界」：两者同时越界时都标，UI 两条提示都可给出。
+			return BuildExportWithCut(exportView, resp.Coverage, exportQuality, items, ExportCut{
+				Budget: true,
+				Rows:   len(items) > totalRows,
+				Bytes:  used > totalBytes,
+				Worker: true,
+			}), nil
 		}
 		if resp.BudgetCut || !resp.Coverage.Complete {
 			exportView := resp.View
 			exportView.Budget.Limit = totalRows
 			exportView.Budget.MaxBytes = totalBytes
-			return BuildExport(exportView, resp.Coverage, resp.Quality, items, resp.BudgetCut, true), nil
+			// resp.BudgetCut 由 Search 侧给出，无法细分行/字节 ⇒ 只标笼统预算码。
+			return BuildExportWithCut(exportView, resp.Coverage, resp.Quality, items, ExportCut{
+				Budget: resp.BudgetCut,
+				Worker: true,
+			}), nil
 		}
 		if resp.Exhausted {
 			break
@@ -1458,7 +1824,13 @@ func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error
 			exportView := resp.View
 			exportView.Budget.Limit = totalRows
 			exportView.Budget.MaxBytes = totalBytes
-			return BuildExport(exportView, resp.Coverage, resp.Quality, items, true, true), nil
+			// 达到行数上限而停止取页（实取行数恰好等于上限，故必须显式标 Rows，
+			// 否则「len(items) > Limit」永不成立，用户只能看到笼统的 budget_exceeded）。
+			return BuildExportWithCut(exportView, resp.Coverage, exportQuality, items, ExportCut{
+				Budget: true,
+				Rows:   len(items) >= totalRows,
+				Worker: true,
+			}), nil
 		}
 		searchQ.Cursor = resp.NextCursor
 		searchQ.ViewID = resp.View.ViewID
@@ -1472,7 +1844,7 @@ func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error
 	exportView := last.View
 	exportView.Budget.Limit = totalRows
 	exportView.Budget.MaxBytes = totalBytes
-	return BuildExport(exportView, last.Coverage, last.Quality, items, false, coverageHasCut(last.Coverage)), nil
+	return BuildExport(exportView, last.Coverage, exportQuality, items, false, coverageHasCut(last.Coverage)), nil
 }
 
 func coverageHasCut(cov Coverage) bool {

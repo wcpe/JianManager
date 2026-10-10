@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   classifyLogViewState,
+  exportBlockedKeyForReasons,
   formatCoverageSummary,
   mergeQualityIntoSummary,
   resolveExportDownloadAffordance,
@@ -15,7 +16,7 @@ import {
   LOGS_FEDERATION_LOCALES,
   reasonI18nKey,
 } from './i18n'
-import { PARTIAL_REASONS } from './types'
+import { EXPORT_BLOCK_REASONS, PARTIAL_REASONS } from './types'
 import type { Coverage, LogFederationResponse } from './types'
 
 function coverage(partial: Partial<Coverage> = {}): Coverage {
@@ -411,6 +412,79 @@ describe('resolveExportDownloadAffordance（FR-482）', () => {
     })
     expect(a.showDownload).toBe(false)
     expect(a.blockedKey).toBe(LOGS_FEDERATION_KEYS.exportBlockedPermission)
+  })
+})
+
+describe('导出预算上限文案（FR-480 导出闸）', () => {
+  // 缺陷背景：导出上限原是编译期常量、前端导出又不传 limit，数据超 10000 行的
+  // 用户只能看到笼统的「导出未通过完整性校验」，看不出是行数到顶。
+  // 本组用例锁定「行数 / 字节」两条精确 reason 各自映射到专用文案。
+
+  it('row_limit_exceeded → 行数上限专用文案', () => {
+    expect(exportBlockedKeyForReasons([EXPORT_BLOCK_REASONS.ROW_LIMIT_EXCEEDED])).toBe(
+      LOGS_FEDERATION_KEYS.exportBlockedRowLimit,
+    )
+    // 后端会同时带上笼统的 budget_exceeded，精确码优先。
+    expect(
+      exportBlockedKeyForReasons([
+        EXPORT_BLOCK_REASONS.BUDGET_EXCEEDED,
+        EXPORT_BLOCK_REASONS.ROW_LIMIT_EXCEEDED,
+      ]),
+    ).toBe(LOGS_FEDERATION_KEYS.exportBlockedRowLimit)
+  })
+
+  it('byte_budget_exceeded / artifact_byte_budget_exceeded → 体积上限专用文案', () => {
+    expect(exportBlockedKeyForReasons([EXPORT_BLOCK_REASONS.BYTE_BUDGET_EXCEEDED])).toBe(
+      LOGS_FEDERATION_KEYS.exportBlockedByteBudget,
+    )
+    expect(
+      exportBlockedKeyForReasons([EXPORT_BLOCK_REASONS.ARTIFACT_BYTE_BUDGET_EXCEEDED]),
+    ).toBe(LOGS_FEDERATION_KEYS.exportBlockedByteBudget)
+  })
+
+  it('行数优先于字节（两者同时超限时给可操作的那条）', () => {
+    expect(
+      exportBlockedKeyForReasons([
+        EXPORT_BLOCK_REASONS.BYTE_BUDGET_EXCEEDED,
+        EXPORT_BLOCK_REASONS.ROW_LIMIT_EXCEEDED,
+      ]),
+    ).toBe(LOGS_FEDERATION_KEYS.exportBlockedRowLimit)
+  })
+
+  it('非预算原因与空输入 → undefined（调用方走泛化文案）', () => {
+    expect(exportBlockedKeyForReasons([])).toBeUndefined()
+    expect(exportBlockedKeyForReasons(null)).toBeUndefined()
+    expect(exportBlockedKeyForReasons(undefined)).toBeUndefined()
+    expect(
+      exportBlockedKeyForReasons([
+        EXPORT_BLOCK_REASONS.COVERAGE_INCOMPLETE,
+        EXPORT_BLOCK_REASONS.WORKER_OR_LIST_TRUNCATED,
+      ]),
+    ).toBeUndefined()
+    expect(exportBlockedKeyForReasons(['quality_unresolved'])).toBeUndefined()
+  })
+
+  it('覆盖原因含 BUDGET_EXCEEDED → 预算专用文案（不再落到泛化 incomplete）', () => {
+    const v = classifyLogViewState({
+      ok: true,
+      items: [{ id: 1 }],
+      coverage: coverage({
+        complete: false,
+        partialReasons: [PARTIAL_REASONS.BUDGET_EXCEEDED],
+      }),
+    })
+    expect(v.allowsExportDownload).toBe(false)
+    expect(v.exportBlockedKey).toBe(LOGS_FEDERATION_KEYS.exportBlockedBudget)
+  })
+
+  it('新增的导出文案键在 zh / en 中都存在', () => {
+    for (const key of [
+      LOGS_FEDERATION_KEYS.exportBlockedRowLimit,
+      LOGS_FEDERATION_KEYS.exportBlockedByteBudget,
+      LOGS_FEDERATION_KEYS.exportBlockedBudget,
+    ]) {
+      expect(key.startsWith('logsFederation.export.')).toBe(true)
+    }
   })
 })
 

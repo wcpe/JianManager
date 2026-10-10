@@ -135,6 +135,9 @@ func main() {
 	if err := config.ValidateBeaconConfig(cfg.Beacon); err != nil {
 		log.Fatalf("Beacon 协同配置无效: %v", err)
 	}
+	if err := config.ValidateLogExportConfig(cfg.LogExport); err != nil {
+		log.Fatalf("日志导出配置无效: %v", err)
+	}
 
 	initLogger(cfg.Log)
 
@@ -324,7 +327,13 @@ func main() {
 	} else if holderErr := logHolderSvc.ReconcileInstances(instances, nodes, time.Now().UTC()); holderErr != nil {
 		slog.Warn("日志 holder 启动对账失败", "error", holderErr)
 	}
-	logCoord := logcoord.Assemble(pool, nodeSvc, instanceSvc, logHolderSvc)
+	// 导出物化预算（FR-480）：默认 10000 行 / 64MiB 与既有常量一致，行为不变；
+	// 数据量超默认上限的部署经 log_export.max_rows / max_bytes 显式调大，
+	// 否则用户只能看到「导出未通过完整性校验」且无任何调大途径（前端导出不传 limit）。
+	logCoord := logcoord.AssembleWithExportBudget(pool, nodeSvc, instanceSvc, logHolderSvc, logcoord.ExportBudget{
+		MaxRows:  cfg.LogExport.MaxRows,
+		MaxBytes: cfg.LogExport.MaxBytes,
+	})
 	// 实例 stdout/stderr 经事件流采集落库。
 	eventSvc.SetLogSink(logSvc)
 	// 平台结构化日志在输出 stdout 之外同时落库（持久化开关由 log_store.persist_platform 控制）。
@@ -839,6 +848,7 @@ func main() {
 		Log:                     logSvc,
 		LogCoord:                logCoord,
 		LogRuntimePool:          pool,
+		LogRuntimeHolders:       logHolderSvc,
 		LogVLAssets:             service.NewApprovedVLAssetStore(root),
 		Metric:                  metricSvc,
 		CapacityTrend:           capacityTrendAlerter,

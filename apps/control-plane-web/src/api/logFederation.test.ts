@@ -18,6 +18,18 @@ import {
 import { PARTIAL_REASONS } from '@/lib/logs-federation'
 
 describe('logFederation client mapping（FR-482）', () => {
+  it('永久位置证据无损映射，旧Worker缺字段兼容，且不改变coverage/quality/导出闸', () => {
+    const evidence = { worker_id: 'trusted-worker', storage_namespace: 'shared', from: '18446744073709551614', to: '18446744073709551615', reason_code: 'PERMANENTLY_LOST', operator: '实名', at_utc: '2026-10-08T00:00:00Z', log_source_id: 'inst:1/stdout', source_generation: 'gen-1' }
+    const base = { sourceTag: 'federated' as const, items: [], coverage: { complete: true, targets: [] }, quality: { duplicate_quality: 'exact', stats_quality: 'exact' } }
+    const old = buildFederationResult(base)
+    const result = buildFederationResult({ ...base, ingest_position_gaps: [evidence, { ...evidence, log_source_id: 'inst:2/stdout' }] })
+    expect(result.response.ingestPositionGaps).toHaveLength(2)
+    expect(result.response.ingestPositionGaps?.[0]).toEqual({ workerId: 'trusted-worker', storageNamespace: 'shared', from: evidence.from, to: evidence.to, reasonCode: evidence.reason_code, operator: '实名', atUTC: evidence.at_utc, logSourceId: 'inst:1/stdout', sourceGeneration: 'gen-1' })
+    expect(old.response.ingestPositionGaps).toEqual([])
+    expect(result.response.coverage).toEqual(old.response.coverage)
+    expect(result.response.quality).toEqual(old.response.quality)
+    expect(result.exportAffordance).toEqual(old.exportAffordance)
+  })
   it('isHttp404 / isFederatedNotReady', () => {
     expect(isHttp404({ response: { status: 404 } })).toBe(true)
     expect(isHttp404({ response: { status: 500 } })).toBe(false)

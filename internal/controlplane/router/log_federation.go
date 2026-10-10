@@ -318,7 +318,7 @@ func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 		strings.EqualFold(string(resp.Quality.DuplicateQuality), "conflict") {
 		notes = append(notes, "export_incomplete")
 	}
-	c.JSON(http.StatusOK, gin.H{
+	body := gin.H{
 		"ok":          true,
 		"sourceTag":   "federated",
 		"items":       resp.Items,
@@ -329,7 +329,11 @@ func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 		"budget_cut":  resp.BudgetCut,
 		"next_cursor": resp.NextCursor,
 		"notes":       notes,
-	})
+	}
+	if len(resp.IngestPositionGaps) > 0 {
+		body["ingest_position_gaps"] = resp.IngestPositionGaps
+	}
+	c.JSON(http.StatusOK, body)
 }
 
 func instanceTargetID(id uint) string { return fmt.Sprintf("inst:%d", id) }
@@ -723,6 +727,8 @@ func (h *LogFederationHandler) Export(c *gin.Context) {
 			)
 		}
 		// 不返回 Artifact 字节：缺口/截断/超预算/质量未决不交付成功附件。
+		// limits 是「本次实际采用的上限」——前端据此把笼统的「预算超了」说成
+		// 「超过 N 行上限，请缩小时间范围或调大 log_export.max_rows」。
 		c.JSON(http.StatusOK, gin.H{
 			"view":               res.View,
 			"coverage":           res.Coverage,
@@ -731,6 +737,7 @@ func (h *LogFederationHandler) Export(c *gin.Context) {
 			"incomplete_reasons": dedupeFederationReasons(reasons),
 			"budget_exceeded":    res.BudgetExceeded,
 			"cut":                res.Cut,
+			"limits":             res.Limits,
 			"artifact":           nil,
 		})
 		return

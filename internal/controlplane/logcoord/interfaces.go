@@ -25,6 +25,9 @@ type WorkerSearchRequest struct {
 	Cursor       string      `json:"cursor,omitempty"`
 	OrderVersion string      `json:"order_version"`
 	MetricField  string      `json:"metric_field,omitempty"`
+	// AllowProjectionDrift 请求 Worker 豁免「投影清单版本变化」判 VIEW_STALE。
+	// 只有「单次操作自己创建视图、自己读完」的导出路径置位；见 Query.AllowProjectionDrift。
+	AllowProjectionDrift bool `json:"allow_projection_drift,omitempty"`
 }
 
 // WorkerTargetResult Worker 侧单目标覆盖/查询结果。
@@ -43,11 +46,14 @@ type WorkerTargetResult struct {
 
 // WorkerSearchResponse 单 Worker Search 响应。
 type WorkerSearchResponse struct {
-	ViewID     string               `json:"view_id"`
-	Items      []Event              `json:"items"`
-	Targets    []WorkerTargetResult `json:"targets"`
-	Exhausted  bool                 `json:"exhausted"`
-	NextCursor string               `json:"next_cursor,omitempty"`
+	ViewID  string               `json:"view_id"`
+	Items   []Event              `json:"items"`
+	Targets []WorkerTargetResult `json:"targets"`
+	// Coverage 保留 Worker 的跨目标完整性与枚举摘要；Targets 仍作为兼容的逐目标投影。
+	Coverage           *Coverage           `json:"coverage,omitempty"`
+	IngestPositionGaps []IngestPositionGap `json:"ingest_position_gaps,omitempty"`
+	Exhausted          bool                `json:"exhausted"`
+	NextCursor         string              `json:"next_cursor,omitempty"`
 	// Truncated Worker 侧因预算/上限截断。
 	Truncated   bool   `json:"truncated"`
 	Unsupported bool   `json:"unsupported"`
@@ -67,9 +73,10 @@ type WorkerStatsPoint struct {
 
 // WorkerStatsResponse 单 Worker Stats 响应。
 type WorkerStatsResponse struct {
-	ViewID  string               `json:"view_id"`
-	Points  []WorkerStatsPoint   `json:"points"`
-	Targets []WorkerTargetResult `json:"targets"`
+	ViewID   string               `json:"view_id"`
+	Points   []WorkerStatsPoint   `json:"points"`
+	Targets  []WorkerTargetResult `json:"targets"`
+	Coverage *Coverage            `json:"coverage,omitempty"`
 	// Truncated 统计输入不完整等。
 	Truncated   bool   `json:"truncated"`
 	Unsupported bool   `json:"unsupported"`

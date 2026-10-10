@@ -3424,6 +3424,13 @@
     "more": "更多"
   },
   "logsFederation": {
+    "positionGaps": {
+      "title": "永久位置缺失（{{count}} 条）",
+      "description": "以下采集位置已被人工裁定放弃；这是独立位置凭据，不改变当前时间覆盖、统计质量或导出校验。",
+      "unknown": "未知（旧节点未提供）",
+      "identity": "节点：{{worker}} · 来源：{{source}} · 代次：{{generation}}",
+      "evidence": "存储空间：{{namespace}} · 位置：[{{from}}, {{to}}] · 原因：{{reason}} · 操作人：{{operator}} · 时间：{{at}}"
+    },
     "coverage": {
       "complete": "覆盖完整",
       "partial": "结果不完整",
@@ -3435,6 +3442,7 @@
       "ready_complete_empty": "所选范围内无日志（覆盖完整）",
       "verifying": "正在校验完整覆盖，先展示已取到的结果；导出时将做完整校验",
       "partial": "部分日志暂时无法查询，以下为已取到的结果",
+      "rate_limited": "日志查询请求过于频繁，本次未取到新数据；已保留上一次的结果，请稍后重试，或缩小时间范围/关闭实时跟随以降低请求频率",
       "offline": "部分节点当前不可达，结果可能缺少这些节点的日志",
       "engine_not_ready": "日志查询服务未启用，暂时只能查看平台与历史日志",
       "rehydrate_failed": "历史日志取回失败，结果不完整",
@@ -3449,6 +3457,7 @@
     },
     "reasons": {
       "engineNotReady": "日志查询服务未启用",
+      "rateLimited": "请求过于频繁",
       "logUnsupported": "该节点未开启日志采集",
       "legacy": "切换前的历史数据",
       "rehydrateFailed": "历史日志取回失败",
@@ -3474,6 +3483,19 @@
       "reopenView": "重新打开视图",
       "contactAdmin": "联系管理员"
     },
+    "clearConflicts": {
+      "button": "确认并清空冲突",
+      "title": "确认并清空身份冲突记录",
+      "description": "该节点存在无法自动裁定的身份冲突记录（同一事件 ID 出现不同内容）。系统在这些情况下会保留先到者并跳过冲突行，即保留的是正确版本；清空只移除这条诊断提示，不改动任何日志内容。清空后本条质量标记会消失，请先核对保留版本无误再执行。",
+      "reasonLabel": "清空理由（必填，将记入审计凭据）",
+      "reasonPlaceholder": "例如：已逐个核对 VL 中保留版本正确",
+      "confirmLabel": "确认并清空",
+      "reasonRequired": "请填写清空理由（审计凭据需要记录为何可以清）",
+      "success": "已清空 {{count}} 条身份冲突记录",
+      "partial": "已清空 {{count}} 条；{{skipped}} 个源因期间新增记录被跳过，请重新查询确认",
+      "failed": "清空身份冲突失败",
+      "scopeHint": "将清空本节点全部持有冲突记录的源（仅平台管理员）"
+    },
     "export": {
       "allowed": "覆盖完整且校验通过，可下载",
       "blockedIncomplete": "结果不完整，暂不可导出（请缩小范围或稍后重试）",
@@ -3482,6 +3504,9 @@
       "blockedUnresolved": "有重复日志待确认，暂不可导出",
       "blockedNotReady": "导出服务尚未就绪，请稍后重试",
       "blockedPermission": "权限不足，无法导出",
+      "blockedRowLimit": "导出数据超过单次行数上限，请缩小时间范围，或让管理员调大服务端 log_export.max_rows 配置",
+      "blockedByteBudget": "导出数据超过单次体积上限，请缩小时间范围，或让管理员调大服务端 log_export.max_bytes 配置",
+      "blockedBudget": "导出数据超过服务端单次上限，请缩小时间范围，或让管理员调大 log_export 配置",
       "permissionRecheckHint": "下载前将再次复核权限",
       "nextCursorHint": "已加载到当前查询范围的末尾；如需更早的日志，请调整时间范围。"
     },

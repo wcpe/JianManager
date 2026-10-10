@@ -15,7 +15,7 @@
  * 本模块无 React / i18n 运行时依赖；只产出 key 与结构化状态。
  */
 import { LOGS_FEDERATION_KEYS, reasonI18nKey } from './i18n'
-import { PARTIAL_REASONS } from './types'
+import { EXPORT_BLOCK_REASONS, PARTIAL_REASONS } from './types'
 import type {
   ClassifiedLogViewState,
   Coverage,
@@ -42,6 +42,7 @@ const EMPTY_STATS: CoverageTargetStats = {
 
 /** reason 分类优先级：越靠前越主导 UI 状态。 */
 const REASON_PRIORITY: readonly string[] = [
+  PARTIAL_REASONS.RATE_LIMITED,
   PARTIAL_REASONS.VIEW_STALE,
   PARTIAL_REASONS.LOG_UNSUPPORTED,
   PARTIAL_REASONS.ENGINE_NOT_READY,
@@ -62,6 +63,7 @@ const REASON_PRIORITY: readonly string[] = [
 
 /** 缺口 / 未覆盖类 reason：即使 cursor 枚举结束也不能宣称全量历史完整。 */
 const HISTORY_GAP_REASONS = new Set<string>([
+  PARTIAL_REASONS.RATE_LIMITED,
   PARTIAL_REASONS.OFFLINE,
   PARTIAL_REASONS.ENGINE_NOT_READY,
   PARTIAL_REASONS.LOG_UNSUPPORTED,
@@ -91,6 +93,7 @@ const VIEW_BANNER_KEY: Record<LogViewState, string> = {
   gap: LOGS_FEDERATION_KEYS.viewGap,
   verifying: LOGS_FEDERATION_KEYS.viewVerifying,
   partial: LOGS_FEDERATION_KEYS.viewPartial,
+  rate_limited: LOGS_FEDERATION_KEYS.viewRateLimited,
   ready_complete: LOGS_FEDERATION_KEYS.viewReadyComplete,
   unknown: LOGS_FEDERATION_KEYS.viewUnknown,
 }
@@ -111,6 +114,8 @@ const VIEW_ACTION_KEYS: Record<LogViewState, string[]> = {
   // 给「重试」只会误导（实测点重试后横幅依旧）。等用户改筛选/换窗口触发新校验即可。
   verifying: [],
   partial: [LOGS_FEDERATION_KEYS.actionRetry],
+  // 限流是瞬时的（令牌桶很快回补）：重试是唯一正确动作，且**必须**保留已渲染的行。
+  rate_limited: [LOGS_FEDERATION_KEYS.actionRetry],
   ready_complete: [],
   unknown: [LOGS_FEDERATION_KEYS.actionRetry, LOGS_FEDERATION_KEYS.actionContactAdmin],
 }
@@ -294,6 +299,8 @@ export function mergeQualityIntoSummary(
 /** reason 码 → LogViewState。 */
 function stateFromReason(reason: PartialReason): LogViewState {
   switch (reason) {
+    case PARTIAL_REASONS.RATE_LIMITED:
+      return 'rate_limited'
     case PARTIAL_REASONS.VIEW_STALE:
       return 'view_stale'
     case PARTIAL_REASONS.LOG_UNSUPPORTED:
@@ -319,6 +326,30 @@ function stateFromReason(reason: PartialReason): LogViewState {
   }
 }
 
+/**
+ * 导出阻断原因码（后端 incomplete_reasons）→ 专用 i18n key；无法精确归因时返回 undefined。
+ *
+ * 为什么需要它：导出闸阻断报告里的原因码此前全部落到泛化的「导出未通过完整性校验」，
+ * 用户看不出到底是「行数到顶」还是「字节到顶」，也就无从判断该缩小时间范围
+ * 还是该调大配置（生产实测：超 10000 行时只看到笼统提示）。
+ *
+ * 行数优先于字节：两者同时超限时，「行数」是用户可直接操作的维度
+ * （缩小时间范围即可减少行数），字节上限在典型日志行宽下极少先到顶。
+ */
+export function exportBlockedKeyForReasons(reasons: readonly string[] | null | undefined): string | undefined {
+  if (!Array.isArray(reasons) || reasons.length === 0) return undefined
+  if (reasons.includes(EXPORT_BLOCK_REASONS.ROW_LIMIT_EXCEEDED)) {
+    return LOGS_FEDERATION_KEYS.exportBlockedRowLimit
+  }
+  if (
+    reasons.includes(EXPORT_BLOCK_REASONS.BYTE_BUDGET_EXCEEDED) ||
+    reasons.includes(EXPORT_BLOCK_REASONS.ARTIFACT_BYTE_BUDGET_EXCEEDED)
+  ) {
+    return LOGS_FEDERATION_KEYS.exportBlockedByteBudget
+  }
+  return undefined
+}
+
 /** 导出阻断 key：按视图状态选择。 */
 function exportBlockedKeyFor(
   state: LogViewState,
@@ -334,6 +365,15 @@ function exportBlockedKeyFor(
     return LOGS_FEDERATION_KEYS.exportBlockedFailed
   }
   if (state === 'engine_not_ready') return LOGS_FEDERATION_KEYS.exportBlockedNotReady
+  // 预算类阻断优先于泛化 incomplete：覆盖原因里已带 BUDGET_EXCEEDED 时说明
+  // 查询/导出是被服务端上限截断的，用户要的答案是「上限是多少、怎么调」。
+  //
+  // 注意这里只看 coverage：精确到「行数 / 字节」的归因来自导出闸阻断报告
+  // （POST /export 的 incomplete_reasons），列表响应不携带它，故那条路径由
+  // LogsPage 的导出失败分支经 exportBlockedKeyForReasons 处理。
+  if (coverage.reasons.includes(PARTIAL_REASONS.BUDGET_EXCEEDED)) {
+    return LOGS_FEDERATION_KEYS.exportBlockedBudget
+  }
   if (!coverage.complete) return LOGS_FEDERATION_KEYS.exportBlockedIncomplete
   const exportStatus = response.exportStatus
   if (exportStatus === 'FAILED' || exportStatus === 'INCOMPLETE' || exportStatus === 'PENDING') {
@@ -382,8 +422,12 @@ export function classifyLogViewState(
 
   // 传输失败优先：即使 body 残留 coverage.complete=true，也不得当成功。
   if (transportFailed) {
+    // 限流单独成态：它比「查询失败」更具体，且处置方式不同（等待/重试而非排查），
+    // 但仍属失败——既不得当空成功，也不得降级 legacy 把限流掩盖成正常结果。
+    const rateLimited = errorCode === PARTIAL_REASONS.RATE_LIMITED
+    const state: LogViewState = rateLimited ? 'rate_limited' : 'query_failed'
     return {
-      state: 'query_failed',
+      state,
       isFailure: true,
       isIncomplete: false,
       pendingVerification: false,
@@ -391,8 +435,8 @@ export function classifyLogViewState(
       allowsExportDownload: false,
       viewEnumerationEnded: false,
       historyFullyEnumerated: false,
-      bannerKey: VIEW_BANNER_KEY.query_failed,
-      actionKeys: [...VIEW_ACTION_KEYS.query_failed],
+      bannerKey: VIEW_BANNER_KEY[state],
+      actionKeys: [...VIEW_ACTION_KEYS[state]],
       coverage: {
         ...coverage,
         status: 'failed',
@@ -450,6 +494,7 @@ export function classifyLogViewState(
     state === 'query_failed' ||
     state === 'view_stale' ||
     state === 'engine_not_ready' ||
+    state === 'rate_limited' ||
     state === 'unknown'
 
   const isIncomplete = !coverage.complete || state !== 'ready_complete'

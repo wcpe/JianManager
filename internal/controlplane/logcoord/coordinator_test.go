@@ -1115,12 +1115,9 @@ func TestNewViewIDIsOpaqueAndUnique(t *testing.T) {
 	}
 }
 
-// WarmSearch 必须把结果额外写入「时间窗 +1 分钟」桶：整分桶键下，桶 M 的条目
-// 只能由落在 M 内的查询写入，预热周期与桶边界之间的缝隙会让用户切换窗口时
-// 冷查（2026-10-08 面板来回切换恒冷复盘）。本用例锁定：
-//  1. 同一分钟内的真实查询命中预热条目（不触发新扇出）；
-//  2. 下一分钟的真实查询同样命中（WarmSearch 预写桶生效）。
-func TestWarmSearchCoversSameAndNextMinuteBucket(t *testing.T) {
+// WarmSearch 保留当前与下一分钟的预热候选，但候选不等于新窗口安全分页凭据。
+// 精确相同窗口保持命中；同分钟扩窗或下一分钟查询必须回源，防止跳过尚未读取的新行。
+func TestWarmSearchExactWindowHitsButShiftedBucketsRefetch(t *testing.T) {
 	worker := &fakeWorker{workerID: "w1",
 		searchItems:  []Event{mkEvent("e1", "n", "g", 1, "2026-10-08T07:00:00Z", "INFO", "x")},
 		searchTarget: []WorkerTargetResult{{TargetID: "node:1", State: CoverageSuccess, CatalogGeneration: "1"}}}
@@ -1139,13 +1136,21 @@ func TestWarmSearchCoversSameAndNextMinuteBucket(t *testing.T) {
 	worker.mu.Unlock()
 	require.Equal(t, 1, afterWarm, "预热必须实际执行一次查询")
 
-	// 同分钟（桶 07:30）内的真实查询：命中预热条目。
+	// 精确窗口仍命中，预热候选的保留不改变原有热缓存。
+	require.Len(t, coord.searchCache, 2, "保留当前与下一分钟桶的预热候选")
+	_, err = coord.Search(context.Background(), base)
+	require.NoError(t, err)
+	worker.mu.Lock()
+	exactCalls := worker.searchCalls
+	worker.mu.Unlock()
+	require.Equal(t, 1, exactCalls)
+	// 同分钟的窗口变化必须回源，旧窗口不具备新窗口的安全排序前缀。
 	same := base
 	same.FromUTC, same.ToUTC = "2026-10-08T06:30:55Z", "2026-10-08T07:30:55Z"
 	_, err = coord.Search(context.Background(), same)
 	require.NoError(t, err)
 
-	// 下一分钟（桶 07:31）的真实查询：命中 WarmSearch 预写条目。
+	// 下一分钟的候选同样必须先回源，不能以旧窗口承诺完整或推进游标。
 	next := base
 	next.FromUTC, next.ToUTC = "2026-10-08T06:31:10Z", "2026-10-08T07:31:10Z"
 	_, err = coord.Search(context.Background(), next)
@@ -1153,8 +1158,8 @@ func TestWarmSearchCoversSameAndNextMinuteBucket(t *testing.T) {
 
 	worker.mu.Lock()
 	defer worker.mu.Unlock()
-	require.Equal(t, 1, worker.searchCalls,
-		"同分钟与下一分钟的查询都必须命中预热缓存，不得再次扇出")
+	require.Equal(t, 3, worker.searchCalls,
+		"精确窗口命中，同分钟变化与下一分钟窗口都必须重新读取")
 }
 
 // 缓存 TTL 分档：短窗保持短档保新鲜；长窗（含无界 all）走长档以覆盖预热周期。
@@ -1199,6 +1204,23 @@ func TestWarmSearchBypassesOwnCacheAndRefreshes(t *testing.T) {
 		"每轮预热都必须真正扇出，不得命中自身旧条目（雪球）")
 }
 
+// Fast 首屏也必须保留已经观察到的 dial 失败，Pending 不能遮掉具体覆盖证据。
+func TestFastSearchPreservesObservedCoverageFailures(t *testing.T) {
+	dialer := newFakeDialer()
+	coord := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}, dialer)
+	resp, err := coord.Search(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "p",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z",
+		Budget: QueryBudget{Limit: 100}, Fast: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.True(t, resp.Coverage.Pending)
+	require.NotEmpty(t, resp.Coverage.Targets)
+	require.Equal(t, CoverageOffline, resp.Coverage.Targets[0].State)
+	require.Contains(t, resp.Coverage.Targets[0].Reasons, "dial_failed")
+}
+
 // 空覆盖结果不得写入同参缓存：否则 CP 启动早期 dial 失败的空结果会被用户与
 // 预热器持续命中（面板长期 0 条）。
 func TestEmptyIncompleteResultIsNotCached(t *testing.T) {
@@ -1214,4 +1236,145 @@ func TestEmptyIncompleteResultIsNotCached(t *testing.T) {
 	coord.searchCacheMu.Lock()
 	defer coord.searchCacheMu.Unlock()
 	require.Empty(t, coord.searchCache, "空覆盖结果不得写入同参缓存")
+}
+
+// reviewWindowWorker 只复用本包内存假 Worker，不打开网络连接。
+type reviewWindowWorker struct{ *fakeWorker }
+
+func (w *reviewWindowWorker) Search(ctx context.Context, req WorkerSearchRequest) (*WorkerSearchResponse, error) {
+	resp, err := w.fakeWorker.Search(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	from := MustParseRFC3339(req.FromUTC)
+	to := MustParseRFC3339(req.ToUTC)
+	items := make([]Event, 0, len(resp.Items))
+	for _, event := range resp.Items {
+		ts := MustParseRFC3339(event.EventTimeUTC)
+		if (from.IsZero() || !ts.Before(from)) && (to.IsZero() || ts.Before(to)) {
+			items = append(items, event)
+		}
+	}
+	resp.Items = items
+	return resp, nil
+}
+
+func reviewCoordinator(items []Event) (*Coordinator, *fakeWorker) {
+	worker := &fakeWorker{workerID: "review-worker", searchItems: items,
+		searchTarget: []WorkerTargetResult{{TargetID: "inst:901", State: CoverageSuccess, CatalogGeneration: "100"}}}
+	dialer := newFakeDialer()
+	dialer.clients["review-worker"] = &reviewWindowWorker{worker}
+	resolver := &fakeTargetResolver{targets: []TargetInfo{{ID: "inst:901", WorkerID: "review-worker", Readiness: ReadyOnline}}}
+	return New(resolver, dialer), worker
+}
+
+func reviewCPQuery() Query {
+	return Query{FromUTC: "2026-09-22T00:00:00Z", ToUTC: "2026-09-22T01:00:00Z",
+		AuthorizedTargetIDs: []string{"inst:901"}, PrincipalKey: "user:review-a",
+		PermissionScope: "scope:review-a", Budget: QueryBudget{Limit: 1}}
+}
+
+// 缓存命中不得把预热主体或其他主体的 View 交给当前调用方。
+func TestReviewCacheViewBinding(t *testing.T) {
+	cases := []struct {
+		name      string
+		warm      bool
+		fast      bool
+		scopeOnly bool
+	}{
+		{name: "不同主体Search", fast: false},
+		{name: "预热主体到真实用户", warm: true, fast: true},
+		{name: "同主体不同PermissionScope", fast: false, scopeOnly: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			coord, worker := reviewCoordinator([]Event{
+				mkEvent("review-2", "review-source", "g1", 20, "2026-09-22T00:30:00Z", "INFO", "new"),
+				mkEvent("review-1", "review-source", "g1", 10, "2026-09-22T00:20:00Z", "INFO", "old"),
+			})
+			firstQ := reviewCPQuery()
+			firstQ.Fast = tc.fast
+			var first *SearchResponse
+			var err error
+			if tc.warm {
+				firstQ.PrincipalKey = "warm:review"
+				first, err = coord.WarmSearch(context.Background(), firstQ)
+			} else {
+				first, err = coord.Search(context.Background(), firstQ)
+			}
+			require.NoError(t, err)
+			require.NotNil(t, first)
+			require.NotEmpty(t, first.NextCursor)
+
+			secondQ := firstQ
+			if tc.scopeOnly {
+				secondQ.PermissionScope = "scope:review-b"
+			} else {
+				secondQ.PrincipalKey = "user:review-b"
+			}
+			second, err := coord.Search(context.Background(), secondQ)
+			require.NoError(t, err)
+			require.Equal(t, secondQ.PrincipalKey, second.View.PrincipalKey)
+			require.Equal(t, secondQ.PermissionScope, second.View.PermissionScope)
+
+			pageQ := secondQ
+			pageQ.ViewID, pageQ.Cursor = second.View.ViewID, second.NextCursor
+			_, err = coord.Search(context.Background(), pageQ)
+			require.NoError(t, err)
+
+			exportQ := secondQ
+			exportQ.Fast = false
+			exportQ.ViewID = second.View.ViewID
+			_, err = coord.Export(context.Background(), exportQ)
+			require.NoError(t, err)
+			_ = worker
+		})
+	}
+}
+
+// 同一时间桶的缓存命中必须重绑精确窗口，并过滤下界之外的旧行。
+func TestReviewCachedWindowBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		warm  bool
+		shift time.Duration
+	}{
+		{name: "预写下一分钟", warm: true, shift: time.Minute},
+		{name: "同分钟截断", shift: 30 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			coord, _ := reviewCoordinator([]Event{
+				mkEvent("before-lower-2", "review-source", "g1", 20, "2026-09-22T00:00:20Z", "INFO", "old2"),
+				mkEvent("before-lower-1", "review-source", "g1", 10, "2026-09-22T00:00:10Z", "INFO", "old1"),
+			})
+			q := reviewCPQuery()
+			var first *SearchResponse
+			var err error
+			if tc.warm {
+				first, err = coord.WarmSearch(context.Background(), q)
+			} else {
+				first, err = coord.Search(context.Background(), q)
+			}
+			require.NoError(t, err)
+			require.NotNil(t, first)
+			require.NotEmpty(t, first.NextCursor)
+			nextQ := q
+			nextQ.FromUTC = MustParseRFC3339(q.FromUTC).Add(tc.shift).Format(time.RFC3339)
+			nextQ.ToUTC = MustParseRFC3339(q.ToUTC).Add(tc.shift).Format(time.RFC3339)
+			resp, err := coord.Search(context.Background(), nextQ)
+			require.NoError(t, err)
+			require.Equal(t, nextQ.FromUTC, resp.View.FromUTC)
+			require.Equal(t, nextQ.ToUTC, resp.View.ToUTC)
+			from, to := MustParseRFC3339(nextQ.FromUTC), MustParseRFC3339(nextQ.ToUTC)
+			for _, event := range resp.Items {
+				ts := MustParseRFC3339(event.EventTimeUTC)
+				require.False(t, ts.Before(from))
+				require.True(t, ts.Before(to))
+			}
+			pageQ := nextQ
+			pageQ.ViewID, pageQ.Cursor = resp.View.ViewID, resp.NextCursor
+			_, err = coord.Search(context.Background(), pageQ)
+			require.NoError(t, err)
+		})
+	}
 }
