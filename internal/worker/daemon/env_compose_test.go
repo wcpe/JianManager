@@ -24,7 +24,7 @@ func countEnvKey(out []string, k string) int {
 // 期望：有绑定 → 只剩唯一绑定值；无绑定 → 不残留。
 func TestComposeEnv_StripsInheritedJavaHome(t *testing.T) {
 	base := []string{
-		"JAVA_HOME=/home/u/.sdkman/candidates/java/current",
+		"JAVA_HOME=/home/user/.sdkman/candidates/java/current",
 		"PATH=/usr/local/bin:/usr/bin",
 	}
 	out := composeEnv(base, WrapperConfig{JavaHome: "/opt/jdk-17"})
@@ -33,7 +33,7 @@ func TestComposeEnv_StripsInheritedJavaHome(t *testing.T) {
 		t.Fatalf("JAVA_HOME 条目数应为 1（仅绑定值），实际 %d：%v", n, out)
 	}
 	for _, kv := range out {
-		if kv == "JAVA_HOME=/home/u/.sdkman/candidates/java/current" {
+		if kv == "JAVA_HOME=/home/user/.sdkman/candidates/java/current" {
 			t.Fatalf("继承的脏 JAVA_HOME 未被剥离：%v", out)
 		}
 	}
@@ -42,7 +42,7 @@ func TestComposeEnv_StripsInheritedJavaHome(t *testing.T) {
 // TestComposeEnv_UnboundStripsInheritedJavaHome 未绑定 JDK 时不得残留继承的 JAVA_HOME。
 func TestComposeEnv_UnboundStripsInheritedJavaHome(t *testing.T) {
 	base := []string{
-		"JAVA_HOME=/home/u/.sdkman/candidates/java/current",
+		"JAVA_HOME=/home/user/.sdkman/candidates/java/current",
 		"PATH=/usr/local/bin:/usr/bin",
 	}
 	out := composeEnv(base, WrapperConfig{})

@@ -95,7 +95,7 @@ func countEnvKey(out []string, k string) int {
 // 期望：实例的 JAVA_HOME 只由实例绑定的 JDK 决定，继承来的值必须被剥离（有绑定→唯一绑定值）。
 func TestComposeEnv_StripsInheritedJavaHome(t *testing.T) {
 	base := []string{
-		"JAVA_HOME=/home/u/.sdkman/candidates/java/current", // Worker 继承的脏值
+		"JAVA_HOME=/home/user/.sdkman/candidates/java/current", // Worker 继承的脏值
 		"PATH=/usr/local/bin:/usr/bin",
 	}
 	out := ComposeEnv(base, CommandSpec{JavaHome: "/opt/jdk-17"})
@@ -104,7 +104,7 @@ func TestComposeEnv_StripsInheritedJavaHome(t *testing.T) {
 		t.Fatalf("JAVA_HOME 条目数应为 1（仅绑定值），实际 %d：%v", n, out)
 	}
 	for _, kv := range out {
-		if kv == "JAVA_HOME=/home/u/.sdkman/candidates/java/current" {
+		if kv == "JAVA_HOME=/home/user/.sdkman/candidates/java/current" {
 			t.Fatalf("继承的脏 JAVA_HOME 未被剥离：%v", out)
 		}
 	}
@@ -114,7 +114,7 @@ func TestComposeEnv_StripsInheritedJavaHome(t *testing.T) {
 // 留着它等于让实例的 Java 运行时指向 Worker 环境里的可变软链，是本次事故的直接成因。
 func TestComposeEnv_UnboundStripsInheritedJavaHome(t *testing.T) {
 	base := []string{
-		"JAVA_HOME=/home/u/.sdkman/candidates/java/current",
+		"JAVA_HOME=/home/user/.sdkman/candidates/java/current",
 		"PATH=/usr/local/bin:/usr/bin",
 	}
 	out := ComposeEnv(base, CommandSpec{})
@@ -129,7 +129,7 @@ func TestComposeEnv_UnboundStripsInheritedJavaHome(t *testing.T) {
 // 这是有意保留的正规途径，取代「靠 Worker 进程环境碰巧带什么」的隐式传播。
 func TestComposeEnv_InstanceEnvVarsCanStillSetJavaHome(t *testing.T) {
 	base := []string{
-		"JAVA_HOME=/home/u/.sdkman/candidates/java/current", // 继承的脏值
+		"JAVA_HOME=/home/user/.sdkman/candidates/java/current", // 继承的脏值
 		"FOO=base",
 	}
 	out := ComposeEnv(base, CommandSpec{

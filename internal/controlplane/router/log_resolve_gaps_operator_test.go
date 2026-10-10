@@ -88,7 +88,7 @@ func (w *recordingResolveGapsWorker) snapshot() resolveGapsCall {
 // 只注入本用例所需的少量服务与连接池——这样断言的链路就是生产链路，而不是手工挂 handler。
 func setupLogRuntimeOperatorRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	t.Helper()
-	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-log-operator", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
+	jwtCfg := config.JWTConfig{Secret: "test-key", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)

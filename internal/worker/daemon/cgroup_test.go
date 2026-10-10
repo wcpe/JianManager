@@ -219,7 +219,7 @@ func TestWorkerUnitNameFromCgroup(t *testing.T) {
 		{"系统级 service 单元", "/system.slice/jianmanager-worker.service",
 			"jianmanager-worker.service", true},
 		{"带 nice/ionice 的 transient 单元（真机形态）",
-			"/user.slice/user-51404.slice/user@51404.service/jm.slice/jm-logs.slice/jm-worker-node-main.service",
+			"/user.slice/user-1000.slice/user@1000.service/jm.slice/jm-logs.slice/jm-worker-node-main.service",
 			"jm-worker-node-main.service", true},
 		{"已在隔离目录内（自身单元仍是 Worker 单元）",
 			"/user.slice/user-1000.slice/user@1000.service/app.slice/jianmanager-daemons/inst-1", "", false},

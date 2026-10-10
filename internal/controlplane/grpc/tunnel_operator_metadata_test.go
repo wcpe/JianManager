@@ -69,7 +69,8 @@ func serveTunnelWorker(t *testing.T, lis *bufconn.Listener, uuid, secret string,
 // Worker 侧的 incoming metadata（含阴性对照，确保断言不是「夹具泄漏」造成的假绿）。
 func TestReverseTunnelForwardsOperatorMetadata(t *testing.T) {
 	reg, db, lis := startTunnelCP(t)
-	const uuid, secret = "node-operator-1", "secret-operator-1"
+	const uuid = "node-operator-1"
+	const secret = "test-key"
 	require.NoError(t, db.Create(&model.Node{UUID: uuid, Name: "operator-1", Secret: secret}).Error)
 
 	worker := &operatorMetadataTunnelWorker{}

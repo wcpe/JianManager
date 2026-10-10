@@ -132,7 +132,7 @@ func TestMaskMessageIsDeterministicAndMasksVolatile(t *testing.T) {
 	}
 	for _, in := range []string{
 		"trace 4bf92f3577b34da6a3ce929d0e0e4736 done",
-		"conn 10.1.2.3 established",
+		"conn 10.0.0.7 established",
 		"id 550e8400-e29b-41d4-a716-446655440000 failed",
 	} {
 		if got := MaskMessage(in); got == in {
