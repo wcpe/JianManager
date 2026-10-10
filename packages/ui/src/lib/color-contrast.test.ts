@@ -341,6 +341,14 @@ const CONTRAST_PAIRS: ContrastPair[] = [
   { fg: '--status-danger-foreground', bg: '--status-danger', minRatio: 3, usage: '危险徽章' },
   { fg: '--status-warning-foreground', bg: '--status-warning', minRatio: 3, usage: '警告徽章' },
   { fg: '--status-info-foreground', bg: '--status-info', minRatio: 3, usage: '信息徽章' },
+  // ── 柔和底徽章（StatusBadge 的默认变体）──
+  // 【此前是门禁盲区】StatusBadge 默认用 `bg-status-X/15 text-status-X`（纯状态色当文字），
+  // 而上面四对测的是**实色底**变体 —— 最常用的那个反而没被覆盖，且纯状态色压在 15% 淡底上
+  // 在浅色下本就偏弱。现补 weak/ink 三件套（每套经手工取值，非 alpha 混合），并纳入门禁。
+  { fg: '--success-ink', bg: '--success-weak', minRatio: 3, usage: '成功徽章（柔和底）' },
+  { fg: '--danger-ink', bg: '--danger-weak', minRatio: 3, usage: '危险徽章（柔和底）' },
+  { fg: '--warning-ink', bg: '--warning-weak', minRatio: 3, usage: '警告徽章（柔和底）' },
+  { fg: '--info-ink', bg: '--info-weak', minRatio: 3, usage: '信息徽章（柔和底）' },
 ]
 
 /** 取变量值，缺失即报错——缺定义会让对比度校验悄悄跳过，必须显式失败。 */
@@ -421,7 +429,10 @@ describe('颜色解析与转换', () => {
   })
 
   it('未解析成功的值不会被静默算成 NaN', () => {
-    expect(() => wcagContrast('color-mix(in srgb, #fff 50%, #000)', '#ffffff')).toThrow(/无法解析颜色值/)
+    // 样例由 `color-mix(...)` 换成 `hsl(...)`：前者已纳入解析范围（暗色 token 的
+    // weak/ink/line 大量用它，不支持则那些对比度对无法校验，见 parseColorMix 的说明）。
+    // 本用例守的契约不变——**仍不在支持范围内的写法必须显式抛错，而不是算出 NaN**。
+    expect(() => wcagContrast('hsl(120 50% 50%)', '#ffffff')).toThrow(/无法解析颜色值/)
   })
 })
 

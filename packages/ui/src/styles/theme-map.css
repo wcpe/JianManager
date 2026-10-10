@@ -70,6 +70,21 @@
   --color-status-danger-foreground: var(--status-danger-foreground);
   --color-status-info: var(--status-info);
   --color-status-info-foreground: var(--status-info-foreground);
+  /* 状态色「三件套」：weak(淡底) / ink(该底上的墨色) / line(描边)。
+     此前只有 success/danger 在 tokens.css 里定义、且未登记成工具类；warning/info 连定义都没有。
+     登记后 `bg-*-weak` / `text-*-ink` / `border-*-line` 可用（StatusBadge 的柔和变体走这三件套）。 */
+  --color-success-weak: var(--success-weak);
+  --color-success-ink: var(--success-ink);
+  --color-success-line: var(--success-line);
+  --color-warning-weak: var(--warning-weak);
+  --color-warning-ink: var(--warning-ink);
+  --color-warning-line: var(--warning-line);
+  --color-danger-weak: var(--danger-weak);
+  --color-danger-ink: var(--danger-ink);
+  --color-danger-line: var(--danger-line);
+  --color-info-weak: var(--info-weak);
+  --color-info-ink: var(--info-ink);
+  --color-info-line: var(--info-line);
   --color-brand-forest: var(--brand-forest);
   --color-brand-cobalt: var(--brand-cobalt);
   /* 多序列历史曲线配色（FR-060 TimeSeriesChart） */
@@ -78,6 +93,32 @@
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  /* ── 排版阶梯（试点：/instances）──
+     借鉴 Radix Themes 的「收敛成有限几级」与 Vercel Geist 的「每级配专属行高/字距」。
+     此前全站散落 399 处任意值字号（text-[11px] 267 处、text-[10px] 92 处），
+     且行高一律吃 Tailwind 默认 1.5 —— 11px 拿到 16.5px，对密集表格偏松且不可控。
+
+     取值取自项目**现有的事实节奏**（字号不变），新增的是「每级有调过的行高与字距」。
+     命名取语义（用途）而非尺寸名，迁移时看用途而不是像素。
+
+     ⚠️ 命名刻意避开 Tailwind 内建字号名（xs/sm/base/lg/xl）——覆盖 `--text-base`
+     会把全站 `text-base` 从 16px 静默变成 14px，那是隐藏的全局副作用。 */
+  --text-micro: 0.625rem;                 /* 10px · 徽章/chip 内极小字 */
+  --text-micro--line-height: 0.875rem;    /* 14px（原默认 15px）*/
+  --text-micro--letter-spacing: 0.01em;   /* 小字加正字距提升可读性 */
+  --text-meta: 0.6875rem;                 /* 11px · 次要/元信息（主力，267 处）*/
+  --text-meta--line-height: 1rem;         /* 16px（原默认 16.5px）*/
+  --text-meta--letter-spacing: 0.005em;
+  --text-dense: 0.75rem;                  /* 12px · 密集正文 */
+  --text-dense--line-height: 1rem;
+  --text-body: 0.8125rem;                 /* 13px · 表格正文 */
+  --text-body--line-height: 1.125rem;     /* 18px */
+  --text-lead: 0.875rem;                  /* 14px · 常规正文 */
+  --text-lead--line-height: 1.25rem;
+  --text-title: 1rem;                     /* 16px · 区块标题 */
+  --text-title--line-height: 1.5rem;
+  --text-title--letter-spacing: -0.01em;
+
   --radius-sm: calc(var(--radius) - 3px);
   --radius-md: calc(var(--radius) - 1px);
   --radius-lg: var(--radius);
@@ -88,6 +129,11 @@
      品牌相关取值（--brand-shadow）经变量路由，FR-164 第二主题仅覆盖变量即可换肤。 */
   --shadow-soft: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 1px 3px -1px rgb(var(--shadow-color) / 0.05);
   --shadow-lift: 0 6px 16px -5px rgb(var(--shadow-color) / 0.14), 0 2px 6px -3px rgb(var(--shadow-color) / 0.08);
+  /* 抬升阶梯向上补齐。沿用 soft/lift 的既有取值不动（53 + 19 处依赖），只补更高两档，
+     并统一用语义名而非内建 shadow-sm/md/lg（覆盖内建会波及全站其它 29 处）。
+     语义：flat(无) < soft(卡片) < lift(悬停抬升) < overlay(浮层) < modal(模态)。 */
+  --shadow-overlay: 0 12px 32px -8px rgb(var(--shadow-color) / 0.18), 0 4px 10px -4px rgb(var(--shadow-color) / 0.10);
+  --shadow-modal: 0 24px 56px -12px rgb(var(--shadow-color) / 0.26), 0 8px 20px -6px rgb(var(--shadow-color) / 0.12);
   /* ── 全局动效收敛（FR-244）：唯一的动画词汇表，任何交互动效都从这里取值，禁止再散落硬编码毫秒 ──
        时长 token：--motion-duration-fast(120)｜normal(180)｜slow(320)｜route(360)｜progress-*(进度条专用)。
        缓动 token：--motion-easing-standard（iOS 收敛缓动，别名 --ease-ios，Tailwind 用 ease-ios）｜--motion-easing-emphasized。
