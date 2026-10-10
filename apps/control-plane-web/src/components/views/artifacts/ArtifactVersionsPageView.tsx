@@ -97,8 +97,26 @@ export function ArtifactVersionsPageView({
   // 文件选择框的 key：上传成功后自增以清空浏览器已选文件（DOM 值不受受控 prop 约束）。
   const [uploadFileKey, setUploadFileKey] = useState(0)
 
-  if (isLoading) return <div className="p-4 text-sm text-muted-foreground">{t('common.loading')}</div>
-  if (isError || !catalog) return <div className="p-4 text-sm text-destructive">{t('artifactVersions.loadFailed')}</div>
+  if (isLoading) {
+    // 加载/错误态也要保留 PageShell + PageHeader：此前整页早退只剩一行文案，
+    // `data-page` 就绪信号随之消失（e2e/布局断言会在慢网络下闪断），页名也被摘掉。
+    return (
+      <PageShell data-page="artifact-versions" className="mx-auto max-w-5xl">
+        <PageHeader title={t('artifactVersions.title')} description={t('artifactVersions.description')} />
+        <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+      </PageShell>
+    )
+  }
+  if (isError || !catalog) {
+    return (
+      <PageShell data-page="artifact-versions" className="mx-auto max-w-5xl">
+        <PageHeader title={t('artifactVersions.title')} description={t('artifactVersions.description')} />
+        <p className="text-sm text-destructive" data-testid="artifact-versions-error">
+          {t('artifactVersions.loadFailed')}
+        </p>
+      </PageShell>
+    )
+  }
 
   const cachedVersions = catalog.versions.filter((version) => version.assetId > 0)
   const sourceByID = new Map(catalog.sources.map((source) => [source.id, source]))
@@ -180,7 +198,14 @@ export function ArtifactVersionsPageView({
                 <div className="min-w-44 flex-1">
                   <p className="font-medium">{version.version}{isDefault ? ` · ${t('artifactVersions.globalDefault')}` : ''}</p>
                   {source && <p className="text-xs text-muted-foreground">{sourceLabel(source.provider, source.name)}</p>}
-                  <p className="text-xs text-muted-foreground">{cached ? `${t('artifactVersions.cached')} · ${version.expectedSha256.slice(0, 12)}` : t('artifactVersions.notCached')}</p>
+                  {/* 未缓存且无 sha 时不能渲染成「已缓存 ·」这类尾随分隔符。 */}
+                  <p className="text-xs text-muted-foreground">
+                    {cached
+                      ? version.expectedSha256
+                        ? `${t('artifactVersions.cached')} · ${version.expectedSha256.slice(0, 12)}`
+                        : t('artifactVersions.cached')
+                      : t('artifactVersions.notCached')}
+                  </p>
                   {version.lastError && <p className="mt-1 text-xs text-destructive">{version.lastError}</p>}
                 </div>
                 {!cached ? (
@@ -189,8 +214,10 @@ export function ArtifactVersionsPageView({
                     {t('artifactVersions.cache')}
                   </Button>
                 ) : (
+                  // 设默认在途：此前只有禁用（无文案无转圈），点了没反应会被当成没点上。
                   <Button size="sm" variant={isDefault ? 'secondary' : 'outline'} disabled={isDefault || defaultPending} onClick={() => onSetGlobalDefault(version.id)}>
-                    {t('artifactVersions.setGlobalDefault')}
+                    {defaultPending && <Loader2 className="mr-1 size-3.5 animate-spin" />}
+                    {defaultPending ? t('common.saving') : t('artifactVersions.setGlobalDefault')}
                   </Button>
                 )}
               </div>

@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { http, HttpResponse } from 'msw'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
+import { API } from '@jianmanager/devmock/api'
+import { server } from '@jianmanager/devmock/server'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { ALL_PERMISSION_NODE_IDS } from '@/lib/shared/roles'
@@ -66,5 +69,43 @@ describe('PermissionsPage（FR-432）', () => {
     useAuthStore.setState({ role: 3 })
     renderWithProviders(<PermissionsPage />)
     expect(screen.getByText(/权限配置读取|permission read/i)).toBeInTheDocument()
+  })
+
+  // 左栏原先用「useUsers() 拉全量 + users.map() 全量渲染」（规则点名的禁用形态）。
+  // 现在候选走服务端搜索（limit 信封 + 键入 q，300ms 防抖），列表走变高虚拟窗口。
+  it('用户候选走服务端搜索：请求带 limit 信封，键入只发一次带 q 的请求', async () => {
+    const userUrls: string[] = []
+    server.use(
+      http.get(API('/users'), ({ request }) => {
+        userUrls.push(request.url)
+        return HttpResponse.json({
+          items: [{ id: 1, uuid: 'u1', username: 'admin', role: 10, status: 1, createdAt: '2026-01-01T00:00:00Z' }],
+          total: 1,
+          limit: 100,
+          offset: 0,
+        })
+      }),
+    )
+    renderWithProviders(<PermissionsPage />)
+
+    await waitFor(() => expect(userUrls.length).toBeGreaterThan(0))
+    expect(userUrls[0]).toContain('limit=100')
+    expect(userUrls[0]).not.toContain('q=')
+
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText('搜索'), 'adm')
+
+    await waitFor(() => expect(userUrls.some((u) => u.includes('q=adm'))).toBe(true))
+    // 300ms 防抖：中间的 a / ad 不许各发一次。
+    expect(userUrls.filter((u) => u.includes('q='))).toHaveLength(1)
+  })
+
+  it('深链 ?user=<不存在的 id> → 中栏按未选择呈现（不是空权限树）', async () => {
+    renderWithProviders(<PermissionsPage />, { route: '/permissions?user=999999' })
+
+    // 候选窗口已装下全部用户（命中 1 条）且该 id 不在其中 → 判定为「确实不存在」。
+    expect(await screen.findByText('未选择对象')).toBeInTheDocument()
+    // 中栏提示（工具栏与主体各一处，故用 getAllByText）。
+    expect(screen.getAllByText('左侧选择角色模板或用户后在此编辑权限卡片。').length).toBeGreaterThan(0)
   })
 })

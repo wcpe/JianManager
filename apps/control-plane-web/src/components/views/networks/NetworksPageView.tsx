@@ -129,6 +129,12 @@ const STATUS_LABEL: Record<string, string> = {
  */
 const CAND_ROW_HEIGHT = 36
 
+/**
+ * 详情左栏成员行的固定行高（px）。行盒用 `h-9` 钉死：`py-2`(16) + 状态徽章(20) = 36，
+ * 与去掉 `space-y-1` 前的实际行盒同高；虚拟化按 `index × 该值` 定位，必须与真实行盒严格一致。
+ */
+const MEMBER_ROW_HEIGHT = 36
+
 /** 视图切换按钮：工具栏内的分段控件（`aria-pressed` 标注点亮态）。 */
 function ViewTab({
   active,
@@ -225,10 +231,11 @@ function NetworkHealthDistribution({ health, loading }: { health: MemberHealth |
   return (
     <div>
       <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-muted">
-        {segs.map((s, i) =>
+        {segs.map((s) =>
           s.value > 0 ? (
             <div
-              key={i}
+              // 分段是无重排风险的定长小集合，但仍用自有标签作 key，避免下标作 key 的改写风险。
+              key={s.label}
               className={s.className}
               style={{ width: `${(s.value / health.total) * 100}%` }}
               title={`${s.label}: ${s.value}`}
@@ -239,8 +246,8 @@ function NetworkHealthDistribution({ health, loading }: { health: MemberHealth |
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
         {segs
           .filter((s) => s.value > 0)
-          .map((s, i) => (
-            <span key={i} className="inline-flex items-center gap-1">
+          .map((s) => (
+            <span key={s.label} className="inline-flex items-center gap-1">
               <span className={cn('size-1.5 rounded-full', s.className)} />
               {s.label} {s.value}
             </span>
@@ -308,8 +315,9 @@ function CreateNetworkModalView({ creating = false, onClose, onSubmit }: CreateN
         <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
           <ScrollableDialogBody className="space-y-3">
             <div>
-              <FieldLabel required>{t('networks.name')}</FieldLabel>
+              <FieldLabel required htmlFor="network-create-name">{t('networks.name')}</FieldLabel>
               <Input
+                id="network-create-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onBlur={() => gate.touch('name')}
@@ -320,8 +328,9 @@ function CreateNetworkModalView({ creating = false, onClose, onSubmit }: CreateN
               <FieldError error={gate.show('name', nameError)} />
             </div>
             <div>
-              <FieldLabel>{t('networks.description')}</FieldLabel>
+              <FieldLabel htmlFor="network-create-desc">{t('networks.description')}</FieldLabel>
               <Input
+                id="network-create-desc"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 className="mt-1"
@@ -441,7 +450,9 @@ export function NetworkInstancePickerView({
       </div>
       {truncated && (
         <p className="shrink-0 px-4 pb-1 text-[11px] text-muted-foreground">
-          {t('common.searchTruncated', { shown: list.length, total: total ?? 0 })}
+          {/* shown 必须取**服务端窗口**长度：排除已入组成员后的 list.length 与 total 不同口径，
+              否则会显示「已显示前 48 项，共 50 项」而实际窗口本来就是 50。 */}
+          {t('common.searchTruncated', { shown: items?.length ?? 0, total: total ?? 0 })}
         </p>
       )}
       <div ref={candScrollRef} onScroll={onCandScroll} className="min-h-0 flex-1 overflow-y-auto px-2">
@@ -499,8 +510,17 @@ export function NetworkInstancePickerView({
 
 /** 详情面板的注入契约：详情数据与全部写动作经 props 注入，候选选择器经插槽注入。 */
 export interface NetworkDetailPanelViewProps {
+  /** 详情 id（深链 `?network=` 的取值）：详情未取到时用作标题兜底（`#id`），避免空白弹窗。 */
+  detailId: number
   /** 详情（容器按 detailId 取数注入）；未加载时缺省，成员区为空列表。 */
   detail?: NetworkDetailView
+  /** 详情取数中：正文渲染加载占位（此前是「空标题 + 暂无成员」的假空态）。 */
+  detailLoading?: boolean
+  /**
+   * 详情不可用：id 非法（`?network=abc`）或后端查无此群组（深链指向已删除的群组）。
+   * 此时渲染明确提示，而不是一个既没标题也没内容的空弹窗。
+   */
+  detailMissing?: boolean
   /** 添加成员在途：禁用「加入所选」。 */
   adding?: boolean
   /** 移除成员在途：危险确认弹窗的确认按钮显示旋转。 */
@@ -527,7 +547,10 @@ export interface NetworkDetailPanelViewProps {
  * 详情数据、写动作与候选取数全在外壳。弹窗开合由 `detailId`（容器按深链派生）决定，故本体不持 open。
  */
 export function NetworkDetailPanelView({
+  detailId,
   detail,
+  detailLoading = false,
+  detailMissing = false,
   adding = false,
   removing = false,
   batchPending = false,
@@ -541,7 +564,18 @@ export function NetworkDetailPanelView({
   const [selected, setSelected] = useState<number[]>([])
   const [removeTarget, setRemoveTarget] = useState<{ instanceId: number; name: string } | null>(null)
 
-  const memberIds = useMemo(() => (detail?.members ?? []).map((m) => m.instanceId), [detail])
+  const members = useMemo(() => detail?.members ?? [], [detail])
+  const memberIds = useMemo(() => members.map((m) => m.instanceId), [members])
+
+  /**
+   * 成员列表虚拟化：成员数级与右栏候选同级（都是实例数），大档 1200 时整列进 DOM 同样是主开销。
+   *
+   * 【为什么去掉原先的 space-y-1】它给相邻行加 4px 间距，而这 4px 不计入行高：第 N 行的真实偏移
+   * 是 N×行高 + 4×(N−1)，等距虚拟化按 index×itemSize 定位会随行数累积偏差。故把间距折进行盒
+   * （h-9 = 36 = `py-2`(16) + 状态徽章(20)，与原先的视觉结果一致）。
+   */
+  const { containerRef: memberScrollRef, onScroll: onMemberScroll, range: memberRange, totalSize: memberTotalSize } =
+    useVirtualRows({ total: members.length, itemSize: MEMBER_ROW_HEIGHT, overscan: 8 })
 
   const roleLabel = (role: string) => t(`networks.role_${role}`, { defaultValue: role })
   const statusLabel = (s: string) => (STATUS_LABEL[s] ? t(STATUS_LABEL[s]) : s)
@@ -578,7 +612,8 @@ export function NetworkDetailPanelView({
         {/* 头部 */}
         <div className="flex shrink-0 items-center justify-between gap-3 border-b px-5 py-3.5">
           <div className="min-w-0">
-            <DialogTitle className="truncate text-lg font-bold">{detail?.name}</DialogTitle>
+            {/* 详情未到时退回 `#id`：标题恒有内容，运维至少知道自己要看的是哪条深链。 */}
+            <DialogTitle className="truncate text-lg font-bold">{detail?.name ?? `#${detailId}`}</DialogTitle>
             {health && (
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {t('networks.memberCount', { count: health.total })}
@@ -619,44 +654,59 @@ export function NetworkDetailPanelView({
           </div>
         </div>
 
-        {/* 双栏：左成员 / 右候选 */}
+        {/* 双栏：左成员 / 右候选。详情未就绪时正文给出明确状态，不留空白弹窗。 */}
+        {detailMissing ? (
+          <div className="flex min-h-40 flex-1 items-center justify-center px-5">
+            <p className="text-sm text-muted-foreground" data-testid="network-detail-missing">
+              {t('networks.deleted')}
+            </p>
+          </div>
+        ) : detailLoading ? (
+          <div className="flex min-h-40 flex-1 items-center justify-center px-5">
+            <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+          </div>
+        ) : (
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-px overflow-hidden bg-border md:grid-cols-2">
           {/* 左：成员 */}
           <div className="flex min-h-0 flex-col bg-card">
             <div className="shrink-0 px-4 pt-3 pb-2 text-xs font-semibold tracking-wide text-muted-foreground">
               {t('networks.members')}
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-              {detail && detail.members.length === 0 ? (
+            <div ref={memberScrollRef} onScroll={onMemberScroll} className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+              {detail && members.length === 0 ? (
                 <p className="px-2 py-6 text-center text-xs text-muted-foreground">{t('networks.noMembers')}</p>
               ) : (
-                <ul className="space-y-1">
-                  {detail?.members.map((m) => (
-                    <li
-                      key={m.instanceId}
-                      className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 hover:bg-accent/60"
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <StatusBadge
-                          level={instanceStatusLevel(m.status)}
-                          label={statusLabel(m.status)}
-                          pulse={m.status === 'STARTING' || m.status === 'STOPPING'}
-                        />
-                        <span className="truncate text-sm font-medium">{m.name}</span>
-                        <span className="shrink-0 text-[11px] text-muted-foreground">{roleLabel(m.role)}</span>
-                      </div>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="ghost"
-                        className="shrink-0 text-status-danger hover:text-status-danger"
-                        onClick={() => setRemoveTarget({ instanceId: m.instanceId, name: m.name })}
+                // 虚拟化：外层撑起总高，内层按 range.before 平移，只渲染窗口内的行。
+                <div className="relative" style={{ height: memberTotalSize }}>
+                  <ul style={{ transform: `translateY(${memberRange.before}px)` }}>
+                    {members.slice(memberRange.start, memberRange.end).map((m) => (
+                      <li
+                        key={m.instanceId}
+                        data-testid="network-member-row"
+                        className="flex h-9 items-center justify-between gap-2 rounded-lg px-2.5 hover:bg-accent/60"
                       >
-                        {t('networks.removeMember')}
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <StatusBadge
+                            level={instanceStatusLevel(m.status)}
+                            label={statusLabel(m.status)}
+                            pulse={m.status === 'STARTING' || m.status === 'STOPPING'}
+                          />
+                          <span className="truncate text-sm font-medium">{m.name}</span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">{roleLabel(m.role)}</span>
+                        </div>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="ghost"
+                          className="shrink-0 text-status-danger hover:text-status-danger"
+                          onClick={() => setRemoveTarget({ instanceId: m.instanceId, name: m.name })}
+                        >
+                          {t('networks.removeMember')}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </div>
           </div>
@@ -664,6 +714,7 @@ export function NetworkDetailPanelView({
           {/* 右：候选（整列经插槽注入 —— 选择器实现自带服务端搜索；本组件只传勾选态、排除名单与提交动作） */}
           {renderInstancePicker({ selected, onToggle: toggleSel, memberIds, onAdd: () => void addSelected(), adding })}
         </div>
+        )}
       </DialogContent>
     </Dialog>
       <DangerConfirm
@@ -703,10 +754,16 @@ export interface NetworksPageViewProps {
   networks?: NetworkSummaryView[]
   /** 列表加载态（渲染骨架）。 */
   isLoading?: boolean
+  /** 列表取数失败：渲染错误文案而非「暂无群组」，否则故障会被读成「一个群组都没建」。 */
+  isError?: boolean
   /** 当前打开的详情群组 id（深链 `?network=` 的取值）；null 表示不渲染详情面板。 */
   detailId: number | null
   /** 详情数据（容器按 `detailId` 取数注入）。 */
   detail?: NetworkDetailView
+  /** 详情取数中（面板正文渲染加载占位）。 */
+  detailLoading?: boolean
+  /** 详情不可用（id 非法或查无此群组）：面板正文渲染缺失提示。 */
+  detailMissing?: boolean
   /** 打开某群组详情（容器写查询参数，使详情可寻址）。 */
   onOpenDetail: (id: number) => void
   /** 关闭详情面板（容器清理查询参数）。 */
@@ -747,8 +804,11 @@ export function NetworksPageView({
   onViewChange,
   networks,
   isLoading = false,
+  isError = false,
   detailId,
   detail,
+  detailLoading = false,
+  detailMissing = false,
   onOpenDetail,
   onCloseDetail,
   creating = false,
@@ -804,6 +864,9 @@ export function NetworksPageView({
       ) : isLoading ? (
         // 裸 <p> 换成统一骨架：与其它页的数据区占位一致（阶段 6 补丁的 PageSkeleton 一族）。
         <ListSkeleton />
+      ) : isError ? (
+        // 域内没有专用的「加载失败」键：复用通用错误文案，但必须与「暂无群组」区分开。
+        <p className="text-sm text-destructive">{t('common.error')}</p>
       ) : (
         <NetworkListView networks={networks ?? []} onView={onOpenDetail} onDelete={setDeleteTarget} />
       )}
@@ -817,7 +880,10 @@ export function NetworksPageView({
       )}
       {detailId !== null && (
         <NetworkDetailPanelView
+          detailId={detailId}
           detail={detail}
+          detailLoading={detailLoading}
+          detailMissing={detailMissing}
           adding={addingMembers}
           removing={removingMember}
           batchPending={batchPending}

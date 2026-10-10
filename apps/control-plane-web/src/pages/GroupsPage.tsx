@@ -1,5 +1,7 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做组取数、三个写动作、URL 深链解析/写回与成员对话框接线。
 import { useSearchParams } from 'react-router'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { useGroups, useCreateGroup, useUpdateGroup, useUpdateGroupQuota, useDeleteGroup } from '@/api/groups'
 import GroupMembersDialog from '@/components/groups/GroupMembersDialog'
 import { GroupsPageView } from '@/components/views/users/GroupsPageView'
@@ -15,6 +17,7 @@ import type { GroupPanel } from '@/components/views/users/GroupsPageView'
  * 保留同路径默认导出，路由表无需改动。
  */
 export default function GroupsPage() {
+  const { t } = useTranslation()
   const { data: groups, isLoading } = useGroups()
   const createGroup = useCreateGroup()
   const updateGroup = useUpdateGroup()
@@ -63,7 +66,18 @@ export default function GroupsPage() {
       onUpdateGroup={async (id, values) => {
         // 按原有顺序先更新名称/描述、再更新配额（成功提示与缓存失效由 mutation hook 挂）。
         await updateGroup.mutateAsync({ id, name: values.name, description: values.description })
-        await updateQuota.mutateAsync({ id, ...values.quota })
+        try {
+          await updateQuota.mutateAsync({ id, ...values.quota })
+        } catch (err) {
+          // 【为什么要单独提示】这是两个独立请求：名称/描述已经落库，配额失败时不会回滚。
+          // 原实现只让异常冒到调用点、却没人接（两个 hook 都只挂成功提示），于是「改了一半」
+          // 看起来像「完全没生效」，用户会再提交一次。这里至少把失败说出口，并把异常继续抛出，
+          // 让对话框保持打开、草稿不丢，用户可直接重试。
+          //
+          // 文案借用设置页的通用「保存失败」（本页没有更精确的键，也未新增 i18n 键）。
+          toast.error(t('settings.saveFailed'))
+          throw err
+        }
       }}
       onDeleteGroup={(id) => {
         deleteGroup.mutate(id)

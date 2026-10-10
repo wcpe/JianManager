@@ -2,6 +2,7 @@
  * @file ConfigBaselinesPageView：配置基线页的受控视图（基线列表 + 漂移面板 + 编辑弹窗），
  *       取数、三个写动作（保存 / 删除 / 收敛）与 toast 由应用容器负责。
  * @input lib/config-baseline（scopeKey 拼装与解析、哈希截断）、lib/instance-group（InstanceGroupNode）、
+ *        lib/virtual-list（useVirtualRows：漂移明细按实例数可达千级，只渲染滚动窗口内的行）、
  *        views/DangerConfirm（删除二次确认）、Button/Input/Panel/Dialog/Table/StatusBadge 等原语、翻译上下文
  * @output ConfigBaselinesPageView、ConfigBaselinesPageViewProps、BaselineDriftPanelView、BaselineDriftPanelViewProps、
  *         BaselineEditorDialogView、BaselineEditorDialogViewProps、ConfigBaselineRow、BaselineDriftItemView、
@@ -9,7 +10,7 @@
  * @sync apps/control-plane-web/src/pages/ConfigBaselinesPage.tsx、apps/control-plane-web/src/pages/ConfigBaselinesPage.dom.test.tsx
  * @since FR-502（组件受控化迁包；原页 FR-458 配置基线模板下发、跨实例漂移检测与一键收敛）
  */
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { GitCompareArrows, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
@@ -30,6 +31,7 @@ import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { composeScopeKey, isValidScopeKey, scopeKindOf, scopeValueOf, shortHash } from '@/lib/config-explorer/config-baseline'
 import type { ScopeKind } from '@/lib/config-explorer/config-baseline'
 import type { InstanceGroupNode } from '@/lib/instances/instance-group'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
 
 /**
  * 配置基线行（本视图渲染与编辑回填所需的最小字段集）。
@@ -107,6 +109,11 @@ export interface ConfigBaselinesPageViewProps {
   baselines?: ConfigBaselineRow[]
   /** 列表加载态。 */
   isLoading?: boolean
+  /**
+   * 列表取数失败态：与「空数组」区分开——失败时渲染错误文案而非「尚无配置基线」，
+   * 否则后端/权限故障会被读成「还没建过基线」。
+   */
+  isError?: boolean
   /** 组织树分组候选项（`group:<id>` scope 的选择器数据源）；容器取数后注入。 */
   groups?: InstanceGroupNode[]
   /** 当前展开漂移面板的基线 ID；null 表示不展开（此时容器不发漂移请求）。 */
@@ -171,6 +178,13 @@ export interface BaselineEditorDialogViewProps {
 
 const SCOPE_KINDS: ScopeKind[] = ['all', 'group', 'network', 'tag', 'instance']
 
+/**
+ * 漂移明细行的固定行高（px）：行盒是真 `<tr>`，高度由单元格内距与最高内容决定
+ * （`px-2 py-1.5` = 12 + 状态徽章 `text-xs`+`py-0.5` = 20 + 行下边框 1 = 33）。
+ * 虚拟化按 `index × 该值` 定位，必须与真实行盒严格一致，否则滚动会累积漂移。
+ */
+const DRIFT_ROW_HEIGHT = 33
+
 /** 组织树分组选项（含层级缩进），供 scope 选择器使用。 */
 interface GroupOption {
   id: number
@@ -224,10 +238,37 @@ export function BaselineDriftPanelView({
 }: BaselineDriftPanelViewProps) {
   const { t } = useTranslation()
   const [result, setResult] = useState<BaselineConvergeOutcome | null>(null)
+  /**
+   * 切换基线时清掉上一条的收敛汇总。
+   *
+   * 【为什么必须有】`result` 是本组件的 state，而外壳按 `driftId !== null` 条件渲染面板：
+   * 从基线 A 切到 B 时，同一位置仍是同一组件类型 → React 保留 state，于是面板标题已显示
+   * `#B`、汇总却还是 A 的数字。运维据此会误判 B 的收敛结果，故 state 必须随 `baselineId` 对齐。
+   * 外壳另外传了 `key={baselineId}`（切换即重挂载，免去一帧残留），此处是**自守**：
+   * 面板被直接挂载（无 key）时同样不残留。
+   */
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 外部身份（baselineId）变化时对齐 state，属该规则的合法例外
+    setResult(null)
+  }, [baselineId])
   // 读取失败的行无法判定一致性（FR-458 nit）：全部 drifted===0 时若仍有 error 行，
   // 不能报「已全部一致」，否则运维会误以为集群齐平。
   const errorCount = (drift?.items ?? []).filter((it) => it.error).length
   const allConverged = !!drift && drift.drifted === 0 && errorCount === 0
+
+  const items = drift?.items ?? []
+
+  /**
+   * 漂移明细虚拟化：`items` 的规模 = scope 内实例数（大档 1200），
+   * 此前整表进 DOM（每台一行、三列），只靠 `max-h-80` 滚动遮挡。
+   * 行与行之间不得出现 `space-y-*` 之类不计入行高的间距，否则 `index × DRIFT_ROW_HEIGHT`
+   * 的定位会随行数累积偏差（同上）。
+   */
+  const { containerRef, onScroll, range } = useVirtualRows({
+    total: items.length,
+    itemSize: DRIFT_ROW_HEIGHT,
+    overscan: 8,
+  })
 
   const handleConverge = async () => {
     const outcome = await onConverge(baselineId)
@@ -277,7 +318,12 @@ export function BaselineDriftPanelView({
             </div>
           )}
 
-          <div className="max-h-80 overflow-auto rounded-md border">
+          <div
+            ref={containerRef}
+            onScroll={onScroll}
+            data-testid="baseline-drift-virtual"
+            className="max-h-80 overflow-auto rounded-md border"
+          >
             <Table>
               <TableHeader>
                 <TableRow>
@@ -287,8 +333,14 @@ export function BaselineDriftPanelView({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(drift?.items ?? []).map((it) => (
-                  <TableRow key={it.instanceId}>
+                {range.before > 0 && (
+                  // 窗口上占位：高度来自同一行高常量，滚动条长度按全部行算。
+                  <TableRow aria-hidden="true" data-testid="baseline-drift-spacer-before">
+                    <TableCell colSpan={3} className="p-0" style={{ height: range.before }} />
+                  </TableRow>
+                )}
+                {items.slice(range.start, range.end).map((it) => (
+                  <TableRow key={it.instanceId} data-testid="baseline-drift-row">
                     <TableCell className="text-xs">
                       <span className="font-mono text-muted-foreground">#{it.instanceId}</span> {it.instanceName}
                     </TableCell>
@@ -304,7 +356,12 @@ export function BaselineDriftPanelView({
                     <TableCell className="font-mono text-[11px] text-muted-foreground">{shortHash(it.currentHash)}</TableCell>
                   </TableRow>
                 ))}
-                {(drift?.items.length ?? 0) === 0 && (
+                {range.after > 0 && (
+                  <TableRow aria-hidden="true" data-testid="baseline-drift-spacer-after">
+                    <TableCell colSpan={3} className="p-0" style={{ height: range.after }} />
+                  </TableRow>
+                )}
+                {items.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={3} className="text-center text-xs text-muted-foreground">
                       {t('baselines.noInstances')}
@@ -377,6 +434,9 @@ export function BaselineEditorDialogView({
               >
                 {SCOPE_KINDS.map((k) => (
                   <option key={k} value={k}>
+                    {/* 动态拼接键：`baselines.scopeKind_<kind>` 共 5 个，zh/en 均已存在（已逐键核对）。
+                        但这类键没有静态校验，增删 ScopeKind 时若漏了语言包就会退回显示原始键名，
+                        故这里不传 defaultValue——让缺键在界面上暴露出来，而不是被静默兜底掩盖。 */}
                     {t(`baselines.scopeKind_${k}`)}
                   </option>
                 ))}
@@ -475,6 +535,7 @@ export function BaselineEditorDialogView({
 export function ConfigBaselinesPageView({
   baselines,
   isLoading = false,
+  isError = false,
   groups,
   driftBaselineId,
   onToggleDrift,
@@ -518,6 +579,8 @@ export function ConfigBaselinesPageView({
       <Panel title={t('baselines.listTitle')} bodyClassName="p-0">
         {isLoading ? (
           <p className="p-4 text-sm text-muted-foreground">{t('common.loading')}</p>
+        ) : isError ? (
+          <p className="p-4 text-sm text-destructive">{t('baselines.errorState')}</p>
         ) : !baselines || baselines.length === 0 ? (
           <p className="p-4 text-sm text-muted-foreground">{t('baselines.empty')}</p>
         ) : (
@@ -572,8 +635,11 @@ export function ConfigBaselinesPageView({
         )}
       </Panel>
 
+      {/* key={driftId}：切换基线即重挂载面板——面板内的收敛汇总等 state 随之一并重置，
+          不会出现「标题已是 B、数字还是 A」的残留帧（面板内另有 useEffect 自守）。 */}
       {driftId !== null && (
         <BaselineDriftPanelView
+          key={driftId}
           baselineId={driftId}
           drift={drift}
           isLoading={driftLoading}

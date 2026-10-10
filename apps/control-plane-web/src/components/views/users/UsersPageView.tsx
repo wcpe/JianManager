@@ -390,7 +390,9 @@ export function UsersPageView({
         </Panel>
       )}
 
-      {/* 删除二次确认：scope 固定 platform（与原页一致，不降级）、是否放行由容器注入。 */}
+      {/* 删除二次确认：`scope="platform"` 固定为平台级（与原页一致，不因这一页而降级）。
+          注意：**没有 `allowed` 之类的 prop 由容器注入**——DangerConfirm 自己读登录态判定是否放行，
+          本视图无从（也不需要）参与该判定。 */}
       <DangerConfirm
         open={deleteTarget !== null}
         title={t('danger.deleteUserTitle', { name: deleteTarget?.username ?? '' })}

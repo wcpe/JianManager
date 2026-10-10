@@ -16,7 +16,7 @@ import { ConfigBaselinesPageView } from '@/components/views/config-baselines/Con
  * 保留同路径默认导出，路由表（`ROUTE_CHUNKS['/config-baselines']`）与既有用例无需改动。
  */
 export default function ConfigBaselinesPage() {
-  const { data: baselines, isLoading } = useConfigBaselines()
+  const { data: baselines, isLoading, isError } = useConfigBaselines()
   const upsert = useUpsertBaseline()
   const del = useDeleteBaseline()
   // 展开漂移面板的基线 ID；null 表示收起（此时 useBaselineDrift 不发请求）。
@@ -31,6 +31,7 @@ export default function ConfigBaselinesPage() {
     <ConfigBaselinesPageView
       baselines={baselines}
       isLoading={isLoading}
+      isError={isError}
       groups={groups}
       driftBaselineId={driftBaselineId}
       onToggleDrift={(id) => setDriftBaselineId((current) => (current === id ? null : id))}

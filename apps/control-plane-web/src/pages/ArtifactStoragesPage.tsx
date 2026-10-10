@@ -23,7 +23,7 @@ function errMessage(err: unknown, fallback: string): string {
  */
 export default function ArtifactStoragesPage() {
   const { t } = useTranslation()
-  const { data: channels, isLoading } = useArtifactStorages()
+  const { data: channels, isLoading, isError } = useArtifactStorages()
   const create = useCreateArtifactStorage()
   const update = useUpdateArtifactStorage()
   const del = useDeleteArtifactStorage()
@@ -44,6 +44,8 @@ export default function ArtifactStoragesPage() {
     <ArtifactStoragesPageView
       channels={channels}
       isLoading={isLoading}
+      isError={isError}
+      failuresError={migrationFailures.isError}
       saving={create.isPending || update.isPending}
       testingDraft={testDraft.isPending}
       // 只有容器知道行内测试在测哪一行；未在测试时为 null，所有行都可点。

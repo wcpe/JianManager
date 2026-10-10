@@ -6,6 +6,8 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 import { server } from '@jianmanager/devmock/server'
+import { http, HttpResponse } from 'msw'
+import { API } from '@jianmanager/devmock/api'
 import type { Session } from '@jianmanager/devmock/handlers/domains/auth'
 import RuntimeAssetsPage from './RuntimeAssetsPage'
 
@@ -214,5 +216,34 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     renderWithProviders(<RuntimeAssetsPage />)
 
     expect(await screen.findByText('加载运行时与制品失败')).toBeInTheDocument()
+  })
+
+  it('批量部署的实例搜索按 300ms 防抖下发，逐击键不打满服务端搜索', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const queries: string[] = []
+    server.use(
+      http.get(API('/instances/search'), ({ request }) => {
+        const q = new URL(request.url).searchParams.get('q') ?? ''
+        if (q) queries.push(q)
+        return HttpResponse.json({
+          items: [{ id: 1, name: 'survival-1', uuid: 'i-1', status: 'RUNNING' }],
+          total: 1,
+          page: 1,
+          pageSize: 200,
+        })
+      }),
+    )
+    renderWithProviders(<RuntimeAssetsPage />)
+    await screen.findByText('ViaVersion')
+
+    await user.click(screen.getByRole('button', { name: '批量部署' }))
+    const dialog = await screen.findByRole('dialog')
+    const search = within(dialog).getByPlaceholderText('搜索实例名称')
+
+    // 逐字符键入 9 次：不防抖时每个字符都会触发一次服务端搜索。
+    await user.type(search, 'survival-1')
+    await waitFor(() => expect(queries.length).toBeGreaterThan(0))
+    expect(queries).toEqual(['survival-1'])
   })
 })

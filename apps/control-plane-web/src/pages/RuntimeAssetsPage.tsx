@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { useRuntimeAssetsOverview, useRefreshRuntimeAssets, useDeleteRuntimeJDK, useDeleteAsset, useImportAsset } from '@/api/runtimeAssets'
 import { useSearchInstances } from '@/api/instances'
 import { useBatchDeployPlugins } from '@/api/plugins'
+import { useDebounced } from '@/lib/hooks/use-debounced'
 import { RuntimeAssetsInstancePickerView, RuntimeAssetsPageView } from '@/components/views/runtime-assets/RuntimeAssetsPageView'
 import type { RuntimeAssetsInstancePickerArgs } from '@/components/views/runtime-assets/RuntimeAssetsPageView'
 import ArtifactReconcileSection from './ArtifactReconcileSection'
@@ -30,13 +31,17 @@ const CANDIDATE_LIMIT = 200
  *
  * 独立成本文件内的局部组件：它只在弹窗挂载时被渲染，于是「弹窗不打开就不拉候选」这一取数时机
  * 与迁包前（`useSearchInstances(..., open)`）等价。候选一律走服务端搜索，不得一次拉全量；
- * 搜索词是「会触发取数」的状态，故留在本层而非视图——与迁包前逐击键下发 `q` 的时序保持一致
- * （勾选集合仍在弹窗内受控）。
+ * 搜索词是「会触发取数」的状态，故留在本层而非视图。
+ *
+ * 【为什么必须防抖】视图的每次击键都会上报关键字，而下发的 `q` 是**查询键**：
+ * 不防抖时 10 个字符就是 10 次服务端搜索（千级实例上每次都要过滤+计数），
+ * 首屏也会在候选列表上来回跳。这里按 300ms 防抖后下发（同 `NetworkInstanceCandidates`）。
  */
 function RuntimeInstanceCandidates({ selected, onToggle }: RuntimeAssetsInstancePickerArgs) {
   const [keyword, setKeyword] = useState('')
+  const q = useDebounced(keyword, 300).trim()
   const { data: page, isLoading } = useSearchInstances({
-    q: keyword || undefined,
+    ...(q ? { q } : {}),
     page: 1,
     pageSize: CANDIDATE_LIMIT,
     sort: 'name',
@@ -46,6 +51,7 @@ function RuntimeInstanceCandidates({ selected, onToggle }: RuntimeAssetsInstance
   return (
     <RuntimeAssetsInstancePickerView
       items={page?.items}
+      total={page?.total}
       loading={isLoading}
       selected={selected}
       onToggle={onToggle}

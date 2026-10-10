@@ -24,8 +24,20 @@ import {
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { ConfigRow, ConfigSummaryChips, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
 import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
-import { BACKUP_COMPLETED, BACKUP_MODE_INCREMENTAL, backupStatusKey, backupStatusLevel, countDependents, formatSizeMb, isIncrementalChild, summarizeBackups } from '@/lib/backups/backup'
+import { BACKUP_COMPLETED, BACKUP_MODE_INCREMENTAL, backupStatusKey, backupStatusLevel, formatSizeMb, isIncrementalChild, summarizeBackups } from '@/lib/backups/backup'
 import type { BackupInfo } from '@/lib/backups/backup'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
+
+/**
+ * 列表视图行高（px，两档）。行盒由行内 style 钉死（「声明值即真实值」）：
+ * - 普通行 = 操作按钮 `h-6`(24) + 单元格 `py-1.5`(12) + 行边框 1 ≈ 37 → 取 40 留余量；
+ * - 增量行在模式单元格里多一行「基于 #id」（`text-xs` 16 + `gap-1` 4）→ 再加 16 取 56。
+ * 虚拟化按这两个常量定位，故滚动映射与真实行盒严格一致、不随行数累积漂移。
+ */
+const BACKUP_ROW_PX = 40
+const BACKUP_CHILD_ROW_PX = 56
+/** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
+const FALLBACK_VIEWPORT_PX = 640
 
 /**
  * 可选备份存储位置（本视图渲染下拉与解析存储名所需的最小字段集）。
@@ -77,6 +89,8 @@ export interface BackupsPageViewProps {
   backups?: BackupInfo[]
   /** 列表加载态（渲染「加载中」文案）。 */
   isLoading?: boolean
+  /** 列表取数失败：渲染错误文案而非「暂无备份」，否则故障会被读成「这个实例还没备份过」。 */
+  isError?: boolean
   /** 列表中是否存在进行中备份（显示自动刷新提示；轮询启停归容器）。 */
   backupsActive?: boolean
   /** 选中实例进程是否存活（存活时禁止恢复，与后端恢复守卫一致）。 */
@@ -104,6 +118,7 @@ export function BackupsPageView({
   storages,
   backups,
   isLoading = false,
+  isError = false,
   backupsActive = false,
   instanceLive = false,
   creating = false,
@@ -126,10 +141,51 @@ export function BackupsPageView({
   const restoreDisabledTitle = instanceLive
     ? t('backups.restoreNeedStopped', '实例运行中，请先停止实例再恢复')
     : undefined
+  /**
+   * 恢复被禁用的原因提示 id。
+   *
+   * 禁用按钮**不可聚焦**，故 title 里的原因键盘/读屏用户根本读不到；这里同时给：
+   * ① 页面上一行可见提示（见汇总条右侧）；② 禁用按钮的 aria-describedby 指向它，
+   * 读屏浏览到按钮时能念出原因（对齐 WCAG 2.1「状态可由辅助技术感知」）。
+   */
+  const restoreBlockedHintId = 'backups-restore-blocked-hint'
 
   const list = useMemo(() => backups ?? [], [backups])
   const summary = useMemo(() => summarizeBackups(list), [list])
   const backupById = useMemo(() => new Map(list.map((b) => [b.id, b])), [list])
+
+  /**
+   * 父备份 → 直接依赖它的增量子备份数。
+   *
+   * 【为什么建映射】原先在渲染期逐行调 `countDependents(list, b.id)`（O(n) 扫描），
+   * 列表视图那一行还调了两次；配合「有进行中备份时每 3 秒轮询」，千份备份时每轮约 2×10⁶ 次比较。
+   * 改为一次 O(n) 建表、行内 O(1) 查表（`countDependents` 的判据：父 id 相等即计入）。
+   */
+  const dependentCount = useMemo(() => {
+    const map = new Map<number, number>()
+    for (const b of list) {
+      if (b.parentId === undefined || b.parentId === null) continue
+      map.set(b.parentId, (map.get(b.parentId) ?? 0) + 1)
+    }
+    return map
+  }, [list])
+  const dependentsOf = (id: number) => dependentCount.get(id) ?? 0
+
+  /**
+   * 列表视图虚拟化：备份会随时间累积到千级，而列表视图此前整表进 DOM（连滚动容器都没有）。
+   * 行高两档与行盒同源（见常量注释），窗口外的高度由占位行撑开。
+   */
+  const rowSizes = useMemo(
+    () => list.map((b) => (isIncrementalChild(b) ? BACKUP_CHILD_ROW_PX : BACKUP_ROW_PX)),
+    [list],
+  )
+  const { containerRef, onScroll, range } = useVirtualRows({
+    total: list.length,
+    itemSize: BACKUP_ROW_PX,
+    sizes: rowSizes,
+    overscan: 8,
+    fallbackViewportSize: FALLBACK_VIEWPORT_PX,
+  })
 
   const storageName = (id?: number) =>
     id ? (storages ?? []).find((s) => s.id === id)?.name ?? `#${id}` : t('backups.localStorage', '本地')
@@ -157,7 +213,7 @@ export function BackupsPageView({
   }
 
   // 删除前算直接依赖此备份的增量数，用于二次确认警告（FR-151）。
-  const dependents = deleteTarget ? countDependents(list, deleteTarget.id) : 0
+  const dependents = deleteTarget ? dependentsOf(deleteTarget.id) : 0
 
   const modeBadge = (b: BackupInfo) =>
     b.mode === BACKUP_MODE_INCREMENTAL ? (
@@ -196,7 +252,9 @@ export function BackupsPageView({
               className="p-2 border rounded bg-background text-sm"
               value={storageId ?? ''}
               onChange={(e) => setStorageId(e.target.value ? Number(e.target.value) : undefined)}
+              // 仅有 title 时可达名依赖 tooltip 提示；补显式 aria-label 让读屏稳定念出字段名。
               title={t('backups.selectStorage', '存储位置')}
+              aria-label={t('backups.selectStorage', '存储位置')}
             >
               <option value="">{t('backups.localStorage', '本地')}</option>
               {(storages ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -236,10 +294,23 @@ export function BackupsPageView({
                 {t('backups.autoRefreshing')}
               </span>
             )}
+            {/* 恢复被禁用的原因做成可见提示：禁用按钮不可聚焦，只放在 title 里读屏读不到。 */}
+            {instanceLive && (
+              <span
+                id={restoreBlockedHintId}
+                className="text-xs text-status-warning"
+                data-testid="backups-restore-blocked-hint"
+              >
+                {restoreDisabledTitle}
+              </span>
+            )}
           </div>
 
           {isLoading && list.length === 0 ? (
             <p className="text-muted-foreground">{t('common.loading')}</p>
+          ) : isError ? (
+            // 取数失败必须与「暂无备份」区分开：后者会让运维以为这个实例没有可恢复的备份。
+            <p className="text-sm text-destructive">{t('common.error')}</p>
           ) : list.length === 0 ? (
             <Panel>
               <p className="py-6 text-center text-sm text-muted-foreground">{t('backups.empty', '暂无备份')}</p>
@@ -247,7 +318,7 @@ export function BackupsPageView({
           ) : view === 'card' ? (
             <div className="flex flex-col gap-2.5">
               {list.map((b) => {
-                const dep = countDependents(list, b.id)
+                const dep = dependentsOf(b.id)
                 return (
                   <ConfigRow
                     key={b.id}
@@ -272,6 +343,7 @@ export function BackupsPageView({
                           onClick={() => setRestoreTarget(b.id)}
                           disabled={b.status !== BACKUP_COMPLETED || restoring || instanceLive}
                           title={restoreDisabledTitle}
+                          aria-describedby={instanceLive ? restoreBlockedHintId : undefined}
                         >
                           {t('backups.restore', '恢复')}
                         </Button>
@@ -292,64 +364,92 @@ export function BackupsPageView({
             </div>
           ) : (
             <Panel bodyClassName="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t('backups.name', '名称')}</TableHead>
-                    <TableHead>{t('backups.mode', '模式')}</TableHead>
-                    <TableHead>{t('backups.size', '大小')}</TableHead>
-                    <TableHead>{t('backups.storageLocation', '存储位置')}</TableHead>
-                    <TableHead>{t('backups.checksum', '校验和')}</TableHead>
-                    <TableHead>{t('backups.status', '状态')}</TableHead>
-                    <TableHead>{t('backups.time', '时间')}</TableHead>
-                    <TableHead className="text-right">{t('common.actions', '操作')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {list.map((b) => (
-                    <TableRow key={b.id}>
-                      <TableCell className="font-medium">{b.name}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-1">
-                          {modeBadge(b)}
-                          {isIncrementalChild(b) && (
-                            <span className="text-xs text-muted-foreground">
-                              {t('backups.basedOn', '基于')} {parentName(b)}
-                            </span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>{formatSizeMb(b.fileSizeMb)}</TableCell>
-                      <TableCell>{storageName(b.storageId)}</TableCell>
-                      <TableCell className="font-mono text-xs" title={b.checksum}>{checksumLabel(b)}</TableCell>
-                      <TableCell>{statusBadge(b)}</TableCell>
-                      <TableCell className="text-muted-foreground">{new Date(b.createdAt).toLocaleString()}</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            onClick={() => setRestoreTarget(b.id)}
-                            disabled={b.status !== BACKUP_COMPLETED || restoring || instanceLive}
-                            title={restoreDisabledTitle}
-                          >
-                            {t('backups.restore', '恢复')}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            className="text-status-danger hover:text-status-danger"
-                            onClick={() => setDeleteTarget(b)}
-                            title={countDependents(list, b.id) > 0 ? t('backups.dependentsWarn', { count: countDependents(list, b.id) }) : undefined}
-                          >
-                            {t('common.delete', '删除')}
-                          </Button>
-                        </div>
-                      </TableCell>
+              {/* 虚拟滚动容器：备份累积到千级时只渲染窗口内的行（行高见 BACKUP_ROW_PX 常量注释）。 */}
+              <div
+                ref={containerRef}
+                onScroll={onScroll}
+                data-testid="backups-list-virtual"
+                className="max-h-[70vh] overflow-auto"
+              >
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t('backups.name', '名称')}</TableHead>
+                      <TableHead>{t('backups.mode', '模式')}</TableHead>
+                      <TableHead>{t('backups.size', '大小')}</TableHead>
+                      <TableHead>{t('backups.storageLocation', '存储位置')}</TableHead>
+                      <TableHead>{t('backups.checksum', '校验和')}</TableHead>
+                      <TableHead>{t('backups.status', '状态')}</TableHead>
+                      <TableHead>{t('backups.time', '时间')}</TableHead>
+                      <TableHead className="text-right">{t('common.actions', '操作')}</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {range.before > 0 && (
+                      <TableRow aria-hidden="true" data-testid="backups-virtual-spacer-before">
+                        <TableCell colSpan={8} className="p-0" style={{ height: range.before }} />
+                      </TableRow>
+                    )}
+                    {list.slice(range.start, range.end).map((b) => {
+                      const dep = dependentsOf(b.id)
+                      return (
+                      <TableRow
+                        key={b.id}
+                        data-testid="backup-row"
+                        style={{ height: isIncrementalChild(b) ? BACKUP_CHILD_ROW_PX : BACKUP_ROW_PX }}
+                      >
+                        <TableCell className="font-medium">{b.name}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-1">
+                            {modeBadge(b)}
+                            {isIncrementalChild(b) && (
+                              <span className="text-xs text-muted-foreground">
+                                {t('backups.basedOn', '基于')} {parentName(b)}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>{formatSizeMb(b.fileSizeMb)}</TableCell>
+                        <TableCell>{storageName(b.storageId)}</TableCell>
+                        <TableCell className="font-mono text-xs" title={b.checksum}>{checksumLabel(b)}</TableCell>
+                        <TableCell>{statusBadge(b)}</TableCell>
+                        <TableCell className="text-muted-foreground">{new Date(b.createdAt).toLocaleString()}</TableCell>
+                        <TableCell className="text-right whitespace-nowrap">
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              onClick={() => setRestoreTarget(b.id)}
+                              disabled={b.status !== BACKUP_COMPLETED || restoring || instanceLive}
+                              title={restoreDisabledTitle}
+                              aria-describedby={instanceLive ? restoreBlockedHintId : undefined}
+                            >
+                              {t('backups.restore', '恢复')}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="text-status-danger hover:text-status-danger"
+                              onClick={() => setDeleteTarget(b)}
+                              // 一次查表即可（此前同一行内调了两次 countDependents，各扫全表一遍）。
+                              title={dep > 0 ? t('backups.dependentsWarn', { count: dep }) : undefined}
+                            >
+                              {t('common.delete', '删除')}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      )
+                    })}
+                    {range.after > 0 && (
+                      // 窗口下占位：滚动条长度仍按全部行算。
+                      <TableRow aria-hidden="true" data-testid="backups-virtual-spacer-after">
+                        <TableCell colSpan={8} className="p-0" style={{ height: range.after }} />
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
             </Panel>
           )}
         </>
