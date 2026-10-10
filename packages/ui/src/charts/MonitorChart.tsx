@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Brush, CartesianGrid, Legend, Line, LineChart, XAxis, YAxis } from 'recharts'
 import { formatterFor, type PlotSeries } from '../lib/monitor-metrics'
 import { brushSelectionToWindow } from '../lib/brush'
+import { chartAccessibleName } from '../lib/chart-a11y'
 import { hoverSnapshotAt, type SampleRow } from '../lib/chart-hover'
 
 const CHART_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)']
@@ -52,6 +53,7 @@ export function MonitorChart({
   yDomain = ['auto', 'auto'],
   showBrush = true,
   yAxisWidth = 48,
+  ariaLabel,
 }: {
   series: PlotSeries[]
   height?: number
@@ -62,6 +64,11 @@ export function MonitorChart({
   showBrush?: boolean
   /** Y 轴宽度（px）。格式化后仍偏长的场景（如多指标对比的紧凑缩写）可放宽避免截断。 */
   yAxisWidth?: number
+  /**
+   * 图表的替代文本（可访问名）。省略时由序列名推导——见 {@link chartAccessibleName}。
+   * 调用方若有更贴切的描述（图卡标题等），传进来即可覆盖推导值。
+   */
+  ariaLabel?: string
 }) {
   const { t } = useTranslation()
 
@@ -184,7 +191,13 @@ export function MonitorChart({
         )}
       </div>
 
-      <div ref={containerRef} style={{ height, width: '100%' }}>
+      {/* role="img" + aria-label：为什么与 TimeSeriesChart 同一处理，见 charts/TimeSeriesChart.tsx 的同位置注释。 */}
+      <div
+        ref={containerRef}
+        role="img"
+        aria-label={chartAccessibleName(series, ariaLabel, emptyHint)}
+        style={{ height, width: '100%' }}
+      >
         {width > 0 && (
           <LineChart
             width={width}

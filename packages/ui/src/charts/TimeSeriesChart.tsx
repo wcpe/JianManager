@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { chartAccessibleName } from '../lib/chart-a11y'
 
 /** 一条曲线序列（FR-060 消费 /metrics/series 的点；value=avg，null 为缺测断点）。 */
 export interface ChartSeries {
@@ -57,6 +58,7 @@ export function TimeSeriesChart({
   emptyHint,
   yDomain = ['auto', 'auto'],
   referenceLines = [],
+  ariaLabel,
 }: {
   series: ChartSeries[]
   height?: number
@@ -68,6 +70,11 @@ export function TimeSeriesChart({
   yDomain?: [number | 'auto' | 'dataMin' | 'dataMax', number | 'auto' | 'dataMin' | 'dataMax']
   /** 可选阈值线；仅调用方明确传入时渲染，避免影响其它图表。 */
   referenceLines?: ChartReferenceLine[]
+  /**
+   * 图表的替代文本（可访问名）。省略时由序列名推导——见 {@link chartAccessibleName}。
+   * 调用方若有更贴切的描述（如「近 24 小时 TPS 趋势」），传进来即可覆盖推导值。
+   */
+  ariaLabel?: string
 }) {
   const { t } = useTranslation()
   const { data, spanMs } = useMemo(() => {
@@ -134,7 +141,16 @@ export function TimeSeriesChart({
 
   return (
     <div className="space-y-1">
-      <div ref={containerRef} style={{ height, width: '100%' }}>
+      {/* role="img" + aria-label：recharts 画出来的是裸 SVG（一堆 <path>/<text>），读屏既读不出
+          趋势也读不出「这是什么图」，等于对读屏用户完全不可见。整块标成图像并给替代文本，
+          是把图形内容传达给非视觉用户的标准做法（与 Sparkline 同一约定）。
+          用 role="img" 还顺带屏蔽了内部坐标轴/图例的碎文本噪声——它们已在替代文本里概括。 */}
+      <div
+        ref={containerRef}
+        role="img"
+        aria-label={chartAccessibleName(series, ariaLabel, emptyHint)}
+        style={{ height, width: '100%' }}
+      >
         {width > 0 && (
           <LineChart width={width} height={height} data={data} margin={{ top: 6, right: 12, bottom: 0, left: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />

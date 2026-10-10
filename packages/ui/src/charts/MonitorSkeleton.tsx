@@ -58,6 +58,7 @@ function MonitorChartCard({
           valueFormatter={formatterFor(def.format)}
           yDomain={def.yDomain ?? ['auto', 'auto']}
           emptyHint={t('common.noData')}
+          ariaLabel={t(def.titleKey)}
         />
       )}
     </Panel>
