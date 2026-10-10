@@ -21,7 +21,7 @@ const appViews = path.join(root, 'src/components/views')
 
 /** 包内允许保留的 lib 模块——设计系统的依赖闭包（含被原语与博物馆直接使用者）。 */
 const DESIGN_SYSTEM_LIBS = new Set([
-  'brush', 'chart-hover', 'color-contrast', 'combobox', 'focus-ring',
+  'brush', 'chart-a11y', 'chart-hover', 'color-contrast', 'combobox', 'focus-ring',
   'interaction-overlay', 'monitor-metrics', 'stat-card', 'theme', 'threshold',
   'tone', 'utils',
 ])

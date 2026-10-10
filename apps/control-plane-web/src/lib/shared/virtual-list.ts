@@ -147,6 +147,8 @@ export function useVirtualRows({
   sizes,
 }: VirtualRowsOptions) {
   const containerRef = useRef<HTMLDivElement>(null)
+  /** 待执行的滚动合并回调（见 onScroll）。挂在 ref 上以便卸载时取消，避免卸载后 setState。 */
+  const scrollRafRef = useRef<number | null>(null)
   const [metrics, setMetrics] = useState({
     viewportSize: fallbackViewportSize,
     crossSize: fallbackCrossSize,
@@ -207,16 +209,44 @@ export function useVirtualRows({
     window.addEventListener('resize', debouncedMeasure)
     return () => {
       window.clearTimeout(timer)
+      if (scrollRafRef.current !== null) {
+        window.cancelAnimationFrame(scrollRafRef.current)
+        scrollRafRef.current = null
+      }
       resizeObserver?.disconnect()
       window.removeEventListener('resize', debouncedMeasure)
     }
   }, [measure])
 
-  const onScroll = useCallback(() => {
+  /**
+   * 把当前滚动位置同步进 metrics（同值短路，与 measure 同一标准）。
+   *
+   * 【为什么必须做同值短路】`setMetrics({...prev, scrollOffset})` 每次都产生新对象，React 无法
+   * bailout → 即使 scrollTop 没变也要重渲染整个列表（本文件多处列表页组件树都在千级元素量级）。
+   * 返回 prev 时 React 直接跳过本次渲染，与 measure 里的处理一致。
+   */
+  const flushScroll = useCallback(() => {
+    scrollRafRef.current = null
     const el = containerRef.current
     if (!el) return
-    setMetrics((prev) => ({ ...prev, scrollOffset: el.scrollTop }))
+    const next = el.scrollTop
+    setMetrics((prev) => (prev.scrollOffset === next ? prev : { ...prev, scrollOffset: next }))
   }, [])
+
+  /**
+   * 滚动事件处理器。
+   *
+   * 【为什么必须按帧合并】原实现每个 scroll 事件都 `setMetrics` 一次。浏览器在一次滚动里
+   * 可能连续派发多个 scroll 事件（触控板惯性、滚轮连击、以及程序化 `scrollTop` 赋值叠加
+   * 用户滚动），每个事件都是一次「重算窗口 + 重渲染整列表」。滚动事件按 HTML 规范发生在
+   * 「update the rendering」的 scroll steps 里，而 rAF 回调就在同一帧的紧接着一步——
+   * 因此在 scroll 里挂 rAF 既能把同一帧内的多次事件合并成**一次** setState，又不会推迟到下一帧
+   * （不会出现视口晚一帧才跟上滚动的「拖影」）。
+   */
+  const onScroll = useCallback(() => {
+    if (scrollRafRef.current !== null) return
+    scrollRafRef.current = window.requestAnimationFrame(flushScroll)
+  }, [flushScroll])
 
   // 变高模式：sizes → 前缀和（每行新高度时 O(n) 重建，控制台量级下可忽略）。
   // 用累加器而不是回读 prefix[i]：与「prefix[i+1] = prefix[i] + h」逐项等价（prefix[0]=0）。
