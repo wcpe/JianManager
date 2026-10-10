@@ -87,6 +87,21 @@ async function flushMacrotask() {
   })
 }
 
+/**
+ * 取唯一匹配 `[data-slot]` 钩子的节点，并断言它确实只有一个。
+ *
+ * 钩子数量本身就是契约（「关闭入口集合」必须可数），所以「恰好一个」照旧断言；
+ * 但断言不会让 TS 收窄类型，故取到 null/undefined 时显式抛错——否则传给 fireEvent
+ * 只会静默变成一次无效点击，让后续断言假绿。
+ */
+function soleSlottedNode(selector: string): Element {
+  const found = document.querySelectorAll(selector)
+  expect(found).toHaveLength(1)
+  const node = found[0]
+  if (!node) throw new Error(`未找到唯一的钩子节点：${selector}`)
+  return node
+}
+
 describe('Dialog', () => {
   it('关闭态不渲染任何对话框内容', () => {
     renderDialog()
@@ -132,12 +147,11 @@ describe('Dialog', () => {
   it('默认渲染右上角关闭按钮，点击即关闭', async () => {
     await openDialog()
 
-    const closeButtons = document.querySelectorAll('[data-slot="dialog-close"]')
-    expect(closeButtons).toHaveLength(1)
+    const closeButton = soleSlottedNode('[data-slot="dialog-close"]')
     // 图标按钮的可见文案是 sr-only 的 Close，作为可访问名暴露
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
 
-    fireEvent.click(closeButtons[0])
+    fireEvent.click(closeButton)
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
@@ -230,12 +244,11 @@ describe('Dialog 钩子与关闭文案（FR-496 阶段 6 修复）', () => {
   it('页脚关闭按钮与右上角 X 的 dialog-close 钩子对称', async () => {
     await openDialog({ showCloseButton: false, footerClose: true })
 
-    const closes = document.querySelectorAll('[data-slot="dialog-close"]')
-    expect(closes).toHaveLength(1)
+    const closeButton = soleSlottedNode('[data-slot="dialog-close"]')
     // 仍然是带 outline 变体的 Button，没有被换成裸 Radix 按钮（样式与按压反馈都还在）
-    expect(closes[0].tagName).toBe('BUTTON')
-    expect(closes[0]).toHaveAttribute('data-variant', 'outline')
-    expect(closes[0]).toHaveTextContent('Close')
+    expect(closeButton.tagName).toBe('BUTTON')
+    expect(closeButton).toHaveAttribute('data-variant', 'outline')
+    expect(closeButton).toHaveTextContent('Close')
   })
 
   it('closeLabel 同时覆盖右上角 X 与页脚关闭文案', async () => {

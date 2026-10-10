@@ -156,7 +156,9 @@ export function InstanceWizardPage({
   const steps: StepKey[] = isDocker ? ['basic', 'launch', 'advanced', 'review'] : ['basic', 'launch', 'review']
   const [stepIdx, setStepIdx] = useState(0)
   const safeIdx = Math.min(stepIdx, steps.length - 1)
-  const step = steps[safeIdx]
+  // steps 恒非空（按 isDocker 构造为 4/3 项）且 safeIdx 已夹在 [0, len-1]，故一定取到；
+  // 兜底 'basic' 恰是它必然的取值（steps[0]），只为让类型系统接受这次下标访问。
+  const step = steps[safeIdx] ?? 'basic'
   const isLast = safeIdx === steps.length - 1
 
   // 单步是否可继续（仅校验该步内的必填项）。

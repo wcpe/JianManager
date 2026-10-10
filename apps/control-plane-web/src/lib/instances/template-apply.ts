@@ -18,6 +18,8 @@ export function extractVariables(startCommand: string): string[] {
   const seen = new Set<string>()
   for (const m of startCommand.matchAll(VAR_RE)) {
     const name = m[1]
+    // 正则第 1 组 `([A-Za-z0-9_]+)` 是必选组，匹配成功即恒存在；判空只为收窄类型。
+    if (name === undefined) continue
     if (!seen.has(name)) {
       seen.add(name)
       out.push(name)
@@ -32,9 +34,11 @@ export function extractVariables(startCommand: string): string[] {
  * - 提供空串视为「已填为空」，占位被移除。
  */
 export function fillTemplate(startCommand: string, values: Record<string, string>): string {
-  return startCommand.replace(VAR_RE, (whole, name: string) =>
-    Object.prototype.hasOwnProperty.call(values, name) ? values[name] : whole,
-  )
+  return startCommand.replace(VAR_RE, (whole, name: string) => {
+    // 用 hasOwnProperty 而非直接取值：避免 `{{toString}}` 命中 Object 原型上的方法。
+    const value = Object.prototype.hasOwnProperty.call(values, name) ? values[name] : undefined
+    return value ?? whole
+  })
 }
 
 /** 校验错误集：变量名 → i18n messageKey（仿 cron.ts 的 messageKey 约定，保持纯逻辑）。 */
@@ -62,7 +66,10 @@ export function parseMaxHeapMb(startCommand: string): number | null {
   const m = startCommand.match(/-Xmx(\d+)([gmk])/i)
   if (!m) return null
   const n = Number(m[1])
-  switch (m[2].toLowerCase()) {
+  const unit = m[2]
+  // 正则第 2 组 `([gmk])` 是必选组，匹配成功即恒存在；判空只为收窄类型（原写法在此会抛错，不可达）。
+  if (unit === undefined) return null
+  switch (unit.toLowerCase()) {
     case 'g':
       return n * 1024
     case 'm':

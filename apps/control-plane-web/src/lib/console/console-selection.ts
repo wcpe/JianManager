@@ -76,8 +76,11 @@ export function selectionText(lines: readonly LogLine[], range: SeqRange | null 
 
 /** 全选缓冲（`Ctrl+A`）。空缓冲返回 null——不造一个空区间让工具条白浮出来。 */
 export function fullSeqRange(lines: readonly LogLine[]): SeqRange | null {
-  if (lines.length === 0) return null
-  return { anchor: lines[0].seq, head: lines[lines.length - 1].seq }
+  const first = lines[0]
+  const last = lines.at(-1)
+  // 空缓冲时两者皆为 undefined（首尾取不到即等价于原 `length === 0` 判据）。
+  if (first === undefined || last === undefined) return null
+  return { anchor: first.seq, head: last.seq }
 }
 
 /** 扩选：锚点不动，只挪终点。无区间时以 `seq` 自成一点（首次 `Shift+Click` 的退化情形）。 */

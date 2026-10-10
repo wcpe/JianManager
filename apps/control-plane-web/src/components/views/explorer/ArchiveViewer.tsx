@@ -114,7 +114,8 @@ export default function ArchiveViewer({
     return () => {
       alive = false
     }
-  }, [instanceId, path, t])
+    // listEntries 是外壳注入的模块级取数函数，引用恒定，列入依赖不会引起重跑。
+  }, [instanceId, path, t, listEntries])
 
   const tree = useMemo(() => buildEntryTree(entries), [entries])
 
@@ -154,7 +155,8 @@ export default function ArchiveViewer({
         setViewLoading(false)
       }
     },
-    [instanceId, path, t],
+    // readEntry 是外壳注入的模块级取数函数，引用恒定。
+    [instanceId, path, t, readEntry],
   )
 
   /** 反编译归档内某 .class 条目（entry 为空则反编译整个 jar）。 */
@@ -191,7 +193,8 @@ export default function ArchiveViewer({
         setViewLoading(false)
       }
     },
-    [instanceId, path, name, t],
+    // decompile 是外壳注入的模块级取数函数，引用恒定。
+    [instanceId, path, name, t, decompile],
   )
 
   const renderNode = (node: EntryNode, depth: number): React.ReactNode => {

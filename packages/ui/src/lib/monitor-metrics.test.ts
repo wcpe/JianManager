@@ -13,8 +13,28 @@ import {
   buildSnapshots,
   buildCompareSeries,
   NODE_METRIC_CATALOG,
+  type MetricChartDef,
+  type MetricSnapshot,
   type RawSeries,
 } from './monitor-metrics'
+
+/**
+ * 按 id 取图表定义。
+ * 定义表里没有该 id 时直接抛错，而不是让 undefined 一路传进断言——
+ * 否则「图定义被改名或删除」会表现成「曲线断言莫名其妙失败」，掩盖真正原因。
+ */
+function defById(defs: MetricChartDef[], id: string): MetricChartDef {
+  const def = defs.find((d) => d.id === id)
+  if (!def) throw new Error(`图表定义缺失：${id}`)
+  return def
+}
+
+/** 按 metricKey 取快照（同上：取不到即抛，避免 undefined 混进断言）。 */
+function snapshotByKey(snaps: MetricSnapshot[], metricKey: string): MetricSnapshot {
+  const snap = snaps.find((s) => s.metricKey === metricKey)
+  if (!snap) throw new Error(`快照缺失：${metricKey}`)
+  return snap
+}
 
 describe('formatBytes', () => {
   it('按量级取 G/M/K', () => {
@@ -74,7 +94,8 @@ describe('ratioPctSeries', () => {
     expect(ratioPctSeries(num, den).map((p) => p.value)).toEqual([50, null, null])
   })
   it('分母≤0 或缺测处为 null', () => {
-    expect(ratioPctSeries([{ ts: 't', value: 10 }], [{ ts: 't', value: -1 }])[0].value).toBeNull()
+    // 整条取值序列比对：既钉住占比为 null，也钉住「只有这一个点」（避免为空时假绿）
+    expect(ratioPctSeries([{ ts: 't', value: 10 }], [{ ts: 't', value: -1 }]).map((p) => p.value)).toEqual([null])
   })
 })
 
@@ -110,10 +131,11 @@ describe('buildChartSeries', () => {
       { metricKey: 'node_disk_used', points: [{ ts: 't0', value: 20 }] },
       { metricKey: 'node_disk_total', points: [{ ts: 't0', value: 100 }] },
     ]
-    const out = buildChartSeries(NODE_CHART_DEFS[0], raw, id)
+    const out = buildChartSeries(defById(NODE_CHART_DEFS, 'resource'), raw, id)
     expect(out.map((s) => s.key)).toEqual(['node_cpu_pct', 'mem_pct', 'disk_pct'])
-    expect(out[1].points[0].value).toBe(50)
-    expect(out[2].points[0].value).toBe(20)
+    // 三条线各自的点值：CPU 为源序列原值，内存/磁盘由 used/total 派生为百分比
+    // （整表比对而非逐条取下标：顺带钉住「每条线各一个点」）
+    expect(out.map((s) => s.points.map((p) => p.value))).toEqual([[40], [50], [20]])
   })
 
   it('内存图按 sources 取 used/total 两线', () => {
@@ -121,7 +143,7 @@ describe('buildChartSeries', () => {
       { metricKey: 'node_mem_used', points: [{ ts: 't0', value: 5 }] },
       { metricKey: 'node_mem_total', points: [{ ts: 't0', value: 9 }] },
     ]
-    const out = buildChartSeries(NODE_CHART_DEFS[3], raw, id)
+    const out = buildChartSeries(defById(NODE_CHART_DEFS, 'memory'), raw, id)
     expect(out.map((s) => s.key)).toEqual(['node_mem_used', 'node_mem_total'])
   })
 
@@ -131,13 +153,13 @@ describe('buildChartSeries', () => {
       { metricKey: 'world_loaded_chunks', world: 'world_nether', points: [{ ts: 't0', value: 20 }] },
       { metricKey: 'world_loaded_chunks', world: '', points: [{ ts: 't0', value: 999 }] },
     ]
-    const chunks = INSTANCE_CHART_DEFS.find((d) => d.id === 'chunks')!
+    const chunks = defById(INSTANCE_CHART_DEFS, 'chunks')
     const out = buildChartSeries(chunks, raw, id)
     expect(out.map((s) => s.key)).toEqual(['world', 'world_nether'])
   })
 
   it('缺序列时跳过该线', () => {
-    const out = buildChartSeries(INSTANCE_CHART_DEFS[0], [], id)
+    const out = buildChartSeries(defById(INSTANCE_CHART_DEFS, 'tps'), [], id)
     expect(out).toEqual([])
   })
 
@@ -146,7 +168,7 @@ describe('buildChartSeries', () => {
       { metricKey: 'world_loaded_chunks', world: 'world', points: [{ ts: 't0', value: 100 }] },
       { metricKey: 'world_loaded_chunks', world: 'world_nether', points: [{ ts: 't0', value: 20 }] },
     ]
-    const chunks = INSTANCE_CHART_DEFS.find((d) => d.id === 'chunks')!
+    const chunks = defById(INSTANCE_CHART_DEFS, 'chunks')
     const out = buildChartSeries(chunks, raw, id, 'world_nether')
     expect(out.map((s) => s.key)).toEqual(['world_nether'])
   })
@@ -182,11 +204,11 @@ describe('buildSnapshots', () => {
       { metricKey: 'node_cpu_pct', points: [{ ts: 't0', value: 40 }, { ts: 't1', value: 60 }] },
     ]
     const snaps = buildSnapshots(NODE_METRIC_CATALOG, raw)
-    const cpu = snaps.find((s) => s.metricKey === 'node_cpu_pct')!
+    const cpu = snapshotByKey(snaps, 'node_cpu_pct')
     expect(cpu.current).toBe(60)
     expect(cpu.points).toHaveLength(2)
     // 无数据的指标当前值为 null、点为空
-    const load = snaps.find((s) => s.metricKey === 'node_load')!
+    const load = snapshotByKey(snaps, 'node_load')
     expect(load.current).toBeNull()
     expect(load.points).toEqual([])
     // 目录全量覆盖
@@ -204,7 +226,8 @@ describe('buildCompareSeries', () => {
   it('按选中顺序叠加多条序列', () => {
     const out = buildCompareSeries(['node_load', 'node_cpu_pct'], NODE_METRIC_CATALOG, raw, id)
     expect(out.map((s) => s.key)).toEqual(['node_load', 'node_cpu_pct'])
-    expect(out[0].name).toBe('monitor.metric.load1')
+    // 名称同样按选中顺序取目录 nameKey（整表比对，顺带钉住条数）
+    expect(out.map((s) => s.name)).toEqual(['monitor.metric.load1', 'monitor.metric.cpu'])
   })
   it('每条序列带出目录 format（供 Y 轴/hover 选格式器）', () => {
     const out = buildCompareSeries(['node_load', 'node_cpu_pct'], NODE_METRIC_CATALOG, raw, id)

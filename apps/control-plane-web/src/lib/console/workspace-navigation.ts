@@ -413,7 +413,8 @@ const PATH_REGISTRATIONS: PathRegistration[] = (() => {
 
 /** 路径归一化：去 query/hash、折叠重复斜杠、去尾斜杠；空串归为根路径 `/`。 */
 function normalizePath(pathname: string): string {
-  const cut = pathname.split('?')[0].split('#')[0]
+  // `split` 恒返回至少一个元素，故两个 [0] 在运行时必有值；`?? ''` 只为收窄类型（不可达）。
+  const cut = (pathname.split('?')[0] ?? '').split('#')[0] ?? ''
   const collapsed = cut.replace(/\/{2,}/g, '/')
   const trimmed = collapsed.replace(/\/+$/, '')
   if (trimmed === '') return '/'
@@ -440,8 +441,8 @@ function matchScore(pattern: string, path: string): number {
   const dynamic = patternSegs.some((s) => s.startsWith(':'))
   if (dynamic) {
     if (patternSegs.length !== pathSegs.length) return 0
-    for (let i = 0; i < patternSegs.length; i++) {
-      const seg = patternSegs[i]
+    // entries() 直接给出（下标，段）对；两数组等长由上一行保证，故 pathSegs[i] 恒有意义。
+    for (const [i, seg] of patternSegs.entries()) {
       if (seg.startsWith(':')) {
         if (pathSegs[i] === '') return 0
       } else if (seg !== pathSegs[i]) {

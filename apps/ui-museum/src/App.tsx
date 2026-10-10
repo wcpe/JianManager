@@ -28,12 +28,8 @@ import {
   Input,
   Label,
   MetricCell,
-  MetricComparePanel,
   MetricGrid,
-  MetricsOverviewStrip,
   MiniBar,
-  MonitorChart,
-  MonitorSkeleton,
   NODE_CHART_DEFS,
   ObjectPageHeader,
   PageHeader,
@@ -42,8 +38,6 @@ import {
   PasswordInput,
   PlatformTab,
   PlatformTabs,
-  RangePicker,
-  ResolutionPicker,
   ResourceGauge,
   ScopeBar,
   ScrollableDialogBody,
@@ -61,7 +55,6 @@ import {
   SheetDescription,
   SheetHeader,
   SheetTitle,
-  Sparkline,
   StatCard,
   StatusBadge,
   SummaryChips,
@@ -79,7 +72,6 @@ import {
   TabsTrigger,
   Textarea,
   ThreeCol,
-  TimeSeriesChart,
   Toolbar,
   ToolbarSpacer,
   TwoCol,
@@ -90,38 +82,54 @@ import {
   type RawSeries,
   type ViewMode,
 } from '@jianmanager/ui'
+// 图表**组件**不在主 barrel（barrel 只透出图表类型，见 packages/ui/src/index.ts 的说明）：
+// 组件走深路径，避免 recharts 被同步带进每个消费方的 chunk。
+import { MetricComparePanel } from '@jianmanager/ui/charts/MetricComparePanel'
+import { MetricsOverviewStrip } from '@jianmanager/ui/charts/MetricsOverviewStrip'
+import { MonitorChart } from '@jianmanager/ui/charts/MonitorChart'
+import { MonitorSkeleton } from '@jianmanager/ui/charts/MonitorSkeleton'
+import { RangePicker, ResolutionPicker } from '@jianmanager/ui/charts/RangePicker'
+import { Sparkline } from '@jianmanager/ui/charts/Sparkline'
+import { TimeSeriesChart } from '@jianmanager/ui/charts/TimeSeriesChart'
 
-const rawSeries: RawSeries[] = [
-  {
-    metricKey: 'node_cpu_pct',
-    points: [
-      { ts: '2026-07-05T00:00:00Z', value: 34 },
-      { ts: '2026-07-05T00:05:00Z', value: 46 },
-      { ts: '2026-07-05T00:10:00Z', value: 39 },
-      { ts: '2026-07-05T00:15:00Z', value: 58 },
-    ],
-  },
-  {
-    metricKey: 'node_load',
-    points: [
-      { ts: '2026-07-05T00:00:00Z', value: 1.8 },
-      { ts: '2026-07-05T00:05:00Z', value: 2.1 },
-      { ts: '2026-07-05T00:10:00Z', value: 1.6 },
-      { ts: '2026-07-05T00:15:00Z', value: 2.4 },
-    ],
-  },
-]
+/**
+ * 两条演示序列各自命名后再组数组。
+ *
+ * 不写 `rawSeries[0]` / `rawSeries[1]`：索引访问在 noUncheckedIndexedAccess 下类型是
+ * `RawSeries | undefined`，而这两条是固定的演示数据——命名后既不必判空，引用处也更明确。
+ */
+const cpuSeries: RawSeries = {
+  metricKey: 'node_cpu_pct',
+  points: [
+    { ts: '2026-07-05T00:00:00Z', value: 34 },
+    { ts: '2026-07-05T00:05:00Z', value: 46 },
+    { ts: '2026-07-05T00:10:00Z', value: 39 },
+    { ts: '2026-07-05T00:15:00Z', value: 58 },
+  ],
+}
+
+const loadSeries: RawSeries = {
+  metricKey: 'node_load',
+  points: [
+    { ts: '2026-07-05T00:00:00Z', value: 1.8 },
+    { ts: '2026-07-05T00:05:00Z', value: 2.1 },
+    { ts: '2026-07-05T00:10:00Z', value: 1.6 },
+    { ts: '2026-07-05T00:15:00Z', value: 2.4 },
+  ],
+}
+
+const rawSeries: RawSeries[] = [cpuSeries, loadSeries]
 
 const chartSeries: ChartSeries[] = [
   {
     key: 'cpu',
     name: 'CPU',
-    points: rawSeries[0].points,
+    points: cpuSeries.points,
   },
   {
     key: 'load',
     name: 'Load',
-    points: rawSeries[1].points,
+    points: loadSeries.points,
   },
 ]
 
@@ -503,7 +511,7 @@ export default function App() {
               <div className="flex items-center gap-4">
                 <ResourceGauge label="CPU" value={58} unit="%" />
                 <div className="h-10 flex-1">
-                  <Sparkline points={rawSeries[0].points} ariaLabel="CPU trend" />
+                  <Sparkline points={cpuSeries.points} ariaLabel="CPU trend" />
                 </div>
               </div>
             </Panel>

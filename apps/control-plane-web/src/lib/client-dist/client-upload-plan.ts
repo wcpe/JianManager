@@ -95,11 +95,14 @@ export async function runLimited<T>(
   async function worker(): Promise<void> {
     for (;;) {
       if (firstError !== null || signal?.aborted) return
+      // 先按当前游标取任务、再推进游标：tasks 是稠密数组，取不到即等价于「下标越界，
+      // 已无任务可派发」，同时把 task 收窄为确定的函数。
+      const task = tasks[next]
+      if (task === undefined) return
       const i = next
-      if (i >= tasks.length) return
       next += 1
       try {
-        results[i] = await tasks[i]()
+        results[i] = await task()
       } catch (err) {
         if (firstError === null) firstError = err
         return
@@ -170,10 +173,11 @@ export function createProgressTracker(
 
 // ── 浏览器内容 hash ─────────────────────────────────────────────────────────
 
+/** 初始状态字：声明为定长元组，解构即得 8 个确定值（无需逐项判空）。 */
 const SHA256_INITIAL = [
   0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
   0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
-]
+] as const
 
 const SHA256_ROUND = [
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -205,26 +209,51 @@ function padSha256Input(input: Uint8Array): Uint8Array {
 
 /** 从一个 64 字节块生成 64 轮消息调度表。 */
 function fillSha256Schedule(input: Uint8Array, offset: number, schedule: Uint32Array): void {
+  // 前 16 字 = 该块按大端序读出的 4 字节字（等价于逐字节移位拼接，但无需下标访问）。
+  const view = new DataView(input.buffer, input.byteOffset, input.byteLength)
   for (let i = 0; i < 16; i += 1) {
-    const p = offset + i * 4
-    schedule[i] = ((input[p] << 24) | (input[p + 1] << 16) | (input[p + 2] << 8) | input[p + 3]) >>> 0
+    schedule[i] = view.getUint32(offset + i * 4, false)
   }
   for (let i = 16; i < 64; i += 1) {
-    const x = schedule[i - 15]
-    const y = schedule[i - 2]
-    const s0 = rotateRight(x, 7) ^ rotateRight(x, 18) ^ (x >>> 3)
-    const s1 = rotateRight(y, 17) ^ rotateRight(y, 19) ^ (y >>> 10)
-    schedule[i] = (schedule[i - 16] + s0 + schedule[i - 7] + s1) >>> 0
+    // 不变量：i ∈ [16, 63] 时四个来源下标 i-16 / i-15 / i-7 / i-2 必落在 [0, 63] 内。
+    // 先取值再判空：既让类型收窄，也在边界被破坏时立刻抛错，而不是静默算出错误摘要。
+    const w16 = schedule[i - 16]
+    const w15 = schedule[i - 15]
+    const w7 = schedule[i - 7]
+    const w2 = schedule[i - 2]
+    if (w16 === undefined || w15 === undefined || w7 === undefined || w2 === undefined) {
+      throw new Error('SHA-256 消息调度下标越界')
+    }
+    const s0 = rotateRight(w15, 7) ^ rotateRight(w15, 18) ^ (w15 >>> 3)
+    const s1 = rotateRight(w2, 17) ^ rotateRight(w2, 19) ^ (w2 >>> 10)
+    schedule[i] = (w16 + s0 + w7 + s1) >>> 0
   }
 }
 
-/** 执行一个 SHA-256 压缩块。 */
-function compressSha256Block(state: Uint32Array, schedule: Uint32Array): void {
+/** SHA-256 的 8 字状态（定长元组，避免下标访问退化成可选值）。 */
+type Sha256State = [number, number, number, number, number, number, number, number]
+
+/** 取初始状态字；SHA256_INITIAL 为定长元组，解构即 8 个确定值。 */
+function sha256InitialState(): Sha256State {
+  const [s0, s1, s2, s3, s4, s5, s6, s7] = SHA256_INITIAL
+  return [s0, s1, s2, s3, s4, s5, s6, s7]
+}
+
+/** 执行一个 SHA-256 压缩块，返回压缩后的 8 字状态。 */
+function compressSha256Block(state: Sha256State, schedule: Uint32Array): Sha256State {
+  // s0..s7 保留压缩前的状态字（收尾相加用），a..h 为轮内可变的当前状态。
+  const [s0, s1, s2, s3, s4, s5, s6, s7] = state
   let [a, b, c, d, e, f, g, h] = state
   for (let i = 0; i < 64; i += 1) {
+    // 轮常量表与调度表均定长 64，i ∈ [0, 63] 必然命中；判空仅为类型收窄与边界自检。
+    const round = SHA256_ROUND[i]
+    const word = schedule[i]
+    if (round === undefined || word === undefined) {
+      throw new Error('SHA-256 轮常量/调度下标越界')
+    }
     const sum1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25)
     const choice = (e & f) ^ (~e & g)
-    const temp1 = (h + sum1 + choice + SHA256_ROUND[i] + schedule[i]) >>> 0
+    const temp1 = (h + sum1 + choice + round + word) >>> 0
     const sum0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22)
     const majority = (a & b) ^ (a & c) ^ (b & c)
     const temp2 = (sum0 + majority) >>> 0
@@ -237,20 +266,23 @@ function compressSha256Block(state: Uint32Array, schedule: Uint32Array): void {
     b = a
     a = (temp1 + temp2) >>> 0
   }
-  const work = [a, b, c, d, e, f, g, h]
-  for (let i = 0; i < state.length; i += 1) state[i] = (state[i] + work[i]) >>> 0
+  // 收尾：状态字 = 压缩前状态字 + 压缩结果字，定长 8 字整体返回。
+  return [
+    (s0 + a) >>> 0, (s1 + b) >>> 0, (s2 + c) >>> 0, (s3 + d) >>> 0,
+    (s4 + e) >>> 0, (s5 + f) >>> 0, (s6 + g) >>> 0, (s7 + h) >>> 0,
+  ]
 }
 
 /** HTTP 非安全上下文的无依赖 SHA-256 兜底，仅由小文件聚合路径使用。 */
 function sha256HexFallback(input: Uint8Array): string {
   const padded = padSha256Input(input)
-  const state = Uint32Array.from(SHA256_INITIAL)
+  let state = sha256InitialState()
   const schedule = new Uint32Array(64)
   for (let offset = 0; offset < padded.length; offset += 64) {
     fillSha256Schedule(padded, offset, schedule)
-    compressSha256Block(state, schedule)
+    state = compressSha256Block(state, schedule)
   }
-  return Array.from(state, (word) => word.toString(16).padStart(8, '0')).join('')
+  return state.map((word) => word.toString(16).padStart(8, '0')).join('')
 }
 
 function hasNativeSha256(): boolean {

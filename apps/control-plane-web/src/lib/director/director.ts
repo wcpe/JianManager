@@ -137,5 +137,6 @@ export function nextSceneId(s: DirectorState, current: string | null): string | 
   if (s.sceneIds.length === 0) return null
   const idx = current === null ? -1 : s.sceneIds.indexOf(current)
   const nextIdx = (idx + 1) % s.sceneIds.length
-  return s.sceneIds[nextIdx]
+  // nextIdx 恒落在 [0, length-1]（上方已排除空列表），取不到即「无下一场景」，与返回类型 `string | null` 一致。
+  return s.sceneIds[nextIdx] ?? null
 }

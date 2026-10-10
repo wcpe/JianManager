@@ -355,7 +355,10 @@ export function catalogFor(kind: 'platform' | 'node' | 'instance'): MetricCatalo
 export function latestValue(raw: RawSeries[], metricKey: string): number | null {
   const pts = pointsOf(raw, metricKey)
   for (let i = pts.length - 1; i >= 0; i--) {
-    const v = pts[i].value
+    // i 恒在 [0, length-1]，元素必存在；判 undefined 仅为类型收窄
+    const pt = pts[i]
+    if (pt === undefined) continue
+    const v = pt.value
     if (v != null && Number.isFinite(v)) return v
   }
   return null

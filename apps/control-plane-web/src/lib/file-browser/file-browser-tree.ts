@@ -81,7 +81,9 @@ export function buildTree(entries: FileEntry[]): BrowserTreeDir {
       continue
     }
 
+    // segments 非空（上方已跳过空路径），末段名必存在；判 undefined 仅用于类型收窄。
     const name = segments[segments.length - 1]
+    if (name === undefined) continue
     const parent = ensureDir(segments.slice(0, -1))
     parent.files.push({ entry, name })
   }

@@ -70,7 +70,8 @@ export default function DecompileViewer({ instanceId, path, name, onClose, decom
     return () => {
       alive = false
     }
-  }, [instanceId, path, t])
+    // decompile 是外壳注入的模块级取数函数，引用恒定，列入依赖不会引起重跑。
+  }, [instanceId, path, t, decompile])
 
   return (
     // flex-1 占满右栏：ResourceExplorer 打开反编译时已收起文件列表（FR-111）。

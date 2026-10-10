@@ -269,7 +269,8 @@ export function InstanceConsoleView({
         return
       }
       // 目标晚于全部已加载历史 → 落点在内存缓冲那一段，定位到缓冲首行（会话起点）。
-      if (lines.length > 0) locateSeq(lines[0].seq)
+      const first = lines.at(0)
+      if (first !== undefined) locateSeq(first.seq)
     },
     [historyBacktrack, lines, locateSeq],
   )

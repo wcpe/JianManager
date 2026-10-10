@@ -71,8 +71,8 @@ export function BotBatchBar({
     let succeeded = 0
     let failed = 0
     setProgress({ done: 0, total: groups.length })
-    for (let i = 0; i < groups.length; i++) {
-      const g = groups[i]
+    // 用 entries() 逐组下发，既保留序号（进度）又避免下标访问可能取到 undefined
+    for (const [i, g] of groups.entries()) {
       try {
         const res = await onBatch({
           action,

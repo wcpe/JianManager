@@ -72,13 +72,15 @@ export function canPublish(state: WizardState): boolean {
 /** 取下一步标识（已是最后一步则返回自身）。 */
 export function nextStep(step: PublishStepId): PublishStepId {
   const i = PUBLISH_STEPS.indexOf(step)
-  return PUBLISH_STEPS[Math.min(i + 1, PUBLISH_STEPS.length - 1)]
+  // 下标已夹在 [0, length-1] 内必然命中；取不到（步列表为空，类型上不可达）时退回自身。
+  return PUBLISH_STEPS.at(Math.min(i + 1, PUBLISH_STEPS.length - 1)) ?? step
 }
 
 /** 取上一步标识（已是第一步则返回自身）。 */
 export function prevStep(step: PublishStepId): PublishStepId {
   const i = PUBLISH_STEPS.indexOf(step)
-  return PUBLISH_STEPS[Math.max(i - 1, 0)]
+  // 下标已夹在 [0, length-1] 内必然命中；取不到（步列表为空，类型上不可达）时退回自身。
+  return PUBLISH_STEPS.at(Math.max(i - 1, 0)) ?? step
 }
 
 // ── FR-191：zip 上传归一 / 文件树 / 草稿 dirty 判定 ─────────────────────────
@@ -268,8 +270,9 @@ export function buildFileTree(files: ManifestFileLike[]): TreeDir {
     const segments = normalizeManifestPath(f.path)
       .split('/')
       .filter((s) => s !== '')
-    if (segments.length === 0) return // 防御：纯斜杠/空路径跳过
-    const name = segments[segments.length - 1]
+    // 末段即文件名；取不到说明没有有效段（纯斜杠/空路径），防御性跳过。
+    const name = segments.at(-1)
+    if (name === undefined) return
     const dirSegments = segments.slice(0, -1)
 
     // 逐段下钻/创建目录节点
@@ -391,8 +394,8 @@ export function collectAllDirPaths(files: ManifestFileLike[]): string[] {
     const segs = normalizeManifestPath(f.path).split('/').filter((s) => s !== '')
     let acc = ''
     // 逐层累加目录前缀（最后一段是文件名，跳过）。
-    for (let i = 0; i < segs.length - 1; i++) {
-      acc = acc === '' ? segs[i] : `${acc}/${segs[i]}`
+    for (const seg of segs.slice(0, -1)) {
+      acc = acc === '' ? seg : `${acc}/${seg}`
       dirs.add(acc)
     }
   }
@@ -660,8 +663,10 @@ export function computeDirVisualState(
     }
     return effectiveMark
   }
-  if (descendantValues.size === 0) return 'none'
-  if (descendantValues.size === 1) return [...descendantValues][0]
+  // 子树无显式标记 → 无色；只有一个不同标记 → 继承该标记；多于一个 → 混杂。
+  const [soleMark, ...otherMarks] = descendantValues
+  if (soleMark === undefined) return 'none'
+  if (otherMarks.length === 0) return soleMark
   return 'mixed'
 }
 

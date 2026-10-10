@@ -3,6 +3,10 @@
   "extends": "./base.json",
   "compilerOptions": {
     "lib": ["ES2023", "DOM"],
+    // 数组/字典索引访问不默认「一定存在」（在 TS 6 的 strict 默认下才有意义）。
+    // 落在共用基线而非各 app：app / packages/ui / ui-museum 三者共用本配置，
+    // 分开设会让「同一份包源码在不同 program 里严格度不同」。
+    "noUncheckedIndexedAccess": true,
     "types": ["vite/client"],
     "jsx": "react-jsx"
   }

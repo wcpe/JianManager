@@ -14,16 +14,23 @@ import { ObjectPageHeader } from './ObjectPageHeader'
  * 这些契约一旦被改坏，外壳重构就会静默退回到「侧栏塞满路由」之前的旧问题。
  */
 
+/**
+ * 首个条目（默认高亮项）。
+ * 「执行当前高亮项」「鼠标点击结果」两个用例需要在保留原字段的前提下换掉 onSelect，
+ * 具名常量让它们不必按 `ITEMS[0]` 取下标。
+ */
+const FIRST_ITEM: CommandPaletteItem = {
+  id: 'page-instances',
+  label: '全部实例',
+  group: '页面',
+  hint: '/instances',
+  keywords: ['实例列表'],
+  onSelect: () => {},
+}
+
 /** 检索用的样例条目：标签两两不同，避免用例里出现歧义定位。 */
 const ITEMS: CommandPaletteItem[] = [
-  {
-    id: 'page-instances',
-    label: '全部实例',
-    group: '页面',
-    hint: '/instances',
-    keywords: ['实例列表'],
-    onSelect: () => {},
-  },
+  FIRST_ITEM,
   {
     id: 'page-nodes',
     label: '节点管理',
@@ -163,7 +170,7 @@ describe('CommandPalette 命令面板', () => {
     const onOpenChange = vi.fn()
     render(
       <PaletteHarness
-        items={[{ ...ITEMS[0], onSelect }]}
+        items={[{ ...FIRST_ITEM, onSelect }]}
         onOpenChange={onOpenChange}
       />,
     )
@@ -178,7 +185,7 @@ describe('CommandPalette 命令面板', () => {
 
   it('鼠标点击结果同样执行并关闭', async () => {
     const onSelect = vi.fn()
-    render(<PaletteHarness items={[{ ...ITEMS[0], onSelect }]} />)
+    render(<PaletteHarness items={[{ ...FIRST_ITEM, onSelect }]} />)
     await screen.findByRole('listbox')
 
     fireEvent.click(screen.getByRole('option', { name: /全部实例/ }))

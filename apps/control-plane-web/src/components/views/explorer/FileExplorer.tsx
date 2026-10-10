@@ -200,8 +200,9 @@ export default function FileExplorer({
     for (const f of files) {
       const segs = normalizeManifestPath(f.path).split('/').filter((s) => s !== '')
       let acc = ''
-      for (let i = 0; i < segs.length - 1; i++) {
-        acc = acc === '' ? segs[i] : `${acc}/${segs[i]}`
+      // 只累计末段（文件名）之前的目录段，作为「被文件占据」的目录
+      for (const seg of segs.slice(0, -1)) {
+        acc = acc === '' ? seg : `${acc}/${seg}`
         occupied.add(acc)
       }
     }

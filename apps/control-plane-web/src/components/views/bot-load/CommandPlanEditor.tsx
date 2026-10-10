@@ -41,7 +41,12 @@ export function CommandPlanEditor({ value, onChange, serverErrors = [] }: Comman
     const j = index + dir
     if (j < 0 || j >= value.commands.length) return
     const commands = [...value.commands]
-    ;[commands[index], commands[j]] = [commands[j], commands[index]]
+    const a = commands[index]
+    const b = commands[j]
+    // index 由列表下标传入、j 已由上方边界检查，两者恒有效；判空仅为类型收窄，避免写入 undefined 项。
+    if (a === undefined || b === undefined) return
+    commands[index] = b
+    commands[j] = a
     onChange({ ...value, commands })
   }
 
@@ -51,6 +56,8 @@ export function CommandPlanEditor({ value, onChange, serverErrors = [] }: Comman
 
   const duplicate = (index: number) => {
     const src = value.commands[index]
+    // index 由列表下标传入，恒有效；判空仅为类型收窄（否则会复制出 undefined 项）。
+    if (!src) return
     const copy: BotLoadCommand = {
       ...src,
       id: `${src.id}-copy-${Date.now() % 10000}`,
@@ -82,8 +89,9 @@ export function CommandPlanEditor({ value, onChange, serverErrors = [] }: Comman
       return
     }
     const errs = validateCommandSchedule(parsed)
-    if (errs.length > 0) {
-      setYamlError(errs[0].message)
+    const firstError = errs[0]
+    if (firstError) {
+      setYamlError(firstError.message)
       return
     }
     onChange(parsed)

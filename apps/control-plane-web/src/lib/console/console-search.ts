@@ -43,11 +43,11 @@ export function findConsoleMatches(lines: readonly LogLine[], query: string): Co
   if (!needle) return []
 
   const matches: ConsoleSearchMatch[] = []
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-    const line = lines[lineIndex]
+  // 用 entries() 成对拿（下标，行/列），省掉两处按下标取值与随之而来的判空。
+  for (const [lineIndex, line] of lines.entries()) {
     const cells = consoleLineCells(line)
-    for (let cell = 0; cell < cells.length; cell++) {
-      const haystack = cells[cell].toLocaleLowerCase()
+    for (const [cell, cellText] of cells.entries()) {
+      const haystack = cellText.toLocaleLowerCase()
       if (!haystack) continue
       let at = haystack.indexOf(needle)
       while (at >= 0) {

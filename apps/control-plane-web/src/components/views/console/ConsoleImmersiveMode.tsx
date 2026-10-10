@@ -190,7 +190,9 @@ export function ConsoleImmersiveMode({
     } catch { /* 隐私模式等存不进就算了 */ }
   }, [layout, focusedPaneId])
 
-  const focusedPane = findPane(layout, focusedPaneId) ?? paneLeaves(layout)[0]
+  // 布局恒有至少一个叶子（split 只在叶子上分叉、removePane 不允许移除最后一个），
+  // 故首叶必存在；`?? initialPane` 兜的是「布局树被外部改坏」这种不可达情形。
+  const focusedPane = findPane(layout, focusedPaneId) ?? paneLeaves(layout)[0] ?? initialPane
   const sessionIds = useMemo(() => instanceIdsInTrees([layout]), [layout])
   const visiblePaneIds = useMemo(
     () => (maximizedPaneId ? [maximizedPaneId] : paneLeaves(layout).map((pane) => pane.id)),
@@ -253,7 +255,9 @@ export function ConsoleImmersiveMode({
       }
       const nextFocus = paneLeaves(next)[0]
       setLayout(next)
-      setFocusedPaneId(nextFocus.id)
+      // removePane 只在真移除了一个 pane 时返回树（最后一个 pane 不允许关闭），
+      // 故移除后仍有叶子、首叶必存在；判空属不可达分支，仅为收窄类型。
+      if (nextFocus !== undefined) setFocusedPaneId(nextFocus.id)
       setMaximizedPaneId(null)
     },
     [layout, t],

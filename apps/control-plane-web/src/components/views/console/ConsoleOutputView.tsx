@@ -241,9 +241,10 @@ function renderBody(
     }
     const points = [...cuts].sort((a, b) => a - b)
 
-    for (let k = 0; k < points.length - 1; k++) {
-      const from = points[k]
-      const to = points[k + 1]
+    // 相邻切点成对遍历：`cuts` 恒含 segStart/segEnd，排序后首点即 segStart，
+    // 于是用「上一个切点」游标推进即可，不必按下标取（原为 points[k]/points[k+1]）。
+    let from = points[0] ?? segStart
+    for (const to of points.slice(1)) {
       const hit = cellMatches.find((match) => match.start <= from && match.end >= to)
       const text = segment.text.slice(from - segStart, to - segStart)
       const content = hit ? (
@@ -261,6 +262,7 @@ function renderBody(
         text
       )
       pieces.push(styledSpan(`${index}-${from}`, segment, content))
+      from = to
     }
   })
   return pieces
@@ -501,7 +503,11 @@ export function ConsoleOutputView({
       let ans = 0
       while (lo <= hi) {
         const mid = (lo + hi) >> 1
-        if (offsets[mid] <= y) {
+        const midOffset = offsets[mid]
+        // mid ∈ [0, rows.length-1]，而 offsets 是长度 rows.length+1 的前缀和，故 midOffset
+        // 恒存在；判空只为收窄类型（命中即数据自相矛盾，二分已无意义，直接收束）。
+        if (midOffset === undefined) break
+        if (midOffset <= y) {
           ans = mid
           lo = mid + 1
         } else {
@@ -518,7 +524,8 @@ export function ConsoleOutputView({
   /** 离开底部那一刻的最新 seq。未读数由它与当前 seq 相减推出，不再单独累加计数。 */
   const [pausedAtSeq, setPausedAtSeq] = useState(-1)
 
-  const lastSeq = lines.length > 0 ? lines[lines.length - 1].seq : -1
+  // `at(-1)` 取末行：空缓冲时为空 → -1，与原先的显式空判等价。
+  const lastSeq = lines.at(-1)?.seq ?? -1
   // 用 seq 差而非数组长度差：环形缓冲丢最旧时长度可能不变，长度差会误判成「没有新行」。
   const unseen = follow ? 0 : Math.max(0, lastSeq - pausedAtSeq)
 
@@ -555,7 +562,7 @@ export function ConsoleOutputView({
   // （它原本是第 0 行，旧偏移恒为 0），等高时即 inserted × rowHeight，与原行为一致。
   const firstRowSeqRef = useRef<number | null>(null)
   useLayoutEffect(() => {
-    const nextFirst = rows.length > 0 ? rows[0].seq : null
+    const nextFirst = rows.at(0)?.seq ?? null
     const prevFirst = firstRowSeqRef.current
     firstRowSeqRef.current = nextFirst
     const el = containerRef.current
@@ -698,7 +705,8 @@ export function ConsoleOutputView({
       const rect = el.getBoundingClientRect()
       const contentTop = rowsRef.current?.offsetTop ?? 0
       const index = indexAtOffset(clientY - rect.top + el.scrollTop - contentTop)
-      return rows[Math.min(rows.length - 1, Math.max(0, index))].seq
+      // rows.length === 0 已在上面返回，钳制后的下标必在界内；`?.` 只为收窄类型。
+      return rows.at(Math.min(rows.length - 1, Math.max(0, index)))?.seq ?? null
     },
     [containerRef, indexAtOffset, rows],
   )

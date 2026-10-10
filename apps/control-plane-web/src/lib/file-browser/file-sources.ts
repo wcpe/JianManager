@@ -21,7 +21,8 @@ export function looksBinary(text: string): boolean {
 /** 末段文件名（path 以 "/" 分隔；无段时回退原串）。 */
 function baseName(path: string): string {
   const segs = path.split('/').filter((s) => s !== '')
-  return segs.length > 0 ? segs[segs.length - 1] : path
+  // 无有效段（空串/纯斜杠）回退原串；有段时末段恒存在
+  return segs.at(-1) ?? path
 }
 
 // ── 实例工作目录（FR-213）：懒加载分层 ────────────────────────────────

@@ -183,7 +183,10 @@ export async function uploadFilesEfficient(
       }))
       const res = await deps.precheck(channelId, query, { signal })
       res.forEach((r, i) => {
-        if (r.hit && r.result) hitByKey.set(group[i].key, r.result)
+        // 预查结果与请求条目按序一一对应；取不到对应条目则跳过（服务端多回时也不越界）。
+        const entry = group.at(i)
+        if (entry === undefined) return
+        if (r.hit && r.result) hitByKey.set(entry.key, r.result)
       })
     }
   } catch (err) {
@@ -229,7 +232,11 @@ export async function uploadFilesEfficient(
         // multipart 报量含协议开销，按批总字节封顶折算。
         onUploadProgress: (loaded) => tracker.setInflight(taskId, Math.min(loaded, batchBytes)),
       })
-      out.forEach((r, i) => results.set(batch[i].key, r))
+      out.forEach((r, i) => {
+        // 批次结果与批次条目按上传顺序一一对应；取不到对应条目则跳过。
+        const entry = batch.at(i)
+        if (entry !== undefined) results.set(entry.key, r)
+      })
       completedFiles += batch.length
       tracker.complete(taskId, batchBytes)
     })

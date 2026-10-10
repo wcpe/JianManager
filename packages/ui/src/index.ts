@@ -29,15 +29,24 @@ export * from './components/tabs'
 export * from './components/textarea'
 export * from './components/view-toggle'
 
-export * from './charts/RangePicker'
-export * from './charts/Sparkline'
-export * from './charts/TimeSeriesChart'
-export * from './charts/MonitorChart'
-export * from './charts/MonitorSkeleton'
-export * from './charts/MetricsOverviewStrip'
-// 全量对齐补录：它此前既漏在 barrel 外、又漏在边界测试清单外，于是主控台只能
-// 自己留一份副本（见 apps/control-plane-web/src/components/charts/MetricComparePanel.tsx）。
-export * from './charts/MetricComparePanel'
+// ---- 图表模块：barrel 只透出**类型**，组件一律走深路径（`@jianmanager/ui/charts/*`）----
+//
+// 【为什么值不能再从 barrel 出】图表模块（TimeSeriesChart / MonitorChart）静态 import recharts，
+// 而 barrel 被 120+ 个应用文件引用、几乎每个路由分块都静态可达。于是 recharts 的「被引用面」
+// 与 react 同量级，构建器把它与 react/react-dom 合并进同一个共享 chunk——实测该 chunk
+// 就是 359 kB 的 `charts-*.js`，且**每个 chunk 都要 import 它拿 `require_react`**，
+// 最终被写进 dist/index.html 的 modulepreload：任何页面（含落地页）首屏都得先下完它。
+//
+// 值改走深路径后，recharts 只被真正画图的少数视图同步引用；配合 vite.config.ts 撤掉
+// 第三方命名分块，它才真正落成独立 chunk（LineChart-*.js）并退出首屏预加载——
+// 两处缺一不可：只改分块配置，recharts 仍会被每个 barrel 消费者同步依赖。
+//
+// 类型不受影响：类型导出编译期擦除、不产生任何运行时依赖，故仍从 barrel 透出，
+// 调用方的 `import type { MetricRange } from '@jianmanager/ui'` 无需改动。
+export type { MetricRange, MetricResolution } from './charts/RangePicker'
+export type { SparkPoint } from './charts/Sparkline'
+export type { ChartSeries, ChartReferenceLine } from './charts/TimeSeriesChart'
+export type { MonitorSource, MonitorSeriesHook } from './charts/MonitorSkeleton'
 
 // 跨组件基础设施（FR-496 阶段 6）：焦点环/交互覆盖层常量与 a11y hooks
 export * from './hooks'
