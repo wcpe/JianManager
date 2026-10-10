@@ -139,10 +139,13 @@ export function BotLoadWizard({
 
   const go = (step: WizardStep) => dispatch({ type: 'setStep', step })
   const next = () => {
-    if (stepIndex < WIZARD_STEPS.length - 1) go(WIZARD_STEPS[stepIndex + 1])
+    // 步骤数组为模块级非空字面量，stepIndex 来自 indexOf，索引 +1 越界时取到 undefined 即不动
+    const following = WIZARD_STEPS[stepIndex + 1]
+    if (stepIndex < WIZARD_STEPS.length - 1 && following) go(following)
   }
   const prev = () => {
-    if (stepIndex > 0) go(WIZARD_STEPS[stepIndex - 1])
+    const previous = WIZARD_STEPS[stepIndex - 1]
+    if (stepIndex > 0 && previous) go(previous)
   }
 
   const toggleNode = (nodeId: number) => {

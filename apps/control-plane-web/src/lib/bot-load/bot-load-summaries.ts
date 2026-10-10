@@ -112,34 +112,35 @@ function parseSimpleYamlSchedule(raw: string): BotLoadCommandSchedule | null {
 
   for (const line of lines) {
     if (!line.trim() || line.trim().startsWith('#')) continue
-    const dur = line.match(/^durationMs:\s*(.+)$/)
-    if (dur) {
-      durationMs = Number(unquote(dur[1].trim()))
+    // 下方各规则的捕获组均为必选组（`.+` 至少一字符），故组 1 有值 ⟺ 该行命中；判 undefined 只是类型收窄。
+    const durationValue = line.match(/^durationMs:\s*(.+)$/)?.[1]
+    if (durationValue !== undefined) {
+      durationMs = Number(unquote(durationValue.trim()))
       continue
     }
-    const jit = line.match(/^jitterMs:\s*(.+)$/)
-    if (jit) {
-      jitterMs = Number(unquote(jit[1].trim()))
+    const jitterValue = line.match(/^jitterMs:\s*(.+)$/)?.[1]
+    if (jitterValue !== undefined) {
+      jitterMs = Number(unquote(jitterValue.trim()))
       continue
     }
     if (/^commands:\s*$/.test(line)) continue
-    const item = line.match(/^\s+-\s+id:\s*(.+)$/)
-    if (item) {
+    const itemId = line.match(/^\s+-\s+id:\s*(.+)$/)?.[1]
+    if (itemId !== undefined) {
       if (current) commands.push(current)
-      current = { id: unquote(item[1].trim()), atMs: 0, command: '' }
+      current = { id: unquote(itemId.trim()), atMs: 0, command: '' }
       inRepeat = false
       continue
     }
     if (!current) continue
-    const atMs = line.match(/^\s+atMs:\s*(.+)$/)
-    if (atMs) {
-      current.atMs = Number(unquote(atMs[1].trim()))
+    const atMsValue = line.match(/^\s+atMs:\s*(.+)$/)?.[1]
+    if (atMsValue !== undefined) {
+      current.atMs = Number(unquote(atMsValue.trim()))
       inRepeat = false
       continue
     }
-    const cmd = line.match(/^\s+command:\s*(.+)$/)
-    if (cmd) {
-      current.command = unquote(cmd[1].trim())
+    const commandValue = line.match(/^\s+command:\s*(.+)$/)?.[1]
+    if (commandValue !== undefined) {
+      current.command = unquote(commandValue.trim())
       inRepeat = false
       continue
     }
@@ -149,14 +150,14 @@ function parseSimpleYamlSchedule(raw: string): BotLoadCommandSchedule | null {
       continue
     }
     if (inRepeat && current.repeat) {
-      const iv = line.match(/^\s+intervalMs:\s*(.+)$/)
-      if (iv) {
-        current.repeat.intervalMs = Number(unquote(iv[1].trim()))
+      const intervalValue = line.match(/^\s+intervalMs:\s*(.+)$/)?.[1]
+      if (intervalValue !== undefined) {
+        current.repeat.intervalMs = Number(unquote(intervalValue.trim()))
         continue
       }
-      const ct = line.match(/^\s+count:\s*(.+)$/)
-      if (ct) {
-        current.repeat.count = Number(unquote(ct[1].trim()))
+      const countValue = line.match(/^\s+count:\s*(.+)$/)?.[1]
+      if (countValue !== undefined) {
+        current.repeat.count = Number(unquote(countValue.trim()))
         continue
       }
     }

@@ -5,8 +5,16 @@ import { RangePicker, type MetricRange } from '@jianmanager/ui/charts/RangePicke
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
-/** 各实例对比图可切的指标（FR-060 #2：节点上各实例 TPS/MSPT/堆/线程对比）。 */
-export const COMPARE_METRICS: { key: string; labelKey: string; fmt: (v: number) => string }[] = [
+/** 单个对比指标的规格（FR-060 #2）。 */
+export interface CompareMetric {
+  key: string
+  labelKey: string
+  fmt: (v: number) => string
+}
+
+/** 各实例对比图可切的指标（FR-060 #2：节点上各实例 TPS/MSPT/堆/线程对比）。
+ * 声明为非空元组：首项恒存在，`NodeInstanceCompare` 的默认指标无需额外判空。 */
+export const COMPARE_METRICS: [CompareMetric, ...CompareMetric[]] = [
   { key: 'inst_tps', labelKey: 'metrics.tps', fmt: (v) => v.toFixed(1) },
   { key: 'inst_mspt', labelKey: 'metrics.mspt', fmt: (v) => `${v.toFixed(1)}ms` },
   { key: 'inst_heap_used', labelKey: 'metrics.heap', fmt: formatFileSize },

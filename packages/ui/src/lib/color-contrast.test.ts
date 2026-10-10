@@ -94,11 +94,19 @@ function parseStylesheet(css: string, sourceName: string): Stylesheet {
 
   const blockPattern = /([^{}]+)\{([^{}]*)\}/g
   for (const block of withoutComments.matchAll(blockPattern)) {
-    const selectors = block[1]
+    const selectorText = block[1]
+    const declarationText = block[2]
+    // 两个捕获组都是必选组，匹配成功即存在；缺失说明 blockPattern 被改成了可选组。
+    // 此处抛错而不是当作空串继续解析——否则残缺解析会让对比度断言基于错误的值而假绿。
+    if (selectorText === undefined || declarationText === undefined) {
+      throw new Error(`${sourceName} 的 CSS 块缺少选择器或声明体：${block[0]}`)
+    }
+
+    const selectors = selectorText
       .split(',')
       .map((selector) => selector.trim())
       .filter(Boolean)
-    const declarations = parseDeclarations(block[2], sourceName)
+    const declarations = parseDeclarations(declarationText, sourceName)
 
     for (const selector of selectors) {
       const classified = classifySelector(selector)

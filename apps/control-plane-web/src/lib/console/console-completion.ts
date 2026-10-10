@@ -68,8 +68,10 @@ export interface CompletionState {
 
 /** 一组字符串的最长公共前缀（空集/单元素退化正确）。 */
 export function longestCommonPrefix(items: readonly string[]): string {
-  if (items.length === 0) return ''
-  let prefix = items[0]
+  const first = items[0]
+  // 空集：没有可作基准的首元素，公共前缀为空串。
+  if (first === undefined) return ''
+  let prefix = first
   for (const item of items.slice(1)) {
     let i = 0
     while (i < prefix.length && i < item.length && prefix[i] === item[i]) i++
@@ -82,7 +84,8 @@ export function longestCommonPrefix(items: readonly string[]): string {
 /** 光标所在（或紧邻其左）的 token 边界。光标在空白处即视为一个新的空 token。 */
 function tokenAt(value: string, caret: number): { start: number; end: number } {
   let start = caret
-  while (start > 0 && !/\s/.test(value[start - 1])) start--
+  // start > 0 保证下标在界内；用 charAt 取字符，省掉一次判空（越界只会拿到空串，不会走到）。
+  while (start > 0 && !/\s/.test(value.charAt(start - 1))) start--
   return { start, end: caret }
 }
 

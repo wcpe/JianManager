@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import {
   AGGREGATE_MAX_FILE_BYTES,
   HASH_MAX_FILE_BYTES,
@@ -175,6 +176,23 @@ describe('sha256HexOfBlob', () => {
       expect(await sha256HexOfBlob(new Blob([]))).toBe(
         'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
       )
+    } finally {
+      vi.stubGlobal('crypto', originalCrypto)
+    }
+  })
+
+  it('JS 兜底跨多个 64 字节块时与 node:crypto 逐字节一致（覆盖消息调度/压缩块边界）', async () => {
+    const originalCrypto = globalThis.crypto
+    vi.stubGlobal('crypto', {})
+    try {
+      // 55/56/63/64/65 覆盖补位与块边界，其余覆盖多块与大于一页的输入。
+      const sizes = [0, 1, 55, 56, 63, 64, 65, 119, 120, 127, 128, 1000, 65543, 1 << 20]
+      for (const size of sizes) {
+        const bytes = new Uint8Array(size)
+        for (let i = 0; i < size; i += 1) bytes[i] = (i * 31 + 7) & 0xff
+        const expected = createHash('sha256').update(bytes).digest('hex')
+        await expect(sha256HexOfBlob(new Blob([bytes])), `size=${size}`).resolves.toBe(expected)
+      }
     } finally {
       vi.stubGlobal('crypto', originalCrypto)
     }

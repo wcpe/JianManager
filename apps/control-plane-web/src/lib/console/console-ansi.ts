@@ -118,7 +118,8 @@ function applySgr(style: AnsiStyle, params: string): AnsiStyle {
 
   for (let i = 0; i < codes.length; i++) {
     const code = codes[i]
-    if (!Number.isInteger(code)) continue
+    // i 由循环条件保证在界内，`code` 取不到属不可达分支；与「非整数参数」同样跳过。
+    if (code === undefined || !Number.isInteger(code)) continue
     if (code === 0) {
       next = {}
     } else if (code === 1) {
@@ -241,7 +242,9 @@ export function ansiPlainText(raw: string): AnsiPlainText {
       continue
     }
     if (!isSwallowedControl(raw.charCodeAt(i))) {
-      chars.push(raw[i])
+      // 用 charAt 取字符而不是 raw[i]：i 由循环条件保证在界内（两者取值相同），
+      // 但 charAt 的返回类型是确定 string，不必为此处再写一次判空。
+      chars.push(raw.charAt(i))
       map.push(i)
     }
     i++
@@ -257,7 +260,8 @@ export function ansiPlainText(raw: string): AnsiPlainText {
  */
 export function ansiSliceFromPlain(raw: string, map: number[], plainIndex: number): string {
   if (plainIndex <= 0) return raw
-  const cut = plainIndex < map.length ? map[plainIndex] : raw.length
+  // `at` 对越界下标给 undefined，正好等价于原分支「plainIndex 超出 map 就用原串长度」。
+  const cut = map.at(plainIndex) ?? raw.length
   let carried = ''
   let i = 0
   while (i < cut) {

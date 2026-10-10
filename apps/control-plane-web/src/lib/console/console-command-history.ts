@@ -109,6 +109,8 @@ export function searchCommandHistory(history: readonly string[], query: string):
   const out: CommandHistoryMatch[] = []
   for (let i = history.length - 1; i >= 0; i--) {
     const value = history[i]
+    // i 由循环条件保证在界内，判空属不可达分支（仅为收窄类型）。
+    if (value === undefined) continue
     if (seen.has(value)) continue
     if (!needle) {
       seen.add(value)

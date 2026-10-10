@@ -132,7 +132,8 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose, search }: 
         if (seq === reqSeq.current) setLoading(false)
       }
     },
-    [instanceId, t],
+    // search 是外壳注入的模块级取数函数，引用恒定。
+    [instanceId, t, search],
   )
 
   // 保持 runSearchRef 指向最新 runSearch（供重试间接调用）。

@@ -14,7 +14,8 @@
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
+import { TimeSeriesChart } from '@jianmanager/ui/charts/TimeSeriesChart'
+import type { ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
 import { KPI_I18N, activeClientsHintKey, clientDistEmptyI18nKey, formatKpiRate, resolveActiveClients, resolveClientDistEmptyKind, resolveUpdateRates } from '@/lib/client-dist/client-dist-kpi'
 import type { ObsWindow } from '@/lib/metrics/obs-window'
 import type { ClientDistStats, ClientDistObservability } from '@/lib/client-dist/client-dist-stats-contracts'

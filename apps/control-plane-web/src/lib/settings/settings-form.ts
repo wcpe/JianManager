@@ -101,7 +101,10 @@ export function durationToMillis(value: string): number | undefined {
   let matched = false
   let m: RegExpExecArray | null
   while ((m = re.exec(value)) !== null) {
-    const factor = unitFactor[m[2]]
+    // 单位组为必选组（`(ns|us|µs|μs|ms|s|m|h)`），命中即存在；判 undefined 仅用于类型收窄。
+    const unit = m[2]
+    if (unit === undefined) return undefined
+    const factor = unitFactor[unit]
     if (factor === undefined) return undefined
     total += Number(m[1]) * factor
     matched = true

@@ -37,7 +37,9 @@ export function canNavForward(state: NavHistoryState): boolean {
 /** 后退一步；无历史时返回原 state。 */
 export function navBack(state: NavHistoryState): NavHistoryState {
   if (state.stack.length === 0) return state
-  const prev = state.stack[state.stack.length - 1]
+  const prev = state.stack.at(-1)
+  // 上面已判非空，故栈顶恒存在；判空只为收窄类型。
+  if (prev === undefined) return state
   return {
     stack: state.stack.slice(0, -1),
     current: prev,
@@ -48,10 +50,12 @@ export function navBack(state: NavHistoryState): NavHistoryState {
 /** 前进一步。 */
 export function navForward(state: NavHistoryState): NavHistoryState {
   if (state.forward.length === 0) return state
-  const [next, ...rest] = state.forward
+  const next = state.forward[0]
+  // 上面已判非空，故首项恒存在；判空只为收窄类型。
+  if (next === undefined) return state
   return {
     stack: [...state.stack, state.current],
     current: next,
-    forward: rest,
+    forward: state.forward.slice(1),
   }
 }

@@ -59,6 +59,17 @@ const LEVEL_ALIASES: Record<string, LogLevel> = {
   TRACE: 'TRACE',
 }
 
+/**
+ * 匹配组 → 日志级别。
+ *
+ * 下面两个前缀正则的级别组都是**必参与匹配**的（`(INFO|WARNING|…)` 非可选），组下标在运行时
+ * 必有值；参数收 `undefined` 只为收窄 `RegExpExecArray` 的下标类型。表外 token 一律 undefined
+ * （「前缀不匹配整体降级」，不猜级别）。
+ */
+function toLevel(token: string | undefined): LogLevel | undefined {
+  return token === undefined ? undefined : LEVEL_ALIASES[token]
+}
+
 const LEVEL_TOKEN = '(INFO|WARNING|WARN|ERROR|SEVERE|FATAL|DEBUG|TRACE)'
 
 /**
@@ -143,17 +154,18 @@ function parsePrefix(raw: string): PrefixResult {
   if (threadMatch) {
     ts = threadMatch[1]
     // 线程名（threadMatch[2]）不入模型：spec §1.1 无该字段，需要时从 raw 取。
-    level = LEVEL_ALIASES[threadMatch[3]]
+    level = toLevel(threadMatch[3])
     consumed = threadMatch[0].length
   } else if (shortMatch) {
     ts = shortMatch[1]
-    level = LEVEL_ALIASES[shortMatch[2]]
+    level = toLevel(shortMatch[2])
     consumed = shortMatch[0].length
   } else {
     // MC 前缀未命中时，再认结构化 level=（slog/logrus）。不改 body 消费偏移——
     // level 键散落在正文中，行模型仍保留完整原文。
     const structured = STRUCTURED_LEVEL.exec(plain)
-    if (structured) level = LEVEL_ALIASES[structured[1].toUpperCase()]
+    // 该正则带 `i` 标志，命中值可能小写，故查表前先大写归一。
+    if (structured) level = toLevel(structured[1]?.toUpperCase())
   }
 
   const afterTime = plain.slice(consumed)
@@ -161,8 +173,10 @@ function parsePrefix(raw: string): PrefixResult {
   // 堆栈帧不取来源：`\tat com.foo.Bar(...)` 无 `[...]`，但避免 `[...]` 误伤仍显式跳过。
   if (!STACK_FRAME.test(afterTime) && !STACK_MORE.test(afterTime)) {
     const sourceMatch = PREFIX_SOURCE.exec(afterTime)
-    if (sourceMatch && !DIGITS_AND_COLONS_ONLY.test(sourceMatch[1])) {
-      source = sourceMatch[1]
+    const sourceToken = sourceMatch?.[1]
+    // 来源组必参与匹配（`[^[\]\s]{1,32}` 非可选），token 取不到属不可达分支。
+    if (sourceMatch && sourceToken !== undefined && !DIGITS_AND_COLONS_ONLY.test(sourceToken)) {
+      source = sourceToken
       consumed += sourceMatch[0].length
     }
   }

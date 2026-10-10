@@ -38,16 +38,19 @@ interface DraftState {
   inlineEdited?: boolean
 }
 
+/** 单项草稿初值（与清单同源；buildDrafts 与草稿兜底共用，保证两者构造方式一致）。 */
+function draftFromItem(it: ConfigSurfaceItem): DraftState {
+  return {
+    source: it.source,
+    inlineValue: it.inlineValue ?? (it.effectiveSource === 'inline' ? it.effectiveValue : ''),
+    filePath: it.filePath ?? 'server.properties',
+  }
+}
+
 /** 从清单构造草稿（保存前不改真源）。 */
 function buildDrafts(items: ConfigSurfaceItem[]): Record<string, DraftState> {
   const out: Record<string, DraftState> = {}
-  for (const it of items) {
-    out[it.itemKey] = {
-      source: it.source,
-      inlineValue: it.inlineValue ?? (it.effectiveSource === 'inline' ? it.effectiveValue : ''),
-      filePath: it.filePath ?? 'server.properties',
-    }
-  }
+  for (const it of items) out[it.itemKey] = draftFromItem(it)
   return out
 }
 
@@ -108,8 +111,16 @@ function SurfaceEditor({
   const { t } = useTranslation()
   const [drafts, setDrafts] = useState<Record<string, DraftState>>(() => buildDrafts(items))
 
-  const setDraft = (itemKey: string, patch: Partial<DraftState>) =>
-    setDrafts((d) => ({ ...d, [itemKey]: { ...d[itemKey], ...patch } }))
+  /**
+   * 取某清单项的草稿。
+   *
+   * `buildDrafts(items)` 覆盖全部 item，故命中是常态；万一取不到（items 已变而编辑器尚未按
+   * `key` 重挂的那一帧），按同一构造方式用清单现值兜底——与「草稿表由当前 items 重建」同义。
+   */
+  const draftOf = (it: ConfigSurfaceItem): DraftState => drafts[it.itemKey] ?? draftFromItem(it)
+
+  const setDraft = (it: ConfigSurfaceItem, patch: Partial<DraftState>) =>
+    setDrafts((d) => ({ ...d, [it.itemKey]: { ...(d[it.itemKey] ?? draftFromItem(it)), ...patch } }))
 
   // 已改动项（来源或内联值变化）。
   const changed = items.filter((it) => {
@@ -123,7 +134,7 @@ function SurfaceEditor({
   const save = () => {
     onSave(
       changed.map((it) => {
-        const d = drafts[it.itemKey]
+        const d = draftOf(it)
         if (d.source !== 'inline') {
           return { itemKey: it.itemKey, source: 'file' as const, filePath: d.filePath, fileKey: it.fileKey }
         }
@@ -172,8 +183,8 @@ function SurfaceEditor({
                 key={it.itemKey}
                 instanceId={instanceId}
                 item={it}
-                draft={drafts[it.itemKey]}
-                onChange={(patch) => setDraft(it.itemKey, patch)}
+                draft={draftOf(it)}
+                onChange={(patch) => setDraft(it, patch)}
                 renderLink={renderLink}
               />
             ))}

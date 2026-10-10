@@ -22,7 +22,8 @@ export function scopeKindOf(scopeKey: string): ScopeKind {
   const key = scopeKey.trim()
   if (!key || key === 'all') return 'all'
   const kind = key.split(':')[0]
-  return SCOPED_KINDS.includes(kind) ? (kind as ScopeKind) : 'all'
+  // key 非空（上方已排除），split 首段必存在；判 undefined 仅用于类型收窄。
+  return kind !== undefined && SCOPED_KINDS.includes(kind) ? (kind as ScopeKind) : 'all'
 }
 
 /** 解析 scopeKey 的取值（all 无值）。 */

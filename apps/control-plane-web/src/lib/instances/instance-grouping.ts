@@ -335,7 +335,8 @@ function keyOfFor(dim: GroupDimension, extra?: InstanceGroupKeyMap) {
       case 'network':
       case 'groupTree': {
         const keys = extra?.get(inst.id)
-        return keys && keys.length > 0 ? keys[0] : ''
+        // 首项即分组键；无 key（或空数组）归入「未分组」（空串）。
+        return keys?.[0] ?? ''
       }
       default:
         return ''

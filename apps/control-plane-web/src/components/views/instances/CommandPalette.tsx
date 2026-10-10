@@ -109,7 +109,9 @@ export default function CommandPalette({
       scrollIntoView(listRef.current, activeIndex - 1)
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      if (activeIndex >= 0) run(entries[activeIndex])
+      // activeIndex 空列表时为 -1，否则已被 clamp 在 [0, entries.length-1]，故取到的项恒存在。
+      const active = entries[activeIndex]
+      if (active) run(active)
     }
   }
 

@@ -95,8 +95,9 @@ export interface CapabilitySubject {
 
 /** 按 (type, role) 取本地降级兜底画像（仅在响应未下发 `capabilities` 时使用）。 */
 export function capabilityProfileFor(type?: string, role?: string): InstanceCapabilityProfile {
-  if (type && role && CAPABILITY_REGISTRY[`${type}:${role}`]) return CAPABILITY_REGISTRY[`${type}:${role}`]
-  return UNIVERSAL_FALLBACK
+  // 注册表按 `type:role` 取值；缺 type/role 或未命中注册表都走 universal 兜底。
+  const hit = type && role ? CAPABILITY_REGISTRY[`${type}:${role}`] : undefined
+  return hit ?? UNIVERSAL_FALLBACK
 }
 
 /**

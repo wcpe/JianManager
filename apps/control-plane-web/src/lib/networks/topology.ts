@@ -362,9 +362,11 @@ export function groupTopology(topo: Topology, groups: TopoGroupBrief[]): Grouped
   const ungrouped: TopoNode[] = []
 
   for (const n of topo.nodes) {
-    const gis = hitGroups.get(n.id)
-    if (gis && gis.length > 0) {
-      bandNodes[gis[0]].push(n) // 落首个所属带
+    // 落首个所属带：`hitGroups` 的值为 push 出来的非空数组，首项必存在；带数组与 groups 同长同序，恒存在。
+    const bandIndex = hitGroups.get(n.id)?.[0]
+    const band = bandIndex === undefined ? undefined : bandNodes[bandIndex]
+    if (band) {
+      band.push(n)
     } else {
       ungrouped.push(n)
     }
@@ -373,8 +375,9 @@ export function groupTopology(topo: Topology, groups: TopoGroupBrief[]): Grouped
   const bands: TopoBand[] = []
   groups.forEach((g, gi) => {
     // 仅保留有节点的带，避免空带占位（空 network 无成员则不出现在拓扑）。
-    if (bandNodes[gi].length > 0) {
-      bands.push({ id: g.id, name: g.name, nodes: bandNodes[gi] })
+    const nodes = bandNodes[gi]
+    if (nodes && nodes.length > 0) {
+      bands.push({ id: g.id, name: g.name, nodes })
     }
   })
   if (ungrouped.length > 0) {
@@ -518,15 +521,19 @@ export function groupTopologyByDimension(
   const bandNodes: TopoNode[][] = specs.map(() => [])
   const ungrouped: TopoNode[] = []
   for (const n of topo.nodes) {
-    const arr = hit.get(n.id)
-    if (arr && arr.length > 0) bandNodes[arr[0]].push(n)
+    // 落首个所属带：`hit` 的值为 push 出来的非空数组，首项必存在；带数组与 specs 同长同序，恒存在。
+    const bandIndex = hit.get(n.id)?.[0]
+    const band = bandIndex === undefined ? undefined : bandNodes[bandIndex]
+    if (band) band.push(n)
     else ungrouped.push(n)
   }
 
   const bands: TopoBand[] = []
   specs.forEach((s, si) => {
-    if (bandNodes[si].length > 0) {
-      bands.push({ id: null, key: s.key, name: s.name, parent: s.parent, nodes: bandNodes[si] })
+    // 仅保留有节点的带（bandNodes 与 specs 同长同序，该索引恒存在）。
+    const nodes = bandNodes[si]
+    if (nodes && nodes.length > 0) {
+      bands.push({ id: null, key: s.key, name: s.name, parent: s.parent, nodes })
     }
   })
   if (ungrouped.length > 0) {

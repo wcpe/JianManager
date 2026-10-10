@@ -46,12 +46,16 @@ function expandField(field: string, min: number, max: number): Set<number> {
   const out = new Set<number>()
   for (const term of field.split(',')) {
     const [rangePart, stepPart] = term.split('/')
+    // split 至少返回一项，故 rangePart 恒存在（空 term 已由 isValidField 拦下）；判空只为收窄类型。
+    if (rangePart === undefined) continue
     const step = stepPart ? parseInt(stepPart, 10) : 1
     let lo = min
     let hi = max
     if (rangePart !== '*') {
       if (rangePart.includes('-')) {
         const [a, b] = rangePart.split('-').map((x) => parseInt(x, 10))
+        // 含 '-' 时 split 至少返回两项，故 a/b 恒存在；判空只为收窄类型。
+        if (a === undefined || b === undefined) continue
         lo = a
         hi = b
       } else {
@@ -76,6 +80,8 @@ export function nextRuns(expr: string, count = 5, from: Date = new Date()): Date
   const fields = trimmed.split(/\s+/)
   if (fields.length !== 5 || !validateCron(trimmed).valid) return []
   const [minF, hourF, domF, monF, dowF] = fields
+  // 上面已判定字段数恰为 5 且每段都通过 isValidField（空段不合法），故五段恒存在；判空只为收窄类型。
+  if (!minF || !hourF || !domF || !monF || !dowF) return []
   const mins = expandField(minF, 0, 59)
   const hours = expandField(hourF, 0, 23)
   const doms = expandField(domF, 1, 31)
@@ -133,6 +139,8 @@ export function describeCron(expr: string): CronDescription | null {
   const fields = expr.trim().split(/\s+/)
   if (fields.length !== 5 || !validateCron(expr).valid) return null
   const [min, hour, dom, mon, dow] = fields
+  // 上面已判定字段数恰为 5 且每段都通过 isValidField（空段不合法），故五段恒存在；判空只为收窄类型。
+  if (!min || !hour || !dom || !mon || !dow) return null
   const isNum = (s: string) => /^\d+$/.test(s)
   const allStar = dom === '*' && mon === '*' && dow === '*'
   if (allStar && /^\*\/\d+$/.test(min) && hour === '*') {

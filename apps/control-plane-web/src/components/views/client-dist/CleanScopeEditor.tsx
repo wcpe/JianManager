@@ -101,8 +101,8 @@ export function CleanScopeEditor({
       all.add(d)
       const segs = d.split('/').filter(Boolean)
       let acc = ''
-      for (let i = 0; i < segs.length; i++) {
-        acc = acc === '' ? segs[i] : `${acc}/${segs[i]}`
+      for (const seg of segs) {
+        acc = acc === '' ? seg : `${acc}/${seg}`
         all.add(acc)
       }
     }

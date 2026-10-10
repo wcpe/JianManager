@@ -295,6 +295,9 @@ export function VirtualizedGroupedInstanceTable({
   const heightAt = useCallback(
     (index: number) => {
       const row = rows[index]
+      // index 由虚拟窗口按 [0, rows.length) 给出，故 row 恒存在；判空只为收窄类型，
+      // 兜底取实例行常量，与平铺表的「越界项按实例行占位」同判据。
+      if (row === undefined) return INSTANCE_ROW_HEIGHT
       if (row.kind === 'group') return INSTANCE_GROUP_ROW_HEIGHT
       return instanceRowHeight(isRowExpanded?.(row.instance) === true)
     },

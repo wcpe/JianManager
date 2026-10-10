@@ -69,8 +69,9 @@ export interface ConsoleCommandBarProps {
 /** 从光标向前删一个词（先吃空白、再吃非空白），返回新值与新光标位。 */
 function deleteWordBefore(value: string, caret: number): { value: string; caret: number } {
   let at = caret
-  while (at > 0 && /\s/.test(value[at - 1])) at--
-  while (at > 0 && !/\s/.test(value[at - 1])) at--
+  // `at > 0` 保证下标在界内；用 charAt 取字符，省掉一次判空（越界只会拿到空串，不会走到）。
+  while (at > 0 && /\s/.test(value.charAt(at - 1))) at--
+  while (at > 0 && !/\s/.test(value.charAt(at - 1))) at--
   return { value: value.slice(0, at) + value.slice(caret), caret: at }
 }
 
@@ -161,9 +162,11 @@ export function ConsoleCommandBar({
       if (historyIndex === -1) {
         if (delta === 1) return // 已在草稿，↓ 无处可去
         draftRef.current = value
-        const index = history.length - 1
-        setHistoryIndex(index)
-        applyEdit(history[index], history[index].length)
+        // history.length === 0 已在函数开头返回，末条必存在（判空仅为收窄类型）。
+        const latest = history.at(-1)
+        if (latest === undefined) return
+        setHistoryIndex(history.length - 1)
+        applyEdit(latest, latest.length)
         return
       }
       const next = historyIndex + delta
@@ -173,8 +176,11 @@ export function ConsoleCommandBar({
         applyEdit(draftRef.current, draftRef.current.length)
         return
       }
+      // next 已被上面两个边界分支夹在 [0, history.length) 内，取不到属不可达分支。
+      const nextLine = history[next]
+      if (nextLine === undefined) return
       setHistoryIndex(next)
-      applyEdit(history[next], history[next].length)
+      applyEdit(nextLine, nextLine.length)
     },
     [applyEdit, history, historyIndex, value],
   )
@@ -203,7 +209,9 @@ export function ConsoleCommandBar({
 
     if (state.candidates.length === 1) {
       // 唯一候选直接补：这不是「盲补」，是无歧义。
-      const next = applyCompletion(input.value, state, state.candidates[0])
+      const only = state.candidates.at(0)
+      if (only === undefined) return
+      const next = applyCompletion(input.value, state, only)
       applyEdit(next.value, next.caret)
       setCompletion(null)
       return
@@ -257,7 +265,10 @@ export function ConsoleCommandBar({
         // 候选列表开着时 Enter 是「确认候选」而非「提交命令」：否则用户刚打开候选就
         // 误提交一条半截命令。要提交先 Esc 关列表。
         event.preventDefault()
-        acceptCompletion(candidates[completion.index])
+        // 候选集恒非空（computeCompletion 对空候选返回 null），index 又由取模维持在界内，
+        // 取不到属不可达分支。
+        const candidate = candidates[completion.index]
+        if (candidate !== undefined) acceptCompletion(candidate)
         return
       }
       if (event.key === 'Escape') {

@@ -62,7 +62,8 @@ export function DirectorConsolePage({
 
   // 首次进入 / 仅一个场景时自动激活第一个，免去用户手点。
   useEffect(() => {
-    if (activeId === null && scenes.length > 0) onActivate(scenes[0].id)
+    const first = scenes.at(0)
+    if (activeId === null && first !== undefined) onActivate(first.id)
   }, [activeId, scenes, onActivate])
 
   // 只挂载预热（含 active）场景的画布；cold 场景不挂载（不建 WS）。

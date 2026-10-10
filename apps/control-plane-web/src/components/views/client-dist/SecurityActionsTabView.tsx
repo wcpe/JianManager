@@ -507,7 +507,7 @@ function KeyStateDialog({
                 <SelectContent>
                   {KEY_STATE_OPTIONS.map((s) => (
                     <SelectItem key={s} value={s}>
-                      {t(`clientDistOps.actions.state${s[0].toUpperCase()}${s.slice(1)}`)}
+                      {t(`clientDistOps.actions.state${s.charAt(0).toUpperCase()}${s.slice(1)}`)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -642,7 +642,7 @@ function ChannelProtectionDialog({
                 <SelectContent>
                   {PROT_MODE_OPTIONS.map((m) => (
                     <SelectItem key={m} value={m}>
-                      {t(`clientDistOps.actions.mode${m === 'retry_after' ? 'RetryAfter' : m[0].toUpperCase() + m.slice(1)}`)}
+                      {t(`clientDistOps.actions.mode${m === 'retry_after' ? 'RetryAfter' : m.charAt(0).toUpperCase() + m.slice(1)}`)}
                     </SelectItem>
                   ))}
                 </SelectContent>

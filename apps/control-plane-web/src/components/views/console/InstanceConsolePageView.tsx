@@ -215,11 +215,15 @@ export function InstanceConsolePageView({
   const activateSiblingTab = (current: TabKey, delta: 1 | -1) => {
     const index = visibleTabs.indexOf(current)
     const next = visibleTabs[(index + delta + visibleTabs.length) % visibleTabs.length]
+    // 取模后下标必在界内（visibleTabs 为空时整个取值为 NaN，属不可达）；判空仅为收窄类型。
+    if (next === undefined) return
     tabRefs.current.get(next)?.focus()
     onActiveTabChange(next)
   }
   const activateEdgeTab = (edge: 'first' | 'last') => {
-    const key = edge === 'first' ? visibleTabs[0] : visibleTabs[visibleTabs.length - 1]
+    // 首/末 tab：空集合时取不到，属不可达分支（键盘事件只可能来自已渲染的 tab 按钮）。
+    const key = edge === 'first' ? visibleTabs.at(0) : visibleTabs.at(-1)
+    if (key === undefined) return
     tabRefs.current.get(key)?.focus()
     onActiveTabChange(key)
   }
