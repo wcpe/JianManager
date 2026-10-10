@@ -177,6 +177,79 @@ describe('ClientDistOpsPage 区块（迁自旧监控页用例）', () => {
     expect(screen.queryByText('m-bbbb')).not.toBeInTheDocument()
   })
 
+  /**
+   * 下钻「以本次为准」回归锁（P0 正确性）：连续点两个不同维度的下钻，后一次必须丢弃前一次
+   * 留下的过滤条件。原实现把联动上下文**累积**在 state 里、且对 URL 四键传 `undefined`
+   * （`updateClientDistQuery` 对 undefined 的语义是「保留旧值」），于是「先点 A 维度、再点 B 维度」
+   * 会双重过滤（日志被错误过滤，甚至过滤成空表）。
+   */
+  it('下钻「以本次为准」：先点错误码（URL 键）再点机器「看日志」，不残留错误码过滤', async () => {
+    loginAs(ADMIN_TOKEN)
+    const user = userEvent.setup()
+    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops?tab=monitor' })
+    await screen.findByText('近 1h 错误')
+
+    // 维度 A：错误码 TopN → 写入 URL `errCode`
+    const topErrors = await screen.findByText('错误码 Top 10')
+    const errPanel = topErrors.closest('[data-slot="panel"]') ?? topErrors.parentElement
+    await user.click(within(errPanel as HTMLElement).getByRole('button', { name: /INVALID_CLIENT_KEY/ }))
+    expect(await screen.findByText('errCode=INVALID_CLIENT_KEY')).toBeInTheDocument()
+
+    // 维度 B：切回「机器 / 客户端」，点某台机器的「看日志」
+    await user.click(screen.getByRole('tab', { name: '机器 / 客户端' }))
+    const matches = await screen.findAllByText('m-aaaa')
+    const row = matches
+      .map((el) => el.closest('tr'))
+      .find((tr) => tr && within(tr).queryByRole('button', { name: '看日志' }))
+    expect(row).not.toBeNull()
+    await user.click(within(row as HTMLElement).getByRole('button', { name: '看日志' }))
+
+    // 最终过滤条件只含本次维度：错误码既不显示、也未被带进 URL。
+    expect(await screen.findByText('machine=m-aaaa')).toBeInTheDocument()
+    expect(screen.queryByText('errCode=INVALID_CLIENT_KEY')).not.toBeInTheDocument()
+    expect(new URLSearchParams(window.location.search).get('errCode')).toBeNull()
+  })
+
+  it('下钻「以本次为准」：先点平台分布（非 URL 维度）再点机器「看日志」，不残留平台过滤', async () => {
+    loginAs(ADMIN_TOKEN)
+    const user = userEvent.setup()
+    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops?tab=clients' })
+    await screen.findByText('客户端运行态')
+
+    // 维度 A：平台分布（platform 只进页内 state，不是 URL 键）
+    const platformTitle = await screen.findByText('平台分布')
+    const platformPanel = platformTitle.closest('[data-slot="panel"]') ?? platformTitle.parentElement
+    await user.click(within(platformPanel as HTMLElement).getByRole('button', { name: /Linux/ }))
+    expect(await screen.findByText('platform=linux')).toBeInTheDocument()
+
+    // 维度 B：同一 Tab 内点某台机器的「看日志」
+    await user.click(screen.getByRole('tab', { name: '机器 / 客户端' }))
+    const matches = await screen.findAllByText('m-aaaa')
+    const row = matches
+      .map((el) => el.closest('tr'))
+      .find((tr) => tr && within(tr).queryByRole('button', { name: '看日志' }))
+    expect(row).not.toBeNull()
+    await user.click(within(row as HTMLElement).getByRole('button', { name: '看日志' }))
+
+    expect(await screen.findByText('machine=m-aaaa')).toBeInTheDocument()
+    expect(screen.queryByText('platform=linux')).not.toBeInTheDocument()
+  })
+
+  it('下钻「以本次为准」：结果分布「全部」（onLink({}) ）能清空已有联动过滤', async () => {
+    loginAs(ADMIN_TOKEN)
+    const user = userEvent.setup()
+    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops?tab=overview&machineId=m-aaaa' })
+    await screen.findByTestId('ops-overview')
+
+    const distTitle = await screen.findByText('请求结果分布')
+    const distPanel = distTitle.closest('[data-slot="panel"]') ?? distTitle.parentElement
+    await user.click(within(distPanel as HTMLElement).getAllByRole('button')[0])
+
+    // 联动条整体消失（而不是只剩半截），URL 里的 machineId 也被清掉。
+    await waitFor(() => expect(screen.queryByText('已联动过滤日志：')).not.toBeInTheDocument())
+    expect(new URLSearchParams(window.location.search).get('machineId')).toBeNull()
+  })
+
   it('处置 Tab（seg=actions）：三块处置表单 + 动作表齐备', async () => {
     loginAs(ADMIN_TOKEN)
     renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops?tab=actions' })

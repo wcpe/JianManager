@@ -104,7 +104,10 @@ export function SessionMetrics({
       (p.barrier?.arrived ?? 0) > 0,
   )
 
-  const nodeIds = collectNodeIds(points).slice(0, 6)
+  // 执行节点健康只列前 6 个（多节点会话下节点数可远超 6）：截断了必须说，否则会被读成「就这几个节点」。
+  const allNodeIds = collectNodeIds(points)
+  const nodeIds = allNodeIds.slice(0, 6)
+  const nodesTruncated = allNodeIds.length > nodeIds.length
 
   const legacySeries: ChartSeries[] = [
     {
@@ -192,6 +195,9 @@ export function SessionMetrics({
               )
             })}
           </ul>
+        )}
+        {nodesTruncated && (
+          <p className="mt-1 text-xs text-muted-foreground">{t('search.truncated')}</p>
         )}
       </ChartBlock>
 

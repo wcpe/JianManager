@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- 受控视图与 Tab 取值表同文件导出（仅影响 Fast Refresh） */
 /**
  * @file PlayersPageView：玩家管理页（在线玩家 / 实时事件 / 封禁记录 / 白名单四个 Tab）的受控视图，
  *       取数、SSE 订阅、写动作与 toast 由应用容器负责。
@@ -52,8 +53,12 @@ import type { BanRecord, OnlinePlayer, OnlinePlayersResult, WhitelistResult } fr
 /** 页内四个 Tab：在线玩家 / 实时事件 / 封禁记录 / 白名单。 */
 export type PlayerTab = 'online' | 'live' | 'bans' | 'whitelist'
 
-/** 页内 Tab 顺序（手写下划线式导航，与既有可达名一致）。 */
-const PLAYER_TABS: PlayerTab[] = ['online', 'live', 'bans', 'whitelist']
+/**
+ * 页内 Tab 顺序（手写下划线式导航，与既有可达名一致）。
+ * 导出供容器做 URL `tab` 参数的合法值集合（`useTabParam('tab', 'online', PLAYER_TABS)`）——
+ * 顺序与合法值只有一份真源，避免容器再抄一遍导致两边漂移。
+ */
+export const PLAYER_TABS: PlayerTab[] = ['online', 'live', 'bans', 'whitelist']
 
 /** 玩家治理动作种类：踢出 / 封禁。 */
 export type PlayerActionKind = 'kick' | 'ban'
@@ -288,8 +293,10 @@ export function PlayersOnlineTabView({
         <>
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <label className="text-sm font-medium">{t('players.serverFilter')}</label>
+            {/* 旁边的 <label> 既无 htmlFor 也未包住 Select（不是它的可访问名），
+                故名字落在可聚焦的触发按钮上（与下方事件类型筛选同一写法）。 */}
             <Select value={serverFilter} onValueChange={setServerFilter}>
-              <SelectTrigger size="sm" className="w-44">
+              <SelectTrigger size="sm" className="w-44" aria-label={t('players.serverFilter')}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -490,10 +497,32 @@ export function PlayersLiveTabView({
   const [clearedBefore, setClearedBefore] = useState(0)
   // 暂停时冻结一份快照（null 表示跟随实时流）。
   const [pausedEvents, setPausedEvents] = useState<PlayerEventRow[] | null>(null)
-  const visibleEvents = (pausedEvents ?? events)
-    .filter((e) => e.timestamp >= clearedBefore)
-    .filter((e) => eventFilter === 'all' || e.type === eventFilter)
+  const visibleEvents = useMemo(
+    () =>
+      (pausedEvents ?? events)
+        .filter((e) => e.timestamp >= clearedBefore)
+        .filter((e) => eventFilter === 'all' || e.type === eventFilter),
+    [pausedEvents, events, clearedBefore, eventFilter],
+  )
   const paused = pausedEvents !== null
+  /**
+   * 事件行 = 事件 + 稳定的 React key。
+   *
+   * 原先用 `${timestamp}-${idx}`，而事件流是「新事件插到队首 + 可暂停/清空/过滤」的列表：
+   * 每来一条新事件，旧行的下标全部平移 → key 随之改变 → React 把整列 <li> 拆掉重建
+   * （切筛选或清空时同理）。服务端 `PlayerEvent` 没有 id 字段，故按**内容指纹**做 key：
+   * 同一条事件无论排在第几位、是否被过滤掉，key 都不变。
+   * 完全相同的重复事件（同毫秒、同类型同内容）按出现次序补序号，避免 key 冲突。
+   */
+  const eventRows = useMemo(() => {
+    const seen = new Map<string, number>()
+    return visibleEvents.map((event) => {
+      const fingerprint = `${event.type}|${event.timestamp}|${event.playerName ?? ''}|${event.server ?? ''}|${event.fromServer ?? ''}|${event.toServer ?? ''}|${event.message ?? ''}`
+      const nth = (seen.get(fingerprint) ?? 0) + 1
+      seen.set(fingerprint, nth)
+      return { key: `${fingerprint}#${nth}`, event }
+    })
+  }, [visibleEvents])
 
   const togglePause = () => setPausedEvents(paused ? null : events)
   const clearEvents = () => {
@@ -594,8 +623,8 @@ export function PlayersLiveTabView({
                 <p className="text-center text-muted-foreground text-sm py-6">{t('players.liveNoEvents')}</p>
               ) : (
                 <ul className="divide-y max-h-[420px] overflow-auto text-sm">
-                  {visibleEvents.map((e, idx) => (
-                    <li key={`${e.timestamp}-${idx}`} className="px-3 py-2 flex items-start gap-2">
+                  {eventRows.map(({ key, event: e }) => (
+                    <li key={key} className="px-3 py-2 flex items-start gap-2">
                       <EventBadge type={e.type} />
                       <span className="flex-1">
                         {e.playerName && <span className="font-medium">{e.playerName}</span>}
@@ -839,11 +868,14 @@ export function PlayersWhitelistTabView({
       ) : (
         <>
           <form onSubmit={(e) => void add(e)} className="flex gap-2 mb-4 max-w-md">
-            <input
+            {/* 换用 Input 原语（同页其它输入框都走它，原生 <input> 会丢焦点环与主题变量）；
+                原先只有 placeholder，读屏取不到名字，故显式给 aria-label。 */}
+            <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="flex-1 px-3 py-2 border rounded-md bg-background text-sm"
+              className="flex-1"
               placeholder={t('players.whitelistAddPlaceholder')}
+              aria-label={t('players.whitelistAddPlaceholder')}
             />
             <Button type="submit" disabled={pending || !name.trim()}>
               {t('players.whitelistAdd')}
@@ -1013,18 +1045,28 @@ export function PlayersPageView({
   onWhitelistRemove,
 }: PlayersPageViewProps) {
   const { t } = useTranslation()
+  // Tab 与面板的 id 关联用一次性生成的稳定前缀，避免同页多处渲染时 id 冲突。
+  const tabsUid = useId()
+  const tabDomId = (key: PlayerTab) => `${tabsUid}-tab-${key}`
+  const panelDomId = (key: PlayerTab) => `${tabsUid}-panel-${key}`
 
   return (
     // 全量对齐：外壳与页头改用布局层原语。原为裸 <div> + 手写页头，且无 data-page。
-    // 下方的手写 tab（下划线式）本次保留——把它换成布局层的 Tabs 属「页内导航统一」，
-    // 与骨架对齐是两件事，不混在一次改动里。
+    // 下方仍保留手写 tab（下划线式）而非布局层 Tabs：视觉与骨架对齐是两件事，不混在一次改动里；
+    // 但补上 tab 语义——原实现是裸 <button>，选中态只靠边框颜色，读屏既不知道当前是哪个 Tab，
+    // 也无法从 Tab 跳到对应面板。
     <PageShell data-page="players">
       <PageHeader title={t('players.title')} description={t('players.subtitle')} />
 
-      <div className="flex gap-1 mb-4 border-b">
+      <div className="flex gap-1 mb-4 border-b" role="tablist">
         {PLAYER_TABS.map((key) => (
           <button
             key={key}
+            type="button"
+            role="tab"
+            id={tabDomId(key)}
+            aria-selected={tab === key}
+            aria-controls={panelDomId(key)}
             onClick={() => onTabChange(key)}
             className={`px-3 py-2 text-sm -mb-px border-b-2 ${
               tab === key ? 'border-primary text-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -1038,45 +1080,53 @@ export function PlayersPageView({
       {/* 四个区块按 Tab 条件挂载（与原页一致）：区块内的本地 UI 状态随切换重置；
           数据侧由容器的 enabled 开关保住「未激活不取数/不订阅」的时机。 */}
       {tab === 'online' && (
-        <PlayersOnlineTabView
-          online={online}
-          isLoading={onlineLoading}
-          actionPending={playerActionPending}
-          onPlayerAction={onPlayerAction}
-        />
+        <div role="tabpanel" id={panelDomId('online')} aria-labelledby={tabDomId('online')}>
+          <PlayersOnlineTabView
+            online={online}
+            isLoading={onlineLoading}
+            actionPending={playerActionPending}
+            onPlayerAction={onPlayerAction}
+          />
+        </div>
       )}
       {tab === 'live' && (
-        <PlayersLiveTabView
-          picker={livePicker}
-          instanceId={liveInstanceId}
-          onInstanceChange={onLiveInstanceChange}
-          connected={probeConnected}
-          roster={roster}
-          events={events}
-        />
+        <div role="tabpanel" id={panelDomId('live')} aria-labelledby={tabDomId('live')}>
+          <PlayersLiveTabView
+            picker={livePicker}
+            instanceId={liveInstanceId}
+            onInstanceChange={onLiveInstanceChange}
+            connected={probeConnected}
+            roster={roster}
+            events={events}
+          />
+        </div>
       )}
       {tab === 'bans' && (
-        <PlayersBansTabView
-          bans={bans}
-          isLoading={bansLoading}
-          activeOnly={bansActiveOnly}
-          onActiveOnlyChange={onBansActiveOnlyChange}
-          onUnban={onUnban}
-        />
+        <div role="tabpanel" id={panelDomId('bans')} aria-labelledby={tabDomId('bans')}>
+          <PlayersBansTabView
+            bans={bans}
+            isLoading={bansLoading}
+            activeOnly={bansActiveOnly}
+            onActiveOnlyChange={onBansActiveOnlyChange}
+            onUnban={onUnban}
+          />
+        </div>
       )}
       {tab === 'whitelist' && (
-        <PlayersWhitelistTabView
-          picker={whitelistPicker}
-          instanceId={whitelistInstanceId}
-          onInstanceChange={onWhitelistInstanceChange}
-          whitelist={whitelist}
-          isLoading={whitelistLoading}
-          isError={whitelistError}
-          onRefresh={onRetryWhitelist}
-          pending={whitelistPending}
-          onAdd={onWhitelistAdd}
-          onRemove={onWhitelistRemove}
-        />
+        <div role="tabpanel" id={panelDomId('whitelist')} aria-labelledby={tabDomId('whitelist')}>
+          <PlayersWhitelistTabView
+            picker={whitelistPicker}
+            instanceId={whitelistInstanceId}
+            onInstanceChange={onWhitelistInstanceChange}
+            whitelist={whitelist}
+            isLoading={whitelistLoading}
+            isError={whitelistError}
+            onRefresh={onRetryWhitelist}
+            pending={whitelistPending}
+            onAdd={onWhitelistAdd}
+            onRemove={onWhitelistRemove}
+          />
+        </div>
       )}
     </PageShell>
   )

@@ -50,7 +50,6 @@ export default function BotLoadSessionsTab() {
         onStop={(id) => run('stop', id)}
         startPending={startSession.isPending}
         stopPending={stopSession.isPending}
-        initialSearch={filter.q ?? ''}
       />
 
       <BotLoadWizard open={wizardOpen} onOpenChange={setWizardOpen} />

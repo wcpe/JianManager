@@ -131,16 +131,19 @@ export function UpdateHeatmap({ series }: { series: ObservabilitySeriesPoint[] }
                 <div key={ci} className="flex flex-col gap-[3px]">
                   {col.map((cell) => {
                     const lv = cell.future ? -1 : level(cell.count, weeks.max)
+                    // 数量只靠透明度与 title 表达：裸 div 不进无障碍树，读屏读不到 title。
+                    // 故显式给 role=img + aria-label，让每格自带可读的「日期 + 更新次数」。
+                    const label = cell.future
+                      ? cell.label
+                      : `${cell.label} · ${t('clientDistObs.heatmapCellUpdates', { defaultValue: '{{n}} 次更新', n: cell.count })}`
                     return (
                       <div
                         key={cell.key}
+                        role="img"
+                        aria-label={label}
                         className="h-3 w-3 rounded-[2px] bg-primary"
                         style={{ opacity: lv >= 0 ? LEVEL_OPACITY[lv] : 0.04 }}
-                        title={
-                          cell.future
-                            ? cell.label
-                            : `${cell.label} · ${t('clientDistObs.heatmapCellUpdates', { defaultValue: '{{n}} 次更新', n: cell.count })}`
-                        }
+                        title={label}
                         data-level={lv}
                         data-date={cell.key}
                       />

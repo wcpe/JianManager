@@ -14,6 +14,7 @@ import { EmptyState } from '@/components/views/client-dist/security-format'
  */
 export function SecurityEventsView({
   events,
+  truncated,
   isLoading,
   isError,
   query,
@@ -23,6 +24,8 @@ export function SecurityEventsView({
   renderRow,
 }: {
   events: ClientDistSecurityEvent[]
+  /** 命中数已达服务端上限：列表可能被截断，需明确告知（固定 limit 无翻页器）。 */
+  truncated?: boolean
   isLoading: boolean
   isError: boolean
   query: ClientDistQuery
@@ -50,7 +53,10 @@ export function SecurityEventsView({
       ) : events.length === 0 ? (
         <EmptyState text={isLoading ? t('common.loading') : t('clientDistOps.events.empty')} />
       ) : (
-        <Table>
+        <>
+          {/* 固定 limit=200 且无翻页器：命中触顶时列表是被截断的，不能让人当成「就这些」。 */}
+          {truncated && <p className="mb-2 text-xs text-muted-foreground">{t('search.truncated')}</p>}
+          <Table>
           <TableHeader>
             <TableRow>
               <TableHead>{t('clientDistOps.events.colTime')}</TableHead>
@@ -66,6 +72,7 @@ export function SecurityEventsView({
             {events.map((event) => renderRow(event))}
           </TableBody>
         </Table>
+        </>
       )}
     </Panel>
   )

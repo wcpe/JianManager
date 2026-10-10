@@ -10,12 +10,29 @@ import { IpAnalysisTabView, PlayerAnalysisTabView } from '@/components/views/cli
  * 调用点（`ProtectionCenterPage`）继续按原名使用。
  */
 
+/** 聚合表服务端上限（列表无翻页器）：命中数达到上限即视为可能被截断，由视图给出提示。 */
+const ANALYSIS_LIMIT = 200
+
 export function IpAnalysisTab() {
-  const { data, isError, isLoading } = useClientDistIpAnalysis({ limit: 200 })
-  return <IpAnalysisTabView rows={data ?? []} isLoading={isLoading} isError={isError} />
+  const { data, isError, isLoading } = useClientDistIpAnalysis({ limit: ANALYSIS_LIMIT })
+  return (
+    <IpAnalysisTabView
+      rows={data ?? []}
+      truncated={(data?.length ?? 0) >= ANALYSIS_LIMIT}
+      isLoading={isLoading}
+      isError={isError}
+    />
+  )
 }
 
 export function PlayerAnalysisTab() {
-  const { data, isError, isLoading } = useClientDistPlayerAnalysis({ limit: 200 })
-  return <PlayerAnalysisTabView rows={data ?? []} isLoading={isLoading} isError={isError} />
+  const { data, isError, isLoading } = useClientDistPlayerAnalysis({ limit: ANALYSIS_LIMIT })
+  return (
+    <PlayerAnalysisTabView
+      rows={data ?? []}
+      truncated={(data?.length ?? 0) >= ANALYSIS_LIMIT}
+      isLoading={isLoading}
+      isError={isError}
+    />
+  )
 }

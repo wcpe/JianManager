@@ -105,6 +105,8 @@ export default function ProtectionCenterPage() {
   const channelId = query.channelId
   const channel = channelId ?? OPS_ALL_CHANNELS
 
+  // 下钻联动上下文：`runtimeLinkExtra` 只承载「不在 URL 键集内」的运行态维度
+  // （platform/coreVersion/runtimeVersion/lag），URL 四键（machineId/version/errCode/ip）以查询串为真源。
   const [runtimeLinkExtra, setRuntimeLinkExtra] = useState<RuntimeLink>({})
   const runtimeLink: RuntimeLink = {
     ...runtimeLinkExtra,
@@ -113,13 +115,26 @@ export default function ProtectionCenterPage() {
     errCode: query.errCode,
     ip: query.ip,
   }
+  /**
+   * 下钻到全量日志（点分布桶 / 点机器「看日志」）。
+   *
+   * 语义是「**以本次为准**」而不是「在本页历史上下钻里的累加」——连续点两个不同维度
+   * （先点平台分布、再点某机器「看日志」）时，后一次必须丢弃前一次留下的过滤条件，
+   * 否则请求会被双重过滤；结果分布「全部」（`onLink({})`）也必须能清空全部联动条件。
+   *
+   * 故此处两点与常见的「合并 patch」写法相反：
+   * - 四个 URL 键**全部显式**写入，缺省用 `null`（删除）而非 `undefined`——`updateClientDistQuery`
+   *   对 `undefined` 的语义是「保留旧值」，用它就等于沿用上一次的过滤条件；
+   * - 非 URL 维度的 `runtimeLinkExtra` 整体**替换**（而非展开合并），使上一次的 platform/lag 等不再残留。
+   */
   const openLogsWithLink = (link: RuntimeLink) => {
-    setRuntimeLinkExtra((prev) => ({ ...prev, ...link }))
+    const { machineId, version, errCode, ip, ...extra } = link
+    setRuntimeLinkExtra(extra)
     setSearchParams(updateClientDistQuery(searchParams, {
-      machineId: link.machineId,
-      version: link.version,
-      errCode: link.errCode,
-      ip: link.ip,
+      machineId: machineId ?? null,
+      version: version ?? null,
+      errCode: errCode ?? null,
+      ip: ip ?? null,
       tab: 'logs',
       type: 'request',
     }), { replace: true })

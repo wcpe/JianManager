@@ -72,6 +72,7 @@ export function SessionFailures({ runId }: { runId: number | string }) {
       }
       data={query.data}
       isLoading={query.isLoading}
+      isError={query.isError}
       failureSummary={run?.failureSummary ?? {}}
       onRetry={doRetry}
       retryPending={retryMut.isPending}

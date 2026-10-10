@@ -51,26 +51,39 @@ export default function StatisticsPage() {
 
   const isPlatformAdmin = useAuthStore((s) => s.role) === ROLE_PLATFORM_ADMIN
 
-  const { data: overview } = useMetricOverview(range)
-  const { data: nodes } = useNodes()
+  const overviewQuery = useMetricOverview(range)
+  const nodesQuery = useNodes()
   /**
    * 实例维度走后端聚合（`/instances/aggregate`）：视图不再为「状态 / 角色 / 进程类型」三张分布图
    * 拉全量实例列表（千级约 1MB/轮，且带 30 秒兜底轮询、页面还持有全集）。
    */
-  const { data: instAgg } = useInstanceAggregate()
-  const { data: players } = useOnlinePlayers()
+  const instAggQuery = useInstanceAggregate()
+  const playersQuery = useOnlinePlayers()
   // 分发观测仅平台管理员可查；非管理员不发起请求（enabled=false），UI 整区降级。
   const distQuery = useClientDistObservability({ range: toObsRange(range), enabled: isPlatformAdmin })
+
+  /**
+   * 平台规模/构成区的取数失败标记（详见视图的 `statsError` 文档）。
+   *
+   * 三个查询都是 KPI 与构成分布的唯一来源，任一失败都会把「取数失败」显示成实打实的 0
+   * （如实例数 0/0、探针连通 0.0%、分布面板空白），必须显式降级。
+   *
+   * **`/metrics/overview` 刻意不纳入**：它的 totals 只是优先口径，失败后 KPI 会回退到
+   * `/nodes`、`/instances/aggregate` 的本地聚合，呈现的仍是真实数字（既有用例 ④ 即锁定这一点），
+   * 把它算进来只会让「有完整降级数据」的页面变成一片错误态。
+   */
+  const statsError = nodesQuery.isError || instAggQuery.isError || playersQuery.isError
 
   return (
     <StatisticsPageView
       range={range}
       onRangeChange={setRange}
-      overviewTotals={overview?.totals}
-      nodes={nodes}
-      instanceCounts={instAgg}
-      players={players}
+      overviewTotals={overviewQuery.data?.totals}
+      nodes={nodesQuery.data}
+      instanceCounts={instAggQuery.data}
+      players={playersQuery.data}
       isPlatformAdmin={isPlatformAdmin}
+      statsError={statsError}
       distribution={distQuery.data}
       distributionError={distQuery.isError}
       // 两个区块的取数分别在应用侧接线层内（useSLO / usePlayerTrend + 时区读取），故只交出渲染结果。

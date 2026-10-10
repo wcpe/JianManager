@@ -1,5 +1,6 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做平台管理员门禁、筛选取数与跳转接线。
 import { useMemo, useState } from 'react'
+import { useDebounced } from '@/lib/hooks/use-debounced'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 import { useAuthStore } from '@/stores/auth'
@@ -36,17 +37,23 @@ export default function AgentCallLogsPage() {
 
   // 筛选与分页都会进入查询键，属「取数时机」决策，故 state 归容器；视图只受控展示并逐字段上报改动。
   const [query, setQuery] = useState<AgentCallLogsQuery>(DEFAULT_QUERY)
+  /**
+   * action 是自由文本筛选取 300ms 防抖：输入框即时回显（`query.action` 原样喂给视图），
+   * 但请求键只用停止键入后的值——否则每敲一个字都重取一页流水（本页还带翻页游标）。
+   * 其余维度是离散选择（下拉 / 页码），不需要防抖。
+   */
+  const debouncedAction = useDebounced(query.action, 300)
 
   const filter = useMemo((): AgentCallLogFilter => {
     const f: AgentCallLogFilter = { page: query.page, pageSize: PAGE_SIZE }
     const tid = Number(query.tokenId)
     if (Number.isInteger(tid) && tid > 0) f.tokenId = tid
-    if (query.action.trim()) f.action = query.action.trim()
+    if (debouncedAction.trim()) f.action = debouncedAction.trim()
     if (query.client.trim()) f.client = query.client.trim()
     if (query.success === 'true') f.success = true
     if (query.success === 'false') f.success = false
     return f
-  }, [query])
+  }, [debouncedAction, query])
 
   const { data: tokens } = useAgentTokens({ enabled: isAdmin })
   const { data, isLoading, isError, isFetching } = useAgentCallLogs(filter, { enabled: isAdmin })

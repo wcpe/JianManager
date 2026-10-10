@@ -10,7 +10,7 @@
  * @sync apps/control-plane-web/src/pages/PermissionsPage.tsx、apps/control-plane-web/src/pages/PermissionsPage.dom.test.tsx
  * @since FR-502（组件受控化迁包；原页 FR-432 权限管理三栏页）
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2, Diff, Link2, UsersRound } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -35,6 +35,8 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { cn } from '@jianmanager/ui'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
+import { mergeMeasuredRowHeights } from '@/lib/shared/row-heights'
 import { permDomainExplain, permExplain } from '@/lib/permissions/permission-explain'
 import { ROLE_LABEL_KEY } from '@/lib/shared/roles'
 
@@ -167,8 +169,22 @@ export interface PermissionsPageViewProps {
   roles?: PermissionsRoleRow[]
   /** 角色列表加载态。 */
   rolesLoading?: boolean
-  /** 用户列表；沿用既有 `/users` 全量口径（千级用户须服务端搜索时应由容器改口径，视图不自取数）。 */
+  /** 用户候选窗口；口径由容器决定（服务端搜索：默认前 N 条 + 键入 `q`）。 */
   users?: PermissionsUserRow[]
+  /** 服务端命中的用户总数：大于候选窗口时左栏提示继续键入。 */
+  usersTotal?: number
+  /** 用户候选取数中：左栏搜索框下方显示加载态。 */
+  usersLoading?: boolean
+  /** 用户搜索框当前值（受控；真源在容器——它是取数键）。 */
+  userQuery?: string
+  /** 用户搜索键入上报（容器 300ms 防抖后下发服务端 `q`）。 */
+  onUserQueryChange?: (keyword: string) => void
+  /**
+   * 选中的用户在候选窗口里**确实不存在**（容器在「未过滤且窗口已装下全部用户」时才置真）。
+   * 置真时中栏按「未选择」呈现——否则深链 `?user=<不存在的 id>` 会落在一棵空权限树上，
+   * 配着「点卡片切换开/关」的提示，看不出是这个 id 不存在。
+   */
+  selectedUserMissing?: boolean
   /** 当前选中对象；受控（容器持有，见上方受控边界）。 */
   selection: PermissionSelection
   /** 选中对象变更上报（容器写入自身状态，需要时回写 URL）。 */
@@ -220,91 +236,203 @@ function applyOverrides(base: string[], overrides: PermissionOverride[]): Set<st
 }
 
 /**
+ * 左栏虚拟列表的一行：角色段与用户段共用同一条滚动轴，段内小标题也是行。
+ * 用单个平铺数组而不是两个独立列表，是因为两段在同一个滚动容器里——分成两个列表就没法
+ * 用一个虚拟窗口描述真实滚动位置（这也是原实现只能全量渲染的原因之一）。
+ */
+type CatalogRow =
+  | { key: string; kind: 'header'; label: string }
+  | { key: string; kind: 'role'; role: PermissionsRoleRow }
+  | { key: string; kind: 'user'; user: PermissionsUserRow }
+
+/** 行高估算（px）：仅用于尚未量测到的行，渲染过的行以 DOM 实测值回填（见下方 layout effect）。 */
+const CATALOG_HEADER_PX = 24
+const CATALOG_ROLE_PX = 64
+const CATALOG_USER_PX = 52
+/** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
+const CATALOG_FALLBACK_VIEWPORT_PX = 420
+
+/**
  * 左栏：对象选择（角色模板 + 用户）。
  *
- * 本组件只吃注入数据与一个选中回调，无本地状态：列表口径（全量 / 搜索窗口）由容器决定，
- * 以免把候选集裁剪逻辑挪进包内。
+ * 【为什么必须虚拟化】用户窗口是「前 N 条 + 键入走服务端搜索」（口径由容器决定）。
+ * 用户上百后，全量 `users.map()` 意味着每次 render 都要 reconcile 上百个按钮，而这一栏只有
+ * 230px 宽、能看见的不过十几行。故两段一起走变高虚拟窗口，只有滚进视口的行进 DOM；
+ * 行高以实测回填收敛（估算只负责屏外行），合并规则复用 lib/shared/row-heights。
+ *
+ * 本组件不取数：搜索词经 `onUserQueryChange` 上报（防抖与请求由容器负责），
+ * 候选窗口与总数经 props 注入——视图只管「渲染哪些行」。
  */
 function PermissionsCatalogPanel({
   roles = [],
   users = [],
+  usersTotal,
+  usersLoading = false,
   rolesLoading = false,
   catalogLoading = false,
+  userQuery = '',
   selection,
   onSelectionChange,
+  onUserQueryChange,
 }: {
   roles?: PermissionsRoleRow[]
   users?: PermissionsUserRow[]
+  /** 服务端命中的用户总数：超过候选窗口时提示继续键入（避免「搜了没结果」的错觉）。 */
+  usersTotal?: number
+  usersLoading?: boolean
   rolesLoading?: boolean
   catalogLoading?: boolean
+  /** 搜索框当前值（受控；真源在容器，因为它是取数键）。 */
+  userQuery?: string
   selection: PermissionSelection
   onSelectionChange: (selection: PermissionSelection) => void
+  /** 键入上报（容器做 300ms 防抖后下发服务端 `q`）。 */
+  onUserQueryChange?: (keyword: string) => void
 }) {
   const { t } = useTranslation()
+
+  const rows = useMemo<CatalogRow[]>(
+    () => [
+      { key: 'roles-header', kind: 'header', label: t('permissions.roles') },
+      ...roles.map((role) => ({ key: `role-${role.id}`, kind: 'role' as const, role })),
+      { key: 'users-header', kind: 'header', label: t('permissions.users') },
+      ...users.map((user) => ({ key: `user-${user.id}`, kind: 'user' as const, user })),
+    ],
+    [roles, t, users],
+  )
+  const baseSizes = useMemo(
+    () => rows.map((r) => (r.kind === 'role' ? CATALOG_ROLE_PX : r.kind === 'user' ? CATALOG_USER_PX : CATALOG_HEADER_PX)),
+    [rows],
+  )
+  const [measured, setMeasured] = useState<Map<string, number>>(() => new Map())
+  /** 上次量测时的容器宽度：宽度一变（角色描述折行数变），旧实测值整体失效。 */
+  const measuredWidthRef = useRef(-1)
+  const rowSizes = useMemo(
+    () => rows.map((r, i) => measured.get(r.key) ?? baseSizes[i] ?? CATALOG_USER_PX),
+    [baseSizes, measured, rows],
+  )
+
+  const { containerRef, onScroll, range, crossSize } = useVirtualRows({
+    total: rows.length,
+    itemSize: CATALOG_USER_PX,
+    overscan: 6,
+    fallbackViewportSize: CATALOG_FALLBACK_VIEWPORT_PX,
+    sizes: rowSizes,
+  })
+
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const base = measuredWidthRef.current === crossSize ? measured : new Map<string, number>()
+    measuredWidthRef.current = crossSize
+    const list = [...el.querySelectorAll<HTMLElement>('[data-catalog-row-key]')].map((node) => ({
+      // jsdom 无布局：offsetHeight 恒 0，合并规则会自然忽略（测试里窗口完全确定）。
+      id: node.dataset.catalogRowKey ?? '',
+      px: node.offsetHeight,
+    }))
+    const { sizes: next, changed } = mergeMeasuredRowHeights(base, list)
+    if (changed || base !== measured) setMeasured(next)
+  }, [containerRef, crossSize, measured, range.end, range.start, rows])
+
+  const truncated = usersTotal !== undefined && usersTotal > users.length
 
   return (
     <Panel
       className="min-h-0 overflow-hidden"
-      bodyClassName="min-h-0 flex-1 overflow-y-auto p-2"
+      bodyClassName="min-h-0 flex-1 flex flex-col gap-1.5 overflow-hidden p-2"
       title={t('permissions.objects')}
       icon={<UsersRound className="size-3.5" />}
     >
-      <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {t('permissions.roles')}
-      </div>
-      {(rolesLoading || catalogLoading) && <p className="px-1 text-xs text-muted-foreground">{t('common.loading')}</p>}
-      {roles.map((role) => {
-        const active = selection?.kind === 'role' && selection.id === role.id
-        return (
-          <button
-            key={role.id}
-            type="button"
-            data-testid={`permissions-role-${role.key}`}
-            onClick={() => onSelectionChange({ kind: 'role', id: role.id })}
-            className={cn(
-              'mb-1 w-full rounded-lg border px-2.5 py-2 text-left transition-colors',
-              active
-                ? 'border-primary bg-primary/12 shadow-sm'
-                : 'border-border bg-card hover:border-primary/40 hover:bg-accent/40',
-            )}
-          >
-            <div className="flex items-center gap-1.5">
-              <span className={cn('truncate text-[13px]', active ? 'font-semibold text-primary' : 'font-medium')}>{role.name}</span>
-              {role.key === 'platform_admin' && (
-                <Badge className="bg-amber-100 text-[10px] text-amber-800">{t('permissions.superAdmin')}</Badge>
-              )}
-              {role.isSystem && role.key !== 'platform_admin' && (
-                <Badge variant="outline" className="text-[10px]">{t('permissions.systemRole')}</Badge>
-              )}
+      {/* 搜索框固定在面板顶部：列表自身滚动，它跟着滚走就再也找不回来了。 */}
+      <Input
+        value={userQuery}
+        onChange={(e) => onUserQueryChange?.(e.target.value)}
+        placeholder={t('permissions.search')}
+        aria-label={t('permissions.search')}
+        className="h-8 shrink-0"
+      />
+      <div
+        ref={containerRef}
+        onScroll={onScroll}
+        data-testid="permissions-catalog"
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
+        {/* 窗口上/下占位：窗口外的行用高度撑开，滚动条与整体高度保持真实 */}
+        {range.before > 0 && <div aria-hidden="true" style={{ height: range.before }} />}
+        {rows.slice(range.start, range.end).map((row) => {
+          if (row.kind === 'header') {
+            return (
+              <div
+                key={row.key}
+                data-catalog-row-key={row.key}
+                className="px-1 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+              >
+                {row.label}
+              </div>
+            )
+          }
+          if (row.kind === 'role') {
+            const active = selection?.kind === 'role' && selection.id === row.role.id
+            return (
+              // 行间距用包裹层的 padding 而不是行的 margin：量测取的是包裹层的 offsetHeight，
+              // 而 margin 不计入 offsetHeight——留 margin 会让每行都少算一段间距。
+              <div key={row.key} data-catalog-row-key={row.key} className="pb-1">
+                <button
+                  type="button"
+                  data-testid={`permissions-role-${row.role.key}`}
+                  onClick={() => onSelectionChange({ kind: 'role', id: row.role.id })}
+                  className={cn(
+                    'w-full rounded-lg border px-2.5 py-2 text-left transition-colors',
+                    active
+                      ? 'border-primary bg-primary/12 shadow-sm'
+                      : 'border-border bg-card hover:border-primary/40 hover:bg-accent/40',
+                  )}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className={cn('truncate text-[13px]', active ? 'font-semibold text-primary' : 'font-medium')}>{row.role.name}</span>
+                    {row.role.key === 'platform_admin' && (
+                      <Badge className="bg-amber-100 text-[10px] text-amber-800">{t('permissions.superAdmin')}</Badge>
+                    )}
+                    {row.role.isSystem && row.role.key !== 'platform_admin' && (
+                      <Badge variant="outline" className="text-[10px]">{t('permissions.systemRole')}</Badge>
+                    )}
+                  </div>
+                  <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{row.role.description}</div>
+                </button>
+              </div>
+            )
+          }
+          const active = selection?.kind === 'user' && selection.id === row.user.id
+          return (
+            <div key={row.key} data-catalog-row-key={row.key} className="pb-1">
+              <button
+                type="button"
+                data-testid={`permissions-user-${row.user.id}`}
+                onClick={() => onSelectionChange({ kind: 'user', id: row.user.id })}
+                className={cn(
+                  'w-full rounded-lg border px-2.5 py-2 text-left transition-colors',
+                  active
+                    ? 'border-primary bg-primary/12 shadow-sm'
+                    : 'border-border bg-card hover:border-primary/40 hover:bg-accent/40',
+                )}
+              >
+                <div className={cn('truncate text-[13px]', active ? 'font-semibold text-primary' : 'font-medium')}>{row.user.username}</div>
+                <div className="text-[11px] text-muted-foreground">{t(ROLE_LABEL_KEY[row.user.role] ?? 'users.roleUnknown', { role: row.user.role })}</div>
+              </button>
             </div>
-            <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{role.description}</div>
-          </button>
-        )
-      })}
-
-      <div className="mb-1 mt-3 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {t('permissions.users')}
+          )
+        })}
+        {range.after > 0 && <div aria-hidden="true" style={{ height: range.after }} />}
       </div>
-      {users.map((u) => {
-        const active = selection?.kind === 'user' && selection.id === u.id
-        return (
-          <button
-            key={u.id}
-            type="button"
-            data-testid={`permissions-user-${u.id}`}
-            onClick={() => onSelectionChange({ kind: 'user', id: u.id })}
-            className={cn(
-              'mb-1 w-full rounded-lg border px-2.5 py-2 text-left transition-colors',
-              active
-                ? 'border-primary bg-primary/12 shadow-sm'
-                : 'border-border bg-card hover:border-primary/40 hover:bg-accent/40',
-            )}
-          >
-            <div className={cn('truncate text-[13px]', active ? 'font-semibold text-primary' : 'font-medium')}>{u.username}</div>
-            <div className="text-[11px] text-muted-foreground">{t(ROLE_LABEL_KEY[u.role] ?? 'users.roleUnknown', { role: u.role })}</div>
-          </button>
-        )
-      })}
+      {/* 加载态与截断提示固定在底部：它们是状态而不是列表内容，跟着滚走同样会看不到。 */}
+      {(rolesLoading || catalogLoading || usersLoading) && (
+        <p className="shrink-0 px-1 text-xs text-muted-foreground">{t('common.loading')}</p>
+      )}
+      {truncated && (
+        <p className="shrink-0 px-1 text-xs text-muted-foreground">
+          {t('common.searchTruncated', { shown: users.length, total: usersTotal ?? 0 })}
+        </p>
+      )}
     </Panel>
   )
 }
@@ -730,6 +858,11 @@ export function PermissionsPageView({
   roles = [],
   rolesLoading = false,
   users = [],
+  usersTotal,
+  usersLoading = false,
+  userQuery = '',
+  onUserQueryChange,
+  selectedUserMissing = false,
   selection,
   onSelectionChange,
   userPermissions,
@@ -775,14 +908,6 @@ export function PermissionsPageView({
   const [draftOverrides, setDraftOverrides] = useState<PermissionOverride[]>([])
   const [bindRoleId, setBindRoleId] = useState<string>('')
   const [draftKey, setDraftKey] = useState(editorKey)
-  if (draftKey !== editorKey) {
-    setDraftKey(editorKey)
-    setDraftNodes(editorInitialNodes)
-    setDraftOverrides(editorInitialOverrides)
-    setBindRoleId(editorInitialBindRoleId)
-    setRangeAnchor(null)
-    setRangeEnd(null)
-  }
 
   const visibleNodes = useMemo(() => flattenCatalog(catalog, treeFilter), [catalog, treeFilter])
   const domainGroups = useMemo(() => groupByDomain(visibleNodes), [visibleNodes])
@@ -1051,6 +1176,24 @@ export function PermissionsPageView({
         ? userTarget?.username ?? t('permissions.users')
         : t('permissions.noSelection')
 
+  /**
+   * 草稿基线变了（换了对象，或同一对象的基线变了：模板 updatedAt / 用户有效权限口径）→ 重置草稿。
+   *
+   * React 官方的「渲染期调整 state」模式：渲染期 setState 是允许的，但**必须提前返回**——
+   * 否则这一帧会带着旧草稿继续算下去（白算，且旧草稿会参与本帧的 diff/预览计算）。
+   * 提前返回放在**全部 hook 之后**，故各次渲染的 hook 数量仍然一致；返回 null 不会提交任何 DOM，
+   * React 紧接着用新 state 重渲染，用户看不到中间帧。
+   */
+  if (draftKey !== editorKey) {
+    setDraftKey(editorKey)
+    setDraftNodes(editorInitialNodes)
+    setDraftOverrides(editorInitialOverrides)
+    setBindRoleId(editorInitialBindRoleId)
+    setRangeAnchor(null)
+    setRangeEnd(null)
+    return null
+  }
+
   if (!canRead) {
     return (
       // 全量对齐：无权限态是普通内容页，套标准骨架。
@@ -1095,15 +1238,20 @@ export function PermissionsPageView({
         <PermissionsCatalogPanel
           roles={roles}
           users={users}
+          usersTotal={usersTotal}
+          usersLoading={usersLoading}
+          userQuery={userQuery}
           rolesLoading={rolesLoading}
           catalogLoading={catalogLoading}
           selection={selection}
           onSelectionChange={onSelectionChange}
+          onUserQueryChange={onUserQueryChange}
         />
 
         <PermissionsMatrixPanel
-          objectTitle={objectTitle}
-          selectionKind={selection?.kind ?? null}
+          // 深链指向的用户确实不存在 → 中栏按「未选择」呈现（否则是一棵空树 + 误导性的操作提示）。
+          objectTitle={selectedUserMissing ? t('permissions.noSelection') : objectTitle}
+          selectionKind={selectedUserMissing ? null : selection?.kind ?? null}
           groups={domainGroups}
           checkedIds={checkedIds}
           rangeIds={rangeIds}

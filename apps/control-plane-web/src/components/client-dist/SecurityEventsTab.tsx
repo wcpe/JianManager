@@ -18,6 +18,24 @@ import { useSecurityQuery } from './security-shared'
  * 查询读写、三个处置 mutation（含提示）、日志深链与确认弹窗（权限注入）。
  */
 
+/**
+ * 行内三类处置动作的注入包。
+ *
+ * 三个 mutation **上提到容器**（而非每行各调一遍 hook）：事件表按 `limit=200` 取数，
+ * 行级持有全局 mutation 会让 200 行挂 600 个 mutation observer——分层错位，也让每次
+ * 改一行时的状态更新波及整表。`pending` 同样由容器统一判定（同一时刻只会有一个确认框打开）。
+ */
+type EventRowActions = {
+  blockIP: ReturnType<typeof useBlockClientDistIP>
+  setKeyState: ReturnType<typeof useSetClientDistKeyState>
+  setProtection: ReturnType<typeof useSetClientDistChannelProtection>
+  /** 任一处置在途（确认按钮禁用）。 */
+  pending: boolean
+}
+
+/** 事件表服务端上限（列表无翻页器）：命中数达到上限即视为可能被截断，由视图给出提示。 */
+const EVENTS_LIMIT = 200
+
 export function EventsTab() {
   const { query, updateQuery } = useSecurityQuery()
   const [riskRule, setRiskRule] = useState('')
@@ -27,29 +45,38 @@ export function EventsTab() {
     machineId: query.machineId,
     errCode: query.errCode,
     riskRule: riskRule || undefined,
-    limit: 200,
+    limit: EVENTS_LIMIT,
   })
+
+  const blockIP = useBlockClientDistIP()
+  const setKeyState = useSetClientDistKeyState()
+  const setProtection = useSetClientDistChannelProtection()
+  const actions: EventRowActions = {
+    blockIP,
+    setKeyState,
+    setProtection,
+    pending: blockIP.isPending || setKeyState.isPending || setProtection.isPending,
+  }
 
   return (
     <SecurityEventsView
       events={data ?? []}
+      truncated={(data?.length ?? 0) >= EVENTS_LIMIT}
       isLoading={isLoading}
       isError={isError}
       query={query}
       onQueryChange={(patch) => updateQuery(patch)}
       riskRule={riskRule}
       onRiskRuleChange={setRiskRule}
-      renderRow={(event) => <EventRow key={event.id} event={event} />}
+      renderRow={(event) => <EventRow key={event.id} event={event} actions={actions} />}
     />
   )
 }
 
-function EventRow({ event }: { event: ClientDistSecurityEvent }) {
+function EventRow({ event, actions }: { event: ClientDistSecurityEvent; actions: EventRowActions }) {
   const { t } = useTranslation()
   const [searchParams] = useSearchParams()
-  const blockIP = useBlockClientDistIP()
-  const setKeyState = useSetClientDistKeyState()
-  const setProtection = useSetClientDistChannelProtection()
+  const { blockIP, setKeyState, setProtection, pending } = actions
   const logsHref = buildClientDistHref('/client-dist-ops', searchParams, {
     channelId: event.channelId,
     ip: event.ip,
@@ -58,87 +85,101 @@ function EventRow({ event }: { event: ClientDistSecurityEvent }) {
     tab: 'logs',
     type: 'request',
   })
-  const pending = blockIP.isPending || setKeyState.isPending || setProtection.isPending
 
   return (
     <SecurityEventRowView
       event={event}
       logsHref={logsHref}
       renderLogsLink={(href, label) => <Link to={href}>{label}</Link>}
-      renderConfirm={(state, close) => (
-        <>
-          <DangerConfirm
-            open={state === 'block-ip'}
-            title={t('clientDistOps.events.confirmBlockTitle', { ip: event.ip })}
-            description={t('clientDistOps.events.confirmBlockDesc')}
-            confirmLabel={t('clientDistOps.events.confirmBlockLabel')}
-            pending={pending}
-            onConfirm={() => {
-              blockIP.mutate(
-                { ip: event.ip, channelId: event.channelId || undefined, reason: event.reason || t('clientDistOps.events.reasonBlock'), durationMinutes: 30 },
-                {
-                  onSuccess: () => {
-                    toast.success(t('clientDistOps.actions.toastIpBlocked'))
-                    close()
+      /**
+       * 按需实例化：只在当前行真正点了某个处置按钮时才挂那个 DangerConfirm。
+       * 原实现把三个弹窗常驻在每一行（200 行 = 600 个 Dialog 实例），而同一时刻至多一个在打开。
+       */
+      renderConfirm={(state, close) => {
+        if (state === 'block-ip') {
+          return (
+            <DangerConfirm
+              open
+              title={t('clientDistOps.events.confirmBlockTitle', { ip: event.ip })}
+              description={t('clientDistOps.events.confirmBlockDesc')}
+              confirmLabel={t('clientDistOps.events.confirmBlockLabel')}
+              pending={pending}
+              onConfirm={() => {
+                blockIP.mutate(
+                  { ip: event.ip, channelId: event.channelId || undefined, reason: event.reason || t('clientDistOps.events.reasonBlock'), durationMinutes: 30 },
+                  {
+                    onSuccess: () => {
+                      toast.success(t('clientDistOps.actions.toastIpBlocked'))
+                      close()
+                    },
+                    onError: () => toast.error(t('clientDistOps.actions.toastIpBlockFailed')),
                   },
-                  onError: () => toast.error(t('clientDistOps.actions.toastIpBlockFailed')),
-                },
-              )
-            }}
-            onCancel={close}
-          />
-          <DangerConfirm
-            open={state === 'key-state'}
-            title={t('clientDistOps.events.confirmKeyTitle', { key: event.keyId ?? '' })}
-            description={t('clientDistOps.events.confirmKeyDesc')}
-            confirmLabel={t('clientDistOps.events.confirmKeyLabel')}
-            pending={pending}
-            onConfirm={() => {
-              setKeyState.mutate(
-                {
-                  keyId: String(event.keyId),
-                  body: { state: 'throttled', reason: event.reason || t('clientDistOps.events.reasonKey') },
-                },
-                {
-                  onSuccess: () => {
-                    toast.success(t('clientDistOps.actions.toastKeyOk'))
-                    close()
+                )
+              }}
+              onCancel={close}
+            />
+          )
+        }
+        if (state === 'key-state') {
+          return (
+            <DangerConfirm
+              open
+              title={t('clientDistOps.events.confirmKeyTitle', { key: event.keyId ?? '' })}
+              description={t('clientDistOps.events.confirmKeyDesc')}
+              confirmLabel={t('clientDistOps.events.confirmKeyLabel')}
+              pending={pending}
+              onConfirm={() => {
+                setKeyState.mutate(
+                  {
+                    keyId: String(event.keyId),
+                    body: { state: 'throttled', reason: event.reason || t('clientDistOps.events.reasonKey') },
                   },
-                  onError: () => toast.error(t('clientDistOps.actions.toastKeyFailed')),
-                },
-              )
-            }}
-            onCancel={close}
-          />
-          <DangerConfirm
-            open={state === 'channel-protection'}
-            title={t('clientDistOps.events.confirmProtTitle', { channel: event.channelId })}
-            description={t('clientDistOps.events.confirmProtDesc')}
-            confirmLabel={t('clientDistOps.events.confirmProtLabel')}
-            pending={pending}
-            onConfirm={() => {
-              setProtection.mutate(
-                {
-                  channelId: event.channelId,
-                  body: {
-                    mode: 'retry_after',
-                    reason: event.reason || t('clientDistOps.events.reasonProtection'),
-                    retryAfterSeconds: 60,
+                  {
+                    onSuccess: () => {
+                      toast.success(t('clientDistOps.actions.toastKeyOk'))
+                      close()
+                    },
+                    onError: () => toast.error(t('clientDistOps.actions.toastKeyFailed')),
                   },
-                },
-                {
-                  onSuccess: () => {
-                    toast.success(t('clientDistOps.actions.toastProtOk'))
-                    close()
+                )
+              }}
+              onCancel={close}
+            />
+          )
+        }
+        if (state === 'channel-protection') {
+          return (
+            <DangerConfirm
+              open
+              title={t('clientDistOps.events.confirmProtTitle', { channel: event.channelId })}
+              description={t('clientDistOps.events.confirmProtDesc')}
+              confirmLabel={t('clientDistOps.events.confirmProtLabel')}
+              pending={pending}
+              onConfirm={() => {
+                setProtection.mutate(
+                  {
+                    channelId: event.channelId,
+                    body: {
+                      mode: 'retry_after',
+                      reason: event.reason || t('clientDistOps.events.reasonProtection'),
+                      retryAfterSeconds: 60,
+                    },
                   },
-                  onError: () => toast.error(t('clientDistOps.actions.toastProtFailed')),
-                },
-              )
-            }}
-            onCancel={close}
-          />
-        </>
-      )}
+                  {
+                    onSuccess: () => {
+                      toast.success(t('clientDistOps.actions.toastProtOk'))
+                      close()
+                    },
+                    onError: () => toast.error(t('clientDistOps.actions.toastProtFailed')),
+                  },
+                )
+              }}
+              onCancel={close}
+            />
+          )
+        }
+        return null
+      }}
     />
   )
 }

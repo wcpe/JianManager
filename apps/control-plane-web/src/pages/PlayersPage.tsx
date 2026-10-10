@@ -5,8 +5,9 @@ import { toast } from 'sonner'
 import { useInstanceSearch, type InstanceInfo } from '@/api/instances'
 import { useOnlinePlayers, useKickPlayer, useBanPlayer, useUnbanPlayer, useBans, useWhitelist, useWhitelistAction, usePlayerEvents, type PlayerActionResult } from '@/api/players'
 import { useDebounced } from '@/lib/hooks/use-debounced'
+import { useTabParam } from '@/lib/hooks/use-tab-param'
 import { CANDIDATE_LIMIT } from '@/components/views/instances/InstancePicker'
-import { PlayersPageView } from '@/components/views/players/PlayersPageView'
+import { PLAYER_TABS, PlayersPageView } from '@/components/views/players/PlayersPageView'
 import type { PlayerActionRequest, PlayerTab } from '@/components/views/players/PlayersPageView'
 
 /**
@@ -64,7 +65,8 @@ function useInstancePickerFeed(enabled: boolean, role?: string) {
 export default function PlayersPage() {
   const { t } = useTranslation()
   // 当前 Tab：本层据它门控四个区块的查询与订阅，保住原先「未激活的 Tab 不挂载、不取数」的时机。
-  const [tab, setTab] = useState<PlayerTab>('online')
+  // 同时入 URL（`?tab=`，缺省 online 不写键）——刷新/分享/后退都能回到同一个 Tab，与 LogsPage/Bots 一致。
+  const [tab, setTab] = useTabParam<PlayerTab>('tab', 'online', PLAYER_TABS)
 
   // ── 在线玩家（FR-054 / FR-067） ──
   const { data: online, isLoading: onlineLoading } = useOnlinePlayers({ enabled: tab === 'online' })
@@ -74,11 +76,18 @@ export default function PlayersPage() {
   /**
    * 踢出/封禁：逐玩家一次请求，累计 succeeded/failed 后统一提示（与原页一致——单个失败不中断后续）。
    * 目标名字集合由视图组装（含同名去重：封禁按玩家名全局执行），本层只负责执行与结果文案。
+   *
+   * 进度：批量是串行请求（勾 500 人 = 500 次往返，可能几十秒），原实现只在全部结束后弹一次 toast，
+   * 中途界面没有任何反馈、危险按钮也一直禁用，操作者会以为没点上。故开工即出一条 loading toast，
+   * 每完成一名玩家原地更新累计计数（复用 `players.actionResult` 的「成功 N，失败 M」文案），
+   * 收尾再按有无失败把它改成 success / error——始终是同一条 toast，不会刷屏。
    */
   const runPlayerAction = async ({ kind, names, reason }: PlayerActionRequest) => {
     const mutation = kind === 'kick' ? kick : ban
     let succeeded = 0
     let failed = 0
+    const progress = () => t('players.actionResult', { succeeded, failed })
+    const toastId = toast.loading(progress())
     for (const name of names) {
       try {
         const res: PlayerActionResult = await mutation.mutateAsync({ name, scope: { reason: reason || undefined } })
@@ -87,10 +96,11 @@ export default function PlayersPage() {
       } catch {
         failed += 1
       }
+      toast.loading(progress(), { id: toastId })
     }
-    const message = t('players.actionResult', { succeeded, failed })
-    if (failed > 0) toast.error(message)
-    else toast.success(message)
+    const message = progress()
+    if (failed > 0) toast.error(message, { id: toastId })
+    else toast.success(message, { id: toastId })
   }
 
   // ── 实时事件（FR-066）：SSE 订阅留在本层；非实时事件 Tab 传 null，断开且不重连 ──

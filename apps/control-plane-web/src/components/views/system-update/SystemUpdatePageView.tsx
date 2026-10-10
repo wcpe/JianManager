@@ -414,7 +414,7 @@ export interface SystemUpdateNodeRowProps {
   rolloutRunning: boolean
   /** 本行在途的动作；null=空闲。 */
   pending: 'upgrade' | 'rollback' | null
-  /** DangerConfirm 的平台范围门禁结果（应用侧读登录态角色后注入）。 */
+  /* 门禁不由容器注入：DangerConfirm 自己读登录态角色判定是否放行。 */
   /** 单节点升级上报。 */
   onUpgrade: (nodeId: number) => void
   /** 单节点回滚上报。 */
@@ -530,7 +530,7 @@ export interface SystemUpdateNodesSectionProps {
   onRollbackNode: (nodeId: number) => void
   /** 打开全网升级配置弹窗（开合与二次确认留在本视图）。 */
   onUpgradeAll: () => void
-  /** DangerConfirm 的平台范围门禁结果。 */
+  /* 门禁不由容器注入：DangerConfirm 自己读登录态角色判定是否放行。 */
   /** Worker 二进制缓存条目。 */
   workerAssets?: SystemUpdateWorkerAssetEntry[]
   /** Worker 缓存取数中。 */
@@ -635,7 +635,7 @@ export interface SystemUpdateControlPlaneCardProps {
   upgrading: boolean
   /** 回滚在途。 */
   rollingBack: boolean
-  /** DangerConfirm 的平台范围门禁结果。 */
+  /* 门禁不由容器注入：DangerConfirm 自己读登录态角色判定是否放行。 */
   /** 自升级上报（容器执行 mutation + toast + 延迟刷新检查结果）。 */
   onUpgrade: () => void
   /** 回滚上报。 */
@@ -869,7 +869,8 @@ export function SystemUpdateRolloutPanel({ rollout }: SystemUpdateRolloutPanelPr
 export interface SystemUpdatePageViewProps {
   /** 是否平台管理员：false 时整页渲染 forbidden 提示（路由守卫之外的纵深防御）。 */
   isPlatformAdmin: boolean
-  /** 四处危险确认的平台范围门禁结果（应用侧读登录态角色后注入）。 */
+  /* 四处危险确认的门禁由 DangerConfirm 自读登录态判定，没有需要容器注入的开关——
+     曾交给外壳注入 `allowed`，外壳漏传即静默放行，那条路已删除。 */
   /** `GET /self-update/check` 的结果；缺省表示尚未拿到任何结果（渲染引导占位）。 */
   check?: SystemUpdateCheckResult
   /** 检查失败的后端消息（缺省=无错误）；仅当尚无 check 结果时渲染整屏错误横幅。 */

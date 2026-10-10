@@ -358,15 +358,22 @@ export function AgentTokensPageView({
 }: AgentTokensPageViewProps) {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
+  /**
+   * 开合的唯一入口：改本地状态 + 单向通知容器（容器据它收敛节点/实例候选查询的 `enabled`）。
+   *
+   * 【为什么不用 effect 追 props】容器传下来的 `onCreateDialogOpenChange` 是内联箭头，每次渲染
+   * 都换身份；用 `[showCreate, onCreateDialogOpenChange]` 当依赖会让这个 effect 每次父级渲染
+   * 都重跑一遍（当前靠「setState 同值 → React bailout」侥幸不炸，但那是巧合而非契约）。
+   * 通知只在**状态真的变化**时发生才是它的语义，所以放在事件里而不是渲染后的 effect 里。
+   */
+  const setCreateOpen = (open: boolean) => {
+    setShowCreate(open)
+    onCreateDialogOpenChange?.(open)
+  }
   // 一次性明文：只在签发成功后写入，关闭即清空；不存在任何重新获取/回显明文的路径。
   const [issuedPlain, setIssuedPlain] = useState<IssuedAgentTokenPlain | null>(null)
   const [revokeTarget, setRevokeTarget] = useState<AgentTokenRow | null>(null)
   const [revoking, setRevoking] = useState(false)
-
-  // 对话框开合归本视图；此处只把「打开」这一取数时机通知容器（节点候选查询的门控）。
-  useEffect(() => {
-    onCreateDialogOpenChange?.(showCreate)
-  }, [showCreate, onCreateDialogOpenChange])
 
   const handleRevoke = async () => {
     if (!revokeTarget) return
@@ -386,7 +393,7 @@ export function AgentTokensPageView({
         actions={
           <>
             {headerLinks}
-            <Button onClick={() => setShowCreate(true)}>
+            <Button onClick={() => setCreateOpen(true)}>
               <Plus className="size-4" /> {t('agentTokens.create')}
             </Button>
           </>
@@ -493,12 +500,12 @@ export function AgentTokensPageView({
         onInstanceQueryChange={onInstanceQueryChange}
         nodeOptions={nodeOptions}
         notify={notify}
-        onClose={() => setShowCreate(false)}
+        onClose={() => setCreateOpen(false)}
         onSubmit={async (payload) => {
           const res = await onIssue(payload)
           // 成功才关窗并转交一次性明文；失败（null）保持对话框打开，草稿留给用户修正。
           if (res) {
-            setShowCreate(false)
+            setCreateOpen(false)
             setIssuedPlain(res)
           }
           return res

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -39,12 +39,14 @@ export default function BotLoadTemplatesTab() {
   const [wizardOpen, setWizardOpen] = useState(false)
   const [deleteId, setDeleteId] = useState<number | null>(null)
 
-  // 搜索防抖写 URL
-  useMemo(() => {
+  // 搜索防抖写 URL。
+  // 必须放 effect：`useMemo` 的工厂函数语义是「纯计算」，渲染期调 setSearchParams 等于在渲染里改路由
+  // （React 反模式；StrictMode 下工厂会被重复执行，路由写入也就重复发生）。
+  useEffect(() => {
     const q = debouncedQ.trim()
     if ((filter.q ?? '') === q) return
     setSearchParams(mergeSearchParams(searchParams, { q: q || null, page: null }), { replace: true })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 debouncedQ 驱动
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 debouncedQ 驱动（filter/searchParams 变化不应回写）
   }, [debouncedQ])
 
   const confirmDelete = () => {

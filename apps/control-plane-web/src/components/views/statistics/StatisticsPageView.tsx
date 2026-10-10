@@ -120,6 +120,15 @@ export interface StatisticsPageViewProps {
   instanceCounts?: StatisticsInstanceCounts
   /** `/players` 结果（在线玩家数 + 各后端探针可达明细）。 */
   players?: OnlinePlayersResult
+  /**
+   * 平台规模/构成区的取数失败标记（`/nodes`、`/instances/aggregate`、`/players` 任一失败）。
+   *
+   * 【为什么必须区分错误态与空态】这三条查询是 KPI 与五张构成分布的唯一来源；失败时各字段缺省成
+   * `undefined`，视图会把它们渲染成实打实的 0（实例 0/0、探针连通 0.0%、分布面板一片空白），
+   * 也就是把「取数失败」演成「平台没有数据」的假成功——比直接报错更误导人。
+   * 置真时该区整体降级为错误文案，不再输出任何计数。
+   */
+  statsError?: boolean
   /** 是否平台管理员：决定分发观测区块展示汇总还是权限提示（包内不持鉴权状态）。 */
   isPlatformAdmin: boolean
   /** 分发观测数据（容器按权限取数后注入；非管理员请勿取数，此处留空即降级为权限提示）。 */
@@ -148,6 +157,7 @@ export function StatisticsPageView({
   isPlatformAdmin,
   distribution,
   distributionError = false,
+  statsError = false,
   renderSloSection,
   renderPlayerTrend,
 }: StatisticsPageViewProps) {
@@ -193,57 +203,68 @@ export function StatisticsPageView({
         actions={<RangePicker value={range} onChange={onRangeChange} />}
       />
 
-      {/* KPI 行：节点 / 实例 / 玩家 + 崩溃单列 */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <StatCard
-          icon={<Server className="size-3.5" />}
-          label={t('statistics.nodes')}
-          value={`${totals?.onlineNodeCount ?? nodeSum.online}/${totals?.nodeCount ?? nodeSum.total}`}
-          sub={t('dashboard.online')}
-        />
-        <StatCard
-          icon={<Boxes className="size-3.5" />}
-          label={t('statistics.instances')}
-          value={`${totals?.runningInstances ?? instSum.running}/${instSum.total}`}
-          sub={t('statistics.running')}
-        />
-        <StatCard
-          icon={<AlertTriangle className="size-3.5" />}
-          tone={instSum.crashed > 0 ? 'danger' : 'neutral'}
-          label={t('statistics.statusCrashed')}
-          value={String(instSum.crashed)}
-          sub={t('nav.instances')}
-        />
-        <StatCard
-          icon={<Users className="size-3.5" />}
-          label={t('statistics.onlinePlayers')}
-          value={String(totals?.onlinePlayers ?? players?.players.length ?? 0)}
-          sub={t('nav.players')}
-        />
-        <StatCard
-          icon={<Server className="size-3.5" />}
-          tone="info"
-          label={t('statistics.probeReach')}
-          value={fmtRate(probe.pct)}
-          sub={`${probe.available}/${probe.total}`}
-        />
-        <StatCard
-          icon={<Server className="size-3.5" />}
-          tone="warning"
-          label={t('statistics.maintenance')}
-          value={String(nodeSum.maintenance)}
-          sub={t('nav.nodes')}
-        />
-      </div>
+      {/* 取数失败 → 整区错误态（原因见 props.statsError）；成功才渲染计数与分布。 */}
+      {statsError ? (
+        <Panel title={t('statistics.title')}>
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            {t('dashboard.platformOverviewUnavailable')}
+          </p>
+        </Panel>
+      ) : (
+        <>
+          {/* KPI 行：节点 / 实例 / 玩家 + 崩溃单列 */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <StatCard
+              icon={<Server className="size-3.5" />}
+              label={t('statistics.nodes')}
+              value={`${totals?.onlineNodeCount ?? nodeSum.online}/${totals?.nodeCount ?? nodeSum.total}`}
+              sub={t('dashboard.online')}
+            />
+            <StatCard
+              icon={<Boxes className="size-3.5" />}
+              label={t('statistics.instances')}
+              value={`${totals?.runningInstances ?? instSum.running}/${instSum.total}`}
+              sub={t('statistics.running')}
+            />
+            <StatCard
+              icon={<AlertTriangle className="size-3.5" />}
+              tone={instSum.crashed > 0 ? 'danger' : 'neutral'}
+              label={t('statistics.statusCrashed')}
+              value={String(instSum.crashed)}
+              sub={t('nav.instances')}
+            />
+            <StatCard
+              icon={<Users className="size-3.5" />}
+              label={t('statistics.onlinePlayers')}
+              value={String(totals?.onlinePlayers ?? players?.players.length ?? 0)}
+              sub={t('nav.players')}
+            />
+            <StatCard
+              icon={<Server className="size-3.5" />}
+              tone="info"
+              label={t('statistics.probeReach')}
+              value={fmtRate(probe.pct)}
+              sub={`${probe.available}/${probe.total}`}
+            />
+            <StatCard
+              icon={<Server className="size-3.5" />}
+              tone="warning"
+              label={t('statistics.maintenance')}
+              value={String(nodeSum.maintenance)}
+              sub={t('nav.nodes')}
+            />
+          </div>
 
-      {/* 构成分布区 */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <DistPanel title={t('statistics.distByStatus')} buckets={instByStatus} empty={t('instances.empty')} />
-        <DistPanel title={t('statistics.distByRole')} buckets={instByRole} empty={t('instances.empty')} />
-        <DistPanel title={t('statistics.distByProcess')} buckets={instByProcess} empty={t('instances.empty')} />
-        <DistPanel title={t('statistics.distByOs')} buckets={nodeByOs} empty={t('nodes.empty')} />
-        <DistPanel title={t('statistics.distByArch')} buckets={nodeByArch} empty={t('nodes.empty')} />
-      </div>
+          {/* 构成分布区 */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <DistPanel title={t('statistics.distByStatus')} buckets={instByStatus} empty={t('instances.empty')} />
+            <DistPanel title={t('statistics.distByRole')} buckets={instByRole} empty={t('instances.empty')} />
+            <DistPanel title={t('statistics.distByProcess')} buckets={instByProcess} empty={t('instances.empty')} />
+            <DistPanel title={t('statistics.distByOs')} buckets={nodeByOs} empty={t('nodes.empty')} />
+            <DistPanel title={t('statistics.distByArch')} buckets={nodeByArch} empty={t('nodes.empty')} />
+          </div>
+        </>
+      )}
 
       {/* 可用性（FR-463）：平台级窗口可用率/故障次数/MTTR/MTBF/误差预算。取数在应用侧接线层，经插槽注入。 */}
       {renderSloSection?.()}

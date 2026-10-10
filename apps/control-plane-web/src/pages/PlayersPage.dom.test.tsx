@@ -72,7 +72,7 @@ describe('PlayersPage（mock 假后端）', () => {
     await user.click(within(dialog).getByRole('button', { name: '封禁' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '封禁玩家' })).not.toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: '封禁记录' }))
+    await user.click(screen.getByRole('tab', { name: '封禁记录' }))
     const banRow = (await screen.findByText('Bob')).closest('tr') as HTMLElement
     expect(within(banRow).getByText('违规行为')).toBeInTheDocument()
     expect(within(banRow).getByText('生效中')).toBeInTheDocument()
@@ -99,7 +99,7 @@ describe('PlayersPage（mock 假后端）', () => {
     await user.click(within(banDialog).getByRole('button', { name: '批量封禁' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '批量封禁玩家' })).not.toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: '封禁记录' }))
+    await user.click(screen.getByRole('tab', { name: '封禁记录' }))
     for (const player of ['Alice', 'Bob']) {
       const row = (await screen.findByText(player)).closest('tr') as HTMLElement
       expect(within(row).getByText('批量违规')).toBeInTheDocument()
@@ -129,7 +129,7 @@ describe('PlayersPage（mock 假后端）', () => {
     renderWithProviders(<PlayersPage />, { route: '/players' })
 
     // 切到封禁记录 tab，确认 seed 封禁行（Griefer 生效中）。
-    await user.click(screen.getByRole('button', { name: '封禁记录' }))
+    await user.click(screen.getByRole('tab', { name: '封禁记录' }))
     const row = (await screen.findByText('Griefer')).closest('tr') as HTMLElement
     expect(within(row).getByText('生效中')).toBeInTheDocument()
 
@@ -172,7 +172,7 @@ describe('PlayersPage（mock 假后端）', () => {
       renderWithProviders(<PlayersPage />, { route: '/players' })
 
       // ① 实时事件 Tab：候选默认窗口走服务端搜索，且整页不出现裸 /instances（全量列举）。
-      await user.click(screen.getByRole('button', { name: '实时事件' }))
+      await user.click(screen.getByRole('tab', { name: '实时事件' }))
       await waitFor(() =>
         expect(
           calls.some((c) => c.path === '/api/v1/instances/search' && c.params.get('pageSize') === '50'),
@@ -191,7 +191,7 @@ describe('PlayersPage（mock 假后端）', () => {
       // 先收起候选下拉：Popover 是 modal，展开时页内其余内容对可访问性查询不可见。
       await user.keyboard('{Escape}')
       await waitFor(() => expect(screen.queryByPlaceholderText('搜索或输入…')).not.toBeInTheDocument())
-      await user.click(screen.getByRole('button', { name: '白名单' }))
+      await user.click(screen.getByRole('tab', { name: '白名单' }))
       await waitFor(() =>
         expect(
           calls.some(
@@ -242,7 +242,7 @@ describe('PlayersPage（mock 假后端）', () => {
     renderWithProviders(<PlayersPage />, { route: '/players' })
 
     try {
-      await user.click(screen.getByRole('button', { name: '实时事件' }))
+      await user.click(screen.getByRole('tab', { name: '实时事件' }))
       expect(await screen.findByText('事件流')).toBeInTheDocument()
       const eventPanel = screen.getByText('事件流').closest('.border') as HTMLElement
       expect(await within(eventPanel).findByText('Carl')).toBeInTheDocument()
@@ -263,5 +263,59 @@ describe('PlayersPage（mock 假后端）', () => {
     } finally {
       globalThis.fetch = originalFetch
     }
+  })
+
+  /**
+   * 页内 Tab 的语义与 URL 同步（本次补）：
+   * 原实现是裸 `<button>`（无 role/aria-selected，选中态只靠边框颜色），且 Tab 不入 URL——
+   * 刷新、分享链接、浏览器后退都回不到同一个 Tab。
+   */
+  it('页内 Tab 有 tab 语义且入 URL：切 Tab 写 ?tab=，选中态随 aria-selected 走', async () => {
+    const user = userEvent.setup()
+    loginMockAdmin()
+    renderWithProviders(<PlayersPage />, { route: '/players' })
+
+    const tablist = await screen.findByRole('tablist')
+    const onlineTab = within(tablist).getByRole('tab', { name: '在线玩家' })
+    expect(onlineTab).toHaveAttribute('aria-selected', 'true')
+    // 筛选后无在线玩家时不应再复用「暂无在线玩家」……
+    // （见下方空态用例：这里先确认默认 Tab 的面板与 Tab 已用 aria-controls 关联）
+    expect(onlineTab).toHaveAttribute('aria-controls')
+    const panelId = onlineTab.getAttribute('aria-controls')
+    expect(document.getElementById(panelId as string)).toHaveAttribute('role', 'tabpanel')
+
+    await user.click(within(tablist).getByRole('tab', { name: '白名单' }))
+    await waitFor(() => expect(window.location.search).toBe('?tab=whitelist'))
+    expect(within(tablist).getByRole('tab', { name: '白名单' })).toHaveAttribute('aria-selected', 'true')
+    expect(onlineTab).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('?tab= 直达恢复对应 Tab（深链）', async () => {
+    loginMockAdmin()
+    renderWithProviders(<PlayersPage />, { route: '/players?tab=bans' })
+
+    const tablist = await screen.findByRole('tablist')
+    expect(within(tablist).getByRole('tab', { name: '封禁记录' })).toHaveAttribute('aria-selected', 'true')
+    expect(within(tablist).getByRole('tab', { name: '在线玩家' })).toHaveAttribute('aria-selected', 'false')
+  })
+
+  /** 子服筛选下拉原先完全无可访问名（旁边的 <label> 既无 htmlFor 也未包住 Select）。 */
+  it('子服筛选下拉具备可访问名', async () => {
+    loginMockUser()
+    renderWithProviders(<PlayersPage />, { route: '/players' })
+
+    expect(await screen.findByRole('combobox', { name: '按子服筛选' })).toBeInTheDocument()
+  })
+
+  /** 白名单添加原先用原生 <input>，且只有 placeholder——读屏取不到名字。 */
+  it('白名单添加输入框走 Input 原语并具备可访问名', async () => {
+    const user = userEvent.setup()
+    loginMockAdmin()
+    renderWithProviders(<PlayersPage />, { route: '/players?tab=whitelist' })
+
+    const input = await screen.findByRole('textbox', { name: '输入玩家名加入白名单' })
+    expect(input).toHaveAttribute('placeholder', '输入玩家名加入白名单')
+    await user.type(input, 'Carol')
+    expect(input).toHaveValue('Carol')
   })
 })

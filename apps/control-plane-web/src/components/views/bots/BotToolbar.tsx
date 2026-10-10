@@ -53,17 +53,19 @@ export function BotToolbar({
 
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2">
+      {/* 三个筛选控件原先都没有可访问名（只有占位符）；名字落在可聚焦的控件本体上。 */}
       <Input
         value={search}
         onChange={(e) => onSearch(e.target.value)}
         placeholder={t('bots.searchPlaceholder')}
+        aria-label={t('bots.searchPlaceholder')}
         className="h-9 w-56"
       />
       <Select
         value={nodeId === null ? SENTINEL_ALL : String(nodeId)}
         onValueChange={(v: string) => onNode(v === SENTINEL_ALL ? null : Number(v))}
       >
-        <SelectTrigger size="sm" className="w-40">
+        <SelectTrigger size="sm" className="w-40" aria-label={t('bots.allNodes')}>
           <SelectValue placeholder={t('bots.allNodes')} />
         </SelectTrigger>
         <SelectContent>
@@ -79,7 +81,7 @@ export function BotToolbar({
         value={status === '' ? SENTINEL_ALL : status}
         onValueChange={(v: string) => onStatus(v === SENTINEL_ALL ? '' : v)}
       >
-        <SelectTrigger size="sm" className="w-36">
+        <SelectTrigger size="sm" className="w-36" aria-label={t('bots.allStatus')}>
           <SelectValue placeholder={t('bots.allStatus')} />
         </SelectTrigger>
         <SelectContent>
@@ -95,12 +97,15 @@ export function BotToolbar({
       <div className="ml-auto flex items-center gap-2">
         <div className="flex items-center gap-1 rounded-md border p-0.5">
           <span className="px-2 text-xs text-muted-foreground">{t('bots.groupBy')}</span>
+          {/* 分组维度是「选中的那一档」而不是动作按钮：补 aria-pressed（同页 ViewToggle 已有正确写法），
+              否则读屏只知道按钮文案、不知道当前按哪个维度分组。 */}
           {GROUP_BY_DIMS.map((dim) => (
             <Button
               key={dim}
               type="button"
               size="xs"
               variant={groupBy === dim ? 'default' : 'ghost'}
+              aria-pressed={groupBy === dim}
               onClick={() => onGroupBy(dim)}
             >
               {t(`bots.groupDim_${dim}`)}

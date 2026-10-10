@@ -14,25 +14,20 @@ import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { ChevronRight, Download } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { Input } from '@jianmanager/ui/components/input'
 import { ListSkeleton, PageHeader, PageShell, ScopeBar } from '@jianmanager/ui/components/layout'
 import { Panel } from '@jianmanager/ui/components/panel'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import type { AuditLogInfo } from '@/lib/audit/audit-contracts'
 import { formatAuditDetail } from '@/lib/audit/audit-filters'
 import type { AuditFilterState } from '@/lib/audit/audit-filters'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
+import { mergeMeasuredRowHeights } from '@/lib/shared/row-heights'
 import { cn } from '@jianmanager/ui'
 
 /**
- * Radix Select 不允许空字符串值，用哨兵代表「全部用户」。
+ * Combobox 用空串表示「未选」，无法承载一个可点选的「全部」项，故另设哨兵。
  * 哨兵只在「控件值 ↔ 空串」之间做转换，故不会出现在上报给容器的筛选态里。
  */
 const SENTINEL_ALL = '__all__'
@@ -41,8 +36,10 @@ const SENTINEL_ALL = '__all__'
  * 行高估算（px，FR-496 阶段 6 视口裁剪用）。行高由行内单元格的行数唯一决定：
  * `px-3 py-2`(16) + 最高单元格 + `border-b`(1)，实测（Chromium 1440×900，root 16px）：
  * 单行 action 徽章 32.7 → 33；有翻译的 action 单元格叠两行（12px 标签 + 10px 原键角标）46.3 → 33+14。
- * 估算只用于「尚未量测到的行」撑滚动高度；两档行共用同一基准，故基准的绝对误差只会整体平移
- * 滚动区间，不会累积错位（错位只可能来自「两行/一行」判定错，故该判定与行渲染共用一处实现）。
+ *
+ * 【只用于「尚未量测到的行」】估算值哪怕只差零点几像素也会**按行数线性累积**
+ * （600 行 × 0.5px = 300px），滚动条位置会与真实内容错位。渲染过的行一律以 DOM 实测值回填
+ * （见 `measuredRows`），估算只负责首帧与屏外行撑高度。
  */
 const ROW_BASE_PX = 33
 const ROW_EXTRA_LINE_PX = 14
@@ -91,8 +88,12 @@ export interface AuditPageViewProps {
   isLoading?: boolean
   /** 列表取数失败；优先于列表渲染。 */
   isError?: boolean
-  /** 候选用户（容器取数注入）；缺省即只有「全部用户」一项。 */
+  /** 候选用户（容器取数注入：服务端搜索的前 N 条）；缺省即只有「全部用户」一项。 */
   users?: AuditUserOption[]
+  /** 服务端命中的用户总数：超过候选窗口时提示「已显示前 N 项」。 */
+  usersTotal?: number
+  /** 用户候选的键入查询上报（防抖与服务端请求由容器负责，与 InstancePicker 同款）。 */
+  onUserQueryChange?: (keyword: string) => void
   /** 当前筛选条件（受控：它是查询键，改一项即触发重新取数并回到第 1 页）。 */
   filter: AuditFilterState
   /** 是否还有下一页（决定「加载更多」可用性）。 */
@@ -121,6 +122,8 @@ export function AuditPageView({
   isLoading = false,
   isError = false,
   users,
+  usersTotal,
+  onUserQueryChange,
   filter,
   hasNextPage = false,
   isFetchingNextPage = false,
@@ -134,6 +137,14 @@ export function AuditPageView({
   /** 展开的行 id；null 表示全部折叠（纯展示态，不影响取数）。 */
   const [expanded, setExpanded] = useState<number | null>(null)
 
+  /**
+   * 选中用户的展示名。
+   *
+   * 候选窗口是「前 N 条 + 键入服务端搜索」，选中的用户很可能不在当前窗口里；
+   * 不记住名字，触发器就会退回显示裸的用户 id。纯展示状态，故留在视图。
+   */
+  const [pickedUser, setPickedUser] = useState<{ id: string; name: string } | null>(null)
+
   // 视口裁剪（FR-496 阶段 6）：数百行一次性进 DOM 是本页的主开销，只渲染滚动窗口内的行。
   // 展开行的详情正文长短不定（估算误差会让其后所有行偏移错位），故实测后回填。
   const expandedRef = useRef<HTMLDivElement>(null)
@@ -145,23 +156,66 @@ export function AuditPageView({
     if (expanded !== null && px > 0 && px !== expandedPx) setExpandedSize({ id: expanded, px })
   }, [expanded, expandedPx, logs])
 
-  /** 逐行高度：折叠行按「一行/两行」估算，展开行用实测值 → 偏移前缀和贴近真实布局。 */
+  /**
+   * 折叠行的实测高度（行 id → px）。
+   *
+   * 折叠行原先只有常量估算，而估算偏差**按行数累积**（600 行 × 0.5px = 300px），
+   * 表现为滚动条位置与真实内容错位。这里把已渲染过的行实测回填，让前缀和随浏览收敛到真实布局
+   * （与任务中心同一套机制，合并规则见 lib/shared/row-heights）。
+   */
+  const [measuredRows, setMeasuredRows] = useState<Map<string, number>>(() => new Map())
+  /** 上次量测时的容器宽度：宽度一变（action 单元格折行数变），旧实测值整体失效。 */
+  const measuredWidthRef = useRef<number>(-1)
+
+  /** 逐行高度：展开行与已量测过的折叠行用实测值，其余用估算 → 偏移前缀和贴近真实布局。 */
   const rowSizes = useMemo(
     () =>
-      logs.map((log) =>
-        log.id === expanded
-          ? expandedPx
-          : ROW_BASE_PX + (resolveActionLabel(t, log.action).showsRawKey ? ROW_EXTRA_LINE_PX : 0),
-      ),
-    [expanded, expandedPx, logs, t],
+      logs.map((log) => {
+        if (log.id === expanded) return expandedPx
+        return (
+          measuredRows.get(String(log.id)) ??
+          ROW_BASE_PX + (resolveActionLabel(t, log.action).showsRawKey ? ROW_EXTRA_LINE_PX : 0)
+        )
+      }),
+    [expanded, expandedPx, logs, measuredRows, t],
   )
-  const { containerRef, onScroll, range } = useVirtualRows({
+  const { containerRef, onScroll, range, crossSize } = useVirtualRows({
     total: logs.length,
     itemSize: ROW_BASE_PX,
     overscan: 6,
     fallbackViewportSize: FALLBACK_VIEWPORT_PX,
     sizes: rowSizes,
   })
+
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    // 宽度变了就丢掉全部旧实测值重测：它们是按旧宽度量的，留着只会整体错位。
+    // crossSize 自身经 400ms 防抖，拿到的是侧栏动画结束后的稳定宽度。
+    const base = measuredWidthRef.current === crossSize ? measuredRows : new Map<string, number>()
+    measuredWidthRef.current = crossSize
+    const measured = [...el.querySelectorAll<HTMLElement>('[data-audit-row-id]')].map((node) => ({
+      // jsdom 无布局：offsetHeight 恒 0，合并规则会自然忽略（测试里窗口完全确定）。
+      id: node.dataset.auditRowId ?? '',
+      px: node.offsetHeight,
+    }))
+    // 展开行自己有实测通道（expandedRef），故作为 skipId 传入。
+    const { sizes, changed } = mergeMeasuredRowHeights(base, measured, expanded === null ? null : String(expanded))
+    // 宽度变化时即使没有新实测值也要提交（把旧宽度下的实测值清掉）。
+    if (changed || base !== measuredRows) setMeasuredRows(sizes)
+  }, [containerRef, crossSize, expanded, measuredRows, range.end, range.start, logs])
+
+  // 用户候选下拉：全部 + 服务端命中窗口 + 当前值回显兜底（选中项可能已被后续键入挤出窗口；
+  // 仍在窗口内就不重复补，否则 Combobox 里会出现两个同值项）。
+  const userOptions: ComboboxOption[] = [
+    { value: SENTINEL_ALL, label: t('audit.allUsers') },
+    ...(users ?? []).map((u) => ({ value: String(u.id), label: u.username })),
+    ...(filter.userId !== '' &&
+    pickedUser?.id === filter.userId &&
+    !(users ?? []).some((u) => String(u.id) === filter.userId)
+      ? [{ value: filter.userId, label: pickedUser.name }]
+      : []),
+  ]
 
   // 页脚计数以「已加载量」为真源，信封总数缺省（尚未到达）时退化成本地行数——与原页 `?? logs.length` 同口径。
   const totalCount = total ?? logs.length
@@ -185,22 +239,41 @@ export function AuditPageView({
 
       {/* 强筛选器：套作用域条（FR-496 阶段 3 布局规范） */}
       <ScopeBar>
-        <Select
-          value={filter.userId === '' ? SENTINEL_ALL : filter.userId}
-          onValueChange={(v: string) => onChangeFilter({ userId: v === SENTINEL_ALL ? '' : v })}
-        >
-          <SelectTrigger size="sm" className="w-44">
-            <SelectValue placeholder={t('audit.allUsers')} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={SENTINEL_ALL}>{t('audit.allUsers')}</SelectItem>
-            {users?.map((u) => (
-              <SelectItem key={u.id} value={String(u.id)}>
-                {u.username}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/*
+          用户筛选用**服务端搜索**型选择器：候选只取前 N 条，键入经 `onUserQueryChange` 上报
+          （容器 300ms 防抖后下发 `?q=`）。原先用 `useUsers()` 拉全量再逐个挂 SelectItem，
+          正是规则点名的禁用形态：用户上百后每次 render 都要把整份选项列表求值一遍，
+          且请求体随用户数线性增长。
+          （Radix Select 依赖全部 SelectItem mount 才能提供方向键导航，故无法只渲染前 N 项；
+          Combobox 基于 Popover——关闭即不挂 DOM，并有界渲染。）
+        */}
+        <div className="w-44">
+          <Combobox
+            ariaLabel={t('audit.allUsers')}
+            options={userOptions}
+            value={filter.userId === '' ? SENTINEL_ALL : filter.userId}
+            onChange={(v) => {
+              if (v === SENTINEL_ALL) {
+                setPickedUser(null)
+                onChangeFilter({ userId: '' })
+                return
+              }
+              const picked = users?.find((u) => String(u.id) === v)
+              setPickedUser({ id: v, name: picked?.username ?? v })
+              onChangeFilter({ userId: v })
+            }}
+            placeholder={t('audit.allUsers')}
+            className="w-full"
+            allowCustom={false}
+            onQueryChange={onUserQueryChange}
+          />
+          {/* 服务端截断时提示继续键入（与 InstancePicker / 群组成员候选一致）。 */}
+          {usersTotal !== undefined && usersTotal > (users?.length ?? 0) && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('common.searchTruncated', { shown: users?.length ?? 0, total: usersTotal })}
+            </p>
+          )}
+        </div>
         <Input
           value={filter.action}
           onChange={(e) => onChangeFilter({ action: e.target.value })}
@@ -345,7 +418,7 @@ function AuditRow({
   // FR-303：action 键翻译。已知键显翻译 + 原键角标，未知键回退原键（defaultValue），保证不崩。
   const { label: actionLabel, showsRawKey } = resolveActionLabel(t, log.action)
   return (
-    <div ref={rowRef} className={cn('border-border/60', !isLast && 'border-b')}>
+    <div ref={rowRef} data-audit-row-id={log.id} className={cn('border-border/60', !isLast && 'border-b')}>
       <button
         type="button"
         onClick={onToggle}
