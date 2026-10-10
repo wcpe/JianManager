@@ -55,7 +55,16 @@ export function SessionHeaderView({
   const live = isLiveRunState(run.runState)
   const terminal = isTerminalRunState(run.runState)
   const stopping = run.runState === 'stopping' || run.runState === 'cancelling'
-  const canReport = terminal && (reportReady || terminal)
+  /**
+   * 报告可导出 = 运行已终态 **且** 报告已就绪。
+   *
+   * 原式写成 `terminal && (reportReady || terminal)`：`terminal` 已是前置条件，括号里恒为真，
+   * `reportReady` 是**永远无效的参数**（传什么都一样），两种失效都不可见。
+   * 此处按原意直接联合两个条件——`reportReady` 由容器给出，容器已把「直接打开一个已完成的会话
+   * 不会建 SSE、收不到 complete 帧」折算进去（`live.reportReady || isTerminalRunState(runState)`），
+   * 故终态会话的报告按钮仍然可用。
+   */
+  const canReport = terminal && reportReady
 
   const onConfirm = () => {
     if (confirm === 'stop') {

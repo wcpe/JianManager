@@ -28,3 +28,45 @@ export function normalizeRows(
 export function shouldShowEmptyRow(data: DbRowsResult | undefined): boolean {
   return normalizeRows(data).length === 0
 }
+
+/** 主键类列的候选列名（GORM 表几乎都是 `id`）。 */
+const ID_COLUMNS = ['id', 'ID'] as const
+
+/**
+ * 为当前页每行算出稳定 key（与行内容一一对应，而不是数组下标）。
+ *
+ * 为什么不能继续用下标：排序（点列头）、翻页、过滤都会让「同一位置」换成另一条记录，
+ * React 会把上一行的 DOM 身份直接套给新数据——行内的文本选择、焦点、以及未来任何
+ * 行级状态都会错位到别的记录上。
+ *
+ * 取值优先级：
+ * 1. 主键类列（`id`）：最稳，翻页/排序后仍是同一行的身份；
+ * 2. 整行内容指纹（视图/联表结果没有主键时的兜底）；
+ * 3. 下标（内容指纹也不可得，如行内出现循环引用）。
+ *
+ * 同页出现完全相同的两行（无主键的视图结果）时，指纹会撞车，故追加出现序号去重，
+ * 保证 key 在页内唯一（否则 React 会报重复 key 并只保留一行）。
+ */
+export function rowKeys(rows: Array<Record<string, unknown>>): string[] {
+  const seen = new Map<string, number>()
+  return rows.map((row, index) => {
+    const base = baseRowKey(row, index)
+    const hit = seen.get(base) ?? 0
+    seen.set(base, hit + 1)
+    return hit === 0 ? base : `${base}#${hit}`
+  })
+}
+
+/** 单行的基准 key（未去重）：主键 → 内容指纹 → 下标。 */
+function baseRowKey(row: Record<string, unknown>, index: number): string {
+  for (const column of ID_COLUMNS) {
+    const value = row[column]
+    if (value !== undefined && value !== null) return `id:${String(value)}`
+  }
+  try {
+    return `row:${JSON.stringify(row)}`
+  } catch {
+    // 行内出现不可序列化的值（循环引用 / BigInt）：退回下标，至少不抛错。
+    return `idx:${index}`
+  }
+}

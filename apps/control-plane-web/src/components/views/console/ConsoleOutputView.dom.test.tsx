@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { describe, expect, it } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
@@ -131,7 +131,7 @@ describe('ConsoleOutputView 虚拟列表', () => {
     expect(screen.queryByText('line-4999')).not.toBeInTheDocument()
   })
 
-  it('overscan 为上下各 12 行（spec §2.1）', () => {
+  it('overscan 为上下各 12 行（spec §2.1）', async () => {
     const { container } = renderWithProviders(
       <ConsoleOutputView lines={makeLines(500)} droppedCount={0} fontSize={14} />,
     )
@@ -141,6 +141,10 @@ describe('ConsoleOutputView 虚拟列表', () => {
     // 滚到第 100 行：窗口起点应为 100 - overscan = 88。
     output.scrollTop = 100 * ROW_HEIGHT
     fireEvent.scroll(output)
+
+    // 滚动指标按 rAF 合并（useVirtualRows.onScroll 一帧最多一次 setState），
+    // 因此窗口在下一动画帧才跟上——同步断言会读到合并前的旧窗口。
+    await waitFor(() => expect(renderedSeqs()[0]).toBe(100 - OVERSCAN))
 
     const seqs = renderedSeqs()
     expect(seqs[0]).toBe(100 - OVERSCAN)

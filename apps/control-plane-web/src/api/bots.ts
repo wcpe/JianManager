@@ -91,14 +91,23 @@ export function useBots(params?: BotListParams) {
   })
 }
 
-/** 获取 Bot 计数聚合，可按 instance/node/status/behavior 分组（FR-038）。 */
-export function useBotSummary(params?: BotListParams & { groupBy?: string }) {
+/**
+ * 获取 Bot 计数聚合，可按 instance/node/status/behavior 分组（FR-038）。
+ *
+ * `options.enabled` 供调用方门控：分组总览同时挂着 5 路 summary，每路都是 5s 轮询
+ * （稳定 ≈1 req/s），而其中只有当前分组维度那一路是当场要用的。未启用的维度不必轮询。
+ */
+export function useBotSummary(
+  params?: BotListParams & { groupBy?: string },
+  options?: { enabled?: boolean },
+) {
   return useQuery({
     queryKey: ['bots', 'summary', params],
     queryFn: async () => {
       const { data } = await api.get<BotSummary>('/bots/summary', { params })
       return data
     },
+    enabled: options?.enabled ?? true,
     refetchInterval: BOT_REFETCH_MS,
   })
 }

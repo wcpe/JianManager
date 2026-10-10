@@ -24,9 +24,11 @@ export interface IpAnalysisTabViewProps {
   isLoading: boolean
   /** 取数失败；判定优先于空态。 */
   isError: boolean
+  /** 命中数已达服务端上限：列表可能被截断，需明确告知（固定 limit 无翻页器）。 */
+  truncated?: boolean
 }
 
-export function IpAnalysisTabView({ rows, isLoading, isError }: IpAnalysisTabViewProps) {
+export function IpAnalysisTabView({ rows, isLoading, isError, truncated }: IpAnalysisTabViewProps) {
   const { t } = useTranslation()
   return (
     <Panel title={t('clientDistOps.ip.title')}>
@@ -35,7 +37,9 @@ export function IpAnalysisTabView({ rows, isLoading, isError }: IpAnalysisTabVie
       ) : rows.length === 0 ? (
         <EmptyState text={isLoading ? t('common.loading') : t('clientDistOps.ip.empty')} />
       ) : (
-        <Table>
+        <>
+          {truncated && <TruncatedNote />}
+          <Table>
           <TableHeader>
             <TableRow>
               <TableHead>{t('clientDistOps.ip.colIp')}</TableHead>
@@ -63,6 +67,7 @@ export function IpAnalysisTabView({ rows, isLoading, isError }: IpAnalysisTabVie
             ))}
           </TableBody>
         </Table>
+        </>
       )}
     </Panel>
   )
@@ -76,9 +81,11 @@ export interface PlayerAnalysisTabViewProps {
   isLoading: boolean
   /** 取数失败；判定优先于空态。 */
   isError: boolean
+  /** 命中数已达服务端上限：列表可能被截断，需明确告知（固定 limit 无翻页器）。 */
+  truncated?: boolean
 }
 
-export function PlayerAnalysisTabView({ rows, isLoading, isError }: PlayerAnalysisTabViewProps) {
+export function PlayerAnalysisTabView({ rows, isLoading, isError, truncated }: PlayerAnalysisTabViewProps) {
   const { t } = useTranslation()
   return (
     <Panel title={t('clientDistOps.players.title')}>
@@ -87,7 +94,9 @@ export function PlayerAnalysisTabView({ rows, isLoading, isError }: PlayerAnalys
       ) : rows.length === 0 ? (
         <EmptyState text={isLoading ? t('common.loading') : t('clientDistOps.players.empty')} />
       ) : (
-        <Table>
+        <>
+          {truncated && <TruncatedNote />}
+          <Table>
           <TableHeader>
             <TableRow>
               <TableHead>{t('clientDistOps.players.colPlayer')}</TableHead>
@@ -113,7 +122,19 @@ export function PlayerAnalysisTabView({ rows, isLoading, isError }: PlayerAnalys
             ))}
           </TableBody>
         </Table>
+        </>
       )}
     </Panel>
   )
+}
+
+/**
+ * 「已截断」提示行。
+ *
+ * 这两个聚合表按固定 `limit: 200` 取数且没有翻页器——命中超过上限时列表是被截断的，
+ * 运维若不被告知会把「表里没有」误读成「不存在」。复用既有 `search.truncated` 文案。
+ */
+function TruncatedNote() {
+  const { t } = useTranslation()
+  return <p className="mb-2 text-xs text-muted-foreground">{t('search.truncated')}</p>
 }

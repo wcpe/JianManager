@@ -23,6 +23,9 @@ const MASKERS: ProfileMaskers = {
   installId: maskInstallId,
 }
 
+/** 画像列表服务端上限（列表无翻页器）：命中数达到上限即视为可能被截断，由视图给出提示。 */
+const PROFILES_LIMIT = 200
+
 export function ProfilesTab() {
   const { query, updateQuery } = useSecurityQuery()
   const [playerName, setPlayerName] = useState('')
@@ -32,13 +35,14 @@ export function ProfilesTab() {
     channelId: query.channelId,
     machineId: query.machineId,
     ip: query.ip,
-    limit: 200,
+    limit: PROFILES_LIMIT,
   })
   const detail = useClientDistSecurityProfile(detailId)
 
   return (
     <SecurityProfilesTabView
       profiles={data ?? []}
+      truncated={(data?.length ?? 0) >= PROFILES_LIMIT}
       isLoading={isLoading}
       isError={isError}
       query={query}

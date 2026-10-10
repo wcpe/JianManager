@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
@@ -56,8 +55,6 @@ export interface SessionsTabViewProps {
   startPending?: boolean
   /** 停止 mutation 进行中：pending 期间禁用全部停止按钮。 */
   stopPending?: boolean
-  /** 搜索框初值（取 URL 的 q；该筛选当前不参与取数，仅作展示草稿，故留在包内）。 */
-  initialSearch?: string
 }
 
 /**
@@ -77,11 +74,8 @@ export function SessionsTabView({
   onStop,
   startPending,
   stopPending,
-  initialSearch,
 }: SessionsTabViewProps) {
   const { t } = useTranslation()
-  // 纯 UI 草稿：不参与取数，故状态留在包内，仅以 URL 的 q 作初值。
-  const [search, setSearch] = useState(initialSearch ?? '')
 
   const items = data?.items ?? []
   const total = data?.total ?? 0
@@ -90,13 +84,18 @@ export function SessionsTabView({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
+        {/*
+          会话列表的搜索框**当前不参与取数**（后端 `GET /bots/stress-sessions` 只接受 page/pageSize，
+          没有 q）。原实现把它做成可输入的本地草稿：敲了字什么都不发生，用户会以为「没有匹配的会话」——
+          这是比「不能用」更坏的死交互。故禁用并显式说明；接上服务端过滤（需要后端加 q）再解禁。
+        */}
         <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          disabled
           placeholder={t('botsLoad.searchSessions')}
           aria-label={t('botsLoad.searchSessions')}
           className="h-9 w-56"
         />
+        <span className="text-xs text-muted-foreground">{t('common.soon')}</span>
         <Button className="ml-auto" onClick={onCreateClick}>
           <Plus className="size-4" /> {t('botsLoad.createRun')}
         </Button>

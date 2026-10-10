@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useNotificationFeed, useMarkFeedRead, useMarkAllFeedRead } from '@/api/notification-feed'
 import type { FeedQuery } from '@/api/notification-feed'
+import { useDebounced } from '@/lib/hooks/use-debounced'
 import { NotificationCenterPageView } from '@/components/views/notifications/NotificationCenterPageView'
 
 /**
@@ -14,7 +15,17 @@ import { NotificationCenterPageView } from '@/components/views/notifications/Not
 export default function NotificationCenterPage() {
   const navigate = useNavigate()
   const [filter, setFilter] = useState<FeedQuery>({})
-  const { data: page } = useNotificationFeed(filter)
+  /**
+   * 关键字防抖（300ms）留在容器：输入框必须**即时回显**（`filter.keyword` 原样喂给视图），
+   * 但请求键只用停止键入后的值。否则每敲一个字都发一次 `/notifications/feed`
+   * ——该查询还带 30 秒轮询，会与在途请求叠成一阵请求风暴。
+   * 与 PlayersPage 的取数策略同一形态：视图只管受控输入，取数口径（含防抖）归容器。
+   */
+  const debouncedKeyword = useDebounced(filter.keyword ?? '', 300).trim()
+  const { data: page, isLoading, isError } = useNotificationFeed({
+    ...filter,
+    keyword: debouncedKeyword || undefined,
+  })
   const markRead = useMarkFeedRead()
   const markAll = useMarkAllFeedRead()
 
@@ -25,6 +36,8 @@ export default function NotificationCenterPage() {
     <NotificationCenterPageView
       query={filter}
       data={page}
+      isLoading={isLoading}
+      error={isError}
       markingAll={markAll.isPending}
       onPatchFilter={patchFilter}
       onPageChange={(next) => setFilter((f) => ({ ...f, page: next }))}

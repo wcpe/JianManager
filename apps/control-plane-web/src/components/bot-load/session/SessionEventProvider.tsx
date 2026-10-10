@@ -28,6 +28,14 @@ interface SessionEventContextValue {
   run: BotLoadRunV2 | null
 }
 
+/**
+ * `counts` / `run-state` 帧触发 detail 全量重取的最小间隔。
+ *
+ * 服务端推流 ticker 是 2s，逐帧重取就等于每 2 秒拉一次 HTTP 整表快照；这两类帧的数据
+ * 已被 `applyStreamFrame` 合并进内存态，故 detail 只做低频兜底同步。
+ */
+const DETAIL_REFRESH_MIN_INTERVAL_MS = 5000
+
 const SessionEventContext = createContext<SessionEventContextValue | null>(null)
 
 export function useSessionEvents(): SessionEventContextValue {
@@ -51,40 +59,61 @@ export function SessionEventProvider({
   const [live, setLive] = useState<SessionLiveState>(() => createSessionLiveState(snapshot ?? null))
   const [streamStatus, setStreamStatus] = useState<BotLoadEventClientStatus | string>('idle')
   const terminalRef = useRef(false)
+  /**
+   * live 的最新值镜像（同一帧内同步可见）。
+   *
+   * `onEvent` 必须先算出新状态、再做副作用：React 要求 setState 的 updater 是**纯函数**
+   * （StrictMode 开发态会重复执行它），把失效查询/标记终态写在 updater 里会被执行两遍。
+   * 帧是顺序到达的，用 ref 承接上一帧结果即可；快照合并同样经 `commitLive` 写入，两个来源不会分叉。
+   */
+  const liveRef = useRef(live)
+  const commitLive = useCallback((next: SessionLiveState) => {
+    liveRef.current = next
+    setLive(next)
+  }, [])
+  /** 最近一次 detail 全量重取的时间戳（节流用）。 */
+  const lastDetailRefreshRef = useRef(0)
 
-  // 快照刷新时合并（不覆盖 live metrics/warnings）。
+  // 快照刷新时合并（不覆盖 live metrics/warnings）。setState 收在 commitLive 里，
+  // 与 liveRef 一起写，保证 ref 与 state 不会分叉。
   useEffect(() => {
     if (!snapshot) return
-    /* eslint-disable react-hooks/set-state-in-effect -- HTTP 快照到达时合并 live.run，属外部系统同步 */
-    setLive((prev) => ({
-      ...prev,
-      run: mergeRun(prev.run, snapshot),
-    }))
+    commitLive({
+      ...liveRef.current,
+      run: mergeRun(liveRef.current.run, snapshot),
+    })
     if (isTerminalRunState(snapshot.runState)) {
       terminalRef.current = true
     }
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [snapshot])
+  }, [snapshot, commitLive])
+
+  /** detail 重取节流（节流口径见模块顶部的 `DETAIL_REFRESH_MIN_INTERVAL_MS`）。 */
+  const refreshDetailThrottled = useCallback(() => {
+    const now = Date.now()
+    if (now - lastDetailRefreshRef.current < DETAIL_REFRESH_MIN_INTERVAL_MS) return
+    lastDetailRefreshRef.current = now
+    void qc.invalidateQueries({ queryKey: botLoadQueryKeys(runId).detail })
+  }, [qc, runId])
 
   const onEvent = useCallback(
     (frame: { event: string; data: string; id?: string }) => {
-      setLive((prev) => {
-        const { state, completed } = applyStreamFrame(prev, frame.event, frame.data, frame.id)
-        if (completed) {
-          terminalRef.current = true
-          void qc.invalidateQueries({ queryKey: botLoadQueryKeys(runId).detail })
-          void qc.invalidateQueries({ queryKey: ['bots', 'stress-sessions', runId, 'failures'] })
-        }
-        if (frame.event === 'failure') {
-          void qc.invalidateQueries({ queryKey: botLoadQueryKeys(runId).failures() })
-        }
-        if (frame.event === 'counts' || frame.event === 'run-state') {
-          void qc.invalidateQueries({ queryKey: botLoadQueryKeys(runId).detail })
-        }
-        return state
-      })
+      // ① 纯计算：先把帧应用到状态并提交（不在 updater 里做任何副作用）。
+      const { state, completed } = applyStreamFrame(liveRef.current, frame.event, frame.data, frame.id)
+      commitLive(state)
+      // ② 副作用：终态失效是「一次性且必须立刻生效」的，不受节流影响。
+      if (completed) {
+        terminalRef.current = true
+        lastDetailRefreshRef.current = Date.now()
+        void qc.invalidateQueries({ queryKey: botLoadQueryKeys(runId).detail })
+        void qc.invalidateQueries({ queryKey: ['bots', 'stress-sessions', runId, 'failures'] })
+      } else if (frame.event === 'counts' || frame.event === 'run-state') {
+        refreshDetailThrottled()
+      }
+      if (frame.event === 'failure') {
+        void qc.invalidateQueries({ queryKey: botLoadQueryKeys(runId).failures() })
+      }
     },
-    [qc, runId],
+    [qc, runId, commitLive, refreshDetailThrottled],
   )
   const snapshotRunState = snapshot?.runState
 

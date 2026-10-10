@@ -28,6 +28,7 @@ import { isNetworkDownloadFailure } from '@/lib/client-dist/download-failure'
 import { isTerminalTask, TASK_KIND_LABEL_KEYS } from '@/lib/tasks/task-status'
 import type { Task, TaskLog, TaskState } from '@/lib/tasks/task-status'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
+import { mergeMeasuredRowHeights } from '@/lib/shared/row-heights'
 import { cn } from '@jianmanager/ui'
 
 /** 任务状态 → Badge 变体与文案键。 */
@@ -60,13 +61,23 @@ const NO_CANCELING_IDS: string[] = []
  * 行高估算（px，FR-496 阶段 6 视口裁剪用）：`px-3 py-2.5`(20) + 最高单元格 + `border-b`(1)，
  * 实测（Chromium 1440×900，root 16px）：有详情的行 56.7；最高单元格在「状态徽章 22」与
  * 「标题 20 / 标题+详情 35.7」之间切换 —— 单行 20+22+1=43，两行 20+35.7+1≈57。
- * 估算只用于「尚未量测到的行」撑滚动高度；两档行共用同一基准，故基准的绝对误差只会整体平移
- * 滚动区间，不会累积错位（错位只可能来自「两行/一行」判定错，故该判定与行渲染同源：detail 非空即有第二行）。
+ *
+ * 【只用于「尚未量测到的行」】估算值哪怕只差零点几像素，误差也会**按行数线性累积**：
+ * 500 行窗口里 0.5px/行就是 250px 的总高偏差，滚动条位置与实际内容对不上。
+ * 因此渲染过的行一律以 DOM 实测值回填（见 `measuredRows`），估算只负责首帧与屏外行撑高度。
  */
 const TASK_ROW_BASE_PX = 43
 const TASK_ROW_EXTRA_LINE_PX = 14
 /** 展开行（错误正文 + 日志）的估算高度：仅用于首帧与无布局环境，浏览器实测后以实测为准。 */
 const TASK_ROW_EXPANDED_PX = 260
+/**
+ * 详情里最多渲染的日志行数（取**最后** N 行：排障要看的是最近的输出）。
+ *
+ * 后端单任务日志可达上万行，全量塞进一个 `<pre>` 会让浏览器一次性排版上万行文本
+ * （`whitespace-pre-wrap break-all` 下每行都要做断行计算），展开一个大任务的瞬间就卡住主线程。
+ * 被裁掉的行数以计数说明呈现，不做静默截断。
+ */
+const MAX_LOG_LINES = 500
 /** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
 const FALLBACK_VIEWPORT_PX = 640
 /** 详情里网络失败引导的两个链接入口统一样式（原页两处字面量相同，抽一处避免分叉）。 */
@@ -202,23 +213,56 @@ export function TasksPageView({
     if (expandedId !== null && px > 0 && px !== expandedPx) setExpandedSize({ id: expandedId, px })
   }, [expandedId, expandedPx, tasks])
 
-  /** 逐行高度：折叠行按「一行/两行」估算，展开行用实测值 → 偏移前缀和贴近真实布局。 */
+  /**
+   * 折叠行的实测高度（taskId → px）。
+   *
+   * 折叠行原先只有常量估算，而估算的偏差**按行数累积**（500 行 × 0.5px = 250px），
+   * 表现为滚动条位置与真实内容错位、拖到底也到不了最后一行。这里把**已渲染过的**行实测回填，
+   * 让前缀和随浏览逐步收敛到真实布局（与 ConsoleOutputView 的自校正同一套机制）。
+   * 未渲染到的行仍用估算——它们还没进 DOM，无从量起。
+   */
+  const [measuredRows, setMeasuredRows] = useState<Map<string, number>>(() => new Map())
+  /** 上次量测时的容器宽度：宽度一变（标题折行数变），旧实测值整体失效。 */
+  const measuredWidthRef = useRef<number>(-1)
+
+  /**
+   * 逐行高度：展开行与已量测过的折叠行用实测值，其余用估算 →
+   * 偏移前缀和随浏览贴近真实布局。
+   */
   const rowSizes = useMemo(
     () =>
-      tasks.map((task) =>
-        task.taskId === expandedId
-          ? expandedPx
-          : TASK_ROW_BASE_PX + (task.detail ? TASK_ROW_EXTRA_LINE_PX : 0),
-      ),
-    [expandedId, expandedPx, tasks],
+      tasks.map((task) => {
+        if (task.taskId === expandedId) return expandedPx
+        return measuredRows.get(task.taskId) ?? TASK_ROW_BASE_PX + (task.detail ? TASK_ROW_EXTRA_LINE_PX : 0)
+      }),
+    [expandedId, expandedPx, measuredRows, tasks],
   )
-  const { containerRef, onScroll, range } = useVirtualRows({
+
+  const { containerRef, onScroll, range, crossSize } = useVirtualRows({
     total: tasks.length,
     itemSize: TASK_ROW_BASE_PX,
     overscan: 6,
     fallbackViewportSize: FALLBACK_VIEWPORT_PX,
     sizes: rowSizes,
   })
+
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    // 宽度变了就丢掉全部旧实测值重测：它们是按旧宽度（旧折行数）量的，留着只会整体错位。
+    // crossSize 自身经 400ms 防抖，拿到的是侧栏动画结束后的稳定宽度。
+    const base = measuredWidthRef.current === crossSize ? measuredRows : new Map<string, number>()
+    measuredWidthRef.current = crossSize
+    const measured = [...el.querySelectorAll<HTMLElement>('[data-task-row-id]')].map((node) => ({
+      // jsdom 无布局：offsetHeight 恒 0，合并规则会自然忽略（测试里窗口完全确定）。
+      id: node.dataset.taskRowId ?? '',
+      px: node.offsetHeight,
+    }))
+    // 展开行自己有实测通道（expandedRef），故作为 skipId 传入。
+    const { sizes, changed } = mergeMeasuredRowHeights(base, measured, expandedId)
+    // 宽度变化时即使没有新的实测值也要提交（把旧宽度下的实测值清掉）。
+    if (changed || base !== measuredRows) setMeasuredRows(sizes)
+  }, [containerRef, crossSize, expandedId, measuredRows, range.end, range.start, tasks])
 
   const totalCount = total ?? 0
   const hasFilters = !!(state || kind || nodeId || keyword || time)
@@ -400,11 +444,19 @@ function TaskRow({
   const { t } = useTranslation()
   // 在线 running 已请求取消 → 显「取消中」；否则按状态。
   const canceling = task.state === 'running' && task.cancelRequested
+  /**
+   * 状态元数据查表并兜底：`TaskState` 是前端枚举，后端一旦先上一档新状态（如 queued），
+   * 查表得到 undefined，原先直接 `STATE_META[task.state].variant` 会在渲染期抛错把整页打崩。
+   * 兜底直接显示后端给的原始状态串——它比「未知」更有助于定位，也不必为此新增文案键。
+   */
+  const meta = STATE_META[task.state] as { variant: 'default' | 'secondary' | 'destructive' | 'outline'; key: string } | undefined
   const badge = canceling
     ? { variant: 'outline' as const, label: t('tasks.state.canceling', '取消中') }
-    : { variant: STATE_META[task.state].variant, label: t(STATE_META[task.state].key) }
+    : meta
+      ? { variant: meta.variant, label: t(meta.key) }
+      : { variant: 'outline' as const, label: task.state }
   return (
-    <div ref={rowRef} className={cn('border-border/60', !isLast && 'border-b')}>
+    <div ref={rowRef} data-task-row-id={task.taskId} className={cn('border-border/60', !isLast && 'border-b')}>
       <div className="flex items-center">
         <button
           type="button"
@@ -426,7 +478,12 @@ function TaskRow({
             <Badge variant={badge.variant}>{badge.label}</Badge>
           </span>
           <span className="w-40 shrink-0">
-            <ProgressBar value={task.progress} terminal={isTerminalTask(task)} failed={task.state === 'failed'} />
+            <ProgressBar
+              value={task.progress}
+              terminal={isTerminalTask(task)}
+              failed={task.state === 'failed'}
+              label={`${task.title || task.kind} ${t('tasks.progress')}`}
+            />
           </span>
           <span className="w-40 shrink-0 font-mono text-[11px] text-muted-foreground">
             {new Date(task.updatedAt).toLocaleString()}
@@ -486,20 +543,43 @@ function CancelTaskButton({ task, canceling, onCancelTask }: {
   )
 }
 
-/** 进度条：失败时用 destructive 色，终态成功满格。 */
-function ProgressBar({ value, terminal, failed }: { value: number; terminal: boolean; failed: boolean }) {
+/**
+ * 进度条：失败时用 destructive 色，终态成功满格。
+ *
+ * 可访问性：原先只有两个 div 的宽度差，读屏完全读不到进度。补 `role="progressbar"` +
+ * `aria-valuenow/min/max` + 带任务名的可访问名；播报值取**界面上显示的那个数**
+ * （终态成功按 100% 显示，故也按 100 播报），避免读屏听到的数字与视觉不一致。
+ */
+function ProgressBar({
+  value,
+  terminal,
+  failed,
+  label,
+}: {
+  value: number
+  terminal: boolean
+  failed: boolean
+  /** 可访问名（含任务名，便于按行阅读时知道是谁的进度）。 */
+  label: string
+}) {
   const pct = Math.max(0, Math.min(100, value))
+  const shown = terminal && !failed ? 100 : pct
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
+      <div
+        className="h-1.5 w-28 overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={shown}
+      >
         <div
           className={cn('h-full rounded-full transition-all', failed ? 'bg-destructive' : 'bg-primary')}
           style={{ width: `${failed ? 100 : pct}%` }}
         />
       </div>
-      <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">
-        {terminal && !failed ? 100 : pct}%
-      </span>
+      <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">{shown}%</span>
     </div>
   )
 }
@@ -515,6 +595,8 @@ function TaskDetail({ error, detail, renderLink }: {
   const { t } = useTranslation()
   const logs = detail?.logs ?? []
   const isLoading = detail?.isLoading ?? false
+  // 只渲染尾部（最近的输出）：上万行的日志全量进 DOM 会一次性做上万次断行排版，展开即卡住主线程。
+  const visibleLogs = logs.length > MAX_LOG_LINES ? logs.slice(-MAX_LOG_LINES) : logs
   // 两处引导入口共用同一套链接样式（随 renderLink 一并注入，缺省退化为原生 <a href>）。
   const link = (to: string, children: ReactNode) =>
     renderLink ? (
@@ -547,9 +629,17 @@ function TaskDetail({ error, detail, renderLink }: {
         ) : logs.length === 0 ? (
           <p className="text-[11px] text-muted-foreground">{t('tasks.noLogs')}</p>
         ) : (
-          <pre className="max-h-64 overflow-auto rounded-md border bg-card p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
-            {logs.map((l) => l.line).join('\n')}
-          </pre>
+          <>
+            {/* 截断要明说：静默只显示尾部会让用户以为日志就这么短（排障时正是最需要完整上下文的地方）。 */}
+            {visibleLogs.length < logs.length && (
+              <p className="mb-1 text-[11px] text-muted-foreground">
+                {t('instances.loadedOfTotal', { loaded: visibleLogs.length, total: logs.length })}
+              </p>
+            )}
+            <pre className="max-h-64 overflow-auto rounded-md border bg-card p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
+              {visibleLogs.map((l) => l.line).join('\n')}
+            </pre>
+          </>
         )}
       </div>
     </div>

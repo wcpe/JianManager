@@ -69,17 +69,21 @@ export interface NotificationFeedQuery {
 
 /**
  * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不碰路由、不弹 toast**。
- * - 通知流数据经 props 注入（容器调 `useNotificationFeed()`）；
+ * - 通知流数据经 props 注入（容器调 `useNotificationFeed()`），**含其加载/错误态**——
+ *   取数失败若与「没有消息」共用一个分支，用户会把故障读成「我没收到通知」；
  * - 筛选（来源/仅未读/关键字）与页码决定请求参数，整份留在容器——视图不存筛选副本，
- *   只用 `query` 渲染选中态；「改筛选即回第 1 页」由容器在 `onPatchFilter` 内完成；
- * - 标记已读（单条/全部）与两处跳转（任务中心定位 / 告警页）以回调上报，容器执行 mutation 与 `navigate`；
- * - 原页无独立加载/错误态（未取回时 `items` 为空即渲染空态），此处保持一致，不新增分支。
+ *   只用 `query` 渲染选中态；「改筛选即回第 1 页」与关键字防抖（300ms）都由容器在取数侧完成；
+ * - 标记已读（单条/全部）与两处跳转（任务中心定位 / 告警页）以回调上报，容器执行 mutation 与 `navigate`。
  */
 export interface NotificationCenterPageViewProps {
   /** 当前查询参数（容器持有）；视图据此渲染 Tab 选中态与分页器。 */
   query: NotificationFeedQuery
   /** 当前页通知流；缺省视作空列表（渲染空态）。 */
   data?: NotificationFeedPage
+  /** 首屏取数在途：渲染加载态，而不是抢先显示「暂无通知」。 */
+  isLoading?: boolean
+  /** 取数失败：渲染错误态。缺省 false。 */
+  error?: boolean
   /** 标记全部已读在途：禁用页头按钮。 */
   markingAll?: boolean
   /** 改筛选条件（来源/仅未读/关键字）；容器负责把页码归 1。 */
@@ -119,6 +123,8 @@ function feedLevelStatus(level: NotificationFeedLevel): StatusLevel {
 export function NotificationCenterPageView({
   query,
   data,
+  isLoading = false,
+  error = false,
   markingAll = false,
   onPatchFilter,
   onPageChange,
@@ -135,10 +141,12 @@ export function NotificationCenterPageView({
   const pageSize = query.pageSize ?? 50
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
-  const sourceTabs: { value: NotificationFeedSource | undefined; label: string }[] = [
-    { value: undefined, label: t('notificationCenter.sourceAll') },
-    { value: 'message', label: t('notificationCenter.sourceMessage') },
-    { value: 'alert', label: t('notificationCenter.sourceAlert') },
+  // key 用稳定的来源值（`undefined` 即「全部」）而不是翻译文案：文案随语言/措辞变化，
+  // 拿它当 key 会让 React 在切语言时把整个 Tab 列表当成新节点重建（丢焦点、重挂载）。
+  const sourceTabs: { key: string; value: NotificationFeedSource | undefined; label: string }[] = [
+    { key: 'all', value: undefined, label: t('notificationCenter.sourceAll') },
+    { key: 'message', value: 'message', label: t('notificationCenter.sourceMessage') },
+    { key: 'alert', value: 'alert', label: t('notificationCenter.sourceAlert') },
   ]
 
   return (
@@ -158,7 +166,7 @@ export function NotificationCenterPageView({
         <div className="flex gap-1 rounded-lg border p-0.5">
           {sourceTabs.map((tab) => (
             <button
-              key={tab.label}
+              key={tab.key}
               type="button"
               onClick={() => onPatchFilter({ source: tab.value })}
               className={cn(
@@ -194,7 +202,19 @@ export function NotificationCenterPageView({
       </div>
 
       <Panel bodyClassName="p-0">
-        {items.length === 0 ? (
+        {/* 三态互斥且顺序固定：在途 → 失败 → 空。取数失败绝不能落到「暂无通知」那一支
+            （那会把故障说成「你没收到消息」，是用户最容易误信的一种假成功）。 */}
+        {isLoading ? (
+          <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 text-center">
+            <Bell className="size-10 animate-pulse text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+          </div>
+        ) : error ? (
+          <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 text-center" role="alert">
+            <Bell className="size-10 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">{t('common.error')}</p>
+          </div>
+        ) : items.length === 0 ? (
           <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 text-center">
             <Bell className="size-10 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">{t('notificationCenter.empty')}</p>
@@ -273,7 +293,15 @@ function NotificationRow({
           </span>
           <StatusBadge level={feedLevelStatus(item.level)} label={item.level} dot={false} />
           <span className="truncate font-medium">{item.title}</span>
-          {!item.read && <span className="size-1.5 shrink-0 rounded-full bg-primary" title={t('notificationCenter.unread')} />}
+          {/* 未读不能只靠颜色（圆点色 + 行底色的淡色高亮）传达：色觉障碍与读屏用户都收不到。
+              圆点保持视觉，另配一段仅读屏可见的文字作为可访问表达（原先挂在不可聚焦的 span 上的
+              `title` 既不可聚焦、也不是可靠的可访问名来源）。 */}
+          {!item.read && (
+            <span className="inline-flex shrink-0 items-center gap-1 text-primary">
+              <span className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
+              <span className="sr-only">{t('notificationCenter.unread')}</span>
+            </span>
+          )}
         </div>
         {item.body && <p className="mt-1 break-words text-sm text-muted-foreground">{item.body}</p>}
         <p className="mt-1 font-mono text-[11px] text-muted-foreground">{new Date(item.createdAt).toLocaleString()}</p>

@@ -29,6 +29,7 @@ export function SessionBots({ runId }: { runId: number | string }) {
       }
       data={query.data}
       isLoading={query.isLoading}
+      isError={query.isError}
     />
   )
 }

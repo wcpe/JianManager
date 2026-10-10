@@ -25,13 +25,15 @@ export interface SessionBotsProps {
   /** 当前页数据（容器经 useBotLoadRunBots 取数）。 */
   data?: { items: BotLoadRunBot[]; total: number }
   isLoading?: boolean
+  /** 取数失败：显式报错，不得退化成「无 Bot」（那会把取数故障读成「这一批没起 Bot」）。 */
+  isError?: boolean
 }
 
 /**
  * 会话 Bot 明细表（FR-371）：搜索 / 状态 / 节点三个过滤输入（失焦或回车提交），
  * 整页全选与逐行勾选。勾选集合是纯 UI 状态，不外传。
  */
-export function SessionBots({ filter, onFilterChange, data, isLoading }: SessionBotsProps) {
+export function SessionBots({ filter, onFilterChange, data, isLoading, isError }: SessionBotsProps) {
   const { t } = useTranslation()
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
@@ -120,7 +122,8 @@ export function SessionBots({ filter, onFilterChange, data, isLoading }: Session
                   />
                 </TableCell>
                 <TableCell className="font-medium">{b.name}</TableCell>
-                <TableCell>{b.status}</TableCell>
+                {/* 状态枚举走既有 `bots.status_*` 文案表（与 Bot 列表同一套），未知值回退裸枚举。 */}
+                <TableCell>{t(`bots.status_${b.status}`, b.status)}</TableCell>
                 <TableCell>{b.executorNodeId ?? '—'}</TableCell>
                 <TableCell className="font-mono text-xs">{b.stepId ?? b.commandId ?? '—'}</TableCell>
                 <TableCell className="tabular-nums">{b.reconnectCount}</TableCell>
@@ -129,10 +132,18 @@ export function SessionBots({ filter, onFilterChange, data, isLoading }: Session
                 </TableCell>
               </TableRow>
             ))}
-            {items.length === 0 && !isLoading && (
+            {items.length === 0 && !isLoading && !isError && (
               <TableRow>
                 <TableCell colSpan={7} className="text-center text-muted-foreground">
                   {t('botLoad.noBots')}
+                </TableCell>
+              </TableRow>
+            )}
+            {/* 失败判定优先于空态：取数失败与「这一批没有 Bot」是两件事。 */}
+            {isError && (
+              <TableRow>
+                <TableCell colSpan={7} className="text-center text-amber-700 dark:text-amber-300">
+                  {t('botLoad.loadFailed')}
                 </TableCell>
               </TableRow>
             )}

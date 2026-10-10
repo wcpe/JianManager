@@ -48,6 +48,8 @@ export interface ProfileMaskers {
 export interface SecurityProfilesTabViewProps {
   /** 画像列表（空数组即空态）。 */
   profiles: ClientDistSecurityProfile[]
+  /** 命中数已达服务端上限：列表可能被截断，需明确告知（固定 limit 无翻页器）。 */
+  truncated?: boolean
   /** 取数中；仅在无行时展示「加载中」文案。 */
   isLoading: boolean
   /** 取数失败；判定优先于空态。 */
@@ -74,6 +76,7 @@ export interface SecurityProfilesTabViewProps {
 
 export function SecurityProfilesTabView({
   profiles,
+  truncated,
   isLoading,
   isError,
   query,
@@ -112,7 +115,10 @@ export function SecurityProfilesTabView({
         ) : profiles.length === 0 ? (
           <EmptyState text={isLoading ? t('common.loading') : t('clientDistOps.profiles.empty')} />
         ) : (
-          <Table>
+          <>
+            {/* 前台按固定 limit 取数且无翻页器：命中触顶时列表是被截断的，必须说明。 */}
+            {truncated && <p className="mb-2 text-xs text-muted-foreground">{t('search.truncated')}</p>}
+            <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>{t('clientDistOps.profiles.colPlayerChannel')}</TableHead>
@@ -168,6 +174,7 @@ export function SecurityProfilesTabView({
               ))}
             </TableBody>
           </Table>
+          </>
         )}
       </Panel>
       <ProfileDetailDialog

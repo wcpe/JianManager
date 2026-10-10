@@ -24,6 +24,11 @@ export interface SessionFailuresProps {
   /** 当前页数据（容器经 useBotLoadFailures 取数）。 */
   data?: { items: BotLoadFailure[]; total: number }
   isLoading?: boolean
+  /**
+   * 取数失败：必须显式报错。压测判定正是靠失败明细下结论，把它渲染成「无失败记录」
+   * 是最危险的假信号——「没有失败」与「失败列表没取到」会被读成同一件事。
+   */
+  isError?: boolean
   /** 各类别失败计数（容器取自 run.failureSummary）。 */
   failureSummary: Record<string, number>
   /** 触发重试：传 botUuid 列表则重试选中，不传则重试当前过滤全集。 */
@@ -42,6 +47,7 @@ export function SessionFailures({
   onFilterChange,
   data,
   isLoading,
+  isError,
   failureSummary,
   onRetry,
   retryPending,
@@ -111,6 +117,8 @@ export function SessionFailures({
                     type="checkbox"
                     checked={f.botUuid ? selected.has(f.botUuid) : false}
                     disabled={!f.botUuid}
+                    // 读屏需要知道勾的是哪个 Bot（行内还有时间/类别/错误码，光看「复选框」无从判断）。
+                    aria-label={f.botUuid ?? f.id}
                     onChange={() => {
                       if (!f.botUuid) return
                       const uuid = f.botUuid
@@ -140,10 +148,18 @@ export function SessionFailures({
                 </TableCell>
               </TableRow>
             ))}
-            {items.length === 0 && !isLoading && (
+            {items.length === 0 && !isLoading && !isError && (
               <TableRow>
                 <TableCell colSpan={7} className="text-center text-muted-foreground">
                   {t('botLoad.noFailures')}
+                </TableCell>
+              </TableRow>
+            )}
+            {/* 失败明细是压测判定的证据面：取数失败绝不能被读成「没有失败」。 */}
+            {isError && (
+              <TableRow>
+                <TableCell colSpan={7} className="text-center text-amber-700 dark:text-amber-300">
+                  {t('botLoad.loadFailed')}
                 </TableCell>
               </TableRow>
             )}

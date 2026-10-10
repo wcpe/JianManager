@@ -160,11 +160,13 @@ function BotFleetTab() {
 
   // 全局概览：无 groupBy → total + byStatus（受工具栏筛选影响，便于「筛选后看分布」）
   const globalSummary = useBotSummary(baseParams)
-  // 分布计数 + 实例/节点维度总览（一并取，分组维度切换时无需重查）
+  // 分布计数 + 实例/节点维度总览（实例/节点两路恒定要用：舰队分布条与两种分组维度）
   const instanceSummary = useBotSummary({ ...baseParams, groupBy: 'instance' })
   const nodeSummary = useBotSummary({ ...baseParams, groupBy: 'node' })
-  const statusSummary = useBotSummary({ ...baseParams, groupBy: 'status' })
-  const behaviorSummary = useBotSummary({ ...baseParams, groupBy: 'behavior' })
+  // status/behavior 两路只在切到该维度时才被读：原先无条件挂 5 路 summary、每路 5s 轮询，
+  // 稳定 1 req/s，其中至少两路是纯浪费；按当前维度门控后默认只剩 3 路。
+  const statusSummary = useBotSummary({ ...baseParams, groupBy: 'status' }, { enabled: groupBy === 'status' })
+  const behaviorSummary = useBotSummary({ ...baseParams, groupBy: 'behavior' }, { enabled: groupBy === 'behavior' })
 
   const summaryByDim: Record<GroupByDim, typeof instanceSummary> = {
     instance: instanceSummary,

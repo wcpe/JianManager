@@ -5,7 +5,7 @@ import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { useInstance, useKillInstance, useRebuildInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
+import { useInstance, useKillInstance, useRebuildInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance, isRebuildingInstance } from '@/api/instances'
 import { usePermissionsStore } from '@/stores/permissions'
 import { runtimeDriftOf } from '@/lib/runtime-assets/runtime-drift'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
@@ -113,9 +113,10 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   // 搭建中硬性禁启（FR-331）：provision 未终态期间启动按钮禁用 + tooltip 引导看任务中心，
   // 与后端启动闸（FR-319 二轮②）同一信号源（statusReason「搭建中」），任务终态自然解禁。
   const provisioning = isProvisioningInstance(instance)
-  const isDamaged = instance.status === 'DAMAGED'
   // 重建在途（FR-342）：损毁实例重建期间 statusReason 标「重建中…」，据此禁用重建按钮、且不落红色失败横幅。
-  const rebuilding = isDamaged && (instance.statusReason?.startsWith('重建中') ?? false)
+  // 判据已收敛到 `isRebuildingInstance`（与 `isProvisioningInstance` 同族，见其注释里的前缀匹配风险）——
+  // 它自带 `status === 'DAMAGED'` 前提，故此处不再单独判 `isDamaged`。
+  const rebuilding = isRebuildingInstance(instance)
   // 运行态漂移（FR-471）：>0 即存在未纳管活进程；无漂移时为 undefined（不渲染任何标记）。
   const runtimeDrift = runtimeDriftOf(instance)
   const overviewLogs = logs?.items ?? []

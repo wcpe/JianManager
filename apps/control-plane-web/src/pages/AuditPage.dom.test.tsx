@@ -20,6 +20,20 @@ function scrollToBottom(el: HTMLElement) {
 }
 
 /**
+ * 等 action 筛选（容器侧 300ms 防抖）真正落地。
+ *
+ * 必须**在同一帧内**同时成立「命中行在 + 未命中行不在」：只等未命中行消失会命中重查期间的空窗
+ * （`useAuditLogs` 无 placeholderData，改键那一刻 data 变 undefined），只等命中行出现又会命中
+ * 尚未过滤的旧列表（instance.start 本来就在种子里）。
+ */
+async function waitActionFiltered() {
+  await waitFor(() => {
+    expect(screen.queryByText('user.login')).not.toBeInTheDocument()
+    expect(screen.getByText('instance.start')).toBeInTheDocument()
+  })
+}
+
+/**
  * AuditPage 强断言（FR-199 身份访问域）。受 requireAuth 保护：渲染前 loginMockUser()。
  * AuditPage 同时调 GET /users（筛选下拉）+ GET /audit（列表），两者均由本域 mock。
  * 三条：① 渲染种子审计行 ② 筛选 action 后列表联动收窄 ③ 注入 500 后页面显错误态。
@@ -41,9 +55,7 @@ describe('AuditPage（mock 假后端）', () => {
     await screen.findByText('user.login')
     const user = userEvent.setup()
     await user.type(screen.getByPlaceholderText(/操作/), 'instance')
-    // 重查后只剩 instance.start，其余消失。
-    await waitFor(() => expect(screen.queryByText('user.login')).not.toBeInTheDocument())
-    expect(screen.getByText('instance.start')).toBeInTheDocument()
+    await waitActionFiltered()
     expect(screen.queryByText('group.create')).not.toBeInTheDocument()
   })
 
@@ -142,13 +154,27 @@ describe('AuditPage（mock 假后端）', () => {
     expect(screen.queryByText('audit.row.1')).not.toBeInTheDocument()
   })
 
-  it('导出使用相同筛选条件，但不携带分页参数', async () => {
+  it('导出使用相同筛选条件，但不携带分页参数；下载链接先入 DOM 再撤销 URL', async () => {
     loginMockUser()
     const user = userEvent.setup()
     let exportedUrl: URL | null = null
     const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:audit')
-    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
-    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    let revokeCalls = 0
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {
+      revokeCalls += 1
+    })
+    // 点击那一刻链接是否已挂进文档；以及撤销是否与点击落在**同一个同步块**里
+    // （同块撤销会把部分浏览器里尚未取到字节的下载掐断——这正是本轮修的问题）。
+    let connectedAtClick: boolean | null = null
+    let revokedSameTask: boolean | null = null
+    let sameTaskProbe: Promise<void> = Promise.resolve()
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      connectedAtClick = this.isConnected
+      // 微任务探针：同处一个任务的撤销会被它看到；排进 setTimeout 的撤销不会。
+      sameTaskProbe = Promise.resolve().then(() => {
+        revokedSameTask = revokeCalls > 0
+      })
+    })
     server.use(
       http.get(API('/audit/export'), ({ request }) => {
         exportedUrl = new URL(request.url)
@@ -159,6 +185,8 @@ describe('AuditPage（mock 假后端）', () => {
     renderWithProviders(<AuditPage />)
     await screen.findByText('user.login')
     await user.type(screen.getByPlaceholderText(/操作/), 'instance')
+    // 先等防抖落地（列表收窄到只剩命中行），再导出——导出的正是用户眼前这组筛选。
+    await waitActionFiltered()
     await user.click(screen.getByRole('button', { name: '导出' }))
 
     await waitFor(() => expect(exportedUrl).not.toBeNull())
@@ -166,6 +194,11 @@ describe('AuditPage（mock 假后端）', () => {
     expect(exportedUrl?.searchParams.has('page')).toBe(false)
     expect(exportedUrl?.searchParams.has('pageSize')).toBe(false)
     expect(exportedUrl?.searchParams.has('limit')).toBe(false)
+
+    expect(connectedAtClick).toBe(true)
+    await sameTaskProbe
+    expect(revokedSameTask).toBe(false)
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:audit'))
 
     createObjectURL.mockRestore()
     revokeObjectURL.mockRestore()
@@ -197,5 +230,46 @@ describe('AuditPage（mock 假后端）', () => {
     renderWithProviders(<AuditPage />)
     // 种子 user.login 不在 audit.actions 映射表（后端无此键）→ 原样展示。
     expect(await screen.findByText('user.login')).toBeInTheDocument()
+  })
+
+  // 用户筛选原先是「useUsers() 拉全量 + 逐个挂 SelectItem」（规则点名的禁用形态）；
+  // 现在候选走服务端搜索（默认前 N 条 + 键入 q），本用例锁死「请求带 limit 信封 + 键入只发一次 q」。
+  it('用户筛选走服务端搜索：候选带 limit 信封，键入只发一次带 q 的请求', async () => {
+    loginMockUser()
+    const userUrls: string[] = []
+    const auditUrls: string[] = []
+    server.use(
+      http.get(API('/users'), ({ request }) => {
+        userUrls.push(request.url)
+        return HttpResponse.json({
+          items: [{ id: 9, uuid: 'u9', username: 'zoe', role: 0, status: 1, createdAt: '2026-01-01T00:00:00Z' }],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        })
+      }),
+      http.get(API('/audit'), ({ request }) => {
+        auditUrls.push(request.url)
+        return HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 100 })
+      }),
+    )
+    renderWithProviders(<AuditPage />)
+
+    // 首屏候选：带 limit 走分页信封（不再拉整个用户数组）。
+    await waitFor(() => expect(userUrls).toHaveLength(1))
+    expect(userUrls[0]).toContain('limit=50')
+    expect(userUrls[0]).not.toContain('q=')
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: '全部用户' }))
+    await user.type(await screen.findByPlaceholderText('搜索或输入…'), 'zoe')
+
+    await waitFor(() => expect(userUrls.some((u) => u.includes('q=zoe'))).toBe(true))
+    // 300ms 防抖：中间的 z / zo 不许各发一次。
+    expect(userUrls.filter((u) => u.includes('q='))).toHaveLength(1)
+
+    // 选中后筛选上报到列表请求（userId 生效）。
+    await user.click(screen.getByRole('button', { name: 'zoe' }))
+    await waitFor(() => expect(auditUrls.at(-1)).toContain('userId=9'))
   })
 })

@@ -15,7 +15,7 @@ import {
 } from '@jianmanager/ui/components/scrollable-dialog'
 import { BotMetric, formatBotEvent, formatEventTime, formatPosition } from '@/components/views/bots/BotListParts'
 import type { BotInfo } from '@/lib/bots/bot'
-import type { BotRealtimeState } from '@/lib/bots/bot-realtime-types'
+import type { BotRealtimeEvent, BotRealtimeState } from '@/lib/bots/bot-realtime-types'
 
 export interface BotDetailDialogProps {
   /** 目标 Bot；null 表示关闭。 */
@@ -83,10 +83,12 @@ export function BotDetailDialog({
           )}
 
           <form onSubmit={submit} className="flex gap-2">
+            {/* 命令输入框原先只有 placeholder，读屏取不到名字（发送按钮也只叫「发送」）。 */}
             <Input
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               placeholder={t('bots.commandPlaceholder')}
+              aria-label={t('bots.commandPlaceholder')}
             />
             <Button type="submit" disabled={!command.trim() || sending}>
               <Send className="size-4" />
@@ -106,8 +108,13 @@ export function BotDetailDialog({
                 <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('bots.noEvents')}</p>
               ) : (
                 <ul className="divide-y text-sm">
-                  {realtime.events.map((event, index) => (
-                    <li key={`${event.timestamp}-${index}`} className="px-3 py-2">
+                  {/*
+                    事件流是「新事件插到队首」的滚窗列表：用 `${timestamp}-${index}` 作 key 时，
+                    每来一条新事件旧行下标全部平移 → key 变化 → React 拆掉整列 <li> 重建。
+                    事件没有服务端 id，故按内容指纹做稳定 key（完全相同的重复事件按出现次序补序号）。
+                  */}
+                  {realtime.events.map((event) => (
+                    <li key={botEventKey(event)} className="px-3 py-2">
                       <div className="flex items-center justify-between gap-3">
                         <span className="font-medium">{t(`bots.event_${event.type}`, event.type)}</span>
                         <span className="text-xs text-muted-foreground">{formatEventTime(event.timestamp)}</span>
@@ -123,4 +130,13 @@ export function BotDetailDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+/**
+ * Bot 实时事件的稳定 React key：`BotRealtimeEvent` 没有 id，改用「时间戳 + 类型 + 载荷」指纹。
+ * 同一条事件无论滚到第几位都保持同一个 key；极端情况下同毫秒同内容的事件不可区分，
+ * 这种情况本身也无从区分，指纹相同即视为同一条（列表窗口仅保留最近若干条）。
+ */
+function botEventKey(event: BotRealtimeEvent): string {
+  return `${event.timestamp}|${event.type}|${JSON.stringify(event.data)}`
 }

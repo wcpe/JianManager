@@ -1,10 +1,11 @@
 // 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表/详情取数、筛选与窗口状态、取消任务与 toast 接线。
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useSearchParams } from 'react-router'
+import { Link, useLocation } from 'react-router'
 import { toast } from 'sonner'
 import { useNodes } from '@/api/nodes'
 import { useTasks, useTask, useCancelTask } from '@/api/tasks'
+import { useDebounced } from '@/lib/hooks/use-debounced'
 import { TASKS_WINDOW_MAX, TASKS_WINDOW_STEP, TasksPageView } from '@/components/views/tasks/TasksPageView'
 import type { TasksFilterState } from '@/components/views/tasks/TasksPageView'
 
@@ -35,8 +36,23 @@ function errMessage(err: unknown, fallback: string): string {
 export default function TasksPage() {
   const { t } = useTranslation()
   // 通知中心/页眉跳转深链（FR-226）：?task=<taskId> 进页即自动展开该任务，定位上下文。
-  const [searchParams] = useSearchParams()
-  const [expandedId, setExpandedId] = useState<string | null>(() => searchParams.get('task'))
+  const location = useLocation()
+  const [expandedId, setExpandedId] = useState<string | null>(
+    () => new URLSearchParams(location.search).get('task'),
+  )
+
+  /**
+   * 深链同步：只在挂载时读一次 `?task=` 是不够的——页眉任务菜单 / 通知中心在**本页已挂载**时再跳
+   * `/tasks?task=<id>`，路由只换查询串、组件不重挂，初值不再生效，展开的仍是上一个任务（甚至什么都不展开）。
+   * 故按「每次导航」（location.key 每次都变，重复点同一条菜单也算）回灌 URL 里的 task。
+   * 反向不回写：用户手动展开/折叠不写 URL——否则折叠一行就会把深链抹掉，刷新后定位丢失。
+   * 无 `task` 参数时不动展开态（一次无参导航不该收起用户手动展开的行）。
+   */
+  const deepLinkTask = new URLSearchParams(location.search).get('task')
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- URL（外部输入）变化时回灌展开态，属该规则的合法例外
+    if (deepLinkTask) setExpandedId(deepLinkTask)
+  }, [deepLinkTask, location.key])
 
   // 筛选条件（FR-227）。
   const [filters, setFilters] = useState<TasksFilterState>(EMPTY_FILTERS)
@@ -44,12 +60,19 @@ export default function TasksPage() {
   // 增长窗口（FR-337）：「加载更多」+100 封顶 500；筛选变化复位。
   const [limit, setLimit] = useState(TASKS_WINDOW_STEP)
 
+  /**
+   * 关键字防抖（300ms）：输入框仍即时回显（`filters.keyword` 原样喂给视图），但请求键只用停止键入后的值。
+   * 本页 `useTasks` 是 `staleTime: 0` + 2 秒短轮询，不防抖的话每敲一个字都要发一次全量列表请求，
+   * 还会与在途请求、轮询请求叠在一起（叠加越滚越大）。取数口径（含防抖）归容器，与通知中心同款。
+   */
+  const debouncedKeyword = useDebounced(filters.keyword, 300).trim()
+
   const { data: nodes } = useNodes()
   const { data: page, isLoading, isError } = useTasks({
     state: filters.state,
     kind: filters.kind,
     nodeId: filters.nodeId ? Number(filters.nodeId) : undefined,
-    keyword: filters.keyword,
+    keyword: debouncedKeyword || undefined,
     since,
     limit,
   })

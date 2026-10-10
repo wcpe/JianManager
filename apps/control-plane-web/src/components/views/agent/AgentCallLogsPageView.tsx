@@ -246,14 +246,19 @@ export function AgentCallLogsPageView({
         {isFetching ? ` · ${t('common.loading')}` : ''}
       </p>
 
-      {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading')}</p>}
-      {isError && <p className="text-sm text-destructive">{t('agentCallLogs.loadFailed')}</p>}
-
-      {!isLoading && !isError && items.length === 0 && (
+      {/*
+        三态互斥（顺序固定：在途 → 失败 → 空 → 数据）。
+        【为什么要写成一条链】原先是四个独立条件，末一条只看 `items.length > 0`——
+        翻页/改筛选时 isLoading 与**上一页的旧数据**会同时为真，于是「加载中」和整张表一起显示。
+        首屏无数据时才显示加载态；已有数据时改由上方摘要行的 `· 加载中` 提示在途状态。
+      */}
+      {isLoading && items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+      ) : isError ? (
+        <p className="text-sm text-destructive">{t('agentCallLogs.loadFailed')}</p>
+      ) : items.length === 0 ? (
         <Panel className="p-6 text-center text-sm text-muted-foreground">{t('agentCallLogs.empty')}</Panel>
-      )}
-
-      {items.length > 0 && (
+      ) : (
         <Panel className="overflow-x-auto p-0">
           <Table>
             <TableHeader>

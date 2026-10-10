@@ -119,6 +119,8 @@ export interface ClientDistRequestLogsViewProps {
   onClearLink: () => void
   /** 请求事件行（空数组即空态）。 */
   events: ClientDistEvent[]
+  /** 服务端命中总数；大于已展示行数时提示「已截断」（本视图单页取数，无翻页器）。 */
+  eventsTotal: number
   /** 取数中；仅在无行时展示「加载中」文案。 */
   eventsLoading: boolean
   /** 取数失败；判定优先于空态。 */
@@ -156,6 +158,7 @@ export function ClientDistRequestLogsView({
   link,
   onClearLink,
   events,
+  eventsTotal,
   eventsLoading,
   eventsError,
   outcome,
@@ -233,7 +236,16 @@ export function ClientDistRequestLogsView({
         ) : events.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted-foreground">{eventsLoading ? t('common.loading') : t('clientDistOps.eventsEmpty')}</p>
         ) : (
-          <EventTable events={events} onDetail={changeDetail} />
+          <>
+            {/* 单页取数（page=1/pageSize=100）无翻页器：命中超出本页时明确告知「已截断」，
+                否则运维会以为日志只有这 100 条。 */}
+            {eventsTotal > events.length && (
+              <p className="mb-2 text-xs text-muted-foreground">
+                {t('common.searchTruncated', { shown: events.length, total: eventsTotal })}
+              </p>
+            )}
+            <EventTable events={events} onDetail={changeDetail} />
+          </>
         )}
       </Panel>
       <EventDetailDialog
@@ -269,6 +281,8 @@ export interface ClientDistAggregateLogsViewProps {
   onPlayerNameChange: (value: string) => void
   /** 聚合日志行（空数组即空态）。 */
   logs: ClientDistSecurityLogItem[]
+  /** 服务端命中总数；大于已展示行数时提示「已截断」（本视图单页取数，无翻页器）。 */
+  logsTotal: number
   /** 取数中；仅在无行时展示「加载中」文案。 */
   logsLoading: boolean
   /** 取数失败；判定优先于空态。 */
@@ -286,6 +300,7 @@ export function ClientDistAggregateLogsView({
   playerName,
   onPlayerNameChange,
   logs,
+  logsTotal,
   logsLoading,
   logsError,
   exportSlot,
@@ -311,39 +326,47 @@ export function ClientDistAggregateLogsView({
       ) : logs.length === 0 ? (
         <p className="py-10 text-center text-sm text-muted-foreground">{logsLoading ? t('common.loading') : t('clientDistOps.logs.empty')}</p>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t('clientDistOps.logs.colTime')}</TableHead>
-              <TableHead>{t('clientDistOps.logs.colType')}</TableHead>
-              <TableHead>{t('clientDistOps.logs.colTitle')}</TableHead>
-              <TableHead>{t('clientDistOps.logs.colObject')}</TableHead>
-              <TableHead>{t('clientDistOps.logs.colStatusErr')}</TableHead>
-              <TableHead>{t('clientDistOps.logs.colDetail')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {logs.map((item) => (
-              <TableRow key={item.id}>
-                <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(item.createdAt)}</TableCell>
-                <TableCell><Badge variant="outline">{clientDistLogTypeLabel(item.type, t)}</Badge></TableCell>
-                <TableCell className="font-medium">{item.title || '—'}</TableCell>
-                <TableCell className="max-w-64 text-xs">
-                  <div className="truncate">{t('clientDistOps.logs.prefixChannel')}{item.channelId || '—'}</div>
-                  <div className="truncate text-muted-foreground">{t('clientDistOps.logs.prefixPlayer')}{item.playerName || '—'} · {t('clientDistOps.logs.prefixIp')}{item.ip || '—'}</div>
-                  <div className="truncate text-muted-foreground">{t('clientDistOps.logs.prefixMachine')}{item.machineId || '—'}</div>
-                </TableCell>
-                <TableCell>
-                  <div>{item.status || '—'}</div>
-                  <div className="text-xs text-muted-foreground">{item.errCode || '—'}</div>
-                </TableCell>
-                <TableCell className="max-w-96">
-                  <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs text-muted-foreground">{JSON.stringify(item.detail ?? {}, null, 2)}</pre>
-                </TableCell>
+        <>
+          {/* 同请求侧：单页取数无翻页器，命中超出本页时明确告知「已截断」。 */}
+          {logsTotal > logs.length && (
+            <p className="mb-2 text-xs text-muted-foreground">
+              {t('common.searchTruncated', { shown: logs.length, total: logsTotal })}
+            </p>
+          )}
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('clientDistOps.logs.colTime')}</TableHead>
+                <TableHead>{t('clientDistOps.logs.colType')}</TableHead>
+                <TableHead>{t('clientDistOps.logs.colTitle')}</TableHead>
+                <TableHead>{t('clientDistOps.logs.colObject')}</TableHead>
+                <TableHead>{t('clientDistOps.logs.colStatusErr')}</TableHead>
+                <TableHead>{t('clientDistOps.logs.colDetail')}</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {logs.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(item.createdAt)}</TableCell>
+                  <TableCell><Badge variant="outline">{clientDistLogTypeLabel(item.type, t)}</Badge></TableCell>
+                  <TableCell className="font-medium">{item.title || '—'}</TableCell>
+                  <TableCell className="max-w-64 text-xs">
+                    <div className="truncate">{t('clientDistOps.logs.prefixChannel')}{item.channelId || '—'}</div>
+                    <div className="truncate text-muted-foreground">{t('clientDistOps.logs.prefixPlayer')}{item.playerName || '—'} · {t('clientDistOps.logs.prefixIp')}{item.ip || '—'}</div>
+                    <div className="truncate text-muted-foreground">{t('clientDistOps.logs.prefixMachine')}{item.machineId || '—'}</div>
+                  </TableCell>
+                  <TableCell>
+                    <div>{item.status || '—'}</div>
+                    <div className="text-xs text-muted-foreground">{item.errCode || '—'}</div>
+                  </TableCell>
+                  <TableCell className="max-w-96">
+                    <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs text-muted-foreground">{JSON.stringify(item.detail ?? {}, null, 2)}</pre>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </>
       )}
     </Panel>
   )

@@ -23,7 +23,9 @@ test('FR-146 在线玩家批量踢封+子服筛选 与 实时事件暂停/过滤
   await page.screenshot({ path: '../.tmp/acceptance/FR-146/single-machine-players-online.png', fullPage: true })
 
   // 实时事件：暂停 + 类型过滤 + 清空
-  await page.getByRole('button', { name: '实时事件' }).click()
+  // 页内 Tab 已补 tab 语义（role=tab）并入 URL，故按 tab 角色定位。
+  await page.getByRole('tab', { name: '实时事件' }).click()
+  await expect(page).toHaveURL(/\?tab=live$/)
   await expect(page.getByRole('button', { name: '暂停' })).toBeVisible()
   await expect(page.getByRole('button', { name: '清空' })).toBeVisible()
 })

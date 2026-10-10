@@ -115,6 +115,7 @@ function RequestLogsContainer({
       link={link}
       onClearLink={onClearLink}
       events={data?.items ?? []}
+      eventsTotal={data?.total ?? 0}
       eventsLoading={isLoading}
       eventsError={isError}
       outcome={outcome}
@@ -185,6 +186,7 @@ function AggregateLogsContainer({
       playerName={playerName}
       onPlayerNameChange={setPlayerName}
       logs={data?.items ?? []}
+      logsTotal={data?.total ?? 0}
       logsLoading={isLoading}
       logsError={isError}
       exportSlot={
