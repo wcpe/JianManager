@@ -45,6 +45,8 @@ import {
 } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { validateRequired, validateFields, hasErrors } from '@/lib/shared/form-validation'
+// 与 UI 原语 FieldError 同名，故按用途改别名（这里是「字段错误 key」的类型）。
+import type { FieldError as FieldErrorKey } from '@/lib/shared/form-validation'
 import { isTerminalTask } from '@/lib/tasks/task-status'
 import type { TaskState } from '@/lib/tasks/task-status'
 import { useFieldGate } from '@/lib/hooks/use-field-gate'
@@ -150,6 +152,22 @@ const emptyForm: ArtifactStorageForm = {
 }
 
 /**
+ * 预签名有效期校验：必须是 60~3600 的整数（后端约束，见 `artifactStorages.presignTtlHint`）。
+ *
+ * 此前只给了 `min={60} max={3600}`——那是**浏览器约束**：清空输入得 `Number('') === 0`，
+ * 直填 5000 也不被拦，两者都会照原样提交、由后端再拒一次。
+ */
+function validatePresignTtl(value: string): FieldErrorKey {
+  const trimmed = value.trim()
+  if (trimmed === '') return 'validation.required'
+  if (!/^\d+$/.test(trimmed)) return 'validation.integer'
+  const n = Number(trimmed)
+  // 越界复用已有的提示键（其正文即「60~3600 秒」）：本域没有专设的区间文案键，
+  // 新增键会与 user 的另一分支冲突，故不新增（如需独立文案请补 artifactStorages.presignTtlRange）。
+  return n < 60 || n > 3600 ? 'artifactStorages.presignTtlHint' : undefined
+}
+
+/**
  * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast、不持鉴权状态**。
  * - 渠道列表、迁移任务与计数、失败明细经 props 注入（容器调对应 hook，并按任务终态启停轮询）；
  * - 写动作以回调上报，由容器执行 mutation 并决定成功/失败文案：提交表单与草稿测试回传
@@ -166,6 +184,8 @@ export interface ArtifactStoragesPageViewProps {
   channels?: ArtifactStorageChannelView[]
   /** 列表加载态（渲染骨架行）。 */
   isLoading?: boolean
+  /** 列表取数失败：渲染错误文案而非「暂无存储渠道」。 */
+  isError?: boolean
   /** 创建/更新在途：禁用弹窗提交按钮。 */
   saving?: boolean
   /** 草稿测试连接在途：禁用「测试连接」按钮。 */
@@ -186,6 +206,8 @@ export interface ArtifactStoragesPageViewProps {
   failuresTaskId?: string | null
   /** 失败明细（容器按 `failuresTaskId` 拉取后注入；上限 500 条）。 */
   failures?: ArtifactMigrationFailureView[]
+  /** 失败明细取数失败：弹窗内渲染错误文案（与「暂无失败记录」区分开）。 */
+  failuresError?: boolean
   /** 提交表单；`editingId` 为 null 表示创建。返回是否成功——成功才关窗并清空草稿。 */
   onSubmit: (values: ArtifactStorageForm, editingId: number | null) => Promise<boolean>
   /** 测试未保存的草稿（不落库）；`editingId` 非空时带 id 让后端复用存库凭证探测。 */
@@ -219,6 +241,7 @@ export interface ArtifactStoragesPageViewProps {
 export function ArtifactStoragesPageView({
   channels,
   isLoading = false,
+  isError = false,
   saving = false,
   testingDraft = false,
   rowTestingId = null,
@@ -229,6 +252,7 @@ export function ArtifactStoragesPageView({
   migrationCanceling = false,
   failuresTaskId = null,
   failures,
+  failuresError = false,
   onSubmit,
   onTestDraft,
   onTest,
@@ -291,11 +315,18 @@ export function ArtifactStoragesPageView({
   }
 
   const errors = validateFields(
-    { name: form.name, endpoint: form.endpoint ?? '', bucket: form.bucket ?? '' },
+    {
+      name: form.name,
+      endpoint: form.endpoint ?? '',
+      bucket: form.bucket ?? '',
+      // 数字字段转字符串后交给统一校验链（validateFields 的口径是字符串）。
+      presignTtlSeconds: form.presignTtlSeconds === undefined ? '' : String(form.presignTtlSeconds),
+    },
     {
       name: [validateRequired],
       endpoint: [validateRequired],
       bucket: [validateRequired],
+      presignTtlSeconds: [validatePresignTtl],
     },
   )
 
@@ -345,24 +376,24 @@ export function ArtifactStoragesPageView({
           <form id="artifact-storage-form" onSubmit={submit}>
             <ScrollableDialogBody className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="flex flex-col gap-1 text-sm">
-                <FieldLabel required>{t('artifactStorages.name', '名称')}</FieldLabel>
-                <input className="p-2 border rounded bg-background aria-invalid:border-destructive" value={form.name}
+                <FieldLabel required htmlFor="artifact-storage-name">{t('artifactStorages.name', '名称')}</FieldLabel>
+                <input id="artifact-storage-name" className="p-2 border rounded bg-background aria-invalid:border-destructive" value={form.name}
                   aria-invalid={!!gate.show('name', errors.name)}
                   onChange={(e) => set('name', e.target.value)}
                   onBlur={() => gate.touch('name')} />
                 <FieldError error={gate.show('name', errors.name)} />
               </div>
               <div className="flex flex-col gap-1 text-sm">
-                <FieldLabel required>{t('artifactStorages.bucket', 'Bucket')}</FieldLabel>
-                <input className="p-2 border rounded bg-background aria-invalid:border-destructive" value={form.bucket}
+                <FieldLabel required htmlFor="artifact-storage-bucket">{t('artifactStorages.bucket', 'Bucket')}</FieldLabel>
+                <input id="artifact-storage-bucket" className="p-2 border rounded bg-background aria-invalid:border-destructive" value={form.bucket}
                   aria-invalid={!!gate.show('bucket', errors.bucket)}
                   onChange={(e) => set('bucket', e.target.value)}
                   onBlur={() => gate.touch('bucket')} />
                 <FieldError error={gate.show('bucket', errors.bucket)} />
               </div>
               <div className="flex flex-col gap-1 text-sm md:col-span-2">
-                <FieldLabel required>{t('artifactStorages.endpoint', 'Endpoint')}</FieldLabel>
-                <input className="p-2 border rounded bg-background aria-invalid:border-destructive"
+                <FieldLabel required htmlFor="artifact-storage-endpoint">{t('artifactStorages.endpoint', 'Endpoint')}</FieldLabel>
+                <input id="artifact-storage-endpoint" className="p-2 border rounded bg-background aria-invalid:border-destructive"
                   placeholder={t('artifactStorages.endpointHint', '如 rustfs.example.com:9000（内网 http 常态；协议由「启用 TLS」决定）')}
                   aria-invalid={!!gate.show('endpoint', errors.endpoint)}
                   value={form.endpoint} onChange={(e) => set('endpoint', e.target.value)}
@@ -381,10 +412,13 @@ export function ArtifactStoragesPageView({
               </label>
               <label className="flex flex-col gap-1 text-sm">
                 {t('artifactStorages.presignTtl', '预签名有效期（秒）')}
-                <input type="number" min={60} max={3600} className="p-2 border rounded bg-background"
+                <input type="number" min={60} max={3600} className="p-2 border rounded bg-background aria-invalid:border-destructive"
+                  aria-invalid={!!gate.show('presignTtlSeconds', errors.presignTtlSeconds)}
                   value={form.presignTtlSeconds ?? 600}
+                  onBlur={() => gate.touch('presignTtlSeconds')}
                   onChange={(e) => set('presignTtlSeconds', Number(e.target.value))} />
                 <span className="text-xs text-muted-foreground">{t('artifactStorages.presignTtlHint', '玩家下载跳转链接的有效时长，60~3600 秒')}</span>
+                <FieldError error={gate.show('presignTtlSeconds', errors.presignTtlSeconds)} />
               </label>
               <label className="flex items-center gap-2 text-sm mt-6">
                 <Checkbox checked={form.useSsl}
@@ -613,7 +647,15 @@ export function ArtifactStoragesPageView({
               )
             })}
             {isLoading && <TableSkeletonRows rows={3} cols={6} />}
-            {(!channels || channels.length === 0) && !isLoading && (
+            {isError && !isLoading && (
+              // 取数失败与「暂无存储渠道」必须区分：后者会让管理员以为渠道配置都丢了。
+              <TableRow data-flat>
+                <TableCell colSpan={6} className="p-4 text-sm text-destructive">
+                  {t('common.error')}
+                </TableCell>
+              </TableRow>
+            )}
+            {(!channels || channels.length === 0) && !isLoading && !isError && (
               <TableEmptyRow
                 colSpan={6}
                 icon={<HardDrive />}
@@ -697,6 +739,10 @@ export function ArtifactStoragesPageView({
             ))}
             {failures && failures.length === 0 && (
               <p className="text-sm text-muted-foreground">{t('artifactStorages.migrate.noFailures', '暂无失败记录')}</p>
+            )}
+            {failuresError && !failures && (
+              // 明细取数失败不能落成「暂无失败记录」：那会让人以为这条任务零失败。
+              <p className="text-sm text-destructive">{t('common.error')}</p>
             )}
           </ScrollableDialogBody>
           <DialogFooter>

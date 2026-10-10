@@ -75,17 +75,26 @@ export default function NetworksPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const { data: networks, isLoading } = useNetworks()
+  const { data: networks, isLoading, isError } = useNetworks()
 
   // 详情与视图存入 URL，支持深链 / 刷新还原（FR-145 可寻址；完整可寻址归 FR-128）。
-  const detailId = searchParams.get('network') ? Number(searchParams.get('network')) : null
+  //
+  // 【为什么必须 finite 校验】`Number('abc')` 是 NaN，而 `NaN !== null` 为真：不做校验时
+  // `?network=abc` 会照样挂载详情面板，而 `useNetwork(NaN)` 因 `enabled: !!id` 压根不发请求，
+  // 于是只得到一个标题与正文都空白的弹窗（连错误态都没有）。故非法取值一律按「无详情」处理，
+  // 并由 `detailInvalid` 让视图给出明确提示而不是空白。
+  const rawDetail = searchParams.get('network')
+  const parsedDetail = rawDetail === null ? null : Number(rawDetail)
+  const detailId = parsedDetail !== null && Number.isFinite(parsedDetail) && parsedDetail > 0 ? parsedDetail : null
+  /** URL 里给了 `?network=` 但取值不是合法 id（如 `?network=abc`、`?network=0`）。 */
+  const detailInvalid = rawDetail !== null && detailId === null
   const view: NetworkView =
     location.pathname.startsWith('/networks/topology') || searchParams.get('view') === 'topology'
       ? 'topology'
       : 'list'
 
   // 0 表示「无详情」：useNetwork 以 id 真值门控，等价于迁包前「详情面板未挂载即不请求」。
-  const { data: detail } = useNetwork(detailId ?? 0)
+  const { data: detail, isLoading: detailLoading, isError: detailError } = useNetwork(detailId ?? 0)
 
   const create = useCreateNetwork()
   const del = useDeleteNetwork()
@@ -116,8 +125,11 @@ export default function NetworksPage() {
       onViewChange={setView}
       networks={networks}
       isLoading={isLoading}
+      isError={isError}
       detailId={detailId}
       detail={detail}
+      detailLoading={detailLoading}
+      detailMissing={detailInvalid || detailError}
       onOpenDetail={openDetail}
       onCloseDetail={closeDetail}
       creating={create.isPending}

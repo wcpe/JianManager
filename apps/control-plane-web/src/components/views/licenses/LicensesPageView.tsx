@@ -6,7 +6,7 @@
  * @sync apps/control-plane-web/src/pages/LicensesPage.tsx、apps/control-plane-web/src/pages/LicensesPage.dom.test.tsx
  * @since FR-502（组件受控化迁包；原页 FR-135 开源许可清单、FR-210 静态清单强断言）
  */
-import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowLeft, ChevronDown, ChevronRight, Package, ScrollText, Search, Wrench } from 'lucide-react'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -24,6 +24,23 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { depKey, filterByName, partitionDeps } from '@/lib/licenses/licenses'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
+
+/**
+ * 依赖表主行的固定行高（px）。行盒由行内 style 钉死（「声明值即真实值」）：
+ * 内容自然高 = 徽章/文本 20 + 单元格 `py-1.5`(12) + 行边框 1 ≈ 33 → 取 36 留余量。
+ * 虚拟化按同一常量定位，故滚动映射与真实行盒严格一致、不随行数累积漂移。
+ */
+const LICENSE_ROW_PX = 36
+/**
+ * 展开行（许可证全文）的高度估算：仅用于首帧与无布局环境；浏览器实测后以实测值纠正
+ * （同 `AuditPageView` 对不定高详情行的做法）。
+ */
+const LICENSE_TEXT_ROW_PX = 220
+/** 展开行实测补偿：测量对象是单元格内的 div，行盒还要加单元格 `py-1.5`(12) 与行边框 1。 */
+const LICENSE_TEXT_CELL_OVERHEAD_PX = 13
+/** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
+const FALLBACK_VIEWPORT_PX = 640
 
 /**
  * 单条依赖的许可信息（本视图渲染所需的最小字段集）。
@@ -154,7 +171,14 @@ export function LicensesPageView({
 
       {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
-      ) : isError || deps.length === 0 ? (
+      ) : isError ? (
+        // 取数失败与空清单必须区分：报「暂无依赖数据」会让管理员以为构建期清单没生成。
+        <Panel bodyClassName="py-10">
+          <p className="text-center text-sm text-destructive" data-testid="licenses-error">
+            {t('common.error')}
+          </p>
+        </Panel>
+      ) : deps.length === 0 ? (
         <Panel bodyClassName="py-10">
           <p className="text-center text-sm text-muted-foreground">{t('licenses.empty')}</p>
         </Panel>
@@ -182,6 +206,45 @@ export function LicensesPageView({
   )
 }
 
+/**
+ * 展开的许可证全文行：内容长短不定，故渲染后把实测高度回填给虚拟模型
+ * （jsdom 无布局时 offsetHeight 恒 0，保留估算，窗口在测试里完全确定）。
+ */
+function LicenseTextRow({
+  id,
+  text,
+  onMeasure,
+}: {
+  /** 依赖唯一键（虚拟模型按它存实测高度）。 */
+  id: string
+  /** 许可证全文；空串渲染占位文案。 */
+  text: string
+  onMeasure: (id: string, px: number) => void
+}) {
+  const { t } = useTranslation()
+  const ref = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const px = ref.current?.offsetHeight ?? 0
+    if (px > 0) onMeasure(id, px + LICENSE_TEXT_CELL_OVERHEAD_PX)
+  })
+
+  return (
+    <TableRow data-flat className="hover:bg-transparent" data-testid="license-text-row">
+      <TableCell colSpan={5} className="bg-muted/30">
+        <div ref={ref}>
+          {text ? (
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-background p-3 text-xs leading-relaxed text-foreground/90">
+              {text}
+            </pre>
+          ) : (
+            <p className="text-xs text-muted-foreground">{t('licenses.noLicenseText')}</p>
+          )}
+        </div>
+      </TableCell>
+    </TableRow>
+  )
+}
+
 /** 单分区依赖表（运行时 / 开发）：行内可展开查看许可证全文。 */
 function DependencyTable({
   title,
@@ -199,6 +262,36 @@ function DependencyTable({
   onToggle: (key: string) => void
 }) {
   const { t } = useTranslation()
+
+  /**
+   * 展开行的实测高度（按依赖键存）。同一时刻可展开多行，故不是单个值。
+   * 只有高度真的变了才写回，避免 useLayoutEffect 每次都触发一轮渲染。
+   */
+  const [textHeights, setTextHeights] = useState<Record<string, number>>({})
+  const measureText = useCallback((id: string, px: number) => {
+    setTextHeights((prev) => (prev[id] === px ? prev : { ...prev, [id]: px }))
+  }, [])
+
+  /**
+   * 依赖表虚拟化：构建期清单实测 931 条（运行时 456 + 开发 475），此前两张表一次性进 DOM
+   * （约 4650 个单元格）。行盒高度与逐行模型同源（见常量注释），窗口外的行用占位撑开。
+   */
+  const rowSizes = useMemo(
+    () =>
+      deps.map((d) => {
+        const key = depKey(d)
+        return LICENSE_ROW_PX + (expanded.has(key) ? textHeights[key] ?? LICENSE_TEXT_ROW_PX : 0)
+      }),
+    [deps, expanded, textHeights],
+  )
+  const { containerRef, onScroll, range } = useVirtualRows({
+    total: deps.length,
+    itemSize: LICENSE_ROW_PX,
+    sizes: rowSizes,
+    overscan: 8,
+    fallbackViewportSize: FALLBACK_VIEWPORT_PX,
+  })
+
   return (
     <Panel
       title={
@@ -213,88 +306,112 @@ function DependencyTable({
       tone={tone}
       bodyClassName="p-0"
     >
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-8" />
-            <TableHead>{t('licenses.colName')}</TableHead>
-            <TableHead className="w-32">{t('licenses.colVersion')}</TableHead>
-            <TableHead className="w-40">{t('licenses.colLicense')}</TableHead>
-            <TableHead>{t('licenses.colAuthor')}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {deps.length === 0 ? (
+      <div
+        ref={containerRef}
+        onScroll={onScroll}
+        data-testid="licenses-table-virtual"
+        className="max-h-[70vh] overflow-auto"
+      >
+        <Table>
+          <TableHeader>
             <TableRow>
-              <TableCell colSpan={5} className="py-6 text-center text-muted-foreground">
-                {t('licenses.empty')}
-              </TableCell>
+              <TableHead className="w-8" />
+              <TableHead>{t('licenses.colName')}</TableHead>
+              <TableHead className="w-32">{t('licenses.colVersion')}</TableHead>
+              <TableHead className="w-40">{t('licenses.colLicense')}</TableHead>
+              <TableHead>{t('licenses.colAuthor')}</TableHead>
             </TableRow>
-          ) : (
-            deps.map((d) => {
-              const key = depKey(d)
-              const isOpen = expanded.has(key)
-              const isLink = /^https?:\/\//.test(d.url)
-              return (
-                <Fragment key={key}>
-                  <TableRow
-                    className="cursor-pointer transition-colors duration-[var(--motion-duration-fast)] ease-ios hover:bg-accent/50"
-                    onClick={() => onToggle(key)}
-                  >
-                    <TableCell className="text-muted-foreground">
-                      {isOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      <span className="flex items-center gap-2">
-                        {isLink ? (
-                          <a
-                            href={d.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="text-primary hover:underline"
-                          >
-                            {d.name}
-                          </a>
-                        ) : (
-                          d.name
-                        )}
-                        <Badge variant="outline" className="shrink-0 text-[10px] font-normal">
-                          {d.scope}
-                        </Badge>
-                      </span>
-                    </TableCell>
-                    <TableCell className="tabular-nums text-muted-foreground">{d.version || '—'}</TableCell>
-                    <TableCell>
-                      {d.license ? (
-                        <Badge variant="secondary" className="font-normal">
-                          {d.license}
-                        </Badge>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="max-w-64 truncate text-muted-foreground">{d.author || '—'}</TableCell>
+          </TableHeader>
+          <TableBody>
+            {deps.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="py-6 text-center text-muted-foreground">
+                  {t('licenses.empty')}
+                </TableCell>
+              </TableRow>
+            ) : (
+              <>
+                {range.before > 0 && (
+                  <TableRow aria-hidden="true" data-testid="licenses-virtual-spacer-before">
+                    <TableCell colSpan={5} className="p-0" style={{ height: range.before }} />
                   </TableRow>
-                  {isOpen && (
-                    <TableRow className="hover:bg-transparent">
-                      <TableCell colSpan={5} className="bg-muted/30">
-                        {d.licenseText ? (
-                          <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-background p-3 text-xs leading-relaxed text-foreground/90">
-                            {d.licenseText}
-                          </pre>
-                        ) : (
-                          <p className="text-xs text-muted-foreground">{t('licenses.noLicenseText')}</p>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </Fragment>
-              )
-            })
-          )}
-        </TableBody>
-      </Table>
+                )}
+                {deps.slice(range.start, range.end).map((d) => {
+                  const key = depKey(d)
+                  const isOpen = expanded.has(key)
+                  const isLink = /^https?:\/\//.test(d.url)
+                  return (
+                    <Fragment key={key}>
+                      <TableRow
+                        data-testid="license-row"
+                        style={{ height: LICENSE_ROW_PX }}
+                        className="cursor-pointer transition-colors duration-[var(--motion-duration-fast)] ease-ios hover:bg-accent/50"
+                        onClick={() => onToggle(key)}
+                      >
+                        <TableCell className="text-muted-foreground">
+                          {/* 展开开关是**真按钮**：此前整行靠 `<tr onClick>`，而 `<tr>` 不可聚焦、
+                              也没有 role/键盘处理，键盘与读屏用户完全无法展开。
+                              按钮带 aria-expanded 表达开合态；点击不再冒泡到行，避免双触发。 */}
+                          <button
+                            type="button"
+                            aria-expanded={isOpen}
+                            aria-label={d.name}
+                            data-testid="license-toggle"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onToggle(key)
+                            }}
+                            className="flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                          >
+                            {isOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                          </button>
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          <span className="flex items-center gap-2">
+                            {isLink ? (
+                              <a
+                                href={d.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-primary hover:underline"
+                              >
+                                {d.name}
+                              </a>
+                            ) : (
+                              d.name
+                            )}
+                            <Badge variant="outline" className="shrink-0 text-[10px] font-normal">
+                              {d.scope}
+                            </Badge>
+                          </span>
+                        </TableCell>
+                        <TableCell className="tabular-nums text-muted-foreground">{d.version || '—'}</TableCell>
+                        <TableCell>
+                          {d.license ? (
+                            <Badge variant="secondary" className="font-normal">
+                              {d.license}
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="max-w-64 truncate text-muted-foreground">{d.author || '—'}</TableCell>
+                      </TableRow>
+                      {isOpen && <LicenseTextRow id={key} text={d.licenseText} onMeasure={measureText} />}
+                    </Fragment>
+                  )
+                })}
+                {range.after > 0 && (
+                  <TableRow aria-hidden="true" data-testid="licenses-virtual-spacer-after">
+                    <TableCell colSpan={5} className="p-0" style={{ height: range.after }} />
+                  </TableRow>
+                )}
+              </>
+            )}
+          </TableBody>
+        </Table>
+      </div>
     </Panel>
   )
 }

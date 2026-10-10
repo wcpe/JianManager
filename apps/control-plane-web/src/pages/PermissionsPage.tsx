@@ -2,11 +2,20 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useUsers } from '@/api/users'
+import { useUserSearch } from '@/api/users'
+import { useDebounced } from '@/lib/hooks/use-debounced'
 import { useRbacCatalog, useRbacRoles, useSetRolePermissions, useSetUserOverrides, useSetUserRole, useUserPermissions } from '@/api/rbac'
 import { usePermissionsStore } from '@/stores/permissions'
 import { PermissionsPageView } from '@/components/views/permissions/PermissionsPageView'
 import type { PermissionSelection } from '@/components/views/permissions/PermissionsPageView'
+
+/**
+ * 用户候选窗口大小（服务端搜索的取值上限）。
+ *
+ * 左栏是 230px 的窄栏、且列表已虚拟化，故一次取一个够用的窗口 + 键入收窄即可；
+ * 用户多于此数时左栏显示「已显示前 N 项，共 M 项；继续输入可缩小范围」。
+ */
+const PERMISSIONS_USER_LIMIT = 100
 
 /**
  * 深链初始选择：只在挂载时读一次 `?user=<id>`（`?role` 不参与，与迁包前一致）。
@@ -45,10 +54,30 @@ export default function PermissionsPage() {
 
   const { data: catalog, isLoading: catalogLoading } = useRbacCatalog()
   const { data: roles = [], isLoading: rolesLoading } = useRbacRoles()
-  const { data: users = [] } = useUsers()
+
+  /**
+   * 用户候选走服务端搜索（FR-336）：默认前 N 条 + 键入经 300ms 防抖下发 `q`。
+   * 左栏不再拉「全量用户」——那是千级用户下最重的请求，且每个用户一行都要渲染。
+   */
+  const [userKeyword, setUserKeyword] = useState('')
+  const userQ = useDebounced(userKeyword, 300).trim()
+  const { data: userPage, isLoading: usersLoading } = useUserSearch({
+    ...(userQ ? { q: userQ } : {}),
+    limit: PERMISSIONS_USER_LIMIT,
+    offset: 0,
+  })
+  const users = userPage?.items ?? []
 
   const selectedUserId = selection?.kind === 'user' ? selection.id : null
   const { data: userPerms } = useUserPermissions(selectedUserId, selection?.kind === 'user')
+  /**
+   * 选中用户在候选窗口里**确实不存在**。
+   *
+   * 判定要足以支撑「这个 id 不存在」的结论，故只在「没有搜索词（窗口即全量）且窗口已装下全部用户」
+   * 时才成立——否则用户一搜就把选中行滤出窗口，中栏会毫无理由地变成「未选择对象」。
+   */
+  const userIdsComplete = !userQ && userPage !== undefined && userPage.total <= userPage.items.length
+  const selectedUserMissing = selectedUserId !== null && userIdsComplete && !users.some((u) => u.id === selectedUserId)
 
   const setRolePerms = useSetRolePermissions()
   const setUserOverrides = useSetUserOverrides()
@@ -61,6 +90,11 @@ export default function PermissionsPage() {
       roles={roles}
       rolesLoading={rolesLoading}
       users={users}
+      usersTotal={userPage?.total}
+      usersLoading={usersLoading}
+      userQuery={userKeyword}
+      onUserQueryChange={setUserKeyword}
+      selectedUserMissing={selectedUserMissing}
       selection={selection}
       onSelectionChange={setSelection}
       userPermissions={userPerms}
@@ -84,8 +118,16 @@ export default function PermissionsPage() {
           toast.error(t('common.error'))
           return false
         }
-        // 覆盖保存成功后才改绑角色模板：改绑是随后的独立请求，失败不额外提示（与迁包前一致）。
-        if (roleId !== null) setUserRole.mutate({ userId, roleId })
+        // 覆盖保存成功后才改绑角色模板：改绑是随后的独立请求。它失败必须单独提示——
+        // 否则「覆盖已存、角色未变」看起来像整体成功，用户会以为改绑也生效了。
+        if (roleId !== null) {
+          try {
+            await setUserRole.mutateAsync({ userId, roleId })
+          } catch {
+            toast.error(t('common.error'))
+            return false
+          }
+        }
         toast.success(t('permissions.saved'))
         return true
       }}

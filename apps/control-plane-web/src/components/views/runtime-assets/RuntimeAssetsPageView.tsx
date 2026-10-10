@@ -42,6 +42,7 @@ import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui/lib/thres
 import { cn } from '@jianmanager/ui'
 import { buildRuntimeGrid, DEFAULT_ASSET_FILTER, filterAssetGroups, RUNTIME_TYPE_LABEL, shortSha } from '@/lib/runtime-assets/runtime-assets-view'
 import { formatFileSize } from '@/lib/shared/format-file-size'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
 import type { AssetFilter } from '@/lib/runtime-assets/runtime-assets-view'
 
 /** 状态等级 → 色点类（实例状态前导点）。 */
@@ -191,6 +192,8 @@ export interface RuntimeAssetsInstancePickerArgs {
 export interface RuntimeAssetsInstancePickerViewProps {
   /** 候选窗口（容器取数注入）；缺省按空候选渲染。 */
   items?: RuntimeAssetsInstanceCandidateView[]
+  /** 候选总数（服务端返回），用于截断提示；不给则不提示。 */
+  total?: number
   /** 候选取数中（占位「加载目标实例…」）。 */
   loading?: boolean
   /** 已勾选的实例 id（受控：勾选与「部署到 N 个实例」计数同源，由弹窗持有）。 */
@@ -202,6 +205,13 @@ export interface RuntimeAssetsInstancePickerViewProps {
 }
 
 /**
+ * 候选行固定行高（px）。行盒用行内 style 钉死（「声明值即真实值」）：
+ * `p-2`(16) + 两行文本（名称 20 + 状态行 16）= 52 → 取 56 留余量。
+ * 虚拟化按 `index × 该值` 定位，必须与真实行盒严格一致，否则滚动会累积漂移。
+ */
+const CANDIDATE_ROW_PX = 56
+
+/**
  * 实例候选选择器：搜索框 + 勾选列表（含加载/空候选占位）。
  *
  * 输入框的显示值留本组件（纯展示草稿），关键字经 `onQueryChange` 上报给容器；
@@ -209,6 +219,7 @@ export interface RuntimeAssetsInstancePickerViewProps {
  */
 export function RuntimeAssetsInstancePickerView({
   items,
+  total,
   loading = false,
   selected,
   onToggle,
@@ -217,6 +228,23 @@ export function RuntimeAssetsInstancePickerView({
   const { t } = useTranslation()
   const [keyword, setKeyword] = useState('')
   const instances = items ?? []
+
+  /**
+   * 候选列表虚拟化：候选窗口本身可达 200 条（容器 CANDIDATE_LIMIT），
+   * 此前整列进 DOM 只靠 `max-h-72` 滚动遮挡。
+   *
+   * 【为什么去掉原先的 space-y-2】它给相邻行加 8px 间距，而这 8px 不计入行高：
+   * 第 N 行的真实偏移是 N×行高 + 8×(N−1)，等距虚拟化按 index×itemSize 定位会随行数累积偏差。
+   * 故把间距折进行盒（行内 style = CANDIDATE_ROW_PX）。
+   */
+  const { containerRef, onScroll, range, totalSize } = useVirtualRows({
+    total: instances.length,
+    itemSize: CANDIDATE_ROW_PX,
+    overscan: 8,
+  })
+
+  /** 服务端截断时提示引导继续键入缩小范围（窗口长度 vs 服务端总数）。 */
+  const truncated = total !== undefined && total > instances.length
 
   return (
     <>
@@ -229,29 +257,48 @@ export function RuntimeAssetsInstancePickerView({
         placeholder={t('plugins.batchDeploy.targetSearch')}
         className="h-8 text-xs"
       />
-      <div className="max-h-72 space-y-2 overflow-auto rounded border p-2">
+      {truncated && (
+        <p className="text-[11px] text-muted-foreground">
+          {t('common.searchTruncated', { shown: instances.length, total: total ?? 0 })}
+        </p>
+      )}
+      <div
+        ref={containerRef}
+        onScroll={onScroll}
+        data-testid="runtime-assets-candidates"
+        className="max-h-72 overflow-auto rounded border p-2"
+      >
         {loading && (
           <p className="p-2 text-sm text-muted-foreground">{t('plugins.batchDeploy.loadingTargets')}</p>
         )}
         {!loading && instances.length === 0 && (
           <p className="p-2 text-sm text-muted-foreground">{t('plugins.batchDeploy.noTargets')}</p>
         )}
-        {instances.map((inst) => (
-          <label key={inst.id} className="flex cursor-pointer items-start gap-2 rounded p-2 hover:bg-muted/60">
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={selected.includes(inst.id)}
-              onChange={(e) => onToggle(inst.id, e.target.checked)}
-            />
-            <span className="min-w-0 text-sm">
-              <span className="block font-medium">{inst.name}</span>
-              <span className="block text-xs text-muted-foreground">
-                #{inst.id} · {inst.status} · {t('runtimeAssets.node')} {inst.nodeId}
-              </span>
-            </span>
-          </label>
-        ))}
+        {!loading && instances.length > 0 && (
+          // 虚拟化：外层撑起总高，内层按 range.before 平移，只渲染窗口内的行。
+          <div className="relative" style={{ height: totalSize }}>
+            <ul style={{ transform: `translateY(${range.before}px)` }}>
+              {instances.slice(range.start, range.end).map((inst) => (
+                <li key={inst.id} style={{ height: CANDIDATE_ROW_PX }}>
+                  <label className="flex h-full cursor-pointer items-start gap-2 rounded p-2 hover:bg-muted/60">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={selected.includes(inst.id)}
+                      onChange={(e) => onToggle(inst.id, e.target.checked)}
+                    />
+                    <span className="min-w-0 text-sm">
+                      <span className="block font-medium">{inst.name}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        #{inst.id} · {inst.status} · {t('runtimeAssets.node')} {inst.nodeId}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </>
   )

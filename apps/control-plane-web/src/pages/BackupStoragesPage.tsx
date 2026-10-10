@@ -17,7 +17,7 @@ function errMessage(err: unknown, fallback: string): string {
  */
 export default function BackupStoragesPage() {
   const { t } = useTranslation()
-  const { data: storages, isLoading } = useBackupStorages()
+  const { data: storages, isLoading, isError } = useBackupStorages()
   const create = useCreateBackupStorage()
   const update = useUpdateBackupStorage()
   const del = useDeleteBackupStorage()
@@ -29,6 +29,7 @@ export default function BackupStoragesPage() {
     <BackupStoragesPageView
       storages={storages}
       isLoading={isLoading}
+      isError={isError}
       saving={create.isPending || update.isPending}
       testing={testDraft.isPending}
       // 只有容器知道行内测试在测哪一行；未在测试时为 null，所有行都可点。

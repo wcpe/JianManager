@@ -25,7 +25,7 @@ function errMessage(err: unknown, fallback: string): string {
  */
 export default function SchedulesPage() {
   const { t } = useTranslation()
-  const { data: schedules, isLoading } = useSchedules()
+  const { data: schedules, isLoading, isError } = useSchedules()
 
   const createSchedule = useCreateSchedule()
   const updateSchedule = useUpdateSchedule()
@@ -43,6 +43,7 @@ export default function SchedulesPage() {
     <SchedulesPageView
       schedules={schedules}
       isLoading={isLoading}
+      isError={isError}
       filter={filter}
       onFilterChange={setFilter}
       logsId={logsId}
@@ -87,8 +88,10 @@ export default function SchedulesPage() {
             toast.error(errMessage(err, t('common.error'))),
         })
       }}
-      renderInstancePicker={({ value, onChange, invalid, enabled }) => (
+      renderInstancePicker={({ value, onChange, invalid, enabled, id }) => (
         <InstancePicker
+          // id 由视图给出，与「实例」的 FieldLabel htmlFor 配对：选择器触发元素因此有可访问名。
+          id={id}
           value={value}
           onChange={onChange}
           enabled={enabled}

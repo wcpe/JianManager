@@ -24,6 +24,14 @@ import { formatSizeMb } from '@/lib/backups/backup'
 /** 用户组详情可打开的面板（FR-128 可寻址）：编辑属性 / 管理成员。 */
 export type GroupPanel = 'edit' | 'members'
 
+/**
+ * 组卡片上最多铺几个成员药丸，其余以「+N」收口（点它直接进该组成员面板）。
+ *
+ * 大组（数百成员）全量铺开会把卡片撑成一面墙，一屏只能看一个组；而卡片是「概览」，
+ * 完整名单在成员面板里看。6 个大致是卡片宽度下两行的量。
+ */
+const MEMBER_PILL_LIMIT = 6
+
 /** 组成员药丸展示所需字段（`user` 缺失时回退显示 `#userId`）。 */
 export interface GroupMemberChip {
   id: number
@@ -189,8 +197,11 @@ export function GroupsPageView({
               )}
 
               {g.members && g.members.length > 0 && (
+                /* 成员药丸只渲染前 MEMBER_PILL_LIMIT 个，其余以「+N」收口：
+                   大组（数百成员）全量铺开会把卡片撑成一面墙，一屏只能看一个组，
+                   而卡片在这里是「概览」——完整成员名单在成员面板里看。 */
                 <div className="flex flex-wrap gap-1.5">
-                  {g.members.map((m) => (
+                  {g.members.slice(0, MEMBER_PILL_LIMIT).map((m) => (
                     <span
                       key={m.id}
                       className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs"
@@ -203,6 +214,19 @@ export function GroupsPageView({
                       )}
                     </span>
                   ))}
+                  {g.members.length > MEMBER_PILL_LIMIT && (
+                    // 「+N」是纯符号，各语言一致（无硬编码文案）；可访问名借用既有键
+                    // 「管理「{{name}}」成员」——读屏听到的是「+3，管理「运维组」成员」这种可操作提示。
+                    // 点击直接开该组的成员面板，省得用户再去找「成员」按钮。
+                    <button
+                      type="button"
+                      onClick={() => onOpenPanel(g.id, 'members')}
+                      aria-label={t('groups.manageMembers', { name: g.name })}
+                      className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                    >
+                      +{g.members.length - MEMBER_PILL_LIMIT}
+                    </button>
+                  )}
                 </div>
               )}
             </Panel>

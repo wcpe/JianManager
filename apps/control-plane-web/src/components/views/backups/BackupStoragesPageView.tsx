@@ -122,6 +122,8 @@ export interface BackupStoragesPageViewProps {
   storages?: BackupStorageRow[]
   /** 列表加载态（渲染骨架行）。 */
   isLoading?: boolean
+  /** 列表取数失败：渲染错误文案而非「暂无存储后端」，否则故障会被读成「一个后端都没配」。 */
+  isError?: boolean
   /** 创建/更新在途：禁用弹窗提交按钮。 */
   saving?: boolean
   /** 草稿测试连接在途：禁用「测试连接」按钮。 */
@@ -147,6 +149,7 @@ export interface BackupStoragesPageViewProps {
 export function BackupStoragesPageView({
   storages,
   isLoading = false,
+  isError = false,
   saving = false,
   testing = false,
   rowTestingId = null,
@@ -318,7 +321,15 @@ export function BackupStoragesPageView({
               )
             })}
             {isLoading && <TableSkeletonRows rows={3} cols={8} />}
-            {(!storages || storages.length === 0) && !isLoading && (
+            {isError && !isLoading && (
+              // 取数失败与「暂无存储后端」必须区分：后者会让管理员以为配置都还在。
+              <TableRow data-flat>
+                <TableCell colSpan={8} className="p-4 text-sm text-destructive">
+                  {t('common.error')}
+                </TableCell>
+              </TableRow>
+            )}
+            {(!storages || storages.length === 0) && !isLoading && !isError && (
               <TableEmptyRow
                 colSpan={8}
                 icon={<Database />}
@@ -349,17 +360,17 @@ export function BackupStoragesPageView({
           <form id="backup-storage-form" onSubmit={submit}>
             <ScrollableDialogBody className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="flex flex-col gap-1 text-sm">
-                <FieldLabel required>{t('backupStorages.name', '名称')}</FieldLabel>
-                <input className="p-2 border rounded bg-background aria-invalid:border-destructive" value={form.name}
+                <FieldLabel required htmlFor="backup-storage-name">{t('backupStorages.name', '名称')}</FieldLabel>
+                <input id="backup-storage-name" className="p-2 border rounded bg-background aria-invalid:border-destructive" value={form.name}
                   aria-invalid={!!gate.show('name', errors.name)}
                   onChange={(e) => set('name', e.target.value)}
                   onBlur={() => gate.touch('name')} />
                 <FieldError error={gate.show('name', errors.name)} />
               </div>
               <div className="flex flex-col gap-1 text-sm">
-                <FieldLabel>{t('backupStorages.type', '类型')}</FieldLabel>
+                <FieldLabel htmlFor="backup-storage-type">{t('backupStorages.type', '类型')}</FieldLabel>
                 {/* 编辑时 type 不可改（改型=删重建，后端 422 双保险，FR-338）。 */}
-                <Combobox options={TYPE_OPTIONS} value={form.type} onChange={(v) => set('type', v)} allowCustom={false} disabled={!!editing} />
+                <Combobox id="backup-storage-type" ariaLabel={t('backupStorages.type', '类型')} options={TYPE_OPTIONS} value={form.type} onChange={(v) => set('type', v)} allowCustom={false} disabled={!!editing} />
               </div>
               <label className="flex flex-col gap-1 text-sm md:col-span-2">
                 {t('backupStorages.endpoint', 'Endpoint')}
@@ -393,16 +404,16 @@ export function BackupStoragesPageView({
                 </label>
               )}
               <div className="flex flex-col gap-1 text-sm">
-                <FieldLabel>{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</FieldLabel>
-                <input className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.accessKeyHint', '')}
+                <FieldLabel htmlFor="backup-storage-access-key">{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</FieldLabel>
+                <input id="backup-storage-access-key" className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.accessKeyHint', '')}
                   aria-invalid={!!gate.show('accessKeyEnv', errors.accessKeyEnv)}
                   value={form.accessKeyEnv} onChange={(e) => set('accessKeyEnv', e.target.value)}
                   onBlur={() => gate.touch('accessKeyEnv')} />
                 <FieldError error={gate.show('accessKeyEnv', errors.accessKeyEnv)} />
               </div>
               <div className="flex flex-col gap-1 text-sm">
-                <FieldLabel>{t('backupStorages.secretKeyEnv', 'Secret Key 环境变量')}</FieldLabel>
-                <input className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.secretKeyHint', '')}
+                <FieldLabel htmlFor="backup-storage-secret-key">{t('backupStorages.secretKeyEnv', 'Secret Key 环境变量')}</FieldLabel>
+                <input id="backup-storage-secret-key" className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.secretKeyHint', '')}
                   aria-invalid={!!gate.show('secretKeyEnv', errors.secretKeyEnv)}
                   value={form.secretKeyEnv} onChange={(e) => set('secretKeyEnv', e.target.value)}
                   onBlur={() => gate.touch('secretKeyEnv')} />

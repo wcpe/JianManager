@@ -8,7 +8,7 @@
  * @sync apps/control-plane-web/src/pages/SchedulesPage.tsx、apps/control-plane-web/src/pages/SchedulesPage.dom.test.tsx
  * @since FR-502（组件受控化迁包；原页 FR-012 定时任务、FR-153 cron 可读文案与命令编辑、FR-207 mock 域簇）
  */
-import { Fragment, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Clock, Pencil, ScrollText, Trash2 } from 'lucide-react'
 import { ConfigRow, ConfigSwitch, ConfigSummaryChips, ConfigViewToggle } from '@/components/views/config-explorer/ConfigRow'
@@ -44,9 +44,21 @@ import {
   TableSkeletonRows,
 } from '@jianmanager/ui/components/table'
 import { CRON_PRESETS, describeCron, nextRuns, validateCron } from '@/lib/shared/cron'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { EMPTY_SCHEDULE_FORM, SCHEDULE_ACTIONS, formFromSchedule } from '@/lib/schedules/schedule-form'
 import type { ScheduleFormState } from '@/lib/schedules/schedule-form'
 import type { ScheduleInfo } from '@/lib/schedules/schedule'
+
+/**
+ * 列表视图主行的固定行高（px）。行盒由行内 style 钉死（「声明值即真实值」）：
+ * 内容自然高约 60.5（`py-3` = 24 + cron 单元格两行 35.5 + 行边框 1），取 64 留出行内余量；
+ * 虚拟化按同一常量定位，故滚动映射与真实行盒严格一致、不随行数累积漂移。
+ */
+const SCHEDULE_ROW_PX = 64
+/** 展开的日志行高度估算（仅首帧与无布局环境使用；浏览器实测后以实测值为准）。 */
+const SCHEDULE_LOGS_ROW_PX = 240
+/** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
+const FALLBACK_VIEWPORT_PX = 640
 
 /** 汇总筛选条取值：'enabled' 仅启用 / 'disabled' 仅停用 / null 全部。 */
 export type ScheduleFilter = 'enabled' | 'disabled' | null
@@ -79,6 +91,11 @@ export interface SchedulesInstancePickerArgs {
   invalid: boolean
   /** 是否取数：弹窗关闭时为 false，外壳据此停发请求。 */
   enabled: boolean
+  /**
+   * 选择器触发器应使用的 id：本组件的 `FieldLabel htmlFor` 指向它，使「实例」字段有可访问名。
+   * 实现必须把它透传到触发元素上（否则标签指向不存在/不匹配的元素，读屏仍拿不到字段名）。
+   */
+  id: string
 }
 
 /**
@@ -100,6 +117,8 @@ export interface SchedulesPageViewProps {
   schedules?: ScheduleInfo[]
   /** 列表加载态（渲染骨架行）。 */
   isLoading?: boolean
+  /** 列表取数失败：渲染错误文案而非「暂无定时任务」，否则故障会被读成「一个任务都没建」。 */
+  isError?: boolean
   /** 汇总筛选条当前值（只影响可见行，不触发取数）。 */
   filter: ScheduleFilter
   /** 汇总筛选条变更上报。 */
@@ -257,13 +276,14 @@ export function ScheduleFormDialogView({
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
           <ScrollableDialogBody className="space-y-3 py-1">
             <div className="space-y-1.5">
-              <FieldLabel required={mode === 'create'}>{t('schedules.instance')}</FieldLabel>
+              <FieldLabel required={mode === 'create'} htmlFor="schedule-instance">{t('schedules.instance')}</FieldLabel>
               {mode === 'create' ? (
                 renderInstancePicker({
                   value: form.instanceId ? Number(form.instanceId) : null,
                   onChange: (id) => setForm({ ...form, instanceId: id === null ? '' : String(id) }),
                   invalid: instanceMissing,
                   enabled: open,
+                  id: 'schedule-instance',
                 })
               ) : (
                 <div className="w-full rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
@@ -273,9 +293,10 @@ export function ScheduleFormDialogView({
             </div>
 
             <div className="space-y-1.5">
-              <FieldLabel required={mode === 'create'}>{t('schedules.name')}</FieldLabel>
+              <FieldLabel required={mode === 'create'} htmlFor="schedule-name">{t('schedules.name')}</FieldLabel>
               {mode === 'create' ? (
                 <Input
+                  id="schedule-name"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   placeholder={t('schedules.namePlaceholder')}
@@ -289,7 +310,7 @@ export function ScheduleFormDialogView({
             </div>
 
             <div className="space-y-1.5">
-              <FieldLabel required>{t('schedules.cron')}</FieldLabel>
+              <FieldLabel required htmlFor="schedule-cron">{t('schedules.cron')}</FieldLabel>
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-xs text-muted-foreground">{t('schedules.presets')}:</span>
                 {CRON_PRESETS.map((p) => (
@@ -304,6 +325,7 @@ export function ScheduleFormDialogView({
                 ))}
               </div>
               <Input
+                id="schedule-cron"
                 value={form.cronExpr}
                 onChange={(e) => setForm({ ...form, cronExpr: e.target.value })}
                 placeholder="0 4 * * *"
@@ -337,8 +359,9 @@ export function ScheduleFormDialogView({
 
             {form.action === 'command' && (
               <div className="space-y-1.5">
-                <FieldLabel>{t('schedules.command')}</FieldLabel>
+                <FieldLabel htmlFor="schedule-command">{t('schedules.command')}</FieldLabel>
                 <Input
+                  id="schedule-command"
                   value={form.command}
                   onChange={(e) => setForm({ ...form, command: e.target.value })}
                   placeholder="say server restarting"
@@ -385,6 +408,7 @@ export function ScheduleFormDialogView({
 export function SchedulesPageView({
   schedules,
   isLoading = false,
+  isError = false,
   filter,
   onFilterChange,
   logsId,
@@ -414,9 +438,66 @@ export function SchedulesPageView({
   }
 
   const enabledCount = (schedules ?? []).filter((s) => s.enabled).length
-  const visible = (schedules ?? []).filter((s) =>
-    filter === 'enabled' ? s.enabled : filter === 'disabled' ? !s.enabled : true,
+  const visible = useMemo(
+    () =>
+      (schedules ?? []).filter((s) =>
+        filter === 'enabled' ? s.enabled : filter === 'disabled' ? !s.enabled : true,
+      ),
+    [schedules, filter],
   )
+
+  /**
+   * 卡片行「下次执行」的预计算表（id → 展示文案）。
+   *
+   * 【为什么必须预计算】`nextRuns` 是**分钟级逐分扫描、上限 366 天**（见 lib/shared/cron）：
+   * 「永不命中」的表达式（如 `0 0 30 2 *`）单次约 52.7 万次迭代。原先直接写在卡片行的渲染表达式里，
+   * 于是每个启用行在**每次渲染**都要重算一遍——开关翻转、展开日志、切筛选都会触发。
+   * 这里改为按可见集合算一次并缓存：只在列表数据或筛选真的变化时重算。
+   */
+  const nextRunOf = useMemo(() => {
+    const map = new Map<number, string>()
+    const notScheduled = t('schedules.notScheduled')
+    for (const s of visible) {
+      if (!s.enabled) continue
+      // 非法表达式不参与预览（与原先 `!cron.valid → notScheduled` 同判据）。
+      map.set(
+        s.id,
+        validateCron(s.cronExpr).valid
+          ? nextRuns(s.cronExpr, 1)[0]?.toLocaleString() ?? notScheduled
+          : notScheduled,
+      )
+    }
+    return map
+  }, [t, visible])
+
+  /**
+   * 列表视图虚拟化。任务列表是**全库**的（容器调 `useSchedules()` 不带 instanceId，
+   * 后端 `ScheduleService.List(nil)` 即返回所有实例的任务），规模随集群实例数增长，
+   * 而原先整表进 DOM、只靠 `max-h-[70vh]` 滚动遮挡。
+   *
+   * 行高逐行建模：主行用钉死的常量，展开的日志行按浏览器实测高度计入（未测到/无布局环境先用估算）。
+   */
+  const logsRowRef = useRef<HTMLDivElement>(null)
+  const [logsRowSize, setLogsRowSize] = useState<{ id: number; px: number } | null>(null)
+  const logsRowPx = logsRowSize && logsRowSize.id === logsId ? logsRowSize.px : SCHEDULE_LOGS_ROW_PX
+  useLayoutEffect(() => {
+    // jsdom 无布局：offsetHeight 恒 0 → 保留估算，测试里窗口完全确定。
+    const px = logsRowRef.current?.offsetHeight ?? 0
+    if (logsId !== null && px > 0 && px !== logsRowPx) setLogsRowSize({ id: logsId, px })
+  }, [logs, logsId, logsRowPx])
+
+  /** 逐行高度：主行定高；展开行在其上追加日志行高度（两者都与行盒同源）。 */
+  const rowSizes = useMemo(
+    () => visible.map((s) => (s.id === logsId ? SCHEDULE_ROW_PX + logsRowPx : SCHEDULE_ROW_PX)),
+    [logsId, logsRowPx, visible],
+  )
+  const { containerRef, onScroll, range } = useVirtualRows({
+    total: visible.length,
+    itemSize: SCHEDULE_ROW_PX,
+    sizes: rowSizes,
+    overscan: 8,
+    fallbackViewportSize: FALLBACK_VIEWPORT_PX,
+  })
 
   return (
     // 阶段 6 页面迁移 + 全量对齐：外壳与页头改用布局层原语。
@@ -476,6 +557,9 @@ export function SchedulesPageView({
               <TableSkeletonRows rows={4} cols={7} />
             </TableBody>
           </Table>
+        ) : isError ? (
+          // 取数失败必须与「暂无定时任务」区分开：后者会让运维以为任务被删光了。
+          <p className="p-4 text-sm text-destructive">{t('common.error')}</p>
         ) : visible.length === 0 ? (
           <Table appearance="refined">
             <TableHeader>
@@ -508,9 +592,7 @@ export function SchedulesPageView({
                     <div>{s.enabled ? t('schedules.nextRunLabel') : t('schedules.disabledLabel')}</div>
                     <div>
                       {s.enabled
-                        ? validateCron(s.cronExpr).valid
-                          ? (nextRuns(s.cronExpr, 1)[0]?.toLocaleString() ?? t('schedules.notScheduled'))
-                          : t('schedules.notScheduled')
+                        ? nextRunOf.get(s.id) ?? t('schedules.notScheduled')
                         : s.lastRun
                           ? new Date(s.lastRun).toLocaleString()
                           : t('schedules.neverRun')}
@@ -551,84 +633,108 @@ export function SchedulesPageView({
             )}
           </div>
         ) : (
-          <Table appearance="refined" stickyHeader containerClassName="max-h-[70vh] overflow-y-auto">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('schedules.name')}</TableHead>
-                <TableHead>{t('schedules.instance')}</TableHead>
-                <TableHead>{t('schedules.cron')}</TableHead>
-                <TableHead>{t('schedules.action')}</TableHead>
-                <TableHead>{t('schedules.enabled')}</TableHead>
-                <TableHead align="right">{t('schedules.lastRun')}</TableHead>
-                <TableHead align="right">{t('common.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visible.map((s) => {
-                const expanded = logsId === s.id
-                return (
-                  <Fragment key={s.id}>
-                    <TableRow>
-                      <TableCell className="font-medium text-foreground">{s.name}</TableCell>
-                      <TableCell className="text-muted-foreground">{instanceNameOf(s)}</TableCell>
-                      <TableCell className="font-mono text-xs">
-                        <div>{s.cronExpr}</div>
-                        <div className="font-sans text-muted-foreground">{cronReadable(s.cronExpr)}</div>
-                      </TableCell>
-                      <TableCell>{t(`schedules.action_${s.action}`, { defaultValue: s.action })}</TableCell>
-                      <TableCell>
-                        <ConfigSwitch
-                          checked={s.enabled}
-                          onChange={() => onToggleEnabled(s)}
-                          label={t('schedules.enabled')}
-                          onLabel={t('schedules.enable')}
-                          offLabel={t('schedules.disable')}
-                        />
-                      </TableCell>
-                      <TableCell align="right" className="text-muted-foreground tabular-nums">
-                        {s.lastRun ? new Date(s.lastRun).toLocaleString() : t('schedules.neverRun')}
-                      </TableCell>
-                      {/* 3 个操作 → 图标按钮（方案 A：28px 命中区 / 15px 图标）；aria-label 保留原文案可达名。 */}
-                      <TableCell align="right">
-                        <div className="flex items-center justify-end gap-1">
-                          <TableIconButton
-                            aria-label={expanded ? t('schedules.hideLogs') : t('schedules.viewLogs')}
-                            title={expanded ? t('schedules.hideLogs') : t('schedules.viewLogs')}
-                            aria-expanded={expanded}
-                            onClick={() => onToggleLogs(s.id)}
-                          >
-                            <ScrollText />
-                          </TableIconButton>
-                          <TableIconButton
-                            aria-label={t('common.edit')}
-                            title={t('common.edit')}
-                            onClick={() => setEditing(s)}
-                          >
-                            <Pencil />
-                          </TableIconButton>
-                          <TableIconButton
-                            tone="danger"
-                            aria-label={t('common.delete')}
-                            title={t('common.delete')}
-                            onClick={() => setDeleteTarget(s)}
-                          >
-                            <Trash2 />
-                          </TableIconButton>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                    {expanded && (
-                      <TableRow data-flat>
-                        <TableCell colSpan={7} className="p-0">
-                          <ScheduleLogsView items={logs} isLoading={logsLoading} />
+          // 滚动容器与数据窗口同源。Table 的内层容器让出滚动（`overflow-visible`），
+          // 吸附表头才以本 div 为滚动祖先——否则表头会随内层容器一起滚走。
+          <div
+            ref={containerRef}
+            onScroll={onScroll}
+            data-testid="schedules-list-virtual"
+            className="max-h-[70vh] overflow-auto"
+          >
+            <Table appearance="refined" stickyHeader containerClassName="overflow-visible">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('schedules.name')}</TableHead>
+                  <TableHead>{t('schedules.instance')}</TableHead>
+                  <TableHead>{t('schedules.cron')}</TableHead>
+                  <TableHead>{t('schedules.action')}</TableHead>
+                  <TableHead>{t('schedules.enabled')}</TableHead>
+                  <TableHead align="right">{t('schedules.lastRun')}</TableHead>
+                  <TableHead align="right">{t('common.actions')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {range.before > 0 && (
+                  // 窗口上占位：高度来自同一行高模型，滚动条长度按全部行算。
+                  <TableRow aria-hidden="true" data-testid="schedules-virtual-spacer-before">
+                    <TableCell colSpan={7} className="p-0" style={{ height: range.before }} />
+                  </TableRow>
+                )}
+                {visible.slice(range.start, range.end).map((s) => {
+                  const expanded = logsId === s.id
+                  return (
+                    <Fragment key={s.id}>
+                      <TableRow data-testid="schedule-row" style={{ height: SCHEDULE_ROW_PX }}>
+                        <TableCell className="font-medium text-foreground">{s.name}</TableCell>
+                        <TableCell className="text-muted-foreground">{instanceNameOf(s)}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          <div>{s.cronExpr}</div>
+                          <div className="font-sans text-muted-foreground">{cronReadable(s.cronExpr)}</div>
+                        </TableCell>
+                        <TableCell>{t(`schedules.action_${s.action}`, { defaultValue: s.action })}</TableCell>
+                        <TableCell>
+                          <ConfigSwitch
+                            checked={s.enabled}
+                            onChange={() => onToggleEnabled(s)}
+                            label={t('schedules.enabled')}
+                            onLabel={t('schedules.enable')}
+                            offLabel={t('schedules.disable')}
+                          />
+                        </TableCell>
+                        <TableCell align="right" className="text-muted-foreground tabular-nums">
+                          {s.lastRun ? new Date(s.lastRun).toLocaleString() : t('schedules.neverRun')}
+                        </TableCell>
+                        {/* 3 个操作 → 图标按钮（方案 A：28px 命中区 / 15px 图标）；aria-label 保留原文案可达名。 */}
+                        <TableCell align="right">
+                          <div className="flex items-center justify-end gap-1">
+                            <TableIconButton
+                              aria-label={expanded ? t('schedules.hideLogs') : t('schedules.viewLogs')}
+                              title={expanded ? t('schedules.hideLogs') : t('schedules.viewLogs')}
+                              aria-expanded={expanded}
+                              onClick={() => onToggleLogs(s.id)}
+                            >
+                              <ScrollText />
+                            </TableIconButton>
+                            <TableIconButton
+                              aria-label={t('common.edit')}
+                              title={t('common.edit')}
+                              onClick={() => setEditing(s)}
+                            >
+                              <Pencil />
+                            </TableIconButton>
+                            <TableIconButton
+                              tone="danger"
+                              aria-label={t('common.delete')}
+                              title={t('common.delete')}
+                              onClick={() => setDeleteTarget(s)}
+                            >
+                              <Trash2 />
+                            </TableIconButton>
+                          </div>
                         </TableCell>
                       </TableRow>
-                    )}
-                  </Fragment>
-                )
-              })}
-            </TableBody>
-          </Table>
+                      {expanded && (
+                        <TableRow data-flat data-testid="schedule-logs-row">
+                          <TableCell colSpan={7} className="p-0">
+                            {/* 包一层测量壳：实测高度进虚拟模型，长日志表也不会让其后所有行错位。 */}
+                            <div ref={logsRowRef}>
+                              <ScheduleLogsView items={logs} isLoading={logsLoading} />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </Fragment>
+                  )
+                })}
+                {range.after > 0 && (
+                  // 窗口下占位（同上）：展开行的高度也必须体现在这里，否则滚动条长度会偏短。
+                  <TableRow aria-hidden="true" data-testid="schedules-virtual-spacer-after">
+                    <TableCell colSpan={7} className="p-0" style={{ height: range.after }} />
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
         )}
 
         <TableCardFooter>
