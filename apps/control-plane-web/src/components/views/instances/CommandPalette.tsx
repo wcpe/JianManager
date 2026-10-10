@@ -145,7 +145,7 @@ export default function CommandPalette({
             aria-label={t('palette.placeholder')}
             className="h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
-          <kbd className="hidden shrink-0 rounded border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground sm:inline-block">
+          <kbd className="hidden shrink-0 rounded border bg-muted px-1.5 py-0.5 text-micro text-muted-foreground sm:inline-block">
             Esc
           </kbd>
         </div>
@@ -188,9 +188,9 @@ export default function CommandPalette({
                   )}
                   <span className="min-w-0 flex-1 truncate">{entry.label}</span>
                   {entry.sublabel && (
-                    <span className="shrink-0 truncate text-[11px] text-muted-foreground">{entry.sublabel}</span>
+                    <span className="shrink-0 truncate text-meta text-muted-foreground">{entry.sublabel}</span>
                   )}
-                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-micro text-muted-foreground">
                     {t(`palette.kind.${entry.kind}`)}
                   </span>
                   {active && <CornerDownLeft className="size-3.5 shrink-0 text-muted-foreground" />}

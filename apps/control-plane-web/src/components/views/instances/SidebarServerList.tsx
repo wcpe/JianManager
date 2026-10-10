@@ -57,7 +57,7 @@ export default function SidebarServerList({
     return (
       <p
         data-testid="sidebar-server-list"
-        className="mt-2 rounded-md border border-dashed px-2 py-2 text-[11px] leading-relaxed text-muted-foreground"
+        className="mt-2 rounded-md border border-dashed px-2 py-2 text-meta leading-relaxed text-muted-foreground"
       >
         {t('sidebarServers.empty')}
       </p>
@@ -84,7 +84,7 @@ export default function SidebarServerList({
     >
       {favorites.length > 0 && (
         <section data-testid="sidebar-server-favorites" aria-label={t('sidebarServers.favorites')}>
-          <h3 className="px-2 pb-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+          <h3 className="px-2 pb-0.5 text-meta font-medium uppercase tracking-wide text-muted-foreground/70">
             {t('sidebarServers.favorites')}
           </h3>
           <div className="space-y-0.5">{favorites.map(renderRow)}</div>
@@ -92,7 +92,7 @@ export default function SidebarServerList({
       )}
       {recentRows.length > 0 && (
         <section data-testid="sidebar-server-recent" aria-label={t('sidebarServers.recent')}>
-          <h3 className="px-2 pb-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+          <h3 className="px-2 pb-0.5 text-meta font-medium uppercase tracking-wide text-muted-foreground/70">
             {t('sidebarServers.recent')}
           </h3>
           <div className="space-y-0.5">{recentRows.map(renderRow)}</div>
@@ -125,7 +125,7 @@ function ServerRow({
         type="button"
         onClick={() => onOpen(item)}
         title={`${item.name} · ${nodeName}`}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-foreground/90"
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-body text-foreground/90"
       >
         <InstanceStatusDot status={status} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>

@@ -173,7 +173,7 @@ export default function BusinessSegment({
               <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2">
                 {domainEntries.map(([domain, def]) => (
                   <div key={domain}>
-                    <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <div className="mb-1 px-1 text-meta font-semibold uppercase tracking-wide text-muted-foreground">
                       {domain}
                     </div>
                     <ul className="flex flex-col gap-0.5">
@@ -190,7 +190,7 @@ export default function BusinessSegment({
                             >
                               <span className="truncate font-mono">{action.action}</span>
                               {action.readOnly ? (
-                                <span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground">
+                                <span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 py-px text-micro text-muted-foreground">
                                   {t('business.readOnly')}
                                 </span>
                               ) : (
@@ -221,7 +221,7 @@ export default function BusinessSegment({
               ) : (
                 <div className="flex flex-col gap-2.5">
                   {isWriteAction(selected.action) && (
-                    <span className="inline-flex w-fit items-center gap-1 rounded-full bg-status-danger/12 px-2 py-0.5 text-[10px] font-medium text-status-danger">
+                    <span className="inline-flex w-fit items-center gap-1 rounded-full bg-status-danger/12 px-2 py-0.5 text-micro font-medium text-status-danger">
                       <ShieldAlert className="size-3" aria-hidden />
                       {t('business.writeAction')}
                     </span>
@@ -272,7 +272,7 @@ export default function BusinessSegment({
                         </div>
                       )}
                       {result.available && (
-                        <pre className="overflow-auto rounded-lg bg-muted/50 p-2.5 text-[11px]">
+                        <pre className="overflow-auto rounded-lg bg-muted/50 p-2.5 text-meta">
                           {JSON.stringify(result.output, null, 2)}
                         </pre>
                       )}

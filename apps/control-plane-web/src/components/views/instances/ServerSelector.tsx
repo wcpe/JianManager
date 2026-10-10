@@ -117,7 +117,7 @@ export default function ServerSelector({
         type="button"
         onClick={() => onOpenChange(true)}
         aria-label={t('serverSelector.open')}
-        className="flex w-full items-center gap-2 rounded-md border bg-card/80 px-2.5 py-2 text-left text-[13px] text-foreground shadow-soft transition-colors hover:bg-accent/60"
+        className="flex w-full items-center gap-2 rounded-md border bg-card/80 px-2.5 py-2 text-left text-body text-foreground shadow-soft transition-colors hover:bg-accent/60"
       >
         <Server className="size-4 shrink-0 text-primary" />
         <span className="min-w-0 flex-1 truncate">{t('serverSelector.open')}</span>
@@ -287,7 +287,7 @@ function StoredInstanceRow({
     >
       <button type="button" onClick={() => onOpen(instance)} className="min-w-0 flex-1 px-2 py-1.5 text-left text-sm">
         <span className="block truncate">{instance.name}</span>
-        <span className="block truncate text-[11px] text-muted-foreground">{instance.status}</span>
+        <span className="block truncate text-meta text-muted-foreground">{instance.status}</span>
       </button>
       <button
         type="button"
@@ -327,8 +327,8 @@ function InstanceRow({
       <button type="button" onClick={() => onOpen(instance)} className="min-w-0 flex flex-1 items-center gap-2 text-left">
         <span className="size-2 shrink-0 rounded-full bg-primary" />
         <span className="min-w-0 flex-1 truncate">{instance.name}</span>
-        <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">{nodeName ?? `#${instance.nodeId}`}</span>
-        <span className="shrink-0 text-[11px] text-muted-foreground">{instance.status}</span>
+        <span className="hidden shrink-0 text-meta text-muted-foreground sm:inline">{nodeName ?? `#${instance.nodeId}`}</span>
+        <span className="shrink-0 text-meta text-muted-foreground">{instance.status}</span>
       </button>
       <button
         type="button"

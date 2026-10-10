@@ -16,7 +16,7 @@ export function MetricSourceChips({ metrics, className }: { metrics: Availabilit
   const labels = sources.map((source) => t(metricSourceLabelKey(source)))
   return (
     <span
-      className={cn('inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2 py-0.5 text-[10px] text-muted-foreground', className)}
+      className={cn('inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2 py-0.5 text-micro text-muted-foreground', className)}
       title={`${t('metrics.source.label')}: ${labels.join(' · ')}`}
       data-metric-sources={sources.join(',')}
     >

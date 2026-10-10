@@ -139,26 +139,26 @@ export default function SnapshotPanel({
         </div>
       }
     >
-      <p className="px-0.5 pb-1.5 text-[11px] text-muted-foreground">{t('serverConsole.snapshotHint')}</p>
+      <p className="px-0.5 pb-1.5 text-meta text-muted-foreground">{t('serverConsole.snapshotHint')}</p>
       {/* W-11：运行态打快照**允许**（后端只在 note 里标注），但产出的世界文件可能不一致——
           必须**在创建前**讲清，而不是等用户回滚后才发现列表里那行 note。
           同屏的「备份恢复」在运行态是禁用的，这句提示同时解释了两者语义差异。 */}
       {instanceLive && (
-        <p data-testid="snapshot-running-warning" className="px-0.5 pb-1.5 text-[11px] text-status-warning">
+        <p data-testid="snapshot-running-warning" className="px-0.5 pb-1.5 text-meta text-status-warning">
           {t('serverConsole.snapshotRunningWarning')}
         </p>
       )}
       {isLoading ? (
-        <p className="px-0.5 py-1 text-[11px] text-muted-foreground">{t('common.loading')}</p>
+        <p className="px-0.5 py-1 text-meta text-muted-foreground">{t('common.loading')}</p>
       ) : isError ? (
         <div data-testid="snapshot-error" className="flex items-center gap-2 px-0.5 py-1">
-          <p className="text-[11px] text-status-danger">{t('serverConsole.snapshotLoadFailed')}</p>
+          <p className="text-meta text-status-danger">{t('serverConsole.snapshotLoadFailed')}</p>
           <Button type="button" variant="outline" size="sm" onClick={onRefresh}>
             {t('common.refresh')}
           </Button>
         </div>
       ) : rows.length === 0 ? (
-        <p data-testid="snapshot-empty" className="px-0.5 py-1 text-[11px] text-muted-foreground">
+        <p data-testid="snapshot-empty" className="px-0.5 py-1 text-meta text-muted-foreground">
           {t('serverConsole.snapshotEmpty')}
         </p>
       ) : (
@@ -283,8 +283,8 @@ function SnapshotRow({
         data-kind={snapshot.kind}
         className={
           snapshot.kind === 'pre_rollback'
-            ? 'rounded-full bg-status-warning/10 px-2 py-0.5 text-[11px] text-status-warning'
-            : 'rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground'
+            ? 'rounded-full bg-status-warning/10 px-2 py-0.5 text-meta text-status-warning'
+            : 'rounded-full bg-muted px-2 py-0.5 text-meta text-muted-foreground'
         }
       >
         {kindLabel(t, snapshot.kind)}
@@ -297,20 +297,20 @@ function SnapshotRow({
           {t('serverConsole.snapshotBinary', { name: snapshot.binaryName })}
         </span>
       )}
-      {snapshot.note && <span className="w-full text-[11px] text-status-warning">{snapshot.note}</span>}
+      {snapshot.note && <span className="w-full text-meta text-status-warning">{snapshot.note}</span>}
       {snapshot.state === 'failed' && snapshot.failureReason && (
-        <span className="w-full text-[11px] text-status-danger">{snapshot.failureReason}</span>
+        <span className="w-full text-meta text-status-danger">{snapshot.failureReason}</span>
       )}
       {/* B-1：底链缺失时状态仍可能是 completed，但实际不可回滚——必须显式说出原因，
           而不是让运维点下去才失败（原缺陷正是「列表显示可回滚、点击报 record not found」）。 */}
       {snapshot.notRollableReason && (
-        <span data-testid="snapshot-not-rollable" className="w-full text-[11px] text-status-danger">
+        <span data-testid="snapshot-not-rollable" className="w-full text-meta text-status-danger">
           {snapshot.notRollableReason}
         </span>
       )}
       <div className="ml-auto flex items-center gap-1">
-        {rollingBack && <span className="text-[11px] text-muted-foreground">{t('serverConsole.snapshotRollingBack')}</span>}
-        {deleting && <span className="text-[11px] text-muted-foreground">{t('common.deleting')}</span>}
+        {rollingBack && <span className="text-meta text-muted-foreground">{t('serverConsole.snapshotRollingBack')}</span>}
+        {deleting && <span className="text-meta text-muted-foreground">{t('common.deleting')}</span>}
         <Button
           size="sm"
           variant="outline"

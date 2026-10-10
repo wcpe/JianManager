@@ -45,7 +45,7 @@ function ProcessTopPanel({ rows, onInspect }: { rows: ProcessTopItem[]; onInspec
   const { t } = useTranslation()
   return (
     <Panel title={t('monitor.processTop', '进程 TOP10')}>
-      <p className="mb-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      <p className="mb-2 flex items-center gap-1.5 text-meta text-muted-foreground">
         <ShieldCheck className="size-3.5" />
         {t('monitor.processManagedOnly', '仅展示 JianManager 受管实例进程树，命令摘要已脱敏。')}
       </p>
@@ -84,7 +84,7 @@ function ProcessTopPanel({ rows, onInspect }: { rows: ProcessTopItem[]; onInspec
                 className="pointer-events-none absolute right-0 top-[calc(100%-0.25rem)] z-30 w-80 rounded-md border bg-popover p-3 text-popover-foreground opacity-0 shadow-soft transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
               >
                 <div className="mb-2 min-w-0 truncate font-medium">{row.commandSummary || row.name || '--'}</div>
-                <dl className="grid grid-cols-[92px_1fr] gap-x-3 gap-y-1 text-[11px]">
+                <dl className="grid grid-cols-[92px_1fr] gap-x-3 gap-y-1 text-meta">
                   <dt className="text-muted-foreground">{t('monitor.processPid', 'PID')}</dt>
                   <dd className="font-mono tabular-nums">{row.pid}</dd>
                   <dt className="text-muted-foreground">{t('monitor.processUser', '用户')}</dt>
@@ -134,7 +134,7 @@ function ProcessNodeItem({ item }: { item: ManagedProcessInfo }) {
     <div className="rounded-md border px-3 py-2 text-sm">
       <div className="flex items-center justify-between gap-2">
         <strong className="font-mono">PID {item.pid}</strong>
-        {item.isRoot && <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{t('monitor.processRoot', '根')}</span>}
+        {item.isRoot && <span className="rounded-full bg-muted px-2 py-0.5 text-meta text-muted-foreground">{t('monitor.processRoot', '根')}</span>}
       </div>
       <p className="mt-1 truncate text-muted-foreground">{item.commandSummary || item.name || '--'}</p>
       <p className="mt-1 text-xs text-muted-foreground">
@@ -449,7 +449,7 @@ export default function MonitoringPage(props: MonitoringPageProps) {
 
       {target.kind === 'node' && <BotRuntimePanel reason={botRuntimeReason} />}
 
-      <Panel bodyClassName="px-3 py-2 text-[11px] text-muted-foreground">{t('monitor.hint')}</Panel>
+      <Panel bodyClassName="px-3 py-2 text-meta text-muted-foreground">{t('monitor.hint')}</Panel>
 
       {/* 主图网格（每图独立时间筛选 + brush + hover），共享页级粒度与下钻世界聚焦 */}
       <MonitorSkeleton

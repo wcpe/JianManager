@@ -79,7 +79,7 @@ function WorkspaceCardImpl({
         )}
         <div className={cn('flex min-w-0 flex-1 items-baseline gap-1.5', readOnly && 'pl-1')}>
           <span className="truncate text-xs font-semibold tracking-wide text-foreground">{title}</span>
-          <span className="truncate text-[11px] text-muted-foreground">{instanceName}</span>
+          <span className="truncate text-meta text-muted-foreground">{instanceName}</span>
         </div>
         {!readOnly && (
           <>

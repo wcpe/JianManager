@@ -155,7 +155,7 @@ export function InstanceRankingPanel({
         </div>
       }
     >
-      {data?.scoped && <p className="mb-2 text-[11px] text-muted-foreground">{t('ranking.scoped')}</p>}
+      {data?.scoped && <p className="mb-2 text-meta text-muted-foreground">{t('ranking.scoped')}</p>}
       {error ? (
         <p className="py-5 text-center text-sm text-muted-foreground">{t('ranking.error')}</p>
       ) : loading ? (
@@ -186,14 +186,14 @@ export function InstanceRankingPanel({
                 <TableCell className="font-medium">{row.name}</TableCell>
                 <TableCell className="text-muted-foreground">{nodeName(row.nodeUuid)}</TableCell>
                 <TableCell className="text-right font-mono tabular-nums">{fmtRankingValue(metric, row.value, t)}</TableCell>
-                <TableCell className="text-right text-[11px] text-muted-foreground">{fmtSampledAt(row.sampledAt)}</TableCell>
+                <TableCell className="text-right text-meta text-muted-foreground">{fmtSampledAt(row.sampledAt)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       )}
       {!!data?.skippedNoData && (
-        <p className="mt-2 text-[11px] text-muted-foreground">{t('ranking.skipped', { count: data.skippedNoData })}</p>
+        <p className="mt-2 text-meta text-muted-foreground">{t('ranking.skipped', { count: data.skippedNoData })}</p>
       )}
     </Panel>
   )

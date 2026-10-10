@@ -87,7 +87,7 @@ export function SLOSection({ data, loading = false, error = false }: SLOSectionP
         <span className="flex items-center gap-2">
           {t('slo.title')}
           {data?.approximatedBuckets && (
-            <span className="text-[11px] font-normal text-muted-foreground">{t('slo.approx')}</span>
+            <span className="text-meta font-normal text-muted-foreground">{t('slo.approx')}</span>
           )}
         </span>
       }

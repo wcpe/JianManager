@@ -294,7 +294,7 @@ function BalanceView({
                 <TableRow key={r.id}>
                   <TableCell className="font-medium">{r.playerName}</TableCell>
                   <TableCell>{r.currency}</TableCell>
-                  <TableCell className="font-mono text-[11px] text-muted-foreground">{r.nodeUuid || '—'}</TableCell>
+                  <TableCell className="font-mono text-meta text-muted-foreground">{r.nodeUuid || '—'}</TableCell>
                   <TableCell>{r.zoneId || '—'}</TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{r.balance}</TableCell>
                 </TableRow>
@@ -397,7 +397,7 @@ function LeaderboardView({
                     <RankBadge rank={r.rank} />
                   </TableCell>
                   <TableCell className="font-medium">{r.playerName}</TableCell>
-                  <TableCell className="font-mono text-[11px] text-muted-foreground">{r.nodeUuid || '—'}</TableCell>
+                  <TableCell className="font-mono text-meta text-muted-foreground">{r.nodeUuid || '—'}</TableCell>
                   <TableCell>{r.zoneId || '—'}</TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{r.balance}</TableCell>
                 </TableRow>
@@ -416,7 +416,7 @@ function RankBadge({ rank }: { rank: number }) {
   return (
     <span
       className={cn(
-        'inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold tabular-nums',
+        'inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-meta font-semibold tabular-nums',
         top ? 'bg-primary text-primary-foreground' : 'text-muted-foreground',
       )}
     >
@@ -559,7 +559,7 @@ function TransferView({ onDispatch }: { onDispatch: EconomySegmentProps['onDispa
           {!result.available ? (
             <p className="text-xs text-status-danger">{result.error || t('economy.dispatchFailed')}</p>
           ) : (
-            <pre className="overflow-auto rounded-lg bg-muted/50 p-2.5 text-[11px]">{JSON.stringify(result.output, null, 2)}</pre>
+            <pre className="overflow-auto rounded-lg bg-muted/50 p-2.5 text-meta">{JSON.stringify(result.output, null, 2)}</pre>
           )}
         </div>
       )}
@@ -660,7 +660,7 @@ function LedgerView({
             <TableBody>
               {rows.map((r) => (
                 <TableRow key={r.id}>
-                  <TableCell className="text-[11px] text-muted-foreground">{fmtEpochMillis(r.occurredAt)}</TableCell>
+                  <TableCell className="text-meta text-muted-foreground">{fmtEpochMillis(r.occurredAt)}</TableCell>
                   <TableCell className="font-medium">{r.playerName}</TableCell>
                   <TableCell>{r.currency}</TableCell>
                   <TableCell>{r.entryType || '—'}</TableCell>
@@ -669,7 +669,7 @@ function LedgerView({
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{r.balanceAfter || '—'}</TableCell>
                   <TableCell>{r.zoneId || '—'}</TableCell>
-                  <TableCell className="font-mono text-[11px] text-muted-foreground">{r.ledgerId || '—'}</TableCell>
+                  <TableCell className="font-mono text-meta text-muted-foreground">{r.ledgerId || '—'}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

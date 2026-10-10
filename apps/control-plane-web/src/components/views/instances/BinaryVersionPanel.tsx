@@ -119,7 +119,7 @@ export default function BinaryVersionPanel({
       /* 加载占位也带 icon：否则标题栏在「加载 → 有数据」之间图标出现、高度跳动（W-20）。 */
       icon={<Package className="size-3.5" />}
     >
-      <p className="px-2.5 py-1.5 text-[11px] text-muted-foreground">{t('common.loading')}</p>
+      <p className="px-2.5 py-1.5 text-meta text-muted-foreground">{t('common.loading')}</p>
     </Panel>
   )
 
@@ -133,7 +133,7 @@ export default function BinaryVersionPanel({
         icon={<Package className="size-3.5" />}
       >
         <div data-testid="binary-version-error" className="flex items-center gap-2 px-2.5 py-1.5">
-          <p className="text-[11px] text-status-danger">{t('serverConsole.binaryVersionLoadFailed')}</p>
+          <p className="text-meta text-status-danger">{t('serverConsole.binaryVersionLoadFailed')}</p>
           <Button type="button" variant="outline" size="sm" onClick={onRefresh}>
             {t('common.refresh')}
           </Button>
@@ -208,21 +208,21 @@ export default function BinaryVersionPanel({
       }
     >
       <div className="space-y-1.5 text-xs">
-        <p className="text-[11px] text-muted-foreground">{t('serverConsole.binaryVersionHint')}</p>
+        <p className="text-meta text-muted-foreground">{t('serverConsole.binaryVersionHint')}</p>
         {!view.bound ? (
-          <p data-testid="binary-version-unbound" className="text-[11px] text-muted-foreground">
+          <p data-testid="binary-version-unbound" className="text-meta text-muted-foreground">
             {view.note ?? t('serverConsole.binaryVersionUnbound')}
           </p>
         ) : (
           <>
             <BinaryVersionSummary view={view} />
             {view.noLibraryVersion && (
-              <p data-testid="binary-version-no-library" className="text-[11px] text-status-warning">
+              <p data-testid="binary-version-no-library" className="text-meta text-status-warning">
                 {t('serverConsole.binaryVersionNoLibrary')}
               </p>
             )}
             {view.driftDetected && (
-              <p data-testid="binary-version-drift" className="text-[11px] text-status-warning">
+              <p data-testid="binary-version-drift" className="text-meta text-status-warning">
                 {t('serverConsole.binaryVersionDrift')}
                 {view.driftReason ? `：${view.driftReason}` : ''}
               </p>
@@ -231,20 +231,20 @@ export default function BinaryVersionPanel({
                 未校验（节点离线/文件过大/运行中）与「已核对且一致」必须区分开。
                 N-4：「读过但没算成」写成独立的跳过原因，绝不并入 driftDetected。 */}
             {view.diskSha256Checked ? (
-              <p data-testid="binary-version-disk-checked" className="text-[11px] text-muted-foreground">
+              <p data-testid="binary-version-disk-checked" className="text-meta text-muted-foreground">
                 {t('serverConsole.binaryVersionDiskChecked')}
               </p>
             ) : (
-              <p data-testid="binary-version-disk-unchecked" className="text-[11px] text-muted-foreground">
+              <p data-testid="binary-version-disk-unchecked" className="text-meta text-muted-foreground">
                 {t('serverConsole.binaryVersionDiskUnchecked')}
               </p>
             )}
             {view.diskCheckSkippedReason && (
-              <p data-testid="binary-version-disk-skipped" className="text-[11px] text-muted-foreground">
+              <p data-testid="binary-version-disk-skipped" className="text-meta text-muted-foreground">
                 {t('serverConsole.binaryVersionDiskSkipped')}：{view.diskCheckSkippedReason}
               </p>
             )}
-            <p className="text-[11px] text-muted-foreground">{t('serverConsole.binaryVersionStopHint')}</p>
+            <p className="text-meta text-muted-foreground">{t('serverConsole.binaryVersionStopHint')}</p>
           </>
         )}
       </div>
@@ -303,7 +303,7 @@ function BinaryVersionSummary({ view }: { view: BinaryVersionView }) {
         {view.currentAssetId > 0 && <span className="font-mono text-muted-foreground">asset#{view.currentAssetId}</span>}
       </div>
       {view.currentSha256 && (
-        <div className="truncate font-mono text-[11px] text-muted-foreground" title={view.currentSha256}>
+        <div className="truncate font-mono text-meta text-muted-foreground" title={view.currentSha256}>
           sha256 {view.currentSha256.slice(0, 16)}…
         </div>
       )}

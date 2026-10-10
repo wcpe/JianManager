@@ -73,7 +73,7 @@ export function AttributionResultView({ result }: { result: AttributionResult })
     return (
       <div className="space-y-1">
         <p className="text-sm text-muted-foreground">{t('attribution.insufficient')}</p>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-meta text-muted-foreground">
           {t('attribution.samples')}: {result.samples}
         </p>
       </div>
@@ -91,21 +91,21 @@ export function AttributionResultView({ result }: { result: AttributionResult })
               <span className="min-w-0 truncate font-medium">{factorLabel(f, t)}</span>
               <span className="shrink-0 tabular-nums text-muted-foreground">
                 {(f.weight * 100).toFixed(1)}%
-                <span className="ml-2 text-[11px]">
+                <span className="ml-2 text-meta">
                   {t('attribution.correlation')} {fmtCorr(f.correlation)}
                 </span>
               </span>
             </div>
             <div className="flex items-center gap-2">
               <MiniBar value={f.weight * 100} level={factorLevel(f.correlation)} />
-              <span className="shrink-0 text-[11px] text-muted-foreground">
+              <span className="shrink-0 text-meta text-muted-foreground">
                 {factorLevel(f.correlation) === 'danger' ? t('attribution.weight') : t('attribution.neutral')}
               </span>
             </div>
           </li>
         ))}
       </ul>
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-meta text-muted-foreground">
         {t('attribution.samples')}: {result.samples}
         {note ? ` · ${note}` : ''}
       </p>
@@ -145,7 +145,7 @@ export function AttributionCard({ result, fetching = false, error = false, onAna
         </Button>
       }
     >
-      <p className="mb-3 text-[11px] text-muted-foreground">{t('attribution.hint')}</p>
+      <p className="mb-3 text-meta text-muted-foreground">{t('attribution.hint')}</p>
       {error ? (
         <p className="text-sm text-muted-foreground">{t('attribution.error')}</p>
       ) : fetching ? (
