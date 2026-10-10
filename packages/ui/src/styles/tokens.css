@@ -102,6 +102,26 @@
   --danger-weak: #fef2f2;
   --danger-ink: #b91c1c;
   --danger-line: #f9d7d7;
+  /* warning/info 补齐同款三件套（此前只有 success/danger 有）：
+     weak=淡底 / ink=该底上的墨色 / line=描边。状态徽章用它比实色底更柔和，
+     且暗色下自动跟随（见下方 .dark）。 */
+  --warning-weak: #fdf5e6;
+  --warning-ink: #92400e;
+  --warning-line: #f5e0bb;
+  --info-weak: #eff5ff;
+  --info-ink: #1d4ed8;
+  --info-line: #d3e2fb;
+
+  /* ── 层级阶梯 ──
+     此前 45 处 z 值散落（含 z-[200]/z-[300] 这类任意值），浮层谁压谁只能靠读代码。
+     用普通 CSS 变量而非 @theme：Tailwind 的 z 主题命名空间不保证，
+     `z-[var(--z-*)]` 的写法无歧义且换肤/换主题时同样生效。 */
+  --z-base: 1;
+  --z-sticky: 10;      /* 吸附表头、粘性工具条 */
+  --z-dropdown: 20;    /* 下拉、气泡、右键菜单 */
+  --z-overlay: 30;     /* 遮罩 */
+  --z-modal: 40;       /* 模态、抽屉 */
+  --z-toast: 50;       /* 全局提示（须压住一切） */
 }
 
 .dark {
@@ -167,4 +187,10 @@
   --danger-weak: color-mix(in srgb, var(--status-danger) 18%, var(--card));
   --danger-ink: color-mix(in srgb, var(--status-danger) 86%, #ffffff);
   --danger-line: color-mix(in srgb, var(--status-danger) 36%, var(--card));
+  --warning-weak: color-mix(in srgb, var(--status-warning) 20%, var(--card));
+  --warning-ink: color-mix(in srgb, var(--status-warning) 88%, #ffffff);
+  --warning-line: color-mix(in srgb, var(--status-warning) 34%, var(--card));
+  --info-weak: color-mix(in srgb, var(--status-info) 18%, var(--card));
+  --info-ink: color-mix(in srgb, var(--status-info) 88%, #ffffff);
+  --info-line: color-mix(in srgb, var(--status-info) 34%, var(--card));
 }

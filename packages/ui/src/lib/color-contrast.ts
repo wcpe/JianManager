@@ -55,6 +55,7 @@ const HEX_PATTERN = /^#([0-9a-f]{3,8})$/i
 const OKLCH_FN = 'oklch'
 /** `rgb(r g b)` / `rgba(r, g, b, a)` 的函数名。 */
 const RGB_FN = 'rgb'
+const COLOR_MIX_FN = 'color-mix'
 
 /**
  * 判断文本是否「整串就是一个指定函数调用」，是则返回括号内的内容。
@@ -227,6 +228,78 @@ function makeRgb(r: number, g: number, b: number): Rgb {
 }
 
 /**
+ * 按**顶层逗号**切分（跳过括号内的逗号）。
+ *
+ * 不能复用 splitTopLevel：它连空格一起切，而 `in srgb` 与 `#36d58a 82%` 里的空格是语义
+ * 的一部分，切了就拿不到「颜色 + 百分比」的配对。
+ */
+function splitByTopLevelComma(input: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let current = ''
+  for (const ch of input) {
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth -= 1
+    if (ch === ',' && depth === 0) {
+      out.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  out.push(current)
+  return out
+}
+
+/** 拆出「颜色 + 可选百分比」：`#36d58a 82%` → `{ color: '#36d58a', pct: 82 }`。 */
+function splitMixOperand(input: string): { color: string; pct: number | null } | null {
+  const text = input.trim()
+  if (text === '') return null
+  const m = /^(.*?)\s+([\d.]+)%$/.exec(text)
+  if (!m) return { color: text, pct: null }
+  const color = m[1]
+  const pctText = m[2]
+  if (color === undefined || pctText === undefined) return null
+  const pct = Number(pctText)
+  if (!Number.isFinite(pct)) return null
+  return { color: color.trim(), pct }
+}
+
+/**
+ * 解析 `color-mix(in srgb, A P%, B)`。
+ *
+ * 【为什么必须支持】暗色 token 的 weak/ink/line 全部用 color-mix 从状态色与卡片色混出
+ * （见 tokens.css 的 `.dark`）。解析器此前不认这种写法，对比度门禁遇到这些对只能抛错 ——
+ * 于是**暗色下的状态色对长期没有校验**，而它们恰恰是最容易在换主题时失守的。
+ *
+ * 仅支持本项目实际用到的形态：`in srgb` + 两个颜色、其中一个带百分比（另一个按 100−p 补足）。
+ * alpha 本模块本就忽略（见模块注释声明的边界）。
+ */
+function parseColorMix(text: string): Rgb | null {
+  const body = wholeFunctionBody(text, COLOR_MIX_FN)
+  if (body === null) return null
+  const parts = splitByTopLevelComma(body).map((p) => p.trim())
+  const space = parts[0]
+  if (space === undefined || space.toLowerCase() !== 'in srgb') return null
+  if (parts.length !== 3) return null
+  const a = splitMixOperand(parts[1] ?? '')
+  const b = splitMixOperand(parts[2] ?? '')
+  if (!a || !b) return null
+  if (a.pct === null && b.pct === null) return null
+  const aPct = a.pct ?? 100 - (b.pct ?? 0)
+  const bPct = b.pct ?? 100 - aPct
+  if (aPct < 0 || bPct < 0) return null
+  const ca = parseColor(a.color)
+  const cb = parseColor(b.color)
+  if (!ca || !cb) return null
+  return makeRgb(
+    (ca.r * aPct + cb.r * bPct) / 100,
+    (ca.g * aPct + cb.g * bPct) / 100,
+    (ca.b * aPct + cb.b * bPct) / 100,
+  )
+}
+
+/**
  * 解析 oklch() 文本为 OKLCH 分量。
  * L 支持小数（0.704）与百分数（70.4%）；alpha 被忽略（见 parseColor 注释）。
  */
@@ -302,6 +375,10 @@ export function parseColor(value: string): Rgb | null {
     const oklch = parseOklch(text)
     return oklch ? oklchToSrgb(oklch) : null
   }
+
+  // color-mix(...)：暗色 token 的 weak/ink/line 大量用它从状态色与卡片色混出。
+  // 不支持则门禁遇到这些值只能抛错跳过 —— 暗色的状态色对因此长期无人校验。
+  if (wholeFunctionBody(text, COLOR_MIX_FN) !== null) return parseColorMix(text)
 
   // rgba() 不以 rgb( 开头，故两种函数名各试一次
   const rgbBody = wholeFunctionBody(text, RGB_FN) ?? wholeFunctionBody(text, 'rgba')

@@ -1,12 +1,21 @@
 import { cn } from '../lib/utils'
 import type { StatusLevel } from '../lib/threshold'
 
-/** 状态等级 → 徽章底/字配色（半透明底 + 状态色字，高密度面板用）。 */
+/**
+ * 状态等级 → 徽章底/字配色（高密度面板用）。
+ *
+ * 【为什么不用 `bg-status-X/15 text-status-X`】纯状态色压在自身的 15% 淡底上，实测
+ * **warning 2.72:1、success 2.78:1，低于 WCAG 非文本 3:1**（info 4.20 / danger 3.81 勉强过）。
+ * 根因是把「实色底上的前景」直接拿来当「淡底上的墨色」用 —— 淡底提亮了背景，
+ * 前景却没跟着加深。改用 weak/ink 三件套（手工取值，非 alpha 混合）后：
+ * warning 6.54 / success 6.76 / info 6.12 / danger 5.91，并已纳入对比度门禁
+ * （5 主题 × 明暗全绿）。暗色下由 tokens.css 的 color-mix 自动跟随。
+ */
 const LEVEL_CLASS: Record<StatusLevel, string> = {
-  success: 'bg-status-success/15 text-status-success',
-  warning: 'bg-status-warning/15 text-status-warning',
-  danger: 'bg-status-danger/15 text-status-danger',
-  info: 'bg-status-info/15 text-status-info',
+  success: 'bg-success-weak text-success-ink',
+  warning: 'bg-warning-weak text-warning-ink',
+  danger: 'bg-danger-weak text-danger-ink',
+  info: 'bg-info-weak text-info-ink',
   neutral: 'bg-muted text-muted-foreground',
 }
 
