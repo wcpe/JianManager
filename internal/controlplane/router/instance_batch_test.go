@@ -73,10 +73,14 @@ func TestInstanceBatch_Stop_WorkerOffline(t *testing.T) {
 	assert.Equal(t, float64(2), m["failed"]) // Worker 未连接 → 委托全失败
 	assert.Equal(t, float64(0), m["skipped"])
 
-	// 委托失败回写 CRASHED（与单实例 delegateToWorker 语义一致）
-	var inst model.Instance
-	require.NoError(t, db.First(&inst, id1).Error)
-	assert.Equal(t, model.InstanceStatusCrashed, inst.Status)
+	// 节点离线不能证明服务器崩溃：保留最后已知状态，写明待心跳确认的原因。
+	for _, id := range []uint{id1, id2} {
+		var inst model.Instance
+		require.NoError(t, db.First(&inst, id).Error)
+		assert.Equal(t, model.InstanceStatusRunning, inst.Status)
+		assert.Contains(t, inst.StatusReason, "操作结果待确认")
+		assert.Contains(t, inst.StatusReason, "Worker 未连接")
+	}
 
 	// errors 含失败明细
 	errs := m["errors"].([]interface{})

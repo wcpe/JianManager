@@ -321,7 +321,7 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 			s.manager.SetQueryPort(req.InstanceUuid, int(req.QueryPort))
 			// 刷新启动配置（启动命令 / 绑定 JDK / 环境变量），使配置编辑（FR-233 重绑 JDK 等）对下次启动生效——
 			// 否则 worker 保留旧 spec，重绑的 JDK 不被采用、preflight 仍报「未绑定 JDK」。
-			s.manager.SetLaunchConfig(req.InstanceUuid, req.StartCommand, req.JdkPath, req.JdkBinPath, req.EnvVars, req.AutoRestart)
+			s.manager.SetLaunchConfig(req.InstanceUuid, req.StartCommand, req.JdkPath, req.JdkBinPath, req.EnvVars, req.AutoRestart, req.StopCommand)
 			if req.ProcessType == string(process.ProcessTypeDocker) {
 				s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings), req.CpuLimit, req.MemLimitMb, req.DiskLimitMb)
 			}
@@ -340,7 +340,7 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 }
 
 // ResyncInstances Worker 重连/重注册后接收 CP 重推的整节点实例规格，填充内存注册表（见 ADR-050）。
-// 「只补不覆盖」：已在表者（含 RecoverDaemonInstances 恢复的 RUNNING 实例）跳过，
+// 「只补不覆盖」运行态与目录：已在表者复用幂等注册补完整启动规格（当前控制通道不中断），
 // 不在表者按 STOPPED 登记且不启动进程——只让停机实例可被文件/配置/归档 op 定位工作目录，
 // 绝不擅自拉起。修 bug #2（重启后停机实例 op 报「实例不存在」）。
 func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstancesRequest) (*workerpb.ResyncInstancesResponse, error) {
@@ -355,11 +355,9 @@ func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstan
 		// CP 已按适用性收敛 probe_port（代理/Beacon/通用二进制为 0）；心跳采集按 ProbePort>0 过滤，
 		// 补直探端口使直探对恢复实例也打对端口（不触碰运行态、不重启进程）。
 		if _, exists := s.manager.GetInstance(spec.InstanceUuid); exists {
-			s.manager.SetProbePort(spec.InstanceUuid, int(spec.ProbePort))
-			s.manager.SetServerPort(spec.InstanceUuid, int(spec.ServerPort))
-			s.manager.SetQueryPort(spec.InstanceUuid, int(spec.QueryPort))
-			if err := s.registerInstanceLogs(spec, spec.WorkDir); err != nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "instance log binding failed: %v", err)
+			// 复用幂等注册的完整规格同步；保留运行态与工作目录，仅使下一代策略可重建。
+			if _, err := s.registerInstanceFromProto(spec); err != nil {
+				return nil, status.Errorf(codes.FailedPrecondition, "同步实例规格失败: %v", err)
 			}
 			skipped++
 			continue
@@ -396,8 +394,8 @@ func (s *Server) StartInstance(ctx context.Context, req *workerpb.InstanceAction
 	if reason, released := s.manager.ReleaseCircuitBreaker(req.InstanceUuid); released {
 		slog.Info("人工启动解除实例崩溃熔断", "instanceId", req.InstanceUuid, "wasReason", reason)
 	}
-	if err := s.manager.Start(req.InstanceUuid); err != nil {
-		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
+	if err := s.manager.StartContext(ctx, req.InstanceUuid); err != nil {
+		return lifecycleActionFailure(ctx, err)
 	}
 	return &workerpb.InstanceActionResponse{Success: true}, nil
 }
@@ -451,8 +449,8 @@ func (s *Server) AdoptForeignRuntime(ctx context.Context, req *workerpb.Instance
 
 // StopInstance 停止实例。
 func (s *Server) StopInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
-	if err := s.manager.Stop(req.InstanceUuid); err != nil {
-		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
+	if err := s.manager.StopContext(ctx, req.InstanceUuid); err != nil {
+		return lifecycleActionFailure(ctx, err)
 	}
 	return &workerpb.InstanceActionResponse{Success: true}, nil
 }
@@ -461,18 +459,26 @@ func (s *Server) StopInstance(ctx context.Context, req *workerpb.InstanceActionR
 func (s *Server) RestartInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
 	// N-3：重启同样应用请求携带的生效限额（CP 的重启路径也带限额）。
 	s.applyActionLimits(req)
-	if err := s.manager.Restart(req.InstanceUuid); err != nil {
-		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
+	if err := s.manager.RestartContext(ctx, req.InstanceUuid); err != nil {
+		return lifecycleActionFailure(ctx, err)
 	}
 	return &workerpb.InstanceActionResponse{Success: true}, nil
 }
 
 // KillInstance 强制终止实例。
 func (s *Server) KillInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
-	if err := s.manager.Kill(req.InstanceUuid); err != nil {
-		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
+	if err := s.manager.KillContext(ctx, req.InstanceUuid); err != nil {
+		return lifecycleActionFailure(ctx, err)
 	}
 	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
+
+// lifecycleActionFailure 保留取消的传输语义，CP 不得据此判断服务器崩溃。
+func lifecycleActionFailure(ctx context.Context, err error) (*workerpb.InstanceActionResponse, error) {
+	if ctx.Err() != nil {
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
 }
 
 // SendCommand 向实例发送命令。

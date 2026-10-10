@@ -23,6 +23,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
+	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
@@ -348,6 +349,20 @@ type LogIndexVerifyConfig struct {
 	// log_index.verify.visibility_floor）：>0 时首探前先等到"距批写入 ≥ floor"
 	// （对齐 VL 写入→可查询的硬地板，避免 0/0.2/0.6s 三次无效探测）。0/非正 = 关（默认关）。
 	VisibilityFloor string `mapstructure:"visibility_floor"`
+	// ChunkEstimate 是**单簇校验查询的保守耗时估计**（duration 字符串，键
+	// log_index.verify.chunk_estimate）：空/非法/非正 = **不放大预算**（默认，行为与修复前
+	// 逐字一致）。
+	//
+	// 为什么需要（2026-10-10 生产活锁）：单源预算原先是与事件数无关的常数，而大积压会被切成
+	// 数百簇（现场 544205 事件 / 2000 ⇒ 272 簇，实测单簇 17–23 秒）⇒ 常量预算永远跑不完。
+	// 给出本估计后，预算按 `⌈事件数/簇粒度⌉ × 估计 × 安全系数` 放大，并被 chunk_budget_max 封顶。
+	ChunkEstimate string `mapstructure:"chunk_estimate"`
+	// ChunkBudgetMax 是放大后预算的上限（duration 字符串，键
+	// log_index.verify.chunk_budget_max）：空/非法/非正 = 用 ingest 默认（5 分钟）。
+	//
+	// 上限的意义：超过它的批次只能靠**逐轮渐进收敛**（校验部分通过也登记已通过区间），
+	// 而不是让单源占住校验额度一小时（272 簇 × 23s ≈ 104 分钟 ✗）。
+	ChunkBudgetMax string `mapstructure:"chunk_budget_max"`
 }
 
 // LogIndexBatchPruneConfig 是历史投递批次裁剪的配置面（键 `log_index.batch_prune.*`）。
@@ -927,6 +942,36 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	return p, nil
 }
 
+// validateRuntimeRetention 对照 vlsup.New 的实际回退：全局空串为 30d，
+// 冷层空白覆盖沿用全局。相等保留期兼容默认值，但不是扫描/搬运余量或无限失败保护。
+func (c *Config) validateRuntimeRetention(p retention.Policy) error {
+	hotRaw := c.LogVL.RetentionPeriod
+	if hotRaw == "" {
+		hotRaw = vlsup.DefaultRetentionPeriod
+	}
+	coldRaw := c.LogVL.ColdRetentionPeriod
+	if strings.TrimSpace(coldRaw) == "" {
+		coldRaw = hotRaw
+	}
+	for _, check := range []struct {
+		key      string
+		raw      string
+		declared time.Duration
+	}{
+		{"log_vl.retention_period", hotRaw, p.HotWindow()},
+		{"log_vl.cold_retention_period", coldRaw, p.Normalize().ColdRetention},
+	} {
+		actual, err := retention.ParseRuntimeTTL(check.raw)
+		if err != nil {
+			return fmt.Errorf("%s: %w", check.key, err)
+		}
+		if actual < check.declared {
+			return fmt.Errorf("%s 实际生效 %q (%s) 短于 log_retention 声明 %s；VL 原生淘汰会绕过搬运与最后副本保护", check.key, check.raw, actual, check.declared)
+		}
+	}
+	return nil
+}
+
 // WALBudgetNotice 返回「WAL 积压上限被显式关掉」的提醒（未关掉时返回空串）。
 //
 // 语义（2026-10-02 复核后收紧）：本值现在是**真实积压上限**（直接接 WAL.SetLimits），
@@ -1124,6 +1169,25 @@ func (c *Config) VerifyBudgetTuning() (roundBudget, visibilityFloor time.Duratio
 		visibilityFloor = d
 	}
 	return roundBudget, visibilityFloor
+}
+
+// VerifyChunkEstimatesTuning 把 `log_index.verify.chunk_estimate / chunk_budget_max` 收敛为
+// ingest 的「预算随事件数放大」档位（2026-10-10 生产活锁修复，改动 B）。
+//
+// 口径（与 round_budget 同向的保守默认）：**空/非法/非正一律视为「不放大」**——返回零值让
+// ingest 走常量预算，与修复前逐字一致。绝不因为误写而让某个源悄悄拿到几十倍的校验额度 ✗。
+func (c *Config) VerifyChunkEstimatesTuning() ingest.VerifyChunkEstimates {
+	if c == nil {
+		return ingest.VerifyChunkEstimates{}
+	}
+	var est ingest.VerifyChunkEstimates
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.ChunkEstimate)); err == nil && d > 0 {
+		est.PerChunk = d
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.ChunkBudgetMax)); err == nil && d > 0 {
+		est.Max = d
+	}
+	return est
 }
 
 // PersistGateTuning 把 `log_index.persist.*` 下**持久化门公平性**的两枚旋钮收敛为 ingest 配置面。
@@ -1384,6 +1448,11 @@ func Load(path string) (*Config, error) {
 	// 每源每轮校验预算与可见性错开（2026-10-03 回退修复）：空串 = 用 ingest 默认（预算 1.5s、错开关）。
 	v.SetDefault("log_index.verify.round_budget", "")
 	v.SetDefault("log_index.verify.visibility_floor", "")
+	// 校验预算随事件数放大（2026-10-10 生产活锁修复，改动 B）：空串 = **不放大**（保守默认，
+	// 与修复前逐字一致）；chunk_estimate 给了正数才按「簇数 × 估计 × 安全系数」放大，
+	// 并由 chunk_budget_max 封顶（空 = ingest 默认 5 分钟）。
+	v.SetDefault("log_index.verify.chunk_estimate", "")
+	v.SetDefault("log_index.verify.chunk_budget_max", "")
 	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
@@ -1472,6 +1541,20 @@ func Load(path string) (*Config, error) {
 			} else {
 				cfg.configPath = used
 			}
+		}
+	}
+	// 在读取其它运行态文件、更不用说启动受管 VL 之前校验原始策略。
+	// 不先 Normalize：负值不能被默认值掩盖，错误配置也不能只让 main 静默停用驱动器。
+	if err := cfg.SamplingPolicy().Validate(); err != nil {
+		return nil, fmt.Errorf("log_ingest.sampling: %w", err)
+	}
+	if cfg.LogRetention.Enabled {
+		policy, err := cfg.RetentionPolicy()
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.validateRuntimeRetention(policy); err != nil {
+			return nil, err
 		}
 	}
 	if cfg.EnrollToken == "" && strings.TrimSpace(cfg.EnrollTokenFile) != "" {

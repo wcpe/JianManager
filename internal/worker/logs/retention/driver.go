@@ -61,6 +61,9 @@ type PartitionRef struct {
 	// 若不看这个标记就反复下发，第二轮会对同一个分区再次 BeginMigration，
 	// 而 Catalog 的状态机不允许在途迁移被重新开始（会返回错误并污染状态）。
 	InFlight bool
+	// Retryable 表示已有迁移的可重试失败；必须续跑，不能再 Begin。
+	// 优先于 OwnerCold：切权威后仍可能因租约/清理失败留下旧副本。
+	Retryable bool
 }
 
 // eligibleAt 返回该分区最早可离开热层的时刻。
@@ -222,10 +225,10 @@ func (d *Driver) Step(ctx context.Context, now time.Time) (DriverResult, error) 
 	}
 	res.Listed = len(all)
 
-	// 过滤：已在冷层、或在途迁移的分区不纳入本轮计划。
+	// 可重试失败优先续跑；仅稳定冷层和真正活动/手工迁移跳过。
 	candidates := make([]PartitionRef, 0, len(all))
 	for _, part := range all {
-		if part.Owner == OwnerColdName || part.InFlight {
+		if !part.Retryable && (part.Owner == OwnerColdName || part.InFlight) {
 			res.Skipped++
 			continue
 		}

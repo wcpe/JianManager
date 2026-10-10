@@ -2126,11 +2126,16 @@ func delegateRPCTimeout(action string, gracefulStopSeconds int32) time.Duration 
 
 // delegateToWorker 委托实例操作给 Worker Node。
 func (s *InstanceService) delegateToWorker(instance *model.Instance, action string) {
+	// 捕获派发前的事实版本，迟到响应只能回写这一版本，不能覆盖新心跳或后续操作。
+	var observed model.Instance
+	if err := s.db.First(&observed, instance.ID).Error; err != nil || observed.UUID != instance.UUID || observed.NodeID != instance.NodeID {
+		return
+	}
 	// 查找节点
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
 		slog.Error("查找节点失败", "instanceId", instance.UUID, "error", err)
-		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, "查找节点失败: "+err.Error())
+		writeLifecycleObservation(s.db, &observed, observed.Status, "操作未确认，等待心跳收敛: 查找节点失败: "+err.Error())
 		return
 	}
 
@@ -2138,13 +2143,13 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
 		slog.Error("节点未连接", "nodeUUID", node.UUID)
-		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, "节点未连接")
+		writeLifecycleObservation(s.db, &observed, observed.Status, "操作未确认，等待心跳收敛: 节点未连接")
 		return
 	}
 
 	// 超时按动作取：start/restart 须覆盖 Worker 侧「优雅停止 + 等待上一代进程退出 + 启动」全链路
 	// （见 delegateRPCTimeout），与其它动作共用 30s 会把仍在正常启动/重启的实例误标 CRASHED。
-	ctx, cancel := context.WithTimeout(context.Background(), delegateRPCTimeout(action, s.gracefulStopTimeoutSeconds()))
+	ctx, cancel := context.WithTimeout(s.bgCtx, delegateRPCTimeout(action, s.gracefulStopTimeoutSeconds()))
 	defer cancel()
 
 	// N-3：启动/重启请求**随附生效限额**，不依赖「启动前的幂等重注册一定成功」。
@@ -2176,7 +2181,8 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 		if regErr := s.registerOnWorkerLocked(instance); regErr != nil {
 			reason := "重启前同步最新启动规格失败，已取消重启: " + regErr.Error()
 			slog.Error("重启前同步最新启动规格失败，已取消重启", "instanceId", instance.UUID, "error", regErr)
-			s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, reason)
+			// 新规格同步失败时动作尚未派发，保留待确认事实，不需要额外查询来假定崩溃。
+			writeLifecycleObservation(s.db, &observed, observed.Status, reason)
 			return
 		}
 		resp, err = client.Worker.RestartInstance(ctx, req)
@@ -2186,13 +2192,13 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 
 	if err != nil {
 		slog.Error("Worker 操作失败", "action", action, "instanceId", instance.UUID, "error", err)
-		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, "Worker 操作失败: "+err.Error())
+		reconcileLifecycleObservation(s.db, client.Worker, &observed, "Worker 操作结果未确认: "+err.Error())
 		return
 	}
 
 	if resp != nil && !resp.Success {
 		slog.Error("Worker 操作未成功", "action", action, "instanceId", instance.UUID, "error", resp.Error)
-		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, resp.Error)
+		reconcileLifecycleObservation(s.db, client.Worker, &observed, resp.Error)
 		return
 	}
 
@@ -2200,7 +2206,9 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	if action == "start" {
 		// 仅当仍处 STARTING 时才置 RUNNING：启动委托回来前用户可能已点停止（STARTING→STOPPING），
 		// 此时迟到的 start 成功不得把已在停止中的实例「复活」成 RUNNING（修 #5 启动中停止竞态）。
-		s.updateStatusFromTo(instance.ID, model.InstanceStatusStarting, model.InstanceStatusRunning)
+		if observed.Status == model.InstanceStatusStarting {
+			writeLifecycleObservation(s.db, &observed, model.InstanceStatusRunning, "")
+		}
 		slog.Info("Worker 操作成功", "action", action, "instanceId", instance.UUID)
 		return
 	}
@@ -2213,8 +2221,32 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 		targetStatus = model.InstanceStatusRunning
 	}
 
-	s.updateStatusAsync(instance.ID, targetStatus)
+	writeLifecycleObservation(s.db, &observed, targetStatus, "")
 	slog.Info("Worker 操作成功", "action", action, "instanceId", instance.UUID)
+}
+
+// writeLifecycleObservation 条件回写派发前事实，身份/节点/状态/更新时间任一变化即放弃迟到结果。
+func writeLifecycleObservation(db *gorm.DB, observed *model.Instance, target model.InstanceStatus, reason string) {
+	if err := db.Model(&model.Instance{}).
+		Where("id = ? AND uuid = ? AND node_id = ? AND status = ? AND updated_at = ?", observed.ID, observed.UUID, observed.NodeID, observed.Status, observed.UpdatedAt).
+		Updates(map[string]any{"status": target, "status_reason": reason, "status_reason_source": ""}).Error; err != nil {
+		slog.Warn("生命周期结果条件回写失败", "instanceId", observed.UUID, "error", err)
+	}
+}
+
+// reconcileLifecycleObservation 传输失败/取消不是崩溃证据；复用现有状态查询，失败则交给心跳收敛。
+func reconcileLifecycleObservation(db *gorm.DB, worker workerpb.WorkerServiceClient, observed *model.Instance, reason string) {
+	target := observed.Status
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := worker.GetInstanceStatus(ctx, &workerpb.InstanceActionRequest{InstanceUuid: observed.UUID})
+	if err == nil && resp != nil {
+		switch state := model.InstanceStatus(resp.State); state {
+		case model.InstanceStatusStopped, model.InstanceStatusStarting, model.InstanceStatusRunning, model.InstanceStatusStopping, model.InstanceStatusCrashed:
+			target = state
+		}
+	}
+	writeLifecycleObservation(db, observed, target, "操作结果待确认，状态查询/心跳收敛: "+reason)
 }
 
 func (s *InstanceService) updateStatusAsync(id uint, status model.InstanceStatus) {

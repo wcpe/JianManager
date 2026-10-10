@@ -68,6 +68,11 @@ func (d *directStrategy) Start(ctx context.Context) error {
 
 	cmd.Env = ComposeEnv(os.Environ(), d.spec)
 
+	// 只在提交启动前取消；成功启动的实例生命周期独立于请求。
+	if err := ctx.Err(); err != nil {
+		stdin.Close()
+		return err
+	}
 	if err := cmd.Start(); err != nil {
 		stdin.Close()
 		d.state = StateCrashed

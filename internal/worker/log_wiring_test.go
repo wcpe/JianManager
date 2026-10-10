@@ -245,6 +245,10 @@ func TestVerifyAndHotBudgetKeysBindFromYAML(t *testing.T) {
 		"    max_per_second: 7",
 		"    max_in_flight: 2",
 		"    max_queries_per_chunk: 5",
+		// 校验预算随事件数放大（2026-10-10 生产活锁修复，改动 B）：
+		// 这两个键必须真的从 YAML 绑到 ingest 档位，否则「按簇数放大」对运维不可调（= f237ae32 的老毛病）。
+		"    chunk_estimate: 17s",
+		"    chunk_budget_max: 6m",
 	}, "\n")+"\n"), 0o600); err != nil {
 		t.Fatalf("写测试 yml 失败: %v", err)
 	}
@@ -265,6 +269,17 @@ func TestVerifyAndHotBudgetKeysBindFromYAML(t *testing.T) {
 	budget, maxPerChunk := cfg.VerifyQueryTuning()
 	if budget.MaxPerSecond != 7 || budget.MaxInFlight != 2 || maxPerChunk != 5 {
 		t.Fatalf("log_index.verify.* 未绑定：%+v maxQueriesPerChunk=%d", budget, maxPerChunk)
+	}
+	// 校验预算随事件数放大（改动 B）：两个键都必须绑到 ingest 档位。
+	estimates := cfg.VerifyChunkEstimatesTuning()
+	if estimates.PerChunk != 17*time.Second || estimates.Max != 6*time.Minute {
+		t.Fatalf("log_index.verify.chunk_estimate / chunk_budget_max 未绑定：%+v", estimates)
+	}
+	// 非法值 = 不放大（保守方向：绝不因为误写而让某个源悄悄拿到几十倍校验额度）。
+	cfg.LogIndex.Verify.ChunkEstimate = "不是时长"
+	cfg.LogIndex.Verify.ChunkBudgetMax = "-1s"
+	if bad := cfg.VerifyChunkEstimatesTuning(); bad.PerChunk != 0 || bad.Max != 0 {
+		t.Fatalf("非法 chunk_estimate/chunk_budget_max 必须回退「不放大」，实测 %+v", bad)
 	}
 	// 非法值回退默认（天花板不得因为误写而消失）。
 	cfg.LogIndex.Persist.HotBudget = "不是时长"

@@ -194,6 +194,9 @@ func (m *Manager) adoptUnmanagedRecord(instanceUUID string, rec *daemon.PIDRecor
 			cur.ProbePort = rec.ProbePort
 		}
 		cur.strategy = strategy
+		// 重连策略只负责当前控制通道；下一代必须按 CP 完整规格重建。
+		cur.strategyStale = true
+		cur.launchSpecPending = strings.TrimSpace(cur.StartCommand) == ""
 		cur.processType = ProcessTypeDaemon
 		cur.State = StateRunning
 		if restored {
@@ -201,16 +204,21 @@ func (m *Manager) adoptUnmanagedRecord(instanceUUID string, rec *daemon.PIDRecor
 		}
 	} else {
 		m.instances[instanceUUID] = &Instance{
-			UUID:        instanceUUID,
-			State:       StateRunning,
-			AutoRestart: !restored,
-			WorkDir:     rec.WorkDir,
-			ProbePort:   rec.ProbePort,
-			strategy:    strategy,
-			processType: ProcessTypeDaemon,
+			UUID:              instanceUUID,
+			State:             StateRunning,
+			AutoRestart:       !restored,
+			WorkDir:           rec.WorkDir,
+			ProbePort:         rec.ProbePort,
+			strategy:          strategy,
+			strategyStale:     true,
+			launchSpecPending: true,
+			processType:       ProcessTypeDaemon,
 		}
 	}
 	m.mu.Unlock()
+
+	// 登记竞争胜出且双进程归属已确认后，锁外复用既有隔离；失败只告警，不撤销收养。
+	m.isolateAdoptedWrapper(instanceUUID, rec)
 
 	if restored {
 		// 与启动接管同口径：幂等补发一次禁用帧（wrapper 已置位时无副作用），使 wrapper 与记账对齐。

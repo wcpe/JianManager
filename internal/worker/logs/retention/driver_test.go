@@ -10,6 +10,22 @@ import (
 // 本文件守住 G6：冷层搬运**驱动器**。没有它，HOT 永不自动转 COLD——
 // plan/executor/Mover 全都对，但没有东西周期性地把它们串起来。
 
+// 原始负值不得先归一化成默认值，否则启动校验会失效。
+func TestPolicyRejectsRawExecutionValues(t *testing.T) {
+	for _, p := range []Policy{
+		{Enabled: true, HotRetention: -time.Hour},
+		{Enabled: true, ColdRetention: -time.Hour},
+		{Enabled: true, Sweep: Sweep{Interval: -time.Hour}},
+		{Enabled: true, Sweep: Sweep{Timeout: -time.Hour}},
+		{Enabled: true, Trigger: Trigger{DiskPercent: 101}},
+		{Enabled: true, Trigger: Trigger{MinAge: -time.Hour}},
+	} {
+		if err := p.Validate(); err == nil {
+			t.Errorf("必须拒绝原始非法策略：%+v", p)
+		}
+	}
+}
+
 // fakeLister 提供候选分区。
 type fakeLister struct {
 	parts []PartitionRef

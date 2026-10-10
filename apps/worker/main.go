@@ -506,8 +506,11 @@ func runWorker() {
 		healthScanner.Start(healthCtx)
 	}
 
-	// 初始化指标采集器
-	collector := metrics.NewCollector(30 * time.Second)
+	// 一个 CPU 采样所有者发布窗口快照，周期采集、RPC 与心跳只读取同一结果。
+	cpuSampler := metrics.NewCPUSampler(30 * time.Second)
+	cpuSampler.Start(context.Background())
+	defer cpuSampler.Stop()
+	collector := metrics.NewCollector(30*time.Second, cpuSampler)
 	collector.StartPeriodic(func(m metrics.NodeMetrics) {
 		slog.Debug("指标采集",
 			"cpu", fmt.Sprintf("%.1f%%", m.CPUUsage*100),
@@ -838,6 +841,10 @@ func runWorker() {
 		// 回退修复 ② —— 该预算在 f237ae32 引入时只有注释没有接线，默认 1.5s 在
 		// "VL 可见性地板 ~1.02s"下整轮被用尽 ⇒ 其余源每轮 defer（2026-10-03 实测）。
 		verifyRoundBudgetCfg, verifyVisibilityFloorCfg := cfg.VerifyBudgetTuning()
+		// 校验预算随事件数放大（2026-10-10 生产活锁修复，改动 B；键
+		// log_index.verify.chunk_estimate / chunk_budget_max）：空/非法 = 不放大（保守默认，
+		// 与修复前逐字一致）⇒ 不影响任何现有源。
+		verifyChunkEstimatesCfg := cfg.VerifyChunkEstimatesTuning()
 		indexPruneCfg := cfg.LogIndex.IndexPrune()
 		indexCommitCfg := cfg.LogIndex.CommitBudget()
 		newIngest := func() (*ingest.Manager, error) {
@@ -851,7 +858,9 @@ func runWorker() {
 				// 采集归一化的节点级默认字符集（复审 P2-3，键 log_ingest.charset）：源未显式配置时
 				// 生效，空串 = auto（零配置零行为变化）。GBK 日志源配 gbk 可免去自动判定的启发式
 				// 不确定性；非法值已在 config.Load 阶段启动即拒。
-				DefaultCharset:   cfg.IngestDefaultCharset(),
+				DefaultCharset: cfg.IngestDefaultCharset(),
+				// 节点采样策略透传每源管线；零值关闭，恢复重放不再重复采样。
+				Sampling:         cfg.SamplingPolicy(),
 				CapacityProvider: logCapacityProvider,
 				// 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天。
 				Reconcile: &reconcileCfg,
@@ -870,6 +879,8 @@ func runWorker() {
 				// 每源每轮校验预算与可见性错开（回退修复 ②，同上）。
 				VerifyRoundBudget:     verifyRoundBudgetCfg,
 				VerifyVisibilityFloor: verifyVisibilityFloorCfg,
+				// 预算随事件数放大（改动 B，同上）：只在 chunk_estimate 显式给出正数时生效。
+				VerifyChunkEstimates: verifyChunkEstimatesCfg,
 				// 单源 WAL **真实积压**上限（键 log_capacity.max_wal_entries / max_wal_bytes）：
 				// 直接下发到 WAL.SetLimits。此前 SetLimits 无任何调用点（现场只剩硬编码
 				// 16MiB/5000），而配置里的 max_wal_bytes 被接到了只增不减的累计量上。
@@ -986,6 +997,21 @@ func runWorker() {
 			// 手动归档导入入口（④）：把「扫描并导入待导入 gz」接到 gRPC 上，
 			// 供采集轮停摆（源被暂停/停止）时由运维显式触发；操作人经 metadata 携带。
 			logStack.LogRPC.SetIngestArchiveImporter(manager)
+			// 身份冲突人工清空入口：运维审阅后确认「冲突已被正确处理（保留先到者）」，
+			// 清空诊断记录以消掉日志页的质量标记（duplicate_quality=conflict / stats_quality=partial）。
+			// 操作人与理由都经 metadata 携带（取不到即拒），凭据随该源 payload 落库。
+			logStack.LogRPC.SetIngestIdentityConflictClearer(grpcsvc.IngestIdentityConflictClearerFunc(
+				func(ctx context.Context, sourceKey, operator, reason string) (grpcsvc.IdentityConflictClearOutcome, error) {
+					result, err := manager.ClearIdentityConflicts(ctx, sourceKey, operator, reason)
+					if err != nil {
+						return grpcsvc.IdentityConflictClearOutcome{}, err
+					}
+					return grpcsvc.IdentityConflictClearOutcome{
+						ClearedCount:   result.ClearedCount,
+						ClearedSources: result.ClearedSources,
+						SkippedSources: result.SkippedSources,
+					}, nil
+				}))
 			// 「已放弃位置」查询面标记（缺口 B 批2）：把 ingest 的放弃凭据接到搜索响应上，
 			// 使下游能区分「本来就没有」与「已被确认永久丢失」——不再静默跳过。
 			// 跨包适配放在这里（apps 同时依赖 ingest 与 grpcsvc），服务层不反向依赖 ingest。
@@ -999,6 +1025,7 @@ func runWorker() {
 					for _, r := range ranges {
 						out = append(out, grpcsvc.IngestPositionGap{
 							StorageNamespace: r.StorageNamespace, From: r.From, To: r.To,
+							LogSourceID: r.LogSourceID, SourceGeneration: r.SourceGeneration,
 							ReasonCode: r.ReasonCode, Operator: r.Operator, AtUTC: r.AtUTC,
 						})
 					}
@@ -1358,6 +1385,8 @@ func runWorker() {
 	// 节拍取共享契约值 directprobe.HeartbeatInterval（ADR-013 的 30s）：单拍采集预算的上界正是
 	// 由它反推（见 internal/platform/directprobe），两处必须同源，否则「预算 < 节拍」的护栏失效。
 	hb := heartbeat.New(cpAddr, nodeUUID, regResult.NodeSecret, directprobe.HeartbeatInterval, manager)
+	// 心跳消费同一窗口，不重新读取累计 CPU 计数或推进采样基线。
+	hb.SetCPUReader(cpuSampler)
 	// 受管运行时快照随反向隧道 Heartbeat 上报；只读取既有 Worker/Bot Worker，不会拉起 Bot 子进程。
 	hb.SetManagedRuntimeProvider(workerServer)
 	// 运行中长任务进度随心跳上报（FR-183，见 ADR-040）：心跳读 Worker gRPC Server 的内存任务表。
@@ -1480,10 +1509,19 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 			}
 			lines := manager.ResumeDiagnosticLines()
 			if len(lines) == 0 {
-				continue
+				// 注意：**不能**在这里 return/continue 掉整个打点——下方「永久阻塞」清单
+				// 恰恰在没有常规诊断行时才最需要可见（其源可能既不 paused 也无 backlog）。
 			}
 			for _, line := range lines {
 				slog.Info("恢复判据快照", "detail", line)
+			}
+			// **被不可分类缺口永久阻塞的源**（2026-10-10 生产实测：65 源 / 215 条未决缺口，
+			// 其中 WAL_BODY_MISSING、ROTATED_SEGMENT_NOT_READY 不在任何恢复白名单里 ⇒
+			// 不重启、不人工介入就**永不起采集**）。此前这些源与其他"还在等滞回"的源在日志里
+			// 长得一模一样（都只印「积压已回落但暂不能恢复采集」），外部无从区分 ✗。
+			// 这里以 WARN 显式点名，使"卡死"与"等待"可分辨 ✓（只读，不改任何行为）。
+			for _, line := range manager.GapBlockedDiagnosticLines() {
+				slog.Warn("源被不可分类缺口阻塞（无自动出路，需人工裁定或重置）", "detail", line)
 			}
 			// **兜底环读数与不变量读数一并落在这条分钟打点上**（用户 2026-10-05：第三次"无消费面" ✗✗
 			// ⇒ 从此**任何新增导出必须同批带可达面 + 可达性红证** ✓）。

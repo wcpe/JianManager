@@ -14,6 +14,18 @@ const (
 	LogSourceWorker LogSource = "worker"
 )
 
+// AllLogSources 是 LogSource 的封闭取值域（真源）。
+//
+// 为什么需要显式枚举：保留/归档策略要按「Legacy 集合的补集」圈定 platform 来源，而 SQL 里
+// 的否定条件（NOT IN）在 SQLite 上无法走索引，只能全表扫描（2026-10-09 生产实测：109 万行
+// 全扫 226ms，而等值走索引 8ms）。求补集必须知道全集，故在此集中声明；新增来源时只改这里，
+// 消费方（如 service.nonLegacyLogSources）自动跟随，避免清单漂移导致新来源被保留策略漏掉。
+var AllLogSources = []LogSource{
+	LogSourceInstance,
+	LogSourceControlPlane,
+	LogSourceWorker,
+}
+
 // LogLevel 日志级别。实例日志优先取行内结构化 level=（slog/logrus 等）；
 // 无结构化级别时 stdout 默认归为 info、stderr 归为 error；平台日志沿用 slog 级别。
 type LogLevel string

@@ -33,16 +33,17 @@ func newCatalogPartitionLister(cat *catalog.Catalog) retention.PartitionLister {
 				// Keys 与 Get 之间的不一致（并发删除）不是错误：跳过即可。
 				continue
 			}
+			retryable := rec.MigrationState == catalog.StateFailedRetryable &&
+				rec.TargetOwner == catalog.OwnerCold && rec.TargetDirID != ""
 			out = append(out, retention.PartitionRef{
 				StorageNamespace: key.StorageNamespace,
 				// 直接沿用 catalog 的日期写法（解析层两种都认，避免在这里做格式转换）。
 				UTCDay: key.UTCDay,
 				Owner:  string(rec.Owner),
-				// 在途判据与既有 RPC 迁移入口**逐字一致**（见 SetPartitionMigrator 的分支）：
-				// 有迁移状态、未清理完、且已登记目标 owner ⇒ 视为在途，驱动器不得再次下发。
+				// 活动/手工/未知状态均不自动覆盖；只有明确的冷层可重试失败进入续跑。
 				InFlight: rec.MigrationState != "" &&
-					rec.MigrationState != catalog.StateCleaned &&
-					rec.TargetOwner.Valid(),
+					rec.MigrationState != catalog.StateCleaned && !retryable,
+				Retryable: retryable,
 			})
 		}
 		return out, nil
@@ -51,13 +52,12 @@ func newCatalogPartitionLister(cat *catalog.Catalog) retention.PartitionLister {
 
 // newDayManagerMover 把 lifecycle 状态机接成 Mover。
 //
-// 分支与既有 `SetPartitionMigrator` 的语义**逐字对齐**（同一套判据、同一个调用序列）：
-// 已在冷层 ⇒ 幂等返回；在途 ⇒ Resume 而非重新 Start；否则 Start 到 COLD。
-// 之所以不另写一套：两条入口（人工 API 与自动驱动器）对同一个状态机若有不同判据，
-// 早晚会在「人工介入与自动搬运同时发生时」互相踩掉对方的状态。
+// 已有迁移必须先 Resume，不能因 Owner 已切 COLD 跳过租约排空与清理。
+// 手工失败与未知状态不自动覆盖；稳定冷层才允许幂等返回，否则 Start 到 COLD。
+// Resume/Start 均委托既有状态机，继续保留最后副本保护、校验与查询租约门禁。
 func newDayManagerMover(mgr *lifecycle.DayManager, cat *catalog.Catalog) retention.Mover {
 	return retention.MoverFunc(func(ctx context.Context, storageNamespace, day string) (string, error) {
-		if mgr == nil {
+		if mgr == nil || cat == nil {
 			return "", fmt.Errorf("日志 Lifecycle 管理器未就绪")
 		}
 		if err := ctx.Err(); err != nil {
@@ -72,18 +72,26 @@ func newDayManagerMover(mgr *lifecycle.DayManager, cat *catalog.Catalog) retenti
 		if !ok {
 			return "", fmt.Errorf("日志分区 %s 不在 Catalog 中", key)
 		}
+		canonicalDay := parsed.Format("2006-01-02")
+		if rec.MigrationState != "" && rec.MigrationState != catalog.StateCleaned {
+			_, stateErr := catalog.HappyIndex(rec.MigrationState)
+			if rec.MigrationState == catalog.StateFailedManual || (stateErr != nil && rec.MigrationState != catalog.StateFailedRetryable) {
+				return "", fmt.Errorf("日志分区 %s 迁移状态 %s 需要人工处理", key, rec.MigrationState)
+			}
+			if rec.TargetOwner != catalog.OwnerCold || rec.TargetDirID == "" {
+				return "", fmt.Errorf("日志分区 %s 缺少已登记的冷层恢复目标", key)
+			}
+			if err := mgr.Resume(canonicalDay); err != nil {
+				return "", err
+			}
+			return rec.TargetDirID, nil
+		}
 		if rec.Owner == catalog.OwnerCold {
-			// 幂等：已经在冷层，视为成功（返回现有权威目录 ID）。
+			// 只有稳定冷层才能幂等成功，不能跳过未完成的清理。
 			return rec.OwnerDirID, nil
 		}
 		dirID := parsed.Format("20060102")
-		if rec.MigrationState != "" && rec.MigrationState != catalog.StateCleaned && rec.TargetOwner.Valid() {
-			if err := mgr.Resume(day); err != nil {
-				return "", err
-			}
-			return dirID, nil
-		}
-		if err := mgr.Start(day, catalog.OwnerCold, dirID); err != nil {
+		if err := mgr.Start(canonicalDay, catalog.OwnerCold, dirID); err != nil {
 			return "", err
 		}
 		return dirID, nil

@@ -2,6 +2,8 @@ package lifecycle
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -513,4 +515,35 @@ func TestVLSupRuntime_Adapter(t *testing.T) {
 	require.Equal(t, vlsup.NamespaceRehydrate, NamespaceForOwner(catalog.OwnerArchive))
 
 	_ = time.Now()
+}
+
+// 复制完成后篡改 COLD 内容，Verify 必须对比真实快照而不是把目标目录与自身比较。
+func TestVLPartitionOpsVerifyRejectsTamperedCopy(t *testing.T) {
+	key := testKey()
+	hotRoot := t.TempDir()
+	coldRoot := t.TempDir()
+	snapshotDir := filepath.Join(hotRoot, "snapshot")
+	if err := os.MkdirAll(snapshotDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(snapshotDir, "events.jsonl"), []byte("original\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	ops := &VLPartitionOps{
+		HotDataRoot:  hotRoot,
+		ColdDataRoot: coldRoot,
+		snapshots:    make(map[catalog.PartitionKey]string),
+		verified:     make(map[catalog.PartitionKey]string),
+	}
+	copyID, err := ops.copySnapshot(key, snapshotDir, "")
+	if err != nil {
+		t.Fatalf("copySnapshot: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(copyID, "events.jsonl"), []byte("tampered\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ops.verifyCopy(key, copyID, ""); err == nil {
+		t.Fatal("verifyCopy must reject a tampered COLD copy")
+	}
 }

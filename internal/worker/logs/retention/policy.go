@@ -2,6 +2,7 @@ package retention
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -218,6 +219,21 @@ func defaultTTLFor(key string) time.Duration {
 func (p Policy) Validate() error {
 	if !p.Enabled {
 		return nil
+	}
+	for _, field := range []struct {
+		name  string
+		value time.Duration
+	}{
+		{"hot_retention", p.HotRetention}, {"cold_retention", p.ColdRetention},
+		{"sweep.interval", p.Sweep.Interval}, {"sweep.timeout", p.Sweep.Timeout},
+		{"trigger.min_age", p.Trigger.MinAge},
+	} {
+		if field.value < 0 {
+			return fmt.Errorf("retention: %s 不能为负，得到 %s", field.name, field.value)
+		}
+	}
+	if math.IsNaN(p.Trigger.DiskPercent) || math.IsInf(p.Trigger.DiskPercent, 0) || p.Trigger.DiskPercent < 0 || p.Trigger.DiskPercent > 100 {
+		return fmt.Errorf("retention: trigger.disk_percent 必须在 0..100，得到 %v", p.Trigger.DiskPercent)
 	}
 	for k, v := range p.ByLevel {
 		if LevelKeyOf(k) == "" {

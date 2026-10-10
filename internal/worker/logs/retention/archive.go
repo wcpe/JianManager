@@ -175,8 +175,16 @@ func (p Policy) PlanArchive(now time.Time, partitions []PartitionRef, moverAvail
 			t.Action = ActionBlocked
 			t.Reason = "未配置冷层搬运路径且未显式允许直接删除；按「删前归档」保留原物"
 		}
-		// 纯年龄口径：到点即动手。
-		if t.Due = !now.Before(eligibleAt); t.Due {
+		// 失败恢复不是新的到期搬运；即便尚未到年龄，也要续跑已有状态机。
+		// 没有恢复入口则保留原物，绝不能把续跑降级成 discard。
+		if part.Retryable {
+			t.Due = true
+			t.TriggerReason = "retry"
+			if !moverAvailable {
+				t.Action = ActionBlocked
+				t.Reason = "可重试迁移缺少恢复入口；保留原物"
+			}
+		} else if t.Due = !now.Before(eligibleAt); t.Due {
 			t.TriggerReason = TriggerAge
 		}
 		out = append(out, t)

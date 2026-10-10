@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -949,35 +951,227 @@ func (s *MetricService) RollupAndPurge(now time.Time) error {
 	return s.purge(now)
 }
 
+// 分批规模常量。
+//
+// 为什么必须分批（生产实证 2026-10-09，CP 日志统计）：单条
+// `SELECT * FROM metric_sample_raws WHERE ts < ? ORDER BY ts` 要捞 54.5 万行、最慢 145.8 秒，
+// 而 CP 的 SQLite 连接池被刻意收敛为 1 条（FR-318，避免 COMMIT 因 BUSY 失败后连接毒化）。
+// 于是一条巨查询独占唯一连接期间，同库上「只返回 1 行」的 `SELECT * FROM nodes` 也要排队 4 秒——
+// 这就是用户感知的「日志页慢」的第二层根因（第一层限流已单独修复）。
+//
+// 分批后每批只持锁很短一瞬，批与批之间连接归还连接池，其它请求得以插队。
+// 在单连接前提下，这是唯一能给其它请求让路的办法（不能靠调大连接数，那是另一个 owner 的改动）。
+const (
+	// metricScanBatch 单次采样扫描的行数上限（读）。
+	metricScanBatch = 2000
+	// metricPrefetchChunk 单次「已存在桶」预取覆盖的候选键数量上限（决定 IN 列表规模）。
+	metricPrefetchChunk = 200
+	// metricInsertBatch 单次 INSERT 的行数上限（写）。
+	metricInsertBatch = 200
+	// metricPurgeBatch 单次 DELETE 的行数上限（写）。
+	metricPurgeBatch = 2000
+)
+
+// metricBucketKey 把 (series_id, bucket_ts) 复合键折叠成无碰撞的字符串键。
+//
+// 两个分量都写成十进制整数（series_id 为自增主键、bucket_ts 取 UnixNano）。十进制表示里
+// 不可能出现 '|'，故分隔符位置不存在歧义：series_id=1/bucket=23 得 "1|23"，
+// series_id=12/bucket=3 得 "12|3"，两者不同。反过来，任意两个不同的 (uint, int64) 组合
+// 都映射到不同的十进制拼接串，因此不会出现「不同桶被判为同一个」的漏插。
+// 该格式与改动前逐桶 COUNT 时用的 `fmt.Sprintf("%d|%d", ...)` 一致，便于逐值对照。
+func metricBucketKey(seriesID uint, bucket time.Time) string {
+	return strconv.FormatUint(uint64(seriesID), 10) + "|" + strconv.FormatInt(bucket.UnixNano(), 10)
+}
+
+// bucketCandidate 一个待写入的聚合桶（键 + 复合键的两半，便于分批预取）。
+type bucketCandidate struct {
+	key      string
+	seriesID uint
+	bucket   time.Time
+}
+
+// candidatesOf 整理聚合结果为候选桶列表，并按 (series_id, bucket_ts) 升序排列。
+//
+// 升序不是美观问题：prefetchExistingBuckets 依赖它切块——同块内序列集合与桶时间范围都紧凑，
+// 预取查询才能走覆盖索引的窄范围；顺序不保证的话每块都可能退化到全表范围。
+func candidatesOf[T any](accs map[string]T, pick func(key string, a T) bucketCandidate) []bucketCandidate {
+	cands := make([]bucketCandidate, 0, len(accs))
+	for key, a := range accs {
+		cands = append(cands, pick(key, a))
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].seriesID != cands[j].seriesID {
+			return cands[i].seriesID < cands[j].seriesID
+		}
+		return cands[i].bucket.Before(cands[j].bucket)
+	})
+	return cands
+}
+
+// scanRawSamples 按主键游标分批遍历已完结的原始样本，逐批交给 consume。
+//
+// 为什么用 id 游标而不是 ts 游标：`WHERE ts < ? ORDER BY ts` 的执行计划实测是
+// SCAN + USE TEMP B-TREE FOR ORDER BY——既全表扫描又要为 54 万行建临时排序树，
+// 单条语句就把唯一连接占满上百秒。而 `WHERE ts < ? AND id > ? ORDER BY id LIMIT n`
+// 实测走 INTEGER PRIMARY KEY 范围搜索、无临时 B 树，单批代价与表总行数解耦。
+//
+// 游标单调递增，故每批严格前进、循环必然终止。崩溃/重启后从 id=0 重扫也只是重算同样的聚合
+// （聚合结果与扫描顺序无关，见 accumulateRaw / accumulateFive），因此中断可安全重跑。
+func (s *MetricService) scanRawSamples(cutoff time.Time, consume func([]model.MetricSampleRaw) error) error {
+	var cursor uint
+	for {
+		var rows []model.MetricSampleRaw
+		if err := s.db.Select("id", "series_id", "ts", "value").
+			Where("ts < ? AND id > ?", cutoff, cursor).
+			Order("id").Limit(metricScanBatch).Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		if err := consume(rows); err != nil {
+			return err
+		}
+		cursor = rows[len(rows)-1].ID
+	}
+}
+
+// scanFiveMinuteBuckets 按主键游标分批遍历已完结的 5m 档行（rollup1h 的输入）。
+// 与 scanRawSamples 同构，故同样不产生临时排序树、不多秒持锁。
+func (s *MetricService) scanFiveMinuteBuckets(cutoff time.Time, consume func([]model.MetricRollup5m) error) error {
+	var cursor uint
+	for {
+		var rows []model.MetricRollup5m
+		if err := s.db.Select("id", "series_id", "bucket_ts", "avg", "min", "max", "last", "count").
+			Where("bucket_ts < ? AND id > ?", cutoff, cursor).
+			Order("id").Limit(metricScanBatch).Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		if err := consume(rows); err != nil {
+			return err
+		}
+		cursor = rows[len(rows)-1].ID
+	}
+}
+
+// bucketKeyRow 预取查询返回的一行 (series_id, bucket_ts)。
+type bucketKeyRow struct {
+	SeriesID uint      `gorm:"column:series_id"`
+	BucketTS time.Time `gorm:"column:bucket_ts"`
+}
+
+// prefetchExistingBuckets 预取「候选桶中已存在」的键集合，把逐桶 COUNT 的 N+1 收敛为按块查询。
+//
+// 改动前每个候选桶各发一条 `WHERE series_id = ? AND bucket_ts = ?` COUNT：生产上 21 万个桶
+// 就是 21 万次往返，每次都要抢占唯一连接，是队头阻塞的直接来源。
+//
+// 现在的做法：候选键已按 (series_id, bucket_ts) 升序排列，于是按「同一序列」切块，
+// 每块一条 `series_id = ? AND bucket_ts IN (...)`。该条件命中
+// `idx_metric_*_series_bucket` 覆盖索引（实测 SEARCH ... USING COVERING INDEX
+// (series_id=? AND bucket_ts=?)），返回行数被 IN 列表**按构造**限死在上限之内
+// （不依赖数据分布），故单块代价可预测。
+//
+// 返回的是 map 集合而非「存在即跳过」的即时判定，是为了让调用方在内存里完成判定：
+// 判定过程不再产生任何 DB 往返（复用 metricBucketKey，见其无碰撞论证）。
+func prefetchExistingBuckets(cands []bucketCandidate, query func(seriesID uint, buckets []time.Time) ([]bucketKeyRow, error)) (map[string]struct{}, error) {
+	existing := make(map[string]struct{}, len(cands))
+	for i := 0; i < len(cands); {
+		seriesID := cands[i].seriesID
+		buckets := make([]time.Time, 0, metricPrefetchChunk)
+		for i < len(cands) && cands[i].seriesID == seriesID && len(buckets) < metricPrefetchChunk {
+			buckets = append(buckets, cands[i].bucket)
+			i++
+		}
+		rows, err := query(seriesID, buckets)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			existing[metricBucketKey(r.SeriesID, r.BucketTS)] = struct{}{}
+		}
+	}
+	return existing, nil
+}
+
+// existingRollupBuckets 预取候选桶中已存在于 table 表的键集合（table 由 NamingStrategy 派生，
+// 与 overviewTrendSource 取表名的方式一致，避免硬编码表名漂移）。
+func (s *MetricService) existingRollupBuckets(cands []bucketCandidate, modelName string) (map[string]struct{}, error) {
+	table := s.db.NamingStrategy.TableName(modelName)
+	return prefetchExistingBuckets(cands, func(seriesID uint, buckets []time.Time) ([]bucketKeyRow, error) {
+		var rows []bucketKeyRow
+		err := s.db.Table(table).Select("series_id, bucket_ts").
+			Where("series_id = ? AND bucket_ts IN ?", seriesID, buckets).Find(&rows).Error
+		return rows, err
+	})
+}
+
+// pendingRows 从候选桶里滤掉「已存在」的，并映射为待插入行，保持候选顺序。
+//
+// 语义等价性：改动前是「逐桶 COUNT>0 则 continue，否则 Create」。COUNT>0 与
+// 「该 (series_id, bucket_ts) 的键出现在预取集合中」是同一判定，故被跳过的桶集合完全相同，
+// 被写入的桶集合也完全相同（判定与顺序无关，故排序不影响结果集）。
+func pendingRows[T any](cands []bucketCandidate, existing map[string]struct{}, toRow func(bucketCandidate) T) []T {
+	rows := make([]T, 0, len(cands))
+	for _, c := range cands {
+		if _, ok := existing[c.key]; ok {
+			continue // 已存在则跳过（幂等：重跑不会重复插入）
+		}
+		rows = append(rows, toRow(c))
+	}
+	return rows
+}
+
+// insertRows 分批写入聚合行。
+//
+// 分批的理由与扫描同源：单条 INSERT 覆盖多行时仍是一次锁持有，批越小越容易被其它请求插队。
+// 批与批之间连接归还连接池（database/sql 的等待者是 FIFO，会立刻拿到），故其它读请求得以推进。
+func insertRows[T any](db *gorm.DB, rows []T) error {
+	for i := 0; i < len(rows); i += metricInsertBatch {
+		batch := rows[i:min(i+metricInsertBatch, len(rows))]
+		if err := db.Create(&batch).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type rawAcc struct {
 	seriesID uint
 	bucket   time.Time
 	sum      float64
 	min, max float64
 	last     float64
-	count    int
+	// lastTS/lastID 记录 last 取自哪一行，用「(ts, id) 取最大」取代对扫描顺序的依赖。
+	// 改动前靠 `ORDER BY ts` 的全局升序让循环里最后一次赋值落在桶内最新行；改为 id 游标分批后
+	// 扫描不再按 ts 排序，故必须显式比较。同刻多行时取 id 最大者——这与改动前驱动实际返回的
+	// 平局顺序（实测 id 升序，取最后一条）一致，但不依赖 SQL 未定义的平局顺序。
+	lastTS time.Time
+	lastID uint
+	count  int
 }
 
-func (s *MetricService) rollup5m(now time.Time) error {
-	cutoff := bucketStart(now, metricBucket5m) // 只卷已完结的桶
-	var raws []model.MetricSampleRaw
-	if err := s.db.Where("ts < ?", cutoff).Order("ts").Find(&raws).Error; err != nil {
-		return err
-	}
-	accs := map[string]*rawAcc{}
-	var order []string
-	for _, r := range raws {
+// accumulateRaw 把一批原始样本累进 5m 聚合桶。
+//
+// 与改动前逐行累加的等价性：
+//   - sum/min/max/count 都是与到达顺序无关的交换/结合运算，分批不改变结果；
+//   - last 改为按 (ts, id) 取最大，得到「桶内最新一行」；改动前 `ORDER BY ts` 升序后取最后一条
+//     同样是「桶内 ts 最大者」，故正常路径逐字段一致（同刻平局见 lastTS/lastID 注释）；
+//   - 缺测（Value == nil）依旧跳过，不计入任何聚合字段，也不建桶（与改动前 continue 一致）。
+func accumulateRaw(accs map[string]*rawAcc, batch []model.MetricSampleRaw) {
+	for _, r := range batch {
 		if r.Value == nil {
 			continue // 缺测不计入聚合
 		}
 		v := *r.Value
 		b := bucketStart(r.TS, metricBucket5m)
-		key := fmt.Sprintf("%d|%d", r.SeriesID, b.UnixNano())
+		key := metricBucketKey(r.SeriesID, b)
 		a := accs[key]
 		if a == nil {
 			a = &rawAcc{seriesID: r.SeriesID, bucket: b, min: v, max: v}
 			accs[key] = a
-			order = append(order, key)
 		}
 		a.sum += v
 		a.count++
@@ -987,27 +1181,40 @@ func (s *MetricService) rollup5m(now time.Time) error {
 		if v > a.max {
 			a.max = v
 		}
-		a.last = v // raws 按 ts 升序，桶内最后一条即最新
+		if a.lastTS.Before(r.TS) || (a.lastTS.Equal(r.TS) && r.ID > a.lastID) {
+			a.last, a.lastTS, a.lastID = v, r.TS, r.ID
+		}
 	}
-	for _, key := range order {
-		a := accs[key]
-		var exists int64
-		if err := s.db.Model(&model.MetricRollup5m{}).
-			Where("series_id = ? AND bucket_ts = ?", a.seriesID, a.bucket).Count(&exists).Error; err != nil {
-			return err
-		}
-		if exists > 0 {
-			continue
-		}
-		row := model.MetricRollup5m{
+}
+
+func (s *MetricService) rollup5m(now time.Time) error {
+	cutoff := bucketStart(now, metricBucket5m) // 只卷已完结的桶
+
+	accs := map[string]*rawAcc{}
+	// 采样分批：raws 由整表捞取（生产 54 万行、最慢单条 145.8 秒）改为有界游标推进。
+	// 累加与顺序无关，故分批不改变任何聚合字段（见 accumulateRaw）。
+	if err := s.scanRawSamples(cutoff, func(batch []model.MetricSampleRaw) error {
+		accumulateRaw(accs, batch)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	cands := candidatesOf(accs, func(key string, a *rawAcc) bucketCandidate {
+		return bucketCandidate{key: key, seriesID: a.seriesID, bucket: a.bucket}
+	})
+	existing, err := s.existingRollupBuckets(cands, "MetricRollup5m")
+	if err != nil {
+		return err
+	}
+	rows := pendingRows(cands, existing, func(c bucketCandidate) model.MetricRollup5m {
+		a := accs[c.key]
+		return model.MetricRollup5m{
 			SeriesID: a.seriesID, BucketTS: a.bucket,
 			Avg: a.sum / float64(a.count), Min: a.min, Max: a.max, Last: a.last, Count: a.count,
 		}
-		if err := s.db.Create(&row).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+	})
+	return insertRows(s.db, rows)
 }
 
 type fiveAcc struct {
@@ -1016,25 +1223,28 @@ type fiveAcc struct {
 	weightedSum float64
 	min, max    float64
 	last        float64
-	count       int
+	// lastTS/lastID 同 rawAcc：5m 输入改为 id 游标分批后，不再依赖 `ORDER BY bucket_ts` 的
+	// 到达顺序，改为显式取 (bucket_ts, id) 最大者——即 1h 桶内最新的 5m 桶。
+	lastTS time.Time
+	lastID uint
+	count  int
 }
 
-func (s *MetricService) rollup1h(now time.Time) error {
-	cutoff := bucketStart(now, metricBucket1h)
-	var fives []model.MetricRollup5m
-	if err := s.db.Where("bucket_ts < ?", cutoff).Order("bucket_ts").Find(&fives).Error; err != nil {
-		return err
-	}
-	accs := map[string]*fiveAcc{}
-	var order []string
-	for _, f := range fives {
+// accumulateFive 把一批 5m 档行累进 1h 聚合桶。
+//
+// 与改动前逐行累加的等价性：
+//   - weightedSum/count/min/max 顺序无关，分批不改变结果；
+//   - last 语义为「1h 桶内最新 5m 桶的 last 值」，改动前由 `ORDER BY bucket_ts` 升序的最后一次
+//     赋值实现，这里改为显式 (bucket_ts, id) 取最大，正常路径一致（同刻平局见 lastTS/lastID 注释）；
+//   - Avg = weightedSum / count 的 count 加权口径逐字段不变。
+func accumulateFive(accs map[string]*fiveAcc, batch []model.MetricRollup5m) {
+	for _, f := range batch {
 		b := bucketStart(f.BucketTS, metricBucket1h)
-		key := fmt.Sprintf("%d|%d", f.SeriesID, b.UnixNano())
+		key := metricBucketKey(f.SeriesID, b)
 		a := accs[key]
 		if a == nil {
 			a = &fiveAcc{seriesID: f.SeriesID, bucket: b, min: f.Min, max: f.Max}
 			accs[key] = a
-			order = append(order, key)
 		}
 		a.weightedSum += f.Avg * float64(f.Count)
 		a.count += f.Count
@@ -1044,51 +1254,98 @@ func (s *MetricService) rollup1h(now time.Time) error {
 		if f.Max > a.max {
 			a.max = f.Max
 		}
-		a.last = f.Last
+		if a.lastTS.Before(f.BucketTS) || (a.lastTS.Equal(f.BucketTS) && f.ID > a.lastID) {
+			a.last, a.lastTS, a.lastID = f.Last, f.BucketTS, f.ID
+		}
 	}
-	for _, key := range order {
-		a := accs[key]
-		if a.count == 0 {
+}
+
+func (s *MetricService) rollup1h(now time.Time) error {
+	cutoff := bucketStart(now, metricBucket1h)
+
+	accs := map[string]*fiveAcc{}
+	// 采样分批：5m 档整表捞取（生产 21 万行）改为有界游标推进，累加与顺序无关。
+	if err := s.scanFiveMinuteBuckets(cutoff, func(batch []model.MetricRollup5m) error {
+		accumulateFive(accs, batch)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// count 为 0 的桶不建行也不预取：改动前先判 `a.count == 0 { continue }` 再发 COUNT，
+	// 即该分支同样不产生任何查询，故这里在建候选时即剔除，行为一致。
+	cands := candidatesOf(accs, func(key string, a *fiveAcc) bucketCandidate {
+		return bucketCandidate{key: key, seriesID: a.seriesID, bucket: a.bucket}
+	})
+	kept := cands[:0]
+	for _, c := range cands {
+		if accs[c.key].count == 0 {
 			continue
 		}
-		var exists int64
-		if err := s.db.Model(&model.MetricRollup1h{}).
-			Where("series_id = ? AND bucket_ts = ?", a.seriesID, a.bucket).Count(&exists).Error; err != nil {
-			return err
-		}
-		if exists > 0 {
-			continue
-		}
-		row := model.MetricRollup1h{
+		kept = append(kept, c)
+	}
+	cands = kept
+
+	existing, err := s.existingRollupBuckets(cands, "MetricRollup1h")
+	if err != nil {
+		return err
+	}
+	rows := pendingRows(cands, existing, func(c bucketCandidate) model.MetricRollup1h {
+		a := accs[c.key]
+		return model.MetricRollup1h{
 			SeriesID: a.seriesID, BucketTS: a.bucket,
 			Avg: a.weightedSum / float64(a.count), Min: a.min, Max: a.max, Last: a.last, Count: a.count,
 		}
-		if err := s.db.Create(&row).Error; err != nil {
-			return err
-		}
-	}
-	return nil
+	})
+	return insertRows(s.db, rows)
 }
 
-func (s *MetricService) purge(now time.Time) error {
-	if err := s.db.Where("ts < ?", now.Add(-metricRawRetention)).
-		Delete(&model.MetricSampleRaw{}).Error; err != nil {
-		return err
+// purgeByIDCursor 按主键游标分批删除 timeCol < cutoff 的历史行。
+//
+// 为什么分批：SQLite 上单条大 DELETE 会长时间独占写锁（生产上删除 54 万行原始样本是队头阻塞的
+// 组成部分），分批后每批只短暂持锁，批间让其它请求插队。
+//
+// 为什么「先取 id 再按主键删」而不是 `DELETE ... LIMIT n`：SQLite 的 DELETE LIMIT 需编译期开启
+// SQLITE_ENABLE_UPDATE_DELETE_LIMIT，且本项目另有 MySQL 形态，故采用任何驱动都支持的两步式。
+// 取 id 的语句是 `WHERE timeCol < ? AND id > ? ORDER BY id LIMIT n`，实测走 INTEGER PRIMARY KEY
+// 范围搜索（无临时排序树），单批代价与表内剩余行数解耦。
+//
+// 终止性与安全性：游标严格递增（取回的 id 均 > cursor），故循环必然终止；
+// 每批取回的 id 都满足删除条件，不存在「取到却不删」的重复往返。中途失败/重启后重跑，
+// 剩余的行会被下一批（或下一次 tick）继续删除，即删除是收敛的、幂等的。
+func (s *MetricService) purgeByIDCursor(model any, timeCol string, cutoff time.Time) error {
+	var cursor uint
+	for {
+		var ids []uint
+		if err := s.db.Model(model).Select("id").
+			Where(timeCol+" < ? AND id > ?", cutoff, cursor).
+			Order("id").Limit(metricPurgeBatch).Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		if err := s.db.Where("id IN ?", ids).Delete(model).Error; err != nil {
+			return err
+		}
+		cursor = ids[len(ids)-1]
 	}
-	if err := s.db.Where("bucket_ts < ?", now.Add(-metric5mRetention)).
-		Delete(&model.MetricRollup5m{}).Error; err != nil {
-		return err
-	}
-	if err := s.db.Where("bucket_ts < ?", now.Add(-metric1hRetention)).
-		Delete(&model.MetricRollup1h{}).Error; err != nil {
-		return err
-	}
-	if err := s.db.Where("sampled_at < ?", now.Add(-metricRawRetention)).
-		Delete(&model.ProcessMetricSnapshot{}).Error; err != nil {
-		return err
-	}
-	return nil
 }
+
+// purge 按 TTL 清理各档过期数据。保留期常量与改动前完全一致。
+func (s *MetricService) purge(now time.Time) error {
+	if err := s.purgeByIDCursor(&model.MetricSampleRaw{}, "ts", now.Add(-metricRawRetention)); err != nil {
+		return err
+	}
+	if err := s.purgeByIDCursor(&model.MetricRollup5m{}, "bucket_ts", now.Add(-metric5mRetention)); err != nil {
+		return err
+	}
+	if err := s.purgeByIDCursor(&model.MetricRollup1h{}, "bucket_ts", now.Add(-metric1hRetention)); err != nil {
+		return err
+	}
+	return s.purgeByIDCursor(&model.ProcessMetricSnapshot{}, "sampled_at", now.Add(-metricRawRetention))
+}
+
 
 // Start 启动后台卷积/清理循环（每 5min，复用 scheduler 式后台 goroutine）。
 func (s *MetricService) Start() {

@@ -33,6 +33,11 @@ func (f *fakeFR035RouteWorker) CreateInstance(context.Context, *workerpb.CreateI
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
 
+// 搭建前的规格对账使用既有 RPC，夹具必须显式实现，不能落入嵌入的空客户端。
+func (f *fakeFR035RouteWorker) ResyncInstances(_ context.Context, req *workerpb.ResyncInstancesRequest, _ ...grpc.CallOption) (*workerpb.ResyncInstancesResponse, error) {
+	return &workerpb.ResyncInstancesResponse{Registered: int32(len(req.Instances))}, nil
+}
+
 func (f *fakeFR035RouteWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
 	f.mu.Lock()
 	f.download = req

@@ -65,7 +65,9 @@ type Instance struct {
 	// 零值=未知（PID 恢复等路径），此时巡检不做宽限、保持既有判定。
 	StartedAt time.Time
 	// operationMu 串行同一实例的生命周期操作，不阻塞其他实例。
-	operationMu sync.Mutex
+	operationMu lifecycleGate
+	// launchSpecPending 只凭 PID 收养时为真，CP 补齐前不得先停后启。
+	launchSpecPending bool
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
 	// nil 表示实例已创建但尚未启动（或已 Close）。
 	strategy IProcessCommand
@@ -515,7 +517,7 @@ func (m *Manager) SetResourceLimits(uuid string, cpuLimit float64, memLimitMB in
 
 // SetLaunchConfig 刷新已存在实例的启动配置，供 CP 幂等重注册时下发（FR-233）。
 // 运行中的策略继续服务且仅标记过期；停止/崩溃态则立即丢弃旧策略，确保下一次启动采用新规格。
-func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string, envVars map[string]string, autoRestart bool) {
+func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string, envVars map[string]string, autoRestart bool, stopCommand ...string) {
 	var stale IProcessCommand
 	var resetting *Instance
 	m.mu.Lock()
@@ -525,6 +527,12 @@ func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string
 		inst.JDKBinPath = jdkBinPath
 		inst.EnvVars = envVars
 		inst.AutoRestart = autoRestart
+		if len(stopCommand) > 0 {
+			inst.StopCommand = stopCommand[0]
+		}
+		if strings.TrimSpace(startCommand) != "" || inst.processType == ProcessTypeDocker {
+			inst.launchSpecPending = false
+		}
 		if inst.strategy != nil {
 			switch inst.State {
 			case StateRunning, StateStarting, StateStopping:
@@ -617,22 +625,30 @@ func (m *Manager) GetInstanceDockerStats(ctx context.Context, uuid string) (cpuP
 
 // lockInstanceOperation 获取实例级生命周期锁，并复核等待期间实例未被移除或替换。
 func (m *Manager) lockInstanceOperation(uuid string) (*Instance, bool) {
+	inst, err := m.lockInstanceOperationContext(context.Background(), uuid)
+	return inst, err == nil
+}
+
+// lockInstanceOperationContext 排队可取消，获得 gate 后仍须复核实例身份。
+func (m *Manager) lockInstanceOperationContext(ctx context.Context, uuid string) (*Instance, error) {
 	m.mu.RLock()
 	inst, exists := m.instances[uuid]
 	m.mu.RUnlock()
 	if !exists {
-		return nil, false
+		return nil, fmt.Errorf("实例 %s 不存在", uuid)
 	}
 
-	inst.operationMu.Lock()
+	if err := inst.operationMu.LockContext(ctx); err != nil {
+		return nil, fmt.Errorf("实例 %s 操作排队取消: %w", uuid, err)
+	}
 	m.mu.RLock()
 	current, stillExists := m.instances[uuid]
 	m.mu.RUnlock()
 	if !stillExists || current != inst {
 		inst.operationMu.Unlock()
-		return nil, false
+		return nil, fmt.Errorf("实例 %s 不存在或已被替换", uuid)
 	}
-	return inst, true
+	return inst, nil
 }
 
 // Start 启动实例。按实例的 ProcessType 选择策略；首次启动时惰性构造策略。
@@ -649,15 +665,14 @@ func (m *Manager) Start(uuid string) error {
 // 若把「调用方取消」也当作「启动失败」置 CRASHED，一次取消就会污染实例状态，
 // 让运维以为是实例崩溃而非请求被取消。
 //
-// 说明：当前 gRPC 入口（internal/worker/grpc）仍传 context.Background()，把 RPC ctx 接进来
-// 属于该入口的改动（不在本次修复面内）；本方法先把可取消语义与状态语义准备就绪。
+// 生产 RPC 传入请求 ctx；进程成功启动后不再受该请求生命周期影响。
 func (m *Manager) StartContext(ctx context.Context, uuid string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 不存在", uuid)
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
 	return m.startLocked(ctx, uuid, inst)
@@ -667,6 +682,9 @@ func (m *Manager) StartContext(ctx context.Context, uuid string) error {
 func (m *Manager) startLocked(ctx context.Context, uuid string, inst *Instance) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("启动实例 %s 未执行: %w", uuid, err)
 	}
 	m.mu.Lock()
 	current, exists := m.instances[uuid]
@@ -681,6 +699,10 @@ func (m *Manager) startLocked(ctx context.Context, uuid string, inst *Instance) 
 	if inst.strategyResetting {
 		m.mu.Unlock()
 		return fmt.Errorf("实例 %s 正在刷新启动策略，请稍后重试", uuid)
+	}
+	if inst.launchSpecPending {
+		m.mu.Unlock()
+		return fmt.Errorf("实例 %s 尚未收到完整启动规格，保留现有控制通道", uuid)
 	}
 
 	// Stop 收尾与配置更新可能交错：Stop 已检查 stale 后，SetLaunchConfig 才在 STOPPING 窗口
@@ -775,8 +797,12 @@ func (m *Manager) startLocked(ctx context.Context, uuid string, inst *Instance) 
 
 	m.emitStateChange(uuid, oldState, StateStarting)
 
-	if err := strategy.Start(ctx); err != nil {
-		if errors.Is(err, daemon.ErrStartWaitCanceled) {
+	startErr := ctx.Err()
+	if startErr == nil {
+		startErr = strategy.Start(ctx)
+	}
+	if err := startErr; err != nil {
+		if errors.Is(err, daemon.ErrStartWaitCanceled) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			// 调用方取消 ⇒ 本次既未启动、也未判定失败（可重试）：**不是崩溃**，保持原状态。
 			// 置 CRASHED 会把「请求被取消」污染成「实例崩溃」，运维据此排查会南辕北辙。
 			m.mu.Lock()
@@ -819,11 +845,19 @@ func (m *Manager) startLocked(ctx context.Context, uuid string, inst *Instance) 
 
 // Stop 停止实例。
 func (m *Manager) Stop(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 未运行", uuid)
+	return m.StopContext(context.Background(), uuid)
+}
+
+// StopContext 在下发停止前可取消；已经开始的优雅停止仍正常收尾。
+func (m *Manager) StopContext(ctx context.Context, uuid string) error {
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return m.stopLocked(uuid, inst)
 }
 
@@ -878,26 +912,52 @@ func (m *Manager) stopLocked(uuid string, inst *Instance) error {
 // daemon.WaitForPriorExit 依 PID 文件等旧 wrapper/Java 全退出（best-effort 上限）再拉起新进程，
 // reapWrapper 的 `d.wrapperCmd != cmd` 陈旧守卫保证旧 reaper 不误改新实例状态。
 func (m *Manager) Restart(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 不存在", uuid)
+	return m.RestartContext(context.Background(), uuid)
+}
+
+// RestartContext 排队与停止前可取消；停止已经执行时保留 STOPPED，绝不迟到启动。
+func (m *Manager) RestartContext(ctx context.Context, uuid string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
-	return m.restartLocked(uuid, inst)
+	return m.restartLockedContext(ctx, uuid, inst)
 }
 
 // restartLocked 在已持有实例生命周期锁时优雅重启：运行类先优雅停止、等旧进程退出，再启动。
 func (m *Manager) restartLocked(uuid string, inst *Instance) error {
+	return m.restartLockedContext(context.Background(), uuid, inst)
+}
+
+func (m *Manager) restartLockedContext(ctx context.Context, uuid string, inst *Instance) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.RLock()
 	state := inst.State
+	pending := inst.launchSpecPending
 	m.mu.RUnlock()
+	// PID 收养只证明当前控制通道可用，不能据此先停服务器再用空规格自愈。
+	if pending {
+		return fmt.Errorf("实例 %s 尚未收到完整启动规格，拒绝重启且保留当前运行时", uuid)
+	}
 	// 运行中（含启动/停止中）先优雅停止、等旧进程退出；STOPPED/CRASHED 无活跃进程，直接（重）启动。
 	if state == StateRunning || state == StateStarting || state == StateStopping {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := m.stopLocked(uuid, inst); err != nil {
 			return err
 		}
 	}
-	return m.startLocked(context.Background(), uuid, inst)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("实例 %s 已停止但本次重启被取消，未启动新一代: %w", uuid, err)
+	}
+	return m.startLocked(ctx, uuid, inst)
 }
 
 // RestartIfRunning 是 FR-459 假死自愈的受锁入口：与 Restart 相同地优雅重启，但**仅当**实例在
@@ -927,11 +987,19 @@ func (m *Manager) RestartIfRunning(uuid string) error {
 
 // Kill 强制终止实例。
 func (m *Manager) Kill(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 不存在", uuid)
+	return m.KillContext(context.Background(), uuid)
+}
+
+// KillContext 排队取消不能变成迟到强杀。
+func (m *Manager) KillContext(ctx context.Context, uuid string) error {
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return m.killLocked(uuid, inst)
 }
 
@@ -1291,13 +1359,15 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 
 		m.mu.Lock()
 		m.instances[instanceUUID] = &Instance{
-			UUID:        instanceUUID,
-			State:       StateRunning,
-			AutoRestart: !restored,
-			WorkDir:     rec.WorkDir,
-			ProbePort:   rec.ProbePort,
-			strategy:    strategy,
-			processType: ProcessTypeDaemon,
+			UUID:              instanceUUID,
+			State:             StateRunning,
+			AutoRestart:       !restored,
+			WorkDir:           rec.WorkDir,
+			ProbePort:         rec.ProbePort,
+			strategy:          strategy,
+			strategyStale:     true,
+			launchSpecPending: true,
+			processType:       ProcessTypeDaemon,
 		}
 		m.mu.Unlock()
 		if restored {

@@ -37,10 +37,12 @@ type daemonStrategy struct {
 	// 「命令看似下发成功，连接却随即失效」，正是本缺陷要根治的失联形态。
 	writeMu sync.Mutex
 
-	wrapperCmd *exec.Cmd
-	conn       net.Conn
-	state      InstanceState
-	closed     bool
+	// wrapperCommand 为启动配置的受控 helper 测试接缝；nil 始终执行当前 Worker 的 daemon 子命令。
+	wrapperCommand func(executable string) *exec.Cmd
+	wrapperCmd     *exec.Cmd
+	conn           net.Conn
+	state          InstanceState
+	closed         bool
 
 	// readWg 跟踪输出读取 goroutine
 	readWg sync.WaitGroup
@@ -133,6 +135,9 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 	}
 
 	cmd := exec.Command(exePath, "daemon")
+	if d.wrapperCommand != nil {
+		cmd = d.wrapperCommand(exePath)
+	}
 	cmd.Env = append(os.Environ(), daemon.EnvWrapperConfig+"="+string(cfgBytes))
 	// wrapper 必须脱离 Worker 进程组：Worker 退出时 wrapper 不被牵连。
 	// Linux/macOS: setsid 新建会话；Windows: CREATE_NEW_PROCESS_GROUP。
@@ -142,6 +147,10 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 	cmd.Stdout = newSlogWriter(d.spec.UUID, "wrapper-stdout")
 	cmd.Stderr = newSlogWriter(d.spec.UUID, "wrapper-stderr")
 
+	// 请求只约束启动提交前的阶段，不能用 CommandContext 把已启动 wrapper 绑到 RPC。
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("启动 wrapper 未执行: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		d.state = StateCrashed
 		return fmt.Errorf("启动 wrapper 失败: %w", err)
