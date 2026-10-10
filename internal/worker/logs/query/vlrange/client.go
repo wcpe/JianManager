@@ -4,6 +4,7 @@ package vlrange
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,33 +55,10 @@ func (c *Client) Search(ctx context.Context, rng query.AuthoritativeRange, q que
 		return query.RangeResult{Exhausted: true, DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}, nil
 	}
 	params.Set("query", searchQuery(rng, q))
-	// 每页请求 N+1 条前瞻（多出的 1 条用于判定「是否还有下一页」）；游标页为 N+2：
-	// 收窄后的窗口必然包含游标行本身（_time == 游标时刻），而它会被客户端全键过滤丢弃，
-	// 只留 N+1 会让每页恰好只剩 N 条 → 服务端误判 exhausted、next 为空 → 第 3 页起仍不可达。
 	params.Set("limit", strconv.FormatUint(lookaheadRows(q), 10))
-	var out query.RangeResult
-	bytesRead, truncated, err := c.stream(ctx, params, scanLimit(q.Budget), func(line []byte) error {
-		ev, err := eventFromJSON(line)
-		if err != nil {
-			return err
-		}
-		if q.ClosedVisibleSeq > 0 && ev.Record.End > q.ClosedVisibleSeq {
-			return nil
-		}
-		out.Items = append(out.Items, ev)
-		return nil
+	return c.searchPage(ctx, params, q, lookaheadRows(q), func(ev logtypes.Event) bool {
+		return q.ClosedVisibleSeq == 0 || ev.Record.End <= q.ClosedVisibleSeq
 	})
-	if err != nil {
-		return query.RangeResult{}, err
-	}
-	out.Bytes = bytesRead
-	out.Exhausted = !truncated
-	out.DuplicateQuality = query.DupExact
-	out.StatsQuality = query.StatsExact
-	if truncated {
-		out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
-	}
-	return out, nil
 }
 
 // Stats uses the LogsQL stats pipe so aggregation happens in VL over the
@@ -102,7 +80,7 @@ func (c *Client) Stats(ctx context.Context, rng query.AuthoritativeRange, q quer
 	}
 	params.Set("query", selectorQuery(rng, q)+pipe)
 	var out query.StatsResult
-	bytesRead, truncated, err := c.stream(ctx, params, scanLimit(q.Budget), func(line []byte) error {
+	bytesRead, truncated, err := c.stream(ctx, params, scanLimit(q.Budget), 0, func(line []byte) error {
 		point, err := statsFromJSON(line, q)
 		if err != nil {
 			return err
@@ -110,10 +88,10 @@ func (c *Client) Stats(ctx context.Context, rng query.AuthoritativeRange, q quer
 		out.Points = append(out.Points, point)
 		return nil
 	})
-	if err != nil {
-		return query.StatsResult{}, err
-	}
 	out.Bytes = bytesRead
+	if err != nil {
+		return out, err
+	}
 	out.DuplicateQuality = query.DupExact
 	out.StatsQuality = query.StatsExact
 	if truncated {
@@ -134,7 +112,7 @@ func (c *Client) Fields(ctx context.Context, rng query.AuthoritativeRange, q que
 	}
 	res, err := c.Search(ctx, rng, q)
 	if err != nil {
-		return query.FieldsResult{}, err
+		return query.FieldsResult{Bytes: res.Bytes, CoverageReasons: res.CoverageReasons, Truncated: true}, err
 	}
 	set := make(map[string]struct{})
 	for _, ev := range res.Items {
@@ -163,13 +141,19 @@ func (c *Client) Facets(ctx context.Context, rng query.AuthoritativeRange, q que
 		if !validField(dimension) || dimension == "event_id" || dimension == "message" || dimension == "_time" {
 			continue
 		}
+		if out.Bytes >= scanLimit(q.Budget) {
+			out.Truncated = true
+			out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
+			break
+		}
 		copyQ := q
+		copyQ.Budget.MaxBytes = scanLimit(q.Budget) - out.Bytes
 		copyQ.GroupBy = []string{dimension}
 		stats, err := c.Stats(ctx, rng, copyQ)
-		if err != nil {
-			return query.RangeFacetsResult{}, err
-		}
 		out.Bytes += stats.Bytes
+		if err != nil {
+			return out, err
+		}
 		out.CoverageReasons = append(out.CoverageReasons, stats.CoverageReasons...)
 		if len(stats.Points) > int(limit) {
 			out.Truncated = true
@@ -299,8 +283,8 @@ func searchQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	// 严格「大于」过滤，跨页重复被吸收。
 	// 游标页的窗口由 params() 收窄到 `_time <= 游标时刻`（P0-1）：不放宽则此处 top-K 会
 	// 返回与第一页相同的一批行，游标过滤后只剩 ≤1 行，第二页起全部不可达。
-	// 残余风险：同一时间戳的并列行若被 top-K 截断在**组内**，客户端全键次序无法补回未取回
-	// 的并列行（毫秒级时间戳下极罕见）；并列组完整取回时由全键过滤正确拆分。
+	// 时间 top-K 不能证明页边界并列组完整；searchPage 只补取该时间组，再按冻结复合键分页。
+	// 未完整组不会输出为游标锚点，不把低概率并列当成漏行可以接受的理由。
 	return selectorQuery(rng, q) +
 		" | fields _time, _msg, event_id, log_source_id, source_generation, parser_version, record_start, record_end, ingest_time_utc, level, stream, instance_id, canonical_content_hash" +
 		" | sort by (_time desc)" +
@@ -413,29 +397,189 @@ func statsPipe(q query.RangeQuery) (string, error) {
 	return b.String(), nil
 }
 
-func (c *Client) stream(ctx context.Context, params url.Values, maxBytes uint64, consume func([]byte) error) (uint64, bool, error) {
-	var read uint64
+// searchPage 只在页边界组未被更旧时间证明完整时补取该时间组，不改变整窗时间 top-K。
+// 补查与向更旧窗口续读共用同一字节额度；不完整组只公布严格更新的安全前缀。
+func (c *Client) searchPage(ctx context.Context, params url.Values, q query.RangeQuery, rows uint64, matches func(logtypes.Event) bool) (query.RangeResult, error) {
+	out := query.RangeResult{DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}
+	maxBytes := scanLimit(q.Budget)
+	seen := make(map[string]bool)
+	appendEvents := func(events []logtypes.Event) {
+		for _, ev := range events {
+			if !matches(ev) || (q.CursorSortKey != nil && query.CompareSortKey(query.SortKeyOf(ev), *q.CursorSortKey) <= 0) {
+				continue
+			}
+			key := ev.EventID + "\x00" + ev.CanonicalHash
+			if !seen[key] {
+				seen[key] = true
+				out.Items = append(out.Items, ev)
+			}
+		}
+	}
+	partial := func(stamp string) {
+		out.SafeBeforeUTC = stamp
+		out.Exhausted = false
+		out.StatsQuality = query.StatsPartial
+		out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
+	}
+	readEvents := func(p url.Values) ([]logtypes.Event, bool, error) {
+		if out.Bytes >= maxBytes {
+			return nil, true, nil
+		}
+		var events []logtypes.Event
+		n, cut, err := c.stream(ctx, p, maxBytes-out.Bytes, 0, func(line []byte) error {
+			ev, err := eventFromJSON(line)
+			if err == nil {
+				events = append(events, ev)
+			}
+			return err
+		})
+		out.Bytes += n
+		return events, cut, err
+	}
+	p := cloneParams(params)
+	baseQuery := p.Get("query")
+	if i := strings.LastIndex(baseQuery, " | limit "); i >= 0 {
+		baseQuery = baseQuery[:i]
+	}
+	for {
+		raw, byteCut, err := readEvents(p)
+		if err != nil {
+			return out, err
+		}
+		if len(raw) == 0 {
+			if byteCut {
+				partial(p.Get("end"))
+			} else {
+				out.Exhausted = true
+			}
+			break
+		}
+		query.SortEvents(raw)
+		boundary := raw[len(raw)-1].EventTimeUTC
+		stamp, err := time.Parse(time.RFC3339Nano, boundary)
+		if err != nil {
+			return out, fmt.Errorf("vlrange: invalid boundary time: %w", err)
+		}
+		prefix := make([]logtypes.Event, 0, len(raw))
+		for _, ev := range raw {
+			t, err := time.Parse(time.RFC3339Nano, ev.EventTimeUTC)
+			if err == nil && t.After(stamp) {
+				prefix = append(prefix, ev)
+			}
+		}
+		if byteCut {
+			appendEvents(prefix)
+			partial(boundary)
+			break
+		}
+		if uint64(len(raw)) < rows {
+			appendEvents(raw)
+			out.Exhausted = true
+			break
+		}
+		appendEvents(prefix)
+		// 前缀已足一页，边界位于本页之后；保留正常一次 union，不扩大整窗排序成本。
+		if len(out.Items) >= int(q.Budget.EffectiveLimit()) {
+			break
+		}
+		if out.Bytes >= maxBytes {
+			partial(boundary)
+			break
+		}
+		groupParams := cloneParams(p)
+		groupParams.Set("start", stamp.UTC().Format(time.RFC3339Nano))
+		groupParams.Set("end", stamp.Add(time.Nanosecond).UTC().Format(time.RFC3339Nano))
+		// 字节数同时约束行数：每个合法 NDJSON 行至少占一字节，无隐含服务端默认上限。
+		groupRows := maxBytes - out.Bytes
+		groupParams.Set("limit", strconv.FormatUint(groupRows, 10))
+		groupParams.Set("query", baseQuery+" | limit "+strconv.FormatUint(groupRows, 10))
+		group, cut, err := readEvents(groupParams)
+		if cut || err != nil {
+			partial(boundary)
+			break
+		}
+		appendEvents(group)
+		if len(out.Items) > int(q.Budget.EffectiveLimit()) {
+			break
+		}
+		// 游标组的已返回前缀可能占满 top-K；完整组过滤后不足一页时只续读更旧窗口。
+		p.Set("end", stamp.UTC().Format(time.RFC3339Nano))
+		start, err := time.Parse(time.RFC3339Nano, p.Get("start"))
+		if err != nil {
+			return out, err
+		}
+		if !start.Before(stamp) {
+			out.Exhausted = true
+			break
+		}
+	}
+	query.SortEvents(out.Items)
+	return out, nil
+}
+
+func (c *Client) stream(ctx context.Context, params url.Values, maxBytes, maxRows uint64, consume func([]byte) error) (uint64, bool, error) {
+	var read, rows uint64
 	truncated := false
-	err := c.vl.Stream(ctx, queryPath, params, func(body io.Reader) error {
-		sc := bufio.NewScanner(body)
-		sc.Buffer(make([]byte, 64*1024), 4<<20)
+	if maxBytes == 0 {
+		return 0, true, nil
+	}
+	actual, err := c.vl.StreamBudget(ctx, queryPath, params, maxBytes, func(body io.Reader) error {
+		// 在读入前限制真实字节数，Scanner 预读和超大单行也不能突破预留额度。
+		n := maxBytes
+		if n > uint64(1<<63-1) {
+			n = uint64(1<<63 - 1)
+		}
+		limited := &io.LimitedReader{R: body, N: int64(n)}
+		sc := bufio.NewScanner(limited)
+		bufSize := uint64(64 * 1024)
+		if n < bufSize {
+			bufSize = n
+		}
+		sc.Buffer(make([]byte, int(bufSize)), 4<<20)
 		for sc.Scan() {
 			line := sc.Bytes()
-			read += uint64(len(line) + 1)
-			if read > maxBytes {
+			// 恰好触顶但未见完整换行的末行可能只是被硬边界截断的半条 JSON。
+			if limited.N == 0 && uint64(len(line)) == n && !bytes.HasSuffix(line, []byte{'\n'}) {
 				truncated = true
 				break
 			}
-			if len(strings.TrimSpace(string(line))) == 0 {
+			if len(bytes.TrimSpace(line)) == 0 {
 				continue
 			}
-			if err := consume(append([]byte(nil), line...)); err != nil {
+			if err := consume(line); err != nil {
+				if limited.N == 0 {
+					truncated = true
+					break
+				}
+				read = n - uint64(limited.N)
 				return err
 			}
+			rows++
+			if maxRows > 0 && rows >= maxRows {
+				truncated = true
+				break
+			}
+		}
+		read = n - uint64(limited.N)
+		if limited.N == 0 || sc.Err() == bufio.ErrTooLong {
+			truncated = true
+			return nil
 		}
 		return sc.Err()
 	})
+	// HTTP 非 2xx 正文由传输层读取，也必须归入本次预留，不能借错误反复退款。
+	if actual > read {
+		read = actual
+	}
 	return read, truncated, err
+}
+
+func cloneParams(p url.Values) url.Values {
+	out := make(url.Values, len(p))
+	for key, values := range p {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
 }
 
 func scanLimit(b query.Budget) uint64 {

@@ -31,8 +31,10 @@ type RangeResult struct {
 	Items []logtypes.Event
 	// Exhausted 表示本 range 在 closed_visible_seq 前缀内已读完。
 	Exhausted bool
-	// Bytes 粗粒度成本累计（budget.MaxBytes 用）。
+	// Bytes 是本次调用实际读取的字节数，包含预读与补查；不得超过已预留额度。
 	Bytes uint64
+	// SafeBeforeUTC 非空时，该时间组尚未完整；只能返回严格更新的行，不能跨组推进游标。
+	SafeBeforeUTC string
 	// CoverageReasons 执行侧追加的 partial 原因（如冷层未恢复）。
 	CoverageReasons []string
 	// QualityOverride 非空时覆盖默认质量。

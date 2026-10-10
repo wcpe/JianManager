@@ -253,11 +253,17 @@ func TestLogFederation_Search_PartialCoverageJSON(t *testing.T) {
 	cov, ok := body["coverage"].(map[string]interface{})
 	require.True(t, ok, "coverage missing: %v", body)
 	assert.Equal(t, false, cov["complete"], "partial coverage must not claim complete")
-	// 快路径契约（分页优先 ✓）：覆盖校验后置 ⇒ 不做逐目标分解（targets 为空 ✗），仅以 pending 呈现。
-	// 逐目标分解（success/offline）由慢路径与导出承担，其 eager 语义在 logcoord 侧测试中覆盖 ✓。
-	assert.Equal(t, true, cov["pending"], "fast path must mark coverage pending: %v", body)
+	// 快路径仅后置快照水位校验；已经观察到的 success/offline 必须原样保留。
+	assert.Equal(t, true, cov["pending"], "快路径必须标识尚未固化的快照水位: %v", body)
 	targets, _ := cov["targets"].([]interface{})
-	require.Len(t, targets, 0, "pending coverage must not carry per-target breakdown")
+	require.Len(t, targets, 2, "pending 不能隐藏已经观察到的逐目标失败")
+	states := map[string]string{}
+	for _, v := range targets {
+		target := v.(map[string]interface{})
+		states[target["target_id"].(string)] = target["state"].(string)
+	}
+	require.Equal(t, "success", states[on])
+	require.Equal(t, "offline", states[off])
 	assert.NotContains(t, fmt.Sprint(body["notes"]), "pending", "pending 绝不入 notes ✗")
 
 	// View 不固化 closed_visible_seq（新契约 ✓）：快路径未跑逐目标校验 ⇒ 该向量无意义，
@@ -425,10 +431,9 @@ func TestLogFederation_AdminSearchOK_WithKeywordAndLimits(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	body := parseJSON(t, w)
 	cov := body["coverage"].(map[string]interface{})
-	// 新契约：首屏/翻页走快路径 ⇒ 覆盖校验后置（pending=true、complete=false ✓）；
-	// 完整覆盖校验由导出/显式全量承担（eager 语义不变 ✗）。
+	// pending 只标记快照水位未固化，不得把全部目标 success 的观测覆盖改成失败。
 	assert.Equal(t, true, cov["pending"])
-	assert.Equal(t, false, cov["complete"])
+	assert.Equal(t, true, cov["complete"])
 	items := body["items"].([]interface{})
 	require.Len(t, items, 1)
 	assert.Equal(t, "e1", items[0].(map[string]interface{})["event_id"])

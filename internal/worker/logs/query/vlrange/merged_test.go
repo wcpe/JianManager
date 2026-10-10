@@ -352,3 +352,56 @@ func TestSearchMergedSalvagesItemsWhenLaterSegmentFails(t *testing.T) {
 	require.Error(t, err, "零结果时整组失败必须报错")
 }
 
+// UTC 天归因必须与分区日一致，不能借用另一日的代次或封闭水位。
+func TestReviewRangeUTCDayIsolation(t *testing.T) {
+	rng := scopedRange("inst:901", "src-a", "GenA", []string{"pgenGood"}, 10)
+	rng.Key = catalog.PartitionKey{StorageNamespace: "namespace-not-source", UTCDay: "2026-09-21"}
+	ev := mergedTestEvent("src-a", "GenA", "pgenGood", 10)
+	params, empty, err := (&Client{}).params(rng, query.RangeQuery{
+		TimeRange: query.TimeRange{FromUTC: "2026-09-21T00:00:00Z", ToUTC: "2026-09-23T00:00:00Z"},
+	})
+	if err != nil || empty {
+		t.Fatalf("单分区日参数应非空，实际 empty=%t err=%v", empty, err)
+	}
+	t.Logf("single_range_window=%s..%s range_day=%s event_time=%s", params.Get("start"), params.Get("end"), rng.Key.UTCDay, ev.EventTimeUTC)
+	control := ev
+	control.EventTimeUTC = "2026-09-21T01:02:03Z"
+	if !rangeMatchesEvent(rng, control) {
+		t.Fatal("同日事件应命中范围")
+	}
+	if rangeMatchesEvent(rng, ev) {
+		t.Fatal("另一日事件不得借用当前分区的代次或水位")
+	}
+}
+
+// 有效 scope 未命中时不得退回 namespace，避免绕过来源代次与水位约束。
+func TestReviewScopedNamespaceFallback(t *testing.T) {
+	rng := scopedRange("inst:901", "src-a", "GenA", []string{"pgenGood"}, 10)
+	rng.Key = catalog.PartitionKey{StorageNamespace: "src-a", UTCDay: "2026-09-22"}
+	rng.ClosedVisibleSeq = 100
+	text := selectorQuery(rng, query.RangeQuery{ClosedVisibleSeq: rng.ClosedVisibleSeq})
+	for _, required := range []string{`source_generation:="GenA"`, `projection_generation:="pgenGood"`, `record_end:<=10`} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("单范围选择器缺少约束 %q，实际=%q", required, text)
+		}
+	}
+	if !rangeMatchesEvent(rng, mergedTestEvent("src-a", "GenA", "pgenGood", 10)) {
+		t.Fatal("有效 scoped 事件应命中")
+	}
+	for _, tc := range []struct {
+		name string
+		gen  string
+		pgen string
+		end  uint64
+	}{
+		{name: "wrongSourceGeneration", gen: "wrongGen", pgen: "pgenGood", end: 9},
+		{name: "wrongProjectionGeneration", gen: "GenA", pgen: "pgenWrong", end: 9},
+		{name: "beyondScopedWatermark", gen: "GenA", pgen: "pgenGood", end: 11},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if rangeMatchesEvent(rng, mergedTestEvent("src-a", tc.gen, tc.pgen, tc.end)) {
+				t.Fatalf("失配事件不得通过 namespace 回退放行")
+			}
+		})
+	}
+}

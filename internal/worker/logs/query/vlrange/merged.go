@@ -67,16 +67,31 @@ func mergedScanRows(q query.RangeQuery) uint64 {
 // 用 rng.ClosedVisibleSeq 表达（合并路径不得使用全局 q.ClosedVisibleSeq——
 // 组内各 range 水位不同）。
 func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
+	// 合并查询按物理分区的 UTC 天粗筛；内存归因必须再次限制事件时间，
+	// 否则另一日的同来源代次会借用当前 range 的水位。
+	if rng.Key.UTCDay != "" {
+		dayStart, err := time.Parse("2006-01-02", rng.Key.UTCDay)
+		if err != nil {
+			return false
+		}
+		eventTime, err := time.Parse(time.RFC3339Nano, ev.EventTimeUTC)
+		if err != nil || eventTime.Before(dayStart) || !eventTime.Before(dayStart.AddDate(0, 0, 1)) {
+			return false
+		}
+	}
+
 	proj := rng.Projection
 	scoped := proj != nil && len(proj.SourceProjections) > 0
 	projGen := ev.Fields[projectionGenerationField]
 
 	covered := false
+	hasExpressibleCoverage := false
 	if scoped {
 		for _, scope := range proj.SourceProjections {
 			if len(scope.ProjectionGenerations) == 0 {
 				continue
 			}
+			hasExpressibleCoverage = true
 			if ev.Source.LogSourceID != scope.LogSourceID {
 				continue
 			}
@@ -97,13 +112,19 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 			if src.LogSourceID == "" || src.SourceGeneration == "" {
 				continue
 			}
+			hasExpressibleCoverage = true
 			if ev.Source.LogSourceID == src.LogSourceID && ev.Source.SourceGeneration == src.SourceGeneration {
 				covered = true
 				break
 			}
 		}
 	}
-	if !covered {
+	if hasExpressibleCoverage {
+		// selectorQuery 有可表达的来源约束时不会回退 namespace；必须命中其中一项。
+		if !covered {
+			return false
+		}
+	} else {
 		if rng.Key.StorageNamespace == "" {
 			// 无来源约束：单 range 查询等价于 `*`，合并路径不会收纳这类 range；
 			// 若仍被调用则按不匹配处理（宁可少收，不可放大可见范围）。
@@ -242,42 +263,46 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 		segments++
 		params, empty, err := c.windowParams(segStart, segEnd, q)
 		if err != nil {
-			return query.RangeResult{}, err
+			return out, err
 		}
 		if !empty {
 			params.Set("query", mergedSearchQuery(sources, q))
 			params.Set("limit", strconv.FormatUint(mergedScanRows(q), 10))
-			bytesRead, truncated, err := c.stream(ctx, params, scanLimit(q.Budget), func(line []byte) error {
-				ev, err := eventFromJSON(line)
-				if err != nil {
-					return err
-				}
-				// 归因：命中任一 range 的权威谓词才保留（旧代次/超水位行在此被过滤）。
-				matched := false
+			// 所有滑段及边界组补查共用一个额度，不能把零剩余传成默认 32MiB。
+			if out.Bytes >= scanLimit(q.Budget) {
+				exhausted = false
+				out.SafeBeforeUTC = params.Get("end")
+				out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
+				break
+			}
+			segmentQ := q
+			segmentQ.Budget.MaxBytes = scanLimit(q.Budget) - out.Bytes
+			segment, err := c.searchPage(ctx, params, segmentQ, mergedScanRows(q), func(ev logtypes.Event) bool {
 				for _, rng := range rngs {
 					if rangeMatchesEvent(rng, ev) {
-						matched = true
-						break
+						return true
 					}
 				}
-				if !matched {
-					return nil
-				}
-				// 去重语义与 CP 侧 dedupeMergedRows 一致：同 id 同 hash 去重；
-				// 同 id 异 hash 保留（内容不同的两份都要可见），并触发质量降级。
+				return false
+			})
+			out.Bytes += segment.Bytes
+			out.CoverageReasons = append(out.CoverageReasons, segment.CoverageReasons...)
+			if segment.SafeBeforeUTC != "" {
+				out.SafeBeforeUTC = segment.SafeBeforeUTC
+			}
+			for _, ev := range segment.Items {
 				if prev, ok := seenHash[ev.EventID]; ok {
 					duplicated = true
 					if prev == ev.CanonicalHash {
-						return nil
+						continue
 					}
 				}
 				seenHash[ev.EventID] = ev.CanonicalHash
 				out.Items = append(out.Items, ev)
-				return nil
-			})
+			}
 			if err != nil {
 				if len(out.Items) == 0 {
-					return query.RangeResult{}, err
+					return out, err
 				}
 				// 已有结果：更老段失败不得整组丢弃。标记原因、停在该段，
 				// 更老数据由游标翻页继续触达。
@@ -287,11 +312,10 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 				out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
 				break
 			}
-			out.Bytes += bytesRead
-			if truncated {
-				// 任一段被预算截断：不得宣称读完。
+			if !segment.Exhausted {
 				exhausted = false
-				out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
+				// 本段仍有未枚举行，不允许越过该段去拿更老数据当游标锚点。
+				break
 			}
 		}
 		// 已到最老段：本段即最后一段，exhausted 由各段 truncated 决定。
@@ -319,6 +343,9 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 		out.DuplicateQuality = query.DupUnresolved
 	}
 	out.StatsQuality = query.StatsExact
+	if len(out.CoverageReasons) > 0 {
+		out.StatsQuality = query.StatsPartial
+	}
 	return out, nil
 }
 

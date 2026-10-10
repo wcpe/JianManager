@@ -29,6 +29,13 @@ type PlanRequest struct {
 	RequireCold bool
 	// RequireArchive 为 true 时，若 ARCHIVE 未恢复 → partial / ARCHIVE_NOT_RESTORED。
 	RequireArchive bool
+	// AllowProjectionDrift 为 true 时，视图复用校验豁免「投影清单版本（ManifestVersion）变化」判 stale。
+	//
+	// 只允许「单次操作自己创建视图、自己读完」的导出路径置位（CP logcoord.Export 逐页 Search）：
+	// 该路径不存在「前端旧 view_id 跨请求复用」场景，故投影漂移是源仍在实时追加内容的正常现象。
+	// 其余维度一律不豁免：分区记录消失、无权威副本、目录/代次变化、closed_visible_seq 缩水
+	// （数据变少）仍必须 VIEW_STALE。详见 validateViewAgainstCatalog。
+	AllowProjectionDrift bool
 }
 
 // PlanResult 是 planner 输出。
@@ -164,7 +171,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			res.Coverage.EnumerationState = EnumStale
 			return res
 		}
-		stale := p.validateViewAgainstCatalog(view, &res.Coverage)
+		stale := p.validateViewAgainstCatalog(view, &res.Coverage, req.AllowProjectionDrift)
 		if stale != nil {
 			res.Err = stale
 			res.Coverage.EnumerationState = EnumStale
@@ -392,7 +399,9 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 
 // validateViewAgainstCatalog 检查固定视图是否仍可对齐 Catalog。
 // 纯迁移（旧租约仍可读原集合）不自动失效；generation 变化 / 数据集合破坏 closed_visible_seq → VIEW_STALE。
-func (p *Planner) validateViewAgainstCatalog(view *QueryView, cov *Coverage) *QueryError {
+//
+// allowProjectionDrift 只豁免「投影清单版本变化」这一条分支（见下方标注），其余分支一律保留。
+func (p *Planner) validateViewAgainstCatalog(view *QueryView, cov *Coverage, allowProjectionDrift bool) *QueryError {
 	for targetID, wantGen := range view.Generations {
 		key, ok := parseTargetKey(targetID)
 		if !ok {
@@ -438,7 +447,17 @@ func (p *Planner) validateViewAgainstCatalog(view *QueryView, cov *Coverage) *Qu
 			if ref.Projection != nil {
 				currentVersion = ref.Projection.ManifestVersion
 			}
-			if wantVersion != currentVersion {
+			// 投影清单版本漂移：内容清单变化（源仍在实时追加日志时**必然**发生）。
+			//
+			// 为什么可以按请求豁免（而非放宽校严）：ManifestVersion 只哈希 SourceProjections 内容清单,
+			// 「数据变少」由紧随其后的 closed_visible_seq 缩水分支独立把关，因此内容追加走本分支、
+			// 数据丢失走下一分支——豁免本分支不会放过任何数据丢失场景。
+			//
+			// 为什么必须能豁免：导出是「单次操作自己 CreateView、自己逐页读完」，耗时可达数十秒，
+			// 期间任意源写入新投影都会让 165 个目标全部降级 partial，导出永远拿不到附件
+			// （生产实证：只要玩家的业务服务器在跑，导出就永远失败）。
+			// 该路径不存在「前端旧 view_id 跨请求复用」，故原设计意图（防旧 view_id 复用）在此不适用。
+			if wantVersion != currentVersion && !allowProjectionDrift {
 				cov.AddTarget(TargetCoverage{TargetID: targetID, State: CoverageStale, Reasons: []string{ReasonConflictGeneration}})
 				return newErr(ErrCodeViewStale, fmt.Sprintf("view %s target %s projection changed", view.ViewID, targetID))
 			}

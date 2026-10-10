@@ -148,8 +148,19 @@ func TestSearchCursorPagesFillLimitWithoutGapsOrDuplicates(t *testing.T) {
 	require.Len(t, gotIDs, len(rows))
 
 	// 判据 3：游标页窗口确实被收窄到「不晚于游标时刻」，并保留 1 行前瞻预算。
-	windows := store.snapshot()
-	require.Len(t, windows, 5)
+	allWindows := store.snapshot()
+	var windows []fakeVLWindow
+	var boundaryWindows []fakeVLWindow
+	for _, window := range allWindows {
+		if window.end.Sub(window.start) == time.Nanosecond {
+			boundaryWindows = append(boundaryWindows, window)
+		} else {
+			windows = append(windows, window)
+		}
+	}
+	require.Len(t, windows, 5, "正常窗口仍每页一次 top-K")
+	require.Len(t, boundaryWindows, 1, "只对截断页的未知并列组补查一次")
+	require.Equal(t, tenth, boundaryWindows[0].start)
 	require.NotEqual(t, windows[0].end, windows[1].end,
 		"游标页必须收窄窗口上界；与第一页逐字相同的窗口正是 P0-1 的根因")
 	cursorTime := sorted[limit-1].eventTime // 第一页第 5 行即第一页游标所在行

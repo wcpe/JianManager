@@ -180,11 +180,44 @@ func (c *Client) Get(ctx context.Context, path string, query url.Values) ([]byte
 // 查询接口返回 NDJSON，不能先把完整响应读入内存；调用方负责在 consume 中设置
 // 行数、字节数和取消边界。非 2xx 响应仍只读取有界错误正文。
 func (c *Client) Stream(ctx context.Context, path string, query url.Values, consume func(io.Reader) error) error {
+	_, err := c.streamWithBudget(ctx, path, query, 0, consume)
+	return err
+}
+
+// StreamBudget 在读入响应前限制额度，并在成功、解析错误及 HTTP 错误路径保留实际读入字节。
+// 零额度不发请求，避免剩余零被重新解释为默认预算；原 Stream 仍保持既有语义。
+func (c *Client) StreamBudget(ctx context.Context, path string, query url.Values, maxBytes uint64, consume func(io.Reader) error) (uint64, error) {
+	if maxBytes == 0 {
+		return 0, fmt.Errorf("vlsup: stream byte budget exhausted")
+	}
+	return c.streamWithBudget(ctx, path, query, maxBytes, consume)
+}
+
+// streamByteReader 将预读也计入实际消费，不以已解析的行数冒充网络读取量。
+type streamByteReader struct {
+	reader io.Reader
+	ctx    context.Context
+	read   uint64
+}
+
+func (r *streamByteReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.reader.Read(p)
+	r.read += uint64(n)
+	return n, err
+}
+
+func (c *Client) streamWithBudget(ctx context.Context, path string, query url.Values, maxBytes uint64, consume func(io.Reader) error) (uint64, error) {
 	if c == nil {
-		return fmt.Errorf("vlsup: nil client")
+		return 0, fmt.Errorf("vlsup: nil client")
 	}
 	if consume == nil {
-		return fmt.Errorf("vlsup: nil stream consumer")
+		return 0, fmt.Errorf("vlsup: nil stream consumer")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
@@ -195,27 +228,51 @@ func (c *Client) Stream(ctx context.Context, path string, query url.Values, cons
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return fmt.Errorf("vlsup: build request: %w", err)
+		return 0, fmt.Errorf("vlsup: build request: %w", err)
 	}
 	if c.username != "" || c.password != "" {
 		token := base64.StdEncoding.EncodeToString([]byte(c.username + ":" + c.password))
 		req.Header.Set("Authorization", "Basic "+token)
 	}
-	resp, err := c.hq.Do(req)
+	httpClient := c.hq
+	if maxBytes > 0 {
+		// 自动重定向会在消费回调之外预读旧正文；预算入口必须把 3xx 当有界错误处理。
+		bounded := *c.hq
+		bounded.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		httpClient = &bounded
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("vlsup: request %s: %w", path, err)
+		return 0, fmt.Errorf("vlsup: request %s: %w", path, err)
 	}
 	defer resp.Body.Close()
+	var body io.Reader = resp.Body
+	if maxBytes > 0 {
+		limit := maxBytes
+		if limit > uint64(1<<63-1) {
+			limit = uint64(1<<63 - 1)
+		}
+		body = io.LimitReader(body, int64(limit))
+	}
+	counter := &streamByteReader{reader: body, ctx: ctx}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		// 错误描述也占查询成本；小预算不能为了文案先额外读入 1MiB。
+		text, _ := io.ReadAll(io.LimitReader(counter, 1<<20))
+		if err := ctx.Err(); err != nil {
+			return counter.read, err
+		}
 		switch resp.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden:
-			return fmt.Errorf("%w: %s status %d", ErrUnauthorized, path, resp.StatusCode)
+			return counter.read, fmt.Errorf("%w: %s status %d", ErrUnauthorized, path, resp.StatusCode)
 		default:
-			return &StatusError{Path: path, Code: resp.StatusCode, Body: strings.TrimSpace(string(body))}
+			return counter.read, &StatusError{Path: path, Code: resp.StatusCode, Body: strings.TrimSpace(string(text))}
 		}
 	}
-	return consume(resp.Body)
+	err = consume(counter)
+	if cancelled := ctx.Err(); cancelled != nil {
+		err = cancelled
+	}
+	return counter.read, err
 }
 
 // InsertJSONLines 将规范事件以 NDJSON 投递到 Worker 本地 VL。

@@ -518,7 +518,7 @@ func TestSearch_CursorPagination(t *testing.T) {
 				buildEvent("s", "g1", 1, 2, "2026-09-20T10:00:00Z", "e1"),
 				buildEvent("s", "g1", 2, 3, "2026-09-20T11:00:00Z", "e2"),
 				buildEvent("s", "g1", 3, 4, "2026-09-20T12:00:00Z", "e3"),
-			}}, nil
+			}, Exhausted: true}, nil
 		},
 	}
 	svc := NewService(NewPlanner(c, nil), client, "b")
