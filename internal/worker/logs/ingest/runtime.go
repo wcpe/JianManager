@@ -2745,12 +2745,44 @@ func (m *Manager) Register(source SourceConfig) error {
 			"charset", source.Charset, "charsetInherited", explicit.Charset == "")
 	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
-	// INGEST-2 修复：eventBodyLookup 对该源全部历史事件做一次磁盘段遍历（O(段行数)），
-	// 不得落在 m.mu 临界区内。m.events 构造后只读（仅 Close 置 nil），锁外读安全。
-	// 新源无段 ⇒ O(1) 空遍历；换代源的 O(段行数) 磁盘读由此移到锁外。
-	bodyLookup := m.eventBodyLookup(key)
+	// **按需构造事件体水合函数**（N-2，2026-10-12 终审修复）。
+	//
+	// 两个约束必须同时满足（缺一即回归）：
+	//  1. INGEST-2 的收益：`eventBodyLookup` 对该源全部历史事件做一次**磁盘段遍历**
+	//     （`eventstore.Iterate` 逐段 readSegment，O(段行数)；生产单源实测 126MB/135k 行）；
+	//     它**不得**落在 `m.mu` 临界区内，否则换代源登记会长时间独占锁。
+	//  2. N-2 的修复：它**只在真的需要时才构造**。旧形态无条件预构造 ⇒ **安静源**
+	//     （WAL 已排空、`WALRefs` 为空）本来一条引用都没有、`RestoreMixed` 根本不需要
+	//     hydrate，却仍白付一次全段磁盘读 + 全量 map 驻留。启动路径对全部源串行登记，
+	//     60 源 × 秒级 ⇒ 启动多出分钟级、内存峰值 GB 级（与 e8e44105 事故同类形态）。
+	//
+	// 实现＝两段式：先锁内做 **O(1)** 判断（只读 map 长度，不碰磁盘），锁外按需构造，
+	// 再重新进锁执行原有的恢复流程。第二段与第三段之间状态可能变化（并发登记/持久化），
+	// 故使用点保留 nil 兜底（见下方 len(saved.WALRefs) 分支）——正确性不依赖两段间的稳定性。
+	needHydrate := false
+	m.mu.Lock()
+	if _, ok := m.pipes[key]; ok {
+		if !sameSourceConfig(m.sources[key], source) {
+			m.mu.Unlock()
+			return fmt.Errorf("ingest: source identity already bound to another configuration")
+		}
+		m.mu.Unlock()
+		return nil
+	}
+	if saved, ok := m.state.Sources[key]; ok && len(saved.WALRefs) > 0 {
+		needHydrate = true
+	}
+	m.mu.Unlock()
+
+	// 锁外构造（仅当确实存在引用条目需要水合）。
+	var bodyLookup func(eventID string) (logtypes.Event, bool)
+	if needHydrate {
+		bodyLookup = m.eventBodyLookup(key)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// 重新校验：两段之间可能有并发登记抢先完成（原实现在同一次持锁内完成该判断）。
 	if _, ok := m.pipes[key]; ok {
 		if !sameSourceConfig(m.sources[key], source) {
 			return fmt.Errorf("ingest: source identity already bound to another configuration")
@@ -2767,6 +2799,14 @@ func (m *Manager) Register(source SourceConfig) error {
 			return err
 		}
 		if len(saved.WALRefs) > 0 {
+			// 兜底（N-2 两段式的正确性前提）：两段持锁之间状态可能被并发登记/持久化改写——
+			// 首段判定「不需要水合」，此刻却已出现引用条目。此时**就地构造**：
+			// `eventBodyLookup` 不取 `m.mu`（只读 `m.events`，见其注释），故无死锁风险；
+			// 代价仅是该次 O(段行数) 遍历落回锁内，而这是罕见竞态而非稳态路径。
+			// 绝不在此处用 nil 兜底函数了事——那会把「引用条目取不到正文」误记成真实数据丢失。
+			if bodyLookup == nil {
+				bodyLookup = m.eventBodyLookup(key)
+			}
 			// 引用形式（B1a）：内联条目直接恢复，引用条目按 EventID 从事件段存储水合。
 			missing := wal.RestoreMixed(saved.WAL, saved.WALRefs, bodyLookup)
 			if len(missing) > 0 {
