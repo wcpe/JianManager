@@ -3,6 +3,7 @@ package ledger
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 )
 
@@ -242,6 +243,79 @@ func foldedGapDetail(base string, victims int, start, end uint64) string {
 	return fmt.Sprintf("%s (%s %d 条同因缺口；区间 %d-%d)", base, gapFoldNote, victims, start, end)
 }
 
+// normalizeFoldSpans 归一化折叠子区间：按起点排序 + 合并相接/重叠项（同一口径 rangesTouch）。
+//
+// 为什么要归一化：折叠是**反复发生**的（每次越界折叠最旧一批），被折叠出的凸包条目可能在后续
+// 轮次里再次成为受害者——此时它的 FoldSpans 已是子区间集合，必须与新区间一起重新归一化，
+// 才能保持「子区间互不相接」的不变式（否则展开落凭据时会产出冗余的重叠凭据）。
+func normalizeFoldSpans(spans []PositionRange) []PositionRange {
+	if len(spans) == 0 {
+		return nil
+	}
+	out := append([]PositionRange(nil), spans...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].From == out[j].From {
+			return out[i].To < out[j].To
+		}
+		return out[i].From < out[j].From
+	})
+	kept := out[:1]
+	for _, sp := range out[1:] {
+		last := &kept[len(kept)-1]
+		if rangesTouch(last.From, last.To, sp.From, sp.To) {
+			if sp.To > last.To {
+				last.To = sp.To
+			}
+			continue
+		}
+		kept = append(kept, sp)
+	}
+	return kept
+}
+
+// DefaultMaxFoldSpansPerGap 是单个折叠缺口保留的精确子区间条数上限。
+//
+// 为什么必须有上限：折叠的**全部意义**是把单源缺口占用钉在常数级（见文件头：现场曾达
+// 5 万条/源）。若子区间列表无界，反复折叠会让它随故障规模线性增长 ⇒ 内存界失效，
+// 等于把刚修好的问题从「缺口条数」搬到了「子区间条数」。
+//
+// 取值：与 DefaultMaxUnresolvedGapsPerSource 同级（折叠只发生在越界时，单次最多并掉
+// excess+1 条）。触及上限时的退化方向**必须仍是保守的**——见 capFoldSpans。
+const DefaultMaxFoldSpansPerGap = DefaultMaxUnresolvedGapsPerSource
+
+// capFoldSpans 归一化并封顶精确子区间，返回 (子区间, 被合并掉的条数)。
+//
+// **触发上限时的退化方向（这是本函数唯一需要审慎的地方）**：把多余子区间并成一条**凸包**，
+// 该凸包会覆盖夹间健康位置。这看似与 LEDGER-2 的修复目标冲突，但两者优先级不同：
+//   - 内存有界是**硬约束**（无界会让进程 OOM，后果是整机失效）；
+//   - 凭据精确性是**正确性约束**，但只在「人工放弃」这一条路径上被消费，且退化后仍有
+//     显式痕迹（MergedSpans>0 写进 Detail 并计入观测），运维据此知道该凭据是粗粒度裁定。
+//
+// 也就是说：退化不是静默的，且只在极端规模（单缺口 >64 段精确子区间）下发生。
+func capFoldSpans(spans []PositionRange) ([]PositionRange, int) {
+	kept := normalizeFoldSpans(spans)
+	if len(kept) <= DefaultMaxFoldSpansPerGap {
+		return kept, 0
+	}
+	// 保留最新的若干段（与凭据裁剪同向：最新裁定最相关），其余并成一条凸包置于最前。
+	cut := len(kept) - (DefaultMaxFoldSpansPerGap - 1)
+	tail := kept[cut:]
+	head := PositionRange{From: kept[0].From, To: kept[cut-1].To}
+	out := make([]PositionRange, 0, DefaultMaxFoldSpansPerGap)
+	out = append(out, head)
+	out = append(out, tail...)
+	return normalizeFoldSpans(out), cut - 1
+}
+
+// gapEvidenceSpans 返回该缺口的**精确**证据区间：折叠产生的缺口按其子区间展开，其余缺口
+// 即其自身区间。放弃裁定的凭据必须按本函数逐段落，绝不用凸包冒充（LEDGER-2）。
+func gapEvidenceSpans(g Gap) []PositionRange {
+	if len(g.FoldSpans) == 0 {
+		return []PositionRange{{From: g.StartPos, To: g.EndPos}}
+	}
+	return append([]PositionRange(nil), g.FoldSpans...)
+}
+
 // enforceGapBoundsLocked 在登记/消解之后压缩缺口条数。调用方必须已持写锁。
 //
 // 两步（顺序固定，先折叠后裁剪）：
@@ -288,8 +362,19 @@ func (l *Ledger) foldUnresolvedGapsLocked(e *Entry) {
 		// 折叠最旧的 excess+1 条为一条，使组内条数回到上限。
 		victims := indexes[:excess+1]
 		merged := e.Gaps[victims[0]]
+		// **保留精确子区间**（LEDGER-2，2026-10-12 修复）：凸包只用于「区间只扩大不缩小」的
+		// 保守判据（WAL 完整性/重投范围），但**不得**被当作「这段全是永久丢失」的证据——
+		// 折叠前各受害者之间可能夹着健康位置。故在折叠时把每条受害者的原始区间记进被保留的
+		// 那条缺口（FoldSpans），供 AbandonGapsThrough 落凭据时逐段展开。
+		//
+		// 起点必须取 `merged` 的**精确子区间**而不是它的凸包（StartPos/EndPos）：反复折叠时
+		// merged 本身可能已是上一次折叠的产物，用凸包会把上次的夹间健康位置重新吞回来
+		// （实测形态：100 条缺口折叠后 spans 退化成 [{10,3869},{3970,3979}]，第 1 段即凸包）。
+		spans := gapEvidenceSpans(merged)
 		for _, index := range victims[1:] {
 			gap := e.Gaps[index]
+			// 同理：受害者自身可能也已折叠过，展开它的精确子区间。
+			spans = append(spans, gapEvidenceSpans(gap)...)
 			if gap.StartPos < merged.StartPos {
 				merged.StartPos = gap.StartPos
 			}
@@ -298,7 +383,13 @@ func (l *Ledger) foldUnresolvedGapsLocked(e *Entry) {
 			}
 			merged.Detail = mergedGapDetail(merged.Detail, gap.Detail, merged.StartPos, merged.EndPos)
 		}
+		merged.FoldSpans, merged.FoldSpanMerges = capFoldSpans(spans)
 		merged.Detail = foldedGapDetail(merged.Detail, len(victims), merged.StartPos, merged.EndPos)
+		if merged.FoldSpanMerges > 0 {
+			// 退化不得静默（见 FoldSpanMerges 的说明）：把粗粒度裁定的痕迹写进唯一的可读面。
+			merged.Detail = fmt.Sprintf("%s（精确子区间已合并 %d 段：该条目为粗粒度裁定，放弃时按整段记凭据）",
+				merged.Detail, merged.FoldSpanMerges)
+		}
 		merged.Resolved = false
 		merged.Resolution = ""
 		// 折叠区间占据第一个受害者的位置，只删除同因其余受害者，保留夹间审计与其他原因。

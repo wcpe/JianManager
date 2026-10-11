@@ -79,6 +79,20 @@ type Gap struct {
 	// ResolvedBy 是放弃裁定的操作人（来自调用方认证主体）。**必须非空**——放弃不可无痕，
 	// 见 Ledger.AbandonGapsThrough 的拒绝语义。
 	ResolvedBy string `json:"resolved_by,omitempty"`
+	// FoldSpans 是**折叠前**各条受害缺口的精确区间（LEDGER-2），仅当本条目由「超上限折叠」
+	// 产生时非空；StartPos/EndPos 此时是这些区间的**凸包**（只用于「可能未落库」的保守判据）。
+	//
+	// 为什么必须保留（2026-10-12 终审）：凸包会覆盖受害者之间的**健康位置**。放弃裁定
+	// （AbandonGapsThrough）按缺口区间逐字落 PERMANENTLY_LOST 凭据，若直接抄凸包，就会把
+	// 夹间的健康字节谎报成「永久丢失」——而凭据比缺口活得久（缺口会被裁剪），误报会长期留存，
+	// 运维据此可能重复补账。故落凭据时必须按 FoldSpans 逐段展开（见 AbandonGapsThrough）。
+	FoldSpans []PositionRange `json:"fold_spans,omitempty"`
+	// FoldSpanMerges 是 FoldSpans 因触及 DefaultMaxFoldSpansPerGap 而**被合并掉的段数**
+	// （>0 表示该折叠条目的子区间已退化：最旧若干段被并成一条凸包，可能覆盖夹间健康位置）。
+	//
+	// 为什么要显式记账：内存有界是硬约束，极端规模下退化不可避免；但退化**不得静默**——
+	// 运维读到非零值即知这条凭据是粗粒度裁定，需按区间整体复核，而不是逐段核对。
+	FoldSpanMerges int `json:"fold_span_merges,omitempty"`
 }
 
 func (l *Ledger) UnresolvedGapCount(key SourceKey) int {
@@ -265,11 +279,19 @@ func (l *Ledger) AbandonGapsThrough(key SourceKey, position uint64, ab GapAbando
 		gap.ResolvedAtUTC = at
 		gap.ResolvedBy = ab.Operator
 		// 每个实际空洞先分别留凭据，随后只合并相接/重叠项，不能用首尾凸包覆盖夹间健康位置。
-		entry.Abandonments = append(entry.Abandonments, GapAbandonment{
-			From: gap.StartPos, To: gap.EndPos, ReasonCode: reasonCode,
-			Reason: ab.Reason, Detail: ab.Detail,
-			Operator: ab.Operator, AtUTC: at, Through: position,
-		})
+		//
+		// **折叠过的缺口按精确子区间逐段展开**（LEDGER-2，2026-10-12 终审修复）：超上限折叠会把
+		// 多条离散缺口并成一条凸包（见 foldUnresolvedGapsLocked），其 StartPos/EndPos 会跨越
+		// 受害者之间的健康位置。若此处直接抄凸包，就是把健康字节谎报成「永久丢失」，而凭据
+		// 比缺口活得久（缺口会被 trimResolvedGapsLocked 裁掉）⇒ 误报长期留存，运维据此可能
+		// 重复补账。FoldSpans 非空时按它逐段落，语义与「每个实际空洞分别留凭据」完全一致。
+		for _, span := range gapEvidenceSpans(*gap) {
+			entry.Abandonments = append(entry.Abandonments, GapAbandonment{
+				From: span.From, To: span.To, ReasonCode: reasonCode,
+				Reason: ab.Reason, Detail: ab.Detail,
+				Operator: ab.Operator, AtUTC: at, Through: position,
+			})
+		}
 		resolved++
 	}
 	if resolved == 0 {

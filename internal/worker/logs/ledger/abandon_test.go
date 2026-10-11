@@ -346,3 +346,89 @@ func TestAutoResolveNeverMarksPermanentlyLost(t *testing.T) {
 		"自动消解不得伪装成放弃裁定")
 	require.Empty(t, entry.Abandonments, "自动路径不得产生放弃凭据")
 }
+
+// 回归（LEDGER-2，2026-10-12 终审修复）：折叠（超上限并成凸包）过的缺口被人工放弃时，
+// 凭据必须按**精确子区间**逐段落，绝不能用凸包把夹间健康位置谎报成「永久丢失」。
+//
+// 现场形态：单源同因未解决缺口 >64 条时，foldUnresolvedGapsLocked 把最旧一批并成**一条凸包**
+// （只扩大区间、保守方向，对「可能未落库」判据是对的）。但 AbandonGapsThrough 会按缺口区间逐字
+// 落 PERMANENTLY_LOST 凭据 ⇒ 直接抄凸包就把受害者之间的健康字节也登记成永久丢失。凭据比缺口
+// 活得久（缺口会被 trimResolvedGapsLocked 裁掉）⇒ 误报长期留存，运维据此可能重复补账。
+//
+// 为什么既有的 TestAbandonGapsKeepsDisjointEvidence 抓不到：那条用例的离散空洞是**同一格
+// Gaps 数组内的两条独立条目**（由 6b9d6b62 修复覆盖），而本用例的凸包是**折叠**产生的单条
+// 条目（FoldSpans 为空时它自称的区间就是凸包）。
+//
+// 转红方式（实测）：把 AbandonGapsThrough 的 `gapEvidenceSpans(*gap)` 换回
+// `[]{PositionRange{{From: gap.StartPos, To: gap.EndPos}}}`（即抄凸包，还原旧行为）
+// ⇒ 断言②（健康位置不得被凭据覆盖）立即红。
+func TestAbandonAfterFoldKeepsPreciseSpansNotHull(t *testing.T) {
+	led := New()
+	key := keyOf("fold-abandon", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
+
+	// 造 100 条互不相邻的同因缺口（各 10 字节，间隔 100 字节健康区）⇒ 触发折叠。
+	// 位置区间：第 i 条 = [10+i*110, 19+i*110]，则前 100 条的凸包必然跨越大量健康位置。
+	const victimCount = 100
+	const stride = 110
+	for i := 0; i < victimCount; i++ {
+		start := uint64(10 + i*stride)
+		require.NoError(t, led.RecordGap(key, start, start+9, GapReasonAppendRejected, "折叠夹具"))
+	}
+	require.NoError(t, led.AdvanceRead(key, 20000))
+	require.NoError(t, led.AdvanceDurable(key, 20000))
+
+	entry := led.Get(key)
+	require.LessOrEqual(t, len(entry.Gaps), DefaultMaxUnresolvedGapsPerSource+1,
+		"前置：未解决缺口必须已被折叠回上限附近")
+	// 找到那条折叠出来的凸包条目（FoldSpans 非空）。
+	var folded *Gap
+	for i := range entry.Gaps {
+		if len(entry.Gaps[i].FoldSpans) > 0 {
+			folded = &entry.Gaps[i]
+			break
+		}
+	}
+	require.NotNil(t, folded, "前置：应存在一条由折叠产生的缺口（FoldSpans 非空）")
+	require.Greater(t, len(folded.FoldSpans), 1, "前置：折叠条目的子区间应多于一条")
+
+	// 关键几何量：凸包跨度 vs 单段跨度。
+	// 折叠场景下凭据**必然被裁剪**（凭据上限 64；触发折叠时凭据总数 = 缺口数 > 64，
+	// mergeAndTrimAbandonmentsLocked 保留最新的 64 条），故凸包的绝大多数段会被裁掉。
+	// 这使「凭据是否抄了凸包」有一个无歧义的判据：**任何单条凭据的跨度都不得超过单段跨度**。
+	// 旧实现恰好留下一条跨度 = 整个凸包（3969 字节）的凭据 ⇒ 本断言转红。
+	hullSpan := folded.EndPos - folded.StartPos
+	var maxSpan uint64
+	for _, sp := range folded.FoldSpans {
+		if d := sp.To - sp.From; d > maxSpan {
+			maxSpan = d
+		}
+	}
+	require.Greater(t, hullSpan, maxSpan,
+		"前置：凸包跨度必须显著大于单段跨度（否则本用例无判别力）")
+
+	_, err := led.AbandonGapsThrough(key, 20000, GapAbandonment{Operator: "ops@example", Detail: "折叠后放弃"})
+	require.NoError(t, err)
+
+	// ① 核心断言：凭据跨度必须与**单段**同量级，绝不得出现一条横跨整个凸包的凭据。
+	for _, ab := range led.Get(key).Abandonments {
+		require.LessOrEqual(t, ab.To-ab.From, maxSpan,
+			"凭据 [%d,%d] 跨度 %d 超过单段跨度 %d ⇒ 抄用了折叠凸包（把夹间健康位置谎报成永久丢失）",
+			ab.From, ab.To, ab.To-ab.From, maxSpan)
+	}
+
+	// ② 更直观的等价断言：凸包内部任意一处健康位置都不得被凭据覆盖。
+	// 取倒数第二段的尾部健康位（它紧邻最后一段，且不被任何合法凭据覆盖）。
+	require.GreaterOrEqual(t, len(folded.FoldSpans), 2)
+	secondLast := folded.FoldSpans[len(folded.FoldSpans)-2]
+	healthPos := secondLast.To + 50
+	require.Less(t, healthPos, folded.EndPos, "前置：healthPos 必须落在凸包区间内部")
+	_, coveredHealth := led.AbandonmentsCovering(key, healthPos)
+	require.False(t, coveredHealth,
+		"折叠凸包内的夹间健康位置不得被登记为永久丢失（凭据必须按 FoldSpans 精确展开）")
+
+	// ③ 凭据必须精确覆盖真实空洞段：取最後一段（裁剪后必然幸存的那段）验证正向可达。
+	lastSpan := folded.FoldSpans[len(folded.FoldSpans)-1]
+	_, coveredReal := led.AbandonmentsCovering(key, lastSpan.From)
+	require.True(t, coveredReal, "真实空洞位置必须有放弃凭据（末段 [%d,%d]）", lastSpan.From, lastSpan.To)
+}
