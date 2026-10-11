@@ -191,8 +191,8 @@ func TestVerifyPartialChunksReportOnlyPassedRanges(t *testing.T) {
 	m, err := New(Options{Root: t.TempDir(), VL: client, Catalog: catalog.New(journal), Journal: journal})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = m.Stop() })
-	m.verifyChunkEvents = 2          // 每簇 2 条 ⇒ 4 簇（精确控制哪一簇失败）
-	m.verifyChunkConcurrency = 1     // 串行：让"第 3 簇失败"的判定确定（并发下取消顺序不确定）
+	m.verifyChunkEvents = 2      // 每簇 2 条 ⇒ 4 簇（精确控制哪一簇失败）
+	m.verifyChunkConcurrency = 1 // 串行：让"第 3 簇失败"的判定确定（并发下取消顺序不确定）
 	m.verificationTimeout = 300 * time.Millisecond
 	m.verifyBackoffMin, m.verifyBackoffMax = 5*time.Millisecond, 5*time.Millisecond
 	m.verifyMaxQueriesPerChunk = 2 // 每簇 2 次尝试即放弃 ⇒ 用例快而不放大失败簇
@@ -310,7 +310,7 @@ func TestVerifyPartialProgressIsRecordedForNextRound(t *testing.T) {
 //  3. **常量预算优先**：上限低于运维显式配置的 round_budget 时，不得回头压低常量预算。
 //
 // 变异验证（实测见回复）：去掉 `if scaled > max { scaled = max }` 的封顶 ⇒ 性质 2 转红
-//（272 簇 × 17s × 1.5 ≈ 115 分钟 ≫ 5 分钟上限）。
+// （272 簇 × 17s × 1.5 ≈ 115 分钟 ≫ 5 分钟上限）。
 func TestVerifyChunkBudgetScalesWithEventsBoundedByMax(t *testing.T) {
 	journal := catalog.NewMemJournal()
 	m, err := New(Options{Root: t.TempDir(), Catalog: catalog.New(journal), Journal: journal})

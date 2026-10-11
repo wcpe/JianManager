@@ -659,27 +659,27 @@ func TestMetric_PurgeBatch_RetentionBoundariesUnchanged(t *testing.T) {
 	// raw：保留 48h。
 	require.NoError(t, svc.db.Create(&[]model.MetricSampleRaw{
 		{SeriesID: 1, TS: now.Add(-metricRawRetention).Add(-time.Second), Value: &five}, // 删
-		{SeriesID: 1, TS: now.Add(-metricRawRetention), Value: &five},                     // 留（边界）
-		{SeriesID: 1, TS: now.Add(-time.Second), Value: &five},                            // 留
+		{SeriesID: 1, TS: now.Add(-metricRawRetention), Value: &five},                   // 留（边界）
+		{SeriesID: 1, TS: now.Add(-time.Second), Value: &five},                          // 留
 	}).Error)
 
 	// 5m：保留 30d。
 	require.NoError(t, svc.db.Create(&[]model.MetricRollup5m{
 		{SeriesID: 1, BucketTS: now.Add(-metric5mRetention).Add(-time.Second), Count: 1}, // 删
-		{SeriesID: 1, BucketTS: now.Add(-metric5mRetention), Count: 1},                    // 留（边界）
+		{SeriesID: 1, BucketTS: now.Add(-metric5mRetention), Count: 1},                   // 留（边界）
 	}).Error)
 
 	// 1h：保留 400d。
 	require.NoError(t, svc.db.Create(&[]model.MetricRollup1h{
 		{SeriesID: 1, BucketTS: now.Add(-metric1hRetention).Add(-time.Second), Count: 1}, // 删
-		{SeriesID: 1, BucketTS: now.Add(-metric1hRetention), Count: 1},                    // 留（边界）
+		{SeriesID: 1, BucketTS: now.Add(-metric1hRetention), Count: 1},                   // 留（边界）
 	}).Error)
 
 	// 进程快照：保留 48h（跟 raw 同口径）。
 	require.NoError(t, svc.db.Create(&[]model.ProcessMetricSnapshot{
 		{NodeUUID: "n", InstanceUUID: "i", PID: 1, SampledAt: now.Add(-metricRawRetention).Add(-time.Second)}, // 删
-		{NodeUUID: "n", InstanceUUID: "i", PID: 2, SampledAt: now.Add(-metricRawRetention)},                    // 留（边界）
-		{NodeUUID: "n", InstanceUUID: "i", PID: 3, SampledAt: now.Add(-time.Second)},                           // 留
+		{NodeUUID: "n", InstanceUUID: "i", PID: 2, SampledAt: now.Add(-metricRawRetention)},                   // 留（边界）
+		{NodeUUID: "n", InstanceUUID: "i", PID: 3, SampledAt: now.Add(-time.Second)},                          // 留
 	}).Error)
 
 	require.NoError(t, svc.purge(now))

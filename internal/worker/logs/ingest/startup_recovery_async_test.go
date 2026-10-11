@@ -285,6 +285,7 @@ func captureSlogOutput(buf *bytes.Buffer) func() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	return func() { slog.SetDefault(prev) }
 }
+
 // 「同一来源、同一天」不得被无界重复重发。
 //
 // 现场形态（`.tmp/logs-perf-20261009/startup-replay/timeline-148.txt`）：inst:148/file 的

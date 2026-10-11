@@ -172,7 +172,7 @@ func RateLimitClassByPrefix(rules ...RateLimitPrefixRule) RateLimitClassOfFunc {
 // RateLimitByRouteClass 按「路由分类 × 客户端 IP」分桶的限流中间件，并保留跨分类的每 IP 总上限。
 //
 // 为什么需要按分类分桶（2026-10-09 生产实证）：原先整个 /api/v1 共用一个 per-IP 桶
-//（10 请求/秒、容量 20）。而应用外壳的一页加载本身就是多请求扇出——实测浏览器 IP 在
+// （10 请求/秒、容量 20）。而应用外壳的一页加载本身就是多请求扇出——实测浏览器 IP 在
 // 加载实例页的 2 秒内发出约 30–60 次请求（/instances、/instances/{id}、/instances/aggregate），
 // 直接把整桶吃满，落在同一桶里的日志页请求随即被 429 连坐（单秒 320 次请求中 297 次 429）。
 // 按分类分桶让「一页的合法扇出」不再与「别的页面的轮询」互相挤占。

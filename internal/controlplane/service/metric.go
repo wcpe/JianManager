@@ -1346,7 +1346,6 @@ func (s *MetricService) purge(now time.Time) error {
 	return s.purgeByIDCursor(&model.ProcessMetricSnapshot{}, "sampled_at", now.Add(-metricRawRetention))
 }
 
-
 // Start 启动后台卷积/清理循环（每 5min，复用 scheduler 式后台 goroutine）。
 func (s *MetricService) Start() {
 	s.mu.Lock()
