@@ -359,7 +359,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 	// （selectKeys 按 dayOverlapsRange 过滤掉窗口外的分区）⇒ 迭代视图目标永远看不到它。
 	//
 	// record=true：此刻视图尚未登记（下面的 p.views[...] 还没执行）⇒ 无并发读者，可安全写回。
-	p.coverEmptyAuthorizedTargets(req, view, &res, true)
+	p.coverEmptyAuthorizedTargets(req, view, &res)
 	if !req.Transient {
 		p.mu.Lock()
 		p.pruneViewsLocked()
@@ -387,10 +387,10 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 // 找不到可查记录的授权目标**保持未就绪**（不发明空成功）：worker 侧无法区分「该源在本 Worker
 // 上没有记录」与「窗口内无数据」，宁可让 CP 判 missing_coverage，也不把「不知道」粉饰成「空」。
 //
-// record 只在创建路径置位（视图尚未登记 ⇒ 无并发读者）：把结果写回视图，使固定视图复用路径
-// （planRangesForView）能产出同一条覆盖。复用路径持有的是共享视图（在 p.mu 之外被并发请求读），
-// 就地改写即数据竞争，故一律只写本次响应的覆盖。
-func (p *Planner) coverEmptyAuthorizedTargets(req PlanRequest, view *QueryView, res *PlanResult, record bool) {
+// 只在**创建路径**调用（视图尚未登记 ⇒ 无并发读者），故结果一律写回视图：写回后
+// planRangesForView 能原样复用同一条空成功覆盖；**复用路径绝不再调用本函数**（F1：
+// 那里补空会把「有数据未读」粉饰成「空」，见 planRangesForView 的论证）。
+func (p *Planner) coverEmptyAuthorizedTargets(req PlanRequest, view *QueryView, res *PlanResult) {
 	if len(req.TargetIDs) == 0 {
 		// 未指定授权目标 = 本 Worker 全部 Catalog 分区：没有分区就没有目标，不发明覆盖。
 		return
@@ -426,12 +426,10 @@ func (p *Planner) coverEmptyAuthorizedTargets(req PlanRequest, view *QueryView, 
 		cov := TargetCoverage{TargetID: auth, State: CoverageSuccess}
 		res.Coverage.AddTarget(cov)
 		covered[auth] = true
-		if record {
-			view.TargetCoverage[auth] = cov
-			// 登记进 TargetIDs：planRangesForView 按它产出同一条覆盖；它不在 QueryableTargets 里，
-			// 故走「不可查」分支 ⇒ 只给覆盖、不给 range（空 = 结果里 0 行）。
-			view.TargetIDs = append(view.TargetIDs, auth)
-		}
+		view.TargetCoverage[auth] = cov
+		// 登记进 TargetIDs：planRangesForView 按它产出同一条覆盖；它不在 QueryableTargets 里，
+		// 故走「不可查」分支 ⇒ 只给覆盖、不给 range（空 = 结果里 0 行）。
+		view.TargetIDs = append(view.TargetIDs, auth)
 	}
 }
 
@@ -628,12 +626,57 @@ func (p *Planner) planRangesForView(req PlanRequest, view *QueryView, res *PlanR
 			Projection:       ref.Projection,
 		})
 	}
-	// 复用路径同样要补「窗口内无分区的授权目标」的空成功覆盖：创建路径已把结果记进视图，
-	// 上面的主循环会原样复用（条目已在 view.TargetCoverage 里）；这里再兜一次本请求新出现的
-	// 授权目标（视图冻结后授权集合可能收窄/变化，见 M-9 的收窄语义）。
-	// record=false：view 是共享对象、在 p.mu 之外被并发请求读，绝不能就地改写。
-	p.coverEmptyAuthorizedTargets(req, view, res, false)
+	// 复用路径的**未规划授权目标**必须显式上报「未就绪」（F1，2026-10-12 终审修复）：
+	// 既不得补空成功、也不得沉默——详见 markUnplannedAuthorizedTargetsForReuse 的论证
+	// （沉默会被 CP 按 readiness 判 success，与补空成功是同一个后果）。
+	p.markUnplannedAuthorizedTargetsForReuse(req, view, res)
 	assertDisjoint(res.Ranges)
+}
+
+// markUnplannedAuthorizedTargetsForReuse 为本请求授权、但**当前视图无法服务**的目标显式并入
+// 「未就绪」覆盖（F1，2026-10-12 终审修复）。
+//
+// 什么目标会落到这里：视图在创建时按当时的 Catalog 定死了 TargetIDs/TargetCoverage；此后才
+// 出现的可查目标不在其中——① 视图创建后新源开始写日志；② 复用请求把授权集合**放宽**。
+// 这两种情形下主循环不会为它产出任何 range ⇒ **本次查询从未读过它的行**。
+//
+// 为什么两条路都堵死（缺一不可）：
+//   - **不得**补 CoverageSuccess ✗：那是把「有数据未读」粉饰成「空」，`res.Coverage` 会判
+//     complete=true ⇒ CP 的 BuildCoverage 放行 ⇒ 导出附件「完整」却静默缺失该源；
+//   - **也不得**保持沉默 ✗（实测教训，2026-10-12）：CP 侧 `absentTargetReasons` 在**响应非空**时
+//     返回 nil，`CoverageFromReadiness` 随即给 `ReadyOnline` 的目标判 success
+//     （targets_absent_test.go 固定的既有语义：未出现 = 该目标无数据）⇒ 沉默会被读成「空成功」，
+//     与补空成功是**同一个后果**，只是粉饰从 Worker 挪到了 CP。
+//     ⇒ 唯一正确处置是**显式并入 CoverageNotReady**，让 CP 的 BuildCoverage 判 coverage_incomplete。
+//
+// 与创建路径的空成功口径不冲突：创建路径补 success 的前提是「此刻 Catalog 里确实查到了可查
+// 记录」，证明的是**当下就能核验**的「该源在窗口内无分区」；复用路径的目标连「能不能读」都随
+// 视图冻结而未知 ⇒ 按 fail-closed 判未就绪，与「宁可判 missing_coverage，也不把不知道粉饰成空」同口径。
+//
+// 只写本次响应：view 是共享对象、在 p.mu 之外被并发请求读，绝不就地改写。
+func (p *Planner) markUnplannedAuthorizedTargetsForReuse(req PlanRequest, view *QueryView, res *PlanResult) {
+	if len(req.TargetIDs) == 0 {
+		// 未指定授权目标 = 本 Worker 全部 Catalog 分区：没有目标可点名，不发明覆盖。
+		return
+	}
+	covered := make(map[string]bool, len(view.TargetCoverage)*2)
+	for id := range view.TargetCoverage {
+		covered[id] = true
+		if key, ok := parseTargetKey(id); ok {
+			covered[key.StorageNamespace] = true
+			covered[key.UTCDay] = true
+		}
+	}
+	for _, auth := range req.TargetIDs {
+		if auth == "" || covered[auth] {
+			continue
+		}
+		res.Coverage.AddTarget(TargetCoverage{
+			TargetID: auth,
+			State:    CoverageNotReady,
+			Reasons:  []string{ReasonRangeUnavailable},
+		})
+	}
 }
 
 // selectKeys 按授权目标 + 时间范围筛选 Catalog 分区键。
