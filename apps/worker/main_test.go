@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 )
 
@@ -331,5 +334,76 @@ func assertNoTempExportLeftovers(t *testing.T, dir string) {
 		if strings.Contains(entry.Name(), ".tmp-") {
 			t.Fatalf("导出目录残留临时文件 %q", entry.Name())
 		}
+	}
+}
+
+// 回归（INGEST-12 可达面，2026-10-12 终审修复）：兜底环读数的打点面必须**真的包含**
+// 三档自愈步的实发次数与耗时——尤其是「破环直投」步（`DirectDeliverProbes` /
+// `NsRollingDirectDeliver`）。
+//
+// 为什么需要这条守门：本仓纪律是「任何新增导出必须同批带可达面 + 可达性红证」
+// （用户 2026-10-05 定的）。而 INGEST-12 首次修复**违反了自己引用的这条纪律**——
+// `sweepDirectDeliverProbes` / `nsRollingDirectDeliver` 两个探针在 9091 行落了值、
+// 在 ResumeSweepStats 里也导出了，但**没有任何外部读者**：打点行里根本没有它们，
+// 于是"该步在兜底环诊断里不可见"这个原始诉求实际未被解决（修了缺陷也无人能观测）。
+//
+// 转红方式（实测）：删掉 `sweepStatsLogAttrs` 里任一 `*_probes` 键（例如把
+// `"direct_deliver_probes", st.DirectDeliverProbes,` 整行删除）⇒ 对应断言立即红。
+func TestSweepStatsLogAttrsExposeAllSelfHealSteps(t *testing.T) {
+	st := ingest.ResumeSweepStats{
+		SweepTicks:             7,
+		SweepPanics:            0,
+		EligibleNow:            3,
+		RollingProbes:          11,
+		NsRolling:              22_000_000, // 22ms
+		DeliveryProbes:         12,
+		NsRollingDelivery:      33_000_000, // 33ms
+		DirectDeliverProbes:    13,
+		NsRollingDirectDeliver: 44_000_000, // 44ms
+	}
+	attrs := sweepStatsLogAttrs(st)
+
+	// 摊平成 key → value，便于按名断言（也顺带验证「键值对成对」这一 slog 前置条件）。
+	require.Equal(t, 0, len(attrs)%2, "slog 键值对必须成对（奇数个参数会让 slog 打 !BADKEY）")
+	byKey := make(map[string]any, len(attrs)/2)
+	for i := 0; i < len(attrs); i += 2 {
+		key, ok := attrs[i].(string)
+		require.True(t, ok, "第 %d 个参数必须是键（字符串），实际 %T", i, attrs[i])
+		byKey[key] = attrs[i+1]
+	}
+
+	// 三档自愈步：次数 + 耗时（ms）都必须可达。
+	for _, want := range []struct {
+		probesKey string
+		msKey     string
+		probes    int64
+		ms        int64
+	}{
+		{"rolling_probes", "ms_rolling", st.RollingProbes, st.NsRolling / 1e6},
+		{"delivery_probes", "ms_rolling_delivery", st.DeliveryProbes, st.NsRollingDelivery / 1e6},
+		{"direct_deliver_probes", "ms_rolling_direct_deliver", st.DirectDeliverProbes, st.NsRollingDirectDeliver / 1e6},
+	} {
+		got, ok := byKey[want.probesKey]
+		require.True(t, ok,
+			"打点面缺 %q：该探针将重新变成「只有定义、没有读者」的不可达导出（INGEST-12 的原始诉求）",
+			want.probesKey)
+		require.Equal(t, want.probes, got, "%s 必须原样透出探针值", want.probesKey)
+
+		gotMs, ok := byKey[want.msKey]
+		require.True(t, ok, "打点面缺耗时 %q（只报次数无法判「该步是否又在拖慢整轮」）", want.msKey)
+		require.Equal(t, want.ms, gotMs, "%s 必须按 ms 透出耗时", want.msKey)
+	}
+
+	// 心跳哨兵与既有读数不得在重构中丢失（本次把整段抽成函数，属高风险改动面）。
+	for _, key := range []string{
+		"ticks", "panics", "eligible", "skip_blocked",
+		"ms_delivery", "ms_resolve", "ms_evaluate", "ms_round_total", "last_round_sources",
+		"ms_round_other", "ms_scan_elig", "ms_backlog_total", "ms_sync_quota", "ms_other_rest",
+		"ms_wait_backlog_max", "ms_wait_quota_max", "ms_wait_sources_max", "ms_wait_resume_max",
+		"inflight", "skip_inflight_cap", "candidates", "revived",
+		"skip_backpressure", "skip_hysteresis", "skip_enumeration", "rising_streak",
+	} {
+		_, ok := byKey[key]
+		require.True(t, ok, "抽取 sweepStatsLogAttrs 时丢失了既有读数 %q", key)
 	}
 }

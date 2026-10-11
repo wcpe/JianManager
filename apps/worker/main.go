@@ -1596,6 +1596,66 @@ func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) 
 //
 // 为什么需要（2026-10-05 用户点名 ✗✓）：`ResumeDiagnostics` 一度**只有定义与测试引用** ⇒
 // 生产不可达 ⇒ 现场只能靠 SQL 反推"清零却仍暂停" ✗。接在同一条分钟打点上，读数即日志 ✓。
+// sweepStatsLogAttrs 把兜底环读数摊成 slog 的键值对（**抽成纯函数以便单测**）。
+//
+// 为什么必须抽出来（INGEST-12 复核，2026-10-12）：本仓纪律是「任何新增导出必须同批带
+// 可达面 + 可达性红证」（用户 2026-10-05 定的，见 sampleResumeDiagnostics 内的注释）。
+// 而 RollingProbes / DeliveryProbes / DirectDeliverProbes 三个字段此前**只有定义、没有任何
+// 外部读者**——include 在本函数返回的键值对里，才让 "导出 → 可达面" 这条链闭合，
+// 也才能被 apps/worker 的单测直接断言（否则打点埋在 ticker 循环里，无法测）。
+//
+// 语义分三组：
+//   - 心跳/门哨兵：ticks 不涨即环停；panics 非零即环崩过；
+//   - 跳过原因分类：现场"41 家为何不动"的直接答案；
+//   - 耗时与在飞：单轮耗时按四相拆解 + 逐相最长 m.mu 等待 + 在飞定界；
+//   - 三档自愈步实发次数与耗时：都带 O(1) 欠账前置 ⇒「次数 × 耗时」即成本定界的直接证据。
+func sweepStatsLogAttrs(st ingest.ResumeSweepStats) []any {
+	return []any{
+		"ticks", st.SweepTicks, "panics", st.SweepPanics, // 门哨兵：ticks 不涨 ⇒ 环停了
+		"eligible", st.EligibleNow, // gauge：合格暂停源总数 ⇒ 与累计 candidates 并读看出覆盖进度
+		"skip_blocked", st.SkipBlocked, // 有界等待超时次数 ⇒ 现场判"是否被 m.mu 挡住"
+		// 耗时读数：三步各 ms + 每轮 ms + 上轮源数 ⇒ avg=round/sources 一眼可算。
+		"ms_delivery", st.NsDelivery / 1e6, "ms_resolve", st.NsResolve / 1e6,
+		"ms_evaluate", st.NsEvaluate / 1e6, "ms_round_total", st.NsRoundTotal / 1e6,
+		"last_round_sources", st.LastRoundSources,
+		// **三步之外（"其它"）**（2026-10-05 分型结论）：现场单轮 395s 而三步合计仅 1.2s（0.31%）
+		// ⇒ 99.7% 藏在**未计时的那部分**（每轮全量遍历：sweepBacklogTotal / 资格扫描+排序 /
+		// syncRecoveryQuota）⇒ 这一项定性后即可对号入座。
+		"ms_round_other", (st.NsRoundTotal - st.NsDelivery - st.NsResolve - st.NsEvaluate) / 1e6,
+		// 四相下探：三相各 ms + 派生"其余"。
+		"ms_scan_elig", st.NsScanElig / 1e6,
+		"ms_backlog_total", st.NsBacklogTotal / 1e6,
+		"ms_sync_quota", st.NsSyncQuota / 1e6,
+		"ms_other_rest", (st.NsRoundTotal - st.NsDelivery - st.NsResolve - st.NsEvaluate -
+			st.NsScanElig - st.NsBacklogTotal - st.NsSyncQuota) / 1e6,
+		// 逐相"最长单次 m.mu 等待"ms。
+		"ms_wait_backlog_max", st.MuWaitBacklogMax / 1e6,
+		"ms_wait_quota_max", st.MuWaitQuotaMax / 1e6,
+		"ms_wait_sources_max", st.MuWaitSourcesMax / 1e6,
+		"ms_wait_resume_max", st.MuWaitResumeMax / 1e6,
+		// 在飞定界：在飞数逼近上限 ⇒ 叠加压力大（应查被谁挡住）。
+		"inflight", st.InFlight, "skip_inflight_cap", st.SkipInflightCap,
+		"candidates", st.Candidates, "revived", st.Revived,
+		"skip_backpressure", st.SkipBackpressure,
+		"skip_hysteresis", st.SkipHysteresis,
+		"skip_enumeration", st.SkipEnumeration,
+		"rising_streak", st.RisingStreak,
+		// **轮转窗口内三档自愈步的实发次数与耗时**（#66-⑤/⑥、#179-②、INGEST-12）：
+		// 这三步都带 O(1) 欠账前置（无欠账不发起），故「次数 × 耗时」就是**成本定界的直接证据**：
+		//   - rolling：只滚动/补段（⑤）；
+		//   - delivery：有界投递步（⑥）；
+		//   - direct_deliver：**破环直投**——含 Ledger 深克隆 + WAL 全量快照 + 同步 VL 写，
+		//     是把单轮拖到 48.5 分钟的 O(n) 重活所在步 ⇒ 其耗时是「兜底环是否又被它拖住」的
+		//     第一手读数（INGEST-12 把它纳入有界执行器后，据此可验证"每轮有界"是否真的成立）。
+		// 为什么必须显式打出来：本仓纪律要求「新增导出必须同批带可达面 + 可达性红证」，
+		// 而这三个字段此前只有定义、没有任何外部读者 ⇒ 修了缺陷也无人能观测。
+		"rolling_probes", st.RollingProbes, "ms_rolling", st.NsRolling / 1e6,
+		"delivery_probes", st.DeliveryProbes, "ms_rolling_delivery", st.NsRollingDelivery / 1e6,
+		"direct_deliver_probes", st.DirectDeliverProbes,
+		"ms_rolling_direct_deliver", st.NsRollingDirectDeliver / 1e6,
+	}
+}
+
 func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 	if manager == nil {
 		return
@@ -1636,36 +1696,7 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 			// ⇒ 环挂住/空闲时**整行都不打** ⇒ "没有行"与"环挂了"在外部**无法区分** ✗✗。
 			// 心跳的意义就是"**无需其它任何计数即可判读**" ✓ ⇒ 只要环跑过就每分钟打一行（ticks 不涨即环停 ✓）。
 			if st.SweepTicks > 0 {
-				slog.Info("兜底环读数",
-					"ticks", st.SweepTicks, "panics", st.SweepPanics, // 门哨兵：ticks 不涨 ⇒ 环停了 ✓
-					"eligible", st.EligibleNow, // gauge：合格暂停源总数 ⇒ 与累计 candidates 并读看出覆盖进度 ✓
-					"skip_blocked", st.SkipBlocked, // 有界等待超时次数 ⇒ 现场判"是否被 m.mu 挡住" ✓
-					// 耗时读数（新账 1 ✓）：三步各 ms + 每轮 ms + 上轮源数 ⇒ avg=round/sources 一眼可算 ✓。
-					"ms_delivery", st.NsDelivery/1e6, "ms_resolve", st.NsResolve/1e6,
-					"ms_evaluate", st.NsEvaluate/1e6, "ms_round_total", st.NsRoundTotal/1e6,
-					"last_round_sources", st.LastRoundSources,
-					// **三步之外（"其它"）**（2026-10-05 分型结论 ✓）：现场单轮 395s 而三步合计仅 1.2s（0.31% ✗）
-					// ⇒ 99.7% 藏在**未计时的那部分**（每轮全量遍历：`sweepBacklogTotal` / 资格扫描+排序 /
-					// `syncRecoveryQuota` ✓）⇒ 这一项定性后即可对号入座 ✓。
-					"ms_round_other", (st.NsRoundTotal-st.NsDelivery-st.NsResolve-st.NsEvaluate)/1e6,
-					// 四相下探（2026-10-05 ✓）：三相各 ms + 派生"其余" ✓。
-					"ms_scan_elig", st.NsScanElig/1e6,
-					"ms_backlog_total", st.NsBacklogTotal/1e6,
-					"ms_sync_quota", st.NsSyncQuota/1e6,
-					"ms_other_rest", (st.NsRoundTotal-st.NsDelivery-st.NsResolve-st.NsEvaluate-
-						st.NsScanElig-st.NsBacklogTotal-st.NsSyncQuota)/1e6,
-					// 逐相"最长单次 m.mu 等待"ms（支 A 直接点名该相 ✓）。
-					"ms_wait_backlog_max", st.MuWaitBacklogMax/1e6,
-					"ms_wait_quota_max", st.MuWaitQuotaMax/1e6,
-					"ms_wait_sources_max", st.MuWaitSourcesMax/1e6,
-					"ms_wait_resume_max", st.MuWaitResumeMax/1e6,
-					// 在飞定界（新账 2 ✓）：在飞数逼近上限 ⇒ 叠加压力大（应查被谁挡住 ✓）。
-					"inflight", st.InFlight, "skip_inflight_cap", st.SkipInflightCap,
-					"candidates", st.Candidates, "revived", st.Revived,
-					"skip_backpressure", st.SkipBackpressure,
-					"skip_hysteresis", st.SkipHysteresis,
-					"skip_enumeration", st.SkipEnumeration,
-					"rising_streak", st.RisingStreak)
+				slog.Info("兜底环读数", sweepStatsLogAttrs(st)...)
 			}
 			// 自愈失败原因（有界、新→旧 ✓）：**与读数同批打**，别让它成为"值可读但没人看" ✗。
 			if rs := manager.SelfFailureReasons(); len(rs) > 0 {
