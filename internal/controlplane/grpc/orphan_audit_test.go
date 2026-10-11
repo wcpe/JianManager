@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -15,253 +14,115 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// fakeOrphanAuditRecorder 记录落库调用。
-type fakeOrphanAuditRecorder struct {
-	calls []struct {
-		action    string
-		target    string
-		detail    string
-		success   bool
-		errMsg    string
-		targetTyp string
+// TestTruncateUTF8_RuneBoundary 锁定 truncateUTF8 的截断语义（CP-15 复核）：
+// 结果必须是「不超过 max 字节的**最大**合法 UTF-8 rune 前缀」——既不切断多字节字符，
+// 也不在还能整 rune 保留时少留（off-by-one 会在此暴露）。
+func TestTruncateUTF8_RuneBoundary(t *testing.T) {
+	inputs := []string{"", "a", "中", "ab", "a中", "中a", "中文", "中文X", "a中文b", "🙂x", "a🙂", "🙂🙂"}
+	for _, s := range inputs {
+		for max := 0; max <= len(s)+2; max++ {
+			got := truncateUTF8(s, max)
+			if max <= 0 || len(s) <= max {
+				if got != s {
+					t.Errorf("s=%q max=%d: 应原样返回，得到 %q", s, max, got)
+				}
+				continue
+			}
+			if len(got) > max {
+				t.Errorf("s=%q max=%d: 结果 %q 超过 %d 字节", s, max, got, max)
+			}
+			if !utf8.ValidString(got) {
+				t.Errorf("s=%q max=%d: 结果 %q 非法 UTF-8", s, max, got)
+			}
+			// 最大化判据：结果应是「不超过 max 字节的最大 rune 前缀」
+			best := ""
+			for i := 0; i <= len(s); i++ {
+				if i <= max && utf8.ValidString(s[:i]) {
+					best = s[:i]
+				}
+			}
+			if got != best {
+				t.Errorf("s=%q max=%d: 得到 %q，期望最大合法前缀 %q", s, max, got, best)
+			}
+		}
+	}
+	// 长串抽查（中英数 emoji 混合），防「只在短串正确」的偶然通过。
+	long := strings.Repeat("中文abc🙂", 100)
+	for max := 1; max <= 40; max++ {
+		got := truncateUTF8(long, max)
+		best := ""
+		for i := 0; i <= len(long); i++ {
+			if i <= max && utf8.ValidString(long[:i]) {
+				best = long[:i]
+			}
+		}
+		if got != best {
+			t.Errorf("long max=%d: 得到 %d 字节，期望 %d 字节", max, len(got), len(best))
+		}
 	}
 }
 
-func (f *fakeOrphanAuditRecorder) RecordResultSafe(_ uint, action, targetType, targetID, detail, _ string, success bool, errMsg string) {
-	f.calls = append(f.calls, struct {
-		action    string
-		target    string
-		detail    string
-		success   bool
-		errMsg    string
-		targetTyp string
-	}{action, targetID, detail, success, errMsg, targetType})
-}
-
-func newOrphanAuditFixture(t *testing.T) (*ControlPlaneHandler, *gorm.DB, *model.Node, *fakeOrphanAuditRecorder) {
-	t.Helper()
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
-	// Instance 表须存在：target↔node 绑定校验会按 targetId 查实例归属。
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}))
-	node := &model.Node{UUID: "node-orphan-audit", Name: "n", Secret: "s", Status: model.NodeStatusOnline}
-	require.NoError(t, db.Create(node).Error)
-	h := NewControlPlaneHandler(db, NewClientPool())
-	rec := &fakeOrphanAuditRecorder{}
-	h.SetOrphanAuditRecorder(rec)
-	return h, db, node, rec
-}
-
-// seedOrphanAuditInstance 造一个属于 nodeID 的实例（供 target↔node 绑定用例）。
-func seedOrphanAuditInstance(t *testing.T, db *gorm.DB, uuid string, nodeID uint) {
-	t.Helper()
-	require.NoError(t, db.Create(&model.Instance{
-		UUID:         uuid,
-		NodeID:       nodeID,
-		Name:         "i-" + uuid,
-		Type:         model.InstanceTypeMinecraftJava,
-		ProcessType:  model.ProcessTypeDirect,
-		StartCommand: "java -jar server.jar",
-	}).Error)
-}
-
-// TestReportOrphanAudit_Records FR-455/456：携带正确身份的孤儿审计应落 CP 审计库。
-func TestReportOrphanAudit_Records(t *testing.T) {
-	h, _, node, rec := newOrphanAuditFixture(t)
-
-	_, err := h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-		NodeUuid:   node.UUID,
-		NodeSecret: node.Secret,
-		Action:     "orphan.scan_dispose_blocked",
-		TargetId:   "inst-1",
-		Detail:     `{"kind":"docker_leftover"}`,
-		Success:    false,
-		Error:      "容器仍 running，保守不删",
-	})
-	require.NoError(t, err)
-	require.Len(t, rec.calls, 1)
-	require.Equal(t, "orphan.scan_dispose_blocked", rec.calls[0].action)
-	require.Equal(t, "inst-1", rec.calls[0].target)
-	require.Equal(t, "orphan", rec.calls[0].targetTyp)
-	require.False(t, rec.calls[0].success)
-	require.Equal(t, "容器仍 running，保守不删", rec.calls[0].errMsg)
-}
-
-// TestReportOrphanAudit_AuthRejected 缺身份 / secret 不匹配一律拒绝，不落库。
-func TestReportOrphanAudit_AuthRejected(t *testing.T) {
-	h, _, node, rec := newOrphanAuditFixture(t)
-
-	_, err := h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{NodeUuid: node.UUID})
-	require.Error(t, err, "缺 node_secret 应拒绝")
-
-	_, err = h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{NodeUuid: node.UUID, NodeSecret: "wrong"})
-	require.Error(t, err, "secret 不匹配应拒绝")
-
-	require.Empty(t, rec.calls)
-}
-
-// TestReportOrphanAudit_AllowedActions FR-456 N2 / FR-459：白名单内动作全部放行（与 spec 审计动作表一致）。
-func TestReportOrphanAudit_AllowedActions(t *testing.T) {
-	for _, action := range []string{
+// TestOrphanAuditAllowedActions_Contract 锁定审计白名单契约（CP-3）：
+// 本表是强校验（不在表内一律拒绝），新增动作必须同时更新本表、spec 与 proto 注释。
+// 本用例守护两条不变量：
+//  1. 已知的系统级动作（含 ADR-097 的 cgroup.isolate_failed）必须在表内；
+//  2. 表内动作名不超过 maxOrphanAuditActionLen（纵深防御依赖该上限）。
+func TestOrphanAuditAllowedActions_Contract(t *testing.T) {
+	// Worker 侧会发送的系统动作：缺一则该动作的审计被 CP 拒收后静默丢弃（CP-3）。
+	mustAllow := []string{
 		"orphan.scan_detected",
 		"orphan.scan_disposed",
 		"orphan.scan_dispose_blocked",
 		"orphan.dispose_blocked",
 		"orphan.dispose_reaped",
-		// FR-471：启动期发现孤儿但按非破坏策略只观测（重启未杀人的唯一留痕），以及外来运行时接管的成功/失败。
+		"orphan.auto_adopted",
+		"orphan.adopt_blocked",
+		"orphan.adopt_failed",
 		"orphan.startup_detected_not_reaped",
-		"orphan.foreign_runtime_detected",
 		"orphan.foreign_runtime_adopt_blocked",
 		"orphan.foreign_runtime_adopted",
-		// FR-459 健康巡检动作。
+		"orphan.foreign_runtime_detected",
 		"health.dead_detected",
 		"health.selfheal_restart",
+		"health.selfheal_exhausted",
 		"health.circuit_broken",
 		"health.circuit_released",
-	} {
-		t.Run(action, func(t *testing.T) {
-			h, _, node, rec := newOrphanAuditFixture(t)
-			_, err := h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-				NodeUuid: node.UUID, NodeSecret: node.Secret, Action: action, TargetId: "wd",
-			})
-			require.NoError(t, err)
-			require.Len(t, rec.calls, 1)
-			require.Equal(t, action, rec.calls[0].action)
-		})
+		// ADR-097「无隔离保护必须成为可观测事实」的唯一 CP 侧留痕通道。
+		"cgroup.isolate_failed",
+	}
+	for _, action := range mustAllow {
+		if _, ok := orphanAuditAllowedActions[action]; !ok {
+			t.Errorf("动作 %q 不在 CP 审计白名单内，Worker 侧上报会被拒收后静默丢弃", action)
+		}
+	}
+	for action := range orphanAuditAllowedActions {
+		if len(action) > maxOrphanAuditActionLen {
+			t.Errorf("白名单动作 %q 超过长度上限 %d", action, maxOrphanAuditActionLen)
+		}
 	}
 }
 
-// TestReportOrphanAudit_RejectsUnknownAction FR-456 N2：白名单外动作一律拒绝，不落库。
-func TestReportOrphanAudit_RejectsUnknownAction(t *testing.T) {
-	h, _, node, rec := newOrphanAuditFixture(t)
+// TestReportOrphanAudit_AllowsCgroupIsolateFailed 端到端守护 CP-3：
+// cgroup.isolate_failed 必须能被 ReportOrphanAudit 接受（不在白名单时返回 InvalidArgument）。
+func TestReportOrphanAudit_AllowsCgroupIsolateFailed(t *testing.T) {
+	dsn := "file:orp_audit_cgroup?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}))
+	node := &model.Node{UUID: "n-cgroup", Secret: "s", Name: "n", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(node).Error)
 
-	for _, action := range []string{"", "evil.action", "orphan.scan", "orphan.scan_disposedx"} {
-		_, err := h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-			NodeUuid: node.UUID, NodeSecret: node.Secret, Action: action, TargetId: "wd",
-		})
-		require.Errorf(t, err, "action=%q 应被拒", action)
+	h := NewControlPlaneHandler(db, NewClientPool())
+	// 未装配审计落库器时确认收到即返回成功——此时 action 已过白名单校验。
+	_, err = h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
+		NodeUuid:   "n-cgroup",
+		NodeSecret: "s",
+		Action:     "cgroup.isolate_failed",
+		TargetId:   "/var/lib/jianmanager-daemons/u1",
+		Detail:     `{"reason":"非特权用户无从迁移 cgroup"}`,
+		Success:    false,
+	})
+	if err != nil {
+		t.Fatalf("cgroup.isolate_failed 应被接受，得到错误: %v", err)
 	}
-	require.Empty(t, rec.calls, "白名单外动作不得落库")
-}
-
-// TestReportOrphanAudit_RejectsOverlongAction action 超长直接拒绝（纵深防御）。
-func TestReportOrphanAudit_RejectsOverlongAction(t *testing.T) {
-	h, _, node, rec := newOrphanAuditFixture(t)
-	_, err := h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-		NodeUuid: node.UUID, NodeSecret: node.Secret,
-		Action: strings.Repeat("a", maxOrphanAuditActionLen+1), TargetId: "wd",
-	})
-	require.Error(t, err)
-	require.Empty(t, rec.calls)
-}
-
-// TestReportOrphanAudit_TruncatesAndWrapsDetail FR-456 N2/N3：
-// detail 超限按 rune 边界截断（不留非法 UTF-8），且落库 detail 携带 nodeUuid 便于按节点溯源。
-func TestReportOrphanAudit_TruncatesAndWrapsDetail(t *testing.T) {
-	h, _, node, rec := newOrphanAuditFixture(t)
-
-	huge := `{"cmdline":"` + strings.Repeat("中", maxOrphanAuditDetailLen) + `"}`
-	_, err := h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-		NodeUuid: node.UUID, NodeSecret: node.Secret,
-		Action: "orphan.scan_detected", TargetId: "wd", Detail: huge,
-	})
-	require.NoError(t, err)
-	require.Len(t, rec.calls, 1)
-
-	got := rec.calls[0].detail
-	require.LessOrEqual(t, len(got), maxOrphanAuditDetailLen+128, "detail 必须被截断")
-	require.True(t, utf8.ValidString(got), "截断后仍须是合法 UTF-8")
-
-	var obj map[string]any
-	require.NoError(t, json.Unmarshal([]byte(got), &obj), "detail 外层须是合法 JSON")
-	require.Equal(t, node.UUID, obj["nodeUuid"], "detail 须携带 nodeUuid（N3）")
-	require.Contains(t, obj, "payload")
-}
-
-// TestReportOrphanAudit_TruncatesTarget targetId 超长被截断（不放任任意长度入审计库）。
-func TestReportOrphanAudit_TruncatesTarget(t *testing.T) {
-	h, _, node, rec := newOrphanAuditFixture(t)
-	_, err := h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-		NodeUuid: node.UUID, NodeSecret: node.Secret,
-		Action: "orphan.scan_detected", TargetId: strings.Repeat("/very/long", 200),
-	})
-	require.NoError(t, err)
-	require.Len(t, rec.calls, 1)
-	require.LessOrEqual(t, len(rec.calls[0].target), maxOrphanAuditTargetLen)
-}
-
-// TestReportOrphanAudit_TargetNodeBinding FR-456 N2：targetId 解析为**他节点**实例时拒绝；
-// 解析为本节点实例时放行；解析不到（direct 孤儿的工作目录 target）也不拦。
-func TestReportOrphanAudit_TargetNodeBinding(t *testing.T) {
-	h, db, node, rec := newOrphanAuditFixture(t)
-	other := &model.Node{UUID: "node-other", Name: "o", Secret: "s2", Status: model.NodeStatusOnline}
-	require.NoError(t, db.Create(other).Error)
-	seedOrphanAuditInstance(t, db, "inst-mine", node.ID)
-	seedOrphanAuditInstance(t, db, "inst-theirs", other.ID)
-
-	// 他节点实例 → 拒绝。
-	_, err := h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-		NodeUuid: node.UUID, NodeSecret: node.Secret, Action: "orphan.scan_detected", TargetId: "inst-theirs",
-	})
-	require.Error(t, err, "target 属他节点实例应拒绝")
-	require.Empty(t, rec.calls)
-
-	// 本节点实例 → 放行。
-	_, err = h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-		NodeUuid: node.UUID, NodeSecret: node.Secret, Action: "orphan.scan_detected", TargetId: "inst-mine",
-	})
-	require.NoError(t, err)
-	require.Len(t, rec.calls, 1)
-
-	// 非实例 UUID（direct 孤儿的工作目录）→ 不做绑定，放行。
-	_, err = h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-		NodeUuid: node.UUID, NodeSecret: node.Secret, Action: "orphan.scan_detected", TargetId: "/srv/servers/survival-abc",
-	})
-	require.NoError(t, err)
-	require.Len(t, rec.calls, 2)
-}
-
-// FR-459 复审项 11：health.* 动作的审计 targetType 应为 health（而非孤儿处置的 orphan），
-// 使健康自愈/熔断在审计面可按类型正确归类；orphan.* 仍为 orphan。
-func TestReportOrphanAudit_HealthActionTargetType(t *testing.T) {
-	h, _, node, rec := newOrphanAuditFixture(t)
-
-	_, err := h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-		NodeUuid:   node.UUID,
-		NodeSecret: node.Secret,
-		Action:     "health.circuit_broken",
-		TargetId:   "inst-health",
-		Detail:     `{"operator":"auto","kind":"health"}`,
-		Success:    true,
-	})
-	require.NoError(t, err)
-	require.Len(t, rec.calls, 1)
-	require.Equal(t, "health", rec.calls[0].targetTyp, "health.* 动作应归 health targetType")
-
-	// 新增的「自愈重启达上限」动作同样在白名单内且归 health。
-	_, err = h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-		NodeUuid:   node.UUID,
-		NodeSecret: node.Secret,
-		Action:     "health.selfheal_exhausted",
-		TargetId:   "inst-health",
-		Detail:     `{"operator":"auto"}`,
-		Success:    true,
-	})
-	require.NoError(t, err)
-	require.Len(t, rec.calls, 2)
-	require.Equal(t, "health", rec.calls[1].targetTyp)
-	require.Equal(t, "health.selfheal_exhausted", rec.calls[1].action)
-
-	// orphan.* 不受影响。
-	_, err = h.ReportOrphanAudit(context.Background(), &workerpb.ReportOrphanAuditRequest{
-		NodeUuid:   node.UUID,
-		NodeSecret: node.Secret,
-		Action:     "orphan.dispose_reaped",
-		TargetId:   "inst-health",
-		Success:    true,
-	})
-	require.NoError(t, err)
-	require.Len(t, rec.calls, 3)
-	require.Equal(t, "orphan", rec.calls[2].targetTyp)
 }

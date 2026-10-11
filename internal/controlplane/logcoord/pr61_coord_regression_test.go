@@ -152,20 +152,43 @@ func TestPR61BudgetReservation(t *testing.T) {
 		require.LessOrEqual(t, sum, amount)
 	}
 }
+
+// TestPR61CacheAuthorizationIsolation（CP-1 改后重写）固定缓存键去掉身份段后的**新**不变量：
+//
+//	① 同一授权集合（targets digest）下，不同主体/权限版本**应当**命中同一条目（否则预热器
+//	   写死的占位身份永远命中不了，预热零收益却仍全平台扇出）；
+//	② 跨授权集合**绝不**命中（不同 targets ⇒ 不同 digest）——这是真正的安全边界；
+//	③ 命中不得外泄创建者的 View 身份：返回的 View 必须是**当前调用方**的（见
+//	   rebindCachedSearchResponse）。
+//
+// 历史形态（本用例改写前）断言「不同主体不得互命中」，那是把身份放进键时的过度保守设计；
+// 身份入键会使预热条目永不命中，与「限制宽窗查询对整机的抢占」的初衷相反（PR review CP-1）。
 func TestPR61CacheAuthorizationIsolation(t *testing.T) {
 	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Exhausted: true}}
 	c := pr61Coord(map[string]*pr61Worker{"w1": w})
 	q := pr61Query()
 	q.Fast = true
-	_, err := c.Search(context.Background(), q)
+	first, err := c.Search(context.Background(), q)
 	require.NoError(t, err)
+
+	// ① 同集合换主体：必须命中缓存（只扇出过一次），且 View 身份归属当前调用方。
 	q.PrincipalKey = "user:2"
-	_, err = c.Search(context.Background(), q)
-	require.NoError(t, err)
 	q.PermissionScope = "scope:2"
-	_, err = c.Search(context.Background(), q)
+	second, err := c.Search(context.Background(), q)
 	require.NoError(t, err)
-	require.Len(t, w.budgets, 3, "不同权限主体或权限版本不得命中其他人的缓存")
+	require.Len(t, w.budgets, 1, "同一授权集合下不同主体必须命中同一缓存条目（预热可共享的前提）")
+	require.Equal(t, "user:2", second.View.PrincipalKey, "命中不得外泄创建者的 View 身份")
+	require.Equal(t, "scope:2", second.View.PermissionScope, "命中不得外泄创建者的权限范围")
+
+	// ③ 返回的行集合与首次一致（同集合 ⇒ 同结果）。
+	require.Equal(t, len(first.Items), len(second.Items))
+
+	// ② 跨授权集合：绝不命中（必须再扇出一次）。
+	q.AuthorizedTargetIDs = []string{"inst:other"}
+	different, err := c.Search(context.Background(), q)
+	require.NoError(t, err)
+	require.Len(t, w.budgets, 2, "不同授权集合必须各查一次（digest 不同 ⇒ 不得命中）")
+	require.Equal(t, "user:2", different.View.PrincipalKey)
 }
 
 func TestPR61DedupeCannotOverwriteConflictQuality(t *testing.T) {

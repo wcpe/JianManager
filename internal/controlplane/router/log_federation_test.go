@@ -125,6 +125,9 @@ type fedWorker struct {
 	unsup   bool
 	fail    string
 	searchN int
+	// statsN/facetN 记录聚合 RPC 次数：聚合类同参缓存命中时不得增长（CP-8 回归）。
+	statsN int
+	facetN int
 	// lastFilter 记录最近一次 Search 收到的过滤表达式，供断言结构化筛选是否已组合下发。
 	lastFilter string
 }
@@ -161,6 +164,7 @@ func (w *fedWorker) Fields(_ context.Context, req logcoord.WorkerSearchRequest) 
 }
 
 func (w *fedWorker) Stats(_ context.Context, req logcoord.WorkerSearchRequest, _ []string, _ string) (*logcoord.WorkerStatsResponse, error) {
+	w.statsN++
 	return &logcoord.WorkerStatsResponse{
 		ViewID:  req.ViewID,
 		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...),
@@ -168,6 +172,7 @@ func (w *fedWorker) Stats(_ context.Context, req logcoord.WorkerSearchRequest, _
 }
 
 func (w *fedWorker) Facets(_ context.Context, req logcoord.WorkerSearchRequest, _ []string, _ uint32) (*logcoord.WorkerFacetsResponse, error) {
+	w.facetN++
 	return &logcoord.WorkerFacetsResponse{
 		ViewID:  req.ViewID,
 		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...),

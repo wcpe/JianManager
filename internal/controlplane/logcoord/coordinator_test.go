@@ -1204,6 +1204,94 @@ func TestWarmSearchBypassesOwnCacheAndRefreshes(t *testing.T) {
 		"每轮预热都必须真正扇出，不得命中自身旧条目（雪球）")
 }
 
+// authzFilteringResolver 只返回本次被请求的授权目标（贴近真实 resolver 的收敛语义）：
+// 用于构造「两个不同授权集合」的场景，验证缓存不跨集合命中。
+type authzFilteringResolver struct{ byID map[string]TargetInfo }
+
+func (r authzFilteringResolver) Resolve(_ context.Context, ids []string) ([]TargetInfo, error) {
+	out := make([]TargetInfo, 0, len(ids))
+	for _, id := range ids {
+		if t, ok := r.byID[id]; ok {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// CP-1 回归：预热条目必须能被**同参的真实用户**命中。
+//
+// 预热器没有真实用户身份（占位 PrincipalKey/PermissionScope），若身份段参与缓存键，
+// 预热条目与真实用户条目**永不同键** ⇒ 预热零命中，却仍按窗口周期对全部 Worker 全量扇出
+// （与「限制宽窗查询抢占」的初衷相反）。本用例在旧行为（键含主体/scope）下必然失败：
+// 用户查询会因未命中而二次扇出（searchCalls 2 ≠ 1）。
+func TestWarmEntryHitsSameParamUserQueryAcrossPrincipals(t *testing.T) {
+	worker := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "n", "g", 1, "2026-10-08T07:00:00Z", "INFO", "x")},
+		searchTarget: []WorkerTargetResult{{TargetID: "node:1", State: CoverageSuccess, CatalogGeneration: "1"}}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = worker
+	coord := New(&fakeTargetResolver{targets: []TargetInfo{{ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline}}}, dialer)
+
+	// 预热器：身份为占位值，其余入参与用户请求逐字相同。
+	warmQ := Query{AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "warm", PermissionScope: "warm",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z",
+		Budget: QueryBudget{Limit: 100}, Fast: true}
+	_, err := coord.WarmSearch(context.Background(), warmQ)
+	require.NoError(t, err)
+	worker.mu.Lock()
+	require.Equal(t, 1, worker.searchCalls, "预热必须实际执行一次查询")
+	worker.mu.Unlock()
+
+	// 真实用户：同 targets/窗口/limit/Fast，仅身份不同 ⇒ 必须命中预热条目。
+	userQ := warmQ
+	userQ.PrincipalKey = "user:7|role:10|targets:deadbeef"
+	userQ.PermissionScope = "platform_admin|role:admin|auth:1|nodes:cafe|targets:deadbeef"
+	resp, err := coord.Search(context.Background(), userQ)
+	require.NoError(t, err)
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	require.Equal(t, 1, worker.searchCalls, "预热后同参用户查询必须命中，不得再次扇出")
+	require.Len(t, resp.Items, 1, "命中必须回放预热读到的行")
+	// 命中不得把预热者的身份交给调用方：View 一律换绑为本次请求自己的视图。
+	require.Equal(t, userQ.PrincipalKey, resp.View.PrincipalKey)
+	require.Equal(t, userQ.PermissionScope, resp.View.PermissionScope)
+	require.NotEqual(t, warmQ.PrincipalKey, resp.View.PrincipalKey, "不得回放预热者身份")
+}
+
+// CP-1 反向回归：去身份段后仍**不跨授权集合命中**（越权不可能）。
+// 预热 inst:1 后查询 inst:2，必须重新扇出，且覆盖集只含本次授权目标。
+func TestWarmEntryNotHitByDifferentAuthorizedSet(t *testing.T) {
+	worker := &fakeWorker{workerID: "w1",
+		searchItems: []Event{mkEvent("e1", "n", "g", 1, "2026-10-08T07:00:00Z", "INFO", "x")},
+		searchTarget: []WorkerTargetResult{
+			{TargetID: "node:1", State: CoverageSuccess, CatalogGeneration: "1"},
+			{TargetID: "node:2", State: CoverageSuccess, CatalogGeneration: "1"},
+		}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = worker
+	coord := New(authzFilteringResolver{byID: map[string]TargetInfo{
+		"node:1": {ID: "node:1", WorkerID: "w1", Readiness: ReadyOnline},
+		"node:2": {ID: "node:2", WorkerID: "w1", Readiness: ReadyOnline},
+	}}, dialer)
+
+	warmQ := Query{AuthorizedTargetIDs: []string{"node:1"}, PrincipalKey: "warm", PermissionScope: "warm",
+		FromUTC: "2026-10-08T06:30:05Z", ToUTC: "2026-10-08T07:30:05Z",
+		Budget: QueryBudget{Limit: 100}, Fast: true}
+	_, err := coord.WarmSearch(context.Background(), warmQ)
+	require.NoError(t, err)
+
+	otherQ := warmQ
+	otherQ.AuthorizedTargetIDs = []string{"node:2"}
+	otherQ.PrincipalKey = "user:9|role:10|targets:cafebabe"
+	resp, err := coord.Search(context.Background(), otherQ)
+	require.NoError(t, err)
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	require.Equal(t, 2, worker.searchCalls, "不同授权集合不得命中预热条目，必须重新扇出")
+	require.Len(t, resp.Coverage.Targets, 1)
+	require.Equal(t, "node:2", resp.Coverage.Targets[0].TargetID, "命中条目不得把其它集合的目标带进来")
+}
+
 // Fast 首屏也必须保留已经观察到的 dial 失败，Pending 不能遮掉具体覆盖证据。
 func TestFastSearchPreservesObservedCoverageFailures(t *testing.T) {
 	dialer := newFakeDialer()

@@ -32,7 +32,8 @@ type Coordinator struct {
 	views map[string]View
 
 	// 同参秒级 TTL 缓存（第二笔：首屏/分页重复查询提速，扇出成本 20s+ 时回收最大）。
-	// 键含授权主体摘要 ⇒ 跨主体绝不命中 ✗；Export 路径不经过此处 ⇒ 天然旁路 ✗。
+	// 键＝授权集合摘要（**不含主体/scope**）⇒ 同一授权集合的多个调用方共享条目 ✓、
+	// 跨集合绝不命中 ✗（论证见 searchCacheKey）；Export 路径不经过此处 ⇒ 天然旁路 ✗。
 	searchCacheMu sync.Mutex
 	searchCache   map[string]searchCacheEntry
 
@@ -145,10 +146,27 @@ func searchCacheKeyBucket(t string) string {
 // searchCacheKey 同参键＝**授权集合摘要（targets digest ✓）** ‖ 时间片（整分桶 ✓） ‖ 过滤 ‖
 // onlineOnly ‖ order ‖ limit/maxBytes ‖ Fast ‖ 复用视图 ID ‖ 游标。
 //
-// 为什么不再用主体/身份入键（2026-10-07 裁定 ✓）：日志内容只取决于**授权集合**（同一集合 ⇒
-// 同一结果 ✓），越权由上游 authorizedTargets 判定（403 用例保留 ✓）；把 user/role/scope 放进键
-// 属过度保守 ✗，且会让"平台级/单实例预热"永远无法被真实用户命中 ✗。改为 targets digest 后，
-// 个人级与平台级同规则、预热条目天然共享 ✓，而**跨集合绝不命中** ✓（不同 targets ⇒ 不同 digest）。
+// 为什么键内**不含主体/身份**（2026-10-07 裁定 ✓，2026-10-12 重申并补回归 ✓）：日志内容只
+// 取决于**授权集合**（同一集合 ⇒ 同一结果 ✓），越权由上游 authorizedTargets 判定（403 用例保留 ✓）。
+// 身份入键属过度保守 ✗，且会让"平台级/单实例预热"永远无法被真实用户命中——预热器没有真实用户
+// 身份，只能写死占位值，与真实键**永不相同** ⇒ 预热零收益，却仍按窗口周期对全部 Worker 全量扇出 ✗
+// （与"限制宽窗查询抢占"的初衷相反）。改为 targets digest 后个人级与平台级同规则、预热条目天然
+// 共享 ✓，而**跨集合绝不命中** ✓（不同 targets ⇒ 不同 digest）。
+//
+// 去身份段后的三条安全前提（缺一不可，改动本键前必须逐条复核 ✓）：
+//  1. View 身份不随条目外泄：命中路径一律经 rebindCachedSearchResponse 把 resp.View 换成**当前
+//     调用方自己的 View**（PrincipalKey/PermissionScope/Budget 均取自本次请求 ✓），
+//     绝不把创建者的 View 或游标交给调用方 ✗；
+//  2. 复用校验先于查缓存：带 ViewID 的请求在 Search 内先走 resolveForQuery / resolveForQueryFast，
+//     其中 authorizeViewReuse 强制主体相等与 scope 相等（不匹配即 ErrViewAuthz/ErrViewReuseMismatch，
+//     快路径也只容忍 ErrViewReuseMismatch、ErrViewAuthz 原样上抛 ✓），因此跨主体复用 viewId 在
+//     触达缓存之前就被拒 ✗；
+//  3. 键内其余段仍是全部结果相关入参（授权集合/时间窗/过滤/onlineOnly/order/limit/maxBytes/
+//     Fast/豁免标记），且 PermissionScope 不参与扇出（worker_adapter 下发前已清空）⇒ 同集合不同
+//     scope 的两个调用方能各自查询到的行本就相同，共享条目不改变任何人可见的数据 ✗。
+//
+// 授权集合入键用 64 位截断摘要：targets 由 CP 侧构造（inst:<id>/node:<id>/*），不接受用户自由
+// 文本 ⇒ 不存在"构造第二集合撞同一摘要"的注入面 ✓。
 //
 // 为什么 ViewID 必须入键（2026-10-08 修复）：带 ViewID 的复用调用必须重新扇出以执行
 // ensureWorkerViewBinding 的 worker 绑定与 catalog 代次漂移校验（ErrViewReuseMismatch）——
@@ -168,8 +186,6 @@ func searchCacheKeyBucket(t string) string {
 func searchCacheKey(q Query) string {
 	return strings.Join([]string{
 		targetsDigest(q.AuthorizedTargetIDs),
-		q.PrincipalKey,
-		q.PermissionScope,
 		fmt.Sprint(q.Budget.MaxFanout),
 		fmt.Sprint(q.Budget.TimeoutMS),
 		searchCacheKeyBucket(q.FromUTC),
@@ -1170,8 +1186,10 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 	}
 	view, resolved := viewFast, resolvedFast
 	view.Budget = readBudgetForQuery(view, q)
-	// 同参秒级 TTL 缓存：命中直接返回（重复/翻页查询免扇出 ✓）。Export 路径不经 Search 本函数
-	// ⇒ 天然旁路 ✗；键含主体/scope ⇒ 跨主体绝不命中 ✗。
+	// 同参秒级 TTL 缓存：命中直接返回（重复/翻页查询免扇出 ✓）。键＝授权集合摘要，**不含主体/
+	// scope** ⇒ 同一授权集合的多个调用方共享条目 ✓（跨集合绝不命中、View 身份经 rebind 换绑，
+	// 论证见 searchCacheKey）。Export 逐页走本函数，靠 AllowProjectionDrift/Fast/Cursor 段与列表
+	// 天然分键 ✗（不是"绕过缓存"——见 searchCacheKey 的豁免标记段注释）。
 	// BypassCache（仅预热器）：跳过读取但照常写入，防止预热命中自身旧条目形成雪球。
 	if !q.BypassCache {
 		if cached, ok := c.lookupSearchCache(q); ok {

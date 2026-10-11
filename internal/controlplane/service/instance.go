@@ -2225,28 +2225,74 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	slog.Info("Worker 操作成功", "action", action, "instanceId", instance.UUID)
 }
 
-// writeLifecycleObservation 条件回写派发前事实，身份/节点/状态/更新时间任一变化即放弃迟到结果。
+// writeLifecycleObservation 条件回写派发前事实：身份/节点/状态任一变化即放弃迟到结果。
+//
+// CAS 字段为何**不含 updated_at**：updated_at 是 GORM 自动维护的副作用字段，心跳每拍都会对全部
+// 上报实例执行 statusQ.Update("status", status)（见 grpc/handler.go），**即使状态值没变也会推进它**。
+// 而本函数的调用点在 Worker RPC 返回之后，start/restart 的链路耗时可达「优雅停止超时 + 60s」
+// （delegateRPCTimeout），远大于心跳间隔 ⇒ 「派发 → 回写」之间几乎必然落进一拍心跳，
+// updated_at 恒失配 ⇒ RowsAffected=0 ⇒ 失败原因与终态写不进去，且旧实现只查 Error 不查
+// RowsAffected，整个过程完全静默。status 只在真正的状态迁移时改变，心跳写同值不推进它，
+// 因此用 status 做 CAS 既保留了「派发前事实已变则放弃迟到结果」的语义，又不会被心跳误伤。
 func writeLifecycleObservation(db *gorm.DB, observed *model.Instance, target model.InstanceStatus, reason string) {
-	if err := db.Model(&model.Instance{}).
-		Where("id = ? AND uuid = ? AND node_id = ? AND status = ? AND updated_at = ?", observed.ID, observed.UUID, observed.NodeID, observed.Status, observed.UpdatedAt).
-		Updates(map[string]any{"status": target, "status_reason": reason, "status_reason_source": ""}).Error; err != nil {
-		slog.Warn("生命周期结果条件回写失败", "instanceId", observed.UUID, "error", err)
+	res := db.Model(&model.Instance{}).
+		Where("id = ? AND uuid = ? AND node_id = ? AND status = ?", observed.ID, observed.UUID, observed.NodeID, observed.Status).
+		Updates(map[string]any{"status": target, "status_reason": reason, "status_reason_source": ""})
+	if res.Error != nil {
+		slog.Warn("生命周期结果条件回写失败", "instanceId", observed.UUID, "error", res.Error)
+		return
+	}
+	if res.RowsAffected == 0 {
+		// 条件失配 = 期间状态/归属已被心跳或后续操作改写：放弃迟到结果是对的，但必须留痕——
+		// 否则「为什么这次回写没生效」在日志里完全不可见（旧实现的静默缺陷）。
+		slog.Warn("生命周期结果条件回写被跳过：派发前事实已变化",
+			"instanceId", observed.UUID, "observedStatus", observed.Status,
+			"targetStatus", target, "reason", reason)
+	}
+}
+
+// markLifecycleUnconfirmed 只写「结果待确认」原因、**不动 status**。
+//
+// 与 writeLifecycleObservation 分开的理由（修 CP-4）：结果查询失败时我们把 observed.Status 原样写回，
+// 语义上不是「更新状态」而是「什么都没查清」。而 CP 写入的原因（status_reason_source 为空串）不会被
+// 下一拍健康心跳清掉，于是「原样回写 + 待确认文案」会给实例钉上一条长期可见但无信息量的兜底文案，
+// 覆盖掉此前更有价值的原因。因此该分支只更新原因，让心跳去真正收敛状态（函数注释的承诺）。
+func markLifecycleUnconfirmed(db *gorm.DB, observed *model.Instance, reason string) {
+	res := db.Model(&model.Instance{}).
+		Where("id = ? AND uuid = ? AND node_id = ? AND status = ?", observed.ID, observed.UUID, observed.NodeID, observed.Status).
+		Updates(map[string]any{"status_reason": reason, "status_reason_source": ""})
+	if res.Error != nil {
+		slog.Warn("生命周期待确认原因回写失败", "instanceId", observed.UUID, "error", res.Error)
+		return
+	}
+	if res.RowsAffected == 0 {
+		slog.Warn("生命周期待确认原因回写被跳过：派发前事实已变化",
+			"instanceId", observed.UUID, "observedStatus", observed.Status, "reason", reason)
 	}
 }
 
 // reconcileLifecycleObservation 传输失败/取消不是崩溃证据；复用现有状态查询，失败则交给心跳收敛。
 func reconcileLifecycleObservation(db *gorm.DB, worker workerpb.WorkerServiceClient, observed *model.Instance, reason string) {
-	target := observed.Status
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	resp, err := worker.GetInstanceStatus(ctx, &workerpb.InstanceActionRequest{InstanceUuid: observed.UUID})
-	if err == nil && resp != nil {
-		switch state := model.InstanceStatus(resp.State); state {
-		case model.InstanceStatusStopped, model.InstanceStatusStarting, model.InstanceStatusRunning, model.InstanceStatusStopping, model.InstanceStatusCrashed:
-			target = state
-		}
+	unconfirmed := "操作结果待确认，状态查询/心跳收敛: " + reason
+	if err != nil || resp == nil {
+		// 连状态都查不清：只留痕原因，不碰 status（见 markLifecycleUnconfirmed）。
+		slog.Warn("生命周期结果查询失败，交由心跳收敛", "instanceId", observed.UUID, "reason", reason, "error", err)
+		markLifecycleUnconfirmed(db, observed, unconfirmed)
+		return
 	}
-	writeLifecycleObservation(db, observed, target, "操作结果待确认，状态查询/心跳收敛: "+reason)
+	// Worker 是运行态的权威来源：查到明确状态就回写，让面板不必等下一拍心跳收敛。
+	// 状态不可识别（空串/未知取值）时不猜——同样只留痕原因。
+	switch state := model.InstanceStatus(resp.State); state {
+	case model.InstanceStatusStopped, model.InstanceStatusStarting, model.InstanceStatusRunning, model.InstanceStatusStopping, model.InstanceStatusCrashed:
+		writeLifecycleObservation(db, observed, state, unconfirmed)
+	default:
+		slog.Warn("生命周期结果查询返回未知状态，交由心跳收敛",
+			"instanceId", observed.UUID, "state", resp.State, "reason", reason)
+		markLifecycleUnconfirmed(db, observed, unconfirmed)
+	}
 }
 
 func (s *InstanceService) updateStatusAsync(id uint, status model.InstanceStatus) {

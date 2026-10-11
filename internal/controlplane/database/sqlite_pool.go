@@ -64,6 +64,11 @@ type sqliteTxGuard struct {
 	gateWaits     atomic.Int64
 	gateWaitNanos atomic.Int64
 
+	// lastEvictLogNanos 是最近一条「连接毒化驱逐」Error 告警的纳秒时间戳（零点 = 从未打过）。
+	// 频控用（修 CP-9）：驱逐事件在短时压力下可能被 database/sql 反复触发，
+	// Error 级告警若逐次打印会刷屏冲掉其他日志；计数仍逐次累加，告警按窗口合并。
+	lastEvictLogNanos atomic.Int64
+
 	plan sqlitePoolPlan
 }
 
@@ -259,11 +264,7 @@ func (c *guardConn) IsValid() bool {
 	if !c.txOpen.Load() {
 		return true
 	}
-	total := c.guard.evictedConns.Add(1)
-	slog.Error("SQLite 连接带未提交事务回池，已驱逐（不再复用）",
-		"evicted_total", total,
-		"dirty_commit_total", c.guard.dirtyCommits.Load(),
-		"dirty_rollback_total", c.guard.dirtyRollbacks.Load())
+	c.guard.logEvicted(stagePoolPut)
 	return false
 }
 
@@ -279,11 +280,57 @@ func (c *guardConn) ResetSession(context.Context) error {
 	if !c.txOpen.Load() {
 		return nil
 	}
-	total := c.guard.evictedConns.Add(1)
-	slog.Error("SQLite 复用前发现连接仍处于事务中，丢弃换新连接",
-		"evicted_total", total,
-		"dirty_commit_total", c.guard.dirtyCommits.Load())
+	c.guard.logEvicted(stageSessionReset)
 	return driver.ErrBadConn
+}
+
+// 驱逐告警的入口标识（日志字段用）。
+const (
+	stagePoolPut      = "pool_put"
+	stageSessionReset = "session_reset"
+)
+
+// evictLogMinInterval 是毒化连接驱逐告警的频控窗口（修 CP-9）：
+// ResetSession 返回 ErrBadConn 后 database/sql 的 (*DB).retry 会重试，重试失败又会走一次
+// putConn ⇒ 同一条脏连接可能在短时内反复走进 IsValid/ResetSession，而无条件的 slog.Error
+// 会把日志刷到淹没其他条目。计数（evictedConns）仍逐次累加——它是累计真源，必须精确；
+// 这里只把 Error 级告警按窗口合并，窗口内的同类事件降级为 Debug，排障时仍可追溯。
+const evictLogMinInterval = 10 * time.Second
+
+// logEvicted 记录一条连接毒化驱逐：累加计数 + 打印（可能被频控合并的）Error 告警。
+// stage 区分入口（回池 / 取出时复查）。
+func (g *sqliteTxGuard) logEvicted(stage string) {
+	total := g.evictedConns.Add(1)
+	msg := "SQLite 连接带未提交事务回池，已驱逐（不再复用）"
+	if stage == stageSessionReset {
+		msg = "SQLite 复用前发现连接仍处于事务中，丢弃换新连接"
+	}
+	if !g.logEvictionRateLimited(msg,
+		"stage", stage,
+		"evicted_total", total,
+		"dirty_commit_total", g.dirtyCommits.Load(),
+		"dirty_rollback_total", g.dirtyRollbacks.Load()) {
+		// 频控窗口内：降级 Debug 留痕。不丢失「发生过」这一事实（计数已在），
+		// 也不让同一事件在压力下一次又一次占据 Error 级。
+		slog.Debug("SQLite 连接毒化驱逐（频控期内省略 Error 级告警）",
+			"stage", stage, "evicted_total", total)
+	}
+}
+
+// logEvictionRateLimited 按时间窗频控打印告警：首次（或距上次不足一窗后再次到达）必打，
+// 其余跳过。返回本次是否真的打印。多 goroutine 并发时只有 CAS 胜出者打印，
+// 窗口边界少打一条无伤大雅（计数不受影响）。
+func (g *sqliteTxGuard) logEvictionRateLimited(msg string, kv ...any) bool {
+	now := time.Now().UnixNano()
+	last := g.lastEvictLogNanos.Load()
+	if last != 0 && now-last < int64(evictLogMinInterval) {
+		return false
+	}
+	if !g.lastEvictLogNanos.CompareAndSwap(last, now) {
+		return false
+	}
+	slog.Error(msg, kv...)
+	return true
 }
 
 // guardTx 包装驱动事务，把真实的结束与否回报给连接。
