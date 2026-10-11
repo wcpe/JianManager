@@ -459,6 +459,11 @@ func ledgerRowsOfOpt(key string, saved persistedSource, core *indexLedgerCore, s
 
 // walRowsOf 把该源的 WAL 条目录入 source_wal 行：正文内联条目带 Body，引用条目 Body 为 nil。
 // FP 覆盖正文的每一个 JSON 字段（见 walBodyFP），未变更的条目不会触发正文重编码。
+//
+// **Replay 必须随行落库（ACQ-1，2026-10-12 终审修复）**：它是条目语义的一部分（是否来自
+// 恢复期回放/补账），只落在内存条目上时，重启后回放条目会退回「常规积压」并把源重新推过闸
+// （闸视图 = 总量 − 回放），而这恰好发生在最需要它的时刻（恢复期回放与进程重启是同一场景）。
+// 两侧（内联与引用）都要带，否则引用态条目重启后丢标记。
 func (m *Manager) walRowsOf(key string, saved persistedSource) ([]stateindex.WALRow, error) {
 	rows := make([]stateindex.WALRow, 0, len(saved.WAL)+len(saved.WALRefs))
 	for _, entry := range saved.WAL {
@@ -469,7 +474,7 @@ func (m *Manager) walRowsOf(key string, saved persistedSource) ([]stateindex.WAL
 		rows = append(rows, stateindex.WALRow{
 			Key: key, Seq: entry.Seq, EventID: entry.Event.EventID,
 			RecordStart: entry.Event.Record.Start, RecordEnd: entry.Event.Record.End,
-			Appended: entry.Appended, Durable: entry.Durable, Body: body,
+			Appended: entry.Appended, Durable: entry.Durable, Replay: entry.Replay, Body: body,
 			FP: walBodyFP(entry.Event),
 		})
 	}
@@ -477,7 +482,7 @@ func (m *Manager) walRowsOf(key string, saved persistedSource) ([]stateindex.WAL
 		rows = append(rows, stateindex.WALRow{
 			Key: key, Seq: ref.Seq, EventID: ref.EventID,
 			RecordStart: ref.RecordStart, RecordEnd: ref.RecordEnd,
-			Appended: ref.Appended, Durable: ref.Durable, Body: nil,
+			Appended: ref.Appended, Durable: ref.Durable, Replay: ref.Replay, Body: nil,
 			FP: uint64(0), // 引用条目的正文在事件段存储中，身份字段即判据
 		})
 	}
@@ -577,6 +582,7 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 		if row.Body == nil {
 			walRefs[row.Key] = append(walRefs[row.Key], acquire.WALRef{
 				Seq: row.Seq, Appended: row.Appended, Durable: row.Durable,
+				Replay:  row.Replay, // ACQ-1：回放标记必须读回，否则重启后条目退回常规积压
 				EventID: row.EventID, RecordStart: row.RecordStart, RecordEnd: row.RecordEnd,
 			})
 			continue
@@ -587,6 +593,7 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 		}
 		walInline[row.Key] = append(walInline[row.Key], acquire.WALEntry{
 			Seq: row.Seq, Event: event, Appended: row.Appended, Durable: row.Durable,
+			Replay: row.Replay, // ACQ-1：同上，内联条目同样要恢复回放标记
 		})
 	}
 
