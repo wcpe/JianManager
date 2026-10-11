@@ -28,6 +28,14 @@ type Trigger struct {
 	DiskPercent float64 `mapstructure:"disk_percent"`
 	// MinAge 磁盘触发时的最小分区年龄（自当天结束起算）；<=0 取 DefaultTriggerMinAge。
 	MinAge time.Duration `mapstructure:"min_age"`
+	// Interval 冷层**搬运**的调度周期（Driver.Run 的 tick 间隔）；<=0 取 DefaultDriverInterval。
+	//
+	// 为什么必须独立于 `sweep.interval`（RET-4，2026-10-11）：`log_retention.sweep.interval`
+	// 的语义是「删除执行器的扫描间隔」，而搬运与删除是两条独立的路径。复用同一个键意味着
+	// 运维为了调删除节奏去改它，会连带改变搬运节奏（反之亦然），调参副作用不可见。
+	// 两者的合理取值也不同：删除扫描 1h 足够（删是幂等的，间隔只影响过期数据多留多久），
+	// 而搬运是「到期数据的默认动作」，间隔即「到期后最多多久才搬」，长间隔会让热层超期占用。
+	Interval time.Duration `mapstructure:"interval"`
 }
 
 // DefaultTriggerMinAge 是磁盘触发时的最小分区年龄。
@@ -36,10 +44,20 @@ type Trigger struct {
 // 又必须明显短于热层窗口（30d），才能让「提前搬」真的提前。
 const DefaultTriggerMinAge = 7 * 24 * time.Hour
 
+// DefaultDriverInterval 是冷层搬运的默认调度周期。
+//
+// 取 15 分钟而不是沿用删除扫描的 1h：搬运是**到期数据的默认动作**，间隔即「到期后最多
+// 多久才搬」，而热层 TTL 与 VL 原生 retention 之间没有余量，长间隔会让超期数据继续占着热层。
+// 单轮只是列举分区 + 算计划（只有到点分区才真的搬），代价与间隔不成问题。
+const DefaultDriverInterval = 15 * time.Minute
+
 // Normalize 补齐缺省。
 func (t Trigger) Normalize() Trigger {
 	if t.DiskPercent > 0 && t.MinAge <= 0 {
 		t.MinAge = DefaultTriggerMinAge
+	}
+	if t.Interval <= 0 {
+		t.Interval = DefaultDriverInterval
 	}
 	return t
 }
@@ -171,13 +189,16 @@ type Driver struct {
 }
 
 // NewDriver 创建驱动器。disk 为 nil 时只按年龄触发。
+//
+// 调度周期取 `trigger.interval`（搬运自己的键），**不再**复用 `sweep.interval`（删除扫描间隔）：
+// 两者语义不同，共用会变成不可见的调参耦合（见 Trigger.Interval 的说明）。
 func NewDriver(policy Policy, lister PartitionLister, mover Mover, disk DiskReader) *Driver {
 	return &Driver{
 		policy:   policy,
 		lister:   lister,
 		exec:     NewArchiveExecutor(policy, mover),
 		disk:     disk,
-		interval: policy.Normalize().Sweep.Interval,
+		interval: policy.Trigger.Normalize().Interval,
 	}
 }
 
@@ -190,7 +211,7 @@ func (d *Driver) SetPolicy(p Policy) {
 	if d.exec != nil {
 		d.exec.SetPolicy(p)
 	}
-	d.interval = p.Normalize().Sweep.Interval
+	d.interval = p.Trigger.Normalize().Interval
 }
 
 // Executor 返回内部执行器（观测面读 Stats 用）。

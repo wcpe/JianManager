@@ -85,7 +85,7 @@ func BuildAggregate(run SuppressedRun, degraded bool) logtypes.Event {
 	// 只算一次并集跨度：Record、正文里的区间、区间字段三处必须同源，
 	// 分别计算迟早会漂移（而漂移的表现是校验/缺口判据对不上，很难查）。
 	span := run.Span()
-	message, truncated := aggregateMessage(run)
+	message, truncated := aggregateMessage(run, span)
 	event := logtypes.BuildEvent(
 		first.Source,
 		span,
@@ -115,7 +115,13 @@ func BuildAggregate(run SuppressedRun, degraded bool) logtypes.Event {
 //
 // 正文是「人看得懂 + 机器能解析」的折中：`键=值` 便于用 LogsQL 做检索与统计，
 // 换行分段让它在 UI 里仍然可读。
-func aggregateMessage(run SuppressedRun) (string, bool) {
+//
+// span 必须由调用方按 run.Span() 传入（而不是在本函数里另算一遍）：Record、正文里的区间、
+// 区间字段三处必须同源（见 BuildAggregate 的注释）。**绝不**用「首条起点 / 末条终点」——
+// Span() 的相邻判定允许「后一条起点早于前一条终点」的乱序形态，那时末条 End 会小于
+// max(End)，正文区间将窄于事件实际覆盖，极端时甚至给出 End < Start 的非法区间；
+// 而排障时人是先读正文、再去核字段的，两处不一致会被直接当成数据问题追查。
+func aggregateMessage(run SuppressedRun, span logtypes.RecordRange) (string, bool) {
 	first := run.Events[0]
 	last := run.Events[len(run.Events)-1]
 
@@ -127,7 +133,7 @@ func aggregateMessage(run SuppressedRun) (string, bool) {
 	fmt.Fprintf(&b, " 规则=%s", run.Rule)
 	fmt.Fprintf(&b, " 级别=%s", levelForDisplay(first.Level))
 	fmt.Fprintf(&b, " 条数=%d", run.Count())
-	fmt.Fprintf(&b, " 区间=[%d,%d)", first.Record.Start, last.Record.End)
+	fmt.Fprintf(&b, " 区间=[%d,%d)", span.Start, span.End)
 	fmt.Fprintf(&b, " 模板=%s", TruncateRunes(MaskMessage(first.Message), aggregatePatternChars))
 	b.WriteString("\n首条=")
 	b.WriteString(firstSample)

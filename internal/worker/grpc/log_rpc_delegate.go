@@ -140,3 +140,16 @@ func (s *Server) LogClearIdentityConflicts(ctx context.Context, req *workerpb.Lo
 	}
 	return s.UnimplementedWorkerServiceServer.LogClearIdentityConflicts(ctx, req)
 }
+
+// LogImportArchives 手动触发归档（.gz）导入扫描（操作人经 metadata 携带）。
+//
+// 必须在此显式 delegate：Server 嵌入的是 UnimplementedWorkerServiceServer，缺了这个方法时
+// 调用会**恒返回 Unimplemented**——而 worker/config.go 的注释与 CHANGELOG 都对外宣称该入口
+// 「始终可用（不受定时扫描开关影响）」，形成「文档说能用、实际不可用」的静默断链。
+// 回归见 log_rpc_delegate_test.go（穿透 bufconn 真 gRPC，而非直接调 grpcsvc 层）。
+func (s *Server) LogImportArchives(ctx context.Context, req *workerpb.LogImportArchivesRequest) (*workerpb.LogTaskResponse, error) {
+	if q := s.logRPC(); q != nil {
+		return q.LogImportArchives(ctx, req)
+	}
+	return s.UnimplementedWorkerServiceServer.LogImportArchives(ctx, req)
+}

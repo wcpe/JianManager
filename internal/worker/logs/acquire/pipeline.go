@@ -63,6 +63,9 @@ type Pipeline struct {
 	replayGate  replayGateState
 	// replaySuppressBaseOverride 是退避首个间隔的测试/配置覆盖（0 ⇒ 用常量默认值）。
 	replaySuppressBaseOverride time.Duration
+	// drainDiagKey 是上一次「排空取批诊断」打过的读数指纹（ACQ-4：读数不变不重复打）。
+	// 持 replayGuard 访问（与排空闸同锁 ⇒ 同一源的排空路径串行 ✓）。
+	drainDiagKey string
 }
 
 // replaySuppressBase / replaySuppressMax 是「冗余整窗重投」抑制的退避区间（#60-Z1，父级裁定）；
@@ -74,6 +77,7 @@ const (
 	replaySuppressBase = 500 * time.Millisecond
 	replaySuppressMax  = 2 * time.Second
 )
+
 // 历史记录（#60-Z1 现场，opt2 采）：门队列浅（1–9 帧）⇒ 不是排队问题；单次持久化 maxMs=159,934ms ✗✗
 // ⇒ 慢在「单次大 payload 提交」；投递链上相邻样本 79.7% 是新代次（+1）⇒ 几乎每次写入都在整窗 replace；
 // ≥1M 批占 4.8%、峰值 126 条/h。环：排空每次只发 ≤500 条，却以 replay=true 调用投递 ⇒ ingest 侧
@@ -492,7 +496,12 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 	suppress, progressed := p.replayDrainDecision(now)
 	// #7 复盘定点（**只观测、零判据改动** ✗）：滞留期排空"碎批 2–840"的根因三判一 ——
 	//   抑制跳轮 ✗ ／ 快照碎批（snapshot/durable 大而 pending 小）✗ ／ 读数口径错（碎批其实来自常规轮）✓。
-	// 一次跑即可判：本行 pending 与 snapshot/durable 同刻并列，suppress/progressed 亦并列。
+	//
+	// **日志纪律（ACQ-4）**：本函数是暂停源自愈排空的主路径，维护环每轮每源至少调一次；
+	// 长期停在暂停上的源会持续触发。原实现无脑打一条 **Info** ⇒ 长期刷屏（本仓库对日志面
+	// 成本有纪律，见 noteSelfFailure 的有界环形缓冲）。现改为：① 降为 **Debug**；② 再加
+	// **读数变化才打**（同一 (pending, snapshot, durable, cap, suppress, progressed) 组合不重复产出），
+	// 于是"一次跑即可判"的取证能力完整保留，而静止形态下不再有逐轮日志。
 	{
 		durableN := 0
 		for _, e := range entries {
@@ -500,8 +509,7 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 				durableN++
 			}
 		}
-		slog.Info("排空取批诊断", "pending", len(pending), "snapshot", len(entries), "durable", durableN,
-			"cap", cap0, "suppress", suppress, "progressed", progressed)
+		p.logDrainDiag(len(pending), len(entries), durableN, cap0, suppress, progressed)
 	}
 	if suppress {
 		p.noteSuppressedReplayDrain(now)
@@ -532,6 +540,29 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 	}
 	return pending, nil
 }
+
+// logDrainDiag 打「排空取批诊断」一行（#7 复盘定点取证，见 deliverPendingBestEffort ✓）。
+//
+// 两道约束（ACQ-4）：
+//   - **Debug 级**：默认 Info 门下零日志面成本；
+//   - **读数是变化才打**：同一指纹不重复产出 ⇒ 长期停滞的源不再逐轮刷日志，
+//     而"三判一"所需的 pending/snapshot/durable/cap/suppress/progressed 一并俱全，
+//     每次读数变化仍有一条完整取证。
+//
+// 指纹与 lastLogKey 都持 replayGuard（与排空闸同锁 ⇒ 同一源串行 ✓）。
+func (p *Pipeline) logDrainDiag(pendingN, snapshotN, durableN int, cap0 int, suppress, progressed bool) {
+	key := fmt.Sprintf("%d/%d/%d/%d/%t/%t", pendingN, snapshotN, durableN, cap0, suppress, progressed)
+	p.replayGuard.Lock()
+	changed := p.drainDiagKey != key
+	p.drainDiagKey = key
+	p.replayGuard.Unlock()
+	if !changed {
+		return
+	}
+	slog.Debug("排空取批诊断", "pending", pendingN, "snapshot", snapshotN, "durable", durableN,
+		"cap", cap0, "suppress", suppress, "progressed", progressed)
+}
+
 func (p *Pipeline) noteSelfFailure(reason string) {
 	p.workerSelfFailures++
 	// **原因必须可读**（2026-10-05 ✓）：此前是 `_ = reason` ⇒ 自愈失败只留一个计数、原因永远查不到 ✗

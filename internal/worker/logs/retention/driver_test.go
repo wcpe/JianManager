@@ -19,6 +19,7 @@ func TestPolicyRejectsRawExecutionValues(t *testing.T) {
 		{Enabled: true, Sweep: Sweep{Timeout: -time.Hour}},
 		{Enabled: true, Trigger: Trigger{DiskPercent: 101}},
 		{Enabled: true, Trigger: Trigger{MinAge: -time.Hour}},
+		{Enabled: true, Trigger: Trigger{Interval: -time.Hour}},
 	} {
 		if err := p.Validate(); err == nil {
 			t.Errorf("必须拒绝原始非法策略：%+v", p)
@@ -53,6 +54,30 @@ func newTestDriver(t *testing.T, mover Mover, disk DiskReader, parts []Partition
 	t.Helper()
 	p := enabledPolicy()
 	return NewDriver(p, &fakeLister{parts: parts}, mover, disk)
+}
+
+// TestDriverIntervalIsIndependentOfSweepInterval 是 RET-4 的回归：搬运的调度周期只由
+// `trigger.interval` 决定，改「删除扫描间隔」（sweep.interval）不得连带改变搬运节奏。
+func TestDriverIntervalIsIndependentOfSweepInterval(t *testing.T) {
+	p := enabledPolicy()
+	p.Sweep.Interval = 5 * time.Hour // 只为删除而调的键
+	d := NewDriver(p, &fakeLister{}, nil, nil)
+	if got := d.Interval(); got != DefaultDriverInterval {
+		t.Errorf("搬运周期不得跟随 sweep.interval，应为默认 %s，得到 %s", DefaultDriverInterval, got)
+	}
+
+	p.Trigger.Interval = 42 * time.Minute
+	d = NewDriver(p, &fakeLister{}, nil, nil)
+	if got := d.Interval(); got != 42*time.Minute {
+		t.Errorf("trigger.interval 应决定搬运周期，得到 %s", got)
+	}
+
+	// SetPolicy 也必须立即生效（否则热更新配置后节奏不变）。
+	p.Trigger.Interval = 7 * time.Minute
+	d.SetPolicy(p)
+	if got := d.Interval(); got != 7*time.Minute {
+		t.Errorf("SetPolicy 后搬运周期应更新为 7m，得到 %s", got)
+	}
 }
 
 // 回归①：**到点必搬** —— 这是驱动器的存在理由。
@@ -260,7 +285,7 @@ func TestDriverWithoutMoverBlocksInsteadOfDeleting(t *testing.T) {
 // TestDriverRunStopsOnContextCancel 确认周期循环会随 ctx 结束退出（首轮立即执行）。
 func TestDriverRunStopsOnContextCancel(t *testing.T) {
 	p := enabledPolicy()
-	p.Sweep.Interval = time.Hour // 长间隔：确保只跑首轮
+	p.Trigger.Interval = time.Hour // 长间隔：确保只跑首轮（搬运周期由 trigger.interval 决定）
 	mv := &fakeMover{}
 	d := NewDriver(p, &fakeLister{parts: driverFixture()}, mv, nil)
 

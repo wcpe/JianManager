@@ -4,7 +4,8 @@ package vlsup
 //
 // 现场形态：worker 被强杀（SIGKILL）后，其托管的 vlsup 子进程成孤儿、继续占用
 // 19461/19462 ✗ ⇒ 新 worker 报 `hot exited immediately after start`，只能靠 RangeClient
-// 接旧实例（降级 ✓）。故：**启前回收 + 关停级联**都要有界、且**只碰自己的孤儿** ✓。
+// 接旧实例（降级 ✓）。故：**启前回收**必须有界、且**只碰自己的孤儿** ✓
+// （关停级联另有关停路径自己的骨架；本函数当前只有 startup 一个调用点，见 apps/worker/main.go ✓）。
 //
 // 判据（**两道都过才回收** ✗✓，防误杀他进程）：
 //  ① 进程 cmdline 含**本 data 根**（vlsup 的 cmdline 由本节点的 data 根派生 ⇒ 见 cmdline.go ✓）；
@@ -16,6 +17,7 @@ package vlsup
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -94,7 +96,9 @@ func scanOwnOrphans(dataRoot string, selfPID int) ([]OrphanMatch, error) {
 }
 
 // ReapOrphans 回收本节点的 vlsup 孤儿（启前调用 ✓）；每个孤儿：TERM → 有界等 → 未退则 KILL ✓。
-// who 为调用点标识（"startup"/"shutdown" ✓），仅用于日志（不静默 ✓）。
+// who 为调用点标识（"startup"/"shutdown" ✓）：本函数据此自报一次**汇总**留痕
+// （ACQ-5：旧实现注释声称 who "仅用于日志"，函数体却从未引用它 ⇒ 调用点标识被静默丢弃；
+// 逐条留痕仍由调用方的 onReap 负责，这里只补一条不随孤儿数增长、且没有孤儿也打的汇总行）。
 func ReapOrphans(dataRoot, who string, onReap func(OrphanMatch)) ([]int, error) {
 	if strings.TrimSpace(dataRoot) == "" {
 		return nil, fmt.Errorf("vlsup: 孤儿回收需要 data 根（空 ⇒ 拒绝执行，防误杀 ✗）")
@@ -125,5 +129,9 @@ func ReapOrphans(dataRoot, who string, onReap func(OrphanMatch)) ([]int, error) 
 		}
 		reaped = append(reaped, o.PID)
 	}
+	// 汇总留痕（ACQ-5）：who 是调用点标识，没有孤儿时也要打 ⇒ 现场能区分"没人可回收"与
+	// "没跑过回收"。每条进程的逐条留痕由 onReap 负责（pid + 两道证据 ✓），这里只报计数。
+	slog.Info("vlsup 孤儿回收完成",
+		"who", who, "dataRoot", dataRoot, "found", len(found), "reaped", len(reaped), "pids", reaped)
 	return reaped, nil
 }

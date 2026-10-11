@@ -30,9 +30,19 @@ const (
 // searchMaxWindow 是合并粗筛单次 VL 查询的时间窗口上限，必须不大于 VL 启动参数
 // `-search.maxQueryTimeRange`（当前 31d，见 vlsup.BuildArgs）：超过即被 VL 以 400
 // `too big time range selected` 拒绝。31d 覆盖 retention 30d 场景下的一切并集窗口
-// （"all"=30 天窗最多跨 31 个 UTC 天 ⇒ 31×24h，实测恰在 VL 边界内），故常态下
+// （"all"=30 天窗最多跨 31 个 UTC 天 ⇒ 31×24h），故常态下
 // **单次查询**即完成——VL 的 sort+limit top-K 从最新分区早停，实测 30 天窗 1.2-1.3s。
 // 仅当窗口超过 31d（保留期外的防御路径）才切分为滑动段。
+//
+// **边界比较符已在本机实测确证**（VictoriaLogs v1.52.0，起本地实例逐点探测）：
+//   - 窗口恰好 744h（=31d）⇒ HTTP 200，**不被拒**；
+//   - 744h + 10ns / 1µs / 1s ⇒ HTTP 400 `too big time range selected`
+//     （`it cannot exceed -search.maxQueryTimeRange=744h0m0s`）；
+//   - ⇒ VL 的判定是**严格大于**（`window > 744h` 才拒），恰好取 31d 是**被接受**的。
+//
+// 因此"恰好 31d"是可用且有意取满的（retention 30d + 1d 余量，见 vlsup.BuildArgs 的同款注释），
+// 不需要为了"避开边界"而收窄。改动此常量前必须同步改 `-search.maxQueryTimeRange`，否则
+// 窗口一旦真的超过 VL 上限，代次占用探测与合并粗筛会整组失败。
 const searchMaxWindow = 31 * 24 * time.Hour
 
 // projectionGenerationField 是投影代次字段名（eventFromJSON 会把它放进 Event.Fields）。
@@ -252,7 +262,8 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	duplicated := false
 	exhausted := true
 	needRows := int(lookaheadRows(q))
-	// 临时诊断（2026-10-08）：合并查询的 VL 侧耗时（区分"等 VL"与"本地处理"）。
+	// 固定观测口径：合并查询的 VL 侧耗时（区分"等 VL"与"本地处理"）。
+	// Debug 级（默认 Info 门下不产出，零日志面成本）；定位合并路径慢查询时开启即可。
 	vlStart := time.Now()
 	segments := 0
 	for segEnd := winEnd; ; {
@@ -306,10 +317,16 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 				}
 				// 已有结果：更老段失败不得整组丢弃。标记原因、停在该段，
 				// 更老数据由游标翻页继续触达。
+				//
+				// 原因码必须是**真实原因**（QRY-2）：段查询失败（VL 5xx / 超时 / 连接错）不是
+				// 预算问题。旧实现复用 `ReasonBudgetExceeded` 有两个后果：① 现场按 BUDGET_EXCEEDED
+				// 去调预算，而真实原因是 VL 段查询失败；② 该原因码在 Search 里会置 budgetHit，
+				// 而游标只在 !budgetHit 时下发 ⇒ 本注释承诺的恢复路径（游标翻页）在 worker 契约上
+				// 反而不成立（Exhausted=false 却 NextCursor=""）。故改用 ReasonRangeUnavailable。
 				slog.Warn("合并粗筛段查询失败，保留已收集结果",
 					"targets", len(rngs), "segment_start", segStart.Format(time.RFC3339), "err", err)
 				exhausted = false
-				out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
+				out.CoverageReasons = append(out.CoverageReasons, query.ReasonRangeUnavailable)
 				break
 			}
 			if !segment.Exhausted {
@@ -331,7 +348,7 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 		segEnd = segStart
 	}
 
-	// 临时诊断：VL 请求耗时（含网络往返 + 流式读取 + 归因过滤）。
+	// 固定观测口径：VL 请求耗时（含网络往返 + 流式读取 + 归因过滤）。
 	slog.Debug("query-timing: vl-merged",
 		"targets", len(rngs), "segments", segments, "vl_ms", time.Since(vlStart).Milliseconds(),
 		"rows", len(out.Items), "bytes", out.Bytes, "truncated", !exhausted)

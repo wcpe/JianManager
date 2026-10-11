@@ -266,13 +266,17 @@ func TestPlanDoesNotExpandEverySource(t *testing.T) {
 	}
 }
 
-// TestPlanSkipsKeepForeverAndOverridesMatchingGlobal：永久保留与等同于全局的覆盖都不下发。
-func TestPlanSkipsKeepForeverAndOverridesMatchingGlobal(t *testing.T) {
+// TestPlanKeepsForeverAndExtendingOverridesPerSource：永久保留与「比全局更长」的来源覆盖
+// 都必须让该级别的**全局档退场**（RET-1 修复后的口径）。
+//
+// 旧实现在这里只产出「1 条全局 + 1 条来源档」，而全局档会按更短的全局 TTL 删掉那条
+// 「要留更久」的来源——本用例把错误行为固化成过预期，现已按正确语义改写。
+func TestPlanKeepsForeverAndExtendingOverridesPerSource(t *testing.T) {
 	p := enabledPolicy()
 	p.ByLevel = map[string]time.Duration{"DEBUG": 0, "INFO": time.Hour, "WARN": 0, "ERROR": 0, "TRACE": 0}
 	p.Sources = []SourceOverride{
-		{Match: "inst:1", ByLevel: map[string]time.Duration{"INFO": time.Hour}},      // 与全局相同 ⇒ 不单独下发
-		{Match: "inst:2", ByLevel: map[string]time.Duration{"INFO": 48 * time.Hour}}, // 与全局不同 ⇒ 下发
+		{Match: "inst:1", ByLevel: map[string]time.Duration{"INFO": time.Hour}},      // 与全局相同
+		{Match: "inst:2", ByLevel: map[string]time.Duration{"INFO": 48 * time.Hour}}, // 比全局更长 ⇒ 延长型
 	}
 	plan, err := p.Plan(baseTime, []string{"inst:1", "inst:2"}, DefaultScanLevels())
 	if err != nil {
@@ -282,23 +286,180 @@ func TestPlanSkipsKeepForeverAndOverridesMatchingGlobal(t *testing.T) {
 		if tg.TTL <= 0 {
 			t.Errorf("永久保留的级别不得出现在计划里：%s", tg)
 		}
-	}
-	var global, scoped int
-	for _, tg := range plan {
+		if tg.Level != "INFO" {
+			t.Errorf("只有 INFO 有保留期，不该出现 %s 档", tg.Level)
+		}
 		if tg.SourceID == "" {
-			global++
-			if tg.Level != "INFO" {
-				t.Errorf("只有 INFO 有保留期，不该出现 %s 档", tg.Level)
+			t.Errorf("INFO 存在延长型覆盖 ⇒ 该级别不得产出全实例档（否则会按 1h 删掉 inst:2 的 48h 数据）：%s", tg)
+		}
+	}
+	if len(plan) != 2 {
+		t.Fatalf("应逐源各一条（inst:1 → 1h、inst:2 → 48h），得到 %d 条", len(plan))
+	}
+	got := map[string]time.Duration{}
+	for _, tg := range plan {
+		got[tg.SourceID] = tg.TTL
+	}
+	if got["inst:1"] != time.Hour || got["inst:2"] != 48*time.Hour {
+		t.Fatalf("逐源保留期错误：%v", got)
+	}
+}
+
+// effectiveCutoff 用 **VL 删除任务的并集语义**算出「某源某级别实际会被删到哪个截止时间」：
+// 所有匹配该 (源, 级别) 的档里取**最晚**的那个 Before（截止时间越晚 = 删得越多）；
+// 没有任何档匹配 = 不删（ok=false）。
+//
+// 为什么必须在测试里显式模拟这个语义：`Plan` 的正确性判据不是「产出了哪些档」，而是
+// 「并集执行之后每个源实际被删到哪」。只看档的条数/标签会漏掉 RET-1 那类误删。
+func effectiveCutoff(plan []SweepTarget, source, level string) (time.Time, bool) {
+	key := LevelKeyOf(level)
+	var best time.Time
+	found := false
+	for _, tg := range plan {
+		if tg.Level != key {
+			continue
+		}
+		if tg.SourceID != "" && tg.SourceID != source {
+			continue
+		}
+		if !found || tg.Before.After(best) {
+			best, found = tg.Before, true
+		}
+	}
+	return best, found
+}
+
+// TestPlanExtendingOverridesAreNotDeletedByGlobalTarget 是 RET-1 的转红用例：
+// 「留更久 / 永久保留」的来源覆盖绝不能被任何档按更短的 TTL 删掉。
+//
+// 改回旧实现（全局档不排除被覆盖的源）时本用例必然失败：inst:2 的 INFO 会被
+// `level:INFO`（全局 7d）匹配到，实际生效的截止时间早于「永久保留」；inst:3 同理。
+func TestPlanExtendingOverridesAreNotDeletedByGlobalTarget(t *testing.T) {
+	p := enabledPolicy()
+	p.ByLevel = map[string]time.Duration{
+		"INFO":  7 * 24 * time.Hour,
+		"ERROR": 90 * 24 * time.Hour,
+	}
+	p.Sources = []SourceOverride{
+		{Match: "inst:2", ByLevel: map[string]time.Duration{"INFO": 0}},                   // 永久保留
+		{Match: "inst:3", ByLevel: map[string]time.Duration{"INFO": 30 * 24 * time.Hour}}, // 比全局更长
+	}
+	sources := []string{"inst:1", "inst:2", "inst:3"}
+	plan, err := p.Plan(baseTime, sources, DefaultScanLevels())
+	if err != nil {
+		t.Fatalf("计划失败：%v", err)
+	}
+
+	for _, sid := range sources {
+		for _, level := range []string{"INFO", "ERROR"} {
+			want := p.EffectiveTTL(sid, level)
+			cut, matched := effectiveCutoff(plan, sid, level)
+			if want == 0 {
+				if matched {
+					t.Errorf("%s/%s 配置为永久保留，却仍有档会删它：before=%s（%s）",
+						sid, level, cut.Format(time.RFC3339), level)
+				}
+				continue
 			}
-		} else {
-			scoped++
-			if tg.SourceID != "inst:2" {
-				t.Errorf("与全局相同的覆盖不该单独下发，出现 %s", tg)
+			if !matched {
+				t.Errorf("%s/%s 的保留期为 %s，却没有任何档覆盖它（配置声明不生效）", sid, level, want)
+				continue
+			}
+			if wantCut := baseTime.Add(-want); !cut.Equal(wantCut) {
+				t.Errorf("%s/%s 实际删除截止时间应为 %s（保留 %s），得到 %s —— 说明有更短的档在删它",
+					sid, level, wantCut.Format(time.RFC3339), want, cut.Format(time.RFC3339))
 			}
 		}
 	}
-	if global != 1 || scoped != 1 {
-		t.Fatalf("期望 1 条全局 + 1 条来源，得到 global=%d scoped=%d", global, scoped)
+}
+
+// TestPlanPrefixExtendingOverrideExpandsPerSource：前缀型（`inst:*`）的延长覆盖同样必须让
+// 全局档退场——哪怕它可能命中「当前不在 sourceIDs 里」的来源（这正是选逐源下发而不是
+// 「给全局档拼 NOT log_source_id」的原因：排除项对未知来源补不全）。
+func TestPlanPrefixExtendingOverrideExpandsPerSource(t *testing.T) {
+	p := enabledPolicy()
+	p.Sources = []SourceOverride{
+		{Match: "inst:*", ByLevel: map[string]time.Duration{"INFO": 0}}, // 全部实例源永久保留 INFO
+	}
+	plan, err := p.Plan(baseTime, []string{"inst:1", "inst:2"}, DefaultScanLevels())
+	if err != nil {
+		t.Fatalf("计划失败：%v", err)
+	}
+	for _, tg := range plan {
+		if tg.Level == "INFO" {
+			t.Errorf("前缀延长覆盖存在时不得产出 INFO 全实例档（会按全局 TTL 删掉被声明永久保留的源）：%s", tg)
+		}
+	}
+	// 其余级别不受影响：仍按全局档下发（默认档位）。
+	var info, others int
+	for _, tg := range plan {
+		if tg.Level == "INFO" {
+			info++
+		} else {
+			others++
+		}
+	}
+	if info != 0 || others != 4 {
+		t.Errorf("期望 INFO 零条、其余级别各一条全局档，得到 info=%d others=%d", info, others)
+	}
+}
+
+// TestPlanShorteningOverrideKeepsGlobalTarget：只缩短的覆盖**不**触发逐源展开
+// （目标数仍与来源数解耦，代价只在运维显式要求「留更久」时才付）。
+func TestPlanShorteningOverrideKeepsGlobalTarget(t *testing.T) {
+	p := enabledPolicy()
+	p.Sources = []SourceOverride{
+		{Match: "inst:2", ByLevel: map[string]time.Duration{"INFO": time.Hour}}, // 比全局 7d 短
+	}
+	plan, err := p.Plan(baseTime, []string{"inst:1", "inst:2"}, DefaultScanLevels())
+	if err != nil {
+		t.Fatalf("计划失败：%v", err)
+	}
+	if len(plan) != len(DefaultScanLevels())+1 {
+		t.Fatalf("应为 5 条全局档 + 1 条缩短的来源档，得到 %d 条", len(plan))
+	}
+	cut, _ := effectiveCutoff(plan, "inst:2", "INFO")
+	if want := baseTime.Add(-time.Hour); !cut.Equal(want) {
+		t.Errorf("缩短型覆盖必须生效（%s），得到 %s", want, cut)
+	}
+}
+
+// TestDescribeNeverClaimsExecutorInEffect 是 RET-2 的措辞回归。
+//
+// 启动日志会打印政策摘要（main.go 的 retentionPolicyLogFields），而本版本删除执行器
+// 没有生产构造点：`vl_sweep=true` 只能说「只计划」，**不得**印成 vl-sweep/已生效。
+func TestDescribeNeverClaimsExecutorInEffect(t *testing.T) {
+	if DeleteExecutorWired {
+		t.Fatal("本版本删除执行器未接线；若已接线，请同步更新本用例与 Describe 的措辞")
+	}
+	p := enabledPolicy()
+	p.Discard = true
+	p.Sweep.VLSweep = true
+	got := p.Describe()
+	if strings.Contains(got, "vl-sweep") {
+		t.Errorf("打开执行闸不得描述成 vl-sweep（会让人以为删除已生效）：%q", got)
+	}
+	if !strings.Contains(got, "planned-only") || !strings.Contains(got, "未接线") {
+		t.Errorf("应显式说明「只计划 / 未接线」，得到 %q", got)
+	}
+	if !strings.Contains(DescribeDeleteExecutor(p), "未接线") {
+		t.Errorf("DescribeDeleteExecutor 必须显式报未接线，得到 %q", DescribeDeleteExecutor(p))
+	}
+	off := enabledPolicy()
+	if !strings.Contains(off.Describe(), "dry-run") {
+		t.Errorf("执行闸未开时仍应报 dry-run，得到 %q", off.Describe())
+	}
+}
+
+// TestDryRunReasonNamesUnwiredExecutor：干跑原因必须能区分「两闸没开」与「执行器未接线」。
+func TestDryRunReasonNamesUnwiredExecutor(t *testing.T) {
+	p := discardPolicy() // 两闸都开
+	if got := dryRunReason(p); !strings.Contains(got, "未接线") {
+		t.Errorf("两闸都开时，干跑原因应指向「执行器未接线」，得到 %q", got)
+	}
+	p2 := enabledPolicy()
+	if got := dryRunReason(p2); !strings.Contains(got, "执行闸未打开") {
+		t.Errorf("执行闸未开时，干跑原因应指向执行闸，得到 %q", got)
 	}
 }
 

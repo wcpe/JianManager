@@ -17,7 +17,7 @@ import (
 // 解码位置选在归一化入口（Normalizer.FeedAt）而不是各采集器：tailer / gzip 归档 / 受管 Raw
 // 三条输入路径最终都汇到这里，在这里收口可以保证「同一份字节在任何输入路径上得到同一个事件」。
 //
-// 判据（为什么不会把合法 UTF-8 误判成 GBK）：
+// 判据（**auto 模式**下为什么不会把合法 UTF-8 误判成 GBK）：
 //   - 合法 UTF-8 永远原样返回，绝不进入 GB 系解码分支；
 //   - 非 UTF-8 的字节先按 GB18030 解码，**解码结果含 U+FFFD（替换字符）即判为不可信**并放弃解码
 //     （实测：随机损坏字节 0xff 0xfe、孤立截断字节 0xC4 经 GB18030 解码都会产生 U+FFFD，
@@ -27,6 +27,8 @@ import (
 //
 // 配置可用 SourceConfig.Charset 按源覆盖（auto/utf-8/gbk/gb18030）；不一致或未知的取值在
 // 登记阶段被拒（见 pipeline.New 与 ingest.Register 的校验），不会静默回退。
+// ⚠️ 显式配置为 GB 系时**不做**「合法 UTF-8 原样返回」这道保护（配置即事实：配置错的后果
+// 要暴露出来，而不是被静默改对，见 decodeWith 的说明 ✓）——混有 UTF-8 内容的源应配 auto。
 const (
 	// CharsetAuto 自动检测（默认）：合法 UTF-8 原样，非法 UTF-8 尝试 GB18030。
 	CharsetAuto Charset = "auto"
@@ -139,6 +141,17 @@ func (d *charsetDecoder) decode(raw string) (string, Charset) {
 	return raw, CharsetUTF8
 }
 
+// decodeWith 按**显式配置**的字符集解码（配置即事实 ✗✓）。
+//
+// 语义（NORM-1 订正后的实际口径）：配置为 GB 系时，本行走 GB18030 解码；**不再**套用 auto 模式
+// 那道「合法 UTF-8 原样返回」的保护。理由是配置错误必须暴露而不是被静默改对——否则把 GBK 源
+// 误配成 utf-8（或反之）时，平台会悄悄给出正确文本，现场永远发现不了 ✗。因此配置为 gbk 的源里
+// 夹杂的 UTF-8 非 ASCII 行**会**被转码（GB18030 是 Unicode 超集，解 UTF-8 字节通常不产生
+// U+FFFD ⇒ 无 `encoding_sanitized` 标记的静默乱码）；混有 UTF-8 内容的源应配 **auto**
+// （auto 的粘滞判据正是为此存在 ✓）。纯 ASCII 行经 decodeGB 的短路原样返回（零转码 ✓）。
+//
+// 下面这个 utf8.ValidString 分支不是"保护合法 UTF-8"——它只在 **GB 解码被判不可信**
+// （结果含 U+FFFD）且原文却是合法 UTF-8 时兜底：此时保留原文，并按 utf-8 记生效字符集。
 func (d *charsetDecoder) decodeWith(charset Charset, raw string) (string, Charset) {
 	switch charset {
 	case CharsetUTF8:
@@ -151,8 +164,7 @@ func (d *charsetDecoder) decodeWith(charset Charset, raw string) (string, Charse
 			return decoded, charset
 		}
 		if utf8.ValidString(raw) {
-			// 显式配置为 GB 系但本行是合法 UTF-8：强制转码只会毁掉正确文本，
-			// 故保留原样并在事件字段里标注生效字符集（调用方据此可发现配置与实际不符）。
+			// GB 解码不可信（含替换字符）但原文是合法 UTF-8 ⇒ 保留原文，生效字符集记 utf-8。
 			return raw, CharsetUTF8
 		}
 		return raw, charset

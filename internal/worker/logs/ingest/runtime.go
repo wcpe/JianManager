@@ -410,6 +410,12 @@ type Manager struct {
 	// "有界投递步"次数与耗时（前置是 O(1) 的"投递欠账"判据 delivery < read ✓ ⇒ 无欠账不发起 ✓）。
 	sweepDeliveryProbes atomic.Int64
 	nsRollingDelivery   atomic.Int64
+	// sweepDirectDeliverProbes / nsRollingDirectDeliver（#179-② 诊断，只读）：兜底环轮转窗口里
+	// **实际发起**的「破环直投」步次数与耗时。该步含 Ledger 深克隆 + WAL 全量快照 + 同步 VL 写入
+	// （本文件自述"把单轮拖到 48.5 分钟"的 O(n) 重活），此前**没有任何读数** ⇒ 兜底环诊断里完全
+	// 不可见；有了它才谈得上断言单轮有界（与相邻两步同款的前置 O(1) 判据）。
+	sweepDirectDeliverProbes atomic.Int64
+	nsRollingDirectDeliver   atomic.Int64
 	// sweepBackpressureStreak 是窗口化背压的阈值（连续 N 轮净涨才跳过 ✓；0 ⇒ 默认 3）。
 	sweepBackpressureStreak int
 	// sweepInflightCap 是在飞并发上限（见 defaultSweepInflightCap ✓）。
@@ -516,14 +522,6 @@ type Manager struct {
 	verifyChunkEvents int
 	// verifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取默认，1 为串行。
 	verifyChunkConcurrency int
-	// sourceMaxEnd 缓存每源「权威集合的最大 record_end」（封闭可见水位）。
-	//
-	// 为什么需要（FR-498 单位行成本 8.3× 的修复之一）：publish 原先把 maxEnd 算成
-	// 「传入 events 的最大 record_end」，而 events 是**权威全量**——为拿这一个标量，每批
-	// 都要遍历该源全部历史事件（生产实测单源段 18GB/63 源，单次遍历 8.7 µs/行）。
-	// 该水位是**单调不减**的（段只追加、投递只前进），因此可以按源缓存、每批只与「本批最大值」
-	// 取大。字段缺失时由 authoritativeMaxEnd 用 state 的 EventsStoredThrough 初始化。
-	sourceMaxEnd map[string]uint64
 	// eventsStoredRows 缓存每源「段存储已落行数」，避免 appendEvents 每批 Count（其内部要
 	// 校准末段 = O(末段行数) 的整段读取）。本进程是段的唯一写者，追加成功后按增量推进即可。
 	eventsStoredRows map[string]int
@@ -2747,6 +2745,10 @@ func (m *Manager) Register(source SourceConfig) error {
 			"charset", source.Charset, "charsetInherited", explicit.Charset == "")
 	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
+	// INGEST-2 修复：eventBodyLookup 对该源全部历史事件做一次磁盘段遍历（O(段行数)），
+	// 不得落在 m.mu 临界区内。m.events 构造后只读（仅 Close 置 nil），锁外读安全。
+	// 新源无段 ⇒ O(1) 空遍历；换代源的 O(段行数) 磁盘读由此移到锁外。
+	bodyLookup := m.eventBodyLookup(key)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.pipes[key]; ok {
@@ -2766,7 +2768,7 @@ func (m *Manager) Register(source SourceConfig) error {
 		}
 		if len(saved.WALRefs) > 0 {
 			// 引用形式（B1a）：内联条目直接恢复，引用条目按 EventID 从事件段存储水合。
-			missing := wal.RestoreMixed(saved.WAL, saved.WALRefs, m.eventBodyLookup(key))
+			missing := wal.RestoreMixed(saved.WAL, saved.WALRefs, bodyLookup)
 			if len(missing) > 0 {
 				recoveryDirty = true
 				// 取不到正文的条目不得静默丢：记可见缺口并告警（与 FR-474 §5#1 同口径）。
@@ -3774,8 +3776,6 @@ type deliveryTailPlan struct {
 	Fast bool
 	// StoredRows 是段存储已落行数（快路径下由缓存给出，避免每批 Count 校准末段）。
 	StoredRows int
-	// MaxEnd 是权威集合的最大 record_end（缓存水位与本批取大，单调不减）。
-	MaxEnd uint64
 	// Events 是本批要追加进段存储的事件（快路径下即权威集合的增量尾部）。
 	Events []logtypes.Event
 }
@@ -3815,13 +3815,13 @@ func (m *Manager) planDeliveryTail(key string, saved persistedSource, events []l
 	if !ok {
 		return plan
 	}
-	minStart, maxEnd := events[0].Record.Start, events[0].Record.End
+	// 只需最小 record_start 判定「本批是否整体在水位之后」；最大 record_end 由发布面
+	// writeProjectionDay → publishSnapshot 自行计算（它只应对本次可见面取最大，
+	// 不得并入「已耐久未投递」的 WAL 值，见 publishSnapshot 的注释）。
+	minStart := events[0].Record.Start
 	for _, e := range events[1:] {
 		if e.Record.Start < minStart {
 			minStart = e.Record.Start
-		}
-		if e.Record.End > maxEnd {
-			maxEnd = e.Record.End
 		}
 	}
 	if minStart < saved.EventsStoredThrough || minStart < positions.Delivery {
@@ -3833,7 +3833,6 @@ func (m *Manager) planDeliveryTail(key string, saved persistedSource, events []l
 	}
 	plan.Fast = true
 	plan.StoredRows = stored
-	plan.MaxEnd = m.advanceSourceMaxEnd(key, maxEnd)
 	return plan
 }
 
@@ -3881,28 +3880,6 @@ func (m *Manager) cachedStoredRows(key string) (int, bool) {
 //
 // 三者取大即权威全量的 max：权威集合 = 段内容 + durable WAL（见 canonicalRecoveryEvents），
 // 而两部分的右端分别由前两个水位给出。
-func (m *Manager) advanceSourceMaxEnd(key string, batchMax uint64) uint64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.sourceMaxEnd == nil {
-		m.sourceMaxEnd = map[string]uint64{}
-	}
-	cur := m.sourceMaxEnd[key]
-	if saved, ok := m.state.Sources[key]; ok && saved.EventsStoredThrough > cur {
-		cur = saved.EventsStoredThrough
-	}
-	if p, ok := m.pipes[key]; ok && p != nil {
-		if pos, ok := p.Positions(); ok && pos.Durable > cur {
-			cur = pos.Durable
-		}
-	}
-	if batchMax > cur {
-		cur = batchMax
-	}
-	m.sourceMaxEnd[key] = cur
-	return cur
-}
-
 // projectionGenerationsExhausted 报告该源已发布的投影代次是否已达上限（需要整窗重发刷新）。
 func (m *Manager) projectionGenerationsExhausted(source SourceConfig) bool {
 	if m.cat == nil {
@@ -4675,7 +4652,9 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	}
 	plan := projectionWritePlan{Write: writeEvents, Archive: toWrite, Replace: replace, Snapshot: snapshot}
 	if tail.Fast && !replace && !replay {
-		// 增量尾部：段追加走 O(本批) 路径、发布水位走缓存（见 projectionWritePlan.Tail）。
+		// 增量尾部：段追加走 O(本批) 路径（省掉 appendEvents 的全量比对与末段校准）。
+		// 发布水位不在此处决定：publishSnapshot 按「本次写入面的最大 record_end」取，
+		// 并与既有 ClosedVisibleSeq 取大保单调。
 		// 重放（replay）不属于增量尾部 ✗：它是全量恢复投递，必须走慢路径——否则会被当成"快路径"
 		// 而绕过恢复期的 staging 幂等过滤（以及其它恢复期判据）✗。
 		tail.Events = toWrite
@@ -6080,7 +6059,7 @@ const (
 	// 注意上限**只封顶放大值**：常量预算（round_budget）比它大时以 round_budget 为准 ✓。
 	defaultVerifyChunkBudgetSafety = 1.5
 	defaultVerifyChunkBudgetMax    = 5 * time.Minute
-	defaultVerifyChunkEvents = 2000
+	defaultVerifyChunkEvents       = 2000
 	// defaultVerifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取该默认，1 为串行。
 	// 校验查询的成本几乎全在「返回体传输 + 客户端逐行 JSON 解析」，属可并行部分；
 	// 跨源并发（pollConcurrency）只重叠了源与源之间的等待，源内部的等待仍逐个叠加。
@@ -8035,9 +8014,10 @@ func (m *Manager) publish(source SourceConfig, projectionGeneration string, even
 
 func (m *Manager) publishSnapshot(source SourceConfig, projectionGeneration string, events []logtypes.Event, replace bool, observed *catalog.Record, snapshot *publicationSnapshot, checkObserved bool) error {
 	key := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
-	// 权威集合的最大 record_end（封闭可见水位）：按源缓存 + 本次 events 取大，避免为这一个标量
-	// 遍历全部历史事件（见 advanceSourceMaxEnd）。快路径下 events 只含本批，
-	// 全量历史由缓存（段覆盖水位 + Durable 水位）给出，两者等价。
+	// 本次发布面的最大 record_end（封闭可见水位）＝ 传入 events 的最大 record_end。
+	// 语义边界：它只度量**本次实际写入 VL 的内容**——快路径下 events 是本批尾部，
+	// 慢路径下是权威全量；不得并入「已落 WAL 尚未投递」的 Durable 水位，否则会把
+	// 尚未可见的位置报成已可见。历史已有可见水位由下方 scope.ClosedVisibleSeq 取大承接。
 	batchMax := uint64(0)
 	for _, event := range events {
 		if event.Record.End > batchMax {
@@ -8800,6 +8780,11 @@ type ResumeSweepStats struct {
 	// 次数与耗时（前置为 O(1) 投递欠账判据 ⇒ 无欠账不发起 ⇒ 本读数即成本定界证明 ✓）。
 	DeliveryProbes    int64
 	NsRollingDelivery int64
+	// DirectDeliverProbes / NsRollingDirectDeliver（#179-② / INGEST-12 只读）：同上窗口里
+	// **实际发起**的"破环直投"步次数与耗时。该步含 Ledger 深克隆 + WAL 全量快照 + 同步 VL 写
+	// （本文件自述"把单轮拖到 48.5 分钟"的 O(n) 重活）；旧形态它不经有界执行器、也不产读数。
+	DirectDeliverProbes    int64
+	NsRollingDirectDeliver int64
 }
 
 func (m *Manager) ResumeSweepStats() ResumeSweepStats {
@@ -8835,8 +8820,10 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		RollingProbes:    m.sweepRollingProbes.Load(),
 		NsRolling:        m.nsRolling.Load(),
 
-		DeliveryProbes:    m.sweepDeliveryProbes.Load(),
-		NsRollingDelivery: m.nsRollingDelivery.Load(),
+		DeliveryProbes:         m.sweepDeliveryProbes.Load(),
+		NsRollingDelivery:      m.nsRollingDelivery.Load(),
+		DirectDeliverProbes:    m.sweepDirectDeliverProbes.Load(),
+		NsRollingDirectDeliver: m.nsRollingDirectDeliver.Load(),
 	}
 }
 
@@ -9091,8 +9078,36 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 			// **不复活**：不调 EvaluateResume、不改暂停态、不入候选口径 ⇒ 候选红线不变 ✓。
 			// #179-②：**破环直投** —— 缝属"待重读"类且已 resolved（非终局）时不等实例 resume，
 			// 直接把缝区间的 durable 存量经标准投递面投出 ⇒ 成功路径自动按既有证据口径关缝 ✓。
-			if src, okSrc := m.sourceConfigFor(p); okSrc {
-				m.directDeliverResolvedReReadGap(p, src)
+			//
+			// **INGEST-12**：本步与相邻两步同样经 `runSweepStepBounded` + 同一张在飞表收口。
+			// 旧形态是这一步唯一**裸调用**（相邻 9073/9103 都包在大执行器里）⇒ 其内部 O(n) 重活
+			// （Ledger 深克隆 + WAL 全量快照 + 同步 VL 写）既不占预算也不进在飞计数，全都落在
+			// 兜底环 ticker 单线程上，与 30 行前「论界**每轮有界** ✓」的自述直接矛盾。
+			// 认领在**函数外**两档 O(1) 门闸之后做（`sourceConfigFor` 是内存查表），使"深克隆/快照
+			// 这类开销"也只在认领成功后才发生；`directDeliverResolvedReReadGap` 自身不再认领
+			// （避免同一 key 自锁）。
+			key := p.Key().LogSourceID + "/" + p.Key().SourceGeneration
+			if _, srcOK := m.sourceConfigFor(p); srcOK && m.tryClaimReplayInflight(key) {
+				m.sweepDirectDeliverProbes.Add(1)
+				tDirect := time.Now()
+				started := make(chan struct{})
+				finished := m.runSweepStepBounded(m.sweepStepBudgetOf(), func() {
+					close(started)
+					defer m.finishScheduledReplay(key) // 清在飞（待办仍在则下轮再来 ✓）
+					if src, okSrc := m.sourceConfigFor(p); okSrc {
+						m.directDeliverResolvedReReadGap(p, src)
+					}
+				})
+				if !finished {
+					select {
+					case <-started:
+						// 已发起、只是等待超预算：调用在后台继续，在飞标记由它结束时清 ✓
+					default:
+						// 未发起（在飞上限拒绝）：撤回认领 ⇒ 本轮不做该源，且不热自旋 ✓。
+						m.finishScheduledReplay(key)
+					}
+				}
+				m.nsRollingDirectDeliver.Add(int64(time.Since(tDirect)))
 			}
 			if pos.Delivery < pos.Read {
 				key := p.Key().LogSourceID + "/" + p.Key().SourceGeneration
@@ -9787,11 +9802,10 @@ func (m *Manager) directDeliverResolvedReReadGap(p *pipeline.Pipeline, source So
 		}
 		return
 	}
-	key := p.Key().LogSourceID + "/" + p.Key().SourceGeneration
-	if !m.tryClaimReplayInflight(key) {
-		return // 他面在飞 ⇒ 让路（下轮重试 ✓）
-	}
-	defer m.finishScheduledReplay(key)
+	// **单源互斥由调用方持有**（INGEST-12）：认领在 `maybeResumePausedSources` 里、经两档
+	// O(1) 门闸之后完成，使本函数内的 O(n) 重活（深克隆/全量快照）也只在认领成功后发生。
+	// 本函数**不再**自己认领/释放 —— 同 key 二次认领会直接失败而让本步静默空转（自锁）。
+	//
 	// 增量语义（replay=false ✓）：本步投的是**缝区间的部分切片**，不是整窗——
 	// `deliver()` 内 `replace := saved.PublicationPending || replay` ⇒ replay=true 会按
 	// 「整窗重发」走权威全量重建（O(段行数)≈秒级）并把全量当写入面 ✗✗（2026-10-05 首验：

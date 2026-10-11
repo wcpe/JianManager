@@ -340,7 +340,12 @@ func TestSearchMergedSalvagesItemsWhenLaterSegmentFails(t *testing.T) {
 	require.NoError(t, err, "已有结果时更老段失败不得整组报错")
 	require.Len(t, res.Items, 20, "已收集行必须保留")
 	require.False(t, res.Exhausted, "段失败后不得宣称读完")
-	require.Contains(t, res.CoverageReasons, query.ReasonBudgetExceeded)
+	// QRY-2：原因码必须是**真实原因**（段查询失败 = RANGE_UNAVAILABLE），不得复用
+	// BUDGET_EXCEEDED——后者会在 Search 回调里置 budgetHit，从而抑制 next_cursor，
+	// 使本注释承诺的「更老数据由游标翻页继续触达」在 worker 契约上不成立。
+	require.Contains(t, res.CoverageReasons, query.ReasonRangeUnavailable)
+	require.NotContains(t, res.CoverageReasons, query.ReasonBudgetExceeded,
+		"段查询失败不是预算问题：标成 BUDGET_EXCEEDED 会误导排障并抑制游标下发")
 
 	// 零结果时的对照：整组报错（不掩盖全量失败）。
 	mu.Lock()

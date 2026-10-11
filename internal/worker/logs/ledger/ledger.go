@@ -622,6 +622,15 @@ type Entry struct {
 	// 长期挡住」的源会每轮扫描整张保留列表（积压场景下可达十万级），把空间优化变成 CPU 负担。
 	deliveryPrunedThrough uint64
 
+	// deliveryPrunedWatermark 与 deliveryPrunedThrough 成对：记录那次裁剪**实际使用的水位**
+	// （= min(Reclaim, Delivery)，见 delivery_batch_prune.go 的 LEDGER-1 论证）。
+	//
+	// 为什么不能只记 Reclaim：Reclaim 可以越过 Delivery（凭据放行 / 责任已转移），此时水位停在
+	// Delivery 上不动。若去重键只有 Reclaim，则「Reclaim 每轮都前进、水位原地不动」会让每一轮
+	// 采集都重扫一遍列表——正是 deliveryPrunedThrough 要消除的那个固定税。两者一起判才算
+	// 「这个 (Reclaim, 水位) 组合已经处理过」。同样是进程内状态，语义与重启归零同上。
+	deliveryPrunedWatermark uint64
+
 	// gapMergedTotal / gapFoldedTotal 是缺口定界的进程内计数（观测用，同 deliveryPrunedThrough：
 	// 小写字段不落库、不参与索引映射与 JSON 快照，重启归零）。
 	// 它们的意义：「缺口条数」不再等于「失败次数」，运维需要知道有多少次上报被合并/折叠掉了，

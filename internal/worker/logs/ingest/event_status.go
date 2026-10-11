@@ -541,7 +541,7 @@ func ExportEventStatus(root string, args []string, out io.Writer) error {
 	reports := make([]EventStatusReport, 0, len(selected))
 	for _, key := range selected {
 		facts := eventStatusFactsOfPersisted(state.Sources[key])
-		report := DeriveEventStatus(key, facts, options.from, options.to)
+		report := DeriveEventStatus(key, facts, derefOrZeroUint64(options.from), derefOrZeroUint64(options.to))
 		if options.at != "" {
 			moment, _ := time.Parse(time.RFC3339Nano, options.at) // 参数解析已校验格式
 			located, ok, err := locateEventAtOrAfter(eventsStore, key, moment.UTC())
@@ -585,33 +585,100 @@ func eventStatusFactsOfPersisted(saved persistedSource) EventStatusFacts {
 	return facts
 }
 
+// INGEST-6 修复：from/to 用 *uint64 区分「未传」与「显式 0」。
+// 未传（nil）→ 传 0 给 DeriveEventStatus → eventStatusBounds 按「整源」解释；
+// 显式 0 → 传 0 → 与「未传」在 DeriveEventStatus 层面等价（[0, ceiling] 即整源），
+// 但 CLI 层面保留了「用户确实传过」的事实，便于将来需要区分时不必再改签名。
 type eventStatusArgs struct {
 	source string
-	from   uint64
-	to     uint64
+	from   *uint64
+	to     *uint64
 	at     string
 }
 
+// derefOrZeroUint64 把 *uint64 归一为 DeriveEventStatus 的 uint64 入参：nil（未传）→ 0（整源）。
+func derefOrZeroUint64(p *uint64) uint64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// parseEventStatusArgs 解析 `worker log-event-status` 的位置参数（--data-dir 已在更上层剥离）。
+//
+// 同时接受 `--k=v` 与 `--k v` 两种写法：用法注释写的是空格分隔，而旧实现只认等号形式，
+// 于是照注释执行的运维会得到「参数被静默忽略 ⇒ 导出全量」的错误结论（本工具是只读排障面，
+// 宁可失败也不能给错范围）。未知参数 / 缺值一律报错退出，不再静默丢弃。
 func parseEventStatusArgs(args []string) (eventStatusArgs, error) {
 	var out eventStatusArgs
-	for _, arg := range args {
+	// 取一个（可空串）值：`--from 100` 形态下须再消耗下一个参数，越界即报错。
+	takeValue := func(arg, name string, inline string, hasInline bool, i *int) (string, error) {
+		if hasInline {
+			return inline, nil
+		}
+		if *i+1 >= len(args) {
+			return "", fmt.Errorf("ingest: %s 缺少取值", arg)
+		}
+		*i++
+		return args[*i], nil
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		switch {
+		case arg == "--source":
+			v, err := takeValue(arg, "source", "", false, &i)
+			if err != nil {
+				return out, err
+			}
+			out.source = strings.TrimSpace(v)
 		case strings.HasPrefix(arg, "--source="):
 			out.source = strings.TrimSpace(strings.TrimPrefix(arg, "--source="))
+		case arg == "--from":
+			v, err := takeValue(arg, "from", "", false, &i)
+			if err != nil {
+				return out, err
+			}
+			parsed, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return out, fmt.Errorf("ingest: --from 必须为非负整数: %w", err)
+			}
+			val := parsed
+			out.from = &val
 		case strings.HasPrefix(arg, "--from="):
 			parsed, err := strconv.ParseUint(strings.TrimPrefix(arg, "--from="), 10, 64)
 			if err != nil {
 				return out, fmt.Errorf("ingest: --from 必须为非负整数: %w", err)
 			}
-			out.from = parsed
+			v := parsed
+			out.from = &v
+		case arg == "--to":
+			v, err := takeValue(arg, "to", "", false, &i)
+			if err != nil {
+				return out, err
+			}
+			parsed, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return out, fmt.Errorf("ingest: --to 必须为非负整数: %w", err)
+			}
+			val := parsed
+			out.to = &val
 		case strings.HasPrefix(arg, "--to="):
 			parsed, err := strconv.ParseUint(strings.TrimPrefix(arg, "--to="), 10, 64)
 			if err != nil {
 				return out, fmt.Errorf("ingest: --to 必须为非负整数: %w", err)
 			}
-			out.to = parsed
+			v := parsed
+			out.to = &v
+		case arg == "--at":
+			v, err := takeValue(arg, "at", "", false, &i)
+			if err != nil {
+				return out, err
+			}
+			out.at = strings.TrimSpace(v)
 		case strings.HasPrefix(arg, "--at="):
 			out.at = strings.TrimSpace(strings.TrimPrefix(arg, "--at="))
+		default:
+			return out, fmt.Errorf("ingest: 未知参数 %q（支持 --source/--from/--to/--at，等号或空格分隔）", arg)
 		}
 	}
 	if out.at != "" {

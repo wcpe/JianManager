@@ -144,6 +144,14 @@ func BuildArgs(cfg InstanceConfig) ([]string, error) {
 		// （[1677-09-21, 2262-04-11] 全时段）拒绝 → 「按未占用继续」→ 重名防护静默
 		// 失效（生产日志可查）。31d = retention 30d + 1d 余量；前台查询的窗口由
 		// worker 侧合并段切分钳在 ≤24h，不受本次放宽影响。
+		//
+		// **边界比较符已实测确证**（同版本 VictoriaLogs v1.52.0 起本地实例逐点探测）：
+		// 窗口恰好 744h（=31d）返回 200，744h + 10ns / 1µs / 1s 返回 400
+		// `too big time range selected ... cannot exceed -search.maxQueryTimeRange=744h0m0s`
+		// ⇒ VL 判定是**严格大于**（`>`），故"恰好 31d"被接受。
+		// 注意：依赖方（query/vlrange 的 searchMaxWindow、ingest 的 projectionProbeWindow）
+		// 恰好取 31d，落在**被接受的一侧**；将来若把 VL 侧上限调小，这些窗口必须同步调小，
+		// 否则探测与合并粗筛会整组失败（重名防护静默失效 / 整组 RANGE_UNAVAILABLE）。
 		"-search.maxConcurrentRequests=16",
 		"-search.maxQueryDuration=10s",
 		"-search.maxQueryTimeRange=31d",

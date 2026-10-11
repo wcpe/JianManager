@@ -114,9 +114,10 @@ func planState(st State, nowUnixMilli int64) ([tableCount]map[string][]rowData, 
 			key: mirrorKey(row.Key, row.Seq, row.EventID, row.RecordStart, row.RecordEnd),
 			fp:  fp,
 			values: func() ([]any, error) {
+				// replay 列随 appended/durable 一起写入（ACQ-1）：回放归因落库后重启才不失效。
 				return []any{row.Key, toInt64(row.Seq), row.EventID, toInt64(row.RecordStart),
 					toInt64(row.RecordEnd), boolToInt(row.Appended), boolToInt(row.Durable),
-					nullableBytes(row.Body), int64(fp)}, nil
+					boolToInt(row.Replay), nullableBytes(row.Body), int64(fp)}, nil
 			},
 		})
 	}
@@ -141,8 +142,11 @@ func planState(st State, nowUnixMilli int64) ([tableCount]map[string][]rowData, 
 // 每个字段（ingest 侧的 walBodyFingerprint 覆盖 logtypes.Event 的全部 JSON 字段，并有
 // TestWALBodyFingerprintCoversEveryEventField 守着这一点）。
 func WALFingerprint(row WALRow) uint64 {
+	// Replay 也进指纹（ACQ-1）：它是该行语义的一部分（是否来自回放/补账），必须随"只写变更行"
+	// 的镜像差异被正确识别——否则同一条目由常规路径再次写入时，指纹相同 ⇒ 不更新 ⇒ 库里的
+	// 旧 replay 值被留下，与内存条目分裂。
 	return fingerprint(row.Seq, row.EventID, row.RecordStart, row.RecordEnd, row.Appended, row.Durable,
-		row.Body != nil, row.FP)
+		row.Replay, row.Body != nil, row.FP)
 }
 
 // Migration 缓存一次迁移的确定性行计划；跨进程只信库内凭据，不依赖这个句柄保存进度。

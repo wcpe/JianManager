@@ -11,36 +11,75 @@ import (
 // delivery_batch（≈5 MB/天 @60 源），而它原先没有任何裁剪路径——长跑会把索引无界撑大，
 // 与 FR-496「索引稳态不随总量增长」的初衷相悖。本文件给出**判据、理由与调用点**。
 //
-// # 谁在读投递批次（消费者，全仓仅此一处有语义）
+// # 谁在读投递批次（消费者）
 //
 //	rows(delivery_batch) → ingest.indexStateToState → ledger.Entry.DeliveryBatches
-//	  → contiguousDeliveryEnd(batches, floor=Positions.Reclaim)
+//	  ├─ contiguousDeliveryEnd(batches, floor=Positions.Reclaim)      ← 读者 A：连续前缀
+//	  └─ ingest.classifyEventStatus(facts with Batches)               ← 读者 B：按批次判态
 //
-// 三个调用点的 floor 都是 reclaim：RecordDelivery、Restore、以及 FR-496 迁移校验的
+// 读者 A 的三个调用点的 floor 都是 reclaim：RecordDelivery、Restore、以及 FR-496 迁移校验的
 // comparisonState（ingest/index_store.go 的 ledger.ContiguousDeliveryEnd）。
+//
+// 读者 B 是**第二个有语义的读者**（此前被漏掉，PR #61 审查 LEDGER-1 补上）：它按批次状态把
+// 区间判成 ACKED（REQUEST_DONE）/ SENT_UNACKED（UNKNOWN）/ UNSENT（NOT_SENT、REPLAY_REQUIRED），
+// 优先级为「放弃凭据 → 已校验区间 → **delivery 前缀** → **批次** → 缺口 → 无证据」。
+// 也就是说：位置 ≤ Positions.Delivery 的区间由**前缀**兜底判 ACKED，与批次在不在无关；
+// 位置 > Positions.Delivery 的区间才依赖批次列表区分「已确认」与「已发出未确认」。
+//
 // 除此之外只有 Entry.clone() 的深拷贝，没有别的读者。
 //
-// `Positions.Delivery` 是由它派生的值（落库保留原值，Restore/比对时按同一口径重算）；
+// `Positions.Delivery` 是由读者 A 派生的值（落库保留原值，Restore/比对时按同一口径重算）；
 // `DeliveryState`（最近一批的状态）与 `ErrorCount` 另存（ingest 的 indexLedgerCore），
 // 而「该源最近一次投递是否 UNKNOWN」读的是账本字段 p.DeliveryState()，**不读批次列表**
 // （见 pipeline.DeliveryState / reconcile 的 UNKNOWN 判定）。
 //
-// # 判据：水位 = Positions.Reclaim
+// # 判据：水位 = min(Positions.Reclaim, Positions.Delivery)
 //
-// contiguousDeliveryEnd 的语义是「所有字节均有请求结果的连续前缀末端」：pos 从 floor 起、
-// 只增；一个跨度 s 只有在 s.end > pos 时才推进 pos。因此对 end <= floor 的跨度，两个分支
-// 都是恒假——它是**恒等元**：删掉它既不改变本次计算结果，也不改变后续跨度的处理结果
+// 读者 A 的恒等元性质：contiguousDeliveryEnd 的语义是「所有字节均有请求结果的连续前缀末端」：
+// pos 从 floor 起、只增；一个跨度 s 只有在 s.end > pos 时才推进 pos。因此对 end <= floor 的跨度，
+// 两个分支都是恒假——它是**恒等元**：删掉它既不改变本次计算结果，也不改变后续跨度的处理结果
 // （后续只依赖当前 pos，而 pos 未被它改变）。
 //
-//	⇒ batch.End <= Positions.Reclaim 的条目确定不会再被需要。
+//	⇒ batch.End <= Positions.Reclaim 的条目对读者 A 是恒等元。
 //
-// 语义上与 reclaim 的既有含义完全一致：reclaim 只能经 CanReclaim 门禁推进（恢复分段到
-// WAL_RESPONSIBILITY_TRANSFERRED 及其后、无 hold），即「这些字节的恢复责任已由受管恢复
-// 分段/投影承担」——责任既已转移，批次级请求结果对这些字节不再承载任何决定性的信息。
+// 但恒等元性质**只在水位处成立**，对读者 B 不成立：读者 B 在位置 > Delivery 时按批次判态。
+// 因此水位必须再夹一层下界 Delivery：
 //
-// 单调性（为什么裁过一次之后永远安全）：水位只前进（TryReclaim 仅在 target > Reclaim 时
-// 推进；AdvanceRead 只把读指针夹到水位之上），而「end <= W」在更晚的 W' >= W 下依然成立
-// ⇒ 被裁条目在任意更晚时刻仍是恒等元。
+//	⇒ 判据取 watermark = min(Reclaim, Delivery)，被裁条目满足 End <= Delivery。
+//
+// 为什么这个下界让两个读者同时安全（LEDGER-1 的论证）：
+//
+//   - 读者 A：Delivery <= Reclaim 时水位就是 Reclaim，与改动前逐字节相同；Delivery < Reclaim 时
+//     水位取 Delivery（更 conservative 的下界），被裁集合是原恒等元集合的子集 ⇒ 仍是恒等元。
+//   - 读者 B：被裁条目满足 End <= Delivery，其覆盖的所有位置都 ≤ Delivery，而那段由**前缀**兜底
+//     判 ACKED、根本不读批次 ⇒ 判态逐段相同。未被裁的条目（End > Delivery，含 (Delivery, Reclaim]
+// 这一段）正是读者 B 唯一能区分「已确认 / 已发出未确认」的证据，必须留下。
+//
+// 为什么 Reclaim 会越过 Delivery（这不是理论形态）：tryReclaimLocked 的**凭据放行**分支
+// （区间内已有人工裁定的永久丢失空洞时，target 无条件取 ref.CoversTo）与**责任已转移**分支
+// （RecoveryWALResponsibilityXfer 下允许覆盖未确认事件）都会把 Reclaim 推到分段末端 CoversTo，
+// 而 Positions.Delivery 只在 RecordDelivery / Restore 重算，TryReclaim **从不重算它**。
+// 于是暂停 / 空闲源上 (Delivery, Reclaim] 这一段长期存在：若按旧判据裁掉，诊断面会把已确认
+// 落库的区间报成 UNSENT（basis=no_evidence）——把「已发送」说成「未发送」，会误导事件级排障。
+//
+// # 单调性（为什么裁过一次之后永远安全）
+//
+// 裁过的条目满足 End <= 当时水位。此后：
+//
+//   - TryReclaim 只在 target > Reclaim 时推进 Reclaim（只上调）；
+//   - RecordDelivery 只 append 批次并按同一口径重算 Delivery（contiguousDeliveryEnd 的返回值
+//     恒 >= floor=Reclaim，故 Delivery 相对 Reclaim 也不下调）；
+//   - AdvanceRead 只把读指针夹到水位之上；
+//
+// ⇒ min(Reclaim, Delivery) 只前进，「end <= W」在更晚的 W' >= W 下依然成立，被裁条目在任意
+// 更晚时刻仍是两个读者的恒等元。
+//
+// **唯一的例外是 Restore 的下调归一分支**（LEDGER-4，如实登记）：落库态违反
+// `Reclaim <= Read` 时 Restore 会把 Reclaim **下调**为 Read 并告警，随后按新 floor 重算
+// Delivery。水位下调后此前裁掉的条目不再「以新水位为 floor 的恒等元」，Positions.Delivery
+// 会被重算得比真值**偏低**——这是保守方向（少报已投递，不会把未发送说成已发送），代价是
+// 「静默源出口」的 Delivery >= Read 可能暂不成立、指纹水位取到偏低位置（源多停一会儿 /
+// 多一次对账），无数据丢失。该分支只应在落库态已本身违例时触发，恢复侧另有 WARN 留痕。
 //
 // # 不做的事（如实登记）
 //
@@ -89,6 +128,10 @@ func (c DeliveryBatchPruneConfig) Normalized() DeliveryBatchPruneConfig {
 //
 // 判据见文件头：batch.End <= watermark 的条目是 contiguousDeliveryEnd(…, watermark) 的恒等元。
 // keepRecent 额外保留「最近 keepRecent 条被水位越过的条目」（审计尾窗，只多留不少留）。
+//
+// watermark 由调用方给出，**必须是 deliveryBatchWatermark 算出的 min(Reclaim, Delivery)**：
+// 直接传 Reclaim 会越过 Positions.Delivery，把读者 B（event_status 按批次判态）在
+// (Delivery, Reclaim] 上唯一可用的证据裁掉（见文件头 LEDGER-1 论证）。
 //
 // watermark 为 0 时一律不裁：水位 0 表示尚无任何字节被裁定安全（与 acquire.WAL.pruneReclaimed
 // 同口径），此时连零长度退化条目也不动。
@@ -187,6 +230,28 @@ func (l *Ledger) DeliveryBatchPrune() DeliveryBatchPruneConfig {
 	return l.batchPrune
 }
 
+// deliveryBatchWatermark 返回本次裁剪使用的水位：min(Positions.Reclaim, Positions.Delivery)。
+//
+// 为什么夹 Delivery 这一层（LEDGER-1）：reclaim 可以越过 delivery——凭据放行与「责任已转移」
+// 都会把 Reclaim 推到恢复分段末端 CoversTo，而 Positions.Delivery 只在 RecordDelivery / Restore
+// 重算、TryReclaim 从不重算它。区间 (Delivery, Reclaim] 是诊断面（event_status 按批次判态）
+// 唯一能区分「已确认 / 已发出未确认」的证据，按旧判据（水位 = Reclaim）裁掉它，等于把已确认
+// 落库的区间报成「未发送」。夹上 Delivery 后被裁条目满足 End <= Delivery，其覆盖位置由
+// delivery 前缀兜底判 ACKED，两个读者的判态都逐段不变。完整论证见文件头。
+//
+// 顺序不可换：必须先取 min 再比较，绝不能「Delivery 为 0 就当没裁过」——Delivery = 0 且
+// Reclaim > 0 是真实形态（从未成功投递过却已有责任转移），此时水位 0 ⇒ 一条都不裁，
+// 正是安全方向。
+func deliveryBatchWatermark(e *Entry) uint64 {
+	if e == nil {
+		return 0
+	}
+	if e.Positions.Delivery < e.Positions.Reclaim {
+		return e.Positions.Delivery
+	}
+	return e.Positions.Reclaim
+}
+
 // pruneDeliveryBatchesLocked 按当前水位裁一次该源的投递批次。调用方必须已持写锁。
 //
 // 幂等 + 按水位去重：水位未变则直接返回（见 Entry.deliveryPrunedThrough 的注释），因此本方法在
@@ -199,21 +264,26 @@ func (l *Ledger) pruneDeliveryBatchesLocked(e *Entry) {
 	if e == nil || !l.batchPrune.Enabled {
 		return
 	}
-	if e.deliveryPrunedThrough == e.Positions.Reclaim {
+	watermark := deliveryBatchWatermark(e)
+	// 去重键是（Reclaim, 水位）两者：Reclaim 前进而水位未前进（Delivery 滞后）时同样没有新条目
+	// 可裁，仍要跳过；只有水位真正前进才值得再扫一次列表。
+	if e.deliveryPrunedThrough == e.Positions.Reclaim && watermark <= e.deliveryPrunedWatermark {
 		return // 这个水位已经裁过：水位不变则没有任何条目会变得可裁
 	}
 	if len(e.DeliveryBatches) == 0 {
 		e.deliveryPrunedThrough = e.Positions.Reclaim
+		e.deliveryPrunedWatermark = watermark
 		return
 	}
-	kept, dropped, err := PruneDeliveryBatches(e.DeliveryBatches, e.Positions.Reclaim, l.batchPrune.KeepRecent)
+	kept, dropped, err := PruneDeliveryBatches(e.DeliveryBatches, watermark, l.batchPrune.KeepRecent)
 	// 无论成功与否都记下「这个水位已处理」：守卫拦下意味着判据不自洽（不是瞬时故障），
 	// 再对同一水位重复告警没有信息量；下一次水位前进时会再试。
 	e.deliveryPrunedThrough = e.Positions.Reclaim
+	e.deliveryPrunedWatermark = watermark
 	if err != nil {
 		slog.Warn("历史投递批次裁剪被守卫拦下，本轮保留完整历史（不影响采集正确性）",
 			"logSourceID", e.Key.LogSourceID, "generation", e.Key.SourceGeneration,
-			"reclaim", e.Positions.Reclaim, "batches", len(e.DeliveryBatches), "error", err)
+			"reclaim", e.Positions.Reclaim, "watermark", watermark, "batches", len(e.DeliveryBatches), "error", err)
 		return
 	}
 	if dropped == 0 {
@@ -222,5 +292,5 @@ func (l *Ledger) pruneDeliveryBatchesLocked(e *Entry) {
 	e.DeliveryBatches = kept
 	slog.Debug("已裁剪水位之下的历史投递批次",
 		"logSourceID", e.Key.LogSourceID, "generation", e.Key.SourceGeneration,
-		"reclaim", e.Positions.Reclaim, "dropped", dropped, "kept", len(kept))
+		"reclaim", e.Positions.Reclaim, "watermark", watermark, "dropped", dropped, "kept", len(kept))
 }

@@ -228,3 +228,53 @@ func TestExportEventStatusCLIEndToEnd(t *testing.T) {
 	// 未知源：必须报错（而不是静默给空结论）。
 	require.Error(t, ExportEventStatus(root, []string{"--source=node:nope"}, &out))
 }
+
+// TestParseEventStatusArgsAcceptsSpaceSeparatedAndRejectsUnknown 锁定参数解析形态：
+// 用法注释写的是空格分隔，旧实现只认等号 ⇒ 照注释执行的运维拿到「全量」的错结论；
+// 未知参数/缺值必须报错（只读排障面宁可失败也不给错范围）。
+func TestParseEventStatusArgsAcceptsSpaceSeparatedAndRejectsUnknown(t *testing.T) {
+	// 等号与空格两种形态必须等价。
+	eq, err := parseEventStatusArgs([]string{"--source=inst:1/stdout", "--from=100", "--to=200"})
+	require.NoError(t, err)
+	sp, err := parseEventStatusArgs([]string{"--source", "inst:1/stdout", "--from", "100", "--to", "200"})
+	require.NoError(t, err)
+	require.Equal(t, eq.source, sp.source, "两种分隔形态的 source 必须一致")
+	require.NotNil(t, sp.from, "空格形态的 --from 必须被解析")
+	require.NotNil(t, sp.to, "空格形态的 --to 必须被解析")
+	require.Equal(t, uint64(100), *sp.from)
+	require.Equal(t, uint64(200), *sp.to)
+
+	// 显式 --from=0 与未传必须可区分（整源语义见 INGEST-6）。
+	zeroOnly, err := parseEventStatusArgs([]string{"--from=0"})
+	require.NoError(t, err)
+	require.NotNil(t, zeroOnly.from, "显式 --from=0 必须可表达（不得与「未传」混淆）")
+	require.Equal(t, uint64(0), *zeroOnly.from)
+	require.Nil(t, parseEventStatusArgsEmptyFrom(), "占位断言：未传时 from 保持 nil")
+
+	// --at 的 RFC3339 校验在两种形态下都生效。
+	_, err = parseEventStatusArgs([]string{"--at", "2026-10-08T00:00:00Z"})
+	require.NoError(t, err)
+	_, err = parseEventStatusArgs([]string{"--at=not-a-time"})
+	require.Error(t, err, "非法 --at 必须报错")
+
+	// 未知参数不得静默忽略。
+	_, err = parseEventStatusArgs([]string{"--sorce", "inst:1"})
+	require.Error(t, err, "拼错的参数名必须报错（静默忽略会让运维以为筛选生效）")
+	_, err = parseEventStatusArgs([]string{"--verbose"})
+	require.Error(t, err, "未实现的开关必须报错")
+
+	// 缺值（空格形态下吃掉末尾）必须报错。
+	_, err = parseEventStatusArgs([]string{"--source"})
+	require.Error(t, err, "--source 缺值必须报错")
+	_, err = parseEventStatusArgs([]string{"--from"})
+	require.Error(t, err, "--from 缺值必须报错")
+}
+
+// parseEventStatusArgsEmptyFrom 是「未传任何参数」的读取途径：from 必须保持 nil。
+func parseEventStatusArgsEmptyFrom() *uint64 {
+	got, err := parseEventStatusArgs(nil)
+	if err != nil {
+		panic(err)
+	}
+	return got.from
+}

@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
@@ -180,4 +182,40 @@ func TestAggregateNeverShrinksOrGrowsSpanBeyondMembers(t *testing.T) {
 	if !strings.Contains(aggs[0].Message, "区间=[0,19)") {
 		t.Errorf("正文中的区间应与 Record 一致：%s", strings.SplitN(aggs[0].Message, "\n", 2)[0])
 	}
+}
+
+// eventAt 造一条占 [start,end) 的事件（供区间构造类用例直接指定区间）。
+func eventAt(id string, start, end uint64) logtypes.Event {
+	return logtypes.BuildEvent(testSource(id), logtypes.RecordRange{Start: start, End: end},
+		baseTime.UTC().Format(time.RFC3339Nano), baseTime.UTC().Format(time.RFC3339Nano),
+		"DEBUG", "stdout", "d")
+}
+
+// TestAggregateMessageRangeMatchesRecordAndFields：正文里的区间、Record、区间字段必须同源。
+//
+// 为什么单独守这条（PR #61 审查 SAMPLING-2）：正文此前用「首条起点 / 末条终点」，而 Record 与
+// sampling_record_start/end 用 Span() 的 min/max。Span() 的相邻判定允许「后一条起点早于前一条
+// 终点」的乱序形态（Start <= last.End+1 即算相邻），此时末条 End 会小于 max(End) ⇒
+// 正文区间窄于事件实际覆盖，排障时人先读正文、再去核字段，两处不一致会被当成数据问题追查。
+//
+// 转红方式（实测）：把 aggregateMessage 里的 span.Start/span.End 换回 first.Record.Start /
+// last.Record.End，本用例的正文断言立即红（正文给出 [10,19) 而字段给出 [0,29)）。
+func TestAggregateMessageRangeMatchesRecordAndFields(t *testing.T) {
+	// 乱序形态：首条起点 10、末条终点 19，而真实并集是 [0,29)。
+	run := SuppressedRun{Rule: RuleLevelFilter, Events: []logtypes.Event{
+		eventAt("inst:1", 10, 29),
+		eventAt("inst:1", 0, 19),
+	}}
+	span := run.Span()
+	require.Equal(t, uint64(0), span.Start)
+	require.Equal(t, uint64(29), span.End, "并集跨度必须取 min/max，而不是末条终点")
+
+	agg := BuildAggregate(run, false)
+	require.Equal(t, span.Start, agg.Record.Start)
+	require.Equal(t, span.End, agg.Record.End)
+	require.Equal(t, "0", agg.Fields[FieldRecordFrom])
+	require.Equal(t, "29", agg.Fields[FieldRecordTo])
+	head := strings.SplitN(agg.Message, "\n", 2)[0]
+	require.Contains(t, head, "区间=[0,29)", "正文区间必须与 Record/字段同源")
+	require.NotContains(t, head, "区间=[10,19)", "不得用首条起点/末条终点拼正文区间（乱序下会窄于真实覆盖）")
 }

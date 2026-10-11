@@ -132,6 +132,9 @@ CREATE TABLE IF NOT EXISTS source_wal (
   record_end   INTEGER NOT NULL,
   appended     INTEGER NOT NULL DEFAULT 0,
   durable      INTEGER NOT NULL DEFAULT 0,
+  -- replay（ACQ-1）：该条目来自恢复期回放/补账的归因标记。零值 = 非回放，
+  -- 故 ALTER TABLE ADD COLUMN 对既有库天然兼容（旧行全部是常规条目 ✓）。
+  replay       INTEGER NOT NULL DEFAULT 0,
   body         TEXT,
   fp           INTEGER NOT NULL,
   PRIMARY KEY (key, seq, event_id, record_start, record_end)
@@ -217,7 +220,13 @@ type WALRow struct {
 	RecordEnd   uint64
 	Appended    bool
 	Durable     bool
-	Body        []byte
+	// Replay 与 acquire.WALRef.Replay 同义：该条目来自**恢复期回放/补账**（ACQ-1）。
+	// 为什么必须落库：它只在内存条目上时，任何一次重启都会让回放条目退回「常规积压」
+	// ⇒ 闸视图重新把回放字节计入，恢复期「回放不计入闸」的方案①失效，退回
+	// 「复活 → re-append → 再越闸」的自锁形态；诊断判据 BacklogTotalEntries >
+	// BacklogEntries 也翻回 false。旧数据零值 = 非回放（向后兼容 ✓）。
+	Replay bool
+	Body   []byte
 	// FP 是**写入路径专用**的正文判据（不落库为独立列，落库的是合成后的行指纹）：
 	// 调用方必须保证「同一 (Key, EventID, RecordStart, RecordEnd) 下 FP 相同 ⇒ Body 相同」。
 	// 引用条目（Body 为 nil）填 0。
@@ -270,7 +279,7 @@ var loadColumns = [tableCount][]string{
 	tblProjection:      {"key", "generation", "events_stored_through", "pending", "updated_at"},
 	tblInstanceBinding: {"uuid", "namespace", "generation", "mode", "work_dir"},
 	tblSourceAux:       {"key", "config", "payload"},
-	tblSourceWAL:       {"key", "seq", "event_id", "record_start", "record_end", "appended", "durable", "body"},
+	tblSourceWAL:       {"key", "seq", "event_id", "record_start", "record_end", "appended", "durable", "replay", "body"},
 	tblDeliveryBatch:   {"key", "ordinal", "start_pos", "end_pos", "state"},
 }
 
@@ -393,22 +402,24 @@ var specs = [tableCount]tableSpec{
 		keyCols:   []string{"key", "seq", "event_id", "record_start", "record_end"},
 		mirrorSQL: "SELECT key, seq, event_id, record_start, record_end, fp FROM source_wal",
 		fpSelf:    true,
-		upsert: `INSERT INTO source_wal (key, seq, event_id, record_start, record_end, appended, durable, body, fp)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		// replay 列（ACQ-1）承载「该条目来自恢复期回放/补账」的口径，与 appended/durable 同为
+		// 变更驱动：不随 UPSERT 刷新的话，同一条目由常规路径再次写入时会把已有回放标记抹掉。
+		upsert: `INSERT INTO source_wal (key, seq, event_id, record_start, record_end, appended, durable, replay, body, fp)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(key, seq, event_id, record_start, record_end) DO UPDATE SET
-				appended=excluded.appended, durable=excluded.durable, body=excluded.body, fp=excluded.fp`,
+				appended=excluded.appended, durable=excluded.durable, replay=excluded.replay, body=excluded.body, fp=excluded.fp`,
 		upsertBatch: "INSERT INTO source_wal (%s) VALUES %s",
 		columns: []string{"key", "seq", "event_id", "record_start", "record_end", "appended", "durable",
-			"body", "fp"},
+			"replay", "body", "fp"},
 		onConflict: `ON CONFLICT(key, seq, event_id, record_start, record_end) DO UPDATE SET
-			appended=excluded.appended, durable=excluded.durable, body=excluded.body, fp=excluded.fp`,
+			appended=excluded.appended, durable=excluded.durable, replay=excluded.replay, body=excluded.body, fp=excluded.fp`,
 		deleteStmt: "DELETE FROM source_wal WHERE key = ? AND seq = ? AND event_id = ? AND record_start = ? AND record_end = ?",
 		// 排序键必须与主键 (key, seq, event_id, record_start, record_end) 同序：SQLite 只有在
 		// ORDER BY 命中主键索引前缀时才省掉排序。此前这里从 seq 起排（缺 key），索引前缀对不上，
 		// 于是每行（含 5GB 级 body）都要进 TEMP B-TREE 物化——生产 711 万行时排序数据溢出到
 		// /var/tmp，空间不足直接报 `database or disk is full`，启动 6 次重试全败后放弃采集。
 		// 对齐主键后实测：711 万行全量读 9.2s，执行计划为 SCAN ... USING INDEX，无临时文件。
-		orderBy:    "key, seq, event_id, record_start, record_end",
+		orderBy: "key, seq, event_id, record_start, record_end",
 	},
 	tblDeliveryBatch: {
 		name:      "delivery_batch",

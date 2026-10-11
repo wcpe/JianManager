@@ -31,7 +31,8 @@ const (
 	ActionMoveToCold = "move_to_cold"
 	// ActionArchiveCopy 导出为独立副本（次选；接口已留，实现见「未做」栏）。
 	ActionArchiveCopy = "archive_copy"
-	// ActionDiscard 直接删除。**仅在显式 discard: true 时可达**。
+	// ActionDiscard 直接删除。**仅在显式 discard: true 且没有搬运路径时可达**；
+	// 执行阶段还要求装配了删除出口（Remover），否则落「保留原物」（见 ArchiveExecutor）。
 	ActionDiscard = "discard"
 	// ActionBlocked 无归档路径可用且未显式允许删除 ⇒ 保留原物 + 告警。
 	//
@@ -236,16 +237,43 @@ type ArchiveOutcome struct {
 	At time.Time
 }
 
+// Remover 是「显式知情放弃」时**真正执行删除**的出口。
+//
+// 为什么要有它（RET-3，2026-10-11 复核）：原实现的 ActionDiscard 分支只把结果标成
+// ArchiveDiscarded 并 `Discarded++`，注释说「交给调用方按已审计的计划执行」，但**没有任何
+// 调用方执行删除**——于是观测面报「已删除」而数据原封不动，审计面（G10「谁、何时、多少、去哪」）
+// 在删除动作上失真。现在把删除出口显式化：
+//   - 装配了 Remover ⇒ 调用它，**成功才**计 ArchiveDiscarded / Discarded++；
+//   - 未装配（本版本的生产形态）⇒ 落 ArchiveKeptOriginal + 原因，绝不声称删过。
+//
+// 接口刻意只留一个方法（与 Mover 同口径）：执行器不该知道「删除一个日分区」在 VL 侧是
+// 删目录还是走 /delete，那样它才能用假实现做出「删了什么、没删什么」的可转红回归。
+type Remover interface {
+	// RemovePartition 删除 (存储命名空间, UTC 日) 分区的数据。失败时返回错误——
+	// 调用方必须保留原物并把失败如实上报（绝不把失败当成删除成功）。
+	RemovePartition(ctx context.Context, storageNamespace, utcDay string) error
+}
+
+// RemoverFunc 函数适配（生产用它把受管 VL 的分区删除接进来）。
+type RemoverFunc func(ctx context.Context, storageNamespace, utcDay string) error
+
+// RemovePartition 实现 Remover。
+func (f RemoverFunc) RemovePartition(ctx context.Context, storageNamespace, utcDay string) error {
+	return f(ctx, storageNamespace, utcDay)
+}
+
 // ArchiveExecutor 驱动「删前归档」。
 //
 // 关键不变量（硬规则的可执行形态）：
 //   - 搬运失败 ⇒ 结果必为 ArchiveKeptOriginal，且**绝不**触达任何删除路径；
 //   - 未显式 discard ⇒ 结果**永不**为 ArchiveDiscarded；
-//   - 无搬运路径 ⇒ ArchiveKeptOriginal + 告警计数，而不是删。
+//   - 无搬运路径 ⇒ ArchiveKeptOriginal + 告警计数，而不是删；
+//   - 显式 discard 但**没有删除出口** ⇒ 同样落 ArchiveKeptOriginal（宁占盘不假报删除）。
 type ArchiveExecutor struct {
-	policy Policy
-	mover  Mover
-	stats  ArchiveStats
+	policy  Policy
+	mover   Mover
+	remover Remover
+	stats   ArchiveStats
 }
 
 // ArchiveStats 是归档的累计读数（G10 观测面）。
@@ -254,9 +282,9 @@ type ArchiveStats struct {
 	Planned int64
 	// Moved 累计搬运成功数。
 	Moved int64
-	// KeptOriginal 累计「保留原物」数（搬运失败或无路径）。
+	// KeptOriginal 累计「保留原物」数（搬运失败、无路径、删除出口未装配或删除失败）。
 	KeptOriginal int64
-	// Discarded 累计显式删除数。
+	// Discarded 累计**真的执行成功**的显式删除数（未装配删除出口或删除失败都不计入）。
 	Discarded int64
 	// NotDue 累计未到点数。
 	NotDue int64
@@ -267,8 +295,19 @@ type ArchiveStats struct {
 }
 
 // NewArchiveExecutor 创建执行器。mover 为 nil 时所有目标都落到「保留原物 + 告警」。
+//
+// 删除出口（Remover）经 SetRemover 单独装配：本版本的 `ActionDiscard` 只在没有搬运路径时
+// 才被规划出来，而生产恒有搬运路径，故删除出口默认保持未装配（＝不会删）。
 func NewArchiveExecutor(policy Policy, mover Mover) *ArchiveExecutor {
 	return &ArchiveExecutor{policy: policy, mover: mover}
+}
+
+// SetRemover 装配「显式知情放弃」的删除出口；传 nil 表示未装配（到达该动作时保留原物）。
+func (e *ArchiveExecutor) SetRemover(r Remover) {
+	if e == nil {
+		return
+	}
+	e.remover = r
 }
 
 // SetPolicy 替换策略。
@@ -320,8 +359,24 @@ func (e *ArchiveExecutor) ExecutePlanned(ctx context.Context, now time.Time, pla
 		}
 		switch t.Action {
 		case ActionDiscard:
-			// 只有显式 discard 才走到这里。这里仍**不直接调删除接口**——
-			// 交给调用方按已审计的计划执行，使「谁删了什么」有单一出口可查。
+			// 只有显式 discard 才走到这里。**必须真的调用删除出口**：计数只在删除成功后推进，
+			// 否则观测面会报「已删除」而数据还在（RET-3：那是审计面失真，不是省事）。
+			if e.remover == nil {
+				outcome.Result = ArchiveKeptOriginal
+				outcome.Err = fmt.Errorf("未装配删除出口（显式 discard 也不得假报删除）")
+				e.stats.KeptOriginal++
+				e.stats.LastError = fmt.Sprintf("%s/%s 显式 discard 但删除出口未装配，已保留原物",
+					t.StorageNamespace, t.UTCDay)
+				break
+			}
+			if err := e.remover.RemovePartition(ctx, t.StorageNamespace, t.UTCDay); err != nil {
+				// 与搬运失败同口径：失败 ⇒ 保留原物 + 告警，绝不计入已删除。
+				outcome.Result = ArchiveKeptOriginal
+				outcome.Err = err
+				e.stats.KeptOriginal++
+				e.stats.LastError = fmt.Sprintf("%s/%s 删除失败，已保留原物：%v", t.StorageNamespace, t.UTCDay, err)
+				break
+			}
 			outcome.Result = ArchiveDiscarded
 			e.stats.Discarded++
 		case ActionMoveToCold:

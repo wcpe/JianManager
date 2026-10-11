@@ -286,14 +286,33 @@ func TestArchiveSkipsUnparseableDay(t *testing.T) {
 	}
 }
 
+// fakeRemover 记录显式放弃路径上的删除调用，可注入失败（RET-3）。
+type fakeRemover struct {
+	calls    []string
+	failWith error
+}
+
+func (r *fakeRemover) RemovePartition(_ context.Context, ns, day string) error {
+	r.calls = append(r.calls, ns+"/"+day)
+	if r.failWith != nil {
+		return r.failWith
+	}
+	return nil
+}
+
 // TestArchiveExplicitDiscardIsReachable 是硬规则的**正向对照**：
 // 显式 discard 之后确实可达删除，否则「硬规则」会退化成「永远不删」，
 // 那样第 3 条验收会在一个恒真的分支上通过（用例失去意义）。
+//
+// RET-3 修正：正向对照必须断言「**真的发生了删除调用**」，而不是只看结果标签——
+// 旧实现的 ActionDiscard 分支只写标签与计数、没有任何删除调用，本用例当时无法发现。
 func TestArchiveExplicitDiscardIsReachable(t *testing.T) {
 	p := discardPolicy()
 	hv := time.Date(2026, 10, 2, 3, 0, 0, 0, time.UTC)
 
+	rm := &fakeRemover{}
 	ex := NewArchiveExecutor(p, nil) // 即使没有搬运路径，显式放弃也应可达删除
+	ex.SetRemover(rm)
 	out := ex.Execute(context.Background(), hv, archiveFixture())
 	var discarded int
 	for _, o := range out {
@@ -303,6 +322,9 @@ func TestArchiveExplicitDiscardIsReachable(t *testing.T) {
 	}
 	if discarded == 0 {
 		t.Fatal("显式 discard 后删除路径必须可达——否则硬规则退化成「永远不删」，第 3 条验收将恒真")
+	}
+	if len(rm.calls) != discarded {
+		t.Fatalf("每个「已删除」结果都必须对应一次真实删除调用：结果 %d 条、调用 %d 次", discarded, len(rm.calls))
 	}
 	if got := ex.Stats().Discarded; got != int64(discarded) {
 		t.Errorf("观测面 Discarded 计数应为 %d，得到 %d", discarded, got)
@@ -316,6 +338,55 @@ func TestArchiveExplicitDiscardIsReachable(t *testing.T) {
 	}
 	if res.Submitted == 0 || len(fd.calls) == 0 {
 		t.Fatal("两道闸都开时删除路径必须真的可用")
+	}
+}
+
+// TestArchiveDiscardWithoutRemoverNeverClaimsDeletion 是 RET-3 的转红用例：
+// 没有装配删除出口时，显式 discard **不得**报「已删除」（数据还在，报已删就是观测面说谎）。
+func TestArchiveDiscardWithoutRemoverNeverClaimsDeletion(t *testing.T) {
+	p := discardPolicy()
+	hv := time.Date(2026, 10, 2, 3, 0, 0, 0, time.UTC)
+	ex := NewArchiveExecutor(p, nil) // 无搬运路径、也没有删除出口
+
+	out := ex.Execute(context.Background(), hv, archiveFixture())
+	for _, o := range out {
+		if o.Result == ArchiveDiscarded {
+			t.Fatalf("未装配删除出口时不得声称已删除：%s", o.Target)
+		}
+	}
+	if got := ex.Stats().Discarded; got != 0 {
+		t.Errorf("未真正删除时 Discarded 必须为 0，得到 %d", got)
+	}
+	if ex.Stats().KeptOriginal == 0 {
+		t.Error("未装配删除出口应落「保留原物」，使观测面能看出「计划要删、实际没删」")
+	}
+	if ex.Stats().LastError == "" {
+		t.Error("应留下原因（未装配删除出口），否则现场只看到「没删」而不知为何")
+	}
+}
+
+// TestArchiveDiscardFailureKeepsOriginal：删除出口报错时同样不得计入已删除。
+func TestArchiveDiscardFailureKeepsOriginal(t *testing.T) {
+	p := discardPolicy()
+	hv := time.Date(2026, 10, 2, 3, 0, 0, 0, time.UTC)
+	rm := &fakeRemover{failWith: errors.New("VL 拒绝删除（模拟）")}
+	ex := NewArchiveExecutor(p, nil)
+	ex.SetRemover(rm)
+
+	out := ex.Execute(context.Background(), hv, archiveFixture())
+	if len(rm.calls) == 0 {
+		t.Fatal("前置条件：必须真的尝试过删除")
+	}
+	for _, o := range out {
+		if o.Result == ArchiveDiscarded {
+			t.Fatalf("删除失败不得报「已删除」：%s（err=%v）", o.Target, o.Err)
+		}
+		if o.Result == ArchiveKeptOriginal && o.Err == nil {
+			t.Errorf("保留原物必须带原因：%s", o.Target)
+		}
+	}
+	if ex.Stats().Discarded != 0 {
+		t.Errorf("删除全部失败时 Discarded 必须为 0，得到 %d", ex.Stats().Discarded)
 	}
 }
 

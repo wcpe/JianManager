@@ -218,9 +218,30 @@ type budgetTaskOutcome[T any] struct {
 	reserved uint64
 }
 
+// budgetStopKind 描述 runBudgetTasks 为什么没有把 count 个任务全部跑完（QRY-4）。
+//
+// 为什么必须区分：旧实现只回一个 bool `cut`，而 `apply` 返回 false 造成的提前停止会在
+// 「active==0 && next<count && 父 ctx 未取消」时被记成 `cut`，调用方随即无条件
+// `MarkIncomplete(ReasonBudgetExceeded)` ⇒ 典型响应变成「Err=UNSUPPORTED +
+// PartialReasons 里带 BUDGET_EXCEEDED」——排障时把「能力未实现」读成「预算超限」。
+// 现在覆盖原因只在**真正的预算路径**上落 BUDGET_EXCEEDED。
+type budgetStopKind int
+
+const (
+	// budgetStopComplete 全部任务正常跑完（或被排队任务从未启动但额度未耗尽）。
+	budgetStopComplete budgetStopKind = iota
+	// budgetStopCut 额度耗尽 / 在途任务消费超过预留 ⇒ 真的是预算问题。
+	budgetStopCut
+	// budgetStopApply apply 返回 false（能力未实现、需要提前停止）⇒ 与预算无关。
+	budgetStopApply
+)
+
 // runBudgetTasks 以最多八个真实在途任务调度，预算记账为已消费加在途预留。
 // 零值入站预算只在请求级归一为默认总额，不能让每个 range 再各领一份默认额度。
-func runBudgetTasks[T any](ctx context.Context, budget Budget, count int, execute func(context.Context, int, Budget) (T, uint64), apply func(T) bool) bool {
+//
+// 返回值是停跑**原因**（见 budgetStopKind）：调用方据此决定覆盖原因码，不得把
+// 「提前停止」误标成预算耗尽。
+func runBudgetTasks[T any](ctx context.Context, budget Budget, count int, execute func(context.Context, int, Budget) (T, uint64), apply func(T) bool) budgetStopKind {
 	if budget.MaxBytes == 0 {
 		budget.MaxBytes = DefaultMaxBytes
 	}
@@ -232,6 +253,7 @@ func runBudgetTasks[T any](ctx context.Context, budget Budget, count int, execut
 	var used uint64
 	next, active := 0, 0
 	cut, stop := false, false
+	earlyStop := false
 	for next < count || active > 0 {
 		for !stop && workCtx.Err() == nil && next < count && active < parallel {
 			b := budget
@@ -261,6 +283,7 @@ func runBudgetTasks[T any](ctx context.Context, budget Budget, count int, execut
 		}
 		if active == 0 {
 			if next < count && ctx.Err() == nil {
+				// 一个任务都发不出 ⇒ 额度已见底（apply 未要求停止时才归因于预算 ✓）。
 				cut = true
 			}
 			break
@@ -282,11 +305,21 @@ func runBudgetTasks[T any](ctx context.Context, budget Budget, count int, execut
 		}
 		if !apply(o.value) {
 			stop = true
+			earlyStop = true
 			cancel()
 		}
 		// stop 后仍排空在途结果，避免遗留发送协程；不会再启动排队任务。
 	}
-	return cut
+	switch {
+	case earlyStop:
+		// apply 要求提前停止：原因由 apply 自己记进 coverage（UNSUPPORTED 等），
+		// 调用方不得再补一条 BUDGET_EXCEEDED。
+		return budgetStopApply
+	case cut:
+		return budgetStopCut
+	default:
+		return budgetStopComplete
+	}
 }
 
 func budgetRangeCount(b Budget, coverage *Coverage, n int) int {
@@ -299,12 +332,14 @@ func budgetRangeCount(b Budget, coverage *Coverage, n int) int {
 
 // Search 执行查询面 Search stub。
 func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
-	// 临时诊断（2026-10-08 慢查询根因定位；验证后降级/移除）：
-	// 分解 plan / 任务执行 / 组装 的耗时，回答"端到端 8s 花在哪"。
-	diagStart := time.Now()
+	// 固定观测口径（慢查询定位用）：分解 plan / 任务执行 / 组装三段耗时。
+	// 全程 Debug 级 —— 默认 Info 门下不产出任何日志，只有显式开 Debug 才会付出两次
+	// time.Now() 的纳秒级开销。回答的问题固定为"端到端慢查询花在哪一段"，
+	// 与 vlrange 的 `query-timing: vl-merged`（VL 侧往返）配套构成完整分解。
+	queryStart := time.Now()
 	resp := SearchResponse{RequestID: req.RequestID}
 	plan := s.planFromRequest(req)
-	planMs := time.Since(diagStart).Milliseconds()
+	planElapsedMs := time.Since(queryStart).Milliseconds()
 	resp.Coverage = plan.Coverage
 	remapCoverageTargets(&resp.Coverage, req.AuthorizedTargets)
 	resp.Quality = plan.Quality
@@ -377,7 +412,7 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 		targetIDs []string
 	}
 	exhausted := true
-	cut := runBudgetTasks(ctx, req.Budget, len(allowed), func(ctx context.Context, idx int, budget Budget) (searchRangeOutcome, uint64) {
+	stopKind := runBudgetTasks(ctx, req.Budget, len(allowed), func(ctx context.Context, idx int, budget Budget) (searchRangeOutcome, uint64) {
 		task := allowed[idx]
 		ids := make([]string, 0, len(task.rngs))
 		for _, rng := range task.rngs {
@@ -459,12 +494,12 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 		}
 		return true
 	})
-	if cut {
+	if stopKind == budgetStopCut {
 		budgetHit = true
 		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
-	slog.Debug("query-timing: tasks", "req", req.RequestID, "plan_ms", planMs,
-		"tasks_ms", time.Since(diagStart).Milliseconds()-planMs, "tasks", len(tasks), "applied_ranges", appliedRanges)
+	slog.Debug("query-timing: tasks", "req", req.RequestID, "plan_ms", planElapsedMs,
+		"tasks_ms", time.Since(queryStart).Milliseconds()-planElapsedMs, "tasks", len(tasks), "applied_ranges", appliedRanges)
 
 	SortEvents(items)
 
@@ -511,9 +546,9 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 	if !plan.Coverage.Complete {
 		resp.Quality.StatsQuality = StatsPartial
 	}
-	// 临时诊断：端到端总耗时（worker 视角）。
+	// 固定观测口径：端到端总耗时（worker 视角）。
 	slog.Debug("query-timing: total",
-		"req", req.RequestID, "total_ms", time.Since(diagStart).Milliseconds(), "items", len(items))
+		"req", req.RequestID, "total_ms", time.Since(queryStart).Milliseconds(), "items", len(items))
 	return resp
 }
 
@@ -557,7 +592,7 @@ func (s *Service) Stats(ctx context.Context, req QueryRequest, groupBy []string)
 		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 		resp.Quality.StatsQuality = StatsPartial
 	}
-	cut := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (statsRangeOutcome, uint64) {
+	stopKind := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (statsRangeOutcome, uint64) {
 		rng := plan.Ranges[idx]
 		q := RangeQuery{RequestID: req.RequestID, TimeRange: req.TimeRange, Filter: req.Filter, Budget: budget,
 			ClosedVisibleSeq: rng.ClosedVisibleSeq, GroupBy: append([]string(nil), req.GroupBy...),
@@ -592,7 +627,7 @@ func (s *Service) Stats(ctx context.Context, req QueryRequest, groupBy []string)
 		points = mergeStatsPoints(points, o.res.Points)
 		return true
 	})
-	if cut {
+	if stopKind == budgetStopCut {
 		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
 	if !plan.Coverage.Complete {
@@ -633,7 +668,7 @@ func (s *Service) Fields(ctx context.Context, req QueryRequest) FieldsResponse {
 		err error
 	}
 	launch := budgetRangeCount(req.Budget, &plan.Coverage, len(plan.Ranges))
-	cut := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (fieldsRangeOutcome, uint64) {
+	stopKind := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (fieldsRangeOutcome, uint64) {
 		rng := plan.Ranges[idx]
 		res, err := client.Fields(ctx, rng, RangeQuery{RequestID: req.RequestID, TimeRange: req.TimeRange,
 			Filter: req.Filter, Budget: budget, ClosedVisibleSeq: rng.ClosedVisibleSeq})
@@ -666,7 +701,7 @@ func (s *Service) Fields(ctx context.Context, req QueryRequest) FieldsResponse {
 		}
 		return true
 	})
-	if cut {
+	if stopKind == budgetStopCut {
 		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
 	resp.Fields = make([]string, 0, len(fieldSet))
@@ -725,7 +760,7 @@ func (s *Service) Facets(ctx context.Context, req QueryRequest, dimensions []str
 		err error
 	}
 	launch := budgetRangeCount(req.Budget, &plan.Coverage, len(plan.Ranges))
-	cut := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (facetsRangeOutcome, uint64) {
+	stopKind := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (facetsRangeOutcome, uint64) {
 		rng := plan.Ranges[idx]
 		res, err := client.Facets(ctx, rng, RangeQuery{RequestID: req.RequestID, TimeRange: req.TimeRange,
 			Filter: req.Filter, Budget: budget, ClosedVisibleSeq: rng.ClosedVisibleSeq}, controlled, limit)
@@ -759,7 +794,7 @@ func (s *Service) Facets(ctx context.Context, req QueryRequest, dimensions []str
 		}
 		return true
 	})
-	if cut {
+	if stopKind == budgetStopCut {
 		resp.Truncated = true
 		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
@@ -941,7 +976,7 @@ func (s *Service) Tail(ctx context.Context, req QueryRequest, mode TailMode) Tai
 	exhausted := true
 	safeBefore := ""
 	launch := budgetRangeCount(req.Budget, &plan.Coverage, len(plan.Ranges))
-	cut := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (tailRangeOutcome, uint64) {
+	stopKind := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (tailRangeOutcome, uint64) {
 		rng := plan.Ranges[idx]
 		res, err := s.client.Tail(ctx, rng, RangeQuery{RequestID: req.RequestID, TimeRange: req.TimeRange,
 			Filter: req.Filter, Budget: budget, ClosedVisibleSeq: rng.ClosedVisibleSeq}, mode)
@@ -979,7 +1014,7 @@ func (s *Service) Tail(ctx context.Context, req QueryRequest, mode TailMode) Tai
 		}
 		return true
 	})
-	if cut {
+	if stopKind == budgetStopCut {
 		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
 	// VIEW_BOUNDED 使用与 Search 相同的稳定排序（固定视图尾部）。

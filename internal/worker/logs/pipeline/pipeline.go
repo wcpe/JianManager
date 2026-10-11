@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -112,6 +113,27 @@ type Pipeline struct {
 	// 原子量：本结构既被采集轮 worker 调用（pollSource 路径），也被归档扫描路径调用，
 	// 两者可并发碰同一个源 ⇒ 普通 int64 会构成数据竞争。
 	archiveImportDeferred atomic.Int64
+	// mu 是**单源串行锁**：把「同一个 Pipeline 的全部读写入口」串行化（SAMPLING-1）。
+	//
+	// 为什么必须有：采集轮把 `cycleMu` 收窄为只覆盖读快照段之后，worker 在**分发之前**就放锁，
+	// 于是 `Stop` / `PrepareCutoverReadiness` / `ImportArchivesNow`（它们仍以 `cycleMu` 当「与
+	// 采集轮互斥」的手段）会与在飞 worker 同时进到**同一个 Pipeline**：
+	//   · `Sampler` 内部无锁（自述「由采集轮对单个源串行调用」已不再成立），两个 goroutine 同时
+	//     `Process` ⇒ `s.sigs` 并发 map 写 ⇒ `fatal error: concurrent map writes`（整个 Worker 退出）；
+	//   · `Flush` 与 `Poll` 并发操作同一个 `NormalizeBoundary` / `FileTailer`（本包此前零同步原语）；
+	//   · `RefreshDegrade` 读写 `lastDegradeSample`。
+	// 这些都是**同一源**上的并发，与「跨源并发」无关 ⇒ 用一把 per-pipeline 锁收口，而不是把
+	// `cycleMu` 重新扩大（那正是 D 修复要拆掉的覆盖面，会把 worker 执行期重新绑回与解算/登记/
+	// 停止共用的全局锁）。
+	//
+	// **锁序**：`Pipeline.mu` → 调用方（Manager）侧的全部锁。交付钩子 / 落库钩子 / 归档归属钩子
+	// 都在持本锁时被回调，故调用方**不得**在持有共享锁（如 `Manager.mu`）时调用下面的入口。
+	// 既有生产调用点均满足（`Stop` / `PrepareCutoverReadiness` / `ImportArchivesNow` 都是先放
+	// `m.mu` 再逐源调用）。
+	//
+	// **刻意不覆盖 `TryReclaim`**：它经 `ReclaimProof` 钩子在持本锁的调用链内被回调，
+	// 一并加锁会自锁；它只碰 ledger/WAL（两者各自带锁）故不需要本锁。
+	mu sync.Mutex
 }
 
 // ArchiveImportDeferred 返回「因 WAL 余量耗尽而推迟归档导入」的累计次数。
@@ -288,6 +310,10 @@ func (p *Pipeline) DeliverPending() (bool, error) {
 	if p == nil || p.inner == nil {
 		return false, nil
 	}
+	// 与 Poll / Flush / ImportArchive 共用同一把 per-pipeline 锁（SAMPLING-1）：
+	// 本方法同样会走 emit→采样→WAL，且 `selfHealPausedSource` 与兜底环可能并发对同一源发起。
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	events, err := p.inner.DeliverPending()
 	if err != nil || len(events) == 0 {
 		return false, err
@@ -328,6 +354,11 @@ func (p *Pipeline) EventsEmitted() int { return p.bound.EventsEmitted() }
 
 // SetRotateTarget 更新轮转目标。
 func (p *Pipeline) SetRotateTarget(path string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.tailer != nil {
 		p.tailer.SetRotateTarget(path)
 	}
@@ -337,17 +368,26 @@ func (p *Pipeline) PrepareRotation() (bool, error) {
 	if p == nil || p.tailer == nil {
 		return false, nil
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.tailer.PrepareRotation()
 }
 
 func (p *Pipeline) CurrentSegmentUnread() bool {
-	return p != nil && p.tailer != nil && p.tailer.CurrentSegmentUnread()
+	if p == nil || p.tailer == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.tailer.CurrentSegmentUnread()
 }
 
 func (p *Pipeline) RebaseCurrentSegment(pos uint64) error {
 	if p == nil || p.tailer == nil {
 		return fmt.Errorf("pipeline: file tailer not configured")
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.tailer.RebaseCurrentSegment(pos)
 }
 
@@ -364,6 +404,8 @@ func (p *Pipeline) FlushClosedSegment() ([]logtypes.Event, error) {
 	if p == nil || p.bound == nil {
 		return nil, nil
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.bound.FlushUnclosed(normalize.UnclosedReasonCrossRotation)
 	events := p.bound.DrainEvents()
 	if len(events) == 0 {
@@ -379,6 +421,8 @@ func (p *Pipeline) ConfirmRotationCoverage() error {
 	if p == nil || p.tailer == nil {
 		return fmt.Errorf("pipeline: file tailer not configured")
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.tailer.ConfirmRotationCoverage()
 }
 
@@ -395,6 +439,8 @@ func (p *Pipeline) FlushStaleMultiline(now time.Time, timeout time.Duration) ([]
 	if p == nil || p.bound == nil || timeout <= 0 {
 		return nil, nil
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	events, ok := p.bound.FlushStaleUnclosed(now, timeout, normalize.UnclosedReasonIdle)
 	if !ok || len(events) == 0 {
 		return nil, nil
@@ -405,6 +451,13 @@ func (p *Pipeline) FlushStaleMultiline(now time.Time, timeout time.Duration) ([]
 // Poll 读取增量：FILE_PRIMARY tail / STDIO 行流 → normalize 事件 → WAL → delivery。
 // 返回本批已入 WAL 的完整事件（不含仍在缓冲的半条）。
 func (p *Pipeline) Poll() ([]logtypes.Event, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pollLocked()
+}
+
+// pollLocked 是 Poll 的**锁内实现**：调用方必须已持 `p.mu`（见 `Pipeline.mu` 的锁序说明）。
+func (p *Pipeline) pollLocked() ([]logtypes.Event, error) {
 	switch p.mode {
 	case ModeFilePrimary:
 		return p.pollFile()
@@ -465,6 +518,13 @@ func (p *Pipeline) pollStdio() ([]logtypes.Event, error) {
 
 // Flush 冲刷多行半条事件（崩溃/轮转前）。显式 PARTIAL/OK 状态，不静默丢。
 func (p *Pipeline) Flush() ([]logtypes.Event, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.flushLocked()
+}
+
+// flushLocked 是 Flush 的**锁内实现**：调用方必须已持 `p.mu`。
+func (p *Pipeline) flushLocked() ([]logtypes.Event, error) {
 	// tailer.FlushPartial → boundary.FlushPartial → normalize.FlushPartial。
 	if p.tailer != nil {
 		_, _, _ = p.tailer.FlushPartial()
@@ -479,9 +539,14 @@ func (p *Pipeline) Flush() ([]logtypes.Event, error) {
 }
 
 // Drain Poll + Flush，一次取完当前可见完整事件。
+//
+// 两段必须在**同一段临界区**内完成（SAMPLING-1）：否则「Poll 之后、Flush 之前」正是
+// `Stop` / 预备切换的 `Flush` 能插进来的窗口，一次 Drain 会与它交错两次。
 func (p *Pipeline) Drain() ([]logtypes.Event, error) {
-	polled, err := p.Poll()
-	flushed, ferr := p.Flush()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	polled, err := p.pollLocked()
+	flushed, ferr := p.flushLocked()
 	out := append(append([]logtypes.Event{}, polled...), flushed...)
 	if err != nil {
 		return out, err
@@ -504,6 +569,10 @@ func (p *Pipeline) RefreshDegrade(now time.Time) bool {
 	if p.sampler == nil || p.capacityProvider == nil {
 		return false
 	}
+	// 与事件路径共用同一把 per-pipeline 锁（SAMPLING-1）：本方法写 `lastDegradeSample` 并改写
+	// `Sampler` 的降级状态，而 `Sampler.Process`（在 `emit` 内）也在并发读它。
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if !p.lastDegradeSample.IsZero() && now.Sub(p.lastDegradeSample) < degradeSampleInterval {
 		return false
 	}
@@ -530,6 +599,9 @@ func (p *Pipeline) RefreshDegrade(now time.Time) bool {
 // 这是最危险的一类不一致（现场表现是校验永远失败或缺口永远挂着）。
 //
 // 采样未启用时 sampler 为 nil，本方法逐指令等价于直接调用 p.ingest。
+//
+// **并发契约（SAMPLING-1）**：调用方必须已持 `p.mu`（本方法只由 Poll/Flush/Drain/
+// FlushClosedSegment/FlushStaleMultiline/ImportArchive 在各自临界区内调用）。
 func (p *Pipeline) emit(events []logtypes.Event) ([]logtypes.Event, error) {
 	events = p.sampleEvents(events)
 	if len(events) == 0 {
@@ -549,6 +621,9 @@ func (p *Pipeline) emit(events []logtypes.Event) ([]logtypes.Event, error) {
 // 而不是本次修复想要的「切批不改语义」。故采样必须保持整包一次，切批只发生在采样之后。
 //
 // 采样未启用（sampler == nil）时本方法逐指令等价于恒等返回（零行为变化）。
+//
+// **并发契约（SAMPLING-1）**：调用方必须已持 `p.mu` —— `Sampler` 内部无锁，两个 goroutine
+// 同时 `Process` 会并发写 `s.sigs`（map）⇒ `fatal error: concurrent map writes`。
 func (p *Pipeline) sampleEvents(events []logtypes.Event) []logtypes.Event {
 	if p.sampler == nil {
 		return events
@@ -712,6 +787,11 @@ func (p *Pipeline) archiveImportBatchSize() int {
 //   - 因此「丢」不可能发生（每段要么已落库、要么仍在待导入集合里），
 //     而「重」由既有 event_id + 位置账本幂等收敛（本修复不新增判据）。
 func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
+	// 与 Poll / Flush 共用同一把 per-pipeline 锁（SAMPLING-1）：本方法会走
+	// `sampleEvents`（`Sampler.Process` → `s.sigs`）与 `ingest`（WAL/投递/回收证明），
+	// 而归档导入入口（手动 + 定时扫描）与在飞采集 worker 是两条独立 goroutine。
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	// 先给回收一次机会，再评估本轮余量。
 	//
 	// 为什么这一步不能省（现场「不自愈」形态的机制本体）：`acquire.Pipeline.Ingest` 在每次

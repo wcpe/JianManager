@@ -46,9 +46,17 @@ const (
 	// FieldEncodingSanitized 标记正文含非法 UTF-8，已被替换为 U+FFFD。
 	// 置位意味着**正文与源文件原始字节不一致**，调用方不得当作原文一致。
 	FieldEncodingSanitized = "encoding_sanitized"
-	// FieldSourceCharset 标记本事件的正文是由非 UTF-8 字符集（GBK/GB18030）解码而来。
-	// 只在确实发生转码时写入：既能证明「这行不是 UTF-8 原文」，也让历史数据的重写范围
-	// 可以直接按该字段筛出来（见 docs/specs/worker-log-normalizer/spec.md 的字符集一节）。
+	// FieldSourceCharset 标记本事件的**生效字符集**（GBK/GB18030），即这行最终是按哪个
+	// 字符集解读的。
+	//
+	// 口径（NORM-1，原注释与实现两个方向都不符，此处以实现为准订正）：写入判据是
+	// **本行生效字符集 ≠ UTF-8**，而不是"确实发生了转码"。因此显式配置为 GB 系的源里，
+	// 纯 ASCII 行同样会被标成 `source_charset: gbk/gb18030` —— 它们的正文与 UTF-8 原文
+	// 逐字节相同，但按**源级口径**记账是有意的：历史数据重写要能按该字段
+	// **整源**筛出来，而不漏掉其中的 ASCII 行（见 charset.go 的源级粘滞说明 ✓）。
+	// 若改成"仅在发生转码时写入"，同源事件会因行内容不同而时有时无，重写范围不可枚举 ✗。
+	//
+	// 真正发生转码的行数另由 charsetDecoder.decodedLines 观测（仅诊断，不落字段 ✓）。
 	FieldSourceCharset = "source_charset"
 	// FieldEventTimeZone 记录解释 [HH:MM:SS] 所用的时区名（缺陷 C）。
 	// 只在生效时区不是 UTC 时写入：既有 UTC 源的事件零变化，而按源时区换算过的事件
@@ -546,8 +554,9 @@ func (n *Normalizer) buildEvent(
 	if message != joinLines(lines) {
 		ev.Fields[FieldEncodingSanitized] = "true"
 	}
-	// 由 GBK/GB18030 解码而来的事件留下可审计标记：既证明正文不是 UTF-8 原文，
-	// 也让「历史数据重写」可以直接按该字段定位受影响的事件。
+	// 生效字符集不是 UTF-8 时留下可审计标记（NORM-1：口径是"生效字符集"，不是"确实转码"——
+	// 显式 GB 配置下的纯 ASCII 行同样记账，理由见 FieldSourceCharset 的注释 ✓）。
+	// 字段让「历史数据重写」可以按该字段定位受影响的事件；真正转码过的行数见 decodedLines。
 	if charset != "" && charset != CharsetUTF8 {
 		ev.Fields[FieldSourceCharset] = string(charset)
 	}

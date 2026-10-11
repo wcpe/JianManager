@@ -92,7 +92,7 @@ func TestPR61UnusedReservationReleasedIncrementally(t *testing.T) {
 	defer cancel()
 	entered := make(chan int, 12)
 	releaseOne, releaseRest := make(chan struct{}), make(chan struct{})
-	done := make(chan bool, 1)
+	done := make(chan budgetStopKind, 1)
 	var applied int
 	go func() {
 		done <- runBudgetTasks(ctx, Budget{MaxBytes: 128}, 12, func(workCtx context.Context, idx int, b Budget) (int, uint64) {
@@ -132,8 +132,8 @@ func TestPR61UnusedReservationReleasedIncrementally(t *testing.T) {
 	}
 	close(releaseRest)
 	select {
-	case cut := <-done:
-		require.False(t, cut)
+	case stopKind := <-done:
+		require.Equal(t, budgetStopComplete, stopKind, "未用预留增量释放 ⇒ 不得判定为预算耗尽")
 	case <-ctx.Done():
 		t.Fatal("调度未结束")
 	}

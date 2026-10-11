@@ -24,9 +24,16 @@ import (
 // 事件体是在投递路径（writeProjection → appendEvents）才写入段存储，故尚未投递的条目
 // 只能内联保存。判据必须**按条**给出（见 SnapshotSplit 的 covered 谓词），不得按源一刀切。
 type WALRef struct {
-	Seq         uint64 `json:"seq"`
-	Appended    bool   `json:"appended"`
-	Durable     bool   `json:"durable"`
+	Seq      uint64 `json:"seq"`
+	Appended bool   `json:"appended"`
+	Durable  bool   `json:"durable"`
+	// Replay 与 WALEntry.Replay 同义：该条目来自**恢复期回放/补账**。
+	//
+	// 为什么必须持久化（ACQ-1）：`Replay` 只落在内存条目上时，重启后回放条目会退回
+	// 「常规积压」并重新把源推过闸（`backlogLocked` 的闸视图 = 总量 − 回放）——
+	// 而这恰好发生在最需要它的时刻（恢复期回放与进程重启是同一场景）。
+	// 旧数据无此字段 ⇒ 零值 false = 非回放，向后兼容 ✓。
+	Replay      bool   `json:"replay,omitempty"`
 	EventID     string `json:"event_id"`
 	RecordStart uint64 `json:"record_start"`
 	RecordEnd   uint64 `json:"record_end"`
@@ -43,7 +50,7 @@ func (w *WAL) SnapshotSplit(covered func(logtypes.Event) bool) (refs []WALRef, i
 	for _, e := range w.entries {
 		if covered != nil && covered(e.Event) {
 			refs = append(refs, WALRef{
-				Seq: e.Seq, Appended: e.Appended, Durable: e.Durable,
+				Seq: e.Seq, Appended: e.Appended, Durable: e.Durable, Replay: e.Replay,
 				EventID: e.Event.EventID, RecordStart: e.Event.Record.Start, RecordEnd: e.Event.Record.End,
 			})
 			continue
@@ -57,6 +64,9 @@ func (w *WAL) SnapshotSplit(covered func(logtypes.Event) bool) (refs []WALRef, i
 //
 // 合并后按 Seq 升序排列，保持投递顺序。取不到正文的引用**不得静默丢弃**：以 missing 原样
 // 返回，由调用方记可见缺口并告警（与 FR-474 §5#1「截断可见」同口径）。
+//
+// 回放标记随 refs 双向往返（ACQ-1）：`WALRef.Replay` 落到重建条目的 `WALEntry.Replay` 上，
+// 否则重启后回放条目会重新计入闸视图（见 WALRef.Replay 的说明 ✓）。
 func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventID string) (logtypes.Event, bool)) []WALRef {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -68,7 +78,7 @@ func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventI
 			missing = append(missing, r)
 			continue
 		}
-		entries = append(entries, WALEntry{Seq: r.Seq, Event: ev, Appended: r.Appended, Durable: r.Durable})
+		entries = append(entries, WALEntry{Seq: r.Seq, Event: ev, Appended: r.Appended, Durable: r.Durable, Replay: r.Replay})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Seq < entries[j].Seq })
 	w.entries = entries
@@ -78,6 +88,10 @@ func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventI
 			w.lastDurableEnd = entry.Event.Record.End
 		}
 	}
+	// 与 Restore 对称（ACQ-3）：恢复完立刻判一次闸。`saved.WALRefs` 非空时生产走的就是本路径
+	//（见 ingest 的 refs 来源），索引里的持久积压可能已经越界 ⇒ 必须当场暂停，而不是等下一次
+	// Append（现场形态：内存积压早已越界、暂停却滞后到下一次追加才发生）。
+	w.enforceBacklogLimitLocked()
 	return missing
 }
 
@@ -156,8 +170,6 @@ type WAL struct {
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
 	maxEntries int64
 	maxBytes   int64
-	// appendOriginReplay 由 AppendReplay 置位（见其注释 ✓）。
-	appendOriginReplay bool
 	// recoveryWiden 是**恢复期独立配额**的拓宽系数（≤1 = 常规闸；见 SetRecoveryWiden ✓）。
 	recoveryWiden float64
 	// pruneSinceSweep 是距离上一次"完整清扫"的 prune 次数（#66-①；持 w.mu 访问 ✓）。
@@ -640,20 +652,36 @@ func (w *WAL) SetFsync(fn func() error) {
 //
 // 调用方：恢复期回放/归档补账的写入路径（把原代次的存量写回 WAL 待投递 ✓）。常规采集**不得**
 // 走本入口 ✗（否则等于给洪流开了后门 ✗ —— 红线：新数据必须仍被同一把尺挡住 ✓）。
-func (w *WAL) AppendReplay(events ...logtypes.Event) error {
-	w.mu.Lock()
-	w.appendOriginReplay = true
-	w.mu.Unlock()
-	err := w.Append(events...)
-	w.mu.Lock()
-	w.appendOriginReplay = false
-	w.mu.Unlock()
-	return err
+//
+// **入口名即来源**（ACQ-2）：语义经入参 `origin` 传递，而不是实例字段。旧实现用
+// `appendOriginReplay` 字段在 `Append` **之外**置位/复位，两次取锁之间没有与 `Append` 的
+// 整个临界区互斥 ⇒ 任何并发的常规 `Append` 只要落进这个窗口，就会被标成回放（被闸视图剔除
+// ⇒ 红线失效）并走进放去重（同哈希即丢弃 ⇒ 常规采集行被静默吞掉）。
+func (w *WAL) Append(events ...logtypes.Event) error {
+	return w.appendLocked(originAcquire, events...)
 }
 
-func (w *WAL) Append(events ...logtypes.Event) error {
+// AppendReplay 见 Append 的说明（红线：常规采集不得走本入口 ✓）。
+func (w *WAL) AppendReplay(events ...logtypes.Event) error {
+	return w.appendLocked(originReplay, events...)
+}
+
+// walOrigin 标识一次追加的来源（**入参传递**，不在实例上留状态 ✓）。
+type walOrigin int
+
+const (
+	// originAcquire 常规采集（默认）：新数据必须仍被同一把尺挡住 ✓。
+	originAcquire walOrigin = iota
+	// originReplay 恢复期回放/归档补账：计入"回放在飞"，不计入闸视图 ✓。
+	originReplay
+)
+
+// appendLocked 是 Append / AppendReplay 的共同实现：整个追加在**同一个临界区**内完成，
+// 来源由入参给出（无跨调用的可变状态 ⇒ 并发互不污染 ✓）。
+func (w *WAL) appendLocked(origin walOrigin, events ...logtypes.Event) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	replay := origin == originReplay
 
 	// #66-③：高频路径 —— 旧实现这里 Get（深克隆）一次、判闸处再 Get 一次（每次追加两发 ✗）。
 	// 本函数只读 Paused/PauseReason/Positions.Read 三个标量 ⇒ 全部可由 O(1) 轻量读覆盖 ✓。
@@ -666,7 +694,8 @@ func (w *WAL) Append(events ...logtypes.Event) error {
 	}
 
 	// #179 上游根修：回放/补账入口先与既有条目对账，杜绝"同一 id 写两遍"✗（详见函数注释 ✓）。
-	if w.appendOriginReplay && len(events) > 0 {
+	// 判据取**本次入参** origin（ACQ-2）：常规采集轮不得走进放去重 ✓。
+	if replay && len(events) > 0 {
 		events = w.adjudicateReplayDuplicatesLocked(events)
 		if len(events) == 0 {
 			return nil
@@ -675,7 +704,7 @@ func (w *WAL) Append(events ...logtypes.Event) error {
 
 	for _, ev := range events {
 		newEntry := WALEntry{
-			Replay:   w.appendOriginReplay,
+			Replay:   replay,
 			Seq:      uint64(len(w.entries) + 1),
 			Event:    ev,
 			Appended: true,

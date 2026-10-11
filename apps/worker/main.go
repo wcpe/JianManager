@@ -90,13 +90,15 @@ func main() {
 		return
 	}
 	// 采集索引只读导出（FR-496 spec §2.3）：`worker log-index-export [--data-dir DIR] [--out FILE]`。
-	// 用于排障与回滚前的快照，不改动索引库或任何状态。
+	// 用于排障与回滚前的快照，不改动索引库或任何状态。两种写法等价（`--k v` / `--k=v`）；
+	// 未知、缺值、重复的参数一律报错退出（退出码 1）。
 	if len(os.Args) > 1 && os.Args[1] == "log-index-export" {
 		runLogIndexExport(os.Args[2:])
 		return
 	}
 	// 事件级状态派生态视图（后续项③）：`worker log-event-status [--data-dir DIR] [--source ID[/GEN]]
 	// [--from N --to M | --at RFC3339]`。只读索引库（+ 可选事件段），不改动任何状态。
+	// 两种写法等价：`--k v` 与 `--k=v` 均可；未知参数或缺值参数一律报错退出（退出码 1）。
 	if len(os.Args) > 1 && os.Args[1] == "log-event-status" {
 		runLogEventStatus(os.Args[2:])
 		return
@@ -104,20 +106,84 @@ func main() {
 	runWorker()
 }
 
+/**
+ * normalizeSubcommandArgs 归一化子命令的取值参数：把 `--k v` 与 `--k=v` 统一成 `--k=v`。
+ *
+ * 为什么必须归一化：解析器（如下层 ingest.parseEventStatusArgs）只认等号形式，而用法注释写的是
+ * 空格形式 —— 按注释敲 `--source inst:1/stdout --from 100 --to 200` 会被**静默丢弃**，
+ * 于是「看某源 100–200 区间」实际导出全源全区间，结论直接失真且毫无提示。
+ * 同理，未知参数与缺值参数（末位 `--k`、下一参又是 `--x`）也一律报错：这是排障用的只读工具，
+ * 宁可失败也不要静默换语义。
+ */
+func normalizeSubcommandArgs(args []string, known ...string) ([]string, error) {
+	allowed := make(map[string]struct{}, len(known))
+	for _, name := range known {
+		allowed[name] = struct{}{}
+	}
+	usage := strings.Join(known, " / ")
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		name, value, hasValue := strings.Cut(arg, "=")
+		if _, ok := allowed[name]; !ok {
+			return nil, fmt.Errorf("未知参数 %q（可用参数：%s）", arg, usage)
+		}
+		if !hasValue {
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("参数 %s 缺少取值", name)
+			}
+			value = args[i+1]
+			i++
+		}
+		if value == "" {
+			return nil, fmt.Errorf("参数 %s 的取值为空", name)
+		}
+		if strings.HasPrefix(value, "--") {
+			return nil, fmt.Errorf("参数 %s 缺少取值（下一个参数是 %s）", name, value)
+		}
+		out = append(out, name+"="+value)
+	}
+	return out, nil
+}
+
+/** flagValue 取归一化参数里某个键的取值；重复出现即报错（避免「后者静默覆盖前者」）。 */
+func flagValue(args []string, name string) (string, error) {
+	found := ""
+	count := 0
+	for _, arg := range args {
+		key, value, ok := strings.Cut(arg, "=")
+		if !ok || key != name {
+			continue
+		}
+		found = value
+		count++
+	}
+	if count > 1 {
+		return "", fmt.Errorf("参数 %s 重复出现 %d 次", name, count)
+	}
+	return found, nil
+}
+
 // runLogEventStatus 输出“某源某区间/某时间点当前处于哪一态”的派生态视图（JSON 到 stdout）。
 //
 // 只读：索引库不存在或不可读时报错退出（退出码 1），不创建、不修改任何文件。
 func runLogEventStatus(args []string) {
-	override := ""
-	for _, value := range parseDataDirArg(args) {
-		override = value
+	normalized, err := normalizeSubcommandArgs(args, "--data-dir", "--source", "--from", "--to", "--at")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "事件级状态导出参数非法: %v\n", err)
+		os.Exit(1)
+	}
+	override, err := flagValue(normalized, "--data-dir")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "事件级状态导出参数非法: %v\n", err)
+		os.Exit(1)
 	}
 	dataRoot, err := dataroot.Resolve(override)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "解析数据目录失败: %v\n", err)
 		os.Exit(1)
 	}
-	if err := ingest.ExportEventStatus(dataRoot.Base(), args, os.Stdout); err != nil {
+	if err := ingest.ExportEventStatus(dataRoot.Base(), normalized, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "导出事件级状态失败: %v\n", err)
 		os.Exit(1)
 	}
@@ -126,10 +192,24 @@ func runLogEventStatus(args []string) {
 // runLogIndexExport 把采集索引（SQLite）导出为旧 ingest.state.json 结构的 JSON。
 //
 // 只读：库不存在或不可读时报错退出（退出码 1），不创建、不修改任何文件。
+// `--out FILE` 的语义是「回滚前快照」，故**先写同目录临时文件、导出成功后原子改名**：
+// 旧实现先 O_TRUNC 打开目标再导出，导出失败（索引损坏/不可读）就把上一份快照清零了。
+// 两种写法等价（`--out FILE` 与 `--out=FILE`）；缺值、重复出现一律报错退出。
 func runLogIndexExport(args []string) {
-	override := ""
-	for _, value := range parseDataDirArg(args) {
-		override = value
+	normalized, err := normalizeSubcommandArgs(args, "--data-dir", "--out")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "采集索引导出参数非法: %v\n", err)
+		os.Exit(1)
+	}
+	override, err := flagValue(normalized, "--data-dir")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "采集索引导出参数非法: %v\n", err)
+		os.Exit(1)
+	}
+	outPath, err := flagValue(normalized, "--out")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "采集索引导出参数非法: %v\n", err)
+		os.Exit(1)
 	}
 	dataRoot, err := dataroot.Resolve(override)
 	if err != nil {
@@ -137,33 +217,47 @@ func runLogIndexExport(args []string) {
 		os.Exit(1)
 	}
 	root := dataRoot.Base()
-	out := os.Stdout
-	for i := 0; i < len(args); i++ {
-		value := ""
-		switch {
-		case args[i] == "--out" && i+1 < len(args):
-			value = args[i+1]
-			i++
-		case strings.HasPrefix(args[i], "--out="):
-			value = strings.TrimPrefix(args[i], "--out=")
-		default:
-			continue
-		}
-		file, err := os.OpenFile(value, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "打开导出文件失败: %v\n", err)
+	if outPath == "" {
+		if err := ingest.ExportIndexJSON(root, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "导出采集索引失败: %v\n", err)
 			os.Exit(1)
 		}
-		defer func() { _ = file.Close() }()
-		out = file
+		return
 	}
-	if err := ingest.ExportIndexJSON(root, out); err != nil {
+	if err := writeIndexExportAtomically(root, outPath); err != nil {
 		fmt.Fprintf(os.Stderr, "导出采集索引失败: %v\n", err)
 		os.Exit(1)
 	}
-	if out != os.Stdout {
-		fmt.Fprintln(os.Stderr, "采集索引已导出")
+	fmt.Fprintln(os.Stderr, "采集索引已导出")
+}
+
+/**
+ * writeIndexExportAtomically 把索引导出到 outPath，且**不破坏已有文件**：
+ * 先写同目录临时文件（同一文件系统，改名是原子的），导出与落盘都成功后才覆盖目标。
+ * 失败路径删除临时文件并保留旧快照——它正是「回滚前快照」，被清零就失去了意义。
+ */
+func writeIndexExportAtomically(root, outPath string) error {
+	dir := filepath.Dir(outPath)
+	tmp, err := os.CreateTemp(dir, filepath.Base(outPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("创建临时导出文件失败: %w", err)
 	}
+	tmpPath := tmp.Name()
+	// CreateTemp 默认 0600：快照可能含日志正文，权限不放宽。
+	if err := ingest.ExportIndexJSON(root, tmp); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("关闭临时导出文件失败: %w", err)
+	}
+	if err := os.Rename(tmpPath, outPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("替换导出文件失败: %w", err)
+	}
+	return nil
 }
 
 // runDaemonWrapper 以 wrapper 子进程模式运行。
@@ -294,22 +388,35 @@ func runWorker() {
 
 	// 2026-10-04（候选 2 测量）：按需开启互斥锁争用采样 —— m.mu 是全局热锁（代码侧 61 个调用点、
 	// pprof 点名 14 个等待者），"谁持锁最久/谁被等最多"必须先有数据再谈收窄。
-	// 默认关闭（Go 默认 fraction=0）；仅当环境变量显式设置时开启。1=全采（诊断窗口用），
-	// 数值越大采样越稀（如 5=1/5），开销随之下降；0=关闭。
+	// 0 = 关闭（Go 默认 fraction=0，也是本项默认）。
+	//
+	// GO-7：此前该旋钮只认环境变量 JM_MUTEX_PROFILE_FRACTION，绕过项目配置体系 ⇒ 运维无从从
+	// 配置面发现它、也无法纳入版本化管理。现以 `log.mutex_profile_fraction` 为**正典**；
+	// 环境变量保留为「配置加载失败时的兜底」（例如要诊断的正是启动早期），设置时打 Warn 提示
+	// 运维改走配置面。1 = 全采（诊断窗口），数值越大采样越稀（如 5 = 1/5）。
+	mutexFraction := cfg.Log.MutexProfileFraction
 	if v := os.Getenv("JM_MUTEX_PROFILE_FRACTION"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			runtime.SetMutexProfileFraction(n)
-			slog.Info("互斥锁争用采样已配置", "fraction", n)
+			if mutexFraction == 0 {
+				mutexFraction = n
+			}
+			slog.Warn("JM_MUTEX_PROFILE_FRACTION 是配置面外的兜底旋钮，请改用 log.mutex_profile_fraction",
+				"env", n, "configured", cfg.Log.MutexProfileFraction)
 		} else {
 			slog.Warn("JM_MUTEX_PROFILE_FRACTION 非法，忽略", "value", v)
 		}
+	}
+	if mutexFraction > 0 {
+		runtime.SetMutexProfileFraction(mutexFraction)
+		slog.Info("互斥锁争用采样已配置", "fraction", mutexFraction)
 	}
 	// 日志等级/格式装配（此前**完全没有装配点**：Worker 从不调用 slog.SetDefault，
 	// 于是 log.level / log.format 两个配置项形同不存在——写 debug 不产生任何 DEBUG 输出，
 	// 写 error 也压不住 INFO。现场表现是「改了配置但日志没变」，极难归因。
 	//
-	// 用 LevelVar 而不是固定等级：G10 要求「运行期可动态调等级」（平时压到 info 降开销、
-	// 排障时临时开 debug），而 LevelVar 正是该能力的接线点。
+	// 口径（勿夸大能力）：等级**只在启动期按配置装配一次**，进程内没有任何可达入口能再改它
+	// ⇒ 现场改级别必须改配置并**重启 Worker**。用 LevelVar 承载该等级，只是把它绑到 handler
+	// 上（等价于固定等级），将来若真接出运行期调级入口（信号/心跳策略），这里就是接线点。
 	logLevelVar := new(slog.LevelVar)
 	logLevel, logLevelErr := cfg.LogLevel()
 	if logLevelErr != nil {
@@ -329,7 +436,7 @@ func runWorker() {
 		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, logOpts)))
 	}
 	slog.Info("Worker 日志已按配置装配", "level", logLevel.String(), "format", logFormat,
-		"note", "等级可经 logLevelVar 运行期调整（G10）")
+		"note", "等级在启动期生效，调整需重启进程")
 
 	// 启动自证（2026-10-02 真机复验）：把「实际读到的配置文件」与关键采集口径一次打清楚。
 	// 现场教训：`log_ingest.time_zone: local` 配上仍按 UTC 解释日志——可能是读的不是你改的文件，
@@ -1508,10 +1615,8 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 					"verify_deferred", manager.VerifyDeferredCount())
 			}
 			lines := manager.ResumeDiagnosticLines()
-			if len(lines) == 0 {
-				// 注意：**不能**在这里 return/continue 掉整个打点——下方「永久阻塞」清单
-				// 恰恰在没有常规诊断行时才最需要可见（其源可能既不 paused 也无 backlog）。
-			}
+			// 常规诊断行为空时**不能**跳过本次打点：下方「永久阻塞」清单恰恰在没有常规诊断行时
+			// 才最需要可见（其源可能既不 paused 也无 backlog）。
 			for _, line := range lines {
 				slog.Info("恢复判据快照", "detail", line)
 			}

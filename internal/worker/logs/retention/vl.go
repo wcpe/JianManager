@@ -100,6 +100,12 @@ type SweepResult struct {
 //
 // 并发口径：由单个后台循环调用（与采集轮无关），内部不加锁；节流表只在本实例内生效，
 // 进程重启后立刻补扫一次——删除是幂等的，多扫一次只是多一次索引遍历，不会删错。
+//
+// **生产接线状态（RET-2）**：本版本没有 `NewSweeper` 的生产调用点，也没有给受管 VL 注入
+// `-delete.enable` 的配置位，因此第三闸在生产不可达：打开两闸的真实效果是「零删除」。
+// 这是 fail-closed 方向，但启动日志不得声称删除已生效（措辞见 Policy.Describe 与
+// DescribeDeleteExecutor）。补接线时必须一并补上 `-delete.enable` 的显式配置位
+// （默认关、开启需二次确认）与 SweepStats 的消费点。
 type Sweeper struct {
 	policy  Policy
 	deleter VLDeleter
@@ -117,12 +123,19 @@ func dryRunReason(p Policy) string {
 		return "执行闸未打开（sweep.vl_sweep=false）：仅计算，不删除"
 	case !p.Discard:
 		return "意图闸未打开（discard=false）：按硬规则「删前归档」，到期数据应走搬运而非删除"
+	case !DeleteExecutorWired:
+		// 本版本没有执行器的生产构造点：即使两闸都开、客户端就绪，也只是「只计划」。
+		return "删除执行器未接线（本版本无生产构造点）：只算计划，不删除"
 	default:
 		return "删除客户端未就绪"
 	}
 }
 
 // SweepStats 是执行器的累计读数（观测面）。
+//
+// 接线状态（OBS-1）：本版本的 `Sweeper` 没有生产构造点，故这些读数在生产**没有消费点**——
+// 它们当前只服务回归与将来的诊断面（`PlanOnly` 的干跑规模就是靠 SkippedDisabled 读出来的）。
+// 接上执行器时必须同时把它们接到既有的分钟打点，否则「省了多少 / 删了什么」在现场不可读。
 type SweepStats struct {
 	// Sweeps 扫描轮数。
 	Sweeps int64

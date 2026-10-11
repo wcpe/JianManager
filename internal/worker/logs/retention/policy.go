@@ -111,6 +111,10 @@ type Sweep struct {
 	//
 	// 默认 false：删除不可逆，而本包的默认姿态是「先算出来、看得见，再让运维决定动手」。
 	// 打开它还需要受管 VL 进程带 `-delete.enable`（VL 自身默认关），否则调用会被拒（400）。
+	//
+	// **本版本的接线状态（RET-2）**：`NewSweeper` 在生产没有构造点，`-delete.enable` 也没有
+	// 注入点，因此打开本项的实际效果只是让计划进入「只计划」档（措辞见 DescribeDeleteExecutor），
+	// 不会产生任何删除调用。这是 fail-closed 方向（不会误删），但**不得**按「已生效」读它。
 	VLSweep bool `mapstructure:"vl_sweep"`
 	// Interval 扫描间隔；<=0 取 DefaultSweepInterval。
 	Interval time.Duration `mapstructure:"interval"`
@@ -226,7 +230,7 @@ func (p Policy) Validate() error {
 	}{
 		{"hot_retention", p.HotRetention}, {"cold_retention", p.ColdRetention},
 		{"sweep.interval", p.Sweep.Interval}, {"sweep.timeout", p.Sweep.Timeout},
-		{"trigger.min_age", p.Trigger.MinAge},
+		{"trigger.min_age", p.Trigger.MinAge}, {"trigger.interval", p.Trigger.Interval},
 	} {
 		if field.value < 0 {
 			return fmt.Errorf("retention: %s 不能为负，得到 %s", field.name, field.value)
@@ -371,7 +375,35 @@ func ParseTTL(raw string) (time.Duration, error) {
 	return 0, fmt.Errorf("retention: 无法解析保留期 %q（支持 30m / 24h / 1h30m，以及 d=天、w=周，如 3d、2w）", raw)
 }
 
+// DeleteExecutorWired 报告**本版本**是否把删除执行器接到了生产（启动日志与观测面用）。
+//
+// 为什么需要这个常量（RET-2，2026-10-11 复核）：三闸里的执行闸 `sweep.vl_sweep` 只有
+// `Sweeper` 消费，而 `NewSweeper` 在生产**没有构造点**（全仓只有测试构造），
+// `-delete.enable` 也没有注入点（`vlsup.BuildArgs` 是硬编码参数表，没有扩展位）。
+// 于是「把开关打开」在生产既不删、也没有干跑计划出口，而 `Describe()` 原先会打印
+// `mode=vl-sweep` 并被写进启动日志——读日志的人会以为删除已生效。
+//
+// 结论（本版本取「最小正确形态」，不补接线）：把措辞改成 `planned-only`，
+// 并把「未接线」显式写进 `Describe()` 的返回串（它由 main.go 的启动日志打印）。
+// 接线（构造 Sweeper + 给受管 VL 注入 -delete.enable）后必须把本常量改成 true 并同步措辞。
+const DeleteExecutorWired = false
+
+// DescribeDeleteExecutor 返回删除执行器接线状态的一句话说明（启动日志、观测面与文档用）。
+func DescribeDeleteExecutor(p Policy) string {
+	if !p.Normalize().Sweep.VLSweep {
+		return "删除执行器未启用（sweep.vl_sweep=false）：只算计划、零删除调用"
+	}
+	if !DeleteExecutorWired {
+		return "删除执行器未接线：sweep.vl_sweep=true 只让计划进入「只计划」档，" +
+			"本版本不会产生任何删除调用（第三闸 -delete.enable 不可达）"
+	}
+	return "删除执行器已接线（仍需受管 VL 带 -delete.enable，否则下发被拒）"
+}
+
 // Describe 返回策略摘要（启动日志与观测面用）。
+//
+// 措辞约束（RET-2）：`vl_sweep=true` **不得**被描述成「已生效」——本版本删除执行器未接线，
+// 那一档的实际效果只是「计划可审计」。
 func (p Policy) Describe() string {
 	if !p.Enabled {
 		return "disabled"
@@ -388,9 +420,11 @@ func (p Policy) Describe() string {
 	}
 	mode := "dry-run"
 	if n.Sweep.VLSweep {
-		mode = "vl-sweep"
+		// 措辞与 DescribeDeleteExecutor 一致：本版本没有删除执行器的生产构造点。
+		mode = "planned-only"
 	}
-	return fmt.Sprintf("%s overrides=%d (%s)", mode, len(p.Sources), strings.Join(parts, " "))
+	return fmt.Sprintf("%s overrides=%d (%s)；%s",
+		mode, len(p.Sources), strings.Join(parts, " "), DescribeDeleteExecutor(n))
 }
 
 func humanTTL(d time.Duration) string {

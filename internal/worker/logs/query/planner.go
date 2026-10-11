@@ -349,44 +349,17 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		view.TargetCoverage[target.TargetID] = target
 	}
 
-	// 查询窗内无分区的目标：按「空」而非「坏」纳入覆盖（与 #60 的 CP 侧同口径；
+	// 查询窗内无分区的**授权目标**：按「空」而非「坏」纳入覆盖（与 #60 的 CP 侧同口径；
 	// 2026-09-30 生产实证：静默源 inst:153 因此令平台 complete 恒 false）。
 	//
-	// 背景：res.Coverage 与 ranges 都按**分区**构造，窗口内没有分区的目标两边都不出现 →
-	// planRangesForView 判 not_ready/RANGE_UNAVAILABLE → 一个没数据的源把整个平台判成未就绪。
-	// 处置：只要它的记录在 Catalog 中确实可查（OwnerForQuery 给得出权威），就为它补一条
-	// **空成功覆盖**。注意**不**标为可查——否则会为它追加一个指向不存在分区的 range，
-	// 反而制造 range-unavailable；不标则可走非可查分支，直接采用这条空覆盖并 continue。
-	for _, targetID := range view.TargetIDs {
-		if _, exists := view.TargetCoverage[targetID]; exists {
-			continue
-		}
-		key, ok := parseTargetKey(targetID)
-		if !ok {
-			continue
-		}
-		// 注意：不能用 p.cat.Get(key)——key 里是**查询窗内那一天**，而静默源的最后分区
-		// 早于窗口（生产实证：inst:153 止于 09-27，窗口是今天）→ Get 必然落空 →
-		// 本修复会一路 continue 而毫无作用。故改为按**命名空间**找它任意一个分区：
-		// 只要该源确实有可查记录，就说明「窗口内无数据」而非「不可用」。
-		var rec *catalog.Record
-		for _, candidate := range p.cat.Keys() {
-			if candidate.StorageNamespace != key.StorageNamespace {
-				continue
-			}
-			if r, ok := p.cat.Get(candidate); ok && r != nil {
-				rec = r
-				break
-			}
-		}
-		if rec == nil {
-			continue
-		}
-		if ref := catalog.OwnerForQuery(rec); !ref.OK {
-			continue
-		}
-		view.TargetCoverage[targetID] = TargetCoverage{TargetID: targetID, State: CoverageSuccess}
-	}
+	// 必须迭代 req.TargetIDs（授权目标）而不是 view.TargetIDs（2026-10-11 复审订正）：
+	// res.Coverage 与 ranges 都按**分区**构造，而 CP 发的授权目标是**命名空间**粒度
+	// （TargetInfo{ID: "inst:153"}）⇒ 窗口内没有分区的源在两边都不出现 ⇒ CP 判
+	// missing_coverage ⇒ 一个静默源把整个平台判成未就绪。而这类源**根本不进 view.TargetIDs**
+	// （selectKeys 按 dayOverlapsRange 过滤掉窗口外的分区）⇒ 迭代视图目标永远看不到它。
+	//
+	// record=true：此刻视图尚未登记（下面的 p.views[...] 还没执行）⇒ 无并发读者，可安全写回。
+	p.coverEmptyAuthorizedTargets(req, view, &res, true)
 	if !req.Transient {
 		p.mu.Lock()
 		p.pruneViewsLocked()
@@ -395,6 +368,92 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 	}
 	res.View = view
 	return res
+}
+
+// coverEmptyAuthorizedTargets 为「查询窗内没有任何分区的**授权目标**」补一条**空成功覆盖**。
+//
+// 症状与口径：CP 的授权目标是命名空间粒度，而覆盖与 range 都按分区构造 ⇒ 窗口内无数据的源在
+// 两边都不出现 ⇒ CP 判 missing_coverage ⇒ 一个静默源（最后分区早于窗口，如 inst:153）把整个平台
+// 判成未就绪。这与 #60 在 CP 侧「无数据 ≠ 故障」同口径：按**空结果**计入成功。
+//
+// 判据（缺一不可）：
+//  1. 视图内没有任何条目承载该授权目标（判据与 remapCoverageTargets/CP 侧一致：条目 ID 等于
+//     授权目标，或条目是它的分区子项）——已有覆盖就不得重复计入；
+//  2. Catalog 里确实存在同命名空间、且 `OwnerForQuery` 给得出权威的记录（按命名空间找**任意**
+//     一天：静默源的最后分区可能早于窗口，故绝不能用窗口内那一天去 Get，那必然落空）；
+//  3. **不**把它标为可查（不进 QueryableTargets）——否则会为它追加一个指向不存在分区的 range，
+//     反而制造 range-unavailable。
+//
+// 找不到可查记录的授权目标**保持未就绪**（不发明空成功）：worker 侧无法区分「该源在本 Worker
+// 上没有记录」与「窗口内无数据」，宁可让 CP 判 missing_coverage，也不把「不知道」粉饰成「空」。
+//
+// record 只在创建路径置位（视图尚未登记 ⇒ 无并发读者）：把结果写回视图，使固定视图复用路径
+// （planRangesForView）能产出同一条覆盖。复用路径持有的是共享视图（在 p.mu 之外被并发请求读），
+// 就地改写即数据竞争，故一律只写本次响应的覆盖。
+func (p *Planner) coverEmptyAuthorizedTargets(req PlanRequest, view *QueryView, res *PlanResult, record bool) {
+	if len(req.TargetIDs) == 0 {
+		// 未指定授权目标 = 本 Worker 全部 Catalog 分区：没有分区就没有目标，不发明覆盖。
+		return
+	}
+	// 一次 O(条数) 建立「已被覆盖」集合：条目 ID 直接命中，或按 parseTargetKey 归到命名空间/天
+	// （与 matchTarget 的三条命中规则等价）。此前写法对每个目标整份遍历 p.cat.Keys() ⇒ O(T×K)
+	// 且每次整份拷贝，而触发条件本身恒假（迭代的是必然已被覆盖的 view.TargetIDs）。
+	covered := make(map[string]bool, len(view.TargetCoverage)*2)
+	for id := range view.TargetCoverage {
+		covered[id] = true
+		if key, ok := parseTargetKey(id); ok {
+			covered[key.StorageNamespace] = true
+			covered[key.UTCDay] = true
+		}
+	}
+	// Catalog 键只取一次（惰性：没有待补目标时零成本）。
+	var allKeys []catalog.PartitionKey
+	for _, auth := range req.TargetIDs {
+		if auth == "" || covered[auth] {
+			continue
+		}
+		if allKeys == nil {
+			allKeys = p.cat.Keys()
+		}
+		// 授权目标可能是命名空间（其自身可含 '/'，如 ns/game-1），也可能是 ns/day：
+		// 先按整串当命名空间找；找不到再按 parseTargetKey 拆出的命名空间找一次。
+		if !p.catalogHasQueryableRecord(allKeys, auth) {
+			key, ok := parseTargetKey(auth)
+			if !ok || key.StorageNamespace == auth || !p.catalogHasQueryableRecord(allKeys, key.StorageNamespace) {
+				continue
+			}
+		}
+		cov := TargetCoverage{TargetID: auth, State: CoverageSuccess}
+		res.Coverage.AddTarget(cov)
+		covered[auth] = true
+		if record {
+			view.TargetCoverage[auth] = cov
+			// 登记进 TargetIDs：planRangesForView 按它产出同一条覆盖；它不在 QueryableTargets 里，
+			// 故走「不可查」分支 ⇒ 只给覆盖、不给 range（空 = 结果里 0 行）。
+			view.TargetIDs = append(view.TargetIDs, auth)
+		}
+	}
+}
+
+// catalogHasQueryableRecord 报告 Catalog 中是否存在该命名空间下**可查**的记录（任意一天）。
+// 只看 OwnerForQuery：staging / residual / 无权威一律不算（与主循环同一判据）。
+func (p *Planner) catalogHasQueryableRecord(allKeys []catalog.PartitionKey, namespace string) bool {
+	if namespace == "" {
+		return false
+	}
+	for _, k := range allKeys {
+		if k.StorageNamespace != namespace {
+			continue
+		}
+		rec, ok := p.cat.Get(k)
+		if !ok || rec == nil {
+			continue
+		}
+		if ref := catalog.OwnerForQuery(rec); ref.OK {
+			return true
+		}
+	}
+	return false
 }
 
 // validateViewAgainstCatalog 检查固定视图是否仍可对齐 Catalog。
@@ -543,14 +602,14 @@ func (p *Planner) planRangesForView(req PlanRequest, view *QueryView, res *PlanR
 		if original, ok := view.TargetCoverage[targetID]; ok {
 			res.Coverage.AddTarget(original)
 		} else {
-			// 视图未为该 target 建覆盖：记录可查，但**查询窗内没有任何分区**（典型：静默源，
-			// 其数据全部早于窗口）。这与 #60 在 CP 侧「无数据 ≠ 故障」同口径：按**空结果**
-			// 计入成功，而不是伪造成 not_ready/RANGE_UNAVAILABLE —— 否则一个没有数据的源
-			// 会永久把整个平台判成未就绪（2026-09-30 生产实证：inst:153 令 complete 恒 false）。
-			// 注意 continue：不为它产出 range，故查询结果中它贡献 0 行，正是「空」的语义。
+			// 防御分支（当前**不可达**，如实标注，不冒充修复）：可查目标在创建视图时必已写入
+			// view.TargetCoverage（Plan 先按 res.Coverage 全量填充，再补空成功覆盖）。
+			// 真出现「可查却无覆盖记录」说明创建侧漏了记账——按未就绪如实上报，
+			// 绝不伪造成空成功把缺口掩盖掉。
 			res.Coverage.AddTarget(TargetCoverage{
 				TargetID:          targetID,
-				State:             CoverageSuccess,
+				State:             CoverageNotReady,
+				Reasons:           []string{ReasonRangeUnavailable},
 				ClosedVisibleSeq:  cvs,
 				CatalogGeneration: wantGen,
 				Owner:             ownerStr,
@@ -569,6 +628,11 @@ func (p *Planner) planRangesForView(req PlanRequest, view *QueryView, res *PlanR
 			Projection:       ref.Projection,
 		})
 	}
+	// 复用路径同样要补「窗口内无分区的授权目标」的空成功覆盖：创建路径已把结果记进视图，
+	// 上面的主循环会原样复用（条目已在 view.TargetCoverage 里）；这里再兜一次本请求新出现的
+	// 授权目标（视图冻结后授权集合可能收窄/变化，见 M-9 的收窄语义）。
+	// record=false：view 是共享对象、在 p.mu 之外被并发请求读，绝不能就地改写。
+	p.coverEmptyAuthorizedTargets(req, view, res, false)
 	assertDisjoint(res.Ranges)
 }
 

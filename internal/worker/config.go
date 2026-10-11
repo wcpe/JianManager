@@ -571,6 +571,10 @@ type WSConfig struct {
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
+	// MutexProfileFraction 互斥锁争用采样率（诊断用）。0 = 关闭（Go 默认，也是本项默认）。
+	// 此前该旋钮只认环境变量 JM_MUTEX_PROFILE_FRACTION（绕过配置体系 ⇒ 运维无法从配置面发现
+	// 它、也无法纳入版本化管理）。1 = 全采（诊断窗口），数值越大采样越稀（5 = 1/5）。
+	MutexProfileFraction int `mapstructure:"mutex_profile_fraction"`
 }
 
 // LogQueryConfig configures the optional localhost VictoriaLogs query client.

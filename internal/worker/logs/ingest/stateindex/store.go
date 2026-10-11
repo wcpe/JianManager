@@ -415,6 +415,13 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 			return nil, fmt.Errorf("stateindex: 建表失败: %w", err)
 		}
 	}
+	// ACQ-1 增量迁移：`source_wal.replay` 是后加列，`CREATE TABLE IF NOT EXISTS` 不会为既有库
+	// 补列 ⇒ 这里按「列是否存在」幂等补齐。旧库旧行零值 = 非回放（与「旧行全是常规采集条目」
+	// 的事实一致 ✓），因此本迁移是纯追加、不改动任何既有语义。
+	if err := addColumnIfMissing(ctx, db, "source_wal", "replay", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if _, err := db.ExecContext(ctx,
 		"INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
 		SchemaVersion); err != nil {
@@ -1847,6 +1854,65 @@ func asBool(value any) bool {
 	}
 }
 
+// replayFlag 读 source_wal.replay 列（下标 7）。
+//
+// 与 asBool 的区别只在**兼容旧库**：本列由 ACQ-1 新增（`ALTER TABLE ... ADD COLUMN`，
+// DEFAULT 0），迁移前的旧库该列可能不存在、读回来是 NULL（driver 给 nil）——此时按
+// 「非回放」处理，与旧数据零值语义一致（旧行全是常规采集条目 ✓）。
+func replayFlag(values []any) bool {
+	if len(values) <= 7 {
+		return false
+	}
+	return asBool(values[7])
+}
+
+// addColumnIfMissing 按 PRAGMA table_info 幂等补列：SQLite 的 DDL 没有 ADD COLUMN IF NOT
+// EXISTS，而本仓库的建表用的是 CREATE TABLE IF NOT EXISTS ⇒ 后加列对既有库必须显式补。
+//
+// 为什么不用「直接 ALTER 并忽略 duplicate column 错误」：那会把「列已存在」与「真错误」
+// 混为一谈，且错误串随 SQLite 版本漂移。查 table_info 是显式、可读、可测的判据。
+func addColumnIfMissing(ctx context.Context, db *sql.DB, table, column, def string) error {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("stateindex: 读取 %s 列清单失败: %w", table, err)
+	}
+	found := false
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			colType   string
+			notNull   int
+			dfltValue any
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("stateindex: 解析 %s 列清单失败: %w", table, err)
+		}
+		if name == column {
+			found = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("stateindex: 遍历 %s 列清单失败: %w", table, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("stateindex: 关闭 %s 列清单失败: %w", table, err)
+	}
+	if found {
+		return nil
+	}
+	// 表刚由 CREATE TABLE IF NOT EXISTS 建出来时不会走到这里（列已在 DDL 里）；走到这里
+	// 只可能是「既有旧库缺列」，补列后旧行零值即默认值，语义等价。
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, def)); err != nil {
+		return fmt.Errorf("stateindex: 为 %s 补列 %s 失败: %w", table, column, err)
+	}
+	return nil
+}
+
 func asText(value any) string {
 	switch v := value.(type) {
 	case nil:
@@ -1922,8 +1988,10 @@ func appendRow(st *State, spec tableSpec, values []any) error {
 	case "source_aux":
 		st.Aux = append(st.Aux, AuxRow{Key: asText(values[0]), Config: asBytes(values[1]), Payload: asBytes(values[2])})
 	case "source_wal":
+		// 下标（loadColumns 顺序）：0 key / 1 seq / 2 event_id / 3 record_start / 4 record_end /
+		// 5 appended / 6 durable / 7 replay / 8 body。fp 不在 loadColumns（单列指纹，见 tblSourceWAL）。
 		row := WALRow{Key: asText(values[0]), EventID: asText(values[2]), Appended: asBool(values[5]),
-			Durable: asBool(values[6]), Body: asBytes(values[7])}
+			Durable: asBool(values[6]), Replay: replayFlag(values), Body: asBytes(values[8])}
 		if row.Seq, err = asUint64(values[1]); err != nil {
 			return err
 		}
@@ -1972,11 +2040,16 @@ func (s *Store) Samples() []Sample {
 func (s *Store) Latency() Latency {
 	s.mu.Lock()
 	samples := append([]Sample(nil), s.samples...)
+	// INGEST-3 修复：三个累计字段在持锁区内读——写入侧（ApplyScopedCtxRows）在 s.mu 内累加，
+	// 读写两侧不同锁 ⇒ -race 下构成数据竞争。
+	nsPlan := s.nsPlan
+	nsPrune := s.nsPrune
+	nsMirrorRebuild := s.nsMirrorRebuild
 	s.mu.Unlock()
 	if len(samples) == 0 {
 		// #67-C：无样本也要带上累计读数（否则"一个单元都没采到"时三段耗时全不可见 ✗）。
 		return Latency{
-			NsPlan: s.nsPlan, NsPrune: s.nsPrune, NsMirrorRebuild: s.nsMirrorRebuild,
+			NsPlan: nsPlan, NsPrune: nsPrune, NsMirrorRebuild: nsMirrorRebuild,
 			WALBytes: s.WALBytes(), CheckpointAttempts: s.ckptAttempts.Load(),
 			CheckpointBusy: s.ckptBusy.Load(), CheckpointTruncate: s.ckptTruncate.Load(),
 			ReadersInFlight: s.readersInFlight.Load(),
@@ -2002,9 +2075,9 @@ func (s *Store) Latency() Latency {
 	result.P50 = percentile(durations, 0.50)
 	result.P95 = percentile(durations, 0.95)
 	result.Max = max
-	result.NsPlan = s.nsPlan
-	result.NsPrune = s.nsPrune
-	result.NsMirrorRebuild = s.nsMirrorRebuild
+	result.NsPlan = nsPlan
+	result.NsPrune = nsPrune
+	result.NsMirrorRebuild = nsMirrorRebuild
 	result.WALBytes = s.WALBytes()
 	result.CheckpointAttempts = s.ckptAttempts.Load()
 	result.CheckpointBusy = s.ckptBusy.Load()
