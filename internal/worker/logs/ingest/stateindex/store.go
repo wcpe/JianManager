@@ -340,10 +340,8 @@ type Store struct {
 	ckptTruncate atomic.Int64 // 走"受控 TRUNCATE"点的次数
 	// #67-B：受控截断**默认关闭**（(c)）；开关与残余门一起才允许截断 ✓。
 	controlledTruncate bool
-	// truncateWanted：锁内**只登记意图**，真正的截断在锁外执行点（TryControlledTruncate ✓）。
-	truncateWanted  atomic.Int64
-	readersInFlight atomic.Int64 // 在飞只读句柄数（OpenReadOnly 开/关 +1/−1 ✓）
-	cycle           uint64
+	readersInFlight    atomic.Int64 // 在飞只读句柄数（OpenReadOnly 开/关 +1/−1 ✓）
+	cycle              uint64
 
 	// testCrashHook 仅供测试注入：在一次写入事务**提交之前**、写完全部变更行之后被调用，
 	// 用于在子进程中模拟进程异常中断（os.Exit 或 SIGKILL），验证未提交批次不会残留。
@@ -579,13 +577,17 @@ func (s *Store) checkpointPassiveIfNeeded(ctx context.Context) {
 	}
 	s.ckptLogPages.Store(int64(logPages))
 	s.ckptMoved.Store(int64(movedPages))
-	// #67-B：**不在锁内截断** —— 这里只做"是否值得截断"的判定并留给锁外执行点（见 TryControlledTruncate）。
-	// 判定条件：开关已开 + 无在飞只读句柄 + 残余 ≤ 残余门 ✓。
-	if s.controlledTruncate && s.readersInFlight.Load() == 0 {
-		if residual := s.WALBytes(); residual < walTruncateResidualBytes {
-			s.truncateWanted.Store(1)
-		}
-	}
+	// #67-B：**不在锁内截断** —— 本处不执行截断，真正的截断由锁外执行点 `TryControlledTruncate`
+	// 承担（它以 TryLock 自证"没有在飞 apply/读"，绝不等待）。
+	//
+	// **本处不再做任何判定或状态登记**（INGEST-4，2026-10-12 终审清理）：原实现在这里判定
+	// 「残余 ≤ 残余门 ⇒ 值得截断」并把结果写进 `truncateWanted` 字段，指望锁外读它；
+	// 但 `TryControlledTruncate` **自己重算全部判据**（`walBytes` 门 + `controlledTruncate`
+	// + `readersInFlight`），从不读该字段 ⇒ 它是「只写不读」的冗余状态。删除后语义不变，
+	// 且不再让读者误以为存在跨阶段的意图传递。
+	// 两处判据本就互补而非重复：锁外问「WAL 是否大到值得截断（非空转）」，
+	// 而残余门的语义是「WAL 是否已小到可以收尾」——后者由 `TryControlledTruncate`
+	// 执行后的 `ckptTruncate` 计数与 `WALBytes()` 读数共同表达，无需本处预登记。
 	if walBytes >= int64(walCheckpointPages)*sqlitePageSize*4 {
 		// 大 WAL 告警（异常收敛的观测面：多轮 PASSIVE 仍追不上 ⇒ 运维可见 ✓，不刷屏按量级节流 ✓）。
 		if s.ckptBusy.Load() == 0 {
@@ -1263,7 +1265,6 @@ func (s *Store) TryControlledTruncate(ctx context.Context) bool {
 	if !s.controlledTruncate || s.readersInFlight.Load() != 0 {
 		return false
 	}
-	s.truncateWanted.Store(0)
 	s.ckptAttempts.Add(1)
 	s.ckptLastAt.Store(time.Now().UnixNano())
 	tctx, cancel := context.WithTimeout(ctx, walTruncateTimeout)
@@ -1860,7 +1861,15 @@ func asBool(value any) bool {
 // DEFAULT 0），迁移前的旧库该列可能不存在、读回来是 NULL（driver 给 nil）——此时按
 // 「非回放」处理，与旧数据零值语义一致（旧行全是常规采集条目 ✓）。
 func replayFlag(values []any) bool {
-	if len(values) <= 7 {
+	// 守卫下界必须与 appendRow 实际读取的最大下标一致（N-8，2026-10-12 修复）：
+	// appendRow 的 source_wal 分支读 values[8]（body）⇒ 合法行至少要 `replay` 列之后的 body 列。
+	// 此前守卫写 `<= 7`（只要求 8 列），比实际使用窄一列：若某天真出现 8 列的残行，
+	// 本函数不越界而同分支的 `asBytes(values[8])` 会 panic。当前不可达（loadColumns 恒 9 列），
+	// 但守卫与使用点对齐，"越界不可能"这条推理才成立。
+	//
+	// 用 `loadColumns` 的实际长度而非写死常量：列清单是单一真源（schema.go），
+	// 将来增删列时本守卫与使用点会一同对齐，不会各自漂移。
+	if len(values) < len(loadColumns[tblSourceWAL]) {
 		return false
 	}
 	return asBool(values[7])
