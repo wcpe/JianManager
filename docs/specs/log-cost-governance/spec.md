@@ -135,7 +135,9 @@ COLD 默认保留期为 730d、所有级别统一，HOT 默认 90d；按 namespa
 
 ### D5 观测面 — 部分采纳（见 §7）
 运行期可动态调整日志等级（debug 用于现场定位、平时压到 info 以降开销）——
-**尚未接线**（且既有 `log.level: debug` 本身未接到 slog handler，见 §7）。
+**部分落地**：`log.level`/`log.format` 现在**有装配点**（此前 `log.level: debug` 完全未接到 slog handler），
+但装配出的 `slog.LevelVar` 是 `runWorker` 的局部量、**没有任何可达的调整入口** ⇒ 实际语义是
+**启动期生效、调整需重启**；**运行期调整仍未接线**（见 §6.8 与 §7）。
 
 ---
 
@@ -243,7 +245,10 @@ const (
 
 ## 6.8 配置接线（`internal/worker`）
 
-- `TestLogLevelIsParsedAndRejectsGarbage` — `log.level` **有装配点**且非法值启动即拒
+- `TestLogLevelIsParsedAndRejectsGarbage` — `log.level` **有装配点**且非法值启动即拒。
+  装配用 `slog.LevelVar`，但该变量是 `apps/worker/main.go` 中 `runWorker` 的**局部量**，
+  只喂给 `slog.HandlerOptions{Level: …}`，无设置项/RPC/端点/信号可触及 ⇒
+  **启动期生效、调整需重启**，不构成「运行期调级」
 - `TestLogFormatIsParsedAndRejectsGarbage` — `log.format` 同上
 - `TestMaxWALBytesHasFiniteDefault` — WAL 字节上界默认有限，且高于正常稳态量级
 - `TestWALBudgetNoticeNamesTheUnlimitedCase` — 显式不限必须被点名
@@ -256,7 +261,11 @@ const (
 
 ### 6.6 变异实验（`go test -overlay`，原文件零改动）
 - `logs/sampling`：**11/11 全部以断言转红**（`.tmp/sampling-mutation/REPORT.txt`）
-- `logs/retention`：**21/21 全部以断言转红**（`.tmp/retention-mutation/REPORT.txt`）
+- `logs/retention`：**21/21 全部以断言转红**（`.tmp/retention-mutation/REPORT.txt`，编号 N1–N21）
+
+**计数口径（全仓引用处以此为准）**：`retention` 的 21 条 = 策略/计划/执行器/VL 客户端 16 条 + 冷层搬运驱动器新增 5 条（N17–N21）；`sampling` 11 条；两包**合计 32/32**。
+
+历史数字的换算（三个数不相等，但都可由此推出，非互相矛盾）：`692e714b` 的 **27/27** = sampling 11 + retention 16（驱动器尚未接线）；`282c60af` 的 **32/32** = 两包合计（该提交信息把它挂在 "retention" 名下，属当时表述不精确）；`08eb2386` 的 **21/21 + 11/11** = 定稿后的分列口径。ADR-098/ADR-099 与 ARCHITECTURE 引用时统一写作「retention 21/21（含驱动器 5 条）+ sampling 11/11，合计 32/32」。
 
 其中两条变异直接暴露了实现缺陷并据此修复：**M10**（校验读 `Normalize()` 之后 ⇒ 成死代码）、
 **N13**（`discard` 判在搬运之前 ⇒ 默认动作被永久改成删除）。
@@ -271,7 +280,7 @@ const (
 | `ActionArchiveCopy`（导出独立副本） | 仅留接口 | `retention` 已定义动作与结果语义，执行分支未实现 |
 | eventstore 段/归档对象的回收 | 未做 | `logs/eventstore` 目前无 `Prune`/`Trim`/`Reclaim`；段是「权威事件集合」的承载体，加保留必须带**下界**（有界保留）且**不得破坏** `deliverTailPlan` 的水位语义（段只换介质不裁剪） |
 | COLD/Rehydrate 的 VL 启动参数 | **部分接线** | 按 namespace 差异化 `-retentionPeriod` 已接线，HOT/COLD 默认 90d/730d；此项不等于开启原生空间淘汰或删除，删除仍受既有三闸且默认不开 |
-| G10 观测面对外暴露点 | **部分** | `ArchiveStats`/`SweepStats`/`DriverResult`/`sampling.Stats` 已具备读数，驱动器每轮打印 listed/skipped/due/moved/keptOriginal/notDue；**指标端点未接线**。`log.level` 已接线并暴露 `LevelVar`（运行期可调，见 §6.8） |
+| G10 观测面对外暴露点 | **部分** | `ArchiveStats`/`SweepStats`/`DriverResult`/`sampling.Stats` 已具备读数，驱动器每轮打印 listed/skipped/due/moved/keptOriginal/notDue；**指标端点未接线**。`log.level` 已接线（装配为 `slog.LevelVar`，**启动期生效、调整需重启**）——该 LevelVar 是 `runWorker` 的局部量、无任何可达调整入口，**运行期调级未做**（见 §6.8） |
 | 分级验证（info/debug 只存不验） | 未做 | 需落在 `ingest/runtime.go` 的 `verifyProjection` 调用点（该文件由并行工作流持有） |
 | 按级别独立热层保留 | 未做（可选路径） | 需把级别分流到不同存储命名空间（见 §4 已知边界），属数据面重构 |
 | `log_capacity.max_wal_bytes` 有限默认 + 告警 | **已做** | 默认由 `0`（不限）改为 `DefaultMaxWALBytes`（512MiB，远高于正常稳态的 KB 量级，只在真失控时触发 PAUSED + 登记缺口）；显式写 0 时启动日志点名提醒（`WALBudgetNotice`），使「没配」与「配成不限」不再不可区分 |

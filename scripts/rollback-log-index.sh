@@ -13,8 +13,11 @@
 #   JM_DATA_DIR=<数据根> scripts/rollback-log-index.sh --dry-run  # 只看会做什么
 #   JM_DATA_DIR=<数据根> scripts/rollback-log-index.sh --export <文件>  # 回滚前先只读导出索引为 JSON
 #
+#
 # 环境变量：
-#   JM_DATA_DIR          Worker 数据根（默认取 JIANMANAGER_DATA_DIR，再退到 /opt/jianmanager-worker/data）
+#   JM_DATA_DIR          Worker 数据根（默认取 JIANMANAGER_DATA_DIR，再退到 <安装根>/data）
+#   JM_INSTALL_DIR       Worker 安装根（配合 JM_DATA_DIR 缺省推导；默认 /opt/jianmanager，
+#                        与 install-worker.sh:INSTALL_DIR、deploy-worker.sh:DEF_INSTALL 同口径）
 #   JM_WORKER_SERVICE    systemd 用户级单元名；置空则改用 PID 文件方式停/启
 #   JM_WORKER_PID_FILE   PID 文件（PID 文件方式使用；默认 <数据根>/run/worker.pid）
 #   JM_WORKER_START_CMD 自定义启动命令（PID 文件方式使用）
@@ -22,7 +25,11 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-DATA_DIR=${JM_DATA_DIR:-${JIANMANAGER_DATA_DIR:-/opt/jianmanager-worker/data}}
+# 数据根口径与 install-worker.sh / deploy-worker.sh 一致：<安装根>/data。
+# 不要在此另立约定（历史上的 /opt/jianmanager-worker 在全仓零出现，只会让忘了传
+# JM_DATA_DIR 的运维撞上「数据根不存在」，或在旧残留目录上回滚错对象）。
+INSTALL_ROOT=${JM_INSTALL_DIR:-/opt/jianmanager}
+DATA_DIR=${JM_DATA_DIR:-${JIANMANAGER_DATA_DIR:-$INSTALL_ROOT/data}}
 LOG_DIR="$DATA_DIR/var/log"
 INDEX_DB="$LOG_DIR/ingest.index.db"
 LEGACY_JSON="$LOG_DIR/ingest.state.json"
@@ -42,7 +49,9 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         -h|--help)
-            sed -n '2,20p' "$0"
+            # 打印文件头的说明段：从第 2 行到脚本正文起点 `set -eu` **之前**。
+            # 按标记取而不是硬编码行号，注释增删不会把输出截断在半句。
+            awk 'NR == 1 { next } /^set -eu/ { exit } { print }' "$0"
             exit 0
             ;;
         *) echo "错误: 未知参数 $1" >&2; exit 2 ;;

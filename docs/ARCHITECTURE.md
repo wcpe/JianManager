@@ -309,7 +309,7 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | 采集通道 | `internal/worker/logs/acquire` + `pipeline` + `ingest`（tail/stdio/archive→normalize→WAL→VL→projection/Catalog） | FR-474/475 | 生产采集/投影/恢复已接线；ACK-loss/磁盘满 Runbook A 待验 |
 | 归一化 | `internal/worker/logs/normalize` | FR-475 | 地基已落地，单测绿 |
 | 采集侧成本策略 | `internal/worker/logs/sampling`（等级过滤/同源同消息高频抑制/每源预算/风暴自动降级） | FR-498 配套 | **已落地**（提交 `692e714b`）：不变量 R 区间守恒（`MergePositionRanges(Process(in)) == MergePositionRanges(in)`）为门禁，R2 缺口消解回归 + R2b 朴素丢弃反证；策略**默认全关**、抑制折叠为汇总事件；11/11 变异以断言转红 |
-| 保留与分层策略 | `internal/worker/logs/retention`（分级档位/源级覆盖/白名单过滤器/VL 删除执行器/**冷层搬运驱动器**）+ `apps/worker/log_retention.go`（生产适配层） | FR-477 配套、ADR-098 | **部分落地**（提交 `692e714b`/`282c60af`）：默认动作=搬运 COLD、删除需 `vl_sweep`+`discard` 双闸 + VL `-delete.enable`、默认全关；驱动器年龄+磁盘水位取先到（磁盘触发带 min_age=7d）；32/32 变异转红。`cold_retention` / `trigger.*` 配置面与 VL 按 namespace retention 已在工作区接线（未提交）；**待实现**：gz 文件吸存、搬运/删除的指标暴露 |
+| 保留与分层策略 | `internal/worker/logs/retention`（分级档位/源级覆盖/白名单过滤器/VL 删除执行器/**冷层搬运驱动器**）+ `apps/worker/log_retention.go`（生产适配层） | FR-477 配套、ADR-098 | **部分落地**（提交 `692e714b`/`282c60af`）：默认动作=搬运 COLD、删除需 `vl_sweep`+`discard` 双闸 + VL `-delete.enable`、默认全关；驱动器年龄+磁盘水位取先到（磁盘触发带 min_age=7d）；变异 retention **21/21**（含驱动器 5 条）转红，与 sampling 11/11 合计 **32/32**（计数口径见 [成本治理规格](specs/log-cost-governance/spec.md) §6.6）。`cold_retention` / `trigger.*` 配置面与 VL 按 namespace retention **已接线**（提交 `08eb2386`）；**待实现**：gz 文件吸存、搬运/删除的指标暴露 |
 | VL 运行时 | `internal/worker/logs/vlsup`（资产校验/localhost/auth/防递归/预算采样） | FR-476 | 受管三实例、CP runtime status/control、远程 Runbook C 基础已通过；资产下载闭环与真机预算证据待验（`EvaluateBudget` RSS/磁盘降级已落地） |
 | Partition Catalog + Lifecycle | `internal/worker/logs/catalog` + `lifecycle`（状态机编排/Ops 注入） | FR-477 | Catalog 启动恢复/唯一 owner 已接线；迁移崩溃/旧 owner re-attach Runbook B 待验 |
 | Deep Archive | `internal/worker/logs/archive`（Provider/registry/Rehydrate 任务/manifest） | FR-478 | Remote S3 Provider、**真机 RustFS S3 验收通过**（登记/幂等/manifest/往返/Rehydrate 任务）、manifest engine 记录真实 VL build_id；发布 generation 清理矩阵待验 |
@@ -321,7 +321,7 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 **数据面边界不变**：CP 业务库仍只保留 platform/audit + （切换后）Legacy 只读存量；切换打开前 instance/worker 来源仍写入 CP `logs` 表。禁止把测试全绿当作真 Worker/VL/浏览器验收。
 
-**采集索引与查询一致性（当前工作区）**：旧 JSON 迁移绑定原始字节 SHA-256、映射版本与 meta 进度凭据，分块数据/进度同事务提交；启动循环续跑 `Incomplete`，全量逐值校验及来源复核后才归档旧 JSON，非空无凭据不一致库拒绝覆盖。全表读取共用一个只读事务的 WAL 快照。锁外持久化计划携快照顺序令牌，提交门内整份拒绝过期计划（包括根行及剪枝），部分提交同样推进接纳门槛；详见 [索引规格](specs/log-index-sqlite/spec.md)。
+**采集索引与查询一致性**：旧 JSON 迁移绑定原始字节 SHA-256、映射版本与 meta 进度凭据，分块数据/进度同事务提交；启动循环续跑 `Incomplete`，全量逐值校验及来源复核后才归档旧 JSON，非空无凭据不一致库拒绝覆盖。全表读取共用一个只读事务的 WAL 快照。锁外持久化计划携快照顺序令牌，提交门内整份拒绝过期计划（包括根行及剪枝），部分提交同样推进接纳门槛；详见 [索引规格](specs/log-index-sqlite/spec.md)。
 
 **发布恢复边界**：静默遗留 pending 由常驻对账按实际 UTC 日内容级确认或预算化续修，不依赖新日志；全部日未确认时保持 pending，清除须复核发布版本/authority/attempt，旧完成不能清新尝试。微投影 64 代阈值按本批实际日检查，到限单代 Replace 写完整 canonical 日集，保留旧历史。既有处理游标逐源完成后推进，不能按候选数抢先跨过未处理源；详细语义与回归见 [采集规格](specs/worker-log-acquisition/spec.md)。
 
@@ -331,16 +331,16 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 | 维度 | 现状（截至 2026-10-02） | 目标形态（已决策） |
 |---|---|---|
-| 热层保留 | 配置默认 `log_vl.retention_period=90d`，受管 VL 按 namespace retention（未覆盖时沿用全局）执行；启用产品保留策略时校验原始声明与实际回退值，明显矛盾启动拒绝 | **90 天**：VL + SSD，其中按级别分级停留 `debug 3d / info 7d / warn 30d / error 90d`（设置中可配置，含源级覆盖） |
-| 冷层保留 | `retention.Policy.ColdRetention` 默认 730d（声明与校验）；`log_retention.cold_retention` 与受管 VL 的**按 namespace retention** 已在工作区接线（未提交） | **730 天（2 年）**：VL + 大容量盘，**所有级别统一**；由受管 COLD 的 `-retentionPeriod` 执行 |
+| 热层保留 | 配置默认 `log_vl.retention_period=90d`，受管 VL 按 namespace retention（未覆盖时沿用全局）执行；启用产品保留策略时校验原始声明与实际回退值，**`log_vl.retention_period` / `cold_retention_period` 短于对应声明即启动拒绝**（VL 原生淘汰是直接删，会绕过「删前归档」） | **90 天**：VL + SSD，其中按级别分级停留 `debug 3d / info 7d / warn 30d / error 90d`（设置中可配置，含源级覆盖） |
+| 冷层保留 | `retention.Policy.ColdRetention` 默认 730d（声明与校验）；`log_retention.cold_retention` 与受管 VL 的**按 namespace retention** **已接线**（提交 `08eb2386`） | **730 天（2 年）**：VL + 大容量盘，**所有级别统一**；由受管 COLD 的 `-retentionPeriod` 执行 |
 | 到期动作 | 默认动作=搬运 COLD（复用 `ROUTING_FROZEN→…→CLEANED`），搬运失败=保留原物+告警、零删除；删除需 `discard` + `sweep.vl_sweep` 双闸且受管 VL 需 `-delete.enable`，**默认全关** | 不变（该语义即目标形态）；补齐"谁、何时、多少、去哪"的对外暴露（指标 + 日志行） |
-| 分层驱动 | `retention.Driver` 周期调度 + 首轮立即执行；触发口径年龄 + 磁盘水位**取先到**（磁盘触发 min_age=7d）；`log_retention.trigger.*` 配置面已在工作区接线（未提交） | 不变（接线完成后即目标形态） |
+| 分层驱动 | `retention.Driver` 周期调度 + 首轮立即执行；触发口径年龄 + 磁盘水位**取先到**（磁盘触发 min_age=7d）；`log_retention.trigger.*` 配置面 **已接线**（提交 `08eb2386`） | 不变（即目标形态） |
 | 实例本地 gz | 无吸存能力；平台不删实例本地任何 `.gz`（轮转尾部由 ArchiveImporter 解析，仅用于接管） | 以**文件身份、压缩态**吸存到冷层：只归档文件、不解析、不入事件流；幂等去重由系统负责；**本地 gz 一律不动** |
 | 对象存储 | FR-478 已有 S3 Provider / Rehydrate 能力（真机 RustFS 验收通过），当前未作为必需组件 | **第一阶段不上**；作为第 3 档（异地/超长期/合规）能力位与后续评估位 |
 | 采集侧成本 | `Config.SamplingPolicy → ingest.Options.Sampling → Manager → 每源 Pipeline` 已接线，四类策略**默认全关**；抑制以汇总事件承接（不变量 R），恢复重投不重复采样 | 不变（默认关即目标姿态） |
 | 单位成本 | 投递路径 O(段总行数) 遍历已消除（`87af507f`：−82% 批耗时 / +68% 吞吐 / 达成率 0.555→0.93）；新鲜度换成本的分段批拉经实测收益为零、**不做** | 成本可见性平台化（每源 GB/天、ms/行），供预算化运营 |
 | 平台配额 | 机制侧有"每源预算"（默认关）；`GroupQuota` 无日志量维度 | **先可见性、后强制**：用量报表先落地，强制档位（复用 `EnforceMode` 三档）后置 |
-| 观测与关联 | 日志侧仅 `log_ingest_healthy` 一个告警指标；`log.level`/`log.format` 已装配、`LevelVar` 支持运行期调级；无 trace/correlation 字段 | FR-485 其余观测项补齐（state 尺寸与增速、persist 写字节/秒、单源积压与暂停时长、投递失败率分类、退避次数、慢 SQL、节点 iowait、比率触发）；**轻量 correlation id** 贯通 CP→Worker→事件字段（不引入 OTel collector；correlation 不得进 `stream_fields`） |
+| 观测与关联 | 日志侧仅 `log_ingest_healthy` 一个告警指标；`log.level`/`log.format` 已装配（装配点是 `slog.LevelVar`，但该变量是 Worker `runWorker` 的局部量、**无任何可达的调整入口**，故实际语义是**启动期生效、调整需重启**）；无 trace/correlation 字段 | FR-485 其余观测项补齐（state 尺寸与增速、persist 写字节/秒、单源积压与暂停时长、投递失败率分类、退避次数、慢 SQL、节点 iowait、比率触发）；**轻量 correlation id** 贯通 CP→Worker→事件字段（不引入 OTel collector；correlation 不得进 `stream_fields`） |
 
 **TTL 校验边界**：产品 TTL 与受管 VL 参数分开解析；VL 裸数/大写 `M` 按固定 31 天月、`y` 按 365 天，小写 `m` 非法，原 `90d/730d` 默认兼容。冷层明确可重试失败优先 Resume，不能因 Owner 已切 COLD 跳过清理或再次 Begin；活动/手工/未知状态不自动覆盖。有限 native TTL 仍会原生按日淘汰，不是搬运无限失败的保护机制；关闭保留策略、删除三闸与实例本地 `.gz` 不动的边界不变。详见 [成本治理规格](specs/log-cost-governance/spec.md)。
 
@@ -348,7 +348,7 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
-- **Worker 日志平台 Log RPC（FR-473～484，消息已冻结 / 生产装配已落地）**：`GetLogCapabilities`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`。受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。详见 API.md「Worker 日志平台」。
+- **Worker 日志平台 Log RPC（FR-473～484，消息已冻结 / 生产装配已落地）**：`GetLogCapabilities`、`LogCreateView`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`、`LogMigratePartition`、`LogCutoverReadiness`、`LogResolveIngestGaps`、`LogImportArchives`（手动触发归档 `.gz` 导入扫描：源被暂停时自动发现不再跑，此入口复用同一条导入管道与归属闸，强制携带操作人）、`LogClearIdentityConflicts`（人工确认并清空身份冲突记录以消除查询面质量标记，强制携带操作人 + 理由）。受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。节点级 runtime/ingest 管理面的 HTTP 端点（`resolve-gaps` / `clear-identity-conflicts`）见 API.md「Worker 日志平台」；`LogImportArchives` 无 CP HTTP 端点，只有 Worker gRPC 入口。
 - 生命周期：Register, Heartbeat (双向 stream), FetchBotWorkerArchive
   - `Register` 的身份匹配经 gRPC metadata 携带 `node-uuid`/`node-secret`（重注册必须同时出示）或 `enroll-token`（新节点准入），均不改 proto；Host 和名称不再作为身份凭据（ADR-081）。
   - `RegisterResponse` 携带 `ws_token_secret`（FR-275，见 ADR-061）：CP↔Worker 专用 **WS 令牌密钥**（只签终端/插件桥令牌，与签用户会话的 `jwt.secret` 隔离，Worker 永不持有后者）。首注册与重注册均下发；Worker 持久化到 `etc/node-identity.json` 并热应用到 WS 校验。CP 侧密钥三轨：显式 `jwt.ws_secret` > 生产 autogen 持久化 `<dataRoot>/etc/ws-token-secret.key`（0600）> dev 回退 `dev-secret-change-me`；若既无本地持久化值也未收到响应值，Worker 拒绝启动 WS 服务。

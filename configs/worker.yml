@@ -37,6 +37,10 @@ data_dir: ./data
 log:
   level: info
   format: text
+  # 互斥锁争用采样率（诊断用，0=关闭）。此前该旋钮只认环境变量
+  # JM_MUTEX_PROFILE_FRACTION，绕过配置体系 ⇒ 运维无从从配置面发现它。
+  # 1 = 全采（诊断窗口），数值越大采样越稀（5 = 1/5），0 = 关闭（默认）。
+  # mutex_profile_fraction: 0
 
 # Optional localhost VictoriaLogs query client. Empty vl_url keeps the explicit
 # LOG_UNSUPPORTED compatibility path until a managed VL instance is healthy.
@@ -54,7 +58,13 @@ log:
 #   username: jm
 #   password: ${JIANMANAGER_VL_PASSWORD}
 #   data_root: /home/jianmanager/var/log/vl
-#   retention_period: 30d
+#   retention_period: 90d        # ⚠ 必须**不短于** log_retention.hot_retention（默认 90d）。
+#                                # VL 的 retention 到期是**直接删**，会绕过「删前归档」：
+#                                # 热层实例 TTL 比 hot_retention 短，VL 会在搬运之前先删掉数据。
+#                                # 启用保留策略时 Load 在启动受管进程之前就拒绝（配错即拒绝启动）。
+#                                # 本项不配置时取默认 90d；**显式写成空串**则回退到受管 supervisor
+#                                # 的模板值 30d，同样短于默认 90d 声明 ⇒ 会被拒。
+#   cold_retention_period: 730d  # 同上：不得短于 log_retention.cold_retention（默认 730d）
 #   start_cold: false
 #   start_rehydrate: false
 
@@ -107,6 +117,34 @@ log:
 # 环境变量覆盖：JIANMANAGER_LOG_INGEST_CHARSET。
 # log_ingest:
 #   charset: gbk
+
+# 未闭合多行缓冲的闲置超时（缺陷 B）：超过它仍没有新行，就以显式 `multiline_unclosed`
+# 标记强制闭合该缓冲并推进 durable。未闭合缓冲平时只由「下一行到达」推进——源长时间
+# 静默时它既不产出事件也不推进 durable，而轮转恢复要靠 durable 覆盖已读前缀，于是这段
+# 悬挂区间既没被覆盖也没有事件，链路会卡在「轮转分段不可读」。
+# 空 = 默认 5s（normalize.DefaultUnclosedTimeout）；非正数（含 "0"）= **关闭**强制冲刷，
+# 悬挂记录会一直挂着（仅排障用）。非法值启动即拒。
+# log_ingest:
+#   multiline_unclosed_timeout: 5s
+
+# 「定时归档导入扫描」的周期（键 log_ingest.archive_scan_interval）。
+# 空或 "0" = **关闭（默认关）**。为什么默认关：常规源在每个采集轮里已经自动发现并导入归档，
+# 定时扫描的价值只在「采集轮停了、归档还在攒」（源被暂停/停止采集）的场景；默认开会在每个
+# 部署上多出一份周期性目录扫描与账本写入——收益不明显而成本确定，故由运维显式打开。
+# log_ingest:
+#   archive_scan_interval: 5m
+
+# 整节点解算的有界化（键 log_ingest.resolve_gaps_max_sources / resolve_gaps_max_duration）：
+# 作用于 POST /nodes/:id/log-runtime/ingest/resolve-gaps **不传 storageNamespace** 的路径，
+# 限制单次调用最多处理多少源、最多跑多久；超出即分片并由调用方续跑。
+# 0/空 = 源数用默认 256；空 = 时长用默认 2m（主要服务于没有 deadline 的调用方）。
+# ⚠ 为什么必须有界（2026-10-02 压测现场）：该路径此前对全部源做投影查询且**整段持采集轮锁**，
+# 一次调用即让**整节点采集停摆 30 分钟**（read_pos 冻结、索引 WAL 涨到 10.2 GB），
+# 且调用方超时后服务端仍继续跑。锁纪律已修（解算不再跨投影查询持锁、ctx 可取消），
+# 本项是「有界」那一半——遍历必须有上界。非法值（负数 / 非法时长）启动即拒。
+# log_ingest:
+#   resolve_gaps_max_sources: 256
+#   resolve_gaps_max_duration: 2m
 
 # 采集侧采样与降级（成本治理）。默认**全关**：本项一旦启用就会改变「哪些日志被存下来」，
 # 必须由运维显式开启。取值口径：0 = 没填走默认，负数 = 写错启动即拒。

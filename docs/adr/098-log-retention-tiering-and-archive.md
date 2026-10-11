@@ -86,9 +86,9 @@ FR-473～484 建成了日志平台的骨架：Worker 本地采集 + 账本 + WAL
 
 - **正面**：日志数据盘有了上界（热 90d 上限 + 冷 730d 上限）；所有配置错误的最坏后果从"数据永久丢失"降级为"盘没省下来"；分层有了自动驱动，不再依赖人工 API。
 - **实现状态（截至本 ADR 写入时）**：
-  - 已落地（提交 `692e714b`、`282c60af`）：`internal/worker/logs/retention`（策略/计划/执行器/VL 客户端/驱动器）、`apps/worker/log_retention.go` 生产适配层、`log_retention.*` 配置面主体、**冷层搬运驱动器**（周期调度 + 首轮立即执行 + 年龄/水位取先到）；变异 32/32 全红。
-  - 工作区已接线（写入时未提交，以代码/CHANGELOG 为准）：`log_retention.cold_retention`、`log_retention.trigger.*` 配置面；受管 VL 的**按 namespace retention**（`vlsup.RetentionByNamespace`）。仍待：把热层窗口与受管 HOT 的 `-retentionPeriod` 对齐到 90 天、COLD 侧 `-delete.enable` 的显式默认关闭说明。
+  - 已落地（提交 `692e714b`、`282c60af`）：`internal/worker/logs/retention`（策略/计划/执行器/VL 客户端/驱动器）、`apps/worker/log_retention.go` 生产适配层、`log_retention.*` 配置面主体、**冷层搬运驱动器**（周期调度 + 首轮立即执行 + 年龄/水位取先到）；变异 retention 21/21（含驱动器 5 条）全红，与 sampling 11/11 合计 32/32（计数口径见 `docs/specs/log-cost-governance/spec.md` §6.6）。
+  - **已接线（提交 `08eb2386`；本条 2026-10-11 订正）**：`log_retention.cold_retention`、`log_retention.trigger.*` 配置面；受管 VL 的**按 namespace retention**（`vlsup.RetentionByNamespace`）；热层窗口与受管 HOT 的 `-retentionPeriod` 对齐到 90 天（同提交内修复「VL 自带 `-retentionPeriod` 30d 短于热层 90d ⇒ 绕过删前归档直接删」）。COLD 侧 `-delete.enable` 的显式默认关闭说明见本 ADR 决策表与 `docs/specs/log-cost-governance/spec.md` §3 门禁 / §7 未做项。
   - 待实现：gz 文件吸存（第 5 条）；到期/搬运/删除的指标与日志行对外暴露（"谁、何时、多少、去哪"可审计）。
   - 文档对账：`docs/specs/log-cost-governance/spec.md` 的 D1/D2 口径按本 ADR 更新为热 90d / 冷 730d（该 spec 正由实现侧同步）；PRD 的 FR 编号需对账（`log-cost-governance` 一侧的 FR 编号与 PRD `FR-499`（采集登记锁解耦）冲突，CHANGELOG 亦标 FR-499）。
-- **可转红防护**：`log_retention` 的 21+5 条回归与 32 条变异（含"搬运失败留存+零删除""穷举组合下未显式 discard 零裸删""显式 discard 后删除确实可达"的正反对照）钉住本 ADR 的规则；改动规则必须同步这些用例。
+- **可转红防护**：`log_retention` 的 21+5 条回归与 `retention`/`sampling` 合计 32 条变异（含"搬运失败留存+零删除""穷举组合下未显式 discard 零裸删""显式 discard 后删除确实可达"的正反对照）钉住本 ADR 的规则；改动规则必须同步这些用例。
 - **不影响**：`.claude/rules/architecture-invariants.md` 与 `decision-alignment.md` 的同步不在本次写入范围（由文档纪律流程后续处理）。

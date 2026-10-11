@@ -65,7 +65,9 @@
 
 ### 6. 运行期日志等级可调
 
-`log.level`/`log.format` 此前**没有任何装配点**（Worker 从不调 `slog.SetDefault`，两键形同不存在）；现装配并暴露 `LevelVar` 作为运行期动态调等级的接线点，非法值启动即拒。现场排障可临时开 debug、平时压到 info 以降开销。
+`log.level`/`log.format` 此前**没有任何装配点**（Worker 从不调 `slog.SetDefault`，两键形同不存在）；现装配为 `slog.LevelVar`，非法值启动即拒。现场排障改等级需改配置并重启 Worker。
+
+> **2026-10-11 订正（G10 口径）**：本节标题与原文宣称的「运行期」不成立——`apps/worker/main.go` 里的 `logLevelVar` 是 `runWorker` 的**局部变量**，只用于构造 `slog.HandlerOptions{Level: …}`，没有任何可达的调整入口（既无设置项、无 RPC/HTTP 端点，也无信号处理）。实际语义是**启动期生效、调整需重启**。原决策「把等级装配上、非法值启动即拒」继续有效；「运行期动态调级」如仍要做，须另立入口（属 G10 未实现项）。
 
 ### 7. 多租户配额（D4）：先可见性，后强制
 
@@ -94,9 +96,9 @@
 
 - **正面**：单位成本的主要机制性来源被消除并留有可转红回归；成本治理手段齐备但**默认全关**，启用与否是运维的显式决定；采样在结构上不可能破坏缺口消解（不变量 R）。
 - **代价与边界**：
-  - `log_ingest.sampling.*` 的策略语义与 `log_retention.*` 的档位必须与 `docs/specs/log-cost-governance/spec.md` 同步演进；变异 11/11（sampling）+ 32/32（retention，含驱动器 5 条）以断言转红为门禁。
+  - `log_ingest.sampling.*` 的策略语义与 `log_retention.*` 的档位必须与 `docs/specs/log-cost-governance/spec.md` 同步演进；变异 11/11（sampling）+ 21/21（retention，含驱动器 5 条；两包合计 32/32）以断言转红为门禁，计数口径见 `docs/specs/log-cost-governance/spec.md` §6.6。
   - **未决策项**：**分级验证**（低价值级别"只存不验"）尚未决策与实现——它削弱的是"逐字段校验"的证据链，收益与风险需单独评估后再定，**本 ADR 不承诺**。
   - **未实现项**：指标端点尚未接线（`sampling.Stats`/`ArchiveStats`/`SweepStats`/`DriverResult` 已有读数，仅日志行可见）；`JIANMANAGER_STAGE_TIMING` 阶段观测已具备，但成本可见性（每源 GB/天、ms/行）仍未平台化。
   - **FR-485 其余观测项**（state 文件尺寸与增速、persist 写字节/秒、单源 WAL 积压与暂停时长、投递失败率与分类、校验退避次数、慢 SQL、节点 iowait、比率触发）仍属未实现，是两次生产事故"靠人肉发现"的直接原因，优先级不因本 ADR 降级。
-- **可转红防护**：`sampling` 11 条变异 + `retention` 32 条变异全部以断言转红；`TestInvariantR2`/`TestInvariantR2b` 是本 ADR 的核心安全锚点——移除它们等于放弃"抑制不造洞"的证明。
+- **可转红防护**：`sampling` 11 条变异 + `retention` 21 条变异（含驱动器 5 条；合计 32 条）全部以断言转红；`TestInvariantR2`/`TestInvariantR2b` 是本 ADR 的核心安全锚点——移除它们等于放弃"抑制不造洞"的证明。
 - **不影响**：`.claude/rules/architecture-invariants.md` 与 `decision-alignment.md` 的同步不在本次写入范围（由文档纪律流程后续处理）。
