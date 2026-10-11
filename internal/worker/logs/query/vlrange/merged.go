@@ -282,7 +282,16 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 			// 所有滑段及边界组补查共用一个额度，不能把零剩余传成默认 32MiB。
 			if out.Bytes >= scanLimit(q.Budget) {
 				exhausted = false
-				out.SafeBeforeUTC = params.Get("end")
+				// **栅栏必须取「本段起点」而非「本段终点」**（F5，2026-10-12 终审修复）。
+				// 本分支在进入本段查询**之前**触发（额度已耗尽）⇒ `[segStart, segEnd)` 这一整段
+				// **从未被读取**。而 `safeTimePrefix` 的判据是「保留 ev.Time < fence」，故：
+				//   - fence = segEnd（段终点）：会把 [segStart, segEnd) 的**未读行**当作「安全前缀」，
+				//     后续页/别的 owner 的游标据此跨过它们 ⇒ 静默漏行；
+				//   - fence = segStart（段起点）：保留的都是**严格早于本段**的已读行，未读段整体在
+				//     栅栏之外 ⇒ 游标不会跨过它，下页从该段重新开始。
+				// 与单 range 路径（client.go 用最后一个已返回行的 boundary）同口径：栅栏只表示
+				// 「严格早于它的行已读全」。
+				out.SafeBeforeUTC = segStart.UTC().Format(time.RFC3339Nano)
 				out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
 				break
 			}
