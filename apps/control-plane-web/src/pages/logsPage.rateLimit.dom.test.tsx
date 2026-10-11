@@ -185,6 +185,68 @@ describe('日志中心限流保留与轮询节流（FR-482）', () => {
     expect(screen.queryByTestId('logs-coverage-banner')).not.toBeInTheDocument()
   })
 
+  it('切筛选后持续 429：不得把旧筛选的行冒充成新筛选的结果', async () => {
+    loginMockUser()
+    let rateLimited = false
+    stubHandlers({ rateLimited: () => rateLimited })
+    // 非跟随态：主查询走 /logs/federation。筛选 A（默认 15m）先给一份真实行；
+    // 限流开始后的请求（含切筛选后的新查询）一律 429。
+    server.use(
+      http.get(API('/logs/federation'), () => {
+        federationCalls++
+        if (rateLimited) {
+          return HttpResponse.json(
+            { error: 'RATE_LIMITED', message: '请求过于频繁，请稍后再试' },
+            { status: 429 },
+          )
+        }
+        return HttpResponse.json({
+          sourceTag: 'federated',
+          items: [liveItem],
+          view: { view_id: 'filter-a-view' },
+          exhausted: true,
+          coverage: { complete: true, targets: [], enumeration_state: 'EXHAUSTED' },
+        })
+      }),
+    )
+    renderWithProviders(<LogsPage />)
+    // 假时钟下推进一小段让首屏联邦查询落地（比照下方 stats/facets 用例）。
+    await vi.advanceTimersByTimeAsync(300)
+    // 筛选 A 先拿到真实行。
+    expect(screen.getByText('federation-kept-row')).toBeInTheDocument()
+    console.log('step1 ok: first row visible')
+
+    // 切到筛选 B（最近 1 小时）的同时服务端开始持续限流：新查询重试耗尽后必须落地为
+    // 「限流 + 空结果（非成功空态）」，而不是继续渲染筛选 A 的行——那会把 A 节点/实例的
+    // 日志读成 B 筛选的结果（生产 429 占比 23.8%，这条路径并不罕见）。
+    HTMLElement.prototype.hasPointerCapture ??= () => false
+    HTMLElement.prototype.setPointerCapture ??= () => {}
+    HTMLElement.prototype.releasePointerCapture ??= () => {}
+    HTMLElement.prototype.scrollIntoView ??= () => {}
+    rateLimited = true
+    // 假时钟下 userEvent 的交互序列会挂起，改用 fireEvent 直接驱动 Radix Select
+    // （trigger 在 pointerdown 开、option 在 click 选，均为同步派发）。
+    const trigger = screen.getAllByRole('combobox')[0]!
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false })
+    fireEvent.click(trigger)
+    await vi.advanceTimersByTimeAsync(50)
+    fireEvent.click(screen.getByRole('option', { name: '最近 1 小时' }))
+    await vi.advanceTimersByTimeAsync(50)
+    // 等两层重试耗尽（内层 250/600ms + react-query 500/1000ms，合计约 4s）落定为错误终态。
+    await vi.advanceTimersByTimeAsync(6000)
+
+    // ① 旧筛选的行不得继续可见：保留项与筛选身份绑定，filterKey 变了即判失效。
+    expect(screen.queryByText('federation-kept-row')).not.toBeInTheDocument()
+    // ② 限流横幅必须可见（说明「这次没查到」）。
+    expect(screen.getByTestId('logs-coverage-banner')).toHaveAttribute('data-state', 'rate_limited')
+    // ③ 不得把限流伪装成「查到了 0 条」空成功。
+    expect(screen.queryByText('暂无日志')).not.toBeInTheDocument()
+    const emptyState = screen.getByTestId('logs-empty-state')
+    expect(emptyState).toHaveAttribute('data-empty-success', 'false')
+    // ④ 切筛选后确实发出了带新筛选的请求（证明 ④ 的空白源于新查询失败，而非没发请求）。
+    expect(federationCalls).toBeGreaterThan(1)
+  })
+
   it('stats/facets 持续 429 不得白屏：列表与横幅照常可用（洞察栏只是装饰）', async () => {
     loginMockUser()
     stubHandlers({ rateLimited: () => false })

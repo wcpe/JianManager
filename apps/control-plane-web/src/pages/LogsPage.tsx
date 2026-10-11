@@ -44,6 +44,7 @@ import {
   timeRangeToParams,
   buildExportParams,
   computeVirtualWindow,
+  windowForAnchor,
   TIME_RANGE_PRESETS,
   LOG_VIEWS,
   type TimeRangePreset,
@@ -127,26 +128,6 @@ function mapFederationItems(items: unknown[] | null | undefined): LogEntry[] {
 const SENTINEL_ALL = '__all__'
 const PAGE_SIZE = 100
 
-/**
- * 事件时间辅助函数：取降序事件末条的原始时间；空页返回null。
- * 分页不得用此时间替代服务端复合游标，同戳组必须沿原视图续页。
- */
-export function oldestOf(items: Array<{ time?: string }>): string | null {
-	const last = items.length > 0 ? items[items.length - 1] : null
-	return last?.time ?? null
-}
-
-/**
- * tail-first 分页（纯函数，便于单测 ✓）：以锚点为**窗口上界**、按预设窗宽整体前移，
- * 返回该窗应发的 `from/to`；首屏锚点为now，已枚举完窗口的下一窗锚点为原from。
- * 语义与首屏的 `timeParamsFor(range, anchor, false)` 完全一致（同一 `timeRangeToParams` ✓）。
- */
-export function windowForAnchor(
-	range: TimeRangePreset,
-	anchor: string | number | Date,
-): Pick<LogQueryParams, 'from' | 'to'> {
-	return timeRangeToParams(range, new Date(anchor))
-}
 const SOURCES = ['instance', 'control_plane', 'worker']
 const ROLE_PLATFORM_ADMIN = 10
 const LEVELS = ['error', 'warn', 'info', 'debug']
@@ -292,8 +273,12 @@ export default function LogsPage() {
    * 把经典表的行冒充成联邦结果。
    * 更新时机用「渲染期按需调整 state」而非 effect（React 官方推荐的派生 state 写法，
    * 也避免先渲染一帧空列表再把数据补回来的闪烁）。
+   *
+   * **必须携带筛选身份**：保留项若不含筛选键，切到新筛选后新请求持续 429（重试耗尽）时，
+   * 列表会继续渲染**上一个筛选**的行（可能是另一个节点/实例）——筛选控件已显示新条件，
+   * 内容却属于旧条件，运维会把 A 实例的日志读成 B 实例的。复用前必须比对 filterKey。
    */
-  const [lastGoodFederation, setLastGoodFederation] = useState<LogsFederationResult | null>(null)
+  const [lastGoodFederation, setLastGoodFederation] = useState<{ filterKey: string; result: LogsFederationResult } | null>(null)
   // 「确认并清空身份冲突」对话框开关（质量标记的运维入口，见 ClearConflictsDialog）。
   const [clearConflictsOpen, setClearConflictsOpen] = useState(false)
   /**
@@ -306,6 +291,10 @@ export default function LogsPage() {
    * 保持到真正恢复为止。
    */
   const [rateLimited, setRateLimited] = useState(false)
+  // 筛选身份键（view/实例/节点/级别/关键字/范围；**不含 page** ✗——翻页需保留滚动位置）。
+  // 既驱动滚动复位（LogTimeline 的 filterKey effect），也是限流保留项的归属判据：
+  // 保留项记的是这个键，筛选一变，旧保留项即判失效、不得冒充新筛选的结果。
+  const filterKey = `${view}|${instanceId ?? ''}|${nodeId ?? ''}|${level}|${keyword.trim()}|${range}`
   const latestFederation = federationQuery.data
   /**
    * 「这一轮请求真的拿到结果了」——用于清除闩锁。
@@ -327,9 +316,10 @@ export default function LogsPage() {
     && latestFederation
     && !latestFederation.degraded
     && Array.isArray(latestFederation.response.items)
-    && latestFederation !== lastGoodFederation
+    && lastGoodFederation?.result !== latestFederation
   ) {
-    setLastGoodFederation(latestFederation)
+    // 记录当时的筛选身份：切筛选后旧保留项即失效（见 retainedFederation 的复用条件）。
+    setLastGoodFederation({ filterKey, result: latestFederation })
   }
   const federationRateLimited = rateLimited
   const federation = legacyMode && legacyQuery.data
@@ -428,9 +418,13 @@ export default function LogsPage() {
    * 为什么要在这里兜底而不能只靠 react-query：跟随态每 3 秒滚动时间桶 ⇒ queryKey 每次都变，
    * 而 key 变化后的失败会把 data 丢弃（实测：keepPreviousData 只在同 key 重取时保留，
    * 换 key 后失败则 data=undefined）⇒ 列表照样被清空。
+   *
+   * **只在筛选身份一致时复用**：保留项记着它所属筛选的 filterKey，与当前筛选不一致
+   * （说明用户刚切了筛选）时不得复用——否则切筛选后服务端持续 429，页面会拿旧筛选
+   * （另一节点/实例）的行冒充新筛选的结果，比空列表更危险。
    */
-  const retainedFederation = federationRateLimited && lastGoodFederation
-    ? lastGoodFederation
+  const retainedFederation = federationRateLimited && lastGoodFederation?.filterKey === filterKey
+    ? lastGoodFederation.result
     : null
   const federationItems = federationActive
     ? mapFederationItems(
@@ -444,20 +438,24 @@ export default function LogsPage() {
 
   const items = legacyMode ? (legacyQuery.data?.items ?? []) : federationActive ? (federationItems ?? []) : (data?.items ?? [])
   const total = legacyMode ? (legacyQuery.data?.total ?? 0) : federationActive ? items.length : (data?.total ?? 0)
-	// 页码＝**已访问页数**（page），不再对"还有下一页"预先加 1 ✗——CP 在"恰好整页到边"时也会发
-	// `next_cursor`（hasMore 含 workerOpen ✓），旧式 `page + 1` 于是把 100 条整页显示成 2/2 ✗。
-	// 「下一页」按钮的可点性由查询结果的 nextCursor 直接驱动（不复用本页数值 ✓）。
-	const totalPages = federationActive
-		? Math.max(1, page)
-		: Math.max(1, Math.ceil(total / PAGE_SIZE))
+  // 有游标时必须原 view 续页（预算截断空页也可续）；明确结束才移动完整窗口。
+  const federationCanContinue = Boolean(federation?.response.nextCursor && federation?.response.viewId)
+  const federationCanShift = !federation?.response.nextCursor && federation?.response.exhausted === true
+    && items.length > 0 && range !== 'all' && typeof federationParams.from === 'string'
+  const federationNextAvailable = federationActive && !follow
+    && (federationCanContinue || federationCanShift)
+    && !federationQuery.isFetching && !federationQuery.isPlaceholderData
 
-	// 有游标时必须原 view 续页（预算截断空页也可续）；明确结束才移动完整窗口。
-	const federationCanContinue = Boolean(federation?.response.nextCursor && federation?.response.viewId)
-	const federationCanShift = !federation?.response.nextCursor && federation?.response.exhausted === true
-		&& items.length > 0 && range !== 'all' && typeof federationParams.from === 'string'
-	const federationNextAvailable = federationActive && !follow
-		&& (federationCanContinue || federationCanShift)
-		&& !federationQuery.isFetching && !federationQuery.isPlaceholderData
+  // 页码＝**已访问页数**（page），不再对"还有下一页"无条件加 1 ✗——CP 在"恰好整页到边"时也会发
+  // `next_cursor`（hasMore 含 workerOpen ✓），旧式无条件 `page + 1` 于是把 100 条整页显示成 2/2 ✗。
+  // 「下一页」按钮的可点性由查询结果的 nextCursor 直接驱动（不复用本页数值 ✓）。
+  //
+  // 联邦模式没有服务端总数：分母只能给**保守下界**——确认还能继续（next_cursor 或可移窗）时
+  // page+1，否则 page。恒 `Math.max(1, page)` 会让分母恒等分子（「第 N / N 页」）而丢失
+  // 「还有下一页」的判读信息；无条件 page+1 又在恰好整页到边时谎报一页。
+  const totalPages = federationActive
+    ? (federationNextAvailable ? page + 1 : page)
+    : Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   // 改任一筛选都回到第 1 页，避免停留在越界页。
   const resetTo = useCallback(
@@ -465,7 +463,7 @@ export default function LogsPage() {
       (v: T) => {
         setter(v)
         setPage(1)
-		setFederationCursors({})
+        setFederationCursors({})
       },
     [],
   )
@@ -736,7 +734,9 @@ export default function LogsPage() {
           value={range}
           onValueChange={(v: string) => resetTo(setRange)(v as TimeRangePreset)}
         >
-          <SelectTrigger size="sm" className="w-36">
+          {/* data-testid 供 e2e 定位：默认窗与选项文案都会漂移（见 e2e/navigation-benchmark.spec.ts），
+              按 testid 定位才不会被「最近 15 分钟 / 最近 24 小时」这类文案变化打红。 */}
+          <SelectTrigger size="sm" className="w-36" data-testid="logs-range-select">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -919,7 +919,7 @@ export default function LogsPage() {
             items={items}
             total={total}
             follow={follow}
-            filterKey={`${view}|${instanceId ?? ''}|${nodeId ?? ''}|${level}|${keyword.trim()}|${range}`}
+            filterKey={filterKey}
             // 切窗口/筛选期间展示的是上一份数据（placeholderData）：此时 isLoading 为 false
             // 但新结果尚未到达，须维持 loading 语义（timeline 据此不把旧数据误判为空态）；
             // follow 轮询每 3 秒换桶，不置位以免闪烁。
@@ -1208,6 +1208,9 @@ function LogTimeline({
     if (containerRef.current) {
       containerRef.current.scrollTop = 0
     }
+    // 筛选变化需同步把虚拟窗口起点复位（与上面 DOM 的 scrollTop 同一次提交内完成，
+    // 否则窗口仍停在旧 startIndex、首帧渲染错位）——这是「外部系统同步」而非派生 state。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setScrollTop(0)
   }, [filterKey])
 

@@ -12,7 +12,7 @@ const versionGo = readFileSync(path.resolve(__dirname, '../../internal/version/v
 const appVersion = /^var Version = "(.+)"$/m.exec(versionGo)?.[1] ?? '0.0.0-unknown'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   // 注入前端版本号，运维控制台侧栏底部展示（FR-037；来源见上 FR-288）
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
@@ -49,10 +49,24 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        // 2026-10-10 修正：原指向 8080，那是 `cp-live devcp.yml`（工作目录 .tmp 已删除、
-        // 数据库是已删文件句柄），导致日志页看到的不是生产环境。生产 CP 的 HTTP 端口是 19000
-        // （19100 是 gRPC、8080 被无关的开发进程占用）。可用 VITE_API_TARGET 覆盖。
-        target: process.env.VITE_API_TARGET ?? 'http://127.0.0.1:19000',
+        // 默认目标＝仓库自带 CP HTTP 端口（configs/control-plane.yml 的 server.port、
+        // docker-compose 的 JIANMANAGER_SERVER_PORT，均为 8080）——按仓库文档起 CP 再 `pnpm dev`
+        // 即开箱可用。
+        //
+        // 本机若跑的是另一个 CP（例如生产实例），**不要**改这里的默认值：把覆盖写进
+        // `.env.development.local`（该文件被 .gitignore 忽略、不入库），例如
+        // `VITE_API_TARGET=http://127.0.0.1:<端口>`。默认值一旦指向某台具体部署，仓库默认
+        // 开发流就不可用，且 mock 模式（MSW `onUnhandledRequest: 'bypass'`）会把未被假后端
+        // 实现的端点真实打到那台部署上。
+        //
+        // mock 模式（`pnpm dev:mock` / Playwright e2e）默认指向一个**明确无监听**的回环端口：
+        // MSW 只对已实现端点给假响应，未实现的一律 bypass —— 若沿用真实目标，这些请求会
+        // 打到「恰好监听该端口的那台部署」上（实测：`/api/v1/logs/federation` 因 devmock 无
+        // 假实现被转发到真实 CP 并返回 401/5xx），使 e2e 结果依赖本机进程而不可复现。
+        // 指向空端口后未实现端点**确定性失败**（ECONNREFUSED ⇒ 页面走既有的降级/失败态），
+        // 缺口应补 devmock 假后端而非依赖出网。仍可经 shell 显式 `VITE_API_TARGET=...` 覆盖。
+        target: process.env.VITE_API_TARGET
+          ?? (mode === 'mock' ? 'http://127.0.0.1:9' : 'http://127.0.0.1:8080'),
         changeOrigin: true,
       },
     },
@@ -85,4 +99,4 @@ export default defineConfig({
       },
     ],
   },
-})
+}))

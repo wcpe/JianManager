@@ -9,7 +9,8 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@jianmanager/ui/components/dialog'
+}   from '@jianmanager/ui/components/dialog'
+  import { ScrollableDialogBody, scrollableDialogContentClass } from '@jianmanager/ui/components/scrollable-dialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
@@ -100,7 +101,10 @@ export function ClearConflictsDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v: boolean) => { if (!v) onOpenChange(false) }}>
-      <DialogContent data-testid="logs-clear-conflicts-dialog">
+      {/* FE-5：套 FR-072 高度自适应壳（`.claude/rules/ui-modals.md` 约束 2/3）——本弹窗含较长
+          描述文案 + 作用域提示 + 标签 + 输入 + 页脚，短视口（横屏手机/小窗）下必须内部滚动，
+          不能让确认按钮移出可视区。比照同目录既有做法（如 InstanceTagsDialog）。 */}
+      <DialogContent data-testid="logs-clear-conflicts-dialog" className={scrollableDialogContentClass}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertTriangle className="size-5 text-destructive" aria-hidden />
@@ -111,22 +115,23 @@ export function ClearConflictsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {!sourceKey && (
-          <p className="text-xs text-muted-foreground" data-testid="logs-clear-conflicts-scope">
-            {t('logsFederation.clearConflicts.scopeHint')}
-          </p>
-        )}
+        <ScrollableDialogBody>
+          {!sourceKey && (
+            <p className="text-xs text-muted-foreground" data-testid="logs-clear-conflicts-scope">
+              {t('logsFederation.clearConflicts.scopeHint')}
+            </p>
+          )}
 
-        <div className="space-y-2">
-          <Label htmlFor={reasonId} className="text-sm">
-            {t('logsFederation.clearConflicts.reasonLabel')}
-          </Label>
-          <Input
-            id={reasonId}
-            data-testid="logs-clear-conflicts-reason"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder={t('logsFederation.clearConflicts.reasonPlaceholder')}
+          <div className="space-y-2">
+            <Label htmlFor={reasonId} className="text-sm">
+              {t('logsFederation.clearConflicts.reasonLabel')}
+            </Label>
+            <Input
+              id={reasonId}
+              data-testid="logs-clear-conflicts-reason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={t('logsFederation.clearConflicts.reasonPlaceholder')}
             autoComplete="off"
             autoFocus
             aria-invalid={reason.length > 0 && trimmed.length === 0}
@@ -136,7 +141,8 @@ export function ClearConflictsDialog({
               {t('logsFederation.clearConflicts.reasonRequired')}
             </p>
           )}
-        </div>
+          </div>
+        </ScrollableDialogBody>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

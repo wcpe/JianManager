@@ -59,6 +59,21 @@ export function timeRangeToParams(
   }
 }
 
+/**
+ * tail-first 分页窗口（纯函数）：以锚点为**窗口上界**、按预设窗宽整体前移，
+ * 返回该窗应发的 `from/to`；首屏锚点为 now，已枚举完窗口的下一窗锚点为原 from。
+ * 语义与首屏的 `timeParamsFor(range, anchor, false)` 完全一致（同一 `timeRangeToParams`）。
+ *
+ * 放在本模块而非页面组件里：页面文件只导出组件（react-refresh/only-export-components），
+ * 纯函数与 `timeRangeToParams` 同域便于 vitest 直接覆盖。
+ */
+export function windowForAnchor(
+  range: TimeRangePreset,
+  anchor: string | number | Date,
+): Pick<LogQueryParams, 'from' | 'to'> {
+  return timeRangeToParams(range, new Date(anchor))
+}
+
 /** 导出范围：当前页 / 全部匹配 / 时间段（FR-150 导出范围可选）。 */
 export type LogExportScope = 'currentPage' | 'allMatched' | 'range'
 

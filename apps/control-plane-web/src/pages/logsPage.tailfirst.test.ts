@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { oldestOf, windowForAnchor } from './LogsPage'
+import { windowForAnchor } from './logs-filters'
 
 /**
- * tail-first 窗口与事件时间辅助函数；复合游标续页由DOM用例验证：
+ * tail-first 窗口辅助函数；复合游标续页由DOM用例验证：
  * ① 首屏窗＝15 分钟（锚点为窗上界）；
  * ② 窗口完成后以原窗口下界为新上界，保持窗宽且不重扫已完成窗口；
- * ③ 连续已完成窗口上界递减；时间辅助函数空页返回null；
+ * ③ 连续已完成窗口上界递减；
  * ④ 复位语义：切窗/切筛后以同一锚点重建 ⇒ 窗与首屏一致（锚点栈由既有 resetTo 清空）。
+ *
+ * 函数本体位于 pages/logs-filters.ts（页面组件文件只导出组件，见 eslint react-refresh）。
  */
 const M = 60_000
 const at = (s: string) => new Date(s).getTime()
@@ -30,13 +32,12 @@ describe('tail-first 分页（纯函数）', () => {
 		expect(at(second.to) - at(second.from)).toBe(15 * M)
 	})
 
-	it('③ 连续完成窗口：窗上界严格递减，时间辅助函数空页为null', () => {
+	it('③ 连续完成窗口：窗上界严格递减', () => {
 		const anchors = ['2026-10-07T04:00:00Z', '2026-10-07T03:45:00Z', '2026-10-07T03:30:00Z', '2026-10-07T03:15:00Z']
 		const tos = anchors.map((a) => at(windowForAnchor('15m', a).to))
 		for (let i = 1; i < tos.length; i++) {
 			expect(tos[i]).toBeLessThan(tos[i - 1]) // 严格递减 ⇒ 一直向更早 ✓
 		}
-		expect(oldestOf([])).toBeNull()
 	})
 
 	it('④ 复位语义：同一锚点重建 ⇒ 窗与首屏逐字段一致（切窗/切筛后回到初始锚点）', () => {
@@ -47,11 +48,5 @@ describe('tail-first 分页（纯函数）', () => {
 		// 且与"翻页态"不同（证明复位确实改变窗口）：
 		const paged = windowForAnchor('15m', '2026-10-07T03:40:00Z')
 		expect(paged).not.toEqual(first)
-	})
-
-	it('oldestOf：取末条（event_time DESC ⇒ 最旧）且容忍缺字段', () => {
-		const items = [{ time: '2026-10-07T04:00:00Z' }, { time: '2026-10-07T03:59:00Z' }]
-		expect(oldestOf(items)).toBe('2026-10-07T03:59:00Z')
-		expect(oldestOf([{ time: '2026-10-07T04:00:00Z' }, {}])).toBeNull()
 	})
 })
