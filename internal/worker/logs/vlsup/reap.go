@@ -5,7 +5,9 @@ package vlsup
 // 现场形态：worker 被强杀（SIGKILL）后，其托管的 vlsup 子进程成孤儿、继续占用
 // 19461/19462 ✗ ⇒ 新 worker 报 `hot exited immediately after start`，只能靠 RangeClient
 // 接旧实例（降级 ✓）。故：**启前回收**必须有界、且**只碰自己的孤儿** ✓
-// （关停级联另有关停路径自己的骨架；本函数当前只有 startup 一个调用点，见 apps/worker/main.go ✓）。
+// （**调用点只有一个**：apps/worker/main.go 的启动路径传 who="startup"；`who` 参数保留
+// 是为了将来若加关停侧调用能区分来源，但**当前不存在关停侧调用**，不要据此以为已有
+// 关停级联的回收骨架——关停路径本身不回收孤儿，孤儿留给下一次启动清理 ✓）。
 //
 // 判据（**两道都过才回收** ✗✓，防误杀他进程）：
 //  ① 进程 cmdline 含**本 data 根**（vlsup 的 cmdline 由本节点的 data 根派生 ⇒ 见 cmdline.go ✓）；
