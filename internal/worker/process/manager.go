@@ -517,7 +517,18 @@ func (m *Manager) SetResourceLimits(uuid string, cpuLimit float64, memLimitMB in
 
 // SetLaunchConfig 刷新已存在实例的启动配置，供 CP 幂等重注册时下发（FR-233）。
 // 运行中的策略继续服务且仅标记过期；停止/崩溃态则立即丢弃旧策略，确保下一次启动采用新规格。
+//
+// **熔断保护（CP-5，2026-10-12 修复）**：入参 autoRestart 是 CP 的**配置**，而熔断禁用是运行时
+// 的**保护态**，两者语义不同。熔断期间 CP 重推（隧道重连的 onOpen/Register/心跳兜底都会触发
+// ResyncNode → 本方法）若无条件写回 `inst.AutoRestart = autoRestart`，就会把 breakCircuit
+// 刚设的禁用重新打开 ⇒ 崩溃循环实例在熔断后继续自愈重启（FR-459 的「熔断粘性」被打破）。
+// 故熔断期间强制保持禁用，配置意图记在下方注释的语义里，等显式解除熔断（ReleaseCircuitBreaker）
+// 后再由 CP 的后续重推（或解除路径自身的 rearm）恢复。
 func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string, envVars map[string]string, autoRestart bool, stopCommand ...string) {
+	// 先取熔断态（h.mu 独立于 m.mu，且此处不嵌套持有，无锁序风险）。
+	if _, broken := m.isCircuitBroken(uuid); broken {
+		autoRestart = false
+	}
 	var stale IProcessCommand
 	var resetting *Instance
 	m.mu.Lock()
