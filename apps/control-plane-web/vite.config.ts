@@ -1,5 +1,5 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
@@ -12,7 +12,16 @@ const versionGo = readFileSync(path.resolve(__dirname, '../../internal/version/v
 const appVersion = /^var Version = "(.+)"$/m.exec(versionGo)?.[1] ?? '0.0.0-unknown'
 
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode }) => {
+  // **必须从配置函数的 `env` 读，不能读 `process.env`**（NEW-1，2026-10-12 修复）：
+  // vite 的 `loadEnv` 把 `.env*` 装进**配置函数收到的 `env` 对象**与 `import.meta.env`，
+  // **不写回 `process.env`**；`constants.ts` 的包装也只为 NODE_ENV/BROWSER 开了特例。
+  // 此前的 `process.env.VITE_API_TARGET` 因此**永远读不到 `.env.development.local`**
+  // 里的覆盖值（实测：本机该文件已设 19000，dev 模式代理仍指向 8080 ⇒ 静默打到错误的 CP）。
+  // 仍保留 `process.env` 优先：shell 显式 `VITE_API_TARGET=... pnpm dev` 的行为不变。
+  const env = loadEnv(mode, process.cwd(), 'VITE_')
+  const apiTarget = process.env.VITE_API_TARGET ?? env.VITE_API_TARGET
+  return {
   // 注入前端版本号，运维控制台侧栏底部展示（FR-037；来源见上 FR-288）
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
@@ -55,7 +64,8 @@ export default defineConfig(({ mode }) => ({
         //
         // 本机若跑的是另一个 CP（例如生产实例），**不要**改这里的默认值：把覆盖写进
         // `.env.development.local`（该文件被 .gitignore 忽略、不入库），例如
-        // `VITE_API_TARGET=http://127.0.0.1:<端口>`。默认值一旦指向某台具体部署，仓库默认
+        // `VITE_API_TARGET=http://127.0.0.1:<端口>`。该覆盖值由上方 `loadEnv` 读取
+        // （**不是** `process.env`，见 NEW-1 的说明）。默认值一旦指向某台具体部署，仓库默认
         // 开发流就不可用，且 mock 模式（MSW `onUnhandledRequest: 'bypass'`）会把未被假后端
         // 实现的端点真实打到那台部署上。
         //
@@ -65,7 +75,7 @@ export default defineConfig(({ mode }) => ({
         // 假实现被转发到真实 CP 并返回 401/5xx），使 e2e 结果依赖本机进程而不可复现。
         // 指向空端口后未实现端点**确定性失败**（ECONNREFUSED ⇒ 页面走既有的降级/失败态），
         // 缺口应补 devmock 假后端而非依赖出网。仍可经 shell 显式 `VITE_API_TARGET=...` 覆盖。
-        target: process.env.VITE_API_TARGET
+        target: apiTarget
           ?? (mode === 'mock' ? 'http://127.0.0.1:9' : 'http://127.0.0.1:8080'),
         changeOrigin: true,
       },
@@ -99,4 +109,5 @@ export default defineConfig(({ mode }) => ({
       },
     ],
   },
-}))
+  }
+})

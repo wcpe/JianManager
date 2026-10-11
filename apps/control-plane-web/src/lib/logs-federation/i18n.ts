@@ -1,9 +1,22 @@
 /**
- * logsFederation.* i18n 键与 zh/en 文案占位（FR-482 foundation）。
+ * logsFederation.* i18n 键与 zh/en 文案（FR-482 foundation）。
  *
- * 正式接入 i18n 资源包时，把 {@link LOGS_FEDERATION_LOCALES} 合并进
- * `src/i18n/zh.json` / `en.json` 的顶层 `logsFederation` 段即可；
- * 本文件保持与 helper 输出的 key 一致，便于单测对账。
+ * **当前状态（2026-10-12 订正）**：{@link LOGS_FEDERATION_KEYS} 是 helper 产出的 key 的
+ * **唯一真源**，仍在使用；而 {@link LOGS_FEDERATION_LOCALES}（zh/en 文案对象）的
+ * **过渡期使命已完成**——`src/i18n/zh.json` / `en.json` 的顶层 `logsFederation` 段
+ * **早已建立**（本文件头原先写的「正式接入 i18n 资源包时，把 LOGS_FEDERATION_LOCALES
+ * 合并进去」那一步**已经做过**），渲染层读的是那两份真实包。
+ *
+ * 因此**不要**把本对象当作「当前生效的文案」读：它与真实包此后各自演化，已实测漂移
+ * （桩 56 叶 / 真实 83 叶、27 个键真实包有而桩无、43 条同键文案不同）。
+ *
+ * 它现在只剩两个用途：
+ *   1. 运行时**零消费**的兼容导出（`index.ts` re-export 供既有引用不破）；
+ *   2. 测试里的**陈旧度哨兵**：`helpers.test.ts` 断言「桩的叶子必须是真实包的子集」，
+ *      一旦真实包删键而桩还留着，该断言转红提示同步。
+ *
+ * **测试断言一律读真实包**（`import zh from '@/i18n/zh.json'`），不要读本对象——
+ * 读桩等于桩 vs 桩自证：真实包漏键它不会红（该缺陷形态由 FE-8 回归锁定）。
  */
 
 /** helper 可能产出的全部 i18n key（静态清单，供 missing-keys / 对账使用）。 */

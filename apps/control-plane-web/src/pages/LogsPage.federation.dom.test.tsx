@@ -637,7 +637,8 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 		)
 		const user = userEvent.setup()
 		renderWithProviders(<LogsPage />)
-		// 保持默认「最近 24 小时」窗口：本用例只验证跟随态的上界语义，不触碰时间范围选择器。
+		// 保持默认时间窗（现为「最近 15 分钟」，见 LogsPage 的默认档）：本用例只验证跟随态的
+		// 上界语义，不触碰时间范围选择器。
 		await user.click(await screen.findByRole('button', { name: '实时跟随' }))
 		expect(await screen.findByText('federation-skewed-live')).toBeInTheDocument()
 	})

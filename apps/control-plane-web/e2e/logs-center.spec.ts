@@ -17,8 +17,16 @@ import { login } from './helpers'
 
 /** 默认时间窗跨度：15 分钟（与 LogsPage 的 `useState<TimeRangePreset>('15m')` 对齐）。 */
 const DEFAULT_WINDOW_MS = 15 * 60 * 1000
-/** 上界与挂钟的容差：仅覆盖挂载/网络往返，不覆盖默认值漂移（改成 24h 会差 85min 量级）。 */
-const TO_TOLERANCE_MS = 10 * 60 * 1000
+/**
+ * 上界与挂钟的容差（NEW-4，2026-10-12 收紧）。
+ *
+ * 语义是「仅覆盖挂载/网络往返」——实际实现里上界锚点就是 `Date.now()`，偏差应在毫秒级。
+ * 原先取 10min（＝窗宽的 2/3，见 `DEFAULT_WINDOW_MS`）过宽：若某天默认窗变成「历史窗口」
+ * （例如 `[now-24h, now-15m]`，窗宽仍可能恰好 15min），上界落后 9 分钟也照样通过 ⇒ 漏检。
+ * 收紧到 60s：仍远大于挂载往返（实测该 spec 从打开到断言为秒级），但能拦住「上界明显偏离
+ * 当前时刻」的形态。窗宽本身由 `DEFAULT_WINDOW_MS` 的精确等值断言单独锁定，不依赖本容差。
+ */
+const TO_TOLERANCE_MS = 60 * 1000
 
 function watchAPIRequests(page: Page): string[] {
   const seen: string[] = []
