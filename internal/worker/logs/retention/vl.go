@@ -116,6 +116,13 @@ type Sweeper struct {
 }
 
 // dryRunReason 说明为什么这一轮没有下发（观测面据此区分「没开」与「没到点」）。
+//
+// **不是** `Sweeper` 能力的分支表：调用方 `Sweep` 只在 `res.DryRun==true` 时调它，
+// 而该条件已排除「VLSweep 关」「Discard 关」「deleter 为 nil」三种 ⇒ 正常情况下
+// **一律落到 `default`**（三闸全开且客户端就绪，却仍被标 DryRun 只可能是判据分叉）。
+//
+// 前三个 `case` 因此是**防御性**的（判据若被改动，文案仍能与原因对上），
+// 而不是「当前会走到」的路径——写清楚这一点，避免读者把它读成三分支的真实分派。
 func dryRunReason(p Policy) string {
 	n := p.Normalize()
 	switch {
@@ -124,7 +131,11 @@ func dryRunReason(p Policy) string {
 	case !p.Discard:
 		return "意图闸未打开（discard=false）：按硬规则「删前归档」，到期数据应走搬运而非删除"
 	case !DeleteExecutorWired:
-		// 本版本没有执行器的生产构造点：即使两闸都开、客户端就绪，也只是「只计划」。
+		// 防御分支（当前不可达，如实标注）：`DeleteExecutorWired` 表达的是「**生产装配处**
+		// 是否构造了本 Sweeper」，而本类型在测试中是可构造且可用的 ⇒ 它**不参与**
+		// `Sweep` 的 DryRun 判据（见该处注释）。生产不可达由启动日志的
+		// DescribeDeleteExecutor 单独声明，两者职责不同。
+		// 真出现本分支说明有人把该常量塞进了判据——那会让类型失去能力，须回退。
 		return "删除执行器未接线（本版本无生产构造点）：只算计划，不删除"
 	default:
 		return "删除客户端未就绪"
@@ -213,7 +224,13 @@ func (s *Sweeper) Sweep(ctx context.Context, now time.Time, sourceIDs, levels []
 		}
 	}
 	res.Planned = len(targets)
-	// 只有两道闸都开才进入下发分支；否则一律落到「仅计算」。
+	// 只有两闸都开、且客户端就绪，才进入下发分支；否则一律落到「仅计算」。
+	//
+	// **刻意不纳入 `DeleteExecutorWired`**（N-5 复核，2026-10-12）：该常量的语义是
+	// 「**生产装配处**是否构造了 Sweeper」，而 `Sweeper` 类型本身是可用的（测试即构造它）。
+	// 把常量塞进本判据会让类型自身失去能力、并让端到端用例（策略→计划→真实 HTTP 请求）
+	// 失去意义——那是把「接线状态」与「类型能力」两件事混为一谈。
+	// 「生产不可达」由 DescribeDeleteExecutor 在启动日志显式声明，正是为此设的观测面。
 	res.DryRun = !s.policy.Normalize().Sweep.VLSweep || s.deleter == nil || !s.policy.Discard
 	s.stats.Sweeps++
 	s.stats.Planned += int64(len(targets))

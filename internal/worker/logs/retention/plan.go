@@ -1,6 +1,7 @@
 package retention
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -140,7 +141,9 @@ func (p Policy) Plan(now time.Time, sourceIDs []string, levels []string) ([]Swee
 	sort.Strings(sortedSources)
 	seen := map[string]bool{}
 	sources := make([]string, 0, len(sortedSources))
-	var invalidErr error
+	// invalidErrs 聚合**全部**非法源标识（N-7，2026-10-12 修复）：此前用单个 error 逐次覆盖，
+	// 同时配错多个源时只有最后一个出现在错误里，排障要一轮轮修。errors.Join 保留全部。
+	var invalidErrs []error
 	for _, sid := range sortedSources {
 		if sid == "" || seen[sid] {
 			continue
@@ -148,11 +151,13 @@ func (p Policy) Plan(now time.Time, sourceIDs []string, levels []string) ([]Swee
 		seen[sid] = true
 		if !ValidSourceID(sid) {
 			// 源标识非法就跳过这一条，但**不静默**：整份计划里少了谁必须能从错误里看出来。
-			invalidErr = fmt.Errorf("retention: 源标识 %q 含非法字符，已跳过其来源级覆盖", sid)
+			invalidErrs = append(invalidErrs,
+				fmt.Errorf("retention: 源标识 %q 含非法字符，已跳过其来源级覆盖", sid))
 			continue
 		}
 		sources = append(sources, sid)
 	}
+	invalidErr := errors.Join(invalidErrs...)
 
 	var out []SweepTarget
 	for _, key := range sortedLevels {
