@@ -214,7 +214,19 @@ func targetsDigest(ids []string) string {
 }
 
 // rebindCachedSearchResponse 只复用缓存的行与覆盖摘要，绝不把创建者的 View/游标交给当前调用方。
-// 时间桶命中时按当前精确窗口过滤行，并把结果标为可继续枚举，避免旧窗口越界或伪装完整。
+// 时间桶命中时按当前精确窗口过滤行，避免旧窗口越界；并把游标按当前 View 重编码。
+//
+// **窗口重绑分支已删除**（N-3，2026-10-12 终审清理）：这里原有一个
+// `windowAdjusted := cached.View.FromUTC != view.FromUTC || ...ToUTC != view.ToUTC`
+// 分支（命中时改判 `CACHE_WINDOW_REBASED` + `Complete=false` + `EnumerationState=EnumOpen`）。
+// 它**不可达**：唯一调用方 `lookupSearchCache` 在返回命中前已强制
+// `entry.resp.View.FromUTC == q.FromUTC && entry.resp.View.ToUTC == q.ToUTC`
+// （见该函数内的精确窗口守卫），而本函数收到的 `view` 由当前请求的 `q` 派生 ⇒
+// 两侧窗口按构造必然相等 ⇒ 判据恒假。留着会让读者以为"分钟桶跨窗命中"这条路径存在，
+// 与 `lookupSearchCache` 的实际语义矛盾（该守卫的注释已说明：精确窗口不一致必须回源）。
+//
+// 上面那段**按当前精确窗口过滤行**的逻辑仍保留：它对 `cached.Items` 做的是**下界/上界裁剪**
+// （防御 `q` 的窗口比缓存载荷窄的情形，例如调用方传入子窗口），与"整窗被重绑"是两件事。
 func rebindCachedSearchResponse(q Query, view View, cached *SearchResponse) *SearchResponse {
 	if cached == nil {
 		return nil
@@ -224,7 +236,6 @@ func rebindCachedSearchResponse(q Query, view View, cached *SearchResponse) *Sea
 	out.IngestPositionGaps = append([]IngestPositionGap(nil), cached.IngestPositionGaps...)
 	from, fromErr := time.Parse(time.RFC3339Nano, q.FromUTC)
 	to, toErr := time.Parse(time.RFC3339Nano, q.ToUTC)
-	windowAdjusted := cached.View.FromUTC != view.FromUTC || cached.View.ToUTC != view.ToUTC
 	if fromErr == nil && toErr == nil && (q.FromUTC != "" || q.ToUTC != "") {
 		filtered := make([]Event, 0, len(cached.Items))
 		for _, event := range cached.Items {
@@ -241,13 +252,6 @@ func rebindCachedSearchResponse(q Query, view View, cached *SearchResponse) *Sea
 			filtered = append(filtered, event)
 		}
 		out.Items = filtered
-	}
-	if windowAdjusted {
-		out.Coverage.PartialReasons = append([]string(nil), cached.Coverage.PartialReasons...)
-		out.Coverage.PartialReasons = appendUniqueReason(out.Coverage.PartialReasons, "CACHE_WINDOW_REBASED")
-		out.Coverage.Complete = false
-		out.Coverage.EnumerationState = EnumOpen
-		out.Exhausted = false
 	}
 	if cached.NextCursor != "" && len(out.Items) > 0 {
 		out.NextCursor = EncodePageCursor(PageCursor{
