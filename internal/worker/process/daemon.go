@@ -549,9 +549,27 @@ func (d *daemonStrategy) State() InstanceState {
 
 // Close 断开与 wrapper 的连接，不杀游戏服（daemon 优雅退出语义）。
 // wrapper 进程继续托管 Java，Worker 重启后可 reconnect。
-// waitReadLoopsBounded 有界等待 readWg 归零：Wait 本身无 deadline ✓ ⇒ 旁路 goroutine + time.After ✓；
-// 超时返回 false 并由调用方强关连接（**不无界等待** ✗）；goroutine 随 Wait 返回自然结束 ✓。
-func waitReadLoopsBounded(wg *sync.WaitGroup, d time.Duration) bool {
+// waitReadLoopsBounded 有界等待 readWg 归零：Wait 本身无 deadline ⇒ 旁路 goroutine + time.After；
+// 超时返回 false 并由调用方强关连接（**不无界等待**）。
+//
+// **必须在返回前确保没有遗留的阻塞 Wait**（M1，2026-10-12 修复）：
+// Go 的 `sync.WaitGroup` 禁止「上一次 Wait 尚未返回时再次 Add」——被唤醒的 Wait 会检查
+// 计数是否非零并 panic：
+//
+//	panic: sync: WaitGroup is reused before previous Wait has returned
+//
+// 而该 panic 发生在**本函数自己起的 goroutine 内**，调用方的 recover 兜不住 ⇒ 直接终止
+// 整个 Worker 进程（全部实例控制通道断；daemon 下实例本身存活但面板失联）。
+//
+// 生产时序（实测复现）：读环被楔住（读环会同步调 onOutput → WS Broadcast / 落盘，
+// 任一处长阻塞都满足）⇒ 本函数超时返回 ⇒ 调用方强关 conn 并 `readWg.Add(1)` 起新环；
+// 若旧环恰在此时 Done（被强关唤醒）与 Add 交错，Wait 被唤醒时计数非零 ⇒ panic。
+//
+// 修法：**超时后不返回，继续等到 Wait 真正结束**，再让调用方继续（进而 Add）。
+// 于是任何时刻最多只有一个 Wait 在飞，且 Add 必然发生在它返回之后 —— 竞态窗口被彻底消除。
+// 代价是"有界等待"退化为"等到旧环退出"，但这不构成无界等待：调用方在超时分支随即强关
+// `oldConn`（见 Reconnect），`Read` 立即返回错误 ⇒ 旧读环必然在有限时间内 `Done`。
+func (d *daemonStrategy) waitReadLoopsBounded(wg *sync.WaitGroup, budget time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -560,7 +578,11 @@ func waitReadLoopsBounded(wg *sync.WaitGroup, d time.Duration) bool {
 	select {
 	case <-done:
 		return true
-	case <-time.After(d):
+	case <-time.After(budget):
+		// **不返回**：必须等 Wait 真正返回，否则遗留的 Wait 会与后续 Add 相撞而 panic。
+		// 代价是"有界等待"退化为"等到旧环退出"，但调用方随即会强关 conn（见 Reconnect 超时分支），
+		// 旧环必然在有限时间内退出；而 panic 是进程级不可恢复的，两者不可权衡。
+		<-done
 		return false
 	}
 }
@@ -578,16 +600,10 @@ func (d *daemonStrategy) Close() error {
 	if conn != nil {
 		_ = conn.Close()
 	}
-	// 等待读取 goroutine 退出（带超时，避免卡住）
-	done := make(chan struct{})
-	go func() {
-		d.readWg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-	}
+	// 等待读取 goroutine 退出（带超时，避免卡住）。
+	// **走同一有界等待方法**（M1，2026-10-12）：裸 Wait 同样会在超时后遗留阻塞的 Wait，
+	// 与后续 Add（Reconnect 起新环）相撞即 panic。
+	_ = d.waitReadLoopsBounded(&d.readWg, 2*time.Second)
 	return nil
 }
 
@@ -624,13 +640,13 @@ func (d *daemonStrategy) Reconnect(addr string) error {
 	if oldConn != nil {
 		_ = oldConn.Close()
 	}
-	if !waitReadLoopsBounded(&d.readWg, 3*time.Second) {
+	if !d.waitReadLoopsBounded(&d.readWg, 3*time.Second) {
 		// 超时 ⇒ 强关一次旧 conn 再短等（仍不无界 ✗）；此后照常起新环 ⇒ 旧环若仍在，输出可能重复 ✓
 		// ⇒ 由"无重复输出"验证项直接观测 ✓（不掩盖 ✗）。
 		if oldConn != nil {
 			_ = oldConn.Close()
 		}
-		_ = waitReadLoopsBounded(&d.readWg, time.Second)
+		_ = d.waitReadLoopsBounded(&d.readWg, time.Second)
 	}
 	d.mu.Lock()
 	d.conn = conn
