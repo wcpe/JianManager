@@ -261,6 +261,25 @@ systemctl --user show <unit> -p KillMode   # 复核：应变为 process
 - 非 systemd 环境（前台运行、容器、cgroup v1）与任何查询失败（`systemctl` 缺失、D-Bus 不可达、超时）一律静默跳过，不引入新的失败面；
 - 可用 `JM_DAEMON_CGROUP_ISOLATION=0` 关闭（该开关同时关闭运行期隔离，此时不再告警以免误导）。
 
+#### 契约用例（「重启不连坐」的自动化验收）
+
+`TestDaemonSubtreeSurvivesWorkerUnitCgroupKill`（`internal/worker/process/shutdown_cgroup_test.go`）是本项**唯一**的端到端防线：它把「Worker 关闭路径」与「单元级 cgroup SIGTERM」依次施加到真实 wrapper 子树上，断言 wrapper 与 java **存活**、可被下次启动接管，且显式 Stop 仍能停。
+
+它需要**用户可写的 cgroup 子树**，否则会 `SKIP`（不是通过）。执行入口：
+
+```bash
+# 有 user systemd 的环境（把测试放进可写的 scope cgroup）
+systemd-run --user --scope go test ./internal/worker/process/ \
+  -run TestDaemonSubtreeSurvivesWorkerUnitCgroupKill -count=1 -v
+
+# 若系统已有可写子树，也可直接指向它
+JM_TEST_CGROUP_ROOT=/sys/fs/cgroup/<你的可写子树> \
+  go test ./internal/worker/process/ \
+  -run TestDaemonSubtreeSurvivesWorkerUnitCgroupKill -count=1 -v
+```
+
+**⚠️ CI 的限制（如实登记）**：GitHub 托管 runner 通常既无 user systemd session、也无 `/sys/fs/cgroup` 写权限，故 CI 里本用例会 SKIP。release 流水线有一道 `cgroup 隔离端到端契约` 步骤：能跑时**必须 PASS 且不得 SKIP**；不能跑时打 `::warning::` 明确声明「本项端到端契约**本次未验证**」——**绝不静默跳过**。上新机器或改动了 cgroup 隔离相关代码后，请按上面的入口在真机手工执行一次。
+
 ### 9.3 CP 直接启停的受控 POSIX 模板
 
 仓库当前没有受控的 `start.sh` / `stop.sh`。需要在非 systemd 场景下直接管理 CP 时，使用仓库中的单入口模板 `scripts/cp-lifecycle.sh`，通过 `start` / `stop` 子命令避免两份启停逻辑漂移：
