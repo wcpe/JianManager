@@ -91,7 +91,7 @@ describe('DashboardPage 宽屏布局', () => {
     expect(shell).not.toHaveAttribute('data-sidebar-target')
     expect(sidebar).toHaveAttribute('data-state', 'expanded')
     expect(content).toHaveClass('jm-console-content')
-    // FR-496 阶段 6 补丁：`data-sidebar-layout` / `data-sidebar-motion`（320ms 落位状态机）整段退场，
+    // FR-502 阶段 6 补丁：`data-sidebar-layout` / `data-sidebar-motion`（320ms 落位状态机）整段退场，
     // 宽度过渡改由 `.jm-console-sidebar` 自己承担（见 console-shell-motion.test.ts）。
     expect(shell).not.toHaveAttribute('data-sidebar-layout')
     expect(shell).not.toHaveAttribute('data-sidebar-motion')

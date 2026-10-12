@@ -8,7 +8,7 @@ import TasksPage from './TasksPage'
 import InstancesPage from './InstancesPage'
 
 /**
- * 页内数据区骨架（FR-496 阶段 6 补丁）。
+ * 页内数据区骨架（FR-502 阶段 6 补丁）。
  *
  * 契约是「**页头/筛选条先渲染，只有数据区转骨架**」：切页时用户立刻看到这一页的布局，
  * 数据到了原地填充。此前这几页是 `isLoading ? <p>加载中</p>`——整页只剩一行字，

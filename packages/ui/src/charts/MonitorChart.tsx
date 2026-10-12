@@ -9,7 +9,7 @@ import { hoverSnapshotAt, type SampleRow } from '../lib/chart-hover'
 const CHART_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)']
 
 /**
- * 容器宽度变化的防抖时长（FR-496 阶段 6 补丁）。
+ * 容器宽度变化的防抖时长（FR-502 阶段 6 补丁）。
  *
  * 侧栏开合、面板折叠、窗口拖拽都会让容器宽度**逐帧**变化，ResizeObserver 因此每帧回调。
  * 而 recharts 重绘极贵——实测展开一次侧栏，图表侧产生 240 次 `<g>` 子节点替换 +

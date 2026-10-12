@@ -24,7 +24,7 @@ vi.mock('@/api/notification-feed', () => ({
 }))
 
 /**
- * 顶栏布局契约（方案 C / ADR-071；FR-496 阶段 6 补丁）。
+ * 顶栏布局契约（方案 C / ADR-071；FR-502 阶段 6 补丁）。
  *
  * 补丁改变了顶栏的两件事，本文件锁住它们：
  * 1. **唯一一条 53px 通栏**——工作区切换并回顶栏（原型 `.topbar` 内含 `.space-nav`），
@@ -46,7 +46,7 @@ describe('ConsoleHeader 布局', () => {
     expect(header).toHaveClass('h-[53px]')
     // 方案 C：品牌 Logo 移入顶栏品牌区。
     expect(screen.getByText('JianManager')).toBeInTheDocument()
-    // FR-496 阶段 6 补丁：工作区切换不再另起一行，顶栏内就有 `.space-nav`。
+    // FR-502 阶段 6 补丁：工作区切换不再另起一行，顶栏内就有 `.space-nav`。
     expect(container.querySelector('[data-slot="console-workspace-bar"]')).toBeNull()
     const workspaces = within(header).getByRole('navigation', { name: '工作区' })
     expect(within(workspaces).getAllByRole('button').map((b) => b.textContent)).toEqual([

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { SizeContext, SizeProvider, useDensity, type Density } from './SizeProvider'
 
 /**
- * 尺寸上下文测试（FR-496 阶段 6）。
+ * 尺寸上下文测试（FR-502 阶段 6）。
  *
  * 契约只有两条，但都容易被后续批次静默破坏：
  * ① **解析优先级**：显式入参 > Provider > 兜底。任一层写反，最直接的症状是

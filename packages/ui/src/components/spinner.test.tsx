@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { Spinner } from './spinner'
 
 /**
- * Spinner 测试（FR-496 阶段 6）。
+ * Spinner 测试（FR-502 阶段 6）。
  *
  * 契约：默认装饰性（对辅助技术隐藏，加载语义由容器的 aria-busy/文案表达），
  * 显式给 label 时才成为有名字的图像；尺寸走 data-size 钩子，便于样式与测试定位。

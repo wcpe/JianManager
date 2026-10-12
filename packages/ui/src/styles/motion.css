@@ -1,5 +1,5 @@
 /**
- * 动效词汇表（FR-244；FR-496 阶段 1 自主控台迁入）。
+ * 动效词汇表（FR-244；FR-502 阶段 1 自主控台迁入）。
  *
  * 这里只有 @keyframes：时长/缓动 token 在 theme-map.css 定义（--motion-duration-*、
  * --motion-easing-*），动画名 token（--animate-breathing / --animate-top-progress）

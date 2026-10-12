@@ -6,8 +6,8 @@
  *        Panel/StatCard/MiniBar 原语、layout（PageShell/PageHeader）、charts/RangePicker、翻译上下文
  * @output StatisticsPageView、StatisticsPageViewProps、StatisticsOverviewTotals、StatisticsInstanceCounts
  * @sync apps/control-plane-web/src/pages/StatisticsPage.tsx、apps/control-plane-web/src/pages/StatisticsPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-220 平台级聚合统计 + FR-463 可用性区块 + FR-469 玩家趋势 +
- *        FR-217/FR-428 客户端分发观测 + FR-496 阶段 6 布局原语）
+ * @since FR-508（组件受控化迁包；原页 FR-220 平台级聚合统计 + FR-463 可用性区块 + FR-469 玩家趋势 +
+ *        FR-217/FR-428 客户端分发观测 + FR-502 阶段 6 布局原语）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

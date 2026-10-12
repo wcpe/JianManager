@@ -3,7 +3,7 @@
  * @input  lib/utils 的 cn、lib/tone、lib/interaction-overlay 的 shadowTransition
  * @output Panel、PanelProps
  * @sync   改动三段结构或 data-slot 钩子时同步 panel.test.tsx；页面外壳依赖其 bodyClassName 约定
- * @since  FR-496
+ * @since  FR-502
  */
 import * as React from 'react'
 
@@ -13,9 +13,9 @@ import { shadowTransition } from '../lib/interaction-overlay'
 
 /**
  * 分区面板（FR-061/FR-163）：大圆角 + 柔和阴影统一卡片原语，
- * 可选标题栏（图标/标题 + 头部操作）+ 内容区 + 底部区（FR-496 阶段 3 补齐的三段式）。
+ * 可选标题栏（图标/标题 + 头部操作）+ 内容区 + 底部区（FR-502 阶段 3 补齐的三段式）。
  *
- * FR-496 阶段 6 的收敛点：
+ * FR-502 阶段 6 的收敛点：
  * - 三段各自带 `data-slot` 钩子（panel-header / panel-body / panel-footer），
  *   页面可以精确命中某一段做样式或断言，不必再靠 `:first-child` 猜结构；
  * - 间距与字号回到设计标度（4px 栅格 / `text-xs`），不再写 `px-[15px] text-[11px]`
@@ -45,7 +45,7 @@ export function Panel({
   tone?: Tone
   /** 启用 hover 反馈（主色晕染阴影 shadow-lift，iOS 缓动；FR-176 去位移、只换阴影不抬位）。 */
   hoverable?: boolean
-  /** 底部区（FR-496 阶段 3）：对齐原型 `.panel-foot` 三段式，用于分页、合计、批量操作等。 */
+  /** 底部区（FR-502 阶段 3）：对齐原型 `.panel-foot` 三段式，用于分页、合计、批量操作等。 */
   footer?: React.ReactNode
 }) {
   return (
@@ -63,7 +63,7 @@ export function Panel({
         hoverable &&
           // FR-176：hover 只换阴影不位移（`hover:shadow-lift`）。
           // FR-244：时长/缓动取 motion token（slow≈320ms），不写定值。
-          // FR-496：过渡串取 lib/interaction-overlay 的 shadowTransition —— 取值单一真源。
+          // FR-502：过渡串取 lib/interaction-overlay 的 shadowTransition —— 取值单一真源。
           // 全局守护测试已从「钉本文件出现字面量」改为「字面量或常量均可，但常量文件必须绑定
           // motion token」，所以这里可以放心用常量。
           `${shadowTransition} hover:shadow-lift`,

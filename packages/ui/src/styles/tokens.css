@@ -1,5 +1,5 @@
 /**
- * 设计 token（FR-496 阶段 1 自 apps/control-plane-web/src/index.css 迁入；阶段 2 改为「种子 + 派生」）。
+ * 设计 token（FR-502 阶段 1 自 apps/control-plane-web/src/index.css 迁入；阶段 2 改为「种子 + 派生」）。
  *
  * ── 怎么加一套新主题 ──
  * 在 themes.css 里声明 **4 个种子** 即可，结构色会自动派生：

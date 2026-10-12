@@ -3,7 +3,7 @@
  * @input lib/password-strength、Panel/Input/PasswordInput/Label/Button 原语、翻译上下文
  * @output SetupPageView、SetupPageViewProps、SetupValues
  * @sync apps/control-plane-web/src/pages/SetupPage.tsx、apps/control-plane-web/src/pages/SetupPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-157 密码强度提示、FR-199 身份访问域）
+ * @since FR-508（组件受控化迁包；原 FR-157 密码强度提示、FR-199 身份访问域）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

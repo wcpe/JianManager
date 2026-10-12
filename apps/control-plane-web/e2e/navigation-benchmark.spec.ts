@@ -274,7 +274,7 @@ interface SidebarFrameProbe {
 
 async function sidebarFrameStats(page: Page): Promise<SidebarFrameProbe> {
   const shell = page.locator('[data-slot="console-shell"]')
-  // FR-496 阶段 6 补丁：无头 Chromium 的 rAF 帧间隔常达 100ms 以上，320ms 的真实过渡采不到中段帧。
+  // FR-502 阶段 6 补丁：无头 Chromium 的 rAF 帧间隔常达 100ms 以上，320ms 的真实过渡采不到中段帧。
   // 把宽度过渡放慢到 1.2s 后逐帧采样才稳定覆盖过渡过程；同时这也放大了「JS 定时器 + CSS 过渡
   // 两个时钟」的错位（旧实现会在 320ms 处落位跳变），因此本探针同时是那条回归的守卫。
   await shell.evaluate((root) => {
@@ -405,7 +405,7 @@ async function sidebarFrameStats(page: Page): Promise<SidebarFrameProbe> {
         if (lastFrameAt !== null) frames.push(now - lastFrameAt)
         lastFrameAt = now
         samples.push(sample())
-        // FR-496 阶段 6 补丁：宽度过渡改由侧栏自身承担，外壳不再有 `data-sidebar-motion` 钩子，
+        // FR-502 阶段 6 补丁：宽度过渡改由侧栏自身承担，外壳不再有 `data-sidebar-motion` 钩子，
         // 采样终点改为「侧栏宽度落到当前 data-state 的目标值」（折叠 54 / 展开 246）。
         // 必须同时要求「已经离开起始宽度」：探针在点击前布防，此时宽度天然等于起始值，
         // 少了这个条件会在点击前就判定「已到位」而提前收尾（中段帧为 0）。
@@ -645,7 +645,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       await expect
         .poll(async () => sidebar.evaluate((el) => Math.round(el.getBoundingClientRect().width)), { message: `${route.label} 侧栏折叠后保留 54px 图标轨（原型 .sidebar.collapsed）` })
         .toBe(54)
-      // FR-496 阶段 6 补丁反转了这里的三条契约：宽度过渡从 drawer 移到侧栏自身，
+      // FR-502 阶段 6 补丁反转了这里的三条契约：宽度过渡从 drawer 移到侧栏自身，
       // 内容区不再做 transform/clip-path 位移补偿（原实现靠两个时钟对齐，落位瞬间会抖）。
       expect(collapseStats.sidebarTransition, `${route.label} 收起由侧栏自身宽度过渡驱动`).toContain('width')
       expect(collapseStats.sidebarTransitionDurationMs, `${route.label} 收起侧栏过渡时长`).toBeGreaterThanOrEqual(250)
@@ -660,7 +660,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       // 核心契约：逐帧「内容区左缘 = 侧栏右缘」，既不平移也不二次抖动。
       expect(collapseStats.contentSidebarDriftMax, `${route.label} 收起逐帧内容区跟随侧栏右缘`).toBeLessThanOrEqual(2)
       // 旧侧栏的 `.jm-sidebar-mode` 双内容层交叉淡入（展开层/折叠图标层的 opacity+transform）
-      // 已随 FR-496 阶段 6 换成 `WorkspaceSidebar` 退场：新侧栏折叠态是同一棵子树按
+      // 已随 FR-502 阶段 6 换成 `WorkspaceSidebar` 退场：新侧栏折叠态是同一棵子树按
       // `renderCollapsed` 延迟切换图标轨，没有那两层。相关结构契约由 WorkspaceSidebar.dom.test.tsx 守。
       expect(collapseStats.contentFinalX, `${route.label} 收起结束内容区落到图标轨后`).toBeLessThanOrEqual(80)
 
@@ -684,7 +684,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       expect(expandStats.contentClipPath, `${route.label} 展开内容区不裁切`).toBe('none')
       expect(expandStats.contentSidebarDriftMax, `${route.label} 展开逐帧内容区跟随侧栏右缘`).toBeLessThanOrEqual(2)
       // 旧侧栏的 `.jm-sidebar-mode` 双内容层交叉淡入（展开层/折叠图标层的 opacity+transform）
-      // 已随 FR-496 阶段 6 换成 `WorkspaceSidebar` 退场：新侧栏折叠态是同一棵子树按
+      // 已随 FR-502 阶段 6 换成 `WorkspaceSidebar` 退场：新侧栏折叠态是同一棵子树按
       // `renderCollapsed` 延迟切换图标轨，没有那两层。相关结构契约由 WorkspaceSidebar.dom.test.tsx 守。
       expect(expandStats.contentFinalX, `${route.label} 展开结束内容区落到展开侧栏后`).toBeGreaterThanOrEqual(220)
       results.push({ route: route.label, collapse: collapseStats, expand: expandStats })

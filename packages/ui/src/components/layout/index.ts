@@ -1,5 +1,5 @@
 /**
- * 布局层（FR-496 阶段 3）：内容页布局规范的唯一出处。
+ * 布局层（FR-502 阶段 3）：内容页布局规范的唯一出处。
  *
  * 依据《资源优先工作区》原型（`.tmp/设计/`）实测的页面骨架与结构词汇表实现。
  * 页面只应从这里取布局原语，不再各自手写 `space-y-*` / `grid-cols-*` 之类的骨架类名——
@@ -20,7 +20,7 @@
  */
 export { PageShell } from './PageShell'
 export { PageHeader, type PageBreadcrumb } from './PageHeader'
-// 骨架（FR-496 阶段 6 补丁）：路由 fallback 与页内数据区的统一占位，见 PageSkeleton.tsx 头注。
+// 骨架（FR-502 阶段 6 补丁）：路由 fallback 与页内数据区的统一占位，见 PageSkeleton.tsx 头注。
 export { PageSkeleton, DataPanelSkeleton, ListSkeleton, type PageSkeletonVariant } from './PageSkeleton'
 export { ScopeBar } from './ScopeBar'
 export { SummaryStrip, SummaryItem } from './SummaryStrip'

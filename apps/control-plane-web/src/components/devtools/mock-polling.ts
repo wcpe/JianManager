@@ -2,7 +2,7 @@ import type { Query, QueryClient, QueryKey } from '@tanstack/react-query'
 import { MOCK_POLL_FOLLOW_ORIGINAL, getMockPollInterval } from '@jianmanager/devmock/runtime-control'
 
 /**
- * mock 模式全局轮询控制（FR-496 阶段 6 补丁）。
+ * mock 模式全局轮询控制（FR-502 阶段 6 补丁）。
  *
  * 要解决的问题：mock 下各处的 `refetchInterval`（2s/10s/15s/30s…散在 `src/api/**` 几十个调用点）
  * 不可控——想安静地看一次请求、想验证「轮询会不会带出脏数据」、想把节奏放慢看 loading，

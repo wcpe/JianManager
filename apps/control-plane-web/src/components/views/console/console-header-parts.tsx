@@ -6,7 +6,7 @@ import { logoToggleLabelKey } from '@/lib/shared/sidebar-logo'
 import { searchBoxClass } from '@/lib/shared/header-layout'
 
 /**
- * 全局顶栏的三个展示部件（FR-496 阶段 6 补丁 / FR-179 / FR-232）。
+ * 全局顶栏的三个展示部件（FR-502 阶段 6 补丁 / FR-179 / FR-232）。
  * 从应用侧 `ConsoleHeader` 拆出：store 与 react-query 依赖经 props 注入，此处只做渲染。
  */
 

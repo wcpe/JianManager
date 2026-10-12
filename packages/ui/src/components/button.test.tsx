@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { Button } from './button'
 
 /**
- * Button 现状快照测试（FR-496 阶段 0）。
+ * Button 现状快照测试（FR-502 阶段 0）。
  *
  * 目的不是穷举行为，而是在重构前锁定对外契约：`data-*` 钩子、变体透传、
  * className 合并语义、asChild 降级。阶段 4 重做 Button 时，这些断言
@@ -68,12 +68,12 @@ describe('Button', () => {
 })
 
 /**
- * FR-496 阶段 6 新增契约：加载态与提示。
+ * FR-502 阶段 6 新增契约：加载态与提示。
  *
  * 都是"少做一步就静默出错"的语义——只转圈不禁用会重复提交、图标按钮没有可访问名
  * 屏幕阅读器只会念"按钮"、工具提示覆盖了可见文案则违反 WCAG 2.5.3。故逐条钉死。
  */
-describe('Button 加载态与提示（FR-496 阶段 6）', () => {
+describe('Button 加载态与提示（FR-502 阶段 6）', () => {
   it('isLoading 同时给出禁用、aria-busy 与装饰性 Spinner', () => {
     render(<Button isLoading>保存</Button>)
 
@@ -182,7 +182,7 @@ describe('Button 加载态与提示（FR-496 阶段 6）', () => {
     }
   })
 
-  it('焦点环与按压反馈取共享常量（FR-496 阶段 6 收敛）', () => {
+  it('焦点环与按压反馈取共享常量（FR-502 阶段 6 收敛）', () => {
     render(<Button>提交</Button>)
 
     const className = screen.getByRole('button').className

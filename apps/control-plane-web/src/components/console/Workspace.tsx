@@ -7,7 +7,7 @@ import { ROUTE_CHUNKS } from '@/lib/shared/route-chunks'
 import WorkspaceEmpty from '@/components/views/console/WorkspaceEmpty'
 
 /**
- * 路由表的懒加载声明（FR-496 阶段 6 补丁）：加载器一律从 `@/lib/route-chunks` 取，
+ * 路由表的懒加载声明（FR-502 阶段 6 补丁）：加载器一律从 `@/lib/route-chunks` 取，
  * 不再各写一份 `import('@/pages/X')`——预取器查的就是同一张表，两处同源才能保证
  * 「hover 预取过的 chunk」与「点下去要等的 chunk」是同一个（否则预取会静默失效）。
  */
@@ -90,7 +90,7 @@ export default function Workspace() {
 
   // 超级工作台全幅（自带实例库 + 画布），不套统一内边距与滚动壳。
   if (location.pathname === '/super' || location.pathname.startsWith('/super/')) {
-    // FR-496 阶段 6 补丁：fallback 从「一行加载中文字」换成同壳骨架（工具壳，无外层留白/页头）。
+    // FR-502 阶段 6 补丁：fallback 从「一行加载中文字」换成同壳骨架（工具壳，无外层留白/页头）。
     return (
       <Suspense fallback={<PageSkeleton variant="tool" aria-label={t('common.loading')} />}>
         <SuperWorkbenchPage />
@@ -116,7 +116,7 @@ export default function Workspace() {
         data-slot="workspace-route-transition"
         className={isFixedViewportRoute ? 'jm-route-transition flex min-h-0 flex-1 flex-col' : 'jm-route-transition min-h-full'}
       >
-        {/* FR-496 阶段 6 补丁：Suspense 边界收进路由子树**内部**。
+        {/* FR-502 阶段 6 补丁：Suspense 边界收进路由子树**内部**。
             此前边界包住整个工作区壳，切页时 fallback 把外壳（背景、内边距、滚动容器、路由进场容器）
             一并替换掉，于是「骨架 → 真实页面」会整页跳动一次；现在外壳常驻，只有路由内容在
             「页面骨架 ↔ 真实页面」之间切换，骨架与页面共用同一套留白与滚动模型。

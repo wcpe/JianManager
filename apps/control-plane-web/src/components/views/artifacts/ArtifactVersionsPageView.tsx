@@ -3,7 +3,7 @@
  * @input Panel/Input/Button 原语、PageShell/PageHeader 布局原语、翻译上下文
  * @output ArtifactVersionsPageView、ArtifactVersionsPageViewProps、ArtifactCatalogView、ArtifactSourceView、ArtifactVersionView
  * @sync apps/control-plane-web/src/pages/ArtifactVersionsPage.tsx、apps/control-plane-web/src/pages/ArtifactVersionsPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-409 制品版本库 + FR-411 本地上传来源）
+ * @since FR-508（组件受控化迁包；原页 FR-409 制品版本库 + FR-411 本地上传来源）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

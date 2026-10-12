@@ -40,7 +40,7 @@ describe('FR-037 运维控制台 Shell（mock 假后端）', () => {
     expect(sidebar).toHaveClass('jm-console-sidebar')
     expect(header).toBeInTheDocument()
     expect(container.querySelector('[data-slot="console-main"]')).toHaveClass('jm-console-main')
-    // FR-496 阶段 6：侧栏由六域长列表换成「工作区侧栏」——固定入口 + 资源导航。
+    // FR-502 阶段 6：侧栏由六域长列表换成「工作区侧栏」——固定入口 + 资源导航。
     // 旧断言（六域顶层按钮「服务器」「平台设置」）随六域 IA 退场，这里锁新侧栏的等价契约：
     // 侧栏仍给出跨节点入口（平台首页）与资源定位（选择服务器 / 资源导航分段）。
     // 导航行是 link（包在 `<Link>` 里）；「选择服务器」与「按节点」仍是真 button，保持原断言。
@@ -52,7 +52,7 @@ describe('FR-037 运维控制台 Shell（mock 假后端）', () => {
     expect(await within(header).findByText('JianManager')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '节点作用域' })).not.toBeInTheDocument()
 
-    // FR-496 阶段 6 补丁：顶栏是唯一一条——工作区切换在顶栏内，其下直接是「侧栏 + 工作区」。
+    // FR-502 阶段 6 补丁：顶栏是唯一一条——工作区切换在顶栏内，其下直接是「侧栏 + 工作区」。
     expect(header).toHaveClass('h-[53px]')
     expect(container.querySelector('[data-slot="console-workspace-bar"]')).toBeNull()
     expect(within(header).getByRole('navigation', { name: '工作区' })).toBeInTheDocument()

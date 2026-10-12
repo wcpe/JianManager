@@ -8,7 +8,7 @@
  *         AlertChannelsTabView、AlertChannelsTabViewProps
  * @sync apps/control-plane-web/src/pages/AlertsPage.tsx（容器）、apps/control-plane-web/src/pages/AlertsPage.dom.test.tsx、
  *        apps/control-plane-web/src/pages/alerts/RuleDialog.tsx 与 ChannelDialog.tsx（对话框容器经插槽注入）
- * @since FR-502（组件受控化迁包；原页 FR-011 告警规则 + FR-085 通道/事件 + FR-149 事件筛选 + FR-208 mock 域簇）
+ * @since FR-508（组件受控化迁包；原页 FR-011 告警规则 + FR-085 通道/事件 + FR-149 事件筛选 + FR-208 mock 域簇）
  */
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

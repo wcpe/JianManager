@@ -5,7 +5,7 @@
  * @input  lib/utils 的 cn、lib/focus-ring、Button、radix-ui 的 Dialog；关闭文案取 i18n 键 common.close
  * @output Dialog 及其子组件（Trigger / Content / Header / Title / Footer 等）
  * @sync   改动结构或关闭语义时同步 dialog.test.tsx；模态约束同步 .claude/rules/ui-modals.md
- * @since  FR-496
+ * @since  FR-502
  */
 import * as React from "react"
 import { XIcon } from "lucide-react"
@@ -17,7 +17,7 @@ import { focusRing } from "../lib/focus-ring"
 import { Button } from "./button"
 
 /**
- * 关闭文案的 i18n 键与兜底值（FR-496 阶段 6）。
+ * 关闭文案的 i18n 键与兜底值（FR-502 阶段 6）。
  *
  * 组件库不自己初始化 i18next——初始化意味着替宿主决定语言与资源。这里只在宿主已初始化
  * 时按键取值，取不到就回落英文，因此「未接 i18n 的应用/组件库单测」的行为与硬编码英文完全一致。
@@ -46,7 +46,7 @@ function DialogTrigger({
 }
 
 /**
- * 门户（FR-496 阶段 6 修复死钩子）。
+ * 门户（FR-502 阶段 6 修复死钩子）。
  *
  * Radix 的 `DialogPortal` 只读 `container` / `forceMount` / `children`，其余 props 直接丢弃，
  * 所以以前挂在它身上的 `data-slot="dialog-portal"` 从未落进 DOM（阶段 0 记录的缺陷）。

@@ -8,7 +8,7 @@
  *         BaselineEditorDialogView、BaselineEditorDialogViewProps、ConfigBaselineRow、BaselineDriftItemView、
  *         BaselineDriftView、BaselineConvergeOutcome、BaselineFormValues
  * @sync apps/control-plane-web/src/pages/ConfigBaselinesPage.tsx、apps/control-plane-web/src/pages/ConfigBaselinesPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-458 配置基线模板下发、跨实例漂移检测与一键收敛）
+ * @since FR-508（组件受控化迁包；原页 FR-458 配置基线模板下发、跨实例漂移检测与一键收敛）
  */
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

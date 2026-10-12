@@ -5,7 +5,7 @@
  * @output SettingsPageView、SettingsPageViewProps、SettingsThemeMode、SettingsItemView、SettingsDataView、
  *          SettingsOutboundTestArgs
  * @sync apps/control-plane-web/src/pages/SettingsPage.tsx、apps/control-plane-web/src/pages/SettingsPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-037 系统设置 + FR-063 平台配置覆盖层 + FR-158 未保存拦截与生效时机标注 +
+ * @since FR-508（组件受控化迁包；原页 FR-037 系统设置 + FR-063 平台配置覆盖层 + FR-158 未保存拦截与生效时机标注 +
  *        FR-225 调试模式开关 + FR-229/FR-280 出站连通性测试入口 + FR-409 GitHub 令牌快捷创建）
  */
 import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'

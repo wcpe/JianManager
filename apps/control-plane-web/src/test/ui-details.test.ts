@@ -51,7 +51,7 @@ function read(rel: string): string {
 }
 
 /**
- * FR-496：组件包的设计底座已从单一 styles.css 拆分为 styles/ 目录下的多文件
+ * FR-502：组件包的设计底座已从单一 styles.css 拆分为 styles/ 目录下的多文件
  * （theme-map / tokens / themes / motion），此处合并读取以保持既有断言成立。
  */
 function readUiStyles(): string {
@@ -142,7 +142,7 @@ describe('FR-244 全局动画 token 化', () => {
   const uiCss = readUiStyles()
 
   it('组件包设计底座暴露 motion duration 与 easing token（应用经 @import 引入）', () => {
-    // FR-496：token 已归一到 packages/ui/src/styles/，应用不再重复定义
+    // FR-502：token 已归一到 packages/ui/src/styles/，应用不再重复定义
     // （此前 app 与包各持一份副本、已发生漂移，本次合并为单一真源）。
     for (const css of [uiCss]) {
       expect(css).toMatch(/--motion-duration-fast:\s*120ms/)
@@ -190,7 +190,7 @@ describe('FR-244 全局动画 token 化', () => {
       const src = read(file)
       expect(src).not.toMatch(/duration-200\b/)
       expect(src).not.toMatch(/duration-300\b/)
-      // FR-496：动效取值可以写在调用点（字面量），也可以抽到 packages/ui/src/lib 的共享常量。
+      // FR-502：动效取值可以写在调用点（字面量），也可以抽到 packages/ui/src/lib 的共享常量。
       // 后者更干净（取值单一真源），故两种写法都接受；但必须能追溯到 motion token ——
       // 字面量在本文件可验，常量引用则由下一条断言在常量文件里验。
       const literal = /duration-\[var\(--motion-duration-(?:normal|slow)\)\]/.test(src)
@@ -199,7 +199,7 @@ describe('FR-244 全局动画 token 化', () => {
     })
   }
 
-  it('共享动效常量本身绑定 motion-duration token（FR-496 收敛）', () => {
+  it('共享动效常量本身绑定 motion-duration token（FR-502 收敛）', () => {
     const lib = readFileSync(path.join(rootDir, 'packages/ui/src/lib/interaction-overlay.ts'), 'utf8')
     expect(lib).toMatch(/duration-\[var\(--motion-duration-(?:fast|normal|slow)\)\]/)
     expect(lib).not.toMatch(/duration-200\b/)

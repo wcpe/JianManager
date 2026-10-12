@@ -11,7 +11,7 @@
  *        Combobox/Badge/Button/Input/Panel/Select/Table/Textarea/Dialog 原语、lucide 图标、翻译上下文
  * @output SecurityActionsTabView、SecurityActionsTabViewProps
  * @sync apps/control-plane-web/src/components/client-dist/SecurityActionsTab.tsx
- * @since FR-502（组件受控化迁包；原 FR-430 / ADR-088 处置 Tab，含 S2.1 常驻表单改模态）
+ * @since FR-508（组件受控化迁包；原 FR-430 / ADR-088 处置 Tab，含 S2.1 常驻表单改模态）
  */
 import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

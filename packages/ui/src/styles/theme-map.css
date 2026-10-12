@@ -1,5 +1,5 @@
 /**
- * dark 变体绑定到应用内主题 class（FR-496 阶段 1 修复）。
+ * dark 变体绑定到应用内主题 class（FR-502 阶段 1 修复）。
  *
  * 此前全仓没有任何 @custom-variant 声明，Tailwind v4 的 `dark:` 因此默认解析为
  * `@media (prefers-color-scheme: dark)`——即全站 88 处 `dark:` 工具类跟随的是
@@ -13,7 +13,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /**
- * hover 变体脱离 `@media (hover: hover)` 包裹（FR-496 阶段 6 补丁）。
+ * hover 变体脱离 `@media (hover: hover)` 包裹（FR-502 阶段 6 补丁）。
  *
  * Tailwind v4 把 `hover:` 默认编译成 `&:hover { @media (hover: hover) { … } }`，
  * 于是整站 hover 反馈都挂在一条环境查询上。该查询在**混合输入设备**上会判否：
@@ -30,7 +30,7 @@
 @custom-variant hover (&:hover);
 
 /**
- * token → Tailwind utility 映射（FR-496 阶段 1 自 packages/ui 提供）。
+ * token → Tailwind utility 映射（FR-502 阶段 1 自 packages/ui 提供）。
  *
  * 迁入缘由：此前这份映射定义在 apps/control-plane-web/src/index.css 本地，
  * 而 packages/ui/src/components/* 是全站样式的主要产出方——结果组件库不自包含，

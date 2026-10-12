@@ -3,7 +3,7 @@ import * as React from 'react'
 import { attemptFocus, getFocusableElements, hasFocusableContent } from './focusable'
 
 /**
- * 滚动区域的键盘可达性（FR-496 阶段 6）：让「只能滚、不能 Tab」的容器对键盘用户可用。
+ * 滚动区域的键盘可达性（FR-502 阶段 6）：让「只能滚、不能 Tab」的容器对键盘用户可用。
  *
  * 要解决的问题：一个 `overflow-auto` 的容器，若内容里全是纯文本/只读节点，
  * 键盘用户既进不去也滚不动——WCAG 2.1.1 意义上的"不可操作"。表格正文、

@@ -10,7 +10,7 @@ import MobileConsoleNav from '@/components/console/MobileConsoleNav'
 import Workspace from '@/components/console/Workspace'
 
 /**
- * 侧栏基准宽度（FR-496 阶段 6）：展开 246px / 折叠 54px，照原型 `.sidebar`。
+ * 侧栏基准宽度（FR-502 阶段 6）：展开 246px / 折叠 54px，照原型 `.sidebar`。
  *
  * 为什么要在外壳上写这两个变量：外壳 CSS 的原值是 15rem / 3.5rem（240 / 56），
  * 与 ui 包 `SideNav` 的 246 / 54 差 6px——两个真源不齐时，侧栏右缘会与品牌列、
@@ -26,9 +26,9 @@ const SIDEBAR_WIDTH_VARS = {
  * 运维控制台 Shell（方案 C 品牌顶栏贯通，见 ADR-071；承接 ADR-009 / FR-037 / FR-061 / FR-162）：
  * 顶 = 横跨整宽的**唯一一条** 53px 全局顶栏（品牌区 + 工作区切换 + 搜索/集群徽标/任务/通知/账户）；
  * 其下为一行「侧栏 + 工作区」——侧栏下移到顶栏之下，品牌区宽度与侧栏同步，交界处合为一条竖线。
- * 登录后默认落地此处。页名不在顶栏出现，由内容页的 `PageHeader` 承担（FR-496 阶段 6 补丁）。
+ * 登录后默认落地此处。页名不在顶栏出现，由内容页的 `PageHeader` 承担（FR-502 阶段 6 补丁）。
  *
- * 【折叠动画只有一个时钟（FR-496 阶段 6 补丁）】
+ * 【折叠动画只有一个时钟（FR-502 阶段 6 补丁）】
  * 旧实现用 `sidebarLayout` / `sidebarMotion` 两个 state + 320ms `setTimeout` 造出「先锁宽、
  * 动画结束后落位」的两段式状态机，再配 `.jm-console-content` 的 `clip-path` + `translate3d`
  * 补偿。那套机制要求 JS 定时器与 CSS 过渡两个时钟严格同步：任何一帧掉帧或提前/滞后，

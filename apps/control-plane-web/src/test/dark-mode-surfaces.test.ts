@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-/** FR-496：设计 token 已归一到 packages/ui/src/styles/，故暗色 token 断言改读组件包。 */
+/** FR-502：设计 token 已归一到 packages/ui/src/styles/，故暗色 token 断言改读组件包。 */
 const repoRoot = resolve(root, '../../..')
 
 function source(path: string): string {
@@ -43,7 +43,7 @@ describe('暗色模式设计表面', () => {
     const files = [
       'components/console/ConsoleHeader.tsx',
       'components/console/ConsoleSidebar.tsx',
-      // 活着的桌面侧栏（FR-496 阶段 6 起由 DashboardPage 挂载）：旧侧栏仍在名单里当对照物，
+      // 活着的桌面侧栏（FR-502 阶段 6 起由 DashboardPage 挂载）：旧侧栏仍在名单里当对照物，
       // 但暗色回归必须盯住真正在屏上的那一个。
       'components/views/console/WorkspaceSidebar.tsx',
       'components/console/InstanceConsolePage.tsx',

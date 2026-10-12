@@ -5,7 +5,7 @@
  * @output ArtifactStoragesPageView、ArtifactStoragesPageViewProps、ArtifactStorageChannelView、ArtifactStorageForm、
  *        ArtifactStorageTestOutcome、ArtifactMigrationTaskView、ArtifactMigrationInfoView、ArtifactMigrationFailureView
  * @sync apps/control-plane-web/src/pages/ArtifactStoragesPage.tsx、apps/control-plane-web/src/pages/ArtifactStoragesPage.dom.test.tsx、apps/control-plane-web/src/pages/ArtifactStoragesPage.migration.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-347 外置存储渠道管理 + FR-348 存量迁移）
+ * @since FR-508（组件受控化迁包；原页 FR-347 外置存储渠道管理 + FR-348 存量迁移）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

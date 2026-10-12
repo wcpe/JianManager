@@ -5,7 +5,7 @@
  * @output ConfigVersionDrawer、ConfigVersionDrawerProps
  * @sync apps/control-plane-web/src/components/config-explorer/ConfigVersionDrawer.tsx、
  *        apps/control-plane-web/src/components/config-explorer/ConfigVersionDrawer.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-071 配置浏览器历史、复用 FR-031 配置版本端点）
+ * @since FR-508（组件受控化迁包；原 FR-071 配置浏览器历史、复用 FR-031 配置版本端点）
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'

@@ -3,7 +3,7 @@
  * @input Combobox/Button/Dialog/滚动壳原语、翻译上下文
  * @output GroupMembersDialogView、GroupMembersDialogViewProps、GroupMemberView、GroupMemberCandidate
  * @sync apps/control-plane-web/src/components/GroupMembersDialog.tsx、apps/control-plane-web/src/pages/GroupsPage.tsx
- * @since FR-502（组件受控化迁包；原 FR-156，候选服务端搜索为 FR-336）
+ * @since FR-508（组件受控化迁包；原 FR-156，候选服务端搜索为 FR-336）
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'

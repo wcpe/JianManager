@@ -22,7 +22,7 @@ initThemeFromStorage()
  * VITE_MOCK=1 时启 MSW Service Worker，整站打到内存假后端（FR-196，`npm run dev:mock`）。
  * 动态 import 确保 mock 代码不进生产包。否则直连真后端，行为不变。
  *
- * FR-496 阶段 6 补丁：
+ * FR-502 阶段 6 补丁：
  * - worker 起来之前先还原调试面板持久化的四个旋钮（延迟 / 数据量 / 轮询间隔 / 请求日志）：
  *   `applyPersistedMockRuntime()` 内含「按档位重播种 + 补写登录会话」，替代原先散在这里的
  *   `resetDb()` + 会话补写逻辑；worker 由 devmock 的 `startMockWorker()` 启动——它默认

@@ -570,7 +570,7 @@ export default function App() {
           </Tabs>
         </Section>
 
-        {/* 布局层（FR-496 阶段 3 + 阶段 6 收尾）：此前一处都没收录，页面迁移依赖它却无从在此核对。
+        {/* 布局层（FR-502 阶段 3 + 阶段 6 收尾）：此前一处都没收录，页面迁移依赖它却无从在此核对。
             它是「一页内部怎么摆」的唯一出处——页面只从这里取原语，不再手写 space-y / grid-cols 骨架类名。 */}
         <Section id="layout" active={section} title="布局" hint="页面壳与布局原语">
           <p className="text-[11px] text-muted-foreground">

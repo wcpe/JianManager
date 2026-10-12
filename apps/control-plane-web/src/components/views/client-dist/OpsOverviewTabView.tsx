@@ -9,7 +9,7 @@
  * @output OpsOverviewTabView、OpsOverviewTabViewProps、RankFilterKey、OpsOverviewLinkRenderer
  * @sync apps/control-plane-web/src/components/client-dist/OpsOverviewTab.tsx、
  *       apps/control-plane-web/src/components/client-dist/OpsOverviewTab.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-430 / FR-428 / FR-356 页面 B 总览 Tab）
+ * @since FR-508（组件受控化迁包；原 FR-430 / FR-428 / FR-356 页面 B 总览 Tab）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

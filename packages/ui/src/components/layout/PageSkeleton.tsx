@@ -5,7 +5,7 @@ import { Skeleton } from '../skeleton'
 import { PageShell } from './PageShell'
 
 /**
- * 页面骨架（FR-496 阶段 6 补丁）：路由级 Suspense fallback 与页内数据区的统一占位。
+ * 页面骨架（FR-502 阶段 6 补丁）：路由级 Suspense fallback 与页内数据区的统一占位。
  *
  * 【为什么放在布局层而不是应用侧】
  * 骨架的全部价值是「在真实内容到达之前，先给出与它将占据的空间一致的结构」，所以它必须复用

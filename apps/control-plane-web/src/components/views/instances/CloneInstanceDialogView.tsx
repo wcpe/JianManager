@@ -5,7 +5,7 @@
  * @output CloneInstanceDialogView、CloneInstanceDialogViewProps、CloneFormDraft、ClonePreview、CloneProxyOption
  * @sync apps/control-plane-web/src/components/CloneInstanceDialog.tsx、
  *        apps/control-plane-web/src/components/CloneInstanceDialog.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-036 一键复制、FR-231 高级复制筛选、FR-202 供给/部署流程）
+ * @since FR-508（组件受控化迁包；原 FR-036 一键复制、FR-231 高级复制筛选、FR-202 供给/部署流程）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

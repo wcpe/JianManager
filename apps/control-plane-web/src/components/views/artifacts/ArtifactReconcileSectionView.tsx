@@ -3,7 +3,7 @@
  * @input Panel/Button/Input/Dialog/Table/scrollable-dialog 原语、lib/runtime-assets-view（字节格式化）、views/DangerConfirm、翻译上下文
  * @output ArtifactReconcileSectionView、ArtifactReconcileSectionViewProps、ArtifactReportState、ArtifactDiffQueryState、各视图契约类型
  * @sync apps/control-plane-web/src/pages/ArtifactReconcileSection.tsx、apps/control-plane-web/src/pages/RuntimeAssetsPage.tsx
- * @since FR-502（组件受控化迁包；原 FR-349 制品索引可视化与 S3 一致性对账）
+ * @since FR-508（组件受控化迁包；原 FR-349 制品索引可视化与 S3 一致性对账）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

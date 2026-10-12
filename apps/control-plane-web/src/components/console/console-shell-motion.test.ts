@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 /**
- * 控制台外壳折叠动画契约（FR-496 阶段 6 补丁）。
+ * 控制台外壳折叠动画契约（FR-502 阶段 6 补丁）。
  *
  * 抖动根因是「两个时钟 + 内容区位移补偿」：外壳用 `sidebarLayout`/`sidebarMotion` 状态机
  * 在 320ms 后落位，同时靠 `.jm-console-content` 的 `clip-path` + `translate3d` 把侧栏宽度变化
@@ -24,7 +24,7 @@ function block(selector: string): string {
   return css.slice(start, css.indexOf('}', start))
 }
 
-describe('控制台外壳折叠动画（FR-496 阶段 6 补丁）', () => {
+describe('控制台外壳折叠动画（FR-502 阶段 6 补丁）', () => {
   it('宽度过渡只作用于侧栏自身，且复用 motion token', () => {
     const sidebar = block('.jm-console-sidebar')
     expect(sidebar).toMatch(/transition:\s*width var\(--sidebar-motion-duration\) var\(--motion-easing-standard\)/)

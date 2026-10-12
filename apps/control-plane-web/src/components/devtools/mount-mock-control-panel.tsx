@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { MockControlPanel } from './MockControlPanel'
 
 /**
- * 挂载 Mock 调试面板（FR-496 阶段 6 补丁）。
+ * 挂载 Mock 调试面板（FR-502 阶段 6 补丁）。
  *
  * 为什么另起一棵 React 树而不是往 App 里塞组件：
  * ① 面板与业务无关，塞进 App 就等于把「mock」写进业务外壳的渲染路径，生产构建也得跟着带上判断；

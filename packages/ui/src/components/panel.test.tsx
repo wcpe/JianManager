@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Panel } from './panel'
 
 /**
- * Panel 现状快照测试（FR-496 阶段 0）。
+ * Panel 现状快照测试（FR-502 阶段 0）。
  *
  * Panel 是全站卡片原语（FR-061 / FR-163），几乎所有页面都在用它，而它的对外契约只有两条：
  * ① **标题栏要不要出现**——title / icon / actions 三者全空时必须不产生标题栏节点；
@@ -122,12 +122,12 @@ describe('Panel', () => {
 })
 
 /**
- * FR-496 阶段 6 新增契约：三段式结构钩子与标度收敛。
+ * FR-502 阶段 6 新增契约：三段式结构钩子与标度收敛。
  *
  * 结构钩子是页面迁移时的抓手（页面按 panel-header / panel-body / panel-footer 定位，
  * 不再靠 :first-child 猜），标度收敛则是「换主题时样式跟着变」的前提。
  */
-describe('Panel 三段式钩子与标度收敛（FR-496 阶段 6）', () => {
+describe('Panel 三段式钩子与标度收敛（FR-502 阶段 6）', () => {
   it('标题栏 / 内容区 / 底部区各自带 data-slot 钩子', () => {
     render(
       <Panel title="实例概览" footer={<span>共 3 条</span>}>

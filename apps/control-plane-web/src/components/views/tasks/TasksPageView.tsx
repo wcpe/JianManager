@@ -5,8 +5,8 @@
  * @output TasksPageView、TasksPageViewProps、TasksFilterState、TasksDetailState、TaskNodeOption、TasksLinkArgs、
  *         TASKS_WINDOW_STEP、TASKS_WINDOW_MAX
  * @sync apps/control-plane-web/src/pages/TasksPage.tsx、apps/control-plane-web/src/pages/TasksPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-183 任务中心 + FR-208 详情懒查 + FR-227 强制停止与筛选 +
- *        FR-279 网络失败引导 + FR-329 短轮询 + FR-337 增长窗口 + FR-496 阶段 6 视口裁剪）
+ * @since FR-508（组件受控化迁包；原页 FR-183 任务中心 + FR-208 详情懒查 + FR-227 强制停止与筛选 +
+ *        FR-279 网络失败引导 + FR-329 短轮询 + FR-337 增长窗口 + FR-502 阶段 6 视口裁剪）
  */
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -58,7 +58,7 @@ export const TASKS_WINDOW_MAX = 500
 const NO_CANCELING_IDS: string[] = []
 
 /**
- * 行高估算（px，FR-496 阶段 6 视口裁剪用）：`px-3 py-2.5`(20) + 最高单元格 + `border-b`(1)，
+ * 行高估算（px，FR-502 阶段 6 视口裁剪用）：`px-3 py-2.5`(20) + 最高单元格 + `border-b`(1)，
  * 实测（Chromium 1440×900，root 16px）：有详情的行 56.7；最高单元格在「状态徽章 22」与
  * 「标题 20 / 标题+详情 35.7」之间切换 —— 单行 20+22+1=43，两行 20+35.7+1≈57。
  *
@@ -202,7 +202,7 @@ export function TasksPageView({
   const { t } = useTranslation()
   const { state, kind, nodeId, keyword, time } = filters
 
-  // 视口裁剪（FR-496 阶段 6）：增长窗口最大 500 行，一次性铺进 DOM 是本页的主开销。
+  // 视口裁剪（FR-502 阶段 6）：增长窗口最大 500 行，一次性铺进 DOM 是本页的主开销。
   // 展开行的错误正文 + 日志长短不定（估算误差会让其后所有行偏移错位），故实测后回填。
   const expandedRef = useRef<HTMLDivElement>(null)
   const [expandedSize, setExpandedSize] = useState<{ id: string; px: number } | null>(null)
@@ -301,7 +301,7 @@ export function TasksPageView({
         )}
       </div>
 
-      {/* FR-496 阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与筛选条先渲染，
+      {/* FR-502 阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与筛选条先渲染，
           数据区用同壳骨架（同一张 Panel + 同一条吸附列头 + 行占位）顶上，数据到达原地替换。 */}
       {isLoading && total === undefined ? (
         <Panel bodyClassName="p-0">
@@ -372,7 +372,7 @@ export function TasksPageView({
 }
 
 /**
- * 列表列头（FR-496 阶段 6 补丁抽出）：静态列名，不依赖数据，加载态与就绪态共用同一份，
+ * 列表列头（FR-502 阶段 6 补丁抽出）：静态列名，不依赖数据，加载态与就绪态共用同一份，
  * 因而骨架期间列名/列宽就已就位，数据到达只是「行长出来」。
  */
 function TasksColumnHeader() {

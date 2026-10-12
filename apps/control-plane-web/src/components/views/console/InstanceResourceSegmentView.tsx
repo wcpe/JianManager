@@ -4,7 +4,7 @@
  * @output InstanceResourceSegmentView、InstanceResourceSegmentViewProps
  * @sync apps/control-plane-web/src/components/console/InstanceResourceSegment.tsx、
  *        apps/control-plane-web/src/components/console/InstanceConsolePage.tsx
- * @since FR-502（组件受控化迁包；原 FR-413 页签内分段、FR-451 关键配置段）
+ * @since FR-508（组件受控化迁包；原 FR-413 页签内分段、FR-451 关键配置段）
  */
 import { Activity, type ReactNode } from 'react'
 import { cn } from '@jianmanager/ui'

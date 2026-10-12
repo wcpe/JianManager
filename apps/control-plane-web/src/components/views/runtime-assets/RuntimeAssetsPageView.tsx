@@ -13,7 +13,7 @@
  *         RuntimeAssetsInstancePickerArgs、RuntimeAssetsInstanceCandidateView
  * @sync apps/control-plane-web/src/pages/RuntimeAssetsPage.tsx、apps/control-plane-web/src/pages/RuntimeAssetsPage.dom.test.tsx、
  *       apps/control-plane-web/src/pages/RuntimeAssetsPage.fr301.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-082 运行时与制品全局页、FR-301 多运行时矩阵与手动刷新、
+ * @since FR-508（组件受控化迁包；原页 FR-082 运行时与制品全局页、FR-301 多运行时矩阵与手动刷新、
  *        FR-155 制品导入上传进度、FR-033/FR-045 引用保护与删除占用方提示）
  */
 import { useState, type ReactNode } from 'react'

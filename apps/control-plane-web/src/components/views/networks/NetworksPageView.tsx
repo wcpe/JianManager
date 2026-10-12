@@ -12,7 +12,7 @@
  * @sync apps/control-plane-web/src/pages/NetworksPage.tsx（容器 + 拓扑 / 实例候选两个插槽的实现）、
  *        apps/control-plane-web/src/components/console/TopologyGraph.tsx（拓扑接线层，经 renderTopology 注入）、
  *        apps/control-plane-web/src/pages/NetworksPage.dom.test.tsx、NetworksPage.fr032.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-032 群组关系模型、FR-145 可寻址双栏拓扑、FR-335 概要健康分布）
+ * @since FR-508（组件受控化迁包；原页 FR-032 群组关系模型、FR-145 可寻址双栏拓扑、FR-335 概要健康分布）
  */
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
