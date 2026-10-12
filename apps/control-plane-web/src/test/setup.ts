@@ -5,7 +5,7 @@ import { cleanup } from '@testing-library/react'
 import { server } from '@jianmanager/devmock/server'
 import { resetDb } from '@jianmanager/devmock/db'
 import { clearInjections } from '@jianmanager/devmock/inject'
-import { useAuthStore } from '@/stores/auth'
+import { useAuthStore, flushAuthDynamicImports } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import type { TerminalSessionManager } from '@/lib/terminal-session-manager'
 
@@ -65,7 +65,7 @@ beforeAll(async () => {
   server.listen({ onUnhandledRequest: 'error' })
   ;({ terminalSessionManager } = await import('@/lib/terminal-session-manager'))
 })
-afterEach(() => {
+afterEach(async () => {
   cleanup()
   server.resetHandlers()
   resetDb()
@@ -75,5 +75,15 @@ afterEach(() => {
   usePermissionsStore.getState().reset()
   // 每例后统一释放终端会话，防止会话（WS/xterm/计时器）泄漏到下个用例。
   terminalSessionManager?.disposeAll()
+  // `logout()` 会发起两个动态 import（权限 store、终端会话管理器），它们**不被同步等待**；
+  // 若本处拆除环境时仍在飞，node 报 `EnvironmentTeardownError: Cannot load '.../axios/index.js'
+  // ... after the environment was torn down` 的 unhandled rejection —— **全部用例都通过**的
+  // 轮次仍以非零码退出（2026-10-12 主干 CI 实测：319 files / 2505 tests 全 passed 却判失败）。
+  // 与上面 Blob polyfill 同型：都是「CI 才复现的 unhandled rejection 污染」。
+  //
+  // `flushAuthDynamicImports` 只等**本模块已经发起**的那些 import（内部登记表），不新增任何
+  // 解析/加载；无在途时立即 resolve ⇒ 常规用例的拆卸不增加 tick（本文件 ② 条注释规避的
+  // 正是「await 一个新解析」这类污染）。
+  await flushAuthDynamicImports()
 })
 afterAll(() => server.close())
