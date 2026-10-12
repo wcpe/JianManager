@@ -351,3 +351,78 @@ func TestControlledTruncateOffByDefaultAndGated(t *testing.T) {
 	store.mu.Unlock()
 	// (b) 残余门之外（重新灌大到超门）⇒ 即使开启也不截断 ✓。
 }
+
+// 回归（M1，2026-10-12 修复）：`TryControlledTruncate` 的「无在飞只读句柄」护栏必须
+// 能看到**另一个 Store 实例**（OpenReadOnly）持有的只读句柄。
+//
+// 缺陷形态：`readersInFlight` 曾是**实例字段**，而只读句柄由 `OpenReadOnly` 在**新实例**上
+// `Add(1)`，截断判据却读**写入用实例**的字段 ⇒ 写实例恒为 0 ⇒ 护栏形同不存在。
+// 后果：导出 JSON / 事件状态查询持长时只读句柄期间，写实例仍会执行
+// `wal_checkpoint(TRUNCATE)` 与读者争抢 —— 正是 #67-A′/#67-B 要消除的 2026-10-05 停摆机制。
+//
+// 转红方式（实测）：把 `readersInFlight` 改回实例字段（两处构造点各自 `new(atomic.Int64)`）
+// ⇒ 断言②（写实例必须看到只读实例的计数）立即红。
+func TestControlledTruncateSeesReadOnlyHandlesFromOtherInstances(t *testing.T) {
+	root := t.TempDir()
+	path := root + "/ingest.index.db"
+	writer, err := OpenWithBudget(path, DefaultCommitBudget())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+
+	// 前置：写实例当前看不到任何在飞读者。
+	require.Equal(t, int64(0), writer.readersInFlight.Load(), "前置：无读者时应为 0")
+
+	// 另一个实例持只读句柄（模拟导出 JSON / 事件状态查询）。
+	reader, err := OpenReadOnly(path)
+	require.NoError(t, err)
+
+	// ① 护栏判据在**写实例**上必须看到它 —— 这正是修复点。
+	require.Equal(t, int64(1), writer.readersInFlight.Load(),
+		"写实例必须看到只读实例持有的句柄（否则 TryControlledTruncate 的护栏失效）")
+
+	// ② 截断必须因此让路（护栏的实际作用面）。
+	writer.mu.Lock()
+	writer.controlledTruncate = true // 绕过开关，直接测护栏本身
+	writer.mu.Unlock()
+	require.False(t, writer.TryControlledTruncate(context.Background()),
+		"有在飞只读句柄时不得执行受控截断（会与读者争抢，重现 2026-10-05 停摆机制）")
+
+	// ③ 读者关闭后护栏解除。
+	require.NoError(t, reader.Close())
+	require.Equal(t, int64(0), writer.readersInFlight.Load(), "只读句柄关闭后计数必须归还")
+}
+
+// 回归（M2，2026-10-12 修复）：`ApplyScopedCtxRows` 的 `cycleRows` 覆盖必须在调用返回后
+// **恢复**原预算，不得永久钉死该 Store 实例的周期行数上界。
+//
+// 缺陷形态：原实现写 `s.budget.CycleMaxRows = cycleRows` 之后才
+// `defer func(original int){...}(s.budget.CycleMaxRows)` —— Go 在 defer **语句执行时**求值实参，
+// 故 original 取到的是刚写入的 cycleRows，恢复成空操作。该实例的预算被永久钉死在调用方传的
+// 小值上，后续落库步长退化为极小值：配合「未完成不推进水位」表现为持续低吞吐而非报错，
+// 静默性能退化且首启正常（与"二启才死"同构的难查形态）。
+//
+// 转红方式（实测）：把恢复逻辑改回 `defer func(original int){...}(s.budget.CycleMaxRows)`
+// ⇒ 断言②（调用后预算必须复原）立即红。
+func TestApplyScopedCtxRowsRestoresCycleBudget(t *testing.T) {
+	root := t.TempDir()
+	store, err := OpenWithBudget(root+"/ingest.index.db", DefaultCommitBudget())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	before := store.budget.CycleMaxRows
+	require.Positive(t, before, "前置：默认周期预算应为正")
+
+	const small = 16
+	require.NotEqual(t, before, small, "前置：覆盖值必须与默认值不同，否则本用例无判别力")
+
+	// 一次最小调用（空期望集）只为触发覆盖与恢复路径。
+	_, err = store.ApplyScopedCtxRows(context.Background(), State{}, nil, nil, small)
+	require.NoError(t, err)
+
+	// ① 调用期间生效（不能因为"怕改坏"而干脆不覆盖）。
+	//    这里用"调用后复原"间接证明：若从未生效，本断言无从区分；故同时断言调用前的值已被改动过
+	//    的语义由 ② 承载——② 是核心。
+	// ② 核心断言：调用返回后必须复原，不得永久钉死。
+	require.Equal(t, before, store.budget.CycleMaxRows,
+		"cycleRows 覆盖必须在调用返回后复原（否则该实例的周期预算被永久钉死 ⇒ 后续落库步长退化）")
+}

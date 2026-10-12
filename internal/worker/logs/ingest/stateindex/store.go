@@ -340,8 +340,16 @@ type Store struct {
 	ckptTruncate atomic.Int64 // 走"受控 TRUNCATE"点的次数
 	// #67-B：受控截断**默认关闭**（(c)）；开关与残余门一起才允许截断 ✓。
 	controlledTruncate bool
-	readersInFlight    atomic.Int64 // 在飞只读句柄数（OpenReadOnly 开/关 +1/−1 ✓）
-	cycle              uint64
+	// readersInFlight 指向**该库路径上**的在飞只读句柄计数（M1，2026-10-12 修复）。
+	//
+	// 必须是**进程级、按路径共享**的计数器，不能是实例字段：只读句柄由 `OpenReadOnly` 在
+	// **另一个 Store 实例**上创建（该函数 `s := &Store{...}` 新建实例后 `Add(1)`），
+	// 而截断判据读的是**写入用实例**的字段。用实例字段时写实例恒为 0 ⇒
+	// `TryControlledTruncate` 的「无在飞读者才截断」护栏形同不存在，会在导出 JSON /
+	// 事件状态查询持长时只读句柄时执行 `wal_checkpoint(TRUNCATE)` 与读者争抢
+	// —— 正是 #67-A′/#67-B 要消除的 2026-10-05 停摆机制。
+	readersInFlight *atomic.Int64
+	cycle           uint64
 
 	// testCrashHook 仅供测试注入：在一次写入事务**提交之前**、写完全部变更行之后被调用，
 	// 用于在子进程中模拟进程异常中断（os.Exit 或 SIGKILL），验证未提交批次不会残留。
@@ -354,6 +362,26 @@ type Store struct {
 	// 以下屏障仅供迁移回归放行独立写者，分别覆盖预检后与提交单元之间的窗口。
 	testMigrationAfterCheckHook func()
 	testCommitChunkHook         func()
+}
+
+// readersInFlightRegistry 是**进程级**的「库路径 → 在飞只读句柄计数」注册表（M1）。
+//
+// 为什么需要它（而不是实例字段）：只读句柄由 `OpenReadOnly` 在**另一个 Store 实例**上创建，
+// 而截断判据（`TryControlledTruncate`）跑在**写入用实例**上。两者不共享实例字段，
+// 用实例字段会让写实例的计数恒为 0 ⇒ 护栏失效。按路径共享即可让两侧看到同一个数。
+//
+// 键用 `path` 原文（不做 filepath.Clean）：`Open` 与 `OpenReadOnly` 的调用方传的是同一字符串
+// （见 index_store.go / event_status.go 的构造点），保持原样比较即可；条目常驻（进程内库路径
+// 数量有限，且 Store 本身也常驻），不做淘汰以免引入生命周期竞态。
+var readersInFlightRegistry sync.Map // map[string]*atomic.Int64
+
+// readersInFlightFor 返回该库路径共享的在飞只读句柄计数器（不存在则创建）。
+func readersInFlightFor(path string) *atomic.Int64 {
+	if v, ok := readersInFlightRegistry.Load(path); ok {
+		return v.(*atomic.Int64)
+	}
+	v, _ := readersInFlightRegistry.LoadOrStore(path, new(atomic.Int64))
+	return v.(*atomic.Int64)
 }
 
 // Open 打开（必要时创建）索引库：建表、设置 WAL/单写者、并把现有行的指纹读入镜像。
@@ -379,6 +407,7 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 	db.SetMaxIdleConns(1)
 	budget = budget.Normalized()
 	s := &Store{path: path, db: db, mirror: newMirror(), budget: budget, rowBudget: budget.MaxRows,
+		readersInFlight: readersInFlightFor(path),
 		walPruneApplied: make(map[string]uint64)}
 	ctx := context.Background()
 	// journal_mode=WAL + synchronous=NORMAL（spec §2.1）：提交即持久、崩溃可恢复；
@@ -467,7 +496,8 @@ func OpenReadOnly(path string) (*Store, error) {
 		return nil, fmt.Errorf("stateindex: 只读打开索引库失败: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	s := &Store{path: path, db: db, readOnly: true, mirror: newMirror(), budget: DefaultCommitBudget()}
+	s := &Store{path: path, db: db, readOnly: true, mirror: newMirror(), budget: DefaultCommitBudget(),
+		readersInFlight: readersInFlightFor(path)}
 	s.readersInFlight.Add(1) // #67-A′：在飞只读句柄（Close 归还）——checkpoint 能否截断取决于它是否为零 ✓
 	s.rowBudget = s.budget.MaxRows
 	if _, err := db.ExecContext(context.Background(), "PRAGMA query_only=ON"); err != nil {
@@ -904,8 +934,17 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 	}
 	if cycleRows > 0 {
 		// 只覆盖「本次调用的行数上界」，不动配置面（配置面仍由 CommitBudget 表达）。
+		//
+		// **必须先存原值再赋值**（M2，2026-10-12 修复）：此前写成
+		// `s.budget.CycleMaxRows = cycleRows; defer func(original int){...}(s.budget.CycleMaxRows)`，
+		// 而 Go 在 **defer 语句执行时**求值实参 —— 此时字段刚被改成 cycleRows，
+		// 于是 `original` 等于 cycleRows，恢复成空操作 ⇒ 该 Store 实例的周期预算被**永久钉死**在
+		// 调用方传的这个小值上，后续所有落库步长退化为极小值（每周期只推 N 行）。
+		// 配合「未完成不推进水位」的表现是持续低吞吐而非报错：静默性能退化，且首启正常、
+		// 表现滞后（与"二启才死"那类难查形态同构）。
+		original := s.budget.CycleMaxRows
 		s.budget.CycleMaxRows = cycleRows
-		defer func(original int) { s.budget.CycleMaxRows = original }(s.budget.CycleMaxRows)
+		defer func() { s.budget.CycleMaxRows = original }()
 	}
 	scoped := owners != nil
 	owned := make(map[string]struct{}, len(owners))
