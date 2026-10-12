@@ -149,9 +149,13 @@ func BuildArgs(cfg InstanceConfig) ([]string, error) {
 		// 窗口恰好 744h（=31d）返回 200，744h + 10ns / 1µs / 1s 返回 400
 		// `too big time range selected ... cannot exceed -search.maxQueryTimeRange=744h0m0s`
 		// ⇒ VL 判定是**严格大于**（`>`），故"恰好 31d"被接受。
-		// 注意：依赖方（query/vlrange 的 searchMaxWindow、ingest 的 projectionProbeWindow）
+		// 注意：依赖方（query/vlrange 的 searchMaxWindow、ingest 的 projectionProbeSpan）
 		// 恰好取 31d，落在**被接受的一侧**；将来若把 VL 侧上限调小，这些窗口必须同步调小，
 		// 否则探测与合并粗筛会整组失败（重名防护静默失效 / 整组 RANGE_UNAVAILABLE）。
+		// **依赖方必须保证的是「总跨度 ≤ 31d」而不是「回看量 ≤ 31d」**：ingest 的探测窗
+		// 上界因无日期日志行可落在未来而前移到 now+1d，故其起点相应后移（[now-30d, now+1d]）。
+		// 2026-10-12 实测踩过这个坑：上界前移 1 天而起点仍按 now-31d ⇒ 总跨度 32d ⇒
+		// VL 400 ⇒ 「按未占用继续」⇒ 重名防护整条失效。改动探测窗时请一并复核总跨度。
 		"-search.maxConcurrentRequests=16",
 		"-search.maxQueryDuration=10s",
 		"-search.maxQueryTimeRange=31d",

@@ -5696,7 +5696,47 @@ func (m *Manager) dropEventsAlreadyWritten(client *vlsup.Client, source SourceCo
 		}
 		query := fmt.Sprintf("%s AND event_id:in(%s) | fields event_id, canonical_content_hash | limit 20000",
 			filter, strings.Join(ids, ","))
-		params := url.Values{"query": {query}}
+		// **必须显式给时间窗**：不带 start/end 的查询会被 VL 以默认全时段
+		// （[1677-09-21, 2262-04-11]）处理，并被 `-search.maxQueryTimeRange` 以 400 拒绝
+		// （2026-10-08 实测记录见 vlsup/cmdline.go）⇒ 本函数走「证据缺失照写」⇒
+		// 幂等过滤整条失效，且**每次分片都会失败**（identityChunk=500，单源段数十万行即数百次）。
+		// 该幂等要掐掉的正是「同名代次被写两次 ⇒ 该代次条数翻倍」（生产实测 544205×2、
+		// VL 条数/唯一事件 3.45x）——失效后该放大原样复现。
+		//
+		// 窗口按本批事件的**自身时间**取（±1s 裕量）。
+		//
+		// **刻意不夹 `source.UTCDay` 日界**（与写后逐字段校验的做法不同）：校验查询按
+		// `log_source_id + source_generation + projection_generation` 取**整批行集**，越界会把
+		// 邻日批次的日界事件带进结果集而误判 duplicate（故校验面必须夹）；本查询只按
+		// `event_id:in(本批 ids)` 取 hash，越界事件的 event_id 不在本批 ids 内、不可能命中，
+		// 故夹日界无收益。反而有害：重放路径的 `source.UTCDay` 与事件所属日**可以不同**
+		// （`daySourceFor` 正是为此把 UTCDay 设为事件日；实时源则取当天），夹住会把合法的
+		// 历史重放事件排除在窗口外 ⇒ 幂等过滤对它们静默失效（本项要防的形态）。
+		var winStart, winEnd time.Time
+		for _, event := range events[start:end] {
+			when, ok := parseEventTimeUTC(event.EventTimeUTC)
+			if !ok {
+				continue
+			}
+			if winStart.IsZero() || when.Before(winStart) {
+				winStart = when
+			}
+			if winEnd.IsZero() || when.After(winEnd) {
+				winEnd = when
+			}
+		}
+		if winStart.IsZero() {
+			// 本片无可用事件时间：**不给窗口会必然被 VL 拒**（见上），故退化为「跳过本片查询、
+			// 照写」——与「证据缺失照写」同方向（宁可多写不漏），且不发出必然失败的请求。
+			continue
+		}
+		winStart = winStart.Add(-time.Second)
+		winEnd = winEnd.Add(time.Second)
+		params := url.Values{
+			"query": {query},
+			"start": {winStart.UTC().Format(time.RFC3339Nano)},
+			"end":   {winEnd.UTC().Format(time.RFC3339Nano)},
+		}
 		err := client.Stream(context.Background(), "/select/logsql/query", params, func(body io.Reader) error {
 			scanner := bufio.NewScanner(io.LimitReader(body, 32<<20))
 			scanner.Buffer(make([]byte, 64*1024), 8<<20)
@@ -7436,7 +7476,7 @@ const (
 	// projectionProbeTimeout 是单次占用探测的超时。探测只是「避免重名」的保障，不允许把投递卡在
 	// 网络上，故用远小于校验窗口（默认 5 分钟）的短超时。
 	projectionProbeTimeout = 5 * time.Second
-	// projectionProbeWindow 是占用探测的时间窗。
+	// 探测窗取「HOT retention 全期」而非仅近期。
 	//
 	// **2026-10-10 扩窗（本项修复的根因之一，生产铁证）**：原值 3d 让这道防重名守卫对
 	// 「事件日早于 3 天」的重放**结构性失明**——探测按 `_time`（事件时间）过滤，而重放写的
@@ -7447,11 +7487,13 @@ const (
 	//   · 逐字段校验按 `projection_generation:=<同名>` 过滤 ⇒ 每个 event_id 都有多份 ⇒
 	//     `unexpected or duplicate projection event_id`（**确定性**失败）⇒ 永不发布 ⇒
 	//     下一轮再判缺失 ⇒ 无界重发（生产 407 次）。
-	// 实测对照（同一 VL、同一天窗）：3d 窗 `count()=0`（误判未占用）；31d 窗 `count()=2294248`。
+	// 实测对照（同一 VL、同一天窗）：3d 窗 `count()=0`（误判未占用）；满窗 `count()=2294248`。
 	//
-	// 取 31d 的依据：它等于 VL 侧硬上限 `-search.maxQueryTimeRange=31d`（再宽会被 422 拒绝，
-	// 那正是 2026-10-08 那次「探测静默失效」的成因），且 HOT 层 retention=30d ⇒ 这个窗口
+	// 取 31d 的依据：它等于 VL 侧硬上限 `-search.maxQueryTimeRange=31d`（再宽会被 **400**
+	// 拒绝，那正是 2026-10-08 那次「探测静默失效」的成因），且 HOT 层 retention=30d ⇒ 这个窗口
 	// **足以覆盖 HOT 中一切可能造成碰撞的行**（更早的行已被 retention 删除）。
+	// 注意：本常量是**总跨度**上限，窗口两端的构造必须一起守住它（见 projectionProbeSpan
+	// 与 projectionProbeFutureSlack 的说明——上界前移 1 天得以起点后移 1 天为代价）。
 	// 诚实边界：COLD 层 retention=730d，其 31d 以外的同名旧行仍探测不到；那些行既不可查询、
 	// 也会被 COLD 的 retention 逐步清掉，且 COLD 写入走独立客户端（本函数按写路由取客户端），
 	// 因此不构成本次现场形态。此边界记录于此，不假装已覆盖。
@@ -7459,7 +7501,20 @@ const (
 	// 成本：>3d 窗口要读盘（5s 级）。但本探测只在**分配新代次时**发生（每源每天每次重建一次），
 	// 且已并入 `verifyLimiter` 天花板；与之对照的是「同名反复重写 57 万条 × N 次」的 VL 体积
 	// （生产已累积数百 GB）。这里明确选择正确性。
-	projectionProbeWindow = 31 * 24 * time.Hour
+	// projectionProbeSpan 是探测窗的**总跨度上限**（不是「起点回看量」）。
+	//
+	// **必须 ≤ VL 侧 `-search.maxQueryTimeRange`（本仓启的是 31d），否则整条重名防护静默失效。**
+	// VL 按**区间长度**判定且比较符是**严格大于**：实测 744h 返回 200、744h+10ns 返回 400
+	// `too big time range selected`（见 vlsup/cmdline.go 的实测记录与不变式注释）。
+	// 一旦超限，`projectionGenerationUsed` 直接报错 ⇒ `probeProjectionGenerationWithClient`
+	// 走「探测失败按未占用继续」⇒ VL 侧占用判据被整条跳过，只剩进程内 CAS；
+	// 状态回滚/重置/迁移让计数器回退时，新名即撞上上一生命周期的同名行 ⇒
+	// `unexpected or duplicate projection event_id` ⇒ 永不发布 ⇒ 采集停摆。
+	// 这正是 2026-10-08 那次事故的成因（探测被 400 拒绝），也是 FR-496 的停摆形态。
+	//
+	// 因此窗口两端**必须一起**受本常量约束：`end - start ≤ projectionProbeSpan`。
+	// 取 31d 的依据见下（等于 VL 硬上限，落在被接受的一侧）。
+	projectionProbeSpan = 31 * 24 * time.Hour
 	// projectionProbeFutureSlack 把探测窗的上界从 now 再向后放一天。
 	//
 	// **为什么上界不能取 now（2026-10-12 修复）**：日志行多为「只有时刻、没有日期」的形态
@@ -7478,8 +7533,10 @@ const (
 	//
 	// 取 1 天而非更多：applyClock 把时刻约束在 base 的 ±12h 内，而 base 在生产不晚于
 	// now，故事件时间最多超前 now 约 12h；1 天覆盖该上界并留足边界裕量。
-	// 代价：窗口由 [now-31d, now] 变为 [now-31d, now+1d]，未放宽 VL 的 31d 总跨度上限
-	// （`-search.maxQueryTimeRange` 按区间长度判定），故不会重新引入 422 拒绝。
+	//
+	// **代价与守恒**：上界前移 1 天，起点就**必须**相应后移 1 天（见下表），
+	// 以守住总跨度 ≤ projectionProbeSpan —— 上界前移而不收起点会得到 32d > 31d，
+	// 触发上面描述的整条防护失效。故实际窗口是 [now-30d, now+1d]，总跨度恰 31d。
 	projectionProbeFutureSlack = 24 * time.Hour
 )
 
@@ -7709,7 +7766,11 @@ func (m *Manager) tryReserveKnownGeneration(key, candidate, owner string, token 
 		// 只读诊断：缓存已确认未占用 ⇒ 直接回答（不登记预留）。
 		return false, true
 	}
-	m.reserveGenerationLockedNoLock(key, candidate, owner, token)
+	if !m.reserveGenerationLockedNoLock(key, candidate, owner, token) {
+		// 上限拒绝：**不得**报「预留成功」——否则调用方以为已占住该名，而表里没有登记，
+		// 另一条并发投递可占住同一个名字（撞名）。按「已被预留」交给调用方进位重选。
+		return true, false
+	}
 	return false, true
 }
 
@@ -7729,28 +7790,46 @@ func (m *Manager) claimGenerationLocked(key, generation, owner string, token uin
 	if _, busy := m.generationReserved[key][generation]; busy {
 		return false
 	}
-	m.reserveGenerationLockedNoLock(key, generation, owner, token)
-	return true
+	// 登记可能因上限被拒（返回 false）⇒ 同样按「占用」处理，由调用方进位重选。
+	// **不得**在此忽略返回值：那会让调用方以为已占住该名，而表里其实没有 —— 于是另一条
+	// 并发投递可以占住同一个名字（撞名，正是本机制要消灭的形态）。
+	return m.reserveGenerationLockedNoLock(key, generation, owner, token)
 }
 
 // reserveGenerationLockedNoLock 是预留登记的实现（调用方须持 m.mu）。
 //
-// 有界性：每源同时最多 maxProjectionReservedPerSource 条；越界即整组清空
-// （退化为「下次重新实探」，保守方向——绝不让异常路径把内存拖大）。
-func (m *Manager) reserveGenerationLockedNoLock(key, generation, owner string, token uint64) {
+// 有界性：每源同时最多 maxProjectionReservedPerSource 条。越界时**拒绝登记**（返回 false，
+// 调用方按「已被预留」进位重选），**绝不整组清空**。
+//
+// **为什么不能整组清空（2026-10-12 复审订正）**：本函数原先在越界时把整张表换成空 map，
+// 注释称其为「退化为下次重新实探，保守方向」——**该论证是错的**。表里除本次候选之外，
+// 还有**其它在飞写入者尚未释放**的预留：清空后它们的 release 按 token 找不到条目（静默无效），
+// 而**下一条同源投递会看到该名「未预留」**；实探 VL 又必然报「未占用」（同伴还没落盘），
+// 于是 claimGenerationLocked 成功 ⇒ **两条面拿到同一个名字各写一份**——正是本机制要消灭的撞名。
+// 实探对「同瞬尚未落地」天然失明（见 probeProjectionGenerationWithClient 的说明），
+// 所以「退化为重新实探」并不保守，而是退回缺陷本身。
+// 拒绝登记则相反：上限只影响**本次取名**（退化为进位重选，下一轮必成功），
+// 既有在飞预留的语义完好——这才是真正的保守方向。
+// 上限本身只是异常路径的内存兜底（正常同时至多一两条），故拒绝不会造成实际饥饿。
+func (m *Manager) reserveGenerationLockedNoLock(key, generation, owner string, token uint64) bool {
 	if generation == "" {
-		return
+		return false
 	}
 	if m.generationReserved == nil {
 		m.generationReserved = map[string]map[string]uint64{}
 	}
 	reserved := m.generationReserved[key]
-	if reserved == nil || len(reserved) >= maxProjectionReservedPerSource {
+	if reserved == nil {
 		reserved = map[string]uint64{}
 		m.generationReserved[key] = reserved
 	}
+	if len(reserved) >= maxProjectionReservedPerSource {
+		// 已到上限：拒绝本次登记，由调用方进位重选。**不得清空**（见上方说明）。
+		return false
+	}
 	reserved[generation] = token
 	_ = owner // owner 仅供调用方日志使用；表内只存所有权令牌（见 generationReservation）
+	return true
 }
 
 // releaseProjectionGeneration 释放一次预留（写入尝试结束——**成功或失败都必须释放**）。
@@ -7881,24 +7960,28 @@ func (m *Manager) projectionGenerationUsed(ctx context.Context, client *vlsup.Cl
 	if client == nil {
 		return false, nil
 	}
-	// 选择器与写入/校验同口径（源 + 来源代次），窗口显式取**近期**（见 projectionProbeWindow）：
+	// 选择器与写入/校验同口径（源 + 来源代次），窗口显式取**近期**（见 projectionProbeSpan）：
 	// 同一名字的旧行会让「整窗重发」的校验失败，故占用判定要覆盖重放可能触达的近期数据。
 	//
 	// 2026-10-08 修复：此前不带 start/end，VL 以默认全时段（[1677-09-21, 2262-04-11]）
 	// 处理并被 `-search.maxQueryTimeRange` 以 400 拒绝 → 「按未占用继续」→ 重名
 	// 防护静默失效（生产日志可查）。显式有界后探测恢复有效，且不再依赖 VL 默认值。
-	// sort 只为让「确已占用」走最新分区早停（实测 0.01s 级）；「未占用」需扫全窗口，
-	// 窗口本身已按内存分区边界取 3d。
+	// sort 只为让「确已占用」走最新分区早停（实测 0.01s 级）；「未占用」需扫全窗口。
 	selector := "projection_generation:=" + strconv.Quote(generation) +
 		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
 		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
 	now := time.Now().UTC()
-	// 上界按 projectionProbeFutureSlack 后移：无日期日志行的事件时间可合法落在未来，
-	// 取 now 会让这些行落入探测盲区（详见该常量的说明）。
+	// 窗口两端一起受 projectionProbeSpan（总跨度上限）约束：
+	//   end   = now + slack（覆盖可落在未来的无日期行）
+	//   start = end - span（由 end **反推**，故总跨度恒 ≤ span，与 slack 取值无关）
+	// 由 end 反推而非用 now-span 是刻意的：后者会在 slack>0 时把总跨度撑到 span+slack
+	// （实测踩过：31d+1d=32d > VL 上限 ⇒ 探测被 400 拒绝 ⇒ 重名防护整条失效）。
+	probeEnd := now.Add(projectionProbeFutureSlack)
+	probeStart := probeEnd.Add(-projectionProbeSpan)
 	params := url.Values{
 		"query": {selector + " | fields _time | sort by (_time desc) | limit 1"},
-		"start": {now.Add(-projectionProbeWindow).Format(time.RFC3339Nano)},
-		"end":   {now.Add(projectionProbeFutureSlack).Format(time.RFC3339Nano)},
+		"start": {probeStart.Format(time.RFC3339Nano)},
+		"end":   {probeEnd.Format(time.RFC3339Nano)},
 	}
 	// Q3（2026-10-03 现场 1364/min）：**代次占用探测也是投影查询** ✗ —— 它发生在每次取新代次时
 	// （重放的每一天、每个源各一次），此前**完全没走天花板闸** ✓。现在并入同一 limiter：

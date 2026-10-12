@@ -99,6 +99,27 @@ type projectionVLFixture struct {
 	writes [][]byte
 	// probes 记录「代次占用探测」查询原文（`| fields _time | limit 1`，复审 P2-11 回归的读数）。
 	probes []string
+	// probeSpans 记录每次代次占用探测的**窗口跨度**（end−start），用于「总跨度不得越过 VL 硬上限」
+	// 的回归（见 probe_window_test.go）。夹具此前只按 start/end 过滤行、从不校验跨度 ⇒
+	// 31d 与 32d 在用例里完全等价，这正是 2026-10-12 那次「上界前移 1 天致总跨度 32d」能溜过
+	// 全部既有用例的原因。
+	probeSpans []time.Duration
+	// queryWindows 记录**每一条** `/select/logsql/query` 请求的时间窗（缺失记为 zero），
+	// 用于「任何 VL 查询都必须显式带时间窗」的回归（见 probe_window_test.go）。
+	//
+	// 为什么要文件级而非只盯某一处：**无窗口查询会被 VL 以 400 拒绝**（默认全时段超
+	// `-search.maxQueryTimeRange`），而该遗漏在本仓已发生三次（2026-09-28 校验查询、
+	// 2026-10-08 探测查询、以及本次 dropEventsAlreadyWritten 的幂等查询）。每次后果都是
+	// 「请求恒失败 + 上层静默降级」，且单测夹具只按窗口过滤行、对缺失窗口一律放行 ⇒ 结构性不可见。
+	queryWindows []queryWindowRecord
+}
+
+// queryWindowRecord 是一次 VL 查询的窗口读数（HasWindow=false 表示该请求未带 start/end）。
+type queryWindowRecord struct {
+	Query     string
+	Start     time.Time
+	End       time.Time
+	HasWindow bool
 }
 
 func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -120,8 +141,23 @@ func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			f.mu.Unlock()
 		}
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		from, _ := time.Parse(time.RFC3339Nano, r.URL.Query().Get("start"))
-		to, _ := time.Parse(time.RFC3339Nano, r.URL.Query().Get("end"))
+		rawStart := r.URL.Query().Get("start")
+		rawEnd := r.URL.Query().Get("end")
+		from, _ := time.Parse(time.RFC3339Nano, rawStart)
+		to, _ := time.Parse(time.RFC3339Nano, rawEnd)
+		f.mu.Lock()
+		f.queryWindows = append(f.queryWindows, queryWindowRecord{
+			Query:     selector,
+			Start:     from,
+			End:       to,
+			HasWindow: rawStart != "" && rawEnd != "",
+		})
+		f.mu.Unlock()
+		if !from.IsZero() && !to.IsZero() {
+			f.mu.Lock()
+			f.probeSpans = append(f.probeSpans, to.Sub(from))
+			f.mu.Unlock()
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		count := 0
