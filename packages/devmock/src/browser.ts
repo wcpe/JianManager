@@ -10,7 +10,7 @@ import { isMockRequestLogEnabled, setMockRequestLogEnabled } from './runtime-con
 export const worker = setupWorker(...handlers, terminalWsHandler)
 
 /**
- * 起 worker（FR-496 阶段 6 补丁）。
+ * 起 worker（FR-502 阶段 6 补丁）。
  *
  * 默认 **quiet**：MSW 每拦一个请求就往控制台打一组
  * 「Request / Handler / Response」日志，且响应体整段进 console——首屏几十个请求直接刷穿控制台，
@@ -23,7 +23,7 @@ export async function startMockWorker(): Promise<void> {
 }
 
 /**
- * 运行时切换 MSW 请求日志（FR-496 阶段 6 补丁）。
+ * 运行时切换 MSW 请求日志（FR-502 阶段 6 补丁）。
  *
  * MSW 只在 `start()` 读一次 `quiet`（其内部把 quiet 塞进网络层的 resolutionContext），
  * 没有运行时开关，所以这里只能 `stop()` → `start()` 重配一次网络层。窗口期内（毫秒级）
