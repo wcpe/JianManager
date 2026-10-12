@@ -1,13 +1,18 @@
 package router
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,11 +36,315 @@ var testLogCoord *logcoord.Coordinator
 type LogFederationHandler struct {
 	coord *logcoord.Coordinator
 	authz *service.AuthzService
+	// 面板聚合类（stats/facets）的同参秒级缓存：这两条查询同样打满 VL 并发槽，
+	// 页面加载时与主列表互挤（实测 5.7–8.7s ✗）⇒ 命中即免扇出。键含授权主体/scope ⇒
+	// 跨主体绝不命中 ✗；导出/校验路径不经这两个 handler ⇒ 天然旁路 ✗。
+	aggCache *fedTTLCache
+
+	// 热集与预热失败频控状态（**每 handler 一份**，见下）。
+	// 原为包级 var，而 noteHotInstance 在 Search 请求路径上写入 ⇒ 同进程多 handler
+	// （测试并行、未来多租户）会互相串扰：A 的查询会改变 B 的预热窗口选择，
+	// 一个 handler 的失败频控会吞掉另一个的日志。挂到实例上与 aggCache 的既有写法一致 ✓。
+	warmHotMu sync.Mutex
+	warmHot   map[uint]time.Time
+
+	warmFailMu   sync.Mutex
+	warmFailOnce map[string]time.Time
 }
 
-// NewLogFederationHandler 创建联邦查询处理器。
+// fedTTLCache 极简同参 TTL 缓存（只读复用，返回副本字节）。
+type fedTTLCache struct {
+	mu sync.Mutex
+	m  map[string]fedTTLEntry
+}
+
+type fedTTLEntry struct {
+	body []byte
+	exp  time.Time
+}
+
+// fedAggTTL 聚合类短档 TTL：与 Coordinator 侧 pending 档同量级（新日志最多晚 TTL 秒 ✗）。
+const fedAggTTL = 4 * time.Second
+
+func (c *fedTTLCache) get(key string) ([]byte, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.m[key]
+	if !ok || time.Now().After(e.exp) {
+		if ok {
+			delete(c.m, key)
+		}
+		return nil, false
+	}
+	return e.body, true
+}
+
+func (c *fedTTLCache) put(key string, body []byte) {
+	if c == nil || len(body) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = make(map[string]fedTTLEntry)
+	}
+	if len(c.m) > 512 {
+		for k := range c.m {
+			delete(c.m, k)
+		}
+	}
+	c.m[key] = fedTTLEntry{body: body, exp: time.Now().Add(fedAggTTL)}
+}
+
+// fedAggPagingParams 聚合类请求中**对聚合结果完全无影响**的参数（分页标识），不入缓存键。
+//
+//   - cursor：Stats/Facets 不做分页，q.Cursor 在两条路径上从未被读取（Stats/Facets 也不校验
+//     它）⇒ 纯粹是分页标识，入键只会让"同参不同页"各自成键；
+//   - page/pageSize：从未被 buildQuery 读取（前端分页参数，服务端只认 limit）⇒ 同理。
+//
+// 为什么**不**把 viewId 一并排除（与"分页标识"的直觉相反）：它虽不参与聚合语义，但
+// resolveForQuery 会用它做视图查找与复用校验（GetView → authorizeViewReuse），并据此锁定
+// 目标集合快照；而本 handler 的缓存读取发生在 coord.Stats/Facets **之前** ⇒ 若把它移出键，
+// 一个已失效/伪造的 viewId 会被缓存命中直接放行（跳过 400/403 与目标集合锁定）✗。
+// 其余参数一律入键（safe-by-default ✓）：将来新增的结果相关参数（groupBy/timeBucket/
+// metricField/dimensions/dimensionLimit/keyword/level/source/instanceId/nodeId/limit…）
+// 不会因"忘了进白名单"而与旧条目串味 ✗。
+var fedAggPagingParams = map[string]bool{"cursor": true, "page": true, "pageSize": true}
+
+// fedAggCacheKey 聚合类同参键＝授权主体/scope/时间片/过滤/onlineOnly + **语义查询串**。
+// 语义查询串＝原始查询串去掉分页标识（fedAggPagingParams）后按参数名排序重编码 ⇒
+// 「结果相关参数不同绝不命中 ✓」与「仅分页标识不同仍命中同一聚合条目 ✓」同时成立。
+func fedAggCacheKey(q logcoord.Query, c *gin.Context) string {
+	return strings.Join([]string{
+		q.PrincipalKey,
+		q.PermissionScope,
+		q.FromUTC,
+		q.ToUTC,
+		fmt.Sprint(q.OnlineOnly),
+		fedAggSemanticQuery(c),
+	}, "\x1f")
+}
+
+// fedAggSemanticQuery 把原始查询串归一为「语义参数」的稳定表示（去掉分页标识 + 参数名/取值排序）。
+// 解析失败时退回原始串：宁可少命中，也不能把"解析不了"当成"无参数"而让不同请求串味 ✗。
+func fedAggSemanticQuery(c *gin.Context) string {
+	raw := c.Request.URL.RawQuery
+	if raw == "" {
+		return ""
+	}
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return raw
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		if fedAggPagingParams[name] {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		vals := append([]string(nil), values[name]...)
+		sort.Strings(vals)
+		for _, v := range vals {
+			b.WriteString(name)
+			b.WriteByte('=')
+			b.WriteString(v)
+			b.WriteByte('\x1e')
+		}
+	}
+	return b.String()
+}
+
+// 预热热门窗（fedWarmWindows 全覆盖 × 平台级 ✓）：与用户走同一条 Search 代码路径、结果写进同一
+// TTL 缓存，唯一差别是"发起者身份"——缓存键不含身份段（键＝授权集合摘要 ✓，论证见
+// logcoord.searchCacheKey），故**同一授权集合**的真实用户查询能命中预热条目 ✓。
+//
+// 命中的附加前提（勿读成"任何同名窗口都命中"）：Coordinator 侧 lookupSearchCache 还要求**精确
+// from/to 相等**（防旧窗口冒充新窗口的排序前缀 ✗，见 TestWarmSearchExactWindowHitsButShiftedBucketsRefetch）。
+// 因此当前**只有 all 预设**（两侧都不带 from/to ⇒ 均为空串）能稳定命中；15m/1h/24h/7d 的 from/to
+// 由浏览器按毫秒生成、预热按秒生成（RFC3339 无小数秒），字符串几乎不可能相等 ⇒ 这些滚动窗的预热
+// 命中收益≈0（仍会在 Worker 侧起到投影/索引预热作用）。这是既有守卫的取舍，若要恢复滚动窗命中，
+// 须同时改该守卫与窗口重绑用例，属独立议题 ✗。
+//
+// 失败只做频控日志，绝不影响请求路径 ✗。
+//
+// 节奏（按窗口定间隔 ✗✓）：24h 冷扫本身要 20–40s ⇒ 若与 15m 同用短间隔，等于**持续占满 VL 的
+// 并发槽**（实测第 1 次 24h 被掐在 39.99s ✗）。故：15m⇒25s、1h⇒150s、24h⇒12min；
+// 全局 20s tick 串行调度（同一时刻只有一个预热在飞 ✓），单次 25s 超时到点即放弃（不堆叠 ✗，
+// ctx 取消会让 VL 立刻放槽 ✓）。
+//
+// 单实例维度（零配置 ✓）：记录最近被真实查询过的实例（热集），对其 15m/1h 窗预热 ⇒
+// 用户切到"刚看过的实例"时直接命中，无需任何配置项 ✗；热集只保留最近 K 个、随时间淘汰 ✗。
+const (
+	fedWarmTick    = 20 * time.Second
+	fedWarmTimeout = 25 * time.Second
+	fedWarmHotKeep = 3
+	fedWarmHotTTL  = 30 * time.Minute
+	// fedWarmPageLimit 必须与前端 LogsPage 的 PAGE_SIZE（limit 参数）及 logcoord
+	// 缓存的 Budget.Limit 键段一致：此前预热用 50 而用户发 100，键不同 ⇒ 预热条目
+	// 永远不命中（2026-10-08 面板来回切换恒冷复盘）。
+	fedWarmPageLimit = 100
+)
+
+type fedWarmWindow struct {
+	win   time.Duration
+	every time.Duration
+}
+
+// fedWarmWindows 覆盖前端全部时间预设（logs-filters.ts: all/15m/1h/24h/7d）。
+// every 与缓存 TTL 必须满足「实际轮间隔 < TTL」才不至于留桶首缝隙：调度 tick 为
+// 20s，every=30s 的实际间隔恒为 40s（< 长档 TTL 50s），every=20s 即每 tick 一轮
+// （15m 短档 TTL 25s）。配合 WarmSearch 预写下一桶，每条自然分钟从第 0 秒起即可
+// 命中。win=0 表示无界（all，不传 from/to）。
+var fedWarmWindows = []fedWarmWindow{
+	{win: 15 * time.Minute, every: 20 * time.Second},
+	{win: time.Hour, every: 30 * time.Second},
+	{win: 24 * time.Hour, every: 30 * time.Second},
+	{win: 7 * 24 * time.Hour, every: 30 * time.Second},
+	{win: 0, every: 30 * time.Second},
+}
+
+// 热集：最近查询过的单实例（按最近使用排序，最多 fedWarmHotKeep 个），状态在 handler 字段上。
+
+// noteHotInstance 请求路径调用（常量开销 ✓）：记录单实例查询，供预热器选择窗口。
+func (h *LogFederationHandler) noteHotInstance(id uint) {
+	if h == nil || id == 0 {
+		return
+	}
+	h.warmHotMu.Lock()
+	if h.warmHot == nil {
+		h.warmHot = make(map[uint]time.Time)
+	}
+	h.warmHot[id] = time.Now()
+	h.warmHotMu.Unlock()
+}
+
+// hotInstances 返回最近使用、未过期的实例 id（最多 K 个 ✓）。
+func (h *LogFederationHandler) hotInstances() []uint {
+	if h == nil {
+		return nil
+	}
+	h.warmHotMu.Lock()
+	defer h.warmHotMu.Unlock()
+	type pair struct {
+		id uint
+		at time.Time
+	}
+	all := make([]pair, 0, len(h.warmHot))
+	for id, at := range h.warmHot {
+		if time.Since(at) <= fedWarmHotTTL {
+			all = append(all, pair{id, at})
+		} else {
+			delete(h.warmHot, id)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].at.After(all[j].at) })
+	if len(all) > fedWarmHotKeep {
+		all = all[:fedWarmHotKeep]
+	}
+	ids := make([]uint, 0, len(all))
+	for _, p := range all {
+		ids = append(ids, p.id)
+	}
+	return ids
+}
+
+func (h *LogFederationHandler) startWarmLoop() {
+	if h == nil || h.coord == nil {
+		return
+	}
+	// 测试路径（经 testLogCoord 注入的协调器/假 dialer）不启预热：避免后台并发打假客户端造成
+	// 数据竞争与用例间干扰 ✗（生产装配不设 testLogCoord ⇒ 正常预热 ✓）。
+	if testLogCoord != nil {
+		return
+	}
+	go func() {
+		defer func() { _ = recover() }()
+		ticker := time.NewTicker(fedWarmTick)
+		defer ticker.Stop()
+		last := map[time.Duration]time.Time{}
+		lastHot := map[time.Duration]time.Time{}
+		for {
+			now := time.Now()
+			for _, w := range fedWarmWindows {
+				// 串行＋按窗口间隔：到点的窗口才跑，且同一时刻至多一个在飞 ✓
+				if t, ok := last[w.win]; !ok || now.Sub(t) >= w.every {
+					last[w.win] = now
+					h.warmWindow(now.UTC(), w.win, nil)
+				}
+			}
+			// 热集（最近查询过的单实例 ⇒ 键为 targets digest，预热可被真实用户命中 ✓）：
+			// 只预热 15m/1h 两窗（24h 单实例成本高、不常驻 ✗），间隔复用同表 ✓。
+			for _, id := range h.hotInstances() {
+				for _, w := range fedWarmWindows[:2] {
+					key := w.win
+					if t, ok := lastHot[key]; !ok || time.Since(t) >= w.every {
+						lastHot[key] = time.Now()
+						h.warmWindow(now.UTC(), w.win, []string{fmt.Sprintf("inst:%d", id)})
+					}
+				}
+			}
+			<-ticker.C
+		}
+	}()
+}
+
+// warmWindow 单窗口预热（targets 为空 ⇒ 平台级 "*" ✓；否则为单实例集 ✓；
+// win=0 ⇒ 无界 all 预设，不传 from/to，与前端 timeRangeToParams 逐字一致）；
+// 使用 WarmSearch（同时预写下一分钟桶，消除整分桶键的桶首缝隙）；
+// 任何 panic/错误都被吞掉并频控记录（每窗口每分钟最多一条 ✗）。
+func (h *LogFederationHandler) warmWindow(now time.Time, win time.Duration, targets []string) {
+	defer func() { _ = recover() }()
+	ctx, cancel := context.WithTimeout(context.Background(), fedWarmTimeout)
+	defer cancel()
+	if len(targets) == 0 {
+		targets = []string{"*"}
+	}
+	q := logcoord.Query{
+		AuthorizedTargetIDs: targets,
+		// 身份段是**显式占位**：预热器没有真实用户身份，而缓存键不含身份段
+		// （键＝授权集合摘要 ⇒ 预热条目可被同授权集合的真实用户命中 ✓，见
+		// logcoord.searchCacheKey 的论证）。占位值另有两个作用：让预热创建的 View
+		// 永不满足 authorizeViewReuse 的主体校验（不可被复用 ✗），并在排查时
+		// 一眼看出该 View 来自预热而非真实请求 ✓。
+		PrincipalKey:    "warm",
+		PermissionScope: "warm",
+		Budget:          logcoord.QueryBudget{Limit: fedWarmPageLimit},
+		Fast:            true,
+	}
+	if win > 0 {
+		q.FromUTC = now.Add(-win).Format(time.RFC3339)
+		q.ToUTC = now.Format(time.RFC3339)
+	}
+	if _, err := h.coord.WarmSearch(ctx, q); err != nil {
+		key := win.String()
+		h.warmFailMu.Lock()
+		if h.warmFailOnce == nil {
+			h.warmFailOnce = make(map[string]time.Time)
+		}
+		last, ok := h.warmFailOnce[key]
+		if !ok || time.Since(last) > time.Minute {
+			h.warmFailOnce[key] = time.Now()
+		}
+		h.warmFailMu.Unlock()
+		if !ok || time.Since(last) > time.Minute {
+			slog.Debug("日志联邦预热失败（频控）", "window", key, "error", err)
+		}
+	}
+}
+
+// NewLogFederationHandler 创建联邦查询处理器（并启动热门窗预热器 ✓）。
 func NewLogFederationHandler(coord *logcoord.Coordinator, authz *service.AuthzService) *LogFederationHandler {
-	return &LogFederationHandler{coord: coord, authz: authz}
+	h := &LogFederationHandler{coord: coord, authz: authz, aggCache: &fedTTLCache{},
+		warmHot: make(map[uint]time.Time), warmFailOnce: make(map[string]time.Time)}
+	h.startWarmLoop()
+	return h
 }
 
 // RegisterRoutes 注册联邦查询路由（挂在 log.read 权限组下）。
@@ -61,6 +370,12 @@ func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 首屏快路径（Query.Fast）默认开启：分页/首屏只取当页所需（有界时间片＋limit），
+	// 逐目标完整覆盖校验后置为 Coverage.Pending（该字段独立呈现、**绝不入 notes** ✗），
+	// 完整校验留给导出/显式全量（其 eager 语义与下方导出闸判定一字不动 ✗）。
+	// 2026-10-07 复盘：上次默认开启引发裸查询 409 VIEW_STALE，根因是「前端旧 viewId 复用」
+	// ——已由 d5363a60（viewId 生命周期）修复，且本带 planner 空视图守卫；另有安全带回滚兜底。
+	q.Fast = true
 	resp, err := h.coord.Search(c.Request.Context(), q)
 	if err != nil {
 		writeFederationError(c, err)
@@ -77,7 +392,7 @@ func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 		strings.EqualFold(string(resp.Quality.DuplicateQuality), "conflict") {
 		notes = append(notes, "export_incomplete")
 	}
-	c.JSON(http.StatusOK, gin.H{
+	body := gin.H{
 		"ok":          true,
 		"sourceTag":   "federated",
 		"items":       resp.Items,
@@ -88,7 +403,11 @@ func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 		"budget_cut":  resp.BudgetCut,
 		"next_cursor": resp.NextCursor,
 		"notes":       notes,
-	})
+	}
+	if len(resp.IngestPositionGaps) > 0 {
+		body["ingest_position_gaps"] = resp.IngestPositionGaps
+	}
+	c.JSON(http.StatusOK, body)
 }
 
 func instanceTargetID(id uint) string { return fmt.Sprintf("inst:%d", id) }
@@ -341,6 +660,20 @@ func (h *LogFederationHandler) Search(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 首屏/翻页默认走快路径（分页优先）：只取当页所需，完整覆盖校验后置为 Coverage.Pending
+	// （独立呈现、绝不入 notes ✗）。前提已具备：快路径现容忍"固定条件变化"的 view 复用
+	// （改为按当前条件重建视图 ✓，授权主体/覆盖校验仍严守 ✗ —— 见 resolve_fast.go）。
+	// 导出（Export，下方 L432）不置位 ⇒ 导出闸与 eager 校验语义一字不动 ✗。
+	q.Fast = true
+	// 热集登记（零配置 ✓）：FacadeSearch 是面板主路径 ⇒ 在此记录单实例查询
+	//（键已改为 targets digest ⇒ 热集预热条目可被真实用户命中 ✓）。
+	for _, tid := range q.AuthorizedTargetIDs {
+		if raw := strings.TrimPrefix(tid, "inst:"); raw != tid {
+			if id, err := strconv.ParseUint(raw, 10, 64); err == nil {
+				h.noteHotInstance(uint(id))
+			}
+		}
+	}
 	resp, err := h.coord.Search(c.Request.Context(), q)
 	if err != nil {
 		writeFederationError(c, err)
@@ -388,9 +721,21 @@ func (h *LogFederationHandler) Stats(c *gin.Context) {
 		TimeBucket:  c.Query("timeBucket"),
 		MetricField: c.Query("metricField"),
 	}
+	// 同参 TTL：命中即直接回放（面板"stats 延后加载"时仍可能重复取数 ✓）；
+	// 冷未命中的真实耗时如实保留（VL 扫描成本 ✗），不做任何伪造 ✓。
+	key := "s\x1f" + fedAggCacheKey(q, c)
+	if body, ok := h.aggCache.get(key); ok {
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
 	resp, err := h.coord.Stats(c.Request.Context(), sq)
 	if err != nil {
 		writeFederationError(c, err)
+		return
+	}
+	if body, mErr := json.Marshal(resp); mErr == nil {
+		h.aggCache.put(key, body)
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -411,9 +756,20 @@ func (h *LogFederationHandler) Facets(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "dimensions 不能为空"})
 		return
 	}
+	// 同参 TTL：与 Stats 同口径（键含主体/scope/RawQuery ✓），命中回放、冷查如实计耗时 ✓。
+	key := "f\x1f" + fedAggCacheKey(q, c)
+	if body, ok := h.aggCache.get(key); ok {
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
 	resp, err := h.coord.Facets(c.Request.Context(), fq)
 	if err != nil {
 		writeFederationError(c, err)
+		return
+	}
+	if body, mErr := json.Marshal(resp); mErr == nil {
+		h.aggCache.put(key, body)
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 		return
 	}
 	c.JSON(http.StatusOK, resp)
@@ -445,6 +801,8 @@ func (h *LogFederationHandler) Export(c *gin.Context) {
 			)
 		}
 		// 不返回 Artifact 字节：缺口/截断/超预算/质量未决不交付成功附件。
+		// limits 是「本次实际采用的上限」——前端据此把笼统的「预算超了」说成
+		// 「超过 N 行上限，请缩小时间范围或调大 log_export.max_rows」。
 		c.JSON(http.StatusOK, gin.H{
 			"view":               res.View,
 			"coverage":           res.Coverage,
@@ -453,6 +811,7 @@ func (h *LogFederationHandler) Export(c *gin.Context) {
 			"incomplete_reasons": dedupeFederationReasons(reasons),
 			"budget_exceeded":    res.BudgetExceeded,
 			"cut":                res.Cut,
+			"limits":             res.Limits,
 			"artifact":           nil,
 		})
 		return

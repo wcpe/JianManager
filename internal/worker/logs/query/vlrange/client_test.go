@@ -154,6 +154,26 @@ func TestClientSearchFetchesLookaheadBeforeDeclaringExhausted(t *testing.T) {
 	require.Equal(t, "2", limit, "first page needs a lookahead row to produce a cursor")
 }
 
+// 达到查询 top-K 行数时仍可能存在更旧数据，不能把该页标成已耗尽。
+func TestClientDoesNotDeclareExhaustedAtRowLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"_time":"2026-09-22T01:02:04Z","_msg":"newer","event_id":"e2"}
+{"_time":"2026-09-22T01:02:03Z","_msg":"older","event_id":"e1"}
+`))
+	}))
+	defer srv.Close()
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+	res, err := client.Search(context.Background(), query.AuthoritativeRange{Key: queryKey()}, query.RangeQuery{Budget: query.Budget{Limit: 1}})
+	require.NoError(t, err)
+	require.False(t, res.Exhausted)
+	// 正常分页开放枚举，不等价于扫描预算不足；CP 依靠这一差别保留正常游标。
+	require.NotContains(t, res.CoverageReasons, query.ReasonBudgetExceeded)
+	require.Equal(t, query.StatsExact, res.StatsQuality)
+}
+
 func TestClientStatsConstrainInputToClosedVisiblePrefix(t *testing.T) {
 	var selector string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

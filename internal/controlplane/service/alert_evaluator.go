@@ -19,7 +19,7 @@ const (
 	// onlineThreshold 节点被认为是"在线"的心跳阈值。
 	onlineThreshold = 90 * time.Second
 
-	// alertMetricFreshWindow 实例级/饱和度阈值取"最新样本"的新鲜窗口，避免陈样本误判为当前值。
+	// alertMetricFreshWindow 时序阈值取"最新样本"的新鲜窗口，避免陈样本误判为当前值。
 	alertMetricFreshWindow = 5 * time.Minute
 
 	// baselineDefaultWindowSec 动态基线默认窗口（秒）。
@@ -158,6 +158,21 @@ func (e *AlertEvaluator) evaluateNodeMetricRule(rule *model.AlertRule, nodes []m
 			continue
 		}
 		value := getNodeMetric(node, rule.Metric)
+		// iowait 不在节点快照中；沿既有别名和 UUID 从时序库取近期百分比样本。
+		if metricKey, ok := resolveMetricKey("node", rule.Metric); ok && metricKey == model.MetricNodeIOWait {
+			if e.metrics == nil {
+				continue
+			}
+			sample, err := e.metrics.LatestValue(model.MetricScopeNode, node.UUID, "", metricKey, time.Now().UTC().Add(-alertMetricFreshWindow))
+			if err != nil {
+				slog.Warn("告警评估：查询节点指标失败", "rule", rule.Name, "node", node.Name, "error", err)
+				continue
+			}
+			if sample == nil {
+				continue // 无近期样本，既不触发也不伪造恢复。
+			}
+			value = *sample
+		}
 		if value < 0 {
 			continue // 不支持的指标
 		}

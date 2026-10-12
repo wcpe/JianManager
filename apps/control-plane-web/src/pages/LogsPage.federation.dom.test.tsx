@@ -9,7 +9,10 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { BrowserRouter } from 'react-router'
+import { queryClient } from '@/lib/query-client'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
@@ -318,20 +321,24 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 
 	it('联邦 next_cursor 驱动下一页且保持完整 coverage', async () => {
 		loginMockUser()
+		// 未枚举完的窗口必须沿原视图续游标，同戳尾部不能靠时间锚跳过。
+		const requests: URLSearchParams[] = []
 		server.use(
 			http.get(API('/logs/federation'), ({ request }) => {
-				const cursor = new URL(request.url).searchParams.get('cursor')
+				const query = new URL(request.url).searchParams
+				requests.push(query)
+				const second = query.get('cursor') === 'cursor-page-2' && query.get('viewId') === 'cv-pages'
 				return HttpResponse.json({
 					sourceTag: 'federated',
 					items: [{
-						event_id: cursor ? 'page-2' : 'page-1', log_source_id: 'node:1',
-						message: cursor ? 'federation-page-two' : 'federation-page-one',
-						event_time_utc: cursor ? '2026-09-22T11:00:00Z' : '2026-09-22T12:00:00Z',
+						event_id: second ? 'page-2' : 'page-1', log_source_id: 'node:1',
+						message: second ? 'federation-page-two' : 'federation-page-one',
+						event_time_utc: '2026-09-22T12:00:00.123456789Z',
 					}],
-					coverage: { complete: true, partial_reasons: [], targets: [], enumeration_state: cursor ? 'EXHAUSTED' : 'OPEN' },
+					coverage: { complete: true, partial_reasons: [], targets: [], enumeration_state: second ? 'EXHAUSTED' : 'OPEN' },
 					quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
-					view: { view_id: 'cv-pages' }, exhausted: !!cursor,
-					next_cursor: cursor ? '' : 'cursor-page-2',
+					view: { view_id: 'cv-pages' }, exhausted: second,
+					next_cursor: second ? '' : 'cursor-page-2',
 				})
 			}),
 		)
@@ -341,10 +348,183 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 		await user.click(screen.getByRole('button', { name: '下一页' }))
 		expect(await screen.findByText('federation-page-two')).toBeInTheDocument()
 		await waitFor(() => expect(screen.queryByText('federation-page-one')).not.toBeInTheDocument())
+		const secondRequest = requests.find((query) => query.get('cursor') === 'cursor-page-2')!
+		const firstRequest = requests.filter((query) => !query.has('cursor')).at(-1)!
+		expect(secondRequest.get('viewId')).toBe('cv-pages')
+		expect(secondRequest.get('from')).toBe(firstRequest.get('from'))
+		expect(secondRequest.get('to')).toBe(firstRequest.get('to'))
 		expect(screen.queryByTestId('logs-coverage-banner')).not.toBeInTheDocument()
 	})
 
-	it('同一联邦 View 展示 Stats 与 level Facets', async () => {
+	it('预算截断的空页仍沿原游标续页，不前移窗口', async () => {
+		loginMockUser()
+		const requests: URLSearchParams[] = []
+		server.use(http.get(API('/logs/federation'), ({ request }) => {
+			const query = new URL(request.url).searchParams
+			requests.push(query)
+			const next = query.get('cursor') === 'budget-cursor'
+			return HttpResponse.json({ sourceTag: 'federated', items: next ? seedLogsPage.items : [],
+				view: { view_id: 'budget-view' }, next_cursor: next ? '' : 'budget-cursor', exhausted: next,
+				coverage: { complete: false, partial_reasons: ['TRUNCATED'], targets: [] } })
+		}))
+		const user = userEvent.setup()
+		renderWithProviders(<LogsPage />)
+		await screen.findByTestId('logs-empty-not-success')
+		await waitFor(() => expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled())
+		await user.click(screen.getByRole('button', { name: '下一页' }))
+		await screen.findByText('federation-seed-log-line')
+		const next = requests.find((query) => query.get('cursor') === 'budget-cursor')!
+		expect(next.get('viewId')).toBe('budget-view')
+		expect(next.get('to')).toBe(requests.filter((query) => !query.has('cursor')).at(-1)!.get('to'))
+	})
+
+	it('跨节点扫描预算截断且无安全游标时，空items保留不完整警告和独立位置凭据', async () => {
+		loginMockUser()
+		server.use(http.get(API('/logs/federation'), () => HttpResponse.json({
+			sourceTag: 'federated', items: [], next_cursor: '', exhausted: false, budget_cut: true,
+			view: { view_id: 'scan-cut-view' },
+			coverage: { complete: false, partial_reasons: ['TRUNCATED'], targets: [], enumeration_state: 'OPEN' },
+			quality: { duplicate_quality: 'exact', stats_quality: 'partial' },
+			ingest_position_gaps: [{ worker_id: 'scan-worker', storage_namespace: 'scan-space', from: '0', to: '0', reason_code: 'PERMANENTLY_LOST', operator: 'scan-admin', at_utc: '2026-10-08T00:00:00Z' }],
+		})))
+		renderWithProviders(<LogsPage />)
+		const banner = await screen.findByTestId('logs-coverage-banner')
+		expect(banner).toHaveAttribute('data-state', 'truncated')
+		expect(banner).toHaveAttribute('data-export-allowed', 'false')
+		expect(await screen.findByTestId('logs-empty-not-success')).toBeInTheDocument()
+		expect(screen.queryByText('暂无日志')).not.toBeInTheDocument()
+		expect(screen.getByTestId('logs-ingest-position-gaps')).toHaveTextContent('scan-worker')
+		expect(screen.getByTestId('logs-ingest-position-gaps')).toHaveTextContent('[0, 0]')
+		expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled()
+	})
+
+	it('窗口枚举结束才前移到原窗口下界，返回上一页复用缓存', async () => {
+		loginMockUser()
+		const requests: URLSearchParams[] = []
+		let firstFrom = ''
+		server.use(http.get(API('/logs/federation'), ({ request }) => {
+			const query = new URL(request.url).searchParams
+			requests.push(query)
+			const shifted = query.get('to') === firstFrom
+			if (!shifted) firstFrom = query.get('from') ?? ''
+			return HttpResponse.json({ sourceTag: 'federated', items: [{ ...seedLogsPage.items[0], message: shifted ? 'earlier-window' : 'finished-window' }],
+				view: { view_id: shifted ? 'earlier-view' : 'finished-view' }, next_cursor: '', exhausted: true,
+				coverage: { complete: true, targets: [] } })
+		}))
+		const user = userEvent.setup()
+		renderWithProviders(<LogsPage />)
+		await screen.findByText('finished-window')
+		await waitFor(() => expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled())
+		await user.click(screen.getByRole('button', { name: '下一页' }))
+		await screen.findByText('earlier-window')
+		expect(requests.at(-1)!.get('to')).toBe(firstFrom)
+		expect(requests.at(-1)!.has('cursor')).toBe(false)
+		expect(requests.at(-1)!.has('viewId')).toBe(false)
+		const callCount = requests.length
+		await user.click(screen.getByRole('button', { name: '上一页' }))
+		await screen.findByText('finished-window')
+		expect(requests).toHaveLength(callCount)
+	})
+
+	it('跟随列表从既有Search补位置凭据，不要求Tail扩展字段', async () => {
+		loginMockUser()
+		server.use(
+			http.get(API('/logs/federation'), () => HttpResponse.json({ sourceTag: 'federated', items: seedLogsPage.items,
+				coverage: { complete: true, targets: [] }, ingest_position_gaps: [{ worker_id: 'follow-worker', storage_namespace: 'shared', from: '1', to: '2', reason_code: 'PERMANENTLY_LOST', operator: 'follow-admin', at_utc: '2026-10-08T00:00:00Z' }] })),
+			http.get(API('/logs/federation/tail'), () => HttpResponse.json({ sourceTag: 'federated', items: [{ ...seedLogsPage.items[0], message: 'tail-without-gap-field' }], coverage: { complete: true, targets: [] } })),
+		)
+		const user = userEvent.setup()
+		renderWithProviders(<LogsPage />)
+		await screen.findByTestId('logs-ingest-position-gaps')
+		await user.click(screen.getByRole('button', { name: '实时跟随' }))
+		await screen.findByText('tail-without-gap-field')
+		expect(screen.getByTestId('logs-ingest-position-gaps')).toHaveTextContent('follow-worker')
+		expect(screen.getByTestId('logs-ingest-position-gaps')).toHaveTextContent('未知（旧节点未提供）')
+	})
+
+	it('切筛选丢弃旧游标但保留列表直到新响应，刷新中禁止续旧窗口', async () => {
+		loginMockUser()
+		let release = () => {}
+		let started = false
+		const responseGate = new Promise<void>((resolve) => { release = resolve })
+		let filteredRequest: URLSearchParams | undefined
+		server.use(http.get(API('/logs/federation'), async ({ request }) => {
+			const query = new URL(request.url).searchParams
+			if (query.has('keyword')) {
+				filteredRequest = query
+				started = true
+				await responseGate
+			}
+			return HttpResponse.json({ sourceTag: 'federated', items: [{ ...seedLogsPage.items[0], message: query.has('keyword') ? 'filtered-page' : query.has('cursor') ? 'old-second-page' : 'old-first-page' }],
+				view: { view_id: 'original-view' }, next_cursor: 'original-cursor', exhausted: false,
+				coverage: { complete: true, targets: [] } })
+		}))
+		const user = userEvent.setup()
+		renderWithProviders(<LogsPage />)
+		await screen.findByText('old-first-page')
+		await waitFor(() => expect(screen.getByRole('button', { name: '下一页' })).toBeEnabled())
+		await user.click(screen.getByRole('button', { name: '下一页' }))
+		await screen.findByText('old-second-page')
+		await user.type(screen.getByPlaceholderText('搜索日志内容…'), 'x')
+		await waitFor(() => expect(started).toBe(true))
+		expect(screen.getByText('old-second-page')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled()
+		expect(filteredRequest!.has('cursor')).toBe(false)
+		expect(filteredRequest!.has('viewId')).toBe(false)
+		expect(filteredRequest!.get('page')).toBe('1')
+		release()
+		await screen.findByText('filtered-page')
+	})
+
+	it('身份及权限切换清除共享联邦缓存，拒绝结果不展示上一主体位置证据', async () => {
+		const adminToken = `mock.${btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))}.sig`
+		const memberToken = `mock.${btoa(JSON.stringify({ userId: 2, username: 'member', role: 0, exp: Math.floor(Date.now() / 1000) + 900 }))}.sig`
+		loginMockUser(adminToken)
+		server.use(http.get(API('/logs/federation'), ({ request }) => {
+			if (request.headers.get('authorization') === `Bearer ${memberToken}`) return HttpResponse.json({ message: 'forbidden' }, { status: 403 })
+			return HttpResponse.json({ sourceTag: 'federated', items: seedLogsPage.items,
+				coverage: { complete: true, targets: [] }, ingest_position_gaps: [{ worker_id: 'admin-private-worker', storage_namespace: 'private', from: '1', to: '2', reason_code: 'PERMANENTLY_LOST', operator: 'admin', at_utc: '2026-10-08T00:00:00Z' }] })
+		}))
+		const mount = () => render(<BrowserRouter><QueryClientProvider client={queryClient}><LogsPage /></QueryClientProvider></BrowserRouter>)
+		const first = mount()
+		await screen.findByTestId('logs-ingest-position-gaps')
+		expect(queryClient.getQueriesData({ queryKey: ['logsFederation'] }).length).toBeGreaterThan(0)
+		first.unmount()
+		loginMockUser(memberToken)
+		expect(queryClient.getQueriesData({ queryKey: ['logsFederation'] })).toEqual([])
+		mount()
+		await screen.findByTestId('logs-coverage-banner')
+		expect(screen.queryByTestId('logs-ingest-position-gaps')).not.toBeInTheDocument()
+		expect(screen.queryByText('admin-private-worker')).not.toBeInTheDocument()
+	})
+
+	it('永久位置缺失独立于覆盖与导出，空列表仍显示每条无损证据', async () => {
+		loginMockUser()
+		server.use(http.get(API('/logs/federation'), () => HttpResponse.json({
+			sourceTag: 'federated', items: [], exhausted: true,
+			coverage: { complete: true, targets: [] },
+			quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+			ingest_position_gaps: [
+				{ worker_id: 'worker-a', storage_namespace: 'shared', from: '18446744073709551614', to: '18446744073709551615',
+					reason_code: 'PERMANENTLY_LOST', operator: 'admin-a', at_utc: '2026-10-08T00:00:00Z', log_source_id: 'inst:1/stdout', source_generation: 'gen-a' },
+				{ worker_id: 'worker-b', storage_namespace: 'shared', from: '0', to: '1',
+					reason_code: 'PERMANENTLY_LOST', operator: 'admin-b', at_utc: '2026-10-08T01:00:00Z', log_source_id: 'inst:2/stdout', source_generation: 'gen-b' },
+			],
+		})))
+		renderWithProviders(<LogsPage />)
+		const warning = await screen.findByTestId('logs-ingest-position-gaps')
+		expect(warning).toHaveTextContent('永久位置缺失')
+		expect(warning).toHaveTextContent('18446744073709551614')
+		expect(warning).toHaveTextContent('18446744073709551615')
+		expect(screen.getAllByTestId('logs-ingest-position-gap')).toHaveLength(2)
+		for (const evidence of ['worker-a', 'worker-b', 'inst:1/stdout', 'inst:2/stdout', 'gen-a', 'gen-b', 'admin-a', 'admin-b', 'PERMANENTLY_LOST', '2026-10-08T00:00:00Z']) {
+			expect(warning).toHaveTextContent(evidence)
+		}
+		expect(screen.queryByTestId('logs-coverage-banner')).not.toBeInTheDocument()
+		expect(screen.queryByTestId('logs-export-blocked')).not.toBeInTheDocument()
+	})
+
+	it('Stats 与 level Facets 洞察展示（stats/facets 各自重建视图，不携带搜索 viewId）', async () => {
 		loginMockUser()
 		server.use(
 			http.get(API('/logs/federation'), () => HttpResponse.json({
@@ -352,19 +532,22 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 				coverage: { complete: true, targets: [], enumeration_state: 'EXHAUSTED' },
 				quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
 			})),
+			// F-006 实测：聚合查询复用搜索 viewId 会被 CP 拒（409 VIEW_STALE），
+			// 故 stats/facets 按各自固定条件独立重建视图——此处断言**不带** viewId。
 			http.get(API('/logs/federation/stats'), ({ request }) => {
-				expect(new URL(request.url).searchParams.get('viewId')).toBe('cv-insights')
+				expect(new URL(request.url).searchParams.get('viewId')).toBeNull()
 				return HttpResponse.json({ points: [{ dimensions: { level: 'ERROR' }, count: 42 }], coverage: { complete: true } })
 			}),
 			http.get(API('/logs/federation/facets'), ({ request }) => {
-				expect(new URL(request.url).searchParams.get('viewId')).toBe('cv-insights')
+				expect(new URL(request.url).searchParams.get('viewId')).toBeNull()
 				return HttpResponse.json({ dimensions: [{ dimension: 'level', values: [{ value: 'ERROR', count: 42 }] }], coverage: { complete: true } })
 			}),
 		)
 		renderWithProviders(<LogsPage />)
 		const insights = await screen.findByTestId('logs-federation-insights')
 		expect(insights).toHaveTextContent('当前视图 42 个事件')
-		expect(insights).toHaveTextContent('ERROR 42')
+		// facets 串行在 stats 落定之后（统计 → 维度），文本到达需等待。
+		await waitFor(() => expect(insights).toHaveTextContent('ERROR 42'))
 	})
 
 	it('Stats 使用后端真实 wire 形态 agg.count 呈现事件数', async () => {
@@ -398,15 +581,66 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 			http.get(API('/logs/federation/tail'), ({ request }) => {
 				expect(new URL(request.url).searchParams.get('mode')).toBe('FOLLOW_LIVE')
 				return HttpResponse.json({
-					items: [{ event_id: 'live-1', log_source_id: 'node:1', message: 'federation-live-tail', event_time_utc: '2026-09-23T00:00:00Z' }],
+					// 默认时间范围为有界窗口（最近 24h）：夹具事件时间必须落在窗口内，
+					// 否则会被（正确地）过滤掉而看不到实时事件——这正是有界窗口的预期行为。
+					items: [{ event_id: 'live-1', log_source_id: 'node:1', message: 'federation-live-tail', event_time_utc: new Date().toISOString() }],
 					coverage: { complete: true, targets: [], enumeration_state: 'OPEN' }, exhausted: false,
 				})
 			}),
 		)
 		const user = userEvent.setup()
 		renderWithProviders(<LogsPage />)
+		// 默认时间窗为 24h（2026-09-30 性能依据）；固定选择「全部时间」，
+		// 让本用例只验证「实时跟随」机制本身，不随默认窗口漂移。
+		// 时间范围是 Select（combobox），不是按钮。
+		HTMLElement.prototype.hasPointerCapture ??= () => false
+		HTMLElement.prototype.setPointerCapture ??= () => {}
+		HTMLElement.prototype.releasePointerCapture ??= () => {}
+		HTMLElement.prototype.scrollIntoView ??= () => {}
+		await user.click(screen.getAllByRole('combobox')[0])
+		await user.click(await screen.findByRole('option', { name: '全部时间' }))
 		await user.click(await screen.findByRole('button', { name: '实时跟随' }))
 		expect(await screen.findByText('federation-live-tail')).toBeInTheDocument()
+	})
+
+	// 回归（P2-9）：跟随态必须**不下发 `to` 上界**。
+	//
+	// 旧实现把 `to` 钉在浏览器 now：Worker/实例时钟略快、或落盘时区未校正（+8h）产生的
+	// 「未来时间戳」事件会被后端按 [from,to] 排掉 → 实时跟随永远空（用户观感「不实时」）。
+	// 本用例的事件时间戳 = now + 8h（未校正时区偏移的实测量级），并让假后端忠实复刻
+	// 「to 非空即按上界过滤」的窗口语义：改回 `to=now` 即转红。
+	it('实时跟随不下发 to 上界：时钟偏移的未来时间戳事件仍可见（P2-9）', async () => {
+		loginMockUser()
+		const skewedItem = {
+			event_id: 'live-skew',
+			log_source_id: 'node:1',
+			message: 'federation-skewed-live',
+			event_time_utc: new Date(Date.now() + 8 * 3600_000).toISOString(),
+		}
+		server.use(
+			http.get(API('/logs/federation'), () => HttpResponse.json({
+				sourceTag: 'federated', items: [], exhausted: true,
+				coverage: { complete: true, targets: [], enumeration_state: 'EXHAUSTED' },
+			})),
+			http.get(API('/logs/federation/tail'), ({ request }) => {
+				const params = new URL(request.url).searchParams
+				expect(params.get('mode')).toBe('FOLLOW_LIVE')
+				expect(params.get('from')).toBeTruthy()
+				const to = params.get('to')
+				// 后端窗口语义：[from, to]；上界存在时，晚于 to 的事件必须被排除。
+				const items = to && new Date(skewedItem.event_time_utc) > new Date(to) ? [] : [skewedItem]
+				return HttpResponse.json({
+					items,
+					coverage: { complete: true, targets: [], enumeration_state: 'OPEN' }, exhausted: false,
+				})
+			}),
+		)
+		const user = userEvent.setup()
+		renderWithProviders(<LogsPage />)
+		// 保持默认时间窗（现为「最近 15 分钟」，见 LogsPage 的默认档）：本用例只验证跟随态的
+		// 上界语义，不触碰时间范围选择器。
+		await user.click(await screen.findByRole('button', { name: '实时跟随' }))
+		expect(await screen.findByText('federation-skewed-live')).toBeInTheDocument()
 	})
 
 	it('⑦ gap + nextCursor=null → 缺口态横幅 + 游标结束提示（不等于历史完整）', async () => {
@@ -594,5 +828,34 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 		await waitFor(() =>
 			expect(trigger).toHaveAttribute('title', expect.stringContaining('下载前将再次复核权限')),
 		)
+	})
+
+	it('平台视图只使用 CP 经典日志，不应发起联邦覆盖请求', async () => {
+		const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
+		loginMockUser(`mock.${payload}.sig`)
+		let federationCalls = 0
+		let classicCalls = 0
+		server.use(
+			http.get(API('/logs/federation'), () => {
+				federationCalls += 1
+				return HttpResponse.json({ sourceTag: 'federated', items: seedLogsPage.items, coverage: { complete: true, targets: [] } })
+			}),
+			http.get(API('/logs'), () => {
+				classicCalls += 1
+				return HttpResponse.json({
+					items: [{ ...seedLogsPage.items[0], message: 'platform-classic-log' }],
+					total: 1, page: 1, pageSize: 100,
+				})
+			}),
+		)
+		const user = userEvent.setup()
+		renderWithProviders(<LogsPage />)
+		await screen.findByText('federation-seed-log-line')
+		const federationBefore = federationCalls
+		await user.click(screen.getByRole('tab', { name: '平台日志' }))
+		expect(await screen.findByText('platform-classic-log')).toBeInTheDocument()
+		await waitFor(() => expect(classicCalls).toBeGreaterThan(0))
+		expect(federationCalls).toBe(federationBefore)
+		expect(screen.queryByText('federation-seed-log-line')).not.toBeInTheDocument()
 	})
 })

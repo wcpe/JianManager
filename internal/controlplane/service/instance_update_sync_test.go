@@ -110,6 +110,6 @@ func TestDelegateRestart_StopsWhenLaunchSpecRegistrationFails(t *testing.T) {
 
 	got, err := svc.GetByID(inst.ID)
 	require.NoError(t, err)
-	require.Equal(t, model.InstanceStatusCrashed, got.Status)
+	require.Equal(t, model.InstanceStatusStopping, got.Status, "未派发重启不能冒称服务器已崩溃，等待心跳收敛")
 	require.Contains(t, got.StatusReason, "重启前同步最新启动规格失败")
 }

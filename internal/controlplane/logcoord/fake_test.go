@@ -37,6 +37,10 @@ type fakeWorker struct {
 	lastOpenViewView  string
 	lastSearchTargets []string
 	lastOpenTargets   []string
+	// lastSearchDrift / lastOpenDrift 记录本次请求是否带「允许投影版本漂移」豁免标记，
+	// 用于断言只有导出路径置位（列表/Stats/Facets 等复用路径必须为 false）。
+	lastSearchDrift bool
+	lastOpenDrift   bool
 
 	statsPoints  []WorkerStatsPoint
 	statsTargets []WorkerTargetResult
@@ -60,6 +64,7 @@ func (w *fakeWorker) OpenView(_ context.Context, req WorkerSearchRequest) (*Work
 	w.openViewCalls++
 	w.lastOpenViewView = req.ViewID
 	w.lastOpenTargets = append([]string(nil), req.TargetIDs...)
+	w.lastOpenDrift = req.AllowProjectionDrift
 	if w.openViewFail != "" {
 		return &WorkerSearchResponse{Error: w.openViewFail}, nil
 	}
@@ -75,6 +80,7 @@ func (w *fakeWorker) Search(_ context.Context, req WorkerSearchRequest) (*Worker
 	w.searchCalls++
 	w.lastSearchView = req.ViewID
 	w.lastSearchTargets = append([]string(nil), req.TargetIDs...)
+	w.lastSearchDrift = req.AllowProjectionDrift
 	resp := &WorkerSearchResponse{
 		ViewID:      req.ViewID,
 		Items:       append([]Event(nil), w.searchItems...),

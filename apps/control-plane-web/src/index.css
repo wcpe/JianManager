@@ -102,7 +102,10 @@
   --input: #d7dce3;
   --ring: #158053;
   --radius: 0.375rem;
-  --workspace-bg-image: url('/brand/console-bg-light.png');
+  /* 首访资源减重：原 1437.5KB 背景位图（console-bg-light.png，全站唯一重物 ✗）
+     替换为同基调的柔和渐变（0KB ✓）。视觉一致性由设计 token 保证：沿用 background/muted。
+     如需恢复位图：把 url('/brand/console-bg-light.png') 换回即可（文件已移出 public ✗）。 */
+  --workspace-bg-image: linear-gradient(160deg, var(--background) 0%, var(--muted) 55%, var(--background) 100%);
 
   /* 阴影色源：中性阴影用墨蓝黑，抬升阴影用主色 RGB 晕染（FR-164 覆盖 --brand-shadow 换主题晕色） */
   --shadow-color: 16 24 40;

@@ -54,8 +54,18 @@
 - `onOpen`（`tunnel.go`）去掉 `n == 1` 限制：隧道**每次**建立都触发 `onConnected`（幂等重推，由 `ResyncDeduper` 按节点去重），避免瞬时 active=2 漏推。
 - 长驻订阅类副作用（`EventService.StartWorkerStream` / `PlayerEventService.StartWorkerStream` / `recoverConnectedBotFleetSubscriptions`）与重推**语义分离**：走 `onFirstConnected`，仅在节点「从无到有」（active 0→1）时触发**一次**，避免瞬时 active=2 重复建立长驻订阅流（stdout/stderr 双写、事件重复扇出）；两个 `StartWorkerStream` 另加 per-node 单飞守卫做纵深防御。
 - 追加触发源：`Register` 成功后与心跳（低频，作自然兜底）均可触发同一幂等重推入口。
-- Worker 侧 `ResyncInstances`（`internal/worker/grpc/server.go`）已是「只补不覆盖」语义，天然幂等，无需改动。
+- Worker 侧 `ResyncInstances`（`internal/worker/grpc/server.go`）保持「不覆盖运行态和工作目录、不擅自启动」；已在表实例不再仅跳过，而是复用幂等注册补完整启动规格与端口，当前控制连接不中断、下一代策略按 stale/rebuild 生效；skipped 仍表示未新建实例。未知启动规格的收养实例在补齐前不能先停后启，详细规格与 `SetLaunchConfig` 兼容接口见 [自动收养规格 §2.2](../auto-adopt-orphans/spec.md#22-收养动作非破坏幂等)。
 - 心跳里 `syncInstanceStates` 的**证据对账异步化**（`NewEvidenceReconcileDispatcher`，按节点单飞）：最长 8s 的进程侧证据拉取移出心跳应答关键路径（重推/心跳不被阻塞）。
+
+### 2.5 生命周期取消与不确定结果收敛（RV-016）
+
+- **实例操作闸**：零值可用的 `lifecycleGate` 保持同一实例生命周期操作串行，排队直接等待令牌或 ctx 取消，不创建后台 goroutine 代等 Mutex。取得令牌后再次检查取消，防止取消与取闸同时就绪产生迟到操作。
+- **生产入口**：Worker `StartInstance/RestartInstance/StopInstance/KillInstance` 分别调用 Manager 的 `StartContext/RestartContext/StopContext/KillContext`，使用请求 RPC ctx；无 ctx 的旧入口保持 Background 包装兼容。已开始的优雅停止正常收尾，排队 Stop/Kill 被取消时不迟到停服或强杀。
+- **取消三阶段**：①取闸或停止/启动提交前取消＝未执行，不改变真实运行事实；②Restart 已完成停止但新启动提交前取消＝保留 STOPPED、不再启动新一代；③实际 `cmd.Start` 已提交＝进程已启动，不把请求 ctx 绑定为进程寿命、不为取消误杀，丢失响应交 CP 确认。取消/等待失败不是 CRASHED 的证据，不能据此触发错误自愈。
+- **CP 单实例与批量**：成功和不确定结果都以派发前观察的 `id/uuid/node_id/status/updated_at` 作条件 CAS 回写；任一已变化即放弃迟到结果，不能覆盖期间心跳、迁移或并发操作。传输失败/取消先用已有 `GetInstanceStatus` 在独立 2s 窗口确认；查询失败保持观察态并记待确认原因，继续由现有心跳收敛，不新增状态枚举或 RPC。Worker 未连接同样只记待确认，不直接标崩溃。
+- **批量兼容**：`BatchContext(ctx, req, scopeIDs, scope)` 传播调用方取消与委托超时；旧 `Batch(req, scopeIDs, scope)` 仍为 Background 包装，权限与目标筛选语义不变。
+
+**本轮验证边界**：本地新增 RV 回归重复 3 轮、相关 race、授权范围全包及 vet 已由执行组报告通过；旧 CP 内存 DB 用例重复 `-count=2` 遇共享夹具唯一 UUID 冲突，不能称所有重复测试均无环境问题（旧单轮 race 通过）。可选 native cgroup 实验因本轮授权范围排除，假 cgroupfs/本地 helper 不等于真实 systemd/cgroup 验收；未据此勾选下列真机项。运行时 RV-018/022 的最终证据另行核对，不以本节进程回归代替。
 
 ## 3. 任务拆分
 
@@ -77,6 +87,7 @@
 | 4 | 心跳清单缺项但进程侧证据显示在跑时，状态不翻 STOPPED | 单测 + 真机 |
 | 5 | 隧道瞬时 active=2 时新连仍触发重推，且重复触发幂等无副作用 | 单测 |
 | 6 | 配置开关可关闭周期扫描/切告警档 | 单测 |
+| 7 | 部署含状态 / 迁移类变更时，**部署后立刻再重启一次**（二启）验证通过；重启类改动的验收含「迁移 → 首启 → 停 → 二启 → 三启」+ 脏环境（`2026-10-01` 事故纪律） | 真机（规则：`.claude/rules/gate-merge.md`「部署后复验」、`.claude/rules/testing-and-quality.md`「状态 / 迁移类变更」） |
 
 **真机五场景清单（必须真机过，逐场景确认「服务器不受影响、状态不误判、无孤儿遗留」）**：
 
@@ -99,13 +110,14 @@
 
 下表把实现中的关键常量、配置键与审计 action 名统一登记，供 reviewer 与文档核对（实现为准，文档随实现更新）。
 
-**配置键**（`internal/worker/config.go`，`worker.yml` 下 `orphan_scan.*`，Viper `SetDefault`）：
+**配置键**（`internal/worker/config.go`，`worker.yml` 下 `orphan_scan.*` / `recover.*`，Viper `SetDefault`）：
 
 | 键 | 默认 | 语义 |
 |---|---|---|
 | `orphan_scan.disabled` | `false` | `true` = 关闭周期扫描（应急逃生口）。注意：本文早前误写为 `worker.orphan_scan_enabled`（默认开），**以实现为准**——语义等价（都表示「默认启用」）。 |
 | `orphan_scan.interval` | `60s` | 扫描周期；非法/空回退 60s。 |
 | `orphan_scan.dispose_policy` | `warn` | `warn` 只告警 + 落审计 / `auto` 自动清理。 |
+| `recover.retry_backoff` | `1s,2s,4s,8s,16s,32s,64s` | 启动接管存活 wrapper 的重试退避序列（逗号分隔 duration，总窗口 ≈127s）。缺省与进程包 `DefaultRecoverRetryBackoff` 同源；越界/空值回退默认。**注入须在 `RecoverDaemonInstances` 之前装配**（见 `apps/worker/main.go`），否则该轮接管用不到配置。 |
 
 **关键常量**：
 
@@ -135,3 +147,15 @@
 **Worker→CP 上报通道**：`ReportOrphanAudit`（`proto/worker.proto`；CP 实现 `internal/controlplane/grpc/orphan_audit.go`；Worker 侧 `internal/worker/orphanaudit`）——与 `ReportCrashSnapshot` 同源的出站信道 + 节点身份鉴权，落 `RecordResultSafe`。
 
 **主要装配入口**：`Manager.SetOrphanAuditHandler`（Worker 审计回调）、`ControlPlaneHandler.SetOrphanAuditRecorder`、`ControlPlaneHandler.SetReconcileDispatcher`、`TunnelRegistry.SetOnConnected` / `SetOnFirstConnected`。
+
+## 7. Worker 关闭路径契约与 cgroup 边界（FR-500）
+
+> 完整设计、证据与验收见 `docs/specs/daemon-cgroup-isolation/spec.md`（2026-10-01 生产事故根因修复）。
+
+**契约（三条，正式表述）**：
+
+1. **只断连**：Worker 因信号 / 重启进入关闭序列时，对 daemon 实例**只关闭与 wrapper 的连接**（`daemonStrategy.Close()`），不下发停止帧、不发信号、不杀进程树；游离 wrapper 与其 java 子树必须存活，并可被下一次启动接管（`RecoverDaemonInstances`）。
+2. **显式例外**：用户显式「停止 / 删除 / 重启实例」照旧终止进程（停止=控制帧优雅关服 + 超时强杀兜底；删除=按 PID/进程组强杀两棵树）。二者正交，本契约不得改变其语义。
+3. **cgroup 边界**：daemon 子树必须位于 Worker 的 **systemd 单元 cgroup 之外**（`…/app.slice/jianmanager-daemons/<实例 UUID>`）。理由：`setsid` 只逃脱**进程组**，而 `systemctl restart` 按 `KillMode=control-group`（默认，`KillSignal=15`）对该单元 cgroup 内**全部**进程发 SIGTERM——2026-10-01 的 11 台实例即由此全灭（Worker 关闭路径当时已正确只断连，逐行日志见上引 spec §1）。
+
+**读者须知（易误判点）**：`KillMode=process`（`scripts/install-worker.sh:333`）只是**部署期**对策，单元漂移即失效；本契约要求运行期自身成立（wrapper 启动时自迁 + 接管已运行 wrapper 时迁移），不依赖 unit 配置。

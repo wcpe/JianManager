@@ -148,7 +148,8 @@ func (c *corruptOnPutProvider) Put(ctx context.Context, key PartitionKey, relPat
 }
 
 // TestRegistryRegisterIdempotent 表驱动：幂等登记、路径冲突、受管状态。
-func TestRegistryRegisterIdempotent(t *testing.T) {	ctx := context.Background()
+func TestRegistryRegisterIdempotent(t *testing.T) {
+	ctx := context.Background()
 	payload := []byte("stdio-primary-segment-payload")
 	sum := ContentHash(payload)
 	oid := ObjectIDFor(sum, int64(len(payload)))

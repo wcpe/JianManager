@@ -142,6 +142,52 @@ func TestPartialFlushEmitOrDiscard(t *testing.T) {
 	require.Equal(t, 0, res2.Stats.PendingLines, "DiscardPartial 后缓冲已清空")
 }
 
+// 跨 live 文件轮转的「堆栈打一半」必须留下**显式**未闭合痕迹（2026-10-02 补）。
+//
+// 背景：轮转闭合原先走 closeStatus（有 level/时间戳即 OK），于是一条被打断在两段文件之间的
+// 堆栈会被静默标成 parse_status=OK —— 切分点从数据里彻底不可见，事后无法判断
+// 「这条事件是完整的，还是被轮转切过」。
+//
+// 判据刻意只在 len(pending.lines) > 1 时成立：单行、以换行结束的记录本身就是完整记录
+// （轮转只是恰好发生在两条记录之间），标记它会在**每次**轮转上制造误报。
+//
+// 转红方式（实测）：把 FlushUnclosed 的实现换成 closeStatus（即退回旧行为），
+// 「半条堆栈」的两个断言立即红。
+func TestFlushUnclosedMarksOnlyTruncatedMultiline(t *testing.T) {
+	opts := testOpts("stdout")
+
+	// ① 半条堆栈（已吃进续行）：必须 PARTIAL + 显式标记。
+	n := New(opts)
+	require.Empty(t, n.Feed(`[12:00:00] [Server thread/ERROR]: boom`))
+	require.Empty(t, n.Feed("	at a.A(A.java:1)"))
+	ev, ok := n.FlushUnclosed(UnclosedReasonCrossRotation)
+	require.True(t, ok)
+	require.Equal(t, StatusPartial, ParseStatus(ev.Fields[FieldParseStatus]),
+		"半条堆栈不得伪装成完整事件")
+	require.Equal(t, UnclosedReasonCrossRotation, ev.Fields[FieldMultilineUnclosed],
+		"必须留下可审计的未闭合原因")
+	require.Contains(t, ev.Message, "boom")
+	require.Contains(t, ev.Message, "at a.A(A.java:1)")
+
+	// ② 单行完整记录：不得标记（轮转恰好发生在两条记录之间是常态，标记即误报）。
+	n2 := New(opts)
+	require.Empty(t, n2.Feed(`[12:00:01] [Server thread/INFO]: single complete line`))
+	ev2, ok := n2.FlushUnclosed(UnclosedReasonCrossRotation)
+	require.True(t, ok)
+	_, marked := ev2.Fields[FieldMultilineUnclosed]
+	require.False(t, marked, "单行完整记录不得带未闭合标记（否则每次轮转都误报）")
+	require.NotEqual(t, StatusPartial, ParseStatus(ev2.Fields[FieldParseStatus]))
+
+	// ③ 闲置超时走同一标记通道，但原因可区分。
+	n3 := New(opts)
+	require.Empty(t, n3.Feed(`[12:00:02] [Server thread/ERROR]: boom`))
+	require.Empty(t, n3.Feed("	at b.B(B.java:2)"))
+	ev3, ok := n3.FlushUnclosed(UnclosedReasonIdle)
+	require.True(t, ok)
+	require.Equal(t, UnclosedReasonIdle, ev3.Fields[FieldMultilineUnclosed])
+	require.Equal(t, StatusPartial, ParseStatus(ev3.Fields[FieldParseStatus]))
+}
+
 // FR-475：超过 multiline 上限 → TRUNCATED，不静默拼接下一事件。
 func TestLimitExceededTruncated(t *testing.T) {
 	lines := []string{

@@ -33,38 +33,38 @@ const (
 type DeliveryState string
 
 const (
-	DeliveryNotSent         DeliveryState = "NOT_SENT"
-	DeliveryUnknown         DeliveryState = "UNKNOWN"
-	DeliveryRequestDone     DeliveryState = "REQUEST_DONE"
-	DeliveryReplayRequired  DeliveryState = "REPLAY_REQUIRED"
+	DeliveryNotSent        DeliveryState = "NOT_SENT"
+	DeliveryUnknown        DeliveryState = "UNKNOWN"
+	DeliveryRequestDone    DeliveryState = "REQUEST_DONE"
+	DeliveryReplayRequired DeliveryState = "REPLAY_REQUIRED"
 )
 
 // Reclaim 与恢复分段责任状态（契约 §4.3）。
 type RecoverySegmentState string
 
 const (
-	RecoveryStaged                   RecoverySegmentState = "STAGED"
-	RecoveryDurableVerified          RecoverySegmentState = "DURABLE_VERIFIED"
-	RecoveryWALResponsibilityXfer    RecoverySegmentState = "WAL_RESPONSIBILITY_TRANSFERRED"
-	RecoveryReleased                 RecoverySegmentState = "RELEASED"
-	RecoveryCleaned                  RecoverySegmentState = "CLEANED"
+	RecoveryStaged                RecoverySegmentState = "STAGED"
+	RecoveryDurableVerified       RecoverySegmentState = "DURABLE_VERIFIED"
+	RecoveryWALResponsibilityXfer RecoverySegmentState = "WAL_RESPONSIBILITY_TRANSFERRED"
+	RecoveryReleased              RecoverySegmentState = "RELEASED"
+	RecoveryCleaned               RecoverySegmentState = "CLEANED"
 )
 
 // ReleaseReason 恢复分段释放证明；进入 RELEASED 前必须登记其一。
 type ReleaseReason string
 
 const (
-	ReleaseProjectionBacked      ReleaseReason = "PROJECTION_BACKED"
-	ReleaseNextCopyVerified      ReleaseReason = "NEXT_COPY_VERIFIED"
+	ReleaseProjectionBacked       ReleaseReason = "PROJECTION_BACKED"
+	ReleaseNextCopyVerified       ReleaseReason = "NEXT_COPY_VERIFIED"
 	ReleaseRetentionExpiredNoHold ReleaseReason = "RETENTION_EXPIRED_WITHOUT_HOLDS"
 )
 
 // Positions 四水位；位置与投递状态分离保存。
 type Positions struct {
-	Read      uint64 `json:"read_position"`
-	Durable   uint64 `json:"durable_position"`
-	Delivery  uint64 `json:"delivery_position"`
-	Reclaim   uint64 `json:"reclaim_position"`
+	Read     uint64 `json:"read_position"`
+	Durable  uint64 `json:"durable_position"`
+	Delivery uint64 `json:"delivery_position"`
+	Reclaim  uint64 `json:"reclaim_position"`
 }
 
 // SourceIdentity 逻辑日志源分段身份。
@@ -82,24 +82,24 @@ type RecordRange struct {
 
 // Event 标准规范事件（查询与账本共用身份字段）。
 type Event struct {
-	EventID            string            `json:"event_id"`
-	Source             SourceIdentity    `json:"source"`
-	Record             RecordRange       `json:"record"`
-	EventTimeUTC       string            `json:"event_time_utc"`
-	IngestTimeUTC      string            `json:"ingest_time_utc"`
-	Level              string            `json:"level"`
-	Stream             string            `json:"stream"`
-	Message            string            `json:"message"`
-	CanonicalHash      string            `json:"canonical_content_hash"`
-	Fields             map[string]string `json:"fields,omitempty"`
+	EventID       string            `json:"event_id"`
+	Source        SourceIdentity    `json:"source"`
+	Record        RecordRange       `json:"record"`
+	EventTimeUTC  string            `json:"event_time_utc"`
+	IngestTimeUTC string            `json:"ingest_time_utc"`
+	Level         string            `json:"level"`
+	Stream        string            `json:"stream"`
+	Message       string            `json:"message"`
+	CanonicalHash string            `json:"canonical_content_hash"`
+	Fields        map[string]string `json:"fields,omitempty"`
 }
 
 // DeliveryRecord 单事件投递/核验状态。
 type DeliveryRecord struct {
-	EventID           string         `json:"event_id"`
-	DeliveryState     DeliveryState  `json:"delivery_state"`
-	ValidationState   string         `json:"validation_state"`
-	VerificationState string         `json:"verification_state"`
+	EventID           string        `json:"event_id"`
+	DeliveryState     DeliveryState `json:"delivery_state"`
+	ValidationState   string        `json:"validation_state"`
+	VerificationState string        `json:"verification_state"`
 }
 
 // EventID 按契约：hash(log_source_id, source_generation, record_start, record_end, parser_version)。

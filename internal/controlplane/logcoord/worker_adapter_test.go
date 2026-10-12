@@ -81,7 +81,9 @@ func TestLogCoord_WorkerClientAdapter_SearchMapsProto(t *testing.T) {
 				OrderVersion: OrderVersion,
 			},
 			Coverage: &workerpb.LogCoverage{
-				Complete: false,
+				Complete:         false,
+				PartialReasons:   []string{"BUDGET_EXCEEDED"},
+				EnumerationState: workerpb.LogEnumerationState_LOG_ENUMERATION_OPEN,
 				Targets: []*workerpb.LogCoverageTarget{
 					{
 						TargetId:          "inst:1",
@@ -124,6 +126,10 @@ func TestLogCoord_WorkerClientAdapter_SearchMapsProto(t *testing.T) {
 	require.NotNil(t, resp)
 	assert.Equal(t, "cv_1", resp.ViewID)
 	assert.True(t, resp.Exhausted)
+	require.NotNil(t, resp.Coverage)
+	assert.False(t, resp.Coverage.Complete)
+	assert.Contains(t, resp.Coverage.PartialReasons, "BUDGET_EXCEEDED")
+	assert.Equal(t, EnumOpen, resp.Coverage.EnumerationState)
 	require.Len(t, resp.Items, 1)
 	assert.Equal(t, "e1", resp.Items[0].EventID)
 	assert.Equal(t, uint64(10), resp.Items[0].RecordStart)

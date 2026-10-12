@@ -5,9 +5,12 @@ package ingest
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,10 +18,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/disk"
@@ -26,10 +31,15 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/eventstore"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
+	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
+	"google.golang.org/grpc/metadata"
+	"runtime/debug"
 )
 
 // SourceConfig describes one persistent Worker log source.
@@ -44,6 +54,13 @@ type SourceConfig struct {
 	SourceCategory   logtypes.Source      `json:"source_category,omitempty" mapstructure:"source_category"`
 	StorageNamespace string               `json:"storage_namespace,omitempty" mapstructure:"storage_namespace"`
 	UTCDay           string               `json:"utc_day,omitempty" mapstructure:"utc_day"`
+	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串表示跟随节点默认或 auto。
+	// 中文 locale 的 JVM 会把 Java 日志写成 GBK，必须按源声明，不能靠猜（缺陷 B）。
+	Charset string `json:"charset,omitempty" mapstructure:"charset"`
+	// TimeZone 解释日志行内 [HH:MM:SS] 所用的时区（缺陷 C）：空串 = UTC（保持既有行为），
+	// "local" = 跟随节点本地时区，其余按 IANA 名解析（如 Asia/Hong_Kong）。
+	// 中文 locale 的 JVM 按本地时区写日志，若按 UTC 解释会整体偏移（现场实测 +8 小时）。
+	TimeZone string `json:"time_zone,omitempty" mapstructure:"time_zone"`
 }
 
 type persistedSource struct {
@@ -63,6 +80,23 @@ type persistedSource struct {
 	EventsStored bool `json:"events_stored,omitempty"`
 	// Events 仅在旧格式或段写入失败时使用；正常情况为空（权威副本在 eventstore）。
 	Events []logtypes.Event `json:"events,omitempty"`
+	// VerifiedRuns 是该源**写 VL 后逐字段可见性校验通过**的源位置连续区间（P1-2 的区间级凭据）。
+	//
+	// 为什么必须持久化：WAL 条目一旦被回收，就不可能再通过重投生成覆盖证据；此时「已发布投影」
+	// 只能给出一个封闭水位（末端语义），无法证明缺口区间本身被逐字段校验覆盖过。区间级凭据
+	// 让「已发布投影证据」自动消解出口有据可依，而不是按末端水位把中间的空洞一并宣称已落库。
+	//
+	// 有界性：只保留最近的 maxVerifiedRunsPerSource 段（相邻写入会就地合并，稳态下通常只有 1 段）。
+	VerifiedRuns []ledger.PositionRange `json:"verified_runs,omitempty"`
+	// IdentityConflicts 是不可裁定身份冲突的隔离记录；冲突行不得进入写入面，也不得被当作已落库证据。
+	IdentityConflicts []identityConflictRecord `json:"identity_conflicts,omitempty"`
+	// IdentityConflictClearances 是「人工确认并清空身份冲突」的审计凭据（最近若干次，见
+	// identityConflictClearance 与 maxIdentityConflictClearances）。
+	//
+	// 为什么与 IdentityConflicts 同处一个 payload：清空的**唯一**可核验凭据就是
+	// 「本条凭据 + 清空后的记录集」这一对事实。放在别处（例如账本条目）会引入一条
+	// 本不存在的跨结构一致性要求——而两条数据分属不同写路径时，那条要求无法被守卫。
+	IdentityConflictClearances []identityConflictClearance `json:"identity_conflict_clearances,omitempty"`
 }
 
 type persistedState struct {
@@ -74,36 +108,619 @@ type persistedState struct {
 // pendingSpoolRoot 是未绑定实例输出的持久化暂存目录。
 const pendingSpoolRoot = "pending"
 
+// startupRecoveryBatch 是启动恢复「读回权威集合 + 对账」的批大小。
+//
+// 为什么要分批（而不是像改动前那样一次性把所有源的 canonical 事件读进内存）：单源事件集在
+// 生产可达数百 MB（全库 18GB），整批常驻会把启动的内存峰值推到 GB 级；分批后内存峰值 ≈
+// 批大小 × 单源事件集，而**对账的并发度不受影响**（批内并发，见 Reconcile.Concurrency）。
+const startupRecoveryBatch = 4
+
+// startupRecoveryState 是启动恢复的后台进度（观测 + 就绪判据）。
+type startupRecoveryState struct {
+	// InProgress 表示恢复尚未结束：此时就绪面必须报「未完成」，不得宣告平台可切换。
+	InProgress bool
+	Total      int
+	Completed  int
+	// Failed 是**单源**失败计数：单源失败不再使整个 Manager 创建失败（改动前会——那样连
+	// 采集与实例管理都起不来），而是记入 Reasons 并继续其余源。
+	Failed int
+	// Reasons 是逐源失败原因（有界：只保留前若干条，避免刷屏）。
+	Reasons []string
+	// ReplaysScheduled / ReplaysSkipped 是**启动恢复重发登记**的读数（2026-10-10 第二项修复）。
+	//
+	// 为什么单列：改动前「判定」与「重发」是同一个内联循环，`Completed` 一次就代表"这个源恢复了"。
+	// 移到异步调度后两者必须分开记——`ReplaysScheduled` 表示"已在路上"、`ReplaysSkipped` 表示
+	// "本次没有重发"。把二者合并会让现场无法判断到底有没有在重发，而那正是本轮要回答的问题。
+	ReplaysScheduled int
+	ReplaysSkipped   int
+	// ReplaySkipReasons 是逐源跳过原因（有界，与 Reasons 同一上限）。跳过**不等于**已恢复：
+	// 缺口仍由发布账本与就绪面照实呈现，此处只是"为什么没有发起重发"的解释。
+	ReplaySkipReasons []string
+	// ReplaysInFlight 是「已登记、尚无结论」的重发源键（升序，实时取自重建调度器）。
+	//
+	// 语义（必须说清，否则会被误读）：**非空表示重发仍在路上**，不表示失败；
+	// 空也不表示成功——真正的成败判据是发布账本与就绪面（`projection_not_published`），
+	// 本字段只回答"我登记的那件事做完没有"。放弃（确定性失败达上限）不在本集合里，
+	// 而是以 `Failed` + Reasons 呈现（"不再重试" ≠ "已完成"）。
+	ReplaysInFlight []string
+}
+
 // Manager owns configured source pipelines and their durable state.
 type Manager struct {
-	mu      sync.Mutex
-	cycleMu sync.Mutex
+	// defaultCharset 是节点级默认字符集（源未显式配置时生效）；空串等价于 auto。
+	defaultCharset string
+	// defaultTimeZone 是节点级默认时区名（源未显式配置时生效）；空串等价于 UTC。
+	defaultTimeZone string
+	mu              sync.Mutex
+	cycleMu         sync.Mutex
+	// cycleMu 持有者观测仪（#57，env/Options 开启；默认关 ⇒ observeCycleMu 返回 nil，调用点只有一次判空）。
+	cycleMuProfile bool
+	// cycleMuMu 是观测仪的**叶子锁**：只保护下面几个普通字段（绝不在持它时调用外部代码，也不打日志）。
+	// 纪律（同 #55-A）：locked() 在**持 cycleMu 时**执行 ⇒ 锁内零 atomic、零日志，
+	// 把观测自身的开销排除在「持有时长」之外。
+	cycleMuMu          sync.Mutex
+	cycleMuHolder      cycleMuHolderInfo // 当前持有者（section + goroutine id + 起表时刻）
+	cycleMuHolderWatch *cycleMuWatch     // 该条记录属于谁（只有登记它的观测能清掉它）
+	cycleMuWindowStart time.Time         // 取锁密度滚动窗起点
+	cycleMuWindowAcqs  int               // 当前窗内取锁次数
+	cycleMuRatePerSec  float64           // 上一个已关窗的密度读数（次/秒）
+	// 慢持有 / 等锁读数（放锁后结算 ⇒ 可安全用 atomic）。
+	cycleMuSlowHoldCount atomic.Int64 // 慢持有累计（超 cycleMuSlowHoldThreshold）
+	cycleMuWarnAt        atomic.Int64 // UnixNano；慢持有告警独立节流窗
+	cycleMuWaitTotal     atomic.Int64 // 有界获取侧：等锁累计时长（ns）
+	cycleMuWaitMax       atomic.Int64 // 有界获取侧：最长单次等待（ns）
+	cycleMuWaitAttempts  atomic.Int64 // 有界获取侧的**调用次数**（每次调用记一条，与"探针 20/20 全忙"口径可比）
+	cycleMuWaitTimeouts  atomic.Int64 // 有界获取侧：超预算/被取消次数
+	// republishSkipped：「发布确认快路径」累计**跳过整窗重发**的次数（单位=次，见 tryConfirmPendingPublication）。
+	// 取值语义：pending=true 且非存量重放时，先按最近已发布代次在查询面复核；确认已完整可见 ⇒ 记 1 次。
+	// 用途：#5 验收直接判「VL 完整 ⇒ 零重发」是否真的发生 ✓。
+	republishSkipped atomic.Int64
+	// replaceRowsWritten：写入面（差集后）实际落库行数读数（w21 稿 ③），用于 #12 判读「整窗重发 vs 只写差集」。
+	replaceRowsWritten atomic.Int64
+	// registerMu 串行化「实例登记 / 采集绑定」自身，使这条路径**永不等待采集轮的长临界区**。
+	//
+	// 为什么要与 cycleMu 分离（2026-10-01 生产事故根因）：cycleMu 的持有者是「整轮采集」
+	// （pollOnce：逐源 Poll → WAL → persist → VL 投递 → 投影校验，单轮在饱和期可达分钟级）
+	// 与「预备切换 / 停止」（全管道 Flush + persist）。登记路径此前也取 cycleMu，于是
+	// 「CP 启动实例 → Worker CreateInstance → 登记实例日志采集」这一步被整轮采集挡住，
+	// 在 CP 的 10 秒 RPC 截止时间内必然 DeadlineExceeded（07:39/07:46/07:49/08:44 四次全中）。
+	//
+	// 登记为什么不需要 cycleMu 的互斥：登记只做三件事——读/写 m.state.Instances、按源键
+	// 幂等登记管道（m.mu 内建表）、persist（m.mu 内整段临界区）。三者都在 m.mu 保护下，
+	// 而 pollOnce 对本轮管道集合的取用是「m.mu 下快照、快照外轮询」，新增管道最多延到
+	// 下一轮参与采集（首轮无数据，无正确性损失）。故两者之间不需要额外互斥。
+	//
+	// 锁序（任何路径都不得逆序）：cycleMu → registerMu → pendingMu → mu。
+	// registerMu 永远不等待 cycleMu（否则本锁失去意义），Stop 则以 cycleMu → registerMu
+	// 的顺序把「关闭采集索引」与登记串行开，避免登记在 Stop 之后重新打开索引句柄。
+	registerMu sync.Mutex
 	// pendingMu 串行化暂存写入与注册接管，避免绑定切换时发生乱序或重复回放。
 	pendingMu sync.Mutex
-	root      string
-	vl        *vlsup.Client
-	vlRoute   func(SourceConfig) (*vlsup.Client, bool, error)
-	cat       *catalog.Catalog
-	journal   catalog.Journal
-	archive   *archive.Registry
-	sources   map[string]SourceConfig
-	pipes     map[string]*pipeline.Pipeline
-	state     persistedState
-	statePath string
+	// resolveGapsBudget 是整节点解算（ResolveCoveredGaps）单次调用的预算（源数 + 墙钟）。
+	//
+	// 为什么需要（2026-10-02 压测现场实证）：解算此前对**全部源**做投影查询与账本变更且全程
+	// 持 cycleMu，一次调用就让整节点采集停摆（read_pos 冻结 30 分钟、source_wal 卡 560 万行、
+	// 索引 WAL 涨到 10.2 GB，HTTP 300s 超时后服务端仍继续持锁跑完）。锁纪律修正后剩下的风险
+	// 是「单次调用无界」——源数 × 单源投影查询（段扫描随源数据量增长，生产单源可达秒级）
+	// 没有任何上界。故遍历带上界，并把「没跑完」如实返回（不伪装成成功）。
+	resolveGapsBudget ResolveGapsBudget
+	// resolveGapsCursor 是下一次整节点解算的起始源下标（轮转）。
+	//
+	// 为什么需要游标而不是「每轮都从第一个源开始」：预算用尽后的重复调用必须能**继续**，
+	// 否则永远停在同一个前缀、后面的源再也不会被解算（等于把「有界」变成「永远解不完整」）。
+	// 游标只在**处理成功**一个源后前移，失败时停在出错的源上，便于修复后原地重试。
+	resolveGapsCursor int
+	// stopped 表示 Stop 已开始（索引句柄即将/已经关闭）。
+	//
+	// 为什么解算需要它：解算的变更段不再整段持有 cycleMu（见 resolveOneSourceGaps），于是
+	// 它可能在两个源之间与 Stop 交错——此时再 persist 会把已关闭的索引句柄重新打开且无人关闭
+	// （registerMu 注释里点名的同型形态）。停止后一律拒绝，而不是留下无人关闭的连接与 WAL 残留。
+	stopped bool
+	// resolveGapsStage 是解算的测试观测口（生产为 nil，零开销）：在**离锁**阶段按源回调，
+	// 让回归能把「解算进行中」钉在确定位置，从而断言采集轮照常推进（与既有的 stageSink 同型）。
+	resolveGapsStage func(string)
+	// 单源实际完成 canonical 计数后的测试屏障，生产为 nil。
+	reconcileCheckedHook func(string)
+	// lifecycleCtx/lifecycleCancel 是本 Manager 自身生命周期的 ctx：持久化的可取消面
+	// （Stop 即取消，长落库不再"服务端继续为没人要的结果删库"）。**只在 New 中赋值、之后不再
+	// 改写**（取消用 cancel 函数），故读取无需加锁，也不参与任何锁序。
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+	// startupRecovery 是启动恢复（对账 + 重发 + 解阻回收）的**后台进度**。
+	//
+	// 为什么移出 New（2026-10-02 生产事故）：该链在 New 内逐源串行执行，而它的一端是
+	// 「读回该源全部 canonical 事件」（生产 18GB）+「剪枝后逐行删索引」（一次 3.4M 行）；
+	// New 不返回 ⇒ main 起不到反向隧道 ⇒ worker 20–30 分钟完全不可达（SIGQUIT 取证）。
+	// 现在 New 只做「登记 + 账本/段恢复」，恢复在后台续做并在就绪面上如实标注未完成。
+	startupRecovery startupRecoveryState
+	// startupDone 在启动恢复结束（含提前取消）时关闭；WaitStartupRecovery 据此等待。
+	startupDone chan struct{}
+	// lastPersistStats 是最近一次落库的读数（观测面）：生产排障据此确认
+	// 「①水位化差异删除是否真的启用」（RangePrunes > 0）、分步是否触发（Incomplete）。
+	lastPersistStats stateindex.Stats
+	// persistYield 是持久化「让路窗口」（见 persistStepYield 的说明）；0 用默认。
+	persistYield time.Duration
+	// persistPriorityStreak 是老化阈值（连续优先授予上限）；≤0 用默认（见 persistPriorityStreakMax）。
+	persistPriorityStreak int
+	// persistGateStage 是持久化门的测试观测口（生产 nil，零开销）：在「授予」与「交门」两个
+	// 事件点回调，让回归按**事件序**断言公平性（而不是靠耗时阈值猜）。
+	persistGateStage func(ctx context.Context, event string, seq int64, priority bool)
+	// persistHotBudget 是热路径（采集/投递侧）在持久化门上的等待上界；超时即交给后台通道。
+	persistHotBudget time.Duration
+	// persistStepHold 是持久化步骤的测试观测口（生产 nil，零开销）：在**持门执行步骤期间**回调，
+	// 让回归能确定性地"把门按住"（阻断即持门），从而断言热路径的有界等待与交办行为。
+	persistStepHold func()
+	// persistPlanHold 是**门外规划**的测试观测口（生产 nil）：在 planPersist 开头回调，
+	// 用于证明"长规划不占门"（变异=把规划移回门内 ⇒ 采集/投递单元被卡 ⇒ 红 ✓）。
+	persistPlanHold func()
+	// reconcileYield/SliceEvents 是**对账 CPU 让路**的运行时配置（见 groupEventsByUTCDayYielding）。
+	reconcileYield       time.Duration
+	reconcileSliceEvents int
+	// reconcileYieldNotify 是让路次数观测口（生产 nil，零开销）。
+	reconcileYieldNotify func()
+	// resumeInterval 是**容量自愈兜底**的低频周期（键 log_capacity.resume_interval）。
+	resumeInterval time.Duration
+	// resumeBatchPerRound 是兜底环每轮处理上限（见 defaultResumeBatchPerRound）。
+	resumeBatchPerRound int
+	// recoveryQuotaFactor / recoveryDrainGrace / recoveryGraceUntil：**恢复期独立配额**的接线
+	// （用户定调方案② ✓）。factor 默认 4（同倍拓宽，仍有界 ✓）；grace 默认 30m（现场排空动辄
+	// 小时级 ⇒ 10m 有"刚回归即再锁"的风险 ✓）；graceUntil 是可观测的宽限截止 ✓。
+	recoveryQuotaFactor float64
+	recoveryDrainGrace  time.Duration
+	recoveryGraceUntil  time.Time
+	// recoveryProbe 是"恢复是否进行中"的测试注入点（生产 nil ⇒ 用 StartupRecoveryStatus() ✓）。
+	recoveryProbe func() bool
+	// lastSweepBacklog / lastSweepAt：兜底环**净涨背压**的两轮读数（上一轮的闸视图总积压 ✓）。
+	// 现场形态（+463k ✗）：复活让源开始读文件 ⇒ 常规新数据进入 WAL ⇒ 若与此同时继续复活更多源，
+	// 就是"越复活越涨" ✗✗ ⇒ 恶化期**不放宽、不复活** ✓（用户 Q18 批准的背压 ✓）。
+	lastSweepBacklog int64
+	lastSweepKnown   bool
+	// sweepBacklogOf 是闸视图总积压的取数口（测试可注入 ✓）。
+	sweepBacklogOf func() int64
+	// resumeProbe 是兜底扫描的测试观测口（生产 nil）：每个"积压/容量类暂停"的源被扫到时回调。
+	resumeProbe func(logSourceID string)
+	// scanYield / scanSliceRows / scanYieldNotify：**段读聚合路径的让路**（见
+	// publishedClosedForSourceCtx 的逐行回调）。现场 X 光片点名该路径（readSegment）是每轮重活的
+	// I/O 大头 ✗：它本就可被 ctx 取消（每行校验 ctx.Err ✓），但**从不让路** ⇒ 单源扫描可以把一个
+	// P 占满整轮 ✗。默认 1ms / 8192 行：10 万行源额外 ≈12ms（可忽略 ✓），却把 P 交还调度器 ✓。
+	scanYield       time.Duration
+	scanSliceRows   int
+	scanYieldNotify func()
+	// scanBudget 是**单源单轮段读聚合的时间预算**（键 log_index.scan_budget；0 ⇒ 默认 2s）。
+	// 现场 `pollOnce` 的 WaitGroup 等分钟级 ✗ ⇒ 单个大源的整段扫描必须被截断：超预算即返回
+	// "证据不完整"（= 不当作证据 ⇒ 不消解、不推进 ✓），下一轮续扫 ✓。
+	scanBudget time.Duration
+	// scanBudgetExceeded 统计"超预算截断"次数（排障观测口）。
+	scanBudgetExceeded atomic.Int64
+	// readingsConsumed* 是**可达面被消费的调用计数**（用户 2026-10-05 的更稳写法 ✓）：
+	// 分钟打点（`sampleResumeDiagnostics`）按名调用这三个方法 ✓ ⇒ 计数随分钟递增即为
+	// "**可达面确实被消费**"的直接证据 ✓✓（不读外部源码、不依赖测试工作目录深度 ✗）。
+	// 现场读法：打点行里的 `consumed_*` 逐分钟增长 ⇒ 接线活着 ✓（恒 0 ⇒ 接线断了 ✗）。
+	readingsConsumedDiagnostics atomic.Int64
+	readingsConsumedStats       atomic.Int64
+	readingsConsumedInvariants  atomic.Int64
+
+	// backpressureSkips 统计因"上一轮净涨"而跳过的兜底轮数（可观测 ✓）。
+	backpressureSkips atomic.Int64
+	// sweepTicks / sweepPanics 是兜底环的**心跳与崩溃计数**（2026-10-05 现场：`candidates` 三次**恒定**
+	// ⇒ 累计计数不再增长 ⇒ 更像"**环本身停了**" ✗✓，与"被过滤"外部读数无法区分 ✓）。
+	// goroutine 内未捕获的 panic 会**静默杀死整个兜底环** ✗ ⇒ recover 连栈一起留证 ✓。
+	sweepTicks  atomic.Int64
+	sweepPanics atomic.Int64
+	// sweepCursor / sweepEligibleNow：**轮转窗口的游标**与**合格暂停源总数（gauge）** ✓
+	// （用户 2026-10-05 ②：只取前 N 且不轮转 ⇒ 长暂停源永不被覆盖 ✗✗；合格数单列 ⇒
+	// 现场一眼看出"合格 38 vs 本轮处理 2" ✓）。
+	sweepCursor      atomic.Uint64
+	sweepEligibleNow atomic.Int64
+	// sweepStepHold 是"有界步骤"的测试注入点（生产 nil、零开销 ✓）：在 `runSweepStepBounded`
+	// 执行 `fn` **之前**回调。为什么注在**这一步内部**（2026-10-05 纪律⑥：注入点必须"准且稳" ✓）：
+	// 用全局锁（`m.mu`）注入会**既测错位置**（环入口就要拿它 ✗）**又偶发**（时紧时松 ✗）✓。
+	sweepStepHold func()
+	// #56：追加被拒（暂停/上限）⇒「排空已 durable 存量」改为**调度**（不在摄取路径内当场执行）。
+	// replayMu 只保护下面两个集合与唤醒通道（叶子锁：绝不在持它时调用任何外部代码）；
+	// replayWake 是 cap=1 的**非阻塞唤醒**（同源/并发多次请求合并成一次唤醒）。
+	replayMu       sync.Mutex
+	replayPending  map[string]struct{} // 待排空的源（同源多次被拒 ⇒ 合并成一条）
+	replayInflight map[string]struct{} // 正在排空的源（单飞：同源不并发整窗 replay）
+	replayWake     chan struct{}
+	// ── #63：重放回收（rolling drain）读数与上界 ───────────────────────────────────────────
+	// 现场靶数：344 位/s/源（1.14 亿需 3.7 天）⇒ 最低线 4,000/s/源、四源合计 13,500/s（8h 收官）；
+	// 及格语义 = **追平生成速率**（生产仍在灌料 ⇒ 循环必须可长期滚动），而非只清零存量 ✓。
+	reclaimRollRounds       atomic.Int64 // 滚动回收调用轮数
+	reclaimRollSteps        atomic.Int64 // 累计推进步数（每步 = 一次探测/补段/推进）
+	reclaimRollAdvanced     atomic.Int64 // 累计推进位数（位 = 账本 record 位置）
+	reclaimRollFirstAdvance atomic.Int64 // 累计"首步推进量"（= 陈旧覆盖段的上界缺口 ✓ 现场判据）
+	reclaimRollNanos        atomic.Int64 // 累计墙钟（ns）⇒ 位·s⁻¹ = Advanced/(Nanos/1e9)
+	reclaimRollLast         atomic.Value // ReclaimRollSnapshot：上一轮读数（reclaim/delivery/firstAdvance/steps/advanced）
+	// reclaimRollMaxSteps / reclaimRollBudget 是**单轮有界**（#63 裁定：≤8 步 / ≤200ms）；
+	// 现场与回归都可覆盖（0 ⇒ 默认 8 / 200ms ✓）。
+	reclaimRollMaxSteps int
+	reclaimRollBudget   time.Duration
+
+	// replayScheduledTotal 是「追加被拒 ⇒ 登记待办」的累计次数（观测面：证明调度确实发生）。
+	replayScheduledTotal atomic.Int64
+	// sweepStepBudget 是兜底环**单源单步**的有界等待预算（0 ⇒ 默认 150ms ✓，见 sweepStepBudgetOf）。
+	sweepStepBudget time.Duration
+	// skipBlocked 统计"本轮因**有界等待超时**而跳过"的次数（2026-10-05 现场 ✓）：
+	// 兜底环是**维护环**，绝不该挂在重活上 ✗ —— 现场形态正是环第一轮卡在
+	// `DeliverPending→deliver`（等 `m.mu`：被"长持 m.mu 的规划者"挡住 ✓）⇒ ticks=1 冻结 ✓。
+	skipBlocked atomic.Int64
+	// **三步各自耗时（累计 ns）+ 每轮总耗时 + 上轮处理源数**（新账 1 ✓）：单轮 4–6 分钟而
+	// `skip_blocked` 只解释个位数秒 ⇒ 须能分辨"少数慢源"还是"每源均匀慢" ✓（平均每源 = 总耗时/源数 ✓）。
+	nsDelivery   atomic.Int64
+	nsResolve    atomic.Int64
+	nsEvaluate   atomic.Int64
+	nsRoundTotal atomic.Int64
+	// **在飞被放弃调用的定界**（用户 2026-10-05 新账 2 ✓）：有界执行器只放弃**等待** ✗，
+	// 被放弃的调用仍带着批次/事件载荷在后台等 `m.mu` ⇒ 多轮叠加会累积内存（现场 RSS 8–14GB/轮爬升 ✓，
+	// 后证非单调 ⇒ 暂态可接受 ✓，但极端负载下必须**可定界** ✓）。
+	sweepInflight    atomic.Int64 // 当前在飞（含被放弃）的步骤数 ✓
+	skipInflightCap  atomic.Int64 // 因"在飞已达上限"而拒绝发起的步数 ✓
+	lastRoundSources atomic.Int64
+	// **四相下探**（2026-10-05 分型结论 ✓）：99.7% 在"三步之外" ⇒ 拆成三相计时 + 派生"其余" ✓。
+	// 判读：某相**远超"逐源锁 × 59"合理量级** ⇒ 该相**被长持有者挡住**（与 m.mu 排队同源 ✓）；
+	// 各相都在合理量级 ⇒ 是**遍历本身** ⇒ 批量化（三遍并一遍 ✓）。
+	nsScanElig     atomic.Int64
+	nsBacklogTotal atomic.Int64
+	nsSyncQuota    atomic.Int64
+	// **逐相"最长单次 m.mu 等待"**（支 A/B 判据 ✓，见 noteMuWait 注释 ✓）。
+	muWaitBacklog atomic.Int64
+	muWaitQuota   atomic.Int64
+	muWaitSources atomic.Int64
+	muWaitResume  atomic.Int64
+	// **兜底环每轮的跳过原因分类计数**（2026-10-05 现场：41 家三项前置全满足却不复活 ✗ ⇒
+	// 必须能直接读出"是哪一条把它挡了" ✓）。
+	risingStreak     atomic.Int64
+	skipBackpressure atomic.Int64
+	skipHysteresis   atomic.Int64
+	skipEnumeration  atomic.Int64
+	sweepCandidates  atomic.Int64
+	sweepRevived     atomic.Int64
+	// selfHealDuePass / selfHealDueSkip（#66-⑤ 诊断，只读）：自愈面**限频闸**的命中/未命中计数。
+	// 为什么要它：现场"四落后源零 `滚动回收` 行"的第一嫌疑是"自愈面根本没轮到它们"——而准入链上
+	// 可能拦住它们的位置只有两处：① **状态闸**（未暂停且零未解决缺口 ⇒ 直接返回，**不计入**本对计数）；
+	// ② **限频闸**（本对计数 ✓）。两者并读即可分辨（pass 有增长 ⇒ 状态闸放行了；skip 恒涨而 pass 不动
+	// ⇒ 全被限频挡住；两个都恒为 0 ⇒ 连状态闸都没放行或自愈面未被调用 ⇒ 嫌疑上移到管道/轮转面 ✓）。
+	selfHealDuePass atomic.Int64
+	selfHealDueSkip atomic.Int64
+	// selfHealStallCount / selfHealStallSkip（改动 C 诊断，只读）：自愈面「无进展退避」的
+	// 计数——**进入退避**的累计次数，以及**本轮投递被退避挡下**的累计次数。
+	// 读法：stall 恒涨而 skip 不动 ⇒ 每轮都有进展（退避被进展不断重置，正常 ✓）；
+	// stall 与 skip 同步增长 ⇒ 该源确实卡住且已限频（正是退避要治的形态 ✓）。
+	selfHealStallCount atomic.Int64
+	selfHealStallSkip  atomic.Int64
+	// #179 第 1 步（③ 观测，行为中性）：补段助手的**四处静默 return** 的按源去重计数 + 首次 Debug。
+	// 为什么要它：现场"某源零 `滚动回收` 行、且看不出为什么不动"的根因就是这四处全静默 ✗。
+	blockedSegHold     atomic.Int64 // 段 hold（HasRecoveryHold）
+	blockedConfigHold  atomic.Int64 // 配置层 hold（m.recoveryHold）
+	blockedNoMaterial  atomic.Int64 // to <= from（无"已确认未覆盖"区间）
+	blockedWatermark   atomic.Int64 // 水位复读失败（变则弃）
+	blockedStallWarns  atomic.Int64 // ② 有界判据：N 轮无进展 ⇒ 告警次数（可观测 ✓）
+	blockedLoggedMu    sync.Mutex
+	blockedLogged      map[string]struct{} // 按源去重（首次 Debug 一次，不刷屏 ✓）
+	reclaimStallMu     sync.Mutex
+	reclaimStallRounds map[string]int // ② 按源"回收停滞轮次"（reclaim 未前进的连续轮数 ✓）
+	reclaimStallLast   map[string]uint64
+	// sweepRollingProbes / nsRolling（#66-⑤ 诊断，只读）：兜底环轮转窗口里**实际发起**的
+	// "只滚动/补段"自愈次数与耗时（前置是 O(1) 的"有欠账"判据 ⇒ 健康源不发起 ⇒ 本读数同时是
+	// **成本定界**的证明 ✓）。
+	sweepRollingProbes atomic.Int64
+	nsRolling          atomic.Int64
+	// sweepDeliveryProbes / nsRollingDelivery（#66-⑥ 诊断，只读）：同一窗口里**实际发起**的
+	// "有界投递步"次数与耗时（前置是 O(1) 的"投递欠账"判据 delivery < read ✓ ⇒ 无欠账不发起 ✓）。
+	sweepDeliveryProbes atomic.Int64
+	nsRollingDelivery   atomic.Int64
+	// sweepDirectDeliverProbes / nsRollingDirectDeliver（#179-② 诊断，只读）：兜底环轮转窗口里
+	// **实际发起**的「破环直投」步次数与耗时。该步含 Ledger 深克隆 + WAL 全量快照 + 同步 VL 写入
+	// （本文件自述"把单轮拖到 48.5 分钟"的 O(n) 重活），此前**没有任何读数** ⇒ 兜底环诊断里完全
+	// 不可见；有了它才谈得上断言单轮有界（与相邻两步同款的前置 O(1) 判据）。
+	sweepDirectDeliverProbes atomic.Int64
+	nsRollingDirectDeliver   atomic.Int64
+	// sweepBackpressureStreak 是窗口化背压的阈值（连续 N 轮净涨才跳过 ✓；0 ⇒ 默认 3）。
+	sweepBackpressureStreak int
+	// sweepInflightCap 是在飞并发上限（见 defaultSweepInflightCap ✓）。
+	sweepInflightCap int
+	// persistRequests/persistWorkerDone 是**后台持久化通道**：热路径超时后把「请落库」交给它，
+	// 由独立 goroutine 完成（它才是允许阻塞的那一方）。cap=1：已有待办请求即无需重复入队。
+	persistRequests   chan struct{}
+	persistWorkerDone chan struct{}
+	// resolvePersistBudget 是**解算收尾落库**在持久化门上的有界等待预算（#59；0 ⇒ 默认 2s）。
+	// 现场（探针自栈两现）：handler 卡在 persistGate.Cond.Wait 达 45s —— 而该源的账本写
+	// （AbandonGapsThrough）早已落账 ⇒ 卡的是"索引落库排队"，属**可交办**的工作。
+	resolvePersistBudget time.Duration
+	// persistResolveHandoffs 是解算收尾"交办后台"的累计次数（#59 观测读数：0 ⇒ 全部同步落库完成）。
+	persistResolveHandoffs atomic.Int64
+	// persistClearConflictsHandoffs 是「清空身份冲突」收尾"交办后台"的累计次数。
+	// 与解算分开记账：合并计数会让探针无法区分"卡在解算"与"卡在清空"。
+	persistClearConflictsHandoffs atomic.Int64
+	// replayBudget 是整窗重发的切片预算（见 ReplayBudget）。
+	replayBudget ReplayBudget
+	// vlProbeTimeout / vlNotReady 是 VL ready 门禁的读数：probe 超时与「哪些源当前被判未就绪」。
+	// vlNotReady 只用于**状态变化时才打日志**（否则每轮每源刷屏，现场日志会被淹掉）。
+	vlProbeTimeout time.Duration
+	vlReadyWait    time.Duration
+	vlNotReady     map[string]string
+	root           string
+	vl             *vlsup.Client
+	vlRoute        func(SourceConfig) (*vlsup.Client, bool, error)
+	cat            *catalog.Catalog
+	journal        catalog.Journal
+	archive        *archive.Registry
+	sources        map[string]SourceConfig
+	pipes          map[string]*pipeline.Pipeline
+	state          persistedState
+	statePath      string
+	// index 是采集索引的嵌入式 SQLite 存储（FR-496，spec §2.1）：persist 只写变更行，
+	// 启动时自动迁移旧 ingest.state.json（校验失败拒绝启动）。nil 表示尚未打开（
+	// 测试直接构造 Manager 的场景在首次 persist 时按需打开）。
+	index *stateindex.Store
+	// persistedRev 记录「上次持久化时」各源账本的修订号（见 ledger.Ledger.Revision）。
+	// persist 据此只处理变更源，把每次持久化的成本从 O(全部源的行数) 降到 O(变更源的行数)。
+	//
+	// 基线在 Register（恢复完账本、建好 pipeline）的**最后**一步写入，因此「刚启动」天然是
+	// 干净的：内存状态与库内容一致，无需任何写入即达成一致。
+	persistedRev map[string]uint64
+	// persistedCover 记录「上次持久化时」各源的段存储覆盖水位。
+	//
+	// 为什么修订号之外还需要它：WAL 行是「内联正文」还是「只存引用」由
+	// (EventsStored, EventsStoredThrough) 决定（B1a 的按条判据），而这两个字段由投递路径
+	// 直接改 state——账本修订号看不见它。若不单独跟踪，段存储覆盖推进后旧的内联行不会被
+	// 改写成引用行（或反之），源会在重启后按错误的形态恢复。
+	//
+	// 这里用「现值与上次记录值比较」而不是「在上层每个改动点显式标记」：前者不需要任何人
+	// 记得标记（漏标记即静默丢更新），且比较只是两个标量，代价可忽略。
+	persistedCover map[string]coverSignature
 	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
 	events              *eventstore.Store
 	verificationTimeout time.Duration
+	// verifyMaxQueriesPerChunk 是单簇单次校验的尝试次数上限（0 用默认）。
+	verifyMaxQueriesPerChunk int
+	// verifyLimiter 是校验/对账查询的全局天花板（速率 + 在飞）。
+	verifyLimiter *verifyLimiter
+	// verifyRoundProgress 记录**本轮已完成多少块校验**：轮级预算只允许在"本轮已有进展"之后
+	// 才把后续源推迟到下一轮 ✗——否则慢环境（-race 放大 / VL 变慢）下第一个源就会吃掉整轮预算，
+	// 之后每个源都被推迟 ⇒ 同一批源**每轮都被推迟**、永不判定 ✗✗（实测：race 下 12 源夹具停滞，
+	// 未就绪源数长期不降）。保证"每轮至少推进一个"是本修复的硬要求 ✓。
+	verifyRoundProgress atomic.Int64
+
+	// verifyRoundBudget 是**每源每轮的校验时间预算**（可配，默认 1.5s）。
+	//
+	// 为什么（2026-10-03 现场 Q4：未暂停源 readΔ 全 0）：采集轮是**全源屏障**——轮内固定 worker
+	// 逐源串行，少数源卡在"校验等待"就把 worker 占住，本轮其余源连 `Poll` 都轮不到 ✗。
+	// 有了本预算：单源本轮最多等这么久，超出即**本轮放弃**（结论与"窗口内未可见"同族 ✓），
+	// 交回下一轮 ⇒ 轮墙钟有界 ⇒ **每个源每轮都能跑到 Poll** ✓✓。
+	verifyRoundBudget time.Duration
+	// verifyVisibilityFloor 是"可见性错开"等待（键 log_index.verify.visibility_floor）：
+	// >0 时整批首探前先等到"距批写入 ≥ floor"——VL 写入→可查询有 ~1.02s 硬地板，本函数紧跟
+	// insert 之后调用 ⇒ 立即探测必然全落在地板内（0/0.2/0.6s 三次白探）；等到地板后再探 ⇒
+	// 首探即命中。≤0 = 关（默认关）。
+	verifyVisibilityFloor time.Duration
+	// reconcileLockBudget 覆盖「取候选等 m.mu」的有界上限（0 用默认常量
+	// reconcileCandidateLockBudget；测试用小值走真实限额路径，与 SetReconcileLoopConfig 同风格）。
+	reconcileLockBudget time.Duration
+	// reconcileCursorKeySnapshot 是"对账游标当前所指源 key"的**无锁快照**（2026-10-04）：
+	// 供"锁超时"快速放弃路径在不取 m.mu 的前提下带上"已推进到哪"，解除点名掩蔽（父级裁定 ①）。
+	reconcileCursorKeySnapshot atomic.Value // string
+	// verifyRoundDeadline 是本轮的校验截止时刻（unix nanos；0 表示不限，用于非轮内调用路径）。
+	verifyRoundDeadline atomic.Int64
+	// verifySourceBudget 是**每源**的校验预算状态（key = "logSourceID/generation"）：
+	// 每源在轮内被处理前**各自**设置截止时刻（见 pollOnce → setVerifySourceDeadline）。
+	// 校验**优先**读本源状态（2026-10-03 回退修复 ③：消除"慢源吃掉整轮预算 ⇒ 轮内后段源
+	// 全部 defer"的**队头阻塞**——深积压下单轮墙钟 ≫ 预算即触发）；未设 per-source 的
+	// 路径（启动恢复/对账）回退轮级 verifyRoundDeadline（语义不变 ✓）。
+	verifySourceBudget sync.Map // map[string]*verifySourceBudgetState
+	// verifyChunkEstimates 是「单源校验预算随事件数放大」的档位（改动 B）。
+	// 零值 = 完全关闭放大 ⇒ 预算与修复前逐字一致（保守默认，见 VerifyChunkEstimates）。
+	verifyChunkEstimates VerifyChunkEstimates
+	// verifyDeferred 是"因轮级预算而本轮放弃校验"的计数（可观测 ✓）。
+	verifyDeferred atomic.Int64
 	// verifyBackoffMin/verifyBackoffMax 是投影校验重试的退避区间（B1c）；0 用默认常量。
 	verifyBackoffMin time.Duration
 	verifyBackoffMax time.Duration
+	// verifyChunkEvents 是单次校验查询覆盖的事件上限（分簇粒度，FR-498 P0）；0 用默认常量。
+	// 作为字段而非裸常量：不同 VL 部署的返回体承载能力不同，且回归要用真实限额路径驱动。
+	verifyChunkEvents int
+	// verifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取默认，1 为串行。
+	verifyChunkConcurrency int
+	// eventsStoredRows 缓存每源「段存储已落行数」，避免 appendEvents 每批 Count（其内部要
+	// 校准末段 = O(末段行数) 的整段读取）。本进程是段的唯一写者，追加成功后按增量推进即可。
+	eventsStoredRows map[string]int
+	// eventsStoredEpoch 是每源「段物理版本号」：本进程每次真正追加段就自增
+	//（appendEvents / appendEventTail 是本进程唯一的两个段写入出口）。它是 storedCoverageMemo
+	// 的有效性凭据之一，与段行数一起回答「这段内容还是不是记备忘时那段」。
+	//
+	// 为什么这两个读数够：段是**只追加**结构，除「末段半行截断」（崩溃残留校准）外没有改写
+	// 路径，而截断会改变行数（见 eventStoreCoverage 的说明）。
+	eventsStoredEpoch map[string]uint64
+	// storedCoverageMemo 缓存每源「某个内容指纹的事件集合已被段逐条覆盖」的核对结论
+	//（见 eventStoreCoverage）。
+	//
+	// 为什么需要（这是性能正确性、不是可选优化）：覆盖判定必须按**身份**逐条比对（这正是
+	// 「段物理行数被冗余行抬高 ⇒ 误判段超前于权威集合 ⇒ 永久硬失败」的修复），而逐条比对
+	// 要遍历整段并 JSON 解码每一行——生产实证（inst:148，126MB / 135113 行）**单次 1.7s**
+	//（本机只读实测，3 次取整）。
+	// 偏偏慢路径是「同一份权威全量被反复问」的形态：`planDeliveryTail` 在「本批区间与已落段
+	// 范围重叠」时退回慢路径（见其 minStart 判据），而重放/重建按 UTC 天切片推进，每天都带着
+	// 同一份权威全量进来；单轮预算只有 90s（defaultReplayMaxDuration）且还要容纳 VL 写入。
+	// 没有备忘就是「每批/每天一次全段遍历」，足以把整轮预算耗尽 ⇒ 收束时置 `PublicationPending`
+	// ⇒ 回到「pending 钉死」的老路 ✗。备忘把重复问的代价压到近似零。
+	storedCoverageMemo map[string]eventStoreCoverage
+	// eventStoreIdentityConflicts 累计「段与权威集合对同一 event_id 持有不同内容」的次数
+	//（观测面：这类冲突必须可见，不能被静默吞掉）。
+	eventStoreIdentityConflicts atomic.Int64
+	// storedCoverageHits 累计覆盖备忘命中次数（观测/回归用：让「重复问不再遍历段」可被断言，
+	// 而不必依赖耗时阈值）。
+	storedCoverageHits atomic.Int64
+	// stageSink 是阶段计时的测试观测口（生产为 nil，零开销）：让回归能断言「快路径确实生效」，
+	// 而不必依赖耗时阈值或日志解析。
+	stageSink        func(string)
 	capacityProvider func() (acquire.CapacityBudget, error)
-	recoveryHold     func(SourceConfig, string) (bool, string)
+	// sampling 保存原始已校验策略，每个源创建独立采样器。
+	sampling     sampling.Policy
+	recoveryHold func(SourceConfig, string) (bool, string)
+	// reconcile 是启动增量对账（FR-497）的生效配置（已归一化）。
+	reconcile ReconcileConfig
+	// reconcileLoop 是常驻增量对账（后续项③）的生效配置（已归一化）：周期驱动、单轮预算与
+	// 源数有界，默认温和（15m / 45s / 8 源轮转）。**关闭即完全不跑**（不打 VL 查询、
+	// 不推进任何状态）；启动对账（reconcile）不受它影响。
+	reconcileLoop ReconcileLoopConfig
+	// reconcileLoopStats / reconcileLoopCursor / reconcileDayCounts 是常驻对账的观测读数、
+	// 全源轮转游标与「按 UTC 天权威条数」缓存（见 reconcile_loop.go 的说明）。
+	reconcileLoopStats  ReconcileLoopStats
+	reconcileLoopCursor atomic.Int64 // 候选1：改为无锁游标（视图路径读写；对账单 goroutine 主导，丢失更新仅致幂等重做/跳过）
+	// reconcileViewSnapshot 是"对账只读视图"（候选 1，2026-10-04）：keys+sources 同代快照，
+	// 持锁写侧重建、atomic 发布；对账读侧零取 m.mu（发布点：源变更 force + 采集链/对账节流）。
+	reconcileViewSnapshot atomic.Value // *reconcileView
+	// 候选 2（2026-10-04）：m.mu 慢持锁观测 —— 计数 + 节流告警（先测量、后收窄）。
+	mutexHoldSlowCount atomic.Int64
+	// #55-A（2026-10-05）：把「等锁」从「持有」里拆出来单独计 —— 起表点原先在 Lock **之前**
+	// ⇒ 读数混入等待（现场 9–19s），无法区分"自身持有"与"被挡住" ✗。两套计数器 + 各自节流窗口
+	//（慢等待与慢持有各自一行告警），阈值同为 mutexHoldSlowThreshold。
+	mutexWaitSlowCount atomic.Int64
+	mutexWaitWarnAt    atomic.Int64 // UnixNano；慢等待告警节流窗口（独立于慢持有）
+	// pollDispatchHook 是"采集分发前"的**仅测试用**观测点（D 修复红/绿）：断言进入分发段时 cycleMu 已释放。
+	pollDispatchHook atomic.Value // func()
+	// walRowsBuildHook 是"锁外构建 WAL 行"前调用的**仅测试用**观测点（A-Step2 红/绿）：
+	// 断言该处未持 m.mu。
+	walRowsBuildHook atomic.Value // func()
+	// deliverPlanHook 是"锁外投递规划（本批规范化 + 去重）"前调用的**仅测试用**观测点
+	// （#54 修复红/绿）：断言该处未持 m.mu。
+	deliverPlanHook atomic.Value // func()
+	// resolveGapsPlanHook 是「解算的锁外计算结束、重新取锁复验之前」调用的**仅测试用**观测点（#58）：
+	// 供用例在锁外窗口里注入一次账本写，断言第三段复验必须丢弃（不写入任何变更）。生产 nil ⇒ 零开销。
+	resolveGapsPlanHook func()
+	// clearConflictsAfterPlanHook 是「清空身份冲突」第一段（取计划快照）与第三段（复验提交）
+	// 之间调用的**仅测试用**观测点。供用例确定性地注入"审阅后新增了一条冲突记录"，
+	// 断言第三段复验必须跳过该源（未审阅的记录不得被顺手清掉）。生产 nil ⇒ 零开销。
+	clearConflictsAfterPlanHook func()
+	// rebuildSourceBuildHook 是"锁外构建源重建体"前调用的**仅测试用**观测点（#55-B 红/绿）：
+	// 断言该处未持 m.mu；同时供"锁外期间源又变了 ⇒ 第三段必须丢弃重建"的确定性用例注入变更。
+	rebuildSourceBuildHook atomic.Value // func()
+	mutexHoldWarnAt        atomic.Int64 // UnixNano；告警节流窗口
+
+	// rebuilds 是**投影重建的异步调度器**（见 rebuild_scheduler.go）：把「重放整段历史 → 写 VL →
+	// 逐字段校验 → 发布」这条慢路径从采集主线与对账轮上摘出去，交给专用 goroutine 执行，
+	// 并对其加限速（批间让出）与有界重试（防循环重建）。
+	//
+	// 为什么必须是字段而不是包级全局：重建的台账（每源连续失败次数/退避/放弃原因）属于
+	// Manager 的生命周期，跨 Manager 共享会让测试之间互相污染、也会让「源换代次后清零」失真。
+	rebuilds *rebuildScheduler
+	// reconcileLoopCfgSnapshot 是常驻对账配置的快照（候选 1）：写点即时发布 ⇒ 配置读零锁。
+	reconcileLoopCfgSnapshot atomic.Value // ReconcileLoopConfig
+	reconcileViewPublishedAt atomic.Int64 // UnixNano
+	reconcileDayCounts       map[string]reconcileDayCountsCache
+	// indexPrune 是历史投递批次裁剪的生效配置（已归一化，默认开启）：建每个源的账本时下发
+	// （ledger.SetDeliveryBatchPrune）。裁剪发生在账本写路径内，因此配置必须落在账本上，
+	// 而不是落库前再过滤一遍——后者只能让库变小，内存仍会随总量线性增长。
+	indexPrune ledger.DeliveryBatchPruneConfig
+	// indexCommit 是索引持久化「提交单元预算」的生效配置（已归一化）：单次持久化按
+	// 行数 + 耗时双上界切成多个提交单元（FR-498 P0，见 stateindex.CommitBudget）。
+	// 打开索引库时下发（stateindex.OpenWithBudget）。
+	indexCommit stateindex.CommitBudget
+	// walLimits 是单源 WAL **真实积压**上限的配置面（键 log_capacity.max_wal_entries /
+	// max_wal_bytes）；建管道时下发到 acquire.WAL.SetLimits。nil 表示沿用 acquire 包默认。
+	//
+	// 为什么要经 Manager 转发而不是在 acquire 里读配置：WAL 由本包创建（newWAL），
+	// 配置也只到本层；acquire 不得反向依赖 worker 配置。
+	walLimits *acquire.WALLimits
+	// maxReplayEventsPerDrain 是暂停/恢复期单轮外发事件数上限（回放限速）；0 表示用默认。
+	maxReplayEventsPerDrain int
+	// multilineUnclosedTimeout 是未闭合多行缓冲的闲置超时（缺陷 B）；≤0 表示关闭强制冲刷。
+	multilineUnclosedTimeout time.Duration
+	// reconcileReports 保留最近一次启动对账的逐源结论（只读观测面）。
+	reconcileReports []ReconcileReport
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
 	sourceErrs map[string]string
+	// gapAutoResolveAt 记录每源最近一次自愈尝试的时刻（缺陷 A）。
+	// 自愈要投递存量并按天聚合事件区间，故按源限频（见 gapAutoResolveInterval）。
+	gapAutoResolveAt map[string]time.Time
+	// reReadGapProbeAt 记录每源最近一次"待重读缝直投"探测时刻（2026-10-06 快验回归修复）。
+	// 该步含 Ledger.Get（深克隆）＋ WAL 全量 Snapshot ⇒ 只允许**有投递欠账**的源在冷却期外
+	// 至多探一次（详见 directDeliverResolvedReReadGap 的门闸说明 ✓）。
+	reReadGapProbeAt map[string]time.Time
+	// selfHealInterval 是自愈的最小重试间隔；0 表示用默认常量。
+	selfHealInterval time.Duration
+	// verifiedCoverageEpoch 记录每源「逐字段校验覆盖」的**进展代次**（单调递增，由
+	// recordVerifiedRunsReporting 在**真的新增了覆盖**时自增）。自愈面用它判断"本轮有没有推进"：
+	// 有 ⇒ 不退避（否则会扼杀改动 A 的渐进收敛 ✗），无 ⇒ 退避（避免 10s 周期空转 ✗）。
+	// 有界性：只在确有新覆盖时自增；键集合与 state.Sources 同规模（源数），不随失败次数增长 ✓。
+	verifiedCoverageEpoch map[string]uint64
+	// selfHealBackoff 记录每源**无进展失败**的退避状态（见 selfHealBackoffFor / noteSelfHealFailure）。
+	// 与 verifiedCoverageEpoch 同锁（m.mu）：两者必须一起读，否则"有进展"与"退避代次"会撕裂。
+	selfHealBackoff map[string]*selfHealBackoffState
+	// generationProbeCache 是「该源该代次已确认未占用」的进程内缓存（复审 P2-11，
+	// 见 projectionGenerationKnownFree / recordProjectionGenerationAttempt）。不持久化：
+	// 重启后重新实探，正是保守方向。
+	generationProbeCache map[string]map[string]bool
+	// generationReserved 是「该源该代次名已被本进程**预留**（即将写入）」的表。
+	//
+	// 为什么必须有它（2026-10-10 生产实测，缺陷修复）：代次名的分配**不在任何锁内**
+	//（nextFreeProjectionGeneration 在 runtime.go 的 deliver 里于取 publishMu **之前**调用），
+	// 而它的判据是「实探 VL 未占用」（含 5s 级网络往返）＋ 缓存该名可用。两条同源投递各自
+	// 实探「未占用」⇒ 双双算出**同一个名字** ⇒ 各写一份完整副本，VL 侧同一 (源, 代次) 出现
+	// 2–3 倍重复行（生产 inst:172 实测 60000 唯一 / 180000 行 = 3×）。
+	//
+	// 语义：与 generationProbeCache 共用 m.mu（同一临界区，无新增锁 ⇒ 无新增锁序边）；
+	// 取名与写入尝试都持 m.mu 读写它，故「探测 → 预留 → 释放」对同源是一次原子选择。
+	// 释放时机：写入尝试**结束**（成功或失败）时删除——失败也必须释放（否则该名被永久
+	// 钉死，重试只能一直进位，代次号无界增长）。残留只会让重试换一个名字，方向保守 ✓。
+	generationReserved map[string]map[string]uint64
+	// generationReservationSeq 分配预留所有权令牌（见 generationReservation.token）。
+	// 原子量：只在取名与释放路径上自增，不需要与 m.mu 同临界区。
+	generationReservationSeq atomic.Uint64
+
+	// pollConcurrency 是单轮采集的跨源并发度；0/负值取 defaultPollConcurrency，1 为串行。
+	// 作为字段以便用真实限额路径做对照实验与回归，而非只断言常量本身。
+	pollConcurrency int
+	// publishMu 串行化「读当前权威 → 应用本源的投影 → CAS 写回」整段（见 publish）。
+	//
+	// 为什么必须有（FR-498 并发采集轮的前提）：同一 namespace 会有**多个源**（同一实例的
+	// stdout/stderr、多文件源），而 publish 是读-改-写：并发轮下两个源各自读到同一份旧记录，
+	// 后写者会把先写者的 SourceProjections 覆盖掉（丢失更新）。实测：两个 stdio 源并发投递后
+	// 记录里只剩 1 条源投影（原串行实现为 2 条）。锁内重新读取当前记录即恢复串行语义。
+	//
+	// 锁序：它是叶子锁（cat 的回调不进入 Manager），可在 cycleMu 内、m.mu 之外获取。
+	publishMu sync.Mutex
+	// 按真实源与 UTC 日记录发布版本，其他源的发布不使本源快照失效。
+	publicationEpochs map[string]map[string]uint64
+	// 在途计数与尝试号由 m.mu 保护，遗留 pending 与在途写入分开管理。
+	publicationAttempts map[string]uint64
+	publicationInflight map[string]int
+	// persistGate 让「构建 + 落库」同一时刻只有一次在跑（串行），并让短变更调用者只等
+	// **一个周期**而不是排到队尾（见 persist 的合并说明）。
+	persistGate persistGate
+	// persistJoin / persistCovered 是合并算法的两个水位：调用方按到达顺序声明序号；
+	// 每次落库声明它覆盖到的序号。声明号 ≤ 覆盖水位的调用方直接返回（它的变更已被落库）。
+	persistJoin    atomic.Int64
+	persistCovered atomic.Int64
+	// 快照序在实际根行与派生行定格的临界区分配，与请求声明号分开。
+	persistSnapshotSerial uint64
+	persistAccepted       atomic.Uint64
+	// 兼容直调单步入口，所有提交共用接纳与写入的串行边界，规划不持此锁。
+	persistCommitMu sync.Mutex
+	// persistPlanMu/persistPlan/persistPlanAt 是**热路径规划复用**缓存（2026-10-03 回退修复）：
+	// 窗口内的多个调用者复用同一份门外计划，避免 N 倍冗余规划（每份都要持 m.mu 遍历全源 +
+	// 重建镜像，60 源并发下实测吞吐 3.3k→1.5k 行/s）。Builds/Reuses 是"每轮只规划一次"的
+	// 可观测指标（复验用：builds/轮 ≈1）。
+	persistPlanMu     sync.Mutex
+	persistPlan       *persistPlan
+	persistPlanAt     time.Time
+	persistPlanBuilds atomic.Int64
+	persistPlanReuses atomic.Int64
 	// pendingMaxStream/pendingMaxTotal 是 pending 暂存上限（M-6）；0 表示用默认常量。
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
 	pendingMaxStream int64
 	pendingMaxTotal  int64
+}
+
+// SetSelfHealInterval 覆盖自愈最小重试间隔（测试用；<=0 表示沿用默认）。
+func (m *Manager) SetSelfHealInterval(interval time.Duration) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.selfHealInterval = interval
 }
 
 // SetPendingSpoolLimits 覆盖 pending 暂存上限（测试用）。
@@ -137,9 +754,17 @@ func (m *Manager) noteSourceError(sourceID, msg string) bool {
 // Options constructs a production ingestion manager. A nil VL client leaves
 // sources durable but explicitly not delivered, preserving visible gaps.
 type Options struct {
-	Root                string
-	VL                  *vlsup.Client
-	Catalog             *catalog.Catalog
+	Root string
+	// Sampling 为零时保持原文恒等，启用时按源独立采样。
+	Sampling sampling.Policy
+	VL       *vlsup.Client
+	Catalog  *catalog.Catalog
+	// DefaultCharset 是节点级默认字符集（auto/utf-8/gbk/gb18030）；空串等价于 auto。
+	// 源可用 SourceConfig.Charset 覆盖。
+	DefaultCharset string
+	// DefaultTimeZone 是节点级默认时区名（UTC/local/IANA 名）；空串等价于 UTC（既有行为）。
+	// 源可用 SourceConfig.TimeZone 覆盖。节点的 JVM 与 Worker 同机部署时，配 local 即可对齐。
+	DefaultTimeZone     string
 	Journal             catalog.Journal
 	Archive             *archive.Registry
 	Sources             []SourceConfig
@@ -149,7 +774,312 @@ type Options struct {
 	// VLRoute returns the Catalog-selected client and whether publication is
 	// frozen. Nil preserves initial HOT behavior.
 	VLRoute func(SourceConfig) (*vlsup.Client, bool, error)
+	// Reconcile 是启动增量对账（FR-497）的配置面；nil 表示用默认（启用，
+	// 并发 4、单源超时 30s、单查询超时 10s）。配置键登记见 spec §5。
+	Reconcile *ReconcileConfig
+	// ReconcileLoop 是常驻增量对账（后续项③）的配置面；nil 表示用默认（启用、15 分钟周期、
+	// 单轮预算 45s、单轮 8 源轮转）。配置键登记为 `log_reconcile_loop.*`；与 Reconcile 同样，
+	// 当前生效路径是 Options + Set（YAML → Options 接线需改 internal/worker/config.go）。
+	ReconcileLoop *ReconcileLoopConfig
+	// IndexPrune 是采集索引「历史投递批次（delivery_batch）裁剪」的配置面（FR-496 索引有界化，
+	// spec §6）；nil 表示用默认（ledger.DefaultDeliveryBatchPruneConfig：**开启**、严格按
+	// reclaim 水位）。判据与证明见 ledger/delivery_batch_prune.go。
+	IndexPrune *ledger.DeliveryBatchPruneConfig
+	// IndexCommit 是索引持久化「提交单元预算」的配置面（FR-498 P0，键 log_index.persist.*，
+	// spec §3.4）；nil 表示用默认（stateindex.DefaultCommitBudget：每提交单元 512 行、目标 40ms、
+	// 下限 64 行——真源是 stateindex 的 DefaultCommitMaxRows/DefaultCommitMinRows/DefaultCommitTarget）。
+	// 单次持久化按行数 + 耗时双上界切成多个提交单元，见 stateindex.CommitBudget。
+	IndexCommit *stateindex.CommitBudget
+	// ReconcileYield / ReconcileSliceEvents 是**对账 CPU 让路**的配置面（键 log_reconcile.yield /
+	// slice_events）：每 slice 条事件 `Sleep(yield)` 交还 P，避免对账与采集抢核 ✗（0/0 ⇒ 关闭）。
+	ReconcileYield       time.Duration
+	ReconcileSliceEvents int
+	// ReconcileYieldNotify 是让路次数的观测口（测试/排障用，生产 nil）。
+	ReconcileYieldNotify func()
+	// ScanYield / ScanSliceRows 是**段读聚合路径的让路**配置（键 log_index.scan_yield /
+	// scan_slice_rows；0 ⇒ 默认 1ms / 8192 行）。
+	ScanYield       time.Duration
+	ScanSliceRows   int
+	ScanYieldNotify func()
+	// Scan 是上面三个旋钮的合并形态（配置层一次下发；零值字段各自回退默认 ✓）。
+	Scan *ScanTuning
+	// ScanBudget 是单源单轮段读聚合的时间预算（0 ⇒ 默认 2s）。
+	ScanBudget time.Duration
+	// RecoveryQuotaFactor / RecoveryDrainGrace 是**恢复期独立配额**（0 ⇒ 默认 4 / 30m）。
+	RecoveryQuotaFactor float64
+	RecoveryDrainGrace  time.Duration
+	// RecoveryProbe 是"恢复是否进行中"的注入点（生产 nil ⇒ 用 StartupRecoveryStatus()）。
+	RecoveryProbe func() bool
+	// SweepBackpressureStreak 是窗口化背压阈值：**连续 N 轮**闸视图积压净涨才跳过本轮
+	// （0 ⇒ 默认 3 ✓；单轮抖动不再永久挡复活 ✗）。
+	SweepBackpressureStreak int
+	// SweepInflightCap 是在飞被放弃调用的并发上限（0 ⇒ 默认 4 ✓）。
+	SweepInflightCap int
+	// ReclaimRoll 是**滚动回收**（#63/#64）的单轮上界旋钮（键 log_index.reclaim_roll.*；nil/零值 ⇒ 默认）。
+	ReclaimRoll *ReclaimRollTuning
+	// ResolvePersistBudget 是解算收尾落库在持久化门上的有界等待预算（#59；0 ⇒ 默认 2s）。
+	// 超预算即交办后台并返回（受理即返，最终一致），详见 persistResolveTail 的说明。
+	ResolvePersistBudget time.Duration
+	// CycleMuProfile 打开 cycleMu 持有者观测仪（#57；默认关，也可用 env JIANMANAGER_CYCLE_MU_PROFILE=1）。
+	// 打开后：慢持有 Warn + 当前持有者快照 + 取锁密度 + 有界等锁读数；关闭时零开销。
+	CycleMuProfile bool
+	// ResumeBatchPerRound 是兜底环每轮最多处理的可解源数（0 ⇒ 默认 8）。
+	ResumeBatchPerRound int
+	// ResumeInterval 是**容量自愈兜底**周期（0 ⇒ 默认 30s）：低频重试「排空存量 → 推进回收 →
+	// 按滞回解除积压/容量类暂停」，不依赖采集轮产生新批次 ✗。
+	ResumeInterval time.Duration
+
+	// WALLimits 是单源 WAL **真实积压**上限（条目数 + 字节）的配置面（键 log_capacity.*）；
+	// nil 表示沿用 acquire 包默认。接线到 acquire.WAL.SetLimits。
+	WALLimits *acquire.WALLimits
+	// MaxReplayEventsPerDrain 是暂停/恢复期单轮外发事件数上限（回放限速，键
+	// log_capacity.max_replay_events_per_drain）；0 表示用默认。
+	MaxReplayEventsPerDrain int
+	// MultilineUnclosedTimeout 是未闭合多行缓冲的闲置超时（键
+	// log_ingest.multiline_unclosed_timeout）；0 表示用默认（normalize.DefaultUnclosedTimeout），
+	// 负值表示关闭强制冲刷。见 Pipeline.FlushStaleMultiline。
+	MultilineUnclosedTimeout time.Duration
+	// ResolveGapsBudget 是整节点解算（ResolveCoveredGaps）单次调用的预算（源数 + 墙钟），
+	// 键 log_ingest.resolve_gaps_max_sources / log_ingest.resolve_gaps_max_duration；
+	// nil 表示用默认（defaultResolveGapsMaxSources / defaultResolveGapsMaxDuration）。
+	// 见 ResolveGapsBudget 的缺陷说明。
+	ResolveGapsBudget *ResolveGapsBudget
+	// StartupRecoveryBackground 让启动恢复（对账 + 重发 + 解阻回收 + 落库）在**后台**执行：
+	// New 立刻返回，worker 随即可达 serving（反向隧道/WS/HTTP 不再等它），恢复进度经就绪面
+	// （CutoverReadiness 的 startup_recovery_in_progress / _failed）如实上报。
+	//
+	// 为什么是开关而不是无条件（2026-10-02 生产事故的工程取舍）：启动恢复是「启动后状态何时
+	// 落定」的语义边界，既有大量调用方/用例以「New 返回即恢复完成」为前置。开关让生产拿到
+	// 「必定可达 serving」，同时把其余调用方的边界保持**显式**。两条路径跑的是**同一个驱动**
+	// （runStartupRecovery），差别只在「在哪个 goroutine 里跑」——不存在「测试路径与生产路径
+	// 是两份实现」的问题。
+	StartupRecoveryBackground bool
+	// VerifyBudget 是校验/对账查询的全局天花板（键 log_index.verify.max_per_second /
+	// max_in_flight）；零值用默认（30/s、6 在飞）。天花板语义：正常路径零等待 ✓。
+	VerifyBudget VerifyBudget
+	// VerifyMaxQueriesPerChunk 是单簇单次校验的尝试次数上限（键
+	// log_index.verify.max_queries_per_chunk）；≤0 用默认（12）。
+	VerifyMaxQueriesPerChunk int
+	// VerifyRoundBudget 是每源每轮的校验时间预算（键 log_index.verify.round_budget）；
+	// ≤0 用默认（1.5s）。见 Manager.verifyRoundBudget 的说明。
+	VerifyRoundBudget time.Duration
+	// VerifyVisibilityFloor 是"可见性错开"等待（键 log_index.verify.visibility_floor）：
+	// >0 时整批首探前先等到"距批写入 ≥ floor"（对齐 VL 写入→可查询的硬地板 ⇒ 首探即命中，
+	// 不再做 0/0.2/0.6s 三次无效探测）；≤0 = 关（默认关，行为零变化）。
+	VerifyVisibilityFloor time.Duration
+	// VerifyChunkEstimates 是「单源校验预算随事件数放大」的档位（键
+	// log_index.verify.chunk_estimate / chunk_budget_max）。
+	//
+	// 零值 = **完全关闭放大**（默认）：预算与修复前逐字一致（等价于原来的 round_budget），
+	// 因此不影响任何现有源的现行行为。只有在运维显式给出单簇耗时估计时才放大。
+	// 见 Manager.verifyBudgetOfEvents 的推导与上限说明。
+	VerifyChunkEstimates VerifyChunkEstimates
+	// PersistHotBudget 是热路径（采集/投递）在持久化门上的等待上界（键
+	// log_index.persist.hot_budget）；≤0 用默认（30ms）。超时即交给后台持久化通道，采集不受阻。
+	PersistHotBudget time.Duration
+	// PersistYield 是持久化「让路窗口」（键 log_index.persist.cycle_yield）；≤0 用默认。
+	// PersistPriorityStreak 是老化阈值（键 log_index.persist.priority_streak）；≤0 用默认 8。
+	PersistPriorityStreak int
+	// PersistYield 是持久化「让路窗口」（键 log_index.persist.cycle_yield）；≤0 用默认。
+	PersistYield time.Duration
+	// VLReadyProbeTimeout 是对账/重发之前探测 VL 写入端就绪的超时（键
+	// log_reconcile.vl_ready_timeout）；≤0 用默认（defaultVLReadyProbeTimeout）。
+	//
+	// 为什么必须有这道门（2026-10-02/03 现场）：worker 与 VL 同步重启时，启动对账会**抢跑**在
+	// VL ready 之前 ⇒ 计数查询必然 `count_query_failed` ⇒ 保守回退整窗重发 ⇒ 几十万事件的插入
+	// 打在未就绪的 VL 上，长时间失败重试（现场 18+ 分钟零成功写入、CPU 空烧）。门禁把「必然失败
+	// 的竞态」变成「等下一轮」（与常驻对账「不可信查询不重发」的既有取舍一致）。
+	VLReadyProbeTimeout time.Duration
+	// VLReadyWait 是启动恢复**等待** VL 就绪的上界（键 log_reconcile.vl_ready_wait）；≤0 用默认。
+	// 超出即记失败原因并交给运行期（常驻对账会重新发现缺失天并重发），不再占着启动恢复。
+	VLReadyWait time.Duration
+	// ReplayBudget 是**整窗重发**的切片预算（键 log_reconcile.replay_max_days /
+	// replay_max_duration）；零值用默认（defaultReplayMaxDaysPerRound / defaultReplayMaxDuration）。
+	//
+	// 为什么要切片：整窗重发此前对**单个大源**就是「一次写完整个权威集合」（现场 330MB），
+	// 既不切片也无预算 ⇒ 与采集轮抢共享持久化门、并把 VL 打满（其余源零成功写入）。
+	ReplayBudget ReplayBudget
+	// ReplayTuning 是上面三枚旋钮的合并形态（配置层一次下发；零值字段各自回退默认）。
+	// 非零字段优先于上面的单独字段。
+	ReplayTuning *ReplayTuning
+	// RebuildTuning 是投影重建的限速与重试上限（零值 ⇒ 默认；见 rebuild_scheduler.go）。
+	RebuildTuning *RebuildTuning
+	// RebuildYieldNotify 是重建批间让出的观测口（测试/排障用，生产 nil ⇒ 零开销）。
+	RebuildYieldNotify func()
+	// RebuildRunNotify 是「重建任务开始执行」的观测口（测试/排障用，生产 nil ⇒ 零开销）。
+	// 注意它跑在**重建 worker goroutine** 上，不阻塞采集轮。
+	RebuildRunNotify func(key string)
 }
+
+// ReplayTuning 把「重发的外部条件与切片」三枚旋钮收在一起，供配置层一次下发
+// （键 log_reconcile.vl_ready_timeout / vl_ready_wait / replay_max_days / replay_max_duration）。
+type ReplayTuning struct {
+	VLReadyProbeTimeout time.Duration
+	VLReadyWait         time.Duration
+	Budget              ReplayBudget
+	// ReconcileYield / ReconcileSliceEvents：**对账 CPU 让路**（键 log_reconcile.yield /
+	// slice_events）。0 ⇒ 用 ingest 默认（5ms / 4096 条）。
+	ReconcileYield       time.Duration
+	ReconcileSliceEvents int
+}
+
+// RebuildTuning 是**投影重建的限速与重试上限**旋钮（见 rebuild_scheduler.go）。
+//
+// 为什么不复用 ReplayBudget：ReplayBudget 切的是「天」，而生产循环的形态是**单天 57 万条**
+// （`inst:220/file` 的 2026-10-05）——按天切片对它是零约束。这里的两枚旋钮作用在更细的粒度上：
+// Throttle 管「批与批之间让出多久」，MaxAttempts 管「同一个源连续失败几次就停下」。
+type RebuildTuning struct {
+	// Throttle 是重建**批间让出**时长（0 ⇒ rebuildDefaultThrottleDelay）。
+	Throttle time.Duration
+	// MaxAttempts 是同源连续重建失败上限（0 ⇒ rebuildDefaultMaxAttempts）；达上限即停止
+	// 自动重试并打 ERROR（数据仍视为未发布，缺口保持可见）。
+	MaxAttempts int
+}
+
+// ReplayBudget 是整窗重发的切片预算：一轮最多重发几天 / 最多跑多久。
+//
+// 未完成时**不发布剩余天、不推进回收责任、不推进水位**（见复用的既有发布语义）；下一轮从剩余
+// 天续跑（同一天的重发按 event_id 身份 + 逐字段校验幂等，重复只生成新代次并取代旧代次）。
+type ReplayBudget struct {
+	MaxDays     int
+	MaxDuration time.Duration
+}
+
+// VerifyBudget 是**投影校验/对账查询**的全局上限（**天花板，不是节拍器**）。
+//
+// 为什么需要（2026-10-03 现场：近 5 分钟 `投影校验查询 ×410` 占满算力、未暂停源 readΔ=0）：
+// 校验按簇退避重试到窗口耗尽，而并发上界只有「单批内 4」✗——多源同时校验时没有任何**全局**
+// 速率/在飞上限，于是少量失败簇的重试就能把节点算力与 VL 容量吃光 ✗。
+//
+// 天花板语义（务必与"限速节拍"区分）：
+//   - 令牌桶容量 = MaxPerSecond ⇒ 正常路径（几簇、1–2 次查询）**立即通过、零等待** ✗；
+//   - 只有超过上限的**风暴**才被削峰 ✓；
+//   - 采集侧的读/写**不经过本闸** ⇒ 算力与 VL 容量天然优先给采集 ✓。
+type VerifyBudget struct {
+	// MaxPerSecond 是校验/对账查询的每秒上限；≤0 用默认（30）。
+	MaxPerSecond int
+	// MaxInFlight 是在飞的校验/对账查询数上限；≤0 用默认（6）。
+	MaxInFlight int
+}
+
+// VerifyChunkEstimates 是「单源校验预算随事件数放大」的档位（键
+// `log_index.verify.chunk_estimate` / `chunk_budget_max`）。
+//
+// 为什么需要它（2026-10-10 生产活锁修复，改动 B）：单源预算原先是一个与事件数无关的常数，
+// 而大积压会被切成数百簇（现场 `inst:220/file`：544205 事件 / 2000 ⇒ **272 簇**，
+// 生产实测单簇查询 17–23 秒）。常数预算下永远只跑得完其中极小一部分 ⇒ 整批拿不到
+// 「全部可见」结论 ⇒ 不 publish ⇒ 下一轮重来（活锁）。按簇数放大预算让大积压有机会一轮跑完。
+//
+// **保守默认**：PerChunk ≤ 0 ⇒ 完全关闭放大，预算与修复前逐字一致（不影响任何现有源）。
+// 只有运维显式给出单簇耗时估计时才按 `簇数 × PerChunk × 安全系数` 放大，且**必定**被
+// Max 封顶（超过上限就依赖改动 A 的逐轮渐进收敛，绝不无限占用校验额度）。
+type VerifyChunkEstimates struct {
+	// PerChunk 是单簇校验查询的**保守**耗时估计（正数才启用放大）。
+	//
+	// 现场实测 17–23 秒是 VL 很慢时的读数，正常应远小于此；故这里没有内置默认值——
+	// 让运维按自己的 VL 实况填一个「偏大」的数（宁可多给预算，也不要给不够）。
+	PerChunk time.Duration
+	// Max 是本批校验预算的**上限**（>0 才封顶；≤0 用 defaultVerifyChunkBudgetMax）。
+	// 上限的意义：超过它的批次只能靠改动 A 的逐轮渐进收敛，而不是让单源占住校验额度一小时。
+	Max time.Duration
+	// Safety 是簇数折算的安全系数（≤0 用 defaultVerifyChunkBudgetSafety）。
+	Safety float64
+}
+
+// VerifyChunkEstimatesOf 归一化档位（未启用放大时返回零值）。
+func (m *Manager) verifyChunkEstimatesOf() VerifyChunkEstimates {
+	if m == nil {
+		return VerifyChunkEstimates{}
+	}
+	return m.verifyChunkEstimates
+}
+
+// verifyLimiter 是校验/对账查询的**全局**天花板（令牌桶 + 在飞信号量）。
+type verifyLimiter struct {
+	mu          sync.Mutex
+	cond        *sync.Cond
+	rate        int
+	capacity    int
+	tokens      float64
+	last        time.Time
+	inFlight    int
+	maxInFlight int
+}
+
+// newVerifyLimiter 按预算构造（零值 → 默认）。上限 ≤0 时按各自默认补齐。
+func newVerifyLimiter(budget VerifyBudget) *verifyLimiter {
+	rate := budget.MaxPerSecond
+	if rate <= 0 {
+		rate = defaultVerifyMaxPerSecond
+	}
+	inFlight := budget.MaxInFlight
+	if inFlight <= 0 {
+		inFlight = defaultVerifyMaxInFlight
+	}
+	l := &verifyLimiter{rate: rate, capacity: rate, tokens: float64(rate), maxInFlight: inFlight, last: time.Now()}
+	l.cond = sync.NewCond(&l.mu)
+	return l
+}
+
+// Acquire 取得一次查询许可（速率 + 在飞双闸）；ctx 取消即返回 error。
+func (l *verifyLimiter) Acquire(ctx context.Context) error {
+	if l == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		now := time.Now()
+		l.tokens += now.Sub(l.last).Seconds() * float64(l.rate)
+		l.last = now
+		if l.tokens > float64(l.capacity) {
+			l.tokens = float64(l.capacity)
+		}
+		if l.tokens >= 1 && l.inFlight < l.maxInFlight {
+			l.tokens--
+			l.inFlight++
+			return nil
+		}
+		// 天花板语义：等待由速率/在飞决定（1/rate 量级），不是固定节拍。
+		l.mu.Unlock()
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Millisecond):
+		}
+		l.mu.Lock()
+	}
+}
+
+// Release 归还一次查询许可。
+func (l *verifyLimiter) Release() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	if l.inFlight > 0 {
+		l.inFlight--
+	}
+	l.cond.Broadcast()
+	l.mu.Unlock()
+}
+
+const (
+	// defaultReplayMaxDaysPerRound 默认一轮重发 1 个 UTC 天：单个天已是「一次插入循环」的有界单位，
+	// 且能让采集轮在其间完整跑若干轮（现场 330MB 源按天切开后每段可独立完成与发布）。
+	defaultReplayMaxDaysPerRound = 1
+	// defaultReplayMaxDuration 是一轮重发的墙钟预算（检查点在「天与天之间」）。
+	defaultReplayMaxDuration = 90 * time.Second
+	// defaultVLReadyProbeTimeout 是 VL ready 探针的超时。
+	defaultVLReadyProbeTimeout = 2 * time.Second
+	// defaultVLReadyWait 是启动恢复等待 VL ready 的上界（超过即记错误、留给下一轮）。
+	defaultVLReadyWait = 90 * time.Second
+)
 
 type CutoverReadiness struct {
 	LedgerReady bool
@@ -161,6 +1091,37 @@ func (m *Manager) CutoverReadiness() CutoverReadiness {
 	result := CutoverReadiness{LedgerReady: true, CutoffTime: time.Now().UTC()}
 	if m == nil {
 		return CutoverReadiness{Reasons: []string{"ingest_manager_unavailable"}}
+	}
+	// 启动恢复未完成 ⇒ 平台不可宣告就绪。
+	//
+	// 为什么必须显式报告（2026-10-02 事故的语义侧）：改动前「恢复完成」是由 New 同步返回隐式
+	// 表达的——worker 能连上就说明恢复做完了。恢复移出 New 之后，这个隐式前提消失，必须换成
+	// 显式判据，否则 CP 会在账本/投影/回收责任尚未落定时就宣告可切换。
+	m.mu.Lock()
+	recovery := m.startupRecovery
+	reasons := append([]string(nil), recovery.Reasons...)
+	m.mu.Unlock()
+	if recovery.InProgress {
+		result.LedgerReady = false
+		result.Reasons = append(result.Reasons, "startup_recovery_in_progress")
+	} else if recovery.Failed > 0 {
+		result.LedgerReady = false
+		result.Reasons = append(result.Reasons, "startup_recovery_failed")
+		result.Reasons = append(result.Reasons, reasons...)
+	}
+	// 启动恢复登记的重发尚未出结论 ⇒ 同样不可宣告就绪（2026-10-10 第二项修复）。
+	//
+	// 为什么必须显式（而不是靠 InProgress）：判定/登记是秒级的，重发是分钟级的。若只以
+	// `InProgress` 判就绪，平台会在"重发还在写 VL"时宣告可切换——那正是 2026-10-02 事故的
+	// 语义侧。判据取**调度器的未结论集合**而不是"有没有跑过"：放弃（确定性失败达上限）时
+	// 该源已从该集合移除，但同时被记入 `startupRecovery.Failed` ⇒ 依然 not-ready 且带原因，
+	// 绝不把「不再重试」说成「已恢复」。
+	if pendingKeys := m.startupReplayInFlight(); len(pendingKeys) > 0 {
+		result.LedgerReady = false
+		result.Reasons = append(result.Reasons, "startup_replay_in_flight")
+		for _, key := range pendingKeys {
+			result.Reasons = append(result.Reasons, "startup_replay_pending:"+key)
+		}
 	}
 	pending, pendingErr := m.pendingSpoolState()
 	if pendingErr != nil {
@@ -221,10 +1182,16 @@ func (m *Manager) CutoverReadiness() CutoverReadiness {
 		m.mu.Lock()
 		saved := m.state.Sources[key]
 		m.mu.Unlock()
-		closed, complete := m.publishedClosedForSource(source, saved)
-		if !complete || closed < entry.Positions.Durable {
-			result.LedgerReady = false
-			result.Reasons = append(result.Reasons, key+":projection_not_published")
+		// 零数据源（从未采集到任何事件，Durable==0）没有可发布的投影——「空」是合法状态，
+		// 不得因此否决全局切换（与 CP 侧 2026-09-30「空≠缺」语义修正同型）。
+		// 生产实证：inst:152/file（bungee 的空文件日志）与 inst:153/stdout（Beacon 空 stdout）
+		// 在此永久产出 projection_not_published，使 cutover 闸门恒不可满足。
+		if entry.Positions.Durable > 0 {
+			closed, complete := m.publishedClosedForSource(source, saved)
+			if !complete || closed < entry.Positions.Durable {
+				result.LedgerReady = false
+				result.Reasons = append(result.Reasons, key+":projection_not_published")
+			}
 		}
 	}
 	return result
@@ -234,8 +1201,13 @@ func (m *Manager) PrepareCutoverReadiness() CutoverReadiness {
 	if m == nil {
 		return CutoverReadiness{Reasons: []string{"ingest_manager_unavailable"}}
 	}
+	w := m.observeCycleMu("cutover")
 	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	w.locked()
+	defer func() {
+		m.cycleMu.Unlock()
+		w.done()
+	}()
 	m.mu.Lock()
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
 	for _, pipe := range m.pipes {
@@ -244,6 +1216,7 @@ func (m *Manager) PrepareCutoverReadiness() CutoverReadiness {
 	m.mu.Unlock()
 	var flushReasons []string
 	for _, pipe := range pipes {
+		pipe.RefreshDegrade(time.Now())
 		if _, err := pipe.Flush(); err != nil {
 			flushReasons = append(flushReasons, pipe.Key().String()+":flush_failed")
 		}
@@ -259,53 +1232,745 @@ func (m *Manager) PrepareCutoverReadiness() CutoverReadiness {
 	return result
 }
 
-func (m *Manager) ResolveCoveredGaps() error {
+// ResolveGapsBudget 是整节点解算（ResolveCoveredGaps）单次调用的预算。
+//
+// 为什么必须有（2026-10-02 压测现场实证）：整节点路径不传 storageNamespace，会对**全部源**
+// 做投影查询与账本变更；此前它整段持 cycleMu（与采集轮同一把锁），于是一次调用即让整节点采集
+// 停摆（read_pos 冻结 30 分钟、source_wal 卡 560 万行、索引 WAL 涨到 10.2 GB），且 HTTP 300s
+// 超时后服务端仍继续持锁跑完（取消无效）。锁纪律修正（见 ResolveCoveredGaps）之后，剩下的
+// 风险是「单次调用无界」：源数 × 单源投影查询（段级扫描随源数据量增长，生产单源可达秒级）
+// 本身没有上界。故遍历带上界，并把「没跑完」如实返回——不伪装成功，也不静默继续。
+type ResolveGapsBudget struct {
+	// MaxSources 是单次调用最多处理的源数；≤0 用 defaultResolveGapsMaxSources。
+	MaxSources int
+	// MaxDuration 是单次调用的墙钟预算；≤0 用 defaultResolveGapsMaxDuration。
+	//
+	// 检查发生在**源与源之间**：单源内部不可中断（其可中断性由 ctx 承担，见
+	// publishedClosedForSourceCtx），故实际耗时可上浮「一个源」的时长。
+	MaxDuration time.Duration
+}
+
+const (
+	// defaultResolveGapsMaxSources 覆盖单节点常见规模（生产实测 60–75 源）且仍是硬上界：
+	// 超出即分片（见 resolveGapsCursor），而不是让一次调用跑到天荒地老。
+	defaultResolveGapsMaxSources = 256
+	// defaultResolveGapsMaxDuration 是兜底预算：主要服务于**没有 deadline 的调用方**
+	// （RPC 侧自有截止时间，ctx 会先到点）。取值远大于「256 源 × 单源投影查询」的期望耗时。
+	defaultResolveGapsMaxDuration = 2 * time.Minute
+)
+
+// DefaultResolveGapsMaxSources 返回默认的解算源数预算。
+//
+// 导出是为了让配置层（internal/worker/config.go 的错误消息与默认值）引用**同一个真源**，
+// 而不是各写一份数字——两份数字迟早不一致，且不一致时没有任何编译错误提示。
+func DefaultResolveGapsMaxSources() int { return defaultResolveGapsMaxSources }
+
+// DefaultResolveGapsMaxDuration 返回默认的解算墙钟预算（同上，唯一真源）。
+func DefaultResolveGapsMaxDuration() time.Duration { return defaultResolveGapsMaxDuration }
+
+// ErrResolveGapsBudgetExhausted 是「本次调用在预算内没跑完」的哨兵错误。
+//
+// 为什么用错误而不是「部分成功」：解算是运维显式动作，调用方必须能区分「全部解完」与
+// 「只解了前 N 个源，剩下的还没碰」。返回错误并把续跑方式写进消息，方可执行。
+var ErrResolveGapsBudgetExhausted = errors.New("ingest: 全源解算预算用尽")
+
+// ResolveGapsBudgetExhaustedError 说明预算用尽时的进度与续跑方式。
+type ResolveGapsBudgetExhaustedError struct {
+	Processed   int
+	Total       int
+	MaxSources  int
+	MaxDuration time.Duration
+	// Cursor 是下一次调用将从此下标（排序后的源键序）继续的位置。
+	Cursor int
+}
+
+func (e *ResolveGapsBudgetExhaustedError) Error() string {
+	return fmt.Sprintf("ingest: 全源解算预算用尽（本轮处理 %d/%d 源，预算 %d 源 / %s，下一次将从第 %d 个源继续）；再次调用同一接口即可续跑",
+		e.Processed, e.Total, e.MaxSources, e.MaxDuration, e.Cursor)
+}
+
+// Unwrap 让调用方可用 errors.Is(err, ErrResolveGapsBudgetExhausted) 判定（如「稍后再调」重试）。
+func (e *ResolveGapsBudgetExhaustedError) Unwrap() error { return ErrResolveGapsBudgetExhausted }
+
+// resolveGapsBudgetOfOpts 归一化 Options 传入的预算指针（nil → 零值，由 resolveGapsBudgetOf 兜默认）。
+//
+// 复制而非共享指针：配置对象在装配层可能被复用，Manager 不得持有外部可变状态。
+func resolveGapsBudgetOfOpts(opt *ResolveGapsBudget) ResolveGapsBudget {
+	if opt == nil {
+		return ResolveGapsBudget{}
+	}
+	return *opt
+}
+
+// resolveGapsBudgetOf 返回归一化后的解算预算（零值 → 默认）。
+func (m *Manager) resolveGapsBudgetOf() ResolveGapsBudget {
+	budget := m.resolveGapsBudget
+	if budget.MaxSources <= 0 {
+		budget.MaxSources = defaultResolveGapsMaxSources
+	}
+	if budget.MaxDuration <= 0 {
+		budget.MaxDuration = defaultResolveGapsMaxDuration
+	}
+	return budget
+}
+
+// ResolveCoveredGaps 解算全部源的「已覆盖缺口」（整节点自动路径）。
+//
+// 并发纪律（2026-10-02 生产缺陷修复，与 FR-499「登记路径与长临界区解耦」同款）：
+//
+//	此前：cycleMu 全程持有 → 逐源投影查询（段级扫描）压在锁上 → 一次调用 = 整节点采集停摆，
+//	      且调用方超时/断开后服务端无从得知，继续持锁跑完（取消无效）。
+//	现在：①m.mu 下快照源集合（短）；②逐源在**离锁**状态下做投影查询（成本的大头）；
+//	      ③仅对「必须与采集轮串行」的账本变更取 cycleMu（每源一段短临界区，源与源之间
+//	      允许采集轮推进）。判据一字未改，见 resolveOneSourceGaps 的两阶段说明。
+//
+// ctx 贯穿遍历与投影查询：调用方（HTTP/RPC）超时或断开 → 服务端工作即时停止并返回明确错误，
+// 绝不静默继续。全源遍历带预算（源数 + 墙钟，可配：Options.ResolveGapsBudget），
+// 超出预算返回 ResolveGapsBudgetExhaustedError（含续跑游标），单次调用不会无界跑。
+func (m *Manager) ResolveCoveredGaps(ctx context.Context) error {
 	if m == nil {
 		return fmt.Errorf("ingest: manager unavailable")
 	}
-	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	m.mu.Lock()
+	keys := make([]string, 0, len(m.pipes))
 	pipes := make(map[string]*pipeline.Pipeline, len(m.pipes))
-	sources := make(map[string]SourceConfig, len(m.sources))
+	sources := make(map[string]SourceConfig, len(m.pipes))
 	for key, pipe := range m.pipes {
+		keys = append(keys, key)
 		pipes[key] = pipe
 		sources[key] = m.sources[key]
 	}
+	start := m.resolveGapsCursor
+	stopped := m.stopped
 	m.mu.Unlock()
-	for key, pipe := range pipes {
-		entry := pipe.Ledger().Get(pipe.Key())
-		if entry == nil {
-			return fmt.Errorf("ingest: source %s ledger missing", key)
+	if stopped {
+		return fmt.Errorf("ingest: manager 已停止，拒绝解算（停止后不得再写账本或重开索引句柄）")
+	}
+	// 源键排序 + 轮转游标：遍历顺序确定（原实现按 map 随机序），且预算用尽后的重复调用
+	// 从断点继续，而不是每轮都停在同一个前缀（否则「有界」会退化成「永远解不完整」）。
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return m.persist()
+	}
+	if start < 0 || start >= len(keys) {
+		start = 0
+	}
+	budget := m.resolveGapsBudgetOf()
+	deadline := time.Now().Add(budget.MaxDuration)
+	processed := 0
+	for i := 0; i < len(keys); i++ {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("ingest: 全源解算被取消（本轮已处理 %d/%d 源）: %w", processed, len(keys), err)
 		}
-		for _, gap := range entry.Gaps {
-			if !gap.Resolved && gap.Reason == "STDIO_RAW_WRITE_FAILED" {
-				return fmt.Errorf("ingest: source %s has an unverified Raw write failure; projection alone cannot resolve it", key)
+		if processed >= budget.MaxSources || time.Now().After(deadline) {
+			return &ResolveGapsBudgetExhaustedError{
+				Processed: processed, Total: len(keys), MaxSources: budget.MaxSources,
+				MaxDuration: budget.MaxDuration, Cursor: (start + i) % len(keys),
 			}
 		}
-		source := sources[key]
+		key := keys[(start+i)%len(keys)]
+		if err := m.resolveOneSourceGaps(ctx, key, pipes[key], sources[key]); err != nil {
+			return err
+		}
+		processed++
 		m.mu.Lock()
-		saved := m.state.Sources[key]
+		m.resolveGapsCursor = (start + i + 1) % len(keys)
 		m.mu.Unlock()
-		closed, complete := m.publishedClosedForSource(source, saved)
-		if !complete {
-			return fmt.Errorf("ingest: source %s has no complete published projection", key)
-		}
-		if closed < entry.Positions.Durable || entry.Positions.Reclaim < entry.Positions.Durable {
-			return fmt.Errorf("ingest: source %s recovery coverage is behind durable position", key)
-		}
-		if _, err := pipe.Ledger().ResolveGapsThrough(pipe.Key(), closed, "verified published projection"); err != nil {
-			return err
-		}
-		if err := pipe.Ledger().ResumeAcquire(pipe.Key()); err != nil {
-			return err
-		}
 	}
 	return m.persist()
 }
 
+// resumeAcquireRespectingGates 恢复采集，但**不越权清除积压/容量闸的暂停**。
+//
+// 为什么（D4，2026-10-03 现场）：解算与放弃裁定的收尾此前无条件 `ResumeAcquire`，而积压闸带滞回
+// （积压回落到上限一半以下才自动恢复）——于是「解一次缺口 / 做一次运维解阻」就把条目闸解除一次，
+// 积压实测涨到 113.9 万条（名义上限 5000）。这里只放行「非积压闸造成」的暂停：积压闸的恢复
+// 交给它自己的滞回路径（`WAL.pruneReclaimed` → `maybeResumeBacklogLocked`）。
+func resumeAcquireRespectingGates(pipe *pipeline.Pipeline) error {
+	if pipe == nil {
+		return nil
+	}
+	if entry := pipe.Ledger().Get(pipe.Key()); entry != nil && entry.AcquirePaused &&
+		acquire.IsBacklogPauseReason(entry.PauseReason) {
+		return nil
+	}
+	return pipe.Ledger().ResumeAcquire(pipe.Key())
+}
+
+// unverifiedRawWriteFailure 是两阶段共用的**逐字**判据：未解决的 Raw 写失败缺口一律拒绝
+// （projection alone cannot resolve it）——原始正文没有落盘、投影里也没有，任何「已发布投影」
+// 都不能证明它存在过。措辞与改动前一致（既有回归按该措辞断言）。
+func unverifiedRawWriteFailure(key string, entry *ledger.Entry) error {
+	for _, gap := range entry.Gaps {
+		if !gap.Resolved && gap.Reason == ledger.GapReasonStdioRawWriteFailed {
+			return fmt.Errorf("ingest: source %s has an unverified Raw write failure; projection alone cannot resolve it", key)
+		}
+	}
+	return nil
+}
+
+// resolveOneSourceGaps 解指名源的缺口，分两阶段：
+//
+//   - 阶段 A（**不持** cycleMu）：测试观测口 → 账本快照 → 判据（Raw 写失败原因、投影完整性、
+//     覆盖水位）→ 已发布投影查询（publishedClosedForSourceCtx，成本大头，ctx 可中断）。
+//     该读路径在锁外执行**不是新引入的并发形态**：CutoverReadiness（CP 侧预备切换的就绪探测）
+//     一直在不持 cycleMu 的情况下走同一条 publishedClosedForSource（账本快照 + 投影读），
+//     本方法的阶段 A 与它同类，只是多了一步「随后在短临界区内复核」。
+//   - 阶段 B（cycleMu **短临界区**）：用新鲜账本**逐字复核同一判据**后落变更
+//     （ResolveGapsThrough / 静默源补段 / ResumeAcquire），随即释放锁。
+//
+// 为什么阶段 B 必须复核：A 与 B 之间采集轮可能推进真值（Durable 前移、新缺口出现）。复核只可能
+// 让「投影已不足覆盖」的源**保守拒绝**（返回与旧实现同款的错误，运维重试即可），绝不会拿陈旧
+// 证据去解一个已经不该解的缺口。反之，`closed` 取自 A 的已发布水位是**单调**证据：B 中它只会
+// 显得更保守（ResolveGapsThrough(closed) 至多覆盖到该水位，不会越过）。
+func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pipeline.Pipeline, source SourceConfig) error {
+	if pipe == nil {
+		return fmt.Errorf("ingest: source %s pipeline missing", key)
+	}
+	if m.resolveGapsStage != nil {
+		// 测试观测口（生产 nil，零开销）：回调发生在离锁阶段的最前，回归据此把「解算进行中」
+		// 钉在确定位置，进而断言采集轮照常推进。
+		m.resolveGapsStage(key)
+	}
+	// 阶段 A：离锁的判据 + 投影查询。
+	entry := pipe.Ledger().Get(pipe.Key())
+	if entry == nil {
+		return fmt.Errorf("ingest: source %s ledger missing", key)
+	}
+	if err := unverifiedRawWriteFailure(key, entry); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	saved := m.state.Sources[key]
+	m.mu.Unlock()
+	closed, complete, err := m.publishedClosedForSourceCtx(ctx, source, saved)
+	if err != nil {
+		// ctx 取消/超时或投影读取失败：明确失败（不得静默继续，也不得用半份证据解缺口）。
+		return err
+	}
+	if !complete {
+		// 全源路径只允许自动证据消解；人工 metadata 不得把空键调用变成跨源永久裁定。
+		// 人工放弃只走已校验完整源键并经 CP 对象授权的显式单源入口。
+		return fmt.Errorf("ingest: source %s has no complete published projection", key)
+	}
+	if closed < entry.Positions.Durable || entry.Positions.Reclaim < entry.Positions.Durable {
+		return fmt.Errorf("ingest: source %s recovery coverage is behind durable position", key)
+	}
+
+	// 阶段 B：与采集轮串行的最小窗口。
+	//
+	// 锁序：cycleMu → mu（见 cycleMu 注释的完整锁序）。
+	// 最坏持有量：**单源变更段**——账本判据复核 + ResolveGapsThrough + 静默源补段（内存状态机）
+	// + ResumeAcquire，不含任何投影查询、网络往返或持久化（persist 在调用方、锁外执行）。
+	// 量化口径与 FR-499 一致：直接测「被它挡住的那件事」的时长，不用 TryLock 探锁（饥饿模式下
+	// 锁空闲也返回 false）。回归 TestResolveCoveredGapsLockHoldIsBoundedPerSource 实测：
+	// 解算总时长 372ms 的同一时段内，采集轮最坏单轮仅 1.37ms ⇒ 争用上界为毫秒级，
+	// 与解算总时长（源数 × 单源投影查询）彻底解耦。
+	// #57：本处是"被 ResolveCoveredGaps 逐源调用"的实际持有者 ⇒ tag=resolveOne（现场 20/20 全忙的嫌疑面）。
+	w := m.observeCycleMu("resolveOne")
+	m.cycleMu.Lock()
+	w.locked()
+	defer func() {
+		m.cycleMu.Unlock()
+		w.done()
+	}()
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("ingest: 全源解算被取消: %w", err)
+	}
+	m.mu.Lock()
+	stopped := m.stopped
+	m.mu.Unlock()
+	if stopped {
+		return fmt.Errorf("ingest: manager 已停止，拒绝解算（停止后不得再写账本或重开索引句柄）")
+	}
+	entry = pipe.Ledger().Get(pipe.Key())
+	if entry == nil {
+		return fmt.Errorf("ingest: source %s ledger missing", key)
+	}
+	if err := unverifiedRawWriteFailure(key, entry); err != nil {
+		return err
+	}
+	if closed < entry.Positions.Durable || entry.Positions.Reclaim < entry.Positions.Durable {
+		return fmt.Errorf("ingest: source %s recovery coverage is behind durable position", key)
+	}
+	if _, err := pipe.Ledger().ResolveGapsThrough(pipe.Key(), closed, "verified published projection"); err != nil {
+		return err
+	}
+	// 静默源出口（2026-09-30 生产实证）：为「已全部投递、但无分段覆盖的尾部」补一段显式覆盖。
+	//
+	// 为何需要：建段只发生在 releaseRecovery（有新批次投递时）——而**静默流**（如某实例的
+	// stderr，自 09-27 起再无新行）永远不会有新批次 → 尾部永远无段可依 → 回收停滞 → 积压不落 →
+	// 源反复被暂停，且 read 已被夹到水位、自己永远走不出去。
+	//
+	// 安全性：仅当尾部**已全部确认投递**（delivery >= read）时才补段 —— 覆盖的是「已证明安全
+	// 另存」的区间，不存在任何未投递数据被跳过；条件不满足则一律不动。
+	//
+	// 「无副本」标记（复审 P2-13）：这一段**没有任何物理副本**（路径不是文件、也不是
+	// project://<代次>），此前却写 `manual://admin-confirmed` 并登记 `NEXT_COPY_VERIFIED`——
+	// 前者看着像「管理员确认过某个已验证副本」，后者字面就是「下一份副本已验证」，
+	// 于是状态链把「无副本」包装成了「已验证副本」，事后审计分不清这段到底有没有副本。
+	// 现在如实标注：路径带 no-copy 标记，释放依据用 PROJECTION_BACKED（本段成立的前提正是
+	// 「整段已投递并被逐字段校验」→ 已发布投影就是它的凭据），接收者显式说明无副本。
+	if d := entry.Positions.Delivery; d >= entry.Positions.Read && entry.Positions.Read > entry.Positions.Reclaim {
+		segID := fmt.Sprintf("manual-recovery-%d-%d", entry.Positions.Reclaim, entry.Positions.Read)
+		if _, exists := pipe.RecoveryRef(segID); !exists {
+			if err := pipe.BindRecoverySegment(segID, silentExitNoCopyPath, entry.Positions.Reclaim, entry.Positions.Read); err != nil {
+				return err
+			}
+		}
+		// 走完责任转移链，使 CanReclaim 放行（与 releaseRecovery 的状态机同构）。
+		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", "")
+		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", silentExitNoCopyReceiver)
+		// 释放依据必须与事实一致：没有第二份副本，凭据是「已发布投影 + 逐字段校验」。
+		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryReleased, logtypes.ReleaseProjectionBacked, silentExitNoCopyReceiver)
+		// CLEANED 不登记新依据（账本契约：清理沿用已登记证明）；此处**不要**再传一次 reason，
+		// 否则会把 RELEASED 阶段的依据覆盖成调用点写的值，「这段到底凭什么被释放」当场失真。
+		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryCleaned, "", "")
+		// 推进回收并按当前水位剪枝；失败不置死——下一轮自动重试。
+		_, _ = pipe.TryReclaim()
+	}
+	if err := resumeAcquireRespectingGates(pipe); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ResolveCoveredGapsForSource 是「显式人工确认」路径：只解指名源的缺口。
+//
+// 与自动路径（ResolveCoveredGaps）的区别，以及为什么必须要有它：
+//   - 自动路径对 STDIO_RAW_WRITE_FAILED 一律拒绝（projection alone cannot resolve it），
+//     且该拒绝发生在遍历所有源的循环内——一个源的不可验证缺口会中止**整节点**的解算；
+//   - 当该源同时又是「唯一未就绪目标」时，就形成自我指涉：要解缺口需平台就绪，
+//     要平台就绪需该源可查，而它正卡在缺口上。
+//
+// 语义（2026-10-02 收紧）：本路径是**放弃裁定**，不再是「把缺口标成已解决」——
+// 解到该源当前读位置，等于「我确认这段缺口永久丢失、不再补齐」。因此：
+//   - 走 Ledger.AbandonGapsThrough，留下结构化的原因码/时间/操作人 + 独立凭据，
+//     使「补齐了」与「被放弃了」在数据上可区分；
+//   - **操作人为空一律拒绝**（放弃不可无痕）。操作人由调用方（gRPC 层）从认证上下文取。
+//
+// 其它源一概不动。default-deny 判据不受影响：自动路径仍按原因排除，本方法只影响指名源。
+//
+// ctx 语义（2026-10-02 与整节点路径同批修正）：调用方（HTTP/RPC）超时或断开时**不得**把放弃
+// 裁定落盘——放弃是唯一允许回收链跨过永久空洞的动作，必须来自一次完整、未被取消的显式请求。
+// 故入口与临界区内各校验一次，取消即返回明确错误（不写账本、不恢复采集）。
+// resolveGapsCycleMuWait 是"放弃裁定"等待采集轮锁（cycleMu）的墙钟预算（2026-10-04 C 修复）：
+// 现场 resolve-gaps 33/53 调用在 cycleMu 上排队 45-60s 全 TIMEOUT（持有者 pollOnce 被 work
+// 通道阻塞，见专项报告）。放弃裁定"等不到就明确失败"是安全的——它不写账本、不改状态，
+// 调用方可重试；而"无限等"只会把调用方超时与服务端排队叠加成双倍失败面。
+const resolveGapsCycleMuWait = 5 * time.Second
+
+// acquireCycleMuBounded 在有界预算内获取 cycleMu（TryLock 轮询；ctx 取消立即放弃）。
+// 返回 false 表示超预算/被取消 —— 调用方必须**未做任何变更**地返回错误。
+func (m *Manager) acquireCycleMuBounded(ctx context.Context, budget time.Duration) bool {
+	// #57 等锁侧观测（探针"每次都吃满 5s 预算"的直接对照）：start 同时作为 deadline 基准
+	// ⇒ 与改前相比**不多一次** time.Now；观测关闭时 noteCycleMuWait 立即返回 ⇒ 零开销。
+	start := time.Now()
+	deadline := start.Add(budget)
+	for {
+		if m.cycleMu.TryLock() {
+			m.noteCycleMuWait(time.Since(start), true)
+			return true
+		}
+		if ctx != nil && ctx.Err() != nil {
+			m.noteCycleMuWait(time.Since(start), false)
+			return false
+		}
+		if !time.Now().Before(deadline) {
+			m.noteCycleMuWait(time.Since(start), false)
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func (m *Manager) ResolveCoveredGapsForSource(ctx context.Context, storageNamespace, operator string) error {
+	if m == nil {
+		return fmt.Errorf("ingest: manager unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if storageNamespace == "" {
+		return fmt.Errorf("ingest: storage namespace is required")
+	}
+	if strings.TrimSpace(operator) == "" {
+		// 拒绝而不是「用个占位名兜过去」：放弃是唯一允许回收链跨过永久空洞的动作，
+		// 无痕放弃等于给静默丢日志开后门。
+		return fmt.Errorf("ingest: 放弃缺口必须携带操作人（认证主体为空时拒绝执行）")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("ingest: 放弃裁定被取消（未写入任何变更）: %w", err)
+	}
+	// C 修复（2026-10-04，resolve-gaps 挂死专项）：cycleMu 的**有界获取**。
+	// 现场（pprof 铁证）：pollOnce 持 cycleMu 卡在 `work <- i`（2347）——worker 全堵在
+	// m.mu 的 33.8 万条 WAL 序列化上 ⇒ 本路径**无限等 cycleMu** ⇒ 舰队 33/53 调用
+	// 45-60s 全 TIMEOUT。放弃裁定"忙即快速失败"是安全的：它**未写入任何变更**，
+	// 返回明确错误让调用方重试，远优于"调用方超时但服务端仍在排队"。
+	// C 修复（2026-10-04，resolve-gaps 挂死专项）：cycleMu 的**有界获取**。
+	// 现场（pprof 铁证）：pollOnce 持 cycleMu 卡在 `work <- i`（2347）——worker 全堵在
+	// m.mu 的 33.8 万条 WAL 序列化上 ⇒ 本路径**无限等 cycleMu** ⇒ 舰队 33/53 调用
+	// 45-60s 全 TIMEOUT。放弃裁定"忙即快速失败"是安全的：它**未写入任何变更**，
+	// 返回明确错误让调用方重试，远优于"调用方超时但服务端仍在排队"。
+	// #57：持有观测（tag=resolveGapsForSource）—— 获取侧走 acquireBounded（等锁读数在那边记）。
+	// #58：三段式收窄（照 #55-B 范式）。修前整个函数体都在 cycleMu 内 —— 含**账本克隆 + 缺口扫描 +
+	// 放弃写入 + 恢复采集 + 最重的 m.persist()**（索引规划/落库/fsync/WAL 剪枝）⇒ 现场实测
+	// `cycleMu 慢持有 section=resolveGapsForSource hold=1m26.374992592s`（观测仪首条 Warn）。
+	// 第一段（持锁）只取 O(1) 守卫快照；第二段（锁外）做重活；第三段复验守卫后做最小必要变更；
+	// persist 移到临界区外 —— 与同族路径 ResolveCoveredGaps（末尾 m.persist() 本就在 cycleMu 外）同型。
+	w := m.observeCycleMu("resolveGapsForSource")
+	if !m.acquireCycleMuBounded(ctx, resolveGapsCycleMuWait) {
+		return fmt.Errorf("ingest: 采集轮忙（cycleMu 等待超 %s 预算），放弃裁定未写入任何变更，请稍后重试", resolveGapsCycleMuWait)
+	}
+	w.locked()
+	// 第一段（持 cycleMu，全 O(1)）：停止标记 / 管道句柄 / 账本修订号（守卫）。
+	m.mu.Lock()
+	stopped := m.stopped
+	pipe := m.pipes[storageNamespace]
+	m.mu.Unlock()
+	if stopped {
+		m.cycleMu.Unlock()
+		w.done()
+		return fmt.Errorf("ingest: manager 已停止，拒绝放弃裁定（停止后不得再写账本或重开索引句柄）")
+	}
+	// 临界区内再校验一次：等锁期间调用方可能已取消——此时不得留下「无人认领的放弃」。
+	if err := ctx.Err(); err != nil {
+		m.cycleMu.Unlock()
+		w.done()
+		return fmt.Errorf("ingest: 放弃裁定被取消（未写入任何变更）: %w", err)
+	}
+	if pipe == nil {
+		m.cycleMu.Unlock()
+		w.done()
+		return fmt.Errorf("ingest: source %s not found", storageNamespace)
+	}
+	// 守卫：账本修订号。Ledger.touch 在**所有写路径的入口** require() 内推进 ⇒ 任何账本写都会变。
+	rev := pipe.Ledger().Revision(pipe.Key())
+	m.cycleMu.Unlock()
+	w.done()
+
+	// ── 第二段（**锁外**）：重活 —— 克隆账本条目 + 扫描未解决缺口求 through（O(缺口数)）。
+	entry := pipe.Ledger().Get(pipe.Key())
+	if entry == nil {
+		return fmt.Errorf("ingest: source %s ledger missing", storageNamespace)
+	}
+	// 取值必须**越过所有未解决缺口的末端**：缺口总落在「已读位置」之后，
+	// 只解到读位置覆盖不到它们，ResumeAcquire 会继续拒绝
+	// （unresolved gaps still block acquisition）——这正是 409 的成因。
+	through := entry.Positions.Read
+	if entry.Positions.Durable > through {
+		through = entry.Positions.Durable
+	}
+	for _, gap := range entry.Gaps {
+		if !gap.Resolved && gap.EndPos > through {
+			through = gap.EndPos
+		}
+	}
+
+	// 仅测试观测点（生产 nil，零开销）：锁外计算到此结束 ⇒ 用例可在此注入「源又变了」以验证复验。
+	if m.resolveGapsPlanHook != nil {
+		m.resolveGapsPlanHook()
+	}
+	// ── 第三段（复验守卫 + 最小必要变更）：重新取有界 cycleMu；守卫（停止标记 / 管道身份 /
+	// 账本修订号）任一变化 ⇒ **不写入任何变更**地返回明确错误（调用方重试即可；与 C 修复同型）。
+	// 为什么要复验：第二段在锁外算 through，期间采集轮/投递/回收都可能写该源账本 ⇒ 直接用旧
+	// through 落「放弃」会放弃一段**未经判定**的缺口区间（审计凭据失真）⇒ 丢弃重算。
+	wc := m.observeCycleMu("resolveGapsForSource.commit")
+	if !m.acquireCycleMuBounded(ctx, resolveGapsCycleMuWait) {
+		return fmt.Errorf("ingest: 采集轮忙（cycleMu 等待超 %s 预算），放弃裁定未写入任何变更，请稍后重试", resolveGapsCycleMuWait)
+	}
+	wc.locked()
+	m.mu.Lock()
+	stoppedNow := m.stopped
+	pipeNow := m.pipes[storageNamespace]
+	m.mu.Unlock()
+	if stoppedNow || pipeNow != pipe || pipeNow.Ledger().Revision(pipeNow.Key()) != rev {
+		m.cycleMu.Unlock()
+		wc.done()
+		return fmt.Errorf("ingest: 源 %s 在放弃裁定计算期间发生变化（未写入任何变更），请重试", storageNamespace)
+	}
+	if err := ctx.Err(); err != nil {
+		m.cycleMu.Unlock()
+		wc.done()
+		return fmt.Errorf("ingest: 放弃裁定被取消（未写入任何变更）: %w", err)
+	}
+	reason := ""
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if values := md.Get("x-jm-reason"); len(values) > 0 {
+			reason = strings.TrimSpace(values[0])
+		}
+	}
+	if _, err := pipe.Ledger().AbandonGapsThrough(pipe.Key(), through, ledger.GapAbandonment{
+		ReasonCode: ledger.GapReasonPermanentlyLost,
+		Reason:     reason,
+		Operator:   operator,
+		Detail:     "manual abandonment via ResolveCoveredGapsForSource",
+	}); err != nil {
+		m.cycleMu.Unlock()
+		wc.done()
+		return err
+	}
+	if err := resumeAcquireRespectingGates(pipe); err != nil {
+		m.cycleMu.Unlock()
+		wc.done()
+		return err
+	}
+	m.cycleMu.Unlock()
+	wc.done()
+	// #58：落库（索引规划/Apply/fsync/WAL 剪枝）在 cycleMu **之外**。
+	// #59：且**有界**——现场（探针自栈两现）handler 正是在这里无界等持久化门达 45s（账本写已落账，
+	// 卡的是索引落库排队）⇒ 超预算交后台（受理即返，最终一致；写不丢，见 persistResolveTail）。
+	_, err := m.persistResolveTail()
+	return err
+}
+
+// clearIdentityConflictsCycleMuWait 是「人工确认并清空身份冲突」等待采集轮锁（cycleMu）的墙钟预算。
+//
+// 取值与理由逐条同 resolveGapsCycleMuWait / archiveScanCycleMuWait（同类现场形态：调用方在
+// 45-60s 后被自己的截止时间打断，而服务端仍在排队）：远小于任何 RPC/HTTP 截止时间，且大于
+// 采集轮读快照段的期望持有时长。等不到即**未做任何变更**地明确失败，由运维重试。
+const clearIdentityConflictsCycleMuWait = 5 * time.Second
+
+// IdentityConflictClearResult 是清空操作的逐源结果（审计凭据的对外可读部分）。
+type IdentityConflictClearResult struct {
+	// ClearedCount 本次真正清空的冲突记录条数（跨源合计）。
+	ClearedCount int
+	// ClearedSources 实际发生清空的源键（升序）。
+	ClearedSources []string
+	// SkippedSources 计划内但**未**清空的源键（升序）：或期间被并发写新增了冲突记录
+	// （见三段式复验），或本就已无冲突记录（幂等目标态）。
+	SkippedSources []string
+}
+
+// clearConflictsPlan 是「清空身份冲突」第一段（持锁）取到的**逐源计划快照**。
+type clearConflictsPlan struct {
+	key string
+	// records 是申请时读到的冲突记录**逐字段快照**。第三段据此复验：只有当库里仍是这一份
+	// 完全相同的集合时才允许清空——期间若有新冲突写入，那批记录**未经人工审阅**，
+	// 必须跳过而不是顺手一起清掉（否则"确认后清空"就退化成"无条件清空"）。
+	records []identityConflictRecord
+}
+
+// ClearIdentityConflicts 人工确认并清空「身份冲突」记录，使查询面的质量标记不再为
+// conflict/partial（见 planner 的 DupConflict/StatsPartial 派生）。
+//
+// 语义（必须与实现一致）：运维**审阅后确认**这些冲突已被正确处理。判据是系统在不可裁定形态下
+// 一律「保留先到者并跳过冲突行」（appendEvents / planDeliveryBatchOutsideLock 的身份收敛），
+// 即保留的是正确版本，冲突行从未进入写入面；故清空只移除**诊断凭据**，不改任何日志内容。
+//
+// storageNamespace 为空 = 清本 Worker 全部持有冲突记录的源；非空 = 只清该源（完整源键
+// LogSourceID/SourceGeneration，与 ResolveCoveredGapsForSource 取同一口径）。
+//
+// 红线（逐条对应实现）：
+//  1. **操作人为空一律拒绝**：本操作会让查询面不再提示该源存在内容歧义，无痕清空等于给
+//     「掩盖数据歧义」开后门（与缺口放弃同族的可审计要求）。
+//  2. **理由为空一律拒绝**：凭据里必须有"为什么可以清"。
+//  3. **留审计凭据**：identityConflictClearance（谁 / 何时 / 为何 / 清了多少条 / 被清记录明细）
+//     随该源 payload 落库；**凭据落点没有 revision 可用**，详见 identityConflictClearance 注释。
+//  4. **只动 identity_conflicts**：payload 里其它字段（verified_runs / abandonments /
+//     ledger_core / events_stored / events / wal…）在清空前后逐字节不变。
+//  5. **必须持久化**：走有界落库（同 #59 取舍），且**在 cycleMu 之外**。
+//  6. **有界等锁**：acquireCycleMuBounded + 明确预算错误，绝不用无界 cycleMu.Lock()。
+//
+// 三段式（照 #55-B / #58 范式，理由同 ResolveCoveredGapsForSource）：第一段持锁只做守卫与
+// 逐源计划快照（O(待清记录数)，有界 ≤ maxIdentityConflictRecords/源）→ 锁外无重活 →
+// 第三段复验后做最小变更；最重的 persist 在临界区之外。
+func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, operator, reason string) (IdentityConflictClearResult, error) {
+	var result IdentityConflictClearResult
+	if m == nil {
+		return result, fmt.Errorf("ingest: manager unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// 操作人与理由必须在**取任何锁之前**校验：拒绝的请求不得产生任何可观测副作用。
+	if strings.TrimSpace(operator) == "" {
+		// 拒绝而不是用占位名兜过去：本操作会让查询面不再提示该源存在内容歧义（质量标记消失），
+		// 无痕清空等于给「掩盖数据歧义」开后门。
+		return result, fmt.Errorf("ingest: 清空身份冲突必须携带操作人（认证主体为空时拒绝执行）")
+	}
+	if strings.TrimSpace(reason) == "" {
+		return result, fmt.Errorf("ingest: 清空身份冲突必须携带理由（理由为空时拒绝执行）")
+	}
+	if err := ctx.Err(); err != nil {
+		return result, fmt.Errorf("ingest: 清空身份冲突被取消（未写入任何变更）: %w", err)
+	}
+	key := strings.TrimSpace(storageNamespace)
+
+	// ── 第一段（持 cycleMu，只做守卫 + 计划快照）：停止标记 / 源存在性 / 待清记录快照。
+	if !m.acquireCycleMuBounded(ctx, clearIdentityConflictsCycleMuWait) {
+		return result, m.clearConflictsBusyErr(ctx)
+	}
+	m.mu.Lock()
+	stopped := m.stopped
+	plans := make([]clearConflictsPlan, 0, 1)
+	if key != "" {
+		saved, ok := m.state.Sources[key]
+		if !ok {
+			m.mu.Unlock()
+			m.cycleMu.Unlock()
+			return result, fmt.Errorf("ingest: source %s not found", key)
+		}
+		plans = append(plans, clearConflictsPlan{key: key,
+			records: append([]identityConflictRecord(nil), saved.IdentityConflicts...)})
+	} else {
+		keys := make([]string, 0, len(m.state.Sources))
+		for sourceKey, saved := range m.state.Sources {
+			if len(saved.IdentityConflicts) == 0 {
+				continue
+			}
+			keys = append(keys, sourceKey)
+		}
+		sort.Strings(keys)
+		for _, sourceKey := range keys {
+			saved := m.state.Sources[sourceKey]
+			plans = append(plans, clearConflictsPlan{key: sourceKey,
+				records: append([]identityConflictRecord(nil), saved.IdentityConflicts...)})
+		}
+	}
+	m.mu.Unlock()
+	m.cycleMu.Unlock()
+	if stopped {
+		return result, fmt.Errorf("ingest: manager 已停止，拒绝清空身份冲突（停止后不得再写索引）")
+	}
+	if err := ctx.Err(); err != nil {
+		// 等锁期间调用方可能已取消：不得留下「无人认领的清空凭据」。
+		return result, fmt.Errorf("ingest: 清空身份冲突被取消（未写入任何变更）: %w", err)
+	}
+	if len(plans) == 0 {
+		// 幂等目标态：请求覆盖范围内没有任何冲突记录。返回成功且计数为 0，不写凭据
+		// （没有发生变更就不该产生一条"我清空了 0 条"的历史记录）。
+		return result, nil
+	}
+
+	// ── 第二段（**锁外**）：本操作的"重活"只有一次锁外等待后的重新取锁；这里不做任何
+	// 状态读取，避免把「计划快照」与「提交时读到的状态」混为一谈。
+	//
+	// 仅测试观测点（生产 nil，零开销）：锁外窗口到此结束 ⇒ 用例可在此注入「源又变了」以验证复验。
+	if m.clearConflictsAfterPlanHook != nil {
+		m.clearConflictsAfterPlanHook()
+	}
+
+	// ── 第三段（复验守卫 + 最小必要变更）：重新取有界 cycleMu；逐源复验记录集合未变，
+	// 未变者清空并写凭据，已变者**跳过**（那批记录未经审阅）。
+	atUTC := time.Now().UTC().Format(time.RFC3339Nano)
+	if !m.acquireCycleMuBounded(ctx, clearIdentityConflictsCycleMuWait) {
+		return result, m.clearConflictsBusyErr(ctx)
+	}
+	m.mu.Lock()
+	stoppedNow := m.stopped
+	if stoppedNow {
+		m.mu.Unlock()
+		m.cycleMu.Unlock()
+		return result, fmt.Errorf("ingest: manager 已停止，拒绝清空身份冲突（停止后不得再写索引）")
+	}
+	if err := ctx.Err(); err != nil {
+		m.mu.Unlock()
+		m.cycleMu.Unlock()
+		return result, fmt.Errorf("ingest: 清空身份冲突被取消（未写入任何变更）: %w", err)
+	}
+	for _, plan := range plans {
+		saved, ok := m.state.Sources[plan.key]
+		if !ok || len(saved.IdentityConflicts) == 0 {
+			result.SkippedSources = append(result.SkippedSources, plan.key)
+			continue
+		}
+		if !sameIdentityConflicts(saved.IdentityConflicts, plan.records) {
+			// 期间有新冲突写入（或记录被其它路径改写）：那批记录**未经本次人工审阅**，
+			// 不得顺手清掉——否则"确认后清空"就退化成"无条件清空"。
+			result.SkippedSources = append(result.SkippedSources, plan.key)
+			slog.Warn("清空身份冲突：源在计划与提交之间新增了冲突记录，本次跳过该源（未清空任何记录）",
+				"source", plan.key, "planned", len(plan.records), "current", len(saved.IdentityConflicts))
+			continue
+		}
+		cleared := append([]identityConflictRecord(nil), saved.IdentityConflicts...)
+		// 只清 identity_conflicts：本行之外不改动 persistedSource 的任何字段（防呆红线）。
+		saved.IdentityConflicts = nil
+		// 凭据：被清记录的明细是有界保留的（见 maxClearedConflictDetails），故条数单独记。
+		detail := cleared
+		if len(detail) > maxClearedConflictDetails {
+			detail = detail[:maxClearedConflictDetails]
+		}
+		saved.IdentityConflictClearances = append(saved.IdentityConflictClearances, identityConflictClearance{
+			Operator:       strings.TrimSpace(operator),
+			Reason:         strings.TrimSpace(reason),
+			AtUTC:          atUTC,
+			ClearedCount:   len(cleared),
+			ClearedRecords: append([]identityConflictRecord(nil), detail...),
+		})
+		if len(saved.IdentityConflictClearances) > maxIdentityConflictClearances {
+			saved.IdentityConflictClearances = append([]identityConflictClearance(nil),
+				saved.IdentityConflictClearances[len(saved.IdentityConflictClearances)-maxIdentityConflictClearances:]...)
+		}
+		m.state.Sources[plan.key] = saved
+		result.ClearedCount += len(cleared)
+		result.ClearedSources = append(result.ClearedSources, plan.key)
+	}
+	m.mu.Unlock()
+	m.cycleMu.Unlock()
+
+	if len(result.ClearedSources) == 0 {
+		sort.Strings(result.SkippedSources)
+		return result, nil
+	}
+	sort.Strings(result.ClearedSources)
+	sort.Strings(result.SkippedSources)
+	slog.Info("已人工确认并清空身份冲突记录",
+		"operator", operator, "reason", reason, "cleared", result.ClearedCount,
+		"sources", len(result.ClearedSources), "skipped", len(result.SkippedSources))
+
+	// ── 落库（索引规划/Apply/fsync 在 cycleMu 之外；有界，超预算交后台，见 #59）。
+	//
+	// 这里**刻意不动 Catalog**：质量标记的归零路径是"下一次投影发布时由 publishSnapshot 用
+	// identityConflictCount 重算 proj.ConflictCount"（publishSnapshot 的既有行为，本方法不改
+	// 它）。反过来，若要在此处直接把 Catalog 里的 ConflictCount 改写为 0，只能借
+	// PublishProjection——而那是"物理写入后已校验发布"的原子提交入口，用它做派生字段刷新会把
+	// 「已校验发布」这个语义混进一次纯粹的人工凭据变更里（它的 journal 凭据写着
+	// "verified projection publication"），并使"投影清单版本"的因果链变得不可读。
+	// 故本方法只保证：内存与索引里已无冲突记录 ⇒ 下一次发布必然算出 0。
+	// 代价（如实说明）：**已停止投递的源**其标记要等下一次发布才消失（见方法注释末尾）。
+	durable, err := m.persistClearConflictsTail()
+	if err != nil {
+		return result, err
+	}
+	if !durable {
+		slog.Info("清空身份冲突的索引落库已交办后台，目录侧冲突计数待下一次投影发布时归零",
+			"cleared", result.ClearedCount, "sources", len(result.ClearedSources))
+	}
+	return result, nil
+}
+
+// clearConflictsBusyErr 构造"等不到 cycleMu"的明确错误（区分取消与超预算，便于运维判断）。
+func (m *Manager) clearConflictsBusyErr(ctx context.Context) error {
+	if ctx != nil && ctx.Err() != nil {
+		return fmt.Errorf("ingest: 清空身份冲突被取消（未写入任何变更）: %w", ctx.Err())
+	}
+	return fmt.Errorf("ingest: 采集轮忙（cycleMu 等待超 %s 预算），清空身份冲突未写入任何变更，请稍后重试",
+		clearIdentityConflictsCycleMuWait)
+}
+
+// sameIdentityConflicts 逐字段比较两份冲突记录集合（顺序敏感：清空是"这一份"的删除）。
+func sameIdentityConflicts(a, b []identityConflictRecord) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // New restores source ledger/WAL/projection state and creates configured pipelines.
 func New(opts Options) (*Manager, error) {
+	// 在打开索引、创建目录及启动后台任务前校验原值，禁止默认化吞掉非法配置。
+	if err := opts.Sampling.Validate(); err != nil {
+		return nil, fmt.Errorf("ingest: 采样策略无效: %w", err)
+	}
 	if opts.Root == "" {
 		return nil, fmt.Errorf("ingest: root is required")
 	}
@@ -315,11 +1980,107 @@ func New(opts Options) (*Manager, error) {
 	m := &Manager{
 		root: opts.Root, vl: opts.VL, vlRoute: opts.VLRoute, cat: opts.Catalog, journal: opts.Journal, archive: opts.Archive,
 		sources: make(map[string]SourceConfig), pipes: make(map[string]*pipeline.Pipeline),
-		state:               persistedState{Sources: make(map[string]persistedSource)},
-		statePath:           filepath.Join(opts.Root, "var", "log", "ingest.state.json"),
-		verificationTimeout: opts.VerificationTimeout,
-		capacityProvider:    opts.CapacityProvider,
-		recoveryHold:        opts.RecoveryHold,
+		state:                    persistedState{Sources: make(map[string]persistedSource)},
+		statePath:                filepath.Join(opts.Root, "var", "log", "ingest.state.json"),
+		verificationTimeout:      opts.VerificationTimeout,
+		capacityProvider:         opts.CapacityProvider,
+		sampling:                 opts.Sampling,
+		recoveryHold:             opts.RecoveryHold,
+		resolveGapsBudget:        resolveGapsBudgetOfOpts(opts.ResolveGapsBudget),
+		reconcile:                reconcileConfigOf(opts.Reconcile),
+		reconcileLoop:            reconcileLoopConfigOf(opts.ReconcileLoop),
+		indexPrune:               indexPruneConfigOf(opts.IndexPrune),
+		indexCommit:              indexCommitBudgetOf(opts.IndexCommit),
+		walLimits:                opts.WALLimits,
+		reconcileYield:           reconcileYieldFromOpts(opts),
+		reconcileSliceEvents:     reconcileSliceFromOpts(opts),
+		reconcileYieldNotify:     opts.ReconcileYieldNotify,
+		resumeInterval:           opts.ResumeInterval,
+		resumeBatchPerRound:      opts.ResumeBatchPerRound,
+		sweepBackpressureStreak:  opts.SweepBackpressureStreak,
+		sweepInflightCap:         opts.SweepInflightCap,
+		recoveryQuotaFactor:      opts.RecoveryQuotaFactor,
+		recoveryDrainGrace:       opts.RecoveryDrainGrace,
+		recoveryProbe:            opts.RecoveryProbe,
+		scanYield:                scanValueOf(opts.ScanYield, opts.Scan, func(t *ScanTuning) time.Duration { return t.Yield }),
+		scanSliceRows:            scanSliceRowsOf(opts.ScanSliceRows, opts.Scan),
+		scanYieldNotify:          opts.ScanYieldNotify,
+		scanBudget:               scanValueOf(opts.ScanBudget, opts.Scan, func(t *ScanTuning) time.Duration { return t.Budget }),
+		maxReplayEventsPerDrain:  opts.MaxReplayEventsPerDrain,
+		multilineUnclosedTimeout: multilineUnclosedTimeoutOf(opts.MultilineUnclosedTimeout),
+	}
+	// 生命周期 ctx：持久化的可取消面（Stop 取消）。只在 New 中赋值、之后不再改写 ⇒ 读不加锁。
+	m.lifecycleCtx, m.lifecycleCancel = context.WithCancel(context.Background())
+	m.persistYield = opts.PersistYield
+	m.persistHotBudget = opts.PersistHotBudget
+	if m.persistHotBudget <= 0 {
+		m.persistHotBudget = defaultPersistHotBudget
+	}
+	m.persistRequests = make(chan struct{}, 1)
+	m.persistWorkerDone = make(chan struct{})
+	m.persistPriorityStreak = opts.PersistPriorityStreak
+	// 投影重建调度器（见 rebuild_scheduler.go）：每源台账 + 单飞/合并队列 + 限速与退避旋钮。
+	m.rebuilds = newRebuildScheduler()
+	if tuning := opts.RebuildTuning; tuning != nil {
+		if tuning.Throttle > 0 {
+			m.rebuilds.throttle = tuning.Throttle
+		}
+		if tuning.MaxAttempts > 0 {
+			m.rebuilds.maxAttempts = tuning.MaxAttempts
+		}
+	}
+	m.rebuilds.yieldNotify = opts.RebuildYieldNotify
+	m.rebuilds.hookRun = opts.RebuildRunNotify
+	m.replayBudget = replayBudgetOf(opts.ReplayBudget)
+	m.vlProbeTimeout = opts.VLReadyProbeTimeout
+	m.vlReadyWait = opts.VLReadyWait
+	if tuning := opts.ReplayTuning; tuning != nil {
+		if tuning.VLReadyProbeTimeout > 0 {
+			m.vlProbeTimeout = tuning.VLReadyProbeTimeout
+		}
+		if tuning.VLReadyWait > 0 {
+			m.vlReadyWait = tuning.VLReadyWait
+		}
+		if tuning.Budget.MaxDays > 0 || tuning.Budget.MaxDuration > 0 {
+			m.replayBudget = replayBudgetOf(tuning.Budget)
+		}
+	}
+	if m.vlProbeTimeout <= 0 {
+		m.vlProbeTimeout = defaultVLReadyProbeTimeout
+	}
+	if m.vlReadyWait <= 0 {
+		m.vlReadyWait = defaultVLReadyWait
+	}
+	m.vlNotReady = make(map[string]string)
+	m.defaultCharset = opts.DefaultCharset
+	m.resolvePersistBudget = opts.ResolvePersistBudget
+	// #64：滚动回收的单轮上界（键 log_index.reclaim_roll.*；nil/非正 ⇒ 用默认 32 步 / 1s ✓）。
+	if opts.ReclaimRoll != nil {
+		if opts.ReclaimRoll.MaxSteps > 0 {
+			m.reclaimRollMaxSteps = opts.ReclaimRoll.MaxSteps
+		}
+		if opts.ReclaimRoll.Budget > 0 {
+			m.reclaimRollBudget = opts.ReclaimRoll.Budget
+		}
+	}
+	// #57：cycleMu 持有者观测仪（env 默认关；Options 可显式打开，供回归与现场按需取读数）。
+	m.cycleMuProfile = opts.CycleMuProfile || cycleMuProfileEnabled()
+	m.defaultTimeZone = opts.DefaultTimeZone
+	// 节点级默认时区必须**运行期自证**（2026-10-02 真机复验：配了 local 却仍是 +8h，因为
+	// 容器/systemd 里 local 恰好解析成 UTC）。这段日志与告警把「配置值 → 解析结果 → 解析依据」
+	// 一次说清，避免下一次又去怀疑接线与恢复路径。
+	if loc, err := ParseTimeZone(m.defaultTimeZone); err == nil {
+		_, offset := time.Now().In(loc).Zone()
+		if offset != 0 || strings.TrimSpace(m.defaultTimeZone) != "" {
+			slog.Info("采集归一化节点默认时区已生效",
+				"config", m.defaultTimeZone, "resolved", loc.String(), "offsetSeconds", offset)
+		}
+		if hint := DefaultTimeZoneHint(m.defaultTimeZone, loc); hint != "" {
+			slog.Warn("节点默认时区配置未达到预期效果", "hint", hint)
+		}
+	}
+	if strings.TrimSpace(m.defaultCharset) != "" {
+		slog.Info("采集归一化节点默认字符集已生效", "config", m.defaultCharset)
 	}
 	if m.verificationTimeout <= 0 {
 		// 5 分钟（原 30 秒）。依据 2026-09-28 生产实测：VL 的 /insert/jsonline 是「接收即
@@ -336,7 +2097,30 @@ func New(opts Options) (*Manager, error) {
 	if m.verifyBackoffMax <= 0 {
 		m.verifyBackoffMax = defaultVerifyBackoffMax
 	}
-	// 事件体走追加式磁盘段（FR-484）：state 文件只留元数据，避免整份重写与常驻切片。
+	// 投影校验的分簇与并发（FR-498 P0）：默认 2000 事件/簇、同批内 4 路并发。
+	if m.verifyChunkEvents <= 0 {
+		m.verifyChunkEvents = defaultVerifyChunkEvents
+	}
+	if m.verifyChunkConcurrency <= 0 {
+		m.verifyChunkConcurrency = defaultVerifyChunkConcurrency
+	}
+	m.verifyMaxQueriesPerChunk = opts.VerifyMaxQueriesPerChunk
+	if m.verifyMaxQueriesPerChunk <= 0 {
+		m.verifyMaxQueriesPerChunk = defaultVerifyMaxQueriesPerChunk
+	}
+	m.verifyLimiter = newVerifyLimiter(opts.VerifyBudget)
+	m.verifyRoundBudget = opts.VerifyRoundBudget
+	if m.verifyRoundBudget <= 0 {
+		m.verifyRoundBudget = defaultVerifyRoundBudget
+	}
+	m.verifyVisibilityFloor = opts.VerifyVisibilityFloor
+	m.verifyChunkEstimates = opts.VerifyChunkEstimates
+	// 采集索引（FR-496）：打开 SQLite 索引，必要时一次性迁移旧 ingest.state.json；
+	// 迁移/校验失败 → 拒绝启动采集（不静默降级），保留旧文件供人工处置。
+	if err := m.openIndex(); err != nil {
+		return nil, err
+	}
+	// 事件体走追加式磁盘段（FR-484）：state 只留元数据，避免整份重写与常驻切片。
 	store, err := eventstore.Open(filepath.Join(opts.Root, "var", "log", "events"))
 	if err != nil {
 		return nil, err
@@ -363,49 +2147,463 @@ func New(opts Options) (*Manager, error) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	// 启动恢复分三阶段（FR-497）：
+	//   ① 登记全部源并重建权威集合（顺序与旧实现一致）；
+	//   ② 并发对账「源 × UTC 天」的条数（只读 VL，双超时）；
+	//   ③ 按源重发：只补缺失天 / 零重发 / 回退整窗（对账不可信时）。
+	//
+	// 为什么要拆开：对账是网络查询，必须能并发且失败只影响单源；而登记与重发仍要保持
+	// 既有的确定性顺序（catalog 发布、段存储、回收责任推进都不接受乱序）。
+	recovery := make([]startupSource, 0, len(keys))
+	recoveryPossible := m.vl != nil || m.vlRoute != nil
 	for _, sourceKey := range keys {
 		source := restoredSources[sourceKey]
 		if err := m.Register(source); err != nil {
 			return nil, err
 		}
-		key := source.LogSourceID + "/" + source.SourceGeneration
-		m.mu.Lock()
-		saved := m.state.Sources[key]
-		m.mu.Unlock()
-		recoveryEvents, err := m.canonicalRecoveryEvents(key, saved)
-		if err != nil {
-			return nil, err
+		if !recoveryPossible {
+			// 无 VL 客户端：没有可对账、也没有可重发的目标（与旧行为一致）。
+			continue
 		}
-		if len(recoveryEvents) > 0 && m.vl != nil {
-			// A new VL data root or a lost projection response must never rely on
-			// the old physical generation. Rebuild a new isolated projection and
-			// publish its manifest/watermark atomically.
-			generation := nextProjectionGeneration(saved.ProjectionGeneration)
-			m.mu.Lock()
-			saved.ProjectionGeneration = generation
-			m.state.Sources[key] = saved
-			m.mu.Unlock()
-			if _, err := m.writeProjection(source, recoveryEvents, generation, recoveryEvents, nil, true); err != nil {
-				return nil, err
-			}
-			m.mu.Lock()
-			p := m.pipes[key]
-			m.mu.Unlock()
-			if p != nil && p.DeliveryState() == logtypes.DeliveryUnknown {
-				if err := p.ResolveUnknownThroughProjection(recoveryEvents); err != nil {
-					return nil, err
-				}
-			}
-			if err := m.releaseRecovery(source, recoveryEvents); err != nil {
-				return nil, err
-			}
-		}
+		// 只登记「待恢复的源」——**读回权威事件集与对账/重发全部移到后台**（见 runStartupRecovery）。
+		// 改动前这里逐源把 canonical 事件全量读进内存再对账，于是 New 的耗时为
+		// O(全部源的事件总量)（生产 18GB，单线程），期间 worker 完全不可达（2026-10-02 事故）。
+		recovery = append(recovery, startupSource{source: source, key: source.LogSourceID + "/" + source.SourceGeneration})
 	}
 	if err := m.recoverPendingSpools(); err != nil {
 		_ = store.Close()
 		return nil, err
 	}
+	// StartupRecoveryBackground（生产）：恢复不阻塞 New——New 返回后 main 立即继续，
+	// 反向隧道/WS/HTTP 随即可达，恢复在后台按批续做并经就绪面如实上报。
+	// 其余调用方（默认）：就地执行同一驱动，保持「New 返回即恢复完成」的既有边界。
+	go m.persistLoop(m.lifecycleContext())
+	if err := m.startStartupRecovery(recovery, opts.StartupRecoveryBackground); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	return m, nil
+}
+
+// lifecycleContext 返回 Manager 生命周期 ctx（持久化的可取消面）。字段只在 New 中赋值，
+// 故读取不加锁、也不参与锁序。
+func (m *Manager) lifecycleContext() context.Context {
+	if m == nil || m.lifecycleCtx == nil {
+		return context.Background()
+	}
+	return m.lifecycleCtx
+}
+
+// startStartupRecovery 启动启动恢复驱动：background=true 时在后台 goroutine 里跑
+// （生产语义：New 不阻塞），否则就地跑完（保持既有调用方的边界）。
+// 错误语义按模式分工（同一条驱动，只有错误处置不同）：
+//   - 同步模式：**保持既有契约**——任一步失败即让 New 失败（调用方由此得知"启动投影/回收责任
+//     没落定"，走既有重试与告警面）；这正是既有回归守住的行为。
+//   - 后台模式（生产）：单源失败**不致命**——记入就绪原因并继续其余源，就绪面照实报 not-ready
+//     （`startup_recovery_failed` + 逐源原因）。理由：一个源的重发失败不该让整节点的实例管理、
+//     采集与其它源的采集都起不来；「未就绪」已由就绪面显式表达，不比让 New 失败更弱。
+func (m *Manager) startStartupRecovery(items []startupSource, background bool) error {
+	m.mu.Lock()
+	done := make(chan struct{})
+	m.startupDone = done
+	if len(items) == 0 {
+		m.startupRecovery = startupRecoveryState{}
+		m.mu.Unlock()
+		close(done)
+		return nil
+	}
+	m.startupRecovery = startupRecoveryState{InProgress: true, Total: len(items)}
+	m.mu.Unlock()
+	if background {
+		go func() {
+			defer close(done)
+			// 后台模式的错误不外抛（没有调用方在等）：失败已记入原因并经就绪面表达。
+			// asyncReplay=true：生产语义——重发登记给重建 worker（不占采集主线，见 runStartupRecovery）。
+			_ = m.runStartupRecovery(m.lifecycleContext(), items, false, true)
+		}()
+		return nil
+	}
+	err := m.runStartupRecovery(m.lifecycleContext(), items, true, false)
+	close(done)
+	return err
+}
+
+// replayBudgetOf 归一化重发预算（零值 → 默认）。
+func replayBudgetOf(budget ReplayBudget) ReplayBudget {
+	if budget.MaxDays <= 0 {
+		budget.MaxDays = defaultReplayMaxDaysPerRound
+	}
+	if budget.MaxDuration <= 0 {
+		budget.MaxDuration = defaultReplayMaxDuration
+	}
+	return budget
+}
+
+// ensureVLReady 在对账/重发之前探测该源的 VL 写入端是否就绪；不就绪即返回错误（调用方**不得**
+// 发起对账与重发，只能记错误等下一轮）。
+//
+// 日志策略：**只在状态变化时打一条**（就绪 → 未就绪、未就绪 → 就绪），否则每轮每源一条会把现场
+// 日志淹掉，而这类「反复未就绪」恰恰是排障时最需要看清的信号。
+func (m *Manager) ensureVLReady(ctx context.Context, source SourceConfig) error {
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	client, frozen, err := m.clientForSource(source)
+	if err != nil {
+		m.noteVLNotReady(key, err)
+		return err
+	}
+	if frozen {
+		err := fmt.Errorf("ingest: VL 写入端已冻结（cutover 进行中），不发起对账/重发")
+		m.noteVLNotReady(key, err)
+		return err
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, m.vlProbeTimeout)
+	defer cancel()
+	if err := client.Health(probeCtx); err != nil {
+		wrapped := fmt.Errorf("ingest: VL 未就绪（%s）: %w", err.Error(), err)
+		m.noteVLNotReady(key, wrapped)
+		return wrapped
+	}
+	m.noteVLReady(key)
+	return nil
+}
+
+func (m *Manager) noteVLNotReady(key string, err error) {
+	message := err.Error()
+	m.mu.Lock()
+	_, existed := m.vlNotReady[key]
+	m.vlNotReady[key] = message
+	m.mu.Unlock()
+	if !existed {
+		slog.Warn("VL 未就绪：本轮不发起对账/重发（等下一轮，避免必然失败的整窗重发）",
+			"source", key, "error", message)
+	}
+}
+
+func (m *Manager) noteVLReady(key string) {
+	m.mu.Lock()
+	_, existed := m.vlNotReady[key]
+	delete(m.vlNotReady, key)
+	m.mu.Unlock()
+	if existed {
+		slog.Info("VL 已就绪：恢复对账/重发", "source", key)
+	}
+}
+
+// StartupRecoveryStatus 返回启动恢复的后台进度（观测面；CP 的运维接口与排障据此判断
+// 「平台为什么还没就绪」）。
+func (m *Manager) StartupRecoveryStatus() startupRecoveryState {
+	if m == nil {
+		return startupRecoveryState{}
+	}
+	m.mu.Lock()
+	status := m.startupRecovery
+	status.Reasons = append([]string(nil), m.startupRecovery.Reasons...)
+	status.ReplaySkipReasons = append([]string(nil), m.startupRecovery.ReplaySkipReasons...)
+	m.mu.Unlock()
+	// 「已登记、尚无结论」的重发实时取自调度器（不缓存在本结构里，避免两份状态分叉）。
+	status.ReplaysInFlight = m.startupReplayInFlight()
+	return status
+}
+
+// WaitStartupRecovery 等待启动恢复结束（含被取消）。ctx 取消即返回 ctx.Err()。
+//
+// 为什么需要它：恢复语义（「启动后多久，账本/投影/回收责任才落定」）此前由 New 的同步返回
+// 隐式表达；移到后台后必须有**显式的等待点**，否则测试与调用方无从确定边界。
+// 生产不需要等（这正是本修复的目的），故 main 不调用它。
+func (m *Manager) WaitStartupRecovery(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	done := m.startupDone
+	m.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// runStartupRecovery 是启动恢复的后台驱动（FR-497 的三阶段，顺序与语义不变）：
+// ① 按批读回权威集合（可取消、有界内存）；② 批内并发对账（网络）；③ 逐源重发 + 落库。
+//
+// 与改动前的两处行为差异，都是 2026-10-02 事故的直接对策：
+//   - **不阻塞启动**：整段脱离 New，worker 立即可达（本方法的失败只影响就绪面，不再让
+//     Manager 创建失败——改动前单源重发失败会导致整个采集运行时起不来）；
+//   - **单源失败不致命**：记入 Reasons 并继续其余源（改动前直接 return err）。
+//
+// 2026-10-10 第二项修复（**重发移出本驱动**）：`asyncReplay=true`（= 生产，对应
+// `StartupRecoveryBackground`）时，阶段③不再在本 goroutine 上跑「重发本身」——
+// 它只做 O(天数) 的登记（见 startup_replay.go 的完整论证），重发由重建 worker 按
+// **有界重试 + 退避 + 放弃**执行。驱动因此能在秒级内跑完全部批次并给出恢复结论，
+// 而就绪面同时把「重发仍在路上」显式报出来（`startup_replay_in_flight`）。
+//
+// `asyncReplay=false`（同步模式）时阶段③**逐字保持**既有内联重发循环（有界趟数 +
+// VL 等待窗口）：这条路径的契约是「返回即恢复完成」，调用方依赖它。
+func (m *Manager) runStartupRecovery(ctx context.Context, items []startupSource, failFast, asyncReplay bool) error {
+	allReports := make([]ReconcileReport, 0, len(items))
+	for start := 0; start < len(items); start += startupRecoveryBatch {
+		if err := ctx.Err(); err != nil {
+			m.finishStartupRecovery()
+			return err
+		}
+		end := start + startupRecoveryBatch
+		if end > len(items) {
+			end = len(items)
+		}
+		loaded := make([]startupSource, 0, end-start)
+		for _, item := range items[start:end] {
+			if err := ctx.Err(); err != nil {
+				m.finishStartupRecovery()
+				return err
+			}
+			snapshot := m.capturePublicationSnapshot(item.source, ctx)
+			m.mu.Lock()
+			saved := m.state.Sources[item.key]
+			m.mu.Unlock()
+			events, err := m.canonicalRecoveryEvents(item.key, saved)
+			if err != nil {
+				if failFast {
+					m.finishStartupRecovery()
+					return err
+				}
+				m.noteStartupRecoveryFailure(item.key, err)
+				continue
+			}
+			if len(events) == 0 {
+				continue
+			}
+			loaded = append(loaded, startupSource{source: item.source, key: item.key, events: events, snapshot: snapshot})
+		}
+		if len(loaded) == 0 {
+			continue
+		}
+		reports := m.reconcileStartup(ctx, loaded)
+		allReports = append(allReports, reports...)
+		// 增量可见：排障中途也能看到「对账已经跑了哪些源」。
+		//
+		// **O(n²) 修正（2026-10-10）**：`allReports` 是**累计**集，而这里在批次循环里每批都调一次
+		// ——若"记读数"与"打日志"合在一起（原实现），第 k 批会把前 k-1 批全部重打一遍，
+		// 总日志量 = O(批数²)。生产现场 5 个启动窗口打出 4×1526 + 1×3359 条、同一
+		// `(源, 缺失天)` 组合反复出现，正是这个放大（它同时淹没了"第一次是谁触发的"这一判据）。
+		// 现在拆成两步：读数记**累计**（语义不变），日志只打**本批新增**（每份报告恰好一行）。
+		m.recordReconcileReports(allReports)
+		m.noteReconcileReports(reports)
+		if asyncReplay {
+			// 生产路径：只登记，不等重发（见本函数头）。阈值是 O(批次内天数)，与事件量无关。
+			summary := m.scheduleStartupReplays(loaded, reports)
+			m.noteStartupReplaySummary(summary)
+			continue
+		}
+		if err := m.runStartupReplayInline(ctx, loaded, reports, failFast); err != nil {
+			m.finishStartupRecovery()
+			return err
+		}
+	}
+	m.finishStartupRecovery()
+	return nil
+}
+
+// runStartupReplayInline 是**同步模式**的启动恢复重发（逐字保留改动前的内联循环）。
+//
+// 为什么保留：它的契约是「返回即恢复完成」，既有回归与需要确定性边界的调用方依赖它；
+// 生产不走这里（`apps/worker/main.go` 传 `StartupRecoveryBackground: true`）。
+//
+// 语义（与改动前一致，未做任何"顺手优化"）：
+//   - 重发按**天**切片推进（见 replayWindow）：一轮没做完的源留在这里，下一趟继续；
+//   - 趟数与等待上界分开计：只有「本趟有进展」才消耗趟数预算；纯等待（VL 未就绪）按固定
+//     间隔轮询，并受 `vlReadyWait` 的墙钟上界约束——否则「等 VL 起来」会被趟数上限提前
+//     掐断，而且记录下来的原因会退化成一句没用的「趟数用尽」；
+//   - 任一步失败按 failFast 决定「让 New 失败」还是「记原因继续」。
+func (m *Manager) runStartupReplayInline(ctx context.Context, loaded []startupSource, reports []ReconcileReport, failFast bool) error {
+	type pendingReplay struct {
+		item   startupSource
+		report ReconcileReport
+		window *replayWindow
+		// vlWaitSince 记录「因 VL 未就绪而等待」的起点，用于给等待设上界。
+		vlWaitSince time.Time
+		// lastErr 是最近一次真实失败原因（用于「趟数/等待用尽」时如实报出原因，而不是一句
+		// 「趟数用尽」——现场排障靠的就是这句话）。
+		lastErr error
+	}
+	pending := make([]pendingReplay, 0, len(loaded))
+	for index, item := range loaded {
+		pending = append(pending, pendingReplay{item: item, report: reports[index]})
+	}
+	// liveWindows 收拢「本驱动当前还活着、还没到终态的窗」。
+	//
+	// 为什么必须显式收拢（而不是靠 window 被 GC）：代次预留只由 releaseProjectionGeneration
+	// 释放，GC 不会代劳 ⇒ 任何「窗不再被续跑却没有释放」的出口都会把该代次名钉死到进程结束，
+	// 该源此后每次取名都无谓进位。本驱动有 4 个放弃出口（趟数用尽 / ctx 取消 / failFast 提前
+	// 返回 / 单源非致命失败），逐个手写释放必然漏一个；改成「登记 + 出口统一释放」后，
+	// 新增出口天然不再需要记得释放。
+	liveWindows := make(map[string]*replayWindow, len(loaded))
+	forgetWindow := func(key string, w *replayWindow) {
+		if w == nil {
+			return
+		}
+		if cur, ok := liveWindows[key]; ok && cur == w {
+			m.releaseReplayWindow(w)
+			delete(liveWindows, key)
+		}
+	}
+	defer func() {
+		for key, w := range liveWindows {
+			m.releaseReplayWindow(w)
+			delete(liveWindows, key)
+		}
+	}()
+	passes := 0
+	waitStarted := time.Now()
+	for len(pending) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if passes > maxStartupReplayPasses || time.Since(waitStarted) > m.vlReadyWait+time.Minute {
+			for _, entry := range pending {
+				cause := entry.lastErr
+				if cause == nil {
+					cause = fmt.Errorf("重发在 %d 趟内未完成", maxStartupReplayPasses)
+				}
+				remaining := []string(nil)
+				if entry.window != nil {
+					remaining = entry.window.days
+				}
+				forgetWindow(entry.item.key, entry.window)
+				m.noteStartupRecoveryFailure(entry.item.key,
+					fmt.Errorf("重发未完成（剩余天 %v）: %w", remaining, cause))
+			}
+			break
+		}
+		progressed := false
+		next := make([]pendingReplay, 0, len(pending))
+		for _, entry := range pending {
+			if err := ctx.Err(); err != nil {
+				return err // 出口统一释放所有仍活着的窗（见上面的 defer）
+			}
+			daysBefore := 0
+			if entry.window != nil {
+				daysBefore = len(entry.window.days)
+			}
+			done, window, err := m.applyStartupRecovery(ctx, entry.item, entry.report, entry.window)
+			entry.window = window
+			// 登记本源的活窗（供放弃出口与函数出口统一释放；同一个 key 的旧窗已被 apply
+			// 那边释放或续用，这里以最新窗口为准）。
+			if window != nil {
+				liveWindows[entry.item.key] = window
+			}
+			if window != nil && len(window.days) < daysBefore {
+				progressed = true // 本趟至少完成了一天（真进展）
+			}
+			if err != nil {
+				entry.lastErr = err
+				// VL 未就绪不是「源恢复失败」：它是可等待的外部条件（现场触发因就是它），
+				// 在有界窗口内保留在 pending 里下趟再试；超出窗口才记失败。
+				if m.vlNotReadyFor(entry.item.key) {
+					if entry.vlWaitSince.IsZero() {
+						entry.vlWaitSince = time.Now()
+					}
+					if time.Since(entry.vlWaitSince) < m.vlReadyWait {
+						next = append(next, entry)
+						continue
+					}
+					// 等待窗口用尽：**仍不致命**（两种模式一致）——VL 未就绪是外部条件，
+					// 该源的缺失天会被运行期常驻对账重新发现并重发（见 reconcile_loop）；
+					// 就绪面 meanwhile 如实报 not-ready。把外部条件当「源恢复失败」去中断
+					// 整个启动恢复，正是 2026-10-02 现场把 worker 拖死的形态。
+					// 本流在此放弃该源 ⇒ 窗不再续跑 ⇒ 释放其代次预留（防钉死）。
+					forgetWindow(entry.item.key, entry.window)
+					m.noteStartupRecoveryFailure(entry.item.key, err)
+					continue
+				}
+				if failFast {
+					return fmt.Errorf("ingest: 启动恢复重发失败（源 %s）: %w", entry.item.key, err)
+				}
+				// 非致命失败：同样放弃该源本轮的窗（缺失天由常驻对账重新登记）⇒ 释放预留。
+				forgetWindow(entry.item.key, entry.window)
+				m.noteStartupRecoveryFailure(entry.item.key, err)
+				continue
+			}
+			entry.vlWaitSince = time.Time{}
+			if !done {
+				// 预算内没做完：已发布的天已完成，剩余天下一趟续跑（不推进回收责任）。
+				// 窗仍活着 ⇒ 预留继续由它持有（下一趟用同一代次，正是预留的目的）。
+				entry.lastErr = nil
+				next = append(next, entry)
+				continue
+			}
+			// 整窗完成：applyStartupRecovery 已在它自己的出口释放了预留 ⇒ 这里只注销登记
+			//（forgetWindow 对已释放的句柄是空操作：句柄被置 nil 后 release 直接返回）。
+			forgetWindow(entry.item.key, entry.window)
+			m.noteStartupRecoveryCompleted()
+		}
+		pending = next
+		if progressed {
+			passes++
+			// 让路：本趟已让出持久化门，这里再给采集轮一个完整的调度机会。
+			time.Sleep(persistStepYield)
+			continue
+		}
+		// 本趟零进展（典型：VL 未就绪）：按固定间隔轮询，把 CPU 让给采集轮，避免空转烧核。
+		time.Sleep(vlReadyRetryInterval)
+	}
+	return nil
+}
+
+func (m *Manager) noteStartupRecoveryCompleted() {
+	m.mu.Lock()
+	m.startupRecovery.Completed++
+	m.mu.Unlock()
+}
+
+func (m *Manager) noteStartupRecoveryFailure(key string, err error) {
+	// **延期不是失败**（用户 2026-10-05 现场铁证 ✓）：`ErrVerifyDeferred`（[runtime.go:4020] ✓）
+	// 是设计内的正常让路 ✓，却与本行**共用无条件 ERROR** ✗ ⇒ 现场 `inst:142/143` 在新二进制上仍持续
+	// 打 ERROR（08:22:49 ✓）。**只对延期降级、其余照旧 ERROR** ✗（一刀切会把真问题淹没 ✓）。
+	level, msg := startupRecoveryFailureLevel(err)
+	slog.Log(context.Background(), level, msg, "source", key, "error", err)
+	m.mu.Lock()
+	m.startupRecovery.Failed++
+	if len(m.startupRecovery.Reasons) < maxStartupRecoveryReasons {
+		m.startupRecovery.Reasons = append(m.startupRecovery.Reasons, key+":"+err.Error())
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) finishStartupRecovery() {
+	m.mu.Lock()
+	m.startupRecovery.InProgress = false
+	m.mu.Unlock()
+}
+
+// maxStartupRecoveryReasons 是有界原因条数（避免逐源刷屏；总量由 Failed 计数表达）。
+const maxStartupRecoveryReasons = 8
+
+// vlReadyRetryInterval 是「等 VL 就绪」时的轮询间隔（零进展的趟之间）。
+//
+// 为什么需要它：等待期间若只做 5ms 让路，等待窗口（defaultVLReadyWait）内的趟数会把 CPU 空烧
+// 掉（现场 2.67 核的形态之一）；固定 2s 间隔既让 CPU 让给采集轮，又能在 VL 起来后 2s 内接上。
+const vlReadyRetryInterval = 2 * time.Second
+
+// maxStartupReplayPasses 是单个源重发的最大推进趟数（每趟受 ReplayBudget 约束）。
+//
+// 它是有界性的最后一层保险：预算保证「每趟有限」，本常量保证「趟数有限」——否则一个永远做不完的
+// 超大源会把启动恢复的循环一直占着（而它每一趟都只是在等外部条件）。
+const maxStartupReplayPasses = 64
+
+// vlNotReadyFor 报告该源当前是否被判为「VL 未就绪」（由 ensureVLReady 维护，状态变化才打日志）。
+func (m *Manager) vlNotReadyFor(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, notReady := m.vlNotReady[key]
+	return notReady
 }
 
 func (m *Manager) recoverPendingSpools() error {
@@ -475,8 +2673,38 @@ func DiskCapacityProvider(root string, configured acquire.CapacityBudget) func()
 	}
 }
 
+// IsValidCharset 报告节点级默认字符集取值是否合法（供配置层在启动阶段显式拒绝非法值）。
+//
+// 为什么由本包再导出一层：字符集的判定与解码口径都在 normalize（唯一真源），而配置层
+// （internal/worker/config.go）只依赖 ingest 这一层——多导出一个名字，避免配置层为了校验
+// 而绕到 normalize 上去，也避免两侧各自维护一份字符集白名单（那才是真正的漂移源）。
+// 取值：auto / utf-8 / gbk / gb18030（空串表示未配置，按 auto 处理）。
+func IsValidCharset(raw string) bool {
+	return normalize.IsValidCharset(raw)
+}
+
+// DefaultMultilineUnclosedTimeout 返回未闭合多行缓冲的默认强制闭合时限（真源在 normalize）。
+//
+// 同上：配置层只依赖 ingest，故在此再导出一层，避免配置层为取一个默认值而再引入
+// normalize 依赖、也避免默认值在两侧各写一遍（那会在调参时漂移）。
+func DefaultMultilineUnclosedTimeout() time.Duration {
+	return normalize.DefaultUnclosedTimeout
+}
+
+// 静默源出口的「无副本」标注（复审 P2-13）：这一段的凭据是「整段已投递并被逐字段校验」，
+// 而不是任何物理副本。路径与责任接收者都带上显式标记，使事后审计一眼能看出「这段没有副本」。
+const (
+	// silentExitNoCopyPath 是静默源出口补出的恢复分段路径（**不是**文件路径，也不是 project://代次）。
+	silentExitNoCopyPath = "manual://delivered-no-copy"
+	// silentExitNoCopyReceiver 是该分段的责任接收者标记。
+	silentExitNoCopyReceiver = "manual:admin(delivered-no-copy)"
+)
+
 // Register adds one source; registration is idempotent by logical source key.
 func (m *Manager) Register(source SourceConfig) error {
+	// explicit 是调用方（登记路径 / 索引恢复路径）给的**显式**配置：后面会被节点默认填充，
+	// 故这里先留一份原件，用于「索引只记显式口径」与逐源自证日志。
+	explicit := source
 	if source.LogSourceID == "" || source.SourceGeneration == "" {
 		return fmt.Errorf("ingest: source identity is required")
 	}
@@ -492,25 +2720,97 @@ func (m *Manager) Register(source SourceConfig) error {
 	if source.UTCDay == "" {
 		source.UTCDay = time.Now().UTC().Format("2006-01-02")
 	}
+	if source.Charset == "" {
+		source.Charset = m.defaultCharset
+	}
+	if !normalize.IsValidCharset(source.Charset) {
+		return fmt.Errorf("ingest: 未知日志字符集 %q（source=%s）", source.Charset, source.LogSourceID)
+	}
+	if source.TimeZone == "" {
+		source.TimeZone = m.defaultTimeZone
+	}
+	location, err := ParseTimeZone(source.TimeZone)
+	if err != nil {
+		return fmt.Errorf("ingest: 源 %s 的时区配置无效: %w", source.LogSourceID, err)
+	}
+	// 逐源自证「生效归类口径」（2026-10-02 真机复验的教训）：一次运行里每个源只登记一次，
+	// 这条日志把「源 → 生效时区/字符集 → 解析出的偏移」钉死。现场排查时只要 grep 它，
+	// 就能立刻分辨「默认没落到该源」与「默认本身就是 UTC 语义」——不必再逐层读代码猜。
+	{
+		_, offset := time.Now().In(location).Zone()
+		slog.Info("日志源归一化口径已生效",
+			"source", source.LogSourceID, "generation", source.SourceGeneration,
+			"timeZone", source.TimeZone, "timeZoneInherited", explicit.TimeZone == "",
+			"resolved", location.String(), "offsetSeconds", offset,
+			"charset", source.Charset, "charsetInherited", explicit.Charset == "")
+	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
+	// **按需构造事件体水合函数**（N-2，2026-10-12 终审修复）。
+	//
+	// 两个约束必须同时满足（缺一即回归）：
+	//  1. INGEST-2 的收益：`eventBodyLookup` 对该源全部历史事件做一次**磁盘段遍历**
+	//     （`eventstore.Iterate` 逐段 readSegment，O(段行数)；生产单源实测 126MB/135k 行）；
+	//     它**不得**落在 `m.mu` 临界区内，否则换代源登记会长时间独占锁。
+	//  2. N-2 的修复：它**只在真的需要时才构造**。旧形态无条件预构造 ⇒ **安静源**
+	//     （WAL 已排空、`WALRefs` 为空）本来一条引用都没有、`RestoreMixed` 根本不需要
+	//     hydrate，却仍白付一次全段磁盘读 + 全量 map 驻留。启动路径对全部源串行登记，
+	//     60 源 × 秒级 ⇒ 启动多出分钟级、内存峰值 GB 级（与 e8e44105 事故同类形态）。
+	//
+	// 实现＝两段式：先锁内做 **O(1)** 判断（只读 map 长度，不碰磁盘），锁外按需构造，
+	// 再重新进锁执行原有的恢复流程。第二段与第三段之间状态可能变化（并发登记/持久化），
+	// 故使用点保留 nil 兜底（见下方 len(saved.WALRefs) 分支）——正确性不依赖两段间的稳定性。
+	needHydrate := false
+	m.mu.Lock()
+	if _, ok := m.pipes[key]; ok {
+		if !sameSourceConfig(m.sources[key], source) {
+			m.mu.Unlock()
+			return fmt.Errorf("ingest: source identity already bound to another configuration")
+		}
+		m.mu.Unlock()
+		return nil
+	}
+	if saved, ok := m.state.Sources[key]; ok && len(saved.WALRefs) > 0 {
+		needHydrate = true
+	}
+	m.mu.Unlock()
+
+	// 锁外构造（仅当确实存在引用条目需要水合）。
+	var bodyLookup func(eventID string) (logtypes.Event, bool)
+	if needHydrate {
+		bodyLookup = m.eventBodyLookup(key)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// 重新校验：两段之间可能有并发登记抢先完成（原实现在同一次持锁内完成该判断）。
 	if _, ok := m.pipes[key]; ok {
-		if m.sources[key] != source {
+		if !sameSourceConfig(m.sources[key], source) {
 			return fmt.Errorf("ingest: source identity already bound to another configuration")
 		}
 		return nil
 	}
 	led := ledger.New()
+	recoveryDirty := false
+	// 历史投递批次裁剪（FR-496 索引有界化）：配置默认开启，非法值已在 indexPruneConfigOf 回退。
+	led.SetDeliveryBatchPrune(m.indexPrune)
 	wal := newWAL(led, ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration})
 	if saved, ok := m.state.Sources[key]; ok {
 		if err := led.Restore(saved.Ledger); err != nil {
 			return err
 		}
 		if len(saved.WALRefs) > 0 {
+			// 兜底（N-2 两段式的正确性前提）：两段持锁之间状态可能被并发登记/持久化改写——
+			// 首段判定「不需要水合」，此刻却已出现引用条目。此时**就地构造**：
+			// `eventBodyLookup` 不取 `m.mu`（只读 `m.events`，见其注释），故无死锁风险；
+			// 代价仅是该次 O(段行数) 遍历落回锁内，而这是罕见竞态而非稳态路径。
+			// 绝不在此处用 nil 兜底函数了事——那会把「引用条目取不到正文」误记成真实数据丢失。
+			if bodyLookup == nil {
+				bodyLookup = m.eventBodyLookup(key)
+			}
 			// 引用形式（B1a）：内联条目直接恢复，引用条目按 EventID 从事件段存储水合。
-			missing := wal.RestoreMixed(saved.WAL, saved.WALRefs, m.eventBodyLookup(key))
+			missing := wal.RestoreMixed(saved.WAL, saved.WALRefs, bodyLookup)
 			if len(missing) > 0 {
+				recoveryDirty = true
 				// 取不到正文的条目不得静默丢：记可见缺口并告警（与 FR-474 §5#1 同口径）。
 				var from, to uint64 = ^uint64(0), 0
 				for _, r := range missing {
@@ -525,7 +2825,7 @@ func (m *Manager) Register(source SourceConfig) error {
 					from = 0
 				}
 				_ = led.RecordGap(ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration},
-					from, to, "WAL_BODY_MISSING",
+					from, to, ledger.GapReasonWALBodyMissing,
 					fmt.Sprintf("%d 条 WAL 引用在事件段存储中找不到正文（B1a 引用恢复）", len(missing)))
 				slog.Warn("WAL 引用恢复：部分条目正文缺失，已记可见缺口",
 					"logSourceID", source.LogSourceID, "missing", len(missing))
@@ -536,25 +2836,62 @@ func (m *Manager) Register(source SourceConfig) error {
 	}
 	p, err := pipeline.New(pipeline.Options{
 		Mode: source.Mode, LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration,
-		Path: source.Path, RotateTo: source.RotateTo, Stream: source.Stream,
+		Path: source.Path, RotateTo: source.RotateTo, Stream: source.Stream, Charset: source.Charset,
+		Location:       location,
 		SourceCategory: source.SourceCategory, Ledger: led, WAL: wal,
 		SuppressRecursiveVL: source.SourceCategory == logtypes.SourceWorker || source.SourceCategory == logtypes.SourceNode,
 		CapacityProvider:    m.capacityProvider,
-		DurablePersist:      m.persist,
-		ReclaimProof:        func(events []logtypes.Event) error { return m.releaseRecovery(source, events) },
-		Delivery: pipeline.FuncHook(func(events []logtypes.Event) (pipeline.DeliveryResult, error) {
-			return m.deliver(source, events)
+		Sampling:            m.sampling,
+		// 采集/投递侧的落库前置：有界等待；超时交办时必须阻止本批投递。
+		DurablePersist:          m.persistDurableBeforeDelivery,
+		WALLimits:               m.walLimits,
+		MaxReplayEventsPerDrain: m.maxReplayEventsPerDrain,
+		ReclaimProof:            func(events []logtypes.Event) error { return m.releaseRecovery(source, events) },
+		Delivery: pipeline.FuncHook(func(events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
+			return m.deliver(source, events, replay)
 		}),
+		// #56：追加被拒（暂停/上限）不再在本路径内同步整窗重投，改为**调度**一次路径外排空
+		//（见 schedulePendingReplay：摄取路径内只登记待办 + 非阻塞唤醒）。
+		AppendRejected: func() { m.schedulePendingReplay(key) },
 	})
 	if err != nil {
 		return err
 	}
 	m.sources[key] = source
 	m.pipes[key] = p
+	m.publishReconcileViewLocked(true) // 源集合变更：立即发布对账只读视图（候选 1）
+	// 归档归属闸（2026-10-02）：把「跨代次归属注册表」接到本源的导入器上。
+	// 缺了它，归档导入只能假设"属于当前代次"——那是静默重复的入口。
+	p.SetArchiveOwnerRegistry(m.archiveOwnerLookup())
+	// 命中其它代次时的**补账**通道：记回原代次的待投递账目（不投递 VL，见 backfillArchiveUnderOwner）。
+	// 补账不可行时导入器会退回"拒绝 + 记缺口"，绝不静默归当前代次。
+	p.SetArchiveBackfill(func(ownerGeneration, archivePath, objectID string) error {
+		return m.backfillArchiveUnderOwner(source, ownerGeneration, archivePath, objectID)
+	})
 	if m.state.SourceConfigs == nil {
 		m.state.SourceConfigs = make(map[string]SourceConfig)
 	}
-	m.state.SourceConfigs[key] = source
+	// 索引里只记**显式**口径（2026-10-02 真机复验的连带修复）：Charset / TimeZone 为空表示
+	// 「跟随节点默认」，绝不把继承来的值写回索引——否则「本次运行继承了什么」会被固化成
+	// 「该源的显式值」，之后改 `log_ingest.time_zone`／`log_ingest.charset` 重启对已登记源**永不生效**
+	// （现场表现与「默认没接线」一模一样，极难分辨）。其余字段（Mode/来源类别/命名空间/日分区）
+	// 是结构默认、也是索引行与 catalog 键的输入，仍按生效值落库。
+	persisted := source
+	persisted.Charset, persisted.TimeZone = explicit.Charset, explicit.TimeZone
+	m.state.SourceConfigs[key] = persisted
+	// 持久化基线：账本刚由 Restore/WAL.Restore 填好，内存状态与索引内容一致，
+	// 因此这里直接取当前修订号与段覆盖签名作为「已落库」的起点——否则启动后的首轮
+	// persist 会把每个源都当成变更源重写一遍（对 13 源现场就是几 MB 的无效写入）。
+	if p.Ledger() != nil && !recoveryDirty {
+		if m.persistedRev == nil {
+			m.persistedRev = make(map[string]uint64)
+		}
+		if m.persistedCover == nil {
+			m.persistedCover = make(map[string]coverSignature)
+		}
+		m.persistedRev[key] = p.Ledger().Revision(p.Key())
+		m.persistedCover[key] = coverSignatureOf(m.state.Sources[key])
+	}
 	return nil
 }
 
@@ -563,6 +2900,15 @@ func (m *Manager) Start(ctx context.Context) {
 	if m == nil {
 		return
 	}
+	// 常驻增量对账（后续项③）：与采集轮共用同一 ctx 生命周期。它只读对账不持锁，
+	// 重发阶段持 cycleMu 与采集轮串行（见 reconcile_loop.go 的隔离说明）。
+	go m.RunReconcileLoop(ctx)
+	// 投影重建 worker（见 rebuild_scheduler.go）：**独立 goroutine**，且从不取 cycleMu ⇒
+	// 无论一次重建跑多久，采集轮都能照常取锁推进。这是「重建不得占用采集主线」的落点。
+	go m.RunRebuildWorker(ctx)
+	// 容量自愈兜底：不依赖采集轮产生新批次（2026-10-03 现场：暂停后无人再评估 ⇒ 成批源停死）。
+	go m.RunCapacityResumeLoop(ctx)
+	m.syncRecoveryQuota() // 启动即同步一次（恢复期独立配额 ✓）
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -581,30 +2927,199 @@ func (m *Manager) Stop() error {
 	if m == nil {
 		return nil
 	}
+	// 先停启动恢复：它可能正在落库/写段，而本方法随后要 flush 并关索引句柄。
+	// 取消即生效（驱动在每次让路与每步之间校验 ctx），故这里等待是有界的。
+	if m.lifecycleCancel != nil {
+		m.lifecycleCancel()
+	}
+	if err := m.WaitStartupRecovery(context.Background()); err != nil {
+		return err
+	}
+	if m.persistWorkerDone != nil {
+		<-m.persistWorkerDone
+	}
+	w := m.observeCycleMu("stop")
 	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	w.locked()
+	defer func() {
+		m.cycleMu.Unlock()
+		w.done()
+	}()
+	// 与登记串行（锁序 cycleMu → registerMu，见 registerMu 注释）：Stop 之后不能再有登记
+	// 进来 persist——那会在索引句柄关闭后把它重新打开，留下无人关闭的连接与 WAL 残留。
+	m.registerMu.Lock()
+	defer m.registerMu.Unlock()
 	m.mu.Lock()
+	// 停止标记：解算的变更段是**每源一段短临界区**（见 resolveOneSourceGaps），因此它可能在
+	// 两个源之间与 Stop 交错——若放任其在 CloseIndex 之后 persist，会把已关闭的索引句柄重新
+	// 打开且无人关闭（留下 WAL 残留），与 registerMu 注释里点名的形态同型。停止后一律拒绝。
+	m.stopped = true
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
 	for _, p := range m.pipes {
 		pipes = append(pipes, p)
 	}
 	m.mu.Unlock()
 	for _, p := range pipes {
+		p.RefreshDegrade(time.Now())
 		_, _ = p.Flush()
 	}
-	if err := m.persist(); err != nil {
+	// 关停落库：**有界尽力**（P0 复盘 2026-10-03 ✓）。
+	//
+	// 语义自检（改的是承诺的形状，不是数据安全 ✓）：
+	//   · 旧承诺「**停服即已落库**」在巨量脏账下等价于"关停可能无限等" ✗ —— 现场实测 SIGTERM
+	//     **200s / 30s 未退** ✗（编排/守护面只能强杀 ⇒ 反而更不干净 ✓）。
+	//   · 新承诺「**有界尽力**」：给足宽限（默认 ``stopGrace``，见下 ✓），到时仍未落完即
+	//     **降级退出**（WARN 不静默 ✓）；未落部分由**下次启动的恢复链 ＋ 常驻对账环**续做 ✓
+	//     （既有机制 ✓，不引入新路径 ✗）⇒ 数据不丢、耐久性最终一致 ✓。
+	//   · 仍未取消生命周期 ctx 的语义 ✓（这条注释原意保留 ✓）；只是把"无限"改成"有界" ✓。
+	stopStarted := time.Now()
+	if err := m.persistCtx(context.Background(), persistMode{priority: true, maxWait: stopGrace}); err != nil {
 		return err
 	}
+	if elapsed := time.Since(stopStarted); elapsed >= stopGrace {
+		// 不静默 ✓：超时即降级退出，且把"未落完"这件事显式告诉运维面 ✓。
+		slog.Warn("关停落库超过有界宽限，已降级退出（未落部分由下次启动的恢复链/对账环续做）",
+			"grace", stopGrace.String(), "elapsed", elapsed.String())
+	}
+	// 关闭索引句柄：显式把 WAL 归并回主库（见 stateindex.Store.Close）。
+	//
+	// 为什么必须在 Stop 里做（而不是留给进程退出）：演练实测不归并时 `-wal` 会残留到
+	// 数百 MB——迁移的一次性大事务写完即有 453.6 MB，事后进程被 kill 就永久留在盘上。
+	// 这里只有索引句柄关掉了，Manager 之后**不能再 persist**（这是 Stop 的语义）。
 	// 事件段句柄在持久化之后关闭：先让 state 元数据落定，再释放段写入端。
+	if err := m.CloseIndex(); err != nil {
+		return err
+	}
 	if m.events != nil {
 		return m.events.Close()
 	}
 	return nil
 }
 
+// CloseIndex 关闭采集索引句柄并归并 WAL。幂等：已关闭时是空操作。
+//
+// 单独暴露是为了让「只关索引、不动事件段」的场景（Stop 的分步、测试的崩溃现场模拟）
+// 不必调用完整的 Stop；调用后 Manager 不能再 persist，直到重新打开索引。
+func (m *Manager) CloseIndex() error {
+	if m == nil {
+		return nil
+	}
+	// 与 persist 串行（锁序 persistGate → m.mu）：persist 的落库已在 m.mu 之外，若这里只取
+	// m.mu 就关闭句柄，可能与正在进行的 ApplyScoped 撞上（关闭一个正在被写入的库）。
+	m.persistGateEnsure()
+	m.persistGate.mu.Lock()
+	for m.persistGate.running {
+		m.persistGate.cond.Wait()
+	}
+	m.persistGate.mu.Unlock()
+	m.mu.Lock()
+	store := m.index
+	m.index = nil
+	m.persistedRev = nil
+	m.persistedCover = nil
+	m.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	if err := store.Close(); err != nil {
+		return fmt.Errorf("ingest: 关闭采集索引失败: %w", err)
+	}
+	return nil
+}
+
+// persistGate 是持久化的「单执行者 + 显式 FIFO 队列」门：一次只有一个 goroutine 在构建与落库，
+// 其余调用方**按到达顺序排队**（而不是各自再执行一遍；也不是裸 Broadcast + 抢锁）。
+type persistGate struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	running bool
+	// err 是最近一个已完成周期的结果，供等待者返回（不吞错误）。
+	err error
+	// priorityQueue / normalQueue 是显式 FIFO 等待队列（存的是 persistJoin 序号）。
+	// 授予规则：优先队列非空 ⇒ 只授予其队首（恢复/重放链让位给用户面）；否则授予普通队首。
+	priorityQueue []int64
+	normalQueue   []int64
+	// priorityStreak 是「连续授予优先队列」的计数，用于**老化**：达上限即强制让一个普通队首通过
+	// （否则采集轮持续到达时，恢复/重放链会被无限压制 ✗ 反方向同样致命）。
+	priorityStreak int
+}
+
+// enqueueLocked 把序号加入对应队列（调用方需持 g.mu）。
+func (g *persistGate) enqueueLocked(seq int64, priority bool) {
+	if priority {
+		g.priorityQueue = append(g.priorityQueue, seq)
+		return
+	}
+	g.normalQueue = append(g.normalQueue, seq)
+}
+
+// dequeueLocked 把序号从两条队列里摘除（幂等；调用方需持 g.mu）。
+func (g *persistGate) dequeueLocked(seq int64) {
+	g.priorityQueue = removePersistSeq(g.priorityQueue, seq)
+	g.normalQueue = removePersistSeq(g.normalQueue, seq)
+}
+
+func removePersistSeq(queue []int64, seq int64) []int64 {
+	for index, value := range queue {
+		if value == seq {
+			return append(queue[:index], queue[index+1:]...)
+		}
+	}
+	return queue
+}
+
+// grantableLocked 判断该序号此刻能否取门：门空闲、自己是**队首**，且优先队列的「连胜」未到上限
+// （老化：见 persistPriorityStreakMax —— 否则持续到达的采集轮会把恢复链饿死 ✗ 反方向也不行）。
+//
+// 注意：让路窗口**不在这里判**——若在这里判，刚交门的调用者会落进 `Cond.Wait`，而窗口到期时
+// 没有任何人 Broadcast（无人唤醒 ⇒ 永久睡眠 ✗，2026-10-03 自伤实测：整包测试挂死 600s）。
+// 让路由调用方**显式 sleep** 实现（见 persistCtx 的 not-oneStep 分支）。调用方需持 g.mu。
+func (g *persistGate) grantableLocked(seq int64, priority bool, streakMax int) bool {
+	if g.running {
+		return false
+	}
+	if priority {
+		// 优先：队首即可（恢复链让位）。但连续授予达上限且普通队列有人等时，强制让普通队首先走。
+		if len(g.priorityQueue) == 0 || g.priorityQueue[0] != seq {
+			return false
+		}
+		return !(streakMax > 0 && g.priorityStreak >= streakMax && len(g.normalQueue) > 0)
+	}
+	if len(g.priorityQueue) > 0 && !(streakMax > 0 && g.priorityStreak >= streakMax) {
+		return false
+	}
+	return len(g.normalQueue) > 0 && g.normalQueue[0] == seq
+}
+
+// defaultPollConcurrency 是单轮采集的跨源并发度默认值（0 或负值取它，1 表示回到串行）。
+//
+// 为什么需要并发（FR-498 实测根因，2026-10-01）：单源单轮的时间几乎全部是**等待**而非算力——
+// 60 源基线实测单轮 99.6s 里 pollSource=99.6s、其中 deliver=90.8s、而 deliver 中
+// verify（VL 的 LogsQL 校验查询，含重试退避）=85.3s（占整轮 85.6%）；同期 Worker CPU 仅
+// 17–45%、VL CPU 仅 7–23%，两边都没打满。而采集轮是**逐源串行**的，等于把 60 份网络/磁盘
+// 等待直接叠加成轮周期（实测 ≈1.65s/源 → ≈99s/轮）→ 采集上限被钉在
+// ≈60 源 × 2000 行/轮 ÷ 99s ≈ 1.2k 行/s，不足 30 行/s × 60 源 生成速率的 70%。
+//
+// 语义边界：并发只发生在**源之间**（每源一个工作项），**同源仍然串行**——同一源的
+// poll → WAL 追加 → durable 持久化 → 投递 → 投影校验顺序一个字节都不变，因此暂停/回收/
+// 滞回与「不丢数据」的语义不受影响；跨源本来就没有顺序契约（本轮之前它们只是被同一个
+// 250ms ticker 依次驱动）。
+const defaultPollConcurrency = 8
+
 func (m *Manager) pollOnce() {
+	// D 修复（2026-10-04，resolve-gaps 挂死专项）：cycleMu 只覆盖"读快照"段。
+	// 现场（pprof 铁证）：原实现 cycleMu 覆盖整轮 ⇒ worker 们堵在 m.mu 的 33.8 万条 WAL
+	// 序列化时，"work <- i / wg.Wait()"这段把 cycleMu 也占住 ⇒ 解算/登记/停止全挂。
+	// 语义自检（父级确认）：cycleMu 只需保证"本轮工作集（读到的源列表）"与"改 pipes 的路径"
+	// 不并发；worker 执行期放锁不改变本轮工作集（item 已定格），轮与轮间由 ticker 串行。
+	w := m.observeCycleMu("pollSnapshot")
 	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	w.locked()
+	// 轮级校验预算：本轮内单源校验最多等到这个时刻 ⇒ 轮墙钟不被少数源拖成分钟级 ✓
+	// （本轮跑完即清 0，非轮内路径（启动恢复/对账重发）不受影响，仍按各自窗口 ✓）。
+	m.verifyRoundDeadline.Store(time.Now().Add(m.verifyRoundBudgetOf()).UnixNano())
+	m.verifyRoundProgress.Store(0) // 本轮进展计数（见 verifyRoundProgress 注释）
+	defer m.verifyRoundDeadline.Store(0)
 	m.mu.Lock()
 	type sourcePipe struct {
 		source SourceConfig
@@ -614,39 +3129,466 @@ func (m *Manager) pollOnce() {
 	for key, p := range m.pipes {
 		pipes = append(pipes, sourcePipe{source: m.sources[key], pipe: p})
 	}
+	workers := m.pollConcurrency
+	m.publishReconcileViewLocked(false) // 采集轮：持续刷新对账只读视图（候选 1，节流发布）
 	m.mu.Unlock()
-	dirty := false
-	for _, item := range pipes {
-		p := item.pipe
-		before, beforeOK := p.Positions()
-		events, metadataChanged, err := m.pollSource(item.source, p)
-		after, afterOK := p.Positions()
-		if before != after || beforeOK != afterOK || len(events) > 0 || metadataChanged || err != nil {
-			dirty = true
+	// D 修复：读快照完成即放 cycleMu —— 其后"归一 workers / 分发 work / wg.Wait / 汇总"都在锁外。
+	m.cycleMu.Unlock()
+	w.done()
+	// 仅测试观测点：断言进入分发段时 cycleMu 已释放（见 pollDispatchHook 注释）。
+	if hook, _ := m.pollDispatchHook.Load().(func()); hook != nil {
+		hook()
+	}
+	if workers <= 0 {
+		workers = defaultPollConcurrency
+	}
+	if workers > len(pipes) {
+		workers = len(pipes)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+
+	dirty := make([]bool, len(pipes))
+	work := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				item := pipes[i]
+				p := item.pipe
+				// **每源独立校验预算**（per-source，2026-10-03 回退修复 ③）：本源处理期间其校验
+				// 只受**自身**截止约束 ⇒ 慢源耗尽自身预算不再连坐同轮其他源（消队头阻塞）✓。
+				m.setVerifySourceDeadline(item.source)
+				before, beforeOK := p.Positions()
+				events, metadataChanged, err := m.pollSource(item.source, p)
+				after, afterOK := p.Positions()
+				if before != after || beforeOK != afterOK || len(events) > 0 || metadataChanged || err != nil {
+					dirty[i] = true
+				}
+				// 缺陷 A 自愈：暂停源不再读取新数据，投递/回收/恢复评估整条链失去触发点；
+				// 这里对「已暂停或仍持有未解决缺口」的源做一次限频自愈（见 selfHealPausedSource）。
+				if m.selfHealPausedSource(item.source, p) {
+					dirty[i] = true
+				}
+				if err != nil {
+					// The pipeline records the gap; the Worker process remains available.
+					// 但静默吞掉错误会掩盖 reclaim/projection 持续失败（真机 64 源实测曾整轮 reclaim=0
+					// 却无任何日志）。按源限流暴露一次，便于运维定位。
+					if m.noteSourceError(item.source.LogSourceID, err.Error()) {
+						slog.Warn("日志采集循环错误", "source", item.source.LogSourceID, "error", err)
+					}
+				}
+			}
+		}()
+	}
+	for i := range pipes {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
+
+	anyDirty := false
+	for i := range dirty {
+		if dirty[i] {
+			anyDirty = true
+			break
 		}
+	}
+	if anyDirty {
+		// 采集轮**不为落库阻塞**：有界等待、超时交给后台持久化通道（见 persistHot 的说明）。
+		_ = m.persistHot()
+	}
+}
+
+// archiveScanCycleMuWait 是归档扫描等待采集轮锁（cycleMu）的墙钟预算。
+//
+// 为什么与 resolveGapsCycleMuWait 同量级：两者都是「调用方可以是后台/定时/交互任务，等不到就
+// 明确失败更安全」的路径——现场该类路径的故障形态一致（排队 45–60s 后被调用方超时打断，而
+// 服务端仍在排队）。5s 的选择依据见 resolveGapsCycleMuWait：远小于任何 RPC/HTTP 截止时间，
+// 且大于采集轮读快照段（D 修复后 cycleMu 只覆盖快照）的期望持有时长。
+//
+// 为什么扫描场景不需要更长：定时扫描每 interval（现场 30s）触发一次，且**幂等**
+// （已导入分段由 seg.Imported 跳过）。本轮拿不到锁就跳过，下一轮再来；拉长预算只会让
+// "扫不动"这件事更晚被观测到。手工触发则由运维按需重试。
+const archiveScanCycleMuWait = 5 * time.Second
+
+// ImportArchivesNow 手动/定时触发归档导入扫描：对指定源（storageNamespace 为空 = 全部源）
+// 立刻走一次与采集轮**完全相同**的导入管道。
+//
+// 为什么复用 importArchives 而不是另写一条：自动路径上的三件事都必须逐字成立——
+// ① 同一条清洗管道（normalize 全套 + 采样收口）；② 归属闸（跨代次拒绝，见 acquire.ArchiveImporter）；
+// ③ 幂等（已导入的分段由 `seg.Imported` 跳过，重复触发零新增）。另写一条必然在这三点上漂移。
+//
+// 为什么必须带操作人：本入口会推进源位置与账本，属于改变状态的动作；无痕触发等于给
+// "谁在什么时候灌了数据"留下空白。定时扫描由系统身份传入（见 archiveScanOperator），
+// 同样留痕。
+//
+// 返回 (扫描到的待导入归档数, 实际导入的归档数)。
+func (m *Manager) ImportArchivesNow(storageNamespace, operator string) (int, int, error) {
+	if m == nil {
+		return 0, 0, fmt.Errorf("ingest: manager unavailable")
+	}
+	if strings.TrimSpace(operator) == "" {
+		return 0, 0, fmt.Errorf("ingest: 手动导入归档必须携带操作人（认证主体为空时拒绝执行）")
+	}
+	// 有界获取 cycleMu（2026-10-10 修复，同 resolveGapsCycleMuWait 的取舍）。
+	//
+	// 现场：`log_ingest.archive_scan_interval: 30s` 已启用，但 20 分钟内「手动导入归档扫描完成」
+	// 与「定时归档导入扫描失败」**日志各 0 条** —— 扫描既没干活也没报错，这是"无限等锁"的
+	// 典型形态（已排除"无归档可扫"：164 个 FILE_PRIMARY 源里 151 个含 814 个 gz，而 catalog
+	// 中 gzip 段记录为 0，即 pending 非空、本应有日志）。
+	//
+	// 为什么有界是安全的：本方法只做「发现 + 交给既有导入管道」，超时即**未做任何变更**
+	// （targets 未读、账本未触碰、无事件落库）⇒ 定时扫描下一轮 30s 后再来、手动调用由运维重试。
+	// 反之"无限等"会把定时任务变成不可见挂死：既无成功日志也无失败日志，运维只能靠 pprof 猜。
+	//
+	// 为什么用 context.Background() 而不是给本方法加 ctx：本方法是连接层接口
+	// （grpcsvc.IngestArchiveImporter，由 ingest.Manager 满足）的成员，调用方有两类——
+	// 定时扫描 goroutine（无请求 ctx 可传）与 gRPC 手动入口。加 ctx 会同时改变接口与全部
+	// 调用点（含 grpcsvc 的接口定义与测试桩），把一次锁修复的变更面扩大到跨包协议；
+	// 而本方法需要的语义只是"别挂死"，预算已由 acquireCycleMuBounded 承担。
+	w := m.observeCycleMu("importArchives")
+	if !m.acquireCycleMuBounded(context.Background(), archiveScanCycleMuWait) {
+		return 0, 0, fmt.Errorf("ingest: 采集轮忙（cycleMu 等待超 %s 预算），归档扫描未执行任何变更，请稍后重试", archiveScanCycleMuWait)
+	}
+	w.locked()
+	defer func() {
+		m.cycleMu.Unlock()
+		w.done()
+	}()
+	m.mu.Lock()
+	type target struct {
+		source SourceConfig
+		pipe   *pipeline.Pipeline
+	}
+	targets := make([]target, 0, len(m.pipes))
+	for key, p := range m.pipes {
+		src, ok := m.sources[key]
+		if !ok {
+			continue
+		}
+		if ns := strings.TrimSpace(storageNamespace); ns != "" && src.StorageNamespace != ns {
+			continue
+		}
+		if src.Mode != pipeline.ModeFilePrimary || src.Path == "" {
+			continue // 无文件源就没有归档可扫
+		}
+		targets = append(targets, target{source: src, pipe: p})
+	}
+	m.mu.Unlock()
+
+	scanned, imported := 0, 0
+	var firstErr error
+	for _, tg := range targets {
+		archives, err := discoverSourceArchives(tg.source)
 		if err != nil {
-			// The pipeline records the gap; the Worker process remains available.
-			// 但静默吞掉错误会掩盖 reclaim/projection 持续失败（真机 64 源实测曾整轮 reclaim=0
-			// 却无任何日志）。按源限流暴露一次，便于运维定位。
-			if m.noteSourceError(item.source.LogSourceID, err.Error()) {
-				slog.Warn("日志采集循环错误", "source", item.source.LogSourceID, "error", err)
+			if firstErr == nil {
+				firstErr = err
 			}
 			continue
 		}
+		pending := pendingArchives(tg.pipe, archives)
+		scanned += len(pending)
+		if len(pending) == 0 {
+			continue
+		}
+		events, _, err := importArchives(tg.pipe, pending)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		// 只有真正产出事件的归档才算"导入"（被归属闸拒绝的不计，它们只记缺口）。
+		if len(events) > 0 {
+			imported += len(pending)
+		}
+		slog.Info("手动导入归档扫描完成",
+			"source", tg.source.LogSourceID, "generation", tg.source.SourceGeneration,
+			"operator", operator, "pending", len(pending), "events", len(events),
+			// deferred 是「因 WAL 余量耗尽而推迟本轮导入」的累计次数（缺陷二观测面）。
+			// 它非零说明导入**在正常让路**（归档会由下一轮续推）；若它持续增长而 events 恒 0，
+			// 则问题在回收停滞而不是导入本身——现场排障靠这一对读数分辨，不必再猜。
+			"deferred", tg.pipe.ArchiveImportDeferred())
 	}
-	if dirty {
-		_ = m.persist()
+	if err := m.persist(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return scanned, imported, firstErr
+}
+
+// archiveScanOperator 是定时扫描的系统身份（定时动作同样必须留痕，只是主体是调度器）。
+const archiveScanOperator = "scheduler:archive-scan"
+
+// RunArchiveScan 按 interval 周期触发归档导入扫描；interval <= 0 表示**关闭**（默认关）。
+//
+// 为什么默认关：常规源在每个采集轮里已经自动发现并导入归档，定时扫描的价值只在
+// "采集轮停了但归档还在攒"的场景（源被暂停/停止采集）。默认开会在每个部署上多出一份
+// 周期性的目录扫描与账本写入，收益不明显而成本确定，故由配置显式打开。
+//
+// 返回一个 stop 函数；interval <= 0 时返回 nil（调用方据此知道未启用）。
+func (m *Manager) RunArchiveScan(interval time.Duration) (stop func()) {
+	if m == nil || interval <= 0 {
+		return nil
+	}
+	done := make(chan struct{})
+	var once sync.Once
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if _, _, err := m.ImportArchivesNow("", archiveScanOperator); err != nil {
+					slog.Warn("定时归档导入扫描失败", "error", err)
+				}
+			}
+		}
+	}()
+	return func() { once.Do(func() { close(done) }) }
+}
+
+// backfillArchiveUnderOwner 把一份归档记回**它自己的代次**账上（账本侧补账，不投递 VL）。
+//
+// 为什么只做账本侧、不调 deliver（这是与"补账通道"最关键的边界，源自一次硬点论证）：
+// 投递路径的 ReclaimProof 钩子（releaseRecovery）按代次查 m.pipes 并要求存在活跃管道，
+// 而"非活跃代次不得假装活跃"是既定约束 ⇒ 用旧代次走 deliver 必然失败；三条绕开它的出路
+// （注册 headless 管道 / 跳过 ReclaimProof / 另造责任转移机制）分别违反既定约束或
+// 动到不变量 R 与 VerifiedRuns 的底座，故一条都不走。
+//
+// 补账写成**旧代次的"待投递"账目**：
+//   - 事件体入旧代次的段存（appendEvents）；
+//   - 事件按 Durable 追加进旧代次的持久化 WAL（这就是它的 backlog）；
+//   - 旧代次账本的位置推进到覆盖这批事件，并登记该归档为已导入；
+//   - 整条记录回索引（持久化）。
+//
+// ⇒ 旧代次将来**再次活跃**时，其既有的 backlog 投递路径会自然把它们发出去（不丢）；
+//
+//	以新代次 event_id 重复入 VL 的路径被封死（不重）；当前代次名下永无归属（不归）。
+//
+// 返回错误即"补账不可行"，调用方必须退回"拒绝 + 记缺口"（不得静默改走当前代次）。
+func (m *Manager) backfillArchiveUnderOwner(source SourceConfig, ownerGeneration, archivePath, objectID string) error {
+	if m == nil {
+		return fmt.Errorf("ingest: manager unavailable")
+	}
+	if strings.TrimSpace(ownerGeneration) == "" {
+		return fmt.Errorf("ingest: 原代次为空，无法补账")
+	}
+	ownerKey := source.LogSourceID + "/" + ownerGeneration
+	m.mu.Lock()
+	saved, ok := m.state.Sources[ownerKey]
+	m.mu.Unlock()
+	if !ok || len(saved.Ledger) == 0 {
+		// 寻址失败：该代次在原 Worker 的索引里没有账 —— 不可补，交给人工。
+		return fmt.Errorf("ingest: 原代次 %q 的账本不可寻址", ownerGeneration)
+	}
+
+	// 用**原代次**构造导入器与账本：位置从原代次的既有水位继续（这才是"记回它自己的账"）。
+	ownerSourceKey := ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: ownerGeneration}
+	ownerLedger := ledger.New()
+	if err := ownerLedger.Restore(saved.Ledger); err != nil {
+		return fmt.Errorf("ingest: 恢复原代次账本失败: %w", err)
+	}
+	// 刻意**不注入** lookupOwner/backfill：内层导入不再走归属闸（原代次就是它的家）。
+	imp := acquire.NewArchiveImporter(ownerLedger, ownerSourceKey)
+	res, err := imp.ImportGzip(archivePath)
+	if err != nil {
+		return fmt.Errorf("ingest: 原代次导入失败: %w", err)
+	}
+	if res == nil || len(res.Events) == 0 {
+		// 没有事件可补：可能是已导入或空归档。登记已导入以免每轮重扫，不算失败。
+		if res != nil {
+			_ = imp.MarkImported(archivePath, res.ArchiveObjectID, res.ResumedFrom, res.ResumedFrom)
+		}
+		return m.commitBackfill(ownerKey, ownerLedger, nil, archivePath, res)
+	}
+
+	end := res.Events[len(res.Events)-1].Record.End
+	if err := ownerLedger.AdvanceRead(ownerSourceKey, end); err != nil {
+		return err
+	}
+	if err := ownerLedger.AdvanceDurable(ownerSourceKey, end); err != nil {
+		return err
+	}
+	if err := imp.MarkImported(archivePath, res.ArchiveObjectID,
+		res.Events[0].Record.Start, end); err != nil {
+		return err
+	}
+	return m.commitBackfill(ownerKey, ownerLedger, res.Events, archivePath, res)
+}
+
+// commitBackfill 把补账结果写回内存状态并持久化（事件体入段存 + WAL 待投递账目 + 账本）。
+func (m *Manager) commitBackfill(ownerKey string, ownerLedger *ledger.Ledger,
+	events []logtypes.Event, archivePath string, res *acquire.ImportResult) error {
+	// 事件体入原代次的段存：否则 WAL 引用恢复时取不到正文（B1a 的按条判据）。
+	if len(events) > 0 {
+		if err := m.appendEvents(ownerKey, events); err != nil {
+			return fmt.Errorf("ingest: 补账事件入段存失败: %w", err)
+		}
+	}
+	m.mu.Lock()
+	cur := m.state.Sources[ownerKey]
+	cur.Ledger = ownerLedger.Snapshot()
+	// 追加为**已持久待投递**条目：旧代次再次活跃时由既有 backlog 路径外发。
+	seq := uint64(len(cur.WAL) + len(cur.WALRefs))
+	for _, ev := range events {
+		seq++
+		cur.WAL = append(cur.WAL, acquire.WALEntry{Seq: seq, Event: ev, Appended: true, Durable: true})
+	}
+	if len(events) > 0 {
+		cur.EventsStored = true
+		if through := events[len(events)-1].Record.End; through > cur.EventsStoredThrough {
+			cur.EventsStoredThrough = through
+		}
+	}
+	m.state.Sources[ownerKey] = cur
+	m.mu.Unlock()
+
+	if err := m.persist(); err != nil {
+		return fmt.Errorf("ingest: 补账持久化失败: %w", err)
+	}
+	slog.Info("归档补账完成（记入原代次的待投递账目）",
+		"ownerKey", ownerKey, "archive", archivePath, "events", len(events))
+	if res != nil {
+		_ = res
+	}
+	return nil
+}
+
+// AbandonedSourceRange 是一段被人工裁定为永久丢失的源位置区间（查询面数据）。
+type AbandonedSourceRange struct {
+	LogSourceID      string
+	SourceGeneration string
+	StorageNamespace string
+	From             uint64
+	To               uint64
+	ReasonCode       string
+	Operator         string
+	AtUTC            string
+}
+
+// AbandonedRanges 返回与给定授权目标（形如 storage_namespace 或 storage_namespace/YYYY-MM-DD）
+// 相关的、已被人工裁定永久丢失的源位置区间。
+//
+// 目标匹配用**前缀**（"<ns>/"）：调用方给的是 catalog 分区键（ns/day，见
+// catalog.PartitionKey.String），而放弃凭据是按**源**（存储命名空间）存的。
+// 用前缀而不是解析"取斜杠前那段"，是为了不依赖日期格式——解析格式一旦变了，
+// 匹配会静默失配、标记静默消失（比不实现更坏）。
+//
+// 未接线/空的目标集表示「本 Worker 全部源」（与 planner「空 = 全部 Catalog 分区」同一口径）：
+// 此时不按命名空间过滤，返回全部源的放弃凭据——否则"没传目标"会表现成"没有永久丢失"，
+// 那正是静默跳过。
+func (m *Manager) AbandonedRanges(targetIDs []string) []AbandonedSourceRange {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	pipes := make(map[string]*pipeline.Pipeline, len(m.pipes))
+	namespaces := make(map[string]string, len(m.pipes)) // key -> storage namespace
+	for key, p := range m.pipes {
+		pipes[key] = p
+		if src, ok := m.sources[key]; ok {
+			namespaces[key] = src.StorageNamespace
+		}
+	}
+	m.mu.Unlock()
+
+	var out []AbandonedSourceRange
+	for key, p := range pipes {
+		ns := namespaces[key]
+		if ns == "" {
+			continue
+		}
+		if len(targetIDs) > 0 && !targetMatchesNamespace(targetIDs, ns) {
+			continue
+		}
+		entry := p.Ledger().Get(p.Key())
+		if entry == nil {
+			continue
+		}
+		for _, ab := range entry.Abandonments {
+			out = append(out, AbandonedSourceRange{
+				LogSourceID: p.Key().LogSourceID, SourceGeneration: p.Key().SourceGeneration,
+				StorageNamespace: ns, From: ab.From, To: ab.To,
+				ReasonCode: ab.ReasonCode, Operator: ab.Operator, AtUTC: ab.AtUTC,
+			})
+		}
+	}
+	return out
+}
+
+// targetMatchesNamespace 报告授权目标里是否有指向该命名空间的分区键。
+func targetMatchesNamespace(targetIDs []string, ns string) bool {
+	prefix := ns + "/"
+	for _, t := range targetIDs {
+		if t == ns || strings.HasPrefix(t, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// archiveOwnerLookup 返回「归档归属代次」查询：在**既有持久化**里枚举同一 LogSourceID 的
+// 各个代次，回答某个归档对象已被哪个代次导入过。
+//
+// 为什么用 m.state 而不是新建注册表（零迁移）：归档的逐件账本来就落在**账本分段**里
+// （Segment{Kind: SegmentGzip, Path, ArchiveObjectID}），而分段存在以 (LogSourceID, 代次) 为键的
+// 账本条目中、并随索引持久化。因此「同源各代次可枚举」这件事不需要新表——只需把已持久化的
+// 各代次条目翻一遍。新表 + 迁移的风险（迁移期不可用、双写不一致）远大于这一次线性扫描的收益：
+// 调用点是**每个待导入归档一次**，而不是每批事件一次。
+//
+// 判据口径与归档侧一致：规范化路径 + archive_object_id（后者已含大小与内容哈希，
+// 见 ArchiveObjectID）——即 (源ID, 规范化路径, 大小, 内容哈希)。
+//
+// 查不到就是查不到：返回 found=false，由调用方按「来源不可追溯」拒绝导入，
+// **绝不回退成「假设当前代次」**。
+func (m *Manager) archiveOwnerLookup() func(logSourceID, cleanPath, objectID string) (string, bool) {
+	return func(logSourceID, cleanPath, objectID string) (string, bool) {
+		if m == nil || logSourceID == "" || objectID == "" {
+			return "", false
+		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		for _, saved := range m.state.Sources {
+			for i := range saved.Ledger {
+				entry := &saved.Ledger[i]
+				if entry.Key.LogSourceID != logSourceID {
+					continue
+				}
+				for j := range entry.Segments {
+					seg := &entry.Segments[j]
+					if seg.Kind != ledger.SegmentGzip || seg.ArchiveObjectID != objectID {
+						continue
+					}
+					if filepath.Clean(seg.Path) != cleanPath {
+						continue
+					}
+					return entry.Key.SourceGeneration, true
+				}
+			}
+		}
+		return "", false
 	}
 }
 
 func (m *Manager) pollSource(source SourceConfig, p *pipeline.Pipeline) ([]logtypes.Event, bool, error) {
+	// 容量提供者可能执行磁盘查询，只在共享锁外刷新，覆盖本轮 Poll、导入与闭合输出。
+	p.RefreshDegrade(time.Now())
 	if source.Mode != pipeline.ModeFilePrimary || source.Path == "" {
+		if stageTimingEnabled() {
+			started := time.Now()
+			events, err := p.Poll()
+			m.recordRoundStage(source.LogSourceID, "poll", time.Since(started))
+			return events, false, err
+		}
 		events, err := p.Poll()
 		return events, false, err
 	}
 	archives, err := discoverSourceArchives(source)
 	if err != nil {
-		_ = p.Ledger().RecordGap(p.Key(), 0, 0, "ARCHIVE_DISCOVERY_FAILED", err.Error())
+		_ = p.Ledger().RecordGap(p.Key(), 0, 0, ledger.GapReasonArchiveDiscoveryFailed, err.Error())
 		return nil, false, err
 	}
 	pending := pendingArchives(p, archives)
@@ -688,7 +3630,7 @@ func (m *Manager) pollSource(source SourceConfig, p *pipeline.Pipeline) ([]logty
 			return all, metadataChanged, confirmErr
 		}
 		if len(pending) == 0 {
-			_ = p.Ledger().RecordGap(p.Key(), 0, 0, "ROTATED_SEGMENT_NOT_READY", "replacement latest.log detected before its rotated segment became readable")
+			_ = p.Ledger().RecordGap(p.Key(), 0, 0, ledger.GapReasonRotatedSegmentNotReady, "replacement latest.log detected before its rotated segment became readable")
 			return all, metadataChanged, fmt.Errorf("ingest: rotated segment is not available yet")
 		}
 		imported, changed, importErr := importArchives(p, pending)
@@ -706,6 +3648,19 @@ func (m *Manager) pollSource(source SourceConfig, p *pipeline.Pipeline) ([]logty
 
 	polled, pollErr := p.Poll()
 	all = append(all, polled...)
+	// 缺陷 B：源静默时的唯一出路。未闭合缓冲平时只由「下一行到达」推进，源一旦长时间
+	// 不再输出，缓冲既不产出事件也不推进 durable——而轮转恢复要靠 durable 覆盖已读前缀，
+	// 于是这段悬挂区间既没被覆盖、也没有事件，链路卡在「轮转分段不可读」。
+	// 放在 Poll 之后：轮转已在上面按 cross_rotation 语义闭合过，这里只处理「没有轮转、
+	// 也没有新行」的静默形态（两者互斥，不会双发同一条悬挂记录）。
+	if m.multilineUnclosedTimeout > 0 {
+		if stale, staleErr := p.FlushStaleMultiline(time.Now(), m.multilineUnclosedTimeout); staleErr != nil {
+			m.noteSourceError(source.LogSourceID, staleErr.Error())
+		} else if len(stale) > 0 {
+			all = append(all, stale...)
+			metadataChanged = true
+		}
+	}
 	return all, metadataChanged, pollErr
 }
 
@@ -758,6 +3713,7 @@ func importArchives(p *pipeline.Pipeline, paths []string) ([]logtypes.Event, boo
 	var out []logtypes.Event
 	changed := false
 	for _, path := range paths {
+		p.RefreshDegrade(time.Now())
 		result, err := p.ImportArchive(path)
 		if result != nil {
 			changed = true
@@ -770,87 +3726,1257 @@ func importArchives(p *pipeline.Pipeline, paths []string) ([]logtypes.Event, boo
 	return out, changed, nil
 }
 
-func (m *Manager) deliver(source SourceConfig, events []logtypes.Event) (pipeline.DeliveryResult, error) {
+// deliveryTiming 记录一次投递内各阶段的耗时（**纯观测**，不改任何逻辑）。
+//
+// 为什么要有它：投递路径的单批耗时构成在现场不可见——`投影写入开始/结束` 只有秒级精度，
+// verify 有自己的一条打点，而「进 deliver 到出 deliver」之间的其余阶段（身份集合重建、
+// 权威集合构建、代次探测、缺口消解）此前没有任何读数。单位行成本 8.3× 的定位缺的就是它。
+// 输出为 debug 级：生产默认 info 不受影响，压测/夹具把 log.level 调成 debug 即可。
+type deliveryTiming struct {
+	key    string
+	events int
+	start  time.Time
+	last   time.Time
+	marks  []string
+	// sink 非 nil 时把阶段串交给测试观测口（见 Manager.stageSink）。
+	sink func(string)
+}
+
+func newDeliveryTiming(key string, events int, sink func(string)) *deliveryTiming {
+	now := time.Now()
+	return &deliveryTiming{key: key, events: events, start: now, last: now, sink: sink}
+}
+
+// mark 记录自上一个 mark 起（或函数入口起）的耗时。
+func (t *deliveryTiming) mark(stage string) {
+	if t == nil {
+		return
+	}
+	now := time.Now()
+	t.marks = append(t.marks, fmt.Sprintf("%s=%dms", stage, now.Sub(t.last).Milliseconds()))
+	t.last = now
+}
+
+// report 输出一批的阶段计时。
+//
+// 为什么用环境变量而不是日志级别门控：Worker 的 `log.level` 配置目前没有接到 slog 的
+// handler 级别上（`log.level: debug` 不产生任何 DEBUG 输出，实测），因此 debug 级打点
+// 在现场与夹具里都取不到。这里用显式开关：生产默认关闭（不刷屏），
+// `JIANMANAGER_STAGE_TIMING=1` 打开（压测/夹具/定位现场）。
+func (t *deliveryTiming) report() {
+	if t == nil {
+		return
+	}
+	if t.sink != nil {
+		t.sink(strings.Join(t.marks, " "))
+	}
+	if !stageTimingEnabled() {
+		return
+	}
+	slog.Info("采集批次阶段耗时",
+		"source", t.key, "events", t.events,
+		"stages", strings.Join(t.marks, " "), "totalMs", time.Since(t.start).Milliseconds())
+}
+
+var (
+	stageTimingOnce sync.Once
+	stageTimingOn   bool
+)
+
+// recordRoundStage 记一次采集轮内的阶段耗时（仅 JIANMANAGER_STAGE_TIMING=1 时生效）。
+//
+// 为什么（2026-10-03 现场 Q4：未暂停源 readΔ 全 0，而栈上已无锁阻塞）：采集轮是"全源屏障"——
+// 轮内固定 worker 逐源串行走「读 → WAL → 契约落库 → 投递 → 校验等待 → 发布 → 回收」，**少数源
+// 卡在哪个阶段**决定了整轮墙钟，也决定其余源何时才轮到自己读 ✗。阶段打点让现场直接读出
+// "时间去哪了"，不必再从 SIGQUIT 反推 ✓。
+func (m *Manager) recordRoundStage(source string, stage string, elapsed time.Duration) {
+	if m == nil || !stageTimingEnabled() {
+		return
+	}
+	slog.Info("采集阶段耗时", "source", source, "stage", stage, "elapsedMs", elapsed.Milliseconds())
+}
+
+func stageTimingEnabled() bool {
+	stageTimingOnce.Do(func() { stageTimingOn = os.Getenv("JIANMANAGER_STAGE_TIMING") == "1" })
+	return stageTimingOn
+}
+
+// deliveryTailPlan 描述「本批能否作为权威集合的增量尾部直接处理」。
+//
+// 背景（FR-498 单位行成本 8.3×，2026-10-02 实测定位）：
+// 投递路径原先每批要做三次 O(段总行数) 的操作——身份集合重建（deliver）、权威全量构建
+// （canonicalRecoveryEvents）、段行数校准（appendEvents 的 Count）。段**只增不减**且没有裁剪
+// 路径（契约 §4.3/§5.3 要求它作为 VL 数据根丢失后的权威集合），于是单源段在生产上已达数十万行
+// （全库 18 GB / 63 源），微基准实测单次遍历 8.7 µs/行 ⇒ 每批数秒，且成本随运行时长线性增长。
+// 实验室（段从零开始）没有这个成本——这正是 0.36 → 2.95 ms/行（8.3×）的主因，
+// 也解释了「资源全闲但达成率 0.79」：时间花在单线程的磁盘遍历上，不是算力。
+type deliveryTailPlan struct {
+	// Fast 为真时：本批区间整体在「段已覆盖水位」与「已投递水位」之后，且没有重放/待发布语义
+	// ⇒ 三段 O(段) 操作全部可省。
+	Fast bool
+	// StoredRows 是段存储已落行数（快路径下由缓存给出，避免每批 Count 校准末段）。
+	StoredRows int
+	// Events 是本批要追加进段存储的事件（快路径下即权威集合的增量尾部）。
+	Events []logtypes.Event
+}
+
+// planDeliveryTail 判定本批是否可以走「增量尾部」快速路径，并给出段追加与发布水位所需的读数。
+//
+// 判据（三条全部成立才快，任一不成立即回退到原全量路径）：
+//  1. **语义上不需要权威全量**：不是重放、没有待发布语义（「代次预算耗尽」已在 deliver 里并入
+//     replace 判定，故这里只认 replay/PublicationPending）；
+//  2. **事件体已在段存储**：否则权威集合在内联切片里，重建本来便宜，无需快路径；
+//  3. **本批区间整体在水位之后**：最小 record_start >= 段已覆盖水位（不与段内容重叠 ⇒ 无重复可去）
+//     且 >= 已投递水位（该区间从未投递过 ⇒ 身份集合里不可能命中）。
+//
+// 安全论证（为什么跳过身份重建不削弱保证）：
+//   - 身份集合的唯一用途是「跳过已写入的同 ID 事件」与「检出同 ID 不同哈希」。重复只可能来自
+//     「该区间曾经投递过」——判据 3 的第二条把它排除。
+//   - 偶发的 IDENTITY_CONFLICT（同 ID 不同哈希）不会被静默放过：两行都会写入 VL，
+//     随后**逐字段可见性校验**会以 duplicate / content mismatch 失败（fail loud，不是 fail silent）。
+//   - tailer 回退/重读同一区间：第一次投递成功会推进已投递水位，第二次因 minStart < 水位
+//     自动回退慢路径，仍走全量去重；第一次失败（水位未推进）时的重投本就是必须的重试。
+func (m *Manager) planDeliveryTail(key string, saved persistedSource, events []logtypes.Event, replay bool) deliveryTailPlan {
+	plan := deliveryTailPlan{}
+	if replay || saved.PublicationPending || m.events == nil || len(events) == 0 {
+		return plan
+	}
+	// 权威集合仍在**内联切片**里时必须走全量路径：那时重建本来就便宜，而且去重是必需的。
+	// 注意判据不是 EventsStored：该标记是 state 的字段，段已存在但 state 新建/重置时它为假
+	// （夹具与「换机重挂数据根」都命中这一形态），此时权威集合其实已经在段里。
+	if len(saved.Events) > 0 {
+		return plan
+	}
+	p, ok := m.pipeFor(key)
+	if !ok {
+		return plan
+	}
+	positions, ok := p.Positions()
+	if !ok {
+		return plan
+	}
+	// 只需最小 record_start 判定「本批是否整体在水位之后」；最大 record_end 由发布面
+	// writeProjectionDay → publishSnapshot 自行计算（它只应对本次可见面取最大，
+	// 不得并入「已耐久未投递」的 WAL 值，见 publishSnapshot 的注释）。
+	minStart := events[0].Record.Start
+	for _, e := range events[1:] {
+		if e.Record.Start < minStart {
+			minStart = e.Record.Start
+		}
+	}
+	if minStart < saved.EventsStoredThrough || minStart < positions.Delivery {
+		return plan
+	}
+	stored, ok := m.cachedStoredRows(key)
+	if !ok {
+		return plan
+	}
+	plan.Fast = true
+	plan.StoredRows = stored
+	return plan
+}
+
+// pipeFor 返回该源的采集管道（快照语义；调用方只读 Positions）。
+func (m *Manager) pipeFor(key string) (*pipeline.Pipeline, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.pipes[key]
+	return p, ok
+}
+
+// cachedStoredRows 返回段存储已落行数：首次用 Count 建立基线（含末段校准），此后按追加增量推进。
+// 本进程是段的唯一写者，且段没有任何裁剪/改写路径（契约要求的「只换介质不裁剪」），
+// 故缓存在进程生命周期内有效。
+func (m *Manager) cachedStoredRows(key string) (int, bool) {
+	if m.events == nil {
+		return 0, false
+	}
+	m.mu.Lock()
+	n, ok := m.eventsStoredRows[key]
+	m.mu.Unlock()
+	if ok {
+		return n, true
+	}
+	n, err := m.events.Count(key)
+	if err != nil {
+		return 0, false
+	}
+	m.mu.Lock()
+	if m.eventsStoredRows == nil {
+		m.eventsStoredRows = map[string]int{}
+	}
+	m.eventsStoredRows[key] = n
+	m.mu.Unlock()
+	return n, true
+}
+
+// advanceSourceMaxEnd 推进并返回该源「权威集合的最大 record_end」（单调不减的水位缓存）。
+//
+// 为什么不直接遍历权威全量：那正是 8.3× 的成本来源之一（快路径下 events 只含本批，
+// 而全量遍历要读该源全部历史事件）。水位的三个来源都单调不减：
+//   - state 的 EventsStoredThrough（段已覆盖的最大 record_end，持久化字段）；
+//   - 采集管道的 Durable 水位（WAL 已持久化到的 record_end，覆盖「已落 WAL 但未落段」的部分）；
+//   - 本次 events 的最大 record_end。
+//
+// 三者取大即权威全量的 max：权威集合 = 段内容 + durable WAL（见 canonicalRecoveryEvents），
+// 而两部分的右端分别由前两个水位给出。
+// projectionGenerationsExhausted 报告该源已发布的投影代次是否已达上限（需要整窗重发刷新）。
+func (m *Manager) projectionGenerationsExhausted(source SourceConfig) bool {
+	if m.cat == nil {
+		return false
+	}
+	catKey := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
+	current, ok := m.cat.Get(catKey)
+	if !ok {
+		return false
+	}
+	return len(publishedSourceProjectionGenerations(current.PublishedProjection, source)) >= maxPublishedProjectionGenerations
+}
+
+// 本批事件的实际 UTC 日才是代次数预算所属分区，不能只检查源登记日。
+func (m *Manager) projectionGenerationsExhaustedForEvents(source SourceConfig, events []logtypes.Event) bool {
+	seen := map[string]bool{}
+	for _, event := range events {
+		day, err := eventUTCDay(source, event)
+		if err != nil || seen[day] {
+			continue
+		}
+		seen[day] = true
+		daySource := source
+		daySource.UTCDay = day
+		if m.projectionGenerationsExhausted(daySource) {
+			return true
+		}
+	}
+	return false
+}
+
+// ── #57：cycleMu 持有者观测仪（env 默认关；单变量观测件，零行为变更） ─────────────────────
+//
+// 动因（现场强证据）：resolve-gaps 探针 20/20 全忙、19/20 耗时 5.020–5.075s（±55ms）⇒ 每次都
+// 吃满 5s 预算 ⇒ cycleMu **近乎连续被持有**（不是稀疏竞争窗 ✗✗）。现场锚
+// `goroutine 3457 [sync.Mutex.Lock, 2 minutes]` 只能看见「有人在等」，上游持有者定不了名 ✗。
+// 本仪器把「谁持有 / 多久 / 在哪 / 多密」变成可直接读出的三个面：
+//  1. 慢持有 Warn 行（section + hold + slowTotal，独立节流窗）；
+//  2. 当前持有者快照（section + goroutine id + heldFor）—— 探针可与 5.02s 同刻取用 ✓；
+//  3. 取锁密度（滚动窗内每秒取锁次数）＋ 有界获取侧读数（等锁总时长/最长/尝试/超预算）。
+//
+// 零开销：默认关（env `JIANMANAGER_CYCLE_MU_PROFILE=1`，或 Options.CycleMuProfile）；
+// 关闭时 observeCycleMu 返回 nil，且 watch 的所有方法对 nil 接收者安全 ⇒ 调用点只有一次判空。
+const (
+	// cycleMuSlowHoldThreshold 是「慢持有」阈值（100ms 起步，与 #55-A 的 m.mu 口径一致）。
+	cycleMuSlowHoldThreshold = 100 * time.Millisecond
+	// cycleMuWarnMinInterval 是慢持有告警的**独立**节流窗（不与其他仪器共享 ⇒ 互不压制）。
+	cycleMuWarnMinInterval = 5 * time.Second
+	// cycleMuDensityWindow 是取锁密度的滚动窗（每秒取锁次数按该窗计算）。
+	cycleMuDensityWindow = 5 * time.Second
+)
+
+var (
+	cycleMuProfileOnce sync.Once
+	cycleMuProfileOn   bool
+)
+
+// cycleMuProfileEnabled 读观测仪开关（同 JIANMANAGER_STAGE_TIMING 家族：显式 env、默认关）。
+func cycleMuProfileEnabled() bool {
+	cycleMuProfileOnce.Do(func() { cycleMuProfileOn = os.Getenv("JIANMANAGER_CYCLE_MU_PROFILE") == "1" })
+	return cycleMuProfileOn
+}
+
+// goroutineID 返回当前 goroutine 的数字 id（**仅观测仪开启时调用** ⇒ 生产默认零开销）。
+//
+// Go 不公开 goroutine id：这里取 runtime.Stack 首行（goroutine 123 [running]:），与常见诊断工具
+// 同法。现场要的正是「这个字段能与 pprof 栈里的 goroutine 编号对上」。
+func goroutineID() uint64 {
+	var buf [64]byte
+	line := string(buf[:runtime.Stack(buf[:], false)])
+	const prefix = "goroutine "
+	if !strings.HasPrefix(line, prefix) {
+		return 0
+	}
+	line = line[len(prefix):]
+	space := strings.IndexByte(line, ' ')
+	if space < 0 {
+		return 0
+	}
+	id, err := strconv.ParseUint(line[:space], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
+}
+
+// cycleMuHolderInfo 是「当前持有者」快照（零值 = 未持有 / 观测未开）。
+type cycleMuHolderInfo struct {
+	section   string
+	goroutine uint64
+	at        time.Time
+	held      bool
+}
+
+// cycleMuWatch 是一次 cycleMu 持有观测：observeCycleMu 在**取锁前**创建，locked() 在**取到锁后**
+// 立即调用，done() 在**放锁后**调用（与 #55-A 的 watchMutexWait/acquired 同型）。
+type cycleMuWatch struct {
+	m       *Manager
+	section string
+	at      time.Time
+	waited  time.Duration
+}
+
+// observeCycleMu 创建一次观测（未启用 ⇒ nil；watch 的所有方法对 nil 接收者安全）。
+func (m *Manager) observeCycleMu(section string) *cycleMuWatch {
+	if m == nil || !m.cycleMuProfile {
+		return nil
+	}
+	return &cycleMuWatch{m: m, section: section, at: time.Now()}
+}
+
+// locked 在取到 cycleMu **之后**立即调用：登记当前持有者、累计取锁密度、起表。
+// 锁内只写普通字段（cycleMuMu 保护）—— 零 atomic、零日志 ✓。
+func (w *cycleMuWatch) locked() {
+	if w == nil {
+		return
+	}
+	w.waited = time.Since(w.at)
+	w.at = time.Now()
+	goid := goroutineID() // 先算（runtime.Stack 有成本）⇒ 叶子锁只包字段写入
+	w.m.cycleMuMu.Lock()
+	w.m.cycleMuHolder = cycleMuHolderInfo{section: w.section, goroutine: goid, at: w.at, held: true}
+	w.m.cycleMuHolderWatch = w
+	w.m.noteCycleMuDensityLocked(w.at)
+	w.m.cycleMuMu.Unlock()
+}
+
+// noteCycleMuDensityLocked 在滚动窗内累计「取锁次数」（**调用方必须持 cycleMuMu**）。
+// 判读：现场「cycleMu 近乎连续被持有」应表现为**每秒取锁次数很低**（每次持有很久）＋ 慢持有行密集。
+func (m *Manager) noteCycleMuDensityLocked(now time.Time) {
+	if m.cycleMuWindowStart.IsZero() {
+		m.cycleMuWindowStart = now
+	} else if elapsed := now.Sub(m.cycleMuWindowStart); elapsed >= cycleMuDensityWindow {
+		m.cycleMuRatePerSec = float64(m.cycleMuWindowAcqs) / elapsed.Seconds()
+		m.cycleMuWindowStart = now
+		m.cycleMuWindowAcqs = 0
+	}
+	m.cycleMuWindowAcqs++
+}
+
+// done 在**放锁之后**调用：结算持有、清空自己登记的持有者记录、慢持有上报（独立节流窗）。
+func (w *cycleMuWatch) done() {
+	if w == nil {
+		return
+	}
+	hold := time.Since(w.at)
+	w.m.cycleMuMu.Lock()
+	// 只清「自己登记的那条」：解锁与 done() 之间可能已有人取到锁并登记了新持有者（不可误清 ✗）。
+	if w.m.cycleMuHolderWatch == w {
+		w.m.cycleMuHolder = cycleMuHolderInfo{}
+		w.m.cycleMuHolderWatch = nil
+	}
+	w.m.cycleMuMu.Unlock()
+	if hold < cycleMuSlowHoldThreshold {
+		return
+	}
+	w.m.cycleMuSlowHoldCount.Add(1)
+	last := w.m.cycleMuWarnAt.Load()
+	now := time.Now().UnixNano()
+	if last != 0 && time.Duration(now-last) < cycleMuWarnMinInterval {
+		return
+	}
+	if w.m.cycleMuWarnAt.CompareAndSwap(last, now) {
+		slog.Warn("cycleMu 慢持有", "section", w.section, "hold", hold.String(), "slowTotal", w.m.cycleMuSlowHoldCount.Load())
+	}
+}
+
+// noteCycleMuWait 记一次有界获取的等锁时长（#57；关闭观测时立即返回 ⇒ 零开销）。
+// 现场对照：探针 19/20 次恰好 5.020–5.075s ⇒ 本读数应呈现「近似恒等于预算」的形态。
+func (m *Manager) noteCycleMuWait(d time.Duration, acquired bool) {
+	if m == nil || !m.cycleMuProfile {
+		return
+	}
+	m.cycleMuWaitTotal.Add(int64(d))
+	m.cycleMuWaitAttempts.Add(1)
+	if !acquired {
+		m.cycleMuWaitTimeouts.Add(1)
+	}
+	if int64(d) > m.cycleMuWaitMax.Load() {
+		m.cycleMuWaitMax.Store(int64(d))
+	}
+}
+
+// CycleMuProfileEnabled 报告 cycleMu 观测仪是否开启（探针同刻取用；未开 ⇒ 其余读数无意义）。
+func (m *Manager) CycleMuProfileEnabled() bool { return m != nil && m.cycleMuProfile }
+
+// CycleMuSlowHoldCount 返回慢持有累计次数（阈值 cycleMuSlowHoldThreshold）。
+func (m *Manager) CycleMuSlowHoldCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.cycleMuSlowHoldCount.Load()
+}
+
+// CycleMuHolderSnapshot 返回「当前持有者」快照：section、goroutine id、已持有时长、是否持有。
+// 探针可在每次 5s 超时**同刻**取一次 ⇒「谁持有」当场定点（现场锚 goroutine 3457 的答案面）。
+func (m *Manager) CycleMuHolderSnapshot() (string, uint64, time.Duration, bool) {
+	if m == nil {
+		return "", 0, 0, false
+	}
+	m.cycleMuMu.Lock()
+	defer m.cycleMuMu.Unlock()
+	h := m.cycleMuHolder
+	if !h.held {
+		return "", 0, 0, false
+	}
+	return h.section, h.goroutine, time.Since(h.at), true
+}
+
+// CycleMuDensityPerSec 返回滚动窗内「每秒取锁次数」（含当前未完窗口的即时值；未启用 ⇒ 0）。
+func (m *Manager) CycleMuDensityPerSec() float64 {
+	if m == nil {
+		return 0
+	}
+	m.cycleMuMu.Lock()
+	defer m.cycleMuMu.Unlock()
+	if m.cycleMuWindowStart.IsZero() {
+		return 0
+	}
+	if elapsed := time.Since(m.cycleMuWindowStart); elapsed >= cycleMuDensityWindow {
+		return m.cycleMuRatePerSec // 窗已满但尚无新取锁：用上一个已关窗读数
+	} else if elapsed > 0 {
+		return float64(m.cycleMuWindowAcqs) / elapsed.Seconds()
+	}
+	return 0
+}
+
+// CycleMuWaitStats 返回有界获取侧读数：等锁累计、最长单次等待、尝试次数、超预算/被取消次数。
+func (m *Manager) CycleMuWaitStats() (total, max time.Duration, attempts, timeouts int64) {
+	if m == nil {
+		return 0, 0, 0, 0
+	}
+	return time.Duration(m.cycleMuWaitTotal.Load()), time.Duration(m.cycleMuWaitMax.Load()),
+		m.cycleMuWaitAttempts.Load(), m.cycleMuWaitTimeouts.Load()
+}
+
+// mutexHoldSlowThreshold 是"慢持锁/慢等待"告警阈值（候选 2 测量，2026-10-04；#55-A 沿用）：
+// 仅在关键临界区（投递规划/校验凭据/落段标记）上计时，超阈计数并按节流窗口告警。
+const mutexHoldSlowThreshold = 100 * time.Millisecond
+
+// mutexHoldWarnMinInterval 是慢持锁/慢等待告警节流窗口（避免高频投递路径告警风暴；计数仍逐次累加）。
+const mutexHoldWarnMinInterval = 5 * time.Second
+
+// mutexHoldWatch 是一次 m.mu 观测（候选 2；#55-A 起拆成「等锁」与「纯持有」两段）。
+//
+// 用法（两段式，热点处）：
+//
+//	w := m.watchMutexWait("X") // 起点：等锁
+//	m.mu.Lock()
+//	w.acquired()               // Lock 成功后：结算等待、重新起表（此后只计纯持有）
+//	...
+//	m.mu.Unlock()
+//	w.done()                   // Unlock 之后：结算纯持有（等待与持有各自计数/告警）
+//
+// 兼容：watchMutexHold(section) 等价于"没有等待段"（起表即持有），供不必拆分的调用点使用。
+type mutexHoldWatch struct {
+	m       *Manager
+	section string
+	at      time.Time     // 持有起表时刻
+	waitAt  time.Time     // 等锁起表时刻（零值 ⇒ 本 watch 不计等待）
+	waited  time.Duration // 已结算的等锁时长
+}
+
+// watchMutexHold 开始一次持锁计时（零语义改动：不改变任何分支/返回值，仅观测）。
+func (m *Manager) watchMutexHold(section string) *mutexHoldWatch {
+	return &mutexHoldWatch{m: m, section: section, at: time.Now()}
+}
+
+// watchMutexWait 开始一次「等锁 + 持有」两段计时（#55-A，零语义改动）：调用方必须紧接
+// `m.mu.Lock()`，并在 Lock 成功后调用 acquired()、Unlock 之后调用 done()。
+//
+// 为什么必须拆（现场 2026-10-05）：起表在 Lock **之前** ⇒ 读数混入等待，9–19s 的慢段
+// 无法区分"本函数自己持锁 9–19s"与"被别的长持锁者挡在外面 9–19s"，收窄方向因此不唯一 ✗。
+func (m *Manager) watchMutexWait(section string) *mutexHoldWatch {
+	now := time.Now()
+	return &mutexHoldWatch{m: m, section: section, at: now, waitAt: now}
+}
+
+// acquired 在 `m.mu.Lock()` **成功之后**立即调用：结算等待时长并重新起表（此后只计纯持有）。
+//
+// 注意：它是在**持锁内**执行的 ⇒ 只写本结构体字段，不做任何 atomic 计数、不打日志
+// （避免把观测自身的开销算进持有）。
+func (w *mutexHoldWatch) acquired() {
+	if w == nil {
+		return
+	}
+	if !w.waitAt.IsZero() {
+		w.waited = time.Since(w.waitAt)
+		w.waitAt = time.Time{}
+	}
+	w.at = time.Now()
+}
+
+// done 结束计时：等待与持有**各自**判定超阈、各自计数、各自一行 Warn（含各自节流窗口）。
+func (w *mutexHoldWatch) done() {
+	if w == nil || w.m == nil {
+		return
+	}
+	// 等待（被挡住）：独立计数与告警行 —— 与"持有"混算正是 #55-A 要修的口径缺陷。
+	if w.waited >= mutexHoldSlowThreshold {
+		w.m.noteSlowSectionLock(messageSlowMutexWait, w.section, "wait", w.waited,
+			&w.m.mutexWaitSlowCount, &w.m.mutexWaitWarnAt)
+	}
+	// 纯持有（Lock 后 → Unlock 后）：语义与 #55-A 之前逐字一致（阈值/计数/告警字段名不变）。
+	hold := time.Since(w.at)
+	if hold < mutexHoldSlowThreshold {
+		return
+	}
+	w.m.noteSlowSectionLock(messageSlowMutexHold, w.section, "hold", hold,
+		&w.m.mutexHoldSlowCount, &w.m.mutexHoldWarnAt)
+}
+
+// 两条慢段告警的固定文案（各一行：慢等待 / 慢持锁）。
+const (
+	messageSlowMutexHold = "m.mu 慢持锁"
+	messageSlowMutexWait = "m.mu 慢等待"
+)
+
+// noteSlowSectionLock 记一次"超阈慢段"：计数 +1（逐次累加），距上次告警超过节流窗口时打一条
+// Warn（含累计数）。等待与持有各传自己的计数器与节流时间戳 ⇒ 一方告警不压另一方。
+//
+// 命名带 Lock 后缀提醒：调用方必须已在**锁外**（本函数会写日志，锁内打日志会放大持有时长）。
+func (m *Manager) noteSlowSectionLock(message, section, field string, d time.Duration, counter, warnAt *atomic.Int64) {
+	counter.Add(1)
+	last := warnAt.Load()
+	now := time.Now().UnixNano()
+	if last != 0 && time.Duration(now-last) < mutexHoldWarnMinInterval {
+		return
+	}
+	if warnAt.CompareAndSwap(last, now) {
+		slog.Warn(message, "section", section, field, d.String(), "slowTotal", counter.Load())
+	}
+}
+
+// MutexHoldSlowCount 返回慢持锁（**纯持有**，#55-A 起不含等待）累计次数；供测试与诊断。
+func (m *Manager) MutexHoldSlowCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.mutexHoldSlowCount.Load()
+}
+
+// MutexWaitSlowCount 返回慢等待（被挡在 m.mu 外面的时长超阈）累计次数（#55-A 新增读数）：
+// 与 MutexHoldSlowCount 一起把"自身持有"与"被挡住"分开，收窄方向才唯一。
+func (m *Manager) MutexWaitSlowCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.mutexWaitSlowCount.Load()
+}
+
+// deliveryPlanFailure 是「本批规范化 + 去重」的失败形态：零宽事件 / 规范化失败。
+// 不可裁定身份冲突改为隔离记录并跳过变体，不再阻断整批投递。
+type deliveryPlanFailure struct {
+	result pipeline.DeliveryResult
+	err    error
+}
+
+// eventIdentity 是投递/重建两面共用的身份对账项：规范哈希 + 记录区间 + 正文字节数。
+// size/区间用于「同 ID 异哈希」的确定性裁定（2026-10-05 #179 现场：同区间、残行 947 B
+// vs 重读完整行 1034 B ✓）；idx≥0 指该事件在本批 toWrite 中的下标（−1 表示来自既有存储
+// 或内联集合，不在本批 ✗ —— 裁定取"后到者"时需按此决定替换还是追加 ✓）。
+type eventIdentity struct {
+	hash   string
+	start  uint64
+	end    uint64
+	size   int
+	msg    string
+	level  string
+	stream string
+	idx    int
+}
+
+// identityConflictRecord 保存不可裁定的同 ID 异哈希变体，供恢复、查询质量与运维诊断使用。
+type identityConflictRecord struct {
+	EventID     string `json:"event_id"`
+	Start       uint64 `json:"start"`
+	End         uint64 `json:"end"`
+	KeptHash    string `json:"kept_hash"`
+	DroppedHash string `json:"dropped_hash"`
+	ObservedAt  string `json:"observed_at"`
+}
+
+const maxIdentityConflictRecords = 256
+
+// identityConflictClearance 是「人工确认并清空身份冲突」的**审计凭据**。
+//
+// 为什么必须有它（本功能最容易被做错的地方）：身份冲突记录是「该源存在同 ID 异内容」的
+// 唯一凭据，而质量标记（planner 的 DupConflict/StatsPartial）正是由它派生。清空记录等于让
+// 查询面**不再提示**这份歧义——若不留痕，这条路径就成了「掩盖数据歧义」的后门。
+//
+// 为什么不能照抄 GapAbandonment 的落点：缺口放弃凭据挂在账本条目上，而账本条目有 revision
+// （Ledger.Revision）可做「期间是否被改过」的守卫；身份冲突记录直接挂在 persistedSource 上，
+// **没有等价 revision**。故本凭据只能与它所描述的数据**同处一地**（同一个 payload），
+// 用「清空后的记录集 + 本条凭据」这一对事实共同构成可核验的凭据：
+// 后来者读到 cleared_count 与 cleared_records 就能知道「曾经有哪些冲突、被谁在何时以何理由清掉」。
+type identityConflictClearance struct {
+	// Operator 是做出确认的认证主体（为空一律拒绝执行，见 ClearIdentityConflicts）。
+	Operator string `json:"operator"`
+	// Reason 是操作人给出的清空理由（为空的请求同样被拒）。
+	Reason string `json:"reason"`
+	// AtUTC 是清空时刻（RFC3339Nano）。
+	AtUTC string `json:"at_utc"`
+	// ClearedCount 是本次真正清掉的记录条数。**恒等于** len(ClearedRecords) 与
+	// 实际被移除条目数中的较小者不成立时以本条为准：明细有上限（见
+	// maxClearedConflictDetails），故条数必须单独记，绝不用明细长度代替。
+	ClearedCount int `json:"cleared_count"`
+	// ClearedRecords 是被清空记录的**明细快照**（有界，最多 maxClearedConflictDetails 条）。
+	//
+	// 为什么要留明细而不是只留条数：清空之后这批记录就从活动数据里消失了，若只留条数，
+	// 「当初保留的是哪个版本（kept_hash）」这一最关键的裁定证据就永久不可核验。留明细使
+	// 清空成为**可回溯的归档**而不是抹除。
+	ClearedRecords []identityConflictRecord `json:"cleared_records,omitempty"`
+}
+
+// maxIdentityConflictClearances 是每源保留的凭据条数上限（保留最近若干次）。
+//
+// 有界的理由：本路径是人工入口，正常运维下次数极少；无界增长会把 payload 撑大并进入每轮
+// 落库的字节指纹计算。**如实说明其代价**：超过上限的最久远凭据会被裁掉，故它保证的是
+// 「近期操作可回溯」而非「永久不可删」——这与缺口放弃凭据（必须比缺口活得久）的强度不同，
+// 强度差异源于本操作**不回退任何查询语义**（只去掉一个提示标记），不构成数据丢失通道。
+const maxIdentityConflictClearances = 32
+
+// maxClearedConflictDetails 是单条凭据里保留的被清记录明细上限。
+const maxClearedConflictDetails = 64
+
+// adjudicateSameIntervalIdentity 对「同 ID 异哈希」按**确定性证据**裁定（判据不放宽 ✗）：
+//  1. 同记录区间 ＋ 一方严格更长 ⇒ 取较长者（轮转尾部残行 vs 重读完整行 ✓）；
+//  2. 同记录区间 ＋ **level/stream/message 全同、仅事件时间不同** ⇒ 取后写者
+//     （2026-10-05 #179 现场：同一段字节两次读取把日期推成了两天，后一次为更正版 ✓；
+//     message 相同即同一物理行的身份证据 ✓，长度不可用 —— 现场两条 message 长度相等 ✗）。
+//
+// 其余形态（异区间、同区间但 message 不同、等长且非形态 2）⇒ 两者皆 false，调用方维持硬失败 ✓。
+func adjudicateSameIntervalIdentity(existing eventIdentity, event logtypes.Event, incomingSize int) (bool, bool) {
+	if existing.start != event.Record.Start || existing.end != event.Record.End {
+		return false, false
+	}
+	if existing.level == event.Level && existing.stream == event.Stream && existing.msg == event.Message {
+		return false, true // 形态 2：同一物理行，时间推断差异 ⇒ 后写者（更正版）胜 ✓
+	}
+	if incomingSize == existing.size {
+		return false, false
+	}
+	if incomingSize > existing.size {
+		return false, true
+	}
+	return true, false
+}
+
+// planDeliveryBatchOutsideLock 在**锁外**完成本批的「零宽校验 + 规范化 + 去重」（#54 修复）。
+//
+// 现场（本分支 #54 专项）：这段 O(本批) 的工作原先整段持 m.mu —— 单批 47 万–173 万条 ⇒
+// 实测持锁 1m09.5s 且随批量线性增长 ✗。它**只触碰入参 events 与本调用私有的 seen**：
+// 既不读也不写任何共享状态，故外移不改变任何契约：
+//   - 追加序（FIFO）：toWrite 严格按 events 输入顺序 append；
+//   - 去重语义：seen 命中同 ID 同哈希 ⇒ 跳过；同 ID 不同哈希 ⇒ IDENTITY_CONFLICT 硬失败；
+//   - 失败形态：零宽 ⇒ 422、规范化失败 ⇒ 422、身份冲突 ⇒ status 0，错误文本逐字不变。
+//
+// 为什么"原来那把锁"本来也没有保护对象（外移的安全性论证）：seen 在进入临界区**之前**
+// 就已构建完毕（来自段 A 锁内取的 saved 快照），本段不读 m.state/m.pipes；而真正决定
+// "写不写、写什么"的后续步骤（canonicalRecoveryEvents / writeProjectionPlan）本来就在
+// 锁外 —— 即旧实现的锁既没有把「去重判定」与「写入」做成原子，也不提供任何跨源串行化
+// 保证（同源投递的串行化由采集轮"每源一个工作项"给出，见 defaultPollConcurrency 说明）。
+func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map[string]eventIdentity) ([]logtypes.Event, *deliveryPlanFailure) {
+	if hook, _ := m.deliverPlanHook.Load().(func()); hook != nil {
+		hook()
+	}
+	toWrite := make([]logtypes.Event, 0, len(events))
+	for _, event := range events {
+		if event.Record.End <= event.Record.Start {
+			return nil, &deliveryPlanFailure{
+				result: pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity},
+				err:    fmt.Errorf("ingest: zero-width event %s", event.EventID),
+			}
+		}
+		var err error
+		event, err = normalizeCanonicalEvent(event)
+		if err != nil {
+			return nil, &deliveryPlanFailure{
+				result: pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity},
+				err:    err,
+			}
+		}
+		if existing, exists := seen[event.EventID]; exists {
+			if existing.hash == event.CanonicalHash {
+				continue
+			}
+			// 同 ID 异哈希：先走两种裁定出口（同 canonicalRecoveryEvents 的同一判据与
+			// 同一留痕口径 ✓）；**不可裁定形态（异区间/等长）保留先到者并跳过本行**。
+			//
+			// 2026-10-08 修复（生产实测）：不可裁定形态此前以硬失败终止整批投递 ——
+			// 冲突是确定性的（重试输入不变）⇒ 该源投递永续失败 ⇒ closed_visible_seq
+			// 钉死 ⇒ 查询按水位截断（实测 VL 侧 4844 行/小时而面板仅 6 条可见，用户观感
+			// 「日志不更新/丢数据」）。改为跳过冲突行后水位得以推进；同 ID 多行的质量
+			// 语义由查询侧「unresolved」承接（与 keepExisting 同效，只是不再整批失败）。
+			incomingSize := len(event.Message)
+			keepExisting, takeIncoming := adjudicateSameIntervalIdentity(existing, event, incomingSize)
+			switch {
+			case takeIncoming:
+				if existing.idx >= 0 && existing.idx < len(toWrite) && toWrite[existing.idx].EventID == event.EventID {
+					toWrite[existing.idx] = event // 本批内的残行 ⇒ 原位替换 ✓
+				} else {
+					toWrite = append(toWrite, event) // 既有存储里的残行 ⇒ 追加完整行投出 ✓
+				}
+				slog.Warn("身份重复裁定：同区间异哈希取较长者（弃尾部残行变体）",
+					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+					"kept_bytes", incomingSize, "dropped_bytes", existing.size,
+					"kept_hash", event.CanonicalHash, "dropped_hash", existing.hash)
+				seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+					end: event.Record.End, size: incomingSize, msg: event.Message, level: event.Level,
+					stream: event.Stream, idx: len(toWrite) - 1}
+			case keepExisting:
+				slog.Warn("身份重复裁定：后写变体较短（残行），保留完整行变体",
+					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+					"kept_bytes", existing.size, "dropped_bytes", incomingSize,
+					"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+			default:
+				slog.Warn("身份冲突：保留先到者并跳过冲突行（不再整批失败）",
+					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+					"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+			}
+			continue
+		}
+		toWrite = append(toWrite, event)
+		seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+			end: event.Record.End, size: len(event.Message), msg: event.Message, level: event.Level,
+			stream: event.Stream, idx: len(toWrite) - 1}
+	}
+	return toWrite, nil
+}
+
+// analyzeDeliveryBatch 提取本批已经有落库证据的重复行与不可裁定冲突。
+// 它只读快照，不改变 planDeliveryBatchOutsideLock 的既有写入判定。
+func analyzeDeliveryBatch(events []logtypes.Event, seen map[string]eventIdentity) ([]logtypes.Event, []identityConflictRecord) {
+	local := make(map[string]eventIdentity, len(seen)+len(events))
+	for key, identity := range seen {
+		local[key] = identity
+	}
+	landed := make([]logtypes.Event, 0, len(events))
+	conflicts := make([]identityConflictRecord, 0)
+	for _, raw := range events {
+		event, err := normalizeCanonicalEvent(raw)
+		if err != nil {
+			continue
+		}
+		existing, exists := local[event.EventID]
+		if !exists {
+			local[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+				end: event.Record.End, size: len(event.Message), msg: event.Message,
+				level: event.Level, stream: event.Stream, idx: -1}
+			continue
+		}
+		if existing.hash == event.CanonicalHash {
+			landed = append(landed, event)
+			continue
+		}
+		keepExisting, takeIncoming := adjudicateSameIntervalIdentity(existing, event, len(event.Message))
+		switch {
+		case takeIncoming:
+			local[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+				end: event.Record.End, size: len(event.Message), msg: event.Message,
+				level: event.Level, stream: event.Stream, idx: -1}
+		case keepExisting:
+			landed = append(landed, event)
+		default:
+			conflicts = append(conflicts, identityConflictRecord{
+				EventID: event.EventID, Start: event.Record.Start, End: event.Record.End,
+				KeptHash: existing.hash, DroppedHash: event.CanonicalHash,
+				ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+	}
+	return landed, conflicts
+}
+
+// recordIdentityConflicts 持久化不可裁定冲突，并把其计入后续投影质量。
+func (m *Manager) recordIdentityConflicts(key string, conflicts []identityConflictRecord) {
+	if m == nil || len(conflicts) == 0 {
+		return
+	}
+	m.mu.Lock()
+	saved := m.state.Sources[key]
+	saved.IdentityConflicts = append(saved.IdentityConflicts, conflicts...)
+	if len(saved.IdentityConflicts) > maxIdentityConflictRecords {
+		saved.IdentityConflicts = append([]identityConflictRecord(nil), saved.IdentityConflicts[len(saved.IdentityConflicts)-maxIdentityConflictRecords:]...)
+	}
+	m.state.Sources[key] = saved
+	m.mu.Unlock()
+	m.requestPersist()
+}
+
+func (m *Manager) identityConflictCount(namespace, sourceKey string) uint64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var total uint64
+	for key, saved := range m.state.Sources {
+		cfg, ok := m.state.SourceConfigs[key]
+		if (ok && cfg.StorageNamespace == namespace) || (!ok && key == sourceKey) {
+			total += uint64(len(saved.IdentityConflicts))
+		}
+	}
+	return total
+}
+
+func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
 	if len(events) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
 	if m.vl == nil && m.vlRoute == nil {
 		return pipeline.DeliveryResult{HTTPStatus: 0}, fmt.Errorf("ingest: VictoriaLogs client is not ready")
 	}
+	// 阶段计时（纯观测）：投递路径的单批耗时构成在现场不可见，8.3× 单位成本定位缺的就是它。
+	timing := newDeliveryTiming(source.LogSourceID+"/"+source.SourceGeneration, len(events), m.stageSink)
+	defer timing.report()
 	key := source.LogSourceID + "/" + source.SourceGeneration
+	snapshot := m.capturePublicationSnapshot(source)
+	// #54 修复（deliver.plan 锁内 O(n) 专项，与 #53 的 A-Step2 同型）：锁内只做**值拷贝快照**。
+	// 修前这里有三段 m.mu 临界区，其中两段是 O(n) 重活：
+	//   - 段 B：遍历 saved.Events（内联集合，旧格式/段未落时非空）逐条规范化；
+	//   - 段 C：遍历**全批** events（零宽校验 + 规范化 + 去重），现场单批 47 万–173 万条，
+	//     实测持锁 1m09.5s（随批量线性）。
+	// 两段都**不读也不写任何共享状态**（只碰入参 events 与本调用私有的 seen/toWrite），
+	// 故整段外移、锁内只留快照 ⇒ 契约（追加序 / 去重语义 / 事件内容 / 持久化产物）逐位不变。
+	w := m.watchMutexWait("deliver.plan")
 	m.mu.Lock()
+	w.acquired()
 	saved := m.state.Sources[key]
-	seen := make(map[string]string, len(saved.Events))
-	for _, event := range saved.Events {
-		event, err := normalizeCanonicalEvent(event)
-		if err != nil {
-			m.mu.Unlock()
-			return pipeline.DeliveryResult{}, err
-		}
-		seen[event.EventID] = event.CanonicalHash
-	}
+	// 段 B 的值拷贝快照（同型 A-Step2 的 walSnapshot）。安全性：saved 本身已是锁内的值拷贝，
+	// 其 Events 只被**整体置 nil 或重建为新切片**，从不原地改写已有元素
+	//（appendEvents / appendEventTail / migrateInlineEvents / rebuildSource）⇒ 锁外只读遍历安全。
+	inlineEvents := saved.Events
 	eventsStored := saved.EventsStored && m.events != nil
 	m.mu.Unlock()
-	// 事件体已落段时，身份集合从段流式重建（不持全量切片）；旧格式仍走内联切片。
-	if eventsStored {
-		if err := m.events.Iterate(key, func(event logtypes.Event) error {
-			normalized, err := normalizeCanonicalEvent(event)
+	w.done()
+	// 增量尾部快速路径（判据与安全论证见 planDeliveryTail）：满足时跳过「遍历该源全部历史事件」
+	// 重建身份集合——这是单位行成本里最贵的一项（生产单源段实测可达 70 万行，微基准
+	// 单次遍历 8.7 µs/行 ≈ 6 秒/批，而段只增不减，成本随运行时长线性增长）。
+	tail := m.planDeliveryTail(key, saved, events, replay)
+	// 发布确认快路径（2026-10-06，协议 #5 的①）：pending 的含义是「上次发布**未获确认**」✗。
+	// 整窗重发前先按**最近已发布代次**在查询面逐字段复核：确认已完整可见 ⇒ 发布事实上已完成 ⇒
+	// 清 pending（持久化，终态与 L4019 写成功后清理一致）并放行快路径，**跳过整窗重发** ✓。
+	// 任何不确定（缺行 / 查询出错 / 取证不稳 / 空集）⇒ 维持「整窗重发」原语义，**判据不放宽** ✗。
+	// 红线：**绝不把 pending 降级为「累积」** ✗ —— 这里跳过的是"整窗重发的写入"，不是取代语义，
+	// 否则重现 2026-09-30「查询并集无界 ⇒ VL 排序超 51MB ⇒ 400 ⇒ 该目标恒 not_ready」旧漏洞。
+	if saved.PublicationPending && !replay {
+		if ok, cerr := m.tryConfirmPendingPublication(source, key, saved); cerr == nil && ok {
+			// 本地快照同步：否则下方 L3876/L3892 会再次把 replace 拉回整窗重发。
+			saved.PublicationPending = false
+		}
+	}
+	var seen map[string]eventIdentity
+	if tail.Fast {
+		seen = make(map[string]eventIdentity, len(events))
+		timing.mark("seen-skipped")
+	} else {
+		seen = make(map[string]eventIdentity, len(inlineEvents))
+		// 段 B（#54 修复）：内联集合的规范化遍历（O(段行数)）**在锁外** —— 锁内只留上面的快照。
+		for _, event := range inlineEvents {
+			event, err := normalizeCanonicalEvent(event)
 			if err != nil {
-				return err
+				return pipeline.DeliveryResult{}, err
 			}
-			seen[normalized.EventID] = normalized.CanonicalHash
-			return nil
-		}); err != nil {
-			return pipeline.DeliveryResult{}, err
+			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+				end: event.Record.End, size: len(event.Message), msg: event.Message, level: event.Level,
+				stream: event.Stream, idx: -1}
 		}
-	}
-	m.mu.Lock()
-	toWrite := make([]logtypes.Event, 0, len(events))
-	for _, event := range events {
-		if event.Record.End <= event.Record.Start {
-			m.mu.Unlock()
-			return pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity}, fmt.Errorf("ingest: zero-width event %s", event.EventID)
-		}
-		var err error
-		event, err = normalizeCanonicalEvent(event)
-		if err != nil {
-			m.mu.Unlock()
-			return pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity}, err
-		}
-		if existing, exists := seen[event.EventID]; exists {
-			if existing != event.CanonicalHash {
-				m.mu.Unlock()
-				return pipeline.DeliveryResult{}, fmt.Errorf("ingest: IDENTITY_CONFLICT for event_id %s", event.EventID)
+		// 事件体已落段时，身份集合从段流式重建（不持全量切片）；旧格式仍走内联切片。
+		if eventsStored {
+			if err := m.events.Iterate(key, func(event logtypes.Event) error {
+				normalized, err := normalizeCanonicalEvent(event)
+				if err != nil {
+					return err
+				}
+				seen[normalized.EventID] = eventIdentity{hash: normalized.CanonicalHash, start: normalized.Record.Start,
+					end: normalized.Record.End, size: len(normalized.Message), msg: normalized.Message,
+					level: normalized.Level, stream: normalized.Stream, idx: -1}
+				return nil
+			}); err != nil {
+				return pipeline.DeliveryResult{}, err
 			}
-			continue
 		}
-		toWrite = append(toWrite, event)
-		seen[event.EventID] = event.CanonicalHash
+		timing.mark("seen")
 	}
-	m.mu.Unlock()
+	// 段 C（#54 修复）：本批的「零宽校验 + 规范化 + 去重」（O(本批)）整段移到锁外。
+	// 该段不触碰 m.mu、也不触碰任何共享状态（详见 planDeliveryBatchOutsideLock 的说明）。
+	landed, conflicts := analyzeDeliveryBatch(events, seen)
+	toWrite, fail := m.planDeliveryBatchOutsideLock(events, seen)
+	if fail != nil {
+		return fail.result, fail.err
+	}
+	if len(conflicts) > 0 {
+		m.recordIdentityConflicts(key, conflicts)
+	}
+	timing.mark("toWrite")
 	if len(toWrite) == 0 {
+		// 只用相同内容重复或已裁定保留的事件作为落库证据；被丢弃的冲突变体不得消解其区间缺口。
+		m.resolveGapsLandedByDelivery(source, landed)
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
-	expected, err := m.canonicalRecoveryEvents(key, saved)
-	if err != nil {
-		return pipeline.DeliveryResult{}, err
+	// 权威全量的构建是 O(段行数)（生产单源实测可达 70 万行 ≈ 6 秒）；只有「整窗重发」语义
+	// （重放 / 待发布 / 代次数达上限）才需要它作为写入面与证据面。快路径下本批就是权威集合的
+	// 增量尾部，写入面 / 证据面 / 段追加 / 发布水位全部可由「本批 + 缓存水位」给出，
+	// 故跳过全量重建（判据见 planDeliveryTail）。
+	// 重放/微代支改走**累积**（w21 稿 ② 第三落点，2026-10-06 #13 实测跨代拷贝后定稿）：
+	//   新代只承载「未确认差集」（下方 writeEvents = toWrite），旧代仍留在读白名单里 ⇒ 并集完备 ✓
+	//   且不再产生跨代同 id 拷贝 ✓（差集与已 ack 的旧代内容不相交）。
+	// 硬约束（血训）：差集**绝不能**配 replace=true——publish 内 replace 分支会把白名单重置为仅新代
+	//   （scope.ProjectionGenerations = []string{projectionGeneration}）⇒ 旧事件从读面消失 ✗；
+	//   故一切 replace=true 的路径（代次用尽、待发布整窗支）仍保持整窗写入面，本处只摘掉 replay 的取代项。
+	replace := saved.PublicationPending
+	if !replace && m.projectionGenerationsExhaustedForEvents(source, events) {
+		// 与 writeProjectionDay 内同一判据等价：它只取决于**本源自己**已发布的代次数，
+		// 而同源的投递是串行的，所以提前到这里判定不会与后续判定不一致；
+		// 提前的目的是在构建权威全量**之前**就知道它是否被需要。
+		replace = true
 	}
-	generation := nextProjectionGeneration(saved.ProjectionGeneration)
+	var expected []logtypes.Event
+	if tail.Fast && !replace {
+		expected = toWrite
+		timing.mark("recovery-skipped")
+	} else {
+		var err error
+		expected, err = m.canonicalRecoveryEvents(key, saved)
+		if err != nil {
+			return pipeline.DeliveryResult{}, err
+		}
+		timing.mark("recovery")
+	}
+	// 代次名必须是 VL 中尚未出现过的名字：状态回滚/重置后计数器会回退，直接进位会重名
+	// （见 nextFreeProjectionGeneration 的事故说明）。
+	//
+	// 取名为**预留**语义（2026-10-10 缺陷修复）：同源并发的两条投递各自实探「未占用」会算出
+	// 同一个名字，随后各写一份完整副本（生产实测 3×）。reserve 在 m.mu 内把「探测 → 预留」
+	// 做成一次原子选择，第二条面只能进位。释放必须在本函数**所有**返回路径上发生——
+	// 用 defer 收口，避免早退路径漏释放把名字钉死（见 releaseProjectionGeneration 注释）。
+	generation, genRes := m.reserveProjectionGeneration(source, saved.ProjectionGeneration,
+		fmt.Sprintf("deliver replay=%t", replay))
+	// 释放收口到函数出口（成功/失败/所有早退路径一视同仁）：漏释放会把名字钉死到进程结束，
+	// 该源此后每次取名都无谓进位。genRes==nil 时 releaseProjectionGeneration 是安全空操作。
+	defer m.releaseProjectionGeneration(genRes)
+	timing.mark("probe")
 	writeEvents := toWrite
 	if saved.PublicationPending {
 		writeEvents = expected
 	}
-	result, err := m.writeProjection(source, expected, generation, writeEvents, toWrite, saved.PublicationPending)
+	// 取代 vs 累积（2026-09-30 生产实证）：`expected` 是该源的**全量** canonical 集 ✓，
+	// `toWrite` 是**本批** ✓，且本批恒为全量的子集 ✓。故当两者**条数相等**时，本次写入
+	// 已覆盖全量 → 新代包含旧代的一切 → **取代**安全；否则是增量微代次 → 必须累积
+	// （既有测试 TestManagerNewBatchPublishesIsolatedView 守此契约）。
+	// 此前的漏洞：只认 PublicationPending，**重启后的全量重放也走累积** ✗ → 查询并集无界
+	// （实测 7 代）→ VL 排序超 51MB → 400 → 该目标恒 not_ready。
+	// 取代 vs 累积（2026-09-30 生产实证）：replay=本次是「存量重放」（由 deliverPendingBestEffort
+	// 发起，见 acquire/pipeline.go）；**只有它写入的是全量** → 新代包含旧代一切 → 取代安全
+	// （旧代纯冗余）；普通批次仍累积（既有测试 TestManagerNewBatchPublishesIsolatedView 守此契约）。
+	// 此前只认 PublicationPending，**重启后的存量重放也走累积** ✗ → 查询并集无界（实测 7 代）
+	// → VL 排序超 51MB → 400 → 该目标恒 not_ready。
+	// 注：曾试过用数据形状判别（EventsStored / EventsStoredThrough / eventsStored /
+	// len(toWrite)==len(expected)），全部被证伪：真实重放的批次只是全量的子集。
+	replace = replace || saved.PublicationPending
+	// 本次**实际写入面**（校验逐字段覆盖的就是它）：
+	// replace 为真时 writeProjectionPlan 会把写入面扩为权威全量（整窗重发），否则就是本批。
+	// 自动消解必须按实际写入面取证据，否则重放会「写了却没消解」，缺口又只能等人工。
+	// 同 ID 同哈希/可裁定保留的重复行也属于已落库证据；不可裁定冲突行不在 evidence 内。
+	evidence := append(append([]logtypes.Event(nil), landed...), writeEvents...)
+	if replace {
+		evidence = expected
+	}
+	plan := projectionWritePlan{Write: writeEvents, Archive: toWrite, Replace: replace, Snapshot: snapshot}
+	if tail.Fast && !replace && !replay {
+		// 增量尾部：段追加走 O(本批) 路径（省掉 appendEvents 的全量比对与末段校准）。
+		// 发布水位不在此处决定：publishSnapshot 按「本次写入面的最大 record_end」取，
+		// 并与既有 ClosedVisibleSeq 取大保单调。
+		// 重放（replay）不属于增量尾部 ✗：它是全量恢复投递，必须走慢路径——否则会被当成"快路径"
+		// 而绕过恢复期的 staging 幂等过滤（以及其它恢复期判据）✗。
+		tail.Events = toWrite
+		plan.Tail = &tail
+	}
+	result, err := m.writeProjectionPlan(source, expected, generation, plan)
 	if err != nil {
 		return result, err
 	}
+	timing.mark("write")
+	// 投递成功（写 VL + 逐字段可见性校验 + catalog 发布）= 该写入面已确认落库 → 自动消解
+	// 被它完全覆盖的缺口。这是缺陷 A 的「成功后自动消解」出口：重投成功即清零，不再依赖人工。
+	m.resolveGapsLandedByDelivery(source, evidence)
+	timing.mark("resolve")
 	if os.Getenv("JIANMANAGER_LOG_INJECT_ACK_LOSS") == "1" {
 		result.AckLost = true
 	}
 	return result, nil
 }
 
+// projectionWritePlan 描述一次投影写入的「写入面」与「发布语义」（FR-497 spec §2.2）。
+//
+// 为什么要拆开：重启恢复原先只有「整窗重发」一种形态——Replace=true 时把写入面**扩为
+// 权威全量**。启动增量对账需要「只写缺失天，但发布语义仍是取代」（新代包含该天全量 →
+// 取代安全），于是写入面与发布语义必须能分别指定。
+type projectionWritePlan struct {
+	// Write 是本次实际写入 VL 的事件集合。
+	Write []logtypes.Event
+	// Archive 是同时落归档的权威事件集合（现状恢复路径为 nil）。
+	Archive []logtypes.Event
+	// Replace 为 true 表示发布语义是「新代取代旧代白名单」（该天）；false 表示累积微代次。
+	Replace bool
+	// Days 非空表示**限定写入面**为这些 UTC 天（增量补天）：此时 Replace 不再把写入面扩为
+	// 权威全量，且 Days 必须与 Write 的天集合完全一致——错位会「标记为已发布却没写数据」，
+	// 故按硬失败处理（宁可启动失败，不接受静默丢数据）。
+	Days []string
+	// Tail 非 nil 表示本次是「权威集合的增量尾部」：段存储按增量追加、发布水位走缓存，
+	// 不需要（也没有）权威全量（判据与安全论证见 deliveryTailPlan）。
+	Tail *deliveryTailPlan
+	// Snapshot 必须在读取 canonical 集合之前取得，跨源更新不使它失效。
+	Snapshot *publicationSnapshot
+	// Yield 非 nil 时是**批间让出**钩子：每完成一个插入批、以及每个校验簇开始之前调用一次。
+	//
+	// 为什么放在计划里而不是全局开关：让出是**调用方**的节奏选择，同一份写入代码在采集快路径
+	// （走 `deliver`，不该被额外 sleep 拖慢）与重建慢路径（必须给采集让路）上要有不同行为。
+	// 生产采集路径恒为 nil（零开销）；只有重建调度器会填它。
+	//
+	// **安全边界**：让出只是"插入批与批之间、校验簇与簇之间"的主动退让，**不改变**任何写入面、
+	// 校验判据、发布判据与错误处理——即它无法把失败变成成功，也无法把成功变成失败。
+	Yield func()
+}
+
+// publicationSnapshot 绑定源/日的发布版本，与物理代次尝试号独立。
+type publicationSnapshot struct {
+	epochs map[string]uint64
+	ctx    context.Context
+}
+
+var errPublicationStale = errors.New("ingest: 本源发布快照已失效，需重新规划")
+
+func (m *Manager) capturePublicationSnapshot(source SourceConfig, contexts ...context.Context) *publicationSnapshot {
+	m.publishMu.Lock()
+	defer m.publishMu.Unlock()
+	// 关停 Flush 发生在 lifecycleCancel 之后，正常投递保留既有独立完成语义。
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out := &publicationSnapshot{epochs: map[string]uint64{}, ctx: ctx}
+	for day, epoch := range m.publicationEpochs[source.LogSourceID+"/"+source.SourceGeneration] {
+		out.epochs[day] = epoch
+	}
+	return out
+}
+
+// 此检查只比较同源同日版本，禁止把其他源正常发布当成冲突。
+func (m *Manager) publicationSnapshotCurrentLocked(source SourceConfig, snapshot *publicationSnapshot, days []string) bool {
+	if snapshot == nil {
+		return true
+	}
+	current := m.publicationEpochs[source.LogSourceID+"/"+source.SourceGeneration]
+	if days == nil {
+		for day, epoch := range current {
+			if snapshot.epochs[day] != epoch {
+				return false
+			}
+		}
+		for day, epoch := range snapshot.epochs {
+			if current[day] != epoch {
+				return false
+			}
+		}
+		return true
+	}
+	for _, day := range days {
+		if snapshot.epochs[day] != current[day] {
+			return false
+		}
+	}
+	return true
+}
+
+// verifyProjectionChunkSize 是「发布确认快路径」的分批规模：与既有投影校验的批形一致（2000/批），
+// 既避免单次查询过大，也避免一次性把整份证据塞进单条查询。
+const verifyProjectionChunkSize = 2000
+
+// tryConfirmPendingPublication 在「上次发布未获确认（PublicationPending）且本次不是存量重放」时，
+// 先按**最近已发布代次**（saved.ProjectionGeneration）在查询面逐字段复核本源当前事件是否已完整可见：
+//   - 全部批次 complete ⇒ 发布事实上已完成 ⇒ 清 pending（持久化，同 L4019 终态）＋记 republishSkipped
+//     ⇒ (true, nil) —— 调用方据此跳过整窗重发（并放行快路径）。
+//   - 任一批不 complete / 查询出错 / 取证不稳 / 空集 ⇒ (false, nil)，**维持整窗重发原语义**（判据不放宽 ✗）。
+//
+// 成本：仅在 pending 且非重放时触发（确认后 pending 即被清）；O(段行数) 的取证与写路径同源
+// （canonicalRecoveryEvents），它换掉的是**每一批都整窗重写**的代价 ✓。
+// 语义安全：pending 的真义是"上次发布未获确认"，而这里用查询面拿到了**已确认可见**的证据；
+// 清 pending 的终态与「写成功后清 pending」完全一致，只是证据来源不同（查询面 vs 写入面）✓。
+func (m *Manager) tryConfirmPendingPublication(source SourceConfig, key string, saved persistedSource) (bool, error) {
+	return m.tryConfirmPendingPublicationCtx(context.Background(), source, key, saved)
+}
+
+func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source SourceConfig, key string, saved persistedSource, missingDays ...*[]string) (bool, error) {
+	if !saved.PublicationPending {
+		return false, nil
+	}
+	snapshot := m.capturePublicationSnapshot(source)
+	m.mu.Lock()
+	attempt := m.publicationAttempts[key]
+	inflight := m.publicationInflight[key]
+	m.mu.Unlock()
+	if inflight != 0 {
+		return false, nil
+	}
+	// 取证与写路径同源：canonicalRecoveryEvents 同时覆盖「段已落」与「内联旧格式」两条路。
+	// 成本 O(段行数) 只在 pending 且非重放时付一次（写完/确认后 pending 即被清），
+	// 而它换掉的是**每一批都整窗重写**的代价（量级远大于此）✓。
+	want, werr := m.canonicalRecoveryEvents(key, saved)
+	if werr != nil || len(want) == 0 {
+		return false, nil
+	}
+	// 必须**按事件归属的 UTC 日**分组校验：校验窗口由「源.UTCDay × 事件时间」共同决定，
+	// 若沿用源的当天日期而事件属于历史日，窗口会成像 start>end 的倒置区间 ⇒ 恒 0 行 ⇒ 误判不完整 ✗
+	//（本次开发中真实踩到，故此处显式按日拆分，与 reconcile 用例设 verifySource.UTCDay 同法）。
+	grouped, _, gerr := groupEventsByUTCDay(source, want)
+	if gerr != nil || len(grouped) == 0 {
+		return false, nil
+	}
+	missing := []string{}
+	observed := map[string]*catalog.Record{}
+	for day, dayEvents := range grouped {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		vs := source
+		vs.UTCDay = day
+		rec, exists := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
+		observed[day] = rec
+		var generations []string
+		if exists && rec.PublishedProjection != nil {
+			generations = publishedSourceProjectionGenerations(rec.PublishedProjection, vs)
+		}
+		if len(generations) == 0 {
+			missing = append(missing, day)
+			continue
+		}
+		allowed := make(map[string]logtypes.Event, len(dayEvents))
+		for _, event := range dayEvents {
+			allowed[event.EventID] = event
+		}
+		queryTimeout := m.reconcile.QueryTimeout
+		if queryTimeout <= 0 {
+			queryTimeout = 10 * time.Second
+		}
+		client, _, routeErr := m.clientForSource(vs)
+		if routeErr != nil {
+			missing = append(missing, day)
+			continue
+		}
+		scope, scoped := m.publishedScope(vs, day)
+		var maxEnd uint64
+		for _, event := range dayEvents {
+			if event.Record.End > maxEnd {
+				maxEnd = event.Record.End
+			}
+		}
+		if !scoped || scope.ClosedVisibleSeq < maxEnd {
+			missing = append(missing, day)
+			continue
+		}
+		// 计数仅防止未知额外行；还必须逐个身份、哈希、正文及时间校验，不能单凭 count 清 pending。
+		countScope := scope
+		countScope.ClosedVisibleSeq = 0
+		count, countErr := countVLDay(ctx, client, vs, day, countScope, queryTimeout)
+		if countErr != nil || count != len(dayEvents) {
+			missing = append(missing, day)
+			continue
+		}
+		complete := true
+		for start := 0; start < len(dayEvents); {
+			end := start
+			bytes := 0
+			for end < len(dayEvents) && end-start < 500 {
+				estimate := 6*len(dayEvents[end].Message) + 4096
+				if end > start && bytes+estimate > 8<<20 {
+					break
+				}
+				bytes += estimate
+				end++
+			}
+			queryCtx, cancel := context.WithTimeout(ctx, queryTimeout)
+			ok, _, queryErr := m.verifyProjectionQuery(queryCtx, client, vs, generations[0], dayEvents[start:end], allowed, generations)
+			cancel()
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			if queryErr != nil || !ok {
+				complete = false
+				break
+			}
+			start = end
+		}
+		if !complete {
+			missing = append(missing, day)
+		}
+	}
+	if len(missing) > 0 {
+		// 已修复的天由白名单内容证据排除，下轮切片只续跑剩余天，不从第一天重新开始。
+		sort.Strings(missing)
+		if len(missingDays) > 0 && missingDays[0] != nil {
+			*missingDays[0] = missing
+		}
+		return false, nil
+	}
+	m.publishMu.Lock()
+	if !m.publicationSnapshotCurrentLocked(source, snapshot, nil) {
+		m.publishMu.Unlock()
+		return false, nil
+	}
+	for day, record := range observed {
+		vs := source
+		vs.UTCDay = day
+		current, _ := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
+		if !sameCatalogAuthority(record, current) || sourcePublicationToken(record, vs) != sourcePublicationToken(current, vs) {
+			m.publishMu.Unlock()
+			return false, nil
+		}
+	}
+	m.mu.Lock()
+	cur := m.state.Sources[key]
+	if m.publicationAttempts[key] != attempt || m.publicationInflight[key] != 0 || cur.ProjectionGeneration != saved.ProjectionGeneration {
+		m.mu.Unlock()
+		m.publishMu.Unlock()
+		return false, nil
+	}
+	cur.PublicationPending = false
+	m.state.Sources[key] = cur
+	m.mu.Unlock()
+	m.publishMu.Unlock()
+	m.republishSkipped.Add(1)
+	// 实战可核验（#5 复盘缺口）：跳过整窗重发必须有日志，否则外部只见"pending 消了"而无从判是否真的走了快路径。
+	slog.Info("发布确认快路径：VL 已完整，跳过整窗重发",
+		"source", source.LogSourceID, "generation", saved.ProjectionGeneration, "events", len(want))
+	// 持久化：内存已清、落库未跟上时，下次启动仍会整窗重发（安全方向 ✓），故持久化失败不影响本次放行。
+	_ = m.persistHot()
+	return true, nil
+}
+
+// RepublishSkipped 返回「发布确认快路径」累计跳过整窗重发的次数（观测用，单位=次）。
+func (m *Manager) RepublishSkipped() int64 { return m.republishSkipped.Load() }
+
 func (m *Manager) writeProjection(source SourceConfig, events []logtypes.Event, generation string, writeEvents, archiveEvents []logtypes.Event, replace bool) (pipeline.DeliveryResult, error) {
+	return m.writeProjectionPlan(source, events, generation, projectionWritePlan{
+		Write: writeEvents, Archive: archiveEvents, Replace: replace,
+	})
+}
+
+// writeProjectionPlan 是 writeProjection 的完整形态：按计划写入 VL、校验、发布、落段。
+//
+// events 恒为权威全量（用于段存储补齐与 persist）；实际写入面由 plan 决定。
+func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Event, generation string, plan projectionWritePlan) (pipeline.DeliveryResult, error) {
 	if len(events) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: http.StatusNoContent}, nil
 	}
@@ -860,30 +4986,65 @@ func (m *Manager) writeProjection(source SourceConfig, events []logtypes.Event, 
 		}
 	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
+	if plan.Snapshot == nil {
+		plan.Snapshot = m.capturePublicationSnapshot(source)
+	}
+	m.publishMu.Lock()
+	if !m.publicationSnapshotCurrentLocked(source, plan.Snapshot, plan.Days) {
+		m.publishMu.Unlock()
+		return pipeline.DeliveryResult{}, errPublicationStale
+	}
 	m.mu.Lock()
+	if m.publicationAttempts == nil {
+		m.publicationAttempts = map[string]uint64{}
+	}
+	if m.publicationInflight == nil {
+		m.publicationInflight = map[string]int{}
+	}
+	m.publicationAttempts[key]++
+	attempt := m.publicationAttempts[key]
+	m.publicationInflight[key]++
 	saved := m.state.Sources[key]
 	saved.ProjectionGeneration = generation
 	saved.PublicationPending = true
 	m.state.Sources[key] = saved
 	m.mu.Unlock()
+	m.publishMu.Unlock()
+	defer func() { m.mu.Lock(); m.publicationInflight[key]--; m.mu.Unlock() }()
+	// 该代次名从此刻起可能出现在 VL 中（写入可能只完成一部分就失败）——因此**先**把它记入
+	// 探测水位（复审 P2-11）：水位必须是「本进程为该源写过/尝试写过的最大序号」，否则一个
+	// 半途失败的写入之后，同名候选会被缓存判成「未写过 ⇒ 未占用」，把重名风险重新引进来。
+	m.recordProjectionGenerationAttempt(key, generation)
 	// The attempted generation is durable before any VL write. A lost response
 	// or failed Catalog commit must rebuild into a different physical target.
-	if err := m.persist(); err != nil {
+	//
+	// 2026-10-03 起这里是**热路径**：有界等待 + 超时交办（persistHot ✗ 不再为落库阻塞投递）。
+	// 「代次不得重名」的保护不依赖这一次落库：取名前的 VL 占用探测（nextFreeProjectionGeneration）
+	// 才是主判据 ✓；最坏情况（进程在落库前崩溃）只会让该代次重取一次名 → 探测拦下 ✓ 不丢数据。
+	if err := m.persistHot(); err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
 	grouped, days, err := groupEventsByUTCDay(source, events)
 	if err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
-	archiveGrouped, _, err := groupEventsByUTCDay(source, archiveEvents)
+	archiveGrouped, _, err := groupEventsByUTCDay(source, plan.Archive)
 	if err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
-	writeGrouped, writeDays, err := groupEventsByUTCDay(source, writeEvents)
+	writeGrouped, writeDays, err := groupEventsByUTCDay(source, plan.Write)
 	if err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
-	if replace {
+	switch {
+	case len(plan.Days) > 0:
+		// 增量补天：写入面已由调用方按天过滤；这里只校验二者一致并固定顺序。
+		if err := sameUTCDays(writeDays, plan.Days); err != nil {
+			return pipeline.DeliveryResult{}, err
+		}
+		writeDays = sortUTCDays(plan.Days)
+	case plan.Replace:
+		// 整窗重发（现状语义）：写入面扩为权威全量。
 		writeDays = days
 		writeGrouped = grouped
 	}
@@ -891,7 +5052,7 @@ func (m *Manager) writeProjection(source SourceConfig, events []logtypes.Event, 
 	for _, day := range writeDays {
 		daySource := source
 		daySource.UTCDay = day
-		dayResult, writeErr := m.writeProjectionDay(daySource, grouped[day], writeGrouped[day], generation, archiveGrouped[day], replace)
+		dayResult, writeErr := m.writeProjectionDay(daySource, grouped[day], writeGrouped[day], generation, archiveGrouped[day], plan.Replace, plan.Tail != nil, plan.Yield, plan.Snapshot)
 		if dayResult.HTTPStatus != 0 {
 			result.HTTPStatus = dayResult.HTTPStatus
 		}
@@ -901,46 +5062,115 @@ func (m *Manager) writeProjection(source SourceConfig, events []logtypes.Event, 
 	}
 	m.mu.Lock()
 	saved = m.state.Sources[key]
-	saved.ProjectionGeneration = generation
-	saved.PublicationPending = false
-	m.state.Sources[key] = saved
+	if m.publicationAttempts[key] == attempt {
+		saved.ProjectionGeneration = generation
+		saved.PublicationPending = false
+		m.state.Sources[key] = saved
+	}
 	m.mu.Unlock()
 	// 事件体写入磁盘段（先内容、后引用）：写入成功并 fsync 后，再让 state 元数据引用它。
 	// 契约 §4.3/§5.3 要求这是 VL 数据根丢失后重建 projection 的权威集合，故不裁剪只换介质。
-	if err := m.appendEvents(key, events); err != nil {
+	//
+	// 快路径（plan.Tail）下 events 就是「权威集合的增量尾部」，直接追加即可：
+	// 省掉 appendEvents 的 Count（末段校准 = O(末段行数)）与全量比对。
+	if plan.Tail != nil {
+		if err := m.appendEventTail(key, *plan.Tail); err != nil {
+			return result, err
+		}
+	} else if err := m.appendEvents(key, events); err != nil {
 		return result, err
 	}
-	return result, m.persist()
+	// 这里**不再**单独落库一次：本批次引发的 state 变更（投影代次 / 发布待定 / 段覆盖水位）
+	// 会被随后任意一次 persist 覆盖，而 persist 是「按变更源重建 + 全量根表比对」的增量落库——
+	// 后一次落库总是把前一次的遗漏补齐。紧随其后的落库点有两个：同源下一批的 DurablePersist
+	// （VL 插入前的契约落库）与轮末的统一 persist（pollOnce 的 dirty 分支）。
+	//
+	// 为什么必须去掉（FR-498 并发采集轮的连带修复）：每源每批两次落库时，并发轮里 8 个 worker
+	// 会在全局串行的持久化上排长队，把「短变更」调用者（实例登记）挤到队尾。去掉后单源每批
+	// 只落库一次（VL 插入前那次，契约不变），持久化总量与排队长度减半。
+	//
+	// 崩溃语义没有变弱：投影状态最多晚一次落库到达索引（≤1 轮），而恢复路径本来就不依赖
+	// state 里的投影标记——事件段存储是权威集合（见 canonicalRecoveryEvents），代次重名由
+	// VL 侧占用探测兜底（见 nextFreeProjectionGeneration）。
+	return result, nil
 }
 
 // appendEvents 把该源的 canonical 事件集合同步到磁盘段，并把该源标记为“事件体已落段”。
 //
-// 入参是**完整**权威集合（与旧版 `saved.Events` 的语义一致），函数内部只追加尚未落段的
-// 尾部：段内已有事件数就是已落段前缀长度，而权威集合始终以该前缀开头（由
-// canonicalRecoveryEvents 的构造顺序保证：先段内容、后 durable WAL），因此只需 append
-// 其后的差额。这样每轮 poll 都幂等，不会把同一事件重复写入段。
+// 入参是**完整**权威集合（与旧版 `saved.Events` 的语义一致）。函数内部只追加段里还没有的身份
+// （按段内已有 identity 集合求差集），因此每轮 poll 都幂等，不会把同一事件重复写入段。
+//
+// 关键判据（2026-10-10 根治「代次可见性不一致」的**真根因**）：
+// 段是「只增不减的权威超集」，**允许包含冗余行**（同 event_id 且同哈希的重复行，语义等价），
+// 而入参 `events` 是**按身份去重后**的权威集合。于是「段物理行数」可以**合法地**大于 `len(events)`：
+//   - 生产实证（inst:148）：段物理 135113 行，去重后 134981 个 event_id，130 个 id 重复
+//     （129 个 2 份 + 1 个 4 份），**全部同 canonical 哈希**；全生产 158 源中 36 源含此类冗余
+//     共 59556 行（单源最多 13998 行），且**零**行缺 event_id、零例「同 id 异哈希」可归因于此。
+//   - 旧实现把两者当「同一条前缀的长度」直接比较（`stored > len(events)` ⇒ 硬失败），于是
+//     这些纯冗余行被误判成「段超前于权威集合 ⇒ 段被外部改写/恢复集合有漏」，**永久硬失败**：
+//     该源此后每次恢复/重建都在这里撞墙 ⇒ 发布永远无法完成（`PublicationPending` 钉死）⇒
+//     对账判缺失 ⇒ 反复整窗重发。生产现场该错误 **952 次、涉及 45 个源**，是比「读面代次」更深一层
+//     的真凶（读面白名单本身是跨代次累积的，实测 661 个「源×天」组合里**零**个不可见）。
+//
+// 冗余行的来源（只读实测，2026-10-10）：重复对**记录区间完全相同、canonical 哈希相同、仅
+// `ingest_time_utc` 不同**（例如同一物理行在 06:37 与 07:13 各被登记一次），且 130/130 对都落在
+// **同一段内**、间隔 1~243 行。证据指向「旧实现按**下标**切片追加」：这些重复对中 119/130 在
+// 两个孪生行之间夹着**位置更靠前**的事件（即该区间发生过内容位移），98/130 紧邻段内的非单调点
+// （全段 13 处非单调点全落在受影响的两个段内）。内容一旦位移，`events[stored:]` 就会把已落段的
+// 条目再追加一遍——这正是冗余行的生成方式。
+//
+// 本函数（`appendEvents`）改为按身份收敛后，**本路径不会再产生新的冗余行**（只追加段中不存在的
+// 身份）。注意这不等于「全库不会再有冗余行」：`appendEventTail` 走的是不做身份核对的增量追加
+// 快路径（其安全性由 `planDeliveryTail` 的「本批区间在已投递水位之后」判据保证，见该函数注释），
+// 且既有冗余行按设计**不清理**（段只增不减，见本文件顶部契约）。
+//
+// 为什么改成按身份核对**不会**把不完整数据当完整结果返回（红线）：
+//   - 「段超前」这个担忧的本质是「段里有一段谁也无法解释的内容」——但这里逐条核对的正是
+//     「入参的**每一条**身份是否都已在段中」：只要有一条权威事件不在段里，就照旧放行追加；
+//   - 段内事件数少于权威集合时按身份差集追加（只追加缺的身份），与旧行为同向，不会少写；
+//   - 因此新实现**只放宽「段比权威集合多」的良性形态**，不放宽任何「权威事件不可见」的形态。
+//
+// 同 event_id 异哈希的处置（**必须与既有各路径同一口径**，不得新增失败模式）：
+// 段内已存变体与权威变体内容不同时，走既有的 `adjudicateSameIntervalIdentity` 两类裁定——
+// 可裁定（同区间一方更长 / 同区间同行仅时间不同）⇒ 保留较长或后到者（`takeIncoming` 时把权威
+// 变体追加进去，段允许两份并存，语义由查询侧按同一规则收敛）；不可裁定 ⇒ **按既有约定记录
+// `identityConflictRecord` 并跳过**，绝不为此硬失败。
+//
+// 为什么不能在这里硬失败（2026-10-09 复核，两处既有实现已给出结论）：冲突是**确定性**的
+// （同一份段 + 同一份权威集合，重试输入不变）⇒ 硬失败会让该源的投递/恢复**永续失败** ⇒
+// 发布水位钉死 ⇒ 查询按水位截断（正是 `planDeliveryBatchOutsideLock` 与
+// `canonicalRecoveryEvents` 在 2026-10-08 修掉的形态，二者注释都写明「不再整批失败」）。
+// 历史事件体一旦是残行，其修正版必然带不同哈希——"一律硬失败"会把**正常的残行修正**也永久堵死。
+// 且该变更必须 fail loud 才安全：故冲突计入 `eventStoreIdentityConflicts` 并落
+// `IdentityConflicts` 隔离记录（对运维可查、对投影质量可见），本函数**不静默吞掉**它。
 //
 // 标记与落段在同一临界区内推进：只有段写成功（已 fsync）后 state 才会引用它。
+//
+// 锁序：本函数内部只在最后取一次 m.mu（与既有实现一致）；段遍历走 eventstore 自己的 Store.mu，
+// 二者不嵌套持有（核对在取 m.mu **之前**完成），故不会引入新的锁序边。
 func (m *Manager) appendEvents(key string, events []logtypes.Event) error {
 	if m.events == nil || len(events) == 0 {
 		return nil
 	}
-	stored, err := m.events.Count(key)
+	missing, conflicts, err := m.missingFromEventStore(key, events)
 	if err != nil {
 		return err
 	}
-	if stored > len(events) {
-		// 段内已落段事件多于权威集合：说明段内容与清单不一致（例如密封段被外部改写、
-		// 或恢复集合构造有漏）。此时继续执行会静默“承认”一段谁也无法解释的前缀，
-		// 并让缺失事件永久消失，故必须硬失败而非跳过追加。
-		return fmt.Errorf("ingest: eventstore ahead of authoritative set for %s: stored=%d authoritative=%d", key, stored, len(events))
+	// 身份冲突按既有约定留痕（隔离记录 + 计数器）：既不整批失败，也不静默吞掉。
+	// 放在追加**之前**：冲突结论与是否真的追加成功无关。
+	if len(conflicts) > 0 {
+		m.eventStoreIdentityConflicts.Add(int64(len(conflicts)))
+		m.recordIdentityConflicts(key, conflicts)
 	}
-	if stored < len(events) {
-		if err := m.events.Append(key, events[stored:]); err != nil {
+	if len(missing) > 0 {
+		if err := m.events.Append(key, missing); err != nil {
 			return err
 		}
+		m.bumpEventStoreEpoch(key)
 	}
+	w := m.watchMutexWait("appendEvents.persist")
 	m.mu.Lock()
+	w.acquired()
 	saved := m.state.Sources[key]
 	saved.EventsStored = true
 	// B1a：记录段存储已覆盖到的最大 record_end。`events` 是权威集合（按记录位置有序），
@@ -955,6 +5185,274 @@ func (m *Manager) appendEvents(key string, events []logtypes.Event) error {
 		saved.EventsStoredThrough = covered
 	}
 	// 已落段后不再保留内联副本，否则常驻切片会重新把 RSS 推高（FR-484 目标）。
+	saved.Events = nil
+	m.state.Sources[key] = saved
+	m.mu.Unlock()
+	w.done()
+	return nil
+}
+
+// missingFromEventStore 返回权威集合里**尚未落段**的事件（按入参顺序），并返回碰到的身份冲突。
+//
+// 逐个身份核对（这是本函数存在的全部理由）：
+//   - 段内已有同 event_id **且同 canonical_content_hash** ⇒ 该条已在段中，不追加（冗余副本不影响结论）；
+//   - 段内没有该 event_id ⇒ 放进待追加集合（调用方追加；追加失败向上传播，绝不静默丢弃）；
+//   - 段内已有同 event_id 但**哈希不同** ⇒ 走 `adjudicateSameIntervalIdentity` 的两类裁定
+//     （同区间一方更长 ⇒ 取较长者；同区间同行仅时间不同 ⇒ 取后到者）。`takeIncoming` 时把权威
+//     变体照常追加（段保留两份，语义由查询侧按同一规则收敛）；`keepExisting` 与不可裁定形态
+//     均以 `identityConflictRecord` 留痕并**跳过该条**（与 planDeliveryBatchOutsideLock /
+//     canonicalRecoveryEvents 的 2026-10-08 处置逐字同口径：不整批硬失败）。
+//
+// 为什么冲突不硬失败（复核既有结论）：冲突是确定性的，硬失败会让该源投递/恢复永续失败、发布
+// 水位钉死 ⇒ 查询按水位截断（正是那两处已修掉的形态）。且历史残行与其修正版必然哈希不同，
+// 「一律硬失败」连正常修正都会永久堵死。留痕（IdentityConflicts 隔离记录 + 计数器）保证它
+// 对运维可查、对投影质量可见，不是静默吞掉。
+//
+// 备忘（storedCoverage）：入参集合的**内容指纹** + 段物理读数都未变时，直接判定「无待追加」，
+// 省掉逐条遍历（生产单源 126MB / 13.5 万行，实测单次解析 1.7s）。指纹取自入参本身，故对
+// 「不同调用方传不同集合」天然安全（长度相同也不行 ✗）——这正是不能用长度当键的原因。
+func (m *Manager) missingFromEventStore(key string, events []logtypes.Event) ([]logtypes.Event, []identityConflictRecord, error) {
+	// 备忘只在**已建立**时才可能命中，故只在那时才计算集合指纹（O(集合)，实测 13.5 万条约 232ms）；
+	// 从未建立过备忘的源（每轮都有新事件的常见形态）连这一次开销都不付。
+	memoExists := m.hasStoredCoverageMemo(key)
+	var digest [sha256.Size]byte
+	if memoExists {
+		digest = eventSetDigest(events)
+		covered, err := m.storedCoverage(key, digest)
+		if err != nil {
+			return nil, nil, err
+		}
+		if covered {
+			m.storedCoverageHits.Add(1)
+			return nil, nil, nil
+		}
+	}
+	// 段内**每个身份当前胜出的变体**：与 `canonicalRecoveryEvents` 同一折叠规则（先到者胜，
+	// 可裁定取较长/更正者），故「段能重建出的集合」与本判定逐条一致。
+	//
+	// 只留胜者而不是「每个身份的第一条」是幂等性的关键：段的追加语义决定它可能同时持有
+	// 一个身份的多个变体，若记账只认第一条，「本次追加的胜者」在下一轮又会被判成「不在段中」
+	// ⇒ 每轮重复追加同一事件（段无界增长 ✗）。
+	stored := make(map[string]eventIdentity, len(events))
+	if err := m.events.Iterate(key, func(event logtypes.Event) error {
+		if event.EventID == "" {
+			// 段内无身份的条目：不可能是任何权威事件的身份，且无法据此判定冲突；
+			// 保留它（不删段内内容）但让权威事件照常按自身身份入段。
+			return nil
+		}
+		existing, ok := stored[event.EventID]
+		if !ok {
+			stored[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+				end: event.Record.End, size: len(event.Message), msg: event.Message, level: event.Level,
+				stream: event.Stream, idx: -1}
+			return nil
+		}
+		if existing.hash == event.CanonicalHash {
+			// 段内自身的良性冗余（生产实测：单源最多 1.4 万行同 id 同哈希）：与本次核对无关。
+			return nil
+		}
+		// 段内同一身份已有两个不同内容：按既有裁定收敛到胜者（与 canonicalRecoveryEvents 同规则）。
+		// 注意返回值顺序是 (keepExisting, takeIncoming)。
+		if _, takeIncoming := adjudicateSameIntervalIdentity(existing, event, len(event.Message)); takeIncoming {
+			stored[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+				end: event.Record.End, size: len(event.Message), msg: event.Message, level: event.Level,
+				stream: event.Stream, idx: -1}
+		}
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+	missing := make([]logtypes.Event, 0, len(events))
+	conflicts := make([]identityConflictRecord, 0)
+	seen := make(map[string]bool, len(events))
+	for _, event := range events {
+		if event.EventID == "" {
+			// 身份缺失的事件无法去重，只能照写（沿用旧行为：绝不因缺证据而少写）。
+			missing = append(missing, event)
+			continue
+		}
+		if seen[event.EventID] {
+			continue
+		}
+		seen[event.EventID] = true
+		existing, ok := stored[event.EventID]
+		if !ok {
+			missing = append(missing, event) // 该身份在段中完全没有 ⇒ 必追加
+			continue
+		}
+		if existing.hash == event.CanonicalHash {
+			continue // 段中胜者与权威变体一致 ⇒ 已覆盖
+		}
+		// 段中已有同身份但内容不同：与既有两个路径（planDeliveryBatchOutsideLock、
+		// canonicalRecoveryEvents）逐字同口径地裁定，绝不整批硬失败（理由见函数头注释）。
+		keepExisting, takeIncoming := adjudicateSameIntervalIdentity(existing, event, len(event.Message))
+		switch {
+		case takeIncoming:
+			// 权威变体是较长者/更正版 ⇒ 追加进段（段不可改写，故与段内旧变体并存；
+			// 段的重建折叠会选它，语义与查询侧收敛方向一致）。下一轮它已是胜者 ⇒ 幂等。
+			missing = append(missing, event)
+		case keepExisting:
+			// 段中胜者更完整（本次权威变体是残行）⇒ 不追加、不记冲突（既有约定：
+			// 可裁定形态只告警，不算「不可裁定冲突」）。
+			slog.Warn("段内身份变体更完整（权威变体较短），保留段内已有内容",
+				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+				"kept_bytes", existing.size, "dropped_bytes", len(event.Message))
+		default:
+			// 不可裁定（异区间 / 同区间等长且非同一物理行）⇒ 按既有约定留痕并跳过。
+			conflicts = append(conflicts, identityConflictRecord{
+				EventID: event.EventID, Start: event.Record.Start, End: event.Record.End,
+				KeptHash: existing.hash, DroppedHash: event.CanonicalHash,
+				ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+	}
+	// 段已完整覆盖本次权威集合 ⇒ 记入备忘（内容指纹 + 本次段读数）。有待追加时不记：
+	// 追加会推进段读数使备忘失效，而且真有待追加时该集合并未被完整覆盖。
+	if len(missing) == 0 {
+		if !memoExists {
+			digest = eventSetDigest(events) // 只在确实要记时才补算指纹
+		}
+		m.rememberStoredCoverage(key, digest)
+	}
+	return missing, conflicts, nil
+}
+
+// eventSetDigest 计算一个事件集合的内容指纹（身份 + 内容哈希 + 记录区间）。
+//
+// 用途仅是**备忘的键**：用于回答「这次问的集合与上次已核对通过的是不是同一份」。
+// 用 sha256 而不是短哈希：一次假命中会让本该追加的事件被跳过（静默丢数据），
+// 属红线，故不接受任何可计算的碰撞风险（本函数只在内存里遍历，不做磁盘 I/O）。
+func eventSetDigest(events []logtypes.Event) [sha256.Size]byte {
+	h := sha256.New()
+	var buf [8]byte
+	for i := range events {
+		h.Write([]byte(events[i].EventID))
+		h.Write([]byte{0})
+		h.Write([]byte(events[i].CanonicalHash))
+		h.Write([]byte{0})
+		binary.LittleEndian.PutUint64(buf[:], events[i].Record.Start)
+		h.Write(buf[:])
+		binary.LittleEndian.PutUint64(buf[:], events[i].Record.End)
+		h.Write(buf[:])
+	}
+	var out [sha256.Size]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// eventStoreCoverage 是「这个内容指纹的权威集合已被段逐条覆盖」的备忘条目。
+type eventStoreCoverage struct {
+	// digest 是已核对通过的权威集合内容指纹（见 eventSetDigest）。
+	//
+	// 为什么必须按内容而不是按长度：不同调用方会传**不同**的集合（投递主路径传权威全量、
+	// commitBackfill 传补账批、migrateInlineEvents 传内联旧格式），它们的长度可能相同而内容
+	// 完全不同 —— 按长度命中就会跳过本该追加的事件（静默丢数据 ✗）。
+	digest [sha256.Size]byte
+	// rows / epoch 是记下备忘时的段读数：段物理行数与本源的段物理版本号。
+	//
+	// 为什么这两个就够：段是只追加结构，除「末段半行截断」（崩溃残留校准）外没有改写路径。
+	//   - 真正追加 ⇒ 行数变（且 epoch 变）⇒ 备忘自动失效；
+	//   - 末段截断 ⇒ 行数变（变小）⇒ 备忘自动失效；
+	//   - 两者都没变 ⇒ 段内容逐字节没变（由 eventstore.calibrateLocked 的校准语义保证：
+	//     清单计数恒等于物理完整行数，故行数相同即内容相同）。
+	rows  int
+	epoch uint64
+}
+
+// hasStoredCoverageMemo 报告该源是否已有备忘（无备忘 ⇒ 不可能命中，调用方据此免算指纹）。
+func (m *Manager) hasStoredCoverageMemo(key string) bool {
+	m.mu.Lock()
+	_, ok := m.storedCoverageMemo[key]
+	m.mu.Unlock()
+	return ok
+}
+
+// storedCoverage 报告「该指纹的集合已被段完整覆盖」是否可复用（未命中返回 false，调用方走全量遍历）。
+//
+// 锁序：先取段读数（eventstore 自己的 Store.mu），再取一次 m.mu 短临界区读备忘；
+// 二者不嵌套持有，故不引入新的锁序边。
+func (m *Manager) storedCoverage(key string, digest [sha256.Size]byte) (bool, error) {
+	rows, err := m.events.Count(key)
+	if err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	memo := m.storedCoverageMemo[key]
+	epoch := m.eventsStoredEpoch[key]
+	m.mu.Unlock()
+	if memo.digest != digest || memo.rows != rows || memo.epoch != epoch {
+		return false, nil
+	}
+	return true, nil
+}
+
+// rememberStoredCoverage 记下「该指纹的权威集合已完整落段」。
+func (m *Manager) rememberStoredCoverage(key string, digest [sha256.Size]byte) {
+	rows, err := m.events.Count(key)
+	if err != nil {
+		// 读数取不到就不记：备忘只是提速，缺它只会退回全量遍历核对。
+		return
+	}
+	m.mu.Lock()
+	if m.storedCoverageMemo == nil {
+		m.storedCoverageMemo = map[string]eventStoreCoverage{}
+	}
+	epoch := m.eventsStoredEpoch[key]
+	m.storedCoverageMemo[key] = eventStoreCoverage{digest: digest, rows: rows, epoch: epoch}
+	m.mu.Unlock()
+}
+
+// bumpEventStoreEpoch 推进该源的段物理版本号，并**丢弃覆盖备忘**（本进程真正追加过段之后调用）。
+//
+// 两个写入出口（appendEvents / appendEventTail）都必须调它：否则「追加后备忘仍命中」会让
+// 下一轮误判「无待追加」⇒ 静默漏写。
+//
+// 为什么顺手丢弃备忘：备忘的唯一用途是「同一份集合被反复问、其间没有任何写入」。
+// 有写入 ⇒ 集合/段都变了，备忘本就不该复用；丢掉它还能让下一位调用方免于计算集合指纹
+// （见 missingFromEventStore 的惰性指纹）。「备忘存在」因此等价于「自记备忘起无写入」，
+// 这比单靠 rows/epoch 比对更早地排除掉不可命中的情形。
+func (m *Manager) bumpEventStoreEpoch(key string) {
+	m.mu.Lock()
+	if m.eventsStoredEpoch == nil {
+		m.eventsStoredEpoch = map[string]uint64{}
+	}
+	m.eventsStoredEpoch[key]++
+	delete(m.storedCoverageMemo, key)
+	m.mu.Unlock()
+}
+
+// appendEventTail 把「增量尾部」事件追加进段存储（投递快路径专用）。
+//
+// 与 appendEvents 的差别：后者的入参是**权威全量**，需要按身份核对段内已有内容后追加差集；
+// 快路径已由 planDeliveryTail 保证「本批区间整体在段已覆盖水位之后」（该区间从未投递过 ⇒
+// 段内不可能已有这些身份），因此可以直接整批追加，不做 O(段行数) 的核对。
+//
+// 状态推进与 appendEvents 逐字一致：段写成功后才把 state 标记为「已落段」并推进
+// EventsStoredThrough（B1a 的按条引用判据），并清掉内联副本（避免常驻切片把 RSS 推高）。
+func (m *Manager) appendEventTail(key string, tail deliveryTailPlan) error {
+	if m.events == nil || len(tail.Events) == 0 {
+		return nil
+	}
+	if err := m.events.Append(key, tail.Events); err != nil {
+		return err
+	}
+	m.bumpEventStoreEpoch(key)
+	m.mu.Lock()
+	if m.eventsStoredRows == nil {
+		m.eventsStoredRows = map[string]int{}
+	}
+	m.eventsStoredRows[key] = tail.StoredRows + len(tail.Events)
+	saved := m.state.Sources[key]
+	saved.EventsStored = true
+	var covered uint64
+	for _, ev := range tail.Events {
+		if ev.Record.End > covered {
+			covered = ev.Record.End
+		}
+	}
+	if covered > saved.EventsStoredThrough {
+		saved.EventsStoredThrough = covered
+	}
 	saved.Events = nil
 	m.state.Sources[key] = saved
 	m.mu.Unlock()
@@ -1004,12 +5502,32 @@ func (m *Manager) migrateInlineEvents() error {
 
 const maxPublishedProjectionGenerations = 64
 
-func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []logtypes.Event, generation string, archiveEvents []logtypes.Event, replace bool) (pipeline.DeliveryResult, error) {
+func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []logtypes.Event, generation string, archiveEvents []logtypes.Event, replace bool, tailPlanned bool, yield func(), snapshots ...*publicationSnapshot) (pipeline.DeliveryResult, error) {
+	var snapshot *publicationSnapshot
+	if len(snapshots) > 0 {
+		snapshot = snapshots[0]
+	}
+	ctx := context.Background()
+	if snapshot != nil && snapshot.ctx != nil {
+		ctx = snapshot.ctx
+	}
+	if err := ctx.Err(); err != nil {
+		return pipeline.DeliveryResult{}, err
+	}
 	catKey := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
 	expectedAuthority, _ := m.cat.Get(catKey)
-	if current, ok := m.cat.Get(catKey); ok && !replace &&
+	// tailPlanned 表示本次是「增量尾部」快路径：代次预算的判定已在 deliver 里做过
+	// （同一判据、同源串行，见 projectionGenerationsExhausted），此处不得再改写 replace——
+	// 快路径下 events 只是本批，没有可供整窗重发的权威全量。
+	if current, ok := m.cat.Get(catKey); ok && !replace && !tailPlanned &&
 		len(publishedSourceProjectionGenerations(current.PublishedProjection, source)) >= maxPublishedProjectionGenerations {
 		replace = true
+		// 代次用尽 ⇒ 进位换代：新代按 replace 语义声明为「覆盖旧代并集」，读路径跨代解析 ✓。
+		// 但**写入面保持调用方给出的差集**（本批；未变更行已由管线按「同 ID 同哈希」剔除，见 deliver 的
+		// toWrite）：旧实现在此把写入面覆写为整窗全量 events ✗ ⇒ 同一 event_id 同 canonical_content_hash
+		// 被再写进新代 ⇒ 查询面判重（w21 稿 ② 的根因）。仅当调用方未给出写入面（空）时才回退整窗，
+		// 避免"声明了整窗却没写"。
+		// 压缩是单代取代旧白名单，必须把本日完整 canonical 写入新代，不能只写差集。
 		writeEvents = events
 	}
 	client, frozen, err := m.clientForSource(source)
@@ -1025,15 +5543,48 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		batchFirst = writeEvents[0].EventTimeUTC
 		batchLast = writeEvents[len(writeEvents)-1].EventTimeUTC
 	}
+	// 写面幂等（w21 稿 ②）尚未落地：差集预检与「对账不可用/关闭 ⇒ 整窗重发」（不得放宽）的既有护栏
+	// 存在语义冲突，需先修订设计（仅在已发布面可信时启用 ✓），详见 w21-plan-idempotent-write.md 的后续裁定。
 	slog.Info("投影写入开始",
 		"generation", generation, "source", source.LogSourceID,
 		"events", len(writeEvents), "archiveEvents", len(archiveEvents),
 		"firstEventTime", batchFirst, "lastEventTime", batchLast,
-		)
-	status, err := m.insertInBatches(client, writeEvents, generation)
+	)
+	// 写面幂等（w21 ②，2026-10-10 补上 replace 路径）：插入前对「已写入过的同 id 同 hash」做 id 级过滤。
+	//
+	// 作用域（与既有实现相比只放宽了一处，其余逐字不变）：
+	//   - 慢路径（恢复/重放/非尾部增量）：按「任意未发布代次」过滤（既有行为 ✓）；
+	//   - **replace 路径**（整窗重发/代次用尽/待发布）：按「**本次代次名**」过滤（本次新增）；
+	//   - 增量尾部（tailPlanned）不经过本过滤：本批即新数据，无重复可言。
+	//
+	// 为什么 replace 路径必须过滤（2026-10-10 生产实测）：代次名由 `nextFreeProjectionGeneration`
+	// 在**取 publishMu 之前**确定，并发或重试的两条投递可各自实探「未占用」、算出**同一个名字**，
+	// 随后各写一份完整副本。生产可见后果（同一源、同一 2026-10-05 窗口）：`projection-5` 被整份
+	// 写入两次、内容逐字节相同 ⇒ 该代次条数翻倍（544205 × 2 = 1088410，与 VL 实查吻合）；
+	// 沙箱以生产等效容量复现同样形态（VL 条数 / 唯一事件 = 3.45x）。
+	//
+	// **只缩小插入面，不缩小校验面**（这是与"整批跳过"最要紧的区别）：校验面仍是本次计划的全量，
+	// 于是「上次写全了」⇒ 插入面为空、校验全过、发布照常推进 ✓；「上次只写了一半」⇒ 缺席的那些
+	// 条仍被插入、并按全量复核 ⇒ 自愈 ✓。若做成整批跳过，partial 形态会退化成「永不 publish +
+	// 水位钉死」✗，故本实现刻意不做成那种形态。
+	//
+	// 判据不放宽（红线逐字保持 ✓）：只跳过同 id **且**同 hash ⇒ 同 id 异 hash 的真更正照写 ✓；
+	// 任何查询失败一律照写 ✓；代次白名单与水位语义一字不动 ✓。
+	// 注意：**不得**用 `expectedAuthority != nil` 早短路——分区记录暂缺（重启早期）与幂等无关 ✗。
+	insertEvents := writeEvents
+	if len(writeEvents) > 0 && !tailPlanned {
+		if replace {
+			// 整窗路径：只认本次代次名（`generation` 是本次将要写的那个物理代次）。
+			insertEvents = m.dropEventsAlreadyWritten(client, source, generation, writeEvents)
+		} else {
+			// 慢路径：保持既有口径（任意未发布代次，含更早的 staging 代次）。
+			insertEvents = m.dropEventsAlreadyWritten(client, source, "", writeEvents)
+		}
+	}
+	status, err := m.insertInBatchesCtxYield(ctx, client, insertEvents, generation, yield)
 	slog.Info("投影写入结束",
 		"generation", generation, "source", source.LogSourceID,
-		"events", len(writeEvents), "status", status, "err", err)
+		"events", len(insertEvents), "verified", len(writeEvents), "status", status, "err", err)
 	if err != nil {
 		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
@@ -1053,13 +5604,36 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 			return pipeline.DeliveryResult{HTTPStatus: status}, archiveErr
 		}
 	}
-	if err := m.verifyProjection(client, source, generation, writeEvents); err != nil {
-		return pipeline.DeliveryResult{HTTPStatus: status}, err
+	if passedRuns, verifyErr := m.verifyProjectionCtxYieldRuns(ctx, client, source, generation, writeEvents, yield); verifyErr != nil {
+		// **渐进进展登记（2026-10-10 生产活锁修复，改动 A）**：本批被切成数百簇时，
+		// 单源预算只够跑完其中一部分；旧实现让**已通过的那些簇不留痕迹**，于是每轮都从
+		// 第 1 簇重来、永远跑不完（现场 `inst:220/file`：544205 事件 / 2000 ⇒ 272 簇，
+		// 单源预算 30s 而单簇查询 17–23s ⇒ 每轮只推进约 30 簇且下一轮归零，3.5 小时零进展）。
+		//
+		// 这里把**本次逐字段校验通过**的簇区间并进该源的持久凭据（见 recordVerifiedRuns）：
+		// 它是既有「投递成功」路径（resolveGapsLandedByDelivery）使用的**同一个**原语，
+		// 语义完全一致——只登记 err == nil 的簇，失败簇绝不进入（见 verifyProjectionCtxYieldRuns）。
+		// 于是「已校验覆盖」逐轮累积，即使单轮跑不完全部簇也能持续推进，而不是原地打转。
+		//
+		// 只做 best-effort：登记失败不影响本次结论（校验失败本身就是返回值，如实上报 ✓）。
+		if len(passedRuns) > 0 {
+			key := source.LogSourceID + "/" + source.SourceGeneration
+			m.recordVerifiedRuns(key, passedRuns)
+			slog.Info("投影校验部分通过：已登记本轮逐字段校验覆盖区间（下一轮只差剩余部分）",
+				"generation", generation, "source", source.LogSourceID,
+				"events", len(writeEvents), "passedRuns", len(passedRuns),
+				"verifiedRuns", len(m.verifiedRuns(key)), "err", verifyErr.Error())
+		}
+		// **显式标记「本次已成功写入 VL，但校验未通过」**（见 errProjectionVerifyFailed 的说明）：
+		// 这正是生产循环的形态（写完 573562 条 → 校验不过 → 换代次再写一遍），
+		// 重建调度器据此把它判为**确定性**失败并计上限。不依赖错误串匹配 ⇒ 不会随文案漂移失效。
+		return pipeline.DeliveryResult{HTTPStatus: status}, fmt.Errorf(
+			"ingest: projection %s %w: %w", generation, errProjectionVerifyFailed, verifyErr)
 	}
 	if frozen {
 		return pipeline.DeliveryResult{HTTPStatus: status}, fmt.Errorf("ingest: Catalog write route is frozen; verified staging generation %s remains unpublished", generation)
 	}
-	if err := m.publish(source, generation, events, replace, expectedAuthority); err != nil {
+	if err := m.publishSnapshot(source, generation, events, replace, expectedAuthority, snapshot, true); err != nil {
 		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
 	return pipeline.DeliveryResult{HTTPStatus: status}, nil
@@ -1076,22 +5650,178 @@ const insertBatchMaxEvents = 500
 
 // insertInBatches 按条数上限把事件分批投递到 VL，返回最后一批的 HTTP 状态。
 // 任一批失败即中断，并原样返回该批状态与错误（调用方据此判定投递结果）。
+// dropEventsAlreadyWritten 对「已写入过的同 id 同 hash」做 id 级幂等过滤
+// （w21 ② 第四落点，2026-10-10 扩展到 replace 路径）：≤500 个 event_id 一批查询，
+// 命中则从本次**插入面**剔除 ✓（调用方保持校验面为全量，见 writeProjectionDay 的说明）。
+//
+// generation 参数决定查询标签面（两个口径共用同一实现，不新造平行逻辑 ✓）：
+//   - generation 非空 ⇒ 只认**该物理代次名**（`projection_generation:=<generation>`）——
+//     供 replace 路径掐掉「同名代次被写两次」；
+//   - generation 为空 ⇒ 不限代次标签（只按源 + 源代次）——保持既有语义，
+//     认「任意已写入过的同 id 同 hash」（含更早的未发布 staging 代次），供慢路径使用。
+//
+// 语义与安全：
+//   - 调用点只覆盖**非尾部**路径（replace 与慢路径）⇒ 常规增量尾部零开销 ✓；
+//   - 任何查询失败/权威缺失一律**照写**（宁可多写不漏，绝不因缺证据而少写 ✓）；
+//   - 只跳过同 id **且**同 hash ⇒ 同 id 异 hash 的真更正照写 ✓；
+//   - 调用侧**不得**加 `expectedAuthority != nil` 之类早短路：分区记录暂缺（重启早期）与幂等无关 ✗。
+func (m *Manager) dropEventsAlreadyWritten(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) []logtypes.Event {
+	if client == nil || len(events) == 0 {
+		return events
+	}
+	const identityChunk = 500
+	written := make(map[string]string, len(events))
+	for start := 0; start < len(events); start += identityChunk {
+		end := start + identityChunk
+		if end > len(events) {
+			end = len(events)
+		}
+		ids := make([]string, 0, end-start)
+		seenID := make(map[string]bool, end-start)
+		for _, event := range events[start:end] {
+			if event.EventID == "" || seenID[event.EventID] {
+				continue
+			}
+			seenID[event.EventID] = true
+			ids = append(ids, strconv.Quote(event.EventID))
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		filter := fmt.Sprintf("log_source_id:=%q AND source_generation:=%q",
+			source.LogSourceID, source.SourceGeneration)
+		if generation != "" {
+			// replace 路径：标签面钉到本次物理代次（只掐同名重复，不动跨代次语义）。
+			filter += fmt.Sprintf(" AND projection_generation:=%q", generation)
+		}
+		query := fmt.Sprintf("%s AND event_id:in(%s) | fields event_id, canonical_content_hash | limit 20000",
+			filter, strings.Join(ids, ","))
+		// **必须显式给时间窗**：不带 start/end 的查询会被 VL 以默认全时段
+		// （[1677-09-21, 2262-04-11]）处理，并被 `-search.maxQueryTimeRange` 以 400 拒绝
+		// （2026-10-08 实测记录见 vlsup/cmdline.go）⇒ 本函数走「证据缺失照写」⇒
+		// 幂等过滤整条失效，且**每次分片都会失败**（identityChunk=500，单源段数十万行即数百次）。
+		// 该幂等要掐掉的正是「同名代次被写两次 ⇒ 该代次条数翻倍」（生产实测 544205×2、
+		// VL 条数/唯一事件 3.45x）——失效后该放大原样复现。
+		//
+		// 窗口按本批事件的**自身时间**取（±1s 裕量）。
+		//
+		// **刻意不夹 `source.UTCDay` 日界**（与写后逐字段校验的做法不同）：校验查询按
+		// `log_source_id + source_generation + projection_generation` 取**整批行集**，越界会把
+		// 邻日批次的日界事件带进结果集而误判 duplicate（故校验面必须夹）；本查询只按
+		// `event_id:in(本批 ids)` 取 hash，越界事件的 event_id 不在本批 ids 内、不可能命中，
+		// 故夹日界无收益。反而有害：重放路径的 `source.UTCDay` 与事件所属日**可以不同**
+		// （`daySourceFor` 正是为此把 UTCDay 设为事件日；实时源则取当天），夹住会把合法的
+		// 历史重放事件排除在窗口外 ⇒ 幂等过滤对它们静默失效（本项要防的形态）。
+		var winStart, winEnd time.Time
+		for _, event := range events[start:end] {
+			when, ok := parseEventTimeUTC(event.EventTimeUTC)
+			if !ok {
+				continue
+			}
+			if winStart.IsZero() || when.Before(winStart) {
+				winStart = when
+			}
+			if winEnd.IsZero() || when.After(winEnd) {
+				winEnd = when
+			}
+		}
+		if winStart.IsZero() {
+			// 本片无可用事件时间：**不给窗口会必然被 VL 拒**（见上），故退化为「跳过本片查询、
+			// 照写」——与「证据缺失照写」同方向（宁可多写不漏），且不发出必然失败的请求。
+			continue
+		}
+		winStart = winStart.Add(-time.Second)
+		winEnd = winEnd.Add(time.Second)
+		params := url.Values{
+			"query": {query},
+			"start": {winStart.UTC().Format(time.RFC3339Nano)},
+			"end":   {winEnd.UTC().Format(time.RFC3339Nano)},
+		}
+		err := client.Stream(context.Background(), "/select/logsql/query", params, func(body io.Reader) error {
+			scanner := bufio.NewScanner(io.LimitReader(body, 32<<20))
+			scanner.Buffer(make([]byte, 64*1024), 8<<20)
+			for scanner.Scan() {
+				var row struct {
+					EventID string `json:"event_id"`
+					Hash    string `json:"canonical_content_hash"`
+				}
+				if json.Unmarshal(scanner.Bytes(), &row) == nil && row.EventID != "" {
+					written[row.EventID] = row.Hash
+				}
+			}
+			return scanner.Err()
+		})
+		if err != nil {
+			return events // 证据缺失：照写（宁可多写不漏 ✓）
+		}
+	}
+	if len(written) == 0 {
+		return events
+	}
+	kept := make([]logtypes.Event, 0, len(events))
+	skipped := 0
+	for _, event := range events {
+		if hash, ok := written[event.EventID]; ok && hash == event.CanonicalHash {
+			skipped++
+			continue
+		}
+		kept = append(kept, event)
+	}
+	if skipped > 0 {
+		// 可观测性：跳过条数并入既有 republishSkipped（与"确认快路径"的跳过同口径 ✓）。
+		m.republishSkipped.Add(int64(skipped))
+		if generation != "" {
+			slog.Info("同代次重写：已存在同 id 同 hash，跳过重复插入（校验面不缩小）",
+				"generation", generation, "source", source.LogSourceID,
+				"planned", len(events), "skipped", skipped, "toInsert", len(kept))
+		}
+	}
+	return kept
+}
+
 func (m *Manager) insertInBatches(client *vlsup.Client, events []logtypes.Event, generation string) (int, error) {
+	return m.insertInBatchesCtx(context.Background(), client, events, generation)
+}
+
+func (m *Manager) insertInBatchesCtx(ctx context.Context, client *vlsup.Client, events []logtypes.Event, generation string) (int, error) {
+	return m.insertInBatchesCtxYield(ctx, client, events, generation, nil)
+}
+
+// insertInBatchesCtxYield 是插入循环的**限速形态**：每完成一个批调用一次 yield（可为 nil）。
+//
+// 为什么需要（2026-10-09 生产实证）：单天 57 万事件 = 1147 个 500 条批，原文一次跑完，
+// 期间（连同紧随其后的 287 簇校验）连续吃满算力、把采集轮挤在身后。批间让出把这次重建
+// 从「连续吃满」摊成「间歇性让路」，而让出期间**不持任何锁**。
+//
+// 不变量（安全论证）：yield 只发生在**批与批之间**，不插入到某个批的请求内部，
+// 因此「一个批要么整批成功、要么整批失败」的既有语义逐字不变；批间不改变任何状态，
+// 所以让出既不能把失败变成成功，也不能把已写成功当作失败（幂等由 event_id 承担，既有语义）。
+func (m *Manager) insertInBatchesCtxYield(ctx context.Context, client *vlsup.Client, events []logtypes.Event, generation string, yield func()) (int, error) {
 	status := 0
 	for start := 0; start < len(events); start += insertBatchMaxEvents {
 		end := start + insertBatchMaxEvents
 		if end > len(events) {
 			end = len(events)
 		}
+		// 让出点（重建路径）：在发起本批之前交还时间片，保证采集轮有稳定机会推进。
+		if start > 0 && yield != nil {
+			yield()
+		}
+		if err := ctx.Err(); err != nil {
+			// 取消即收手：已写入的批**保持已写**（VL 幂等由 event_id 承担），
+			// 本次调用方据此判定「未完成」，不得当成发布成功（见 rebuildDays 的返回值语义）。
+			return status, err
+		}
 		payload, err := projectionPayload(events[start:end], generation)
 		if err != nil {
 			return status, err
 		}
-		st, err := client.InsertJSONLines(context.Background(), payload)
+		st, err := client.InsertJSONLines(ctx, payload)
 		status = st
 		if err != nil {
 			return status, err
 		}
+		m.replaceRowsWritten.Add(int64(end - start))
 	}
 	return status, nil
 }
@@ -1158,8 +5888,28 @@ func canonicalEventTime(event logtypes.Event) (time.Time, error) {
 }
 
 func groupEventsByUTCDay(source SourceConfig, events []logtypes.Event) (map[string][]logtypes.Event, []string, error) {
+	// 零让路包装：包外调用点逐字不变 ✓（让路只在常驻对账路径显式启用）。
+	return groupEventsByUTCDayYielding(source, events, 0, 0, nil)
+}
+
+// groupEventsByUTCDayYielding 是**会主动让路**的分组实现（CPU 密集对账的节流口）。
+//
+// 为什么必须让路（2026-10-03 现场 X 光片）：`canonicalDayCounts→groupEventsByUTCDay` 对整源事件
+// 做一次全量分组（单源可达数十万条），在 60 台/113 万条规模下与采集轮**抢核** ✗——采集轮
+// 表现为"明明没等锁、也没等落库，却推进不动"。让路 = 每 slice 条 `time.Sleep(yield)`：
+// 睡眠会把 P 交还调度器 ✓ 采集轮立即获得 CPU ✓；对账自身只多花 O(总条数/slice × yield) ✓
+// （默认 4096 条 / 5ms：10 万条源 ≈ 120ms 额外延迟，可忽略 ✓）。
+//
+// slice<=0 或 yield<=0 ⇒ 零让路（等价于纯函数，测试可关 ✓）。
+func groupEventsByUTCDayYielding(source SourceConfig, events []logtypes.Event, slice int, yield time.Duration, notify func()) (map[string][]logtypes.Event, []string, error) {
 	grouped := make(map[string][]logtypes.Event)
-	for _, event := range events {
+	for i, event := range events {
+		if yield > 0 && slice > 0 && i > 0 && i%slice == 0 {
+			if notify != nil {
+				notify()
+			}
+			time.Sleep(yield)
+		}
 		day, err := eventUTCDay(source, event)
 		if err != nil {
 			return nil, nil, err
@@ -1179,27 +5929,76 @@ func groupEventsByUTCDay(source SourceConfig, events []logtypes.Event) (map[stri
 //
 // 事件体在磁盘段时按日聚合最大末端位置（流式，不载入全量事件）；旧格式仍用内联切片。
 func (m *Manager) publishedClosedForSource(source SourceConfig, saved persistedSource) (uint64, bool) {
+	// ctx 形态是**唯一实现**（见 publishedClosedForSourceCtx）：此处传 Background，保持既有签名
+	// 与语义（既有调用点逐字不变）。投影读取失败在无 ctx 语义下仍表现为「不完整」。
+	closed, complete, _ := m.publishedClosedForSourceCtx(context.Background(), source, saved)
+	return closed, complete
+}
+
+// publishedClosedForSourceCtx 是可取消形态：ctx 在源内聚合的逐行回调处生效（Iterate 逐行回调，
+// 故取消能即时中止段扫描，不必等整源读完），并在内联事件路径的每条事件前校验。
+//
+// 为什么必须可取消（2026-10-02 压测现场）：单源投影查询要扫该源的全部磁盘事件段（生产单源段
+// 达数十万行、全库 18GB），一次整节点解算 = 75 次这样的扫描。此前它压在 cycleMu 上且不可取消；
+// 现在它离锁执行，但**仍必须能被打断**——否则 HTTP 300s 超时之后，服务端还会继续为一份没人
+// 再等的响应扫下去。
+func (m *Manager) publishedClosedForSourceCtx(ctx context.Context, source SourceConfig, saved persistedSource) (uint64, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	dayMaxEnd := map[string]uint64{}
 	if saved.EventsStored && m.events != nil {
 		key := source.LogSourceID + "/" + source.SourceGeneration
-		agg, err := m.events.DayMaxEnd(key, func(ev logtypes.Event) (string, error) {
+		scanRows := 0
+		// **轮内预算**：单源扫描最多花 scanBudgetOf()（超时 ⇒ 证据不完整 ⇒ 不消解/不推进 ✓ 安全方向）。
+		scanCtx, scanCancel := context.WithTimeout(ctx, m.scanBudgetOf())
+		defer scanCancel()
+		agg, err := m.events.DayMaxEndCtx(scanCtx, key, func(ev logtypes.Event) (string, error) {
+			// **段读让路**（2026-10-03 现场 X 光片：readSegment 是每轮重活的 I/O 大头 ✗）：
+			// 每 slice 行交还一次 P ⇒ 与之并行的采集轮不再被单源整段扫描压满 ✓。开销可忽略
+			// （默认 1ms / 8192 行 ⇒ 10 万行源额外 ≈12ms ✓）；ctx 取消仍逐行生效 ✓（语义不变 ✓）。
+			scanRows++
+			if slice := m.scanSliceOf(); slice > 0 && scanRows%slice == 0 {
+				if m.scanYieldNotify != nil {
+					m.scanYieldNotify()
+				}
+				if y := m.scanYieldOf(); y > 0 {
+					time.Sleep(y)
+				}
+			}
 			return eventUTCDay(source, ev)
 		})
 		if err != nil {
-			return 0, false
+			if errors.Is(err, context.DeadlineExceeded) {
+				// 超预算：按"证据不完整"处理（**不是**错误 ⇒ 上层不消解缺口、不推进水位 ✓），
+				// 下一轮继续扫；这样单源大扫描不会把整轮撑成分钟级 ✗。
+				m.scanBudgetExceeded.Add(1) // 观测口：无条件的截断计数 ✓
+				return 0, false, nil
+			}
+			return 0, false, err
 		}
 		dayMaxEnd = agg
 	} else {
 		for _, event := range saved.Events {
+			if err := ctx.Err(); err != nil {
+				return 0, false, err
+			}
 			day, err := eventUTCDay(source, event)
 			if err != nil {
-				return 0, false
+				return 0, false, err
 			}
 			if event.Record.End > dayMaxEnd[day] {
 				dayMaxEnd[day] = event.Record.End
 			}
 		}
 	}
+	closed, complete := m.publishedClosedFromDayMax(source, dayMaxEnd)
+	return closed, complete, nil
+}
+
+// publishedClosedFromDayMax 是「按日最大末端 + 已发布投影」推导保守封闭前缀的纯计算部分
+// （与改动前的实现逐字相同，只是从 publishedClosedForSource 中抽出以便 ctx 形态复用）。
+func (m *Manager) publishedClosedFromDayMax(source SourceConfig, dayMaxEnd map[string]uint64) (uint64, bool) {
 	days := make([]string, 0, len(dayMaxEnd))
 	for day := range dayMaxEnd {
 		days = append(days, day)
@@ -1269,9 +6068,20 @@ func (m *Manager) clientForSource(source SourceConfig) (*vlsup.Client, bool, err
 }
 
 // 投影校验的退避默认值（B1c）。
+//
+// 上限由 2s 收紧到 500ms 的依据（2026-10-01 实测，探针见 docs/specs/log-verify-chunking/spec.md §6）：
+// VL 的「写入 → 可查询」延迟**恒定**在 1011–1029 ms（20/20 次，见可见延迟探针），
+// 而退避序列 200/400/800/封顶 2s 的探测点是 0 / 0.2 / 0.6 / **1.4** s —— 恰好在 1.0 s 附近
+// 没有探测点，每次批级校验都白等约 0.4 s（真进程夹具批级 verify p50 = 1411 ms）。
+// 封顶 500ms 后探测点变为 0 / 0.2 / 0.6 / 1.1 s，数据一可见就命中并返回。
+//
+// 为什么不是「固定 200ms 轮询」：2026-09-28 生产事故正是固定间隔轮询到 30 秒超时
+// （单源最多约 150 次查询，把 VL 与磁盘一起压垮）。本改动保持**指数退避**语义，
+// 只把封顶从 2s 收到 500ms——等待更久时（数据长期不可见）2 秒窗口内的查询次数是 5 次，
+// 仍远低于事故时的量级；查询成本本身也已被分簇压到「每批 1 次」（见 verifyChunkEvents）。
 const (
 	defaultVerifyBackoffMin = 200 * time.Millisecond
-	defaultVerifyBackoffMax = 2 * time.Second
+	defaultVerifyBackoffMax = 500 * time.Millisecond
 )
 
 // nextVerifyBackoff 返回下一次退避时长：指数增长并封顶（B1c）。
@@ -1289,33 +6099,494 @@ func nextVerifyBackoff(cur, max time.Duration) time.Duration {
 	return next
 }
 
-// verifyProjection 分批校验投影可见性。
+// 投影校验的分簇与并发参数（FR-498 P0 优化，2026-10-01）。
+const (
+	// defaultVerifyChunkEvents 是单次校验查询覆盖的事件上限。
+	//
+	// 与写入批上限（insertBatchMaxEvents=500）**解耦**：写入批上限保护的是单次插入请求的体积，
+	// 而校验查询的成本由「查询窗口内返回的行数」决定，与「本次要求可见的事件数」几乎无关——
+	// 分片越细，越多的查询会重复读回同一批行。实测（本地饱和夹具 60 源 ×30 行/s，详见
+	// docs/specs/log-verify-chunking/spec.md）：旧实现按 500 条索引切片、各片时间窗相互重叠，
+	// 读回量被放大到 k×n（k=片数）；单次校验查询 141ms 里 VL 首字节仅 3.5ms，
+	// 其余全是返回体的传输与逐行 JSON 解析。2000 与「单源单次 poll 的典型满批」一致：
+	// 常见情形下一批只需 1 次查询。
+	// defaultVerifyMaxPerSecond / defaultVerifyMaxInFlight 是校验/对账查询的**全局天花板**默认值
+	// （天花板语义：令牌桶容量 = 速率 ⇒ 正常路径的少量查询一次性放行、零等待 ✓）。
+	defaultVerifyMaxPerSecond = 30
+	defaultVerifyMaxInFlight  = 6
+	// defaultVerifyMaxQueriesPerChunk 是**单簇**一次校验的尝试次数上限（从源头降量）。
+	//
+	// 退避重试原本会一直重试到校验窗口耗尽（生产 5 分钟 ⇒ 单簇 150+ 次查询 ✗）；窗口仍决定
+	// "等多久"，本预算决定"最多问几次"，两者取先到者。
+	defaultVerifyMaxQueriesPerChunk = 12
+	// defaultVerifyRoundBudget 是**每源每轮**的校验时间预算默认值（键
+	// log_index.verify.round_budget 可配）。
+	//
+	// 取值依据（2026-10-03 回退修复实测）：原默认 1.5s 时**整轮预算**被少数源用尽 ⇒ 其余源
+	// 每轮 defer（60 源 × 60 行/s 夹具实测 verify 停摆 98%）；调档到 30s 后同口径夹具
+	// verify 1108/1108 全成功、事件速率 3255/s（≈基线 3340）、defer=0。
+	// 30s 依轮墙钟估算（60 源 / 8 并发 × ~1.2s/源 ≈ 9s）留 ≥3 倍余量；防护仍在（轮墙钟有界）。
+	defaultVerifyRoundBudget = 30 * time.Second
+	// defaultVerifyChunkBudgetSafety / defaultVerifyChunkBudgetMax 是「单源校验预算随事件数
+	// 放大」的安全系数与上限（改动 B；键 log_index.verify.chunk_estimate / chunk_budget_max）。
+	//
+	// 安全系数取 1.5：单簇估计本就要求「保守取大」，再乘 1.5 是为并发度/限速闸下的排队
+	// 留余量（`verifyLimiter` 的 max_in_flight 会让部分簇排在别的源后面）。
+	//
+	// 上限取 5 分钟（与默认单簇窗口 verificationTimeout 同量级）：现场 272 簇 × 23s ≈ 104
+	// 分钟**不可接受**——那会让单源占住校验额度近两小时、轮内其他源被饿死 ✗。
+	// 超过上限的部分交给改动 A 的逐轮渐进收敛（这正是 A、B 必须成对落地的原因）。
+	// 注意上限**只封顶放大值**：常量预算（round_budget）比它大时以 round_budget 为准 ✓。
+	defaultVerifyChunkBudgetSafety = 1.5
+	defaultVerifyChunkBudgetMax    = 5 * time.Minute
+	defaultVerifyChunkEvents       = 2000
+	// defaultVerifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取该默认，1 为串行。
+	// 校验查询的成本几乎全在「返回体传输 + 客户端逐行 JSON 解析」，属可并行部分；
+	// 跨源并发（pollConcurrency）只重叠了源与源之间的等待，源内部的等待仍逐个叠加。
+	defaultVerifyChunkConcurrency = 4
+	// verifySlowQueryThreshold 是单次校验查询的慢查询告警阈值。旧实现只打「查询开始」，
+	// 慢查询在现场不可见（FR-498 定位耗时构成的主要困难之一）。
+	verifySlowQueryThreshold = 500 * time.Millisecond
+)
+
+// verifyQueryStats 累计一次投影校验的读回量（观测面与回归读数）。
+type verifyQueryStats struct {
+	Queries int
+	Rows    int64
+	Bytes   int64
+}
+
+// verifyEventTimeKey 返回事件用于分簇排序的时间键；不可解析的时间按零值处理
+// （排在最前，彼此相等，保证排序的严格弱序）。
+func verifyEventTimeKey(event logtypes.Event) time.Time {
+	if when, err := canonicalEventTime(event); err == nil {
+		return when
+	}
+	return time.Time{}
+}
+
+// planVerifyChunks 把整批事件按**事件时间**排序后，每 max 条切成一簇。
+//
+// 为什么按时间切（FR-498 P0）：旧实现按**索引**每 500 条切一片，每片用「本片事件的
+// [min-1s, max+1s]」查询。批内事件的时间与索引顺序并不一致（多条流混合、时间戳跳变、
+// 跨日批次），各片时间窗因而相互重叠，**同一批的每一行都会被重复读回 k 次**（k=片数）。
+// 按时间切簇后，各簇窗口只覆盖自己的时间范围（相邻簇最多在 ±1s 容差处相接），
+// 读回总量从 k×n 降到 ≈n：簇内跨度是 min/max 决定的，排序本身就让相邻簇的窗口不再互相包含。
+//
+// 语义不变：每个事件仍必须在其所属簇的窗口内可见且内容逐字段一致；allowed（整批）的接受规则、
+// 重复/多余检测、退避与超时语义全部保持原样（见 verifyProjectionQuery）。
+func planVerifyChunks(events []logtypes.Event, max int) [][]logtypes.Event {
+	if len(events) == 0 {
+		return nil
+	}
+	if max <= 0 {
+		max = defaultVerifyChunkEvents
+	}
+	ordered := make([]logtypes.Event, len(events))
+	copy(ordered, events)
+	// 稳定排序：同一时间戳的事件保持原索引顺序，不改变可观察的判定顺序。
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return verifyEventTimeKey(ordered[i]).Before(verifyEventTimeKey(ordered[j]))
+	})
+	chunks := make([][]logtypes.Event, 0, (len(ordered)+max-1)/max)
+	for start := 0; start < len(ordered); start += max {
+		end := start + max
+		if end > len(ordered) {
+			end = len(ordered)
+		}
+		chunks = append(chunks, ordered[start:end])
+	}
+	return chunks
+}
+
+// verifyProjection 校验整批事件的投影可见性。
 //
 // 分批是必须的：VL 对单次查询有内存上限，而恢复期的事件数是整批积压（实测 747,822 条会让 VL
 // 返回 400 `cannot calculate [sort by (_time) desc limit ...]`）。但**分批必须让期望集覆盖整批**：
 // 各分片的时间范围会重叠（真实事件常共享时间戳），第 N 片的查询会返回其他分片的事件；
 // 若只以本片为期望集，这些记录会被误判为 unexpected（2026-09-28 生产实测）。
+//
+// 分簇按**事件时间**而非索引（见 planVerifyChunks），簇内并发执行（见 verifyChunkConcurrency）。
+// 错误语义与串行实现一致：任一簇失败即整体失败，返回**最先观察到**的那个错误，并取消其余簇。
 func (m *Manager) verifyProjection(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
+	return m.verifyProjectionCtx(context.Background(), client, source, generation, events)
+}
+
+func (m *Manager) verifyProjectionCtx(parent context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) error {
+	return m.verifyProjectionCtxYield(parent, client, source, generation, events, nil)
+}
+
+// verifyProjectionCtxYield 是校验的**限速形态**：每开始一个校验簇之前调用一次 yield（可为 nil）。
+//
+// 为什么需要：生产循环里一次重建要校验 **287 个簇**（573562 事件 / 2000 条每簇），
+// 这些簇以 `verifyChunkConcurrency`（默认 4）并发跑完；原文一次连续跑完，
+// 期间它与采集轮的校验查询争同一条全局天花板（`verifyLimiter`）。簇间让出把这次争抢摊开。
+//
+// 不变量（安全论证）：yield 只发生在**簇派发之前**，不改变分簇、并发度、退避、
+// 错误分类与判定优先级——即它无法让「校验不通过」变成「校验通过」（那是不可能的：
+// yield 不接触任何统计量或判定分支）。取消语义同样不变：parent 取消仍在派发前被观察到。
+func (m *Manager) verifyProjectionCtxYield(parent context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, yield func()) error {
+	_, err := m.verifyProjectionCtxYieldRuns(parent, client, source, generation, events, yield)
+	return err
+}
+
+// verifyProjectionCtxYieldRuns 是校验的完整形态：在既有**错误语义逐字不变**的前提下，
+// 额外返回「本次**逐字段校验通过**的簇所覆盖的源位置连续区间」。
+//
+// 为什么需要它（2026-10-10 生产活锁修复，改动 A）：大积压单批会被切成数百簇（现场
+// `inst:220/file` 544205 事件 / 2000 ⇒ **272 簇**），而单源预算只够跑完其中几簇 ⇒ 整批
+// 永远拿不到「全部可见」的结论 ⇒ 不 publish ⇒ 代次不推进 ⇒ 下一轮从头再校验同一批。
+// 旧实现里**已经成功的那几簇不留任何痕迹**，于是每一轮都在重复同一段无效功（活锁）。
+// 返回已通过区间后，调用方可以把这份**渐进进展**登记进源的持久凭据（VerifiedRuns），
+// 使「已校验覆盖」逐轮累积而不是逐轮归零。
+//
+// 语义红线（务必保持）：
+//   - **返回值 err 的判定完全不变**——只有全部簇成功才是 nil；部分成功仍返回错误，
+//     错误来源与优先级（semanticErr > otherErr > parent.Err()）逐字与修复前一致。
+//   - 返回的区间只是**附带信息**，绝不参与「校验是否通过」的判定。
+//   - 只累积 **err == nil 的簇**：失败簇（含被取消、被预算 defer、未能可见的簇）的区间
+//     一律不得出现在结果里，否则会把「没校验过」的字节宣称成「已逐字段校验通过」。
+func (m *Manager) verifyProjectionCtxYieldRuns(parent context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, yield func()) ([]ledger.PositionRange, error) {
+	if len(events) == 0 {
+		return nil, nil
+	}
+	// **预算起点后移（2026-10-04，父级裁定 b'）**：单源处理链（全量重写 47 万事件 + 等待）可远超
+	// 单源预算；起点停在"源处理开头"时，轮到校验时预算早已耗尽 ⇒ 237 簇只查得动 1 簇（现场
+	// queries=0/1 交替）⇒ 整批永不通过 ⇒ 不 publish ⇒ 下轮重写同一批——"events 恒定 × generation
+	// 递增"的自锁循环之因。在"即将校验"处重新计时 ⇒ 本批校验拥有完整的单源预算；
+	// 轮墙钟上界仍 = ⌈源数/并发⌉ × 预算（有界不破 ✓）。
+	//
+	// **改动 B（2026-10-10）**：此处同时把**本批事件数**交给预算计算——簇数随积压线性增长
+	// （现场 544205 事件 = 272 簇），常量预算下大积压永远跑不完（活锁）。默认仍为常量预算。
+	m.setVerifySourceDeadlineFor(source, len(events))
+	// 可见性错开（2026-10-03 回退修复 ②）：本函数紧跟在 insert 之后调用 —— VL 的
+	// 「写入→可查询」有 ~1.02s 硬地板（本仓实测 1011–1029ms，恒定）。立即探测必然全落在
+	// 地板内（0/0.2/0.6s 三次无效探测 + 查询开销全白做）。配了 floor 时先等到地板之后再探测
+	// ⇒ 首探即命中。关闭（默认）时行为与本修复前逐字不变 ✓。
+	if floor := m.verifyVisibilityFloorOf(); floor > 0 {
+		timer := time.NewTimer(floor)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-parent.Done():
+			return nil, parent.Err()
+		}
+	}
 	allowed := make(map[string]logtypes.Event, len(events))
 	for _, event := range events {
 		allowed[event.EventID] = event
 	}
-	for start := 0; start < len(events); start += insertBatchMaxEvents {
-		end := start + insertBatchMaxEvents
-		if end > len(events) {
-			end = len(events)
+	chunks := planVerifyChunks(events, m.verifyChunkEvents)
+	concurrency := m.verifyChunkConcurrency
+	if concurrency <= 0 {
+		concurrency = defaultVerifyChunkConcurrency
+	}
+	if concurrency > len(chunks) {
+		concurrency = len(chunks)
+	}
+	started := time.Now()
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+
+	var (
+		mu          sync.Mutex
+		stats       verifyQueryStats
+		semanticErr error
+		otherErr    error
+		// verifiedRuns 累积「本次**逐字段校验通过**（err == nil）的簇」所覆盖的源位置区间。
+		// 由 mu 保护（簇在多个 goroutine 里跑）。语义见 verifyProjectionCtxYieldRuns 的红线。
+		verifiedRuns []ledger.PositionRange
+	)
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range next {
+				chunkStats, err := m.verifyProjectionChunk(ctx, client, source, generation, chunks[idx], allowed)
+				mu.Lock()
+				stats.Queries += chunkStats.Queries
+				stats.Rows += chunkStats.Rows
+				stats.Bytes += chunkStats.Bytes
+				if err == nil {
+					// 本簇**逐字段校验通过**：把它的覆盖区间记下来（渐进进展的唯一来源）。
+					// 失败簇绝不进入这里——那会把「没校验过」的字节宣称成已校验。
+					verifiedRuns = append(verifiedRuns, gapRangesOfEvents(chunks[idx])...)
+				} else {
+					// 判定类错误优先于「被取消的查询」产生的传输类噪音（见 verifyErrorIsSemantic）：
+					// 否则首个失败取消其余簇后，现场看到的会是被取消查询的 context canceled /
+					// 半行 JSON 解析错误，而真正的根因被掩盖。
+					if verifyErrorIsSemantic(err) {
+						if semanticErr == nil {
+							semanticErr = err
+						}
+					} else if otherErr == nil {
+						otherErr = err
+					}
+				}
+				mu.Unlock()
+				if err != nil {
+					// 只有携带「明确根因」的失败才取消其余簇（永久失败 / 内容不一致、多余或重复、
+					// 事件集非法这类**确定性**判定）：此时收敛是安全的，根因已经拿到。
+					//
+					// 超时类失败**不取消**：它往往只说明"本批数据尚不可见"，而其余簇此刻可能正读到
+					// 真正的根因（例如某一行内容不一致）；取消会把那个结论一并抹掉，让现场只剩
+					// 取消噪音（2026-10-01 在 `-race` 下实测到该形态：注入的"写错一行"被
+					// `verification failed: context deadline exceeded` 覆盖）。
+					//
+					// 该策略此前**没有真正生效**：本簇到期唯一的错误文案
+					// `not fully visible before deadline` 曾被 verifyErrorIsSemantic 判为判定类，
+					// 于是任一簇到期都会走 cancel()（2026-10-02 复审 P1-3 修正，回归见
+					// verify_cancel_classification_test.go）。
+					if vlsup.IsPermanent(err) || verifyErrorIsSemantic(err) {
+						cancel()
+					}
+				}
+			}
+		}()
+	}
+	for i := range chunks {
+		if ctx.Err() != nil {
+			break // 已有簇失败：不再派发后续簇（与串行实现「失败即返回」一致）
 		}
-		if err := m.verifyProjectionChunk(client, source, generation, events[start:end], allowed); err != nil {
-			return err
+		// 让出点（重建路径）：在派发本簇之前交还时间片。位置在**判定之前**，故它不影响
+		// 「谁成功谁失败」；只影响这次校验把多少算力连续压在节点上。
+		if i > 0 && yield != nil {
+			yield()
+		}
+		select {
+		case next <- i:
+		case <-ctx.Done():
 		}
 	}
-	return nil
+	close(next)
+	wg.Wait()
+
+	elapsed := time.Since(started)
+	mu.Lock()
+	finalStats, verdict := stats, semanticErr
+	if verdict == nil {
+		verdict = otherErr
+	}
+	if verdict == nil {
+		verdict = parent.Err()
+	}
+	// 只在**未全部通过**时给出「已通过簇」的区间：全通过时调用方手里已有更强的事实
+	//（整批可见），且那条路径已有自己的区间凭据登记（见 resolveGapsLandedByDelivery）——
+	// 在这里为几十万事件做一次合并排序纯属浪费。故 nil 区间在成功路径上**不表示无进展**。
+	passed := []ledger.PositionRange(nil)
+	if verdict != nil {
+		passed = ledger.MergePositionRanges(verifiedRuns)
+	}
+	passedRuns := len(passed)
+	mu.Unlock()
+	slog.Info("投影校验完成",
+		"generation", generation, "source", source.LogSourceID,
+		"events", len(events), "chunks", len(chunks), "concurrency", concurrency,
+		"queries", finalStats.Queries, "rows", finalStats.Rows, "bytes", finalStats.Bytes,
+		"passedRuns", passedRuns,
+		"elapsedMs", elapsed.Milliseconds(), "err", errText(verdict))
+	return passed, verdict
 }
 
-// verifyProjectionChunk 校验单批事件在 VL 中完全可见（退避重试 + 永久错误立即失败）。
-// allowed 是「可接受集合」（整批积压的全部事件）：本批之外的记录只要属于该集合且内容一致即接受。
-func (m *Manager) verifyProjectionChunk(client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) error {
-	ctx, cancel := context.WithTimeout(context.Background(), m.verificationTimeout)
+// verifyErrorIsTimeoutLike 判定错误是否只是「本簇自己的校验窗口到期」的产物
+// （客户端取消/超时引发的传输类错误），而不是 VL 给出的语义结论。
+func verifyErrorIsTimeoutLike(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "context canceled")
+}
+
+// verifyErrorIsSemantic 判定错误是否属于「校验自身的**确定性**判定结论」——内容不一致 /
+// 多余或重复 / 永久失败 / 事件集非法——而不是「同批其他簇失败后取消」引发的传输类噪音，
+// 也不是「本簇窗口到期仍不可见」这类**尚未定型**的结论。
+//
+// 为什么需要区分（2026-10-01 实测）：同批多簇并发执行时，首个失败会取消其余查询；被取消的
+// 请求可能报出 `context canceled`，或把被截断的响应体报成 `unexpected end of JSON input`。
+// 若让「最先观察到者胜出」，现场看到的就可能是被取消查询的噪音，真正根因（例如内容不一致）
+// 被掩盖。故判定类错误优先返回（串行实现下本来也只会返回判定类错误，语义一致）。
+//
+// 为什么**不含**「not fully visible before deadline」（2026-10-02 复审 P1-3）：
+// 那是本簇自己的窗口到期产生的**非确定性**结论（数据可能只是可见性延迟，退避重试本就是为它
+// 准备的），而它恰恰是 chunk 超时时**唯一**的错误文案。一旦把它算作判定类，任一簇到期就会
+// `cancel()` 其余簇——另一簇即将读到的真根因（例如内容不一致）被
+// `aborted by batch cancellation` 覆盖，现场只剩「不可见 + 取消」的噪音。
+// 因此取消只允许由 vlsup.IsPermanent 与真正的判定类错误触发（见 verifyProjection 的取消策略）。
+func verifyErrorIsSemantic(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, marker := range []string{
+		"projection content mismatch",
+		"unexpected or duplicate projection event_id",
+		"verification failed permanently",
+		"duplicate canonical event_id",
+		"invalid canonical event time",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// verifySourceBudgetState 是单源校验预算的原子状态（per-source，见 Manager.verifySourceBudget）。
+type verifySourceBudgetState struct {
+	deadlineNanos atomic.Int64 // = now + verifyRoundBudget（unix nanos；0=不限）
+	progressed    atomic.Int64 // 本源已推进的校验块数（"每源至少推进一块"的保底判据）
+}
+
+// verifySourceState 返回（必要时创建）某源的预算状态。
+func (m *Manager) verifySourceState(source SourceConfig) *verifySourceBudgetState {
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	if v, ok := m.verifySourceBudget.Load(key); ok {
+		return v.(*verifySourceBudgetState)
+	}
+	actual, _ := m.verifySourceBudget.LoadOrStore(key, &verifySourceBudgetState{})
+	return actual.(*verifySourceBudgetState)
+}
+
+// setVerifySourceDeadline 在**每源处理前**为该源设置独立预算（轮内采集路径调用；
+// 每源相互独立 ⇒ 慢源耗尽自身预算不再拖累同轮其他源 ✓）。
+//
+// 注意：这里用的是**与事件数无关的常量预算**（= 修复前的语义）。真正要校验的那一批事件
+// 大小在这一刻尚未确定（要等 poll/deliver 走到校验面），故"随事件数放大"由
+// setVerifySourceDeadlineFor 在**即将校验**处覆盖（见 verifyProjectionCtxYieldRuns）。
+func (m *Manager) setVerifySourceDeadline(source SourceConfig) {
+	m.setVerifySourceDeadlineFor(source, 0)
+}
+
+// setVerifySourceDeadlineFor 按**本批事件数**设置该源的校验预算（0 = 用常量预算，
+// 即与修复前逐字一致）。
+//
+// 改动 B（2026-10-10 生产活锁修复）：预算 = max(常量预算, ⌈事件数/簇粒度⌉ × 单簇估计 × 安全系数)，
+// 并**必定**被 Max 封顶。理由见 VerifyChunkEstimates；保守默认（PerChunk ≤ 0）下本函数
+// 与修复前完全等价（返回常量预算）⇒ 不影响任何现有源。
+//
+// 上限为何必须存在：无上限时 272 簇 × 23s ≈ 104 分钟会占住单源近两小时的校验额度，
+// 采集轮的单源墙钟随之失控（轮内其他源被饿死）。有上限后，超出部分依赖改动 A 的
+// 逐轮渐进收敛——这正是两者必须成对落地的原因。
+func (m *Manager) setVerifySourceDeadlineFor(source SourceConfig, events int) {
+	if m == nil {
+		return
+	}
+	st := m.verifySourceState(source)
+	st.deadlineNanos.Store(time.Now().Add(m.verifyBudgetOfEvents(events)).UnixNano())
+	st.progressed.Store(0)
+}
+
+// verifyBudgetOfEvents 按本批事件数计算单源校验预算（改动 B 的唯一判据处）。
+func (m *Manager) verifyBudgetOfEvents(events int) time.Duration {
+	base := m.verifyRoundBudgetOf()
+	if m == nil || events <= 0 {
+		return base
+	}
+	est := m.verifyChunkEstimatesOf()
+	if est.PerChunk <= 0 {
+		// 未启用放大：预算与修复前逐字一致（保守默认，绝不影响现有源 ✓）。
+		return base
+	}
+	chunkEvents := m.verifyChunkEvents
+	if chunkEvents <= 0 {
+		chunkEvents = defaultVerifyChunkEvents
+	}
+	chunks := (events + chunkEvents - 1) / chunkEvents
+	safety := est.Safety
+	if safety <= 0 {
+		safety = defaultVerifyChunkBudgetSafety
+	}
+	scaled := time.Duration(float64(est.PerChunk) * float64(chunks) * safety)
+	if scaled <= 0 {
+		// 溢出保护：折算结果溢出（极端配置）时按上限处理，绝不回落到小预算。
+		scaled = time.Duration(1) << 62
+	}
+	if scaled <= base {
+		// 常量预算本来就够：不动（放大只在"常量不够"时才生效 ✓）。
+		return base
+	}
+	max := est.Max
+	if max <= 0 {
+		max = defaultVerifyChunkBudgetMax
+	}
+	if scaled > max {
+		scaled = max
+	}
+	if scaled < base {
+		// 上限低于运维显式配置的常量预算：常量预算是运维的直接意图，优先于本项放大上限 ✓
+		// （上限只用来封顶**放大值**，不回头压低显式配置 ✗）。
+		scaled = base
+	}
+	return scaled
+}
+
+// verifyBudgetFor 计算本簇可用的校验超时与"是否必须延期"（把原 verifyProjectionChunk 的
+// 内联预算判定抽出，**per-source 优先、轮级兜底**）。
+//
+// 语义（与 #41 的"轮级 1.5s→30s"衔接）：轮级预算在**深积压长轮**下仍会被轮内前段源吃光
+// ⇒ 后段源 queries=0 直接 defer（现场：新进程 verify 13 批 0 成功）。per-source 后，
+// **每源都有自己的截止**，互不拖累（消队头阻塞）；"每源至少推进一块"的保底判据同步 per-source 化。
+func (m *Manager) verifyBudgetFor(source SourceConfig, generation string) (time.Duration, error) {
+	timeout := m.verificationTimeout
+	if m == nil {
+		return timeout, nil
+	}
+	// 1) per-source（轮内采集路径优先）
+	if v, ok := m.verifySourceBudget.Load(source.LogSourceID + "/" + source.SourceGeneration); ok {
+		st := v.(*verifySourceBudgetState)
+		if deadlineNanos := st.deadlineNanos.Load(); deadlineNanos > 0 {
+			if remaining := time.Until(time.Unix(0, deadlineNanos)); remaining < timeout {
+				if st.progressed.Load() == 0 {
+					// 保底放行：本源还没完成过任何一块 ⇒ 即使预算已用尽也放行本块 ✓。
+					st.progressed.Add(1)
+				} else {
+					m.verifyDeferred.Add(1)
+					if remaining <= 0 {
+						return 0, fmt.Errorf("ingest: projection %s %w (round budget exhausted)", generation, ErrVerifyDeferred)
+					}
+					return remaining, nil
+				}
+				st.progressed.Add(1)
+			}
+			return timeout, nil
+		}
+	}
+	// 2) 轮级兜底（启动恢复/对账等非"每源"路径：语义与修复前逐字一致）
+	if deadlineNanos := m.verifyRoundDeadline.Load(); deadlineNanos > 0 {
+		if remaining := time.Until(time.Unix(0, deadlineNanos)); remaining < timeout {
+			if m.verifyRoundProgress.Load() == 0 {
+				m.verifyRoundProgress.Add(1)
+			} else {
+				m.verifyDeferred.Add(1)
+				if remaining <= 0 {
+					return 0, fmt.Errorf("ingest: projection %s %w (round budget exhausted)", generation, ErrVerifyDeferred)
+				}
+				return remaining, nil
+			}
+			m.verifyRoundProgress.Add(1)
+		}
+	}
+	return timeout, nil
+}
+
+// verifyProjectionChunk 校验单个簇的事件在 VL 中完全可见（退避重试 + 永久错误立即失败）。
+// allowed 是「可接受集合」（整批积压的全部事件）：本簇之外的记录只要属于该集合且内容一致即接受。
+// parent 是整批的 ctx：同批其他簇失败/超时会取消它——此时本簇不得把取消噪音（context canceled、
+// 被截断响应体的 JSON 解析错误）当成自己的校验结论，否则现场看到的会是噪音而非真正根因。
+func (m *Manager) verifyProjectionChunk(parent context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) (verifyQueryStats, error) {
+	// 校验预算：**per-source 优先**（消队头阻塞：慢源不再吃掉整轮预算 ⇒ 轮内后段源不再被连坐），
+	// 轮级兜底（启动恢复/对账等非"每源"路径语义与修复前逐字一致 ✓）。判定细则见 verifyBudgetFor。
+	timeout, budgetErr := m.verifyBudgetFor(source, generation)
+	if budgetErr != nil {
+		return verifyQueryStats{}, budgetErr
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	// 退避重试（B1c）：原实现以固定 200ms 轮询直至超时（默认 30 秒 ≈ 最多约 150 次校验
 	// 查询/源）。高负载时每次查询更慢、重试互相叠加，会把 VL 与磁盘一起压垮——2026-09-28
@@ -1323,52 +6594,154 @@ func (m *Manager) verifyProjectionChunk(client *vlsup.Client, source SourceConfi
 	// 现改为指数退避封顶，并让「重试无意义」的错误（认证失败 / 4xx 语义错误）立即失败。
 	backoff := m.verifyBackoffMin
 	var lastErr error
+	var stats verifyQueryStats
+	maxQueries := m.verifyMaxQueriesPerChunk
+	if maxQueries <= 0 {
+		maxQueries = defaultVerifyMaxQueriesPerChunk
+	}
 	for {
-		complete, err := m.verifyProjectionOnceAllowed(ctx, client, source, generation, events, allowed)
+		if stats.Queries >= maxQueries {
+			// 尝试预算用尽：结论必须与「窗口到期仍不可见」**逐字一致** ✗——绝不返回 nil
+			// （那会被当成"校验通过"，是比慢更坏的错 ✗）。措辞沿用下面窗口到期那条。
+			if lastErr != nil {
+				return stats, fmt.Errorf("ingest: projection %s verification failed: %w", generation, lastErr)
+			}
+			return stats, fmt.Errorf("ingest: projection %s not fully visible before deadline: %w", generation, context.DeadlineExceeded)
+		}
+		queryStarted := time.Now()
+		complete, queryStats, err := m.verifyProjectionQuery(ctx, client, source, generation, events, allowed)
+		elapsed := time.Since(queryStarted)
+		stats.Queries++
+		stats.Rows += queryStats.Rows
+		stats.Bytes += queryStats.Bytes
+		if elapsed >= verifySlowQueryThreshold {
+			// 慢查询单独留痕：读回量（rows/bytes）是判定「窗口内行数过多」还是「VL 慢」的关键。
+			slog.Warn("投影校验慢查询",
+				"generation", generation, "source", source.LogSourceID,
+				"events", len(events), "rows", queryStats.Rows, "bytes", queryStats.Bytes,
+				"elapsedMs", elapsed.Milliseconds())
+		}
+		// 父 ctx 已取消（同批其他簇已拿到明确根因）：本簇的"尚未可见"结论已无意义，立即收手。
+		// 注意顺序——先处理本次查询自身的结论，再看取消：判定类错误是本簇的真实结论，
+		// 不能被"别的簇先失败"抹掉（见 verifyProjection 的取消策略）。
 		if complete && err == nil {
-			return nil
+			return stats, nil
 		}
 		if err != nil {
 			if vlsup.IsPermanent(err) {
-				return fmt.Errorf("ingest: projection %s verification failed permanently: %w", generation, err)
+				return stats, fmt.Errorf("ingest: projection %s verification failed permanently: %w", generation, err)
 			}
-			lastErr = err
+			// 判定类错误（内容不一致 / 多余或重复 / 事件集非法）是**确定性结论**：VL 里的行内容
+			// 已经定型，退避重试不会改变它。旧实现会把它当普通失败继续重试到窗口结束
+			// （默认 5 分钟）才报出同一结论——纯浪费，且让现场多等一个窗口。
+			// 错误前缀与「重试到窗口结束」路径保持逐字一致，调用方的断言与判读不受影响。
+			if verifyErrorIsSemantic(err) {
+				return stats, fmt.Errorf("ingest: projection %s verification failed: %w", generation, err)
+			}
+			if parent.Err() == nil {
+				lastErr = err
+			} else {
+				return stats, fmt.Errorf("ingest: projection %s verification aborted by batch cancellation: %w", generation, parent.Err())
+			}
+		}
+		if parentErr := parent.Err(); parentErr != nil {
+			return stats, fmt.Errorf("ingest: projection %s verification aborted by batch cancellation: %w", generation, parentErr)
 		}
 		select {
 		case <-ctx.Done():
-			if lastErr != nil {
-				return fmt.Errorf("ingest: projection %s verification failed: %w", generation, lastErr)
+			// 本簇窗口到期：根因就是「到期仍不可见」。lastErr 若只是本簇自己的超时引发的传输类
+			// 错误（context deadline exceeded / canceled），不改变这一结论——否则现场会把
+			// 「数据没可见」误读成「查询失败」（2026-10-01 在 `-race` 下实测到该形态：
+			// 注入「少写一行」后错误被改写成 verification failed: context deadline exceeded）。
+			if lastErr != nil && !verifyErrorIsTimeoutLike(lastErr) {
+				return stats, fmt.Errorf("ingest: projection %s verification failed: %w", generation, lastErr)
 			}
-			return fmt.Errorf("ingest: projection %s not fully visible before deadline: %w", generation, ctx.Err())
+			return stats, fmt.Errorf("ingest: projection %s not fully visible before deadline: %w", generation, ctx.Err())
 		case <-time.After(backoff):
 		}
 		backoff = nextVerifyBackoff(backoff, m.verifyBackoffMax)
 	}
 }
 
-func (m *Manager) verifyProjectionOnce(ctx context.Context, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {
-	return m.verifyProjectionOnceAllowed(ctx, m.vl, source, generation, events, nil)
+// errText 把可空错误渲染为日志字段（nil → 空串，避免日志里出现 "<nil>"）。
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
-// verifyProjectionOnceAllowed 执行一次校验查询。
+func (m *Manager) verifyProjectionOnce(ctx context.Context, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {
+	complete, _, err := m.verifyProjectionQuery(ctx, m.vl, source, generation, events, nil)
+	return complete, err
+}
+
+// utcDayBounds 返回 "2006-01-02" 形式的 UTC 日的闭区间 [起, 止]。
+// 格式不符时返回 ok=false，调用方保持原行为（向后兼容）。
+func utcDayBounds(utcDay string) (time.Time, time.Time, bool) {
+	day, err := time.Parse("2006-01-02", utcDay)
+	if err != nil {
+		return time.Time{}, time.Time{}, false
+	}
+	return day, day.Add(24*time.Hour - time.Nanosecond), true
+}
+
+// sameSourceConfig 判定两次登记是否属于同一份源配置。
 //
-// 与 verifyProjectionOnceWithClient 的唯一差别是 allowed：分批校验时，各片的时间范围重叠，
-// 查询会返回**同批其他分片**的记录。这些记录必须被接受（否则误判 unexpected），
-// 但仍要求内容逐字段一致、且不得重复出现；完整性只要求本片 events 全部可见。
-// allowed 为 nil 时退化为「本片即全部」的原语义。
-func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event) (bool, error) {
+// UTCDay 是**登记日的派生默认值**（空值填「今天」，见 RegisterSource 归一化），
+// 不构成源身份：跨天后同一源的再登记会因它不同而被误判为
+// 「another configuration」→ 实例日志采集登记被拒 → 实例起不来
+// （2026-10-01 生产实证：午夜后全部重登记被拒，11 台实例无法启动）。
+// 故比较前把它归零，其余字段仍严格逐字段比较。
+func sameSourceConfig(a, b SourceConfig) bool {
+	a.UTCDay, b.UTCDay = "", ""
+	return a == b
+}
+
+// verifyProjectionQuery 执行一次校验查询，并返回本次的读回量（行数/字节数）。
+//
+// 与 verifyProjectionOnceWithClient 的唯一差别是 allowed：分批校验时，各簇的时间范围可能相接，
+// 查询会返回**同批其他簇**的记录。这些记录必须被接受（否则误判 unexpected），
+// 但仍要求内容逐字段一致、且不得重复出现；完整性只要求本簇 events 全部可见。
+// allowed 为 nil 时退化为「本簇即全部」的原语义。
+//
+// 判定规则与旧实现逐字一致（相同的 selector、时间窗、日夹取、逐字段比对与三类错误文案）；
+// 新增的 verifyQueryStats 只用于观测与回归读数，不参与任何判定。
+func (m *Manager) verifyProjectionQuery(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event, generationScopes ...[]string) (bool, verifyQueryStats, error) {
+	var stats verifyQueryStats
+	generationSelector := "projection_generation:=" + strconv.Quote(generation)
+	if len(generationScopes) > 0 {
+		parts := make([]string, 0, len(generationScopes[0]))
+		for _, value := range generationScopes[0] {
+			parts = append(parts, "projection_generation:="+strconv.Quote(value))
+		}
+		generationSelector = "(" + strings.Join(parts, " OR ") + ")"
+		ids := make([]string, 0, len(events))
+		for _, event := range events {
+			ids = append(ids, strconv.Quote(event.EventID))
+		}
+		generationSelector += " AND event_id:in(" + strings.Join(ids, ",") + ")"
+	}
+	if m.verifyLimiter != nil {
+		// 全局天花板（速率 + 在飞）：**正常路径零等待**（桶容量 = 速率 ⇒ 少量查询一次性放行 ✓），
+		// 只有风暴被削峰 ✓。采集侧的读/写不走这里 ⇒ 其算力与 VL 容量天然优先 ✓。
+		if err := m.verifyLimiter.Acquire(ctx); err != nil {
+			return false, stats, err
+		}
+		defer m.verifyLimiter.Release()
+	}
 	if client == nil {
-		return false, fmt.Errorf("ingest: VictoriaLogs verification client is unavailable")
+		return false, stats, fmt.Errorf("ingest: VictoriaLogs verification client is unavailable")
 	}
 	want := make(map[string]logtypes.Event, len(events))
 	var first, last time.Time
 	for _, event := range events {
 		if _, exists := want[event.EventID]; exists {
-			return false, fmt.Errorf("duplicate canonical event_id %s", event.EventID)
+			return false, stats, fmt.Errorf("duplicate canonical event_id %s", event.EventID)
 		}
 		when, err := canonicalEventTime(event)
 		if err != nil {
-			return false, fmt.Errorf("invalid canonical event time for %s: %w", event.EventID, err)
+			return false, stats, fmt.Errorf("invalid canonical event time for %s: %w", event.EventID, err)
 		}
 		if first.IsZero() || when.Before(first) {
 			first = when
@@ -1395,14 +6768,29 @@ func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup
 	selector := "projection_generation:=" + strconv.Quote(generation) +
 		" AND log_source_id:=" + strconv.Quote(sourceID) +
 		" AND source_generation:=" + strconv.Quote(sourceGeneration)
+	// 时间窗必须**夹在本源的 UTC 日内**：±1s 的宽容窗会越界到相邻日，
+	// 把「上一天批次的日界事件」（如 09-28 窗口下探 1s 落进 09-27T23:59:59.126）
+	// 带进结果集；该事件不属于本批 allowed → 误判 `unexpected or duplicate
+	// projection event_id` → 运行时创建失败 → 节点离线（2026-09-30 生产事故）。
+	// 日界事件在自己那一天的窗口内仍被正常覆盖，完整性不受影响。
+	start := first.Add(-time.Second)
+	end := last.Add(time.Second)
+	if dayStart, dayEnd, ok := utcDayBounds(source.UTCDay); ok {
+		if start.Before(dayStart) {
+			start = dayStart
+		}
+		if end.After(dayEnd) {
+			end = dayEnd
+		}
+	}
 	params := url.Values{
 		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
 		// 不设 limit：VL 按时间返回窗口内的记录，而分片是按**索引**切的，其时间跨度可能很宽
 		// （2026-09-28 生产：500 条事件跨约 10 小时），窗口内除本片外还会有其他分片的记录。
 		// 原先 `limit = len(events)+1` 会截断返回，导致本片记录凑不齐 → 误判「不可见」→
 		// 运行时创建失败 → 采集静默停摆（多轮盲改后才由参数日志定位）。
-		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
-		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
+		"start": {start.UTC().Format(time.RFC3339Nano)},
+		"end":   {end.UTC().Format(time.RFC3339Nano)},
 	}
 	// 诊断（2026-09-28 生产）：校验恒「不可见」而数据确实在 VL 里时，必须能拿到
 	// 平台**实际发出的**查询参数，与手工复刻查询逐字段对照。此前多轮修复都因缺少
@@ -1411,12 +6799,21 @@ func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup
 		"generation", generation, "events", len(events),
 		"query", params.Get("query"), "start", params.Get("start"),
 		"end", params.Get("end"), "limit", params.Get("limit"))
+	// 遗留发布确认按真实白名单并集读取，不把最近尝试代次误当整日发布面。
+	params.Set("query", generationSelector+" AND log_source_id:="+strconv.Quote(sourceID)+" AND source_generation:="+strconv.Quote(sourceGeneration)+" | fields _time, _msg, event_id, level, stream, canonical_content_hash")
 	seen := make(map[string]bool, len(events))
 	seenOther := make(map[string]bool)
 	err := client.Stream(ctx, "/select/logsql/query", params, func(body io.Reader) error {
 		scanner := bufio.NewScanner(io.LimitReader(body, 32<<20+1))
 		scanner.Buffer(make([]byte, 64*1024), 4<<20)
 		for scanner.Scan() {
+			// 取消（同批其他簇已失败）时立即收手：否则会把被截断的响应体报成
+			// `unexpected end of JSON input`，掩盖真正的根因。
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			stats.Rows++
+			stats.Bytes += int64(len(scanner.Bytes())) + 1 // +1：NDJSON 行尾换行
 			var row struct {
 				EventID       string `json:"event_id"`
 				CanonicalHash string `json:"canonical_content_hash"`
@@ -1453,9 +6850,9 @@ func (m *Manager) verifyProjectionOnceAllowed(ctx context.Context, client *vlsup
 		return scanner.Err()
 	})
 	if err != nil {
-		return false, err
+		return false, stats, err
 	}
-	return len(seen) == len(want), nil
+	return len(seen) == len(want), stats, nil
 }
 
 func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {
@@ -1497,14 +6894,29 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 	selector := "projection_generation:=" + strconv.Quote(generation) +
 		" AND log_source_id:=" + strconv.Quote(sourceID) +
 		" AND source_generation:=" + strconv.Quote(sourceGeneration)
+	// 时间窗必须**夹在本源的 UTC 日内**：±1s 的宽容窗会越界到相邻日，
+	// 把「上一天批次的日界事件」（如 09-28 窗口下探 1s 落进 09-27T23:59:59.126）
+	// 带进结果集；该事件不属于本批 allowed → 误判 `unexpected or duplicate
+	// projection event_id` → 运行时创建失败 → 节点离线（2026-09-30 生产事故）。
+	// 日界事件在自己那一天的窗口内仍被正常覆盖，完整性不受影响。
+	start := first.Add(-time.Second)
+	end := last.Add(time.Second)
+	if dayStart, dayEnd, ok := utcDayBounds(source.UTCDay); ok {
+		if start.Before(dayStart) {
+			start = dayStart
+		}
+		if end.After(dayEnd) {
+			end = dayEnd
+		}
+	}
 	params := url.Values{
 		"query": {selector + " | fields _time, _msg, event_id, level, stream, canonical_content_hash"},
 		// 不设 limit：VL 按时间返回窗口内的记录，而分片是按**索引**切的，其时间跨度可能很宽
 		// （2026-09-28 生产：500 条事件跨约 10 小时），窗口内除本片外还会有其他分片的记录。
 		// 原先 `limit = len(events)+1` 会截断返回，导致本片记录凑不齐 → 误判「不可见」→
 		// 运行时创建失败 → 采集静默停摆（多轮盲改后才由参数日志定位）。
-		"start": {first.Add(-time.Second).UTC().Format(time.RFC3339Nano)},
-		"end":   {last.Add(time.Second).UTC().Format(time.RFC3339Nano)},
+		"start": {start.UTC().Format(time.RFC3339Nano)},
+		"end":   {end.UTC().Format(time.RFC3339Nano)},
 	}
 	// 诊断（2026-09-28 生产）：校验恒「不可见」而数据确实在 VL 里时，必须能拿到
 	// 平台**实际发出的**查询参数，与手工复刻查询逐字段对照。此前多轮修复都因缺少
@@ -1547,6 +6959,373 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 	return len(seen) == len(want), nil
 }
 
+// deliveryConfirmedSegPrefix 是「投递确认补段」的段名前缀（#61-Z-a）：账本里可一眼认出这类段的来历。
+const deliveryConfirmedSegPrefix = "delivery-confirmed-"
+
+// ── #63：重放回收（rolling drain） ────────────────────────────────────────────────────
+//
+// 现场：`reclaim` 动了但**速率 344 位/s/源**（1.14 亿需 3.7 天 ✗✗），且**复采差逐字相同** ⇒
+// "一次性微推后再度停住" ✓。机制（读码坐实）：`TryReclaim` 的单次上界 = **当前覆盖段的 `CoversTo`**
+// （ledger.tryReclaimLocked 的 `target := ref.CoversTo`）；而补段闸只在"**完全无覆盖**"（哨兵）时补 ⇒
+// 位置**被陈旧段覆盖**（`CoversTo ≪ delivery`）时谁都不补 ⇒ 每轮只能推一个排空批（≈3500 位 / 10s ✓）。
+//
+// 修法（Z3-a，父级裁定）：**探测驱动的有界小循环** —— 每轮反复「探测（必要时补段）→ 推进」，
+// 直到不再推进或触到单轮上界（≤8 步 / ≤200ms ✓）。典型形态只需 ~3 步：
+//
+//	① 推进到陈旧段末端 → ② 位置变"无覆盖" ⇒ 助手补 **`[reclaim, delivery]` 一整段** → ③ 推进到 delivery ✓
+//
+// ⇒ 一次调用吃完存量；生产仍灌料时每轮覆盖"自上次以来新增的已确认区间" ⇒ **追平生成速率** ✓。
+//
+// 不变量：上界仍是**已确认投递水位 `delivery`**（default-deny 不放宽 ✓，`reclaim ≥ delivery` 时零动作 ✓）；
+// 每段仍逐段入账本（`delivery-confirmed-<from>-<to>` ✓ 可审计）；hold 优先（每步复读 ✓）；单轮有界 ✓。
+// reclaimStep0RollingOnly 是「步 0：只推进/补段滚动回收」的**共用精简入口**（#66-⑤）——
+// 两条面共用同一助手，避免各写一份而语义分叉 ✗：
+//
+//	· **自愈面**：selfHealPausedSource 步 0（#62 起 ✓；其准入＝已暂停 或 仍有未解决缺口）；
+//	· **兜底环轮转窗口**：maybeResumePausedSources 的**早退之前**（#66-⑤ 新挂 ✓）。
+//
+// **只做这一步**：不做投递（步 1）、不做缺口消解（步 2）、不做恢复评估（步 3）——兜底环自己已有那三步
+// 的等价路径（DeliverPending / autoResolveGapsFromPublished / EvaluateResume ✓），且那三步的准入红线
+// （积压/容量类暂停 ✓）**不变** ✗（本入口只放宽"谁来推进回收"，不放宽"谁能被复活" ✓）。
+//
+// 为什么需要它（#66-⑤ 现场）：一条"采集仍在跑、只是回收链被卡住"的源（非积压类暂停 或 未暂停，
+// 且零未解决缺口）三条面全都到不了它 ⇒ 新窗零 `滚动回收` 行、全库零「本轮未推进（回收被拒）」行
+// ✗✗（被拒行只在 rolling 内部才会打 ⇒ rolling 从未被调用 ✓）。
+func (m *Manager) reclaimStep0RollingOnly(p *pipeline.Pipeline, source SourceConfig) {
+	if m == nil || p == nil {
+		return
+	}
+	m.rollingReclaimRepair(p, source)
+}
+
+func (m *Manager) rollingReclaimRepair(p *pipeline.Pipeline, source SourceConfig) {
+	if m == nil || p == nil || p.Ledger() == nil {
+		return
+	}
+	maxSteps := m.reclaimRollMaxSteps
+	if maxSteps <= 0 {
+		maxSteps = defaultReclaimRollMaxSteps
+	}
+	budget := m.reclaimRollBudget
+	if budget <= 0 {
+		budget = defaultReclaimRollBudget
+	}
+	start := time.Now()
+	before, ok := p.Ledger().Positions(p.Key())
+	if !ok {
+		return
+	}
+	steps := 0
+	var advanced, firstAdvance uint64
+	for ; steps < maxSteps; steps++ {
+		if err := m.repairStalledReclaim(p, source); err != nil {
+			slog.Warn("滚动回收：补段失败（下轮重试）", "logSourceID", source.LogSourceID, "error", err.Error())
+			break
+		}
+		// 助手内部的探测**本身就会推进**（有覆盖即跳到该段末端；无覆盖则先补段再推进）⇒ 此处只读结果 ✓。
+		cur, ok := p.Ledger().Positions(p.Key())
+		if !ok || cur.Reclaim <= before.Reclaim {
+			break // 不再推进：无料（reclaim ≥ delivery）/ hold / 状态未转移 ⇒ 退出（有界 ✓）
+		}
+		if advanced == 0 {
+			firstAdvance = cur.Reclaim - before.Reclaim // 首步 = 陈旧覆盖段的上界缺口 ✓（现场判据）
+		}
+		advanced += cur.Reclaim - before.Reclaim
+		before = cur
+		if time.Since(start) >= budget {
+			break // 单轮墙钟上界 ✓
+		}
+	}
+	if steps == 0 && advanced == 0 {
+		// 诊断（#64-④）：本轮一步未动 ⇒ 取一次**拒绝原因**（按源去重：同因不刷屏、换因再报 ✓）。
+		// 现场据此分辨三者：「无料（reclaim ≥ delivery，正常终态 ⇒ 不打点 ✓）」
+		// 「CanReclaim 拒（state=… / hold=…）」「配置层 hold（CanCleanup 假）⇒ 连补段都不做」✓。
+		if before.Reclaim < before.Delivery {
+			if _, err := p.TryReclaim(); err != nil && !errors.Is(err, ledger.ErrReclaimNoSegment) {
+				if m.noteSourceError(source.LogSourceID, err.Error()) {
+					slog.Warn("滚动回收：本轮未推进（回收被拒）", "logSourceID", source.LogSourceID,
+						"reclaim", before.Reclaim, "delivery", before.Delivery, "error", err.Error())
+				}
+			}
+		}
+		return // 无活可做：不打"本轮链式推进"行（避免刷屏 ✗）
+	}
+	elapsed := time.Since(start)
+	m.reclaimRollRounds.Add(1)
+	m.reclaimRollSteps.Add(int64(steps))
+	m.reclaimRollAdvanced.Add(int64(advanced))
+	m.reclaimRollFirstAdvance.Add(int64(firstAdvance))
+	m.reclaimRollNanos.Add(int64(elapsed))
+	m.reclaimRollLast.Store(ReclaimRollSnapshot{
+		Reclaim: before.Reclaim, Delivery: before.Delivery,
+		FirstAdvance: firstAdvance, Steps: steps, Advanced: advanced, Elapsed: elapsed,
+	})
+	slog.Info("滚动回收：本轮链式推进",
+		"logSourceID", source.LogSourceID,
+		"reclaim", before.Reclaim, "delivery", before.Delivery,
+		"firstAdvance", firstAdvance, "advance", advanced,
+		"steps", steps, "elapsedMs", elapsed.Milliseconds())
+}
+
+const (
+	// defaultReclaimRollMaxSteps / defaultReclaimRollBudget 是单轮有界（#64 裁定：≤32 步 / ≤1s ✓）。
+	//
+	// 为什么从 8 步/200ms 提到 32 步/1s（#63 落地首读）：现场单源已见 `steps=8` **打满** ⇒ 说明
+	// reclaim 与 delivery 之间还夹着 >8 条**首尾相接的陈旧段**（每段一跳 ✓，段可多达几十~上千 ✗）⇒
+	// 每轮只走 8 跳 ⇒ 段链长 N 时需 ⌈N/8⌉ 轮（每轮 10s）。提到 32 步 ⇒ ⌈N/32⌉ 轮；且现场可用
+	// 配置键 `log_index.reclaim_roll.*` 热调（免发版 ✓）；仍属**单轮有界**（1s ≪ 轮周期，且只对有洞的源 ✓）。
+	defaultReclaimRollMaxSteps = 32
+	defaultReclaimRollBudget   = time.Second
+)
+
+// ReclaimRollTuning 是「滚动回收」单轮上界的配置面（#64；零值 ⇒ ingest 侧默认 32 步 / 1s ✓）。
+//
+// 取舍口径（与 ScanTuning 同）：这类旋钮**回退默认永远安全**（最坏只是"下一轮继续滚"✓），
+// 因此非正数一律视为"用默认"，绝不解释成"关闭"✗。
+type ReclaimRollTuning struct {
+	MaxSteps int           // 单轮最多推进步数；≤0 ⇒ 默认
+	Budget   time.Duration // 单轮墙钟上界；≤0 ⇒ 默认
+}
+
+// ReclaimRollSnapshot 是「上一轮滚动回收」的读数（#63-Z3-c；现场读数与红/绿判据同一套数 ✓）。
+type ReclaimRollSnapshot struct {
+	Reclaim      uint64        // 本轮结束时的回收位置
+	Delivery     uint64        // 同刻的已确认投递水位（上界）
+	FirstAdvance uint64        // 首步推进量 = 陈旧覆盖段的上界缺口 ✓
+	Steps        int           // 本轮步数
+	Advanced     uint64        // 本轮总推进位数
+	Elapsed      time.Duration // 本轮墙钟
+}
+
+// ReclaimRollingStats 返回滚动回收读数（累计 + 上一轮）⇒ 位·s⁻¹ 可直接算 ✓。
+type ReclaimRollingStats struct {
+	Rounds       int64
+	Steps        int64
+	Advanced     uint64
+	FirstAdvance uint64
+	Elapsed      time.Duration
+	Last         ReclaimRollSnapshot
+	// #66-⑤ 诊断（只读）：自愈面**限频闸**的通过/跳过累计 —— 见 Manager.selfHealDuePass 字段注释 ✓。
+	// 状态闸（未暂停且零缺口 ⇒ 早退）**不**计入任何计数 ⇒ 组合读法：两值恒为 0 ⇒ 该源连状态闸都
+	// 没放行（或自愈面根本没被调用）；skip 恒涨而 pass 不动 ⇒ 全被限频挡住 ✓。
+	SelfHealDuePass int64
+	SelfHealDueSkip int64
+	// #179 第 1 步（③）：**受阻类别**（只读）——"为什么这条缝/这回补段没发生"一眼可读 ✓。
+	BlockedSegmentHold    int64 // 段 hold（运维钉住的段覆盖该位置 ✓）
+	BlockedConfigHold     int64 // 配置层 hold（连补段都不做 ✓）
+	BlockedNoMaterial     int64 // 无"已确认但未覆盖"的区间（to <= from ✓）
+	BlockedWatermarkMoved int64 // 水位在复读窗口内变化（变则弃 ✓）
+	BlockedStallWarns     int64 // ② N 轮无进展的告警次数 ✓
+}
+
+// ReclaimRollingStats 读取滚动回收读数（#63-Z3-c）。
+func (m *Manager) ReclaimRollingStats() ReclaimRollingStats {
+	if m == nil {
+		return ReclaimRollingStats{}
+	}
+	st := ReclaimRollingStats{
+		Rounds: m.reclaimRollRounds.Load(), Steps: m.reclaimRollSteps.Load(),
+		Advanced: uint64(m.reclaimRollAdvanced.Load()), FirstAdvance: uint64(m.reclaimRollFirstAdvance.Load()),
+		Elapsed:         time.Duration(m.reclaimRollNanos.Load()),
+		SelfHealDuePass: m.selfHealDuePass.Load(),
+		SelfHealDueSkip: m.selfHealDueSkip.Load(),
+
+		BlockedSegmentHold:    m.blockedSegHold.Load(),
+		BlockedConfigHold:     m.blockedConfigHold.Load(),
+		BlockedNoMaterial:     m.blockedNoMaterial.Load(),
+		BlockedWatermarkMoved: m.blockedWatermark.Load(),
+		BlockedStallWarns:     m.blockedStallWarns.Load(),
+	}
+	if last, _ := m.reclaimRollLast.Load().(ReclaimRollSnapshot); last.Steps > 0 || last.Advanced > 0 {
+		st.Last = last
+	}
+	return st
+}
+
+// repairStalledReclaim 是"回收被『无段覆盖』拒 ⇒ 按已确认水位补段"的**共用收口助手**
+// （#61-Z-a ＋ #62）：两条面共用同一助手，避免"只有有投递的源才治得了洞"✗：
+//
+//	· **投递确认面**（releaseRecovery 顶部）—— 有新批次/排空/对账的源 ✓；
+//	· **恢复/自愈面**（selfHealPausedSource 步 0）—— **已停投的源**（#62 现场：四个落后源
+//	  `inst:160/202/203/179` 补段闸一次都没轮到它们，因为没人再投递 ⇒ 谁也走不到投递确认面 ✗✓）。
+//
+// 触发判据不变（#61 口径）：**先探一次回收**，只有被哨兵 `ErrReclaimNoSegment` 拒才补 ✓（绝不盲补 ✗）。
+// 覆盖上界仍是账本里的 **delivery 已确认水位**（单次大覆盖 [reclaim, delivery] 合法 ✓，与补段助手同源 ✓）；
+// hold 闸 / 幂等 / 绑定前后复读水位（变则弃）全部继承自 backfillDeliveryConfirmedCoverage ✓。
+func (m *Manager) repairStalledReclaim(p *pipeline.Pipeline, source SourceConfig) error {
+	if m == nil || p == nil || p.Ledger() == nil {
+		return nil
+	}
+	if _, err := p.TryReclaim(); !errors.Is(err, ledger.ErrReclaimNoSegment) {
+		return nil // 无洞（或洞以别的拒绝形态表现 ⇒ 不在本助手职责内 ✓）
+	}
+	positions, ok := p.Ledger().Positions(p.Key())
+	if !ok {
+		return nil
+	}
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	m.mu.Lock()
+	generation := m.state.Sources[key].ProjectionGeneration
+	m.mu.Unlock()
+	slog.Warn("回收被『无段覆盖』拒：按「已确认投递水位」补段（停在 R 的源由此走出去）",
+		"logSourceID", source.LogSourceID, "generation", source.SourceGeneration,
+		"reclaim", positions.Reclaim, "delivery", positions.Delivery)
+	return m.backfillDeliveryConfirmedCoverage(p, source, generation, positions)
+}
+
+// noteReclaimBlocked 记录一次"补段被静默拦下"（#179 第 1 步③）：按类别计数 + **按源首次 Debug**（不刷屏 ✓）。
+// 行为中性：只加计数与一次性日志，不改变任何判据或返回值 ✓。
+func (m *Manager) noteReclaimBlocked(category string, p *pipeline.Pipeline, source SourceConfig) {
+	if m == nil {
+		return
+	}
+	switch category {
+	case "seg-hold":
+		m.blockedSegHold.Add(1)
+	case "config-hold":
+		m.blockedConfigHold.Add(1)
+	case "no-material":
+		m.blockedNoMaterial.Add(1)
+	case "watermark-moved":
+		m.blockedWatermark.Add(1)
+	}
+	key := ""
+	if p != nil {
+		key = p.Key().LogSourceID + "/" + p.Key().SourceGeneration
+	}
+	if key == "" {
+		key = source.LogSourceID
+	}
+	m.blockedLoggedMu.Lock()
+	if m.blockedLogged == nil {
+		m.blockedLogged = make(map[string]struct{})
+	}
+	dup := false
+	if _, ok := m.blockedLogged[category+"|"+key]; ok {
+		dup = true
+	} else {
+		m.blockedLogged[category+"|"+key] = struct{}{}
+	}
+	m.blockedLoggedMu.Unlock()
+	if !dup {
+		slog.Debug("补段被拦下（首次可见；后续同源同类不再打点）",
+			"logSourceID", source.LogSourceID, "category", category)
+	}
+}
+
+// backfillDeliveryConfirmedCoverage 在**投递确认点**补注册覆盖段（#61-Z-a，父级裁刀）。
+//
+// 现场（今晚全部悬案同源）：`paused 42` 钉死 / 放血落账失败 / tier 达成率下滑，皆系一条链 ——
+// `ledger: reclaim blocked: no recovery segment covers position <R>` ⇒ WAL 不能回收 ⇒ 顶 8000/5000
+// ⇒ 源暂停 ⇒ 采集端落后（position 表：reclaim 落后上亿而 **delivery 已 = read** ✗）。
+//
+// 为什么既有绑定点会留洞（以实际代码为准）：全部绑定点都**以 `from = 当前 Reclaim` 起段** ——
+//
+//	· `pipeline.ingest` / `DeliverPending` 的 proof 面带 `DeliveryState != UNKNOWN` 闸；
+//	· `releaseRecovery` 的 `if from >= to { return nil }` 会**静默不绑**（不是错误）；
+//	· 段状态链（Staged→DurableVerified→Xfer）任一步失败即 `return err`，段停在中间态；
+//	· 静默流只有 `resolveOneSourceGaps` 的 `manual-recovery-*` 出口能补，而它要先被人工/自动解算触发。
+//
+// 只要某一轮"绑定者没跑"，位置就停在 R 无人补 ⇒ 报 `no recovery segment covers position R` ✓。
+// 本函数与上述成因**正交**：只要发生一次投递确认，就把 [当前 Reclaim, 已确认投递水位) 补上 ✓。
+//
+// 凭据（不越界未来 + default-deny 未放宽）：Delivery 水位只在「ingest 侧插入 + 逐字段可见性校验 +
+// 已发布投影」之后推进（writeProjectionPlan → RecordHTTPResult），故它就是"已证明另存"的水位 ✓；
+// 越过 Delivery 的位置**永远**没有本段覆盖 ⇒ 未确认数据一个字节都不会被跳过 ✓。
+// （2026-10-06 曾试把上界放宽到 durable 以解停滞 ✗ —— 被不变量测试当场捉住：覆盖未投递区间会让其
+// WAL 条目被回收 ⇒ 事件再也投不出去 ✗ ⇒ 已撤回；停滞真修点＝让投递水位前进 ✓。）
+// 审计：段名 `delivery-confirmed-<from>-<to>`、路径 `delivery-confirmed://<generation>`，状态链只推进到
+// `WAL_RESPONSIBILITY_TRANSFERRED`（接收者 = projection:<generation>），**不**直接 Released/Cleaned ——
+// 把"这一段凭什么被释放"留给常规释放链独立裁定 ✓。
+//
+// 只在**真的存在洞**时补段：触发条件是"先探一次回收**被哨兵 `ErrReclaimNoSegment` 拒**"（见调用点）——
+// 健康源一个段都不会多出来 ⇒ RecoveryRefs 不会无界增长 ✓；且与"回收到底能不能过"同一判据，不会自说自话 ✓。
+// 幂等与并发：段名含区间 ⇒ 同区间重复调用不重复建段；绑定前**复读水位**，Reclaim 已前移或 Delivery 倒退
+// ⇒ 本段已过期 ⇒ 跳过（下一轮以新 Reclaim 起段，与 #55-B/#58 的"取快照 → 复验 → 变则弃"同型）✓。
+func (m *Manager) backfillDeliveryConfirmedCoverage(p *pipeline.Pipeline, source SourceConfig, generation string, positions logtypes.Positions) error {
+	if p == nil || p.Ledger() == nil {
+		return nil
+	}
+	// hold 闸（hold 优先于任何自动补段 —— 与 tryReclaimLocked 里"hold 优先于凭据"同口径 ✓）：
+	// 补出的新段**不带 hold**，若放任它就会把 reclaim 推过被运维钉住的位置 ✗（2026-10-05 实测红：
+	// TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears 断言 reclaim 不动 + 段只有既有那一条）。
+	//   · **已登记的**段 hold：账本里可查（新段绕过它 = 直接违约束 ✗）；
+	//   · **配置层** hold（Options.RecoveryHold）：运维显式钉住 ⇒ 连补段都不做（此处按源自身的
+	//     UTCDay 求值，属保守口径：宁可少补一段，也不越过人工约束 ✓ —— 既有绑定点不受本闸影响 ✓）。
+	if p.Ledger().HasRecoveryHold(p.Key()) {
+		m.noteReclaimBlocked("seg-hold", p, source)
+		return nil
+	}
+	if m.recoveryHold != nil {
+		if hold, _ := m.recoveryHold(source, generation); hold {
+			m.noteReclaimBlocked("config-hold", p, source)
+			return nil
+		}
+	}
+	from := positions.Reclaim
+	to := positions.Delivery // 不越界未来：只覆盖"已确认投递"到的那一段
+	// **2026-10-06 记录（已撤回的错误改法）**：曾试过"read==durable ∧ 无缺口 ⇒ 上界放宽到 durable"，
+	// 被现有不变量测试当场捉住 ✗ —— 覆盖未投递区间会让其 WAL 条目被回收 ⇒ 那些事件**再也投不出去** ✗
+	// ⇒ 红线：**未确认投递的数据一个字节都不许被越过** ✓（见 reclaim_backfill_test.go 的不变量断言）。
+	// 停滞的真修点＝**让投递水位前进**（delivery==reclaim<read 的环 ✗），不是放宽本上界 ✗。
+	if to <= from {
+		m.noteReclaimBlocked("no-material", p, source)
+		return nil // 无"已确认但未覆盖"的区间
+	}
+	// gate 由调用方给出（"先探一次回收 + 哨兵命中"）：本函数只负责"按已确认水位补段"。
+	segID := fmt.Sprintf("%s%d-%d", deliveryConfirmedSegPrefix, from, to)
+	if ref, exists := p.RecoveryRef(segID); exists {
+		return m.advanceDeliveryConfirmedSegment(p, segID, generation, ref)
+	}
+	// 复验守卫（变则弃）：绑定前再读一次水位 —— 期间 Reclaim 前移 ⇒ 本段起点已过期。
+	if now, ok := p.Ledger().Positions(p.Key()); !ok || now.Reclaim != from || now.Delivery < to {
+		m.noteReclaimBlocked("watermark-moved", p, source)
+		return nil
+	}
+	// Path 用**与投影背书段同款**的 `projection://<generation>`：常规释放链会据此把释放依据登记为
+	// PROJECTION_BACKED（复审 P2-13 的口径 ✓）；"这一段从哪来"由**段名前缀** `delivery-confirmed-` 标注 ✓。
+	if err := p.BindRecoverySegment(segID, "projection://"+generation, from, to); err != nil {
+		return err
+	}
+	ref, ok := p.RecoveryRef(segID)
+	if !ok {
+		return nil
+	}
+	slog.Warn("回收位置无段覆盖：已按「投递已确认水位」补段（解滞回链的根因）",
+		"logSourceID", p.Key().LogSourceID, "generation", p.Key().SourceGeneration,
+		"segment", segID, "coversFrom", from, "coversTo", to,
+		"delivery", to, "note", "凭据 = 该区间已确认投递（插入 + 逐字段校验 + 已发布投影）")
+	return m.advanceDeliveryConfirmedSegment(p, segID, generation, ref)
+}
+
+// advanceDeliveryConfirmedSegment 把补出的段推进到"责任已转移"（幂等；**不越过 Xfer** ⇒ 保留独立释放裁定面）。
+// 到达 Xfer 即让 `CanReclaim` 放行；随后立即尝试推进回收 —— 成功即"积压回落 → 滞回满足 → 采集恢复"当场打开 ✓。
+func (m *Manager) advanceDeliveryConfirmedSegment(p *pipeline.Pipeline, segID, generation string, ref ledger.RecoveryRef) error {
+	if ref.State == logtypes.RecoveryStaged {
+		if err := p.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", ""); err != nil {
+			return err
+		}
+		ref, _ = p.RecoveryRef(segID)
+	}
+	if ref.State == logtypes.RecoveryDurableVerified {
+		// 接收者必须显式（账本拒绝空/self/等于段名）：本段的接收者就是该代次的已发布投影 ✓。
+		if err := p.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", "projection:"+generation); err != nil {
+			return err
+		}
+		ref, _ = p.RecoveryRef(segID)
+	}
+	if ref.State != logtypes.RecoveryWALResponsibilityXfer {
+		return nil // 已被常规释放链推进过（Released/Cleaned）：本轮无需再动
+	}
+	if _, err := p.TryReclaim(); err != nil {
+		// 回收推进失败**不**让投递失败（投递已确认，段已就位 ⇒ 下一轮/下一面会自动再试 ✓）；
+		// 但必须留痕（该类失败此前是静默的，正是本悬案难查的原因之一 ✓）。
+		slog.Warn("补段后就地推进回收失败（下一轮自动再试）",
+			"logSourceID", p.Key().LogSourceID, "segment", segID, "error", err.Error())
+	}
+	return nil
+}
+
 // releaseRecovery transfers WAL responsibility only after the delivery result
 // and canonical projection have both been persisted. The projection itself is
 // the durable receiver; HTTP 2xx alone never reaches this method.
@@ -1566,6 +7345,12 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event) 
 	positions, ok := p.Positions()
 	if !ok {
 		return fmt.Errorf("ingest: missing ledger positions for %s", key)
+	}
+	// #61-Z-a：投递确认点补段（共用助手，见 repairStalledReclaim）：先探一次回收，只有被"无段覆盖"
+	// 拒才按"已确认投递水位"补段 ⇒ 把滞回链的根因当场解掉 ✓；再走下面原有的"本批区间"责任转移链
+	//（补段后 reclaim 可能已前移 ⇒ 下面自然早退 ✓，两者可组合 ✓）。
+	if err := m.repairStalledReclaim(p, source); err != nil {
+		return err
 	}
 	from := positions.Reclaim
 	currentSegID := fmt.Sprintf("projection-recovery-%s-%d", generation, to)
@@ -1614,7 +7399,8 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event) 
 			if err := p.SetRecoveryHold(segID, true); err != nil {
 				return err
 			}
-			if err := m.persist(); err != nil {
+			// 恢复链：**一步一让**（不在这里把整段差异吃完，见 persistRecoveryStep 的说明）。
+			if err := m.persistRecoveryStep(context.Background()); err != nil {
 				return err
 			}
 			return fmt.Errorf("ingest: recovery segment %s retained by hold for %s: %s", segID, day, reason)
@@ -1625,9 +7411,16 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event) 
 		ref, _ = p.RecoveryRef(segID)
 	}
 	if ref.State == logtypes.RecoveryWALResponsibilityXfer {
-		reason := logtypes.ReleaseProjectionBacked
-		if ref.Path != "projection://"+generation {
-			reason = logtypes.ReleaseNextCopyVerified
+		// 释放依据必须与「这段到底有没有副本」一致（复审 P2-13）：
+		//   - project://<代次>：本段的凭据就是该代次的已发布投影 → PROJECTION_BACKED；
+		//   - manual://delivered-no-copy：静默源出口补出的**无副本**段，凭据同样是「整段已投递并
+		//     被逐字段校验」（见 ResolveCoveredGaps 的说明）→ 仍是 PROJECTION_BACKED，
+		//     绝不能登记成「下一份副本已验证」；
+		//   - 其余路径：按既有语义视为「另有已验证副本」。
+		reason := logtypes.ReleaseNextCopyVerified
+		switch ref.Path {
+		case "projection://" + generation, silentExitNoCopyPath:
+			reason = logtypes.ReleaseProjectionBacked
 		}
 		if err := p.TransitionRecovery(segID, logtypes.RecoveryReleased, reason, receiver); err != nil {
 			return err
@@ -1638,14 +7431,16 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event) 
 		return fmt.Errorf("ingest: recovery segment %s cannot be completed from %s", segID, ref.State)
 	}
 	if positions.Reclaim < ref.CoversTo {
-		if _, err := p.TryReclaim(); err != nil {
+		if _, err := p.TryReclaim(); err != nil && !errors.Is(err, ledger.ErrReclaimNoSegment) {
+			// #61-Z-a：分段末端之后的"无段覆盖"**不是错误** —— 它正是"本段覆盖到此为止"的正常形态
+			//（回收已推进到 ref.CoversTo ✓）。其余拒绝（状态未转移 / hold）仍照旧上报 ✓。
 			return err
 		}
 	}
 	if err := p.TransitionRecovery(segID, logtypes.RecoveryCleaned, logtypes.ReleaseProjectionBacked, receiver); err != nil {
 		return err
 	}
-	return m.persist()
+	return m.persistRecoveryStep(context.Background())
 }
 
 func nextProjectionGeneration(current string) string {
@@ -1657,6 +7452,573 @@ func nextProjectionGeneration(current string) string {
 		return fmt.Sprintf("projection-%d", n+1)
 	}
 	return current + "-rebuild"
+}
+
+// 物理代次名的「不可复用」保证（2026-10-01 生产事故修复）。
+//
+// 背景：投影的隔离完全落在物理代次名上——写入按名字打标、校验按名字过滤、查询侧白名单也按
+// 名字列举。而名字来自本机状态的单调计数器（nextProjectionGeneration）。状态一旦重生
+// （旧 JSON→SQLite 迁移、scripts/rollback-log-index.sh 把归档 JSON 改回、state 被重置），
+// 计数器就从头开始，新名字与 VL 里**上一轮生命周期**留下的行重名。VL 只追加不删除
+// （「取代」只改查询侧白名单，物理行保留到 retention 到期），于是校验查询把旧行读成本次写入
+// 的内容 → `unexpected or duplicate projection event_id` → 校验永不通过 → 运行时创建失败、
+// 采集停摆；重试若仍从同一状态出发，还会反复写同一个名字，把 VL 越写越脏。
+// 生产实测（2026-10-01 05:20）：projection-88 撞上当天 03:22 那一轮同名整窗重发，三次重试
+// 全写 88，27 分钟无进展，最终只能空库重建恢复。
+//
+// 修复：选代次名前先问 VL「这个名字在该源上是否已有行」，已有就按 1/2/4/8… 递增跳到未占用的
+// 名字。探测失败不阻断投递（写入自身失败由既有语义处理），只告警后沿用旧行为；探测覆盖本次
+// 写入路由所在的 VL 目标（跨 VL 目标的极端情形仍按旧行为，不会比修复前更差）。
+const (
+	// maxProjectionGenerationProbes 是单次选名的探测上限。按 2 的幂递增，16 次可越过约 65535 个
+	// 已占名字（真实事故只越过 7 个：88→94），同时保证极端情形下不会无限探测。
+	maxProjectionGenerationProbes = 16
+	// projectionProbeTimeout 是单次占用探测的超时。探测只是「避免重名」的保障，不允许把投递卡在
+	// 网络上，故用远小于校验窗口（默认 5 分钟）的短超时。
+	projectionProbeTimeout = 5 * time.Second
+	// 探测窗取「HOT retention 全期」而非仅近期。
+	//
+	// **2026-10-10 扩窗（本项修复的根因之一，生产铁证）**：原值 3d 让这道防重名守卫对
+	// 「事件日早于 3 天」的重放**结构性失明**——探测按 `_time`（事件时间）过滤，而重放写的
+	// 正是历史日（现场 `2026-10-05`，距 now 已 5 天）。于是探测恒报「该名字未占用」，
+	// 同一个物理代次名被反复写进 VL：
+	//   · `inst:220/file` 的 `projection-130` 在 10-05 这天落了 **2,294,248** 行
+	//     （= 573562 × 4，即同名写了 4 遍）；
+	//   · 逐字段校验按 `projection_generation:=<同名>` 过滤 ⇒ 每个 event_id 都有多份 ⇒
+	//     `unexpected or duplicate projection event_id`（**确定性**失败）⇒ 永不发布 ⇒
+	//     下一轮再判缺失 ⇒ 无界重发（生产 407 次）。
+	// 实测对照（同一 VL、同一天窗）：3d 窗 `count()=0`（误判未占用）；满窗 `count()=2294248`。
+	//
+	// 取 31d 的依据：它等于 VL 侧硬上限 `-search.maxQueryTimeRange=31d`（再宽会被 **400**
+	// 拒绝，那正是 2026-10-08 那次「探测静默失效」的成因），且 HOT 层 retention=30d ⇒ 这个窗口
+	// **足以覆盖 HOT 中一切可能造成碰撞的行**（更早的行已被 retention 删除）。
+	// 注意：本常量是**总跨度**上限，窗口两端的构造必须一起守住它（见 projectionProbeSpan
+	// 与 projectionProbeFutureSlack 的说明——上界前移 1 天得以起点后移 1 天为代价）。
+	// 诚实边界：COLD 层 retention=730d，其 31d 以外的同名旧行仍探测不到；那些行既不可查询、
+	// 也会被 COLD 的 retention 逐步清掉，且 COLD 写入走独立客户端（本函数按写路由取客户端），
+	// 因此不构成本次现场形态。此边界记录于此，不假装已覆盖。
+	//
+	// 成本：>3d 窗口要读盘（5s 级）。但本探测只在**分配新代次时**发生（每源每天每次重建一次），
+	// 且已并入 `verifyLimiter` 天花板；与之对照的是「同名反复重写 57 万条 × N 次」的 VL 体积
+	// （生产已累积数百 GB）。这里明确选择正确性。
+	// projectionProbeSpan 是探测窗的**总跨度上限**（不是「起点回看量」）。
+	//
+	// **必须 ≤ VL 侧 `-search.maxQueryTimeRange`（本仓启的是 31d），否则整条重名防护静默失效。**
+	// VL 按**区间长度**判定且比较符是**严格大于**：实测 744h 返回 200、744h+10ns 返回 400
+	// `too big time range selected`（见 vlsup/cmdline.go 的实测记录与不变式注释）。
+	// 一旦超限，`projectionGenerationUsed` 直接报错 ⇒ `probeProjectionGenerationWithClient`
+	// 走「探测失败按未占用继续」⇒ VL 侧占用判据被整条跳过，只剩进程内 CAS；
+	// 状态回滚/重置/迁移让计数器回退时，新名即撞上上一生命周期的同名行 ⇒
+	// `unexpected or duplicate projection event_id` ⇒ 永不发布 ⇒ 采集停摆。
+	// 这正是 2026-10-08 那次事故的成因（探测被 400 拒绝），也是 FR-496 的停摆形态。
+	//
+	// 因此窗口两端**必须一起**受本常量约束：`end - start ≤ projectionProbeSpan`。
+	// 取 31d 的依据见下（等于 VL 硬上限，落在被接受的一侧）。
+	projectionProbeSpan = 31 * 24 * time.Hour
+	// projectionProbeFutureSlack 把探测窗的上界从 now 再向后放一天。
+	//
+	// **为什么上界不能取 now（2026-10-12 修复）**：日志行多为「只有时刻、没有日期」的形态
+	// （`[12:00:01] ...`），其事件时间由 normalize 的 applyClock 以 base 为锚就近归日
+	// （±12h）。于是同一行的时间轴**可以合法落在未来**——例如 base 锚在当日 UTC 00:30 时，
+	// `[12:00:01]` 会解析成当日 12:00:01Z，而此刻 now 才 01:45。实时解析走
+	// `effectiveBase()` 的 `time.Now()` 兜底（pipeline 只在**归档日**导入时才显式给
+	// BaseTime=该日中午），所以这不是假设情形。
+	//
+	// 若窗口上界取 now，这类未来行落进盲区 ⇒ 探测恒报「该名字未占用」⇒ 绕过
+	// `claimGenerationLocked` 直接占住该名 ⇒ 撞上既有同名行 ⇒ 正是本函数要消灭的
+	// `unexpected or duplicate projection event_id`（FR-496 停摆形态）。
+	// 实测（本仓 generation_reuse 回归）：夹具行 `[12:00:01]` 落成当日 12:00:01Z，
+	// 探测在 `end=now` 下报未占用、重放写回同名 `projection-3`；仅把上界推到 now+1d
+	// 即进位到 `projection-4`（探测量 2→4）——因果由此确认。
+	//
+	// 取 1 天而非更多：applyClock 把时刻约束在 base 的 ±12h 内，而 base 在生产不晚于
+	// now，故事件时间最多超前 now 约 12h；1 天覆盖该上界并留足边界裕量。
+	//
+	// **代价与守恒**：上界前移 1 天，起点就**必须**相应后移 1 天（见下表），
+	// 以守住总跨度 ≤ projectionProbeSpan —— 上界前移而不收起点会得到 32d > 31d，
+	// 触发上面描述的整条防护失效。故实际窗口是 [now-30d, now+1d]，总跨度恰 31d。
+	projectionProbeFutureSlack = 24 * time.Hour
+)
+
+// nextFreeProjectionGeneration 返回该源在 VL 中尚未出现过的物理代次名。
+//
+// VL 客户端不可用时退回既有行为（只进位一次，不做占用探测）——探测是保障而非前置条件。
+func (m *Manager) nextFreeProjectionGeneration(source SourceConfig, current string) string {
+	client, _, err := m.clientForSource(source)
+	if err != nil {
+		return nextProjectionGeneration(current)
+	}
+	return m.nextFreeProjectionGenerationWithClient(client, source, current)
+}
+
+// nextFreeProjectionGenerationWithClient 是探测的实现（显式收客户端，便于按天路由与用例注入）。
+//
+// **刻意不预留**（reserve=false）：本函数只回答「下一个未占用的名字是什么」，不写预留表。
+// 生产写入路径一律走 reserveProjectionGeneration（探测 + 预留原子完成）。
+// 为什么必须保留这个「不预留」的形态：它同时供测试与只读诊断使用，而「**同一状态重复询问
+// 必须得到同一结论**」是既有回归守住的契约（TestProjectionGenerationProbeIsCachedAndInvalidatedOnWrite）；
+// 若本入口也登记预留，第二次询问就会把自己刚登记的条目当成"被占用"而进位 ⇒ 结论漂移。
+func (m *Manager) nextFreeProjectionGenerationWithClient(client *vlsup.Client, source SourceConfig, current string) string {
+	generation, _ := m.probeProjectionGenerationWithClient(client, source, current, false, "", 0)
+	return generation
+}
+
+// reserveProjectionGeneration 为一次**即将写入**的投递原子地取一个未占用的物理代次名。
+//
+// 为什么必须有它（2026-10-10 生产实测，本缺陷的机制本体）：代次名原先由
+// nextFreeProjectionGeneration 在**取 publishMu 之前**分配，判据是「实探 VL 未占用」＋
+// 「缓存该名可用」。两条同源投递各自实探「未占用」即双双算出**同一个名字**，随后各写一份
+// 完整副本——生产 inst:172/file 实测：08:00:47.093/.101/.102 三条「投影写入开始 gen=projection-1
+// events=60000」，VL 侧同一 (源, 代次) 60000 唯一 event_id / 180000 行（3×）。
+//
+// 语义（与缓存共用 m.mu，无新增锁 ⇒ 无新增锁序边）：
+//   - 整个「探测 → 预留」在 **m.mu 内**完成，故「同源两条投递同时取名」不可能拿到同一个名字；
+//   - 候选名若**已被预留**，视为「占用」并进位 —— 这正是把「同瞬尚未落地的对等写入」
+//     纳入判据的那一步（写前读去重看不见它，见 dropEventsAlreadyWritten 的边界）。
+//
+// 为什么不放进 publishMu（用户明令 ✗）：publishMu 是**全局**锁，且临界区内会取 m.mu；
+// 而探测是 5s 级 VL 网络往返（projectionProbeTimeout），放进去会让所有源串行等一个源，
+// 把「跨源并发」这一 FR-498 成果直接取消。放 m.mu 的代价是探测期间其它源也要排队取 m.mu
+// （m.mu 本就是投递路径上已被接受的短临界区），但**不会**把网络往返串成全局队列：
+// 每个源只在它自己那一次取名时占用 m.mu 一个探测周期，且探测有硬上界
+// （projectionProbeTimeout、maxProjectionGenerationProbes=16）。
+//
+// owner 仅用于可读诊断（谁在写），不参与判据。
+// 返回的预留句柄**必须**在写入尝试结束（成功或失败）后交给 releaseProjectionGeneration；
+// 返回 nil 表示本次没拿到预留（探测失败/预算用尽/无 VL 客户端）——此时**不得**释放任何东西，
+// 且名字退化为既有的「只进位一次」语义（调用方仍会写入，重名由写后逐字段校验兜住）。
+func (m *Manager) reserveProjectionGeneration(source SourceConfig, current string, owner string) (string, *generationReservation) {
+	if m == nil {
+		return nextProjectionGeneration(current), nil
+	}
+	client, _, err := m.clientForSource(source)
+	if err != nil {
+		// VL 客户端不可用：退回既有行为（只进位一次、不做占用探测）。此时**无法预留**
+		// ——探测本身就不存在，占用判据只由 VL 决定（既有语义，不因本修复收紧或放宽）。
+		return nextProjectionGeneration(current), nil
+	}
+	// 令牌在**本次调用开始**分配一次，并在真正登记时写入表中 ⇒ 「登记与释放严格配对」。
+	token := m.generationReservationSeq.Add(1)
+	generation, ok := m.reserveProjectionGenerationWithClient(client, source, current, owner, token)
+	if !ok {
+		return generation, nil
+	}
+	return generation, &generationReservation{
+		key:        source.LogSourceID + "/" + source.SourceGeneration,
+		generation: generation,
+		token:      token,
+		owner:      owner,
+	}
+}
+
+// generationReservation 是一次代次名预留的句柄（所有权凭据）。
+//
+// 为什么要显式句柄而不是 (key, generation) 两个字符串：释放必须能回答「这次释放是不是我
+// 自己的那次预留」。只用名字的话，一条迟到的旧调用会把**接替者**的预留清掉，
+// 于是「同事在写这个名字」这个事实丢失 ⇒ 撞名复现。token 就是这个问题的答案。
+type generationReservation struct {
+	key        string
+	generation string
+	token      uint64
+	owner      string
+}
+
+// reserveProjectionGenerationWithClient 是 reserveProjectionGeneration 的实现
+// （显式收客户端，便于按天路由与用例注入）。
+//
+// 返回值语义（**必须**严格区分，写错任一方向都有害）：
+//   - ok=true  ⇒ 本调用**持有**该名字的预留，调用方必须在写入尝试结束后释放它；
+//     漏释放会把名字钉死到进程结束（该源此后每次取名都无谓进位）✗。
+//   - ok=false ⇒ 本调用**没有**拿到预留（探测失败 / 预算用尽 / 无 VL 客户端）⇒
+//     调用方**不得**释放——那个名字不属于它，释放会把别人的预留清掉 ✗。
+func (m *Manager) reserveProjectionGenerationWithClient(client *vlsup.Client, source SourceConfig, current string, owner string, token uint64) (string, bool) {
+	return m.probeProjectionGenerationWithClient(client, source, current, true, owner, token)
+}
+
+// probeProjectionGenerationWithClient 是选名的**唯一实现**（probe-only 与 reserve 共用）。
+//
+// reserve=false：只回答「下一个未占用的名字」，不登记预留、也不因别人已预留而进位
+// （即完全等于本修复前的语义）—— 供测试/只读诊断的 nextFreeProjectionGenerationWithClient 使用。
+// reserve=true ：把「探测 → 预留」做成原子选择，并参考预留表避让（生产写入路径）。
+func (m *Manager) probeProjectionGenerationWithClient(client *vlsup.Client, source SourceConfig, current string, reserve bool, owner string, token uint64) (string, bool) {
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	if m == nil {
+		return nextProjectionGeneration(current), false
+	}
+	candidate := nextProjectionGeneration(current)
+	first := candidate
+	step := 1
+	for probe := 0; probe < maxProjectionGenerationProbes; probe++ {
+		// 判据三合一（顺序固定）：① 本进程已预留（仅 reserve 语义下参与）；② 本进程已实探
+		// 未占用（缓存）；③ 实探 VL。①② 都在 m.mu 内完成，故「同源两条投递同时取名」
+		// 不可能拿到同一个名字 ✓。
+		reserved, free := m.tryReserveKnownGeneration(key, candidate, owner, token, reserve)
+		if reserved {
+			// 该名字已被同源的另一条面预占（尚未落地）⇒ 按占用处理并进位。
+			// 这正是修复点：写前读去重看不见「同瞬尚未落地」的对等写入（见
+			// dropEventsAlreadyWritten 的边界），而预留表看得见。
+			advanced, ok := bumpProjectionGeneration(candidate, step)
+			if !ok {
+				return candidate, false
+			}
+			slog.Info("投影代次已被本进程另一条投递预留，进位避让",
+				"source", source.LogSourceID, "generation", candidate, "from", current)
+			candidate, step = advanced, step*2
+			continue
+		}
+		if free {
+			if candidate != first {
+				slog.Info("投影代次与历史投影重名，已进位到新代次",
+					"source", source.LogSourceID, "generation", candidate, "from", current)
+			}
+			return candidate, true
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), projectionProbeTimeout)
+		used, err := m.projectionGenerationUsed(ctx, client, source, candidate)
+		cancel()
+		if err != nil {
+			slog.Warn("投影代次占用探测失败，按未占用继续", "source", source.LogSourceID, "generation", candidate, "error", err)
+			// 探测失败也要**尽量占用**（CAS 失败即进位）：否则 N 条并发在这样的探测失败下
+			// 会全部回落到同一个名字——实测正是本缺陷的形态（本地夹具 VL 下 8/8 撞名）。
+			if !reserve {
+				return candidate, false
+			}
+			if m.claimGenerationLocked(key, candidate, owner, token) {
+				return candidate, true
+			}
+			advanced, ok := bumpProjectionGeneration(candidate, step)
+			if !ok {
+				return candidate, false
+			}
+			slog.Info("投影代次已被本进程另一条投递预留，进位避让（探测失败路径）",
+				"source", source.LogSourceID, "generation", candidate, "from", current)
+			candidate, step = advanced, step*2
+			continue
+		}
+		if !used {
+			// 实探确认未占用 → 记入缓存（复审 P2-11：同一 (源, 代次) 不重复探测）。
+			m.rememberProjectionGenerationFree(key, candidate)
+			if !reserve {
+				if candidate != first {
+					slog.Info("投影代次与历史投影重名，已进位到新代次",
+						"source", source.LogSourceID, "generation", candidate, "from", current)
+				}
+				return candidate, false
+			}
+			// **占用必须是 CAS**（本缺陷修复的关键一步）：探测在 m.mu **之外**完成
+			//（故意如此，否则 5s 级 VL 往返会串住所有源），因此「探测到未占用」与
+			//「占住这个名字」之间必然存在窗口。若这里直接无条件写入预留表，
+			// 两条并发投递会双双实探「未占用」并双双占住**同一个名字** —— 撞名照旧。
+			// claimGenerationLocked 在 m.mu 内做「查了再写」，故后到者失败 ⇒ 进位重选。
+			if m.claimGenerationLocked(key, candidate, owner, token) {
+				if candidate != first {
+					slog.Info("投影代次与历史投影重名，已进位到新代次",
+						"source", source.LogSourceID, "generation", candidate, "from", current)
+				}
+				return candidate, true
+			}
+			advanced, ok := bumpProjectionGeneration(candidate, step)
+			if !ok {
+				return candidate, false
+			}
+			slog.Info("投影代次已被本进程另一条投递预留，进位避让",
+				"source", source.LogSourceID, "generation", candidate, "from", current)
+			candidate, step = advanced, step*2
+			continue
+		}
+		advanced, ok := bumpProjectionGeneration(candidate, step)
+		if !ok {
+			// 名字不是 `projection-<n>` 形态：不猜测语义，保持既有行为。
+			break
+		}
+		candidate, step = advanced, step*2
+	}
+	// 探测预算用尽：沿用既有行为（返回当前候选，不打预留标记）——调用方仍会写入，
+	// 若发生重名由既有的写后逐字段校验兜住（判据不放宽也不新增）。
+	return candidate, false
+}
+
+// tryReserveKnownGeneration 处理两个**无需网络**的判据，并在缓存命中且 reserve=true 时完成预留。
+//
+// 返回 (alreadyReserved, newlyReserved)：
+//   - alreadyReserved=true ⇒ 该名字已被本进程预留（另一条同源投递持有）⇒ 调用方必须进位。
+//     reserve=false 时**恒为 false**：只读诊断不参与预留判据（否则它会把同事的预留当成占用，
+//     并让「同一状态重复询问得到同一结论」的既有契约失效）。
+//   - newlyReserved=true   ⇒ 缓存已确认 VL 未占用，本次**当场预留成功** ⇒ 直接用它。
+//
+// 两者共用一次持锁，避免「查预留 / 查缓存 / 写预留」三次取锁之间的窗口。
+func (m *Manager) tryReserveKnownGeneration(key, candidate, owner string, token uint64, reserve bool) (bool, bool) {
+	if candidate == "" {
+		return false, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if reserve {
+		if _, busy := m.generationReserved[key][candidate]; busy {
+			return true, false
+		}
+	}
+	probed := m.generationProbeCache[key]
+	if probed == nil || !probed[candidate] {
+		return false, false
+	}
+	if !reserve {
+		// 只读诊断：缓存已确认未占用 ⇒ 直接回答（不登记预留）。
+		return false, true
+	}
+	if !m.reserveGenerationLockedNoLock(key, candidate, owner, token) {
+		// 上限拒绝：**不得**报「预留成功」——否则调用方以为已占住该名，而表里没有登记，
+		// 另一条并发投递可占住同一个名字（撞名）。按「已被预留」交给调用方进位重选。
+		return true, false
+	}
+	return false, true
+}
+
+// claimGenerationLocked 以 **CAS** 语义占用一个代次名：只有当前**未**被预留时才写入，返回是否成功。
+//
+// 为什么必须是 CAS 而不是无条件写（本缺陷修复的关键一步）：探测（projectionGenerationUsed）在
+// m.mu **之外**完成——这是刻意的，否则 5s 级 VL 往返会串住所有源（见 reserveProjectionGeneration
+// 的锁选型说明）。于是「探测到未占用」与「占住这个名字」之间必然存在窗口：两条并发投递会双双
+// 实探「未占用」，若无条件写入预留表，它们会双双占住**同一个名字** —— 撞名照旧。
+// 本方法在 m.mu 内做「查了再写」，后到者返回 false ⇒ 调用方进位重选。
+func (m *Manager) claimGenerationLocked(key, generation, owner string, token uint64) bool {
+	if generation == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, busy := m.generationReserved[key][generation]; busy {
+		return false
+	}
+	// 登记可能因上限被拒（返回 false）⇒ 同样按「占用」处理，由调用方进位重选。
+	// **不得**在此忽略返回值：那会让调用方以为已占住该名，而表里其实没有 —— 于是另一条
+	// 并发投递可以占住同一个名字（撞名，正是本机制要消灭的形态）。
+	return m.reserveGenerationLockedNoLock(key, generation, owner, token)
+}
+
+// reserveGenerationLockedNoLock 是预留登记的实现（调用方须持 m.mu）。
+//
+// 有界性：每源同时最多 maxProjectionReservedPerSource 条。越界时**拒绝登记**（返回 false，
+// 调用方按「已被预留」进位重选），**绝不整组清空**。
+//
+// **为什么不能整组清空（2026-10-12 复审订正）**：本函数原先在越界时把整张表换成空 map，
+// 注释称其为「退化为下次重新实探，保守方向」——**该论证是错的**。表里除本次候选之外，
+// 还有**其它在飞写入者尚未释放**的预留：清空后它们的 release 按 token 找不到条目（静默无效），
+// 而**下一条同源投递会看到该名「未预留」**；实探 VL 又必然报「未占用」（同伴还没落盘），
+// 于是 claimGenerationLocked 成功 ⇒ **两条面拿到同一个名字各写一份**——正是本机制要消灭的撞名。
+// 实探对「同瞬尚未落地」天然失明（见 probeProjectionGenerationWithClient 的说明），
+// 所以「退化为重新实探」并不保守，而是退回缺陷本身。
+// 拒绝登记则相反：上限只影响**本次取名**（退化为进位重选，下一轮必成功），
+// 既有在飞预留的语义完好——这才是真正的保守方向。
+// 上限本身只是异常路径的内存兜底（正常同时至多一两条），故拒绝不会造成实际饥饿。
+func (m *Manager) reserveGenerationLockedNoLock(key, generation, owner string, token uint64) bool {
+	if generation == "" {
+		return false
+	}
+	if m.generationReserved == nil {
+		m.generationReserved = map[string]map[string]uint64{}
+	}
+	reserved := m.generationReserved[key]
+	if reserved == nil {
+		reserved = map[string]uint64{}
+		m.generationReserved[key] = reserved
+	}
+	if len(reserved) >= maxProjectionReservedPerSource {
+		// 已到上限：拒绝本次登记，由调用方进位重选。**不得清空**（见上方说明）。
+		return false
+	}
+	reserved[generation] = token
+	_ = owner // owner 仅供调用方日志使用；表内只存所有权令牌（见 generationReservation）
+	return true
+}
+
+// releaseProjectionGeneration 释放一次预留（写入尝试结束——**成功或失败都必须释放**）。
+//
+// 为什么失败也要释放：预留的唯一目的是「同源并发的第二次取名不撞名」——它是**在飞写入者
+// 的登记**，不是「这个名字已被永久用掉」。任务结束后若继续占着该名，下一次重试只能一路
+// 进位，代次号会随失败次数无界增长，而这些号在 VL 里从未出现，白白拉大探测窗口。
+// 释放**不等于**「该名可复用」：本方法同时把该名的「未占用」缓存删掉，于是下一次取名会
+// **重新实探 VL**（真实写入失败可能已留下同名行）——这正是既有防线
+// （见 recordProjectionGenerationAttempt 的注释 ✓）。故本方法只让「名字被再分配给谁」
+// 回到实探判据上，**不削弱任何重名防护**。
+//
+// 所有权：res.token 必须与表中登记的一致才删除。这一步防的是「A 释放了 B 的预留」——
+// 没有它，一条迟到的旧调用就能把正在写入的同伴的预留清掉，撞名随即复现。
+func (m *Manager) releaseProjectionGeneration(res *generationReservation) {
+	if m == nil || res == nil || res.generation == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if reserved := m.generationReserved[res.key]; reserved != nil {
+		// token 必须核对：表中若是别人的登记（或已被别人接替），本次释放无效。
+		if cur, ok := reserved[res.generation]; ok && cur == res.token {
+			delete(reserved, res.generation)
+		}
+		if len(reserved) == 0 {
+			delete(m.generationReserved, res.key)
+		}
+	}
+	// 缓存一并失效：本进程已把该名交给 VL 写过（或刚取到名字但未写入），
+	// 「VL 未占用」在两种情形下都不再是可靠结论。
+	if probed := m.generationProbeCache[res.key]; probed != nil {
+		delete(probed, res.generation)
+	}
+}
+
+// maxProjectionReservedPerSource 是单源「已预留代次名」的上限。
+//
+// 正常路径下每源同时至多一两条（写入结束即释放）；上限只防异常路径（大量在飞写入、
+// 释放被漏掉）把内存拖大。越界即整组重建，退化为「重新实探」——保守方向。
+const maxProjectionReservedPerSource = 64
+
+// generationReservableForTest 报告「该 (源, 代次) 当前**未**被本进程预留」。
+//
+// 仅供回归断言使用：预留表是 unexported 状态，而「别人的释放不得误清我的预留」这条红线
+// 必须能被直接断言（否则只能从"撞名是否复现"间接推断，噪声大且不自证）。
+// 它不参与任何生产判据，也不改变任何状态。
+func (m *Manager) generationReservableForTest(key, generation string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, busy := m.generationReserved[key][generation]
+	return !busy
+}
+
+// projectionGenerationKnownFree 报告「本进程已确认该 (源, 代次) 未占用，无需再探测」。
+//
+// 缓存内容（复审 P2-11）：每源一组**已实探确认 VL 中不存在**的代次名。写入该名字时立即失效
+// （见 recordProjectionGenerationAttempt），因为那一刻起 VL 里可能已经有它的行——失效是安全
+// 方向的关键：半途失败的写入同样可能留下行，缓存不能把失败的尝试当成「依然未占用」。
+//
+// 边界（为什么不能更进一步）：稳态下候选名每批前进一名，因此「同一 (源, 代次) 被重复探测」
+// 主要出现在「同一状态被重复推进」的场景（探测进位循环、未落写的重试窗口）。**不能**改成
+// 「本进程写过 projection-N 就跳过 projection-N+1 的探测」：名字是否被占用只由 VL 决定，
+// 而状态回滚/重置（2026-10-01 生产事故）会让 VL 里存在计数更大的同名旧行——那正是这道探测
+// 存在的理由，去掉它等于把「同名旧行被读成本次写入 → 校验永不通过 → 采集停摆」重新引进来。
+func (m *Manager) projectionGenerationKnownFree(key, generation string) bool {
+	if generation == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	probed := m.generationProbeCache[key]
+	if probed == nil {
+		return false
+	}
+	return probed[generation]
+}
+
+// rememberProjectionGenerationFree 记录「该 (源, 代次) 已实探确认未占用」。
+//
+// 缓存按源有界（maxGenerationProbeCachePerSource）：条目在写入时失效，正常路径下每源同时
+// 至多一两条；上限只是防止异常路径（同一状态被反复推进）把内存拖大。
+func (m *Manager) rememberProjectionGenerationFree(key, generation string) {
+	if generation == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.generationProbeCache == nil {
+		m.generationProbeCache = map[string]map[string]bool{}
+	}
+	probed := m.generationProbeCache[key]
+	if probed == nil || len(probed) >= maxGenerationProbeCachePerSource {
+		probed = map[string]bool{}
+		m.generationProbeCache[key] = probed
+	}
+	probed[generation] = true
+}
+
+// recordProjectionGenerationAttempt 使该 (源, 代次) 的「未占用」缓存失效。
+//
+// 时机是**写入尝试之前**：写入可能只完成一部分就失败，此后 VL 里可能已有该名字的行，
+// 缓存必须立刻失效，否则重试会跳过探测、直接往同名旧行上写（同名冲突正是停摆的成因）。
+func (m *Manager) recordProjectionGenerationAttempt(key, generation string) {
+	if generation == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	probed := m.generationProbeCache[key]
+	if probed == nil {
+		return
+	}
+	delete(probed, generation)
+}
+
+// maxGenerationProbeCachePerSource 是单源「已确认未占用」代次名的缓存上限。
+//
+// 正常路径下每源的条目在写入时即失效（同时至多一两条），上限只防异常路径（同一状态被反复
+// 推进）把内存拖大；越界即整组重建，退化为「重新实探」——保守方向。
+const maxGenerationProbeCachePerSource = 64
+
+// projectionGenerationUsed 报告 VL 中该源是否已有该物理代次的行（limit 1，命中即返回）。
+func (m *Manager) projectionGenerationUsed(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string) (bool, error) {
+	if client == nil {
+		return false, nil
+	}
+	// 选择器与写入/校验同口径（源 + 来源代次），窗口显式取**近期**（见 projectionProbeSpan）：
+	// 同一名字的旧行会让「整窗重发」的校验失败，故占用判定要覆盖重放可能触达的近期数据。
+	//
+	// 2026-10-08 修复：此前不带 start/end，VL 以默认全时段（[1677-09-21, 2262-04-11]）
+	// 处理并被 `-search.maxQueryTimeRange` 以 400 拒绝 → 「按未占用继续」→ 重名
+	// 防护静默失效（生产日志可查）。显式有界后探测恢复有效，且不再依赖 VL 默认值。
+	// sort 只为让「确已占用」走最新分区早停（实测 0.01s 级）；「未占用」需扫全窗口。
+	selector := "projection_generation:=" + strconv.Quote(generation) +
+		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
+		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
+	now := time.Now().UTC()
+	// 窗口两端一起受 projectionProbeSpan（总跨度上限）约束：
+	//   end   = now + slack（覆盖可落在未来的无日期行）
+	//   start = end - span（由 end **反推**，故总跨度恒 ≤ span，与 slack 取值无关）
+	// 由 end 反推而非用 now-span 是刻意的：后者会在 slack>0 时把总跨度撑到 span+slack
+	// （实测踩过：31d+1d=32d > VL 上限 ⇒ 探测被 400 拒绝 ⇒ 重名防护整条失效）。
+	probeEnd := now.Add(projectionProbeFutureSlack)
+	probeStart := probeEnd.Add(-projectionProbeSpan)
+	params := url.Values{
+		"query": {selector + " | fields _time | sort by (_time desc) | limit 1"},
+		"start": {probeStart.Format(time.RFC3339Nano)},
+		"end":   {probeEnd.Format(time.RFC3339Nano)},
+	}
+	// Q3（2026-10-03 现场 1364/min）：**代次占用探测也是投影查询** ✗ —— 它发生在每次取新代次时
+	// （重放的每一天、每个源各一次），此前**完全没走天花板闸** ✓。现在并入同一 limiter：
+	// 与校验查询共享速率/在飞上限（天花板语义 ⇒ 正常路径零等待 ✓）。
+	if m.verifyLimiter != nil {
+		if err := m.verifyLimiter.Acquire(ctx); err != nil {
+			return false, err
+		}
+		defer m.verifyLimiter.Release()
+	}
+	used := false
+	err := client.Stream(ctx, "/select/logsql/query", params, func(body io.Reader) error {
+		scanner := bufio.NewScanner(io.LimitReader(body, 1<<20))
+		scanner.Buffer(make([]byte, 64*1024), 1<<20)
+		for scanner.Scan() {
+			if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
+				continue
+			}
+			used = true
+			return nil
+		}
+		return scanner.Err()
+	})
+	if err != nil {
+		return false, err
+	}
+	return used, nil
+}
+
+// bumpProjectionGeneration 把 `projection-<n>` 形态的代次名按 delta 进位；格式不符时返回 false
+// （调用方保持既有行为，不再探测）。
+func bumpProjectionGeneration(current string, delta int) (string, bool) {
+	var n int
+	if _, err := fmt.Sscanf(current, "projection-%d", &n); err != nil || n <= 0 {
+		return "", false
+	}
+	return fmt.Sprintf("projection-%d", n+delta), true
 }
 
 // eventBodyLookup 返回「按 EventID 取回 canonical 事件体」的查询函数（B1a 引用水合）。
@@ -1686,7 +8048,7 @@ func (m *Manager) eventBodyLookup(key string) func(eventID string) (logtypes.Eve
 // 事件体来自磁盘段（eventstore）；仅当该源仍是旧格式（EventsStored=false）时才用内联切片。
 // 集合语义不变：仍为**全部**已登账事件，不做任何裁剪。
 func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]logtypes.Event, error) {
-	seen := make(map[string]string, len(saved.WAL))
+	seen := make(map[string]eventIdentity, len(saved.WAL))
 	events := make([]logtypes.Event, 0, len(saved.WAL))
 	add := func(event logtypes.Event) error {
 		if event.Record.End <= event.Record.Start {
@@ -1698,15 +8060,46 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 			return err
 		}
 		// 该 event_id 的规范哈希已在本次登账集合中时不重复入账（只用于身份对账）。
-		if existing, ok := seen[event.EventID]; ok {
-			if existing != event.CanonicalHash {
-				return fmt.Errorf("ingest: IDENTITY_CONFLICT for event_id %s", event.EventID)
-			}
+		existing, ok := seen[event.EventID]
+		if !ok {
+			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+				end: event.Record.End, size: len(event.Message), msg: event.Message, level: event.Level,
+				stream: event.Stream, idx: len(events)}
+			events = append(events, event)
 			return nil
 		}
-		seen[event.EventID] = event.CanonicalHash
-		events = append(events, event)
-		return nil
+		if existing.hash == event.CanonicalHash {
+			return nil
+		}
+		// 同 ID 异哈希：先走两种裁定出口（「同区间 ＋ 一方严格更长」按较长者裁定 ✓）；
+		// **不可裁定形态（异区间/等长）保留先到者并跳过本行**。
+		// 2026-10-08 修复（与 planDeliveryBatchOutsideLock 同源）：不可裁定形态此前以
+		// 硬失败终止恢复/重建 —— 确定性冲突会让重启恢复/重放永久撞墙（水位钉死）。
+		incomingSize := len(event.Message)
+		keepExisting, takeIncoming := adjudicateSameIntervalIdentity(existing, event, incomingSize)
+		switch {
+		case takeIncoming:
+			events[existing.idx] = event // 完整行替换先入账的残行变体 ✓
+			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
+				end: event.Record.End, size: incomingSize, msg: event.Message, level: event.Level,
+				stream: event.Stream, idx: existing.idx}
+			slog.Warn("身份重复裁定：同区间异哈希取较长者（弃尾部残行变体）",
+				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+				"kept_bytes", incomingSize, "dropped_bytes", existing.size,
+				"kept_hash", event.CanonicalHash, "dropped_hash", existing.hash)
+			return nil
+		case keepExisting:
+			slog.Warn("身份重复裁定：后写变体较短（残行），保留完整行变体",
+				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+				"kept_bytes", existing.size, "dropped_bytes", incomingSize,
+				"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+			return nil
+		default:
+			slog.Warn("身份冲突：保留先到者并跳过冲突行（恢复/重建路径，不再整批失败）",
+				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
+				"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+			return nil
+		}
 	}
 	// 段的权威性**不依赖 state 里的 EventsStored 标记**：该标记随 state 一起持久化，而
 	// state 可能被重置或丢失（运维处置/损坏恢复），此时段本身仍完好在盘上；若因标记为假而
@@ -1758,20 +8151,52 @@ func normalizeCanonicalEvent(event logtypes.Event) (logtypes.Event, error) {
 }
 
 func (m *Manager) publish(source SourceConfig, projectionGeneration string, events []logtypes.Event, replace bool, observed ...*catalog.Record) error {
+	var expected *catalog.Record
+	if len(observed) > 0 {
+		expected = observed[0]
+	}
+	return m.publishSnapshot(source, projectionGeneration, events, replace, expected, nil, len(observed) > 0)
+}
+
+func (m *Manager) publishSnapshot(source SourceConfig, projectionGeneration string, events []logtypes.Event, replace bool, observed *catalog.Record, snapshot *publicationSnapshot, checkObserved bool) error {
 	key := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
-	maxEnd := uint64(0)
+	// 本次发布面的最大 record_end（封闭可见水位）＝ 传入 events 的最大 record_end。
+	// 语义边界：它只度量**本次实际写入 VL 的内容**——快路径下 events 是本批尾部，
+	// 慢路径下是权威全量；不得并入「已落 WAL 尚未投递」的 Durable 水位，否则会把
+	// 尚未可见的位置报成已可见。历史已有可见水位由下方 scope.ClosedVisibleSeq 取大承接。
+	batchMax := uint64(0)
 	for _, event := range events {
-		if event.Record.End > maxEnd {
-			maxEnd = event.Record.End
+		if event.Record.End > batchMax {
+			batchMax = event.Record.End
 		}
 	}
+	// 封闭水位只来自本次校验面，实时 Durable 或事件段水位不构成本次发布证据。
+	maxEnd := batchMax
 	if maxEnd == 0 {
 		return nil
 	}
+	// 串行化「读当前 → 应用本源投影 → CAS 写回」整段：共享 namespace 的多个源在并发采集轮下
+	// 会互相覆盖（见 publishMu 的说明）。
+	m.publishMu.Lock()
+	defer m.publishMu.Unlock()
 	rec, ok := m.cat.Get(key)
 	expected := rec.Clone()
-	if len(observed) > 0 {
-		expected = observed[0]
+	if !m.publicationSnapshotCurrentLocked(source, snapshot, []string{source.UTCDay}) {
+		return errPublicationStale
+	}
+	if checkObserved {
+		// 保留「校验期间权威变更」的拒绝语义：owner / 代数 / 写路由 / 恢复要求被换掉时，
+		// 不得把本次投影发布到新权威上（TestOwnerChangeDuringVerificationCannotPublishToNewOwner）。
+		//
+		// 为什么不再比较投影清单（manifest）与日志序号：并发轮里其他源发布自己的投影是**正常**
+		// 变更，若按原口径视为冲突，同一 namespace 的多源就会每轮互相打断（本轮实测：两个 stdio
+		// 源只剩 1 条发布）。authority 之外的并发变更一律以「锁内读到的当前记录」为基础合并。
+		if !sameCatalogAuthority(observed, rec) {
+			return fmt.Errorf("%w: Catalog authority changed during projection verification", catalog.ErrInvalidState)
+		}
+		if sourcePublicationToken(observed, source) != sourcePublicationToken(rec, source) {
+			return errPublicationStale
+		}
 	}
 	if !ok {
 		rec = catalog.NewStableRecord(key, catalog.OwnerHot, 1, "hot-"+projectionGeneration)
@@ -1781,6 +8206,7 @@ func (m *Manager) publish(source SourceConfig, projectionGeneration string, even
 	}
 	proj := rec.PublishedProjection
 	previousGenerations := publishedProjectionGenerations(proj)
+	proj.ConflictCount = m.identityConflictCount(source.StorageNamespace, source.LogSourceID+"/"+source.SourceGeneration)
 	if len(proj.SourceProjections) == 0 {
 		for _, ref := range proj.CoveredSourceGenerations {
 			closed := proj.ClosedVisibleSeq[ref.LogSourceID+"/"+ref.SourceGeneration]
@@ -1813,6 +8239,9 @@ func (m *Manager) publish(source SourceConfig, projectionGeneration string, even
 		scope.ProjectionGenerations = []string{projectionGeneration}
 	} else {
 		scope.ProjectionGenerations = appendUniqueGeneration(scope.ProjectionGenerations, projectionGeneration)
+	}
+	if !replace && scope.ClosedVisibleSeq > maxEnd {
+		maxEnd = scope.ClosedVisibleSeq
 	}
 	scope.ClosedVisibleSeq = maxEnd
 	sort.Slice(proj.SourceProjections, func(i, j int) bool {
@@ -1847,7 +8276,81 @@ func (m *Manager) publish(source SourceConfig, projectionGeneration string, even
 	proj.QueryLocationDirID = rec.OwnerDirID
 	proj.QueryGeneration = rec.Generation
 	rec.PublishedProjection = proj
-	return m.cat.PublishProjection(expected, rec)
+	if err := m.cat.PublishProjection(expected, rec); err != nil {
+		return err
+	}
+	if m.publicationEpochs == nil {
+		m.publicationEpochs = map[string]map[string]uint64{}
+	}
+	sourceKey := source.LogSourceID + "/" + source.SourceGeneration
+	if m.publicationEpochs[sourceKey] == nil {
+		m.publicationEpochs[sourceKey] = map[string]uint64{}
+	}
+	m.publicationEpochs[sourceKey][source.UTCDay]++
+	return nil
+}
+
+// 只抽取真实源投影，不把共享命名空间内其他源的 manifest 变化纳入本源 CAS。
+func sourcePublicationToken(rec *catalog.Record, source SourceConfig) string {
+	if rec == nil || rec.PublishedProjection == nil {
+		return ""
+	}
+	proj := rec.PublishedProjection
+	for _, scope := range proj.SourceProjections {
+		if scope.LogSourceID == source.LogSourceID && scope.SourceGeneration == source.SourceGeneration {
+			data, _ := json.Marshal(scope)
+			return string(data)
+		}
+	}
+	if len(proj.SourceProjections) > 0 {
+		return ""
+	}
+	generations := publishedSourceProjectionGenerations(proj, source)
+	if len(generations) == 0 {
+		return ""
+	}
+	data, _ := json.Marshal(struct {
+		Generations []string
+		Closed      uint64
+	}{generations, proj.ClosedVisibleSeq[source.LogSourceID+"/"+source.SourceGeneration]})
+	return string(data)
+}
+
+// sameCatalogAuthority 判定两份 Catalog 记录是否指向同一权威（owner / 代数 / 目录 / 写路由 /
+// 恢复要求）。
+//
+// 为什么不比较投影清单（manifest）与 journal 序号：并发采集轮里**其他源**发布自己的投影会
+// 推进这两者，但那是正常的多源合并，不是权威变更；若按原口径视为冲突，共享 namespace 的源
+// 每轮互相打断（本轮实测：两个 stdio 源最终只剩 1 条投影）。两份都为 nil（记录尚不存在）时
+// 视为同一权威（都被视为「无权威」）。
+func sameCatalogAuthority(a, b *catalog.Record) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		// 一侧缺失：只有在另一侧是「本次发布可安全合并的初始 HOT 权威」时才算同一权威。
+		// 为什么不能一律判否：并发轮里同一 namespace 的另一个源可能刚建立记录（HOT/第 1 代/
+		// 未冻结/无需恢复），那是正常的多源首写，而不是权威切换；一律判否会让共享 namespace
+		// 的源每轮互相打断（本轮实测：两个 stdio 源只剩 1 条投影）。
+		other := a
+		if other == nil {
+			other = b
+		}
+		return isInitialHotAuthority(other)
+	}
+	return a.Owner == b.Owner && a.Generation == b.Generation && a.OwnerDirID == b.OwnerDirID &&
+		a.WriteRoute == b.WriteRoute && a.RecoveryRequired == b.RecoveryRequired
+}
+
+// isInitialHotAuthority 判定记录是否是「HOT 首写」形态的权威（NewStableRecord(OwnerHot,1,...)）：
+// 这种记录可以由并发源的投影发布安全合并，不需要按权威切换拒绝。
+func isInitialHotAuthority(rec *catalog.Record) bool {
+	if rec == nil {
+		return false
+	}
+	return rec.Owner == catalog.OwnerHot && rec.Generation == 1 && !rec.RecoveryRequired &&
+		rec.WriteRoute.Owner == catalog.OwnerHot && rec.WriteRoute.Generation == 1 &&
+		rec.WriteRoute.DirID == rec.OwnerDirID && !rec.WriteRoute.Frozen
 }
 
 func publishedProjectionGenerations(projection *catalog.PublishedProjection) []string {
@@ -1885,74 +8388,2428 @@ func appendUniqueGeneration(generations []string, generation string) []string {
 }
 
 func (m *Manager) load() error {
-	b, err := os.ReadFile(m.statePath)
-	if os.IsNotExist(err) {
+	// FR-496：状态从嵌入式 SQLite 索引读入（旧 JSON 迁移已在 openIndex 完成）。
+	if m.index == nil {
+		// 兼容直接构造 Manager 的测试：没有索引可用，只能保持空状态。
 		return nil
 	}
+	loaded, err := m.loadStateFromIndex()
 	if err != nil {
-		return fmt.Errorf("ingest: read state: %w", err)
+		return err
 	}
-	if len(b) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(b, &m.state); err != nil {
-		return fmt.Errorf("ingest: decode state: %w", err)
-	}
-	if m.state.Sources == nil {
-		m.state.Sources = make(map[string]persistedSource)
-	}
-	if m.state.Instances == nil {
-		m.state.Instances = make(map[string]InstanceBinding)
-	}
+	m.state = *loaded
 	return nil
 }
 
+// persist 把内存状态增量写入采集索引（FR-496 spec §2.3）：只写本批次变更的行（UPSERT），
+// 事务提交即持久；未变更行不产生任何写语句（空闲轮询不重写历史）。
+//
+// 成本按「变更源」收敛（这是「60 源下单次持久化 ≤50ms」的关键）：
+//   - 只有账本修订号变化、或段覆盖签名变化的源，才重建 WAL 行与账本派生行
+//     （gap/source_wal/delivery_batch，占行数绝对多数）；
+//   - 根表（source/position/projection/source_aux/instance_binding）行数为 O(源数)，
+//     每轮由索引层全量比对（几百行量级），因此「投影代次 / 发布待定 / 实例绑定」这类由
+//     Manager 直接改 state 的字段无须任何显式标记即天然正确——但前提是**每轮都必须跑
+//     apply**：跳过整次写入等于连根表也不比对了，投影代次等元数据变更会静默丢失
+//     （曾以 instances 重启用例转红抓到：发布后的 generation 未落库，重启后重复投影）。
+//
+// 生产 307MB 副本实测：修复前每次持久化对全部 746,884 行做规划+比对（≈3.0s），
+// 且因指纹口径缺陷每次都整表重写（47s）；修复后无变更轮次只比对几百行根表（毫秒级）。
+//
+// 并发与排队（FR-498 并发采集轮的连带修复）：
+//   - 单执行者：构建 + 落库同一时刻只有一次在跑，因此「构建顺序 = 落库顺序」，不可能出现
+//     旧快照后写（那会让 persistedRev 已推进但索引回到旧值 → 变更永久丢失）；
+//   - 落库在 m.mu 之外：SQLite 事务（批量源下几十毫秒级）不再阻塞登记的 m.mu 短临界区；
+//   - 合并（coalescing）：等待者只等「一个周期」，且一个周期可被多个调用方共享——短变更的
+//     调用者（实例登记，RPC 截止 10s）不会被采集轮里多个源的持久化挤到队尾
+//     （race 实测：不合并时登记 ≥1s 截止，TestRegisterInstanceNotBlockedBySaturatedPollRound 转红）。
+//
+// 锁序：cycleMu → registerMu → pendingMu → persistGate → m.mu。
+// persist 保持既有契约：**返回即「当前已声明的变更全部落库」**（FR-499 的「登记返回即落库」
+// 保证不变），且走**优先队列**（用户面：采集轮/登记/解算/关停的延迟优先于恢复链吞吐）。
 func (m *Manager) persist() error {
+	return m.persistCtx(context.Background(), persistPriority)
+}
+
+// persistRecoveryStep 是**恢复/重放链**的落库入口：只做**一步**有界落库（受每周期总预算约束）
+// 后立即交门，不在这里循环把整段差异吃完。
+//
+// 为什么（2026-10-03 现场：persistGate 门闩饿死采集轮，SIGQUIT 8 个 goroutine 等 2+ 分钟）：
+// `releaseRecovery` 尾部此前调用 persist()——它"循环到做完"的契约在 4.5M 行差异下意味着 ~35 个
+// 周期（默认 131k 行/周期）一口气吃完，全程反复夺门；等待者（含采集轮）被压在门外 ⇒ read_pos
+// 冻结 + VL 零写入。现在恢复链一步一让，完整性由**驱动链的趟循环**保证（启动恢复的 pass 循环、
+// 常驻对账的轮次），且 `persistCovered` 只在整批完成时推进 ⇒ 不会谎报已覆盖。
+func (m *Manager) persistRecoveryStep(ctx context.Context) error {
+	// 恢复链同样走**有界等待 → 交后台 → 立即返回**（2026-10-03 现场：恢复步整步占门，
+	// 6 个投递/采集单元卡 Cond.Wait）。语义不变：水位只在真落完时推进，未完成由驱动循环续做 ✓。
+	return m.persistCtx(ctx, persistMode{oneStep: true, maxWait: m.persistHotBudgetOf()})
+}
+
+// persistStepYield 是分步持久化「让路」的**下限**（真实窗口见 Manager.persistYieldOf）。
+//
+// 为什么需要它（2026-10-02 事故）：一次调用若把整批差异做完，就会独占持久化门；采集轮与登记
+// 的持久化都被挡在门外，表现为「采集停摆、登记超时」。
+//
+// 为什么 5ms 不够（2026-10-03 现场）：持门者每 5ms 回来抢一次 `g.mu`，等待者在 Mutex 上被持续
+// 压制（SIGQUIT 等 2+ 分钟）。让路窗口必须覆盖**一次完整调度量级**（默认 GOMAXPROCS×5ms、
+// 下限 20ms，键 log_index.persist.cycle_yield 可配），且让路只约束「刚交门的那个调用者」。
+const persistStepYield = 20 * time.Millisecond
+
+// defaultPersistPriorityStreakMax 是老化阈值默认值（见 persistPriorityStreakMax）。
+const defaultPersistPriorityStreakMax = 8
+
+// defaultPersistHotBudget 是**热路径**（采集/投递侧）在持久化门上最多等多久。
+//
+// 为什么热路径必须"等不起"（2026-10-03 现场二度复现：SIGQUIT 20:48 采集轮仍在同一把 Cond 上等待）：
+// 一次落库的**单元**可以在**一条 SQL 语句**里跑很久（如范围剪枝一次删数百万行）——单元预算只在
+// 语句之间检查，语句本身不可打断 ✗。于是"分步/让路"再公平也没用：持门者不放门，采集侧就得等 ✗。
+// 因此热路径改成：**有界等待 + 超时即交给后台持久化通道**，绝不为落库阻塞采集 ✓。
+const defaultPersistHotBudget = 30 * time.Millisecond
+
+// stopGrace 是**关停落库的有界宽限**（P0 复盘 ✓）：高于既有 5s 先例（那只是 WS Shutdown ✓）、
+// 远低于现场"200s/30s 未退" ✗；有界即可，宁可降级退出也不无限等（守护面强杀更不干净 ✓）。
+// 注：**声明为 var 以便测试临时缩短**（生产不写它 ✓；测试并行时须自持互斥 ✓）。
+var stopGrace = 45 * time.Second
+
+// ErrPersistDeferred 表示本次落库尚未完成，已交给后台通道继续处理。
+// 采集投递链收到该错误时必须停止向下游发送，等待后续重试。
+var ErrPersistDeferred = errors.New("ingest: durable persist deferred")
+
+// persistMode 决定一次持久化调用的排队档位与推进步数。
+type persistMode struct {
+	// priority=true 走**优先队列**（用户面路径：采集轮的落库、实例登记、解算、归档导入、关停）：
+	// 普通队列里的恢复/重放链必须为它让位（用户面延迟 > 恢复链吞吐）。
+	priority bool
+	// maxWait>0 时是**热路径**：在门上最多等这么久，超时即交给后台通道并返回（不阻塞采集 ✗），
+	// 且最多执行一步（不做"循环到做完"✗）。
+	maxWait time.Duration
+	// failOnHandoff 用于 WAL→投递前的耐久门：交办尚未完成时必须向上游报错，禁止提前投递。
+	failOnHandoff bool
+	// oneStep=true 只做一步就交门（恢复/重放链）；false = 循环到「此后再无差异」才返回
+	// （同步语义：登记返回即已落库、Stop 关停前落完）。
+	oneStep bool
+	// handoffObs 非 nil 时，在**发生交办**（等门超预算 / 一步后仍有差异）那一刻 +1（#59）。
+	// 用途：让调用方能**明确表述**"已交办后台（受理即返）"与"本次已真落库"——persistCtx 的
+	// 返回值（nil/error）本身区分不了这两者。其它调用点传 nil ⇒ 零开销。
+	handoffObs *atomic.Int64
+	// planReuse=true 允许复用门外的既有计划（**只给采集/投递热路径**，2026-10-03 回退修复 ①）：
+	// 热路径本就"超时交后台、最终一致"⇒ 复用窗口内的计划不改变可观测语义，却把"每个调用者
+	// 各自规划（持 m.mu 重建全源镜像）"降为"每窗口一次"。**强一致路径（登记/关停/恢复步）必须
+	// 保持 false**：它们要求"返回即落库"，复用会跳过本轮状态变更的落库（实测会破坏恢复/崩溃
+	// 回归用例）。
+	planReuse bool
+}
+
+var (
+	persistPriority      = persistMode{priority: true}
+	persistNormalOneStep = persistMode{oneStep: true}
+)
+
+// reconcileYieldFromOpts / reconcileSliceFromOpts 解析对账让路配置：直连字段优先，
+// 其次走 ReplayTuning（= `log_reconcile.yield/slice_events` 的配置面），都没有则用默认 ✓。
+func reconcileYieldFromOpts(opts Options) time.Duration {
+	if opts.ReconcileYield > 0 {
+		return opts.ReconcileYield
+	}
+	if opts.ReplayTuning != nil && opts.ReplayTuning.ReconcileYield > 0 {
+		return opts.ReplayTuning.ReconcileYield
+	}
+	return 0
+}
+
+func reconcileSliceFromOpts(opts Options) int {
+	if opts.ReconcileSliceEvents > 0 {
+		return opts.ReconcileSliceEvents
+	}
+	if opts.ReplayTuning != nil && opts.ReplayTuning.ReconcileSliceEvents > 0 {
+		return opts.ReplayTuning.ReconcileSliceEvents
+	}
+	return 0
+}
+
+// ScanTuning 是**段读聚合**让路与轮内预算的配置面（键 log_index.scan.*；零值各自回退默认 ✓）。
+type ScanTuning struct {
+	SliceRows int
+	Yield     time.Duration
+	Budget    time.Duration
+}
+
+// defaultScanYield / defaultScanSliceRows 是段读聚合路径让路的默认值（见 scanYield 字段注释）。
+const (
+	defaultScanYield     = time.Millisecond
+	defaultScanSliceRows = 8192
+)
+
+func (m *Manager) scanYieldOf() time.Duration {
+	if m == nil || m.scanYield <= 0 {
+		return defaultScanYield
+	}
+	return m.scanYield
+}
+
+// defaultScanBudget 是单源单轮段读聚合的默认时间预算（见 scanBudget 字段注释）。
+const defaultScanBudget = 2 * time.Second
+
+func (m *Manager) scanBudgetOf() time.Duration {
+	if m == nil || m.scanBudget <= 0 {
+		return defaultScanBudget
+	}
+	return m.scanBudget
+}
+
+// scanValueOf / scanSliceRowsOf 解析段读旋钮：直连字段优先，其次 ScanTuning（配置面 ✓），
+// 都没有则交给 accessor 的默认值 ✓（这两个 helper 只负责"取到显式配置"，0 即未配置 ✓）。
+func scanValueOf(direct time.Duration, tuning *ScanTuning, pick func(*ScanTuning) time.Duration) time.Duration {
+	if direct > 0 {
+		return direct
+	}
+	if tuning != nil {
+		if v := pick(tuning); v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func scanSliceRowsOf(direct int, tuning *ScanTuning) int {
+	if direct > 0 {
+		return direct
+	}
+	if tuning != nil && tuning.SliceRows > 0 {
+		return tuning.SliceRows
+	}
+	return 0
+}
+
+func (m *Manager) scanSliceOf() int {
+	if m == nil || m.scanSliceRows <= 0 {
+		return defaultScanSliceRows
+	}
+	return m.scanSliceRows
+}
+
+// defaultRecoveryQuotaFactor / defaultRecoveryDrainGrace 是**恢复期独立配额**的默认值。
+//
+// 依据（2026-10-04 现场 + 用户定调 ✓）：恢复期的回放/补账是设计行为（gz 归档补账写回原代次
+// backlog ✓），必然把源推过常规闸 ⇒ 常规闸在恢复期注定自锁 ✗；而恢复完成后若仍按拓宽判，就是
+// 削弱常规期语义 ✗（红线）。宽限取 30m：现场排空动辄小时级 ⇒ 更短的窗有"刚回归即再锁"风险 ✓。
+const (
+	defaultRecoveryQuotaFactor = 4.0
+	defaultRecoveryDrainGrace  = 30 * time.Minute
+)
+
+func (m *Manager) recoveryQuotaFactorOf() float64 {
+	if m == nil || m.recoveryQuotaFactor < 1 {
+		return defaultRecoveryQuotaFactor
+	}
+	return m.recoveryQuotaFactor
+}
+
+func (m *Manager) recoveryDrainGraceOf() time.Duration {
+	if m == nil || m.recoveryDrainGrace <= 0 {
+		return defaultRecoveryDrainGrace
+	}
+	return m.recoveryDrainGrace
+}
+
+// recoveryInProgress 返回"恢复是否进行中"（既有可检状态 ✓；测试可注入 ✓）。
+func (m *Manager) recoveryInProgress() bool {
+	if m != nil && m.recoveryProbe != nil {
+		return m.recoveryProbe()
+	}
+	return m != nil && m.StartupRecoveryStatus().InProgress
+}
+
+// SourceResumeDiagnostic 是**逐源**暂停/复活判据的可观测快照（现场排障用 ✓）。
+//
+// 为什么需要它（2026-10-04 现场：`gap_open` 在降而 `paused` 平 ✗）：`gap_open` 是**全局计数**，
+// 而单源解除暂停要求**它自己**的缺口全部清零 ✓ ⇒ 必须按**源**看才知道"清零却仍暂停"是 bug ✗
+// 还是"仍有残余缺口/暂停原因不在本类"的正确行为 ✓。本快照把这条判据的每个输入都摊开 ✓。
+type SourceResumeDiagnostic struct {
+	LogSourceID   string
+	AcquirePaused bool
+	PauseReason   string
+	// BacklogPause 表示暂停原因是否属本包积压/容量类（只有 true 才走滞回自愈 ✓）。
+	BacklogPause bool
+	// Unresolved 是该源未消解缺口数；UnresolvedByReason 按原因细分。
+	Unresolved         int
+	UnresolvedByReason map[string]int
+	// Blocking 是"仍会挡住 ResumeAcquire"的条数（= 未消解且不在分类白名单里的 ✓）。
+	Blocking int
+	// BacklogEntries / Limits 是当前积压与生效上限（含恢复期拓宽 ✓）。
+	BacklogEntries int64
+	MaxEntries     int64
+	// BacklogTotalEntries / ReplayEntries 是**总量视图**与其中"回放归因"的条数 ✓。
+	//
+	// 判据（用户 2026-10-05 指定 ✓）：`BacklogTotalEntries == BacklogEntries` ⇒ **无回放归因**
+	// （WAL 增长 = 复活后的**常规新数据** ⇒ 方案① 不适用 ✓，靠背压/滞回压制 ✓）；
+	// `BacklogTotalEntries > BacklogEntries` ⇒ **存在回放归因** ⇒ 再去点名该走 `IngestReplay` 的调用点 ✓。
+	BacklogTotalEntries int64
+	ReplayEntries       int64
+	// ReadPos / ReclaimPos：三水位补齐（现场离线核 `reclaim ≤ read` 不变量 ✓）。
+	ReadPos    uint64
+	ReclaimPos uint64
+	// DeliveryPos / DurablePos 是账本水位（靶②判据：缺口是否在**已投递水位之上** ⇒ 需恢复链重投
+	// 而非水位覆盖 ✓）。
+	DeliveryPos uint64
+	DurablePos  uint64
+	// UnresolvedGaps 摊开每条未消解缺口的区间与原因（现场用它与上面的水位对齐 ✓）。
+	UnresolvedGaps []UnresolvedGapView
+}
+
+// UnresolvedGapView 是单条未消解缺口的最小可读视图（区间 + 原因 + 是否可分类消解 ✓）。
+type UnresolvedGapView struct {
+	Start      uint64
+	End        uint64
+	Reason     string
+	Classiable bool
+	// AboveDelivery 表示该缺口**整体位于已投递水位之上**（⇒ 水位覆盖判据不可能消解它 ✓，
+	// 只能靠恢复链重投后由投递成功证据消解 ✓）——靶②的核心判据 ✓。
+	AboveDelivery bool
+}
+
+// ResumeDiagnostics 返回所有源的暂停/复活判据快照（按 LogSourceID 升序，稳定可 diff ✓）。
+func (m *Manager) ResumeDiagnostics() []SourceResumeDiagnostic {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+	out := make([]SourceResumeDiagnostic, 0, len(pipes))
+	for _, p := range pipes {
+		wal := p.WAL()
+		led := p.Ledger()
+		if wal == nil || led == nil {
+			continue
+		}
+		entry := led.Get(p.Key())
+		if entry == nil {
+			continue
+		}
+		d := SourceResumeDiagnostic{
+			LogSourceID:        p.Key().LogSourceID,
+			AcquirePaused:      entry.AcquirePaused,
+			PauseReason:        entry.PauseReason,
+			BacklogPause:       acquire.IsBacklogPauseReason(entry.PauseReason),
+			UnresolvedByReason: map[string]int{},
+		}
+		d.ReadPos = entry.Positions.Read
+		d.ReclaimPos = entry.Positions.Reclaim
+		d.DeliveryPos = entry.Positions.Delivery
+		d.DurablePos = entry.Positions.Durable
+		for _, g := range entry.Gaps {
+			if g.Resolved {
+				continue
+			}
+			d.Unresolved++
+			d.UnresolvedByReason[g.Reason]++
+			classiable := gapReasonClassifiableOnResume(g.Reason)
+			if !classiable {
+				d.Blocking++
+			}
+			d.UnresolvedGaps = append(d.UnresolvedGaps, UnresolvedGapView{
+				Start: g.StartPos, End: g.EndPos, Reason: g.Reason,
+				Classiable: classiable, AboveDelivery: g.StartPos > entry.Positions.Delivery,
+			})
+		}
+		d.BacklogEntries, d.MaxEntries = wal.BacklogAndLimits()
+		d.BacklogTotalEntries, _ = wal.BacklogTotal()
+		d.ReplayEntries, _ = wal.ReplayInFlight()
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LogSourceID < out[j].LogSourceID })
+	return out
+}
+
+// UnresolvedGapBlockedSources 返回**被「不可分类缺口」永久阻塞**的源清单（2026-10-10）。
+//
+// 语义：某源存在未消解缺口，且这些缺口**全部落在恢复白名单之外**（`gapReasonClassifiableOnResume`
+// 为假）⇒ 它永远不会被 `maybeResumeBacklogLocked` 的分类裁定放行，也不会被
+// `ResumeAcquire` 放行 ⇒ **不重启、不人工介入就永久停在暂停态**。
+//
+// 为什么要这个标记（生产实测 2026-10-10）：现场 65 个源持有 215 条未决缺口（DELIVER_ERROR 148、
+// WAL_BODY_MISSING 64、ROTATED_SEGMENT_NOT_READY 3）。其中 WAL_BODY_MISSING 是**真实正文缺失**
+// （回读造不出已丢的字节 ⇒ 必须人工裁定 ✓），而 ROTATED_SEGMENT_NOT_READY **当时**不在任何白名单里
+// ——它只是"轮转段尚未就绪"的时序记录（区间恒为 [0,0]），却让 86 个源永久停在暂停上 ✗✗
+// （修法：它已入白名单，见 ledger.GapReasonsHealableOnReResume ✓）。两类的共同点是：
+// 它们所属的源已经「积压归零」，而日志每轮只印一句「积压已回落但暂不能恢复采集」，
+// **从外部看不出「它其实永远起不来」与「它只是还在等滞回」的区别**。本函数把这一区别变成显式读数。
+//
+// 只读、零行为改动：不主动暂停任何源（那是行为），只报告「已经被卡住且无出路」的源。
+func (m *Manager) UnresolvedGapBlockedSources() []SourceResumeDiagnostic {
+	if m == nil {
+		return nil
+	}
+	diags := m.ResumeDiagnostics()
+	out := make([]SourceResumeDiagnostic, 0, len(diags))
+	for _, d := range diags {
+		if d.Unresolved == 0 || d.Blocking == 0 {
+			continue
+		}
+		// 只有「**全部**未决缺口都不可分类」才判永久阻塞：只要还有一条可分类缺口，
+		// 分类裁定/重投仍有出路 ⇒ 不列入（避免把"正在自愈"误报成"永久卡死"）。
+		if d.Blocking != d.Unresolved {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// GapBlockedDiagnosticLines 把「永久阻塞」清单折成可日志行（供分钟打点消费，见
+// sampleResumeDiagnostics）。与 ResumeDiagnosticLines 同型：只打异常项，避免刷屏。
+func (m *Manager) GapBlockedDiagnosticLines() []string {
+	blocked := m.UnresolvedGapBlockedSources()
+	lines := make([]string, 0, len(blocked))
+	for _, d := range blocked {
+		reasons := make([]string, 0, len(d.UnresolvedByReason))
+		for reason, count := range d.UnresolvedByReason {
+			reasons = append(reasons, fmt.Sprintf("%s=%d", reason, count))
+		}
+		sort.Strings(reasons)
+		lines = append(lines, fmt.Sprintf(
+			"source=%s paused=%v backlog=%d/%d unresolved=%d blocking=%d reasons=[%s]",
+			d.LogSourceID, d.AcquirePaused, d.BacklogEntries, d.MaxEntries,
+			d.Unresolved, d.Blocking, strings.Join(reasons, " ")))
+	}
+	sort.Strings(lines)
+	return lines
+}
+
+// ResumeDiagnosticLines 把诊断面折成**只含异常项**的可日志行（暂停 / 有未消解缺口 / 有回放在飞 ✓）。
+//
+// 为什么必须"可达"（2026-10-05 用户点名的教训 ✗✓）：`ResumeDiagnostics` 此前只有定义与测试引用 ⇒
+// **没有生产可达面** ✓ —— 正是我们一路在抓的"实现存在但不可达"，这次中招的是自己的新工具 ✗。
+// 本函数供**每分钟打点**（与采集索引持久化耗时采样同一 sampler ✓）与 CLI 使用；只打非零项，
+// 避免 60 源刷屏 ✓。`BacklogEntries>0` 属正常态，**不打**（噪声 ✗）。
+func (m *Manager) ResumeDiagnosticLines() []string {
+	m.readingsConsumedDiagnostics.Add(1) // 消费计数（见字段注释 ✓）
+	diags := m.ResumeDiagnostics()
+	lines := make([]string, 0, len(diags))
+	for _, d := range diags {
+		if !d.AcquirePaused && d.Unresolved == 0 && d.ReplayEntries == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf(
+			"source=%s paused=%v reason=%q backlog_pause=%v backlog=%d/%d total=%d replay=%d unresolved=%d blocking=%d delivery_pos=%d",
+			d.LogSourceID, d.AcquirePaused, d.PauseReason, d.BacklogPause,
+			d.BacklogEntries, d.MaxEntries, d.BacklogTotalEntries, d.ReplayEntries,
+			d.Unresolved, d.Blocking, d.DeliveryPos)+
+			fmt.Sprintf(" consumed_diag=%d consumed_stats=%d consumed_inv=%d read_pos=%d reclaim_pos=%d invariant_ok=%v paused_exempt=%v",
+				m.readingsConsumedDiagnostics.Load(), m.readingsConsumedStats.Load(), m.readingsConsumedInvariants.Load(),
+				d.ReadPos, d.ReclaimPos,
+				d.ReclaimPos <= d.ReadPos || d.AcquirePaused, // 暂停源豁免 ✓（见 ledger 侧同口径注释）
+				d.AcquirePaused && d.ReclaimPos > d.ReadPos))
+	}
+	sort.Strings(lines)
+	return lines
+}
+
+// gapReasonClassifiableOnResume 报告某原因是否属于"恢复后回读可愈合"的白名单。
+//
+// 判定**不再在本包内重复一份名单**（2026-10-10）：白名单的唯一真源是
+// `ledger.IsGapReasonHealableOnReResume`，acquire 侧的分类裁定与这里的阻塞诊断共用它 ✓。
+// 此前本函数与 acquire 侧各持一份按原因字面量写死的清单，两处漏改其一的表现是
+// 「某原因永远不被自动消解、源永久停在暂停上且无任何报错」（无声失效 ✗）——
+// 生产实测正是 `ROTATED_SEGMENT_NOT_READY` 落在两份名单之外 ⇒ 86 源永久阻塞 ✓。
+func gapReasonClassifiableOnResume(reason string) bool {
+	return ledger.IsGapReasonHealableOnReResume(reason)
+}
+
+// defaultSweepBackpressureStreak 是窗口化背压的默认阈值（连续 3 轮净涨才跳过 ✓）。
+const defaultSweepBackpressureStreak = 3
+
+func (m *Manager) sweepBackpressureStreakOf() int {
+	if m == nil || m.sweepBackpressureStreak <= 0 {
+		return defaultSweepBackpressureStreak
+	}
+	return m.sweepBackpressureStreak
+}
+
+// PositionInvariantViolations 转发账本层的"回收 ≤ 读"越界清单（**给分钟打点/诊断面消费** ✓）。
+//
+// 用户 2026-10-05：这已是第三次"新工具没有消费面" ✗✗（ResumeDiagnostics → ResumeSweepStats →
+// PositionInvariantViolations）⇒ 本转发 + main 的分钟打点同时落地 ✓；流程纪律 = **任何新增导出
+// 必须同批带可达面与可达性红证** ✓。
+func (m *Manager) PositionInvariantViolations() []string {
+	if m == nil {
+		return nil
+	}
+	m.readingsConsumedInvariants.Add(1) // 消费计数（见字段注释 ✓）
+	m.mu.Lock()
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+	var out []string
+	for _, p := range pipes {
+		if l := p.Ledger(); l != nil {
+			out = append(out, l.PositionInvariantViolations()...)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// SelfFailureReasons 汇总各管道**最近的自愈失败原因**（新→旧、有界 ✓），供分钟打点消费 ✓。
+func (m *Manager) SelfFailureReasons() []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+	var out []string
+	for _, p := range pipes {
+		for _, r := range p.SelfFailureReasons() {
+			out = append(out, p.Key().LogSourceID+": "+r)
+			if len(out) >= 8 {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+// ResumeSweepStats 返回兜底环的**跳过原因分类读数**（现场"41 家为何不动"的直接答案 ✓）。
+type ResumeSweepStats struct {
+	Candidates       int64 // 进入本轮容量内的候选源数
+	Revived          int64 // 本轮真正复活的源数
+	SkipBackpressure int64
+	SkipHysteresis   int64
+	SkipEnumeration  int64
+	RisingStreak     int64
+	// SweepTicks / SweepPanics：**心跳与崩溃计数**（现场据此判"环活着吗" ✓）。
+	SweepTicks  int64
+	SweepPanics int64
+	// EligibleNow 是**合格暂停源总数（gauge，不是累计 ✓）**；与 Candidates（累计）并读即知覆盖进度 ✓。
+	EligibleNow int64
+	// SkipBlocked：因**有界等待超时**而跳过的步数（现场据此判"是否被 m.mu 之类的长持有挡住" ✓）。
+	SkipBlocked int64
+	// **耗时读数**：三步各自累计 + 每轮总耗时 + 上轮处理源数 ⇒ 平均每源一眼可算 ✓。
+	NsDelivery       int64
+	NsResolve        int64
+	NsEvaluate       int64
+	NsRoundTotal     int64
+	LastRoundSources int64
+	// **在飞定界读数**（新账 2 ✓）：当前在飞（含被放弃）+ 因到上限而拒发的步数 ⇒ 现场一眼判叠加压力 ✓。
+	InFlight        int64
+	SkipInflightCap int64
+	// **四相读数**（见字段注释 ✓）。
+	NsScanElig     int64
+	NsBacklogTotal int64
+	NsSyncQuota    int64
+	// 逐相"最长单次 m.mu 等待"（ns ✓；支 A 直接点名该相 ✓）。
+	MuWaitBacklogMax int64
+	MuWaitQuotaMax   int64
+	MuWaitSourcesMax int64
+	MuWaitResumeMax  int64
+	// RollingProbes / NsRolling（#66-⑤ 只读）：兜底环轮转窗口里**实际发起**的"只滚动/补段"自愈次数
+	// 与耗时（前置为 O(1) 有欠账判据 ⇒ 健康源不发起 ⇒ 本读数即成本定界证明 ✓）。
+	RollingProbes int64
+	NsRolling     int64
+	// DeliveryProbes / NsRollingDelivery（#66-⑥ 只读）：同上窗口里**实际发起**的"有界投递步"
+	// 次数与耗时（前置为 O(1) 投递欠账判据 ⇒ 无欠账不发起 ⇒ 本读数即成本定界证明 ✓）。
+	DeliveryProbes    int64
+	NsRollingDelivery int64
+	// DirectDeliverProbes / NsRollingDirectDeliver（#179-② / INGEST-12 只读）：同上窗口里
+	// **实际发起**的"破环直投"步次数与耗时。该步含 Ledger 深克隆 + WAL 全量快照 + 同步 VL 写
+	// （本文件自述"把单轮拖到 48.5 分钟"的 O(n) 重活）；旧形态它不经有界执行器、也不产读数。
+	DirectDeliverProbes    int64
+	NsRollingDirectDeliver int64
+}
+
+func (m *Manager) ResumeSweepStats() ResumeSweepStats {
+	if m == nil {
+		return ResumeSweepStats{}
+	}
+	m.readingsConsumedStats.Add(1) // 消费计数（见字段注释 ✓）
+	return ResumeSweepStats{
+		Candidates:       m.sweepCandidates.Load(),
+		Revived:          m.sweepRevived.Load(),
+		SkipBackpressure: m.skipBackpressure.Load(),
+		SkipHysteresis:   m.skipHysteresis.Load(),
+		SkipEnumeration:  m.skipEnumeration.Load(),
+		RisingStreak:     m.risingStreak.Load(),
+		SweepTicks:       m.sweepTicks.Load(),
+		SweepPanics:      m.sweepPanics.Load(),
+		EligibleNow:      m.sweepEligibleNow.Load(),
+		SkipBlocked:      m.skipBlocked.Load(),
+		NsDelivery:       m.nsDelivery.Load(),
+		NsResolve:        m.nsResolve.Load(),
+		NsEvaluate:       m.nsEvaluate.Load(),
+		NsRoundTotal:     m.nsRoundTotal.Load(),
+		LastRoundSources: m.lastRoundSources.Load(),
+		InFlight:         m.sweepInflight.Load(),
+		SkipInflightCap:  m.skipInflightCap.Load(),
+		NsScanElig:       m.nsScanElig.Load(),
+		NsBacklogTotal:   m.nsBacklogTotal.Load(),
+		NsSyncQuota:      m.nsSyncQuota.Load(),
+		MuWaitBacklogMax: m.muWaitBacklog.Load(),
+		MuWaitQuotaMax:   m.muWaitQuota.Load(),
+		MuWaitSourcesMax: m.muWaitSources.Load(),
+		MuWaitResumeMax:  m.muWaitResume.Load(),
+		RollingProbes:    m.sweepRollingProbes.Load(),
+		NsRolling:        m.nsRolling.Load(),
+
+		DeliveryProbes:         m.sweepDeliveryProbes.Load(),
+		NsRollingDelivery:      m.nsRollingDelivery.Load(),
+		DirectDeliverProbes:    m.sweepDirectDeliverProbes.Load(),
+		NsRollingDirectDeliver: m.nsRollingDirectDeliver.Load(),
+	}
+}
+
+// sweepBacklogTotal 返回**闸视图**总积压（全部源的条目数之和 ✓）：背压判据的输入 ✓。
+func (m *Manager) sweepBacklogTotal() int64 {
+	if m != nil && m.sweepBacklogOf != nil {
+		return m.sweepBacklogOf()
+	}
+	if m == nil {
+		return 0
+	}
+	muT0 := time.Now()
+	m.mu.Lock()
+	m.noteMuWait("backlog", muT0)
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+	var total int64
+	for _, p := range pipes {
+		if wal := p.WAL(); wal != nil {
+			entries, _ := wal.BacklogAndLimits()
+			total += entries
+		}
+	}
+	return total
+}
+
+// BackpressureSkips 返回因净涨背压而跳过的轮数（可观测 ✓）。
+func (m *Manager) BackpressureSkips() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.backpressureSkips.Load()
+}
+
+// RecoveryQuotaStats 暴露恢复期配额的当前口径（可观测 ✓）：生效系数、宽限截止、是否恢复中。
+func (m *Manager) RecoveryQuotaStats() (factor float64, graceUntil time.Time, recovering bool) {
+	if m == nil {
+		return 1, time.Time{}, false
+	}
+	m.mu.Lock()
+	until := m.recoveryGraceUntil
+	m.mu.Unlock()
+	recovering = m.recoveryInProgress()
+	if recovering || (!until.IsZero() && time.Now().Before(until)) {
+		return m.recoveryQuotaFactorOf(), until, recovering
+	}
+	return 1, until, false
+}
+
+// syncRecoveryQuota 把"恢复期独立配额"同步到全部管道（每轮 tick + Start 各调一次 ✓）。
+//
+// 规则（用户定调 ✓）：恢复中 ⇒ 设 factor ✓；恢复刚结束 ⇒ 记宽限截止，期间继续拓宽 ✓；
+// 宽限过期 ⇒ 回归常规闸 ✓（届时超常规闸的源按**常规语义**暂停 = 正确行为 ✓，红线不削弱 ✗）。
+// noteMuWait 记录一次 m.mu 获取的等待时长（按调用相 ∪ 取最大 ✓）。
+//
+// 用途（四相下探判据 ✓）：**单点极大** ⇒ 该相被长持有者挡住（支 A ⇒ 点名该相 ✓）；
+// **稳定小** ⇒ 该相耗在遍历本身（支 B ⇒ 三遍并一遍 ✓）。
+func (m *Manager) noteMuWait(label string, t0 time.Time) {
+	if m == nil {
+		return
+	}
+	v := time.Since(t0).Nanoseconds()
+	var a *atomic.Int64
+	switch label {
+	case "backlog":
+		a = &m.muWaitBacklog
+	case "quota":
+		a = &m.muWaitQuota
+	case "sources":
+		a = &m.muWaitSources
+	case "resume":
+		a = &m.muWaitResume
+	default:
+		return
+	}
+	for {
+		o := a.Load()
+		if v <= o || a.CompareAndSwap(o, v) {
+			return
+		}
+	}
+}
+
+func (m *Manager) syncRecoveryQuota() {
+	if m == nil {
+		return
+	}
+	recovering := m.recoveryInProgress()
+	muT0 := time.Now()
+	m.mu.Lock()
+	m.noteMuWait("quota", muT0)
+	if recovering {
+		m.recoveryGraceUntil = time.Time{}
+	} else if m.recoveryGraceUntil.IsZero() {
+		m.recoveryGraceUntil = time.Now().Add(m.recoveryDrainGraceOf())
+		slog.Info("启动恢复已结束：进入排空宽限窗（期间仍按恢复期独立配额判）",
+			"graceUntil", m.recoveryGraceUntil.Format(time.RFC3339),
+			"grace", m.recoveryDrainGraceOf().String(), "factor", m.recoveryQuotaFactorOf())
+	}
+	until := m.recoveryGraceUntil
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+
+	factor := 1.0
+	if recovering || time.Now().Before(until) {
+		factor = m.recoveryQuotaFactorOf()
+	}
+	for _, p := range pipes {
+		wal := p.WAL()
+		if wal == nil {
+			continue
+		}
+		wal.SetRecoveryWiden(factor)
+	}
+}
+
+// defaultResumeInterval 是容量自愈兜底的默认周期。
+//
+// 依据（2026-10-03 现场）：暂停的唯一恢复评估点挂在采集轮上（Append 前/投递后 TryReclaim），
+// 而暂停期间采集轮只"只投递不读取"⇒ 一旦投递也停（或上游全堵），恢复评估再无人触发 ✗，
+// 表现为暂停不回落、成批源停死。30s 足够低频（开销 ≈ 每源一次 O(1) 账本读）又能把
+// "停死数小时"压缩到"最多 30s 后发现可恢复" ✓。
+const defaultResumeInterval = 30 * time.Second
+
+func (m *Manager) resumeIntervalOf() time.Duration {
+	if m == nil || m.resumeInterval <= 0 {
+		return defaultResumeInterval
+	}
+	return m.resumeInterval
+}
+
+// maybeResumePausedSources 是容量自愈兜底的一次执行：**只碰积压/容量类暂停** ✓。
+//
+// 红线（用户指令）：绝不越权清其它类暂停（容量门禁等）——原因前缀不属于本包积压类的源一律跳过 ✓；
+// 对符合的源做「尽力排空存量 → 推进回收 → 滞回评估」，积压回落到滞回线即自动解除 ✓。
+// defaultResumeBatchPerRound 是兜底环**每轮最多处理多少个可解源**。
+//
+// 为什么需要显式容量（2026-10-04 现场：15 分钟只解 1 个 ✗）：兜底环虽然遍历全部暂停源 ✓，
+// 但每源的"补证据→消解缺口→评估恢复"是一整串动作，慢源会把一轮拖长 ⇒ 观察上就是"每轮只放行
+// 一个" ✗。这里给出**有界但多源**的每轮容量（N 可配 ✓，默认 8），并记录本轮实际放行数 ✓，
+// 使"每轮容量"成为可观测、可调的显式量 ✓，而不是由最慢源隐式决定 ✗。
+const defaultResumeBatchPerRound = 8
+
+func (m *Manager) resumeBatchOf() int {
+	if m == nil || m.resumeBatchPerRound <= 0 {
+		return defaultResumeBatchPerRound
+	}
+	return m.resumeBatchPerRound
+}
+
+func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
+	muT0 := time.Now()
+	m.mu.Lock()
+	m.noteMuWait("resume", muT0)
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+	// **稳定序**：轮转窗口只有在稳定序下才有意义 ✓（map 迭代序随机会让"轮转"退化成随机 ✓）。
+	tScan := time.Now()
+	defer func() { m.nsScanElig.Add(int64(time.Since(tScan))) }()
+	sort.Slice(pipes, func(i, j int) bool {
+		return pipes[i].Key().LogSourceID+pipes[i].Key().SourceGeneration <
+			pipes[j].Key().LogSourceID+pipes[j].Key().SourceGeneration
+	})
+	// **全量资格扫描（gauge）**：合格暂停源总数 = 下一轮窗口该覆盖的总量 ✓。
+	// 为什么单列：现场"`candidates` 恒定 2 而应复活 38" ✗ ⇒ 必须能一眼看出"**合格者有多少 vs 本轮处理了多少**" ✓。
+	eligible := 0
+	for _, p := range pipes {
+		led := p.Ledger()
+		if led == nil {
+			continue
+		}
+		// **eligible 的口径**（2026-10-05 小件 ✓，与"★应复活"剪刀差对齐）：**计入**所有积压/容量类暂停源
+		// （**含滞回未满足者** ✓）；**不计入**非积压类暂停与已解除者 ✓；已裁定放弃者的缺口被消解、但源可能
+		// 仍在暂停 ⇒ **照样计入**（它仍是"可解源" ✓）。
+		// ⇒ 与"★应复活"之差 = **滞回条件（backlog < 半闸）** ✓ ⇒ 现场"eligible 稳 46 而剪刀差在降"
+		// **不是矛盾**，是两把尺口径不同 ✓✓。
+		if st, ok := led.AcquireState(p.Key()); ok && st.Paused && acquire.IsBacklogPauseReason(st.PauseReason) {
+			eligible++
+		}
+	}
+	m.sweepEligibleNow.Store(int64(eligible))
+
+	// **轮转窗口**（用户 2026-10-05 ②：只取前 N 且不轮转 ⇒ 长暂停源**永不被覆盖** ✗✗）：
+	// 从上一轮停下的位置继续、绕回开头 ✓ ⇒ 任意合格源在 ⌈E/batch⌉ 轮内必被处理 ✓。
+	handled := 0
+	batch := m.resumeBatchOf()
+	start := 0
+	if len(pipes) > 0 {
+		start = int(m.sweepCursor.Load() % uint64(len(pipes)))
+	}
+	scanned := 0
+	for scanned < len(pipes) && handled < batch {
+		p := pipes[(start+scanned)%len(pipes)]
+		scanned++
+		led := p.Ledger()
+		if led == nil {
+			continue
+		}
+		// #66-⑤：**早退之前**先给该源一次「只滚动/补段」的机会。否则"既非积压/容量类暂停、又无未解决
+		// 缺口"的落后源（现场 `inst:160/202/203/179`：新窗零 `滚动回收` 行、全库零「回收被拒」行 ✓）
+		// 三条面都到不了它：投递确认面要等新批次被确认（安静源没有 ✗）、自愈面准入要求"暂停或缺口"
+		//（它两者皆非 ✗）、本环候选资格又要求"积压/容量类暂停"（早退 ✗）⇒ 回收链永久卡住。
+		// 轮转窗口**会扫遍所有管道**（游标 ⌈E/batch⌉ 轮内覆盖全部 ✓）⇒ 挂在这里 ⇒ 任意落后源
+		// 在有限轮内必被推进一次 ✓。
+		//
+		// **成本定界**：先做 O(1) 的"有欠账"前置（reclaim ≥ delivery ⇒ 无可推进 ⇒ 不 probe ✓，
+		// 健康源每轮只多一次 Positions 读 ✓），再走**既有有界执行器**（单步预算 + 在飞上限；
+		// 超预算只表示"本轮不等它"、后台照跑 ✓）⇒ **每轮有界** ✓。
+		// **不新增旁路语义**：调用的就是两面共用的同一助手，hold 优先/幂等/绑定前后水位复读
+		//（repairStalledReclaim → backfillDeliveryConfirmedCoverage ✓）全部继承 ✓。
+		if pos, ok := led.Positions(p.Key()); ok {
+			if src, srcOK := m.sourceConfigFor(p); srcOK {
+				m.noteReclaimStall(p, src, pos)
+			}
+			if pos.Reclaim < pos.Delivery {
+				if src, srcOK := m.sourceConfigFor(p); srcOK {
+					m.sweepRollingProbes.Add(1)
+					tRoll := time.Now()
+					if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { m.reclaimStep0RollingOnly(p, src) }) {
+						m.skipBlocked.Add(1)
+					}
+					m.nsRolling.Add(int64(time.Since(tRoll)))
+				}
+			}
+			// #66-⑥：**投递欠账**（read > delivery）同样在这里被**有界驱动一次**。
+			// 为什么必须在"这里"：现场 `inst:160` 是 `read=441M / delivery=reclaim=331M` ⇒ ⑤ 的回收欠账
+			// 前置恒假（reclaim 已追平 ✗），而三条现存投递面全都到不了这类源 —— 自愈面步 1 在
+			// `AcquirePaused` **之内** ✗、自愈面状态闸要求"暂停或缺口" ✗、兜底环候选只服务积压/
+			// 容量类暂停 ✗、#56 排空宿主只服务**登记过 `AppendRejected`** 的源 ✗ ⇒ 投递水位永久静止 ✗✗。
+			//
+			// **有界**：复用既有 `DeliverPending`（单次 ≤ `log_capacity.max_replay_events_per_drain`
+			// 条，默认 500 ✓；只发 Durable 条目 ✓；位置账本幂等 ✓；未推进退避/失败不退避 ✓）
+			// + 既有有界执行器（单步预算 + 在飞上限 ✓）。
+			// **单源可重入幂等**：整窗 replay 的既有前提是"绝不并发对同源发起两次"
+			//（见 schedulePendingReplay 注释 ✓）⇒ 必须与 #56 宿主**共用同一张在飞表**认领；
+			// 认领不到（他面在飞）⇒ 本轮让路、**下一轮重试**（窗口轮转必然再来 ✓）。
+			// **不复活**：不调 EvaluateResume、不改暂停态、不入候选口径 ⇒ 候选红线不变 ✓。
+			// #179-②：**破环直投** —— 缝属"待重读"类且已 resolved（非终局）时不等实例 resume，
+			// 直接把缝区间的 durable 存量经标准投递面投出 ⇒ 成功路径自动按既有证据口径关缝 ✓。
+			//
+			// **INGEST-12**：本步与相邻两步同样经 `runSweepStepBounded` + 同一张在飞表收口。
+			// 旧形态是这一步唯一**裸调用**（相邻 9073/9103 都包在大执行器里）⇒ 其内部 O(n) 重活
+			// （Ledger 深克隆 + WAL 全量快照 + 同步 VL 写）既不占预算也不进在飞计数，全都落在
+			// 兜底环 ticker 单线程上，与 30 行前「论界**每轮有界** ✓」的自述直接矛盾。
+			// 认领在**函数外**两档 O(1) 门闸之后做（`sourceConfigFor` 是内存查表），使"深克隆/快照
+			// 这类开销"也只在认领成功后才发生；`directDeliverResolvedReReadGap` 自身不再认领
+			// （避免同一 key 自锁）。
+			key := p.Key().LogSourceID + "/" + p.Key().SourceGeneration
+			if _, srcOK := m.sourceConfigFor(p); srcOK && m.tryClaimReplayInflight(key) {
+				m.sweepDirectDeliverProbes.Add(1)
+				tDirect := time.Now()
+				started := make(chan struct{})
+				finished := m.runSweepStepBounded(m.sweepStepBudgetOf(), func() {
+					close(started)
+					defer m.finishScheduledReplay(key) // 清在飞（待办仍在则下轮再来 ✓）
+					if src, okSrc := m.sourceConfigFor(p); okSrc {
+						m.directDeliverResolvedReReadGap(p, src)
+					}
+				})
+				if !finished {
+					select {
+					case <-started:
+						// 已发起、只是等待超预算：调用在后台继续，在飞标记由它结束时清 ✓
+					default:
+						// 未发起（在飞上限拒绝）：撤回认领 ⇒ 本轮不做该源，且不热自旋 ✓。
+						m.finishScheduledReplay(key)
+					}
+				}
+				m.nsRollingDirectDeliver.Add(int64(time.Since(tDirect)))
+			}
+			if pos.Delivery < pos.Read {
+				key := p.Key().LogSourceID + "/" + p.Key().SourceGeneration
+				if _, srcOK := m.sourceConfigFor(p); srcOK && m.tryClaimReplayInflight(key) {
+					m.sweepDeliveryProbes.Add(1)
+					tDeliver := time.Now()
+					started := make(chan struct{})
+					finished := m.runSweepStepBounded(m.sweepStepBudgetOf(), func() {
+						close(started)
+						defer m.finishScheduledReplay(key) // 清在飞（待办仍在则再唤醒 ✓）
+						_, _ = p.DeliverPending()
+					})
+					if !finished {
+						select {
+						case <-started:
+							// 已发起、只是等待超预算：调用在后台继续，在飞标记由它结束时清 ✓
+						default:
+							// 未发起（在飞上限拒绝）：撤回认领 ⇒ 本轮不排空该源，且**不热自旋** ✓
+							//（本路径不登记 replayPending ⇒ 释放即可，下一轮重试 ✓）。
+							m.finishScheduledReplay(key)
+						}
+					}
+					m.nsRollingDelivery.Add(int64(time.Since(tDeliver)))
+				}
+			}
+		}
+		entry := led.Get(p.Key())
+		if entry == nil || !entry.AcquirePaused {
+			continue
+		}
+		if !acquire.IsBacklogPauseReason(entry.PauseReason) {
+			m.skipEnumeration.Add(1) // 枚举类跳过（原因非积压类 ✓）——红线不变 ✓，但要可读 ✓
+			continue
+		}
+		// **枚举类跳过**（不在管道/原因非积压类）：分类计数 ✓，让"41 家为何不动"可直接读出来 ✓。
+		handled++ // 计入本轮容量：**处理**（无论最终是否放行）都占额度 ✓，避免慢源无限拖延一轮 ✗
+		candidates++
+		m.sweepCandidates.Add(1) // 计数归属在**观测发生处** ✓（直接调用者也能看到读数 ✓）
+		if m.resumeProbe != nil {
+			m.resumeProbe(p.Key().LogSourceID)
+		}
+		// **缺口闸兜底**（2026-10-03 现场终章的决定性根因）：积压类暂停的恢复前置里有一条
+		// "账本无未解决 gap"——`ledger.ResumeAcquire` 在有缺口时**直接拒绝**
+		// （见 internal/worker/logs/ledger/ledger.go:876-885 `unresolved gaps still block acquisition`）。
+		// 现场形态正是"积压已清零（entries=0）仍无一复活" ✗✗——它们**不是**被积压挡住，而是被缺口挡住 ✓。
+		// 因此这里必须先把「已发布投影证据能覆盖的缺口」消解掉（缺口语义红线：无证据不得凭空消解 ✗，
+		// 由 autoResolveGapsFromPublished 自己把关 ✓），再评估恢复 ✓。
+		if src, ok := m.sourceConfigFor(p); ok {
+			// **有界**（同执行器 ✓）：本步要读该源的已发布投影并可能做整源扫描 ⇒ 慢源/被 m.mu 挡住时
+			// 会让整个维护环停摆 ✗（现场 ticks=1 冻结的同类）。跳过后**下一轮重试**、语义不变 ✓。
+			tResolve := time.Now()
+			if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { m.autoResolveGapsFromPublished(src, p) }) {
+				m.skipBlocked.Add(1)
+			}
+			m.nsResolve.Add(int64(time.Since(tResolve)))
+		}
+		// 排空侧：先把已 durable 未确认的存量发出去（投递成功才会推进回收）✓
+		// **有界等待**（2026-10-05 现场 ✓）：`DeliverPending`→`deliver` 会拿 `m.mu`，而"长持 m.mu 的
+		// 规划者"（整源镜像重建那类 ✓）可以让它阻塞很久 ✗ ⇒ 维护环不许挂在这上面 ✗✗。
+		// 照 `persistHot` 同型：超预算就**跳过本轮该步**（计入 skipBlocked ✓，继续下一源 ✓），
+		// 被挡的那次调用会在后台自行完成 ✓（`m.mu` 释放后即返回 ✓，不丢工作 ✓）。
+		tDeliver := time.Now()
+		if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { _, _ = p.DeliverPending() }) {
+			m.skipBlocked.Add(1)
+		}
+		m.nsDelivery.Add(int64(time.Since(tDeliver)))
+		// 回收侧再评估：TryReclaim（按当前水位剪枝）+ 滞回恢复 ✓
+		before := led.Get(p.Key())
+		wasPaused := before != nil && before.AcquirePaused
+		// **有界**（同执行器 ✓）：`EvaluateResume` = `TryReclaim`（账本/分段门禁 ✓）+ 滞回评估 ⇒
+		// 在 m.mu 被长持有或分段扫描慢时会阻塞 ✗。跳过只表示"本轮不评"，**下一轮照评** ✓
+		// （滞回与分类消解都是幂等的 ✓，语义不变 ✓）。
+		tEvaluate := time.Now()
+		if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() { _ = p.EvaluateResume() }) {
+			m.skipBlocked.Add(1)
+		}
+		m.nsEvaluate.Add(int64(time.Since(tEvaluate)))
+		after := led.Get(p.Key())
+		if wasPaused && after != nil && after.AcquirePaused {
+			// **滞回/其它跳过**：评估过但未解除 ⇒ 分类计数 ✓（现场 41 家若全落这里 ⇒ 判据问题 ✓）。
+			m.skipHysteresis.Add(1)
+		}
+		if wasPaused && after != nil && !after.AcquirePaused {
+			revived++
+			m.sweepRevived.Add(1)
+		}
+	}
+	// 下一轮从**新的位置**继续 ✓（轮转的核心一行 ✓；scanned 含被跳过的项 ⇒ 游标必然前进 ✓）。
+	if len(pipes) > 0 {
+		m.sweepCursor.Store(uint64((start + scanned) % len(pipes)))
+	}
+	// 耗时读数的分母：**记在自己函数内** ✓（不碰调用方 ⇒ 少一个跨作用域锚点 ✓）。
+	m.lastRoundSources.Store(int64(candidates))
+	return candidates, revived
+}
+
+// sourceConfigFor 取某条管道对应的源配置（键形态与 autoResolveGapsFromPublished 内部一致 ✓）。
+func (m *Manager) sourceConfigFor(p *pipeline.Pipeline) (SourceConfig, bool) {
+	if m == nil || p == nil {
+		return SourceConfig{}, false
+	}
+	key := p.Key()
+	cfgKey := key.LogSourceID + "/" + key.SourceGeneration
+	muT0 := time.Now()
+	m.mu.Lock()
+	m.noteMuWait("sources", muT0)
+	src, ok := m.sources[cfgKey]
+	if !ok {
+		// 兼容：部分路径用存储命名空间作为键（见 runtime.go 里 m.pipes[storageNamespace] 的用法）。
+		src, ok = m.sources[key.LogSourceID]
+	}
+	m.mu.Unlock()
+	return src, ok
+}
+
+// ── #56：追加被拒 ⇒ 「排空存量」改为调度（宿主 = 既有容量自愈兜底环） ─────────────────
+//
+// 现场（opt2 三栈定名）：WAL.Append 被拒（暂停/上限）时原先在 emit→ingest 链上**同步**执行
+// deliverPendingBestEffort（replay=true，整窗、百万级批）⇒ 采集轮停摆、goroutine 堆积 183→242，
+// 而全程 m.mu 无慢持锁 ⇒ 在途阻塞。修法：摄取路径只登记待办 + 非阻塞唤醒（O(1)），
+// 排空由**既有**兜底环在路径外执行（不新造环 ⇒ 生命周期/关停沿用已审的那条路径）。
+
+// schedulePendingReplay 登记「该源需排空已 durable 存量」并唤醒兜底环（#56，摄取路径内只做这件事）。
+//
+// 合并语义：同源已有待办 ⇒ 不重复入队、不重复唤醒（避免一次暂停风暴刷出 N 次整窗 replay）。
+// 单飞语义：该源正在排空时新到的被拒**仍会登记**（待办保留），由排空完成后的再唤醒接手；
+// 绝不并发发起同源两次整窗 replay（那会打乱同源投递的串行前提）。
+func (m *Manager) schedulePendingReplay(key string) {
+	if m == nil || key == "" {
+		return
+	}
+	m.replayMu.Lock()
+	if m.replayPending == nil {
+		m.replayPending = make(map[string]struct{})
+	}
+	if m.replayWake == nil {
+		m.replayWake = make(chan struct{}, 1)
+	}
+	_, dup := m.replayPending[key]
+	m.replayPending[key] = struct{}{}
+	wake := m.replayWake
+	m.replayMu.Unlock()
+	m.replayScheduledTotal.Add(1)
+	if dup {
+		return // 合并：同源已有待办 ⇒ 不重复唤醒
+	}
+	select {
+	case wake <- struct{}{}:
+	default: // 已有待唤醒信号：合并
+	}
+}
+
+// replayWakeCh 返回唤醒通道（懒创建；nil 通道在 select 里等价于"永不就绪"，安全）。
+func (m *Manager) replayWakeCh() <-chan struct{} {
+	m.replayMu.Lock()
+	defer m.replayMu.Unlock()
+	if m.replayWake == nil {
+		m.replayWake = make(chan struct{}, 1)
+	}
+	return m.replayWake
+}
+
+// takeScheduledReplay 认领一条「待排空且不在飞」的源（标记在飞、从待办移除）。
+// 全部待办都在飞或没有待办 ⇒ 返回 false（调用方据此结束本轮）。
+func (m *Manager) takeScheduledReplay() (string, bool) {
+	m.replayMu.Lock()
+	defer m.replayMu.Unlock()
+	for key := range m.replayPending {
+		if _, busy := m.replayInflight[key]; busy {
+			continue // 在飞：跳过（待办保留 ⇒ 该源排空结束后由再唤醒接手）
+		}
+		if m.replayInflight == nil {
+			m.replayInflight = make(map[string]struct{})
+		}
+		m.replayInflight[key] = struct{}{}
+		delete(m.replayPending, key)
+		return key, true
+	}
+	return "", false
+}
+
+// tryClaimReplayInflight 以 #56 的**同一张在飞表**为"整窗 replay 排空"做**单源互斥**（#66-⑥）。
+//
+// 为什么必须共用这张表：`drainScheduledReplay`（#56 宿主）与兜底环轮转窗口的投递步（#66-⑥）
+// 都会发起 `DeliverPending`（replay=true ⇒ ingest 侧**整窗 replace**），而该路径的既有前提是
+// "绝不并发对同源发起两次整窗 replay（那会打乱同源投递的串行前提）"（见 schedulePendingReplay 注释 ✓）。
+// 直调而不认领 = 把这个前提破掉 ✗✗ ⇒ 两条面必须认同一张在飞表 ✓。
+//
+// 与 takeScheduledReplay 的差别：本方法**不动** replayPending（钩子路径不是"追加被拒"登记来的 ✓）；
+// 释放一律走 finishScheduledReplay（清在飞 + 待办仍在则再唤醒 ✓）。
+func (m *Manager) tryClaimReplayInflight(key string) bool {
+	if m == nil || key == "" {
+		return false
+	}
+	m.replayMu.Lock()
+	defer m.replayMu.Unlock()
+	if m.replayInflight == nil {
+		m.replayInflight = make(map[string]struct{})
+	}
+	if _, busy := m.replayInflight[key]; busy {
+		return false
+	}
+	m.replayInflight[key] = struct{}{}
+	return true
+}
+
+// finishScheduledReplay 结束一次排空：清在飞标记；若该源在排空期间又被登记（新到的追加被拒）
+// ⇒ 再唤醒一次，让待办在不远的将来被真正处理（不依赖下一轮兜底 tick）。
+func (m *Manager) finishScheduledReplay(key string) {
+	m.replayMu.Lock()
+	delete(m.replayInflight, key)
+	_, stillPending := m.replayPending[key]
+	wake := m.replayWake
+	m.replayMu.Unlock()
+	if !stillPending || wake == nil {
+		return
+	}
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+// abandonScheduledReplay 撤回一次认领（有界执行器因**在飞上限**拒绝发起时）：
+// 待办放回集合、清在飞标记 ⇒ 留待下一轮，绝不把源永久标成"在飞"（否则该源再也不会被排空 ✗）。
+func (m *Manager) abandonScheduledReplay(key string) {
+	m.replayMu.Lock()
+	delete(m.replayInflight, key)
+	if m.replayPending == nil {
+		m.replayPending = make(map[string]struct{})
+	}
+	m.replayPending[key] = struct{}{}
+	m.replayMu.Unlock()
+}
+
+// drainScheduledReplay 排空「因追加被拒而登记」的存量投递（#56）。由兜底环在**路径外**调用。
+//
+// 每源一步都走既有的**有界执行器**（慢源不拖死兜底环：超预算放弃等待、调用在后台跑完并自清在飞）。
+// 返回本轮真正发起排空的源数（观测/回归用）。
+func (m *Manager) drainScheduledReplay() int {
+	handled := 0
+	for {
+		key, ok := m.takeScheduledReplay()
+		if !ok {
+			return handled
+		}
+		p, ok := m.pipeFor(key)
+		if !ok || p == nil {
+			m.finishScheduledReplay(key) // 源已注销：丢弃待办（无管道可排空）
+			continue
+		}
+		handled++
+		started := make(chan struct{})
+		finished := m.runSweepStepBounded(m.sweepStepBudgetOf(), func() {
+			close(started)
+			defer m.finishScheduledReplay(key)
+			_, _ = p.DeliverPending()
+		})
+		if !finished {
+			select {
+			case <-started:
+				// 已发起、只是等待超预算：调用在后台继续，在飞标记由它结束时清除 ✓
+			default:
+				// 未发起（在飞上限拒绝）：撤回认领并**结束本轮** —— 不能就地重试，否则
+				// takeScheduledReplay 会再次认领同一个键 ⇒ 热自旋（在飞上限在被别人占用时
+				// 会持续拒绝，循环永不退出 ✗）。待办已放回集合 ⇒ 下一轮/下一次被拒再试 ✓。
+				m.abandonScheduledReplay(key)
+				return handled
+			}
+		}
+	}
+}
+
+// ScheduledReplayCount 返回「追加被拒 ⇒ 登记待办」的累计次数（#56 观测读数）。
+func (m *Manager) ScheduledReplayCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.replayScheduledTotal.Load()
+}
+
+// RunCapacityResumeLoop 是容量自愈兜底循环（低频、只读账本、ctx 结束即退）。
+func (m *Manager) RunCapacityResumeLoop(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticker := time.NewTicker(m.resumeIntervalOf())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.replayWakeCh():
+			// #56：追加被拒的排空请求 —— 在**摄取路径之外**执行（这正是本修复的目的）。
+			// 关停故事：环随 ctx 退出；已发起的排空调用是有界的 WAL 快照投递，其在飞时长与
+			// sweepOnce 的既有有界步骤同源（超预算放弃**等待**、调用后台跑完，不丢数据：条目仍在 WAL）。
+			m.drainScheduledReplay()
+		case <-ticker.C:
+			m.sweepTicks.Add(1) // 心跳：环活着就有读数 ✓（停止 ⇒ 心跳不动 ⇒ 一眼可辨 ✓）
+			// **兜底 recover（连栈）**：一轮内的 panic 不许杀死整个兜底环 ✗（现场"计数恒定"的形态 ✓）；
+			// 栈一起打（用户 2026-10-05：只打 panic 原文往往不足以一次定位 ✓）。
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						m.sweepPanics.Add(1)
+						slog.Error("兜底环本轮 panic（已恢复，环继续）",
+							"panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+					}
+				}()
+				m.sweepOnce()
+			}()
+		}
+	}
+}
+
+// sweepOnce 是兜底环的**一轮全部动作**（自 RunCapacityResumeLoop 原样抽出：只搬家，
+// `continue→return` 与缩进由**精确文本替换**完成 ✓，逻辑逐字不变 ✓）。
+func (m *Manager) sweepOnce() {
+	roundStart := time.Now()
+	defer func() { m.nsRoundTotal.Add(int64(time.Since(roundStart))) }()
+	// **窗口化净涨背压**（2026-10-05 现场修正 ✗✓）：单轮比较太敏感 —— 现场 41 家
+	// "paused + backlog_pause + blocking=0 + backlog < 半闸"三项前置全满足却无一复活 ✗，
+	// 头号嫌疑就是**任何一轮抖动都被判净涨 ⇒ 永久跳过** ✗。
+	// 改为：只有**连续 N 轮净涨**（默认 3，可配 ✓）才跳过；读的仍是**闸视图**积压 ✓。
+	tBacklog := time.Now()
+	now := m.sweepBacklogTotal()
+	m.nsBacklogTotal.Add(int64(time.Since(tBacklog)))
+	if m.lastSweepKnown && now > m.lastSweepBacklog {
+		m.risingStreak.Add(1)
+	} else {
+		m.risingStreak.Store(0)
+	}
+	streak := m.risingStreak.Load()
+	m.lastSweepBacklog, m.lastSweepKnown = now, true
+	if streak >= int64(m.sweepBackpressureStreakOf()) {
+		m.skipBackpressure.Add(1)
+		slog.Warn("兜底环背压：连续多轮积压净涨，本轮不放宽也不复活",
+			"streak", streak, "threshold", m.sweepBackpressureStreakOf(), "backlog", now)
+		return // 原 `continue` ⇒ 抽出后同一语义：结束本轮 ✓
+	}
+	tQuota := time.Now()
+	m.syncRecoveryQuota()
+	m.nsSyncQuota.Add(int64(time.Since(tQuota)))   // 先同步配额口径（恢复中/宽限/回归 ✓），再扫暂停源 ✓
+	cands, revived := m.maybeResumePausedSources() // 计数由函数内累加 ✓（避免双计 ✗）
+	// **每轮为何无复活**（把猜测变读数 ✓）：有候选却零复活时打一条汇总 ✓，否则静默 ✓。
+	if cands > 0 && revived == 0 {
+		slog.Warn("兜底环本轮无复活（可观测：候选/复活/各类跳过计数）",
+			"candidates", cands, "revived", revived,
+			"skip_backpressure", m.skipBackpressure.Load(),
+			"skip_hysteresis", m.skipHysteresis.Load(),
+			"skip_enum", m.skipEnumeration.Load())
+	}
+}
+
+// groupReconcileEvents 是常驻对账的**唯一分组入口**：把让路旋钮（slice/yield）与观测口
+// 一次性接上，避免调用点各写各的（调用点漏接 = 让路静默失效 ✗）。
+func (m *Manager) groupReconcileEvents(source SourceConfig, events []logtypes.Event) (map[string][]logtypes.Event, []string, error) {
+	return groupEventsByUTCDayYielding(source, events, m.reconcileSliceOf(), m.reconcileYieldOf(), m.reconcileYieldNotify)
+}
+
+// defaultReconcileYield / defaultReconcileSliceEvents 是**对账 CPU 让路**的默认值。
+//
+// 依据（2026-10-03 现场）：60 台/113 万条规模下对账分组与采集抢核 ⇒ 采集轮"无锁无等待却推不动" ✗。
+// 默认 4096 条 / 5ms：10 万条源额外延迟 ≈ 24×5ms ≈ 120ms（可忽略 ✓），但每个切片都交还 P ✓。
+const (
+	defaultReconcileYield       = 5 * time.Millisecond
+	defaultReconcileSliceEvents = 4096
+)
+
+// reconcileYieldOf 归一化对账让路时长（<=0 ⇒ 默认；负值配置在启动期已被拒 ✗）。
+func (m *Manager) reconcileYieldOf() time.Duration {
+	if m == nil {
+		return defaultReconcileYield
+	}
+	if m.reconcileYield > 0 {
+		return m.reconcileYield
+	}
+	return defaultReconcileYield
+}
+
+// reconcileSliceOf 归一化让路切片大小（<=0 ⇒ 默认）。
+func (m *Manager) reconcileSliceOf() int {
+	if m == nil || m.reconcileSliceEvents <= 0 {
+		return defaultReconcileSliceEvents
+	}
+	return m.reconcileSliceEvents
+}
+
+// persistHot 是采集/投递侧的统一入口：绝不为落库阻塞（超时交给后台通道）。
+func (m *Manager) persistHot() error {
+	return m.persistCtx(context.Background(), persistMode{
+		priority:  true,
+		maxWait:   m.persistHotBudgetOf(),
+		planReuse: true,
+	})
+}
+
+// persistDurableBeforeDelivery 是 WAL 提交后的耐久门。
+// 交办后台不等于本批已落库，故超时必须返回 ErrPersistDeferred，让采集管道跳过本次投递。
+func (m *Manager) persistDurableBeforeDelivery() error {
+	return m.persistCtx(context.Background(), persistMode{
+		priority:      true,
+		maxWait:       m.persistHotBudgetOf(),
+		planReuse:     true,
+		failOnHandoff: true,
+	})
+}
+
+func (m *Manager) persistHotBudgetOf() time.Duration {
+	if m != nil && m.persistHotBudget > 0 {
+		return m.persistHotBudget
+	}
+	return defaultPersistHotBudget
+}
+
+// requestPersist 把「请落库」交给后台持久化通道（非阻塞；已有待办即跳过）。
+// defaultResolvePersistBudget 是解算收尾落库的默认有界等待预算（#59）。
+//
+// 取值 2s 的取舍：调用方（CS/CP RPC）总预算通常在 5–10s 量级，而该路径前面还有一次
+// 5s 的 cycleMu 有界获取（resolveGapsCycleMuWait）⇒ 两段相加仍有富余；同时远大于门上一次
+// 正常周期（几十–几百 ms）⇒ 正常负载下**绝大多数调用仍走同步落库**，只有真被长周期挡住时才交办。
+const defaultResolvePersistBudget = 2 * time.Second
+
+// resolvePersistBudgetOf 归一化解算收尾落库预算。
+func (m *Manager) resolvePersistBudgetOf() time.Duration {
+	if m != nil && m.resolvePersistBudget > 0 {
+		return m.resolvePersistBudget
+	}
+	return defaultResolvePersistBudget
+}
+
+// notePersistHandoff 记一次"交办后台"（#59；mode.handoffObs 为 nil ⇒ 零开销）。
+func (m *Manager) notePersistHandoff(mode persistMode) {
+	if mode.handoffObs != nil {
+		mode.handoffObs.Add(1)
+	}
+}
+
+// persistResolveTail 是**解算收尾的有界落库**（#59）：与强一致路径同档（priority=true、**不放宽**
+// 计划复用），唯一差别是门上最多等 resolvePersistBudget；超预算即交办后台并返回。
+//
+// 语义不变量：
+//
+//	① 写不丢：交办走既有 persistRequests 后台通道（保证最终完成；既有回归
+//	   TestAsyncHandoffDoesNotClaimCoverage 守住"交办不得谎报覆盖"）；
+//	② 表述明确：返回值 durable 区分"本次已真落库"与"已交办后台"，并累计到
+//	   ResolvePersistHandoffCount() 供探针同刻取；
+//	③ 覆盖水位只在**完整落库**后推进（既有实现不变 —— persistCovered.Store 在 !incomplete 分支）。
+func (m *Manager) persistResolveTail() (durable bool, err error) {
+	var handoffs atomic.Int64
+	mode := persistMode{priority: true, maxWait: m.resolvePersistBudgetOf(), handoffObs: &handoffs}
+	if err := m.persistCtx(context.Background(), mode); err != nil {
+		return false, err
+	}
+	if n := handoffs.Load(); n > 0 {
+		m.persistResolveHandoffs.Add(n)
+		slog.Info("解算收尾落库已交办后台（受理即返：账本变更已落账，索引落库由后台通道最终完成）",
+			"section", "resolveGapsForSource", "budget", m.resolvePersistBudgetOf().String())
+		return false, nil
+	}
+	return true, nil
+}
+
+// ResolvePersistHandoffCount 返回解算收尾"交办后台"的累计次数（#59 观测读数）。
+func (m *Manager) ResolvePersistHandoffCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.persistResolveHandoffs.Load()
+}
+
+// persistClearConflictsTail 是「清空身份冲突」收尾的**有界落库**。
+//
+// 复用 persistResolveTail 的取舍（同档 priority、不放宽计划复用、只在门上加了预算，超预算即
+// 交办后台并返回）而不是另写一套，理由：#59 已经为"人工入口的收尾落库"定过口径，这里若换一套
+// 预算/交办语义，两条人工路径的可观测行为就会漂移，运维面对同一类现象要读两种读数。
+//
+// 与 persistResolveTail 的唯一差别是交办日志的 section 与计数器的归属：
+// 「解算收尾」的计数器若被本路径累加，探针就无法区分是解算卡还是清空卡。
+func (m *Manager) persistClearConflictsTail() (durable bool, err error) {
+	var handoffs atomic.Int64
+	mode := persistMode{priority: true, maxWait: m.resolvePersistBudgetOf(), handoffObs: &handoffs}
+	if err := m.persistCtx(context.Background(), mode); err != nil {
+		return false, err
+	}
+	if n := handoffs.Load(); n > 0 {
+		m.persistClearConflictsHandoffs.Add(n)
+		slog.Info("清空身份冲突的落库已交办后台（受理即返：内存状态已清空，索引落库由后台通道最终完成）",
+			"section", "clearIdentityConflicts", "budget", m.resolvePersistBudgetOf().String())
+		return false, nil
+	}
+	return true, nil
+}
+
+// ClearConflictsPersistHandoffCount 返回清空身份冲突"交办后台"的累计次数（观测读数，0 ⇒ 全部同步落库完成）。
+func (m *Manager) ClearConflictsPersistHandoffCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.persistClearConflictsHandoffs.Load()
+}
+
+func (m *Manager) requestPersist() {
+	if m == nil || m.persistRequests == nil {
+		return
+	}
+	select {
+	case m.persistRequests <- struct{}{}:
+	default:
+	}
+}
+
+// persistLoop 是**唯一允许在持久化门上阻塞**的消费者：它把热路径交来的落库请求做完。
+//
+// 为什么必须有（2026-10-03 现场）：采集/投递侧的落库前置是"先落库再写 VL"的契约，而一次落库的
+// 单个单元可能停在一分钟级的 SQL 语句上——把采集侧挂在这条链上，就是现场"VL 零写入 + read_pos
+// 冻结"的形态。现在采集侧**有界等待**、超时交办，落库的**真实性**由本 goroutine 与
+// `persistCovered` 保证（只在整批真正落库后才推进 ✓ 不谎报）。
+func (m *Manager) persistLoop(ctx context.Context) {
+	defer close(m.persistWorkerDone)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// #67-B（b）：受控截断的**锁外执行点** —— 独立 tick（与"周期是否完成"无关 ✓），
+	// 每轮只做一次"能不能截断"的判定；真正要求 TryLock 成功 + 无读者 + 残余 ≤ 门限 ✓。
+	truncateTicker := time.NewTicker(defaultControlledTruncateInterval)
+	defer truncateTicker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.persistRequests:
+			if err := m.persist(); err != nil {
+				slog.Warn("后台持久化失败（下一轮重试）", "error", err)
+			}
+		case <-truncateTicker.C:
+			m.tryControlledTruncate(ctx)
+		}
+	}
+}
+
+// defaultControlledTruncateInterval 是受控截断执行点的节拍（#67-B（b））：低频、与持久化周期解耦 ✓。
+const defaultControlledTruncateInterval = 60 * time.Second
+
+// noteReclaimStall 是 #179 第 1 步②的**有界判据（本步只告警）**：同一源连续 ≥3 轮"回收未前进"
+// 即升级为一条 Warn（含受阻类别读数 ✓），之后每 3 轮再报一次（节流 ✓）。
+// **本步不做任何自动动作** ✗（"存量段直投"那一级待 ① 落地后接入 ✓）——目的只是"禁止静默永久钉死" ✓。
+func (m *Manager) noteReclaimStall(p *pipeline.Pipeline, source SourceConfig, pos logtypes.Positions) {
+	if m == nil || p == nil {
+		return
+	}
+	key := p.Key().LogSourceID + "/" + p.Key().SourceGeneration
+	m.reclaimStallMu.Lock()
+	if m.reclaimStallRounds == nil {
+		m.reclaimStallRounds = make(map[string]int)
+		m.reclaimStallLast = make(map[string]uint64)
+	}
+	if last, ok := m.reclaimStallLast[key]; ok && pos.Reclaim > last {
+		m.reclaimStallRounds[key] = 0 // 有进展 ⇒ 计数清零 ✓
+	} else if pos.Reclaim < pos.Delivery {
+		m.reclaimStallRounds[key]++ // 有欠账且未前进 ⇒ 记一轮 ✓
+	} else {
+		m.reclaimStallRounds[key] = 0 // 无欠账（reclaim ≥ delivery）⇒ 非停滞 ✓
+	}
+	rounds := m.reclaimStallRounds[key]
+	m.reclaimStallLast[key] = pos.Reclaim
+	m.reclaimStallMu.Unlock()
+	if rounds >= 3 && rounds%3 == 0 {
+		m.blockedStallWarns.Add(1)
+		slog.Warn("回收连续多轮无进展（②有界判据：本步只告警，不做自动动作）",
+			"logSourceID", source.LogSourceID, "rounds", rounds,
+			"read", pos.Read, "durable", pos.Durable, "delivery", pos.Delivery, "reclaim", pos.Reclaim,
+			"blocked_seg_hold", m.blockedSegHold.Load(), "blocked_config_hold", m.blockedConfigHold.Load(),
+			"blocked_no_material", m.blockedNoMaterial.Load(), "blocked_watermark_moved", m.blockedWatermark.Load())
+	}
+}
+
+// allowReReadGapProbe 是"待重读缝直投"的**每源冷却门**（O(1)，2026-10-06 快验回归修复）：
+// 同源 30s 内至多探一次 ⇒ 把该步的代价从"每源每轮 × 全量快照"降到"欠账源 ≤2 次/分钟" ✓。
+// 设计取舍：宁可让个别缝多等 ≤30s，也不允许它再占死兜底环（饿死 60 源的代价远大于此 ✗）。
+func (m *Manager) allowReReadGapProbe(key ledger.SourceKey) bool {
+	if m == nil {
+		return false
+	}
+	k := key.LogSourceID + "/" + key.SourceGeneration
+	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for key, p := range m.pipes {
-		prev := m.state.Sources[key]
-		entry := persistedSource{Ledger: p.Ledger().Snapshot(), ProjectionGeneration: prev.ProjectionGeneration,
-			PublicationPending: prev.PublicationPending, EventsStored: prev.EventsStored,
-			EventsStoredThrough: prev.EventsStoredThrough}
-		// B1a：按条切分——段存储已覆盖（record_end <= EventsStoredThrough）的条目只写引用；
-		// 其余（尚未投递、正文未入库，或段存储不可用）必须内联保存，绝不丢正文。
-		through := prev.EventsStoredThrough
-		refs, inline := p.WAL().SnapshotSplit(func(ev logtypes.Event) bool {
-			return entry.EventsStored && through > 0 && ev.Record.End <= through
-		})
-		entry.WALRefs = refs
-		entry.WAL = append(entry.WAL, inline...)
-		// 事件体已在磁盘段时不写回内联切片——这正是原先 state 涨到 180MB、每次 persist
-		// 触发 130MB MarshalIndent 的根源（FR-484 阶段0 量测）。
-		if !entry.EventsStored {
-			entry.Events = append(entry.Events, prev.Events...)
+	if m.reReadGapProbeAt == nil {
+		m.reReadGapProbeAt = make(map[string]time.Time)
+	}
+	if last, ok := m.reReadGapProbeAt[k]; ok && now.Sub(last) < 30*time.Second {
+		return false
+	}
+	if len(m.reReadGapProbeAt) > 4096 {
+		for kk, ts := range m.reReadGapProbeAt {
+			if now.Sub(ts) > 10*time.Minute {
+				delete(m.reReadGapProbeAt, kk)
+			}
 		}
-		m.state.Sources[key] = entry
 	}
-	// 元数据量小，用流式编码直接写文件，避免 “先 Marshal 出整份 []byte 再写” 的双份峰值。
-	if err := os.MkdirAll(filepath.Dir(m.statePath), 0o755); err != nil {
-		return err
+	m.reReadGapProbeAt[k] = now
+	return true
+}
+
+// directDeliverResolvedReReadGap 是 #179-② 的**破环直投步**（红线照批 ✓）：
+// 区间上界＝缝 EndPos（目的正是越过当前 delivery ✓）；只投确在 WAL 的 durable 字节（缺 ⇒ 可见缺口+告警 ✓）；
+// 不绕导入守卫、不 MarkImported、hold 优先、判据不放宽 ✓；单源互斥复用 #56 在飞表 ✓；
+// 上限取配置值（`maxReplayEventsPerDrain`），未配置时回退**导出真源** `DefaultReplayEventsPerDrain` ✓；
+// **不做自动终局裁定** ✗（升级梯首级就是本步 ✓）。
+func (m *Manager) directDeliverResolvedReReadGap(p *pipeline.Pipeline, source SourceConfig) {
+	if m == nil || p == nil || p.Ledger() == nil {
+		return
 	}
-	tmp := m.statePath + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	// 门闸（2026-10-06 探针快验回归修复 ✗✗）：本步原来对**每个源、每轮**先做
+	// `Ledger.Get`（深克隆 O(缺口数＋批次数)）＋ `WAL.Snapshot`（全量拷贝 O(WAL 条数)）——
+	// 60 源 × 数十万条目实测把兜底环单轮拖到 **48.5 分钟**（采集读面被饿死 ✓）。
+	// 两道 O(1) 前置：① 无投递欠账（delivery ≥ read）⇒ 直接返回 ✓；
+	//              ② 同源冷却期内不重复探测 ✓（默认 30s，见 allowReReadGapProbe ✓）。
+	pos, ok := p.Ledger().Positions(p.Key())
+	if !ok || pos.Delivery >= pos.Read {
+		return
+	}
+	if !m.allowReReadGapProbe(p.Key()) {
+		return
+	}
+	entry := p.Ledger().Get(p.Key())
+	if entry == nil {
+		return
+	}
+	// 选缝：只取**仍阻挡当前 delivery 水位的待重读缝**（EndPos > delivery ✓）。
+	// 落后于水位的旧缝（字节多已被回收）不得被误选——2026-10-05 179 首验实测：旧缝 id=0
+	// 被误选 ⇒ 每轮只报"找不到字节"，真正挡路的 id=1 永远轮不到 ✗✗。
+	delivery := entry.Positions.Delivery
+	type reReadGap struct{ from, to uint64 }
+	candidates := make([]reReadGap, 0, 4)
+	for _, g := range entry.Gaps {
+		if !g.Resolved || !acquire.IsReReadHealableResolution(g.Resolution) {
+			continue
+		}
+		if g.EndPos <= delivery || g.EndPos <= g.StartPos {
+			continue
+		}
+		candidates = append(candidates, reReadGap{g.StartPos, g.EndPos})
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	limit := m.maxReplayEventsPerDrain
+	if limit <= 0 {
+		limit = acquire.DefaultReplayEventsPerDrain
+	}
+	snapshot := p.WAL().Snapshot()
+	slice := make([]logtypes.Event, 0, 16)
+	picked := false
+	tried := make([]bool, len(candidates))
+	for {
+		// 按 StartPos 升序逐个尝试（离水位最近者优先 ✓），取第一个确有 durable 字节的。
+		best := -1
+		for i, c := range candidates {
+			if tried[i] {
+				continue
+			}
+			if best < 0 || c.from < candidates[best].from {
+				best = i
+			}
+		}
+		if best < 0 {
+			break
+		}
+		tried[best] = true
+		c := candidates[best]
+		slice = slice[:0]
+		for _, e := range snapshot {
+			if !e.Durable || e.Event.Record.End < c.from || e.Event.Record.Start > c.to {
+				continue
+			}
+			slice = append(slice, e.Event)
+			if len(slice) >= limit {
+				break
+			}
+		}
+		if len(slice) > 0 {
+			picked = true
+			break
+		}
+	}
+	if !picked {
+		if m.noteSourceError(source.LogSourceID, "reclaim-repair: 缝区间在 WAL 中无 durable 字节") {
+			slog.Warn("破环直投：待重读缝区间在 WAL 中找不到 durable 字节（保持可见缺口，不静默）",
+				"logSourceID", source.LogSourceID, "candidates", len(candidates))
+		}
+		return
+	}
+	// **单源互斥由调用方持有**（INGEST-12）：认领在 `maybeResumePausedSources` 里、经两档
+	// O(1) 门闸之后完成，使本函数内的 O(n) 重活（深克隆/全量快照）也只在认领成功后发生。
+	// 本函数**不再**自己认领/释放 —— 同 key 二次认领会直接失败而让本步静默空转（自锁）。
+	//
+	// 增量语义（replay=false ✓）：本步投的是**缝区间的部分切片**，不是整窗——
+	// `deliver()` 内 `replace := saved.PublicationPending || replay` ⇒ replay=true 会按
+	// 「整窗重发」走权威全量重建（O(段行数)≈秒级）并把全量当写入面 ✗✗（2026-10-05 首验：
+	// 该形态带来 202 的「投影可见性期限」重试与时延；部分切片本就不该走整窗语义 ✗）。
+	if _, err := m.deliver(source, slice, false); err != nil {
+		slog.Warn("破环直投失败（下轮重试）", "logSourceID", source.LogSourceID, "error", err)
+		return
+	}
+	// **关键**：仅调 m.deliver 不推进位置账本 ✗ ⇒ 必须补记，否则 delivery 不会越过缝 ✓。
+	if err := p.WAL().RecordHTTPResult(acquire.DeliveryResult{
+		StartPos: slice[0].Record.Start, EndPos: slice[len(slice)-1].Record.End, HTTPStatus: 200,
+	}); err != nil {
+		slog.Warn("破环直投：投递结果登记失败（下轮重试）", "logSourceID", source.LogSourceID, "error", err)
+		return
+	}
+	// #179-③ 收口：缝的"关闭"在本形态是**改判**（待重读类 ⇒ 已投递类）——
+	// 既有"未决→已决"通道到不了已决缝 ✗（实测 `缝已关=false` ✓）。
+	if n, err := p.Ledger().SupersedeDeliveredReReadGaps(p.Key(), gapRangesOfEvents(slice),
+		gapResolutionDeliveryRetry,
+		acquire.ResolutionReReadOnResume, acquire.ResolutionReReadOnResumeDelivery); err != nil {
+		slog.Warn("破环直投：缝升级失败（数据已投出，下轮重试）", "logSourceID", source.LogSourceID, "error", err)
+	} else if n > 0 {
+		slog.Info("破环直投：待重读缝已按投递证据升级为终局", "logSourceID", source.LogSourceID, "gaps", n)
+	}
+}
+
+// tryControlledTruncate 在持久化环的 tick 上、**锁外**尝试一次受控截断（#67-B（b））。
+//
+// 为什么放在这里：TRUNCATE 会等读者并做页拷贝 —— 在持 `stateindex.Store.mu` 时做会把落库/采样/读面
+// 一起冻住（2026-10-05 生产 58min 停摆的机制本体 ✗✗）。本入口只在**环的节拍**上调用，且真正截断
+// 由 `Store.TryControlledTruncate` 用 `TryLock` 自证"没有在飞 apply/读"后才执行 ✓。
+func (m *Manager) tryControlledTruncate(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	m.persistPlanMu.Lock()
+	plan := m.persistPlan
+	m.persistPlanMu.Unlock()
+	if plan == nil || plan.store == nil {
+		return
+	}
+	plan.store.TryControlledTruncate(ctx)
+}
+
+// persistCtx 是 persist 的**可取消 + 分步 + 显式公平**实现。
+//
+// 公平性（2026-10-03 现场：门闩饿死采集轮）：等待者**显式入队**（优先/普通两条 FIFO），只有队首
+// 能被授予门；持门者做完一步后必须**重新排到队尾**，并受「让路窗口」约束（刚交门的调用者在窗口内
+// 不得再取门）——公平性不再交给 `sync.Mutex` 的抢锁与裸 Broadcast ✗。
+//
+// 续跑为什么不重不漏：`ApplyScoped` 的镜像**按提交单元增量更新**，与库内容逐单元一致；因此下一步
+// 重算差异时看到的只剩尚未处理的行。ctx 取消时已提交单元保留（状态一致），未提交部分下次继续。
+func (m *Manager) persistCtx(ctx context.Context, mode persistMode) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.persistGateEnsure()
+	// 合并（coalescing）：本调用按到达顺序声明一个序号；任何「构建发生在声明之后」的落库都会
+	// 覆盖它（见下方 covered 的读取位置），因此一个周期可被任意多个调用方共享，短变更调用者
+	// （实例登记）不必排到队尾各自再执行一遍。
+	seq := m.persistJoin.Add(1)
+	if m.persistCovered.Load() >= seq {
+		return nil
+	}
+	// **铁律：规划在门外**（2026-10-03 现场）：持门者只做提交、不做规划 ✗✗。
+	// 规划合并（2026-10-03 回退修复 ①）：**只对热路径**（采集/投递，mode.planReuse）在窗口内
+	// 复用既有计划 —— 原实现让每个未 covered 的调用者各自跑 planPersist（持 m.mu 遍历全源 +
+	// 重建镜像），60 源并发下每轮 N 倍冗余规划 + 锁争抢，实测吞吐 3.3k→1.5k 行/s。
+	// 强一致路径（登记/关停/恢复/测试）保持"每次重新规划"⇒"返回即落库"语义零变化 ✓。
+	// 覆盖水位按**计划自带**的 plan.covered（构建前读到的 persistJoin 水位）推进，绝不越推 ✓。
+	var (
+		plan    *persistPlan
+		planErr error
+	)
+	if mode.planReuse {
+		plan, planErr = m.planPersistReuse(ctx, seq)
+	} else {
+		plan, planErr = m.planPersist(ctx)
+	}
+	if planErr != nil {
+		// 规划失败：不阻塞调用方（热路径语义），交给后台通道重试；错误照旧上报 ✓。
+		m.requestPersist()
+		return planErr
+	}
+	g := &m.persistGate
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	waitStarted := time.Now()
+	g.enqueueLocked(seq, mode.priority)
+	// 入队序观测（契约字面，2026-10-05 A 裁定）：记录本条在门内的真实入队顺序。
+	// 契约 = "门按其队列顺序（入队序）服务"；seq 是门外取号，并发下可与入队序不同
+	// （旧行为里长 m.mu 段恰好串行化了并发调用 ⇒ 隐式维持"取号序==入队序"；A-Step2 拆掉
+	// 该隐式耦合后，观测面必须记录真实入队序，不得再拿取号序当契约 ✗）。
+	if m.persistGateStage != nil {
+		m.persistGateStage(ctx, "enqueue", seq, mode.priority)
+	}
+	// 出队同样要 Broadcast：**排队结构的变化会改变「谁是队首」**——一个等待者返回（出队）后，
+	// 新的队首可能因此变得可授予，而它此刻正睡在 cond.Wait 上。少了这一次唤醒就是全体沉睡
+	// （2026-10-03 实测：12 个 persistCtx 全在 Cond.Wait、门是空的）。
+	defer func() {
+		g.dequeueLocked(seq)
+		g.cond.Broadcast()
+	}()
+	for {
+		if m.persistCovered.Load() >= seq {
+			return g.err
+		}
+		if mode.maxWait > 0 && time.Since(waitStarted) >= mode.maxWait {
+			// 热路径等不到门：交给后台通道（保证"最终会落库"），本调用立即返回 ✓ 采集不受阻。
+			m.notePersistHandoff(mode)
+			m.requestPersist()
+			if mode.failOnHandoff {
+				return ErrPersistDeferred
+			}
+			return nil
+		}
+		if !g.running && g.grantableLocked(seq, mode.priority, m.persistPriorityStreakMax()) {
+			if plan != nil && plan.snapshot < m.persistAccepted.Load() {
+				// 尚未授予写入步骤，离门重新规划但保留真实排队位置，不能让同档后来者插队。
+				g.mu.Unlock()
+				if mode.planReuse {
+					plan, planErr = m.planPersistReuse(ctx, seq)
+				} else {
+					plan, planErr = m.planPersist(ctx)
+				}
+				g.mu.Lock()
+				if planErr != nil {
+					return planErr
+				}
+				continue
+			}
+			g.running = true
+			g.dequeueLocked(seq)
+			if m.persistGateStage != nil {
+				m.persistGateStage(ctx, "acquire", seq, mode.priority)
+			}
+			g.mu.Unlock()
+
+			// 覆盖水位与计划都在**门外**取好（见入口处）：门内只提交 ✗规划。
+			if m.persistStepHold != nil {
+				m.persistStepHold()
+			}
+			incomplete, err := m.commitPersist(ctx, plan)
+			if err == nil && !incomplete {
+				// 只有**完整落库**才推进覆盖水位：部分完成就宣称覆盖会静默丢更新。
+				// 推进值 = 计划自带水位（构建前读）：复用场景下它可能小于本次声明号 ⇒ 不越推 ✓。
+				for prev := m.persistCovered.Load(); plan.covered > prev; prev = m.persistCovered.Load() {
+					if m.persistCovered.CompareAndSwap(prev, plan.covered) {
+						break
+					}
+				}
+			}
+
+			g.mu.Lock()
+			g.running = false
+			g.err = err
+			if mode.priority {
+				g.priorityStreak++
+			} else {
+				g.priorityStreak = 0
+			}
+			g.cond.Broadcast()
+			if m.persistGateStage != nil {
+				m.persistGateStage(ctx, "release", seq, mode.priority)
+			}
+			if errors.Is(err, errPersistPlanStale) {
+				// 旧计划整件拒写后释放门，重新规划不能挪回门内。
+				g.mu.Unlock()
+				plan, planErr = m.planPersist(ctx)
+				g.mu.Lock()
+				if planErr != nil {
+					return planErr
+				}
+				g.enqueueLocked(seq, mode.priority)
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if !incomplete {
+				return nil
+			}
+			if mode.maxWait > 0 {
+				// 热路径最多一步：剩余差异交给后台通道（它允许阻塞），采集继续 ✓。
+				m.notePersistHandoff(mode)
+				m.requestPersist()
+				if mode.failOnHandoff {
+					return ErrPersistDeferred
+				}
+				return nil
+			}
+			if mode.oneStep {
+				// 恢复/重放链：一步一让——剩余差异交给驱动链的下一趟（它们本来就让路）。
+				return nil
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			// 本步有界但差异未完：重新排队（回到队尾）+ **显式让路**——睡满一个调度量级的窗口，
+			// 让排队者（含采集轮）在窗口内把门拿走；本调用随后按队列顺序再取门。
+			g.enqueueLocked(seq, mode.priority)
+			yield := m.persistYieldOf()
+			g.mu.Unlock()
+			if yield > 0 {
+				time.Sleep(yield)
+			}
+			g.mu.Lock()
+			continue
+		}
+		if mode.maxWait > 0 {
+			// 热路径：cond 不支持超时，用「短睡 + 重检」实现有界等待（上限 mode.maxWait ✓）。
+			g.mu.Unlock()
+			time.Sleep(time.Millisecond)
+			g.mu.Lock()
+			continue
+		}
+		g.cond.Wait()
+	}
+}
+
+// persistPriorityStreakMax 是「连续授予优先队列」的上限（老化阈值）：达上限后强制让一个普通队首
+// 通过一次，避免持续到达的采集轮把恢复/重放链饿死（反方向饥饿）。
+//
+// 默认 8：按「采集轮 250ms 一轮、恢复链每步 ≤3s」估算，8 次优先授予 ≈ 数秒内必然放行一次普通等待者，
+// 恢复链仍能收敛；配 0 或负值表示**关闭老化**（仅用于回归里复刻「无反饿保护」的形态）。
+func (m *Manager) persistPriorityStreakMax() int {
+	if m == nil {
+		return defaultPersistPriorityStreakMax
+	}
+	if m.persistPriorityStreak < 0 {
+		// 负值 = **关闭老化**（仅用于回归复刻「无反饿保护」的形态；生产不这样配）。
+		return 0
+	}
+	if m.persistPriorityStreak == 0 {
+		return defaultPersistPriorityStreakMax
+	}
+	return m.persistPriorityStreak
+}
+
+// verifyRoundBudgetOf 返回生效的轮级校验预算。
+func (m *Manager) verifyRoundBudgetOf() time.Duration {
+	if m != nil && m.verifyRoundBudget > 0 {
+		return m.verifyRoundBudget
+	}
+	return defaultVerifyRoundBudget
+}
+
+// VerifyDeferredCount 返回"因轮级预算而本轮放弃校验"的累计次数（观测面 ✓）。
+func (m *Manager) VerifyDeferredCount() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.verifyDeferred.Load()
+}
+
+// reconcileLockBudgetOf 返回生效的「取候选等 m.mu」有界上限（≤0 用默认常量）。
+func (m *Manager) reconcileLockBudgetOf() time.Duration {
+	if m != nil && m.reconcileLockBudget > 0 {
+		return m.reconcileLockBudget
+	}
+	return reconcileCandidateLockBudget
+}
+
+// verifyVisibilityFloorOf 返回生效的"可见性错开"等待（≤0 = 关）。
+func (m *Manager) verifyVisibilityFloorOf() time.Duration {
+	if m != nil && m.verifyVisibilityFloor > 0 {
+		return m.verifyVisibilityFloor
+	}
+	return 0
+}
+
+// persistYieldOf 返回生效的让路窗口：默认 max(persistStepYield, GOMAXPROCS × 5ms)。
+//
+// 为什么与 GOMAXPROCS 挂钩：「一次完整调度」的量级取决于并行度——核越多，被唤醒的等待者越多，
+// 单个持门者越容易靠"回来得快"压制它们（现场 8 个等待者等 2+ 分钟）。
+func (m *Manager) persistYieldOf() time.Duration {
+	if m != nil && m.persistYield > 0 {
+		return m.persistYield
+	}
+	window := time.Duration(runtime.GOMAXPROCS(0)) * 5 * time.Millisecond
+	if window < persistStepYield {
+		window = persistStepYield
+	}
+	return window
+}
+
+// persistGateEnsure 惰性初始化持久化门（兼容直接构造 Manager 的测试路径）。
+func (m *Manager) persistGateEnsure() {
+	g := &m.persistGate
+	g.mu.Lock()
+	if g.cond == nil {
+		g.cond = sync.NewCond(&g.mu)
+	}
+	g.mu.Unlock()
+}
+
+// persistSnapshot 在**持持久化门（本轮唯一执行者）**的前提下执行一次完整持久化：m.mu 下
+// 构建期望状态，释放 m.mu 后再落库（SQLite 事务不再阻塞登记的短临界区；顺序由门保证，见 persist）。
+// persistSnapshotStep 执行**一步**持久化：构建期望状态（m.mu 下）→ 释放 m.mu → 一次有界落库
+// （受每周期总预算约束）。返回 incomplete=true 表示差异尚未做完（镜像已按提交单元更新，
+// 下一步重算即续跑）。
+// persistPlan 是**门外的规划结果**：门内只允许做提交（ApplyScopedCtx）与水位推进 ✗规划。
+//
+// 为什么必须拆开（2026-10-03 现场 X 光片）：持门者在做 CPU 密集规划
+// （persistSnapshotStep→planState→mirrorKey 复刻整源镜像行），于是 6 个投递/采集单元全部卡在
+// sync.Cond.Wait、pollOnce 的 chan send 卡 4 分钟 ✗✗。铁律：**持门者只做提交、不做规划** ✓。
+type persistPlan struct {
+	store    *stateindex.Store
+	desired  stateindex.State
+	changed  []string
+	prunes   []stateindex.WALPrune
+	advances []persistAdvance
+	// covered 是**构建本计划前**读到的 persistJoin 水位：提交成功后覆盖水位最多推进到这里
+	// （计划只保证覆盖"构建前声明的变更"；复用场景下它可能小于调用者声明号 ⇒ 绝不越推 ✓）。
+	covered int64
+	// snapshot 是实际快照顺序；较新快照一经接纳，整个旧计划都失效。
+	snapshot uint64
+}
+
+var errPersistPlanStale = errors.New("ingest: 持久化计划已被较新快照超越")
+
+// persistAdvance 记录「本轮构建过的源」及其构建时的修订号/覆盖签名，**只在落库成功后才推进**。
+//
+// 为什么不能在构建期就推进（用户质疑 2，2026-10-02 复核）：一次落库失败（磁盘满 / 库被
+// 换成只读 / 进程在 apply 之前被杀）会把这些源永久标记成「已持久化」——下一轮不再重建，
+// 其陈旧行再也不会被重试，索引与内存就此静默分叉。现场形态正是「部分持久化残留的悬挂源
+// 被当成已全量落库」：重启后该源按陈旧水位重读（重复投递），或整行缺失被当成新源
+// （先前已投递的数据无人认账）。失败必须让水位**留在原处**，下一轮自动重试同一批源。
+type persistAdvance struct {
+	key   string
+	rev   uint64
+	cover coverSignature
+}
+
+// planPersist 在**门外**构建期望态（CPU 密集：镜像行重建 + 状态→索引态转换）。
+//
+// 只持 m.mu（短临界区）取快照，绝不触碰持久化门 ✓；调用方持门后只做 commitPersist ✓。
+// walSnapshot 是 A-Step2 的"锁外 WAL 构建"输入：changed 源在锁内的**值拷贝**
+// （WAL/WALRefs 为 append-only 切片头 ⇒ 锁外只读安全；此后不再触碰 m.state/m.pipes）。
+type walSnapshot struct {
+	key   string
+	saved persistedSource
+}
+
+// buildWALRowsOutsideLock 在锁外按 changed 顺序逐源构建 WAL 行（A-Step2）：
+// 现场此处的逐条 json.Marshal 曾全压在 m.mu 内（栈证 338,521 条）⇒ 调用方必须已释放 m.mu。
+func (m *Manager) buildWALRowsOutsideLock(snaps []walSnapshot) ([]stateindex.WALRow, error) {
+	if hook, _ := m.walRowsBuildHook.Load().(func()); hook != nil {
+		hook()
+	}
+	out := make([]stateindex.WALRow, 0, len(snaps))
+	for _, sn := range snaps {
+		rows, err := m.walRowsOf(sn.key, sn.saved)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+	}
+	return out, nil
+}
+
+// 根状态与管线输入在同一短临界区定格；历史账本和 WAL 的重建仍在锁外执行。
+func persistRootSnapshot(st persistedState) persistedState {
+	out := persistedState{Sources: make(map[string]persistedSource, len(st.Sources)), SourceConfigs: make(map[string]SourceConfig, len(st.SourceConfigs)), Instances: make(map[string]InstanceBinding, len(st.Instances))}
+	for key, saved := range st.Sources {
+		saved.VerifiedRuns = append([]ledger.PositionRange(nil), saved.VerifiedRuns...)
+		saved.IdentityConflicts = append([]identityConflictRecord(nil), saved.IdentityConflicts...)
+		// 清空凭据与冲突记录同族：快照必须**深拷贝**。浅拷贝会让计划构建期间发生的清空
+		// 直接改写已定格快照里的凭据切片（两者共享底层数组），使"计划描述的变更是哪一次"
+		// 变得不可断言——这与既有 VerifiedRuns/IdentityConflicts 的拷贝理由完全同型。
+		saved.IdentityConflictClearances = append([]identityConflictClearance(nil), saved.IdentityConflictClearances...)
+		out.Sources[key] = saved
+	}
+	for key, value := range st.SourceConfigs {
+		out.SourceConfigs[key] = value
+	}
+	for key, value := range st.Instances {
+		out.Instances[key] = value
+	}
+	return out
+}
+
+func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
+	// covered 是**构建本计划前**读到的持久化声明水位：提交成功后覆盖水位最多推进到这里
+	// （计划只保证覆盖"构建前声明的变更"；复用路径下它可能小于调用者声明号 ⇒ 绝不越推 ✓）。
+	covered := m.persistJoin.Load()
+	if m.persistPlanHold != nil {
+		// 测试钩子：模拟"长规划"。它必须在**门外**睡眠——变异成门内规划则采集/投递单元被卡 ✓。
+		m.persistPlanHold()
+	}
+	m.mu.Lock()
+	store := m.index
+	if store == nil {
+		// 直接构造 Manager 的测试路径：按需打开索引（不触发迁移）。
+		opened, err := stateindex.OpenWithBudget(m.indexPath(), m.indexCommit)
+		if err != nil {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("ingest: 打开采集索引失败: %w", err)
+		}
+		store = opened
+		m.index = store
+	}
+	if m.persistedRev == nil {
+		m.persistedRev = make(map[string]uint64)
+	}
+	if m.persistedCover == nil {
+		m.persistedCover = make(map[string]coverSignature)
+	}
+	m.persistSnapshotSerial++
+	snapshot := m.persistSnapshotSerial
+	planState := persistRootSnapshot(m.state)
+	changed := make([]string, 0, len(m.pipes))
+	// 源集合 = 管道（生产全部源都有管道）∪ 内存状态（测试可能直接构造只有状态的管理器）。
+	// 只有状态的源没有账本修订号可查（管道才是权威），按「每轮都变更」处理，
+	// 与旧的全量写入行为等价——这是测试路径的正确性底线，生产路径不经过这里。
+	keys := make(map[string]struct{}, len(m.pipes)+len(m.state.Sources))
+	for key := range m.pipes {
+		keys[key] = struct{}{}
+	}
+	for key := range m.state.Sources {
+		keys[key] = struct{}{}
+	}
+	// advanced 记录「本轮构建过的源」及其构建时的修订号/覆盖签名，**只在落库成功后才推进**。
+	//
+	// 为什么不能在构建期就推进（用户质疑 2，2026-10-02 复核）：一次落库失败（磁盘满 / 库被
+	// 换成只读 / 进程在 apply 之前被杀）会把这些源永久标记成「已持久化」——下一轮不再重建，
+	// 其陈旧行再也不会被重试，索引与内存就此静默分叉。现场形态正是「部分持久化残留的悬挂源
+	// 被当成已全量落库」：重启后该源按陈旧水位重读（重复投递），或整行缺失被当成新源
+	// （先前已投递的数据无人认账）。失败必须让水位**留在原处**，下一轮自动重试同一批源。
+	advanced := make([]persistAdvance, 0, len(keys))
+	// #55-B（父级裁定，三段式）：第一段锁内只做**守卫判定 + O(1) 输入快照**；重建重活
+	//（Ledger 快照 / WAL 分片 / 内联正文拷贝）移到锁外；第三段锁内**复验守卫**后写回（防丢失更新）。
+	rebuilds := make([]rebuildTask, 0, len(keys))
+	for key := range keys {
+		p := m.pipes[key]
+		if p == nil {
+			// 无管道：没有修订号可依据，按变更处理（重建该源的账本派生行）。
+			changed = append(changed, key)
+			continue
+		}
+		rev := p.Ledger().Revision(p.Key())
+		saved := m.state.Sources[key]
+		cover := coverSignatureOf(saved)
+		if m.persistedRev[key] == rev && m.persistedCover[key] == cover {
+			continue // 账本与段覆盖都未变：该源本轮不参与行规划（只写变更行的前提）
+		}
+		rebuilds = append(rebuilds, rebuildTask{
+			key: key, pipe: p, rev: rev, cover: cover,
+			eventsStored: saved.EventsStored, through: saved.EventsStoredThrough, inline: saved.Events,
+		})
+		// 覆盖签名只取决于 EventsStored / EventsStoredThrough，而重建**原样保留**这两个字段
+		//（见 commitRebuiltSource）⇒ 计划时读到与重建后读到逐字相同，故记账可与守卫同临界区。
+		advanced = append(advanced, persistAdvance{key: key, rev: rev, cover: cover})
+		changed = append(changed, key)
+	}
+	// 第二段（锁外）：逐源构建重建体。现场此处是 m.mu 内除逐条 marshal 之外最大的整块耗时之一
+	//（Ledger 快照逐条 clone + WAL 分片的内联正文拷贝，逐条镜像重建阶段达 260–632ms）。
+	m.mu.Unlock()
+	for i := range rebuilds {
+		rebuilds[i].rebuilt = m.buildRebuiltSourceOutsideLock(rebuilds[i])
+	}
+	m.mu.Lock()
+	// 第三段（锁内）：**复验守卫**后写回。锁外算重建体期间采集轮照常推进：账本修订号或段覆盖
+	// 若已变化，直接写回就会用**计划时的旧水位**覆盖新水位（丢失更新）⇒ 整件丢弃、留待下一轮
+	//（守卫在下轮必然重新命中；无需重试环）。丢弃不改变水位记账：advanced 记的是计划时的
+	// rev/cover，若它们已然陈旧 ⇒ 下轮守卫必命中 ⇒ 自愈 ✓。
+	for i := range rebuilds {
+		t := rebuilds[i]
+		p := m.pipes[t.key]
+		if p == nil || p != t.pipe {
+			continue
+		}
+		// 计划私有副本使用实际重建体；实时 revision 变化只阻止写回共享镜像，不吞掉已取得的快照。
+		private := planState.Sources[t.key]
+		private.Ledger, private.WAL, private.WALRefs = t.rebuilt.Ledger, t.rebuilt.WAL, t.rebuilt.WALRefs
+		planState.Sources[t.key] = private
+		if p.Ledger().Revision(p.Key()) != t.rev || coverSignatureOf(m.state.Sources[t.key]) != t.cover {
+			continue
+		}
+		m.commitRebuiltSource(t.key, t.rebuilt)
+	}
+	// 增量状态：账本派生行只按变更源构建，根行恒为全量（行数为 O(源数)，便宜且兜住
+	// 元数据变更）；配合 ApplyScoped 让未变更源的账本派生行根本不参与规划。
+	// ①水位化差异删除提示：把每个变更源的 **WAL 剪枝水位**（= 账本 reclaim 位置）下发给索引层。
+	//
+	// 为什么是 reclaim：采集侧的内存剪枝用的正是同一个位置（`WAL.pruneReclaimed(pos)`，判据
+	// `Durable && Record.End <= pos`，见 acquire/wal.go），因此索引层的谓词范围删除与内存剪枝
+	// **同源**；索引层还会再做一次等价性守门（期望集里不得存在满足谓词的行），不通过就退回逐行。
+	//
+	// 为什么必须下发（2026-10-02 事故）：启动恢复一次把整段积压判为可回收，索引侧于是要把这段
+	// 「镜像有、期望无」的行逐行删掉（生产 3.4M 行 ÷ 32 行/语句 ≈ 10.6 万条 DELETE，单线程在
+	// 19.5GB 库上 20–30 分钟零进展）。有了水位，这一段差异退化成**每源一条**谓词删除。
+	prunes := make([]stateindex.WALPrune, 0, len(changed))
+	for _, key := range changed {
+		pipe := m.pipes[key]
+		if pipe == nil || pipe.Ledger() == nil {
+			continue
+		}
+		entries := planState.Sources[key].Ledger
+		if len(entries) == 0 || entries[0].Positions.Reclaim == 0 {
+			continue
+		}
+		// 剪枝提示与期望行使用同一源快照，不能读取规划之后的实时回收水位。
+		prunes = append(prunes, stateindex.WALPrune{Owner: key, EndThrough: entries[0].Positions.Reclaim})
+	}
+	// A-Step2（2026-10-04 resolve-gaps 挂死专项）：锁内只做"非 WAL 行"的规划（账本/根行/aux
+	// —— 便宜，且可变字段在此定格），**WAL 行的逐条 marshal（现场 338,521 条）移到锁外**，
+	// 用锁内取的**值拷贝快照**构建（WAL/WALRefs 是 append-only 切片：段只追加 ⇒ 锁外只读安全）。
+	desired, err := m.stateToIndexStateScopedOpt(&planState, changed, true)
 	if err != nil {
-		return err
+		m.mu.Unlock()
+		return nil, err
 	}
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err = enc.Encode(&m.state); err == nil {
-		err = f.Sync()
+	walSnaps := make([]walSnapshot, 0, len(changed))
+	for _, key := range changed {
+		walSnaps = append(walSnaps, walSnapshot{key: key, saved: planState.Sources[key]})
 	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
+	// 规划完成：释放 m.mu 并返回计划。**规划到此结束**（门外）✓；提交由持门者 commitPersist ✓。
+	m.mu.Unlock()
+	// 锁外：WAL 行构建（贵：marshal 全在此；此后不再读 m.state/m.pipes）。
+	walRows, err := m.buildWALRowsOutsideLock(walSnaps)
+	if err != nil {
+		return nil, err
+	}
+	desired.WAL = append(desired.WAL, walRows...)
+	return &persistPlan{store: store, desired: desired, changed: changed, prunes: prunes, advances: advanced, covered: covered, snapshot: snapshot}, nil
+}
+
+// planPersistReuse 是热路径的"规划合并"门面（**只供 persistMode.planReuse**，见其注释）。
+//
+// 背景（2026-10-03 回退定位）：f237ae32 把规划移出持久化门后，**每个未被 covered 短路的
+// 调用者都各自跑一遍 planPersist**（持 m.mu 遍历全源 + 重建变更源镜像）——60 源并发下
+// 每轮 N 倍冗余规划 + m.mu 争抢，实测吞吐 3.3k→1.5k 行/s、verify 98% 停摆。
+//
+// 合并判据（正确性）：**只复用"构建于本调用声明之后"的计划** —— 计划自带 plan.covered
+// （构建前读到的 persistJoin 水位），`plan.covered >= seq` 意味着规划发生在本次声明之后，
+// 而本次的状态变更完成于声明之前 ⇒ 该计划必然已包含本次变更 ✓（不漏写）。
+// 等待期间（persistPlanMu 上排队）由先到的调用者完成规划，其 covered 覆盖排队者的声明号
+// ⇒ 排队者醒来即复用 —— 与旧实现"持门者的规划覆盖排队者"同效，但规划仍在**门外** ✓。
+//
+// 本函数不改变门内提交的原子边界（门内仍一份计划/一次落盘）✓，不依赖任何调用侧串行 ✗。
+func (m *Manager) planPersistReuse(ctx context.Context, seq int64) (*persistPlan, error) {
+	m.persistPlanMu.Lock()
+	defer m.persistPlanMu.Unlock()
+	if m.persistPlan != nil && m.persistPlan.covered >= seq && m.persistPlan.snapshot >= m.persistAccepted.Load() {
+		m.persistPlanReuses.Add(1)
+		return m.persistPlan, nil
+	}
+	plan, err := m.planPersist(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m.persistPlan = plan
+	m.persistPlanAt = time.Now()
+	m.persistPlanBuilds.Add(1)
+	return plan, nil
+}
+
+// PersistPlanStats 导出"规划次数/复用次数"（复验指标：builds/轮 ≈1；只增不减的累计值）。
+func (m *Manager) PersistPlanStats() (builds, reuses int64) {
+	if m == nil {
+		return 0, 0
+	}
+	return m.persistPlanBuilds.Load(), m.persistPlanReuses.Load()
+}
+
+// commitPersist 在**门内**提交一份计划：只做提交与水位推进，不做任何规划 ✗。
+//
+// 新鲜度过滤（为什么必须有）：规划发生在门外 ⇒ 同一源可能已被**更新的计划**先提交 ✗。
+// 直接套用旧计划会写回陈旧行；更糟的是若把 persistedRev 往回写，陈旧行就**永远不会**被重建 ✗✗。
+// 因此提交前用 O(1) 的修订号/覆盖签名复读一遍：只提交**仍然新鲜**的源，其余丢弃（水位不推进
+// ⇒ 下一轮自然重建）✓。这是廉价一致性校验，不是规划 ✓（不含镜像重建/状态转换）。
+func (m *Manager) commitPersist(ctx context.Context, plan *persistPlan) (bool, error) {
+	if plan == nil || plan.store == nil {
+		return false, nil
+	}
+	m.persistCommitMu.Lock()
+	defer m.persistCommitMu.Unlock()
+	if plan.snapshot < m.persistAccepted.Load() {
+		return false, errPersistPlanStale
+	}
+	// 部分提交和失败同样建立门槛，旧根行及剪枝绝不允许穿过。
+	m.persistAccepted.Store(plan.snapshot)
+	// 提交**全部**构建过的源（不清空提交 ✗）：清空会在"状态持续变更"时让每次提交都被丢弃 ⇒ 饿死 ✗
+	// （实测：把过滤当成"提交条件"会同时打断 delivery_batch 剪枝与默认值恢复用例）。
+	// 只按新鲜度决定**是否推进水位**：不新鲜的源水位留在原处 ⇒ 下一轮必然重建并重写它
+	// （即使本轮写进了略旧的行，也会被下一轮覆盖）✓ —— 收敛性不依赖"本轮是否恰好赶上" ✓。
+	m.mu.Lock()
+	advances := make([]persistAdvance, 0, len(plan.advances))
+	for _, a := range plan.advances {
+		pp := m.pipes[a.key]
+		if pp == nil {
+			continue
+		}
+		if pp.Ledger().Revision(pp.Key()) != a.rev || coverSignatureOf(m.state.Sources[a.key]) != a.cover {
+			continue // 规划后被更新：写行但不推进水位 ⇒ 下一轮重建 ✓（绝不把陈旧行标成已落库 ✗）
+		}
+		advances = append(advances, a)
+	}
+	m.mu.Unlock()
+	stats, err := plan.store.ApplyScopedCtx(ctx, plan.desired, plan.changed, plan.prunes)
+	if err == nil {
+		// 观测面：记录本次读数（含分步未完成标志与范围删除条数），供排障与回归取证。
+		m.mu.Lock()
+		m.lastPersistStats = stats
+		m.mu.Unlock()
 	}
 	if err != nil {
-		return err
+		// 不推进水位：本轮构建的源在下一轮会被重新构建并重试落库，悬挂源不会静默滞留。
+		return false, fmt.Errorf("ingest: 持久化采集索引失败（水位未推进，下一轮自动重试）: %w", err)
 	}
-	return os.Rename(tmp, m.statePath)
+	if stats.Incomplete {
+		// 本步受预算约束提前返回：**不推进水位**，下一步重建同一批源并续做剩余差异
+		// （镜像已按提交单元更新 ⇒ 重算结果只剩未处理的行）。
+		return true, nil
+	}
+	// 完整落库后才推进水位。需要重新取锁：规划期已释放 m.mu，期间可能有新的变更被声明；
+	// 即便账本在这段时间里又前进，这里记下的是**更旧**的修订号，下一轮会因不等而重建（安全方向）。
+	m.mu.Lock()
+	for _, a := range advances {
+		m.persistedRev[a.key] = a.rev
+		m.persistedCover[a.key] = a.cover
+	}
+	m.mu.Unlock()
+	return false, nil
+}
+
+// persistSnapshotStep 是「规划 + 提交」的兼容壳（供已在门外的调用方与测试使用）。
+//
+// 调用方若**持门**，必须改调 planPersist（门外）+ commitPersist（门内）✗ 否则违反铁律 ✗。
+func (m *Manager) persistSnapshotStep(ctx context.Context) (bool, error) {
+	plan, err := m.planPersist(ctx)
+	if err != nil {
+		return false, err
+	}
+	return m.commitPersist(ctx, plan)
+}
+
+// LastPersistStats 返回最近一次落库的读数（含谓词范围删除是否启用、是否分步未完成）。
+func (m *Manager) LastPersistStats() stateindex.Stats {
+	if m == nil {
+		return stateindex.Stats{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	stats := m.lastPersistStats
+	stats.Written = cloneCountMap(m.lastPersistStats.Written)
+	stats.Deleted = cloneCountMap(m.lastPersistStats.Deleted)
+	stats.Planned = cloneCountMap(m.lastPersistStats.Planned)
+	return stats
+}
+
+func cloneCountMap(in map[string]int) map[string]int {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+// coverSignature 是「WAL 以何种形态落库」的判据（B1a 按条切分的内联/引用决策输入）。
+type coverSignature struct {
+	eventsStored bool
+	through      uint64
+}
+
+func coverSignatureOf(saved persistedSource) coverSignature {
+	return coverSignature{eventsStored: saved.EventsStored, through: saved.EventsStoredThrough}
+}
+
+// rebuildTask 是一件「锁外重建」任务（#55-B）：
+//   - 锁内产出：O(1) 输入快照（账本修订号 / 覆盖签名 / 段覆盖水位 / 内联正文切片头）
+//     —— `inline` 是**切片头值拷贝**，其底层数组只被整体置 nil 或重建为新切片、
+//     从不原地改写元素（见 appendEvents / appendEventTail / migrateInlineEvents）⇒ 锁外只读安全；
+//   - 锁外产出：rebuilt（重建体）；
+//   - 第三段复验 rev/cover/pipe 身份后写回（复验不过 ⇒ 丢弃留待下轮）。
+type rebuildTask struct {
+	key   string
+	pipe  *pipeline.Pipeline
+	rev   uint64
+	cover coverSignature
+
+	eventsStored bool
+	through      uint64
+	inline       []logtypes.Event
+
+	rebuilt persistedSource
+}
+
+// buildRebuiltSourceOutsideLock 在**锁外**构建一个源的重建体（#55-B，从原 rebuildSource 拆出）。
+//
+// 现场：这段是 m.mu 内除逐条 marshal 之外最大的整块耗时（Ledger().Snapshot() 逐条 clone +
+// WAL().SnapshotSplit 的内联正文拷贝，逐条镜像重建阶段达 260–632ms）⇒ 整段持锁时，
+// 投递/登记/停止/解算全部一起排队。
+//
+// 锁外安全性：Ledger.Snapshot / WAL.SnapshotSplit 各自持自己的锁（ledger.go:599 `l.mu.RLock`、
+// wal.go:41 `w.mu.Lock`）且产物都是**全新切片**；本函数不触碰 m.state / m.pipes。
+func (m *Manager) buildRebuiltSourceOutsideLock(t rebuildTask) persistedSource {
+	if hook, _ := m.rebuildSourceBuildHook.Load().(func()); hook != nil {
+		hook()
+	}
+	entry := persistedSource{
+		Ledger:              t.pipe.Ledger().Snapshot(),
+		EventsStored:        t.eventsStored,
+		EventsStoredThrough: t.through,
+	}
+	// B1a：按条切分——段存储已覆盖（record_end <= EventsStoredThrough）的条目只写引用；
+	// 其余（尚未投递、正文未入库，或段存储不可用）必须内联保存，绝不丢正文。
+	refs, inline := t.pipe.WAL().SnapshotSplit(func(ev logtypes.Event) bool {
+		return entry.EventsStored && t.through > 0 && ev.Record.End <= t.through
+	})
+	entry.WALRefs = refs
+	entry.WAL = append(entry.WAL, inline...)
+	// 事件体已在磁盘段时不写回内联切片——这正是原先 state 涨到 180MB、每次 persist
+	// 触发 130MB MarshalIndent 的根源（FR-484 阶段0 量测）。
+	if !entry.EventsStored {
+		entry.Events = append(entry.Events, t.inline...)
+	}
+	return entry
+}
+
+// commitRebuiltSource 把锁外算好的重建体写回 state（**调用方必须持 m.mu**，且已复验守卫）。
+//
+// 保留字段（投影代次 / 待发布 / 逐字段凭据）取**提交时**的现值：它们由别的路径维护
+// （publish / recordVerifiedRuns），用提交时的读数比用计划时的读数**减少**丢失更新的窗口；
+// 重建体自身的字段（账本 / WAL / 覆盖水位）仍来自计划时的 O(1) 快照，与改前逐字段一致。
+//
+// VerifiedRuns 必须原样保留（既有事故）：它由投递路径写入（见 recordVerifiedRuns），
+// 重建时若清空，每次 persist 都会把刚登记的区间级凭据抹掉 —— 那会使
+// autoResolveGapsFromPublished 永远拿不到凭据而**静默失效**。
+func (m *Manager) commitRebuiltSource(key string, rebuilt persistedSource) {
+	cur := m.state.Sources[key]
+	cur.Ledger = rebuilt.Ledger
+	cur.WALRefs = rebuilt.WALRefs
+	cur.WAL = rebuilt.WAL
+	cur.EventsStored = rebuilt.EventsStored
+	cur.EventsStoredThrough = rebuilt.EventsStoredThrough
+	cur.Events = rebuilt.Events
+	// ProjectionGeneration / PublicationPending / VerifiedRuns 原样保留（cur 的现值）。
+	m.state.Sources[key] = cur
 }
 
 func newWAL(led *ledger.Ledger, key ledger.SourceKey) *acquire.WAL {
 	return acquire.NewWAL(led, key)
+}
+
+// multilineUnclosedTimeoutOf 归一化未闭合超时配置。
+//
+// 口径：0 ⇒ 默认（normalize.DefaultUnclosedTimeout，5s，零配置零行为变化）；
+// 负值 ⇒ 关闭（返回 0，调用方据此跳过强制冲刷）。为什么不把 0 也当成「关闭」：
+// 0 是 Go 的零值，无法与「未配置」区分，而「未配置」必须是安全默认（会冲刷）。
+// 要关闭请显式写一个负值（配置侧 0 与负值都映射为关闭，见 Config.IngestMultilineUnclosedTimeout）。
+func multilineUnclosedTimeoutOf(v time.Duration) time.Duration {
+	if v < 0 {
+		return 0
+	}
+	if v == 0 {
+		return normalize.DefaultUnclosedTimeout
+	}
+	return v
+}
+
+// ErrVerifyDeferred 是"本轮预算用尽、校验延后到下一轮"的**可分类哨兵**（用户 2026-10-05 ④ ✓）。
+//
+// 为什么需要：它是**设计内的正常让路**（同源 INFO 往往显示投影已写入 status=200/err=nil ✓），
+// 但此前只以裸文本返回 ⇒ 调用方无从分类 ⇒ 被逐级打成 **ERROR** ✗（现场 `inst:142` 的分级误报 ✓）。
+// 有哨兵后，调用方 `errors.Is(err, ErrVerifyDeferred)` 即可降级为 WARN/INFO ✓ —— 语义零变化 ✓。
+var ErrVerifyDeferred = errors.New("verification deferred to next round")
+
+// errProjectionVerifyFailed 标记「本次已把数据写进 VL，但逐字段可见性校验未通过」。
+//
+// 为什么需要这个显式标记（2026-10-09 生产循环的止血点）：
+// 该形态是「写完 → 校验不过 → 换新代次再写一遍」的**自锁循环**——现场 `inst:220/file` 的同一份
+// 573562 事件被写成 ≥70 个代次（每轮 ~1 小时），VL 累积 281GB、并把 40 个源的采集挤死 13 小时。
+// 这类失败**重试不会自愈**（数据本身有问题，或该代次永远凑不齐），故重建调度器必须把它判为
+// **确定性失败**并按上限放弃自动重试；而「VL 未就绪 / 网络抖动」这类外部失败必须继续重试。
+//
+// **为什么不靠错误串匹配**：该形态的错误文案恰是 `... not fully visible before deadline:
+// context deadline exceeded`（超时类），既有 `verifyErrorIsSemantic` **刻意**把它判为非语义
+// （那是为了「不取消同批其余簇」的正确取舍，不能改）；而 `errors.Is(err, context.DeadlineExceeded)`
+// 又会把它归到"超时类"。用**写入已成功**这个事实做判据（在返回路径上显式包装）比匹配文案更稳，
+// 也不会随文案演进静默失效（静默失效的后果就是循环重建复发）。
+var errProjectionVerifyFailed = errors.New("projection verify failed after write")
+
+// defaultSweepStepBudget 是兜底环**单源单步**的有界等待预算（0 ⇒ 默认 150ms ✓）。
+//
+// 为什么必须有（2026-10-05 现场 X 光片 ✓）：环第一轮卡在 `DeliverPending→deliver` 的 `m.mu`
+// 上 ⇒ `ticks=1` 冻结、`candidates` 恒定 ⇒ 外部看起来像"没扫到"，其实是"**第一轮就挂住**" ✗✗。
+// 维护环的职责是**周期性巡检**，不是等待重活完成 ⇒ 单步必须能被放弃 ✓。
+const defaultSweepStepBudget = 150 * time.Millisecond
+
+// defaultSweepInflightCap 是在飞被放弃调用的**并发上限**（0 ⇒ 默认 12 ✓）。
+//
+// 为什么需要上限（新账 2 ✓）：超时只放弃"等"、不放弃"做" ✗ ⇒ 每个被放弃的调用仍持有载荷在后台
+//
+//	等 `m.mu`。上限把"同时在飞的这类调用"钉住 ⇒ 内存不再随轮数叠加 ✓（超出即本轮不再发起新步 ✓）。
+//
+// 2026-10-06 #6 复盘（父令定点）：原默认 4 ⇒ 95 源规模下 `inflight` 长期贴 1–4、`skip_inflight_cap`
+// 单调增（实测 0→363）、单轮 300 s+、排水停摆（WAL 760 020 悬空、read 900 000 vs reclaim 0）✗。
+// 提到 12：只放开**跨源**并发；**同源仍严格单飞**（tryClaimReplayInflight 逐源互斥 ✗）；
+// 有界执行器语义不变（超预算只不等待、后台继续 ✓）。
+const defaultSweepInflightCap = 12
+
+func (m *Manager) sweepInflightCapOf() int {
+	if m == nil || m.sweepInflightCap <= 0 {
+		return defaultSweepInflightCap
+	}
+	return m.sweepInflightCap
+}
+
+func (m *Manager) sweepStepBudgetOf() time.Duration {
+	if m == nil || m.sweepStepBudget <= 0 {
+		return defaultSweepStepBudget
+	}
+	return m.sweepStepBudget
+}
+
+// runSweepStepBounded 执行一步；**超预算即返回 false**（不等它 ✓）。被放弃的那次调用会在后台自行
+// 完成（`m.mu` 释放后即返回 ✓）——因此"跳过"只表示"本轮不等它"，**不丢工作** ✓。
+func (m *Manager) runSweepStepBounded(budget time.Duration, fn func()) bool {
+	// **在飞上限**（新账 2 ✓）：已到上限 ⇒ 本轮**不发起**新步 ✓（防极端负载把载荷叠加到不可控 ✗）。
+	if cap := m.sweepInflightCapOf(); cap > 0 && m.sweepInflight.Load() >= int64(cap) {
+		m.skipInflightCap.Add(1)
+		return false
+	}
+	m.sweepInflight.Add(1)
+	done := make(chan struct{})
+	go func() {
+		defer func() { m.sweepInflight.Add(-1); close(done) }() // 在飞数随调用真正结束而减 ✓
+		// 注入点必须在**有界区之内**（2026-10-05 实测教训 ✗✓）：放在 goroutine 之外会把**调用者**
+		// 自己按住 ⇒ 预算再紧也救不了 ⇒ 红证会测出"钩子位置错"而不是"有界失效" ✓。
+		if m.sweepStepHold != nil {
+			m.sweepStepHold()
+		}
+		fn()
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(budget):
+		// 放弃**等待**，但调用**仍在飞** ⇒ 在飞计数要到它真正结束才回落 ✓（这是定界的关键 ✓）。
+		return false
+	}
+}
+
+// startupRecoveryFailureLevel 决定"启动恢复：源恢复失败"这条日志的**级别**（用户 2026-10-05 ✓）。
+//
+// 为什么要抽成函数（可直接测 ✓）：延后是**设计内的正常让路**（`ErrVerifyDeferred` ✓），真失败不是 ✗；
+// 抽出来后用例可以断言两侧（延期 ⇒ WARN ✓ / 真失败 ⇒ ERROR ✓），而不再依赖"读源码 + 人眼判" ✓。
+//
+// **纪律第 8 条（推广版，用户 2026-10-05 ✓）**：凡新增导出/哨兵，必须**同批带【消费点 + 可达性红证】**
+// ✗ —— 本次的"哨兵造好没人用"正是它的反面教材 ✓（`ErrVerifyDeferred` 导出后，此处才是它的第一个消费点 ✓）。
+func startupRecoveryFailureLevel(err error) (slog.Level, string) {
+	if errors.Is(err, ErrVerifyDeferred) {
+		return slog.LevelWarn, "启动恢复：源校验延后（设计内让路，下轮重试）"
+	}
+	return slog.LevelError, "启动恢复：源恢复失败（其余源照常继续）"
 }

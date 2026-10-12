@@ -7,6 +7,14 @@ interface BenchRoute {
   label: string
   href: string
   readySelector: string
+  /**
+   * 页面就绪后的显式准备步骤（虚拟化断言前执行）。
+   *
+   * 存在的理由：部分页面的默认视图只覆盖有界数据子集（如日志中心默认最近 15 分钟时间窗，
+   * 见 2026-10-11 快首屏依据），而虚拟化断言需要 1000+ 全量数据。夹具显式声明自己需要
+   * 的前提，不依赖默认值漂移。
+   */
+  prepare?: (page: Page) => Promise<void>
   virtual?: {
     surfaceSelector: string
     itemSelector: string
@@ -45,6 +53,7 @@ const ROUTES: BenchRoute[] = [
     label: '日志中心',
     href: '/logs',
     readySelector: '[data-page="logs"]',
+    prepare: selectAllTimeRange,
     virtual: {
       surfaceSelector: '[data-testid="logs-virtual"]',
       itemSelector: '[data-testid="log-row"]',
@@ -76,6 +85,24 @@ async function resetConsoleLayout(page: Page): Promise<void> {
     localStorage.setItem('sidebar.collapsed', '0')
     localStorage.removeItem('sidebar.collapsedGroups')
   })
+}
+
+/**
+ * 把日志中心的时间范围显式切到「全部时间」。
+ *
+ * 默认时间窗是**最近 15 分钟**（2026-10-11 快首屏依据：默认「全部时间」会让每个目标的全部分区
+ * 参与查询），mock 日志按一年摊布，15 分钟窗口内只剩几十条——虚拟化断言需要 1000+ 全量数据，
+ * 故显式选择而非依赖默认值。
+ * 定位走 `data-testid`（时间范围是 Radix Select，combobox）：按**显示文案**定位会随默认值/i18n
+ * 漂移（旧写法过滤「最近 24 小时」，默认窗改 15m 后 locator 永不匹配 ⇒ 超时假红）。
+ */
+async function selectAllTimeRange(page: Page): Promise<void> {
+  const rangeSelect = page.getByTestId('logs-range-select')
+  await expect(rangeSelect, '日志中心时间范围控件存在').toBeVisible()
+  await rangeSelect.click()
+  await page.getByRole('option', { name: '全部时间' }).click()
+  // 断言选中项已落到触发器的显示文本上，避免「点了但没生效」的静默通过。
+  await expect(rangeSelect, '日志中心时间范围已切到全部时间').toContainText('全部时间')
 }
 
 /** 断言 1000+ mock 数据页仍只渲染可视窗口，避免 benchmark 在 DOM 爆量时虚假通过。 */
@@ -115,6 +142,7 @@ async function expectRoutesWithoutWorkspaceOverflow(
     await page.goto(route.href)
     const ready = page.locator(route.readySelector)
     await expect(ready, `${viewport.label} ${route.label} 页面就绪`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
+    if (route.prepare) await route.prepare(page)
     await expectVirtualRendering(page, route)
     await ready.evaluate((el) => el.setAttribute('data-overflow-probe', 'true'))
     await expectNoWorkspaceOverflow(page, `${viewport.label} ${route.label}`, route.readySelector)
@@ -399,6 +427,10 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
   })
 
   test('记录关键页面切换耗时', async ({ page }) => {
+    // 6 条路由**串行**走完（每条含就绪等待 + 虚拟化断言 + 一次 rAF），日志中心还要把
+    // 12k 条假日志切到「全部时间」再断言：本机实测 36.8s，已超 Playwright 默认 30s 预算。
+    // 用例只把耗时打成 annotation、**不设阈值**，故放宽预算不会弱化任何断言。
+    test.setTimeout(90_000)
     const results: Array<{ label: string; elapsedMs: number }> = []
 
     for (const route of ROUTES) {
@@ -411,6 +443,9 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
         const startedNav = await page.evaluate(() => performance.now())
         await link.click()
         await expect(page.locator(route.readySelector), `${route.label} 页面就绪`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
+        // prepare 的耗时会计入本页 elapsedMs（无法在导航完成前准备）——本用例只把耗时打成
+        // annotation、不设阈值，故可接受。
+        if (route.prepare) await route.prepare(page)
         await expectVirtualRendering(page, route)
         await page.evaluate(() => new Promise(requestAnimationFrame))
         const elapsedMs = Math.round((await page.evaluate(() => performance.now())) - startedNav)
@@ -420,6 +455,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
 
       const started = await page.evaluate(() => performance.now())
       await expect(page.locator(route.readySelector), `${route.label} 页面就绪`).toBeVisible({ timeout: ROUTE_READY_TIMEOUT_MS })
+      if (route.prepare) await route.prepare(page)
       await expectVirtualRendering(page, route)
       await page.evaluate(() => new Promise(requestAnimationFrame))
       const ended = await page.evaluate(() => performance.now())

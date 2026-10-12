@@ -119,7 +119,9 @@ type Services struct {
 	LogCoord *logcoord.Coordinator
 	// LogRuntimePool 经反向隧道控制 Worker 受管 VictoriaLogs。
 	LogRuntimePool *cpgrpc.ClientPool
-	LogVLAssets    *service.ApprovedVLAssetStore
+	// LogRuntimeHolders 用可信持有者记录校验历史源归属，不从请求键推断授权。
+	LogRuntimeHolders *service.LogTargetHolderService
+	LogVLAssets       *service.ApprovedVLAssetStore
 	// PlatformObservability 是平台管理员首页的有界总览读模型（FR-402）。
 	PlatformObservability *service.PlatformObservabilityService
 	Settings              *service.SettingsService
@@ -187,7 +189,49 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	r.Use(gin.Recovery())
 
 	api := r.Group("/api/v1")
-	api.Use(middleware.RateLimit(10, 20)) // 10 请求/秒，桶容量 20
+	// 限流：按「路由分类 × 客户端 IP」分桶，跨分类另设每 IP 总上限（2026-10-09 生产实证修复）。
+	//
+	// 原实现整个 /api/v1 共用一个 per-IP 桶（10 req/s、容量 20）。实测该桶被**页面自身的
+	// 合法扇出**打满：加载一个实例列表页会在 2 秒内发出 30–60 次请求（/instances、
+	// /instances/{id}、/instances/aggregate），于是同 IP 下去的日志页请求被连坐 429
+	//（生产：单秒 320 次 /logs/federation 请求中 297 次 429，并稳定持续 18 秒压在桶上限）。
+	// 分类分桶后，日志查询类与其它端点各自独立计费，互不挤占。
+	//
+	// 数值依据（cp.out 近 20MB 的 9199 条请求；剔除 429 风暴 ±10s 污染窗口后统计每 IP
+	// 峰值滑动窗口）：全 API 1s≈20、5s≈45、10s≈90；日志类 1s≈24、5s≈45。
+	// 单桶「容量 20 + 速率 10/s」在 1 秒窗口内可放行约 20+10=30 次，**足以承载实测的
+	// 合法负载**——真正的缺陷是分类共桶，不是数值不够。因此：
+	//   - 各分类预算一个数都没动，仍是原来的 10/s、容量 20；
+	//   - 跨分类总上限取「各分类预算之和」（20/s、容量 40）。这是**有意的设计取舍**，不是
+	//     把数值调大：若总上限仍是 10/20，日志类会与别的分类争夺同一额度，隔离形同虚设。
+	//   - 分类只有 2 个（有界常量），放大倍数恒为 2，不随请求内容增长。
+	//
+	// 语义必须如实读（2026-10-12 注释归真）：分类桶是**互相独立的配额**，每 IP 的实际
+	// 总量上限 = min(全局桶, Σ各分类预算)。当前只有 default 与 log_query 两类，
+	// 10 + 10 == 全局 20（速率与容量皆然）⇒ **全局桶对现有两类不构成任何额外约束**，
+	// 它与分类之和的阈值完全重合，只是为「将来新增第三类」预留的兜底闸。因此：
+	//   - 相对修复前（单桶 10/s、容量 20），每 IP 的总配额**确实由 10/s 变为 20/s（翻倍）**，
+	//     这是让分类隔离成立的代价，不应读成"总量未放宽"；
+	//   - 全局桶先于分类桶判定的意义在于**顺序**而非阈值：被分类拒绝的请求同样已扣减
+	//     全局令牌（方向更严），而全局被拒时分类桶未被扣减（不会白占分类预算）。
+	//   - 真正的封顶仍是两道：分类桶（严格 per-IP、10/s）与全局桶（20/s），二者皆无界增长风险
+	//     （桶表 maxBuckets=10000 有界）。若将来新增分类使 Σ分类 > 20/s，全局桶才开始真正约束总量。
+	// 注：中间件侧的同一段说明（middleware/ratelimit.go 的 RateLimitByRouteClass 注释）需同步归真。
+	api.Use(middleware.RateLimitByRouteClass(
+		middleware.RateLimitClassByPrefix(
+			// 日志查询类：跨 Worker 扇出 + 缓存 + 目标解析，单页扇出多路（列表/stats/facets/取证）。
+			middleware.RateLimitPrefixRule{Prefix: "/api/v1/logs/federation", Class: middleware.RateLimitClassLogQuery},
+			middleware.RateLimitPrefixRule{Prefix: "/api/v1/logs", Class: middleware.RateLimitClassLogQuery},
+		),
+		// 默认类（实例/指标/通知/任务等页面外壳）：保持原值 10/s、容量 20。
+		middleware.RateLimitSpec{RatePerSecond: 10, Capacity: 20},
+		map[string]middleware.RateLimitSpec{
+			// 日志查询类：同样保持原值 10/s、容量 20（本次修复不放宽任何分类预算）。
+			middleware.RateLimitClassLogQuery: {RatePerSecond: 10, Capacity: 20},
+		},
+		// 跨分类每 IP 总上限 = 各分类预算之和 ⇒ 分类隔离成立的同时总量仍是硬上限。
+		middleware.RateLimitSpec{RatePerSecond: 20, Capacity: 40},
+	))
 	// API 错误统一落平台日志（FR-320）：4xx 业务拒绝 warn / 5xx error，经 log_slog 桥进日志中心，
 	// /logs 页可追查「某操作为什么报错」（挂全局含未认证路径；401/404/429 噪音跳过）。
 	api.Use(middleware.ErrorLog())
@@ -472,7 +516,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// FR-476 Worker 受管 VictoriaLogs 状态/启停：仅平台节点管理权限，经反向隧道。
 		// 归档端点另需目标级授权（M-4B）：自定义角色获得 node.manage 后不得越权指定任意 target。
 		if svcs.LogRuntimePool != nil && svcs.Node != nil {
-			NewLogRuntimeHandler(svcs.Node, svcs.LogRuntimePool, svcs.Authz, svcs.Instance).RegisterRoutes(permRead("node.manage"))
+			NewLogRuntimeHandler(svcs.Node, svcs.LogRuntimePool, svcs.Authz, svcs.Instance, svcs.LogRuntimeHolders).RegisterRoutes(permRead("node.manage"))
 		}
 		if svcs.LogVLAssets != nil && svcs.SelfUpdate != nil && svcs.Node != nil {
 			assets := NewLogVLAssetHandler(svcs.LogVLAssets, svcs.SelfUpdate, svcs.Node)

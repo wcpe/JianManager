@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
@@ -26,6 +28,9 @@ type QueryRequest struct {
 	GroupBy           []string
 	TimeBucket        string
 	MetricField       string
+	// AllowProjectionDrift 本次请求豁免「投影清单版本变化」判 VIEW_STALE。
+	// 仅 CP 导出路径（自己创建视图、自己逐页读完）置位；见 PlanRequest.AllowProjectionDrift。
+	AllowProjectionDrift bool
 }
 
 // SearchResponse 对应 LogSearchResponse。
@@ -206,10 +211,135 @@ type CapabilitiesRequest struct {
 	RequestID       string
 }
 
+// budgetTaskOutcome 只保留在途任务的结果；完成后立即归并并释放未用预留。
+type budgetTaskOutcome[T any] struct {
+	value    T
+	bytes    uint64
+	reserved uint64
+}
+
+// budgetStopKind 描述 runBudgetTasks 为什么没有把 count 个任务全部跑完（QRY-4）。
+//
+// 为什么必须区分：旧实现只回一个 bool `cut`，而 `apply` 返回 false 造成的提前停止会在
+// 「active==0 && next<count && 父 ctx 未取消」时被记成 `cut`，调用方随即无条件
+// `MarkIncomplete(ReasonBudgetExceeded)` ⇒ 典型响应变成「Err=UNSUPPORTED +
+// PartialReasons 里带 BUDGET_EXCEEDED」——排障时把「能力未实现」读成「预算超限」。
+// 现在覆盖原因只在**真正的预算路径**上落 BUDGET_EXCEEDED。
+type budgetStopKind int
+
+const (
+	// budgetStopComplete 全部任务正常跑完（或被排队任务从未启动但额度未耗尽）。
+	budgetStopComplete budgetStopKind = iota
+	// budgetStopCut 额度耗尽 / 在途任务消费超过预留 ⇒ 真的是预算问题。
+	budgetStopCut
+	// budgetStopApply apply 返回 false（能力未实现、需要提前停止）⇒ 与预算无关。
+	budgetStopApply
+)
+
+// runBudgetTasks 以最多八个真实在途任务调度，预算记账为已消费加在途预留。
+// 零值入站预算只在请求级归一为默认总额，不能让每个 range 再各领一份默认额度。
+//
+// 返回值是停跑**原因**（见 budgetStopKind）：调用方据此决定覆盖原因码，不得把
+// 「提前停止」误标成预算耗尽。
+func runBudgetTasks[T any](ctx context.Context, budget Budget, count int, execute func(context.Context, int, Budget) (T, uint64), apply func(T) bool) budgetStopKind {
+	if budget.MaxBytes == 0 {
+		budget.MaxBytes = DefaultMaxBytes
+	}
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	const parallel = 8
+	done := make(chan budgetTaskOutcome[T], parallel)
+	available := budget.MaxBytes
+	var used uint64
+	next, active := 0, 0
+	cut, stop := false, false
+	earlyStop := false
+	for next < count || active > 0 {
+		for !stop && workCtx.Err() == nil && next < count && active < parallel {
+			b := budget
+			var reserved uint64
+			if budget.MaxBytes > 0 {
+				if available == 0 {
+					break
+				}
+				slots := parallel - active
+				if left := count - next; left < slots {
+					slots = left
+				}
+				reserved = available / uint64(slots)
+				if reserved == 0 {
+					reserved = 1
+				}
+				available -= reserved
+				b.MaxBytes = reserved
+			}
+			idx := next
+			next++
+			active++
+			go func() {
+				value, bytes := execute(workCtx, idx, b)
+				done <- budgetTaskOutcome[T]{value: value, bytes: bytes, reserved: reserved}
+			}()
+		}
+		if active == 0 {
+			if next < count && ctx.Err() == nil {
+				// 一个任务都发不出 ⇒ 额度已见底（apply 未要求停止时才归因于预算 ✓）。
+				cut = true
+			}
+			break
+		}
+		o := <-done
+		active--
+		if budget.MaxBytes > 0 {
+			charged := o.bytes
+			if charged > o.reserved {
+				charged = o.reserved
+				cut = true
+			}
+			used += charged
+			available += o.reserved - charged
+			if used >= budget.MaxBytes {
+				cut, stop = true, true
+				cancel()
+			}
+		}
+		if !apply(o.value) {
+			stop = true
+			earlyStop = true
+			cancel()
+		}
+		// stop 后仍排空在途结果，避免遗留发送协程；不会再启动排队任务。
+	}
+	switch {
+	case earlyStop:
+		// apply 要求提前停止：原因由 apply 自己记进 coverage（UNSUPPORTED 等），
+		// 调用方不得再补一条 BUDGET_EXCEEDED。
+		return budgetStopApply
+	case cut:
+		return budgetStopCut
+	default:
+		return budgetStopComplete
+	}
+}
+
+func budgetRangeCount(b Budget, coverage *Coverage, n int) int {
+	if b.MaxFanout > 0 && uint32(n) > b.MaxFanout {
+		coverage.MarkIncomplete(ReasonBudgetExceeded)
+		return int(b.MaxFanout)
+	}
+	return n
+}
+
 // Search 执行查询面 Search stub。
 func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
+	// 固定观测口径（慢查询定位用）：分解 plan / 任务执行 / 组装三段耗时。
+	// 全程 Debug 级 —— 默认 Info 门下不产出任何日志，只有显式开 Debug 才会付出两次
+	// time.Now() 的纳秒级开销。回答的问题固定为"端到端慢查询花在哪一段"，
+	// 与 vlrange 的 `query-timing: vl-merged`（VL 侧往返）配套构成完整分解。
+	queryStart := time.Now()
 	resp := SearchResponse{RequestID: req.RequestID}
 	plan := s.planFromRequest(req)
+	planElapsedMs := time.Since(queryStart).Milliseconds()
 	resp.Coverage = plan.Coverage
 	remapCoverageTargets(&resp.Coverage, req.AuthorizedTargets)
 	resp.Quality = plan.Quality
@@ -243,72 +373,133 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 	limit := req.Budget.EffectiveLimit()
 	fanoutLimit := req.Budget.MaxFanout
 	var (
-		items     []logtypes.Event
-		usedBytes uint64
-		fanout    uint32
-		cancelled bool
-		budgetHit bool
+		items      []logtypes.Event
+		cancelled  bool
+		budgetHit  bool
+		safeBefore string
 	)
 	cursorKey := decodeCursorSort(req.View)
 
-	for _, rng := range plan.Ranges {
-		if err := ctx.Err(); err != nil {
-			cancelled = true
-			break
-		}
-		if fanoutLimit > 0 && fanout >= fanoutLimit {
+	// 任务有界并发；每个完成结果立即释放未用额度并归并，不能先发完整队列再事后裁字节。
+	// 结果顺序由稳定复合键冻结，partial 质量与覆盖原因只累积、不因后完成的 exact 回升。
+	//
+	// 合并执行（2026-10-08）：可合并 range 聚为一次粗筛（MergedRangeClient，行级按各
+	// range 权威谓词归因）；客户端未实现该能力、或组内存在无来源约束 range 时自动
+	// 退回逐 range——语义不变，仅性能差异。
+	//
+	// 跨天合并（2026-10-08 修正，直测 10× 差距）：**不得按 UTC 天拆查询**——VL 在
+	// "窗口内匹配行数 < limit"时必须扫完整个窗口，按天拆分把一次查询放大成每天一次全扫（实测 154 源 24h 跨天一次查 0.44-0.83s，分天后旧天单查即
+	// 4.8-6.2s）。同 Owner 的 rng 合并为一次跨天查询，行归因按各 rng 谓词
+	// （含各自天分区水位）在内存完成；不同 Owner 的批次必须全部参与全局 top-N。
+
+	mergedClient, _ := s.client.(MergedRangeClient)
+	tasks := groupSearchTasks(plan.Ranges, mergedClient != nil)
+	// 按原始 range 计 fanout，合并不得把多日/多源组偷换成一个预算单位。
+	allowed := make([]searchTask, 0, len(tasks))
+	appliedRanges := 0
+	for _, task := range tasks {
+		if fanoutLimit > 0 && uint32(appliedRanges+len(task.rngs)) > fanoutLimit {
 			plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 			budgetHit = true
 			break
 		}
-		fanout++
-
-		q := RangeQuery{
-			RequestID:        req.RequestID,
-			TimeRange:        req.TimeRange,
-			Filter:           req.Filter,
-			Budget:           req.Budget,
-			ClosedVisibleSeq: rng.ClosedVisibleSeq,
-			CursorSortKey:    cursorKey,
+		appliedRanges += len(task.rngs)
+		allowed = append(allowed, task)
+	}
+	type searchRangeOutcome struct {
+		res       RangeResult
+		err       error
+		targetIDs []string
+	}
+	exhausted := true
+	stopKind := runBudgetTasks(ctx, req.Budget, len(allowed), func(ctx context.Context, idx int, budget Budget) (searchRangeOutcome, uint64) {
+		task := allowed[idx]
+		ids := make([]string, 0, len(task.rngs))
+		for _, rng := range task.rngs {
+			ids = append(ids, rng.TargetID)
 		}
-		rres, err := s.client.Search(ctx, rng, q)
-		if err != nil {
-			if errors.Is(err, ErrRangeClientUnimplemented) {
+		q := RangeQuery{RequestID: req.RequestID, TimeRange: req.TimeRange, Filter: req.Filter, Budget: budget, CursorSortKey: cursorKey}
+		var res RangeResult
+		var err error
+		if task.merged {
+			// 合并组水位由各 range 的归因谓词检查，不能借用首个 range 的水位。
+			res, err = mergedClient.SearchMerged(ctx, task.rngs, q)
+		} else {
+			rng := task.rngs[0]
+			q.ClosedVisibleSeq = rng.ClosedVisibleSeq
+			res, err = s.client.Search(ctx, rng, q)
+		}
+		return searchRangeOutcome{res: res, err: err, targetIDs: ids}, res.Bytes
+	}, func(o searchRangeOutcome) bool {
+		if ctx.Err() != nil {
+			cancelled = true
+			exhausted = false
+			return false
+		}
+		if o.err != nil {
+			exhausted = false
+			if errors.Is(o.err, ErrRangeClientUnimplemented) {
 				resp.Err = newErr(ErrCodeUnsupported, "range client search unimplemented")
 				plan.Coverage.MarkIncomplete(ReasonUnsupported)
-				resp.Coverage = plan.Coverage
-				return resp
+				return false
 			}
-			if errors.Is(err, context.Canceled) {
-				cancelled = true
-				break
+			if errors.Is(o.err, context.Canceled) {
+				budgetHit = true
+				plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
+				return true
 			}
 			plan.Coverage.MarkIncomplete(ReasonRangeUnavailable)
-			for i := range plan.Coverage.Targets {
-				if plan.Coverage.Targets[i].TargetID == rng.TargetID {
-					plan.Coverage.Targets[i].State = CoverageNotReady
-					plan.Coverage.Targets[i].Reasons = appendUniqueStr(plan.Coverage.Targets[i].Reasons, ReasonRangeUnavailable)
+			slog.Info("search range 不可用，标记 RANGE_UNAVAILABLE", "targets", o.targetIDs, "err", o.err)
+			for _, tid := range o.targetIDs {
+				for i := range plan.Coverage.Targets {
+					if plan.Coverage.Targets[i].TargetID == tid {
+						plan.Coverage.Targets[i].State = CoverageNotReady
+						plan.Coverage.Targets[i].Reasons = appendUniqueStr(plan.Coverage.Targets[i].Reasons, ReasonRangeUnavailable)
+					}
 				}
 			}
-			continue
+			return true
 		}
-		for _, r := range rres.CoverageReasons {
-			plan.Coverage.MarkIncomplete(r)
+		if !o.res.Exhausted {
+			exhausted = false
 		}
-		if rres.DuplicateQuality != "" {
-			resp.Quality.DuplicateQuality = rres.DuplicateQuality
+		if fence := o.res.SafeBeforeUTC; fence != "" && (safeBefore == "" || compareUTCDESC(fence, safeBefore) < 0) {
+			safeBefore = fence
 		}
-		if rres.StatsQuality != "" {
-			resp.Quality.StatsQuality = rres.StatsQuality
+		for _, reason := range o.res.CoverageReasons {
+			plan.Coverage.MarkIncomplete(reason)
+			if reason == ReasonBudgetExceeded {
+				budgetHit = true
+			}
 		}
-		items = append(items, rres.Items...)
-		usedBytes += rres.Bytes
-		if req.Budget.MaxBytes > 0 && usedBytes > req.Budget.MaxBytes {
-			budgetHit = true
-			plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
-			break
+		if o.res.DuplicateQuality != "" && o.res.DuplicateQuality != DupExact {
+			resp.Quality.DuplicateQuality = o.res.DuplicateQuality
 		}
+		if o.res.StatsQuality != "" && o.res.StatsQuality != StatsExact {
+			resp.Quality.StatsQuality = o.res.StatsQuality
+		}
+		rangeItems := o.res.Items
+		if cursorKey != nil {
+			rangeItems = filterAfterCursor(rangeItems, *cursorKey)
+		}
+		items = append(items, rangeItems...)
+		SortEvents(items)
+		if safeBefore != "" {
+			items = safeTimePrefix(items, safeBefore)
+		}
+		// 及时释放已归并结果：全局只需 top-N 加一条前瞻，不能囤积所有完成任务。
+		if len(items) > int(limit)+1 {
+			items = append([]logtypes.Event(nil), items[:int(limit)+1]...)
+			exhausted = false
+		}
+		return true
+	})
+	if stopKind == budgetStopCut {
+		budgetHit = true
+		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
+	slog.Debug("query-timing: tasks", "req", req.RequestID, "plan_ms", planElapsedMs,
+		"tasks_ms", time.Since(queryStart).Milliseconds()-planElapsedMs, "tasks", len(tasks), "applied_ranges", appliedRanges)
 
 	SortEvents(items)
 
@@ -318,10 +509,13 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 	}
 
 	var next string
-	exhausted := true
+	// 任一 range 未耗尽、出现 range 错误或覆盖本身不完整，都不得宣称分页结束。
+	exhausted = exhausted && plan.Coverage.Complete
 	if uint32(len(items)) > limit {
 		items = items[:limit]
 		exhausted = false
+	}
+	if !exhausted && len(items) > 0 && !budgetHit && !cancelled {
 		next = EncodeCursor(Cursor{
 			ViewID:       viewIDOf(plan.View, req.View),
 			OrderVersion: SortVersion,
@@ -347,8 +541,14 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 		resp.Coverage.EnumerationState = EnumExhausted
 	}
 	if plan.Quality.DuplicateQuality != "" && resp.Quality.DuplicateQuality == DupExact {
-		resp.Quality = plan.Quality
+		resp.Quality.DuplicateQuality = plan.Quality.DuplicateQuality
 	}
+	if !plan.Coverage.Complete {
+		resp.Quality.StatsQuality = StatsPartial
+	}
+	// 固定观测口径：端到端总耗时（worker 视角）。
+	slog.Debug("query-timing: total",
+		"req", req.RequestID, "total_ms", time.Since(queryStart).Milliseconds(), "items", len(items))
 	return resp
 }
 
@@ -379,58 +579,56 @@ func (s *Service) Stats(ctx context.Context, req QueryRequest, groupBy []string)
 	limit := req.Budget.EffectiveLimit()
 	_ = limit // stats 合并点数上限由后续 FR 冻结；foundation 仍受 fanout/bytes 约束
 	fanoutLimit := req.Budget.MaxFanout
-	var (
-		points    []StatsPoint
-		usedBytes uint64
-		fanout    uint32
-	)
+	var points []StatsPoint
 
-	for _, rng := range plan.Ranges {
-		if err := ctx.Err(); err != nil {
+	type statsRangeOutcome struct {
+		res StatsResult
+		err error
+	}
+	launch := len(plan.Ranges)
+	if fanoutLimit > 0 && uint32(launch) > fanoutLimit {
+		launch = int(fanoutLimit)
+		// 必须在发起前记录跳过范围，不能等截短 outcomes 中永远不会发生的下一轮。
+		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
+		resp.Quality.StatsQuality = StatsPartial
+	}
+	stopKind := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (statsRangeOutcome, uint64) {
+		rng := plan.Ranges[idx]
+		q := RangeQuery{RequestID: req.RequestID, TimeRange: req.TimeRange, Filter: req.Filter, Budget: budget,
+			ClosedVisibleSeq: rng.ClosedVisibleSeq, GroupBy: append([]string(nil), req.GroupBy...),
+			TimeBucket: req.TimeBucket, MetricField: req.MetricField}
+		res, err := s.client.Stats(ctx, rng, q)
+		return statsRangeOutcome{res: res, err: err}, res.Bytes
+	}, func(o statsRangeOutcome) bool {
+		if ctx.Err() != nil {
 			plan.Coverage.MarkIncomplete(ReasonCancelled)
 			resp.Err = newErr(ErrCodeCancelled, "stats cancelled")
-			resp.Coverage = plan.Coverage
-			return resp
+			return false
 		}
-		if fanoutLimit > 0 && fanout >= fanoutLimit {
-			plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
-			break
-		}
-		fanout++
-		q := RangeQuery{
-			RequestID:        req.RequestID,
-			TimeRange:        req.TimeRange,
-			Filter:           req.Filter,
-			Budget:           req.Budget,
-			ClosedVisibleSeq: rng.ClosedVisibleSeq,
-			GroupBy:          append([]string(nil), req.GroupBy...),
-			TimeBucket:       req.TimeBucket,
-			MetricField:      req.MetricField,
-		}
-		sres, err := s.client.Stats(ctx, rng, q)
-		if err != nil {
-			if errors.Is(err, ErrRangeClientUnimplemented) {
+		if o.err != nil {
+			if errors.Is(o.err, ErrRangeClientUnimplemented) {
 				resp.Err = newErr(ErrCodeUnsupported, "range client stats unimplemented")
 				plan.Coverage.MarkIncomplete(ReasonUnsupported)
-				resp.Coverage = plan.Coverage
-				return resp
+				return false
 			}
-			plan.Coverage.MarkIncomplete(ReasonRangeUnavailable)
-			continue
+			if errors.Is(o.err, context.Canceled) {
+				plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
+			} else {
+				plan.Coverage.MarkIncomplete(ReasonRangeUnavailable)
+			}
+			return true
 		}
-		for _, r := range sres.CoverageReasons {
-			plan.Coverage.MarkIncomplete(r)
+		for _, reason := range o.res.CoverageReasons {
+			plan.Coverage.MarkIncomplete(reason)
 		}
-		if sres.StatsQuality != "" {
-			resp.Quality.StatsQuality = sres.StatsQuality
+		if o.res.StatsQuality != "" && o.res.StatsQuality != StatsExact {
+			resp.Quality.StatsQuality = o.res.StatsQuality
 		}
-		points = mergeStatsPoints(points, sres.Points)
-		usedBytes += sres.Bytes
-		if req.Budget.MaxBytes > 0 && usedBytes > req.Budget.MaxBytes {
-			plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
-			resp.Quality.StatsQuality = StatsPartial
-			break
-		}
+		points = mergeStatsPoints(points, o.res.Points)
+		return true
+	})
+	if stopKind == budgetStopCut {
+		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
 	if !plan.Coverage.Complete {
 		resp.Quality.StatsQuality = StatsPartial
@@ -462,38 +660,49 @@ func (s *Service) Fields(ctx context.Context, req QueryRequest) FieldsResponse {
 		resp.Coverage = plan.Coverage
 		return resp
 	}
-	var used uint64
-	for _, rng := range plan.Ranges {
+	// 并发取数，但按 ranges 原顺序施加副作用：
+	// 错误、早停（cancelled/unsupported）与覆盖原因的顺序都与串行版本逐字一致，
+	// 差别仅在于错误路径上多做了少量无用的 range 请求（不影响任何观测结果）。
+	type fieldsRangeOutcome struct {
+		res FieldsResult
+		err error
+	}
+	launch := budgetRangeCount(req.Budget, &plan.Coverage, len(plan.Ranges))
+	stopKind := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (fieldsRangeOutcome, uint64) {
+		rng := plan.Ranges[idx]
+		res, err := client.Fields(ctx, rng, RangeQuery{RequestID: req.RequestID, TimeRange: req.TimeRange,
+			Filter: req.Filter, Budget: budget, ClosedVisibleSeq: rng.ClosedVisibleSeq})
+		return fieldsRangeOutcome{res: res, err: err}, res.Bytes
+	}, func(o fieldsRangeOutcome) bool {
 		if err := ctx.Err(); err != nil {
 			resp.Err = newErr(ErrCodeCancelled, "fields cancelled")
 			plan.Coverage.MarkIncomplete(ReasonCancelled)
-			break
+			return false
 		}
-		res, err := client.Fields(ctx, rng, RangeQuery{
-			RequestID: req.RequestID, TimeRange: req.TimeRange, Filter: req.Filter,
-			Budget: req.Budget, ClosedVisibleSeq: rng.ClosedVisibleSeq,
-		})
-		if err != nil {
-			if errors.Is(err, ErrRangeClientUnimplemented) {
+		if o.err != nil {
+			if errors.Is(o.err, ErrRangeClientUnimplemented) {
 				resp.Err = newErr(ErrCodeUnsupported, "fields unimplemented on this worker")
 				plan.Coverage.MarkIncomplete(ReasonUnsupported)
-				break
+				return false
 			}
 			plan.Coverage.MarkIncomplete(ReasonRangeUnavailable)
-			continue
+			return true
 		}
-		for _, reason := range res.CoverageReasons {
+		for _, reason := range o.res.CoverageReasons {
 			plan.Coverage.MarkIncomplete(reason)
 		}
-		for _, field := range res.Fields {
+		for _, field := range o.res.Fields {
 			if streamFieldAllowed(field) {
 				fieldSet[field] = struct{}{}
 			}
 		}
-		used += res.Bytes
-		if res.Truncated || (req.Budget.MaxBytes > 0 && used > req.Budget.MaxBytes) {
+		if o.res.Truncated {
 			plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 		}
+		return true
+	})
+	if stopKind == budgetStopCut {
+		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
 	resp.Fields = make([]string, 0, len(fieldSet))
 	for field := range fieldSet {
@@ -546,40 +755,48 @@ func (s *Service) Facets(ctx context.Context, req QueryRequest, dimensions []str
 		}
 	}
 	counts := make(map[string]uint64)
-	var used uint64
-	for _, rng := range plan.Ranges {
-		if err := ctx.Err(); err != nil {
+	type facetsRangeOutcome struct {
+		res RangeFacetsResult
+		err error
+	}
+	launch := budgetRangeCount(req.Budget, &plan.Coverage, len(plan.Ranges))
+	stopKind := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (facetsRangeOutcome, uint64) {
+		rng := plan.Ranges[idx]
+		res, err := client.Facets(ctx, rng, RangeQuery{RequestID: req.RequestID, TimeRange: req.TimeRange,
+			Filter: req.Filter, Budget: budget, ClosedVisibleSeq: rng.ClosedVisibleSeq}, controlled, limit)
+		return facetsRangeOutcome{res: res, err: err}, res.Bytes
+	}, func(o facetsRangeOutcome) bool {
+		if ctx.Err() != nil {
 			resp.Err = newErr(ErrCodeCancelled, "facets cancelled")
 			plan.Coverage.MarkIncomplete(ReasonCancelled)
-			break
+			return false
 		}
-		res, err := client.Facets(ctx, rng, RangeQuery{
-			RequestID: req.RequestID, TimeRange: req.TimeRange, Filter: req.Filter,
-			Budget: req.Budget, ClosedVisibleSeq: rng.ClosedVisibleSeq,
-		}, controlled, limit)
-		if err != nil {
-			if errors.Is(err, ErrRangeClientUnimplemented) {
+		if o.err != nil {
+			if errors.Is(o.err, ErrRangeClientUnimplemented) {
 				resp.Err = newErr(ErrCodeUnsupported, "facets unimplemented on this worker")
 				plan.Coverage.MarkIncomplete(ReasonUnsupported)
-				break
+				return false
 			}
 			plan.Coverage.MarkIncomplete(ReasonRangeUnavailable)
-			continue
+			return true
 		}
-		for _, reason := range res.CoverageReasons {
+		for _, reason := range o.res.CoverageReasons {
 			plan.Coverage.MarkIncomplete(reason)
 		}
-		for _, value := range res.Values {
-			if _, ok := allowed[value.Dimension]; !ok {
-				continue
+		for _, value := range o.res.Values {
+			if _, ok := allowed[value.Dimension]; ok {
+				counts[value.Dimension+"\x00"+value.Value] += value.Count
 			}
-			counts[value.Dimension+"\x00"+value.Value] += value.Count
 		}
-		used += res.Bytes
-		if res.Truncated || (req.Budget.MaxBytes > 0 && used > req.Budget.MaxBytes) {
+		if o.res.Truncated {
 			resp.Truncated = true
 			plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 		}
+		return true
+	})
+	if stopKind == budgetStopCut {
+		resp.Truncated = true
+		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
 	for key, count := range counts {
 		parts := strings.SplitN(key, "\x00", 2)
@@ -752,32 +969,53 @@ func (s *Service) Tail(ctx context.Context, req QueryRequest, mode TailMode) Tai
 
 	limit := req.Budget.EffectiveLimit()
 	var items []logtypes.Event
-	for _, rng := range plan.Ranges {
-		if err := ctx.Err(); err != nil {
+	type tailRangeOutcome struct {
+		res RangeResult
+		err error
+	}
+	exhausted := true
+	safeBefore := ""
+	launch := budgetRangeCount(req.Budget, &plan.Coverage, len(plan.Ranges))
+	stopKind := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (tailRangeOutcome, uint64) {
+		rng := plan.Ranges[idx]
+		res, err := s.client.Tail(ctx, rng, RangeQuery{RequestID: req.RequestID, TimeRange: req.TimeRange,
+			Filter: req.Filter, Budget: budget, ClosedVisibleSeq: rng.ClosedVisibleSeq}, mode)
+		return tailRangeOutcome{res: res, err: err}, res.Bytes
+	}, func(o tailRangeOutcome) bool {
+		if ctx.Err() != nil {
 			plan.Coverage.MarkIncomplete(ReasonCancelled)
 			resp.Err = newErr(ErrCodeCancelled, "tail cancelled")
-			resp.Coverage = plan.Coverage
-			return resp
+			return false
 		}
-		q := RangeQuery{
-			RequestID:        req.RequestID,
-			TimeRange:        req.TimeRange,
-			Filter:           req.Filter,
-			Budget:           req.Budget,
-			ClosedVisibleSeq: rng.ClosedVisibleSeq,
-		}
-		rres, err := s.client.Tail(ctx, rng, q, mode)
-		if err != nil {
-			if errors.Is(err, ErrRangeClientUnimplemented) {
+		if o.err != nil {
+			if errors.Is(o.err, ErrRangeClientUnimplemented) {
 				resp.Err = newErr(ErrCodeUnsupported, fmt.Sprintf("tail mode %s unimplemented", mode))
 				plan.Coverage.MarkIncomplete(ReasonUnsupported)
-				resp.Coverage = plan.Coverage
-				return resp
+				return false
 			}
 			plan.Coverage.MarkIncomplete(ReasonRangeUnavailable)
-			continue
+			return true
 		}
-		items = append(items, rres.Items...)
+		for _, reason := range o.res.CoverageReasons {
+			plan.Coverage.MarkIncomplete(reason)
+		}
+		exhausted = exhausted && o.res.Exhausted
+		if fence := o.res.SafeBeforeUTC; fence != "" && (safeBefore == "" || compareUTCDESC(fence, safeBefore) < 0) {
+			safeBefore = fence
+		}
+		items = append(items, o.res.Items...)
+		SortEvents(items)
+		if safeBefore != "" {
+			items = safeTimePrefix(items, safeBefore)
+		}
+		if len(items) > int(limit)+1 {
+			items = append([]logtypes.Event(nil), items[:int(limit)+1]...)
+			exhausted = false
+		}
+		return true
+	})
+	if stopKind == budgetStopCut {
+		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
 	// VIEW_BOUNDED 使用与 Search 相同的稳定排序（固定视图尾部）。
 	if mode == TailViewBounded {
@@ -787,7 +1025,10 @@ func (s *Service) Tail(ctx context.Context, req QueryRequest, mode TailMode) Tai
 		items = items[:limit]
 		resp.Exhausted = false
 	} else {
-		resp.Exhausted = true
+		resp.Exhausted = exhausted && plan.Coverage.Complete
+	}
+	if !plan.Coverage.Complete {
+		resp.Quality.StatsQuality = StatsPartial
 	}
 	resp.Items = items
 	resp.Coverage = plan.Coverage
@@ -804,6 +1045,8 @@ func (s *Service) planFromRequest(req QueryRequest) PlanResult {
 		ViewRef:        req.View,
 		RequireCold:    req.RequireCold,
 		RequireArchive: req.RequireArchive,
+		// 豁免标记是请求级授权：由 CP 在导出路径显式置位，Worker 侧原样透传给 planner。
+		AllowProjectionDrift: req.AllowProjectionDrift,
 	})
 }
 

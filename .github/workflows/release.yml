@@ -286,6 +286,51 @@ jobs:
           go vet ./...
           go test ./...
 
+      # cgroup 隔离的**端到端契约**（FR-500：「重启不再拖倒实例」）。
+      #
+      # 背景：TestDaemonSubtreeSurvivesWorkerUnitCgroupKill 需要「用户可写的 cgroup 子树」，
+      # 而 `go test ./...` 在普通 shell 里没有该权限 ⇒ 它**静默 SKIP**：CI 全绿，但本项最核心的
+      # 验收断言从未执行（即"以为有红证，实际没有"）。本步把它显式跑一遍。
+      #
+      # 为什么不是硬失败：GitHub 托管 runner 通常**没有 user systemd session**，也无
+      # `/sys/fs/cgroup` 写权限，两条路都可能不可用。硬失败会阻断整条 release 流水线，
+      # 而这不是代码缺陷。故策略是：
+      #   · 能跑 ⇒ 必须 PASS，且**不得 SKIP**（skip 即失败：防线存在但没生效）；
+      #   · 不能跑（环境不支持）⇒ 打 `::warning::` 明确声明「本项端到端契约在本次 CI **未验证**」，
+      #     并指向人工/真机执行入口。绝不静默跳过。
+      #
+      # 人工执行入口（真机或带 user systemd 的环境）：
+      #   systemd-run --user --scope go test ./internal/worker/process/ \
+      #     -run TestDaemonSubtreeSurvivesWorkerUnitCgroupKill -count=1 -v
+      - name: cgroup 隔离端到端契约（尽力真跑并显式报告）
+        shell: bash
+        continue-on-error: false
+        run: |
+          set -uo pipefail
+          RUNNER=""
+          if command -v systemd-run >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
+            RUNNER="systemd-run --user --scope --quiet"
+          fi
+          if [ -z "$RUNNER" ]; then
+            echo "::warning::本环境无 user systemd，FR-500 的 cgroup 端到端契约**本次未验证**（不是通过）。请按 docs/DEPLOY.md 的人工入口在真机执行。"
+            exit 0
+          fi
+          out=$($RUNNER go test ./internal/worker/process/ \
+                  -run 'TestDaemonSubtreeSurvivesWorkerUnitCgroupKill' -count=1 -v 2>&1) && rc=0 || rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::cgroup 契约用例失败（FR-500 核心验收，见上方输出）"
+            exit "$rc"
+          fi
+          if printf '%s\n' "$out" | grep -q -- '--- SKIP'; then
+            echo "::error::cgroup 契约用例被 SKIP：防线存在但未生效（本步的意义就是不让它静默跳过）"
+            exit 1
+          fi
+          printf '%s\n' "$out" | grep -q -- '--- PASS' || {
+            echo "::error::未观察到 PASS 记录，契约用例可能未真正执行"
+            exit 1
+          }
+
   # ───────────────────────── build：交叉编译 4 个二进制（matrix） ─────────────────────────
   build:
     needs: [metadata, prepare-embeds, go-test]

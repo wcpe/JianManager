@@ -284,7 +284,8 @@ func TestHealthWall_NoWorkerRPCAndBoundedQueries(t *testing.T) {
 }
 
 // FR-461/FR-459 验收 7：假死实例状态仍是 RUNNING（进程在、只是不响应），只按 status 分级
-// 会让它在健康墙上完全不可见；健康墙须把「RUNNING 但 status_reason 非空」计为降级。
+// 会让它在健康墙上完全不可见；健康墙须把「RUNNING 但 status_reason 非空**且来源为心跳巡检**」
+// 计为降级——CP 写入的失败原因（来源非 worker）虽也是 RUNNING+非空原因，却不是假死，不得计入。
 func TestHealthWall_DegradedCountsHangingInstances(t *testing.T) {
 	svc := newHealthWallSvc(t)
 	base := metricBase()
@@ -300,9 +301,12 @@ func TestHealthWall_DegradedCountsHangingInstances(t *testing.T) {
 	require.NoError(t, svc.db.Where("uuid = ?", "n-idle").First(&idle).Error)
 
 	require.NoError(t, svc.db.Create(&[]model.Instance{
-		// 假死：RUNNING 但巡检已写原因。
+		// 假死：RUNNING 但巡检已写原因（来源标记 worker=心跳写入的健康巡检原因，degraded 只认这一类）。
 		{UUID: "i-hang", NodeID: hang.ID, Name: "hang", Status: model.InstanceStatusRunning,
-			StatusReason: "假死：进程在但 tcp 响应探测连续失败 3 次"},
+			StatusReason: "假死：进程在但 tcp 响应探测连续失败 3 次", StatusReasonSource: "worker"},
+		// CP 写入失败原因的 RUNNING 实例：不算 degraded（来源非 worker），避免误报假死。
+		{UUID: "i-cp-reason", NodeID: hang.ID, Name: "cp-reason", Status: model.InstanceStatusRunning,
+			StatusReason: "重启前同步最新启动规格失败，已取消重启: 节点未连接"},
 		// 健康 RUNNING：无原因。
 		{UUID: "i-ok", NodeID: hang.ID, Name: "ok", Status: model.InstanceStatusRunning},
 		// 另一个节点全健康。
@@ -317,7 +321,7 @@ func TestHealthWall_DegradedCountsHangingInstances(t *testing.T) {
 		byUUID[n.UUID] = n
 	}
 	assert.Equal(t, 1, byUUID["n-hang"].Degraded, "假死实例应计入 degraded")
-	assert.Equal(t, 2, byUUID["n-hang"].Running, "RUNNING 计数不受影响")
+	assert.Equal(t, 3, byUUID["n-hang"].Running, "RUNNING 计数不受影响")
 	assert.Equal(t, HealthLevelDegraded, byUUID["n-hang"].Level, "存在假死实例的节点应降级")
 	assert.Equal(t, 0, byUUID["n-idle"].Degraded)
 	assert.Equal(t, HealthLevelHealthy, byUUID["n-idle"].Level)

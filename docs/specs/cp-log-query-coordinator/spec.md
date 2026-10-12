@@ -47,3 +47,7 @@
 - 实例换过节点时按 Catalog/历史持有者纳入查询；Search 使用稳定复合排序 K-way merge，Stats 使用声明口径的二次聚合。
 - Facets 对受控维度精确合并；高基数返回截断维度、截断数和 coverage。`limit` 只限制结果数，扇出、字节、CPU、超时和并发预算另行执行。
 - Export 复用同一 view 和逻辑事件集合，完整物化并校验后才生成下载产物；源 Worker 后续离线不改变已完成产物。
+- Search/Stats 顶层 coverage 与 Worker 顶层 partial 原因同样参与聚合；cut/open 用 OR，不能被某个目标的成功或已结束覆盖。预算排除目标必须显式 `BUDGET_EXCEEDED`，Stats 保持 partial，不能呈现完整零统计。
+- `max_bytes` 是整个联邦请求的预算（零值入口默认 32 MiB），读取前公平预留给参与 Worker；子 RPC 必须得到正数额度且总预留不超过总量，零份额不拨号、不创建 view、不查询。扇出上限、最多 8 个在途与请求取消/超时共同约束调度；缓存身份包含主体、权限范围与预算，不能跨授权主体复用。
+- Search 普通、快速与缓存响应可选保留 `ingest_position_gaps[]`，HTTP 门面原样透传，即使事件列表为空也不能丢弃。字段/兼容口径见 [API.md](../../API.md) 对应日志平台章节；位置凭据独立展示，不污染 coverage/quality/Export。
+- Worker 扫描截断或未完整同时间戳边界组时保守不出全局 cursor，`exhausted=false`；正常 limit 分页继续使用原 view 与复合 cursor。预算部分结果与可安全分页不是同一概念。

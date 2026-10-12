@@ -158,6 +158,11 @@ func (s *Server) ValidateConfig(ctx context.Context, req *workerpb.ValidateConfi
 }
 
 func detectConfigFormat(path string) (string, bool) {
+	// Velocity 的 forwarding.secret 是无扩展名的密钥文件，属代理搭建期必需配置；
+	// 这里仅放行该确切文件名，不放开任意无扩展名路径（权限面最小化）。
+	if strings.EqualFold(filepath.Base(path), "forwarding.secret") {
+		return "txt", true
+	}
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".properties":
 		return "properties", true

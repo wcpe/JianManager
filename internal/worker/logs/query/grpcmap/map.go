@@ -303,6 +303,8 @@ func QueryRequestFromBase(qb *workerpb.LogQueryRequestBase) query.QueryRequest {
 		Filter:          qb.GetFilter(),
 		PermissionScope: qb.GetPermissionScope(),
 		CancelToken:     qb.GetCancellationToken(),
+		// 请求级豁免标记：老 CP 不发该字段时取零值 false，即维持原有全部校严。
+		AllowProjectionDrift: qb.GetAllowProjectionDrift(),
 	}
 	if at := qb.GetAuthorizedTargets(); at != nil {
 		req.AuthorizedTargets = append([]string(nil), at.GetTargetIds()...)

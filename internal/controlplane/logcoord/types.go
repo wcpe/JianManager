@@ -107,6 +107,19 @@ type Query struct {
 	// OnlineOnly 仅在调用方显式选择「仅在线」时为 true；不得默认。
 	OnlineOnly bool        `json:"online_only"`
 	Budget     QueryBudget `json:"budget"`
+	// Fast：首屏快路径 ✗——跳过视图绑定（OpenView 往返）与逐目标完整性校验，直接以有界查询返回 items，
+	// coverage 以 Pending 标记；导出路径（export.go 的逐页 Search）**不得**置位，校验语义一律不动 ✓。
+	Fast bool `json:"fast,omitempty"`
+	// AllowProjectionDrift：本次查询豁免 Worker 侧「投影清单版本（ManifestVersion）变化」判 VIEW_STALE。
+	//
+	// 只允许**导出路径**（Coordinator.Export 逐页 Search）置位：导出是「单次操作自己 CreateView、
+	// 自己读完」的视图，不存在「前端旧 view_id 跨请求复用」场景，故源在导出期间写入新投影
+	// 属正常现象，而非集合被破坏。列表/翻页等复用既有 view_id 的路径**一律不得**置位。
+	//
+	// 豁免边界（不得扩大）：只跳过 ManifestVersion 一条分支；分区记录消失、无权威副本、目录/代次
+	// 变化、closed_visible_seq 缩水（数据变少）仍必须 VIEW_STALE（见 Worker planner 注释）。
+	// 与 Fast 正交：本字段不改变任何 coverage/quality 判定口径，只免去一个陈旧性误判。
+	AllowProjectionDrift bool `json:"allow_projection_drift,omitempty"`
 	// ViewID 非空时复用既有逻辑事件集合，不重新选择最新目标集合。
 	ViewID string `json:"view_id,omitempty"`
 	// Cursor 是 CP 联邦分页边界，绑定 View 与全局复合排序键。
@@ -116,6 +129,11 @@ type Query struct {
 	Filter          string `json:"filter,omitempty"`
 	PermissionScope string `json:"permission_scope,omitempty"`
 	CancelToken     string `json:"cancellation_token,omitempty"`
+	// BypassCache 跳过同参缓存读取（仍正常写缓存），**仅预热器内部使用**、不参与
+	// 缓存键：预热若允许命中上一轮自己的条目，会把旧结果（含启动早期 dial 失败
+	// 的空结果）反复续写进新桶形成「雪球」，用户落进这些桶即拿到 0 条/陈旧数据
+	// （2026-10-08 面板恒冷复盘）。只读路径不受影响。
+	BypassCache bool `json:"-"`
 }
 
 // SortKey 稳定复合排序键。
@@ -223,6 +241,10 @@ type Coverage struct {
 	PartialReasons   []string         `json:"partial_reasons,omitempty"`
 	Targets          []TargetCoverage `json:"targets,omitempty"`
 	EnumerationState EnumerationState `json:"enumeration_state"`
+	// Pending：首屏快路径（Fast）尚未做逐目标完整性校验时的独立标记 ✗。
+	// **绝不写入 notes、不改变 Complete 的枚举语义** ✓——否则前端会把它读成 not-ready 并回退 legacy
+	// （2026-10-07 浏览器 E2E 的真实回退坑 ✓）；导出闸仍只看 Complete/Quality（log_federation.go:76-78 ✗）。
+	Pending bool `json:"pending,omitempty"`
 }
 
 // Quality 查询质量维度（与 complete 独立）。
@@ -255,6 +277,20 @@ type View struct {
 	CreatedAt                time.Time         `json:"created_at"`
 }
 
+// IngestPositionGap 独立保留永久位置缺失凭据，不参与覆盖、质量或导出判定。
+// WorkerID 由协调器的可信路由赋值；旧 Worker 未提供真实源代次时留空，不能猜测。
+type IngestPositionGap struct {
+	WorkerID         string `json:"worker_id,omitempty"`
+	StorageNamespace string `json:"storage_namespace"`
+	From             string `json:"from"`
+	To               string `json:"to"`
+	ReasonCode       string `json:"reason_code"`
+	Operator         string `json:"operator"`
+	AtUTC            string `json:"at_utc"`
+	LogSourceID      string `json:"log_source_id,omitempty"`
+	SourceGeneration string `json:"source_generation,omitempty"`
+}
+
 // SearchResponse 跨 Worker Search 汇总结果。
 type SearchResponse struct {
 	View       View     `json:"view"`
@@ -264,7 +300,8 @@ type SearchResponse struct {
 	Exhausted  bool     `json:"exhausted"`
 	NextCursor string   `json:"next_cursor,omitempty"`
 	// BudgetCut 行/字节预算截断了结果；与 Coverage.Complete 独立。
-	BudgetCut bool `json:"budget_cut"`
+	BudgetCut          bool                `json:"budget_cut"`
+	IngestPositionGaps []IngestPositionGap `json:"ingest_position_gaps,omitempty"`
 }
 
 type FieldsResponse struct {
@@ -339,6 +376,7 @@ type StatsResponse struct {
 	Points     []StatsPoint `json:"points"`
 	Metric     string       `json:"metric,omitempty"`
 	TimeBucket string       `json:"time_bucket,omitempty"`
+	BudgetCut  bool         `json:"budget_cut"`
 }
 
 // FacetsQuery Facet 请求。
@@ -394,6 +432,9 @@ type ExportResult struct {
 	// Artifact 仅在完整通过时非 nil（NDJSON 等物化载荷）。
 	Artifact []byte `json:"artifact,omitempty"`
 	RowBytes uint64 `json:"row_bytes,omitempty"`
+	// Limits 本次导出实际采用的预算上限与实取行数，供 UI 给出可操作提示
+	// （「单次最多 N 行」而非笼统「预算超了」）。不参与任何闸门判定。
+	Limits ExportLimits `json:"limits"`
 }
 
 // ResolveReadinessToCoverage 就绪度映射为覆盖状态（查询前的默认）。

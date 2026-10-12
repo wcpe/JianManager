@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
@@ -111,8 +112,11 @@ func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir str
 	if !binding.Mode.Valid() {
 		return fmt.Errorf("ingest: invalid instance acquisition mode")
 	}
-	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
+	// 登记只取 registerMu，**不取 cycleMu**：cycleMu 被整轮采集/预备切换/停止长持有
+	// （饱和期分钟级），取它会把「CP 启动实例」这一步拖过 RPC 截止时间。
+	// 详见 Manager.registerMu 的注释与 docs/specs/log-ingest-register-lock/spec.md 的锁审计表。
+	m.registerMu.Lock()
+	defer m.registerMu.Unlock()
 	m.mu.Lock()
 	existing, exists := m.state.Instances[uuid]
 	m.mu.Unlock()
@@ -143,6 +147,9 @@ func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir str
 	if binding.Mode == pipeline.ModeStdioPrimary {
 		streams = append(streams, "stderr")
 	}
+	// INGEST-5 修复：收集已登记的源 key，错误路径必须一并回滚 pipes/sources/SourceConfigs，
+	// 避免留下「源在采集、绑定不在」的半个登记中间态。
+	var registeredKeys []string
 	for _, stream := range streams {
 		path := filepath.Join(binding.WorkDir, "logs", "latest.log")
 		sourceID := binding.TargetID + "/file"
@@ -153,8 +160,10 @@ func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir str
 		if err := m.Register(SourceConfig{LogSourceID: sourceID, SourceGeneration: generation,
 			Mode: binding.Mode, Path: path, Stream: stream, SourceCategory: logtypes.SourceInstance,
 			StorageNamespace: targetID, ArchiveGlob: fileArchiveGlob(binding.Mode, path)}); err != nil {
+			m.rollbackRegisterSources(registeredKeys)
 			return err
 		}
+		registeredKeys = append(registeredKeys, sourceID+"/"+generation)
 	}
 	m.mu.Lock()
 	if m.state.Instances == nil {
@@ -162,7 +171,14 @@ func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir str
 	}
 	m.state.Instances[uuid] = binding
 	m.mu.Unlock()
-	if err := m.persist(); err != nil {
+	// 有界热路径（P0 复盘 2026-10-03 ✓）：**不得在持 registerMu 时无限等持久化门** ✗ ——
+	// 原 `m.persist()` = persistPriority（无 maxWait ⇒ 门上无限等 ✓）⇒ 注册风暴下"每个注册者
+	// 抱着 registerMu 无限等门"（SIGQUIT 成串 sema / 四把 wait_max 分钟级的机制本体 ✓✓）。
+	// 语义自检（不变量 ✓）：**"注册返回"改由"内存状态已在 m.mu 内提交（终将落库）"保证** ✓；
+	// 超时即交后台持久化通道（与采集轮同款热路径 ✓，失败由后台通道的错误面兜底 ✓），
+	// 不再承诺"返回即已落盘" ✗ —— 该承诺属用户面路径（persistPriority/同步模式 ✓），登记侧不需要 ✗。
+	if err := m.persistHot(); err != nil {
+		m.rollbackRegisterSources(registeredKeys)
 		m.mu.Lock()
 		delete(m.state.Instances, uuid)
 		m.mu.Unlock()
@@ -181,6 +197,28 @@ func (m *Manager) RegisterInstance(uuid, targetID, generation, mode, workDir str
 		}
 	}
 	return nil
+}
+
+// rollbackRegisterSources 回滚已登记的源（INGEST-5）：RegisterInstance 的错误路径必须把
+// pipes/sources/SourceConfigs/persistedRev/persistedCover 一并清理并重新发布对账视图，
+// 避免留下「源在采集、绑定不在」的半个登记中间态——否则 pollOnce 照常采集、
+// AppendInstanceOutput 写 pending spool，且 persistedRev 基线会让 planPersist 跳过重建。
+//
+// 调用方须已持 registerMu + pendingMu（本函数只取 m.mu，锁序 registerMu → pendingMu → m.mu ✓）。
+func (m *Manager) rollbackRegisterSources(keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, key := range keys {
+		delete(m.pipes, key)
+		delete(m.sources, key)
+		delete(m.state.SourceConfigs, key)
+		delete(m.persistedRev, key)
+		delete(m.persistedCover, key)
+	}
+	m.publishReconcileViewLocked(true) // 源集合变更：立即发布对账只读视图
 }
 
 func fileArchiveGlob(mode pipeline.AcquireMode, livePath string) string {
@@ -398,7 +436,7 @@ func (m *Manager) recordRawWriteFailure(binding InstanceBinding, stream string, 
 	if entry == nil {
 		return
 	}
-	_ = pipe.Ledger().RecordGap(pipe.Key(), entry.Positions.Read, entry.Positions.Read, "STDIO_RAW_WRITE_FAILED", fmt.Sprintf("%d bytes require operator verification", size))
+	_ = pipe.Ledger().RecordGap(pipe.Key(), entry.Positions.Read, entry.Positions.Read, ledger.GapReasonStdioRawWriteFailed, fmt.Sprintf("%d bytes require operator verification", size))
 	_ = pipe.Ledger().PauseAcquire(pipe.Key(), "managed Raw write failed; manual recovery required")
 	_ = m.persist()
 }

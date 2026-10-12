@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"gorm.io/gorm"
 
@@ -19,7 +18,7 @@ import (
 //
 // 与单实例 InstanceService.Start/Stop/... 的差异：单实例路径先做 DB 状态转换再异步 goroutine 委托，
 // 无法同步观测 Worker 结果。批量需要精确计数，故此处采用同步委托（与 bot_scale.go 一致），
-// 委托成功后再回写终态，失败回写 CRASHED，与单实例语义对齐。
+// 委托成功后条件回写终态；取消/传输失败通过已有查询与心跳收敛，绝不假定 CRASHED。
 
 const (
 	// maxInstanceBatchTargets 单次批量操作目标数上限，避免单请求过载。
@@ -182,6 +181,17 @@ func (s *InstanceBatchService) resolveBatchTargets(req InstanceBatchRequest, sco
 
 // Batch 执行批量操作：解析目标 → 按各自节点有界并发同步委托既有 per-instance RPC → 计数。
 func (s *InstanceBatchService) Batch(req InstanceBatchRequest, scopeIDs []uint, scope bool) (*InstanceBatchResult, error) {
+	return s.BatchContext(context.Background(), req, scopeIDs, scope)
+}
+
+// BatchContext 保留既有批量入口，同时让可取消调用方将意图传到 Worker。
+func (s *InstanceBatchService) BatchContext(ctx context.Context, req InstanceBatchRequest, scopeIDs []uint, scope bool) (*InstanceBatchResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	instances, skipped, err := s.resolveBatchTargets(req, scopeIDs, scope)
 	if err != nil {
 		return nil, err
@@ -207,13 +217,18 @@ func (s *InstanceBatchService) Batch(req InstanceBatchRequest, scopeIDs []uint, 
 	)
 	for i := range instances {
 		inst := instances[i]
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Wait()
+			return result, ctx.Err()
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			derr := s.delegateBatchOne(req, &inst)
+			derr := s.delegateBatchOneContext(ctx, req, &inst)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -233,9 +248,16 @@ func (s *InstanceBatchService) Batch(req InstanceBatchRequest, scopeIDs []uint, 
 }
 
 // delegateBatchOne 将单个实例的批量动作同步委托到其所属 Worker（复用既有 per-instance RPC）。
-// 生命周期动作委托成功后回写终态，失败回写 CRASHED，与单实例 delegateToWorker 语义对齐；
+// 生命周期动作委托成功后条件回写终态，失败复用状态查询并等待心跳，与单实例语义对齐；
 // command 动作不改实例状态。
 func (s *InstanceBatchService) delegateBatchOne(req InstanceBatchRequest, inst *model.Instance) error {
+	return s.delegateBatchOneContext(context.Background(), req, inst)
+}
+
+func (s *InstanceBatchService) delegateBatchOneContext(parent context.Context, req InstanceBatchRequest, inst *model.Instance) error {
+	if err := parent.Err(); err != nil {
+		return err
+	}
 	var releaseOperation func()
 	if s.instance != nil {
 		releaseOperation = s.instance.acquireInstanceOperation(inst.ID)
@@ -248,6 +270,9 @@ func (s *InstanceBatchService) delegateBatchOne(req InstanceBatchRequest, inst *
 		inst = &current
 	}
 
+	if err := parent.Err(); err != nil {
+		return err
+	}
 	if inst.Node.UUID == "" {
 		return fmt.Errorf("实例 %d 缺少关联节点", inst.ID)
 	}
@@ -269,15 +294,20 @@ func (s *InstanceBatchService) delegateBatchOne(req InstanceBatchRequest, inst *
 
 	client, ok := s.pool.Get(inst.Node.UUID)
 	if !ok {
-		// 生命周期动作与单实例 delegateToWorker 对齐：节点不可达视为失败并回写 CRASHED。
-		// command 不改状态。
+		// 节点不可达只说明未能确认操作，绝不把健康服务器记成崩溃。
 		if req.Action != InstanceBatchCommand {
-			s.updateStatus(inst.ID, model.InstanceStatusCrashed)
+			writeLifecycleObservation(s.db, inst, inst.Status, "操作结果待确认，等待心跳收敛: Worker 未连接")
 		}
 		return fmt.Errorf("Worker %s 未连接", inst.Node.UUID)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 与单实例 delegateToWorker 同源：restart 走「优雅停止 + 等待上一代进程退出 + 启动」的
+	// 同步串行链，须按生效的优雅停止超时放大预算，否则长关服实例会被本项目判超时而误报失败。
+	var gracefulStopSeconds int32
+	if s.instance != nil {
+		gracefulStopSeconds = s.instance.gracefulStopTimeoutSeconds()
+	}
+	ctx, cancel := context.WithTimeout(parent, delegateRPCTimeout(string(req.Action), gracefulStopSeconds))
 	defer cancel()
 
 	if req.Action == InstanceBatchCommand {
@@ -324,15 +354,15 @@ func (s *InstanceBatchService) delegateBatchOne(req InstanceBatchRequest, inst *
 	}
 
 	if err != nil {
-		s.updateStatus(inst.ID, model.InstanceStatusCrashed)
+		reconcileLifecycleObservation(s.db, client.Worker, inst, "gRPC 操作结果未知: "+err.Error())
 		return fmt.Errorf("gRPC %s 失败: %w", req.Action, err)
 	}
 	if resp != nil && !resp.Success {
-		s.updateStatus(inst.ID, model.InstanceStatusCrashed)
+		reconcileLifecycleObservation(s.db, client.Worker, inst, resp.Error)
 		return fmt.Errorf("Worker %s 失败: %s", req.Action, resp.Error)
 	}
 
-	s.updateStatus(inst.ID, target)
+	writeLifecycleObservation(s.db, inst, target, "")
 	return nil
 }
 

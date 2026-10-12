@@ -73,6 +73,22 @@ service WorkerService {
   rpc LogMigratePartition(LogMigratePartitionRequest) returns (LogTaskResponse);
   rpc LogCutoverReadiness(LogCutoverReadinessRequest) returns (LogCutoverReadinessResponse);
   rpc LogResolveIngestGaps(LogResolveIngestGapsRequest) returns (LogTaskResponse);
+  // LogImportArchives 手动触发归档（.gz）导入扫描：把"已经躺在源目录里、但还没被导入"的
+  // 归档立刻走一次与自动路径**完全相同**的导入管道（同清洗、同归属闸、同幂等）。
+  //
+  // 为什么需要它：自动发现只在采集轮里跑，而采集轮在源被暂停（容量/积压/人工）时不再读取——
+  // 此时目录里的历史归档既不会被自动导入，运维也没有别的入口，只能干等。
+  // 本 RPC 提供那条入口，并强制携带操作人（可审计）。
+  rpc LogImportArchives(LogImportArchivesRequest) returns (LogTaskResponse);
+  // LogClearIdentityConflicts 人工确认并清空「身份冲突」记录，使日志页的质量标记不再为
+  // conflict/partial（见 planner 的 DupConflict/StatsPartial 派生）。
+  //
+  // 语义：运维审阅后**确认这些冲突已被正确处理**（系统在不可裁定形态下保留先到者，即保留
+  // 正确版本；冲突行本身从未进入写入面），同意清空诊断记录以消除质量标记。
+  //
+  // 为什么必须显式：冲突记录是「数据歧义未裁定」的唯一凭据。清空它会让查询面**不再提示**
+  // 该源存在内容歧义，故必须由运维在审阅后明确确认，且强制携带操作人与理由（可审计）。
+  rpc LogClearIdentityConflicts(LogClearIdentityConflictsRequest) returns (LogClearIdentityConflictsResponse);
   // IssueTerminalToken 签发一次性终端连接 token。
   rpc IssueTerminalToken(IssueTerminalTokenRequest) returns (IssueTerminalTokenResponse);
   // ListFiles 列出实例工作目录下的文件。
@@ -368,6 +384,9 @@ message ReportOrphanAuditRequest {
   string node_secret = 2;
   string action = 3;      // 审计动作名：orphan.scan_detected / orphan.scan_disposed /
                           // orphan.scan_dispose_blocked / orphan.dispose_blocked / orphan.dispose_reaped /
+                          // orphan.auto_adopted / orphan.adopt_blocked / orphan.adopt_failed（FR-497 全自动收养
+                          // 三态：复核通过且拨号成功纳管 / 复核不过只告警不收养 / 拨号失败保留 PID 待下轮，
+                          // 与 docs/specs/auto-adopt-orphans/spec.md §6 一致）/
                           // health.dead_detected / health.selfheal_restart / health.selfheal_exhausted /
                           // health.circuit_broken / health.circuit_released（FR-459，detail 内标 operator=auto）
   string target_id = 4;   // 目标标识（实例 UUID 或 direct 孤儿工作目录）
@@ -400,6 +419,9 @@ message FetchBotWorkerArchiveResponse {
 message HeartbeatRequest {
   string node_uuid = 1;
   float cpu_usage = 2;
+    // iowait 是 CPU 等 IO 的时间占比（0..1，FR-485）。只看 cpu_usage 会把 IO 瓶颈
+    // 看成「CPU 不满」；本机事故中 iowait 曾达 90%。老 CP 忽略该字段，不改变既有语义。
+    float iowait = 17;
   float memory_usage = 3;
   float disk_usage = 4;
   int64 memory_used_mb = 5;
@@ -1068,6 +1090,7 @@ message GetNodeMetricsResponse {
   float cpu_usage = 1;
   float memory_usage = 2;
   float disk_usage = 3;
+    float iowait = 8;  // IO 等待占比（0..1，FR-485）
   int64 memory_used_mb = 4;
   int64 memory_total_mb = 5;
   int64 disk_used_mb = 6;
@@ -2464,6 +2487,23 @@ message LogQueryRequestBase {
   string filter = 7;
   string permission_scope = 8;
   string cancellation_token = 9;
+  // allow_projection_drift 本次请求豁免「投影清单版本（manifest_version）变化」判 stale。
+  //
+  // 语义边界（只此一条，不得扩大）：ManifestVersion = sha256(SourceProjections) 只哈希内容清单，
+  // 源在实时追加内容时它必然变化；而「数据变少」由独立的 ClosedVisibleSeq 水位缩水分支把关。
+  // 故豁免它不会放过任何数据丢失场景，只放过「内容追加」。
+  //
+  // 置位条件：仅「单次操作自己创建视图、自己读完」的导出路径（CP logcoord.Export 逐页 Search）。
+  // 该路径不存在「前端旧 view_id 跨请求复用」场景，故投影漂移属正常现象而非集合被破坏。
+  // 列表/翻页/Stats/Facets 等复用既有 view_id 的路径一律不得置位（否则前端旧 view_id 复用
+  // 会静默读到跨代次数据）。
+  //
+  // 不属于本字段的豁免范围（仍必须 VIEW_STALE）：目录/代次变化、无权威副本、分区记录消失、
+  // closed_visible_seq 缩水。
+  //
+  // 放在请求基座而非 LogQueryViewRef：它是**本次请求的授权标记**，不是视图身份的一部分；
+  // 放进 ViewRef 会让它随视图参与身份比较，改变既有字段语义。
+  bool allow_projection_drift = 10;
 }
 
 message GetLogCapabilitiesRequest {
@@ -2493,6 +2533,33 @@ message LogSearchResponse {
   string next_cursor = 6;
   bool exhausted = 7;
   LogError error = 8;
+  // ingest_position_gaps 是本 Worker 已**人工裁定放弃**（PERMANENTLY_LOST）的源位置区间。
+  //
+  // 与 coverage 的语义**严格分开**（不可混用、不可合并）：
+  //   - coverage 回答「这个分区还能不能查」（logcoord 的分区可查询性，值域是枚举状态）；
+  //   - 本字段回答「这个分区**内部**有哪些位置的数据已被确认永久缺失」（逐区间，值域是位置）。
+  // 缺了它，下游只能看到"有数据"，而无法知道某个区间是**确实没有**、还是**永久丢了**——
+  // 那正是"静默跳过"：查询结果看起来完整，实际中间少了一段且无人告知。
+  repeated IngestPositionGap ingest_position_gaps = 9;
+}
+
+// IngestPositionGap 一段被人工裁定为永久丢失的源位置区间（可查、可告警）。
+message IngestPositionGap {
+  // storage_namespace 该区间所属的存储命名空间，不代表日志源或代次身份。
+  string storage_namespace = 1;
+  // from/to 源位置闭区间 [from, to]。
+  uint64 from = 2;
+  uint64 to = 3;
+  // reason_code 固定为 PERMANENTLY_LOST；留字段以便将来自查与扩展。
+  string reason_code = 4;
+  // operator 做出放弃裁定的操作人（认证主体）。放弃不可无痕，故必然非空。
+  string operator = 5;
+  // at_utc 裁定时间（RFC3339）。
+  string at_utc = 6;
+  // log_source_id 来自真实采集凭据的日志源身份；旧节点或未知身份留空，不可推断。
+  string log_source_id = 7;
+  // source_generation 来自该缺口凭据的源代次；未知时留空，不可用当前代次替代。
+  string source_generation = 8;
 }
 
 message LogStatsRequest {
@@ -2651,4 +2718,41 @@ message LogCutoverReadinessResponse {
 message LogResolveIngestGapsRequest {
   string request_id = 1;
   string protocol_version = 2;
+  // 可选：仅解该存储命名空间（源）的缺口。空=整节点（既有行为，逐字不变）。
+  string storage_namespace = 3;
+}
+
+message LogImportArchivesRequest {
+  string request_id = 1;
+  string protocol_version = 2;
+  // 可选：仅扫描该存储命名空间（源）；空 = 本 Worker 全部可导入源。
+  string storage_namespace = 3;
+}
+
+message LogClearIdentityConflictsRequest {
+  string request_id = 1;
+  string protocol_version = 2;
+  // 可选：仅清该源的冲突记录。取值是**完整源键** `LogSourceID/SourceGeneration`
+  // （如 `inst:145/file/instance:<uuid>@worker:<uuid>`），与 LogResolveIngestGapsRequest
+  // 的同名字段取同一口径的同一个值（沿用既有 wire 语义，不为同一个值再造一个字段名）；
+  // 空 = 本 Worker 全部持有冲突记录的源。
+  string storage_namespace = 3;
+}
+
+// LogClearIdentityConflictsResponse 是清空的**结果凭据**（不只是成功/失败）。
+//
+// 为什么单独一个响应类型而不复用 LogTaskResponse：调用方需要看到「清了多少条」以及
+// 「清的是哪些源」——那正是审计凭据的对外可读部分。只回 SUCCEEDED 会让运维无从判断
+// 是否真的清掉了预期的那批（也就无法在误清后立刻发现）。
+message LogClearIdentityConflictsResponse {
+  string request_id = 1;
+  // cleared_count 本次清空的冲突记录条数（跨源合计）。
+  uint64 cleared_count = 2;
+  // cleared_sources 本次实际发生清空的源键（升序）。
+  repeated string cleared_sources = 3;
+  // skipped_sources 本次请求覆盖到、但**没有**冲突记录可清（或源不存在）的源键（升序）。
+  // 它不是错误：清空是幂等的，"已经没有冲突"正是目标状态；单列出来是为了让"请求覆盖了谁"
+  // 与"实际改了谁"在同一份凭据里可对照。
+  repeated string skipped_sources = 4;
+  LogError error = 5;
 }

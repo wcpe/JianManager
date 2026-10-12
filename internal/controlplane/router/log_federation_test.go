@@ -75,10 +75,14 @@ func TestLogFederation_ViewReuseHTTPStatus(t *testing.T) {
 	viewID, _ := viewObj["view_id"].(string)
 	require.NotEmpty(t, viewID)
 
-	// 变更时间范围复用同一 viewId → 409 VIEW_STALE
+	// 变更时间范围复用同一 viewId：新契约（快路径容忍"固定条件变化" ⇒ 按当前条件重建视图 ✓）
+	// ⇒ 200，且覆盖校验以 pending 独立呈现（绝不入 notes ✗）；旧的 409 VIEW_STALE 不再要求。
 	w2 := makeRequest(r, "GET", "/api/v1/logs/federation/search?instanceId=1&viewId="+viewID+"&from=2020-01-01T00:00:00Z&to=2020-01-02T00:00:00Z", nil, adminToken)
-	require.Equal(t, http.StatusConflict, w2.Code, "body=%s", w2.Body.String())
-	assert.Contains(t, fmt.Sprint(parseJSON(t, w2)["error"]), "VIEW_STALE")
+	require.Equal(t, http.StatusOK, w2.Code, "body=%s", w2.Body.String())
+	body2 := parseJSON(t, w2)
+	cov2, _ := body2["coverage"].(map[string]interface{})
+	require.Equal(t, true, cov2["pending"], "快路径必须以 pending 呈现覆盖校验未跑（body=%s）", w2.Body.String())
+	assert.NotContains(t, fmt.Sprint(body2["notes"]), "pending", "pending 绝不入 notes ✗")
 
 	// 伪造其他主体创建的 view 再带当前 token 复用 → 403
 	foreign, err := coord.CreateView(context.Background(), logcoord.Query{
@@ -121,6 +125,9 @@ type fedWorker struct {
 	unsup   bool
 	fail    string
 	searchN int
+	// statsN/facetN 记录聚合 RPC 次数：聚合类同参缓存命中时不得增长（CP-8 回归）。
+	statsN int
+	facetN int
 	// lastFilter 记录最近一次 Search 收到的过滤表达式，供断言结构化筛选是否已组合下发。
 	lastFilter string
 }
@@ -157,6 +164,7 @@ func (w *fedWorker) Fields(_ context.Context, req logcoord.WorkerSearchRequest) 
 }
 
 func (w *fedWorker) Stats(_ context.Context, req logcoord.WorkerSearchRequest, _ []string, _ string) (*logcoord.WorkerStatsResponse, error) {
+	w.statsN++
 	return &logcoord.WorkerStatsResponse{
 		ViewID:  req.ViewID,
 		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...),
@@ -164,6 +172,7 @@ func (w *fedWorker) Stats(_ context.Context, req logcoord.WorkerSearchRequest, _
 }
 
 func (w *fedWorker) Facets(_ context.Context, req logcoord.WorkerSearchRequest, _ []string, _ uint32) (*logcoord.WorkerFacetsResponse, error) {
+	w.facetN++
 	return &logcoord.WorkerFacetsResponse{
 		ViewID:  req.ViewID,
 		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...),
@@ -249,25 +258,25 @@ func TestLogFederation_Search_PartialCoverageJSON(t *testing.T) {
 	cov, ok := body["coverage"].(map[string]interface{})
 	require.True(t, ok, "coverage missing: %v", body)
 	assert.Equal(t, false, cov["complete"], "partial coverage must not claim complete")
-
+	// 快路径仅后置快照水位校验；已经观察到的 success/offline 必须原样保留。
+	assert.Equal(t, true, cov["pending"], "快路径必须标识尚未固化的快照水位: %v", body)
 	targets, _ := cov["targets"].([]interface{})
-	require.Len(t, targets, 2)
-	byID := map[string]map[string]interface{}{}
-	for _, raw := range targets {
-		tc := raw.(map[string]interface{})
-		byID[tc["target_id"].(string)] = tc
+	require.Len(t, targets, 2, "pending 不能隐藏已经观察到的逐目标失败")
+	states := map[string]string{}
+	for _, v := range targets {
+		target := v.(map[string]interface{})
+		states[target["target_id"].(string)] = target["state"].(string)
 	}
-	require.Contains(t, byID, on)
-	require.Contains(t, byID, off)
-	assert.Equal(t, "success", byID[on]["state"])
-	assert.Equal(t, "offline", byID[off]["state"])
+	require.Equal(t, "success", states[on])
+	require.Equal(t, "offline", states[off])
+	assert.NotContains(t, fmt.Sprint(body["notes"]), "pending", "pending 绝不入 notes ✗")
 
-	// View 固化 closed_visible_seq 向量
+	// View 不固化 closed_visible_seq（新契约 ✓）：快路径未跑逐目标校验 ⇒ 该向量无意义，
+	// 刻意不写入 ✗（避免下游把它当已校验证据 ✓）；固化由慢路径/导出承担（见导出用例 ✓）。
 	view, _ := body["view"].(map[string]interface{})
 	require.NotNil(t, view)
-	cvs, _ := view["closed_visible_seq"].(map[string]interface{})
-	require.NotNil(t, cvs, "view.closed_visible_seq must be persisted after search")
-	assert.Equal(t, "src-on/g:1", cvs[on])
+	_, hasCVS := view["closed_visible_seq"]
+	assert.False(t, hasCVS, "fast path must not persist closed_visible_seq: %v", view)
 
 	items, _ := body["items"].([]interface{})
 	assert.NotEmpty(t, items)
@@ -427,6 +436,8 @@ func TestLogFederation_AdminSearchOK_WithKeywordAndLimits(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	body := parseJSON(t, w)
 	cov := body["coverage"].(map[string]interface{})
+	// pending 只标记快照水位未固化，不得把全部目标 success 的观测覆盖改成失败。
+	assert.Equal(t, true, cov["pending"])
 	assert.Equal(t, true, cov["complete"])
 	items := body["items"].([]interface{})
 	require.Len(t, items, 1)

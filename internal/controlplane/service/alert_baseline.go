@@ -304,6 +304,9 @@ var nodeMetricAliases = map[string]string{
 	model.MetricNodeDiskUsed: model.MetricNodeDiskUsed,
 	"load":                   model.MetricNodeLoad,
 	model.MetricNodeLoad:     model.MetricNodeLoad,
+	// iowait（FR-485）：别名与自键都登记，规则里写 metric: "iowait" 或 "node_iowait" 均可命中。
+	"iowait": model.MetricNodeIOWait, "io_wait": model.MetricNodeIOWait,
+	model.MetricNodeIOWait: model.MetricNodeIOWait,
 }
 
 // instanceMetricAliases 把 instance 目标的指标别名解析为标准 metric_key。
@@ -354,8 +357,10 @@ func saturationPercent(usedKey string, used, limit *float64) (float64, bool) {
 		return *used / *limit * 100, true
 	}
 	// 百分比型指标（cpu）自身即饱和度。
+	// FR-485：iowait 与 cpu 同为百分比型指标（unit=pct，0..100），自身即饱和度；
+	// 不登记在此的话，饱和度型 iowait 规则会恒返回 (0,false) 而永不触发。
 	switch usedKey {
-	case model.MetricNodeCPUPct, model.MetricInstCPUPct:
+	case model.MetricNodeCPUPct, model.MetricInstCPUPct, model.MetricNodeIOWait:
 		return *used, true
 	}
 	return 0, false

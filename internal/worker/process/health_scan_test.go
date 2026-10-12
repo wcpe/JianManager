@@ -935,3 +935,59 @@ func TestHealthScan_ScanReleaseConcurrent_NoBadTerminalState(t *testing.T) {
 		"并发 scan/release 后不得残留「broken==false ∧ wrapper 禁用」的终态")
 	assert.Greater(t, auditTotal(), auditBefore, "并发交错轮次应持续触发审计下发（用例非空转）")
 }
+
+// 回归（CP-5，2026-10-12 终审修复）：熔断期间 CP 的**重推**不得把 `Instance.AutoRestart` 重新打开。
+//
+// 现场形态：隧道重连（onOpen / Register / 心跳兜底）都会触发 ResyncNode → SetLaunchConfig，
+// 而 CP 下发的 autoRestart 恒为 true（CP 不知道 Worker 侧的熔断保护态）。旧实现无条件写回
+// `inst.AutoRestart = autoRestart`，把 breakCircuit 刚设的禁用重新打开。
+//
+// 为什么这条断言必须落在 `inst.AutoRestart` 本身：direct/docker 策略在**构造时**把
+// `inst.AutoRestart` 快照进 CommandSpec（manager.go 惰性构造块），停止/崩溃态下
+// SetLaunchConfig 会丢弃 strategy ⇒ 下次启动按新快照重建 ⇒ 被写回的 true 直接放行自动重启。
+// 既有的 TestHealthScan_CircuitBreakerManualRelease 只断言 autoRestartAllowed/isCircuitBroken，
+// 两者都只看 healthState.broken、**不看** AutoRestart ⇒ 抓不到本缺陷（实测：改回旧行为它仍绿）。
+//
+// 转红方式（实测）：删除 SetLaunchConfig 顶部「熔断期间强制 autoRestart=false」的判定
+// ⇒ 本用例断言的 inst.AutoRestart 变回 true，立即红。
+func TestManager_SetLaunchConfigMustNotRearmAutoRestartWhileCircuitBroken(t *testing.T) {
+	alive, responsive := true, true
+	_, m, _, _ := newHealthTestScanner(t, HealthActionWarn, 3, &alive, &responsive)
+	addInstance(m, "u-resync", StateCrashed, true, 0, 25566)
+
+	// 制造熔断（崩溃窗口超限）。
+	for i := 0; i < 5; i++ {
+		m.emitCrash("u-resync", CrashInfo{ExitCode: 1})
+	}
+	require.True(t, m.breakCircuit("u-resync", "持续崩溃已熔断：测试原因", false), "应触发熔断")
+	inst, ok := m.GetInstance("u-resync")
+	require.True(t, ok)
+	require.False(t, inst.AutoRestart, "前置：熔断必须禁用自动重启")
+
+	// CP 重推（隧道重连）：入参 autoRestart=true，模拟 CP 不知熔断态。
+	m.SetLaunchConfig("u-resync", "java -jar server.jar", "", "", nil, true)
+
+	inst, ok = m.GetInstance("u-resync")
+	require.True(t, ok)
+	require.False(t, inst.AutoRestart,
+		"熔断期间 CP 重推不得重新打开 AutoRestart（否则崩溃循环实例在熔断后继续自愈重启）")
+	require.False(t, m.autoRestartAllowed("u-resync"), "熔断保护态必须仍然有效")
+
+	// 对照组：显式人工解除熔断后，CP 重推必须能恢复正常配置（不得把修复写成永久禁用）。
+	_, released := m.ReleaseCircuitBreaker("u-resync")
+	require.True(t, released)
+	m.SetLaunchConfig("u-resync", "java -jar server.jar", "", "", nil, true)
+	inst, ok = m.GetInstance("u-resync")
+	require.True(t, ok)
+	require.True(t, inst.AutoRestart,
+		"解除熔断后 CP 重推必须能恢复自动重启（修复不得造成永久禁用）")
+
+	// 对照组 2：未熔断实例的重推必须原样生效（含 CP 主动关闭的场景）。
+	addInstance(m, "u-fresh", StateStopped, false, 0, 25567)
+	m.SetLaunchConfig("u-fresh", "java -jar server.jar", "", "", nil, true)
+	fresh, _ := m.GetInstance("u-fresh")
+	require.True(t, fresh.AutoRestart, "未熔断实例的重推必须原样生效")
+	m.SetLaunchConfig("u-fresh", "java -jar server.jar", "", "", nil, false)
+	fresh, _ = m.GetInstance("u-fresh")
+	require.False(t, fresh.AutoRestart, "CP 主动关闭自动重启必须生效")
+}

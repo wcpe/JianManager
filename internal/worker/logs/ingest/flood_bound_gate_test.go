@@ -73,10 +73,14 @@ func TestFloodWithFailingDeliveryPausesSourceAndKeepsStateBounded(t *testing.T) 
 	walLen := len(p.WAL().Snapshot())
 	require.LessOrEqual(t, walLen, 6000, "WAL 积压条目数应被上限拦住（默认 5000 + 单批余量），实测 %d", walLen)
 
-	// 持久化后状态文件必须有界——这正是事故中膨胀到 1.2 GB 的那个文件。
+	// 持久化后索引库（含 WAL 伴生文件）必须有界——这正是事故中膨胀到 1.2 GB 的那个状态。
 	require.NoError(t, m.persist())
-	info, err := os.Stat(filepath.Join(root, "var", "log", "ingest.state.json"))
-	require.NoError(t, err)
-	require.Less(t, info.Size(), int64(32<<20),
-		"状态文件须保持有界（修复前同输入 ≳100 MiB，事故中曾达 1.2 GB），实测 %d 字节", info.Size())
+	var total int64
+	for _, name := range []string{"ingest.index.db", "ingest.index.db-wal", "ingest.index.db-shm"} {
+		if info, err := os.Stat(filepath.Join(root, "var", "log", name)); err == nil {
+			total += info.Size()
+		}
+	}
+	require.Less(t, total, int64(32<<20),
+		"状态索引须保持有界（修复前同输入 ≳100 MiB，事故中曾达 1.2 GB），实测 %d 字节", total)
 }

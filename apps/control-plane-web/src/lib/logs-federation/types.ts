@@ -27,6 +27,12 @@ export const PARTIAL_REASONS = {
   LOG_UNSUPPORTED: 'LOG_UNSUPPORTED',
   /** Legacy 数据源：仅有来源标识与时间覆盖，不在联邦 Query View 内。 */
   LEGACY: 'LEGACY',
+  /**
+   * 请求被限流（HTTP 429，CP `middleware.RateLimit` 按 ClientIP 分桶）。
+   * 既不是「查到 0 条」，也不是「联邦路径不可用」——是**这次没拿到数据**，
+   * 必须保留上一份已渲染结果并显式提示，禁止空成功、也不得静默降级到 legacy。
+   */
+  RATE_LIMITED: 'RATE_LIMITED',
   /** 归档回灌（Rehydrate）失败。 */
   REHYDRATE_FAILED: 'REHYDRATE_FAILED',
   /** 采集积压：上游写入未追上，查询结果滞后。 */
@@ -56,6 +62,33 @@ export const PARTIAL_REASONS = {
 } as const
 
 export type PartialReasonCode = (typeof PARTIAL_REASONS)[keyof typeof PARTIAL_REASONS]
+
+/**
+ * 导出闸阻断报告（`incomplete_reasons`）里的原因码。
+ *
+ * 与 PARTIAL_REASONS 分开维护：后者是**覆盖**原因的大写枚举（进 coverage.partial_reasons、
+ * 参与 view state 判定），而这里是**导出物化**的诊断码（小写、只出现在阻断报告里）。
+ * 混入同一对象会让「覆盖原因」与「导出归因」两个正交概念在类型上互相污染。
+ */
+export const EXPORT_BLOCK_REASONS = {
+  /** 覆盖不完整。 */
+  COVERAGE_INCOMPLETE: 'coverage_incomplete',
+  /** 列表 / Worker 侧截断。 */
+  WORKER_OR_LIST_TRUNCATED: 'worker_or_list_truncated',
+  /** 预算类截断的笼统码（既有 wire 契约，保留）。 */
+  BUDGET_EXCEEDED: 'budget_exceeded',
+  /**
+   * 因**行数**上限被截断（CP 侧跨页累积达 log_export.max_rows，默认 10000）。
+   *
+   * 生产实证：前端导出原不传 limit、后端上限又是编译期常量，数据超 10000 行时
+   * 必然被拒且用户没有任何调大途径；而笼统的 budget_exceeded 也说不出「是行数到顶」。
+   */
+  ROW_LIMIT_EXCEEDED: 'row_limit_exceeded',
+  /** 因**累计字节**上限被截断（log_export.max_bytes，默认 64MiB）。 */
+  BYTE_BUDGET_EXCEEDED: 'byte_budget_exceeded',
+  /** 物化产物本身超过字节上限（编码后大小）。 */
+  ARTIFACT_BYTE_BUDGET_EXCEEDED: 'artifact_byte_budget_exceeded',
+} as const
 
 /** partial_reasons 元素：已登记码或后端透传的原始字符串。 */
 export type PartialReason = PartialReasonCode | (string & {})
@@ -100,6 +133,15 @@ export interface TargetCoverage {
 export interface Coverage {
   /** true = 本次结果集在声明的授权目标与时间窗内完整。 */
   complete: boolean
+  /**
+   * 首屏快路径（Query.Fast）尚未做逐目标完整性校验时的独立标记。
+   *
+   * 与 complete 正交、**绝不冒充 complete**：pending=true 表示「未校验」，
+   * 不是「有具体缺失」——不得据此渲染「部分日志无法查询」的失败/缺失文案，
+   * 但也不可把空结果当完整成功，且全量历史完整性（historyFullyEnumerated）不得为真。
+   * 导出入口不因 pending 关闭：产出物由后端慢路径在下载前做完整校验（FR-482 由后端闸保证）。
+   */
+  pending?: boolean
   /** 结构化部分原因；失败 / 降级时不得省略。 */
   partialReasons: PartialReason[]
   /** 目标覆盖摘要。 */
@@ -168,7 +210,22 @@ export type ExportStatus = 'READY' | 'PENDING' | 'FAILED' | 'INCOMPLETE' | (stri
  * 日志联邦查询 / 导出响应的前端信封。
  * 覆盖 useLogs 未来升级后的字段，以及错误注入 / mock 的传输失败形态。
  */
+/** 已裁定永久位置缺失；独立于时间覆盖与质量，位置始终保留十进制字符串。 */
+export interface IngestPositionGap {
+  workerId: string
+  storageNamespace: string
+  from: string
+  to: string
+  reasonCode: string
+  operator: string
+  atUTC: string
+  /** 旧Worker未提供时保持未知，禁止由namespace或当前事件推测。 */
+  logSourceId?: string
+  sourceGeneration?: string
+}
+
 export interface LogFederationResponse {
+  ingestPositionGaps?: IngestPositionGap[]
   /** 传输 / HTTP 层是否成功；undefined 表示调用方未提供（按成功路径继续看 coverage）。 */
   ok?: boolean
   viewId?: string
@@ -203,13 +260,15 @@ export interface FormattedCoverageSummary {
   /**
    * 横幅档位。
    * - complete：显式 complete 且无 partial / 未解析重复
-   * - partial：有 coverage 但不完整
+   * - partial：有 coverage 但不完整（含 pending 未校验；由 pending 字段区分语义）
    * - failed：无 coverage（查询失败信封），**禁止**当成空成功
    * - unknown：coverage 形状无法识别
    */
   status: 'complete' | 'partial' | 'failed' | 'unknown'
   /** 仅 status=complete 时为 true。 */
   complete: boolean
+  /** 首屏快路径未校验标记（Coverage.Pending 的透传；不是缺失原因）。 */
+  pending: boolean
   /**
    * 是否允许 UI 把「0 条结果」呈现为成功空态。
    * 失败 / 不完整 / coverage 缺失时一律 false——失败不得显示为空成功。
@@ -239,7 +298,15 @@ export type LogViewState =
   | 'truncated'
   | 'legacy'
   | 'gap'
+  /** 首屏快路径未做完整性校验（Coverage.Pending）：结果可用但未验证，非缺失。 */
+  | 'verifying'
   | 'partial'
+  /**
+   * 请求被限流（429，重试耗尽）：**本次没拿到数据**。
+   * 既不是「查到 0 条」（禁止空成功），也不是「联邦路径不可用」（不得降级 legacy 拿旧数据
+   * 把限流掩盖成正常）。页面据此保留上一份已渲染的行并给出可重试的限流提示。
+   */
+  | 'rate_limited'
   | 'ready_complete'
   | 'unknown'
 
@@ -248,11 +315,21 @@ export interface ClassifiedLogViewState {
   state: LogViewState
   /** 是否为失败态（传输错误 / VIEW_STALE / 引擎未就绪等，不可渲染成空成功）。 */
   isFailure: boolean
-  /** 是否为不完整结果（partial 各态）。 */
+  /** 是否为不完整结果（partial 各态；含未校验的 verifying）。 */
   isIncomplete: boolean
+  /**
+   * 是否处于「未校验」态（state='verifying'）：首屏快路径结果，完整性未验证。
+   * 结果可用、可继续浏览与翻页；不得渲染为「缺失/失败」，也不得宣称完整。
+   */
+  pendingVerification: boolean
   /** 空结果是否可作为「成功且完整」展示。 */
   emptySuccessAllowed: boolean
-  /** 是否允许导出下载入口（仅在覆盖完整且校验通过时为 true）。 */
+  /**
+   * 是否允许导出下载入口。
+   * complete 校验通过时为 true；**未校验（verifying）时同样开放入口**——
+   * 下载物由后端慢路径在产出前做完整校验（FR-482「只有校验后可下载」由后端闸保证），
+   * 前端把「未校验」当「已失败」会把导出永久锁死。
+   */
   allowsExportDownload: boolean
   /** 当前 view 枚举是否已结束（nextCursor=null 或 EXHAUSTED）；≠ 全量历史完整。 */
   viewEnumerationEnded: boolean

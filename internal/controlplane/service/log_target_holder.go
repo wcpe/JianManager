@@ -28,6 +28,52 @@ func (s *LogTargetHolderService) ListForInstance(instanceID uint) ([]model.LogTa
 	return out, nil
 }
 
+// ListForInstances 批量取多个实例的 holder，按实例分组返回。
+//
+// 为什么需要批量（2026-10-09 生产实证）：平台级联邦查询会遍历全部实例，逐实例调用
+// ListForInstance 时每次查询要发 N 条 SQL（生产约 25 实例 ⇒ 约 25 条 holder 查询），
+// 而 CP 的 SQLite 连接池被刻意收敛为单连接（FR-318）⇒ 这些查询全部串行排队，与其它
+// 请求互相阻塞（生产 SLOW SQL 记录到同一形态的 holder 查询 p90 达 2.7s、max 约 10s）。
+// 批量后 N 条降为 1 条。
+//
+// 等价性：分组内顺序仍为 current DESC, id ASC（与 ListForInstance 逐字一致），
+// 且实例之间互不影响——同一批只改变「取数方式」，不改变任何一行的内容或排序。
+func (s *LogTargetHolderService) ListForInstances(instanceIDs []uint) (map[uint][]model.LogTargetHolder, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("log holder service is not configured")
+	}
+	out := make(map[uint][]model.LogTargetHolder, len(instanceIDs))
+	if len(instanceIDs) == 0 {
+		return out, nil
+	}
+	uniq := make([]uint, 0, len(instanceIDs))
+	seen := make(map[uint]bool, len(instanceIDs))
+	for _, id := range instanceIDs {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		uniq = append(uniq, id)
+	}
+	// 分块：规避 SQL 变量数量上限，块内排序已保证跨块合并仍按实例分组有序。
+	const chunk = 500
+	for start := 0; start < len(uniq); start += chunk {
+		end := start + chunk
+		if end > len(uniq) {
+			end = len(uniq)
+		}
+		var rows []model.LogTargetHolder
+		if err := s.db.Where("instance_id IN ?", uniq[start:end]).
+			Order("instance_id ASC, current DESC, id ASC").Find(&rows).Error; err != nil {
+			return nil, fmt.Errorf("查询日志 holder 失败: %w", err)
+		}
+		for _, h := range rows {
+			out[h.InstanceID] = append(out[h.InstanceID], h)
+		}
+	}
+	return out, nil
+}
+
 // RecordCurrent records a current holder and closes any previous current holder.
 func (s *LogTargetHolderService) RecordCurrent(instanceID uint, workerUUID, generation, namespace string, now time.Time) error {
 	if s == nil || s.db == nil {

@@ -29,6 +29,13 @@ type PlanRequest struct {
 	RequireCold bool
 	// RequireArchive 为 true 时，若 ARCHIVE 未恢复 → partial / ARCHIVE_NOT_RESTORED。
 	RequireArchive bool
+	// AllowProjectionDrift 为 true 时，视图复用校验豁免「投影清单版本（ManifestVersion）变化」判 stale。
+	//
+	// 只允许「单次操作自己创建视图、自己读完」的导出路径置位（CP logcoord.Export 逐页 Search）：
+	// 该路径不存在「前端旧 view_id 跨请求复用」场景，故投影漂移是源仍在实时追加内容的正常现象。
+	// 其余维度一律不豁免：分区记录消失、无权威副本、目录/代次变化、closed_visible_seq 缩水
+	// （数据变少）仍必须 VIEW_STALE。详见 validateViewAgainstCatalog。
+	AllowProjectionDrift bool
 }
 
 // PlanResult 是 planner 输出。
@@ -164,7 +171,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			res.Coverage.EnumerationState = EnumStale
 			return res
 		}
-		stale := p.validateViewAgainstCatalog(view, &res.Coverage)
+		stale := p.validateViewAgainstCatalog(view, &res.Coverage, req.AllowProjectionDrift)
 		if stale != nil {
 			res.Err = stale
 			res.Coverage.EnumerationState = EnumStale
@@ -341,6 +348,18 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		target.Reasons = append([]string(nil), target.Reasons...)
 		view.TargetCoverage[target.TargetID] = target
 	}
+
+	// 查询窗内无分区的**授权目标**：按「空」而非「坏」纳入覆盖（与 #60 的 CP 侧同口径；
+	// 2026-09-30 生产实证：静默源 inst:153 因此令平台 complete 恒 false）。
+	//
+	// 必须迭代 req.TargetIDs（授权目标）而不是 view.TargetIDs（2026-10-11 复审订正）：
+	// res.Coverage 与 ranges 都按**分区**构造，而 CP 发的授权目标是**命名空间**粒度
+	// （TargetInfo{ID: "inst:153"}）⇒ 窗口内没有分区的源在两边都不出现 ⇒ CP 判
+	// missing_coverage ⇒ 一个静默源把整个平台判成未就绪。而这类源**根本不进 view.TargetIDs**
+	// （selectKeys 按 dayOverlapsRange 过滤掉窗口外的分区）⇒ 迭代视图目标永远看不到它。
+	//
+	// record=true：此刻视图尚未登记（下面的 p.views[...] 还没执行）⇒ 无并发读者，可安全写回。
+	p.coverEmptyAuthorizedTargets(req, view, &res)
 	if !req.Transient {
 		p.mu.Lock()
 		p.pruneViewsLocked()
@@ -351,9 +370,95 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 	return res
 }
 
+// coverEmptyAuthorizedTargets 为「查询窗内没有任何分区的**授权目标**」补一条**空成功覆盖**。
+//
+// 症状与口径：CP 的授权目标是命名空间粒度，而覆盖与 range 都按分区构造 ⇒ 窗口内无数据的源在
+// 两边都不出现 ⇒ CP 判 missing_coverage ⇒ 一个静默源（最后分区早于窗口，如 inst:153）把整个平台
+// 判成未就绪。这与 #60 在 CP 侧「无数据 ≠ 故障」同口径：按**空结果**计入成功。
+//
+// 判据（缺一不可）：
+//  1. 视图内没有任何条目承载该授权目标（判据与 remapCoverageTargets/CP 侧一致：条目 ID 等于
+//     授权目标，或条目是它的分区子项）——已有覆盖就不得重复计入；
+//  2. Catalog 里确实存在同命名空间、且 `OwnerForQuery` 给得出权威的记录（按命名空间找**任意**
+//     一天：静默源的最后分区可能早于窗口，故绝不能用窗口内那一天去 Get，那必然落空）；
+//  3. **不**把它标为可查（不进 QueryableTargets）——否则会为它追加一个指向不存在分区的 range，
+//     反而制造 range-unavailable。
+//
+// 找不到可查记录的授权目标**保持未就绪**（不发明空成功）：worker 侧无法区分「该源在本 Worker
+// 上没有记录」与「窗口内无数据」，宁可让 CP 判 missing_coverage，也不把「不知道」粉饰成「空」。
+//
+// 只在**创建路径**调用（视图尚未登记 ⇒ 无并发读者），故结果一律写回视图：写回后
+// planRangesForView 能原样复用同一条空成功覆盖；**复用路径绝不再调用本函数**（F1：
+// 那里补空会把「有数据未读」粉饰成「空」，见 planRangesForView 的论证）。
+func (p *Planner) coverEmptyAuthorizedTargets(req PlanRequest, view *QueryView, res *PlanResult) {
+	if len(req.TargetIDs) == 0 {
+		// 未指定授权目标 = 本 Worker 全部 Catalog 分区：没有分区就没有目标，不发明覆盖。
+		return
+	}
+	// 一次 O(条数) 建立「已被覆盖」集合：条目 ID 直接命中，或按 parseTargetKey 归到命名空间/天
+	// （与 matchTarget 的三条命中规则等价）。此前写法对每个目标整份遍历 p.cat.Keys() ⇒ O(T×K)
+	// 且每次整份拷贝，而触发条件本身恒假（迭代的是必然已被覆盖的 view.TargetIDs）。
+	covered := make(map[string]bool, len(view.TargetCoverage)*2)
+	for id := range view.TargetCoverage {
+		covered[id] = true
+		if key, ok := parseTargetKey(id); ok {
+			covered[key.StorageNamespace] = true
+			covered[key.UTCDay] = true
+		}
+	}
+	// Catalog 键只取一次（惰性：没有待补目标时零成本）。
+	var allKeys []catalog.PartitionKey
+	for _, auth := range req.TargetIDs {
+		if auth == "" || covered[auth] {
+			continue
+		}
+		if allKeys == nil {
+			allKeys = p.cat.Keys()
+		}
+		// 授权目标可能是命名空间（其自身可含 '/'，如 ns/game-1），也可能是 ns/day：
+		// 先按整串当命名空间找；找不到再按 parseTargetKey 拆出的命名空间找一次。
+		if !p.catalogHasQueryableRecord(allKeys, auth) {
+			key, ok := parseTargetKey(auth)
+			if !ok || key.StorageNamespace == auth || !p.catalogHasQueryableRecord(allKeys, key.StorageNamespace) {
+				continue
+			}
+		}
+		cov := TargetCoverage{TargetID: auth, State: CoverageSuccess}
+		res.Coverage.AddTarget(cov)
+		covered[auth] = true
+		view.TargetCoverage[auth] = cov
+		// 登记进 TargetIDs：planRangesForView 按它产出同一条覆盖；它不在 QueryableTargets 里，
+		// 故走「不可查」分支 ⇒ 只给覆盖、不给 range（空 = 结果里 0 行）。
+		view.TargetIDs = append(view.TargetIDs, auth)
+	}
+}
+
+// catalogHasQueryableRecord 报告 Catalog 中是否存在该命名空间下**可查**的记录（任意一天）。
+// 只看 OwnerForQuery：staging / residual / 无权威一律不算（与主循环同一判据）。
+func (p *Planner) catalogHasQueryableRecord(allKeys []catalog.PartitionKey, namespace string) bool {
+	if namespace == "" {
+		return false
+	}
+	for _, k := range allKeys {
+		if k.StorageNamespace != namespace {
+			continue
+		}
+		rec, ok := p.cat.Get(k)
+		if !ok || rec == nil {
+			continue
+		}
+		if ref := catalog.OwnerForQuery(rec); ref.OK {
+			return true
+		}
+	}
+	return false
+}
+
 // validateViewAgainstCatalog 检查固定视图是否仍可对齐 Catalog。
 // 纯迁移（旧租约仍可读原集合）不自动失效；generation 变化 / 数据集合破坏 closed_visible_seq → VIEW_STALE。
-func (p *Planner) validateViewAgainstCatalog(view *QueryView, cov *Coverage) *QueryError {
+//
+// allowProjectionDrift 只豁免「投影清单版本变化」这一条分支（见下方标注），其余分支一律保留。
+func (p *Planner) validateViewAgainstCatalog(view *QueryView, cov *Coverage, allowProjectionDrift bool) *QueryError {
 	for targetID, wantGen := range view.Generations {
 		key, ok := parseTargetKey(targetID)
 		if !ok {
@@ -399,7 +504,17 @@ func (p *Planner) validateViewAgainstCatalog(view *QueryView, cov *Coverage) *Qu
 			if ref.Projection != nil {
 				currentVersion = ref.Projection.ManifestVersion
 			}
-			if wantVersion != currentVersion {
+			// 投影清单版本漂移：内容清单变化（源仍在实时追加日志时**必然**发生）。
+			//
+			// 为什么可以按请求豁免（而非放宽校严）：ManifestVersion 只哈希 SourceProjections 内容清单,
+			// 「数据变少」由紧随其后的 closed_visible_seq 缩水分支独立把关，因此内容追加走本分支、
+			// 数据丢失走下一分支——豁免本分支不会放过任何数据丢失场景。
+			//
+			// 为什么必须能豁免：导出是「单次操作自己 CreateView、自己逐页读完」，耗时可达数十秒，
+			// 期间任意源写入新投影都会让 165 个目标全部降级 partial，导出永远拿不到附件
+			// （生产实证：只要玩家的业务服务器在跑，导出就永远失败）。
+			// 该路径不存在「前端旧 view_id 跨请求复用」，故原设计意图（防旧 view_id 复用）在此不适用。
+			if wantVersion != currentVersion && !allowProjectionDrift {
 				cov.AddTarget(TargetCoverage{TargetID: targetID, State: CoverageStale, Reasons: []string{ReasonConflictGeneration}})
 				return newErr(ErrCodeViewStale, fmt.Sprintf("view %s target %s projection changed", view.ViewID, targetID))
 			}
@@ -485,8 +600,18 @@ func (p *Planner) planRangesForView(req PlanRequest, view *QueryView, res *PlanR
 		if original, ok := view.TargetCoverage[targetID]; ok {
 			res.Coverage.AddTarget(original)
 		} else {
+			// 防御分支（当前**不可达**，如实标注，不冒充修复）：可查目标在创建视图时必已写入
+			// view.TargetCoverage（Plan 先按 res.Coverage 全量填充，再补空成功覆盖）。
+			// 真出现「可查却无覆盖记录」说明创建侧漏了记账——按未就绪如实上报，
+			// 绝不伪造成空成功把缺口掩盖掉。
 			res.Coverage.AddTarget(TargetCoverage{
-				TargetID: targetID, State: CoverageNotReady, Reasons: []string{ReasonRangeUnavailable},
+				TargetID:          targetID,
+				State:             CoverageNotReady,
+				Reasons:           []string{ReasonRangeUnavailable},
+				ClosedVisibleSeq:  cvs,
+				CatalogGeneration: wantGen,
+				Owner:             ownerStr,
+				DirID:             wantDir,
 			})
 			continue
 		}
@@ -501,7 +626,57 @@ func (p *Planner) planRangesForView(req PlanRequest, view *QueryView, res *PlanR
 			Projection:       ref.Projection,
 		})
 	}
+	// 复用路径的**未规划授权目标**必须显式上报「未就绪」（F1，2026-10-12 终审修复）：
+	// 既不得补空成功、也不得沉默——详见 markUnplannedAuthorizedTargetsForReuse 的论证
+	// （沉默会被 CP 按 readiness 判 success，与补空成功是同一个后果）。
+	p.markUnplannedAuthorizedTargetsForReuse(req, view, res)
 	assertDisjoint(res.Ranges)
+}
+
+// markUnplannedAuthorizedTargetsForReuse 为本请求授权、但**当前视图无法服务**的目标显式并入
+// 「未就绪」覆盖（F1，2026-10-12 终审修复）。
+//
+// 什么目标会落到这里：视图在创建时按当时的 Catalog 定死了 TargetIDs/TargetCoverage；此后才
+// 出现的可查目标不在其中——① 视图创建后新源开始写日志；② 复用请求把授权集合**放宽**。
+// 这两种情形下主循环不会为它产出任何 range ⇒ **本次查询从未读过它的行**。
+//
+// 为什么两条路都堵死（缺一不可）：
+//   - **不得**补 CoverageSuccess ✗：那是把「有数据未读」粉饰成「空」，`res.Coverage` 会判
+//     complete=true ⇒ CP 的 BuildCoverage 放行 ⇒ 导出附件「完整」却静默缺失该源；
+//   - **也不得**保持沉默 ✗（实测教训，2026-10-12）：CP 侧 `absentTargetReasons` 在**响应非空**时
+//     返回 nil，`CoverageFromReadiness` 随即给 `ReadyOnline` 的目标判 success
+//     （targets_absent_test.go 固定的既有语义：未出现 = 该目标无数据）⇒ 沉默会被读成「空成功」，
+//     与补空成功是**同一个后果**，只是粉饰从 Worker 挪到了 CP。
+//     ⇒ 唯一正确处置是**显式并入 CoverageNotReady**，让 CP 的 BuildCoverage 判 coverage_incomplete。
+//
+// 与创建路径的空成功口径不冲突：创建路径补 success 的前提是「此刻 Catalog 里确实查到了可查
+// 记录」，证明的是**当下就能核验**的「该源在窗口内无分区」；复用路径的目标连「能不能读」都随
+// 视图冻结而未知 ⇒ 按 fail-closed 判未就绪，与「宁可判 missing_coverage，也不把不知道粉饰成空」同口径。
+//
+// 只写本次响应：view 是共享对象、在 p.mu 之外被并发请求读，绝不就地改写。
+func (p *Planner) markUnplannedAuthorizedTargetsForReuse(req PlanRequest, view *QueryView, res *PlanResult) {
+	if len(req.TargetIDs) == 0 {
+		// 未指定授权目标 = 本 Worker 全部 Catalog 分区：没有目标可点名，不发明覆盖。
+		return
+	}
+	covered := make(map[string]bool, len(view.TargetCoverage)*2)
+	for id := range view.TargetCoverage {
+		covered[id] = true
+		if key, ok := parseTargetKey(id); ok {
+			covered[key.StorageNamespace] = true
+			covered[key.UTCDay] = true
+		}
+	}
+	for _, auth := range req.TargetIDs {
+		if auth == "" || covered[auth] {
+			continue
+		}
+		res.Coverage.AddTarget(TargetCoverage{
+			TargetID: auth,
+			State:    CoverageNotReady,
+			Reasons:  []string{ReasonRangeUnavailable},
+		})
+	}
 }
 
 // selectKeys 按授权目标 + 时间范围筛选 Catalog 分区键。

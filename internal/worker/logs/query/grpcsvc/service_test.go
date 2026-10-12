@@ -7,6 +7,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -208,6 +213,261 @@ func TestLogSearch_MapsResponseAndRequest(t *testing.T) {
 	require.EqualValues(t, 10, fq.lastReq.Budget.Limit)
 	require.Equal(t, "view-1", fq.lastReq.View.ViewID)
 	require.Equal(t, query.SortVersion, fq.lastReq.View.OrderVersion)
+}
+
+// 「已放弃位置」标记必须**单独**回填在 ingest_position_gaps 上，且不得污染 coverage 语义。
+//
+// 为什么这条断言是核心：用户要的是「下游查询对已放弃区间显式返回位置缺失标记，不得静默跳过」。
+// 两件事必须同时成立——
+//
+//	① 有放弃记录时，响应里**带出**该区间（否则等于没有实现，下游仍无从得知）；
+//	② 它**不得**改写 coverage（coverage 回答"分区能不能查"，放弃回答"分区内哪些位置永久没了"；
+//	   把后者塞进前者会让下游把"永久丢失"误读成"暂时查不到"而一直重试）。
+//
+// 转红方式（实测）：把 LogSearch 里的 s.fillIngestPositionGaps(out, ...) 调用去掉，①立即红；
+// 把回填改成写进 out.Coverage，②立即红。
+func TestLogSearch_IngestPositionGapsAnnotatedSeparately(t *testing.T) {
+	fq := &fakeQuery{search: query.SearchResponse{
+		RequestID: "r-gap",
+		View:      &query.ViewRef{ViewID: "view-gap", OrderVersion: query.SortVersion},
+		Coverage: query.Coverage{
+			Complete: true,
+			Targets: []query.TargetCoverage{{
+				TargetID: "ns:game/2026-09-20",
+				State:    query.CoverageSuccess,
+			}},
+		},
+		Quality: query.Quality{DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact},
+	}}
+	svc := New(fq, &fakeViews{})
+
+	// 未接线提供者：不得编造标记（也不得报错）。
+	resp, err := svc.LogSearch(context.Background(), searchReq("r-gap"))
+	require.NoError(t, err)
+	require.Empty(t, resp.GetIngestPositionGaps(), "未接线时不得编造放弃标记")
+
+	// 接线提供者：必须带出区间，且 coverage 逐字不变。
+	var gotTargets []string
+	var called bool
+	svc.SetIngestAbandonmentProvider(IngestAbandonmentFunc(func(targetIDs []string) []IngestPositionGap {
+		called = true
+		gotTargets = append([]string(nil), targetIDs...)
+		return []IngestPositionGap{{
+			StorageNamespace: "ns:game", From: 100, To: 150,
+			ReasonCode: "PERMANENTLY_LOST", Operator: "ops@example", AtUTC: "2026-10-02T08:00:00Z",
+		}}
+	}))
+	resp2, err := svc.LogSearch(context.Background(), searchReq("r-gap"))
+	require.NoError(t, err)
+	require.True(t, called, "提供者必须被调用")
+	_ = gotTargets // 目标集来自请求授权范围（空 = 本 Worker 全部），本用例不绑定其内容。
+
+	require.Len(t, resp2.GetIngestPositionGaps(), 1, "有放弃记录时必须显式带出该区间（不得静默跳过）")
+	g := resp2.GetIngestPositionGaps()[0]
+	require.Equal(t, "ns:game", g.GetStorageNamespace())
+	require.EqualValues(t, 100, g.GetFrom())
+	require.EqualValues(t, 150, g.GetTo())
+	require.Equal(t, "PERMANENTLY_LOST", g.GetReasonCode())
+	require.Equal(t, "ops@example", g.GetOperator())
+	require.Equal(t, "2026-10-02T08:00:00Z", g.GetAtUtc())
+
+	// ② coverage 必须不受影响（语义分开）。
+	require.True(t, resp2.GetCoverage().GetComplete(), "放弃标记不得改写 coverage 的完整度")
+	require.Len(t, resp2.GetCoverage().GetTargets(), 1)
+	require.Equal(t, "ns:game/2026-09-20", resp2.GetCoverage().GetTargets()[0].GetTargetId())
+	require.Equal(t, workerpb.LogCoverageState_LOG_COVERAGE_SUCCESS,
+		resp2.GetCoverage().GetTargets()[0].GetState(),
+		"放弃标记不得改写分区的可查询性状态")
+	require.Empty(t, resp2.GetCoverage().GetPartialReasons(),
+		"放弃标记不得写进 logcoord 的 partial_reasons（两者语义必须分开标注）")
+}
+
+// 缺口必须有独立源身份字段，命名空间不能替代源与代次。
+func TestIngestPositionGapSourceIdentityContract(t *testing.T) {
+	fields := (&workerpb.IngestPositionGap{}).ProtoReflect().Descriptor().Fields()
+	require.NotNil(t, fields.ByNumber(7), "协议必须保留真实日志源身份")
+	require.Equal(t, "log_source_id", string(fields.ByNumber(7).Name()))
+	require.NotNil(t, fields.ByNumber(8), "协议必须保留真实源代次")
+	require.Equal(t, "source_generation", string(fields.ByNumber(8).Name()))
+}
+
+// 新旧节点双向兼容：旧消息缺身份仍可读，旧读者遇到新增字段仍能保留原证据。
+func TestIngestPositionGapLegacyWireCompatibility(t *testing.T) {
+	message := protodesc.ToDescriptorProto((&workerpb.IngestPositionGap{}).ProtoReflect().Descriptor())
+	message.Field = message.Field[:6]
+	file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
+		Name: proto.String("legacy-gap.proto"), Package: proto.String("legacy"),
+		Syntax: proto.String("proto3"), MessageType: []*descriptorpb.DescriptorProto{message},
+	}, nil)
+	require.NoError(t, err)
+	legacy := dynamicpb.NewMessage(file.Messages().Get(0))
+	current := &workerpb.IngestPositionGap{
+		StorageNamespace: "ns:shared", From: 10, To: 20,
+		ReasonCode: "PERMANENTLY_LOST", Operator: "operator", AtUtc: "2026-10-08T00:00:00Z",
+		LogSourceId: "historical-source", SourceGeneration: "generation-old",
+	}
+	wire, err := proto.Marshal(current)
+	require.NoError(t, err)
+	require.NoError(t, proto.Unmarshal(wire, legacy))
+	require.Equal(t, "ns:shared", legacy.Get(legacy.Descriptor().Fields().ByNumber(1)).String())
+	require.EqualValues(t, 10, legacy.Get(legacy.Descriptor().Fields().ByNumber(2)).Uint())
+	require.Equal(t, "operator", legacy.Get(legacy.Descriptor().Fields().ByNumber(5)).String())
+	require.NotEmpty(t, legacy.GetUnknown(), "旧读者应接受新增身份字段")
+
+	legacy.SetUnknown(nil)
+	oldWire, err := proto.Marshal(legacy)
+	require.NoError(t, err)
+	received := &workerpb.IngestPositionGap{}
+	require.NoError(t, proto.Unmarshal(oldWire, received))
+	require.Equal(t, current.StorageNamespace, received.StorageNamespace)
+	require.Equal(t, current.From, received.From)
+	require.Equal(t, current.To, received.To)
+	require.Equal(t, current.ReasonCode, received.ReasonCode)
+	require.Equal(t, current.Operator, received.Operator)
+	require.Equal(t, current.AtUtc, received.AtUtc)
+	require.Empty(t, received.GetLogSourceId(), "旧节点缺少身份时保持未知")
+	require.Empty(t, received.GetSourceGeneration(), "旧节点缺少代次时保持未知")
+}
+
+// 同一命名空间中的历史代次不能被当前查询事件身份覆盖，缺少凭据时保持未知。
+func TestLogSearch_IngestPositionGapPreservesProviderIdentity(t *testing.T) {
+	svc := New(&fakeQuery{search: query.SearchResponse{
+		Items: []logtypes.Event{{Source: logtypes.SourceIdentity{
+			LogSourceID: "current-source", SourceGeneration: "current-generation",
+		}}},
+	}}, &fakeViews{})
+	svc.SetIngestAbandonmentProvider(IngestAbandonmentFunc(func([]string) []IngestPositionGap {
+		return []IngestPositionGap{
+			{StorageNamespace: "ns:shared", LogSourceID: "historical-source", SourceGeneration: "generation-old", From: 10, To: 20},
+			{StorageNamespace: "ns:shared", LogSourceID: "historical-source", SourceGeneration: "generation-other", From: 10, To: 20},
+			{StorageNamespace: "ns:shared", From: 10, To: 20},
+		}
+	}))
+	resp, err := svc.LogSearch(context.Background(), searchReq("identity"))
+	require.NoError(t, err)
+	require.Len(t, resp.GetIngestPositionGaps(), 3)
+	gaps := resp.GetIngestPositionGaps()
+	require.Equal(t, "historical-source", gaps[0].GetLogSourceId())
+	require.Equal(t, "generation-old", gaps[0].GetSourceGeneration())
+	require.Equal(t, "historical-source", gaps[1].GetLogSourceId())
+	require.Equal(t, "generation-other", gaps[1].GetSourceGeneration())
+	require.Empty(t, gaps[2].GetLogSourceId(), "未知来源不得从命名空间或事件补全")
+	require.Empty(t, gaps[2].GetSourceGeneration(), "未知代次不得用当前代次替代")
+}
+
+// 手动归档导入入口：必须要求操作人（无痕触发 = "谁灌了数据"留空白），且把范围原样下传。
+//
+// 转红方式（实测）：把 LogImportArchives 里的 operatorFromContext 空值判定去掉，①立即红。
+func TestLogImportArchives_RequiresOperatorAndPassesScope(t *testing.T) {
+	svc := New(&fakeQuery{}, &fakeViews{})
+
+	// 未接线：必须明确失败，不得空成功（否则运维会以为"扫过了、没东西"）。
+	resp, err := svc.LogImportArchives(context.Background(), &workerpb.LogImportArchivesRequest{})
+	require.NoError(t, err)
+	require.Equal(t, workerpb.LogTaskState_LOG_TASK_FAILED, resp.GetState())
+
+	fake := &fakeArchiveImporter{}
+	svc.SetIngestArchiveImporter(fake)
+
+	// ① 无操作人：拒绝，且**不得**调用导入器。
+	resp, err = svc.LogImportArchives(context.Background(), &workerpb.LogImportArchivesRequest{
+		StorageNamespace: "ns:game",
+	})
+	require.NoError(t, err)
+	require.Equal(t, workerpb.LogTaskState_LOG_TASK_FAILED, resp.GetState())
+	require.Contains(t, resp.GetError().GetMessage(), OperatorMetadataKey)
+	require.Zero(t, fake.calls, "无操作人时不得执行导入（不可无痕）")
+
+	// ② 带操作人：执行，范围原样下传。
+	ctx := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs(OperatorMetadataKey, "ops@example"))
+	resp, err = svc.LogImportArchives(ctx, &workerpb.LogImportArchivesRequest{
+		StorageNamespace: " ns:game ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, workerpb.LogTaskState_LOG_TASK_SUCCEEDED, resp.GetState())
+	require.Equal(t, 1, fake.calls)
+	require.Equal(t, "ns:game", fake.namespace, "命名空间应 trim 后下传")
+	require.Equal(t, "ops@example", fake.operator)
+}
+
+type fakeArchiveImporter struct {
+	calls     int
+	namespace string
+	operator  string
+}
+
+func (f *fakeArchiveImporter) ImportArchivesNow(ns, operator string) (int, int, error) {
+	f.calls++
+	f.namespace, f.operator = ns, operator
+	return 1, 1, nil
+}
+
+// 身份冲突人工清空：操作人与理由**都**必需（本操作会让查询面不再提示该源存在内容歧义，
+// 无痕清空等于给「掩盖数据歧义」开后门），且范围原样下传。
+//
+// 转红方式（实测）：把 LogClearIdentityConflicts 里 operatorFromContext 或 reasonFromContext
+// 的空值判定去掉，对应用例立即红；恢复后转绿。
+func TestLogClearIdentityConflicts_RequiresOperatorAndReason(t *testing.T) {
+	svc := New(&fakeQuery{}, &fakeViews{})
+
+	// 未接线：必须明确失败，不得回一个"清空 0 条"的空成功（那会让运维以为标记已经消掉）。
+	resp, err := svc.LogClearIdentityConflicts(context.Background(), &workerpb.LogClearIdentityConflictsRequest{})
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetError())
+	require.Contains(t, resp.GetError().GetMessage(), "not configured")
+	require.Zero(t, resp.GetClearedCount())
+
+	clearer := &fakeIdentityConflictClearer{}
+	svc.SetIngestIdentityConflictClearer(clearer)
+
+	// ① 无操作人：拒绝，且**不得**调用清空器。
+	resp, err = svc.LogClearIdentityConflicts(context.Background(),
+		&workerpb.LogClearIdentityConflictsRequest{StorageNamespace: "inst:145/file/g1"})
+	require.NoError(t, err)
+	require.Contains(t, resp.GetError().GetMessage(), OperatorMetadataKey)
+	require.Zero(t, clearer.calls, "无操作人时不得执行清空（不可无痕）")
+
+	// ② 有操作人但无理由：同样拒绝（凭据必须记录"为什么可以清"）。
+	ctxNoReason := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs(OperatorMetadataKey, "ops@example"))
+	resp, err = svc.LogClearIdentityConflicts(ctxNoReason,
+		&workerpb.LogClearIdentityConflictsRequest{StorageNamespace: "inst:145/file/g1"})
+	require.NoError(t, err)
+	require.Contains(t, resp.GetError().GetMessage(), ReasonMetadataKey)
+	require.Zero(t, clearer.calls, "无理由时不得执行清空")
+
+	// ③ 两者齐备：执行，范围 trim 后下传，结果原样回给调用方。
+	ctx := metadata.NewIncomingContext(context.Background(),
+		metadata.Pairs(OperatorMetadataKey, "ops@example", ReasonMetadataKey, " 已核对保留版本 "))
+	resp, err = svc.LogClearIdentityConflicts(ctx, &workerpb.LogClearIdentityConflictsRequest{
+		StorageNamespace: " inst:145/file/g1 ",
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp.GetError())
+	require.Equal(t, 1, clearer.calls)
+	require.Equal(t, "inst:145/file/g1", clearer.sourceKey, "源键应 trim 后下传")
+	require.Equal(t, "ops@example", clearer.operator)
+	require.Equal(t, "已核对保留版本", clearer.reason, "理由应 trim 后下传")
+	require.Equal(t, uint64(8), resp.GetClearedCount(), "清空条数必须回报给调用方")
+	require.Equal(t, []string{"inst:145/file/g1"}, resp.GetClearedSources())
+}
+
+type fakeIdentityConflictClearer struct {
+	calls     int
+	sourceKey string
+	operator  string
+	reason    string
+}
+
+func (f *fakeIdentityConflictClearer) ClearIdentityConflicts(_ context.Context, sourceKey, operator, reason string) (IdentityConflictClearOutcome, error) {
+	f.calls++
+	f.sourceKey, f.operator, f.reason = sourceKey, operator, reason
+	return IdentityConflictClearOutcome{
+		ClearedCount:   8,
+		ClearedSources: []string{"inst:145/file/g1"},
+		SkippedSources: []string{"inst:151/file/g1"},
+	}, nil
 }
 
 func TestLogSearch_UnimplementedRangeClient_LOGUnsupported(t *testing.T) {

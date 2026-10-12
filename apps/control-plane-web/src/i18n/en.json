@@ -3423,8 +3423,10 @@
     "exporting": "Exporting…",
     "exportStarted": "Log export started",
     "exportFailed": "Log export failed",
+    "exportBlockedReasons": "Export did not pass the completeness check; no file is provided (reasons: {{reasons}})",
     "empty": "No logs",
     "loadError": "Failed to load logs",
+    "slowQueryHint": "Still loading after {{seconds}}s. Narrow the time range above to speed this up.",
     "statsEvents": "{{count}} events in this view",
     "totalCount": "{{count}} total",
     "prevPage": "Previous",
@@ -3443,6 +3445,13 @@
     "more": "More"
   },
   "logsFederation": {
+    "positionGaps": {
+      "title": "Permanent position gaps ({{count}})",
+      "description": "These ingest positions were manually abandoned. This independent evidence does not change time coverage, statistical quality, or export verification.",
+      "unknown": "Unknown (not supplied by older worker)",
+      "identity": "Worker: {{worker}} · Source: {{source}} · Generation: {{generation}}",
+      "evidence": "Storage namespace: {{namespace}} · Positions: [{{from}}, {{to}}] · Reason: {{reason}} · Operator: {{operator}} · Time: {{at}}"
+    },
     "coverage": {
       "complete": "Coverage complete",
       "partial": "Coverage incomplete (partial results)",
@@ -3452,7 +3461,9 @@
     "viewState": {
       "ready_complete": "Complete results",
       "ready_complete_empty": "No logs in selected range (coverage complete)",
+      "verifying": "Verifying full coverage; showing available results (export performs a full verification)",
       "partial": "Partial results: coverage incomplete",
+      "rate_limited": "Log queries are being rate limited; no new data was fetched. The previous results are kept. Retry shortly, or narrow the time range / turn off live follow to reduce request rate",
       "offline": "Some nodes offline; results incomplete",
       "engine_not_ready": "Log query engine not ready",
       "rehydrate_failed": "Rehydrate failed; archive layer incomplete",
@@ -3467,6 +3478,7 @@
     },
     "reasons": {
       "engineNotReady": "Query engine not ready",
+      "rateLimited": "Too many requests",
       "logUnsupported": "Node log platform not enabled",
       "legacy": "Legacy data source",
       "rehydrateFailed": "Rehydrate failed",
@@ -3492,6 +3504,19 @@
       "reopenView": "Reopen view",
       "contactAdmin": "Contact administrator"
     },
+    "clearConflicts": {
+      "button": "Confirm and clear conflicts",
+      "title": "Confirm and clear identity conflict records",
+      "description": "This node holds identity conflicts that cannot be resolved automatically (the same event ID appears with different content). In such cases the system keeps the first-seen variant and skips the conflicting row, so the retained version is the correct one; clearing only removes this diagnostic notice and changes no log content. The quality marker disappears after clearing, so verify the retained versions first.",
+      "reasonLabel": "Reason (required, recorded in the audit credential)",
+      "reasonPlaceholder": "e.g. Verified each retained version in VL",
+      "confirmLabel": "Confirm and clear",
+      "reasonRequired": "Enter a reason — the audit credential must record why clearing is allowed",
+      "success": "Cleared {{count}} identity conflict record(s)",
+      "partial": "Cleared {{count}}; {{skipped}} source(s) were skipped because new records appeared — re-query to confirm",
+      "failed": "Failed to clear identity conflicts",
+      "scopeHint": "Clears every source on this node that holds conflict records (platform admins only)"
+    },
     "export": {
       "allowed": "Coverage complete and verified; download available",
       "blockedIncomplete": "Coverage incomplete; export download is not available",
@@ -3500,6 +3525,9 @@
       "blockedUnresolved": "Duplicates unresolved; export will not publish a success artifact",
       "blockedNotReady": "Export not ready or not verified",
       "blockedPermission": "Insufficient or revoked permission; cannot download",
+      "blockedRowLimit": "Export exceeds the per-request row limit; narrow the time range or ask an administrator to raise the server log_export.max_rows setting",
+      "blockedByteBudget": "Export exceeds the per-request size limit; narrow the time range or ask an administrator to raise the server log_export.max_bytes setting",
+      "blockedBudget": "Export exceeds the server per-request limit; narrow the time range or ask an administrator to raise the log_export setting",
       "permissionRecheckHint": "Permission is rechecked before download",
       "nextCursorHint": "A null cursor only ends enumeration of the current view; it does not mean full history is complete."
     },
@@ -3630,6 +3658,7 @@
     "cpu": "CPU",
     "memory": "Memory",
     "disk": "Disk",
+    "iowait": "iowait (IO wait)",
     "tps": "TPS",
     "greaterThan": ">",
     "lessThan": "<",

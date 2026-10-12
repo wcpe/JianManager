@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"context"
-	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/mem"
@@ -18,6 +17,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -222,8 +222,9 @@ func logIngestHealth() (bool, string) {
 	return logIngestHealthy, logIngestDetail
 }
 
-// CollectHeartbeatData 采集心跳数据。
-func CollectHeartbeatData(nodeUUID string) *workerpb.HeartbeatRequest {
+// CollectHeartbeatData 采集心跳数据；CPU 仅读主进程注入的同窗快照。
+// 不传 reader 时标量降级为零，不启动采样、不读取累计时间。
+func CollectHeartbeatData(nodeUUID string, readers ...metrics.CPUReader) *workerpb.HeartbeatRequest {
 	req := &workerpb.HeartbeatRequest{
 		NodeUuid: nodeUUID,
 	}
@@ -234,8 +235,12 @@ func CollectHeartbeatData(nodeUUID string) *workerpb.HeartbeatRequest {
 		req.MemoryUsedMb = int64(vmem.Used / 1024 / 1024)
 	}
 
-	if percents, err := cpu.Percent(time.Second, false); err == nil && len(percents) > 0 {
-		req.CpuUsage = float32(percents[0] / 100.0)
+	// 与周期 collector、实时 RPC 共用唯一 CPU owner，消费者不推进基线。
+	if len(readers) > 0 && readers[0] != nil {
+		snapshot := readers[0].Snapshot()
+		if snapshot.Valid {
+			req.CpuUsage, req.Iowait = snapshot.CPUUsage, snapshot.IOWait
+		}
 	}
 
 	if usage, err := disk.Usage("/"); err == nil {

@@ -66,6 +66,9 @@ func (n nodeWorkerUUIDLister) CutoverReadiness(ctx context.Context, workerUUID s
 		return service.LogCutoverWatermark{}, fmt.Errorf("worker %s: %s", workerUUID, resp.GetError().GetMessage())
 	}
 	mark := service.LogCutoverWatermark{WorkerUUID: workerUUID, CapabilityConfirmed: resp.GetCapabilityConfirmed(), LedgerReady: resp.GetLedgerReady()}
+	// 转述 Worker 的具体未就绪原因：只回两个布尔会让「为何按不下切换」变成盲猜
+	// （2026-09-30 生产实证：Worker 侧响应本就带 reasons，CP 在此前把它丢了）。
+	mark.Reasons = append(mark.Reasons, resp.GetReasons()...)
 	if resp.GetCutoffTimeUtc() != "" {
 		mark.CutoffTime, _ = time.Parse(time.RFC3339Nano, resp.GetCutoffTimeUtc())
 	}
@@ -197,10 +200,12 @@ func cutoverStatusJSON(st service.LogCutoverStatus) gin.H {
 
 // logCutoverWatermarkRequest PUT 水位条目。apply=true 时要求 capability+ledger_ready。
 type logCutoverWatermarkRequest struct {
-	WorkerUUID          string     `json:"workerUuid"`
-	CapabilityConfirmed bool       `json:"capabilityConfirmed"`
-	LedgerReady         bool       `json:"ledgerReady"`
-	CutoffTime          *time.Time `json:"cutoffTime"`
+	WorkerUUID          string `json:"workerUuid"`
+	CapabilityConfirmed bool   `json:"capabilityConfirmed"`
+	LedgerReady         bool   `json:"ledgerReady"`
+	// Reasons Worker 侧未就绪的具体原因（只读转述，供 400 响应与排障展示）。
+	Reasons    []string   `json:"reasons,omitempty"`
+	CutoffTime *time.Time `json:"cutoffTime"`
 	// Apply 尝试原子登记切换水位。true 时 CapabilityConfirmed && LedgerReady 必填。
 	Apply bool `json:"apply"`
 }
@@ -260,6 +265,7 @@ func (h *LogCutoverHandler) UpdateCutover(c *gin.Context) {
 			}
 			watermarks = append(watermarks, logCutoverWatermarkRequest{WorkerUUID: workerUUID,
 				CapabilityConfirmed: mark.CapabilityConfirmed, LedgerReady: mark.LedgerReady,
+				Reasons:    mark.Reasons,
 				CutoffTime: &mark.CutoffTime, Apply: req.Enabled != nil && *req.Enabled || requested[workerUUID]})
 		}
 		req.WorkerWatermarks = watermarks
@@ -272,10 +278,13 @@ func (h *LogCutoverHandler) UpdateCutover(c *gin.Context) {
 			return
 		}
 		if w.Apply && !(w.CapabilityConfirmed && w.LedgerReady) {
+			// 把 Worker 侧的具体原因一并转述：只回两个布尔时，运维无从判断卡在哪个条件
+			//（2026-09-30 生产：为「为何按不下切换」反复盲猜数小时）。
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":      "INVALID_REQUEST",
 				"message":    "应用切换水位要求 capabilityConfirmed 与 ledgerReady",
 				"workerUuid": w.WorkerUUID,
+				"reasons":    w.Reasons,
 			})
 			return
 		}

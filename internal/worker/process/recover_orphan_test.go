@@ -69,7 +69,7 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			name:           "重试耗尽但 wrapper 仍存活→按 ADR-093 只告警不杀",
 			succeedOnDial:  0,
 			wantRecovered:  0,
-			wantDials:      1 + len(recoverRetryBackoff),
+			wantDials:      1 + len(DefaultRecoverRetryBackoff),
 			wantPIDFile:    true,
 			wantRegistered: false,
 			wantBlocked:    true,
@@ -79,7 +79,7 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			succeedOnDial:          0,
 			wrapperDiesDuringRetry: true,
 			wantRecovered:          0,
-			wantDials:              1 + len(recoverRetryBackoff),
+			wantDials:              1 + len(DefaultRecoverRetryBackoff),
 			wantPIDFile:            true,
 			wantRegistered:         false,
 			wantStartupObserve:     true,
@@ -145,13 +145,13 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 					"wrapper 已死时只观测并落 non-reap 审计")
 			}
 
-			// 重试间隔递增：失败几次就应等待 recoverRetryBackoff 的对应前缀
-			retrySleeps := len(recoverRetryBackoff)
+			// 重试间隔递增：失败几次就应等待 DefaultRecoverRetryBackoff 的对应前缀
+			retrySleeps := len(DefaultRecoverRetryBackoff)
 			if tt.succeedOnDial > 0 {
 				retrySleeps = tt.succeedOnDial - 1
 			}
 			require.GreaterOrEqual(t, len(sleeps), retrySleeps)
-			assert.Equal(t, recoverRetryBackoff[:retrySleeps], sleeps[:retrySleeps], "重试间隔应按递增序列")
+			assert.Equal(t, DefaultRecoverRetryBackoff[:retrySleeps], sleeps[:retrySleeps], "重试间隔应按递增序列")
 
 			// FR-471：启动路径不删 PID 文件（交由周期扫描/接管），故恒保留。
 			assert.FileExists(t, pidPath, "启动恢复路径应保留 PID 文件")
@@ -329,4 +329,214 @@ func TestRecoverDaemonInstances_OwnershipVerifyBlocksKill(t *testing.T) {
 		}
 	}
 	assert.True(t, seen, "应落「已发现未处置」审计")
+}
+
+// auditActions 抽出审计动作名序列，供 Contains/NotContains 断言。
+func auditActions(audits []scanAudit) []string {
+	out := make([]string, 0, len(audits))
+	for _, a := range audits {
+		out = append(out, a.action)
+	}
+	return out
+}
+
+// newOrphanReapFixture 构造「接管兜底处置」用例夹具：PID 记录 + 注入桩（存活读数/杀树/审计）。
+// 返回的 alive 可被用例改写为模拟 wrapper 死亡。
+func newOrphanReapFixture(t *testing.T, uuid string) (*Manager, string, *daemon.PIDRecord, *[]int, *[]scanAudit) {
+	t.Helper()
+	dir := t.TempDir()
+	pidPath := writeOrphanPIDRecord(t, dir, uuid)
+	rec, err := daemon.NewPIDFile(pidPath).ReadRecord()
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+
+	m := NewManager(dir)
+	m.recoverSleep = func(time.Duration) {} // 复核/等待不真睡
+	killed := &[]int{}
+	audits := &[]scanAudit{}
+	m.recoverKillTree = func(pid int) error {
+		*killed = append(*killed, pid)
+		return nil
+	}
+	m.onOrphanAudit = func(action, targetID, detail string, success bool, errMsg string) {
+		*audits = append(*audits, scanAudit{action: action, targetID: targetID, detail: detail, success: success})
+	}
+	return m, pidPath, rec, killed, audits
+}
+
+// TestReapOrphanWrapper_WrapperAliveOnlyWarns FR-455① 验收 2b 回归（可转红）。
+//
+// 直接打处置原语 reapOrphanWrapper——它是「接管兜底」与「周期扫描 auto 档」共用的**唯一**强杀入口。
+// 传入「接管重试耗尽」而非 errOrphanedWrapperGone、且 wrapper 仍存活：即旧行为最危险的形态
+// ——wrapper 与 Java 都健康、只是 socket 一时拨不通的运行中服务器。ADR-093 决策 1 判其为
+// 「确属本实例、仅瞬时不可达，不是孤儿」→ 只告警 + 落审计、保留 PID 文件、**一个进程都不杀**。
+//
+// 转红方式（改回旧行为）：删掉函数开头那道「wrapper 仍存活即返回」的判定，让重试耗尽直接落到
+// 按 PID 记录强杀 wrapper + Java 两棵树——killed 会含 4242/4243、PID 文件被删、审计变成
+// orphan.dispose_reaped，本用例的 killed/PID 文件/dispose_blocked 三条断言立即失败。
+func TestReapOrphanWrapper_WrapperAliveOnlyWarns(t *testing.T) {
+	uuid := "reap-wrapper-alive"
+	m, pidPath, rec, killed, audits := newOrphanReapFixture(t, uuid)
+
+	// wrapper 与 Java 均存活（接管只不过拨不通 socket）。
+	m.recoverPIDAlive = func(pid int) bool { return pid == testWrapperPID || pid == testJavaPID }
+	// 即便归属复核**通过**（确属本实例）也不得杀：存活判据优先于「socket 是否拨通」。
+	m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
+
+	m.reapOrphanWrapper(uuid, pidPath, rec, errors.New("dial refused"))
+
+	assert.Empty(t, *killed, "wrapper 仍存活时不得强杀任何进程（强杀会误杀运行中的服务器）")
+	assert.FileExists(t, pidPath, "应保留 PID 文件等下一轮扫描或人工介入")
+	assert.Contains(t, auditActions(*audits), "orphan.dispose_blocked", "应落「不处置」审计，保证不静默")
+	assert.NotContains(t, auditActions(*audits), "orphan.dispose_reaped", "不得出现「已处置」审计")
+	for _, a := range *audits {
+		if a.action == "orphan.dispose_blocked" {
+			assert.False(t, a.success, "被拦截的处置审计 success 应为 false")
+			assert.Contains(t, a.detail, "alive_unreachable", "审计 detail 应标明拦截原因")
+		}
+	}
+}
+
+// TestReapOrphanWrapper_OwnershipUnverifiedBlocksKill FR-455① 验收 2 回归（可转红）。
+//
+// 真孤儿形态（wrapper 已死、Java 仍活）但**归属复核不通过**——PID 可能已被 OS 复用给无关进程。
+// 此时代码必须只告警 + 落审计、不杀、保留 PID 文件，等下一轮扫描或人工介入。
+//
+// 转红方式（改回旧行为）：移除 killTree 之前的 m.verifyProcessOwnership 门，真孤儿会被直接强杀
+// ——killed 会含 Java PID（4243），本用例的 killed/PID 文件/dispose_blocked 断言立即失败。
+func TestReapOrphanWrapper_OwnershipUnverifiedBlocksKill(t *testing.T) {
+	uuid := "reap-verify-blocked"
+	m, pidPath, rec, killed, audits := newOrphanReapFixture(t, uuid)
+
+	// wrapper 已死、Java 仍活 → 进入真孤儿处置分支。
+	m.recoverPIDAlive = func(pid int) bool { return pid == testJavaPID }
+	var verifyWorkDir string
+	var verifyExpectWrapper bool
+	verifyCalled := 0
+	m.recoverVerifyOwner = func(pid int, instanceUUID, workDir string, expectWrapper bool) bool {
+		verifyCalled++
+		verifyWorkDir = workDir
+		verifyExpectWrapper = expectWrapper
+		return false // 复核不通过：PID 可能已被 OS 复用给无关进程
+	}
+
+	m.reapOrphanWrapper(uuid, pidPath, rec, errOrphanedWrapperGone)
+
+	assert.Equal(t, 1, verifyCalled, "处置前必须做归属复核")
+	assert.Equal(t, rec.WorkDir, verifyWorkDir, "复核须以该实例工作目录为匹配主键")
+	assert.False(t, verifyExpectWrapper, "真孤儿分支复核的是 Java（wrapper 已死）")
+	assert.Empty(t, *killed, "归属复核不通过时不得强杀（PID 可能已被复用给无关进程）")
+	assert.FileExists(t, pidPath, "复核不通过应保留 PID 文件等下一轮或人工介入")
+	assert.Contains(t, auditActions(*audits), "orphan.dispose_blocked")
+	assert.NotContains(t, auditActions(*audits), "orphan.dispose_reaped")
+	for _, a := range *audits {
+		if a.action == "orphan.dispose_blocked" {
+			assert.False(t, a.success)
+			assert.Contains(t, a.detail, "ownership_unverified")
+		}
+	}
+}
+
+// TestRecoverDaemonInstances_ShortRetryWindowNeverKillsLiveServer FR-455① 验收 1/2b 端到端回归（可转红）。
+//
+// 场景即缺陷原文：接管 reconnect 在**很短的窗口内**（旧序列 {1s,2s,4s}≈7s，此处用注入的等价小值
+// 替身以便瞬时跑完）重试耗尽，而 wrapper 与 Java 都仍存活。新行为：只告警 + 落审计、保留 PID 文件、
+// 不杀任何进程；同时本用例证明注入的重试序列真实生效（初拨 + 3 次重试 = 4 次拨号）。
+//
+// 转红方式（改回旧行为）：
+//   - 让重试耗尽后走 reapOrphanWrapper 强杀 wrapper + Java 两棵树 → killed 非空、PID 文件被删、
+//     审计出现 orphan.dispose_reaped；
+//   - 让重试序列忽略注入（恒用默认 7 步）→ dials 由 4 变 8。
+//
+// 两种改法都会让本用例失败。
+func TestRecoverDaemonInstances_ShortRetryWindowNeverKillsLiveServer(t *testing.T) {
+	uuid := "recover-short-window"
+	m, pidPath, _, killed, audits := newOrphanReapFixture(t, uuid)
+
+	// 旧序列 {1s,2s,4s} 的等价小值：窗口短（旧口径 ≈7s）但测试瞬时完成。
+	injected := []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	m.SetRecoverRetryBackoff(injected)
+	m.recoverPIDAlive = func(pid int) bool { return pid == testWrapperPID || pid == testJavaPID }
+	m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
+	var sleeps []time.Duration
+	m.recoverSleep = func(d time.Duration) { sleeps = append(sleeps, d) }
+	dials := 0
+	m.recoverDial = func(_ *daemonStrategy, _ string) error {
+		dials++
+		return errors.New("dial refused")
+	}
+
+	recovered, err := m.RecoverDaemonInstances()
+	require.NoError(t, err)
+	assert.Equal(t, 0, recovered, "拨不通不应登记实例")
+	assert.Equal(t, 1+3, dials, "重试次数应等于注入序列长度 + 初拨")
+	assert.Equal(t, injected, sleeps, "重试间隔应逐项取注入序列")
+	assert.Empty(t, *killed, "重试耗尽但 wrapper 仍存活时不得强杀任何进程")
+	assert.FileExists(t, pidPath, "应保留 PID 文件等下一轮/人工介入")
+	assert.Contains(t, auditActions(*audits), "orphan.dispose_blocked")
+	assert.NotContains(t, auditActions(*audits), "orphan.dispose_reaped")
+}
+
+// TestDefaultRecoverRetryBackoff_CoversMinuteScale FR-455① 回归（可转红）：默认序列必须是覆盖
+// 分钟级的递增序列（spec §6：1s→2s→4s→8s→16s→32s→64s ≈127s）。
+//
+// 转红方式：改回旧 {1s,2s,4s}（≈7s）——长度、逐项值、总窗口三条断言全部失败。
+func TestDefaultRecoverRetryBackoff_CoversMinuteScale(t *testing.T) {
+	want := []time.Duration{
+		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+		16 * time.Second, 32 * time.Second, 64 * time.Second,
+	}
+	assert.Equal(t, want, DefaultRecoverRetryBackoff)
+
+	total := time.Duration(0)
+	for i, d := range DefaultRecoverRetryBackoff {
+		assert.Greater(t, d, time.Duration(0), "序列项必须为正")
+		if i > 0 {
+			assert.Greater(t, d, DefaultRecoverRetryBackoff[i-1], "序列必须递增")
+		}
+		total += d
+	}
+	assert.Equal(t, 127*time.Second, total, "总重试窗口应约 127s（≈分钟级）")
+	assert.GreaterOrEqual(t, int(total/time.Second), 120, "重试窗口须覆盖分钟级瞬时故障")
+}
+
+// TestRecoverRetryBackoff_Injection 注入语义：空/全非法回退默认序列，合法序列覆盖默认且被
+// reconnectWithRetry 真实使用；入口做防御性拷贝（调用方后续改写不影响运行期节奏）。
+func TestRecoverRetryBackoff_Injection(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(dir)
+
+	assert.Equal(t, DefaultRecoverRetryBackoff, m.recoverRetrySequence(), "未注入时用默认序列")
+
+	m.SetRecoverRetryBackoff(nil)
+	assert.Equal(t, DefaultRecoverRetryBackoff, m.recoverRetrySequence(), "nil 应回退默认")
+
+	m.SetRecoverRetryBackoff([]time.Duration{0, -time.Second})
+	assert.Equal(t, DefaultRecoverRetryBackoff, m.recoverRetrySequence(), "全非法项应回退默认")
+
+	m.SetRecoverRetryBackoff([]time.Duration{5 * time.Millisecond, 0, 7 * time.Millisecond})
+	assert.Equal(t, []time.Duration{5 * time.Millisecond, 7 * time.Millisecond},
+		m.recoverRetrySequence(), "应过滤非正项")
+
+	injected := []time.Duration{3 * time.Millisecond}
+	m.SetRecoverRetryBackoff(injected)
+	injected[0] = time.Hour // 调用方后续改写不得影响已注入序列
+	assert.Equal(t, []time.Duration{3 * time.Millisecond}, m.recoverRetrySequence(), "注入应做防御性拷贝")
+
+	// 真实使用：重试次数跟随注入序列长度。
+	s := newDaemonStrategy(m, CommandSpec{UUID: "inject-used", WorkDir: dir})
+	m.recoverSleep = func(time.Duration) {}
+	dials := 0
+	m.recoverDial = func(_ *daemonStrategy, _ string) error {
+		dials++
+		return errors.New("dial refused")
+	}
+	addr := filepath.Join(dir, "x.sock")
+	require.Error(t, m.reconnectWithRetry(s, addr, "inject-used"), "全部拨号失败应返回错误")
+	assert.Equal(t, 1+1, dials, "单元素序列 = 初拨 + 1 次重试")
+
+	m.SetRecoverRetryBackoff([]time.Duration{time.Millisecond, time.Millisecond})
+	dials = 0
+	require.Error(t, m.reconnectWithRetry(s, addr, "inject-used"), "全部拨号失败应返回错误")
+	assert.Equal(t, 1+2, dials, "重试次数应等于注入序列长度 + 初拨")
 }

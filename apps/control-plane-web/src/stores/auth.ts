@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { decodeJwt } from '@/lib/jwt'
+import { queryClient } from '@/lib/query-client'
 
 /** 登录/恢复后异步拉取 /auth/me，填充权限 store（失败由 store 自身回落）。 */
 function schedulePermissionsLoad(): void {
@@ -37,6 +38,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   username: storedClaims?.username ?? null,
 
   login: (accessToken, refreshToken) => {
+    queryClient.clear()
     localStorage.setItem('accessToken', accessToken)
     localStorage.setItem('refreshToken', refreshToken)
     const claims = decodeJwt(accessToken)
@@ -51,6 +53,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    queryClient.clear()
     localStorage.removeItem('accessToken')
     localStorage.removeItem('refreshToken')
     set({ accessToken: null, refreshToken: null, isAuthenticated: false, role: null, username: null })

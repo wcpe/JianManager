@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,24 +9,30 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// LogRuntimeHandler exposes Worker-managed VictoriaLogs control through CP.
-// The handler never connects to VL directly; all calls use the reverse tunnel.
+// LogRuntimeHandler 经反向隧道代理 Worker 管理的日志运行时，不直接连接 VictoriaLogs。
 type LogRuntimeHandler struct {
 	nodes     *service.NodeService
 	pool      *cpgrpc.ClientPool
 	authz     *service.AuthzService
 	instances *service.InstanceService
+	holders   *service.LogTargetHolderService
 }
 
-func NewLogRuntimeHandler(nodes *service.NodeService, pool *cpgrpc.ClientPool, authz *service.AuthzService, instances *service.InstanceService) *LogRuntimeHandler {
-	return &LogRuntimeHandler{nodes: nodes, pool: pool, authz: authz, instances: instances}
+func NewLogRuntimeHandler(nodes *service.NodeService, pool *cpgrpc.ClientPool, authz *service.AuthzService, instances *service.InstanceService, holders ...*service.LogTargetHolderService) *LogRuntimeHandler {
+	h := &LogRuntimeHandler{nodes: nodes, pool: pool, authz: authz, instances: instances}
+	if len(holders) > 0 {
+		h.holders = holders[0]
+	}
+	return h
 }
 
 func (h *LogRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
@@ -36,17 +43,89 @@ func (h *LogRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/nodes/:id/log-runtime/:namespace/:action", h.Control)
 	rg.POST("/nodes/:id/log-runtime/migrate", h.MigratePartition)
 	rg.POST("/nodes/:id/log-runtime/ingest/resolve-gaps", h.ResolveIngestGaps)
+	rg.POST("/nodes/:id/log-runtime/ingest/clear-identity-conflicts", h.ClearIdentityConflicts)
 	rg.GET("/nodes/:id/log-archive/status", h.ArchiveStatus)
 	rg.POST("/nodes/:id/log-archive/rehydrate", h.Rehydrate)
 }
 
+// operatorMetadataKey 是 CP→Worker 承载「操作人认证主体」的 gRPC metadata 键。
+//
+// 与 Worker 侧 grpcsvc.OperatorMetadataKey 同源（ADR-101 登记为传输契约：操作人必须由传输层
+// 携带，请求体可被任意伪造）。这里刻意重复一个字面量而不 import Worker 的内部包：CP 依赖 Worker
+// 实现包会引入分层倒挂，而该键本身就是跨进程协议的一部分——改动它属于协议变更，须走 ADR。
+const operatorMetadataKey = "x-jm-operator"
+
+// operatorFromRequest 从**认证上下文**（而非请求体）取出可审计的操作人标识。
+//
+// 为什么必须由 CP 注入（2026-10-02 生产现场缺陷）：Worker 侧的「放弃裁定」要求 incoming
+// metadata 带 x-jm-operator，取不到一律拒绝（ADR-101：放弃是唯一允许回收链跨过永久空洞的动作，
+// 不可无痕）。而 CP 转发时不透传任何操作人 ⇒ 这条**唯一**能解开「DELIVER_ERROR 未决缺口永久
+// 阻塞该源恢复采集」的产品面路径实际不可达（现场 5 个源停在暂停态，运维只能绕过产品面直连
+// Worker）。取不到主体时必须在这里就拒绝：把请求下发给 Worker 只会换回一句「请设置
+// x-jm-operator」，那条提示对 CP 调用方不可执行。
+func (h *LogRuntimeHandler) operatorFromRequest(c *gin.Context) (string, bool) {
+	// 已认证主体优先用登录名/密钥名（审计与人可读性最好）：JWT 路径取 claims.Username，
+	// Agent（API 密钥）路径由 agent_auth 注入 "agent:<名称>"。
+	if name := strings.TrimSpace(c.GetString(middleware.CtxUsername)); name != "" {
+		return name, true
+	}
+	// 兜底：认证主体存在但用户名未注入（自定义认证通道）时用稳定可审计的用户标识，
+	// 而不是放弃留痕或编造一个「system」。
+	if access := getAccess(c); access != nil && access.UserID > 0 {
+		return fmt.Sprintf("user:%d", access.UserID), true
+	}
+	return "", false
+}
+
 func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
+	// 操作人必须在**任何 RPC 之前**解析：取不到就拒绝（不下发请求）。
+	operator, ok := h.operatorFromRequest(c)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "OPERATOR_UNKNOWN",
+			"message": "无法确定操作人：认证主体缺失（放弃裁定必须可审计）。" +
+				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
+		})
+		return
+	}
+	// 可选 body：storageNamespace 必须是完整 LogSourceID/SourceGeneration 源键。
+	// 传了：只解该源（显式人工确认，见 Worker 侧 ResolveCoveredGapsForSource——
+	// 用于解开「唯一未就绪目标正是持有缺口者」的自我指涉死锁）；
+	// 不传：与既有整节点行为逐字一致（向后兼容）。
+	var body struct {
+		StorageNamespace string `json:"storageNamespace"`
+		// Reason 是「放弃裁定」的显式理由（ADR-101 / FR-483 §6）：仅当某源"从未有完整已发布投影"
+		// 这类死结需要人工裁定终局时才必填；缺失 ⇒ Worker 侧照旧拒绝（不开静默放宽的口子 ✗）。
+		Reason string `json:"reason"`
+	}
+	if c.Request.ContentLength > 0 {
+		if bindErr := c.ShouldBindJSON(&body); bindErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+			return
+		}
+	}
+	body.StorageNamespace = strings.TrimSpace(body.StorageNamespace)
+	// 非空源键是永久裁定，须先完成对象授权；空键仍只走既有自动解算，不能扩大其判据。
+	if body.StorageNamespace != "" && !h.authorizeResolveSource(c, body.StorageNamespace) {
+		return
+	}
 	client, ok := h.client(c)
 	if !ok {
 		return
 	}
-	resp, err := client.Worker.LogResolveIngestGaps(c.Request.Context(), &workerpb.LogResolveIngestGapsRequest{
+	// 只有已经完成对象授权的显式单源裁定才下传人工凭据。
+	// 空键自动解算不得携带操作人/理由，防止全源路径把请求理由解释为永久裁定授权。
+	var mdPairs []string
+	if body.StorageNamespace != "" {
+		mdPairs = append(mdPairs, operatorMetadataKey, operator)
+		if reason := strings.TrimSpace(body.Reason); reason != "" {
+			mdPairs = append(mdPairs, "x-jm-reason", reason)
+		}
+	}
+	ctx := metadata.NewOutgoingContext(c.Request.Context(), metadata.Pairs(mdPairs...))
+	resp, err := client.Worker.LogResolveIngestGaps(ctx, &workerpb.LogResolveIngestGapsRequest{
 		RequestId: c.GetHeader("X-Request-ID"), ProtocolVersion: "log-query/1",
+		StorageNamespace: strings.TrimSpace(body.StorageNamespace),
 	})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "WORKER_RPC_FAILED"})
@@ -54,13 +133,191 @@ func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
 	}
 	if resp == nil || resp.GetError() != nil || resp.GetState() != workerpb.LogTaskState_LOG_TASK_SUCCEEDED {
 		code := "LOG_NOT_READY"
+		// 转述 Worker 的具体原因：只回裸 code 会让运维无从判断是「源不存在」「账本不一致」
+		// 还是「缺口未覆盖」，实测会把排查拖成盲猜。
+		message := ""
 		if resp != nil && resp.GetError() != nil {
 			code = resp.GetError().GetCode().String()
+			message = resp.GetError().GetMessage()
 		}
-		c.JSON(http.StatusConflict, gin.H{"error": "GAP_RESOLUTION_FAILED", "code": code})
+		c.JSON(http.StatusConflict, gin.H{"error": "GAP_RESOLUTION_FAILED", "code": code, "message": message})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"state": "resolved"})
+}
+
+// ClearIdentityConflicts 人工确认并清空「身份冲突」记录，使日志页的质量标记不再为
+// conflict / partial（见 Worker planner 的 DupConflict / StatsPartial 派生）。
+//
+// 语义：运维审阅后确认这些冲突已被正确处理（系统在不可裁定形态下保留先到者，即保留正确
+// 版本；冲突行从未进入写入面），同意清空诊断记录以消除质量标记。只移除诊断记录，不改日志内容。
+//
+// 与 resolve-gaps 同族的纪律（逐条对应）：
+//  1. 操作人在**任何 RPC 之前**解析：取不到就拒绝，不下发请求（请求体可被伪造，责任由传输层带）；
+//  2. 理由必填：它要进审计凭据，故与操作人同走 metadata（同样不受请求体伪造影响）；
+//  3. 指名源须先完成对象授权（与放弃裁定同一判据，防止跨实例/跨组越权）；
+//  4. 不传源键 = 全 Worker 范围：那是**批量**动作，只允许平台管理员（见 authorizeClearAllSources），
+//     否则任何持有 node.manage 的调用方都能一次性清掉整节点所有源的歧义提示。
+func (h *LogRuntimeHandler) ClearIdentityConflicts(c *gin.Context) {
+	operator, ok := h.operatorFromRequest(c)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "OPERATOR_UNKNOWN",
+			"message": "无法确定操作人：认证主体缺失（清空身份冲突必须可审计）。" +
+				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
+		})
+		return
+	}
+	var body struct {
+		// StorageNamespace 是完整源键 LogSourceID/SourceGeneration（沿用 resolve-gaps 的字段名与
+		// 取值口径）；空 = 本 Worker 全部持有冲突记录的源。
+		StorageNamespace string `json:"storageNamespace"`
+		// Reason 是本次清空的显式理由：**必填**（凭据必须记录"为什么可以清"）。
+		Reason string `json:"reason"`
+	}
+	if c.Request.ContentLength > 0 {
+		if bindErr := c.ShouldBindJSON(&body); bindErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+			return
+		}
+	}
+	body.StorageNamespace = strings.TrimSpace(body.StorageNamespace)
+	body.Reason = strings.TrimSpace(body.Reason)
+	if body.Reason == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "REASON_REQUIRED",
+			"message": "清空身份冲突必须给出理由（审计凭据需要记录为何可以清）",
+		})
+		return
+	}
+	if body.StorageNamespace != "" {
+		// 单源是永久性裁定，须先完成对象授权；判据与消失的缺口裁定完全一致。
+		if !h.authorizeResolveSource(c, body.StorageNamespace) {
+			return
+		}
+	} else if !h.authorizeClearAllSources(c) {
+		return
+	}
+	client, ok := h.client(c)
+	if !ok {
+		return
+	}
+	ctx := metadata.NewOutgoingContext(c.Request.Context(), metadata.Pairs(
+		operatorMetadataKey, operator, "x-jm-reason", body.Reason))
+	resp, err := client.Worker.LogClearIdentityConflicts(ctx, &workerpb.LogClearIdentityConflictsRequest{
+		RequestId: c.GetHeader("X-Request-ID"), ProtocolVersion: "log-query/1",
+		StorageNamespace: body.StorageNamespace,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "WORKER_RPC_FAILED", "message": err.Error()})
+		return
+	}
+	if resp == nil || resp.GetError() != nil {
+		code, message := "LOG_NOT_READY", ""
+		if resp != nil && resp.GetError() != nil {
+			code = resp.GetError().GetCode().String()
+			message = resp.GetError().GetMessage()
+		}
+		c.JSON(http.StatusConflict, gin.H{"error": "CLEAR_CONFLICTS_FAILED", "code": code, "message": message})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"state":          "cleared",
+		"clearedCount":   resp.GetClearedCount(),
+		"clearedSources": resp.GetClearedSources(),
+		"skippedSources": resp.GetSkippedSources(),
+	})
+}
+
+// authorizeClearAllSources 校验「清空全部源」的授权：只有平台管理员可做。
+//
+// 为什么比单源更严：单源清空绑定到一个已授权的实例（越权面最小），而空源键会一次性清掉本
+// Worker 上**所有**源的歧义提示。若沿用节点级权限（node.manage），任何能操作该节点的调用方
+// 都能借一次调用把整节点的质量标记抹平——那是本功能最不希望出现的越权形态。
+//
+// 判据用 access.IsPlatformAdmin 而非新增权限节点：与 bot / bot_load 等既有"批量或跨资源"
+// 端点的口径一致（组管理员走单源路径即可，不需要为它扩权限树）。
+func (h *LogRuntimeHandler) authorizeClearAllSources(c *gin.Context) bool {
+	access := getAccess(c)
+	if h.authz == nil || access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "清空全部源的授权未就绪"})
+		return false
+	}
+	if !access.IsPlatformAdmin {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "FORBIDDEN",
+			"message": "清空全部源的身份冲突仅限平台管理员；请指定单个日志源（storageNamespace）逐源清空",
+		})
+		return false
+	}
+	return true
+}
+
+// authorizeResolveSource 在裁定 RPC 前绑定完整源键，节点能力不能代替实例组授权。
+func (h *LogRuntimeHandler) authorizeResolveSource(c *gin.Context, sourceKey string) bool {
+	parts := strings.Split(sourceKey, "/")
+	if len(parts) != 3 || !strings.HasPrefix(parts[0], "inst:") || parts[2] == "" ||
+		(parts[1] != "stdout" && parts[1] != "stderr" && parts[1] != "file") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "须提供完整的实例日志源键及代次"})
+		return false
+	}
+	id, err := strconv.ParseUint(strings.TrimPrefix(parts[0], "inst:"), 10, strconv.IntSize)
+	if err != nil || id == 0 || parts[0] != fmt.Sprintf("inst:%d", id) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "实例日志源键无效"})
+		return false
+	}
+	access := getAccess(c)
+	if h.authz == nil || h.instances == nil || h.nodes == nil || access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "日志源裁定授权未就绪"})
+		return false
+	}
+	deny := func() bool {
+		// 不区分源不存在、组外、代次或归属错误，避免借此枚举实例及历史源。
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权裁定该日志源"})
+		return false
+	}
+	// 即便平台管理员在组授权中短路，也必须取得真实实例，不能只信客户端的数字 ID。
+	inst, err := h.instances.GetByID(uint(id))
+	if err != nil || inst == nil || inst.UUID == "" {
+		return deny()
+	}
+	allowed, err := h.authz.CanAccessInstance(access, inst.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "日志源授权校验失败"})
+		return false
+	}
+	if !allowed {
+		return deny()
+	}
+	nodeID, err := strconv.ParseUint(c.Param("id"), 10, strconv.IntSize)
+	if err != nil || nodeID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_NODE_ID"})
+		return false
+	}
+	node, err := h.nodes.GetByID(uint(nodeID))
+	if err != nil || node == nil || node.UUID == "" {
+		return deny()
+	}
+	// 当前绑定由 CP 数据库派生，与下发 CreateInstanceRequest 的身份契约一致；不能剥离代次。
+	generation := fmt.Sprintf("instance:%s@worker:%s", inst.UUID, node.UUID)
+	if inst.NodeID == node.ID && parts[2] == generation {
+		return true
+	}
+	// 实例迁移后，旧 Worker 只可访问已登记的历史 holder；客户端提供的旧 UUID 不是凭证。
+	if h.holders != nil {
+		holders, err := h.holders.ListForInstance(inst.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "日志源绑定校验失败"})
+			return false
+		}
+		for _, holder := range holders {
+			if !holder.Current && holder.InstanceID == inst.ID && holder.StorageNamespace == parts[0] &&
+				holder.WorkerUUID == node.UUID && holder.SourceGeneration == parts[2] {
+				return true
+			}
+		}
+	}
+	return deny()
 }
 
 type logMigratePartitionRequest struct {

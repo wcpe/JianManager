@@ -105,6 +105,11 @@ func (v *VLPartitionOps) copySnapshot(key catalog.PartitionKey, snapshotID, _ st
 			return "", err
 		}
 	}
+	// Copy 返回的是目标目录句柄，但 Verify 仍必须能找到本次复制使用的真实源快照。
+	// 记录源快照，避免后续把 copyID 误当成源路径。
+	v.mu.Lock()
+	v.snapshots[key] = snapshotID
+	v.mu.Unlock()
 	dest := filepath.Join(v.ColdDataRoot, "partitions", day)
 	if _, err := os.Stat(dest); err == nil {
 		sourceDigest, sourceErr := treeDigest(snapshotID)
@@ -133,24 +138,26 @@ func (v *VLPartitionOps) copySnapshot(key catalog.PartitionKey, snapshotID, _ st
 	return dest, nil
 }
 
-func (v *VLPartitionOps) verifyCopy(key catalog.PartitionKey, snapshotID, _ string) (string, error) {
+func (v *VLPartitionOps) verifyCopy(key catalog.PartitionKey, _ string, _ string) (string, error) {
 	day, err := dayName(key)
 	if err != nil {
 		return "", err
 	}
-	if snapshotID == "" {
-		v.mu.Lock()
-		snapshotID = v.snapshots[key]
-		v.mu.Unlock()
-	}
+	v.mu.Lock()
+	snapshotID := v.snapshots[key]
+	v.mu.Unlock()
 	if snapshotID == "" {
 		return "", fmt.Errorf("lifecycle: snapshot reference unavailable")
+	}
+	dest := filepath.Join(v.ColdDataRoot, "partitions", day)
+	if filepath.Clean(snapshotID) == filepath.Clean(dest) {
+		return "", fmt.Errorf("lifecycle: snapshot reference points to COLD destination")
 	}
 	sourceDigest, err := treeDigest(snapshotID)
 	if err != nil {
 		return "", err
 	}
-	destDigest, err := treeDigest(filepath.Join(v.ColdDataRoot, "partitions", day))
+	destDigest, err := treeDigest(dest)
 	if err != nil {
 		return "", err
 	}

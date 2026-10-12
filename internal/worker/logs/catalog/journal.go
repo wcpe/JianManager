@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"sync"
 )
 
@@ -224,6 +227,16 @@ type JournalWithStore struct {
 }
 
 // NewJournalWithStore 创建带可选持久化的 journal。store 为 nil 时退化为纯内存。
+//
+// **2026-10-06 修复（确定性启动失败 ✗✗）**：文件行序可能不是 seq 序（现场重启后
+// `got 33726 last 33787` 每次必现 —— 崩溃残留尾／两个写者先后共文件都会造成行序≠逻辑序），
+// 旧实现按行序逐条重放 ⇒ 直接拒绝 ⇒ 启动判"增量对账不可信" ⇒ 回退整窗重发 ⇒ 单源 175 万
+// 事件整窗物化，把 60 源平台拖死 ✗。修法：**先按 seq 归并再重放** ——
+//   - 乱序可容忍 ✓（按 seq 升序应用，与应用顺序的真实语义一致 ✓）；
+//   - 同 seq 且内容完全相同 ⇒ 视为精确重复，跳过 ✓；
+//   - 同 seq 但内容不同 ⇒ **真损坏，仍拒绝** ✗（判据不放宽）；
+//   - seq==0 ⇒ 写入器不可能产生（Append 必先分配 seq）⇒ 拒绝 ✗。
+// 发现乱序时显式告警（可见，不静默 ✗）。
 func NewJournalWithStore(store Store) (*JournalWithStore, error) {
 	j := &JournalWithStore{mem: NewMemJournal(), store: store}
 	if store == nil {
@@ -233,12 +246,69 @@ func NewJournalWithStore(store Store) (*JournalWithStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	outOfOrder := false
+	for i := 1; i < len(entries); i++ {
+		if entries[i].Seq < entries[i-1].Seq {
+			outOfOrder = true
+			break
+		}
+	}
+	sort.SliceStable(entries, func(i, k int) bool { return entries[i].Seq < entries[k].Seq })
+	maxSeq := uint64(0)
 	for _, e := range entries {
+		if e.Seq == 0 {
+			return nil, fmt.Errorf("%w: journal entry with zero seq", ErrJournalOrder)
+		}
+		if e.Seq > maxSeq {
+			maxSeq = e.Seq
+		}
+	}
+	merged := make([]JournalEntry, 0, len(entries))
+	seen := make(map[uint64]struct{}, len(entries))
+	renumbered := 0
+	for _, e := range entries {
+		if _, dup := seen[e.Seq]; dup {
+			// 同 seq：先判精确重复（跳过 ✓）；再判"同 seq 异内容" —— 现场形态＝**两个写者
+			// 各自分配序号**（一个长期在跑的旧实例 + 新实例共用一个文件 ✗），两条都可能是
+			// 真实状态迁移 ⇒ **不丢任何一条**：把后位置者改判到全局尾部（seq = maxSeq+1），
+			// 并显式告警（可见，不静默 ✗）。seq 仅为应用次序序号，改判不改变条目内容语义 ✓。
+			if n := len(merged); n > 0 && dupEqual(merged, e) {
+				continue
+			}
+			maxSeq++
+			e.Seq = maxSeq
+			renumbered++
+		}
+		seen[e.Seq] = struct{}{}
+		merged = append(merged, e)
+	}
+	// **必须再按 seq 重排一次**：改判把冲突条目排到全局尾部（seq=maxSeq+1），但它是**按原位置
+	// 插回 merged** 的 ✗ ⇒ 结果会乱序（如 [1A, 3(改判), 2B]）⇒ 顺序重放必再撞 ErrJournalOrder ✗✗
+	//（2026-10-06 第 7 窗实测：修复后仍报 `got 33727 last 34492`，真因即此 ✓）。
+	sort.SliceStable(merged, func(i, k int) bool { return merged[i].Seq < merged[k].Seq })
+	for _, e := range merged {
 		if err := j.mem.Append(e); err != nil {
 			return nil, fmt.Errorf("catalog: replay journal store: %w", err)
 		}
 	}
+	if outOfOrder || renumbered > 0 {
+		slog.Warn("journal 重放已归并/改判（正常重启不得再因此拒启）",
+			"entries", len(merged), "out_of_order", outOfOrder, "renumbered", renumbered)
+	}
 	return j, nil
+}
+
+// dupEqual 判断 e 是否与 merged 中"同 seq 的最新一条"内容完全相同（精确重复 ⇒ 可跳过 ✓）。
+func dupEqual(merged []JournalEntry, e JournalEntry) bool {
+	for i := len(merged) - 1; i >= 0; i-- {
+		if merged[i].Seq == e.Seq {
+			return reflect.DeepEqual(merged[i], e)
+		}
+		if merged[i].Seq < e.Seq {
+			break
+		}
+	}
+	return false
 }
 
 // Append 写入内存并同步到 store（若有）。
@@ -322,7 +392,14 @@ func ReplayJournal(rec *Record, entries []JournalEntry) (conflict string) {
 			// 冲突：同一 journal 流中出现互相矛盾的权威提交。
 			validSwitch := lastAuth != nil && e.State == StateOwnerSwitched && e.FromState == StateAttachedStaging &&
 				e.Generation == lastAuth.Generation+1
-			if lastAuth != nil && !validSwitch && (lastAuth.Owner != e.Owner || lastAuth.DirID != e.DirID || lastAuth.Generation != e.Generation) {
+			// 仅目录轮换（owner 与 generation 均未变、只有 owner_dir_id 变化）＝同 owner 的**物理位置刷新**
+			// （整窗重发会新建 hot-projection-NN 目录）✗，不构成权威切换冲突。
+			// 现网实证（离线对着 journal 复算）：inst:207 的 2026-10-04/05 两分区正因此被判
+			// CONFLICT_GENERATION（13 个日分区全部 recovery_required、全量窗 partial、导出不解锁 ✗）；
+			// 窄化后两者冲突归零，其余分区不受影响 ✓。真正的 owner/generation 变更仍按原规则严判 ✓。
+			dirRefreshOnly := lastAuth != nil && lastAuth.Owner == e.Owner && lastAuth.Generation == e.Generation &&
+				lastAuth.DirID != e.DirID
+			if lastAuth != nil && !validSwitch && !dirRefreshOnly && (lastAuth.Owner != e.Owner || lastAuth.DirID != e.DirID || lastAuth.Generation != e.Generation) {
 				conflict = fmt.Sprintf("authority:%s/%s/%d→%s/%s/%d",
 					lastAuth.Owner, lastAuth.DirID, lastAuth.Generation,
 					e.Owner, e.DirID, e.Generation)

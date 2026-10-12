@@ -43,6 +43,16 @@ var orphanAuditAllowedActions = map[string]struct{}{
 	"orphan.scan_dispose_blocked": {},
 	"orphan.dispose_blocked":      {},
 	"orphan.dispose_reaped":       {},
+	// orphan.auto_adopted / adopt_blocked / adopt_failed：FR-497 全自动收养三态
+	//（纳管成功 / 归属复核不过只告警 / 拨号失败），与 docs/specs/auto-adopt-orphans/spec.md §6 对齐。
+	"orphan.auto_adopted":  {},
+	"orphan.adopt_blocked": {},
+	"orphan.adopt_failed":  {},
+	// cgroup.isolate_failed：ADR-097「无隔离保护必须成为可观测事实」的**唯一 CP 侧留痕通道**
+	//（接管路径在零迁移且 wrapper 仍存活时落该审计）。缺此项时该上报被本表以 InvalidArgument
+	// 拒收、Worker 侧仅 Warn 后丢弃 ⇒「这批实例已失去 cgroup 隔离」对 CP 不可见，恰是 ADR-097
+	// 要消除的形态。与 docs/adr/097-cgroup-isolation-*.md 及 spec 审计动作表对齐。
+	"cgroup.isolate_failed": {},
 	// orphan.startup_detected_not_reaped：启动恢复路径发现孤儿但按 FR-471 非破坏策略**只观测不处置**。
 	// 必须入库：它是「重启没杀人」的唯一留痕（否则该次观测静默丢失，事故复盘无据）。
 	"orphan.startup_detected_not_reaped": {},

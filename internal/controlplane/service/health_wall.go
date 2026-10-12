@@ -146,6 +146,12 @@ type healthWallInstanceAgg struct {
 //
 // degraded 取 RUNNING 且 status_reason 非空的行数（FR-459：假死实例状态仍是 RUNNING，
 // 只看 status 分级会让它对健康墙完全不可见）。
+//
+// 但 status_reason 一列双语义混用：既是健康巡检的降级信号（假死/熔断，来源标记为 "worker"），
+// 也是 CP 写入的生命周期失败原因（如「重启前同步最新启动规格失败，已取消重启: …」，来源标记为空）。
+// 后者同样可能是「RUNNING + 非空原因」的组合，却不是假死——若不加来源条件，会被误算成 degraded，
+// 让健康节点（乃至整台节点）被误判降级、刷出假死告警噪声。故此处只统计 status_reason_source='worker'
+// 的行（即心跳自己写下的巡检原因），与心跳清空原因时的来源条件同一口径。
 func (s *PlatformObservabilityService) healthWallInstances() (healthWallInstanceAgg, error) {
 	agg := healthWallInstanceAgg{
 		running:  map[uint]int{},
@@ -157,13 +163,13 @@ func (s *PlatformObservabilityService) healthWallInstances() (healthWallInstance
 		NodeID uint
 		Status model.InstanceStatus
 		Count  int
-		// Reasoned 是该 (node,status) 分组内 status_reason 非空的行数。
+		// Reasoned 是该 (node,status) 分组内「心跳写入的」status_reason 非空行数。
 		Reasoned int
 	}
 	var rows []row
 	if err := s.db.Model(&model.Instance{}).
 		Select("node_id, status, COUNT(*) AS count, " +
-			"SUM(CASE WHEN status_reason IS NOT NULL AND status_reason <> '' THEN 1 ELSE 0 END) AS reasoned").
+			"SUM(CASE WHEN status_reason IS NOT NULL AND status_reason <> '' AND status_reason_source = 'worker' THEN 1 ELSE 0 END) AS reasoned").
 		Group("node_id, status").Find(&rows).Error; err != nil {
 		return agg, fmt.Errorf("查询健康墙实例计数失败: %w", err)
 	}

@@ -43,7 +43,7 @@ func setupPMRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engi
 	jwtCfg := config.JWTConfig{Secret: "test-secret-pm306", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	groupSvc := service.NewGroupService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
-	instanceSvc.Shutdown()
+	instanceSvc.SetDelegateBypassForTest(true)
 	svcs := &Services{
 		Auth:     service.NewAuthService(db, jwtCfg),
 		User:     service.NewUserService(db),

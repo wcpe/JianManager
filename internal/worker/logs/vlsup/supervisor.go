@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -49,8 +50,16 @@ type Options struct {
 	AssetSHA256 string
 	// DataRoot 受管数据根；各 namespace 使用 DataRoot/<ns>/data。
 	DataRoot string
-	// RetentionPeriod VL runtime retention；空则 DefaultRetentionPeriod。
+	// RetentionPeriod VL runtime retention 的**回退值**；空则 DefaultRetentionPeriod。
+	// 未在 RetentionByNamespace 里单独指定的 namespace 用它。
 	RetentionPeriod string
+	// RetentionByNamespace 按 namespace 覆盖 VL runtime retention。
+	//
+	// 为什么必须能分开：VL 的 retention 是**实例级**的，且到期是**直接删**——
+	// 它绕过平台侧「删前归档」的硬规则：搬运驱动器还没搬，VL 自己先把热层数据删了。
+	// 因此热层实例的 retention 必须**不短于**保留策略的热层窗口（留出搬运余量），
+	// 冷层实例的 retention 则是「冷留存多久」的唯一执行者。
+	RetentionByNamespace map[Namespace]string
 	// AuthUsername / AuthPassword 本地 Basic-auth；生产必须非空。
 	AuthUsername string
 	AuthPassword string
@@ -85,10 +94,12 @@ type instance struct {
 
 // Supervisor 管理 named VL 实例（hot|cold|rehydrate）。
 type Supervisor struct {
-	binPath     string
-	assetSHA    string
-	dataRoot    string
-	retention   string
+	binPath   string
+	assetSHA  string
+	dataRoot  string
+	retention string
+	// retentionNS 按 namespace 覆盖 retention（空 = 用 retention）。
+	retentionNS map[Namespace]string
 	authUser    string
 	authPass    string
 	ports       map[Namespace]int
@@ -154,6 +165,12 @@ func New(opts Options) (*Supervisor, error) {
 	if retention == "" {
 		retention = DefaultRetentionPeriod
 	}
+	retentionByNS := make(map[Namespace]string, len(opts.RetentionByNamespace))
+	for ns, v := range opts.RetentionByNamespace {
+		if strings.TrimSpace(v) != "" {
+			retentionByNS[ns] = v
+		}
+	}
 	tag := opts.AssetTag
 	if tag == "" {
 		tag = AssetTag
@@ -173,6 +190,7 @@ func New(opts Options) (*Supervisor, error) {
 		assetSHA:    opts.AssetSHA256,
 		dataRoot:    opts.DataRoot,
 		retention:   retention,
+		retentionNS: retentionByNS,
 		authUser:    opts.AuthUsername,
 		authPass:    opts.AuthPassword,
 		ports:       map[Namespace]int{},
@@ -213,6 +231,14 @@ func New(opts Options) (*Supervisor, error) {
 	return s, nil
 }
 
+// retentionFor 返回 namespace 生效的 VL runtime retention。
+func (s *Supervisor) retentionFor(ns Namespace) string {
+	if v, ok := s.retentionNS[ns]; ok && strings.TrimSpace(v) != "" {
+		return v
+	}
+	return s.retention
+}
+
 func (s *Supervisor) configFor(ns Namespace) InstanceConfig {
 	port, ok := s.ports[ns]
 	if !ok || port <= 0 {
@@ -222,7 +248,7 @@ func (s *Supervisor) configFor(ns Namespace) InstanceConfig {
 		Namespace:          ns,
 		Port:               port,
 		StorageDataPath:    StoragePathUnder(s.dataRoot, ns),
-		RetentionPeriod:    s.retention,
+		RetentionPeriod:    s.retentionFor(ns),
 		MemoryAllowedBytes: s.memOverride[ns],
 		AuthUsername:       s.authUser,
 		AuthPassword:       s.authPass,
@@ -595,8 +621,6 @@ func (s *Supervisor) reconcileExitedLocked(inst *instance) {
 		inst.status.LastError = "managed VictoriaLogs process exited unexpectedly"
 	}
 }
-
-
 
 // StatusAll 返回全部受管 namespace 的状态。
 func (s *Supervisor) StatusAll() []InstanceStatus {

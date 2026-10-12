@@ -77,6 +77,10 @@ type InstanceService struct {
 	bgWG     sync.WaitGroup
 	bgMu     sync.Mutex
 
+	// delegateBypass 是测试用委托旁路（见 SetDelegateBypassForTest）：打开后 spawnDelegate
+	// 同步消费一次委托并立即释放生命周期锁，不产生异步副作用。
+	delegateBypass bool
+
 	// operationLocks 将同实例生命周期请求与其异步 Worker 委托串行到同一临界区，
 	// 防止删除越过在途启动后，旧实例指针又在 Worker 重建注册并启动孤儿进程。
 	operationLocksMu sync.Mutex
@@ -1342,7 +1346,12 @@ func (s *InstanceService) startInternal(id, expectedNodeID uint) error {
 	}
 
 	// 委托给 Worker Node；生命周期锁移交给后台委托，RPC 与状态回写结束后释放。
-	delegateOwnsOperation = s.spawnDelegate(instance, "start", expectedNodeID, releaseOperation)
+	// 返回 false 表示控制面已进入关闭流程、委托未派出：必须显式报错——旧实现丢弃该返回值并
+	// return nil，调用方拿到「成功」而 Worker 侧一步都没执行，实例停在 STARTING 直到心跳纠正。
+	if !s.spawnDelegate(instance, "start", expectedNodeID, releaseOperation) {
+		return fmt.Errorf("实例 %s 启动失败：控制面正在关闭，本次动作未执行", instance.UUID)
+	}
+	delegateOwnsOperation = true
 
 	return nil
 }
@@ -1431,7 +1440,11 @@ func (s *InstanceService) stopInternal(id, expectedNodeID uint) error {
 		return err
 	}
 
-	delegateOwnsOperation = s.spawnDelegate(instance, "stop", expectedNodeID, releaseOperation)
+	// 同 Start：委托未派出（控制面关闭中）时必须报错，不能丢弃返回值当作已受理。
+	if !s.spawnDelegate(instance, "stop", expectedNodeID, releaseOperation) {
+		return fmt.Errorf("实例 %s 停止失败：控制面正在关闭，本次动作未执行", instance.UUID)
+	}
+	delegateOwnsOperation = true
 	return nil
 }
 
@@ -1485,7 +1498,11 @@ func (s *InstanceService) restartInternal(id, expectedNodeID uint) error {
 		return err
 	}
 
-	delegateOwnsOperation = s.spawnDelegate(instance, "restart", expectedNodeID, releaseOperation)
+	// 同 Start：委托未派出（控制面关闭中）时必须报错，不能丢弃返回值当作已受理。
+	if !s.spawnDelegate(instance, "restart", expectedNodeID, releaseOperation) {
+		return fmt.Errorf("实例 %s 重启失败：控制面正在关闭，本次动作未执行", instance.UUID)
+	}
+	delegateOwnsOperation = true
 	return nil
 }
 
@@ -1526,7 +1543,11 @@ func (s *InstanceService) killInternal(id, expectedNodeID uint) error {
 		return err
 	}
 
-	delegateOwnsOperation = s.spawnDelegate(instance, "kill", expectedNodeID, releaseOperation)
+	// 同 Start：委托未派出（控制面关闭中）时必须报错，不能丢弃返回值当作已受理。
+	if !s.spawnDelegate(instance, "kill", expectedNodeID, releaseOperation) {
+		return fmt.Errorf("实例 %s 强制终止失败：控制面正在关闭，本次动作未执行", instance.UUID)
+	}
+	delegateOwnsOperation = true
 	return nil
 }
 
@@ -2007,12 +2028,32 @@ func (s *InstanceService) resolveJDKPath(instance *model.Instance) (string, erro
 	return "", nil
 }
 
+// SetDelegateBypassForTest 打开/关闭测试用委托旁路。
+//
+// 打开后 spawnDelegate 不再启动后台委托，而是同步消费一次、立即释放实例生命周期锁，并仍返回
+// 「已受理」，使无 Worker 连接的用例可以只观测同步状态转换。
+//
+// 为什么需要它：这个诉求原先由 Shutdown 兼办，但 Shutdown 同时把服务置为「正在关闭」——而关闭中
+// 的生命周期请求现在会明确报错（不再丢弃 spawnDelegate 的返回值假装成功），两者语义已不可兼得。
+func (s *InstanceService) SetDelegateBypassForTest(on bool) {
+	s.bgMu.Lock()
+	s.delegateBypass = on
+	s.bgMu.Unlock()
+}
+
 // spawnDelegate 在后台异步委托实例动作给 Worker，并登记到 bgWG 以便优雅关闭时 join。
 // releaseOperation 由后台委托在 RPC 与状态回写结束后调用，使删除与后续生命周期请求等待在途动作。
 // expectedNodeID>0 时派发前再次重读实例归属；变化则拒绝 Worker RPC（FR-395）。
 // Shutdown 之后（bgCtx 取消）不再发起新委托，返回 false 让调用方自行释放生命周期锁。
 func (s *InstanceService) spawnDelegate(instance *model.Instance, action string, expectedNodeID uint, releaseOperation func()) bool {
 	s.bgMu.Lock()
+	if s.delegateBypass {
+		s.bgMu.Unlock()
+		// 测试旁路：同步消费委托并释放生命周期锁（releaseOperation 约定只调用一次），
+		// 对调用方而言等同于「委托已受理」。
+		releaseOperation()
+		return true
+	}
 	if s.bgCtx.Err() != nil {
 		s.bgMu.Unlock()
 		return false
@@ -2048,13 +2089,53 @@ func (s *InstanceService) Shutdown() {
 	s.bgWG.Wait()
 }
 
+const (
+	// delegateRPCTimeoutDefault 是实例生命周期动作委托给 Worker 的默认 RPC 超时。
+	delegateRPCTimeoutDefault = 30 * time.Second
+	// lifecycleWaitRPCTimeoutMargin 是**需要等上一代进程退出**的动作（start/restart）在
+	// 「生效优雅停止超时」之外的余量：覆盖 Worker 侧等待预算之后的进程启动与状态检查开销
+	// （见 worker daemon.PriorExitBudget = 优雅停止超时 + 收尾余量 10s）。
+	lifecycleWaitRPCTimeoutMargin = 60 * time.Second
+	// gracefulStopTimeoutDefaultSeconds 是平台设置 graceful_stop.timeout 的基线默认值（秒），
+	// 与 settings.go 的 defaultValue 保持一致；CP 未装配 settings 时按此兜底。
+	gracefulStopTimeoutDefaultSeconds = 30
+)
+
+// delegateRPCTimeout 返回把生命周期动作委托给 Worker 的 RPC 超时。
+//
+// start 与 restart 在 Worker 侧都要**等上一代进程退出**：daemon 策略的 Start 会先执行
+// WaitForPriorExit（预算 = 生效优雅停止超时 + 收尾余量，平台设 120s 时 = 130s），超预算即
+// **拒绝启动**（宁可保留仍在服务的旧进程，也不新旧并存）。因此两者必须同口径放大：
+//   - 若 start 仍用 30s，慢关服实例点「启动」会先被 CP 判超时——实例被误标 CRASHED 且原因写成
+//     RPC 超时（假失败），随后 Worker 的等待到点又返回「上一代未在预算内退出」（第二次失败）：
+//     运维看到两个都不是真因的错误，且「点一次启动就崩」的观感与实际原因完全脱节。
+//   - 放大后 CP 的等待必然覆盖 Worker 的判定，返回的永远是 Worker 的结论（真正的根因）。
+//
+// stop/kill 不等待进程退出（只下发停止帧），仍用 30s。
+func delegateRPCTimeout(action string, gracefulStopSeconds int32) time.Duration {
+	switch action {
+	case "start", "restart":
+	default:
+		return delegateRPCTimeoutDefault
+	}
+	if gracefulStopSeconds <= 0 {
+		gracefulStopSeconds = gracefulStopTimeoutDefaultSeconds
+	}
+	return time.Duration(gracefulStopSeconds)*time.Second + lifecycleWaitRPCTimeoutMargin
+}
+
 // delegateToWorker 委托实例操作给 Worker Node。
 func (s *InstanceService) delegateToWorker(instance *model.Instance, action string) {
+	// 捕获派发前的事实版本，迟到响应只能回写这一版本，不能覆盖新心跳或后续操作。
+	var observed model.Instance
+	if err := s.db.First(&observed, instance.ID).Error; err != nil || observed.UUID != instance.UUID || observed.NodeID != instance.NodeID {
+		return
+	}
 	// 查找节点
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
 		slog.Error("查找节点失败", "instanceId", instance.UUID, "error", err)
-		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, "查找节点失败: "+err.Error())
+		writeLifecycleObservation(s.db, &observed, observed.Status, "操作未确认，等待心跳收敛: 查找节点失败: "+err.Error())
 		return
 	}
 
@@ -2062,11 +2143,13 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
 		slog.Error("节点未连接", "nodeUUID", node.UUID)
-		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, "节点未连接")
+		writeLifecycleObservation(s.db, &observed, observed.Status, "操作未确认，等待心跳收敛: 节点未连接")
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 超时按动作取：start/restart 须覆盖 Worker 侧「优雅停止 + 等待上一代进程退出 + 启动」全链路
+	// （见 delegateRPCTimeout），与其它动作共用 30s 会把仍在正常启动/重启的实例误标 CRASHED。
+	ctx, cancel := context.WithTimeout(s.bgCtx, delegateRPCTimeout(action, s.gracefulStopTimeoutSeconds()))
 	defer cancel()
 
 	// N-3：启动/重启请求**随附生效限额**，不依赖「启动前的幂等重注册一定成功」。
@@ -2098,7 +2181,8 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 		if regErr := s.registerOnWorkerLocked(instance); regErr != nil {
 			reason := "重启前同步最新启动规格失败，已取消重启: " + regErr.Error()
 			slog.Error("重启前同步最新启动规格失败，已取消重启", "instanceId", instance.UUID, "error", regErr)
-			s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, reason)
+			// 新规格同步失败时动作尚未派发，保留待确认事实，不需要额外查询来假定崩溃。
+			writeLifecycleObservation(s.db, &observed, observed.Status, reason)
 			return
 		}
 		resp, err = client.Worker.RestartInstance(ctx, req)
@@ -2108,13 +2192,13 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 
 	if err != nil {
 		slog.Error("Worker 操作失败", "action", action, "instanceId", instance.UUID, "error", err)
-		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, "Worker 操作失败: "+err.Error())
+		reconcileLifecycleObservation(s.db, client.Worker, &observed, "Worker 操作结果未确认: "+err.Error())
 		return
 	}
 
 	if resp != nil && !resp.Success {
 		slog.Error("Worker 操作未成功", "action", action, "instanceId", instance.UUID, "error", resp.Error)
-		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, resp.Error)
+		reconcileLifecycleObservation(s.db, client.Worker, &observed, resp.Error)
 		return
 	}
 
@@ -2122,7 +2206,9 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	if action == "start" {
 		// 仅当仍处 STARTING 时才置 RUNNING：启动委托回来前用户可能已点停止（STARTING→STOPPING），
 		// 此时迟到的 start 成功不得把已在停止中的实例「复活」成 RUNNING（修 #5 启动中停止竞态）。
-		s.updateStatusFromTo(instance.ID, model.InstanceStatusStarting, model.InstanceStatusRunning)
+		if observed.Status == model.InstanceStatusStarting {
+			writeLifecycleObservation(s.db, &observed, model.InstanceStatusRunning, "")
+		}
 		slog.Info("Worker 操作成功", "action", action, "instanceId", instance.UUID)
 		return
 	}
@@ -2135,8 +2221,78 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 		targetStatus = model.InstanceStatusRunning
 	}
 
-	s.updateStatusAsync(instance.ID, targetStatus)
+	writeLifecycleObservation(s.db, &observed, targetStatus, "")
 	slog.Info("Worker 操作成功", "action", action, "instanceId", instance.UUID)
+}
+
+// writeLifecycleObservation 条件回写派发前事实：身份/节点/状态任一变化即放弃迟到结果。
+//
+// CAS 字段为何**不含 updated_at**：updated_at 是 GORM 自动维护的副作用字段，心跳每拍都会对全部
+// 上报实例执行 statusQ.Update("status", status)（见 grpc/handler.go），**即使状态值没变也会推进它**。
+// 而本函数的调用点在 Worker RPC 返回之后，start/restart 的链路耗时可达「优雅停止超时 + 60s」
+// （delegateRPCTimeout），远大于心跳间隔 ⇒ 「派发 → 回写」之间几乎必然落进一拍心跳，
+// updated_at 恒失配 ⇒ RowsAffected=0 ⇒ 失败原因与终态写不进去，且旧实现只查 Error 不查
+// RowsAffected，整个过程完全静默。status 只在真正的状态迁移时改变，心跳写同值不推进它，
+// 因此用 status 做 CAS 既保留了「派发前事实已变则放弃迟到结果」的语义，又不会被心跳误伤。
+func writeLifecycleObservation(db *gorm.DB, observed *model.Instance, target model.InstanceStatus, reason string) {
+	res := db.Model(&model.Instance{}).
+		Where("id = ? AND uuid = ? AND node_id = ? AND status = ?", observed.ID, observed.UUID, observed.NodeID, observed.Status).
+		Updates(map[string]any{"status": target, "status_reason": reason, "status_reason_source": ""})
+	if res.Error != nil {
+		slog.Warn("生命周期结果条件回写失败", "instanceId", observed.UUID, "error", res.Error)
+		return
+	}
+	if res.RowsAffected == 0 {
+		// 条件失配 = 期间状态/归属已被心跳或后续操作改写：放弃迟到结果是对的，但必须留痕——
+		// 否则「为什么这次回写没生效」在日志里完全不可见（旧实现的静默缺陷）。
+		slog.Warn("生命周期结果条件回写被跳过：派发前事实已变化",
+			"instanceId", observed.UUID, "observedStatus", observed.Status,
+			"targetStatus", target, "reason", reason)
+	}
+}
+
+// markLifecycleUnconfirmed 只写「结果待确认」原因、**不动 status**。
+//
+// 与 writeLifecycleObservation 分开的理由（修 CP-4）：结果查询失败时我们把 observed.Status 原样写回，
+// 语义上不是「更新状态」而是「什么都没查清」。而 CP 写入的原因（status_reason_source 为空串）不会被
+// 下一拍健康心跳清掉，于是「原样回写 + 待确认文案」会给实例钉上一条长期可见但无信息量的兜底文案，
+// 覆盖掉此前更有价值的原因。因此该分支只更新原因，让心跳去真正收敛状态（函数注释的承诺）。
+func markLifecycleUnconfirmed(db *gorm.DB, observed *model.Instance, reason string) {
+	res := db.Model(&model.Instance{}).
+		Where("id = ? AND uuid = ? AND node_id = ? AND status = ?", observed.ID, observed.UUID, observed.NodeID, observed.Status).
+		Updates(map[string]any{"status_reason": reason, "status_reason_source": ""})
+	if res.Error != nil {
+		slog.Warn("生命周期待确认原因回写失败", "instanceId", observed.UUID, "error", res.Error)
+		return
+	}
+	if res.RowsAffected == 0 {
+		slog.Warn("生命周期待确认原因回写被跳过：派发前事实已变化",
+			"instanceId", observed.UUID, "observedStatus", observed.Status, "reason", reason)
+	}
+}
+
+// reconcileLifecycleObservation 传输失败/取消不是崩溃证据；复用现有状态查询，失败则交给心跳收敛。
+func reconcileLifecycleObservation(db *gorm.DB, worker workerpb.WorkerServiceClient, observed *model.Instance, reason string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := worker.GetInstanceStatus(ctx, &workerpb.InstanceActionRequest{InstanceUuid: observed.UUID})
+	unconfirmed := "操作结果待确认，状态查询/心跳收敛: " + reason
+	if err != nil || resp == nil {
+		// 连状态都查不清：只留痕原因，不碰 status（见 markLifecycleUnconfirmed）。
+		slog.Warn("生命周期结果查询失败，交由心跳收敛", "instanceId", observed.UUID, "reason", reason, "error", err)
+		markLifecycleUnconfirmed(db, observed, unconfirmed)
+		return
+	}
+	// Worker 是运行态的权威来源：查到明确状态就回写，让面板不必等下一拍心跳收敛。
+	// 状态不可识别（空串/未知取值）时不猜——同样只留痕原因。
+	switch state := model.InstanceStatus(resp.State); state {
+	case model.InstanceStatusStopped, model.InstanceStatusStarting, model.InstanceStatusRunning, model.InstanceStatusStopping, model.InstanceStatusCrashed:
+		writeLifecycleObservation(db, observed, state, unconfirmed)
+	default:
+		slog.Warn("生命周期结果查询返回未知状态，交由心跳收敛",
+			"instanceId", observed.UUID, "state", resp.State, "reason", reason)
+		markLifecycleUnconfirmed(db, observed, unconfirmed)
+	}
 }
 
 func (s *InstanceService) updateStatusAsync(id uint, status model.InstanceStatus) {
@@ -2155,9 +2311,17 @@ func (s *InstanceService) updateStatusFromTo(id uint, from, to model.InstanceSta
 }
 
 // updateStatusReasonAsync 异步置状态 + 原因：委托失败时写入崩溃原因（供前端显示具体错误，不再只见「崩溃」无因）。
+//
+// 写原因时一并把 status_reason_source 复位为空：这里写的是 CP 的生命周期失败原因，必须与心跳携带的
+// 巡检原因区分开——若该行上一拍挂着巡检原因（来源标记为 worker），不复位就会被下一拍健康心跳当作
+// 自己的原因清掉，本函数刚写的失败原因又变成「查不出来」。
 func (s *InstanceService) updateStatusReasonAsync(id uint, status model.InstanceStatus, reason string) {
 	if err := s.db.Model(&model.Instance{}).Where("id = ?", id).
-		Updates(map[string]any{"status": status, "status_reason": reason}).Error; err != nil {
+		Updates(map[string]any{
+			"status":               status,
+			"status_reason":        reason,
+			"status_reason_source": "",
+		}).Error; err != nil {
 		slog.Error("更新实例状态/原因失败", "instanceId", id, "status", status, "error", err)
 	}
 }
@@ -2780,9 +2944,13 @@ func (s *InstanceService) preflightStart(instance *model.Instance) error {
 }
 
 // updateStatusReasonOnly 仅更新 status_reason，不动 status（FR-314 预检失败：状态保持、不进 STARTING）。
+// 同 updateStatusReasonAsync：写 CP 原因的同时复位来源标记，避免被下一拍心跳当作巡检原因清掉。
 func (s *InstanceService) updateStatusReasonOnly(id uint, reason string) {
 	if err := s.db.Model(&model.Instance{}).Where("id = ?", id).
-		Update("status_reason", reason).Error; err != nil {
+		Updates(map[string]any{
+			"status_reason":        reason,
+			"status_reason_source": "",
+		}).Error; err != nil {
 		slog.Error("更新实例状态原因失败", "instanceId", id, "error", err)
 	}
 }

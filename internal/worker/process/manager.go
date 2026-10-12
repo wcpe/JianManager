@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -64,7 +65,9 @@ type Instance struct {
 	// 零值=未知（PID 恢复等路径），此时巡检不做宽限、保持既有判定。
 	StartedAt time.Time
 	// operationMu 串行同一实例的生命周期操作，不阻塞其他实例。
-	operationMu sync.Mutex
+	operationMu lifecycleGate
+	// launchSpecPending 只凭 PID 收养时为真，CP 补齐前不得先停后启。
+	launchSpecPending bool
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
 	// nil 表示实例已创建但尚未启动（或已 Close）。
 	strategy IProcessCommand
@@ -118,6 +121,13 @@ type Manager struct {
 	recoverKillTree func(pid int) error
 	recoverPIDAlive func(pid int) bool
 	recoverSleep    func(d time.Duration)
+	// recoverMigrate 隔离接管子树的测试接缝；nil 使用现有 cgroup 迁移实现。
+	recoverMigrate func(pid int, instanceUUID string) (int, error)
+	// recoverBackoff 是接管 reconnect 的有界重试间隔序列（FR-455①）的注入点：
+	// 空/nil=默认 DefaultRecoverRetryBackoff（≈127s，覆盖分钟级瞬时故障）；
+	// 由 worker main 按配置 recover.retry_backoff 经 SetRecoverRetryBackoff 装配（测试注入小值）。
+	// 由 mu 保护（装配期写入、运行期重试路径读取）。
+	recoverBackoff []time.Duration
 	// recoverVerifyOwner 是「处置前置存活复核」（FR-455①）的可注入桩：nil=真实现
 	// （DefaultVerifyProcessOwnership，读 cmdline/cwd）。返回 false=无法确认 PID 确属目标实例 → 不杀。
 	recoverVerifyOwner func(pid int, instanceUUID, workDir string, expectWrapper bool) bool
@@ -236,6 +246,10 @@ func (m *Manager) clearForeignRuntime(uuid string) {
 
 // NewManager 创建进程管理器。
 func NewManager(serversDir string) *Manager {
+	// 启动清扫：回收被强杀（kill -9）的 wrapper 留下的**空**隔离 cgroup 目录
+	// （见 internal/worker/daemon/cgroup.go「daemon 子树脱离 Worker 单元 cgroup」）。
+	// 只删空目录、失败静默，对非 systemd 环境与测试环境均为无副作用的空操作。
+	daemon.SweepEmptyDaemonCgroupDirs()
 	return &Manager{
 		instances:  make(map[string]*Instance),
 		serversDir: serversDir,
@@ -503,7 +517,18 @@ func (m *Manager) SetResourceLimits(uuid string, cpuLimit float64, memLimitMB in
 
 // SetLaunchConfig 刷新已存在实例的启动配置，供 CP 幂等重注册时下发（FR-233）。
 // 运行中的策略继续服务且仅标记过期；停止/崩溃态则立即丢弃旧策略，确保下一次启动采用新规格。
-func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string, envVars map[string]string, autoRestart bool) {
+//
+// **熔断保护（CP-5，2026-10-12 修复）**：入参 autoRestart 是 CP 的**配置**，而熔断禁用是运行时
+// 的**保护态**，两者语义不同。熔断期间 CP 重推（隧道重连的 onOpen/Register/心跳兜底都会触发
+// ResyncNode → 本方法）若无条件写回 `inst.AutoRestart = autoRestart`，就会把 breakCircuit
+// 刚设的禁用重新打开 ⇒ 崩溃循环实例在熔断后继续自愈重启（FR-459 的「熔断粘性」被打破）。
+// 故熔断期间强制保持禁用，配置意图记在下方注释的语义里，等显式解除熔断（ReleaseCircuitBreaker）
+// 后再由 CP 的后续重推（或解除路径自身的 rearm）恢复。
+func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string, envVars map[string]string, autoRestart bool, stopCommand ...string) {
+	// 先取熔断态（h.mu 独立于 m.mu，且此处不嵌套持有，无锁序风险）。
+	if _, broken := m.isCircuitBroken(uuid); broken {
+		autoRestart = false
+	}
 	var stale IProcessCommand
 	var resetting *Instance
 	m.mu.Lock()
@@ -513,6 +538,12 @@ func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string
 		inst.JDKBinPath = jdkBinPath
 		inst.EnvVars = envVars
 		inst.AutoRestart = autoRestart
+		if len(stopCommand) > 0 {
+			inst.StopCommand = stopCommand[0]
+		}
+		if strings.TrimSpace(startCommand) != "" || inst.processType == ProcessTypeDocker {
+			inst.launchSpecPending = false
+		}
 		if inst.strategy != nil {
 			switch inst.State {
 			case StateRunning, StateStarting, StateStopping:
@@ -605,36 +636,67 @@ func (m *Manager) GetInstanceDockerStats(ctx context.Context, uuid string) (cpuP
 
 // lockInstanceOperation 获取实例级生命周期锁，并复核等待期间实例未被移除或替换。
 func (m *Manager) lockInstanceOperation(uuid string) (*Instance, bool) {
+	inst, err := m.lockInstanceOperationContext(context.Background(), uuid)
+	return inst, err == nil
+}
+
+// lockInstanceOperationContext 排队可取消，获得 gate 后仍须复核实例身份。
+func (m *Manager) lockInstanceOperationContext(ctx context.Context, uuid string) (*Instance, error) {
 	m.mu.RLock()
 	inst, exists := m.instances[uuid]
 	m.mu.RUnlock()
 	if !exists {
-		return nil, false
+		return nil, fmt.Errorf("实例 %s 不存在", uuid)
 	}
 
-	inst.operationMu.Lock()
+	if err := inst.operationMu.LockContext(ctx); err != nil {
+		return nil, fmt.Errorf("实例 %s 操作排队取消: %w", uuid, err)
+	}
 	m.mu.RLock()
 	current, stillExists := m.instances[uuid]
 	m.mu.RUnlock()
 	if !stillExists || current != inst {
 		inst.operationMu.Unlock()
-		return nil, false
+		return nil, fmt.Errorf("实例 %s 不存在或已被替换", uuid)
 	}
-	return inst, true
+	return inst, nil
 }
 
 // Start 启动实例。按实例的 ProcessType 选择策略；首次启动时惰性构造策略。
+//
+// 无 ctx 形态：等价于 StartContext(context.Background(), uuid)（既有调用方沿用）。
 func (m *Manager) Start(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 不存在", uuid)
+	return m.StartContext(context.Background(), uuid)
+}
+
+// StartContext 是可取消的启动形态：ctx 被取消时启动等待立即收手，
+// 返回可重试错误（daemon.ErrStartWaitCanceled）且**不把实例记为崩溃**。
+//
+// 为什么要区分（复审 P1-5）：daemon 策略启动前要等上一代进程退出（预算可达分钟级）。
+// 若把「调用方取消」也当作「启动失败」置 CRASHED，一次取消就会污染实例状态，
+// 让运维以为是实例崩溃而非请求被取消。
+//
+// 生产 RPC 传入请求 ctx；进程成功启动后不再受该请求生命周期影响。
+func (m *Manager) StartContext(ctx context.Context, uuid string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
-	return m.startLocked(uuid, inst)
+	return m.startLocked(ctx, uuid, inst)
 }
 
 // startLocked 在已持有实例生命周期锁时启动实例。
-func (m *Manager) startLocked(uuid string, inst *Instance) error {
+func (m *Manager) startLocked(ctx context.Context, uuid string, inst *Instance) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("启动实例 %s 未执行: %w", uuid, err)
+	}
 	m.mu.Lock()
 	current, exists := m.instances[uuid]
 	if !exists || current != inst {
@@ -648,6 +710,10 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 	if inst.strategyResetting {
 		m.mu.Unlock()
 		return fmt.Errorf("实例 %s 正在刷新启动策略，请稍后重试", uuid)
+	}
+	if inst.launchSpecPending {
+		m.mu.Unlock()
+		return fmt.Errorf("实例 %s 尚未收到完整启动规格，保留现有控制通道", uuid)
 	}
 
 	// Stop 收尾与配置更新可能交错：Stop 已检查 stale 后，SetLaunchConfig 才在 STOPPING 窗口
@@ -742,7 +808,21 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 
 	m.emitStateChange(uuid, oldState, StateStarting)
 
-	if err := strategy.Start(context.Background()); err != nil {
+	startErr := ctx.Err()
+	if startErr == nil {
+		startErr = strategy.Start(ctx)
+	}
+	if err := startErr; err != nil {
+		if errors.Is(err, daemon.ErrStartWaitCanceled) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// 调用方取消 ⇒ 本次既未启动、也未判定失败（可重试）：**不是崩溃**，保持原状态。
+			// 置 CRASHED 会把「请求被取消」污染成「实例崩溃」，运维据此排查会南辕北辙。
+			m.mu.Lock()
+			prevState := inst.State
+			inst.State = oldState
+			m.mu.Unlock()
+			m.emitStateChange(uuid, prevState, oldState)
+			return fmt.Errorf("启动实例 %s 被取消（可重试）: %w", uuid, err)
+		}
 		m.mu.Lock()
 		prevState := inst.State
 		inst.State = StateCrashed
@@ -776,11 +856,19 @@ func (m *Manager) startLocked(uuid string, inst *Instance) error {
 
 // Stop 停止实例。
 func (m *Manager) Stop(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 未运行", uuid)
+	return m.StopContext(context.Background(), uuid)
+}
+
+// StopContext 在下发停止前可取消；已经开始的优雅停止仍正常收尾。
+func (m *Manager) StopContext(ctx context.Context, uuid string) error {
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return m.stopLocked(uuid, inst)
 }
 
@@ -835,26 +923,52 @@ func (m *Manager) stopLocked(uuid string, inst *Instance) error {
 // daemon.WaitForPriorExit 依 PID 文件等旧 wrapper/Java 全退出（best-effort 上限）再拉起新进程，
 // reapWrapper 的 `d.wrapperCmd != cmd` 陈旧守卫保证旧 reaper 不误改新实例状态。
 func (m *Manager) Restart(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 不存在", uuid)
+	return m.RestartContext(context.Background(), uuid)
+}
+
+// RestartContext 排队与停止前可取消；停止已经执行时保留 STOPPED，绝不迟到启动。
+func (m *Manager) RestartContext(ctx context.Context, uuid string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
-	return m.restartLocked(uuid, inst)
+	return m.restartLockedContext(ctx, uuid, inst)
 }
 
 // restartLocked 在已持有实例生命周期锁时优雅重启：运行类先优雅停止、等旧进程退出，再启动。
 func (m *Manager) restartLocked(uuid string, inst *Instance) error {
+	return m.restartLockedContext(context.Background(), uuid, inst)
+}
+
+func (m *Manager) restartLockedContext(ctx context.Context, uuid string, inst *Instance) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	m.mu.RLock()
 	state := inst.State
+	pending := inst.launchSpecPending
 	m.mu.RUnlock()
+	// PID 收养只证明当前控制通道可用，不能据此先停服务器再用空规格自愈。
+	if pending {
+		return fmt.Errorf("实例 %s 尚未收到完整启动规格，拒绝重启且保留当前运行时", uuid)
+	}
 	// 运行中（含启动/停止中）先优雅停止、等旧进程退出；STOPPED/CRASHED 无活跃进程，直接（重）启动。
 	if state == StateRunning || state == StateStarting || state == StateStopping {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := m.stopLocked(uuid, inst); err != nil {
 			return err
 		}
 	}
-	return m.startLocked(uuid, inst)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("实例 %s 已停止但本次重启被取消，未启动新一代: %w", uuid, err)
+	}
+	return m.startLocked(ctx, uuid, inst)
 }
 
 // RestartIfRunning 是 FR-459 假死自愈的受锁入口：与 Restart 相同地优雅重启，但**仅当**实例在
@@ -884,11 +998,19 @@ func (m *Manager) RestartIfRunning(uuid string) error {
 
 // Kill 强制终止实例。
 func (m *Manager) Kill(uuid string) error {
-	inst, exists := m.lockInstanceOperation(uuid)
-	if !exists {
-		return fmt.Errorf("实例 %s 不存在", uuid)
+	return m.KillContext(context.Background(), uuid)
+}
+
+// KillContext 排队取消不能变成迟到强杀。
+func (m *Manager) KillContext(ctx context.Context, uuid string) error {
+	inst, err := m.lockInstanceOperationContext(ctx, uuid)
+	if err != nil {
+		return err
 	}
 	defer inst.operationMu.Unlock()
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return m.killLocked(uuid, inst)
 }
 
@@ -953,7 +1075,7 @@ func (m *Manager) AdoptForeignRuntime(uuid string) (int, error) {
 	fr := m.foreignRuntime(uuid)
 	if fr.PID <= 0 {
 		// 无漂移：直接走正常启动路径（幂等；已 RUNNING 时由 startLocked 的状态守卫拒绝并给出明确错误）。
-		if err := m.startLocked(uuid, inst); err != nil {
+		if err := m.startLocked(context.Background(), uuid, inst); err != nil {
 			return 0, err
 		}
 		return 0, nil
@@ -970,7 +1092,7 @@ func (m *Manager) AdoptForeignRuntime(uuid string) (int, error) {
 	// 漂移进程已退场：先清该实例的观测，避免下一次心跳仍报旧 PID（扫描下一轮也会自然收敛）。
 	m.clearForeignRuntime(uuid)
 
-	if err := m.startLocked(uuid, inst); err != nil {
+	if err := m.startLocked(context.Background(), uuid, inst); err != nil {
 		return fr.PID, fmt.Errorf("外来进程 pid=%d 已退出，但以受管方式启动实例 %s 失败: %w", fr.PID, uuid, err)
 	}
 	m.auditOrphan("orphan.foreign_runtime_adopted", uuid,
@@ -1237,6 +1359,10 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 			continue
 		}
 		strategy.SetWrapperPID(rec.WrapperPID)
+		// 接管侧的 cgroup 隔离（见 daemon/cgroup.go）：已运行的 wrapper 由**旧二进制** spawn，仍在 Worker
+		// 单元 cgroup 内。若不在此刻迁移，本次部署后的第一个 `systemctl restart` 依旧会连坐杀掉全部实例
+		// ——那正是本缺陷的验收场景本身。迁移只改 cgroup 归属、不发任何信号，失败仅告警、保持原状。
+		m.isolateAdoptedWrapper(instanceUUID, rec)
 
 		// FR-459 终验 Low #3：若 Worker 重启前该实例已熔断，从状态文件恢复熔断态——否则 Worker
 		// 会「忘掉」熔断（以为可自动重启）而 wrapper 粘性 autoRestartOff 仍在拒绝重启，形成反向 desync。
@@ -1244,13 +1370,15 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 
 		m.mu.Lock()
 		m.instances[instanceUUID] = &Instance{
-			UUID:        instanceUUID,
-			State:       StateRunning,
-			AutoRestart: !restored,
-			WorkDir:     rec.WorkDir,
-			ProbePort:   rec.ProbePort,
-			strategy:    strategy,
-			processType: ProcessTypeDaemon,
+			UUID:              instanceUUID,
+			State:             StateRunning,
+			AutoRestart:       !restored,
+			WorkDir:           rec.WorkDir,
+			ProbePort:         rec.ProbePort,
+			strategy:          strategy,
+			strategyStale:     true,
+			launchSpecPending: true,
+			processType:       ProcessTypeDaemon,
 		}
 		m.mu.Unlock()
 		if restored {
@@ -1262,4 +1390,52 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 		slog.Info("已恢复 daemon 实例", "instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "circuitRestored", restored)
 	}
 	return recovered, nil
+}
+
+// isolateAdoptedWrapper 把接管到的 wrapper 及其 java 子树迁出 Worker 的 systemd 单元 cgroup
+// （机制与理由见 internal/worker/daemon/cgroup.go）。
+//
+// 为什么接管路径必须做这件事：迁移前 spawn 的 wrapper 一律留在 Worker 单元 cgroup 内，systemd
+// 重启该单元时按 KillMode=control-group 向其 cgroup 内全部进程发 SIGTERM，wrapper 与 java 一起毙命。
+// 新代码 spawn 的 wrapper 会自迁（wrapper.run 开头），但**已在运行**的那些只能由接管方迁移——否则
+// 「部署新版本 → 重启 Worker」这一步（本缺陷的验收场景）依旧全灭。
+//
+// 语义边界：只改 cgroup 归属，不发任何信号、不改 PID 记录与 socket；失败仅告警保持原状，
+// 因此与 FR-455① 接管、FR-497 自动收养、orphan_scan 孤儿治理都不冲突。
+func (m *Manager) isolateAdoptedWrapper(instanceUUID string, rec *daemon.PIDRecord) {
+	if rec.WrapperPID <= 0 {
+		return
+	}
+	migrate := m.recoverMigrate
+	if migrate == nil {
+		migrate = daemon.MigratePIDTreeToCgroup
+	}
+	moved, err := migrate(rec.WrapperPID, instanceUUID)
+	if err != nil {
+		slog.Warn("接管实例的 daemon 子树迁出 Worker 单元 cgroup 失败，保持原状",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "error", err)
+		m.auditOrphan("cgroup.isolate_failed", instanceUUID,
+			fmt.Sprintf(`{"wrapperPid":%d,"moved":%d,"reason":"迁移调用失败"}`, rec.WrapperPID, moved), false, err.Error())
+		return
+	}
+	if moved > 0 {
+		slog.Info("已把接管的 daemon 子树迁出 Worker 单元 cgroup（单元重启不再连坐）",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "moved", moved)
+		return
+	}
+	// moved==0 且 wrapper 仍存活 = **一个进程都没迁成**，实例仍在 Worker 单元 cgroup 内，下一次
+	// `systemctl restart` 会被连坐杀掉。此前这里没有任何输出（`moved > 0` 分支不成立即静默返回），
+	// 真机后果（2026-10-09 事故）：13 个 wrapper 因源在当前用户无写权限的单元（如 /system.slice）
+	// 而无从迁移，逐进程 WARN 只落在 wrapper 侧日志里，CP 侧看不到「这批实例已无保护」。
+	//
+	// 因此显式落审计（非静默），让「无隔离保护」成为可观测事实而非隐性风险。注意与「wrapper 已退出」
+	// 区分：后者无需保护，不算失败。
+	if !m.pidAlive(rec.WrapperPID) {
+		return
+	}
+	m.auditOrphan("cgroup.isolate_failed", instanceUUID,
+		fmt.Sprintf(`{"wrapperPid":%d,"javaPid":%d,"moved":0,"reason":"实例仍在 Worker 单元 cgroup 内，重启该单元会被连坐"}`,
+			rec.WrapperPID, rec.JavaPID), false, "")
+	slog.Warn("接管实例未能获得 cgroup 隔离，实例仍在 Worker 单元 cgroup 内（重启该单元会被连坐）",
+		"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID)
 }

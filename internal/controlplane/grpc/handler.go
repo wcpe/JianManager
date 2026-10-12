@@ -604,16 +604,21 @@ func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*work
 		var reasonValue *string
 		// reasonEmptyCond：仅当库中 status_reason 为空/未记录时才写巡检泛化原因（见下方分支）。
 		reasonEmptyCond := false
+		// reasonClearCond：本拍要清空库中 status_reason（巡检明确健康）。清空必须附加来源条件，
+		// 只清心跳自己写的巡检原因（见下方 ② 与 statusReasonSourceWorker 说明）。
+		reasonClearCond := false
 		// FR-459：健康巡检原因 → instances.status_reason。
 		//   - 熔断原因（health=="circuit_broken"）是需要在面板可见的具体升级原因 → 恒写入；
 		//   - CRASHED 的巡检原因是泛化文案（如「实例已崩溃…」），**不得覆盖 CP 已写入的具体原因**
 		//     （如「未绑定 JDK」「Worker 操作失败: …」，FR-312）：仅在库中原因为空时补写；
 		//   - 其余情况（假死/嫌疑）按上报写入，使假死在面板与健康墙可见；
-		//   - 巡检明确健康（health=="healthy"）且无原因 → 清空历史原因（假死已恢复）。
+		//   - 巡检明确健康（health=="healthy"）且无原因 → 清空历史原因（假死已恢复），
+		//     但仅限心跳自己写的巡检原因；CP 写入的失败原因须留存（见 ②）。
 		// 老 Worker 不上报 health/status_reason（均空），此分支不触发，保持既有语义。
 		switch {
 		case s.StatusReason == "" && status == model.InstanceStatusRunning && s.Health == healthFaultHealthy:
 			reasonValue = &emptyReason
+			reasonClearCond = true
 		case s.StatusReason == "":
 			// 无原因可写（含老 Worker / 健康实例）：不动 status_reason。
 		case s.Health == healthFaultCircuitBroken:
@@ -642,6 +647,12 @@ func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*work
 
 		// ② status_reason 单独写：泛化原因场景附加「库中原因为空」条件；DAMAGED 守卫与 status 一致，
 		//    以免把巡检原因写到不打算改动状态的损毁实例上。
+		//    来源标记一并与正文同写（见 statusReasonSourceWorker）：心跳写下的原因归心跳所有，
+		//    下一拍健康心跳才清得掉、健康墙才据它判降级。
+		//    清空路径（reasonClearCond）反过来只作用于 status_reason_source='worker' 的行：
+		//    CP 写入的生命周期失败原因（如「重启前同步最新启动规格失败，已取消重启: …」）必须留存，
+		//    不能被下一拍 RUNNING+healthy 的心跳抹平成空；同时把来源复位为空串，避免残留的
+		//    'worker' 标记让「CP 随后写入的原因」被误判成心跳自有原因而在将来被清掉。
 		if reasonValue != nil {
 			reasonQ := h.db.Model(&model.Instance{}).Where("uuid = ?", s.InstanceUuid)
 			if damagedGuard {
@@ -650,7 +661,15 @@ func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*work
 			if reasonEmptyCond {
 				reasonQ = reasonQ.Where("status_reason IS NULL OR status_reason = ''")
 			}
-			if err := reasonQ.Update("status_reason", *reasonValue).Error; err != nil {
+			reasonSource := statusReasonSourceWorker
+			if reasonClearCond {
+				reasonQ = reasonQ.Where("status_reason_source = ?", statusReasonSourceWorker)
+				reasonSource = ""
+			}
+			if err := reasonQ.Updates(map[string]interface{}{
+				"status_reason":        *reasonValue,
+				"status_reason_source": reasonSource,
+			}).Error; err != nil {
 				slog.Warn("同步实例状态原因失败", "instanceUUID", s.InstanceUuid, "state", s.State, "error", err)
 			}
 		}
@@ -775,6 +794,11 @@ const (
 	healthFaultCircuitBroken = "circuit_broken"
 )
 
+// statusReasonSourceWorker 是 instances.status_reason_source 的 Worker 心跳来源标记：
+// 该 status_reason 由心跳携带的健康巡检结论写入，心跳可以清空/覆盖；
+// 其余取值（含空串=历史行）表示原因是 CP 写入的生命周期失败原因，心跳不得抹平。
+const statusReasonSourceWorker = "worker"
+
 // maybeNotifyCircuitBroken 在心跳上报健康熔断时为实例投递站内信告警（FR-459 T4）。
 // 按 nodeUUID+uuid 去重：原因未变化不重复发信；实例恢复（health 不再为熔断）时清除记录。
 func (h *ControlPlaneHandler) maybeNotifyCircuitBroken(nodeUUID string, s *workerpb.InstanceState) {
@@ -845,9 +869,15 @@ func (h *ControlPlaneHandler) reconcileMissingInstances(node model.Node, reporte
 		switch {
 		case evErr == nil && hasEvidence && running:
 			// 证据确认仍在跑：保持当前态 + 标 statusReason（消除通道抖动误判），清宽限计数。
+			// 该文案同属**心跳侧巡检**结论（描述「心跳清单暂缺」这一通道状态），来源标记按 worker 写：
+			// 实例重新出现在心跳清单且健康时应被清掉（否则面板长期残留过期对账文案），
+			// 健康墙的 degraded 口径也据此把它算作降级信号。
 			h.clearReconcileGrace(m.UUID)
 			if err := h.db.Model(&model.Instance{}).Where("uuid = ?", m.UUID).
-				Update("status_reason", "进程侧证据显示实例仍在运行（心跳清单暂缺，已延迟对账）").Error; err != nil {
+				Updates(map[string]interface{}{
+					"status_reason":        "进程侧证据显示实例仍在运行（心跳清单暂缺，已延迟对账）",
+					"status_reason_source": statusReasonSourceWorker,
+				}).Error; err != nil {
 				slog.Warn("更新对账 statusReason 失败", "instanceUUID", m.UUID, "error", err)
 			}
 		case evErr == nil && hasEvidence && !running:
@@ -861,7 +891,10 @@ func (h *ControlPlaneHandler) reconcileMissingInstances(node model.Node, reporte
 				h.clearReconcileGrace(m.UUID)
 				h.setStopped(m.UUID)
 			} else if err := h.db.Model(&model.Instance{}).Where("uuid = ?", m.UUID).
-				Update("status_reason", fmt.Sprintf("进程侧证据暂不可得，宽限对账中（第 %d/%d 拍）", beats, evidenceReconcileGraceBeats)).Error; err != nil {
+				Updates(map[string]interface{}{
+					"status_reason":        fmt.Sprintf("进程侧证据暂不可得，宽限对账中（第 %d/%d 拍）", beats, evidenceReconcileGraceBeats),
+					"status_reason_source": statusReasonSourceWorker,
+				}).Error; err != nil {
 				slog.Warn("更新对账 statusReason 失败", "instanceUUID", m.UUID, "error", err)
 			}
 		}
@@ -869,9 +902,20 @@ func (h *ControlPlaneHandler) reconcileMissingInstances(node model.Node, reporte
 }
 
 // setStopped 把实例置 STOPPED 并清空 statusReason。
+//
+// status 与 status_reason 必须拆成两条 UPDATE：原因清空附加了「来源为心跳」条件，
+// 若与 status 挤在同一条 UPDATE，CP 写入的失败原因（来源非 worker）会让整条 UPDATE 不匹配，
+// status 就永远停在 RUNNING（与 syncInstanceStates 里同一个踩坑模式）。
 func (h *ControlPlaneHandler) setStopped(uuid string) {
 	if err := h.db.Model(&model.Instance{}).Where("uuid = ?", uuid).
-		Updates(map[string]interface{}{"status": "STOPPED", "status_reason": ""}).Error; err != nil {
+		Update("status", "STOPPED").Error; err != nil {
 		slog.Warn("对账落 STOPPED 失败", "instanceUUID", uuid, "error", err)
+	}
+	// 只清心跳自写的巡检原因（假死/宽限对账等）；CP 写入的生命周期失败原因须留存供面板展示，
+	// 同时把来源复位为空串，避免残留的 'worker' 标记让后续 CP 写入的原因被误清。
+	if err := h.db.Model(&model.Instance{}).
+		Where("uuid = ? AND status_reason_source = ?", uuid, statusReasonSourceWorker).
+		Updates(map[string]interface{}{"status_reason": "", "status_reason_source": ""}).Error; err != nil {
+		slog.Warn("对账清空巡检原因失败", "instanceUUID", uuid, "error", err)
 	}
 }

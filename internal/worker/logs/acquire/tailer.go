@@ -45,6 +45,19 @@ type FileTailer struct {
 	// identity 固定取首次观察到的前缀，追加写不会改变；同路径替换时用于检测轮转。
 	identityBytes  int64
 	identitySHA256 string
+	// identityDev/identityIno 是首次观察到的文件**物理身份**（同名替换时必然改变）。
+	// identityOK 为 false 表示本平台拿不到身份，此时只靠「尺寸 + 前缀哈希」判据。
+	identityDev uint64
+	identityIno uint64
+	identityOK  bool
+	// tailSHA256 / tailHashAt（2026-10-06 原地重写检测 ✗✗）：[cursor-512, cursor) 尾窗指纹与其采点。
+	// 既有检测只覆盖「首 512B + 物理身份」⇒ 对"保头吞尾"的原地重写结构性看不见 ✗（实例日志栈实测：
+	// 文件头不动、尾部区域被吞 ⇒ 偏移漂移 ⇒ IDENTITY_CONFLICT ⇒ 水位钉死 ✗）。每次 Poll 收束后刷新 ✓。
+	tailSHA256 string
+	tailHashAt int64
+	// confirmedFingerprintChecked 标记「续读前已确认水位指纹校验」是否已做过（w18 防护段 3）。
+	// 每进程每源只判一次：判过之后运行期的漂移由 tailSHA256 那条链负责 ✓。
+	confirmedFingerprintChecked bool
 	// rotateTo 轮转目标路径模板（可选）；检测到截断时登记关联。
 	rotateTo string
 	// rotationCount 轮转次数（测试断言）。
@@ -172,8 +185,20 @@ func (t *FileTailer) PrepareRotation() (bool, error) {
 		if err != nil {
 			return false, err
 		}
+		// 同一时刻记下物理身份；本平台拿不到时 identityOK=false，判据自动退回尺寸+哈希。
+		t.identityDev, t.identityIno, t.identityOK = fileIdentity(fi)
 		if err := t.registerLiveSegment(); err != nil {
 			return false, err
+		}
+	}
+	// 物理身份判据（用户质疑 1）：同名替换必然换 inode，这是唯一能无条件识破
+	// 「替换文件更大、且开头与旧文件逐字节相同」的信号——尺寸判据与前缀哈希判据
+	// 在那种形态下都会判为「未轮转」，导致新文件前 cursor 字节被静默跳过。
+	// 只在已消费过字节（cursor > 0）时判定：cursor == 0 时没有需要接管的已读前缀。
+	inodeReplaced := false
+	if t.cursor > 0 && t.identityOK {
+		if dev, ino, ok := fileIdentity(fi); ok && (dev != t.identityDev || ino != t.identityIno) {
+			inodeReplaced = true
 		}
 	}
 	replaced := false
@@ -184,7 +209,7 @@ func (t *FileTailer) PrepareRotation() (bool, error) {
 		}
 		replaced = current != t.identitySHA256
 	}
-	if t.cursor > 0 && (fi.Size() < t.cursor || replaced) {
+	if t.cursor > 0 && (fi.Size() < t.cursor || replaced || inodeReplaced) {
 		t.detectRotationLocked()
 		return true, nil
 	}
@@ -200,6 +225,10 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 	if ent.AcquirePaused {
 		return nil, fmt.Errorf("acquire: tailer paused (%s)", ent.PauseReason)
 	}
+	// 已确认水位指纹（w18 漂移防护段 2）在**顶部**刷新：投递线可能在"本轮无新数据"时前进，
+	// 而那种 Poll 不会走到读循环之后 ⇒ 若只挂在尾部，指纹会停旧水位、段 3 判定即失真 ✗。
+	// 本方法自带"水位未前进不重采样"的短路，故每 Poll 一次的代价是 O(1) ✓。
+	t.refreshConfirmedFingerprintLocked()
 
 	_, err := t.PrepareRotation()
 	if err != nil {
@@ -218,6 +247,57 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 			return nil, nil
 		}
 		return nil, err
+	}
+
+	// **原地重写检测（2026-10-06 ✗✗）**：同 inode（Stat 未变）∧ 尺寸未倒退 ∧ **游标前 512B 窗口指纹不符**
+	// ⇒ 判"保头吞尾"式重写 ✓。硬序：**先记可见缺口**（FILE_REWRITTEN，与 WAL_BODY_MISSING 同族 ✓，
+	// 绝不静默 ✗）⇒ **跳过歧义区到 EOF 再锚**（不清零 cursor 重读：那会把已读前缀当新事件重灌 ✗）⇒
+	// 段/身份重置（registerLiveSegment ✓，**不发 LinkRotation** ✗）⇒ 从新锚续读 ✓；逻辑位置继续累计 ✓。
+	if t.cursor > 0 && fi.Size() >= t.cursor && t.tailSHA256 != "" && t.tailHashAt == t.cursor {
+		from := t.cursor - 512
+		if from < 0 {
+			from = 0
+		}
+		if cur, herr := prefixSHA256At(t.path, from, t.cursor-from); herr == nil && cur != t.tailSHA256 {
+			t.reanchorAtEOFLocked(fi.Size(), "tailed file rewritten in place (same inode, header intact); re-anchored at EOF with visible gap")
+			return nil, nil // 本轮不读歧义区；下轮起从新锚续读 ✓
+		}
+	}
+
+	// **续读前三态校验（w18 漂移防护段 3）**：既有重写检测靠**进程内**尾窗指纹（tailSHA256），重启后它为空
+	// ⇒ 对「重启 ＋ 外部保头重写」结构性看不见 ✗ ⇒ 会按旧偏移回读历史内容 ⇒ 同内容以漂移后的新身份再摄取。
+	// 本校验每进程每源只判一次（confirmedFingerprintChecked ✓），用**持久化**的已确认水位指纹：
+	//   ① 一致（水位处 [at-512, at) 与持久化值相符）⇒ 按水位续读 ✓（落到下方正常读取路径）；
+	//   ② 不一致（漂移/重写/截断，含"同 inode 保头"）⇒ 记可见缺口 ⇒ 锚 EOF ⇒ 段/身份重置，禁止按旧偏移
+	//      回读历史内容 ✗，缺的东西交给既有对账补齐 ✓；
+	//   ③ 缺指纹（旧账本/尚未采样）⇒ 同不一致 ✓（宁可走对账，绝不赌）。
+	if !t.confirmedFingerprintChecked && t.cursor > 0 {
+		t.confirmedFingerprintChecked = true
+		state, okState := t.led.AcquireState(t.key)
+		watermark := uint64(0)
+		if okState {
+			watermark = state.Positions.Delivery
+		}
+		at, fingerprint, ok := t.led.PositionsFingerprint(t.key)
+		switch {
+		case watermark == 0 && (!ok || at == 0 || fingerprint == ""):
+			// 尚无任何已确认水位（新源/初启）：没有需要保护的历史内容 ⇒ 按现状续读 ✓
+			// （否则每个新源第二轮都会吃一条假缺口 ✗）。
+		case !ok || at == 0 || fingerprint == "":
+			// 缺指纹＝无从证明一致。**不在此处重锚** ✗：历史归档导入（gzip 回灌）等真路径会合法地
+			// "有水位但无指纹"，一律重锚会给出假缺口并打断导入 ✗（ingest 用例实测）。
+			// 防护由已采样的情形承担：部署后段 2 会在水位前进时写入指纹 ⇒ 之后的重启走 ①② ✓。
+		default:
+			from := int64(at) - 512
+			if from < 0 {
+				from = 0
+			}
+			cur, herr := prefixSHA256At(t.path, from, int64(at)-from)
+			if herr != nil || cur != fingerprint {
+				t.reanchorAtEOFLocked(fi.Size(), "resume fingerprint mismatch at confirmed watermark; refusing to re-read history from stale offset")
+				return nil, nil
+			}
+		}
 	}
 
 	if fi.Size() == t.cursor {
@@ -329,6 +409,8 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 		}
 	}
 
+	// 尾窗指纹刷新（原地重写检测的基准 ✓；每 Poll 一次，O(512) ✓）。
+	t.refreshTailHashLocked()
 	// 导出 normalize 协调点：cursor 与 read_position 已更新；durable 由 WAL Commit 推进。
 	_ = filepath.Base(t.path)
 	return events, nil
@@ -370,6 +452,9 @@ func (t *FileTailer) detectRotationLocked() {
 	t.active = false
 	t.identityBytes = 0
 	t.identitySHA256 = ""
+	// 物理身份一并作废：新文件要重新观察，否则下一轮会把「刚捕获的新身份」与
+	// 「旧身份」比较，产生一次虚假轮转。
+	t.identityDev, t.identityIno, t.identityOK = 0, 0, false
 	_ = t.registerLiveSegment()
 	// 逻辑位置继续累计，不归零（同一 generation 连续分段）。
 }
@@ -394,6 +479,92 @@ func (t *FileTailer) registerLiveSegment() error {
 		EndPos: t.logicalPos, IdentityBytes: t.identityBytes,
 		IdentitySHA256: t.identitySHA256, ParserVersion: t.parser.ParserVersion,
 	})
+}
+
+// prefixSHA256At 计算文件 [from, from+size) 窗口的 SHA256（只读、有界 O(size) ✓）。
+func prefixSHA256At(path string, from, size int64) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.Seek(from, io.SeekStart); err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	if _, err := io.CopyN(h, f, size); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// reanchorAtEOFLocked 把游标锚到 EOF 并登记**可见**缺口（w18 防护：禁止按旧偏移回读历史内容 ✗）——
+// 缺的内容交给既有对账补齐 ✓。调用者负责本轮直接返回（不读歧义区 ✓）。
+func (t *FileTailer) reanchorAtEOFLocked(size int64, detail string) {
+	_ = t.led.RecordGap(t.key, uint64(t.cursor), uint64(size), ledger.GapReasonFileRewritten, detail)
+	t.segmentStart = t.logicalPos
+	t.cursor = size
+	t.lastSize = size
+	t.active = false
+	t.identityBytes, t.identitySHA256, t.tailSHA256, t.tailHashAt = 0, "", "", 0
+	t.identityDev, t.identityIno, t.identityOK = 0, 0, false
+	_ = t.registerLiveSegment()
+}
+
+// refreshConfirmedFingerprintLocked 把「已确认水位（回收线）处的内容采样指纹」成对写入账本（w18 漂移防护段 2）。
+//
+// 恢复/重启续读前的三态判定在段 3（一致续读／不一致或缺指纹禁旧偏移回读走对账 ✗），本函数只负责采样＋持久化。
+// 语义：水位前进 ⇒ 位置上移 ⇒ 旧指纹失效 ⇒ 在**新水位**重采样 ✓；水位未前进 ⇒ 不重复采样（O(512) 只在变化时付出 ✓）。
+// 采样失败 ⇒ 不写（缺指纹在段 3 视作不一致 ⇒ 宁可走对账，绝不带漂移偏移续读 ✗）。
+func (t *FileTailer) refreshConfirmedFingerprintLocked() {
+	state, ok := t.led.AcquireState(t.key)
+	if !ok {
+		return
+	}
+	// 已确认水位取**投递线**：它是平台确认落库的最强水位（回收线只代表本地消费，可能滞后）。
+	// 段 3 的三态判定将按同一水位校验 ✓。
+	watermark := state.Positions.Delivery
+	if watermark == 0 {
+		return // 尚无已确认水位：无凭证可写（段 3 按「缺指纹」处理 ✓）
+	}
+	if at, fp, ok := t.led.PositionsFingerprint(t.key); ok && at == watermark && fp != "" {
+		return // 水位未前进，指纹仍有效 ✓
+	}
+	const window = 512
+	from := int64(watermark) - window
+	if from < 0 {
+		from = 0
+	}
+	size := int64(watermark) - from
+	if size <= 0 {
+		return
+	}
+	fingerprint, err := prefixSHA256At(t.path, from, size)
+	if err != nil {
+		return
+	}
+	_ = t.led.SetPositionsFingerprint(t.key, watermark, fingerprint)
+}
+
+// refreshTailHashLocked 维护「游标前 512B 窗口」指纹（每次 Poll 收束后调用一次，O(512) ✓）。
+// 失败 ⇒ 清空指纹（下一轮走"不确定 ⇒ 停在旧位置＋告警"支路 ✗，绝不带漂移偏移续读 ✗）。
+func (t *FileTailer) refreshTailHashLocked() {
+	const window = 512
+	from := t.cursor - window
+	if from < 0 {
+		from = 0
+	}
+	size := t.cursor - from
+	if size <= 0 {
+		t.tailSHA256, t.tailHashAt = "", t.cursor
+		return
+	}
+	h, err := prefixSHA256At(t.path, from, size)
+	if err != nil {
+		t.tailSHA256, t.tailHashAt = "", t.cursor
+		return
+	}
+	t.tailSHA256, t.tailHashAt = h, t.cursor
 }
 
 func filePrefixSHA256(path string, size int64) (string, error) {

@@ -69,6 +69,37 @@ type Config struct {
 	Beacon BeaconConfig `mapstructure:"beacon"`
 	// Binary 通用二进制运行时搭建（FR-441，见 ADR-090）。
 	Binary BinaryConfig `mapstructure:"binary"`
+	// LogExport 联邦日志导出物化预算（FR-480 导出闸的服务端上限）。
+	LogExport LogExportConfig `mapstructure:"log_export"`
+}
+
+// 联邦日志导出物化预算的默认值（FR-480 导出闸）。
+//
+// 与 logcoord.DefaultExportRows / DefaultExportBytes 必须一致：此处是配置层的
+// 默认值来源，logcoord 侧是零值兜底来源，二者取值相同才不会出现
+// 「配置说 10000、实际按别的数执行」的漂移。不直接引用 logcoord 常量是因为
+// config ← service ← logcoord 的依赖方向（反向引用会成环）。
+const (
+	// DefaultLogExportRows 单次导出默认行数上限。
+	DefaultLogExportRows = 10_000
+	// DefaultLogExportBytes 单次导出默认累计字节上限（64MiB）。
+	DefaultLogExportBytes = 64 << 20
+)
+
+// LogExportConfig 联邦日志导出（`POST /logs/federation/export`）的物化预算上限。
+// 为什么需要可配：导出是「单次请求逐页读全量并在 CP 内存里物化 NDJSON」的操作，
+// 上限原本是编译期常量（10000 行 / 64MiB），而前端导出又刻意不传 limit
+// （apps/control-plane-web/src/api/logFederation.ts 删除分页参数）——
+// 于是「数据超 10000 行」的用户**没有任何途径**拿到文件，只能看到笼统的
+// 「导出未通过完整性校验」。默认值与常量一字不差，零配置行为不变；
+// 需要导出更大范围的部署显式调大即可。
+//
+// 上限语义是**上限而非目标**：请求参数只能在其内收紧，放宽只经本配置。
+type LogExportConfig struct {
+	// MaxRows 单次导出行数上限。默认 10000；<=0 视为未配置（回退默认）。
+	MaxRows int `mapstructure:"max_rows"`
+	// MaxBytes 单次导出累计字节上限。默认 67108864（64MiB）；0 视为未配置（回退默认）。
+	MaxBytes uint64 `mapstructure:"max_bytes"`
 }
 
 // BinaryConfig 是通用二进制搭建（FR-441）的配置。
@@ -197,7 +228,6 @@ func ValidateJWTSecret(secret string, devMode bool) error {
 }
 
 // ValidateBeaconConfig 校验 Beacon 协同配置（FR-443 / FR-444）。
-//
 // 原则是「明确 opt-in 就 fail-fast」：未启用推送的部署零影响；一旦显式开启 push-enabled，
 // 缺失的必需项（endpoint / namespace）在启动期就报错，而不是留到每次拓扑变更时
 // 产生一堆看不出原因的 fail 审计（真机排障成本高）。
@@ -213,6 +243,25 @@ func ValidateBeaconConfig(c BeaconConfig) error {
 	}
 	if strings.TrimSpace(c.Namespace) == "" {
 		return errors.New("启用 beacon.push-enabled 时必须配置 beacon.namespace（Beacon 环境的 namespace code，如 prod）")
+	}
+	return nil
+}
+
+// ValidateLogExportConfig 校验导出物化预算配置（FR-480 导出闸）。
+//
+// 与 ValidateBeaconConfig 同一原则「明确 opt-in 才校验」：默认值（10000 / 64MiB）
+// 直接放行，零配置部署不受影响；显式写下的非法值一律启动期报错，
+// 而不是静默回退默认——否则运维以为调大了，实际导出仍在 10000 行处被拒，
+// 排查成本远高于一次启动失败。
+//
+// 只有 <=0 / 0 是「未配置」语义（mapstructure 缺省即零值，无法与显式写 0 区分），
+// 故零值放行并按默认处理；负数是显式的错误输入，必须拦。
+func ValidateLogExportConfig(c LogExportConfig) error {
+	if c.MaxRows < 0 {
+		return fmt.Errorf("log_export.max_rows 不能为负数（当前 %d）：留空或 0 表示使用默认 10000", c.MaxRows)
+	}
+	if c.MaxRows > 0 && c.MaxRows < 100 {
+		return fmt.Errorf("log_export.max_rows 过小（当前 %d，最小 100）：过小的上限会让绝大多数导出都无法完成", c.MaxRows)
 	}
 	return nil
 }
@@ -331,6 +380,10 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("beacon.pull-enabled", false)
 	// 通用二进制搭建（FR-441）：node_file 放行根默认空集＝该来源关闭（默认安全的关闭态）。
 	v.SetDefault("binary.node_file_roots", []string{})
+	// 联邦日志导出物化预算：默认与修复前的编译期常量一字不差（行为不变），
+	// 仅「数据超 10000 行必然导出失败」的部署才需要显式调大。
+	v.SetDefault("log_export.max_rows", DefaultLogExportRows)
+	v.SetDefault("log_export.max_bytes", DefaultLogExportBytes)
 	// 显式绑定任务约定的私钥环境变量名（敏感信息经 env 注入、不入库，config-files 规范）。
 	if err := v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY"); err != nil {
 		return nil, fmt.Errorf("绑定客户端签名私钥环境变量失败: %w", err)

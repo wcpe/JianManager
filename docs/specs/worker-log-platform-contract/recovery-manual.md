@@ -51,6 +51,11 @@ CP HTTP 管理面（默认全部经 `node.manage`/`log.read` 权限；cutover �
 | 运行时控制（含 install/启停） | `POST /api/v1/nodes/:id/log-runtime/:namespace/:action` |
 | 触发分区迁移 | `POST /api/v1/nodes/:id/log-runtime/migrate` |
 | 解决采集缺口 | `POST /api/v1/nodes/:id/log-runtime/ingest/resolve-gaps` |
+
+`ingest/resolve-gaps` 的请求面：可选 body `{"storageNamespace":"<源的整串 key>","reason":"<显式理由>"}`
+（`storageNamespace` 传**整串源 key**（`log_source_id` ＋ `/` ＋ 来源代次），不是库里的 `storage_namespace` 列）；
+操作人经 **`x-jm-operator`**、理由经 **`x-jm-reason`** 成对下传（CP 自动注入前者）。两键缺任一项时，
+对"无完整已发布投影"的源一律拒绝（见 §6-I）。
 | 归档状态 / 触发回灌 | `GET /api/v1/nodes/:id/log-archive/status`、`POST /api/v1/nodes/:id/log-archive/rehydrate` |
 | 上传审批 VL 资产 / 安装 | `POST /api/v1/log-runtime/assets/:os/:arch`、`POST /api/v1/nodes/:id/log-runtime/install` |
 
@@ -94,6 +99,26 @@ Worker 侧配置键（`worker.yml`，零配置默认关闭）：`log_sources`、
 - 逐 Worker 切换前完成能力确认、watermark、Legacy 保留预算预检；不足则不切换并报阻断原因。
 - 切换后实例与 Worker/Node 日志都停止新入 CP `logs`；未到期 Legacy 不受 platform 容量淘汰挤出。
 - 旧日志按行、新日志按 Multiline 事件时，未建等价映射前**禁止**拼接精确趋势。
+
+### I. 源"无完整已发布投影"（收尾死结，ADR-101 出口）
+
+- **现象**：`ingest/resolve-gaps`（整节点或源级）返回 `GAP_RESOLUTION_FAILED`，message 含
+  `… has no complete published projection` ⇒ 整节点收尾恒 409（表现为某实例 `partial`、
+  全量窗 `coverage.complete=false`、`duplicate_quality=unresolved`）。
+- **出口（显式、可审计）**：对该源发起**源级** resolve——`storageNamespace` 传**整串源 key**，
+  另带 `reason`（以已认证主体调用，CP 自动注入 `x-jm-operator`）⇒ Worker 记 ADR-101 放弃裁定
+  （`PERMANENTLY_LOST` ＋ 操作人 ＋ 理由，持久、跨重启存活、可由 `Entry.Abandonments` 审计）后放行 ✓。
+  ```bash
+  TOKEN=$(curl -s -X POST $API/auth/login -d '{"username":"…","password":"…"}' | jq -r .accessToken)
+  curl -s -X POST "$API/nodes/1/log-runtime/ingest/resolve-gaps" \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"storageNamespace":"<整串源 key>","reason":"ADR-101 永久空洞：该源从未有完整已发布投影"}'
+  # ⇒ {"state":"resolved"}
+  ```
+- **拒止面（不许放宽）**：缺操作人**或**缺理由 ⇒ 照旧拒绝；**零消费源**（read/durable/reclaim 全 0）
+  ⇒ 保持原报错（无可放弃之物，不写空区间留痕）。
+- **已知边界**：本出口只覆盖**账本层**阻塞。若阻塞在 **VL/覆盖层**（源有发布、位置已收敛，仍报同一
+  死结），裁定对整节点无效 ⇒ 属独立排期项，**禁止反复写入同一源**。
 
 ## 7. 变更控制
 

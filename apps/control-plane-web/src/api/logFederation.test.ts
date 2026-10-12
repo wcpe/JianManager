@@ -5,17 +5,31 @@
 import { describe, expect, it } from 'vitest'
 import {
   FEDERATED_NOT_READY_MESSAGE,
+  FederatedExportIncompleteError,
   buildFederationResult,
   isFederatedNotReady,
   isHttp404,
   legacyDegradeEnvelope,
   mapFederationEnvelope,
   normalizeFederationCoverage,
+  parseExportBlockedReasons,
   transportFailureEnvelope,
 } from './logFederation'
 import { PARTIAL_REASONS } from '@/lib/logs-federation'
 
 describe('logFederation client mapping（FR-482）', () => {
+  it('永久位置证据无损映射，旧Worker缺字段兼容，且不改变coverage/quality/导出闸', () => {
+    const evidence = { worker_id: 'trusted-worker', storage_namespace: 'shared', from: '18446744073709551614', to: '18446744073709551615', reason_code: 'PERMANENTLY_LOST', operator: '实名', at_utc: '2026-10-08T00:00:00Z', log_source_id: 'inst:1/stdout', source_generation: 'gen-1' }
+    const base = { sourceTag: 'federated' as const, items: [], coverage: { complete: true, targets: [] }, quality: { duplicate_quality: 'exact', stats_quality: 'exact' } }
+    const old = buildFederationResult(base)
+    const result = buildFederationResult({ ...base, ingest_position_gaps: [evidence, { ...evidence, log_source_id: 'inst:2/stdout' }] })
+    expect(result.response.ingestPositionGaps).toHaveLength(2)
+    expect(result.response.ingestPositionGaps?.[0]).toEqual({ workerId: 'trusted-worker', storageNamespace: 'shared', from: evidence.from, to: evidence.to, reasonCode: evidence.reason_code, operator: '实名', atUTC: evidence.at_utc, logSourceId: 'inst:1/stdout', sourceGeneration: 'gen-1' })
+    expect(old.response.ingestPositionGaps).toEqual([])
+    expect(result.response.coverage).toEqual(old.response.coverage)
+    expect(result.response.quality).toEqual(old.response.quality)
+    expect(result.exportAffordance).toEqual(old.exportAffordance)
+  })
   it('isHttp404 / isFederatedNotReady', () => {
     expect(isHttp404({ response: { status: 404 } })).toBe(true)
     expect(isHttp404({ response: { status: 500 } })).toBe(false)
@@ -43,6 +57,68 @@ describe('logFederation client mapping（FR-482）', () => {
   it('legacy 即便误传 complete=true 也不得当完整成功', () => {
     const cov = normalizeFederationCoverage({ complete: true }, 'legacy')
     expect(cov?.complete).toBe(false)
+  })
+
+  it('门面 pending 响应：pending 原样保留，不塞 EXPORT_INCOMPLETE 占位', () => {
+    const cov = normalizeFederationCoverage(
+      { complete: false, pending: true, partialReasons: [], targets: [] },
+      'federated',
+    )
+    expect(cov?.complete).toBe(false)
+    expect(cov?.pending).toBe(true)
+    // 未校验 ≠ 有缺失：不得把「导出不完整」占位原因套在 pending 上。
+    expect(cov?.partialReasons).toEqual([])
+  })
+
+  it('非 pending 的无原因 incomplete：仍塞 EXPORT_INCOMPLETE 保底（既有行为不回退）', () => {
+    const cov = normalizeFederationCoverage(
+      { complete: false, partialReasons: [], targets: [] },
+      'federated',
+    )
+    expect(cov?.pending).toBe(false)
+    expect(cov?.partialReasons).toContain(PARTIAL_REASONS.EXPORT_INCOMPLETE)
+  })
+
+  it('门面 pending → verifying：横幅校验中、导出入口开放（后端闸把关）', () => {
+    const result = buildFederationResult({
+      sourceTag: 'federated',
+      items: [{ id: 1 }],
+      view: { view_id: 'cv-pending' },
+      coverage: { complete: false, pending: true, partial_reasons: [], targets: [] },
+    })
+    expect(result.classified.state).toBe('verifying')
+    expect(result.classified.pendingVerification).toBe(true)
+    expect(result.banner.tone).toBe('info')
+    expect(result.exportAffordance.showDownload).toBe(true)
+  })
+
+  it('空串 next_cursor 归一为 null（空串不是有效游标）', () => {
+    const mapped = mapFederationEnvelope({
+      sourceTag: 'federated',
+      items: [],
+      coverage: { complete: true, targets: [] },
+      next_cursor: '',
+    })
+    expect(mapped.response.nextCursor).toBeNull()
+  })
+
+  it('导出闸阻断：解析 incomplete_reasons 并抛结构化错误（供 UI 展示原因）', () => {
+    const body = JSON.stringify({
+      artifact: null,
+      export_incomplete: true,
+      incomplete_reasons: ['quality_unresolved', 'coverage_incomplete', ''],
+    })
+    const reasons = parseExportBlockedReasons(body)
+    // 空串原因被过滤，未知码原样保留。
+    expect(reasons).toEqual(['quality_unresolved', 'coverage_incomplete'])
+    const err = new FederatedExportIncompleteError(reasons)
+    expect(err).toBeInstanceOf(Error)
+    expect(err.name).toBe('FederatedExportIncompleteError')
+    expect(err.reasons).toEqual(reasons)
+    // 非法输入不抛错：返回空 reasons，调用方走泛化失败文案。
+    expect(parseExportBlockedReasons('not-json')).toEqual([])
+    expect(parseExportBlockedReasons('{}')).toEqual([])
+    expect(parseExportBlockedReasons('{"incomplete_reasons": "x"}')).toEqual([])
   })
 
   it('ErrFederatedNotReady → engine_not_ready + 无导出下载', () => {

@@ -150,10 +150,11 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 	configSvc := service.NewConfigService(db, pool)
 	nodeSvc := service.NewNodeService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
-	// 测试环境无 Worker 连接：禁用后台异步委托。否则 Stop/Start 等同步转换后，
-	// delegateToWorker 会因节点不可达把状态异步覆盖为 CRASHED，且可能在用例结束
-	// 关闭 DB 后仍写库——这正是 TestNode_Drain_StopsRunning 整包跑偶发失败的根因。
-	instanceSvc.Shutdown()
+	// 测试环境无 Worker 连接：走委托旁路。否则 Stop/Start 等同步转换后，delegateToWorker 会因
+	// 节点不可达把状态异步覆盖为 CRASHED，且可能在用例结束关闭 DB 后仍写库——这正是
+	// TestNode_Drain_StopsRunning 整包跑偶发失败的根因。
+	// 用委托旁路而非 Shutdown：后者会把服务置为「正在关闭」，使随后的生命周期请求明确报错。
+	instanceSvc.SetDelegateBypassForTest(true)
 	// 回填实例服务，供节点排空（drain）测试复用实例停止逻辑（FR-048）。
 	nodeSvc.SetInstanceService(instanceSvc)
 	// 制品库需要数据根；测试用临时根，落在本包的进程级 TMPDIR（见 main_test.go

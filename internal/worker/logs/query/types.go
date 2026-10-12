@@ -2,6 +2,8 @@ package query
 
 import (
 	"fmt"
+	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
@@ -21,6 +23,8 @@ const DefaultProtocolVersion = "log-query/1"
 const (
 	DefaultLimit    uint32 = 200
 	DefaultMaxLimit uint32 = 1000
+	// DefaultMaxBytes 是整个请求共用的默认扫描额度，不是每个 range 的额度。
+	DefaultMaxBytes uint64 = 32 << 20
 )
 
 // ErrorCode 对应 proto LogErrorCode 的语义名（生成代码未落地前的本地权威）。
@@ -233,36 +237,82 @@ func CompareSortKey(a, b SortKey) int {
 	return 0
 }
 
+// safeTimePrefix 排除未完整时间组及更旧行，防止其它 owner 把全局游标带过缺失组。
+func safeTimePrefix(events []logtypes.Event, fence string) []logtypes.Event {
+	out := events[:0]
+	for _, ev := range events {
+		if compareUTCDESC(ev.EventTimeUTC, fence) < 0 {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
 // LessSortKey 报告 a 是否应排在 b 之前（结果序列更前）。
 func LessSortKey(a, b SortKey) bool { return CompareSortKey(a, b) < 0 }
 
 func compareUTCDESC(a, b string) int {
-	// 时间字符串按 RFC3339 字典序即可比较 UTC；空值排最后。
+	// RFC3339 的可选小数部分不能按字符串比较（"...00.1Z" 会排在
+	// "...00Z" 之前或之后取决于标点字节），必须按时间值比较；空值排最后。
 	if a == b {
 		return 0
 	}
 	if a == "" {
-		return 1 // empty sorts after real times in DESC
+		return 1
 	}
 	if b == "" {
 		return -1
 	}
+	ta, errA := time.Parse(time.RFC3339Nano, a)
+	tb, errB := time.Parse(time.RFC3339Nano, b)
+	if errA == nil && errB == nil {
+		switch {
+		case ta.After(tb):
+			return -1
+		case ta.Before(tb):
+			return 1
+		default:
+			return 0
+		}
+	}
+	// 非规范时间仍保持确定性排序，避免排序比较器不传递。
 	if a > b {
-		return -1 // newer first
+		return -1
 	}
 	return 1
 }
 
 // SortEvents 按冻结排序键就地排序（结果序列序：最新在前）。
+//
+// 复杂度是可用性约束（P2-7）：排序责任已完全落在这里（VL 侧只按 `_time desc` 出块，
+// 全键次序由本函数与游标承接），而单次合并规模可达 10^5 行。旧实现的插入排序是 O(n²)：
+// 实测 n=20000 的逆序输入耗时 23.4s（约 1.2µs/次全键比较），10^5 行量级足以把查询线程
+// 拖死。改用 sort.SliceStable 后同规模约 10ms（接近 O(n log n)）。
+//
+// 必须用 SliceStable，不能用 Slice：全键相同的事件（同 source/record、仅 message 不同）
+// 必须保持输入相对次序——分页游标取 items[limit-1]，不稳定序会让同一键的行在两次调用间
+// 换位，进而重复或漏返。稳定序也是旧插入排序的既有语义，不得静默改变。
 func SortEvents(items []logtypes.Event) {
-	// 插入排序足够覆盖 foundation stub 规模；生产由 VL 侧排序。
-	for i := 1; i < len(items); i++ {
-		j := i
-		for j > 0 && LessSortKey(SortKeyOf(items[j]), SortKeyOf(items[j-1])) {
-			items[j], items[j-1] = items[j-1], items[j]
-			j--
-		}
+	// 预先解出全键，避免每次比较都重建 SortKey（旧实现对每对比较都调用 SortKeyOf，
+	// 是 O(n²) 之外的第二层放大）。
+	keys := make([]SortKey, len(items))
+	for i := range items {
+		keys[i] = SortKeyOf(items[i])
 	}
+	// 排序索引置换、再按置换重排事件：键与事件必须同步移动——直接在 items 上排序会
+	// 让 keys 与 items 错位（比较的键与被交换的元素不再对应），次序随即失真。
+	perm := make([]int, len(items))
+	for i := range perm {
+		perm[i] = i
+	}
+	sort.SliceStable(perm, func(a, b int) bool {
+		return LessSortKey(keys[perm[a]], keys[perm[b]])
+	})
+	sorted := make([]logtypes.Event, len(items))
+	for i, p := range perm {
+		sorted[i] = items[p]
+	}
+	copy(items, sorted)
 }
 
 // Cursor 是逻辑分页引用：只携带 view_id + sort key + page_limit。
@@ -433,6 +483,11 @@ func DefaultPartitionStatus(key catalog.PartitionKey, rec *catalog.Record, ref c
 			st.NotReadyReasons = append(st.NotReadyReasons, ReasonRecoveryRequired)
 		}
 		if len(st.NotReadyReasons) == 0 {
+			// 观测日志（2026-09-30）：这里是「有记录但判定不可查」的兜底；
+			// 打出原因与位置，就能终止“到底走的哪条分支”的猜测。
+			slog.Info("DefaultPartitionStatus：记录不可查，归因 RANGE_UNAVAILABLE",
+				"reasons", rv.PartialReasons, "owner", rec.Owner, "dir", rec.OwnerDirID,
+				"state", string(rec.MigrationState), "recoveryRequired", rec.RecoveryRequired)
 			st.NotReadyReasons = append(st.NotReadyReasons, ReasonRangeUnavailable)
 		}
 	}

@@ -55,6 +55,13 @@ func (f *fakeFR035ProxyWorker) WriteConfig(_ context.Context, req *workerpb.Writ
 	return &workerpb.WriteConfigResponse{Success: true}, nil
 }
 
+// ResyncInstances 支撑「创建后即时注册」钩子：幂等空实现并按条数回报 registered，
+// 生产路径的语义（真 Worker 的 ResyncInstances）不受影响；缺此方法会让嵌入空接口的
+// 测试替身在钩子调用处直接 nil 解引用 panic。
+func (f *fakeFR035ProxyWorker) ResyncInstances(_ context.Context, req *workerpb.ResyncInstancesRequest, _ ...grpc.CallOption) (*workerpb.ResyncInstancesResponse, error) {
+	return &workerpb.ResyncInstancesResponse{Registered: int32(len(req.GetInstances()))}, nil
+}
+
 type blockingFR035ProxyWorker struct {
 	fakeFR035ProxyWorker
 	started chan struct{}

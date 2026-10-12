@@ -1,0 +1,412 @@
+package vlrange
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/query"
+	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
+)
+
+func mergedTestEvent(logSourceID, sourceGen, projGen string, recordEnd uint64) logtypes.Event {
+	ev := logtypes.Event{
+		EventID:       "eid-" + logSourceID + "-" + projGen,
+		EventTimeUTC:  "2026-09-22T01:02:03Z",
+		CanonicalHash: "hash-" + logSourceID + "-" + projGen,
+	}
+	ev.Source.LogSourceID = logSourceID
+	ev.Source.SourceGeneration = sourceGen
+	ev.Record.End = recordEnd
+	if projGen != "" {
+		ev.Fields = map[string]string{projectionGenerationField: projGen}
+	}
+	return ev
+}
+
+func scopedRange(targetID, src, gen string, gens []string, seq uint64) query.AuthoritativeRange {
+	return query.AuthoritativeRange{
+		TargetID:         targetID,
+		Key:              queryKey(),
+		Owner:            catalog.OwnerHot,
+		ClosedVisibleSeq: seq,
+		Projection: &catalog.PublishedProjection{
+			SourceProjections: []catalog.SourceProjection{{
+				SourceGenerationRef:   catalog.SourceGenerationRef{LogSourceID: src, SourceGeneration: gen},
+				ProjectionGenerations: gens,
+				ClosedVisibleSeq:      seq,
+			}},
+		},
+	}
+}
+
+func TestMergedSearchQueryShape(t *testing.T) {
+	q := query.RangeQuery{Budget: query.Budget{Limit: 100, MaxBytes: 1 << 20}}
+	text := mergedSearchQuery([]string{"src-a", "src-b"}, q)
+	// in() 语法（PoC 实测比 OR 组快 ~4.6 倍）+ 管道与 searchQuery 同形。
+	require.Contains(t, text, `log_source_id:in("src-a","src-b")`)
+	require.Contains(t, text, projectionGenerationField)
+	require.Contains(t, text, "| sort by (_time desc)")
+	require.Contains(t, text, "| limit 303") // (页 100 + 1 前瞻) × 3
+	// 转义：字符串中的引号/反斜杠必须转义（与 selectorQuery 同款）。
+	escaped := mergedSearchQuery([]string{`a"b\c`}, q)
+	require.Contains(t, escaped, `log_source_id:in("a\"b\\c")`)
+}
+
+func TestRangeMatchesEventPredicates(t *testing.T) {
+	// scoped：仅接受 (src-a, gen-a, projgen ∈ {pgen-A-1}, record_end <= 100)。
+	scoped := scopedRange("inst:1", "src-a", "gen-a", []string{"pgen-A-1"}, 100)
+	// 非 scoped：接受 CoveredSourceGenerations 的 (src-b, gen-b)，
+	// 且 projection_generation 必须 ∈ {pgen-B}。
+	nonScoped := query.AuthoritativeRange{
+		TargetID: "inst:2",
+		Key:      queryKey(),
+		Owner:    catalog.OwnerHot,
+		Projection: &catalog.PublishedProjection{
+			CoveredSourceGenerations: []catalog.SourceGenerationRef{{LogSourceID: "src-b", SourceGeneration: "gen-b"}},
+			ProjectionGenerations:    []string{"pgen-B"},
+		},
+	}
+	// 无 Projection：回退 StorageNamespace 相等。
+	plain := query.AuthoritativeRange{
+		TargetID: "inst:3",
+		Key:      catalog.PartitionKey{StorageNamespace: "src-c", UTCDay: "2026-09-22"},
+		Owner:    catalog.OwnerHot,
+	}
+
+	cases := []struct {
+		name string
+		rng  query.AuthoritativeRange
+		ev   logtypes.Event
+		want bool
+	}{
+		{"scoped 命中", scoped, mergedTestEvent("src-a", "gen-a", "pgen-A-1", 100), true},
+		{"scoped 水位等于上界（<= 保留）", scoped, mergedTestEvent("src-a", "gen-a", "pgen-A-1", 100), true},
+		{"scoped 超水位", scoped, mergedTestEvent("src-a", "gen-a", "pgen-A-1", 101), false},
+		{"scoped 旧代次", scoped, mergedTestEvent("src-a", "gen-a", "pgen-A-OLD", 100), false},
+		{"scoped 错来源", scoped, mergedTestEvent("src-x", "gen-a", "pgen-A-1", 100), false},
+		{"scoped 错 source_generation", scoped, mergedTestEvent("src-a", "gen-other", "pgen-A-1", 100), false},
+		{"非 scoped 命中", nonScoped, mergedTestEvent("src-b", "gen-b", "pgen-B", 1000), true},
+		{"非 scoped 代次集合不符", nonScoped, mergedTestEvent("src-b", "gen-b", "pgen-OTHER", 1000), false},
+		{"非 scoped 来源不符", nonScoped, mergedTestEvent("src-z", "gen-b", "pgen-B", 1000), false},
+		{"无 Projection：按 namespace 命中", plain, mergedTestEvent("src-c", "any", "", 10), true},
+		{"无 Projection：来源不符", plain, mergedTestEvent("src-d", "any", "", 10), false},
+		{
+			"scoped 全 scope generation 为空 → 回退 namespace",
+			query.AuthoritativeRange{
+				TargetID: "inst:4",
+				Key:      catalog.PartitionKey{StorageNamespace: "src-e", UTCDay: "2026-09-22"},
+				Owner:    catalog.OwnerHot,
+				Projection: &catalog.PublishedProjection{
+					SourceProjections: []catalog.SourceProjection{{
+						SourceGenerationRef:   catalog.SourceGenerationRef{LogSourceID: "src-e", SourceGeneration: "gen-e"},
+						ProjectionGenerations: nil, // 空 → selectorQuery 会回退 NS
+					}},
+				},
+			},
+			mergedTestEvent("src-e", "gen-e", "whatever", 10),
+			true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, rangeMatchesEvent(tc.rng, tc.ev))
+		})
+	}
+
+	// range 级水位（rng.ClosedVisibleSeq）独立生效：scoped 内水位满足但 range 水位不满足。
+	rngSeq := scopedRange("inst:5", "src-a", "gen-a", []string{"pgen-A-1"}, 50)
+	require.False(t, rangeMatchesEvent(rngSeq, mergedTestEvent("src-a", "gen-a", "pgen-A-1", 51)))
+	require.True(t, rangeMatchesEvent(rngSeq, mergedTestEvent("src-a", "gen-a", "pgen-A-1", 50)))
+
+	// 无来源约束（NS 空）→ 永不匹配（保守：合并路径不放大可见范围）。
+	bare := query.AuthoritativeRange{TargetID: "inst:6", Key: catalog.PartitionKey{UTCDay: "2026-09-22"}}
+	require.False(t, rangeMatchesEvent(bare, mergedTestEvent("src-any", "g", "", 1)))
+}
+
+func TestSearchMergedFiltersDedupesAndAttributes(t *testing.T) {
+	var seenQuery string
+	var seenLimit string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/select/logsql/query", r.URL.Path)
+		seenQuery = r.URL.Query().Get("query")
+		seenLimit = r.URL.Query().Get("limit")
+		w.Header().Set("Content-Type", "application/json")
+		// 返回顺序为 VL 的 _time desc 语义：
+		// 1. src-a 当前代次（命中）
+		// 2. src-a 旧代次同 event_id 同 hash（应被谓词过滤——不属于任何 rng）
+		// 3. src-a 当前代次第二次出现（同 id 同 hash → 去重）
+		// 4. src-a 同 id 异 hash（保留 + 质量降级）
+		// 5. src-b 命中
+		// 6. src-a 超水位（应被过滤）
+		w.Write([]byte(
+			`{"_time":"2026-09-22T03:00:05Z","_msg":"a1","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}` + "\n" +
+				`{"_time":"2026-09-22T03:00:04Z","_msg":"a-old","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-OLD","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}` + "\n" +
+				`{"_time":"2026-09-22T03:00:03Z","_msg":"a1-dup","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}` + "\n" +
+				`{"_time":"2026-09-22T03:00:02Z","_msg":"a1-conflict","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"90","record_end":"100","level":"INFO","stream":"stdout","canonical_content_hash":"h2"}` + "\n" +
+				`{"_time":"2026-09-22T03:00:01Z","_msg":"b1","event_id":"e2","log_source_id":"src-b","source_generation":"gen-b","projection_generation":"pgen-B","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h3"}` + "\n" +
+				`{"_time":"2026-09-22T03:00:00Z","_msg":"a-beyond","event_id":"e3","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"101","record_end":"102","level":"INFO","stream":"stdout","canonical_content_hash":"h4"}` + "\n",
+		))
+	}))
+	defer srv.Close()
+
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL, AllowNonLoopback: true})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+
+	// 两个 range：scoped(src-a) + 非 scoped(src-b)——同 Owner 同天 → 合并。
+	nonScoped := query.AuthoritativeRange{
+		TargetID: "inst:2",
+		Key:      catalog.PartitionKey{StorageNamespace: "src-b", UTCDay: "2026-09-22"},
+		Owner:    catalog.OwnerHot,
+		Projection: &catalog.PublishedProjection{
+			CoveredSourceGenerations: []catalog.SourceGenerationRef{{LogSourceID: "src-b", SourceGeneration: "gen-b"}},
+			ProjectionGenerations:    []string{"pgen-B"},
+		},
+	}
+	rngs := []query.AuthoritativeRange{
+		scopedRange("inst:1", "src-a", "gen-a", []string{"pgen-A-1"}, 100),
+		nonScoped,
+	}
+	res, err := client.SearchMerged(context.Background(), rngs, query.RangeQuery{
+		TimeRange: query.TimeRange{FromUTC: "2026-09-22T00:00:00Z", ToUTC: "2026-09-23T00:00:00Z"},
+		Budget:    query.Budget{Limit: 100, MaxBytes: 1 << 20},
+	})
+	require.NoError(t, err)
+
+	// 合并查询文本：in() 覆盖两来源；limit 为合并预算（(页 100+1 前瞻) × 3 = 303）。
+	require.Contains(t, seenQuery, `log_source_id:in("src-a","src-b")`)
+	require.Equal(t, "303", seenLimit)
+
+	// 归因结果：a1(e1/h1) + a1-conflict(e1/h2 保留) + b1 —— 旧代次/重复/超水位被过滤。
+	require.Len(t, res.Items, 3)
+	require.Equal(t, "a1", res.Items[0].Message)
+	require.Equal(t, "a1-conflict", res.Items[1].Message)
+	require.Equal(t, "b1", res.Items[2].Message)
+	// 同 id 异 hash → 质量降级（不得宣称 exact）。
+	require.Equal(t, query.DupUnresolved, res.DuplicateQuality)
+	// 千字节级响应未达预算 → 未截断。
+	require.True(t, res.Exhausted)
+}
+
+// 跨天合并：窗口取各天并集、行归因跨天正确。
+// 回归守护（2026-10-08 生产缺陷）：曾因 SearchMerged 残留"同 UTC 天"防御，
+// 使 24h 跨天查询整组报错、全部 target 标 RANGE_UNAVAILABLE 返回 0 条。
+func TestSearchMergedAcrossDaysUsesUnionWindow(t *testing.T) {
+	var mu sync.Mutex
+	type win struct{ start, end string }
+	var wins []win
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		wins = append(wins, win{r.URL.Query().Get("start"), r.URL.Query().Get("end")})
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		// 两行分属两天（09-22 与 09-23），各自由对应 rng 的谓词接受。
+		w.Write([]byte(
+			`{"_time":"2026-09-22T20:00:00Z","_msg":"d1","event_id":"e1","log_source_id":"src-a","source_generation":"gen-a","projection_generation":"pgen-A-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}` + "\n" +
+				`{"_time":"2026-09-23T05:00:00Z","_msg":"d2","event_id":"e2","log_source_id":"src-b","source_generation":"gen-b","projection_generation":"pgen-B-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h2"}` + "\n",
+		))
+	}))
+	defer srv.Close()
+
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL, AllowNonLoopback: true})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+
+	day1 := scopedRange("inst:1", "src-a", "gen-a", []string{"pgen-A-1"}, 100)
+	day2 := scopedRange("inst:2", "src-b", "gen-b", []string{"pgen-B-1"}, 100)
+	day2.Key.UTCDay = "2026-09-23"
+
+	res, err := client.SearchMerged(context.Background(), []query.AuthoritativeRange{day1, day2}, query.RangeQuery{
+		TimeRange: query.TimeRange{FromUTC: "2026-09-22T12:00:00Z", ToUTC: "2026-09-23T12:00:00Z"},
+		Budget:    query.Budget{Limit: 100, MaxBytes: 1 << 20},
+	})
+	require.NoError(t, err, "跨天合并必须被接受（回归：曾整组报错返回 0 条）")
+	require.Len(t, res.Items, 2, "两天的行都应归因保留")
+
+	// 2026-10-08 三次修正：VL 单查窗口上限已放宽到 31d（覆盖 retention 全期与
+	// "all" 30 天窗的 31 天跨度）⇒ 常态窗口必须**单次查询**完成（v6 语义，
+	// VL sort+limit top-K 从最新分区早停），窗口 = 并集 ∩ TimeRange。
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, wins, 1, "31d 内的窗口必须单次查询完成，不得按天/按段拆分")
+	require.Equal(t, "2026-09-22T12:00:00Z", wins[0].start)
+	require.Equal(t, "2026-09-23T12:00:00Z", wins[0].end)
+}
+
+// 窗口超过 VL 单查上限（31d）时按滑动 31d 段从新到老切分（保留期外的防御路径），
+// 段内候选行达本页预算即停；每段 ≤ 31d。
+func TestSearchMergedSegmentsBeyondVLLimitAndStopsWhenEnoughRows(t *testing.T) {
+	var mu sync.Mutex
+	type win struct{ start, end string }
+	var wins []win
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		wins = append(wins, win{r.URL.Query().Get("start"), r.URL.Query().Get("end")})
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		// 150 行同源不同 id：第一段即够页（needRows = 101）。
+		var b strings.Builder
+		for i := 0; i < 150; i++ {
+			fmt.Fprintf(&b, `{"_time":"2026-10-10T05:%02d:%02dZ","_msg":"m%d","event_id":"e%d","log_source_id":"src-c","source_generation":"gen-c","projection_generation":"pgen-C-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h%d"}`+"\n",
+				i/60, i%60, i, i, i)
+		}
+		w.Write([]byte(b.String()))
+	}))
+	defer srv.Close()
+
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL, AllowNonLoopback: true})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+
+	// 跨度 40 天（09-01 → 10-10）：并集窗口 > 31d，必然切段。
+	rngs := []query.AuthoritativeRange{
+		scopedRange("inst:1", "src-c", "gen-c", []string{"pgen-C-1"}, 100),
+		scopedRange("inst:2", "src-c", "gen-c", []string{"pgen-C-1"}, 100),
+		scopedRange("inst:3", "src-c", "gen-c", []string{"pgen-C-1"}, 100),
+	}
+	rngs[0].Key.UTCDay = "2026-09-01"
+	rngs[1].Key.UTCDay = "2026-09-20"
+	rngs[2].Key.UTCDay = "2026-10-10"
+
+	res, err := client.SearchMerged(context.Background(), rngs, query.RangeQuery{
+		Budget: query.Budget{Limit: 100, MaxBytes: 1 << 20},
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Items, 150, "第一段返回的行全部保留")
+	require.False(t, res.Exhausted, "早停后更老段未查，不得宣称读完")
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, wins, 1, "第一段够页即停，不应查询更老段")
+	start, err := time.Parse(time.RFC3339, wins[0].start)
+	require.NoError(t, err)
+	end, err := time.Parse(time.RFC3339, wins[0].end)
+	require.NoError(t, err)
+	require.LessOrEqual(t, end.Sub(start), 31*24*time.Hour, "每段不得超过 VL 单查窗口上限")
+}
+
+// 段查询失败且已有结果时必须保留已收集行（回归：曾致 30 天实例视图 19s 后整组
+// RANGE_UNAVAILABLE、面板返回 0 条）；零结果时保持整组报错（不掩盖全量失败）。
+func TestSearchMergedSalvagesItemsWhenLaterSegmentFails(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n > 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// 第一段 20 行（不足 needRows=101）→ 必然继续查更老段 → 第二段失败。
+		var b strings.Builder
+		for i := 0; i < 20; i++ {
+			fmt.Fprintf(&b, `{"_time":"2026-10-10T05:%02d:%02dZ","_msg":"m%d","event_id":"e%d","log_source_id":"src-c","source_generation":"gen-c","projection_generation":"pgen-C-1","record_start":"1","record_end":"2","level":"INFO","stream":"stdout","canonical_content_hash":"h%d"}`+"\n",
+				i/60, i%60, i, i, i)
+		}
+		w.Write([]byte(b.String()))
+	}))
+	defer srv.Close()
+
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL, AllowNonLoopback: true})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+
+	rngs := []query.AuthoritativeRange{
+		scopedRange("inst:1", "src-c", "gen-c", []string{"pgen-C-1"}, 100),
+		scopedRange("inst:2", "src-c", "gen-c", []string{"pgen-C-1"}, 100),
+	}
+	rngs[0].Key.UTCDay = "2026-09-01"
+	rngs[1].Key.UTCDay = "2026-10-10"
+
+	res, err := client.SearchMerged(context.Background(), rngs, query.RangeQuery{
+		Budget: query.Budget{Limit: 100, MaxBytes: 1 << 20},
+	})
+	require.NoError(t, err, "已有结果时更老段失败不得整组报错")
+	require.Len(t, res.Items, 20, "已收集行必须保留")
+	require.False(t, res.Exhausted, "段失败后不得宣称读完")
+	// QRY-2：原因码必须是**真实原因**（段查询失败 = RANGE_UNAVAILABLE），不得复用
+	// BUDGET_EXCEEDED——后者会在 Search 回调里置 budgetHit，从而抑制 next_cursor，
+	// 使本注释承诺的「更老数据由游标翻页继续触达」在 worker 契约上不成立。
+	require.Contains(t, res.CoverageReasons, query.ReasonRangeUnavailable)
+	require.NotContains(t, res.CoverageReasons, query.ReasonBudgetExceeded,
+		"段查询失败不是预算问题：标成 BUDGET_EXCEEDED 会误导排障并抑制游标下发")
+
+	// 零结果时的对照：整组报错（不掩盖全量失败）。
+	mu.Lock()
+	calls = 100 // 让后续所有请求都失败
+	mu.Unlock()
+	_, err = client.SearchMerged(context.Background(), rngs, query.RangeQuery{
+		Budget: query.Budget{Limit: 100, MaxBytes: 1 << 20},
+	})
+	require.Error(t, err, "零结果时整组失败必须报错")
+}
+
+// UTC 天归因必须与分区日一致，不能借用另一日的代次或封闭水位。
+func TestReviewRangeUTCDayIsolation(t *testing.T) {
+	rng := scopedRange("inst:901", "src-a", "GenA", []string{"pgenGood"}, 10)
+	rng.Key = catalog.PartitionKey{StorageNamespace: "namespace-not-source", UTCDay: "2026-09-21"}
+	ev := mergedTestEvent("src-a", "GenA", "pgenGood", 10)
+	params, empty, err := (&Client{}).params(rng, query.RangeQuery{
+		TimeRange: query.TimeRange{FromUTC: "2026-09-21T00:00:00Z", ToUTC: "2026-09-23T00:00:00Z"},
+	})
+	if err != nil || empty {
+		t.Fatalf("单分区日参数应非空，实际 empty=%t err=%v", empty, err)
+	}
+	t.Logf("single_range_window=%s..%s range_day=%s event_time=%s", params.Get("start"), params.Get("end"), rng.Key.UTCDay, ev.EventTimeUTC)
+	control := ev
+	control.EventTimeUTC = "2026-09-21T01:02:03Z"
+	if !rangeMatchesEvent(rng, control) {
+		t.Fatal("同日事件应命中范围")
+	}
+	if rangeMatchesEvent(rng, ev) {
+		t.Fatal("另一日事件不得借用当前分区的代次或水位")
+	}
+}
+
+// 有效 scope 未命中时不得退回 namespace，避免绕过来源代次与水位约束。
+func TestReviewScopedNamespaceFallback(t *testing.T) {
+	rng := scopedRange("inst:901", "src-a", "GenA", []string{"pgenGood"}, 10)
+	rng.Key = catalog.PartitionKey{StorageNamespace: "src-a", UTCDay: "2026-09-22"}
+	rng.ClosedVisibleSeq = 100
+	text := selectorQuery(rng, query.RangeQuery{ClosedVisibleSeq: rng.ClosedVisibleSeq})
+	for _, required := range []string{`source_generation:="GenA"`, `projection_generation:="pgenGood"`, `record_end:<=10`} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("单范围选择器缺少约束 %q，实际=%q", required, text)
+		}
+	}
+	if !rangeMatchesEvent(rng, mergedTestEvent("src-a", "GenA", "pgenGood", 10)) {
+		t.Fatal("有效 scoped 事件应命中")
+	}
+	for _, tc := range []struct {
+		name string
+		gen  string
+		pgen string
+		end  uint64
+	}{
+		{name: "wrongSourceGeneration", gen: "wrongGen", pgen: "pgenGood", end: 9},
+		{name: "wrongProjectionGeneration", gen: "GenA", pgen: "pgenWrong", end: 9},
+		{name: "beyondScopedWatermark", gen: "GenA", pgen: "pgenGood", end: 11},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if rangeMatchesEvent(rng, mergedTestEvent("src-a", tc.gen, tc.pgen, tc.end)) {
+				t.Fatalf("失配事件不得通过 namespace 回退放行")
+			}
+		})
+	}
+}

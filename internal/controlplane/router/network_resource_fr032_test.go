@@ -25,7 +25,7 @@ func setupFR032Router(t *testing.T, db *gorm.DB) *gin.Engine {
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
-	instanceSvc.Shutdown()
+	instanceSvc.SetDelegateBypassForTest(true)
 	nodeSvc := service.NewNodeService(db)
 	nodeSvc.SetInstanceService(instanceSvc)
 	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, nil, nil)

@@ -157,6 +157,8 @@ type Heartbeat struct {
 	taskProvider TaskSnapshotProvider
 	// managedRuntimeProvider 由 Worker 主进程注入；nil 时保持旧 Worker 的 Heartbeat 兼容形状。
 	managedRuntimeProvider ManagedRuntimeProvider
+	// cpuReader 由主进程注入唯一 CPU owner；心跳只读已发布窗口。
+	cpuReader metrics.CPUReader
 	// proxyApplier 据心跳响应里 CP 下发的期望代理运行时重建 Worker 出站 client（FR-185，见 ADR-043）；
 	// 为 nil 时心跳不应用下发代理（Worker 仅用本地 yaml/env，向后兼容旧 CP）。
 	proxyApplier *proxyApplier
@@ -179,6 +181,11 @@ func New(controlPlaneAddr, nodeUUID, nodeSecret string, interval time.Duration, 
 		stopCh:           make(chan struct{}),
 		instanceProvider: provider,
 	}
+}
+
+// SetCPUReader 在 Start 前注入 Worker 唯一 CPU owner 的只读快照接口。
+func (h *Heartbeat) SetCPUReader(reader metrics.CPUReader) {
+	h.cpuReader = reader
 }
 
 // SetTaskProvider 注入运行中任务快照来源（FR-183，见 ADR-040）。
@@ -283,7 +290,7 @@ func (h *Heartbeat) sendHeartbeatWithRetry() {
 // buildHeartbeatRequest 组装本拍心跳负载（含节点指标、每实例直探快照、运行中任务），
 // 返回负载与该拍可移除的终态任务 id。采集只在此处发生一次，由重试循环复用。
 func (h *Heartbeat) buildHeartbeatRequest() (*workerpb.HeartbeatRequest, []string) {
-	req := register.CollectHeartbeatData(h.nodeUUID)
+	req := register.CollectHeartbeatData(h.nodeUUID, h.cpuReader)
 
 	// 附加实例状态快照 + 每实例直探快照（FR-060 时序留存 + FR-446/447）。
 	if h.instanceProvider != nil {

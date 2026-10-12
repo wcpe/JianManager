@@ -143,7 +143,7 @@ func newFR299Services(db *gorm.DB, pool *cpgrpc.ClientPool, jdkSvc *service.JDKS
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
-	instanceSvc.Shutdown()
+	instanceSvc.SetDelegateBypassForTest(true)
 	nodeSvc := service.NewNodeService(db)
 	nodeSvc.SetInstanceService(instanceSvc)
 	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-fr299", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}

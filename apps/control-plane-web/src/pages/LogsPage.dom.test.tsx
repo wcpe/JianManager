@@ -36,9 +36,17 @@ describe('LogsPage（mock 假后端）', () => {
     expect(screen.getByText(/heartbeat sent to control-plane/)).toBeInTheDocument()
   })
 
-  it('1000+ 一年日志数据下只渲染可视窗口', async () => {
-    loginMockUser()
-    renderWithProviders(<LogsPage />)
+    it('1000+ 一年日志数据下只渲染可视窗口', async () => {
+      loginMockUser()
+      renderWithProviders(<LogsPage />)
+      // 默认时间窗为 24h（2026-09-30 性能依据）；本用例意图是「一年数据下的虚拟化渲染」，
+      // 故显式切到「全部时间」，不依赖默认值。时间范围是 Select（combobox），非按钮。
+      HTMLElement.prototype.hasPointerCapture ??= () => false
+      HTMLElement.prototype.setPointerCapture ??= () => {}
+      HTMLElement.prototype.releasePointerCapture ??= () => {}
+      HTMLElement.prototype.scrollIntoView ??= () => {}
+      await userEvent.click(screen.getAllByRole('combobox')[0])
+      await userEvent.click(await screen.findByRole('option', { name: '全部时间' }))
 
     const surface = await screen.findByTestId('logs-virtual')
     expect(Number(surface.dataset.totalCount)).toBeGreaterThanOrEqual(1000)

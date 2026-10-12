@@ -199,6 +199,8 @@ func toProtoQueryBase(req WorkerSearchRequest) *workerpb.LogQueryRequestBase {
 		Filter:            req.Filter,
 		PermissionScope:   "",
 		CancellationToken: "",
+		// 请求级豁免标记原样透传到 Worker（仅导出路径会置位）。
+		AllowProjectionDrift: req.AllowProjectionDrift,
 	}
 }
 
@@ -242,6 +244,75 @@ func statsQualityFromProto(v workerpb.LogStatsQuality) StatsQuality {
 	}
 }
 
+func coverageFromProto(c *workerpb.LogCoverage) *Coverage {
+	if c == nil {
+		return nil
+	}
+	out := &Coverage{
+		Complete:         c.GetComplete(),
+		PartialReasons:   append([]string(nil), c.GetPartialReasons()...),
+		EnumerationState: enumerationStateFromProto(c.GetEnumerationState()),
+	}
+	for _, target := range mapCoverageTargets(c.GetTargets()) {
+		out.Targets = append(out.Targets, TargetCoverage{
+			TargetID:          target.TargetID,
+			State:             target.State,
+			Reasons:           append([]string(nil), target.Reasons...),
+			ClosedVisibleSeq:  target.ClosedVisibleSeq,
+			CatalogGeneration: target.CatalogGeneration,
+		})
+	}
+	return out
+}
+
+// coverageBudgetCut 同时检查顶层与逐目标原因，不能用逐目标 success 抹去总预算截断。
+func coverageBudgetCut(c *Coverage) bool {
+	if c == nil {
+		return false
+	}
+	reasons := append([]string(nil), c.PartialReasons...)
+	for _, t := range c.Targets {
+		reasons = append(reasons, t.Reasons...)
+	}
+	for _, r := range reasons {
+		if strings.EqualFold(r, "BUDGET_EXCEEDED") || strings.EqualFold(r, "TRUNCATED") {
+			return true
+		}
+	}
+	return false
+}
+
+func positionGapsFromProto(gaps []*workerpb.IngestPositionGap) []IngestPositionGap {
+	var out []IngestPositionGap
+	for _, g := range gaps {
+		if g == nil {
+			continue
+		}
+		item := IngestPositionGap{
+			StorageNamespace: g.GetStorageNamespace(), From: strconv.FormatUint(g.GetFrom(), 10), To: strconv.FormatUint(g.GetTo(), 10),
+			ReasonCode: g.GetReasonCode(), Operator: g.GetOperator(), AtUTC: g.GetAtUtc(),
+			LogSourceID: g.GetLogSourceId(), SourceGeneration: g.GetSourceGeneration(),
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func enumerationStateFromProto(v workerpb.LogEnumerationState) EnumerationState {
+	switch v {
+	case workerpb.LogEnumerationState_LOG_ENUMERATION_OPEN:
+		return EnumOpen
+	case workerpb.LogEnumerationState_LOG_ENUMERATION_EXHAUSTED:
+		return EnumExhausted
+	case workerpb.LogEnumerationState_LOG_ENUMERATION_STALE:
+		return EnumStale
+	case workerpb.LogEnumerationState_LOG_ENUMERATION_CANCELLED:
+		return EnumCancelled
+	default:
+		return ""
+	}
+}
+
 func mapSearchResponse(resp *workerpb.LogSearchResponse, err error) (*WorkerSearchResponse, error) {
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
@@ -260,18 +331,22 @@ func mapSearchResponse(resp *workerpb.LogSearchResponse, err error) (*WorkerSear
 		if v := resp.GetView(); v != nil {
 			out.ViewID = v.GetViewId()
 		}
+		out.Coverage = coverageFromProto(resp.GetCoverage())
 		out.Targets = mapCoverageTargets(resp.GetCoverage().GetTargets())
 		return out, nil
 	}
 	out := &WorkerSearchResponse{
-		ViewID:     resp.GetView().GetViewId(),
-		NextCursor: resp.GetNextCursor(),
-		Exhausted:  resp.GetExhausted(),
-		Targets:    mapCoverageTargets(resp.GetCoverage().GetTargets()),
-		Quality:    qualityFromProto(resp.GetQuality()),
+		ViewID:             resp.GetView().GetViewId(),
+		NextCursor:         resp.GetNextCursor(),
+		Exhausted:          resp.GetExhausted(),
+		Coverage:           coverageFromProto(resp.GetCoverage()),
+		IngestPositionGaps: positionGapsFromProto(resp.GetIngestPositionGaps()),
+		Targets:            mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Quality:            qualityFromProto(resp.GetQuality()),
 	}
 	// !exhausted + next_cursor 是正常分页，不是资源截断。资源截断由 coverage
 	// 原因显式表达，不能把页大小误报为不完整结果。
+	out.Truncated = coverageBudgetCut(out.Coverage)
 	for _, target := range out.Targets {
 		for _, reason := range target.Reasons {
 			if reason == "BUDGET_EXCEEDED" || reason == "TRUNCATED" {
@@ -328,10 +403,12 @@ func mapStatsResponse(resp *workerpb.LogStatsResponse, err error) (*WorkerStatsR
 		return out, nil
 	}
 	out := &WorkerStatsResponse{
-		ViewID:  resp.GetView().GetViewId(),
-		Targets: mapCoverageTargets(resp.GetCoverage().GetTargets()),
-		Quality: qualityFromProto(resp.GetQuality()),
+		ViewID:   resp.GetView().GetViewId(),
+		Coverage: coverageFromProto(resp.GetCoverage()),
+		Targets:  mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Quality:  qualityFromProto(resp.GetQuality()),
 	}
+	out.Truncated = coverageBudgetCut(out.Coverage)
 	for _, p := range resp.GetPoints() {
 		agg := StatsAggregate{
 			Count: p.GetCount(),

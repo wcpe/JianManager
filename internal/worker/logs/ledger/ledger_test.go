@@ -273,3 +273,58 @@ func TestReleaseRequiresReason(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// FR-496 加固：账本修订号必须在**每一个**写路径上推进——上层「只持久化变更源」依赖它是
+// 可靠判据，漏推进一处就会把该源的更新静默漏落库。
+//
+// 转红说明：删掉某个写方法里的 touch（或把推进点从 require 挪走），本用例即红——
+// 对应源修订号不变，上层的增量持久化便跳过该源。
+func TestLedgerRevisionAdvancesOnEveryMutation(t *testing.T) {
+	key := keyOf("rev", "g1")
+	led := New()
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "rev", SourceGeneration: "g1"})
+
+	type mutation struct {
+		name string
+		run  func()
+	}
+	segment := Segment{Path: "/data/rev.log", Kind: SegmentLive, StartPos: 0, EndPos: 100}
+	mutations := []mutation{
+		{"AdvanceRead", func() { _ = led.AdvanceRead(key, 10) }},
+		{"AdvanceDurable", func() { _ = led.AdvanceDurable(key, 10) }},
+		{"RecordDelivery", func() { _ = led.RecordDelivery(key, 0, 10, logtypes.DeliveryRequestDone) }},
+		{"RegisterSegment", func() { _ = led.RegisterSegment(key, segment) }},
+		{"LinkRotation", func() { _ = led.LinkRotation(key, "/data/rev.log", "/data/rev.1.log", 100) }},
+		{"RecordGap", func() { _ = led.RecordGap(key, 0, 10, "TEST", "detail") }},
+		{"PauseAcquire", func() { _ = led.PauseAcquire(key, "disk full") }},
+		{"ResumeAcquire", func() { _ = led.ResumeAcquire(key) }},
+		{"RegisterRecovery", func() { _ = led.RegisterRecovery(key, RecoveryRef{SegmentID: "s1", State: logtypes.RecoveryStaged}) }},
+		{"TryReclaim", func() { _, _ = led.TryReclaim(key) }},
+		{"IncrementIngestSeq", func() { _, _ = led.IncrementIngestSeq(key) }},
+	}
+	// 让 TryReclaim 有可推进的靶子（先走完责任链）。
+	_ = led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone)
+	_ = led.RegisterRecovery(key, RecoveryRef{SegmentID: "s1", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 100})
+	_ = led.TransitionRecovery(key, "s1", logtypes.RecoveryWALResponsibilityXfer, "", "receiver")
+
+	for index, mutation := range mutations {
+		before := led.Revision(key)
+		mutation.run()
+		after := led.Revision(key)
+		if after <= before {
+			t.Fatalf("写方法 %q 之后修订号未推进（before=%d after=%d）", mutation.name, before, after)
+		}
+		_ = index
+	}
+	// Snapshot / Revision 是只读操作，不得推进修订号。
+	before := led.Revision(key)
+	_ = led.Snapshot()
+	_ = led.Revision(key)
+	if got := led.Revision(key); got != before {
+		t.Fatalf("只读操作改变了修订号：%d → %d", before, got)
+	}
+	// 新鲜账本不存在的源修订号为 0。
+	if got := led.Revision(keyOf("absent", "g1")); got != 0 {
+		t.Fatalf("未注册源修订号应为 0，实测 %d", got)
+	}
+}

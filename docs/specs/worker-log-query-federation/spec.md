@@ -51,3 +51,7 @@ QueryPlanner 创建并执行 Query View；Search/Stats/Fields/Facets/Tail/Rehydr
 - 每个响应返回 `complete/partial_reasons`、覆盖目标、缺失层、截断、积压、rehydrate 状态、duplicate_quality 和 stats_quality；partial 不得转成空成功。
 - Tail 明确区分 `FOLLOW_LIVE`（控制台原始流或实时订阅）与 `VIEW_BOUNDED`（标准化事件固定视图）；两者不共享“完整历史”语义。
 - FR-479 的跨层完整验收依赖 FR-477/478；只测 HOT 只能标 HOT 能力通过。
+- Search 正常路径保留 `fields → time sort → limit` 与 union 查询；仅在页边界同时间戳组完整性尚未证明时补取窄时间组，完整组按冻结复合键排序及过滤 cursor，不恢复整窗口多键全表排序。补取与跨段续读共用剩余字节预算；不完整组只能返回严格更新的安全前缀，不能发出越过缺失组的游标。
+- Search/Stats/Fields 采用有界增量调度，最多 8 个真实在途；先预留总扫描额度、完成归并后释放未用份额，零份额不调度。入站 `max_bytes=0` 默认整请求 32 MiB，执行时不能把零剩余额度转成默认额度；merged 各段及边界组共享额度。NDJSON 流式读取同时限制预读和超大单行，不先读完整超大行再检查。
+- fanout 截断以原始 Catalog ranges 计，不以合并后任务数偷换；Stats 发起前标 `BUDGET_EXCEEDED` 与 partial 统计质量。达到扫描额度或取消时停止调度并取消在途，正常 limit 分页不误标预算失败。
+- `LogSearchResponse.ingest_position_gaps` 单独返回人工永久放弃位置凭据，实际源/代次由采集账本提供；未知值不推断。它不改变查询时间覆盖、事件统计质量或导出判据；协议字段与 CP 无损 HTTP 形态见 [API.md](../../API.md)。
