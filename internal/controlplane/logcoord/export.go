@@ -171,7 +171,17 @@ func BuildExportWithCut(view View, coverage Coverage, quality Quality, items []E
 		res.Artifact = nil
 		return res
 	}
+	// **零行窗口也必须给出非 nil 的附件**（B-3，2026-10-12 修复）：
+	// `bytes.Buffer{}.Bytes()` 在**零写入**时返回 `nil`（已实测），而下游
+	// `router.log_federation.go` 的 `blocks := ... || res.Artifact == nil` 把 nil 判为
+	// 「导出未通过完整性校验」⇒ 「窗口内 0 行 + 覆盖 complete + quality exact」这一
+	// **完全合法**的导出会被谎报为不完整，返回 JSON 而非 NDJSON，且没有任何可执行的补救动作
+	// （缩小范围、调大上限都无效）。空窗口是常见场景（该实例该时段确实无日志），
+	// 方向虽 fail-closed，但命中的是「完整却零行」这一正常情形，故必须给出空附件而非 nil。
 	res.Artifact = buf.Bytes()
+	if res.Artifact == nil {
+		res.Artifact = []byte{}
+	}
 	return res
 }
 

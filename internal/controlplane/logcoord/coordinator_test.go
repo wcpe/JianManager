@@ -1466,3 +1466,47 @@ func TestReviewCachedWindowBinding(t *testing.T) {
 		})
 	}
 }
+
+// 回归（B-3，2026-10-12 修复）：**零行窗口**的导出必须给出**非 nil** 附件。
+//
+// 缺陷形态：`bytes.Buffer{}.Bytes()` 在零写入时返回 `nil`（已实测），而 router 侧
+// `blocks := ... || res.Artifact == nil` 把 nil 判为「导出未通过完整性校验」⇒
+// 「窗口内 0 行 + 覆盖 complete + quality exact」这一**完全合法**的导出被谎报为不完整，
+// 返回 JSON 而非 NDJSON，且没有任何可执行的补救动作（缩小范围/调大上限都无效）。
+// 空窗口是常见场景（该实例该时段确实无日志），方向虽 fail-closed，但命中的是正常情形。
+//
+// 转红方式（实测）：把 `if res.Artifact == nil { res.Artifact = []byte{} }` 删掉 ⇒
+// 断言①（附件必须非 nil）立即红。
+func TestExportEmptyWindowYieldsNonNilArtifact(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "t1", WorkerID: "w1", Readiness: ReadyOnline},
+	}}
+	w1 := &fakeWorker{
+		workerID: "w1",
+		// 零事件，但覆盖完整（该窗口确实无日志）。
+		searchItems: []Event{},
+		searchTarget: []WorkerTargetResult{
+			successTarget("t1", "w1", "s/g:1", "1"),
+		},
+	}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	coord := New(resolver, dialer)
+
+	res, err := coord.Export(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"t1"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+
+	// ① 核心断言：空窗口的附件必须非 nil（否则 router 会判 blocks=true 谎报不完整）。
+	require.NotNil(t, res.Artifact,
+		"零行窗口必须给出非 nil 附件：nil 会被 router 判为「导出未通过完整性校验」并返回 JSON 而非 NDJSON")
+	require.Empty(t, res.Artifact, "空窗口的附件内容应为空")
+
+	// ② 完整性判定不得因空窗口而翻转。
+	assert.False(t, res.ExportIncomplete, "空窗口不是「导出不完整」")
+	assert.True(t, res.Coverage.Complete, "前置：该窗口覆盖完整")
+	assert.False(t, res.BudgetExceeded)
+}
