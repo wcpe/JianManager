@@ -12,7 +12,7 @@ export { isDeepLink, landingPathOf } from '@/lib/hooks/use-workspace-navigation'
 import { landingPathOf } from '@/lib/hooks/use-workspace-navigation'
 
 /**
- * 工作区导航的唯一数据源（FR-496 阶段 6 补丁：从 `WorkspaceSidebar` 抽成独立模块）。
+ * 工作区导航的唯一数据源（FR-502 阶段 6 补丁：从 `WorkspaceSidebar` 抽成独立模块）。
  *
  * 为什么抽出来：顶栏（`ConsoleHeader`）与侧栏（`WorkspaceSidebar`）都要消费同一份
  * 「按权限裁剪的工作区列表 + 当前工作区」。此前顶栏只借用了一个独立成行的

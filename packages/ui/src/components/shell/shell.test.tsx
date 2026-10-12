@@ -7,7 +7,7 @@ import { SideNav, SideNavBottom, SideNavHead, SideNavResource, SideNavRow, SideN
 import { TopNav } from './TopNav'
 
 /**
- * 导航骨架外壳测试（FR-496 阶段 4）。
+ * 导航骨架外壳测试（FR-502 阶段 4）。
  *
  * 与阶段 3 的布局层测试同一取向：不测视觉，只锁**结构性契约**与**交互行为**——
  * `data-slot` / `data-*` 钩子、槽位透传、回调参数、折叠态、以及资源树最关键的那条

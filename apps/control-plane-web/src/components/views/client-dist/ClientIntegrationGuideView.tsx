@@ -6,7 +6,7 @@
  * @output ClientIntegrationGuideView（+ ClientIntegrationGuideViewProps、ClientUpdaterJarsInfo）
  * @sync apps/control-plane-web/src/components/ClientIntegrationGuide.tsx（容器）、
  *       apps/control-plane-web/src/components/ClientIntegrationGuide.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-107 接入指引、FR-259 楔子与更新核心拆分、FR-258 wedge 自动拉 core）
+ * @since FR-508（组件受控化迁包；原 FR-107 接入指引、FR-259 楔子与更新核心拆分、FR-258 wedge 自动拉 core）
  */
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

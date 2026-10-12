@@ -11,7 +11,7 @@ import { ALL_PERMISSION_NODE_IDS, DEFAULT_ROLE_NODES } from '@/lib/shared/roles'
 import WorkspaceSidebar from './WorkspaceSidebar'
 
 /**
- * 数据源整模块 mock（FR-496 阶段 6）：侧栏的资源树 / 分类计数 / 群组列表都来自这些 hook，
+ * 数据源整模块 mock（FR-502 阶段 6）：侧栏的资源树 / 分类计数 / 群组列表都来自这些 hook，
  * 用固定小数据集断言结构，不依赖假后端的规模与排序（那些由各页自己的 dom 用例守）。
  */
 vi.mock('@/api/nodes', () => ({
@@ -83,17 +83,17 @@ function loginAsGroupAdmin() {
 }
 
 /**
- * 新工作区侧栏（FR-496 阶段 6）。
+ * 新工作区侧栏（FR-502 阶段 6）。
  *
  * 只锁**结构与行为契约**（四段槽位、权限裁剪、激活判定、跳转目标、折叠态），不测视觉：
  * 这些契约是阶段 7 把其余页面迁到新外壳、以及后续删 `nav-config.ts` 六域定义时的安全网。
  *
- * FR-496 阶段 6 补丁：工作区切换从本模块的 `ConsoleWorkspaceBar` 并回顶栏，
+ * FR-502 阶段 6 补丁：工作区切换从本模块的 `ConsoleWorkspaceBar` 并回顶栏，
  * 那组用例随之迁到 `ConsoleHeader.workspaces.dom.test.tsx`（本文件只管侧栏自身）。
  * 折叠动画的契约也一并换真源：宽度过渡现在只作用于 `.jm-console-sidebar` 自身，
  * 由 `console-shell-motion.test.ts` 守（jsdom 没有样式计算，本文件只断言折叠态结构）。
  */
-describe('WorkspaceSidebar 工作区侧栏（FR-496 阶段 6）', () => {
+describe('WorkspaceSidebar 工作区侧栏（FR-502 阶段 6）', () => {
   beforeEach(() => {
     loginAsAdmin()
     useConsoleStore.setState({ sidebarCollapsed: false, lastWorkspaceKey: null })

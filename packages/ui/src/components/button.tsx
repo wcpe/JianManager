@@ -4,7 +4,7 @@
  * @input  lib/focus-ring（统一焦点环）、lib/interaction-overlay（交互层）、lib/utils 的 cn、Spinner
  * @output Button、buttonVariants、ButtonProps
  * @sync   改动行为时同步 button.test.tsx；导出变化时同步 index.ts
- * @since  FR-496
+ * @since  FR-502
  */
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
@@ -51,7 +51,7 @@ function hasVisibleText(node: React.ReactNode): boolean {
 const buttonVariants = cva(
   cn(
     "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap outline-none",
-    // FR-496 阶段 6：焦点环/过渡/禁用态全部改取 lib 里的统一常量，
+    // FR-502 阶段 6：焦点环/过渡/禁用态全部改取 lib 里的统一常量，
     // 组件只表达"用哪一种"，不再各自拼同一串类名（拼错时既不报错也很难发现）。
     interactionTransition,
     disabledState,
@@ -119,7 +119,7 @@ function Button({
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean
     /**
-     * 加载中（FR-496 阶段 6）：内置 Spinner + 自动禁用 + `aria-busy`。
+     * 加载中（FR-502 阶段 6）：内置 Spinner + 自动禁用 + `aria-busy`。
      *
      * 三个动作必须捆在一起：只转圈不禁用会重复提交，只禁用不转圈看起来像坏了，
      * 不标 `aria-busy` 则辅助技术用户完全不知道刚才那次点击在等什么。
@@ -127,7 +127,7 @@ function Button({
      */
     isLoading?: boolean
     /**
-     * 悬停提示（FR-496 阶段 6）。
+     * 悬停提示（FR-502 阶段 6）。
      *
      * 实现为原生 `title`，不是自绘气泡：气泡需要 wrapper 元素或 Portal，
      * 而 Button 有 139 处调用、多在 flex 行内与表格单元格里，插一层包裹会改变布局

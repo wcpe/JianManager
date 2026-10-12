@@ -1,5 +1,5 @@
 /**
- * 共享设计底座汇总入口（FR-496 阶段 1）。
+ * 共享设计底座汇总入口（FR-502 阶段 1）。
  *
  * packages/ui 的样式自此自包含：消费方 import 本文件一次，即获得
  *   theme-map.css  token → Tailwind utility 映射（@theme inline）

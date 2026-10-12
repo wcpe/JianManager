@@ -4,7 +4,7 @@ import { login } from './helpers'
 /**
  * FR-144 节点页直观化 · 单机（Playwright + mock 模式）验收。
  *
- * FR-177 先重做主从双栏；FR-496 阶段 6 又照原型 `nodesPage()` 拆成**列表态与详情态**：
+ * FR-177 先重做主从双栏；FR-502 阶段 6 又照原型 `nodesPage()` 拆成**列表态与详情态**：
  *   /nodes            → 列表态：集群概览（状态计数）+ 本地搜索 + 添加节点 + 节点卡片墙
  *   /nodes?node=<id>  → 详情态：对象头 + 分段工具
  *

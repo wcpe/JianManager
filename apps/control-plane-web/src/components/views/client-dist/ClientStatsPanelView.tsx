@@ -9,7 +9,7 @@
  * @output ClientStatsPanelView、ClientStatsPanelViewProps
  * @sync apps/control-plane-web/src/components/ClientStatsPanel.tsx、
  *       apps/control-plane-web/src/components/ClientStatsPanel.dom.test.tsx
- * @since FR-502（面板受控化迁包；原 FR-095 统计看板、FR-217/219 观测维度、FR-356 KPI 口径、
+ * @since FR-508（面板受控化迁包；原 FR-095 统计看板、FR-217/219 观测维度、FR-356 KPI 口径、
  *        FR-425 统一时间窗、FR-426/427/428 机器排行 / 热力图 / 洞察卡）
  */
 import type { ReactNode } from 'react'

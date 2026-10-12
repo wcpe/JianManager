@@ -4,7 +4,7 @@
  *        等原语、views/DangerConfirm（删除二次确认）、翻译上下文
  * @output BackupStoragesPageView、BackupStoragesPageViewProps、BackupStorageRow、BackupStorageForm、BackupStorageTestOutcome
  * @sync apps/control-plane-web/src/pages/BackupStoragesPage.tsx、apps/control-plane-web/src/pages/BackupStoragesPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-057 存储后端管理 + FR-338 编辑 + FR-072 表单校验）
+ * @since FR-508（组件受控化迁包；原页 FR-057 存储后端管理 + FR-338 编辑 + FR-072 表单校验）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

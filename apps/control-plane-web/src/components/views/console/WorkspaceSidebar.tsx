@@ -27,7 +27,7 @@ import { isDeepLink, landingPathOf } from '@/lib/hooks/use-workspace-navigation'
 import type { MemberStatusCounts } from '@/lib/networks/topology'
 
 /**
- * 工作区外壳侧栏（FR-496 阶段 6）：把「资源优先工作区」原型（`.tmp/设计/`）的侧栏接进主控台。
+ * 工作区外壳侧栏（FR-502 阶段 6）：把「资源优先工作区」原型（`.tmp/设计/`）的侧栏接进主控台。
  *
  * 【与 `ConsoleSidebar` 的关系：新增，不替换文件】
  * 本文件是 `ConsoleSidebar.tsx` 的**接替者**，但旧文件保留不删——渐进替换才有回退路径，
@@ -45,11 +45,11 @@ import type { MemberStatusCounts } from '@/lib/networks/topology'
  * 【能力对照：替换时哪些旧能力必须原样留下】
  * - 权限裁剪：与旧侧栏同语义同入口（`workspacesForPermissions` / `workspacesForRole`，FR-431）；
  * - 折叠态：仍由 `useConsoleStore.sidebarCollapsed` 驱动，宽度动画仍走 `jm-*` 那套 CSS
- *   （FR-496 阶段 6 补丁后，宽度过渡只作用于侧栏自身，见 {@link WorkspaceSidebar}）；
+ *   （FR-502 阶段 6 补丁后，宽度过渡只作用于侧栏自身，见 {@link WorkspaceSidebar}）；
  * - 收藏 / 最近打开（FR-293）：`ServerSelector` + `SidebarServerList` 整体搬进「收藏」段，逻辑未改；
  * - 移动端：`MobileConsoleNav` 不动，本组件在 `<sm` 依旧整条隐藏（`hidden sm:flex`）。
  *
- * 【原缺口已闭合（FR-496 阶段 6 补丁）】
+ * 【原缺口已闭合（FR-502 阶段 6 补丁）】
  * - 导航行的链接语义：`SideNavRow` 曾渲染 `<button>` + `navigate()`，拿不到 `<a href>` 的
  *   中键 / 新标签页语义。根因是 `<a>` 不允许嵌 `<button>`——只要行组件自己渲染 button，
  *   调用方就永远包不出真链接。现已把行组件改为渲染 `<div>`（只负责外观与激活态样式），
@@ -75,9 +75,9 @@ function navigableEntries(group: { children?: NavEntry[] }): NavEntry[] {
 }
 
 /**
- * 控制台侧栏（FR-496 阶段 6）：`ConsoleSidebar` 的接替者。默认导出，供 `DashboardPage` 直接挂载。
+ * 控制台侧栏（FR-502 阶段 6）：`ConsoleSidebar` 的接替者。默认导出，供 `DashboardPage` 直接挂载。
  *
- * 【折叠动画：宽度过渡只由侧栏自己承担（FR-496 阶段 6 补丁）】
+ * 【折叠动画：宽度过渡只由侧栏自己承担（FR-502 阶段 6 补丁）】
  * 旧外壳把宽度过渡放在内层 `jm-sidebar-drawer`、再给内容区加 `clip-path` + `translate3d` 补偿，
  * 靠「JS 320ms 定时器 + CSS 320ms 过渡」两个时钟对齐来假装内容没动。补丁改为原型 `.sidebar` 的做法：
  * **外层 `jm-console-sidebar` 自己过渡宽度**（`index.css`），内层抽屉 `width: 100%` 跟随，
@@ -135,7 +135,7 @@ export interface WorkspaceSidebarProps {
 }
 
 /**
- * 控制台侧栏（FR-496 阶段 6）：`ConsoleSidebar` 的接替者。
+ * 控制台侧栏（FR-502 阶段 6）：`ConsoleSidebar` 的接替者。
  *
  * 数据与路由一律由 props 注入（ADR-102）：本视图不触达 api / store / 路由。
  */
@@ -204,7 +204,7 @@ interface SectionsInjected {
 }
 
 /**
- * 工作区切换（FR-496 阶段 6 补丁：已并回顶栏 `ConsoleHeader`，不再独立成行）。
+ * 工作区切换（FR-502 阶段 6 补丁：已并回顶栏 `ConsoleHeader`，不再独立成行）。
  *
  * 阶段 6 曾在此处导出 `ConsoleWorkspaceBar`，以「不动 ConsoleHeader」为代价换渐进替换；
  * 本补丁把工作区切换并进 ui 包 `TopNav` 的 `workspaces` 槽位后，顶栏恢复成原型那样
@@ -601,7 +601,7 @@ function GroupResourceList({ data, onNavigate }: Pick<SectionsInjected, 'data' |
 }
 
 /**
- * 一行工作区导航（FR-496 阶段 6）：统一 `SideNavRow` 的调用口径。
+ * 一行工作区导航（FR-502 阶段 6）：统一 `SideNavRow` 的调用口径。
  * 行样式只有 ui 包一处真源，这里只负责「激活判定 / 折叠态可访问名 / 链接语义」三件事。
  *
  * 语义是**链接**，所以外层包 `<Link>` 拿真 `<a href>`：可聚焦、支持中键与 Ctrl+点击、

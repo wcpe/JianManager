@@ -6,8 +6,8 @@
  * @output AuditPageView、AuditPageViewProps、AuditUserOption
  * @sync apps/control-plane-web/src/pages/AuditPage.tsx、apps/control-plane-web/src/pages/AuditPage.dom.test.tsx、
  *        apps/control-plane-web/src/pages/page-loading-skeleton.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-015 审计日志检索 + FR-158 行详情展开 + FR-172 分页信封 +
- *        FR-303 action 键翻译 + FR-321 失败留痕 + FR-496 阶段 3 作用域条 / 阶段 6 视口裁剪与同壳骨架）
+ * @since FR-508（组件受控化迁包；原页 FR-015 审计日志检索 + FR-158 行详情展开 + FR-172 分页信封 +
+ *        FR-303 action 键翻译 + FR-321 失败留痕 + FR-502 阶段 3 作用域条 / 阶段 6 视口裁剪与同壳骨架）
  */
 import { useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -33,7 +33,7 @@ import { cn } from '@jianmanager/ui'
 const SENTINEL_ALL = '__all__'
 
 /**
- * 行高估算（px，FR-496 阶段 6 视口裁剪用）。行高由行内单元格的行数唯一决定：
+ * 行高估算（px，FR-502 阶段 6 视口裁剪用）。行高由行内单元格的行数唯一决定：
  * `px-3 py-2`(16) + 最高单元格 + `border-b`(1)，实测（Chromium 1440×900，root 16px）：
  * 单行 action 徽章 32.7 → 33；有翻译的 action 单元格叠两行（12px 标签 + 10px 原键角标）46.3 → 33+14。
  *
@@ -145,7 +145,7 @@ export function AuditPageView({
    */
   const [pickedUser, setPickedUser] = useState<{ id: string; name: string } | null>(null)
 
-  // 视口裁剪（FR-496 阶段 6）：数百行一次性进 DOM 是本页的主开销，只渲染滚动窗口内的行。
+  // 视口裁剪（FR-502 阶段 6）：数百行一次性进 DOM 是本页的主开销，只渲染滚动窗口内的行。
   // 展开行的详情正文长短不定（估算误差会让其后所有行偏移错位），故实测后回填。
   const expandedRef = useRef<HTMLDivElement>(null)
   const [expandedSize, setExpandedSize] = useState<{ id: number; px: number } | null>(null)
@@ -237,7 +237,7 @@ export function AuditPageView({
         }
       />
 
-      {/* 强筛选器：套作用域条（FR-496 阶段 3 布局规范） */}
+      {/* 强筛选器：套作用域条（FR-502 阶段 3 布局规范） */}
       <ScopeBar>
         {/*
           用户筛选用**服务端搜索**型选择器：候选只取前 N 条，键入经 `onUserQueryChange` 上报
@@ -302,7 +302,7 @@ export function AuditPageView({
         />
       </ScopeBar>
 
-      {/* FR-496 阶段 6 补丁：数据未到时不再只显示一行「加载中」文字。页头与筛选条本来就先渲染，
+      {/* FR-502 阶段 6 补丁：数据未到时不再只显示一行「加载中」文字。页头与筛选条本来就先渲染，
           数据区这里用**同壳骨架**（同一张 Panel + 同一条吸附列头 + 行占位）顶上，
           数据到达后原地替换——期间没有整块内容突然出现，也没有列头/页脚的位移。 */}
       {isLoading && total === undefined ? (
@@ -378,7 +378,7 @@ export function AuditPageView({
 }
 
 /**
- * 列表列头（FR-496 阶段 6 补丁抽出）：内容是静态列名，不依赖数据，
+ * 列表列头（FR-502 阶段 6 补丁抽出）：内容是静态列名，不依赖数据，
  * 因此加载态与就绪态共用同一份——骨架期间列名/列宽就已就位，数据到达只是「行长出来」。
  */
 function AuditColumnHeader() {

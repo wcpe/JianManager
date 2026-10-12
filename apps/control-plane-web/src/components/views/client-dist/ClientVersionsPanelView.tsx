@@ -9,7 +9,7 @@
  *         ClientVersionsPanelVersionDetail
  * @sync apps/control-plane-web/src/components/ClientVersionsPanel.tsx、
  *       apps/control-plane-web/src/components/ClientVersionsPanel.dom.test.tsx
- * @since FR-502（面板受控化迁包；原 FR-088 版本管理面板、FR-191 发布独立页、FR-214 制品预览）
+ * @since FR-508（面板受控化迁包；原 FR-088 版本管理面板、FR-191 发布独立页、FR-214 制品预览）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

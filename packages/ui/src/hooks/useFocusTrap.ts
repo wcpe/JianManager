@@ -3,7 +3,7 @@ import * as React from 'react'
 import { attemptFocus, getFocusableElements } from './focusable'
 
 /**
- * 焦点陷阱（FR-496 阶段 6）：把键盘焦点关在一个容器内，关闭时把焦点还回去。
+ * 焦点陷阱（FR-502 阶段 6）：把键盘焦点关在一个容器内，关闭时把焦点还回去。
  *
  * 用途：不基于 Radix 的自绘模态/抽屉（Radix `Dialog`/`Sheet` 自带陷阱，不要重复套用）。
  *

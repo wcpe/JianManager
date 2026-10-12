@@ -8,7 +8,7 @@
  *         ProvisionProxySubmitResult、PROVISION_PROXY_QUERY_INIT、needsProxyVersion
  * @sync apps/control-plane-web/src/components/ProvisionProxyDialog.tsx、
  *        apps/control-plane-web/src/components/ProvisionProxyDialog.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-035 搭建代理、FR-072 系统可获取项、FR-202 供给/部署流程）
+ * @since FR-508（组件受控化迁包；原 FR-035 搭建代理、FR-072 系统可获取项、FR-202 供给/部署流程）
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

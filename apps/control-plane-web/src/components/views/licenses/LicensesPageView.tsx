@@ -4,7 +4,7 @@
  *         Panel/Input/Badge/Button/StatCard/表格原语、翻译上下文
  * @output LicensesPageView、LicensesPageViewProps、LicenseDepEntry
  * @sync apps/control-plane-web/src/pages/LicensesPage.tsx、apps/control-plane-web/src/pages/LicensesPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-135 开源许可清单、FR-210 静态清单强断言）
+ * @since FR-508（组件受控化迁包；原页 FR-135 开源许可清单、FR-210 静态清单强断言）
  */
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

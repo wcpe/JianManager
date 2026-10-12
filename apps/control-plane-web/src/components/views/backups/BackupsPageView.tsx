@@ -4,7 +4,7 @@
  *        views/DangerConfirm（恢复与删除二次确认）、Panel/Table/StatusBadge/Button 等原语、翻译上下文
  * @output BackupsPageView、BackupsPageViewProps、BackupsInstancePickerArgs、BackupStorageChoice
  * @sync apps/control-plane-web/src/pages/BackupsPage.tsx、apps/control-plane-web/src/pages/BackupsPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-056 全量/增量备份 + FR-057 远程存储 + FR-151 进度轮询/汇总/链路依赖）
+ * @since FR-508（组件受控化迁包；原页 FR-056 全量/增量备份 + FR-057 远程存储 + FR-151 进度轮询/汇总/链路依赖）
  */
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

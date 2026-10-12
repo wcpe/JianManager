@@ -9,7 +9,7 @@ import { ALL_PERMISSION_NODE_IDS, DEFAULT_ROLE_NODES, ROLE_MEMBER, ROLE_PLATFORM
 import zh from '@/i18n/zh.json'
 
 /**
- * FR-496 阶段 5 的工作区导航数据层测试。
+ * FR-502 阶段 5 的工作区导航数据层测试。
  * 核心主张只有一条：**换结构不换权限语义**。因此每个断言都拿旧六域（nav-config.ts）
  * 当参照物比，而不是自证新数据「看起来对」。
  */
@@ -114,7 +114,7 @@ function assertPermissionEquivalence(nodes: Set<string>, admin: boolean, label: 
   }
 }
 
-describe('workspace-navigation：四工作区 × 组 × 页面（FR-496 阶段 5）', () => {
+describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5）', () => {
   it('工作区顺序、分组 key 与逐条页面归位对齐 CSV', () => {
     expect(WORKSPACES.map((w) => w.key)).toEqual(['ops', 'observability', 'operation', 'platform'])
     expect(WORKSPACES.map((w) => w.labelKey)).toEqual([

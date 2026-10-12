@@ -131,7 +131,7 @@ describe('ServerSelector DOM', () => {
     }
   })
 
-  // 键盘与焦点（FR-496）：弹层是自绘 portal，只声明了 `role="dialog" aria-modal="true"`。
+  // 键盘与焦点（FR-502）：弹层是自绘 portal，只声明了 `role="dialog" aria-modal="true"`。
   // 以下用例锁定这个声明的兑现契约——它们都不会抛错，去掉实现后只会静默失效
   // （Esc 关不掉、Tab 跑到遮罩背后的侧栏、关闭后焦点掉到 body），故必须逐条钉住。
   it('Esc 关闭弹层（自绘模态此前没有键盘出口）', async () => {

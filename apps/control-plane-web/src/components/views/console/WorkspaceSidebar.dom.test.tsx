@@ -138,7 +138,7 @@ function renderSidebar(props: Partial<ComponentProps<typeof WorkspaceSidebar>> =
   return { container, merged, onNavigate }
 }
 
-describe('WorkspaceSidebar（FR-496 工作区侧栏受控视图）', () => {
+describe('WorkspaceSidebar（FR-502 工作区侧栏受控视图）', () => {
   it('无当前工作区时不渲染四段内容，仅保留侧栏壳。', () => {
     const { container } = renderSidebar({ activeWorkspace: null })
     expect(container.querySelector('[data-slot="console-sidebar"]')).not.toBeNull()

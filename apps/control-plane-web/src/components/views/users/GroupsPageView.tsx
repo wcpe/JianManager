@@ -6,7 +6,7 @@
  *        Button/Panel/布局层原语、翻译上下文
  * @output GroupsPageView、GroupsPageViewProps、GroupPanel、GroupRow、GroupMemberChip、GroupsMembersDialogArgs
  * @sync apps/control-plane-web/src/pages/GroupsPage.tsx、apps/control-plane-web/src/pages/GroupsPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-156 用户组、FR-128 可寻址面板、FR-336 成员候选服务端搜索）
+ * @since FR-508（组件受控化迁包；原页 FR-156 用户组、FR-128 可寻址面板、FR-336 成员候选服务端搜索）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

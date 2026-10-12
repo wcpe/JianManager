@@ -11,8 +11,8 @@
  *         AttributionGauge、OverviewLinkArgs、
  *         OverviewMetricTotals、OverviewMetricTrend、OverviewMetricSnapshot、OverviewObservabilitySnapshot、OverviewAttributionSnapshot
  * @sync apps/control-plane-web/src/pages/OverviewPage.tsx、apps/control-plane-web/src/pages/OverviewPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-061 旗舰总览、FR-060 聚合历史曲线、FR-402 平台全景观测、
- *        FR-432 平台观测区权限对齐、FR-461 集群健康墙、FR-496 阶段 6 布局原语与渲染补丁）
+ * @since FR-508（组件受控化迁包；原页 FR-061 旗舰总览、FR-060 聚合历史曲线、FR-402 平台全景观测、
+ *        FR-432 平台观测区权限对齐、FR-461 集群健康墙、FR-502 阶段 6 布局原语与渲染补丁）
  */
 import { lazy, Suspense, useEffect, useMemo, type ReactNode, type UIEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -77,7 +77,7 @@ const AGGREGATION_LIMIT = 5
 const OVERVIEW_INSTANCE_ROW_HEIGHT = 36
 
 /**
- * 趋势序列降采样（FR-496 阶段 6 补丁）。
+ * 趋势序列降采样（FR-502 阶段 6 补丁）。
  *
  * 24h 范围服务端返回 **96 点/条**，而首页图表高 180px、宽约 400px——96 点远超实际可分辨的
  * 像素密度，纯属渲染负担。recharts 是 SVG 实现、**每个点都生成 DOM**：实测 4 个图表 × 96 点
@@ -705,7 +705,7 @@ export function OverviewPageView({
   const activeAlertRows = (activeAlerts ?? []).slice(0, AGGREGATION_LIMIT)
 
   /**
-   * 四条趋势合成一张图（FR-496 阶段 6 补丁）。
+   * 四条趋势合成一张图（FR-502 阶段 6 补丁）。
    *
    * 【为什么合并】React Profiler 埋点实测：首页整页渲染 283.9ms 中，
    * 4 个 `TimeSeriesChart` 占 **246ms（86.6%）**，而其余所有区块合计仅 24.7ms

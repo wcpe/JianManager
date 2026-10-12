@@ -13,7 +13,7 @@ import {
 } from './mock-polling'
 
 /**
- * 全局轮询控制（FR-496 阶段 6 补丁）。
+ * 全局轮询控制（FR-502 阶段 6 补丁）。
  * 断言的是「改写后的最终选项」——这才是 QueryObserver 排期时真正读的值，
  * 只断言内部状态的话，把 `defaultQueryOptions` 装饰写错（比如漏掉函数形式）也不会红。
  */
@@ -123,7 +123,7 @@ describe('installMockPollingControl', () => {
   })
 })
 
-describe('默认档「跟随原始」= 不干预（FR-496 阶段 6 补丁）', () => {
+describe('默认档「跟随原始」= 不干预（FR-502 阶段 6 补丁）', () => {
   it('静态间隔原样返回，不被统一覆盖', () => {
     const client = new QueryClient()
     installMockPollingControl(client)

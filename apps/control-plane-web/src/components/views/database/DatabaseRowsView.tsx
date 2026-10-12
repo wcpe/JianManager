@@ -3,7 +3,7 @@
  * @input lib/db-contracts、lib/db-rows-view、lib/utils、表格与表单原语、翻译上下文
  * @output DatabaseRowsView、DatabaseRowsViewProps、DatabaseRowsState
  * @sync apps/control-plane-web/src/components/database/DatabaseExplorer.tsx、apps/control-plane-web/src/pages/DatabasePage.dom.test.tsx、apps/control-plane-web/src/components/database/rows-view.test.ts
- * @since FR-502
+ * @since FR-508
  */
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'

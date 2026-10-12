@@ -92,7 +92,7 @@ export default function ServerSelector({
 
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // 键盘可达性（FR-496）：弹层此前只有 `role="dialog" aria-modal="true"` 两个声明，
+  // 键盘可达性（FR-502）：弹层此前只有 `role="dialog" aria-modal="true"` 两个声明，
   // 却没有配套的键盘与焦点管理——Esc 关不掉（只能点遮罩或关闭按钮），Tab 能一路跑到
   // 遮罩背后的侧栏与页眉，且屏读器仍读得到背景内容（ARIA 承诺了模态却没兑现）。
   // 这里接上共享焦点陷阱：Esc 交给 onOpenChange，Tab 在弹层内首尾环绕，关闭时还原焦点。

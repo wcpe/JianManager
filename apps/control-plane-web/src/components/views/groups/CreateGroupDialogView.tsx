@@ -3,7 +3,7 @@
  * @input form-validation、useFieldGate、FieldLabel/FieldError、Input/Textarea、Dialog/Button 原语、翻译上下文
  * @output CreateGroupDialogView、CreateGroupDialogViewProps、CreateGroupValues
  * @sync apps/control-plane-web/src/pages/GroupsPage.tsx
- * @since FR-502（组件受控化迁包；原 FR-156，兑现 FR-003）
+ * @since FR-508（组件受控化迁包；原 FR-156，兑现 FR-003）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

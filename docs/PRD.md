@@ -1,21 +1,19 @@
 # 产品需求文档（PRD）：JianManager
 
-> 需求单一真源与登记册：§4 一行一个 FR，记录范围、优先级、状态与交付版本。
-> 详细规格与验收见既有 specs；实施经过与版本历史见 CHANGELOG 和 Git，不在 PRD 重复。
+> 需求的单一真源（WHAT / WHY），也是产品的**需求登记册 + 路线图**。每个需求在 §4 加一行 FR（带优先级 + 状态），交付即标版本；**单功能的详细规格放 `docs/specs/<feature>/`，PRD 只保留「一行 FR + 状态」的索引级**。
 >
 > 结构遵循 SDD PRD 模板（§1-8）。演进规则见 `.claude/rules/doc-evolution.md`。
 
 ## 1. 背景与目标
 
-JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商的**多节点管理平台**。一个 Go + 内嵌 React 的**单二进制**部署 Control Plane，按需在各节点部署 Worker，统一管理游戏服实例的全生命周期、终端、文件、监控、告警、备份、Bot、玩家治理、
-业务对接与玩家客户端 OTA 分发。
+JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商的**多节点管理平台**。一个 Go + 内嵌 React 的**单二进制**部署 Control Plane，按需在各节点部署 Worker，统一管理游戏服实例的全生命周期、终端、文件、监控、告警、备份、Bot、玩家治理、业务对接与玩家客户端 OTA 分发。
 
 **价值主张**：把分散的多机游戏服运维收敛到一个面板——单二进制、零外部依赖即可起步，规模化时一键加节点。
 
 ### 非目标
 - 不做真正的多租户隔离（tenant_id）——以用户组替代（ADR-004）。
 - 不引入 Node.js / Python 作为后端服务（ADR-001）；不为前端单独配 nginx（go:embed，ADR-005）。
-- Worker 不直读写 CP 业务库、不向浏览器开放 HTTP；日志数据面本地存储遵循 ADR-094。
+- Worker 不直接读写数据库、不直接暴露 HTTP API 给浏览器（架构不变量）。
 - V1 不含 MFA、CP 高可用、JVM 深度诊断、真多租户（见 §4 范围外表）。
 
 ## 2. 角色
@@ -40,89 +38,120 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 
 > 状态取值：📋 计划 / 🔨 开发中 / ✅ 已交付@vX.Y.Z / ⏸️ 已延后 / ❌ 已废弃。
 > 优先级：P0(核心) / P1 / P2 / P3——为规划用，**已交付 / 已废弃后优先级无意义记 `—`**。
-> 状态交付须通过对应验收；标为“已交付@具体版本”。正式 tag 前可记下一开发版本，本次精简不代表发布。
+> 标 `已交付` 是有门的：仅该 FR 的 spec 验收全过 + 测试 / 真机通过后，由 `sdd-release-version` 发版统一标 `已交付@vX.Y.Z`；开发中不得自标。false-done 走 `sdd-fix-bug` 归真，撤 / 推迟走 `sdd-rollback-change`。
 
-### FR 处置规则（2026-11-01 定稿）
+**活跃 FR 详细规格索引**（PRD 只留索引行，详情见 spec）：
+- FR-433~439（2026-09-20 实例角色/群组拓扑 MCP 能力与压测稳定性修复批）：FR-433 实例角色可变更与 `beacon` 角色 / FR-434 群组服与拓扑 MCP 工具 / FR-435 实例分组 MCP 工具 / FR-436 daemon 孤儿 Java 接管 / FR-437 容量快照陈旧 / FR-438 bot-worker 事件循环过载 / FR-439 MCP 会话并发上限——**七项均免 spec**（改动集中且边界清晰：角色枚举扩展 + MCP 工具补齐 + 四项缺陷修复，随批交付）
+- FR-489（2026-09-28 MCP 端点无状态化与 Token 维度运维视图）→ `docs/specs/mcp-stateless-endpoint/spec.md`（+ **ADR-096**，部分取代 ADR-077 决策 5、修订 ADR-080 决策 6）；连带修订 FR-388/389/391、作废 FR-439
+- FR-499（2026-10-01 采集登记路径与长临界区解耦）→ `docs/specs/log-ingest-register-lock/spec.md`；含**行级锁审计表**与忙期实测数字；**免 ADR**（不改进程模型 / 协议 / 数据模型，只改进程内锁纪律与锁序）；**不改 CP 侧任何配套**（§3.6 明确回答响应语义影响）
+- FR-501（2026-10-02 日志成本治理：分层/采样/保留 + 冷层搬运）→ `docs/specs/log-cost-governance/spec.md`（+ **ADR-098** 保留/分层/归档、**ADR-099** 成本治理与不变量 R）；含**不变量 R**（区间守恒，R2/R2b 锚点）、**删前归档硬规则**（默认搬运 COLD、删除三闸默认全关）、分级档位与冷层窗口；**编号对账**：原 CHANGELOG 误标 FR-499，2026-10-02 改号为 FR-501
+- FR-494（2026-09-29 QQ 机器人告警通知通道）→ `docs/specs/qqbot-notification-channel/spec.md`；增强 FR-085（新增第 9 种通道类型 `qq`），不改既有 8 种通道行为；**免 ADR**（复用既有通道模式，未引入新进程 / 协议 / 数据模型）
+- FR-495（2026-09-29 QQ 机器人扫码接入）→ `docs/specs/qqbot-group-discovery/spec.md`；增强 FR-494：控制台扫码绑定机器人（`appId`/`appSecret`/`user_openid` 自动取得，终结手抄），密钥落 `<dataRoot>/etc/qq/` 并以 `${QQ-<appId>}` 引用。**群聊路径已从前端下线**（平台拒绝群主动消息 `40034105`）；网关与群发现代码保留待平台开放
+- FR-473~484（2026-09-20 Worker 日志平台底座受控规格）→ `docs/specs/worker-log-platform-contract/spec.md`、`worker-log-acquisition/spec.md`、`worker-log-normalizer/spec.md`、`worker-victorialogs-runtime/spec.md`、`worker-log-lifecycle/spec.md`、`worker-log-deep-archive/spec.md`、`worker-log-query-federation/spec.md`、`cp-log-query-coordinator/spec.md`、`log-ingest-cutover/spec.md`、`logs-center-tiered-ui/spec.md`；**Shared Contracts（FR-473）已冻结**；FR-474~484 实现规格状态为 **实现中（地基/接线）**，契约规格保持已冻结
+- FR-473~484（2026-09-20 Worker 日志平台底座受控规格）→ `docs/specs/worker-log-platform-contract/spec.md`、`worker-log-acquisition/spec.md`、`worker-log-normalizer/spec.md`、`worker-victorialogs-runtime/spec.md`、`worker-log-lifecycle/spec.md`、`worker-log-deep-archive/spec.md`、`worker-log-query-federation/spec.md`、`cp-log-query-coordinator/spec.md`、`log-ingest-cutover/spec.md`、`logs-center-tiered-ui/spec.md`；**Shared Contracts（FR-473）已冻结**；FR-473~484 实现规格状态为 **实现中（地基/接线）**，契约规格保持已冻结
+- FR-430（2026-09-10 客户端分发信息架构合并：三页[客户端分发/分发监控/安全中心]收敛为两页，观测页并入独立「客户端分发运维」`/client-dist-ops` 7 Tab；旧两条路由透传 query 重定向；全量日志双视图合一；补平台管理员守卫；页面 B 全量 i18n。纯前端零后端改动）→ `docs/specs/client-dist-ia-merge/spec.md`（+ ADR-088）
+- FR-425~429（2026-09-07 客户端分发监控统计优化批：三页[频道工作台/分发监控/安全中心]统一自定义时间筛选 / 机器级更新清单与钻取 / 更新活动热力图 / 概览洞察卡同环比与口径解读 / 布局统一重排；**UI mock 先行**——devmock 模式完成可演示再接真栈，当前工作区内直跑不建 worktree）→ 需 spec 的两项：FR-426 `docs/specs/client-dist-machine-drilldown/spec.md`、FR-428 `docs/specs/client-dist-insight-cards/spec.md`；免 spec 的三项：FR-425 / FR-427 / FR-429
+- FR-412~424（2026-08-26 控制台与实例界面重设计批）→ 需 spec 的六项：FR-415 / FR-418 / FR-419 `docs/specs/console-log-view-redesign/spec.md`（+ ADR-086 输出/输入分离取代 xterm 直通输入）、FR-420 / FR-421 `docs/specs/console-immersive-workspace/spec.md`（+ ADR-087 可见控制优先工作台，取代未入库的 tmux 前缀键提案）、FR-422 / FR-423 `docs/specs/instance-layout-redesign/spec.md`；免 spec 的六项：FR-412 / FR-413 / FR-414 / FR-416 / FR-417 / FR-424
+- FR-342~345（2026-07-16 迭代批：搭建损毁重建 / 实例系统级指标 / 环境变量管理 / 历史日志）→ FR-342 `docs/specs/provision-damaged-rebuild/`、FR-343 `docs/specs/instance-system-metrics/`、FR-344 `docs/specs/instance-env-vars/`、FR-345 `docs/specs/instance-log-history/`（四项均已交付@v0.18.0）
+- FR-335~340（2026-07-15 验收分诊批二：规模化与全栈补缺）→ FR-335 `docs/specs/topology-scale/`、FR-336 `docs/specs/users-search-pagination/`、FR-337 `docs/specs/tasks-pagination/`、FR-338 `docs/specs/backup-storage-update/`、FR-339 `docs/specs/console-players-backup-segments/`、FR-340 `docs/specs/metrics-batch-series/`；随批一并做的前端消费 gap：节点页聚合（gap:FR-270）/实例列表可供性（gap:FR-235）/超级工作台虚拟化（gap:FR-167）/备份实例选择器 Combobox/端口表虚拟化
+- FR-313（进程级崩溃诊断链路：环形缓冲 + 退出码快照上报持久化 + 前端崩溃诊断面板）→ `docs/specs/crash-diagnostics/spec.md`（需 spec，开发中创建）
+- FR-314（实例启动同步预检：预检 RPC + 同步报错不进 STARTING）→ `docs/specs/start-preflight/spec.md`（需 spec，开发中创建）
+- FR-305（反向隧道单消息尺寸上限统一治理：`ServerOptions()` 64MiB 在 grpctunnel 路径失效）→ `docs/specs/tunnel-message-size-guard/spec.md`（需 spec，开发中创建；宜随 FR-281 M1 一并处理）
+- FR-304（文件上传链路流式化：client-stream UploadFile 与 DownloadFile 对称）→ `docs/specs/upload-streaming/spec.md`（✅ 已交付@v0.15.0）
+- FR-298~301（节点运行时库：多运行时泛化 / 自动扫描 / Node.js 安装器 / Bot 接管 / 聚合刷新）→ `docs/specs/node-runtime-library/spec.md`
+- FR-306~307（节点包管理器 + 多 registry + 全局包可视化管理）→ `docs/specs/node-package-management/spec.md`
+- FR-308（bot-worker 下发部署 + NODE_PATH 全局依赖）→ `docs/specs/bot-worker-deploy/spec.md`
+- FR-302（导入现有服务器：就地接管 / 搬迁托管区）→ `docs/specs/import-existing-server/spec.md`
+- FR-128~162（控制台体验与可寻址性增强）→ `docs/specs/console-ux-enhancement/spec.md`
+- FR-124~127（JBIS 背包域）→ `docs/specs/business-integration/fr-124-127-inventory.md`
+- FR-046（Sponge 子服支持）→ `docs/specs/provision-sponge/spec.md`（✅ 已交付@v0.13.0）
+- FR-114（探针依赖内联 / 缓存预置）→ `docs/specs/probe-dependency-cache/spec.md`（✅ 已交付@v0.13.0）
+- FR-073 / 078 / 079 / 080 / 082 / 083 / 084 / 085（ServerProbe 治理桥运营底座在途）→ `docs/specs/serverprobe-ops-inflight/spec.md`
+- FR-003 / 041 / 042 / 046 / 059 / 098 / 113 / 114（在途杂项 / 归真 / 延后）→ `docs/specs/inflight-backlog/spec.md`
+- FR-053（插件批量部署多服）→ `docs/specs/plugin-batch-deploy/spec.md` + `api.md`
+- FR-163~169（前端整体重设计:视觉底座 / 双主题 / 多级分组 / 可组合工作区+超级工作台+导播台 / 监控升级）→ `docs/specs/ui-redesign/design.md`(+ 原型 `preview.html`)
+- FR-173~175（CI 发布管线 / 出站网络代理 / 自更新对接 GitHub Releases，关联 ADR-036/037）→ `docs/specs/release-pipeline/`、`docs/specs/network-proxy/`、`docs/specs/self-update-github/`（开发中创建）
+- FR-176~184（节点与运行时 UI 重做 / 自更新增强 / 全局任务中心 / jmctl 紧急控制台，关联 ADR-039/040/041/042 + ADR-036 更新）→ FR-182 `docs/specs/self-update-enhancement/spec.md`、FR-183 `docs/specs/task-center/spec.md`、FR-184 `docs/specs/emergency-cli/spec.md`（已落审）；FR-176/179/180/181 免 spec；FR-177 `docs/specs/node-page-redesign/spec.md`、FR-178 `docs/specs/node-runtime-panels/spec.md`（W2，已自审）
+- FR-185~190（出站代理面板化+节点级下发 / 更新页服务端缓存+markdown / 客户端分发迁运营+全流程向导重做 / 全站模态纪律+复制兜底 / 重度模态重做 / Worker 二进制 CP 下发，关联 ADR-043 + 增强 FR-174/182/086/072/009/004）→ FR-185 `docs/specs/proxy-visual-config/`、FR-186 `docs/specs/update-page-cache/`、FR-187 `docs/specs/client-dist-redesign/`、FR-189 `docs/specs/heavy-modal-redesign/`；FR-188 免 spec（规则 + 全站审计改造 + 复制兜底）；FR-190 `docs/specs/worker-binary-cp-cache/spec.md` + `docs/adr/059-worker-binary-cp-cache-distribution.md`（开发中）
+- FR-191~194（客户端分发二轮重做：发布文件树+zip 上传 / 拉取密钥可查看 / updater-core 版本管理 / 端到端流程图，关联 ADR-044[FR-192 修订 ADR-022①] / ADR-045[FR-193 补充 ADR-021] + 增强 FR-187/086/091）→ FR-191 `docs/specs/client-dist-publish-redesign/`、FR-192 `docs/specs/pull-key-viewable/`、FR-193 `docs/specs/updater-core-version-mgmt/`（需 spec，开发中创建）；FR-194 免 spec（前端流程图）；BUG-D 面包屑域名 / BUG-E 就绪度 CTA 不弹窗（fix，不占 §4）
+- FR-196~212（前端 mock API 与测试基座：MSW v2 内存假后端[有状态、跨 endpoint 全联动] + 双运行形态[`VITE_MOCK` 整站 mock 模式 + jsdom/@testing-library 强断言测试] + 成功默认/按需注入错误 + 实时流全仿真[WS 终端 / SSE 日志·事件·指标] + Playwright E2E + CI 门禁，关联新 ADR-047）→ FR-196/197/198/211/212 `docs/specs/frontend-mock-api/spec.md`（**需 spec**，地基三条＋域簇范式契约＋E2E/CI，开发中创建）；FR-199~210 **免 spec**（域簇机械套用 FR-196/197/198 既定范式 + 既有 `docs/API.md` / `web/src/api/*.ts` 类型契约，不引入新模型/新契约/新 ADR）；FR-211 Playwright E2E（mock 模式整站）+ FR-212 CI 前端质量门禁（PR/push 拦截 lint+vitest+E2E，扩 `release.yml` test 闸）；登录失败整页刷新 = fix 走 `sdd-fix-bug`（不占 §4），其页面级回归并入 FR-199
+- BUG-A 节点重名覆盖（修 FR-004 注册身份匹配缺陷，见 ADR-039）：注册改 UUID 锚定三级匹配 + 节点名活跃唯一 + 坏节点检测/修复后端（`NodeRepairService` + `/nodes/repair/*`、`/nodes/:id/reenroll|orphans|purge-orphans`）随 ADR-039 fix 提交落地；坏节点修复**可视化入口**随 FR-177 节点页重做。属缺陷修复（非新 FR），不占 §4 FR 编号
+- FR-213~221（观测体系重构 + 客户端分发观测 + 共享文件浏览器 + 通知中心：导航{监控/日志/统计}+任务中心移系统 / 站内信+告警合并通知中心 / 分发观测时序底座+监控页+统计扩维 / 文件浏览器抽取+实例卡片迁移+分发文件预览 / 平台级统计页 / 时序剖析增强，关联 ADR-048[统一通知模型] / ADR-049[分发观测聚合，复用 ADR-013] + 增强 FR-060/086）→ FR-213 `docs/specs/file-browser-component/`、FR-215 `docs/specs/observability-ia-redesign/`、FR-216 `docs/specs/notification-center/`、FR-217 `docs/specs/client-dist-observability/`、FR-220 `docs/specs/platform-statistics/`（需 spec，开发中创建）；FR-214/218/219/221 免 spec（前端复用/消费既有）；FIX-1 发布上传复验 + strict/fail-static 等术语中文化（fix 走 sdd-fix-bug，不占 §4）
+- FR-222~224 + FIX-A~D（节点上线流程打通 + worker 生命周期修复 + .yml 约定）：FR-222/223 已由 0.13.0 开发版 FIX-1/2/3 归真闭环；FR-224 已在 v0.12.0 交付；FR-222 `docs/specs/worker-self-setup/`，FR-223/224 免 spec。FIX-A #2 worker 重连重推实例[+ADR-050] / FIX-B #3 终端断连 / FIX-C #4 启停 kill 竞态 / FIX-D 首次上线真机断点（fix 走 sdd-fix-bug，不占 §4）
+- FR-225~232 + FIX-1~6（0.13.0 开发版归档）：调试开关 / 通知-任务联动 / 任务强停+筛选 / JDK 登记重做 / 连通性测试族 / 创建向导页 / 复制双模式 / 前端细节已交付；FIX-1/2/3 已把 FR-222/223 节点上线链路归真闭环；FR-227 `docs/specs/task-force-stop/`、FR-228 `docs/specs/jdk-register-redesign/`、FR-229 `docs/specs/connectivity-selftest/`、FR-231 `docs/specs/instance-clone-modes/`；FIX-4 JDK 下载超时 / FIX-5 JDK 登记卡死 / FIX-6 系统更新进页只读缓存为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）
+- FR-079 + FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）：FR-079/233/234/236/237/240/241/243/246/247 已在 0.13.0 开发版交付；FR-235（实例列表页重设计）、FR-244（全局动画系统）仍按 §4 状态继续跟踪。FR-235/133/137/244 本轮消费 FR-247 的服务端分页地基，规格见 `docs/specs/instance-list-redesign/spec.md`（已审核，首批实现落地）。合并关系：FR-238→FR-078，FR-239→FR-236，FR-242→FR-241，FR-245→FR-240。FIX-7 生产 SQL 日志静默 / FIX-8 创建实例节点下拉空 / FIX-9 点击实例卡片无反应为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）。计划见 `.tmp/brainstorm-ui-docker-batch-2026-06-30.md`
+- FR-170（进程粒度监控采集）→ `docs/specs/process-metrics/spec.md` + `docs/adr/060-process-granularity-metrics.md`（开发中，首批已落地）；FR-171/172（备份校验和 / 审计分页导出）→ `docs/specs/backup-audit-backend/spec.md`（开发中，首批已落地）；FR-152（备份存储测试连接 + 容量展示）→ `docs/specs/backup-storage-test-capacity/spec.md`（开发中，首批已落地）
+- FR-264（客户端分发单节点源站安全防护：多维限流 / IP 临时封禁 / key 状态机 / 频道降速保护 / 制品授权收紧 / 启动安全画像 / 独立防护中心）→ `docs/specs/client-dist-security-firewall/spec.md`（已交付@v0.13.0）
+- FR-265（客户端分发观测四 Tab 重构：统计/监控/日志只看请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖）→ `docs/specs/client-dist-observability-rebuild/spec.md`（已交付@v0.13.0）
+- FR-266（updater-core 构建元信息内嵌与展示：jar 内写版本 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示，紧急 hotfix 仍可直接上传）→ `docs/specs/updater-core-build-metadata/spec.md`（已交付@v0.13.0）
+- FR-267~272（高密度控制台重塑 2026-07-02）：A+C Jian 绿默认视觉底座 / 页眉节点作用域 + 侧栏 IA + 页面归位 / 服务器统一控制台 `/instances/:id` / 节点控制台与高密度服务器列表 / 平台首页高密度总览 / 全站 A+C 皮肤收口 → `docs/specs/console-redesign/design.md`（已交付@v0.13.0）；关联 ADR-055/056/057；使用既有 mock-api 完成前端原型，不新增真实后端接口。
+- FR-273（通用组件包与控件博物馆）：抽出 `@jianmanager/ui` 通用 UI/token/charts 包，主应用消费组件包，并新增 `web/wiki` 控件博物馆展示第一版控件与常用状态矩阵 → `docs/specs/component-package-wiki/spec.md`；关联 ADR-058。
+- FR-274（Bot 压测会话 YAML 动作编排与 50 Bot 稳定验收，增强 FR-042）→ `docs/specs/bot-stress-yaml-orchestration/spec.md`
+- FR-275/276（CP↔Worker 专用 WS 令牌密钥下发 + 终端 401 诊断兜底：终端/插件桥令牌与用户会话密钥分离，经 gRPC 注册响应下发并持久化；修 FR-080 enroll 不下发密钥致生产终端 401、探针监控失效的产品缺口；修订 ADR-020，见 ADR-061）→ `docs/specs/worker-ws-token-secret/spec.md`（草拟，FR-275 开发中）
+- FR-277（SSH 推送式远程部署脚本：操作机经 SSH 密钥推送部署/更新面板与节点到 Linux 主机，环境变量配置；Worker 侧复用 ADR-051 两阶段语义，服务档位 system/user 双轨；见 ADR-063）→ `docs/specs/ssh-deploy-scripts/spec.md`（开发中，剩真机验收）
+- FR-281（CP→Worker 指令反向流化：gRPC 反向隧道 + 双模式 + 终端 CP 中转，修订 ADR-002 与「浏览器↔Worker WS」不变量，见 ADR-066）→ `docs/specs/worker-reverse-stream/spec.md`（已落审；M1 指令隧道 → M2 终端中转；NAT 真机验收必验）
+- FR-283~288（多语言 monorepo 统一布局与命令面 2026-07-12）：`apps/`（所有外壳，含 Go/Node/React）+ `packages/`（第一方 JS 库）+ `internal/`（Go 库留根）+ `third_party/` 布局；前端提升为真 pnpm workspace（`web/`→`apps/control-plane-web`、`web/wiki`→`apps/ui-museum`、`web/packages/ui`→`packages/ui`）+ devmock 抽包 + go-task 命令面 + 前端版本接上 `version.go` 真源（ADR-065）；关联新 ADR-064（重申 ADR-005，不取代）→ 共享 spec `docs/specs/monorepo-unification/spec.md`（已落审，含 FR-284/285/286 免 spec 执行边界与 FR-287/288 设计节）。单分支串行执行中（序 283→(284,285)→286→287→288；实现排在 FR-281 反向流之后——内容改动先落、文件移动后落），计划见 `.tmp/brainstorm-monorepo-unification-2026-07-12.md`
+- FR-293~297（导航与控制台缓存体验 2026-07-12：侧栏常驻服务器列[收藏置顶+最近打开] / 页眉集群统计浮窗 / 服务器控制台页签 keep-alive+终端连接管理器 / 跨服务器热缓存 / 实例域数据层调优，增强 FR-240/162/179/269；**UI mock 先行**——界面先在 MSW mock 模式下完成可演示再接真栈）→ FR-295/296 共享 `docs/specs/console-keepalive/spec.md` + 新 ADR（前端 keep-alive 与终端连接管理架构，开发中创建）；FR-293/294/297 免 spec。依赖：FR-296←FR-295。**全部 ✅ 已交付@v0.15.0**（rebase+ff-only 落 dev，真机验收机四栈验收；ADR-067 前端 keep-alive 与终端连接管理架构落地）；真机验收顺带修复服务器选择器模态被侧栏 transform/contain 包含块压窄（改 createPortal 到 body，见 CHANGELOG 修复段）。计划见 `.tmp/brainstorm-console-nav-cache-2026-07-12.md`
+- FIX-验收批一（2026-07-15 mock 整站验收 ~50 条源码分诊后的交互质量修复，fix 走 sdd-fix-bug，不占 §4）：①危险操作补确认（群组成员移除/安全组删除/进入维护）+ DangerConfirm 在途禁用；②三页 Tab 态 URL 同步（频道工作台/安全中心/分发监控）+ line 激活态加固；③表单必填错误改触碰/提交后展示（useFieldGate 门控，补 FR-072 缺口，接线 ~11 弹窗）；④登录/刷新防重复 + 用户/组写操作成功失败 toast（补 FR-232 缺口）；⑤设置数值项客户端校验（与后端 validateSettingValue 一致）；⑥节点搜索清右栏 + 定时卡片真实下次执行（补 FR-153 缺口）；⑦监控图例限定名 + 对比图 Y 轴按量纲格式化（补 FR-221 缺口）；⑧3 模态改自适应壳（ui-modals 合规）；⑨空态/骨架/白名单错误重试 + SHA 截断复制/配额 GB/SK 提示/管理页路由守卫；⑩devmock 保真（JDK 删除 409 / 日志排序）。9 条报告误报驳回 + 3 条待真机复验，订正台账见 `.tmp/acceptance/acceptance-corrections-2026-07-15.md`
+- FR-346~350（客户端分发上传增效与外置对象存储 2026-07-17 迭代批：上传秒传/聚合/并发 + BlobStore 抽象与 S3[rustfs] 存储渠道 + 存量迁移 + 一致性对账 + 编排器多级目录/右键定点添加；关联 ADR-073 + 增强 FR-250/251/088/191；BUG「0 字节文件上传被拒 totalSize 须为正」走 sdd-fix-bug 不占 §4）→ FR-346 `docs/specs/client-upload-efficiency/spec.md`、FR-347 `docs/specs/artifact-external-storage/spec.md`、FR-348 `docs/specs/artifact-storage-migration/spec.md`、FR-349 `docs/specs/artifact-s3-reconcile/spec.md`（四项均已交付@v0.18.0）；FR-350 免 spec（纯前端，已交付@v0.18.0）
+- FR-351~353（客户端更新器内嵌硬门禁 + 接入/版本面板信息补齐 + 楔子/core 本地日志轮换 2026-07-21：发版构建缺 wedge/updater-core 硬失败；guide 与版本旁路展示内嵌版本；`.jm-updater/logs` 按 10MiB/跨日轮换 gzip 保留 5；增强 FR-107/193/260/090；计划见 `.tmp/brainstorm-client-updater-embed-logrotate-2026-07-21.md`）→ FR-351 免 spec；FR-352 `docs/specs/client-updater-guide-embed-info/spec.md`；FR-353 `docs/specs/updater-local-log-rotate/spec.md`（均已交付@v0.19.0）
+- FR-354~355（对外部署与展示 2026-07-21：Docker/compose 打磨可跑 + Control Plane 一键下载安装脚本；同批 docs：README 安装步骤与 MSW mock 压缩截图入库、根目录 SECURITY.md、上游 sdd 规则对账；**不做** GHCR 发布 / K8s / CP systemd 服务化 / 重做面板 Worker 装机；计划见 `.tmp/brainstorm-deploy-readme-security-2026-07-21.md`；验收证据 `.tmp/acceptance-deploy-readme-security-2026-07-21.md`）→ FR-354 `docs/specs/docker-compose-deploy/spec.md`；FR-355 `docs/specs/cp-oneclick-install/spec.md`（均已交付@v0.19.0）；DOCS-README / DOCS-SECURITY / GOV-RULES 不占 §4
+- FR-356~361（客户端分发安全/遥测/统计闭环 2026-07-21：KPI 口径统一 + 统计监控加厚钻取 + 安全研判处置 + 跨页深链 + updater-core 遥测隐私字段 + CSV 导出；允许新聚合 API/必要 schema；**不做** 告警联动/CDN 多节点防护/重写安全状态机；计划见 `.tmp/brainstorm-client-dist-obs-security-loop-2026-07-21.md`）→ FR-356 `docs/specs/client-dist-kpi-semantics/spec.md`；FR-357 `docs/specs/client-dist-stats-monitor-enrich/spec.md`；FR-358 `docs/specs/client-dist-security-ops-loop/spec.md`；FR-359 免 spec；FR-360 `docs/specs/client-telemetry-enrich-privacy/spec.md`；FR-361 `docs/specs/client-dist-csv-export/spec.md`（均已交付@v0.19.0）
+- FR-326（CP↔Worker 实例反向对账）→ `docs/specs/instance-reverse-reconcile/spec.md`（✅ 已交付@v0.20.0）
+- FR-362/363/365/369~372（500+ Bot 分布式命令压测）：FR-362/363 已交付@v0.19.0；FR-365/369～372 已交付@v0.20.0（500 物化/分片与 2 Bot 真连闭环；单 Worker 全员 connected 与 60min 长稳 harness 为残余，见 CHANGELOG）
+- FR-384~388（Agent 安全操控后台）：FR-384/385/387/388 已交付@v0.20.0；FR-386 ❌ 已废弃（由 FR-389/392 取代）
+- FR-389~392（Agent MCP 长连接运维 + 调用观测）：✅ 已交付@v0.20.0（CP 内嵌 MCP + 调用流水 + 观测 UI + mcp-bridge 退役）
+- FR-373~378（文件权限底座 + 资源管理器批次）：✅ 已交付@v0.20.0
+- FR-393~394（节点离线归档与彻底清理）：✅ 已交付@v0.20.0
+- FR-395~399（Agent MCP 全域运维 + 500 Bot 资源容量闭环 2026-07-26）：能力分组白名单与节点继承实例 scope / 节点实例全生命周期强类型工具 / 文件配置插件控制与流式数据分离 / Bot 舰队压测全编排 / 全链路资源采样与容量报告；永久禁区保留用户组与 RBAC、Agent Token 管理、密钥明文、数据库浏览、自更新、平台设置；计划见 `.tmp/brainstorm-mcp-full-ops-bot-capacity-2026-07-26.md` → FR-395 `docs/specs/agent-capability-policy-v2/spec.md`、FR-396 `docs/specs/mcp-instance-operations/spec.md`、FR-397 `docs/specs/mcp-content-operations/spec.md`、FR-398 `docs/specs/mcp-bot-orchestration/spec.md`、FR-399 `docs/specs/bot-load-resource-capacity/spec.md`（✅ 均已交付@v0.21.0；依赖序 395→[396,397,398]→399→500 Bot 真机容量战役）
+- FR-404（Bot 乱斗场景与受管稳定性压测）：Scenario V2 的死亡重生恢复、混合目标搜敌与本地攻击活跃度，以及 MCP 场景创建入口；以受管 Paper + ServerProbe 做 50 Bot 一小时资源稳定性验证，不把客户端攻击动作冒充服务端伤害/击杀证据 → `docs/specs/bot-combat-soak/spec.md`（✅ 已交付@v0.21.0；50 Bot 一小时真机压测按 `.tmp/acceptance-real-machine-checklist.md` 执行）
+- FIX-观测刷新 + FR-400~403（平台全景观测 2026-07-27）：修复可见页面指标自动刷新与陈旧态；补齐受管资源归因与首页 Tooltip、Bot Worker 历史观测、平台总览下钻，以及平台/节点实例日志分流。范围只涵盖平台受管资源，不采集任意 OS 进程、不伪造单 Bot RSS；指标留存复用 ADR-013 的 48h raw / 30d 5m / 400d 1h。→ FR-400 `docs/specs/managed-resource-attribution/spec.md`、FR-401 `docs/specs/bot-runtime-observability/spec.md`、FR-402 `docs/specs/platform-observability-overview/spec.md`（均需 spec）；FR-403 免 spec。依赖序：FIX→400→401→402；FR-403 独立；计划见 `.tmp/brainstorm-platform-observability-2026-07-27.md`（✅ 均已交付@v0.21.0；真 CP 多节点鲜度/断隧道按 checklist 确认）
+- FIX-公开注册 + FR-405（受控用户创建与邮箱邀请）：移除匿名注册；平台管理员可一次直建用户，或签发仅组成员、7 天、可撤销的一次性邮件邀请；受邀者通过系统设置的统一公共基址（HTTP 或 HTTPS）链接自行设置用户名和密码，后续绝对链接复用该基址。SMTP 配置独立于告警通道，密码仅允许环境变量引用。→ `docs/specs/user-invitation-and-registration-security/spec.md`、`api.md`，ADR-082（✅ 已交付@v0.21.0；SMTP 真实投递按 checklist 确认）
+- FR-406~408（监控页全景观测与受管进程探查处置）：`/monitor` 收口平台/节点/实例观测，默认选中对比指标；受管实例进程详情按 `instanceId+pid` 查询并基于历史样本诊断；非根子进程提供 `terminate`/`kill_tree` 两档受控处置，根进程继续复用实例生命周期，全部限定受管资源且写审计 → `docs/specs/managed-process-diagnostics-control/spec.md`、`api.md`（✅ 已交付@v0.21.0；进程处置真机按 checklist 确认）
+- FR-409（制品版本库与 ServerProbe 在线分发）：在既有 CAS 制品库之上新增制品包 / 来源 / 版本层；ServerProbe 首个接入，CP 从 GitHub Releases 校验缓存 jar、Worker 从 CP 拉取，支持全局 / Worker / 实例版本选择与回滚。旧制品消费者保持兼容 → `docs/specs/artifact-version-library/spec.md`（✅ 已交付@v0.21.0）
+- FR-410（Linux 用户级 systemd 版本化直装与节点部署）：将 CP / Worker 的 user unit 部署升级为 `current` 指针 + 不可变版本目录 + 稳定数据目录，自动迁移旧布局并提供显式回滚脚本；不引入公开镜像或 Docker Compose 生产路径 → `docs/specs/versioned-user-systemd-deploy/spec.md`（✅ 已交付@v0.21.0）
+- FR-411（ServerProbe 本地上传来源）：在既有 ServerProbe 制品包中新增本地上传来源，与 GitHub Releases 线上来源明确标识；上传即入 CAS 并可复用既有全局 / Worker / 实例选择与 CP→Worker 下发链路，不自动切换默认版本 → `docs/specs/local-serverprobe-upload/spec.md`（✅ 已交付@v0.21.0）
+- FR-425~429（客户端分发观测增强批）：**实现已随 FR-430 运维页落地**（时间筛选/洞察卡/热力图/布局等并入 `/client-dist-ops`）；FR-426/428 独立 spec 仍待补。✅ 已交付@v0.22.0
+- FR-430（客户端分发 IA 合并：两页 + 7 Tab + 旧路由重定向 + 守卫 + i18n）→ `docs/specs/client-dist-ia-merge/spec.md` + ADR-088。代码在分支 HEAD；✅ 已交付@v0.22.0
+- FR-431~432（控制台六域导航 IA + 可配置权限树）→ `docs/specs/nav-ia-role-model/spec.md` + ADR-089。**线上验收通过**；UI 原型 gitignore 不入库。✅ 已交付@v0.22.0
+- FR-473~484（**Worker 日志平台底座** 2026-09-20）：正式版完整底座——采集/处理/持久/HOT VL/COLD Lifecycle/Deep+Rehydrate/Worker 层内联邦/CP 跨节点联邦/停实例日志入 CP/日志中心改造。能力齐套、三层按配置启用；Paper 默认 FILE_PRIMARY；CP 仅 platform+audit+Legacy 只读。**不做**：CH/Loki 实现、日志告警引擎、浏览器直连 VL。架构审核：范围与 FR 划分保留。**门禁重分类（2026-09-20）**：FR-473 冻结=「契约与治理可开工」——退出条件为 Shared Contracts 齐备 + 依赖层证据（VL 行为/supervisor-equivalent smoke/纯逻辑）+ **ADR-094 accepted** + **proto/能力协商终审** + **VL 资产正式审批** + **性能判据方法与初始阈值入契约**；**Worker 生产组件级集成测不是冻结前置**（否则与「冻结前不实现 475+」死锁），改为 FR-474（Runbook A WAL/恢复分段）/ FR-476（Runbook C supervisor wiring）/ FR-477（Runbook B Catalog 崩溃与旧 owner 过滤）的开发验收条件。计划见 `.tmp/brainstorm-worker-log-platform-foundation-2026-09-20.md` 与 `.tmp/fr433-contract-freeze-checklist-2026-09-20.md`（均不入库）→ FR-473～484 见 §4（状态：**FR-473 契约已冻结**；FR-473~484 **开发中·地基/接线**；478/482 发布必需）；FR-483 docs **开发中·文档对账**
+- FR-484（**canonical 事件体落盘 compact**，2026-09-24）：FR-473 契约 §4.3/§5.3 的「VL 数据根重建权威事件集合」原先内联在 `ingest.state.json` 并常驻内存，随单源留存事件数线性增长（真机 64 源实测 state ≈143–189MB、Worker 稳态 ≈674MiB，1GiB 仅够 ≈40 源）。量测归因显示主因不是事件体常驻（+95MiB）而是 `persist()` 整份 `MarshalIndent` 的瞬时分配（+620MiB 且 `sys` 不归还）。本 FR 把事件体改为**追加式磁盘段**（NDJSON + MANIFEST 原子替换、只容忍尾段截断、中间段损坏硬失败），**集合内容与语义完全不变**（仍为全部已登账事件、仍不可按 reclaim 裁剪）。**不做**：内存裁剪（已被三个回归测试否决）、新压缩格式、改动事件身份/投影代次/覆盖水位。→ `docs/specs/worker-log-canonical-eventstore/spec.md` + ADR-095（状态：**实测通过**，文档对账进行中）
+- FR-502~507（**前端组件库与导航外壳重构** 2026-10-02，重构批，增强 FR-273 组件包 / FR-431~432 控制台导航 IA）：设计底座单一真源与 `dark:` 变体修复 / 主题配色对比度自动校验 / 内容页布局规范层 / 导航外壳组件层 / 工作区导航数据层 / 主控台外壳接入——**六项均免 spec**（改动收敛在组件库与外壳：token 迁移 + 测试门禁 + 组件层新增 + 导航数据新增，不引入新进程 / 新协议 / 新数据模型 / 新 API；PRD 行内验收即门禁）→ 状态见 §4；**不新增 ADR**（沿用既有 Tailwind v4 + CSS 变量 token 体系与 monorepo 布局，见 ADR-032 / ADR-055~057 / ADR-064，无新架构决策）。依据设计方《资源优先工作区》提案（7 图 + 交互原型 + 45 路由对照表，过程材料不入库）
+- 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
+- **FR-445~470（生产就绪查漏补缺批 2026-09-21）**：P0 重启韧性/孤儿进程 + P1 集群运维与观测 + 实例详情多形态适配与 MC 直探 + P2 增强。**依赖序**：`FR-445→448/449/450`、`FR-445→452→453`、`FR-446→447`、`FR-451→446/458`、`FR-455/456/462→459`（其余相互独立）。**实现分阶段**：批 1 并行为 P0 韧性（455/456）+ P1 运维（457/458/459/460）+ P1 观测（461/462）+ 界面采集（445~454）；批 2 依赖批 1（453、459）；P2（463~470）最后。ADR：091（能力画像）/ 092（配置源与直探）/ 093（进程韧性）。
+  - FR-445 实例能力画像抽象（type × role capabilities）→ `docs/specs/instance-capability-profile/spec.md` + ADR-091
+  - FR-446~447 MC 直探（SLP + Query）与采集优先级降级编排 → `docs/specs/mc-direct-probe/spec.md` + ADR-092（依赖 FR-451）
+  - FR-448~450 详情界面多形态适配（backend / proxy / beacon / generic）→ `docs/specs/instance-detail-adaptation/spec.md`（依赖 FR-445）
+  - FR-451 实例配置源明面化（启动参数 + server.properties，可引用文件）→ `docs/specs/instance-config-surface/spec.md` + ADR-092
+  - FR-452~453 实例列表树表（可切换分组维度）与拓扑页完整网络视图 → `docs/specs/instance-list-and-topology/spec.md`（依赖 FR-445）
+  - FR-454 beacon/binary 探针误配修正 → **fix，免 spec**（记 CHANGELOG）
+  - FR-455~456 重启韧性加固与孤儿进程周期兜底 → `docs/specs/restart-resilience/spec.md` + ADR-093（**P0 上线阻塞**）
+  - FR-457~458 集群级滚动/分批/灰度编排与配置批量下发收敛 → `docs/specs/cluster-ops-orchestration/spec.md`
+  - FR-459 实例健康巡检与自愈 → `docs/specs/instance-health-selfheal/spec.md`（依赖 FR-455/456/462）
+  - FR-460 失效 bot 自动回收与补足 → `docs/specs/bot-reclaim/spec.md`
+  - FR-461~462 集群健康总览墙与异常自动检测（动态基线）→ `docs/specs/cluster-observability/spec.md`
+  - FR-463~464 SLO/可用性统计与容量趋势预测 → `docs/specs/capacity-and-slo/spec.md`
+  - FR-465 性能归因（含 GC 采集）→ `docs/specs/performance-attribution/spec.md`
+  - FR-466 服务器快照与一键回滚 → `docs/specs/instance-snapshot-rollback/spec.md`
+  - FR-467 运行期配额强制 → `docs/specs/runtime-quota-enforcement/spec.md`
+  - FR-468 二进制/Beacon 版本管理与升级 → `docs/specs/binary-version-management/spec.md`
+  - FR-469 跨实例排行与玩家在线趋势 → `docs/specs/cross-instance-ranking/spec.md`
+  - FR-470 崩溃诊断增强 → `docs/specs/crash-diagnostics-enhancement/spec.md`
 
-**版本边界以 git tag 为准，不以分支为准。**
-
-| 该 FR 是否出现在任一已发布 tag（如 `v0.23.0`）中 | 允许的处置 |
-|---|---|
-| **从未出现**（只存在于 master / 开发分支 / 工作区） | **可直接改写或整条删除**，无需留废弃痕迹 |
-| **已出现**（曾随某个 tag 发布过） | **只能标记 `❌ 已废弃`**，保留编号与原始描述，不得删除或改写标题 |
-
-**为什么以 tag 而不是 master**：`master` 上的「✅ 已交付@v0.24.0」只表示代码已合并，
-不代表对外发布过。若以 master 为准，任何未发版的改动都会被锁死，无法随架构演进而修订。
-
-**删除 vs 废弃的判据**：一条 FR 若从未进过发布版本，且其描述已被架构变更彻底推翻
-（不是「未做完」而是「对象不存在了」），直接删除——保留一条「已废弃」的条目
-会让读者以为还有历史包袱要背。曾发布过的才需要留痕。
-
-**补充判据（2026-11-03）：已进 `origin/master` 的编号一律按「留痕」处理，只标 `❌ 已废弃`。**
-
-为什么在 tag 之外还要看 master：`master` 是其他开发分支的基线，分支上已经在引用这些编号
-（spec 标题、ADR、包注释、跨分支工单）。删掉或重编号会让所有并行分支的引用断掉，
-并引发一批 FR 编号重编码——那个代价远大于「PRD 里多一条废弃条目」。
-
-判定命令（改 FR 之前先跑）：
-
-```bash
-git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标废弃，不得删/改标题
-```
-
-处置时**标题列与状态列之外的原描述必须原样保留**，废弃说明**追加**在状态列末尾，
-不得用「已废除」替换掉原有内容——原描述里的验收读数与事故记录是排障时的第一手材料。
-
-**撰写时的两个常犯错误**：
-
-1. 把「✅ 已交付」等同于「功能在生产验证过」。PRD 的 ✅ 语义是
-   **代码与回归已落地**，不代表性能/长稳/生产启用已验证（例如 `archive_copy`
-   代码在但默认关闭）。需要区分时在状态列写明「代码已落地，生产未启用」。
-2. 架构大改后只改规格文档、不改 FR 标题。FR 是需求真源，标题写着已废除的机制
-   （如「追加落盘」「四水位」「冷热迁移」）会让后来者按旧架构理解现状。
-
-**规格导航**（状态仅以以下 FR 表为准，表内“规格”为既有受控文档）：
-
-- 日志平台 FR-473～484：各 FR 规格见表；契约冻结不等于下游全部验收。
-- FR-485/486：尚无独立 spec，未实现范围及验收保留于 §6。
-- FR-490～493：审批规划与防绕过判据见 §6；不因本次文档精简视为已实现。
-- FR-495：[扫码接入][s165]；FR-497：[增量恢复][s167]、[自动收养][s168]。
-- FR-498：[功能收口与延期专项][s176]，原门限保留、不记通过。
-- FR-499/500/501：[登记锁][s171]、[cgroup隔离][s170]、[成本治理][s172]。
-- 合并索引：FR-238→FR-078、FR-239→FR-236、FR-242→FR-241、FR-245→FR-240。
-- **已退役编号索引**（2026-11-01 立，2026-11-03 修订）：以下六个编号**一律保留在 §4 表内并标
-  `❌ 已废弃`**，不删除条目、不重排后续编号——它们都已进 `origin/master`，
-  spec / ADR / 包注释 / 跨分支工单大量引用（实测 FR-474/478/481/496 合计 155 处）。
-  序号不代表还有待办，只代表「这个编号曾经存在且不得复用」。
-
-  | 编号 | 退役原因 | 退役时点 |
-  |---|---|---|
-  | FR-474 | 文件/STDIO/归档共采集账本——gz 归档采集与 ArchiveImporter 已整体删除 | 2026-11-03 |
-  | FR-478 | local/S3/MinIO 深归档与 Rehydrate——单 VL 后冷层与 Rehydrate 已删 | 2026-11-01 |
-  | FR-481 | 日志入库切换与 Legacy 只读——cutover 已整体下线，无可切换的两侧 | 更早 |
-  | FR-484 | canonical 事件体（tmpfs 段）——事件段与重建链已整体删除 | 2026-11-03 |
-  | FR-496 | 纯 Go SQLite 增量索引——索引库改 `:memory:`，不再有本地索引文件 | 2026-11-01 |
-  | FR-504 | 实时停续采与 gz 导入——gz 归档采集已删 | 2026-11-01 |
-
-  **这六个编号不得复用**：
-  它们在规格与 ADR 里被当作功能标签引用（如 `stateindex` 包注释、`log-index-sqlite/spec.md` 标题）。
-- 其余已交付细节以表内既有规格与 [CHANGELOG](../CHANGELOG.md) 为准；本次不新增需求、验收或发布。
-
-> 验收后缀：全真栈＝真 UI/CP/Worker/外部进程端到端；四档＝单测/集测/单机与浏览器截图（后端 mock）。
-> “验收经 FR-XXX 覆盖”保留后继验收映射；未写验收后缀不额外证明通过，具体边界以各 FR 与受控验收记录为准。
+> **验收档位图例**：`·全真栈验收`=真 UI+真 CP/Worker+真外部进程端到端；`·四档验收`=单测/集测/单机截图/真浏览器截图（后端 mock 基底）；`·验收经 FR-XXX 覆盖`=能力面被后继 FR 重做/包含并在其验收中验证（映射依据 `.tmp/acceptance/UNMARKED-66-RECONCILE.md`）；**无后缀=交付未验收（真缺口，当前 1 个：099 需真客户端 OTA 场景）**。证据台账 `.tmp/acceptance/ACCEPTANCE-LEDGER.md`。
 
 | 编号 | 需求 | 优先级 | 状态 |
 |---|---|---|---|
 | FR-001 | 用户认证（JWT 双 Token） | — | ✅ 已交付@v0.1.0·全真栈验收 |
 | FR-002 | 用户与权限管理（三级 RBAC） | — | ✅ 已交付@v0.1.0·验收经 FR-156 覆盖 |
-| FR-003 | 用户组与配额 [规格][s001] | — | ✅ 已交付@v0.1.0·验收经 FR-156 覆盖 |
+| FR-003 | 用户组与配额 | — | ✅ 已交付@v0.1.0·验收经 FR-156 覆盖 |
 | FR-004 | 节点注册与心跳 | — | ✅ 已交付@v0.1.0·全真栈验收 |
 | FR-005 | 实例生命周期管理 | — | ✅ 已交付@v0.1.0·全真栈验收 |
 | FR-006 | 守护进程（Daemon Wrapper） | — | ✅ 已交付@v0.1.0·验收经 FR-005 覆盖 |
 | FR-007 | 终端实时 | — | ✅ 已交付@v0.1.0·全真栈验收 |
 | FR-008 | 文件管理 | — | ✅ 已交付@v0.1.0·全真栈验收 |
 | FR-009 | Bot 平台 | — | ✅ 已交付@v0.1.0·全真栈验收 |
-| FR-010 | 监控指标 | — | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-010 | 监控指标 | — | ✅ 已交付@v0.13.0·全真栈验收（曾归真 404；端点修复后真机复验：节点实时指标 200 真数据 + 监控页真值） |
 | FR-011 | 告警规则 | — | ✅ 已交付@v0.1.0·全真栈验收 |
 | FR-012 | 定时任务 | — | ✅ 已交付@v0.6.0·全真栈验收 |
 | FR-013 | 备份恢复 | — | ✅ 已交付@v0.1.0·全真栈验收 |
@@ -153,26 +182,26 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-038 | Bot 规模化后端 API | — | ✅ 已交付@v0.3.0·验收经 FR-009 覆盖 |
 | FR-039 | 控制台实例内 Bot 管理段 | — | ✅ 已交付@v0.3.0·验收经 FR-147 覆盖 |
 | FR-040 | 全局 Bot 管理页重构 | — | ✅ 已交付@v0.3.0·验收经 FR-147 覆盖 |
-| FR-041 | Bot 实时遥测与单 Bot 详情面板 [规格][s001] | P2 | ✅ 已交付@v0.13.0·验收经 FR-147 覆盖 |
-| FR-042 | Bot 压测会话编排 UI [规格][s001] | P2 | ✅ 已交付@v0.13.0·验收经 FR-274 覆盖 |
+| FR-041 | Bot 实时遥测与单 Bot 详情面板 | P2 | ✅ 已交付@v0.13.0·验收经 FR-147 覆盖 |
+| FR-042 | Bot 压测会话编排 UI | P2 | ✅ 已交付@v0.13.0·验收经 FR-274 覆盖 |
 | FR-043 | 全链路运维打通（节点→实例→终端→Bot 进服） | — | ✅ 已交付@v0.3.0·全真栈验收 |
 | FR-044 | 项目自包含便携运行时（FHS 数据根 + 核心缓存） | — | ✅ 已交付@v0.3.0·全真栈验收 |
 | FR-045 | 制品库（内容寻址 + 完整性校验） | — | ✅ 已交付@v0.3.0·验收经 FR-044 覆盖 |
-| FR-046 | Sponge 子服支持 [规格][s002] | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-046 | Sponge 子服支持 | P2 | ✅ 已交付@v0.13.0·全真栈验收（真机验收：SpongeVanilla launcher 引导 Done 3.662s + SpongeForge installer→mods Done 2.586s，现代 Forge argfile 启动收口） |
 | FR-047 | 环境/标签多维分组筛选 | — | ✅ 已交付@v0.4.0·验收经 FR-165 覆盖 |
 | FR-048 | 节点维护模式与主动下线 | — | ✅ 已交付@v0.4.0·全真栈验收 |
 | FR-049 | 日志持久化、归档与保留 | — | ✅ 已交付@v0.4.0·验收经全真栈日志中心战役覆盖 |
 | FR-050 | 日志检索与过滤 | — | ✅ 已交付@v0.4.0·验收经全真栈日志中心战役覆盖 |
 | FR-051 | 通用文件改前自动备份与版本回滚 | — | ✅ 已交付@v0.4.0·全真栈验收 |
 | FR-052 | 插件/模组单服管理 | — | ✅ 已交付@v0.4.0·验收经 FR-143 覆盖 |
-| FR-053 | 插件批量部署多服 [规格][s003] | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-053 | 插件批量部署多服 | P1 | ✅ 已交付@v0.13.0·全真栈验收（真机验收：制品库资产批量部署 2 实例 succeeded 2/failed 0 + 磁盘核验 + 审计 action） |
 | FR-054 | 玩家管理（RCON） | — | ✅ 已交付@v0.4.0·验收经 FR-067 覆盖 |
 | FR-055 | 玩家管理插件桥增强 | — | ❌ 已废弃（ADR-014） |
 | FR-056 | 增量备份 | — | ✅ 已交付@v0.4.0·四档验收 |
 | FR-057 | 备份远程存储 | — | ✅ 已交付@v0.4.0·全真栈验收 |
 | FR-058 | 实例批量操作 | — | ✅ 已交付@v0.4.0·四档验收 |
-| FR-059 | 危险操作保护体系化 [规格][s001] | — | ✅ 已交付@v0.10.0·四档验收 |
-| FR-060 | 时序监控与历史曲线 | — | ✅ 已交付@v0.5.0·全真栈验收 |
+| FR-059 | 危险操作保护体系化 | — | ✅ 已交付@v0.10.0·四档验收（复验发现服务器控制台与工作区强杀直发接口未过 DangerConfirm，已修：两处入口统一接危险确认 scope=group；真机复验通过：控制台强杀弹确认框、取消 0 请求、确认才发唯一 kill 且真 java 进程真停不误伤） |
+| FR-060 | 时序监控与历史曲线 | — | ✅ 已交付@v0.5.0·全真栈验收（真 ServerProbe 复验：world_entities/world_tile_entities 三方数据吻合[/metrics=/series 末值=server-state]，监控页多序列世界实体/方块实体曲线真数据渲染） |
 | FR-061 | 面板信息密度与视觉改造 | — | ✅ 已交付@v0.5.0·四档验收 |
 | FR-062 | 节点负载（load average）采集与仪表盘 | — | ✅ 已交付@v0.5.0·四档验收 |
 | FR-063 | 平台设置（全量平台配置可视化与运行时调整） | — | ✅ 已交付@v0.6.0·四档验收 |
@@ -180,24 +209,24 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-065 | 实时插件桥通道地基（探针反向 WS ↔ Worker） | — | ✅ 已交付@v0.7.0·验收经 FR-114 覆盖 |
 | FR-066 | 实时玩家事件 + 精确跨服感知 | — | ✅ 已交付@v0.7.0·验收经 FR-146 覆盖 |
 | FR-067 | 玩家治理迁到探针 + 退役 RCON 全链路 | — | ✅ 已交付@v0.7.0·验收经 FR-146 覆盖 |
-| FR-068 | 探针在线更新（推送即就位 + 下次重启生效） | — | ✅ 已交付@v0.7.0·全真栈验收 |
+| FR-068 | 探针在线更新（推送即就位 + 下次重启生效） | — | ✅ 已交付@v0.7.0·全真栈验收（真机复验发现运行中实例 Windows classpath 锁致更新 422，已修：同内容跳过 + 锁定降级 + Windows 独占锁自动化回归；真机复验通过：运行中 paper-probe[jar 被 java 进程锁]在线更新返回 200 非 422、deployed:true·restarted:false·probeConnected:true「探针 jar 已就位下次重启生效」，运行实例未被打扰） |
 | FR-069 | 实例导航与侧栏树形优化 | — | ✅ 已交付@v0.7.0·验收经 FR-165 覆盖 |
 | FR-070 | 文件管理资源管理器化 + 编辑器基础 + Ctrl+S 历史 | — | ✅ 已交付@v0.7.0·验收经 FR-008 覆盖 |
 | FR-071 | 配置管理资源管理器化 + 自动发现全部配置 | — | ✅ 已交付@v0.7.0·验收经 FR-008 覆盖 |
 | FR-072 | 创建/编辑模态框统一 | — | ✅ 已交付@v0.7.0·验收经 FR-159 覆盖 |
-| FR-073 | 编辑器迷你 IDE 增强（CodeMirror） [规格][s004] | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-074 | 跨文件全文搜索与持久倒排索引 | — | ✅ 已交付@v0.9.0·验收经 FR-113 覆盖 |
+| FR-073 | 编辑器迷你 IDE 增强（CodeMirror） | P2 | ✅ 已交付@v0.13.0·全真栈验收（CodeMirror 编辑/保存/搜索面板/历史回滚真机验，属 FR-141 编辑器核心） |
+| FR-074 | 跨文件全文搜索与持久倒排索引 | — | ✅ 已交付@v0.9.0·验收经 FR-113 覆盖（复验发现配置管理入口搜索命中只开文件不定位行，已修：configMode 透传 gotoLine/gotoNonce 至配置编辑器并强制文本模式；真机复验通过：真 server.properties 搜 enable-rcon 命中定位到第 12 行、表单模式点命中强制切回文本并定位） |
 | FR-075 | 归档浏览与反编译 | — | ✅ 已交付@v0.9.0·全真栈验收 |
-| FR-076 | 全量 Bukkit 状态探查（异步非侵入）+ WS 按需查询 | — | ✅ 已交付@v0.9.0·验收经 FR-142 覆盖 |
-| FR-077 | 「服务器状态」专属 tab | — | ✅ 已交付@v0.9.0·验收经 FR-142 覆盖 |
-| FR-078 | Docker 容器化实例运行 + 镜像管理 + 端口映射 [规格][s004] | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-079 | 实例级资源限额（Docker 模式） [规格][s004] | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-080 | Worker 一键安装 / 傻瓜部署 [规格][s004] | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-081 | 面板自更新（CP/Worker 二进制在线升级） [规格][s004] | — | ✅ 已交付@v0.9.0·验收经 FR-182 覆盖 |
-| FR-082 | 运行时与制品全局页（JDK + 制品库，可视化） [规格][s004] | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-083 | 平台存储资源管理器（数据根 FHS 浏览）+ FR-044 完善 [规格][s004] | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-084 | 数据库资源管理器（只读浏览） [规格][s004] | P2 | ✅ 已交付@v0.13.0·验收经全真栈 DB 浏览战役覆盖 |
-| FR-085 | 告警体系全面增强（多通道 + 多类型 + 分级聚合 + 确认历史） [规格][s004] | P1 | ✅ 已交付@v0.13.0·验收经 FR-011 覆盖 |
+| FR-076 | 全量 Bukkit 状态探查（异步非侵入）+ WS 按需查询 | — | ✅ 已交付@v0.9.0·验收经 FR-142 覆盖（真 Paper+真 ServerProbe 复验：server-state 端点经反向 WS 桥返回真六分区 server/worlds/jvm/**classloader 计数22791/23049/258+加载器层级**/scheduler/listeners，采集期 TPS 稳定 20.0 无可感下降） |
+| FR-077 | 「服务器状态」专属 tab | — | ✅ 已交付@v0.9.0·验收经 FR-142 覆盖（真机复验：服务器状态卡渲染真 Bukkit 六分区+classloader 专区真数据[真 JDK21 层级链]，手动刷新按需生效[时间戳更新、实体数实时变化]、默认不轮询[停留数分钟仅首次+手动 2 次请求]） |
+| FR-078 | Docker 容器化实例运行 + 镜像管理 + 端口映射 | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-079 | 实例级资源限额（Docker 模式） | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-080 | Worker 一键安装 / 傻瓜部署 | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-081 | 面板自更新（CP/Worker 二进制在线升级） | — | ✅ 已交付@v0.9.0·验收经 FR-182 覆盖 |
+| FR-082 | 运行时与制品全局页（JDK + 制品库，可视化） | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-083 | 平台存储资源管理器（数据根 FHS 浏览）+ FR-044 完善 | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-084 | 数据库资源管理器（只读浏览） | P2 | ✅ 已交付@v0.13.0·验收经全真栈 DB 浏览战役覆盖 |
+| FR-085 | 告警体系全面增强（多通道 + 多类型 + 分级聚合 + 确认历史） | P1 | ✅ 已交付@v0.13.0·验收经 FR-011 覆盖 |
 | FR-086 | 客户端分发频道与拉取密钥 | — | ✅ 已交付@v0.8.0·验收经 FR-192 覆盖 |
 | FR-087 | 签名 manifest 端点（latest-only）+ 客户端制品分发 | — | ✅ 已交付@v0.8.0·验收经 FR-265 覆盖 |
 | FR-088 | 客户端版本发布 + latest 指针 | — | ✅ 已交付@v0.8.0·验收经 FR-191 覆盖 |
@@ -210,8 +239,8 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-095 | 分发统计后台 | — | ✅ 已交付@v0.8.0·验收经 FR-213 覆盖 |
 | FR-096 | 分发端点应用层（L7）防护 | — | ✅ 已交付@v0.8.0·验收经 FR-264 覆盖 |
 | FR-097 | 自有 `.jmpack` 打包（压缩 + 签名，格式删除） | — | ❌ 已废弃（见 ADR-054） |
-| FR-098 | 块级二进制 diff 增量发布 [规格][s001] | P2 | ✅ 已交付@v0.13.0·验收经 FR-251 覆盖 |
-| FR-099 | 客户端 OTA 更新进度窗口（进度条 + 速度 + ETA） | — | ✅ 已交付@v0.8.0·真客户端OTA与2026-07-14原生进度窗目视已验 |
+| FR-098 | 块级二进制 diff 增量发布 | P2 | ✅ 已交付@v0.13.0·验收经 FR-251 覆盖 |
+| FR-099 | 客户端 OTA 更新进度窗口（进度条 + 速度 + ETA） | — | ✅ 已交付@v0.8.0·端到端真机复验：updater-core（Java8）真下载 + reconcile + sha256 完整性 + 文件级增量/托管区减量/防降级；进度模型 ProgressModel/ProgressView 11 单测绿、SwingProgressView 真桌面（非 headless）代码路径无崩溃。原生 Swing 弹窗人眼目视（动条+实时速度/ETA）已于 2026-07-14 经真启动器 `-javaagent:wedge.jar` 场景由用户确认通过，无剩余尾巴 |
 | FR-103 | 插件桥（Bukkit/BC 插件 WS 连入，旧自写） | — | ❌ 已废弃（ADR-014） |
 | FR-107 | 后台客户端更新器接入指引 | — | ✅ 已交付@v0.8.0·验收经 FR-187 覆盖 |
 | FR-108 | 仪表盘总览环分级配色与负载量纲修正 | — | ✅ 已交付@v0.9.1·验收经 FR-062 覆盖 |
@@ -219,8 +248,8 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-110 | 系统更新页未配源仍展示当前版本 | — | ✅ 已交付@v0.9.1·验收经 FR-186 覆盖 |
 | FR-111 | 归档/反编译查看器布局优化 | — | ✅ 已交付@v0.9.1·全真栈验收 |
 | FR-112 | 平台/运维导航信息架构统一 | — | ✅ 已交付@v0.9.1·验收经 FR-268 覆盖 |
-| FR-113 | 全文索引后台化与进度 [规格][s001] | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-114 | 探针依赖内联/缓存预置 [规格][s005] | P3 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-113 | 全文索引后台化与进度 | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-114 | 探针依赖内联/缓存预置 | P3 | ✅ 已交付@v0.13.0·全真栈验收（真机验收：libraries+assets 缓存包随建服下发 6.3MiB，探针首启免联网拉主依赖） |
 | FR-115 | 业务桥 Worker 脊柱（JBIS M1） | — | ✅ 已交付@v0.10.0·验收经 FR-122 覆盖 |
 | FR-116 | CP 业务编排与汇聚脊柱（JBIS M1） | — | ✅ 已交付@v0.10.0·验收经 FR-122 覆盖 |
 | FR-117 | ServerProbe 业务对接层骨架（JBIS M1） | — | ✅ 已交付@v0.10.0·验收经 FR-122 覆盖 |
@@ -230,384 +259,359 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-121 | 业务写横切硬化（幂等 + 二次确认 + 审计，JBIS M2） | — | ✅ 已交付@v0.10.0·验收经 FR-123 覆盖 |
 | FR-122 | 经济汇聚与多区聚合（JBIS M2） | — | ✅ 已交付@v0.10.0·四档验收 |
 | FR-123 | 经济定制页（JBIS M2） | — | ✅ 已交付@v0.10.0·四档验收 |
-| FR-124 | AIS 背包读写门面（含离线读取与基础属性写，物品写不在范围） [规格][s006] | P2 | ✅ 已交付@v0.14.0·真机读取/基础属性写已验；物品写按ADR-0017降级 |
-| FR-125 | 背包 Provider [规格][s006] | P2 | ✅ 已交付@v0.14.0·真机背包/幂等属性写/追踪事件已验 |
-| FR-126 | 背包汇聚与存储 [规格][s006] | P2 | ✅ 已交付@v0.14.0·真机审计/事件汇聚与实例级权限已验 |
-| FR-127 | 背包定制页 [规格][s006] | P2 | ✅ 已交付@v0.14.0·真机背包页/二次确认/属性写已验 |
-| FR-128 | 导航与视图状态可寻址化 + 滚动位置恢复 [规格][s007] | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-129 | 实例工作区分屏面板化 [规格][s007] | — | ❌ 已废弃（并入 FR-166 可组合卡片画布） |
-| FR-130 | 文件与配置合并为统一资源面板 [规格][s007] | — | ❌ 已废弃（并入 FR-166 资源卡） |
-| FR-131 | 侧边栏可折叠图标轨 + 隐藏滚动条 + 布局持久化 [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-132 | 侧栏底部控件图标化（主题/语言/退出）+ 三态直选 + 底部布局 [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-133 | 实例树搜索/虚拟化/折叠保留/激活态/空态/a11y [规格][s007] | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-134 | 统一页头与面包屑组件 [规格][s007] | P3 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-135 | 开源许可与依赖清单页（独立页，照参考图布局） [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-136 | 实例列表汇总头 + 节点/端口列 + 角色徽标 + proxy↔backend inline [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-137 | 实例列表搜索/排序 + 筛选吸顶可折叠 + 分组单表 [规格][s007] | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-138 | 单实例操作可发现性与反馈 [规格][s007] | — | ✅ 已交付@v0.10.0·四档验收 |
-| FR-139 | 批量操作增强 [规格][s007] | — | ✅ 已交付@v0.10.0·四档验收 |
-| FR-140 | 终端体验增强 [规格][s007] | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-141 | 资源管理器与配置编辑器增强 [规格][s007] | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-142 | 详情页监控与探针增强 [规格][s007] | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-143 | 插件/模组/资源包/数据包管理增强 [规格][s007] | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-144 | 节点页直观化 [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-145 | 群组管理可寻址双栏 + proxy↔backend 拓扑 [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-146 | 玩家管理增强 [规格][s007] | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-147 | Bot 规模化管理增强 [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-148 | 趋势图增强 [规格][s007] | — | ✅ 已交付@v0.10.0·四档验收 |
-| FR-149 | 告警增强 [规格][s007] | — | ✅ 已交付@v0.10.0·四档验收 |
-| FR-150 | 日志中心增强 [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-151 | 备份页增强 [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-152 | 备份存储测试连接 + 容量展示 [规格][s007] | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-153 | 计划任务增强 [规格][s007] | — | ✅ 已交付@v0.10.0·四档验收 |
-| FR-154 | 模板应用到实例 + 变量填充预览 [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-155 | 平台资产与更新页增强 [规格][s007] | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-156 | 用户与组管理能力补齐 [规格][s007] | — | ✅ 已交付@v0.10.0·四档验收 |
-| FR-157 | 认证体验增强 [规格][s007] | — | ✅ 已交付@v0.10.0·四档验收 |
-| FR-158 | 设置与审计页增强 [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-159 | 共享表单对话框统一（命令面板/服务器选择器/终端全屏豁免） [规格][s007] | P2 | ✅ 已交付@v0.13.0·四档验收；三类非表单浮层按规则豁免 |
-| FR-160 | 共享基件统一（保留页签/复合行/面包屑/终端浮层内部例外） [规格][s007] | P2 | ✅ 已交付@v0.13.0·四档验收；特定内部交互例外保留 |
-| FR-161 | 全局响应式与防翻屏基线 [规格][s007] | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-162 | 全局页眉/顶栏（基础信息 + 搜索占位） [规格][s007] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-163 | 视觉底座与设计系统（共享面板/统计卡、主题与响应式） [规格][s008] | P1 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-164 | 全局双主题（靛蓝 / 青绿）+ 明暗模式（CSS 变量驱动 + 一处切换全站 + 持久） [规格][s008] | P1 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-165 | 实例多级分组（树/列表/拖拽/筛选、父子组与多对多成员） [规格][s008] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-166 | 可组合卡片工作区（六功能卡、个人预设；并入 FR-129/130） [规格][s008] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-167 | 跨实例超级工作台（任意实例卡片拼合 + 实例库拖拽） [规格][s008] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-168 | 工作区导播台（多路 WS 预热 + 瞬切 + 定时轮播 + 并发上限 + 非激活降频） [规格][s008] | P2 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-169 | 监控页六指标、独立时间筛选、brush 与实时浮窗 [规格][s008] | P1 | ✅ 已交付@v0.10.0·四档验收 |
-| FR-170 | 实例进程 CPU/内存/IO 采集与监控页 Top10 [规格][s009] | P2 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-171 | 备份校验和计算、展示与恢复完整性检查 [规格][s010] | P3 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-172 | 审计服务端分页、总数与导出 [规格][s010] | P3 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-173 | CI/CD 预发布与正式发布、CP/Worker双OS产物校验和及版本注入 [规格][s011] | P1 | ✅ 已交付@v0.11.0·四档验收 |
-| FR-174 | CP/Worker 出站 HTTP/SOCKS5 代理与 no_proxy（留空直连） [规格][s012] | P1 | ✅ 已交付@v0.11.0·四档验收 |
-| FR-175 | GitHub Releases 自更新（稳定/预发布渠道、sha256 校验与代理） [规格][s013] | P1 | ✅ 已交付@v0.11.0·四档验收 |
+| FR-124 | 扩 AllinInventorySync api 导出读写门面 | P2 | ✅ 已交付@v0.14.0·真机验收：CoreLib serverInfo 解锁（黄金 config + MySQL/Redis）后经真 AIS 2.1.0 api 读 view（getPlayerInventory 真背包，含离线）+ 基础属性写（getInventoryWriteApi.writeBasicAttrs 带 WriteResult 回执）真机验通；物品写门面按 ADR-0017 降级不在范围 |
+| FR-125 | 背包 Provider | P2 | ✅ 已交付@v0.14.0·真机验收：三插件（CoreLib 1.3.0 + AIS 2.1.0 + ServerProbe）同栈起通，view 返真背包（EMERALD×9…含 nbtBase64）+ writeBasicAttrs 精确生效且幂等 + TrackedItemActionEvent（JOIN_CARRY）订阅汇聚；过程修复探针解码不符嵌套契约写死玩家 bug（c6f287a / ServerProbe 8b5974b） |
+| FR-126 | 背包汇聚与存储 | P2 | ✅ 已交付@v0.14.0·真机验收：writeBasicAttrs → JM business.write 审计 + AIS EDIT_ATTRS；追踪事件 JOIN_CARRY 按 domain+dedupKey 汇聚落 business_events（id=1，node/instance 归属正确，payload 全对）；业务事件读视图实例级权限收敛已落地 |
+| FR-127 | 背包定制页 | P2 | ✅ 已交付@v0.14.0·真机验收：背包定制页（/super 背包卡）真背包快照 + 基础属性写二次确认端到端；业务掌控台 object 型入参下发修复（8b568d3，真机复验 writeBasicAttrs 嵌套 base/edited 下发 success） |
+| FR-128 | 导航与视图状态可寻址化 + 滚动位置恢复 | P1 | ✅ 已交付@v0.13.0·全真栈验收（真机验收：节点/实例 ?tab= URL 直达全程使用；滚动恢复重试制加固带回归） |
+| FR-129 | 实例工作区分屏面板化 | — | ❌ 已废弃（并入 FR-166 可组合卡片画布） |
+| FR-130 | 文件与配置合并为统一资源面板 | — | ❌ 已废弃（并入 FR-166 资源卡） |
+| FR-131 | 侧边栏可折叠图标轨 + 隐藏滚动条 + 布局持久化 | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-132 | 侧栏底部控件图标化（主题/语言/退出）+ 三态直选 + 底部布局 | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-133 | 实例树搜索/虚拟化/折叠保留/激活态/空态/a11y | P2 | ✅ 已交付@v0.13.0·全真栈验收（分组树 role=tree+树搜索过滤+空态+a11y roving tabindex+orgView URL 化真机验） |
+| FR-134 | 统一页头与面包屑组件 | P3 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-135 | 开源许可与依赖清单页（独立页，照参考图布局） | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-136 | 实例列表汇总头 + 节点/端口列 + 角色徽标 + proxy↔backend inline | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-137 | 实例列表搜索/排序 + 筛选吸顶可折叠 + 分组单表 | P2 | ✅ 已交付@v0.13.0·全真栈验收（q/sort/order/pageSize URL↔UI 双向绑定+筛选折叠真机验） |
+| FR-138 | 单实例操作可发现性与反馈 | — | ✅ 已交付@v0.10.0·四档验收 |
+| FR-139 | 批量操作增强 | — | ✅ 已交付@v0.10.0·四档验收 |
+| FR-140 | 终端体验增强 | P2 | ✅ 已交付@v0.13.0·全真栈验收（重连/全屏/字号/搜索计数+走查修复：重连一次性 token 重取[e23361d]、空闲保活 ping/pong[81ad8a9/5a9e8e9]经反代 A/B 验通） |
+| FR-141 | 资源管理器与配置编辑器增强 | P2 | ✅ 已交付@v0.13.0·全真栈验收（编辑器/目录树/搜索/版本 diff+走查修复：diff 增删红绿着色[4e7593f] 真机验） |
+| FR-142 | 详情页监控与探针增强 | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-143 | 插件/模组/资源包/数据包管理增强 | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-144 | 节点页直观化 | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-145 | 群组管理可寻址双栏 + proxy↔backend 拓扑 | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-146 | 玩家管理增强 | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-147 | Bot 规模化管理增强 | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-148 | 趋势图增强 | — | ✅ 已交付@v0.10.0·四档验收 |
+| FR-149 | 告警增强 | — | ✅ 已交付@v0.10.0·四档验收 |
+| FR-150 | 日志中心增强 | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-151 | 备份页增强 | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-152 | 备份存储测试连接 + 容量展示 | P2 | ✅ 已交付@v0.13.0·全真栈验收（真实端点经 MinIO SigV4 集测 TestS3_RealMinIO 验） |
+| FR-153 | 计划任务增强 | — | ✅ 已交付@v0.10.0·四档验收 |
+| FR-154 | 模板应用到实例 + 变量填充预览 | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-155 | 平台资产与更新页增强 | P2 | ✅ 已交付@v0.13.0·四档验收（被引用制品禁删、拉取密钥过期预警、DB 敏感列防护、系统更新页 i18n/强确认、制品导入下载进度[axios onUploadProgress]+JDK 导入进度[任务中心]、全网升级金丝雀分批[canary/batch/失败即中止，rollout 阶段+批次进度]全部落地） |
+| FR-156 | 用户与组管理能力补齐 | — | ✅ 已交付@v0.10.0·四档验收 |
+| FR-157 | 认证体验增强 | — | ✅ 已交付@v0.10.0·四档验收 |
+| FR-158 | 设置与审计页增强 | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-159 | 共享对话框统一 | P2 | ✅ 已交付@v0.13.0·四档验收（所有创建/编辑/配置表单已迁共享 Radix Dialog + scrollable 壳；收敛完成，合规例外：命令面板/服务器选择器/终端全屏 3 处 `fixed inset-0` 均为非表单浮层，ui-modals 明文豁免） |
+| FR-160 | 共享基件统一（ref 重构） | P2 | ✅ 已交付@v0.13.0·四档验收（原生 confirm=0、原生 table 已归共享 Table[FR-195]、控制台状态徽标统一；本轮补齐标准动作/链接按钮改共享 Button[7 文件 17 处]+Bot/封禁硬编码状态色改 status token；收敛完成，例外保留 tab 下划线/分段 pill/复合可点行/面包屑/终端与浮层内部） |
+| FR-161 | 全局响应式与防翻屏基线 | P2 | ✅ 已交付@v0.13.0·四档验收（响应式页壳 jm-page-* 覆盖 ~19 页、高基数列表虚拟化、共享 Table 内建 overflow-x-auto 表内滚动防翻屏、复杂模态→可寻址双栏[NetworksPage]已就位；收敛确认，无裸横向溢出待修） |
+| FR-162 | 全局页眉/顶栏（基础信息 + 搜索占位） | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-163 | 视觉底座与设计系统（统一 Panel/StatCard 组件、弃 shadcn Card 松散用法、靛蓝圆角灵动 + 响应式基线） | P1 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-164 | 全局双主题（靛蓝 / 青绿）+ 明暗模式（CSS 变量驱动 + 一处切换全站 + 持久） | P1 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-165 | 实例多级嵌套分组（前端树+列表+拖拽+批量标记+筛选；后端分组树 parent_id 自引用 + 实例-组 M:N） | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-166 | 可组合卡片工作区（单实例可拖拽画布 + 6 功能卡 + 预设个人级持久化；取代 ADR-030，并入 FR-129/130） | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-167 | 跨实例超级工作台（任意实例卡片拼合 + 实例库拖拽） | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-168 | 工作区导播台（多路 WS 预热 + 瞬切 + 定时轮播 + 并发上限 + 非激活降频） | P2 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-169 | 监控页升级（平台/节点/实例 6 指标 + 每图时间筛选 + brush 拖拽轴 + hover 浮窗 + 实时，扩 FR-060/061） | P1 | ✅ 已交付@v0.10.0·四档验收 |
+| FR-170 | 进程粒度监控采集（Worker 采每进程 CPU/内存/IO + CP 存储 + 监控页 hover 进程 TOP10）——FR-169 拆出 | P2 | ✅ 已交付@v0.13.0·全真栈验收（真机采集经 WSL Linux worker 真进程 pid CPU/内存/IO 验） |
+| FR-171 | 备份完整性校验和（model.Backup 加 checksum + 创建时计算 + 列表/详情展示）——FR-151 拆出 | P3 | ✅ 已交付@v0.13.0·四档验收（远程校验经 verifyBackupChecksum 单测含篡改检出 + 真 S3 字节一致性 TestS3_RealMinIO 传递证 + 恢复路径校验） |
+| FR-172 | 审计日志服务端分页与导出（GET /audit 加分页 + 总数 + 导出 endpoint）——FR-158 拆出 | P3 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-173 | CI/CD 发布管线（GitHub Actions：push→滚动预发布[取 CHANGELOG Unreleased]、tag→正式 release[取版本段]；交叉编译 CP+Worker linux/amd64+windows/amd64 含 go:embed 前端；产物 + checksums.txt 上传 release；ldflags 注入版本，见 ADR-036） | P1 | ✅ 已交付@v0.11.0·四档验收 |
+| FR-174 | 出站网络代理（CP/Worker 每进程可配 HTTP/SOCKS5 + no_proxy，共享出站 HTTP 客户端工厂，覆盖自更新/JDK/服务端 jar/CFR/GitHub API 下载；留空=直连，见 ADR-037） | P1 | ✅ 已交付@v0.11.0·四档验收 |
+| FR-175 | 自更新对接 GitHub Releases（增强 FR-081：原生 GitHub Releases API 解析 + stable/prerelease 渠道 + checksums sha256 校验 + 经 FR-174 代理下载；取代 ADR-020 §4 feed 立场，见 ADR-036） | P1 | ✅ 已交付@v0.11.0·四档验收 |
 | FR-176 | 全局交互细节修正（卡片 hover 不位移 + 输入焦点态收敛 + 主题化滚动条；增强 FR-163） | P2 | ✅ 已交付@v0.11.0·四档验收 |
-| FR-177 | 节点页主从双栏/收缩列表/页眉与JDK制品端口入口重排 [规格][s014] | P1 | ✅ 已交付@v0.11.0·四档验收 |
-| FR-178 | 节点 JDK/制品抽屉、异步安装进度、多厂商与核心缓存 [规格][s015] | P1 | ✅ 已交付@v0.11.0·四档验收 |
+| FR-177 | 节点管理页重做（主从双栏 + 左列表可收缩 + 节点页眉重设计 + JDK/制品/端口入口重排；增强 FR-144） | P1 | ✅ 已交付@v0.11.0·四档验收 |
+| FR-178 | 节点内 JDK + 制品管理面板（抽屉取代简陋模态 + JDK 异步安装/进度日志接任务中心 + foojay 多厂商多版本 + 目录选择器 + 抽屉 UX 约束 + 节点制品缓存秒建免重下；增强 FR-033/045，关联 FR-082/183） | P1 | ✅ 已交付@v0.11.0·四档验收 |
 | FR-179 | 全局页眉重设计 + 搜索右对齐（增强 FR-162） | P2 | ✅ 已交付@v0.11.0·四档验收 |
 | FR-180 | 实例工作区页眉重设计（增强 FR-069/166） | P2 | ✅ 已交付@v0.11.0·四档验收 |
 | FR-181 | Logo 点击折叠/展开导航栏（增强 FR-131） | P3 | ✅ 已交付@v0.11.0·四档验收 |
-| FR-182 | CP/Worker更新日志、一键回滚上一版与单版本备份 [规格][s016] | P1 | ✅ 已交付@v0.11.0·四档验收 |
-| FR-183 | 跨节点长任务进度/日志、任务中心与终态站内信 [规格][s017] | P1 | ✅ 已交付@v0.11.0·四档验收 |
-| FR-184 | jmctl 直连 daemon 应急 CLI（独立二进制，不读数据库） [规格][s018] | P2 | ✅ 已交付@v0.11.0·四档验收 |
-| FR-185 | 出站代理可视化与节点热下发（DB > yaml > 环境变量） [规格][s019] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-186 | 更新页服务端缓存、静默刷新与 Markdown 日志（失败留旧值） [规格][s020] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-187 | 分发迁运营域、就绪度/空态/分步发布与模态（后端API不变） [规格][s021] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-188 | 全站内容自适应模态纪律与非安全 HTTP 复制兜底 | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-189 | 创建实例/添加节点重度模态重做与目录、探针交互 [规格][s022] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-190 | CP 代理缓存同版本 Worker 二进制，内网装机与升级 [规格][s023] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-191 | 独立发布/上传页、zip 编排与只读内容预览（仅编排元数据） [规格][s024] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-192 | 拉取密钥加密后可查可改；旧哈希不可查，吊销须强确认、不轮换 [规格][s025] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-193 | CP 内嵌默认楔子/core，随 CP 更新；运营无需上传管理 [规格][s026] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-194 | 客户端分发页内嵌运维向端到端流程图 | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-195 | 全站共享 Table、行卡片/徽章与主题统一（纯前端，行为不变） | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-196 | MSW 浏览器 mock 与 Vitest node/jsdom 双环境测试基座 [规格][s027] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-197 | 有状态假后端（跨实体联动、鉴权、seed/reset 与错误注入） [规格][s027] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-198 | WS终端伪交互与SSE日志/事件/指标仿真，mock/测试两用 [规格][s027] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-199 | 身份访问 mock 与认证/用户/组/审计页面强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-200 | 节点、运行时、修复、JDK/制品与自更新 mock/页面强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-201 | 实例/分组/状态/端口 mock 与创建启停、页面联动强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-202 | 搭建/克隆/模板 mock 与向导页面强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-203 | 群组/代理注册 mock、网络页多对多联动强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-204 | 文件/历史版本/存储/归档 mock 与资源管理页面强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-205 | 配置/数据库 mock 与对应浏览页面强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-206 | 插件/探针/玩家/经济业务 mock 与管理页面强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-207 | 备份/存储/定时任务 mock 与对应页面强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-208 | 指标/告警/通知/任务/日志 mock、SSE 与观测页面强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-209 | Bot/终端 mock、WS 仿真与对应页面强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-210 | 客户端分发/版本/统计/密钥/设置 mock 与页面强断言 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-211 | Playwright 整站 mock E2E（无需真实后端） [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-212 | CI 前端 lint/Vitest/E2E 失败阻断 PR/push 与发布 [规格][s027] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-213 | 共享文件浏览器（目录树/列表/预览/下载），迁移实例资源卡 [规格][s028] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-214 | 分发历史/待发布文件预览（管理 JWT 只读口，与玩家拉取隔离） [规格][s028] | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-215 | 观测导航重组为监控/日志/统计，任务中心迁系统域 [规格][s029] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-216 | 通知中心合并站内信/告警、单铃铛预览与筛选已读查询 [规格][s030] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-217 | 分发遥测聚合快照（活跃/版本/成功率/字节/平台与时序查询） [规格][s031] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-218 | 分发监控趋势/分布/榜单，总览或按频道筛选 | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-219 | 频道统计扩充活跃/版本/成功率/平台分布 | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-220 | 平台节点/实例/玩家/分发聚合统计，独立于频道统计 [规格][s032] | P1 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-221 | 既有分层时序增强：多指标对比、节点至世界下钻与聚合粒度 | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-222 | Worker 首启交互/无人值守 setup、身份持久化后转 run [规格][s033] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-223 | Worker 安装脚本分离下载与上线，复用 setup/可选常驻服务 | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-224 | 全仓 .yml 约定与配置/脚本/文档统一（兼容回退 .yaml） | P2 | ✅ 已交付@v0.12.0·四档验收 |
-| FR-225 | 调试开关热切 log/Gin debug，默认 info/release、无需重启 | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-226 | 任务通知深链、页眉任务入口与实时进度联动 | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-227 | 任务强制停止（真取消下载/清临时文件）与多条件筛选 [规格][s034] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-228 | JDK 可执行文件选择与自动探测，托管选项联动默认目录 [规格][s035] | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-229 | 连通性自检端点族 + 测试按钮 [规格][s036] | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-230 | 创建实例独立向导页 | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-231 | 实例快速复制核心/插件/根配置，高级模式按目录包含排除 [规格][s037] | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-232 | 节点页默认首选节点，页眉刷新仅刷新当前数据、不整页reload | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-233 | 实例启动命令/JVM/JDK/环境/资源/自重启可编辑并持久化 | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-234 | 创建向导可改命令示例、jar 提示，隐藏系统分配工作目录 | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-235 | 1000+ 实例列表（卡片/树表、虚拟化、分组搜索与服务端分页） [规格][s038] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-236 | 建后端/代理模态优化与 Docker 一键建服（含原 FR-239） | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-237 | 节点 Docker 可用性检测、安装引导与建服前阻断 | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
-| FR-240 | 1000+ 导航实例选择器（搜索/虚拟化/最近收藏；含 FR-245） | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-241 | 全局命令搜索与集群徽标弹层（服务端搜索；含 FR-242） | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-243 | 顶部路由加载进度条与统一切页过渡 | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-244 | 全站动画与过渡统一（CSS motion token，非 framer-motion） [规格][s038] | P2 | ✅ 已交付@v0.13.0·四档验收；CSS motion token非framer-motion |
-| FR-246 | 全站卡片视觉范式与节点卡片信息密度提质 | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-247 | 1000+ 实例服务端搜索、分页与分组聚合 API [规格][s039] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-248 | OTA 签名密钥自动生成与公钥展示 [规格][s040] | — | ❌ 已废弃（验签已去，见 ADR-054） |
-| FR-249 | OTA 拉取失败追踪、错误详情与成功失败筛选 [规格][s041] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-250 | 分发本地文件树编排、sync 调整后批量上传发布 | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-251 | 4G+ 文件分块上传协议与实时进度 [规格][s042] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-252 | 分发sync覆盖/仅一次/忽略、托管目录与发布步骤大白话解释 | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-253 | OTA 客户端信任公钥运行期可配 [规格][s043] | — | ❌ 已废弃（signPublicKey 废弃，见 ADR-054） |
-| FR-254 | 分发配置树拖拽移动文件/目录以编排目标路径 | P2 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-255 | 分发清理目录树与 clean-all（保留内置/自定排除） [规格][s044] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-256 | updater 去验签/CAS/core 自更新，保留 sha256 与拉取鉴权 [规格][s045] | — | ✅ 已交付@v0.13.0·四档验收 |
-| FR-257 | 流式下载/解压、sha256 与 HTTP Range 续传（1GB 内存<10MB） [规格][s045] | — | ✅ 已交付@v0.13.0·四档验收 |
-| FR-258 | 楔子首次拉 core、sha256 校验、保留三版回滚与配置透传 [规格][s045] | — | ✅ 已交付@v0.13.0·四档验收 |
-| FR-259 | CP core 多版本归档、鉴权下载、面板切换回滚与 hotfix 上传 [规格][s045] [规格][s046] | — | ✅ 已交付@v0.13.0·四档验收 |
-| FR-260 | 更新器简化 UI/ADR/文档同步、配置下载与受引用 core 防删 | — | ✅ 已交付@v0.13.0·四档验收 |
-| FR-263 | 拉取密钥加密器自动生成持久化、env 优先与密钥有效期编辑 | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-264 | 单节点源站限流/配额/IP 封禁/密钥态/频道降速与安全画像 [规格][s047] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-261 | 发布文件树多选/重命名/拖放/zip 解压/冲突处理，发布才上传 | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-262 | 清理目录树右键标记、多选与父子联动，产出清理/排除范围 | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-265 | 分发统计/监控/请求日志/客户端四视图与运行态心跳联动 [规格][s048] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-266 | core 构建版本/commit/dirty/时间内嵌展示，缺元信息仍准 hotfix [规格][s049] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-267 | A+C Jian绿高密度设计底座：细边框/小圆角/紧凑表/状态数字 [规格][s050] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-268 | 节点作用域、侧栏信息架构与页面归位（单服能力收口控制台） [规格][s050] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-269 | 统一服务器控制台（实例概览与九页签） [规格][s050] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-270 | 节点/全部服务器高密度列表，1000+搜索分页聚合与下钻 [规格][s050] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-271 | 平台首页高密度总览：平台首页按节点、服务器、异常、任务、资源、告警等维度重排为一屏速扫总览 [规格][s050] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-272 | 单服能力收进控制台、平台能力归管理域并统一高密度皮肤 [规格][s050] | P1 | ✅ 已交付@v0.13.0·四档验收 |
-| FR-273 | 共享 UI/token/charts 包与控件博物馆（不抽业务、不增后端） [规格][s051] | — | ✅ 已交付@v0.13.0·四档验收 |
-| FR-274 | Bot 会话 YAML 动作编排与 50 Bot 稳定验收 [规格][s052] | P2 | ✅ 已交付@v0.13.0·50/50真连约5.5分钟，原30min为缩比验收 |
-| FR-275 | 独立 WS 令牌密钥生成、注册下发与 Worker 身份文件持久化 [规格][s053] | P0 | ✅ 已交付@v0.13.0·全真栈验收（无手工 secret 场景端到端：注册自动下发→终端 101） |
-| FR-276 | 终端密钥不一致 401 结构化诊断与修复指引 [规格][s053] | P1 | ✅ 已交付@v0.13.0·正向真机通过；401诊断分支仅单测 |
-| FR-277 | SSH 部署/更新 CP 与 Worker（root/sudo/user，幂等保数据身份） [规格][s054] | P1 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-278 | CP 内嵌同版Linux/Windows Worker，内嵌优先、缓存/远程兜底 [规格][s055] | P1 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-279 | JDK 受限网络代理真机验证与失败时代理/镜像可操作引导 | P2 | ✅ 已交付@v0.15.0·代理链路真机；网络失败态仅DOM证据 |
-| FR-280 | 代理面板提示与连通测试自定义目标 | P2 | ✅ 已交付@v0.15.0·真机验收（任意 URL 实测+可编辑输入框线上 bundle 命中） |
-| FR-281 | Worker 反向 gRPC 隧道、直拨回退与终端 CP 中转（免入站） [规格][s056] | P1 | ✅ 已交付@v0.15.0·真机验收（现网双反向隧道自愈、隧道承载探针/上传/终端中转、NAT 场景真跑） |
-| FR-282 | Worker 同机多节点独立 systemd unit，默认命名兼容 | P1 | ✅ 已交付@v0.15.0·真机验收（三 unit 共存互不覆盖，同机新旧脚本正反对照） |
-| FR-283 | 根 pnpm workspace、前端/共享配置迁 apps/packages（行为不变） [规格][s057] | P2 | ✅ 已交付@v0.16.0 |
-| FR-284 | devmock 独立包与依赖反转（生产构建不含 mock） [规格][s057] | P2 | ✅ 已交付@v0.16.0 |
-| FR-285 | Go 入口迁 apps，internal 与 embed 目标不动（行为不变） [规格][s057] | P2 | ✅ 已交付@v0.16.0 |
-| FR-286 | Bot Worker 迁 apps，更新 spawn/打包路径并真机验证 [规格][s057] | P2 | ✅ 已交付@v0.16.0 |
-| FR-287 | go-task 统一 build/test/lint/dev 命令面，Windows/Linux 可用 [规格][s057] | P2 | ✅ 已交付@v0.16.0 |
-| FR-288 | 前端版本构建期派生 Go 版本真源，展示/API/产物一致 [规格][s057] | P2 | ✅ 已交付@v0.16.0 |
-| FR-289 | JDK arch 别名归一；未知架构 422 明拒 | P2 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-290 | JDK 下载停滞看门狗、中断网络分类与可操作引导 | P2 | ✅ 已交付@v0.15.0·单测/真机回归；真停滞引导待自然复现 |
-| FR-291 | JDK 安装失败清残留、重试自愈，完好目录拒覆盖 | P2 | ✅ 已交付@v0.15.0·真机验收（预植残骸自愈装成+完好目录仍拒，同机正反对照） |
-| FR-292 | 托管 JDK 删除到顶层子目录，拒删托管根及根外路径 | P2 | ✅ 已交付@v0.15.0·真机验收（嵌套删除无父壳、邻居 JDK 完好、拒删托管根） |
-| FR-293 | 侧栏收藏置顶/最近八服、搜索收藏互通（不增高频轮询） | P2 | ✅ 已交付@v0.15.0·真机验收（收藏/最近渲染、点击客户端跳转进服、与选择器星标互通、双空引导） |
-| FR-294 | 页眉集群统计浮窗与节点/实例下钻（打开才取、最多八行） | P2 | ✅ 已交付@v0.15.0·真机验收（节点浮窗 4 节点各显运行数、运行服浮窗名称+节点+在线、查看全部页脚） |
-| FR-295 | 实例九页签保活、终端连接管理与文件/配置草稿保留 [规格][s058] | P2 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-296 | 跨服至多三服 LRU 热缓存、闲置10分钟断 WS 后自动重连 [规格][s058] | P2 | ✅ 已交付@v0.15.0·热切真机；闲置断连/四台LRU仅单测未真机 |
-| FR-297 | 实例域缓存、后台刷新与悬停防抖预取 | P2 | ✅ 已交付@v0.15.0·真机验收（跨服回切瞬时呈现无白屏，热缓存命中） |
-| FR-298 | 多类型节点运行时库、常用安装路径扫描与手动登记 [规格][s059] | P1 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-299 | Node.js 一键安装，代理/停滞/残骸自愈/删除与 JDK 同语义 [规格][s059] | P1 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-300 | Bot spawn 优先节点托管 Node，可指定、缺省回退 PATH [规格][s059] | P1 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-301 | CP 多运行时库存聚合缓存、手动刷新与失败保留旧值 [规格][s059] | P1 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-302 | 现有服务器就地导入或搬迁（就地删除不删原目录） [规格][s060] | P1 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-303 | 审计 action 中英文映射、可见原键、未知键安全回退 | P2 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-304 | 文件/插件部署流式上传、校验后原子落盘；旧 Worker 有界回退 [规格][s061] | P1 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-305 | 隧道/直拨双向 unary 消息统一64MiB边界，不限制流式传输 [规格][s062] | P1 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-306 | 节点 npm/pnpm/yarn 偏好、多 registry 与凭据脱敏配置 [规格][s063] | P1 | ✅ 已交付@v0.15.0·真机验收 |
-| FR-307 | 托管全局运行时包增删改查、异步进度与失败引导 [规格][s063] | P1 | ✅ 已交付@v0.16.0 |
-| FR-308 | CP 下发 Bot Worker，依赖装全局包并通过 NODE_PATH 运行 [规格][s064] | P1 | ✅ 已交付@v0.16.0 |
-| FR-309 | 节点有实例拒删；离线 force 可级联删记录，不清远端文件 | P1 | ✅ 已交付@v0.17.0 |
-| FR-310 | 删运行中实例先停/杀完整进程树，死透校验后清目录与记录 | P1 | ✅ 已交付@v0.17.0 |
-| FR-311 | 节点页 JDK 登记编辑与统计布局紧凑化 | P2 | ✅ 已交付@v0.16.0 |
-| FR-312 | 实例启动失败原因横幅与工作台展示（非空即显） | P1 | ✅ 已交付@v0.16.0 |
-| FR-313 | 实例退出码/信号/时长/尾日志快照上报、留存与崩溃诊断 UI [规格][s065] | P1 | ✅ 已交付@v0.17.0 |
-| FR-314 | 启动同步预检 JDK/目标/目录，不过检不进 STARTING [规格][s066] | P1 | ✅ 已交付@v0.16.0 |
-| FR-315 | 实例/工作台按状态光晕，双主题平滑过渡 | P2 | ✅ 已交付@v0.16.0 |
-| FR-316 | 搭建向导 MC 版本与 JDK 需求预检，不兼容阻断并引导安装 | P2 | ✅ 已交付@v0.17.0 |
-| FR-317 | CP 预警+Worker 实时内存启动守卫（批量并发预留待增强） | P0 | ✅ 已交付@v0.16.0 |
-| FR-318 | 压力态 SQLite 嵌套事务/连接错排查与回归 | P2 | ✅ 已交付@v0.17.0 |
-| FR-319 | 搭建异步任务与阶段进度、临时下载校验、未完工实例启动闸 | P0 | ✅ 已交付@v0.16.0 |
-| FR-320 | API 4xx/5xx 带路径/错误/身份落平台日志 | P1 | ✅ 已交付@v0.16.0 |
-| FR-321 | 失败写操作亦入审计，列表结果徽章与错误详情 | P1 | ✅ 已交付@v0.16.0 |
-| FR-322 | 心跳正常取消/EOF 降 Debug，异常 WARN 带节点标识 | P2 | ✅ 已交付@v0.16.0 |
-| FR-323 | 导入搬迁/克隆/备份创建恢复异步任务、阶段进度与终态通知 [规格][s067] | P1 | ✅ 已交付@v0.16.0 |
-| FR-324 | 短操作 loading/防重与文件上传百分比、下载反馈 | P2 | ✅ 已交付@v0.16.0 |
-| FR-325 | Worker 接管重连有界重试、保留 PID 并兜底清理孤儿树 | P1 | ✅ 已交付@v0.17.0 |
-| FR-326 | 心跳在管清单反向对账，无记录实例按宽限/确认策略处置 [规格][s068] | — | ✅ 已交付@v0.20.0·真机孤儿检测/dispose/Worker 清理闭环 |
-| FR-327 | 页眉任务中心下拉面板 | P2 | ✅ 已交付@v0.17.0 |
-| FR-328 | 搭建 MC 版本及其他长下拉列表滚动修复 | P1 | ✅ 已交付@v0.17.0 |
-| FR-329 | 非终态任务自动轮询，终态停止（SSE 不在范围） | P1 | ✅ 已交付@v0.17.0 |
-| FR-330 | 节点核心缓存命中复用、校验入库、可清理与任务提示 | P1 | ✅ 已交付@v0.17.0 |
-| FR-331 | 搭建中实例前后端所有启动入口强制拒绝并引导任务中心 | P1 | ✅ 已交付@v0.17.0 |
-| FR-332 | 折叠态导航分类图标点击跳转分类首页 | P2 | ✅ 已交付@v0.17.0 |
-| FR-333 | CP 本机密码重置、解锁/随机密码与用户列表（jmctl 不读库） | P1 | ✅ 已交付@v0.17.0 |
-| FR-334 | T 型贯通品牌顶栏、折叠控件迁移与页眉节点作用域下线 | P2 | ✅ 已交付@v0.17.0 |
-| FR-335 | 群组拓扑聚合、成员健康摘要与搜索/筛选/缩放分层视口 [规格][s069] | P2 | ✅ 已交付@v0.17.0 |
-| FR-336 | 用户服务端搜索分页、候选 Combobox 虚拟化 [规格][s070] | P2 | ✅ 已交付@v0.17.0 |
-| FR-337 | 任务列表分页信封/总数/加载更多，保留运行中轮询 [规格][s071] | P2 | ✅ 已交付@v0.17.0 |
-| FR-338 | 备份存储配置编辑、凭据引用校验与 mock 同步 [规格][s072] | P2 | ✅ 已交付@v0.17.0 |
-| FR-339 | 控制台玩家/备份/定时分区接真，未接分区不留假入口 [规格][s073] | P2 | ✅ 已交付@v0.17.0 |
-| FR-340 | 指标多目标批量查询与逐实例鉴权、前端消除 N+1 [规格][s074] | P1 | ✅ 已交付@v0.17.0 |
-| FR-341 | daemon 抗 SIGPIPE/cgroup 连坐、优雅停机有界与自动重连 [规格][s075] | P0 | ✅ 已交付@v0.17.0 |
-| FR-342 | 搭建失败 DAMAGED 保留参数、一键重建并回报阶段错误 [规格][s076] | P1 | ✅ 已交付@v0.18.0 |
-| FR-343 | 无探针真实 CPU/RSS/时长；TPS/MSPT/人数标需探针 [规格][s077] | P1 | ✅ 已交付@v0.18.0 |
-| FR-344 | 自定义启动环境写 .env，下次启动生效；运行期完整环境只读 [规格][s078] | P2 | ✅ 已交付@v0.18.0 |
-| FR-345 | 停止/崩溃终端历史回放与实例日志筛选/搜索/导出 [规格][s079] | P2 | ✅ 已交付@v0.18.0 |
-| FR-346 | 上传哈希秒传、小文件聚合、有限并发；大文件仍分块 [规格][s080] | P1 | ✅ 已交付@v0.18.0 |
-| FR-347 | 本地/S3 BlobStore、存储渠道与短期预签名302下载 [规格][s081] | P1 | ✅ 已交付@v0.18.0 |
-| FR-348 | 存量制品校验搬运、更新位置后删源，进度/失败/幂等续跑 [规格][s082] | P1 | ✅ 已交付@v0.18.0 |
-| FR-349 | 制品/S3 缺失孤儿对账与显式确认处置（不自动修复） [规格][s083] | P2 | ✅ 已交付@v0.18.0 |
-| FR-350 | 发布树多级/多行建目录与右键定点上传文件/文件夹 | P2 | ✅ 已交付@v0.18.0 |
-| FR-351 | 正式发布缺楔子/core 硬失败；开发态仍允许缺件启动 | — | ✅ 已交付@v0.19.0 |
-| FR-352 | 更新器内嵌版本/可用性/大小与版本旁路摘要（不含构建元信息） [规格][s084] | — | ✅ 已交付@v0.19.0 |
-| FR-353 | 楔子/core 日志10MiB或跨日轮换 gzip 留五份（失败不挡启动） [规格][s085] | — | ✅ 已交付@v0.19.0 |
-| FR-354 | Docker/Compose 可构建启动；不含 Worker 在线/GHCR/K8s [规格][s086] | — | ✅ 已交付@v0.19.0 |
-| FR-355 | CP 下载安装与启动提示；不做 systemd/Windows 服务化 [规格][s087] | — | ✅ 已交付@v0.19.0 |
-| FR-356 | 分发下载/更新健康、精确/近似活跃与安全 KPI 共享口径 [规格][s088] | — | ✅ 已交付@v0.19.0 |
-| FR-357 | 分发统计/趋势/错误样例/详情加厚与分布钻取过滤 [规格][s089] | — | ✅ 已交付@v0.19.0 |
-| FR-358 | 安全画像/风险时间线、确认后封IP/改密钥态与频道安全摘要 [规格][s090] | — | ✅ 已交付@v0.19.0 |
-| FR-359 | 分发三页 URL 深链/筛选互通，不改后端业务语义 | — | ✅ 已交付@v0.19.0 |
-| FR-360 | core 诊断画像字段补齐、必需/可选与隐私退出/脱敏契约 [规格][s091] | — | ✅ 已交付@v0.19.0 |
-| FR-361 | 管理员按筛选导出统计/事件/安全日志 CSV（脱敏与限流） [规格][s092] | — | ✅ 已交付@v0.19.0 |
-| FR-362 | Bot 发压节点池、分片容量预检、幂等创建停止与批次回执 [规格][s093] | — | ✅ 已交付@v0.19.0 |
-| FR-363 | 可验证分组/种子/屏障场景与塔防预设（不含技能/商店等） [规格][s094] | — | ✅ 已交付@v0.19.0 |
-| FR-364 | 探针压测可信事件与塔防断言桥（不以聊天解析作正式判据） [规格][s095] | — | ❌ 已废弃（未实施，由 FR-369 取代） |
-| FR-365 | Bot 退避重连、进程/Worker 恢复与序号状态归真 [规格][s096] | — | ✅ 已交付@v0.20.0·恢复真机；error态须retry-failed，不自动connected |
-| FR-366 | 压测状态机、stable/step/spike 曲线与自动容量判定 [规格][s097] | — | ❌ 已废弃（未实施，由 FR-370 取代） |
-| FR-367 | 压测场景模板与五步向导、结构化/YAML 与容量预览 [规格][s098] | — | ❌ 已废弃（未实施，由 FR-371 取代） |
-| FR-368 | 压测实时聚合、分页诊断/重试与 JSON/CSV 报告 [规格][s099] | — | ❌ 已废弃（未实施，由 FR-372 取代） |
-| FR-369 | 通用命令调度/checkpoint/重试；业务事件仅可选、不入默认判定 [规格][s095] [规格][s100] | — | ✅ 已交付@v0.20.0·2Bot真连/500物化；单Worker全连受信号量限 |
-| FR-370 | 通用命令压测状态机、三曲线与阈值判定（业务指标不入默认） [规格][s097] | — | ✅ 已交付@v0.20.0·metrics/SSE真机；500×60min harness未跑满 |
-| FR-371 | 通用命令模板/五步向导，不要求探针或业务字段 [规格][s098] | — | ✅ 已交付@v0.20.0·Playwright mock 向导 E2E |
-| FR-372 | 通用压测聚合 SSE、分页诊断/重试/报告（命令成功仅发送） [规格][s099] | — | ✅ 已交付@v0.20.0·Playwright mock 会话页 + 后端 stream 真连 |
-| FR-373 | 文件权限元数据、写前预检与单路径 chmod（不 chown/不提权） [规格][s101] | — | ✅ 已交付@v0.20.0 |
-| FR-374 | 服务器导入绝对路径输入、权限修复引导与写配置预检 [规格][s102] | — | ✅ 已交付@v0.20.0 |
-| FR-375 | 资源管理器地址/历史/排序/视图记忆与权限预检修复 [规格][s103] | — | ✅ 已交付@v0.20.0 |
-| FR-376 | 文件多标签、应用内浮窗与浏览器独立路由窗口 [规格][s104] | — | ✅ 已交付@v0.20.0 |
-| FR-377 | 跨主区/浮窗/浏览器标签拖放与剪切复制粘贴统一总线 [规格][s105] | — | ✅ 已交付@v0.20.0 |
-| FR-378 | 统一文件壳/能力注入并接全场景，保留分发标记等业务能力 [规格][s106] | — | ✅ 已交付@v0.20.0 |
-| FR-384 | Agent Token 独立鉴权、默认只读/写白名单/scope与强审计 [规格][s107] | — | ✅ 已交付@v0.20.0·真机签发/鉴权/吊销 |
-| FR-385 | jm-agent HTTP CLI（不连DB/gRPC，Token 只传入不落盘） [规格][s108] | — | ✅ 已交付@v0.20.0·真机 whoami/启停 |
-| FR-386 | 独立 stdio mcp-bridge（已由 CP 内嵌网关取代） [规格][s109] | P1 | ❌ 已废弃（由FR-389/392取代；删除独立stdio进程） |
-| FR-387 | 管理员 Agent Token 列表/创建/详情/吊销与连接片段 UI [规格][s107] | — | ✅ 已交付@v0.20.0 |
-| FR-388 | CLI/CP-MCP/curl 同策略安全契约、≥30断言与CI门禁 [规格][s110] | — | ✅ 已交付@v0.20.0·安全闸≥30；会话断言随FR-489缩减 |
-| FR-389 | CP 内嵌 Streamable HTTP/SSE MCP（旧协议会话由489退役） [规格][s111] | — | ✅ 已交付@v0.20.0·会话运维由FR-489取代，保留SSE兼容 |
-| FR-390 | Agent 读写调用流水、client来源、Token活跃统计与保留窗口 [规格][s112] | — | ✅ 已交付@v0.20.0·真机 mcp/jmagent client 可区分 |
-| FR-391 | Agent 调用/Token/审计观测（旧会话页由489替换） | — | ✅ 已交付@v0.20.0·旧会话页由FR-489改为Token活动视图 |
-| FR-392 | 删除独立 mcp-bridge/stdio 发布路径并统一 jmagent 客户端标识 [规格][s111] | — | ✅ 已交付@v0.20.0·mcp-bridge 删除 + CI/契约清理 |
-| FR-393 | 下线节点归档列表/只读详情，保留在线与名下实例删除守卫 [规格][s113] | — | ✅ 已交付@v0.20.0·真机 API 闭环 |
-| FR-394 | 归档节点硬清理须精确确认，force只删平台记录不删远端文件 [规格][s113] | — | ✅ 已交付@v0.20.0·真机硬删闭环 |
-| FR-395 | Agent 能力分组与节点继承scope；旧Token不扩权，保留永久禁区 [规格][s114] | P0 | ✅ 已交付@v0.21.0 |
-| FR-396 | MCP 节点/实例生命周期强类型工具；不开放准入Token签发 [规格][s115] | P0 | ✅ 已交付@v0.21.0 |
-| FR-397 | MCP 文件/配置/插件控制与短期传输票据，保留路径/体积护栏 [规格][s116] | P1 | ✅ 已交付@v0.21.0 |
-| FR-398 | MCP Bot/模板/压测全编排；目标与发压节点均过scope，明细分页 [规格][s117] | P0 | ✅ 已交付@v0.21.0 |
-| FR-399 | 500 Bot JVM/发压进程/节点/集群容量报告（实测与25%建议分列） [规格][s118] | P0 | ✅ 已交付@v0.21.0 |
-| FR-400 | 受管资源归因/仪表鲜度与下钻，仅管辖进程、不采任意OS进程 [规格][s119] | P1 | ✅ 已交付@v0.21.0 |
-| FR-401 | Bot Worker RSS/事件循环/容量历史；不伪造单Bot RSS [规格][s120] | P1 | ✅ 已交付@v0.21.0 |
-| FR-402 | 平台健康/资源/告警/任务/Bot聚合TopN与下钻，不全铺实体 [规格][s121] | P1 | ✅ 已交付@v0.21.0 |
-| FR-403 | 日志中心平台与节点实例视图分流 | P1 | ✅ 已交付@v0.21.0 |
-| FR-404 | 50 Bot一小时乱斗/恢复/资源稳定；非服务端伤害证据或TEST-500 [规格][s122] | P0 | ✅ 已交付@v0.21.0 |
-| FR-405 | 移除匿名注册；管理员直建/七天一次性可撤组成员邮箱邀请 [规格][s123] | P0 | ✅ 已交付@v0.21.0 |
-| FR-406 | 监控页整合平台/节点/实例与默认多指标对比、URL下钻 | P1 | ✅ 已交付@v0.21.0 |
-| FR-407 | 受管实例PID脱敏详情、历史CPU/RSS/IO异常与缺测证据诊断 [规格][s124] | P1 | ✅ 已交付@v0.21.0 |
-| FR-408 | 根进程复用实例启停；子进程terminate/kill_tree重验归属并审计 [规格][s124] | P1 | ✅ 已交付@v0.21.0 |
-| FR-409 | 探针制品来源/版本库；全局→Worker→实例选择，不自动升旧实例 [规格][s125] | P1 | ✅ 已交付@v0.21.0 |
-| FR-410 | Linux user systemd不可变版本/current/保留数据与显式回滚 [规格][s126] | P1 | ✅ 已交付@v0.21.0 |
-| FR-411 | 探针jar本地上传来源、CAS版本选择下发，不自动改默认或升级 [规格][s127] | P1 | ✅ 已交付@v0.21.0 |
-| FR-412 | 实例顶栏瘦身≤90px、可收指标与最近/收藏模糊切换器 | P1 | ✅ 已交付@v0.22.0 |
-| FR-413 | 实例 Tab 重组 | P1 | ✅ 已交付@v0.22.0 |
-| FR-414 | 终端热集上限治理 | P1 | ✅ 已交付@v0.22.0 |
-| FR-415 | 只读结构化DOM虚拟日志、5000行环缓与独立命令输入 [规格][s128] | P0 | ✅ 已交付@v0.22.0 |
-| FR-416 | 命令栏智能输入 | P1 | ✅ 已交付@v0.22.0 |
-| FR-417 | 输出区观察能力 | P1 | ✅ 已交付@v0.22.0 |
-| FR-418 | 跨虚拟行锚点选择/自动滚动与堆栈块折叠复制 [规格][s128] | P1 | ✅ 已交付@v0.22.0 |
-| FR-419 | 日志游标回溯/锚定与跳时间（不含超保留期NDJSON归档） [规格][s128] | P1 | ✅ 已交付@v0.22.0 |
-| FR-420 | F11沉浸控制台与可见工作台头，不用tmux前缀/底部状态栏 [规格][s129] | P2 | ✅ 已交付@v0.22.0 |
-| FR-421 | 至多四pane可视分屏/聚焦/最大化，复用鼠标复制、无键盘复制模式 [规格][s129] | P2 | ✅ 已交付@v0.22.0 |
-| FR-422 | 仅实例路由视口自适应、顶栏常驻与卡内滚动 [规格][s130] | P1 | ✅ 已交付@v0.22.0 |
-| FR-423 | 实例Tab按内容宽度分栏、空态收缩与动态告警合流 [规格][s130] | P1 | ✅ 已交付@v0.22.0 |
-| FR-424 | 宽表格列宽与稀疏表治理 | P1 | ✅ 已交付@v0.22.0 |
-| FR-425 | 分发三页自定时间/URL同步；超14天活跃机器明确标近似 | P1 | ✅ 已交付@v0.22.0 |
-| FR-426 | 机器级更新清单/分页排序与事件时间线钻取（独立spec待补） [规格][s131] | P1 | ✅ 已交付@v0.22.0 |
-| FR-427 | 分发运维统计按天×小时更新热力图（纯前端，消费既有桶） | P2 | ✅ 已交付@v0.22.0 |
-| FR-428 | 分发概览洞察卡、同环比与口径解读（独立spec待补） [规格][s132] | P1 | ✅ 已交付@v0.22.0 |
-| FR-429 | 分发洞察→时间→数字→趋势/热力→明细布局，随430收敛两页 | P2 | ✅ 已交付@v0.22.0 |
-| FR-430 | 分发两页/运维七Tab、旧路由透传与管理员守卫/i18n [规格][s133] | P1 | ✅ 已交付@v0.22.0 |
-| FR-431 | 六域导航/侧栏按权限裁剪，业务URL不变、告警页仍无入口 [规格][s134] | P1 | ✅ 已交付@v0.22.0 |
-| FR-432 | 可配置权限树/角色/用户覆盖，deny永胜、唯一超管不可降权 [规格][s134] | P0 | ✅ 已交付@v0.22.0 |
-| FR-433 | 实例角色可改与beacon角色；不级联删注册、beacon不参与MC拓扑 | P1 | ✅ 已交付@v0.23.0 |
-| FR-434 | MCP群组成员/拓扑/代理注册全工具，删除须精确确认 | P1 | ✅ 已交付@v0.23.0 |
-| FR-435 | 实例分组七项MCP工具，分组仅运维归类、不承载权限配额 | P1 | ✅ 已交付@v0.23.0 |
-| FR-436 | wrapper死/Java活孤儿按PID强杀树，死透才删记录、失败保留 | P0 | ✅ 已交付@v0.23.0 |
-| FR-437 | Bot容量实时刷新与30秒鲜度阈值，消除陈旧伪容量不足 | P1 | ✅ 已交付@v0.23.0 |
-| FR-438 | Bot物理/插件裁剪、分片与容量配置，消除事件循环过载 | P0 | ✅ 已交付@v0.23.0·500在线稳定；僵死Bot回收归FR-460已验 |
-| FR-439 | MCP旧会话并发上限永久429修复（协议会话已退役） | P1 | ❌ 已废弃（原已交付@v0.23.0；随FR-489移除协议会话/并发上限） |
-| FR-440 | MCP实例标签缺省不改/空清除/非空覆盖，须instance.write | P1 | ✅ 已交付@v0.23.0 |
-| FR-441 | asset/HTTPS URL/节点文件搭二进制，异步进度/损毁重建 | P1 | ✅ 已交付@v0.23.0·URL/节点文件真机；asset来源仅单测 |
-| FR-442 | Beacon可选搭建预设（制品库优先于GitHub，未部署不影响平台） | P1 | ✅ 已交付@v0.23.0·GitHub来源及初始化真机；库优先档未真机 |
-| FR-443 | Beacon拓扑尽力推送（不重试、不阻断/回滚本机，启停不推） | P2 | ✅ 已交付@v0.23.0·mock Beacon推送/不可达本机零阻塞已验 |
-| FR-444 | 手动拉Beacon集群/大区/小区为组树和标签；不可达零本地改动 | P2 | ✅ 已交付@v0.23.0 |
-| FR-445 | 类型×角色能力画像声明Tab/探针/MC语义，前端无硬编码分支 [规格][s135] | P1 | ✅ 已交付@v0.23.0 |
-| FR-446 | 无探针SLP取MOTD/版本/人数，Query取实名玩家/插件/地图 [规格][s136] | P1 | ✅ 已交付@v0.23.0 |
-| FR-447 | 采集优先探针→直探→不可用，同指标不伪造缺失值 [规格][s136] | P1 | ✅ 已交付@v0.23.0 |
-| FR-448 | 按角色/类型/探针显隐详情Tab，非MC隐藏MC专有内容 [规格][s137] | P1 | ✅ 已交付@v0.23.0 |
-| FR-449 | 代理专属子服状态/跨服玩家/运行指标/配置视图，复用注册关系 [规格][s137] | P2 | ✅ 已交付@v0.23.0 |
-| FR-450 | 非MC进程/端口/HTTP-TCP健康/配置启动参数视图，保留文件与监控 [规格][s137] | P1 | ✅ 已交付@v0.23.0 |
-| FR-451 | 启动参数/server.properties明面可改，内联或外部文件引用二选一 [规格][s138] | P1 | ✅ 已交付@v0.23.0 |
-| FR-452 | 实例多级树表、标签/组/网络/角色/类型/节点切换与未分组归位 [规格][s139] | P1 | ✅ 已交付@v0.23.0 |
-| FR-453 | 完整网络拓扑含未注册与配套服务，按分组层级健康/负载着色 [规格][s139] | P1 | ✅ 已交付@v0.23.0 |
-| FR-454 | binary/beacon不配探针端口/不抓指标/拒推Bukkit jar并归正类型 | P1 | ✅ 已交付@v0.23.0 |
-| FR-455 | 接管退避复核、多触发重推与状态对账，重启零误杀/漏推 [规格][s140] | P0 | ✅ 已交付@v0.23.0 |
-| FR-456 | 运行期周期识别wrapper/direct/docker孤儿，按策略有限兜底 [规格][s140] | P0 | ✅ 已交付@v0.23.0 |
-| FR-457 | 60+实例分批/间隔/灰度/失败即停/暂停继续与进度取消 [规格][s141] | P1 | ✅ 已交付@v0.23.0 |
-| FR-458 | 多实例配置模板推送、漂移检测与基线收敛 [规格][s141] | P1 | ✅ 已交付@v0.23.0 |
-| FR-459 | 存活/响应巡检、假死受控自愈与崩溃熔断，可配置并审计 [规格][s142] | P1 | ✅ 已交付@v0.23.0 |
-| FR-460 | 旧workerEpoch僵死Bot周期回收、审计与目标容量补足 [规格][s143] | P1 | ✅ 已交付@v0.23.0 |
-| FR-461 | 集群健康总览墙 [规格][s144] | P1 | ✅ 已交付@v0.23.0 |
-| FR-462 | 动态基线/EWMA/同环比、突变与饱和度告警覆盖实例指标 [规格][s144] | P1 | ✅ 已交付@v0.23.0 |
-| FR-463 | SLO/可用率/MTTR/MTBF/误差预算；无证据标不适用、拍加权 [规格][s145] | P2 | ✅ 已交付@v0.23.0 |
-| FR-464 | 资源容量时序外推/趋势告警、耗尽时间与置信区间 [规格][s145] | P2 | ✅ 已交付@v0.23.0 |
-| FR-465 | GC次数/耗时入时序与TPS劣化归因（GC/区块/实体） [规格][s146] | P2 | ✅ 已交付@v0.23.0 |
-| FR-466 | 服务器快照 / 一键回滚 [规格][s147] | P2 | ✅ 已交付@v0.23.0 |
-| FR-467 | Docker与非Docker运行期CPU/内存/磁盘配额及超限处置 [规格][s148] | P2 | ✅ 已交付@v0.23.0 |
-| FR-468 | 二进制/Beacon当前版本、指定升级与上一版回滚 [规格][s149] | P2 | ✅ 已交付@v0.23.0 |
-| FR-469 | 跨节点全实例TPS/MSPT/CPU/内存/在线排行与玩家时段趋势 [规格][s150] | P2 | ✅ 已交付@v0.23.0 |
-| FR-470 | 崩溃诊断增强 [规格][s151] | P2 | ✅ 已交付@v0.23.0 |
-| FR-471 | 运行漂移观测/冲突预检/显式接管；启动恢复不强杀，周期策略可处置 | P1 | ✅ 已交付@v0.23.0 |
-| FR-472 | running零在线且停滞10分钟会话先收敛后补足；有在线Bot不回收 | P1 | ✅ 已交付@v0.24.0 |
-| FR-473 | 日志共享契约/ADR/查询所有权与资源性能门禁；位置模型为 Read/Reclaim 两水位（Durable/Delivery 已降为进程内派生读数） [规格][s152] | P0 | ✅ 已交付@v0.24.0·契约冻结及已覆盖回归；不代表下游全部验收·**2026-11-01 重写**：原「四水位」表述已收窄——`Durable`（已进队列）与 `Delivery`（可从 REQUEST_DONE 区间派生）在索引库 `:memory:` + WAL 纯内存下**没有跨进程意义**，不再作为独立持久水位；真正承重的只有 `Read`（采集游标）与 `Reclaim`（投递证据连续前缀）。`Positions` 结构字段保留（供进程内观测与既有测试），但契约不再要求它们跨重启 |
-| FR-474 | Worker 日志采集与持久化通道（feat）：FileTailer + StdIO + ArchiveImporter **共用采集账本**；源分段身份与 `latest.log→轮转→.gz` 关联；cursor/WAL/分水位回收/坏记录隔离；STDIO 受管 Raw 分段；容量耗尽与缺口可见；**hash+size 仅识别归档对象**；不引入 Filebeat 等。**验收含 Runbook A**（Worker WAL 强杀/ACK 丢失/reclaim/恢复分段释放与 hold 保护真实 PASS）→ `docs/specs/worker-log-acquisition/spec.md` | — | ❌ 已废弃·**gz 归档采集与 ArchiveImporter 已整体删除（2026-11-03 起 ingest 只走 WAL → 投递 VL）；「FileTailer + StdIO + ArchiveImporter 共用采集账本」的对象不再存在**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·生产采集/投影/ACK恢复/reclaim 已通过；**Runbook A 真机（强杀 `-9` 重启）通过并修复重启时序缺陷**；磁盘容量**真实填盘验收通过**（容器内受限 tmpfs：真实越过 80%→`DEGRADED_STORAGE`、91.67%→`PAUSED` 且必记缺口；经真实 `Pipeline.Ingest` 落账本 `AcquirePaused`+缺口+未投递；**真实 ENOSPC** 填至 100% 观测到 `no space left on device`；见 `worker-log-acquisition/acceptance-real.md`）；**2026-10-02 缺陷加固（缺口风暴）**：登记合并（相邻同因）+ 按原因数量级上限 + 投递成功/已发布投影两条自动消解出口 + 暂停源限频自愈（只投递不读取），人工解算接口与 `ResumeAcquire` 门禁语义不变；转红回归见 CHANGELOG [Unreleased] 与 `worker-log-acquisition/spec.md` §3.3 |
-| FR-475 | Java/MC多行归并、编码/时间/级别归一，失败保原文与事件口径 [规格][s154] | P0 | ✅ 已交付@v0.24.0·仅Linux；Windows运行时未测/未认证 |
-| FR-476 | CP只分发VL资产，Worker本地鉴权supervisor与资源预算 [规格][s155] | P0 | ✅ 已交付@v0.24.0·Windows包校验解包已验，Windows运行时未覆盖 |
-| FR-477 | Catalog 唯一 owner 与分区代次/生命周期，分区可查询性判定 [规格][s156] | P0 | ✅ 已交付@v0.24.0·Runbook B已验·**2026-11-01 重写**：删「冷热迁移」（2026-10-31 已废，mover 恒 nil）与「迟到路由」（单 VL、无跨层路由对象）。Catalog 现存职责收窄为三件：① 分区唯一 owner 与代次（防止重投写错代次）；② 分区可查询性判定（哪些 UTC 天有可读投影）；③ 启动时投影代次一致性自愈 |
-| FR-478 | Deep Archive 与 Rehydrate（feat，**发布必需**）：Provider local/S3/MinIO；VL 分区按 namespace+UTC 日+generation；manifest 含 schema/parser/engine；受管 Raw Archive；Rehydrate 任务化（租约/合并/超时/预留/generation 隔离）；幂等重恢复 → `docs/specs/worker-log-deep-archive/spec.md` | — | ❌ 已废弃·**单 VL 架构下 Deep Archive 与 Rehydrate 已无对象（冷层与 Rehydrate 已删）；archive 包只余 `archive_copy` 导出用的 Provider 抽象（归 FR-501）**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·**真机 RustFS S3 验收通过**（登记/幂等/manifest/对象往返/Rehydrate 租约+复用+预留拒绝+完成/发布 generation 清理矩阵）；manifest 记录真实 VL build_id |
-| FR-479 | Worker 本地查询面：Search/Stats/Fields/Facets/Tail 五类 + 固定 view 快照 + 预算与租约 [规格][s158] | P0 | ✅ 已交付@v0.24.0·功能回归收口·**2026-11-01 重写**：删「按**权威副本**查询」——事件段已落 tmpfs 且不跨重启，「权威副本」这个概念在现架构下不再成立，VL 自身数据就是唯一长期真源。保留并明确：五类查询共用同一固定 view 快照（Search/Stats/Facets 必须同 view，否则统计与列表对不上）；旧 cursor 遇 view 失效须显式 `VIEW_STALE`，不得静默重查。首屏性能延期未达标 |
-| FR-480 | CP全授权目标联邦/覆盖/排序与同快照导出，缺口不交成功附件 [规格][s159] | P0 | ✅ 已交付@v0.24.0·功能回归收口；真机/浏览器限既有scope·**2026-11-01 双节点真机验收**：首次用**两个真 Worker**实装验证跨节点能力（历史上只有单节点，合并/排序从未真被执行过）。通过：目标扇出、K-way 合并排序（14 相邻对 0 违规）、覆盖区分、离线如实降级、**缺口不交成功附件**（停掉节点后 `export_incomplete=true` + `artifact=null`，无 NDJSON）。部分：全平台 `range=all` 导出交不出附件——根因是 13 个目标**确实从未产生过日志**（Catalog 无可查分区，单目标查为 `target_no_data`），不是校验缺陷；此前归因于「VL hot 未运行」已复核否定。**2026-11-04 补齐第 9、10 项**：① 「max_bytes 整请求预算 + 零份额不拨号」——`reserveWorkerBudgets` 的零份额分支已由 `TestReserveWorkerBudgetsZeroShareSkipsTarget` / `…MaxFanoutBoundsShares` 钉住，并做变异验证（把 `continue` 改成「零也拨号」即转红，因为那会让 Worker 把 0 解释成「未声明额度 ⇒ 32MiB 默认」，整请求预算被静默放大）；② 「权限覆盖全部端点，越权无侧信道」——`TestLogFederation_Unauthorized403_NoToken` 已从 4 个端点扩到全部 7 个（facade/search/tail/stats/fields/facets/export），另有 no-log.read 与跨实例越权两条；变异验证（注释掉一条路由注册即转红）。**仍未验：性能/RSS/磁盘门限**（需独占宿主作性能证据，与 FR-498 长稳互斥） |
-| FR-481 | 日志入库切换与 Legacy 只读（feat）：停止**实例与 Worker/Node**日志新入 CP `logs`；platform/audit + **LegacyLogReader**；Legacy 独立保留预算与到期规则；容量预检不足不切换；逐 Worker 切换水位；控制台订阅与持久化推送分离；历史 Multiline 可追溯原文；未统一口径禁止拼精确趋势 → `docs/specs/log-ingest-cutover/spec.md` | — | ❌ 已废弃·**cutover（CP `logs` 表 → Worker VL）已整体下线，没有可切换的两侧；Legacy 只读随之失效**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·地基/接线·cutover+Legacy+DualPath + **HTTP 管理面已注册**（默认关闭）；Legacy/cutover 行为由 service/router 单测覆盖；DualPath federated 侧由 `/logs/federation` 承担（无生产调用方，保留 API 不加投机接线） |
-| FR-482 | 日志中心/统计/导出与失败态；游标结束不冒历史完整 [规格][s161] | P1·发布必需 | ✅ 已交付@v0.24.0·live限基础15项及第16项确认409·**2026-11-01 真机端到端验收**：dev 全栈（CP 30100 + Worker 30102 + 真 VL 30461 + Playwright Chromium）实测——列表/统计/维度/导出全部 200 且数据正确（21 条真实日志、导出 25725B/50 行 ndjson）；**失败态如实降级**（不可达目标 `coverage.complete=false` + `ENGINE_NOT_READY` + `export_incomplete`，不冒充成功）。**2026-11-01 重写**：删「**分层**」——冷热双层已废（单 VL），日志中心不再有层级切换语义。保留：联邦查询聚合、覆盖/质量门禁、导出带缺口标注（不交成功附件）、游标翻页与失败态 |
-| FR-483 | 日志契约/许可/恢复/损失/预算/配置文档与实现对账 [规格][s152] | — | ✅ 已交付@v0.24.0·按实现/已覆盖验收/延期专项对账·**2026-11-01 重写**：删「**切换**」——cutover（CP `logs` 表 → Worker VL）已整体下线，无切换对象 |
-| FR-484 | canonical 事件体落盘 compact（feat）：把 FR-473 §4.3/§5.3「VL 数据根重建的权威事件集合」由 state.json 内联+内存常驻改为追加式磁盘段存储（NDJSON + MANIFEST 原子替换），**内容与语义不变、仍不可按 reclaim 裁剪**；含旧格式迁移、崩溃/截断恢复语义、`persist()` 流式写元数据；并加界三处跨轮无界累积结构（`n.events`/`linePos`/`delivered`）收敛采集期峰值。目标单 Worker 150 源稳态 RSS ≤300MiB → `docs/specs/worker-log-canonical-eventstore/spec.md` + ADR-095 | — | ❌ 已废弃·**2026-11-03 退废**：事件段（canonical 事件体）整体删除——`eventstore` 包 4854 行 + `appendEvents` + 重建写入链一并移除（用户裁定：只保留 WAL → 投递 VL，不做重建）。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：✅ 已交付@v0.24.0·**真机验收通过**（host-1 + 真 VictoriaLogs v1.52.0：64/128/150 源稳态 RSS 22.5/22.3/20.0MiB、峰值 56.0/62.0/61.8MiB，判据 ≤300MiB；state.json 77 803KiB→177.9KiB 并与事件数解耦；**342 源逐一核对 1 026 000 条事件零丢失零重复**）；五个门禁回归 + 幂等回归 + 四条累积结构回归（均含变异验证）全绿；**曾发布错误读数已更正**（未保活致 GC 回收） |
-| FR-485 | 日志采集/WAL/投递/SQL及节点iowait/内存磁盘比率指标告警 | P1 | ✅ 已交付@v0.24.0·**2026-11-01 补齐**：投递链路 13 条指标 + 磁盘缓冲 6 条 + 节点内存/磁盘利用率 + 5 条预置告警规则（默认不启用）。**2026-11-04 补齐最后一项**：SQL 慢查询计数已落地——`stateindex` 在 4 条热路径 SQL（批量 upsert / 逐行 upsert / 批量 delete / 镜像 select）上按语句级计时，超过 `slowQueryThreshold`（50ms）即计数、更新最大值并按节流留痕；读数经 `Manager.IndexSQLSnapshot` → `retention.IndexSQLSource` 暴露三条 Prometheus 序列（`jm_log_index_slow_queries_total` / `_max_seconds` / `_last_timestamp_seconds`）。两条回归含变异验证（去掉零份额分支即转红） |
-| FR-486 | Worker启动注册进度与首轮采集耗时观测、超阈告警 | P1 | ✅ 已交付@v0.24.0·**2026-11-01 实现**：4 阶段分段计时（config/bootstrap/logIngest/wsReady）+ 30s 超阈 Warn + slowestPhase 点名。真机实测 totalMs=6846（logIngest 占 97.9%）。**2026-10-31 标题修订**：原「启动**加载分段**计时/日志、**流式/引用化加载优化**」已无对象——索引库改 `:memory:` 后重启即空库，没有「加载索引」这个阶段可计时/可优化。保留仍有意义的部分：注册前进度、首轮采集耗时、超阈告警 |
-| FR-489 | MCP请求独立鉴权、去协议会话与Token活动视图，保留SSE兼容 [规格][s163] | P1 | ✅ 已交付@v0.24.0·主干真机/E2E通过，无状态与SSE兼容均已验 |
-| FR-490 | 审批状态机、冻结载荷证据、24h过期/幂等/CAS/强审计与自查撤回 | P0 | 📋 计划·批准仅人类JWT，Agent Token服务层永久拒绝 |
-| FR-491 | 审批执行器/事务回执与审计、漂移失败零副作用；优先复用RunAsync | P0 | 📋 计划·重试幂等，保留批准事实与失败原因 |
-| FR-492 | 按action目录穷举高危审批，票据/命令/二进制/快照回滚防绕过 | P0 | 📋 计划·MCP只落票据零副作用；start/restart/热重载按原确认直执 |
-| FR-493 | 审批中心/历史与RBAC节点，deny永胜/唯一超管、无权限403 | P1 | 📋 计划·依赖FR-490 |
-| FR-494 | QQ告警官方主动推送（CP纯出站，不做群内被动回复） [规格][s164] | P1 | ✅ 已交付@v0.24.0·仅单聊真机送达；群主动消息平台限制，前端已下线 |
-| FR-495 | QQ扫码绑定/密钥引用与出站网关群发现（群聊前端已下线） [规格][s165] | P1 | 开发中·扫码/网关/入群落库真机通过；**群通道前端与「QQ接入」视图已主动拆除**（非待验），仅保留只读接入状态观测（网关状态/已发现群）；建群通道需平台开放后新立工作 |
-| FR-496 | 采集索引迁移至本地 SQLite（feat，增强 FR-473~484 底座；spec：`docs/specs/log-index-sqlite/spec.md`）：现索引为单一 JSON 整本重写——实测 307MB/13 源，60 实例外推 1.5–3GB，单次持久化将达秒级（历史事故：~1.2GB 时 >5s 触发 `vlsup` 超时、采集停摆）。改为纯 Go 嵌入式 SQLite（WAL、单写者、只写变更行）+ 旧文件一次性迁移归档。验收：60 源下单次持久化 ≤50ms；迁移逐字段一致；`kill -9` 不丢索引。**2026-10-01 加固（FR-498 实测发现）**：迁移后索引里唯一随总量线性增长的表变成 `delivery_batch`（≈**5 MB/天 @60 源**）且原先无裁剪路径，长跑会把索引无界撑大——按 `reclaim` 水位裁剪历史批次（判据有证明：`End <= Reclaim` 的条目对 `delivery_position` 的连续前缀计算是**恒等元**，且水位单调；失败只告警不阻断，有自证守卫；配置键 `log_index.batch_prune.*` 见 spec §6）。60 源 × 6000 批/源夹具实测：360 000 行 / 库 25.6 MB → **0 行 / 864 KB**；水位滞后窗口内保留量只与滞后有关、与累计总量无关（spec §2.4/§3.8） | — | ❌ 已废弃·**索引库已改 `:memory:`（FR-505 不落盘采集架构），不再有本地 SQLite 索引文件可迁移；该 FR 的实现对象已不存在**。**原始交付记录保留如下**（该 FR 已进 master，编号不得复用）：🔨 开发中（实现与 `log_index.*` 配置接线已落地；**2026-10-11 生产真机实测**：生产采集面 164 源下索引持久化 p50 2 ms / p95 6 ms / max 152 ms，远优于「60 源单次持久化 ≤50 ms」验收线。**取证口径（可复算）**：数据源＝生产 Worker journal 的「持久化耗时」分钟打点行（现含 p50/p95/max 与采样周期数），按窗口聚合即得；本项无 `.tmp/` 路径引用。生产累计重启未复现 2026-10-01 二启卡死。**已归真（2026-10-11）**：spec 顶部状态行已由 `📋 计划` 改为 `🔨 开发中`；**剩余边界**：spec §3 第 7 条「迁移→首启→二启→三启 + 脏环境 + 部署后复验」缺形式化复验产物） |
-| FR-497 | 常驻运行期分源×天条数对账补缺与PID/属主校验收养（校验不过不杀） [规格][s167] [规格][s168] | P0 | ✅ 已交付@v0.24.0·**2026-11-01 收口**：常驻对账生产实测连续 6 轮（05:51~07:06）周期精确 15 分钟、8 源/轮、errors=0；计数口径已由测试钉住（pending 分支只计源不计天）。原论证：**2026-10-31 标题修订**：「**重启**对账」这半已无对象——启动对账的输入是「权威集合」，它原先从索引库/事件段重建，而两者改内存后重启即空 ⇒ 启动那一刻没有「应有条数」可比。仍有效的是**常驻对账**（15 分钟一轮，从当前进程内事件段重建）与收养链路。原记录保留：连续强杀零丢失、60源重启≤60s、收养T7四臂已满足；开关关闭时对未纳管活进程对的处置降级（auto_adopt=false 不再被 dispose_policy=auto 误杀）已补并留痕。**2026-10-27 三项缺口已补**（详见 [收养规格][s168]）：① T7 的 Java 分支负例已端到端构造，并顺带修掉一个真缺陷（`processEnvMatchesInstance` 按 NUL 切条目 + UUID 自成 token）；② 心跳/巡检/Stop 改用真实 java 夹具验证；③ Windows 仅到代码层契约与交叉编译通过，**真机未验** |
-| FR-498 | 60源CPU/RSS/VL内存/查询容量基线与错峰建议 [规格][s169] | P0 | ⏸️ 已延后·**2026-10-31 标题修订**：删「持久化」——索引库改 `:memory:` 后不再落盘，原验收线「索引持久化 p95≤50ms」（p95=98–100ms 超线）已无对象。保留 Worker CPU/内存、VL 内存、查询 p95 四条基线。原记录保留：ACKLoss 与 Worker 静默 766 已达标；2026-10-27 降强度重开取证（60源×30行/s×120s，paused=0/gap=0）；fileCPU 分列 `%usr` p50=191 / `%wait` **3** ⇒ Worker 不是在等盘而是在算；机械盘量化 `aqu-sz` 50–76、`w_await`≈56ms、`%util`≈92%。**2026-11-01 容量基线已成文**（spec §8，本机真实环境 60源×4档×2口径）：真机读数 Worker RSS p95 50.2→70.5MB、CPU p95 个位数，内存不随吞吐线性增长。**2026-11-04 进展**：① ~~harness 需用当前 HEAD 重建重跑~~ → **已固化并实测**：负载发生器曾入库为 `scripts/capacity-load/`（`go run ./scripts/capacity-load/ -sources 60 -rate 30 -duration 120s`），自检实测 29.97 行/s/源（目标 30，误差 0.1%）、零写失败——读数从此可复算、不再依赖 `.tmp/`（gitignore）；**该目录已于 2026-11-08 随一次性取证工具清理删除**，读数保留为历史证据（见 [s169] §5.1）；② **当前 HEAD 短窗读数**（`TestCapabilityBaselineShortWindow`，60 源×60 行）：HeapAlloc **8.4 MiB**、每源常驻 **142.6 KiB**（判据 <1 MiB，留 7 倍余量）、3 轮 poll 300ms。这个数字是「事件段删除后每源不再持有事件正文」的直接证据（旧架构该项为生产 77 MB 段占用）——见 [s169] §5.1；③ **2026-11-04 长稳窗已跑通（PASS）**：`TestSoakWindow60Sources` 60 源 × 900 轮 × 真 VL v1.52.0，每 MiB WAL 积压的堆成本 **13.0 → 10.9 MiB/MiB（比值 0.84，在降）**、裸堆 9.6 → 14.3 MiB 且 100% 可由 WAL 积压解释（回归 `heap = 4.58×WAL + 8.01`，残差 std 2.89 MiB 即 GC 噪声）⇒ **不是慢泄漏**。过程中修掉**两个夹具缺陷**（后者曾把夹具行为误读成产品缺陷）：① 从未启动 `Manager.Start`，`DeferredDelivery` 下投递/回收全在后台环 ⇒ 只采不投、WAL 从不回收（WAL 条数 == 60×轮次）；② `newTestManager` 的 `deliverWriteHook` 自己累积 54000 个事件占 3.85 MiB。判据同步改写：裸堆比值必然误报（WAL 是有界缓存，积压震荡就带着堆涨），改为「单位积压成本不得上升 + 积压不得撞跌顶」。详见 [s169] §7。④ **2026-11-04 分段长稳窗（1 行/s/源 真实节奏）段 1–3 已完成，均 PASS**：堆前1/3→后1/3 = 5.7→6.1 / 5.9→6.2 / 5.8→6.3 MiB（比值 1.08/1.05/1.08），poll p50 145–156ms，VL 总数跳段单调递增 331k→439k→547k（投递确实在跑）；**跨段无抬高**——若存在跨重启常驻增长它会表现为每段起点更高，实测没有。执行器曾入库 `scripts/soak-window/run.sh`（先编单一二进制由 9 段共享，带并发检测；**已于 2026-11-08 随一次性取证工具清理删除**，要补跑需按 spec §7.4 描述重建）。**段 4–9 未跑**（用户叫停收尾），故完整 4.5h 墙钟仍未全程覆盖，补跑需先重建执行器。宿主非独占（load 13.7–16.4/40 核 + 其它工程 Java 占 50%+ CPU）⇒ 趋势可信、绝对值不可与静默机比。详见 [s169] §7.4/§7.5。⑤ **仍缺**：250ms 门限（**仍无法判定，卡在环境不是卡在代码**）。2026-11-04 查明口径曾被搞混：250ms 原口径是 **FAST 联邦查询 p95**（`docs/specs/log-acquire-concurrency` §10），**不是**浏览器冷导航；后者在 §10.4 被明确列为「另一个更严、当前无门限」的指标。三个读数不得互相外推：① 生产 CP 空闲无新日志时 p95 = **30.1ms**（达标，但数据集不代表负载，§10.3）；② 本机高负载同口径四次 p95 = 93 / 680 / 1259 / **2486ms**（极差 26.7 倍 ⇒ 本机测不出可信值，HANDOFF 给出 A 换空闲机 / B 接受本机无法判定 / C 立项查长尾三选项，均未选）；③ 本轮生产构建浏览器冷导航 p50 = 2291 / 2735 / 2654ms（**不属此门限**，是另一个指标，三次重跑可复现；分解显示成本在「就绪选择器挂在数据上」——`/api/v1/instances` 单次 921KB、首页 8 接口各 ~740ms，而客户端内路由跳转仅 113–922ms）。e2e 改为默认只记录、`FIRSTPAINT_ENFORCE=1` 才断言，理由是它测的不是那个门限。**2026-11-04 用户裁定选项 B：接受「本机无法判定」为正式记录，250ms 维持未达标状态**（不选 A 换空闲机重跑、不选 C 查长尾）；因此不再在该指标上投入优化——缩 921KB 响应/首页预取/骨架屏都是为了凑一个不可判定的指标。测量工具曾抢救入库 `scripts/search-p95/`（原在 gitignore 的 `.tmp/`，**已于 2026-11-08 随一次性取证工具清理删除**；口径完整记在 [s169] §10，将来走 A 或 C 时照此重写）。详见 [s169] §5.2/§5.2a）、错峰策略认证。详见 [s169] §5.1/§5.2/§7/§8 |
-| FR-500 | daemon自迁及接管后代cgroup隔离；Worker只断连，显式停止照旧 [规格][s170] | P0 | ✅ 已交付·**形式化验收全链完成**（2026-10-27）：三臂实验重做并修正平凡通过缺陷（重做前误将「进程未启动」判为 red PASS，已加前置守卫），red=双双DEAD、fixed-adopt/fixed-self=双双ALIVE 均实测通过；生产实机取证 19/19 实例已在 `jianmanager-daemons/<uuid>` 隔离、单元 cgroup 内零游戏服 java；**主动重启生产单元实测已完成**（spec §4.6，2026-10-27 18:51）：`jm-prod-worker.service`（KillMode=process）重启后 1s 内恢复 active，**19/19 实例的 java PID 与启动时刻均未变**（启动时刻比对比 PID 更有力）。部署形态漂移已收口（CP/Worker 已回到各自 `jm-prod-*.service`）。**2026-11-04 订正**：~~CP `SIGKILL` 臂未测~~ 实为**已实测**——spec §4.4（2026-10-09 生产实机复验）第三条承诺「CP 崩溃不牵连服务器」即该臂：对生产 CP 发 `SIGKILL`（等价 panic/OOM），结果 worker 存活、**21/21 实例存活**，CP 重启后反向隧道自动重建、实例状态自动对账。此前 PRD 记为「未测」是状态列未与 spec 同步所致（该 spec 头部另有一处同类订正记录）。**本项无剩余缺口** |
-| FR-499 | 采集登记与长周期锁解耦，同步建管道/绑定，持久化有界尽力 [规格][s171] | P1 | ✅ 已交付@v0.24.0·**2026-11-01 补端到端计时**：dev 环境真实 CP→Worker 隧道实测 Worker 侧登记本体 `elapsedMs=6.99`、HTTP 全链路 26-39ms；入口埋点超 100ms 走 Warn。原记录：**生产复验产物已补**（2026-10-27，spec §7）：高负载（40 核 / load≈170 / 机械盘）下重测，整轮采集墙钟 11.95s 时登记仍 1.246ms 返回（`idempotent_rebind` 0.518ms），解算 385ms 内采集轮最坏单轮 11.9ms，`m.mu` 单次最长 1.298ms——事故面（登记被长轮次拖死）已有直接回归且读数强化。**2026-11-01 已补端到端计时**（dev 环境 fr504dev，真实 CP→Worker 隧道链路）：Worker 侧 CreateInstance 埋点实测 `elapsedMs=6.99`（登记本体），HTTP 端到端 26-39ms（含 CP 鉴权、DB 写入、gRPC 往返）。埋点超阈 100ms 时用 Warn，正常走 Debug。注意：正常快路径日志在 INFO 级别下不打印，需 `/debug/log-level` 临时开 debug 才能看到。 |
-| FR-501 | 采样与保留策略；抑制汇总事件必须保持区间守恒 R [规格][s172] | P1 | ✅ 已交付@v0.24.0·**2026-11-01 重写**：删「**删前归档硬规则**」与「冷搬运」——单 VL 架构下到期即按 `retention_period`（180d）删除，`archive_copy` 是**可选**导出（默认关），不是删除前置。保留：四类采样策略（默认关）、抑制汇总事件必须保持区间守恒 R、不得绕过缺口 default-deny。**2026-10-31 标题修订**：删「冷搬运」——`retention.NewDriver` 第三个参数 mover 生产传的是 `nil`，冷热分层已废除，`move_to_cold` 不再执行；计划因此直接落到「配了导出 → archive_copy；否则 → blocked（保留原物）」两条路，这正是单 VL 想要的语义。archive_copy 已实现（导出→gzip→manifest 三重校验，次序判在 discard 之前）；热层回收已打通（Catalog ARCHIVED 权威态 + 归档证据，先迁权威态再删热层，删失败回滚 HOT）；查询面显式降级为 `LOG_ARCHIVE_MISSING`/`ARCHIVE_NOT_RESTORED`；导出目的地 local/s3/minio 已接线；删除三闸默认全关；归档对象回收已实现（`log_retention.archive_object_retention.*`，默认关）。**2026-11-01 收口**：删除「长期吸存验证」项——它是**验收活动**不是功能缺口，不该挂在 FR 上当作未完成能力。剩余真实缺口：S3/MinIO 目的地上的归档对象删除未接（装配处如实拒绝而非用 stub 冒充）。 |
+| FR-182 | 自更新体验增强（检查更新展示更新内容 + 一键回滚上一版 + 单版本二进制备份；CP+Worker，增强 FR-081） | P1 | ✅ 已交付@v0.11.0·四档验收 |
+| FR-183 | 全局任务中心 + 完成站内信（job 模型 + Worker→CP 进度/日志上报 + CP API + 前端任务中心 + 完成/失败站内信；JDK 异步安装首个接入，见 ADR-040） | P1 | ✅ 已交付@v0.11.0·四档验收 |
+| FR-184 | jmctl 紧急控制台 CLI（独立轻量二进制 `cmd/jmctl/`，仅依赖 daemon 帧协议包，直连守护进程 Unix Socket/命名管道；emergency/list/stop/kill + UUID 前缀补全，见 ADR-041 与 `docs/specs/emergency-cli/spec.md`） | P2 | ✅ 已交付@v0.11.0·四档验收 |
+| FR-185 | 出站代理可视化配置（设置面板配全局/CP 代理 + 节点级覆盖经 gRPC 下发 Worker 运行时重建出站客户端，免登机器改 yaml/重启；优先级 DB 覆盖 > yaml > 环境变量；增强 FR-174，见 ADR-043） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-186 | 系统更新页服务端缓存 + Markdown 更新日志（CP 持久化上次检查结果，进页即显 + 后台静默刷新、刷新失败保留旧缓存；react-markdown/GFM 渲染 release body 取代 `<pre>` 纯文本；增强 FR-182） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-187 | 客户端分发迁「运营」域 + 全流程向导重做（就绪度步骤器 + 空状态引导卡 + 发布版本向导分步 + 建频道/密钥全模态化；后端 API 不变、纯前端重做；增强 FR-086 线） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-188 | 全站模态框纪律（立 `.claude/rules/ui-modals.md`：禁「点击新增→内联展开/布局重排表单」、强制内容自适应模态复用 FR-072；全站违规页审计改造 + 复制按钮 HTTP 非安全上下文兜底[共享 util]，行为不变） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-189 | 重度模态重做（创建实例 + 添加节点：自适应壳修溢出 + 基本/启动/高级 分区或 Tab + Docker 字段条件显隐 + AddNode「自动安装/手动连接」Tab；增强 FR-009/FR-004 对话框，遵循 ui-modals） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-190 | Worker 二进制由 CP 代理缓存下发（CP 经出站代理拉「与自身同版本」worker 资产→缓存→LAN 下发；装机脚本与 UpgradeNode 改走 CP，解内网无 GitHub + latest 与 CP 版本错位） | P1 | ✅ 已交付@v0.13.0·四档验收（真机内网经 WSL 第二机验：无 GitHub 节点从 CP 下载 install-worker.sh + worker 二进制上线） |
+| FR-191 | 客户端分发发布/上传/预览定向重做（发布/上传改**独立页面**[非模态，根治点外面关闭丢上传草稿]+上传即锁定文件内容；支持上传 zip 自动按包内结构编排目录；配置/审阅/详情改 Minecraft 文件树预览，内容只读、仅可编排路径/目录/sync/platform；增强 FR-187/088） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-192 | 拉取密钥可查看/可编辑（密钥可逆加密存储[env 密钥]，管理员频道页查看明文+复制+**手动设/改密钥值**；**删「轮换」**[换值会断已分发客户端]、**保留「吊销」但强警告二次确认**；老哈希密钥不可查；修订 ADR-022 决策①，见 ADR-044） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-193 | updater-core 默认随 CP 内嵌静默驱动（楔子+updater-core 用 CP 自带默认版本，manifest `agent.core` 由 CP 内嵌 updater-core 自动产出；**运营不上传/不管理**，删「更新器版本」管理页；CP 自更新时默认更新器随之更新；增强 FR-091/FR-107，见 ADR-045[改写为 CP 默认]） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-194 | 客户端分发页内嵌端到端流程图（运维向大白话：首次发布 / 日常更新两段 + 密钥不可丢/整合包只发一次/楔子固定核心可换 要点；纯前端，增强 FR-187） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-195 | 全站原生 `<table>` → 共享 Table + 行卡片审计（12 组件/~20 表统一共享 Table；节点 JDK/制品缓存改行卡片⇄网格切换 + 筛选；版本号/状态/类型/来源统一徽章；统计类改条形/紧凑列表；引用矩阵与 changelog 表仅调主题色；纯前端换皮、行为不变，性质同 FR-188） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-196 | 前端测试与 mock 运行基座（接入 MSW v2 + jsdom/@testing-library/react；vitest 双环境[保留 node 纯逻辑、新增 jsdom 组件]；`VITE_MOCK` 浏览器 mock 模式开关[setupWorker + 入口条件挂载]；render harness[QueryClient/Router/i18n/theme]；新 ADR-047 前端测试与 mock 架构） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-197 | 有状态内存假后端核心 + 错误注入框架（实体 store=Map+seed+reset、跨实体联动领域层、统一鉴权中间件[token 校验]；按 endpoint 运行时注入 401/403/404/409/500/空/网络错误/延迟；per-domain handler/seed 自动聚合防并行冲突；关联 ADR-047） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-198 | 实时流仿真基座（WS 终端 PTY 伪交互[输入→回显假输出]、SSE 日志/事件/指标持续推送、可注入数据源；mock 模式与测试两用；关联 ADR-047） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-199 | mock 域簇·身份访问（auth/setup/users/groups/audit 有状态 handler + Login/Setup/Users/Groups/Audit 页面强断言测试；含「登录失败不刷新页面」回归） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-200 | mock 域簇·节点与运行时（nodes/nodeRuntime/nodeRepair/jdks/runtimeAssets/selfUpdate handler + Nodes/RuntimeAssets/SystemUpdate 强断言测试） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-201 | mock 域簇·实例核心（instances/instanceGroups/serverState/ports handler + Instances/InstanceDetail/Overview 强断言测试，创建/启停→列表联动） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-202 | mock 域簇·供给与模板（provision/clone/templates handler + Templates 与创建/克隆流程强断言测试） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-203 | mock 域簇·群组服网络（networks/registrations/proxy handler + Networks 页 M:N 注册联动强断言测试） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-204 | mock 域簇·文件与归档（files/fileVersions/storage/archive handler + 文件管理器/Storage 强断言测试） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-205 | mock 域簇·配置与数据库（configs/db handler + 配置浏览器/Database 强断言测试） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-206 | mock 域簇·插件玩家经济（plugins/probe/players/economy/business handler + Players/插件管理/业务经济台强断言测试） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-207 | mock 域簇·备份与计划（backups/backupStorages/schedules handler + Backups/BackupStorages/Schedules 强断言测试） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-208 | mock 域簇·可观测与日志（metrics/alerts/events/notifications/tasks/logs handler + SSE 流接 FR-198 + Monitoring/Alerts/Tasks/Logs/Dashboard 壳强断言测试） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-209 | mock 域簇·Bots 与终端（bots/terminal handler + WS 终端接 FR-198 + Bots/InstanceDetail 终端强断言测试） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-210 | mock 域簇·客户端分发与平台设置（clientChannels/clientVersions/clientStats/licenses/settings handler + ClientChannels/Licenses/Settings 强断言测试） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-211 | Playwright E2E（基于 mock 模式整站，无需真后端）：Playwright 安装 + 配置（webServer 起 `VITE_MOCK=1`）+ 关键路径 E2E 场景（登录→导航→实例创建/启停等跨页流），与 vitest 组件测互补 | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-212 | CI 前端质量门禁（PR 拦截）：新增 `.github/workflows/ci.yml`（on pull_request/push）跑 web lint + vitest(node+dom) + Playwright E2E，任一失败阻断；并把 E2E 加入 `release.yml` 既有 test 闸（lint/vitest 已在该闸，FR-173/ADR-036） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-213 | 共享「文件浏览器」前端组件抽取（目录树/列表 + 内容预览[文本/配置/json 语法高亮] + 下载），实例「资源卡片」文件管理迁移到该共享组件（行为不变）；为客户端分发文件预览（FR-214）提供底座（**需 spec**：组件 props/接口契约、预览类型与降级） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-214 | 客户端分发文件预览：发布页已上传文件 + 版本详情历史文件树，复用 FR-213 共享文件浏览器预览内容与结构（前端复用为主，补一个管理面 JWT 只读制品内容/下载端点——玩家拉取密钥端点与浏览器入口物理隔离不可复用，免 spec，依赖 FR-213） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-215 | 观测导航重构：「监控」大类改名「观测」，下设 监控/日志/统计 三子类；任务中心移到「系统」；纯 IA/路由/侧栏调整、页面内容不变（**需 IA spec**；与在飞 FR-208/210/211 前端测试基座并行协调，测试按新 IA 写） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-216 | 通知中心：站内信（定向消息）+ 告警（系统警报）合并为统一通知流，页眉单铃铛入口（下拉预览）+ 独立「通知中心」页（按类型筛选/已读/查询），侧栏置「系统/账户与审计」（**需 spec + ADR-048 统一通知模型**，依赖 FR-215 落点） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-217 | 客户端分发观测数据底座：定时聚合客户端遥测（FR-093 events）为时序快照——拉取/更新次数、活跃客户端（machineId 去重）、版本分布与滞后、更新成功率/fail-static、下载字节、平台分布；新快照表 + 定时聚合任务 + 查询端点（总 + 按频道/时间筛选）（**需 spec + ADR-049，复用 ADR-013 分级降采样思路**） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-218 | 观测·客户端分发监控页：消费 FR-217 数据出时序趋势 + 分布/榜单，总览 + 可筛单频道（前端消费既有端点，免 spec，依赖 FR-217） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-219 | 客户端分发频道工作台「统计」Tab 扩充维度：复用 FR-217 数据加 活跃客户端/版本分布/更新成功率/平台分布 等（增强既有频道统计，免 spec，依赖 FR-217） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-220 | 观测·统计页补齐：观测三子类之一的「统计」页做成平台级聚合统计（节点/实例/玩家/分发等概览聚合，独立于 FR-219 的频道统计 Tab）（**需 spec**，依赖 FR-215） | P1 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-221 | 观测·监控时序剖析增强（**增强 FR-060**，非净新——节点/实例时序底座 ADR-013 已交付）：在既有三档降采样时序上加 多指标对比/叠加、下钻（节点→实例→世界）、自定义聚合粒度、关键指标概览，让全站指标更精准剖析（免 spec，依赖 FR-215） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-222 | worker 免配置自启 setup（节点上线丝滑化，参考 GitHub Actions Runner 下载/上线分离）：worker 启动时若未配置（无 .yml / 无 `etc/node-identity.json`）→ 进入 setup（有 TTY 交互式问 CP gRPC 地址 / enroll token / 节点名；无 TTY/CI 读命令行参数 + env，无人值守）写 worker.yml + 携 enroll token 注册持久化身份 → 转 run；已配置直接 run。「下载」（取二进制）与「上线」（setup+注册+run）解耦（**需 spec + ADR-051**，改写 ADR-020「一键单脚本下载+配置+注册+起」模型；依赖 FR-224 .yml） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-223 | 节点安装脚本重构（配合 FR-222）：检测当前目录已有完整 worker 二进制则跳过下载；「下载」与「上线」分两步；脚本调 worker setup（传参/env）完成配置+注册+可选常驻服务（增强 FR-080/ADR-020，免 spec，依赖 FR-222） | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-224 | 配置文件 .yml 约定统一（.yaml→.yml）：control-plane.yaml→control-plane.yml、worker.yaml→worker.yml + viper 搜索路径 + docker-compose + 安装脚本 + 样例 + docs 同步 + 改 `.claude/rules/config-files.md` 规则；.yml 为准、可选 .yaml 兼容回退不破存量（ref，免 spec） | P2 | ✅ 已交付@v0.12.0·四档验收 |
+| FR-225 | 调试模式开关（设置项，热重载）：默认 Gin release 静默 + log info；设置「调试模式」开关开=log debug+Gin debug、关=info+release，走 FR-063 运行时机制即时生效不重启（增强 FR-063，免 spec） | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-226 | 通知中心快捷跳转 + 任务中心联动 + 页眉任务进度：任务类通知（含 JDK 失败）点击跳任务中心对应任务；页眉放任务中心入口 + 在跑任务进度；完成/失败站内信可一键跳（复用既有 Notification.TaskID，增强 FR-216/183，免 spec） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-227 | 任务中心强制停止 + 筛选查询：强制停止=经 gRPC 真中断 Worker 长任务（取消下载 + 清临时文件）+ 任务转终态（新 canceled 态）；列表按 kind/state/node/时间/关键词筛选（增强 FR-183，需 spec：状态机 + 跨进程取消 + proto） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-228 | JDK 登记体验重做：模态目录/文件选择器选 java 可执行文件 → 后端 java -version 探测自动填 vendor/major/version/arch（免手填）；「标记为 Worker 托管」复选框置顶并决定选择器默认根（面板目录/节点目录）（增强 FR-178/033，需 spec：worker java 探测 RPC + 选择器选文件 + 跨模块） | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-229 | 连通性自检端点族 + 测试按钮：出站代理（设置面板）、JDK 下载源/镜像（运行时）、节点存活（JDK 一键下载前先测、不通即提示不卡死）统一一族测试连通性能力（增强 FR-185/178，需 spec：端点族契约 + 经出站客户端语义） | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-230 | 创建实例独立向导页：创建实例改独立分步向导页（非模态）+ 每步大白话提示，复用既有 create API；与 FR-189 协调（创建出重度模态、改走页，编辑等仍用模态）（增强 FR-005/189，免 spec） | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-231 | 复制实例 高级/快速 双模式：快速复制=核心 jar + plugins/ + 根配置（server.properties 及根 *.yml/*.properties）；高级复制=目录选择器 + 用户包含/排除筛选；扩 CloneWorkDir 支持 include/选择性复制（增强 FR-036，需 spec：复制语义 + 筛选 + proto） | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-232 | 前端交互细节集：节点页进入默认选中第一个节点；页眉刷新图标刷新当前页数据（非整页 reload）（增强 FR-177/179，免 spec） | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-233 | 实例配置随时编辑：实例详情/工作区提供配置编辑（启动命令 / JVM 参数 / JDK / 环境变量 / 资源限额 / 自动重启等），保存即持久化并提示重启生效；今 `InstanceDetailPage` 仅深链跳画布、无编辑能力（feat，需 spec：新 PATCH /instances/:id 契约 + 跨 CP/web、worker 重读配置） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-234 | 创建实例向导优化：启动命令预填可改示例（如 `java -Xmx2G -jar server.jar nogui`）+ 提示 jar 名/放置位置 + 彻底隐藏工作目录（系统分配，对齐 ADR-007/008）（增强 FR-230，免 spec） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-235 | 实例列表页重设计（面向 1000+ 实例）：卡片 + 列表重做（信息密度 / 美观 / 点击进详情），大规模下虚拟化 + 分组 + 搜索筛选；消费 FR-247 服务端搜索/分页（增强 FR-165/163，需 spec，依赖 FR-247/246/240） | P1 | ✅ 已交付@v0.13.0·四档验收（首屏走 /instances/search + /aggregate 不拉裸数组、URL 状态深链恢复、卡片/列表/分组单表虚拟渲染、滚动恢复；spec §4 全 [x]，vitest 16/16 + Playwright fr235-instance-list 2/2 绿） |
+| FR-236 | 一键搭建模态优化 + Docker 傻瓜建服：建后端服 / 建代理两模态遵循 ui-modals + 大白话；并入 Docker 一键建服（预置镜像 `itzg/minecraft-server` + 端口 + 一键起）（增强 FR-035/078，需 spec，含原 FR-239） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-237 | 节点 Docker 可用性检测 + 未装引导：Worker 探测 docker 是否安装/可用，CP/UI 展示状态，未装给安装引导，docker 建服前先测不通即提示不卡死（feat，需 spec：worker 探测 RPC + 跨模块，关联 FR-229 连通性族） | P1 | ✅ 已交付@v0.13.0·全真栈验收 |
+| FR-240 | 导航外壳 + 实例选择器重构（面向 1000+ 实例）：先出 2-3 布局原型经确认 → 实现；实例选择支持搜索 / 虚拟列表 / 分组 / 最近&收藏；并入面包屑文案与路由映射纠错（今实例页面包屑文字与实际页不符；此项排最后做）（增强 FR-131/162/134，需 spec + 原型审核，含原 FR-245） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-241 | 全局搜索 / 命令面板（快捷跳转）：Ctrl/⌘+K 唤起，搜实例/节点/页面/操作并跳转（今页眉搜索框为占位）；并入页眉集群徽标 → 可滚动实例选择弹层 + 点击进入；面向 1000+ 走服务端搜索（feat，需 spec：搜索契约，依赖 FR-247，含原 FR-242） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-243 | 页眉顶部加载进度条 + 路由切换过渡：切页弹一次顶部进度条（nprogress 式）+ 统一路由过渡反馈（今无）（feat，免 spec） | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-244 | 全局动画系统统一：修「稀碎卡顿 / 无动画」——统一 hover / 展开 / 弹层 / 路由过渡（今无 framer-motion、散用 CSS transition）（增强 FR-163/176；本轮随 `docs/specs/instance-list-redesign/spec.md` 草拟审核） | P2 | ✅ 已交付@v0.13.0·四档验收（motion token/顶部进度条/路由·侧栏·抽屉主链路 + 共享原语 Panel/Dialog/Chips/Toggle 散落 duration 收敛到 motion token + 词汇表注释落定；high-value 收敛过关，CSS motion token 非 framer-motion） |
+| FR-246 | 全站卡片范式提质 + 节点页卡片重设计：统一卡片圆角 / 边角 / 阴影 / 间距（修「连接感 / 阴影太假 / 圆角不符 / 边角瑕疵」）并全站贯彻 + 节点页卡片信息密度重做（增强 FR-163/176/177 落地质量，需 spec：圈定全站范围 + 范式） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-247 | 实例规模化后端（1000+）：服务端实例搜索 / 分页 / 分组聚合 API（今前端全量拉、1000+ 撑不住），为列表页 / 导航实例选择器 / 全局搜索 / 页眉弹层提供统一数据地基（feat，需 spec：新查询契约 + 索引 + 多前端面消费）→ `docs/specs/instance-scale-backend/spec.md` | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-248 | OTA 签名密钥自动生成与面板公钥展示：CP 启动时未注入 env 私钥则自动生成 Ed25519 密钥对并持久化到数据根文件（env 注入优先、双轨），面板展示公钥供运营者配到客户端；修订 ADR-022/038（增强 FR-087，需 spec + ADR-052）→ `docs/specs/client-sign-key-autogen/spec.md` | — | ❌ 已废弃（验签已去，见 ADR-054） |
+| FR-249 | OTA 拉取错误追踪与面板查询：manifest/artifact 拉取失败也记录追踪事件（含错误原因），面板分发事件页可按成功/失败筛选并查看错误详情（增强 FR-093，需 spec：DB schema 扩展 + 新查询维度）→ `docs/specs/client-dist-error-tracking/spec.md` | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-250 | 客户端分发发布编排器重做：拖拽多文件/文件夹到浏览器 → 前端本地预览文件树 → 可调整层级/sync 模式 → 点击发布才批量上传到 CP（非逐个上传节省带宽）；消费 FR-251 分块上传（增强 FR-191，需 spec，依赖 FR-251） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-251 | 大文件分块上传端点 + 进度展示：后端新增分块上传协议（init→chunk→complete），前端分片上传 + 实时进度条，支持 4G+ 文件（增强 FR-088，需 spec：新 API 协议）→ `docs/specs/client-chunked-upload/spec.md` | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-252 | 客户端分发术语大白话化：sync 模式（覆盖/仅一次/忽略）加大白话解释、"托管目录"等术语改为运营能看懂的措辞、发布步骤每页加大白话说明（增强 FR-194，免 spec） | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-253 | OTA 客户端信任公钥运行期可配：updater-core 从 jm-updater.json 读信任公钥（缺省回退内置 dev 公钥），CP 一键生成带本机公钥的 jm-updater.json + 接入指引更新（补 FR-248/FR-107 缺口——面板自动生成的公钥此前无处填入客户端；修订 ADR-022 信任模型，需 spec + ADR）→ `docs/specs/client-trust-key-config/spec.md` | — | ❌ 已废弃（signPublicKey 废弃，见 ADR-054） |
+| FR-254 | 客户端分发发布页文件树拖拽编排：configure 步支持拖拽移动文件/目录节点改目标路径（增强 FR-191/250，FR-191 曾列增强未做，免 spec） | P2 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-255 | 客户端分发清理范围编辑器：managedDirs 改多级目录树勾选（支持深层嵌套目录）+ 可选「清空整个 gameDir」（除内置玩家区安全清单 + 运营自定义追加排除；需客户端 clean-all 语义 + 服务端 manifest）（增强 FR-191/088，需 spec）→ `docs/specs/client-dist-clean-scope/spec.md` | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-256 | updater-core 架构简化 Phase 1：删验签（Signatures/BouncyCastle/.jmpack）、删 CAS（CasCache）、删 core 自更新（SelfUpdater）、manifest 去 sig 段、去防降级；保留 sha256 完整性校验 + 拉取密钥鉴权（推翻 ADR-022/053，废弃 FR-090/091/097/253/248）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付@v0.13.0·四档验收 |
+| FR-257 | Reconciler 流式下载 + HTTP Range 断点续传：Transport 改返回 InputStream、Reconciler 边读边写盘（64KB 缓冲）、DigestInputStream 流式 sha256、zstd 流式解压、断点续传；1GB 文件下载内存 < 10MB（依赖 FR-256）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付@v0.13.0·四档验收 |
+| FR-258 | 楔子改 gradle-wrapper 模式：整合包只带 wedge.jar，首次自动拉 core（JDK 原生 HttpURLConnection + sha256 校验）、本地保留 3 版用于回滚、jm-updater.json 原文透传 ctx、Core.run(Map) 接口契约冻结（依赖 FR-256）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付@v0.13.0·四档验收 |
+| FR-259 | CP core 版本归档 + 端点 + 面板回滚：make embed-client-updater 归档多版本 core jar、GET /client-channels/:id/updater-core 端点（拉取密钥鉴权）、面板「updater-core 版本」选择器一键切换回滚；补充平台管理员手动上传 updater-core.jar hotfix 并可立即选用（依赖 FR-258）→ `docs/specs/updater-arch-simplification/spec.md`、`docs/specs/updater-core-hotfix-telemetry/spec.md` | — | ✅ 已交付@v0.13.0·四档验收 |
+| FR-260 | 客户端更新器架构简化 前端 + ADR + doc-sync：接入指引去 signPublicKey 改"楔子自动拉取"、updater-core 版本选择器面板、新 ADR 推翻 ADR-022/053 修订 ADR-045、API/ARCHITECTURE/PRD/CHANGELOG 同步、重编内嵌 jar；后续增强：接入指引可选择 revealable 拉取密钥并自动填入/下载 `jm-updater.json`，Core 版本页展示最新归档与当前选定，内置/选定 updater-core 归档禁止从制品库删除（依赖 FR-259） | — | ✅ 已交付@v0.13.0·四档验收 |
+| FR-263 | 拉取密钥加密器自动生成与持久化：CP 启动未注入 JIANMANAGER_CLIENT_KEY_ENC_SECRET 时自动生成 AES-256-GCM 密钥并持久化到数据根文件（env 注入优先、双轨），dev 回退内置开发密钥；修订 ADR-044 存储策略；后续增强：密钥列表/编辑支持永不过期展示、设置/清空过期时间，明文弹窗标题不拼接密钥名且复制按钮稳定可用（feat，需 spec + ADR） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-264 | 客户端分发单节点源站安全防护：在无 CDN 部署下补多维限流、字节配额、IP 临时封禁与手动解封、key 状态机、频道降速保护、制品授权收紧、启动安全画像遥测（playerName+machineId+installId+环境特征强制上报）与独立防护中心页面（feat，需 spec）→ `docs/specs/client-dist-security-firewall/spec.md` | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-261 | 发布页文件资源管理器（专业文件树库重写）：react-arborist 替换 ClientFileTree，新建文件夹/重命名/Ctrl+点选/Shift+连选/Delete 删除/拖拽上传文件/拖拽上传 zip 自动解压（含 GBK）/拖拽移动调整结构/同名冲突提示忽略覆盖保留两者；保留本地编排→点发布才上传架构（feat，需 spec） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-262 | 清理目录树形右键菜单可视化：FR-261 同款文件树展示目录结构，右键菜单标记清理/排除/取消，Ctrl+点选 Shift+连选批量操作，颜色区分（红=清理/绿=排除/无色=不管理），父子联动；产出 managedDirs+cleanExclude（增强 FR-255，依赖 FR-261，需 spec） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-265 | 客户端分发观测四 Tab 重构：同页面拆统计/监控/日志/客户端；统计/监控/日志仅看分发请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合与运行态联动筛选；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖 → `docs/specs/client-dist-observability-rebuild/spec.md` | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-266 | updater-core 构建元信息内嵌与展示：jar 内写入版本号 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示；紧急 hotfix jar 缺少元信息仍可直接上传并立即选用 → `docs/specs/updater-core-build-metadata/spec.md` | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-267 | 高密度控制台设计系统底座：控制台主界面采用 A+C Jian 绿默认运维风格（细边框、小圆角、紧凑间距、等宽数字、状态点、紧凑表格），作为页眉/侧栏/服务器控制台的视觉基础（见 ADR-057） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-268 | 页眉节点作用域 + 侧栏 IA + 页面归位：页眉提供节点作用域、面包屑、搜索、集群状态、任务、通知、账户；节点作用域联动全部服务器列表、命令面板实例结果与创建实例默认节点；侧栏改为平台首页/服务器/群组网络/观测/平台管理，主题入口保留在侧栏底部，单服能力归入服务器控制台（见 ADR-055） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-269 | 服务器统一控制台 `/instances/:id`：单台服务器详情页固定分区为概览/控制台/文件配置/监控/玩家/插件/备份定时/业务/Bot，并保留可组合画布作为高级拼屏能力（见 ADR-056） | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-270 | 节点控制台 + 高密度服务器列表：节点页与全部服务器页对齐新 IA，消费 FR-247 搜索/分页/聚合地基，面向 1000+ 实例保持可扫、可筛、可下钻 | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-271 | 平台首页高密度总览：平台首页按节点、服务器、异常、任务、资源、告警等维度重排为一屏速扫总览 | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-272 | 全站页面归位与 A+C 皮肤收口：把玩家、插件、备份、定时、Bot、业务等单服能力收进服务器控制台，平台级页面归入平台管理，并统一 A+C Jian 绿默认高密度外观 | P1 | ✅ 已交付@v0.13.0·四档验收 |
+| FR-273 | 通用组件包与控件博物馆：抽出 `@jianmanager/ui` 通用 UI/token/charts 包，主应用从包引入共享控件，并新增 `web/wiki` 控件博物馆展示第一版通用控件与常用状态矩阵（需 spec + ADR-058；不抽业务组件、不新增后端接口） | — | ✅ 已交付@v0.13.0·四档验收 |
+| FR-274 | Bot 压测会话 YAML 动作编排与 50 Bot 稳定验收（增强 FR-042）→ `docs/specs/bot-stress-yaml-orchestration/spec.md` | P2 | ✅ 已交付@v0.13.0·四档验收（代码全测过 spec §4 全 [x]；真机全栈验收：真 CP+Worker+bot-worker+MC1.16.5，50-bot YAML 编排会话 50/50 连续在线 0 掉线，稳定窗口 ~5.5 分钟[缩比 30min 硬标，窗口内 0 drop]） |
+| FR-275 | CP↔Worker 专用 WS 令牌密钥自动下发：CP 预配独立于 jwt.secret 的 WS 令牌密钥（显式配置 > 生产态自动生成持久化 > dev 回退），终端/插件桥令牌改用其签发；经 gRPC RegisterResponse 下发（首注册+重注册），Worker 持久化到 node-identity.json（0600）并用于终端+插件桥校验，旧 CP 空字段回退现状（修 FR-080 enroll 不下发密钥致生产终端 401、探针监控失效的产品缺口；需 spec + ADR-061，修订 ADR-020）→ `docs/specs/worker-ws-token-secret/spec.md` | P0 | ✅ 已交付@v0.13.0·全真栈验收（无手工 secret 场景端到端：注册自动下发→终端 101） |
+| FR-276 | 终端 WS 密钥不一致 401 诊断兜底：CP 终端代理探测 Worker 握手 401 时返回结构化诊断，前端显示「终端令牌被 Worker 拒绝，疑似该节点 WS 密钥与平台不一致」而非裸「连接已断开」，与网络类断连区分；OPERATIONS 标注密钥同步要求与手动核对修复法（需 spec，并入 worker-ws-token-secret；依赖 FR-275 先落）→ `docs/specs/worker-ws-token-secret/spec.md` | P1 | ✅ 已交付@v0.13.0·四档验收（正向真机通过；诊断分支单测覆盖，修复后 401 无法自然复现） |
+| FR-277 | SSH 推送式远程部署脚本：`deploy-cp.sh` / `deploy-worker.sh` 两独立 POSIX sh 脚本，从操作机经 SSH 密钥把本地 `make dist` 产物推送部署/更新到 Linux 主机（systemd 常驻、幂等重跑、数据与身份保留、部署后健康检查）；SSH 目标与部署参数经环境变量配置，Worker 首次上线经 `JM_ENROLL_TOKEN` 复用 setup 语义；目标机 root / 免密 sudo / 纯普通用户（user 级 systemd+linger）三档全支持（需 spec + ADR-063）→ `docs/specs/ssh-deploy-scripts/spec.md` | P1 | ✅ 已交付@v0.15.0·真机验收（deploy-cp/worker 更新模式/幂等/身份保留/user档systemd/一键装机全验通） |
+| FR-278 | CP 内嵌 Worker 二进制（一键安装/升级不依赖 GitHub）：构建期把 windows/linux amd64 Worker 二进制 go:embed 进 CP（make dist / CI 两阶段：先 worker 后 CP，体积 +~43MB），`/worker-assets` 端点解析顺序改为 内嵌（版本=CP 自身）> 本地缓存 > 远程 feed 兜底——离线/内网/国内网络/本地构建开发版的一键安装与节点升级全程不出网，CP↔Worker 版本强一致（真机复现：安装请求因 GitHub TLS 超时 + 远程无本地构建版本 release 而必然失败）（feat，需 spec + ADR-062 修订 ADR-059 分发来源）→ `docs/specs/worker-embed-distribution/spec.md` | P1 | ✅ 已交付@v0.15.0·真机验收（内嵌下发 sha 逐字节对上、embedded://、装机升级零 GitHub 外呼） |
+| FR-279 | JDK 下载受限网络可用性与失败引导：JDK 一键下载（temurin 等 GitHub 源）在无代理环境 TLS 超时（真机复现 `adoptium/temurin21-binaries ... TLS handshake timeout`）——失败信息改为可操作引导（明示可在设置页配置出站代理、或切换 JDK 镜像源，附入口跳转），并真机验证 Worker 侧 JDK 下载确实经 ADR-043 心跳下发的出站代理生效（增强 FR-033/178/186，免 spec） | P2 | ✅ 已交付@v0.15.0·真机验收（代理下发链路 L1 证+引导 UI 上线；网络失败态 env-blocked 已 DOM 证） |
+| FR-280 | 出站代理面板提示与连通性测试自定义目标：① 代理设置区补大白话提示，列明哪些流量经此代理（JDK 下载、Worker 资产/自更新拉取、探针依赖、客户端分发外呼等）；② 连通性测试目标从写死 GitHub 改为可输入任意 URL 测试，默认 `https://www.google.com`（提示文案同步去掉「（GitHub）」硬编码）（增强 FR-185/229，免 spec） | P2 | ✅ 已交付@v0.15.0·真机验收（任意 URL 实测+可编辑输入框线上 bundle 命中） |
+| FR-281 | CP→Worker 指令反向流化（免 NAT / 零入站端口暴露）：把 CP→Worker 的指令派发从「CP 直连 worker gRPC `node.Host:GRPCPort`」改为经 Worker 主动建立的**常驻双向流**承载——Worker 只出站、零入站端口暴露，家用 NAT / 内网 / 公网混合环境均可接入（现状真机复现：公网 CP 无法回拨家用 NAT 后的 Windows worker 的 9101/9102）。含 proto 新增双向指令流、CP 连接池由「拨号」改为「往流里派发 + 关联请求/回执」、Worker 由 gRPC 服务端改为「守流听指令」、超时/断线重连/背压语义；终端 WS（9102）一并经 CP 中转（或同机制隧道化）才彻底免入站。**架构级大改，需 spec + ADR-066 修订 ADR-002（gRPC 节点通信）**；设计定案：gRPC 反向隧道（grpctunnel，~70 RPC 零信封）+ 双模式（隧道优先/直拨回退）+ 终端一律经 CP 中转（feat）→ `docs/specs/worker-reverse-stream/spec.md` | P1 | ✅ 已交付@v0.15.0·真机验收（现网双反向隧道自愈、隧道承载探针/上传/终端中转、NAT 场景真跑） |
+| FR-282 | install-worker.sh 同机多节点 systemd unit 名冲突（fix，增强 FR-222/080/277）：`install-worker.sh` 硬编码 systemd unit 名 `jianmanager-worker`，同一主机装第 2 个 worker（不同 `--install-dir`）会**覆盖**第 1 个的 unit 与服务，致原节点被顶掉（真机复现：host-2 装机把 host-1 的 unit 冲掉，被迫手工建独立 unit 恢复）。改为 unit 名据 `--install-dir` basename 派生（默认 `/opt/jianmanager` 及 basename=jianmanager 仍映射 `jianmanager-worker` 保向后兼容；`jianmanager-node2` → `jianmanager-worker-node2`），使同机多 worker 各占独立 unit 互不覆盖；canonical 与内嵌副本同步、byte 一致测试守护（免 spec） | P1 | ✅ 已交付@v0.15.0·真机验收（三 unit 共存互不覆盖，同机新旧脚本正反对照） |
+| FR-283 | 仓库根 pnpm workspace + 前端提升（ref，需 spec）：引入根 `pnpm-workspace.yaml`；`web/src`→`apps/control-plane-web`、`web/wiki`→`apps/ui-museum`、`web/packages/ui`→`packages/ui`（vite alias 改真实 workspace 依赖）；抽 `packages/tsconfig` + `packages/eslint-config` 共享配置；go:embed 目标不变，仅 `Makefile` embed-web 拷贝源 `web/dist`→`apps/control-plane-web/dist` 改一行。行为不变（关联 ADR-064，重申 ADR-005）→ `docs/specs/monorepo-unification/spec.md` | P2 | ✅ 已交付@v0.16.0 |
+| FR-284 | devmock 抽为独立包（ref，免 spec）：`web/src/mocks`→`packages/devmock`，依赖反转（只依赖 API 契约，不再 `import '@/…'` app 内部）；主应用与测试改引 `@jianmanager/devmock`；生产构建仍不含 devmock（ADR-047 不变量保持）。依赖 FR-283 先落 | P2 | ✅ 已交付@v0.16.0 |
+| FR-285 | Go 入口迁入 apps（ref，免 spec）：`cmd/*`→`apps/*`（control-plane/worker/jmctl）；`internal/` 不动；同步 `Makefile`/`release.yml`/`Dockerfile.*` 的 go build 路径；go:embed 目标目录不变。main 包无 importer，行为不变（关联 ADR-064） | P2 | ✅ 已交付@v0.16.0 |
+| FR-286 | bot-worker 迁入 apps（ref，免 spec）：`bot-worker`→`apps/bot-worker`；同步 Go worker 运行时 spawn 路径解析与打包；须真机验 bot 真入服 spawn 成功（关联 ADR-064）。依赖 FR-285 | P2 | ✅ 已交付@v0.16.0 |
+| FR-287 | 统一命令面 go-task（feat，需 spec）：引入 `Taskfile.yml` 作唯一命令入口，各语言暴露 build/test/lint/dev 同套动词委托 go/pnpm/gradlew，Windows+Linux 双跑通；`Makefile` 收敛为被委托层（关联 ADR-064）→ `docs/specs/monorepo-unification/spec.md`。依赖 FR-283/285 路径落定 | P2 | ✅ 已交付@v0.16.0 |
+| FR-288 | 前端版本接上单一真源（feat，需 spec）：版本唯一真值 = `internal/version/version.go`（ADR-065 既定）；把前端 `__APP_VERSION__` 从独立记版的 `web/package.json` 改为构建期从真源派生注入，改 `version.go` 一处→前端展示+Go `/version`+产物路径（ADR-036）一致，消除前端漂移（实证：真源已 `0.15.0-dev`、前端仍报 `0.14.0`）（关联 ADR-064/065）→ `docs/specs/monorepo-unification/spec.md`。依赖 FR-283 | P2 | ✅ 已交付@v0.16.0 |
+| FR-289 | JDK 安装 arch 别名归一化（fix，增强 FR-033/178）：`POST /nodes/:id/jdks/install` 的 `arch` 为自由字符串直透下载源解析，传 `amd64` 时 adoptium 不认（只认 `x64`）→ 下载 404 且错误不指向真因（真机复现：temurin 17 `arch=amd64` → 「下载返回 HTTP 404」，同版本 `x64` 成功）；面板固定送 `x64` 不受影响、API/自动化调用方中招。CP 侧入参归一化常见别名（`amd64`→`x64`、`arm64`→`aarch64`），未知 arch 直接 422 拒绝而非透传出 404（免 spec） | P2 | ✅ 已交付@v0.15.0·真机验收（amd64→x64 归一装成；foobar→422 INVALID_ARCH） |
+| FR-290 | JDK 下载停滞看门狗与中断错误归网络类（增强 FR-183/279）：下载流中途被掐（代理/跨境线路抖动）时任务无停滞检测，卡在中间进度直至整体超时兜底（真机复现：经 SOCKS5 代理下载 temurin 21 卡 48% 约 9 分钟），且最终错误 `写入临时文件失败: context canceled` 未被 FR-279 归为网络类 → 失败引导（去配代理/换镜像）不触发。加下载停滞看门狗（N 秒零进度 → 快速失败）并把停滞/中断类错误纳入 FR-279 网络类归类与引导（免 spec） | P2 | ✅ 已交付@v0.15.0·单测+真机回归（停滞归网络类/强停不误标单测覆盖；真停滞待自然复现看引导渲染） |
+| FR-291 | JDK 安装失败残留目录清理与重试自愈（fix，增强 FR-183）：安装失败/被取消时已建的目标目录不清理（真机复现：卡死任务遗留 4KB 半截 `temurin-21/` 脚手架），此后同版本重装永远撞「目标目录已存在」，须登机手动 rm 才能解——核心操作被死锁在需要 SSH 的境地。改为安装失败即清理本次所建目标目录；安装前若目标目录存在但无完成标记（无 `bin/java`）则视为残骸自动清除重装；完好已装目录仍拒绝覆盖（语义不变）（免 spec） | P2 | ✅ 已交付@v0.15.0·真机验收（预植残骸自愈装成+完好目录仍拒，同机正反对照） |
+| FR-292 | 删除托管 JDK 清理到托管根顶层目录（fix，增强 FR-033/228）：删除走 NodeJDK 登记的**嵌套探测路径**（归档外层多包一层，如 `temurin-11/jdk-11.0.31+11`），Worker `RemoveAll` 只删内层、父壳空目录留在托管根下占位（真机复现：删 11 后 `temurin-11/` 空壳仍在，需手动 rm；症状虽被 FR-291 自愈兜住，删除本身应清净）。Worker Remove 把托管根下的目标路径归一到**顶层子目录**整体删除；托管根本身（`rel="."` 现可穿过校验直达 `RemoveAll(根)`，一并堵死）与根外路径拒绝（免 spec） | P2 | ✅ 已交付@v0.15.0·真机验收（嵌套删除无父壳、邻居 JDK 完好、拒删托管根） |
+| FR-293 | 侧栏常驻服务器列：收藏置顶+最近打开（增强 FR-240，补当年搁置的 Part B 常驻实例列）：「选择服务器」按钮下方常驻两区=收藏（置顶）+最近打开（LRU ≤8），行=状态点+名称，点击进该服控制台；行内星标收藏/取消，与搜索弹窗收藏互通（同一 localStorage）；已收藏不重复出现在最近区；双空显示引导；侧栏折叠图标轨态不显示；不为侧栏引入高频轮询（免 spec） | P2 | ✅ 已交付@v0.15.0·真机验收（收藏/最近渲染、点击客户端跳转进服、与选择器星标互通、双空引导） |
+| FR-294 | 页眉集群统计浮窗（增强 FR-162/179，复用 FR-216 铃铛浮窗范式）：在线节点/运行中服务器/崩溃服务器三徽标点击改弹缩略浮窗——节点行=名称+状态点+运行实例数、服务器行=名称+节点+在线人数、崩溃行=名称+节点+崩溃原因（statusReason）；行点击进对应服控制台/节点页，底部「查看全部」保留原筛选页跳转；数据仅浮窗打开时拉取，行数上限 8 超出提示剩余数；崩溃空态友好文案（免 spec） | P2 | ✅ 已交付@v0.15.0·真机验收（节点浮窗 4 节点各显运行数、运行服浮窗名称+节点+在线、查看全部页脚） |
+| FR-295 | 服务器控制台页签 keep-alive 与终端连接管理器（增强 FR-269）：9 个页签访问过即保活、切走不卸载切回瞬时；终端页签往返 WS 不断、滚动缓冲与输入不丢；文件/配置页签目录展开态与未保存草稿保留；终端连接抽为实例级连接管理器（组件订阅制，组件卸载不再直接断 WS）；离开实例整体释放（需 spec+ADR：前端 keep-alive 与终端连接管理架构，React 19.2 `<Activity>`/CSS hidden 取舍进 spec）→ `docs/specs/console-keepalive/spec.md` | P2 | ✅ 已交付@v0.15.0·真机验收（8+ 页签往返终端 WS 握手恒为 1、隐藏页签 DOM 保留、缓冲连续） |
+| FR-296 | 跨服务器控制台热缓存（增强 FR-269，**依赖 FR-295**）：最近打开的 ≤3 个服控制台整体保活（LRU 淘汰），A↔B 切换双向瞬时呈现；缓存中的服终端 WS 保持连接、缓冲连续；闲置超时（默认 10 分钟不可见）自动断 WS 降级为界面状态缓存、再进自动重连；LRU 淘汰即完整卸载释放（与 FR-295 同 spec） | P2 | ✅ 已交付@v0.15.0·真机验收（跨服切换两页同存 DOM、组件不重建、WS 存活缓冲连续；闲置 10min 断连+重连、4 台 LRU 淘汰环境受限未真机、单测覆盖） |
+| FR-297 | 实例域数据层缓存调优（增强 FR-269/240）：实例详情/指标/serverState 等实例域查询拉长 staleTime/gcTime + placeholderData，回切先呈现缓存数据后台刷新；侧栏常驻列/服务器选择器行悬停预取实例详情（防抖）；现有 vitest 全绿不回归（免 spec） | P2 | ✅ 已交付@v0.15.0·真机验收（跨服回切瞬时呈现无白屏，热缓存命中） |
+| FR-298 | 节点运行时库底座与自动扫描（feat，泛化 FR-033/178/228 JDK 域，需 spec）：运行时抽象加类型维度（jdk / nodejs / python 预留；JDK 沿用 `node_jdks` 不动实例外键，新类型承载表 spec 定）；Worker 新增**扫描常见安装路径** RPC（`/usr/lib/jvm`、`Program Files\Java`、nvm/官方 node 目录等，复用 detect 探测），节点页 JDK 面板扩为「运行时」分区：扫描候选勾选入库 + 手动登记泛化多类型 → `docs/specs/node-runtime-library/spec.md` | P1 | ✅ 已交付@v0.15.0·真机验收（扫描命中植入JDK→登记(managed=false)→重扫already去重→删外部登记留文件） |
+| FR-299 | Node.js 运行时一键安装（feat，需 spec 并入 node-runtime-library）：nodejs.org dist 便携归档安装（index.json 版本解析、托管目录布局同 JDK），经节点出站代理（ADR-043）；停滞看门狗 / 网络失败引导 / 残骸自愈 / 删除顶层清理与 JDK 链路同语义（FR-289~292 齐平）。依赖 FR-298 | P1 | ✅ 已交付@v0.15.0·真机验收（直连 nodejs.org 装 Node 22.23.1 落盘 bin/node、amd64→x64 归一、任务中心进度、托管删除连文件；no_proxy 绕过 SOCKS 代理直连） |
+| FR-300 | bot-worker 接托管 Node 运行时（增强 FR-006 Bot 域，需 spec 并入 node-runtime-library）：Bot spawn 由裸 `exec("node")` 改为优先用节点运行时库登记/托管的 Node（可指定，无则回退 PATH 保兼容），消灭新节点 PATH 缺 node 时 Bot 起不来的脆弱点。依赖 FR-298 | P1 | ✅ 已交付@v0.15.0·真机验收（bot spawn 日志 nodeSource=managed-scan + node=托管 Node 路径，host-2 无系统 node 必用托管） |
+| FR-301 | CP 运行时库存聚合缓存与刷新（feat，增强 FR-178 运行时资产页，需 spec 并入 node-runtime-library）：Overview 扩**多运行时矩阵**（节点 × 类型 × 版本 + 引用关系），CP 缓存各节点库存快照、显「上次同步时间」+ **手动刷新**（强制 syncFromWorker），同步失败容忍显旧数据。依赖 FR-298 | P1 | ✅ 已交付@v0.15.0·真机验收（overview 多运行时矩阵+runtimeSyncs+syncedAt、refresh 逐节点结果、node-windows 离线容忍显 None） |
+| FR-302 | 导入现有服务器向导（feat，节点级，需 spec + 新 ADR 落地 ADR-007 预留的「导入已有目录」高级模式）：浏览节点目录（复用 FR-178 BrowseDir）→ Worker 探测核心 jar / 内嵌 JDK / `server.properties` 端口 → 导入时二选一：**就地接管**（目录不动，托管区外例外 + **删除实例不删原目录**守则）或**搬进托管区**（移动/拷贝到系统分配目录）→ 登记实例（结构化启动 ADR-008）+ 探到的 JDK 顺带入运行时库 → `docs/specs/import-existing-server/spec.md` | P1 | ✅ 已交付@v0.15.0·真机验收（就地：导入启动Done于原目录+删除原目录完好；搬迁：源清空+托管区落位+Done+删除连目录清） |
+| FR-303 | 审计日志 action 名 i18n（增强审计域，免 spec）：全量已知 action 键（`instance.start` 等 60+）中英映射（`audit.actions.*`），审计页显示翻译、悬停/角标露原键、未知键回退原样不崩；守则：本批 FR-298~302 新增审计 action 随身带中英翻译 | P2 | ✅ 已交付@v0.15.0·真机验收（线上bundle含70键中英翻译，审计记录新action；未知键回退单测覆盖） |
+| FR-304 | 文件上传链路流式化（增强 FR-009 文件域 + FR-052/053 插件部署，需 spec）：`POST /instances/:id/files/upload` 现为 CP `io.ReadAll` 全量内存缓冲 + Worker `WriteFile` unary 直传（下载修复 a6a3713 的对称隐患）。复现结论：**直拨模式** >64MB 被 Worker `MaxRecvMsgSize` 显式拒收（65MB → `ResourceExhausted` 68157492 vs 67108864）；**隧道模式**（FR-281）grpctunnel 分帧 16KB、逻辑消息上限 4GB，同载荷**不设防直接吞** → 双模式行为不一致；≤64MB 也双侧整块缓冲，且 CP `FileService.WriteFile` 硬编码 10s 超时慢链路大文件必超时。新增 client-stream `UploadFile` RPC（与 `DownloadFile` 对称：分块传输 + 落临时文件校验后原子改名），CP 上传 handler 改流式转发不再 `ReadAll`；FR-052/053 插件单发/批量扇出复用 `WriteFile` 的部署路径同步兼容改造（阈值/是否保留小文件 unary 由 spec 定）；老 Worker `Unimplemented` 回退 `WriteFile` 保兼容（沿用 ≤64MB 上限并给明确报错） | P1 | ✅ 已交付@v0.15.0·真机验收（70MiB 上传 sha 逐字节一致/13.2s/零临时残留，隧道+直拨双通道在线；六项 spec 验收全过） |
+| FR-305 | 反向隧道单消息尺寸上限统一治理（fix/健壮性，增强 FR-281 隧道传输 + FR-010/114 探针部署，需 spec + 宜随 FR-281 M1 一并做）：Worker `ServerOptions()` 的 `MaxRecvMsgSize=64MiB`（5de8778 为 `DeployServerProbe` ~7.6MB 载荷特意从默认 4MiB 放宽）只作用于 `grpc.NewServer`；而反向隧道把 WorkerService 挂在 `grpctunnel.NewReverseTunnelServer`（`internal/worker/tunnel/tunnel.go:107`）上，**不消费任何 `grpc.ServerOption` 消息上限**——grpctunnel v0.3.0 不暴露尺寸上限选项，唯一天花板是硬编码 `math.MaxUint32`≈4GB。后果：① **双传输行为不一致**——直拨 >64MiB 显式 `ResourceExhausted` 拒收，隧道同载荷一路吞到 4GB（FR-304 复现坐实：65MB `WriteFile` 隧道成功）；② 隧道已是 ADR-066 首选路径，那个「特意放宽到 64MiB」的安全边界在主链路上**等于不存在**，大 unary RPC（`DeployServerProbe` jar、老 `WriteFile` 直传、`ReadFile` 10MiB 返回等）整块缓冲、无早拒，构成内存/OOM 暴露面。范围：统一直拨与隧道两路的收/发单消息尺寸策略（含 CP 侧 `MaxCallRecvMsgSize`/`MaxCallSendMsgSize` 与 Worker 收发两向），做成有意为之的显式上限而非默认漂移；大载荷优先走流式（与 FR-304/`DownloadFile` 同向，`DeployServerProbe` 是否流化由 spec 定），合法 7.6MB 探针部署与既有 <64MB 载荷必须仍通过。**待定**：grpctunnel 无原生上限选项，落地手段（应用层拦截器早拒 vs 大 RPC 全面流式化 vs 二者结合 + 文档化 4GB 硬顶）由 spec 决策 → `docs/specs/tunnel-message-size-guard/spec.md` | P1 | ✅ 已交付@v0.15.0·真机验收（隧道 unary 64MiB 守卫与直拨同界；含缺陷修复=守卫只守 unary 不包裹 stream，修探针部署 30s 死锁；探针 3.6s 恢复/70MiB 流式仍通/65MiB 拒收单测锁死） |
+| FR-306 | 节点包管理器与多 registry 配置（feat，泛化 FR-298 运行时库 + 承 FR-299/300 Node 生态，需 spec）：Node 22 自带 corepack，节点级选 npm/pnpm/yarn 偏好（默认 npm，pnpm/yarn 经 `corepack enable`+指定版本激活，零额外下载）；多 registry 配置——默认 registry + `@scope` 域源 + 镜像（CN 走 npmmirror 提速），写节点 `.npmrc`/托管配置（含凭据脱敏）。数据模型存 PM 选择 + registry 列表（节点级），Worker RPC 读写 PM/registry 配置 + `corepack enable`；被 FR-307/308 依赖。→ `docs/specs/node-package-management/spec.md` | P1 | ✅ 已交付@v0.15.0·真机验收（corepack 激活 pnpm 11.12.0、.npmrc 三类行落盘、token 脱敏+掩码保存不清空、审计；顺带修 FR-299 tar 符号链接丢弃缺陷） |
+| FR-307 | 全局运行时包可视化管理（feat，需 spec 并入 node-package-management，依赖 FR-306）：面板管理节点上的**全局 npm 包**（`<pm> ls -g --json` 解析已装列表）——手动装/删/更新/查版本；装进节点运行时全局目录（PM global prefix，落托管区 `<数据根>/opt/runtimes/global`），装/更新经任务中心异步（慢操作）+ 停滞看门狗/失败引导语义复用（FR-290/279）。前端全局包管理页（列表+搜索+增删改+可更新标记），走已配 registry/镜像 → `docs/specs/node-package-management/spec.md` | P1 | ✅ 已交付@v0.16.0 |
+| FR-308 | bot-worker runtime 下发部署 + 经全局包运行（feat，节点级，需 spec + 新 ADR 修订 ADR-006，依赖 FR-306+299）：install-worker.sh 一键装机/CP 下发 bot-worker 源码（`dist`，非 bundle）；其依赖（mineflayer/mineflayer-pathfinder）经 FR-306 的 PM+registry 装为**全局包**，bot spawn 带 `NODE_PATH` 指向全局 node_modules（FR-300 node 解析已就绪）——统一「全局包」模型：装 mineflayer 插件（全局包）bot 立即可用。消除装机节点 bot 真连 MC 缺 426MB 依赖的缺口（真机复现：dist-only spawn `ERR_MODULE_NOT_FOUND: mineflayer`）→ `docs/specs/bot-worker-deploy/spec.md` | P1 | ✅ 已交付@v0.16.0 |
+| FR-309 | 节点删除实例守卫（fix，增强 FR-004 节点管理）：删除节点当前不校验其名下实例，节点没了实例记录成孤儿——终端/操作全 404「节点不存在」（v0.15.0 真机复现：删离线测试节点后其 nat-echo 实例悬挂，用户直撞 404）。节点删除时有实例则 409 拒绝并列出实例（离线节点允许 `?force=` 显式级联删除记录并明示不清理远端文件）（免 spec） | P1 | ✅ 已交付@v0.17.0 |
+| FR-310 | 删除运行中实例的进程处置一致性（fix，增强 FR-005/FIX-C）：对 RUNNING 实例发 DELETE，CP 删记录返 200 而 Worker 运行态守卫拒杀进程——DB 与现实脱钩，java 进程成无主孤儿继续跑占端口（v0.15.0 真机复现：删运行中测试实例后 java -jar server.jar 遗留）。改为 CP 对 RUNNING 实例删除先优雅停（超时强杀树）再删，或 409 要求先停；Worker 重启孤儿接管扫描一并评估（免 spec）；真机验收补：删运行中 daemon 实例后工作目录残留（Unix 上 Java 自成进程组存活、RemoveAll 后重写 world 重建目录，并遗留 pid/sock），删目录前按 PID 强杀 wrapper+Java 两棵进程树+死透校验+删后校验重试兜底（与 FR-325 同根） | P1 | ✅ 已交付@v0.17.0 |
+| FR-311 | 节点页管理体验补全（增强 FR-033/177，真机测试反馈）：① JDK 已登记行加**编辑**入口（改厂商/版本/arch/路径，走既有 PUT /nodes/:id/jdks/:jid，模态遵守 ui-modals）；② 节点详情头四个统计球排版紧凑化（现占满整行空隙过大，改小尺寸+左聚拢与信息区同排）（免 spec） | P2 | ✅ 已交付@v0.16.0 |
+| FR-312 | 实例启动失败原因可见性（增强 FR-269/294，真机复现：实例未绑 JDK 点启动只见「启动中→崩溃」无因——statusReason 已入库已出 API，但实例控制台页无展示位，且 Worker 心跳把 CRASHED 冲回 STOPPED 后卡片唯一展示位 `status===CRASHED` 条件失效）：实例控制台页加失败原因横幅（statusReason 非空即显、标注「上次启动失败」，下次启动由既有 transition 清空），工作台卡片展示条件同步放宽为非空即显（免 spec） | P1 | ✅ 已交付@v0.16.0 |
+| FR-313 | 进程级崩溃诊断链路（feat，需 spec）：Worker 维护实例输出环形缓冲（最后 N 行）+ 捕获退出码/信号/运行时长，进程退出生成崩溃快照经 gRPC 上报 CP 持久化（保留最近 K 次）；前端实例控制台「崩溃诊断」展示快照（时间/退出码/尾部输出）——补齐进程秒退（如 jar 缺失）全链路零痕迹盲区（现 proto 不带原因、Worker 不留崩溃日志、终端仅实时流）→ `docs/specs/crash-diagnostics/spec.md` | P1 | ✅ 已交付@v0.17.0 |
+| FR-314 | 实例启动同步预检（feat，增强 FR-005 启停链路，需 spec）：点启动 CP 先同步调 Worker 预检（JDK 绑定/可解析、启动目标 jar 或命令存在、工作目录就绪），失败同步返回具体错误（前端弹错+横幅），状态不进 STARTING；过检才转 STARTING 走既有异步启动——终结「配置错误也要启动中→崩溃兜一圈」→ `docs/specs/start-preflight/spec.md` | P1 | ✅ 已交付@v0.16.0 |
+| FR-315 | 实例状态光晕视觉（增强 FR-269/240 控制台视觉）：实例控制台容器与工作台实例卡片外圈按状态渐变光晕——RUNNING 绿色柔光、STARTING/STOPPING 琥珀呼吸、CRASHED 红色警示光、STOPPED 无光晕；随双主题取色、平滑过渡动画、遵守 UI 风格偏好不过度（免 spec） | P2 | ✅ 已交付@v0.16.0 |
+| FR-316 | 一键搭建版本-JDK 兼容预检（增强 FR-034 搭建向导，FR-308 真机钓出：选 MC 26.1 + 节点最高 Temurin 21 可搭建成功但启动必崩「requires running the server with Java 25」）：向导选定 MC 版本后按核心 Java 需求映射校验所选/默认 JDK，不满足即表单级阻断并引导去 JDK 面板安装；与 FR-314 启动预检互补（搭建时拦 vs 启动时拦）（免 spec） | P2 | ✅ 已交付@v0.17.0 |
+| FR-317 | 内存水位启动守卫（feat，真机事故钓出：验收开 Paper -Xmx2048M 把 8G 主机 OOM 至用户态僵死、SSH/面板全失联）：双闸防「启动实例把节点内存跑满」——① **Worker 实时闸**（真源）：StartInstance 前读系统可用内存，估算实例需求（启动命令解析 `-Xmx` + JVM 开销，解析不到用保守默认），可用 − 需求 < 保留水位（worker.yml `memory_guard.reserve_mb`，默认 max(512MB,总内存10%)）即拒绝启动并返回可操作错误；② **CP 预警闸**：启动请求先按节点最近心跳（总内存/已用）预判，不足直接 400 不下发 RPC，心跳过旧（>90s）放行交 Worker 实时判。批量启动并发预留列为后续增强（免 spec） | P0 | ✅ 已交付@v0.16.0 |
+| FR-318 | CP 压力态 SQLite 嵌套事务错排查（fix，FR-317 事故现场钓出：主机 OOM/swap 风暴恢复初期，实例 stop 转换反复报 `SQL logic error: cannot start a transaction within a transaction`，删 bot 报 INTERNAL_ERROR，重启 CP 即愈）：排查 transition/删除链路在慢 IO 下是否存在事务嵌套或连接状态破坏（glebarez/sqlite 单连接语义），补压力回归测试 | P2 | ✅ 已交付@v0.17.0 |
+| FR-319 | 一键搭建异步化 + 全程可观测（fix+feat，真机复现：1.20.1 搭建挂死 180s+——Paper CDN 从节点侧仅 ~200KB/s、47MB jar 需 4 分钟，provision 是同步 HTTP 长事务，前端超时断开→请求 ctx 连锁取消 DownloadCore→留空壳实例（无 server.jar 可点启动→秒退 CRASHED），错误随断开连接进黑洞、CP 零日志零审计）：搭建改任务中心异步——同步段只 ResolveBuild+建实例（立即 201+taskId），下载/写配置/探针在 CP 后台 goroutine（context.Background 独立超时，不受前端断开影响）分阶段推进 Task（下载核心→写配置→部署探针），失败 Task 含完整错误链 + 实例 statusReason 写「搭建未完成：…」；worker DownloadCore 补开始/完成/失败日志；前端向导提交即关框提示看任务中心。**二轮修复（异步化暴露的新缺口）**：① DownloadCore 改临时文件 `.part` + 完整校验后原子 rename——下载中窗口不再躺半截 jar（真机复现：搭建中点启动得 `Invalid or corrupt jarfile server.jar`）；② Task 加 instance_id 关联，CP 启动闸拦截「provision 任务未终态就点启动」并引导看任务中心；③ 搭建全程实例 statusReason 标「搭建中」+ 卡片琥珀提示（免 spec） | P0 | ✅ 已交付@v0.16.0 |
+| FR-320 | API 错误统一落平台日志（feat，真机钓出：provision 失败等 API 错误只回 HTTP 响应，无任何 slog→FR-049 日志中心平台日志恒空，用户「乱七八糟的问题都看不到日志」）：全局 gin 中间件把 4xx 业务拒绝（422/502 等）与 5xx 的 [路径、状态码、error body、用户、IP] slog 化（4xx=warn、5xx=error），经既有 log_slog 桥自动落日志中心 platform 源；核对 /logs 页导航入口可见性（免 spec） | P1 | ✅ 已交付@v0.16.0 |
+| FR-321 | 审计日志记录失败操作与错误内容（增强 FR-050，真机钓出：搭建失败审计零记录）：AuditLog 加 success/error 字段，关键写操作（实例生命周期/搭建/删除/上传）失败也记审计并带错误内容；审计页列表失败徽章 + 详情展开错误（免 spec） | P1 | ✅ 已交付@v0.16.0 |
+| FR-322 | 心跳流断开告警降噪（fix，真机复现：CP journal 2 小时 484 条「心跳流断开 context canceled」WARN——worker 每拍心跳收完响应即 cancel 属正常收尾，被当异常刷屏淹没真问题，且无节点标识）：Canceled/EOF 正常收尾降 Debug，异常断流保留 WARN 并带 nodeUUID（免 spec） | P2 | ✅ 已交付@v0.16.0 |
+| FR-323 | 长操作任务化：导入/克隆/备份纳入任务中心（增强 FR-302 导入 / FR-036 克隆 / 备份 FR，FR-319 同族收口——用户「把所有长耗时任务加到任务中心、不堵塞页面、有进度」）：抽公共 `run-as-task` 底座（CreateTask→CP 后台 goroutine→SetStage 阶段进度→MarkSucceeded/Failed→终态站内信），provision（FR-319）一并迁过去 DRY；导入 migrate 搬迁 / 克隆 CloneWorkDir / 备份创建 / 备份恢复 四个现同步阻塞或后台无进度的长操作接入——提交秒回 `{taskId}` 不阻塞（搬迁/拷贝/打包可达数十分钟），任务中心显示 stage 文案 + 终态 + 失败错误链；新增 TaskKind（import/clone/backup_create/backup_restore）+ 前端任务中心筛选/文案 → `docs/specs/long-op-tasks/spec.md`（需 spec：3 端点响应改 {taskId}、抽共享底座跨 3 service+任务模型+前端） | P1 | ✅ 已交付@v0.16.0 |
+| FR-324 | 短操作 loading 与文件传输进度补齐（增强 FR-075 反编译 / FR-068 探针 / FR-008/070 文件——用户「1-3 秒短任务要 loading 或进度条」）：① 反编译、探针部署点击后 loading 且完成前防重复点；② 资源管理器 新建/重命名/删除/保存 文件 loading 反馈；③ 文件上传显示百分比进度条（axios onUploadProgress），下载有反馈（浏览器原生下载条 + 内联「下载中」提示）。纯前端 UX 补齐，无数据模型/API 变更（免 spec） | P2 | ✅ 已交付@v0.16.0 |
+| FR-325 | Worker reconnect 失败孤儿进程接管兜底（fix，FR-310 孤儿评估缺口 (a)，ADR-003 守护链路；真机事故实证：FR-277 主机实例 1-86876de3 启动报 Paper `session.lock already locked`——前次运行的孤儿 java 仍活着占世界锁）：Worker 重启接管扫描中 wrapper 存活但 reconnect 拨号失败时，现只删 PID 文件（`manager.go` reconnect 失败分支），活进程从此永久失联。改为保留 PID 文件重试有界次数，仍失败则按 PID 记录的 WrapperPID 杀进程树并记日志，杜绝孤儿永久化（免 spec） | P1 | ✅ 已交付@v0.17.0 |
+| FR-326 | CP↔Worker 实例反向对账（feat，FR-310 孤儿评估缺口 (b)）：Worker 恢复/在跑的实例若 CP 已无记录会永远跑（正向对账已有：CP 以心跳为真源置 STOPPED；反向缺失）。Worker 心跳携带在管实例清单，CP 对无记录者下发处置指令（需防误杀护栏：宽限期+人工确认开关），proto+双侧改造（需 spec，后续批次）→ `docs/specs/instance-reverse-reconcile/spec.md` | — | ✅ 已交付@v0.20.0·真机孤儿检测/dispose/Worker 清理闭环 |
+| FR-327 | 页眉任务中心下拉面板（增强 FR-183 任务中心）：点击页眉任务中心入口弹下拉面板（最近 N 条任务：kind/名称/stage 进度/终态徽章），面板内点条目跳任务中心对应项；运行中任务有进度反馈；模态外点击关闭（免 spec） | P2 | ✅ 已交付@v0.17.0 |
+| FR-328 | 一键搭建后端子服 MC 版本下拉不可滚动（fix，增强 FR-034 搭建向导，真机复现）：向导后端子服步骤的 MC 版本下拉列表超出可视高度后无法滚动，长版本列表不可选。修复下拉内容区滚动（受模态内 overflow 约束影响一并核查），并核查向导内其他下拉同病（免 spec） | P1 | ✅ 已交付@v0.17.0 |
+| FR-329 | 任务中心进度自动刷新（增强 FR-183/319，真机反馈「搭建进度要手动刷新才动」）：任务中心页与页眉任务入口在存在非终态任务时自动轮询刷新（TanStack Query refetchInterval，运行中 ~2s/空闲停轮询），任务到终态即停；SSE 回推列为后续可选不在本 FR（免 spec） | P1 | ✅ 已交付@v0.17.0 |
+| FR-330 | 服务器核心节点级缓存（增强 FR-034/319 搭建链路 + FR-179 制品缓存，真机痛点：Paper CDN 节点侧 ~200KB/s，47MB 核心每次搭建都重新下载）：Worker DownloadCore 先查节点核心缓存（sha256 已知按 sha 键、否则 core+version+build 键，落数据根 cache 区），命中跳过远程下载直接复制/链接入实例目录；未命中下载完成校验后入缓存再交付；缓存条目在节点制品缓存面板可见可清理；provision 任务 stage 文案区分「缓存命中/下载中」（免 spec） | P1 | ✅ 已交付@v0.17.0 |
+| FR-331 | 搭建中实例硬性禁止启动（fix，增强 FR-319 二轮②启动闸，真机反馈：statusReason「正在下载核心（完成前请勿启动）」仅文案提示，仍可点启动）：provision 任务未终态的实例，前端启动按钮直接禁用（tooltip 指明搭建中+引导看任务中心），后端启动闸核查补漏确保各入口（单启/批量/一键）一律 4xx 拒绝——文案劝阻升级为状态强制（免 spec） | P1 | ✅ 已交付@v0.17.0 |
+| FR-332 | 折叠态导航分类图标点击跳转分类首页（fix，增强 FR-131/181 侧边栏折叠，真机复现：折叠后点击分类图标无反应无法跳转）：折叠态下点击分类图标默认导航到该分类下第一个页面（并展示激活态）；展开态行为不变（免 spec） | P2 | ✅ 已交付@v0.17.0 |
+| FR-333 | CP 本机应急密码重置子命令（feat，运维应急能力，用户要求「补重置密码命令」以解锁验收环境）：`jianmanager-cp reset-password -u <用户名> [-p <密码>] [-c <config>] [-list]`——bcrypt 重置指定用户密码并解锁账号（Status→Active），`-p` 留空自动生成 16 位随机密码打印，`-list` 列出全部用户名。命令落 CP 二进制自身而非 jmctl：数据库仅 CP 可读写（架构不变量），jmctl 按 ADR-041 不得直连 DB（免 spec） | P1 | ✅ 已交付@v0.17.0 |
+| FR-334 | 控制台品牌顶栏贯通（T 型外壳）+ 页眉节点作用域下线（feat，增强 FR-162/181/268 控制台外壳，用户走查「侧栏与页眉交界处错位成台阶、页眉节点作用域下拉几乎无作用」）：外壳改 T 型——整宽顶栏（品牌区 + 面包屑 + 操作区）在上、其下「侧栏 + 工作区」一行；品牌区宽度与侧栏同步、右缘对齐连线，顶栏下缘=侧栏上缘，消除原侧栏 logo 区与页眉两条错位分割线的交界台阶；logo 折叠触发器（FR-181）迁入顶栏品牌区。删除页眉节点作用域下拉（`selectedNodeId` 数据面保留，全部服务器页自带节点筛选/命令面板/向导预填照常）；顶栏高度与 logo/搜索框尺寸下调（见 ADR-071，免 spec） | P2 | ✅ 已交付@v0.17.0 |
+| FR-335 | 群组拓扑规模化（feat，增强 FR-145，验收分诊：拓扑页每 proxy 拉 registration + 列表页每 network 拉详情双 N+1；SVG 纵向线性堆叠超高无缩放/筛选）：后端新增拓扑聚合端点（一次返回全部 proxy 及注册关系）+ NetworkSummary 内联成员健康计数；前端拓扑单查询消费 + SVG 视口控件（pan/zoom/适应视图/搜索/状态筛选/分层布局）→ `docs/specs/topology-scale/spec.md` | P2 | ✅ 已交付@v0.17.0 |
+| FR-336 | 用户目录服务端搜索分页 + 候选下拉虚拟化（feat，增强 FR-003/156，验收分诊：`/users` 前后端均无搜索/分页，共享 Combobox 无虚拟化，用户量大时成员弹窗全量挂载）：后端 `GET /users` 加 `q/limit/offset` 返 `{items,total}`（兼容旧无参全量）；共享 Combobox 引入窗口渲染；群组成员弹窗默认只显已选+少量候选、键入走服务端搜索 → `docs/specs/users-search-pagination/spec.md` | P2 | ✅ 已交付@v0.17.0 |
+| FR-337 | 任务中心列表分页信封（feat，增强 FR-183，验收分诊：任务接口固定 Limit(100) 返裸数组无 total/offset，前端整批渲染无翻页/总数，规模化既看不到全量也一次全挂）：后端 List 加 Count+offset 返 `{items,total,limit,offset}`（对齐 FR-247 分页约定）；前端「共 N 条」+加载更多/无限滚动（保 FR-329 非终态轮询行为）；devmock 同步契约 → `docs/specs/tasks-pagination/spec.md` | P2 | ✅ 已交付@v0.17.0 |
+| FR-338 | 备份存储配置编辑（feat，增强 FR-057，验收分诊：备份存储自交付起前后端均无 Update，改配置只能删了重建）：后端 `PUT /backup-storages/:id`（复用既有 validateCandidate/凭证 ${ENV} 引用校验/名称冲突校验，404/422 语义与 Create 一致）；前端编辑弹窗（受控填入现值、区分 create/update）+ 表格编辑入口；devmock 同步 → `docs/specs/backup-storage-update/spec.md` | P2 | ✅ 已交付@v0.17.0 |
+| FR-339 | 实例控制台玩家/备份定时分区接真（feat，FR-269 首版占位归真，验收分诊：两页签停留「第一版原型」静态占位而后端/独立页面/hook 均已就绪）：抽实例作用域 `InstancePlayersSegment`（复用 useOnlinePlayers/useBans/useWhitelist 等）与 `InstanceBackupSegment`（useSchedules(id)+useBackups(id)）接入控制台页签；短期不能全接的分区从 TAB_KEYS 撤下不留假入口；清理占位文案 → `docs/specs/console-players-backup-segments/spec.md` | P2 | ✅ 已交付@v0.17.0 |
+| FR-340 | 指标批量序列接口（feat，增强 FR-060/270，2026-07-15 验收分诊：节点详情实例对比对 N 个实例逐条 `GET /metrics/series` 造成 N+1 请求风暴且 30s 重拉）：后端新增多目标批量序列端点（一次查库按 targetId 分组返回 `{targetId→series[]}`，逐目标复用既有实例访问鉴权）；前端 NodeInstanceCompare 改单条批量查询 + 对比目标数上限；节点内实例清单改用 FR-247 已交付的聚合/搜索接口（gap:FR-270 归真一并收口）→ `docs/specs/metrics-batch-series/spec.md` | P1 | ✅ 已交付@v0.17.0 |
+| FR-341 | daemon 实例在 Worker 重启后存活并自动重连（fix，ADR-003 闭环，2026-07-15 验收 FR-325 真机复现：`systemctl restart` 后 daemon wrapper 与游戏服一起死、命中「清理残留」而非「接管重连」）：定位三叠加杀手并各个击破——K1 wrapper 的 stdout/stderr 断管 SIGPIPE 崩溃（主因，`worker daemon` 子进程启动即 `signal.Ignore(SIGPIPE)`、Unix-only）；K2 systemd cgroup 连坐（worker unit 加 `KillMode=process`，同步内嵌副本+守护测试）；K3 优雅停机 90s 无界挂起（`GracefulStop` 设 5s 上限、超时强制 `Stop()`，确保 `StopAll` 的 daemon 优雅断开及时执行）；不回归 FR-310（删运行中实例仍强杀两棵进程树）→ `docs/specs/daemon-survival/spec.md` | P0 | ✅ 已交付@v0.17.0 |
+| FR-342 | 搭建失败损毁态 + 一键重建（feat，增强 FR-319 异步搭建，真机反馈：断网/下载核心失败后实例只留 STOPPED+statusReason「搭建未完成」，无重建入口、只能删了重填参数）：新增实例状态 DAMAGED（损毁），任何搭建阶段失败（下载/校验/配置写入/探针部署/Forge 安装器）都进损毁态并保留原始搭建参数；新增「重建」动作复用已存配置重跑搭建（成功→STOPPED、再失败→仍 DAMAGED），零重填；状态机加 DAMAGED 转移 + 重建 RPC/端点 + 前端损毁态徽章与重建按钮（需 spec）→ `docs/specs/provision-damaged-rebuild/spec.md` | P1 | ✅ 已交付@v0.18.0 |
+| FR-343 | 实例系统级基础指标（无需探针，走系统直取）（feat，增强 FR-170/142，真机反馈：实例未连 ServerProbe 时 TPS/MSPT/CPU/内存无源、概览显示占位）：把 Worker 侧已采集的 gopsutil 进程 CPU%/RSS 内存/运行时长（FR-170 进程指标）暴露到实例详情 API + 控制台概览，作为不依赖探针的基础指标底座；无探针时仍显真实 CPU/内存/运行时长，TPS/MSPT/在线数标注「需探针」而非假值（需 spec）→ `docs/specs/instance-system-metrics/spec.md` | P1 | ✅ 已交付@v0.18.0 |
+| FR-344 | 实例环境变量管理（双区展示 + 可编辑写入 .env）（feat，增强 FR-034 搭建/结构化启动，用户要求「加环境变量 tab、支持自配启动环境变量写入 .env」）：实例详情新增「环境变量」页签——上区可增删改自定义启动环境变量、保存写入工作目录 .env 文件、下次启动注入生效；下区展示运行中 JVM 实际完整环境（Worker 上报启动时所用 env，含继承 PATH/JAVA_HOME，只读，停机提示仅运行时可读）；env 编辑 API + .env 文件契约 + 启动管线注入 + 前端页签（需 spec）→ `docs/specs/instance-env-vars/spec.md` | P2 | ✅ 已交付@v0.18.0 |
+| FR-345 | 未运行/历史日志查看（终端回放 DB 历史 + 独立历史增强）（feat，增强控制台终端与日志能力，真机反馈：手动关服后终端变黑看不到关服过程、停止态无历史）：实例停止/崩溃时终端自动从 DB 回放最近 N 行历史（可上滚、重连/切页签/刷新不丢），关服不清屏；实例级历史日志查看支持时间筛选/搜索/导出（在现有 Logs 能力上加实例入口）；软依赖 FIX-3（重启优雅关服使关服日志先存在）（需 spec）→ `docs/specs/instance-log-history/spec.md` | P2 | ✅ 已交付@v0.18.0 |
+| FR-346 | 客户端分发上传协议增效：秒传预查 + 小文件聚合 + 有限并发（feat，增强 FR-250/251，真机反馈：数千文件整合包发布逐文件串行 init→chunk→complete 请求过多）：新增批量 sha256 预查端点（前端上传前算哈希、一请求查 N 个、命中制品库 CAS 者跳过上传直接引用既有制品）+ 小文件聚合上传端点（一请求携带多个小文件，免三段协议）+ 前端文件级有限并发与进度整合；大文件保留 FR-251 分块协议（需 spec）→ `docs/specs/client-upload-efficiency/spec.md` | P1 | ✅ 已交付@v0.18.0 |
+| FR-347 | 制品库外置对象存储底座：BlobStore 抽象 + 本地/S3 适配器 + 存储渠道配置页 + 302 预签名下载（feat，增强 FR-088 修订 ADR-011 存储节，用户诉求：制品上传自部署 rustfs 做数据分发、CP 不存大对象）：抽 BlobStore 接口（Put/Open/Stat/Delete/List/Presign，后续新后端只加适配器）——本地适配器封装现 CAS、S3 适配器复用 worker SigV4 纯标准库实现并补 presign；新表制品存储渠道 + 「文件存储配置」管理页（CRUD/连通测试/设活跃渠道；凭证面板直填可逆加密存储，沿 FR-192 先例）；Asset.StorageBackend 按记录路由下载——local 走 ServeContent、s3 返 302 预签名短时效 URL（updater 已开跟随重定向，真机必验）（需 spec + ADR）→ `docs/specs/artifact-external-storage/spec.md` | P1 | ✅ 已交付@v0.18.0 |
+| FR-348 | 制品库存量迁移工具（feat，依赖 FR-347）：存储渠道页发起「迁移到渠道 X」后台任务——逐制品校验搬运→更新 Asset 存储标注→删源；进度可见/失败明细/中断幂等续跑，迁移后下载按新位置路由（需 spec）→ `docs/specs/artifact-storage-migration/spec.md` | P1 | ✅ 已交付@v0.18.0 |
+| FR-349 | 制品索引可视化与 S3 一致性对账（feat，依赖 FR-347）：制品列表加存储位置/对账状态列；对账任务（手动触发 + 定期默认每日）比对 Asset 索引与 S3 对象清单，产出缺失（索引有 S3 无）/孤儿（S3 有索引无）差异报告；处置走显式按钮——缺失标记失效并提示重传、孤儿二次确认后一键清理，不做全自动修复（需 spec）→ `docs/specs/artifact-s3-reconcile/spec.md` | P2 | ✅ 已交付@v0.18.0 |
+| FR-350 | 发布编排器文件树定点增强：多级目录一次建 + 右键定点添加（feat，增强 FR-191/250/261）：「新建文件夹」支持输入 `a/b/c/d` 自动创建整条层级、支持多行一次建多个；右键目录菜单增「上传文件到此 / 上传文件夹到此」，所选内容落到该目录路径下（免 spec，纯前端——FileExplorer 右键基座与 emptyDirs 机制已有） | P2 | ✅ 已交付@v0.18.0 |
+| FR-351 | 发版强制内嵌楔子与 updater-core（feat，增强 FR-193/发布管线）：`make embed-client-updater` / `release.yml` 在 jar 缺失或 0 字节时硬失败并中文报错；正式包禁止缺件；本地 dev 仍可缺 jar 启动并返回 `JAR_NOT_EMBEDDED`（免 spec） | — | ✅ 已交付@v0.19.0 |
+| FR-352 | 接入指引补齐内嵌更新器信息 + 版本面板旁路摘要（feat，增强 FR-107/260）：`client-channels?tab=guide` 展示展示版本串、core 整数版本、wedge/core available/size 与下载；未内嵌明确失败态；频道版本列表/详情/发布页旁路展示「内嵌更新器 vX · core N」摘要；本批不含 commit/buildTime 元信息（需 spec）→ `docs/specs/client-updater-guide-embed-info/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-353 | 楔子与 updater-core 本地诊断日志轮换压缩（feat，增强 FR-090）：`wedge.log` / `updater.log` 各自在打开时若 ≥10MiB 或跨自然日则轮换，旧文件时间戳命名并 gzip，保留最近 5 个归档；轮换失败 fail-open 不挡启动；阈值代码常量、不做运营可配（需 spec）→ `docs/specs/updater-local-log-rotate/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-354 | Docker Compose 与镜像部署可跑通（feat，对外 compose 路径产品化）：打磨 `Dockerfile.control-plane` / `Dockerfile.worker` + `docker-compose.yml` + `make docker*`；校正 compose env 与 Worker/CP 配置键一致；`docs/DEPLOY.md` Docker 专节；验收=干净环境 `compose build && up` 后浏览器可达 CP 并进入登录/引导，配置键错误不静默；**不**要求本 FR 内 UI 见 Worker 在线、**不**推 GHCR/K8s（需 spec）→ `docs/specs/docker-compose-deploy/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-355 | Control Plane 一键下载安装脚本（feat）：仓库提供从 GitHub Releases latest 按 OS/arch 拉取 `control-plane` 的 curl\|bash（及可选 PowerShell）；职责=下载+可执行权限+启动提示；失败可诊断；不做 systemd/Windows 服务化；Worker 仍文档化面板一键装（需 spec）→ `docs/specs/cp-oneclick-install/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-356 | 客户端分发 KPI 口径与共享语义（feat，增强 FR-095/217/218/219/265）：统一定义「下载健康 / 更新健康 / 活跃客户端精确|近似 / 安全微标」字段名与计算公式；频道统计 Tab 与分发监控统计 Tab 共用语义（可抽共享组件）；文案区分请求成功 vs 更新成功；允许只读聚合补全缺字段（需 spec）→ `docs/specs/client-dist-kpi-semantics/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-357 | 分发统计与监控信息加厚 + 分布钻取（feat，增强 FR-095/218/219/249/265）：KPI 绝对数、下载 bytes 趋势、错误码 TopN、失败样例、日志列加厚（player/machine/core/bytes/耗时/可读 err）、详情结构化、分布点击过滤日志/客户端；空态区分无流量/未开遥测/窗外；依赖 FR-356 口径（需 spec）→ `docs/specs/client-dist-stats-monitor-enrich/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-358 | 安全中心研判处置闭环 + 频道安全摘要（feat，增强 FR-096/264）：画像详情全量字段与风险时间线、事件行一键封 IP/改 key 态/频道防护（DangerConfirm）、频道工作台安全摘要条链到安全中心；安全日志 detail 结构化；不可信字段统一角标；允许频道安全摘要聚合 API（需 spec）→ `docs/specs/client-dist-security-ops-loop/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-359 | 分发三页跨页深链与统一筛选状态（feat，增强 FR-265/264）：`channelId`/`ip`/`machineId`/`errCode`/`version`/`tab` 等 query 在频道工作台、分发监控、安全中心互通；分布/榜单/事件一键跳转保留筛选；不改后端业务语义（免 spec） | — | ✅ 已交付@v0.19.0 |
+| FR-360 | updater-core 遥测与启动画像字段补齐 + 隐私契约（feat，增强 FR-094/264）：客户端上报补齐 core 版本、arch、javaVendor、locale/timezone、memoryTier 等运营诊断字段；明确 required vs diagnostic；隐私 notice/opt-out 与面板展示脱敏规则；允许 schema/落库扩展（需 spec）→ `docs/specs/client-telemetry-enrich-privacy/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-361 | 分发统计与安全日志 CSV 导出（feat，增强 FR-095/249/264）：管理端导出当前筛选窗口的统计汇总/事件日志/安全日志 CSV；仅平台管理员；导出列遵守 FR-360 隐私脱敏；限流防拖库（需 spec）→ `docs/specs/client-dist-csv-export/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-362 | Bot 发压节点池与分布式调度底座（feat，增强 FR-038/042/274，500+ Bot 地基）：将目标游戏实例与执行 Bot 的 Worker 节点解耦，CP 发现具备 Node/bot-worker 运行时的可用发压节点及容量，启动前生成跨 Worker 分片计划并做容量预检；批量、幂等地下发创建/停止与逐批回执，容量不足或节点失联时明确拒绝/降级，不产生无主 Bot 记录。真机门禁（2026-07-21 用户确认缩比）：≥2 真 Worker、>50 跨节点分片预检、缩比真实 connected（非仅 DB 行）、容量不足 ready=false、stop 与故障区分；满规模 10 Worker/500 真连为可选扩容（需 spec + ADR-074）→ `docs/specs/bot-distributed-load/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-363 | 可验证 Bot 场景引擎与塔防预设（feat，增强 FR-274）：结构化场景支持按比例分组、固定随机种子、同步屏障，以及 `wait_spawn` / 主城区域漫游 / `send_command` / 等待探针事件 / `move_to_and_wait` / 锁敌追击 / `attack_until` / 死亡重生与重新进房；每步具备超时、重试、取消和成功/失败结果，兼容代理跨服与单服多房间。塔防预设支持「主城行走→命令进房→同步开局→抵达区域→持续普通攻击」；首版不含技能、放塔、商店和复杂背包（需 spec，依赖 FR-362）→ `docs/specs/bot-scenario-engine/spec.md` | — | ✅ 已交付@v0.19.0 |
+| FR-364 | ServerProbe 压测断言桥与塔防事件适配（feat，增强 FR-065/066）：定义通用压测事件契约，由可修改的塔防插件发布进入子服/房间、房间准备、开局、波次、伤害、击杀、死亡、重生、结束等事件，ServerProbe 经既有反向 WS→Worker→CP 链路上报并关联运行/Bot/房间/请求；命令、到达和攻击仅在收到可信回执后算成功，重复/乱序/迟到事件不得误判（需 spec，依赖 FR-363；不以聊天文本解析作为正式判据）→ `docs/specs/bot-load-probe-events/spec.md` | — | ❌ 已废弃（未实施，由 FR-369 取代） |
+| FR-365 | Bot 长稳重连、进程恢复与状态归真（feat，可靠性增强）：Bot 被踢/断线后按指数退避+随机抖动自动重连；bot-worker 子进程崩溃后恢复本节点期望 Bot 集合，Worker 重启/短暂离线后由 CP desired-state reconcile；状态带序号与时间，进程死亡后立即收敛而非残留旧 `connected`，恢复后重走当前阶段幂等入口。真机验收覆盖批量踢出、杀 bot-worker、重启 Worker、服务端离线后恢复，且无重连风暴、幽灵在线、无界定时器和持续内存增长（需 spec，依赖 FR-362；可与 FR-364 并行）→ `docs/specs/bot-runtime-recovery/spec.md` | — | ✅ 已交付@v0.20.0·真机杀 bot-worker/重启 Worker 恢复与归真 OK；残余：error 态不自动回 connected（需 retry-failed） |
+| FR-366 | 压测运行状态机、三类负载曲线与自动判定（feat）：分离可复用场景模板与每次运行记录，支持固定 500+ 长稳、阶梯升压找最大稳定并发、突发登录/开局/攻击洪峰；运行状态覆盖预检/启动/运行/降级/停止/完成/失败/取消，聚合 Bot 在线率、连接耗时、动作成功率、重连与错误，以及 Worker CPU/RSS、节点资源和目标服 TPS/MSPT，按阈值自动给出 verdict、最大稳定容量和安全停止。默认严格验收：500+ 连续 60 分钟，在线/进房/抵达/攻击成功率均 ≥99%，TPS≥19、MSPT p95≤50ms、Bot/Worker/目标服无崩溃；阶梯与洪峰报告含 p50/p95/p99 并区分目标服/发压端/网络/动作失败（需 spec，依赖 FR-362~354）→ `docs/specs/bot-load-runner/spec.md` | — | ❌ 已废弃（未实施，由 FR-370 取代） |
+| FR-367 | 压测场景模板与创建向导前端（feat，完整 Bot 压测配置体验）：Bot 管理信息架构拆为舰队/压测会话/场景模板；五步向导覆盖目标与节点池、连接配置、分组与行为、负载曲线、阈值与预检，结构化编辑为主并保留高级 YAML，支持保存/复制/恢复模板、容量分片预览、预计时长和风险提示。验收要求无需手写 YAML 即可配置塔防场景，500 Bot 容量不足时启动前明确缺口，5000 条 Mock 数据不全量铺开，并通过中英 i18n、暗亮主题、键盘与可访问性验收（需 spec，依赖 FR-362/352/355 API 契约）→ `docs/specs/bot-load-wizard/spec.md` | — | ❌ 已废弃（未实施，由 FR-371 取代） |
+| FR-368 | 实时压测观测、故障诊断与报告前端（feat，完整 Bot 压测运行体验）：会话详情提供实时概览/Bot 明细/性能指标/失败诊断/事件流/配置，消费会话级聚合推送而非为 500 Bot 各开浏览器 SSE；展示连接漏斗、阶段进度、节点分布、TPS/MSPT、CPU/RSS、动作成功率和错误分类，支持失败 Bot 下钻、只重试失败子集、停止/取消及 JSON/CSV 报告导出，大列表分页/虚拟化且筛选可深链。真机验收要求 500 Bot 运行期间持续更新无需手刷，可定位到 Worker/Bot/步骤/探针事件/错误，并完整展示三类测试结果与最大稳定并发；中英、双主题、键盘和屏幕阅读器全过（需 spec，依赖 FR-366；可与 FR-367 并行）→ `docs/specs/bot-load-observability/spec.md` | — | ❌ 已废弃（未实施，由 FR-372 取代） |
+| FR-369 | 通用 Bot 命令编排与场景边界修订（feat，取代 FR-364，增强 FR-363/354）：新增 `command_schedule` 相对时间命令、稳定 commandId/occurrence checkpoint、绝对计划时间、本地集中 scheduler、取消、固定有限重试和结果聚合；`send_command`/命令发送成功仅表示 `bot.chat` 未同步抛错，不等待服务器回执。ServerProbe、塔防插件、TPS/MSPT 与业务事件仅为独立可选观测，不改变命令结果、preflight 或默认 verdict；既有 Scenario V2/塔防预设保留为显式 legacy，真实业务事件数据源不作为本批交付前提（需 spec + ADR-075，依赖 FR-362/352，可与 FR-365 非依赖部分并行）→ `docs/specs/bot-load-probe-events/spec.md`、`docs/specs/bot-load-platform/super-spec.md` | — | ✅ 已交付@v0.20.0·2 Bot 编排闭环 + 500 物化/10×50 批次/checkpoint；单 Worker 全员 connected 受信号量限制 |
+| FR-370 | 通用命令压测运行状态机、负载曲线与自动判定（feat，取代 FR-366）：模板冻结 commandSchedule/loadProfile/thresholds；支持 stable/step/spike，聚合在线、命令发送、调度 lag、可选屏障和 Worker 健康，输出 verdict、maxStableBots、失败分类与 JSON/CSV 报告。默认适用指标均 ≥99%、schedule lag p95≤1 秒、非预期 crash=0；无屏障指标为 not_applicable，TPS/MSPT/业务事件不进入默认判定（需 spec，依赖 FR-362/352/354/358）→ `docs/specs/bot-load-runner/spec.md` | — | ✅ 已交付@v0.20.0·metrics/SSE/projection 真机 + harness 源码；残余：未跑满 500×60min harness |
+| FR-371 | 通用命令压测模板与创建向导前端（feat，取代 FR-367）：Bot 管理拆为舰队/会话/命令模板；五步向导覆盖目标实例、连接配置、命令编排、负载曲线和阈值预检，支持结构化编辑/高级 YAML、模板 CRUD、容量分片与风险预览；不要求业务字段或 ServerProbe，5000 条 Mock 数据保持分页/虚拟化并通过中英、双主题、键盘与可访问性验收（需 spec，依赖 FR-362/352/359 API 契约）→ `docs/specs/bot-load-wizard/spec.md` | — | ✅ 已交付@v0.20.0·Playwright mock 向导 E2E |
+| FR-372 | 通用命令压测实时观测、诊断与报告前端（feat，取代 FR-368）：会话级聚合 SSE 驱动概览、Bot/失败/事件分页、命令调度与发送进度、屏障、Worker 健康和报告；固定五类失败，支持 action trace、失败子集重试、停止/取消、JSON/CSV 导出。持续标注 `bot.chat` 成功边界，TPS/MSPT/ServerProbe 仅有值时作为 optional legacy 展示（需 spec，依赖 FR-370，可与 FR-371 非依赖部分并行）→ `docs/specs/bot-load-observability/spec.md` | — | ✅ 已交付@v0.20.0·Playwright mock 会话页 + 后端 stream 真连 |
+| FR-373 | 文件元数据与权限底座（feat）：`ListFiles`/`BrowseDir` 条目扩展 mode/readable/writable（相对 Worker 进程用户）及可取属主信息；写前 `CheckWritable`；单 path 非递归 `ChmodPath`（二次确认，不 chown/不 root）；permission denied 中文诊断（需 spec，跨 Worker-CP-Web）→ `docs/specs/file-permission-foundation/spec.md` | — | ✅ 已交付@v0.20.0 |
+| FR-374 | 导入现有服务器：手输绝对路径 + 权限引导 + 写配置预检（增强 FR-302）：DirectoryPicker 保留并加路径输入；inspect/读目录失败展示诊断与「尝试修复」(FR-373)/换路径/migrate；提交或写关键配置前可写预检，不过则阻断（需 spec，依赖 FR-373）→ `docs/specs/import-permission-path-ux/spec.md` | — | ✅ 已交付@v0.20.0 |
+| FR-375 | 资源管理器单窗 Windows 对齐体验（增强 FR-070/071/141/008/031）：可编辑地址栏 + 前进后退历史栈 + 鼠标侧键 + 有栈时拦截浏览器后退；详情列头排序（名/时间/类型/大小/权限）+ 详情/列表/大图标视图切换与偏好记忆；列表/树滚动隔离不带动整页；权限列与锁标 + 编辑器可写态 + 保存/写路径统一预检与「尝试修复」（需 spec，依赖 FR-373）→ `docs/specs/file-explorer-windows-ux/spec.md` | — | ✅ 已交付@v0.20.0 |
+| FR-376 | 多实例壳：主区多标签 + 应用内浮动窗 + 浏览器新标签路由（feat）：标签多路径/多文件；弹出可拖拽缩放浮动窗并可收回；独立路由新开浏览器标签深链 path（需 spec，依赖 FR-375 体验契约）→ `docs/specs/file-explorer-multi-window/spec.md` | — | ✅ 已交付@v0.20.0 |
+| FR-377 | 跨窗拖放 + 统一剪贴板总线（feat）：主区↔浮动窗↔跨浏览器标签 DnD 与剪切/复制/粘贴同一总线；与既有 rename/move/单文件 copy 语义对齐；系统文件拖入仍 HTML5 drop（需 spec + 新 ADR，依赖 FR-376）→ `docs/specs/file-explorer-cross-window-dnd/spec.md`、ADR-078 | — | ✅ 已交付@v0.20.0 |
+| FR-378 | 统一文件管理器壳 + 能力注入，全场景接入（feat）：统一导航/视图/列表树/编辑槽/多窗宿主；Capability 注入（canWrite/canChmod/canUpload/标记清理/编排等）；接入实例文件与配置、平台存储、分发编排与预览、导入选目录等，**不删**分发标记等业务能力（需 spec，依赖 FR-375/376；可与 FR-377 部分并行）→ `docs/specs/file-explorer-unified-shell/spec.md` | — | ✅ 已交付@v0.20.0 |
+| FR-384 | Agent Token 模型 + CP 侧鉴权（feat）：`agent_tokens` 表 + `POST/GET/DELETE /api/v1/agent/tokens` 颁发/吊销/列表 + `agent_token` 中间件（独立于人类 JWT）+ 策略引擎真源（默认只读 + 写白名单 + scope 收敛 + 硬拒绝面）+ 审计 `actor_kind=agent` 贯通；CP 为唯一真源，jm-agent/mcp-bridge/curl 三入口共享同一闸（需 spec + 新 ADR-079，跨 middleware/service/router/model）→ `docs/specs/agent-token/spec.md` | — | ✅ 已交付@v0.20.0·真机签发/鉴权/吊销 |
+| FR-385 | jm-agent 管理 CLI（feat，仿 jmctl）：独立 Go 二进制 `apps/jmagent/`，仅引入 HTTP 客户端与标准库，不链 gRPC/DB；子命令 MVP = `whoami/list nodes/list instances/instance status\|metrics\|logs/start\|stop\|restart/node maintenance enter\|leave`，写白名单仅含 `instance.life`+`node.maintenance`；非交互 `--output json` 给脚本/CI；403/硬拒绝文案稳定；Token 仅 env 与 `--token` 传入不落盘（需 spec + 新 ADR-079，依赖 FR-384；建议并行 worktree）→ `docs/specs/jm-agent-cli/spec.md` | — | ✅ 已交付@v0.20.0·真机 whoami/启停 |
+| FR-386 | mcp-bridge 独立进程（feat）：新 Go 二进制 `apps/mcp-bridge/`，stdio 默认（远端 IDE 经 HTTPS CP）；工具集仅暴露 CLI 等价的 action 子集；硬拒绝面永不对 MCP 暴露；CP 403 → MCP `isError=true` 含中文拒绝原因；不引入数据库/gRPC/Worker；不暴露独立网络监听（需 spec + 新 ADR-077，依赖 FR-384）→ `docs/specs/mcp-bridge/spec.md` | P1 | ❌ 已废弃（由 FR-389/392 取代：MCP 改 CP 内嵌 Streamable HTTP/SSE，删除 stdio 独立进程） |
+| FR-387 | Agent Token 管理 UI（feat）：设置 → Agent Token 页 = 列表 / 新建 / 详情 / 吊销 / 复制命令片段；非管理员 403；UI 契约仅附在 FR-384 spec 末尾（免 spec：纯前端消费 FR-384 API，无新模型/新契约/新 ADR，依赖 FR-384；建议并行 worktree） | — | ✅ 已交付@v0.20.0 |
+| FR-388 | Agent 入口可证安全闸（feat）：同 Token 同输入行为契约表（**CLI ↔ CP-MCP(Streamable HTTP/SSE) ↔ curl**，原 mcp-bridge 入口退役）+ 真机复验矩阵（≥30 条断言：scope 外/Token 吊销/过期/写白名单外/硬拒绝面[用户写/删实例/DB 浏览/自更新/审计删除]/并发两入口同时写/速率限制）+ CI agent-gate 闸 + 契约入 `docs/API.md`（需 spec，依赖 FR-384/385/**389** 完成后起跑；扩展见 FR-389 批）→ `docs/specs/agent-safety-gate/spec.md` | — | ✅ 已交付@v0.20.0·AgentGate≥30 + 真机矩阵（**断言集随 FR-489 缩减**：契约表中「会话踢线后 401」一类会话相关断言随协议会话消失；「AgentGate≥30」口径仍成立，断言规模下限由 `TestAgentGate_AssertionCountFloor` 保证） |
+| FR-389 | CP 内嵌 MCP 长连接服务（feat，取代 FR-386 远程入口形态）：Control Plane 提供 **Streamable HTTP（主）+ 兼容 SSE** MCP 端点；鉴权复用 Agent Token（FR-384）；工具集与 jm-agent 对齐、硬拒绝不注册；**可运维会话**：列表（token 名/前缀、IP、已连时长、最近 tool、传输类型 streamable_http\|sse）、强制踢线、空闲超时、绝对超时、每 Token/全局并发上限；会话态内存为主（单 CP 进程，HA 粘滞不在本期）；平台管理员 API 管理会话（需 spec + **改写 ADR-077** 为「CP 内嵌 MCP 网关」；依赖 FR-384）→ `docs/specs/cp-mcp-server/spec.md` | — | ✅ 已交付@v0.20.0·真机 initialize/tools/call/踢线（**会话运维模型由 FR-489 取代**：协议会话已移除，SSE 兼容路径保留） |
+| FR-390 | Agent 调用流水与 Token 活跃（feat）：统一 `agent_call_logs`（或等价）记录 MCP tool 与 Agent HTTP API（含 jmagent）的 action、tokenId、client（`X-JM-Agent-Client`：mcp\|jmagent\|curl\|unknown）、IP、成功/失败、耗时、时间；读路径也记；保留窗口可配置（默认建议 7~30 天）；Token 鉴权继续 bump `lastUsedAt` 并提供 24h 调用次数聚合只读字段/接口；写操作可仍写既有 audit 并在 detail 标明 actor（需 spec，依赖 FR-384；可与 FR-389 并行）→ `docs/specs/agent-call-log/spec.md` | — | ✅ 已交付@v0.20.0·真机 mcp/jmagent client 可区分 |
+| FR-391 | Agent 观测 UI（feat）：平台管理下 MCP 会话页（列表/踢线/超时说明）+ 调用流水页（按 token/action/client/成功失败/时间筛）+ Agent Token 列表展示 `lastUsedAt` 与 24h 次数 + 审计页可筛 actor=agent / action 前缀 `agent.`；复制「IDE 连接 CP MCP URL」片段；非管理员 403（免 spec：纯前端消费 FR-389/390 API，UI 契约附两 FR spec 末节；依赖 FR-389/390） | — | ✅ 已交付@v0.20.0·DOM 7/7（**MCP 会话页被 FR-489 取代**：改为 Token 活动视图） |
+| FR-392 | 退役 mcp-bridge + jmagent 客户端标识（feat/docs）：删除 `apps/mcp-bridge` 与 stdio 文档路径；README/接入指引改为 CP MCP URL；`jmagent` 全局发送 `X-JM-Agent-Client: jmagent`；构建/CI/发布物去掉 mcp-bridge；更新 FR-388 契约与 ADR-077 状态为 superseded by 改写版（需 spec 或并入 FR-389 退役章；依赖 FR-389 主路径可连后执行，可与 FR-391 尾段并行）→ 退役说明可落 `docs/specs/cp-mcp-server/spec.md` 退役章 | — | ✅ 已交付@v0.20.0·mcp-bridge 删除 + CI/契约清理 |
+| FR-393 | 节点离线归档列表与详情（feat，增强 FR-048 软删可发现性）：主节点列表仅活跃节点；`NodesPage` 增加「归档」分段/Tab，列出已软删下线节点并只读查看摘要（名/host/原状态/下线时间等）；在线下线与名下实例守卫沿用 FR-048/309（在线拒绝、未 force 的 409 清单）。验收：离线下线后主列表消失、归档可见；在线仍拒；compose 1CP+1Worker 真机走通（需 spec）→ `docs/specs/node-offline-archive/spec.md` | — | ✅ 已交付@v0.20.0·真机 API 闭环 |
+| FR-394 | 归档节点彻底清理（feat，增强 FR-309 清理闭环）：归档区对已下线节点提供「清理」= 硬删除节点库记录；有残留实例记录须 force 确认后级联删实例平台记录（**不清理远端文件**，文案明示）；DangerConfirm 输入节点名；写审计。验收：清理后主列表与归档均不可见；未 force 有实例则拒绝；compose 真机验（需 spec，依赖 FR-393 UI 入口；硬删 API 可与 FR-393 后端并行）→ `docs/specs/node-offline-archive/spec.md`（同目录清理章） | — | ✅ 已交付@v0.20.0·真机硬删闭环 |
+| FR-395 | Agent 能力策略 v2 与节点继承实例作用域（feat，增强 FR-384/389）：把 `write_allowlist` 扩为强类型能力分组（节点读/操作/破坏性、实例读/生命周期/命令/搭建配置/内容/破坏性、Bot 读/管理/压测、观测读），节点 scope 自动覆盖该节点当前与未来实例，实例 ID scope 继续支持最小授权；旧 Token 迁移后不扩权，未知动作默认拒绝；`tools/list` 按能力裁剪，调用流水记录能力与目标；永久禁区仍为用户/组/RBAC、Agent Token 管理、密钥明文、数据库浏览、自更新、平台设置（需 spec + 新 ADR 取代 ADR-076 对 Agent 硬拒绝面的旧定义，并修订 ADR-077；被 FR-396~399 依赖）→ `docs/specs/agent-capability-policy-v2/spec.md` | P0 | ✅ 已交付@v0.21.0 |
+| FR-396 | MCP 节点与实例全生命周期强类型工具（feat，增强 FR-005/302/314/342/389）：在 FR-395 策略闸内开放节点详情/指标/维护/排空/Docker 与运行时可用性/归档清理，以及实例搜索/指标/日志/崩溃快照/创建搭建/导入克隆/配置/启停重启重建/命令/批量/强杀/删除；全部直接复用 CP service 与现有状态机、启动预检、内存水位和任务闸，不经本机 HTTP 回环；强杀、删除和节点清理须独立 destructive 能力 + 服务端精确确认；不开放返回明文 enrollment token 的节点准入签发（需 spec，依赖 FR-395）→ `docs/specs/mcp-instance-operations/spec.md` | P0 | ✅ 已交付@v0.21.0 |
+| FR-397 | MCP 文件、配置与插件运维强类型工具（feat，增强 FR-008/031/052/373/389）：开放目录/元数据/文本读写/权限预检与 chmod/移动删除/历史 diff 回滚，配置发现/字段与文本写入/校验/历史，以及从既有制品 assetId 部署、启停、删除插件；控制与数据分离——MCP 不承载大型 base64/jar/世界包，改签发短时单用途且绑定 Token/scope/实例/path 的流式 HTTP 传输票据；保留路径越界、二进制与文本体积护栏、原子落盘和危险确认（需 spec，依赖 FR-395；可与 FR-396/398 并行）→ `docs/specs/mcp-content-operations/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-398 | MCP Bot 舰队与压测编排全工具（feat，增强 FR-362/369~372/389）：普通 Bot 列表/详情/创建/停止/删除/行为/命令，压测模板 CRUD 与结构化 JSON/YAML 命令计划/负载曲线/阈值，以及运行创建→发压节点容量→预检→启动→状态→停止→失败子集重试→分页 Bot/失败/事件/指标→JSON/CSV 报告全部由强类型 tool 覆盖；目标实例与每个执行节点均过 FR-395 scope，planToken 保持不透明，5000 条明细走分页/游标，命令成功边界继续遵循 ADR-075（需 spec，依赖 FR-395）→ `docs/specs/mcp-bot-orchestration/spec.md` | P0 | ✅ 已交付@v0.21.0 |
+| FR-399 | 500 Bot 全链路资源采样与容量报告（feat，增强 FR-343/362/370）：压测运行同步采样目标服 JVM 进程 RSS/堆/CPU/运行时长（探针可用时附 TPS/MSPT）、各发压节点 Worker RSS/bot-worker RSS/节点内存与 Bot 数，以及在线率/命令发送/调度延迟/失败/重连；报告按阶段输出 baseline、峰值、p95、增量、每 Bot 内存斜率，分别列目标服/各发压节点/集群总量，并区分「500 Bot 实测峰值」与「加 25% 安全余量建议」；目标 SSH 主机为 64 GiB 时保留 8 GiB 系统内存，不满足时只报告最大稳定实测规模；缺失指标标 unavailable 不以零冒充，MCP 可查快照/曲线/终态容量报告（需 spec，依赖 FR-398，资源字段跨 Worker/CP/报告/MCP）→ `docs/specs/bot-load-resource-capacity/spec.md` | P0 | ✅ 已交付@v0.21.0 |
+| FR-400 | 受管资源归因与首页仪表 Tooltip（feat，增强 FR-169/170）：修复观测刷新后，首页 CPU/负载/内存仪表提供采样时间、陈旧/离线态与可访问 Tooltip；按节点→受管实例→进程 TopN 解释资源占用并可下钻监控页，归因接口可查询已就绪共享 Bot Worker 的真实容量或缺测原因。仅覆盖节点、Worker、受管实例进程树与 Bot Worker，不采集任意 OS 进程；页面可见时 10s 刷新、隐藏暂停，复用既有 90s 新鲜度阈值（需 spec，依赖 FIX-观测刷新）→ `docs/specs/managed-resource-attribution/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-401 | Bot Worker 历史观测与聚合统计（feat，增强 FR-362/399）：常驻采样 Bot Worker RSS、事件循环 P95、活跃/连接中数、真实容量上限及 Go Worker RSS/CPU，按执行节点、目标实例与压测会话关联查询；不以共享进程 RSS 伪造单 Bot 占用。时序留存复用 ADR-013 的 raw/5m/1h 三档（需 spec，依赖 FR-400 的唯一实时快照契约）→ `docs/specs/bot-runtime-observability/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-402 | 平台全景观测总览与下钻（feat，增强 FR-220）：平台首页聚合健康、资源、节点/实例状态、告警、任务与 Bot，展示 TopN/异常项并下钻节点或实例详情，不在首页全量铺开实体表；跨节点 Bot 事件循环 P95 取可用节点最大值（需 spec，依赖 FR-400/401）→ `docs/specs/platform-observability-overview/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-403 | 日志中心平台与节点实例视图分流（feat，增强 FR-150/215）：同一路径分为「平台日志」（仅 CP）与「节点/实例日志」（Worker+实例，按节点/实例聚合筛选）两个主视图；平台管理员保留受控全量检索。复用既有日志表与筛选接口（免 spec） | P1 | ✅ 已交付@v0.21.0 |
+| FR-404 | Bot 乱斗场景与受管稳定性压测（feat，增强 FR-274/352/398/399）：`attack_until` 加性支持死亡后受限重生恢复、混合玩家/敌对生物确定性随机目标、无目标寻路搜敌与客户端攻击活跃度；MCP `loadtest_run_create` 可提交冻结的 Scenario V2。使用受管隔离 Paper + ServerProbe 运行 1 Worker × 50 Bot × 1 小时，只验证客户端攻击活动、重生恢复和资源稳定性，不把它表述为服务端伤害/击杀或 TEST-500（需 spec，依赖 FR-398/399）→ `docs/specs/bot-combat-soak/spec.md` | P0 | ✅ 已交付@v0.21.0 |
+| FR-405 | 受控用户创建与邮箱邀请（fix + feat，修 FR-001/002/156）：移除匿名注册；平台管理员单请求创建账号；管理员签发仅组成员、7 天、可撤销的一次性邀请，邮件链接由独立 SMTP 与系统设置的统一 HTTP/HTTPS 公共基址投递，后续绝对链接复用该基址，受邀者自助设置凭据（需 spec + ADR-082）→ `docs/specs/user-invitation-and-registration-security/spec.md` | P0 | ✅ 已交付@v0.21.0 |
+| FR-406 | 监控页全景观测整合与默认多指标对比（feat，增强 FR-221/400/401/402）：`/monitor` 成为平台/节点/实例观测入口，默认选中对比指标，展示平台健康、异常 TopN、资源归因、共享 Bot Worker 与受管进程并支持 URL 下钻；首页健康与共享 Bot 区块保留在 `/`（免 spec） | P1 | ✅ 已交付@v0.21.0 |
+| FR-407 | 受管进程详细探查与异常诊断（feat，增强 FR-170/400）：按 `instanceId+pid` 查询受管实例当前进程树内 PID，返回脱敏命令摘要、父子关系、CPU/RSS/IO/运行时长/线程数可用性，并结合历史样本输出带证据的 RSS 增长、CPU 高占用、IO 高写入、采样陈旧/不足诊断（需 spec）→ `docs/specs/managed-process-diagnostics-control/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-408 | 受管进程细粒度处置与多种关闭方式（feat，增强 FR-005/170/400）：根进程继续复用实例优雅停止/重启/强制终止；非根子进程提供 `terminate` 与 `kill_tree`，Worker 执行瞬间重验 PID 仍属目标实例树，前端 DangerConfirm + 后端 confirm 双保险并写脱敏审计（需 spec）→ `docs/specs/managed-process-diagnostics-control/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-409 | 制品版本库与 ServerProbe 在线分发（feat，增强 FR-045/068/114/173/174）：在既有 CAS `assets` 上新增通用制品包 / 来源 / 版本层；首个包 ServerProbe 由 CP 同步 GitHub Releases、校验并缓存 jar，Worker 从 CP 拉取。版本按全局默认 → Worker 默认 → 实例显式覆盖解析；Worker 改默认仅影响新实例，已有实例须手动切换以升级或回滚。不再嵌入 ServerProbe 源码、jar 或依赖缓存（需 spec + ADR）→ `docs/specs/artifact-version-library/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-410 | Linux 用户级 systemd 版本化直装与节点部署（feat，增强 FR-277/282）：操作机 SSH 推送 CP 或 Worker 至 Linux 普通用户，二进制按版本/UTC 时间/摘要落入永久保留的不可变目录，`current` 原子指针决定运行版本；稳定保留 `data`、CP 配置与 Worker 身份，旧裸二进制布局首次自动迁移；新增 CP / Worker 显式回滚脚本。仅覆盖 user unit，不引入公开镜像、Docker Compose 生产部署或 Kubernetes（需 spec + ADR）→ `docs/specs/versioned-user-systemd-deploy/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-411 | ServerProbe 本地上传来源（feat，增强 FR-409）：为 `serverprobe` 制品包新增 `local-upload` 内置来源，管理员上传 `.jar` 即流式入现有 CAS 并立即形成可选版本；来源与版本明确区分 GitHub Releases（线上拉取）和本地上传，同名版本按来源消歧；复用全局→Worker→实例选择和 CP-local Worker 拉取，不自动改默认或升级已有实例（需 spec + ADR-085）→ `docs/specs/local-serverprobe-upload/spec.md` | P1 | ✅ 已交付@v0.21.0 |
+| FR-412 | 实例顶栏瘦身与实例切换器（feat，增强 FR-293/296）：删除 `服务器控制台 /` 前缀与无信息副标题，7 格 MetaCell 网格改为一行 pill 指标条（可收起并记住偏好），实例名即切换器（复用最近/收藏 + 模糊搜索），切换命中热集不重建终端连接；顶栏无横幅时 ≤ 90px（免 spec） | P1 | ✅ 已交付@v0.22.0 |
+| FR-413 | 实例 Tab 重组（feat，增强 FR-037）：「环境变量」并入「文件配置」形成分段，10 → 9 个 Tab 并加图标与分组分隔线，1366px 宽下不横向滚动；`?tab=env` 旧深链自动落到新分段（免 spec） | P1 | ✅ 已交付@v0.22.0 |
+| FR-414 | 终端热集上限治理（feat，增强 FR-296/ADR-067）：`HOT_SET_SIZE` 由写死 3 改为可配（默认 6），按实际可见终端数动态提升保活集，闲置断连策略随之调整，为分屏与多 window 场景铺底（免 spec） | P1 | ✅ 已交付@v0.22.0 |
+| FR-415 | 控制台输出/输入分离（feat，取代 Terminal 的 xterm 直通输入）：后端为 stdin 管道而非 pty，故输出区改 DOM 虚拟列表（只读、结构化行模型、MC/Java 日志行解析、ANSI 解析、5000 行环形缓冲），输入改真 `<input>` 命令栏（需 spec + ADR-086）→ `docs/specs/console-log-view-redesign/spec.md` | P0 | ✅ 已交付@v0.22.0 |
+| FR-416 | 命令栏智能输入（feat，依赖 FR-415）：历史按实例持久化（上限 500、相邻去重）、`^R` 模糊搜索、候选式 Tab 补全（命令 + 第二段玩家名，ghost 预览不盲补）、多行粘贴确认（逐行/仅首行/取消）（免 spec） | P1 | ✅ 已交付@v0.22.0 |
+| FR-417 | 输出区观察能力（feat，依赖 FR-415）：日志级别过滤、行内搜索与高亮计数、跳到底部浮标、复制范围菜单（选区/可见屏/全缓冲/仅错误/存 .log），并为停机日志回放、崩溃诊断、启动失败横幅三处补复制按钮（免 spec） | P1 | ✅ 已交付@v0.22.0 |
+| FR-418 | 大范围选取与堆栈块复制（feat，依赖 FR-415）：跨行改用锚点选区（行号区间 + 边缘自动滚动，文本取自数据源而非 DOM，规避虚拟列表选区断裂），单行内保留原生字符级选取；Java/MC 异常按堆栈形态归并为可折叠块并支持一键复制整块（需 spec，沉浸 pane 直接复用鼠标选区与复制能力）→ `docs/specs/console-log-view-redesign/spec.md` | P1 | ✅ 已交付@v0.22.0 |
+| FR-419 | 历史日志无限回溯（feat，增强 FR-150/345）：`/logs` 由 OFFSET/LIMIT 增加 `(time,id)` 游标分页以消除向上翻页时的 offset 漂移；控制台滚到顶自动加载更早并保持滚动锚定，提供「跳到本次启动」与「跳到时间点」，横幅标明回溯位置与数据层级。归档 NDJSON（超保留期）不纳入本次范围（需 spec）→ `docs/specs/console-log-view-redesign/spec.md` | P1 | ✅ 已交付@v0.22.0 |
+| FR-420 | 控制台沉浸工作台（feat，依赖 FR-415/414）：`F11` 进入全屏沉浸态（侧栏/顶栏/Tab 退场），顶部工作台头部承载当前实例、TPS/在线/CPU、可见布局操作与退出；不注册 tmux 前缀键或底部状态栏（需 spec + ADR-087）→ `docs/specs/console-immersive-workspace/spec.md` | P2 | ✅ 已交付@v0.22.0 |
+| FR-421 | 沉浸工作台可视化分屏（feat，依赖 FR-420/418）：通过可见按钮提供左右/上下分屏、添加/切换实例、聚焦、最大化和关闭 pane（最多 4 个）；复制直接复用 FR-418 鼠标锚点/堆栈复制，不提供键盘复制模式（需 spec）→ `docs/specs/console-immersive-workspace/spec.md` | P2 | ✅ 已交付@v0.22.0 |
+| FR-422 | 实例界面视口自适应骨架（feat，增强 FR-269/296）：实例路由内容区由 `min-h-[520px]` + 整页滚动改为 `flex h-full` 骨架——顶栏与 Tab 栏 `flex-none`、内容区 `flex-1 min-h-0`、滚动收口到卡片内部，使顶栏常驻可见且底部不再留白（屏幕越大原浪费越多）；分段栏与工具栏合并为单条横栏。仅覆盖实例详情路由，不改其他页面滚动模型（需 spec）→ `docs/specs/instance-layout-redesign/spec.md` | P1 | ✅ 已交付@v0.22.0 |
+| FR-423 | 实例各 Tab 分栏重排与空态收缩（feat，依赖 FR-422）：按内容宽度需求分栏（窄内容与宽表格分列），等高栏改为不撑高矮卡，空态高度按内容走；概览的「最近事件 / 关注事项 / 崩溃诊断」三个低信息量卡合流为单条「动态与告警」时间线（需 spec）→ `docs/specs/instance-layout-redesign/spec.md` | P1 | ✅ 已交付@v0.22.0 |
+| FR-424 | 宽表格列宽与稀疏表治理（feat，依赖 FR-422）：宽表格显式约束列宽与总宽上限，避免主列无限扩张导致名称与元数据之间断开视觉连接；超宽稀疏表（在线玩家、白名单等 2 列表）改行卡片形态，复用 FR-195 的行卡片范式（免 spec） | P1 | ✅ 已交付@v0.22.0 |
+| FR-425 | 分发三页统一自定义时间筛选（feat，增强 FR-265/357/359）：频道工作台/分发监控/安全中心统一时间范围组件——保留既有预设档并新增任意起止日期时间（后端 from/to RFC3339 已支持，纯前端组件化），URL 深链同步进 FR-359 体系；区间超 14 天明细保留窗时自动标注「活跃机器为近似值」（消费 activeMachinesExact；免 spec） | P1 | ✅ 已交付@v0.22.0 |
+| FR-426 | 机器级更新清单与钻取（feat，增强 FR-217/265）：选时间段列出每台机器（machineId）更新次数/最近更新时间/版本滞后，支持排序分页；点机器看该机器更新事件时间线；新后端查询端点（需 spec → `docs/specs/client-dist-machine-drilldown/spec.md`，**spec 待补**） | P1 | ✅ 已交付@v0.22.0 |
+| FR-427 | 更新活动时间线/热力图（feat，增强 FR-218）：按天×小时热力图消费既有小时桶 series；入分发运维页统计 Tab（免 spec，纯前端） | P2 | ✅ 已交付@v0.22.0 |
+| FR-428 | 分发概览洞察卡（feat，增强 FR-357）：运维总览洞察卡——同环比、异常标记、KPI 口径解释（需 spec → `docs/specs/client-dist-insight-cards/spec.md`，**spec 待补**） | P1 | ✅ 已交付@v0.22.0 |
+| FR-429 | 分发三页布局统一重排（ref，依赖 FR-425~428）：信息架构=洞察卡→时间筛选→概览数字→趋势/热力→明细；随 FR-430 两页化收敛（免 spec） | P2 | ✅ 已交付@v0.22.0 |
+| FR-430 | 客户端分发信息架构合并（观测页并入独立「客户端分发运维」页）（feat，增强 FR-215/264/265/356~359/425~429）：三页收敛为「客户端分发」`/client-channels` +「客户端分发运维」`/client-dist-ops`（7 Tab）；旧路由透传重定向；request 日志双视图合一；两页补平台管理员守卫；i18n `clientDistOps.*`。纯前端（需 spec + ADR-088）→ `docs/specs/client-dist-ia-merge/spec.md` | P1 | ✅ 已交付@v0.22.0 |
+| FR-431 | 控制台六域导航 IA（feat，增强 FR-268/215/272）：顶层收敛为首页/服务器/群组网络/工作台/观测/客户端分发/平台设置；业务 URL 不变；`/templates` 迁出内容分发；`/alerts` 维持无入口；侧栏可见性改由权限节点裁剪（依赖 FR-432）→ `docs/specs/nav-ia-role-model/spec.md` | P1 | ✅ 已交付@v0.22.0 |
+| FR-432 | 可配置权限树与角色模板（feat，增强 FR-002/156）：静态能力域权限目录 + 角色模板/用户绑定/用户 allow-deny 覆盖（deny 永胜；**超管唯一**、不可撤销/降权）+ `RequireAnyPerm`/`requireNodes` 路由与写路径门禁 + `/permissions` 管理页；单平台多用户（ADR-089，不推翻 ADR-004）→ `docs/specs/nav-ia-role-model/spec.md` | P0 | ✅ 已交付@v0.22.0 |
+| FR-433 | 实例角色可变更与 beacon 配套服务角色（feat，增强 FR-032/ADR-007）：`PUT /api/v1/instances/:id` 支持 `role`（非法值 400 拒绝，与 Create 的 grandfather 回落语义刻意不同），MCP `instance_update_config` 暴露 `role` 枚举；新增 `beacon` 角色标识配套服务实例（非 MC 群组服角色：不参与 proxy↔backend 拓扑、不适用 MC 探针与后端注册、不参与玩家查询）。role 变更不做隐式级联——原为 proxy 的 `server_registrations` 保留，避免误删运维数据。**真机验收通过**（隔离环境 E2E CP/Worker）：①MCP `instance_update_config` schema 暴露 `role` 且枚举完整（`backend/proxy/universal/beacon`、非必填）；②非法值经 MCP 与 HTTP 双侧均被拒（MCP 回「无效的实例角色: superadmin（可选 backend/proxy/universal/beacon）」，HTTP 回 400 `INVALID_REQUEST`），与 Create 的 grandfather 回落语义确不同；③`proxy`/`backend`/`beacon` 三角色均可设并回读；④no-cascade 证实——实例由 proxy→universal→proxy 后其 `server_registrations`（proxyId=1/backendId=3）仍在，未被级联删除 | P1 | ✅ 已交付@v0.23.0 |
+| FR-434 | 群组服 Network 与代理注册的 MCP 工具（feat，增强 FR-032/335）：补齐 MCP 侧群组管理与拓扑能力——`network_list/get/create/update/delete`（删除需 `confirmName` 精确确认）、`network_add_members/remove_member`、`topology_get`（一次聚合代理注册 + 群组成员）、`registration_list/create/delete`；权限与实例分组同面（读 `instance.read`、写 `instance.write`），新增 `networkDomainActions` 独立 action 目录。使 MCP 客户端可完整维护群组服拓扑，不再依赖人工登录面板。**真机验收通过**（隔离环境 E2E CP/Worker）：network 全生命周期闭环（create→list→get→add_members→get 复查→update 改名→remove_member→delete 名不符正确拒绝→delete 精确名成功→list 复查空）；`topology_get` 一致；`registration_create/list/delete` 在 proxy↔backend 上闭环；对非代理实例调 `registration_list` 正确报「目标实例不是代理」 | P1 | ✅ 已交付@v0.23.0 |
+| FR-435 | 实例分组 MCP 工具（feat，增强 FR-165/ADR-033）：`instance_group_tree/members/create/update/delete/add_members/remove_members` 七个工具，让 MCP 客户端可按大区/小区等结构树做批量运维；分组仅承载运维归类，不承载权限或配额（读 `instance.read`、写 `instance.write`）。**真机验收发现缺陷**（隔离环境 E2E CP/Worker）：`instance_group_tree/members/create/update/add_members/remove_members` 六项通过（create 挂树、tree 回读、add/remove 成员、update 改名+移根、members 回读均正确）；但 **`instance_group_delete` 恒被拒**（连空分组 + 精确 `confirmGroupName` 也回「能力/scope 不足或操作被拒绝」）。根因：`mcp/tools.go` 的 `callRegisteredTool` 对带 `ConfirmField` 的工具先调 `authorizeDestructiveTarget`，该函数按 descriptor 的 `ResourceType=instance` 把**分组 id 当实例 id** 填入 `target.InstanceID`，`Authorize→principalCanAccessInstance(p, groupId, 0)` 因实例 scope 不含该 id（且 `NodeID=0` 使节点 scope 兜底失效）而必拒——任何 token 都无法删除分组。修法：非实例资源（分组/群组）改用节点 scope 授权，或在 `authorizeDestructiveTarget` 按 action 区分目标类型。同病的 `network_delete` 因未走 `ConfirmField` 路径（自带 confirm）未受影响。**缺陷已修复**：`authorizeDestructiveTarget` 对分组/群组等「容器」目标改按**节点 scope**授权（`PrincipalHasNodeScope`），精确确认名改从分组/群组领域服务解析（新增 `InstanceGroupService.Get`）；回归测试 4 项（含「分组 id 与实例 id 相同」碰撞）全绿，真机复核（重建 E2E CP）删非空→`分组非空`拒绝、删名不符→拒绝、**删精确名→`{"ok":true}`** 通过 | P1 | ✅ 已交付@v0.23.0 |
+| FR-436 | daemon 实例 wrapper 已死而 Java 仍活时的孤儿接管（fix，缺陷修复 FR-325 同源场景）：接管扫描原逻辑只检查 wrapper，见到 wrapper 不存活即删 PID 文件——而 wrapper 死、其托管 Java 仍活时（父进程变 init），活着的 Java 从此不可发现，继续占服务端口与 Paper `session.lock`、面板却显示 STOPPED 且实例再起不来（真机事故：控制面重启后 63 个实例集体失联）。现改为按 PID 记录强杀 Java 树，死透才清理、杀不死则保留 PID 文件待下次兜底。**真机验收通过**（隔离环境 E2E CP/Worker，主动构造该分支）：令实例 wrapper 单独 SIGKILL、Java 存活（PPID 变 1、服务端口仍监听、pid 文件陈旧指向死 wrapper），重启 Worker 触发接管扫描——日志逐条命中「wrapper 已不存活但 Java 仍活，按 PID 记录强杀 Java 孤儿」→「孤儿进程树已强杀并清理 PID 文件」；事后确认原孤儿 Java 确已死亡、全机孤儿（PPID=1 残留）计数 0、pid 文件被清理，实例由 CP 重连重推规格重新登记（状态 STOPPED，无泄漏）。修复前的旧逻辑只删 pid 文件、Java 变不可发现，本次强杀分支真机确认生效 | P0 | ✅ 已交付@v0.23.0 |
+| FR-437 | 压测容量快照陈旧导致的伪容量不足（fix，缺陷修复 FR-398）：①容量快照老化阈值 15s 仅比 bot-worker 10s 心跳多 5s 余量，一次 GC/负载抖动即判 `CAPACITY_SNAPSHOT_STALE`；②预检与容量查询工具走 15s TTL 缓存而非实时快照。二者叠加使节点明明有空闲容量仍报「可用容量 0」，需反复重试偶中。现阈值放宽到 30s（3 倍心跳），并让预检与 `loadtest_node_capacity` 优先经 `RefreshBotLoadCapacity` 取实时值。**真机验收通过**（生产 host-1，500 容量满载）：①`loadtest_node_capacity` 与预检均走 `RefreshBotLoadCapacity` 实时读——连续两次调用 `updatedAt`/`lastHeartbeatAt` 持续推进（非冻结）、`eventLoopP95Ms` 随负载变动，证明读的是实时快照而非陈旧缓存；②对满载节点发起预检，blocker 为 `BOT_LOAD_CAPACITY_INSUFFICIENT`（真实满载原因，`totalAvailable=0` 且节点 `unavailableReason` 为空），**未出现 `CAPACITY_SNAPSHOT_STALE`**——即「可用容量 0」是真实满载而非陈旧伪报，与修复前真机「明明有空闲却报 stale」的现象相反。心跳停摆的根因由 FR-438 分片化消除（FR-438 亦记录 `CAPACITY_SNAPSHOT_STALE` 现象不再出现），本项阈值 30s + 实时读共同保证不再误判 | P1 | ✅ 已交付@v0.23.0 |
+| FR-438 | bot-worker 大规模舰队的事件循环过载（fix，缺陷修复 FR-398）：Mineflayer 为每个 Bot 起 50ms 物理模拟定时器，数百 Bot 时单 Node 进程事件循环被占满（实测 500 容量下 p95 达 5s），keepalive 与心跳均无法调度——服务器集体判 `Timed out` 踢线，容量快照亦停止推进。现按行为判定关闭无需本地碰撞的 Bot 的物理模拟（`idle` 等不自行移动的行为默认关闭，`follow/patrol/guard` 保持开启），并把默认视距降到 `tiny`；另新增 `JM_BOT_WORKER_MAX_BOTS` 配置让容量上限可经 worker.yml 下发。**后续批（2026-09-21）继续压降并取得决定性进展**：①分片化——`bot_worker.shards` 由 6 提到 10，突破单进程单核上限（此前 6 片各 ~95–106% CPU 触顶，现 10 片各 ~41–44%，均值 5.4 核承载 500 Bot）；②内建插件裁剪——压测 Bot 用不到的 24 个 Mineflayer 插件（挖矿/合成/附魔/床/告示牌/粒子…）经 `plugins:{name:false}` 关闭，实测每 Bot CPU 0.713%→0.537%（-24.7%，注意 `digging` 因 pathfinder 经 `block.digTime` 依赖、`simple_inventory` 因 `inventory.js` 调 `bot.setQuickBarSlot` 而**必须保留**，禁用后者会直接崩）；③客户端视距 `tiny`→`2`（协议最小值），每 Bot 内存 31.7MB→16.6MB（-47.6%）；④服务端侧 `view-distance`/`simulation-distance` 10→4、`entity-broadcast-range-percentage` 100→50（20 个 Paper 服），并修正超编目标服 `max-players` 50→60、lobby 服 `spigot.yml` 的 `bungeecord:true` 阻碍直连的问题。**验证结论：500 Bot 全部在线且稳定（472 直连 MC 服 + 10 经 BC 代理，平台记账 activeBots=500），bot-worker 5.4 核 / 13.8GB，eventLoop p95 ~40ms，系统 40 核中用 ~20 核**；FR-437 的 `CAPACITY_SNAPSHOT_STALE` 与心跳停摆现象不再出现。**遗留**：18 个旧 `workerEpoch` 僵死 Bot 占用平台容量记账但不产生连接（`desiredState=running`/`status=error`，分片重启前残留），需平台侧提供失效 Bot 的回收能力 | P0 | ✅ 已交付@v0.23.0（500 在线稳定；遗留的僵死 Bot 回收由 FR-460 承接并真机确认——`bot_reclaim.dispose_auto`/`refill` 正常运作） |
+| FR-439 | MCP 会话并发上限造成永久 429（fix，缺陷修复 FR-389）：`MaxSessionsPerToken=4`/`MaxGlobalSessions=32` 在客户端「重连建新会话但不关旧会话」时会耗尽配额，此后连 `initialize` 都建不了会话，只能重启控制面清空内存会话恢复。现并发上限语义改为「0=不限制」且为默认（当时会话生命周期还由空闲 30m/绝对 24h 超时兜底），`Normalize()` 不再把 0 回落到正数，需要限流的环境可显式设正值；同时 MCP 会话失效响应当时保留规范要求的 404 + `SESSION_GONE` 错误码，便于与「路由不存在」区分排障。**真机验收通过**（隔离环境 E2E）：对同一 token 连续发起 8 次 `initialize`（旧上限 `MaxSessionsPerToken=4` 下第 5 次即 429），实测 8/8 全 HTTP 200 且各得独立 `Mcp-Session-Id`、无 429——并发上限「默认不限制」生效 | P1 | ❌ 已废弃（原 ✅ 已交付@v0.23.0；随 FR-489 无状态化整体作废——协议会话与并发上限均已移除，该缺陷的载体不存在） |
+| FR-440 | 实例标签 MCP 工具（feat，增强 FR-395/047）：新增 `instance_update_tags` 工具与独立 action `agent.instance_update_tags`（V2 能力 `instance.write`，资源类型 instance），补齐 MCP 侧标签维护能力——现有 `instance_update_config` 未暴露 `tags` 字段，打标签只能绕开 MCP 走 HTTP，无法进 Agent 审计流水。三态语义：缺省=不改动、空数组=清空、非空=整体覆盖。`instance.read` 持有者可读（经 `agent_get_instance`），`instance.write` 持有者可写。**真机验收通过**（隔离环境 E2E CP/Worker）：三态各验一次（设标签→覆盖→清空为 `null`），且每次变更触发 FR-443 推送、Beacon 侧收到的 `jmTags` 与变更逐一吻合 | P1 | ✅ 已交付@v0.23.0 |
+| FR-441 | 通用二进制运行时搭建（feat，增强 FR-319/FR-342，见 ADR-090）：`provision_server` 新增 `coreType=binary`，支持三类来源——① 制品库既有 asset、② 远程 URL、③ 节点本地文件路径；二进制不适用 PaperMC 的版本/构建解析，改为「来源解析 → 下载/复制 → 落盘 → 写启动命令」四段式，全程复用 `TaskService.RunAsync`（新 `TaskKind=binary_provision`）以便前端看到下载进度与终态站内信。启动方式复用既有 `startCommand` 字段（不引入新概念），实例角色默认 `universal`。失败进 `DAMAGED` 并保留 `provisionSpec` 供重建。**真机验收通过**（隔离环境）：①`node_file` 来源搭建 30MB 真实 Beacon 二进制，落盘 `-rwxr-xr-x` 且 sha256 完全一致，实例经 wrapper 启动并完成真实初始化（生成 `beacon.db`/`config.yml`/`secrets/`，持续运行未崩溃）；②`url` 来源的 http 明文被正确拒绝（「url 必须为 https」），`https` 路径经 GitHub 实际下载 30593289 字节成功落盘可执行（`source=url`）；③`asset` 来源由单测覆盖（真机制品库为空，未走该档） | P1 | ✅ 已交付@v0.23.0 |
+| FR-442 | 内置 Beacon 快速搭建预设（feat，依赖 FR-441，见 ADR-090）：在 `coreType=binary` 之上提供 Beacon 预设——制品来源优先级为「制品库已有版本 > Beacon GitHub Releases」，默认启动命令 `./beacon-1.1.0-linux-amd64`、默认角色 `beacon`（FR-433）、默认 JVM 无关（Go 二进制）。一键搭建后管理台可完成首次鉴权初始化。Beacon 与本平台为**可选协同**关系：未部署 Beacon 时本平台全部能力不受影响。**真机验收通过**：`coreType=beacon` 一键搭建产出 `role=beacon`、`jdkId=0`、`startCommand=./beacon-1.1.0-linux-amd64`（由落盘名派生）的实例；来源解析命中 GitHub Releases（E2E 制品库为空，走「制品库 > GitHub」的第二档，`source=url` 取件 30593289 字节落盘可执行）；实例启动后 Beacon 完成真实初始化（生成 `beacon.db`/`config.yml`/`secrets/`），配独立端口后**持续运行且 HTTP 200**，管理台 `POST /admin/v1/auth/login` 登录成功（首次鉴权初始化闭环） | P1 | ✅ 已交付@v0.23.0 |
+| FR-443 | 向 Beacon 推送拓扑变更（feat，依赖 Beacon FR-222，见 ADR-090）：实例创建/删除/改归属（name/role/tags）时，若配置了 Beacon 协同端点则推送增量事件，使 Beacon 侧 server 归属与默认入口自动对齐，免去人工双写。**兼容非依赖**：未配置端点即整体跳过；推送失败只写审计与告警、**绝不阻塞或回滚本机操作**；投递尽力而为不做重试队列。实例启停不推送（Beacon 在线状态由 agent 心跳自维护）。**真机验收通过**：正向拉通 mock Beacon（收包含 `X-Beacon-Token` 与 `namespace:prod`，`create`/`ownership` 事件按变更触发，审计落 `instance.beacon_push_ok`）；端点不可达时本机操作**零阻塞**（改名 39ms 完成）且写失败审计；实例启停确认不推送 | P2 | ✅ 已交付@v0.23.0 |
+| FR-444 | 从 Beacon 拉取拓扑并映射为分组树（feat，见 ADR-090）：读取 Beacon 的区服结构（BC 集群 → 大区 → 小区）与 server 归属，映射为 JianManager 实例分组树（FR-165）并为实例补 `region:`/`zone:`/`role:` 标签（FR-440）。首次拉取为手动触发，避免自动建树与人工分组冲突；Beacon 不可达时返回明确错误且**不改动本地任何数据**。**真机验收通过**：空树 → 拉取创建 4 个分组（BC 集群→大区→小区 三层层级正确落库），本地不存在的 server 被跳过并列 `skippedServers`；二次拉取幂等（`createdGroups=0`）；审计落 `instance.beacon_pull_ok`；不可达时本地数据零改动 | P2 | ✅ 已交付@v0.23.0 |
+| FR-445 | 实例能力画像抽象（feat，见 ADR-091）：实例按「类型 × 角色」声明自身能力画像（`capabilities`：有哪些 Tab、依赖探针否、是否 MC 语义），前端据画像显隐内容而非 `if role==='proxy'` 硬编码；新增产品类型只需注册描述符。**验收**：新增一种角色/类型，详情页自动按其声明显隐 Tab，前端零硬编码改动；`generic`/`beacon`/`backend`/`proxy` 四种画像各自正确 | P1 | ✅ 已交付@v0.23.0 |
+| FR-446 | MC 直探能力（SLP + Query）（feat，依赖 FR-451，见 ADR-092）：新增 Minecraft **Server List Ping**（零配置，取 MOTD/版本/在线人数/最大人数/favicon）与 **GameSpy4 Query**（需开 `enable-query`，取实名玩家名单/插件列表/地图名）协议客户端，不依赖探针。**验收**：对任意在跑 MC 服不装探针即可拿 MOTD/版本/人数；开启 query 后可拿实名玩家名单；明文 http 拒绝、超时可配 | P1 | ✅ 已交付@v0.23.0 |
+| FR-447 | 采集优先级与降级编排（feat，依赖 FR-446）：统一采集编排——**有探针走探针 → 无探针走直探 → 都没有显示"不可用"**（不报错、不伪装 `-1`）；同一指标多源时以探针为准。**验收**：同一实例三态（探针+直探 / 仅直探 / 都无）下详情页均正确呈现，无探针不留占位符垃圾值 | P1 | ✅ 已交付@v0.23.0 |
+| FR-448 | 详情界面按能力画像适配（feat，依赖 FR-445）：详情页按 role × type × 探针有无 三轴显隐 Tab 与内容；隐藏 MC 专有 Tab（世界/区块/TPS/插件）对非 MC 实例。**验收**：backend / proxy / beacon / generic 四种实例打开详情页，Tab 与内容各不相同且均合理 | P1 | ✅ 已交付@v0.23.0 |
+| FR-449 | BC（proxy）专用界面（feat，依赖 FR-445/447）：BC 实例专属视图——子服列表与各自状态、跨服玩家分布与全网总数、BC 自身运行指标、BC 配置管理（config.yml 关键项）。**验收**：BC 实例可见上述四块，且与已有拓扑/注册关系数据一致、不重复维护 | P2 | ✅ 已交付@v0.23.0 |
+| FR-450 | 二进制 / beacon 专用界面（feat，依赖 FR-445）：非 MC 实例专属视图——进程运行指标（CPU/内存/线程/句柄/时长/重启次数）、端口与主动健康检查（HTTP GET/TCP 探活）、配置文件管理、启动命令/参数编辑；**保留基础文件目录管理与 CPU 等基础监控**；抽象到可适配更多产品。**验收**：beacon 与通用二进制实例均呈现该视图且无 MC 专有 Tab | P1 | ✅ 已交付@v0.23.0 |
+| FR-451 | 实例配置源明面化（feat，见 ADR-092）：实例启动参数（startCommand/JVM 参数）与 `server.properties` 关键项在详情页**明面可编辑**，并支持**直接引用外部文件**（内联值 vs 文件引用二选一）；不再藏于犄角旮旯。**验收**：可在详情页直接改启动参数与关键配置项并持久化；可切换为引用文件模式且生效 | P1 | ✅ 已交付@v0.23.0 |
+| FR-452 | 实例列表树表 + 可切换分组维度（feat，依赖 FR-445）：实例列表由平铺卡片改为**多级可折叠树表**，分组维度**可切换**（标签 region/zone 默认 / 实例分组树 / 网络 / 角色 / 类型 / 节点 / 不分组）；无分组信息的实例（bc/beacon/独立服务）自然落「未分组」。**验收**：64 台一屏可管、点击分组头折叠展开、切换维度即时重排、未分组与二进制实例正确归位 | P1 | ✅ 已交付@v0.23.0 |
+| FR-453 | 拓扑页重做：完整网络视图（feat，依赖 FR-452）：拓扑由「仅已注册关系」改为**完整网络视图**（含未注册实例与配套服务），层级从所选分组维度推导（默认标签 region/zone），节点带健康着色与负载标签。**验收**：全部实例上拓扑（不再只 12 台）、层级正确、健康/负载可见、布局均衡 | P1 | ✅ 已交付@v0.23.0 |
+| FR-454 | 修正 beacon/binary 探针误配（fix，缺陷修复 FR-441/442）：binary/beacon 实例仍被分配 `ProbePort`，心跳每拍对它们抓 `/metrics` 必失败；`probe_update` 仅排除 `proxy`、未排除 beacon/binary，可对其推送无效 Bukkit jar。现两处补排斥；并归正线上 `beacon` 实例 `type`（`minecraft_java`→`generic`）。**验收**：binary/beacon 不再分配探针端口、心跳不再抓取、`probe_update` 对其返回明确拒绝 | P1 | ✅ 已交付@v0.23.0 |
+| FR-455 | 重启韧性加固（fix/feat，缺陷修复 FR-325/436 同源，见 ADR-093）：①接管重试仅 3 次（约 7s）失败即 `reapOrphanWrapper` 强杀 wrapper+Java，会**误杀本可接管的健康服务器**——改为更长退避 + 存活复核（cmdline 校验）后才处置；②重推仅隧道 `n==1` 触发，CP 重启后可能漏推——补多触发点与幂等；③正向对账以心跳清单为唯一真源导致状态误判——收敛真源。**验收**：真机重启 CP/Worker 后已运行服务器**零误杀、状态不误判、重推不漏**；FR-436 的 wrapper 死/Java 活分支**真机验证通过** | P0 | ✅ 已交付@v0.23.0 |
+| FR-456 | 孤儿进程周期检测与兜底（feat，依赖 FR-455，见 ADR-093）：现有清理只发生在 Worker 启动时——`wrapper` 运行期死亡、`direct` 硬崩、`docker` 未恢复三条路径产生的孤儿/状态错位**无周期兜底**。新增运行期周期扫描 + 反向对账覆盖 direct/docker。**验收**：运行期制造 wrapper 死/Java 活、direct 孤儿、docker 残留，均在有限周期内被识别并按策略处置（不静默、不误杀） | P0 | ✅ 已交付@v0.23.0 |
+| FR-457 | 集群级滚动/分批/灰度运维编排（feat，增强 FR-058/139）：`instance_batch` 现为无状态并发扇出（固定 16 并发、一次性、无分批/暂停/失败即停），无法安全滚动重启。新增**分批/间隔/失败即停/暂停继续/按比例灰度**语义与进度、取消。**验收**：可对 60+ 台执行「每批 5 台、批间隔 N 秒、失败即停」的滚动重启；有进度与取消 | P1 | ✅ 已交付@v0.23.0 |
+| FR-458 | 配置批量下发与跨实例收敛（feat，增强 FR-031）：配置链路现全单实例，跨实例只有只读端口冲突检查。新增「配置模板推送到 N 台」「跨实例配置漂移检测」「一键收敛到基线」。**验收**：可把一份 `server.properties` 推送到选定分组并在漂移时检出与收敛 | P1 | ✅ 已交付@v0.23.0 |
+| FR-459 | 实例健康巡检与自愈（feat，依赖 FR-455/456/462）：现仅「进程退出后按退避自动重启」，无假死检测（探针挂但进程在不会重启）、无集群级巡检。新增存活/响应巡检 + 受控自愈策略（自动重启卡死实例、崩溃熔断）。**验收**：模拟假死实例被巡检识别并按策略自动处置；策略可配、动作写审计 | P1 | ✅ 已交付@v0.23.0 |
+| FR-460 | 失效 bot 自动回收与补足（feat，增强 FR-398）：`workerEpoch` 不匹配的旧 bot（`desiredState=running`/`status=error`）占容量不产生连接，平台无回收能力（遗留 18 个僵死 bot）。新增自动回收 + 容量自动补足回目标数。**验收**：分片/CP 重启后僵死 bot 有限周期内被清、容量自动补回目标；回收动作写审计 | P1 | ✅ 已交付@v0.23.0 |
+| FR-461 | 集群健康总览墙（feat，增强 FR-402）：平台总览现只给计数 + TopN≤5，60+ 台无法一屏看谁异常。新增**逐台健康矩阵/热力墙** + 排序 + 一键定位。**验收**：60+ 台一屏呈现逐台健康态并可下钻到单台 | P1 | ✅ 已交付@v0.23.0 |
+| FR-462 | 异常自动检测（动态基线）（feat，增强 FR-011/085）：告警现仅静态阈值（且仅 node cpu/mem/disk）+ 节点离线。新增动态基线（EWMA/同环比）、突降突升、饱和度检测，并覆盖实例级指标。**验收**：注入缓慢劣化/突降，规则在无手工阈值下触发且噪声可控 | P1 | ✅ 已交付@v0.23.0 |
+| FR-463 | SLO / 可用性统计（feat，增强 FR-011/220）：无 uptime 达成率 / MTTR / MTBF / 误差预算。新增按窗口的可用性与可靠性统计与展示。**验收**：可查看指定窗口内实例/平台的可用率、故障次数、平均恢复时长（平台可用率为**拍加权**；窗口内无任何可用证据即无探针实例时按 `applicable:false` 渲染「不适用」，不伪造数值——详见 `docs/specs/capacity-and-slo/spec.md` §4） | P2 | ✅ 已交付@v0.23.0 |
+| FR-464 | 容量规划 / 趋势预测（feat，增强 FR-013/221）：无法回答"磁盘/内存按当前增速还剩多久"。新增时序外推与容量趋势告警。**验收**：给出关键资源的耗尽预测时间与置信区间 | P2 | ✅ 已交付@v0.23.0 |
+| FR-465 | 性能归因（GC 采集）（feat，增强 FR-060）：原始指标齐（TPS/MSPT/heap/threads/世界）但无归因；探针已暴露 `serverprobe_gc_*` 却未采集。先补 GC 采集入库，再做归因（TPS 低是 GC/区块/实体）。**验收**：GC 次数/耗时入时序；给出 TPS 劣化的主要贡献因子 | P2 | ✅ 已交付@v0.23.0 |
+| FR-466 | 服务器快照 / 一键回滚（feat，增强 FR-013/056）：仅有备份（需停服、链式回放）与文件/配置版本回滚，无整机快照 + 时间点回滚。新增快照与一键回滚闭环（回滚前自动建快照）。**验收**：可对实例打快照并从快照一键回滚，过程可追溯 | P2 | ✅ 已交付@v0.23.0 |
+| FR-467 | 运行期配额强制（feat，增强 FR-078/079/317）：组配额仅在 Create 校验、运行期不强制；Docker 资源限额仅 docker 模式生效。新增运行期 CPU/内存/磁盘配额强制与超限处置。**验收**：超限实例被识别并按策略处置（告警/限流/停止），非 docker 模式亦生效 | P2 | ✅ 已交付@v0.23.0 |
+| FR-468 | 二进制 / Beacon 版本管理与升级（feat，增强 FR-441/442，修订 ADR-090）：二进制/Beacon 重建只重取件、无版本比对/回滚/升级。新增二进制制品版本管理与受控升级（可回滚）。**验收**：可查看当前版本、升到指定版本、并回滚到上一版本 | P2 | ✅ 已交付@v0.23.0 |
+| FR-469 | 跨实例排行 + 玩家在线趋势（feat，增强 FR-340/054）：跨实例对比仅限节点内前 12、单指标；无玩家在线趋势分析。新增跨节点/跨实例全局排行与在线趋势/时段分析。**验收**：可按 TPS/MSPT/CPU/内存/在线排序全量实例；给出在线趋势与时段分布 | P2 | ✅ 已交付@v0.23.0 |
+| FR-470 | 崩溃诊断增强（feat，增强 FR-313/407）：崩溃仅有退出码+尾 200 行快照，无堆栈解析/同类聚合/OOM 关联。新增堆栈根因归类与崩溃趋势聚合。**验收**：连续崩溃被归类聚合、给出根因线索（OOM/异常类） | P2 | ✅ 已交付@v0.23.0 |
+| FR-471 | 在管实例运行态对齐、启动冲突预检与外来运行时接管（feat，增强 FR-302/326/455/456）：外部启动（tmux/脚本）的服务器进程不被平台接管——DB 记 STOPPED 而磁盘在跑、面板说谎且无出口；启动预检只查 java/目录/jar，不含现场占用，故此时点「启动」会双开撞 `world/session.lock` 与端口。**另修一处破坏性缺陷**：启动期孤儿恢复会依遗留 PID 记录强杀「wrapper 已死 / Java 仍活」的进程，而就地导入实例的 `workDir` 与外部服务器目录相同，归属复核结构上无法区分，真机曾因此一次打断 54 台在跑农场。现新增三件事：①孤儿扫描增第 4 相，按**已注册实例的 workDir**（不限受管 `serversDir`，覆盖就地导入）探测未纳管活进程，经心跳 `foreign_pid/foreign_cmdline` 上报，CP 落 `instances.runtime_drift_*` 供面板提示（只观测不自动处置）；②启动预检补 `work_dir_busy` 与 `port_free` 两项，把双开拦在转 STARTING 之前；③新增接管入口 `POST /instances/:id/adopt-runtime`——先做归属复核（防 PID 回收误杀），再 SIGTERM 进程树等其优雅退出（超时升级 SIGKILL），随后以受管方式拉起；④启动恢复路径**不再强杀**，改为只观测 + 保留 PID 记录（强杀只保留在显式 `orphan.dispose_policy=auto` 的周期扫描）；⑤端口预检改「连接探测 + 试绑有界重试」消除偶发误报。**验收**（真机通过）：外部启动的农场逐台报出漂移；点「接管」后状态转 RUNNING 且与磁盘进程一一对应；对运行中实例点「启动」被预检拒绝而非双开；重启 Worker 不再强杀在跑服务器 | P1 | ✅ 已交付@v0.23.0 |
+| FR-472 | 僵尸压测会话收敛：CP 重启后会话卡在 running 导致补足死循环与写放大（fix，缺陷修复 FR-460/370）：压测会话的生命周期终结依赖显式 `Stop` 调用，CP 重启或 bot-worker 死亡后该路径丢失，会话永久停留 `status=running`。`refillRunningSessions` 无条件捞取**全部** running 会话做容量补足，于是对早已失联的会话每拍重建期望行并失败——失败落在事务内，产生持续写盘。**进程内退避（`refillAttempts` map）结构上兜不住**：它随 CP 进程结束而清零，重启即触发一轮全量重试。**真机现场（2026-09-24）**：生产 CP 残留 132 个历史会话（61 running + 32 pending），1132 条 Bot 记录全数失联，CP 持续写库 **3.5 MB/s**、`cp.out` 涨至 **962 MB**。现按**数据库可见的事实**判定僵尸：`status=running` 且在线 Bot 数为 0 且 `updated_at` 停滞超过 `botZombieSessionIdleThreshold`（默认 **10 分钟** = Bot 宽限期 2m 的 5 倍，容忍 Worker 重启与世代迁移窗口）即收敛为 `stopped`，写 `ended_at`/`last_error` 与强审计 `bot_reclaim.session_reaped`；收敛在 `refillRunningSessions` **之前**执行，使僵尸从根上不进入补足扫描。**不变量**：仍持有在线 Bot 的会话永不被收敛。**验收**（单测 3 条：僵尸必收敛、收敛必留痕、健康会话不被误伤；真机：93 个僵尸会话收敛后 CP 写 IO 由 3.5 MB/s 降至 0.3 MB/s，补足失败日志停止） | P1 | ✅ 已交付@v0.24.0 |
+| FR-473 | Worker 日志平台 Shared Contracts 与 ADR（feat，开发前闸门）：新 ADR（Worker 本地 VictoriaLogs + CP 联邦；与 ADR-005/013/066/081 对账）；**冻结正式版基线**：事件身份与采集账本、投递语义与重复对账、checkpoint/WAL/ACK/回收四水位、Partition Catalog 与唯一查询所有权、IngestRouter、PublishedProjection、canonical projection 与 `closed_visible_seq`、`logs.lifecycle` 配置分层与合法部署组合、**完整 gRPC 消息契约**、权限覆盖全查询/导出面、Worker 日志资源预算与**性能判据方法及初始阈值**、能力协商、Legacy/导出/覆盖语义；`stream_fields` 白名单。**冻结退出=契约+治理+依赖层证据**（ADR-094 accepted、proto/协商终审、VL 资产正式审批、性能判据入契约）；**Worker 级 Runbook A/B/C 不作为冻结前置**，分别归属 FR-474/476/477 验收 → `docs/specs/worker-log-platform-contract/spec.md` | P0 | ✅ 已交付@v0.24.0·契约类闸门：交付物即契约层，下游功能归 FR-474~FR-484 各自验收 |
+| FR-474 | Worker 日志采集与持久化通道（feat）：FileTailer + StdIO + ArchiveImporter **共用采集账本**；源分段身份与 `latest.log→轮转→.gz` 关联；cursor/WAL/分水位回收/坏记录隔离；STDIO 受管 Raw 分段；容量耗尽与缺口可见；**hash+size 仅识别归档对象**；不引入 Filebeat 等。**验收含 Runbook A**（Worker WAL 强杀/ACK 丢失/reclaim/恢复分段释放与 hold 保护真实 PASS）→ `docs/specs/worker-log-acquisition/spec.md` | P0 | ✅ 已交付@v0.24.0·生产采集/投影/ACK恢复/reclaim 已通过；**Runbook A 真机（强杀 `-9` 重启）通过并修复重启时序缺陷**；磁盘容量**真实填盘验收通过**（容器内受限 tmpfs：真实越过 80%→`DEGRADED_STORAGE`、91.67%→`PAUSED` 且必记缺口；经真实 `Pipeline.Ingest` 落账本 `AcquirePaused`+缺口+未投递；**真实 ENOSPC** 填至 100% 观测到 `no space left on device`；见 `worker-log-acquisition/acceptance-real.md`）；**2026-10-02 缺陷加固（缺口风暴）**：登记合并（相邻同因）+ 按原因数量级上限 + 投递成功/已发布投影两条自动消解出口 + 暂停源限频自愈（只投递不读取），人工解算接口与 `ResumeAcquire` 门禁语义不变；转红回归见 CHANGELOG [Unreleased] 与 `worker-log-acquisition/spec.md` §3.3 |
+| FR-475 | 日志 Multiline 与归一化（feat）：Java/MC 多行归并；level/time/logger/instance_id；Multiline 上限/超时/半条恢复；时区跨午夜；解析失败保留原文+状态；parser_version；**事件数 vs 行数**口径 → `docs/specs/worker-log-normalizer/spec.md` | P0 | 🔨 开发中·**真机验收通过**（真 VL v1.52.0：Multiline 5 行归并为 1 事件、跨午夜回拨、半条事件 Flush 闭合、账本 ready；**修复损坏编码致 canonical hash 与 VL 正文不一致的缺陷**——净化 + `encoding_sanitized` 审计标记，VL 侧重算 hash 一致）；7 条新回归 + 2 项变异验证；Windows 平台证据待补；**2026-10-02 缺陷加固（GBK 乱码 / 时间戳偏移）**：按源字符集解码（auto 判据拒绝替换字符、`source_charset` 审计）与按源时区解释 `[HH:MM:SS]`（`TimeZone`/节点默认、内嵌 tzdata、`event_time_zone` 审计；节点级默认的配置面 `log_ingest.time_zone`——默认留空=UTC 零行为变化、非法值启动即拒）；转红回归见 CHANGELOG [Unreleased] 与 `worker-log-normalizer/spec.md` §3.3/§3.4 |
+| FR-476 | VictoriaLogs 资产分发与 Worker 运行时（feat）：**CP 只内嵌/分发**经校验官方 OSS 资产（linux-amd64 + windows-amd64）；Worker 本地 supervisor 管理 HOT/COLD/Rehydrate（localhost + 本地鉴权）；资产审批=tag/包与解包校验/许可/兼容；安全停机；资源总预算；失败日志防递归；cache≠RSS。**验收含 Runbook C**（wiring/防递归/预算降级/老 Worker Unimplemented）→ `docs/specs/worker-victorialogs-runtime/spec.md` | P0 | ✅ 已交付@v0.24.0·v1.52.0 资产审批、supervisor/CP runtime 面、远程三实例、预算采样与 80/90 降级评估、**CP 资产上传→签名下载→Worker 安装真机闭环**、GOMEMLIMIT 内存调优均已通过；**Windows 包校验与解包已补真机证据**（真实包经 GitHub asset API 取得：双层哈希与审批值一致、`InstallApprovedPackage` 真实 zip 解包 PASS、CP `Cache`/`Open` 校验通过并拒绝篡改；见 `worker-victorialogs-runtime/acceptance-windows.md`）——**Windows 运行时行为仍未覆盖**（需 Windows 主机执行 `.exe`） |
+| FR-477 | 分区 Catalog 与冷热 Lifecycle（feat）：Partition Catalog（owner/generation/journal）；迁移状态机（冻结路由→排空→snapshot→staging→**QueryPlanner 排除**→原子切 owner→租约排空→detach→清理）；迟到日志按 Catalog 路由；retention 协同；`cold.enabled=false` 单层合法；**detach≠完成**。**验收含 Runbook B**（Catalog 适配层各状态崩溃恢复 + re-attach 后旧 owner 过滤）→ `docs/specs/worker-log-lifecycle/spec.md` | P0 | ✅ 已交付@v0.24.0·catalog 状态机单测绿·**Runbook B 真机迁移链已通过**（FROZEN→…→CLEANED，数据物理迁移、HOT 空/COLD 持有） |
+| FR-478 | Deep Archive 与 Rehydrate（feat，**发布必需**）：Provider local/S3/MinIO；VL 分区按 namespace+UTC 日+generation；manifest 含 schema/parser/engine；受管 Raw Archive；Rehydrate 任务化（租约/合并/超时/预留/generation 隔离）；幂等重恢复 → `docs/specs/worker-log-deep-archive/spec.md` | P1·发布必需 | ✅ 已交付@v0.24.0·**真机 RustFS S3 验收通过**（登记/幂等/manifest/对象往返/Rehydrate 租约+复用+预留拒绝+完成/发布 generation 清理矩阵）；manifest 记录真实 VL build_id |
+| FR-479 | Worker 日志查询服务（feat）：Catalog 驱动不重叠权威副本；Search/Stats/Tail/Fields/Facets/StorageHealth/Rehydrate/ArchiveStatus；覆盖状态与 Cursor/水位；取消与预算；**完整验收依赖 477/478** → `docs/specs/worker-log-query-federation/spec.md` | P0 | ✅ 已交付@v0.24.0·全查询 RPC/受管 VL 已接线，远程 Search/Stats/Facets/Export 通过；**CP 联邦真机查询通过**（`complete=true`、目标 success、返回事件） |
+| FR-480 | CP 跨 Worker 日志查询协调器（feat）：**全部授权目标 + 覆盖汇总**；「仅在线」为显式选项；历史持有者；稳定复合排序 K-way merge；可合并聚合；Facet 截断语义；统一时间桶；禁止全量原始日志入 CP；导出复用有界 Search/同一快照，**缺口/截断/超预算不交付成功附件** → `docs/specs/cp-log-query-coordinator/spec.md` | P0 | ✅ 已交付@v0.24.0·logcoord+HTTP+生产 Assemble（inst/node 解析+真实 Readiness）；**真机联邦查询与延迟取证通过**（串行 p95 28.5ms、8 并发 p95 15.2ms） |
+| FR-481 | 日志入库切换与 Legacy 只读（feat）：停止**实例与 Worker/Node**日志新入 CP `logs`；platform/audit + **LegacyLogReader**；Legacy 独立保留预算与到期规则；容量预检不足不切换；逐 Worker 切换水位；控制台订阅与持久化推送分离；历史 Multiline 可追溯原文；未统一口径禁止拼精确趋势 → `docs/specs/log-ingest-cutover/spec.md` | P0 | ✅ 已交付@v0.24.0·地基/接线·cutover+Legacy+DualPath + **HTTP 管理面已注册**（默认关闭）；Legacy/cutover 行为由 service/router 单测覆盖；DualPath federated 侧由 `/logs/federation` 承担（无生产调用方，保留 API 不加投机接线） |
+| FR-482 | 日志中心与仪表盘（feat，**发布必需**）：范围/级别/关键字/时间/列表/Tail/Hits/Stats/Facets；partial/离线/缺数据/截断/积压/Rehydrate 失败等非成功态；Legacy 标识；导出失败不交付成功附件；nextCursor=null≠历史完整；失败不得呈完整零结果 → `docs/specs/logs-center-tiered-ui/spec.md` | P1·发布必需 | ✅ 已交付@v0.24.0·**真浏览器验收通过**（真实联邦列表/Stats·Facets 一致、失败态引导；修了 Stats `agg.count` 读法缺陷）；失败态 DOM 矩阵 19 项 |
+| FR-483 | 日志平台文档对账（docs）：Shared Contracts/ADR 迁入受控文档；资产清单与许可；恢复手册；数据损失边界；资源预算；合法配置组合；切换与故障处理；ARCHITECTURE/API/CHANGELOG | — | ✅ 已交付@v0.24.0·docs（已对账 ARCHITECTURE/API/CHANGELOG/PRD/规格状态；已补受控文档 `worker-victorialogs-runtime/asset-inventory.md`（资产清单/许可）+ `worker-log-platform-contract/recovery-manual.md`（恢复与故障处置）+ `worker-log-platform-contract/acceptance-record.md`（**持久真机验收记录**，缓解 `.tmp` 证据不入库）） |
+| FR-484 | canonical 事件体落盘 compact（feat）：把 FR-473 §4.3/§5.3「VL 数据根重建的权威事件集合」由 state.json 内联+内存常驻改为追加式磁盘段存储（NDJSON + MANIFEST 原子替换），**内容与语义不变、仍不可按 reclaim 裁剪**；含旧格式迁移、崩溃/截断恢复语义、`persist()` 流式写元数据；并加界三处跨轮无界累积结构（`n.events`/`linePos`/`delivered`）收敛采集期峰值。目标单 Worker 150 源稳态 RSS ≤300MiB → `docs/specs/worker-log-canonical-eventstore/spec.md` + ADR-095 | P1 | ✅ 已交付@v0.24.0·**真机验收通过**（host-1 + 真 VictoriaLogs v1.52.0：64/128/150 源稳态 RSS 22.5/22.3/20.0MiB、峰值 56.0/62.0/61.8MiB，判据 ≤300MiB；state.json 77 803KiB→177.9KiB 并与事件数解耦；**342 源逐一核对 1 026 000 条事件零丢失零重复**）；五个门禁回归 + 幂等回归 + 四条累积结构回归（均含变异验证）全绿；**曾发布错误读数已更正**（未保活致 GC 回收） |
 
-| FR-502 | 四核心采集规则/轮转/实例路径覆盖，Velocity用logs/latest.log [规格][s173] | P1 | ✅ 已交付@v0.24.0·既有代码/回归/真机归真，不冒新增生产验收 |
-| FR-503 | 日志配置基线→平台默认→Worker覆盖，心跳≤30s热应用并持久化 [规格][s174] | P1 | ✅ 已交付@v0.24.0·节点只覆盖五个log.acq键 |
-| FR-505 | 不落盘采集架构：索引库 `:memory:`、事件段 tmpfs、WAL 纯内存、catalog 内存 journal | P0 | ✅ 已交付@v0.24.0·**2026-10-31 登记**（补登既有实现：这批改造原本无任何 FR 承载）。介质归属：VL 数据在磁盘 180d/100GiB，**采集游标 `ingest.cursor` 是唯一跨重启持久面**（每源一行、整表约 2KB、不 fsync、整表重写+rename 原子）。代价如实记录：重启后索引/事件段/WAL/缺口/暂停态全部归零，至多重读一段并重复投递；**VL 数据根丢失后无法再从事件段重建 projection**（ADR-095 已追记）。实测：索引 p50/p95 = 0ms、checkpoint 0 次；死守「机械盘不 fsync」裁定 |
-| FR-506 | 采集游标跨重启持久化（方案 D，并承载源配置重建） | P0 | ✅ 已交付@v0.24.0·**2026-10-31 登记**。TSV v2 共 15 列，每源一行：`key/path/dev/ino/cursor/logicalpos/mode/source_category/storage_namespace/rotate_to/utc_day/charset/time_zone/stream/archive_glob`。起点决策：有游标且文件匹配⇒续读；无⇒从文件末尾（新源不补历史）；路径/inode 变或文件变短⇒退回从头。后 4 列必需：`charset`/`time_zone` 存**显式值**（存生效值会把节点默认继承固化，`TestNodeDefaultsFollowRestartAndExplicitValuesWin` 会红）；`stream` 决定 STDIO 源 raw 布局；`archive_glob` 对 yml 显式源重算不出。带 v1（6列）向后兼容。设计约束：**不 fsync**、无变化零磁盘 IO、单行损坏只跳过该行、读不到当空表且**绝不因此拒绝启动采集** |
-| FR-507 | VL 投递客户端：流标签、gzip 压缩、连接池、字节+时间双阈值攒批与并发投递 | P0 | ✅ 已交付@v0.24.0·**2026-10-31 登记**。对齐 Vector/Fluent Bit/Filebeat 官方做法：① **流标签** `_stream_fields=log_source_id,stream` —— 只放稳定低基数身份维度（基数≈源数×通道数=57），`level` 故意不入流（基数会随内容漂移），`event_id/record_start/record_end/ingest_time_utc` 等无界字段**构造即拒**（实测错配 3 行⇒3 个流，跑一天即百万级流）；② **gzip** 实测 65090B→895B（**73×**），400/415 自动退回不压缩；③ **连接池** MaxIdleConns/PerHost=32；④ **攒批** 4MiB / 1s / 500 条三阈值先到先发 + 4 路并发（派发序=事件序，仅完成可乱序）。未采用官方 10MB 的原因：2026-09-28 事故即单请求过大撞 5s 超时致采集停摆 |
-| FR-508 | 投递主路径取消逐字段回查（verify），以 HTTP 2xx 为唯一结论 | P0 | ✅ 已交付@v0.24.0·**2026-10-31 登记**（ADR-099 §9 已走显式评审修订，作用域收窄到取证路径）。理由：占整轮 **85.6%** 时间（60源实测 verify=85.3s/99.6s）、曾因校验超时导致整批重写使 VL 体积放大 **75×**、回收链只用 HTTP 状态码（`recordHTTPResultLocked`）从不消费它、业界四家采集器无一如此。**不安全的边界已核实**：`VerifiedRuns` 在 ledger 包零命中，删后回收仍由 `REQUEST_DONE` 连续覆盖推进，不会重演 2026-10-28 钉死事故。保留：取证路径（补债/待定发布确认/热层窗口/查询预算）仍用它 |
-| FR-509 | VL 诊断日志按自身级别分流，info 不再冒充 ERROR | P1 | ✅ 已交付@v0.24.0·**2026-10-31 登记**。`exec.go` 把 VL 进程整个 stderr 包成 diagnosticWriter，VL 把所有级别（含 info）都写 stderr，旧代码无条件 `logger.Error` ⇒ 每次启动几十行 info 全变 ERROR，运维 grep ERROR 被噪音淹没。现按行自带级别分流：`info`⇒Info、`warn`⇒Warn、`error/fatal/panic`⇒Error、**解析不出⇒Error（保守方向：panic 栈/segfault 必须保留 ERROR）**。变异验证：default 改 Info 则 4 条子用例同时转红 |
-| FR-510 | VL 不可用时的磁盘缓冲（有界环形，面向机械盘顺序写优化） | P0 | ❌ **已废弃（2026-11-06 整体删除）**·删除原因：`spool` 包**只有写端、没有读端**——`Peek`/`PeekEvents`/`Ack` 在包外零调用（全仓只有它自己的测试在用），所以写进去的事件**永远不会被重投**。那不是缓冲，是「换个地方丢」，而且比直接丢更坏：缺口 detail 会显得数据得救了（误导排障方向），磁盘上还会堆着永远不会被读的数据。代码里 `spoolConsumerReady` 本就是 `false` 的编译期常量，装配层会拒绝挂载——生产配置却写着 `enabled: true`，导致**每次 Worker 启动白报一条 ERROR**。删除范围：`internal/worker/logs/spool/` 整包、`acquire/wal_spool.go`、`ingest/entry_spool_attach.go`、`ingest/entry_spool_metrics.go`、`LogSpoolConfig` 全套配置与 SetDefault、`apps/worker/metrics_compose.go` 的 spoolAdapter、生产 `worker.yml` 的 `log_spool` 段，以及磁盘上的 `ingest.spool`（100MB 预分配文件）。**原始交付记录保留如下**（该 FR 编号不得复用）：✅ 已交付@v0.24.0·**2026-10-31 新立，2026-11-01 交付并生产启用**（但读端从未接线，见上）。动机：当前 VL 不可用时只有纯内存 WAL，满了丢最旧——官方 vlagent 用 `-remoteWrite.tmpDataPath` 磁盘缓冲保投。**边界必须说清**：它只能把「VL 重启几分钟」从丢日志变成不丢；VL 挂很久且缓冲满仍会丢。设计（针对机械盘 `sda` ROTA=1，实测顺序写 **274MB/s**、随机写差一个量级）：① **只 append 不覆盖写**（单文件环形，写头优于随机重建）；② **不 fsync**（用户红线）；③ 定长记录 + CRC 校验（识别掉电导致的截断尾部）；④ 容量 100MB 可配，写满丢最旧（对齐官方 `-remoteWrite.maxDiskUsagePerURL`）；⑤ VL 恢复后顺序读回重投，成功才推进读位。**验收**：VL 断开 3 分钟不丢；掉电后截断尾能被识别且不影响已写记录；顺序写路径 p99 < 5ms |
-| FR-511 | Worker 内置 HTTP 日志接收入口（官方推荐接入方式） | P1 | ✅ 已交付@v0.24.0·**2026-10-31 新立，2026-11-01 交付**（默认无 PUSH_ONLY 源即不生效）。官方明确：非 K8s 环境的文件采集推荐用 Vector/Fluent Bit/Filebeat，然后**推给 VL/vlagent**；VL 支持 `/insert/jsonline`、`/insert/elasticsearch/_bulk`、`/insert/loki/api/v1/push`、`/insert/opentelemetry/v1/logs`。本项让 Worker 自己也能当接收端（便于游戏服进程外推送、其他进程写日志）。**复用现有 pipeline**（不走独立存储），继承攒批/gzip/流标签/背压语义。鉴权与 CP 已有 Worker 鉴权体系一致，不新造凭证模型。边界：不新建日志存储模型，只做「接收 → 归一 → 入同一条管道」 |
-| FR-512 | 采集模式对齐官方：按进程/容器/文件三类来源统一抽象，减少丢日志 | P1 | ✅ 已交付@v0.24.0·**2026-10-31 新立，2026-11-01 交付**。现状：生产 19 个源全部 `FILE_PRIMARY`（tail 活文件），`STDIO_PRIMARY` 有实现未使用；无 HTTP 入口、无 journald、无 syslog。目标（按官方 vlagent 的输入矩阵）：**文件（现有）/ 进程 stdout-stderr（现有，待接）/ HTTP（FR-511）/ journald（可选）** 四类统一为一个 source 抽象，共享同一套 WAL / 攒批 / 投递 / 游标语义。**明确不做**：不恢复 gz 归档回读（2026-10-30 已裁定删）、不引入 Loki/CH 作为第二套存储 |
 | FR-485 | 日志平台可观测性与告警（feat，增强 FR-474/484）：把「单源洪流拖垮 Worker」这类事故的信号变成平台自己能看见——新增指标：state 文件尺寸与增速、persist 写字节/秒、单源 WAL 积压条数与暂停时长、投递失败率与分类、校验退避次数、慢 SQL 计数与最长耗时；经 Worker 上报（proto 扩展）→ CP 落库 → 告警规则联动（metric 触发 + FR-462 动态基线做增速突升检测），并附推荐阈值与处置手册入口。**动因**：2026-09-28 生产事故（ingest.state.json 涨至 1.2 GB、117 MB/s 持续重写 25 小时、iowait 91%、CP 慢 SQL 0.4–2.4s）**完全靠人肉排查发现**，平台当时对这些信号一无所知、无法自行告警。**范围按实证扩大**：节点层同样缺关键信号——**iowait 未被采集**（事故中最刺眼的 91% 无法告警）；node_disk_used/node_mem_used 以**字节**存储、无比率触发，「磁盘 >85%」类绝对阈值当前**无法表达**。故本 FR 一并补齐 iowait 采集与比率触发，**告警规则并入本 FR 一次配好** | P1 | 🔨 部分交付@v0.24.0（**仅采集健康指标链路已落**：#49 落地 `log_ingest_healthy` 经 Worker 心跳上报 → CP 落库 → 内置告警触发联动；其余范围——state 文件尺寸与增速、persist 写字节/秒、单源 WAL 积压条数与暂停时长、投递失败率与分类、校验退避次数、慢 SQL 计数，以及**节点层 iowait 采集与比率触发**——**均未实现**） |
 | FR-486 | Worker 启动时长与状态加载可观测性（feat，性能/可观测，增强 FR-474/484）：1.2 GB ingest 状态文件使 Worker 重启后 **8m39s 才注册上线**（2026-09-28 生产实测：19:31:35 启动 → 19:40:14 注册成功），期间主控台看不到节点、实例健康巡检未运行；且加载全程**没有任何进度日志**——平台对自己的启动过程同样无观测（与 FR-485 同源）。范围：① 加载分阶段计时与日志（读取/解析/恢复/首次持久化）；② 进度可见（注册前也能上报启动阶段）；③ 大状态文件加载优化（流式解析、引用化后免全量内联解析）；④ 状态超阈值的启动前告警。**动因**：C2 窗口重启实测；B1a 压缩生效后需复测时长以确认改善 | P1 | 📋 计划（**零实现**：全仓无对应代码与 spec，待立项） |
 | FR-489 | MCP 端点无状态化与 Token 维度运维视图（feat，修订 **FR-388/389/391**、作废 **FR-439**）：CP 内嵌 MCP 网关的 Streamable HTTP 路径**去会话化**（对齐 MCP SEP-2567）——不再下发/要求 `Mcp-Session-Id`，每请求独立鉴权并用重建的 principal 授权（顺带消除「会话内 principal 快照致 Token 吊销/降权不即时生效」的授权缺口）；移除会话空闲/绝对超时、全局与每 Token 并发上限、`SESSION_GONE` 与超限 429、会话列表/踢线；`GET /api/v1/mcp` 改为 405、`DELETE /api/v1/mcp` 改为 405 + `Allow: POST`（均无会话可保活/可终止）。**SSE 兼容路径保留**（`/sse` + `/message`），其连接态收敛为「SSE 传输连接登记」——那是传输固有需求，不是协议会话。运维视图随之由会话维度改为 Token 维度：移除 `GET/DELETE /api/v1/agent/mcp/sessions`，新增 `GET /api/v1/agent/mcp/activity?window=`（按 `agent_call_logs` 聚合），前端「MCP 会话」页改为活动视图（路由 `/mcp-activity`，旧路径保留重定向）→ `docs/specs/mcp-stateless-endpoint/spec.md`（+ **ADR-096**） | P1 | ✅ 已交付@v0.24.0·**真机验收通过**（PR #42 已合入主干；验收所需的七轮收尾修复 #50/#53/#54/#55/#56/#57 全部合并——7d→168h 窗口契约、Token 维度活动视图、devmock 端点与 e2e smoke、无状态化评审契约缺陷、i18n 动态键守卫等；无状态化路径与 SSE 兼容路径均已在主干跑通 E2E） |
@@ -617,13 +621,13 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-493 | 审批中心与权限节点（feat，依赖 FR-490）：新增审批中心页面——待审列表（操作 / 目标 / 申请人 / 风险 / 原因 / 证据）+ 批准执行 / 驳回 + 历史追溯；RBAC 权限树新增审批权限节点，**须遵循既有权限树约束**（FR-089「deny 永胜、超管唯一」与 FR-432 可配置权限树），无权限账号 403 | P1 | 📋 计划 |
 | FR-494 | QQ 机器人告警通知通道（feat，增强 FR-085）：在既有通道体系内新增第 9 种通道类型 `qq`，把告警经 QQ 开放平台官方 HTTP 接口**主动推送**到指定群聊或单聊——`appId` + `appSecret` 换 AccessToken，再 `POST /v2/groups/{group_openid}/messages`（或 `/v2/users/{openid}/messages`）发 `msg_type=0` 纯文本。**动因**：国内运维值班阵地常在 QQ 群，缺 QQ 系出口使「告警产生 → 人看到」的链路偏长。**架构取舍**：保持 CP 纯出站——不监听端口、不接收 QQ 事件、无常驻长连接、不做被动回复；由告警的低频单向特性与官方主动消息配额（每群 / 每好友 1000 条/天）支撑该取舍。**已知边界**：群消息禁含 URL（`40054010`）；接收方可单方关闭主动推送；`group_openid` 无官方列表接口，须手工填入 → `docs/specs/qqbot-notification-channel/spec.md` | P1 | ✅ 已交付@v0.24.0·**单聊路径真机送达**；群聊为**平台级限制**（`40034105` 主动消息无权限，官方维护者定性「群内主动消息平台侧不支持」），据此**降级为「仅单聊」交付**——前端已下线群聊路径、一律按单聊提交，通道类型与 `group` 分支实现保留待平台开放，限制已在 UI 与 spec §6 如实标注；**不另立 FR 做群内被动回复**（告警是主动推送，而被动回复需用户先 @ 机器人，对告警场景无用） |
 | FR-495 | QQ 机器人扫码接入与已发现群列表（feat，增强 FR-494）：终结手抄 `group_openid`——控制台**扫码绑定机器人**（二维码经 `q.qq.com` 绑定页，回调自动取得 `appId`/`appSecret`/`user_openid`，密钥落盘 `<dataRoot>/etc/qq/` 并以 `${QQ-<appId>}` 引用、不入库）；CP 常驻 QQ 网关 WSS 长连接（`intents=1<<25`）；**群聊路径已下线**（平台拒绝群主动消息，群列表与分享链接端点保留待平台开放）。**产品决策**：手动选群（进群事件无归因字段，自动建通道会产生垃圾通道）/ 单机器人共享（个人主体名额有限，token 缓存按 `appId` 设计）/ WebSocket（完全出站，不暴露入站端口）。**已知边界**：分享链接官方定位是「加好友」，扫码能否直达进群待真机实测；`1<<25` 需申请权限；离线窗口的入群永久丢失（无列表接口补偿）；个人认证进群上限 500 → `docs/specs/qqbot-group-discovery/spec.md` | P1 | 开发中（真机验收：扫码绑定 / 网关连接 / 入群事件自动落库**均通过**；建通道与前端待验） |
-| FR-496 | 前端设计底座单一真源与 `dark:` 变体修复（ref，免 spec）：token 定义从应用侧迁入组件库 `packages/ui/src/styles/`（`theme-map.css` token→Tailwind utility 映射 / `tokens.css` 明暗基线 / `themes.css` 五套主题色覆盖 / `motion.css` 动效关键帧 / `index.css` 汇总入口），主控台与控件博物馆改为「一次 `@import` 即得完整底座」，删除与主控台局部定义已发生漂移的平行副本 `packages/ui/src/styles.css`（组件库自此自包含，不再要求消费方自备 token）；顺带修复全站 `dark:` 变体半失效——显式声明 `@custom-variant dark (&:is(.dark *))` 把变体绑定到应用内 `.dark` class（此前全仓无该声明，Tailwind v4 默认按 `prefers-color-scheme` 媒体查询解析，与 `lib/theme.ts` 写 class 的切主题策略不一致，导致「系统亮色 + 应用暗色」下组件内显式 `dark:` 样式不生效）。**验收**：① 两个消费方均只 `@import` 组件库底座、不再自带 token 副本；② 主控台 `index.css` 1074 → 575 行（基线 = 分支起点 `14472681`），token 迁移前后构建产物一致（CSS/JS 文件名哈希未变）；③ 产物 `:is(.dark *)` 0 → 49 处、`prefers-color-scheme: dark` 1 → 0 处，体积 +0.56 kB；④ 真浏览器实测暗色命中组件内 `dark:`（outline / destructive 按钮计算样式随 `html.dark` 变化）；⑤ 组件库单测全绿 | P1 | 🔨 开发中·阶段 1 完成（证据 ②③④⑤ 已取得；整批随分支 `feat/web-overhaul` 交付，发版时由 `sdd-release-version` 统一标 `✅ 已交付@vX.Y.Z`） |
-| FR-497 | 主题配色对比度自动校验（test，免 spec）：为「5 套主题色 × 明暗」建立可复算的对比度门禁——新增 `packages/ui/src/lib/color-contrast.ts`（hex / rgb / oklch 解析 + WCAG 2.x 相对亮度与对比度计算 + CSS 作用域合并）与断言集 `packages/ui/src/lib/color-contrast.test.ts`：对设计底座 10 组配色（5 主题 × 亮暗）× 11 对「前景 / 背景」组合共 **110 项**逐项断言（正文类 ≥ 4.5:1，次要文字与状态徽章 ≥ 3:1），失败时一次性列出全部不达标项并给出实测比值；另有解析器与作用域的元断言（`index.css` 与 `themes.css` 中所有选择器均被解析器识别、所有颜色写法均可解析），新增主题漏定义即失败。**动因**：配色校验此前靠人眼，5 主题 × 2 明暗的配对矩阵不可能人工穷举。**验收**：① 110 项配对断言在 10 组配色下全绿；② 改 token / 加主题后不达标即失败，并定位到「哪套主题 · 哪个明暗 · 哪一对变量」；③ 用独立实现的解析器交叉验证同一份 CSS 结论一致（不留「测试与实现同源同错」盲区） | P1 | 🔨 开发中·阶段 2 完成（已查出并修复 2 处真实缺陷：teal·亮色与 sunset·亮色的按钮文字配对不达标，改深色墨字后分别实测 7.18:1 与约 6:1，见 `packages/ui/src/styles/themes.css` 注释；组件库测试 240 用例全绿） |
-| FR-498 | 内容页布局规范层（feat，免 spec）：把「每个内容页各自手写骨架类名」收敛为唯一出处——新增 `packages/ui/src/components/layout/`（`PageShell` 三壳态 default 整页滚动 / fixed 固定视口内部滚动 / tool 全占满，`PageHeader`、`ScopeBar`、`SummaryStrip`、`Toolbar`、`PlatformTabs`，以及 `TwoCol` / `ThreeCol` / `MetricGrid` / `CardsGrid` / `SettingsLayout` 等网格原语），页面只从该层取原语；`Panel` 补三段式 `footer` 槽（头 / 身 / 脚），使「工具条 + 数据区 + 页脚」成为标准形状；审计页 `AuditPage` 作为首个迁移试点。**边界**：本层只管「一页内部怎么摆」，页与页之间的骨架归 FR-499。**验收**：① 三种壳态的留白 / 纵向节奏 / 滚动模型各有用例断言；② `Panel` 三段式为向后兼容的新增槽，既有用法不受影响；③ `AuditPage` 迁移后行为不变、原有用例全绿；④ 布局层 24 项用例在组件库单测内运行 | P1 | 🔨 开发中·阶段 3 完成（原语与用例已落，`AuditPage` 已迁移） |
-| FR-499 | 导航外壳组件层（feat，免 spec，承 FR-498 边界）：新增 `packages/ui/src/components/shell/`——`AppShell`（53px 顶栏 + 侧栏 + 页面区三件套骨架）、`TopNav`（四工作区切换 + 品牌 / 检索 / 操作槽）、`SideNav`（246px 展开 · 折叠 54px，含 `SideNavHead` / `SideNavShortcuts` / `SideNavResource` / `SideNavBottom`）、`ResourceTree`（资源树，限流展开与查询）、`CommandPalette`（⌘K 全局检索）、`ObjectPageHeader`（对象页头：面包屑 + 指标 + 工具）；两层分工写进各自 `index.ts` 注释——本层管「页与页之间共用的骨架」，页内布局归 FR-498，不可混用。**验收**：① 六组件各有 props 契约与用例（折叠 / 展开、键盘操作、空态，合计 55 项）；② 关键尺寸与设计原型一致（顶栏 53px、侧栏 246 / 54px）；③ 控件博物馆提供整合预览页，可在真浏览器按四工作区切换查看 | P1 | 🔨 开发中·阶段 4 完成（六组件 + 55 项用例；`apps/ui-museum` 预览页真浏览器截图已取得） |
-| FR-500 | 工作区导航数据层（feat，免 spec）：新增 `apps/control-plane-web/src/components/console/workspace-navigation.ts`，把导航登记从「六域扁平」改为「**四工作区 × 组 × 页面**」三层（服务器运维 / 观测与自动化 / 运营与分发 / 平台管理），按设计交付的原路由对照表（45 条 = 37 导航 + 5 子路由 + 3 认证页）归位：本层登记 42 条（37 + 5），3 个认证页独立于工作区。**新增而非改写** `nav-config.ts`——旧六域定义原样保留作对照物与回滚路径（可回退），两套数据并存并由测试逐条证明等价：37 个导航目的地的 `perm` / `labelKey` / `icon` 与旧真源同路径项逐条同值（含 any-of 数组）；5 个子路由在旧真源无对应项，**继承其入口页 `perm`**（看不见列表页即看不见其深链），属新增项而非权限放宽；裁剪算法同形复刻，不 import 旧私有实现。**验收**：① 登记条数对账 42 + 3 = 45，三层结构无残留 sections；② 旧导航 37 条零遗漏、新增恰为 5 条子路由；③ 11 类权限场景（空权限 / 单权限 / 多权限 / any-of 单边 / 观测只读 / 运营域 / 平台域 / 全量节点 / 管理员短路）下新旧可见面无差异；④ 路径归一化（query/hash、尾斜杠、重复斜杠、缺前导斜杠）与未命中返回 null；⑤ 空权限下不出现任何实例 / 发布 / 会话深链 | P1 | 🔨 开发中·阶段 5 完成（登记数据 + 17 项用例全绿；新增 i18n 键**已全部补进** `src/i18n/{zh,en}.json`，中英齐备。**路径更正**：导航真源实际位于 `apps/control-plane-web/src/lib/console/workspace-navigation.ts`，本条正文所写的 `components/console/` 位置已失效——按「已有 FR 只改状态字段」约定未改正文） |
-| FR-501 | 主控台外壳接入与页面迁移（feat，依赖 FR-496~500，免 spec）：把主控台从旧六域外壳切到新工作区导航——桌面侧栏（旧六域实现 `ConsoleSidebar`）、移动导航 `MobileConsoleNav` 与命令面板 `CommandPalette` 三处消费方一律改以 `workspace-navigation.ts` 为导航真源，接上 `AppShell` / `TopNav` / `SideNav` / `ResourceTree`；既有内容页按 FR-498 布局规范逐个迁移；列表页渲染性能一并处理——阶段 1 实测审计页 250 条、任务页数百条记录一次性进 DOM 已使用例在 10s 超时阈值边缘抖动（无虚拟化、无窗口裁剪，开销随条数线性恶化），属本轮核心目标范围。**验收**：① 四工作区导航在桌面侧栏 / 移动导航 / 命令面板三处一致可达，权限裁剪与旧实现等价；② 迁移页面行为不变（空 / 常规 / 超量 / 异常四态齐备）；③ 目标列表页大数据量下真浏览器渲染开销不再随条数线性恶化（有前后对比数据）；④ 全部消费方切换后删除 `nav-config.ts` 的六域定义——`Workspace.tsx` 路由表承接原 RouteRegistry 语义，**不得为缩短侧栏删登记项** | P1 | 🔨 开发中·阶段 6 进行中（**桌面侧栏已切换**：`DashboardPage` 挂载 `WorkspaceSidebar`，其数据全部取自 `lib/console/workspace-navigation.ts`；仅移动导航 `MobileConsoleNav` 与命令面板 `CommandPalette` 仍以 `nav-config.ts` 为真源，故 `nav-config.ts` 未删。页面迁移未完成） |
-| FR-502 | 应用业务组件受控化迁入组件库（ref，免 spec，补 FR-496~501 未覆盖的「业务组件所有权」范围，架构决策见 ADR-102）：把主控台内剩余 **151 个业务组件**按 **a+b 双范式**受控化后迁入 `packages/ui/src/components/views/<域>/`——**a 范式**（74 个纯读组件）走「外壳取数 + props 注入」，数据与加载/错误态由外壳注入、UI 状态留包内；**b 范式**（54 个含写组件）走「受控 + 回调注入」，动作以 `onXxx` 回调上报、由外壳执行 mutation 与 toast。包内硬约束（沿用原 biz-views）：不 import `@/api`/`@/lib`/`@/components`，不依赖 `react-router`/`@tanstack/react-query`/`sonner`，由边界测试守门；随迁的共享纯逻辑入 `src/lib/`（归包，两边都从包取）。**动因**：177 个业务组件中零应用依赖的仅 16 个（12 已迁、7 为两行再导出层、2 为 devtools 面板），纯移动无路可走；且业务组件不进包则组件博物馆无法覆盖它们——而它们组合最复杂、样式最易漂移，恰是最需要跨主题/跨明暗验证的部分（ADR-058 的兑现前提）。**分批**：按 API 模块聚类推进 instances(32) → nodes(19) → metrics(13) → 其余零散，同域组件共享数据结构与 i18n 命名空间，可复用同一套 props 契约与测试夹具。**不做**：抽 `packages/api` 让组件继续自行取数（绕过受控化目标）、只迁纯读组件（覆盖不全且同域被拆两处）、迁移期目录双写（会造成两份实现静默分叉）。**验收**：① 151 个组件全部迁入且应用内不留重复实现；② 包内零 router/react-query/sonner 依赖（边界测试断言）；③ 迁移页面行为不变（数据口径 / 权限 / 深链 / 文案）且既有用例全绿；④ 组件博物馆可见并入的每一个业务组件并在真浏览器实测渲染 | — | ❌ 已废弃（**ADR-103 取代 ADR-102**：业务视图与业务契约退回应用侧，`packages/ui` 回归设计系统；a+b 双范式作为组件写法保留，但「并入组件库」的归属决策撤销。验收口径改为「业务视图在应用侧、包内零业务、边界测试守门」） |
+| FR-502 | 前端设计底座单一真源与 `dark:` 变体修复（ref，免 spec）：token 定义从应用侧迁入组件库 `packages/ui/src/styles/`（`theme-map.css` token→Tailwind utility 映射 / `tokens.css` 明暗基线 / `themes.css` 五套主题色覆盖 / `motion.css` 动效关键帧 / `index.css` 汇总入口），主控台与控件博物馆改为「一次 `@import` 即得完整底座」，删除与主控台局部定义已发生漂移的平行副本 `packages/ui/src/styles.css`（组件库自此自包含，不再要求消费方自备 token）；顺带修复全站 `dark:` 变体半失效——显式声明 `@custom-variant dark (&:is(.dark *))` 把变体绑定到应用内 `.dark` class（此前全仓无该声明，Tailwind v4 默认按 `prefers-color-scheme` 媒体查询解析，与 `lib/theme.ts` 写 class 的切主题策略不一致，导致「系统亮色 + 应用暗色」下组件内显式 `dark:` 样式不生效）。**验收**：① 两个消费方均只 `@import` 组件库底座、不再自带 token 副本；② 主控台 `index.css` 1074 → 575 行（基线 = 分支起点 `14472681`），token 迁移前后构建产物一致（CSS/JS 文件名哈希未变）；③ 产物 `:is(.dark *)` 0 → 49 处、`prefers-color-scheme: dark` 1 → 0 处，体积 +0.56 kB；④ 真浏览器实测暗色命中组件内 `dark:`（outline / destructive 按钮计算样式随 `html.dark` 变化）；⑤ 组件库单测全绿 | P1 | 🔨 开发中·阶段 1 完成（证据 ②③④⑤ 已取得；整批随分支 `feat/web-overhaul` 交付，发版时由 `sdd-release-version` 统一标 `✅ 已交付@vX.Y.Z`） |
+| FR-503 | 主题配色对比度自动校验（test，免 spec）：为「5 套主题色 × 明暗」建立可复算的对比度门禁——新增 `packages/ui/src/lib/color-contrast.ts`（hex / rgb / oklch 解析 + WCAG 2.x 相对亮度与对比度计算 + CSS 作用域合并）与断言集 `packages/ui/src/lib/color-contrast.test.ts`：对设计底座 10 组配色（5 主题 × 亮暗）× 11 对「前景 / 背景」组合共 **110 项**逐项断言（正文类 ≥ 4.5:1，次要文字与状态徽章 ≥ 3:1），失败时一次性列出全部不达标项并给出实测比值；另有解析器与作用域的元断言（`index.css` 与 `themes.css` 中所有选择器均被解析器识别、所有颜色写法均可解析），新增主题漏定义即失败。**动因**：配色校验此前靠人眼，5 主题 × 2 明暗的配对矩阵不可能人工穷举。**验收**：① 110 项配对断言在 10 组配色下全绿；② 改 token / 加主题后不达标即失败，并定位到「哪套主题 · 哪个明暗 · 哪一对变量」；③ 用独立实现的解析器交叉验证同一份 CSS 结论一致（不留「测试与实现同源同错」盲区） | P1 | 🔨 开发中·阶段 2 完成（已查出并修复 2 处真实缺陷：teal·亮色与 sunset·亮色的按钮文字配对不达标，改深色墨字后分别实测 7.18:1 与约 6:1，见 `packages/ui/src/styles/themes.css` 注释；组件库测试 240 用例全绿） |
+| FR-504 | 内容页布局规范层（feat，免 spec）：把「每个内容页各自手写骨架类名」收敛为唯一出处——新增 `packages/ui/src/components/layout/`（`PageShell` 三壳态 default 整页滚动 / fixed 固定视口内部滚动 / tool 全占满，`PageHeader`、`ScopeBar`、`SummaryStrip`、`Toolbar`、`PlatformTabs`，以及 `TwoCol` / `ThreeCol` / `MetricGrid` / `CardsGrid` / `SettingsLayout` 等网格原语），页面只从该层取原语；`Panel` 补三段式 `footer` 槽（头 / 身 / 脚），使「工具条 + 数据区 + 页脚」成为标准形状；审计页 `AuditPage` 作为首个迁移试点。**边界**：本层只管「一页内部怎么摆」，页与页之间的骨架归 FR-505。**验收**：① 三种壳态的留白 / 纵向节奏 / 滚动模型各有用例断言；② `Panel` 三段式为向后兼容的新增槽，既有用法不受影响；③ `AuditPage` 迁移后行为不变、原有用例全绿；④ 布局层 24 项用例在组件库单测内运行 | P1 | 🔨 开发中·阶段 3 完成（原语与用例已落，`AuditPage` 已迁移） |
+| FR-505 | 导航外壳组件层（feat，免 spec，承 FR-504 边界）：新增 `packages/ui/src/components/shell/`——`AppShell`（53px 顶栏 + 侧栏 + 页面区三件套骨架）、`TopNav`（四工作区切换 + 品牌 / 检索 / 操作槽）、`SideNav`（246px 展开 · 折叠 54px，含 `SideNavHead` / `SideNavShortcuts` / `SideNavResource` / `SideNavBottom`）、`ResourceTree`（资源树，限流展开与查询）、`CommandPalette`（⌘K 全局检索）、`ObjectPageHeader`（对象页头：面包屑 + 指标 + 工具）；两层分工写进各自 `index.ts` 注释——本层管「页与页之间共用的骨架」，页内布局归 FR-504，不可混用。**验收**：① 六组件各有 props 契约与用例（折叠 / 展开、键盘操作、空态，合计 55 项）；② 关键尺寸与设计原型一致（顶栏 53px、侧栏 246 / 54px）；③ 控件博物馆提供整合预览页，可在真浏览器按四工作区切换查看 | P1 | 🔨 开发中·阶段 4 完成（六组件 + 55 项用例；`apps/ui-museum` 预览页真浏览器截图已取得） |
+| FR-506 | 工作区导航数据层（feat，免 spec）：新增 `apps/control-plane-web/src/components/console/workspace-navigation.ts`，把导航登记从「六域扁平」改为「**四工作区 × 组 × 页面**」三层（服务器运维 / 观测与自动化 / 运营与分发 / 平台管理），按设计交付的原路由对照表（45 条 = 37 导航 + 5 子路由 + 3 认证页）归位：本层登记 42 条（37 + 5），3 个认证页独立于工作区。**新增而非改写** `nav-config.ts`——旧六域定义原样保留作对照物与回滚路径（可回退），两套数据并存并由测试逐条证明等价：37 个导航目的地的 `perm` / `labelKey` / `icon` 与旧真源同路径项逐条同值（含 any-of 数组）；5 个子路由在旧真源无对应项，**继承其入口页 `perm`**（看不见列表页即看不见其深链），属新增项而非权限放宽；裁剪算法同形复刻，不 import 旧私有实现。**验收**：① 登记条数对账 42 + 3 = 45，三层结构无残留 sections；② 旧导航 37 条零遗漏、新增恰为 5 条子路由；③ 11 类权限场景（空权限 / 单权限 / 多权限 / any-of 单边 / 观测只读 / 运营域 / 平台域 / 全量节点 / 管理员短路）下新旧可见面无差异；④ 路径归一化（query/hash、尾斜杠、重复斜杠、缺前导斜杠）与未命中返回 null；⑤ 空权限下不出现任何实例 / 发布 / 会话深链 | P1 | 🔨 开发中·阶段 5 完成（登记数据 + 17 项用例全绿；新增 i18n 键**已全部补进** `src/i18n/{zh,en}.json`，中英齐备。**路径更正**：导航真源实际位于 `apps/control-plane-web/src/lib/console/workspace-navigation.ts`，本条正文所写的 `components/console/` 位置已失效——按「已有 FR 只改状态字段」约定未改正文） |
+| FR-507 | 主控台外壳接入与页面迁移（feat，依赖 FR-502~506，免 spec）：把主控台从旧六域外壳切到新工作区导航——桌面侧栏（旧六域实现 `ConsoleSidebar`）、移动导航 `MobileConsoleNav` 与命令面板 `CommandPalette` 三处消费方一律改以 `workspace-navigation.ts` 为导航真源，接上 `AppShell` / `TopNav` / `SideNav` / `ResourceTree`；既有内容页按 FR-504 布局规范逐个迁移；列表页渲染性能一并处理——阶段 1 实测审计页 250 条、任务页数百条记录一次性进 DOM 已使用例在 10s 超时阈值边缘抖动（无虚拟化、无窗口裁剪，开销随条数线性恶化），属本轮核心目标范围。**验收**：① 四工作区导航在桌面侧栏 / 移动导航 / 命令面板三处一致可达，权限裁剪与旧实现等价；② 迁移页面行为不变（空 / 常规 / 超量 / 异常四态齐备）；③ 目标列表页大数据量下真浏览器渲染开销不再随条数线性恶化（有前后对比数据）；④ 全部消费方切换后删除 `nav-config.ts` 的六域定义——`Workspace.tsx` 路由表承接原 RouteRegistry 语义，**不得为缩短侧栏删登记项** | P1 | 🔨 开发中·阶段 6 进行中（**桌面侧栏已切换**：`DashboardPage` 挂载 `WorkspaceSidebar`，其数据全部取自 `lib/console/workspace-navigation.ts`；仅移动导航 `MobileConsoleNav` 与命令面板 `CommandPalette` 仍以 `nav-config.ts` 为真源，故 `nav-config.ts` 未删。页面迁移未完成） |
+| FR-508 | 应用业务组件受控化迁入组件库（ref，免 spec，补 FR-502~507 未覆盖的「业务组件所有权」范围，架构决策见 ADR-102）：把主控台内剩余 **151 个业务组件**按 **a+b 双范式**受控化后迁入 `packages/ui/src/components/views/<域>/`——**a 范式**（74 个纯读组件）走「外壳取数 + props 注入」，数据与加载/错误态由外壳注入、UI 状态留包内；**b 范式**（54 个含写组件）走「受控 + 回调注入」，动作以 `onXxx` 回调上报、由外壳执行 mutation 与 toast。包内硬约束（沿用原 biz-views）：不 import `@/api`/`@/lib`/`@/components`，不依赖 `react-router`/`@tanstack/react-query`/`sonner`，由边界测试守门；随迁的共享纯逻辑入 `src/lib/`（归包，两边都从包取）。**动因**：177 个业务组件中零应用依赖的仅 16 个（12 已迁、7 为两行再导出层、2 为 devtools 面板），纯移动无路可走；且业务组件不进包则组件博物馆无法覆盖它们——而它们组合最复杂、样式最易漂移，恰是最需要跨主题/跨明暗验证的部分（ADR-058 的兑现前提）。**分批**：按 API 模块聚类推进 instances(32) → nodes(19) → metrics(13) → 其余零散，同域组件共享数据结构与 i18n 命名空间，可复用同一套 props 契约与测试夹具。**不做**：抽 `packages/api` 让组件继续自行取数（绕过受控化目标）、只迁纯读组件（覆盖不全且同域被拆两处）、迁移期目录双写（会造成两份实现静默分叉）。**验收**：① 151 个组件全部迁入且应用内不留重复实现；② 包内零 router/react-query/sonner 依赖（边界测试断言）；③ 迁移页面行为不变（数据口径 / 权限 / 深链 / 文案）且既有用例全绿；④ 组件博物馆可见并入的每一个业务组件并在真浏览器实测渲染 | — | ❌ 已废弃（**ADR-103 取代 ADR-102**：业务视图与业务契约退回应用侧，`packages/ui` 回归设计系统；a+b 双范式作为组件写法保留，但「并入组件库」的归属决策撤销。验收口径改为「业务视图在应用侧、包内零业务、边界测试守门」） |
 
 | FR-496 | 采集索引迁移至本地 SQLite（feat，增强 FR-473~484 底座；spec：`docs/specs/log-index-sqlite/spec.md`）：现索引为单一 JSON 整本重写——实测 307MB/13 源，60 实例外推 1.5–3GB，单次持久化将达秒级（历史事故：~1.2GB 时 >5s 触发 `vlsup` 超时、采集停摆）。改为纯 Go 嵌入式 SQLite（WAL、单写者、只写变更行）+ 旧文件一次性迁移归档。验收：60 源下单次持久化 ≤50ms；迁移逐字段一致；`kill -9` 不丢索引。**2026-10-01 加固（FR-498 实测发现）**：迁移后索引里唯一随总量线性增长的表变成 `delivery_batch`（≈**5 MB/天 @60 源**）且原先无裁剪路径，长跑会把索引无界撑大——按 `reclaim` 水位裁剪历史批次（判据有证明：`End <= Reclaim` 的条目对 `delivery_position` 的连续前缀计算是**恒等元**，且水位单调；失败只告警不阻断，有自证守卫；配置键 `log_index.batch_prune.*` 见 spec §6）。60 源 × 6000 批/源夹具实测：360 000 行 / 库 25.6 MB → **0 行 / 864 KB**；水位滞后窗口内保留量只与滞后有关、与累计总量无关（spec §2.4/§3.8） | P0 | 🔨 开发中（实现与 `log_index.*` 配置接线已落地；**2026-10-11 生产真机实测**：生产采集面 164 源下索引持久化 p50 2 ms / p95 6 ms / max 152 ms，远优于「60 源单次持久化 ≤50 ms」验收线。**取证口径（可复算）**：数据源＝生产 Worker journal 的「持久化耗时」分钟打点行（现含 p50/p95/max 与采样周期数），按窗口聚合即得；本项无 `.tmp/` 路径引用。生产累计重启未复现 2026-10-01 二启卡死。**已归真（2026-10-11）**：spec 顶部状态行已由 `📋 计划` 改为 `🔨 开发中`；**剩余边界**：spec §3 第 7 条「迁移→首启→二启→三启 + 脏环境 + 部署后复验」缺形式化复验产物） |
 | FR-497 | 重启增量对账与全自动收养（feat，**推动 FR-455/456 落地** + 增强 FR-471；见 ADR-093；「重启增量对账」子项 spec：`docs/specs/log-startup-reconcile/spec.md`；另一半「全自动收养」**已立项并实现**（spec：`docs/specs/auto-adopt-orphans/spec.md`，T1–T5 已过、T7 真机待做））：现状重启整窗重发（13 源 ~5 分钟，60 源将达十几至几十分钟），且未纳管活进程仅告警（`orphan_scan.dispose_policy=warn`）、接管重试仅 3 次（~7s）失败即强杀健康服务器（FR-455① 地雷）。改为：启动按「源×天」与 VL **条数级对账**只补缺（绝不丢、允许极少重复）+ 存活 wrapper 自动重连 + 未纳管活进程经 PID 文件与进程属主校验后**自动收养**为 RUNNING。验收：60 源重启 ≤60s；人为删 VL 某天可检出并补回；随机杀 Worker 100 次零丢失；校验不过只告警不杀 | P0 | 🔨 开发中（两子项实现与接线均落地：对账三阶段启动恢复 + 收养 T1–T5。**2026-10-11 生产真机实测**：生产调试面出现「启动增量对账一致」记录（含 `inst:314/315/316` 等源），即重启按条数级对账只补缺已实际生效，非整窗重发。**取证口径（可复算）**：数据源＝生产 Worker journal，判据＝`grep -c '启动增量对账一致'` 与其中的源标识/时间戳；本项不引用任何 `.tmp/` 路径。**待归真**：①「60 源重启 ≤60s」无成文实测数字；② 收养子项真机清单 A/B/C/D 未做（spec T7）；③ `stats_query` 真机返回形态未验证） |
@@ -646,149 +650,34 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 ## 5. 非功能需求（NFR）
 
 - **部署**：单二进制（go:embed 前端，ADR-005）；SQLite 零配置起步、MySQL 生产；运行态数据收口单一数据根（FHS，便携可迁移，ADR-010）。
-- **架构不变量**：三进程模型（Control Plane / Worker Node / Bot Worker）+ 固定通信协议（gRPC 节点间 / WS 终端 / stdin-stdout Bot IPC / 反向 WS 探针），见
-  `.claude/rules/architecture-invariants.md`，任何变更不得逾越。
-- **安全**：JWT 双 Token（15m access + 7d refresh）；WS 终端一次性 token；探针实例级 token（scope=plugin-bridge）；客户端分发使用 HTTPS + 拉取密钥鉴权 + sha256 完整性校验（ADR-054）+ L7 防护（ADR-023）；
-  敏感信息经 `${ENV}` 注入不入库；破坏性操作二次确认 + 全程审计。
+- **架构不变量**：三进程模型（Control Plane / Worker Node / Bot Worker）+ 固定通信协议（gRPC 节点间 / WS 终端 / stdin-stdout Bot IPC / 反向 WS 探针），见 `.claude/rules/architecture-invariants.md`，任何变更不得逾越。
+- **安全**：JWT 双 Token（15m access + 7d refresh）；WS 终端一次性 token；探针实例级 token（scope=plugin-bridge）；客户端分发使用 HTTPS + 拉取密钥鉴权 + sha256 完整性校验（ADR-054）+ L7 防护（ADR-023）；敏感信息经 `${ENV}` 注入不入库；破坏性操作二次确认 + 全程审计。
 - **性能与规模**：指标时序分层卷积按 TTL 保留；大工作目录全文索引后台化；上万 Bot 以会话/摘要聚合不逐个铺开；离线节点/实例短路无效请求。
 - **可维护**：SDD 文档驱动 + 防漂移规则（`.claude/rules/`）；核心模块（process manager / 状态机 / 协议）测试覆盖 ≥80%，新代码 ≥60%。
 
 ## 6. 验收标准
 
 - **全链路运维**（节点在线 → 创建启动 MC 实例 → 终端交互 → Bot 进服）可真机端到端跑通（FR-043 已验，v0.3.0）。
-- **逐FR验收**见既有spec：标准满足、自动化测试通过，标注的真机/集成项由用户确认；交付须带版本，正式tag前可记开发版本，不代表已发布。
+- **逐 FR 验收**见对应 `docs/specs/<feature>/`；标 `已交付@vX.Y.Z` 须该 FR 验收标准全部满足 + 自动化测试通过 + 标注的真机/集成项由用户确认通过，由 `sdd-release-version` 发版统一标注。
 - **横切验收**（前端类 FR）：i18n（中/英）完整 + 暗/亮色正常 + 关键路径真机验证——三者缺一不算交付。
-- **500+ Bot 分布式命令压测**（FR-351/352/354/358~361）：离线测试环境中以多 Worker 分片向同一目标服发起 stable、step 和 spike 三类测试；正式通过至少要求 500+ Bot 连续 60 分钟，在线率、命令发送率、调度完成率、Worker
-  健康率及已配置屏障的到达率均 ≥99%，命令调度 lag p95≤1 秒，Worker/bot-worker 无非预期崩溃；前端必须完成命令模板配置、容量预检、实时观测、失败定位和报告闭环。`bot.chat` 未同步抛错只证明命令发送动作成功，不证明服务器接受、权限通过或产生业务效果；ServerProbe、
-  TPS/MSPT、塔防或其他业务事件仅为可选附加观测，不得成为通用运行的启动、成功或交付前提。
-- **Agent MCP 小游戏房间容量验收**（FR-395~399）：仅用 scoped Agent Token + MCP 强类型工具完成「实例准备/配置→Bot 模板与会话→容量预检→100/200/300/400/500 阶梯升压→登录静置→命令进房→移动攻击与周期命令→500 Bot 连续 60
-  分钟→停止与报告」全流程；默认 50 Bot/Worker，500 实测须至少 10 个具备容量的真实 Worker，不得靠单 bot-worker 放大到 500。容量报告必须分别给出目标服 JVM、各发压 Worker/bot-worker、节点总内存与集群总量的 baseline/峰值/p95/每 Bot
-  斜率，并把实测值与加 25% 安全余量建议明确分开；环境不足只能标已测规模与外推，禁止宣称 500 实测。
+- **500+ Bot 分布式命令压测**（FR-351/352/354/358~361）：离线测试环境中以多 Worker 分片向同一目标服发起 stable、step 和 spike 三类测试；正式通过至少要求 500+ Bot 连续 60 分钟，在线率、命令发送率、调度完成率、Worker 健康率及已配置屏障的到达率均 ≥99%，命令调度 lag p95≤1 秒，Worker/bot-worker 无非预期崩溃；前端必须完成命令模板配置、容量预检、实时观测、失败定位和报告闭环。`bot.chat` 未同步抛错只证明命令发送动作成功，不证明服务器接受、权限通过或产生业务效果；ServerProbe、TPS/MSPT、塔防或其他业务事件仅为可选附加观测，不得成为通用运行的启动、成功或交付前提。
+- **Agent MCP 小游戏房间容量验收**（FR-395~399）：仅用 scoped Agent Token + MCP 强类型工具完成「实例准备/配置→Bot 模板与会话→容量预检→100/200/300/400/500 阶梯升压→登录静置→命令进房→移动攻击与周期命令→500 Bot 连续 60 分钟→停止与报告」全流程；默认 50 Bot/Worker，500 实测须至少 10 个具备容量的真实 Worker，不得靠单 bot-worker 放大到 500。容量报告必须分别给出目标服 JVM、各发压 Worker/bot-worker、节点总内存与集群总量的 baseline/峰值/p95/每 Bot 斜率，并把实测值与加 25% 安全余量建议明确分开；环境不足只能标已测规模与外推，禁止宣称 500 实测。
 - **MCP 能力补齐与 Beacon 协同验收**（FR-440~444）：
-  - FR-440：用 scoped V2 Token 经 MCP 调 `instance_update_tags` 能改实例标签；`agent_whoami` 返回的 capabilities 含 `instance.write`；缺省参数不改动、空数组清空、非空整体覆盖三种语义各验一次；无
-    `instance.write` 的 Token 调用被拒。
+  - FR-440：用 scoped V2 Token 经 MCP 调 `instance_update_tags` 能改实例标签；`agent_whoami` 返回的 capabilities 含 `instance.write`；缺省参数不改动、空数组清空、非空整体覆盖三种语义各验一次；无 `instance.write` 的 Token 调用被拒。
   - FR-441：三类来源（制品库 asset / 远程 URL / 节点本地文件）各搭建一次，均能产出 STOPPED 可启动实例；任务经 `RunAsync` 有阶段进度与终态站内信；下载失败进 `DAMAGED` 且 `provisionSpec` 可重建。
   - FR-442：一键搭出 Beacon 实例并可启动；制品来源优先级（制品库 > GitHub）真机验证；未部署时不影响其余功能。
   - FR-443：配置协同端点后，实例改名/改归属能在 Beacon 侧反映；**端点不可达 / 未配置时本机创建与启动操作全部正常**（兼容非依赖的硬要求）；失败有审计记录。
   - FR-444：能拉取 Beacon 区服结构并生成分组树与 `region:`/`zone:`/`role:` 标签；**Beacon 不可达时本地数据零改动**且返回明确错误。
 
-- **MCP 端点无状态化验收**（FR-489）：①无 `Mcp-Session-Id` 时可连续调用 `initialize` / `tools/list` / `tools/call` 且响应不含该头；②携带陈旧或伪造的 session id 被忽略而非拒绝；③**重启 CP 后同一客户端无需重新
-  initialize 即可继续调用**（旧行为必失败）；④`GET /api/v1/mcp` 返回 405 且带 `Allow: POST`，`DELETE /api/v1/mcp` 同样返回 405 + `Allow: POST`；⑤SSE 兼容路径 `/sse` + `/message` 行为不变、
-  连接断开即注销；⑥`GET /api/v1/agent/mcp/activity` 按 Token 正确聚合（多 Token / 窗口边界 / 失败计数 / 无数据）；⑦Token 吊销或 scope 下调在**下一个请求**即生效（不再有快照窗口）；⑧无凭据仍 401、策略拒绝仍 200 +
-  `isError=true`。
+- **MCP 端点无状态化验收**（FR-489）：①无 `Mcp-Session-Id` 时可连续调用 `initialize` / `tools/list` / `tools/call` 且响应不含该头；②携带陈旧或伪造的 session id 被忽略而非拒绝；③**重启 CP 后同一客户端无需重新 initialize 即可继续调用**（旧行为必失败）；④`GET /api/v1/mcp` 返回 405 且带 `Allow: POST`，`DELETE /api/v1/mcp` 同样返回 405 + `Allow: POST`；⑤SSE 兼容路径 `/sse` + `/message` 行为不变、连接断开即注销；⑥`GET /api/v1/agent/mcp/activity` 按 Token 正确聚合（多 Token / 窗口边界 / 失败计数 / 无数据）；⑦Token 吊销或 scope 下调在**下一个请求**即生效（不再有快照窗口）；⑧无凭据仍 401、策略拒绝仍 200 + `isError=true`。
 - **MCP 生产安全门禁验收**（FR-490~493）：
-  - FR-490：票据状态机穷举测试全绿；并发批准 / 撤回 / 过期交错不发生双批准；**Agent Token 调批准端点在任何路径下恒被拒**（服务层稳定拒绝并审计），仅人类 JWT 可批准；24 小时过期后不可执行；申请人可经 `own.list` / `own.get` 查询自己提交的申请与状态、并在
-    `pending` 时 `own.withdraw`，撤回后不可执行。
+  - FR-490：票据状态机穷举测试全绿；并发批准 / 撤回 / 过期交错不发生双批准；**Agent Token 调批准端点在任何路径下恒被拒**（服务层稳定拒绝并审计），仅人类 JWT 可批准；24 小时过期后不可执行；申请人可经 `own.list` / `own.get` 查询自己提交的申请与状态、并在 `pending` 时 `own.withdraw`，撤回后不可执行。
   - FR-491：目标漂移时执行器不产生副作用且记为 `failed`；重复批准 / 重试幂等；执行回执与领域写入、审计同事务；批准成功但执行失败时批准事实与失败原因均保留。
-  - FR-492：**三类绕过口子各有专项断言**——`file_issue_transfer_ticket`（票据 + 流式上传）、`instance_send_command`、`instance_update_config` / `instance_binary_upgrade` /
-    `instance_binary_rollback` / 远程 URL 二进制来源在未审批时**均零副作用**；action 目录全部 `write` / `destructive` 项均有明确的「进审批 / 直执」标注、无遗漏（覆盖测试 fail-closed，新增 action 未标注即失败）；
-    批准后经执行器产生副作用且审计可查；驳回 / 撤回 / 过期均不执行；`start` / `restart` / 热重载仍按既有精确确认直执；CLI / MCP / curl 三入口同策略断言通过；**真机 MCP 实测**（未审批被拒 → 批准 → 执行 → 审计闭环）。
+  - FR-492：**三类绕过口子各有专项断言**——`file_issue_transfer_ticket`（票据 + 流式上传）、`instance_send_command`、`instance_update_config` / `instance_binary_upgrade` / `instance_binary_rollback` / 远程 URL 二进制来源在未审批时**均零副作用**；action 目录全部 `write` / `destructive` 项均有明确的「进审批 / 直执」标注、无遗漏（覆盖测试 fail-closed，新增 action 未标注即失败）；批准后经执行器产生副作用且审计可查；驳回 / 撤回 / 过期均不执行；`start` / `restart` / 热重载仍按既有精确确认直执；CLI / MCP / curl 三入口同策略断言通过；**真机 MCP 实测**（未审批被拒 → 批准 → 执行 → 审计闭环）。
   - FR-493：真机浏览器完成「待审列表 → 批准执行 → 状态推进」闭环；无审批权限账号访问审批端点返回 403；空 / 常规 / 超大量 / 异常四态齐备。
 
-- **QQ 机器人告警通道验收**（FR-494）：①通道类型 `qq` 可创建 / 编辑 / 启停 / 删除，被规则引用时删除返回 409；②明文 `appSecret` 被前端与后端同时拒绝，`${ENV_VAR}` 形式通过；③缺 `appId` / `appSecret` / `targetType` /
-  `targetId`，或 `targetType` 非法时报错；④投递命中 `POST /v2/groups/{group_openid}/messages`（群）或 `/v2/users/{openid}/messages`（单聊），头部为 `Authorization: QQBot <token>`、body
-  为 `{"content":…,"msg_type":0}`；⑤同一 `appId` 在有效期内复用缓存 token、并发投递不重复取 token、临近过期触发刷新；⑥开放平台 HTTP 200 但业务 `code` 非 0 时判定投递失败，且失败不影响告警事件落库；⑦通道「测试发送」在真实机器人凭证下能在 QQ
-  群 / 单聊收到消息；⑧中英文案完整，界面不出现裸 key。
-- **QQ 机器人扫码接入验收**（FR-495）：①分享端点仍在线（实测返回短链 `bot.q.qq.com/s/<码>`），但**前端分享二维码与刷新按钮已随拆除下线**，不再作为验收项；②CP 启动后网关连接状态为 connected（无 `1<<25` 权限时状态为 error 且错误信息明确指向
-  intent 权限）；③测试号把机器人拉进群后 1 分钟内已发现群列表出现该 `group_openid`，重复进群不产生重复条目；④通道表单走单聊（群聊已下线）：点「扫码绑定」出二维码，扫码完成后 `appId` / `appSecret`（引用名 `${QQ-<appId>}`）/ 目标 openid
-  自动填充且可直接保存；手工填写路径保留；⑤网关断开时 `qq` 通道测试发送仍成功；⑥三个新端点的响应均不含 `appSecret`，前端任何位置不出现密钥明文；⑦~~真机全链路：扫码 → 进群 → 后端出现该群 → 选群建通道 → 测试发送到达~~ **末两步不可达**（选群建通道已无 UI 入口、群主动发送被平台 `40034105` 拒绝），可验部分改以单聊路径真机覆盖；⑧**只读接入状态观测**：`qq` 通道对话框中可看到网关状态徽标与 `last_error`（4014 额外指向 `1<<25` 权限），已发现群区只读展示计数/前8位 openid/发现时间且常驻免责文案，无任何群选择控件，无 `alert.manage` 时整块不渲染且不请求。
-
-### 未完成与受限范围
-
-- **FR-490～493 审批规划**：票据pending/withdrawn/rejected/expired/executing/succeeded/failed状态穷举，冻结目标载荷/证据。
-  申请人只查自己申请，pending可撤；批准仅人类JWT。执行前重验资源版本/目标漂移，领域adapter、回执与审计同事务。
-  action目录逐项标记；instance_stop进审批，start/restart/热重载保持直执与精确确认；快照回滚instance_snapshot_rollback亦入审批。
-  approval_required与Operation的关系由spec定：正交标记或第四种Operation二选一，不得兼有；CLI/MCP/curl三入口同策略。
-  审批中心列操作/目标/申请人/风险/原因/证据，提供批准执行/驳回/历史；遵守deny永胜与唯一超管约束。
-  依赖：FR-491→490、FR-492→490/491、FR-493→490；四项仍为计划。
-- **FR-362/370 既有验收边界**：362按用户确认缩比验≥2真Worker、>50跨节点预检及真实connected，500真连仍是扩容档。
-  370的500×60min harness未跑满；不替代以上正式500规模/十Worker门限。
-- **FR-485 已交付（2026-11-01）**：指标链路已补齐并上线。
-  - 投递链路 13 条：batches/events/bytes/requests/retries/failures/aborted + batch_{max,avg}_{events,bytes} + wait_{max,avg}_seconds
-  - 磁盘缓冲 6 条：enabled/used_bytes/capacity_bytes/records/dropped_total/recovered_records
-  - 节点利用率 2 条：`node_mem_pct` / `node_disk_pct`（真机实测 89.95% / 15.63%）
-  - 预置 5 条告警规则（默认不启用）：内存/磁盘/IO等待/采集健康/VL磁盘
-  - **仍缺**：SQL 慢查询计数（需 SQL 层埋点，独立小工程）。
-  - 设计约束：指标不把 `log_source_id` 做标签——投递计数是全局聚合，按源拆会让序列数从 13 涨到 247，而有源数随实例增减变化。有测试钉死这条。
-- **FR-486 已交付（2026-11-01）**：4 阶段启动分段计时（config/bootstrap/logIngest/wsReady）+ 30s 超阈 Warn + slowestPhase 点名。
-  **真机实测**：`totalMs=6846`，其中 `logIngest=6700ms`（占 **97.9%**）——启动慢的真凶就是日志采集运行时，
-  配置/bootstrab/WS 都很正常（7.4ms / 0.4ms / 138ms）。这个数字之前完全不可见。
-  阈值有测试钉死区间（10s..60s），防止被随手改小（正常启动刷 Warn）或改大（真卡住看不见）。
-  **2026-10-31 标题修订**：原「启动**加载**分阶段计时（读取/解析/恢复/首次持久化）、**流式/引用化加载优化**」已无对象——
-  索引库改 `:memory:` 后重启就是空库，没有「加载索引」这个阶段可计时、可优化（也就没有「状态尺寸/加载耗时」这个观测点）。
-- **FR-497 开发中**：按源×天与VL条数对账只补缺，绝不丢失、允许极少重复；人为删VL某天可检出补回。
-  **2026-10-27 补验**（收养部分，详见 [收养规格][s168]）：Java 分支负例已端到端补齐并顺带修掉一个真缺陷（环境子串误判归属），心跳/巡检/Stop 改用真实 java 夹具验证并修掉「无启动宽限期」。
-  **仍不升级为已交付**：Windows 仅到代码层契约与交叉编译通过，真机未验（该平台下 `/proc` 缺失、`OpenProcess`/`taskkill` 行为、`samePath` 大小写敏感性均未实机验证）。
-  存活wrapper自动重连；未纳管进程自动收养须PID文件/进程属主校验，校验不过只告警不杀。
-  已达：连续强杀零丢失（每轮durable单调不减、每轮能重新就绪、kill前有in-flight未采字节、终态逐源durable_pos追平文件字节）、
-  60源重启≤60s、收养T7四臂（启动窗口接管重试耗尽落`alive_unreachable`只告警不杀→恢复后扫描器收养；运行期收养；
-  归属复核不过拒绝收养且不杀；开关关闭时不收养）。
-  新增已达：**开关关闭≠允许处置**——`dispose_policy=auto` + `auto_adopt=false` 时，未纳管活进程对不再被误判为 direct 孤儿处置（原先会走 `killTree` 杀运维手动管理的服务器），降级为 warn 并留 WARN + `orphan.scan_dispose_blocked`（`reason=auto_adopt_disabled`、success=false）；边界为只降级该类，已纳管实例与 `auto_adopt=true`/`dispose_policy=warn` 行为不变（单测六条，转红校验通过）。
-  未达：**T7的Java分支负例未单独构造**（C臂在wrapper阶段即返回）；**收养后心跳报RUNNING/健康巡检/Stop可用的真机部分未验**
-  （以`sleep`代替真实MC服务端）；**Windows未验证**（无`/proc`致wrapper分支复核fail-closed，收养不生效，仅告警）。
-  边界：判据以连续5次强杀+终态逐源追平为准——写入速率高于恢复能力导致的「未追平」属没跑完，不构成丢失判据。
-  运行前提：无可用VL时投影重建前durable不推进；磁盘达90%预算水位时vlsup拒绝准入；符号链接工作目录被产品拒绝。
-- **FR-498 延期专项**：保留Worker CPU/内存、VL内存、查询P95三条容量基线，含“全部时间”查询口径。
-  **2026-10-31 标题修订**：删「索引P50/P95」——索引库改 `:memory:` 后不再落盘，
-  「索引持久化 p95=98–100ms vs 验收线 50ms」这条唯一确定不达标的项**已失去对象**（没有持久化就没有持久化延迟）。
-  ACKLoss与Worker静默766已达标：前者在请求已发出、ACK丢失时落UNKNOWN态并禁止回收，能检出并自愈，
-  注入未解除且无新输入时仍能自愈，零丢失零重复；后者`766`是事件条数而非错误码，超过单次排空上限500的部分（266条）
-  由既有自愈闭环排空，均在既有120秒窗口内收敛。
-  仍缺：9×30min长稳窗口（需独占宿主）、250ms首屏、60源容量基线成文与heap建议、错峰策略未认证。
-  164源既有稳态不能替代缺失的60源口径；保留原性能/长稳阈值与既有测量，不放宽门限、不记通过。
-- **FR-499/500 开发中**：均已生产部署但不升级状态。499的CP侧零配套改动、无生产侧复验产物，CP残余超时不能归因于已修登记锁。
-  **500 形式化验收记录已于 2026-10-27 补上**（spec §4.2 三臂重做 + §4.5 生产实机取证）：三臂重做时发现并修正了「进程未启动被判为 red PASS」的平凡通过缺陷（新增 `require_alive` 前置守卫），三臂均真绿；生产读数 19/19 实例在 `jianmanager-daemons/<uuid>` 隔离、单元 cgroup 内零游戏服 java。
-  **仍不升级为已交付的理由**：未做本机生产单元的主动重启实测（需停机窗口人工执行），因此只能说「隔离归属已正确」而不能说「已观测过真实重启存活」。且新发现一处部署形态漂移：CP/Worker 被 systemd 收养进 `vantaloom-runtime.service`（`KillMode=control-group`），带 `KillMode=process` 的 `jm-prod-worker.service` 在册但 inactive——此时运行期隔离是唯一防线。
-- **FR-501 开发中**：采样四类策略默认关；抑制汇总事件必须保持区间守恒R，不能绕过缺口default-deny与VerifiedRuns。
-  保留debug/info/warn/error的3/7/30/90天档，热90天/冷730天可配；源级覆盖、白名单过滤器不从配置读表达式。
-  默认先搬COLD；失败保原物+告警、零删除。删除须discard、sweep.vl_sweep、受管VL -delete.enable三闸，默认全关。
-  次选路径archive_copy（默认关）已实现：冻结快照→逐文件gzip→manifest(sha256/字节数/coverage)→三重校验
-  （回读sha256、解压逐字节比对、manifest重校验）；次序`move_to_cold → archive_copy → discard → blocked`，
-  导出判在删除之前——有归档目的地时默认动作是导出归档而非删除，`discard` 只解除「无归档路径时的阻塞」。
-  **回收热层与前述删除同守三闸**，并新增第二道前置：**Catalog 的 ARCHIVED 权威态**。
-  2026-10 已补齐该权威态（`catalog.OwnerArchive` 此前无任何生产迁移路径可达，本次接通为唯一「已归档」态）：
-  导出+逐文件校验通过后，先把分区改为 `Owner=archive` 并把归档证据（provider kind、object prefix、
-  manifest 回读 sha256、coverage、归档时刻、迁移前权威快照）写入 Catalog journal；**再**删热层；
-  删除失败则回滚为 HOT（恢复原投影/目录/代次，查询能力不丢）。删除前由 Catalog 复核四个条件：
-  该日无 HOT 残留、归档证据完整、无在途写许可、无活跃读取租约/视图。
-  查询面：ARCHIVED 且本地未恢复时显式降级为 `LOG_COVERAGE_ARCHIVE_MISSING` + `ARCHIVE_NOT_RESTORED`，
-  Search 无任何可读 range 时返回 `LOG_ARCHIVE_MISSING`（**不是**空成功）；已恢复（有对齐投影）则按
-  `archive` tier 路由到 Rehydrate 客户端。导出目的地支持 `local`（默认）/ `s3` / `minio`（2026-10-27 接线，
-  复用已真机验过的 SigV4 `archive.RemoteS3Provider`）；目的地不完整（local 缺 root、s3/minio 缺
-  endpoint/bucket）一律**启动即拒**，构造失败只降级导出器而不让 Worker 启动失败。SFTP/WebDAV 无实现。
-  搬运调度由每小时ticker改为**每日固定时刻**（`log_retention.trigger.sweep_at_hour`，默认3点、进程本地时区），
-  保留启动首轮立即执行；年龄与磁盘水位先到触发，磁盘触发min_age=7d；人工/周期迁移判据相同。
-  `eventstore` 段回收已实现并接线（`log_retention.eventstore_prune.enabled`，默认关）：
-  水位=`min(Positions.Reclaim, VerifiedRuns连续前缀末端)`；**不是** `Positions.Delivery`
-  ——后者的`contiguousDeliveryEnd`不按投递状态过滤，失败请求同样推进它，用它会删掉仍需重放的正文。
-  `/metrics` 已输出保留/搬运与事件段回收序列；运行期调级入口 `/debug/log-level`（GET读/POST改，
-  只调等级不改格式、不持久化、仅本进程handler生效）。
-  **归档对象自身的回收（桶内生命周期）已实现**：`log_retention.archive_object_retention.{enabled,retention,sweep_at_hour}`
-  （默认关、默认无保留期；启用但保留期为空 ⇒ 启动即拒），保留期自 `ArchiveEvidence.ArchivedAt` 起算。
-  次序与热层回收同构且不可调换：`MarkArchiveObjectPurgeRequested`（落 journal）→ 按前缀 `List` + 逐对象 `Delete`
-  → 全部成功才 `MarkArchiveObjectsPurged`；任一失败 `RollbackArchiveObjectPurge`（退回未清除，`PurgeAttempts` 不清零）。
-  **复用同一套删除三闸**（discard + sweep.vl_sweep + log_vl.delete_enabled，默认全关），不新造开关。
-  `List` 返回空（目录已不存在）视为幂等成功；`List` 报错视为失败（「读不出来」≠「里面没东西」）。
-  清除前置：证据完整、热层已回收、无待恢复标记、无活跃查询租约、无本地已恢复投影。
-  终态语义取**方案二**：`Owner` 保持 `OwnerArchive`，清除表达为 `ArchiveEvidence.Purged/PurgedAt/PurgeReason`，
-  查询面对已清除分区给出**新的**原因 `ARCHIVE_PURGED` + 错误码 `LOG_ARCHIVE_PURGED`（不复用 `LOG_ARCHIVE_MISSING`，
-  也不返回空成功）；proto `LogErrorCode` 新增 `LOG_ARCHIVE_PURGED = 11`。
-  `/metrics` 新增 4 条序列（`jm_log_retention_archive_purged_total`、`_archive_purge_failed_total`、
-  `_archive_purge_rolled_back_total`、`_archive_purge_last_run_timestamp_seconds`），未启用时输出 0 而非缺序列。
-  **2026-11-01**：「长期吸存验证」已删除——那是验收活动，不是 FR 的功能缺口。剩余真实边界：S3/MinIO 目的地上的归档对象删除未接。
-- **日志交付边界**：FR-473冻结是契约/治理/依赖证据闸，Runbook A/B/C分别归FR-476/477，不作冻结前置。
-  FR-475仅Linux；FR-476的Windows包校验/解包通过，不等于Windows运行时认证。
-  FR-477不外推本轮浏览器迁移成功分支；FR-479首屏性能仍延期。
-  FR-480真机/浏览器仅既有scope。
-  FR-482 live仅基础15项及第16项确认409，不冒全部UI分支；FR-484 canonical全集禁止按reclaim裁剪。
-  日志底座不做CH/Loki实现、日志告警引擎或浏览器直连VL；Paper默认FILE_PRIMARY，CP仅platform/audit与Legacy只读。
-- **QQ交付边界**：FR-494仅单聊；群主动消息受平台40034105限制，前端已下线，保留group实现待平台开放，不改做被动回复。
-  FR-495扫码/网关/入群落库已真机过，**群通道前端与「QQ接入」视图已主动拆除（不存在，非待验）**，仅保留只读接入状态观测；建群通道属平台开放后的新工作。
-  密钥落`<dataRoot>/etc/qq/`并用`${QQ-<appId>}`引用，不入库；单机器人共享、手选群，不按进群自动创建通道。
-  分享官方定位加好友、能否直达进群待验；intent 1<<25需权限，离线入群事件永久丢失，个人进群上限500。
-- **FR-503/504 边界**：节点覆盖仅五个log.acq键，不支持health/direct_probe节点覆盖；503只保证配置/下发/持久化。
-  504保证开关被消费、纯文本轮转与gzip导入、停采后续采位置不丢，长期定时扫描归501未验。
-  “814个gz零导入/根因无界锁饿死”旧判据已实测否定；以既有spec修正记录为准，不将旧猜测当当前事实。
+- **QQ 机器人告警通道验收**（FR-494）：①通道类型 `qq` 可创建 / 编辑 / 启停 / 删除，被规则引用时删除返回 409；②明文 `appSecret` 被前端与后端同时拒绝，`${ENV_VAR}` 形式通过；③缺 `appId` / `appSecret` / `targetType` / `targetId`，或 `targetType` 非法时报错；④投递命中 `POST /v2/groups/{group_openid}/messages`（群）或 `/v2/users/{openid}/messages`（单聊），头部为 `Authorization: QQBot <token>`、body 为 `{"content":…,"msg_type":0}`；⑤同一 `appId` 在有效期内复用缓存 token、并发投递不重复取 token、临近过期触发刷新；⑥开放平台 HTTP 200 但业务 `code` 非 0 时判定投递失败，且失败不影响告警事件落库；⑦通道「测试发送」在真实机器人凭证下能在 QQ 群 / 单聊收到消息；⑧中英文案完整，界面不出现裸 key。
+- **QQ 机器人扫码接入验收**（FR-495）：①调分享端点可拿到 `qun.qq.com/qunpro/robot/qunshare?...` 格式 URL，前端渲染为可扫二维码，刷新后重新生成；②CP 启动后网关连接状态为 connected（无 `1<<25` 权限时状态为 error 且错误信息明确指向 intent 权限）；③测试号把机器人拉进群后 1 分钟内已发现群列表出现该 `group_openid`，重复进群不产生重复条目；④通道表单走单聊（群聊已下线）：点「扫码绑定」出二维码，扫码完成后 `appId` / `appSecret`（引用名 `${QQ-<appId>}`）/ 目标 openid 自动填充且可直接保存；手工填写路径保留；⑤网关断开时 `qq` 通道测试发送仍成功；⑥三个新端点的响应均不含 `appSecret`，前端任何位置不出现密钥明文；⑦真机全链路：扫码 → 进群 → 后端出现该群 → 选群建通道 → 测试发送到达。
 
 | 期 | 主题 | 完成判定 | 主要证据 |
 |---|---|---|---|
@@ -812,21 +701,21 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 
 ### 期 ↔ 版本映射
 
-各期主题的历史版本映射如下（具体FR版本以§4为准；*沿用原开发段标记，不代表当前发布状态）：
+各期主题对应的发布版本切段（具体 FR 的版本以 §4 为准；带 * 为当前未发版开发段）：
 
 | 期 | 主题 | 覆盖版本 | 状态 |
 |---|---|---|---|
 | 第一期 | 核心平台 | v0.1.0~v0.3.0 | ✅ 完成（真机 FR-043 已验） |
 | 第二期 | MC 群组服运维 | v0.3.0~v0.4.0 / v0.7.0 / **v0.13.0*** | ✅ 完成（FR-046 SpongeVanilla/SpongeForge 真机验收通过） |
 | 第三期 | 运营底座与可观测 | v0.4.0~v0.9.1 / **v0.13.0** | ✅ 完成（FR-010/053/114 真机验收通过，随 v0.13.0 发布） |
-| 第四期 | 客户端 OTA 分发 | v0.8.0 / v0.11.0 / **v0.13.0** | ✅ 完成（真客户端OTA与FR-099原生窗已验） |
-| 第五期 | JBIS 业务对接 | v0.10.0 / v0.13.0 / **v0.14.0*** | ✅ 完成（经济v0.10；背包代码v0.13、真机交付v0.14） |
+| 第四期 | 客户端 OTA 分发 | v0.8.0 / v0.11.0 / **v0.13.0** | ✅ 完成（端到端真客户端 OTA 更新流真机复验：updater-core 真下载+reconcile+sha256+增量/减量/防降级+鉴权 fail-static，真 UI 发布 v1/v2；FR-099 原生进度弹窗人眼目视 2026-07-14 用户确认通过，无剩余尾巴） |
+| 第五期 | JBIS 业务对接 | v0.10.0 / v0.13.0 / **v0.14.0*** | ✅ 完成（经济域 FR-115~123 @v0.10.0；背包域 FR-124~127 代码随 v0.13.0 落地，真机受 CoreLib serverInfo 环境门槛阻断，本轮解锁后真机验通、翻交付于 v0.14.0：bot 入服→AIS 落库→view→writeBasicAttrs+审计+追踪事件全链路） |
 | 第六期 | 控制台体验增强 | v0.10.0 / v0.12.0 / **v0.13.0** | ✅ 完成（FR-128/133/137/140/141 全真机验收通过，随 v0.13.0 发布） |
 
-**历史切段**：原按主题分v0.13～v0.16四版的计划已放弃，三～六期代码归入v0.13.0。
+**版本切段（自 v0.12.0 tag 后）**——原计划「按主题切 v0.13~v0.16 四版」已放弃：实操时三~六期代码一并打进单个 v0.13.0 tag，故按实际拓扑归口：
 
-- **v0.13.0**：三～六期累积交付；含经济FR-115～123与背包FR-124～127代码。当时记本地tag `69dd647` 未push，仅为历史记录。
-- **v0.14.0**：解锁CoreLib环境后背包FR-124～127真机交付，并收口发布向导、探针玩家/业务入参与版本文档修复。
+- **v0.13.0** 三~六期累积交付：第三期运营底座与可观测收口 + 第六期控制台体验与规模化 + 第四期客户端 OTA 二三轮 + 第五期经济脊柱 FR-115~123 与背包代码 FR-124~127（本地 tag 69dd647，未 push）。
+- **v0.14.0** 第五期背包域 FR-124~127 真机验收翻交付（CoreLib serverInfo 环境门槛本版解锁）+ 本轮收口修复（发布向导切步骤清暂存 / 探针写死玩家 / 业务台对象入参）+ 文档归正（版本标签对齐实际 tag 拓扑）。
 
 > 产品成熟（1.0 后稳态）不再加「第 N 期」，改按版本（CHANGELOG / tag）+ 功能（§4 / specs）组织。某期是否完成看 §4 该期 FR 状态是否都 `已交付`。
 
@@ -843,180 +732,3 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | manifest | 客户端 OTA / 业务能力清单；客户端 OTA 通过 HTTPS 拉取，使用拉取密钥鉴权，并以 sha256 校验制品完整性（ADR-054） |
 | JBIS | 业务对接平台：经济 / 背包等域，CP/Worker/桥/UI 插件无关，探针侧适配器 + manifest |
 | 制品库 | 内容寻址（sha256）资产库，去重 + md5/sha256 完整性校验（ADR-011） |
-
-[s001]: specs/inflight-backlog/spec.md
-[s002]: specs/provision-sponge/spec.md
-[s003]: specs/plugin-batch-deploy/spec.md
-[s004]: specs/serverprobe-ops-inflight/spec.md
-[s005]: specs/probe-dependency-cache/spec.md
-[s006]: specs/business-integration/fr-124-127-inventory.md
-[s007]: specs/console-ux-enhancement/spec.md
-[s008]: specs/ui-redesign/design.md
-[s009]: specs/process-metrics/spec.md
-[s010]: specs/backup-audit-backend/spec.md
-[s011]: specs/release-pipeline/spec.md
-[s012]: specs/network-proxy/spec.md
-[s013]: specs/self-update-github/spec.md
-[s014]: specs/node-page-redesign/spec.md
-[s015]: specs/node-runtime-panels/spec.md
-[s016]: specs/self-update-enhancement/spec.md
-[s017]: specs/task-center/spec.md
-[s018]: specs/emergency-cli/spec.md
-[s019]: specs/proxy-visual-config/spec.md
-[s020]: specs/update-page-cache/spec.md
-[s021]: specs/client-dist-redesign/spec.md
-[s022]: specs/heavy-modal-redesign/spec.md
-[s023]: specs/worker-binary-cp-cache/spec.md
-[s024]: specs/client-dist-publish-redesign/spec.md
-[s025]: specs/pull-key-viewable/spec.md
-[s026]: specs/updater-core-version-mgmt/spec.md
-[s027]: specs/frontend-mock-api/spec.md
-[s028]: specs/file-browser-component/spec.md
-[s029]: specs/observability-ia-redesign/spec.md
-[s030]: specs/notification-center/spec.md
-[s031]: specs/client-dist-observability/spec.md
-[s032]: specs/platform-statistics/spec.md
-[s033]: specs/worker-self-setup/spec.md
-[s034]: specs/task-force-stop/spec.md
-[s035]: specs/jdk-register-redesign/spec.md
-[s036]: specs/connectivity-selftest/spec.md
-[s037]: specs/instance-clone-modes/spec.md
-[s038]: specs/instance-list-redesign/spec.md
-[s039]: specs/instance-scale-backend/spec.md
-[s040]: specs/client-sign-key-autogen/spec.md
-[s041]: specs/client-dist-error-tracking/spec.md
-[s042]: specs/client-chunked-upload/spec.md
-[s043]: specs/client-trust-key-config/spec.md
-[s044]: specs/client-dist-clean-scope/spec.md
-[s045]: specs/updater-arch-simplification/spec.md
-[s046]: specs/updater-core-hotfix-telemetry/spec.md
-[s047]: specs/client-dist-security-firewall/spec.md
-[s048]: specs/client-dist-observability-rebuild/spec.md
-[s049]: specs/updater-core-build-metadata/spec.md
-[s050]: specs/console-redesign/design.md
-[s051]: specs/component-package-wiki/spec.md
-[s052]: specs/bot-stress-yaml-orchestration/spec.md
-[s053]: specs/worker-ws-token-secret/spec.md
-[s054]: specs/ssh-deploy-scripts/spec.md
-[s055]: specs/worker-embed-distribution/spec.md
-[s056]: specs/worker-reverse-stream/spec.md
-[s057]: specs/monorepo-unification/spec.md
-[s058]: specs/console-keepalive/spec.md
-[s059]: specs/node-runtime-library/spec.md
-[s060]: specs/import-existing-server/spec.md
-[s061]: specs/upload-streaming/spec.md
-[s062]: specs/tunnel-message-size-guard/spec.md
-[s063]: specs/node-package-management/spec.md
-[s064]: specs/bot-worker-deploy/spec.md
-[s065]: specs/crash-diagnostics/spec.md
-[s066]: specs/start-preflight/spec.md
-[s067]: specs/long-op-tasks/spec.md
-[s068]: specs/instance-reverse-reconcile/spec.md
-[s069]: specs/topology-scale/spec.md
-[s070]: specs/users-search-pagination/spec.md
-[s071]: specs/tasks-pagination/spec.md
-[s072]: specs/backup-storage-update/spec.md
-[s073]: specs/console-players-backup-segments/spec.md
-[s074]: specs/metrics-batch-series/spec.md
-[s075]: specs/daemon-survival/spec.md
-[s076]: specs/provision-damaged-rebuild/spec.md
-[s077]: specs/instance-system-metrics/spec.md
-[s078]: specs/instance-env-vars/spec.md
-[s079]: specs/instance-log-history/spec.md
-[s080]: specs/client-upload-efficiency/spec.md
-[s081]: specs/artifact-external-storage/spec.md
-[s082]: specs/artifact-storage-migration/spec.md
-[s083]: specs/artifact-s3-reconcile/spec.md
-[s084]: specs/client-updater-guide-embed-info/spec.md
-[s085]: specs/updater-local-log-rotate/spec.md
-[s086]: specs/docker-compose-deploy/spec.md
-[s087]: specs/cp-oneclick-install/spec.md
-[s088]: specs/client-dist-kpi-semantics/spec.md
-[s089]: specs/client-dist-stats-monitor-enrich/spec.md
-[s090]: specs/client-dist-security-ops-loop/spec.md
-[s091]: specs/client-telemetry-enrich-privacy/spec.md
-[s092]: specs/client-dist-csv-export/spec.md
-[s093]: specs/bot-distributed-load/spec.md
-[s094]: specs/bot-scenario-engine/spec.md
-[s095]: specs/bot-load-probe-events/spec.md
-[s096]: specs/bot-runtime-recovery/spec.md
-[s097]: specs/bot-load-runner/spec.md
-[s098]: specs/bot-load-wizard/spec.md
-[s099]: specs/bot-load-observability/spec.md
-[s100]: specs/bot-load-platform/super-spec.md
-[s101]: specs/file-permission-foundation/spec.md
-[s102]: specs/import-permission-path-ux/spec.md
-[s103]: specs/file-explorer-windows-ux/spec.md
-[s104]: specs/file-explorer-multi-window/spec.md
-[s105]: specs/file-explorer-cross-window-dnd/spec.md
-[s106]: specs/file-explorer-unified-shell/spec.md
-[s107]: specs/agent-token/spec.md
-[s108]: specs/jm-agent-cli/spec.md
-[s109]: specs/mcp-bridge/spec.md
-[s110]: specs/agent-safety-gate/spec.md
-[s111]: specs/cp-mcp-server/spec.md
-[s112]: specs/agent-call-log/spec.md
-[s113]: specs/node-offline-archive/spec.md
-[s114]: specs/agent-capability-policy-v2/spec.md
-[s115]: specs/mcp-instance-operations/spec.md
-[s116]: specs/mcp-content-operations/spec.md
-[s117]: specs/mcp-bot-orchestration/spec.md
-[s118]: specs/bot-load-resource-capacity/spec.md
-[s119]: specs/managed-resource-attribution/spec.md
-[s120]: specs/bot-runtime-observability/spec.md
-[s121]: specs/platform-observability-overview/spec.md
-[s122]: specs/bot-combat-soak/spec.md
-[s123]: specs/user-invitation-and-registration-security/spec.md
-[s124]: specs/managed-process-diagnostics-control/spec.md
-[s125]: specs/artifact-version-library/spec.md
-[s126]: specs/versioned-user-systemd-deploy/spec.md
-[s127]: specs/local-serverprobe-upload/spec.md
-[s128]: specs/console-log-view-redesign/spec.md
-[s129]: specs/console-immersive-workspace/spec.md
-[s130]: specs/instance-layout-redesign/spec.md
-[s131]: specs/client-dist-machine-drilldown/spec.md
-[s132]: specs/client-dist-insight-cards/spec.md
-[s133]: specs/client-dist-ia-merge/spec.md
-[s134]: specs/nav-ia-role-model/spec.md
-[s135]: specs/instance-capability-profile/spec.md
-[s136]: specs/mc-direct-probe/spec.md
-[s137]: specs/instance-detail-adaptation/spec.md
-[s138]: specs/instance-config-surface/spec.md
-[s139]: specs/instance-list-and-topology/spec.md
-[s140]: specs/restart-resilience/spec.md
-[s141]: specs/cluster-ops-orchestration/spec.md
-[s142]: specs/instance-health-selfheal/spec.md
-[s143]: specs/bot-reclaim/spec.md
-[s144]: specs/cluster-observability/spec.md
-[s145]: specs/capacity-and-slo/spec.md
-[s146]: specs/performance-attribution/spec.md
-[s147]: specs/instance-snapshot-rollback/spec.md
-[s148]: specs/runtime-quota-enforcement/spec.md
-[s149]: specs/binary-version-management/spec.md
-[s150]: specs/cross-instance-ranking/spec.md
-[s151]: specs/crash-diagnostics-enhancement/spec.md
-[s152]: specs/worker-log-platform-contract/spec.md
-[s153]: specs/worker-log-acquisition/spec.md
-[s154]: specs/worker-log-normalizer/spec.md
-[s155]: specs/worker-victorialogs-runtime/spec.md
-[s156]: specs/worker-log-lifecycle/spec.md
-[s157]: specs/worker-log-deep-archive/spec.md
-[s158]: specs/worker-log-query-federation/spec.md
-[s159]: specs/cp-log-query-coordinator/spec.md
-[s160]: specs/log-ingest-cutover/spec.md
-[s161]: specs/logs-center-tiered-ui/spec.md
-[s162]: specs/worker-log-canonical-eventstore/spec.md
-[s163]: specs/mcp-stateless-endpoint/spec.md
-[s164]: specs/qqbot-notification-channel/spec.md
-[s165]: specs/qqbot-group-discovery/spec.md
-[s166]: specs/log-index-sqlite/spec.md
-[s167]: specs/log-startup-reconcile/spec.md
-[s168]: specs/auto-adopt-orphans/spec.md
-[s169]: specs/log-verify-chunking/spec.md
-[s170]: specs/daemon-cgroup-isolation/spec.md
-[s171]: specs/log-ingest-register-lock/spec.md
-[s172]: specs/log-cost-governance/spec.md
-[s173]: specs/log-acquisition-rules/spec.md
-[s174]: specs/log-config-delivery/spec.md
-[s175]: specs/log-collection-switches/spec.md
-[s176]: specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项

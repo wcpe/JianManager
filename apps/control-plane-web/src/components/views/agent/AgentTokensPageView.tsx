@@ -10,7 +10,7 @@
  *         parseIdInput、mergeIds、formatScopeSummary
  * @sync apps/control-plane-web/src/pages/AgentTokensPage.tsx（容器，再导出三个纯函数）、
  *        apps/control-plane-web/src/pages/AgentTokensPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-387 Agent Token 管理，消费 FR-384 API）
+ * @since FR-508（组件受控化迁包；原页 FR-387 Agent Token 管理，消费 FR-384 API）
  */
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

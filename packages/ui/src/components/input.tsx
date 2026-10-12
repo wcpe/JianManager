@@ -3,7 +3,7 @@
  * @input  lib/utils 的 cn、lib/focus-ring、lib/interaction-overlay 的 disabledState
  * @output Input
  * @sync   改动交互或透传契约时同步 input.test.tsx
- * @since  FR-496
+ * @since  FR-502
  */
 import * as React from "react"
 
@@ -12,7 +12,7 @@ import { focusRing, invalidFieldState } from "../lib/focus-ring"
 import { disabledState } from "../lib/interaction-overlay"
 
 /**
- * 文本输入框（FR-496 阶段 6 重做）。
+ * 文本输入框（FR-502 阶段 6 重做）。
  *
  * 保持"薄封装原生 input"这一契约不变（type / name / disabled / aria-* 一律透传，
  * 受控与非受控都按浏览器语义工作），只把样式取值收敛到共享常量：

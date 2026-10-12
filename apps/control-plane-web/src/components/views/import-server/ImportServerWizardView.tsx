@@ -10,7 +10,7 @@
  *         makeImportServerQueryInit
  * @sync apps/control-plane-web/src/components/ImportServerWizard.tsx、
  *        apps/control-plane-web/src/components/ImportServerWizard.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-302 导入现有服务器向导、FR-374 权限失败诊断与就地写预检）
+ * @since FR-508（组件受控化迁包；原 FR-302 导入现有服务器向导、FR-374 权限失败诊断与就地写预检）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

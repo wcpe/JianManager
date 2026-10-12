@@ -3,7 +3,7 @@
  * @input Panel/Button/Input/Select/Table/Badge 原语、layout 页壳（PageShell/PageHeader）、lucide-react 图标、翻译上下文
  * @output AgentCallLogsPageView、AgentCallLogsPageViewProps、AgentCallLogsQuery、AgentCallLogRow、AgentTokenOption
  * @sync apps/control-plane-web/src/pages/AgentCallLogsPage.tsx、apps/control-plane-web/src/pages/AgentCallLogsPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-391 / FR-390 Agent 调用流水）
+ * @since FR-508（组件受控化迁包；原页 FR-391 / FR-390 Agent 调用流水）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

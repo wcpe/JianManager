@@ -5,7 +5,7 @@
  * @output NotificationCenterPageView、NotificationCenterPageViewProps、NotificationFeedItem、
  *         NotificationFeedPage、NotificationFeedQuery、NotificationFeedSource、NotificationFeedLevel
  * @sync apps/control-plane-web/src/pages/NotificationCenterPage.tsx、apps/control-plane-web/src/pages/NotificationCenterPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-216 统一通知模型、FR-226 通知-任务联动）
+ * @since FR-508（组件受控化迁包；原页 FR-216 统一通知模型、FR-226 通知-任务联动）
  */
 import { useTranslation } from 'react-i18next'
 import { Bell } from 'lucide-react'

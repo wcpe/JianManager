@@ -16,7 +16,7 @@
  *         UploadProgressBar（+ Props）、ReviewViewToggle（+ Props）、PublishStepIndicator（+ Props）
  * @sync apps/control-plane-web/src/pages/ClientPublishPage.tsx、
  *       apps/control-plane-web/src/pages/ClientPublishPage.dom.test.tsx
- * @since FR-502（页面受控化迁包；原 FR-191 独立路由页、FR-250 本地暂存 + 延迟批量上传、FR-255 清理范围、FR-350 定点上传）
+ * @since FR-508（页面受控化迁包；原 FR-191 独立路由页、FR-250 本地暂存 + 延迟批量上传、FR-255 清理范围、FR-350 定点上传）
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'

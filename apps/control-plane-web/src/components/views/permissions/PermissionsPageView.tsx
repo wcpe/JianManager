@@ -8,7 +8,7 @@
  *         PermissionsCatalogNode、PermissionsCatalogGroup、PermissionsUserPermissions、
  *         SaveUserPermissionsArgs、PermissionsToggleEvent
  * @sync apps/control-plane-web/src/pages/PermissionsPage.tsx、apps/control-plane-web/src/pages/PermissionsPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-432 权限管理三栏页）
+ * @since FR-508（组件受控化迁包；原页 FR-432 权限管理三栏页）
  */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'

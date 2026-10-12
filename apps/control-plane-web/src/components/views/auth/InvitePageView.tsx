@@ -3,7 +3,7 @@
  * @input Panel/Button/Input/FieldLabel 原语、翻译上下文
  * @output InvitePageView、InvitePageViewProps、InviteValues
  * @sync apps/control-plane-web/src/pages/InvitePage.tsx、apps/control-plane-web/src/pages/InvitePage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-405 邮箱邀请，其前身 FR-001/002/156）
+ * @since FR-508（组件受控化迁包；原 FR-405 邮箱邀请，其前身 FR-001/002/156）
  */
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

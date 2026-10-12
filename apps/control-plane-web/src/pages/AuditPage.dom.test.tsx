@@ -144,7 +144,7 @@ describe('AuditPage（mock 假后端）', () => {
     expect(requests[2].searchParams.get('pageSize')).toBe('100')
     expect(await screen.findByText('已加载 250 / 共 250 条')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '加载更多' })).toBeDisabled()
-    // 视口裁剪（FR-496 阶段 6）：250 行已全部加载，但视口外的行不进 DOM（不再一次性铺满整页）。
+    // 视口裁剪（FR-502 阶段 6）：250 行已全部加载，但视口外的行不进 DOM（不再一次性铺满整页）。
     expect(screen.queryByText('audit.row.250')).not.toBeInTheDocument()
 
     // 滚到底 → 末页数据确实可浏览（原断言「第 N 行在 DOM」要证的就是这条路径）。

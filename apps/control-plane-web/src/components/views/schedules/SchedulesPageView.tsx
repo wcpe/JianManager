@@ -6,7 +6,7 @@
  * @output SchedulesPageView、SchedulesPageViewProps、ScheduleFilter、ScheduleLogRow、ScheduleLogsView、
  *         ScheduleLogsViewProps、ScheduleFormDialogView、ScheduleFormDialogViewProps、SchedulesInstancePickerArgs
  * @sync apps/control-plane-web/src/pages/SchedulesPage.tsx、apps/control-plane-web/src/pages/SchedulesPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-012 定时任务、FR-153 cron 可读文案与命令编辑、FR-207 mock 域簇）
+ * @since FR-508（组件受控化迁包；原页 FR-012 定时任务、FR-153 cron 可读文案与命令编辑、FR-207 mock 域簇）
  */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

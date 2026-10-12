@@ -16,7 +16,7 @@
  *         SystemUpdateWorkerAssetRow、SystemUpdateWorkerAssetTarget、SystemUpdateNodePending、SystemUpdateRolloutDraft、
  *         SystemUpdateRollout、SystemUpdateRolloutNode、SystemUpdateCheckResult
  * @sync apps/control-plane-web/src/pages/SystemUpdatePage.tsx、apps/control-plane-web/src/pages/SystemUpdatePage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-081 面板自更新、FR-059 危险确认门禁、FR-110 未配源版本回显、
+ * @since FR-508（组件受控化迁包；原页 FR-081 面板自更新、FR-059 危险确认门禁、FR-110 未配源版本回显、
  *        FR-155 金丝雀分批、FR-182 备份回滚、FR-186 检查结果缓存、FR-190 Worker 二进制缓存）
  */
 import { useState } from 'react'

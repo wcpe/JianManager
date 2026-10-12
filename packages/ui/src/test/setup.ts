@@ -3,7 +3,7 @@ import { cleanup } from '@testing-library/react'
 import { afterEach } from 'vitest'
 
 /**
- * packages/ui 组件测试的 jsdom 全局 setup（FR-496 阶段 0）。
+ * packages/ui 组件测试的 jsdom 全局 setup（FR-502 阶段 0）。
  *
  * 刻意保持最小：组件库测试不挂 msw、不碰鉴权态、不依赖假后端，
  * 因此只需在每例后卸载渲染树，防止 DOM 与副作用在用例间泄漏。

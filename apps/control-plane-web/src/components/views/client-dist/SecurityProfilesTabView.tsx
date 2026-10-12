@@ -7,7 +7,7 @@
  *        views/UntrustedFieldBadge、Badge/Button/Dialog/Input/Panel/Table 原语、翻译上下文
  * @output SecurityProfilesTabView、SecurityProfilesTabViewProps、ProfileMaskers
  * @sync apps/control-plane-web/src/components/client-dist/SecurityProfilesTab.tsx
- * @since FR-502（组件受控化迁包；原 FR-430 / ADR-088 客户端画像 Tab，含 FR-360 面板脱敏）
+ * @since FR-508（组件受控化迁包；原 FR-430 / ADR-088 客户端画像 Tab，含 FR-360 面板脱敏）
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'

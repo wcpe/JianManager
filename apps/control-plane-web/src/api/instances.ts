@@ -95,7 +95,7 @@ export interface InstanceAggregate {
 }
 
 /**
- * 实例列表的兜底轮询间隔（FR-496 阶段 6 补丁）。
+ * 实例列表的兜底轮询间隔（FR-502 阶段 6 补丁）。
  *
  * 【为什么删掉了原先的「过渡态 2 秒轮询」】原实现是
  * `some(STARTING || STOPPING) ? 2000 : false`，设计意图是「只在实例启停过程中加速刷新」。

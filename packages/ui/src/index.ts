@@ -48,7 +48,7 @@ export type { SparkPoint } from './charts/Sparkline'
 export type { ChartSeries, ChartReferenceLine } from './charts/TimeSeriesChart'
 export type { MonitorSource, MonitorSeriesHook } from './charts/MonitorSkeleton'
 
-// 跨组件基础设施（FR-496 阶段 6）：焦点环/交互覆盖层常量与 a11y hooks
+// 跨组件基础设施（FR-502 阶段 6）：焦点环/交互覆盖层常量与 a11y hooks
 export * from './hooks'
 export * from './lib/interaction-overlay'
 export * from './lib/utils'
@@ -84,7 +84,7 @@ export * from './lib/stat-card'
 export * from './lib/tone'
 // 显式列出而非 `export *`：`VirtualWindow` / `VirtualWindowInput` 与 `./lib/logs-filters` 的同名类型语义不同
 
-// ==== FR-502 迁移批：新增视图按域补录 ====
+// ==== FR-508 迁移批：新增视图按域补录 ====
 // 逐条列出以便逐个核对；同名冲突沿用本文件既有先例（显式列出，冲突名走深路径）。
 // 显式列出而非 export *：AgentTokenOption 与同域其它视图同名（字段不同），
 // barrel 里不能同时通配；需要本模块版该类型的调用方走深路径。

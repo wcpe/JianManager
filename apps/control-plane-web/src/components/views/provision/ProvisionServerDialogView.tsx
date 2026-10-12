@@ -9,7 +9,7 @@
  *        apps/control-plane-web/src/components/ProvisionServerDialog.dom.test.tsx、
  *        apps/control-plane-web/src/components/ProvisionServerDialog.fr316.dom.test.tsx、
  *        apps/control-plane-web/src/components/ProvisionServerDialog.fr328.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-034 一键搭建、FR-046 核心解析、FR-072 系统可获取项、FR-316 版本-JDK 预检、FR-328 下拉可滚动）
+ * @since FR-508（组件受控化迁包；原 FR-034 一键搭建、FR-046 核心解析、FR-072 系统可获取项、FR-316 版本-JDK 预检、FR-328 下拉可滚动）
  */
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

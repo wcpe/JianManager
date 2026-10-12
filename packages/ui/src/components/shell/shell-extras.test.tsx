@@ -6,7 +6,7 @@ import { CommandPalette, type CommandPaletteItem } from './CommandPalette'
 import { ObjectPageHeader } from './ObjectPageHeader'
 
 /**
- * 外壳补充件测试（FR-496 阶段 4）：命令面板 + 对象页头。
+ * 外壳补充件测试（FR-502 阶段 4）：命令面板 + 对象页头。
  *
  * 与阶段 3 的布局测试同一条思路——断言落在**结构性契约**上，不碰样式类名：
  * 命令面板锁的是「受控开合、键盘模型、检索口径（原页面名与原路由都能查到）」；

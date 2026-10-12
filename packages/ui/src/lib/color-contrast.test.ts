@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { meetsContrast, parseColor, parseOklch, toHex, wcagContrast } from './color-contrast'
 
 /**
- * 5 套主题 × 明暗 = 10 组配色的 WCAG 对比度自动校验（FR-496 阶段 2）。
+ * 5 套主题 × 明暗 = 10 组配色的 WCAG 对比度自动校验（FR-502 阶段 2）。
  *
  * ── 为什么 ──
  * themes.css 里至今保留着人工验算痕迹（「近白对 oklch(0.704) 青绿仅 2.39:1，不达 4.5:1；

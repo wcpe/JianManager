@@ -7,7 +7,7 @@
  *        Button/Panel/StatusBadge/Table/布局层原语、翻译上下文
  * @output UsersPageView、UsersPageViewProps、UserRow、UserInvitationRow、CreateUserPayload、UsersPermissionsLinkArgs
  * @sync apps/control-plane-web/src/pages/UsersPage.tsx、apps/control-plane-web/src/pages/UsersPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-199 身份访问域，写入口可见性为 FR-432 user.manage）
+ * @since FR-508（组件受控化迁包；原页 FR-199 身份访问域，写入口可见性为 FR-432 user.manage）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

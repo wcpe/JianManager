@@ -8,7 +8,7 @@
  * @output BotGroupActions、BotGroupActionsProps、BotGroupRow、BotGroupRowProps、BotGroupPeek、
  *         BotGroupPeekProps、BOT_PEEK_PAGE_SIZE
  * @sync apps/control-plane-web/src/pages/BotsPage.tsx（容器保留 useBotBatch/useBots 取数与路由装配）
- * @since FR-502（组件受控化迁包；原页 FR-040 全局 Bot 页、FR-147 分组总览与单组批量、FR-371 会话与模板页签）
+ * @since FR-508（组件受控化迁包；原页 FR-040 全局 Bot 页、FR-147 分组总览与单组批量、FR-371 会话与模板页签）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

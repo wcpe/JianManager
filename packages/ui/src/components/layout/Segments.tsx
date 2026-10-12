@@ -3,7 +3,7 @@ import * as React from 'react'
 import { cn } from '../../lib/utils'
 
 /**
- * 分段控件（FR-496 阶段 6 收尾）：同一维度的少数几种互斥视图之间的切换。
+ * 分段控件（FR-502 阶段 6 收尾）：同一维度的少数几种互斥视图之间的切换。
  *
  * 与 `PlatformTabs` 的分工：`PlatformTabs` 切的是**同一工作区内的一组页面**（内容层级，
  * 原型 `.platform-tabs`，下划线样式）；本组件切的是**当前页内同一份数据的少数几种呈现**

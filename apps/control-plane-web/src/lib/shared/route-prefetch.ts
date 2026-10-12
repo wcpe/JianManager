@@ -3,7 +3,7 @@ import { useEffect, useMemo } from 'react'
 import { ROUTE_LOADERS, matchRouteKey } from './route-chunks'
 
 /**
- * 路由 chunk 预取（FR-496 阶段 6 补丁）。
+ * 路由 chunk 预取（FR-502 阶段 6 补丁）。
  *
  * 切页等待的大头是目标页 chunk 的下载，而 `React.lazy` 只在首次渲染时才发起 import——
  * 用户点下去才开始下载。本模块把「导航意图」（hover / focus / 鼠标进入侧栏）翻译成一次

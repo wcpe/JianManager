@@ -12,7 +12,7 @@
  *         InstanceConsoleLinkArgs
  * @sync apps/control-plane-web/src/components/console/InstanceConsolePage.tsx、
  *        apps/control-plane-web/src/components/console/InstanceConsolePage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-269 统一控制台、FR-293 最近打开、FR-295/ADR-067 页签 keep-alive、
+ * @since FR-508（组件受控化迁包；原页 FR-269 统一控制台、FR-293 最近打开、FR-295/ADR-067 页签 keep-alive、
  *        FR-312 失败原因横幅、FR-331 搭建中禁启、FR-342 损毁重建、FR-343 TPS 真时序、FR-412 瘦身顶栏、
  *        FR-413/445/448 页签重组与能力门控、FR-417 失败原因复制、FR-422/423 视口自适应与分栏、FR-471 运行态漂移）
  */

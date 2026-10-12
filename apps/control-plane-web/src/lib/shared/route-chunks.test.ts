@@ -4,7 +4,7 @@ import { ROUTE_CHUNKS, ROUTE_KEYS, matchRouteKey } from './route-chunks'
 import { flatNavItems } from '@/lib/shared/nav-config'
 
 /**
- * 路由 chunk 表测试（FR-496 阶段 6 补丁）。
+ * 路由 chunk 表测试（FR-502 阶段 6 补丁）。
  *
  * 这张表是「路由表 + 预取」的唯一真源，一旦漏项就意味着某个入口 hover 了却什么都没预取到
  * （静默失效，界面上看不出来）。所以这里的重点是**覆盖度**：导航里出现的每个目标都必须能查到；

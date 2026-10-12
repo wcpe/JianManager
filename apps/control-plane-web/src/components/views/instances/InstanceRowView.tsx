@@ -10,7 +10,7 @@
  * @output InstanceRowView、InstanceRowViewProps、INSTANCE_ROW_HEIGHT、INSTANCE_EXPANDED_ROW_HEIGHT
  * @sync apps/control-plane-web/src/pages/InstancesPage.tsx（容器保留取数与装配，经 renderRow 逐行调用）、
  *        apps/control-plane-web/src/pages/InstancesPage.dom.test.tsx（与 grouping / runtimeDrift / rowMenu 三个针对性测试）
- * @since FR-502（组件受控化迁包；原页 FR-047 多维筛选、FR-058 批量选择、FR-136 分组与节点:端口、
+ * @since FR-508（组件受控化迁包；原页 FR-047 多维筛选、FR-058 批量选择、FR-136 分组与节点:端口、
  *        FR-138 行内主操作与「⋯」次要菜单、FR-302 就地导入徽章、FR-310 运行中删除、FR-331 搭建中禁启、
  *        FR-445 代理能力画像、FR-452 分组树表、FR-471 运行态漂移）
  */

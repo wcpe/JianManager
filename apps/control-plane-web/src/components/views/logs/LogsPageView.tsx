@@ -10,7 +10,7 @@
  * @sync apps/control-plane-web/src/pages/LogsPage.tsx、apps/control-plane-web/src/pages/LogsPage.dom.test.tsx、
  *        apps/control-plane-web/src/pages/LogsPage.federation.dom.test.tsx、
  *        apps/control-plane-web/src/pages/LogsPage.degradeReason.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-049 查看 / FR-050 检索 / FR-150 增强 + FR-482 覆盖/失败态接线）
+ * @since FR-508（组件受控化迁包；原页 FR-049 查看 / FR-050 检索 / FR-150 增强 + FR-482 覆盖/失败态接线）
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

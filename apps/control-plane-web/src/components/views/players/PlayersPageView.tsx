@@ -13,7 +13,7 @@
  *         PlayersLiveTabView、PlayersLiveTabViewProps、PlayersBansTabView、PlayersBansTabViewProps、
  *         PlayersWhitelistTabView、PlayersWhitelistTabViewProps
  * @sync apps/control-plane-web/src/pages/PlayersPage.tsx（容器）、apps/control-plane-web/src/pages/PlayersPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原页 FR-054 玩家治理 + FR-066 实时玩家事件 + FR-067 探针降级）
+ * @since FR-508（组件受控化迁包；原页 FR-054 玩家治理 + FR-066 实时玩家事件 + FR-067 探针降级）
  */
 import { Fragment, useId, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

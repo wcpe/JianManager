@@ -7,7 +7,7 @@
  *         ClientUpdaterCoreUploadPayload、ClientUpdaterCoreUploadOutcome）
  * @sync apps/control-plane-web/src/components/ClientUpdaterCoreSelector.tsx（容器）、
  *       apps/control-plane-web/src/components/ClientUpdaterCoreSelector.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-259 updater-core 归档版本切换与 hotfix 上传）
+ * @since FR-508（组件受控化迁包；原 FR-259 updater-core 归档版本切换与 hotfix 上传）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'

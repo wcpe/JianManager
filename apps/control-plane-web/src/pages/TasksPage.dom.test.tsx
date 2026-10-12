@@ -132,7 +132,7 @@ describe('TasksPage（mock 假后端）', () => {
     await userEvent.click(screen.getByRole('button', { name: '加载更多' }))
     expect(await screen.findByText(`共 ${filteredTotal} 条 · 已加载 200`)).toBeInTheDocument()
 
-    // 视口裁剪（FR-496 阶段 6）：已加载 200 行，但视口外的行不进 DOM——渲染量只与视口有关。
+    // 视口裁剪（FR-502 阶段 6）：已加载 200 行，但视口外的行不进 DOM——渲染量只与视口有关。
     const scroller = screen.getByTestId('tasks-virtual')
     expect(screen.queryByText(batchTasks[199].title)).not.toBeInTheDocument()
     // 滚到底 → 末窗数据可浏览（证明「加载更多」扩出来的窗口确实可达，而非只改了个计数）。

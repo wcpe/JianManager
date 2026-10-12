@@ -3,7 +3,7 @@
  * @input Panel/Button/Table 原语、layout 页壳（PageShell/PageHeader）、lucide-react 图标、翻译上下文
  * @output McpActivityPageView、McpActivityPageViewProps、McpActivityRow、WINDOW_PRESETS、McpWindowPreset
  * @sync apps/control-plane-web/src/pages/McpActivityPage.tsx、apps/control-plane-web/src/pages/McpActivityPage.dom.test.tsx、apps/control-plane-web/e2e/mcp-activity.spec.ts
- * @since FR-502（组件受控化迁包；原 FR-391 / ADR-096 去会话化后的 Token 级活动视图）
+ * @since FR-508（组件受控化迁包；原 FR-391 / ADR-096 去会话化后的 Token 级活动视图）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

@@ -14,7 +14,7 @@
  *         ClientDistLogsLinkRenderer、ClientDistRequestLogsView（+ Props）、ClientDistAggregateLogsView（+ Props）
  * @sync apps/control-plane-web/src/components/client-dist/ClientDistLogsTab.tsx、
  *       apps/control-plane-web/src/components/client-dist/ClientDistLogsTab.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-430 / ADR-088 去重合并的唯一入口，含 FR-357 加厚请求表、FR-265 脱敏详情）
+ * @since FR-508（组件受控化迁包；原 FR-430 / ADR-088 去重合并的唯一入口，含 FR-357 加厚请求表、FR-265 脱敏详情）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

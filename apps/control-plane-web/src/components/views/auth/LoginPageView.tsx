@@ -3,7 +3,7 @@
  * @input Panel/Input/PasswordInput/Label/Button 原语、翻译上下文
  * @output LoginPageView、LoginPageViewProps、LoginValues
  * @sync apps/control-plane-web/src/pages/LoginPage.tsx、apps/control-plane-web/src/pages/LoginPage.dom.test.tsx
- * @since FR-502（组件受控化迁包；原 FR-157 认证体验、FR-199 身份访问域）
+ * @since FR-508（组件受控化迁包；原 FR-157 认证体验、FR-199 身份访问域）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
