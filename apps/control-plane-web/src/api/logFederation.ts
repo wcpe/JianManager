@@ -556,8 +556,10 @@ export function rateLimitRetry(failureCount: number, error: unknown): boolean {
 
 /** 与 rateLimitRetry 配套的退避（按失败次数取，越界用最后一段）。 */
 export function rateLimitRetryDelay(attempt: number): number {
+  // 末尾兜底：延迟表是字面量元组、恒非空，`!` 仅安抚 noUncheckedIndexedAccess
+  //（合并态：主干此段写于本仓库启用该严格选项之前）。
   return RATE_LIMIT_QUERY_RETRY_DELAYS_MS[attempt] ??
-    RATE_LIMIT_QUERY_RETRY_DELAYS_MS[RATE_LIMIT_QUERY_RETRY_DELAYS_MS.length - 1]
+    RATE_LIMIT_QUERY_RETRY_DELAYS_MS[RATE_LIMIT_QUERY_RETRY_DELAYS_MS.length - 1]!
 }
 
 /** 带短退避重试的 GET：**仅对 429（限流）重试**，其它错误原样抛出。 */
