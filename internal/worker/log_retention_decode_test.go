@@ -69,3 +69,45 @@ log_retention:
 		t.Errorf("冷层保留期应统一为 730d，得到 %s", n.ColdRetention)
 	}
 }
+
+// 回归（B1，2026-10-12 修复）：`log_retention.trigger.interval` 必须**真的生效**。
+//
+// 缺陷形态：生产唯一的驱动器构造点 `retention.NewDriver` 取的是
+// `policy.Trigger.Normalize().Interval`（见 driver.go），而本结构体此前**没有 Interval 字段**
+// ⇒ 运维按直觉写 `trigger.interval` 会被 viper **静默丢弃**（不报错、不警告），
+// 实际调度节奏恒为 `DefaultDriverInterval`（15m）。同时样例配置把 `sweep.interval`
+// 当作调度旋钮呈现，而它只作用于删除执行器 `Sweeper`（本版本生产无构造点）
+// ⇒ 形成「文档说的键不生效、生效的键配不了」的死旋钮。
+//
+// 转红方式（实测）：删掉 `LogRetentionTriggerConfig.Interval` 字段（或删掉
+// `RetentionPolicy()` 里的解析块）⇒ 断言①（解析值必须等于配置值）立即红。
+func TestRetentionTriggerIntervalTakesEffect(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker.yml")
+	yaml := `
+log_retention:
+  enabled: true
+  trigger:
+    interval: 3m
+`
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("写夹具失败：%v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load 失败：%v", err)
+	}
+	pol, err := cfg.RetentionPolicy()
+	if err != nil {
+		t.Fatalf("RetentionPolicy 失败：%v", err)
+	}
+
+	// ① 配置值必须被解析（此前会被静默丢弃为 0）。
+	if got := pol.Trigger.Interval; got != 3*time.Minute {
+		t.Fatalf("trigger.interval 未被解析：得到 %v，期望 3m（该键曾因结构体缺字段而被 viper 静默丢弃）", got)
+	}
+	// ② 驱动器**实际使用**的值必须与配置一致（Normalize 不得把它改回默认）。
+	if got := pol.Trigger.Normalize().Interval; got != 3*time.Minute {
+		t.Fatalf("驱动器实际节奏与配置不一致：Normalize 后得到 %v，期望 3m", got)
+	}
+}

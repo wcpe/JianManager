@@ -845,6 +845,18 @@ type LogRetentionTriggerConfig struct {
 	DiskPercent float64 `mapstructure:"disk_percent"`
 	// MinAge 磁盘触发时的最小分区年龄（字符串，支持 7d）；空 = 用默认 7d。
 	MinAge string `mapstructure:"min_age"`
+	// Interval 是**冷层搬运驱动器的调度周期**（字符串，支持 15m/1h）。
+	//
+	// 为什么必须有本键（B1，2026-10-12 修复）：生产唯一的驱动器构造点
+	// `retention.NewDriver` 取的是 `policy.Trigger.Normalize().Interval`
+	// （见 driver.go 的 `interval: policy.Trigger.Normalize().Interval`），
+	// 而不是 `sweep.interval`（后者只作用于删除执行器 `Sweeper`，而本版本
+	// `NewSweeper` 在生产**没有构造点**）。
+	// 此前本结构体缺 Interval ⇒ 运维若按直觉写 `trigger.interval` 会被 viper **静默丢弃**
+	// （不报错、不警告），实际节奏恒为 `DefaultDriverInterval`；而样例配置把
+	// `sweep.interval` 当作调度旋钮呈现 ⇒ 形成"文档说的键不生效、生效的键配不了"的死旋钮。
+	// 空/非法回退 DefaultDriverInterval。
+	Interval string `mapstructure:"interval"`
 }
 
 // LogRetentionSource 某个来源的保留期覆盖。
@@ -907,6 +919,15 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 			return retention.Policy{}, fmt.Errorf("log_retention.trigger.min_age: %w", err)
 		}
 		p.Trigger.MinAge = d
+	}
+
+	// B1：搬运驱动器的调度周期（NewDriver 实际读取的键）。空 = 用 DefaultDriverInterval。
+	if strings.TrimSpace(cfg.Trigger.Interval) != "" {
+		d, err := retention.ParseTTL(cfg.Trigger.Interval)
+		if err != nil {
+			return retention.Policy{}, fmt.Errorf("log_retention.trigger.interval: %w", err)
+		}
+		p.Trigger.Interval = d
 	}
 	if len(cfg.ByLevel) > 0 {
 		p.ByLevel = make(map[string]time.Duration, len(cfg.ByLevel))
