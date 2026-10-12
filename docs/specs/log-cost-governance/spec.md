@@ -3,7 +3,7 @@
 > 状态：**部分落地**（采样、保留及冷层驱动器已接线；本轮修复的完整回归与真机复验尚须单独核验，不沿用历史自证作为当前通过结论；观测面与分级验证等边界见 §7）
 > 关联 PRD：**FR-501**　·　ADR：**ADR-098**（日志保留、分层与归档）/**ADR-099**（成本治理与不变量 R）
 > 关联：FR-498（采集侧成本）、FR-477（分区 Catalog 与冷热 Lifecycle）、FR-474（容量门禁）
-> 实测环境：本地 VictoriaLogs **v1.52.0**（真二进制，`.tmp/lr-probe/`，未触碰生产）
+> 实测环境：本地 VictoriaLogs **v1.52.0**（真二进制，独立数据目录，未触碰生产）
 
 > **编号对账记录（2026-10-02）**：本 spec 原在 CHANGELOG 中被标为「FR-499」，而 PRD 的 FR-499 已被**采集登记路径与长临界区解耦**（`docs/specs/log-ingest-register-lock/spec.md`）占用，属重号。经对账：FR-499 保留给登记锁解耦不动，本项（日志成本治理）取 **FR-501**（对账时 501–519 全仓无引用，为明确空号；FR-500 已由 daemon cgroup 隔离占用）。CHANGELOG 与 PRD 登记行已同步改号/补登；**此后引用本项一律用 FR-501**。
 
@@ -260,8 +260,8 @@ const (
 - `TestDefaultPolicyMatchesRecommendedTTLs` — 热 90d / 冷 730d 默认，且冷层不得按级别分档
 
 ### 6.6 变异实验（`go test -overlay`，原文件零改动）
-- `logs/sampling`：**11/11 全部以断言转红**（`.tmp/sampling-mutation/REPORT.txt`）
-- `logs/retention`：**21/21 全部以断言转红**（`.tmp/retention-mutation/REPORT.txt`，编号 N1–N21）
+- `logs/sampling`：**11/11 全部以断言转红**（变异报告落在 `.tmp/`，不入库 ⇒ 按其方法自行复跑）
+- `logs/retention`：**21/21 全部以断言转红**（编号 N1–N21；变异报告落在 `.tmp/`，不入库）
 
 **计数口径（全仓引用处以此为准）**：`retention` 的 21 条 = 策略/计划/执行器/VL 客户端 16 条 + 冷层搬运驱动器新增 5 条（N17–N21）；`sampling` 11 条；两包**合计 32/32**。
 

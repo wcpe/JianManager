@@ -51,7 +51,7 @@ pollOnce()  { cycleMu.Lock(); … for 每个源 { pollSource } … cycleMu.Unloc
 
 ## 2. 锁审计（改动前的现状真貌）
 
-审计方法：AST 级扫描（`.tmp/fix-register-lock/audit`，按 `Lock/RLock` 调用点定位函数、持有区间与区间内的长操作调用）→ 人工判定长临界区 → 饱和负载下用 `TryLock` 采样量化持有时间。
+审计方法：AST 级扫描（按 `Lock/RLock` 调用点定位函数、持有区间与区间内的长操作调用）→ 人工判定长临界区 → 饱和负载下用 `TryLock` 采样量化持有时间。
 
 ### 2.1 三把锁的职责
 
@@ -168,7 +168,7 @@ type Manager struct {
 
 ## 4. 任务拆分
 
-- [x] 锁审计工具与行级审计表（`.tmp/fix-register-lock/audit`、本文 §2）
+- [x] 锁审计工具与行级审计表（工具产物落在 `.tmp/`，不入库；行级表见本文 §2）
 - [x] 饱和负载下量化忙期持有时间（`cycleMu` 3.15s / `m.mu` 48–51ms，见 §2.4 与 §5）
 - [x] 新增 `registerMu`、登记路径改锁、`Stop` 串行化
 - [x] 可转红回归：`TestRegisterInstanceNotBlockedBySaturatedPollRound`（两个子用例）+ `TestRegisterInstanceLatencyBudgetUnderSaturation`；**逐字还原旧实现实测转红**后再还原修复

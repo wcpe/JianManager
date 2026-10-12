@@ -1,6 +1,8 @@
 # daemon 子树脱离 Worker 单元 cgroup（FR-500）
 
-> 状态：🔨 开发中（代码 + 回归 + 本地门禁完成，**生产部署与最终验收未做**——本项不含部署动作）
+> 状态：🔨 开发中（代码 + 回归 + 三臂实验完成；**生产部署与真机验收已做**——2026-10-11 生产 unit 已补 `KillMode=process`，daemon/java 实测运行在 `app.slice/jianmanager-daemons/<uuid>` 而**不在** Worker 单元 cgroup 内；**剩余边界**见 PRD FR-500 的「待归真」——「真实 worker 三臂实验」仍是本地形态、未补形式化验收记录。取证口径与执行入口见 `docs/DEPLOY.md` §9.2）
+>
+> **订正记录（2026-10-12）**：本行原写「生产部署与最终验收未做——本项不含部署动作」，与同一 PR 的 PRD FR-500 状态列（称已做）**相互矛盾**。经核实取事实为准：`~/.config/systemd/user/jm-prod-worker.service` 第 9 行确为 `KillMode=process`，且 `jianmanager-worker daemon` 进程在跑、`jianmanager-daemons` 路径有实际引用 ⇒ **PRD 正确，本行陈旧**，故订正为「已做」。
 > 关联 PRD：FR-500　·　分支：feat/log-platform-hardening
 > 关联 ADR：ADR-003（守护进程 Wrapper 模式）、ADR-093（进程生命周期韧性与孤儿治理）、FR-341（daemon 存活与自动重连，本项是其运行期补强）
 > 依赖：无（不改 wrapper 协议、PID 文件、socket 布局与任何对外契约字段）
@@ -94,7 +96,7 @@ INFO Worker Node 已停止
 
 `JM_DAEMON_CGROUP_ISOLATION=0` 亦可用于等价复现旧行为（开关关闭 → 不自迁 → 用例转红）。
 
-### 4.2 真实二进制三臂实验（`.tmp/fix-restart-kills/lab/cgroup-restart-test.sh`）
+### 4.2 真实二进制三臂实验（脚本落在 `.tmp/`，该目录**不入库** ⇒ 外部读者不可复算；此处只保留方法口径）
 
 真实 `apps/worker` 二进制 + 真实 daemon wrapper + 替身 java，全部落进「假 Worker 单元 cgroup」（`<lab scope>/worker.service`），再对该 cgroup 全员发 SIGTERM：
 
