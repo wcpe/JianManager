@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { queryClient } from '@/lib/query-client'
+import { queryClient } from '@/lib/shared/query-client'
 
 vi.mock('@/stores/permissions', () => ({
   usePermissionsStore: { getState: () => ({ loadFromAuthMe: vi.fn(), reset: vi.fn() }) },
 }))
-vi.mock('@/lib/terminal-session-manager', () => ({
+vi.mock('@/lib/console/terminal-session-manager', () => ({
   terminalSessionManager: { disposeAll: vi.fn() },
 }))
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { windowForAnchor } from './logs-filters'
+import { windowForAnchor } from '@/lib/logs/logs-filters'
 
 /**
  * tail-first 窗口辅助函数；复合游标续页由DOM用例验证：
