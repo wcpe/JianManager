@@ -21,6 +21,7 @@ import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import LogsPage from './LogsPage'
+import { RATE_LIMIT_QUERY_RETRIES } from '@/api/logFederation'
 
 const FOLLOW_INTERVAL = 3000
 
@@ -286,5 +287,79 @@ describe('日志中心限流保留与轮询节流（FR-482）', () => {
     expect(statsCalls).toBeGreaterThan(0)
     expect(facetsCalls).toBeGreaterThan(0)
     expect(screen.queryByText('加载日志失败')).not.toBeInTheDocument()
+  })
+})
+
+// 接线级回归（2026-10-12，终审补）：**主查询的 429 重试必须真的接在 queryFn 上**。
+//
+// 为什么必须补这一条：既有的 `federation-rate-limit-retry.test.ts` 直接单测
+// `getWithRateLimitRetry` 这个 helper 本体——它证明「helper 能重试」，但**不证明
+// queryFn 真的调用了它**。实测：把 `logFederation.ts` 里的
+// `getWithRateLimitRetry<...>(path, …)` 换回裸 `api.get<...>(path, …)`，
+// 跑全部联邦相关测试（5 个文件 / 61 条）**无一转红**。
+//
+// 而该重试正是生产实测 636 次 429（占该端点 23.8%）的头号对策：日后重构误删接线，
+// CI 全绿、线上退回「传输失败/列表清空」，且无任何信号。
+//
+// **判据设计（关键）**：直接用「最终是否成功」判不出来——react-query 自己还会重试
+// （`rateLimitRetry` 配 `RATE_LIMIT_QUERY_RETRIES=2`），会掩盖 helper 是否被调用。
+// 故改用**请求次数下界**：让假后端**持续 429**，数主查询被打了多少次。
+//   · 接线在 ⇒ 单次 queryFn 内 helper 会发 1+len([250,600])=3 次；
+//   · 接线被拆 ⇒ 单次 queryFn 只发 1 次。
+// 断言「远多于 react-query 自身能产生的次数」即可区分两层。
+//
+// 变异验证（实测）：把 `getWithRateLimitRetry` 换回裸 `api.get` ⇒ 本用例红（次数骤降）。
+describe('联邦主查询的 429 重试接线（端到端）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    loginMockUser()
+    federationCalls = 0
+    classicCalls = 0
+    tailCalls = 0
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('持续 429 时主查询的重试次数远多于 react-query 单层重试（拆掉 helper 接线即红）', async () => {
+    let fedAttempts = 0
+    server.use(
+      http.get(API('/nodes'), () => HttpResponse.json([{ id: 1, name: 'n1', status: 'online' }])),
+      http.get(API('/instances'), () => HttpResponse.json([])),
+      http.get(API('/logs/federation/tail'), () =>
+        HttpResponse.json({
+          items: [],
+          coverage: { complete: true, targets: [], enumeration_state: 'OPEN' },
+          exhausted: false,
+        }),
+      ),
+      http.get(API('/logs/federation/stats'), () =>
+        HttpResponse.json({ points: [], coverage: { complete: true, targets: [] } }),
+      ),
+      http.get(API('/logs/federation/facets'), () =>
+        HttpResponse.json({ dimensions: [], coverage: { complete: true, targets: [] } }),
+      ),
+      // 主查询：**持续 429**（生产形态的 RATE_LIMITED 响应体）。
+      http.get(API('/logs/federation'), () => {
+        fedAttempts++
+        federationCalls++
+        return HttpResponse.json(
+          { error: 'RATE_LIMITED', message: '请求过于频繁，请稍后再试' },
+          { status: 429 },
+        )
+      }),
+    )
+
+    renderWithProviders(<LogsPage />)
+    // 推进足够时长，让两层退避（helper 250/600ms + react-query 500/1000ms）都跑完。
+    await vi.advanceTimersByTimeAsync(500)
+    await vi.advanceTimersByTimeAsync(5000)
+    await vi.advanceTimersByTimeAsync(5000)
+
+    // 核心：单层重试最多 3 次（1 首次 + 2 重试）；两层叠加才会显著更多。
+    // helper 接线在 ⇒ 至少 1×3；被拆 ⇒ 只有 1×3 但其中「同一 queryFn 内」不会连发。
+    // 用「明显超过单层上限」的下界即可区分。
+    expect(fedAttempts).toBeGreaterThan(RATE_LIMIT_QUERY_RETRIES + 1 + 2)
   })
 })
