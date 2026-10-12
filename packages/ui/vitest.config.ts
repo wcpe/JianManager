@@ -3,7 +3,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 /**
- * 组件库单测配置（FR-496 阶段 0 建立）。
+ * 组件库单测配置（FR-502 阶段 0 建立）。
  *
  * 背景：packages/ui 自 FR-283 迁入以来零测试，而 .claude/rules/testing-and-quality.md
  * 要求新增代码覆盖率 ≥60%。与主控台采用同一套双 project 形态，理由相同：

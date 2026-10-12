@@ -389,7 +389,7 @@ function buildGeneratedInstance(id: number): MockInstance {
 }
 
 function seedInstances(): MockInstance[] {
-  // 规模在**播种时**从运行时档位读（FR-496 阶段 6 补丁）：写成模块级常量会被本函数在
+  // 规模在**播种时**从运行时档位读（FR-502 阶段 6 补丁）：写成模块级常量会被本函数在
   // import 时捕获，调试面板改档位后即便重播种也还是旧规模。
   const size = mockDataScaleProfile().instanceCount
   const rows = new Map<number, MockInstance>()

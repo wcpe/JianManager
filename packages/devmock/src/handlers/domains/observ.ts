@@ -137,7 +137,7 @@ const iso = (offsetMs: number): string => new Date(NOW + offsetMs).toISOString()
 const YEAR_MS = 365 * 86_400_000
 
 /**
- * 任务从创建到完成的模拟时长（FR-496 阶段 6 补丁）。
+ * 任务从创建到完成的模拟时长（FR-502 阶段 6 补丁）。
  *
  * 【为什么必须让任务状态随时间推进】任务表的状态原先是一份**静态**随机值：种子里的
  * `running` 与批量生成里的 pending/running 都永不改变。而前端
@@ -338,7 +338,7 @@ function seedAlertEvents(): AlertEvent[] {
     },
   ]
 
-  // 生成规模在**播种时**读运行时档位（FR-496 阶段 6 补丁）：模块级常量会被 import 时捕获，
+  // 生成规模在**播种时**读运行时档位（FR-502 阶段 6 补丁）：模块级常量会被 import 时捕获，
   // 调试面板改档位后重播种也无效。循环外取一次，别在循环条件里每次都读。
   const { feedCount, instanceCount } = mockDataScaleProfile()
   const generated: AlertEvent[] = []
@@ -400,7 +400,7 @@ function seedNotifications(): Notification[] {
     },
   ]
 
-  // 同上：规模取运行时档位（FR-496 阶段 6 补丁）
+  // 同上：规模取运行时档位（FR-502 阶段 6 补丁）
   const { feedCount, instanceCount } = mockDataScaleProfile()
   const generated: Notification[] = []
   for (let i = 4; i <= feedCount + 3; i++) {
@@ -493,7 +493,7 @@ function seedTasks(): Task[] {
     },
   ]
 
-  // 同上：任务规模取运行时档位（FR-496 阶段 6 补丁）
+  // 同上：任务规模取运行时档位（FR-502 阶段 6 补丁）
   const { taskCount, instanceCount } = mockDataScaleProfile()
   const generated: Task[] = []
   for (let i = 4; i <= taskCount + 3; i++) {
@@ -602,7 +602,7 @@ function seedLogs(): LogRow[] {
     },
   ]
 
-  // 同上：日志规模取运行时档位（FR-496 阶段 6 补丁）
+  // 同上：日志规模取运行时档位（FR-502 阶段 6 补丁）
   const { logCount, instanceCount } = mockDataScaleProfile()
   const generated: LogRow[] = []
   for (let i = 5; i <= logCount + 4; i++) {
