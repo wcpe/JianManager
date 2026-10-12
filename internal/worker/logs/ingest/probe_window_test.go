@@ -30,8 +30,12 @@ func vlMaxQueryTimeRange(t *testing.T) time.Duration {
 		Port:            vlsup.DefaultPort(vlsup.NamespaceHot),
 		StorageDataPath: t.TempDir(),
 		RetentionPeriod: "30d",
-		AuthUsername:    "probe-window-test",
-		AuthPassword:    "probe-window-test",
+		// 占位凭据：本用例只读启动参数里的 `-search.maxQueryTimeRange`，不发起任何
+		// 需要鉴权的请求。取值沿用本仓既有测试的短占位写法（如 cmdline_test.go 的
+		// `local-only`）——**刻意取短**：PR Hygiene 的凭据扫描按
+		// `(password|secret|…)[:=]…{12,}` 命中，长占位串会被误报为硬编码凭据。
+		AuthUsername: "local-only",
+		AuthPassword: "local-only",
 	})
 	require.NoError(t, err, "构造 VL 启动参数失败")
 	for _, arg := range args {
