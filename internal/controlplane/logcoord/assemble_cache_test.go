@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,7 +35,11 @@ import (
 // sqlCounterAll 统计全部 SQL 条数（Query + Row 两条回调路径都要挂：
 // Find/First 走 Query 处理器，Scan/Raw 走 Row 处理器，只挂一个会漏计）。
 type sqlCounterAll struct {
-	total int
+	// total 必须是原子量（本 PR 的测试夹具竞争修复）：
+	// 本类型被 8 路并发的 Resolve 用例使用（见 TestResolverConcurrentResolveIsSingleFlight），
+	// 而 gorm 的 After 回调会在**多个 goroutine** 里执行 `total++` —— 普通 int 的并发自增
+	// 是数据竞争（-race 会报 DATA RACE，且计数可能丢更新使"单飞"断言失真）。
+	total atomic.Int64
 }
 
 func newSQLCounterAll(t *testing.T, db *gorm.DB) *sqlCounterAll {
@@ -43,7 +48,7 @@ func newSQLCounterAll(t *testing.T, db *gorm.DB) *sqlCounterAll {
 	name := "sql_all_" + t.Name()
 	record := func(tx *gorm.DB) {
 		if tx.Statement.SQL.String() != "" {
-			c.total++
+			c.total.Add(1)
 		}
 	}
 	require.NoError(t, db.Callback().Query().After("gorm:query").Register(name+"_q", record))
@@ -56,7 +61,7 @@ func newSQLCounterAll(t *testing.T, db *gorm.DB) *sqlCounterAll {
 }
 
 // reset 归零，便于分段统计「冷查 / 暖查」。
-func (c *sqlCounterAll) reset() { c.total = 0 }
+func (c *sqlCounterAll) reset() { c.total.Store(0) }
 
 // seedResolverFixtures 造 count 个实例（同一节点）+ 每实例一条历史 holder，返回授权目标与解析器。
 //
@@ -103,7 +108,7 @@ func TestResolverSQLCountDoesNotGrowWithInstances(t *testing.T) {
 			targets, err := r.Resolve(context.Background(), authorized)
 			require.NoError(t, err)
 			// 冷查一次：nodes + instances(AllBriefs) + holders = 3 条；关键是**不随 n 增长**。
-			assert.LessOrEqual(t, c.total, 3,
+			assert.LessOrEqual(t, int(c.total.Load()), 3,
 				"显式 inst: 形态下冷查 SQL 必须为常数条（优化前为 N+2=%d 条）", n+2)
 			require.Len(t, targets, 2*n, "实例目标 + 历史 holder 目标都不得丢失")
 
@@ -111,7 +116,7 @@ func TestResolverSQLCountDoesNotGrowWithInstances(t *testing.T) {
 			c.reset()
 			_, err = r.Resolve(context.Background(), authorized)
 			require.NoError(t, err)
-			assert.Equal(t, 0, c.total, "TTL 内重复解析不得再产生 SQL")
+			assert.Equal(t, int64(0), c.total.Load(), "TTL 内重复解析不得再产生 SQL")
 		})
 	}
 }
@@ -216,7 +221,7 @@ func TestResolverHolderFailureRetriesWithinTTL(t *testing.T) {
 	c := newSQLCounterAll(t, db)
 	recovered, err := fresh.Resolve(context.Background(), target)
 	require.NoError(t, err)
-	assert.LessOrEqual(t, c.total, 3,
+	assert.LessOrEqual(t, int(c.total.Load()), 3,
 		"holder 恢复后必须回到批量取数（≤3 条），不得固化成逐实例回落（%d 条）", len(ids)+2)
 
 	got := 0
@@ -236,7 +241,7 @@ func TestResolverWildcardColdAndWarmCost(t *testing.T) {
 	c := newSQLCounterAll(t, db)
 	targets, err := r.Resolve(context.Background(), []string{"*"})
 	require.NoError(t, err)
-	cold := c.total
+	cold := c.total.Load()
 	require.GreaterOrEqual(t, len(targets), 25)
 
 	// 一次「页面加载」= 列表 + stats + facets 三次解析：后两次必须零 SQL。
@@ -245,8 +250,8 @@ func TestResolverWildcardColdAndWarmCost(t *testing.T) {
 		_, err = r.Resolve(context.Background(), []string{"*"})
 		require.NoError(t, err)
 	}
-	assert.Equal(t, 0, c.total, "同一页面加载的后两次解析应命中快照，不再打库")
-	assert.LessOrEqual(t, cold, 3, "通配冷查应为常数条（nodes + instances + holders）")
+	assert.Equal(t, int64(0), c.total.Load(), "同一页面加载的后两次解析应命中快照，不再打库")
+	assert.LessOrEqual(t, cold, int64(3), "通配冷查应为常数条（nodes + instances + holders）")
 	_ = ids
 }
 
@@ -487,7 +492,7 @@ func TestResolverConcurrentResolveIsSingleFlight(t *testing.T) {
 		require.NoError(t, err, "并发解析第 %d 路不得报错", i)
 	}
 	// 单飞：8 路并发冷启动共享同一份快照，回源 SQL 数有界（远小于 8×3）。
-	assert.LessOrEqual(t, c.total, 9,
+	assert.LessOrEqual(t, int(c.total.Load()), 9,
 		"并发冷启动应由单飞收敛到少量回源，而不是 8 路各查一遍（实测并发共享后 ≤ 9 条）")
 	// 关键：并发下授权隔离不破 —— 窄授权路不得出现集合外目标。
 	narrowID := fmt.Sprintf("inst:%d", ids[1])
@@ -536,7 +541,7 @@ func TestSlowPathResolvesTargetsOnce(t *testing.T) {
 	_, err := coord.Stats(context.Background(), StatsQuery{Query: q})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), cr.count(), "Stats 每次请求只应解析一次目标（优化前为 2 次）")
-	statsSQL := c.total
+	statsSQL := c.total.Load()
 
 	c.reset()
 	_, err = coord.Facets(context.Background(), FacetsQuery{
@@ -544,7 +549,7 @@ func TestSlowPathResolvesTargetsOnce(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), cr.count(), "Facets 每次请求只应多解析一次（累计 2）")
-	assert.LessOrEqual(t, c.total, statsSQL, "Facets 的目标解析开销不得高于 Stats")
+	assert.LessOrEqual(t, c.total.Load(), statsSQL, "Facets 的目标解析开销不得高于 Stats")
 
 	// createView 仍保持既有对外契约：单独调用只解析一次。
 	before := cr.count()
