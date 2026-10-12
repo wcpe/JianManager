@@ -25,7 +25,7 @@ import {
 } from '@/api/logFederation'
 import { useAuthStore } from '@/stores/auth'
 import { useNodes } from '@/api/nodes'
-import { ClearConflictsDialog } from '@/components/ClearConflictsDialog'
+import { ClearConflictsDialog } from '@/components/logs/ClearConflictsDialog'
 import { InstancePicker } from '@/components/instances/InstancePicker'
 import { LOGS_FEDERATION_KEYS, exportBlockedKeyForReasons } from '@/lib/logs-federation'
 import { LogsPageView } from '@/components/views/logs/LogsPageView'

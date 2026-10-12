@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { decodeJwt } from '@/lib/auth/jwt'
-import { queryClient } from '@/lib/query-client'
+import { queryClient } from '@/lib/shared/query-client'
 
 /** 登录/恢复后异步拉取 /auth/me，填充权限 store（失败由 store 自身回落）。 */
 function schedulePermissionsLoad(): void {

@@ -11,7 +11,7 @@ import '@/i18n'
 import '@/lib/logs-federation/i18n'
 import './index.css'
 import { initThemeFromStorage } from '@jianmanager/ui/lib/theme'
-import { queryClient } from '@/lib/query-client'
+import { queryClient } from '@/lib/shared/query-client'
 import App from './App'
 
 // 首屏无闪 + 登录/初始化页也套主题（FR-164）：在 React 挂载前先把
