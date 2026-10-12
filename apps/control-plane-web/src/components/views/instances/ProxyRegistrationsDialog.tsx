@@ -38,7 +38,7 @@ export interface BackendCandidate {
 /**
  * 代理后端注册管理（FR-035）：把已有 backend 注册进代理，编辑 alias/priority/forced-host，并可 resync。
  *
- * 受控视图（ADR-097 b 范式）：不取数、不发请求、不弹 toast —— 注册项与候选后端由外壳注入，
+ * 受控视图（ADR-102 b 范式）：不取数、不发请求、不弹 toast —— 注册项与候选后端由外壳注入，
  * 三个动作经回调上报。错误码到文案的映射（ALIAS_CONFLICT / ALREADY_REGISTERED）与
  * 表单校验这些**本组件自己的语义**留在视图内。
  */

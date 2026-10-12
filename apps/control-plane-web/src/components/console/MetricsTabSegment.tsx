@@ -7,7 +7,7 @@ import MetricsSegment from './MetricsSegment'
 import MetricsFallbackSegment from './MetricsFallbackSegment'
 
 /**
- * `metrics` Tab 分流器的应用接线层（ADR-097）。
+ * `metrics` Tab 分流器的应用接线层（ADR-102）。
  *
  * 分流判定留在应用侧：它要读能力画像与探针可用性（`resolveMetricsTabStyle` 也是应用侧知识）。
  * 视图只按结果渲染，两个分支在此注入。保留同路径的默认导出与同一套 props，调用点无需改动。

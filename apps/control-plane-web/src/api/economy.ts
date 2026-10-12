@@ -12,7 +12,7 @@ import api from '@/api/client'
  */
 
 /** 经济镜像一行：某 (node, zone, player, currency) 的最新余额（与后端 model.EconomyBalanceMirror 对应）。 */
-// 经济域契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 经济域契约已回迁应用侧（受控视图与业务页面共用，ADR-102）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的 fetch 函数签名使用。
 import type { BusinessEvent, EconomyEventsParams, EconomyLeaderboardParams, EconomyLeaderboardRow, EconomyMirrorParams, EconomyMirrorRow } from '@/lib/instances/economy'
 export type { BusinessEvent, EconomyEventsParams, EconomyLeaderboardParams, EconomyLeaderboardRow, EconomyMirrorParams, EconomyMirrorRow } from '@/lib/instances/economy'

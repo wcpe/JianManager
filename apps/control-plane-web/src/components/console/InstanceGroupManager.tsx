@@ -9,7 +9,7 @@ import { InstanceGroupTree } from './InstanceGroupTree'
 import { InstanceGroupManager as InstanceGroupManagerView } from '@/components/views/instances/InstanceGroupManager'
 
 /**
- * 实例分组管理页的应用接线层（ADR-097 b 范式）。
+ * 实例分组管理页的应用接线层（ADR-102 b 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层持有选中组（子树查询依赖它，必须提到这一层）、
  * 取实例/节点/分组/子树、接两个成员动作、把提示交给 toast，并把已接线的分组树以函数插槽交回视图。

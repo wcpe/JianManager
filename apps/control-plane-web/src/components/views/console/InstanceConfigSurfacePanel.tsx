@@ -13,7 +13,7 @@ import { cn } from '@jianmanager/ui'
  * **内联值**（平台持有、可编辑）或**文件引用**（外部文件提供、平台不覆写，只读展示生效值预览）。
  * 两态互斥，杜绝「平台改了却被文件覆盖」的静默冲突。`server.properties` 与启动命令均**下次启动生效**。
  *
- * 取数与保存由 props 注入（ADR-097）：本视图不触达 api / 路由。
+ * 取数与保存由 props 注入（ADR-102）：本视图不触达 api / 路由。
  */
 
 export interface InstanceConfigSurfacePanelProps {

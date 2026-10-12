@@ -61,7 +61,7 @@ export interface ClonePreview {
 }
 
 /**
- * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 代理候选经 `proxies` 注入（容器调 `useInstances({ role: 'proxy' })`）；
  * - 预检与提交分别经 `onPreview` / `onSubmit` 上报：`onPreview` 回传结果（失败返回 null，容器已提示），
  *   结果只用于本视图的预览块；`onSubmit` 回传是否成功——成功才关窗（失败保留草稿便于重试），

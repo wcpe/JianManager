@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表取数、写动作与危险操作门禁接线。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做列表取数、写动作与危险操作门禁接线。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useBackupStorages, useCreateBackupStorage, useUpdateBackupStorage, useDeleteBackupStorage, useTestBackupStorage, useTestBackupStorageDraft } from '@/api/backupStorages'
@@ -11,7 +11,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 备份存储后端页容器（ADR-097 b 范式）：列表取数、创建/更新/删除/测试四个写动作、
+ * 备份存储后端页容器（ADR-102 b 范式）：列表取数、创建/更新/删除/测试四个写动作、
  * 平台级删除门禁与 toast 文案都在这里决定，表格、弹窗与二次确认交共享视图。
  * 保留同路径默认导出，路由表无需改动。
  */

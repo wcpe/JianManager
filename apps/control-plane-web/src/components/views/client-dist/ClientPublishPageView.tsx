@@ -125,7 +125,7 @@ export interface ClientPublishOutcome {
 }
 
 /**
- * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
+ * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 步骤：`step` 由容器持有并与 `?step=` 双向同步（支持浏览器前进/后退），视图只上报
  *   `onStepChange`（「上一步 / 下一步」两个入口）；
  * - 上传与发布：点「发布」时视图把草稿 + 清理范围 + 备注 + 取消信号经 `onPublish` 交容器

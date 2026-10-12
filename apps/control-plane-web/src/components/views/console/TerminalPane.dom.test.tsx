@@ -8,7 +8,7 @@ import type { ConsoleHistoryState } from '@/lib/console/console-history'
 import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 
 /**
- * 终端面板 · 受控视图测（ADR-097）。
+ * 终端面板 · 受控视图测（ADR-102）。
  *
  * 补的是**注入面契约**：状态由 props 决定分支（停机 → 注入的日志回放、未知 → 不连 WS）、
  * 凭据失败态、权限禁用口径、隐藏工具栏。真实连接与重连纵切由应用侧用例覆盖。

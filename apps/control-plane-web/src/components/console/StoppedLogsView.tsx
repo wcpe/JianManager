@@ -4,7 +4,7 @@ import { StoppedLogsView as StoppedLogsViewImpl } from '@/components/views/conso
 import { useLogs } from '@/api/logs'
 
 /**
- * 停机日志回放的应用接线层（ADR-097）。
+ * 停机日志回放的应用接线层（ADR-102）。
  *
  * 视图本体是受控视图（见 components/views）；本层取最近 300 条日志、把复制回执接回 toast，
  * 并注入「完整历史」的路由链接。对外 props 与原实现一致，调用点零改动。

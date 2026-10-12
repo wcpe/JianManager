@@ -30,7 +30,7 @@ import type { EconomyLedgerRow } from '@/lib/instances/economy-view'
  * DangerConfirm 二次确认 + 稳定 operationId 幂等键）。经济能力不可用时优雅降级（复用 business manifest 发现）。
  * 视觉为靛蓝圆角范式（FR-163）：余额含多区聚合 {@link StatCard} 概览，明细 / 写动作走统一 {@link Panel} 原语。
  *
- * 受控视图（ADR-097 a 范式）：不取数——manifest 探测态、三份查询结果与写动作都由外壳注入。
+ * 受控视图（ADR-102 a 范式）：不取数——manifest 探测态、三份查询结果与写动作都由外壳注入。
  * 四块子视图的呈现、多区聚合、金额校验、二次确认留在视图内。
  */
 export interface EconomySegmentProps {

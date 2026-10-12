@@ -10,7 +10,7 @@ import type { WorkspaceDef } from '@/lib/console/workspace-navigation'
 import type { WorkspaceLinkArgs } from '@/components/views/console/WorkspaceSidebar'
 
 /**
- * 工作区侧栏 · 受控视图测（ADR-097）。
+ * 工作区侧栏 · 受控视图测（ADR-102）。
  *
  * 补的是**展示契约**：四段结构、按工作区分派、权限裁剪、折叠态图标轨、激活态语义、
  * 注入面（链接 / 跳转 / 子组件 / 主题）被正确使用。

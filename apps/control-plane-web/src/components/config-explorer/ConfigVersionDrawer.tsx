@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做三个取数与回滚 mutation 的接线。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做三个取数与回滚 mutation 的接线。
 import { useState } from 'react'
 import ConfigVersionDrawerView from '@/components/views/config-explorer/ConfigVersionDrawer'
 import { useConfigVersions, useConfigDiff, useRollbackConfig } from '@/api/configs'
@@ -14,7 +14,7 @@ interface ConfigVersionDrawerProps {
 }
 
 /**
- * 配置版本抽屉接线层（ADR-097 b 范式）：版本列表 / diff / 回滚三个请求都在这里，
+ * 配置版本抽屉接线层（ADR-102 b 范式）：版本列表 / diff / 回滚三个请求都在这里，
  * 视图只做受控渲染（原 FR-071 语义：列表、起止对比、一键回滚二次确认）。
  *
  * 对比起止 `diffFrom`/`diffTo` 上提到本层——它们是 diff 查询的键（一变即触发取数），

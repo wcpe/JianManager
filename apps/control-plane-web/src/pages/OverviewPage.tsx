@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做六个查询取数、两处受控状态（时间窗 / 归因 Tooltip）
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做六个查询取数、两处受控状态（时间窗 / 归因 Tooltip）
 // 与三处接线（健康墙、链接、按需续取守卫）。
 import { useCallback, useDeferredValue, useState } from 'react'
 import { Link } from 'react-router'
@@ -15,7 +15,7 @@ import { OverviewPageView } from '@/components/views/overview/OverviewPageView'
 import type { AttributionGauge } from '@/components/views/overview/OverviewPageView'
 
 /**
- * 概览页容器（ADR-097 a 范式）：六个查询、平台观测区权限判定、两处受控状态与三处接线都在这里决定，
+ * 概览页容器（ADR-102 a 范式）：六个查询、平台观测区权限判定、两处受控状态与三处接线都在这里决定，
  * 仪表盘、三张聚合卡、三张平台卡、趋势图与密集实例表交共享视图。
  *
  * 受控状态归属：`range` 与 `activeGauge` 归容器——前者是全部指标查询的查询键，后者既决定

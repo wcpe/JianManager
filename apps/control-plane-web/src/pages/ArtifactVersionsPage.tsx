@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做目录查询与四个写动作（含提示文案）的接线。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做目录查询与四个写动作（含提示文案）的接线。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useCacheServerProbeVersion, useServerProbeCatalog, useSetGlobalProbeVersion, useSyncServerProbeSource, useUploadServerProbeVersion } from '@/api/artifactVersions'

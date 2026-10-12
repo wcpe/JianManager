@@ -4,7 +4,7 @@ import { useInstanceEnv, useUpdateInstance } from '@/api/instances'
 import InstanceEnvSegmentView from '@/components/views/instances/InstanceEnvSegment'
 
 /**
- * 环境变量页签的应用接线层（ADR-097 b 范式）。
+ * 环境变量页签的应用接线层（ADR-102 b 范式）。
  *
  * 页签本体是受控视图（见 components/views，不取数、不弹 toast）；本层取三份环境数据并承接保存与提示。
  * 保留同路径的默认导出，调用点无需改动。

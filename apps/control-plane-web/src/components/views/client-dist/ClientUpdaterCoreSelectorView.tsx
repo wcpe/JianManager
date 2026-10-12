@@ -61,7 +61,7 @@ export interface ClientUpdaterCoreUploadOutcome {
 }
 
 /**
- * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
+ * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 版本列表与加载态：`versions` / `loading` 由容器取数注入（`versions` 缺省/空数组渲染空态）；
  * - 切换：行内「选定」只把目标 sha256 记进本视图的确认弹窗（弹窗开合属 UI 状态），确认后经 `onSelect`
  *   上报（PUT 请求与成功/失败 toast 在容器）；`selecting` 为在途禁用态，避免重复提交；

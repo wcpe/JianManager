@@ -5,7 +5,7 @@ import { usePermissionsStore } from '@/stores/permissions'
 import { navGroupsForPermissions, navGroupsForRole } from '@/lib/shared/nav-config'
 
 /**
- * 手机端底部导航的应用接线层（ADR-097）。
+ * 手机端底部导航的应用接线层（ADR-102）。
  *
  * 视图本体是受控视图（见 components/views）；本层注入按权限/角色裁剪的导航分组、当前路径与路由链接，
  * 保留同路径的默认导出与零 props，调用点无需改动。

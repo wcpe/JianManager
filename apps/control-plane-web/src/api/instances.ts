@@ -12,7 +12,7 @@ import type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instances/i
  */
 export const INSTANCE_QUERY_GC_TIME_MS = 15 * 60_000
 
-// 实例实体类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
+// 实例实体类型已回迁应用侧（原 ADR-102 迁包已撤销）；此处转出，调用点零改动。
 import type { InstanceInfo } from '@/lib/instances/instance-types'
 export type { InstanceInfo } from '@/lib/instances/instance-types'
 
@@ -385,7 +385,7 @@ export function useDeleteInstance() {
 }
 
 /**
- * 实例批量操作动作与结果计数（FR-058）：契约归包，受控视图与 API 层共用（ADR-097）。
+ * 实例批量操作动作与结果计数（FR-058）：契约归包，受控视图与 API 层共用（ADR-102）。
  * 本地绑定来自文件顶部的 import，此处仅对外再导出，避免两处各写一份。
  */
 export type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instances/instance-batch'

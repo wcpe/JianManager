@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import EditInstanceLimitsDialog from '@/components/views/instances/EditInstanceLimitsDialog'
 
 /**
- * FR-079 实例资源限额编辑器 · 受控视图测（ADR-097 b 范式）。
+ * FR-079 实例资源限额编辑器 · 受控视图测（ADR-102 b 范式）。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。核心断言是「留空即不限制」
  * 这一输入约定，以及非 docker 模式只提示不编辑。
@@ -56,7 +56,7 @@ function renderDialog(props: Partial<Props> = {}) {
   return handlers
 }
 
-describe('EditInstanceLimitsDialog（FR-079 · ADR-097 b 范式）', () => {
+describe('EditInstanceLimitsDialog（FR-079 · ADR-102 b 范式）', () => {
   it('非 docker 模式只提示，不给编辑表单', () => {
     renderDialog({ processType: 'direct' })
     expect(screen.getByText('仅 docker 模式支持资源限额')).toBeInTheDocument()

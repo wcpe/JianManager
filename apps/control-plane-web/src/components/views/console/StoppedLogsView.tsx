@@ -24,7 +24,7 @@ export interface StoppedLogsViewProps {
  * FR-417 补复制按钮：这里正是「服务器起不来，把关服/崩溃日志发给别人看」的现场，
  * 而原先只能鼠标拖选——300 行日志靠拖选是最难受的场景之一。
  *
- * 取数与路由由 props 注入（ADR-097）：本视图不触达 api / 路由。
+ * 取数与路由由 props 注入（ADR-102）：本视图不触达 api / 路由。
  */
 export function StoppedLogsView({
   instanceId,

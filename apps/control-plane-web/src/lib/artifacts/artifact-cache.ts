@@ -1,7 +1,7 @@
 /**
  * 节点制品缓存的契约类型与纯逻辑工具（FR-178）。
  *
- * 归属说明（ADR-097）：类型由两侧共用——应用 API 层 `@/api/nodeRuntime` 的查询 hook
+ * 归属说明（ADR-102）：类型由两侧共用——应用 API 层 `@/api/nodeRuntime` 的查询 hook
  * 返回 `ArtifactCacheView`，受控视图 `components/views/nodes/NodeArtifactCachePanel`
  * 经 props 接收它。类型随组件归包，避免包内组件为取类型而反向依赖 `@/api`。
  * 纯函数（容量上限 GB ↔ 字节换算）一并归包，便于单测。

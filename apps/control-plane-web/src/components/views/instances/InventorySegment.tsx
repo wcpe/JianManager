@@ -29,7 +29,7 @@ import type { BasicAttrs, InventoryView, RawItemSlot } from '@/lib/instances/inv
  * 本轮只开放基础属性写：物品发放/回收等结构化写仍待 AllinInventorySync 导出可消费门面。
  * 背包能力不可用时优雅降级（复用 business manifest 发现 inventory 域）。视觉为靛蓝圆角范式（FR-163）。
  *
- * 受控视图（ADR-097 a 范式）：不取数、不发请求——manifest 探测态、背包视图与两个动作
+ * 受控视图（ADR-102 a 范式）：不取数、不发请求——manifest 探测态、背包视图与两个动作
  * 都由外壳注入。格子渲染、基础属性表单与校验、二次确认留在视图内。
  */
 export interface InventorySegmentProps {

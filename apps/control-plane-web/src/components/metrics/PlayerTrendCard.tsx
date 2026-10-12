@@ -6,7 +6,7 @@ import type { MetricRange } from '@jianmanager/ui'
 export { HourlyBars } from '@/components/views/instances/PlayerTrendCard'
 
 /**
- * 玩家在线趋势卡的应用接线层（ADR-097 a 范式）。
+ * 玩家在线趋势卡的应用接线层（ADR-102 a 范式）。
  *
  * 卡片本体是受控视图（见 components/views）；本层读浏览器时区并接取数（时区是查询入参，只有这里能拿）。
  * 保留同路径的导出与同一套 props，调用点无需改动。

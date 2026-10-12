@@ -7,7 +7,7 @@ import { resolveCapabilities } from '@/lib/instances/capabilities'
 import { InstanceWorktableCard as InstanceWorktableCardView } from '@/components/views/instances/InstanceWorktableCard'
 
 /**
- * 实例工作台卡的应用接线层（ADR-097 b 范式）。
+ * 实例工作台卡的应用接线层（ADR-102 b 范式）。
  *
  * 卡本体是受控视图（见 components/views）；本层承担四件它不该自己做的事：路由跳转（列表页可自定义、
  * 超级工作台用默认深链）、能力画像判定（是否代理）、搭建中判定、运行态漂移判定，

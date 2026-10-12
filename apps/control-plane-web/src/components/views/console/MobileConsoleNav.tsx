@@ -31,7 +31,7 @@ export interface MobileConsoleNavProps {
   renderLink: (args: SidebarLinkArgs) => ReactNode
 }
 
-/** 手机端底部导航：侧栏在小屏隐藏时的等价入口。数据与路由由 props 注入（ADR-097）。 */
+/** 手机端底部导航：侧栏在小屏隐藏时的等价入口。数据与路由由 props 注入（ADR-102）。 */
 export function MobileConsoleNav({ groups, pathname, renderLink }: MobileConsoleNavProps) {
   const { t } = useTranslation()
   const [openKey, setOpenKey] = useState<string | null>(null)

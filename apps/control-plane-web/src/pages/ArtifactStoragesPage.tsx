@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做渠道取数、存量迁移轮询与写动作/toast 接线。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做渠道取数、存量迁移轮询与写动作/toast 接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -13,7 +13,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 文件存储配置页容器（ADR-097 b 范式）：渠道列表与存量迁移状态取数、创建/更新/删除/测试/
+ * 文件存储配置页容器（ADR-102 b 范式）：渠道列表与存量迁移状态取数、创建/更新/删除/测试/
  * 设活跃/发起迁移/强制停止各写动作与 toast 文案都在这里决定，表格、四个对话框与删除二次确认
  * 交共享视图。
  *

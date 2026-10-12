@@ -162,7 +162,7 @@ function ManualConnectTab({ issued, onCopyResult }: { issued: IssuedEnrollTokenV
 /**
  * 「添加节点」向导对话框：签发一次性 enrollment token，提供「自动安装 / 手动连接」两条上线路径（FR-080 / FR-189）。
  *
- * 受控视图（ADR-097 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控视图（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 签发经 `onIssue` 上报，且**回传签发结果**——一次性凭据要交回视图才能展示（关掉就再也看不到）；
  * - 「生成中 / 已签发」两态与节点名、有效期草稿都留在组件内（纯 UI 状态）；
  * - 复制反馈经 `onCopyResult` 上报，提示文案由外壳决定。

@@ -3,7 +3,7 @@ import { useCrashSnapshots, useCrashTrend } from '@/api/crashSnapshots'
 import CrashDiagnosticsView from '@/components/views/instances/CrashDiagnosticsCard'
 
 /**
- * 崩溃诊断的应用接线层（ADR-097 a 范式）。
+ * 崩溃诊断的应用接线层（ADR-102 a 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层取快照与趋势（趋势只在确有崩溃时才查）、把提示交给 toast。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。

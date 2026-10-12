@@ -106,7 +106,7 @@ export function SuperWorkbenchPage({
   const [dropActive, setDropActive] = useState(false)
   const dragDepth = useRef(0)
 
-  // 画布状态与全部动作由 props 注入（ADR-097）：本视图不触达 store。
+  // 画布状态与全部动作由 props 注入（ADR-102）：本视图不触达 store。
 
   // 首次进入：惰性以空画布初始化。
   useEffect(() => {

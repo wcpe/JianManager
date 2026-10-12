@@ -35,7 +35,7 @@ const historyList = () => screen.queryByRole('listbox', { name: '历史命令匹
 
 /**
  * 回溯控制器 stub：本文件只借视图当「按实例持久化历史」的宿主，不触达 DB 分页取数
- * （受控视图 ADR-097：控制器由应用侧接线层注入）。
+ * （受控视图 ADR-102：控制器由应用侧接线层注入）。
  */
 function historyBacktrack(): ConsoleHistoryState {
   return {

@@ -10,7 +10,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 坏节点修复分段外壳（ADR-097 b 范式）。
+ * 坏节点修复分段外壳（ADR-102 b 范式）。
  *
  * 这里承担三件应用侧的事：两个只读查询、两个破坏性 mutation 及其提示、
  * 以及 404 降级判定（要读 `error.response.status`，故不能留在包里）。

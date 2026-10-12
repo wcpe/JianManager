@@ -108,7 +108,7 @@ export interface ProvisionServerLinkArgs {
 }
 
 /**
- * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 四份候选经 props 注入：`nodeOptions` / `groupOptions`（容器映射为选项）、`versions`（容器调
  *   `useCoreVersions`）、`jdks`（容器调 `useNodeJDKs(nodeId)`）；解析预览经 `resolved` 注入；
  * - `jdks` 以 **undefined 表示「还没取到」**：这是原实现的语义（`jdks !== undefined` 才做无 JDK 阻断），

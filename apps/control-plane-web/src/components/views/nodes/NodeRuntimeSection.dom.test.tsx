@@ -10,7 +10,7 @@ import NodeRuntimeSection, {
 } from '@/components/views/nodes/NodeRuntimeSection'
 
 /**
- * FR-298 节点运行时库 · 受控视图测（ADR-097 b 范式）。
+ * FR-298 节点运行时库 · 受控视图测（ADR-102 b 范式）。
  *
  * 本文件自带局部 i18n 实例：本组件的文案面是整个 `nodes.runtimeLib.*` 命名空间，
  * 且这些键在组件里**不带 defaultValue**，塞进共享实例会让它变成第二份应用语言包。
@@ -96,7 +96,7 @@ const candidates: RuntimeCandidateView[] = [
   { type: 'nodejs', vendor: 'nodejs', majorVersion: 22, version: '22.11.0', arch: 'amd64', path: '/usr/local/bin/node', alreadyRegistered: false },
 ]
 
-describe('NodeRuntimeSection（FR-298 · ADR-097 b 范式）', () => {
+describe('NodeRuntimeSection（FR-298 · ADR-102 b 范式）', () => {
   it('列表只承载非 JDK 类型，扫描发现后勾选候选上报入库', async () => {
     const user = userEvent.setup()
     // 自带 mock 而非取 renderSection 的返回值：后者是可被 props 覆盖的联合类型，

@@ -6,7 +6,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { ConfigFileEditor } from '@/components/views/config-explorer/ConfigFileEditor'
 
 /**
- * 配置编辑器 · 受控视图测（ADR-097）。
+ * 配置编辑器 · 受控视图测（ADR-102）。
  *
  * 补的是**注入面契约**：读取态（加载/失败/有数据）、文本模式的编辑器由外壳注入、
  * dirty 上报与关闭/版本入口。取数与写入由应用侧接线层承担，

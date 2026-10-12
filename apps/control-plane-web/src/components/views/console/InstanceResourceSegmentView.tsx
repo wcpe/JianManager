@@ -20,7 +20,7 @@ const SEGMENTS: SegmentPillOption<ResourceSegment>[] = [
 ]
 
 /**
- * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 分段值 `segment` 归容器（它与深链 `?seg=` / `?tab=env` 解析结果同源，且决定三段各挂哪个视图）；
  *   本视图只渲染分段控件并回传切换；
  * - 三段内容走 `configContent`/`filesContent`/`envContent` 插槽：三段本体是各自取数的视图接线层

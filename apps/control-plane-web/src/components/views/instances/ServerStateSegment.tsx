@@ -344,7 +344,7 @@ function StateSections({ state }: { state: ProbeServerState }) {
  * 状态分区以 FR-061 风格密集表呈现（server/worlds/jvm/classloader 专区/scheduler/listeners）；
  * 探针未连入 / 本次采集超时一律清晰降级提示；插件/世界/加载器等大数据折叠展开纯前端切片不卡。
  *
- * 受控视图（ADR-097 a 范式）：不取数——状态响应与拉取态由外壳注入，自动刷新间隔与手动刷新
+ * 受控视图（ADR-102 a 范式）：不取数——状态响应与拉取态由外壳注入，自动刷新间隔与手动刷新
  * 也经回调上报（间隔是 `useServerState` 的入参，只有外壳能改）。分区渲染、折叠展开、
  * 降级提示留在视图内。
  */

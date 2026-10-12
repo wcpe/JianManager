@@ -8,7 +8,7 @@ import { ClusterBadges, STAT_POPOVER_MAX_ROWS } from '@/components/views/console
 import type { ClusterBadgesProps } from '@/components/views/console/ClusterBadges'
 
 /**
- * FR-294 集群概览徽标 · 受控视图测（ADR-097 c 范式）。
+ * FR-294 集群概览徽标 · 受控视图测（ADR-102 c 范式）。
  *
  * 应用侧 `ConsoleHeader.statPopovers.dom.test.tsx` 走 mock 假后端验联动；
  * 这里补的是**受控契约**：三个计数的呈现、浮窗开合上报（外壳据此开关查询）、

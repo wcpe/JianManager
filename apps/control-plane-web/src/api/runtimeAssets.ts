@@ -3,13 +3,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /**
- * 制品契约（FR-045）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ * 制品契约（FR-045）已回迁应用侧，双侧共用（ADR-102）；对外保留原导出名，调用点无需改动。
  */
 export type { AssetType, AssetInfo } from '@/lib/artifacts/asset-contracts'
 import type { AssetInfo, AssetType } from '@/lib/artifacts/asset-contracts'
 
 /**
- * 运行时/制品视图契约（FR-082 / FR-301）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ * 运行时/制品视图契约（FR-082 / FR-301）已回迁应用侧，双侧共用（ADR-102）；对外保留原导出名，调用点无需改动。
  */
 export type { JDKRefInstance, JDKMatrixItem, AssetTypeGroup, RuntimeMatrixEntry } from '@/lib/runtime-assets/runtime-assets-contracts'
 import type { JDKMatrixItem, AssetTypeGroup, RuntimeMatrixEntry } from '@/lib/runtime-assets/runtime-assets-contracts'

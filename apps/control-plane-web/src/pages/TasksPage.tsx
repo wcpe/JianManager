@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表/详情取数、筛选与窗口状态、取消任务与 toast 接线。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做列表/详情取数、筛选与窗口状态、取消任务与 toast 接线。
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from 'react-router'
@@ -26,7 +26,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 全局任务中心页容器（ADR-097 b 范式）：列表与详情取数、短轮询、筛选/增长窗口状态、
+ * 全局任务中心页容器（ADR-102 b 范式）：列表与详情取数、短轮询、筛选/增长窗口状态、
  * 取消任务的 mutation 与 toast 文案都在这里决定，行渲染与二次确认框交共享视图。
  *
  * 受控状态归属：会触发重新取数的——筛选五维、`limit` 增长窗口、`expandedId`（展开即拉详情）——归本层；

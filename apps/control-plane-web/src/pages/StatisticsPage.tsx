@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做五个查询取数、统计窗口、管理员门禁与两个区块的接线。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做五个查询取数、统计窗口、管理员门禁与两个区块的接线。
 import { useState } from 'react'
 import { useNodes } from '@/api/nodes'
 import { useInstanceAggregate } from '@/api/instances'
@@ -38,7 +38,7 @@ function toObsRange(r: MetricRange): ObsRange {
 }
 
 /**
- * 观测·统计页容器（ADR-097 a 范式）：五个平台级查询、统计窗口与分发观测的权限门禁都在这里决定，
+ * 观测·统计页容器（ADR-102 a 范式）：五个平台级查询、统计窗口与分发观测的权限门禁都在这里决定，
  * KPI、构成分布与分发区块交共享视图。
  *
  * 受控状态归属：`range` 归容器——它是全部查询的查询键，且分发观测端点只认 `toObsRange` 换算出的

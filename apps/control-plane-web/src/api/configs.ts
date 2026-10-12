@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import api from '@/api/client'
 
 /**
- * 配置文件契约（FR-071）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ * 配置文件契约（FR-071）已回迁应用侧，双侧共用（ADR-102）；对外保留原导出名，调用点无需改动。
  */
 export type { ConfigFileInfo, ConfigField, ValidationIssue, ConfigValidationResult, ConfigReadResult, FieldSchema, ModelSchema, CrossCheckIssue, ConfigVersion, ConfigDiff, DiscoveredConfig, ConfigDiscoverResult } from '@/lib/config-explorer/config-contracts'
 import type { ConfigFileInfo, ConfigReadResult, ConfigValidationResult, ConfigVersion, ConfigDiff, ConfigDiscoverResult, CrossCheckIssue } from '@/lib/config-explorer/config-contracts'

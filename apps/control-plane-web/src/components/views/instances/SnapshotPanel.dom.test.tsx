@@ -7,7 +7,7 @@ import { loginMockUserAs } from '@/test/auth'
 import { Role } from '@/lib/shared/danger'
 
 /**
- * FR-466 实例整机快照面板 · 受控视图测（ADR-097 b 范式）。
+ * FR-466 实例整机快照面板 · 受控视图测（ADR-102 b 范式）。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。断言锚在 data-testid 与角色上，
  * 不绑文案（该面板的文案面很宽：四态、两类权限、逐字确认各有措辞）。
@@ -46,7 +46,7 @@ beforeEach(() => {
   loginMockUserAs(Role.GroupAdmin)
 })
 
-describe('SnapshotPanel（FR-466 · ADR-097 b 范式）', () => {
+describe('SnapshotPanel（FR-466 · ADR-102 b 范式）', () => {
   it('读取失败渲染错误块，而不是「暂无快照」', () => {
     renderPanel({ isError: true, snapshots: undefined })
     expect(screen.getByTestId('snapshot-error')).toBeInTheDocument()

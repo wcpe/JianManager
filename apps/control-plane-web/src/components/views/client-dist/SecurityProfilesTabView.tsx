@@ -36,7 +36,7 @@ export interface ProfileMaskers {
 }
 
 /**
- * 客户端画像 Tab 的注入契约（受控视图，ADR-097 a 范式）。
+ * 客户端画像 Tab 的注入契约（受控视图，ADR-102 a 范式）。
  *
  * 受控边界：列表与详情数据、加载/错误态经 props 注入（应用容器调
  * `useClientDistSecurityProfiles` / `useClientDistSecurityProfile`）；会触发重新取数的

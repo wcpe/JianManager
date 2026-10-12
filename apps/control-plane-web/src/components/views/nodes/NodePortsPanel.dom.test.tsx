@@ -39,7 +39,7 @@ void testI18n.use(initReactI18next).init({
   interpolation: { escapeValue: false },
 })
 
-/** 受控渲染：数据与加载态直接经 props 注入（ADR-097 a 范式），无需 MSW、无需 QueryClient。 */
+/** 受控渲染：数据与加载态直接经 props 注入（ADR-102 a 范式），无需 MSW、无需 QueryClient。 */
 function renderPanel(data?: NodePorts, isLoading?: boolean) {
   function Wrapper({ children }: { children: ReactNode }) {
     return <I18nextProvider i18n={testI18n}>{children}</I18nextProvider>
@@ -56,7 +56,7 @@ const basicData: NodePorts = {
   ],
 }
 
-describe('NodePortsPanel（FR-032 端口占用 · ADR-097 a 范式）', () => {
+describe('NodePortsPanel（FR-032 端口占用 · ADR-102 a 范式）', () => {
   it('加载态渲染骨架占位而非裸文字', () => {
     const { container } = renderPanel(undefined, true)
     // 骨架：范围行 + 两行表格轮廓；此时不应出现表头（数据未就绪）。

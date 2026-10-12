@@ -5,7 +5,7 @@ import UnifiedExplorerShell from './UnifiedExplorerShell'
 import { instanceFilesCapability, storageBrowseCapability, customExplorerCapability } from '@/lib/file-browser/file-browser-capability'
 import type { FileBrowserSource } from '@/lib/file-browser/file-browser-types'
 
-// 组件已回迁应用侧（原 ADR-097 迁包已撤销）：包内 UnifiedExplorerShell 从包内 import 标签宿主，
+// 组件已回迁应用侧（原 ADR-102 迁包已撤销）：包内 UnifiedExplorerShell 从包内 import 标签宿主，
 // 因此 mock 必须打在包路径上才拦得到。
 vi.mock('@/components/views/explorer/ExplorerTabHost', () => ({
   default: ({ instanceId }: { instanceId: number }) => (

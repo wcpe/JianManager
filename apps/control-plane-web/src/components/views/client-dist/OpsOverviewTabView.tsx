@@ -46,7 +46,7 @@ export type OpsOverviewLinkRenderer = (args: { to: string; className: string; ch
 const RANK_LINK_CLASS = 'min-w-0 truncate font-medium text-primary hover:underline'
 
 /**
- * 总览 Tab 的注入契约（受控视图，ADR-097 a 范式）。
+ * 总览 Tab 的注入契约（受控视图，ADR-102 a 范式）。
  *
  * 受控边界：更新侧观测、安全态势与运行态数据经 props 注入（应用容器调
  * `useClientDistObservability` / `useClientDistSecurityOverview`，运行态与请求侧由页面持有）；

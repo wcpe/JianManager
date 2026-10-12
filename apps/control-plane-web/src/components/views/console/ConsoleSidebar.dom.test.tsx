@@ -10,7 +10,7 @@ import type { NavGroup } from '@/lib/shared/nav-config'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 
 /**
- * 控制台侧栏 · 受控视图测（ADR-097）。
+ * 控制台侧栏 · 受控视图测（ADR-102）。
  *
  * 补的是**展示契约**：展开/折叠两态、可展开域的开合与激活态、底部偏好块与语言切换。
  * 权限裁剪（按权限/角色种子）与路由联动由应用侧 `ConsoleSidebar.dom.test.tsx` 覆盖。

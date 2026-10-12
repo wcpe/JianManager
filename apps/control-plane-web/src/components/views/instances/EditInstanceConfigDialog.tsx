@@ -22,7 +22,7 @@ export type EditInstanceConfigNotice = (kind: 'success' | 'error', message: stri
  * 实例配置编辑器（FR-233）：随时改启动命令 / 绑定 JDK / 自动重启，经 PUT /instances/:id 持久化、对下次启动生效。
  * 重绑 JDK 是「实例未绑定 JDK / Java 版本不符崩溃」的解药——给已建实例补绑合适大版本的 JDK。
  *
- * 受控视图（ADR-097 b 范式）：不取数、不发请求、不弹 toast —— 可绑 JDK 选项由外壳按节点取好注入，
+ * 受控视图（ADR-102 b 范式）：不取数、不发请求、不弹 toast —— 可绑 JDK 选项由外壳按节点取好注入，
  * 保存经 `onSave` 上报。本地编辑态、「留空=解绑」的语义、成功才关窗留在视图内。
  */
 export interface EditInstanceConfigDialogProps {

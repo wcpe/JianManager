@@ -8,7 +8,7 @@ import { NotificationBell } from '@/components/views/console/NotificationBell'
 import type { NotificationFeedEntry } from '@/components/views/console/NotificationBell'
 
 /**
- * FR-216 统一通知铃铛 · 受控视图测（ADR-097 c 范式）。
+ * FR-216 统一通知铃铛 · 受控视图测（ADR-102 c 范式）。
  *
  * 应用侧只验「合并入口能开能关」；这里补的是**未读徽标与跳转契约**：
  * 99+ 截断、空态、点条目按来源上报（站内信带 taskId / 告警 / 其余）、查看全部。

@@ -54,7 +54,7 @@ export interface StoragePageProps {
  * 浏览走平台存储端点（/storage/*），不复用实例级文件 API；Worker 侧数据根（var/servers、
  * opt/jdks 落各节点本机）按节点经既有实例文件管理浏览，不在此页范围。
  *
- * 受控视图（ADR-097）：概览取数、cache 清理、权限判定、数据源与浏览壳依赖全部由外壳注入。
+ * 受控视图（ADR-102）：概览取数、cache 清理、权限判定、数据源与浏览壳依赖全部由外壳注入。
  */
 export default function StoragePage({
   isPlatformAdmin,

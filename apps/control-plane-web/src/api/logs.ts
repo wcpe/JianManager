@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 单条日志（实例运行日志或平台运行日志，FR-049）。 */
-// 日志条目类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
+// 日志条目类型已回迁应用侧（原 ADR-102 迁包已撤销）；此处转出，调用点零改动。
 import type { LogEntry } from '@/lib/console/console-log-types'
 export type { LogEntry } from '@/lib/console/console-log-types'
 export type { LogQueryParams } from '@/lib/console/console-log-types'

@@ -16,7 +16,7 @@ const CANDIDATE_LIMIT = 50
 const SEARCH_DEBOUNCE_MS = 250
 
 /**
- * 下钻目标选择器的应用接线层（ADR-097 a 范式）。
+ * 下钻目标选择器的应用接线层（ADR-102 a 范式）。
  *
  * 选择器本体是受控视图（见 components/views）；本层按当前节点向服务端搜索实例候选（FR-235 范式：
  * 默认取前 N、键入防抖、截断提示），并把候选窗口喂给内嵌的 InstancePicker。

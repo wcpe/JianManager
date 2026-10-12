@@ -74,7 +74,7 @@ export interface ConsoleSidebarProps extends SidebarInjected {
  * 另在「选择服务器」下方常驻收藏 + 最近打开列（FR-293，仅展开态）。
  * 底部保留主题、语言、版本与开源许可。
  *
- * 数据与路由一律由 props 注入（ADR-097）：本视图不触达 api / store / 路由 / i18n 切换。
+ * 数据与路由一律由 props 注入（ADR-102）：本视图不触达 api / store / 路由 / i18n 切换。
  */
 export function ConsoleSidebar({
   groups,

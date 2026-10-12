@@ -5,7 +5,7 @@ import { useResyncProxy } from '@/api/proxy'
 import ProxyRegistrationsDialogView from '@/components/views/instances/ProxyRegistrationsDialog'
 
 /**
- * 代理后端注册管理的应用接线层（ADR-097 b 范式）。
+ * 代理后端注册管理的应用接线层（ADR-102 b 范式）。
  *
  * 对话框本体是受控视图（见 components/views）；本层取注册列表与候选后端、接三个动作、把提示交给 toast。
  * 候选后端按「已注册的排除掉」在壳侧算好（视图不该为了过滤再去理解注册集合）。

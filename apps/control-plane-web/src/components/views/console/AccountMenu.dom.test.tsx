@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import { AccountMenu } from '@/components/views/console/AccountMenu'
 
 /**
- * FR-162 账户菜单 · 受控视图测（ADR-097 c 范式）。
+ * FR-162 账户菜单 · 受控视图测（ADR-102 c 范式）。
  *
  * 补的是**账户态呈现与退出上报**：用户名/角色文案（复用包内 roles 的 ROLE_LABEL_KEY）、
  * 未知角色不显示角色行、退出经回调上报。

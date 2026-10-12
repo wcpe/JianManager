@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 定时任务（与后端 model.Schedule 对齐）。 */
-// 定时任务契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 定时任务契约已回迁应用侧（受控视图与业务页面共用，ADR-102）；此处原样再导出，调用点无需改动。
 import type { ScheduleInfo } from '@/lib/schedules/schedule'
 export type { ScheduleInfo } from '@/lib/schedules/schedule'
 export type { CreateScheduleBody, UpdateScheduleBody } from '@/lib/schedules/schedule'

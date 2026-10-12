@@ -583,7 +583,7 @@ export function OverviewInstancePanel({ instances, onNeedMore }: OverviewInstanc
 }
 
 /**
- * 受控边界（ADR-097 a 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-102 a 范式）：**不取数、不发请求、不弹 toast**。
  * - 六个查询的结果与错误态经 props 注入（容器调 `useMetricOverview` / `useNodes` / `useInstanceSearch` /
  *   `useInfiniteInstanceSearch` / `useTasks` / `useAlertEvents` / `usePlatformObservabilityOverview` /
  *   `useResourceAttribution`）；计数、百分比、降采样与图表序列都是纯展示派生，留本组件；

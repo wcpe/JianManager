@@ -43,7 +43,7 @@ export interface InstanceActivityFeedProps {
  *
  * 排序：当前态（告警或「正常」）恒在最前，其后是崩溃现场，再往下是日志倒序。
  *
- * 受控视图（ADR-097）：日志、关注事项与崩溃区块由外壳注入，本视图不取数。
+ * 受控视图（ADR-102）：日志、关注事项与崩溃区块由外壳注入，本视图不取数。
  */
 export default function InstanceActivityFeed({
   logs,

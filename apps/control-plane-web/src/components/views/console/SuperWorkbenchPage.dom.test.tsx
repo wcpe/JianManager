@@ -7,7 +7,7 @@ import { SuperWorkbenchPage } from '@/components/views/console/SuperWorkbenchPag
 import type { PlacedCard } from '@/lib/console/workspace-preset'
 
 /**
- * 超级工作台页面 · 受控视图测（ADR-097）。
+ * 超级工作台页面 · 受控视图测（ADR-102）。
  *
  * 补的是**注入面契约**：画布状态与全部动作来自 props、四个子块由外壳注入、
  * 空态与全屏分支、拖拽落位与布局变更回传。store 联动由应用侧接线层承担。

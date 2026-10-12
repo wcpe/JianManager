@@ -4,7 +4,7 @@ import BcSegment from '@/components/views/console/BcSegment'
 import { useTopology } from '@/api/topology'
 
 /**
- * BC 子服拓扑分段接线层（ADR-097）：从 `/topology` 取数并按 instanceId 过滤后注入，
+ * BC 子服拓扑分段接线层（ADR-102）：从 `/topology` 取数并按 instanceId 过滤后注入，
  * 并注入子服链接的渲染（包内不依赖路由库）。消费方（InstanceConsolePage）零改动。
  */
 export default function BcSegmentConnected({ instanceId }: { instanceId: number }) {

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /**
- * 客户端分发观测契约（FR-217）已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名，调用点无需改动。
+ * 客户端分发观测契约（FR-217）已回迁应用侧，双侧共用（ADR-102）；对外保留原导出名，调用点无需改动。
  */
 export type { ObservabilitySeriesPoint } from '@/lib/client-dist/client-dist-observability-contracts'
 import type { ObservabilitySeriesPoint } from '@/lib/client-dist/client-dist-observability-contracts'

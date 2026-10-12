@@ -7,7 +7,7 @@ import InstanceLibrary from './InstanceLibrary'
 import SuperWorkbenchToolbar from './SuperWorkbenchToolbar'
 
 /**
- * 跨实例超级工作台的应用接线层（ADR-097）。
+ * 跨实例超级工作台的应用接线层（ADR-102）。
  *
  * 视图本体是受控视图（见 components/views）；本层注入工作台 store 的画布状态与全部动作，
  * 以及四个自带取数的子组件（卡壳 / 实例库 / 工具栏 / 专注终端沉浸台）。
