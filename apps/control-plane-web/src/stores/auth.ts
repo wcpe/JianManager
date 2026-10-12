@@ -4,9 +4,54 @@ import { queryClient } from '@/lib/query-client'
 
 /** 登录/恢复后异步拉取 /auth/me，填充权限 store（失败由 store 自身回落）。 */
 function schedulePermissionsLoad(): void {
-  void import('@/stores/permissions').then((m) => {
+  void trackDynamicImport(loadPermissionsModule()).then((m) => {
     void m.usePermissionsStore.getState().loadFromAuthMe()
   })
+}
+
+/** 权限 store 的动态 import 入口。 */
+export function loadPermissionsModule() {
+  return import('@/stores/permissions')
+}
+
+/** 终端会话管理器的动态 import 入口（理由同上：xterm 不进首屏 chunk，但要可等待）。 */
+export function loadTerminalSessionManager() {
+  return import('@/lib/terminal-session-manager')
+}
+
+/**
+ * 在途动态 import 的登记表：`logout`/`schedulePermissionsLoad` 每次发起都登记其 Promise，
+ * 由 `flushAuthDynamicImports` 统一收口。
+ *
+ * 为什么用登记表而不是「flush 时重新 import 一次」：重新 import 在**已加载**时虽命中
+ * ES 模块缓存，但首次仍要发起一次新的解析/加载（尤其 `terminal-session-manager` 会把
+ * 真 xterm 拉进模块图），在测试拆卸阶段引入额外 tick —— 本文件 setup.ts ② 条注释
+ * 明确规避的正是这类污染。登记表只等**已经发起**的那些，不新增加载。
+ */
+const inFlightDynamicImports = new Set<Promise<unknown>>()
+
+function trackDynamicImport<T>(promise: Promise<T>): Promise<T> {
+  const tracked: Promise<unknown> = promise.then(
+    () => undefined,
+    () => undefined, // 加载失败不该让拆卸阶段抛错（该路径本就有失败回落语义）
+  )
+  inFlightDynamicImports.add(tracked)
+  void tracked.finally(() => inFlightDynamicImports.delete(tracked))
+  return promise
+}
+
+/**
+ * 等待本模块**已经发起**的全部动态 import 落地（幂等；无在途时为 no-op）。
+ *
+ * 供测试 setup 的 afterEach 调用：`logout()` 保持同步（生产调用点无需等待），
+ * 但测试必须知道「在途 import 已结束」才能安全拆除环境，否则 node 报
+ * `EnvironmentTeardownError: Cannot load '.../axios/index.js' ... after the environment
+ * was torn down` 的 unhandled rejection —— **全部用例都通过**的轮次仍以非零码退出
+ * （2026-10-12 主干 CI 实测：319 files / 2505 tests 全 passed 却判失败）。
+ */
+export function flushAuthDynamicImports(): Promise<void> {
+  if (inFlightDynamicImports.size === 0) return Promise.resolve()
+  return Promise.all([...inFlightDynamicImports]).then(() => undefined)
 }
 
 interface AuthState {
@@ -57,10 +102,12 @@ export const useAuthStore = create<AuthState>((set) => ({
     localStorage.removeItem('accessToken')
     localStorage.removeItem('refreshToken')
     set({ accessToken: null, refreshToken: null, isAuthenticated: false, role: null, username: null })
-    void import('@/stores/permissions').then((m) => m.usePermissionsStore.getState().reset())
+    // 两处都经 trackDynamicImport 登记（**不是**裸 `void import(...)`）：保持动态 import
+    // 语义不变，但让测试能经 flushAuthDynamicImports 等待在途加载收口（见其文档）。
+    void trackDynamicImport(loadPermissionsModule()).then((m) => m.usePermissionsStore.getState().reset())
     // 登出即整体释放全部终端会话（FR-295/296，ADR-067）：连接常驻管理器不随组件卸载断开，
     // 必须在此统一 dispose 防孤儿 WS。动态 import 避免把 xterm 卷进首屏 chunk。
-    void import('@/lib/terminal-session-manager').then((m) => m.terminalSessionManager.disposeAll())
+    void trackDynamicImport(loadTerminalSessionManager()).then((m) => m.terminalSessionManager.disposeAll())
   },
 
   loadFromStorage: () => {
