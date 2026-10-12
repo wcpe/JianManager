@@ -15,7 +15,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { screen, fireEvent } from '@testing-library/react'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
@@ -215,7 +216,6 @@ describe('日志中心限流保留与轮询节流（FR-482）', () => {
     await vi.advanceTimersByTimeAsync(300)
     // 筛选 A 先拿到真实行。
     expect(screen.getByText('federation-kept-row')).toBeInTheDocument()
-    console.log('step1 ok: first row visible')
 
     // 切到筛选 B（最近 1 小时）的同时服务端开始持续限流：新查询重试耗尽后必须落地为
     // 「限流 + 空结果（非成功空态）」，而不是继续渲染筛选 A 的行——那会把 A 节点/实例的
@@ -362,4 +362,110 @@ describe('联邦主查询的 429 重试接线（端到端）', () => {
     // 用「明显超过单层上限」的下界即可区分。
     expect(fedAttempts).toBeGreaterThan(RATE_LIMIT_QUERY_RETRIES + 1 + 2)
   })
+})
+
+// 筛选身份键的**维度完整性**回归（2026-10-12 终审补）。
+//
+// `filterKey` 是「限流期间能否复用上一份列表」的唯一归属判据（见 LogsPage 中
+// retainedFederation 的复用条件）。它必须覆盖**每个真正参与查询的筛选维度**：
+// 少一个维度 ⇒ 在该维度上切筛选时「键不变」，保留项被判为仍然有效，
+// 新查询一旦 429（生产该端点 23.8%），页面就把上一个筛选的行渲染成新筛选的结果。
+//
+// 既有覆盖：本文件的「切筛选后持续 429」（`range` 维度）与
+// `LogsPage.federation.dom.test.tsx` 的视图切换用例（`view`/`nodeId`/`instanceId`）。
+// 但 `source` 与 `onlineOnly` 两个维度**无任何覆盖**——而它们都进 federationParams
+// （`view === 'all' && source` 与 `onlineOnly`）。本用例补 `source`。
+//
+// 事件的驱动方式沿用 `LogsPage.federation.dom.test.tsx` 的既有写法（`userEvent`）：
+// 该 tab 是 Radix 驱动的 Button，`fireEvent.click` 在假时钟下不足以完成选择。
+// 故本用例用**真实时钟** + `findBy*` 等待（代价是等待两次重试退避余量）。
+describe('筛选身份键必须覆盖 source 维度（限流保留项的归属判据）', () => {
+  beforeEach(() => {
+    federationCalls = 0
+    classicCalls = 0
+    tailCalls = 0
+  })
+
+  it('切来源（全部日志视图）后持续 429：不得把上一个来源的行冒充成新来源的结果', async () => {
+    // 「全部日志」视图只对平台管理员渲染（LOG_VIEWS.filter 里的 isPlatformAdmin 门禁），
+    // 故必须带 role=10 的 JWT payload 登录——与 LogsPage.federation.dom.test.tsx 同法。
+    const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
+    loginMockUser(`mock.${payload}.sig`)
+    // 记录服务端实际收到的 source（证明它是独立维度、真的参与查询）。
+    const seenSources: string[] = []
+    let rateLimited = false
+    server.use(
+      http.get(API('/nodes'), () => HttpResponse.json([])),
+      http.get(API('/instances'), () => HttpResponse.json([])),
+      http.get(API('/logs/federation/tail'), () =>
+        HttpResponse.json({
+          items: [],
+          coverage: { complete: true, targets: [], enumeration_state: 'OPEN' },
+          exhausted: false,
+        }),
+      ),
+      http.get(API('/logs/federation/stats'), () =>
+        HttpResponse.json({ points: [], coverage: { complete: true, targets: [] } }),
+      ),
+      http.get(API('/logs/federation/facets'), () =>
+        HttpResponse.json({ dimensions: [], coverage: { complete: true, targets: [] } }),
+      ),
+      http.get(API('/logs/federation'), ({ request }) => {
+        federationCalls++
+        const src = new URL(request.url).searchParams.get('source')
+        seenSources.push(src ?? '(none)')
+        if (rateLimited) {
+          return HttpResponse.json(
+            { error: 'RATE_LIMITED', message: '请求过于频繁，请稍后再试' },
+            { status: 429 },
+          )
+        }
+        return HttpResponse.json({
+          sourceTag: 'federated',
+          items: [liveItem],
+          view: { view_id: 'source-a-view' },
+          exhausted: true,
+          coverage: { complete: true, targets: [], enumeration_state: 'EXHAUSTED' },
+        })
+      }),
+    )
+
+    renderWithProviders(<LogsPage />)
+    // 筛选 A（来源 = 全部）：先拿到一份真实行。
+    await screen.findByText('federation-kept-row')
+    const user = userEvent.setup()
+
+    // 切到「全部日志」视图（source 选择器只在该视图下渲染）。
+    await user.click(screen.getByRole('tab', { name: '全部日志' }))
+    const sourceTrigger = await screen.findByTestId('logs-source-select')
+    expect(seenSources).toContain('(none)')
+
+    // 切到筛选 B（来源 = 控制面，即 `source=control_plane`，UI 文案「平台」）的同时服务端开始持续限流。
+    rateLimited = true
+    Element.prototype.scrollIntoView = vi.fn()
+    // Radix Select 用键盘激活（与 LogsPage.federation.dom.test.tsx 同一写法）。
+    sourceTrigger.focus()
+    await user.keyboard('{Enter}')
+    const option = await screen.findByRole('option', { name: '平台' })
+    await user.click(option)
+
+    // ① 新筛选确实发出了带 source 的请求（证明这是独立筛选维度，而非纯前端展示开关）。
+    await waitFor(() =>
+      expect(seenSources).toContain('control_plane'),
+      { timeout: 8000 },
+    )
+    // 等两层重试退避退到错误终态（helper 250/600ms + react-query 500/1000ms）。
+    await waitFor(
+      () => expect(screen.getByTestId('logs-coverage-banner')).toHaveAttribute('data-state', 'rate_limited'),
+      { timeout: 15000 },
+    )
+
+    // ② 旧筛选的行不得继续可见：`source` 变了，保留项即判失效。
+    //    filterKey 漏含 source 时本断言会红（旧行被当作新筛选的结果继续渲染）。
+    expect(screen.queryByText('federation-kept-row')).not.toBeInTheDocument()
+    // ③ 不得把限流伪装成「查到了 0 条」空成功。
+    expect(screen.queryByText('暂无日志')).not.toBeInTheDocument()
+    const emptyState = screen.getByTestId('logs-empty-state')
+    expect(emptyState).toHaveAttribute('data-empty-success', 'false')
+  }, 60000)
 })

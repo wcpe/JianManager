@@ -291,10 +291,16 @@ export default function LogsPage() {
    * 保持到真正恢复为止。
    */
   const [rateLimited, setRateLimited] = useState(false)
-  // 筛选身份键（view/实例/节点/级别/关键字/范围；**不含 page** ✗——翻页需保留滚动位置）。
+  // 筛选身份键（view/来源/在线过滤/实例/节点/级别/关键字/范围；**不含 page** ✗——翻页需保留滚动位置）。
   // 既驱动滚动复位（LogTimeline 的 filterKey effect），也是限流保留项的归属判据：
   // 保留项记的是这个键，筛选一变，旧保留项即判失效、不得冒充新筛选的结果。
-  const filterKey = `${view}|${instanceId ?? ''}|${nodeId ?? ''}|${level}|${keyword.trim()}|${range}`
+  //
+  // **必须与真正参与查询的筛选维度逐一对应**：`source`（仅 all 视图）与 `onlineOnly`
+  // 都进 federationParams ⇒ 都是独立 queryKey。漏掉它们时，在该视图下切换这两项会「改筛选
+  // 不改身份」：键不变 ⇒ 保留项继续被复用，而新查询若 429（生产该端点 23.8%），
+  // 页面就把**上一个来源/未过滤**的行渲染成新筛选的结果（例如只看 worker 却显示 control_plane 的行）。
+  // `onlineOnly` 尤其容易漏判成「只是排序/展示开关」——它实际是服务端过滤条件。
+  const filterKey = `${view}|${source}|${onlineOnly}|${instanceId ?? ''}|${nodeId ?? ''}|${level}|${keyword.trim()}|${range}`
   const latestFederation = federationQuery.data
   /**
    * 「这一轮请求真的拿到结果了」——用于清除闩锁。
@@ -1181,9 +1187,11 @@ function LogTimeline({
   total: number
   follow: boolean
   /**
-   * 筛选身份键（view/实例/节点/级别/关键字/范围；**不含 page** ✗——翻页需保留滚动位置）。
+   * 筛选身份键（view/来源/在线过滤/实例/节点/级别/关键字/范围；**不含 page** ✗——翻页需保留滚动位置）。
    * 变化即重置滚动：切实例后新列表更短时，旧 scrollTop 会落在空白区，visible 为空 ⇒
    * 表现为「点什么都不动/刷不出来」✗✓。
+   * 维度须与参与查询的筛选条件一致（详见调用处 filterKey 的说明），否则会出现
+   * 「筛选已变、滚动与保留项仍按旧身份判定」的不一致。
    */
   filterKey: string
   /** 查询尚未完成：此时不判空态，避免把「未就绪」误报为空结果。 */
