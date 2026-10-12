@@ -516,16 +516,37 @@ func (c *Coordinator) bindWorkerViews(ctx context.Context, view *View, resolved 
 	}
 }
 
+// bindExistingView 为「已登记但未绑定」的视图补做 Worker 绑定，并把结果写回注册表。
+//
+// **必须深拷贝 map 再绑定**（B-1，2026-10-12 修复）：`View` 是**按值**传递的，但
+// `WorkerViewIDs` / `WorkerViewErrors` 是 map（引用类型）—— 按值传只复制了 map 头，
+// 底层仍是**同一张共享表**。而本函数在「未绑定」形态下会被**每一次**复用请求调用
+// （见上方早退条件），并发复用同一 viewId 时就会并发写同一张 map。
+//
+// 该形态生产可达：首屏快路径（`q.Fast=true`）经 `resolveForQueryFast` 登记视图
+// （`WorkerViewIDs` 已 make 但为空）并把 viewId 返回给浏览器，浏览器的分页/翻页/
+// 多组件扇出带着它回来。后果不是「返回错误」而是 Go 运行时
+// `fatal error: concurrent map writes` **直接终止 CP 进程** —— `gin.Recovery()` 兜不住
+// fatal，全部 API 不可用、在线实例失联，需人工重启。
+//
+// 为什么拷贝而不是加锁：绑定是**幂等**的（同一视图绑同一批 Worker），并发各拷一份各自绑定、
+// 结果等价，最后写入注册表的那份即最终态；用锁串行化会把跨 Worker 的 OpenView 往返
+// （毫秒~秒级）压进临界区，反而制造新的长持锁面。
 func (c *Coordinator) bindExistingView(ctx context.Context, view View, resolved *ResolvedTargets) View {
 	if c == nil || resolved == nil || (len(view.WorkerViewIDs) > 0 || len(view.WorkerViewErrors) > 0) {
 		return view
 	}
-	if view.WorkerViewIDs == nil {
-		view.WorkerViewIDs = make(map[string]string)
+	// 深拷贝两张 map（含既有条目，虽然本分支下通常为空，但保持语义完整）。
+	ids := make(map[string]string, len(view.WorkerViewIDs))
+	for k, v := range view.WorkerViewIDs {
+		ids[k] = v
 	}
-	if view.WorkerViewErrors == nil {
-		view.WorkerViewErrors = make(map[string]string)
+	errs := make(map[string]string, len(view.WorkerViewErrors))
+	for k, v := range view.WorkerViewErrors {
+		errs[k] = v
 	}
+	view.WorkerViewIDs = ids
+	view.WorkerViewErrors = errs
 	c.bindWorkerViews(ctx, &view, resolved)
 	c.mu.Lock()
 	c.views[view.ViewID] = view
