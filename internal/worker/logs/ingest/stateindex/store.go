@@ -349,7 +349,13 @@ type Store struct {
 	// 事件状态查询持长时只读句柄时执行 `wal_checkpoint(TRUNCATE)` 与读者争抢
 	// —— 正是 #67-A′/#67-B 要消除的 2026-10-05 停摆机制。
 	readersInFlight *atomic.Int64
-	cycle           uint64
+	// readerReleased 保证 `Close` 对 readersInFlight 只归还一次。
+	//
+	// 为什么需要：重复 `Close()` 会二次 `Add(-1)`，让计数变成**负数**；而护栏判据是
+	// `readersInFlight.Load() != 0` —— 负数同样非零 ⇒ 受控截断被**永久**关闭。
+	// 与「漏减」（Add(1) 后失败即返回）同样致命，只是方向相反，故两侧都要配对。
+	readerReleased atomic.Bool
+	cycle          uint64
 
 	// testCrashHook 仅供测试注入：在一次写入事务**提交之前**、写完全部变更行之后被调用，
 	// 用于在子进程中模拟进程异常中断（os.Exit 或 SIGKILL），验证未提交批次不会残留。
@@ -498,12 +504,18 @@ func OpenReadOnly(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	s := &Store{path: path, db: db, readOnly: true, mirror: newMirror(), budget: DefaultCommitBudget(),
 		readersInFlight: readersInFlightFor(path)}
-	s.readersInFlight.Add(1) // #67-A′：在飞只读句柄（Close 归还）——checkpoint 能否截断取决于它是否为零 ✓
 	s.rowBudget = s.budget.MaxRows
 	if _, err := db.ExecContext(context.Background(), "PRAGMA query_only=ON"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("stateindex: 设置只读模式失败: %w", err)
 	}
+	// #67-A′：在飞只读句柄计数（Close 归还）——checkpoint 能否截断取决于它是否为零 ✓。
+	//
+	// **必须放在全部错误分支之后**：调用方拿到 (nil, err) 后不会再调 Close，若在这一行之前
+	// 有失败出口且已 Add(1)，计数就只增不减 ⇒ `TryControlledTruncate` 的
+	// `readersInFlight != 0` 护栏被**永久**钉死 ⇒ WAL 只涨不并（与本项要治的形态相反）。
+	// 同理 Close 有 s.readOnly 判据保证「只有成功返回的实例才归还」，两侧严格配对。
+	s.readersInFlight.Add(1)
 	return s, nil
 }
 
@@ -522,10 +534,15 @@ func (s *Store) Path() string { return s.path }
 // checkpoint 失败（例如有未结束的读事务）不阻断关闭：这会退化成旧行为（WAL 留盘、下次打开
 // 时由 SQLite 自动归并），不影响正确性，故只记录不报错——Close 必须总是能关闭句柄。
 func (s *Store) Close() error {
-	if s != nil && s.readOnly {
+	if s == nil {
+		return nil
+	}
+	// 一次性归还：计数为负同样满足 `readersInFlight != 0`，护栏会被永久关闭 —— 与「漏减」
+	// 同样致命，故用 CAS 保证只归还一次（重复 Close 不再产生副作用）。
+	if s.readOnly && s.readerReleased.CompareAndSwap(false, true) {
 		s.readersInFlight.Add(-1) // #67-A′：与 OpenReadOnly 的 +1 配对
 	}
-	if s == nil || s.db == nil {
+	if s.db == nil {
 		return nil
 	}
 	_ = s.Checkpoint()

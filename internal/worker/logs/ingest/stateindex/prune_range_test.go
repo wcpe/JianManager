@@ -392,6 +392,48 @@ func TestControlledTruncateSeesReadOnlyHandlesFromOtherInstances(t *testing.T) {
 	require.Equal(t, int64(0), writer.readersInFlight.Load(), "只读句柄关闭后计数必须归还")
 }
 
+// 回归（2026-10-12 复审）：`readersInFlight` 的增减必须**严格配对**——两个方向都不能破。
+//
+// 护栏判据是 `readersInFlight.Load() != 0`，故**任何**非零值（正或负）都会把受控截断
+// 永久关闭：
+//   - **漏减**：`OpenReadOnly` 曾在 `Add(1)` 之后才校验 `PRAGMA query_only=ON`，该分支失败即
+//     `return nil, err`；而调用方拿到 (nil, err) 不会再调 Close ⇒ 计数只增不减。
+//   - **多减**：`Close()` 重复调用会二次 `Add(-1)` ⇒ 计数变负。
+//
+// 两者后果相同且都与本项目标相反：WAL 只涨不并（正是 #67-A′/#67-B 要消除的形态）。
+//
+// 转红方式（实测）：去掉 `Close` 的 `readerReleased` CAS 保护 ⇒ ② 红（重复关闭把计数打成 -1）。
+// 「漏减」那一侧由「`Add(1)` 必须在全部错误分支之后」保证，其失败路径（PRAGMA 失败）
+// 无法在测试里稳定构造，故只以代码位置约束 + 注释固定，不写不可复现的用例。
+func TestReadersInFlightIncrementDecrementArePaired(t *testing.T) {
+	root := t.TempDir()
+	path := root + "/ingest.index.db"
+	writer, err := OpenWithBudget(path, DefaultCommitBudget())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	require.Equal(t, int64(0), writer.readersInFlight.Load(), "前置：无读者时应为 0")
+
+	// ① 正常配对：开 → 1，关 → 0，且可重复多轮（不得漂移）。
+	for round := 0; round < 3; round++ {
+		reader, openErr := OpenReadOnly(path)
+		require.NoError(t, openErr)
+		require.Equal(t, int64(1), writer.readersInFlight.Load(),
+			"第 %d 轮：只读句柄存活期间计数必须为 1", round)
+		require.NoError(t, reader.Close())
+		require.Equal(t, int64(0), writer.readersInFlight.Load(),
+			"第 %d 轮：关闭后必须精确归还到 0（漂移会让护栏永久失效）", round)
+	}
+
+	// ② 重复 Close 不得二次归还（否则计数为负，护栏同样永久关闭）。
+	reader, err := OpenReadOnly(path)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), writer.readersInFlight.Load())
+	require.NoError(t, reader.Close())
+	require.NoError(t, reader.Close(), "重复 Close 必须幂等（不得报错也不得二次归还）")
+	require.Equal(t, int64(0), writer.readersInFlight.Load(),
+		"重复 Close 后计数仍须为 0：负值与正值一样会让 TryControlledTruncate 永久让路")
+}
+
 // 回归（M2，2026-10-12 修复）：`ApplyScopedCtxRows` 的 `cycleRows` 覆盖必须在调用返回后
 // **恢复**原预算，不得永久钉死该 Store 实例的周期行数上界。
 //
