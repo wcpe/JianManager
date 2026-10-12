@@ -7460,6 +7460,27 @@ const (
 	// 且已并入 `verifyLimiter` 天花板；与之对照的是「同名反复重写 57 万条 × N 次」的 VL 体积
 	// （生产已累积数百 GB）。这里明确选择正确性。
 	projectionProbeWindow = 31 * 24 * time.Hour
+	// projectionProbeFutureSlack 把探测窗的上界从 now 再向后放一天。
+	//
+	// **为什么上界不能取 now（2026-10-12 修复）**：日志行多为「只有时刻、没有日期」的形态
+	// （`[12:00:01] ...`），其事件时间由 normalize 的 applyClock 以 base 为锚就近归日
+	// （±12h）。于是同一行的时间轴**可以合法落在未来**——例如 base 锚在当日 UTC 00:30 时，
+	// `[12:00:01]` 会解析成当日 12:00:01Z，而此刻 now 才 01:45。实时解析走
+	// `effectiveBase()` 的 `time.Now()` 兜底（pipeline 只在**归档日**导入时才显式给
+	// BaseTime=该日中午），所以这不是假设情形。
+	//
+	// 若窗口上界取 now，这类未来行落进盲区 ⇒ 探测恒报「该名字未占用」⇒ 绕过
+	// `claimGenerationLocked` 直接占住该名 ⇒ 撞上既有同名行 ⇒ 正是本函数要消灭的
+	// `unexpected or duplicate projection event_id`（FR-496 停摆形态）。
+	// 实测（本仓 generation_reuse 回归）：夹具行 `[12:00:01]` 落成当日 12:00:01Z，
+	// 探测在 `end=now` 下报未占用、重放写回同名 `projection-3`；仅把上界推到 now+1d
+	// 即进位到 `projection-4`（探测量 2→4）——因果由此确认。
+	//
+	// 取 1 天而非更多：applyClock 把时刻约束在 base 的 ±12h 内，而 base 在生产不晚于
+	// now，故事件时间最多超前 now 约 12h；1 天覆盖该上界并留足边界裕量。
+	// 代价：窗口由 [now-31d, now] 变为 [now-31d, now+1d]，未放宽 VL 的 31d 总跨度上限
+	// （`-search.maxQueryTimeRange` 按区间长度判定），故不会重新引入 422 拒绝。
+	projectionProbeFutureSlack = 24 * time.Hour
 )
 
 // nextFreeProjectionGeneration 返回该源在 VL 中尚未出现过的物理代次名。
@@ -7872,10 +7893,12 @@ func (m *Manager) projectionGenerationUsed(ctx context.Context, client *vlsup.Cl
 		" AND log_source_id:=" + strconv.Quote(source.LogSourceID) +
 		" AND source_generation:=" + strconv.Quote(source.SourceGeneration)
 	now := time.Now().UTC()
+	// 上界按 projectionProbeFutureSlack 后移：无日期日志行的事件时间可合法落在未来，
+	// 取 now 会让这些行落入探测盲区（详见该常量的说明）。
 	params := url.Values{
 		"query": {selector + " | fields _time | sort by (_time desc) | limit 1"},
 		"start": {now.Add(-projectionProbeWindow).Format(time.RFC3339Nano)},
-		"end":   {now.Format(time.RFC3339Nano)},
+		"end":   {now.Add(projectionProbeFutureSlack).Format(time.RFC3339Nano)},
 	}
 	// Q3（2026-10-03 现场 1364/min）：**代次占用探测也是投影查询** ✗ —— 它发生在每次取新代次时
 	// （重放的每一天、每个源各一次），此前**完全没走天花板闸** ✓。现在并入同一 limiter：

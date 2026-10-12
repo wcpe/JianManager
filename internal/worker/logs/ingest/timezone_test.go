@@ -150,8 +150,20 @@ func TestDefaultTimeZoneLocalFollowsProcessTZ(t *testing.T) {
 
 	events := durableEvents(t, m, source.LogSourceID+"/"+source.SourceGeneration)
 	require.NotEmpty(t, events)
-	require.Equal(t, source.UTCDay+"T15:54:02Z", events[0].EventTimeUTC,
-		"local 时区（进程 TZ=HKT）下 23:54:02 必须精确换算为当日 15:54:02Z")
+	// 只断言「时刻换算」，不把**日期归属**写进契约：无日期日志行（`[23:54:02]`）的归日由
+	// normalize 的 applyClock 以 base 为锚就近取号（±12h），而实时路径的 base=time.Now()
+	// （effectiveBase 的兜底；pipeline 只在归档日导入时才显式给 BaseTime=该日中午）。
+	// 于是同一行会落到 now 的前一日或当日，取决于**运行时的钟点**——这是既定契约，
+	// 由 normalize/TestSourceTimeZoneCrossMidnightBoundary 与 applyClock 的注释固定。
+	// 原断言写死「当日」，等于把运行时刻当成契约：HKT 00:00–11:54 窗口内必红
+	// （CI 每天约一半时间会红），与另两条同类用例（这里上面两条用 HasSuffix）不一致。
+	require.True(t, strings.HasSuffix(events[0].EventTimeUTC, "T15:54:02Z"),
+		"local 时区（进程 TZ=HKT）下 23:54:02 必须换算为 15:54:02Z，实得 %s", events[0].EventTimeUTC)
+	// 归日仍须落在 now 附近（当日或前一日）：避免日期被算到更远处而不被察觉。
+	requiredDay := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	day := strings.TrimSuffix(events[0].EventTimeUTC, "T15:54:02Z")
+	require.Contains(t, []string{source.UTCDay, requiredDay}, day,
+		"归日必须落在 now 附近（当日 %s 或前一日 %s），实得 %s", source.UTCDay, requiredDay, day)
 	// 审计字段按 normalize 的现行契约记录解析后的 IANA 位置名，而不是配置别名 local。
 	require.Equal(t, "Asia/Hong_Kong", events[0].Fields[normalize.FieldEventTimeZone])
 }
