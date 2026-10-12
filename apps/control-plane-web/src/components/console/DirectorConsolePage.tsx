@@ -5,7 +5,7 @@ import DirectorCanvas from './DirectorCanvas'
 import DirectorAddSceneMenu from './DirectorAddSceneMenu'
 
 /**
- * 导播台页面的应用接线层（ADR-097）。
+ * 导播台页面的应用接线层（ADR-102）。
  *
  * 视图本体是受控视图（见 components/views）；本层注入导播 store 的场景/状态机/轮播开关与四个动作、
  * 工作台预设，以及两个自带取数的子组件（画布与添加场景菜单）。

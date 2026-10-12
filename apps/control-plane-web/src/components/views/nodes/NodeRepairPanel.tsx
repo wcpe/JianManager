@@ -37,7 +37,7 @@ export interface ReenrollResultView {
  * ② 重新 enroll（轮换 UUID/secret，新密钥一次性回显）；③ 清理孤立 JDK/实例。
  * 后两者破坏性，走 DangerConfirm（scope=platform）+ 后端二次确认（confirm=true）+ 审计。
  *
- * 受控视图（ADR-097 b 范式）：不取数、不发请求、不弹 toast。
+ * 受控视图（ADR-102 b 范式）：不取数、不发请求、不弹 toast。
  * - 诊断数据与统计经 props 注入（原先的 `node: NodeInfo` 收缩为 `nodeId + nodeName`
  *   两个本组件真正用到的字段）；
  * - 两个破坏性动作以回调上报，且 `onReenroll` **回传新身份**——一次性密钥必须由

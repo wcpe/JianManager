@@ -78,7 +78,7 @@ export const INSTANCE_ROW_HEIGHT = 36
 export const INSTANCE_EXPANDED_ROW_HEIGHT = 160
 
 /**
- * 行渲染件的受控边界（ADR-097 b 范式）：**不取数、不发请求、不碰路由**。
+ * 行渲染件的受控边界（ADR-102 b 范式）：**不取数、不发请求、不碰路由**。
  * - 七类实例派生判断由容器注入：节点名（`nodeName`，容器查节点表）、是否代理（`isProxy`，按能力画像）、
  *   是否搭建中（`provisioning`，`isProvisioningInstance` 属应用侧 API）、运行态漂移（`drift`）、
  *   三个动作的在途态（`starting` / `stopping` / `restarting`，容器按实例 id 比对——别的行在提交不该禁用本行）；

@@ -52,7 +52,7 @@ function feedLevelDotClass(level: string): string {
  * 未读计数（统一：本人站内信 + 全局告警，30s 轮询）+ 下拉只读最近通知（消息/告警混合，各带来源标识与级别色点）；
  * 点「查看全部」进通知中心页。处置（确认/认领）仍在告警页，本下拉只读预览。
  *
- * 受控视图（ADR-097 c 范式）：未读数、最近通知与两处跳转由外壳注入。
+ * 受控视图（ADR-102 c 范式）：未读数、最近通知与两处跳转由外壳注入。
  */
 export function NotificationBell({ unread, items, onOpenItem, onViewAll }: NotificationBellProps) {
   const { t } = useTranslation()

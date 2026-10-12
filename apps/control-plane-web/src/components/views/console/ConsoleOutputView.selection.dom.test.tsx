@@ -9,7 +9,7 @@ import type { LogLine } from '@/lib/console/console-log-line'
 import { ConsoleOutputView } from '@/components/views/console/ConsoleOutputView'
 
 /**
- * 锚点选区与堆栈块折叠（FR-418，spec §3）· 受控视图测（ADR-097）。
+ * 锚点选区与堆栈块折叠（FR-418，spec §3）· 受控视图测（ADR-102）。
  *
  * 本文件的核心命题是 ADR-086 代价 2：**屏幕外的行没有 DOM 节点**，所以跨行选区的文本
  * 必须来自行缓冲。因此用例刻意构造「选区两端在 DOM 里都不存在」的局面再断言复制结果完整

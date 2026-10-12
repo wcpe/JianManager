@@ -19,7 +19,7 @@ const actionLabel: Record<'start' | 'stop' | 'restart', string> = {
 }
 
 /**
- * VictoriaLogs 运行时分段外壳（ADR-097 b 范式）。
+ * VictoriaLogs 运行时分段外壳（ADR-102 b 范式）。
  *
  * 七个动作（上传/下发/起停重启/迁移/核销）与两个查询全在这里，连同它们各自的
  * 提示文案与错误转换。受控视图只把「用户点了哪个分区的哪个动作」「选了哪个日期」

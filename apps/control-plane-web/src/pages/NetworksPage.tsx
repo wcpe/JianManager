@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表/详情取数、五个写动作、路由（视图切换 + 详情深链）
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做列表/详情取数、五个写动作、路由（视图切换 + 详情深链）
 // 以及两个插槽实现：拓扑接线层（自行取数）与实例候选的防抖服务端搜索。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -60,7 +60,7 @@ function createErrorOf(err: unknown): { code?: string; message?: string } {
 }
 
 /**
- * 群组（Network 软标签）管理页容器（ADR-097 a+b 范式）：列表/详情取数、五个写动作与 toast 文案
+ * 群组（Network 软标签）管理页容器（ADR-102 a+b 范式）：列表/详情取数、五个写动作与 toast 文案
  * 都在这里决定，页面骨架、列表、拓扑外壳、新建弹窗与详情双栏交共享视图。
  *
  * 两处受控状态归容器：`view`（切换会换掉数据源）与 `detailId`（`useNetwork` 的查询键）——

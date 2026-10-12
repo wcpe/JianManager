@@ -63,7 +63,7 @@ function fmtSampledAt(value: string): string {
  * 权限：非管理员只见可访问实例（后端 scoped 标识），UI 显式提示受限视图。
  * 点击行下钻到实例详情。窗口内无数据的实例不入榜（后端 skippedNoData 计数提示）。
  *
- * 受控视图（ADR-097 a 范式）：不取数——指标/窗口/节点筛选三态与排行结果都由外壳注入
+ * 受控视图（ADR-102 a 范式）：不取数——指标/窗口/节点筛选三态与排行结果都由外壳注入
  * （取数依赖它们），下钻经回调上报。代表值格式化与名次样式留在视图内。
  */
 export interface InstanceRankingPanelProps {

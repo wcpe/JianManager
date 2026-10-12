@@ -11,7 +11,7 @@ import type { BotLoadTemplate } from '@/lib/bot-load/bot-load-types'
 export const TEMPLATES_TAB_PAGE_SIZE = 20
 
 /**
- * 压测模板列表 tab 的注入契约（受控视图，ADR-097 b 范式）。
+ * 压测模板列表 tab 的注入契约（受控视图，ADR-102 b 范式）。
  *
  * 取数与 URL 同步（搜索防抖、标签、页码）在容器，mutation 与 toast 由容器的回调实现；
  * 包内只做展示与派生（当前页标签集合、行摘要）。

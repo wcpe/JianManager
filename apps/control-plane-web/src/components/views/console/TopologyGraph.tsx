@@ -38,7 +38,7 @@ interface ViewBox {
 }
 
 /**
- * 拓扑图数据源（ADR-097 取数留应用侧接线层）：
+ * 拓扑图数据源（ADR-102 取数留应用侧接线层）：
  * 字段为组件所需投影，应用侧 `useTopology()` 的响应结构直接满足。
  */
 export interface TopologyGraphData {
@@ -74,7 +74,7 @@ export interface TopologyGraphProps {
  * SVG 视口壳（pan/zoom + 适应视图 + 名称搜索 + 状态筛选 + 按 network 分组分层布局），
  * 百级节点可用。不引图库；布局走 lib/topology 纯函数。
  *
- * 数据一律由 props 注入（ADR-097）：本视图不触达 api/hook/路由，取数在应用侧接线层。
+ * 数据一律由 props 注入（ADR-102）：本视图不触达 api/hook/路由，取数在应用侧接线层。
  */
 export function TopologyGraph({ className, data, isLoading, nodes, groupNodes, onGroupTreeNeeded }: TopologyGraphProps) {
   const { t } = useTranslation()

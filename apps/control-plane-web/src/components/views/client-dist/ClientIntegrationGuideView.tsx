@@ -29,7 +29,7 @@ export interface ClientUpdaterJarsInfo {
 }
 
 /**
- * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
+ * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 内嵌 jar 信息：`jars` 由容器取数注入（缺省不渲染摘要行）；wedge.jar 下载经 `onDownloadWedge` 交容器；
  * - **拉取密钥明文（敏感边界，逐字保持原揭示时机与范围）**：`selectedKeyId` 与 `revealedKeyPlaintext` 均由容器持有——
  *   明文只可能来自「用户主动在下拉框选择某把密钥、且后端 reveal 请求成功」这一条路径。本视图**不新增任何默认回显、

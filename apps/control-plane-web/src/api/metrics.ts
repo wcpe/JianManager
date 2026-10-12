@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-// 序列与实时指标契约已回迁应用侧（受控视图与业务页面共用，ADR-097）；此处原样再导出，调用点无需改动。
+// 序列与实时指标契约已回迁应用侧（受控视图与业务页面共用，ADR-102）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的查询泛型使用。
 import type { InstanceMetricsData } from '@/lib/instances/instance-metrics'
 import type { PlayerTrendResult } from '@/lib/players/player-trend'
@@ -277,7 +277,7 @@ export function usePlatformObservabilityOverview(enabled: boolean) {
 }
 
 /** FR-461 健康墙单格分级。 */
-// 健康墙类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
+// 健康墙类型已回迁应用侧（原 ADR-102 迁包已撤销）；此处转出，调用点零改动。
 import type { HealthWallResponse, HealthWallSort } from '@/lib/metrics/health-wall-types'
 export type { HealthLevel, HealthWallNode, HealthWallResponse, HealthWallSort } from '@/lib/metrics/health-wall-types'
 

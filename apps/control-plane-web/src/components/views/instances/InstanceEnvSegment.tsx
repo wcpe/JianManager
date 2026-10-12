@@ -24,7 +24,7 @@ function nextEnvRowId(): string {
  * 环境变量页签（FR-344）：上区编辑自定义启动环境变量（保存写入 instance.EnvVars，启动时 Worker 物化为 .env
  * 并注入进程）；下区展示运行中 JVM 进程的实际完整环境（含继承 PATH/JAVA_HOME，只读）。
  *
- * 受控视图（ADR-097 b 范式）：不取数、不发请求、不弹 toast——三份数据经 props 注入，
+ * 受控视图（ADR-102 b 范式）：不取数、不发请求、不弹 toast——三份数据经 props 注入，
  * 保存经 `onSave` 上报。重挂策略留在视图内：`configured` 内容变化时按内容作 key 重挂编辑器，
  * 令其从最新值重新初始化草稿；轮询内容不变则 key 稳定、用户未保存的编辑不被清
  * （这是为了避免「在 effect 里 setState」的反模式，属视图自身的实现细节）。

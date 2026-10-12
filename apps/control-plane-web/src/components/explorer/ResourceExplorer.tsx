@@ -28,7 +28,7 @@ type ConnectedProps = Omit<
 >
 
 /**
- * 共享资源管理器接线层（ADR-097）：文件操作、提示通道、草稿登记、版本缓存失效、
+ * 共享资源管理器接线层（ADR-102）：文件操作、提示通道、草稿登记、版本缓存失效、
  * 主题与三个归档/搜索取数都在这里注入；版本抽屉经渲染函数交回，它内部自带取数。
  * 消费方（ConfigExplorer / ExplorerTabHost / InstanceFilesPage 等）零改动。
  */

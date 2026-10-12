@@ -29,7 +29,7 @@ export interface QuotaPanelProps {
  * 诚实边界（与后端一致）：非 docker 模式不支持内核级限流，CPU 超限只能告警；
  * 面板如实标注，不假装有限流能力。
  *
- * 取数由 props 注入（ADR-097）：本视图不触达 api。
+ * 取数由 props 注入（ADR-102）：本视图不触达 api。
  */
 export function QuotaPanel({ quota, isLoading, isError, onRetry }: QuotaPanelProps) {
   const { t } = useTranslation()

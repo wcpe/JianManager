@@ -4,7 +4,7 @@
  * 把「实例工作目录 / 本地发布草稿 / 客户端分发制品」三种形态适配成与后端解耦的
  * {@link FileBrowserSource}，供共享 `FileBrowser` 复用其浏览 / 预览 / 降级 / 高亮能力。
  *
- * 受控（ADR-097）：**不直接调用应用侧 api**——涉及网络的两种（实例、客户端分发）
+ * 受控（ADR-102）：**不直接调用应用侧 api**——涉及网络的两种（实例、客户端分发）
  * 由调用方注入端点实现；本地草稿零网络，直接可用。
  */
 import type { FileBrowserSource, FileEntry, PreviewContent } from './file-browser-types'

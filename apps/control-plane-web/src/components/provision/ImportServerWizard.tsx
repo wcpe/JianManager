@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做候选取数、探测/预检/权限修复/导入写请求与提示文案。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做候选取数、探测/预检/权限修复/导入写请求与提示文案。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
@@ -33,7 +33,7 @@ function apiMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 导入现有服务器向导接线层（ADR-097 b 范式，原 FR-302 导入现有服务器 / FR-374 权限诊断与就地写预检）。
+ * 导入现有服务器向导接线层（ADR-102 b 范式，原 FR-302 导入现有服务器 / FR-374 权限诊断与就地写预检）。
  *
  * 视图本体是受控视图（见 components/views，不取数、不发请求、不弹 toast、不读路由）；本层负责：
  * - 候选取数：`useNodes()` 映射节点选项（含在线/启动中/离线状态文案）、

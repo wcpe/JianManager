@@ -1,4 +1,4 @@
-// 外壳已回迁应用侧（原 ADR-097 迁包已撤销）；本层只把三段内容接线层注入插槽。
+// 外壳已回迁应用侧（原 ADR-102 迁包已撤销）；本层只把三段内容接线层注入插槽。
 import InstanceResourceSegmentView from '@/components/views/console/InstanceResourceSegmentView'
 import type { ResourceSegment } from '@/lib/instances/instance-console-tabs'
 
@@ -16,7 +16,7 @@ interface InstanceResourceSegmentProps {
 }
 
 /**
- * 文件配置页签接线层（ADR-097 b 范式）：分段外壳（分段控件 + 三段 `<Activity>` 保活）见 components/views，
+ * 文件配置页签接线层（ADR-102 b 范式）：分段外壳（分段控件 + 三段 `<Activity>` 保活）见 components/views，
  * 这里是三段内容的取数接线层注入点——「关键配置」面板、文件管理器、环境变量编辑器本体
  * 都是自取数的视图接线层，故由本层注入而不是在包内取。
  *

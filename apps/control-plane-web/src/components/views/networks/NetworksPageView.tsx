@@ -731,7 +731,7 @@ export function NetworkDetailPanelView({
 }
 
 /**
- * 群组页的注入契约（ADR-097 a+b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
+ * 群组页的注入契约（ADR-102 a+b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  *
  * 受控边界：
  * - 数据经 props 注入（容器调 `useNetworks` / `useNetwork`）；

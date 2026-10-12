@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表/日志取数、四个写动作、组级删除门禁与实例选择器接线。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做列表/日志取数、四个写动作、组级删除门禁与实例选择器接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -15,7 +15,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 定时任务页容器（ADR-097 b 范式）：列表与执行日志取数、创建/更新/删除三个写动作、
+ * 定时任务页容器（ADR-102 b 范式）：列表与执行日志取数、创建/更新/删除三个写动作、
  * 组级删除门禁与 toast 文案都在这里决定，列表、日志与两个对话框交共享视图。
  *
  * 两处受控状态归容器：`filter`（决定可见行集合）与 `logsId`（`useScheduleLogs` 的查询键，

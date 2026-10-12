@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做版本列表取数、切换/上传写请求与角色门禁注入。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做版本列表取数、切换/上传写请求与角色门禁注入。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ClientUpdaterCoreSelectorView } from '@/components/views/client-dist/ClientUpdaterCoreSelectorView'
@@ -9,7 +9,7 @@ type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
 /**
- * updater-core 版本选择器（FR-259）的接线层（ADR-097）。频道工作台「Core 版本」tab：
+ * updater-core 版本选择器（FR-259）的接线层（ADR-102）。频道工作台「Core 版本」tab：
  * 列出所有归档 core 版本，当前选定版本高亮，一键切换实现回滚。切换后提示"客户端下次启动生效"。
  *
  * 展示层已回迁应用侧（`ClientUpdaterCoreSelectorView`），此处只保留应用侧职责：

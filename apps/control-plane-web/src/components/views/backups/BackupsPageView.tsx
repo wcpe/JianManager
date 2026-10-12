@@ -65,7 +65,7 @@ export interface BackupsInstancePickerArgs {
 }
 
 /**
- * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 备份列表与加载态、可用存储位置经 props 注入（容器调 `useBackups` / `useBackupStorages`）；
  * - **归容器**的受控状态：`instanceId` 是备份列表与实例详情查询的键（一变即重新取数），
  *   轮询启停也由容器按「是否有进行中备份」决定，视图只按注入的 `backupsActive` 显示刷新提示；

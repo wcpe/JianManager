@@ -12,7 +12,7 @@ type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
 /**
- * 客户端分发版本管理面板（FR-088，见 ADR-022）的接线层（ADR-097）。
+ * 客户端分发版本管理面板（FR-088，见 ADR-022）的接线层（ADR-102）。
  *
  * 展示层已回迁应用侧（`ClientVersionsPanelView`），此处只保留应用侧职责：
  * - 取数：版本列表（`useClientVersions`）与选中版本详情（`useClientVersion(channelId, detailVersion)`；

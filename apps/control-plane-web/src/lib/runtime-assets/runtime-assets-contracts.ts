@@ -1,5 +1,5 @@
 /**
- * 运行时与制品契约（FR-082 / FR-301，ADR-097）。
+ * 运行时与制品契约（FR-082 / FR-301，ADR-102）。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 import type { AssetInfo, AssetType } from '@/lib/artifacts/asset-contracts'

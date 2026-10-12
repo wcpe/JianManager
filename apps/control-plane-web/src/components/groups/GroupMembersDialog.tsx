@@ -14,7 +14,7 @@ interface GroupMembersDialogProps {
 }
 
 /**
- * 管理用户组成员对话框的应用接线层（ADR-097 b 范式）。
+ * 管理用户组成员对话框的应用接线层（ADR-102 b 范式）。
  *
  * 视图已受控；本层保留「何时发请求」这一策略：组数据取实时 `useGroups`（增删后即刻反映），
  * 候选走服务端搜索（FR-336）——默认前 N 条、键入经 300ms 防抖下发 q；增删经 mutation hook

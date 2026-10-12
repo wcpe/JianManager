@@ -23,7 +23,7 @@ export interface DirectProbeSummaryData {
  *
  * 缺测项以「不可用」文案或 ProcessPanel 的破折号兜底，**不展示 `-1`/`--` 占位垃圾值**。
  *
- * 受控视图（ADR-097 a 范式）：不取数——进程指标与直探摘要经 props 注入。
+ * 受控视图（ADR-102 a 范式）：不取数——进程指标与直探摘要经 props 注入。
  */
 export interface MetricsFallbackSegmentProps {
   /** 进程指标（外壳取数注入）。 */

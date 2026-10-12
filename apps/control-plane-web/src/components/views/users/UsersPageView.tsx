@@ -84,7 +84,7 @@ export interface UsersPermissionsLinkArgs {
 }
 
 /**
- * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 用户列表与邀请列表经 props 注入（容器调 `useUsers` / `useUserInvitations`）；
  * - 五个写动作（新建用户、签发邀请、更新用户、删除用户、撤销邀请）以回调上报，由容器
  *   执行 mutation 并决定成功/失败文案；两个「返回 Promise」的动作失败请抛错，视图内对话框

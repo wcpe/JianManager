@@ -696,7 +696,7 @@ function NodeListErrorState({ onRetry, compact = false }: { onRetry: () => void;
   )
 }
 
-/** 实例对比图的取数接线层（ADR-097）：视图已入包，此处注入服务端搜索与批量指标。 */
+/** 实例对比图的取数接线层（ADR-102）：视图已入包，此处注入服务端搜索与批量指标。 */
 function NodeInstanceCompareContainer({ node }: { node: NodeInfo }) {
   const [metric, setMetric] = useState('inst_tps')
   // 服务端按节点过滤分页取前 12（名称升序）；total 为该节点实例总数（提示中的 N）。
@@ -724,7 +724,7 @@ function NodeInstanceCompareContainer({ node }: { node: NodeInfo }) {
   )
 }
 
-/** 节点监控曲线的取数接线层（ADR-097）。 */
+/** 节点监控曲线的取数接线层（ADR-102）。 */
 function NodeMonitorChartsContainer({ node }: { node: NodeInfo }) {
   const [range, setRange] = useState<MetricRange>('24h')
   const { data } = useMetricSeries({ scope: 'node', targetId: node.uuid, range })

@@ -78,7 +78,7 @@ export interface ClusterBadgesProps {
  * 徽标计数数据源不变（总览页同款聚合 + FR-247 聚合，避免页眉为计数拉全量实例）；
  * 原「点击跳筛选页」保留为浮窗底部「查看全部」。窄屏隐藏逻辑（header-layout）不变。
  *
- * 受控视图（ADR-097 c 范式）：三个计数、三个浮窗的行数据与全部跳转由外壳注入；
+ * 受控视图（ADR-102 c 范式）：三个计数、三个浮窗的行数据与全部跳转由外壳注入；
  * 浮窗自身的 open 态留视图内，经 `onSlotToggle` 上报，外壳据此把对应查询 enabled 绑到 open。
  */
 export function ClusterBadges({

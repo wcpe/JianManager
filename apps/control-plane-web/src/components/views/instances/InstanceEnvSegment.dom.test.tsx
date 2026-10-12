@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import InstanceEnvSegment from '@/components/views/instances/InstanceEnvSegment'
 
 /**
- * FR-344 环境变量页签 · 受控视图测（ADR-097 b 范式）。
+ * FR-344 环境变量页签 · 受控视图测（ADR-102 b 范式）。
  *
  * 自带局部 i18n（本组件文案面是整个 `env.*` 命名空间且不带 defaultValue），
  * 文案与主控台 zh.json 一致——断言落在这几个键上，故必须与线上同值。
@@ -48,7 +48,7 @@ function renderSegment(props: Partial<Props> = {}) {
   return { onSave }
 }
 
-describe('InstanceEnvSegment（FR-344 · ADR-097 b 范式）', () => {
+describe('InstanceEnvSegment（FR-344 · ADR-102 b 范式）', () => {
   it('已配置变量渲染为可编辑行，运行时环境渲染为只读表', () => {
     renderSegment({
       configured: { JAVA_HOME: '/opt/jdks/temurin-21' },

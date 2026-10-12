@@ -50,7 +50,7 @@ type PlayerActionKind = 'kick' | 'ban'
  * 空白一致落在栏位空隙而非卡片内部（spec §3.2）。封禁记录不写死 `flex-1`——
  * 否则 2 条记录也会撑满 800+px，正是本批要消灭的「矮内容被拉平成死区」。
  *
- * 受控视图（ADR-097 a 范式）：不取数、不发请求、不弹 toast——三份数据与五个动作
+ * 受控视图（ADR-102 a 范式）：不取数、不发请求、不弹 toast——三份数据与五个动作
  * 都由外壳注入。分栏布局、原因确认弹窗、列宽约束、降级提示留在视图内。
  */
 export interface InstancePlayersSegmentProps {

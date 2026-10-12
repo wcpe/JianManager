@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做候选取数、搭建写请求、提示文案与 secret 复制回执。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做候选取数、搭建写请求、提示文案与 secret 复制回执。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -22,7 +22,7 @@ interface ProvisionProxyDialogProps {
 }
 
 /**
- * 搭建代理向导接线层（ADR-097 b 范式，原 FR-035 搭建代理 / FR-072 系统可获取项）。
+ * 搭建代理向导接线层（ADR-102 b 范式，原 FR-035 搭建代理 / FR-072 系统可获取项）。
  *
  * 视图本体是受控视图（见 components/views，不取数、不发请求、不弹 toast）；本层负责：
  * - 候选取数：`useNodes()` 过滤启用态后映射节点选项、`useGroups()` 映射用户组选项、

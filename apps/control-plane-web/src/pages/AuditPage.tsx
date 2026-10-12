@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做列表分页取数、筛选态、候选用户、导出与骨架/错误态接线。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做列表分页取数、筛选态、候选用户、导出与骨架/错误态接线。
 import { useMemo, useState } from 'react'
 import { useAuditLogs, exportAuditLogs } from '@/api/audit'
 import { useUserSearch } from '@/api/users'
@@ -11,7 +11,7 @@ import type { AuditFilterState } from '@/lib/audit/audit-filters'
 const AUDIT_USER_LIMIT = 50
 
 /**
- * 审计日志页容器（ADR-097 a 范式）：分页取数、筛选态、候选用户与导出都在这里决定，
+ * 审计日志页容器（ADR-102 a 范式）：分页取数、筛选态、候选用户与导出都在这里决定，
  * 筛选条、时间线行与展开详情交共享视图。
  *
  * 受控状态归属：`filter` 归容器——它经 `toAuditParams` 变成 `GET /audit` 的查询键，

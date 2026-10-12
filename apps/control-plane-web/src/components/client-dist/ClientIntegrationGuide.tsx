@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做内嵌更新器取数、密钥揭示与 wedge 下载接线。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做内嵌更新器取数、密钥揭示与 wedge 下载接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -6,7 +6,7 @@ import { ClientIntegrationGuideView } from '@/components/views/client-dist/Clien
 import { useUpdaterJarsInfo, downloadUpdaterJar, useRevealClientKey, type ClientPullKey } from '@/api/clientChannels'
 
 /**
- * 客户端更新器接入指引（FR-107 / FR-259）的接线层（ADR-097）。面向运营方：在频道详情一页拿齐——下载楔子、
+ * 客户端更新器接入指引（FR-107 / FR-259）的接线层（ADR-102）。面向运营方：在频道详情一页拿齐——下载楔子、
  * 该频道专属 jm-updater.json、启动器 JVM 参数、行为说明，照做即可接入并下发玩家。
  *
  * FR-259 起 core 不再随整合包附带：整合包只带 wedge.jar（~30KB），首次启动楔子自动经

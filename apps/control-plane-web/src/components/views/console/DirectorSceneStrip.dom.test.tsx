@@ -9,7 +9,7 @@ import { createDirectorState } from '@/lib/director/director'
 import type { DirectorState } from '@/lib/director/director'
 
 /**
- * 导播台缩略图条 · 受控视图测（ADR-097）。
+ * 导播台缩略图条 · 受控视图测（ADR-102）。
  *
  * 补的是**展示契约**：场景缩略卡的序号/名称/三态点、激活与删除回调、并发上限滑块。
  * store 联动（持久化、LRU 驱逐）由应用侧与 `director.test.ts` 覆盖。

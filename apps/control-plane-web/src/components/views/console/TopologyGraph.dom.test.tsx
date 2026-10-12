@@ -11,7 +11,7 @@ import type { NodeInfo } from '@/lib/nodes/node-types'
 import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 
 /**
- * 拓扑图 · 受控视图测（ADR-097）。
+ * 拓扑图 · 受控视图测（ADR-102）。
  *
  * 补的是**展示契约**：加载态、空态、节点/连线渲染、工具条控件、维度切换时的取数通知。
  * 取数（单条聚合请求消 N+1）、搜索过滤交互、viewBox 复位由应用侧

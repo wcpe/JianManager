@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-// 版本类型已回迁应用侧（原 ADR-097 迁包已撤销）；此处转出，调用点零改动。
+// 版本类型已回迁应用侧（原 ADR-102 迁包已撤销）；此处转出，调用点零改动。
 import type { FileVersion, FileVersionDiff } from '@/lib/file-browser/file-version'
 export type { FileVersion, FileVersionDiff } from '@/lib/file-browser/file-version'
 

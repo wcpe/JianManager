@@ -10,7 +10,7 @@ import type { NavGroup } from '@/lib/shared/nav-config'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 
 /**
- * 手机端底部导航 · 受控视图测（ADR-097）。
+ * 手机端底部导航 · 受控视图测（ADR-102）。
  *
  * 补的是**展示契约**：主域条（≤5 个）、有链接直接跳 / 无链接展开面板、面板内子项与分节、
  * 点击后收起面板、主域激活高亮。权限裁剪与路由联动由应用侧接线层承担。

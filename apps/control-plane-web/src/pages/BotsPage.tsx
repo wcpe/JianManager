@@ -1,4 +1,4 @@
-// 分组总览的展示件已回迁应用侧（原 ADR-097 迁包已撤销）：分组操作区、分组行与成员窥视在包内；
+// 分组总览的展示件已回迁应用侧（原 ADR-102 迁包已撤销）：分组操作区、分组行与成员窥视在包内；
 // 本层保留取数（概览 summary / 窥视 bots / 批量 mutation）、路由跳转与提示。
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -32,7 +32,7 @@ import { InstancePicker } from '@/components/instances/InstancePicker'
 import CreateBotDialogView from '@/components/views/instances/CreateBotDialog'
 
 /**
- * Bot 详情弹窗的取数接线层（ADR-097）：视图已入包，此处注入元数据、实时流与命令下发。
+ * Bot 详情弹窗的取数接线层（ADR-102）：视图已入包，此处注入元数据、实时流与命令下发。
  */
 function BotDetailDialog({ botId, onOpenChange }: { botId: number | null; onOpenChange: (open: boolean) => void }) {
   const { data: bot } = useBot(botId ?? 0)
@@ -54,7 +54,7 @@ function BotDetailDialog({ botId, onOpenChange }: { botId: number | null; onOpen
 }
 
 /**
- * 分组窥视的取数接线层（ADR-097）：展示件已入包，此处只做参数展开、页码状态与成员取数。
+ * 分组窥视的取数接线层（ADR-102）：展示件已入包，此处只做参数展开、页码状态与成员取数。
  *
  * 页码会触发重新取数，故由本层持有（与列表页码同规则）；窥视随分组展开态挂载/卸载——
  * 收起即卸载、换组即重挂（行与卡都按 `group.key` 成键），页码自然复位为 1，与原页
@@ -302,7 +302,7 @@ function BotFleetTab() {
   )
 }
 
-/** 新建 Bot 弹窗的取数接线层（ADR-097）：视图已入包，此处注入实例选择与创建 mutation。 */
+/** 新建 Bot 弹窗的取数接线层（ADR-102）：视图已入包，此处注入实例选择与创建 mutation。 */
 function CreateBotDialogContainer({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation()
   const create = useCreateBot()

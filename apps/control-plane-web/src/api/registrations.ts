@@ -6,7 +6,7 @@ import type { ProxyRegistration as Registration } from '@/lib/instances/proxy-re
 
 /**
  * proxy↔backend 注册关系契约（对应后端 model.ServerRegistration + backend 概要，FR-032/035）
- * 已回迁应用侧，双侧共用（ADR-097）；对外保留原导出名 `Registration`，调用点无需改动。
+ * 已回迁应用侧，双侧共用（ADR-102）；对外保留原导出名 `Registration`，调用点无需改动。
  */
 export type { ProxyRegistration as Registration } from '@/lib/instances/proxy-registration'
 

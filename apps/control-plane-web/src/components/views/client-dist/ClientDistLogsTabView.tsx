@@ -98,7 +98,7 @@ function LogTypeSelect({ value, onChange }: { value: ClientDistLogTypeValue; onC
 }
 
 /**
- * 加厚请求日志视图的注入契约（受控视图，ADR-097 a 范式）。
+ * 加厚请求日志视图的注入契约（受控视图，ADR-102 a 范式）。
  *
  * 受控边界：请求事件行与加载/错误态、详情数据经 props 注入（容器调
  * `useClientDistEventSearch` / `useClientDistEventDetail`）；会触发重新取数的筛选
@@ -260,7 +260,7 @@ export function ClientDistRequestLogsView({
 }
 
 /**
- * 安全聚合多类型视图的注入契约（受控视图，ADR-097 a 范式）。
+ * 安全聚合多类型视图的注入契约（受控视图，ADR-102 a 范式）。
  *
  * 受控边界：聚合日志行与加载/错误态经 props 注入（容器调 `useClientDistSecurityLogs`）；
  * 会触发重新取数的查询条件（`query` 来自路由查询串、`playerName` 为筛选）经 props 受控，

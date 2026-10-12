@@ -3,7 +3,7 @@ import { useServerState } from '@/api/serverState'
 import { HealthPanel as HealthPanelView } from '@/components/views/instances/HealthPanel'
 
 /**
- * 端口 + 健康检查面板的应用接线层（ADR-097 a 范式）。
+ * 端口 + 健康检查面板的应用接线层（ADR-102 a 范式）。
  *
  * 面板本体是受控视图（见 components/views，不取数）；本层取实例与探针连接态后注入。
  * 保留同名同路径的具名导出，使既有调用点无需改动。

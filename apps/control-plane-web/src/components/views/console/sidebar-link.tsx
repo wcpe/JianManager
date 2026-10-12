@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 
 /**
- * 外壳注入的侧栏链接渲染入参（ADR-097：包内不依赖 react-router）。
+ * 外壳注入的侧栏链接渲染入参（ADR-102：包内不依赖 react-router）。
  *
  * 侧栏各视图（工作区侧栏 / 控制台侧栏）都用它把「跳转 + 可访问性语义」交给外壳，
  * 由外壳接 react-router 的 `<Link>`。`dataActive` 供折叠图标轨这类自带激活标记的样式钩子。

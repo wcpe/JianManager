@@ -92,7 +92,7 @@ export interface BaselineFormValues {
 }
 
 /**
- * 受控边界（ADR-097 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 基线列表、漂移明细、分组候选与全部加载/在途态经 props 注入
  *   （容器调 `useConfigBaselines` / `useBaselineDrift` / `useInstanceGroups`）；
  * - 三个写动作以回调上报，由容器执行 mutation 并决定成功/失败文案：保存与删除回传

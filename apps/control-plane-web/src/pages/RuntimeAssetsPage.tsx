@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做聚合取数、五类写动作与 toast 接线，以及两处插槽实现：
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做聚合取数、五类写动作与 toast 接线，以及两处插槽实现：
 // 实例候选的服务端搜索（千级实例）与制品存储对账区块（其自身容器化在上一批完成）。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -61,7 +61,7 @@ function RuntimeInstanceCandidates({ selected, onToggle }: RuntimeAssetsInstance
 }
 
 /**
- * 运行时与制品全局页容器（ADR-097 b 范式）：聚合取数，以及刷新运行时库存 / 删 JDK / 删制品 /
+ * 运行时与制品全局页容器（ADR-102 b 范式）：聚合取数，以及刷新运行时库存 / 删 JDK / 删制品 /
  * 导入制品 / 批量部署插件五类写动作与 toast 文案都在这里决定；页壳、两区内容、两个对话框与
  * 两处删除二次确认交共享视图。
  *

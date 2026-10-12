@@ -3,7 +3,7 @@ import { dispatchBusiness, fetchBusinessManifest } from '@/api/business'
 import BusinessSegmentView from '@/components/views/instances/BusinessSegment'
 
 /**
- * 业务掌控台的应用接线层（ADR-097 a 范式）。
+ * 业务掌控台的应用接线层（ADR-102 a 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层取能力清单、把 manifest 解析成「域 → 动作」并接下发动作。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。

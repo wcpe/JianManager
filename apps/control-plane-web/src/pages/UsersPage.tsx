@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做用户/邀请取数、五个写动作、写入口与删除门禁、路由链接接线。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做用户/邀请取数、五个写动作、写入口与删除门禁、路由链接接线。
 import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -19,7 +19,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 用户管理页容器（ADR-097 b 范式）：用户/邀请取数、五个写动作、写入口门禁（FR-432 user.manage）
+ * 用户管理页容器（ADR-102 b 范式）：用户/邀请取数、五个写动作、写入口门禁（FR-432 user.manage）
  * 与平台级删除门禁、toast 文案都在这里决定，列表、邀请面板与三个对话框交共享视图。
  *
  * `canManageUsers` 决定写入口是否可见；删除用户的角色门禁（scope 固定 platform，不降级）

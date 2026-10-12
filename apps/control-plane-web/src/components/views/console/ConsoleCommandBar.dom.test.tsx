@@ -8,7 +8,7 @@ import type { ReactNode } from 'react'
 import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 
 /**
- * 命令栏（FR-415，spec §2.2/§2.3；ADR-086）· 受控视图测（ADR-097）。
+ * 命令栏（FR-415，spec §2.2/§2.3；ADR-086）· 受控视图测（ADR-102）。
  *
  * 这些用例锁的是「弃 xterm 输入换原生 input」买到的东西：整行提交、readline 惯用键、
  * 输入法组合期不被打断。旧实现在 xterm `onData` 里手搓这些，全都是坏的。

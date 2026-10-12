@@ -46,7 +46,7 @@ export function HourlyBars({ dist, peak }: HourlyBarsProps) {
  * 卡片角标直接展示实际生效时区，故「下发了什么」与「实际用了什么」不会被误读。
  * 时段分布固定 24 项；半小时偏移时区（如 Asia/Kolkata）会把整点桶标注到 :30，见 API.md 口径注记。
  *
- * 受控视图（ADR-097 a 范式）：不取数——趋势数据与拉取态由外壳注入（浏览器时区也在壳侧读）。
+ * 受控视图（ADR-102 a 范式）：不取数——趋势数据与拉取态由外壳注入（浏览器时区也在壳侧读）。
  */
 export interface PlayerTrendCardProps {
   /** 统计窗口（回显在「粒度」卡上）。 */

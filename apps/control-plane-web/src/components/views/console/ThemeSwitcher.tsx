@@ -45,7 +45,7 @@ export interface ThemeSwitcherProps {
  * 明暗 = 三态直选。主题色与明暗正交、各自 localStorage 持久。
  * 折叠态（compact）布局不变——本来就是纯图标，只是与语言切换器一起纵向排列。
  *
- * 取值/落值由 props 注入（ADR-097）：本视图不触达 store。
+ * 取值/落值由 props 注入（ADR-102）：本视图不触达 store。
  */
 export function ThemeSwitcher({
   compact = false,

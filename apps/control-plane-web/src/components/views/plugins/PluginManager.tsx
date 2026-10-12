@@ -147,7 +147,7 @@ export function PluginManager({
 }: PluginManagerProps) {
   const { t } = useTranslation()
   const notify = (kind: 'success' | 'error' | 'info', message: string) => onNotify?.(kind, message)
-  // 插件列表与四种操作均由 props 注入（ADR-097）：本视图不触达 api。
+  // 插件列表与四种操作均由 props 注入（ADR-102）：本视图不触达 api。
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   // 上传目标目录：插件 / 模组 / 资源包 / 数据包。
@@ -476,7 +476,7 @@ function PluginBatchDeployDialog({
   const [confirming, setConfirming] = useState(false)
   const suppressParentCloseRef = useRef(false)
 
-  // 资产与实例候选由 props 注入（ADR-097）：本视图不触达 api。
+  // 资产与实例候选由 props 注入（ADR-102）：本视图不触达 api。
   const pluginAssets = assets
   const result = deployResult
   const canSubmit = selectedAssets.size > 0 && selectedInstances.size > 0 && !isDeploying

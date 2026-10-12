@@ -10,7 +10,7 @@ import type { LogLine } from '@/lib/console/console-log-line'
 import { ConsoleOutputView } from '@/components/views/console/ConsoleOutputView'
 
 /**
- * 输出区（FR-415，spec §2.1；ADR-086）· 受控视图测（ADR-097）：
+ * 输出区（FR-415，spec §2.1；ADR-086）· 受控视图测（ADR-102）：
  * 虚拟列表 / 自动滚底 / 上滚暂停 / 回溯锚点。
  *
  * jsdom 不做布局，`clientHeight`/`scrollHeight` 恒为 0，所以滚动相关用例显式把这三个

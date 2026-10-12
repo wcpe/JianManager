@@ -50,7 +50,7 @@ function isRollable(snap: Pick<InstanceSnapshotView, 'state' | 'notRollableReaso
  * - 写快照/回滚需 `instance.write`；
  * - **删除快照需 `instance.delete`**（它连带删除底层全量归档，后端权限门槛高于回滚）。
  *
- * 受控视图（ADR-097 b 范式）：不取数、不发请求、不弹 toast——四态、运行态、两个权限位
+ * 受控视图（ADR-102 b 范式）：不取数、不发请求、不弹 toast——四态、运行态、两个权限位
  * 与各动作在途态全部经 props 注入；创建/回滚/删除以回调上报。待确认项（哪条快照在等确认）
  * 属 UI 状态，留在组件内。
  */

@@ -7,7 +7,7 @@ import { InstanceConsoleView } from '@/components/views/console/InstanceConsoleV
 import type { ConsoleHistoryState } from '@/lib/console/console-history'
 
 /**
- * 实例控制台视图 · 受控视图测（ADR-097）。
+ * 实例控制台视图 · 受控视图测（ADR-102）。
  *
  * 补的是**展示契约**：连接占位、搜索面板开关、命令栏禁用口径、输出区与命令栏并存。
  * 终端会话的真实连接与回溯取数由应用侧 TerminalPane / fr416 端到端用例覆盖

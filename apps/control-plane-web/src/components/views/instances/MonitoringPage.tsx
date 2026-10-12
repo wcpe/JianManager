@@ -308,7 +308,7 @@ export interface MonitoringPageProps {
  * 4. 下钻——平台→节点→实例→世界 逐级钻取（面包屑 + 各层下拉）。
  * 仅纯前端消费既有 /metrics/series、/metrics/overview，不改后端、不另立 ADR（沿用 ADR-013）。
  *
- * 受控视图（ADR-097 a 范式）：不取数——目标、范围、粒度、对比选中、序列与进程数据都由外壳注入。
+ * 受控视图（ADR-102 a 范式）：不取数——目标、范围、粒度、对比选中、序列与进程数据都由外壳注入。
  * 下钻面板、概览/对比、进程 TOP 与详情弹窗的呈现留在视图内。
  */
 export default function MonitoringPage(props: MonitoringPageProps) {

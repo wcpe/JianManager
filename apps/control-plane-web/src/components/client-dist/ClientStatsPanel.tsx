@@ -27,7 +27,7 @@ function spanToDays(fromIso: string, toIso: string): number {
 }
 
 /**
- * 客户端分发统计看板（FR-095 + FR-217/FR-219 + FR-356，见 ADR-023/ADR-049）的接线层（ADR-097）。
+ * 客户端分发统计看板（FR-095 + FR-217/FR-219 + FR-356，见 ADR-023/ADR-049）的接线层（ADR-102）。
  *
  * 展示层已回迁应用侧（`ClientStatsPanelView`），此处只保留应用侧职责：
  * - 统一时间窗（FR-425）的持有与 URL 深链解析：初始窗读当前查询串（`from`/`to` 优先，否则默认 30d），

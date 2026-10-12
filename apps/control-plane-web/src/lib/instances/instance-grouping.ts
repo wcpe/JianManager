@@ -4,7 +4,7 @@ import { resolveCapabilities } from './capabilities'
 import { ENV_TAG_PREFIX } from './instance-tags'
 import type { InstanceInfo } from './instance-types'
 
-/** 环境维度复用 Tags 字段的约定前缀（FR-047）：常量随视图归包（ADR-097），此处再导出以保单一真源。 */
+/** 环境维度复用 Tags 字段的约定前缀（FR-047）：常量随视图归包（ADR-102），此处再导出以保单一真源。 */
 export { ENV_TAG_PREFIX }
 
 /**

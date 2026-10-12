@@ -8,7 +8,7 @@ import RollingBatchDialog, { RollingProgress } from '@/components/views/instance
 import type { RollingOp } from '@/lib/instances/instance-rolling'
 
 /**
- * FR-457 滚动/分批/灰度编排 · 受控视图测（ADR-097 b 范式）。
+ * FR-457 滚动/分批/灰度编排 · 受控视图测（ADR-102 b 范式）。
  *
  * 应用侧已有一份 msw 集成测试（覆盖创建载荷端到端、进度轮询、暂停/继续/取消），
  * 这里补的是**不依赖后端**的视图语义：灰度比例换算、批数计算、控制按钮的状态可见性、
@@ -110,7 +110,7 @@ function renderDialog(props: Partial<Props> = {}) {
   return merged
 }
 
-describe('RollingBatchDialog 策略表单（FR-457 · ADR-097 b 范式）', () => {
+describe('RollingBatchDialog 策略表单（FR-457 · ADR-102 b 范式）', () => {
   it('描述带出选中数量，默认策略为分批 5/间隔 30/失败即停/全量', () => {
     renderDialog()
 

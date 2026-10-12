@@ -11,7 +11,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 节点制品缓存页签外壳（ADR-097 b 范式）。
+ * 节点制品缓存页签外壳（ADR-102 b 范式）。
  *
  * 写操作的全部决策都在这里：何时发请求、成功提示什么、失败如何取后端消息。
  * 受控视图只管把用户动作上报上来（`onEvict` / `onClear` / `onSaveCap`），

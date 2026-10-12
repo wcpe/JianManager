@@ -5,7 +5,7 @@ import type { InstanceBatchAction, InstanceBatchFilter } from '@/api/instances'
 import { isRollingActive } from '@/lib/instances/instance-rolling'
 import type { RollingControlAction, RollingOp } from '@/lib/instances/instance-rolling'
 
-// 编排契约（状态 / 失败明细 / 会话 / 控制动作 / 推进判定）归包，双侧共用（ADR-097）。
+// 编排契约（状态 / 失败明细 / 会话 / 控制动作 / 推进判定）归包，双侧共用（ADR-102）。
 // 本地绑定来自上方 import，此处仅对外再导出，避免两处各写一份。
 export type { RollingControlAction, RollingError, RollingOp, RollingState } from '@/lib/instances/instance-rolling'
 export { isRollingActive } from '@/lib/instances/instance-rolling'

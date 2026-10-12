@@ -84,7 +84,7 @@ function navigableEntries(group: { children?: NavEntry[] }): NavEntry[] {
  * 内容区是同一 flex 行的兄弟节点，宽度变化时自然回流、不再被平移。
  * 因此这里只需保留抽屉容器（它仍带来明暗两套表面样式），不再需要「瞬跳 / 补偿」那套配对动画。
  */
-/** 侧栏资源数据源（ADR-097：应用侧取数后注入；字段为组件所需投影）。 */
+/** 侧栏资源数据源（ADR-102：应用侧取数后注入；字段为组件所需投影）。 */
 export interface WorkspaceSidebarData {
   /** 实例聚合权威总数（`/instances` 计数，与页眉同源）。 */
   instanceTotal?: number
@@ -137,7 +137,7 @@ export interface WorkspaceSidebarProps {
 /**
  * 控制台侧栏（FR-496 阶段 6）：`ConsoleSidebar` 的接替者。
  *
- * 数据与路由一律由 props 注入（ADR-097）：本视图不触达 api / store / 路由。
+ * 数据与路由一律由 props 注入（ADR-102）：本视图不触达 api / store / 路由。
  */
 export function WorkspaceSidebar({
   collapsed,

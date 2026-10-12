@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- 纯函数 parseIdInput/mergeIds/formatScopeSummary 经本文件再导出，保持 AgentTokensPage.dom.test.tsx 既有导入路径可用 */
-// 视图已回迁应用侧（原 ADR-097 迁包已撤销）；本层只做平台管理员门禁、列表/候选取数、签发与吊销 mutation、
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做平台管理员门禁、列表/候选取数、签发与吊销 mutation、
 // 危险操作门禁与 toast 文案接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -32,7 +32,7 @@ const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?
 export { parseIdInput, mergeIds, formatScopeSummary } from '@/components/views/agent/AgentTokensPageView'
 
 /**
- * Agent Token 管理页容器（FR-387，消费 FR-384 API，ADR-097 b 范式）：平台管理员门禁、列表取数、
+ * Agent Token 管理页容器（FR-387，消费 FR-384 API，ADR-102 b 范式）：平台管理员门禁、列表取数、
  * 签发/吊销两个写动作、候选数据与映射表注入、页头跳转入口都在这里决定，
  * 表格、签发对话框与一次性明文展示交共享视图。
  *
