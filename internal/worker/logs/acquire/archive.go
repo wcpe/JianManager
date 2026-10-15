@@ -2,7 +2,6 @@ package acquire
 
 import (
 	"bufio"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -16,13 +15,17 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
-// ArchiveImporter 从 gzip 归档流式解析。
+// ArchiveImporter 从归档流式解析（压缩 gzip 与纯文本轮转两种形态，见 archive_format.go）。
 // 约束：
 //   - 轮转已关联时禁止整包按 hash 重导入；
 //   - archive_object_id 仅 provenance，不参与 event_id；
 //   - 接管前必须登记前段结束位置（由 rotation link 提供）；
 //   - **归属闸**（2026-10-02 补）：归档只允许导入到"它所属的那个代次"。归属由轮转关联
 //     或跨代次注册表命中给出；两者都没有 = 来源不可追溯，一律拒绝导入并记缺口告警。
+//
+// 形态**不在本类型里判定**：调用方（pipeline.ImportArchive）按文件头判定后调用对应的入口
+// （ImportGzipBounded / ImportTextBounded）。这样形态判定与准入决策同处一处，且两种形态
+// 在导入流程里除形态本身外**逐字共用**同一实现。
 type ArchiveImporter struct {
 	led    *ledger.Ledger
 	key    ledger.SourceKey
@@ -126,7 +129,7 @@ func HashFile(path string) (string, int64, error) {
 //
 // 等价于 ImportGzipBounded(archivePath, 0)（不限量）——一次读完整包，行为与本修复前一致。
 func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) {
-	return a.importGzip(archivePath, 0)
+	return a.importArchive(archivePath, 0, formatGzip)
 }
 
 // ImportGzipBounded 是**有界**导入：单次最多产出 maxEvents 个事件，读满即停并回
@@ -140,12 +143,35 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 // `单源积压超过上限，已暂停该源采集`；越闸后 Append 的首判据（已暂停）拒绝后续追加
 // ⇒ 源停死、`delivery_pos` 恒 None、VL 侧 0 行，且 5 分钟内零自愈。
 func (a *ArchiveImporter) ImportGzipBounded(archivePath string, maxEvents int) (*ImportResult, error) {
-	return a.importGzip(archivePath, maxEvents)
+	return a.importArchive(archivePath, maxEvents, formatGzip)
 }
 
-// importGzip 是导入的**唯一实现**（maxEvents<=0 表示不限量）。
-func (a *ArchiveImporter) importGzip(archivePath string, maxEvents int) (*ImportResult, error) {
-	// 轮转关联检查：latest.log → .gz 已链接且已导入 → 不重复计数。
+// ImportText 导入**纯文本轮转归档**（BungeeCord 的 `proxy.log.N`）；不限量（等价
+// ImportTextBounded(archivePath, 0)）。
+//
+// 形态不在这里判定：调用方必须先用 DetectArchiveFormat 判定，再调用对应入口。
+// 本入口是「已确定是纯文本」时的执行者，因此它不会把 gzip 归档当纯文本读（那会产出
+// 一堆二进制噪声事件），也不会把纯文本当 gzip 读（那正是本能力要消灭的缺口来源）。
+func (a *ArchiveImporter) ImportText(archivePath string) (*ImportResult, error) {
+	return a.importArchive(archivePath, 0, formatRotatedText)
+}
+
+// ImportTextBounded 是纯文本轮转归档的**有界**导入：语义与 ImportGzipBounded 逐条相同
+// （单轮最多 maxEvents 条、读满即停、位置落回账本分段、下一轮从断点续读）。
+//
+// 为什么有界性对新形态同样必须成立：纯文本轮转文件可以很大（BungeeCord 的轮转上限按
+// 文件大小触发，生产上单文件数万行是常态），一次性导入会重现缺陷二的越闸暂停。
+func (a *ArchiveImporter) ImportTextBounded(archivePath string, maxEvents int) (*ImportResult, error) {
+	return a.importArchive(archivePath, maxEvents, formatRotatedText)
+}
+
+// importArchive 是导入的**唯一实现**（maxEvents<=0 表示不限量）。
+//
+// format 只决定两件事：登记到账本分段的形态，以及「字节流 → 行文本流」的解码方式。
+// 其余一切（归属闸、断点续读、有界分批、事件字段与 record 范围、缺口原因码）对两种形态
+// 完全一致——「走完全相同的下游链路」在实现层就是这一条。
+func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, format archiveFormat) (*ImportResult, error) {
+	// 轮转关联检查：前段（latest.log / proxy.log.0）已链接且本归档已导入 → 不重复计数。
 	link, linked := a.led.RotationLinked(a.key, archivePath)
 	ent := a.led.Get(a.key)
 	var existing *ledger.Segment
@@ -172,7 +198,7 @@ func (a *ArchiveImporter) importGzip(archivePath string, maxEvents int) (*Import
 	if err != nil {
 		// 权限/损坏：记缺口，不拖死后续源。
 		_ = a.led.RecordGap(a.key, 0, 0, ledger.GapReasonArchiveUnreadable, err.Error())
-		_ = a.MarkFailed(archivePath, ledger.GapReasonArchiveUnreadable+": "+err.Error())
+		_ = a.markFailed(archivePath, format.kind, ledger.GapReasonArchiveUnreadable+": "+err.Error())
 		return &ImportResult{Skipped: true, Reason: err.Error()}, nil
 	}
 	objID := ArchiveObjectID(archivePath, size, contentHash)
@@ -180,23 +206,25 @@ func (a *ArchiveImporter) importGzip(archivePath string, maxEvents int) (*Import
 	f, err := os.Open(archivePath)
 	if err != nil {
 		_ = a.led.RecordGap(a.key, 0, 0, ledger.GapReasonArchiveOpenFailed, err.Error())
-		_ = a.MarkFailed(archivePath, ledger.GapReasonArchiveOpenFailed+": "+err.Error())
+		_ = a.markFailed(archivePath, format.kind, ledger.GapReasonArchiveOpenFailed+": "+err.Error())
 		return &ImportResult{Skipped: true, Reason: err.Error(), ArchiveObjectID: objID}, nil
 	}
 	defer f.Close()
 
-	gz, err := gzip.NewReader(f)
+	body, err := format.decode(f)
 	if err != nil {
-		// 损坏 gz：隔离/缺口可见。
-		_ = a.led.RecordGap(a.key, 0, 0, ledger.GapReasonArchiveGzipCorrupt, err.Error())
-		_ = a.MarkFailed(archivePath, ledger.GapReasonArchiveGzipCorrupt+": "+err.Error())
-		return &ImportResult{Skipped: true, Reason: "corrupt gzip: " + err.Error(), ArchiveObjectID: objID}, nil
+		// 形态不可解（当前只有 gzip 有这一阶段）：隔离/缺口可见。
+		// 纯文本轮转没有容器头可校验，故它**不会**走到这里——也就不需要新的缺口原因码
+		// （新原因若不在自动消解白名单里，就会成为「源暂停后永久停采」的新入口）。
+		_ = a.led.RecordGap(a.key, 0, 0, format.decodeFailureReason, err.Error())
+		_ = a.markFailed(archivePath, format.kind, format.decodeFailureReason+": "+err.Error())
+		return &ImportResult{Skipped: true, Reason: format.decodeFailurePrefix + err.Error(), ArchiveObjectID: objID}, nil
 	}
-	defer gz.Close()
+	defer body.Close()
 
 	// 归属闸（2026-10-02）：归档只允许导入到**它所属的那个代次**。
 	//
-	// 位置刻意放在 gzip 头校验**之后**：归档损坏/打不开是更基础的事实，其原因码
+	// 位置刻意放在**解码/头校验**之后：归档损坏/打不开是更基础的事实，其原因码
 	// （ARCHIVE_OPEN_FAILED / ARCHIVE_GZIP_CORRUPT）不应被归属问题顶掉（既有回归依赖它们）。
 	//
 	// 判据与语义（三条，按优先级）：
@@ -245,7 +273,7 @@ func (a *ArchiveImporter) importGzip(archivePath string, maxEvents int) (*Import
 				"归档 %s 已由代次 %q 导入，本代次 %q 不得重复归账（event_id 含代次，重复导入即静默重复）",
 				cleanPath, owner, a.key.SourceGeneration)
 			_ = a.led.RecordGap(a.key, 0, 0, ledger.GapReasonArchiveForeignGeneration, reason)
-			_ = a.MarkFailed(archivePath, ledger.GapReasonArchiveForeignGeneration+": "+reason)
+			_ = a.markFailed(archivePath, format.kind, ledger.GapReasonArchiveForeignGeneration+": "+reason)
 			a.refusedForeign++
 			slog.Warn("拒绝导入属于其它代次的归档（禁止归到当前代次）",
 				"logSourceID", a.key.LogSourceID, "generation", a.key.SourceGeneration,
@@ -304,14 +332,14 @@ func (a *ArchiveImporter) importGzip(archivePath string, maxEvents int) (*Import
 
 	_ = a.led.RegisterSegment(a.key, ledger.Segment{
 		Path:            archivePath,
-		Kind:            ledger.SegmentGzip,
+		Kind:            format.kind,
 		StartPos:        segmentStart,
 		ArchiveObjectID: objID, // provenance only
 		Imported:        false,
 		ParserVersion:   a.parser.ParserVersion,
 	})
 
-	reader := bufio.NewReader(gz)
+	reader := bufio.NewReader(body)
 	if skipBytes > 0 {
 		if _, err := io.CopyN(io.Discard, reader, int64(skipBytes)); err != nil {
 			if err == io.EOF {
@@ -391,7 +419,7 @@ func (a *ArchiveImporter) importGzip(archivePath string, maxEvents int) (*Import
 	// 更新分段结束位置（逻辑源累计：startFrom + 归档内容长度）。
 	_ = a.led.RegisterSegment(a.key, ledger.Segment{
 		Path:            archivePath,
-		Kind:            ledger.SegmentGzip,
+		Kind:            format.kind,
 		StartPos:        segmentStart,
 		EndPos:          pos,
 		ArchiveObjectID: objID,
@@ -429,7 +457,14 @@ func (a *ArchiveImporter) importGzip(archivePath string, maxEvents int) (*Import
 // MarkImported is called only after the archive events are covered by durable
 // WAL (or the linked prefix was already covered). This prevents a capacity or
 // WAL failure from turning a discovered gzip into a silently skipped segment.
+//
+// 形态（kind）取自该路径上**已登记的分段**：本入口是形态无关的「已导入」登记
+// （ingest 侧也会直接调用它），若在这里写死 gzip，纯文本轮转归档的形态会被改写，
+// 账本随即失真。既无分段时按 gzip 登记——这不是"猜形态"，而是保持既有调用口径：
+// 形态感知的导入路径（importArchive）总在调用前先登记分段，故带形态的归档到这里必然
+// 已带有自己的形态。
 func (a *ArchiveImporter) MarkImported(path, objectID string, start, end uint64) error {
+	kind := ledger.SegmentKind("")
 	if entry := a.led.Get(a.key); entry != nil {
 		for _, segment := range entry.Segments {
 			if segment.Path == path {
@@ -437,19 +472,36 @@ func (a *ArchiveImporter) MarkImported(path, objectID string, start, end uint64)
 				if segment.EndPos > end {
 					end = segment.EndPos
 				}
+				kind = segment.Kind
 				break
 			}
 		}
 	}
+	if !ledger.IsArchiveSegmentKind(kind) {
+		kind = ledger.SegmentGzip
+	}
 	return a.led.RegisterSegment(a.key, ledger.Segment{
-		Path: path, Kind: ledger.SegmentGzip, StartPos: start, EndPos: end,
+		Path: path, Kind: kind, StartPos: start, EndPos: end,
 		ArchiveObjectID: objectID, Imported: true, ParserVersion: a.parser.ParserVersion,
 	})
 }
 
 // MarkFailed quarantines an unchanged bad archive. The manager retries only
 // after size or mtime changes, avoiding an unbounded gap on every poll.
+//
+// 等价于 markFailed(path, SegmentGzip, reason)：形态未知时按 gzip 登记，与历史逐字一致。
 func (a *ArchiveImporter) MarkFailed(path, reason string) error {
+	return a.markFailed(path, ledger.SegmentGzip, reason)
+}
+
+// markFailed 是 MarkFailed 的**形态感知**版本：登记失败态时保留该路径上既有的归档类形态
+// （无既存分段时用本次形态）。
+//
+// 为什么形态必须保留：失败态是「这个归档暂时没导进来」的事实记录，它不改变字节的形态。
+// 若在这里写死 gzip，纯文本轮转归档的失败登记会被记成 gzip —— 诊断面（形态统计）随之失真，
+// 而 ingest 的待导入发现也按形态过滤，形态记错会让「已隔离、等文件变化再重试」这条语义
+// 落到错误的形态上。
+func (a *ArchiveImporter) markFailed(path string, kind ledger.SegmentKind, reason string) error {
 	var segment ledger.Segment
 	if entry := a.led.Get(a.key); entry != nil {
 		for _, existing := range entry.Segments {
@@ -460,7 +512,10 @@ func (a *ArchiveImporter) MarkFailed(path, reason string) error {
 		}
 	}
 	segment.Path = path
-	segment.Kind = ledger.SegmentGzip
+	if !ledger.IsArchiveSegmentKind(segment.Kind) {
+		// 无既存分段（首次失败）或该路径上只有非归档分段（tailer 的 rotated 等）：用本次形态。
+		segment.Kind = kind
+	}
 	segment.Imported = false
 	segment.ImportError = reason
 	segment.ParserVersion = a.parser.ParserVersion

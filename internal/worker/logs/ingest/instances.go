@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
@@ -155,6 +157,8 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 	// 详见 Manager.registerMu 的注释与 docs/specs/log-ingest-register-lock/spec.md 的锁审计表。
 	m.registerMu.Lock()
 	defer m.registerMu.Unlock()
+	// rollback 仅在「规则升级重建」路径上非 nil：它定格 detach 之前的旧状态（A6）。
+	var rollback *ruleChangeRollback
 	m.mu.Lock()
 	existing, exists := m.state.Instances[reg.UUID]
 	m.mu.Unlock()
@@ -185,6 +189,39 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 				return err
 			}
 		} else {
+			// A3：重建前先确认旧源的「已读未投递」已清空。
+			//
+			// 摘除会把旧源的 WAL/水位/投影一并清掉，而 WAL 里可能还躺着**已读出但尚未确认投递**
+			// 的事件（投递失败窗口 / 暂停 / 重试积压）。这些事件既不进缺口、也不告警，随状态清空
+			// 直接消失 —— 静默丢数据，本仓最不能接受的那一类。
+			//
+			// 取舍：**宁可重建延后，不可静默丢**。检出残留即拒绝本次重建（旧源原样保留，由 CP
+			// 下次重试或运维介入），并给出一条可判读的错误；不登记「不可自动消解的缺口」——
+			// 那会让该源被永久停采（既有教训）。
+			//
+			// 为什么口径只取 WAL、不先 Flush 出悬挂的半条事件：未闭合多行缓冲是**每个源的稳态**
+			// （最后一行永远在等下一个边界），把它也计入残留会让每一次规则升级都被永久拒绝——
+			// 那正是「为了不丢而引入新的阻塞」，与本次修法的取舍相悖。
+			//
+			// 为什么不在这里「就地结算」：唯一可用的投递入口是 pipeline.Pipeline.DeliverPending，
+			// 它会发起**真实 VL 投递**（含整窗重发分支与持久化门）。本函数在 registerMu 内，把
+			// 登记 RPC 挂在网络与门外正是 2026-10-03 事故的同型形态；且该入口与兜底环共用
+			// 「同源投递串行」前提，内联调用还要额外认领在飞表。因此改为把排空**非阻塞交办**给
+			// 既有后台链（兜底环的投递欠账步 / #56 排空宿主都会驱动同一入口，二者都走有界执行器），
+			// 本次立即返回明确错误：「交办排空 + 拒绝本次重建」不丢事件，也不是死结。
+			if pending, pendingBytes, sourceKey := m.instanceRuleChangeUndelivered(existing); pending > 0 {
+				if sourceKey == "" {
+					sourceKey = existing.TargetID
+				}
+				m.schedulePendingReplay(sourceKey)
+				slog.Warn("规则升级未执行：旧源尚有已读未投递事件（已交办后台排空，投递确认后重试即可）",
+					"uuid", existing.UUID, "source", sourceKey, "pending", pending, "bytes", pendingBytes)
+				return fmt.Errorf("ingest: 旧源 %s 尚有 %d 条已读未投递事件（约 %d 字节），"+
+					"拒绝以新规则重建以免丢失（已交办后台排空，待投递确认后重试）",
+					sourceKey, pending, pendingBytes)
+			}
+			// A6：摘除前定格旧绑定、旧源配置与旧账目镜像——重建失败时据此回滚。
+			rollback = m.snapshotRuleChangeRollback(existing)
 			if err := m.detachSourcesForRuleChange(existing); err != nil {
 				return err
 			}
@@ -235,6 +272,9 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 			StorageNamespace: binding.TargetID, ArchiveGlob: fileArchiveGlob(binding),
 			StartAtEOF: startAtEOF}); err != nil {
 			m.rollbackRegisterSources(registeredKeys)
+			// A6：规则升级重建失败时，回滚**本次新建的源**只是第一步——旧绑定与旧源已被 detach
+			// 摘掉，不回滚就会停在「无绑定、无源」的半个状态。
+			m.restoreRuleChangeRollback(rollback)
 			return err
 		}
 		registeredKeys = append(registeredKeys, sourceID+"/"+reg.Generation)
@@ -256,6 +296,8 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 		m.mu.Lock()
 		delete(m.state.Instances, reg.UUID)
 		m.mu.Unlock()
+		// A6：落库失败同样是「已 detach 却没能建起来」，旧源与旧绑定必须回来。
+		m.restoreRuleChangeRollback(rollback)
 		return err
 	}
 	if err := m.flushPendingForBinding(binding); err != nil {
@@ -400,18 +442,8 @@ func (m *Manager) detachSourcesForRuleChange(old InstanceBinding) error {
 	m.pendingMu.Lock()
 	defer m.pendingMu.Unlock()
 
-	streams := []string{"stdout"}
-	if old.Mode == pipeline.ModeStdioPrimary {
-		streams = append(streams, "stderr")
-	}
-
 	m.mu.Lock()
-	for _, stream := range streams {
-		sourceID := old.TargetID + "/file"
-		if old.Mode == pipeline.ModeStdioPrimary {
-			sourceID = old.TargetID + "/" + stream
-		}
-		key := sourceID + "/" + old.Generation
+	for _, key := range instanceSourceKeys(old) {
 		delete(m.pipes, key)
 		delete(m.sources, key)
 		delete(m.state.SourceConfigs, key)
@@ -434,6 +466,185 @@ func (m *Manager) detachSourcesForRuleChange(old InstanceBinding) error {
 	m.publishReconcileViewLocked(true)
 	m.mu.Unlock()
 	return nil
+}
+
+// instanceSourceKeys 返回某绑定对应的全部源键（FILE_PRIMARY 一条；STDIO_PRIMARY 两条流）。
+//
+// 键即 pipes / sources / SourceConfigs / 账目镜像四张表的统一键（`<logSourceID>/<generation>`）。
+// 登记、摘除、残留探针与失败回滚必须按**同一口径**枚举——口径分叉就会留下「摘了源却留着配置」
+// 这类半状态，而这类半状态在重启后才会显形。
+func instanceSourceKeys(binding InstanceBinding) []string {
+	if binding.Mode == pipeline.ModeStdioPrimary {
+		return []string{
+			binding.TargetID + "/stdout/" + binding.Generation,
+			binding.TargetID + "/stderr/" + binding.Generation,
+		}
+	}
+	return []string{binding.TargetID + "/file/" + binding.Generation}
+}
+
+// instanceUndeliveredResidue 统计某源「已读入 WAL、但尚未被投递水位覆盖」的事件数与字节数（A3）。
+//
+// 判据为什么取**投递水位**而不是回收水位：WAL 条目只在 `Durable && Record.End <= reclaim` 时才
+// 被剪枝（见 acquire 的 pruneReclaimed），所以 WAL 里同时躺着两类条目——「已投递但尚未回收」
+// 与「尚未投递」。只有后者会随账目清空而真正丢失。拿 reclaim 当判据会把前者误判成残留，
+// 使重建被无谓地长期拒绝（回收水位受恢复责任链约束，可能落后很久）。
+//
+// 只读：仅读一次账本水位与一份 WAL 快照，不改任何状态；调用方须已持 registerMu
+// （见 RegisterInstance 的规则升级分支）。
+func instanceUndeliveredResidue(p *pipeline.Pipeline) (entries int, bytes int64) {
+	if p == nil {
+		return 0, 0
+	}
+	delivery := uint64(0)
+	if pos, ok := p.Positions(); ok {
+		delivery = pos.Delivery
+	}
+	for _, entry := range p.WAL().Snapshot() {
+		if entry.Event.Record.End <= delivery {
+			continue // 已被投递水位覆盖：只是还没被回收，不是未投递
+		}
+		entries++
+		bytes += int64(len(entry.Event.Message))
+	}
+	return entries, bytes
+}
+
+// instanceRuleChangeUndelivered 汇总某绑定全部流的「已读未投递」残留，并给出用于交办排空的源键。
+//
+// 源键取**第一个有残留的流**：排空交办按源进行，stdio 两条流各自独立；退化为任一条即可
+// （交办只是让后台链尽快驱动同一入口，真正的判据是上面的条数）。
+func (m *Manager) instanceRuleChangeUndelivered(old InstanceBinding) (entries int, bytes int64, sourceKey string) {
+	type streamPipe struct {
+		key  string
+		pipe *pipeline.Pipeline
+	}
+	keys := instanceSourceKeys(old)
+	m.mu.Lock()
+	streams := make([]streamPipe, 0, len(keys))
+	for _, key := range keys {
+		if p := m.pipes[key]; p != nil {
+			streams = append(streams, streamPipe{key: key, pipe: p})
+		}
+	}
+	m.mu.Unlock()
+	for _, stream := range streams {
+		e, b := instanceUndeliveredResidue(stream.pipe)
+		entries += e
+		bytes += b
+		if e > 0 && sourceKey == "" {
+			sourceKey = stream.key
+		}
+	}
+	return entries, bytes, sourceKey
+}
+
+// ruleChangeRollback 是「规则升级重建」失败时回到旧状态的快照（A6）。
+type ruleChangeRollback struct {
+	uuid     string
+	binding  InstanceBinding
+	configs  map[string]SourceConfig
+	accounts map[string]persistedSource
+}
+
+// snapshotRuleChangeRollback 在 detach **之前**定格旧绑定、旧源配置与旧账目镜像（A6）。
+//
+// 为什么账目镜像也要定格：detach 会把 `m.state.Sources[key]` 一并删掉，而 m.Register 正是
+// **从该镜像**还原水位与 WAL 的（见 Register 里 led.Restore / wal.Restore 的入参）。只放回源配置
+// 而不放回镜像，等于把旧源当成「全新源」重建——它会从文件头重读整份既有日志并重复投递，
+// 与真机「30 倍重复」是同一形态。
+//
+// 调用方须已持 registerMu（本函数只取 m.mu，锁序 registerMu → m.mu ✓）。
+func (m *Manager) snapshotRuleChangeRollback(old InstanceBinding) *ruleChangeRollback {
+	snap := &ruleChangeRollback{
+		uuid:     old.UUID,
+		binding:  old,
+		configs:  make(map[string]SourceConfig),
+		accounts: make(map[string]persistedSource),
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, key := range instanceSourceKeys(old) {
+		// 配置优先取**索引口径**（m.state.SourceConfigs）：它是重启后真正被恢复的那一份，
+		// 且只含显式字段（继承来的字符集/时区不写回索引，见 Register 的口径说明）。
+		if cfg, ok := m.state.SourceConfigs[key]; ok {
+			snap.configs[key] = cfg
+		} else if cfg, ok := m.sources[key]; ok {
+			snap.configs[key] = cfg
+		}
+		if saved, ok := m.state.Sources[key]; ok {
+			snap.accounts[key] = saved
+		}
+	}
+	return snap
+}
+
+// restoreRuleChangeRollback 回滚一次失败的规则升级重建：放回旧账目镜像与旧配置，按旧配置原样
+// 重建旧源，最后恢复旧绑定（A6）。
+//
+// 为什么必须做：detach 已经把旧绑定与旧源摘掉，若不回滚，实例就停在「无绑定、无源」的半个状态
+// ——日志完全断流，且因为绑定也不在了，只能等 CP 下一次真正的登记事件。
+//
+// 行为边界（如实说明，不夸大）：
+//   - 恢复的是「源登记 + 旧绑定 + detach 之前的账目镜像」。镜像里的水位由持久化链推动，
+//     **可能落后于 detach 那一刻的内存水位**，故恢复后可能重读一小段并重复投递（FR-497 允许
+//     重复，投递面按 event_id 幂等）；但不会从文件头整份重读，也绝不丢账目。
+//   - detach 之后、恢复之前写入内存的账目增量不在快照里 ⇒ 同样回退到镜像时点（安全方向：重复，不丢）。
+//
+// 调用方须已持 registerMu，且调用前必须已用 rollbackRegisterSources 清掉本次新建的源
+// （本函数内部会调用 m.Register，锁序 registerMu → m.mu ✓）。
+func (m *Manager) restoreRuleChangeRollback(snap *ruleChangeRollback) {
+	if snap == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.state.SourceConfigs == nil {
+		m.state.SourceConfigs = make(map[string]SourceConfig)
+	}
+	if m.state.Sources == nil {
+		m.state.Sources = make(map[string]persistedSource)
+	}
+	for key, cfg := range snap.configs {
+		m.state.SourceConfigs[key] = cfg
+	}
+	for key, saved := range snap.accounts {
+		m.state.Sources[key] = saved
+	}
+	// 绑定先摘掉，全部源都恢复成功后再放回（见下方"未全部恢复"的说明）。
+	delete(m.state.Instances, snap.uuid)
+	m.publishReconcileViewLocked(true)
+	m.mu.Unlock()
+
+	restored := true
+	keys := make([]string, 0, len(snap.configs))
+	for key := range snap.configs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys) // 固定顺序：stdio 两条流也要按确定次序重建
+	for _, key := range keys {
+		cfg := snap.configs[key]
+		if err := m.Register(cfg); err != nil {
+			restored = false
+			slog.Error("规则升级重建失败后的旧源恢复失败：该源暂不可采，等 CP 重新登记",
+				"uuid", snap.uuid, "logSourceID", cfg.LogSourceID,
+				"generation", cfg.SourceGeneration, "error", err)
+		}
+	}
+	if !restored {
+		// 刻意**不**恢复绑定：绑定一旦在位，CP 的下一次同名登记会走「绑定未变即幂等返回」的
+		// 快路径，而那条路径不会重建源 ⇒ 该实例会被永久钉在「有绑定、无源」上。留空绑定让下次
+		// 登记走完整重建分支，是这里唯一能自愈的形态。
+		slog.Error("旧源未全部恢复：本次不恢复实例绑定，让 CP 下次登记走完整重建路径（幂等快路径会跳过建源）",
+			"uuid", snap.uuid, "target", snap.binding.TargetID, "ruleKey", snap.binding.RuleKey)
+		return
+	}
+	m.mu.Lock()
+	if m.state.Instances == nil {
+		m.state.Instances = make(map[string]InstanceBinding)
+	}
+	m.state.Instances[snap.uuid] = snap.binding
+	m.publishReconcileViewLocked(true)
+	m.mu.Unlock()
 }
 
 // 调用方须已持 registerMu + pendingMu（本函数只取 m.mu，锁序 registerMu → pendingMu → m.mu ✓）。

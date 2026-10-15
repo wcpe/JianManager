@@ -57,18 +57,25 @@ func TestRegisterInstanceBungeeRuleUsesRootProxyLog(t *testing.T) {
 	sc := sourceByID(t, m, "inst:900/file")
 	require.Equal(t, filepath.Join(work, "proxy.log.0"), sc.Path,
 		"bungee 规则的活动日志应为工作目录根的 proxy.log.0")
-	require.Empty(t, sc.ArchiveGlob,
-		"bungee 规则的归档 glob 必须为空——BungeeCord 的轮转产物 proxy.log.N 是纯文本，"+
-			"而导入器只支持 gzip（见 TestBungeeRuleProducesNoArchiveGlob）")
+	require.Equal(t, filepath.Join(work, "proxy.log.[1-9]*"), sc.ArchiveGlob,
+		"bungee 规则的归档 glob 应为收窄后的 proxy.log.[1-9]*（纯文本轮转可导入，"+
+			"见 TestBungeeRuleImportsPlainTextRotations）")
 }
 
-// TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations 验证 bungee 源**不会**把纯文本轮转文件
-// 当成 gzip 归档尝试导入（2026-10-15 复核的行为级回归）。
+// TestRegisterInstanceBungeeRuleImportsPlainTextRotations 验证 bungee 源**能**采集纯文本轮转历史，
+// 且不留下不可自愈的缺口（本能力的端到端行为级回归）。
 //
 // 为什么必须行为级：旧用例只断言归档 glob 的字符串形态，而缺陷的后果在账本里——
-// `proxy.log.1` 会被登记为 kind=gzip 段、记一条 `ARCHIVE_GZIP_CORRUPT` 缺口
-// （该原因不可自动消解 ⇒ 源一旦被暂停即永久停采）。本用例直接断言这两样都不产生。
-func TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations(t *testing.T) {
+// 修复前 `proxy.log.1` 会被登记为 kind=gzip 段、记一条 `ARCHIVE_GZIP_CORRUPT` 缺口
+// （该原因不可自动消解 ⇒ 源一旦被暂停即永久停采），于是当时的结论是「glob 必须为空」。
+// 本用例直接断言新口径的三件事：
+//   - 轮转正文**确实**进了事件段（能力生效，不是又被跳过）；
+//   - 分段形态是 rotated_text 而**不是** gzip（形态判定按文件头，登记如实）；
+//   - 全程零缺口（尤其不得有 ARCHIVE_GZIP_CORRUPT）——这是「源不会被永久停采」的判据。
+//
+// 同时覆盖退化形态：`proxy.log.1.lck`（java.util.logging 的 0 字节锁文件，会被 glob 匹配）
+// 必须被处置为「空归档」而不是「损坏的 gzip 归档」。
+func TestRegisterInstanceBungeeRuleImportsPlainTextRotations(t *testing.T) {
 	m, work := newInstanceRuleTestManager(t)
 	// BungeeCord 的轮转产物：纯文本，数字后缀，位于工作目录根。
 	// 活动日志写两行（末行会被事件边界留作悬挂），使首行本轮就被闭合、可被断言。
@@ -76,6 +83,7 @@ func TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations(t *testing.T)
 		[]byte("[12:00:02] [INFO] live line\n[12:00:03] [INFO] still pending at file tail\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(work, "proxy.log.1"), []byte("[12:00:00] [INFO] rotated plain text one\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(work, "proxy.log.2"), []byte("[12:00:01] [INFO] rotated plain text two\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "proxy.log.1.lck"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(work, "proxy.log.0.lck"), nil, 0o600))
 
 	require.NoError(t, m.RegisterInstance(InstanceRegistration{
@@ -91,23 +99,32 @@ func TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations(t *testing.T)
 	require.NotNil(t, pipe)
 	entry := pipe.Ledger().Get(key)
 	require.NotNil(t, entry)
+	kindByPath := map[string]ledger.SegmentKind{}
 	for _, seg := range entry.Segments {
+		kindByPath[filepath.Base(seg.Path)] = seg.Kind
 		require.NotEqual(t, ledger.SegmentGzip, seg.Kind,
 			"纯文本轮转文件不得被登记为 gzip 归档段（path=%s）", seg.Path)
 		require.Empty(t, seg.ImportError,
-			"纯文本轮转文件不得触发归档导入（path=%s）", seg.Path)
+			"纯文本轮转文件的导入不得留下失败登记（path=%s）", seg.Path)
 	}
+	require.Equal(t, ledger.SegmentRotatedText, kindByPath["proxy.log.1"],
+		"轮转文件必须被登记为 rotated_text（形态按文件头判定）")
+	require.Equal(t, ledger.SegmentRotatedText, kindByPath["proxy.log.2"])
+	require.Equal(t, ledger.SegmentRotatedText, kindByPath["proxy.log.1.lck"],
+		"0 字节锁文件会被 glob 匹配，必须按「空归档」处置而不是「损坏的 gzip」")
+	require.NotContains(t, kindByPath, "proxy.log.0.lck",
+		"当前活跃日志的锁文件不属轮转历史（glob 已收窄排除）")
 	for _, gap := range entry.Gaps {
 		require.NotEqual(t, ledger.GapReasonArchiveGzipCorrupt, gap.Reason,
 			"不得为纯文本轮转文件产生不可自愈的 ARCHIVE_GZIP_CORRUPT 缺口（detail=%s）", gap.Detail)
 	}
+	require.Empty(t, entry.Gaps, "纯文本轮转的常规路径不得产生任何缺口")
 
-	// 当前活跃日志本身仍照常采集（归档侧收窄不得连带停掉活动日志）；
-	// 轮转正文则一行都不该进事件段（它不属 gzip 归档导入范围）。
+	// 当前活跃日志与轮转历史都必须进事件段。
 	text := eventMessageText(t, m, key.String())
 	require.Contains(t, text, "live line", "bungee 的活动日志必须仍被采集")
-	require.NotContains(t, text, "rotated plain text",
-		"轮转历史不属 gzip 归档导入范围，不得被当作归档内容导入")
+	require.Contains(t, text, "rotated plain text one", "轮转历史必须被导入（本能力的核心）")
+	require.Contains(t, text, "rotated plain text two")
 }
 
 // TestRegisterInstanceBukkitRuleKeepsHistoricalPaths 验证 bukkit 规则
@@ -256,10 +273,45 @@ func TestRegisterInstanceRuleDoesNotAffectSourceIdentity(t *testing.T) {
 		"storage namespace 不得随规则变化")
 }
 
-// 变异验证记录（2026-10-15，逐字还原后 diff 为空）：
+// 变异验证记录（2026-10-15 复核「glob 置空」；2026-10-16 纯文本轮转导入上线后**该结论已反转**）：
 //
-//   A2 —— 把 bungee 规则的 ArchiveGlob 改回 `proxy.log.[1-9]*`：
-//     `TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations` → FAIL
-//     （"纯文本轮转文件不得被登记为 gzip 归档段"：proxy.log.1 被登记为 kind=gzip 并尝试导入），
-//     `TestRegisterInstanceBungeeRuleUsesRootProxyLog` 与 `TestBungeeRuleProducesNoArchiveGlob`
-//     同时转红（glob 形态断言）。
+//   A2 —— 当时把 bungee 规则的 ArchiveGlob 从空改回 `proxy.log.[1-9]*`：
+//     旧用例 `TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations` → FAIL
+//     （"纯文本轮转文件不得被登记为 gzip 归档段"）。
+//     注意：那次转红证明的是「**当时**没有任何纯文本导入实现」——匹配到的文件只会以
+//     ARCHIVE_GZIP_CORRUPT 失败（不可自动消解 ⇒ 源暂停即永久停采），故当时如实置空。
+//
+//   本项（纯文本轮转归档导入）落地后，判据从「有没有实现」变成「形态是否如实登记」，
+//   同一个 glob 现在是**正确**的：纯文本轮转走纯文本实现并登记 kind=rotated_text。
+//   反向变异见 acquire/text_rotated_archive_test.go 与 pipeline/text_archive_import_test.go
+//   的「转红方式」注释（形态分流回退、新增 kind 不参与归档类判定）。
+
+// TestBungeeTextRotationIsNotRediscoveredAsPending 验证纯文本轮转归档一旦导入，就不再被判为
+// 「待导入」（新增归档形态必须参与归档类判定）。
+//
+// 不改判定读侧的后果（真机可达）：每轮采集都把它当待导入重新发现，且 `SetRotateTarget` 会持续
+// 指向**已导入**的归档，使 tailer 的轮转目标落到历史文件上——该归档会被反复重试、永远无法重新
+// 标记为已导入。
+func TestBungeeTextRotationIsNotRediscoveredAsPending(t *testing.T) {
+	m, work := newInstanceRuleTestManager(t)
+	require.NoError(t, os.WriteFile(filepath.Join(work, "proxy.log.1"),
+		[]byte("[10:00:00] [Proxy thread/INFO]: rotated one\n[10:00:01] [Proxy thread/INFO]: rotated two\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "proxy.log.0"),
+		[]byte("[11:00:00] [Proxy thread/INFO]: live line\n"), 0o600))
+
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-text-rot", TargetID: "inst:930", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBungee,
+	}))
+
+	// 首轮：该纯文本轮转归档应被发现并导入（走 ImportArchivesNow 的「发现 + 待导入」口径）。
+	scanned, imported, err := m.ImportArchivesNow("", "test-operator")
+	require.NoError(t, err)
+	require.Equal(t, 1, scanned, "首轮应发现 1 份待导入归档（纯文本轮转）")
+	require.Equal(t, 1, imported, "纯文本轮转归档必须能被导入")
+
+	// 次轮：同一归档已记「已导入」⇒ 不得再被判为待导入（否则每轮重发现，且轮转目标被钉在历史文件上）。
+	scannedAgain, _, err := m.ImportArchivesNow("", "test-operator")
+	require.NoError(t, err)
+	require.Zero(t, scannedAgain, "已导入的纯文本轮转归档不得被反复判为待导入")
+}

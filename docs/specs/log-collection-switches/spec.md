@@ -72,18 +72,28 @@
 
 ### 2.2 缺陷修复（据实测重排）
 
-**缺陷 A：归档 glob 指向不可导入的形态**（真实、已修；修法在代码评审中被二次修正）
-- `rules.go` 的 bungee 规则 `ArchiveGlob` 由 `proxy.log.[0-9]*` **改为空**。两层原因：
-  ① 旧 glob 会匹配 0 字节锁文件 `proxy.log.0.lck`（账本留下 `ARCHIVE_GZIP_CORRUPT: EOF`）
-  与**当前活跃日志** `proxy.log.0`（等于重复摄取当前内容）；② 更根本的是 BungeeCord 的轮转
-  产物是**纯文本**（非 gzip），而归档导入器只支持 gzip ⇒ 任何匹配到的文件都必然导入失败，
-  且该缺口原因**不在自动消解白名单**，源一旦被暂停将**永久停采**。留空即如实表达
-  「该核心不产出可导入归档」（`Rule.ArchiveGlob` 的既有注释已定义空值的这一语义）。
-- **已知能力缺口（如实登记）**：BungeeCord 轮转历史的采集需要「纯文本归档导入」能力，
-  属**新功能**，本项不实现、需另立 FR。
-- 可转红回归：`TestBungeeRuleProducesNoArchiveGlob`（规则表）+ 行为级
-  `TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations`（`proxy.log.1/2` 与 `.lck`
-  在场时**不产生任何归档导入缺口**、活跃日志仍被采）。变异验证：glob 改回 `[1-9]*` 即转红（实测）
+**缺陷 A：归档 glob 指向不可导入的形态**（真实、已修；修法经三次收敛，过程如实记录）
+- 收敛过程：① 先收窄为 `proxy.log.[1-9]*`（排除 0 字节锁文件 `proxy.log.0.lck` 与**当前活跃
+  日志** `proxy.log.0`）；② 复查发现更根本的问题——BungeeCord 的轮转产物是**纯文本**（非 gzip），
+  而当时归档导入器只支持 gzip ⇒ 任何匹配到的文件都必然失败，且该失败原因**不在自动消解白名单**，
+  源一旦被暂停将**永久停采**，故改为空 glob；③ **用户要求补齐该能力后，本项实现了纯文本轮转
+  归档导入**，glob 恢复为 `proxy.log.[1-9]*`。
+- **纯文本轮转归档导入（本项新增能力）**：账本新增归档类段形态 `rotated_text`，与 `gzip` 同属
+  「归档类」并由 `ledger.IsArchiveSegmentKind` 作**单一真源**判定（避免统计与「已导入」判定
+  失真）；形态判定**内容优先、名字只承担既有契约**（`.gz` 名一律走 gzip、内容非 gzip 时仍报
+  `ARCHIVE_GZIP_CORRUPT`，即既有「坏归档必须可见」的行为逐字不变；其余按文件头魔数判定，
+  故无扩展名的 `proxy.log.N` 由内容决定）；导入器与 gzip **共用同一实现**（归属闸、断点续读、
+  WAL 余量预算下的有界分批、行口径与 canonical hash 全部逐字共用）。**未引入任何新的失败
+  原因码** ⇒ 「不可自愈缺口会让源永久停采」这条红线在结构上不可能被新形态触发。
+- 可转红回归：`TestBungeeRuleImportsPlainTextRotations`、`TestRegisterInstanceBungeeRuleImportsPlainTextRotations`
+  （端到端：正文进事件段 + `kind=rotated_text` + 零缺口）、
+  `TestBungeeTextRotationIsNotRediscoveredAsPending`（已导入不得被反复判为待导入）、
+  `TestImportTextProducesSameEventsAsGzip`（事件级口径与 gzip 一致）、
+  `TestImportArchiveTextIsBoundedAcrossRounds`（有界分批 + 跨轮续读不重读前缀）；
+  变异验证：形态分流回退、新形态不参与归档判定，各自确定性转红（实测）。
+- **边界（如实登记）**：`.gz` 名但内容是纯文本仍按坏归档隔离（既有契约，刻意保留）；
+  `proxy.log.N.lck`（N≥1、0 字节）会被 glob 匹配但按**空归档**无害消化（0 事件、无缺口、记已导入）；
+  单行超长不做额外限制（有界性由「单轮事件数预算 + 跨轮续读」保证，与 gzip 路径同源）。
 
 **缺陷 B：手动入口运维不可达**（真实、已修）
 - CP 新增 `POST /api/v1/nodes/:id/log-runtime/ingest/import-archives`，经反向隧道调 Worker
@@ -180,7 +190,7 @@ FR-501 的 PRD 行写「**gz 文件吸存**未做」，本项与之的关系：
 - ~~**814 个 gz 的实际可导入性待验**~~ → **已实测**：809 个 gzip 段中 808 已导入，1 个"待导入"实为误判的 0 字节锁文件（缺陷 A，已修）。
 - **导入的性能影响** → 由既有机制覆盖：`pipeline.ImportArchive` 按 WAL 余量预算**逐批**导入、位置落回账本、下一轮从断点续读（`archiveImportDeferred` 可观测）；本项**不需要**另加限速。
 - **`realtime_tail=false` 的语义易被误解**：UI 文案须明确「停采期间的新日志不会被采集」；本项的前端入口在**归档导入**侧，停采开关在设置页（`log.acq.realtime_tail`），二者不混用。
-- **归档能力缺口**：BungeeCord 的轮转产物是纯文本，而现有归档导入器只支持 gzip ⇒ 其轮转历史**不在采集范围**（本项以空 glob 如实表达，并登记为需另立 FR 的能力缺口）；未来若支持纯文本归档导入，再恢复对应 glob。
+- ~~**归档能力缺口**~~ → **已补齐（2026-10-16）**：纯文本轮转归档导入已实现（账本新增归档类形态 `rotated_text`、内容优先的形态判定、与 gzip 共用的有界分批导入器），bungee 的 glob 已恢复为 `proxy.log.[1-9]*`；红线（新失败原因必须可自动消解）通过「不引入新原因码」在结构上守住。
 
 ---
 
@@ -191,7 +201,7 @@ FR-501 的 PRD 行写「**gz 文件吸存**未做」，本项与之的关系：
 | 开关·停采 | `internal/worker/logs/ingest/runtime.go`（`pollSource` 入口） | `realtime_tail=false` 时整源本轮返回：不读、不轮转、不导入，账本/游标/磁盘全不动 |
 | 开关·扫描 | `policy.go`（`ArchiveScanInterval` / `SyncArchiveScan` / `StopArchiveScan`）、`runtime.go`（Manager 字段） | 总开关折算 + 周期热同步（幂等，避免每拍重启扫描 goroutine）+ 停止路径 |
 | 装配 | `apps/worker/main.go` | 策略加载提前到采集运行时构造处；`effectiveArchiveScanInterval`（策略优先、回落 worker.yml 基线）；心跳 applier 里同步周期 |
-| 缺陷 A | `internal/worker/logs/ingest/rules.go` | bungee `ArchiveGlob` 改为空（纯文本轮转不在 gzip 导入范围）+ 规则级与行为级回归 |
+| 缺陷 A | `ingest/rules.go`（glob 恢复）+ `ledger` / `acquire` / `pipeline`（纯文本轮转导入） | bungee `ArchiveGlob` 恢复为 `proxy.log.[1-9]*`；新增归档类形态 `rotated_text`、内容优先的形态分流（`.gz` 名保持既有契约）与有界分批导入（与 gzip 共用实现） |
 | 缺陷 B·CP | `internal/controlplane/router/log_runtime.go` | `POST .../ingest/import-archives` + `authorizeImportNamespace` + `authorizeImportAllSources` |
 | 缺陷 B·前端 | `api/logRuntime.ts`、`components/ImportArchivesDialog.tsx`、`pages/LogsPage.tsx`、`i18n/{zh,en}.json` | `useImportLogArchives` + 日志页入口 + 文案 |
 

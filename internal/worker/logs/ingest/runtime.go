@@ -2187,6 +2187,9 @@ func New(opts Options) (*Manager, error) {
 	// 既有的确定性顺序（catalog 发布、段存储、回收责任推进都不接受乱序）。
 	recovery := make([]startupSource, 0, len(keys))
 	recoveryPossible := m.vl != nil || m.vlRoute != nil
+	// sourceConfigRecalced 记录「本次启动恢复确实按新算法改写了某个源的配置」。
+	// 它必须自己触发一次落库，理由见下方 requestPersist 处的说明。
+	sourceConfigRecalced := false
 	for _, sourceKey := range keys {
 		source := restoredSources[sourceKey]
 		// FR-504：实例源按**当前规则**重算物理路径与归档 glob——账本里存的是当时代码算出的值，
@@ -2197,6 +2200,7 @@ func New(opts Options) (*Manager, error) {
 		if source.SourceCategory == logtypes.SourceInstance {
 			recalced := m.recalcInstanceSourceConfig(source)
 			if recalced.Path != source.Path || recalced.ArchiveGlob != source.ArchiveGlob {
+				sourceConfigRecalced = true
 				slog.Info("实例源配置已按当前规则重算（算法演进后的首次恢复）",
 					"logSourceID", source.LogSourceID,
 					"archiveGlob", recalced.ArchiveGlob, "path", recalced.Path)
@@ -2226,6 +2230,23 @@ func New(opts Options) (*Manager, error) {
 	// 反向隧道/WS/HTTP 随即可达，恢复在后台按批续做并经就绪面如实上报。
 	// 其余调用方（默认）：就地执行同一驱动，保持「New 返回即恢复完成」的既有边界。
 	go m.persistLoop(m.lifecycleContext())
+	if sourceConfigRecalced {
+		// 源配置重算必须**自己触发**一次落库（FR-504 复核，真机实测）。
+		//
+		// 缺陷形态：持久化的触发面是采集/投递侧的变更声明（`planPersist` 的 changed 只按账本修订号
+		// 与段覆盖签名判定），而重算源配置不动账本 ⇒ 安静源（没有新日志）永远不会声明变更，
+		// 索引里的 `source_aux.config` 于是长期停留在旧值：日志说"重算生效"，重启后旧 glob 又回来，
+		// 采集轮继续按旧值找归档。
+		//
+		// 为什么用非阻塞的 requestPersist 而不是 m.persist()：New 不得被持久化拖住
+		// （2026-10-02 事故：New 里做重活让 worker 整段不可达）。交办由后台通道保证最终完成；
+		// 且索引根行（source/source_aux/…）每轮都全量比对，一次周期即可把新值写出去。
+		//
+		// 为什么不改持久化的**跳过判据**：源配置变化本就无需参与判据——根行每轮全量比对，
+		// 变更必然被写；真正缺的只是"有没有人触发这一轮"。把配置纳入每轮判据反而要在锁内多做
+		// 一次逐源比对，属于为一个已成立的机制补重复保险。
+		m.requestPersist()
+	}
 	if err := m.startStartupRecovery(recovery, opts.StartupRecoveryBackground); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -3646,7 +3667,9 @@ func (m *Manager) archiveOwnerLookup() func(logSourceID, cleanPath, objectID str
 				}
 				for j := range entry.Segments {
 					seg := &entry.Segments[j]
-					if seg.Kind != ledger.SegmentGzip || seg.ArchiveObjectID != objectID {
+					// 归属闸必须覆盖全部归档形态：漏掉新形态会让同一份归档在新代次被当「首次见到」
+					// 再放行一次（VL 侧无唯一键可兜，即静默重复）。
+					if !ledger.IsArchiveSegmentKind(seg.Kind) || seg.ArchiveObjectID != objectID {
 						continue
 					}
 					if filepath.Clean(seg.Path) != cleanPath {
@@ -3785,11 +3808,12 @@ func pendingArchives(p *pipeline.Pipeline, paths []string) []string {
 	imported := make(map[string]bool)
 	if entry != nil {
 		for _, segment := range entry.Segments {
-			if segment.Kind == ledger.SegmentGzip && segment.Imported {
+			// 归档类形态（gzip 与纯文本轮转）统一判定：新增形态若不参与，「已导入」会被反复重发现。
+			if ledger.IsArchiveSegmentKind(segment.Kind) && segment.Imported {
 				imported[filepath.Clean(segment.Path)] = true
 				continue
 			}
-			if segment.Kind == ledger.SegmentGzip && segment.ImportError != "" {
+			if ledger.IsArchiveSegmentKind(segment.Kind) && segment.ImportError != "" {
 				if info, err := os.Stat(segment.Path); err == nil && info.Size() == segment.ObservedSize &&
 					info.ModTime().UnixNano() == segment.ObservedModNano {
 					imported[filepath.Clean(segment.Path)] = true

@@ -372,10 +372,14 @@ export default function LogsPage() {
    *   不传 `sourceKey`）。不判角色会给出一个「填完必填理由再吃 403」的入口。
    *   ——若要为实例级角色开放，需要先收集 `inst:<id>` 作为 `sourceKey`（后端已支持）。
    *
-   * 为什么这个判据必须包含 `federationActive`：联邦接口不可达（404 降级）时，
-   * 同一波次新增的导入端点同样不存在，此时给出入口只会得到一次必然失败的往返。
+   * **刻意不绑定 `federationActive`**（与清空冲突的判据不同）：导入走的是 `LogImportArchives`
+   * RPC，与联邦**查询**面（`LogSearch` 一族）不是同一能力。生产实测存在这样的组合——
+   * 「日志查询服务未启用 ⇒ 前端降级为 legacy ⇒ `federationActive=false`」而导入 RPC 完全可用
+   * （同一时刻 `POST /nodes/:id/log-runtime/ingest/import-archives` 返回 200 并成功导入）。
+   * 若把入口绑在查询可用性上，最需要补历史归档的降级场景反而没有按钮。端点自身不可用时
+   * 由后端返回错误，前端按既有错误处理提示——**不做乐观预判**。
    */
-  const canImportArchives = federationActive && nodeId !== null && isPlatformAdmin
+  const canImportArchives = nodeId !== null && isPlatformAdmin
 
   /**
    * 经典表格查询（联邦视图下作降级回退源）。

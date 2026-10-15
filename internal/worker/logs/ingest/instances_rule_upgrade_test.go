@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -370,3 +371,192 @@ func TestStartupRecoveryRecalcsInstanceArchiveGlob(t *testing.T) {
 	}), got, "启动恢复必须按当前规则重算归档 glob（否则修正对已登记源永不生效）")
 	require.NotEqual(t, legacyGlob, got, "不得保留账本里的旧 glob")
 }
+
+// walUndeliveredProbe 是**测试侧独立**的「已读未投递」读数：按 WAL 快照逐条与投递水位比较。
+//
+// 为什么测试不用生产实现：两者互为对照——生产实现若把判据写偏（例如拿 reclaim 当投递水位，
+// 把「已投递未回收」误判成未投递），本探针仍会给出真实读数，断言随即转红。
+func walUndeliveredProbe(p *pipeline.Pipeline) (entries int, bytes int64) {
+	delivery := uint64(0)
+	if pos, ok := p.Positions(); ok {
+		delivery = pos.Delivery
+	}
+	for _, entry := range p.WAL().Snapshot() {
+		if entry.Event.Record.End <= delivery {
+			continue
+		}
+		entries++
+		bytes += int64(len(entry.Event.Message))
+	}
+	return entries, bytes
+}
+
+// TestRuleChangeRefusedWhileUndeliveredWALRemains 锁定「规则升级重建不得静默丢已读未投递事件」（A3）。
+//
+// 缺陷形态：规则升级（载体真变）会先摘除旧源——连同它的 WAL、水位与投影一起清掉。若旧源还有
+// 「已读入 WAL 但尚未确认投递」的事件（投递失败窗口 / 暂停 / 重试积压），这些事件随状态清空
+// 一起消失：既没有缺口登记，也没有任何告警——**静默丢数据**，正是本仓最不能接受的那一类。
+//
+// 契约：检出残留即**拒绝**本次重建（旧源原样保留，由 CP 下次重试），并返回明确错误说明条数；
+// 且拒绝不是永久阻塞——投递恢复、存量排空后同一次升级必须被接受。
+func TestRuleChangeRefusedWhileUndeliveredWALRemains(t *testing.T) {
+	client, fixture := newFlakyVL(t)
+	root := t.TempDir()
+	cat := catalog.New(nil)
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal()})
+	require.NoError(t, err)
+	work := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(work, "logs"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "logs", "latest.log"),
+		[]byte("[12:00:00] [INFO] first\n[12:00:01] [INFO] second\n"), 0o600))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-a3", TargetID: "inst:940", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBukkit,
+	}))
+	key := "inst:940/file/holder-g1"
+	m.mu.Lock()
+	pipe := m.pipes[key]
+	m.mu.Unlock()
+	require.NotNil(t, pipe)
+
+	// 投递端持续失败（等价于 VL 写不可用）：已读出的事件留在 WAL 里 ⇒「已读未投递」。
+	fixture.failWrites.Store(true)
+	m.pollOnce()
+	pending, pendingBytes := walUndeliveredProbe(pipe)
+	require.Greater(t, pending, 0, "前置断言：投递失败后必须留下未投递条目")
+	posBefore, ok := pipe.Positions()
+	require.True(t, ok)
+	require.Greater(t, posBefore.Read, posBefore.Delivery, "前置断言：读取水位必须已越过投递水位")
+
+	// 规则升级（bukkit → bungee：载体真变）⇒ 必须拒绝，而不是把未投递事件连同账目一起清掉。
+	err = m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-a3", TargetID: "inst:940", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBungee,
+	})
+	require.Error(t, err, "旧源仍有已读未投递事件时，规则升级重建必须被拒绝")
+	require.Contains(t, err.Error(), "已读未投递", "错误必须说明拒绝原因")
+	require.Contains(t, err.Error(), fmt.Sprintf("尚有 %d 条", pending), "错误必须给出未投递条数")
+
+	// 旧源必须**原样**保留：同一管道对象、旧配置、旧水位、未投递条目一条不少。
+	m.mu.Lock()
+	pipeAfter := m.pipes[key]
+	bindingAfter := m.state.Instances["uuid-a3"]
+	cfgAfter := m.state.SourceConfigs[key]
+	m.mu.Unlock()
+	require.Same(t, pipe, pipeAfter, "被拒绝的规则升级不得摘除旧源（pipes 必须原样）")
+	require.Equal(t, RuleKeyBukkit, bindingAfter.RuleKey, "绑定必须保持旧规则")
+	require.Equal(t, filepath.Join(work, "logs", "latest.log"), cfgAfter.Path, "源配置必须保持旧载体")
+	posAfter, ok := pipeAfter.Positions()
+	require.True(t, ok)
+	require.Equal(t, posBefore.Read, posAfter.Read, "被拒绝时水位不得被清")
+	require.Equal(t, posBefore.Delivery, posAfter.Delivery, "被拒绝时投递水位不得被清")
+	after, afterBytes := walUndeliveredProbe(pipeAfter)
+	require.Equal(t, pending, after, "未投递条目必须条条仍在")
+	require.Equal(t, pendingBytes, afterBytes, "未投递字节必须一字不少")
+	_ = pipe.Ledger()
+
+	// 拒绝态必须可自愈：投递恢复 + 存量排空后，同一次规则升级被接受。
+	fixture.failWrites.Store(false)
+	settled := false
+	for i := 0; i < 8 && !settled; i++ {
+		_, _ = pipe.DeliverPending()
+		if n, _ := walUndeliveredProbe(pipe); n == 0 {
+			settled = true
+		}
+	}
+	require.True(t, settled, "投递恢复后存量必须能被排空（拒绝不得是死结）")
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-a3", TargetID: "inst:940", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBungee,
+	}), "存量排空后同一次规则升级必须被接受")
+	require.Equal(t, filepath.Join(work, "proxy.log.0"), sourceByID(t, m, "inst:940/file").Path,
+		"接受后源必须切到 bungee 布局")
+}
+
+// TestRuleChangeFailureRestoresOldSourceAndBinding 锁定「重建失败不得停在半个状态」（A6）。
+//
+// 缺陷形态：detach 先摘掉旧绑定与旧源，随后新源登记失败时旧实现只回滚**本次新建**的源——
+// 旧绑定与旧源不会回来，实例停在「无绑定、无源」的半个状态：日志完全断流，且因为绑定已不在，
+// 连 CP 的幂等重登记都要等到下一次真正的登记事件。
+//
+// 契约：失败后旧源（按旧 SourceConfig 原样重建）与旧绑定必须回来，采集可立即继续。
+//
+// 失败注入：新源登记会继承节点默认时区，把默认时区改成非法值即让**新源**登记必失败；
+// 旧源配置带显式合法时区（模拟存量源已固化配置），因此恢复那一步走的是真实成功路径。
+func TestRuleChangeFailureRestoresOldSourceAndBinding(t *testing.T) {
+	client, _ := newProjectionVL(t)
+	root := t.TempDir()
+	cat := catalog.New(nil)
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal()})
+	require.NoError(t, err)
+	work := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(work, "logs"), 0o700))
+	liveLog := filepath.Join(work, "logs", "latest.log")
+	require.NoError(t, os.WriteFile(liveLog, []byte("[12:00:00] [INFO] before\n[12:00:01] [INFO] second\n"), 0o600))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-a6", TargetID: "inst:941", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBukkit,
+	}))
+	key := "inst:941/file/holder-g1"
+	m.pollOnce()
+	require.NoError(t, m.persist(), "前置：让账目镜像追上内存水位（恢复要按镜像还原水位）")
+	m.mu.Lock()
+	pipeBefore := m.pipes[key]
+	require.NotNil(t, pipeBefore)
+	posBefore, ok := pipeBefore.Positions()
+	require.True(t, ok)
+	// 存量源的显式时区（历史配置固化）：新源不受影响，恢复旧源时这一项决定成败。
+	mirrored := m.state.SourceConfigs[key]
+	mirrored.TimeZone = "UTC"
+	m.state.SourceConfigs[key] = mirrored
+	m.mu.Unlock()
+
+	// 注入：新源登记必定失败（默认时区非法），而旧源配置自带合法时区。
+	m.defaultTimeZone = "Not/AZone"
+	err = m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-a6", TargetID: "inst:941", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBungee,
+	})
+	require.Error(t, err, "新源登记失败必须如实返回错误")
+
+	// 恢复断言①：绑定回到旧规则。
+	m.mu.Lock()
+	bindingAfter, bound := m.state.Instances["uuid-a6"]
+	cfgAfter := m.state.SourceConfigs[key]
+	pipeAfter := m.pipes[key]
+	m.mu.Unlock()
+	require.True(t, bound, "失败后必须恢复旧绑定，不得停在无绑定状态")
+	require.Equal(t, RuleKeyBukkit, bindingAfter.RuleKey, "恢复的绑定必须是旧规则")
+	// 恢复断言②：源配置与管道回到旧载体（不是 bungee 的新载体）。
+	require.Equal(t, liveLog, cfgAfter.Path, "恢复的源配置必须指向旧载体")
+	require.NotNil(t, pipeAfter, "失败后必须恢复旧源（否则实例无源可采）")
+	require.Equal(t, liveLog, sourceByID(t, m, "inst:941/file").Path, "恢复的源必须指向旧载体")
+	// 恢复断言③：账目镜像一并放回 ⇒ 水位于是从**镜像**还原，而不是以全新源从文件头重读。
+	posAfter, ok := pipeAfter.Positions()
+	require.True(t, ok, "恢复的源必须带账本")
+	require.Equal(t, posBefore.Read, posAfter.Read,
+		"恢复必须按快照还原水位（全新源会从 0 重读整份旧文件，是 30 倍重复的同型形态）")
+
+	// 恢复断言④：采集可立即继续（续采新内容，不重读旧内容）。
+	appended := "[12:00:02] [INFO] after rollback\n"
+	trailing := "[12:00:03] [INFO] tail\n"
+	appendLogLine(t, liveLog, appended+trailing)
+	m.pollOnce()
+	text := eventMessageText(t, m, key)
+	require.Contains(t, text, "after rollback", "恢复后必须能继续采集新增内容")
+	require.Equal(t, 1, strings.Count(text, "before"), "恢复不得让旧内容第二次进入事件段")
+}
+
+// 变异验证记录（2026-10-16，逐字还原后三处均回到绿）：
+//
+//   变异一（A3 判据）——把 instances.go 的残留判据短路成 `false && pending > 0`（等价于「照旧重建」）：
+//     `TestRuleChangeRefusedWhileUndeliveredWALRemains` → FAIL
+//     （"旧源仍有已读未投递事件时，规则升级重建必须被拒绝"：重建照旧执行，WAL 里的未投递事件随账目清空）。
+//
+//   变异二（A6 回滚）——把 instances.go 失败路径上的 `m.restoreRuleChangeRollback(rollback)` 改成 `_ = rollback`：
+//     `TestRuleChangeFailureRestoresOldSourceAndBinding` → FAIL
+//     （"失败后必须恢复旧绑定，不得停在无绑定状态"：绑定与旧源都被 detach 摘掉且不回来）。
+//
+//   变异三（重算触发落库）——把 runtime.go 的 `m.requestPersist()` 改成 `_ = sourceConfigRecalced`：
+//     `TestStartupRecalcPersistsSourceConfigToIndex` → FAIL
+//     （"启动重算的源配置必须自己触发落库"：索引里的 archive_glob 停在旧值 5s 不变）。

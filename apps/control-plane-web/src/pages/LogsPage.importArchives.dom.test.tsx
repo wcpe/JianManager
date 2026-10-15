@@ -178,4 +178,20 @@ describe('LogsPage × 手动导入归档（FR-504）', () => {
       expect(screen.queryByTestId('logs-import-archives-dialog')).not.toBeInTheDocument(),
     )
   })
+  it('⑤ 联邦查询降级（日志查询服务未启用）时入口仍可用——导入走 LogImportArchives，与查询面不是同一能力', async () => {
+    // 生产实测组合（浏览器人工验收发现）：查询服务未启用 ⇒ 前端降级为 legacy、`federationActive=false`，
+    // 而同一时刻 `POST /nodes/:id/log-runtime/ingest/import-archives` 返回 200 并成功导入。
+    // 若把入口绑在查询可用性上，最需要补历史归档的降级场景反而没有按钮（本用例锁死该回归）。
+    server.use(
+      http.get(API('/logs/federation'), () => new HttpResponse(null, { status: 404 })),
+      http.get(API('/logs/federation/stats'), () => new HttpResponse(null, { status: 404 })),
+      http.get(API('/logs/federation/facets'), () => new HttpResponse(null, { status: 404 })),
+    )
+    loginAs(ROLE_PLATFORM_ADMIN)
+    renderWithProviders(<LogsPage />)
+    await selectNode()
+
+    expect(await screen.findByTestId('logs-import-archives-open')).toBeInTheDocument()
+  })
+
 })

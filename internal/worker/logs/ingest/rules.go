@@ -16,10 +16,10 @@ type Rule struct {
 	LiveRelative string
 	// ArchiveGlob 是归档文件相对工作目录的 glob（空 = 该核心不产出**可导入**的归档）。
 	//
-	// 「可导入」是这里的判据：导入器目前只有 gzip 一种实现（acquire.ImportGzipBounded），
-	// 故轮转产物非 gzip 的核心（BungeeCord 的 `proxy.log.N` 是纯文本，与 Bukkit 系的
-	// `latest.log → *.gz` 形态不同）必须如实置空，否则每次轮转都会留下一条不可消解的
-	// ARCHIVE_GZIP_CORRUPT 缺口（详见 bungee 规则处的说明）。
+	// 「可导入」是这里的判据，而它取决于**形态**：归档导入器按文件头（gzip 魔数 `1f 8b`）
+	// 把压缩归档分到 gzip 实现、把其余分到纯文本实现（acquire.DetectArchiveFormat），
+	// 两种形态都被支持。故只有当某核心的轮转产物是**两种形态都不属于**的东西时，
+	// 才应把本字段置空——那是「能力缺口」，而不是「路径写法」。
 	ArchiveGlob string
 }
 
@@ -44,27 +44,31 @@ var builtinRules = map[string]Rule{
 		ArchiveGlob:  "logs/*.gz",
 	},
 	// BungeeCord：活动日志在**工作目录根**的 proxy.log.0，
-	// 轮转产物为同目录的 proxy.log.N（**纯文本**）。
+	// 轮转产物为同目录的 proxy.log.N（**纯文本**，无扩展名）。
 	//
-	// 归档 glob 为空（2026-10-15 复核）。Rule.ArchiveGlob 的口径是「空 = 该核心不产出归档」，
-	// BungeeCord 正属此列，理由有两层：
-	//  ① 形态不兼容：归档导入器只支持 gzip（acquire.ImportGzipBounded），而 discoverSourceArchives
-	//     不做任何形态过滤 ⇒ 每个 proxy.log.N 都被登记为 kind=gzip 段并记一条
-	//     `ARCHIVE_GZIP_CORRUPT` 缺口，一条也导不进来；
-	//  ② 后果是**阻断级**：该原因不在自动消解白名单（ledger/gap_bounds.go），而 ResumeAcquire
-	//     对任何未消解缺口一律拒绝 ⇒ bungee 源一旦被暂停（积压/容量，生产常态）就**永久停采**，
-	//     只能人工裁定缺口。
-	// 历史两版 glob（`proxy.log.[0-9]*` 与收窄后的 `proxy.log.[1-9]*`）分别还多踩了
-	// 「把当前活跃日志/0 字节锁文件当归档」与「形态本身就导不进来」两个坑；
-	// 按同因相邻合并上报的缺口也无法证明只有锁文件在失败。
+	// glob 收窄为 `proxy.log.[1-9]*`，两道排除：
+	//  ① 首字符限定 1-9 ⇒ 排除 `proxy.log.0`（**当前活跃日志**：它由 FileTailer 采集，
+	//     再按归档导一次就是同一份字节的双计）；
+	//  ② 同一写法也排除了 `proxy.log.0.lck`（java.util.logging 为**当前**日志文件持有的
+	//     0 字节锁文件）。
+	// 注意 `proxy.log.N.lck`（N≥1，轮转文件的锁）仍会被匹配：它不是归档，但**不再是缺口**
+	// ——纯文本路径把它处置为「空归档」（0 事件、无缺口、直接记为已导入），
+	// 见 acquire.TestImportTextEmptyRotatedFileLeavesNoGap。
 	//
-	// **已知能力缺口（登记在此，勿当已解决）**：BungeeCord 的**纯文本**轮转历史不在本项
-	// 采集范围内。要把它纳入，需要另立 FR（新增纯文本归档导入器或按 gzip 魔数分流），
-	// 不属本项范围。
+	// 为什么可以恢复采集（本项修复）：轮转产物是**纯文本**且没有扩展名，形态由导入器读
+	// **文件头**判定后分流到纯文本实现（acquire.ImportTextBounded），并登记为形态专属的
+	// kind（ledger.SegmentRotatedText，不复用 gzip——复用会让统计与诊断失真）。
+	//
+	// 与「glob 置空」那段历史的区别（勿把结论记反）：置空的原因是**当时没有纯文本实现**——
+	// 任何被匹配到的文件都会以 ARCHIVE_GZIP_CORRUPT 失败，而该原因不在自动消解白名单
+	// （ledger/gap_bounds.go），ResumeAcquire 又对任何未消解缺口一律拒绝 ⇒ bungee 源一旦被
+	// 暂停（积压/容量，生产常态）就**永久停采**。那时 glob 的两种写法（`proxy.log.[0-9]*`
+	// 与 `proxy.log.[1-9]*`）里，前者还多踩了「把当前活跃日志与它的锁文件当归档」这个坑；
+	// 现在形态有实现、退化形态有明确处置，故按②收窄后恢复。
 	RuleKeyBungee: {
 		Key:          RuleKeyBungee,
 		LiveRelative: "proxy.log.0",
-		ArchiveGlob:  "",
+		ArchiveGlob:  "proxy.log.[1-9]*",
 	},
 	// Waterfall：BungeeCord 的分支，日志布局按 Bukkit 约定输出到 logs/。
 	RuleKeyWaterfall: {
