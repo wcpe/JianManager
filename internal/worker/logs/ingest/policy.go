@@ -5,6 +5,9 @@
 // > worker.yml 基线（DefaultAcqPolicy）。Worker 侧**不再二次合并**——CP 下发的已是
 // 生效值，二次合并会引入「两处都能改、谁也说不清哪边生效」的歧义。
 //
+// 唯一的例外是「未配置」：定时归档扫描的周期（GzScanInterval）为空/0 表示 CP 未下发该键，
+// 此时由调用方回落 worker.yml 基线（见 ArchiveScanInterval 的三条口径）。
+//
 // 应用约束（spec §3.2）：策略只影响**后续登记/重登记**的实例参数，不触发采集运行时
 // 全量重建；已在采实例保持原状（运行中切换路径会导致账本断裂，必须避免）。
 package ingest
@@ -25,21 +28,31 @@ type AcqPolicy struct {
 	RulesEnabled bool `json:"rules_enabled"`
 	// RealtimeTail 实时采集开关（FR-504 消费）：关闭 = 应急停采，不停服、不丢位置。
 	RealtimeTail bool `json:"realtime_tail"`
-	// GzImportEnabled gz 导入开关（FR-504 消费）：关闭 = 停自动发现，手动导入入口仍可用。
+	// GzImportEnabled 定时归档导入扫描的**总开关**（2026-10-15 复核统一口径）：
+	// 关闭 = 不启用定时归档扫描，手动入口（ImportArchivesNow）不受影响。
 	GzImportEnabled bool `json:"gz_import_enabled"`
-	// GzScanInterval gz 定时扫描周期（FR-504 消费）；<=0 = 关闭定时扫描。
+	// GzScanInterval 定时归档扫描**周期**；空/0 = 未配置 ⇒ 由上层回落 worker.yml 基线
+	// （log_ingest.archive_scan_interval）。总开关关闭时本字段无意义（一律不扫描）。
+	// 协议上 0 只表示「未配置」：写入侧禁止配 0 或负数，故可安全区分「关闭」与「未配置」。
 	GzScanInterval time.Duration `json:"gz_scan_interval"`
 	// PathOverrides 实例级路径覆盖：targetID（`inst:<id>`）→ 相对或绝对路径。
 	// 登记实例时**优先于** CP 下发的相对路径与规则默认（手动覆盖档）。
 	PathOverrides map[string]string `json:"path_overrides,omitempty"`
 }
 
-// ArchiveScanInterval 返回定时归档导入扫描的**生效周期**（FR-504）。
+// ArchiveScanInterval 返回定时归档导入扫描的**生效周期**（FR-504），三条口径（2026-10-15 复核统一）：
 //
-// 总开关（GzImportEnabled）关闭时一律返回 0（不扫描）——这是「gz 导入总开关」的落点：
-// 存量源的历史归档既不能走采集轮（acquire 层的不变量：历史段只能前置到**未被读过**的
-// 当前段，见 FileTailer.CurrentSegmentUnread 的说明），也不能走停用的定时器，
-// 于是「是否允许自动导入历史归档」唯一可用的出口就是这里。
+//   - 总开关（GzImportEnabled）关闭 ⇒ 一律 0（不扫描；手动入口 ImportArchivesNow 不受影响）。
+//     这是「gz 导入总开关」的落点：存量源的历史归档既不能走采集轮（acquire 层的不变量：
+//     历史段只能前置到**未被读过**的当前段，见 FileTailer.CurrentSegmentUnread 的说明），
+//     也不能走停用的定时器，于是「是否允许自动导入历史归档」唯一可用的出口就是这里。
+//   - 总开关开启 + 周期为空/0 ⇒ 返回 0，其含义是「**未配置**」：调用方须回落 worker.yml 基线
+//     （log_ingest.archive_scan_interval），而不是把它当「关闭」。
+//   - 总开关开启 + 配了周期 ⇒ 返回该周期（面板可配、经心跳下发）。
+//
+// 为什么必须区分「关闭」与「未配置」：协议上 0 只表示未配置（写入侧禁止配 0 或负数），
+// 而 worker.yml 的基线是既有部署的唯一配置面——把两者的 0 混为一谈，会让
+// `log_ingest.archive_scan_interval` 被平台默认值静默短路（存量 gz 的唯一自动出口失效且无日志）。
 //
 // 为什么不额外停掉采集轮的自动发现：那是 FR-474 的既有承诺（新绑定源接管时先导入历史、
 // 再给当前段分配位置），停掉会造成**静默的历史缺失**；而保守关闭的理由（避免一次性导入
@@ -53,14 +66,16 @@ func (p AcqPolicy) ArchiveScanInterval() time.Duration {
 }
 
 // DefaultAcqPolicy 返回无任何外部配置时的基线（等价于 worker.yml 基线的内置表达）。
-// 取值理由：规则引擎与实时采集默认开（与 FR-502 落地后的实际行为一致，
-// 不能因引入配置而改变默认采集行为）；gz 导入与定时扫描默认关（保守，
-// 避免在无人察觉时一次性导入大量历史归档）。
+//
+// 取值理由：规则引擎与实时采集默认开（与 FR-502 落地后的实际行为一致，不能因引入配置而
+// 改变默认采集行为）；定时归档扫描默认 **开关开、周期空** —— 效果仍是「默认不扫描」，
+// 但扫描与否交回 worker.yml 基线决定（2026-10-15 复核：旧默认开关 false 会让基线的回落
+// 分支在实践中不可达，配了 archive_scan_interval 的部署升级后定时扫描静默变关）。
 func DefaultAcqPolicy() AcqPolicy {
 	return AcqPolicy{
 		RulesEnabled:    true,
 		RealtimeTail:    true,
-		GzImportEnabled: false,
+		GzImportEnabled: true,
 		GzScanInterval:  0,
 	}
 }

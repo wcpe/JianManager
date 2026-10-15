@@ -177,7 +177,7 @@ type Manager struct {
 	// 关闭状态下重复同步同一周期必须幂等，否则调用方（每拍心跳）会反复收到「发生变化」。
 	scanSynced bool
 	mu         sync.Mutex
-	cycleMu      sync.Mutex
+	cycleMu    sync.Mutex
 	// cycleMu 持有者观测仪（#57，env/Options 开启；默认关 ⇒ observeCycleMu 返回 nil，调用点只有一次判空）。
 	cycleMuProfile bool
 	// cycleMuMu 是观测仪的**叶子锁**：只保护下面几个普通字段（绝不在持它时调用外部代码，也不打日志）。
@@ -2189,6 +2189,23 @@ func New(opts Options) (*Manager, error) {
 	recoveryPossible := m.vl != nil || m.vlRoute != nil
 	for _, sourceKey := range keys {
 		source := restoredSources[sourceKey]
+		// FR-504：实例源按**当前规则**重算物理路径与归档 glob——账本里存的是当时代码算出的值，
+		// 而规则算法会演进（bungee 的归档 glob 由 `proxy.log.[0-9]*` 改为空即一例）。若原样信任
+		// 账本，修正对**已登记源**永不生效：真机实测 glob 修正上线并重启后，索引里的旧 glob 一直
+		// 留着，采集轮仍按旧 glob 发现归档。定位不到绑定（worker.yml 显式源 / 绑定已摘除）时
+		// recalcInstanceSourceConfig 原样返回，不猜测。
+		if source.SourceCategory == logtypes.SourceInstance {
+			recalced := m.recalcInstanceSourceConfig(source)
+			if recalced.Path != source.Path || recalced.ArchiveGlob != source.ArchiveGlob {
+				slog.Info("实例源配置已按当前规则重算（算法演进后的首次恢复）",
+					"logSourceID", source.LogSourceID,
+					"archiveGlob", recalced.ArchiveGlob, "path", recalced.Path)
+			}
+			source = recalced
+			// 同步回索引：否则随后的持久化会把旧值又写回去（本函数在 New 的单线程构造期，
+			// 与上方读取 restoredSources 同口径，无需取锁）。
+			m.state.SourceConfigs[sourceKey] = source
+		}
 		if err := m.Register(source); err != nil {
 			return nil, err
 		}
@@ -2872,9 +2889,17 @@ func (m *Manager) Register(source SourceConfig) error {
 	// 换进来之前就已存在，可能已由别的途径投递过）。把它登记成缺口会让源被
 	// 「不可分类缺口」永久阻塞（真机实测），因为缺口语义是「这段本该有但没有」。
 	//
-	// **正确做法**：把段的起点（StartPos）前移到文件末尾——这才是「新载体从此刻开始」
-	// 的忠实表达。tailer 的 cursor = 位置 - segmentStart，故起点前移后自然从 EOF 读起，
-	// 且此后追加的新内容照常采集。
+	// **正确做法**：段基址（StartPos）保持 0，把**已读水位**推进到文件末尾
+	// （AdvanceRead/AdvanceDurable = size）。判据在 acquire.FileTailer 侧：
+	// 它的 cursor 是**文件内偏移**，由 `cursor = durable - segmentStart` 恢复
+	// （acquire/tailer.go 的 NewFileTailer），因此 `segmentStart = 0 ∧ durable = size`
+	// 恰好得到 `cursor = size` ⇒ 下次 Poll 从 EOF 续读。
+	//
+	// 2026-10-15 复核：此处曾把段基址也前移到 size（StartPos=size, EndPos=size），
+	// 于是 `cursor = size - size = 0`，tailer 反而**从文件头**读起——规则升级后整份既有内容
+	// 被以新位置重新摄取（真机 30 倍重复的形态），且使 CurrentSegmentUnread() 恒真、
+	// 绕过下方「历史归档只能前置到未被读过的当前段」的守卫。段基址是**逻辑源**的起点，
+	// 不是「开始读取的位置」；后者只能由水位表达。
 	if source.StartAtEOF && source.Mode == pipeline.ModeFilePrimary && source.Path != "" {
 		if fi, statErr := os.Stat(source.Path); statErr == nil && fi.Size() > 0 {
 			key := ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration}
@@ -2886,10 +2911,10 @@ func (m *Manager) Register(source SourceConfig) error {
 			if err := led.AdvanceDurable(key, size); err != nil {
 				return err
 			}
-			// 段落起点随之前移：这是「新载体从 EOF 起算」的关键，
-			// 也保证 Tailer 的 base - segmentStart 归零。
+			// 登记段：基址留在 0、EndPos 记到当前文件大小。EndPos 是「该段已观察到多远」
+			// 的记账（轮转关联会读它），与 cursor 无关。
 			if err := led.RegisterSegment(key, ledger.Segment{
-				Path: source.Path, Kind: ledger.SegmentLive, StartPos: size,
+				Path: source.Path, Kind: ledger.SegmentLive, StartPos: 0,
 				EndPos: size, ParserVersion: "acquire-v1",
 			}); err != nil {
 				return err

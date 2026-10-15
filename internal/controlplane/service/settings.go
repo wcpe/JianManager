@@ -540,12 +540,16 @@ func (s *SettingsService) defaultValue(key string) string {
 		return "5m"
 	case SettingKeyHealthSelfHealMaxRestarts:
 		return "3"
-	// 日志采集（FR-503）：默认与 Worker 侧 worker.yml 基线一致——规则引擎与实时采集默认开，
-	// gz 导入与定时扫描默认关（保守，避免一次性导入大量历史归档）；路径覆盖默认空。
-	case SettingKeyLogAcqRulesEnabled, SettingKeyLogAcqRealtimeTail:
+	// 日志采集（FR-503）：默认与 Worker 侧基线一致——规则引擎与实时采集默认开；
+	// gz 导入**总开关默认开、定时扫描周期默认空**（二者组合的效果仍是「默认不扫描」，
+	// 因为生效周期取自 worker.yml 的 log_ingest.archive_scan_interval）；路径覆盖默认空。
+	//
+	// 为什么总开关默认开（2026-10-15 定案）：它同时是「是否回落 worker.yml 基线」的闸门——
+	// 若默认关，配了 `log_ingest.archive_scan_interval` 的既有部署升级后会**静默失去定时扫描**
+	// （Worker 侧折算在总开关处短路，且不打任何日志）。默认开 + 周期空既保持"默认不扫描"的
+	// 保守行为，又让基线回落可达。
+	case SettingKeyLogAcqRulesEnabled, SettingKeyLogAcqRealtimeTail, SettingKeyLogAcqGzImport:
 		return "true"
-	case SettingKeyLogAcqGzImport:
-		return "false"
 	case SettingKeyLogAcqGzScanInterval:
 		return ""
 	case SettingKeyLogAcqPathOverrides:
@@ -665,19 +669,21 @@ func nodeScopeSplit(key string) (baseKey, nodeUUID string, scoped bool) {
 
 // supportsNodeScope 报告某基础键是否支持 Worker 级覆盖（FR-503）。
 //
-// 只对「经心跳按拍下发」的键开放（log.acq.* / health.* / direct_probe.*，见 spec §3.1.1）。
-// 其余白名单键（log.level、jdk.mirror.* 等）不经心跳下发，套节点级后缀只会产生
-// 「写了但无消费方」的静默配置——宁可写入时报错，也不要落一条永不生效的键。
+// 判据是「**确有节点级消费方**」：只有日志采集的 5 个键会被按节点合并后下发
+// （LogAcqPolicy(nodeUUID) 经心跳下发，节点级覆盖真会生效），故这里直接以
+// LogAcqPlatformKeys() 为准——它同时也是合并实现（mergeLogAcqValues）的键集合，
+// 二者不会再各自漂移出「放行了却没人读」的差集。
+//
+// 为什么不能按「是否经心跳下发」放行：health.* / direct_probe.* 也随心跳下发，但它们的
+// 解析器（HealthScanPolicy / DirectProbeTimeouts）**没有节点形参**，全仓没有第二处
+// 节点级合并；放行只会得到一条「写入 200 但永不生效」的静默键，且该写入路径不产生
+// 审计 action（静默 + 无痕）——正是本函数要防的情形。
+// 待这两类各自的节点级消费方就位（spec §3.1.1 登记为待办）再扩围。
 func supportsNodeScope(baseKey string) bool {
-	switch baseKey {
-	case SettingKeyDirectProbeSLPTimeout, SettingKeyDirectProbeQueryTimeout,
-		SettingKeyHealthScanEnabled, SettingKeyHealthScanInterval, SettingKeyHealthProbeKind,
-		SettingKeyHealthSuspicionThreshold, SettingKeyHealthAction,
-		SettingKeyHealthCircuitThreshold, SettingKeyHealthCircuitWindow,
-		SettingKeyHealthStartupWarmup, SettingKeyHealthSelfHealMaxRestarts,
-		SettingKeyLogAcqRulesEnabled, SettingKeyLogAcqRealtimeTail,
-		SettingKeyLogAcqGzImport, SettingKeyLogAcqGzScanInterval, SettingKeyLogAcqPathOverrides:
-		return true
+	for _, key := range LogAcqPlatformKeys() {
+		if key == baseKey {
+			return true
+		}
 	}
 	return false
 }
@@ -685,7 +691,8 @@ func supportsNodeScope(baseKey string) bool {
 // isWritableSettingKey 报告键是否在可写白名单内。
 //
 // 支持 Worker 级覆盖键（`<平台键>@node:<uuid>`）：剥离后缀后按平台键判定，
-// 但仅限 supportsNodeScope 列出的心跳下发类键；残缺后缀（`x@node:`）一律拒绝。
+// 但仅限 supportsNodeScope 列出的键（确有节点级消费方，即日志采集的 5 个键）；
+// 残缺后缀（`x@node:`）一律拒绝。
 func isWritableSettingKey(key string) bool {
 	baseKey, nodeUUID, scoped := nodeScopeSplit(key)
 	if scoped {

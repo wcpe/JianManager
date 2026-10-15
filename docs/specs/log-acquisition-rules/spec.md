@@ -101,7 +101,7 @@ role == proxy && coreJar 含 "velocity"    → velocity
 | 字段号 | 名称 | 说明 |
 |---|---|---|
 | 25 | `log_rule_key` | 规则 key（`bukkit`/`bungee`/`waterfall`/`velocity`），空 = 回退 bukkit |
-| 26 | `log_relative_path` | 实例级覆盖的活动日志相对路径（空 = 用规则的默认值） |
+| 26 | `log_relative_path` | 实例级覆盖的活动日志相对路径（空 = 用规则的默认值）。**预留字段：CP 侧当前没有生产者**（`buildCreateInstanceRequest` 只填 `log_rule_key`），FR-503 的实例路径覆盖实际由心跳 `log.acq.path_overrides`（`HeartbeatResponse` 字段 23）承担；本字段保留供后续接线，Worker 侧读取逻辑一并在位 |
 
 > **字段号选定依据（2026-10-15 实测核对）**：`CreateInstanceRequest` 当前已占用
 > **1–20、22、23、24**（22/23/24 为日志采集增量字段 `log_target_id`/`log_acquire_mode`/
@@ -142,10 +142,15 @@ if binding.RelativePathOverride != "" {        // 实例级覆盖优先
 
 接线方式：在实例注册时按 `storage_namespace == targetID` 匹配 `log_sources` 条目，命中则以其 `path` 覆盖规则默认值（等价于 §3.2 的 `log_relative_path`，但由 `worker.yml` 配置）。
 
-**优先级**（高 → 低）：
-1. `log_sources` 中匹配该实例的条目（运维显式配置）
-2. proto `log_relative_path`（面板配置，见 FR-503）
-3. 规则默认值（`log_rule_key` 决定）
+**优先级**（高 → 低，已按**实际生效顺序**修正）：
+1. CP 心跳下发的实例级覆盖 `log.acq.path_overrides`（即 `policy.PathOverrides`；在登记时**无条件压过**下两层）
+2. `log_sources` 中匹配该实例的条目（运维在节点侧 `worker.yml` 的显式配置）
+3. proto `log_relative_path`（**预留字段**：CP 当前没有生产者，见 §3.2）
+4. 规则默认值（`log_rule_key` 决定）
+
+> 手工配置冲突时的口径：两处都配了同一实例的路径 ⇒ 以 CP 侧（第 1 层）为准，节点侧
+> `worker.yml` 的显式 path 会被静默压过。此顺序与 `internal/worker/logs/ingest/instances.go`
+> 的登记路径一致，`internal/worker/grpc/log_acquisition.go` 只负责把第 2 层提到第 3 层之前。
 
 ### 3.5 不改动的部分（重要）
 

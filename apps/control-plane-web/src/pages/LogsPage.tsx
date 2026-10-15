@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { AlertTriangle, Download, Info, MoreHorizontal, Radio } from 'lucide-react'
+import { AlertTriangle, Download, Info, MoreHorizontal, PackageOpen, Radio } from 'lucide-react'
 import { useLegacyLogs, useLogs, exportLogs, type LogQueryParams } from '@/api/logs'
 import {
 	buildFederationResult,
@@ -365,9 +365,17 @@ export default function LogsPage() {
    * 「手动导入归档」入口的门控（FR-504）。
    *
    * 与清空冲突不同，它**不要求存在冲突标记**——它的用途是补历史（源目录里躺着但从未被
-   * 导入的 .gz）。唯一前提是选中了单一节点：导入按节点下发给该 Worker，未选节点时无法确定目标。
+   * 导入的 .gz）。两个必要条件：
+   * - 选中了单一节点：导入按节点下发给该 Worker，未选节点时无法确定目标；
+   * - 当前用户是平台管理员：全节点范围导入在后端**仅平台管理员**放行
+   *   （`authorizeImportAllSources`），而本入口的可达路径恒为全节点范围（`LogsPage`
+   *   不传 `sourceKey`）。不判角色会给出一个「填完必填理由再吃 403」的入口。
+   *   ——若要为实例级角色开放，需要先收集 `inst:<id>` 作为 `sourceKey`（后端已支持）。
+   *
+   * 为什么这个判据必须包含 `federationActive`：联邦接口不可达（404 降级）时，
+   * 同一波次新增的导入端点同样不存在，此时给出入口只会得到一次必然失败的往返。
    */
-  const canImportArchives = federationActive && nodeId !== null
+  const canImportArchives = federationActive && nodeId !== null && isPlatformAdmin
 
   /**
    * 经典表格查询（联邦视图下作降级回退源）。
@@ -822,6 +830,25 @@ export default function LogsPage() {
             </SelectContent>
           </Select>
 
+        {/* 手动导入归档（FR-504）：补采「躺在源目录里但从未被导入」的历史 .gz 的运维入口。
+            为什么放在工具栏、而不是覆盖/失败态横幅的动作行里：目标场景恰恰是「采集一切正常、
+            只是历史 .gz 没导」，而横幅在覆盖完整时不渲染（`props.visible` 由
+            `isFailure || isIncomplete || !coverage.complete` 决定）——挂在横幅内会让入口在它
+            最该出现的健康态整体消失（review D-01）。不为此改动横幅的 visible 语义：
+            「无异常不打扰」是既有设计。 */}
+        {canImportArchives && (
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="logs-import-archives-open"
+            title={t('logsFederation.importArchives.scopeNode')}
+            onClick={() => setImportArchivesOpen(true)}
+          >
+            <PackageOpen className="size-3.5" />
+            {t('logsFederation.importArchives.button')}
+          </Button>
+        )}
+
         {/* 实时跟随开关 pill，靠右 */}
         <button
           type="button"
@@ -873,7 +900,6 @@ export default function LogsPage() {
           federation={federation}
           onAction={handleFederationAction}
           onClearConflicts={canClearConflicts ? () => setClearConflictsOpen(true) : undefined}
-          onImportArchives={canImportArchives ? () => setImportArchivesOpen(true) : undefined}
           onRetry={() => {
 			if (legacyMode) void legacyQuery.refetch()
 			else { void federationQuery.refetch(); void refetchLogs() }
@@ -896,7 +922,8 @@ export default function LogsPage() {
       )}
 
       {/* 手动导入归档（FR-504）：补采历史 .gz 的运维入口。
-          与清空冲突不同，它不依赖任何冲突标记——只要有单一节点上下文即可用。 */}
+          与清空冲突不同，它不依赖任何冲突标记——但要求单一节点上下文 + 平台管理员
+          （全节点范围导入仅管理员放行，见 canImportArchives）。入口按钮在工具栏。 */}
       {canImportArchives && (
         <ImportArchivesDialog
           nodeId={nodeId}
@@ -989,15 +1016,12 @@ function CoverageBanner({
   onRetry,
   onAction,
   onClearConflicts,
-  onImportArchives,
 }: {
   federation: LogsFederationResult
   onRetry: () => void
   onAction: (key: string) => void
   /** 存在"身份冲突待确认"时提供运维入口；未传则该入口不渲染。 */
   onClearConflicts?: () => void
-  /** 提供「手动导入归档（.gz）」入口（FR-504）；未传则该入口不渲染。 */
-  onImportArchives?: () => void
 }) {
   const { t } = useTranslation()
   const props: CoverageBannerProps = federation.banner
@@ -1091,7 +1115,7 @@ function CoverageBanner({
           {t('logsFederation.export.nextCursorHint')}
         </p>
       )}
-      {(props.showRetry || guidanceActions.length > 0 || (duplicateUnresolved && onClearConflicts) || onImportArchives) && !degraded && (
+      {(props.showRetry || guidanceActions.length > 0 || (duplicateUnresolved && onClearConflicts)) && !degraded && (
         <div className="flex flex-wrap gap-2">
           {props.showRetry && (
             <Button size="sm" variant="outline" onClick={onRetry} data-testid="logs-coverage-retry">
@@ -1121,19 +1145,9 @@ function CoverageBanner({
               {t('logsFederation.clearConflicts.button')}
             </Button>
           )}
-          {/* 手动导入归档（FR-504）：补采"躺在源目录里但从未被导入"的历史 .gz。
-              它是存量源在自动路径之外的唯一出口（定时扫描默认关；采集轮的历史导入只覆盖
-              新绑定）。与清空冲突不同——不需要任何冲突标记，只要选中了节点即可用。 */}
-          {onImportArchives && (
-            <Button
-              size="sm"
-              variant="outline"
-              data-testid="logs-import-archives-open"
-              onClick={onImportArchives}
-            >
-              {t('logsFederation.importArchives.button')}
-            </Button>
-          )}
+          {/* 手动导入归档（FR-504）**不在这里**：它不依赖任何冲突/覆盖标记，而横幅在覆盖完整时
+              根本不渲染 ⇒ 留在横幅内会让入口在最需要它的健康态消失。现由工具栏的独立入口承担
+              （见 LogsPage 工具栏 `logs-import-archives-open`），门控同样在页面级。 */}
         </div>
       )}
     </div>

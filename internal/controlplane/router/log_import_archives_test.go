@@ -8,10 +8,12 @@ package router
 //  1. 操作人取自**认证上下文**、经传输 metadata 下传（请求体伪造无效）；
 //  2. 理由必填，且同样经 metadata 下传（审计凭据要记录"为什么可以导"）；
 //  3. 指名源须先完成对象授权，拒绝时**不下发任何 RPC**；
-//  4. 不传源键 = 批量动作，只允许平台管理员；Worker 报错不得伪装成成功。
+//  4. 不传源键 = 批量动作，只允许平台管理员；Worker 报错不得伪装成成功；
+//  5. 成功触发后在 CP 侧落一条审计行（含理由与源命名空间），Worker 报错时不落。
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -167,6 +169,73 @@ func TestLogImportArchivesEmptyKeyRequiresPlatformAdmin(t *testing.T) {
 	require.Equal(t, "", stub.request.GetStorageNamespace(), "空源键表示全部源")
 	require.Equal(t, "admin", stub.operator)
 	require.Equal(t, "全节点补历史", stub.reason)
+}
+
+// TestLogImportArchivesRecordsAuditWithReason：成功触发后必须在 CP 侧落一条审计行，
+// 含操作人、目标节点、理由与存储命名空间（FR-504 的「理由进审计凭据」）。
+//
+// 为什么必须落 CP 侧：审计中间件对本路径不产生 action
+// （POST /nodes/:id/log-runtime/... 不匹配任何分支），Worker 侧只有一条会轮转的本地
+// slog 且不读理由——CP 侧不落行就等于「谁导了、为何可以导」两者都没有凭据，
+// 而手工导入正是跨过「gz 自动导入默认关」的应急动作。
+//
+// 转红方式：删掉 handler 末尾的 recordAudit 调用——本用例在「必须有一条审计行」处变红。
+func TestLogImportArchivesRecordsAuditWithReason(t *testing.T) {
+	db := setupTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	r := setupLogRuntimeOperatorRouter(t, db, pool)
+	adminToken := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	inst := model.Instance{NodeID: node.ID, Name: "audit-import-source"}
+	require.NoError(t, db.Create(&inst).Error)
+	sourceKey := fmt.Sprintf("inst:%d", inst.ID)
+	stub := &recordingImportArchivesWorker{}
+	pool.SetWorkerClientForTest(node.UUID, stub)
+
+	resp := makeRequest(r, http.MethodPost, importArchivesEndpoint(node.ID),
+		map[string]any{"storageNamespace": sourceKey, "reason": "补 814 个 gz 的历史归档"}, adminToken)
+	// 先确认真实路径已被触发：否则「有审计行」可能只是桩没走到。
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	require.Equal(t, 1, stub.calls)
+
+	var audits []model.AuditLog
+	require.NoError(t, db.Where("action = ?", "node.log_archive.import").Find(&audits).Error)
+	require.Len(t, audits, 1, "成功触发必须落且只落一条导入审计")
+	audit := audits[0]
+	require.NotZero(t, audit.UserID, "操作人必须来自认证上下文")
+	require.Equal(t, "node", audit.TargetType)
+	require.Equal(t, fmt.Sprintf("%d", node.ID), audit.TargetID, "审计目标必须是本次操作的节点")
+	require.False(t, audit.Failed)
+	var detail map[string]any
+	require.NoError(t, json.Unmarshal([]byte(audit.Detail), &detail), "detail 应为 JSON：%s", audit.Detail)
+	require.Equal(t, sourceKey, detail["storageNamespace"], "detail 必须记录源命名空间")
+	require.Equal(t, "补 814 个 gz 的历史归档", detail["reason"], "detail 必须记录理由")
+}
+
+// TestLogImportArchivesWorkerFailureWritesNoAudit：Worker 报错时不得写成功审计
+// （否则审计会证明一个从未发生的导入，比没有审计更糟）。
+func TestLogImportArchivesWorkerFailureWritesNoAudit(t *testing.T) {
+	db := setupTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	r := setupLogRuntimeOperatorRouter(t, db, pool)
+	adminToken := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	groupA := createGroupViaAPI(t, r, adminToken, "audit-import-fail-owner")
+	id := makeInstanceInGroup(t, db, node.ID, groupA, "audit-import-fail", model.InstanceStatusStopped)
+	var inst model.Instance
+	require.NoError(t, db.First(&inst, id).Error)
+
+	stub := &recordingImportArchivesWorker{failWith: &workerpb.LogError{
+		Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: "采集轮忙",
+	}}
+	pool.SetWorkerClientForTest(node.UUID, stub)
+	resp := makeRequest(r, http.MethodPost, importArchivesEndpoint(node.ID),
+		map[string]any{"storageNamespace": fmt.Sprintf("inst:%d", inst.ID), "reason": "补历史"}, adminToken)
+	require.Equal(t, http.StatusConflict, resp.Code, resp.Body.String())
+
+	var audits []model.AuditLog
+	require.NoError(t, db.Where("action = ?", "node.log_archive.import").Find(&audits).Error)
+	require.Empty(t, audits, "Worker 报错时不得留下成功审计（审计只能证明真的触发过）")
 }
 
 // TestLogImportArchivesWorkerFailureIsNotReportedAsSuccess：Worker 报错必须原样转述，

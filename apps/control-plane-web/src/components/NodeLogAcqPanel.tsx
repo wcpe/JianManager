@@ -27,6 +27,14 @@ import {
  * 未覆盖的项直接继承平台默认；「恢复默认」删除本节点覆盖键。
  * 保存后经心跳下发（≤1 周期，约 30s）生效，**无需重启 Worker**；离线节点标注「待下发」。
  *
+ * 草稿语义：只提交真正改动的键，保存成功后**只清除仍是本次提交值**的键（在途期间的新输入不受影响），
+ * 并在存在未提交改动时显示可见提示。
+ *
+ * **已知残留（review D-02 缺陷②，本波按「最小改动」取舍未拦截）**：草稿只活在组件生命周期内——
+ * 切到别的分段（`NodesPage` 的条件渲染）或换节点（`key={selected.id}` 整体重挂）即静默丢弃。
+ * 现在至少提示「有未保存改动」让用户看得见；若要真正拦截，应沿用设置页的
+ * `hasUnsavedChanges` + 切分类确认范式（会引入跨组件的确认交互，故不在本波范围）。
+ *
  * 可复用独立组件（不绑死容器），便于挂在节点详情右栏分段。
  */
 interface NodeLogAcqPanelProps {
@@ -106,15 +114,36 @@ function LogAcqForm({
     const v = draft[it.key]
     if (v !== undefined && v !== originalValue(it)) changed[it.key] = v
   }
+  const changedCount = Object.keys(changed).length
 
   const save = async () => {
-    if (Object.keys(changed).length === 0) {
+    if (changedCount === 0) {
       toast.info(t('nodeLogAcq.noChanges'))
       return
     }
+    // 本次提交的键值快照：清草稿时以它为基准，而不是整表清空（见下方 setDraft）。
+    const submitted = { ...changed }
     try {
-      await onSave(changed)
-      setDraft({})
+      await onSave(submitted)
+      /**
+       * 保存成功后**只清除仍是本次提交值**的键。
+       *
+       * 为什么不 `setDraft({})`（旧实现）：PUT 在途期间输入控件并不禁用，用户在别处的新输入
+       * 会被整表清空一起抹掉，界面当场回退成服务端旧值且没有任何提示——用户以为改动已生效，
+       * 实际从未提交。于是这里逐键比对：仍是提交值的键（= 已落库）清掉；在途期间被再次改动的
+       * 键保留为未保存草稿（下面「有未保存改动」提示会继续显示）。
+       *
+       * 为什么不选「saving 期间禁用全部输入」（另一种候选修法）：本面板的 PUT 往返可达秒级，
+       * 禁用会把整张表锁成只读，且它并不能消除根因——真正的问题不是「能不能输入」，
+       * 而是「清草稿时清多了」。逐键清除既保留可操作性，又对任何时机的输入都安全。
+       */
+      setDraft((d) => {
+        const next = { ...d }
+        for (const [key, value] of Object.entries(submitted)) {
+          if (next[key] === value) delete next[key]
+        }
+        return next
+      })
       toast.success(t('nodeLogAcq.saved'))
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
@@ -176,7 +205,7 @@ function LogAcqForm({
             <div className="flex items-center gap-2">
               {BOOLEAN_KEYS.has(it.key) ? (
                 <Select value={shown(it)} onValueChange={(v) => setDraft((d) => ({ ...d, [it.key]: v }))}>
-                  <SelectTrigger size="sm" className="w-32">
+                  <SelectTrigger size="sm" className="w-32" data-testid={`node-log-acq-input-${it.key}`}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -187,6 +216,7 @@ function LogAcqForm({
               ) : (
                 <div className="w-56">
                   <Input
+                    data-testid={`node-log-acq-input-${it.key}`}
                     value={shown(it)}
                     onChange={(e) => setDraft((d) => ({ ...d, [it.key]: e.target.value }))}
                     placeholder={
@@ -212,11 +242,24 @@ function LogAcqForm({
         ))}
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] text-muted-foreground">{t('nodeLogAcq.heartbeatHint')}</p>
-        <Button size="sm" onClick={save} disabled={saving}>
-          {saving ? t('common.saving', '保存中…') : t('common.save')}
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* 「有未保存改动」的可见提示：本面板的草稿是暂存式（改完还要点保存才落库），
+              没有提示时用户无法区分「已提交」与「只是敲进来了」。判据与提交集同源
+              （changed，改回原值即不算改动），避免出现「提示说有改动、保存却报没有改动」。 */}
+          {changedCount > 0 && (
+            <span
+              data-testid="node-log-acq-unsaved-hint"
+              className="text-[11px] text-status-warning"
+            >
+              {t('nodeLogAcq.unsavedHint', { count: changedCount })}
+            </span>
+          )}
+          <Button size="sm" onClick={save} disabled={saving}>
+            {saving ? t('common.saving', '保存中…') : t('common.save')}
+          </Button>
+        </div>
       </div>
     </div>
   )

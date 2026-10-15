@@ -516,7 +516,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// FR-476 Worker 受管 VictoriaLogs 状态/启停：仅平台节点管理权限，经反向隧道。
 		// 归档端点另需目标级授权（M-4B）：自定义角色获得 node.manage 后不得越权指定任意 target。
 		if svcs.LogRuntimePool != nil && svcs.Node != nil {
-			NewLogRuntimeHandler(svcs.Node, svcs.LogRuntimePool, svcs.Authz, svcs.Instance, svcs.LogRuntimeHolders).RegisterRoutes(permRead("node.manage"))
+			logRuntimeHandler := NewLogRuntimeHandler(svcs.Node, svcs.LogRuntimePool, svcs.Authz, svcs.Instance, svcs.LogRuntimeHolders)
+			// 人工归档导入（FR-504）必须留痕：注入审计服务（未注入时不落审计，但不阻断主流程）。
+			logRuntimeHandler.SetAudit(svcs.Audit)
+			logRuntimeHandler.RegisterRoutes(permRead("node.manage"))
 		}
 		if svcs.LogVLAssets != nil && svcs.SelfUpdate != nil && svcs.Node != nil {
 			assets := NewLogVLAssetHandler(svcs.LogVLAssets, svcs.SelfUpdate, svcs.Node)

@@ -25,6 +25,10 @@ type LogRuntimeHandler struct {
 	authz     *service.AuthzService
 	instances *service.InstanceService
 	holders   *service.LogTargetHolderService
+	// audit 记录「人工应急动作」的审计行（见 ImportArchives）。
+	// 可为 nil（未接线时不落审计，但**不阻断主流程**）：手工导入归档是应急通道，
+	// 不能因为审计服务缺席而让它在生产上不可用。
+	audit *service.AuditService
 }
 
 func NewLogRuntimeHandler(nodes *service.NodeService, pool *cpgrpc.ClientPool, authz *service.AuthzService, instances *service.InstanceService, holders ...*service.LogTargetHolderService) *LogRuntimeHandler {
@@ -33,6 +37,20 @@ func NewLogRuntimeHandler(nodes *service.NodeService, pool *cpgrpc.ClientPool, a
 		h.holders = holders[0]
 	}
 	return h
+}
+
+// SetAudit 注入审计服务（装配期调用，与同族 handler 的可选注入同口径）。
+// nil 为合法值：审计未接线时人工动作照常执行，仅不留 CP 侧审计行。
+func (h *LogRuntimeHandler) SetAudit(audit *service.AuditService) { h.audit = audit }
+
+// recordAudit 记录一条节点级操作审计；audit 未注入时静默跳过（口径同 LogAcqSettingsHandler）。
+func (h *LogRuntimeHandler) recordAudit(c *gin.Context, action string, detail map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	uid, _ := c.Get(middleware.CtxUserID)
+	userID, _ := uid.(uint)
+	h.audit.RecordSafe(userID, action, "node", c.Param("id"), marshalAuditDetail(detail), c.ClientIP())
 }
 
 func (h *LogRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
@@ -242,6 +260,7 @@ func (h *LogRuntimeHandler) ClearIdentityConflicts(c *gin.Context) {
 // 与自动路径的关键差异是**不受 gz 导入开关影响**——应急补历史必须永远可用。
 //
 // 纪律同 clear-identity-conflicts：操作人在任何 RPC 之前解析；理由必填并进审计凭据；
+// 成功触发后在 CP 侧落一条审计行（见函数末尾的 recordAudit）；
 // 不指名源（全 Worker 范围）属批量动作，仅平台管理员可做。
 func (h *LogRuntimeHandler) ImportArchives(c *gin.Context) {
 	operator, ok := h.operatorFromRequest(c)
@@ -306,6 +325,14 @@ func (h *LogRuntimeHandler) ImportArchives(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "IMPORT_ARCHIVES_FAILED", "code": code, "message": message})
 		return
 	}
+	// 成功触发后落 CP 侧审计行：手工导入是**跨过「gz 自动导入默认关」的应急动作**，
+	// 事后必须能回答「谁、为何、对哪个节点与哪个源」。审计中间件对本路径不产生 action
+	// （POST /nodes/:id/log-runtime/... 不匹配任何分支），Worker 侧也只有一条会轮转的
+	// 本地 slog——CP 侧不落行即等于没有凭据。理由由本端点强制必填，这里如实记为 detail。
+	h.recordAudit(c, "node.log_archive.import", map[string]any{
+		"storageNamespace": body.StorageNamespace,
+		"reason":           body.Reason,
+	})
 	// 计数不在响应里（LogTaskResponse 只带状态）：导入明细以 Worker 日志
 	// 「已执行手动归档导入」（含 scanned/imported）为准；本响应只表示「已触发且无错」。
 	c.JSON(http.StatusOK, gin.H{

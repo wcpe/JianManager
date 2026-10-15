@@ -24,6 +24,8 @@ type InstanceBinding struct {
 	WorkDir    string               `json:"work_dir"`
 	// RuleKey 是日志采集规则名（FR-502），空 = bukkit（向后兼容）。
 	// 它参与 binding 相等性判定：规则变化即视为「绑定变更」，与路径变化同口径。
+	// 但**是否重建源**另按解析后的生效载体判定（2026-10-15 复核，见
+	// sameEffectiveLogLayout）：规则名换了而解析结果逐字相同时只刷新本字段。
 	RuleKey string `json:"rule_key,omitempty"`
 	// RelativePath 是实例级活动日志相对路径覆盖（FR-502），空 = 用规则默认。
 	RelativePath string `json:"relative_path,omitempty"`
@@ -170,11 +172,25 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 		if !sameSourceIdentity(existing, binding) {
 			return fmt.Errorf("ingest: instance log binding changed without a source transition")
 		}
-		if err := m.detachSourcesForRuleChange(existing); err != nil {
-			return err
+		// 2026-10-15 复核：只有**解析后的生效载体**真的变了才重建源。
+		//
+		// 表达形式变化（rule_key 空 ↔ 恒下发的 "bukkit"、策略档位把生效值固化进绑定）
+		// 而载体逐字相同时，重建是纯代价：清零该源账目（WAL/水位/投影/已验证代次）并从
+		// 文件头重读既有内容（实测同一份 56 字节内容被读第二遍：read 56→112），
+		// 而所有存量实例升级后首次登记都命中这一形态。
+		if sameEffectiveLogLayout(existing, binding) {
+			// 只把新记法写回绑定：源、管道与账本一概不动，随后仍走下方「已存在」分支
+			// （接管暂存输出、按模式补 raw 文件），与幂等重登记完全同路。
+			if err := m.rebindInstanceMetadata(binding); err != nil {
+				return err
+			}
+		} else {
+			if err := m.detachSourcesForRuleChange(existing); err != nil {
+				return err
+			}
+			// 旧源已摘除：改走下面的完整登记分支，以新规则重建源与绑定。
+			exists = false
 		}
-		// 旧源已摘除：改走下面的完整登记分支，以新规则重建源与绑定。
-		exists = false
 	}
 
 	// 暂存接管与绑定变更必须共用同一把锁，保证注册期间的输出不会插入回放中间。
@@ -283,6 +299,90 @@ func sameSourceIdentity(a, b InstanceBinding) bool {
 		a.WorkDir == b.WorkDir
 }
 
+// sameEffectiveLogLayout 判断两个绑定解析出的**生效载体**是否一致（2026-10-15 复核新增）。
+//
+// 判据只比较「源究竟读哪个文件、发现哪些归档」这两项输出（instanceLivePath + fileArchiveGlob），
+// 不比较 RuleKey/RelativePath 这些**表达形式**。为什么必须如此：
+//   - 历史绑定的 rule_key 为空（FR-502 引入该列前入库，stateindex 迁移把该列回填为空串），而 CP 恒下发
+//     非空规则名（默认 bukkit）；两者解析结果**逐字相同**（logs/latest.log + logs/*.gz），
+//     按「结构体不等」判据却会走破坏性重建——所有存量实例升级后首次登记都会命中这一形态；
+//   - 策略档位（rules_enabled 关闭 ⇒ 固化空规则名、path_overrides 命中 ⇒ 固化覆盖路径）
+//     同样会把不同表达固化成同一路径。
+//
+// 代价不对称：等价时多走一次重建，会清零该源账目（WAL/水位/投影/已验证代次）并从文件头重读
+// 既有内容（实测同一份 56 字节内容被读第二遍：read 56→112）；而少走一次重建，最坏只是绑定里
+// 保留旧记法（下次登记再判一次，幂等）。故这里取「载体一致即等价」。
+func sameEffectiveLogLayout(a, b InstanceBinding) bool {
+	if a.Mode != b.Mode {
+		return false
+	}
+	if a.Mode != pipeline.ModeFilePrimary {
+		// 非 FILE_PRIMARY（stdio）的载体是 raw 文件，由 UUID+Generation 派生
+		// （见 rawInstancePath），与规则名/相对路径无关 ⇒ 这两个字段怎么变都不换载体。
+		return true
+	}
+	return instanceLivePath(a) == instanceLivePath(b) && fileArchiveGlob(a) == fileArchiveGlob(b)
+}
+
+// recalcInstanceSourceConfig 按**当前规则**重算实例源的物理路径与归档 glob（FR-504 启动恢复用）。
+//
+// 入参 source 来自账本（历史写入），其 Path/ArchiveGlob 是**当时代码**算出来的；而规则算法会演进
+// （bungee 的归档 glob 由 `proxy.log.[0-9]*` 改为空即一例）。启动恢复若原样信任账本，算法修正
+// 对**已登记源**就永不生效——真机实测：glob 修正上线并重启 Worker 后，索引 `source_aux.config`
+// 里的旧 glob 一直留着，采集轮仍按旧 glob 去发现归档。
+//
+// 只在能按（源标识 + 代次 + 模式）唯一定位到绑定时重算；定位不到（如 worker.yml 的显式源、
+// 或绑定已被摘除）一律原样返回，绝不猜测。
+func (m *Manager) recalcInstanceSourceConfig(source SourceConfig) SourceConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, binding := range m.state.Instances {
+		if binding.Generation != source.SourceGeneration || binding.Mode != source.Mode {
+			continue
+		}
+		if binding.Mode == pipeline.ModeFilePrimary {
+			if binding.TargetID+"/file" != source.LogSourceID {
+				continue
+			}
+			source.Path = instanceLivePath(binding)
+			source.ArchiveGlob = fileArchiveGlob(binding)
+			return source
+		}
+		for _, stream := range []string{"stdout", "stderr"} {
+			if binding.TargetID+"/"+stream != source.LogSourceID {
+				continue
+			}
+			source.Path = m.rawInstancePath(binding, stream)
+			source.ArchiveGlob = fileArchiveGlob(binding)
+			return source
+		}
+	}
+	return source
+}
+
+// rebindInstanceMetadata 只刷新实例绑定的元数据（规则名/路径覆盖这类**表达**），
+// 不动源、管道与账本——用于「等价规则升级」（2026-10-15 复核，见 sameEffectiveLogLayout）。
+//
+// **为什么落库失败不回滚内存**：源完全未动，绑定记法只是「重启后按哪种表达解析」的提示；
+// 失败最坏是重启后按旧记法再判一次等价（幂等，不会造成重读或丢账目）。把它当错误回滚，
+// 反而会把已经生效的记法丢掉、让下一次登记重复判决。
+//
+// 注意：源配置里**随算法演进的项**（如归档 glob）不在这里修——等价判据按同一算法比较，
+// 等价即意味着这些项也相同；真会被旧算法值困住的是「账本里存着历史值」的**启动恢复**路径，
+// 那条路径单独重算（见 recalcInstanceSourceConfig 与其在 New 中的调用）。
+//
+// 调用方须已持 registerMu（本函数只取 m.mu，锁序 registerMu → m.mu ✓）。
+func (m *Manager) rebindInstanceMetadata(binding InstanceBinding) error {
+	m.mu.Lock()
+	if m.state.Instances == nil {
+		m.state.Instances = make(map[string]InstanceBinding)
+	}
+	m.state.Instances[binding.UUID] = binding
+	m.mu.Unlock()
+	// 与登记分支同款的有界落库：注册风暴下不得抱着门无限等（超时即交后台通道）。
+	return m.persistHot()
+}
+
 // detachSourcesForRuleChange 摘除某实例当前的源登记，为规则升级后的重建让路（FR-502）。
 //
 // **为什么必须连位置与投影一起清掉**：规则变化会改变**物理路径**
@@ -378,9 +478,10 @@ func instanceLivePath(binding InstanceBinding) string {
 
 // fileArchiveGlob 按绑定返回归档 glob（FR-502）。
 //
-// 历史实现固定返回 live 文件同目录的 "*.gz"，这对 Bukkit 系成立，
-// 但 BungeeCord 的轮转产物是 proxy.log.N（数字后缀、非 gzip）——
-// 故改为按规则取 glob。实例级路径覆盖时，归档 glob 跟随覆盖后 live 文件的
+// 历史实现固定返回 live 文件同目录的 "*.gz"，这对 Bukkit 系成立，但按核心类型区分后必须
+// 由规则表决定：BungeeCord 的轮转产物是 proxy.log.N（数字后缀、**纯文本**，gzip-only 导入器
+// 接不了），其规则的 ArchiveGlob 为空 ⇒ 本函数也返回空，交给 discoverSourceArchives 的
+// 默认回落（live 文件同目录的 *.gz）。实例级路径覆盖时，归档 glob 跟随覆盖后 live 文件的
 // 目录与既有形态（保持与历史一致：同目录同类归档）。
 func fileArchiveGlob(binding InstanceBinding) string {
 	if binding.Mode != pipeline.ModeFilePrimary {

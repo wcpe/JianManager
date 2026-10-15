@@ -938,6 +938,8 @@ func runWorker() {
 	//   策略未配周期（下发 0 = 未配置）→ 回落 worker.yml 基线
 	// 这条折算是「关闭」与「未配置」在 Worker 侧的收口：协议上 0 只表示未配置
 	// （写入侧禁止配 0 或负数，见 CP 的 validateSettingValue），故可安全区分。
+	// 基线回落的可达性依赖采集策略默认值为「开关开 + 周期空」（ingest.DefaultAcqPolicy）：
+	// 若默认开关为关，基线的回落分支在实践中永不成立（2026-10-15 复核）。
 	effectiveArchiveScanInterval := func(p ingest.AcqPolicy) time.Duration {
 		if !p.GzImportEnabled {
 			return 0
@@ -1205,10 +1207,17 @@ func runWorker() {
 			// 把「躺在源目录里但还没被导入」的 gz 走一遍与自动路径完全相同的导入管道。
 			// 存量源的历史归档只能靠它——采集轮的前置导入受 acquire 层不变量约束
 			// （历史段只能前置到**未被读过**的当前段），这正是「814 个 gz 零导入」的出路。
-			if scanInterval := effectiveArchiveScanInterval(acqPolicy); scanInterval > 0 {
-				slog.Info("定时归档导入扫描已启用", "interval", scanInterval)
+			//
+			// 日志与生效周期严格一致（周期为 0 一律不打「已启用」）：否则「配了基线却没扫描」
+			// 只能靠翻配置推断，而总开关关闭是**策略**（面板）口径，不是配置丢失。
+			initialScanInterval := effectiveArchiveScanInterval(acqPolicy)
+			if initialScanInterval > 0 {
+				slog.Info("定时归档导入扫描已启用", "interval", initialScanInterval)
+			} else if !acqPolicy.GzImportEnabled && baseArchiveScanInterval > 0 {
+				slog.Warn("定时归档导入扫描被采集策略的总开关关闭，worker.yml 基线被忽略",
+					"baseInterval", baseArchiveScanInterval)
 			}
-			manager.SyncArchiveScan(effectiveArchiveScanInterval(acqPolicy))
+			manager.SyncArchiveScan(initialScanInterval)
 			defer manager.StopArchiveScan()
 			// 采集索引持久化耗时采样（FR-496 spec §3.3）：每分钟以 Debug 打印 P50/P95/Max 与
 			// 本窗口写入行数/字节数，供真机「60 源单次持久化 ≤50ms」验收直接取证

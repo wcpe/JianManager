@@ -21,8 +21,9 @@ func TestAcqPolicyZeroValueManagerIsSafe(t *testing.T) {
 
 	require.True(t, got.RulesEnabled, "未配置时必须按默认：规则引擎开")
 	require.True(t, got.RealtimeTail, "未配置时必须按默认：实时采集开")
-	require.False(t, got.GzImportEnabled, "未配置时必须按默认：gz 导入关（保守）")
-	require.Zero(t, got.GzScanInterval)
+	require.True(t, got.GzImportEnabled,
+		"未配置时必须按默认：gz 导入总开关开——关掉它会让 worker.yml 的 archive_scan_interval 基线被静默短路")
+	require.Zero(t, got.GzScanInterval, "默认未配周期 ⇒ 折算为「未配置」，是否扫描由 worker.yml 基线决定")
 }
 
 // TestSetAcqPolicyIdempotent 验证同值重复设置不产生变更（心跳每拍调用）。

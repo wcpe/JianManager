@@ -15,7 +15,9 @@ func TestLookupBuiltinRules(t *testing.T) {
 		// bukkit：Paper / Spigot / Bukkit 系（现状行为，必须逐字不变）
 		{"bukkit", filepath.FromSlash("logs/latest.log"), filepath.FromSlash("logs/*.gz")},
 		// bungee：BungeeCord 的日志在**工作目录根**，不在 logs/ 子目录（FR-502 的核心补齐）
-		{"bungee", "proxy.log.0", "proxy.log.[1-9]*"},
+		// 归档 glob 为空：BungeeCord 的轮转产物 proxy.log.N 是纯文本，gzip-only 导入器接不了
+		// （见 TestBungeeRuleProducesNoArchiveGlob）。
+		{"bungee", "proxy.log.0", ""},
 		// waterfall：与 Bungee 同源，但按 Bukkit 布局输出
 		{"waterfall", filepath.FromSlash("logs/latest.log"), filepath.FromSlash("logs/*.gz")},
 		// velocity：独立日志文件名
@@ -62,35 +64,34 @@ func TestLookupReturnsNoArchiveGlobForUnknownShape(t *testing.T) {
 	}
 }
 
-// TestBungeeArchiveGlobExcludesLockAndLiveFile 验证 bungee 归档 glob 只匹配真正的轮转产物
-// （FR-504 真机发现的缺陷回归）。
+// TestBungeeRuleProducesNoArchiveGlob 验证 bungee 规则**不产出归档 glob**（2026-10-15 复核）。
 //
-// 现场：`proxy.log.[0-9]*` 会把两类**非归档**文件一并当成待导入归档——
-//   - `proxy.log.0.lck`：BungeeCord 的 0 字节锁文件。实测被反复尝试导入，在账本留下
-//     `ARCHIVE_GZIP_CORRUPT: EOF`（全节点唯一一条导入错误就来自它）。
-//   - `proxy.log.0`：**当前活跃日志**本身。把它当归档导入等于重复摄取当前内容。
+// Rule.ArchiveGlob 的口径是「空 = 该核心不产出归档」，而 BungeeCord 正属此列：
+// 它的轮转产物 `proxy.log.1..N` 是**纯文本**，而归档导入器（acquire.ImportGzipBounded）
+// **只支持 gzip**，discoverSourceArchives 也不做形态过滤。两版 glob 的结局：
+//   - `proxy.log.[0-9]*`：还把 `proxy.log.0`（当前活跃日志）与 `proxy.log.0.lck`（0 字节锁文件）
+//     一并当成待导入归档；
+//   - `proxy.log.[1-9]*`：躲开了上面两者，但**形态本身就导不进来**——每个轮转文件都被登记为
+//     kind=gzip 段并记一条 `ARCHIVE_GZIP_CORRUPT` 缺口，该原因**不在自动消解白名单**
+//     （ledger/gap_bounds.go），而 ResumeAcquire 对任何未消解缺口一律拒绝
+//     ⇒ bungee 源一旦被暂停（积压/容量，生产常态）就**永久停采**，只能人工裁定。
 //
-// 修法是把首字符类收窄为 [1-9]（轮转产物从 1 起）；多位数后缀（如 proxy.log.10）仍被覆盖，
-// 因为字符类只约束首位。本用例用与 discoverSourceArchives 同一套匹配语义（filepath.Match）
-// 双向断言：不该匹配的必须不匹配，该匹配的必须匹配（防"收窄过头把真归档也排除了"）。
-func TestBungeeArchiveGlobExcludesLockAndLiveFile(t *testing.T) {
-	glob := Lookup("bungee").ArchiveGlob
-	for _, name := range []string{"proxy.log.0", "proxy.log.0.lck"} {
+// 因此如实置空。要采集纯文本轮转历史需另立 FR（属新功能，不在本项范围）。
+// 本用例同时保留原「不误匹配锁文件与当前活跃日志」的意图：空 glob 下没有任何文件名会被匹配。
+func TestBungeeRuleProducesNoArchiveGlob(t *testing.T) {
+	glob := Lookup(RuleKeyBungee).ArchiveGlob
+	if glob != "" {
+		t.Errorf("bungee 规则的归档 glob 必须为空（Rule.ArchiveGlob 注释：空 = 该核心不产出归档），"+
+			"实际 %q；BungeeCord 的轮转产物 proxy.log.N 是纯文本，gzip-only 导入器只会留下"+
+			"不可消解的 ARCHIVE_GZIP_CORRUPT 缺口并使源被暂停后永久停采", glob)
+	}
+	for _, name := range []string{"proxy.log.0", "proxy.log.0.lck", "proxy.log.1", "proxy.log.10"} {
 		matched, err := filepath.Match(glob, name)
 		if err != nil {
 			t.Fatalf("glob %q 非法: %v", glob, err)
 		}
 		if matched {
-			t.Errorf("%s 不是轮转归档，不得被 %q 匹配", name, glob)
-		}
-	}
-	for _, name := range []string{"proxy.log.1", "proxy.log.2", "proxy.log.10", "proxy.log.9"} {
-		matched, err := filepath.Match(glob, name)
-		if err != nil {
-			t.Fatalf("glob %q 非法: %v", glob, err)
-		}
-		if !matched {
-			t.Errorf("%s 是轮转归档，必须被 %q 匹配", name, glob)
+			t.Errorf("%s 不可能是可导入的 gzip 归档，不得被 %q 匹配", name, glob)
 		}
 	}
 }

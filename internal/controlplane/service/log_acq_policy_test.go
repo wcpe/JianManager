@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -11,15 +12,17 @@ import (
 // TestLogAcqPolicyDefaults 验证未配置任何键时，日志采集策略回退到与
 // worker.yml 基线一致的安全默认（FR-503）。
 //
-// 语义要点：规则引擎默认开、实时采集默认开、gz 导入默认关（保守）、
-// 定时扫描默认关、路径覆盖为空。
+// 语义要点：规则引擎默认开、实时采集默认开、gz 导入**总开关默认开**、
+// 定时扫描周期默认空（二者组合 ⇒ 默认行为仍是不扫描）、路径覆盖为空。
 func TestLogAcqPolicyDefaults(t *testing.T) {
 	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
 
 	p := svc.LogAcqPolicy("")
 	require.True(t, p.RulesEnabled, "规则引擎默认开启（与 FR-502 落地后行为一致）")
 	require.True(t, p.RealtimeTail, "实时采集默认开启（应急开关默认不生效）")
-	require.False(t, p.GzImportEnabled, "gz 导入默认关闭（保守：避免一次性导入大量历史）")
+	// 总开关默认开 + 周期默认空 ⇒ 默认仍是「不扫描」；总开关开着才能让
+	// worker.yml 的 log_ingest.archive_scan_interval 基线回落可达（否则既有部署升级后静默失去定时扫描）。
+	require.True(t, p.GzImportEnabled, "gz 导入总开关默认开启")
 	require.Zero(t, p.GzScanInterval, "定时扫描默认关闭")
 	require.Empty(t, p.PathOverrides, "默认无路径覆盖")
 }
@@ -125,18 +128,33 @@ func TestLogAcqPolicyPathOverridesInvalidJSONIsSafe(t *testing.T) {
 
 // TestLogAcqPolicyWorkerScopeWhitelist 验证节点级覆盖键的白名单边界（FR-503）。
 //
-// 只对「经心跳按拍下发」的键开放节点级覆盖：log.acq.* / health.* / direct_probe.*。
-// 其余键套 `@node:` 后缀必须被拒绝——否则会落一条永不生效的键（无消费方），
+// 只对「确有节点级消费方」的键开放节点级覆盖，即日志采集的 5 个键（它们经
+// LogAcqPolicy(nodeUUID) 按节点合并后下发，节点级覆盖真会生效）。
+// 其余键套 `@node:` 后缀必须被拒绝——否则会落一条「写入 200 但永不生效」的键，
 // 属于最难排查的一类静默配置错误。
 func TestLogAcqPolicyWorkerScopeWhitelist(t *testing.T) {
 	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
 
-	// 放行：三类心跳下发键。
+	// 放行：日志采集的 5 个键（心跳按节点下发，确有节点级消费方）。
 	require.NoError(t, svc.Update(map[string]string{
-		NodeScopedSettingKey(SettingKeyLogAcqRulesEnabled, "n1"):    "false",
-		NodeScopedSettingKey(SettingKeyHealthScanInterval, "n1"):    "60s",
-		NodeScopedSettingKey(SettingKeyDirectProbeSLPTimeout, "n1"): "5s",
-	}), "心跳下发类键应支持节点级覆盖")
+		NodeScopedSettingKey(SettingKeyLogAcqRulesEnabled, "n1"):   "false",
+		NodeScopedSettingKey(SettingKeyLogAcqRealtimeTail, "n1"):   "false",
+		NodeScopedSettingKey(SettingKeyLogAcqGzImport, "n1"):       "true",
+		NodeScopedSettingKey(SettingKeyLogAcqGzScanInterval, "n1"): "30s",
+		NodeScopedSettingKey(SettingKeyLogAcqPathOverrides, "n1"):  `{"inst:1":"custom/a.log"}`,
+	}), "日志采集键应支持节点级覆盖")
+
+	// 拒绝：health.* / direct_probe.* 虽随心跳下发，但其解析器（HealthScanPolicy /
+	// DirectProbeTimeouts）没有节点形参，全仓没有节点级消费方——放行等于落一条永不生效
+	// 且不产生审计 action 的静默键（静默 + 无痕），必须写入时报错。
+	for _, key := range []string{
+		SettingKeyHealthScanInterval, SettingKeyHealthScanEnabled, SettingKeyHealthAction,
+		SettingKeyHealthSelfHealMaxRestarts,
+		SettingKeyDirectProbeSLPTimeout, SettingKeyDirectProbeQueryTimeout,
+	} {
+		err := svc.Update(map[string]string{NodeScopedSettingKey(key, "n1"): "60s"})
+		require.ErrorIs(t, err, ErrSettingKeyNotWritable, "%s 无节点级消费方，应拒绝", key)
+	}
 
 	// 拒绝：不经心跳下发的键（无节点级消费方，写了也不会生效）。
 	err := svc.Update(map[string]string{
@@ -155,4 +173,65 @@ func TestLogAcqPolicyWorkerScopeWhitelist(t *testing.T) {
 		NodeScopedSettingKey(SettingKeyLogAcqGzScanInterval, "n1"): "0",
 	})
 	require.ErrorIs(t, err, ErrSettingValueInvalid, "节点级键也须过值校验（0 不是合法周期）")
+}
+
+// TestLogAcqPolicyNodeEmptyOverrideIsExplicitDisable 验证「节点级空串覆盖 = 显式关闭」，
+// 而不是回落继承平台值（FR-503）。
+//
+// 空串是合法值：gz_scan_interval 空 = 关闭定时扫描、path_overrides 空 = 无覆盖；
+// 前端节点面板把非布尔项渲染成普通输入框，**清空输入即写入空串**，故这条路径经界面可达。
+// 历史缺陷：心跳按「值非空」判定覆盖、视图按「键存在」判定，于是界面显示「本节点已覆盖为
+// 空/已关闭」，而该节点仍按平台周期（如 1h）在扫描，且运维**无法对单节点关闭定时扫描**——
+// 这是最难排查的一类静默配置错误。
+//
+// 转红方式：把 mergeLogAcqValues 的 ok 判定改回 `!= ""`——本用例在「空串必须表达关闭」
+// 与「视图/心跳自洽」两处同时变红。
+func TestLogAcqPolicyNodeEmptyOverrideIsExplicitDisable(t *testing.T) {
+	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+
+	// 平台级：开 gz 导入、每 1h 扫描、带路径覆盖（缓存未命中/绝对路径场景）。
+	require.NoError(t, svc.Update(map[string]string{
+		SettingKeyLogAcqGzImport:       "true",
+		SettingKeyLogAcqGzScanInterval: "1h",
+		SettingKeyLogAcqPathOverrides:  `{"inst:1":"custom/a.log"}`,
+	}))
+
+	const node = "node-empty-override"
+	// 节点级：显式清空扫描周期与路径覆盖 = 本节点关闭定时扫描、无路径覆盖。
+	require.NoError(t, svc.Update(map[string]string{
+		NodeScopedSettingKey(SettingKeyLogAcqGzScanInterval, node): "",
+		NodeScopedSettingKey(SettingKeyLogAcqPathOverrides, node):  "",
+	}))
+
+	policy := svc.LogAcqPolicy(node)
+	require.Zero(t, policy.GzScanInterval, "节点级空串必须表达「关闭定时扫描」，不得继承平台 1h")
+	require.Empty(t, policy.PathOverrides, "节点级空串必须表达「无路径覆盖」，不得继承平台覆盖")
+	require.True(t, policy.GzImportEnabled, "未被节点覆盖的键仍继承平台级")
+
+	// 其它节点不受影响：仍按平台值。
+	other := svc.LogAcqPolicy("node-other")
+	require.Equal(t, time.Hour, other.GzScanInterval)
+	require.Equal(t, "custom/a.log", other.PathOverrides["inst:1"])
+
+	// 视图与心跳必须自洽：承认「已覆盖」，且生效值就是空（= 与下发结果一致）。
+	view, err := svc.LogAcqSettingsForNode(node)
+	require.NoError(t, err)
+	item := logAcqSettingItemByKey(t, view, SettingKeyLogAcqGzScanInterval)
+	require.True(t, item.Overridden, "空串覆盖仍是「已覆盖」")
+	require.Equal(t, "", item.Override)
+	require.Equal(t, "", item.Effective, "生效值必须等于心跳合并结果（空 = 关闭）")
+	require.Equal(t, "1h", item.Platform, "平台列展示平台级值，不受节点覆盖影响")
+	require.Equal(t, "", item.Default)
+}
+
+// logAcqSettingItemByKey 从设置视图里取一项（不存在则直接判失败）。
+func logAcqSettingItemByKey(t *testing.T, view LogAcqSettingsView, key string) LogAcqSettingItem {
+	t.Helper()
+	for _, item := range view.Items {
+		if item.Key == key {
+			return item
+		}
+	}
+	t.Fatalf("视图缺少配置项 %s", key)
+	return LogAcqSettingItem{}
 }

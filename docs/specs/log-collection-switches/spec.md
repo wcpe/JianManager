@@ -57,23 +57,33 @@
 
 | 开关 | 行为 | 默认 |
 |---|---|---|
-| `gz_import_enabled` | 是否允许 gz 导入（关 = 连常驻循环的自动发现也停，只留手动入口） | `false`（保守） |
-| `gz_scan_interval` | 定时扫描周期（空 = 关闭）；接通既有 `archive_scan_interval` | 空 |
+| `gz_import_enabled` | gz 归档导入**总开关**（关 = 不启用定时归档扫描；**不停**采集轮的自动发现，手动入口也不受影响——见下方「语义要点」） | 见语义要点（**默认不扫描**由「周期空 ⇒ 基线周期 0」保证，与开关取值无关） |
+| `gz_scan_interval` | 定时扫描周期（**空/0 = 未配置 → 回落 `worker.yml` 基线 `log_ingest.archive_scan_interval`**；要停扫描请关总开关） | 空 |
 | `realtime_tail` | 实时采集（关 = 停 tail 不采集新日志，服务照常运行） | `true` |
 
 **语义要点**：
-- `gz_import_enabled=false` 时**手动导入入口仍可用**（应急补历史），仅停自动路径
+- `gz_import_enabled=false` 时**手动导入入口仍可用**（应急补历史）；停的是**定时归档扫描**，
+  而**采集轮内的自动发现不停**（FR-474 的既有承诺：新接管源先导入历史再给当前段分配位置，
+  停掉会造成静默的历史缺失）——见 §3.1 的落点修正
+- `gz_scan_interval` **空/0 = 未配置**（不是「关闭」）：Worker 折算时回落到 `worker.yml` 基线
+  `log_ingest.archive_scan_interval`。「关闭」只由总开关表达（写入侧禁止配 0/负数）
 - `realtime_tail=false` 是**应急停采**：不影响实例进程、不影响已存数据、恢复后从断点续采
 - 两个开关都经 FR-503 的配置链路，支持平台默认 + Worker 覆盖
 
 ### 2.2 缺陷修复（据实测重排）
 
-**缺陷 A：归档 glob 过宽**（真实、已修）
-- `rules.go` 的 bungee 规则 `ArchiveGlob` 由 `proxy.log.[0-9]*` 收窄为 `proxy.log.[1-9]*`：
-  排除 0 号即同时躲开 0 字节锁文件 `proxy.log.0.lck` 与**当前活跃日志** `proxy.log.0`
-  （轮转产物从 1 起；多位数后缀如 `proxy.log.10` 仍被覆盖——字符类只约束首位）
-- 可转红回归 `TestBungeeArchiveGlobExcludesLockAndLiveFile`：**双向断言**——不该匹配的必须
-  不匹配、该匹配的必须匹配，防「收窄过头把真归档也排除」。变异验证：改回 `[0-9]*` 即转红（实测）
+**缺陷 A：归档 glob 指向不可导入的形态**（真实、已修；修法在代码评审中被二次修正）
+- `rules.go` 的 bungee 规则 `ArchiveGlob` 由 `proxy.log.[0-9]*` **改为空**。两层原因：
+  ① 旧 glob 会匹配 0 字节锁文件 `proxy.log.0.lck`（账本留下 `ARCHIVE_GZIP_CORRUPT: EOF`）
+  与**当前活跃日志** `proxy.log.0`（等于重复摄取当前内容）；② 更根本的是 BungeeCord 的轮转
+  产物是**纯文本**（非 gzip），而归档导入器只支持 gzip ⇒ 任何匹配到的文件都必然导入失败，
+  且该缺口原因**不在自动消解白名单**，源一旦被暂停将**永久停采**。留空即如实表达
+  「该核心不产出可导入归档」（`Rule.ArchiveGlob` 的既有注释已定义空值的这一语义）。
+- **已知能力缺口（如实登记）**：BungeeCord 轮转历史的采集需要「纯文本归档导入」能力，
+  属**新功能**，本项不实现、需另立 FR。
+- 可转红回归：`TestBungeeRuleProducesNoArchiveGlob`（规则表）+ 行为级
+  `TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations`（`proxy.log.1/2` 与 `.lck`
+  在场时**不产生任何归档导入缺口**、活跃日志仍被采）。变异验证：glob 改回 `[1-9]*` 即转红（实测）
 
 **缺陷 B：手动入口运维不可达**（真实、已修）
 - CP 新增 `POST /api/v1/nodes/:id/log-runtime/ingest/import-archives`，经反向隧道调 Worker
@@ -95,8 +105,10 @@
 
 **gz 导入开关**：
 - 现有 `RunArchiveScan(interval)`（`ingest/runtime.go:3330`）：`interval <= 0` 即关闭 ⇒ 已具备关闭语义
-- 新增：`gz_import_enabled` 控制**常驻采集循环内的自动发现**（spec 第 60 行所述行为）
-  ——需在 `discoverSourceArchives`（`runtime.go:3667`）的调用点加判据
+- ~~新增：`gz_import_enabled` 控制**常驻采集循环内的自动发现**（spec 第 60 行所述行为）~~
+  ——**该落点已作废**（见 §4「落点修正」）：`gz_import_enabled` 的实际落点是**折算定时扫描周期**
+  （关 ⇒ `ArchiveScanInterval()` 返回 0），采集轮的 `discoverSourceArchives` 不受它影响
+- `gz_scan_interval` 与 `worker.yml` 基线的关系：**策略周期 > 0 用策略；空/0 = 未配置 ⇒ 回落基线**
 - 手动入口 `ImportArchivesNow(storageNamespace, operator)`（`runtime.go:3230`）**不受开关影响**（应急可用）
 
 **实时采集开关**：
@@ -168,7 +180,7 @@ FR-501 的 PRD 行写「**gz 文件吸存**未做」，本项与之的关系：
 - ~~**814 个 gz 的实际可导入性待验**~~ → **已实测**：809 个 gzip 段中 808 已导入，1 个"待导入"实为误判的 0 字节锁文件（缺陷 A，已修）。
 - **导入的性能影响** → 由既有机制覆盖：`pipeline.ImportArchive` 按 WAL 余量预算**逐批**导入、位置落回账本、下一轮从断点续读（`archiveImportDeferred` 可观测）；本项**不需要**另加限速。
 - **`realtime_tail=false` 的语义易被误解**：UI 文案须明确「停采期间的新日志不会被采集」；本项的前端入口在**归档导入**侧，停采开关在设置页（`log.acq.realtime_tail`），二者不混用。
-- **归档 glob 的平台差异**：`proxy.log.[1-9]*` 按 BungeeCord 的轮转命名（从 1 起、纯数字后缀）收窄；若某发行版把轮转写成带额外后缀的形态，需按现场再加规则——本项留此说明而不预设兼容层。
+- **归档能力缺口**：BungeeCord 的轮转产物是纯文本，而现有归档导入器只支持 gzip ⇒ 其轮转历史**不在采集范围**（本项以空 glob 如实表达，并登记为需另立 FR 的能力缺口）；未来若支持纯文本归档导入，再恢复对应 glob。
 
 ---
 
@@ -179,7 +191,7 @@ FR-501 的 PRD 行写「**gz 文件吸存**未做」，本项与之的关系：
 | 开关·停采 | `internal/worker/logs/ingest/runtime.go`（`pollSource` 入口） | `realtime_tail=false` 时整源本轮返回：不读、不轮转、不导入，账本/游标/磁盘全不动 |
 | 开关·扫描 | `policy.go`（`ArchiveScanInterval` / `SyncArchiveScan` / `StopArchiveScan`）、`runtime.go`（Manager 字段） | 总开关折算 + 周期热同步（幂等，避免每拍重启扫描 goroutine）+ 停止路径 |
 | 装配 | `apps/worker/main.go` | 策略加载提前到采集运行时构造处；`effectiveArchiveScanInterval`（策略优先、回落 worker.yml 基线）；心跳 applier 里同步周期 |
-| 缺陷 A | `internal/worker/logs/ingest/rules.go` | bungee `ArchiveGlob` 收窄为 `proxy.log.[1-9]*` |
+| 缺陷 A | `internal/worker/logs/ingest/rules.go` | bungee `ArchiveGlob` 改为空（纯文本轮转不在 gzip 导入范围）+ 规则级与行为级回归 |
 | 缺陷 B·CP | `internal/controlplane/router/log_runtime.go` | `POST .../ingest/import-archives` + `authorizeImportNamespace` + `authorizeImportAllSources` |
 | 缺陷 B·前端 | `api/logRuntime.ts`、`components/ImportArchivesDialog.tsx`、`pages/LogsPage.tsx`、`i18n/{zh,en}.json` | `useImportLogArchives` + 日志页入口 + 文案 |
 

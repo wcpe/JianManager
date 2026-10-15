@@ -1,12 +1,14 @@
 package ingest
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 )
 
 // newInstanceRuleTestManager 构造一个用于规则路径断言的 Manager，
@@ -55,8 +57,57 @@ func TestRegisterInstanceBungeeRuleUsesRootProxyLog(t *testing.T) {
 	sc := sourceByID(t, m, "inst:900/file")
 	require.Equal(t, filepath.Join(work, "proxy.log.0"), sc.Path,
 		"bungee 规则的活动日志应为工作目录根的 proxy.log.0")
-	require.Equal(t, filepath.Join(work, "proxy.log.[1-9]*"), sc.ArchiveGlob,
-		"bungee 规则的归档 glob 应为 proxy.log.[1-9]*（轮转产物非 gzip；排除 0 号以躲开锁文件与当前活跃日志）")
+	require.Empty(t, sc.ArchiveGlob,
+		"bungee 规则的归档 glob 必须为空——BungeeCord 的轮转产物 proxy.log.N 是纯文本，"+
+			"而导入器只支持 gzip（见 TestBungeeRuleProducesNoArchiveGlob）")
+}
+
+// TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations 验证 bungee 源**不会**把纯文本轮转文件
+// 当成 gzip 归档尝试导入（2026-10-15 复核的行为级回归）。
+//
+// 为什么必须行为级：旧用例只断言归档 glob 的字符串形态，而缺陷的后果在账本里——
+// `proxy.log.1` 会被登记为 kind=gzip 段、记一条 `ARCHIVE_GZIP_CORRUPT` 缺口
+// （该原因不可自动消解 ⇒ 源一旦被暂停即永久停采）。本用例直接断言这两样都不产生。
+func TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations(t *testing.T) {
+	m, work := newInstanceRuleTestManager(t)
+	// BungeeCord 的轮转产物：纯文本，数字后缀，位于工作目录根。
+	// 活动日志写两行（末行会被事件边界留作悬挂），使首行本轮就被闭合、可被断言。
+	require.NoError(t, os.WriteFile(filepath.Join(work, "proxy.log.0"),
+		[]byte("[12:00:02] [INFO] live line\n[12:00:03] [INFO] still pending at file tail\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "proxy.log.1"), []byte("[12:00:00] [INFO] rotated plain text one\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "proxy.log.2"), []byte("[12:00:01] [INFO] rotated plain text two\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "proxy.log.0.lck"), nil, 0o600))
+
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-bungee-archives", TargetID: "inst:920", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBungee,
+	}))
+	m.pollOnce()
+
+	key := ledger.SourceKey{LogSourceID: "inst:920/file", SourceGeneration: "holder-g1"}
+	m.mu.Lock()
+	pipe := m.pipes[key.String()]
+	m.mu.Unlock()
+	require.NotNil(t, pipe)
+	entry := pipe.Ledger().Get(key)
+	require.NotNil(t, entry)
+	for _, seg := range entry.Segments {
+		require.NotEqual(t, ledger.SegmentGzip, seg.Kind,
+			"纯文本轮转文件不得被登记为 gzip 归档段（path=%s）", seg.Path)
+		require.Empty(t, seg.ImportError,
+			"纯文本轮转文件不得触发归档导入（path=%s）", seg.Path)
+	}
+	for _, gap := range entry.Gaps {
+		require.NotEqual(t, ledger.GapReasonArchiveGzipCorrupt, gap.Reason,
+			"不得为纯文本轮转文件产生不可自愈的 ARCHIVE_GZIP_CORRUPT 缺口（detail=%s）", gap.Detail)
+	}
+
+	// 当前活跃日志本身仍照常采集（归档侧收窄不得连带停掉活动日志）；
+	// 轮转正文则一行都不该进事件段（它不属 gzip 归档导入范围）。
+	text := eventMessageText(t, m, key.String())
+	require.Contains(t, text, "live line", "bungee 的活动日志必须仍被采集")
+	require.NotContains(t, text, "rotated plain text",
+		"轮转历史不属 gzip 归档导入范围，不得被当作归档内容导入")
 }
 
 // TestRegisterInstanceBukkitRuleKeepsHistoricalPaths 验证 bukkit 规则
@@ -204,3 +255,11 @@ func TestRegisterInstanceRuleDoesNotAffectSourceIdentity(t *testing.T) {
 	require.Equal(t, "inst:904", sc.StorageNamespace,
 		"storage namespace 不得随规则变化")
 }
+
+// 变异验证记录（2026-10-15，逐字还原后 diff 为空）：
+//
+//   A2 —— 把 bungee 规则的 ArchiveGlob 改回 `proxy.log.[1-9]*`：
+//     `TestRegisterInstanceBungeeRuleDoesNotImportPlainTextRotations` → FAIL
+//     （"纯文本轮转文件不得被登记为 gzip 归档段"：proxy.log.1 被登记为 kind=gzip 并尝试导入），
+//     `TestRegisterInstanceBungeeRuleUsesRootProxyLog` 与 `TestBungeeRuleProducesNoArchiveGlob`
+//     同时转红（glob 形态断言）。

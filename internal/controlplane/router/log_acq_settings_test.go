@@ -95,7 +95,7 @@ func TestLogAcqPlatformEndpoints(t *testing.T) {
 	require.Len(t, parsed["items"], 5)
 	require.Equal(t, "true", logAcqItem(t, parsed, "log.acq.rules_enabled")["default"])
 	require.Equal(t, "true", logAcqItem(t, parsed, "log.acq.realtime_tail")["effective"])
-	require.Equal(t, "false", logAcqItem(t, parsed, "log.acq.gz_import_enabled")["effective"])
+	require.Equal(t, "true", logAcqItem(t, parsed, "log.acq.gz_import_enabled")["effective"])
 	require.Equal(t, "", logAcqItem(t, parsed, "log.acq.gz_scan_interval")["effective"])
 
 	// 写：平台默认改为关规则。

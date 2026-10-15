@@ -97,6 +97,34 @@ describe('validateSettingDraft（与后端 validateSettingValue 规则一致）'
   }
 })
 
+describe('log.acq.gz_scan_interval（空 = 未配置，不是「关闭」）', () => {
+  const key = 'log.acq.gz_scan_interval'
+  const cases: Array<[value: string, ok: boolean]> = [
+    // 空 = 未配置 → Worker 回落 worker.yml 基线，合法。
+    ['', true],
+    ['1h', true],
+    ['0.5h', true],
+    ['30m', true],
+    // 0/零值 = 非法（协议上 0 只表示未配置；零周期会让扫描空转），
+    // 要停扫描只能关总开关 log.acq.gz_import_enabled。
+    ['0', false],
+    ['0s', false],
+    ['-1h', false],
+    ['abc', false],
+  ]
+  for (const [value, ok] of cases) {
+    it(`${JSON.stringify(value)} → ${ok ? '合法' : '非法'}`, () => {
+      expect(validateSettingDraft(key, value)).toBe(ok ? undefined : 'settings.invalidLogAcqScanInterval')
+    })
+  }
+
+  it('非法值给出专用提示（须说明「留空 = 未配置」而不是「留空 = 关闭」）', () => {
+    // 提示文案本身也承担口径：与 proto 注释 / ARCHITECTURE / Worker 折算保持一致，
+    // 否则运维会以为「清空周期 = 停扫描」，而实际是回落到节点 worker.yml 基线。
+    expect(validateSettingDraft(key, '0')).toBe('settings.invalidLogAcqScanInterval')
+  })
+})
+
 describe('hasInvalidDraft', () => {
   it('草稿非法即 true', () => {
     expect(hasInvalidDraft(items, { 'backup.retention_days': 'abc' })).toBe(true)
