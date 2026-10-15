@@ -85,12 +85,19 @@ field() {
 
 proc_starttime() {
     pid=$1
-    awk '{ sub(/^.*\\) /, ""); print $20 }' "/proc/$pid/stat" 2>/dev/null
+    # 正则里的右括号**必须写单个反斜杠**：本函数体在**单引号**内，awk 收到的是 `\)`。
+    # 写成 `\\)` 时 awk 看到的是「字面反斜杠 + 右括号」，匹配不到 `comm` 字段的右括号
+    # ⇒ sub() 静默失效 ⇒ $20 落到错误字段（实测：对同一 /proc/<pid>/stat，`\\)` 得 1，
+    # 正确写法得 224274652）。后果是 record_identity_matches_process 的 starttime 比对
+    # 必然不等 ⇒ PID 被误判为「已被其他进程复用」⇒ cp-lifecycle.sh **拒绝停止/启动 CP**
+    # （2026-10-12 部署实测：报 "PID 472317 已被其他进程复用，拒绝发送信号"）。
+    awk '{ sub(/^.*\) /, ""); print $20 }' "/proc/$pid/stat" 2>/dev/null
 }
 
 proc_state() {
     pid=$1
-    awk '{ sub(/^.*\\) /, ""); print $1 }' "/proc/$pid/stat" 2>/dev/null
+    # 同上：`comm` 字段的右括号必须用单反斜杠匹配。
+    awk '{ sub(/^.*\) /, ""); print $1 }' "/proc/$pid/stat" 2>/dev/null
 }
 
 proc_link() {
