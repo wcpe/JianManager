@@ -596,6 +596,28 @@ message HeartbeatResponse {
   // health_self_heal_max_restarts 是假死自愈在熔断窗口内的重启次数上限（FR-459 复审项 7，
   // 避免假死路径重启风暴）。<=0 = 未配置，Worker 回退内置默认 3。
   int32 health_self_heal_max_restarts = 17;
+  // === FR-503 日志采集配置下发 ===
+  // log_acq_present 是「CP 是否下发了日志采集配置」的存在标记（proto3 optional）：
+  // nil = 老 CP 未下发 → Worker 不动作，沿用本地 worker.yml 配置（向后兼容）；
+  // 非 nil = 采用本响应全部 log_acq_* 字段。与 FR-459 的 health_scan_enabled 同款语义，
+  // 避免 proto3 零值无法区分「关闭」与「未配置」。
+  optional bool log_acq_present = 18;
+  // log_acq_rules_enabled 是采集规则引擎总开关（FR-502 的规则匹配是否生效）。
+  // 关闭时 Worker 回退 bukkit 规则（等价于 FR-502 落地前的行为）。
+  bool log_acq_rules_enabled = 19;
+  // log_acq_realtime_tail 是实时采集应急开关（FR-504）：关闭时停 tail 不采集新日志，
+  // 服务照常运行、账本位置保持，恢复后从断点续采。
+  bool log_acq_realtime_tail = 20;
+  // log_acq_gz_import_enabled 是 gz 归档导入开关（FR-504）：关闭时连常驻循环的自动发现也停，
+  // 但手动导入入口仍可用（应急补历史）。
+  bool log_acq_gz_import_enabled = 21;
+  // log_acq_gz_scan_interval_ms 是 gz 定时扫描周期（毫秒，FR-504）。<=0 = 关闭定时扫描。
+  int32 log_acq_gz_scan_interval_ms = 22;
+  // log_acq_path_overrides_json 是实例级日志路径覆盖映射（JSON 对象，FR-502 §3.4）：
+  // {"inst:<id>": "<相对或绝对路径>"}。空 = 无覆盖，各实例用规则默认路径。
+  // 用 JSON 而非 map<string,string> 是为了与既有 platform_settings 的文本值形态一致
+  // （该表的 value 是 TEXT，存 JSON 无需额外编解码约定）。
+  string log_acq_path_overrides_json = 23;
 }
 
 // === 实例操作 ===
@@ -650,6 +672,13 @@ message CreateInstanceRequest {
   string log_target_id = 22;
   string log_acquire_mode = 23; // FILE_PRIMARY | STDIO_PRIMARY
   string log_source_generation = 24; // stable across reconnects on this holder
+  // log_rule_key 是日志采集规则名（FR-502）：bukkit | bungee | waterfall | velocity。
+  // 由 CP 按实例 role + launch_spec.coreJar 推导后下发（如 BungeeCord.jar → bungee）。
+  // 空 = 旧 CP 未下发，Worker 回退 bukkit 规则（行为与历史逐字一致）。
+  string log_rule_key = 25;
+  // log_relative_path 是实例级活动日志相对路径覆盖（相对 work_dir，FR-502）。
+  // 空 = 使用 log_rule_key 对应规则的默认路径。用于规则外的自定义日志布局。
+  string log_relative_path = 26;
 }
 
 // PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。

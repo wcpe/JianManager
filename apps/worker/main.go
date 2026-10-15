@@ -1092,6 +1092,27 @@ func runWorker() {
 			logIngest = manager
 			register.SetLogIngestHealth(true, "")
 			workerServer.SetInstanceLogCollector(manager)
+			// FR-502 §3.4：把 log_sources 配置接线到实例注册路径。
+			// 按实例的日志命名空间（inst:<id>）匹配配置条目，命中时以其 path
+			// 覆盖规则默认路径（运维在节点侧的显式配置优先于 CP 推导的规则）。
+			// path 为绝对路径时可直接给出（filepath.Join 遇到绝对路径会丢弃前缀，
+			// 故 ingest 层无需区分两种形态）。
+			if len(cfg.LogSources) > 0 {
+				byNamespace := make(map[string]string, len(cfg.LogSources))
+				for _, src := range cfg.LogSources {
+					if src.StorageNamespace == "" || src.Path == "" {
+						continue
+					}
+					byNamespace[src.StorageNamespace] = src.Path
+				}
+				if len(byNamespace) > 0 {
+					workerServer.SetInstanceLogSourceOverrides(
+						func(targetID string) (string, bool) {
+							override, ok := byNamespace[targetID]
+							return override, ok
+						})
+				}
+			}
 			logStack.LogRPC.SetCutoverReadiness(grpcsvc.CutoverReadinessFunc(func() (bool, time.Time, []string) {
 				readiness := manager.PrepareCutoverReadiness()
 				for _, id := range manager.MissingInstanceBindings(registeredLogInstanceIDs()) {
@@ -1524,6 +1545,26 @@ func runWorker() {
 	hb.SetHealthPolicyApplier(func(p process.HealthPolicy) {
 		healthScanner.SetPolicy(p)
 	})
+	// 日志采集配置（FR-503）：先加载本地持久化快照——CP 不可达时也能沿用上次生效值
+	// （离线保持），并作为首拍去重的基准。文件缺失/损坏不阻断启动：采集配置问题
+	// 绝不能让 Worker 起不来（那会让节点直接离线），一律告警后按基线继续等 CP 下发。
+	// 无采集运行时（未配置 log_sources 且无 VL 客户端）时不注册：没有消费方，配置无处应用。
+	if logIngest != nil {
+		acqPolicy, acqLoaded, acqLoadErr := ingest.LoadAcqPolicy(etcDir)
+		if acqLoadErr != nil {
+			slog.Warn("加载本地日志采集快照失败，按基线默认继续（等 CP 下发覆盖）", "error", acqLoadErr)
+		}
+		logIngest.SetAcqPolicy(acqPolicy)
+		if acqLoaded {
+			slog.Info("已恢复本地日志采集快照", "dir", etcDir)
+		}
+		// CP 经心跳下发日志采集配置（FR-503）：生效值变化才应用（写采集运行时 + 持久化），
+		// 面板改配置后 ≤1 心跳周期（30s）生效，无需重启 Worker。
+		hb.SetLogAcqPolicyApplier(acqPolicy, func(p ingest.AcqPolicy) error {
+			logIngest.SetAcqPolicy(p)
+			return ingest.SaveAcqPolicy(etcDir, p)
+		})
+	}
 	hb.Start()
 	defer hb.Stop()
 

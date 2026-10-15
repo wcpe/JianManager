@@ -618,6 +618,14 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			settingsHandler.RegisterRoutes(permRead("settings.read", "settings.write", "license.read"))
 		}
 
+		// 日志采集配置（FR-503）：平台默认 + 节点级覆盖（两层），经心跳下发 Worker 生效。
+		// 平台端点沿用平台配置口径；节点端点读沿用节点读、写仅平台管理员（同节点代理 FR-185）。
+		if svcs.Settings != nil && svcs.Node != nil {
+			logAcqHandler := NewLogAcqSettingsHandler(svcs.Settings, svcs.Node, svcs.Audit)
+			logAcqHandler.RegisterPlatformRoutes(permRead("settings.read", "settings.write", "license.read"))
+			logAcqHandler.RegisterNodeRoutes(permRead("node.read", "node.manage"))
+		}
+
 		if svcs.OrphanRuntime != nil {
 			NewOrphanRuntimeHandler(svcs.OrphanRuntime).RegisterRoutes(permRead("node.manage", "instance.read"))
 		}

@@ -27,6 +27,8 @@ func newNodeTestDB(t *testing.T) *gorm.DB {
 		&model.GroupInstance{},
 		&model.ServerRegistration{},
 		&model.NetworkMember{},
+		// FR-503：Purge 会顺带清理该节点的 Worker 级日志采集覆盖键（见 node.go）。
+		&model.PlatformSetting{},
 	))
 	return db
 }
@@ -411,6 +413,44 @@ func TestNodeService_Purge_HardDeletesArchived(t *testing.T) {
 	list, err := svc.ListArchived()
 	require.NoError(t, err)
 	require.Empty(t, list)
+}
+
+// FR-503：彻底清理节点时顺带删除该节点的 Worker 级日志采集覆盖键；
+// 另一节点的同键覆盖与平台级键必须保留（键后缀含完整 UUID，不得误伤）。
+func TestNodeService_Purge_RemovesNodeScopedLogAcqSettings(t *testing.T) {
+	db := newNodeTestDB(t)
+	svc := NewNodeService(db)
+	node := newTestNode(t, db, "gone")
+	other := newTestNode(t, db, "keep")
+	require.NoError(t, db.Model(node).Update("status", model.NodeStatusOffline).Error)
+
+	scoped := func(nodeUUID, key, val string) model.PlatformSetting {
+		return model.PlatformSetting{Key: NodeScopedSettingKey(key, nodeUUID), Value: val}
+	}
+	require.NoError(t, db.Create(&[]model.PlatformSetting{
+		scoped(node.UUID, SettingKeyLogAcqRulesEnabled, "false"),
+		scoped(node.UUID, SettingKeyLogAcqRealtimeTail, "false"),
+		scoped(other.UUID, SettingKeyLogAcqRulesEnabled, "false"),
+		{Key: SettingKeyLogAcqRulesEnabled, Value: "false"}, // 平台级：必须保留
+	}).Error)
+
+	_, err := svc.Delete(node.ID, false)
+	require.NoError(t, err)
+	_, err = svc.Purge(node.ID, false)
+	require.NoError(t, err)
+
+	var rows []model.PlatformSetting
+	require.NoError(t, db.Find(&rows).Error)
+	keys := make([]string, 0, len(rows))
+	for _, r := range rows {
+		keys = append(keys, r.Key)
+	}
+	require.NotContains(t, keys, NodeScopedSettingKey(SettingKeyLogAcqRulesEnabled, node.UUID),
+		"被彻底清理节点的覆盖键应删除")
+	require.NotContains(t, keys, NodeScopedSettingKey(SettingKeyLogAcqRealtimeTail, node.UUID))
+	require.Contains(t, keys, NodeScopedSettingKey(SettingKeyLogAcqRulesEnabled, other.UUID),
+		"其它节点的同键覆盖必须保留")
+	require.Contains(t, keys, SettingKeyLogAcqRulesEnabled, "平台级键必须保留")
 }
 
 // Purge 有残留实例未 force → 409 型错误；force 后级联硬删实例与关联。

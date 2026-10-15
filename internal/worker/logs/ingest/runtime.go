@@ -54,6 +54,14 @@ type SourceConfig struct {
 	SourceCategory   logtypes.Source      `json:"source_category,omitempty" mapstructure:"source_category"`
 	StorageNamespace string               `json:"storage_namespace,omitempty" mapstructure:"storage_namespace"`
 	UTCDay           string               `json:"utc_day,omitempty" mapstructure:"utc_day"`
+	// StartAtEOF 表示本源的物理载体刚被替换（FR-502 规则变更导致路径变化），
+	// 应从**当前文件末尾**开始采集，而非从头重读整个文件。
+	//
+	// 为什么必须如此：规则升级会换到新文件，若从头重读，会把该文件里**已投递过的历史内容**
+	// 再投一遍，产生重复（真机实测 30 倍）。既有 tailer 在「指纹不匹配」场景已有同款防护
+	// （reanchorAtEOFLocked 注释：「禁止按旧偏移回读历史内容」），本字段是该语义在
+	// 源登记路径上的入口。缺的内容交由既有对账机制补齐。
+	StartAtEOF bool `json:"start_at_eof,omitempty" mapstructure:"start_at_eof"`
 	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串表示跟随节点默认或 auto。
 	// 中文 locale 的 JVM 会把 Java 日志写成 GBK，必须按源声明，不能靠猜（缺陷 B）。
 	Charset string `json:"charset,omitempty" mapstructure:"charset"`
@@ -151,7 +159,10 @@ type Manager struct {
 	defaultCharset string
 	// defaultTimeZone 是节点级默认时区名（源未显式配置时生效）；空串等价于 UTC。
 	defaultTimeZone string
-	mu              sync.Mutex
+	// acqPolicy 是运行期生效的日志采集策略（FR-503，见 policy.go）；nil = 尚未下发/加载，
+	// 一律按 DefaultAcqPolicy（规则引擎开）——不能让「没配置」变成「关闭规则」。受 mu 保护。
+	acqPolicy *AcqPolicy
+	mu        sync.Mutex
 	cycleMu         sync.Mutex
 	// cycleMu 持有者观测仪（#57，env/Options 开启；默认关 ⇒ observeCycleMu 返回 nil，调用点只有一次判空）。
 	cycleMuProfile bool
@@ -470,6 +481,12 @@ type Manager struct {
 	// 这里用「现值与上次记录值比较」而不是「在上层每个改动点显式标记」：前者不需要任何人
 	// 记得标记（漏标记即静默丢更新），且比较只是两个标量，代价可忽略。
 	persistedCover map[string]coverSignature
+	// startAtEOF 标记「下一次登记该源时应从文件末尾开始」的一次性意图（FR-502）。
+	//
+	// 由规则变更路径（detachSourcesForRuleChange）写入，登记时被 takeStartAtEOF 取走并清除。
+	// 用一次性标记而非持久字段：它只描述「这一次重建」的起点选择，落库后无意义
+	// （源一旦建立，位置由账本自己维护）。
+	startAtEOF map[string]bool
 	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
 	events              *eventstore.Store
 	verificationTimeout time.Duration
@@ -2832,6 +2849,37 @@ func (m *Manager) Register(source SourceConfig) error {
 			}
 		} else if err := wal.Restore(saved.WAL); err != nil {
 			return err
+		}
+	}
+	// FR-502：规则变更导致物理载体被替换时，从新文件末尾开始采集。
+	//
+	// **为什么不是记缺口**：本场景不是「内容丢失」，而是**有意的起点变更**——旧文件与
+	// 新文件各有自己的字节流，新文件的既有内容不属于本源的采集范围（它在该文件被
+	// 换进来之前就已存在，可能已由别的途径投递过）。把它登记成缺口会让源被
+	// 「不可分类缺口」永久阻塞（真机实测），因为缺口语义是「这段本该有但没有」。
+	//
+	// **正确做法**：把段的起点（StartPos）前移到文件末尾——这才是「新载体从此刻开始」
+	// 的忠实表达。tailer 的 cursor = 位置 - segmentStart，故起点前移后自然从 EOF 读起，
+	// 且此后追加的新内容照常采集。
+	if source.StartAtEOF && source.Mode == pipeline.ModeFilePrimary && source.Path != "" {
+		if fi, statErr := os.Stat(source.Path); statErr == nil && fi.Size() > 0 {
+			key := ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration}
+			size := uint64(fi.Size())
+			// 位置推进到 EOF（读与持久化两侧都要，否则 tailer 会按旧水位回读）。
+			if err := led.AdvanceRead(key, size); err != nil {
+				return err
+			}
+			if err := led.AdvanceDurable(key, size); err != nil {
+				return err
+			}
+			// 段落起点随之前移：这是「新载体从 EOF 起算」的关键，
+			// 也保证 Tailer 的 base - segmentStart 归零。
+			if err := led.RegisterSegment(key, ledger.Segment{
+				Path: source.Path, Kind: ledger.SegmentLive, StartPos: size,
+				EndPos: size, ParserVersion: "acquire-v1",
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	p, err := pipeline.New(pipeline.Options{

@@ -362,6 +362,7 @@ func (m *Manager) stateToIndexStateRows(st *persistedState, skipWAL, skipDerived
 		out.Instances = append(out.Instances, stateindex.InstanceRow{
 			UUID: uuid, Namespace: binding.TargetID, Generation: binding.Generation,
 			Mode: string(binding.Mode), WorkDir: binding.WorkDir,
+			RuleKey: binding.RuleKey, RelativePath: binding.RelativePath,
 		})
 	}
 	return out, nil
@@ -666,6 +667,7 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 		st.Instances[row.UUID] = InstanceBinding{
 			UUID: row.UUID, TargetID: row.Namespace, Generation: row.Generation,
 			Mode: pipeline.AcquireMode(row.Mode), WorkDir: row.WorkDir,
+			RuleKey: row.RuleKey, RelativePath: row.RelativePath,
 		}
 	}
 	normalizePersistedState(st)

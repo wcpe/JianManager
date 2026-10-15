@@ -58,6 +58,9 @@ type Server struct {
 	// logQuery FR-479 日志 RPC 装配点（T11）；nil 时 Log* 走 Unimplemented。
 	logQuery     interface{}
 	instanceLogs InstanceLogCollector
+	// logSourceOverrides 提供实例日志路径的配置化覆盖（FR-502 §3.4）；nil = 不覆盖。
+	// 由 SetInstanceLogSourceOverrides 注入。
+	logSourceOverrides InstanceLogSourceOverrides
 	// root 是本节点数据根，用于把 CP 下发的相对工作目录解析为绝对路径。参见 ADR-010。
 	root *dataroot.Root
 	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。参见 ADR-006。

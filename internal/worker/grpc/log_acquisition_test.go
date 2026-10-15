@@ -19,12 +19,14 @@ import (
 type registrationLogCollector struct {
 	calls                          int
 	target, generation, mode, path string
+	ruleKey, relativePath          string
 	err                            error
 }
 
-func (c *registrationLogCollector) RegisterInstance(uuid, target, generation, mode, path string) error {
+func (c *registrationLogCollector) RegisterInstance(reg ingest.InstanceRegistration) error {
 	c.calls++
-	c.target, c.generation, c.mode, c.path = target, generation, mode, path
+	c.target, c.generation, c.mode, c.path = reg.TargetID, reg.Generation, reg.Mode, reg.WorkDir
+	c.ruleKey, c.relativePath = reg.RuleKey, reg.RelativePath
 	return c.err
 }
 func (*registrationLogCollector) AppendInstanceOutput(string, string, []byte) error { return nil }
