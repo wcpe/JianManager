@@ -34,8 +34,25 @@ type AcqPolicy struct {
 	PathOverrides map[string]string `json:"path_overrides,omitempty"`
 }
 
-// DefaultAcqPolicy 返回无任何外部配置时的基线（等价于 worker.yml 基线的内置表达）。
+// ArchiveScanInterval 返回定时归档导入扫描的**生效周期**（FR-504）。
 //
+// 总开关（GzImportEnabled）关闭时一律返回 0（不扫描）——这是「gz 导入总开关」的落点：
+// 存量源的历史归档既不能走采集轮（acquire 层的不变量：历史段只能前置到**未被读过**的
+// 当前段，见 FileTailer.CurrentSegmentUnread 的说明），也不能走停用的定时器，
+// 于是「是否允许自动导入历史归档」唯一可用的出口就是这里。
+//
+// 为什么不额外停掉采集轮的自动发现：那是 FR-474 的既有承诺（新绑定源接管时先导入历史、
+// 再给当前段分配位置），停掉会造成**静默的历史缺失**；而保守关闭的理由（避免一次性导入
+// 大量归档）已由 pipeline.ImportArchive 的 WAL 余量预算覆盖——逐批导入、位置落回账本、
+// 下一轮从断点续读，不会把整批压进一轮。
+func (p AcqPolicy) ArchiveScanInterval() time.Duration {
+	if !p.GzImportEnabled {
+		return 0
+	}
+	return p.GzScanInterval
+}
+
+// DefaultAcqPolicy 返回无任何外部配置时的基线（等价于 worker.yml 基线的内置表达）。
 // 取值理由：规则引擎与实时采集默认开（与 FR-502 落地后的实际行为一致，
 // 不能因引入配置而改变默认采集行为）；gz 导入与定时扫描默认关（保守，
 // 避免在无人察觉时一次性导入大量历史归档）。
@@ -56,30 +73,79 @@ func (m *Manager) SetAcqPolicy(p AcqPolicy) bool {
 		return false
 	}
 	normalized := normalizeAcqPolicy(p)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.acqPolicy != nil && AcqPolicyEqual(*m.acqPolicy, normalized) {
+	if cur := m.acqPolicy.Load(); cur != nil && AcqPolicyEqual(*cur, normalized) {
 		return false
 	}
-	stored := normalized
-	m.acqPolicy = &stored
+	m.acqPolicy.Store(&normalized)
 	return true
 }
 
 // AcqPolicySnapshot 返回当前生效的采集策略（副本；调用方改返回值不影响内部状态）。
 //
 // 未设置过（尚未下发/加载）时返回 DefaultAcqPolicy：零值 Manager 也安全，
-// 不会因「没配置」而把规则引擎当成关闭。
+// 不会因「没配置」而把规则引擎当成关闭。读取为无锁原子操作——采集轮每源每轮都会调它。
 func (m *Manager) AcqPolicySnapshot() AcqPolicy {
 	if m == nil {
 		return DefaultAcqPolicy()
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.acqPolicy == nil {
-		return DefaultAcqPolicy()
+	if cur := m.acqPolicy.Load(); cur != nil {
+		return cloneAcqPolicy(*cur)
 	}
-	return cloneAcqPolicy(*m.acqPolicy)
+	return DefaultAcqPolicy()
+}
+
+// SyncArchiveScan 按给定周期同步定时归档导入扫描的启停（FR-504），返回是否发生变化。
+//
+// interval <= 0 表示关闭（不启动任何 goroutine）。值变化时停旧启新——周期来自采集策略、
+// 经心跳每拍下发，因此面板改配置后无需重启 Worker；值未变化时不动（避免每拍重启扫描 goroutine）。
+//
+// 为什么把它放在 ingest 包而不是由调用方直接 RunArchiveScan：RunArchiveScan 每次调用都会
+// 新起一个 goroutine，若由调用方自行判断启停，很容易在「策略每拍下发」的路径上反复重启；
+// 由本方法收口后，调用方只需无脑同步当前周期。
+func (m *Manager) SyncArchiveScan(interval time.Duration) bool {
+	if m == nil {
+		return false
+	}
+	if interval < 0 {
+		interval = 0
+	}
+	m.scanMu.Lock()
+	defer m.scanMu.Unlock()
+	// 幂等判据基于「已同步过的周期」而非「是否在运行」：关闭状态（running=false）下
+	// 重复同步关闭也必须返回 false，否则每拍心跳都会报告一次「发生变化」。
+	if m.scanSynced && m.scanInterval == interval {
+		return false
+	}
+	m.scanSynced = true
+	if m.scanStop != nil {
+		m.scanStop()
+		m.scanStop = nil
+	}
+	m.scanRunning = false
+	m.scanInterval = interval
+	if interval <= 0 {
+		return true
+	}
+	if stop := m.RunArchiveScan(interval); stop != nil {
+		m.scanStop = stop
+		m.scanRunning = true
+	}
+	return true
+}
+
+// StopArchiveScan 停止定时归档扫描（幂等）；供运行时停止路径调用，避免 goroutine 泄漏。
+func (m *Manager) StopArchiveScan() {
+	if m == nil {
+		return
+	}
+	m.scanMu.Lock()
+	defer m.scanMu.Unlock()
+	if m.scanStop != nil {
+		m.scanStop()
+		m.scanStop = nil
+	}
+	m.scanRunning = false
+	m.scanInterval = 0
 }
 
 // AcqPolicyEqual 比较两份策略是否等价（含 PathOverrides 的逐键比较）。

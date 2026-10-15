@@ -19,6 +19,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { ClearConflictsDialog } from '@/components/ClearConflictsDialog'
+import { ImportArchivesDialog } from '@/components/ImportArchivesDialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -281,6 +282,8 @@ export default function LogsPage() {
   const [lastGoodFederation, setLastGoodFederation] = useState<{ filterKey: string; result: LogsFederationResult } | null>(null)
   // 「确认并清空身份冲突」对话框开关（质量标记的运维入口，见 ClearConflictsDialog）。
   const [clearConflictsOpen, setClearConflictsOpen] = useState(false)
+  // 「手动导入归档（.gz）」对话框开关（FR-504，历史归档补采的运维入口）。
+  const [importArchivesOpen, setImportArchivesOpen] = useState(false)
   /**
    * 限流提示闩锁：重试耗尽观测到 429 即置位，直到重新拿到**真实成功**结果才清除。
    *
@@ -357,6 +360,14 @@ export default function LogsPage() {
     federationActive &&
     nodeId !== null &&
     federation?.classified.coverage.duplicateUnresolved === true
+
+  /**
+   * 「手动导入归档」入口的门控（FR-504）。
+   *
+   * 与清空冲突不同，它**不要求存在冲突标记**——它的用途是补历史（源目录里躺着但从未被
+   * 导入的 .gz）。唯一前提是选中了单一节点：导入按节点下发给该 Worker，未选节点时无法确定目标。
+   */
+  const canImportArchives = federationActive && nodeId !== null
 
   /**
    * 经典表格查询（联邦视图下作降级回退源）。
@@ -862,6 +873,7 @@ export default function LogsPage() {
           federation={federation}
           onAction={handleFederationAction}
           onClearConflicts={canClearConflicts ? () => setClearConflictsOpen(true) : undefined}
+          onImportArchives={canImportArchives ? () => setImportArchivesOpen(true) : undefined}
           onRetry={() => {
 			if (legacyMode) void legacyQuery.refetch()
 			else { void federationQuery.refetch(); void refetchLogs() }
@@ -880,6 +892,16 @@ export default function LogsPage() {
             if (legacyMode) void legacyQuery.refetch()
             else { void federationQuery.refetch(); void refetchLogs() }
           }}
+        />
+      )}
+
+      {/* 手动导入归档（FR-504）：补采历史 .gz 的运维入口。
+          与清空冲突不同，它不依赖任何冲突标记——只要有单一节点上下文即可用。 */}
+      {canImportArchives && (
+        <ImportArchivesDialog
+          nodeId={nodeId}
+          open={importArchivesOpen}
+          onOpenChange={setImportArchivesOpen}
         />
       )}
 
@@ -967,12 +989,15 @@ function CoverageBanner({
   onRetry,
   onAction,
   onClearConflicts,
+  onImportArchives,
 }: {
   federation: LogsFederationResult
   onRetry: () => void
   onAction: (key: string) => void
   /** 存在"身份冲突待确认"时提供运维入口；未传则该入口不渲染。 */
   onClearConflicts?: () => void
+  /** 提供「手动导入归档（.gz）」入口（FR-504）；未传则该入口不渲染。 */
+  onImportArchives?: () => void
 }) {
   const { t } = useTranslation()
   const props: CoverageBannerProps = federation.banner
@@ -1066,7 +1091,7 @@ function CoverageBanner({
           {t('logsFederation.export.nextCursorHint')}
         </p>
       )}
-      {(props.showRetry || guidanceActions.length > 0 || (duplicateUnresolved && onClearConflicts)) && !degraded && (
+      {(props.showRetry || guidanceActions.length > 0 || (duplicateUnresolved && onClearConflicts) || onImportArchives) && !degraded && (
         <div className="flex flex-wrap gap-2">
           {props.showRetry && (
             <Button size="sm" variant="outline" onClick={onRetry} data-testid="logs-coverage-retry">
@@ -1094,6 +1119,19 @@ function CoverageBanner({
               onClick={onClearConflicts}
             >
               {t('logsFederation.clearConflicts.button')}
+            </Button>
+          )}
+          {/* 手动导入归档（FR-504）：补采"躺在源目录里但从未被导入"的历史 .gz。
+              它是存量源在自动路径之外的唯一出口（定时扫描默认关；采集轮的历史导入只覆盖
+              新绑定）。与清空冲突不同——不需要任何冲突标记，只要选中了节点即可用。 */}
+          {onImportArchives && (
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="logs-import-archives-open"
+              onClick={onImportArchives}
+            >
+              {t('logsFederation.importArchives.button')}
             </Button>
           )}
         </div>

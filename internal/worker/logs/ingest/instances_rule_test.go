@@ -55,8 +55,8 @@ func TestRegisterInstanceBungeeRuleUsesRootProxyLog(t *testing.T) {
 	sc := sourceByID(t, m, "inst:900/file")
 	require.Equal(t, filepath.Join(work, "proxy.log.0"), sc.Path,
 		"bungee 规则的活动日志应为工作目录根的 proxy.log.0")
-	require.Equal(t, filepath.Join(work, "proxy.log.[0-9]*"), sc.ArchiveGlob,
-		"bungee 规则的归档 glob 应为 proxy.log.[0-9]*（轮转产物非 gzip）")
+	require.Equal(t, filepath.Join(work, "proxy.log.[1-9]*"), sc.ArchiveGlob,
+		"bungee 规则的归档 glob 应为 proxy.log.[1-9]*（轮转产物非 gzip；排除 0 号以躲开锁文件与当前活跃日志）")
 }
 
 // TestRegisterInstanceBukkitRuleKeepsHistoricalPaths 验证 bukkit 规则

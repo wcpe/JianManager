@@ -3542,6 +3542,19 @@
       "failed": "Failed to clear identity conflicts",
       "scopeHint": "Clears every source on this node that holds conflict records (platform admins only)"
     },
+    "importArchives": {
+      "button": "Import archives",
+      "title": "Import historical archives (.gz)",
+      "description": "Runs the same import pipeline as the automatic path over every historical archive (.gz and rotated files) that is present in this node's source directories but has never been imported. Use it to backfill history: scheduled scanning is off by default, and the collection loop only imports history for newly adopted sources, so existing sources have no other way in. Imports are batched by write headroom and may span several collection rounds — check the logs page later, or the node's Worker log line for the manual archive import. This entry is unaffected by the gz import switch.",
+      "scopeNode": "Scope: every importable source on this node (platform admins only)",
+      "scopeSource": "Scope: the log sources of one instance (inst:<id>)",
+      "reasonLabel": "Reason (required, recorded in the audit credential)",
+      "reasonPlaceholder": "e.g. Backfill rotated archives",
+      "confirmLabel": "Trigger import",
+      "reasonRequired": "Enter a reason — the audit credential must record why importing is allowed",
+      "triggered": "Archive import scan triggered; imports are batched by write headroom and may span several collection rounds",
+      "failed": "Failed to trigger archive import"
+    },
     "export": {
       "allowed": "Coverage complete and verified; download available",
       "blockedIncomplete": "Coverage incomplete; export download is not available",

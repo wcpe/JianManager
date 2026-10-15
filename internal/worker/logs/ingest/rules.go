@@ -43,10 +43,18 @@ var builtinRules = map[string]Rule{
 	},
 	// BungeeCord：活动日志在**工作目录根**的 proxy.log.0，
 	// 轮转产物为同目录的 proxy.log.N（非 gzip）。
+	//
+	// 归档 glob 从 `proxy.log.[0-9]*` 收窄为 `proxy.log.[1-9]*`（FR-504 真机发现）：
+	// 前者会同时匹配两类**不是归档**的东西——
+	//   ① `proxy.log.0.lck`（BungeeCord 的 0 字节锁文件）：实测被当成归档反复尝试导入，
+	//      账本记为 `ARCHIVE_GZIP_CORRUPT: EOF`（唯一一条导入错误就来自它）；
+	//   ② `proxy.log.0` 本身（**当前活跃日志**）：把它当归档导入等于重复摄取当前内容。
+	// 排除 0 号即可同时躲开两者：轮转产物从 1 起（`proxy.log.[1-9]*` 仍覆盖 10/11… 这类
+	// 多位数后缀，因为字符类只约束首位）。
 	RuleKeyBungee: {
 		Key:          RuleKeyBungee,
 		LiveRelative: "proxy.log.0",
-		ArchiveGlob:  "proxy.log.[0-9]*",
+		ArchiveGlob:  "proxy.log.[1-9]*",
 	},
 	// Waterfall：BungeeCord 的分支，日志布局按 Bukkit 约定输出到 logs/。
 	RuleKeyWaterfall: {

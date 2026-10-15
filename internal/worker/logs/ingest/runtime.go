@@ -159,11 +159,25 @@ type Manager struct {
 	defaultCharset string
 	// defaultTimeZone 是节点级默认时区名（源未显式配置时生效）；空串等价于 UTC。
 	defaultTimeZone string
-	// acqPolicy 是运行期生效的日志采集策略（FR-503，见 policy.go）；nil = 尚未下发/加载，
-	// 一律按 DefaultAcqPolicy（规则引擎开）——不能让「没配置」变成「关闭规则」。受 mu 保护。
-	acqPolicy *AcqPolicy
-	mu        sync.Mutex
-	cycleMu         sync.Mutex
+	// acqPolicy 是运行期生效的采集策略（FR-503，见 policy.go）；未装载时一律按
+	// DefaultAcqPolicy（规则引擎开）——不能让「没配置」变成「关闭规则」。
+	//
+	// 用 atomic.Pointer 承载而非 m.mu 保护的普通字段：采集轮**每源每轮**都要读它
+	// （实时采集开关判据），热路径上不能再争 m.mu。
+	acqPolicy atomic.Pointer[AcqPolicy]
+	// 定时归档导入扫描的启停状态（FR-504，受 scanMu 保护）。
+	//
+	// 为什么需要它：扫描周期可经面板配置（策略每拍下发），值变化时必须能热启停，
+	// 而不是只能在启动时按 worker.yml 决定。
+	scanMu       sync.Mutex
+	scanStop     func()
+	scanInterval time.Duration
+	scanRunning  bool
+	// scanSynced 表示至少同步过一次（区分「从未同步」与「已同步为关闭」）：
+	// 关闭状态下重复同步同一周期必须幂等，否则调用方（每拍心跳）会反复收到「发生变化」。
+	scanSynced bool
+	mu         sync.Mutex
+	cycleMu      sync.Mutex
 	// cycleMu 持有者观测仪（#57，env/Options 开启；默认关 ⇒ observeCycleMu 返回 nil，调用点只有一次判空）。
 	cycleMuProfile bool
 	// cycleMuMu 是观测仪的**叶子锁**：只保护下面几个普通字段（绝不在持它时调用外部代码，也不打日志）。
@@ -3622,6 +3636,16 @@ func (m *Manager) archiveOwnerLookup() func(logSourceID, cleanPath, objectID str
 }
 
 func (m *Manager) pollSource(source SourceConfig, p *pipeline.Pipeline) ([]logtypes.Event, bool, error) {
+	// FR-504 应急停采（realtime_tail=false）：整源本轮不做任何读取/轮转/归档导入。
+	//
+	// 刻意在最前面整源返回，而不是只跳过 p.Poll()：轮转探测会触碰实例目录
+	// （PrepareRotation / FlushClosedSegment 会在物理轮转时闭合段），而停采的语义是
+	// 「只停读，不移动、不截断日志文件」。账本、WAL、游标与磁盘因此全部保持原样
+	// ⇒ 恢复后由 FileTailer 维护的 cursor 断点续采，不丢位置、不产生缺口；
+	// 实例进程与心跳（都在本方法之外）完全不受影响。
+	if !m.AcqPolicySnapshot().RealtimeTail {
+		return nil, false, nil
+	}
 	// 容量提供者可能执行磁盘查询，只在共享锁外刷新，覆盖本轮 Poll、导入与闭合输出。
 	p.RefreshDegrade(time.Now())
 	if source.Mode != pipeline.ModeFilePrimary || source.Path == "" {

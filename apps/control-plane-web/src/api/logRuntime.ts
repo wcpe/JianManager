@@ -97,6 +97,48 @@ export function useResolveLogIngestGaps(nodeId: number) {
   })
 }
 
+/** 手动触发归档（.gz）导入扫描的结果（CP 响应体，FR-504）。 */
+export interface ImportLogArchivesResult {
+  state: string
+  message: string
+}
+
+/**
+ * 手动触发归档（.gz）导入扫描（FR-504）。
+ *
+ * 语义：把「已经躺在源目录里、但还没被导入」的历史归档走一遍与自动路径完全相同的导入管道。
+ * 与自动路径的关键差异是**不受 gz 导入开关影响**——应急补历史永远可用。
+ *
+ * 为什么需要这条前端通路：定时扫描默认关 + 存量源不在采集轮的历史导入范围内（acquire 层
+ * 不变量：历史段只能前置到未被读过的当前段），二者叠加后唯一出口就是手动入口；而该入口
+ * 过去只有 Worker gRPC，面板不可达——这是生产「814 个 gz 从未被导入」的第三块拼图。
+ *
+ * 两个入参都是**审计必需**（后端缺任一即拒）：
+ * - `storageNamespace` 省略/空 = 该节点全部可导入源（仅平台管理员，后端强制）；
+ * - `reason` 必填 —— 进审计凭据（谁/何时/为何触发）。
+ *
+ * 导入是批量且长跑的动作（按 WAL 余量分批、可能跨多个采集轮），本请求只表示「已触发且无错」，
+ * 计数以 Worker 日志「已执行手动归档导入」为准 —— 故不做「完成后刷新」的假承诺。
+ */
+export function useImportLogArchives(nodeId: number) {
+  return useMutation({
+    mutationFn: async ({
+      storageNamespace,
+      reason,
+    }: {
+      storageNamespace?: string
+      reason: string
+    }): Promise<ImportLogArchivesResult> =>
+      (
+        await api.post(
+          `/nodes/${nodeId}/log-runtime/ingest/import-archives`,
+          { storageNamespace: storageNamespace ?? '', reason },
+          { timeout: 60_000 },
+        )
+      ).data,
+  })
+}
+
 /** 身份冲突人工清空的结果（CP 响应体）。 */
 export interface ClearIdentityConflictsResult {
   state: string
