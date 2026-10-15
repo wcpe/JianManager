@@ -321,6 +321,8 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 **数据面边界不变**：CP 业务库仍只保留 platform/audit + （切换后）Legacy 只读存量；切换打开前 instance/worker 来源仍写入 CP `logs` 表。禁止把测试全绿当作真 Worker/VL/浏览器验收。
 
+**实例日志源的路径发现（FR-502）**：实例活动日志的物理路径**不再硬编码**为 `WorkDir/logs/latest.log`，而是按**采集规则**解析——规则表内置四条（`bukkit`＝`logs/latest.log`+`logs/*.gz`、`bungee`＝`proxy.log.0`+`proxy.log.[0-9]*`、`waterfall`、`velocity`），未知或空 key 回退 bukkit。规则名由 CP 按实例 `role` + `launch_spec.coreJar` 推导（`deriveLogRuleKey`）经 `CreateInstanceRequest` 增量字段 `log_rule_key`/`log_relative_path` 下发，覆盖创建/重连重推/更新/补端口四条路径；节点侧 `log_sources` 配置可覆盖规则默认（优先级：配置 > proto 覆盖 > 规则默认）。规则随实例绑定持久化（`instance_binding.rule_key`/`relative_path`，历史库经 `addColumnIfMissing` 幂等补列，旧行零值即回退 bukkit）。规则升级走「源位置不变则平滑重建」语义：`sameSourceIdentity`（WorkDir/TargetID/Generation/Mode）判定源身份未变时才允许，且重建时**段落起点锚到文件末尾**（不重读既有内容，避免重复导入）；源位置类变更仍按原保护拒绝。详见 [规格](specs/log-acquisition-rules/spec.md)。
+
 **采集索引与查询一致性**：旧 JSON 迁移绑定原始字节 SHA-256、映射版本与 meta 进度凭据，分块数据/进度同事务提交；启动循环续跑 `Incomplete`，全量逐值校验及来源复核后才归档旧 JSON，非空无凭据不一致库拒绝覆盖。全表读取共用一个只读事务的 WAL 快照。锁外持久化计划携快照顺序令牌，提交门内整份拒绝过期计划（包括根行及剪枝），部分提交同样推进接纳门槛；详见 [索引规格](specs/log-index-sqlite/spec.md)。
 
 **发布恢复边界**：静默遗留 pending 由常驻对账按实际 UTC 日内容级确认或预算化续修，不依赖新日志；全部日未确认时保持 pending，清除须复核发布版本/authority/attempt，旧完成不能清新尝试。微投影 64 代阈值按本批实际日检查，到限单代 Replace 写完整 canonical 日集，保留旧历史。既有处理游标逐源完成后推进，不能按候选数抢先跨过未处理源；详细语义与回归见 [采集规格](specs/worker-log-acquisition/spec.md)。

@@ -126,6 +126,13 @@ describe('keyCategory（github.token 归网络类，与出站代理同面板）'
     expect(keyCategory('github.token')).toBe('network')
     expect(keyCategory('proxy.url')).toBe('network')
     expect(keyCategory('log.level')).toBe('logging')
+    // FR-503：log.acq.* 是日志采集配置（独立分区），须在 `log.` 判定之前分流——
+    // 否则会被误归入「日志」（CP 自身日志级别）分类，用户找不到采集配置。
+    expect(keyCategory('log.acq.rules_enabled')).toBe('logAcquisition')
+    expect(keyCategory('log.acq.realtime_tail')).toBe('logAcquisition')
+    expect(keyCategory('log.acq.gz_import_enabled')).toBe('logAcquisition')
+    expect(keyCategory('log.acq.gz_scan_interval')).toBe('logAcquisition')
+    expect(keyCategory('log.acq.path_overrides')).toBe('logAcquisition')
     expect(keyCategory('invite.smtp.password')).toBe('email')
     expect(keyCategory('jwt.secret')).toBe('security')
   })
