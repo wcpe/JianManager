@@ -341,8 +341,8 @@ export default function LogsPage() {
         : federationQuery.data)
       : undefined
 
-  // F-003：联邦可用（非降级）时列表以 federation.items 为主数据源；
-  // 404 降级才回退 useLogs 的 Legacy 表。禁止「联邦横幅 + Legacy 内容」错配。
+  // F-003：联邦视图的列表**只**以 federation.items 为主数据源；降级不再回退 useLogs 的
+  // Legacy 表（用户裁定：没有就是没有）。禁止「联邦横幅 + 平台/历史内容」错配。
   const federationActive = !!federation && !federation.degraded && federation.available
   // 供标题区状态提示使用（与横幅同源，避免两处判定漂移）。
   const federationDegraded = federation?.degraded === true
@@ -374,7 +374,7 @@ export default function LogsPage() {
    *
    * **刻意不绑定 `federationActive`**（与清空冲突的判据不同）：导入走的是 `LogImportArchives`
    * RPC，与联邦**查询**面（`LogSearch` 一族）不是同一能力。生产实测存在这样的组合——
-   * 「日志查询服务未启用 ⇒ 前端降级为 legacy ⇒ `federationActive=false`」而导入 RPC 完全可用
+   * 「日志查询服务未启用 ⇒ 联邦视图为空、`federationActive=false`」而导入 RPC 完全可用
    * （同一时刻 `POST /nodes/:id/log-runtime/ingest/import-archives` 返回 200 并成功导入）。
    * 若把入口绑在查询可用性上，最需要补历史归档的降级场景反而没有按钮。端点自身不可用时
    * 由后端返回错误，前端按既有错误处理提示——**不做乐观预判**。
@@ -382,19 +382,25 @@ export default function LogsPage() {
   const canImportArchives = nodeId !== null && isPlatformAdmin
 
   /**
-   * 经典表格查询（联邦视图下作降级回退源）。
+   * 经典表格查询（**仅**平台视图的权威来源）。
    *
    * 两个门控都指向同一目标：**联邦视图下不要为了「可能用得上」而重复请求**。
    * ① `refetchInterval` 不含联邦视图：node_instance/all 视图的主数据源是 federation，
    *    再让 useLogs 跟着每 3 秒打一条数据面请求，只会让每次轮询变成 2 条（生产 429 的
    *    主因之一），而它拉回的行在联邦活跃时根本不参与渲染。
-   * ② `enabled` 只在「经典接口确实是权威来源」时才开：平台视图（federationEnabled=false）
-   *    或联邦已降级（404/不可达）。仅关掉 ① 还不够——跟随态的时间桶每 3 秒滚动一次，
+   * ② `enabled` 只在「经典接口确实是权威来源」时才开：**只有平台视图**
+   *    （federationEnabled=false）符合。仅关掉 ① 还不够——跟随态的时间桶每 3 秒滚动一次，
    *    `params` 里的 from/to 随之变化 ⇒ queryKey 变化本身就触发一次新请求（实测：即使
    *    refetchInterval=false，classic 仍每 tick 发 1 条）。关掉 ② 才真正消除这次重复。
-   *    降级后才启用也意味着回退表按需加载，不会在联邦正常时白白预热一份没人看的表格。
+   *
+   * **联邦视图不再因降级而回退经典表**（用户裁定）：查询服务不可用时「没有就是没有」，
+   * 把平台/历史日志填进节点/实例视图，会让「查不到」被读成「这些就是该视图的日志」，
+   * 属于静默换源式的误导。Legacy 有专门入口（工具栏右侧「更多」），要看存量日志的用户
+   * 自己切过去看，而不是由本视图替他决定。
+   * 由此 `data` 在联邦视图下恒为 undefined，items/total/isLoading/isError 会连锁落到
+   * 「联邦不可用 ⇒ 空且非成功」的语义上，无需各处重复判断。
    */
-  const classicAuthoritative = !federationEnabled || federation?.degraded === true
+  const classicAuthoritative = !federationEnabled
   const { data, isLoading: classicLoading, isError: classicError, refetch: refetchLogs } = useLogs(params, {
     refetchInterval: follow && !federationEnabled ? FOLLOW_INTERVAL : false,
     enabled: !legacyMode && classicAuthoritative,
@@ -497,8 +503,10 @@ export default function LogsPage() {
     [],
   )
 
-  // 导出门禁：联邦可用且覆盖/校验未过 → 禁用；404 降级保留经典导出路径。
-  const classicExportAllowed = !federation || federation.degraded
+  // 导出门禁：联邦可用且覆盖/校验未过 → 禁用。
+  // `classicExportAllowed` 与查询同源，同样**只在平台视图**成立：联邦视图降级后列表已空，
+  // 此时放行经典导出会导出与当前视图无关的平台日志——与「静默换源」是同一处误导。
+  const classicExportAllowed = !federationEnabled
   const exportBlockedByFederation =
     !!federation && !classicExportAllowed && !federation.exportAffordance.showDownload
   const exportDisabled = legacyMode || exporting || total === 0 || exportBlockedByFederation
@@ -506,8 +514,8 @@ export default function LogsPage() {
 	// 否则会先闪 empty-state（且 404 降级期间显示非成功空态），把尚未就绪误报成失败。
 	// 故把「联邦探测未完成」并入 loading：只有探测结束、数据源确定后才允许判空。
 	//
-	// 联邦视图下经典查询只是回退源，它的加载/失败**不得**参与页面态：联邦已拿到数据时
-	// 白屏/报错都无意义地盖住列表；只有联邦降级（真正在用经典表）时才由它说话。
+	// 联邦视图下经典查询根本不参与页面态（`classicAuthoritative=false` ⇒ 不发起、无数据）：
+	// 页面态只由联邦探测与联邦结果决定，不再存在「降级后由经典表说话」这条路径。
 	const federationProbePending = federationEnabled && federationQuery.isLoading
 	const isLoading = legacyMode
 		? legacyQuery.isLoading
@@ -522,13 +530,14 @@ export default function LogsPage() {
 			// 联邦视图下「有数据」= 有联邦结果（含限流时保留的上一份行）。
 			: !!federation
 	// 空结果语义：失败/partial 不得呈「暂无日志」空成功（FR-482）。
-	// 引擎未就绪的降级是例外中的例外：经典路径可能确实没有行，但引擎侧数据从未被查询，
+	// 查询服务未启用（降级）亦然：经典路径可能确实没有行，但引擎侧数据从未被查询，
 	// 此时宣称「暂无日志」是假成功，必须保留非成功空态。
 	// 限流（rate_limited）同样是失败态：emptySuccessAllowed 由 classified 判为 false。
-	const emptySuccessAllowed =
-		!federation ||
-		(federation.degraded && !federation.federatedNotReady) ||
-		federation.classified.emptySuccessAllowed
+	// 联邦视图下**没有**「降级即空成功」这条例外了：降级只说明查不到，不允许显示成
+	// 「暂无日志」——那是把未查询说成不存在。平台视图仍按经典路径判定。
+	const emptySuccessAllowed = federationEnabled
+		? (federation?.classified.emptySuccessAllowed ?? false)
+		: (!federation || federation.classified.emptySuccessAllowed)
 
   const handleExport = async (scope: LogExportScope) => {
     if (exportDisabled) return

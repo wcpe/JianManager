@@ -564,6 +564,44 @@ function seedLogs(): LogRow[] {
   return [...base, ...generated]
 }
 
+/**
+ * 日志筛选 + `time DESC` 排序（FR-049/050）：经典 `/logs` 与联邦 `/logs/federation` 共用。
+ *
+ * 为什么必须共用一份而不是各写一份：两条路径服务的是**同一批种子行**，前端据此渲染同一张
+ * 列表。筛选/排序若各写一份，任何一侧的改动都会让 mock 里的「节点/实例日志」与
+ * 「联邦视图」相互漂移——用例的红绿会由数据源差异决定，而不是由被测的页面行为决定。
+ * 支持维度：source / level / nodeId / instanceId / keyword / from / to。
+ */
+function selectLogRows(url: URL): LogRow[] {
+  const source = url.searchParams.get('source')
+  const level = url.searchParams.get('level')
+  const nodeId = url.searchParams.get('nodeId')
+  const instanceId = url.searchParams.get('instanceId')
+  const keyword = url.searchParams.get('keyword')
+  const from = url.searchParams.get('from')
+  const to = url.searchParams.get('to')
+
+  let items = logs.list()
+  if (source) items = items.filter((l) => l.source === source)
+  if (level) items = items.filter((l) => l.level === level)
+  if (nodeId) items = items.filter((l) => l.nodeId === Number(nodeId))
+  if (instanceId) items = items.filter((l) => l.instanceId === Number(instanceId))
+  if (keyword) items = items.filter((l) => l.message.includes(keyword))
+  if (from) items = items.filter((l) => l.time >= from)
+  if (to) items = items.filter((l) => l.time <= to)
+
+  // 对齐真后端 log.go 的 time DESC 稳定排序（真后端有序，mock 此前漏排造成「实时正序+历史倒序」假象）。
+  return [...items].sort((a, b) => (a.time < b.time ? 1 : a.time > b.time ? -1 : 0))
+}
+
+/** 日志分页参数（经典 / 联邦两条路径共用；缺省 1 / 100，与前端 PAGE_SIZE 一致）。 */
+function logPageParams(url: URL): { page: number; pageSize: number } {
+  return {
+    page: Number(url.searchParams.get('page') ?? '1'),
+    pageSize: Number(url.searchParams.get('pageSize') ?? '100'),
+  }
+}
+
 // ── 指标时序生成（无独立集合，纯派生让图表有内容） ──
 
 /** 生成一条等间隔时序：count 点、step 间隔，值在 [base, base+amp] 间正弦波动。 */
@@ -1955,31 +1993,80 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
-    const source = url.searchParams.get('source')
-    const level = url.searchParams.get('level')
-    const nodeId = url.searchParams.get('nodeId')
-    const instanceId = url.searchParams.get('instanceId')
-    const keyword = url.searchParams.get('keyword')
-    const from = url.searchParams.get('from')
-    const to = url.searchParams.get('to')
-    const page = Number(url.searchParams.get('page') ?? '1')
-    const pageSize = Number(url.searchParams.get('pageSize') ?? '100')
-
-    let items = logs.list()
-    if (source) items = items.filter((l) => l.source === source)
-    if (level) items = items.filter((l) => l.level === level)
-    if (nodeId) items = items.filter((l) => l.nodeId === Number(nodeId))
-    if (instanceId) items = items.filter((l) => l.instanceId === Number(instanceId))
-    if (keyword) items = items.filter((l) => l.message.includes(keyword))
-    if (from) items = items.filter((l) => l.time >= from)
-    if (to) items = items.filter((l) => l.time <= to)
-
-    // 对齐真后端 log.go 的 time DESC 稳定排序（真后端有序，mock 此前漏排造成「实时正序+历史倒序」假象）。
-    items = [...items].sort((a, b) => (a.time < b.time ? 1 : a.time > b.time ? -1 : 0))
+    const items = selectLogRows(url)
+    const { page, pageSize } = logPageParams(url)
 
     const total = items.length
     const start = (page - 1) * pageSize
     return HttpResponse.json({ items: items.slice(start, start + pageSize), total, page, pageSize })
+  }),
+
+  // ===== logs 联邦查询（FR-482/FR-480） =====
+  //
+  // 假后端只提供**正常可用**的联邦信封（ok:true + available:true）：前端「查询服务不可用」
+  // 的各种降级态由测试按需用 server.use 覆写（404/失败/partial 各有专门用例），
+  // mock 自身不模拟降级——否则默认路径不再是生产同款，页面用例会跑在一条生产不存在的分支上。
+  domainRoute('get', '/logs/federation', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    // 与经典 /logs 同源同筛选：前端行映射（mapFederationItems）兼容 LogRow 字段。
+    const items = selectLogRows(url)
+    const { page, pageSize } = logPageParams(url)
+    const start = (page - 1) * pageSize
+    const pageItems = items.slice(start, start + pageSize)
+    return HttpResponse.json({
+      ok: true,
+      sourceTag: 'federated',
+      available: true,
+      items: pageItems,
+      total: items.length,
+      page,
+      pageSize,
+      quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+      coverage: {
+        complete: true,
+        partial_reasons: [],
+        targets: [],
+        enumeration_state: 'OPEN',
+      },
+      exhausted: start + pageItems.length >= items.length,
+      // 固定视图标识：前端 stats/facets 的聚合请求以它为前提（无 viewId 时不会发起聚合）。
+      view: { view_id: 'mock-view-1' },
+    })
+  }),
+
+  // 聚合洞察（洞察栏「当前视图 N 个事件」与级别分布）：假后端不给聚合明细，返回空点集 +
+  // 完整覆盖。空点集让洞察栏只显示占位，不虚构统计数字。
+  domainRoute('get', '/logs/federation/stats', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ points: [], coverage: { complete: true, targets: [] } })
+  }),
+
+  domainRoute('get', '/logs/federation/facets', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ dimensions: [], coverage: { complete: true, targets: [] } })
+  }),
+
+  /**
+   * 联邦导出（FR-482）：POST + 物化当前 Query View，响应是 NDJSON 附件。
+   *
+   * 前端 `exportFederatedLogs` 用响应 `content-type` 判定结果：非 `application/x-ndjson`
+   * 会被当成「导出闸阻断」（200 + 报告 JSON）并抛出结构化错误。故此处必须回 NDJSON，
+   * 否则 mock 模式下点「导出」恒定报阻断，与真实可用后端行为不符。
+   * 筛选与经典 `/logs/export` 同源（共用 `selectLogRows`）；导出是全量，不分页。
+   */
+  domainRoute('post', '/logs/federation/export', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const ndjson = selectLogRows(new URL(info.request.url))
+      .map((l) => JSON.stringify(l))
+      .join('\n')
+    return new HttpResponse(ndjson, {
+      headers: { 'Content-Type': 'application/x-ndjson' },
+    })
   }),
 
   domainRoute('get', '/logs/export', (info) => {
