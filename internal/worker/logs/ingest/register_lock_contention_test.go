@@ -260,7 +260,10 @@ func TestRegisterInstanceNotBlockedBySaturatedPollRound(t *testing.T) {
 
 			if tc.preRegister {
 				// 忙期之前先登记，制造「绑定已存在」的幂等重注册场景。
-				require.NoError(t, m.RegisterInstance(uuid, targetID, generation, string(pipeline.ModeStdioPrimary), workDir))
+				require.NoError(t, m.RegisterInstance(InstanceRegistration{
+					UUID: uuid, TargetID: targetID, Generation: generation,
+					Mode: string(pipeline.ModeStdioPrimary), WorkDir: workDir,
+				}))
 			}
 
 			round := startPollRound(m)
@@ -270,7 +273,10 @@ func TestRegisterInstanceNotBlockedBySaturatedPollRound(t *testing.T) {
 			result := make(chan error, 1)
 			started := time.Now()
 			go func() {
-				result <- m.RegisterInstance(uuid, targetID, generation, string(pipeline.ModeStdioPrimary), workDir)
+				result <- m.RegisterInstance(InstanceRegistration{
+					UUID: uuid, TargetID: targetID, Generation: generation,
+					Mode: string(pipeline.ModeStdioPrimary), WorkDir: workDir,
+				})
 			}()
 
 			var elapsed time.Duration
@@ -359,7 +365,10 @@ func TestRegisterInstanceLatencyBudgetUnderSaturation(t *testing.T) {
 	latencies := make([]time.Duration, 0, 8)
 	for i := 0; i < 8; i++ {
 		started := time.Now()
-		require.NoError(t, m.RegisterInstance(uuid, targetID, generation, string(pipeline.ModeStdioPrimary), workDir))
+		require.NoError(t, m.RegisterInstance(InstanceRegistration{
+			UUID: uuid, TargetID: targetID, Generation: generation,
+			Mode: string(pipeline.ModeStdioPrimary), WorkDir: workDir,
+		}))
 		latencies = append(latencies, time.Since(started))
 		require.False(t, round.finished(), "第 %d 次登记：整轮采集在登记期内就已结束（夹具太短）", i+1)
 	}

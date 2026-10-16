@@ -90,9 +90,11 @@ func planState(st State, nowUnixMilli int64) ([tableCount]map[string][]rowData, 
 		// 该表不参与按归属增量（不在 scopedTables），归属值本身不承载语义，只要求两侧一致。
 		appendRow(tblInstanceBinding, row.UUID, rowData{
 			key: mirrorKey(row.UUID),
-			fp:  fingerprint(row.Namespace, row.Generation, row.Mode, row.WorkDir),
+			// fp 必须覆盖全部可变列（含 FR-502 的 rule_key/relative_path），
+			// 否则规则变更不会被判为「本行已变更」而漏写。
+			fp: fingerprint(row.Namespace, row.Generation, row.Mode, row.WorkDir, row.RuleKey, row.RelativePath),
 			values: func() ([]any, error) {
-				return []any{row.UUID, row.Namespace, row.Generation, row.Mode, row.WorkDir}, nil
+				return []any{row.UUID, row.Namespace, row.Generation, row.Mode, row.WorkDir, row.RuleKey, row.RelativePath}, nil
 			},
 		})
 	}

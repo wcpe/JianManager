@@ -321,6 +321,10 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 **数据面边界不变**：CP 业务库仍只保留 platform/audit + （切换后）Legacy 只读存量；切换打开前 instance/worker 来源仍写入 CP `logs` 表。禁止把测试全绿当作真 Worker/VL/浏览器验收。
 
+**实例日志源的路径发现（FR-502）**：实例活动日志的物理路径**不再硬编码**为 `WorkDir/logs/latest.log`，而是按**采集规则**解析——规则表内置四条（`bukkit`＝`logs/latest.log`+`logs/*.gz`、`bungee`＝`proxy.log.0`+轮转产物、`waterfall`、`velocity`），未知或空 key 回退 bukkit。规则名由 CP 按实例 `role` + `launch_spec.coreJar` 推导（`deriveLogRuleKey`）经 `CreateInstanceRequest` 增量字段 `log_rule_key` 下发（同消息的 `log_relative_path` 是**预留**字段：CP 当前没有生产者，面板的实例级路径覆盖走心跳 `log.acq.path_overrides`），覆盖创建/重连重推/更新/补端口四条路径。**路径覆盖的实际优先级（高 → 低）：CP 心跳 `path_overrides` > 节点侧 `log_sources` 配置 > proto `log_relative_path` > 规则默认**——心跳覆盖在登记时无条件压过其余来源（`internal/worker/logs/ingest/instances.go`），即两处都配了同一实例的路径时以 CP 侧为准，节点侧 `worker.yml` 的显式 path 会被静默压过。规则随实例绑定持久化（`instance_binding.rule_key`/`relative_path`，历史库经 `addColumnIfMissing` 幂等补列，旧行零值即回退 bukkit）。规则升级走「源位置不变则平滑重建」语义：`sameSourceIdentity`（WorkDir/TargetID/Generation/Mode）判定源身份未变时才允许，且重建时**段落起点锚到文件末尾**（不重读既有内容，避免重复导入）；源位置类变更仍按原保护拒绝。详见 [规格](specs/log-acquisition-rules/spec.md)。
+
+**归档导入开关口径（FR-503/504）**：`log.acq.gz_import_enabled` 是 gz 导入**总开关**——关闭 = 折算出的定时扫描周期一律为 0（不启用定时归档扫描），**手动导入入口不受影响**；它**不停**常驻采集轮的自动发现（FR-474 的既有承诺：新接管源先导入历史再给当前段分配位置，停掉会造成静默的历史缺失）。`log.acq.gz_scan_interval` **空/0 = 未配置** → Worker 回落 `worker.yml` 基线 `log_ingest.archive_scan_interval`（协议上 0 只表示未配置，「关闭」只由总开关表达；写入侧禁止配 0/负数）。因此**默认（周期空）⇒ 回落内置基线的周期 0 ⇒ 不扫描**——与开关默认取值无关；要显式停扫描请关总开关，而不是清周期。
+
 **采集索引与查询一致性**：旧 JSON 迁移绑定原始字节 SHA-256、映射版本与 meta 进度凭据，分块数据/进度同事务提交；启动循环续跑 `Incomplete`，全量逐值校验及来源复核后才归档旧 JSON，非空无凭据不一致库拒绝覆盖。全表读取共用一个只读事务的 WAL 快照。锁外持久化计划携快照顺序令牌，提交门内整份拒绝过期计划（包括根行及剪枝），部分提交同样推进接纳门槛；详见 [索引规格](specs/log-index-sqlite/spec.md)。
 
 **发布恢复边界**：静默遗留 pending 由常驻对账按实际 UTC 日内容级确认或预算化续修，不依赖新日志；全部日未确认时保持 pending，清除须复核发布版本/authority/attempt，旧完成不能清新尝试。微投影 64 代阈值按本批实际日检查，到限单代 Replace 写完整 canonical 日集，保留旧历史。既有处理游标逐源完成后推进，不能按候选数抢先跨过未处理源；详细语义与回归见 [采集规格](specs/worker-log-acquisition/spec.md)。
@@ -335,7 +339,7 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 | 冷层保留 | `retention.Policy.ColdRetention` 默认 730d（声明与校验）；`log_retention.cold_retention` 与受管 VL 的**按 namespace retention** **已接线**（提交 `08eb2386`） | **730 天（2 年）**：VL + 大容量盘，**所有级别统一**；由受管 COLD 的 `-retentionPeriod` 执行 |
 | 到期动作 | 默认动作=搬运 COLD（复用 `ROUTING_FROZEN→…→CLEANED`），搬运失败=保留原物+告警、零删除；删除需 `discard` + `sweep.vl_sweep` 双闸且受管 VL 需 `-delete.enable`，**默认全关** | 不变（该语义即目标形态）；补齐"谁、何时、多少、去哪"的对外暴露（指标 + 日志行） |
 | 分层驱动 | `retention.Driver` 周期调度 + 首轮立即执行；触发口径年龄 + 磁盘水位**取先到**（磁盘触发 min_age=7d）；`log_retention.trigger.*` 配置面 **已接线**（提交 `08eb2386`） | 不变（即目标形态） |
-| 实例本地 gz | 无吸存能力；平台不删实例本地任何 `.gz`（轮转尾部由 ArchiveImporter 解析，仅用于接管） | 以**文件身份、压缩态**吸存到冷层：只归档文件、不解析、不入事件流；幂等去重由系统负责；**本地 gz 一律不动** |
+| 实例本地 gz | 无吸存能力；平台不删实例本地任何 `.gz`（轮转尾部由 ArchiveImporter 解析，仅用于接管；同目录的**纯文本轮转**归档——如 BungeeCord 的 `proxy.log.N`——同样由该导入器按形态分流后接管） | 以**文件身份、压缩态**吸存到冷层：只归档文件、不解析、不入事件流；幂等去重由系统负责；**本地 gz 一律不动** |
 | 对象存储 | FR-478 已有 S3 Provider / Rehydrate 能力（真机 RustFS 验收通过），当前未作为必需组件 | **第一阶段不上**；作为第 3 档（异地/超长期/合规）能力位与后续评估位 |
 | 采集侧成本 | `Config.SamplingPolicy → ingest.Options.Sampling → Manager → 每源 Pipeline` 已接线，四类策略**默认全关**；抑制以汇总事件承接（不变量 R），恢复重投不重复采样 | 不变（默认关即目标姿态） |
 | 单位成本 | 投递路径 O(段总行数) 遍历已消除（`87af507f`：−82% 批耗时 / +68% 吞吐 / 达成率 0.555→0.93）；新鲜度换成本的分段批拉经实测收益为零、**不做** | 成本可见性平台化（每源 GB/天、ms/行），供预算化运营 |
@@ -348,7 +352,7 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
-- **Worker 日志平台 Log RPC（FR-473～484，消息已冻结 / 生产装配已落地）**：`GetLogCapabilities`、`LogCreateView`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`、`LogMigratePartition`、`LogCutoverReadiness`、`LogResolveIngestGaps`、`LogImportArchives`（手动触发归档 `.gz` 导入扫描：源被暂停时自动发现不再跑，此入口复用同一条导入管道与归属闸，强制携带操作人）、`LogClearIdentityConflicts`（人工确认并清空身份冲突记录以消除查询面质量标记，强制携带操作人 + 理由）。受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。节点级 runtime/ingest 管理面的 HTTP 端点（`resolve-gaps` / `clear-identity-conflicts`）见 API.md「Worker 日志平台」；`LogImportArchives` 无 CP HTTP 端点，只有 Worker gRPC 入口。
+- **Worker 日志平台 Log RPC（FR-473～484，消息已冻结 / 生产装配已落地）**：`GetLogCapabilities`、`LogCreateView`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`、`LogMigratePartition`、`LogCutoverReadiness`、`LogResolveIngestGaps`、`LogImportArchives`（手动触发归档导入扫描：源被暂停时自动发现不再跑，此入口复用同一条导入管道与归属闸，强制携带操作人；**支持两种归档形态**——`.gz` 压缩归档与 BungeeCord 式**纯文本轮转**（后者见下条），形态按文件头判定、`.gz` 名保持「坏归档必须可见」的既有契约）、`LogClearIdentityConflicts`（人工确认并清空身份冲突记录以消除查询面质量标记，强制携带操作人 + 理由）。受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。节点级 runtime/ingest 管理面的 HTTP 端点（`resolve-gaps` / `clear-identity-conflicts` / `import-archives`）见 API.md「Worker 日志平台」；`LogImportArchives` 的手动入口经 CP `POST /nodes/:id/log-runtime/ingest/import-archives` 转发（FR-504 补齐——此前只有 Worker gRPC 入口，运维实际不可达）。
 - 生命周期：Register, Heartbeat (双向 stream), FetchBotWorkerArchive
   - `Register` 的身份匹配经 gRPC metadata 携带 `node-uuid`/`node-secret`（重注册必须同时出示）或 `enroll-token`（新节点准入），均不改 proto；Host 和名称不再作为身份凭据（ADR-081）。
   - `RegisterResponse` 携带 `ws_token_secret`（FR-275，见 ADR-061）：CP↔Worker 专用 **WS 令牌密钥**（只签终端/插件桥令牌，与签用户会话的 `jwt.secret` 隔离，Worker 永不持有后者）。首注册与重注册均下发；Worker 持久化到 `etc/node-identity.json` 并热应用到 WS 校验。CP 侧密钥三轨：显式 `jwt.ws_secret` > 生产 autogen 持久化 `<dataRoot>/etc/ws-token-secret.key`（0600）> dev 回退 `dev-secret-change-me`；若既无本地持久化值也未收到响应值，Worker 拒绝启动 WS 服务。

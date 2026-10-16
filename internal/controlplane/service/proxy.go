@@ -131,14 +131,27 @@ func (p *ProxyService) prepareProxy(ctx context.Context, req ProvisionProxyReque
 	if err != nil {
 		return nil, nil, err
 	}
-	inst, secret, err := p.createProxyInstance(req)
+	inst, secret, err := p.createProxyInstance(req, core)
 	if err != nil {
 		return inst2result(inst, secret), nil, err
 	}
 	return inst2result(inst, secret), core, nil
 }
 
-func (p *ProxyService) createProxyInstance(req ProvisionProxyRequest) (*model.Instance, string, error) {
+// launchSpecForProxy 组装代理实例的结构化启动规格。
+//
+// 代理与后端子服共用「核心统一落盘为 server.jar」的约定（provisionCoreJar），
+// 代价是 jar 文件名不再携带核心类型；故这里把已解析出的代理核心类型显式写进 CoreKind，
+// 供日志采集规则推导使用（FR-502）——否则平台自己搭建/重建的代理恒得 bukkit 规则，
+// BungeeCord 的 `proxy.log.0`（工作目录根）永远采不到，即本项要修的生产缺陷静默复现。
+func launchSpecForProxy(req ProvisionProxyRequest, core *CoreInfo) LaunchSpec {
+	return LaunchSpec{
+		MemoryMb: req.MemoryMb, JvmArgs: req.JvmArgs,
+		CoreJar: provisionCoreJar, CoreKind: coreKindOf(core), OmitNogui: true,
+	}
+}
+
+func (p *ProxyService) createProxyInstance(req ProvisionProxyRequest, core *CoreInfo) (*model.Instance, string, error) {
 	// 节点级端口分配互斥：从占用快照到实例落库（Create）全程持锁，防同节点并发
 	// 建服/克隆/代理分配选中同一端口。
 	releasePortAlloc := p.instance.lockNodePortAlloc()
@@ -152,7 +165,7 @@ func (p *ProxyService) createProxyInstance(req ProvisionProxyRequest) (*model.In
 	if IsVelocityCore(req.ProxyType) {
 		secret = genForwardingSecret()
 	}
-	specJSON, err := json.Marshal(LaunchSpec{MemoryMb: req.MemoryMb, JvmArgs: req.JvmArgs, CoreJar: provisionCoreJar, OmitNogui: true})
+	specJSON, err := json.Marshal(launchSpecForProxy(req, core))
 	if err != nil {
 		return nil, secret, err
 	}
@@ -246,6 +259,12 @@ func (p *ProxyService) RebuildProxy(ctx context.Context, instanceID uint, create
 		return "", err
 	}
 	secret := inst.ForwardingSecret // 复用已存 secret，避免与后端注册配置的 secret 失配
+	// 重建重新解析了核心，顺带为「本字段引入之前创建的实例」补上核心类型（FR-502）：
+	// 否则重建后的代理仍按 bukkit 规则采集。补写失败不阻断重建（回退 jar 名匹配）。
+	if backfillErr := backfillLaunchSpecCoreKind(p.db, &inst, core); backfillErr != nil {
+		slog.Warn("重建时补写核心类型失败（日志采集规则将回退按 jar 名匹配）",
+			"instance", inst.Name, "instanceId", inst.ID, "error", backfillErr)
+	}
 	p.setProvisionReason(inst.ID, "重建中：正在重新供给代理核心与配置（完成前请勿启动）")
 	title := fmt.Sprintf("重建代理 %s（%s %s）", inst.Name, req.ProxyType, req.Version)
 	backgroundInstance := inst

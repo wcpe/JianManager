@@ -293,3 +293,81 @@ export function useUpdateNodeProxy(nodeId: number) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['node-proxy', nodeId] }),
   })
 }
+
+/**
+ * 日志采集配置项（FR-503）的三层取值。
+ *
+ * 三层（高 → 低）：Worker 覆盖 > 平台默认 > worker.yml 基线。
+ * 前端按「生效值 + 是否被本节点覆盖」渲染，并提供逐项覆盖与恢复默认。
+ */
+export interface LogAcqSettingItem {
+  /** 平台键（不带 `@node:` 后缀），如 log.acq.rules_enabled。 */
+  key: string
+  /** worker.yml 基线（内置默认）值。 */
+  default: string
+  /** 平台级生效值（平台 DB 覆盖 > 基线）。 */
+  platform: string
+  /** 本作用域生效值（节点视图 = Worker 覆盖 > 平台）。 */
+  effective: string
+  /** 本节点覆盖值（平台视图恒为空）。 */
+  override: string
+  /** 本节点是否显式覆盖过该项。 */
+  overridden: boolean
+}
+
+/** 日志采集配置视图（FR-503）：平台视图或某节点的对照视图。 */
+export interface LogAcqSettingsView {
+  /** 非空表示某节点的对照视图；空表示平台默认视图。 */
+  nodeUuid?: string
+  /** 节点名（仅节点视图）。 */
+  nodeName?: string
+  items: LogAcqSettingItem[]
+}
+
+/** 写日志采集配置请求体：键 → 值（节点端点由服务端加 `@node:` 后缀）。 */
+export interface UpdateLogAcqBody {
+  values: Record<string, string>
+}
+
+/** 查询某节点的日志采集配置（含平台默认与覆盖对照，FR-503）。 */
+export function useNodeLogAcq(nodeId: number, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ['node-log-acq', nodeId],
+    queryFn: async () => {
+      const { data } = await api.get<LogAcqSettingsView>(`/nodes/${nodeId}/settings/log-acquisition`)
+      return data
+    },
+    enabled: (options?.enabled ?? true) && !!nodeId,
+  })
+}
+
+/** 写某节点的日志采集覆盖（仅平台管理员，FR-503）；保存经心跳下发，≤1 周期生效。 */
+export function useUpdateNodeLogAcq(nodeId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: UpdateLogAcqBody) => {
+      const { data } = await api.put<LogAcqSettingsView>(`/nodes/${nodeId}/settings/log-acquisition`, body)
+      return data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['node-log-acq', nodeId] })
+      // 平台默认列由 /settings 提供（设置页与节点页共用同源数据），一并失效以免对照列过期。
+      qc.invalidateQueries({ queryKey: ['settings'] })
+    },
+  })
+}
+
+/** 清除某节点日志采集覆盖（恢复继承平台默认）；传 key 只清单项，缺省清全部（FR-503）。 */
+export function useClearNodeLogAcq(nodeId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (key?: string) => {
+      const query = key ? `?key=${encodeURIComponent(key)}` : ''
+      const { data } = await api.delete<LogAcqSettingsView>(
+        `/nodes/${nodeId}/settings/log-acquisition${query}`,
+      )
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['node-log-acq', nodeId] }),
+  })
+}

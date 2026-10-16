@@ -925,6 +925,40 @@ func runWorker() {
 	// FR-474：将配置化 FileTailer/STDIO/ArchiveImporter 接入常驻 Worker。
 	// 未配置 source 时不猜测实例目录；实例生命周期可通过同一 Manager 动态登记。
 	var logIngest *ingest.Manager
+	// 定时归档导入扫描的基线周期（FR-504）：worker.yml 的 log_ingest.archive_scan_interval。
+	// 实际周期由采集策略决定（策略周期优先、未配置回落基线、总开关关闭一律不扫描）。
+	baseArchiveScanInterval, baseArchiveErr := cfg.IngestArchiveScanInterval()
+	if baseArchiveErr != nil {
+		slog.Warn("log_ingest.archive_scan_interval 无法解析，定时扫描按关闭处理", "error", baseArchiveErr)
+		baseArchiveScanInterval = 0
+	}
+	// effectiveArchiveScanInterval 把采集策略折算为定时扫描的生效周期（FR-504）：
+	//   总开关关闭 → 0（不扫描；手动入口 ImportArchivesNow 不受影响）
+	//   策略配了周期 → 用策略周期（面板可配、经心跳下发）
+	//   策略未配周期（下发 0 = 未配置）→ 回落 worker.yml 基线
+	// 这条折算是「关闭」与「未配置」在 Worker 侧的收口：协议上 0 只表示未配置
+	// （写入侧禁止配 0 或负数，见 CP 的 validateSettingValue），故可安全区分。
+	// 基线回落的可达性依赖采集策略默认值为「开关开 + 周期空」（ingest.DefaultAcqPolicy）：
+	// 若默认开关为关，基线的回落分支在实践中永不成立（2026-10-15 复核）。
+	effectiveArchiveScanInterval := func(p ingest.AcqPolicy) time.Duration {
+		if !p.GzImportEnabled {
+			return 0
+		}
+		if p.ArchiveScanInterval() > 0 {
+			return p.ArchiveScanInterval()
+		}
+		return baseArchiveScanInterval
+	}
+	// 日志采集策略（FR-503）：先加载本地持久化快照——CP 不可达时也能沿用上次生效值
+	// （离线保持），并作为首拍去重的基准。文件缺失/损坏不阻断启动：采集配置问题绝不能
+	// 让 Worker 起不来（那会让节点直接离线），一律告警后按基线继续等 CP 下发。
+	acqPolicy, acqLoaded, acqLoadErr := ingest.LoadAcqPolicy(etcDir)
+	if acqLoadErr != nil {
+		slog.Warn("加载本地日志采集快照失败，按基线默认继续（等 CP 下发覆盖）", "error", acqLoadErr)
+	}
+	if acqLoaded {
+		slog.Info("已恢复本地日志采集快照", "dir", etcDir)
+	}
 	registeredLogInstanceIDs := manager.ListInstances
 	if len(cfg.LogSources) > 0 || vlHTTPClient != nil {
 		sources := make([]ingest.SourceConfig, 0, len(cfg.LogSources))
@@ -1092,6 +1126,27 @@ func runWorker() {
 			logIngest = manager
 			register.SetLogIngestHealth(true, "")
 			workerServer.SetInstanceLogCollector(manager)
+			// FR-502 §3.4：把 log_sources 配置接线到实例注册路径。
+			// 按实例的日志命名空间（inst:<id>）匹配配置条目，命中时以其 path
+			// 覆盖规则默认路径（运维在节点侧的显式配置优先于 CP 推导的规则）。
+			// path 为绝对路径时可直接给出（filepath.Join 遇到绝对路径会丢弃前缀，
+			// 故 ingest 层无需区分两种形态）。
+			if len(cfg.LogSources) > 0 {
+				byNamespace := make(map[string]string, len(cfg.LogSources))
+				for _, src := range cfg.LogSources {
+					if src.StorageNamespace == "" || src.Path == "" {
+						continue
+					}
+					byNamespace[src.StorageNamespace] = src.Path
+				}
+				if len(byNamespace) > 0 {
+					workerServer.SetInstanceLogSourceOverrides(
+						func(targetID string) (string, bool) {
+							override, ok := byNamespace[targetID]
+							return override, ok
+						})
+				}
+			}
 			logStack.LogRPC.SetCutoverReadiness(grpcsvc.CutoverReadinessFunc(func() (bool, time.Time, []string) {
 				readiness := manager.PrepareCutoverReadiness()
 				for _, id := range manager.MissingInstanceBindings(registeredLogInstanceIDs()) {
@@ -1146,15 +1201,24 @@ func runWorker() {
 				}
 			}()
 			go manager.Start(ingestCtx)
-			// 定时归档导入扫描（④，键 log_ingest.archive_scan_interval）：**默认关**。
-			// 打开后按周期把「躺在源目录里但还没被导入」的 gz 走一遍与自动路径完全相同的
-			// 导入管道；关闭时 RunArchiveScan 返回 nil（不启动任何 goroutine）。
-			if scanInterval, scanErr := cfg.IngestArchiveScanInterval(); scanErr != nil {
-				slog.Warn("log_ingest.archive_scan_interval 无法解析，定时扫描保持关闭", "error", scanErr)
-			} else if stopScan := manager.RunArchiveScan(scanInterval); stopScan != nil {
-				slog.Info("定时归档导入扫描已启用", "interval", scanInterval)
-				defer stopScan()
+			// 应用本地快照的策略（FR-503）：采集运行时构造完成后立即生效，不等首拍心跳。
+			manager.SetAcqPolicy(acqPolicy)
+			// 定时归档导入扫描（FR-504）：周期由采集策略驱动（面板可配、心跳热更新），
+			// 把「躺在源目录里但还没被导入」的 gz 走一遍与自动路径完全相同的导入管道。
+			// 存量源的历史归档只能靠它——采集轮的前置导入受 acquire 层不变量约束
+			// （历史段只能前置到**未被读过**的当前段），这正是「814 个 gz 零导入」的出路。
+			//
+			// 日志与生效周期严格一致（周期为 0 一律不打「已启用」）：否则「配了基线却没扫描」
+			// 只能靠翻配置推断，而总开关关闭是**策略**（面板）口径，不是配置丢失。
+			initialScanInterval := effectiveArchiveScanInterval(acqPolicy)
+			if initialScanInterval > 0 {
+				slog.Info("定时归档导入扫描已启用", "interval", initialScanInterval)
+			} else if !acqPolicy.GzImportEnabled && baseArchiveScanInterval > 0 {
+				slog.Warn("定时归档导入扫描被采集策略的总开关关闭，worker.yml 基线被忽略",
+					"baseInterval", baseArchiveScanInterval)
 			}
+			manager.SyncArchiveScan(initialScanInterval)
+			defer manager.StopArchiveScan()
 			// 采集索引持久化耗时采样（FR-496 spec §3.3）：每分钟以 Debug 打印 P50/P95/Max 与
 			// 本窗口写入行数/字节数，供真机「60 源单次持久化 ≤50ms」验收直接取证
 			// （整本重写会让写入行数逼近索引总行数，读数一眼可辨）。
@@ -1524,6 +1588,23 @@ func runWorker() {
 	hb.SetHealthPolicyApplier(func(p process.HealthPolicy) {
 		healthScanner.SetPolicy(p)
 	})
+	// 日志采集配置（FR-503）：先加载本地持久化快照——CP 不可达时也能沿用上次生效值
+	// （离线保持），并作为首拍去重的基准。文件缺失/损坏不阻断启动：采集配置问题
+	// 绝不能让 Worker 起不来（那会让节点直接离线），一律告警后按基线继续等 CP 下发。
+	// 无采集运行时（未配置 log_sources 且无 VL 客户端）时不注册：没有消费方，配置无处应用。
+	// CP 经心跳下发日志采集配置（FR-503/504）：生效值变化才应用（写采集运行时 + 持久化 +
+	// 同步定时扫描周期），面板改配置后 ≤1 心跳周期（30s）生效，无需重启 Worker。
+	// 无采集运行时（未配置 log_sources 且无 VL 客户端）时不注册：没有消费方，配置无处应用。
+	// 快照加载与首拍基准已在采集运行时构造处完成（见上方 acqPolicy）。
+	if logIngest != nil {
+		hb.SetLogAcqPolicyApplier(acqPolicy, func(p ingest.AcqPolicy) error {
+			logIngest.SetAcqPolicy(p)
+			// 定时扫描周期随策略热同步（FR-504）：值变化才停旧启新（SyncArchiveScan 内部去重），
+			// 因此面板把周期从「关」改成「1h」后无需重启 Worker 即可生效。
+			logIngest.SyncArchiveScan(effectiveArchiveScanInterval(p))
+			return ingest.SaveAcqPolicy(etcDir, p)
+		})
+	}
 	hb.Start()
 	defer hb.Stop()
 

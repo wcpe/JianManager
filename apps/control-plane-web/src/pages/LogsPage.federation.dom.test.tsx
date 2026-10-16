@@ -4,7 +4,8 @@
  * 覆盖：
  * - partial/离线覆盖 → 横幅可见，失败不得呈空成功；
  * - resolveExportDownloadAffordance 阻断 → 导出按钮禁用；
- * - sourceTag=legacy → Legacy 徽标；404 → 降级 legacy 视图 + 横幅；
+ * - sourceTag=legacy → Legacy 徽标；404 → 横幅说明服务不可达，且**不降级**（本视图列表为空，
+ *   经典 /logs 的行不再冒充本视图的内容；要看存量日志走「更多 → Legacy 只读」）；
  * - ErrFederatedNotReady → 联邦未就绪说明，空结果不当成功。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -161,7 +162,7 @@ describe('LogsPage × logs-federation（FR-482）', () => {
     expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent('含切换前的历史数据')
   })
 
-  it('④ 联邦 API 404 → 降级 legacy 视图 + 横幅，经典表格仍渲染', async () => {
+  it('④ 联邦 API 404 → 横幅说明服务不可达，且不拿经典表格的行冒充本视图', async () => {
     loginMockUser()
     server.use(
       http.get(API('/logs/federation'), () =>
@@ -170,19 +171,27 @@ describe('LogsPage × logs-federation（FR-482）', () => {
     )
 
     renderWithProviders(<LogsPage />)
-    // 表格仍走经典 /logs。
-    expect(await screen.findByText(/federation-seed-log-line/)).toBeInTheDocument()
     const banner = await screen.findByTestId('logs-coverage-banner')
     expect(banner.dataset.degraded).toBe('true')
     // 404 属「接口不可达」而非「功能未启用」，文案不得误导用户去开启。
-    expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent(
-      /实时日志查询服务暂不可用|回退平台与历史日志/,
-    )
+    const title = screen.getByTestId('logs-coverage-title')
+    expect(title).toHaveTextContent('实时日志查询服务暂不可用')
+    expect(title).not.toHaveTextContent('未启用')
     expect(await screen.findByTestId('logs-source-tag')).toHaveTextContent('Legacy')
-    // 降级路径保留经典导出（非联邦下载门禁）。
+    // 查询服务不可用 → 本视图就是没有数据：经典 /logs 的种子行（见 stubBaseHandlers 桩）不得渲染。
+    // 若它们出现，用户会把平台/历史日志读成「节点/实例日志」，即静默换源式误导。
     await waitFor(() =>
-      expect(screen.getByTestId('logs-export-trigger')).not.toBeDisabled(),
+      expect(screen.queryByText(/federation-seed-log-line/)).not.toBeInTheDocument(),
     )
+    // 空列表也不得呈成功空态（否则等于宣称「查过且确实没有」）。
+    expect(await screen.findByTestId('logs-empty-state')).toHaveAttribute(
+      'data-empty-success',
+      'false',
+    )
+    expect(screen.queryByText('暂无日志')).not.toBeInTheDocument()
+    // 经典导出同步收回：它导出的是平台日志，与当前视图无关（同「静默换源」的误导）。
+    expect(screen.getByTestId('logs-export-trigger')).toBeDisabled()
+    expect(banner.dataset.exportAllowed).toBe('false')
   })
 
   it('Legacy 只读页签不与联邦集合拼接，并关闭导出和实时跟随', async () => {

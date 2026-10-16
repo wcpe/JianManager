@@ -35,11 +35,16 @@ describe('SettingsPage（mock 假后端）', () => {
     renderWithProviders(<SettingsPage />)
 
     // 平台管理员可见「日志」分类导航；切过去看到 log.level 配置项（键名 mono 展示）。
-    await user.click(await screen.findByRole('button', { name: /日志/ }))
+    // 注意用精确名 /^日志$/：FR-503 新增了「日志采集」分区，宽松的 /日志/ 会同时命中两者。
+    await user.click(await screen.findByRole('button', { name: /^日志$/ }))
     expect(await screen.findByText('log.level')).toBeInTheDocument()
     // 切到「运行时」分类可见 graceful_stop.timeout（不同分类 → 印证分类分组生效）。
     await user.click(screen.getByRole('button', { name: /运行时/ }))
     expect(await screen.findByText('graceful_stop.timeout')).toBeInTheDocument()
+    // FR-503：「日志采集」是独立分区——log.acq.* 归此，不被 log. 前缀误归入「日志」分类。
+    await user.click(screen.getByRole('button', { name: /日志采集/ }))
+    expect(await screen.findByText('log.acq.rules_enabled')).toBeInTheDocument()
+    expect(screen.queryByText('log.level')).not.toBeInTheDocument()
   })
 
   it('改设置保存 → 联动回读新值', async () => {
@@ -67,7 +72,7 @@ describe('SettingsPage（mock 假后端）', () => {
     const user = userEvent.setup()
     renderWithProviders(<SettingsPage />)
 
-    await user.click(await screen.findByRole('button', { name: /日志/ }))
+    await user.click(await screen.findByRole('button', { name: /^日志$/ }))
     expect(await screen.findByText('加载平台配置失败')).toBeInTheDocument()
   })
 

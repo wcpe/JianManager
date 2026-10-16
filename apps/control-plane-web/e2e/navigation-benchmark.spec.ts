@@ -53,7 +53,12 @@ const ROUTES: BenchRoute[] = [
     label: '日志中心',
     href: '/logs',
     readySelector: '[data-page="logs"]',
-    prepare: selectAllTimeRange,
+    // 先切平台视图（经典路径，服务端 total=12004）再拉满时间窗：联邦视图的 total 只等于
+    // 本页行数，达不到 minTotal 要求的量级（判据与理由见 selectPlatformView 的文档注释）。
+    prepare: async (page) => {
+      await selectPlatformView(page)
+      await selectAllTimeRange(page)
+    },
     virtual: {
       surfaceSelector: '[data-testid="logs-virtual"]',
       itemSelector: '[data-testid="log-row"]',
@@ -85,6 +90,25 @@ async function resetConsoleLayout(page: Page): Promise<void> {
     localStorage.setItem('sidebar.collapsed', '0')
     localStorage.removeItem('sidebar.collapsedGroups')
   })
+}
+
+/**
+ * 把日志中心切到「平台日志」视图（经典端点，服务端给出全量 total）。
+ *
+ * 为什么 benchmark 选平台视图而不是默认的「节点/实例日志」（2026-10-16）：联邦视图
+ * **不再降级回退**经典 `/logs`（用户裁定：查询服务不可用时「没有就是没有」，平台/历史日志
+ * 走「更多 → Legacy 只读」专门入口），因此它的虚拟列表 total 不再是经典路径的服务端全量，
+ * 而是本页取回行数（每页 100）。本用例要验的是「1000+ 数据下只渲染可视窗口」，只有平台视图
+ * （走经典 `/logs`，mock 种子一年 12004 条）能提供这个量级；两者共用同一个虚拟列表组件，
+ * 对虚拟化的验证等价。
+ * 定位走角色 + 文案：视图是同页 tablist 的 tab（无 testid），文案由 `logs.view_platform` 提供。
+ */
+async function selectPlatformView(page: Page): Promise<void> {
+  const tab = page.getByRole('tab', { name: '平台日志' })
+  await expect(tab, '日志中心「平台日志」视图 tab 存在').toBeVisible()
+  await tab.click()
+  // 断言已选中（Radix Tabs 置 aria-selected），避免「点了但没生效」的静默通过。
+  await expect(tab, '日志中心已切到平台视图').toHaveAttribute('aria-selected', 'true')
 }
 
 /**

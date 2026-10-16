@@ -20,7 +20,10 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	cat := catalog.New(nil)
 	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
 	require.NoError(t, err)
-	require.NoError(t, m.RegisterInstance("uuid-1", "inst:1", "holder-g1", "STDIO_PRIMARY", t.TempDir()))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-1", TargetID: "inst:1", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: t.TempDir(),
+	}))
 	require.NoError(t, m.AppendInstanceOutput("uuid-1", "stdout", []byte("stdout raw\n")))
 	require.NoError(t, m.AppendInstanceOutput("uuid-1", "stderr", []byte("stderr raw\n")))
 	data, err := os.ReadFile(m.rawInstancePath(m.state.Instances["uuid-1"], "stdout"))
@@ -70,9 +73,15 @@ func TestInstanceFilePrimaryDoesNotDoubleCollectConsoleOutput(t *testing.T) {
 	cat := catalog.New(nil)
 	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
 	require.NoError(t, err)
-	require.NoError(t, m.RegisterInstance("uuid-1", "inst:1", "holder-g1", "FILE_PRIMARY", work))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-1", TargetID: "inst:1", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work,
+	}))
 	require.Equal(t, []string{"unbound"}, m.MissingInstanceBindings([]string{"uuid-1", "unbound"}))
-	require.NoError(t, m.RegisterInstance("uuid-1", "inst:1", "holder-g1", "FILE_PRIMARY", work))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-1", TargetID: "inst:1", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work,
+	}))
 	require.NoError(t, m.AppendInstanceOutput("uuid-1", "stdout", []byte("console copy\n")))
 	m.pollOnce()
 	require.Len(t, m.pipes, 1)
@@ -97,7 +106,10 @@ func TestInstanceOutputSpoolsBeforeBindingAndFlushesInOrder(t *testing.T) {
 	require.False(t, readiness.LedgerReady)
 	require.Contains(t, strings.Join(readiness.Reasons, ","), "pending_spool:", "%v", readiness.Reasons)
 
-	require.NoError(t, m.RegisterInstance("uuid-spool", "inst:spool", "holder-g1", "STDIO_PRIMARY", work))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-spool", TargetID: "inst:spool", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: work,
+	}))
 	require.NoError(t, m.AppendInstanceOutput("uuid-spool", "stdout", []byte("after-1\n")))
 	binding := m.state.Instances["uuid-spool"]
 	stdout, err := os.ReadFile(m.rawInstancePath(binding, "stdout"))
@@ -120,7 +132,10 @@ func TestInstanceOutputPendingSpoolSurvivesRestart(t *testing.T) {
 
 	restarted, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
 	require.NoError(t, err)
-	require.NoError(t, restarted.RegisterInstance("uuid-restart", "inst:restart", "holder-g1", "STDIO_PRIMARY", work))
+	require.NoError(t, restarted.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-restart", TargetID: "inst:restart", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: work,
+	}))
 	binding := restarted.state.Instances["uuid-restart"]
 	data, err := os.ReadFile(restarted.rawInstancePath(binding, "stdout"))
 	require.NoError(t, err)
@@ -138,7 +153,10 @@ func TestInstanceOutputPendingFlushFailureKeepsGapAndPause(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(rawPath), 0o700))
 	require.NoError(t, os.Mkdir(rawPath, 0o700))
 
-	err = m.RegisterInstance("uuid-fail", "inst:fail", "holder-g1", "STDIO_PRIMARY", work)
+	err = m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-fail", TargetID: "inst:fail", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: work,
+	})
 	require.Error(t, err)
 	pipe := m.pipes["inst:fail/stdout/holder-g1"]
 	require.NotNil(t, pipe)
@@ -166,7 +184,10 @@ func TestInstanceOutputBindingRacePreservesAllBytes(t *testing.T) {
 		}()
 	}
 	close(start)
-	require.NoError(t, m.RegisterInstance("uuid-race", "inst:race", "holder-g1", "STDIO_PRIMARY", work))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-race", TargetID: "inst:race", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: work,
+	}))
 	for i := 0; i < count; i++ {
 		err := <-errs
 		if err != nil {
@@ -283,24 +304,36 @@ func TestRegisterInstanceRejectsSymlinkedWorkDir(t *testing.T) {
 	t.Run("symlinked_workdir_rejected", func(t *testing.T) {
 		link := filepath.Join(base, "linked-instance")
 		createDirLink(t, real, link)
-		err := m.RegisterInstance("uuid-link", "inst:1", "g1", "FILE_PRIMARY", link)
+		err := m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-link", TargetID: "inst:1", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: link,
+		})
 		require.Error(t, err, "指向别处的工作目录不得用于采集")
 		require.Contains(t, err.Error(), "symlinked log work dir")
 	})
 
 	t.Run("real_directory_accepted", func(t *testing.T) {
-		require.NoError(t, m.RegisterInstance("uuid-real", "inst:2", "g1", "FILE_PRIMARY", real))
+		require.NoError(t, m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-real", TargetID: "inst:2", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: real,
+		}))
 	})
 
 	t.Run("outside_root_absolute_still_accepted", func(t *testing.T) {
 		// 根外绝对目录是既有契约（外来接管实例），修复不得打断它。
 		outside := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(outside, "logs"), 0o700))
-		require.NoError(t, m.RegisterInstance("uuid-outside", "inst:3", "g1", "FILE_PRIMARY", outside))
+		require.NoError(t, m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-outside", TargetID: "inst:3", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: outside,
+		}))
 	})
 
 	t.Run("filesystem_root_rejected", func(t *testing.T) {
-		err := m.RegisterInstance("uuid-root", "inst:4", "g1", "FILE_PRIMARY", "/")
+		err := m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-root", TargetID: "inst:4", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: "/",
+		})
 		require.Error(t, err, "不得以文件系统根作为采集目录")
 	})
 }

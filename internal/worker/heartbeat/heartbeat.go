@@ -14,6 +14,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/platform/directprobe"
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/register"
@@ -168,6 +169,9 @@ type Heartbeat struct {
 	// healthApplier 据心跳响应里 CP 下发的实例健康巡检策略（FR-459）热应用到巡检器；
 	// 为 nil 时不应用（Worker 沿用本地 worker.yml 配置，向后兼容旧 CP）。
 	healthApplier func(process.HealthPolicy)
+	// logAcqApplier 据心跳响应里 CP 下发的日志采集配置（FR-503）热应用到采集运行时；
+	// 为 nil 时不应用（Worker 沿用本地快照/默认，向后兼容旧 CP）。
+	logAcqApplier *logAcqApplier
 }
 
 // New 创建心跳上报器。
@@ -217,6 +221,13 @@ func (h *Heartbeat) SetWSSecretApplier(current string, apply func(secret string)
 // 由 main 装配（包裹 HealthScanner.SetPolicy）；不调用则忽略 CP 下发策略（向后兼容旧 CP）。
 func (h *Heartbeat) SetHealthPolicyApplier(apply func(process.HealthPolicy)) {
 	h.healthApplier = apply
+}
+
+// SetLogAcqPolicyApplier 注入「据心跳下发的日志采集配置热应用」回调（FR-503）。
+// current 为启动时已生效的策略（本地持久化快照，无则默认；首拍据此去重）；
+// apply 由 main 装配（写采集运行时生效值 + 持久化）。不调用则忽略 CP 下发配置（向后兼容旧 CP）。
+func (h *Heartbeat) SetLogAcqPolicyApplier(current ingest.AcqPolicy, apply func(ingest.AcqPolicy) error) {
+	h.logAcqApplier = newLogAcqApplier(current, apply)
 }
 
 // Start 启动心跳上报。
@@ -380,6 +391,10 @@ func (h *Heartbeat) sendHeartbeat(req *workerpb.HeartbeatRequest) error {
 
 	// 应用 CP 下发的实例健康巡检策略（FR-459）：写入巡检器生效值，无需重启 Worker 即生效。
 	h.applyHealthPolicy(reply)
+
+	// 应用 CP 下发的日志采集配置（FR-503）：生效值变化才写入采集运行时 + 持久化
+	// （规则开关/实时采集/gz 导入/扫描周期/路径覆盖），无需重启 Worker 即生效。
+	h.applyLogAcqPolicy(reply)
 
 	// 应用 CP 下发的取消请求（FR-227）：真中断对应运行中任务（如下载），canceled 经下一拍心跳上报。
 	if h.taskProvider != nil {

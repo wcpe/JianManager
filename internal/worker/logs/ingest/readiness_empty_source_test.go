@@ -29,7 +29,10 @@ func TestCutoverReadinessTreatsEmptySourceAsReady(t *testing.T) {
 	cat := catalog.New(nil)
 	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
 	require.NoError(t, err)
-	require.NoError(t, m.RegisterInstance("uuid-empty", "inst:empty", "holder-g1", "FILE_PRIMARY", work))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-empty", TargetID: "inst:empty", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work,
+	}))
 
 	readiness := m.CutoverReadiness()
 	require.NotContains(t, strings.Join(readiness.Reasons, ","), "projection_not_published",

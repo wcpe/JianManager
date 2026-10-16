@@ -957,6 +957,10 @@ func main() {
 	// 注入实例健康巡检策略解析器（FR-459）：每次心跳响应携带 health.* 生效策略（enabled/周期/
 	// 探针类型/阈值/动作/熔断阈值），Worker 写入巡检器生效值，无需重启 Worker。
 	grpcHandler.SetHealthPolicyResolver(settingsSvc)
+	// 注入日志采集配置解析器（FR-503）：每次心跳响应携带该 Worker 生效的采集配置
+	// （规则/gz/实时采集/路径覆盖）。解析按 nodeUUID 做两层合并（Worker 覆盖 > 平台默认），
+	// 使单个 Worker 可单独配置而无需重启；不注入则心跳不带该字段，Worker 回退 worker.yml。
+	grpcHandler.SetLogAcqPolicyResolver(settingsSvc)
 	// 注入健康熔断站内信告警投递器（FR-459）：Worker 经心跳上报熔断时给平台管理员发站内信。
 	grpcHandler.SetHealthAlertNotifier(service.NewHealthAlertNotifier(db, notificationSvc))
 	// 反向隧道注册表（FR-281，见 ADR-066）：Worker 主动在本 gRPC 端口开常驻反向隧道，

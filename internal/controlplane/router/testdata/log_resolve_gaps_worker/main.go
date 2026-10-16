@@ -65,7 +65,15 @@ func (f *fixture) init(req request) error {
 		return err
 	}
 	for _, source := range req.Sources {
-		if err := f.manager.RegisterInstance(source.UUID, source.Target, source.Generation, "STDIO_PRIMARY", source.WorkDir); err != nil {
+		// FR-502 起 RegisterInstance 改为结构体入参（避免位置参数错位）；本夹具经
+		// `go run` 编译，不在 `go build ./...` 的扫描范围内，故需单独保持同步。
+		if err := f.manager.RegisterInstance(ingest.InstanceRegistration{
+			UUID:       source.UUID,
+			TargetID:   source.Target,
+			Generation: source.Generation,
+			Mode:       "STDIO_PRIMARY",
+			WorkDir:    source.WorkDir,
+		}); err != nil {
 			return err
 		}
 		if req.Seed == "raw" {

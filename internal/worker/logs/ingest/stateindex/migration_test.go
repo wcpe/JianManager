@@ -181,7 +181,9 @@ func TestMigrationRejectsChangedOwnerAndCommittedContent(t *testing.T) {
 				_, err = store.db.Exec("UPDATE source_wal SET body='篡改正文'")
 			}
 			if mutation == "extra" {
-				_, err = store.db.Exec("INSERT INTO instance_binding VALUES ('extra','n','g','m','w')")
+				// 用显式列名而非位置插入：FR-502 为 instance_binding 追加了
+				// rule_key/relative_path 两列，位置插入会随列数变化而断裂。
+				_, err = store.db.Exec("INSERT INTO instance_binding (uuid, namespace, generation, mode, work_dir) VALUES ('extra','n','g','m','w')")
 			}
 			if mutation == "missing" {
 				_, err = store.db.Exec("DELETE FROM source_aux")

@@ -157,6 +157,25 @@ if grep -E '^[[:space:]]*[^#].*pkill[[:space:]]+-f' "$SCRIPT" >/dev/null; then
     fail "生命周期脚本禁止使用按命令行匹配的批量杀进程命令"
 fi
 
+# ── 源码契约：解析 /proc/<pid>/stat 时必须用单反斜杠匹配 comm 字段的右括号 ──────────
+#
+# 为什么需要这条**源码级**断言（而不是行为断言）：脚本里的 proc_starttime/proc_state
+# 用 awk 剥离 `comm` 字段，正则必须写成 `\)`。写成 `\\)` 时 awk 看到的是「字面反斜杠 +
+# 右括号」，匹配不到右括号 ⇒ sub() 静默失效 ⇒ 字段序号整体错位。
+#
+# 这个缺陷此前**无法被行为测试发现**：本文件自己算期望值时用的是正确写法（见下方
+# `awk '{ sub(/^.*\) /, ...) }'`），于是「测试算对了、被测脚本算错了」，两边各自独立
+# 求值 ⇒ 断言照样通过。2026-10-12 部署时才暴露：cp-lifecycle.sh 对运行中的 CP 报
+# 「PID 已被其他进程复用，拒绝发送信号」，导致标准 stop/start 完全不可用。
+#
+# 行为证据（同一 /proc/<pid>/stat）：`\\)` 得 1，`\)` 得真实 starttime。
+if grep -F 'sub(/^.*\\) /' "$SCRIPT" >/dev/null; then
+    fail "proc_starttime/proc_state 的正则误写为 \\\\)（应为 \\)）：会让 starttime 比对必然失败、脚本拒绝停止/启动 CP"
+fi
+# 正向要求：两处解析函数都必须用正确写法（防「删掉错的但也没写对的」）。
+correct_occurrences=$(grep -Fc 'sub(/^.*\) /' "$SCRIPT")
+[ "$correct_occurrences" -ge 2 ] || fail "proc_starttime 与 proc_state 都应使用正确的单反斜杠写法（实得 $correct_occurrences 处）"
+
 # 配置端口必须是正整数且在范围内，端口冲突不得启动新进程。
 cp "$CONFIG" "$TEST_ROOT/invalid.yml"
 printf '%s\n' 'server:' '  port: 0' 'grpc:' '  port: 19100' >"$TEST_ROOT/invalid.yml"

@@ -54,6 +54,14 @@ type SourceConfig struct {
 	SourceCategory   logtypes.Source      `json:"source_category,omitempty" mapstructure:"source_category"`
 	StorageNamespace string               `json:"storage_namespace,omitempty" mapstructure:"storage_namespace"`
 	UTCDay           string               `json:"utc_day,omitempty" mapstructure:"utc_day"`
+	// StartAtEOF 表示本源的物理载体刚被替换（FR-502 规则变更导致路径变化），
+	// 应从**当前文件末尾**开始采集，而非从头重读整个文件。
+	//
+	// 为什么必须如此：规则升级会换到新文件，若从头重读，会把该文件里**已投递过的历史内容**
+	// 再投一遍，产生重复（真机实测 30 倍）。既有 tailer 在「指纹不匹配」场景已有同款防护
+	// （reanchorAtEOFLocked 注释：「禁止按旧偏移回读历史内容」），本字段是该语义在
+	// 源登记路径上的入口。缺的内容交由既有对账机制补齐。
+	StartAtEOF bool `json:"start_at_eof,omitempty" mapstructure:"start_at_eof"`
 	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串表示跟随节点默认或 auto。
 	// 中文 locale 的 JVM 会把 Java 日志写成 GBK，必须按源声明，不能靠猜（缺陷 B）。
 	Charset string `json:"charset,omitempty" mapstructure:"charset"`
@@ -151,8 +159,25 @@ type Manager struct {
 	defaultCharset string
 	// defaultTimeZone 是节点级默认时区名（源未显式配置时生效）；空串等价于 UTC。
 	defaultTimeZone string
-	mu              sync.Mutex
-	cycleMu         sync.Mutex
+	// acqPolicy 是运行期生效的采集策略（FR-503，见 policy.go）；未装载时一律按
+	// DefaultAcqPolicy（规则引擎开）——不能让「没配置」变成「关闭规则」。
+	//
+	// 用 atomic.Pointer 承载而非 m.mu 保护的普通字段：采集轮**每源每轮**都要读它
+	// （实时采集开关判据），热路径上不能再争 m.mu。
+	acqPolicy atomic.Pointer[AcqPolicy]
+	// 定时归档导入扫描的启停状态（FR-504，受 scanMu 保护）。
+	//
+	// 为什么需要它：扫描周期可经面板配置（策略每拍下发），值变化时必须能热启停，
+	// 而不是只能在启动时按 worker.yml 决定。
+	scanMu       sync.Mutex
+	scanStop     func()
+	scanInterval time.Duration
+	scanRunning  bool
+	// scanSynced 表示至少同步过一次（区分「从未同步」与「已同步为关闭」）：
+	// 关闭状态下重复同步同一周期必须幂等，否则调用方（每拍心跳）会反复收到「发生变化」。
+	scanSynced bool
+	mu         sync.Mutex
+	cycleMu    sync.Mutex
 	// cycleMu 持有者观测仪（#57，env/Options 开启；默认关 ⇒ observeCycleMu 返回 nil，调用点只有一次判空）。
 	cycleMuProfile bool
 	// cycleMuMu 是观测仪的**叶子锁**：只保护下面几个普通字段（绝不在持它时调用外部代码，也不打日志）。
@@ -470,6 +495,12 @@ type Manager struct {
 	// 这里用「现值与上次记录值比较」而不是「在上层每个改动点显式标记」：前者不需要任何人
 	// 记得标记（漏标记即静默丢更新），且比较只是两个标量，代价可忽略。
 	persistedCover map[string]coverSignature
+	// startAtEOF 标记「下一次登记该源时应从文件末尾开始」的一次性意图（FR-502）。
+	//
+	// 由规则变更路径（detachSourcesForRuleChange）写入，登记时被 takeStartAtEOF 取走并清除。
+	// 用一次性标记而非持久字段：它只描述「这一次重建」的起点选择，落库后无意义
+	// （源一旦建立，位置由账本自己维护）。
+	startAtEOF map[string]bool
 	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
 	events              *eventstore.Store
 	verificationTimeout time.Duration
@@ -2156,8 +2187,29 @@ func New(opts Options) (*Manager, error) {
 	// 既有的确定性顺序（catalog 发布、段存储、回收责任推进都不接受乱序）。
 	recovery := make([]startupSource, 0, len(keys))
 	recoveryPossible := m.vl != nil || m.vlRoute != nil
+	// sourceConfigRecalced 记录「本次启动恢复确实按新算法改写了某个源的配置」。
+	// 它必须自己触发一次落库，理由见下方 requestPersist 处的说明。
+	sourceConfigRecalced := false
 	for _, sourceKey := range keys {
 		source := restoredSources[sourceKey]
+		// FR-504：实例源按**当前规则**重算物理路径与归档 glob——账本里存的是当时代码算出的值，
+		// 而规则算法会演进（bungee 的归档 glob 由 `proxy.log.[0-9]*` 改为空即一例）。若原样信任
+		// 账本，修正对**已登记源**永不生效：真机实测 glob 修正上线并重启后，索引里的旧 glob 一直
+		// 留着，采集轮仍按旧 glob 发现归档。定位不到绑定（worker.yml 显式源 / 绑定已摘除）时
+		// recalcInstanceSourceConfig 原样返回，不猜测。
+		if source.SourceCategory == logtypes.SourceInstance {
+			recalced := m.recalcInstanceSourceConfig(source)
+			if recalced.Path != source.Path || recalced.ArchiveGlob != source.ArchiveGlob {
+				sourceConfigRecalced = true
+				slog.Info("实例源配置已按当前规则重算（算法演进后的首次恢复）",
+					"logSourceID", source.LogSourceID,
+					"archiveGlob", recalced.ArchiveGlob, "path", recalced.Path)
+			}
+			source = recalced
+			// 同步回索引：否则随后的持久化会把旧值又写回去（本函数在 New 的单线程构造期，
+			// 与上方读取 restoredSources 同口径，无需取锁）。
+			m.state.SourceConfigs[sourceKey] = source
+		}
 		if err := m.Register(source); err != nil {
 			return nil, err
 		}
@@ -2178,6 +2230,23 @@ func New(opts Options) (*Manager, error) {
 	// 反向隧道/WS/HTTP 随即可达，恢复在后台按批续做并经就绪面如实上报。
 	// 其余调用方（默认）：就地执行同一驱动，保持「New 返回即恢复完成」的既有边界。
 	go m.persistLoop(m.lifecycleContext())
+	if sourceConfigRecalced {
+		// 源配置重算必须**自己触发**一次落库（FR-504 复核，真机实测）。
+		//
+		// 缺陷形态：持久化的触发面是采集/投递侧的变更声明（`planPersist` 的 changed 只按账本修订号
+		// 与段覆盖签名判定），而重算源配置不动账本 ⇒ 安静源（没有新日志）永远不会声明变更，
+		// 索引里的 `source_aux.config` 于是长期停留在旧值：日志说"重算生效"，重启后旧 glob 又回来，
+		// 采集轮继续按旧值找归档。
+		//
+		// 为什么用非阻塞的 requestPersist 而不是 m.persist()：New 不得被持久化拖住
+		// （2026-10-02 事故：New 里做重活让 worker 整段不可达）。交办由后台通道保证最终完成；
+		// 且索引根行（source/source_aux/…）每轮都全量比对，一次周期即可把新值写出去。
+		//
+		// 为什么不改持久化的**跳过判据**：源配置变化本就无需参与判据——根行每轮全量比对，
+		// 变更必然被写；真正缺的只是"有没有人触发这一轮"。把配置纳入每轮判据反而要在锁内多做
+		// 一次逐源比对，属于为一个已成立的机制补重复保险。
+		m.requestPersist()
+	}
 	if err := m.startStartupRecovery(recovery, opts.StartupRecoveryBackground); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -2832,6 +2901,45 @@ func (m *Manager) Register(source SourceConfig) error {
 			}
 		} else if err := wal.Restore(saved.WAL); err != nil {
 			return err
+		}
+	}
+	// FR-502：规则变更导致物理载体被替换时，从新文件末尾开始采集。
+	//
+	// **为什么不是记缺口**：本场景不是「内容丢失」，而是**有意的起点变更**——旧文件与
+	// 新文件各有自己的字节流，新文件的既有内容不属于本源的采集范围（它在该文件被
+	// 换进来之前就已存在，可能已由别的途径投递过）。把它登记成缺口会让源被
+	// 「不可分类缺口」永久阻塞（真机实测），因为缺口语义是「这段本该有但没有」。
+	//
+	// **正确做法**：段基址（StartPos）保持 0，把**已读水位**推进到文件末尾
+	// （AdvanceRead/AdvanceDurable = size）。判据在 acquire.FileTailer 侧：
+	// 它的 cursor 是**文件内偏移**，由 `cursor = durable - segmentStart` 恢复
+	// （acquire/tailer.go 的 NewFileTailer），因此 `segmentStart = 0 ∧ durable = size`
+	// 恰好得到 `cursor = size` ⇒ 下次 Poll 从 EOF 续读。
+	//
+	// 2026-10-15 复核：此处曾把段基址也前移到 size（StartPos=size, EndPos=size），
+	// 于是 `cursor = size - size = 0`，tailer 反而**从文件头**读起——规则升级后整份既有内容
+	// 被以新位置重新摄取（真机 30 倍重复的形态），且使 CurrentSegmentUnread() 恒真、
+	// 绕过下方「历史归档只能前置到未被读过的当前段」的守卫。段基址是**逻辑源**的起点，
+	// 不是「开始读取的位置」；后者只能由水位表达。
+	if source.StartAtEOF && source.Mode == pipeline.ModeFilePrimary && source.Path != "" {
+		if fi, statErr := os.Stat(source.Path); statErr == nil && fi.Size() > 0 {
+			key := ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration}
+			size := uint64(fi.Size())
+			// 位置推进到 EOF（读与持久化两侧都要，否则 tailer 会按旧水位回读）。
+			if err := led.AdvanceRead(key, size); err != nil {
+				return err
+			}
+			if err := led.AdvanceDurable(key, size); err != nil {
+				return err
+			}
+			// 登记段：基址留在 0、EndPos 记到当前文件大小。EndPos 是「该段已观察到多远」
+			// 的记账（轮转关联会读它），与 cursor 无关。
+			if err := led.RegisterSegment(key, ledger.Segment{
+				Path: source.Path, Kind: ledger.SegmentLive, StartPos: 0,
+				EndPos: size, ParserVersion: "acquire-v1",
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	p, err := pipeline.New(pipeline.Options{
@@ -3559,7 +3667,9 @@ func (m *Manager) archiveOwnerLookup() func(logSourceID, cleanPath, objectID str
 				}
 				for j := range entry.Segments {
 					seg := &entry.Segments[j]
-					if seg.Kind != ledger.SegmentGzip || seg.ArchiveObjectID != objectID {
+					// 归属闸必须覆盖全部归档形态：漏掉新形态会让同一份归档在新代次被当「首次见到」
+					// 再放行一次（VL 侧无唯一键可兜，即静默重复）。
+					if !ledger.IsArchiveSegmentKind(seg.Kind) || seg.ArchiveObjectID != objectID {
 						continue
 					}
 					if filepath.Clean(seg.Path) != cleanPath {
@@ -3574,6 +3684,16 @@ func (m *Manager) archiveOwnerLookup() func(logSourceID, cleanPath, objectID str
 }
 
 func (m *Manager) pollSource(source SourceConfig, p *pipeline.Pipeline) ([]logtypes.Event, bool, error) {
+	// FR-504 应急停采（realtime_tail=false）：整源本轮不做任何读取/轮转/归档导入。
+	//
+	// 刻意在最前面整源返回，而不是只跳过 p.Poll()：轮转探测会触碰实例目录
+	// （PrepareRotation / FlushClosedSegment 会在物理轮转时闭合段），而停采的语义是
+	// 「只停读，不移动、不截断日志文件」。账本、WAL、游标与磁盘因此全部保持原样
+	// ⇒ 恢复后由 FileTailer 维护的 cursor 断点续采，不丢位置、不产生缺口；
+	// 实例进程与心跳（都在本方法之外）完全不受影响。
+	if !m.AcqPolicySnapshot().RealtimeTail {
+		return nil, false, nil
+	}
 	// 容量提供者可能执行磁盘查询，只在共享锁外刷新，覆盖本轮 Poll、导入与闭合输出。
 	p.RefreshDegrade(time.Now())
 	if source.Mode != pipeline.ModeFilePrimary || source.Path == "" {
@@ -3688,11 +3808,12 @@ func pendingArchives(p *pipeline.Pipeline, paths []string) []string {
 	imported := make(map[string]bool)
 	if entry != nil {
 		for _, segment := range entry.Segments {
-			if segment.Kind == ledger.SegmentGzip && segment.Imported {
+			// 归档类形态（gzip 与纯文本轮转）统一判定：新增形态若不参与，「已导入」会被反复重发现。
+			if ledger.IsArchiveSegmentKind(segment.Kind) && segment.Imported {
 				imported[filepath.Clean(segment.Path)] = true
 				continue
 			}
-			if segment.Kind == ledger.SegmentGzip && segment.ImportError != "" {
+			if ledger.IsArchiveSegmentKind(segment.Kind) && segment.ImportError != "" {
 				if info, err := os.Stat(segment.Path); err == nil && info.Size() == segment.ObservedSize &&
 					info.ModTime().UnixNano() == segment.ObservedModNano {
 					imported[filepath.Clean(segment.Path)] = true

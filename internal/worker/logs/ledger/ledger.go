@@ -31,7 +31,38 @@ const (
 	SegmentRotated SegmentKind = "rotated" // 轮转后的明文分段
 	SegmentGzip    SegmentKind = "gzip"    // 压缩归档分段
 	SegmentStdio   SegmentKind = "stdio"   // STDIO_PRIMARY 受管 Raw
+	// SegmentRotatedText 是**纯文本轮转归档**分段：收尾的明文历史文件，由归档导入器导入
+	// （BungeeCord 的 `proxy.log.1`、`proxy.log.2`… 是现场形态：java.util.logging 把
+	// proxy.log.0 轮转成同目录的纯文本数字后缀文件，**没有扩展名**）。
+	//
+	// 为什么必须与 SegmentGzip 分开：形态是账本对「这段字节从哪来」的唯一判据，
+	// 语义记错会让统计与诊断失真——把 proxy.log.N 记成 gzip 之后，排障时无法回答
+	// 「这个源到底有没有压缩归档」，而任何按形态判定的逻辑（含归档的已导入判定）都跟着错。
+	//
+	// 为什么不能复用 SegmentRotated：`rotated` 是 **FileTailer 自己**登记的「活动文件被轮转后的
+	// 明文分段」（生命周期由 tailer 管、可被后续轮次继续扩展），本形态是**归档导入器**登记的
+	// 「已收尾的历史轮转文件」。两者混同会让导入器的已导入判定与 tailer 的分段推进互相覆盖。
+	SegmentRotatedText SegmentKind = "rotated_text"
 )
+
+// IsArchiveSegmentKind 报告某形态是否属于**归档类**形态（默认拒绝）。
+//
+// 为什么必须是单一真源：归档的「已导入」判定按**形态**过滤账本分段，而它出现在多处
+// （导入器自己的整包跳过检查、ingest 的待导入集合发现）。新增一种归档形态时若只改一处，
+// 表现是「新形态被反复重导」这种**无声失效**——归档每轮被重新发现、重新解析，
+// 而账本上它明明已经导完（无报错、无指标，只能靠现场观察到的重复读盘发现）。
+// 故形态集合只在这里定义一次，各处一律引用本函数，而不是写 `kind == SegmentGzip`。
+func IsArchiveSegmentKind(kind SegmentKind) bool {
+	switch kind {
+	case SegmentGzip, SegmentRotatedText:
+		return true
+	default:
+		// 其余形态（live / rotated / stdio / 未知 / 空值）都不是归档：它们由别的链路登记，
+		// 或根本不存在（零值）。空值尤其不能被当成归档——那会把「没有分段」误读成
+		// 「已导入的归档」，从而静默跳过整包。
+		return false
+	}
+}
 
 // Segment 账本中的一个物理源分段。
 type Segment struct {
