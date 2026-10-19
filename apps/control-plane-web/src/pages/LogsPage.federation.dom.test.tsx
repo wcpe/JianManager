@@ -867,4 +867,79 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 		expect(federationCalls).toBe(federationBefore)
 		expect(screen.queryByText('federation-seed-log-line')).not.toBeInTheDocument()
 	})
+
+	/**
+	 * 回归（2026-10-19，补 M-1 缺口）：级别筛选必须真正下发到联邦请求。
+	 *
+	 * 原 LogsPage.dom.test.tsx 覆盖过「级别筛选 error → 仅错误行保留」，该文件已按用户裁定
+	 * 删除；复核后这是仅剩的两处无守卫行为之一（另一处是深链 instanceId）。级别 pill 是
+	 * 用户直接可感的控件，改坏后若不红，只能靠人工发现。
+	 */
+	it('⑯ 点击级别 pill 后 level 参数下发到联邦请求', async () => {
+		loginMockUser()
+		const levelCalls: string[] = []
+		server.use(
+			http.get(API('/logs/federation'), ({ request }) => {
+				const query = new URL(request.url).searchParams
+				levelCalls.push(query.get('level') ?? '')
+				return HttpResponse.json({
+					sourceTag: 'federated',
+					items: seedLogsPage.items,
+					coverage: { complete: true, partial_reasons: [], targets: [] },
+					quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+					view: { view_id: 'level-view' },
+				})
+			}),
+		)
+		renderWithProviders(<LogsPage />)
+		await screen.findByText('federation-seed-log-line')
+
+		const user = userEvent.setup()
+		// pill 文案由 logs.level_error 提供（「错误」）。
+		await user.click(screen.getByRole('button', { name: '错误' }))
+		await waitFor(() => expect(levelCalls).toContain('error'), {
+			message: '点击「错误」后 level=error 必须出现在联邦请求里',
+		})
+
+	})
+
+	/**
+	 * 回归（2026-10-19，补 M-1 缺口）：FR-345 深链的 instanceId 必须一路带到联邦请求。
+	 *
+	 * 深链（如从实例详情跳「该实例日志」）依赖 URL 上的 instanceId；若它在中途被丢掉，
+	 * 用户会看到全平台日志而不是该实例的日志——错误不报、数据看似正常，最难发现。
+	 */
+	it('⑰ FR-345 深链 instanceId 传递到联邦请求，且切换级别后仍保留', async () => {
+		loginMockUser()
+		const seen: URLSearchParams[] = []
+		server.use(
+			http.get(API('/logs/federation'), ({ request }) => {
+				const query = new URL(request.url).searchParams
+				seen.push(query)
+				return HttpResponse.json({
+					sourceTag: 'federated',
+					items: seedLogsPage.items,
+					coverage: { complete: true, partial_reasons: [], targets: [] },
+					quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+					view: { view_id: 'deep-link-view' },
+				})
+			}),
+		)
+		renderWithProviders(<LogsPage />, { route: '/logs?instanceId=2' })
+		await screen.findByText('federation-seed-log-line')
+
+		await waitFor(() => {
+			const last = seen[seen.length - 1]
+			expect(last?.get('instanceId')).toBe('2')
+		}, { message: '深链 instanceId 必须下发到联邦请求' })
+
+		// 改级别不得把 instanceId 丢掉（筛选条件是叠加而非替换）。
+		const user = userEvent.setup()
+		await user.click(screen.getByRole('button', { name: '错误' }))
+		await waitFor(() => {
+			const last = seen[seen.length - 1]
+			expect(last?.get('instanceId')).toBe('2')
+			expect(last?.get('level')).toBe('error')
+		}, { message: '切换级别后 instanceId 与 level 必须同时保留' })
+	})
 })
