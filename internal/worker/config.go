@@ -734,10 +734,22 @@ func validateLogSources(sources []LogSourceConfig) error {
 				"写成其它值（如 dev:smoke）时该源仍会被采集并写入 VL，但 CP 按目标枚举永远匹配不到，"+
 				"日志页会显示「日志查询服务未启用」而真因只是命名空间不对", where, s.StorageNamespace)
 		}
-		// 形态 <storage_namespace>/<流名>：前缀必须是该源的命名空间，否则分区键与源身份脱节。
-		if !strings.HasPrefix(id, ns+"/") || len(id) == len(ns)+1 {
-			return fmt.Errorf("%s.log_source_id = %q 必须以 %q 开头（形态 <storage_namespace>/<流名>，例如 %s/file）",
-				where, s.LogSourceID, ns+"/", ns)
+		// 源标识与命名空间的关系按类别分流（2026-10-19 评审修正）：
+		//   - instance 类：必须是 `<storage_namespace>/<流名>`（生产形态 `inst:317/file`），
+		//     否则分区键与源身份脱节；
+		//   - worker / node 类：允许 `id == storage_namespace`（即 `node:1` 自身），
+		//     这是 configs/worker.yml 的出厂示例形态（`log_source_id: node:1` +
+		//     `storage_namespace: node:1`）——此前一律强制 `<ns>/` 会把它判成非法，
+		//     存量部署按示例配置升级后直接起不来。
+		isInstanceCategory := s.SourceCategory == "" || s.SourceCategory == string(logtypes.SourceInstance)
+		if isInstanceCategory {
+			if !strings.HasPrefix(id, ns+"/") || len(id) == len(ns)+1 {
+				return fmt.Errorf("%s.log_source_id = %q 必须以 %q 开头（形态 <storage_namespace>/<流名>，例如 %s/file）",
+					where, s.LogSourceID, ns+"/", ns)
+			}
+		} else if id != ns && !strings.HasPrefix(id, ns+"/") {
+			return fmt.Errorf("%s.log_source_id = %q 必须是 %q 本身或以 %q 开头（%s 类源的两种合法写法）",
+				where, s.LogSourceID, ns, ns+"/", s.SourceCategory)
 		}
 		if cat := strings.TrimSpace(s.SourceCategory); cat != "" &&
 			cat != string(logtypes.SourceInstance) && cat != string(logtypes.SourceWorker) && cat != string(logtypes.SourceNode) {

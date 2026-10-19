@@ -61,7 +61,12 @@ type SourceConfig struct {
 	// 再投一遍，产生重复（真机实测 30 倍）。既有 tailer 在「指纹不匹配」场景已有同款防护
 	// （reanchorAtEOFLocked 注释：「禁止按旧偏移回读历史内容」），本字段是该语义在
 	// 源登记路径上的入口。缺的内容交由既有对账机制补齐。
-	StartAtEOF bool `json:"start_at_eof,omitempty" mapstructure:"start_at_eof"`
+	// **不持久化**（json:"-"）：它只描述「这一次重建」的起点选择，落库后无意义
+	// （源一旦建立，位置由账本自己维护）。此前带 `json:"start_at_eof,omitempty"` 被
+	// `persisted := source` 一起写进索引，重启后再次命中 EOF 跳跃：文件已增长时静默跳过
+	// [持久化 read, size) 这段字节且不记缺口；发生过轮转时 Durable > 当前文件大小，
+	// AdvanceDurable 触发单调性检查报错 → Register 失败 → 采集运行时起不来（2026-10-19 评审发现）。
+	StartAtEOF bool `json:"-" mapstructure:"-"`
 	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串表示跟随节点默认或 auto。
 	// 中文 locale 的 JVM 会把 Java 日志写成 GBK，必须按源声明，不能靠猜（缺陷 B）。
 	Charset string `json:"charset,omitempty" mapstructure:"charset"`

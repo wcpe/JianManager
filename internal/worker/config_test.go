@@ -576,6 +576,33 @@ func TestLoad_LogSourceTargetShape(t *testing.T) {
 		require.ErrorContains(t, err, "重复")
 	})
 
+	t.Run("出厂示例形态可通过（node 类源 id == namespace）", func(t *testing.T) {
+		// configs/worker.yml 的示例就是这一形态：log_source_id=node:1 + storage_namespace=node:1。
+		// 此前一律强制 `<ns>/` 会把它判非法，存量部署按示例升级后直接起不来（2026-10-19 评审发现）。
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "node:1"
+    source_generation: "node-self-v1"
+    path: "/home/jianmanager/logs/worker.log"
+    mode: FILE_PRIMARY
+    source_category: "worker"
+    storage_namespace: "node:1"
+`)
+		cfg, err := Load(path)
+		require.NoError(t, err)
+		require.Len(t, cfg.LogSources, 1)
+	})
+
+	t.Run("实例类源仍必须带流名", func(t *testing.T) {
+		// instance 类不允许 id == namespace：分区键与源身份必须可区分。
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "必须以")
+	})
+
 	t.Run("节点 UUID 形态也可用（运维写配置时数字 ID 尚未分配）", func(t *testing.T) {
 		// M-3：节点数字 ID 由 CP 在注册时分配，写 worker.yml 时无法预知；UUID 在
 		// <dataDir>/etc/node-identity.json 里，是可发现、可验证的写法。

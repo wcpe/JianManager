@@ -85,3 +85,47 @@ func TestStartupRecalcPersistsSourceConfigToIndex(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond,
 		"启动重算的源配置必须自己触发落库；只改内存不写索引 ⇒ 重启后旧值回来，采集轮继续按旧 glob 找归档")
 }
+
+// 回归（2026-10-19 评审）：`StartAtEOF` 是**一次性意图**，不得随配置落库。
+//
+// 真实后果（本用例守住的那条）：该标志若被 `persisted := source` 一起写进索引，
+// 重启时会被原样读回，于是再次命中 runtime.go 的「跳到文件末尾」逻辑：
+//   - 文件已增长 → `AdvanceRead(size)` 把整段 [持久化 read, size) 静默跳过且不记缺口；
+//   - 发生过轮转 → Durable 是跨轮转的累计位置，可能大于当前文件大小，
+//     `AdvanceDurable` 的单调性检查直接报错 ⇒ Register 失败 ⇒ 采集运行时起不来。
+//
+// 这里用一个更直接、也更稳的判据：把「已被 takeStartAtEOF 取走」的源落库一次，
+// 断言索引里存下来的配置**不带**该标记（`json:"-"` ⇒ 反序列化恒为 false）。
+// 只断言内存态会让缺陷整体不可见——真实现场就是「内存对、索引仍带标记」。
+func TestStartAtEOFNotPersistedToIndex(t *testing.T) {
+	client, _ := newProjectionVL(t)
+	root := t.TempDir()
+	cat := catalog.New(nil)
+	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal()})
+	require.NoError(t, err)
+
+	work := t.TempDir()
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-eof-persist", TargetID: "inst:941", Generation: "g1",
+		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBukkit,
+	}))
+	key := "inst:941/file/g1"
+
+	// 模拟「规则升级重建」路径留下的状态：内存里带上了 EOF 意图。
+	m.mu.Lock()
+	cfg := m.state.SourceConfigs[key]
+	cfg.StartAtEOF = true
+	m.state.SourceConfigs[key] = cfg
+	m.mu.Unlock()
+	require.NoError(t, m.Stop())
+
+	// 核心断言：索引里不得出现该字段（若标签回退成 json:"start_at_eof"，这里会读到 true）。
+	require.False(t, persistedSourceConfig(t, m, key).StartAtEOF,
+		"StartAtEOF 是一次性意图，落库后无意义；持久化它会让重启重复跳到文件末尾（丢字节或让采集起不来）")
+
+	// 重启后也不得凭空带出该意图。
+	restarted, err := newTestManager(t, Options{Root: root, VL: client, Catalog: catalog.New(cat.Journal())})
+	require.NoError(t, err)
+	require.False(t, restarted.state.SourceConfigs[key].StartAtEOF,
+		"重启恢复后不得重新带回 EOF 意图")
+}

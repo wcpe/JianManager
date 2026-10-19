@@ -5,7 +5,7 @@
 #   的门禁由 pull_request 承担，master 上的门禁用于确认主干始终可发布。
 #   正式 tag 产生与发布提交相同 SHA 的 CI，release.yml 复用其结果，不重复执行前端质量门禁。
 #
-# 闸：前端 workspace 的 lint（tsc + eslint）+ vitest（全 workspace，含 devmock 包自检）+ build，
+# 闸：前端 workspace 的 lint（tsc + eslint）+ vitest（node 项目 / dom 项目 / devmock 包自检分处三个 job 并行）+ build，
 #   Playwright E2E 按文件分成四个独立 runner 并行执行；任一失败 → web-quality 失败 → check 红。
 #   仓库**分支保护**勾选 `web-quality` 为必需 check 即合并前硬挡
 #   （分支保护是仓库设置，CI 只提供 check；见 README.md「前端 mock 模式与测试」）。
@@ -79,6 +79,12 @@ jobs:
 
       - name: 纯逻辑测试（vitest node 项目）
         run: pnpm --filter control-plane-web exec vitest run --project node
+
+      # devmock 的测试**不在** control-plane-web 的 vitest 项目里（它是独立 workspace 包，
+      # 有自管 test 脚本）。拆分 job 时曾漏掉这一步，导致 8 个文件 / 60 个用例（含本 PR
+      # 新增的 log-acq-contract 契约测试）从 CI 中完全消失——假绿。
+      - name: 假后端自检（devmock 包）
+        run: pnpm --filter @jianmanager/devmock test
 
   web-static:
     runs-on: ubuntu-24.04
