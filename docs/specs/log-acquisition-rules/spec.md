@@ -153,10 +153,16 @@ if binding.RelativePathOverride != "" {        // 实例级覆盖优先
 > 的登记路径一致，`internal/worker/grpc/log_acquisition.go` 只负责把第 2 层提到第 3 层之前。
 
 **目标形态校验（2026-10-19 补，启动即拒）**：既然第 2 层靠 `storage_namespace == targetID`
-匹配，命名空间就必须是**可被 CP 枚举到的目标形态**——`inst:<实例ID>` 或 `node:<节点ID>`
-（由 `validateLogSources` 在 `config.Load` 阶段校验，见 `internal/worker/config.go`）。
+匹配，命名空间就必须是**可被 CP 枚举到的目标形态**——`inst:<实例ID>` 或 `node:<节点ID>`，
+其中节点侧也接受 `node:<节点UUID>`（CP 的 `assemble.go` 对未知前缀走 default 分支按 UUID
+解析并归一成 `node:<id>`；运维写 `worker.yml` 时节点数字 ID 由 CP 注册时才分配、无法预知，
+UUID 则可从 `<dataDir>/etc/node-identity.json` 读到，故这条写法是必要的）。
+（由 `validateLogSources` 在 `config.Load` 阶段校验，见 `internal/worker/config.go`。）
 `storage_namespace` 为空、写成自造前缀（如 `dev:smoke`）、`log_source_id` 不以自身命名空间
 开头、`source_category` 越界、同一源重复登记，均拒绝启动并给出可执行的错误说明。
+`worker` / `node` 类源的 `log_source_id` 允许与 `storage_namespace` 完全相同（出厂示例
+`log_source_id: node:1` + `storage_namespace: node:1` 即此形态）；`instance` 类则必须带流名
+（`inst:317/file`），以便分区键与源身份可区分。
 
 > 为什么必须拒：写错命名空间时**采集与写 VL 全部正常**，只是 CP 按目标枚举永远匹配不到
 > → `target_missing_in_worker_response` → 归一化为 `ENGINE_NOT_READY` → 日志页显示
