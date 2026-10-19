@@ -3902,7 +3902,7 @@
     "debugOff": "Off",
     "logAcqOn": "On",
     "logAcqOff": "Off",
-    "logAcqInvalidPathOverrides": "Must be a JSON object, e.g. {\"inst:1\":\"proxy.log.0\"}",
+    "logAcqInvalidPathOverrides": "Must be a JSON object whose values are paths relative to the instance work dir (no absolute paths or .. escapes), e.g. {\"inst:1\":\"proxy.log.0\"}",
     "keys": {
       "log.level": "Log level",
       "log.acq.rules_enabled": "Collection rule engine",

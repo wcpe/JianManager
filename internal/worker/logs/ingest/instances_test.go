@@ -337,3 +337,59 @@ func TestRegisterInstanceRejectsSymlinkedWorkDir(t *testing.T) {
 		require.Error(t, err, "不得以文件系统根作为采集目录")
 	})
 }
+
+// TestInstanceRelativePathStaysInsideWorkDir 验证实例日志路径不得逃出工作目录。
+//
+// 用户裁定（2026-10-19）：「限定在工作目录内」。`log.acq.path_overrides` 由 CP 经心跳下发，
+// 放行绝对路径等于允许把任意实例的日志源指向宿主机任意可读文件（/etc/shadow 之类），
+// Worker 会照读并写入 VL。CP 与 Worker 分属不同信任域，故 Worker 侧独立再校验一次
+// （纵深防御：CP 的写入校验可能被人工改库/旧版本写入绕过）。
+func TestInstanceRelativePathStaysInsideWorkDir(t *testing.T) {
+	vl, _ := newProjectionVL(t)
+	m, err := newTestManager(t, Options{Root: t.TempDir(), VL: vl, Catalog: catalog.New(nil)})
+	require.NoError(t, err)
+
+	workDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workDir, "logs"), 0o700))
+
+	t.Run("绝对路径被拒", func(t *testing.T) {
+		err := m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-abs", TargetID: "inst:11", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: workDir, RelativePath: "/etc/shadow",
+		})
+		require.Error(t, err, "绝对路径不得作为实例日志路径")
+	})
+
+	t.Run("用 .. 逃出被拒", func(t *testing.T) {
+		err := m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-esc", TargetID: "inst:12", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: workDir, RelativePath: "../../etc/shadow",
+		})
+		require.Error(t, err, "逃出工作目录的相对路径不得被接受")
+	})
+
+	t.Run("工作目录内的相对路径放行", func(t *testing.T) {
+		require.NoError(t, m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-ok", TargetID: "inst:13", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: workDir, RelativePath: "logs/custom.log",
+		}))
+		binding := m.state.Instances["uuid-ok"]
+		require.Equal(t, filepath.Join(workDir, "logs", "custom.log"), instanceLivePath(binding))
+	})
+}
+
+// TestInstanceLivePathFallsBackWhenBindingEscapes 验证即便绑定里带着越界值（历史脏数据、
+// 绕过登记的构造），解析出的物理路径也不会跑到工作目录之外。
+func TestInstanceLivePathFallsBackWhenBindingEscapes(t *testing.T) {
+	workDir := t.TempDir()
+
+	for _, bad := range []string{"/etc/shadow", "../../etc/shadow", "logs/../../../etc/passwd"} {
+		got := instanceLivePath(InstanceBinding{WorkDir: workDir, RelativePath: bad})
+		require.Equal(t, filepath.Join(workDir, Lookup("").LiveRelative), got,
+			"越界路径应回退规则默认，got %q for %q", got, bad)
+	}
+
+	// 对照：合法相对路径正常生效。
+	require.Equal(t, filepath.Join(workDir, "logs", "a.log"),
+		instanceLivePath(InstanceBinding{WorkDir: workDir, RelativePath: "logs/a.log"}))
+}

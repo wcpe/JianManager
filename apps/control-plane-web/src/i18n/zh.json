@@ -3856,7 +3856,7 @@
     "debugOff": "关闭",
     "logAcqOn": "开启",
     "logAcqOff": "关闭",
-    "logAcqInvalidPathOverrides": "须为 JSON 对象文本，如 {\"inst:1\":\"proxy.log.0\"}",
+    "logAcqInvalidPathOverrides": "须为 JSON 对象文本，值为相对实例工作目录的路径（不接受绝对路径或 .. 逃逸），如 {\"inst:1\":\"proxy.log.0\"}",
     "keys": {
       "log.level": "日志级别",
       "log.acq.rules_enabled": "采集规则引擎",

@@ -2071,7 +2071,8 @@ type HeartbeatResponse struct {
 	// 要显式停定时扫描请关总开关（log_acq_gz_import_enabled），而不是清周期。
 	LogAcqGzScanIntervalMs int32 `protobuf:"varint,22,opt,name=log_acq_gz_scan_interval_ms,json=logAcqGzScanIntervalMs,proto3" json:"log_acq_gz_scan_interval_ms,omitempty"`
 	// log_acq_path_overrides_json 是实例级日志路径覆盖映射（JSON 对象，FR-502 §3.4）：
-	// {"inst:<id>": "<相对或绝对路径>"}。空 = 无覆盖，各实例用规则默认路径。
+	// {"inst:<id>": "<相对实例工作目录的路径>"}。空 = 无覆盖，各实例用规则默认路径。
+	// 安全约束：不接受绝对路径，也不接受折叠 `..` 后逃出工作目录的路径。
 	// 用 JSON 而非 map<string,string> 是为了与既有 platform_settings 的文本值形态一致
 	// （该表的 value 是 TEXT，存 JSON 无需额外编解码约定）。
 	LogAcqPathOverridesJson string `protobuf:"bytes,23,opt,name=log_acq_path_overrides_json,json=logAcqPathOverridesJson,proto3" json:"log_acq_path_overrides_json,omitempty"`

@@ -101,7 +101,8 @@ type LogAcqPolicySnapshot struct {
 	RealtimeTail    bool
 	GzImportEnabled bool
 	GzScanInterval  time.Duration
-	// PathOverrides 是实例级路径覆盖：targetID（`inst:<id>`）→ 相对或绝对路径。
+	// PathOverrides 是实例级路径覆盖：targetID（`inst:<id>`）→ 相对实例工作目录的路径
+	// （安全约束：不接受绝对路径，也不接受折叠 .. 后逃出工作目录的路径）。
 	PathOverrides map[string]string
 }
 

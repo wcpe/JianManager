@@ -71,7 +71,7 @@
 | `log.acq.realtime_tail` | 平台 / Worker | 实时采集开关（FR-504） | `true` |
 | `log.acq.gz_import_enabled` | 平台 / Worker | gz 导入开关（FR-504） | `false` |
 | `log.acq.gz_scan_interval` | 平台 / Worker | gz 定时扫描周期（FR-504） | 空（关闭） |
-| `log.acq.path_overrides` | 平台 / Worker | 实例路径覆盖映射（JSON） | `{}` |
+| `log.acq.path_overrides` | 平台 / Worker | 实例路径覆盖映射（JSON）；值须为**相对实例工作目录**的路径，绝对路径与折叠 `..` 后的逃逸一律拒绝（2026-10-19 裁定） | `{}` |
 
 **作用域表达**：
 

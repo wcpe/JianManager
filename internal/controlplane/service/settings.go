@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -858,6 +859,27 @@ func validateSettingValue(key, val string) error {
 			var m map[string]string
 			if err := json.Unmarshal([]byte(val), &m); err != nil {
 				return fmt.Errorf(`%w: 路径覆盖须为 JSON 对象文本（形如 {"inst:1":"proxy.log.0"}）`, ErrSettingValueInvalid)
+			}
+			// 逐条校验路径本身（2026-10-19，安全约束）：必须是相对实例工作目录的路径，
+			// 且折叠 `..` 后不得逃出。放行绝对路径等于允许把任意实例的日志源指向宿主机
+			// 任意可读文件（/etc/shadow 之类），Worker 会照读并入库。
+			// 键也校验：必须是 `inst:<id>` 形态，否则该覆盖永远不会命中任何实例，
+			// 静默失效比报错更难排查。键的校验与 Worker 侧 policy 的 targetID 语义一致。
+			for target, p := range m {
+				if !strings.HasPrefix(target, "inst:") || len(target) == len("inst:") {
+					return fmt.Errorf("%w: 路径覆盖的键须为 inst:<实例ID>（got %q）", ErrSettingValueInvalid, target)
+				}
+				trimmed := strings.TrimSpace(p)
+				if trimmed == "" {
+					return fmt.Errorf("%w: 路径覆盖的值不能为空（%s）", ErrSettingValueInvalid, target)
+				}
+				if filepath.IsAbs(filepath.FromSlash(trimmed)) {
+					return fmt.Errorf("%w: 路径覆盖须为相对实例工作目录的路径，不接受绝对路径（%s = %q）", ErrSettingValueInvalid, target, p)
+				}
+				clean := filepath.Clean(filepath.FromSlash(trimmed))
+				if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+					return fmt.Errorf("%w: 路径覆盖不得逃出实例工作目录（%s = %q）", ErrSettingValueInvalid, target, p)
+				}
 			}
 		}
 	case SettingKeyBackupRetentionDays:

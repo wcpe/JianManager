@@ -92,11 +92,44 @@ func TestLogAcqPolicyPathOverridesJSON(t *testing.T) {
 	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
 
 	require.NoError(t, svc.Update(map[string]string{
-		SettingKeyLogAcqPathOverrides: `{"inst:1":"custom/a.log","inst:2":"/abs/b.log"}`,
+		SettingKeyLogAcqPathOverrides: `{"inst:1":"custom/a.log","inst:2":"logs/proxy.log.0"}`,
 	}))
 	p := svc.LogAcqPolicy("")
 	require.Equal(t, "custom/a.log", p.PathOverrides["inst:1"])
-	require.Equal(t, "/abs/b.log", p.PathOverrides["inst:2"])
+	require.Equal(t, "logs/proxy.log.0", p.PathOverrides["inst:2"])
+}
+
+// TestLogAcqPolicyPathOverridesRejectsEscapingPaths 验证路径覆盖的越界路径被写入侧拒绝。
+//
+// 口径（2026-10-19 用户裁定「限定在工作目录内」）：覆盖值必须是**相对实例工作目录**的路径。
+// 放行绝对路径时，持有 settings.write 的人可把任意实例的日志源指向宿主机任意可读文件
+// （/etc/shadow 之类），Worker 会照读并写入 VL——CP 与 Worker 分属不同信任域，Worker 不应
+// 无条件信任下发来的物理路径。`..` 逃逸同理。
+func TestLogAcqPolicyPathOverridesRejectsEscapingPaths(t *testing.T) {
+	cases := []struct {
+		name string
+		val  string
+	}{
+		{"绝对路径", `{"inst:1":"/etc/shadow"}`},
+		{"用 .. 逃出工作目录", `{"inst:1":"../../etc/shadow"}`},
+		{"清洗后仍逃出", `{"inst:1":"logs/../../../etc/shadow"}`},
+		{"键不是 inst: 形态", `{"node:1":"logs/a.log"}`},
+		{"空值", `{"inst:1":""}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+			err := svc.Update(map[string]string{SettingKeyLogAcqPathOverrides: tc.val})
+			require.ErrorIs(t, err, ErrSettingValueInvalid, "越界路径应被写入校验拒绝")
+			require.Empty(t, svc.EffectiveValue(SettingKeyLogAcqPathOverrides), "被拒绝的值不应落库")
+		})
+	}
+
+	// 对照：工作目录内的相对路径必须放行，否则这条约束就把正常用法一起禁掉了。
+	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+	require.NoError(t, svc.Update(map[string]string{
+		SettingKeyLogAcqPathOverrides: `{"inst:1":"logs/latest.log","inst:2":"sub/dir/a.log"}`,
+	}))
 }
 
 // TestLogAcqPolicyPathOverridesInvalidJSONIsSafe 验证非法路径覆盖 JSON 不致命（两道防线）。

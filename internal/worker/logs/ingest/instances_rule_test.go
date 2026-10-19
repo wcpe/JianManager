@@ -192,14 +192,21 @@ func TestRegisterInstanceVelocityRuleUsesLogsSubdir(t *testing.T) {
 	require.Equal(t, filepath.Join(work, "logs", "*.gz"), sc.ArchiveGlob)
 }
 
-// TestRegisterInstanceAbsolutePathOverride 验证覆盖路径为绝对路径时原样使用
-// （不拼到工作目录之下）。filepath.Join 不会因第二参数是绝对路径而丢弃前者，
-// 必须显式判断——此测试即锁定该行为。
+// TestRegisterInstanceAbsolutePathOverride 验证绝对路径覆盖被**拒绝**（2026-10-19 用户裁定）。
+//
+// 本用例原先断言相反：绝对路径「原样使用、不拼到工作目录之下」，当时的担心是
+// filepath.Join 不会因第二参数是绝对路径而丢弃前者（与 Python 语义不同），故显式判断后直通。
+// 但直通意味着 CP 下发的 path_overrides 可以把任意实例的日志源指向宿主机任意可读文件
+// （/etc/shadow 之类）并入库——CP 与 Worker 分属不同信任域，Worker 不应无条件信任下发的
+// 物理路径。现口径「限定在工作目录内」：登记阶段直接拒绝，见 validateInstanceRelativePath。
+//
+// 仍然保留原用例的核心担忧：绝对路径绝不能**被静默拼到工作目录之下**（那会变成读
+// WorkDir + "/etc/shadow" 这种莫须有的文件）。拒绝是比拼接更安全的处置。
 func TestRegisterInstanceAbsolutePathOverride(t *testing.T) {
 	m, work := newInstanceRuleTestManager(t)
 	abs := filepath.Join(t.TempDir(), "elsewhere", "server.log")
 
-	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+	err := m.RegisterInstance(InstanceRegistration{
 		UUID:         "uuid-abs",
 		TargetID:     "inst:905",
 		Generation:   "holder-g1",
@@ -207,13 +214,9 @@ func TestRegisterInstanceAbsolutePathOverride(t *testing.T) {
 		WorkDir:      work,
 		RuleKey:      RuleKeyBungee,
 		RelativePath: abs,
-	}))
-
-	sc := sourceByID(t, m, "inst:905/file")
-	require.Equal(t, abs, sc.Path,
-		"绝对路径覆盖必须原样使用，不得被拼到工作目录之下")
-	require.NotContains(t, sc.Path, work,
-		"绝对路径覆盖的结果不应包含实例工作目录前缀")
+	})
+	require.Error(t, err, "绝对路径覆盖必须被拒绝，不得直通也不得拼接")
+	require.Contains(t, err.Error(), "绝对路径", "错误信息应指明是绝对路径问题")
 }
 
 // TestInstanceRuleBindingSurvivesRestart 验证规则名与路径覆盖在 Worker 重启后仍生效。

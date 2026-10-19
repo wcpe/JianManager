@@ -149,6 +149,11 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 		// 实例级路径覆盖优先于 CP 下发的相对路径与规则默认（手动覆盖档）。
 		binding.RelativePath = override
 	}
+	// 安全约束（2026-10-19）：实例日志路径必须落在实例自己的 WorkDir 之内。
+	// 在校验**生效后**的位置做，两条来源（CP proto 字段与心跳 path_overrides）一并覆盖。
+	if err := validateInstanceRelativePath(binding.RelativePath); err != nil {
+		return err
+	}
 	if !binding.Mode.Valid() {
 		return fmt.Errorf("ingest: invalid instance acquisition mode")
 	}
@@ -664,6 +669,32 @@ func (m *Manager) rollbackRegisterSources(keys []string) {
 	m.publishReconcileViewLocked(true) // 源集合变更：立即发布对账只读视图
 }
 
+// validateInstanceRelativePath 校验实例级日志路径（安全约束，2026-10-19）。
+//
+// 口径：**必须是相对实例 WorkDir 的路径**，且折叠 `..` 后不得逃出 WorkDir。
+//
+// 为什么不再允许绝对路径：`log.acq.path_overrides` 由 CP 经心跳下发，语义是「该实例的日志
+// 文件在它自己工作目录里的哪一处」。放行绝对路径时，持有 `settings.write` 的人可以把任意
+// 实例的日志源指向宿主机任意可读文件（`/etc/shadow` 之类），Worker 会照读并写入 VL——
+// CP 与 Worker 分属不同信任域，Worker 不应无条件信任下发来的物理路径。项目内同类守卫的
+// 既有口径见 service/storage.go（拒绝绝对路径 + 二次 Rel 确认不逃出根）。
+//
+// 空串合法：表示「用规则默认」（Lookup(RuleKey).LiveRelative，内置规则均为相对路径）。
+func validateInstanceRelativePath(rel string) error {
+	trimmed := strings.TrimSpace(rel)
+	if trimmed == "" {
+		return nil
+	}
+	if filepath.IsAbs(filepath.FromSlash(trimmed)) {
+		return fmt.Errorf("ingest: 实例日志路径须为相对实例工作目录的路径，不接受绝对路径：%q", rel)
+	}
+	clean := filepath.Clean(filepath.FromSlash(trimmed))
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("ingest: 实例日志路径不得逃出实例工作目录：%q", rel)
+	}
+	return nil
+}
+
 // instanceLivePath 按绑定解析实例活动日志的绝对路径（FR-502）。
 //
 // 解析优先级（高 → 低）：
@@ -671,18 +702,16 @@ func (m *Manager) rollbackRegisterSources(keys []string) {
 //  2. binding.RuleKey 对应规则 —— bukkit/bungee/waterfall/velocity
 //  3. 空 RuleKey 回退 bukkit —— 旧 CP 兼容，行为与历史逐字一致
 //
-// RelativePath 若已是绝对路径则原样使用；否则相对 WorkDir 解析。
+// 路径一律相对 WorkDir 解析；登记时已经 validateInstanceRelativePath 校验过，
+// 这里再兜一层——历史持久化的旧行可能带着未校验的值，绕过登记的构造也不应把采集
+// 指向工作目录之外。兜底策略是回退规则默认（仍在 WorkDir 内），而不是返回空路径：
+// 后者会让实例静默停采，把配置问题伪装成「没有日志」。
 //
 // 注意：本函数只影响**物理路径发现**，不改变源标识（sourceID/StorageNamespace）。
 func instanceLivePath(binding InstanceBinding) string {
 	rel := binding.RelativePath
-	if rel == "" {
+	if rel == "" || validateInstanceRelativePath(rel) != nil {
 		rel = Lookup(binding.RuleKey).LiveRelative
-	}
-	// filepath.Join 不会因第二个参数是绝对路径而丢弃前者（与 Python 语义不同），
-	// 故这里必须显式判断，否则配置的绝对路径会被错误地拼到工作目录之下。
-	if filepath.IsAbs(rel) {
-		return filepath.Clean(rel)
 	}
 	return filepath.Join(binding.WorkDir, filepath.FromSlash(rel))
 }

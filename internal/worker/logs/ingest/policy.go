@@ -35,7 +35,8 @@ type AcqPolicy struct {
 	// （log_ingest.archive_scan_interval）。总开关关闭时本字段无意义（一律不扫描）。
 	// 协议上 0 只表示「未配置」：写入侧禁止配 0 或负数，故可安全区分「关闭」与「未配置」。
 	GzScanInterval time.Duration `json:"gz_scan_interval"`
-	// PathOverrides 实例级路径覆盖：targetID（`inst:<id>`）→ 相对或绝对路径。
+	// PathOverrides 实例级路径覆盖：targetID（`inst:<id>`）→ 相对实例工作目录的路径。
+	// 只接受相对路径且不得逃出工作目录（见 validateInstanceRelativePath）。
 	// 登记实例时**优先于** CP 下发的相对路径与规则默认（手动覆盖档）。
 	PathOverrides map[string]string `json:"path_overrides,omitempty"`
 }

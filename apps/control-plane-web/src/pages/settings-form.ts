@@ -135,15 +135,39 @@ export function validateSettingDraft(key: string, value: string): string | undef
     }
     case 'log.acq.path_overrides': {
       // 空 = 无覆盖；非空须为 JSON 对象文本（值为字符串），形如 {"inst:1":"proxy.log.0"}。
+      // 同时校验每条路径本身（与后端同口径，2026-10-19）：必须是相对实例工作目录的路径，
+      // 绝对路径与折叠 `..` 后的逃逸一律拒绝。后端也会拒，但在前端当场提示能省一次往返。
       if (v === '') return undefined
+      let parsed: unknown
       try {
-        const parsed: unknown = JSON.parse(v)
-        return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-          ? undefined
-          : 'settings.logAcqInvalidPathOverrides'
+        parsed = JSON.parse(v)
       } catch {
         return 'settings.logAcqInvalidPathOverrides'
       }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return 'settings.logAcqInvalidPathOverrides'
+      }
+      for (const path of Object.values(parsed as Record<string, unknown>)) {
+        if (typeof path !== 'string' || path.trim() === '') {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+        const p = path.trim().replace(/\\/g, '/')
+        if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+        // 折叠 `..` 后仍以 `..` 开头 ⇒ 逃出工作目录。
+        const parts: string[] = []
+        for (const seg of p.split('/')) {
+          if (seg === '' || seg === '.') continue
+          if (seg === '..') {
+            if (parts.length === 0) return 'settings.logAcqInvalidPathOverrides'
+            parts.pop()
+            continue
+          }
+          parts.push(seg)
+        }
+      }
+      return undefined
     }
     case 'jdk.mirror.temurin':
     case 'jdk.mirror.corretto':

@@ -165,3 +165,37 @@ describe('keyCategory（github.token 归网络类，与出站代理同面板）'
     expect(keyCategory('jwt.secret')).toBe('security')
   })
 })
+
+describe('log.acq.path_overrides（值须为相对实例工作目录的路径）', () => {
+  const key = 'log.acq.path_overrides'
+  const bad = 'settings.logAcqInvalidPathOverrides'
+
+  it('接受工作目录内的相对路径', () => {
+    expect(validateSettingDraft(key, '')).toBeUndefined()
+    expect(validateSettingDraft(key, '{"inst:1":"proxy.log.0"}')).toBeUndefined()
+    expect(validateSettingDraft(key, '{"inst:1":"logs/latest.log"}')).toBeUndefined()
+    expect(validateSettingDraft(key, '{"inst:1":"a/../b/c.log"}')).toBeUndefined()
+  })
+
+  it('拒绝绝对路径（含 Windows 盘符）', () => {
+    expect(validateSettingDraft(key, '{"inst:1":"/etc/shadow"}')).toBe(bad)
+    expect(validateSettingDraft(key, '{"inst:1":"C:/Windows/win.ini"}')).toBe(bad)
+  })
+
+  it('拒绝逃出工作目录的 ..', () => {
+    expect(validateSettingDraft(key, '{"inst:1":"../../etc/shadow"}')).toBe(bad)
+    expect(validateSettingDraft(key, '{"inst:1":"logs/../../../etc/shadow"}')).toBe(bad)
+  })
+
+  it('拒绝空值与非字符串值', () => {
+    expect(validateSettingDraft(key, '{"inst:1":""}')).toBe(bad)
+    expect(validateSettingDraft(key, '{"inst:1":1}')).toBe(bad)
+    expect(validateSettingDraft(key, '{"inst:1":null}')).toBe(bad)
+  })
+
+  it('拒绝非对象 JSON', () => {
+    expect(validateSettingDraft(key, 'not-json')).toBe(bad)
+    expect(validateSettingDraft(key, '["a"]')).toBe(bad)
+    expect(validateSettingDraft(key, 'null')).toBe(bad)
+  })
+})
