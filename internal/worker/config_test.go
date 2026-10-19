@@ -582,7 +582,7 @@ func TestLoad_LogSourceTargetShape(t *testing.T) {
 		path := writeCfg(t, `log_sources:
   - log_source_id: "node:1"
     source_generation: "node-self-v1"
-    path: "/home/jianmanager/logs/worker.log"
+    path: "/var/log/jianmanager/worker.log"
     mode: FILE_PRIMARY
     source_category: "worker"
     storage_namespace: "node:1"
