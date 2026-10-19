@@ -52,4 +52,10 @@ describe('auth store 查询缓存隔离', () => {
     useAuthStore.getState().logout()
     expect(queryClient.getQueryData(['private', 'alice'])).toBeUndefined()
   })
+
+  it('flushAuthDynamicImports 重复调用幂等，无在途时立即返回', async () => {
+    const { flushAuthDynamicImports } = await import('./auth')
+    await flushAuthDynamicImports()
+    await flushAuthDynamicImports()
+  })
 })
