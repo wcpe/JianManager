@@ -58,7 +58,17 @@ describe('发布工作流契约', () => {
     expect(ci).toContain('name: Web E2E / Shard ${{ matrix.shard }} of 4')
     expect(ci).toContain('pnpm e2e --shard=${{ matrix.shard }}/4')
     expect(ci).toContain('name: web-e2e-test-results-${{ matrix.shard }}')
-    expect(ci).toContain('needs: [web-static, web-e2e]')
+    // 统一门禁必须覆盖全部前端测试 job：vitest 的 node 项目已拆到独立 job，
+    // 漏在 needs 之外会让「纯逻辑测试红」被 web-quality 放过。
+    expect(ci).toContain('needs: [web-static, web-test-node, web-e2e]')
+  })
+
+  it('CI 把 vitest 的 node 与 dom 项目分到不同 job，且两侧都显式指定 project', () => {
+    // 拆 job 的收益来自并行；但若任一侧写成裸 `pnpm -r test`，两边都会跑全量，
+    // 既重复计时又会把 dom 的 6 分钟重新塞回关键路径。这条断言守住「各跑各的」。
+    expect(ci).toContain('vitest run --project node')
+    expect(ci).toContain('vitest run --project dom')
+    expect(ci).not.toContain('run: pnpm -r test')
   })
 
   it('CI 对偶发 E2E 重试一次且仅持续失败时阻断', () => {

@@ -44,6 +44,42 @@ env:
   NODE_VERSION: '22'
 
 jobs:
+  # vitest 的 node 项目（纯逻辑，无 DOM）单独成一个 job，与 web-static 并行。
+  # 为什么拆：web-static 里 vitest 全 workspace 占 397s（占该 job 511s 的 77%），
+  # 而 node 项目自身只要 ~10s——把纯逻辑测试挪到独立 runner 上并行，关键路径不再叠加。
+  # 注意：这里刻意**不**跑 dom 项目（dom 留在 web-static），两边都显式 --project，
+  # 避免任何一侧静默跑全量导致重复计时。
+  web-test-node:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout（不需子模块，纯前端门禁）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 缓存 pnpm store
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: 安装依赖（pnpm workspace）
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: 纯逻辑测试（vitest node 项目）
+        run: pnpm --filter control-plane-web exec vitest run --project node
+
   web-static:
     runs-on: ubuntu-24.04
     steps:
@@ -79,8 +115,11 @@ jobs:
           pnpm --filter control-plane-web exec tsc -b --noEmit
           pnpm --filter control-plane-web lint
 
-      - name: 单元 / 组件测试（vitest 全 workspace，等价 task web:test）
-        run: pnpm -r test
+      # node 与 dom 两个项目分开跑、分属不同 job（见 web-test-node）：
+      # web-static 只负责 dom（组件/页面强断言），node 项目并行到另一个 runner 上，
+      # 关键路径因此少一段串行。两者都用 --project 显式指定，避免任一 job 静默跑全量。
+      - name: 组件 / 页面测试（vitest dom 项目）
+        run: pnpm --filter control-plane-web exec vitest run --project dom
 
       - name: 构建（主控台 + 组件博物馆，等价 task web:build）
         shell: bash
@@ -141,17 +180,19 @@ jobs:
 
   web-quality:
     if: always()
-    needs: [web-static, web-e2e]
+    needs: [web-static, web-test-node, web-e2e]
     runs-on: ubuntu-24.04
     steps:
       - name: 汇总前端质量门禁
         shell: bash
         env:
           STATIC_RESULT: ${{ needs.web-static.result }}
+          NODE_TEST_RESULT: ${{ needs.web-test-node.result }}
           E2E_RESULT: ${{ needs.web-e2e.result }}
         run: |
           set -euo pipefail
           [[ "${STATIC_RESULT}" == "success" ]]
+          [[ "${NODE_TEST_RESULT}" == "success" ]]
           [[ "${E2E_RESULT}" == "success" ]]
 
   bot-quality:
