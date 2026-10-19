@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
+	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
@@ -676,6 +678,58 @@ type LogSourceConfig struct {
 	SourceCategory   string `mapstructure:"source_category"`
 	StorageNamespace string `mapstructure:"storage_namespace"`
 	UTCDay           string `mapstructure:"utc_day"`
+}
+
+// logSourceTargetRe 是可被查询枚举到的目标标识形态：`inst:<实例ID>` / `node:<节点ID>`。
+//
+// 与 retention.sourceIDRe 的字符集白名单互补：那条回答「能否安全用于删除过滤器」，
+// 本正则回答「这个命名空间是否可能被 CP 枚举到」。
+var logSourceTargetRe = regexp.MustCompile(`^(inst|node):[1-9][0-9]*$`)
+
+// validateLogSources 校验静态 `log_sources` 的目标形态，非法即拒绝启动。
+//
+// 为什么必须拒（2026-10-17 dev 实测）：CP 的日志查询按**目标**收敛覆盖率
+// （`node:<节点ID>` / `inst:<实例ID>`），而 Worker 侧 coverage 只从自己持有的 Catalog
+// 分区反推，匹配依据正是分区键的 `storage_namespace`。若配置里写了一个不会被任何 CP 目标
+// 匹配到的命名空间，整条链路会**全程静默**——采集照常、VL 里有数据、日志页却显示
+// 「日志查询服务未启用」（CP 收到空目标列表 → target_missing_in_worker_response →
+// 归一化为 ENGINE_NOT_READY）。现场排查会一路去怀疑 VL，而真因只是命名空间写错。
+//
+// 形态由平台自己生成、可完全枚举，因此不预留宽松口子：`log_sources` 的
+// `storage_namespace` 语义本就是「等于 targetID」（见 docs/specs/log-acquisition-rules/spec.md §3.4），
+// 实例级条目必须是 `inst:<id>`；`node:<id>` 供节点自身日志使用。
+func validateLogSources(sources []LogSourceConfig) error {
+	seen := make(map[string]struct{}, len(sources))
+	for i, s := range sources {
+		where := fmt.Sprintf("log_sources[%d]", i)
+		id := strings.TrimSpace(s.LogSourceID)
+		ns := strings.TrimSpace(s.StorageNamespace)
+		if id == "" {
+			return fmt.Errorf("%s.log_source_id 不能为空", where)
+		}
+		if ns == "" {
+			return fmt.Errorf("%s.storage_namespace 不能为空：必须是 inst:<实例ID> 或 node:<节点ID>", where)
+		}
+		if !logSourceTargetRe.MatchString(ns) {
+			return fmt.Errorf("%s.storage_namespace = %q 不是可被查询的目标形态：必须是 inst:<实例ID> 或 node:<节点ID>。"+
+				"写成其它值（如 dev:smoke）时该源仍会被采集并写入 VL，但 CP 按目标枚举永远匹配不到，"+
+				"日志页会显示「日志查询服务未启用」而真因只是命名空间不对", where, s.StorageNamespace)
+		}
+		// 形态 <storage_namespace>/<流名>：前缀必须是该源的命名空间，否则分区键与源身份脱节。
+		if !strings.HasPrefix(id, ns+"/") || len(id) == len(ns)+1 {
+			return fmt.Errorf("%s.log_source_id = %q 必须以 %q 开头（形态 <storage_namespace>/<流名>，例如 %s/file）",
+				where, s.LogSourceID, ns+"/", ns)
+		}
+		if cat := strings.TrimSpace(s.SourceCategory); cat != "" &&
+			cat != string(logtypes.SourceInstance) && cat != string(logtypes.SourceWorker) && cat != string(logtypes.SourceNode) {
+			return fmt.Errorf("%s.source_category = %q 非法：只接受 instance / worker / node（留空按 instance）", where, cat)
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("%s.log_source_id = %q 与前面的源重复：同一源不能登记两次", where, s.LogSourceID)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
 }
 
 // LogIngestConfig 采集归一化的节点级默认配置面，键为 `log_ingest.*`。
@@ -1572,6 +1626,12 @@ func Load(path string) (*Config, error) {
 	// 不先 Normalize：负值不能被默认值掩盖，错误配置也不能只让 main 静默停用驱动器。
 	if err := cfg.SamplingPolicy().Validate(); err != nil {
 		return nil, fmt.Errorf("log_ingest.sampling: %w", err)
+	}
+	// 静态采集源的**目标形态**校验（非法即拒）：写错命名空间的源会被照常采集，
+	// 却永远匹配不到 CP 的目标枚举，最终表现为「日志查询服务未启用」这类误导性状态。
+	// 见 validateLogSources 的文档注释（含 2026-10-17 dev 实测现场）。
+	if err := validateLogSources(cfg.LogSources); err != nil {
+		return nil, fmt.Errorf("log_sources: %w", err)
 	}
 	if cfg.LogRetention.Enabled {
 		policy, err := cfg.RetentionPolicy()

@@ -152,6 +152,18 @@ if binding.RelativePathOverride != "" {        // 实例级覆盖优先
 > `worker.yml` 的显式 path 会被静默压过。此顺序与 `internal/worker/logs/ingest/instances.go`
 > 的登记路径一致，`internal/worker/grpc/log_acquisition.go` 只负责把第 2 层提到第 3 层之前。
 
+**目标形态校验（2026-10-19 补，启动即拒）**：既然第 2 层靠 `storage_namespace == targetID`
+匹配，命名空间就必须是**可被 CP 枚举到的目标形态**——`inst:<实例ID>` 或 `node:<节点ID>`
+（由 `validateLogSources` 在 `config.Load` 阶段校验，见 `internal/worker/config.go`）。
+`storage_namespace` 为空、写成自造前缀（如 `dev:smoke`）、`log_source_id` 不以自身命名空间
+开头、`source_category` 越界、同一源重复登记，均拒绝启动并给出可执行的错误说明。
+
+> 为什么必须拒：写错命名空间时**采集与写 VL 全部正常**，只是 CP 按目标枚举永远匹配不到
+> → `target_missing_in_worker_response` → 归一化为 `ENGINE_NOT_READY` → 日志页显示
+> 「日志查询服务未启用」。现场会一路去怀疑 VL，而真因只是命名空间不对（2026-10-17 dev
+> 实测：`dev:smoke` 即触发该现象；改为 `node:1` 后同一查询立即从 0 行恢复为 5 行、
+> `target` 状态 `partial` → `success`）。
+
 ### 3.5 不改动的部分（重要）
 
 - 采集账本 / WAL / 四水位 / 投递语义：**零改动**
