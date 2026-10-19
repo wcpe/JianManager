@@ -666,7 +666,13 @@ type LogCapacityConfig struct {
 }
 
 // LogSourceConfig 配置一个由 Worker 常驻采集的日志源。
-// 实例生命周期可以在创建/迁移时动态登记同一模型；配置源用于 Worker/Node 日志和离线部署。
+//
+// 实际用途只有一处（2026-10-19 更正，评审 m-1）：**给实例/节点日志源做路径覆盖**——
+// apps/worker/main.go 按 `storage_namespace == targetID` 匹配，命中则以其 path 覆盖
+// 采集规则推导出的默认路径（见 docs/specs/log-acquisition-rules/spec.md §3.4）。
+// 早先这里写的是「配置源用于 Worker/Node 日志和离线部署」，与实现不符：并不存在
+// 「Worker 自身日志走 log_sources」这条路径，`node:<id>` 指的是**节点维度目标**，
+// 不是 Worker 进程自己的 stdout。validateLogSources 的白名单口径正建立在这个事实上。
 type LogSourceConfig struct {
 	LogSourceID      string `mapstructure:"log_source_id"`
 	SourceGeneration string `mapstructure:"source_generation"`
@@ -684,7 +690,19 @@ type LogSourceConfig struct {
 //
 // 与 retention.sourceIDRe 的字符集白名单互补：那条回答「能否安全用于删除过滤器」，
 // 本正则回答「这个命名空间是否可能被 CP 枚举到」。
-var logSourceTargetRe = regexp.MustCompile(`^(inst|node):[1-9][0-9]*$`)
+//
+// 三种合法形态（与 CP 侧 logcoord/assemble.go 的目标解析一一对应）：
+//   - `inst:<实例ID>`  实例日志（CP 按实例 ID 枚举）
+//   - `node:<节点ID>`  节点自身日志（CP 按节点 ID 枚举）
+//   - `node:<节点UUID>` 同上，但用 UUID 寻址
+//
+// 为什么必须支持 UUID（2026-10-19，评审 M-3）：节点数字 ID 由 CP 在**注册时**自增分配，
+// 运维写 worker.yml 时无法预知；只允许 `node:<数字>` 等于要求"先注册、查 ID、再改配置重启"，
+// 而且写错数字仍能通过校验、静默查不到。CP 的 assemble.go 对未知前缀走 default 分支
+// 按 UUID 解析并归一成 `node:<id>`，因此用本节点 UUID 是**可发现、可验证**的写法：
+// 它就在 `<dataDir>/etc/node-identity.json` 里。
+var logSourceTargetRe = regexp.MustCompile(
+	`^(inst:[1-9][0-9]*|node:[1-9][0-9]*|node:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`)
 
 // validateLogSources 校验静态 `log_sources` 的目标形态，非法即拒绝启动。
 //
@@ -697,7 +715,7 @@ var logSourceTargetRe = regexp.MustCompile(`^(inst|node):[1-9][0-9]*$`)
 //
 // 形态由平台自己生成、可完全枚举，因此不预留宽松口子：`log_sources` 的
 // `storage_namespace` 语义本就是「等于 targetID」（见 docs/specs/log-acquisition-rules/spec.md §3.4），
-// 实例级条目必须是 `inst:<id>`；`node:<id>` 供节点自身日志使用。
+// 实例级条目必须是 `inst:<id>`；节点自身日志用 `node:<节点ID>` 或 `node:<节点UUID>`。
 func validateLogSources(sources []LogSourceConfig) error {
 	seen := make(map[string]struct{}, len(sources))
 	for i, s := range sources {
@@ -708,10 +726,11 @@ func validateLogSources(sources []LogSourceConfig) error {
 			return fmt.Errorf("%s.log_source_id 不能为空", where)
 		}
 		if ns == "" {
-			return fmt.Errorf("%s.storage_namespace 不能为空：必须是 inst:<实例ID> 或 node:<节点ID>", where)
+			return fmt.Errorf("%s.storage_namespace 不能为空：必须是 inst:<实例ID> 或 node:<节点ID|节点UUID>", where)
 		}
 		if !logSourceTargetRe.MatchString(ns) {
-			return fmt.Errorf("%s.storage_namespace = %q 不是可被查询的目标形态：必须是 inst:<实例ID> 或 node:<节点ID>。"+
+			return fmt.Errorf("%s.storage_namespace = %q 不是可被查询的目标形态：必须是 inst:<实例ID>、"+
+				"node:<节点ID> 或 node:<节点UUID>（UUID 见 <dataDir>/etc/node-identity.json）。"+
 				"写成其它值（如 dev:smoke）时该源仍会被采集并写入 VL，但 CP 按目标枚举永远匹配不到，"+
 				"日志页会显示「日志查询服务未启用」而真因只是命名空间不对", where, s.StorageNamespace)
 		}

@@ -44,7 +44,9 @@ const inFlightDynamicImports = new Set<Promise<unknown>>()
  *
  * 续体抛错按加载失败处理（该路径本就有失败回落语义），不让拆卸阶段因它抛错。
  */
-function trackDynamicImport<T, R>(
+// 导出仅为测试：生产代码一律经 logout / schedulePermissionsLoad 间接触发。
+// 测试需要直接验证「续体是否被纳管」，否则只能靠时序竞态去猜（评审 M-5 的教训）。
+export function trackDynamicImport<T, R>(
   promise: Promise<T>,
   then?: (module: T) => R | Promise<R>,
 ): Promise<void> {

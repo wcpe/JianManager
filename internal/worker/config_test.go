@@ -576,6 +576,41 @@ func TestLoad_LogSourceTargetShape(t *testing.T) {
 		require.ErrorContains(t, err, "重复")
 	})
 
+	t.Run("节点 UUID 形态也可用（运维写配置时数字 ID 尚未分配）", func(t *testing.T) {
+		// M-3：节点数字 ID 由 CP 在注册时分配，写 worker.yml 时无法预知；UUID 在
+		// <dataDir>/etc/node-identity.json 里，是可发现、可验证的写法。
+		// CP 的 assemble.go 对未知前缀走 default 分支按 UUID 解析并归一成 node:<id>。
+		const uuid = "0091c0d6-6f54-469b-9119-40c05cacbb64"
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "node:`+uuid+`/file"
+    source_generation: "g1"
+    path: "/var/log/jm/node.log"
+    mode: FILE_PRIMARY
+    storage_namespace: "node:`+uuid+`"
+`)
+		cfg, err := Load(path)
+		require.NoError(t, err)
+		require.Len(t, cfg.LogSources, 1)
+		require.Equal(t, "node:"+uuid, cfg.LogSources[0].StorageNamespace)
+	})
+
+	t.Run("畸形的 UUID 形态仍被拒", func(t *testing.T) {
+		for _, ns := range []string{
+			"node:not-a-uuid",
+			"node:0091c0d6-6f54-469b-9119",                       // 段数不足
+			"node:0091c0d6-6f54-469b-9119-40c05cacbb6",            // 末段少一位
+			"node:0091c0d6-6f54-469b-9119-40c05cacbb64x",          // 多字符
+		} {
+			path := writeCfg(t, `log_sources:
+  - log_source_id: "`+ns+`/file"
+    source_generation: "g1"
+    storage_namespace: "`+ns+`"
+`)
+			_, err := Load(path)
+			require.ErrorContains(t, err, "不是可被查询的目标形态", "命名空间 %q 应被拒", ns)
+		}
+	})
+
 	t.Run("实例 ID 非正数被拒", func(t *testing.T) {
 		// inst:0 / inst:007 这类形态 CP 永远不会枚举到（ID 由数据库自增生成）。
 		for _, ns := range []string{"inst:0", "inst:007", "node:00", "inst:-1"} {
