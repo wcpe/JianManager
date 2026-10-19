@@ -1096,10 +1096,7 @@ func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget 
 	for _, target := range targets {
 		result, ok := got[workerTargetID(target)]
 		if !ok {
-			tc := CoverageFromReadiness(target, absentTargetReasons(resp.Targets))
-			if len(absentTargetReasons(resp.Targets)) > 0 && tc.State == CoverageSuccess {
-				tc.State = CoverageNotReady
-			}
+			tc := absentTargetCoverage(target, resp.Targets)
 			coverage[target.ID] = tc
 			continue
 		}
@@ -1397,7 +1394,7 @@ func (c *Coordinator) Fields(ctx context.Context, q Query) (*FieldsResponse, err
 		for _, target := range targets {
 			result, ok := got[workerTargetID(target)]
 			if !ok {
-				covBy[target.ID] = CoverageFromReadiness(target, absentTargetReasons(resp.Targets))
+				covBy[target.ID] = absentTargetCoverage(target, resp.Targets)
 				continue
 			}
 			covBy[target.ID] = TargetCoverage{TargetID: target.ID, State: result.State,
@@ -1586,10 +1583,7 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 		for _, t := range targets {
 			tr, ok := got[workerTargetID(t)]
 			if !ok {
-				tc := CoverageFromReadiness(t, absentTargetReasons(resp.Targets))
-				if len(absentTargetReasons(resp.Targets)) > 0 && tc.State == CoverageSuccess {
-					tc.State = CoverageNotReady
-				}
+				tc := absentTargetCoverage(t, resp.Targets)
 				covBy[t.ID] = tc
 				continue
 			}
@@ -1726,10 +1720,7 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 		for _, t := range targets {
 			tr, ok := got[workerTargetID(t)]
 			if !ok {
-				tc := CoverageFromReadiness(t, absentTargetReasons(resp.Targets))
-				if len(absentTargetReasons(resp.Targets)) > 0 && tc.State == CoverageSuccess {
-					tc.State = CoverageNotReady
-				}
+				tc := absentTargetCoverage(t, resp.Targets)
 				covBy[t.ID] = tc
 				continue
 			}

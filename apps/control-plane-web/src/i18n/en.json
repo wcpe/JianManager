@@ -3504,6 +3504,7 @@
     },
     "reasons": {
       "engineNotReady": "Query engine not ready",
+      "targetNoData": "No log data in this range",
       "rateLimited": "Too many requests",
       "logUnsupported": "Node log platform not enabled",
       "legacy": "Legacy data source",

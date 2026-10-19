@@ -202,11 +202,35 @@ func BuildCoverage(all []TargetInfo, byID map[string]TargetCoverage, onlineOnly 
 // （target_missing_in_worker_response → ENGINE_NOT_READY，并派生 GAP），使平台整体
 // 拒绝启用。正确语义：**响应非空**时，缺失即「空」（合法状态，不降级覆盖度）；
 // 只有**响应本身为空**（Worker 完全没在工作）才保留缺失判定，以维持对 Worker 失能的检出。
+//
+// 语义修正（2026-10-19，二次）：上一条只解决了「响应非空」的情形，但**响应为空**时仍
+// 统一记为 `target_missing_in_worker_response`，随后被归一化成 `ENGINE_NOT_READY`
+// （「日志查询服务未启用」）。可这条分支只在 **RPC 成功返回** 时才会走到——调用失败另有
+// `search_failed` / `empty_worker_response` / `worker_view_failed` / `dial_failed` 等
+// 专属原因，它们才是真正的「引擎未就绪」。也就是说：Worker 明明活着并给了响应，只是
+// 没有任何目标持有 Catalog 分区（该节点确实没有可查日志），却被说成「服务未启用」，
+// 运维会一路去查 VL。2026-10-17 dev 实测现场：直查 VL 有数据、`vlReady=true`，日志页
+// 却显示「日志查询服务未启用」。
+// 现改为单独返回 `TARGET_NO_DATA`：它是「这个目标没有数据」的诚实表达，不再冒充引擎故障。
 func absentTargetReasons(respTargets []WorkerTargetResult) []string {
 	if len(respTargets) == 0 {
-		return []string{"target_missing_in_worker_response"}
+		return []string{"target_no_data"}
 	}
 	return nil
+}
+
+// absentTargetCoverage 构造「该目标未出现在 Worker 响应中」的覆盖项。
+//
+// 为什么单列一个 helper（2026-10-19）：这段原本在 4 个扇出点各写一遍
+// `tc := CoverageFromReadiness(...); if len(absentTargetReasons(...)) > 0 && tc.State == success
+// { tc.State = not_ready }`。把 state 降级条件散落在调用点，正是「无数据被说成引擎未就绪」
+// 的根因——只要有一处漏改，同一语义就会在不同查询路径下表现不一致。
+//
+// 现在的口径：**该目标没有 Catalog 分区**是「无数据」，保持 success（合法终态，
+// 其语义是「这个目标确实没有日志」）；只有 Worker 整体失能（调用失败 / 空响应 /
+// 视图未建立）才由别的分支记 not_ready，不走这里。
+func absentTargetCoverage(t TargetInfo, respTargets []WorkerTargetResult) TargetCoverage {
+	return CoverageFromReadiness(t, absentTargetReasons(respTargets))
 }
 
 func normalizeCoverageReason(reason string) string {
@@ -215,14 +239,18 @@ func normalizeCoverageReason(reason string) string {
 	case "ENGINE_NOT_READY", "LOG_UNSUPPORTED", "LEGACY", "REHYDRATE_FAILED", "BACKLOG",
 		"TRUNCATED", "OFFLINE", "ARCHIVE_MISSING", "GAP", "VIEW_STALE",
 		"DUPLICATE_UNRESOLVED", "PERMISSION_REVOKED", "CANCELLED", "BUDGET_EXCEEDED",
-		"EXPORT_INCOMPLETE", "RECOVERY_REQUIRED":
+		"EXPORT_INCOMPLETE", "RECOVERY_REQUIRED", "TARGET_NO_DATA":
 		return upper
 	case "ARCHIVE_NOT_RESTORED":
 		return "ARCHIVE_MISSING"
 	case "LOG_RPC_UNSUPPORTED":
 		return "LOG_UNSUPPORTED"
-	case "NOT_READY", "MISSING_COVERAGE", "TARGET_MISSING_IN_WORKER_RESPONSE", "EMPTY_WORKER_RESPONSE",
-		"WORKER_VIEW_FAILED":
+	// TARGET_MISSING_IN_WORKER_RESPONSE 曾在此处与 NOT_READY / EMPTY_WORKER_RESPONSE 一起
+	// 归一化为 ENGINE_NOT_READY；它代表「RPC 成功但该目标无分区」，属无数据而非引擎故障，
+	// 故单列为 TARGET_NO_DATA（与 absentTargetReasons 的返回值一一对应）。
+	case "TARGET_MISSING_IN_WORKER_RESPONSE":
+		return "TARGET_NO_DATA"
+	case "NOT_READY", "MISSING_COVERAGE", "EMPTY_WORKER_RESPONSE", "WORKER_VIEW_FAILED":
 		return "ENGINE_NOT_READY"
 	case "ROW_OR_BYTE_BUDGET_CUT", "FACET_TRUNCATED", "FANOUT_BUDGET_EXCEEDED", "WORKER_TRUNCATED":
 		return "TRUNCATED"

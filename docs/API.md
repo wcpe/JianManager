@@ -3124,6 +3124,8 @@
 
 `LogSearchResponse.ingest_position_gaps` 是独立的人工永久放弃位置凭据，不表示查询时间覆盖缺口。`IngestPositionGap` 原字段 1～6 保持 `storage_namespace/from/to/reason_code/operator/at_utc`，仅追加 `log_source_id=7`、`source_generation=8`（来自真实源键）；既有 RPC 与 `fr433/v1` 不变。CP Search 与门面可选返回 `ingest_position_gaps[]`：`worker_id` 为可信路由绑定的 Worker UUID，`from/to` 为无损十进制字符串，其余字段沿用上述 snake_case。空集合省略，旧 Worker 未提供的真实源/代次字段省略，禁止从 namespace 或结果事件推断；不同 Worker/源/代次的凭据不得按 namespace 合并。即使 `items=[]` 也可返回凭据；它不参与 `coverage`、`quality` 或 Export 闸门判断。
 
+`coverage.partial_reasons` 里 `ENGINE_NOT_READY` 与 `TARGET_NO_DATA` 语义不同，不可互相替代：前者表示**查询引擎 / Worker 数据面未就绪**（调用失败、空响应、Query View 未建立、混版 Unimplemented），后者表示**该目标没有可查日志**（RPC 成功返回，但该目标在 Worker 侧没有 Catalog 分区）。`TARGET_NO_DATA` 的目标保持 `state=success`，不进入 `partial_reasons`、不使 `complete=false`；它由 worker 响应中缺少该目标推出（`target_missing_in_worker_response` → `TARGET_NO_DATA`）。**2026-10-19 语义修正**：该情形此前归一化为 `ENGINE_NOT_READY`，导致「VL 有数据、采集正常」的节点在日志页显示「日志查询服务未启用」，把排查引向 VL。
+
 查询预算是整请求扫描额度而非每 Worker/range 独享额度：入口 `max_bytes=0` 使用 32 MiB 默认，执行前分配正数子额度，零份额不发请求；正常 `limit` 分页不等于扫描预算耗尽。Search/Stats 顶层保留 Worker 的 partial 原因与预算截断，不能被逐目标成功覆盖；未完整页边界同戳组或扫描截断时不提供可跨过缺失集合的全局游标。固定窗口续页须携原 view 与复合 cursor，不以毫秒时间锚点替代。
 
 实例注册消息 `CreateInstanceRequest` 另增可选字段 `log_target_id=19`、`log_acquire_mode=20`、`log_source_generation=21`，由 CP 统一创建/重连规格下发。Worker 将它们绑定到实例的受管日志采集面：Java 文件主源、通用进程 stdout/stderr 主源；缺字段保持旧 CP 兼容，不凭 UUID 猜测授权数字 ID。采集绑定失败时注册返回 `success=false`；已有实例 Resync 的绑定失败返回 `FailedPrecondition`。绑定持久化及无绑定实例禁止 cutover，见 FR-474 spec。

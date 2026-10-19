@@ -3458,6 +3458,7 @@
     },
     "reasons": {
       "engineNotReady": "日志查询服务未启用",
+      "targetNoData": "该范围没有日志数据",
       "rateLimited": "请求过于频繁",
       "logUnsupported": "该节点未开启日志采集",
       "legacy": "切换前的历史数据",
