@@ -503,6 +503,30 @@ export default function LogsPage() {
     [],
   )
 
+  /**
+   * 切换视图，并在进入 Legacy 时清掉**实例维度**的筛选。
+   *
+   * 为什么必须清（2026-10-19，评审 M-4）：服务不可用时横幅指引「请到『更多 → Legacy 只读』
+   * 查看平台与历史日志」，但 `nodeId` / `instanceId` 会照旧带进 Legacy 查询，而平台自身与
+   * 历史日志并不带这两个维度——实测 dev 下 `/logs/legacy?...&nodeId=1` 返回 200 但 0 条，
+   * 用户按指引操作后落到另一个空页面。横幅既然指了路，就不能把它通向一个空页。
+   * 反向不成立：离开 Legacy 回到联邦视图时无需恢复，因为已清掉的是「进入前置筛选」，
+   * 用户可随时用工具栏重新选择。
+   */
+  const switchView = useCallback(
+    (candidate: (typeof LOG_VIEWS)[number]) => {
+      setView(candidate)
+      setPage(1)
+      setFederationCursors({})
+      if (candidate === 'legacy') {
+        setFollow(false)
+        setNodeId(null)
+        setInstanceId(null)
+      }
+    },
+    [],
+  )
+
   // 导出门禁：联邦可用且覆盖/校验未过 → 禁用。
   // `classicExportAllowed` 与查询同源，同样**只在平台视图**成立：联邦视图降级后列表已空，
   // 此时放行经典导出会导出与当前视图无关的平台日志——与「静默换源」是同一处误导。
@@ -701,10 +725,7 @@ export default function LogsPage() {
               role="tab"
               aria-selected={view === candidate}
               onClick={() => {
-                setView(candidate)
-                setPage(1)
-				setFederationCursors({})
-				if (candidate === 'legacy') setFollow(false)
+                switchView(candidate)
               }}
             >
               {t(`logs.view_${candidate}`)}
@@ -730,10 +751,7 @@ export default function LogsPage() {
                 data-testid="logs-view-legacy"
                 disabled={!isPlatformAdmin}
                 onSelect={() => {
-                  setView('legacy')
-                  setPage(1)
-                  setFederationCursors({})
-                  setFollow(false)
+                  switchView('legacy')
                 }}
               >
                 {t('logs.view_legacy')}

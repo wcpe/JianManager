@@ -226,11 +226,22 @@ func absentTargetReasons(respTargets []WorkerTargetResult) []string {
 // { tc.State = not_ready }`。把 state 降级条件散落在调用点，正是「无数据被说成引擎未就绪」
 // 的根因——只要有一处漏改，同一语义就会在不同查询路径下表现不一致。
 //
-// 现在的口径：**该目标没有 Catalog 分区**是「无数据」，保持 success（合法终态，
-// 其语义是「这个目标确实没有日志」）；只有 Worker 整体失能（调用失败 / 空响应 /
-// 视图未建立）才由别的分支记 not_ready，不走这里。
+// 口径（2026-10-19 定稿，评审 M-2 修订）：
+//   - **响应非空、但缺该目标** ⇒ 该目标无数据（success，不降级覆盖度）。这是 2026-09-30 的修正。
+//   - **响应本身为空** ⇒ 该目标无数据**且**无法排除 Worker 侧枚举异常：保持 not_ready 并记
+//     `target_no_data`。理由：Worker 在「没有任何匹配分区」与「有分区却枚举不出来」两种情况下
+//     都返回空 targets（planner.selectKeys 为空 ⇒ coverage.Targets 也为空），现有 wire 无法区分
+//     （WorkerSearchResponse.Coverage 只是 Targets 的另一种投影，同为空）。因此不能判 success
+//     ——那会把「有分区却枚举不出来」这类故障静默成空结果并放行导出（评审 M-2）。
+//     代价是该目标的无数据场景会显示为「有缺口」而非「完整」；但 `target_no_data` 在**前端
+//     不会被映射成「日志查询服务未启用」**（stateFromReason 的 default 分支归 partial），
+//     所以不会再把运维引去查 VL。宁可标注不完整，也不静默放行。
 func absentTargetCoverage(t TargetInfo, respTargets []WorkerTargetResult) TargetCoverage {
-	return CoverageFromReadiness(t, absentTargetReasons(respTargets))
+	tc := CoverageFromReadiness(t, absentTargetReasons(respTargets))
+	if len(absentTargetReasons(respTargets)) > 0 && tc.State == CoverageSuccess {
+		tc.State = CoverageNotReady
+	}
+	return tc
 }
 
 func normalizeCoverageReason(reason string) string {

@@ -41,18 +41,32 @@ func TestNormalizeCoverageReasonTargetNoData(t *testing.T) {
 	}
 }
 
-// 回归（2026-10-19）：无数据的目标保持 success（「这个目标确实没有日志」是合法终态），
-// 且它的原因不得污染平台级 partial_reasons / complete。
-func TestAbsentTargetCoverageKeepsSuccess(t *testing.T) {
+// 回归（2026-10-19，评审 M-2 修订）：空响应 ⇒ 保持 not_ready，但原因不再是 ENGINE_NOT_READY。
+//
+// 为什么不能判 success：Worker 在「没有任何匹配分区」与「有分区却枚举不出来」两种情况下都返回
+// 空 targets（planner.selectKeys 为空 ⇒ coverage.Targets 也为空），现有 wire 无法区分。判 success
+// 会把后一种故障静默成「无数据 + complete=true + 可导出」。
+// 为什么也不能判 ENGINE_NOT_READY：前端会把 ENGINE_NOT_READY 渲染成「日志查询服务未启用」，
+// 把运维引去查 VL —— 这正是 2026-10-17 dev 现场被误导的原因。
+func TestAbsentTargetCoverageKeepsNotReadyWithDistinctReason(t *testing.T) {
 	target := TargetInfo{ID: "node:1", Readiness: ReadyOnline}
 
 	tc := absentTargetCoverage(target, nil)
-	require.Equal(t, CoverageSuccess, tc.State,
-		"该目标无分区 = 无数据，保持 success（不得降级为 not_ready）")
-	require.Equal(t, []string{"target_no_data"}, tc.Reasons)
+	require.Equal(t, CoverageNotReady, tc.State,
+		"空响应不能判 success：无法区分「无分区」与「枚举异常」")
+	require.Equal(t, []string{"target_no_data"}, tc.Reasons,
+		"原因必须是 target_no_data，不能是 ENGINE_NOT_READY 语义的缺失原因")
 
 	cov := BuildCoverage([]TargetInfo{target}, map[string]TargetCoverage{target.ID: tc}, false, nil, EnumOpen)
-	require.Empty(t, cov.PartialReasons,
-		"无数据不得写入 partial_reasons（否则前端显示「查询服务未启用」）")
-	require.True(t, cov.Complete, "没有缺口时覆盖率应完整，导出不应被阻断")
+	require.Contains(t, cov.PartialReasons, "TARGET_NO_DATA",
+		"必须标出不完整，不能静默放行导出")
+	require.NotContains(t, cov.PartialReasons, "ENGINE_NOT_READY",
+		"不得让前端显示「日志查询服务未启用」")
+	require.False(t, cov.Complete, "有缺口时覆盖率不得为完整")
+
+	// 响应非空但缺该目标 ⇒ 无数据（success），这条是 2026-09-30 的既有语义，不能被本次改回去。
+	nonEmpty := []WorkerTargetResult{{TargetID: "inst:142"}}
+	tc2 := absentTargetCoverage(target, nonEmpty)
+	require.Equal(t, CoverageSuccess, tc2.State, "响应非空时的缺失 = 该目标无数据（合法终态）")
+	require.Empty(t, tc2.Reasons)
 }

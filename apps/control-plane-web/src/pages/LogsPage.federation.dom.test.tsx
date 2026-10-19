@@ -942,4 +942,48 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 			expect(last?.get('level')).toBe('error')
 		}, { message: '切换级别后 instanceId 与 level 必须同时保留' })
 	})
+
+	/**
+	 * 回归（2026-10-19，评审 M-4）：进入 Legacy 必须清掉实例维度筛选。
+	 *
+	 * 服务不可用时横幅指引「请到『更多 → Legacy 只读』查看平台与历史日志」，而 nodeId /
+	 * instanceId 若照旧带过去，Legacy 会按这两个维度过滤——平台自身与历史日志并不带它们，
+	 * 实测 dev 下 `/logs/legacy?...&nodeId=1` 返回 200 但 0 条。横幅既然指了路，
+	 * 就不能把它通向一个空页。
+	 */
+	it('⑱ 进入 Legacy 视图时清除 nodeId / instanceId 筛选', async () => {
+		const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
+		loginMockUser(`mock.${payload}.sig`)
+		const legacyCalls: URLSearchParams[] = []
+		server.use(
+			http.get(API('/logs/federation'), () =>
+				HttpResponse.json({
+					sourceTag: 'federated',
+					items: seedLogsPage.items,
+					coverage: { complete: true, partial_reasons: [], targets: [] },
+					quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+					view: { view_id: 'legacy-switch-view' },
+				}),
+			),
+			http.get(API('/logs/legacy'), ({ request }) => {
+				legacyCalls.push(new URL(request.url).searchParams)
+				return HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 100 })
+			}),
+		)
+		// 深链进入时带 instanceId，模拟「从实例详情跳该实例日志」的真实路径。
+		renderWithProviders(<LogsPage />, { route: '/logs?instanceId=2' })
+		await screen.findByText('federation-seed-log-line')
+
+		const user = userEvent.setup()
+		// 「更多 → Legacy 只读」仅平台管理员可用（token 已按 admin 构造）。
+		await user.click(screen.getByTestId('logs-more-trigger'))
+		await user.click(await screen.findByTestId('logs-view-legacy'))
+
+		await waitFor(() => expect(legacyCalls.length).toBeGreaterThan(0), {
+			message: '切到 Legacy 后应发起 /logs/legacy 查询',
+		})
+		const first = legacyCalls[0]
+		expect(first.has('instanceId')).toBe(false)
+		expect(first.has('nodeId')).toBe(false)
+	})
 })
