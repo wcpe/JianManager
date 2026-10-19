@@ -101,4 +101,40 @@ describe('auth store 查询缓存隔离', () => {
     await flushAuthDynamicImports()
     await flushAuthDynamicImports()
   })
+
+  /**
+   * 回归（2026-10-19 评审）：**续体自身抛错**不得漏成 unhandled rejection。
+   *
+   * 原实现只吞了 `import()` 的 rejection（`.then(onFulfilled, () => undefined)`），
+   * 但续体在 onFulfilled 里执行——它一旦抛错/返回 rejected，`tracked` 就 reject。而
+   * `tracked` 被 `void tracked.finally(...)` 以不等待的方式消费，`.finally` 链上新生成的
+   * rejected promise 无人接管 ⇒ unhandled rejection。CI 上的表现正是「全部用例通过但
+   * 退出码非零」，很难归因。这里直接监听 process 的 unhandledRejection 来断言。
+   */
+  it('续体抛错不漏成 unhandled rejection', async () => {
+    const { flushAuthDynamicImports, trackDynamicImport } = await import('./auth')
+
+    const seen: unknown[] = []
+    const onUnhandled = (reason: unknown) => seen.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+
+    try {
+      // 同步抛错的续体。
+      void trackDynamicImport(Promise.resolve({ ok: true }), () => {
+        throw new Error('续体同步抛错')
+      })
+      // 返回 rejected Promise 的续体。
+      void trackDynamicImport(Promise.resolve({ ok: true }), async () => {
+        throw new Error('续体异步抛错')
+      })
+
+      await flushAuthDynamicImports()
+      // 让 finally 链与 unhandledRejection 的派发都跑完（它们在微任务之后）。
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+
+    expect(seen, `不应出现 unhandled rejection，实际收到：${JSON.stringify(seen.map(String))}`).toEqual([])
+  })
 })

@@ -50,10 +50,15 @@ export function trackDynamicImport<T, R>(
   promise: Promise<T>,
   then?: (module: T) => R | Promise<R>,
 ): Promise<void> {
-  const tracked: Promise<unknown> = promise.then(
-    (module) => (then ? then(module) : undefined),
-    () => undefined, // 加载失败不该让拆卸阶段抛错（该路径本就有失败回落语义）
-  )
+  // `tracked` 必须**永不 reject**（2026-10-19 评审补）：
+  // 它被两处以「不等待」的形式消费——`void tracked.finally(...)` 与返回给调用方的
+  // `void trackDynamicImport(...)`。只要 reject 沿 `tracked` 漏出去，`.finally` 链上就会
+  // 新生成一个无人接管的 rejected promise，届时先前的努力（本函数存在的全部意义）就白费了。
+  // 两道都得有：第一道吞 import 失败，第二道吞**续体自身**抛错/返回 rejected。
+  // 续体抛错按加载失败处理，生产语义本就如此；测试里则由 flush 统一等待其收口。
+  const tracked: Promise<unknown> = promise
+    .then((module) => (then ? then(module) : undefined))
+    .catch(() => undefined)
   inFlightDynamicImports.add(tracked)
   void tracked.finally(() => inFlightDynamicImports.delete(tracked))
   return tracked.then(() => undefined)

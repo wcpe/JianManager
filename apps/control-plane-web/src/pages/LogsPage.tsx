@@ -158,10 +158,12 @@ function bucketFloor(ms: number): number {
  * 级别用 StatusBadge 着色，token 驱动，与告警页语义统一。
  *
  * FR-482 接线（最小改动）：
- * - 可选联邦 API（`/logs/federation`）经 `useLogsFederation` 探测；404 → 降级 legacy 视图 + 横幅。
+ * - 可选联邦 API（`/logs/federation`）经 `useLogsFederation` 探测；不可用时**不回退**经典表
+ *   （用户裁定：「没有就是没有」，以免把平台/历史日志读成该视图的日志），只出横幅指明去看
+ *   Legacy 只读入口。详见下方 `classicAuthoritative` 一段。
  * - 覆盖/失败态一律经 `classifyLogViewState` + `toCoverageBannerProps`，失败/partial 禁止空成功。
  * - `sourceTag=legacy` 打 Legacy 徽标；ErrFederatedNotReady 显示联邦未就绪说明。
- * - 导出在 `resolveExportDownloadAffordance` 阻断时禁用；404 降级保留经典 `/logs/export`。
+ * - 导出在 `resolveExportDownloadAffordance` 阻断时禁用；经典 `/logs/export` 仅在平台视图放行。
  */
 export default function LogsPage() {
   const { t } = useTranslation()
@@ -270,8 +272,8 @@ export default function LogsPage() {
    *
    * 用 state 而非 ref：渲染期要**读**它来决定列表内容，ref 读值不触发重渲染且违反
    * 「渲染期不得访问 ref」；state 才能让保留生效。
-   * 只记非降级结果——降级（legacy 表格）的行来自经典接口，记进来会让限流回退时
-   * 把经典表的行冒充成联邦结果。
+   * 只记联邦结果：联邦不可用时本视图不取经典表（见 classicAuthoritative），
+   * 记进别的来源会让限流期间把无关的行冒充成联邦结果。
    * 更新时机用「渲染期按需调整 state」而非 effect（React 官方推荐的派生 state 写法，
    * 也避免先渲染一帧空列表再把数据补回来的闪烁）。
    *
@@ -310,7 +312,7 @@ export default function LogsPage() {
    *
    * 不含 degraded 条件：queryFn 只对 429 抛出，其它失败（404/连接失败）都会被转成信封、
    * 在 react-query 层面算成功。若限定「非降级才算成功」，那么「先 429、随后接口变成 404」
-   * 时闩锁永远清不掉，限流横幅会盖住本该发生的 legacy 降级。
+   * 时闩锁永远清不掉，限流横幅会一直盖住后续状态。
    * 但必须排除占位数据：key 滚动期间 keepPreviousData 会用上一份顶替成「有数据」，
    * 那不是新的结果，不能据此宣告恢复。
    */
@@ -354,7 +356,7 @@ export default function LogsPage() {
    * - 确有冲突（`duplicateUnresolved`，与横幅同源）—— 否则这个按钮没有任何可清的东西；
    * - 选中了单一节点 —— 清空是**按节点**下发的（Worker 持有该节点的源），
    *   未选节点时无法确定目标，此时不给入口，而不是默认拿第一个节点去清；
-   * - 联邦不是降级态 —— 降级时质量标记来自 legacy 路径，本入口对其无效。
+   * - 联邦视图可用 —— 不可用时列表为空，本入口没有可清的东西。
    */
   const canClearConflicts =
     federationActive &&
@@ -504,25 +506,27 @@ export default function LogsPage() {
   )
 
   /**
-   * 切换视图，并在进入 Legacy 时清掉**实例维度**的筛选。
+   * 切换视图。进入 Legacy 时只停「跟随」，**保留** nodeId / instanceId 筛选。
    *
-   * 为什么必须清（2026-10-19，评审 M-4）：服务不可用时横幅指引「请到『更多 → Legacy 只读』
-   * 查看平台与历史日志」，但 `nodeId` / `instanceId` 会照旧带进 Legacy 查询，而平台自身与
-   * 历史日志并不带这两个维度——实测 dev 下 `/logs/legacy?...&nodeId=1` 返回 200 但 0 条，
-   * 用户按指引操作后落到另一个空页面。横幅既然指了路，就不能把它通向一个空页。
-   * 反向不成立：离开 Legacy 回到联邦视图时无需恢复，因为已清掉的是「进入前置筛选」，
-   * 用户可随时用工具栏重新选择。
+   * 曾一度在这里清掉两者（2026-10-19 评审 M-4），依据是「平台与历史日志不带这两个维度」。
+   * 该前提是错的，已回退：Legacy 集合是 `legacyLogSources = [LogSourceInstance, LogSourceWorker]`
+   * （见 internal/controlplane/service/log_cutover.go），**只有实例与 Worker 日志，平台自身日志
+   * 根本不在其中**；而这两类行的 `node_id` 非零（model.Log.NodeID 注释：「实例/Worker 日志
+   * 非零」），且 `applyFilter` 确实按它下推 SQL（internal/controlplane/service/log.go:395）。
+   * 也就是说 nodeId 在 Legacy 上是有意义的过滤条件，清掉它只会把用户已经选定的范围放大成
+   * 「全部实例 + 全部 Worker」，属于替用户改查询。当时观察到 `/logs/legacy?...&nodeId=1`
+   * 返回 0 条，真实原因是那台节点上确实没有 legacy 存量行，不是维度不存在。
+   *
+   * 顺带记一笔真正的错配：横幅文案原说 Legacy 可「查看平台与历史日志」，但平台日志不在
+   * Legacy 集合内——该措辞已同步改成「切换前的历史日志」，避免把用户指向一个查不到的东西。
    */
   const switchView = useCallback(
     (candidate: (typeof LOG_VIEWS)[number]) => {
       setView(candidate)
       setPage(1)
       setFederationCursors({})
-      if (candidate === 'legacy') {
-        setFollow(false)
-        setNodeId(null)
-        setInstanceId(null)
-      }
+      // 只停跟随：跟随态按 3 秒滚动时间桶，切到 Legacy 后继续滚会让时间窗不停漂移。
+      if (candidate === 'legacy') setFollow(false)
     },
     [],
   )
@@ -1063,7 +1067,7 @@ function CoverageBanner({
   // 「有重复日志待确认」的判据与 foundation 同源（coverage.duplicateUnresolved），
   // 不另造一套：两边若漂移，会出现「横幅说有冲突、按钮却不见」或反之的矛盾呈现。
   const duplicateUnresolved = classified.coverage.duplicateUnresolved
-  // 404 降级始终展示横幅（即使 foundation 因 items 路径判定 visible=false）。
+  // 不可达/未就绪始终展示横幅（即使 foundation 因 items 路径判定 visible=false）。
   const visible = props.visible || degraded || federatedNotReady
   if (!visible) return null
 

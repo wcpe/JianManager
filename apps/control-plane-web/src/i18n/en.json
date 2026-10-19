@@ -3575,14 +3575,14 @@
       "legacy": "Legacy",
       "federated": "Federated"
     },
-    "degraded": "Log query service is not enabled; this view has no data. For platform and pre-switch historical logs, use More → Legacy (read-only).",
-    "degradedUnavailable": "Live log query service is unavailable; this view has no data. For platform and pre-switch historical logs, use More → Legacy (read-only).",
-    "federatedNotReady": "Log query service is not enabled; this view has no data. For platform and pre-switch historical logs, use More → Legacy (read-only).",
+    "degraded": "Log query service is not enabled; this view has no data. For pre-switch historical logs, use More → Legacy (read-only).",
+    "degradedUnavailable": "Live log query service is unavailable; this view has no data. For pre-switch historical logs, use More → Legacy (read-only).",
+    "federatedNotReady": "Log query service is not enabled; this view has no data. For pre-switch historical logs, use More → Legacy (read-only).",
     "emptyNotSuccess": "Coverage incomplete or query failed — this is not an empty result",
-    "degradedHint": "This view shows per-server live logs only; when the service is not enabled it will not substitute platform or historical logs. For platform and pre-switch historical logs, use More → Legacy (read-only). To enable live querying, go to Nodes → node → Log runtime panel and enable the log platform.",
-    "federatedNotReadyHint": "This view shows per-server live logs only; when the service is not enabled it will not substitute platform or historical logs. For platform and pre-switch historical logs, use More → Legacy (read-only). To enable live querying, go to Nodes → node → Log runtime panel and enable the log platform.",
+    "degradedHint": "This view shows per-server live logs only; when the service is not enabled it will not substitute historical logs. For pre-switch historical logs, use More → Legacy (read-only). To enable live querying, go to Nodes → node → Log runtime panel and enable the log platform.",
+    "federatedNotReadyHint": "This view shows per-server live logs only; when the service is not enabled it will not substitute historical logs. For pre-switch historical logs, use More → Legacy (read-only). To enable live querying, go to Nodes → node → Log runtime panel and enable the log platform.",
     "degradedTitleShort": "Log query service off · no data in this view",
-    "degradedUnavailableHint": "This view shows per-server live logs only; when the service is unreachable it will not substitute platform or historical logs. For platform and pre-switch historical logs, use More → Legacy (read-only). The live service: retry later or contact an administrator.",
+    "degradedUnavailableHint": "This view shows per-server live logs only; when the service is unreachable it will not substitute historical logs. For pre-switch historical logs, use More → Legacy (read-only). The live service: retry later or contact an administrator.",
     "degradedUnavailableTitleShort": "Live log query service unavailable · no data in this view"
   },
   "users": {

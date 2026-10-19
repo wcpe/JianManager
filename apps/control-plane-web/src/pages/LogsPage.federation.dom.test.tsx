@@ -944,14 +944,17 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 	})
 
 	/**
-	 * 回归（2026-10-19，评审 M-4）：进入 Legacy 必须清掉实例维度筛选。
+	 * 回归（2026-10-19，评审复核纠正）：进入 Legacy **保留** nodeId / instanceId 筛选。
 	 *
-	 * 服务不可用时横幅指引「请到『更多 → Legacy 只读』查看平台与历史日志」，而 nodeId /
-	 * instanceId 若照旧带过去，Legacy 会按这两个维度过滤——平台自身与历史日志并不带它们，
-	 * 实测 dev 下 `/logs/legacy?...&nodeId=1` 返回 200 但 0 条。横幅既然指了路，
-	 * 就不能把它通向一个空页。
+	 * 这条用例原本断言相反（进入 Legacy 时清除筛选），依据是「平台与历史日志不带这两个维度」。
+	 * 该前提经核对为错：Legacy 集合是 `legacyLogSources = [LogSourceInstance, LogSourceWorker]`
+	 * （internal/controlplane/service/log_cutover.go:15-18），平台自身日志根本不在其中；而实例与
+	 * Worker 行的 `node_id` 非零（model.Log.NodeID 注释：「实例/Worker 日志非零」），
+	 * `applyFilter` 也确实按它下推 SQL（internal/controlplane/service/log.go:395-397）。
+	 * 所以 nodeId/instanceId 在 Legacy 上是有意义的条件，清掉等于把用户选定的范围放大成
+	 * 「全部实例 + 全部 Worker」，属于替用户改查询。
 	 */
-	it('⑱ 进入 Legacy 视图时清除 nodeId / instanceId 筛选', async () => {
+	it('⑱ 进入 Legacy 视图时保留 nodeId / instanceId 筛选', async () => {
 		const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
 		loginMockUser(`mock.${payload}.sig`)
 		const legacyCalls: URLSearchParams[] = []
@@ -983,7 +986,6 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 			message: '切到 Legacy 后应发起 /logs/legacy 查询',
 		})
 		const first = legacyCalls[0]
-		expect(first.has('instanceId')).toBe(false)
-		expect(first.has('nodeId')).toBe(false)
+		expect(first.get('instanceId')).toBe('2')
 	})
 })
