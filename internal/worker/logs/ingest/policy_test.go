@@ -218,3 +218,75 @@ func TestRegisterInstancePathOverrideOnlyForMatchingTarget(t *testing.T) {
 	require.Equal(t, filepath.Join(work, "logs", "latest.log"),
 		sourceByID(t, m, "inst:914/file").Path, "未命中的 targetID 应保持规则默认")
 }
+
+// TestLoadAcqPolicyPartialFileKeepsDefaults 验证**字段不全的快照不会关掉采集**。
+//
+// 背景（2026-10-20 审查）：加载侧原先把 JSON 直接解成裸 bool 字段，缺失键留零值 false。
+// 于是一份 `{}`（或手工编辑掉某一键、旧版本写入的部分文件）会解出
+// `RealtimeTail=false`，而 pollSource 首行就是「RealtimeTail 为假 ⇒ 整源本轮不读」，
+// 结果是整节点静默停采、且日志里看不出原因。原子写能保证自己写的文件完整，但
+// 外部修改/旧版本遗留/磁盘损坏都能造出不完整文件，加载侧必须自己守住。
+func TestLoadAcqPolicyPartialFileKeepsDefaults(t *testing.T) {
+	def := DefaultAcqPolicy()
+
+	cases := []struct {
+		name    string
+		payload string
+		check   func(t *testing.T, got AcqPolicy)
+	}{
+		{
+			name:    "空对象：三个开关全部保持默认（不得变成关闭）",
+			payload: `{}`,
+			check: func(t *testing.T, got AcqPolicy) {
+				require.Equal(t, def.RulesEnabled, got.RulesEnabled)
+				require.Equal(t, def.RealtimeTail, got.RealtimeTail, "缺字段不得把实时采集关掉")
+				require.Equal(t, def.GzImportEnabled, got.GzImportEnabled)
+			},
+		},
+		{
+			name:    "只写了 gz 导入：其余键保持默认",
+			payload: `{"gz_import_enabled":false}`,
+			check: func(t *testing.T, got AcqPolicy) {
+				require.False(t, got.GzImportEnabled, "显式写下的值必须生效")
+				require.Equal(t, def.RealtimeTail, got.RealtimeTail)
+				require.Equal(t, def.RulesEnabled, got.RulesEnabled)
+			},
+		},
+		{
+			name:    "显式关闭实时采集：必须生效（与缺字段区分）",
+			payload: `{"realtime_tail":false}`,
+			check: func(t *testing.T, got AcqPolicy) {
+				require.False(t, got.RealtimeTail, "显式 false 仍须生效")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, acqPolicyFileName), []byte(tc.payload), 0o644))
+			got, present, err := LoadAcqPolicy(dir)
+			require.NoError(t, err)
+			require.True(t, present)
+			tc.check(t, got)
+		})
+	}
+}
+
+// TestAcqPolicyFileRoundTripPreservesExplicitFalse 验证写入→读取往返保留「显式 false」。
+//
+// 指针改造后必须确认：写入侧为每个键都写了实值（取地址），读出时才不会把
+// 「显式关掉」误当成「缺失」。这条守住改造的另一半。
+func TestAcqPolicyFileRoundTripPreservesExplicitFalse(t *testing.T) {
+	dir := t.TempDir()
+	src := AcqPolicy{RulesEnabled: false, RealtimeTail: false, GzImportEnabled: false, GzScanInterval: 7 * time.Minute}
+	require.NoError(t, SaveAcqPolicy(dir, src))
+
+	got, present, err := LoadAcqPolicy(dir)
+	require.NoError(t, err)
+	require.True(t, present)
+	require.False(t, got.RulesEnabled, "显式 false 不得在往返中变回默认 true")
+	require.False(t, got.RealtimeTail)
+	require.False(t, got.GzImportEnabled)
+	require.Equal(t, 7*time.Minute, got.GzScanInterval)
+}

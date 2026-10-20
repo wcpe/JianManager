@@ -214,9 +214,17 @@ const acqPolicyFileName = "log-acquisition.json"
 // acqPolicyFile 是持久化形态：与内存结构分开，duration 落盘用 Go duration 文本，
 // 避免纳秒整数在人工排查时不可读。
 type acqPolicyFile struct {
-	RulesEnabled    bool              `json:"rules_enabled"`
-	RealtimeTail    bool              `json:"realtime_tail"`
-	GzImportEnabled bool              `json:"gz_import_enabled"`
+	// 用指针区分「文件中确实写了该键」与「键缺失」（2026-10-20 审查修正）。
+	//
+	// 原实现是裸 bool，`json.Unmarshal` 对缺失字段留零值 false，于是任何字段不全的
+	// 合法 JSON（`{}`、手工编辑掉某键、旧版本写入的部分文件）都会解出
+	// `RealtimeTail=false` —— 而 pollSource 的首行就是「RealtimeTail 为假 ⇒ 整源本轮不读」，
+	// 结果是**整节点静默停采**，日志里只有一条「已恢复本地日志采集快照」，不含任何字段值。
+	// 这与 applyReply 专门警告过的「把零值误读成『全部关闭』」是同一类错误，
+	// 只是那边靠 LogAcqPresent 守住了，加载侧没有对应的守卫。
+	RulesEnabled    *bool             `json:"rules_enabled"`
+	RealtimeTail    *bool             `json:"realtime_tail"`
+	GzImportEnabled *bool             `json:"gz_import_enabled"`
 	GzScanInterval  string            `json:"gz_scan_interval"`
 	PathOverrides   map[string]string `json:"path_overrides,omitempty"`
 }
@@ -234,9 +242,9 @@ func SaveAcqPolicy(dir string, p AcqPolicy) error {
 	}
 	p = normalizeAcqPolicy(p)
 	payload, err := json.MarshalIndent(acqPolicyFile{
-		RulesEnabled:    p.RulesEnabled,
-		RealtimeTail:    p.RealtimeTail,
-		GzImportEnabled: p.GzImportEnabled,
+		RulesEnabled:    &p.RulesEnabled,
+		RealtimeTail:    &p.RealtimeTail,
+		GzImportEnabled: &p.GzImportEnabled,
 		GzScanInterval:  p.GzScanInterval.String(),
 		PathOverrides:   p.PathOverrides,
 	}, "", "  ")
@@ -276,11 +284,22 @@ func LoadAcqPolicy(dir string) (AcqPolicy, bool, error) {
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return DefaultAcqPolicy(), false, fmt.Errorf("ingest: 解析采集策略失败: %w", err)
 	}
-	p := AcqPolicy{
-		RulesEnabled:    f.RulesEnabled,
-		RealtimeTail:    f.RealtimeTail,
-		GzImportEnabled: f.GzImportEnabled,
-		PathOverrides:   f.PathOverrides,
+	// 以**默认策略为底**，只覆盖文件中确实存在的键（2026-10-20 审查修正）。
+	// 缺失字段沿用默认值，而不是退化成零值——否则 `{}` 这类合法但不完整的文件会让
+	// RealtimeTail 变 false，等于整节点静默停采。恢复后打一条 Info 带上生效值，
+	// 使「快照把采集关了」在日志上可见。
+	p := DefaultAcqPolicy()
+	if f.RulesEnabled != nil {
+		p.RulesEnabled = *f.RulesEnabled
+	}
+	if f.RealtimeTail != nil {
+		p.RealtimeTail = *f.RealtimeTail
+	}
+	if f.GzImportEnabled != nil {
+		p.GzImportEnabled = *f.GzImportEnabled
+	}
+	if f.PathOverrides != nil {
+		p.PathOverrides = f.PathOverrides
 	}
 	// 周期文本非法时按「关闭」处理：与写入侧的校验口径一致（空/非法 = 关闭），
 	// 且不在加载路径上报错——一个字段坏掉不该让整份策略被丢弃。
