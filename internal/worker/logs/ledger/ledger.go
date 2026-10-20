@@ -1318,6 +1318,25 @@ func (l *Ledger) tryReclaimLocked(e *Entry) (uint64, error) {
 	if ref == nil {
 		// 无恢复分段时：仅当 CanReclaim 在“无 seg”语义下不放行。
 		// 契约要求受管恢复副本证明；没有分段不得回收。
+		//
+		// 但「无分段」不必然等于「存在覆盖洞」（2026-10-20 真机验收修复）：判据是**是否还有待回收前缀**，
+		// 而前缀的上界是**读水位**、不是投递水位 —— 反例见 reclaim_backfill_test.go：
+		// Read=19（4 条全读入）、Delivery=9（只确认前 2 条）、Reclaim=9 时，Reclaim 仍可推进到 Read，
+		// 只是缺确认依据 ⇒ 必须继续报哨兵（否则「未确认数据不得跳过」的 default-deny 被吞掉）。
+		//
+		// 真正的「无事可做」是 Reclaim 已追平**读水位**：读入的全部回收完，没有任何前缀待回收。
+		// 此时无分段是常态（分段在回收后即被消费/裁剪）✓。
+		//
+		// 修前该形态同样返回哨兵，于是 `repairStalledReclaim`（runtime.go）把「无事可做」误判为
+		// 「有洞」，对空区间反复补段：补不出覆盖分段 ⇒ 哨兵每轮重现 ⇒ 无进展自旋。
+		// 生产实测 inst:317 约 34 次/分、位置 7582367 三轮不变、空闲 CPU 18.9%，
+		// 且每轮刷一条 WARN 淹没真实信号。故此处返回成功（幂等无操作）✓。
+		//
+		// 判据取 `>=` 而非 `==`：Restore 侧会把越界的 Reclaim 归一回 Read，
+		// 运行期一旦出现 Reclaim > Read，同样无前缀可回收，一律按「无事可做」收敛，避免再次自旋。
+		if e.Positions.Reclaim >= e.Positions.Read {
+			return e.Positions.Reclaim, nil
+		}
 		// 哨兵（#61-Z-a）："无段覆盖"是**可分类**的一类拒绝 —— 调用方据此判定"存在覆盖洞"并补段，
 		// 而不是靠匹配错误文本 ✗。消息文案逐字保留（既有回归与现场排障都按它定位 ✓）。
 		return e.Positions.Reclaim, fmt.Errorf("%w: no recovery segment covers position %d", ErrReclaimNoSegment, e.Positions.Reclaim)

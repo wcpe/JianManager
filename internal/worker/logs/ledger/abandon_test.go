@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -431,4 +432,64 @@ func TestAbandonAfterFoldKeepsPreciseSpansNotHull(t *testing.T) {
 	lastSpan := folded.FoldSpans[len(folded.FoldSpans)-1]
 	_, coveredReal := led.AbandonmentsCovering(key, lastSpan.From)
 	require.True(t, coveredReal, "真实空洞位置必须有放弃凭据（末段 [%d,%d]）", lastSpan.From, lastSpan.To)
+}
+
+// TestTryReclaimNoOpWhenAlreadyReclaimed 锁定「已回收齐平读水位 ≠ 存在覆盖洞」这条判据。
+//
+// 2026-10-20 真机验收修复：Reclaim 追平 **Read**（读入的全部回收完）后，恢复分段已被消费/裁剪，
+// 「无段覆盖」是常态。修前这里返回哨兵 ErrReclaimNoSegment，令 runtime 的
+// repairStalledReclaim 对空区间反复补段 —— 补不出覆盖分段 ⇒ 哨兵每轮重现 ⇒ 无进展自旋
+// （生产 inst:317 实测约 34 次/分、位置三轮不变、空闲 CPU 18.9%，并每轮刷一条 WARN 淹没真实信号）。
+//
+// 判据必须是 **Read** 而非 Delivery：见 reclaim_backfill_test.go 的反例 —— 只确认了前一部分时
+// Reclaim 仍可推进到 Read，只是缺依据，必须继续报哨兵，不得被本优化吞掉。
+//
+// 转红方式：去掉 tryReclaimLocked 里 `Reclaim >= Read` 的提前返回，本用例第一处
+// require.NoError 立即转红。
+func TestTryReclaimNoOpWhenAlreadyReclaimed(t *testing.T) {
+	led := New()
+	key := keyOf("already-reclaimed", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "already-reclaimed", SourceGeneration: "g1"})
+	require.NoError(t, led.AdvanceRead(key, 100))
+	require.NoError(t, led.AdvanceDurable(key, 100))
+	require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone))
+	// 先让 Reclaim 真正追平 Read：注册一个可放行的恢复分段并回收一次。
+	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
+		SegmentID: "seg-ok", Path: "project://seg-ok", State: logtypes.RecoveryCleaned,
+		CoversFrom: 0, CoversTo: 100,
+	}))
+	if _, err := led.TryReclaim(key); err != nil {
+		t.Fatalf("前置：首次回收应放行，实测 %v", err)
+	}
+	pre, ok := led.Positions(key)
+	require.True(t, ok)
+	require.Equal(t, pre.Read, pre.Reclaim, "前置：Reclaim 必须已追平 Read（%d vs %d）", pre.Reclaim, pre.Read)
+
+	// 进入被测形态：此时若分段已被消费/裁剪，「无段覆盖」但**没有待回收前缀**。
+	// 直接以「无任何恢复分段」复现该形态（与生产中裁剪后的账本一致）。
+	entry := led.Get(key)
+	require.NotNil(t, entry)
+	entry.RecoveryRefs = nil
+
+	// 被测点：无分段 + Reclaim == Read ⇒ 必须是幂等成功，而不是哨兵。
+	pos, err := led.TryReclaim(key)
+	require.NoError(t, err, "Reclaim 已追平 Read 时不得报「无段覆盖」哨兵（那会让调用方对空区间自旋补段）")
+	require.Equal(t, pre.Reclaim, pos, "无事可做时回收位置不得变化")
+
+	// 幂等：重复调用仍须成功且不推进（自旋的根因正是这里每轮都失败）。
+	for i := 0; i < 3; i++ {
+		pos, err = led.TryReclaim(key)
+		require.NoError(t, err, "第 %d 次重复调用仍须是幂等无操作", i+2)
+		require.Equal(t, pre.Reclaim, pos)
+	}
+
+	// 对照：一旦真的出现未回收前缀（Read 前进而 Reclaim 未动），哨兵必须照旧返回——
+	// 这是 #61/#62 补段机制赖以生效的「有洞」形态，不得被本次修复吞掉。
+	require.NoError(t, led.AdvanceRead(key, 250))
+	require.NoError(t, led.AdvanceDurable(key, 250))
+	require.NoError(t, led.RecordDelivery(key, 100, 250, logtypes.DeliveryRequestDone))
+	pos, err = led.TryReclaim(key)
+	require.Error(t, err, "存在未回收前缀时必须继续返回哨兵")
+	require.True(t, errors.Is(err, ErrReclaimNoSegment), "必须是可分类的哨兵，实测 %v", err)
+	require.Equal(t, pre.Reclaim, pos, "被拒时返回的是当前回收位置，不得推进")
 }
