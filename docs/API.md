@@ -3370,7 +3370,7 @@
 - **描述**: 写平台默认（批量键值）
 - **权限**: `settings.write`；写审计
 - **关联 FR**: FR-503
-- **请求**: `{ "values": { "log.acq.rules_enabled": "false", ... } }`。仅接受上述 5 个键，含其它键整体拒绝（422）。值语义逐项校验：布尔项 `true|false`；`gz_scan_interval` **留空 = 未配置（回落 worker.yml 基线）**或正的 Go duration；`path_overrides` 留空或 JSON 对象文本。
+- **请求**: `{ "values": { "log.acq.rules_enabled": "false", ... } }`。仅接受上述 5 个键，含其它键整体拒绝（422）。值语义逐项校验：布尔项 `true|false`；`gz_scan_interval` **留空 = 未配置（回落 worker.yml 基线）**或正的 Go duration；`path_overrides` 留空或 JSON 对象文本，且逐条校验（2026-10-20）：键须为规范的 `inst:<十进制ID>`；值须非空、**非绝对路径**、不含 Windows 盘符/UNC、折叠 `..` 后不得逃出实例工作目录、首尾不得有空白。任一不合返回 422 `BUSINESS_ERROR`。
 - **生效**: 经心跳下发 Worker（`effectiveImmediately=false`）
 
 ### GET /api/v1/nodes/:id/settings/log-acquisition

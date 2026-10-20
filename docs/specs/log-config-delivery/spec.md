@@ -69,9 +69,9 @@
 |---|---|---|---|
 | `log.acq.rules_enabled` | 平台 / Worker | 是否启用规则引擎（FR-502） | `true` |
 | `log.acq.realtime_tail` | 平台 / Worker | 实时采集开关（FR-504） | `true` |
-| `log.acq.gz_import_enabled` | 平台 / Worker | gz 导入开关（FR-504） | `false` |
-| `log.acq.gz_scan_interval` | 平台 / Worker | gz 定时扫描周期（FR-504） | 空（关闭） |
-| `log.acq.path_overrides` | 平台 / Worker | 实例路径覆盖映射（JSON）；值须为**相对实例工作目录**的路径，绝对路径与折叠 `..` 后的逃逸一律拒绝（2026-10-19 裁定） | `{}` |
+| `log.acq.gz_import_enabled` | 平台 / Worker | gz 导入**总开关**（FR-504） | `true`（2026-10-15 定案：默认关会让基线为「开」的存量部署升级后静默失去定时扫描） |
+| `log.acq.gz_scan_interval` | 平台 / Worker | gz 定时扫描周期（FR-504） | 空 = **未配置**，回落该节点 `worker.yml` 的 `log_ingest.archive_scan_interval`（**不是「关闭」**；要停定时扫描请关总开关）。上限约 24 天（协议以 int32 毫秒下发，更长会被截断） |
+| `log.acq.path_overrides` | 平台 / Worker | 实例路径覆盖映射（JSON）。键须为规范的 `inst:<十进制ID>`；值须为**相对实例工作目录**的路径，绝对路径、Windows 盘符/UNC、折叠 `..` 后的逃逸、首尾空白一律拒绝（2026-10-19 裁定 + 2026-10-20 审查补强） | `""`（空串） |
 
 **作用域表达**：
 
@@ -89,7 +89,15 @@ Worker 级：log.acq.<key>@node:<nodeUUID>
 > **代价（如实登记）**：键名带 `@node:<uuid>` 后缀略绕；且节点 UUID 作为键的一部分，
 > 节点删除后需清理（见 §6 风险）。
 
-### 3.1.1 顺带纳入的既有下发项（已确认扩围）
+### 3.1.1 顺带纳入的既有下发项（**仅「面板可配」，不含节点级覆盖**）
+
+> **重要区分（2026-10-20 审查澄清）**：本节说的是这些键**能在设置页配置（平台级）**。
+> 它们**不支持节点级覆盖**——`supportsNodeScope` 只放行 5 个 `log.acq.*`，对
+> `health.*` / `direct_probe.*` 一律返回 false，写 `@node:` 后缀会得到
+> `ErrSettingKeyNotWritable`。理由：这两组的解析器（`HealthScanPolicy` /
+> `DirectProbeTimeouts`）**没有节点形参**，全仓没有第二处节点级合并；放行只会得到
+> 「写入 200 但永不生效」且不产生审计 action 的静默键。实测
+> `PUT /settings {"health.scan_interval@node:<uuid>":"45s"}` 返回 `BUSINESS_ERROR`。
 
 本次一并将「**已在下发但面板不可配**」的项纳入面板（同一套机制，边际成本低）：
 
@@ -215,7 +223,7 @@ Worker 侧将生效配置持久化到数据根（如 `<dataRoot>/etc/log-acquisi
 - **设置页整理范围易失控**：已限定「仅按新功能需要调整」，评审时需守住这条。
 - ~~**节点详情页是新页面**~~ → **已按实现定案处理（2026-10-15）**：`NodesPage` 已是「列表 + 详情」双栏且详情有分段机制，改为新增分段（见 §3.3A 实现定案），不新建页面与路由，既有布局零破坏。
 - **键前缀方案的代价**（§3.1 已登记）：`@node:<uuid>` 后缀使键名略绕；**节点删除后需清理其 Worker 级键** → **已实现（2026-10-15）**：`NodeService.Purge`（彻底清理）在同一事务内删除该节点全部 `@node:<uuid>` 键（`deleteNodeScopedSettings`，按后缀匹配、不误伤其它节点与平台级键）；**软删除/归档不清理**——归档节点可恢复，保留其配置是有价值的。回归：`TestNodeService_Purge_RemovesNodeScopedLogAcqSettings`（含变异验证）。
-- **扩围的边界**（§3.1.1）：`health.*` / `direct_probe.*` 虽已在下发，但其**字段语义与校验规则各自不同**（如 `health.probe_kind` 是枚举、超时是 duration）——纳入面板时须逐项接上各自的 `SettingKey*` 常量与校验分支，**不能只做通用的字符串透传**。（已按此实现：两类键的白名单与校验分支均逐项在位。）
+- **扩围的边界**（§3.1.1）：`health.*` / `direct_probe.*` 虽已在下发，但其**字段语义与校验规则各自不同**（如 `health.probe_kind` 是枚举、超时是 duration）——纳入面板时须逐项接上各自的 `SettingKey*` 常量与校验分支，**不能只做通用的字符串透传**。（已按此实现：两类键的**平台级**白名单与校验分支均逐项在位；节点级覆盖按 §3.1.1 的说明不支持。）
 - ~~**规则升级重建的两处缺口（A3/A6）**~~ → **已修（2026-10-16）**：重建前用只读探针检查「已读未投递残留」（按**投递水位**判定），有残留即**拒绝重建**并把排空交办给既有兜底环（非阻塞——刻意不在持 `registerMu` 时内联投递，避免 2026-10-03「登记被长活拖住」的同型形态）；重建失败时按快照恢复旧绑定与旧源（含账本镜像），恢复失败显式告警且刻意不恢复绑定以便下次登记自愈。连同「索引 `source_aux.config` 快照滞后」一起，三条都在 §7 末尾如实记录。
 
 ---

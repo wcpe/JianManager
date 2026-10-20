@@ -134,7 +134,7 @@ if binding.RelativePathOverride != "" {        // 实例级覆盖优先
 }
 ```
 
-**归档 glob 派生**：`fileArchiveGlob`（`instances.go:224`）当前返回 `Dir(livePath)/*.gz`；bungee 规则的轮转文件不是 `.gz` 而是 `proxy.log.N`，故需按规则返回 glob（`proxy.log.[0-9]*`）。
+**归档 glob 派生**：`fileArchiveGlob`（`instances.go:224`）当前返回 `Dir(livePath)/*.gz`；bungee 规则的轮转文件不是 `.gz` 而是 `proxy.log.N`，故需按规则返回 glob（`proxy.log.[1-9]*`；`[0-9]` 会误吞活跃日志 `.0` 与其 0 字节锁文件）。
 
 ### 3.4 `log_sources` 接线
 
@@ -196,8 +196,10 @@ UUID 则可从 `<dataDir>/etc/node-identity.json` 读到，故这条写法是必
       端到端验证——追加标记行后位置推进 80 字节且该行入库）
 - [x] **Paper 实例采集行为逐字不变**（回归绿：`logs` 全量 19 包通过；
       `TestRegisterInstanceBukkitRuleKeepsHistoricalPaths` 断言路径逐字一致）
-- [x] 实例级覆盖路径生效（`TestRegisterInstanceRelativePathOverridesRule` +
-      `TestRegisterInstanceAbsolutePathOverride` 覆盖相对/绝对两种形态）
+- [x] 实例级覆盖只接受**相对工作目录**的路径（`TestRegisterInstanceRelativePathOverridesRule`
+      验证相对路径生效；`TestRegisterInstanceAbsolutePathOverride` 验证**绝对路径被拒绝**——
+      2026-10-19 用户裁定「限定在工作目录内」，2026-10-20 起 CP 写入侧、Worker 登记侧、
+      `instanceLivePath` 解析侧三层校验）
 - [x] 新实例注册即自动匹配正确规则（CP 侧 `deriveLogRuleKey` 16 例验证；
       `TestRegisterInstanceBungeeRuleUsesRootProxyLog`）
 - [x] 旧 CP 兼容：省略新字段时回退 bukkit
