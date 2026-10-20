@@ -20,7 +20,7 @@ test('FR-058 列表多选 → 批量操作栏 → 批量重启结果反馈 + 强
 
   // 列表视图表格就位，目标运行中实例行可见（行复选框 aria-label = 实例名）。
   const rowCheckbox = page.getByRole('checkbox', { name: 'server-0005' }).first()
-  await expect(rowCheckbox).toBeVisible({ timeout: 10_000 })
+  await expect(rowCheckbox).toBeVisible()
   await rowCheckbox.check()
 
   // 选中后浮现批量操作栏，展示已选计数。
@@ -42,7 +42,6 @@ test('FR-058 列表多选 → 批量操作栏 → 批量重启结果反馈 + 强
 
   // 响应成功后再断言结果反馈与选择清理。
   await expect(page.locator('[data-sonner-toast]').filter({ hasText: /批量完成：成功 \d+/ }).first()).toBeVisible({
-    timeout: 10_000,
   })
   await expect(rowCheckbox).not.toBeChecked()
   await rowCheckbox.check()

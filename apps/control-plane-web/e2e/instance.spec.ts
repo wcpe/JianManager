@@ -70,7 +70,7 @@ test.describe('实例生命周期（mock 模式，FR-211）', () => {
     await stopBtn.click()
 
     // 联动：状态翻到「停止」，主操作改为「启动」（停止按钮消失）。
-    await expect(cardStatus(card)).toHaveText('停止', { timeout: 10_000 })
+    await expect(cardStatus(card)).toHaveText('停止')
     await expect(card.getByRole('button', { name: '启动', exact: true })).toBeVisible()
     await expect(card.getByRole('button', { name: '停止', exact: true })).toHaveCount(0)
   })
@@ -87,7 +87,7 @@ test.describe('实例生命周期（mock 模式，FR-211）', () => {
     await startBtn.click()
 
     // 联动：状态翻到「运行」，主操作出现「停止」（启动按钮消失）。
-    await expect(cardStatus(card)).toHaveText('运行', { timeout: 10_000 })
+    await expect(cardStatus(card)).toHaveText('运行')
     await expect(card.getByRole('button', { name: '停止', exact: true })).toBeVisible()
     await expect(card.getByRole('button', { name: '启动', exact: true })).toHaveCount(0)
   })
@@ -111,12 +111,12 @@ test.describe('实例生命周期（mock 模式，FR-211）', () => {
     await page.getByRole('button', { name: '创建', exact: true }).click()
 
     // 提交成功后回到列表。
-    await expect(page.locator('[data-page="instances"]')).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('[data-page="instances"]')).toBeVisible()
 
     // 1000+ mock 下列表只渲染可视窗口；用搜索收敛到新建项，避免按全集滚动找卡片。
     await page.getByRole('searchbox', { name: '搜索实例' }).fill(name)
 
     // 列表失效重取后新实例卡片出现（创建后默认 STOPPED）。
-    await expect(page.getByRole('button', { name, exact: true })).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
   })
 })

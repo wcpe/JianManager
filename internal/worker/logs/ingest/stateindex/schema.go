@@ -93,6 +93,9 @@ CREATE TABLE IF NOT EXISTS projection (
   updated_at INTEGER NOT NULL
 );
 -- 实例绑定（stdout/stderr 采集所依赖）
+-- rule_key / relative_path 为 FR-502 增量列：日志采集规则名与实例级路径覆盖。
+-- 必须持久化——否则 Worker 重启后规则丢失，BungeeCord 等非 bukkit 布局的实例
+-- 会退回 logs/latest.log 而采集不到日志。历史库无此两列，由 addColumns 补列。
 CREATE TABLE IF NOT EXISTS instance_binding (
   uuid       TEXT PRIMARY KEY,
   namespace  TEXT NOT NULL,
@@ -195,12 +198,16 @@ type ProjectionRow struct {
 }
 
 // InstanceRow 是 instance_binding 表的一行。Namespace 对应 InstanceBinding.TargetID。
+// RuleKey / RelativePath 为 FR-502 增量：日志采集规则名与实例级路径覆盖，
+// 必须持久化以免 Worker 重启后规则丢失（否则非 bukkit 布局的实例采集不到日志）。
 type InstanceRow struct {
-	UUID       string
-	Namespace  string
-	Generation string
-	Mode       string
-	WorkDir    string
+	UUID         string
+	Namespace    string
+	Generation   string
+	Mode         string
+	WorkDir      string
+	RuleKey      string
+	RelativePath string
 }
 
 // AuxRow 是 source_aux 表的一行：spec 五表之外的附属数据。
@@ -277,7 +284,7 @@ var loadColumns = [tableCount][]string{
 	tblPosition:        {"key", "read_pos", "durable_pos", "reclaim_pos", "acquire_paused", "pause_reason"},
 	tblGap:             {"key", "id", "start_pos", "end_pos", "reason", "detail", "resolved", "resolution"},
 	tblProjection:      {"key", "generation", "events_stored_through", "pending", "updated_at"},
-	tblInstanceBinding: {"uuid", "namespace", "generation", "mode", "work_dir"},
+	tblInstanceBinding: {"uuid", "namespace", "generation", "mode", "work_dir", "rule_key", "relative_path"},
 	tblSourceAux:       {"key", "config", "payload"},
 	tblSourceWAL:       {"key", "seq", "event_id", "record_start", "record_end", "appended", "durable", "replay", "body"},
 	tblDeliveryBatch:   {"key", "ordinal", "start_pos", "end_pos", "state"},
@@ -379,11 +386,12 @@ var specs = [tableCount]tableSpec{
 	tblInstanceBinding: {
 		name:      "instance_binding",
 		keyCols:   []string{"uuid"},
-		mirrorSQL: "SELECT uuid, namespace, generation, mode, work_dir FROM instance_binding",
-		upsert: `INSERT INTO instance_binding (uuid, namespace, generation, mode, work_dir)
-			VALUES (?, ?, ?, ?, ?)
+		mirrorSQL: "SELECT uuid, namespace, generation, mode, work_dir, rule_key, relative_path FROM instance_binding",
+		upsert: `INSERT INTO instance_binding (uuid, namespace, generation, mode, work_dir, rule_key, relative_path)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(uuid) DO UPDATE SET namespace=excluded.namespace, generation=excluded.generation,
-				mode=excluded.mode, work_dir=excluded.work_dir`,
+				mode=excluded.mode, work_dir=excluded.work_dir,
+				rule_key=excluded.rule_key, relative_path=excluded.relative_path`,
 		deleteStmt: "DELETE FROM instance_binding WHERE uuid = ?",
 		orderBy:    "uuid",
 	},

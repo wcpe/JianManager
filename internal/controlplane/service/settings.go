@@ -1,9 +1,12 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/mail"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +64,17 @@ const (
 	SettingKeyHealthCircuitWindow       = "health.circuit_breaker_window"
 	SettingKeyHealthStartupWarmup       = "health.startup_warmup"
 	SettingKeyHealthSelfHealMaxRestarts = "health.self_heal_max_restarts"
+	// === FR-503 日志采集配置（平台默认；Worker 级覆盖见 NodeScopedSettingKey）===
+	// 语义与 Worker 侧 worker.yml 基线一致：规则引擎与实时采集默认开。
+	// gz 导入总开关**默认开**（2026-10-15 定案）：默认关会让 worker.yml 基线为「开」的
+	// 存量部署在升级后静默失去定时扫描；定时扫描的**周期**则默认留空 = 未配置，
+	// 交由各节点 worker.yml 的 archive_scan_interval 决定（不是「关闭」）。
+	SettingKeyLogAcqRulesEnabled   = "log.acq.rules_enabled"
+	SettingKeyLogAcqRealtimeTail   = "log.acq.realtime_tail"
+	SettingKeyLogAcqGzImport       = "log.acq.gz_import_enabled"
+	SettingKeyLogAcqGzScanInterval = "log.acq.gz_scan_interval"
+	// SettingKeyLogAcqPathOverrides 实例级日志路径覆盖映射（JSON 对象文本，FR-502 §3.4）。
+	SettingKeyLogAcqPathOverrides = "log.acq.path_overrides"
 	// SettingKeyBackupRetentionDays 默认备份保留天数（整数）。CP 后台巡检据此裁剪超期备份（FR-063）。
 	SettingKeyBackupRetentionDays = "backup.retention_days"
 	// SettingKeyQuotaEnforceInterval 运行期配额强制巡检周期（Go duration，FR-467）。默认 60s（M-2）。
@@ -303,6 +317,13 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		s.editableItem(SettingKeyHealthCircuitWindow, s.defaultValue(SettingKeyHealthCircuitWindow), overrides, false),
 		s.editableItem(SettingKeyHealthStartupWarmup, s.defaultValue(SettingKeyHealthStartupWarmup), overrides, false),
 		s.editableItem(SettingKeyHealthSelfHealMaxRestarts, s.defaultValue(SettingKeyHealthSelfHealMaxRestarts), overrides, false),
+		// 日志采集（FR-503）：经心跳下发 Worker，Worker 侧生效（非 CP 内即时生效）。
+		// 这 5 项是平台默认值；单个 Worker 的覆盖在节点详情页配置（键加 `@node:<uuid>` 后缀）。
+		s.editableItem(SettingKeyLogAcqRulesEnabled, s.defaultValue(SettingKeyLogAcqRulesEnabled), overrides, false),
+		s.editableItem(SettingKeyLogAcqRealtimeTail, s.defaultValue(SettingKeyLogAcqRealtimeTail), overrides, false),
+		s.editableItem(SettingKeyLogAcqGzImport, s.defaultValue(SettingKeyLogAcqGzImport), overrides, false),
+		s.editableItem(SettingKeyLogAcqGzScanInterval, s.defaultValue(SettingKeyLogAcqGzScanInterval), overrides, false),
+		s.editableItem(SettingKeyLogAcqPathOverrides, s.defaultValue(SettingKeyLogAcqPathOverrides), overrides, false),
 		s.editableItem(SettingKeyBackupRetentionDays, s.defaultValue(SettingKeyBackupRetentionDays), overrides, false),
 		// 运行期配额强制（FR-467）：CP 后台巡检读取生效值（即时生效，下一拍用新值）。
 		s.editableItem(SettingKeyQuotaEnforceInterval, s.defaultValue(SettingKeyQuotaEnforceInterval), overrides, true),
@@ -369,7 +390,59 @@ func (s *SettingsService) Update(values map[string]string) error {
 			return err
 		}
 	}
+	return s.writeValues(values)
+}
 
+// UpdateNodeScoped 写入**某节点的**平台键覆盖（FR-503），是节点级覆盖的唯一写入口。
+//
+// 为什么单独成一个方法而不复用 Update（2026-10-20 审查修正）：`Update` 的键白名单
+// （isWritableSettingKey）不区分「平台级端点」与「节点级端点」，两者共用会让
+// `PUT /api/v1/settings`（只要求 settings.write、且不写审计）也能写 `@node:` 键，
+// 从而绕过节点级门禁静默停掉任意节点的采集。现在 `@node:` 后缀在这里统一拼接，
+// Update 侧对带后缀的键一律拒绝，平台端点物理上写不到节点键。
+//
+// 参数 keys 是**基础键**（不带后缀）；nodeUUID 必须非空。
+func (s *SettingsService) UpdateNodeScoped(nodeUUID string, values map[string]string) error {
+	if strings.TrimSpace(nodeUUID) == "" {
+		return fmt.Errorf("%w: 节点标识为空", ErrSettingValueInvalid)
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	scoped := make(map[string]string, len(values))
+	for baseKey, val := range values {
+		// 基础键必须是确有节点级消费方的键（日志采集 5 个），否则写进去永远不生效。
+		if !supportsNodeScope(baseKey) {
+			return fmt.Errorf("%w: %s 不支持节点级覆盖", ErrSettingKeyNotWritable, baseKey)
+		}
+		// 调用方若已带后缀则拒绝，避免拼出 `x@node:a@node:b` 这类永不命中的键。
+		if strings.Contains(baseKey, nodeScopedSettingSuffix) {
+			return fmt.Errorf("%w: %s 不应自带节点后缀", ErrSettingValueInvalid, baseKey)
+		}
+		full := NodeScopedSettingKey(baseKey, nodeUUID)
+		if err := validateSettingValue(full, val); err != nil {
+			return err
+		}
+		scoped[full] = val
+	}
+	return s.writeValues(scoped)
+}
+
+// isWindowsAbsPath 判定 Windows 形态的绝对路径（盘符或 UNC）。
+//
+// 为什么 CP 要单独判（2026-10-20 审查）：CP 跑 Linux、节点可能跑 Windows 时，
+// `filepath.IsAbs` 在 CP 上对 `C:\\logs\\a.log` / `\\server\share\x` 返回 false，
+// 校验放行、返回 200；到了 Windows 节点上 `filepath.IsAbs` 为 true，Worker 的
+// validateInstanceRelativePath 直接拒绝登记 —— 用户看到的是「保存成功但实例日志登记失败」。
+func isWindowsAbsPath(p string) bool {
+	if strings.HasPrefix(p, `\\`) {
+		return true
+	}
+	return len(p) >= 2 && ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':'
+}
+
+// writeValues 是 Update / UpdateNodeScoped 共用的落库 + 应用实现（调用方已完成校验）。
+func (s *SettingsService) writeValues(values map[string]string) error {
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		for key, val := range values {
 			rec := model.PlatformSetting{Key: key, Value: val, UpdatedAt: time.Now()}
@@ -382,14 +455,9 @@ func (s *SettingsService) Update(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-
-	// 落库成功后应用可即时生效项（CP 内读取点）。
 	for key, val := range values {
 		s.applyOverride(key, val)
 	}
-
-	// 本批涉及出站代理键 → 以当前生效代理（DB 覆盖 > yaml > env）重建 CP 出站持有者（FR-185/ADR-043）。
-	// 单独于 applyOverride：重建不依赖单个键值、而依赖「全部覆盖叠加后的生效代理」，故落库后整体算一次。
 	if _, ok := values[SettingKeyProxyURL]; ok {
 		s.rebuildProxy()
 	} else if _, ok := values[SettingKeyProxyNoProxy]; ok {
@@ -486,7 +554,9 @@ func readOnlyItem(key, value string, sensitive bool) SettingItem {
 // defaultValue 返回某键的基线默认值（DB 无覆盖时的生效值）。
 // 单点定义，供 Get（展示）与 EffectiveValue（消费）共享，避免默认值在两处漂移。
 func (s *SettingsService) defaultValue(key string) string {
-	switch key {
+	// Worker 级覆盖键按基础键取默认值（FR-503）：调用方可能传入带 `@node:` 后缀的键。
+	baseKey, _, _ := nodeScopeSplit(key)
+	switch baseKey {
 	case SettingKeyLogLevel:
 		return s.cfg.Log.Level
 	case SettingKeyDebugMode:
@@ -521,6 +591,20 @@ func (s *SettingsService) defaultValue(key string) string {
 		return "5m"
 	case SettingKeyHealthSelfHealMaxRestarts:
 		return "3"
+	// 日志采集（FR-503）：默认与 Worker 侧基线一致——规则引擎与实时采集默认开；
+	// gz 导入**总开关默认开、定时扫描周期默认空**（二者组合的效果仍是「默认不扫描」，
+	// 因为生效周期取自 worker.yml 的 log_ingest.archive_scan_interval）；路径覆盖默认空。
+	//
+	// 为什么总开关默认开（2026-10-15 定案）：它同时是「是否回落 worker.yml 基线」的闸门——
+	// 若默认关，配了 `log_ingest.archive_scan_interval` 的既有部署升级后会**静默失去定时扫描**
+	// （Worker 侧折算在总开关处短路，且不打任何日志）。默认开 + 周期空既保持"默认不扫描"的
+	// 保守行为，又让基线回落可达。
+	case SettingKeyLogAcqRulesEnabled, SettingKeyLogAcqRealtimeTail, SettingKeyLogAcqGzImport:
+		return "true"
+	case SettingKeyLogAcqGzScanInterval:
+		return ""
+	case SettingKeyLogAcqPathOverrides:
+		return ""
 	case SettingKeyBackupRetentionDays:
 		return strconv.Itoa(s.cfg.LogStore.RetentionDays)
 	case SettingKeyQuotaEnforceInterval:
@@ -622,9 +706,61 @@ func (s *SettingsService) applyOverride(key, val string) {
 	}
 }
 
-// isWritableSettingKey 报告键是否在可写白名单内。
+// nodeScopeSplit 拆分 Worker 级覆盖键，返回基础键、节点 UUID 与「是否带作用域后缀」（FR-503）。
+//
+// 键形态 `<基础键>@node:<nodeUUID>`（构造侧见 NodeScopedSettingKey）。
+// scoped 为 true 但 nodeUUID 为空表示写了 `x@node:` 这类残缺键——调用方应拒绝而非
+// 当作平台键处理（否则「想配节点级」会静默变成「配了平台级」，最难排查的一类错）。
+func nodeScopeSplit(key string) (baseKey, nodeUUID string, scoped bool) {
+	if i := strings.Index(key, nodeScopedSettingSuffix); i >= 0 {
+		return key[:i], key[i+len(nodeScopedSettingSuffix):], true
+	}
+	return key, "", false
+}
+
+// supportsNodeScope 报告某基础键是否支持 Worker 级覆盖（FR-503）。
+//
+// 判据是「**确有节点级消费方**」：只有日志采集的 5 个键会被按节点合并后下发
+// （LogAcqPolicy(nodeUUID) 经心跳下发，节点级覆盖真会生效），故这里直接以
+// LogAcqPlatformKeys() 为准——它同时也是合并实现（mergeLogAcqValues）的键集合，
+// 二者不会再各自漂移出「放行了却没人读」的差集。
+//
+// 为什么不能按「是否经心跳下发」放行：health.* / direct_probe.* 也随心跳下发，但它们的
+// 解析器（HealthScanPolicy / DirectProbeTimeouts）**没有节点形参**，全仓没有第二处
+// 节点级合并；放行只会得到一条「写入 200 但永不生效」的静默键，且该写入路径不产生
+// 审计 action（静默 + 无痕）——正是本函数要防的情形。
+// 待这两类各自的节点级消费方就位（spec §3.1.1 登记为待办）再扩围。
+func supportsNodeScope(baseKey string) bool {
+	for _, key := range LogAcqPlatformKeys() {
+		if key == baseKey {
+			return true
+		}
+	}
+	return false
+}
+
+// isWritableSettingKey 报告键是否在**平台级**可写白名单内。
+//
+// 节点级覆盖（`<平台键>@node:<uuid>`）**刻意不在此放行**（2026-10-20 审查修正）：
+// 本函数是 `SettingsService.Update` 的守卫，而 `Update` 有两个调用方——
+//   - 节点端点 `PUT /nodes/:id/settings/log-acquisition`（requirePlatformAdmin + 审计）
+//   - 通用端点 `PUT /api/v1/settings`（**只要求 settings.write，且不写审计**）
+//
+// 若在这里放行 `@node:` 键，任何持 `settings.write` 的自定义角色（可以完全没有节点权限）
+// 就能经通用端点把任意节点的 `log.acq.realtime_tail` 置 false —— 单向停掉该节点的实时采集，
+// 既越过了节点级门禁，也不留任何审计痕迹。这正是 supportsNodeScope 的注释自称要防的
+// 「静默 + 无痕」，只是入口从 health.* 换成了 log.acq.*。
+//
+// 节点级写入的唯一入口是 UpdateNodeScoped（内部加后缀），平台端点因此物理上写不到节点键。
 func isWritableSettingKey(key string) bool {
-	switch key {
+	baseKey, _, scoped := nodeScopeSplit(key)
+	if scoped {
+		// 带节点后缀的键一律不属平台级白名单，交由 UpdateNodeScoped 处理。
+		return false
+	}
+	switch baseKey {
+	}
+	switch baseKey {
 	case SettingKeyLogLevel, SettingKeyDebugMode,
 		SettingKeyJDKMirrorTemurin, SettingKeyJDKMirrorCorretto, SettingKeyJDKMirrorZulu,
 		SettingKeyRuntimeMirrorNodeJS,
@@ -638,6 +774,8 @@ func isWritableSettingKey(key string) bool {
 		SettingKeyHealthSuspicionThreshold, SettingKeyHealthAction,
 		SettingKeyHealthCircuitThreshold, SettingKeyHealthCircuitWindow,
 		SettingKeyHealthStartupWarmup, SettingKeyHealthSelfHealMaxRestarts,
+		SettingKeyLogAcqRulesEnabled, SettingKeyLogAcqRealtimeTail,
+		SettingKeyLogAcqGzImport, SettingKeyLogAcqGzScanInterval, SettingKeyLogAcqPathOverrides,
 		SettingKeyProxyURL, SettingKeyProxyNoProxy,
 		SettingKeyOrphanGracePeriod, SettingKeyOrphanAutoDispose,
 		SettingKeyBotReclaimGracePeriod, SettingKeyBotReclaimAuto,
@@ -651,7 +789,9 @@ func isWritableSettingKey(key string) bool {
 
 // validateSettingValue 按键的语义校验写入值。
 func validateSettingValue(key, val string) error {
-	switch key {
+	// Worker 级覆盖键按基础键走同一套校验（FR-503）——后缀只表达作用域，不改变值语义。
+	baseKey, _, _ := nodeScopeSplit(key)
+	switch baseKey {
 	case SettingKeyLogLevel:
 		if !config.ValidLogLevel(val) {
 			return fmt.Errorf("%w: 日志级别须为 debug|info|warn|error", ErrSettingValueInvalid)
@@ -758,6 +898,87 @@ func validateSettingValue(key, val string) error {
 	case SettingKeyHealthProbeKind:
 		if val != "" && val != "tcp" && val != "http" {
 			return fmt.Errorf("%w: 探针类型须为 tcp|http 或留空(auto)", ErrSettingValueInvalid)
+		}
+	// 日志采集（FR-503）。逐项语义校验，不做通用字符串透传——否则非法值会在心跳下发后
+	// 被 Worker 静默回退默认，用户以为配上了却不生效。
+	case SettingKeyLogAcqRulesEnabled, SettingKeyLogAcqRealtimeTail, SettingKeyLogAcqGzImport:
+		if val != "true" && val != "false" {
+			return fmt.Errorf("%w: 日志采集开关须为 true|false", ErrSettingValueInvalid)
+		}
+	case SettingKeyLogAcqGzScanInterval:
+		// 空值 = **未配置**，由该节点 worker.yml 的 `log_ingest.archive_scan_interval` 决定
+		// （2026-10-20 审查修正：此前注释与错误消息都把它说成「关闭」，与 wire 契约相反——
+		// proto 明确「0 = 未配置 ⇒ 回落基线」，Worker 的 ArchiveScanInterval() 也只在 >0 时
+		// 才用本值。说成「关闭」会让运维以为已停扫，实际仍按基线周期在扫；真正能停掉定时
+		// 扫描的只有把 log.acq.gz_import_enabled 置 false）。
+		//
+		// 非空须为正 duration，且**有上界**：下发侧是 int32 毫秒
+		// （grpc/handler.go 的 int32(p.GzScanInterval/time.Millisecond)），超过约 24.8 天会
+		// 整数截断——`720h`(30天) 截成负数 ⇒ Worker 归零当「未配置」；`1200h`(50天) 截成
+		// 25032704ms ≈ 6.96 小时 ⇒ 被当成合法周期照用，用户配 50 天却每 7 小时扫一次。
+		if strings.TrimSpace(val) != "" {
+			d, err := time.ParseDuration(val)
+			if err != nil || d <= 0 {
+				return fmt.Errorf("%w: gz 扫描周期须留空（交由该节点 worker.yml 基线决定；要停止定时扫描请关闭 gz 导入总开关）或为正的 Go duration（如 1h）", ErrSettingValueInvalid)
+			}
+			if d/time.Millisecond > math.MaxInt32 {
+				return fmt.Errorf("%w: gz 扫描周期上限约 24 天（协议以 int32 毫秒下发，更长会被截断成错误值）", ErrSettingValueInvalid)
+			}
+			// 下界：不足 1ms 会被截断成 0，语义变回「未配置」。
+			if d < time.Millisecond {
+				return fmt.Errorf("%w: gz 扫描周期不得小于 1ms（协议以毫秒下发，更短会被截断成 0 = 未配置）", ErrSettingValueInvalid)
+			}
+		}
+	case SettingKeyLogAcqPathOverrides:
+		// 空值 = 无覆盖。非空须为 JSON 对象文本（值一律字符串），供 Worker 直接解析。
+		if strings.TrimSpace(val) != "" {
+			var m map[string]string
+			if err := json.Unmarshal([]byte(val), &m); err != nil {
+				return fmt.Errorf(`%w: 路径覆盖须为 JSON 对象文本（形如 {"inst:1":"proxy.log.0"}）`, ErrSettingValueInvalid)
+			}
+			// 逐条校验路径本身（2026-10-19，安全约束）：必须是相对实例工作目录的路径，
+			// 且折叠 `..` 后不得逃出。放行绝对路径等于允许把任意实例的日志源指向宿主机
+			// 任意可读文件（/etc/shadow 之类），Worker 会照读并入库。
+			// 键也校验：必须是 `inst:<id>` 形态，否则该覆盖永远不会命中任何实例，
+			// 静默失效比报错更难排查。键的校验与 Worker 侧 policy 的 targetID 语义一致。
+			for target, p := range m {
+				// 键必须是**规范**的 `inst:<十进制ID>`（2026-10-20 审查修正）。
+				// 只查前缀会放行 `inst:abc`、`inst: 1`、`inst:1/2`、全角 `inst:１` 等变体：
+				// Worker 侧按 binding.TargetID（恒为 `inst:<数字>`）精确匹配，这些键永远命中
+				// 不到任何实例——与「写入 200 但永不生效」同类，且没有报错可循。
+				// 规范化写法照 router/log_runtime.go 的 ParseUint + 回拼比对。
+				idText, ok := strings.CutPrefix(target, "inst:")
+				if !ok || idText == "" {
+					return fmt.Errorf("%w: 路径覆盖的键须为 inst:<实例ID>（got %q）", ErrSettingValueInvalid, target)
+				}
+				id, convErr := strconv.ParseUint(idText, 10, 64)
+				if convErr != nil || target != fmt.Sprintf("inst:%d", id) {
+					return fmt.Errorf("%w: 路径覆盖的键须为规范的 inst:<十进制实例ID>（got %q）", ErrSettingValueInvalid, target)
+				}
+				trimmed := strings.TrimSpace(p)
+				if trimmed == "" {
+					return fmt.Errorf("%w: 路径覆盖的值不能为空（%s）", ErrSettingValueInvalid, target)
+				}
+				// 首尾空白直接拒绝而不静默 trim：validateSettingValue 只校验、不回写规范值，
+				// 「校验时 trim、落库仍是原串」会让 Worker 拼出带空格的路径而找不到文件，
+				// 表现为「保存成功但查不到数据」。与 github.token 的「含空白整体拒绝」同口径。
+				if trimmed != p {
+					return fmt.Errorf("%w: 路径覆盖的值首尾不得有空白（%s = %q）", ErrSettingValueInvalid, target, p)
+				}
+				if filepath.IsAbs(filepath.FromSlash(trimmed)) {
+					return fmt.Errorf("%w: 路径覆盖须为相对实例工作目录的路径，不接受绝对路径（%s = %q）", ErrSettingValueInvalid, target, p)
+				}
+				// Windows 形态（盘符 / UNC）在 Linux 的 CP 上 IsAbs 为 false，但下发给
+				// Windows 节点时会被 Worker 判为绝对路径并拒绝登记——届时表现为
+				// 「保存成功、实例日志登记失败」。这里提前拒掉。
+				if isWindowsAbsPath(trimmed) {
+					return fmt.Errorf("%w: 路径覆盖不支持 Windows 盘符或 UNC 路径（%s = %q）", ErrSettingValueInvalid, target, p)
+				}
+				clean := filepath.Clean(filepath.FromSlash(trimmed))
+				if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+					return fmt.Errorf("%w: 路径覆盖不得逃出实例工作目录（%s = %q）", ErrSettingValueInvalid, target, p)
+				}
+			}
 		}
 	case SettingKeyBackupRetentionDays:
 		n, err := strconv.Atoi(val)

@@ -4,7 +4,8 @@
  * 覆盖：
  * - partial/离线覆盖 → 横幅可见，失败不得呈空成功；
  * - resolveExportDownloadAffordance 阻断 → 导出按钮禁用；
- * - sourceTag=legacy → Legacy 徽标；404 → 降级 legacy 视图 + 横幅；
+ * - sourceTag=legacy → Legacy 徽标；404 → 横幅说明服务不可达，且**不降级**（本视图列表为空，
+ *   经典 /logs 的行不再冒充本视图的内容；要看存量日志走「更多 → Legacy 只读」）；
  * - ErrFederatedNotReady → 联邦未就绪说明，空结果不当成功。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -161,7 +162,7 @@ describe('LogsPage × logs-federation（FR-482）', () => {
     expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent('含切换前的历史数据')
   })
 
-  it('④ 联邦 API 404 → 降级 legacy 视图 + 横幅，经典表格仍渲染', async () => {
+  it('④ 联邦 API 404 → 横幅说明服务不可达，且不拿经典表格的行冒充本视图', async () => {
     loginMockUser()
     server.use(
       http.get(API('/logs/federation'), () =>
@@ -170,19 +171,27 @@ describe('LogsPage × logs-federation（FR-482）', () => {
     )
 
     renderWithProviders(<LogsPage />)
-    // 表格仍走经典 /logs。
-    expect(await screen.findByText(/federation-seed-log-line/)).toBeInTheDocument()
     const banner = await screen.findByTestId('logs-coverage-banner')
     expect(banner.dataset.degraded).toBe('true')
     // 404 属「接口不可达」而非「功能未启用」，文案不得误导用户去开启。
-    expect(screen.getByTestId('logs-coverage-title')).toHaveTextContent(
-      /实时日志查询服务暂不可用|回退平台与历史日志/,
-    )
+    const title = screen.getByTestId('logs-coverage-title')
+    expect(title).toHaveTextContent('实时日志查询服务暂不可用')
+    expect(title).not.toHaveTextContent('未启用')
     expect(await screen.findByTestId('logs-source-tag')).toHaveTextContent('Legacy')
-    // 降级路径保留经典导出（非联邦下载门禁）。
+    // 查询服务不可用 → 本视图就是没有数据：经典 /logs 的种子行（见 stubBaseHandlers 桩）不得渲染。
+    // 若它们出现，用户会把平台/历史日志读成「节点/实例日志」，即静默换源式误导。
     await waitFor(() =>
-      expect(screen.getByTestId('logs-export-trigger')).not.toBeDisabled(),
+      expect(screen.queryByText(/federation-seed-log-line/)).not.toBeInTheDocument(),
     )
+    // 空列表也不得呈成功空态（否则等于宣称「查过且确实没有」）。
+    expect(await screen.findByTestId('logs-empty-state')).toHaveAttribute(
+      'data-empty-success',
+      'false',
+    )
+    expect(screen.queryByText('暂无日志')).not.toBeInTheDocument()
+    // 经典导出同步收回：它导出的是平台日志，与当前视图无关（同「静默换源」的误导）。
+    expect(screen.getByTestId('logs-export-trigger')).toBeDisabled()
+    expect(banner.dataset.exportAllowed).toBe('false')
   })
 
   it('Legacy 只读页签不与联邦集合拼接，并关闭导出和实时跟随', async () => {
@@ -857,5 +866,126 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 		await waitFor(() => expect(classicCalls).toBeGreaterThan(0))
 		expect(federationCalls).toBe(federationBefore)
 		expect(screen.queryByText('federation-seed-log-line')).not.toBeInTheDocument()
+	})
+
+	/**
+	 * 回归（2026-10-19，补 M-1 缺口）：级别筛选必须真正下发到联邦请求。
+	 *
+	 * 原 LogsPage.dom.test.tsx 覆盖过「级别筛选 error → 仅错误行保留」，该文件已按用户裁定
+	 * 删除；复核后这是仅剩的两处无守卫行为之一（另一处是深链 instanceId）。级别 pill 是
+	 * 用户直接可感的控件，改坏后若不红，只能靠人工发现。
+	 */
+	it('⑯ 点击级别 pill 后 level 参数下发到联邦请求', async () => {
+		loginMockUser()
+		const levelCalls: string[] = []
+		server.use(
+			http.get(API('/logs/federation'), ({ request }) => {
+				const query = new URL(request.url).searchParams
+				levelCalls.push(query.get('level') ?? '')
+				return HttpResponse.json({
+					sourceTag: 'federated',
+					items: seedLogsPage.items,
+					coverage: { complete: true, partial_reasons: [], targets: [] },
+					quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+					view: { view_id: 'level-view' },
+				})
+			}),
+		)
+		renderWithProviders(<LogsPage />)
+		await screen.findByText('federation-seed-log-line')
+
+		const user = userEvent.setup()
+		// pill 文案由 logs.level_error 提供（「错误」）。
+		await user.click(screen.getByRole('button', { name: '错误' }))
+		await waitFor(() => expect(levelCalls).toContain('error'), {
+			message: '点击「错误」后 level=error 必须出现在联邦请求里',
+		})
+
+	})
+
+	/**
+	 * 回归（2026-10-19，补 M-1 缺口）：FR-345 深链的 instanceId 必须一路带到联邦请求。
+	 *
+	 * 深链（如从实例详情跳「该实例日志」）依赖 URL 上的 instanceId；若它在中途被丢掉，
+	 * 用户会看到全平台日志而不是该实例的日志——错误不报、数据看似正常，最难发现。
+	 */
+	it('⑰ FR-345 深链 instanceId 传递到联邦请求，且切换级别后仍保留', async () => {
+		loginMockUser()
+		const seen: URLSearchParams[] = []
+		server.use(
+			http.get(API('/logs/federation'), ({ request }) => {
+				const query = new URL(request.url).searchParams
+				seen.push(query)
+				return HttpResponse.json({
+					sourceTag: 'federated',
+					items: seedLogsPage.items,
+					coverage: { complete: true, partial_reasons: [], targets: [] },
+					quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+					view: { view_id: 'deep-link-view' },
+				})
+			}),
+		)
+		renderWithProviders(<LogsPage />, { route: '/logs?instanceId=2' })
+		await screen.findByText('federation-seed-log-line')
+
+		await waitFor(() => {
+			const last = seen[seen.length - 1]
+			expect(last?.get('instanceId')).toBe('2')
+		}, { message: '深链 instanceId 必须下发到联邦请求' })
+
+		// 改级别不得把 instanceId 丢掉（筛选条件是叠加而非替换）。
+		const user = userEvent.setup()
+		await user.click(screen.getByRole('button', { name: '错误' }))
+		await waitFor(() => {
+			const last = seen[seen.length - 1]
+			expect(last?.get('instanceId')).toBe('2')
+			expect(last?.get('level')).toBe('error')
+		}, { message: '切换级别后 instanceId 与 level 必须同时保留' })
+	})
+
+	/**
+	 * 回归（2026-10-19，评审复核纠正）：进入 Legacy **保留** nodeId / instanceId 筛选。
+	 *
+	 * 这条用例原本断言相反（进入 Legacy 时清除筛选），依据是「平台与历史日志不带这两个维度」。
+	 * 该前提经核对为错：Legacy 集合是 `legacyLogSources = [LogSourceInstance, LogSourceWorker]`
+	 * （internal/controlplane/service/log_cutover.go:15-18），平台自身日志根本不在其中；而实例与
+	 * Worker 行的 `node_id` 非零（model.Log.NodeID 注释：「实例/Worker 日志非零」），
+	 * `applyFilter` 也确实按它下推 SQL（internal/controlplane/service/log.go:395-397）。
+	 * 所以 nodeId/instanceId 在 Legacy 上是有意义的条件，清掉等于把用户选定的范围放大成
+	 * 「全部实例 + 全部 Worker」，属于替用户改查询。
+	 */
+	it('⑱ 进入 Legacy 视图时保留 nodeId / instanceId 筛选', async () => {
+		const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
+		loginMockUser(`mock.${payload}.sig`)
+		const legacyCalls: URLSearchParams[] = []
+		server.use(
+			http.get(API('/logs/federation'), () =>
+				HttpResponse.json({
+					sourceTag: 'federated',
+					items: seedLogsPage.items,
+					coverage: { complete: true, partial_reasons: [], targets: [] },
+					quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
+					view: { view_id: 'legacy-switch-view' },
+				}),
+			),
+			http.get(API('/logs/legacy'), ({ request }) => {
+				legacyCalls.push(new URL(request.url).searchParams)
+				return HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 100 })
+			}),
+		)
+		// 深链进入时带 instanceId，模拟「从实例详情跳该实例日志」的真实路径。
+		renderWithProviders(<LogsPage />, { route: '/logs?instanceId=2' })
+		await screen.findByText('federation-seed-log-line')
+
+		const user = userEvent.setup()
+		// 「更多 → Legacy 只读」仅平台管理员可用（token 已按 admin 构造）。
+		await user.click(screen.getByTestId('logs-more-trigger'))
+		await user.click(await screen.findByTestId('logs-view-legacy'))
+
+		await waitFor(() => expect(legacyCalls.length).toBeGreaterThan(0), {
+			message: '切到 Legacy 后应发起 /logs/legacy 查询',
+		})
+		const first = legacyCalls[0]
+		expect(first.get('instanceId')).toBe('2')
 	})
 })

@@ -59,6 +59,16 @@ export const PARTIAL_REASONS = {
   EXPORT_INCOMPLETE: 'EXPORT_INCOMPLETE',
   /** 启动恢复中，受影响范围 PARTIAL/RECOVERY_REQUIRED。 */
   RECOVERY_REQUIRED: 'RECOVERY_REQUIRED',
+  /**
+   * 该目标没有可查日志数据（Worker 侧没有它的 Catalog 分区）。
+   *
+   * 与 {@link ENGINE_NOT_READY} 严格区分：后者是「查询引擎 / 数据面未就绪」（Worker 失能、
+   * 视图未建立、空响应），前者是「引擎好好的，只是这个目标确实没有日志」。
+   * 后端自 2026-10-19 起把 `target_missing_in_worker_response` 归一化到这里——它只在
+   * **RPC 成功返回**时产生，因此不能再被说成「服务未启用」（2026-10-17 dev 实测：VL 有数据、
+   * `vlReady=true`，日志页却显示「日志查询服务未启用」，把排查引向 VL）。
+   */
+  TARGET_NO_DATA: 'TARGET_NO_DATA',
 } as const
 
 export type PartialReasonCode = (typeof PARTIAL_REASONS)[keyof typeof PARTIAL_REASONS]

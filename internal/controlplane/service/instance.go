@@ -1800,11 +1800,15 @@ func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (
 	if err := s.db.Select("uuid").First(&logNode, instance.NodeID).Error; err != nil {
 		return nil, fmt.Errorf("解析日志 holder 身份失败: %w", err)
 	}
+	// FR-502：下发日志采集规则名，使 Worker 能按核心类型选择正确的活动日志路径
+	// （如 BungeeCord 的 proxy.log.0 在实例根目录，而非 logs/latest.log）。
+	// 推导失败不阻断注册——回退 bukkit，行为与本项落地前逐字一致。
 	return &workerpb.CreateInstanceRequest{
 		InstanceUuid:               instance.UUID,
 		LogTargetId:                fmt.Sprintf("inst:%d", instance.ID),
 		LogAcquireMode:             logMode,
 		LogSourceGeneration:        fmt.Sprintf("instance:%s@worker:%s", instance.UUID, logNode.UUID),
+		LogRuleKey:                 s.logRuleKeyForInstance(instance),
 		Name:                       instance.Name,
 		ProcessType:                string(instance.ProcessType),
 		StartCommand:               instance.StartCommand,

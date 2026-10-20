@@ -3124,6 +3124,14 @@
 
 `LogSearchResponse.ingest_position_gaps` 是独立的人工永久放弃位置凭据，不表示查询时间覆盖缺口。`IngestPositionGap` 原字段 1～6 保持 `storage_namespace/from/to/reason_code/operator/at_utc`，仅追加 `log_source_id=7`、`source_generation=8`（来自真实源键）；既有 RPC 与 `fr433/v1` 不变。CP Search 与门面可选返回 `ingest_position_gaps[]`：`worker_id` 为可信路由绑定的 Worker UUID，`from/to` 为无损十进制字符串，其余字段沿用上述 snake_case。空集合省略，旧 Worker 未提供的真实源/代次字段省略，禁止从 namespace 或结果事件推断；不同 Worker/源/代次的凭据不得按 namespace 合并。即使 `items=[]` 也可返回凭据；它不参与 `coverage`、`quality` 或 Export 闸门判断。
 
+`coverage.partial_reasons` 里 `ENGINE_NOT_READY` 与 `TARGET_NO_DATA` 语义不同，不可互相替代：前者表示**查询引擎 / Worker 数据面未就绪**（调用失败、空响应、Query View 未建立、混版 Unimplemented），后者表示**该目标没有可查日志**（RPC 成功返回，但该目标在 Worker 侧没有 Catalog 分区）。二者按以下口径区分（2026-10-19 定稿）：
+
+- **响应非空、但缺该目标** ⇒ 该目标无数据，`state=success`，不进入 `partial_reasons`、不使 `complete=false`。
+- **响应本身为空** ⇒ 记 `TARGET_NO_DATA` 且该目标 `state=not_ready`，使 `complete=false`（不静默放行导出）。原因：Worker 在「没有任何匹配分区」与「有分区却枚举不出来」两种情形下都返回空 targets（`planner.selectKeys` 为空 ⇒ `coverage.targets` 亦为空，`Coverage` 只是 `Targets` 的另一投影），现有 wire 无法区分，因此不能判 success——否则会把后一类故障静默成「无数据」。
+- 前端**不得**把 `TARGET_NO_DATA` 映射为「日志查询服务未启用」（它走 partial 分支），以免把排查引向 VL。
+
+**2026-10-19 语义修正**：该情形此前归一化为 `ENGINE_NOT_READY`，导致「VL 有数据、采集正常」的节点在日志页显示「日志查询服务未启用」，把排查引向 VL。
+
 查询预算是整请求扫描额度而非每 Worker/range 独享额度：入口 `max_bytes=0` 使用 32 MiB 默认，执行前分配正数子额度，零份额不发请求；正常 `limit` 分页不等于扫描预算耗尽。Search/Stats 顶层保留 Worker 的 partial 原因与预算截断，不能被逐目标成功覆盖；未完整页边界同戳组或扫描截断时不提供可跨过缺失集合的全局游标。固定窗口续页须携原 view 与复合 cursor，不以毫秒时间锚点替代。
 
 实例注册消息 `CreateInstanceRequest` 另增可选字段 `log_target_id=19`、`log_acquire_mode=20`、`log_source_generation=21`，由 CP 统一创建/重连规格下发。Worker 将它们绑定到实例的受管日志采集面：Java 文件主源、通用进程 stdout/stderr 主源；缺字段保持旧 CP 兼容，不凭 UUID 猜测授权数字 ID。采集绑定失败时注册返回 `success=false`；已有实例 Resync 的绑定失败返回 `FailedPrecondition`。绑定持久化及无绑定实例禁止 cutover，见 FR-474 spec。
@@ -3181,6 +3189,16 @@
 - **响应**：成功 `{ "state": "cleared", "clearedCount": N, "clearedSources": [...], "skippedSources": [...] }`；`skippedSources` 是计划内但未清的源（期间新增了未经审阅的冲突记录，或本就已无冲突记录）。Worker 拒绝返回 409 `CLEAR_CONFLICTS_FAILED`（含具体原因，如「采集轮忙」），传输失败 502 `WORKER_RPC_FAILED`。
 - **标记消失时机**：Worker 内存与索引里的记录已清空后，`ConflictCount` 由**下一次投影发布**重算为 0。仍在投递的源下次投递即归零；**已停止投递的源**要等其再次投递才归零（本操作不回退任何查询语义，只是不再提示该源的内容歧义）。
 - **状态**: 已注册并有路由层测试（`log_clear_identity_conflicts_test.go`）与 Worker 侧回归（`identity_conflict_clear_test.go`）。
+
+### POST /api/v1/nodes/:id/log-runtime/ingest/import-archives
+
+- **请求**：`{ "storageNamespace": "实例存储命名空间（可选）", "reason": "导入理由（必填）" }`。`storageNamespace` 取值形如 `inst:317`，与 Worker 侧 `ImportArchivesNow` 的过滤口径一致——**传完整源键不会匹配到任何源**（实测得到 `scanned=0`，看着像"成功但没东西可导"）；**空 = 本 Worker 全部可导入源**。
+- **语义**：把「已经躺在源目录里、但还没被导入」的历史归档（`.gz`）走一遍与自动路径完全相同的导入管道。**不受 `log.acq.gz_import_enabled` 总开关影响**——应急补历史永远可用。为什么需要它：定时扫描默认关闭，且采集轮的历史导入受 acquire 层不变量约束（历史段只能前置到**未被读过**的当前段），存量源因此没有别的自动出口。
+- **授权**：非空命名空间须绑定真实实例并做实例级对象授权（畸形 400；未知实例/组外 403），**空命名空间（全 Worker 范围）额外要求平台管理员**。
+- **审计**：操作人取已认证主体（不信任 body 自报身份）、理由必填，两者经 `x-jm-operator` / `x-jm-reason` 下传；CP 侧成功触发后写审计 `node.log_archive.import`（detail 含 `storageNamespace` 与 `reason`）。缺失任一 ⇒ 400 `REASON_REQUIRED` / 403 `OPERATOR_UNKNOWN`，且不下发 RPC。
+- **响应**：成功 `{ "state": "imported", "message": "..." }` —— 只表示「已触发且无错」；**导入按 WAL 余量分批、可能跨多个采集轮**，计数以 Worker 日志「已执行手动归档导入」（含 `scanned`/`imported`）为准。Worker 拒绝返回 409 `IMPORT_ARCHIVES_FAILED`，传输失败 502 `WORKER_RPC_FAILED`。
+- **状态**: 已注册并有路由层回归（`log_import_archives_test.go`：越权 / 缺操作人 / 缺理由 / Worker 报错不伪装成功 / 审计闭环）。
+- **关联 FR**: FR-504
 
 ### 日志入库切换与 Legacy 端点（FR-481，**HTTP 已注册**）
 
@@ -3337,6 +3355,39 @@
 - **请求**: `{ "values": { "log.level": "debug", "backup.retention_days": "30" } }`
 
 ---
+
+## 日志采集配置（FR-502 / FR-503 / FR-504）
+
+> 两层语义：**Worker 覆盖 > 平台默认 > worker.yml 基线**，经心跳下发（≤1 心跳周期生效、无需重启 Worker）。平台键 `log.acq.*`，节点级覆盖写作 `log.acq.*@node:<nodeUuid>`。键清单：`log.acq.rules_enabled`（规则引擎）/ `log.acq.realtime_tail`（实时采集应急开关）/ `log.acq.gz_import_enabled`（gz 导入总开关）/ `log.acq.gz_scan_interval`（定时扫描周期）/ `log.acq.path_overrides`（实例路径覆盖 JSON）。参见 `docs/specs/log-config-delivery/spec.md`。
+
+### GET /api/v1/settings/log-acquisition
+- **描述**: 读取日志采集的**平台默认**视图
+- **权限**: `settings.read` / `settings.write` / `license.read`
+- **关联 FR**: FR-503
+- **响应** (200): `{ "items": [ { "key", "default", "platform", "effective", "override", "overridden" } ] }`（平台视图下 `override` 恒为空）
+
+### PUT /api/v1/settings/log-acquisition
+- **描述**: 写平台默认（批量键值）
+- **权限**: `settings.write`；写审计
+- **关联 FR**: FR-503
+- **请求**: `{ "values": { "log.acq.rules_enabled": "false", ... } }`。仅接受上述 5 个键，含其它键整体拒绝（422）。值语义逐项校验：布尔项 `true|false`；`gz_scan_interval` **留空 = 未配置（回落 worker.yml 基线）**或正的 Go duration；`path_overrides` 留空或 JSON 对象文本，且逐条校验（2026-10-20）：键须为规范的 `inst:<十进制ID>`；值须非空、**非绝对路径**、不含 Windows 盘符/UNC、折叠 `..` 后不得逃出实例工作目录、首尾不得有空白。任一不合返回 422 `BUSINESS_ERROR`。
+- **生效**: 经心跳下发 Worker（`effectiveImmediately=false`）
+
+### GET /api/v1/nodes/:id/settings/log-acquisition
+- **描述**: 读取某节点的**对照视图**（平台默认 / 本节点生效值 / 是否被覆盖）+ 节点名
+- **权限**: `node.read` / `node.manage`
+- **关联 FR**: FR-503
+- **响应** (200): 同平台视图，另含 `nodeUuid` / `nodeName`；`overridden=true` 表示该键**存在**节点级覆盖——**空串也是显式覆盖**（对 `gz_scan_interval` / `path_overrides` 而言即"关闭定时扫描 / 无路径覆盖"）
+
+### PUT /api/v1/nodes/:id/settings/log-acquisition
+- **描述**: 写某节点的采集覆盖（仅平台管理员）；写审计 `node.log_acq.override.set`
+- **请求/校验**: 同平台端点（键必须属于上述 5 项；服务端自动加 `@node:<uuid>` 后缀，客户端不需要拼）
+
+### DELETE /api/v1/nodes/:id/settings/log-acquisition
+- **描述**: 清除节点级覆盖（恢复继承平台默认，幂等）；仅平台管理员；写审计 `node.log_acq.override.clear`
+- **查询**: 可选 `?key=<平台键>` 只清一项；缺省清全部 5 项
+
+> 节点**彻底删除**（`Purge`）时在同一事务内清理该节点全部 `log.acq.*@node:<uuid>` 键；软删除 / 归档**不清理**（归档节点可恢复，其配置保留）。
 
 ## 无主运行时反向对账（FR-326）
 

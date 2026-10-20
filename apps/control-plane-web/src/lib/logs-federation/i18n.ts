@@ -73,6 +73,8 @@ export function reasonI18nKey(reason: string): string {
 const REASON_LEAF = {
   RATE_LIMITED: 'rateLimited',
   ENGINE_NOT_READY: 'engineNotReady',
+  /** 该目标没有日志数据（引擎正常）；与 engineNotReady 严格区分。 */
+  TARGET_NO_DATA: 'targetNoData',
   LOG_UNSUPPORTED: 'logUnsupported',
   LEGACY: 'legacy',
   REHYDRATE_FAILED: 'rehydrateFailed',

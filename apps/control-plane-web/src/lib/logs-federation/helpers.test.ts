@@ -696,3 +696,41 @@ describe('pending 未校验态（Coverage.Pending，首屏快路径）', () => {
     expect(s.emptySuccessAllowed).toBe(false)
   })
 })
+
+/**
+ * 回归（2026-10-19）：`TARGET_NO_DATA` 与 `ENGINE_NOT_READY` 必须区分开。
+ *
+ * 后端自本日起把「RPC 成功但该目标没有 Catalog 分区」记为 TARGET_NO_DATA 且保持
+ * success；它绝不能显示成「日志查询服务未启用」——那样会把排查引向 VL
+ * （2026-10-17 dev 实测：VL 有数据、vlReady=true，日志页却显示服务未启用）。
+ */
+describe('TARGET_NO_DATA 与引擎未就绪区分', () => {
+  it('TARGET_NO_DATA 有独立文案，不复用 engineNotReady', () => {
+    expect(reasonI18nKey(PARTIAL_REASONS.TARGET_NO_DATA)).toBe(
+      'logsFederation.reasons.targetNoData',
+    )
+    expect(reasonI18nKey(PARTIAL_REASONS.TARGET_NO_DATA)).not.toBe(
+      reasonI18nKey(PARTIAL_REASONS.ENGINE_NOT_READY),
+    )
+  })
+
+  it('只有 TARGET_NO_DATA 时不得判成 engine_not_ready 视图态', () => {
+    const v = classifyLogViewState({
+      ok: true,
+      items: [],
+      coverage: coverage({ complete: false, partialReasons: [PARTIAL_REASONS.TARGET_NO_DATA] }),
+    })
+    expect(v.state).not.toBe('engine_not_ready')
+    // 未知码走 generic partial：仍然不是「成功空态」，避免把「没查到」说成「没有日志」。
+    expect(v.emptySuccessAllowed).toBe(false)
+  })
+
+  it('ENGINE_NOT_READY 仍判成 engine_not_ready（真故障语义不许丢失）', () => {
+    const v = classifyLogViewState({
+      ok: true,
+      items: [],
+      coverage: coverage({ complete: false, partialReasons: [PARTIAL_REASONS.ENGINE_NOT_READY] }),
+    })
+    expect(v.state).toBe('engine_not_ready')
+  })
+})

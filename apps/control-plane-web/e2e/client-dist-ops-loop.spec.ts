@@ -22,17 +22,17 @@ test.describe('客户端分发运营闭环', () => {
     await expect(page.getByRole('heading', { name: '客户端分发运维' })).toBeVisible()
 
     await expect(page.getByRole('tab', { name: '统计' })).toBeVisible()
-    await expect(page.getByText('请求成功率').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('请求成功率').first()).toBeVisible()
     await expect(page.locator('[data-kpi-scope="client-dist-monitor-statistics"]')).toBeVisible()
     await expect(page.locator('[data-kpi-scope="client-dist-monitor-statistics"]').getByText('更新成功率')).toHaveCount(0)
 
     await page.screenshot({ path: path.join(evidenceDir, '01-ops-statistics.png'), fullPage: true })
 
     await page.getByRole('tab', { name: /实时监控/ }).click()
-    await expect(page.getByText('错误码 Top 10').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('错误码 Top 10').first()).toBeVisible()
     await page.screenshot({ path: path.join(evidenceDir, '02-ops-monitor-errors.png'), fullPage: true })
 
-    await expect(page.getByRole('button', { name: '导出 CSV' }).first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByRole('button', { name: '导出 CSV' }).first()).toBeVisible()
   })
 
   test('运维日志/处置：标题与处置入口（旧 security 重定向）', async ({ page }) => {
@@ -44,11 +44,23 @@ test.describe('客户端分发运营闭环', () => {
 
     // 旧 events → 运维「实时监控/异常」分档；处置动作在「处置」Tab
     await page.getByRole('tab', { name: '处置' }).click()
-    await expect(page.getByRole('button', { name: '封禁 IP' }).first()).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByRole('button', { name: '改 key 态' }).first()).toBeVisible()
-    await expect(page.getByRole('button', { name: '频道防护' }).first()).toBeVisible()
+    /**
+     * 定位改为**处置容器内的稳定 testid**（2026-10-20 消除 flaky）。
+     *
+     * 原写法是 `getByRole('button', { name: '封禁 IP' }).first()`：页面上叫「封禁 IP」的
+     * 元素不止一个——「实时监控」Tab 的行内处置按钮、KPI 卡片的 `kpiBlockedIp` 同名，
+     * 处置 Tab 自己的按钮反而排在其后。Tab 切换瞬间若上一个 Tab 的节点还没卸载，
+     * `.first()` 会拿到那个即将消失的元素，点击自然不弹窗 ⇒ 偶发失败。
+     * 容器 `data-testid="ops-actions"` + 按钮 testid 是这个页面给出的稳定契约，
+     * 用它就不存在「命中同名的另一个元素」这一可能。
+     */
+    const actions = page.getByTestId('ops-actions')
+    await expect(actions).toBeVisible()
+    const banBtn = actions.getByTestId('action-open-block-ip')
+    await expect(banBtn).toBeVisible()
+    await expect(actions.getByTestId('action-open-key-state')).toBeVisible()
+    await expect(actions.getByTestId('action-open-protection')).toBeVisible()
 
-    const banBtn = page.getByRole('button', { name: '封禁 IP' }).first()
     await banBtn.click()
     const banDialog = page.getByRole('dialog')
     await expect(banDialog).toBeVisible()
@@ -63,17 +75,17 @@ test.describe('客户端分发运营闭环', () => {
   test('频道工作台：统计 KPI 更新成功率 + 安全摘要深链到运维页', async ({ page }) => {
     await login(page)
     await page.goto('/client-channels?channel=skyblock-s1&tab=stats')
-    await expect(page.locator('[data-page="client-channel-workbench"]')).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('[data-page="client-channel-workbench"]')).toBeVisible()
 
     const summary = page.getByTestId('channel-security-summary')
-    await expect(summary).toBeVisible({ timeout: 15_000 })
+    await expect(summary).toBeVisible()
     await expect(summary.getByText('安全摘要')).toBeVisible()
     await expect(summary.getByRole('link', { name: '打开安全中心' })).toHaveAttribute(
       'href',
       /\/client-dist-ops\?channelId=skyblock-s1/,
     )
 
-    await expect(page.getByText('更新成功率').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('更新成功率').first()).toBeVisible()
     await expect(page.locator('[data-kpi-scope="client-stats-panel"]')).toBeVisible()
 
     await page.screenshot({ path: path.join(evidenceDir, '04-channel-stats-security.png'), fullPage: true })
@@ -89,7 +101,7 @@ test.describe('客户端分发运营闭环', () => {
       await expect(page).toHaveURL(/errCode=INVALID_CLIENT_KEY/)
       await expect(page.locator('[data-page="client-dist-ops"]')).toBeVisible()
       await expect(page.getByRole('heading', { name: '客户端分发运维' })).toBeVisible()
-      await expect(page.getByRole('combobox').filter({ hasText: '空岛一区' }).first()).toBeVisible({ timeout: 10_000 })
+      await expect(page.getByRole('combobox').filter({ hasText: '空岛一区' }).first()).toBeVisible()
     }
 
     await page.goto('/client-dist-monitor?channelId=skyblock-s1&errCode=INVALID_CLIENT_KEY&tab=logs')

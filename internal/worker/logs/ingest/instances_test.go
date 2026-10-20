@@ -20,7 +20,10 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	cat := catalog.New(nil)
 	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
 	require.NoError(t, err)
-	require.NoError(t, m.RegisterInstance("uuid-1", "inst:1", "holder-g1", "STDIO_PRIMARY", t.TempDir()))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-1", TargetID: "inst:1", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: t.TempDir(),
+	}))
 	require.NoError(t, m.AppendInstanceOutput("uuid-1", "stdout", []byte("stdout raw\n")))
 	require.NoError(t, m.AppendInstanceOutput("uuid-1", "stderr", []byte("stderr raw\n")))
 	data, err := os.ReadFile(m.rawInstancePath(m.state.Instances["uuid-1"], "stdout"))
@@ -70,9 +73,15 @@ func TestInstanceFilePrimaryDoesNotDoubleCollectConsoleOutput(t *testing.T) {
 	cat := catalog.New(nil)
 	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
 	require.NoError(t, err)
-	require.NoError(t, m.RegisterInstance("uuid-1", "inst:1", "holder-g1", "FILE_PRIMARY", work))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-1", TargetID: "inst:1", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work,
+	}))
 	require.Equal(t, []string{"unbound"}, m.MissingInstanceBindings([]string{"uuid-1", "unbound"}))
-	require.NoError(t, m.RegisterInstance("uuid-1", "inst:1", "holder-g1", "FILE_PRIMARY", work))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-1", TargetID: "inst:1", Generation: "holder-g1",
+		Mode: "FILE_PRIMARY", WorkDir: work,
+	}))
 	require.NoError(t, m.AppendInstanceOutput("uuid-1", "stdout", []byte("console copy\n")))
 	m.pollOnce()
 	require.Len(t, m.pipes, 1)
@@ -97,7 +106,10 @@ func TestInstanceOutputSpoolsBeforeBindingAndFlushesInOrder(t *testing.T) {
 	require.False(t, readiness.LedgerReady)
 	require.Contains(t, strings.Join(readiness.Reasons, ","), "pending_spool:", "%v", readiness.Reasons)
 
-	require.NoError(t, m.RegisterInstance("uuid-spool", "inst:spool", "holder-g1", "STDIO_PRIMARY", work))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-spool", TargetID: "inst:spool", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: work,
+	}))
 	require.NoError(t, m.AppendInstanceOutput("uuid-spool", "stdout", []byte("after-1\n")))
 	binding := m.state.Instances["uuid-spool"]
 	stdout, err := os.ReadFile(m.rawInstancePath(binding, "stdout"))
@@ -120,7 +132,10 @@ func TestInstanceOutputPendingSpoolSurvivesRestart(t *testing.T) {
 
 	restarted, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(nil)})
 	require.NoError(t, err)
-	require.NoError(t, restarted.RegisterInstance("uuid-restart", "inst:restart", "holder-g1", "STDIO_PRIMARY", work))
+	require.NoError(t, restarted.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-restart", TargetID: "inst:restart", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: work,
+	}))
 	binding := restarted.state.Instances["uuid-restart"]
 	data, err := os.ReadFile(restarted.rawInstancePath(binding, "stdout"))
 	require.NoError(t, err)
@@ -138,7 +153,10 @@ func TestInstanceOutputPendingFlushFailureKeepsGapAndPause(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(rawPath), 0o700))
 	require.NoError(t, os.Mkdir(rawPath, 0o700))
 
-	err = m.RegisterInstance("uuid-fail", "inst:fail", "holder-g1", "STDIO_PRIMARY", work)
+	err = m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-fail", TargetID: "inst:fail", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: work,
+	})
 	require.Error(t, err)
 	pipe := m.pipes["inst:fail/stdout/holder-g1"]
 	require.NotNil(t, pipe)
@@ -166,7 +184,10 @@ func TestInstanceOutputBindingRacePreservesAllBytes(t *testing.T) {
 		}()
 	}
 	close(start)
-	require.NoError(t, m.RegisterInstance("uuid-race", "inst:race", "holder-g1", "STDIO_PRIMARY", work))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-race", TargetID: "inst:race", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: work,
+	}))
 	for i := 0; i < count; i++ {
 		err := <-errs
 		if err != nil {
@@ -283,24 +304,92 @@ func TestRegisterInstanceRejectsSymlinkedWorkDir(t *testing.T) {
 	t.Run("symlinked_workdir_rejected", func(t *testing.T) {
 		link := filepath.Join(base, "linked-instance")
 		createDirLink(t, real, link)
-		err := m.RegisterInstance("uuid-link", "inst:1", "g1", "FILE_PRIMARY", link)
+		err := m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-link", TargetID: "inst:1", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: link,
+		})
 		require.Error(t, err, "指向别处的工作目录不得用于采集")
 		require.Contains(t, err.Error(), "symlinked log work dir")
 	})
 
 	t.Run("real_directory_accepted", func(t *testing.T) {
-		require.NoError(t, m.RegisterInstance("uuid-real", "inst:2", "g1", "FILE_PRIMARY", real))
+		require.NoError(t, m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-real", TargetID: "inst:2", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: real,
+		}))
 	})
 
 	t.Run("outside_root_absolute_still_accepted", func(t *testing.T) {
 		// 根外绝对目录是既有契约（外来接管实例），修复不得打断它。
 		outside := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(outside, "logs"), 0o700))
-		require.NoError(t, m.RegisterInstance("uuid-outside", "inst:3", "g1", "FILE_PRIMARY", outside))
+		require.NoError(t, m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-outside", TargetID: "inst:3", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: outside,
+		}))
 	})
 
 	t.Run("filesystem_root_rejected", func(t *testing.T) {
-		err := m.RegisterInstance("uuid-root", "inst:4", "g1", "FILE_PRIMARY", "/")
+		err := m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-root", TargetID: "inst:4", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: "/",
+		})
 		require.Error(t, err, "不得以文件系统根作为采集目录")
 	})
+}
+
+// TestInstanceRelativePathStaysInsideWorkDir 验证实例日志路径不得逃出工作目录。
+//
+// 用户裁定（2026-10-19）：「限定在工作目录内」。`log.acq.path_overrides` 由 CP 经心跳下发，
+// 放行绝对路径等于允许把任意实例的日志源指向宿主机任意可读文件（/etc/shadow 之类），
+// Worker 会照读并写入 VL。CP 与 Worker 分属不同信任域，故 Worker 侧独立再校验一次
+// （纵深防御：CP 的写入校验可能被人工改库/旧版本写入绕过）。
+func TestInstanceRelativePathStaysInsideWorkDir(t *testing.T) {
+	vl, _ := newProjectionVL(t)
+	m, err := newTestManager(t, Options{Root: t.TempDir(), VL: vl, Catalog: catalog.New(nil)})
+	require.NoError(t, err)
+
+	workDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workDir, "logs"), 0o700))
+
+	t.Run("绝对路径被拒", func(t *testing.T) {
+		err := m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-abs", TargetID: "inst:11", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: workDir, RelativePath: "/etc/shadow",
+		})
+		require.Error(t, err, "绝对路径不得作为实例日志路径")
+	})
+
+	t.Run("用 .. 逃出被拒", func(t *testing.T) {
+		err := m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-esc", TargetID: "inst:12", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: workDir, RelativePath: "../../etc/shadow",
+		})
+		require.Error(t, err, "逃出工作目录的相对路径不得被接受")
+	})
+
+	t.Run("工作目录内的相对路径放行", func(t *testing.T) {
+		require.NoError(t, m.RegisterInstance(InstanceRegistration{
+			UUID: "uuid-ok", TargetID: "inst:13", Generation: "g1",
+			Mode: "FILE_PRIMARY", WorkDir: workDir, RelativePath: "logs/custom.log",
+		}))
+		binding := m.state.Instances["uuid-ok"]
+		require.Equal(t, filepath.Join(workDir, "logs", "custom.log"), instanceLivePath(binding))
+	})
+}
+
+// TestInstanceLivePathFallsBackWhenBindingEscapes 验证即便绑定里带着越界值（历史脏数据、
+// 绕过登记的构造），解析出的物理路径也不会跑到工作目录之外。
+func TestInstanceLivePathFallsBackWhenBindingEscapes(t *testing.T) {
+	workDir := t.TempDir()
+
+	for _, bad := range []string{"/etc/shadow", "../../etc/shadow", "logs/../../../etc/passwd"} {
+		got := instanceLivePath(InstanceBinding{WorkDir: workDir, RelativePath: bad})
+		require.Equal(t, filepath.Join(workDir, Lookup("").LiveRelative), got,
+			"越界路径应回退规则默认，got %q for %q", got, bad)
+	}
+
+	// 对照：合法相对路径正常生效。
+	require.Equal(t, filepath.Join(workDir, "logs", "a.log"),
+		instanceLivePath(InstanceBinding{WorkDir: workDir, RelativePath: "logs/a.log"}))
 }

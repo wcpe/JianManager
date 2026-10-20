@@ -10,7 +10,15 @@ export interface DraftDiffItem {
 }
 
 /** 设置分类：appearance 为客户端偏好，其余为平台配置。 */
-export type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'network' | 'backup' | 'email' | 'security'
+export type SettingCategory =
+  | 'appearance'
+  | 'logging'
+  | 'logAcquisition'
+  | 'runtime'
+  | 'network'
+  | 'backup'
+  | 'email'
+  | 'security'
 
 /**
  * MC 直探（SLP/Query）超时上界，毫秒。
@@ -22,8 +30,14 @@ export type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'network' |
  */
 export const MAX_DIRECT_PROBE_TIMEOUT_MS = 10_000
 
-/** 把平台配置键映射到分类：可编辑项落 logging/runtime/network/backup/email，只读项落 security。 */
+/**
+ * 把平台配置键映射到分类：可编辑项落 logging/logAcquisition/runtime/network/backup/email，只读项落 security。
+ *
+ * `log.acq.*` 是日志采集配置（FR-503：平台默认 + Worker 覆盖，经心跳下发），
+ * 与 `log.level`（CP 自身日志级别）语义不同，故必须在 `log.` 判定之前分流到独立分类。
+ */
 export function keyCategory(key: string): SettingCategory {
+  if (key.startsWith('log.acq.')) return 'logAcquisition'
   if (key.startsWith('log.') || key.startsWith('debug.')) return 'logging'
   if (key.startsWith('jdk.') || key.startsWith('graceful_stop.') || key.startsWith('direct_probe.')) return 'runtime'
   if (key.startsWith('proxy.') || key === 'github.token') return 'network'
@@ -107,6 +121,71 @@ export function validateSettingDraft(key: string, value: string): string | undef
     }
     case 'backup.retention_days':
       return /^\d+$/.test(v) ? undefined : 'settings.invalidNonNegativeInt'
+    case 'log.acq.gz_scan_interval': {
+      // **空 = 未配置**（不是「关闭」）：Worker 折算时回落到节点 worker.yml 基线
+      // `log_ingest.archive_scan_interval`。要停定时扫描应关总开关 `log.acq.gz_import_enabled`；
+      // 写 0 会被后端判非法（零周期会让扫描空转，协议上 0 只表示未配置）——故此处只放行
+      // 「留空」或「正的 Go duration」，与后端 validateSettingValue 同口径。
+      if (v === '') return undefined
+      if (!/^([0-9]+(\.[0-9]+)?(ns|us|µs|μs|ms|s|m|h))+$/.test(v)) {
+        return 'settings.invalidLogAcqScanInterval'
+      }
+      const digits = v.replace(/ns|us|µs|μs|ms|s|m|h/g, ' ')
+      return /[1-9]/.test(digits) ? undefined : 'settings.invalidLogAcqScanInterval'
+    }
+    case 'log.acq.path_overrides': {
+      // 空 = 无覆盖；非空须为 JSON 对象文本（值为字符串），形如 {"inst:1":"proxy.log.0"}。
+      // 同时校验每条路径本身（与后端同口径，2026-10-19）：必须是相对实例工作目录的路径，
+      // 绝对路径与折叠 `..` 后的逃逸一律拒绝。后端也会拒，但在前端当场提示能省一次往返。
+      if (v === '') return undefined
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(v)
+      } catch {
+        return 'settings.logAcqInvalidPathOverrides'
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return 'settings.logAcqInvalidPathOverrides'
+      }
+      /**
+       * 键也要校验（2026-10-20 审查修正）：后端强制键为规范的 `inst:<十进制ID>`，
+       * 否则该覆盖永远不会命中任何实例（Worker 按 `inst:<数字>` 精确匹配）。
+       * 原先前端只校验值，于是 `{"1":"logs/a.log"}`（把实例 ID 当键）在前端「合法」、
+       * 提交后被后端 422 —— 正是本次想消除的「两处口径漂移」，只是方向反了。
+       */
+      for (const target of Object.keys(parsed as Record<string, unknown>)) {
+        const m = /^inst:(\d+)$/.exec(target)
+        // 与后端同口径：必须是十进制、且回拼后与原文一致（排除 `inst:007`、全角数字等）。
+        if (!m || target !== `inst:${Number(m[1])}`) {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+      }
+      for (const path of Object.values(parsed as Record<string, unknown>)) {
+        if (typeof path !== 'string' || path.trim() === '') {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+        // 首尾空白：后端直接拒绝而不静默 trim（trim 后落库仍是原串会让路径带空格查不到文件）。
+        if (path !== path.trim()) {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+        const p = path.trim().replace(/\\/g, '/')
+        if (p.startsWith('/') || /^[A-Za-z]:/.test(p)) {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+        // 折叠 `..` 后仍以 `..` 开头 ⇒ 逃出工作目录。
+        const parts: string[] = []
+        for (const seg of p.split('/')) {
+          if (seg === '' || seg === '.') continue
+          if (seg === '..') {
+            if (parts.length === 0) return 'settings.logAcqInvalidPathOverrides'
+            parts.pop()
+            continue
+          }
+          parts.push(seg)
+        }
+      }
+      return undefined
+    }
     case 'jdk.mirror.temurin':
     case 'jdk.mirror.corretto':
     case 'jdk.mirror.zulu':

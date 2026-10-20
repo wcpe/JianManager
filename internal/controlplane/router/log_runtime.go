@@ -25,6 +25,10 @@ type LogRuntimeHandler struct {
 	authz     *service.AuthzService
 	instances *service.InstanceService
 	holders   *service.LogTargetHolderService
+	// audit 记录「人工应急动作」的审计行（见 ImportArchives）。
+	// 可为 nil（未接线时不落审计，但**不阻断主流程**）：手工导入归档是应急通道，
+	// 不能因为审计服务缺席而让它在生产上不可用。
+	audit *service.AuditService
 }
 
 func NewLogRuntimeHandler(nodes *service.NodeService, pool *cpgrpc.ClientPool, authz *service.AuthzService, instances *service.InstanceService, holders ...*service.LogTargetHolderService) *LogRuntimeHandler {
@@ -33,6 +37,20 @@ func NewLogRuntimeHandler(nodes *service.NodeService, pool *cpgrpc.ClientPool, a
 		h.holders = holders[0]
 	}
 	return h
+}
+
+// SetAudit 注入审计服务（装配期调用，与同族 handler 的可选注入同口径）。
+// nil 为合法值：审计未接线时人工动作照常执行，仅不留 CP 侧审计行。
+func (h *LogRuntimeHandler) SetAudit(audit *service.AuditService) { h.audit = audit }
+
+// recordAudit 记录一条节点级操作审计；audit 未注入时静默跳过（口径同 LogAcqSettingsHandler）。
+func (h *LogRuntimeHandler) recordAudit(c *gin.Context, action string, detail map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	uid, _ := c.Get(middleware.CtxUserID)
+	userID, _ := uid.(uint)
+	h.audit.RecordSafe(userID, action, "node", c.Param("id"), marshalAuditDetail(detail), c.ClientIP())
 }
 
 func (h *LogRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
@@ -44,6 +62,8 @@ func (h *LogRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/nodes/:id/log-runtime/migrate", h.MigratePartition)
 	rg.POST("/nodes/:id/log-runtime/ingest/resolve-gaps", h.ResolveIngestGaps)
 	rg.POST("/nodes/:id/log-runtime/ingest/clear-identity-conflicts", h.ClearIdentityConflicts)
+	// 手动触发归档（.gz）导入扫描（FR-504）：不受 gz 导入开关影响，应急补历史永远可用。
+	rg.POST("/nodes/:id/log-runtime/ingest/import-archives", h.ImportArchives)
 	rg.GET("/nodes/:id/log-archive/status", h.ArchiveStatus)
 	rg.POST("/nodes/:id/log-archive/rehydrate", h.Rehydrate)
 }
@@ -227,6 +247,159 @@ func (h *LogRuntimeHandler) ClearIdentityConflicts(c *gin.Context) {
 		"clearedSources": resp.GetClearedSources(),
 		"skippedSources": resp.GetSkippedSources(),
 	})
+}
+
+// ImportArchives 手动触发归档（.gz）导入扫描（FR-504 §2.1 的「手动入口」）。
+//
+// 为什么必须补这条 HTTP 通路：Worker 侧的 gRPC `LogImportArchives` 早就存在（并强制校验
+// 操作人），但 CP 与前端此前**都没有入口** ⇒「手动触发导入」在运维侧实际不可达。这是生产
+// 「814 个 gz 从未被导入」的第三块拼图：① 定时扫描默认关；② 存量源不在采集轮的历史导入
+// 范围内（acquire 层不变量：历史段只能前置到**未被读过**的当前段）；③ 手动入口无路可达。
+//
+// 语义：把「已经躺在源目录里、但还没被导入」的归档走一遍与自动路径完全相同的导入管道。
+// 与自动路径的关键差异是**不受 gz 导入开关影响**——应急补历史必须永远可用。
+//
+// 纪律同 clear-identity-conflicts：操作人在任何 RPC 之前解析；理由必填并进审计凭据；
+// 成功触发后在 CP 侧落一条审计行（见函数末尾的 recordAudit）；
+// 不指名源（全 Worker 范围）属批量动作，仅平台管理员可做。
+func (h *LogRuntimeHandler) ImportArchives(c *gin.Context) {
+	operator, ok := h.operatorFromRequest(c)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "OPERATOR_UNKNOWN",
+			"message": "无法确定操作人：认证主体缺失（手动导入归档必须可审计）。" +
+				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
+		})
+		return
+	}
+	var body struct {
+		// StorageNamespace 是**实例存储命名空间**（形如 `inst:317`）——与 Worker 侧
+		// ImportArchivesNow 的过滤口径一致；空 = 本 Worker 全部可导入源。
+		StorageNamespace string `json:"storageNamespace"`
+		// Reason 是本次导入的显式理由：必填（审计凭据要记录「为什么可以导」）。
+		Reason string `json:"reason"`
+	}
+	if c.Request.ContentLength > 0 {
+		if bindErr := c.ShouldBindJSON(&body); bindErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+			return
+		}
+	}
+	body.StorageNamespace = strings.TrimSpace(body.StorageNamespace)
+	body.Reason = strings.TrimSpace(body.Reason)
+	if body.Reason == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "REASON_REQUIRED",
+			"message": "手动导入归档必须给出理由（审计凭据需要记录为何可以导入）",
+		})
+		return
+	}
+	if body.StorageNamespace != "" {
+		// 单实例导入绑定到一个实例，须先完成对象授权（与放弃裁定同一判据的实例级版本）。
+		if !h.authorizeImportNamespace(c, body.StorageNamespace) {
+			return
+		}
+	} else if !h.authorizeImportAllSources(c) {
+		return
+	}
+	client, ok := h.client(c)
+	if !ok {
+		return
+	}
+	ctx := metadata.NewOutgoingContext(c.Request.Context(), metadata.Pairs(
+		operatorMetadataKey, operator, "x-jm-reason", body.Reason))
+	resp, err := client.Worker.LogImportArchives(ctx, &workerpb.LogImportArchivesRequest{
+		RequestId: c.GetHeader("X-Request-ID"), ProtocolVersion: "log-query/1",
+		StorageNamespace: body.StorageNamespace,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "WORKER_RPC_FAILED", "message": err.Error()})
+		return
+	}
+	if resp == nil || resp.GetError() != nil {
+		code, message := "LOG_NOT_READY", ""
+		if resp != nil && resp.GetError() != nil {
+			code = resp.GetError().GetCode().String()
+			message = resp.GetError().GetMessage()
+		}
+		c.JSON(http.StatusConflict, gin.H{"error": "IMPORT_ARCHIVES_FAILED", "code": code, "message": message})
+		return
+	}
+	// 成功触发后落 CP 侧审计行：手工导入是**跨过「gz 自动导入默认关」的应急动作**，
+	// 事后必须能回答「谁、为何、对哪个节点与哪个源」。审计中间件对本路径不产生 action
+	// （POST /nodes/:id/log-runtime/... 不匹配任何分支），Worker 侧也只有一条会轮转的
+	// 本地 slog——CP 侧不落行即等于没有凭据。理由由本端点强制必填，这里如实记为 detail。
+	h.recordAudit(c, "node.log_archive.import", map[string]any{
+		"storageNamespace": body.StorageNamespace,
+		"reason":           body.Reason,
+	})
+	// 计数不在响应里（LogTaskResponse 只带状态）：导入明细以 Worker 日志
+	// 「已执行手动归档导入」（含 scanned/imported）为准；本响应只表示「已触发且无错」。
+	c.JSON(http.StatusOK, gin.H{
+		"state": "imported",
+		"message": "已触发归档导入扫描；导入计数见 Worker 日志。" +
+			"批量导入按 WAL 余量分批，可能跨多个采集轮完成。",
+	})
+}
+
+// authorizeImportNamespace 校验「按实例命名空间导入」的授权（FR-504）。
+//
+// 为什么粒度是实例（`inst:<id>`）而不是完整源键：Worker 侧 `ImportArchivesNow` 的
+// storageNamespace 过滤用的就是**存储命名空间**（即 `inst:<id>`），传完整源键不会匹配到
+// 任何源——实测就是这样：传完整源键得到 `scanned=0`，看着像"授权通过、执行成功"，
+// 实际一个归档都没扫。这里如实按 Worker 的语义收口，并顺带完成实例级对象授权
+// （与放弃裁定同一判据，只是绑定到实例而不是具体源段）。
+func (h *LogRuntimeHandler) authorizeImportNamespace(c *gin.Context, ns string) bool {
+	id, err := strconv.ParseUint(strings.TrimPrefix(ns, "inst:"), 10, strconv.IntSize)
+	if err != nil || id == 0 || ns != fmt.Sprintf("inst:%d", id) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_REQUEST",
+			"message": "须提供实例存储命名空间（形如 inst:317）；留空表示本节点全部源",
+		})
+		return false
+	}
+	access := getAccess(c)
+	if h.authz == nil || h.instances == nil || access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "归档导入授权未就绪"})
+		return false
+	}
+	// 不区分实例不存在与组外，避免借此枚举实例。
+	deny := func() bool {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权导入该实例的日志源"})
+		return false
+	}
+	inst, err := h.instances.GetByID(uint(id))
+	if err != nil || inst == nil || inst.UUID == "" {
+		return deny()
+	}
+	allowed, err := h.authz.CanAccessInstance(access, inst.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "归档导入授权校验失败"})
+		return false
+	}
+	if !allowed {
+		return deny()
+	}
+	return true
+}
+
+// authorizeImportAllSources 校验「全 Worker 范围导入」的授权：只有平台管理员可做。
+//
+// 与 authorizeClearAllSources 同判据（批量/跨资源动作 → 平台管理员），消息按本端点语义定制。
+func (h *LogRuntimeHandler) authorizeImportAllSources(c *gin.Context) bool {
+	access := getAccess(c)
+	if h.authz == nil || access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "全量导入的授权未就绪"})
+		return false
+	}
+	if !access.IsPlatformAdmin {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "FORBIDDEN",
+			"message": "全 Worker 范围的归档导入仅限平台管理员；请指定单个日志源（storageNamespace）逐源导入",
+		})
+		return false
+	}
+	return true
 }
 
 // authorizeClearAllSources 校验「清空全部源」的授权：只有平台管理员可做。

@@ -759,7 +759,10 @@ func (p *Pipeline) archiveImportBatchSize() int {
 	return size
 }
 
-// ImportArchive 导入 gzip 归档；已关联轮转时跳过整包，禁止双计。
+// ImportArchive 导入一个归档（gzip 压缩归档或纯文本轮转归档）；已关联轮转时跳过整包，禁止双计。
+//
+// 形态由**文件头**判定后分流（见下方 import 调用处的说明），两种形态共用本方法的其余全部
+// 语义（准入预算、采样、归一、落库与「已导入」标记）。
 //
 // **分批入账 + 跨轮续传**（缺陷二修复，2026-10-10）。
 //
@@ -821,7 +824,21 @@ func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
 	var current acquire.ImportResult
 	{
 		// 单轮只读一批：读满即停并回 Partial，位置落回账本 ⇒ 下一轮从断点继续。
-		res, err := p.imp.ImportGzipBounded(path, budget)
+		//
+		// 形态分流（纯文本轮转归档导入）：按**文件头**判定形态，而不是按扩展名——
+		// BungeeCord 的轮转产物 `proxy.log.N` 没有扩展名，名字判不出形态。判定本身不产生
+		// 新的失败语义：判不出（打不开/文件太短）时交回 gzip 路径，由它按既有原因码如实登记
+		// （见 acquire.DetectArchiveFormat 的判据与兜底）。
+		var res *acquire.ImportResult
+		var err error
+		switch acquire.DetectArchiveFormat(path) {
+		case ledger.SegmentRotatedText:
+			res, err = p.imp.ImportTextBounded(path, budget)
+		default:
+			// gzip 是既有的唯一形态，也是判定失败时的安全默认：异常取值不得让归档
+			// 悄悄不被处理（那会表现为「归档在目录里、却永远不进 VL」）。
+			res, err = p.imp.ImportGzipBounded(path, budget)
+		}
 		if err != nil || res == nil {
 			return res, err
 		}

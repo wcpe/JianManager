@@ -11,8 +11,10 @@ import { login } from './helpers'
  * 断言窗口宽度（== 默认预设跨度）＋ 上界≈now 才锁得住「默认最近 15 分钟」这一 2026-10-11
  * 快首屏依据（默认「全部时间」会让每个目标的全部分区参与查询）。
  *
- * 观测的是**经典**端点 `/api/v1/logs`：mock 模式没有联邦假后端（devmock 无 /logs 假实现），
- * 联邦探测必然不可用 ⇒ 页面降级经典路径，经典端点才是本环境下真实下发的请求。
+ * 观测的是**联邦**端点 `/api/v1/logs/federation`：devmock 提供联邦假后端（与经典 `/logs`
+ * 复用同一份种子），页面在联邦视图下**只**以 federation.items 为数据源。查询服务不可用时
+ * **不再回退**经典路径（用户裁定：没有就是没有，平台/历史日志走「更多 → Legacy 只读」专门入口），
+ * 所以这里断言的必须是联邦端点本人下发的参数。
  */
 
 /** 默认时间窗跨度：15 分钟（与 LogsPage 的 `useState<TimeRangePreset>('15m')` 对齐）。 */
@@ -60,13 +62,13 @@ test('FR-150 日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 
   const rangeSelect = page.getByTestId('logs-range-select')
   await expect(rangeSelect).toBeVisible()
 
-  // 等待经典端点被请求到：断言 `lastParams` **本身**非空 —— 旧写法 `?.get('from')` 在无匹配
+  // 等待联邦端点被请求到：断言 `lastParams` **本身**非空 —— 旧写法 `?.get('from')` 在无匹配
   // 请求时返回 undefined，而 `expect(undefined).not.toBeNull()` 会误通过，随后由空串解析出的
   // NaN 让失败信息失去指向性。
   await expect
-    .poll(async () => lastParams(seen, '/api/v1/logs'), { timeout: 10_000 })
+    .poll(async () => lastParams(seen, '/api/v1/logs/federation'))
     .not.toBeNull()
-  const logsParams = lastParams(seen, '/api/v1/logs')!
+  const logsParams = lastParams(seen, '/api/v1/logs/federation')!
   const fromMs = new Date(logsParams.get('from') ?? '').getTime()
   const toMs = new Date(logsParams.get('to') ?? '').getTime()
   // 窗宽是默认预设的直接函数（不受断言时刻影响）：默认窗改成 24h/全部时间即红。
@@ -79,7 +81,7 @@ test('FR-150 日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 
   await page.getByRole('option', { name: '全部时间' }).click()
   await expect
     .poll(async () => {
-      const params = lastParams(seen, '/api/v1/logs')
+      const params = lastParams(seen, '/api/v1/logs/federation')
       return params ? `${params.get('from') ?? 'null'}|${params.get('to') ?? 'null'}` : ''
     })
     .toBe('null|null')

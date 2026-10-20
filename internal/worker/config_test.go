@@ -473,3 +473,181 @@ func TestResumeBackpressureStreakTuningDefaultsAndOverride(t *testing.T) {
 	bad := &Config{}
 	assert.Equal(t, 3, bad.ResumeBackpressureStreakTuning(), "非正 ⇒ 回退默认（安全方向 ✓）")
 }
+
+// TestLoad_LogSourceTargetShape 静态 log_sources 必须写成可被查询枚举到的目标形态
+// （`inst:<实例ID>` / `node:<节点ID>`），否则启动即拒。
+//
+// 为什么这条重要（2026-10-17 dev 实测）：命名空间写错时采集与写入 VL 全部正常，
+// 但 CP 按目标枚举匹配不到 → 前端显示「日志查询服务未启用」，现场会误判成 VL 故障。
+// 因此这里既覆盖「合法通过」，也逐个覆盖每类非法形态的拒绝理由。
+func TestLoad_LogSourceTargetShape(t *testing.T) {
+	writeCfg := func(t *testing.T, logSources string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "worker.yml")
+		require.NoError(t, os.WriteFile(path, []byte(logSources), 0o600))
+		return path
+	}
+
+	t.Run("合法的实例源与节点源均通过", func(t *testing.T) {
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317/file"
+    source_generation: "g1"
+    path: "/srv/317/logs/latest.log"
+    mode: FILE_PRIMARY
+    storage_namespace: "inst:317"
+  - log_source_id: "node:1/worker"
+    source_generation: "g1"
+    path: "/var/log/jm/worker.log"
+    mode: FILE_PRIMARY
+    source_category: "worker"
+    storage_namespace: "node:1"
+`)
+		cfg, err := Load(path)
+		require.NoError(t, err)
+		require.Len(t, cfg.LogSources, 2)
+	})
+
+	t.Run("自造命名空间被拒", func(t *testing.T) {
+		// 正是 2026-10-17 dev 现场那条配置：dev:smoke 不属于任何 CP 目标。
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "dev:smoke/file"
+    source_generation: "dev-g1"
+    path: "/tmp/smoke.log"
+    mode: FILE_PRIMARY
+    storage_namespace: "dev:smoke"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "不是可被查询的目标形态")
+		require.ErrorContains(t, err, "dev:smoke")
+	})
+
+	t.Run("命名空间为空被拒", func(t *testing.T) {
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:1/file"
+    source_generation: "g1"
+    storage_namespace: ""
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "storage_namespace 不能为空")
+	})
+
+	t.Run("源标识不以自身命名空间开头被拒", func(t *testing.T) {
+		// 分区键按 storage_namespace 归属，源标识前缀与之脱节会让两者指向不同目标。
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:318/file"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, `必须以 "inst:317/" 开头`)
+	})
+
+	t.Run("源标识缺流名被拒", func(t *testing.T) {
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317/"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, `必须以 "inst:317/" 开头`)
+	})
+
+	t.Run("source_category 非法值被拒", func(t *testing.T) {
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317/file"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+    source_category: "proxy"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "source_category")
+	})
+
+	t.Run("同一源重复登记被拒", func(t *testing.T) {
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317/file"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+  - log_source_id: "inst:317/file"
+    source_generation: "g2"
+    storage_namespace: "inst:317"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "重复")
+	})
+
+	t.Run("出厂示例形态可通过（node 类源 id == namespace）", func(t *testing.T) {
+		// configs/worker.yml 的示例就是这一形态：log_source_id=node:1 + storage_namespace=node:1。
+		// 此前一律强制 `<ns>/` 会把它判非法，存量部署按示例升级后直接起不来（2026-10-19 评审发现）。
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "node:1"
+    source_generation: "node-self-v1"
+    path: "/var/log/jianmanager/worker.log"
+    mode: FILE_PRIMARY
+    source_category: "worker"
+    storage_namespace: "node:1"
+`)
+		cfg, err := Load(path)
+		require.NoError(t, err)
+		require.Len(t, cfg.LogSources, 1)
+	})
+
+	t.Run("实例类源仍必须带流名", func(t *testing.T) {
+		// instance 类不允许 id == namespace：分区键与源身份必须可区分。
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "inst:317"
+    source_generation: "g1"
+    storage_namespace: "inst:317"
+`)
+		_, err := Load(path)
+		require.ErrorContains(t, err, "必须以")
+	})
+
+	t.Run("节点 UUID 形态也可用（运维写配置时数字 ID 尚未分配）", func(t *testing.T) {
+		// M-3：节点数字 ID 由 CP 在注册时分配，写 worker.yml 时无法预知；UUID 在
+		// <dataDir>/etc/node-identity.json 里，是可发现、可验证的写法。
+		// CP 的 assemble.go 对未知前缀走 default 分支按 UUID 解析并归一成 node:<id>。
+		const uuid = "0091c0d6-6f54-469b-9119-40c05cacbb64"
+		path := writeCfg(t, `log_sources:
+  - log_source_id: "node:`+uuid+`/file"
+    source_generation: "g1"
+    path: "/var/log/jm/node.log"
+    mode: FILE_PRIMARY
+    storage_namespace: "node:`+uuid+`"
+`)
+		cfg, err := Load(path)
+		require.NoError(t, err)
+		require.Len(t, cfg.LogSources, 1)
+		require.Equal(t, "node:"+uuid, cfg.LogSources[0].StorageNamespace)
+	})
+
+	t.Run("畸形的 UUID 形态仍被拒", func(t *testing.T) {
+		for _, ns := range []string{
+			"node:not-a-uuid",
+			"node:0091c0d6-6f54-469b-9119",                       // 段数不足
+			"node:0091c0d6-6f54-469b-9119-40c05cacbb6",            // 末段少一位
+			"node:0091c0d6-6f54-469b-9119-40c05cacbb64x",          // 多字符
+		} {
+			path := writeCfg(t, `log_sources:
+  - log_source_id: "`+ns+`/file"
+    source_generation: "g1"
+    storage_namespace: "`+ns+`"
+`)
+			_, err := Load(path)
+			require.ErrorContains(t, err, "不是可被查询的目标形态", "命名空间 %q 应被拒", ns)
+		}
+	})
+
+	t.Run("实例 ID 非正数被拒", func(t *testing.T) {
+		// inst:0 / inst:007 这类形态 CP 永远不会枚举到（ID 由数据库自增生成）。
+		for _, ns := range []string{"inst:0", "inst:007", "node:00", "inst:-1"} {
+			path := writeCfg(t, `log_sources:
+  - log_source_id: "`+ns+`/file"
+    source_generation: "g1"
+    storage_namespace: "`+ns+`"
+`)
+			_, err := Load(path)
+			require.ErrorContains(t, err, "不是可被查询的目标形态", "命名空间 %q 应被拒", ns)
+		}
+	})
+}

@@ -15,7 +15,7 @@ test.describe('FR-371 压测模板创建向导', () => {
     // 等待模板 tab 激活
     await expect(page.getByRole('tab', { name: '命令模板' })).toHaveAttribute('data-state', 'active')
     // 种子模板 command-orchestration-v1 应出现在表格中
-    await expect(page.getByText('command-orchestration-v1')).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText('command-orchestration-v1')).toBeVisible()
     // 至少一行数据（表体行存在）
     await expect(page.locator('table tbody tr').first()).toBeVisible()
   })
@@ -31,16 +31,16 @@ test.describe('FR-371 压测模板创建向导', () => {
     await page.getByRole('button', { name: '保存', exact: true }).click()
 
     // 对话框关闭表示保存成功
-    await expect(page.getByRole('dialog')).toBeHidden({ timeout: 10_000 })
+    await expect(page.getByRole('dialog')).toBeHidden()
     // 新模板出现在列表
-    await expect(page.getByText(uniqueName)).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText(uniqueName)).toBeVisible()
   })
 
   test('从模板运行向导并保存为会话', async ({ page }) => {
     await page.goto('/bots?tab=templates')
     await expect(page.getByRole('tab', { name: '命令模板' })).toHaveAttribute('data-state', 'active')
     // 等待模板列表加载
-    await expect(page.getByText('command-orchestration-v1')).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText('command-orchestration-v1')).toBeVisible()
 
     // 点击第一行模板的「从模板运行」按钮（aria-label）
     await page.getByRole('button', { name: '从模板运行' }).first().click()
@@ -64,16 +64,16 @@ test.describe('FR-371 压测模板创建向导', () => {
     await page.getByRole('button', { name: '仅保存' }).click()
 
     // 保存后导航到会话 tab
-    await expect(page.getByRole('tab', { name: '压测会话' })).toHaveAttribute('data-state', 'active', { timeout: 10_000 })
+    await expect(page.getByRole('tab', { name: '压测会话' })).toHaveAttribute('data-state', 'active')
     // 会话列表至少一行
-    await expect(page.locator('table tbody tr').first()).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('table tbody tr').first()).toBeVisible()
   })
 
   test('会话 tab 展示演示会话', async ({ page }) => {
     await page.goto('/bots?tab=sessions')
     await expect(page.getByRole('tab', { name: '压测会话' })).toHaveAttribute('data-state', 'active')
     // 种子 V2 演示会话 namePrefix=load，列表首列展示 namePrefix
-    await expect(page.locator('table tbody tr').first()).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('table tbody tr').first()).toBeVisible()
     await expect(page.getByText('load', { exact: true })).toBeVisible()
   })
 })

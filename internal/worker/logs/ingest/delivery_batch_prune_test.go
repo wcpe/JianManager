@@ -235,7 +235,10 @@ func TestDeliveryBatchPruneKeepsInstanceBindings(t *testing.T) {
 	m, _ := pruneBoundFixture(t, nil)
 	work := t.TempDir()
 	// 登记是同步落库的（FR-499：登记只做「读写 state.Instances + 幂等建管道 + persist」）。
-	require.NoError(t, m.RegisterInstance("uuid-prune", "inst:prune", "holder-g1", "STDIO_PRIMARY", work))
+	require.NoError(t, m.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-prune", TargetID: "inst:prune", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: work,
+	}))
 	root := m.root
 	require.NoError(t, m.Stop())
 

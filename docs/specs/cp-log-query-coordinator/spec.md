@@ -51,3 +51,33 @@
 - `max_bytes` 是整个联邦请求的预算（零值入口默认 32 MiB），读取前公平预留给参与 Worker；子 RPC 必须得到正数额度且总预留不超过总量，零份额不拨号、不创建 view、不查询。扇出上限、最多 8 个在途与请求取消/超时共同约束调度；缓存身份包含主体、权限范围与预算，不能跨授权主体复用。
 - Search 普通、快速与缓存响应可选保留 `ingest_position_gaps[]`，HTTP 门面原样透传，即使事件列表为空也不能丢弃。字段/兼容口径见 [API.md](../../API.md) 对应日志平台章节；位置凭据独立展示，不污染 coverage/quality/Export。
 - Worker 扫描截断或未完整同时间戳边界组时保守不出全局 cursor，`exhausted=false`；正常 limit 分页继续使用原 view 与复合 cursor。预算部分结果与可安全分页不是同一概念。
+
+## 3.2 覆盖率原因码：`ENGINE_NOT_READY` 与 `TARGET_NO_DATA` 的区分（2026-10-19）
+
+**背景（真机现场）**：dev 节点 VL 端口在听、`vlReady=true`、直查 VL 有数据，而日志页显示
+「日志查询服务未启用」。根因是 `target_missing_in_worker_response` 被与 `NOT_READY` /
+`EMPTY_WORKER_RESPONSE` 一起归一化成 `ENGINE_NOT_READY`，把「该目标没有日志」说成了
+「查询引擎未就绪」，把排查引向 VL。
+
+**判定口径**（`internal/controlplane/logcoord/targets.go`）：
+
+| 情形 | 目标 state | 原因码 | 对 `complete` 的影响 |
+|---|---|---|---|
+| 响应**非空**、但缺该目标 | `success` | 无（该目标无数据，合法终态） | 不影响 |
+| 响应**本身为空** | `not_ready` | `TARGET_NO_DATA` | `complete=false`（不静默放行导出） |
+
+**为什么空响应不能判 success**：Worker 在「没有任何匹配分区」与「有分区却枚举不出来」两种
+情形下都返回空 targets（`planner.selectKeys` 为空 ⇒ `coverage.targets` 亦为空，且
+`WorkerSearchResponse.Coverage` 只是 `Targets` 的另一投影、同为空），现有 wire 无法区分。
+判 success 会把后一类故障静默成「无数据 + complete=true + 可导出」。
+
+**为什么原因码不能沿用 ENGINE_NOT_READY**：前端 `stateFromReason` 会把
+`ENGINE_NOT_READY` 渲染成「日志查询服务未启用」，而复用该码正是本次误导出错的来源。
+`TARGET_NO_DATA` 走 partial 分支，文案为「该范围没有日志数据」。
+
+**真正的引擎未就绪信号**（仍归 `ENGINE_NOT_READY`，语义不得丢失）：
+`dial_failed` / `search_failed` / `worker_view_failed` / `log_rpc_unsupported` /
+`empty_worker_response`（`resp == nil`）。
+
+**范围说明（本节为事后追认）**：该修正属 FR-502/503/504 之外的 CP 侧语义修订，
+由用户明确要求后实施；在此登记以避免后续追溯时误认为它属于上述任一 FR 的既定范围。

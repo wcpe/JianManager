@@ -16,7 +16,7 @@ import (
 	"time"
 
 	// 纯 Go 的嵌入式 SQLite 驱动：CGO_ENABLED=0 可直接编译（spec §2.1）。
-	_ "modernc.org/sqlite"
+	_ "github.com/glebarez/go-sqlite"
 )
 
 // SchemaVersion 是本包写入结构当前版本，落在 meta 表供后续就地升级识别。
@@ -452,6 +452,17 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 	// 补列 ⇒ 这里按「列是否存在」幂等补齐。旧库旧行零值 = 非回放（与「旧行全是常规采集条目」
 	// 的事实一致 ✓），因此本迁移是纯追加、不改动任何既有语义。
 	if err := addColumnIfMissing(ctx, db, "source_wal", "replay", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	// FR-502 增量迁移：`instance_binding` 的 rule_key / relative_path 是后加列，同样需要
+	// 为既有库幂等补列。旧库旧行零值 = 空规则名与无覆盖 ⇒ 回退 bukkit 规则，与历史行为
+	// 逐字一致，故本迁移是纯追加、不改动任何既有实例的采集路径。
+	if err := addColumnIfMissing(ctx, db, "instance_binding", "rule_key", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := addColumnIfMissing(ctx, db, "instance_binding", "relative_path", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -1991,6 +2002,17 @@ func asText(value any) string {
 	}
 }
 
+// textAt 按下标取文本，越界返回空串。
+//
+// 用途：FR-502 增量列（rule_key/relative_path）在**旧库首次打开、补列尚未生效**
+// 的窗口内，载入的行可能仍只有历史列；此时按缺失处理（空串）而非 panic。
+func textAt(values []any, idx int) string {
+	if idx < 0 || idx >= len(values) {
+		return ""
+	}
+	return asText(values[idx])
+}
+
 func asBytes(value any) []byte {
 	switch v := value.(type) {
 	case nil:
@@ -2049,6 +2071,7 @@ func appendRow(st *State, spec tableSpec, values []any) error {
 		st.Instances = append(st.Instances, InstanceRow{
 			UUID: asText(values[0]), Namespace: asText(values[1]), Generation: asText(values[2]),
 			Mode: asText(values[3]), WorkDir: asText(values[4]),
+			RuleKey: textAt(values, 5), RelativePath: textAt(values, 6),
 		})
 	case "source_aux":
 		st.Aux = append(st.Aux, AuxRow{Key: asText(values[0]), Config: asBytes(values[1]), Payload: asBytes(values[2])})

@@ -338,7 +338,10 @@ func (p *ProvisionService) createProvisionInstance(req ProvisionServerRequest, c
 }
 
 func launchSpecForProvision(req ProvisionServerRequest, core *CoreInfo, nodeOS string) (LaunchSpec, error) {
-	spec := LaunchSpec{MemoryMb: req.MemoryMb, JvmArgs: req.JvmArgs, CoreJar: provisionCoreJar}
+	spec := LaunchSpec{
+		MemoryMb: req.MemoryMb, JvmArgs: req.JvmArgs,
+		CoreJar: provisionCoreJar, CoreKind: coreKindOf(core),
+	}
 	if core != nil && core.Runtime != nil && core.Runtime.Distribution == "spongeforge" {
 		if strings.TrimSpace(core.Runtime.LaunchJar) == "" {
 			return LaunchSpec{}, fmt.Errorf("SpongeForge 缺少 Forge 启动 jar")
@@ -351,6 +354,49 @@ func launchSpecForProvision(req ProvisionServerRequest, core *CoreInfo, nodeOS s
 		spec.JavaArgFiles = []string{"user_jvm_args.txt", forgeArgsFile(forgeVersion, nodeOS)}
 	}
 	return spec, nil
+}
+
+// coreKindOf 取已解析核心的类型名（CoreInfo.Type）；core 为空时返回空串，
+// 由消费方按「未知」处理（日志规则推导会回退按 jar 名匹配）。
+func coreKindOf(core *CoreInfo) string {
+	if core == nil {
+		return ""
+	}
+	return project(core.Type)
+}
+
+// backfillLaunchSpecCoreKind 把已解析出的核心类型补写进实例的 launch_spec。
+//
+// 为什么需要：一键搭建统一把核心落盘为 `server.jar`（见 provisionCoreJar），
+// jar 名不再携带核心类型，故日志采集规则推导改读 launch_spec.coreKind（FR-502）。
+// 本字段引入之前创建的实例没有它；重建会重新解析核心，正是补齐信息的天然时机——
+// 否则重建后的代理仍按 bukkit 规则采集，即本项要修的生产缺陷静默复现。
+//
+// 只在缺失时写入，且只改 coreKind：launch_spec 的其余内容（内存/JVM 参数/argfile）
+// 属于原始搭建决定，重建不重新推导，避免把运维调整过的启动规格覆盖掉。
+// 返回错误由调用方按「不阻断重建」处理（规则退化为 jar 名匹配，与历史行为一致）。
+func backfillLaunchSpecCoreKind(db *gorm.DB, inst *model.Instance, core *CoreInfo) error {
+	kind := coreKindOf(core)
+	if db == nil || inst == nil || kind == "" {
+		return nil
+	}
+	spec, err := parseLaunchSpec(inst.LaunchSpec)
+	// spec 为 nil 表示该实例没有结构化启动规格（自由文本 startCommand 的旧实例）：
+	// 不写——凭空补一份只有 coreKind 的 spec 会让「无结构化启动」被误读成结构化启动。
+	if err != nil || spec == nil || strings.TrimSpace(spec.CoreKind) != "" {
+		return err
+	}
+	spec.CoreKind = kind
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return err
+	}
+	if err := db.Model(&model.Instance{}).Where("id = ?", inst.ID).
+		Update("launch_spec", string(raw)).Error; err != nil {
+		return err
+	}
+	inst.LaunchSpec = string(raw)
+	return nil
 }
 
 func forgeArgsFile(forgeVersion, nodeOS string) string {
