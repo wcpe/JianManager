@@ -10,6 +10,14 @@
 #   仓库**分支保护**勾选 `web-quality` 为必需 check 即合并前硬挡
 #   （分支保护是仓库设置，CI 只提供 check；见 README.md「前端 mock 模式与测试」）。
 #
+# E2E 不再用重试兜底（2026-10-20 用户裁定）：`playwright.config.ts` 已设
+#   `retries: 0` + `failOnFlakyTests: true`，任何一次失败都让门禁红。
+#   原配置是重试一次、恢复后仍算通过，把时序竞态藏了起来（表现为「不同用例轮流 flaky、
+#   重跑就绿」）。真正的根因是断言默认超时 5s 太短——全仓 93 处用例都经 helpers.login()
+#   等首屏，本地实测 7s 级、4 分片并行下再翻倍 ⇒ 必然偶发。现统一为 expect 15s / 用例 60s，
+#   并收敛了 56 处逐处打补丁的 timeout。若日后又出现裸的 `timeout: 15_000` 补丁，
+#   说明基准被改坏了，应回头查配置而不是再贴补丁。
+#
 # 路径与命令对齐 monorepo 真貌：前端位于 apps/control-plane-web，由 pnpm workspace 管理；
 #   pnpm 版本由根 package.json 的 packageManager 字段经 corepack 锁定，各步骤与 Taskfile.yml
 #   的 web:lint / web:test / web:build / web:e2e 同配方，CI 直调底层命令不经 task。

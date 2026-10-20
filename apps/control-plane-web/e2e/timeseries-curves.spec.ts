@@ -33,7 +33,6 @@ test('FR-060 平台历史曲线网格 + 时间范围 + 下钻节点级序列', a
   await expect(page.locator('svg.recharts-surface').first()).toBeVisible()
   await expect
     .poll(async () => page.locator('path.recharts-line-curve, path.recharts-area-curve').count(), {
-      timeout: 15_000,
     })
     .toBeGreaterThan(0)
 
@@ -42,7 +41,6 @@ test('FR-060 平台历史曲线网格 + 时间范围 + 下钻节点级序列', a
   await expect(drill).toBeVisible()
   const seriesResp = page.waitForResponse(
     (r) => r.url().includes('/metrics/series') && r.request().method() === 'GET',
-    { timeout: 15_000 },
   )
   // 选中第一个真实节点选项（跳过占位「平台/节点…」项）。
   const nodeOption = drill.locator('option').filter({ hasNotText: /平台|节点…|全部/ }).first()

@@ -31,7 +31,6 @@ test('FR-152 备份存储 容量+备份数 展示 与 行内测试连接反馈',
 
   // 即时反馈必须是本次请求产生的 sonner toast。
   await expect(page.locator('[data-sonner-toast]').filter({ hasText: '连接正常' }).first()).toBeVisible({
-    timeout: 10_000,
   })
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-152/single-machine-backup-storages.png', fullPage: true })

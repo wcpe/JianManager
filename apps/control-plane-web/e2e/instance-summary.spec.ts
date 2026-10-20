@@ -61,7 +61,7 @@ test('FR-136 proxy 行 inline 展开已注册 backend 摘要', async ({ page }) 
   await toggle.click()
 
   // 展开后 inline 出现「已注册后端 N」摘要标题或「暂无已注册后端」空态（BackendsInline / proxy.registeredBackends|noBackends）。
-  await expect(page.getByText(/已注册后端|暂无已注册后端/).first()).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText(/已注册后端|暂无已注册后端/).first()).toBeVisible()
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-136/single-machine-proxy-inline.png', fullPage: false })
 })

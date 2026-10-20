@@ -23,7 +23,7 @@ test('FR-062 仪表盘总负载环 + 负载趋势曲线', async ({ page }) => {
   await expect(page.getByText('负载趋势').first()).toBeVisible()
   // 曲线真渲染（recharts 折线）。
   await expect
-    .poll(async () => page.locator('path.recharts-line-curve').count(), { timeout: 15_000 })
+    .poll(async () => page.locator('path.recharts-line-curve').count())
     .toBeGreaterThan(0)
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-062/single-machine-load-dashboard.png', fullPage: true })
@@ -48,7 +48,7 @@ test('FR-062 监控页节点级负载图（node_load 单序列）', async ({ pag
   await expect(nodeLoadTitle).toBeAttached()
   await nodeLoadTitle.scrollIntoViewIfNeeded()
   await expect
-    .poll(async () => page.locator('path.recharts-line-curve').count(), { timeout: 15_000 })
+    .poll(async () => page.locator('path.recharts-line-curve').count())
     .toBeGreaterThan(0)
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-062/single-machine-node-load-chart.png', fullPage: true })

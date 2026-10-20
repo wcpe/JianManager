@@ -66,7 +66,7 @@ test('FR-150 日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 
   // 请求时返回 undefined，而 `expect(undefined).not.toBeNull()` 会误通过，随后由空串解析出的
   // NaN 让失败信息失去指向性。
   await expect
-    .poll(async () => lastParams(seen, '/api/v1/logs/federation'), { timeout: 10_000 })
+    .poll(async () => lastParams(seen, '/api/v1/logs/federation'))
     .not.toBeNull()
   const logsParams = lastParams(seen, '/api/v1/logs/federation')!
   const fromMs = new Date(logsParams.get('from') ?? '').getTime()

@@ -48,7 +48,7 @@ test('FR-138 主操作点击有反馈：停止 → 状态联动翻牌为「启�
 
   // 反馈：mock 停止后列表失效重取，该行主操作翻牌为「启动」（停止消失）。
   const updatedRow = page.getByRole('row').filter({ has: page.getByRole('button', { name: 'survival-1', exact: true }) })
-  await expect(updatedRow.getByRole('button', { name: '启动', exact: true })).toBeVisible({ timeout: 10_000 })
+  await expect(updatedRow.getByRole('button', { name: '启动', exact: true })).toBeVisible()
   await expect(updatedRow.getByRole('button', { name: '停止', exact: true })).toHaveCount(0)
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-138/single-machine-action-feedback.png', fullPage: false })

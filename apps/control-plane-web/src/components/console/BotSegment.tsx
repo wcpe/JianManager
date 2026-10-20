@@ -459,8 +459,18 @@ function BotBatchBar({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2">
-      <span className="text-xs text-muted-foreground">
+    // data-testid 供 E2E 稳定定位（2026-10-20）：此前用例靠
+    // `getByText('已选 N 个 Bot').locator('xpath=ancestor::div[contains(@class,"rounded-lg")][1]')`
+    // 反推容器——`rounded-lg` 在页面上大量出现，属于脆弱定位；且分组块表头也有
+    // 「批量设行为」按钮，靠类名加层级猜容器会偶发命中错的那个。
+    <div
+      data-testid="bot-batch-bar"
+      className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2"
+    >
+      <span
+        className="text-xs text-muted-foreground"
+        data-testid="bot-batch-scope"
+      >
         {useSelection
           ? t('bots.batchScopeSelected', { count: scopeCount })
           : t('bots.batchScopeFiltered', { count: scopeCount })}
