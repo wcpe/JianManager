@@ -57,8 +57,8 @@ func TestLogAcqPolicyWorkerOverrideWins(t *testing.T) {
 		SettingKeyLogAcqGzImport:     "true",
 	}))
 	// Worker 级：只覆盖实时采集（打开），gz 导入不覆盖。
-	require.NoError(t, svc.Update(map[string]string{
-		NodeScopedSettingKey(SettingKeyLogAcqRealtimeTail, "node-abc"): "true",
+	require.NoError(t, svc.UpdateNodeScoped("node-abc", map[string]string{
+		SettingKeyLogAcqRealtimeTail: "true",
 	}))
 
 	// 该 Worker：实时采集被覆盖为开，gz 导入继承平台级（开）。
@@ -76,10 +76,8 @@ func TestLogAcqPolicyWorkerOverrideWins(t *testing.T) {
 func TestLogAcqPolicyIsolatedBetweenWorkers(t *testing.T) {
 	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
 
-	require.NoError(t, svc.Update(map[string]string{
-		NodeScopedSettingKey(SettingKeyLogAcqRealtimeTail, "node-a"): "false",
-		NodeScopedSettingKey(SettingKeyLogAcqRealtimeTail, "node-b"): "true",
-	}))
+	require.NoError(t, svc.UpdateNodeScoped("node-a", map[string]string{SettingKeyLogAcqRealtimeTail: "false"}))
+	require.NoError(t, svc.UpdateNodeScoped("node-b", map[string]string{SettingKeyLogAcqRealtimeTail: "true"}))
 
 	require.False(t, svc.LogAcqPolicy("node-a").RealtimeTail)
 	require.True(t, svc.LogAcqPolicy("node-b").RealtimeTail)
@@ -168,13 +166,15 @@ func TestLogAcqPolicyPathOverridesInvalidJSONIsSafe(t *testing.T) {
 func TestLogAcqPolicyWorkerScopeWhitelist(t *testing.T) {
 	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
 
-	// 放行：日志采集的 5 个键（心跳按节点下发，确有节点级消费方）。
-	require.NoError(t, svc.Update(map[string]string{
-		NodeScopedSettingKey(SettingKeyLogAcqRulesEnabled, "n1"):   "false",
-		NodeScopedSettingKey(SettingKeyLogAcqRealtimeTail, "n1"):   "false",
-		NodeScopedSettingKey(SettingKeyLogAcqGzImport, "n1"):       "true",
-		NodeScopedSettingKey(SettingKeyLogAcqGzScanInterval, "n1"): "30s",
-		NodeScopedSettingKey(SettingKeyLogAcqPathOverrides, "n1"):  `{"inst:1":"custom/a.log"}`,
+	// 放行：日志采集的 5 个键，经**节点级专用入口** UpdateNodeScoped
+	// （2026-10-20 审查修正：节点级键不再走共享白名单 Update，否则通用端点
+	//  PUT /api/v1/settings 也能写它们，绕过节点门禁且不留审计）。
+	require.NoError(t, svc.UpdateNodeScoped("n1", map[string]string{
+		SettingKeyLogAcqRulesEnabled:   "false",
+		SettingKeyLogAcqRealtimeTail:   "false",
+		SettingKeyLogAcqGzImport:       "true",
+		SettingKeyLogAcqGzScanInterval: "30s",
+		SettingKeyLogAcqPathOverrides:  `{"inst:1":"custom/a.log"}`,
 	}), "日志采集键应支持节点级覆盖")
 
 	// 拒绝：health.* / direct_probe.* 虽随心跳下发，但其解析器（HealthScanPolicy /
@@ -185,33 +185,46 @@ func TestLogAcqPolicyWorkerScopeWhitelist(t *testing.T) {
 		SettingKeyHealthSelfHealMaxRestarts,
 		SettingKeyDirectProbeSLPTimeout, SettingKeyDirectProbeQueryTimeout,
 	} {
-		err := svc.Update(map[string]string{NodeScopedSettingKey(key, "n1"): "60s"})
+		err := svc.UpdateNodeScoped("n1", map[string]string{key: "60s"})
 		require.ErrorIs(t, err, ErrSettingKeyNotWritable, "%s 无节点级消费方，应拒绝", key)
 	}
 
 	// 拒绝：不经心跳下发的键（无节点级消费方，写了也不会生效）。
-	err := svc.Update(map[string]string{
-		NodeScopedSettingKey(SettingKeyLogLevel, "n1"): "debug",
-	})
+	err := svc.UpdateNodeScoped("n1", map[string]string{SettingKeyLogLevel: "debug"})
 	require.ErrorIs(t, err, ErrSettingKeyNotWritable, "log.level 无节点级消费方，应拒绝")
 
 	// 拒绝：残缺后缀（`x@node:`）——不能退化成「配了平台级」。
+	// 平台端点 Update 现在**拒绝一切**带节点后缀的键（无论基础键是否有节点级消费方）。
+	// 这是 B1 的回归守卫：通用端点只要求 settings.write 且不写审计，若它也能写
+	// `@node:` 键，任何自定义角色都能静默停掉任意节点的采集。
+	for _, k := range []string{
+		NodeScopedSettingKey(SettingKeyLogAcqRealtimeTail, "victim-uuid"),
+		NodeScopedSettingKey(SettingKeyLogAcqGzImport, "victim-uuid"),
+	} {
+		require.ErrorIs(t, svc.Update(map[string]string{k: "false"}), ErrSettingKeyNotWritable,
+			"平台端点不得写节点级键（应走 UpdateNodeScoped）")
+	}
+
 	err = svc.Update(map[string]string{
 		SettingKeyLogAcqRealtimeTail + nodeScopedSettingSuffix: "false",
 	})
 	require.ErrorIs(t, err, ErrSettingKeyNotWritable, "残缺 @node: 后缀应拒绝")
 
 	// 拒绝：节点级键的值语义校验与平台级同口径（后缀不改变校验）。
-	err = svc.Update(map[string]string{
-		NodeScopedSettingKey(SettingKeyLogAcqGzScanInterval, "n1"): "0",
-	})
+	err = svc.UpdateNodeScoped("n1", map[string]string{SettingKeyLogAcqGzScanInterval: "0"})
 	require.ErrorIs(t, err, ErrSettingValueInvalid, "节点级键也须过值校验（0 不是合法周期）")
 }
 
-// TestLogAcqPolicyNodeEmptyOverrideIsExplicitDisable 验证「节点级空串覆盖 = 显式关闭」，
-// 而不是回落继承平台值（FR-503）。
+// TestLogAcqPolicyNodeEmptyOverrideIsExplicitDisable 验证「节点级空串覆盖」与「未覆盖」
+// 是两种不同状态：空串是**显式声明**，不会回落继承平台值（FR-503）。
 //
-// 空串是合法值：gz_scan_interval 空 = 关闭定时扫描、path_overrides 空 = 无覆盖；
+// **2026-10-20 审查修正语义**：空串对 gz_scan_interval 的含义是「本节点不指定周期，
+// 交由该节点 worker.yml 基线决定」，**不是**「关闭定时扫描」。原用例名与断言把它写成
+// 「关闭」，与 wire 契约相反（proto 明确「0 = 未配置 ⇒ 回落基线」，Worker 的
+// ArchiveScanInterval() 也只在 >0 时才用本值）。真正能停掉定时扫描的只有把
+// log.acq.gz_import_enabled 置 false。
+//
+// 空串仍是合法值且必须与「未覆盖」区分：path_overrides 空 = 无覆盖；
 // 前端节点面板把非布尔项渲染成普通输入框，**清空输入即写入空串**，故这条路径经界面可达。
 // 历史缺陷：心跳按「值非空」判定覆盖、视图按「键存在」判定，于是界面显示「本节点已覆盖为
 // 空/已关闭」，而该节点仍按平台周期（如 1h）在扫描，且运维**无法对单节点关闭定时扫描**——
@@ -230,14 +243,14 @@ func TestLogAcqPolicyNodeEmptyOverrideIsExplicitDisable(t *testing.T) {
 	}))
 
 	const node = "node-empty-override"
-	// 节点级：显式清空扫描周期与路径覆盖 = 本节点关闭定时扫描、无路径覆盖。
-	require.NoError(t, svc.Update(map[string]string{
-		NodeScopedSettingKey(SettingKeyLogAcqGzScanInterval, node): "",
-		NodeScopedSettingKey(SettingKeyLogAcqPathOverrides, node):  "",
+	// 节点级：显式清空扫描周期与路径覆盖 = 本节点不指定周期（交基线）、无路径覆盖。
+	require.NoError(t, svc.UpdateNodeScoped(node, map[string]string{
+		SettingKeyLogAcqGzScanInterval: "",
+		SettingKeyLogAcqPathOverrides:  "",
 	}))
 
 	policy := svc.LogAcqPolicy(node)
-	require.Zero(t, policy.GzScanInterval, "节点级空串必须表达「关闭定时扫描」，不得继承平台 1h")
+	require.Zero(t, policy.GzScanInterval, "节点级空串 = 不指定周期（0 交基线），不得继承平台 1h")
 	require.Empty(t, policy.PathOverrides, "节点级空串必须表达「无路径覆盖」，不得继承平台覆盖")
 	require.True(t, policy.GzImportEnabled, "未被节点覆盖的键仍继承平台级")
 

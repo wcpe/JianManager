@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/mail"
 	"path/filepath"
 	"strconv"
@@ -64,8 +65,10 @@ const (
 	SettingKeyHealthStartupWarmup       = "health.startup_warmup"
 	SettingKeyHealthSelfHealMaxRestarts = "health.self_heal_max_restarts"
 	// === FR-503 日志采集配置（平台默认；Worker 级覆盖见 NodeScopedSettingKey）===
-	// 语义与 Worker 侧 worker.yml 基线一致：规则引擎与实时采集默认开，
-	// gz 导入与定时扫描默认关（保守，避免一次性导入大量历史归档）。
+	// 语义与 Worker 侧 worker.yml 基线一致：规则引擎与实时采集默认开。
+	// gz 导入总开关**默认开**（2026-10-15 定案）：默认关会让 worker.yml 基线为「开」的
+	// 存量部署在升级后静默失去定时扫描；定时扫描的**周期**则默认留空 = 未配置，
+	// 交由各节点 worker.yml 的 archive_scan_interval 决定（不是「关闭」）。
 	SettingKeyLogAcqRulesEnabled   = "log.acq.rules_enabled"
 	SettingKeyLogAcqRealtimeTail   = "log.acq.realtime_tail"
 	SettingKeyLogAcqGzImport       = "log.acq.gz_import_enabled"
@@ -387,7 +390,59 @@ func (s *SettingsService) Update(values map[string]string) error {
 			return err
 		}
 	}
+	return s.writeValues(values)
+}
 
+// UpdateNodeScoped 写入**某节点的**平台键覆盖（FR-503），是节点级覆盖的唯一写入口。
+//
+// 为什么单独成一个方法而不复用 Update（2026-10-20 审查修正）：`Update` 的键白名单
+// （isWritableSettingKey）不区分「平台级端点」与「节点级端点」，两者共用会让
+// `PUT /api/v1/settings`（只要求 settings.write、且不写审计）也能写 `@node:` 键，
+// 从而绕过节点级门禁静默停掉任意节点的采集。现在 `@node:` 后缀在这里统一拼接，
+// Update 侧对带后缀的键一律拒绝，平台端点物理上写不到节点键。
+//
+// 参数 keys 是**基础键**（不带后缀）；nodeUUID 必须非空。
+func (s *SettingsService) UpdateNodeScoped(nodeUUID string, values map[string]string) error {
+	if strings.TrimSpace(nodeUUID) == "" {
+		return fmt.Errorf("%w: 节点标识为空", ErrSettingValueInvalid)
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	scoped := make(map[string]string, len(values))
+	for baseKey, val := range values {
+		// 基础键必须是确有节点级消费方的键（日志采集 5 个），否则写进去永远不生效。
+		if !supportsNodeScope(baseKey) {
+			return fmt.Errorf("%w: %s 不支持节点级覆盖", ErrSettingKeyNotWritable, baseKey)
+		}
+		// 调用方若已带后缀则拒绝，避免拼出 `x@node:a@node:b` 这类永不命中的键。
+		if strings.Contains(baseKey, nodeScopedSettingSuffix) {
+			return fmt.Errorf("%w: %s 不应自带节点后缀", ErrSettingValueInvalid, baseKey)
+		}
+		full := NodeScopedSettingKey(baseKey, nodeUUID)
+		if err := validateSettingValue(full, val); err != nil {
+			return err
+		}
+		scoped[full] = val
+	}
+	return s.writeValues(scoped)
+}
+
+// isWindowsAbsPath 判定 Windows 形态的绝对路径（盘符或 UNC）。
+//
+// 为什么 CP 要单独判（2026-10-20 审查）：CP 跑 Linux、节点可能跑 Windows 时，
+// `filepath.IsAbs` 在 CP 上对 `C:\\logs\\a.log` / `\\server\share\x` 返回 false，
+// 校验放行、返回 200；到了 Windows 节点上 `filepath.IsAbs` 为 true，Worker 的
+// validateInstanceRelativePath 直接拒绝登记 —— 用户看到的是「保存成功但实例日志登记失败」。
+func isWindowsAbsPath(p string) bool {
+	if strings.HasPrefix(p, `\\`) {
+		return true
+	}
+	return len(p) >= 2 && ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':'
+}
+
+// writeValues 是 Update / UpdateNodeScoped 共用的落库 + 应用实现（调用方已完成校验）。
+func (s *SettingsService) writeValues(values map[string]string) error {
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		for key, val := range values {
 			rec := model.PlatformSetting{Key: key, Value: val, UpdatedAt: time.Now()}
@@ -400,14 +455,9 @@ func (s *SettingsService) Update(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-
-	// 落库成功后应用可即时生效项（CP 内读取点）。
 	for key, val := range values {
 		s.applyOverride(key, val)
 	}
-
-	// 本批涉及出站代理键 → 以当前生效代理（DB 覆盖 > yaml > env）重建 CP 出站持有者（FR-185/ADR-043）。
-	// 单独于 applyOverride：重建不依赖单个键值、而依赖「全部覆盖叠加后的生效代理」，故落库后整体算一次。
 	if _, ok := values[SettingKeyProxyURL]; ok {
 		s.rebuildProxy()
 	} else if _, ok := values[SettingKeyProxyNoProxy]; ok {
@@ -689,15 +739,26 @@ func supportsNodeScope(baseKey string) bool {
 	return false
 }
 
-// isWritableSettingKey 报告键是否在可写白名单内。
+// isWritableSettingKey 报告键是否在**平台级**可写白名单内。
 //
-// 支持 Worker 级覆盖键（`<平台键>@node:<uuid>`）：剥离后缀后按平台键判定，
-// 但仅限 supportsNodeScope 列出的键（确有节点级消费方，即日志采集的 5 个键）；
-// 残缺后缀（`x@node:`）一律拒绝。
+// 节点级覆盖（`<平台键>@node:<uuid>`）**刻意不在此放行**（2026-10-20 审查修正）：
+// 本函数是 `SettingsService.Update` 的守卫，而 `Update` 有两个调用方——
+//   - 节点端点 `PUT /nodes/:id/settings/log-acquisition`（requirePlatformAdmin + 审计）
+//   - 通用端点 `PUT /api/v1/settings`（**只要求 settings.write，且不写审计**）
+//
+// 若在这里放行 `@node:` 键，任何持 `settings.write` 的自定义角色（可以完全没有节点权限）
+// 就能经通用端点把任意节点的 `log.acq.realtime_tail` 置 false —— 单向停掉该节点的实时采集，
+// 既越过了节点级门禁，也不留任何审计痕迹。这正是 supportsNodeScope 的注释自称要防的
+// 「静默 + 无痕」，只是入口从 health.* 换成了 log.acq.*。
+//
+// 节点级写入的唯一入口是 UpdateNodeScoped（内部加后缀），平台端点因此物理上写不到节点键。
 func isWritableSettingKey(key string) bool {
-	baseKey, nodeUUID, scoped := nodeScopeSplit(key)
+	baseKey, _, scoped := nodeScopeSplit(key)
 	if scoped {
-		return nodeUUID != "" && supportsNodeScope(baseKey)
+		// 带节点后缀的键一律不属平台级白名单，交由 UpdateNodeScoped 处理。
+		return false
+	}
+	switch baseKey {
 	}
 	switch baseKey {
 	case SettingKeyLogLevel, SettingKeyDebugMode,
@@ -845,12 +906,27 @@ func validateSettingValue(key, val string) error {
 			return fmt.Errorf("%w: 日志采集开关须为 true|false", ErrSettingValueInvalid)
 		}
 	case SettingKeyLogAcqGzScanInterval:
-		// 空值 = 关闭定时扫描（默认）；非空须为正 duration。零/负值会让扫描循环空转，
-		// 故与「关闭」区分：要关就留空，别写 0。
+		// 空值 = **未配置**，由该节点 worker.yml 的 `log_ingest.archive_scan_interval` 决定
+		// （2026-10-20 审查修正：此前注释与错误消息都把它说成「关闭」，与 wire 契约相反——
+		// proto 明确「0 = 未配置 ⇒ 回落基线」，Worker 的 ArchiveScanInterval() 也只在 >0 时
+		// 才用本值。说成「关闭」会让运维以为已停扫，实际仍按基线周期在扫；真正能停掉定时
+		// 扫描的只有把 log.acq.gz_import_enabled 置 false）。
+		//
+		// 非空须为正 duration，且**有上界**：下发侧是 int32 毫秒
+		// （grpc/handler.go 的 int32(p.GzScanInterval/time.Millisecond)），超过约 24.8 天会
+		// 整数截断——`720h`(30天) 截成负数 ⇒ Worker 归零当「未配置」；`1200h`(50天) 截成
+		// 25032704ms ≈ 6.96 小时 ⇒ 被当成合法周期照用，用户配 50 天却每 7 小时扫一次。
 		if strings.TrimSpace(val) != "" {
 			d, err := time.ParseDuration(val)
 			if err != nil || d <= 0 {
-				return fmt.Errorf("%w: gz 扫描周期须留空（关闭）或为正的 Go duration（如 1h）", ErrSettingValueInvalid)
+				return fmt.Errorf("%w: gz 扫描周期须留空（交由该节点 worker.yml 基线决定；要停止定时扫描请关闭 gz 导入总开关）或为正的 Go duration（如 1h）", ErrSettingValueInvalid)
+			}
+			if d/time.Millisecond > math.MaxInt32 {
+				return fmt.Errorf("%w: gz 扫描周期上限约 24 天（协议以 int32 毫秒下发，更长会被截断成错误值）", ErrSettingValueInvalid)
+			}
+			// 下界：不足 1ms 会被截断成 0，语义变回「未配置」。
+			if d < time.Millisecond {
+				return fmt.Errorf("%w: gz 扫描周期不得小于 1ms（协议以毫秒下发，更短会被截断成 0 = 未配置）", ErrSettingValueInvalid)
 			}
 		}
 	case SettingKeyLogAcqPathOverrides:
@@ -866,15 +942,37 @@ func validateSettingValue(key, val string) error {
 			// 键也校验：必须是 `inst:<id>` 形态，否则该覆盖永远不会命中任何实例，
 			// 静默失效比报错更难排查。键的校验与 Worker 侧 policy 的 targetID 语义一致。
 			for target, p := range m {
-				if !strings.HasPrefix(target, "inst:") || len(target) == len("inst:") {
+				// 键必须是**规范**的 `inst:<十进制ID>`（2026-10-20 审查修正）。
+				// 只查前缀会放行 `inst:abc`、`inst: 1`、`inst:1/2`、全角 `inst:１` 等变体：
+				// Worker 侧按 binding.TargetID（恒为 `inst:<数字>`）精确匹配，这些键永远命中
+				// 不到任何实例——与「写入 200 但永不生效」同类，且没有报错可循。
+				// 规范化写法照 router/log_runtime.go 的 ParseUint + 回拼比对。
+				idText, ok := strings.CutPrefix(target, "inst:")
+				if !ok || idText == "" {
 					return fmt.Errorf("%w: 路径覆盖的键须为 inst:<实例ID>（got %q）", ErrSettingValueInvalid, target)
+				}
+				id, convErr := strconv.ParseUint(idText, 10, 64)
+				if convErr != nil || target != fmt.Sprintf("inst:%d", id) {
+					return fmt.Errorf("%w: 路径覆盖的键须为规范的 inst:<十进制实例ID>（got %q）", ErrSettingValueInvalid, target)
 				}
 				trimmed := strings.TrimSpace(p)
 				if trimmed == "" {
 					return fmt.Errorf("%w: 路径覆盖的值不能为空（%s）", ErrSettingValueInvalid, target)
 				}
+				// 首尾空白直接拒绝而不静默 trim：validateSettingValue 只校验、不回写规范值，
+				// 「校验时 trim、落库仍是原串」会让 Worker 拼出带空格的路径而找不到文件，
+				// 表现为「保存成功但查不到数据」。与 github.token 的「含空白整体拒绝」同口径。
+				if trimmed != p {
+					return fmt.Errorf("%w: 路径覆盖的值首尾不得有空白（%s = %q）", ErrSettingValueInvalid, target, p)
+				}
 				if filepath.IsAbs(filepath.FromSlash(trimmed)) {
 					return fmt.Errorf("%w: 路径覆盖须为相对实例工作目录的路径，不接受绝对路径（%s = %q）", ErrSettingValueInvalid, target, p)
+				}
+				// Windows 形态（盘符 / UNC）在 Linux 的 CP 上 IsAbs 为 false，但下发给
+				// Windows 节点时会被 Worker 判为绝对路径并拒绝登记——届时表现为
+				// 「保存成功、实例日志登记失败」。这里提前拒掉。
+				if isWindowsAbsPath(trimmed) {
+					return fmt.Errorf("%w: 路径覆盖不支持 Windows 盘符或 UNC 路径（%s = %q）", ErrSettingValueInvalid, target, p)
 				}
 				clean := filepath.Clean(filepath.FromSlash(trimmed))
 				if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {

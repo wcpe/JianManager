@@ -202,3 +202,49 @@ func TestLogAcqNodeWriteRequiresPlatformAdmin(t *testing.T) {
 	w, _ = doJSON(t, r, http.MethodGet, nodePath, "")
 	require.Equal(t, http.StatusForbidden, w.Code, "无节点读权限时读也应拒绝")
 }
+
+// TestPlatformSettingsEndpointCannotWriteNodeScopedKeys 守住「节点级覆盖只有一个写入口」。
+//
+// 背景（2026-10-20 审查发现的越权通道）：`isWritableSettingKey` 原先对
+// `<log.acq 键>@node:<uuid>` 一并放行，而该白名单是 `SettingsService.Update` 的守卫，
+// `Update` 有两个调用方——节点端点（requirePlatformAdmin + 审计）与通用端点
+// `PUT /api/v1/settings`（**只要求 settings.write，且完全不写审计**）。于是持
+// `settings.write` 的自定义角色即使没有任何节点权限，也能经通用端点下一条
+// `log.acq.realtime_tail@node:<victim>=false`，静默停掉任意节点的实时采集，且不留痕迹。
+//
+// 现在 `Update` 拒绝一切带节点后缀的键，节点级写入只能走 `UpdateNodeScoped`。
+// 本用例直接从服务层断言这条边界——它是越权通道的根，比断言 HTTP 状态码更贴近本质。
+func TestPlatformSettingsEndpointCannotWriteNodeScopedKeys(t *testing.T) {
+	_, settings, _ := newLogAcqTestRouter(t, true)
+
+	// 平台键：可经 Update（通用端点的服务层）写入，既有行为不变。
+	require.NoError(t, settings.Update(map[string]string{service.SettingKeyLogLevel: "debug"}),
+		"平台键应可经通用端点写入")
+
+	// 节点级键：Update 一律拒绝。通用端点 PUT /api/v1/settings 的唯一写入路径就是 Update
+	// （router/settings.go 的 Update 直接调 h.svc.Update），故这里断言服务层即可覆盖该端点。
+	for _, base := range []string{
+		service.SettingKeyLogAcqRealtimeTail,
+		service.SettingKeyLogAcqGzImport,
+		service.SettingKeyLogAcqRulesEnabled,
+	} {
+		require.ErrorIs(t,
+			settings.Update(map[string]string{
+				service.NodeScopedSettingKey(base, "victim-uuid"): "false",
+			}), service.ErrSettingKeyNotWritable,
+			"通用端点不得写节点级键 %s（应只有节点端点能写）", base)
+	}
+
+	// UpdateNodeScoped 放行。
+	require.ErrorIs(t,
+		settings.Update(map[string]string{
+			service.NodeScopedSettingKey(service.SettingKeyLogAcqRealtimeTail, "victim-uuid"): "false",
+		}), service.ErrSettingKeyNotWritable)
+	require.NoError(t, settings.UpdateNodeScoped("victim-uuid", map[string]string{
+		service.SettingKeyLogAcqRealtimeTail: "false",
+	}), "节点级专用入口应放行")
+
+	// 落库的是带后缀的键，且该节点生效值为 false、其它节点不受影响。
+	require.False(t, settings.LogAcqPolicy("victim-uuid").RealtimeTail)
+	require.True(t, settings.LogAcqPolicy("another-uuid").RealtimeTail)
+}

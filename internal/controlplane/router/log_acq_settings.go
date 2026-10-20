@@ -112,16 +112,12 @@ func (h *LogAcqSettingsHandler) UpdateNode(c *gin.Context) {
 	}
 	// 只接受日志采集的 5 个平台键：本端点不承担「任意键的节点级覆盖」，
 	// 范围外的键整体拒绝（避免被当作通用节点设置入口误用）。
-	scoped := make(map[string]string, len(req.Values))
-	for key, val := range req.Values {
-		if !isLogAcqPlatformKey(key) {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR",
-				"message": fmt.Sprintf("不支持的日志采集配置项: %s", key)})
-			return
-		}
-		scoped[service.NodeScopedSettingKey(key, nodeUUID)] = val
-	}
-	if err := h.settings.Update(scoped); err != nil {
+	//
+	// 后缀拼接与写入统一由 service.UpdateNodeScoped 负责（2026-10-20 审查修正）：
+	// 通用端点 PUT /api/v1/settings 只要求 settings.write 且不写审计，若节点级键也走
+	// 共享白名单，它就能绕过本端点的 requirePlatformAdmin 静默停掉任意节点的采集。
+	// 现在 @node: 键只在此路径可写。
+	if err := h.settings.UpdateNodeScoped(nodeUUID, req.Values); err != nil {
 		writeLogAcqSettingError(c, err, "保存节点日志采集覆盖失败")
 		return
 	}
@@ -192,13 +188,22 @@ func (h *LogAcqSettingsHandler) resolveNode(c *gin.Context) (uint, string, strin
 }
 
 // recordAudit 记录设置审计；audit 未注入时静默跳过。
+//
+// targetType 按**动作作用域**区分（2026-10-20 审查修正）：节点级动作（`node.log_acq.*`）
+// 记 `node`，平台级记 `settings`。原先一律写 `settings`，于是按 `targetType=node` 查
+// 「某节点做过哪些操作」时看不到节点级采集配置的变更/清除——而同一批的
+// router/log_runtime.go 对节点级动作用的是 `node`，两处口径不一致。
 func (h *LogAcqSettingsHandler) recordAudit(c *gin.Context, action, targetID string, detail map[string]any) {
 	if h.audit == nil {
 		return
 	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	userID, _ := uid.(uint)
-	h.audit.RecordSafe(userID, action, "settings", targetID, marshalAuditDetail(detail), c.ClientIP())
+	targetType := "settings"
+	if strings.HasPrefix(action, "node.") {
+		targetType = "node"
+	}
+	h.audit.RecordSafe(userID, action, targetType, targetID, marshalAuditDetail(detail), c.ClientIP())
 }
 
 // RegisterPlatformRoutes 注册平台默认端点（挂在平台配置权限组下）。
