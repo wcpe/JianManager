@@ -325,3 +325,11 @@ jobs:
 
       - name: 校验发布工作流契约（触发条件 / runner / 版本来源）
         run: node --test scripts/release-metadata.test.mjs
+
+      # cp-lifecycle.sh 的契约测试（2026-10-20 接入）：该脚本的 awk 转义曾把 comm
+      # 字段解析错（2026-10-12 生产实测：CP 拒绝 stop/start），而行为测试发现不了这类
+      # 缺陷——所以测试直接检查源码形态。但它此前**没有任何自动执行路径**（不在任何
+      # workflow、也不在 Taskfile 里），等于门禁对它零保护。放在本 job 是因为语义相近
+      # （都是「脚本/工作流的形态契约」）且已有 shell 环境。
+      - name: 校验 cp-lifecycle 脚本契约（comm 字段解析）
+        run: bash scripts/cp-lifecycle.test.sh

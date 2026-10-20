@@ -115,7 +115,10 @@ describe('NodeLogAcqPanel × 草稿生命周期（FR-503 / review D-02）', () =
     await waitFor(() => expect(pathInput).toHaveValue('{"inst:1":"proxy.log.0"}'))
     expect(screen.getByTestId('node-log-acq-unsaved-hint')).toHaveTextContent('1 项未保存改动')
     // 已提交的键已清出草稿（服务端返回的覆盖值接手展示）。
-    expect(scanInput).toHaveValue('1h')
+    // 用 waitFor 包住（2026-10-20 审查）：PUT 成功后该输入框会先回落到旧的查询缓存
+    // （platform: ''），要等 invalidateQueries 的重取落地才变回 '1h'。裸断言是无等待快照，
+    // 靠 act() 排空微任务侥幸通过，属于 design-system 那条 flaky 的同型写法。
+    await waitFor(() => expect(scanInput).toHaveValue('1h'))
   })
 
   it('② 保存期间对**同一个键**的再次修改也保留（只清仍是提交值的键）', async () => {

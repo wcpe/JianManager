@@ -147,8 +147,25 @@ export function validateSettingDraft(key: string, value: string): string | undef
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         return 'settings.logAcqInvalidPathOverrides'
       }
+      /**
+       * 键也要校验（2026-10-20 审查修正）：后端强制键为规范的 `inst:<十进制ID>`，
+       * 否则该覆盖永远不会命中任何实例（Worker 按 `inst:<数字>` 精确匹配）。
+       * 原先前端只校验值，于是 `{"1":"logs/a.log"}`（把实例 ID 当键）在前端「合法」、
+       * 提交后被后端 422 —— 正是本次想消除的「两处口径漂移」，只是方向反了。
+       */
+      for (const target of Object.keys(parsed as Record<string, unknown>)) {
+        const m = /^inst:(\d+)$/.exec(target)
+        // 与后端同口径：必须是十进制、且回拼后与原文一致（排除 `inst:007`、全角数字等）。
+        if (!m || target !== `inst:${Number(m[1])}`) {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+      }
       for (const path of Object.values(parsed as Record<string, unknown>)) {
         if (typeof path !== 'string' || path.trim() === '') {
+          return 'settings.logAcqInvalidPathOverrides'
+        }
+        // 首尾空白：后端直接拒绝而不静默 trim（trim 后落库仍是原串会让路径带空格查不到文件）。
+        if (path !== path.trim()) {
           return 'settings.logAcqInvalidPathOverrides'
         }
         const p = path.trim().replace(/\\/g, '/')

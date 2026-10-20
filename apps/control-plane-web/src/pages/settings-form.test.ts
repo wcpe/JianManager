@@ -198,4 +198,22 @@ describe('log.acq.path_overrides（值须为相对实例工作目录的路径）
     expect(validateSettingDraft(key, '["a"]')).toBe(bad)
     expect(validateSettingDraft(key, 'null')).toBe(bad)
   })
+
+  /**
+   * 键校验（2026-10-20 审查补）：后端强制键为规范的 `inst:<十进制ID>`，
+   * 前端漏了这条就会「前端放行、后端 422」，正是本次要消除的两处口径漂移。
+   */
+  it('拒绝非 inst:<十进制ID> 的键', () => {
+    expect(validateSettingDraft(key, '{"1":"logs/a.log"}')).toBe(bad)
+    expect(validateSettingDraft(key, '{"inst:abc":"logs/a.log"}')).toBe(bad)
+    expect(validateSettingDraft(key, '{"inst:":"logs/a.log"}')).toBe(bad)
+    expect(validateSettingDraft(key, '{"inst:007":"logs/a.log"}')).toBe(bad)
+    expect(validateSettingDraft(key, '{"INST:1":"logs/a.log"}')).toBe(bad)
+    expect(validateSettingDraft(key, '{"inst:1/2":"logs/a.log"}')).toBe(bad)
+  })
+
+  it('拒绝值首尾空白（后端不静默 trim）', () => {
+    expect(validateSettingDraft(key, '{"inst:1":" logs/a.log"}')).toBe(bad)
+    expect(validateSettingDraft(key, '{"inst:1":"logs/a.log "}')).toBe(bad)
+  })
 })

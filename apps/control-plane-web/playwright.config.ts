@@ -42,7 +42,9 @@ export default defineConfig({
   timeout: 60_000,
   use: {
     baseURL: e2eBaseURL,
-    trace: process.env.CI ? 'retain-on-failure' : 'on-first-retry',
+    // retries 归零后 'on-first-retry' 永不触发（本地失败会一点 trace 都没有，
+    // 而 retries:0 恰恰让本地更容易看到失败）。统一用 retain-on-failure。
+    trace: 'retain-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   // 自动起当前工作区的 mock dev server；默认禁止复用未知服务，避免本地旧进程造成假失败。
