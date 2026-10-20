@@ -455,3 +455,68 @@ func TestImportTextHandlesCRLFAndMissingFinalNewline(t *testing.T) {
 	require.False(t, res.Partial)
 	require.Equal(t, ledger.SegmentRotatedText, archiveSegmentOf(led, key, path).Kind)
 }
+
+// TestImportRealBungeeRotationProducesEvents 用**真实 BungeeCord 轮转产物**验证导入。
+//
+// 夹具来源（2026-10-20，可复现）：从生产 `bungee-main` 复制 `BungeeCord.jar`，在临时目录用
+// JDK 17 启动真实核心；它的 `net.md_5.bungee.log.BungeeLogger` 构造参数经 `javap` 反编译确认为
+// `new FileHandler(pattern, 16777216, 8, true)`（16 MiB 上限、保留 8 个、append）。把
+// `proxy.log.0` 预先填到超过 16 MiB 后再启动，JUL 在第一条日志时立即轮转，于是得到**真实**的
+// `proxy.log.0`（新日志）+ `proxy.log.1`（被轮转的旧内容）+ `proxy.log.0.lck`。
+// 夹具 `testdata/bungee-rotation/proxy.log.1` 即 `proxy.log.0` 里的真实日志行（41 行，
+// 含 INFO/SEVERE 与堆栈），不掺任何合成标记——轮转只是改名，内容就是该核心的真实输出。
+//
+// 这条用例补的是「合成文件测不出」的部分：真实 JUL 输出的行格式、堆栈续行、时间戳前缀，
+// 都必须能被解析成事件，而不是被当成畸形内容丢弃。
+func TestImportRealBungeeRotationProducesEvents(t *testing.T) {
+	path, err := filepath.Abs(filepath.Join("testdata", "bungee-rotation", "proxy.log.1"))
+	require.NoError(t, err)
+	require.FileExists(t, path)
+
+	// 形态判定必须走纯文本分支：真实轮转产物不是 gzip（前两字节不是 1f 8b）。
+	require.Equal(t, ledger.SegmentRotatedText, DetectArchiveFormat(path),
+		"真实 bungee 轮转产物应判定为纯文本轮转，而非 gzip")
+
+	key := testKey("src-real-bungee-rotation", "g1")
+	led := ledger.New()
+	imp := NewArchiveImporter(led, key)
+
+	// 按生产语义循环读到读完：导入是**有界分批**的，单轮读不完时 Partial=true、
+	// 位置落回账本、下一轮从断点续读（不丢、不重读前缀）。
+	//
+	// 注意「Imported 何时置真」的既有契约：importArchive 只在**本批没有产出事件**且已见
+	// EOF 时自己 MarkImported；有事件时把事件交给上层，由 ingest 在 WAL 落盘之后才调
+	// MarkImported（见 archive.go 中该函数的文档「called only after the archive events are
+	// covered by durable WAL」）。故这里断言的是**位置推进 + 不产生缺口 + 事件内容正确**，
+	// 不越级要求导入器在事件未落盘时就标「已导入」——那反而会让容量/落盘失败时静默跳过归档。
+	var all []string
+	previousEnd := uint64(0)
+	rounds := 0
+	for {
+		res, err := imp.ImportTextBounded(path, 500)
+		require.NoError(t, err)
+		rounds++
+		require.Equal(t, previousEnd, res.ResumedFrom, "每轮必须从账本记录的断点续读")
+		for _, ev := range res.Events {
+			all = append(all, ev.Message)
+		}
+		seg := archiveSegmentOf(led, key, path)
+		require.NotNil(t, seg)
+		require.Equal(t, ledger.SegmentRotatedText, seg.Kind)
+		require.False(t, seg.Imported, "事件尚未经 WAL 落盘，不得提前标为已导入")
+		require.Greater(t, seg.EndPos, previousEnd, "每轮必须推进已消费位置")
+		previousEnd = seg.EndPos
+		if !res.Partial {
+			break
+		}
+		require.Less(t, rounds, 10, "夹具很小，多轮循环不应无限进行")
+	}
+
+	require.NotEmpty(t, all, "真实轮转日志必须能解析出事件，而不是空归档")
+	require.Empty(t, gapReasonsOf(led, key), "真实轮转日志不得留下任何缺口")
+
+	// 事件正文必须带上真实日志内容（证明是「读懂了」而不是产出了空事件）。
+	joined := strings.Join(all, "\n")
+	require.Contains(t, joined, "BungeeCord-Bootstrap",
+		"真实日志行（含版本横幅）应出现在导入事件中")
+}
