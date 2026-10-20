@@ -65,9 +65,9 @@ for _, stream := range streams {
    | 规则 key | 匹配核心 | 活动日志 | 归档 glob | 轮转语义 |
    |---|---|---|---|---|
    | `bukkit` | Paper / Spigot / Bukkit | `logs/latest.log` | `logs/*.gz` | 现有（FR-474 已实现） |
-   | `bungee` | BungeeCord | `proxy.log.0` | `proxy.log.[0-9]*` | **新增**（根目录数字轮转） |
-   | `waterfall` | Waterfall | `logs/latest.log` | `logs/*.gz` | 同 bukkit |
-   | `velocity` | Velocity | `logs/velocity.log` | `logs/*.gz` | 同 bukkit |
+   | `bungee` | BungeeCord | `proxy.log.0` | `proxy.log.[1-9]*` | **新增**（根目录数字轮转；`[1-9]` 排除活跃日志 `.0` 与其锁 `.0.lck`） |
+   | `waterfall` | Waterfall | `logs/latest.log` | `logs/*.gz` | 同 bukkit（真机核实） |
+   | `velocity` | Velocity | `logs/latest.log` | `logs/*.gz` | 同 bukkit（真机核实；**不是** `velocity.log`） |
 
 4. **实例级覆盖**：把既有 `log_sources` 配置项接线到实例——当前它只服务 Worker/Node 日志，**未在实例注册路径被遍历**。
 5. **向后兼容**：旧 CP / 旧实例（无核心类型信息）**回退到 bukkit 规则**，行为与现状逐字一致。
@@ -218,7 +218,18 @@ UUID 则可从 `<dataDir>/etc/node-identity.json` 读到，故这条写法是必
 
 ## 6. 风险 / 待定
 
-- **BungeeCord 轮转语义待实测**：`proxy.log.0` 轮转时旧文件是重命名为 `proxy.log.1` 还是被覆盖？需在真机观察一个轮转周期后确认 glob 形态（`proxy.log.[0-9]*`）是否正确。
-- **Velocity 规则未实测**：本集群无 Velocity 实例，规则按官方默认路径 `logs/velocity.log` 预置，**待真实实例验证**。
-- **Waterfall 规则未实测**：同上，按「与 Bungee 同源」预置为 `logs/latest.log`，待验证。
+- ~~**BungeeCord 轮转语义待实测**~~ → **已真机闭环（2026-10-20）**：反编译 `BungeeLogger` 确认其
+  `new FileHandler(pattern, 16777216, 8, true)`（16 MiB、保留 8 个、append）；把 `proxy.log.0`
+  预填过 16 MiB 后启动真实核心，JUL 在首条日志时轮转出**真实** `proxy.log.1`，证实命名就是
+  `proxy.log.N`，glob 定为 `proxy.log.[1-9]*`（排除活跃日志 `.0` 与其 0 字节锁 `.0.lck`）。
+  回归：`acquire.TestImportRealBungeeRotationProducesEvents`（真实产物为夹具，变异转红）。
+- ~~**Velocity 规则未实测**~~ → **已真机核实（2026-10-20），并纠正一处错误**：从上游源码构建
+  （JDK 25 运行）后实际产出 `logs/latest.log` + `logs/<date>-1.log.gz`，**不存在 `logs/velocity.log`**。
+  上游 `proxy/src/main/resources/log4j2.xml` 写死 `fileName="logs/latest.log"` /
+  `filePattern="logs/%d{yyyy-MM-dd}-%i.log.gz"`。此前按「独立文件名」预置的规则是**错的**，
+  会让 Velocity 实例永远采不到日志（与 BungeeCord 那个原始缺陷同类）。规则已改为
+  `logs/latest.log`，回归：`ingest.TestProxyCoreRulesMatchRealCoreOutput`（真实产物为夹具，变异转红）。
+- ~~**Waterfall 规则未实测**~~ → **已真机核实（2026-10-20）**：JDK 17 启动真实核心（build 578），
+  实际产出 `logs/latest.log` 与 `logs/2026-10-20-1.log.gz`（归档为**真 gzip**，魔数 `1f 8b`），
+  与规则逐字一致。回归同上。
 - proto 字段号 **25/26** 已在 §3.2 核对（21 因同文件他处占用与历史曾用而规避）；实现前须再核对一次。
