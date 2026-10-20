@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -186,4 +187,47 @@ func TestImportArchiveTextDegenerateFormsLeaveNoUnhealableGap(t *testing.T) {
 
 	require.NotContains(t, gapReasons(p), ledger.GapReasonArchiveGzipCorrupt,
 		"ARCHIVE_GZIP_CORRUPT 不可自动消解，绝不允许出现在轮转文件的常规路径上")
+}
+
+// TestArchiveBaseDayIsPinnedAcrossReimport 锁定「无日期锚点首次固化后不再漂移」这条判据。
+//
+// 2026-10-20 真机验收根因：文件名的形态不带日期（BungeeCord 的 `proxy.log.0`）时，
+// `archiveUTCDay` 必然失败，锚点回落成 `time.Now()`。于是**同一段每次重导都会补出不同日期**
+// ⇒ 事件时间不同 ⇒ CanonicalContentHash 不同；而 EventID 只由区间决定（不含内容）
+// ⇒ 同一 event_id 多个哈希、且「同区间等长」不可裁定 ⇒ 每次启动重放都重新累计
+// IdentityConflicts ⇒ Projection.ConflictCount>0 ⇒ 查询降级为 conflict + 前端禁用导出。
+// 生产实测：inst:318 单次启动 6.6 万条裁定、累计 13.2 万条，VL 里同一 event_id 有 201 条。
+//
+// 判据：首次取到的锚点日必须固化进账本段；此后即使文件 mtime 前进（追加写入的正常形态），
+// 也必须返回**同一个日**。
+//
+// 转红方式：去掉 archiveBaseDay 里「段上已固化则复用」的分支（改成每次都用 mtime），
+// 本用例第二处 require.Equal 立即转红。
+func TestArchiveBaseDayIsPinnedAcrossReimport(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "proxy.log.0")
+	require.NoError(t, os.WriteFile(live, nil, 0o644))
+	p := newFilePipeline(t, live, "src-baseday", "g1", okDeliveryNoop())
+
+	// 文件名不带日期 ⇒ archiveUTCDay 必须失败（这正是现场形态）。
+	_, err := archiveUTCDay(live)
+	require.Error(t, err, "前置：proxy.log.0 这种名字不含日期，archiveUTCDay 应当失败")
+
+	// 先导入一次：登记分段并固化锚点日。
+	archive := filepath.Join(dir, "proxy.log.1")
+	writePlainArchive(t, archive, []string{"18:12:59 [INFO] Using mbed TLS based native cipher."})
+	_, err = p.ImportArchive(archive)
+	require.NoError(t, err)
+
+	first, ok := p.archiveBaseDay(archive)
+	require.True(t, ok, "首次导入后必须能取到锚点日")
+
+	// 模拟「文件继续被写入」：mtime 前进两天。
+	future := time.Now().Add(48 * time.Hour)
+	require.NoError(t, os.Chtimes(archive, future, future))
+
+	second, ok := p.archiveBaseDay(archive)
+	require.True(t, ok)
+	require.Equal(t, first, second,
+		"锚点日必须已固化：mtime 前进不得改变它（否则同段重导会算出不同哈希 ⇒ 身份冲突）")
 }

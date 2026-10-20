@@ -850,7 +850,20 @@ func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
 	}
 
 	normalizeOpts := p.normalizeOpts
+	// 无日期时刻的锚点必须**跨重导稳定**（2026-10-20 真机验收根因）。
+	//
+	// 三条优先级，逐条都有存在理由：
+	//  1. 文件名带日期（`2026-10-15-1.log.gz`）——最权威，沿用既有 archiveUTCDay 口径 ✓；
+	//  2. 段上已固化的 BaseDay —— 文件名不带日期的形态（如 BungeeCord 的 `proxy.log.0`）：
+	//     首次导入时固化，此后每次重导复用，保证同一段永远得同一哈希 ✓；
+	//  3. 文件 mtime 的 UTC 日 —— 首次导入且文件名无日期时的初始锚点，取到后立即固化。
+	//
+	// 修前只有第 1 条，其余形态直接落到 normalize 的 now 兜底 ⇒ 同一段每次重导补出不同
+	// 日期 ⇒ 同 event_id 多哈希（EventID 只含区间、不含内容）⇒ 不可裁定 ⇒ 每次启动重新
+	// 累计 IdentityConflicts ⇒ ConflictCount>0 ⇒ 查询降级 + 前端禁用导出。
 	if day, dayErr := archiveUTCDay(path); dayErr == nil {
+		normalizeOpts.BaseTime = day.Add(12 * time.Hour)
+	} else if day, dayOK := p.archiveBaseDay(path); dayOK {
 		normalizeOpts.BaseTime = day.Add(12 * time.Hour)
 	}
 	boundary := NewNormalizeBoundary(normalizeOpts)
@@ -910,6 +923,50 @@ func archiveUTCDay(path string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("pipeline: archive filename has no UTC day")
 	}
 	return time.ParseInLocation("2006-01-02", day, time.UTC)
+}
+
+// archiveBaseDay 给「文件名不带日期」的归档形态提供**跨重导稳定**的无日期时刻锚点日。
+//
+// 语义：优先返回该段上已固化的 BaseDay；没有则用文件 mtime 的 UTC 日，并**立即固化**
+// 回账本段，使此后每次重导都取到同一日。
+//
+// 为什么不能直接用 mtime 而不固化：mtime 会随文件被追加而前进，用它当锚点同样会让
+// 同一段在不同时刻补出不同日期（就是本方法要根除的病），故首次取到后必须钉死。
+//
+// 失败返回 false：调用方保持既有行为（回落 normalize 的 now），不引入新的硬失败。
+func (p *Pipeline) archiveBaseDay(path string) (time.Time, bool) {
+	if p == nil || p.led == nil {
+		return time.Time{}, false
+	}
+	// 段上已固化：直接复用（幂等，也是绝大多数重导走的路径）。
+	entry := p.led.Get(p.key)
+	if entry != nil {
+		for i := range entry.Segments {
+			if filepath.Clean(entry.Segments[i].Path) != filepath.Clean(path) {
+				continue
+			}
+			if entry.Segments[i].BaseDay == "" {
+				break
+			}
+			day, err := time.ParseInLocation("2006-01-02", entry.Segments[i].BaseDay, time.UTC)
+			if err != nil {
+				break
+			}
+			return day, true
+		}
+	}
+	// 首次导入：用 mtime 的 UTC 日作初始锚点，并固化。
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}, false
+	}
+	fixed := info.ModTime().UTC()
+	day := time.Date(fixed.Year(), fixed.Month(), fixed.Day(), 0, 0, 0, 0, time.UTC)
+	if err := p.led.SetSegmentBaseDay(p.key, path, day.Format("2006-01-02")); err != nil {
+		// 固化失败不阻断本次导入：本次仍用该日，下次会再尝试固化。
+		return day, true
+	}
+	return day, true
 }
 
 // SetDelivery 运行时替换投递钩子。

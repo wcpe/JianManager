@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -77,6 +78,18 @@ type Segment struct {
 	ImportError     string      `json:"import_error,omitempty"`
 	ObservedSize    int64       `json:"observed_size,omitempty"`
 	ObservedModNano int64       `json:"observed_mod_unix_nano,omitempty"`
+	// BaseDay 是该段**首次导入时固化**的无日期时刻锚点日（UTC，形如 "2006-01-02"）。
+	//
+	// 为什么需要（2026-10-20 真机验收根因）：只有时刻、没有日期格式的日志行（如 BungeeCord
+	// 的 `18:12:59 [INFO] ...`）解析时必须补一个日期。归档文件名带日期时由 archiveUTCDay
+	// 提供；文件名不带日期（如 `proxy.log.0`）时该函数失败，锚点回落成 `time.Now()`，
+	// 于是**同一段每次重导补出的日期都不同** ⇒ 事件时间不同 ⇒ CanonicalContentHash 不同，
+	// 而 EventID 只由区间决定（不含内容）⇒ 同一 event_id 多哈希、且「同区间等长」不可裁定
+	// ⇒ 每次启动重放都重新裁定并累计 IdentityConflicts，最终 ConflictCount>0 让查询降级、
+	// 前端禁用导出。生产实测：inst:318 单次启动 6.6 万条裁定，累计 13.2 万条。
+	//
+	// 因此把首次导入所用的日期固化在本字段，重导一律复用 ⇒ 同一段永远得同一哈希 ✓。
+	BaseDay string `json:"base_day,omitempty"`
 	ParserVersion   string      `json:"parser_version"`
 }
 
@@ -1049,6 +1062,38 @@ func contiguousDeliveryEnd(batches []DeliveryBatch, floor uint64) uint64 {
 		}
 	}
 	return pos
+}
+
+// SetSegmentBaseDay 把「无日期时刻的锚点日」固化到指定路径的分段上（幂等）。
+//
+// 为什么单独一个写方法（2026-10-20 真机验收根因）：锚点日必须**首次算一次、此后一律复用**，
+// 否则同一段每次重导都会补出不同日期 ⇒ 同 event_id 多哈希 ⇒ 每次启动重新累计身份冲突
+// ⇒ ConflictCount>0 让查询降级、前端禁用导出。详见 Segment.BaseDay 的注释。
+//
+// 语义：
+//   - 只在分段存在、且 BaseDay 为空时写入（**首次固化**；已有值一律不覆盖，
+//     避免把已建立的一致哈希改坏）；
+//   - 分段落不存在时返回 nil（该段尚未登记，调用方本就无权替它决定锚点）；
+//   - 路径按 filepath.Clean 归一后比较，与 pendingArchives 的判定口径一致。
+func (l *Ledger) SetSegmentBaseDay(key SourceKey, path, baseDay string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, err := l.require(key)
+	if err != nil {
+		return err
+	}
+	want := filepath.Clean(path)
+	for i := range e.Segments {
+		if filepath.Clean(e.Segments[i].Path) != want {
+			continue
+		}
+		if e.Segments[i].BaseDay != "" {
+			return nil // 已固化：绝不覆盖
+		}
+		e.Segments[i].BaseDay = baseDay
+		return nil
+	}
+	return nil
 }
 
 // RegisterSegment 登记物理源分段。
