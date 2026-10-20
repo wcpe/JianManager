@@ -1879,6 +1879,12 @@ func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, 
 	if len(plans) == 0 {
 		// 幂等目标态：请求覆盖范围内没有任何冲突记录。返回成功且计数为 0，不写凭据
 		// （没有发生变更就不该产生一条"我清空了 0 条"的历史记录）。
+		//
+		// 但**仍要刷新派生字段**（2026-10-20 真机验收修正）：这一分支恰恰是「冲突早已清空、
+		// 投影里 conflict_count 却还是旧值」的现场——实测 inst:320 clearedCount=0、
+		// 索引已无记录，而 catalog 快照仍是 3（seq 1846 / projection-336），查询因此一直报
+		// conflict、导出被永久禁用。若在此直接返回，就再没有任何入口能纠正它。
+		m.republishAfterConflictClear(m.conflictClearRefreshTargets(key, nil))
 		return result, nil
 	}
 
@@ -1950,6 +1956,12 @@ func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, 
 
 	if len(result.ClearedSources) == 0 {
 		sort.Strings(result.SkippedSources)
+		// 全源被跳过 ≠ 派生字段就是对的（2026-10-20 真机验收修正）：实测 inst:320 的
+		// 冲突记录上一次已清空，本次因此 clearedCount=0、全部进 SkippedSources，
+		// 而 catalog 里那次发布写下的 conflict_count 仍是 3 —— 陈旧快照恰恰出现在这里。
+		// 若直接返回，就再没有任何入口能纠正它（该源无新数据投递，publishSnapshot 不会自发重跑）。
+		// 故此处同样走一次「按需重发布」：内部有「快照已是 0 就跳过」的门槛，不会白付开销。
+		m.republishAfterConflictClear(m.conflictClearRefreshTargets(key, nil))
 		return result, nil
 	}
 	sort.Strings(result.ClearedSources)
@@ -1976,7 +1988,108 @@ func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, 
 		slog.Info("清空身份冲突的索引落库已交办后台，目录侧冲突计数待下一次投影发布时归零",
 			"cleared", result.ClearedCount, "sources", len(result.ClearedSources))
 	}
+
+	// ── 第四段（已释放 cycleMu）：**主动重发布**，让派生字段 ConflictCount 当场归零。
+	//
+	// 为什么必须补这一步（2026-10-20 真机验收）：上面的注释把「下一次投影发布时重算」当作
+	// 归零路径，代价写的是「已停止投递的源要等下一次发布才消失」。但真机实测表明这个代价
+	// 对停投源等价于**永久卡死**：inst:320 清空成功（clearedCount=3、索引里已为 0），
+	// 而 catalog 已发布投影里的 conflict_count 仍是 3（seq 1846 / projection-336）；
+	// 该源没有任何新数据投递 ⇒ publishSnapshot 永不再被调用 ⇒ 查询一直读旧快照
+	// ⇒ duplicate_quality=conflict ⇒ 前端导出被永久禁用。运维侧表现为「清了却看不出效果，
+	// 也没有任何入口能推动它」。全仓也没有别的入口能刷新这个派生字段。
+	//
+	// 语义边界（刻意不破坏原设计）：仍**不**手改 catalog 里的字段，而是走同一条
+	// publish → publishSnapshot 正规链路，由它用此刻已为 0 的 identityConflictCount 重算——
+	// 这样「已校验发布」的凭据与因果链保持自洽，只是把「等下一次」变成「现在就做一次」。
+	// 失败只告警不失败：冲突记录本身已清干净（那是本方法的契约），刷新派生字段属尽力而为。
+	//
+	// **不挂在 durable 条件下**（2026-10-20 真机验收修正）：persistClearConflictsTail 在把
+	// 索引落库交办后台时返回 durable=false（受 persist 预算影响，属常态而非失败），
+	// 而派生字段的刷新与「索引是否已同步落库」无关——重发布走的是另一条正规链路。
+	// 早前把刷新放在 durable 分支里，导致交办后台时静默跳过，表现为「清了但计数不动」。
+	m.republishAfterConflictClear(m.conflictClearRefreshTargets(key, result.ClearedSources))
 	return result, nil
+}
+
+// conflictClearRefreshTargets 汇总「需要刷新派生字段」的源键。
+//
+// 为什么不能只看 ClearedSources（2026-10-20 真机验收补记）：实测存在 ClearedCount=0 的形态——
+// 索引里的冲突早已清空（上一次调用清掉了），但 catalog 里那次发布写下的 conflict_count
+// 仍是旧值。此时源会被判成 skipped，若只按「本次真正清掉的源」刷新，就永远没人去纠正
+// 陈旧快照。所以只要请求里点名了源键，就把它一并纳入刷新目标（没有可清的记录并不代表
+// 投影里的派生值是对的）。
+func (m *Manager) conflictClearRefreshTargets(requestedKey string, cleared []string) []string {
+	out := make([]string, 0, len(cleared)+1)
+	seen := make(map[string]struct{}, len(cleared)+1)
+	for _, k := range cleared {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	if k := strings.TrimSpace(requestedKey); k != "" {
+		if _, ok := seen[k]; !ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// republishAfterConflictClear 对被清空的源各触发一次投影重发布，使 ConflictCount 归零。
+//
+// 逐源独立：某个源刷新失败不影响其它源，也不影响「冲突已清空」这一既定结果。
+// 不持 cycleMu 调用（本方法由 ClearIdentityConflicts 在释放 cycleMu 之后调用），
+// 由 publishSnapshot 自己走既有锁序。
+func (m *Manager) republishAfterConflictClear(sources []string) {
+	if m == nil || len(sources) == 0 {
+		return
+	}
+	for _, sourceKey := range sources {
+		m.mu.Lock()
+		src, ok := m.sources[sourceKey]
+		p, hasPipe := m.pipes[sourceKey]
+		m.mu.Unlock()
+		if !ok || !hasPipe || p == nil {
+			continue // 源已不在运行时：没有投影可刷新，跳过即可。
+		}
+		// 门槛：只有投影里的派生值确实非 0 才值得付一次全量重发布（它要重建权威事件集合）。
+		// 读的是已发布快照本身——这正是查询侧看到的那个值，因此判据与症状严格同源。
+		if !m.projectionConflictCountNonZero(src) {
+			continue
+		}
+		// 权威事件集合取自账本/事件段（与恢复路径同源），确保重发布不会丢事件。
+		events, err := m.canonicalRecoveryEvents(sourceKey, m.state.Sources[sourceKey])
+		if err != nil {
+			slog.Warn("清空冲突后重发布：取权威事件失败，派生计数待下次投递刷新",
+				"source", sourceKey, "error", err)
+			continue
+		}
+		gen := p.Key().SourceGeneration
+		if err := m.publishSnapshot(src, gen, events, true, nil, nil, false); err != nil {
+			slog.Warn("清空冲突后重发布：派生计数刷新失败，待下次投递再试",
+				"source", sourceKey, "error", err)
+			continue
+		}
+		slog.Info("清空冲突后已重发布投影，冲突计数应已归零", "source", sourceKey, "events", len(events))
+	}
+}
+
+// projectionConflictCountNonZero 报告该源已发布投影里的 ConflictCount 是否仍非 0。
+//
+// 读 catalog 快照而非内存计数器，因为症状就出在这个快照上：内存/索引里冲突已清空，
+// 但快照仍是那次发布写下的旧值（实测 inst:320 为 3，写入于 projection-336）。
+// 取不到记录时按「非 0」处理——宁可多刷一次，也不要把陈旧值留在查询面上。
+func (m *Manager) projectionConflictCountNonZero(src SourceConfig) bool {
+	if m == nil || m.cat == nil {
+		return false
+	}
+	rec, ok := m.cat.Get(catalog.PartitionKey{StorageNamespace: src.StorageNamespace, UTCDay: src.UTCDay})
+	if !ok || rec == nil || rec.PublishedProjection == nil {
+		return true
+	}
+	return rec.PublishedProjection.ConflictCount > 0
 }
 
 // clearConflictsBusyErr 构造"等不到 cycleMu"的明确错误（区分取消与超预算，便于运维判断）。
