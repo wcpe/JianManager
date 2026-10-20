@@ -1,0 +1,32 @@
+[10:31:29] [main/INFO]: Using mbed TLS based native cipher.
+[10:31:29] [main/INFO]: Using zlib based native compressor.
+[10:31:29] [main/INFO]: Enabled Waterfall version git:Waterfall-Bootstrap:1.20-R0.3-SNAPSHOT:a65bb68:578
+[10:31:29] [main/WARN]: Waterfall has reached end of life and is no longer maintained. We recommend you transition to Velocity (https://papermc.io/software/velocity). For more information, see the announcement (https://forums.papermc.io/threads/1088/).
+[10:31:29] [main/INFO]: Not on Windows, attempting to use enhanced EpollEventLoop
+[10:31:29] [main/INFO]: Epoll is working, utilising it!
+[10:31:29] [main/INFO]: Discovered module: ModuleSpec(name=cmd_alert, file=modules/cmd_alert.jar, provider=JenkinsModuleSource())
+[10:31:29] [main/INFO]: Discovered module: ModuleSpec(name=cmd_find, file=modules/cmd_find.jar, provider=JenkinsModuleSource())
+[10:31:29] [main/INFO]: Discovered module: ModuleSpec(name=cmd_list, file=modules/cmd_list.jar, provider=JenkinsModuleSource())
+[10:31:29] [main/INFO]: Discovered module: ModuleSpec(name=cmd_send, file=modules/cmd_send.jar, provider=JenkinsModuleSource())
+[10:31:29] [main/INFO]: Discovered module: ModuleSpec(name=cmd_server, file=modules/cmd_server.jar, provider=JenkinsModuleSource())
+[10:31:29] [main/INFO]: Discovered module: ModuleSpec(name=reconnect_yaml, file=modules/reconnect_yaml.jar, provider=JenkinsModuleSource())
+[10:31:29] [main/INFO]: Attempting to update plugin from null to ModuleVersion(build=578, git=a65bb68)
+[10:31:29] [main/INFO]: Attempting to Jenkins download module cmd_alert v578
+[10:31:30] [main/INFO]: Failed to download: FileNotFoundException : https://api.papermc.io/v2/projects/waterfall/versions/1.20/builds/578/downloads/cmd_alert-1.20-578.jar @ sun.net.www.protocol.http.HttpURLConnection:1996
+[10:31:30] [main/INFO]: Attempting to update plugin from null to ModuleVersion(build=578, git=a65bb68)
+[10:31:30] [main/INFO]: Attempting to Jenkins download module cmd_find v578
+[10:31:31] [main/INFO]: Failed to download: FileNotFoundException : https://api.papermc.io/v2/projects/waterfall/versions/1.20/builds/578/downloads/cmd_find-1.20-578.jar @ sun.net.www.protocol.http.HttpURLConnection:1996
+[10:31:31] [main/INFO]: Attempting to update plugin from null to ModuleVersion(build=578, git=a65bb68)
+[10:31:31] [main/INFO]: Attempting to Jenkins download module cmd_list v578
+[10:31:32] [main/INFO]: Failed to download: FileNotFoundException : https://api.papermc.io/v2/projects/waterfall/versions/1.20/builds/578/downloads/cmd_list-1.20-578.jar @ sun.net.www.protocol.http.HttpURLConnection:1996
+[10:31:32] [main/INFO]: Attempting to update plugin from null to ModuleVersion(build=578, git=a65bb68)
+[10:31:32] [main/INFO]: Attempting to Jenkins download module cmd_send v578
+[10:31:33] [main/INFO]: Failed to download: FileNotFoundException : https://api.papermc.io/v2/projects/waterfall/versions/1.20/builds/578/downloads/cmd_send-1.20-578.jar @ sun.net.www.protocol.http.HttpURLConnection:1996
+[10:31:33] [main/INFO]: Attempting to update plugin from null to ModuleVersion(build=578, git=a65bb68)
+[10:31:33] [main/INFO]: Attempting to Jenkins download module cmd_server v578
+[10:31:34] [main/INFO]: Failed to download: FileNotFoundException : https://api.papermc.io/v2/projects/waterfall/versions/1.20/builds/578/downloads/cmd_server-1.20-578.jar @ sun.net.www.protocol.http.HttpURLConnection:1996
+[10:31:34] [main/INFO]: Attempting to update plugin from null to ModuleVersion(build=578, git=a65bb68)
+[10:31:34] [main/INFO]: Attempting to Jenkins download module reconnect_yaml v578
+[10:31:34] [main/INFO]: Failed to download: FileNotFoundException : https://api.papermc.io/v2/projects/waterfall/versions/1.20/builds/578/downloads/reconnect_yaml-1.20-578.jar @ sun.net.www.protocol.http.HttpURLConnection:1996
+[10:31:35] [main/WARN]: Forced host server pvp is not defined
+[10:31:35] [Netty Boss IO Thread #0/INFO]: Listening on /127.0.0.1:26001

@@ -188,7 +188,8 @@ func TestRegisterInstanceVelocityRuleUsesLogsSubdir(t *testing.T) {
 	}))
 
 	sc := sourceByID(t, m, "inst:903/file")
-	require.Equal(t, filepath.Join(work, "logs", "velocity.log"), sc.Path)
+	// Velocity 的活动日志也是 logs/latest.log（真机核实，见 rules.go 的规则注释）。
+	require.Equal(t, filepath.Join(work, "logs", "latest.log"), sc.Path)
 	require.Equal(t, filepath.Join(work, "logs", "*.gz"), sc.ArchiveGlob)
 }
 

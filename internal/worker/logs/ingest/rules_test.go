@@ -1,8 +1,11 @@
 package ingest
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestLookupBuiltinRules 验证四条内置规则各自解析正确（FR-502）。
@@ -20,8 +23,11 @@ func TestLookupBuiltinRules(t *testing.T) {
 		{"bungee", "proxy.log.0", "proxy.log.[1-9]*"},
 		// waterfall：与 Bungee 同源，但按 Bukkit 布局输出
 		{"waterfall", filepath.FromSlash("logs/latest.log"), filepath.FromSlash("logs/*.gz")},
-		// velocity：独立日志文件名
-		{"velocity", filepath.FromSlash("logs/velocity.log"), filepath.FromSlash("logs/*.gz")},
+		// velocity：与 waterfall 同样落在 logs/latest.log（**不是** velocity.log）。
+		// 2026-10-20 真机核实：上游 log4j2.xml 写死 fileName="logs/latest.log"、
+		// filePattern="logs/%d{yyyy-MM-dd}-%i.log.gz"，启动后实际产出 logs/latest.log
+		// 与 logs/<date>-1.log.gz，不存在 logs/velocity.log。
+		{"velocity", filepath.FromSlash("logs/latest.log"), filepath.FromSlash("logs/*.gz")},
 	}
 	for _, c := range cases {
 		got := Lookup(c.key)
@@ -102,5 +108,59 @@ func TestBungeeRuleImportsPlainTextRotations(t *testing.T) {
 			t.Errorf("%s 不是轮转历史（当前活跃日志或它的锁文件），不得被 %q 匹配"+
 				"——它会被当作归档再导一次，形成同一份字节的双计", name, glob)
 		}
+	}
+}
+
+// TestProxyCoreRulesMatchRealCoreOutput 用**真实核心的产出**锁定 waterfall / velocity 规则。
+//
+// 夹具来源（2026-10-20，可复现）：
+//   - Waterfall：本机 gradle 缓存里的 `mc-testkit-jars/waterfall/1.20/578.jar`，JDK 17 启动后
+//     实际产出 `logs/latest.log` 与 `logs/2026-10-20-1.log.gz`（后者是真 gzip，魔数 1f 8b）。
+//   - Velocity：从上游源码构建（`git clone PaperMC/Velocity`，gradle `:velocity-proxy:shadowJar`，
+//     JDK 25 运行），源码 `proxy/src/main/resources/log4j2.xml` 写死
+//     `fileName="logs/latest.log"` / `filePattern="logs/%d{yyyy-MM-dd}-%i.log.gz"`，
+//     启动后实际产出 `logs/latest.log` + `logs/2026-10-20-1.log.gz`。
+//     **不存在 `logs/velocity.log`**——本规则此前按「独立文件名 velocity.log」预置，
+//     属于与 FR-502 要修的 BungeeCord 缺陷同类的错误，只是本集群无 Velocity 实例而未暴露。
+//
+// 这条用例的判据是「规则里的活动日志路径，必须就是真实核心写出来的那个文件名」——
+// 合成文件名测不出这类错误，只有真实产物能。
+func TestProxyCoreRulesMatchRealCoreOutput(t *testing.T) {
+	cases := []struct {
+		rule    string
+		fixture string // 真实核心产出的活动日志
+		archive string // 真实核心产出的归档（可选）
+	}{
+		{"waterfall", "waterfall-latest.log", ""},
+		{"velocity", "velocity-latest.log", "velocity-archive.log.gz"},
+	}
+	for _, c := range cases {
+		t.Run(c.rule, func(t *testing.T) {
+			rule := Lookup(c.rule)
+			// 规则写的是相对工作目录的路径；真实核心把它们写在工作目录下的同一位置。
+			require.Equal(t, filepath.FromSlash("logs/latest.log"), rule.LiveRelative,
+				"%s 的活动日志必须是 logs/latest.log（真实核心的实际文件名）", c.rule)
+			require.Equal(t, filepath.FromSlash("logs/*.gz"), rule.ArchiveGlob)
+
+			dir := filepath.Join("testdata", "proxy-cores")
+			require.FileExists(t, filepath.Join(dir, c.fixture),
+				"夹具必须是真实核心产出（缺失说明夹具被误删）")
+
+			// 活动日志内容应能被解析成事件（证明夹具是真日志而非占位）。
+			data, err := os.ReadFile(filepath.Join(dir, c.fixture))
+			require.NoError(t, err)
+			wantCore := "Waterfall"
+			if c.rule == "velocity" {
+				wantCore = "Velocity"
+			}
+			require.Contains(t, string(data), wantCore, "真实日志应包含核心标识")
+
+			// 归档 glob 必须能匹配真实归档文件名。
+			if c.archive != "" {
+				ok, err := filepath.Match(rule.ArchiveGlob, filepath.FromSlash("logs/"+c.archive))
+				require.NoError(t, err)
+				require.True(t, ok, "归档 glob %q 必须匹配真实归档 %q", rule.ArchiveGlob, c.archive)
+			}
+		})
 	}
 }

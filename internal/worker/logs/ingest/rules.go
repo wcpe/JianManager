@@ -70,16 +70,29 @@ var builtinRules = map[string]Rule{
 		LiveRelative: "proxy.log.0",
 		ArchiveGlob:  "proxy.log.[1-9]*",
 	},
-	// Waterfall：BungeeCord 的分支，日志布局按 Bukkit 约定输出到 logs/。
+	// Waterfall：BungeeCord 的分支，日志改走 log4j2、按 Bukkit 约定输出到 logs/。
+	//
+	// 2026-10-20 真机核实（Waterfall 1.20-R0.3-SNAPSHOT build 578）：启动后实际产出
+	// `logs/latest.log` 与 `logs/2026-10-20-1.log.gz`（归档为**真 gzip**，魔数 1f 8b），
+	// 与下面的写法逐字一致。
 	RuleKeyWaterfall: {
 		Key:          RuleKeyWaterfall,
 		LiveRelative: "logs/latest.log",
 		ArchiveGlob:  "logs/*.gz",
 	},
-	// Velocity：独立日志文件名 velocity.log，归档为同目录 *.gz。
+	// Velocity：**活动日志同样是 logs/latest.log**，不是 velocity.log。
+	//
+	// 2026-10-20 真机核实（Velocity 4.3.1-SNAPSHOT，从上游源码构建）：源码
+	// `proxy/src/main/resources/log4j2.xml` 写死了
+	//   <RollingRandomAccessFile name="File" fileName="logs/latest.log"
+	//     filePattern="logs/%d{yyyy-MM-dd}-%i.log.gz">
+	// 启动后的实际产出是 `logs/latest.log` + `logs/2026-10-20-1.log.gz`，**不存在**
+	// `logs/velocity.log`。此前本规则按「独立日志文件名 velocity.log」预置（来自上游文档的
+	// 主观印象、未经验证），会让 Velocity 实例的日志**永远采集不到**——与 FR-502 要修的
+	// BungeeCord `proxy.log.0` 缺陷是同一类错误，只是恰好没被本集群（无 Velocity 实例）暴露。
 	RuleKeyVelocity: {
 		Key:          RuleKeyVelocity,
-		LiveRelative: "logs/velocity.log",
+		LiveRelative: "logs/latest.log",
 		ArchiveGlob:  "logs/*.gz",
 	},
 }
