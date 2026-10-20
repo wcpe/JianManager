@@ -167,17 +167,6 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 	m.mu.Lock()
 	existing, exists := m.state.Instances[reg.UUID]
 	m.mu.Unlock()
-	// 绑定位在位、但**运行时里没有对应的采集源** ⇒ 必须走完整登记重建源。
-	//
-	// 2026-10-20 生产部署回归（本 PR 引入）：Worker 重启时 state.Instances 会从账本恢复
-	// 绑定，源却不会（New 只初始化空 map，源由 Register 建）。CP 重连重推时绑定与下发
-	// **逐字等价**，于是连 `existing != binding` 都不成立、直接落到下方「已存在」分支
-	// 返回——采集源永远建不起来，`sources` 恒为 0，**全部实例静默停采**。
-	// 生产实测：`日志采集运行时已启动 sources=0` + 重推 `registered=0 skipped=12`。
-	// 置 exists=false 即改走完整登记分支（绑定已从账本恢复，无需 detach 或 rollback）。
-	if exists && !m.instanceSourcesPresent(existing) {
-		exists = false
-	}
 	if exists && existing != binding {
 		// FR-502：区分「源位置变化」与「采集规则升级」。
 		//
@@ -198,14 +187,6 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 		// 而载体逐字相同时，重建是纯代价：清零该源账目（WAL/水位/投影/已验证代次）并从
 		// 文件头重读既有内容（实测同一份 56 字节内容被读第二遍：read 56→112），
 		// 而所有存量实例升级后首次登记都命中这一形态。
-		// 载体等价还不够：**运行时里必须真有这个源**，否则不能走「不动」分支。
-		//
-		// 2026-10-20 真机回归（生产部署后暴露）：Worker 重启时 m.state.Instances 会从账本
-		// 恢复绑定，但**不会**恢复采集源（New 只初始化空 map，源由 Register 建）。此时 CP
-		// 重连重推，绑定与下发逐字等价 ⇒ sameEffectiveLogLayout 为真 ⇒ 只 rebind 元数据、
-		// 跳过建源，于是 sources 恒为 0：**全部实例静默停采**，日志页无新数据、也不报错。
-		// 生产表现：`日志采集运行时已启动 sources=0` 且重推返回 `registered=0 skipped=12`。
-		// 判据在函数上方已统一收口（源缺失时 exists 已被置 false，进不到这里）。
 		if sameEffectiveLogLayout(existing, binding) {
 			// 只把新记法写回绑定：源、管道与账本一概不动，随后仍走下方「已存在」分支
 			// （接管暂存输出、按模式补 raw 文件），与幂等重登记完全同路。
@@ -378,31 +359,6 @@ func sameSourceIdentity(a, b InstanceBinding) bool {
 // 代价不对称：等价时多走一次重建，会清零该源账目（WAL/水位/投影/已验证代次）并从文件头重读
 // 既有内容（实测同一份 56 字节内容被读第二遍：read 56→112）；而少走一次重建，最坏只是绑定里
 // 保留旧记法（下次登记再判一次，幂等）。故这里取「载体一致即等价」。
-// instanceSourcesPresent 报告某绑定的**采集源是否仍在运行时里**（2026-10-20 真机回归）。
-//
-// 为什么需要它：`sameEffectiveLogLayout` 只比较**绑定的表达形式**（路径/glob/mode），
-// 完全不看运行时状态。而 Worker 重启后 state.Instances 会从账本恢复绑定、源却不会
-// （New 只初始化空 map，源由 Register 建），于是「绑定等价」会错误地代表「源在位」，
-// 让 CP 重连重推被跳过、sources 恒为 0 ⇒ 全部实例静默停采。
-//
-// 判据与 Register 建源时的 key 保持一致：FILE_PRIMARY 是 `<target>/file`，
-// STDIO_PRIMARY 是 `<target>/stdout` 与 `<target>/stderr`（任一在位即认为在位）。
-// 调用方须持有 registerMu（本函数只读 m.sources，遍历期间不取 m.mu 以免与 Register 的
-// 加锁顺序相悖——Register 内部自行加锁，这里只在 registerMu 保护下做一次快照读）。
-func (m *Manager) instanceSourcesPresent(b InstanceBinding) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, key := range instanceSourceKeys(b) {
-		// 以 **pipes** 为准：Register 的「已登记」判据就是 `m.pipes[key]` 存在
-		// （见 Register 的 O(1) 幂等分支）。只查 sources 会出现「sources 在、pipes 不在」
-		// 这种不存在的中间态判断错误，反之亦然。
-		if _, ok := m.pipes[key]; ok {
-			return true
-		}
-	}
-	return false
-}
-
 func sameEffectiveLogLayout(a, b InstanceBinding) bool {
 	if a.Mode != b.Mode {
 		return false
