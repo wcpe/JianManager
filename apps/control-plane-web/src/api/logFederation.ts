@@ -351,23 +351,17 @@ export function mapFederationEnvelope(envelope: LogsFederationEnvelope): {
   let errorCode = asString(envelope.errorCode)
   const items = Array.isArray(envelope.items) ? envelope.items : null
 
-  // FR-473 §4.5：duplicate 未决/冲突 → coverage 不完整，禁止空成功。
-  if (dq === 'UNRESOLVED' || dq === 'CONFLICT') {
-    const reason = PARTIAL_REASONS.DUPLICATE_UNRESOLVED
-    if (!coverage || coverage.complete) {
-      coverage = {
-        complete: false,
-        partialReasons: [reason],
-        targets: coverage?.targets ?? [],
-        enumerationState: 'OPEN',
-      }
-    } else if (!coverage.partialReasons.includes(reason)) {
-      coverage = {
-        ...coverage,
-        partialReasons: [...coverage.partialReasons, reason],
-      }
-    }
-  }
+  // FR-473 §4.5 的质量标记**不得改写 coverage.complete**。
+  //
+  // 旧实现把 dq∈{UNRESOLVED,CONFLICT} 一律处理成 `complete=false` + 注入
+  // DUPLICATE_UNRESOLVED，等于在数据映射层就宣称「覆盖不完整」。但 quality 与完整性是
+  // 正交维度（spec §3.1 / types.ts），生产实测正是 `coverage.complete=true` +
+  // `duplicate_quality=conflict` 被逼成 partial，横幅于是谎报「覆盖不完整」并凭空补一条
+  // 「导出内容不完整」原因。质量对导出的阻断由 foundation 的 duplicateConflict /
+  // duplicateUnresolved 标记单独承担（见 lib/logs-federation/helpers.ts）。
+  //
+  // coverage 缺失时也不在这里凭 quality 造一个 complete=false 的假覆盖：那会把
+  // 「质量未知」伪装成「已知不完整」；coverage 缺失由 classifyLogViewState 判 unknown。
 
   if (federatedNotReady) {
     errorCode = errorCode ?? PARTIAL_REASONS.ENGINE_NOT_READY

@@ -350,18 +350,45 @@ export default function LogsPage() {
   const federationDegraded = federation?.degraded === true
   const federationNotReady = federation?.federatedNotReady === true
   /**
+   * 质量标记（与横幅同源）：**身份冲突**与**未对账重复**是两个不同状态。
+   *
+   * `duplicateConflict`（proto `LOG_QUALITY_DUPLICATE_CONFLICT`）才有可清对象；
+   * `duplicateUnresolved`（`..._UNRESOLVED`，重复事件无法对账）没有任何可人工清空的东西。
+   * 混用会让 unresolved 用户看到一个「点了也没东西可清」的死按钮。
+   */
+  const duplicateConflict = federation?.classified.coverage.duplicateConflict === true
+  const duplicateUnresolved = federation?.classified.coverage.duplicateUnresolved === true
+
+  /**
    * 「确认并清空身份冲突」入口可用性。
    *
    * 三个条件缺一不可：
-   * - 确有冲突（`duplicateUnresolved`，与横幅同源）—— 否则这个按钮没有任何可清的东西；
+   * - 确有**身份冲突**（`duplicateConflict`，与横幅同源）—— 只有 CONFLICT 能由
+   *   `LogClearIdentityConflicts` 清空；UNRESOLVED 不是冲突，不得凭它给按钮；
    * - 选中了单一节点 —— 清空是**按节点**下发的（Worker 持有该节点的源），
    *   未选节点时无法确定目标，此时不给入口，而不是默认拿第一个节点去清；
    * - 联邦视图可用 —— 不可用时列表为空，本入口没有可清的东西。
    */
-  const canClearConflicts =
-    federationActive &&
-    nodeId !== null &&
-    federation?.classified.coverage.duplicateUnresolved === true
+  const canClearConflicts = federationActive && nodeId !== null && duplicateConflict
+
+  /**
+   * 质量维度阻断导出时的**自救引导**（缺陷修复）。
+   *
+   * 为什么必须有：导出被质量标记禁用后，若当前又没有可用的清理入口（未选节点、或压根
+   * 没有可清的冲突），用户会停在一个「按钮灰着、不知为何」的死路。引导只在
+   * 「确实因为质量被阻断、且没有清理入口」时出现，正常态不加噪音。
+   * - 有冲突但未选节点 → 指明要先选节点（清空是按节点下发的）；
+   * - 只有未对账重复 → 明说无法人工清空，给出缩小范围/重试的出路。
+   */
+  const qualityGuidanceKey = !federationActive
+    ? undefined
+    : duplicateConflict
+      ? canClearConflicts
+        ? undefined
+        : LOGS_FEDERATION_KEYS.qualityConflictNeedsNode
+      : duplicateUnresolved
+        ? LOGS_FEDERATION_KEYS.qualityUnresolvedNoRemedy
+        : undefined
 
   /**
    * 「手动导入归档」入口的门控（FR-504）。
@@ -935,6 +962,7 @@ export default function LogsPage() {
           federation={federation}
           onAction={handleFederationAction}
           onClearConflicts={canClearConflicts ? () => setClearConflictsOpen(true) : undefined}
+          qualityGuidanceKey={qualityGuidanceKey}
           onRetry={() => {
 			if (legacyMode) void legacyQuery.refetch()
 			else { void federationQuery.refetch(); void refetchLogs() }
@@ -1051,12 +1079,18 @@ function CoverageBanner({
   onRetry,
   onAction,
   onClearConflicts,
+  qualityGuidanceKey,
 }: {
   federation: LogsFederationResult
   onRetry: () => void
   onAction: (key: string) => void
   /** 存在"身份冲突待确认"时提供运维入口；未传则该入口不渲染。 */
   onClearConflicts?: () => void
+  /**
+   * 质量维度阻断导出时的自救引导 key（未选节点 / 无冲突可清）。
+   * 未传表示当前有可用出路（例如清空入口已出现），不渲染额外提示。
+   */
+  qualityGuidanceKey?: string
 }) {
   const { t } = useTranslation()
   const props: CoverageBannerProps = federation.banner
@@ -1064,8 +1098,9 @@ function CoverageBanner({
   const sourceTag = federation.sourceTag
   const degraded = federation.degraded
   const federatedNotReady = federation.federatedNotReady
-  // 「有重复日志待确认」的判据与 foundation 同源（coverage.duplicateUnresolved），
-  // 不另造一套：两边若漂移，会出现「横幅说有冲突、按钮却不见」或反之的矛盾呈现。
+  // 质量标记与 foundation 同源，不另造一套：两边若漂移，会出现「横幅说有冲突、按钮却不见」
+  // 或反之的矛盾呈现。**必须分开读**：只有 conflict 有可清对象，unresolved 没有。
+  const duplicateConflict = classified.coverage.duplicateConflict
   const duplicateUnresolved = classified.coverage.duplicateUnresolved
   // 不可达/未就绪始终展示横幅（即使 foundation 因 items 路径判定 visible=false）。
   const visible = props.visible || degraded || federatedNotReady
@@ -1096,6 +1131,10 @@ function CoverageBanner({
       data-state={classified.state}
       data-degraded={degraded ? 'true' : 'false'}
       data-export-allowed={federation.exportAffordance.showDownload ? 'true' : 'false'}
+      // 质量维度独立于覆盖完整性：DOM 上分开暴露，测试/排障可核验「conflict 与
+      // unresolved 没有被混成一个布尔」。
+      data-quality-conflict={duplicateConflict ? 'true' : 'false'}
+      data-quality-unresolved={duplicateUnresolved ? 'true' : 'false'}
       className={cn(
         'flex flex-col gap-1.5 rounded-md border px-3 py-2 text-sm',
         {
@@ -1140,6 +1179,13 @@ function CoverageBanner({
             {t(federation.exportAffordance.blockedKey)}
           </p>
         )}
+      {/* 质量维度阻断导出且当前没有可用的清理入口时的自救引导：不能把用户留在
+          「导出灰着、既不知道原因也没有出路」的禁用态（未选节点 / 无冲突可清）。 */}
+      {qualityGuidanceKey && (
+        <p data-testid="logs-quality-guidance" className="text-xs opacity-90">
+          {t(qualityGuidanceKey)}
+        </p>
+      )}
       {!classified.emptySuccessAllowed && (
         <p data-testid="logs-empty-not-success" className="text-xs opacity-80">
           {t('logsFederation.emptyNotSuccess')}
@@ -1150,7 +1196,7 @@ function CoverageBanner({
           {t('logsFederation.export.nextCursorHint')}
         </p>
       )}
-      {(props.showRetry || guidanceActions.length > 0 || (duplicateUnresolved && onClearConflicts)) && !degraded && (
+      {(props.showRetry || guidanceActions.length > 0 || (duplicateConflict && onClearConflicts)) && !degraded && (
         <div className="flex flex-wrap gap-2">
           {props.showRetry && (
             <Button size="sm" variant="outline" onClick={onRetry} data-testid="logs-coverage-retry">
@@ -1168,9 +1214,10 @@ function CoverageBanner({
               {t(key)}
             </Button>
           ))}
-          {/* 身份冲突人工清空：只在确有冲突时出现（否则这个按钮没有任何可清的东西）。
+          {/* 身份冲突人工清空：只在**确有身份冲突**时出现（UNRESOLVED 没有可清对象，
+              给它按钮就是一条点了也没用的死路）。
               它改的是查询面语义（标记消失），故走二次确认 + 必填理由（见 ClearConflictsDialog）。 */}
-          {duplicateUnresolved && onClearConflicts && (
+          {duplicateConflict && onClearConflicts && (
             <Button
               size="sm"
               variant="destructive"

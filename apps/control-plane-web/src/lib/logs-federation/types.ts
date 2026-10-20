@@ -13,8 +13,14 @@
 /** FR-473 Coverage.enumeration_state。 */
 export type EnumerationState = 'OPEN' | 'EXHAUSTED' | 'STALE' | 'CANCELLED'
 
-/** FR-473 Quality.duplicate_quality / stats_quality 的已登记取值。 */
-export type QualityLevel = 'EXACT' | 'APPROXIMATE' | 'UNRESOLVED' | 'UNKNOWN'
+/**
+ * FR-473 Quality.duplicate_quality / stats_quality 的已登记取值。
+ *
+ * `CONFLICT` 对应 proto 的 `LOG_QUALITY_DUPLICATE_CONFLICT`（身份冲突，可由
+ * `LogClearIdentityConflicts` 清除），与 `UNRESOLVED`（`LOG_QUALITY_DUPLICATE_UNRESOLVED`，
+ * 重复事件无法对账、没有任何可清对象）是**两个不同状态**，展示与处置都必须分开。
+ */
+export type QualityLevel = 'EXACT' | 'APPROXIMATE' | 'UNRESOLVED' | 'CONFLICT' | 'UNKNOWN'
 
 /**
  * 已登记的 partial_reasons / 失败原因码（FR-482 §3.1 + FR-473 §6.3）。
@@ -269,10 +275,13 @@ export interface CoverageTargetStats {
 export interface FormattedCoverageSummary {
   /**
    * 横幅档位。
-   * - complete：显式 complete 且无 partial / 未解析重复
+   * - complete：显式 complete 且无 partial / 目标被排除（**只看覆盖维度**）
    * - partial：有 coverage 但不完整（含 pending 未校验；由 pending 字段区分语义）
    * - failed：无 coverage（查询失败信封），**禁止**当成空成功
    * - unknown：coverage 形状无法识别
+   *
+   * 质量维度（{@link duplicateConflict} / {@link duplicateUnresolved}）与完整性正交，
+   * 不得把质量降级映射成 partial——那会把 `coverage.complete=true` 谎报成「覆盖不完整」。
    */
   status: 'complete' | 'partial' | 'failed' | 'unknown'
   /** 仅 status=complete 时为 true。 */
@@ -292,7 +301,18 @@ export interface FormattedCoverageSummary {
   reasonKeys: string[]
   targetStats: CoverageTargetStats
   enumerationState?: EnumerationState
-  /** 重复未对账时为 true（即使 coverage.complete 也不得当完整成功）。 */
+  /**
+   * 是否存在**身份冲突**（`duplicate_quality=CONFLICT`）：同一事件 ID 出现不同内容。
+   * 这是唯一能由 `LogClearIdentityConflicts` 人工清空的质量状态，因此「清空冲突」入口
+   * 只能由它驱动，不能由 {@link duplicateUnresolved} 驱动。
+   */
+  duplicateConflict: boolean
+  /**
+   * 是否存在**未对账的重复事件**（`duplicate_quality=UNRESOLVED`，或覆盖原因里带
+   * `DUPLICATE_UNRESOLVED`）。它没有可人工清空的对象，处置方式是缩小范围 / 重试。
+   *
+   * 与 {@link duplicateConflict} 严格区分；两者都只阻断导出，**不参与**覆盖完整性判定。
+   */
   duplicateUnresolved: boolean
 }
 

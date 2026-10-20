@@ -3487,6 +3487,8 @@
     "viewState": {
       "ready_complete": "Complete results",
       "ready_complete_empty": "No logs in selected range (coverage complete)",
+      "quality_conflict": "Coverage complete, but identity conflicts need review",
+      "quality_unresolved": "Coverage complete, but duplicate events are unresolved",
       "verifying": "Verifying full coverage; showing available results (export performs a full verification)",
       "partial": "Partial results: coverage incomplete",
       "rate_limited": "Log queries are being rate limited; no new data was fetched. The previous results are kept. Retry shortly, or narrow the time range / turn off live follow to reduce request rate",
@@ -3562,6 +3564,7 @@
       "blockedIncomplete": "Coverage incomplete; export download is not available",
       "blockedFailed": "Query failed; export download is not available",
       "blockedViewStale": "View is stale; re-query before exporting",
+      "blockedConflict": "Identity conflicts need review; export is not available",
       "blockedUnresolved": "Duplicates unresolved; export will not publish a success artifact",
       "blockedNotReady": "Export not ready or not verified",
       "blockedPermission": "Insufficient or revoked permission; cannot download",
@@ -3570,6 +3573,10 @@
       "blockedBudget": "Export exceeds the server per-request limit; narrow the time range or ask an administrator to raise the log_export setting",
       "permissionRecheckHint": "Permission is rechecked before download",
       "nextCursorHint": "A null cursor only ends enumeration of the current view; it does not mean full history is complete."
+    },
+    "quality": {
+      "conflictNeedsNode": "Identity conflicts are cleared per node. Select a specific node in the toolbar first, then choose “Confirm and clear conflicts”.",
+      "unresolvedNoRemedy": "Duplicate events cannot be reconciled automatically and there is no conflict to clear manually. Export is unavailable; narrow the time range or retry later."
     },
     "sourceTag": {
       "legacy": "Legacy",

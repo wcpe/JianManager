@@ -3441,6 +3441,8 @@
     "viewState": {
       "ready_complete": "结果完整",
       "ready_complete_empty": "所选范围内无日志（覆盖完整）",
+      "quality_conflict": "覆盖完整，但存在待确认的身份冲突",
+      "quality_unresolved": "覆盖完整，但存在未对账的重复事件",
       "verifying": "正在校验完整覆盖，先展示已取到的结果；导出时将做完整校验",
       "partial": "部分日志暂时无法查询，以下为已取到的结果",
       "rate_limited": "日志查询请求过于频繁，本次未取到新数据；已保留上一次的结果，请稍后重试，或缩小时间范围/关闭实时跟随以降低请求频率",
@@ -3516,6 +3518,7 @@
       "blockedIncomplete": "结果不完整，暂不可导出（请缩小范围或稍后重试）",
       "blockedFailed": "查询失败，暂不可导出",
       "blockedViewStale": "结果已过期，请重新查询后再导出",
+      "blockedConflict": "存在身份冲突待确认，暂不可导出",
       "blockedUnresolved": "有重复日志待确认，暂不可导出",
       "blockedNotReady": "导出服务尚未就绪，请稍后重试",
       "blockedPermission": "权限不足，无法导出",
@@ -3524,6 +3527,10 @@
       "blockedBudget": "导出数据超过服务端单次上限，请缩小时间范围，或让管理员调大 log_export 配置",
       "permissionRecheckHint": "下载前将再次复核权限",
       "nextCursorHint": "已加载到当前查询范围的末尾；如需更早的日志，请调整时间范围。"
+    },
+    "quality": {
+      "conflictNeedsNode": "身份冲突按节点清空：请先在上方「节点」选择器选中具体节点，再点「确认并清空冲突」。",
+      "unresolvedNoRemedy": "重复事件无法自动对账，也没有可人工清空的冲突；导出暂不可用，请缩小时间范围或稍后重试。"
     },
     "sourceTag": {
       "legacy": "Legacy",
