@@ -8,6 +8,7 @@ import {
   useClearNodeLogAcq,
   type LogAcqSettingItem,
 } from '@/api/nodes'
+import { validateSettingDraft } from '@/pages/settings-form'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -120,6 +121,17 @@ function LogAcqForm({
     if (changedCount === 0) {
       toast.info(t('nodeLogAcq.noChanges'))
       return
+    }
+    // 保存前预校验（2026-10-20 浏览器验收发现）：本面板原先**没有**前端校验，只能等
+    // PUT 之后由后端拒绝再弹 toast。设置页（settings-form.validateSettingDraft）早已有
+    // 同口径校验，两处不一致会让「同一个非法值」在一个入口当场报错、在另一个入口要先
+    // 提交一次才失败。这里复用同一个校验函数，保证口径不会各自漂移。
+    for (const [key, value] of Object.entries(changed)) {
+      const errKey = validateSettingDraft(key, value)
+      if (errKey) {
+        toast.error(t(errKey))
+        return
+      }
     }
     // 本次提交的键值快照：清草稿时以它为基准，而不是整表清空（见下方 setDraft）。
     const submitted = { ...changed }

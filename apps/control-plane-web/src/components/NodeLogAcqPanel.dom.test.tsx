@@ -175,3 +175,61 @@ describe('NodeLogAcqPanel × 草稿生命周期（FR-503 / review D-02）', () =
     expect(putCalls).toBe(0)
   })
 })
+
+/**
+ * 回归（2026-10-20 浏览器人工验收发现）：节点面板必须**保存前**就拒绝越界路径。
+ *
+ * 本面板原先没有任何前端校验，非法值要等 PUT 之后由后端拒绝、再弹 toast；
+ * 而设置页（settings-form.validateSettingDraft）早就有同口径校验。同一个非法值
+ * 在一个入口当场报错、在另一个入口要先提交一次才失败，属于两处口径漂移。
+ * 现两处复用同一个校验函数，本用例锁住「不发请求」这一关键点。
+ */
+describe('NodeLogAcqPanel × 保存前校验（与设置页同口径）', () => {
+  it('绝对路径不发 PUT，直接报错', async () => {
+    loginMockUser()
+    const puts: { values: Record<string, string> }[] = []
+    server.use(
+      http.get(API('/nodes/1/settings/log-acquisition'), () => HttpResponse.json(acqView())),
+      http.put(API('/nodes/1/settings/log-acquisition'), async ({ request }) => {
+        puts.push((await request.json()) as { values: Record<string, string> })
+        return HttpResponse.json(acqView())
+      }),
+    )
+
+    const user = userEvent.setup()
+    renderWithProviders(<NodeLogAcqPanel nodeId={1} online />)
+    const input = await screen.findByTestId(`node-log-acq-input-${PATH_KEY}`)
+    // JSON 文本里的 `{` 是 userEvent 的特殊语法字符，直接用 change 事件赋值。
+    fireEvent.change(input, { target: { value: '{"inst:1":"/etc/shadow"}' } })
+
+    await user.click(screen.getByRole('button', { name: /保存/ }))
+
+    await waitFor(() => {
+      expect(puts, '越界路径不得发往服务端').toHaveLength(0)
+    })
+  })
+
+  it('工作目录内的相对路径正常提交', async () => {
+    loginMockUser()
+    const puts: { values: Record<string, string> }[] = []
+    server.use(
+      http.get(API('/nodes/1/settings/log-acquisition'), () => HttpResponse.json(acqView())),
+      http.put(API('/nodes/1/settings/log-acquisition'), async ({ request }) => {
+        puts.push((await request.json()) as { values: Record<string, string> })
+        return HttpResponse.json(acqView({ 'log.acq.path_overrides': '{"inst:1":"logs/a.log"}' }))
+      }),
+    )
+
+    const user = userEvent.setup()
+    renderWithProviders(<NodeLogAcqPanel nodeId={1} online />)
+    const input = await screen.findByTestId(`node-log-acq-input-${PATH_KEY}`)
+    fireEvent.change(input, { target: { value: '{"inst:1":"logs/a.log"}' } })
+
+    await user.click(screen.getByRole('button', { name: /保存/ }))
+
+    await waitFor(() => {
+      expect(puts).toHaveLength(1)
+    })
+    expect(puts[0].values['log.acq.path_overrides']).toBe('{"inst:1":"logs/a.log"}')
+  })
+})
