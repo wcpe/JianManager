@@ -646,11 +646,16 @@ func StatsQualityFromProto(q workerpb.LogStatsQuality) StatsQuality {
 }
 
 // QualityBlocksExport 判定质量是否阻断导出成功附件。
-// duplicate=unresolved/conflict 或 stats=partial/unavailable 均阻断；
-// 枚举值大小写不敏感。
+//
+// 口径是 fail-closed：duplicate 与 stats 都**明确为 exact** 才放行，其余一律阻断。
+// 枚举值大小写不敏感（解析统一走 Parse*）。
+//
+// 为什么不能反过来只列举已知的坏值：Worker 未上报质量（proto 为 nil）或上报了本版本
+// 不认识的未来枚举时，解析结果都是 unspecified。若 unspecified 被当作「无信息、可放行」，
+// 任何未识别质量都会以良好状态通过导出闸门——这正是 M-3 要求避免的 fail-open。
+// 写成「非 exact 即阻断」后，未识别取值与将来新增的坏值天然落在阻断侧，
+// 不再需要维护一份容易漏项的枚举清单（原实现漏了 unspecified 即属此类）。
 func QualityBlocksExport(q Quality) bool {
-	dq := ParseDuplicateQuality(string(q.DuplicateQuality))
-	sq := ParseStatsQuality(string(q.StatsQuality))
-	return dq == DupUnresolved || dq == DupConflict ||
-		sq == StatsQPartial || sq == StatsQUnavailable
+	return ParseDuplicateQuality(string(q.DuplicateQuality)) != DupExact ||
+		ParseStatsQuality(string(q.StatsQuality)) != StatsQExact
 }

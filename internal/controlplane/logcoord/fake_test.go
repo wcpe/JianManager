@@ -7,6 +7,15 @@ import (
 	"time"
 )
 
+// exactQuality 是测试替身默认上报的质量（两个维度都 exact）。
+//
+// 为什么替身必须显式给值：真实 Worker 在 planner 中始终以上报 duplicate=exact /
+// stats=exact 为初值（internal/worker/logs/query/planner.go），「零值 Quality」在
+// 生产路径上并不存在。替身原先留零值，等价于「Worker 未上报质量」；导出闸门改为
+// fail-closed 后这类响应会被正确判为 unspecified 并阻断导出——那是替身没建模，
+// 不是被测逻辑出错，故除专门模拟「未上报」的用例外，替身一律对齐真实行为。
+var exactQuality = Quality{DuplicateQuality: DupExact, StatsQuality: StatsQExact}
+
 // fakeTargetResolver 静态授权目标注册表。
 type fakeTargetResolver struct {
 	targets []TargetInfo
@@ -37,6 +46,10 @@ type fakeWorker struct {
 	lastOpenViewView  string
 	lastSearchTargets []string
 	lastOpenTargets   []string
+	// searchQuality 覆盖 Search 上报的质量；nil 表示按真实 Worker 的默认值上报
+	// exact/exact（见 exactQuality）。需要模拟「Worker 未上报质量」时显式置为
+	// &Quality{}，它解析后是 unspecified，必须被导出闸门阻断。
+	searchQuality *Quality
 	// lastSearchDrift / lastOpenDrift 记录本次请求是否带「允许投影版本漂移」豁免标记，
 	// 用于断言只有导出路径置位（列表/Stats/Facets 等复用路径必须为 false）。
 	lastSearchDrift bool
@@ -81,6 +94,10 @@ func (w *fakeWorker) Search(_ context.Context, req WorkerSearchRequest) (*Worker
 	w.lastSearchView = req.ViewID
 	w.lastSearchTargets = append([]string(nil), req.TargetIDs...)
 	w.lastSearchDrift = req.AllowProjectionDrift
+	quality := exactQuality
+	if w.searchQuality != nil {
+		quality = *w.searchQuality
+	}
 	resp := &WorkerSearchResponse{
 		ViewID:      req.ViewID,
 		Items:       append([]Event(nil), w.searchItems...),
@@ -89,6 +106,7 @@ func (w *fakeWorker) Search(_ context.Context, req WorkerSearchRequest) (*Worker
 		Truncated:   w.searchTrunc,
 		Unsupported: w.searchUnsup,
 		Error:       w.searchErr,
+		Quality:     quality,
 	}
 	return resp, nil
 }

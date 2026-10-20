@@ -884,7 +884,8 @@ func (m *Manager) confirmPendingOutsideLine(ctx context.Context, source SourceCo
 		return false, nil, fmt.Errorf("ingest: 投影重建前发布确认不可用：同源有在飞写入")
 	}
 	missingDays := []string{}
-	confirmed, err := m.tryConfirmPendingPublicationCtx(ctx, source, key, saved, &missingDays)
+	// receipt 传 nil：重建路径与投递路径不在同一轮内，没有可复用的取证结果（复用只在一轮内成立）。
+	confirmed, err := m.tryConfirmPendingPublicationCtx(ctx, source, key, saved, nil, &missingDays)
 	if err != nil {
 		return false, nil, fmt.Errorf("ingest: 投影重建前发布确认失败: %w", err)
 	}

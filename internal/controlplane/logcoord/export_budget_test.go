@@ -81,6 +81,7 @@ func (w *pagedWorker) Search(_ context.Context, req WorkerSearchRequest) (*Worke
 	return &WorkerSearchResponse{
 		ViewID: req.ViewID, Items: append([]Event(nil), rest...),
 		Exhausted: exhausted, NextCursor: "worker-next", Targets: w.targetResult(),
+		Quality: exactQuality,
 	}, nil
 }
 
@@ -282,7 +283,7 @@ func TestBuildExportReasonAndLimits(t *testing.T) {
 
 	t.Run("完整通过时 Limits 仍回传且无预算 reason", func(t *testing.T) {
 		res := BuildExport(View{Budget: QueryBudget{Limit: 100, MaxBytes: 1 << 30}},
-			Coverage{Complete: true}, Quality{}, items, false, false)
+			Coverage{Complete: true}, exactQuality, items, false, false)
 		assert.False(t, res.ExportIncomplete)
 		assert.NotNil(t, res.Artifact)
 		assert.Equal(t, 100, res.Limits.MaxRows)

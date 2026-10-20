@@ -130,6 +130,11 @@ type fedWorker struct {
 	facetN int
 	// lastFilter 记录最近一次 Search 收到的过滤表达式，供断言结构化筛选是否已组合下发。
 	lastFilter string
+	// quality 覆盖 Search 上报的质量；nil 表示按真实 Worker 的默认值上报 exact/exact。
+	// 真实 Worker 在 planner 中始终给出这两个维度（internal/worker/logs/query/planner.go），
+	// 零值等价于「Worker 未上报质量」，会被 fail-closed 的导出闸门正确阻断——
+	// 需要模拟该情形的用例显式置为 &logcoord.Quality{}。
+	quality *logcoord.Quality
 }
 
 func (w *fedWorker) OpenView(ctx context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerSearchResponse, error) {
@@ -143,6 +148,13 @@ func (w *fedWorker) OpenView(ctx context.Context, req logcoord.WorkerSearchReque
 func (w *fedWorker) Search(_ context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerSearchResponse, error) {
 	w.searchN++
 	w.lastFilter = req.Filter
+	quality := logcoord.Quality{
+		DuplicateQuality: logcoord.DupExact,
+		StatsQuality:     logcoord.StatsQExact,
+	}
+	if w.quality != nil {
+		quality = *w.quality
+	}
 	return &logcoord.WorkerSearchResponse{
 		ViewID:      req.ViewID,
 		Items:       append([]logcoord.Event(nil), w.items...),
@@ -151,6 +163,7 @@ func (w *fedWorker) Search(_ context.Context, req logcoord.WorkerSearchRequest) 
 		Truncated:   w.trunc,
 		Unsupported: w.unsup,
 		Error:       w.fail,
+		Quality:     quality,
 	}, nil
 }
 
@@ -352,6 +365,37 @@ func TestLogFederation_Export_BlocksUnresolvedQuality(t *testing.T) {
 
 	w := makeRequest(r, "POST", "/api/v1/logs/federation/export", nil, adminToken)
 	require.Equal(t, http.StatusOK, w.Code)
+	body := parseJSON(t, w)
+	assert.Equal(t, true, body["export_incomplete"])
+	assert.Nil(t, body["artifact"])
+}
+
+// M-3 回归（HTTP 出口）：Worker 未上报质量时不得交付成功附件。
+//
+// 缺陷形态：nil 的 LogQuality 经适配层解析为 unspecified，而导出闸门只拦
+// unresolved/conflict/partial/unavailable ⇒ 放行，HTTP 层于是返回 NDJSON 附件。
+// 覆盖完整并不代表质量已知：没有任何来源断言过这份导出可信，必须 fail-closed。
+func TestLogFederation_Export_BlocksUnspecifiedQuality(t *testing.T) {
+	resolver := &fedResolver{targets: []logcoord.TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: logcoord.ReadyOnline},
+	}}
+	unspecified := logcoord.Quality{}
+	w1 := &fedWorker{
+		items: []logcoord.Event{
+			fedEvent("e1", "src", "g", 1, "2026-09-20T12:00:00Z", "INFO", "hello"),
+		},
+		targets: []logcoord.WorkerTargetResult{fedSuccess("inst:1", "w1", "src/g:1", "1")},
+		quality: &unspecified, // 模拟 Worker 未上报 LogQuality
+	}
+	coord := logcoord.New(resolver, &fedDialer{clients: map[string]logcoord.WorkerClient{"w1": w1}})
+	r, _ := setupFederationRouter(t, coord)
+	adminToken := getAdminToken(t, r)
+
+	w := makeRequest(r, "POST", "/api/v1/logs/federation/export?limit=100", nil, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.NotContains(t, w.Header().Get("Content-Type"), "application/x-ndjson",
+		"质量未指定时不得返回 NDJSON 成功附件")
+
 	body := parseJSON(t, w)
 	assert.Equal(t, true, body["export_incomplete"])
 	assert.Nil(t, body["artifact"])

@@ -587,6 +587,12 @@ type Manager struct {
 	// storedCoverageHits 累计覆盖备忘命中次数（观测/回归用：让「重复问不再遍历段」可被断言，
 	// 而不必依赖耗时阈值）。
 	storedCoverageHits atomic.Int64
+	// adjudications 是「正常身份裁定」留痕的节流聚合状态（见 traceIdentityAdjudication）。
+	// 每个 Manager 一份：无包级可变状态，用例之间互不干扰。
+	adjudications identityAdjudicationThrottle
+	// canonicalRecoveryReuses 累计「一轮投递内复用权威集合」的次数（观测/回归用：让
+	// "pending 轮不再重复全量重建"这一事实可被断言，而不必依赖耗时阈值）。
+	canonicalRecoveryReuses atomic.Int64
 	// stageSink 是阶段计时的测试观测口（生产为 nil，零开销）：让回归能断言「快路径确实生效」，
 	// 而不必依赖耗时阈值或日志解析。
 	stageSink        func(string)
@@ -2054,11 +2060,18 @@ func (m *Manager) republishAfterConflictClear(sources []string) {
 		if !ok || !hasPipe || p == nil {
 			continue // 源已不在运行时：没有投影可刷新，跳过即可。
 		}
-		// 门槛：只有投影里的派生值确实非 0 才值得付一次全量重发布（它要重建权威事件集合）。
+		// 门槛：只有投影里的派生值确实非 0 才值得付一次刷新。
 		// 读的是已发布快照本身——这正是查询侧看到的那个值，因此判据与症状严格同源。
 		if !m.projectionConflictCountNonZero(src) {
 			continue
 		}
+		// 先把该 namespace 下**所有日期分区**的派生计数对齐（这才是查询窗口覆盖历史日期时
+		// 仍报 conflict 的根源：29 个历史分区各自 cc=3，而它们不会再有任何投递去触发发布）。
+		if n := m.resetNamespaceConflictCounts(src.StorageNamespace, 0); n > 0 {
+			slog.Info("清空冲突后已对齐历史分区的派生计数", "namespace", src.StorageNamespace, "partitions", n)
+		}
+		// 再让当前分区的投影走一次正规发布：它除了 ConflictCount 还会重算 manifest 等
+		// 同源派生字段，保持「最后一行为一次真实发布」的因果可读性。
 		// 权威事件集合取自账本/事件段（与恢复路径同源），确保重发布不会丢事件。
 		events, err := m.canonicalRecoveryEvents(sourceKey, m.state.Sources[sourceKey])
 		if err != nil {
@@ -2076,20 +2089,88 @@ func (m *Manager) republishAfterConflictClear(sources []string) {
 	}
 }
 
-// projectionConflictCountNonZero 报告该源已发布投影里的 ConflictCount 是否仍非 0。
+// projectionConflictCountNonZero 报告该 **namespace 下是否还有分区**的 ConflictCount 非 0。
 //
 // 读 catalog 快照而非内存计数器，因为症状就出在这个快照上：内存/索引里冲突已清空，
-// 但快照仍是那次发布写下的旧值（实测 inst:320 为 3，写入于 projection-336）。
+// 但快照仍是那次发布写下的旧值。
+//
+// 为什么必须遍历全部日期分区而非只看当天（2026-10-20 真机验收修正）：ConflictCount 是
+// **namespace 级**状态（identityConflictCount 按 StorageNamespace 汇总，与日期无关），
+// 但它的载体是**按天分区的投影记录**。生产实测 inst:320 有 29 个日期分区各自 cc=3
+// （2026-09-20 ~ 2026-10-20，缺 09-29/10-15）；早前只查/只刷当天分区，于是查询窗口一旦
+// 覆盖到历史日期就再次读到 cc=3 ⇒ duplicate_quality=conflict 永远消不掉。
 // 取不到记录时按「非 0」处理——宁可多刷一次，也不要把陈旧值留在查询面上。
 func (m *Manager) projectionConflictCountNonZero(src SourceConfig) bool {
 	if m == nil || m.cat == nil {
 		return false
 	}
-	rec, ok := m.cat.Get(catalog.PartitionKey{StorageNamespace: src.StorageNamespace, UTCDay: src.UTCDay})
-	if !ok || rec == nil || rec.PublishedProjection == nil {
-		return true
+	for _, key := range m.cat.Keys() {
+		if key.StorageNamespace != src.StorageNamespace {
+			continue
+		}
+		rec, ok := m.cat.Get(key)
+		if !ok || rec == nil || rec.PublishedProjection == nil {
+			return true
+		}
+		if rec.PublishedProjection.ConflictCount > 0 {
+			return true
+		}
 	}
-	return rec.PublishedProjection.ConflictCount > 0
+	return false
+}
+
+// resetNamespaceConflictCounts 把该 namespace 下**所有日期分区**的派生字段 ConflictCount
+// 对齐到当前真实值（清空冲突后即 0），并逐分区落 journal，使重启重放后仍是 0。
+//
+// 为什么不能只靠 publishSnapshot：它一次只发布「当前 UTCDay」那一个分区，而历史日期分区
+// 不会再有任何投递去触发发布（源早已停止写入那些天）。因此这里直接写派生字段本身：
+//   - 只改 ConflictCount 这一个派生字段，不动任何物理写入凭据（closed_visible_seq、
+//     manifest、source_projections 全部原样保留）；
+//   - 逐分区走 AppendJournal（带完整 Record），重启时 applyJournalEntry 会重放成同一状态；
+//   - 幂等：本来就是 0 的分区直接跳过，不产生 journal 噪音。
+//
+// 返回实际改写的分区数。
+func (m *Manager) resetNamespaceConflictCounts(namespace string, want uint64) int {
+	if m == nil || m.cat == nil || namespace == "" {
+		return 0
+	}
+	changed := 0
+	for _, key := range m.cat.Keys() {
+		if key.StorageNamespace != namespace {
+			continue
+		}
+		rec, ok := m.cat.Get(key)
+		if !ok || rec == nil || rec.PublishedProjection == nil {
+			continue
+		}
+		if rec.PublishedProjection.ConflictCount == want {
+			continue
+		}
+		next := rec.Clone()
+		if next.PublishedProjection == nil {
+			continue
+		}
+		before := next.PublishedProjection.ConflictCount
+		next.PublishedProjection.ConflictCount = want
+		next.Generation = rec.Generation + 1
+		if err := m.cat.AppendJournal(catalog.JournalEntry{
+			Key:    key,
+			Record: next,
+			State:  next.MigrationState,
+			// 凭据写明这是**派生字段对齐**，不是一次物理写入后的已校验发布——
+			// 与 PublishProjection 的 "verified projection publication" 语义区分开，
+			// 避免后人把这条记录误读成「又发布了一次内容」。
+			Detail: "derived conflict_count reconciled after identity-conflict clearance",
+		}); err != nil {
+			slog.Warn("清空冲突后对齐派生计数失败，该分区待下次投递刷新",
+				"namespace", namespace, "utcDay", key.UTCDay, "error", err)
+			continue
+		}
+		changed++
+		slog.Info("清空冲突后已对齐分区派生计数",
+			"namespace", namespace, "utcDay", key.UTCDay, "from", before, "to", want)
+	}
+	return changed
 }
 
 // clearConflictsBusyErr 构造"等不到 cycleMu"的明确错误（区分取消与超预算，便于运维判断）。
@@ -4608,6 +4689,149 @@ func adjudicateSameIntervalIdentity(existing eventIdentity, event logtypes.Event
 	return true, false
 }
 
+// —— 正常身份裁定的留痕节流 ——
+//
+// 为什么需要（2026-10 生产实测：单次启动 6.6 万条、累计 13.2 万条，而真正**不可裁定**的冲突
+// 是 0 条）：每次「同 ID 异哈希、恰好可裁定」本来只是一次**正常收敛**（轮转尾部残行 vs 重读
+// 完整行；同一段字节两次读取把日期推成两天），旧实现却为每次裁定打一条 WARN。日志被这类
+// 正常收敛淹没后，运维无法再从日志里区分「正常收敛」与「真冲突」——噪声把信号吃掉了，
+// 可观测性反而**下降**。
+//
+// 现在的口径：每个源**首次**裁定留一条样例（样例源数有上限），其余只做计数；每过
+// adjudicationFlushWindow 或累计 adjudicationFlushEvery 次裁定输出一条**汇总**（次数 + 按源分布）。
+// 于是日志量 = O(源数 + 时间窗)，与裁定**次数脱钩**，而"发生了多少次、涉及哪些源"仍然可查 ✓。
+//
+// 边界（刻意不做）：不可裁定的**真冲突**（identityConflictRecord）不走本机制——它本就稀少、
+// 且必须逐条 fail loud，节流它等于把真信号也压掉 ✗。
+const (
+	// adjudicationFlushWindow 是汇总输出的时间窗。
+	adjudicationFlushWindow = 60 * time.Second
+	// adjudicationFlushEvery 是汇总输出的次数阈值（短时突发也能及时看到，不必等满一个窗口）。
+	adjudicationFlushEvery = 2000
+	// maxAdjudicationSamples 是样例条数上限：源多时也不能把样例本身变成新的噪声源。
+	maxAdjudicationSamples = 8
+	// maxAdjudicationSources 是按源计数的**聚合桶**上限（含折叠桶 adjudicationOverflowKey）：
+	// 超出的源折叠进去，保证聚合状态与汇总行的体积都不随源数无界增长。
+	maxAdjudicationSources = 64
+	// adjudicationOverflowKey 是超出跟踪上限的源的折叠桶名。
+	adjudicationOverflowKey = "(其它源)"
+)
+
+// identityAdjudicationTrace 是节流器对**一次**正常裁定的留痕判定结果。
+//
+// 为什么把判定与 slog 输出分开：调用点只按结果打日志，节流逻辑因此可以脱离日志捕获做
+// 确定性单测（含时钟注入），用例不依赖全局 slog 状态。
+type identityAdjudicationTrace struct {
+	// Sample 为真 ⇒ 该源首次裁定，输出一条样例。
+	Sample bool
+	// Summary 为真 ⇒ 输出一条汇总（此时下列字段有效）。
+	Summary bool
+	// Kind 是样例对应的裁定形态（仅用于样例文案）。
+	Kind string
+	// Total 是本次汇总覆盖的裁定次数。
+	Total uint64
+	// PerSource 是本次汇总覆盖的按源次数分布（已按 maxAdjudicationSources 折叠）。
+	PerSource map[string]uint64
+	// Omitted 是被折叠进 adjudicationOverflowKey 的源数。
+	Omitted int
+	// Window 是本次汇总覆盖的时长。
+	Window time.Duration
+}
+
+// identityAdjudicationThrottle 聚合「正常身份裁定」的留痕状态（一个 Manager 一份）。
+//
+// 为什么挂在 Manager 上而不是用包级变量：包级状态会被并行用例互相污染（本包 111 个用例文件
+// 共享进程），也会让"这台 Worker 到底裁定了多少次"这一读数失去归属。
+type identityAdjudicationThrottle struct {
+	mu sync.Mutex
+	// now 可注入（测试用）；nil ⇒ time.Now。
+	now func() time.Time
+	// lastFlush 是上一次汇总输出的时刻（零值 ⇒ 用首次观察时刻初始化）。
+	lastFlush time.Time
+	// total 是自上次汇总以来的裁定次数。
+	total uint64
+	// perSource 是自上次汇总以来的按源计数。
+	perSource map[string]uint64
+	// sampled 记录已输出过样例的源（有界：样例总数不超过 maxAdjudicationSamples）。
+	sampled map[string]struct{}
+	// samples 是已输出的样例条数。
+	samples int
+}
+
+// observe 记录一次正常裁定，返回「本次该输出什么」。
+//
+// 优先级：样例 > 汇总。样例不重置任何计数，因此被样例占用的那次观察不会推迟汇总——
+// 汇总条件在下一次 observe 时仍然成立（它只看 total 与时间窗）。
+func (t *identityAdjudicationThrottle) observe(sourceKey, kind string) identityAdjudicationTrace {
+	now := time.Now
+	if t.now != nil {
+		now = t.now
+	}
+	at := now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.lastFlush.IsZero() {
+		t.lastFlush = at
+	}
+	t.total++
+	if t.perSource == nil {
+		t.perSource = make(map[string]uint64, 8)
+	}
+	bucket := sourceKey
+	// 预留一个槽位给折叠桶，故总桶数恒 <= maxAdjudicationSources（含折叠桶本身）。
+	if _, tracked := t.perSource[bucket]; !tracked && len(t.perSource) >= maxAdjudicationSources-1 {
+		bucket = adjudicationOverflowKey
+	}
+	t.perSource[bucket]++
+	// 样例：每源一条、总数有界。源名为空（未知来源）时不发样例——它无法帮助定位，只会成为噪声。
+	if sourceKey != "" && t.samples < maxAdjudicationSamples {
+		if t.sampled == nil {
+			t.sampled = make(map[string]struct{}, maxAdjudicationSamples)
+		}
+		if _, ok := t.sampled[sourceKey]; !ok {
+			t.sampled[sourceKey] = struct{}{}
+			t.samples++
+			return identityAdjudicationTrace{Sample: true, Kind: kind}
+		}
+	}
+	if t.total >= adjudicationFlushEvery || at.Sub(t.lastFlush) >= adjudicationFlushWindow {
+		trace := identityAdjudicationTrace{
+			Summary:   true,
+			Total:     t.total,
+			PerSource: t.perSource,
+			Window:    at.Sub(t.lastFlush),
+		}
+		if _, folded := t.perSource[adjudicationOverflowKey]; folded {
+			trace.Omitted = len(t.perSource) - 1
+		}
+		// 汇总后重置：下一次汇总只描述新的窗口（总量已在上一条里报过，不重复累加）。
+		t.total = 0
+		t.perSource = nil
+		t.lastFlush = at
+		return trace
+	}
+	return identityAdjudicationTrace{}
+}
+
+// traceIdentityAdjudication 为一次「正常身份裁定」按节流策略留痕（**纯日志层**，不参与裁定）。
+//
+// kind 只出现在样例里：汇总跨形态聚合，它回答的是"量级与来源"，形态分布由样例体现。
+func (m *Manager) traceIdentityAdjudication(kind, sourceKey, eventID string, start, end uint64, keptBytes, droppedBytes int, keptHash, droppedHash string) {
+	trace := m.adjudications.observe(sourceKey, kind)
+	if trace.Sample {
+		slog.Info("身份重复裁定（正常收敛，样例；同类此后只做汇总）",
+			"kind", kind, "source", sourceKey, "event_id", eventID, "start", start, "end", end,
+			"kept_bytes", keptBytes, "dropped_bytes", droppedBytes,
+			"kept_hash", keptHash, "dropped_hash", droppedHash)
+	}
+	if trace.Summary {
+		slog.Info("身份重复裁定汇总（正常收敛，非冲突）",
+			"window", trace.Window.String(), "total", trace.Total,
+			"sources", len(trace.PerSource), "per_source", trace.PerSource,
+			"omitted_sources", trace.Omitted)
+	}
+}
+
 // planDeliveryBatchOutsideLock 在**锁外**完成本批的「零宽校验 + 规范化 + 去重」（#54 修复）。
 //
 // 现场（本分支 #54 专项）：这段 O(本批) 的工作原先整段持 m.mu —— 单批 47 万–173 万条 ⇒
@@ -4663,18 +4887,20 @@ func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map
 				} else {
 					toWrite = append(toWrite, event) // 既有存储里的残行 ⇒ 追加完整行投出 ✓
 				}
-				slog.Warn("身份重复裁定：同区间异哈希取较长者（弃尾部残行变体）",
-					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
-					"kept_bytes", incomingSize, "dropped_bytes", existing.size,
-					"kept_hash", event.CanonicalHash, "dropped_hash", existing.hash)
+				// 正常收敛（不是冲突）：按节流留痕，绝不逐条刷 WARN（见 traceIdentityAdjudication）。
+				m.traceIdentityAdjudication("同区间异哈希取较长者（弃尾部残行变体）",
+					event.Source.LogSourceID+"/"+event.Source.SourceGeneration, event.EventID,
+					event.Record.Start, event.Record.End, incomingSize, existing.size,
+					event.CanonicalHash, existing.hash)
 				seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
 					end: event.Record.End, size: incomingSize, msg: event.Message, level: event.Level,
 					stream: event.Stream, idx: len(toWrite) - 1}
 			case keepExisting:
-				slog.Warn("身份重复裁定：后写变体较短（残行），保留完整行变体",
-					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
-					"kept_bytes", existing.size, "dropped_bytes", incomingSize,
-					"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+				// 同上：可裁定 ⇒ 正常收敛，不逐条 WARN。
+				m.traceIdentityAdjudication("后写变体较短（残行），保留完整行变体",
+					event.Source.LogSourceID+"/"+event.Source.SourceGeneration, event.EventID,
+					event.Record.Start, event.Record.End, existing.size, incomingSize,
+					existing.hash, event.CanonicalHash)
 			default:
 				slog.Warn("身份冲突：保留先到者并跳过冲突行（不再整批失败）",
 					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
@@ -4806,8 +5032,12 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	// 任何不确定（缺行 / 查询出错 / 取证不稳 / 空集）⇒ 维持「整窗重发」原语义，**判据不放宽** ✗。
 	// 红线：**绝不把 pending 降级为「累积」** ✗ —— 这里跳过的是"整窗重发的写入"，不是取代语义，
 	// 否则重现 2026-09-30「查询并集无界 ⇒ VL 排序超 51MB ⇒ 400 ⇒ 该目标恒 not_ready」旧漏洞。
+	// 本轮内「权威集合」的复用凭据：pending 未获确认时，下面的取证与写入面构建问的是同一份
+	// 输入，凭据成立即复用（判据与安全性见 recoveryReceipt）。非 pending 轮恒为 nil ⇒ 零开销。
+	var receipt *recoveryReceipt
 	if saved.PublicationPending && !replay {
-		if ok, cerr := m.tryConfirmPendingPublication(source, key, saved); cerr == nil && ok {
+		receipt = &recoveryReceipt{}
+		if ok, cerr := m.tryConfirmPendingPublicationWithReceipt(source, key, saved, receipt); cerr == nil && ok {
 			// 本地快照同步：否则下方 L3876/L3892 会再次把 replace 拉回整窗重发。
 			saved.PublicationPending = false
 		}
@@ -4884,7 +5114,9 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 		timing.mark("recovery-skipped")
 	} else {
 		var err error
-		expected, err = m.canonicalRecoveryEvents(key, saved)
+		// 复用凭据（只在本轮内有效）：pending 轮里取证刚构建过同一份集合，凭据成立即免掉这次
+		// 同样 O(段行数) 的重建；不成立则照旧全量构建（方向恒为"多算一次"）。
+		expected, err = m.canonicalRecoveryEventsReusing(key, saved, receipt)
 		if err != nil {
 			return pipeline.DeliveryResult{}, err
 		}
@@ -5054,10 +5286,17 @@ const verifyProjectionChunkSize = 2000
 // 语义安全：pending 的真义是"上次发布未获确认"，而这里用查询面拿到了**已确认可见**的证据；
 // 清 pending 的终态与「写成功后清 pending」完全一致，只是证据来源不同（查询面 vs 写入面）✓。
 func (m *Manager) tryConfirmPendingPublication(source SourceConfig, key string, saved persistedSource) (bool, error) {
-	return m.tryConfirmPendingPublicationCtx(context.Background(), source, key, saved)
+	return m.tryConfirmPendingPublicationCtx(context.Background(), source, key, saved, nil)
 }
 
-func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source SourceConfig, key string, saved persistedSource, missingDays ...*[]string) (bool, error) {
+// tryConfirmPendingPublicationWithReceipt 与 tryConfirmPendingPublication 完全相同，只是把本次
+// 取证用的权威集合**顺带**记进 receipt，供同一轮后续的写入面构建复用（见 recoveryReceipt）。
+// 取证结论与是否复用无关：receipt 只是旁路产物。
+func (m *Manager) tryConfirmPendingPublicationWithReceipt(source SourceConfig, key string, saved persistedSource, receipt *recoveryReceipt) (bool, error) {
+	return m.tryConfirmPendingPublicationCtx(context.Background(), source, key, saved, receipt)
+}
+
+func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source SourceConfig, key string, saved persistedSource, receipt *recoveryReceipt, missingDays ...*[]string) (bool, error) {
 	if !saved.PublicationPending {
 		return false, nil
 	}
@@ -5076,6 +5315,9 @@ func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source So
 	if werr != nil || len(want) == 0 {
 		return false, nil
 	}
+	// 取证集合已在手：留给同一轮的写入面构建复用（判据与安全性见 recoveryReceipt）。
+	// 放在这里（而非函数出口）是因为下面的早退分支都会丢掉 want，届时复用本就无意义。
+	m.rememberCanonicalRecovery(receipt, key, saved, want)
 	// 必须**按事件归属的 UTC 日**分组校验：校验窗口由「源.UTCDay × 事件时间」共同决定，
 	// 若沿用源的当天日期而事件属于历史日，窗口会成像 start>end 的倒置区间 ⇒ 恒 0 行 ⇒ 误判不完整 ✗
 	//（本次开发中真实踩到，故此处显式按日拆分，与 reconcile 用例设 verifySource.UTCDay 同法）。
@@ -8322,16 +8564,15 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
 				end: event.Record.End, size: incomingSize, msg: event.Message, level: event.Level,
 				stream: event.Stream, idx: existing.idx}
-			slog.Warn("身份重复裁定：同区间异哈希取较长者（弃尾部残行变体）",
-				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
-				"kept_bytes", incomingSize, "dropped_bytes", existing.size,
-				"kept_hash", event.CanonicalHash, "dropped_hash", existing.hash)
+			// 正常收敛（不是冲突）：按节流留痕（与 planDeliveryBatchOutsideLock 同一口径）。
+			m.traceIdentityAdjudication("同区间异哈希取较长者（弃尾部残行变体）",
+				key, event.EventID, event.Record.Start, event.Record.End, incomingSize, existing.size,
+				event.CanonicalHash, existing.hash)
 			return nil
 		case keepExisting:
-			slog.Warn("身份重复裁定：后写变体较短（残行），保留完整行变体",
-				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
-				"kept_bytes", existing.size, "dropped_bytes", incomingSize,
-				"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+			m.traceIdentityAdjudication("后写变体较短（残行），保留完整行变体",
+				key, event.EventID, event.Record.Start, event.Record.End, existing.size, incomingSize,
+				existing.hash, event.CanonicalHash)
 			return nil
 		default:
 			slog.Warn("身份冲突：保留先到者并跳过冲突行（恢复/重建路径，不再整批失败）",
@@ -8375,6 +8616,92 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource) ([]
 	}
 	return events, nil
 }
+
+// recoveryReceipt 是**一次投递轮内**「权威事件集合」的复用凭据。
+//
+// 为什么需要（缺陷：pending 轮内的两次全量重建）：`deliver` 在 pending 且非重放时会先调
+// `tryConfirmPendingPublication` 取证一次（本函数），未获确认 ⇒ `replace` 仍为真 ⇒ 同一轮
+// 接着又为写入面再重建一次（见 deliver 内 expected 的取法）。生产单源 70 万行实测一次约 6 秒，
+// 于是 pending 期间每轮白付一倍。
+//
+// 为什么**只做一轮内复用**、不做跨轮结果缓存（刻意不做，理由是正确性与内存两条硬约束）：
+//  1. 正确性凭据只能是「输入未变」。段侧可用「行数 + 段物理版本号」判定（与 eventStoreCoverage
+//     同一套语义：段只追加，除末段截断外无改写路径，二者任一变化都会使读数变化）；但**WAL 侧
+//     没有等价的廉价读数**——条目的 Durable 标记会就地翻转，同一长度下内容可能完全不同，
+//     按长度/最后 ID 做键会返回旧数据 ✗。故跨轮复用必须对 WAL 全量做内容指纹，代价与本函数
+//     本身同阶，收益被吃掉。
+//  2. 跨轮缓存必须把整份 canonical 集合（生产单源 70 万条事件体，数百 MB）常驻内存 ✗✗ ——
+//     这正是 FR-484 用追加式磁盘段消除的形态（真机验收：150 源稳态 RSS 20–22MiB / 判据 ≤300MiB）；
+//     单源缓存就能把它顶穿。而"命中即复制一份给调用方"还要再翻一倍峰值。
+//
+// 因此本凭据只活在一次 `deliver` 调用的栈上（跨轮不外泄 ⇒ 不可能陈旧），守卫是「段行数 +
+// 段物理版本号 + WAL/内联长度 + key」：段没变、WAL 又是同一个 saved 值拷贝 ⇒ 结果逐字节相同。
+type recoveryReceipt struct {
+	key    string
+	rows   int
+	epoch  uint64
+	walLen int
+	inline int
+	events []logtypes.Event
+}
+
+// rememberCanonicalRecovery 记下本次构建结果与当时的输入读数（供同一轮内复用）。
+//
+// 读不到段读数就不记：宁可让下一次调用重新全量构建，也不留一个无法验证的凭据。
+func (m *Manager) rememberCanonicalRecovery(receipt *recoveryReceipt, key string, saved persistedSource, events []logtypes.Event) {
+	if receipt == nil {
+		return
+	}
+	rows := 0
+	if m.events != nil {
+		n, err := m.events.Count(key)
+		if err != nil {
+			*receipt = recoveryReceipt{}
+			return
+		}
+		rows = n
+	}
+	m.mu.Lock()
+	epoch := m.eventsStoredEpoch[key]
+	m.mu.Unlock()
+	*receipt = recoveryReceipt{
+		key:    key,
+		rows:   rows,
+		epoch:  epoch,
+		walLen: len(saved.WAL),
+		inline: len(saved.Events),
+		events: events,
+	}
+}
+
+// canonicalRecoveryEventsReusing 与 canonicalRecoveryEvents 逐字同义，只是优先复用同一轮内
+// 已构建的结果（判据见 recoveryReceipt）。凭据不成立时退回全量构建 —— **方向始终是"多算一次"**，
+// 绝不返回无法证明新鲜的旧数据。
+func (m *Manager) canonicalRecoveryEventsReusing(key string, saved persistedSource, receipt *recoveryReceipt) ([]logtypes.Event, error) {
+	if receipt != nil && receipt.events != nil && receipt.key == key &&
+		receipt.walLen == len(saved.WAL) && receipt.inline == len(saved.Events) {
+		rows := 0
+		if m.events != nil {
+			n, err := m.events.Count(key)
+			if err != nil {
+				// 让全量构建去复现同一个错误：错误文案与修前逐字一致。
+				return m.canonicalRecoveryEvents(key, saved)
+			}
+			rows = n
+		}
+		m.mu.Lock()
+		epoch := m.eventsStoredEpoch[key]
+		m.mu.Unlock()
+		if rows == receipt.rows && epoch == receipt.epoch {
+			m.canonicalRecoveryReuses.Add(1)
+			return receipt.events, nil
+		}
+	}
+	return m.canonicalRecoveryEvents(key, saved)
+}
+
+// CanonicalRecoveryReuses 返回「一轮投递内复用权威集合」的累计次数（观测用，单位=次）。
+func (m *Manager) CanonicalRecoveryReuses() int64 { return m.canonicalRecoveryReuses.Load() }
 
 func normalizeCanonicalEvent(event logtypes.Event) (logtypes.Event, error) {
 	if event.EventTimeUTC != "" {

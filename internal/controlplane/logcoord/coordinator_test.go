@@ -51,7 +51,8 @@ func (w *cursorWorker) Search(_ context.Context, req WorkerSearchRequest) (*Work
 		exhausted = false
 	}
 	return &WorkerSearchResponse{ViewID: req.ViewID, Items: items, Exhausted: exhausted,
-		NextCursor: "worker-next", Targets: []WorkerTargetResult{{TargetID: w.target, State: CoverageSuccess, CatalogGeneration: "1"}}}, nil
+		NextCursor: "worker-next", Targets: []WorkerTargetResult{{TargetID: w.target, State: CoverageSuccess, CatalogGeneration: "1"}},
+		Quality: exactQuality}, nil
 }
 
 func (w *cursorWorker) Tail(ctx context.Context, req WorkerSearchRequest, _ string) (*WorkerSearchResponse, error) {
@@ -1509,4 +1510,45 @@ func TestExportEmptyWindowYieldsNonNilArtifact(t *testing.T) {
 	assert.False(t, res.ExportIncomplete, "空窗口不是「导出不完整」")
 	assert.True(t, res.Coverage.Complete, "前置：该窗口覆盖完整")
 	assert.False(t, res.BudgetExceeded)
+}
+
+// M-3 回归：Worker 未上报质量时导出必须判为不完整且不产出附件。
+//
+// 缺陷形态：Worker 上报 nil 的 LogQuality（或未来枚举）经 qualityFromProto 解析为
+// unspecified，而导出闸门只拦 unresolved/conflict/partial/unavailable ⇒ 放行，
+// 最终在覆盖完整时交出一个「质量未知」的成功附件。数据本身可能不缺，但「这份导出
+// 是否可信」没有任何来源断言过，属于典型的 fail-open。
+//
+// 转红方式（实测）：让 QualityBlocksExport 回退成只列举已知坏值的写法，
+// 本用例的 ExportIncomplete / Artifact 断言立即红（旧行为：完整 + 有附件）。
+func TestExportBlocksWhenWorkerOmitsQuality(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "t1", WorkerID: "w1", Readiness: ReadyOnline},
+	}}
+	w1 := &fakeWorker{
+		workerID:    "w1",
+		searchItems: []Event{mkEvent("e1", "s", "g", 1, "2026-09-20T12:00:00Z", "I", "hello")},
+		searchTarget: []WorkerTargetResult{
+			successTarget("t1", "w1", "s/g:1", "1"),
+		},
+		// 模拟 Worker 未上报 LogQuality：proto 为 nil 时适配层得到的就是零值 Quality。
+		searchQuality: &Quality{},
+	}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	coord := New(resolver, dialer)
+
+	res, err := coord.Export(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"t1"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+
+	assert.True(t, res.ExportIncomplete, "质量未知的导出不得判为完整")
+	assert.Nil(t, res.Artifact, "质量未知时不得下发成功附件")
+	assert.Contains(t, res.IncompleteReasons, "stats_unspecified",
+		"阻断原因需可归因到「统计质量未指定」")
+	// 覆盖本身是完整的：本用例证明质量闸门独立生效，不是被 coverage 顺带拦下。
+	assert.True(t, res.Coverage.Complete, "前置：覆盖完整，阻断只能来自质量闸门")
 }
