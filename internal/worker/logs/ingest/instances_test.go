@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
 func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) {
@@ -392,4 +393,57 @@ func TestInstanceLivePathFallsBackWhenBindingEscapes(t *testing.T) {
 	// 对照：合法相对路径正常生效。
 	require.Equal(t, filepath.Join(workDir, "logs", "a.log"),
 		instanceLivePath(InstanceBinding{WorkDir: workDir, RelativePath: "logs/a.log"}))
+}
+
+// TestRegisterInstanceRebuildsSourceAfterRestart 守住「重启后重推必须重建采集源」。
+//
+// 背景（2026-10-20 生产部署回归）：Worker 重启时 `m.state.Instances` 会从账本恢复绑定，
+// 但 `New` 只初始化空 map、**不恢复采集源**（源由 Register 建）。此时 CP 重连重推，
+// 绑定与下发逐字等价 ⇒ `sameEffectiveLogLayout` 为真 ⇒ 旧实现只 rebind 元数据、
+// 跳过建源，于是 `sources` 恒为 0：**全部实例静默停采**，日志页无新数据也不报错。
+//
+// 生产实测表现：`日志采集运行时已启动 sources=0` 且重推返回
+// `registered=0 skipped=12 total=12`；单实例重启（走真正的 CreateInstance）才恢复采集。
+//
+// 修法：`sameEffectiveLogLayout` 的「不动」分支加一条前置条件——**源必须真的在运行时里**
+// （`instanceSourcesPresent`）。本用例用「同一 root 建第二个 Manager」模拟重启。
+func TestRegisterInstanceRebuildsSourceAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	work := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(work, "logs"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "logs", "latest.log"), []byte("[12:00:00] [INFO] hello\n"), 0o644))
+
+	reg := InstanceRegistration{
+		UUID: "uuid-restart-src", TargetID: "inst:901", Generation: "g-restart",
+		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBukkit,
+	}
+
+	// 第一次：正常登记，源建立。
+	vl, _ := newProjectionVL(t)
+	cat := catalog.New(nil)
+	first, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
+	require.NoError(t, err)
+	require.NoError(t, first.RegisterInstance(reg))
+	require.True(t, first.instanceSourcesPresent(first.state.Instances["uuid-restart-src"]),
+		"首次登记后源必须在运行时里")
+
+	// 模拟重启：同一 root 新建 Manager。绑定应从账本恢复，但源应为空。
+	second, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(cat.Journal()), Journal: cat.Journal()})
+	require.NoError(t, err)
+	require.NotNil(t, second.state.Instances["uuid-restart-src"], "前提：绑定应从账本恢复")
+	// 直接复现缺陷的关键状态：绑定位在位、运行时源缺失。
+	// 不依赖「新建 Manager 恰好不恢复源」这一实现细节（它随 Journal/Catalog 的复用方式而变），
+	// 而是显式清空运行时源表——这正是生产重启后 `sources=0` 的形态。
+	// 真实重启后的形态：sources 与 pipes 都为空（New 只初始化空 map）。
+	second.mu.Lock()
+	second.sources = make(map[string]SourceConfig)
+	second.pipes = make(map[string]*pipeline.Pipeline)
+	second.mu.Unlock()
+	require.False(t, second.instanceSourcesPresent(second.state.Instances["uuid-restart-src"]),
+		"前提：绑定在位但运行时源缺失（生产重启后的真实形态）")
+
+	// CP 重连重推：同样的绑定必须重建源，而不是被「已存在」跳过。
+	require.NoError(t, second.RegisterInstance(reg), "重启后的重推必须成功")
+	require.True(t, second.instanceSourcesPresent(second.state.Instances["uuid-restart-src"]),
+		"重启后重推必须重建采集源，否则全部实例静默停采")
 }
