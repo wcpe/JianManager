@@ -16,6 +16,18 @@ var (
 	javaTimeLevelRe = regexp.MustCompile(`^\[(\d{2}):(\d{2}):(\d{2})\s+([A-Za-z]+)\]:\s*(.*)$`)
 	// [HH:MM:SS] body（无级别）
 	javaTimeOnlyRe = regexp.MustCompile(`^\[(\d{2}):(\d{2}):(\d{2})\]\s+(.*)$`)
+	// HH:MM:SS [LEVEL] body — BungeeCord 形态：时刻**不带方括号**，级别带。
+	//
+	// 2026-10-20 真机验收根因：上面三条 Java 形态都要求时刻被 `[]` 包住，而 BungeeCord 写的是
+	// `18:12:59 [INFO] ...`。缺这条规则时该行匹配不到任何时间形态 ⇒ hasTime=false ⇒
+	// EventTimeUTC 留空 ⇒ 落 normalizeCanonicalEvent 回退到 IngestTimeUTC（=采集时刻）。
+	// 于是同一行每次重新导入都得到不同的 event_time_utc ⇒ CanonicalContentHash 不同；
+	// 而 EventID 只由「来源+代次+区间」决定、不含内容 ⇒ 同一 event_id 多哈希、且「同区间
+	// 等长」不可裁定 ⇒ 每次启动对账重新裁定并累计 IdentityConflicts ⇒ ConflictCount>0
+	// ⇒ 查询降级 conflict + 前端禁用导出。
+	// 生产实测：inst:318 的 eventstore 13.0 万条事件里只有 6.4 万个唯一 event_id，
+	// 6.4 万个 ID 各有多份副本（时间分别是 10-15 的 06:19/06:42/08:05）。
+	bungeeTimeLevelRe = regexp.MustCompile(`^(\d{2}):(\d{2}):(\d{2})\s+\[([A-Za-z]+)\]\s*(.*)$`)
 
 	// Go slog / logrus 结构化 level=（Beacon 等进程）；独立 token，可带引号。
 	slogLevelRe = regexp.MustCompile(`(?i)(?:^|[\s])level=["']?(INFO|WARNING|WARN|ERROR|SEVERE|FATAL|DEBUG|TRACE)["']?(?:[\s]|$)`)
@@ -136,6 +148,19 @@ func parseLine(raw string, loc *time.Location, base time.Time) parsedLine {
 		p.timeOfDay = [3]int{atoi2(m[1]), atoi2(m[2]), atoi2(m[3])}
 		p.hasClock = true
 		p.body = m[4]
+		p.applyClock(loc, base)
+		return p
+	}
+
+	if m := bungeeTimeLevelRe.FindStringSubmatch(raw); m != nil {
+		// BungeeCord：`18:12:59 [INFO] body`。与上面三条 Java 形态同级处理——
+		// 拿到确定时刻（hasClock ⇒ applyClock 用 base 的日期补全并置 hasTime），
+		// 从根上避免「回退到采集时刻」导致的哈希漂移（见 bungeeTimeLevelRe 的注释）。
+		p.kind = kindEventStart
+		p.level = CanonicalLevel(m[4])
+		p.timeOfDay = [3]int{atoi2(m[1]), atoi2(m[2]), atoi2(m[3])}
+		p.hasClock = true
+		p.body = m[5]
 		p.applyClock(loc, base)
 		return p
 	}

@@ -350,3 +350,45 @@ func TestProcessLinesStats(t *testing.T) {
 	require.NotContains(t, levels, "WARNING")
 	require.Less(t, res.Stats.EventCount, res.Stats.LineCount)
 }
+
+// TestBungeeClockOnlyLineGetsDeterministicEventTime 锁定 BungeeCord 形态的解析与时间确定性。
+//
+// 2026-10-20 真机验收根因：BungeeCord 写的是 `18:12:59 [INFO] body` —— 时刻**不带方括号**，
+// 而当时三条 Java 形态正则都要求 `[]` 包住时刻，于是该行匹配不到任何时间形态：
+// hasTime=false ⇒ EventTimeUTC 留空 ⇒ 落 normalizeCanonicalEvent 回退到 IngestTimeUTC（采集时刻）
+// ⇒ 同一行每次重新导入都得到不同的 event_time_utc ⇒ CanonicalContentHash 不同；而 EventID
+// 只由「来源+代次+区间」决定、不含内容 ⇒ 同一 event_id 多哈希、且「同区间等长」不可裁定
+// ⇒ 每次启动对账重新裁定并累计 IdentityConflicts ⇒ ConflictCount>0 ⇒ 查询降级 + 禁用导出。
+// 生产实测：inst:318 的 eventstore 13.0 万条里只有 6.4 万个唯一 event_id（6.4 万个有多份副本）。
+//
+// 判据：同一行在**同一 base** 下必须解析出确定的事件时间（= base 当日 + 行内时刻），
+// 且必须带出级别；这样事件时间不再依赖「何时被采集」。
+//
+// 转红方式：移除 bungeeTimeLevelRe 分支，本用例第一处 require.NotEmpty 立即转红。
+func TestBungeeClockOnlyLineGetsDeterministicEventTime(t *testing.T) {
+	opts := testOpts("stdout")
+	opts.BaseTime = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	n := New(opts)
+
+	// 下一条带时刻的行闭合它。
+	require.Empty(t, n.Feed("18:12:59 [INFO] Using mbed TLS based native cipher."))
+	out := n.Feed("18:13:00 [INFO] next line")
+	require.Len(t, out, 1)
+
+	ev := out[0]
+	require.NotEmpty(t, ev.EventTimeUTC,
+		"BungeeCord 形态必须解析出确定事件时间，不得留空回落采集时刻")
+	require.Equal(t, "2026-10-15T18:12:59Z", ev.EventTimeUTC,
+		"事件时间必须由 base 的当日 + 行内时刻决定，与采集时刻无关")
+	require.Equal(t, "INFO", ev.Level, "级别必须从 [INFO] 正确带出")
+	require.Contains(t, ev.Message, "Using mbed TLS")
+
+	// 同一个 base 下重复解析同一行：时间与哈希必须完全一致（这正是重导不漂移的前提）。
+	n2 := New(opts)
+	require.Empty(t, n2.Feed("18:12:59 [INFO] Using mbed TLS based native cipher."))
+	out2 := n2.Feed("18:13:00 [INFO] next line")
+	require.Len(t, out2, 1)
+	require.Equal(t, ev.EventTimeUTC, out2[0].EventTimeUTC)
+	require.Equal(t, ev.CanonicalHash, out2[0].CanonicalHash,
+		"同一行在确定锚点下必须得到同一规范哈希（否则重导必然产生身份冲突）")
+}
