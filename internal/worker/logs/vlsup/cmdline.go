@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Namespace 标识受管 VL 实例类别（FR-476：Worker supervisor 分别管理 HOT/COLD/Rehydrate）。
@@ -100,6 +101,61 @@ func ListenAddr(port int) string {
 }
 
 // EffectiveCacheBytes 返回将写入 -memory.allowedBytes 的值；0 表示省略该 flag。
+// parseRetentionDuration 解析 VL 的 retention 字面量（`120d` / `720h` / `30d`）。
+//
+// `time.ParseDuration` **不认识 `d`**（Go 没有 day 单位），而本项目与 VL 的
+// retention 配置一直用 `120d` 这种写法 ⇒ 必须自己剥离 `d` 前缀再交给
+// ParseDuration，否则所有 `Nd` 形式都会被判为非法、静默回落到默认值。
+func parseRetentionDuration(raw string) (time.Duration, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, fmt.Errorf("empty retention")
+	}
+	// `Nd` / `N.Md`（VL 允许小数天）；只处理单个 d 后缀，其余交给 ParseDuration。
+	if strings.HasSuffix(s, "d") {
+		num := strings.TrimSuffix(s, "d")
+		f, err := strconv.ParseFloat(num, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse retention %q: %w", raw, err)
+		}
+		if f <= 0 {
+			return 0, fmt.Errorf("non-positive retention %q", raw)
+		}
+		return time.Duration(f * float64(24*time.Hour)), nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("parse retention %q: %w", raw, err)
+	}
+	return d, nil
+}
+
+// QueryTimeRangeLimit 返回 `-search.maxQueryTimeRange` 的取值：retention + 1d 余量。
+//
+// **必须由 retention 派生，不能硬编码**（2026-10-22 复审 P1）。历史事故链：
+// 该参数原本是起步档的 1d，导致投影代次占用探测被 VL 以 400 `too big time range
+// selected` 拒绝 ⇒ 探测「按未占用继续」⇒ 重名防护静默失效。当时把它调到 31d
+// （= retention 30d + 1d），注释里已写明这个式子是 retention 的函数；但代码是
+// 硬编码，retention 一旦改动就脱钩。2026-10-22 把默认 retention 提到 120d 后，
+// 覆盖不到的那部分保留期重新出现同一个缺口。
+//
+// 解析失败时回落到 DefaultRetentionPeriod（而不是 31d）：宁可放大上限，也不能
+// 让「探测覆盖不全」这种静默失败重新出现 —— 上限过大的代价只是少了一层 VL 侧的
+// 粗保护，上限过小则是重名防护整条失效。
+func (c InstanceConfig) QueryTimeRangeLimit() string {
+	const slack = 24 * time.Hour
+	d, err := parseRetentionDuration(c.RetentionPeriod)
+	if err != nil || d <= 0 {
+		d, err = parseRetentionDuration(DefaultRetentionPeriod)
+		if err != nil || d <= 0 {
+			// 连默认值都解析不了：退回历史上验证过的 31d。
+			return "31d"
+		}
+	}
+	// 用 h 而非 d 表示：VL 接受任何 Go duration 格式，h 不会有「月末取整」的歧义。
+	return strconv.FormatInt(int64((d+slack)/time.Hour), 10) + "h"
+}
+
 func (c InstanceConfig) EffectiveCacheBytes() int64 {
 	if c.MemoryAllowedBytes > 0 {
 		return c.MemoryAllowedBytes
@@ -180,7 +236,19 @@ func BuildArgs(cfg InstanceConfig) ([]string, error) {
 		// VL 400 ⇒ 「按未占用继续」⇒ 重名防护整条失效。改动探测窗时请一并复核总跨度。
 		"-search.maxConcurrentRequests=16",
 		"-search.maxQueryDuration=10s",
-		"-search.maxQueryTimeRange=31d",
+		// **查询时间窗上限由 retention 派生，不再硬编码 31d**（2026-10-22 复审 P1）。
+		//
+		// 上面那段注释写的是「31d = retention 30d + 1d 余量」，即这个上限本来就是
+		// retention 的函数。但 2026-10-22 把 `DefaultRetentionPeriod` 从 30d 提到
+		// 120d（默认值与 log_retention 声明的 90d/120d 对齐）之后，硬编码 31d 就与
+		// retention **脱钩**了：保留期 120 天，而任何跨度 >31d 的查询被 VL 直接 400。
+		// 受影响的是**投影代次占用探测** —— 它必须覆盖「同一代次名在保留期内的任意
+		// 一天」，覆盖不到就「按未占用继续」⇒ 重名防护静默失效（这正是当初把 1d
+		// 调到 31d 的原因，见上）。retention 越长，漏检窗口越大。
+		//
+		// 故改为 retention + 1d：既保留原来的 1 天余量语义，又让两者不可能再脱钩。
+		// **总跨度约束**（见上）仍然由依赖方保证 ≤ 本值，故依赖方的窗口必须一并派生。
+		"-search.maxQueryTimeRange=" + cfg.QueryTimeRangeLimit(),
 		"-search.maxQueueDuration=2s",
 	}
 	if cache := cfg.EffectiveCacheBytes(); cache > 0 {

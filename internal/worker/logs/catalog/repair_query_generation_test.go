@@ -250,3 +250,97 @@ func TestRepairProjectionQueryGenerationIsJournalReplayable(t *testing.T) {
 	require.EqualValues(t, 2, rec.PublishedProjection.QueryGeneration,
 		"修复必须落在 journal 里，重启重放后仍然一致")
 }
+
+// TestMixedDayMigrationSkipsSettledRecords 钉住「混合态 UTC 日可迁移」。
+//
+// 缺陷形态（2026-10-21/22 架构复审 P0-1）：某日整体下沉到冷层后，迟到的写入或新出现的
+// storage namespace 仍会在同一天新建一条 `Owner=hot` 的记录 ⇒ 该日长期处于
+// 「部分已 COLD、部分仍 hot」的混合态。旧实现对每个日级操作都取 `records[0]` 当基准
+// 并要求**全部**记录同态：
+//   · `BeginDayMigration` 遇到已 COLD 就整日拒绝；
+//   · `AdvanceDay` / `FailDay` / `SwitchDayOwners` 同理；
+//   · `day_manager.Resume` 报 `UTC-day state divergence` 且**不写失败 journal**。
+// 后果是该日**永久不可迁移**，而那条 hot 分区到期被 VL 原生 retention 直接删除
+// ⇒ 该 namespace 该日数据永久丢失，UI 上只留一次迁移失败。
+//
+// 修法：`activeDayRecords` 统一判据 —— 空态与 CLEANED 不参与本次迁移，
+// 其余必须同态（那才是真分歧）。本用例覆盖 Begin/Advance/Fail/Switch 四处。
+//
+// 变异验证：把 `activeDayRecords` 改回「返回全部记录」⇒ 第一处断言即红
+// （BeginDayMigration 遇到已 COLD 会报 owner 非法）。
+func TestMixedDayMigrationSkipsSettledRecords(t *testing.T) {
+	const day = "2026-09-20"
+	keyHot := PartitionKey{StorageNamespace: "ns-hot", UTCDay: day}
+	keyCold := PartitionKey{StorageNamespace: "ns-cold", UTCDay: day}
+
+	newMixed := func(t *testing.T) *Catalog {
+		t.Helper()
+		c := New(nil)
+		// 已下沉完成的那条（Owner=cold，状态 CLEANED）。
+		settled := NewStableRecord(keyCold, OwnerCold, 1, "cold-g1")
+		settled.MigrationState = StateCleaned
+		require.NoError(t, c.Put(settled))
+		// 迟到的 hot 记录（该日新增的 namespace）。
+		require.NoError(t, c.Put(NewStableRecord(keyHot, OwnerHot, 1, "hot-g1")))
+		return c
+	}
+
+	t.Run("BeginDayMigration 跳过已下沉记录", func(t *testing.T) {
+		c := newMixed(t)
+		recs, err := c.BeginDayMigration(day, OwnerCold, "cold-g2")
+		require.NoError(t, err, "混合态日必须可开始迁移（旧实现遇到已 COLD 就整日拒绝）")
+		require.NotEmpty(t, recs)
+
+		hot, ok := c.Get(keyHot)
+		require.True(t, ok)
+		require.Equal(t, StateRoutingFrozen, hot.MigrationState, "hot 记录必须进入迁移")
+
+		cold, ok := c.Get(keyCold)
+		require.True(t, ok)
+		require.Equal(t, StateCleaned, cold.MigrationState,
+			"已下沉记录不得被本次迁移改动（它是已完成，不是冲突）")
+	})
+
+	t.Run("AdvanceDay 只推进迁移中的记录", func(t *testing.T) {
+		c := newMixed(t)
+		_, err := c.BeginDayMigration(day, OwnerCold, "cold-g2")
+		require.NoError(t, err)
+		_, err = c.AdvanceDay(day, StateDraining)
+		require.NoError(t, err, "混合态日必须能推进状态")
+		hot, _ := c.Get(keyHot)
+		require.Equal(t, StateDraining, hot.MigrationState)
+		cold, _ := c.Get(keyCold)
+		require.Equal(t, StateCleaned, cold.MigrationState, "已下沉记录仍不变")
+	})
+
+	t.Run("FailDay 在混合态下仍能记录失败", func(t *testing.T) {
+		c := newMixed(t)
+		_, err := c.BeginDayMigration(day, OwnerCold, "cold-g2")
+		require.NoError(t, err)
+		// 旧实现要求全一致 ⇒ 失败本身都记不下来，现场查不到原因。
+		_, err = c.FailDay(day, StateFailedRetryable, "drain 失败夹具")
+		require.NoError(t, err, "混合态日必须能记录失败（否则现场无从排障）")
+		hot, _ := c.Get(keyHot)
+		require.Equal(t, StateFailedRetryable, hot.MigrationState)
+	})
+
+	t.Run("推进到 ATTACHED_STAGING 后 SwitchDayOwners 可切换", func(t *testing.T) {
+		c := newMixed(t)
+		_, err := c.BeginDayMigration(day, OwnerCold, "cold-g2")
+		require.NoError(t, err)
+		for _, st := range []MigrationState{StateDraining, StateSnapshotting, StateStagingVerify, StateAttachedStaging} {
+			_, err = c.AdvanceDay(day, st)
+			require.NoError(t, err)
+		}
+		proj := &PublishedProjection{
+			ManifestVersion: "pv-1", CoverageComplete: true,
+			QueryLocationDirID: "cold-g2", QueryGeneration: 2,
+		}
+		_, err = c.SwitchDayOwners(day, OwnerCold, "cold-g2",
+			map[PartitionKey]*PublishedProjection{keyHot: proj})
+		require.NoError(t, err, "混合态日必须能完成权威切换（旧实现对已 COLD 记录调 ApplyOwnerSwitch 必失败）")
+		hot, _ := c.Get(keyHot)
+		require.Equal(t, OwnerCold, hot.Owner, "hot 记录必须切到 cold")
+		require.Equal(t, StateOwnerSwitched, hot.MigrationState)
+	})
+}

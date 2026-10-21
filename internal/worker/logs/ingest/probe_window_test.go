@@ -40,14 +40,21 @@ func vlMaxQueryTimeRange(t *testing.T) time.Duration {
 	require.NoError(t, err, "构造 VL 启动参数失败")
 	for _, arg := range args {
 		if strings.HasPrefix(arg, flag) {
-			// VL 的参数写成 `31d`，而 time.ParseDuration 不支持 `d` 单位（只到 `h`），
-			// 故自己解析「<n>d」形态；出现其它单位时显式失败，不静默跳过。
+			// 上限可能是 `<n>d`（历史上的硬编码 31d）或 `<n>h`（2026-10-22 起由
+			// retention 派生，见 vlsup.QueryTimeRangeLimit —— 它刻意用 h 表达，避免
+			// 「小数天」的取整歧义）。两种都要认：只认 `d` 会让派生改造后本回归
+			// 以「解析失败」而非「越界」告警，把验收点从语义错位成格式错。
+			// `time.ParseDuration` 不认识 `d`（Go 没有 day 单位），故 d 形态自己剥。
 			raw := strings.TrimPrefix(arg, flag)
-			days, ok := strings.CutSuffix(raw, "d")
-			require.True(t, ok, "本回归假定 VL 以 `d` 为单位给出上限，实得 %q；请同步更新解析", raw)
-			n, parseErr := strconv.Atoi(days)
-			require.NoError(t, parseErr, "无法解析 VL 的 maxQueryTimeRange 天数：%s", raw)
-			return time.Duration(n) * 24 * time.Hour
+			if days, ok := strings.CutSuffix(raw, "d"); ok {
+				n, parseErr := strconv.Atoi(days)
+				require.NoError(t, parseErr, "无法解析 VL 的 maxQueryTimeRange 天数：%s", raw)
+				return time.Duration(n) * 24 * time.Hour
+			}
+			d, parseErr := time.ParseDuration(raw)
+			require.NoError(t, parseErr,
+				"无法解析 VL 的 maxQueryTimeRange（既非 <n>d 也非 Go duration）：%q；请同步更新解析", raw)
+			return d
 		}
 	}
 	t.Fatalf("VL 启动参数中缺少 %s：探测窗上限失去锚点，本回归会变成自证", flag)

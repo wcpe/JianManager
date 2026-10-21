@@ -884,3 +884,97 @@ func TestReleaseRecoveryBlockedWhenAuthoritativeHasBeyondWindowDays(t *testing.T
 		"权威全量含超窗口天时，reclaim 不得越过它（reclaim %d → %d）",
 		positionsBefore.Reclaim, positionsAfter.Reclaim)
 }
+
+// TestDeliverEvidenceFaceTruncatedToWrittenWhenReplaceSpansBeyondWindow 钉住
+// 「replace（整窗重发）路径下的证据面必须截断到**实际写入**的天，不能直接用权威全量」。
+//
+// 为什么必须单独测这条（2026-10-22 测试有效性复审 P0）：已有的
+// `TestDeliverEvidenceFaceExcludesUnwrittenDays` 声称覆盖 `evidence = written`，
+// 但实测它走的是 `deliver` 里 `len(toWrite)==0` 的**早退快路径**（本批事件已全在本地段里，
+// 直接由 `landedVisibleInVL` 判可见性），根本没走到赋值点
+// (`runtime.go` 的 `evidence = written`)：
+//   · 把 `evidence = written` 删掉（退回 `evidence = expected`），它**依然通过**；
+//   · ingest 包内所有 Gap/Evidence/Deliver/HotRetention/Rebuild/Projection 用例全绿。
+// 即这条最严重真机缺陷的修复当时**零覆盖**。本用例补的就是那个缺口。
+//
+// 夹具关键：必须同时满足三件事，缺一不可。
+//  1. `replace=true` —— 否则初始 evidence 是本批 toWrite，与 written 恰好相等，测不出差异。
+//     （`PublicationPending=true` 会强制 replace，见 deliver 里的 `replace = replace || saved.PublicationPending`。）
+//  2. `toWrite > 0` —— 否则早退快路径接管，赋值点根本执行不到。故这里**不**预置本地段，
+//     让 `canonicalRecoveryEvents`/段比对判定为「需要写」。
+//  3. 权威全量**跨出热层保留期** —— 只有这样 `writeProjectionPlan` 才会真的少写一天，
+//     使 `written ⊊ expected`，两者才可区分。
+//
+// 断言口径：缺口落在**超窗口天**上。写入面不含该天 ⇒ 该缺口必须仍未被消解。
+// 若把 `evidence = written` 改回 `evidence = expected`，超窗口天的区间会落进证据面
+// ⇒ 缺口被 `delivery confirmed` 消解 ⇒ 本用例转红。
+func TestDeliverEvidenceFaceTruncatedToWrittenWhenReplaceSpansBeyondWindow(t *testing.T) {
+	now := time.Now()
+	beyondDay, boundaryDay, inWindowDay := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	client, fixture, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := hotRetentionTestSource(t, root)
+	// 超窗口天排最前（位置 1..10）；窗口内两天在后（10..30）。
+	events := []logtypes.Event{
+		hotRetentionTestEvent(beyondDay, 1, 10, "beyond window"),
+		hotRetentionTestEvent(boundaryDay, 10, 20, "straddling boundary"),
+		hotRetentionTestEvent(inWindowDay, 20, 30, "inside window"),
+	}
+	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+		Sources: []SourceConfig{source}, HotRetention: hotRetentionTestRetention,
+	})
+	require.NoError(t, err)
+	key := source.LogSourceID + "/" + source.SourceGeneration
+
+	// 生产形态：VL 里查不到，**且本地段也判不出「已落库」** ⇒ 本批必须重写。
+	// 只删 VL 不够：段存储仍持有这些事件，`deliver` 会认为无需重写而走
+	// `len(toWrite)==0` 的早退快路径，那里的证据面由 `landedVisibleInVL` 决定，
+	// 根本执行不到 `evidence = written` 这个赋值点（见用例头注释第 2 条）。
+	fixture.deleteDay(beyondDay)
+	fixture.deleteDay(boundaryDay)
+	fixture.deleteDay(inWindowDay)
+	// 清空该源的 WAL/段账 ⇒ `canonicalRecoveryEvents` 判不出「已落库」⇒ 本批全部进入 toWrite。
+	// 不清的话 `deliver` 会认为事件已在本地段里而走 `len(toWrite)==0` 快路径。
+	m.mu.Lock()
+	cleared := m.state.Sources[key]
+	cleared.WAL = nil
+	cleared.WALRefs = nil
+	cleared.Events = nil
+	cleared.EventsStored = false
+	cleared.EventsStoredThrough = 0
+	m.state.Sources[key] = cleared
+	m.mu.Unlock()
+	m.mu.Lock()
+	st := m.state.Sources[key]
+	st.PublicationPending = true // 强制 replace（整窗重发）
+	m.state.Sources[key] = st
+	m.mu.Unlock()
+
+	pipe, ok := m.pipeFor(key)
+	require.True(t, ok)
+	pipe.Ledger().Ensure(pipe.Key(), logtypes.SourceIdentity{
+		LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1",
+	})
+	// 缺口落在**超窗口天**（1..10 = beyondDay）——写入面必然不含该天。
+	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 1, 10, ledger.GapReasonDeliverError, "超窗口天缺口夹具"))
+	gapsBefore := pipe.Ledger().UnresolvedGapCount(pipe.Key())
+	require.Equal(t, 1, gapsBefore, "夹具前提：缺口必须存在且未解决")
+
+	insertsBefore := fixture.insertCount()
+	_, err = m.deliver(source, events, false)
+	require.NoError(t, err, "整窗重发必须成功（超窗口天被跳过，其余天写入）")
+
+	// **夹具前提守卫**：必须真的发生了写入，否则本用例会退化成 toWrite==0 的快路径，
+	// 那就又变成「名字对、覆盖错」的假绿（正是被复审抓到的那条用例的形态）。
+	require.Greater(t, fixture.insertCount(), insertsBefore,
+		"夹具前提：本批必须真的写入 VL（>0），否则走 toWrite==0 快路径 ⇒ 覆盖不到 evidence=written")
+
+	// 核心断言：超窗口天从未写入 ⇒ 它的缺口必须仍然可见。
+	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
+		"证据面必须截断到实际写入的天；用权威全量做证据会把从未落库的超窗口天标成已消解")
+}

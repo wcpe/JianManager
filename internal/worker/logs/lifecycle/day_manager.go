@@ -60,11 +60,33 @@ func (m *DayManager) Resume(utcDay string) error {
 	var snapshotID string
 	for {
 		records = m.cat.RecordsForDay(utcDay)
-		state := records[0].MigrationState
+		// **只在「迁移中」的子集内要求状态一致**（2026-10-22 复审）。
+		//
+		// 旧实现取 `records[0].MigrationState` 当基准并要求该日**全部**记录一致。
+		// 而混合态一定会发生：某日整体下沉到冷层后，迟到的写入或新出现的 namespace
+		// 仍会在同一天新建一条 Owner=hot 的记录（migrate_target.go 的注释自己承认）。
+		// 于是一旦 `BeginDayMigration` 成功、`Resume` 立刻在这里报 state divergence，
+		// 且**不写失败 journal** ⇒ 该日 hot 分区停在 ROUTING_FROZEN、写入改走 late 目标、
+		// 永不切换，比「直接拒绝」更糟（复审 P0-2）。
+		//
+		// 判据：已 CLEANED/空态 = 不参与本次迁移（早已下沉完成）；其余必须在同一状态。
+		state := catalog.MigrationState("")
 		for _, rec := range records {
+			if rec.MigrationState == "" || rec.MigrationState == catalog.StateCleaned {
+				continue
+			}
+			if state == "" {
+				state = rec.MigrationState
+				representative = rec.Key
+				continue
+			}
 			if rec.MigrationState != state {
 				return fmt.Errorf("lifecycle: UTC-day state divergence")
 			}
+		}
+		if state == "" {
+			// 该日已无迁移中的记录：视为已完成（幂等）。
+			return nil
 		}
 		switch state {
 		case catalog.StateRoutingFrozen:

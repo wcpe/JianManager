@@ -59,6 +59,28 @@ func (c *Catalog) BeginDayMigration(utcDay string, target Owner, targetDirID str
 		Detail: "begin physical UTC-day migration", AtUnixMilli: time.Now().UnixMilli()})
 }
 
+// activeDayRecords 返回该日**仍参与迁移**的记录子集（2026-10-22 复审 P0-1）。
+//
+// 为什么需要它：混合态 UTC 日必然出现 —— 某日整体下沉到冷层后，迟到的写入或
+// 新出现的 storage namespace 仍会在同一天新建一条 `Owner=hot` 的记录
+// （migrate_target.go 的注释自己承认这一点）。旧实现里每个日级操作都用
+// `records[0].MigrationState` 当基准并要求**全部**记录同态，于是混合态日
+// 会在链条的某一步必然报 divergence，而且往往**不写失败 journal** ⇒
+// 该日永久不可迁移、写路由却已冻结，最终数据被 VL retention 删除。
+//
+// 判据：`""`（旧 journal 兼容）与 `CLEANED`（已下沉完成）不参与本次迁移；
+// 其余记录必须处于同一状态 —— 那才是真正的「同一次迁移内不同步」，仍须拒绝。
+func activeDayRecords(records []*Record) []*Record {
+	active := make([]*Record, 0, len(records))
+	for _, rec := range records {
+		if rec == nil || rec.MigrationState == "" || rec.MigrationState == StateCleaned {
+			continue
+		}
+		active = append(active, rec)
+	}
+	return active
+}
+
 func (c *Catalog) AdvanceDay(utcDay string, to MigrationState) ([]*Record, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -75,21 +97,12 @@ func (c *Catalog) AdvanceDay(utcDay string, to MigrationState) ([]*Record, error
 	// 判据：只有 `MigrationState != ""` 的记录在迁移中；已 CLEANED / 空态的记录
 	// （包括早已下沉完成的）不参与本次推进。子集内部仍要求状态一致——那是真正的
 	// 不一致（同一次迁移里各记录不同步），必须继续拒。
-	active := make([]*Record, 0, len(records))
-	from := MigrationState("")
-	for _, rec := range records {
-		if rec.MigrationState == "" || rec.MigrationState == StateCleaned {
-			continue
-		}
-		if from == "" {
-			from = rec.MigrationState
-		}
-		active = append(active, rec)
-	}
+	active := activeDayRecords(records)
 	if len(active) == 0 {
 		// 没有任何记录在迁移中：幂等成功（调用方可能重试）。
 		return records, nil
 	}
+	from := active[0].MigrationState
 	for _, rec := range active {
 		if rec.MigrationState != from {
 			return nil, fmt.Errorf("%w: UTC-day records have divergent states", ErrInvalidState)
@@ -131,7 +144,11 @@ func (c *Catalog) SwitchDayOwners(utcDay string, target Owner, targetDirID strin
 	if err != nil {
 		return nil, err
 	}
-	for _, rec := range records {
+	// **只切换「迁移中」的记录**（2026-10-22 复审 P0-2 同源）：`ApplyOwnerSwitch` 要求
+	// 记录处于 `ATTACHED_STAGING`，而混合态日里已下沉的记录是 `CLEANED` ⇒ 对全部记录
+	// 调用必然失败，导致该日永远切不过去。已完成的记录跳过即可（它已经是目标 owner）。
+	active := activeDayRecords(records)
+	for _, rec := range active {
 		projection := projections[rec.Key]
 		generation := rec.TargetGeneration
 		if generation == 0 {
@@ -141,7 +158,10 @@ func (c *Catalog) SwitchDayOwners(utcDay string, target Owner, targetDirID strin
 			return nil, err
 		}
 	}
-	return c.commitBatchLocked(records, JournalEntry{Key: records[0].Key, State: StateOwnerSwitched,
+	if len(active) == 0 {
+		return records, nil
+	}
+	return c.commitBatchLocked(active, JournalEntry{Key: active[0].Key, State: StateOwnerSwitched,
 		FromState: StateAttachedStaging, AuthorityCommit: true,
 		Detail: "UTC-day owner-switched atomic commit", AtUnixMilli: time.Now().UnixMilli()})
 }
@@ -188,8 +208,14 @@ func (c *Catalog) FailDay(utcDay string, to MigrationState, detail string) ([]*R
 	if err != nil {
 		return nil, err
 	}
-	from := records[0].MigrationState
-	for _, rec := range records {
+	// **只在迁移中的子集上打失败标**（同上）：混合态日里已下沉记录是 CLEANED，
+	// 若要求全一致，失败本身都记不下来 ⇒ 现场连「为什么失败」都查不到。
+	active := activeDayRecords(records)
+	if len(active) == 0 {
+		return records, nil
+	}
+	from := active[0].MigrationState
+	for _, rec := range active {
 		if rec.MigrationState != from {
 			return nil, fmt.Errorf("%w: UTC-day records have divergent states", ErrInvalidState)
 		}
@@ -198,6 +224,6 @@ func (c *Catalog) FailDay(utcDay string, to MigrationState, detail string) ([]*R
 		}
 		rec.RecoveryRequired = true
 	}
-	return c.commitBatchLocked(records, JournalEntry{Key: records[0].Key, State: to, FromState: from,
+	return c.commitBatchLocked(active, JournalEntry{Key: active[0].Key, State: to, FromState: from,
 		Detail: detail, AtUnixMilli: time.Now().UnixMilli()})
 }
