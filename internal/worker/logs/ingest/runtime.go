@@ -5749,6 +5749,34 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 		writeDays = days
 		writeGrouped = grouped
 	}
+	// **热层可发布窗口过滤（2026-10-21 真机实测发现的残留）**：整窗重发会把**权威全量**的
+	// 每一天都拿去写，其中超出热层 retention 的天在 VL 里**不可能可见**（VL 对超期数据点
+	// 返回 200 但静默丢弃）。不在这里过滤的后果，正是部署后真机复现的形态：
+	// `projection verify failed after write: not fully visible before deadline` 持续重试，
+	// `PublicationPending` 因此**永远清不掉**（本函数末尾的清 pending 只在全部天写完后执行）。
+	//
+	// 为什么必须放在这里而不是只放在 `rebuildDaysInner`：整窗重发走的是**本函数**（deliver
+	// 路径），而重建走的是 `rebuildDaysInner`，两条路径各自构造写入面 —— 只修一条等于只治
+	// 一半。真机上 inst:327 在重建侧已正确跳过、却仍在 deliver 侧反复撞校验失败，就是这个洞。
+	//
+	// 与重建侧的语义保持一致：超窗口的天**不写、不校验、不计入已发布**，并**如实打日志**；
+	// 窗口内的天照原语义推进。`splitHotRetentionDays` 在 retention 未配置时原样返回
+	// （零值即不启用过滤），故对未配保留期的部署零行为变化。
+	if len(writeDays) > 0 {
+		inWindow, beyond := m.splitHotRetentionDays(writeDays, time.Now())
+		if len(beyond) > 0 {
+			kept := make(map[string][]logtypes.Event, len(inWindow))
+			for _, day := range inWindow {
+				kept[day] = writeGrouped[day]
+			}
+			writeGrouped = kept
+			writeDays = inWindow
+			slog.Warn("整窗重发跳过超出热层保留期的 UTC 天（不写入、不校验、不计入已发布）",
+				"source", source.LogSourceID, "generation", generation,
+				"beyondHotRetentionDays", beyond, "writeDays", inWindow,
+				"hotRetention", m.hotRetention)
+		}
+	}
 	result := pipeline.DeliveryResult{HTTPStatus: http.StatusNoContent}
 	for _, day := range writeDays {
 		daySource := source

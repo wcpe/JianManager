@@ -470,3 +470,58 @@ func TestNonConfirmPathDoesNotClearPendingForBeyondWindowOnly(t *testing.T) {
 	require.Equal(t, []string{beyondDay}, out.BeyondHotRetention, "被跳过的天必须如实记录")
 	require.Empty(t, out.Days, "超窗口的天绝不能被记成「已发布」")
 }
+
+// TestReplacePlanSkipsBeyondHotRetention 钉住**整窗重发写入面**（`writeProjectionPlan` 的
+// `plan.Replace` 分支）同样跳过超窗口天。
+//
+// 这是部署后真机实测发现的残留：过滤此前只加在 `rebuildDaysInner`，而整窗重发走
+// `writeProjectionPlan` 的 `plan.Replace`（原实现 `writeDays = days`，即权威全量），
+// 于是超窗口天照写 ⇒ 校验恒 `not fully visible` ⇒ 末尾清 pending 的代码永远到不了
+// ⇒ `PublicationPending` 永远清不掉。真机形态：inst:327 在重建侧已正确跳过，却在
+// deliver 侧反复报 `projection-389 projection verify failed after write`。
+//
+// 为什么直接测 `writeProjectionPlan` 而不测 `deliver`：`deliver` 内部有「发布确认快路径」
+// 与 tail 判定，夹具很难在不依赖内部状态的前提下稳定命中 Replace 分支；而**被本修复
+// 改动的就是 Replace 分支本身**，直接测它既精确又不脆弱。
+//
+// 为什么它能转红：去掉 Replace 分支的窗口过滤 ⇒ 超窗口天被写入（payloads 出现
+// "beyond window"）⇒ 第一条断言失败。
+func TestReplacePlanSkipsBeyondHotRetention(t *testing.T) {
+	now := time.Now()
+	beyondDay, boundaryDay, inWindowDay := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	client, fixture, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := hotRetentionTestSource(t, root)
+	events := []logtypes.Event{
+		hotRetentionTestEvent(beyondDay, 1, 10, "beyond window"),
+		hotRetentionTestEvent(boundaryDay, 10, 20, "straddling boundary"),
+		hotRetentionTestEvent(inWindowDay, 20, 30, "inside window"),
+	}
+	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+	require.Equal(t, 3, fixture.insertCount(), "首次写入按 UTC 天分三次插入")
+
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+		Sources: []SourceConfig{source}, HotRetention: hotRetentionTestRetention,
+	})
+	require.NoError(t, err)
+
+	// 生产形态：三天在热层都查不到（超窗口天已被 VL 按 retention 丢弃）。
+	fixture.deleteDay(beyondDay)
+	fixture.deleteDay(boundaryDay)
+	fixture.deleteDay(inWindowDay)
+	insertsBefore := fixture.insertCount()
+
+	// 整窗重发：Write 是权威全量（含超窗口天），Replace=true。
+	_, err = m.writeProjectionPlan(source, events, "projection-replace-1",
+		projectionWritePlan{Write: events, Replace: true})
+	require.NoError(t, err, "整窗重发必须成功（超窗口天被跳过，不应因校验失败而报错）")
+
+	joined := strings.Join(fixture.payloadsSince(insertsBefore), "\n")
+	require.NotContains(t, joined, "beyond window",
+		"整窗重发绝不能再写超窗口天（VL 返回 200 却静默丢弃 ⇒ 校验恒失败 ⇒ pending 永远清不掉）")
+	require.Contains(t, joined, "straddling boundary", "跨越边界当天必须仍按可发布处理")
+	require.Contains(t, joined, "inside window", "窗口内的天必须照常写入")
+}
